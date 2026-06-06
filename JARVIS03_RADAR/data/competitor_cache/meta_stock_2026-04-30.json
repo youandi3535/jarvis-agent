@@ -1,0 +1,97 @@
+{
+  "keyword": "meta stock",
+  "analyzed_at": "2026-04-30 09:38",
+  "posts": [
+    {
+      "title": "메타 주가 (META) 분석 및 전망 (Meta Platforms Stock... ",
+      "link": "https://blog.naver.com/sanctus___/223671068197",
+      "description": "메타 주가 분석 (META) &lt;출처: 구글&gt; 우선 메타의 과거 5년 치 주가를 살펴보도록 하겠습니다. 메타 주가도 2022년 하락장을 피하지는 못했지만, 그래도 이후 강하게 반등하며 5년 수익률 기준 약 181%가량 상승한... ",
+      "blogger": "골댕이형의 경제 이야기",
+      "date": "20241124"
+    },
+    {
+      "title": "David Tepper’s 10 Long-Term Stock Picks/AMZN/MSFT/META",
+      "link": "https://blog.naver.com/hanchiro/223707524097",
+      "description": "억만장자 데이비드 테퍼의 10가지 장기 주식 추천 Billionaire David Tepper’s 10 Long-Term Stock Picks 원문 : https://www.insidermonkey.com/blog/billionaire-david-teppers-10-long-term-stock-picks-1414688/?singlepage=1 이... ",
+      "blogger": "치로의 투자일기",
+      "date": "20241228"
+    },
+    {
+      "title": "How to analyse Meta (Facebook) as a stock investor, 4Q... ",
+      "link": "https://blog.naver.com/usstockpmet8091/223742133283",
+      "description": "This spooked the markets which caused Meta’s stock to plummet 26% in February 2022 when results were announced. Although growth on Facebook is becoming more challenging as its user profile ages, Insta",
+      "blogger": "마당 깊은 집",
+      "date": "20250130"
+    },
+    {
+      "title": "Stock futures jump after Microsoft, Meta earnings beats... ",
+      "link": "https://blog.naver.com/aqua0712/223852705561",
+      "description": "Stock futures jump after Microsoft, Meta earnings beats g] 마이크로소프트, 메타 실적 발표 후 주가 선물 급등 p] 마이크로소프트, 메타 실적 호조 이후 주식 선물 급등 The tech giants eased... ",
+      "blogger": "엔지니어의 미국소식",
+      "date": "20250501"
+    },
+    {
+      "title": "9/15/25 귀트영 (Meta Hits Record Stock Price amid... ",
+      "link": "https://blog.naver.com/richienuno/224008208125",
+      "description": "ex) Meta's stock soared to an all-time high of $747 during midday trading, pushing past its previous peak in February. 2. reflect investor excitement : 투자 기대 심리를 반영하다 2-1... ",
+      "blogger": "초서독서 (7년차)",
+      "date": "20250915"
+    },
+    {
+      "title": "250915 귀트영/ Meta hits record stock price amid... ",
+      "link": "https://blog.naver.com/spoon2003/224005148777",
+      "description": "Meta's stock soared to an all-time high of $747 during midday trading, pushing past its previous peak in February. -soared to an all-time high : 역대 최고점으로 치솟았다 -durring midday trading... ",
+      "blogger": "Here's my own Archive",
+      "date": "20250912"
+    },
+    {
+      "title": "250915 Meta Hits Record Stock Price amid Aggressive Al... ",
+      "link": "https://blog.naver.com/imbolove00/224008064323",
+      "description": "https://www.cnbc.com/2025/06/20/meta-perplexity-scale-ai-deal.html https://www.businessinsider.com/meta-superintelligence-team-hires-deepmind-scale-ai-2025-8 https://www.investors.com/news/technology/",
+      "blogger": "주디보영",
+      "date": "20250915"
+    },
+    {
+      "title": "Meta stock tumbles, Microsoft slides, and Alphabet... ",
+      "link": "https://blog.naver.com/10bagger_sisters/224058421532",
+      "description": "방금 전 있었던 세 빅테크 기업의 실적발표 주가에 바로 반영되는 중 메타: 3분기 주당순이익(EPS)이 전년 대비 83% 감소하며 예상치를 크게 하회하며 주가 급락 마이크로소프트: AI(인공지능) 인프라 투자... ",
+      "blogger": "인더로지",
+      "date": "20251030"
+    },
+    {
+      "title": "Sold Meta and Tesla Stocks... Hot AI Stock Up 1,500% Over",
+      "link": "https://blog.naver.com/horse30/223895317807",
+      "description": "Meta stock isn't quite as polarizing as Tesla or Nvidia, with investors (fairly) uniformly seeing it as a good long-term play. It's up 18% in 2025, beating out the rest of the &quot;Magnificent Seven&",
+      "blogger": "모둠채소",
+      "date": "20250611"
+    },
+    {
+      "title": "[귀트영 25.9.15] Meta Hits Record Stock Price amid... ",
+      "link": "https://blog.naver.com/h2ojewel/224006212307",
+      "description": "Meta Hits Record Stock Price amid Aggressive Al Expansion 메타, 공격적인 AI 확장 속에 주가 최고치 경신 [출처] EBS 이현석의 귀가 뜨이는 영어 Part 1 Meta's stock soared to an all-time high of... ",
+      "blogger": "Dear My English",
+      "date": "20250913"
+    }
+  ],
+  "patterns": {
+    "count": 10,
+    "avg_title_len": 53.6,
+    "has_numbers_pct": 70,
+    "has_list_pct": 0,
+    "has_year_pct": 0,
+    "sample_titles": [
+      "메타 주가 (META) 분석 및 전망 (Meta Platforms Stock... ",
+      "David Tepper’s 10 Long-Term Stock Picks/AMZN/MSFT/META",
+      "How to analyse Meta (Facebook) as a stock investor, 4Q... ",
+      "Stock futures jump after Microsoft, Meta earnings beats... ",
+      "9/15/25 귀트영 (Meta Hits Record Stock Price amid... "
+    ]
+  },
+  "differentiation": {
+    "gap": "기존 글들은 메타 주가의 단기 등락과 실적 발표에만 집중하고 있습니다. 개인 투자자가 실제로 필요한 '메타 주식 매매 타이밍', '포트폴리오 구성 비중', '손절/익절 기준' 같은 실전 투자 전략은 거의 다루지 않고 있습니다.",
+    "angle": "숫자와 차트로 가득한 분석 글이 아닌, 투자자의 의사결정 과정에 직결되는 실행 가능한 전략을 제시하면 검색 의도와 높은 매칭도를 이룰 수 있습니다.",
+    "title": "메타(META) 주식 언제 사고팔아? - 2025년 투자자를 위한 매매 체크리스트",
+    "hook": "AI 호재와 기록 고점 사이에서 헷갈리는 개인투자자들을 위해, 메타 매매의 진입·청산·포지션 조정 기준을 구체적인 가격대와 신호로 정리했습니다."
+  },
+  "cached": false
+}

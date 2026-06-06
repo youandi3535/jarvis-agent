@@ -1,0 +1,1675 @@
+{
+  "date": "2026-05-12",
+  "collected_at": "15:03:15",
+  "google_trending": [
+    "김태희",
+    "민방위",
+    "공대지 미사일",
+    "팔란티어 테크놀로지",
+    "스파이",
+    "최미나수",
+    "필리핀",
+    "코너 맥그리거",
+    "백지영",
+    "이상민",
+    "중학교",
+    "김종국과",
+    "인천항만공사",
+    "실전과",
+    "청양군",
+    "완전군장",
+    "한국형",
+    "공대지미사일",
+    "여자친구",
+    "혈액형",
+    "cm",
+    "kg",
+    "양날의",
+    "AI",
+    "수혜주",
+    "Freedom",
+    "Broker",
+    "게시물",
+    "소도시",
+    "시장님이",
+    "하이닉스",
+    "뉴스현장",
+    "코스피",
+    "커지는",
+    "블룸버그",
+    "친환경",
+    "순이익",
+    "증권사",
+    "에프앤가이드",
+    "코스닥",
+    "살아난",
+    "사이클",
+    "만전자",
+    "만닉스",
+    "외치는데",
+    "이슈딜",
+    "지금은",
+    "한화시스템",
+    "GS",
+    "SKC"
+  ],
+  "scored_keywords": [
+    {
+      "keyword": "김태희",
+      "rank": 1,
+      "score": 100,
+      "sector": "연예·문화",
+      "velocity": "하락",
+      "velocity_score": -10.0,
+      "competition": 100.0,
+      "opportunity_score": 47.0
+    },
+    {
+      "keyword": "민방위",
+      "rank": 2,
+      "score": 98,
+      "sector": "사회·이슈",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 100.0,
+      "opportunity_score": 53.6
+    },
+    {
+      "keyword": "공대지 미사일",
+      "rank": 3,
+      "score": 96,
+      "sector": "사회·이슈",
+      "velocity": "급등",
+      "velocity_score": 30.0,
+      "competition": 85.5,
+      "opportunity_score": 68.1
+    },
+    {
+      "keyword": "팔란티어 테크놀로지",
+      "rank": 4,
+      "score": 95,
+      "sector": "IT·테크",
+      "velocity": "상승",
+      "velocity_score": 20.0,
+      "competition": 69.9,
+      "opportunity_score": 65.8
+    },
+    {
+      "keyword": "스파이",
+      "rank": 5,
+      "score": 93,
+      "sector": "연예·문화",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 100.0,
+      "opportunity_score": 51.4
+    },
+    {
+      "keyword": "최미나수",
+      "rank": 6,
+      "score": 91,
+      "sector": "연예·문화",
+      "velocity": "상승",
+      "velocity_score": 20.0,
+      "competition": 64.7,
+      "opportunity_score": 65.0
+    },
+    {
+      "keyword": "필리핀",
+      "rank": 7,
+      "score": 89,
+      "sector": "여행",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 100.0,
+      "opportunity_score": 49.6
+    },
+    {
+      "keyword": "코너 맥그리거",
+      "rank": 8,
+      "score": 87,
+      "sector": "스포츠",
+      "velocity": "상승",
+      "velocity_score": 20.0,
+      "competition": 81.9,
+      "opportunity_score": 59.8
+    },
+    {
+      "keyword": "백지영",
+      "rank": 9,
+      "score": 86,
+      "sector": "연예·문화",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 100.0,
+      "opportunity_score": 48.2
+    },
+    {
+      "keyword": "이상민",
+      "rank": 10,
+      "score": 84,
+      "sector": "연예·문화",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 100.0,
+      "opportunity_score": 47.3
+    },
+    {
+      "keyword": "중학교",
+      "rank": 11,
+      "score": 82,
+      "sector": "교육·취업",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 100.0,
+      "opportunity_score": 46.4
+    },
+    {
+      "keyword": "김종국과",
+      "rank": 12,
+      "score": 80,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 100.0,
+      "opportunity_score": 43.0
+    },
+    {
+      "keyword": "인천항만공사",
+      "rank": 13,
+      "score": 78,
+      "sector": "부동산",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 99.5,
+      "opportunity_score": 44.7
+    },
+    {
+      "keyword": "실전과",
+      "rank": 14,
+      "score": 77,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 100.0,
+      "opportunity_score": 41.6
+    },
+    {
+      "keyword": "청양군",
+      "rank": 15,
+      "score": 75,
+      "sector": "기타",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 100.0,
+      "opportunity_score": 43.2
+    },
+    {
+      "keyword": "완전군장",
+      "rank": 16,
+      "score": 73,
+      "sector": "사회·이슈",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 50.0,
+      "opportunity_score": 52.4
+    },
+    {
+      "keyword": "한국형",
+      "rank": 17,
+      "score": 71,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.0
+    },
+    {
+      "keyword": "공대지미사일",
+      "rank": 18,
+      "score": 69,
+      "sector": "사회·이슈",
+      "velocity": "급등",
+      "velocity_score": 30.0,
+      "competition": 50.0,
+      "opportunity_score": 63.0
+    },
+    {
+      "keyword": "여자친구",
+      "rank": 19,
+      "score": 68,
+      "sector": "연예·문화",
+      "velocity": "하락",
+      "velocity_score": -10.0,
+      "competition": 50.0,
+      "opportunity_score": 42.6
+    },
+    {
+      "keyword": "혈액형",
+      "rank": 20,
+      "score": 66,
+      "sector": "건강·의료",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 50.0,
+      "opportunity_score": 49.2
+    },
+    {
+      "keyword": "cm",
+      "rank": 21,
+      "score": 64,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 45.8
+    },
+    {
+      "keyword": "kg",
+      "rank": 22,
+      "score": 62,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.9
+    },
+    {
+      "keyword": "양날의",
+      "rank": 23,
+      "score": 60,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.0
+    },
+    {
+      "keyword": "AI",
+      "rank": 24,
+      "score": 59,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 43.5
+    },
+    {
+      "keyword": "수혜주",
+      "rank": 25,
+      "score": 57,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 42.7
+    },
+    {
+      "keyword": "Freedom",
+      "rank": 26,
+      "score": 55,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 41.8
+    },
+    {
+      "keyword": "Broker",
+      "rank": 27,
+      "score": 53,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.9
+    },
+    {
+      "keyword": "게시물",
+      "rank": 28,
+      "score": 51,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.0
+    },
+    {
+      "keyword": "소도시",
+      "rank": 29,
+      "score": 50,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.5
+    },
+    {
+      "keyword": "시장님이",
+      "rank": 30,
+      "score": 48,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 38.6
+    },
+    {
+      "keyword": "하이닉스",
+      "rank": 31,
+      "score": 46,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.7
+    },
+    {
+      "keyword": "뉴스현장",
+      "rank": 32,
+      "score": 44,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.8
+    },
+    {
+      "keyword": "코스피",
+      "rank": 33,
+      "score": 42,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.9
+    },
+    {
+      "keyword": "커지는",
+      "rank": 34,
+      "score": 41,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.5
+    },
+    {
+      "keyword": "블룸버그",
+      "rank": 35,
+      "score": 39,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.5
+    },
+    {
+      "keyword": "친환경",
+      "rank": 36,
+      "score": 37,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 33.7
+    },
+    {
+      "keyword": "순이익",
+      "rank": 37,
+      "score": 35,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 32.8
+    },
+    {
+      "keyword": "증권사",
+      "rank": 38,
+      "score": 33,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.9
+    },
+    {
+      "keyword": "에프앤가이드",
+      "rank": 39,
+      "score": 32,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.4
+    },
+    {
+      "keyword": "코스닥",
+      "rank": 40,
+      "score": 30,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.5
+    },
+    {
+      "keyword": "살아난",
+      "rank": 41,
+      "score": 28,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 29.6
+    },
+    {
+      "keyword": "사이클",
+      "rank": 42,
+      "score": 26,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 28.7
+    },
+    {
+      "keyword": "만전자",
+      "rank": 43,
+      "score": 24,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.8
+    },
+    {
+      "keyword": "만닉스",
+      "rank": 44,
+      "score": 23,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.4
+    },
+    {
+      "keyword": "외치는데",
+      "rank": 45,
+      "score": 21,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.5
+    },
+    {
+      "keyword": "이슈딜",
+      "rank": 46,
+      "score": 19,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 25.6
+    },
+    {
+      "keyword": "지금은",
+      "rank": 47,
+      "score": 17,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 24.6
+    },
+    {
+      "keyword": "한화시스템",
+      "rank": 48,
+      "score": 15,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.8
+    },
+    {
+      "keyword": "GS",
+      "rank": 49,
+      "score": 14,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.3
+    },
+    {
+      "keyword": "SKC",
+      "rank": 50,
+      "score": 12,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 22.4
+    }
+  ],
+  "sector_summary": {
+    "연예·문화": [
+      {
+        "keyword": "최미나수",
+        "rank": 6,
+        "score": 91,
+        "sector": "연예·문화",
+        "velocity": "상승",
+        "velocity_score": 20.0,
+        "competition": 64.7,
+        "opportunity_score": 65.0
+      },
+      {
+        "keyword": "스파이",
+        "rank": 5,
+        "score": 93,
+        "sector": "연예·문화",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 100.0,
+        "opportunity_score": 51.4
+      },
+      {
+        "keyword": "백지영",
+        "rank": 9,
+        "score": 86,
+        "sector": "연예·문화",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 100.0,
+        "opportunity_score": 48.2
+      },
+      {
+        "keyword": "이상민",
+        "rank": 10,
+        "score": 84,
+        "sector": "연예·문화",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 100.0,
+        "opportunity_score": 47.3
+      },
+      {
+        "keyword": "김태희",
+        "rank": 1,
+        "score": 100,
+        "sector": "연예·문화",
+        "velocity": "하락",
+        "velocity_score": -10.0,
+        "competition": 100.0,
+        "opportunity_score": 47.0
+      },
+      {
+        "keyword": "양날의",
+        "rank": 23,
+        "score": 60,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      },
+      {
+        "keyword": "김종국과",
+        "rank": 12,
+        "score": 80,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 100.0,
+        "opportunity_score": 43.0
+      },
+      {
+        "keyword": "여자친구",
+        "rank": 19,
+        "score": 68,
+        "sector": "연예·문화",
+        "velocity": "하락",
+        "velocity_score": -10.0,
+        "competition": 50.0,
+        "opportunity_score": 42.6
+      },
+      {
+        "keyword": "Freedom",
+        "rank": 26,
+        "score": 55,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      },
+      {
+        "keyword": "실전과",
+        "rank": 14,
+        "score": 77,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 100.0,
+        "opportunity_score": 41.6
+      },
+      {
+        "keyword": "Broker",
+        "rank": 27,
+        "score": 53,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      },
+      {
+        "keyword": "시장님이",
+        "rank": 30,
+        "score": 48,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 38.6
+      }
+    ],
+    "사회·이슈": [
+      {
+        "keyword": "공대지 미사일",
+        "rank": 3,
+        "score": 96,
+        "sector": "사회·이슈",
+        "velocity": "급등",
+        "velocity_score": 30.0,
+        "competition": 85.5,
+        "opportunity_score": 68.1
+      },
+      {
+        "keyword": "공대지미사일",
+        "rank": 18,
+        "score": 69,
+        "sector": "사회·이슈",
+        "velocity": "급등",
+        "velocity_score": 30.0,
+        "competition": 50.0,
+        "opportunity_score": 63.0
+      },
+      {
+        "keyword": "민방위",
+        "rank": 2,
+        "score": 98,
+        "sector": "사회·이슈",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 100.0,
+        "opportunity_score": 53.6
+      },
+      {
+        "keyword": "완전군장",
+        "rank": 16,
+        "score": 73,
+        "sector": "사회·이슈",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 50.0,
+        "opportunity_score": 52.4
+      },
+      {
+        "keyword": "뉴스현장",
+        "rank": 32,
+        "score": 44,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.8
+      },
+      {
+        "keyword": "친환경",
+        "rank": 36,
+        "score": 37,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 33.7
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "팔란티어 테크놀로지",
+        "rank": 4,
+        "score": 95,
+        "sector": "IT·테크",
+        "velocity": "상승",
+        "velocity_score": 20.0,
+        "competition": 69.9,
+        "opportunity_score": 65.8
+      },
+      {
+        "keyword": "한국형",
+        "rank": 17,
+        "score": 71,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.0
+      },
+      {
+        "keyword": "AI",
+        "rank": 24,
+        "score": 59,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      },
+      {
+        "keyword": "하이닉스",
+        "rank": 31,
+        "score": 46,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.7
+      },
+      {
+        "keyword": "만전자",
+        "rank": 43,
+        "score": 24,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.8
+      },
+      {
+        "keyword": "만닉스",
+        "rank": 44,
+        "score": 23,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      },
+      {
+        "keyword": "한화시스템",
+        "rank": 48,
+        "score": 15,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.8
+      }
+    ],
+    "여행": [
+      {
+        "keyword": "필리핀",
+        "rank": 7,
+        "score": 89,
+        "sector": "여행",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 100.0,
+        "opportunity_score": 49.6
+      }
+    ],
+    "스포츠": [
+      {
+        "keyword": "코너 맥그리거",
+        "rank": 8,
+        "score": 87,
+        "sector": "스포츠",
+        "velocity": "상승",
+        "velocity_score": 20.0,
+        "competition": 81.9,
+        "opportunity_score": 59.8
+      }
+    ],
+    "교육·취업": [
+      {
+        "keyword": "중학교",
+        "rank": 11,
+        "score": 82,
+        "sector": "교육·취업",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 100.0,
+        "opportunity_score": 46.4
+      }
+    ],
+    "부동산": [
+      {
+        "keyword": "인천항만공사",
+        "rank": 13,
+        "score": 78,
+        "sector": "부동산",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 99.5,
+        "opportunity_score": 44.7
+      }
+    ],
+    "기타": [
+      {
+        "keyword": "cm",
+        "rank": 21,
+        "score": 64,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      },
+      {
+        "keyword": "kg",
+        "rank": 22,
+        "score": 62,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      },
+      {
+        "keyword": "청양군",
+        "rank": 15,
+        "score": 75,
+        "sector": "기타",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 100.0,
+        "opportunity_score": 43.2
+      },
+      {
+        "keyword": "게시물",
+        "rank": 28,
+        "score": 51,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      },
+      {
+        "keyword": "소도시",
+        "rank": 29,
+        "score": 50,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      },
+      {
+        "keyword": "커지는",
+        "rank": 34,
+        "score": 41,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.5
+      },
+      {
+        "keyword": "살아난",
+        "rank": 41,
+        "score": 28,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      },
+      {
+        "keyword": "사이클",
+        "rank": 42,
+        "score": 26,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 28.7
+      },
+      {
+        "keyword": "외치는데",
+        "rank": 45,
+        "score": 21,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      },
+      {
+        "keyword": "지금은",
+        "rank": 47,
+        "score": 17,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 24.6
+      }
+    ],
+    "건강·의료": [
+      {
+        "keyword": "혈액형",
+        "rank": 20,
+        "score": 66,
+        "sector": "건강·의료",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 50.0,
+        "opportunity_score": 49.2
+      }
+    ],
+    "금융·투자": [
+      {
+        "keyword": "수혜주",
+        "rank": 25,
+        "score": 57,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      },
+      {
+        "keyword": "코스피",
+        "rank": 33,
+        "score": 42,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.9
+      },
+      {
+        "keyword": "블룸버그",
+        "rank": 35,
+        "score": 39,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.5
+      },
+      {
+        "keyword": "순이익",
+        "rank": 37,
+        "score": 35,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      },
+      {
+        "keyword": "증권사",
+        "rank": 38,
+        "score": 33,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "에프앤가이드",
+        "rank": 39,
+        "score": 32,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.4
+      },
+      {
+        "keyword": "코스닥",
+        "rank": 40,
+        "score": 30,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.5
+      },
+      {
+        "keyword": "이슈딜",
+        "rank": 46,
+        "score": 19,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      },
+      {
+        "keyword": "GS",
+        "rank": 49,
+        "score": 14,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.3
+      },
+      {
+        "keyword": "SKC",
+        "rank": 50,
+        "score": 12,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 22.4
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "theme": "코너 맥그리거",
+      "topic": "45세 맥그리거가 여전히 격투기계 최강자인 이유 — 나이 역행의 비즈니스 제국과 심리전술",
+      "keyword": "코너 맥그리거",
+      "sector": "스포츠",
+      "score": 87,
+      "opportunity_score": 59.8,
+      "velocity": "상승",
+      "competition": 81.9,
+      "reason": "트렌드 순위 #8 · 상승 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "복귀 루머·스캔들만 다루는 경쟁사와 달리, 비운동적 자산(비즈니스·피지컬 과학·심리전술)의 실제 영향력을 분석해 독자의 '진정한 강함의 원천'에 대한 궁금증 해소",
+      "hook": "왜 나이가 든 맥그리거가 여전히 격투기계에서 위협적인가?",
+      "color": "#2ECC71",
+      "competitor_gap": "경쟁사들은 맥그리거의 '복귀 루머'와 '스캔들'만 반복 다루고 있습니다. 정작 비운동적 측면—비즈니스 제국 구축, 나이 역행의 피지컬 과학, 심리전술의 실제 영향—은 완전히 무시되고 있습니다.",
+      "competitor_title": "코너 맥그리거는 '복귀'가 아니라 '포지셔닝' 중이다 - 35세 UFC 레전드의 비즈니스 전술 분석"
+    },
+    {
+      "theme": "공대지 미사일",
+      "topic": "드론·AI 시대, 공대지 미사일이 부활하는 이유 — 한국 기술이 놓친 2조 원대 시장",
+      "keyword": "공대지 미사일",
+      "sector": "사회·이슈",
+      "score": 96,
+      "opportunity_score": 68.1,
+      "velocity": "급등",
+      "competition": 85.5,
+      "reason": "트렌드 순위 #3 · 급등 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "제품 뉴스·단순 비교만 반복하는 언론과 달리, AI·드론 전쟁에서 공대지 미사일의 재정의된 전술적 역할과 한국 기술의 글로벌 경쟁력 위상을 종합 분석해 기술 업계·투자자의 구조적 기회 노출",
+      "hook": "왜 세계 군부는 드론 시대에도 공대지 미사일에 투자하고 있을까?",
+      "color": "#778CA3",
+      "competitor_gap": "기존 글들은 개별 미사일 뉴스(천룡 추락, 관련주 분석) 또는 단순 제품 비교만 다룸. 드론·AI 시대에 공대지 미사일의 전술적 역할 재정의와 한국 기술의 글로벌 경쟁력 위상을 종합 분석한 글이 완전히 부재.",
+      "competitor_title": "공대지 미사일은 왜 죽지 않을까 — 우크라이나 전쟁이 증명한 미래 전쟁의 주인공"
+    },
+    {
+      "theme": "필리핀",
+      "topic": "필리핀 이민 가이드 — 월 120만 원으로 사는 현지 생활비와 한국인 커뮤니티의 현실",
+      "keyword": "필리핀",
+      "sector": "여행",
+      "score": 89,
+      "opportunity_score": 49.6,
+      "velocity": "유지",
+      "competition": 100.0,
+      "reason": "트렌드 순위 #7 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "투어·패키지 예약만 다루는 기존 글과 달리, 실제 생활비·장기 거주 가능성·한국인 증가에 따른 정착 정보를 다루어 조기은퇴·해외 거주를 진지하게 고민하는 독자의 의사결정 지원",
+      "hook": "필리핀에서 실제로 월급 없이 살 수 있을까?",
+      "color": "#87CEEB",
+      "competitor_gap": "기존 글들은 투어/패키지 예약과 관광 일정 중심이며, 필리핀의 실제 생활비·숨은 로컬 경험·장기 거주 가능성을 다루지 않음. 특히 한국인 증가에 따른 정착/커뮤니티 정보가 전무.",
+      "competitor_title": "필리핀에서 진짜 살 수 있을까? 월 생활비·집값·로컬 음식·한국인 커뮤니티 완벽 가이드"
+    },
+    {
+      "theme": "혈액형",
+      "topic": "혈액형이 정말 성격을 좌우할까? — 과학이 검증한 '성격·건강·수명'의 링크",
+      "keyword": "혈액형",
+      "sector": "건강·의료",
+      "score": 66,
+      "opportunity_score": 49.2,
+      "velocity": "유지",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #20 · 경쟁 보통 · 최근 미발행",
+      "angle": "드라마·극한 상황만 다루는 기존 콘텐츠와 달리, 일상에서 가장 많이 궁금해하는 혈액형-성격·건강 연관성을 근거 기반으로 검증해 한국인의 높은 관심도를 과학적 신뢰도로 충족",
+      "hook": "혈액형이 성격과 건강을 정말 결정하는가?",
+      "color": "#00FF88",
+      "competitor_gap": "상위 글들은 드라마·반려동물·이식 등 극한 상황에 집중되어 있으나, 일상에서 가장 많이 궁금해하는 '혈액형과 성격·건강' 의 과학적 검증이 전무합니다. 특히 한국인이 높은 관심을 보이는 성격 연관성을 근거 기반으로 분석한 글이 없습니다.",
+      "competitor_title": "혈액형이 성격을 정말 결정할까? 과학이 찬성과 반대를 모두 발견한 것"
+    },
+    {
+      "theme": "중학교",
+      "topic": "중학교 입학이 3년 입시의 기로인 이유 — 부모가 알아야 할 첫 100일 전략",
+      "keyword": "중학교",
+      "sector": "교육·취업",
+      "score": 82,
+      "opportunity_score": 46.4,
+      "velocity": "유지",
+      "competition": 100.0,
+      "reason": "트렌드 순위 #11 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "학원·성적 위주의 단기 공략만 다루는 기존 글과 달리, 중학교 입학부터 고등학교 입시까지 3년 전략의 구조를 다루어 입시 초보 부모의 불안감을 해소하고 실질적 로드맵 제공",
+      "hook": "중학교 1학년 지금 뭘 준비해야 고등학교 입시에서 성공할까?",
+      "color": "#9B59B6",
+      "competitor_gap": "대부분이 학원·시험 성적·특정 학교 분석에 집중하며, 중학교 입학 전환기의 부모의 역할이나 3년 전체 입시 로드맵을 다룬 글이 부재. 단기 성적이 아닌 중학교 입학부터 고등학교 입시까지의 전략적 설계 관점이 완전히 빠짐.",
+      "competitor_title": "중학교 입학 첫날부터 시작하는 부모의 3년 입시 로드맵 — 내신·수상·비교과 균형 설계 가이드"
+    },
+    {
+      "theme": "최미나수",
+      "topic": "최미나수 논쟁의 중심 — 10대 여배우가 '빌런' 논란을 받는 이유와 언론의 역할",
+      "keyword": "최미나수",
+      "sector": "연예·문화",
+      "score": 91,
+      "opportunity_score": 65.0,
+      "velocity": "상승",
+      "competition": 64.7,
+      "reason": "트렌드 순위 #6 · 상승 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "개인 스캔들 중심의 기존 보도와 달리, 젊은 배우가 받는 과도한 도덕적 심판과 성별 편향을 구조적으로 분석해 팬덤 문화와 여성 연예인의 위치를 질문",
+      "hook": "왜 20대 여배우는 40대 남배우보다 가혹하게 심판받을까?",
+      "color": "#E91E63"
+    },
+    {
+      "theme": "인천항만공사",
+      "topic": "공기업 합격자가 선택하는 인천항만공사 — 스펙·복리후생·실제 업무의 진실",
+      "keyword": "인천항만공사",
+      "sector": "부동산",
+      "score": 78,
+      "opportunity_score": 44.7,
+      "velocity": "유지",
+      "competition": 99.5,
+      "reason": "트렌드 순위 #13 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "채용정보 중복 반복만 하는 기존 글과 달리, 실제 채용자의 스펙·복리후생 수준·3년 경력의 현실을 다루어 공기업 입사를 고민하는 취준생의 정보 비대칭 해소",
+      "hook": "인천항만공사는 정말 안정적인 공기업 일자리일까?",
+      "color": "#E67E22"
+    },
+    {
+      "theme": "팔란티어 테크놀로지",
+      "topic": "팔란티어는 왜 순손실에도 주가가 오를까? — AI·국방 데이터 사업의 수익성 전환점",
+      "keyword": "팔란티어 테크놀로지",
+      "sector": "IT·테크",
+      "score": 95,
+      "opportunity_score": 65.8,
+      "velocity": "상승",
+      "competition": 69.9,
+      "reason": "트렌드 순위 #4 · 상승 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "적자 뉴스 반복만 하는 기존 보도와 달리, AI·국방 정부 사업이 2026년 수익성으로 전환되는 구조와 글로벌 데이터 사업의 경제학을 분석해 테크 투자자의 미래 판단력 제공",
+      "hook": "손실을 보면서 주가만 오르는 팔란티어, 언제까지 지속될까?",
+      "color": "#00D4FF"
+    },
+    {
+      "theme": "cm (센티미터)",
+      "topic": "키 169cm는 남한의 평균을 넘을까? — 세대별 체형 변화와 '작은 남자'의 실제 연애 시장",
+      "keyword": "cm (센티미터)",
+      "sector": "기타",
+      "score": 64,
+      "opportunity_score": 45.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #21 · 경쟁 보통 · 최근 미발행",
+      "angle": "평균 키 통계만 반복하는 기존 콘텐츠와 달리, 세대 간 체형 변화·키 콤플렉스의 과학·실제 연애 시장에서의 영향도를 다루어 외모 불안감이 높은 독자의 현실감 있는 관점 제공",
+      "hook": "평균 키보다 작으면 정말 불리할까?",
+      "color": "#4A4A4A"
+    },
+    {
+      "theme": "수혜주",
+      "topic": "AI·반도체·군수 수혜주 지도 — 2026년 상승 기대주를 고르는 법",
+      "keyword": "수혜주",
+      "sector": "금융·투자",
+      "score": 57,
+      "opportunity_score": 42.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #25 · 경쟁 보통 · 최근 미발행",
+      "angle": "개별 종목 추천만 하는 기존 글과 달리, 구조적 트렌드(AI·방위사업·에너지 전환)에서 수혜주를 고르는 프레임과 리스크 관리법을 제시해 소액 투자자의 전략적 판단력 강화",
+      "hook": "2026년 꼭 오를 만한 수혜주는 어떤 특징을 가질까?",
+      "color": "#FFD700"
+    }
+  ],
+  "extra_angles": [
+    {
+      "theme": "김태희",
+      "topic": "김태희와 비, 한국 스포츠 엘리트의 또 다른 초상 — 연예인 부부의 경제학",
+      "keyword": "김태희",
+      "sector": "연예·문화",
+      "score": 100,
+      "opportunity_score": 47.0,
+      "velocity": "하락",
+      "competition": 100.0,
+      "reason": "점수 100 · 연예·문화",
+      "angle": "단순 연애 스캔들만 반복하는 기존 보도와 달리, 연예인-운동선수 결혼이 한국 사회에서 가지는 계급·경제·젠더 의미를 분석해 대중문화의 심층 구조를 질문",
+      "hook": "왜 연예인 여성과 운동선수 남성의 결혼은 주목받을까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "민방위",
+      "topic": "민방위 훈련 불참 시 벌금, 꼭 내야 할까? — 2026년 개정법과 대체 서비스 옵션",
+      "keyword": "민방위",
+      "sector": "사회·이슈",
+      "score": 98,
+      "opportunity_score": 53.6,
+      "velocity": "유지",
+      "competition": 100.0,
+      "reason": "점수 98 · 사회·이슈",
+      "angle": "의무적 공지만 반복하는 기존 공고와 달리, 실제 법적 요건·벌금 회피 옵션·대체 서비스·세대 간 인식 차이를 다루어 직장인·학부모의 실질적 선택지 제공",
+      "hook": "민방위 훈련이 정말 필수일까, 아니면 선택할 수 있을까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "스파이",
+      "topic": "'스파이 패밀리'와 '스파이더맨'은 다르다 — 2026년 스파이 영상콘텐츠의 3가지 스타일",
+      "keyword": "스파이",
+      "sector": "연예·문화",
+      "score": 93,
+      "opportunity_score": 51.4,
+      "velocity": "유지",
+      "competition": 100.0,
+      "reason": "점수 93 · 연예·문화",
+      "angle": "개별 작품 평가만 반복하는 기존 리뷰와 달리, 스파이·액션 장르의 세부 분류와 각 스타일의 관객층·전망을 분석해 영상물 선택을 고민하는 독자의 장르적 감각 제공",
+      "hook": "스파이 영상물은 왜 이렇게 많아졌고, 어떤 걸 골라야 할까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "백지영",
+      "topic": "백지영의 무한 신곡 능력 — 28년 경력 가수가 매번 주목받는 이유와 K-POP 생존 공식",
+      "keyword": "백지영",
+      "sector": "연예·문화",
+      "score": 86,
+      "opportunity_score": 48.2,
+      "velocity": "유지",
+      "competition": 100.0,
+      "reason": "점수 86 · 연예·문화",
+      "angle": "스캔들·과거 이슈만 반복하는 기존 언론과 달리, 오래 활동하는 가수의 음악 변신·팬덤 유지 전략·세대 변화에 대응하는 능력을 다루어 K-POP 산업 구조의 성공 모델 제시",
+      "hook": "왜 백지영은 28년을 활동하면서도 여전히 '신인' 같은 임팩트를 낼까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "이상민",
+      "topic": "이상민은 배우일까 감독일까 정치인일까 — 다중 정체성의 한국 엘리트 초상",
+      "keyword": "이상민",
+      "sector": "연예·문화",
+      "score": 84,
+      "opportunity_score": 47.3,
+      "velocity": "유지",
+      "competition": 100.0,
+      "reason": "점수 84 · 연예·문화",
+      "angle": "단편적 뉴스만 반복하는 기존 보도와 달리, 한 인물의 다양한 정체성(배우·감독·관료)이 한국 사회에서 가지는 의미와 엘리트의 다층적 활동을 분석해 사회 구조의 이중성 노출",
+      "hook": "한 사람이 여러 분야를 주도하는 게 과연 정상일까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "김종국과 운동",
+      "topic": "김종국의 근력 비결 — 50대도 가능한 '대사 증진 운동법'의 과학과 실천",
+      "keyword": "김종국과 운동",
+      "sector": "연예·문화",
+      "score": 80,
+      "opportunity_score": 43.0,
+      "velocity": "—",
+      "competition": 100.0,
+      "reason": "점수 80 · 연예·문화",
+      "angle": "유명인 다이어트 팁만 나열하는 기존 콘텐츠와 달리, 나이대별 근력 유지의 생리학적 원리와 현실적 운동 루틴을 다루어 중년 독자의 체감 있는 건강 로드맵 제공",
+      "hook": "50대도 20대처럼 운동하면 근력이 돌아올까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "실전과 같은 훈련",
+      "topic": "학교 훈련은 왜 '실전 같지 않을까?' — 교육심리학이 말하는 학습 효과 극대화",
+      "keyword": "실전과 같은 훈련",
+      "sector": "연예·문화",
+      "score": 77,
+      "opportunity_score": 41.6,
+      "velocity": "—",
+      "competition": 100.0,
+      "reason": "점수 77 · 연예·문화",
+      "angle": "단순 교육 뉴스만 다루는 기존 보도와 달리, 시뮬레이션·실습 기반 교육의 신경과학적 효과와 현장 적용 가능성을 다루어 교육자·학부모의 학습 질 판단력 강화",
+      "hook": "실전처럼 훈련하는 것이 정말 배움을 바꿀까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "청양군",
+      "topic": "청양군이 선택지가 되는 이유 — 도시 탈출 1순위 지역의 숨은 경제학",
+      "keyword": "청양군",
+      "sector": "기타",
+      "score": 75,
+      "opportunity_score": 43.2,
+      "velocity": "유지",
+      "competition": 100.0,
+      "reason": "점수 75 · 기타",
+      "angle": "관광정보·인구통계만 반복하는 기존 글과 달리, 청양군이 도시민의 이주 선택지로 떠오른 구조적 이유(부동산·일자리·생활환경)를 분석해 귀촌을 고민하는 독자의 의사결정 지원",
+      "hook": "충남 시골이 왜 수도권 탈출 첫 번째 선택지가 될까?",
+      "color": "#4a5568"
+    }
+  ],
+  "content_angles": {
+    "코너 맥그리거": {
+      "topic": "45세 맥그리거가 여전히 격투기계 최강자인 이유 — 나이 역행의 비즈니스 제국과 심리전술",
+      "angle": "복귀 루머·스캔들만 다루는 경쟁사와 달리, 비운동적 자산(비즈니스·피지컬 과학·심리전술)의 실제 영향력을 분석해 독자의 '진정한 강함의 원천'에 대한 궁금증 해소",
+      "hook": "왜 나이가 든 맥그리거가 여전히 격투기계에서 위협적인가?"
+    },
+    "공대지 미사일": {
+      "topic": "드론·AI 시대, 공대지 미사일이 부활하는 이유 — 한국 기술이 놓친 2조 원대 시장",
+      "angle": "제품 뉴스·단순 비교만 반복하는 언론과 달리, AI·드론 전쟁에서 공대지 미사일의 재정의된 전술적 역할과 한국 기술의 글로벌 경쟁력 위상을 종합 분석해 기술 업계·투자자의 구조적 기회 노출",
+      "hook": "왜 세계 군부는 드론 시대에도 공대지 미사일에 투자하고 있을까?"
+    },
+    "필리핀": {
+      "topic": "필리핀 이민 가이드 — 월 120만 원으로 사는 현지 생활비와 한국인 커뮤니티의 현실",
+      "angle": "투어·패키지 예약만 다루는 기존 글과 달리, 실제 생활비·장기 거주 가능성·한국인 증가에 따른 정착 정보를 다루어 조기은퇴·해외 거주를 진지하게 고민하는 독자의 의사결정 지원",
+      "hook": "필리핀에서 실제로 월급 없이 살 수 있을까?"
+    },
+    "혈액형": {
+      "topic": "혈액형이 정말 성격을 좌우할까? — 과학이 검증한 '성격·건강·수명'의 링크",
+      "angle": "드라마·극한 상황만 다루는 기존 콘텐츠와 달리, 일상에서 가장 많이 궁금해하는 혈액형-성격·건강 연관성을 근거 기반으로 검증해 한국인의 높은 관심도를 과학적 신뢰도로 충족",
+      "hook": "혈액형이 성격과 건강을 정말 결정하는가?"
+    },
+    "중학교": {
+      "topic": "중학교 입학이 3년 입시의 기로인 이유 — 부모가 알아야 할 첫 100일 전략",
+      "angle": "학원·성적 위주의 단기 공략만 다루는 기존 글과 달리, 중학교 입학부터 고등학교 입시까지 3년 전략의 구조를 다루어 입시 초보 부모의 불안감을 해소하고 실질적 로드맵 제공",
+      "hook": "중학교 1학년 지금 뭘 준비해야 고등학교 입시에서 성공할까?"
+    },
+    "최미나수": {
+      "topic": "최미나수 논쟁의 중심 — 10대 여배우가 '빌런' 논란을 받는 이유와 언론의 역할",
+      "angle": "개인 스캔들 중심의 기존 보도와 달리, 젊은 배우가 받는 과도한 도덕적 심판과 성별 편향을 구조적으로 분석해 팬덤 문화와 여성 연예인의 위치를 질문",
+      "hook": "왜 20대 여배우는 40대 남배우보다 가혹하게 심판받을까?"
+    },
+    "인천항만공사": {
+      "topic": "공기업 합격자가 선택하는 인천항만공사 — 스펙·복리후생·실제 업무의 진실",
+      "angle": "채용정보 중복 반복만 하는 기존 글과 달리, 실제 채용자의 스펙·복리후생 수준·3년 경력의 현실을 다루어 공기업 입사를 고민하는 취준생의 정보 비대칭 해소",
+      "hook": "인천항만공사는 정말 안정적인 공기업 일자리일까?"
+    },
+    "팔란티어 테크놀로지": {
+      "topic": "팔란티어는 왜 순손실에도 주가가 오를까? — AI·국방 데이터 사업의 수익성 전환점",
+      "angle": "적자 뉴스 반복만 하는 기존 보도와 달리, AI·국방 정부 사업이 2026년 수익성으로 전환되는 구조와 글로벌 데이터 사업의 경제학을 분석해 테크 투자자의 미래 판단력 제공",
+      "hook": "손실을 보면서 주가만 오르는 팔란티어, 언제까지 지속될까?"
+    },
+    "cm (센티미터)": {
+      "topic": "키 169cm는 남한의 평균을 넘을까? — 세대별 체형 변화와 '작은 남자'의 실제 연애 시장",
+      "angle": "평균 키 통계만 반복하는 기존 콘텐츠와 달리, 세대 간 체형 변화·키 콤플렉스의 과학·실제 연애 시장에서의 영향도를 다루어 외모 불안감이 높은 독자의 현실감 있는 관점 제공",
+      "hook": "평균 키보다 작으면 정말 불리할까?"
+    },
+    "수혜주": {
+      "topic": "AI·반도체·군수 수혜주 지도 — 2026년 상승 기대주를 고르는 법",
+      "angle": "개별 종목 추천만 하는 기존 글과 달리, 구조적 트렌드(AI·방위사업·에너지 전환)에서 수혜주를 고르는 프레임과 리스크 관리법을 제시해 소액 투자자의 전략적 판단력 강화",
+      "hook": "2026년 꼭 오를 만한 수혜주는 어떤 특징을 가질까?"
+    },
+    "김태희": {
+      "topic": "김태희와 비, 한국 스포츠 엘리트의 또 다른 초상 — 연예인 부부의 경제학",
+      "angle": "단순 연애 스캔들만 반복하는 기존 보도와 달리, 연예인-운동선수 결혼이 한국 사회에서 가지는 계급·경제·젠더 의미를 분석해 대중문화의 심층 구조를 질문",
+      "hook": "왜 연예인 여성과 운동선수 남성의 결혼은 주목받을까?"
+    },
+    "민방위": {
+      "topic": "민방위 훈련 불참 시 벌금, 꼭 내야 할까? — 2026년 개정법과 대체 서비스 옵션",
+      "angle": "의무적 공지만 반복하는 기존 공고와 달리, 실제 법적 요건·벌금 회피 옵션·대체 서비스·세대 간 인식 차이를 다루어 직장인·학부모의 실질적 선택지 제공",
+      "hook": "민방위 훈련이 정말 필수일까, 아니면 선택할 수 있을까?"
+    },
+    "스파이": {
+      "topic": "'스파이 패밀리'와 '스파이더맨'은 다르다 — 2026년 스파이 영상콘텐츠의 3가지 스타일",
+      "angle": "개별 작품 평가만 반복하는 기존 리뷰와 달리, 스파이·액션 장르의 세부 분류와 각 스타일의 관객층·전망을 분석해 영상물 선택을 고민하는 독자의 장르적 감각 제공",
+      "hook": "스파이 영상물은 왜 이렇게 많아졌고, 어떤 걸 골라야 할까?"
+    },
+    "백지영": {
+      "topic": "백지영의 무한 신곡 능력 — 28년 경력 가수가 매번 주목받는 이유와 K-POP 생존 공식",
+      "angle": "스캔들·과거 이슈만 반복하는 기존 언론과 달리, 오래 활동하는 가수의 음악 변신·팬덤 유지 전략·세대 변화에 대응하는 능력을 다루어 K-POP 산업 구조의 성공 모델 제시",
+      "hook": "왜 백지영은 28년을 활동하면서도 여전히 '신인' 같은 임팩트를 낼까?"
+    },
+    "이상민": {
+      "topic": "이상민은 배우일까 감독일까 정치인일까 — 다중 정체성의 한국 엘리트 초상",
+      "angle": "단편적 뉴스만 반복하는 기존 보도와 달리, 한 인물의 다양한 정체성(배우·감독·관료)이 한국 사회에서 가지는 의미와 엘리트의 다층적 활동을 분석해 사회 구조의 이중성 노출",
+      "hook": "한 사람이 여러 분야를 주도하는 게 과연 정상일까?"
+    },
+    "김종국과 운동": {
+      "topic": "김종국의 근력 비결 — 50대도 가능한 '대사 증진 운동법'의 과학과 실천",
+      "angle": "유명인 다이어트 팁만 나열하는 기존 콘텐츠와 달리, 나이대별 근력 유지의 생리학적 원리와 현실적 운동 루틴을 다루어 중년 독자의 체감 있는 건강 로드맵 제공",
+      "hook": "50대도 20대처럼 운동하면 근력이 돌아올까?"
+    },
+    "실전과 같은 훈련": {
+      "topic": "학교 훈련은 왜 '실전 같지 않을까?' — 교육심리학이 말하는 학습 효과 극대화",
+      "angle": "단순 교육 뉴스만 다루는 기존 보도와 달리, 시뮬레이션·실습 기반 교육의 신경과학적 효과와 현장 적용 가능성을 다루어 교육자·학부모의 학습 질 판단력 강화",
+      "hook": "실전처럼 훈련하는 것이 정말 배움을 바꿀까?"
+    },
+    "청양군": {
+      "topic": "청양군이 선택지가 되는 이유 — 도시 탈출 1순위 지역의 숨은 경제학",
+      "angle": "관광정보·인구통계만 반복하는 기존 글과 달리, 청양군이 도시민의 이주 선택지로 떠오른 구조적 이유(부동산·일자리·생활환경)를 분석해 귀촌을 고민하는 독자의 의사결정 지원",
+      "hook": "충남 시골이 왜 수도권 탈출 첫 번째 선택지가 될까?"
+    }
+  },
+  "autocomplete": {
+    "김태희": [
+      "김태희",
+      "김태희 비",
+      "김태희 치어리더",
+      "김태희 나무위키",
+      "김태희 자녀",
+      "김태희 리즈",
+      "김태희 동생",
+      "비 김태희",
+      "김태희 근황",
+      "김태희 사주"
+    ],
+    "민방위": [
+      "민방위 교육",
+      "민방위 훈련",
+      "민방위 나이",
+      "민방위 기간",
+      "민방위 조회",
+      "민방위 사이버교육",
+      "민방위",
+      "민방위 복장",
+      "민방위 대피소",
+      "스마트민방위교육"
+    ],
+    "공대지 미사일": [
+      "공대지 미사일",
+      "공대지 미사일 사거리",
+      "공대지 미사일 천룡"
+    ],
+    "팔란티어 테크놀로지": [
+      "팔란티어 테크놀로지스",
+      "팔란티어 테크놀로지",
+      "팔란티어 테크놀로지스 주가",
+      "팔란티어 테크놀로지 실적발표",
+      "팔란티어 테크놀로지 하는일",
+      "팔란티어 테크놀로지 주가 전망",
+      "팔란티어 테크놀로지 관련주",
+      "팔란티어 테크놀로지스 코리아",
+      "팔란티어 테크놀로지스 주가 전망",
+      "팔란티어 테크놀로지 배당"
+    ],
+    "스파이": [
+      "스파이더맨",
+      "스파이 패밀리",
+      "스파이더",
+      "스파이더맨 4",
+      "혈당스파이크",
+      "스파이 영화",
+      "스파이",
+      "스파이크",
+      "스파이더맨1",
+      "돈스파이크"
+    ],
+    "최미나수": [
+      "최미나수",
+      "최미나수 나무위키",
+      "최미나수 사주",
+      "최미나수 이성훈",
+      "최미나수 빌런",
+      "최미나수 원피스",
+      "최미나수 집안",
+      "최미나수 목걸이",
+      "최미나수 옷",
+      "킬잇 최미나수"
+    ],
+    "필리핀": [
+      "필리핀 환율",
+      "필리핀 보홀",
+      "필리핀 여행",
+      "필리핀 이트래블",
+      "필리핀 시간",
+      "필리핀",
+      "필리핀 클락",
+      "필리핀 세부",
+      "필리핀 칼라페",
+      "필리핀항공"
+    ],
+    "코너 맥그리거": [
+      "코너 맥그리거",
+      "코너 맥그리거 인스타",
+      "코너 맥그리거 재산",
+      "코너 맥그리거 복귀"
+    ],
+    "백지영": [
+      "백지영",
+      "백지영 목견인기",
+      "백지영 정석원",
+      "백지영 나무위키",
+      "백지영 노래",
+      "백지영 넥가드",
+      "백지영 오일",
+      "백지영 대쉬",
+      "백지영 잊지말아요",
+      "백지영 사랑안해"
+    ],
+    "이상민": [
+      "이상민",
+      "이상민 감독",
+      "이상민 와이프",
+      "이상민 장관",
+      "이상민 배우",
+      "이상민 룰라",
+      "이상민 나무위키",
+      "이상민 의원",
+      "이상민 농구",
+      "이상민 시험관"
+    ],
+    "중학교": [
+      "중학교 시간표",
+      "중학교 자퇴",
+      "중학교",
+      "목동중학교",
+      "신정중학교",
+      "중앙중학교",
+      "대청중학교",
+      "영동중학교",
+      "서운중학교",
+      "영남중학교"
+    ],
+    "인천항만공사": [
+      "인천항만공사",
+      "인천항만공사 채용",
+      "인천항만공사 연봉",
+      "인천항만공사 사장",
+      "인천항만공사 스펙",
+      "인천항만공사 위치",
+      "인천항만공사 채용공고",
+      "인천항만공사 교육",
+      "인천항만공사 초봉",
+      "인천항만공사 인턴"
+    ],
+    "실전과": [
+      "실전과 같은 훈련"
+    ],
+    "청양군": [
+      "청양군청",
+      "청양군",
+      "청양군 인구",
+      "청양군 날씨",
+      "청양군수",
+      "청양군 맛집",
+      "청양군수 여론조사",
+      "청양군수 후보",
+      "청양군 인구수",
+      "청양군민체육관"
+    ],
+    "완전군장": [
+      "완전군장 무게",
+      "완전군장",
+      "완전군장 행군",
+      "완전군장 40kg",
+      "완전군장 물품",
+      "완전군장 거리",
+      "완전군장 배낭",
+      "완전군장 구보",
+      "완전군장 결속 방법",
+      "완전군장 매는법"
+    ],
+    "한국형": [
+      "한국형 ai",
+      "삼성한국형아파트",
+      "vip한국형가치투자",
+      "한국형 국부펀드",
+      "한국형 3축체계",
+      "한국형 schd",
+      "성서한국형아파트",
+      "한국형사법학회",
+      "한국형 가치투자",
+      "삼성한국형"
+    ],
+    "공대지미사일": [
+      "공대지 미사일",
+      "공대지 미사일 천룡",
+      "공대지 미사일 사거리"
+    ],
+    "여자친구": [
+      "여자친구",
+      "여자친구 생일선물",
+      "여자친구 멤버",
+      "여자친구 해체",
+      "여자친구 100일 선물",
+      "여자친구 선물",
+      "여자친구 노래",
+      "김감전 여자친구",
+      "여자친구 1주년 선물",
+      "만능발 여자친구"
+    ],
+    "혈액형": [
+      "혈액형 조합",
+      "혈액형 성격",
+      "혈액형",
+      "혈액형 비율",
+      "혈액형 유전",
+      "혈액형 궁합",
+      "혈액형 +",
+      "혈액형 특징",
+      "혈액형 검사",
+      "희귀 혈액형"
+    ]
+  },
+  "datalab_used": true,
+  "iot_used": false,
+  "trend_delta": {
+    "prev_date": "2026-05-11",
+    "new_entry": [
+      "김태희",
+      "민방위",
+      "공대지 미사일",
+      "팔란티어 테크놀로지",
+      "스파이",
+      "최미나수",
+      "필리핀",
+      "코너 맥그리거",
+      "백지영",
+      "이상민"
+    ],
+    "dropped": [
+      "닌텐도 스위치 2",
+      "모두의 창업",
+      "한국경제신문",
+      "양상국",
+      "위대한 가이드",
+      "불기소 처분",
+      "김태년",
+      "베냐민 네타냐후",
+      "포스코",
+      "가정의달인데"
+    ],
+    "risen": [
+      {
+        "keyword": "하이닉스",
+        "delta": 5
+      }
+    ],
+    "fallen": []
+  }
+}

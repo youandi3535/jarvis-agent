@@ -1,0 +1,11 @@
+streamlit>=1.32.0
+plotly>=5.20.0
+pandas>=2.0.0
+pyarrow>=15.0.0
+pytrends>=4.9.2
+requests>=2.31.0
+python-dotenv>=1.0.0
+wordcloud>=1.9.3
+matplotlib>=3.8.0
+apscheduler>=3.10
+beautifulsoup4>=4.12

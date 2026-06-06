@@ -1,0 +1,1484 @@
+{
+  "date": "2026-05-26",
+  "collected_at": "15:02:05",
+  "google_trending": [
+    "고성국",
+    "밀워키 브루어스",
+    "김종훈",
+    "아메리칸 뮤직 어워드",
+    "에볼라바이러스",
+    "금융 포용",
+    "장하나",
+    "한국지방재정공제회",
+    "한국관광공사",
+    "관광객",
+    "지방재정공제회",
+    "박근혜",
+    "윤어게인",
+    "모자라",
+    "갚아요",
+    "고칠수",
+    "최저신용자",
+    "MLB",
+    "광속구",
+    "km",
+    "밀워키",
+    "미저로우스키",
+    "김상욱",
+    "역선택",
+    "BTS",
+    "아메리칸",
+    "환자가",
+    "침구류만",
+    "TSMC",
+    "급등에",
+    "대통령",
+    "외국인",
+    "특징주",
+    "SK",
+    "네트웍스",
+    "채권시장",
+    "비명과",
+    "주식시장",
+    "소프트뱅크",
+    "천정부지",
+    "덕분에",
+    "지키고",
+    "셀럽의",
+    "코스피",
+    "투자전략",
+    "따라잡기",
+    "돌파한",
+    "한투운용",
+    "삼전닉스",
+    "만전자"
+  ],
+  "scored_keywords": [
+    {
+      "keyword": "고성국",
+      "rank": 1,
+      "score": 100,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 62.0
+    },
+    {
+      "keyword": "밀워키 브루어스",
+      "rank": 2,
+      "score": 98,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 61.1
+    },
+    {
+      "keyword": "김종훈",
+      "rank": 3,
+      "score": 96,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 60.2
+    },
+    {
+      "keyword": "아메리칸 뮤직 어워드",
+      "rank": 4,
+      "score": 95,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 59.8
+    },
+    {
+      "keyword": "에볼라바이러스",
+      "rank": 5,
+      "score": 93,
+      "sector": "건강·의료",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.9
+    },
+    {
+      "keyword": "금융 포용",
+      "rank": 6,
+      "score": 91,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.0
+    },
+    {
+      "keyword": "장하나",
+      "rank": 7,
+      "score": 89,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 57.1
+    },
+    {
+      "keyword": "한국지방재정공제회",
+      "rank": 8,
+      "score": 87,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 56.1
+    },
+    {
+      "keyword": "한국관광공사",
+      "rank": 9,
+      "score": 86,
+      "sector": "여행",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 55.7
+    },
+    {
+      "keyword": "관광객",
+      "rank": 10,
+      "score": 84,
+      "sector": "여행",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 54.8
+    },
+    {
+      "keyword": "지방재정공제회",
+      "rank": 11,
+      "score": 82,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.9
+    },
+    {
+      "keyword": "박근혜",
+      "rank": 12,
+      "score": 80,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.0
+    },
+    {
+      "keyword": "윤어게인",
+      "rank": 13,
+      "score": 78,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 52.1
+    },
+    {
+      "keyword": "모자라",
+      "rank": 14,
+      "score": 77,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 51.6
+    },
+    {
+      "keyword": "갚아요",
+      "rank": 15,
+      "score": 75,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 50.8
+    },
+    {
+      "keyword": "고칠수",
+      "rank": 16,
+      "score": 73,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.9
+    },
+    {
+      "keyword": "최저신용자",
+      "rank": 17,
+      "score": 71,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.0
+    },
+    {
+      "keyword": "MLB",
+      "rank": 18,
+      "score": 69,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 48.0
+    },
+    {
+      "keyword": "광속구",
+      "rank": 19,
+      "score": 68,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 47.6
+    },
+    {
+      "keyword": "km",
+      "rank": 20,
+      "score": 66,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 46.7
+    },
+    {
+      "keyword": "밀워키",
+      "rank": 21,
+      "score": 64,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 45.8
+    },
+    {
+      "keyword": "미저로우스키",
+      "rank": 22,
+      "score": 62,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.9
+    },
+    {
+      "keyword": "김상욱",
+      "rank": 23,
+      "score": 60,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.0
+    },
+    {
+      "keyword": "역선택",
+      "rank": 24,
+      "score": 59,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 43.5
+    },
+    {
+      "keyword": "BTS",
+      "rank": 25,
+      "score": 57,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 42.7
+    },
+    {
+      "keyword": "아메리칸",
+      "rank": 26,
+      "score": 55,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 41.8
+    },
+    {
+      "keyword": "환자가",
+      "rank": 27,
+      "score": 53,
+      "sector": "건강·의료",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.9
+    },
+    {
+      "keyword": "침구류만",
+      "rank": 28,
+      "score": 51,
+      "sector": "라이프",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.0
+    },
+    {
+      "keyword": "TSMC",
+      "rank": 29,
+      "score": 50,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.5
+    },
+    {
+      "keyword": "급등에",
+      "rank": 30,
+      "score": 48,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 38.6
+    },
+    {
+      "keyword": "대통령",
+      "rank": 31,
+      "score": 46,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.7
+    },
+    {
+      "keyword": "외국인",
+      "rank": 32,
+      "score": 44,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.8
+    },
+    {
+      "keyword": "특징주",
+      "rank": 33,
+      "score": 42,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.2
+    },
+    {
+      "keyword": "SK",
+      "rank": 34,
+      "score": 41,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.5
+    },
+    {
+      "keyword": "네트웍스",
+      "rank": 35,
+      "score": 39,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.5
+    },
+    {
+      "keyword": "채권시장",
+      "rank": 36,
+      "score": 37,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 33.7
+    },
+    {
+      "keyword": "비명과",
+      "rank": 37,
+      "score": 35,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 32.8
+    },
+    {
+      "keyword": "주식시장",
+      "rank": 38,
+      "score": 33,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.9
+    },
+    {
+      "keyword": "소프트뱅크",
+      "rank": 39,
+      "score": 32,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.4
+    },
+    {
+      "keyword": "천정부지",
+      "rank": 40,
+      "score": 30,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.5
+    },
+    {
+      "keyword": "덕분에",
+      "rank": 41,
+      "score": 28,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 29.6
+    },
+    {
+      "keyword": "지키고",
+      "rank": 42,
+      "score": 26,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 28.7
+    },
+    {
+      "keyword": "셀럽의",
+      "rank": 43,
+      "score": 24,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.8
+    },
+    {
+      "keyword": "코스피",
+      "rank": 44,
+      "score": 23,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.4
+    },
+    {
+      "keyword": "투자전략",
+      "rank": 45,
+      "score": 21,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.5
+    },
+    {
+      "keyword": "따라잡기",
+      "rank": 46,
+      "score": 19,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 25.6
+    },
+    {
+      "keyword": "돌파한",
+      "rank": 47,
+      "score": 17,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 24.6
+    },
+    {
+      "keyword": "한투운용",
+      "rank": 48,
+      "score": 15,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.8
+    },
+    {
+      "keyword": "삼전닉스",
+      "rank": 49,
+      "score": 14,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.3
+    },
+    {
+      "keyword": "만전자",
+      "rank": 50,
+      "score": 12,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 22.4
+    }
+  ],
+  "sector_summary": {
+    "사회·이슈": [
+      {
+        "keyword": "고성국",
+        "rank": 1,
+        "score": 100,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 62.0
+      },
+      {
+        "keyword": "한국지방재정공제회",
+        "rank": 8,
+        "score": 87,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 56.1
+      },
+      {
+        "keyword": "지방재정공제회",
+        "rank": 11,
+        "score": 82,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.9
+      },
+      {
+        "keyword": "박근혜",
+        "rank": 12,
+        "score": 80,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.0
+      },
+      {
+        "keyword": "윤어게인",
+        "rank": 13,
+        "score": 78,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 52.1
+      },
+      {
+        "keyword": "역선택",
+        "rank": 24,
+        "score": 59,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      },
+      {
+        "keyword": "대통령",
+        "rank": 31,
+        "score": 46,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.7
+      },
+      {
+        "keyword": "천정부지",
+        "rank": 40,
+        "score": 30,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.5
+      }
+    ],
+    "스포츠": [
+      {
+        "keyword": "밀워키 브루어스",
+        "rank": 2,
+        "score": 98,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 61.1
+      },
+      {
+        "keyword": "MLB",
+        "rank": 18,
+        "score": 69,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 48.0
+      },
+      {
+        "keyword": "광속구",
+        "rank": 19,
+        "score": 68,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 47.6
+      },
+      {
+        "keyword": "밀워키",
+        "rank": 21,
+        "score": 64,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      },
+      {
+        "keyword": "미저로우스키",
+        "rank": 22,
+        "score": 62,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      }
+    ],
+    "연예·문화": [
+      {
+        "keyword": "김종훈",
+        "rank": 3,
+        "score": 96,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 60.2
+      },
+      {
+        "keyword": "아메리칸 뮤직 어워드",
+        "rank": 4,
+        "score": 95,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 59.8
+      },
+      {
+        "keyword": "장하나",
+        "rank": 7,
+        "score": 89,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 57.1
+      },
+      {
+        "keyword": "모자라",
+        "rank": 14,
+        "score": 77,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 51.6
+      },
+      {
+        "keyword": "갚아요",
+        "rank": 15,
+        "score": 75,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 50.8
+      },
+      {
+        "keyword": "고칠수",
+        "rank": 16,
+        "score": 73,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.9
+      },
+      {
+        "keyword": "김상욱",
+        "rank": 23,
+        "score": 60,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      },
+      {
+        "keyword": "BTS",
+        "rank": 25,
+        "score": 57,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      },
+      {
+        "keyword": "아메리칸",
+        "rank": 26,
+        "score": 55,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      },
+      {
+        "keyword": "비명과",
+        "rank": 37,
+        "score": 35,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      },
+      {
+        "keyword": "덕분에",
+        "rank": 41,
+        "score": 28,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      },
+      {
+        "keyword": "지키고",
+        "rank": 42,
+        "score": 26,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 28.7
+      },
+      {
+        "keyword": "셀럽의",
+        "rank": 43,
+        "score": 24,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.8
+      }
+    ],
+    "건강·의료": [
+      {
+        "keyword": "에볼라바이러스",
+        "rank": 5,
+        "score": 93,
+        "sector": "건강·의료",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.9
+      },
+      {
+        "keyword": "환자가",
+        "rank": 27,
+        "score": 53,
+        "sector": "건강·의료",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      }
+    ],
+    "금융·투자": [
+      {
+        "keyword": "금융 포용",
+        "rank": 6,
+        "score": 91,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.0
+      },
+      {
+        "keyword": "최저신용자",
+        "rank": 17,
+        "score": 71,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.0
+      },
+      {
+        "keyword": "외국인",
+        "rank": 32,
+        "score": 44,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.8
+      },
+      {
+        "keyword": "채권시장",
+        "rank": 36,
+        "score": 37,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 33.7
+      },
+      {
+        "keyword": "주식시장",
+        "rank": 38,
+        "score": 33,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "소프트뱅크",
+        "rank": 39,
+        "score": 32,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.4
+      },
+      {
+        "keyword": "특징주",
+        "rank": 33,
+        "score": 42,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.2
+      },
+      {
+        "keyword": "코스피",
+        "rank": 44,
+        "score": 23,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      },
+      {
+        "keyword": "투자전략",
+        "rank": 45,
+        "score": 21,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      },
+      {
+        "keyword": "돌파한",
+        "rank": 47,
+        "score": 17,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 24.6
+      },
+      {
+        "keyword": "한투운용",
+        "rank": 48,
+        "score": 15,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.8
+      }
+    ],
+    "여행": [
+      {
+        "keyword": "한국관광공사",
+        "rank": 9,
+        "score": 86,
+        "sector": "여행",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 55.7
+      },
+      {
+        "keyword": "관광객",
+        "rank": 10,
+        "score": 84,
+        "sector": "여행",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 54.8
+      }
+    ],
+    "기타": [
+      {
+        "keyword": "km",
+        "rank": 20,
+        "score": 66,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 46.7
+      },
+      {
+        "keyword": "따라잡기",
+        "rank": 46,
+        "score": 19,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      }
+    ],
+    "라이프": [
+      {
+        "keyword": "침구류만",
+        "rank": 28,
+        "score": 51,
+        "sector": "라이프",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "TSMC",
+        "rank": 29,
+        "score": 50,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      },
+      {
+        "keyword": "네트웍스",
+        "rank": 35,
+        "score": 39,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.5
+      },
+      {
+        "keyword": "만전자",
+        "rank": 50,
+        "score": 12,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 22.4
+      }
+    ],
+    "경제·경기": [
+      {
+        "keyword": "급등에",
+        "rank": 30,
+        "score": 48,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 38.6
+      },
+      {
+        "keyword": "SK",
+        "rank": 34,
+        "score": 41,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.5
+      },
+      {
+        "keyword": "삼전닉스",
+        "rank": 49,
+        "score": 14,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.3
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "theme": "한국관광공사",
+      "topic": "한국관광공사가 올해 밀고 있는 여행지, 직접 가봤더니 이런 곳이었다",
+      "keyword": "한국관광공사",
+      "sector": "여행",
+      "score": 86,
+      "opportunity_score": 55.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #9 · 경쟁 보통 · 최근 미발행",
+      "angle": "공공기관 공식 추천지는 신뢰도가 높고 실제 방문 경험 콘텐츠가 드물어 차별화 가능",
+      "hook": "관광공사 추천 = 진짜 핫플인지, 아니면 그냥 홍보용인지 궁금한 독자",
+      "color": "#87CEEB"
+    },
+    {
+      "theme": "에볼라바이러스",
+      "topic": "에볼라 다시 확산? 한국인이 지금 당장 알아야 할 3가지",
+      "keyword": "에볼라바이러스",
+      "sector": "건강·의료",
+      "score": 93,
+      "opportunity_score": 58.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #5 · 경쟁 보통 · 최근 미발행",
+      "angle": "해외 발생 감염병은 국내 유입 불안감을 자극하므로 '내게 어떤 영향?' 프레임이 클릭률 최고",
+      "hook": "또 해외여행 막히는 건지, 국내 감염 가능성은 없는지 걱정되는 독자",
+      "color": "#00FF88"
+    },
+    {
+      "theme": "밀워키 브루어스",
+      "topic": "밀워키 브루어스에 한국 선수가? 지금 주목해야 하는 이유",
+      "keyword": "밀워키 브루어스",
+      "sector": "스포츠",
+      "score": 98,
+      "opportunity_score": 61.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #2 · 경쟁 보통 · 최근 미발행",
+      "angle": "한국 팬에게 낯선 MLB 팀이 검색 급등한 데는 반드시 한국 연결고리가 있음 — 그 맥락 집중",
+      "hook": "왜 갑자기 밀워키 브루어스가 뜨는지 모르는 야구 팬",
+      "color": "#2ECC71"
+    },
+    {
+      "theme": "고성국",
+      "topic": "고성국이 또 발언했다 — 이번엔 뭘 말했고 왜 논란인가",
+      "keyword": "고성국",
+      "sector": "사회·이슈",
+      "score": 100,
+      "opportunity_score": 62.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #1 · 경쟁 보통 · 최근 미발행",
+      "angle": "정치 논평가 발언 이슈는 '사실 정리' 포맷이 양쪽 독자를 모두 끌어들여 트래픽 극대화",
+      "hook": "SNS에서 고성국 이름이 자꾸 보이는데 맥락을 모르는 독자",
+      "color": "#778CA3"
+    },
+    {
+      "theme": "김종훈",
+      "topic": "김종훈, 지금 이 시점에 왜 다시 화제가 되고 있나",
+      "keyword": "김종훈",
+      "sector": "연예·문화",
+      "score": 96,
+      "opportunity_score": 60.2,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #3 · 경쟁 보통 · 최근 미발행",
+      "angle": "동명이인이 많은 인물은 '어떤 김종훈인지' 명확히 짚는 것 자체가 검색 의도와 일치",
+      "hook": "김종훈이라는 이름은 아는데 왜 오늘 뜨는지 모르는 독자",
+      "color": "#E91E63"
+    },
+    {
+      "theme": "침구류 세탁",
+      "topic": "이불·베개만 제대로 세탁해도 수면의 질이 달라진다 — 주기·방법 실전 정리",
+      "keyword": "침구류 세탁",
+      "sector": "라이프",
+      "score": 51,
+      "opportunity_score": 40.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #28 · 경쟁 보통 · 최근 미발행",
+      "angle": "'침구류만'은 세탁 범위를 침구류로 한정한 검색 의도 — 세탁기 용량·소재별 분리법 등 실용 콘텐츠 공백",
+      "hook": "이불을 얼마나 자주, 어떻게 세탁해야 하는지 막연한 독자",
+      "color": "#FF6B6B"
+    },
+    {
+      "theme": "km (킬로미터)",
+      "topic": "운동 앱이 km로 표시하는 거리, 실제로 얼마나 걷는 건지 감이 안 잡힐 때",
+      "keyword": "km (킬로미터)",
+      "sector": "기타",
+      "score": 66,
+      "opportunity_score": 46.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #20 · 경쟁 보통 · 최근 미발행",
+      "angle": "단순 단위 검색 뒤에는 운동·다이어트·여행 거리 감각화 니즈가 숨어 있어 실생활 연결이 유효",
+      "hook": "헬스 앱에서 '오늘 3.2km 걸었습니다'라고 뜨는데 그게 얼마나 대단한 건지 모르는 독자",
+      "color": "#4A4A4A"
+    },
+    {
+      "theme": "금융 포용",
+      "topic": "금융 포용이란 무엇인가 — 은행 못 쓰는 사람들을 위한 정책, 나에게도 해당될까",
+      "keyword": "금융 포용",
+      "sector": "금융·투자",
+      "score": 91,
+      "opportunity_score": 58.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #6 · 경쟁 보통 · 최근 미발행",
+      "angle": "정책 용어는 일반 독자에게 낯설어 '나와 무슨 관계?' 프레임으로 풀면 체류시간이 길어짐",
+      "hook": "금융 소외·저신용·소득 불안정 상황에서 혜택받을 수 있는 제도가 있는지 궁금한 독자",
+      "color": "#FFD700"
+    },
+    {
+      "theme": "급등 종목",
+      "topic": "오늘 갑자기 급등한 종목, 뒤늦게 들어가면 어떻게 되는가",
+      "keyword": "급등 종목",
+      "sector": "경제·경기",
+      "score": 48,
+      "opportunity_score": 38.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #30 · 경쟁 보통 · 최근 미발행",
+      "angle": "급등 뒤 추격매수 행동 심리를 역이용해 '함정' 경고 각도는 클릭 유도 + 신뢰 획득 동시 가능",
+      "hook": "이미 오른 종목을 지금 사도 되는지, 아니면 손실 함정인지 판단 못 하는 개인투자자",
+      "color": "#F39C12"
+    },
+    {
+      "theme": "TSMC",
+      "topic": "TSMC가 흔들리면 내 포트폴리오도 흔들린다 — 반도체 ETF 투자자가 봐야 할 신호",
+      "keyword": "TSMC",
+      "sector": "IT·테크",
+      "score": 50,
+      "opportunity_score": 39.5,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #29 · 경쟁 보통 · 최근 미발행",
+      "angle": "TSMC 직접 투자가 어려운 한국 개인 투자자를 타겟으로 관련 ETF·국내 수혜주 연결 각도가 공백",
+      "hook": "TSMC 뉴스가 삼성·하이닉스 주가에 어떤 영향을 주는지 모르는 개인투자자",
+      "color": "#00D4FF"
+    }
+  ],
+  "extra_angles": [
+    {
+      "theme": "아메리칸 뮤직 어워드",
+      "topic": "아메리칸 뮤직 어워드 2026, 한국 팬이 주목할 후보와 관전 포인트",
+      "keyword": "아메리칸 뮤직 어워드",
+      "sector": "연예·문화",
+      "score": 95,
+      "opportunity_score": 59.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 95 · 연예·문화",
+      "angle": "글로벌 시상식은 K팝 아티스트 수상 여부로 한국 팬 관심이 집중되므로 K팝 시각 필터링이 핵심",
+      "hook": "AMA가 그래미나 빌보드와 어떻게 다른지, 한국 가수가 받을 가능성이 있는지 궁금한 팬",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "장하나",
+      "topic": "장하나, 지금 이 타이밍에 다시 주목받는 진짜 이유",
+      "keyword": "장하나",
+      "sector": "연예·문화",
+      "score": 89,
+      "opportunity_score": 57.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 89 · 연예·문화",
+      "angle": "연예인 재소환 이슈는 '왜 지금?'이라는 타이밍 의문을 해소해 주는 콘텐츠가 검색 의도와 정확히 매칭",
+      "hook": "장하나 이름이 갑자기 피드에 뜨기 시작한 이유를 모르는 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "한국지방재정공제회",
+      "topic": "한국지방재정공제회란 무엇인가 — 지방공무원이라면 가입·혜택 꼭 확인하세요",
+      "keyword": "한국지방재정공제회",
+      "sector": "사회·이슈",
+      "score": 87,
+      "opportunity_score": 56.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 87 · 사회·이슈",
+      "angle": "공공기관 인지도가 낮아 정작 혜택 대상자인 지방공무원도 모르는 경우가 많아 정보 공백이 큼",
+      "hook": "지방공무원인데 소속 공제회 혜택을 제대로 활용하고 있는지 모르는 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "관광객",
+      "topic": "외국인 관광객이 한국에서 진짜 실망하는 것 vs 예상 외로 감동받는 것",
+      "keyword": "관광객",
+      "sector": "여행",
+      "score": 84,
+      "opportunity_score": 54.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 84 · 여행",
+      "angle": "내국인 시각에서 벗어난 '외국인 눈에 비친 한국' 프레임은 공감과 호기심을 동시에 자극",
+      "hook": "한국 여행을 다녀간 외국인들의 솔직한 반응이 궁금한 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "지방재정공제회",
+      "topic": "지방재정공제회 가입 자격·대출·적금 혜택, 실제로 얼마나 유리한가",
+      "keyword": "지방재정공제회",
+      "sector": "사회·이슈",
+      "score": 82,
+      "opportunity_score": 53.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 82 · 사회·이슈",
+      "angle": "기관명 단독 검색은 가입 요건·금리·혜택 비교를 원하는 의도이므로 구체 수치 중심 실용 콘텐츠가 공백",
+      "hook": "지방재정공제회 가입 후 어떤 혜택을 얼마나 받을 수 있는지 궁금한 공무원",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "박근혜",
+      "topic": "박근혜가 다시 뉴스에 등장한 이유 — 2026년 지금 시점에서 보는 맥락",
+      "keyword": "박근혜",
+      "sector": "사회·이슈",
+      "score": 80,
+      "opportunity_score": 53.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 80 · 사회·이슈",
+      "angle": "전직 대통령 재등장 이슈는 현재 정치 지형과 연결된 맥락 분석이 중립 독자를 가장 많이 끌어들임",
+      "hook": "박근혜 관련 뉴스를 봤는데 지금 무슨 일이 있는 건지 파악하고 싶은 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "윤어게인",
+      "topic": "'윤어게인'이 뭔지 모르면 지금 한국 정치 흐름을 놓치는 것",
+      "keyword": "윤어게인",
+      "sector": "사회·이슈",
+      "score": 78,
+      "opportunity_score": 52.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 78 · 사회·이슈",
+      "angle": "신조어·운동 명칭은 모르면 소외되는 FOMO 심리를 자극하는 제목이 가장 효과적",
+      "hook": "SNS에서 '윤어게인'이 계속 보이는데 무슨 운동인지 정확히 모르는 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "모자라 (곡·드라마)",
+      "topic": "자꾸 귀에 맴도는 '모자라' — 이 노래가 지금 왜 이렇게 많이 들리는가",
+      "keyword": "모자라 (곡·드라마)",
+      "sector": "연예·문화",
+      "score": 77,
+      "opportunity_score": 51.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 77 · 연예·문화",
+      "angle": "음악·드라마 OST 바이럴 이슈는 '왜 유행하는가' 분석 각도가 소비자 공감을 극대화",
+      "hook": "어디선가 들었는데 제목도 가수도 모르고 찾고 있는 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "갚아요 (곡·드라마)",
+      "topic": "'갚아요' 가사에 이렇게 반응하는 이유 — 지금 유행하는 감성의 정체",
+      "keyword": "갚아요 (곡·드라마)",
+      "sector": "연예·문화",
+      "score": 75,
+      "opportunity_score": 50.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 75 · 연예·문화",
+      "angle": "감정 공명 콘텐츠는 '왜 내 마음을 건드리는가'를 분석해 주면 공유율과 체류시간이 동시에 상승",
+      "hook": "이 노래 혹은 대사가 유독 마음에 걸리는 이유를 설명받고 싶은 독자",
+      "color": "#4a5568"
+    }
+  ],
+  "content_angles": {
+    "한국관광공사": {
+      "topic": "한국관광공사가 올해 밀고 있는 여행지, 직접 가봤더니 이런 곳이었다",
+      "angle": "공공기관 공식 추천지는 신뢰도가 높고 실제 방문 경험 콘텐츠가 드물어 차별화 가능",
+      "hook": "관광공사 추천 = 진짜 핫플인지, 아니면 그냥 홍보용인지 궁금한 독자"
+    },
+    "에볼라바이러스": {
+      "topic": "에볼라 다시 확산? 한국인이 지금 당장 알아야 할 3가지",
+      "angle": "해외 발생 감염병은 국내 유입 불안감을 자극하므로 '내게 어떤 영향?' 프레임이 클릭률 최고",
+      "hook": "또 해외여행 막히는 건지, 국내 감염 가능성은 없는지 걱정되는 독자"
+    },
+    "밀워키 브루어스": {
+      "topic": "밀워키 브루어스에 한국 선수가? 지금 주목해야 하는 이유",
+      "angle": "한국 팬에게 낯선 MLB 팀이 검색 급등한 데는 반드시 한국 연결고리가 있음 — 그 맥락 집중",
+      "hook": "왜 갑자기 밀워키 브루어스가 뜨는지 모르는 야구 팬"
+    },
+    "고성국": {
+      "topic": "고성국이 또 발언했다 — 이번엔 뭘 말했고 왜 논란인가",
+      "angle": "정치 논평가 발언 이슈는 '사실 정리' 포맷이 양쪽 독자를 모두 끌어들여 트래픽 극대화",
+      "hook": "SNS에서 고성국 이름이 자꾸 보이는데 맥락을 모르는 독자"
+    },
+    "김종훈": {
+      "topic": "김종훈, 지금 이 시점에 왜 다시 화제가 되고 있나",
+      "angle": "동명이인이 많은 인물은 '어떤 김종훈인지' 명확히 짚는 것 자체가 검색 의도와 일치",
+      "hook": "김종훈이라는 이름은 아는데 왜 오늘 뜨는지 모르는 독자"
+    },
+    "침구류 세탁": {
+      "topic": "이불·베개만 제대로 세탁해도 수면의 질이 달라진다 — 주기·방법 실전 정리",
+      "angle": "'침구류만'은 세탁 범위를 침구류로 한정한 검색 의도 — 세탁기 용량·소재별 분리법 등 실용 콘텐츠 공백",
+      "hook": "이불을 얼마나 자주, 어떻게 세탁해야 하는지 막연한 독자"
+    },
+    "km (킬로미터)": {
+      "topic": "운동 앱이 km로 표시하는 거리, 실제로 얼마나 걷는 건지 감이 안 잡힐 때",
+      "angle": "단순 단위 검색 뒤에는 운동·다이어트·여행 거리 감각화 니즈가 숨어 있어 실생활 연결이 유효",
+      "hook": "헬스 앱에서 '오늘 3.2km 걸었습니다'라고 뜨는데 그게 얼마나 대단한 건지 모르는 독자"
+    },
+    "금융 포용": {
+      "topic": "금융 포용이란 무엇인가 — 은행 못 쓰는 사람들을 위한 정책, 나에게도 해당될까",
+      "angle": "정책 용어는 일반 독자에게 낯설어 '나와 무슨 관계?' 프레임으로 풀면 체류시간이 길어짐",
+      "hook": "금융 소외·저신용·소득 불안정 상황에서 혜택받을 수 있는 제도가 있는지 궁금한 독자"
+    },
+    "급등 종목": {
+      "topic": "오늘 갑자기 급등한 종목, 뒤늦게 들어가면 어떻게 되는가",
+      "angle": "급등 뒤 추격매수 행동 심리를 역이용해 '함정' 경고 각도는 클릭 유도 + 신뢰 획득 동시 가능",
+      "hook": "이미 오른 종목을 지금 사도 되는지, 아니면 손실 함정인지 판단 못 하는 개인투자자"
+    },
+    "TSMC": {
+      "topic": "TSMC가 흔들리면 내 포트폴리오도 흔들린다 — 반도체 ETF 투자자가 봐야 할 신호",
+      "angle": "TSMC 직접 투자가 어려운 한국 개인 투자자를 타겟으로 관련 ETF·국내 수혜주 연결 각도가 공백",
+      "hook": "TSMC 뉴스가 삼성·하이닉스 주가에 어떤 영향을 주는지 모르는 개인투자자"
+    },
+    "아메리칸 뮤직 어워드": {
+      "topic": "아메리칸 뮤직 어워드 2026, 한국 팬이 주목할 후보와 관전 포인트",
+      "angle": "글로벌 시상식은 K팝 아티스트 수상 여부로 한국 팬 관심이 집중되므로 K팝 시각 필터링이 핵심",
+      "hook": "AMA가 그래미나 빌보드와 어떻게 다른지, 한국 가수가 받을 가능성이 있는지 궁금한 팬"
+    },
+    "장하나": {
+      "topic": "장하나, 지금 이 타이밍에 다시 주목받는 진짜 이유",
+      "angle": "연예인 재소환 이슈는 '왜 지금?'이라는 타이밍 의문을 해소해 주는 콘텐츠가 검색 의도와 정확히 매칭",
+      "hook": "장하나 이름이 갑자기 피드에 뜨기 시작한 이유를 모르는 독자"
+    },
+    "한국지방재정공제회": {
+      "topic": "한국지방재정공제회란 무엇인가 — 지방공무원이라면 가입·혜택 꼭 확인하세요",
+      "angle": "공공기관 인지도가 낮아 정작 혜택 대상자인 지방공무원도 모르는 경우가 많아 정보 공백이 큼",
+      "hook": "지방공무원인데 소속 공제회 혜택을 제대로 활용하고 있는지 모르는 독자"
+    },
+    "관광객": {
+      "topic": "외국인 관광객이 한국에서 진짜 실망하는 것 vs 예상 외로 감동받는 것",
+      "angle": "내국인 시각에서 벗어난 '외국인 눈에 비친 한국' 프레임은 공감과 호기심을 동시에 자극",
+      "hook": "한국 여행을 다녀간 외국인들의 솔직한 반응이 궁금한 독자"
+    },
+    "지방재정공제회": {
+      "topic": "지방재정공제회 가입 자격·대출·적금 혜택, 실제로 얼마나 유리한가",
+      "angle": "기관명 단독 검색은 가입 요건·금리·혜택 비교를 원하는 의도이므로 구체 수치 중심 실용 콘텐츠가 공백",
+      "hook": "지방재정공제회 가입 후 어떤 혜택을 얼마나 받을 수 있는지 궁금한 공무원"
+    },
+    "박근혜": {
+      "topic": "박근혜가 다시 뉴스에 등장한 이유 — 2026년 지금 시점에서 보는 맥락",
+      "angle": "전직 대통령 재등장 이슈는 현재 정치 지형과 연결된 맥락 분석이 중립 독자를 가장 많이 끌어들임",
+      "hook": "박근혜 관련 뉴스를 봤는데 지금 무슨 일이 있는 건지 파악하고 싶은 독자"
+    },
+    "윤어게인": {
+      "topic": "'윤어게인'이 뭔지 모르면 지금 한국 정치 흐름을 놓치는 것",
+      "angle": "신조어·운동 명칭은 모르면 소외되는 FOMO 심리를 자극하는 제목이 가장 효과적",
+      "hook": "SNS에서 '윤어게인'이 계속 보이는데 무슨 운동인지 정확히 모르는 독자"
+    },
+    "모자라 (곡·드라마)": {
+      "topic": "자꾸 귀에 맴도는 '모자라' — 이 노래가 지금 왜 이렇게 많이 들리는가",
+      "angle": "음악·드라마 OST 바이럴 이슈는 '왜 유행하는가' 분석 각도가 소비자 공감을 극대화",
+      "hook": "어디선가 들었는데 제목도 가수도 모르고 찾고 있는 독자"
+    },
+    "갚아요 (곡·드라마)": {
+      "topic": "'갚아요' 가사에 이렇게 반응하는 이유 — 지금 유행하는 감성의 정체",
+      "angle": "감정 공명 콘텐츠는 '왜 내 마음을 건드리는가'를 분석해 주면 공유율과 체류시간이 동시에 상승",
+      "hook": "이 노래 혹은 대사가 유독 마음에 걸리는 이유를 설명받고 싶은 독자"
+    }
+  },
+  "autocomplete": {},
+  "datalab_used": false,
+  "iot_used": false,
+  "trend_delta": {
+    "prev_date": "2026-05-25",
+    "new_entry": [
+      "고성국",
+      "밀워키 브루어스",
+      "김종훈",
+      "아메리칸 뮤직 어워드",
+      "에볼라바이러스",
+      "금융 포용",
+      "장하나",
+      "한국지방재정공제회",
+      "한국관광공사",
+      "관광객"
+    ],
+    "dropped": [
+      "하지원",
+      "memorial day 2026",
+      "배종옥",
+      "레버리지",
+      "김태형",
+      "해외여행",
+      "현대자동차그룹",
+      "유스디비전",
+      "MID",
+      "프로농구"
+    ],
+    "risen": [
+      {
+        "keyword": "SK",
+        "delta": 4
+      }
+    ],
+    "fallen": []
+  }
+}

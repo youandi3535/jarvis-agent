@@ -1,0 +1,40 @@
+#!/bin/bash
+# JARVIS pre-commit 훅 — CLAUDE.md 박제 검증 자동 실행
+#
+# 설치 (1회):
+#   git config core.hooksPath .githooks
+#
+# 모드:
+#   기본       — 경고 출력 후 commit 통과 (점진적 도입)
+#   strict     — JARVIS_STRICT=1 환경변수 설정 시 위반 발견하면 차단
+#
+# 비활성:
+#   git commit --no-verify
+
+set -e
+
+ROOT="$(git rev-parse --show-toplevel)"
+SCRIPT="$ROOT/shared/precommit_check.py"
+
+if [ ! -f "$SCRIPT" ]; then
+    echo "⚠️  precommit_check.py 없음 — 검증 건너뜀"
+    exit 0
+fi
+
+python3 "$SCRIPT"
+status=$?
+
+if [ $status -eq 0 ]; then
+    exit 0
+fi
+
+echo ""
+if [ "${JARVIS_STRICT:-0}" = "1" ]; then
+    echo "❌ JARVIS_STRICT=1 — 위반 해결 후 다시 commit"
+    echo "    임시 우회: git commit --no-verify"
+    exit 1
+fi
+
+echo "💡 경고 모드 — commit 진행됨. 차단 활성화: export JARVIS_STRICT=1"
+echo "    위반 카테고리 확인: python3 shared/precommit_check.py --list"
+exit 0

@@ -1,0 +1,1683 @@
+{
+  "date": "2026-05-07",
+  "collected_at": "12:01:14",
+  "google_trending": [
+    "롯데면세점",
+    "샌안토니오 대 미네소타",
+    "한덕수",
+    "삼성e&a",
+    "공소취소 뜻",
+    "국립중앙박물관",
+    "스타폭스",
+    "김정난",
+    "장애인",
+    "손흥민",
+    "고지대",
+    "LAFC",
+    "블록슛",
+    "NBA",
+    "샌안토니오",
+    "스포츠",
+    "내란중요임무종사",
+    "뉴스포커스",
+    "삼성E",
+    "오빠와",
+    "비밀로",
+    "박성준",
+    "시민들은",
+    "전격시사",
+    "전현희",
+    "주식시장",
+    "고물가",
+    "과잉유동성과",
+    "금리인상",
+    "코스피",
+    "오르네",
+    "닛케이",
+    "사상첫",
+    "롤러코스터",
+    "특징주",
+    "대한광통신",
+    "광케이블",
+    "OCI",
+    "홀딩스",
+    "CJ",
+    "제일제당",
+    "고려아연",
+    "급등락",
+    "하이닉스",
+    "주주연대",
+    "총파업",
+    "테슬라",
+    "스페이스",
+    "반도체",
+    "우리도"
+  ],
+  "scored_keywords": [
+    {
+      "keyword": "롯데면세점",
+      "rank": 1,
+      "score": 100,
+      "sector": "뷰티·패션",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 100.0,
+      "opportunity_score": 54.5
+    },
+    {
+      "keyword": "샌안토니오 대 미네소타",
+      "rank": 2,
+      "score": 98,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 56.7,
+      "opportunity_score": 59.8
+    },
+    {
+      "keyword": "한덕수",
+      "rank": 3,
+      "score": 96,
+      "sector": "사회·이슈",
+      "velocity": "급등",
+      "velocity_score": 30.0,
+      "competition": 100.0,
+      "opportunity_score": 65.2
+    },
+    {
+      "keyword": "삼성e&a",
+      "rank": 4,
+      "score": 95,
+      "sector": "경제·경기",
+      "velocity": "하락",
+      "velocity_score": -10.0,
+      "competition": 82.6,
+      "opportunity_score": 48.2
+    },
+    {
+      "keyword": "공소취소 뜻",
+      "rank": 5,
+      "score": 93,
+      "sector": "사회·이슈",
+      "velocity": "급등",
+      "velocity_score": 30.0,
+      "competition": 75.1,
+      "opportunity_score": 68.8
+    },
+    {
+      "keyword": "국립중앙박물관",
+      "rank": 6,
+      "score": 91,
+      "sector": "연예·문화",
+      "velocity": "상승",
+      "velocity_score": 20.0,
+      "competition": 100.0,
+      "opportunity_score": 58.0
+    },
+    {
+      "keyword": "스타폭스",
+      "rank": 7,
+      "score": 89,
+      "sector": "연예·문화",
+      "velocity": "급등",
+      "velocity_score": 30.0,
+      "competition": 74.2,
+      "opportunity_score": 67.2
+    },
+    {
+      "keyword": "김정난",
+      "rank": 8,
+      "score": 87,
+      "sector": "연예·문화",
+      "velocity": "상승",
+      "velocity_score": 20.0,
+      "competition": 89.5,
+      "opportunity_score": 58.3
+    },
+    {
+      "keyword": "장애인",
+      "rank": 9,
+      "score": 86,
+      "sector": "사회·이슈",
+      "velocity": "급등",
+      "velocity_score": 30.0,
+      "competition": 100.0,
+      "opportunity_score": 60.7
+    },
+    {
+      "keyword": "손흥민",
+      "rank": 10,
+      "score": 84,
+      "sector": "스포츠",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 100.0,
+      "opportunity_score": 47.3
+    },
+    {
+      "keyword": "고지대",
+      "rank": 11,
+      "score": 82,
+      "sector": "여행",
+      "velocity": "급등",
+      "velocity_score": 30.0,
+      "competition": 98.7,
+      "opportunity_score": 59.2
+    },
+    {
+      "keyword": "LAFC",
+      "rank": 12,
+      "score": 80,
+      "sector": "스포츠",
+      "velocity": "상승",
+      "velocity_score": 20.0,
+      "competition": 89.3,
+      "opportunity_score": 55.1
+    },
+    {
+      "keyword": "블록슛",
+      "rank": 13,
+      "score": 78,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 93.8,
+      "opportunity_score": 43.3
+    },
+    {
+      "keyword": "NBA",
+      "rank": 14,
+      "score": 77,
+      "sector": "스포츠",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 100.0,
+      "opportunity_score": 44.1
+    },
+    {
+      "keyword": "샌안토니오",
+      "rank": 15,
+      "score": 75,
+      "sector": "스포츠",
+      "velocity": "급등",
+      "velocity_score": 30.0,
+      "competition": 94.5,
+      "opportunity_score": 56.9
+    },
+    {
+      "keyword": "스포츠",
+      "rank": 16,
+      "score": 73,
+      "sector": "스포츠",
+      "velocity": "유지",
+      "velocity_score": 5.0,
+      "competition": 50.0,
+      "opportunity_score": 52.4
+    },
+    {
+      "keyword": "내란중요임무종사",
+      "rank": 17,
+      "score": 71,
+      "sector": "사회·이슈",
+      "velocity": "신규",
+      "velocity_score": 5.0,
+      "competition": 50.0,
+      "opportunity_score": 51.5
+    },
+    {
+      "keyword": "뉴스포커스",
+      "rank": 18,
+      "score": 69,
+      "sector": "사회·이슈",
+      "velocity": "급등",
+      "velocity_score": 30.0,
+      "competition": 50.0,
+      "opportunity_score": 63.0
+    },
+    {
+      "keyword": "삼성E",
+      "rank": 19,
+      "score": 68,
+      "sector": "IT·테크",
+      "velocity": "급등",
+      "velocity_score": 30.0,
+      "competition": 50.0,
+      "opportunity_score": 62.6
+    },
+    {
+      "keyword": "오빠와",
+      "rank": 20,
+      "score": 66,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 46.7
+    },
+    {
+      "keyword": "비밀로",
+      "rank": 21,
+      "score": 64,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 45.8
+    },
+    {
+      "keyword": "박성준",
+      "rank": 22,
+      "score": 62,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.9
+    },
+    {
+      "keyword": "시민들은",
+      "rank": 23,
+      "score": 60,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.0
+    },
+    {
+      "keyword": "전격시사",
+      "rank": 24,
+      "score": 59,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 43.5
+    },
+    {
+      "keyword": "전현희",
+      "rank": 25,
+      "score": 57,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 42.7
+    },
+    {
+      "keyword": "주식시장",
+      "rank": 26,
+      "score": 55,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 41.8
+    },
+    {
+      "keyword": "고물가",
+      "rank": 27,
+      "score": 53,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.9
+    },
+    {
+      "keyword": "과잉유동성과",
+      "rank": 28,
+      "score": 51,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.0
+    },
+    {
+      "keyword": "금리인상",
+      "rank": 29,
+      "score": 50,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.5
+    },
+    {
+      "keyword": "코스피",
+      "rank": 30,
+      "score": 48,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 38.6
+    },
+    {
+      "keyword": "오르네",
+      "rank": 31,
+      "score": 46,
+      "sector": "음식·맛집",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.7
+    },
+    {
+      "keyword": "닛케이",
+      "rank": 32,
+      "score": 44,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.8
+    },
+    {
+      "keyword": "사상첫",
+      "rank": 33,
+      "score": 42,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.9
+    },
+    {
+      "keyword": "롤러코스터",
+      "rank": 34,
+      "score": 41,
+      "sector": "라이프",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.5
+    },
+    {
+      "keyword": "특징주",
+      "rank": 35,
+      "score": 39,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.5
+    },
+    {
+      "keyword": "대한광통신",
+      "rank": 36,
+      "score": 37,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 33.7
+    },
+    {
+      "keyword": "광케이블",
+      "rank": 37,
+      "score": 35,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 32.8
+    },
+    {
+      "keyword": "OCI",
+      "rank": 38,
+      "score": 33,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.9
+    },
+    {
+      "keyword": "홀딩스",
+      "rank": 39,
+      "score": 32,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.4
+    },
+    {
+      "keyword": "CJ",
+      "rank": 40,
+      "score": 30,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.5
+    },
+    {
+      "keyword": "제일제당",
+      "rank": 41,
+      "score": 28,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 29.6
+    },
+    {
+      "keyword": "고려아연",
+      "rank": 42,
+      "score": 26,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 28.7
+    },
+    {
+      "keyword": "급등락",
+      "rank": 43,
+      "score": 24,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.8
+    },
+    {
+      "keyword": "하이닉스",
+      "rank": 44,
+      "score": 23,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.4
+    },
+    {
+      "keyword": "주주연대",
+      "rank": 45,
+      "score": 21,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.5
+    },
+    {
+      "keyword": "총파업",
+      "rank": 46,
+      "score": 19,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 25.6
+    },
+    {
+      "keyword": "테슬라",
+      "rank": 47,
+      "score": 17,
+      "sector": "자동차",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 24.6
+    },
+    {
+      "keyword": "스페이스",
+      "rank": 48,
+      "score": 15,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.8
+    },
+    {
+      "keyword": "반도체",
+      "rank": 49,
+      "score": 14,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 11.3
+    },
+    {
+      "keyword": "우리도",
+      "rank": 50,
+      "score": 12,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 22.4
+    }
+  ],
+  "sector_summary": {
+    "뷰티·패션": [
+      {
+        "keyword": "롯데면세점",
+        "rank": 1,
+        "score": 100,
+        "sector": "뷰티·패션",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 100.0,
+        "opportunity_score": 54.5
+      }
+    ],
+    "스포츠": [
+      {
+        "keyword": "샌안토니오 대 미네소타",
+        "rank": 2,
+        "score": 98,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 56.7,
+        "opportunity_score": 59.8
+      },
+      {
+        "keyword": "샌안토니오",
+        "rank": 15,
+        "score": 75,
+        "sector": "스포츠",
+        "velocity": "급등",
+        "velocity_score": 30.0,
+        "competition": 94.5,
+        "opportunity_score": 56.9
+      },
+      {
+        "keyword": "LAFC",
+        "rank": 12,
+        "score": 80,
+        "sector": "스포츠",
+        "velocity": "상승",
+        "velocity_score": 20.0,
+        "competition": 89.3,
+        "opportunity_score": 55.1
+      },
+      {
+        "keyword": "스포츠",
+        "rank": 16,
+        "score": 73,
+        "sector": "스포츠",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 50.0,
+        "opportunity_score": 52.4
+      },
+      {
+        "keyword": "손흥민",
+        "rank": 10,
+        "score": 84,
+        "sector": "스포츠",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 100.0,
+        "opportunity_score": 47.3
+      },
+      {
+        "keyword": "NBA",
+        "rank": 14,
+        "score": 77,
+        "sector": "스포츠",
+        "velocity": "유지",
+        "velocity_score": 5.0,
+        "competition": 100.0,
+        "opportunity_score": 44.1
+      }
+    ],
+    "사회·이슈": [
+      {
+        "keyword": "공소취소 뜻",
+        "rank": 5,
+        "score": 93,
+        "sector": "사회·이슈",
+        "velocity": "급등",
+        "velocity_score": 30.0,
+        "competition": 75.1,
+        "opportunity_score": 68.8
+      },
+      {
+        "keyword": "한덕수",
+        "rank": 3,
+        "score": 96,
+        "sector": "사회·이슈",
+        "velocity": "급등",
+        "velocity_score": 30.0,
+        "competition": 100.0,
+        "opportunity_score": 65.2
+      },
+      {
+        "keyword": "뉴스포커스",
+        "rank": 18,
+        "score": 69,
+        "sector": "사회·이슈",
+        "velocity": "급등",
+        "velocity_score": 30.0,
+        "competition": 50.0,
+        "opportunity_score": 63.0
+      },
+      {
+        "keyword": "장애인",
+        "rank": 9,
+        "score": 86,
+        "sector": "사회·이슈",
+        "velocity": "급등",
+        "velocity_score": 30.0,
+        "competition": 100.0,
+        "opportunity_score": 60.7
+      },
+      {
+        "keyword": "내란중요임무종사",
+        "rank": 17,
+        "score": 71,
+        "sector": "사회·이슈",
+        "velocity": "신규",
+        "velocity_score": 5.0,
+        "competition": 50.0,
+        "opportunity_score": 51.5
+      },
+      {
+        "keyword": "시민들은",
+        "rank": 23,
+        "score": 60,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      },
+      {
+        "keyword": "고물가",
+        "rank": 27,
+        "score": 53,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      },
+      {
+        "keyword": "사상첫",
+        "rank": 33,
+        "score": 42,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.9
+      },
+      {
+        "keyword": "총파업",
+        "rank": 46,
+        "score": 19,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      },
+      {
+        "keyword": "우리도",
+        "rank": 50,
+        "score": 12,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 22.4
+      }
+    ],
+    "경제·경기": [
+      {
+        "keyword": "삼성e&a",
+        "rank": 4,
+        "score": 95,
+        "sector": "경제·경기",
+        "velocity": "하락",
+        "velocity_score": -10.0,
+        "competition": 82.6,
+        "opportunity_score": 48.2
+      },
+      {
+        "keyword": "과잉유동성과",
+        "rank": 28,
+        "score": 51,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      },
+      {
+        "keyword": "닛케이",
+        "rank": 32,
+        "score": 44,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.8
+      },
+      {
+        "keyword": "OCI",
+        "rank": 38,
+        "score": 33,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "홀딩스",
+        "rank": 39,
+        "score": 32,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.4
+      },
+      {
+        "keyword": "CJ",
+        "rank": 40,
+        "score": 30,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.5
+      },
+      {
+        "keyword": "제일제당",
+        "rank": 41,
+        "score": 28,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      },
+      {
+        "keyword": "고려아연",
+        "rank": 42,
+        "score": 26,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 28.7
+      },
+      {
+        "keyword": "급등락",
+        "rank": 43,
+        "score": 24,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.8
+      }
+    ],
+    "연예·문화": [
+      {
+        "keyword": "스타폭스",
+        "rank": 7,
+        "score": 89,
+        "sector": "연예·문화",
+        "velocity": "급등",
+        "velocity_score": 30.0,
+        "competition": 74.2,
+        "opportunity_score": 67.2
+      },
+      {
+        "keyword": "김정난",
+        "rank": 8,
+        "score": 87,
+        "sector": "연예·문화",
+        "velocity": "상승",
+        "velocity_score": 20.0,
+        "competition": 89.5,
+        "opportunity_score": 58.3
+      },
+      {
+        "keyword": "국립중앙박물관",
+        "rank": 6,
+        "score": 91,
+        "sector": "연예·문화",
+        "velocity": "상승",
+        "velocity_score": 20.0,
+        "competition": 100.0,
+        "opportunity_score": 58.0
+      },
+      {
+        "keyword": "오빠와",
+        "rank": 20,
+        "score": 66,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 46.7
+      },
+      {
+        "keyword": "비밀로",
+        "rank": 21,
+        "score": 64,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      },
+      {
+        "keyword": "박성준",
+        "rank": 22,
+        "score": 62,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      },
+      {
+        "keyword": "전격시사",
+        "rank": 24,
+        "score": 59,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      },
+      {
+        "keyword": "전현희",
+        "rank": 25,
+        "score": 57,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      }
+    ],
+    "여행": [
+      {
+        "keyword": "고지대",
+        "rank": 11,
+        "score": 82,
+        "sector": "여행",
+        "velocity": "급등",
+        "velocity_score": 30.0,
+        "competition": 98.7,
+        "opportunity_score": 59.2
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "삼성E",
+        "rank": 19,
+        "score": 68,
+        "sector": "IT·테크",
+        "velocity": "급등",
+        "velocity_score": 30.0,
+        "competition": 50.0,
+        "opportunity_score": 62.6
+      },
+      {
+        "keyword": "블록슛",
+        "rank": 13,
+        "score": 78,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 93.8,
+        "opportunity_score": 43.3
+      },
+      {
+        "keyword": "광케이블",
+        "rank": 37,
+        "score": 35,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      },
+      {
+        "keyword": "하이닉스",
+        "rank": 44,
+        "score": 23,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      },
+      {
+        "keyword": "스페이스",
+        "rank": 48,
+        "score": 15,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.8
+      },
+      {
+        "keyword": "반도체",
+        "rank": 49,
+        "score": 14,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 11.3
+      }
+    ],
+    "금융·투자": [
+      {
+        "keyword": "주식시장",
+        "rank": 26,
+        "score": 55,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      },
+      {
+        "keyword": "금리인상",
+        "rank": 29,
+        "score": 50,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      },
+      {
+        "keyword": "코스피",
+        "rank": 30,
+        "score": 48,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 38.6
+      },
+      {
+        "keyword": "특징주",
+        "rank": 35,
+        "score": 39,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.5
+      },
+      {
+        "keyword": "대한광통신",
+        "rank": 36,
+        "score": 37,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 33.7
+      },
+      {
+        "keyword": "주주연대",
+        "rank": 45,
+        "score": 21,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      }
+    ],
+    "음식·맛집": [
+      {
+        "keyword": "오르네",
+        "rank": 31,
+        "score": 46,
+        "sector": "음식·맛집",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.7
+      }
+    ],
+    "라이프": [
+      {
+        "keyword": "롤러코스터",
+        "rank": 34,
+        "score": 41,
+        "sector": "라이프",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.5
+      }
+    ],
+    "자동차": [
+      {
+        "keyword": "테슬라",
+        "rank": 47,
+        "score": 17,
+        "sector": "자동차",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 24.6
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "theme": "고지대",
+      "topic": "고지대",
+      "keyword": "고지대",
+      "sector": "여행",
+      "score": 82,
+      "opportunity_score": 59.2,
+      "velocity": "급등",
+      "competition": 98.7,
+      "reason": "트렌드 순위 #11 · 급등 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#87CEEB"
+    },
+    {
+      "theme": "롯데면세점",
+      "topic": "롯데면세점",
+      "keyword": "롯데면세점",
+      "sector": "뷰티·패션",
+      "score": 100,
+      "opportunity_score": 54.5,
+      "velocity": "유지",
+      "competition": 100.0,
+      "reason": "트렌드 순위 #1 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#FF69B4"
+    },
+    {
+      "theme": "샌안토니오 대 미네소타",
+      "topic": "샌안토니오 대 미네소타",
+      "keyword": "샌안토니오 대 미네소타",
+      "sector": "스포츠",
+      "score": 98,
+      "opportunity_score": 59.8,
+      "velocity": "—",
+      "competition": 56.7,
+      "reason": "트렌드 순위 #2 · 경쟁 보통 · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#2ECC71"
+    },
+    {
+      "theme": "스타폭스",
+      "topic": "스타폭스",
+      "keyword": "스타폭스",
+      "sector": "연예·문화",
+      "score": 89,
+      "opportunity_score": 67.2,
+      "velocity": "급등",
+      "competition": 74.2,
+      "reason": "트렌드 순위 #7 · 급등 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#E91E63"
+    },
+    {
+      "theme": "공소취소 뜻",
+      "topic": "공소취소 뜻",
+      "keyword": "공소취소 뜻",
+      "sector": "사회·이슈",
+      "score": 93,
+      "opportunity_score": 68.8,
+      "velocity": "급등",
+      "competition": 75.1,
+      "reason": "트렌드 순위 #5 · 급등 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#778CA3"
+    },
+    {
+      "theme": "오르네",
+      "topic": "오르네",
+      "keyword": "오르네",
+      "sector": "음식·맛집",
+      "score": 46,
+      "opportunity_score": 37.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #31 · 경쟁 보통 · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#FFA500"
+    },
+    {
+      "theme": "주식시장",
+      "topic": "주식시장",
+      "keyword": "주식시장",
+      "sector": "금융·투자",
+      "score": 55,
+      "opportunity_score": 41.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #26 · 경쟁 보통 · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#FFD700"
+    },
+    {
+      "theme": "롤러코스터",
+      "topic": "롤러코스터",
+      "keyword": "롤러코스터",
+      "sector": "라이프",
+      "score": 41,
+      "opportunity_score": 35.5,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #34 · 경쟁 보통 · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#FF6B6B"
+    },
+    {
+      "theme": "삼성e&a",
+      "topic": "삼성e&a",
+      "keyword": "삼성e&a",
+      "sector": "경제·경기",
+      "score": 95,
+      "opportunity_score": 48.2,
+      "velocity": "하락",
+      "competition": 82.6,
+      "reason": "트렌드 순위 #4 · 하락 · 경쟁 높음 (레드오션) · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#F39C12"
+    },
+    {
+      "theme": "삼성E",
+      "topic": "삼성E",
+      "keyword": "삼성E",
+      "sector": "IT·테크",
+      "score": 68,
+      "opportunity_score": 62.6,
+      "velocity": "급등",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #19 · 급등 · 경쟁 보통 · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#00D4FF"
+    }
+  ],
+  "extra_angles": [
+    {
+      "theme": "한덕수",
+      "topic": "한덕수",
+      "keyword": "한덕수",
+      "sector": "사회·이슈",
+      "score": 96,
+      "opportunity_score": 65.2,
+      "velocity": "급등",
+      "competition": 100.0,
+      "reason": "점수 96 · 사회·이슈",
+      "angle": "",
+      "hook": "",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "국립중앙박물관",
+      "topic": "국립중앙박물관",
+      "keyword": "국립중앙박물관",
+      "sector": "연예·문화",
+      "score": 91,
+      "opportunity_score": 58.0,
+      "velocity": "상승",
+      "competition": 100.0,
+      "reason": "점수 91 · 연예·문화",
+      "angle": "",
+      "hook": "",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "김정난",
+      "topic": "김정난",
+      "keyword": "김정난",
+      "sector": "연예·문화",
+      "score": 87,
+      "opportunity_score": 58.3,
+      "velocity": "상승",
+      "competition": 89.5,
+      "reason": "점수 87 · 연예·문화",
+      "angle": "",
+      "hook": "",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "장애인",
+      "topic": "장애인",
+      "keyword": "장애인",
+      "sector": "사회·이슈",
+      "score": 86,
+      "opportunity_score": 60.7,
+      "velocity": "급등",
+      "competition": 100.0,
+      "reason": "점수 86 · 사회·이슈",
+      "angle": "",
+      "hook": "",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "손흥민",
+      "topic": "손흥민",
+      "keyword": "손흥민",
+      "sector": "스포츠",
+      "score": 84,
+      "opportunity_score": 47.3,
+      "velocity": "유지",
+      "competition": 100.0,
+      "reason": "점수 84 · 스포츠",
+      "angle": "",
+      "hook": "",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "LAFC",
+      "topic": "LAFC",
+      "keyword": "LAFC",
+      "sector": "스포츠",
+      "score": 80,
+      "opportunity_score": 55.1,
+      "velocity": "상승",
+      "competition": 89.3,
+      "reason": "점수 80 · 스포츠",
+      "angle": "",
+      "hook": "",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "블록슛",
+      "topic": "블록슛",
+      "keyword": "블록슛",
+      "sector": "IT·테크",
+      "score": 78,
+      "opportunity_score": 43.3,
+      "velocity": "—",
+      "competition": 93.8,
+      "reason": "점수 78 · IT·테크",
+      "angle": "",
+      "hook": "",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "NBA",
+      "topic": "NBA",
+      "keyword": "NBA",
+      "sector": "스포츠",
+      "score": 77,
+      "opportunity_score": 44.1,
+      "velocity": "유지",
+      "competition": 100.0,
+      "reason": "점수 77 · 스포츠",
+      "angle": "",
+      "hook": "",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "샌안토니오",
+      "topic": "샌안토니오",
+      "keyword": "샌안토니오",
+      "sector": "스포츠",
+      "score": 75,
+      "opportunity_score": 56.9,
+      "velocity": "급등",
+      "competition": 94.5,
+      "reason": "점수 75 · 스포츠",
+      "angle": "",
+      "hook": "",
+      "color": "#4a5568"
+    }
+  ],
+  "content_angles": {
+    "고지대": {
+      "topic": "고지대",
+      "angle": "",
+      "hook": ""
+    },
+    "롯데면세점": {
+      "topic": "롯데면세점",
+      "angle": "",
+      "hook": ""
+    },
+    "샌안토니오 대 미네소타": {
+      "topic": "샌안토니오 대 미네소타",
+      "angle": "",
+      "hook": ""
+    },
+    "스타폭스": {
+      "topic": "스타폭스",
+      "angle": "",
+      "hook": ""
+    },
+    "공소취소 뜻": {
+      "topic": "공소취소 뜻",
+      "angle": "",
+      "hook": ""
+    },
+    "오르네": {
+      "topic": "오르네",
+      "angle": "",
+      "hook": ""
+    },
+    "주식시장": {
+      "topic": "주식시장",
+      "angle": "",
+      "hook": ""
+    },
+    "롤러코스터": {
+      "topic": "롤러코스터",
+      "angle": "",
+      "hook": ""
+    },
+    "삼성e&a": {
+      "topic": "삼성e&a",
+      "angle": "",
+      "hook": ""
+    },
+    "삼성E": {
+      "topic": "삼성E",
+      "angle": "",
+      "hook": ""
+    },
+    "한덕수": {
+      "topic": "한덕수",
+      "angle": "",
+      "hook": ""
+    },
+    "국립중앙박물관": {
+      "topic": "국립중앙박물관",
+      "angle": "",
+      "hook": ""
+    },
+    "김정난": {
+      "topic": "김정난",
+      "angle": "",
+      "hook": ""
+    },
+    "장애인": {
+      "topic": "장애인",
+      "angle": "",
+      "hook": ""
+    },
+    "손흥민": {
+      "topic": "손흥민",
+      "angle": "",
+      "hook": ""
+    },
+    "LAFC": {
+      "topic": "LAFC",
+      "angle": "",
+      "hook": ""
+    },
+    "블록슛": {
+      "topic": "블록슛",
+      "angle": "",
+      "hook": ""
+    },
+    "NBA": {
+      "topic": "NBA",
+      "angle": "",
+      "hook": ""
+    },
+    "샌안토니오": {
+      "topic": "샌안토니오",
+      "angle": "",
+      "hook": ""
+    }
+  },
+  "autocomplete": {
+    "롯데면세점": [
+      "롯데면세점",
+      "롯데면세점 인터넷",
+      "롯데 면세점 온라인",
+      "롯데면세점 본점",
+      "롯데면세점 잠실",
+      "롯데면세점 인천공항",
+      "롯데면세점 명동",
+      "인천공항 롯데면세점",
+      "롯데면세점 ldf",
+      "롯데면세점 부산"
+    ],
+    "한덕수": [
+      "한덕수",
+      "한덕수 선고",
+      "한덕수 근황",
+      "한덕수 구치소",
+      "한덕수 재판",
+      "한덕수 2심 선고일",
+      "한덕수 2심선고",
+      "한덕수 항소심",
+      "한덕수 형량",
+      "한덕수 나무위키"
+    ],
+    "삼성e&a": [
+      "삼성e&a",
+      "삼성E&A 주가",
+      "삼성E&A 주가전망",
+      "삼성e&a 웨딩",
+      "삼성e&a 나무위키",
+      "삼성E&A 목표주가",
+      "삼성e&a 배당금",
+      "삼성e&a 실적발표",
+      "삼성 e&a 실적",
+      "삼성e&a 채용"
+    ],
+    "공소취소 뜻": [
+      "공소취소 뜻"
+    ],
+    "국립중앙박물관": [
+      "국립중앙박물관",
+      "국립중앙박물관 굿즈",
+      "국립중앙박물관 입장료",
+      "국립중앙박물관 맛집",
+      "국립중앙박물관 주차",
+      "국립중앙박물관 굿즈샵",
+      "국립중앙박물관 푸드코트",
+      "국립중앙박물관 전시",
+      "서울국립중앙박물관",
+      "국립중앙박물관 춘식이"
+    ],
+    "스타폭스": [
+      "스타폭스",
+      "닌텐도 스타폭스"
+    ],
+    "김정난": [
+      "김정난",
+      "김정난 나무위키",
+      "배우 김정난",
+      "김정난 리즈",
+      "김정난 박지훈",
+      "박지훈 김정난",
+      "김정난 집",
+      "김정난배우",
+      "김정난 디아블로",
+      "김정난 인스타"
+    ],
+    "장애인": [
+      "장애인활동지원사",
+      "장애인고용공단",
+      "장애인의 날",
+      "장애인 등급",
+      "장애인 혜택",
+      "장애인 일자리",
+      "장애인활동지원",
+      "장애인연금",
+      "시각장애인",
+      "장애인 채용"
+    ],
+    "손흥민": [
+      "손흥민",
+      "손흥민 경기",
+      "손흥민 나무위키",
+      "손흥민 여자",
+      "손흥민 유니폼",
+      "손흥민 연봉",
+      "손흥민 이적",
+      "손흥민 경기 중계",
+      "손흥민 부상",
+      "손흥민 싸인"
+    ],
+    "고지대": [
+      "고지대",
+      "고지대 캠핑장",
+      "투자위험고지대상",
+      "포코피아 고지대",
+      "고지대 뜻",
+      "고지대 기압",
+      "고지대 펜션",
+      "고지대 식물",
+      "고지대 아파트",
+      "고지대 귀 뚫는법"
+    ],
+    "LAFC": [
+      "lafc",
+      "lafc 경기일정",
+      "lafc 유니폼",
+      "lafc 순위",
+      "lafc 톨루카",
+      "LAFC 경기",
+      "lafc 반티",
+      "lafc 감독",
+      "샌디에이고 lafc",
+      "lafc 선수"
+    ],
+    "블록슛": [
+      "블록 슛 농구 뜻"
+    ],
+    "NBA": [
+      "nba",
+      "nba 플레이오프",
+      "nbamania",
+      "nba 일정",
+      "nba 옷",
+      "nba 순위",
+      "nba키즈",
+      "nba매니아",
+      "nba 모자",
+      "NBA 중계"
+    ],
+    "샌안토니오": [
+      "샌안토니오 스퍼스",
+      "샌안토니오 농구",
+      "샌안토니오",
+      "샌안토니오 미네소타",
+      "샌안토니오 여행",
+      "샌안토니오 시간",
+      "샌안토니오 날씨",
+      "미네소타 샌안토니오",
+      "샌안토니오 리버워크",
+      "샌안토니오 스퍼스 옷"
+    ],
+    "스포츠": [
+      "네이버스포츠",
+      "스포츠바우처",
+      "스포츠토토",
+      "스포츠",
+      "스포츠지원포털",
+      "스포츠브라",
+      "네이버스포츠 야구",
+      "스포츠조이",
+      "코오롱스포츠",
+      "포토스포츠"
+    ],
+    "내란중요임무종사": [
+      "내란중요임무종사자",
+      "내란중요임무종사죄"
+    ],
+    "뉴스포커스": [
+      "뉴스포커스",
+      "뉴스포커스 아나운서",
+      "뉴스포커스 정보"
+    ],
+    "삼성E": [
+      "삼성e&a",
+      "삼성E&A 주가",
+      "삼성E&A 주가전망",
+      "삼성ENA회사",
+      "삼성 etf",
+      "삼성eng",
+      "삼성ea",
+      "삼성ENA회사주가",
+      "삼성e",
+      "삼성ev카드"
+    ],
+    "오빠와": [
+      "지수 오빠 와이프",
+      "오빠 와이프 호칭",
+      "오빠 와이프",
+      "써니야오빠왔다",
+      "오빠왔다 웹툰",
+      "오빠 왁스",
+      "오빠와여동생 뜻",
+      "오빠 와이프 명칭",
+      "오빠와말다툼꿈",
+      "오빠와 여동생의 뜻"
+    ]
+  },
+  "datalab_used": true,
+  "iot_used": false,
+  "trend_delta": {
+    "prev_date": "2026-05-06",
+    "new_entry": [
+      "롯데면세점",
+      "샌안토니오 대 미네소타",
+      "한덕수",
+      "삼성e&a",
+      "공소취소 뜻",
+      "국립중앙박물관",
+      "스타폭스",
+      "김정난",
+      "장애인",
+      "손흥민"
+    ],
+    "dropped": [
+      "보스턴다이내믹스",
+      "스페인 왕비 레티시아",
+      "김선태",
+      "강재준",
+      "cj제일제당",
+      "이스라엘",
+      "탐지견",
+      "국민성장펀드",
+      "이정진",
+      "대통령"
+    ],
+    "risen": [
+      {
+        "keyword": "코스피",
+        "delta": 7
+      }
+    ],
+    "fallen": [
+      {
+        "keyword": "제일제당",
+        "delta": 17
+      },
+      {
+        "keyword": "반도체",
+        "delta": 17
+      }
+    ]
+  }
+}

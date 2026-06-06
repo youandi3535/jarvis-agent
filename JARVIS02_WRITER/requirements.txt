@@ -1,0 +1,10 @@
+crewai>=0.80.0
+crewai-tools>=0.14.0
+pykrx>=1.0.45
+pyautogui>=0.9.54
+opencv-python>=4.8.0
+pyperclip>=1.8.2
+python-dotenv>=1.0.0
+pandas>=2.0.0
+selenium>=4.18.0
+requests>=2.31.0

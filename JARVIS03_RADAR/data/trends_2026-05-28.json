@@ -1,0 +1,1491 @@
+{
+  "date": "2026-05-28",
+  "collected_at": "15:01:57",
+  "google_trending": [
+    "강민경",
+    "선거법",
+    "정유라",
+    "일본항공",
+    "경비원",
+    "휴머노이드",
+    "동탄신도시",
+    "wti",
+    "꽃보다",
+    "꽃길보다",
+    "대통령",
+    "이재명",
+    "국민연금",
+    "마트서",
+    "죽으라는",
+    "하지마비",
+    "승무원",
+    "마시고",
+    "비행하려다",
+    "일본서",
+    "경비실이",
+    "아파트",
+    "경비실의",
+    "삼성서울병원",
+    "AI",
+    "캠브리콘",
+    "IRGC",
+    "공군기지",
+    "참세상",
+    "인터링크",
+    "위클리",
+    "신현송",
+    "금리동결",
+    "배경과",
+    "금통위",
+    "기준금리",
+    "휴림로봇",
+    "현대무벡스",
+    "의존은",
+    "공습에",
+    "얼어붙은",
+    "효성중공업",
+    "흥아해운",
+    "LS",
+    "ELECTR",
+    "IC",
+    "삼성중공업",
+    "한화에어로스페이",
+    "일문일답",
+    "적절한"
+  ],
+  "scored_keywords": [
+    {
+      "keyword": "강민경",
+      "rank": 1,
+      "score": 100,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 62.0
+    },
+    {
+      "keyword": "선거법",
+      "rank": 2,
+      "score": 98,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 61.1
+    },
+    {
+      "keyword": "정유라",
+      "rank": 3,
+      "score": 96,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 60.2
+    },
+    {
+      "keyword": "일본항공",
+      "rank": 4,
+      "score": 95,
+      "sector": "여행",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 59.8
+    },
+    {
+      "keyword": "경비원",
+      "rank": 5,
+      "score": 93,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.9
+    },
+    {
+      "keyword": "휴머노이드",
+      "rank": 6,
+      "score": 91,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.0
+    },
+    {
+      "keyword": "동탄신도시",
+      "rank": 7,
+      "score": 89,
+      "sector": "부동산",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 57.1
+    },
+    {
+      "keyword": "wti",
+      "rank": 8,
+      "score": 87,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 56.1
+    },
+    {
+      "keyword": "꽃보다",
+      "rank": 9,
+      "score": 86,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 55.7
+    },
+    {
+      "keyword": "꽃길보다",
+      "rank": 10,
+      "score": 84,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 54.8
+    },
+    {
+      "keyword": "대통령",
+      "rank": 11,
+      "score": 82,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.9
+    },
+    {
+      "keyword": "이재명",
+      "rank": 12,
+      "score": 80,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.0
+    },
+    {
+      "keyword": "국민연금",
+      "rank": 13,
+      "score": 78,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 52.1
+    },
+    {
+      "keyword": "마트서",
+      "rank": 14,
+      "score": 77,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 51.6
+    },
+    {
+      "keyword": "죽으라는",
+      "rank": 15,
+      "score": 75,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 50.8
+    },
+    {
+      "keyword": "하지마비",
+      "rank": 16,
+      "score": 73,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.9
+    },
+    {
+      "keyword": "승무원",
+      "rank": 17,
+      "score": 71,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.0
+    },
+    {
+      "keyword": "마시고",
+      "rank": 18,
+      "score": 69,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 48.0
+    },
+    {
+      "keyword": "비행하려다",
+      "rank": 19,
+      "score": 68,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 47.6
+    },
+    {
+      "keyword": "일본서",
+      "rank": 20,
+      "score": 66,
+      "sector": "여행",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 46.7
+    },
+    {
+      "keyword": "경비실이",
+      "rank": 21,
+      "score": 64,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 45.8
+    },
+    {
+      "keyword": "아파트",
+      "rank": 22,
+      "score": 62,
+      "sector": "부동산",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.9
+    },
+    {
+      "keyword": "경비실의",
+      "rank": 23,
+      "score": 60,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.0
+    },
+    {
+      "keyword": "삼성서울병원",
+      "rank": 24,
+      "score": 59,
+      "sector": "건강·의료",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 43.5
+    },
+    {
+      "keyword": "AI",
+      "rank": 25,
+      "score": 57,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 42.7
+    },
+    {
+      "keyword": "캠브리콘",
+      "rank": 26,
+      "score": 55,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 41.8
+    },
+    {
+      "keyword": "IRGC",
+      "rank": 27,
+      "score": 53,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.9
+    },
+    {
+      "keyword": "공군기지",
+      "rank": 28,
+      "score": 51,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.0
+    },
+    {
+      "keyword": "참세상",
+      "rank": 29,
+      "score": 50,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.5
+    },
+    {
+      "keyword": "인터링크",
+      "rank": 30,
+      "score": 48,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 38.6
+    },
+    {
+      "keyword": "위클리",
+      "rank": 31,
+      "score": 46,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.7
+    },
+    {
+      "keyword": "신현송",
+      "rank": 32,
+      "score": 44,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.8
+    },
+    {
+      "keyword": "금리동결",
+      "rank": 33,
+      "score": 42,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.9
+    },
+    {
+      "keyword": "배경과",
+      "rank": 34,
+      "score": 41,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.5
+    },
+    {
+      "keyword": "금통위",
+      "rank": 35,
+      "score": 39,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.5
+    },
+    {
+      "keyword": "기준금리",
+      "rank": 36,
+      "score": 37,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 33.7
+    },
+    {
+      "keyword": "휴림로봇",
+      "rank": 37,
+      "score": 35,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 32.8
+    },
+    {
+      "keyword": "현대무벡스",
+      "rank": 38,
+      "score": 33,
+      "sector": "자동차",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.9
+    },
+    {
+      "keyword": "의존은",
+      "rank": 39,
+      "score": 32,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.4
+    },
+    {
+      "keyword": "공습에",
+      "rank": 40,
+      "score": 30,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.5
+    },
+    {
+      "keyword": "얼어붙은",
+      "rank": 41,
+      "score": 28,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 29.6
+    },
+    {
+      "keyword": "효성중공업",
+      "rank": 42,
+      "score": 26,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 28.7
+    },
+    {
+      "keyword": "흥아해운",
+      "rank": 43,
+      "score": 24,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.8
+    },
+    {
+      "keyword": "LS",
+      "rank": 44,
+      "score": 23,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.4
+    },
+    {
+      "keyword": "ELECTR",
+      "rank": 45,
+      "score": 21,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.5
+    },
+    {
+      "keyword": "IC",
+      "rank": 46,
+      "score": 19,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 25.6
+    },
+    {
+      "keyword": "삼성중공업",
+      "rank": 47,
+      "score": 17,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 24.6
+    },
+    {
+      "keyword": "한화에어로스페이",
+      "rank": 48,
+      "score": 15,
+      "sector": "자동차",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.8
+    },
+    {
+      "keyword": "일문일답",
+      "rank": 49,
+      "score": 14,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.3
+    },
+    {
+      "keyword": "적절한",
+      "rank": 50,
+      "score": 12,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 22.4
+    }
+  ],
+  "sector_summary": {
+    "연예·문화": [
+      {
+        "keyword": "강민경",
+        "rank": 1,
+        "score": 100,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 62.0
+      },
+      {
+        "keyword": "정유라",
+        "rank": 3,
+        "score": 96,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 60.2
+      },
+      {
+        "keyword": "꽃보다",
+        "rank": 9,
+        "score": 86,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 55.7
+      },
+      {
+        "keyword": "꽃길보다",
+        "rank": 10,
+        "score": 84,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 54.8
+      }
+    ],
+    "사회·이슈": [
+      {
+        "keyword": "선거법",
+        "rank": 2,
+        "score": 98,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 61.1
+      },
+      {
+        "keyword": "경비원",
+        "rank": 5,
+        "score": 93,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.9
+      },
+      {
+        "keyword": "대통령",
+        "rank": 11,
+        "score": 82,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.9
+      },
+      {
+        "keyword": "이재명",
+        "rank": 12,
+        "score": 80,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.0
+      },
+      {
+        "keyword": "마트서",
+        "rank": 14,
+        "score": 77,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 51.6
+      },
+      {
+        "keyword": "죽으라는",
+        "rank": 15,
+        "score": 75,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 50.8
+      },
+      {
+        "keyword": "하지마비",
+        "rank": 16,
+        "score": 73,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.9
+      },
+      {
+        "keyword": "승무원",
+        "rank": 17,
+        "score": 71,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.0
+      },
+      {
+        "keyword": "마시고",
+        "rank": 18,
+        "score": 69,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 48.0
+      },
+      {
+        "keyword": "비행하려다",
+        "rank": 19,
+        "score": 68,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 47.6
+      },
+      {
+        "keyword": "경비실이",
+        "rank": 21,
+        "score": 64,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      },
+      {
+        "keyword": "경비실의",
+        "rank": 23,
+        "score": 60,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      },
+      {
+        "keyword": "IRGC",
+        "rank": 27,
+        "score": 53,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      },
+      {
+        "keyword": "공군기지",
+        "rank": 28,
+        "score": 51,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      },
+      {
+        "keyword": "참세상",
+        "rank": 29,
+        "score": 50,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      },
+      {
+        "keyword": "공습에",
+        "rank": 40,
+        "score": 30,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.5
+      }
+    ],
+    "여행": [
+      {
+        "keyword": "일본항공",
+        "rank": 4,
+        "score": 95,
+        "sector": "여행",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 59.8
+      },
+      {
+        "keyword": "일본서",
+        "rank": 20,
+        "score": 66,
+        "sector": "여행",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 46.7
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "휴머노이드",
+        "rank": 6,
+        "score": 91,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.0
+      },
+      {
+        "keyword": "AI",
+        "rank": 25,
+        "score": 57,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      },
+      {
+        "keyword": "캠브리콘",
+        "rank": 26,
+        "score": 55,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      },
+      {
+        "keyword": "인터링크",
+        "rank": 30,
+        "score": 48,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 38.6
+      },
+      {
+        "keyword": "휴림로봇",
+        "rank": 37,
+        "score": 35,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      }
+    ],
+    "부동산": [
+      {
+        "keyword": "동탄신도시",
+        "rank": 7,
+        "score": 89,
+        "sector": "부동산",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 57.1
+      },
+      {
+        "keyword": "아파트",
+        "rank": 22,
+        "score": 62,
+        "sector": "부동산",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      }
+    ],
+    "금융·투자": [
+      {
+        "keyword": "wti",
+        "rank": 8,
+        "score": 87,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 56.1
+      },
+      {
+        "keyword": "국민연금",
+        "rank": 13,
+        "score": 78,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 52.1
+      },
+      {
+        "keyword": "금리동결",
+        "rank": 33,
+        "score": 42,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.9
+      },
+      {
+        "keyword": "금통위",
+        "rank": 35,
+        "score": 39,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.5
+      },
+      {
+        "keyword": "기준금리",
+        "rank": 36,
+        "score": 37,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 33.7
+      },
+      {
+        "keyword": "효성중공업",
+        "rank": 42,
+        "score": 26,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 28.7
+      },
+      {
+        "keyword": "흥아해운",
+        "rank": 43,
+        "score": 24,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.8
+      },
+      {
+        "keyword": "ELECTR",
+        "rank": 45,
+        "score": 21,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      },
+      {
+        "keyword": "삼성중공업",
+        "rank": 47,
+        "score": 17,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 24.6
+      }
+    ],
+    "건강·의료": [
+      {
+        "keyword": "삼성서울병원",
+        "rank": 24,
+        "score": 59,
+        "sector": "건강·의료",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      }
+    ],
+    "기타": [
+      {
+        "keyword": "위클리",
+        "rank": 31,
+        "score": 46,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.7
+      },
+      {
+        "keyword": "배경과",
+        "rank": 34,
+        "score": 41,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.5
+      },
+      {
+        "keyword": "의존은",
+        "rank": 39,
+        "score": 32,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.4
+      },
+      {
+        "keyword": "얼어붙은",
+        "rank": 41,
+        "score": 28,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      },
+      {
+        "keyword": "IC",
+        "rank": 46,
+        "score": 19,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      },
+      {
+        "keyword": "일문일답",
+        "rank": 49,
+        "score": 14,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.3
+      },
+      {
+        "keyword": "적절한",
+        "rank": 50,
+        "score": 12,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 22.4
+      }
+    ],
+    "스포츠": [
+      {
+        "keyword": "신현송",
+        "rank": 32,
+        "score": 44,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.8
+      }
+    ],
+    "자동차": [
+      {
+        "keyword": "현대무벡스",
+        "rank": 38,
+        "score": 33,
+        "sector": "자동차",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "한화에어로스페이",
+        "rank": 48,
+        "score": 15,
+        "sector": "자동차",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.8
+      }
+    ],
+    "경제·경기": [
+      {
+        "keyword": "LS",
+        "rank": 44,
+        "score": 23,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "theme": "강민경",
+      "topic": "강민경이 갑자기 화제된 이유, 지금 무슨 일이 있었나",
+      "keyword": "강민경",
+      "sector": "연예·문화",
+      "score": 100,
+      "opportunity_score": 62.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #1 · 경쟁 보통 · 최근 미발행",
+      "angle": "팬이 아닌 사람도 검색하게 만든 '지금 이 순간'의 이슈를 해설하면 유입 폭 확대",
+      "hook": "평소 관심 없던 사람도 검색창에 이름을 쳤다면, 분명 이유가 있다",
+      "color": "#E91E63"
+    },
+    {
+      "theme": "일본항공(JAL)",
+      "topic": "일본항공 예약 전 꼭 확인해야 할 것들, 요즘 탑승 후기가 달라졌다",
+      "keyword": "일본항공(JAL)",
+      "sector": "여행",
+      "score": 95,
+      "opportunity_score": 59.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #4 · 경쟁 보통 · 최근 미발행",
+      "angle": "항공사 선택 직전 불안을 해소해 주는 실용 정보가 여행 카테고리 전환율 최고",
+      "hook": "JAL을 예약하려다 멈칫한 이유가 있다면, 이 글이 그 답이다",
+      "color": "#87CEEB"
+    },
+    {
+      "theme": "동탄신도시",
+      "topic": "동탄신도시 지금 들어가도 될까? 실거주자가 말 안 해 주는 현실",
+      "keyword": "동탄신도시",
+      "sector": "부동산",
+      "score": 89,
+      "opportunity_score": 57.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #7 · 경쟁 보통 · 최근 미발행",
+      "angle": "투자 타이밍 고민 중인 30~40대의 '지금 괜찮냐'는 질문에 직접 답하는 구조",
+      "hook": "호재가 많다는데 왜 주변엔 팔았다는 사람이 더 많을까",
+      "color": "#E67E22"
+    },
+    {
+      "theme": "선거법",
+      "topic": "선거법 개정 논란, 내 삶에 어떤 영향을 주는지 3줄 정리",
+      "keyword": "선거법",
+      "sector": "사회·이슈",
+      "score": 98,
+      "opportunity_score": 61.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #2 · 경쟁 보통 · 최근 미발행",
+      "angle": "법 조항이 아닌 '나한테 어떻게 적용되나'로 접근하면 비전공자 유입 극대화",
+      "hook": "뉴스는 쏟아지는데 내가 왜 신경 써야 하는지 모르겠는 사람을 위한 글",
+      "color": "#778CA3"
+    },
+    {
+      "theme": "삼성서울병원",
+      "topic": "삼성서울병원 예약, 이 방법 모르면 몇 주 기다린다",
+      "keyword": "삼성서울병원",
+      "sector": "건강·의료",
+      "score": 59,
+      "opportunity_score": 43.5,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #24 · 경쟁 보통 · 최근 미발행",
+      "angle": "예약 경쟁이 치열한 대형병원의 실전 노하우가 건강 카테고리 장기 유입의 핵심",
+      "hook": "처음 가는데 어떻게 해야 빨리 볼 수 있는지 아무도 알려주지 않는다",
+      "color": "#00FF88"
+    },
+    {
+      "theme": "휴머노이드",
+      "topic": "휴머노이드 로봇이 5년 안에 내 직장을 바꿀 수 있는 이유",
+      "keyword": "휴머노이드",
+      "sector": "IT·테크",
+      "score": 91,
+      "opportunity_score": 58.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #6 · 경쟁 보통 · 최근 미발행",
+      "angle": "기술 설명이 아닌 '내 일자리·생활비' 연결 각도가 IT 비관심층까지 끌어들임",
+      "hook": "테슬라·삼성이 왜 지금 동시에 이걸 만들고 있는지, 이유를 알면 불안해진다",
+      "color": "#00D4FF"
+    },
+    {
+      "theme": "신현송",
+      "topic": "신현송, 이 경기 이후 평가가 완전히 바뀐 이유",
+      "keyword": "신현송",
+      "sector": "스포츠",
+      "score": 44,
+      "opportunity_score": 36.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #32 · 경쟁 보통 · 최근 미발행",
+      "angle": "결정적 장면·전후 맥락 분석은 팬덤 외 스포츠 관심층 유입에 효과적",
+      "hook": "이름을 처음 들었는데 왜 다들 이야기하는지 궁금했다면",
+      "color": "#2ECC71"
+    },
+    {
+      "theme": "WTI",
+      "topic": "WTI 유가가 흔들리면 내 통장도 흔들린다, 지금 봐야 할 신호",
+      "keyword": "WTI",
+      "sector": "금융·투자",
+      "score": 87,
+      "opportunity_score": 56.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #8 · 경쟁 보통 · 최근 미발행",
+      "angle": "원유 가격을 '물가·환율·금리'로 직결 번역하면 투자 비관심층도 검색 → 체류",
+      "hook": "WTI가 뭔지는 몰라도 기름값·장바구니 가격이 오르는 건 이미 느끼고 있다",
+      "color": "#FFD700"
+    },
+    {
+      "theme": "위클리(Weekly)",
+      "topic": "위클리, 지금 이 타이밍에 왜 다시 언급되는 걸까",
+      "keyword": "위클리(Weekly)",
+      "sector": "기타",
+      "score": 46,
+      "opportunity_score": 37.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #31 · 경쟁 보통 · 최근 미발행",
+      "angle": "걸그룹 컴백·화제성 시점의 '왜 지금?'을 다루면 팬덤 외 일반 유입 가능",
+      "hook": "갑자기 알고리즘에 뜨기 시작한 이름, 놓친 맥락이 있다",
+      "color": "#4A4A4A"
+    },
+    {
+      "theme": "현대무벡스",
+      "topic": "현대무벡스 정체가 뭔지 모르는 사람을 위한 30초 설명",
+      "keyword": "현대무벡스",
+      "sector": "자동차",
+      "score": 33,
+      "opportunity_score": 31.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #38 · 경쟁 보통 · 최근 미발행",
+      "angle": "생소한 기업·브랜드 명칭은 '이게 뭐지?' 검색 의도가 강해 정보 공백 선점 효과 큼",
+      "hook": "뉴스에서 봤는데 도대체 어떤 회사인지 한 번에 정리된 곳이 없다",
+      "color": "#95A5A6"
+    }
+  ],
+  "extra_angles": [
+    {
+      "theme": "정유라",
+      "topic": "정유라가 또 화제인 이유, 이번엔 다르다는 반응이 나오는 배경",
+      "keyword": "정유라",
+      "sector": "연예·문화",
+      "score": 96,
+      "opportunity_score": 60.2,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 96 · 연예·문화",
+      "angle": "논란 인물 재등장 시 '이번 건 뭐가 다른가'로 접근하면 피로감 없이 클릭 유도",
+      "hook": "또 나왔다고 넘기기엔, 이번 내용은 예전과 결이 다르다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "경비원",
+      "topic": "마트 경비원에게 '죽으라'고 한 사람, 왜 이게 이렇게 퍼졌나",
+      "keyword": "경비원",
+      "sector": "사회·이슈",
+      "score": 93,
+      "opportunity_score": 58.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 93 · 사회·이슈",
+      "angle": "사회적 공분이 형성된 사건은 감정 공감 + 구조적 원인 분석 조합이 체류시간 최대화",
+      "hook": "단순한 갑질 사건이 아니라, 우리가 이미 알고 있던 무언가가 터진 것이다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "꽃보다",
+      "topic": "꽃보다 시리즈, 지금 다시 보는 사람이 늘어난 진짜 이유",
+      "keyword": "꽃보다",
+      "sector": "연예·문화",
+      "score": 86,
+      "opportunity_score": 55.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 86 · 연예·문화",
+      "angle": "레트로·재조명 트렌드에 올라타면 신규 시청자와 기존 팬 동시 공략 가능",
+      "hook": "몇 년 전에 봤던 걸 왜 지금 다들 다시 찾는 건지 궁금하다면",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "꽃길보다",
+      "topic": "'꽃길보다' 가사에 사람들이 공감하는 이유, 나만 이런 건 아니었다",
+      "keyword": "꽃길보다",
+      "sector": "연예·문화",
+      "score": 84,
+      "opportunity_score": 54.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 84 · 연예·문화",
+      "angle": "노래 가사·감성 공감 접근은 SNS 공유율이 높아 검색 외 유입 경로도 함께 확보",
+      "hook": "제목도 몰랐는데 멜로디가 귀에 박혔다면, 이 노래가 뭔지 알고 싶어진다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "대통령",
+      "topic": "대통령 이슈, 지금 어느 쪽 말이 맞는지 팩트만 골라봤다",
+      "keyword": "대통령",
+      "sector": "사회·이슈",
+      "score": 82,
+      "opportunity_score": 53.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 82 · 사회·이슈",
+      "angle": "정치 피로감이 높은 독자를 위해 '팩트 필터링'을 표방하면 중립 독자층 유입 증가",
+      "hook": "뉴스는 너무 많고 진짜인지 아닌지 모르겠다는 사람을 위한 글",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "이재명",
+      "topic": "이재명 최근 행보, 지지자도 반대자도 눈여겨보는 이유",
+      "keyword": "이재명",
+      "sector": "사회·이슈",
+      "score": 80,
+      "opportunity_score": 53.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 80 · 사회·이슈",
+      "angle": "찬반을 가르지 않고 '관찰자 시선'으로 쓰면 정치 스펙트럼 전반 유입 가능",
+      "hook": "좋든 싫든 지금 이 타이밍에 무슨 일이 벌어지는지는 알아야 한다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "국민연금",
+      "topic": "국민연금, 지금 가입 중인 사람이 실제로 받을 수 있는 금액 계산해봤다",
+      "keyword": "국민연금",
+      "sector": "금융·투자",
+      "score": 78,
+      "opportunity_score": 52.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 78 · 금융·투자",
+      "angle": "'나는 얼마 받나'라는 개인화 질문에 직접 답하면 30~50대 핵심 타겟 강하게 흡수",
+      "hook": "낸 만큼 돌아온다는 말, 진짜인지 숫자로 확인하고 싶었다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "마트 경비원 폭언",
+      "topic": "마트에서 경비원에게 한 말 한 마디가 여기까지 퍼진 이유",
+      "keyword": "마트 경비원 폭언",
+      "sector": "사회·이슈",
+      "score": 77,
+      "opportunity_score": 51.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 77 · 사회·이슈",
+      "angle": "바이럴 사건의 전파 경로와 사회적 맥락을 분석하면 트렌드 초기 유입 선점 가능",
+      "hook": "이게 왜 이렇게 화제인지, 단순한 악플 이상의 무언가가 있다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "죽으라는 말",
+      "topic": "'죽으라는 말'이 갑질을 넘어 범죄가 될 수 있다는 걸 아는 사람이 없다",
+      "keyword": "죽으라는 말",
+      "sector": "사회·이슈",
+      "score": 75,
+      "opportunity_score": 50.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 75 · 사회·이슈",
+      "angle": "법적 가능성·처벌 여부를 다루면 감정 공분에서 실용 정보로 확장되어 체류시간 증가",
+      "hook": "화는 나는데 어디에 신고해야 하는지, 법적으로 뭘 할 수 있는지 몰랐다",
+      "color": "#4a5568"
+    }
+  ],
+  "content_angles": {
+    "강민경": {
+      "topic": "강민경이 갑자기 화제된 이유, 지금 무슨 일이 있었나",
+      "angle": "팬이 아닌 사람도 검색하게 만든 '지금 이 순간'의 이슈를 해설하면 유입 폭 확대",
+      "hook": "평소 관심 없던 사람도 검색창에 이름을 쳤다면, 분명 이유가 있다"
+    },
+    "일본항공(JAL)": {
+      "topic": "일본항공 예약 전 꼭 확인해야 할 것들, 요즘 탑승 후기가 달라졌다",
+      "angle": "항공사 선택 직전 불안을 해소해 주는 실용 정보가 여행 카테고리 전환율 최고",
+      "hook": "JAL을 예약하려다 멈칫한 이유가 있다면, 이 글이 그 답이다"
+    },
+    "동탄신도시": {
+      "topic": "동탄신도시 지금 들어가도 될까? 실거주자가 말 안 해 주는 현실",
+      "angle": "투자 타이밍 고민 중인 30~40대의 '지금 괜찮냐'는 질문에 직접 답하는 구조",
+      "hook": "호재가 많다는데 왜 주변엔 팔았다는 사람이 더 많을까"
+    },
+    "선거법": {
+      "topic": "선거법 개정 논란, 내 삶에 어떤 영향을 주는지 3줄 정리",
+      "angle": "법 조항이 아닌 '나한테 어떻게 적용되나'로 접근하면 비전공자 유입 극대화",
+      "hook": "뉴스는 쏟아지는데 내가 왜 신경 써야 하는지 모르겠는 사람을 위한 글"
+    },
+    "삼성서울병원": {
+      "topic": "삼성서울병원 예약, 이 방법 모르면 몇 주 기다린다",
+      "angle": "예약 경쟁이 치열한 대형병원의 실전 노하우가 건강 카테고리 장기 유입의 핵심",
+      "hook": "처음 가는데 어떻게 해야 빨리 볼 수 있는지 아무도 알려주지 않는다"
+    },
+    "휴머노이드": {
+      "topic": "휴머노이드 로봇이 5년 안에 내 직장을 바꿀 수 있는 이유",
+      "angle": "기술 설명이 아닌 '내 일자리·생활비' 연결 각도가 IT 비관심층까지 끌어들임",
+      "hook": "테슬라·삼성이 왜 지금 동시에 이걸 만들고 있는지, 이유를 알면 불안해진다"
+    },
+    "신현송": {
+      "topic": "신현송, 이 경기 이후 평가가 완전히 바뀐 이유",
+      "angle": "결정적 장면·전후 맥락 분석은 팬덤 외 스포츠 관심층 유입에 효과적",
+      "hook": "이름을 처음 들었는데 왜 다들 이야기하는지 궁금했다면"
+    },
+    "WTI": {
+      "topic": "WTI 유가가 흔들리면 내 통장도 흔들린다, 지금 봐야 할 신호",
+      "angle": "원유 가격을 '물가·환율·금리'로 직결 번역하면 투자 비관심층도 검색 → 체류",
+      "hook": "WTI가 뭔지는 몰라도 기름값·장바구니 가격이 오르는 건 이미 느끼고 있다"
+    },
+    "위클리(Weekly)": {
+      "topic": "위클리, 지금 이 타이밍에 왜 다시 언급되는 걸까",
+      "angle": "걸그룹 컴백·화제성 시점의 '왜 지금?'을 다루면 팬덤 외 일반 유입 가능",
+      "hook": "갑자기 알고리즘에 뜨기 시작한 이름, 놓친 맥락이 있다"
+    },
+    "현대무벡스": {
+      "topic": "현대무벡스 정체가 뭔지 모르는 사람을 위한 30초 설명",
+      "angle": "생소한 기업·브랜드 명칭은 '이게 뭐지?' 검색 의도가 강해 정보 공백 선점 효과 큼",
+      "hook": "뉴스에서 봤는데 도대체 어떤 회사인지 한 번에 정리된 곳이 없다"
+    },
+    "정유라": {
+      "topic": "정유라가 또 화제인 이유, 이번엔 다르다는 반응이 나오는 배경",
+      "angle": "논란 인물 재등장 시 '이번 건 뭐가 다른가'로 접근하면 피로감 없이 클릭 유도",
+      "hook": "또 나왔다고 넘기기엔, 이번 내용은 예전과 결이 다르다"
+    },
+    "경비원": {
+      "topic": "마트 경비원에게 '죽으라'고 한 사람, 왜 이게 이렇게 퍼졌나",
+      "angle": "사회적 공분이 형성된 사건은 감정 공감 + 구조적 원인 분석 조합이 체류시간 최대화",
+      "hook": "단순한 갑질 사건이 아니라, 우리가 이미 알고 있던 무언가가 터진 것이다"
+    },
+    "꽃보다": {
+      "topic": "꽃보다 시리즈, 지금 다시 보는 사람이 늘어난 진짜 이유",
+      "angle": "레트로·재조명 트렌드에 올라타면 신규 시청자와 기존 팬 동시 공략 가능",
+      "hook": "몇 년 전에 봤던 걸 왜 지금 다들 다시 찾는 건지 궁금하다면"
+    },
+    "꽃길보다": {
+      "topic": "'꽃길보다' 가사에 사람들이 공감하는 이유, 나만 이런 건 아니었다",
+      "angle": "노래 가사·감성 공감 접근은 SNS 공유율이 높아 검색 외 유입 경로도 함께 확보",
+      "hook": "제목도 몰랐는데 멜로디가 귀에 박혔다면, 이 노래가 뭔지 알고 싶어진다"
+    },
+    "대통령": {
+      "topic": "대통령 이슈, 지금 어느 쪽 말이 맞는지 팩트만 골라봤다",
+      "angle": "정치 피로감이 높은 독자를 위해 '팩트 필터링'을 표방하면 중립 독자층 유입 증가",
+      "hook": "뉴스는 너무 많고 진짜인지 아닌지 모르겠다는 사람을 위한 글"
+    },
+    "이재명": {
+      "topic": "이재명 최근 행보, 지지자도 반대자도 눈여겨보는 이유",
+      "angle": "찬반을 가르지 않고 '관찰자 시선'으로 쓰면 정치 스펙트럼 전반 유입 가능",
+      "hook": "좋든 싫든 지금 이 타이밍에 무슨 일이 벌어지는지는 알아야 한다"
+    },
+    "국민연금": {
+      "topic": "국민연금, 지금 가입 중인 사람이 실제로 받을 수 있는 금액 계산해봤다",
+      "angle": "'나는 얼마 받나'라는 개인화 질문에 직접 답하면 30~50대 핵심 타겟 강하게 흡수",
+      "hook": "낸 만큼 돌아온다는 말, 진짜인지 숫자로 확인하고 싶었다"
+    },
+    "마트 경비원 폭언": {
+      "topic": "마트에서 경비원에게 한 말 한 마디가 여기까지 퍼진 이유",
+      "angle": "바이럴 사건의 전파 경로와 사회적 맥락을 분석하면 트렌드 초기 유입 선점 가능",
+      "hook": "이게 왜 이렇게 화제인지, 단순한 악플 이상의 무언가가 있다"
+    },
+    "죽으라는 말": {
+      "topic": "'죽으라는 말'이 갑질을 넘어 범죄가 될 수 있다는 걸 아는 사람이 없다",
+      "angle": "법적 가능성·처벌 여부를 다루면 감정 공분에서 실용 정보로 확장되어 체류시간 증가",
+      "hook": "화는 나는데 어디에 신고해야 하는지, 법적으로 뭘 할 수 있는지 몰랐다"
+    }
+  },
+  "autocomplete": {},
+  "datalab_used": false,
+  "iot_used": false,
+  "trend_delta": {
+    "prev_date": "2026-05-27",
+    "new_entry": [
+      "강민경",
+      "선거법",
+      "정유라",
+      "일본항공",
+      "경비원",
+      "휴머노이드",
+      "동탄신도시",
+      "wti",
+      "꽃보다",
+      "꽃길보다"
+    ],
+    "dropped": [
+      "김종인",
+      "박해수",
+      "순천대학교",
+      "tiger 미국우주테크",
+      "마동석",
+      "잠수함",
+      "황영묵",
+      "신라면세점",
+      "홍보모델로",
+      "지바현"
+    ],
+    "risen": [
+      {
+        "keyword": "AI",
+        "delta": 13
+      }
+    ],
+    "fallen": [
+      {
+        "keyword": "일본서",
+        "delta": 8
+      }
+    ]
+  }
+}

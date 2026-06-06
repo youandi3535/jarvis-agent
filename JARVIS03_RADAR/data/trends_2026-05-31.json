@@ -1,0 +1,1487 @@
+{
+  "date": "2026-05-31",
+  "collected_at": "15:01:45",
+  "google_trending": [
+    "울산 웨일즈",
+    "원자력",
+    "대구광역시",
+    "추신수",
+    "이정후",
+    "잠수함",
+    "여행금지",
+    "데뷔전",
+    "웨일즈",
+    "서울교육청",
+    "민원점검회의",
+    "부교육감이",
+    "서울시교육청",
+    "지진도",
+    "폭발도",
+    "우크라",
+    "우크라이나",
+    "대구시",
+    "금정구",
+    "울산시",
+    "SSG",
+    "들어가자",
+    "국민연금",
+    "외국인",
+    "코스피",
+    "던지자",
+    "집보다",
+    "주담대",
+    "팔았는데",
+    "비트코인",
+    "올라도",
+    "서학개미",
+    "평가액",
+    "방한설에",
+    "AI",
+    "반도체가",
+    "때아니야",
+    "박근종",
+    "반도체",
+    "대형주만",
+    "SK",
+    "하이닉스",
+    "질주에",
+    "HBM",
+    "뒤집은",
+    "삼성전자",
+    "전국민",
+    "단타장",
+    "알았던",
+    "배터리"
+  ],
+  "scored_keywords": [
+    {
+      "keyword": "울산 웨일즈",
+      "rank": 1,
+      "score": 100,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 62.0
+    },
+    {
+      "keyword": "원자력",
+      "rank": 2,
+      "score": 98,
+      "sector": "에너지·환경",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 61.1
+    },
+    {
+      "keyword": "대구광역시",
+      "rank": 3,
+      "score": 96,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 60.2
+    },
+    {
+      "keyword": "추신수",
+      "rank": 4,
+      "score": 95,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 59.8
+    },
+    {
+      "keyword": "이정후",
+      "rank": 5,
+      "score": 93,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.9
+    },
+    {
+      "keyword": "잠수함",
+      "rank": 6,
+      "score": 91,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.0
+    },
+    {
+      "keyword": "여행금지",
+      "rank": 7,
+      "score": 89,
+      "sector": "여행",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 57.1
+    },
+    {
+      "keyword": "데뷔전",
+      "rank": 8,
+      "score": 87,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 56.1
+    },
+    {
+      "keyword": "웨일즈",
+      "rank": 9,
+      "score": 86,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 55.7
+    },
+    {
+      "keyword": "서울교육청",
+      "rank": 10,
+      "score": 84,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 54.8
+    },
+    {
+      "keyword": "민원점검회의",
+      "rank": 11,
+      "score": 82,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.9
+    },
+    {
+      "keyword": "부교육감이",
+      "rank": 12,
+      "score": 80,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.0
+    },
+    {
+      "keyword": "서울시교육청",
+      "rank": 13,
+      "score": 78,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 52.1
+    },
+    {
+      "keyword": "지진도",
+      "rank": 14,
+      "score": 77,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 51.6
+    },
+    {
+      "keyword": "폭발도",
+      "rank": 15,
+      "score": 75,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 50.8
+    },
+    {
+      "keyword": "우크라",
+      "rank": 16,
+      "score": 73,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.9
+    },
+    {
+      "keyword": "우크라이나",
+      "rank": 17,
+      "score": 71,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.0
+    },
+    {
+      "keyword": "대구시",
+      "rank": 18,
+      "score": 69,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 48.0
+    },
+    {
+      "keyword": "금정구",
+      "rank": 19,
+      "score": 68,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 47.6
+    },
+    {
+      "keyword": "울산시",
+      "rank": 20,
+      "score": 66,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 46.7
+    },
+    {
+      "keyword": "SSG",
+      "rank": 21,
+      "score": 64,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 45.8
+    },
+    {
+      "keyword": "들어가자",
+      "rank": 22,
+      "score": 62,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.9
+    },
+    {
+      "keyword": "국민연금",
+      "rank": 23,
+      "score": 60,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.0
+    },
+    {
+      "keyword": "외국인",
+      "rank": 24,
+      "score": 59,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 43.5
+    },
+    {
+      "keyword": "코스피",
+      "rank": 25,
+      "score": 57,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 42.7
+    },
+    {
+      "keyword": "던지자",
+      "rank": 26,
+      "score": 55,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 41.8
+    },
+    {
+      "keyword": "집보다",
+      "rank": 27,
+      "score": 53,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.9
+    },
+    {
+      "keyword": "주담대",
+      "rank": 28,
+      "score": 51,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.0
+    },
+    {
+      "keyword": "팔았는데",
+      "rank": 29,
+      "score": 50,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.5
+    },
+    {
+      "keyword": "비트코인",
+      "rank": 30,
+      "score": 48,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 38.6
+    },
+    {
+      "keyword": "올라도",
+      "rank": 31,
+      "score": 46,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.7
+    },
+    {
+      "keyword": "서학개미",
+      "rank": 32,
+      "score": 44,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.8
+    },
+    {
+      "keyword": "평가액",
+      "rank": 33,
+      "score": 42,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.9
+    },
+    {
+      "keyword": "방한설에",
+      "rank": 34,
+      "score": 41,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.5
+    },
+    {
+      "keyword": "AI",
+      "rank": 35,
+      "score": 39,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.5
+    },
+    {
+      "keyword": "반도체가",
+      "rank": 36,
+      "score": 37,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.8
+    },
+    {
+      "keyword": "때아니야",
+      "rank": 37,
+      "score": 35,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 32.8
+    },
+    {
+      "keyword": "박근종",
+      "rank": 38,
+      "score": 33,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.9
+    },
+    {
+      "keyword": "반도체",
+      "rank": 39,
+      "score": 32,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.5
+    },
+    {
+      "keyword": "대형주만",
+      "rank": 40,
+      "score": 30,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.5
+    },
+    {
+      "keyword": "SK",
+      "rank": 41,
+      "score": 28,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 29.6
+    },
+    {
+      "keyword": "하이닉스",
+      "rank": 42,
+      "score": 26,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 28.7
+    },
+    {
+      "keyword": "질주에",
+      "rank": 43,
+      "score": 24,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.8
+    },
+    {
+      "keyword": "HBM",
+      "rank": 44,
+      "score": 23,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.4
+    },
+    {
+      "keyword": "뒤집은",
+      "rank": 45,
+      "score": 21,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.5
+    },
+    {
+      "keyword": "삼성전자",
+      "rank": 46,
+      "score": 19,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 25.6
+    },
+    {
+      "keyword": "전국민",
+      "rank": 47,
+      "score": 17,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 24.6
+    },
+    {
+      "keyword": "단타장",
+      "rank": 48,
+      "score": 15,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.8
+    },
+    {
+      "keyword": "알았던",
+      "rank": 49,
+      "score": 14,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.3
+    },
+    {
+      "keyword": "배터리",
+      "rank": 50,
+      "score": 12,
+      "sector": "에너지·환경",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 22.4
+    }
+  ],
+  "sector_summary": {
+    "스포츠": [
+      {
+        "keyword": "울산 웨일즈",
+        "rank": 1,
+        "score": 100,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 62.0
+      },
+      {
+        "keyword": "추신수",
+        "rank": 4,
+        "score": 95,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 59.8
+      },
+      {
+        "keyword": "이정후",
+        "rank": 5,
+        "score": 93,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.9
+      },
+      {
+        "keyword": "데뷔전",
+        "rank": 8,
+        "score": 87,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 56.1
+      },
+      {
+        "keyword": "웨일즈",
+        "rank": 9,
+        "score": 86,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 55.7
+      },
+      {
+        "keyword": "SSG",
+        "rank": 21,
+        "score": 64,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      },
+      {
+        "keyword": "던지자",
+        "rank": 26,
+        "score": 55,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      },
+      {
+        "keyword": "방한설에",
+        "rank": 34,
+        "score": 41,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.5
+      }
+    ],
+    "에너지·환경": [
+      {
+        "keyword": "원자력",
+        "rank": 2,
+        "score": 98,
+        "sector": "에너지·환경",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 61.1
+      },
+      {
+        "keyword": "배터리",
+        "rank": 50,
+        "score": 12,
+        "sector": "에너지·환경",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 22.4
+      }
+    ],
+    "사회·이슈": [
+      {
+        "keyword": "대구광역시",
+        "rank": 3,
+        "score": 96,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 60.2
+      },
+      {
+        "keyword": "잠수함",
+        "rank": 6,
+        "score": 91,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.0
+      },
+      {
+        "keyword": "민원점검회의",
+        "rank": 11,
+        "score": 82,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.9
+      },
+      {
+        "keyword": "지진도",
+        "rank": 14,
+        "score": 77,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 51.6
+      },
+      {
+        "keyword": "폭발도",
+        "rank": 15,
+        "score": 75,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 50.8
+      },
+      {
+        "keyword": "우크라",
+        "rank": 16,
+        "score": 73,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.9
+      },
+      {
+        "keyword": "우크라이나",
+        "rank": 17,
+        "score": 71,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.0
+      },
+      {
+        "keyword": "대구시",
+        "rank": 18,
+        "score": 69,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 48.0
+      },
+      {
+        "keyword": "금정구",
+        "rank": 19,
+        "score": 68,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 47.6
+      },
+      {
+        "keyword": "울산시",
+        "rank": 20,
+        "score": 66,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 46.7
+      },
+      {
+        "keyword": "들어가자",
+        "rank": 22,
+        "score": 62,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      },
+      {
+        "keyword": "박근종",
+        "rank": 38,
+        "score": 33,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "전국민",
+        "rank": 47,
+        "score": 17,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 24.6
+      }
+    ],
+    "여행": [
+      {
+        "keyword": "여행금지",
+        "rank": 7,
+        "score": 89,
+        "sector": "여행",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 57.1
+      }
+    ],
+    "교육·취업": [
+      {
+        "keyword": "서울교육청",
+        "rank": 10,
+        "score": 84,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 54.8
+      },
+      {
+        "keyword": "부교육감이",
+        "rank": 12,
+        "score": 80,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.0
+      },
+      {
+        "keyword": "서울시교육청",
+        "rank": 13,
+        "score": 78,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 52.1
+      }
+    ],
+    "금융·투자": [
+      {
+        "keyword": "국민연금",
+        "rank": 23,
+        "score": 60,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      },
+      {
+        "keyword": "외국인",
+        "rank": 24,
+        "score": 59,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      },
+      {
+        "keyword": "코스피",
+        "rank": 25,
+        "score": 57,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      },
+      {
+        "keyword": "주담대",
+        "rank": 28,
+        "score": 51,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      },
+      {
+        "keyword": "비트코인",
+        "rank": 30,
+        "score": 48,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 38.6
+      },
+      {
+        "keyword": "올라도",
+        "rank": 31,
+        "score": 46,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.7
+      },
+      {
+        "keyword": "서학개미",
+        "rank": 32,
+        "score": 44,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.8
+      },
+      {
+        "keyword": "평가액",
+        "rank": 33,
+        "score": 42,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.9
+      },
+      {
+        "keyword": "대형주만",
+        "rank": 40,
+        "score": 30,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.5
+      },
+      {
+        "keyword": "질주에",
+        "rank": 43,
+        "score": 24,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.8
+      },
+      {
+        "keyword": "단타장",
+        "rank": 48,
+        "score": 15,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.8
+      }
+    ],
+    "기타": [
+      {
+        "keyword": "집보다",
+        "rank": 27,
+        "score": 53,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      },
+      {
+        "keyword": "팔았는데",
+        "rank": 29,
+        "score": 50,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      },
+      {
+        "keyword": "때아니야",
+        "rank": 37,
+        "score": 35,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      },
+      {
+        "keyword": "뒤집은",
+        "rank": 45,
+        "score": 21,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      },
+      {
+        "keyword": "알았던",
+        "rank": 49,
+        "score": 14,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.3
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "반도체",
+        "rank": 39,
+        "score": 32,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.5
+      },
+      {
+        "keyword": "반도체가",
+        "rank": 36,
+        "score": 37,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.8
+      },
+      {
+        "keyword": "AI",
+        "rank": 35,
+        "score": 39,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.5
+      },
+      {
+        "keyword": "하이닉스",
+        "rank": 42,
+        "score": 26,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 28.7
+      },
+      {
+        "keyword": "HBM",
+        "rank": 44,
+        "score": 23,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      },
+      {
+        "keyword": "삼성전자",
+        "rank": 46,
+        "score": 19,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      }
+    ],
+    "경제·경기": [
+      {
+        "keyword": "SK",
+        "rank": 41,
+        "score": 28,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "theme": "여행금지",
+      "topic": "갑자기 여행금지 국가 됐다면? 예약·환불·보험 손해 없이 처리하는 법",
+      "keyword": "여행금지",
+      "sector": "여행",
+      "score": 89,
+      "opportunity_score": 57.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #7 · 경쟁 보통 · 최근 미발행",
+      "angle": "정보 공백이 큰 실전 대응 절차에 집중 — 불안한 여행자의 즉각적 행동 욕구 직격",
+      "hook": "항공권 끊어놨는데 여행금지 지정됐을 때 돈 돌려받을 수 있을까?",
+      "color": "#87CEEB"
+    },
+    {
+      "theme": "서울교육청",
+      "topic": "서울교육청 발표, 우리 아이 학교생활에 실제로 뭐가 바뀌나",
+      "keyword": "서울교육청",
+      "sector": "교육·취업",
+      "score": 84,
+      "opportunity_score": 54.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #10 · 경쟁 보통 · 최근 미발행",
+      "angle": "정책 원문보다 '내 아이에게 미치는 영향' 필터로 좁혀 학부모 검색의도 정면 대응",
+      "hook": "뉴스에는 나왔는데 실제로 교실에서 무엇이 달라지는지 아무도 안 알려준다",
+      "color": "#9B59B6"
+    },
+    {
+      "theme": "울산 웨일즈",
+      "topic": "울산에서 웨일즈 대표팀 만나는 법 — 티켓·교통·직관 꿀팁 미리보기",
+      "keyword": "울산 웨일즈",
+      "sector": "스포츠",
+      "score": 100,
+      "opportunity_score": 62.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #1 · 경쟁 보통 · 최근 미발행",
+      "angle": "경기 일정+현장 직관 정보 수요가 폭발하는 타이밍에 실용 가이드로 선점",
+      "hook": "웨일즈 대표팀이 울산에 온다는데 어디서 보고 어떻게 가야 하나?",
+      "color": "#2ECC71"
+    },
+    {
+      "theme": "대구광역시",
+      "topic": "대구에서 지금 무슨 일이? 오늘 검색량 급등한 진짜 이유",
+      "keyword": "대구광역시",
+      "sector": "사회·이슈",
+      "score": 96,
+      "opportunity_score": 60.2,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #3 · 경쟁 보통 · 최근 미발행",
+      "angle": "검색 급등 배경을 빠르게 정리해 주는 '뉴스 큐레이션' 포맷 — 정보 소비 욕구 즉시 충족",
+      "hook": "대구 관련 뉴스가 갑자기 쏟아지는데 핵심만 빠르게 알고 싶다",
+      "color": "#778CA3"
+    },
+    {
+      "theme": "원자력",
+      "topic": "원자력 찬반 논쟁 말고, 전기요금에 미치는 영향만 솔직하게 따져봤다",
+      "keyword": "원자력",
+      "sector": "에너지·환경",
+      "score": 98,
+      "opportunity_score": 61.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #2 · 경쟁 보통 · 최근 미발행",
+      "angle": "이념 논쟁 피하고 '내 지갑'이라는 가장 좁은 타겟으로 레드오션 돌파",
+      "hook": "원전 늘리면 실제로 전기요금이 싸지는 건지 아닌지 숫자로 보고 싶다",
+      "color": "#1ABC9C"
+    },
+    {
+      "theme": "국민연금",
+      "topic": "국민연금 더 내고 덜 받는 시대, 30대가 지금 당장 해야 할 것 3가지",
+      "keyword": "국민연금",
+      "sector": "금융·투자",
+      "score": 60,
+      "opportunity_score": 44.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #23 · 경쟁 보통 · 최근 미발행",
+      "angle": "MZ 세대의 연금 불신을 '행동 전환'으로 연결 — 불안을 실행 동력으로 전환",
+      "hook": "국민연금 고갈된다는데 나는 결국 한 푼도 못 받는 걸까?",
+      "color": "#FFD700"
+    },
+    {
+      "theme": "집보다",
+      "topic": "집보다 OOO이 낫다는 말이 나오게 된 이유 — 요즘 한국인의 주거 감각 변화",
+      "keyword": "집보다",
+      "sector": "기타",
+      "score": 53,
+      "opportunity_score": 40.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #27 · 경쟁 보통 · 최근 미발행",
+      "angle": "감성·라이프스타일 코드로 읽히는 밈·표현의 사회적 맥락 분석 — 공감 기반 유입",
+      "hook": "집보다 어딘가가 더 낫다는 말이 왜 이렇게 많이 검색되고 있을까?",
+      "color": "#4A4A4A"
+    },
+    {
+      "theme": "반도체",
+      "topic": "반도체 주식 사기 전, 이번 사이클이 전과 다른 점 딱 2가지",
+      "keyword": "반도체",
+      "sector": "IT·테크",
+      "score": 32,
+      "opportunity_score": 36.5,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #39 · 경쟁 보통 · 과거 성과 우수",
+      "angle": "투자 각도로 좁혀 '지식 소비'를 '의사결정'으로 연결 — 레드오션에서 타겟 명확화",
+      "hook": "반도체가 다시 오른다는데 이번엔 진짜 사도 되는 타이밍인가?",
+      "color": "#00D4FF"
+    },
+    {
+      "theme": "SK",
+      "topic": "SK그룹 최근 뉴스, 주주·직원·소비자 입장에서 각각 뭘 의미하는가",
+      "keyword": "SK",
+      "sector": "경제·경기",
+      "score": 28,
+      "opportunity_score": 29.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #41 · 경쟁 보통 · 과거 성과 우수 · 최근 미발행",
+      "angle": "이해관계자별 시각 분리 — 단일 뉴스 소비를 다층 분석으로 격상해 체류시간 극대화",
+      "hook": "SK 관련 기사가 쏟아지는데 나한테 실제로 무슨 영향이 있는 건지 모르겠다",
+      "color": "#F39C12"
+    }
+  ],
+  "extra_angles": [
+    {
+      "theme": "추신수",
+      "topic": "추신수가 지금 다시 화제인 이유 — 은퇴 이후 행보가 놀라운 진짜 이유",
+      "keyword": "추신수",
+      "sector": "스포츠",
+      "score": 95,
+      "opportunity_score": 59.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 95 · 스포츠",
+      "angle": "현재 검색 급등 맥락 + 레거시 스토리 결합 — 팬덤과 신규 독자 동시 유입",
+      "hook": "추신수 근황이 왜 갑자기 이렇게 많이 검색되는 걸까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "이정후",
+      "topic": "이정후 오늘 성적·출전 여부, 현지 실황 빠르게 확인하는 방법",
+      "keyword": "이정후",
+      "sector": "스포츠",
+      "score": 93,
+      "opportunity_score": 58.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 93 · 스포츠",
+      "angle": "MLB 실시간 정보 접근법이라는 실용 각도 — 팬의 반복 방문 유도 구조",
+      "hook": "이정후 경기 결과를 한국 시간 기준으로 제일 빠르게 보는 방법이 뭘까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "잠수함",
+      "topic": "한국 잠수함 사고·이슈, 국방력에 실제로 어떤 구멍이 생기는가",
+      "keyword": "잠수함",
+      "sector": "사회·이슈",
+      "score": 91,
+      "opportunity_score": 58.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 91 · 사회·이슈",
+      "angle": "안보 불안을 '구체적 리스크 분석'으로 전환 — 감정 소비를 지식 소비로 업그레이드",
+      "hook": "잠수함 뉴스가 나올 때마다 우리 안보에 실제로 무슨 문제인지 궁금하다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "데뷔전",
+      "topic": "웨일즈 한국 데뷔전, 축구팬이 주목해야 할 선수와 전술 포인트",
+      "keyword": "데뷔전",
+      "sector": "스포츠",
+      "score": 87,
+      "opportunity_score": 56.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 87 · 스포츠",
+      "angle": "경기 전 '예습 콘텐츠' 포맷 — 직관·시청 앞 정보 수요 황금 타이밍 포착",
+      "hook": "웨일즈 대표팀 데뷔전인데 어떤 선수를 눈여겨봐야 재미있게 볼 수 있을까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "웨일즈",
+      "topic": "웨일즈 축구대표팀, 한국 원정 온 진짜 목적과 현재 전력 상태",
+      "keyword": "웨일즈",
+      "sector": "스포츠",
+      "score": 86,
+      "opportunity_score": 55.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 86 · 스포츠",
+      "angle": "친선 이상의 전략적 배경 + 선수단 현황 분석 — 정보 밀도로 경쟁 콘텐츠 차별화",
+      "hook": "웨일즈가 왜 하필 지금 한국에 왔고 전력은 얼마나 되는 팀인가?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "민원점검회의",
+      "topic": "민원점검회의에서 나온 결정, 내 일상 행정 처리에 뭐가 달라지나",
+      "keyword": "민원점검회의",
+      "sector": "사회·이슈",
+      "score": 82,
+      "opportunity_score": 53.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 82 · 사회·이슈",
+      "angle": "정부 회의 결과를 '시민 체감 변화'로 번역 — 검색자의 진짜 관심사 직접 대응",
+      "hook": "민원점검회의 결과가 뉴스에 나왔는데 나한테 실제로 무슨 의미인지 모르겠다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "부교육감",
+      "topic": "부교육감이 화제가 된 배경 — 교육 현장 갈등이 수면 위로 올라온 이유",
+      "keyword": "부교육감",
+      "sector": "교육·취업",
+      "score": 80,
+      "opportunity_score": 53.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 80 · 교육·취업",
+      "angle": "직책보다 '사건의 맥락'에 집중 — 사회적 긴장을 스토리로 풀어 공감 유입 극대화",
+      "hook": "부교육감이 왜 갑자기 검색어 1위에 오른 건지 배경이 궁금하다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "서울시교육청",
+      "topic": "서울시교육청 새 방침, 사교육비에 영향을 줄까 안 줄까",
+      "keyword": "서울시교육청",
+      "sector": "교육·취업",
+      "score": 78,
+      "opportunity_score": 52.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 78 · 교육·취업",
+      "angle": "학부모의 가장 예민한 지점(사교육비)으로 좁혀 클릭 동기 극대화",
+      "hook": "서울시교육청 발표가 학원비·사교육 판도를 바꿀지 솔직하게 알고 싶다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "지진",
+      "topic": "지진도 대비 안 됐는데 — 한국 내진 설계 현실과 내 집 안전 확인법",
+      "keyword": "지진",
+      "sector": "사회·이슈",
+      "score": 77,
+      "opportunity_score": 51.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 77 · 사회·이슈",
+      "angle": "공포를 '즉시 실행 가능한 체크리스트'로 전환 — 불안의 행동화 욕구 포착",
+      "hook": "지진이 나면 내가 사는 건물이 버텨줄지 확인할 방법이 있을까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "폭발",
+      "topic": "폭발 사고 잇따르는 요즘, 생활 속 위험 시설 내 주변엔 없는지 확인하는 법",
+      "keyword": "폭발",
+      "sector": "사회·이슈",
+      "score": 75,
+      "opportunity_score": 50.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 75 · 사회·이슈",
+      "angle": "연속 사고 불안을 '개인 리스크 점검'으로 전환 — 막연한 공포를 구체적 행동으로",
+      "hook": "폭발 사고 뉴스가 계속 나오는데 내 주변에 위험한 시설이 있는지 알 수가 없다",
+      "color": "#4a5568"
+    }
+  ],
+  "content_angles": {
+    "여행금지": {
+      "topic": "갑자기 여행금지 국가 됐다면? 예약·환불·보험 손해 없이 처리하는 법",
+      "angle": "정보 공백이 큰 실전 대응 절차에 집중 — 불안한 여행자의 즉각적 행동 욕구 직격",
+      "hook": "항공권 끊어놨는데 여행금지 지정됐을 때 돈 돌려받을 수 있을까?"
+    },
+    "서울교육청": {
+      "topic": "서울교육청 발표, 우리 아이 학교생활에 실제로 뭐가 바뀌나",
+      "angle": "정책 원문보다 '내 아이에게 미치는 영향' 필터로 좁혀 학부모 검색의도 정면 대응",
+      "hook": "뉴스에는 나왔는데 실제로 교실에서 무엇이 달라지는지 아무도 안 알려준다"
+    },
+    "울산 웨일즈": {
+      "topic": "울산에서 웨일즈 대표팀 만나는 법 — 티켓·교통·직관 꿀팁 미리보기",
+      "angle": "경기 일정+현장 직관 정보 수요가 폭발하는 타이밍에 실용 가이드로 선점",
+      "hook": "웨일즈 대표팀이 울산에 온다는데 어디서 보고 어떻게 가야 하나?"
+    },
+    "대구광역시": {
+      "topic": "대구에서 지금 무슨 일이? 오늘 검색량 급등한 진짜 이유",
+      "angle": "검색 급등 배경을 빠르게 정리해 주는 '뉴스 큐레이션' 포맷 — 정보 소비 욕구 즉시 충족",
+      "hook": "대구 관련 뉴스가 갑자기 쏟아지는데 핵심만 빠르게 알고 싶다"
+    },
+    "원자력": {
+      "topic": "원자력 찬반 논쟁 말고, 전기요금에 미치는 영향만 솔직하게 따져봤다",
+      "angle": "이념 논쟁 피하고 '내 지갑'이라는 가장 좁은 타겟으로 레드오션 돌파",
+      "hook": "원전 늘리면 실제로 전기요금이 싸지는 건지 아닌지 숫자로 보고 싶다"
+    },
+    "국민연금": {
+      "topic": "국민연금 더 내고 덜 받는 시대, 30대가 지금 당장 해야 할 것 3가지",
+      "angle": "MZ 세대의 연금 불신을 '행동 전환'으로 연결 — 불안을 실행 동력으로 전환",
+      "hook": "국민연금 고갈된다는데 나는 결국 한 푼도 못 받는 걸까?"
+    },
+    "집보다": {
+      "topic": "집보다 OOO이 낫다는 말이 나오게 된 이유 — 요즘 한국인의 주거 감각 변화",
+      "angle": "감성·라이프스타일 코드로 읽히는 밈·표현의 사회적 맥락 분석 — 공감 기반 유입",
+      "hook": "집보다 어딘가가 더 낫다는 말이 왜 이렇게 많이 검색되고 있을까?"
+    },
+    "반도체": {
+      "topic": "반도체 주식 사기 전, 이번 사이클이 전과 다른 점 딱 2가지",
+      "angle": "투자 각도로 좁혀 '지식 소비'를 '의사결정'으로 연결 — 레드오션에서 타겟 명확화",
+      "hook": "반도체가 다시 오른다는데 이번엔 진짜 사도 되는 타이밍인가?"
+    },
+    "SK": {
+      "topic": "SK그룹 최근 뉴스, 주주·직원·소비자 입장에서 각각 뭘 의미하는가",
+      "angle": "이해관계자별 시각 분리 — 단일 뉴스 소비를 다층 분석으로 격상해 체류시간 극대화",
+      "hook": "SK 관련 기사가 쏟아지는데 나한테 실제로 무슨 영향이 있는 건지 모르겠다"
+    },
+    "추신수": {
+      "topic": "추신수가 지금 다시 화제인 이유 — 은퇴 이후 행보가 놀라운 진짜 이유",
+      "angle": "현재 검색 급등 맥락 + 레거시 스토리 결합 — 팬덤과 신규 독자 동시 유입",
+      "hook": "추신수 근황이 왜 갑자기 이렇게 많이 검색되는 걸까?"
+    },
+    "이정후": {
+      "topic": "이정후 오늘 성적·출전 여부, 현지 실황 빠르게 확인하는 방법",
+      "angle": "MLB 실시간 정보 접근법이라는 실용 각도 — 팬의 반복 방문 유도 구조",
+      "hook": "이정후 경기 결과를 한국 시간 기준으로 제일 빠르게 보는 방법이 뭘까?"
+    },
+    "잠수함": {
+      "topic": "한국 잠수함 사고·이슈, 국방력에 실제로 어떤 구멍이 생기는가",
+      "angle": "안보 불안을 '구체적 리스크 분석'으로 전환 — 감정 소비를 지식 소비로 업그레이드",
+      "hook": "잠수함 뉴스가 나올 때마다 우리 안보에 실제로 무슨 문제인지 궁금하다"
+    },
+    "데뷔전": {
+      "topic": "웨일즈 한국 데뷔전, 축구팬이 주목해야 할 선수와 전술 포인트",
+      "angle": "경기 전 '예습 콘텐츠' 포맷 — 직관·시청 앞 정보 수요 황금 타이밍 포착",
+      "hook": "웨일즈 대표팀 데뷔전인데 어떤 선수를 눈여겨봐야 재미있게 볼 수 있을까?"
+    },
+    "웨일즈": {
+      "topic": "웨일즈 축구대표팀, 한국 원정 온 진짜 목적과 현재 전력 상태",
+      "angle": "친선 이상의 전략적 배경 + 선수단 현황 분석 — 정보 밀도로 경쟁 콘텐츠 차별화",
+      "hook": "웨일즈가 왜 하필 지금 한국에 왔고 전력은 얼마나 되는 팀인가?"
+    },
+    "민원점검회의": {
+      "topic": "민원점검회의에서 나온 결정, 내 일상 행정 처리에 뭐가 달라지나",
+      "angle": "정부 회의 결과를 '시민 체감 변화'로 번역 — 검색자의 진짜 관심사 직접 대응",
+      "hook": "민원점검회의 결과가 뉴스에 나왔는데 나한테 실제로 무슨 의미인지 모르겠다"
+    },
+    "부교육감": {
+      "topic": "부교육감이 화제가 된 배경 — 교육 현장 갈등이 수면 위로 올라온 이유",
+      "angle": "직책보다 '사건의 맥락'에 집중 — 사회적 긴장을 스토리로 풀어 공감 유입 극대화",
+      "hook": "부교육감이 왜 갑자기 검색어 1위에 오른 건지 배경이 궁금하다"
+    },
+    "서울시교육청": {
+      "topic": "서울시교육청 새 방침, 사교육비에 영향을 줄까 안 줄까",
+      "angle": "학부모의 가장 예민한 지점(사교육비)으로 좁혀 클릭 동기 극대화",
+      "hook": "서울시교육청 발표가 학원비·사교육 판도를 바꿀지 솔직하게 알고 싶다"
+    },
+    "지진": {
+      "topic": "지진도 대비 안 됐는데 — 한국 내진 설계 현실과 내 집 안전 확인법",
+      "angle": "공포를 '즉시 실행 가능한 체크리스트'로 전환 — 불안의 행동화 욕구 포착",
+      "hook": "지진이 나면 내가 사는 건물이 버텨줄지 확인할 방법이 있을까?"
+    },
+    "폭발": {
+      "topic": "폭발 사고 잇따르는 요즘, 생활 속 위험 시설 내 주변엔 없는지 확인하는 법",
+      "angle": "연속 사고 불안을 '개인 리스크 점검'으로 전환 — 막연한 공포를 구체적 행동으로",
+      "hook": "폭발 사고 뉴스가 계속 나오는데 내 주변에 위험한 시설이 있는지 알 수가 없다"
+    }
+  },
+  "autocomplete": {},
+  "datalab_used": false,
+  "iot_used": false,
+  "trend_delta": {
+    "prev_date": "2026-05-30",
+    "new_entry": [
+      "울산 웨일즈",
+      "원자력",
+      "대구광역시",
+      "추신수",
+      "이정후",
+      "잠수함",
+      "여행금지",
+      "데뷔전",
+      "웨일즈",
+      "서울교육청"
+    ],
+    "dropped": [
+      "이영애",
+      "스텔라 루멘",
+      "고양이",
+      "한국마사회",
+      "지상렬",
+      "박준영",
+      "대기업",
+      "돼지고기",
+      "국민연금 제도 확대",
+      "점프샷"
+    ],
+    "risen": [
+      {
+        "keyword": "코스피",
+        "delta": 13
+      }
+    ],
+    "fallen": [
+      {
+        "keyword": "비트코인",
+        "delta": 17
+      }
+    ]
+  }
+}

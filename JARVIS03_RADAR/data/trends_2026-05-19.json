@@ -1,0 +1,1456 @@
+{
+  "date": "2026-05-19",
+  "collected_at": "09:01:29",
+  "google_trending": [
+    "lg 트윈스",
+    "장릉혁",
+    "사전투표",
+    "비씨카드",
+    "지 창욱",
+    "거래소",
+    "포스코 퓨처 엠",
+    "속도 제한",
+    "조진웅",
+    "라민 야말",
+    "직구가",
+    "km",
+    "오스틴",
+    "연타석포",
+    "장릉혁에",
+    "이영애",
+    "온몸에",
+    "여배우의",
+    "제주지사",
+    "여론조사",
+    "오늘Who",
+    "BC카드",
+    "광고비",
+    "지창욱",
+    "B급",
+    "카카오",
+    "빠지고",
+    "금융권",
+    "가상자산",
+    "두나무로",
+    "데일리",
+    "머니마켓",
+    "해외시황",
+    "뉴욕증시",
+    "반도체주",
+    "선매수",
+    "리딩방",
+    "긴장감에",
+    "서학개미에",
+    "비과세",
+    "마이크론",
+    "급락에",
+    "반도체",
+    "어제장",
+    "오늘장",
+    "대내외",
+    "코스닥",
+    "키운다더니",
+    "대어는",
+    "외국인"
+  ],
+  "scored_keywords": [
+    {
+      "keyword": "lg 트윈스",
+      "rank": 1,
+      "score": 100,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 62.0
+    },
+    {
+      "keyword": "장릉혁",
+      "rank": 2,
+      "score": 98,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 61.1
+    },
+    {
+      "keyword": "사전투표",
+      "rank": 3,
+      "score": 96,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 60.2
+    },
+    {
+      "keyword": "비씨카드",
+      "rank": 4,
+      "score": 95,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 59.8
+    },
+    {
+      "keyword": "지 창욱",
+      "rank": 5,
+      "score": 93,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.9
+    },
+    {
+      "keyword": "거래소",
+      "rank": 6,
+      "score": 91,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.0
+    },
+    {
+      "keyword": "포스코 퓨처 엠",
+      "rank": 7,
+      "score": 89,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 57.1
+    },
+    {
+      "keyword": "속도 제한",
+      "rank": 8,
+      "score": 87,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 56.1
+    },
+    {
+      "keyword": "조진웅",
+      "rank": 9,
+      "score": 86,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 55.7
+    },
+    {
+      "keyword": "라민 야말",
+      "rank": 10,
+      "score": 84,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 54.8
+    },
+    {
+      "keyword": "직구가",
+      "rank": 11,
+      "score": 82,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.9
+    },
+    {
+      "keyword": "km",
+      "rank": 12,
+      "score": 80,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.0
+    },
+    {
+      "keyword": "오스틴",
+      "rank": 13,
+      "score": 78,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 52.1
+    },
+    {
+      "keyword": "연타석포",
+      "rank": 14,
+      "score": 77,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 51.6
+    },
+    {
+      "keyword": "장릉혁에",
+      "rank": 15,
+      "score": 75,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 50.8
+    },
+    {
+      "keyword": "이영애",
+      "rank": 16,
+      "score": 73,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.9
+    },
+    {
+      "keyword": "온몸에",
+      "rank": 17,
+      "score": 71,
+      "sector": "건강·의료",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.0
+    },
+    {
+      "keyword": "여배우의",
+      "rank": 18,
+      "score": 69,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 48.0
+    },
+    {
+      "keyword": "제주지사",
+      "rank": 19,
+      "score": 68,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 47.6
+    },
+    {
+      "keyword": "여론조사",
+      "rank": 20,
+      "score": 66,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 46.7
+    },
+    {
+      "keyword": "오늘Who",
+      "rank": 21,
+      "score": 64,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 45.8
+    },
+    {
+      "keyword": "BC카드",
+      "rank": 22,
+      "score": 62,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.9
+    },
+    {
+      "keyword": "광고비",
+      "rank": 23,
+      "score": 60,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.0
+    },
+    {
+      "keyword": "지창욱",
+      "rank": 24,
+      "score": 59,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 43.5
+    },
+    {
+      "keyword": "B급",
+      "rank": 25,
+      "score": 57,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 42.7
+    },
+    {
+      "keyword": "카카오",
+      "rank": 26,
+      "score": 55,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 41.8
+    },
+    {
+      "keyword": "빠지고",
+      "rank": 27,
+      "score": 53,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.9
+    },
+    {
+      "keyword": "금융권",
+      "rank": 28,
+      "score": 51,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.0
+    },
+    {
+      "keyword": "가상자산",
+      "rank": 29,
+      "score": 50,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.5
+    },
+    {
+      "keyword": "두나무로",
+      "rank": 30,
+      "score": 48,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 38.6
+    },
+    {
+      "keyword": "데일리",
+      "rank": 31,
+      "score": 46,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.7
+    },
+    {
+      "keyword": "머니마켓",
+      "rank": 32,
+      "score": 44,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.8
+    },
+    {
+      "keyword": "해외시황",
+      "rank": 33,
+      "score": 42,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.9
+    },
+    {
+      "keyword": "뉴욕증시",
+      "rank": 34,
+      "score": 41,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.5
+    },
+    {
+      "keyword": "반도체주",
+      "rank": 35,
+      "score": 39,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.7
+    },
+    {
+      "keyword": "선매수",
+      "rank": 36,
+      "score": 37,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 33.7
+    },
+    {
+      "keyword": "리딩방",
+      "rank": 37,
+      "score": 35,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 32.8
+    },
+    {
+      "keyword": "긴장감에",
+      "rank": 38,
+      "score": 33,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.9
+    },
+    {
+      "keyword": "서학개미에",
+      "rank": 39,
+      "score": 32,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.4
+    },
+    {
+      "keyword": "비과세",
+      "rank": 40,
+      "score": 30,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.5
+    },
+    {
+      "keyword": "마이크론",
+      "rank": 41,
+      "score": 28,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 29.6
+    },
+    {
+      "keyword": "급락에",
+      "rank": 42,
+      "score": 26,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 28.7
+    },
+    {
+      "keyword": "반도체",
+      "rank": 43,
+      "score": 24,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.0
+    },
+    {
+      "keyword": "어제장",
+      "rank": 44,
+      "score": 23,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.4
+    },
+    {
+      "keyword": "오늘장",
+      "rank": 45,
+      "score": 21,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.5
+    },
+    {
+      "keyword": "대내외",
+      "rank": 46,
+      "score": 19,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 25.6
+    },
+    {
+      "keyword": "코스닥",
+      "rank": 47,
+      "score": 17,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 24.6
+    },
+    {
+      "keyword": "키운다더니",
+      "rank": 48,
+      "score": 15,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.8
+    },
+    {
+      "keyword": "대어는",
+      "rank": 49,
+      "score": 14,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.3
+    },
+    {
+      "keyword": "외국인",
+      "rank": 50,
+      "score": 12,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 22.4
+    }
+  ],
+  "sector_summary": {
+    "스포츠": [
+      {
+        "keyword": "lg 트윈스",
+        "rank": 1,
+        "score": 100,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 62.0
+      },
+      {
+        "keyword": "라민 야말",
+        "rank": 10,
+        "score": 84,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 54.8
+      },
+      {
+        "keyword": "오스틴",
+        "rank": 13,
+        "score": 78,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 52.1
+      },
+      {
+        "keyword": "연타석포",
+        "rank": 14,
+        "score": 77,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 51.6
+      }
+    ],
+    "연예·문화": [
+      {
+        "keyword": "장릉혁",
+        "rank": 2,
+        "score": 98,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 61.1
+      },
+      {
+        "keyword": "지 창욱",
+        "rank": 5,
+        "score": 93,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.9
+      },
+      {
+        "keyword": "조진웅",
+        "rank": 9,
+        "score": 86,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 55.7
+      },
+      {
+        "keyword": "장릉혁에",
+        "rank": 15,
+        "score": 75,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 50.8
+      },
+      {
+        "keyword": "이영애",
+        "rank": 16,
+        "score": 73,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.9
+      },
+      {
+        "keyword": "여배우의",
+        "rank": 18,
+        "score": 69,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 48.0
+      },
+      {
+        "keyword": "지창욱",
+        "rank": 24,
+        "score": 59,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      }
+    ],
+    "사회·이슈": [
+      {
+        "keyword": "사전투표",
+        "rank": 3,
+        "score": 96,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 60.2
+      },
+      {
+        "keyword": "속도 제한",
+        "rank": 8,
+        "score": 87,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 56.1
+      },
+      {
+        "keyword": "직구가",
+        "rank": 11,
+        "score": 82,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.9
+      },
+      {
+        "keyword": "제주지사",
+        "rank": 19,
+        "score": 68,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 47.6
+      },
+      {
+        "keyword": "여론조사",
+        "rank": 20,
+        "score": 66,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 46.7
+      }
+    ],
+    "금융·투자": [
+      {
+        "keyword": "비씨카드",
+        "rank": 4,
+        "score": 95,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 59.8
+      },
+      {
+        "keyword": "거래소",
+        "rank": 6,
+        "score": 91,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.0
+      },
+      {
+        "keyword": "포스코 퓨처 엠",
+        "rank": 7,
+        "score": 89,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 57.1
+      },
+      {
+        "keyword": "BC카드",
+        "rank": 22,
+        "score": 62,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      },
+      {
+        "keyword": "금융권",
+        "rank": 28,
+        "score": 51,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      },
+      {
+        "keyword": "가상자산",
+        "rank": 29,
+        "score": 50,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      },
+      {
+        "keyword": "두나무로",
+        "rank": 30,
+        "score": 48,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 38.6
+      },
+      {
+        "keyword": "머니마켓",
+        "rank": 32,
+        "score": 44,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.8
+      },
+      {
+        "keyword": "해외시황",
+        "rank": 33,
+        "score": 42,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.9
+      },
+      {
+        "keyword": "뉴욕증시",
+        "rank": 34,
+        "score": 41,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.5
+      },
+      {
+        "keyword": "선매수",
+        "rank": 36,
+        "score": 37,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 33.7
+      },
+      {
+        "keyword": "리딩방",
+        "rank": 37,
+        "score": 35,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      },
+      {
+        "keyword": "긴장감에",
+        "rank": 38,
+        "score": 33,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "서학개미에",
+        "rank": 39,
+        "score": 32,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.4
+      },
+      {
+        "keyword": "비과세",
+        "rank": 40,
+        "score": 30,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.5
+      },
+      {
+        "keyword": "어제장",
+        "rank": 44,
+        "score": 23,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      },
+      {
+        "keyword": "오늘장",
+        "rank": 45,
+        "score": 21,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      },
+      {
+        "keyword": "코스닥",
+        "rank": 47,
+        "score": 17,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 24.6
+      },
+      {
+        "keyword": "대어는",
+        "rank": 49,
+        "score": 14,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.3
+      },
+      {
+        "keyword": "외국인",
+        "rank": 50,
+        "score": 12,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 22.4
+      }
+    ],
+    "기타": [
+      {
+        "keyword": "km",
+        "rank": 12,
+        "score": 80,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.0
+      },
+      {
+        "keyword": "오늘Who",
+        "rank": 21,
+        "score": 64,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      },
+      {
+        "keyword": "B급",
+        "rank": 25,
+        "score": 57,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      },
+      {
+        "keyword": "빠지고",
+        "rank": 27,
+        "score": 53,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      },
+      {
+        "keyword": "데일리",
+        "rank": 31,
+        "score": 46,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.7
+      },
+      {
+        "keyword": "키운다더니",
+        "rank": 48,
+        "score": 15,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.8
+      }
+    ],
+    "건강·의료": [
+      {
+        "keyword": "온몸에",
+        "rank": 17,
+        "score": 71,
+        "sector": "건강·의료",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.0
+      }
+    ],
+    "경제·경기": [
+      {
+        "keyword": "광고비",
+        "rank": 23,
+        "score": 60,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      },
+      {
+        "keyword": "급락에",
+        "rank": 42,
+        "score": 26,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 28.7
+      },
+      {
+        "keyword": "대내외",
+        "rank": 46,
+        "score": 19,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "카카오",
+        "rank": 26,
+        "score": 55,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      },
+      {
+        "keyword": "반도체주",
+        "rank": 35,
+        "score": 39,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.7
+      },
+      {
+        "keyword": "마이크론",
+        "rank": 41,
+        "score": 28,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      },
+      {
+        "keyword": "반도체",
+        "rank": 43,
+        "score": 24,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.0
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "theme": "LG 트윈스",
+      "topic": "LG 트윈스, 지금 이 순간이 중요한 이유 — 후반기 변수 3가지",
+      "keyword": "LG 트윈스",
+      "sector": "스포츠",
+      "score": 100,
+      "opportunity_score": 62.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #1 · 경쟁 보통 · 최근 미발행",
+      "angle": "시즌 분기점에서 팬들이 가장 궁금해하는 전력 이슈를 구체적으로 짚어줌",
+      "hook": "트윈스가 우승권에 진입할 수 있는가, 아니면 무너지는가?",
+      "color": "#2ECC71"
+    },
+    {
+      "theme": "사전투표",
+      "topic": "사전투표 언제 어디서? 2026 지방선거 일정·방법 한눈에 보기",
+      "keyword": "사전투표",
+      "sector": "사회·이슈",
+      "score": 96,
+      "opportunity_score": 60.2,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #3 · 경쟁 보통 · 최근 미발행",
+      "angle": "선거철마다 폭발하는 실용 정보 수요를 가장 빠르게 충족시키는 각도",
+      "hook": "내 투표소가 어디인지, 사전투표일이 며칠인지 바로 알고 싶다",
+      "color": "#778CA3"
+    },
+    {
+      "theme": "장릉혁",
+      "topic": "장릉혁이 갑자기 화제가 된 진짜 이유 — 팬들이 몰리는 포인트",
+      "keyword": "장릉혁",
+      "sector": "연예·문화",
+      "score": 98,
+      "opportunity_score": 61.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #2 · 경쟁 보통 · 최근 미발행",
+      "angle": "검색 급등 배경을 설명해주는 콘텐츠는 항상 진입 트래픽을 선점함",
+      "hook": "도대체 장릉혁에게 무슨 일이 생긴 건지 궁금하다",
+      "color": "#E91E63"
+    },
+    {
+      "theme": "온몸 두드러기·발진",
+      "topic": "온몸에 두드러기가 갑자기 났을 때, 병원 가기 전 확인해야 할 것들",
+      "keyword": "온몸 두드러기·발진",
+      "sector": "건강·의료",
+      "score": 71,
+      "opportunity_score": 49.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #17 · 경쟁 보통 · 최근 미발행",
+      "angle": "증상 발현 직후 불안한 독자가 즉시 실행 가능한 체크리스트를 원함",
+      "hook": "원인도 모르는데 온몸에 퍼지고 있어서 지금 당장 뭘 해야 할지 모른다",
+      "color": "#00FF88"
+    },
+    {
+      "theme": "KM (단위·브랜드)",
+      "topic": "KM 검색량 급등, 지금 사람들이 찾는 건 뭔가 — 맥락 분석",
+      "keyword": "KM (단위·브랜드)",
+      "sector": "기타",
+      "score": 80,
+      "opportunity_score": 53.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #12 · 경쟁 보통 · 최근 미발행",
+      "angle": "다의어 키워드는 검색 의도 정리 자체가 차별화 콘텐츠가 됨",
+      "hook": "KM이 갑자기 뜨는데 어떤 맥락인지 파악하고 싶다",
+      "color": "#4A4A4A"
+    },
+    {
+      "theme": "BC카드",
+      "topic": "BC카드 혜택, 2026년 지금 가장 손해 없이 쓰는 카드 조합은?",
+      "keyword": "BC카드",
+      "sector": "금융·투자",
+      "score": 95,
+      "opportunity_score": 59.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #4 · 경쟁 보통 · 최근 미발행",
+      "angle": "카드사 검색은 대부분 '혜택 비교' 의도 — 실익 계산을 직접 해주면 이탈률 최소",
+      "hook": "BC카드가 지금 쓸 만한지, 다른 카드와 비교해서 뭐가 이득인지 알고 싶다",
+      "color": "#FFD700"
+    },
+    {
+      "theme": "카카오",
+      "topic": "카카오 지금 어디로 가나 — 사업 개편·주가·서비스 변화 핵심 정리",
+      "keyword": "카카오",
+      "sector": "IT·테크",
+      "score": 55,
+      "opportunity_score": 41.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #26 · 경쟁 보통 · 최근 미발행",
+      "angle": "대형 플랫폼 변화기엔 '지금 상황 요약' 수요가 가장 크고 경쟁 콘텐츠가 산만함",
+      "hook": "카카오가 요즘 왜 이렇게 변하는 건지, 나한테 어떤 영향이 오는지 궁금하다",
+      "color": "#00D4FF"
+    },
+    {
+      "theme": "광고비",
+      "topic": "2026년 광고비, 지금 올리는 기업 vs 줄이는 기업 — 시장 신호 읽기",
+      "keyword": "광고비",
+      "sector": "경제·경기",
+      "score": 60,
+      "opportunity_score": 44.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #23 · 경쟁 보통 · 최근 미발행",
+      "angle": "광고비 트렌드는 경기 선행지표 — 투자자·마케터 모두 실질 인사이트를 원함",
+      "hook": "광고비 동향이 경기나 내 사업에 어떤 신호를 주는지 알고 싶다",
+      "color": "#F39C12"
+    }
+  ],
+  "extra_angles": [
+    {
+      "theme": "지창욱",
+      "topic": "지창욱 근황, 팬들이 지금 주목하는 이유 한 가지",
+      "keyword": "지창욱",
+      "sector": "연예·문화",
+      "score": 93,
+      "opportunity_score": 58.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 93 · 연예·문화",
+      "angle": "배우 검색 급등 시점에 팬 감성과 실제 뉴스를 연결하면 체류시간이 길어짐",
+      "hook": "지창욱에게 지금 무슨 일이 있는지 빠르게 파악하고 싶다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "거래소 (가상자산)",
+      "topic": "국내 가상자산 거래소, 2026년 지금 어디가 살아남고 있나",
+      "keyword": "거래소 (가상자산)",
+      "sector": "금융·투자",
+      "score": 91,
+      "opportunity_score": 58.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 91 · 금융·투자",
+      "angle": "규제·폐업·합병 이슈가 연속되는 시장에서 '현재 상황' 정리 수요가 가장 큼",
+      "hook": "내가 쓰는 거래소가 괜찮은지, 지금 어떤 거래소가 신뢰할 만한지 모르겠다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "포스코퓨처엠",
+      "topic": "포스코퓨처엠 주가 왜 움직이나 — 배터리 소재 사이클과 지금 타이밍",
+      "keyword": "포스코퓨처엠",
+      "sector": "금융·투자",
+      "score": 89,
+      "opportunity_score": 57.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 89 · 금융·투자",
+      "angle": "2차전지 소재주 관심이 살아있는 구간, 실적·수주·사이클 연결 분석이 차별화",
+      "hook": "포스코퓨처엠이 지금 사야 할 주식인지 아닌지 판단 근거를 알고 싶다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "속도 제한",
+      "topic": "도로 속도 제한 바뀐다? 2026년 개정안 핵심과 내 운전 습관 체크",
+      "keyword": "속도 제한",
+      "sector": "사회·이슈",
+      "score": 87,
+      "opportunity_score": 56.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 87 · 사회·이슈",
+      "angle": "정책 변화는 '나한테 직접 영향'으로 좁혀줄수록 클릭·공유가 폭발함",
+      "hook": "속도 제한이 바뀌면 과태료·면허에 실제로 어떤 변화가 생기는지 알고 싶다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "조진웅",
+      "topic": "조진웅이 다시 뜨는 이유 — 새 작품·발언·화제의 장면까지",
+      "keyword": "조진웅",
+      "sector": "연예·문화",
+      "score": 86,
+      "opportunity_score": 55.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 86 · 연예·문화",
+      "angle": "배우 재검색 급등은 신작·인터뷰·사건 중 하나 — 맥락 파악 콘텐츠가 진입 선점",
+      "hook": "조진웅이 요즘 왜 갑자기 검색되는지 이유를 빨리 알고 싶다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "라민 야말",
+      "topic": "라민 야말, 지금이 커리어 분기점인 이유 — 2026 시즌 결정적 장면들",
+      "keyword": "라민 야말",
+      "sector": "스포츠",
+      "score": 84,
+      "opportunity_score": 54.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 84 · 스포츠",
+      "angle": "챔피언스리그·월드컵 시즌과 겹치면 세계적 관심이 국내 검색으로 유입되는 구조",
+      "hook": "야말이 진짜 메시 후계자인지, 지금 성과가 얼마나 대단한 건지 알고 싶다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "직구 규제",
+      "topic": "해외 직구 규제, 내가 자주 사는 품목은 괜찮은가 — 품목별 체크",
+      "keyword": "직구 규제",
+      "sector": "사회·이슈",
+      "score": 82,
+      "opportunity_score": 53.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 82 · 사회·이슈",
+      "angle": "소비자 불안을 품목 단위로 좁혀주면 '나의 문제'가 되어 즉시 공유됨",
+      "hook": "직구가 막힌다는데 내가 쓰는 사이트·품목은 해당되는지 빨리 확인하고 싶다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "타일러 오스틴",
+      "topic": "타일러 오스틴, KBO 복귀 후 달라진 점 — 팬들이 놀란 진짜 이유",
+      "keyword": "타일러 오스틴",
+      "sector": "스포츠",
+      "score": 78,
+      "opportunity_score": 52.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 78 · 스포츠",
+      "angle": "외국인 선수 검색은 성적 급등락 시점에 집중 — 구체적 수치 분석이 차별화",
+      "hook": "오스틴이 지금 얼마나 잘하고 있는지, 왜 화제가 되는지 알고 싶다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "연타석 홈런",
+      "topic": "연타석 홈런, 야구에서 이게 왜 이렇게 드문 일인가 — 확률과 최근 기록",
+      "keyword": "연타석 홈런",
+      "sector": "스포츠",
+      "score": 77,
+      "opportunity_score": 51.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 77 · 스포츠",
+      "angle": "스포츠 이슈는 '왜 대단한가'를 설명해주는 맥락 콘텐츠가 비팬 독자까지 흡수",
+      "hook": "연타석 홈런이 뉴스가 될 만큼 희귀한 건지, 누가 쳤는지 궁금하다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "장릉혁 논란",
+      "topic": "장릉혁에게 무슨 일이? — 팬덤이 지금 반응하는 방식과 실제 상황",
+      "keyword": "장릉혁 논란",
+      "sector": "연예·문화",
+      "score": 75,
+      "opportunity_score": 50.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 75 · 연예·문화",
+      "angle": "3번 키워드와 쌍으로 검색되는 파생 키워드 — 감정 온도와 사실 사이 간극을 메워줌",
+      "hook": "장릉혁 관련 소식이 너무 많아서 무엇이 사실인지 정리가 안 된다",
+      "color": "#4a5568"
+    }
+  ],
+  "content_angles": {
+    "LG 트윈스": {
+      "topic": "LG 트윈스, 지금 이 순간이 중요한 이유 — 후반기 변수 3가지",
+      "angle": "시즌 분기점에서 팬들이 가장 궁금해하는 전력 이슈를 구체적으로 짚어줌",
+      "hook": "트윈스가 우승권에 진입할 수 있는가, 아니면 무너지는가?"
+    },
+    "사전투표": {
+      "topic": "사전투표 언제 어디서? 2026 지방선거 일정·방법 한눈에 보기",
+      "angle": "선거철마다 폭발하는 실용 정보 수요를 가장 빠르게 충족시키는 각도",
+      "hook": "내 투표소가 어디인지, 사전투표일이 며칠인지 바로 알고 싶다"
+    },
+    "장릉혁": {
+      "topic": "장릉혁이 갑자기 화제가 된 진짜 이유 — 팬들이 몰리는 포인트",
+      "angle": "검색 급등 배경을 설명해주는 콘텐츠는 항상 진입 트래픽을 선점함",
+      "hook": "도대체 장릉혁에게 무슨 일이 생긴 건지 궁금하다"
+    },
+    "온몸 두드러기·발진": {
+      "topic": "온몸에 두드러기가 갑자기 났을 때, 병원 가기 전 확인해야 할 것들",
+      "angle": "증상 발현 직후 불안한 독자가 즉시 실행 가능한 체크리스트를 원함",
+      "hook": "원인도 모르는데 온몸에 퍼지고 있어서 지금 당장 뭘 해야 할지 모른다"
+    },
+    "KM (단위·브랜드)": {
+      "topic": "KM 검색량 급등, 지금 사람들이 찾는 건 뭔가 — 맥락 분석",
+      "angle": "다의어 키워드는 검색 의도 정리 자체가 차별화 콘텐츠가 됨",
+      "hook": "KM이 갑자기 뜨는데 어떤 맥락인지 파악하고 싶다"
+    },
+    "BC카드": {
+      "topic": "BC카드 혜택, 2026년 지금 가장 손해 없이 쓰는 카드 조합은?",
+      "angle": "카드사 검색은 대부분 '혜택 비교' 의도 — 실익 계산을 직접 해주면 이탈률 최소",
+      "hook": "BC카드가 지금 쓸 만한지, 다른 카드와 비교해서 뭐가 이득인지 알고 싶다"
+    },
+    "카카오": {
+      "topic": "카카오 지금 어디로 가나 — 사업 개편·주가·서비스 변화 핵심 정리",
+      "angle": "대형 플랫폼 변화기엔 '지금 상황 요약' 수요가 가장 크고 경쟁 콘텐츠가 산만함",
+      "hook": "카카오가 요즘 왜 이렇게 변하는 건지, 나한테 어떤 영향이 오는지 궁금하다"
+    },
+    "광고비": {
+      "topic": "2026년 광고비, 지금 올리는 기업 vs 줄이는 기업 — 시장 신호 읽기",
+      "angle": "광고비 트렌드는 경기 선행지표 — 투자자·마케터 모두 실질 인사이트를 원함",
+      "hook": "광고비 동향이 경기나 내 사업에 어떤 신호를 주는지 알고 싶다"
+    },
+    "지창욱": {
+      "topic": "지창욱 근황, 팬들이 지금 주목하는 이유 한 가지",
+      "angle": "배우 검색 급등 시점에 팬 감성과 실제 뉴스를 연결하면 체류시간이 길어짐",
+      "hook": "지창욱에게 지금 무슨 일이 있는지 빠르게 파악하고 싶다"
+    },
+    "거래소 (가상자산)": {
+      "topic": "국내 가상자산 거래소, 2026년 지금 어디가 살아남고 있나",
+      "angle": "규제·폐업·합병 이슈가 연속되는 시장에서 '현재 상황' 정리 수요가 가장 큼",
+      "hook": "내가 쓰는 거래소가 괜찮은지, 지금 어떤 거래소가 신뢰할 만한지 모르겠다"
+    },
+    "포스코퓨처엠": {
+      "topic": "포스코퓨처엠 주가 왜 움직이나 — 배터리 소재 사이클과 지금 타이밍",
+      "angle": "2차전지 소재주 관심이 살아있는 구간, 실적·수주·사이클 연결 분석이 차별화",
+      "hook": "포스코퓨처엠이 지금 사야 할 주식인지 아닌지 판단 근거를 알고 싶다"
+    },
+    "속도 제한": {
+      "topic": "도로 속도 제한 바뀐다? 2026년 개정안 핵심과 내 운전 습관 체크",
+      "angle": "정책 변화는 '나한테 직접 영향'으로 좁혀줄수록 클릭·공유가 폭발함",
+      "hook": "속도 제한이 바뀌면 과태료·면허에 실제로 어떤 변화가 생기는지 알고 싶다"
+    },
+    "조진웅": {
+      "topic": "조진웅이 다시 뜨는 이유 — 새 작품·발언·화제의 장면까지",
+      "angle": "배우 재검색 급등은 신작·인터뷰·사건 중 하나 — 맥락 파악 콘텐츠가 진입 선점",
+      "hook": "조진웅이 요즘 왜 갑자기 검색되는지 이유를 빨리 알고 싶다"
+    },
+    "라민 야말": {
+      "topic": "라민 야말, 지금이 커리어 분기점인 이유 — 2026 시즌 결정적 장면들",
+      "angle": "챔피언스리그·월드컵 시즌과 겹치면 세계적 관심이 국내 검색으로 유입되는 구조",
+      "hook": "야말이 진짜 메시 후계자인지, 지금 성과가 얼마나 대단한 건지 알고 싶다"
+    },
+    "직구 규제": {
+      "topic": "해외 직구 규제, 내가 자주 사는 품목은 괜찮은가 — 품목별 체크",
+      "angle": "소비자 불안을 품목 단위로 좁혀주면 '나의 문제'가 되어 즉시 공유됨",
+      "hook": "직구가 막힌다는데 내가 쓰는 사이트·품목은 해당되는지 빨리 확인하고 싶다"
+    },
+    "타일러 오스틴": {
+      "topic": "타일러 오스틴, KBO 복귀 후 달라진 점 — 팬들이 놀란 진짜 이유",
+      "angle": "외국인 선수 검색은 성적 급등락 시점에 집중 — 구체적 수치 분석이 차별화",
+      "hook": "오스틴이 지금 얼마나 잘하고 있는지, 왜 화제가 되는지 알고 싶다"
+    },
+    "연타석 홈런": {
+      "topic": "연타석 홈런, 야구에서 이게 왜 이렇게 드문 일인가 — 확률과 최근 기록",
+      "angle": "스포츠 이슈는 '왜 대단한가'를 설명해주는 맥락 콘텐츠가 비팬 독자까지 흡수",
+      "hook": "연타석 홈런이 뉴스가 될 만큼 희귀한 건지, 누가 쳤는지 궁금하다"
+    },
+    "장릉혁 논란": {
+      "topic": "장릉혁에게 무슨 일이? — 팬덤이 지금 반응하는 방식과 실제 상황",
+      "angle": "3번 키워드와 쌍으로 검색되는 파생 키워드 — 감정 온도와 사실 사이 간극을 메워줌",
+      "hook": "장릉혁 관련 소식이 너무 많아서 무엇이 사실인지 정리가 안 된다"
+    }
+  },
+  "autocomplete": {},
+  "datalab_used": false,
+  "iot_used": false,
+  "trend_delta": {
+    "prev_date": "2026-05-18",
+    "new_entry": [
+      "lg 트윈스",
+      "장릉혁",
+      "사전투표",
+      "비씨카드",
+      "지 창욱",
+      "거래소",
+      "포스코 퓨처 엠",
+      "속도 제한",
+      "조진웅",
+      "라민 야말"
+    ],
+    "dropped": [
+      "에어부산",
+      "키보토스 런",
+      "pga 챔피언십",
+      "한다감",
+      "제주반도체",
+      "삼성 전자 파업",
+      "sco vs nep",
+      "에너지",
+      "카카오모빌리티",
+      "여객기"
+    ],
+    "risen": [],
+    "fallen": []
+  }
+}

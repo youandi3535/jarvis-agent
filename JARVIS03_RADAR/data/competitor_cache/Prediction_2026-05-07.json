@@ -1,0 +1,97 @@
+{
+  "keyword": "Prediction",
+  "analyzed_at": "2026-05-07 09:00",
+  "posts": [
+    {
+      "title": "예측시장(Prediction market)의 힘과 위험: 미래를 맞추는가... ",
+      "link": "https://blog.naver.com/globalmonitor/224205010389",
+      "description": "이는 단순한 해프닝처럼 보일 수도 있지만, 이 사건은 예측시장(prediction market)이 가진 구조적 위험을 다시 한 번 생각하게 만든다. 예측시장(prediction market)은 흔히 ‘집단지성의 시장’으로 불린다. 많은... ",
+      "blogger": "Global Finance Archive",
+      "date": "20260305"
+    },
+    {
+      "title": "expectation anticipation prediction 차이",
+      "link": "https://blog.naver.com/e_world_/224255781325",
+      "description": "비슷해 보이지만 사실 아주 다른 온도를 가진 expectation, anticipation, prediction의 차이를 함께... prediction 뜻과 의미: 현재의 정보나 데이터를 바탕으로 미래에 어떤 일이 일어날지 미리... ",
+      "blogger": "English World",
+      "date": "20260417"
+    },
+    {
+      "title": "관계가 중요하지 않을까? Edge Aware Binding Prediction",
+      "link": "https://blog.naver.com/kpyopark/224138256806",
+      "description": "최근 발표된 논문인 'Edge-aware GAT-based protein binding site prediction'에 대해 학습한 내용을 정리하여 공유합니다. 단순한 노드를 넘어 엣지의 공간 정보에 집중 단백질 결합 부위를 예측하는 기존의 모델들은 주로... ",
+      "blogger": "신세계의 일상화",
+      "date": "20260107"
+    },
+    {
+      "title": "[미국 대학] IB Prediction (예상 점수)은 미국 대학 입시에... ",
+      "link": "https://blog.naver.com/josephlee54/223867618558",
+      "description": "IB Prediction (예상 점수)은 IB(International Baccalaureate) 디플로마 프로그램(IBDP)을 이수하는 학생들이... IB Prediction의 중요성: 대학 입학 지원: 특히 영국 및 유럽의 많은 대학들은 입학 심사 시 학생의 예상... ",
+      "blogger": "TEPI(미래교육연구소) 공식블로그",
+      "date": "20250516"
+    },
+    {
+      "title": "Cs450/history shift, shifter를 이용한 branch prediction",
+      "link": "https://blog.naver.com/lifelectronics/223922238165",
+      "description": "https://hdlbits.01xz.net/wiki/Cs450/history_shift &quot;&quot; &quot; &quot; Cs450/history shift 이번에는 과거에 prediction 했던 기록을 토대로 branch prediction을 하는 방식의 logic입니다. shifter를... ",
+      "blogger": "재키의 IT.BLOG",
+      "date": "20250704"
+    },
+    {
+      "title": "and Invasive Long-Term Survival Prediction in Patients",
+      "link": "https://blog.naver.com/brightek_2016/224266680184",
+      "description": "Natriuretic Peptides and Soluble ST2 Improve Echocardiographic and Invasive Long-Term Survival Prediction in Patients Evaluated for Diastolic Dysfunction 1. 연구 목적 본 연구는 이완기 기능장애(diastolic dysfunction)",
+      "blogger": "(주)브라이텍",
+      "date": "20260427"
+    },
+    {
+      "title": "예측 시장(Prediction Markets)",
+      "link": "https://blog.naver.com/ldk27/224118469897",
+      "description": "----------------------- 예측 시장(Prediction Markets)은 미래에 발생할 특정 사건의 결과에 대해 사람들이 돈(또는 가상 자산)을 걸고 거래하는 시장입니다. 단순히 ‘내기’를 넘어, 시장의 가격 메커니즘을 통해... ",
+      "blogger": "디케이",
+      "date": "20251222"
+    },
+    {
+      "title": "Prediction Market Details",
+      "link": "https://marginalrevolution.com/marginalrevolution/2026/04/prediction-market-details.html",
+      "description": "Prediction Market Details by Alex Tabarrok April 13, 2026 at 7:15 am in Current Affairs , Economics The Guardian has an interesting article on prediction markets. There are the usual... ",
+      "blogger": "Marginal REVOLUTION - Small Steps Toward A Much Better World",
+      "date": "20260413"
+    },
+    {
+      "title": "[Google] — Multi-Token Prediction (MTP): 효율적인 추론과... ",
+      "link": "https://blog.naver.com/inter200_200/224276817607",
+      "description": "(Multi-Token Prediction, MTP)’ 아키텍처를 분석한다. 기존의 오토레그레시브(Autoregressive) 모델은... 병렬 예측 헤드 구조(Parallel Prediction Heads): 기존 모델이 $t$ 시점의 데이터를 통해 $t+1$ 토큰만을... ",
+      "blogger": "LLM(AI) 전문 - Microsoft AI MVP",
+      "date": "20260506"
+    },
+    {
+      "title": "EEG-based Seizure Prediction Study (1)",
+      "link": "https://blog.naver.com/ktceng1234/224202445953",
+      "description": "Kaggle 대회의 목표 American Epilepsy Society Seizure Prediction Challenge 원문은 여기에 https://www.kaggle.com/competitions/seizure-prediction/overview 뇌의 활동 상태는 4가지로 나뉜다 : Interictal / Preictal / Ictal / Post-i",
+      "blogger": "개굴개굴개구링",
+      "date": "20260303"
+    }
+  ],
+  "patterns": {
+    "count": 10,
+    "avg_title_len": 41.5,
+    "has_numbers_pct": 20,
+    "has_list_pct": 0,
+    "has_year_pct": 0,
+    "sample_titles": [
+      "예측시장(Prediction market)의 힘과 위험: 미래를 맞추는가... ",
+      "expectation anticipation prediction 차이",
+      "관계가 중요하지 않을까? Edge Aware Binding Prediction",
+      "[미국 대학] IB Prediction (예상 점수)은 미국 대학 입시에... ",
+      "Cs450/history shift, shifter를 이용한 branch prediction"
+    ]
+  },
+  "differentiation": {
+    "gap": "기존 글들은 Prediction의 이론적 정의, 기술적 구현, 또는 특정 분야 응용에만 집중하고 있습니다. 실제 비즈니스/개인 의사결정에서 Prediction을 '어떻게 활용하고 검증하며 실패를 줄일 수 있는가'에 대한 실용적 프레임워크는 전무합니다.",
+    "angle": "의사결정권자와 실무자들이 즉시 적용 가능한 '예측 모델 검증 및 위험관리 체크리스트'를 제공하면, 높은 검색의도 매칭과 낮은 경쟁도를 동시에 확보할 수 있습니다.",
+    "title": "Prediction을 믿기 전에: 91%의 예측이 실패하는 이유와 검증 프레임워크",
+    "hook": "당신의 예측 모델이 실제로 작동하는지 확인할 수 있는 5단계 검증 체크리스트와 자주 하는 실수 패턴을 공개합니다."
+  },
+  "cached": false
+}

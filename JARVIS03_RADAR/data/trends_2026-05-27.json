@@ -1,0 +1,1439 @@
+{
+  "date": "2026-05-27",
+  "collected_at": "15:02:01",
+  "google_trending": [
+    "김종인",
+    "박해수",
+    "순천대학교",
+    "tiger 미국우주테크",
+    "마동석",
+    "잠수함",
+    "황영묵",
+    "신라면세점",
+    "홍보모델로",
+    "지바현",
+    "자막뉴스",
+    "일본서",
+    "박근혜",
+    "뛴다지만",
+    "어게인",
+    "신동욱",
+    "허수아비",
+    "억울한",
+    "이희준",
+    "인터뷰",
+    "한양대",
+    "ERICA",
+    "대구한의대",
+    "재학생",
+    "서울캠",
+    "전공박람회",
+    "LG전자",
+    "협력사",
+    "스페이스X",
+    "저궤도위성",
+    "지주사",
+    "리레이팅",
+    "SK",
+    "아시아",
+    "종전보다",
+    "금통위",
+    "네트웍스",
+    "AI",
+    "삼성에스디에스",
+    "상한가",
+    "아주사설",
+    "코스피",
+    "불장인데",
+    "줄었나",
+    "국민성장펀드",
+    "흥행에",
+    "코스닥",
+    "금융위원장",
+    "기업가치",
+    "ETF"
+  ],
+  "scored_keywords": [
+    {
+      "keyword": "김종인",
+      "rank": 1,
+      "score": 100,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 62.0
+    },
+    {
+      "keyword": "박해수",
+      "rank": 2,
+      "score": 98,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 61.1
+    },
+    {
+      "keyword": "순천대학교",
+      "rank": 3,
+      "score": 96,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 60.2
+    },
+    {
+      "keyword": "tiger 미국우주테크",
+      "rank": 4,
+      "score": 95,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 59.8
+    },
+    {
+      "keyword": "마동석",
+      "rank": 5,
+      "score": 93,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.9
+    },
+    {
+      "keyword": "잠수함",
+      "rank": 6,
+      "score": 91,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.0
+    },
+    {
+      "keyword": "황영묵",
+      "rank": 7,
+      "score": 89,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 57.1
+    },
+    {
+      "keyword": "신라면세점",
+      "rank": 8,
+      "score": 87,
+      "sector": "여행",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 56.1
+    },
+    {
+      "keyword": "홍보모델로",
+      "rank": 9,
+      "score": 86,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 55.7
+    },
+    {
+      "keyword": "지바현",
+      "rank": 10,
+      "score": 84,
+      "sector": "여행",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 54.8
+    },
+    {
+      "keyword": "자막뉴스",
+      "rank": 11,
+      "score": 82,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.9
+    },
+    {
+      "keyword": "일본서",
+      "rank": 12,
+      "score": 80,
+      "sector": "여행",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.0
+    },
+    {
+      "keyword": "박근혜",
+      "rank": 13,
+      "score": 78,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 52.1
+    },
+    {
+      "keyword": "뛴다지만",
+      "rank": 14,
+      "score": 77,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 51.6
+    },
+    {
+      "keyword": "어게인",
+      "rank": 15,
+      "score": 75,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 50.8
+    },
+    {
+      "keyword": "신동욱",
+      "rank": 16,
+      "score": 73,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.9
+    },
+    {
+      "keyword": "허수아비",
+      "rank": 17,
+      "score": 71,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.0
+    },
+    {
+      "keyword": "억울한",
+      "rank": 18,
+      "score": 69,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 48.0
+    },
+    {
+      "keyword": "이희준",
+      "rank": 19,
+      "score": 68,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 47.6
+    },
+    {
+      "keyword": "인터뷰",
+      "rank": 20,
+      "score": 66,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 46.7
+    },
+    {
+      "keyword": "한양대",
+      "rank": 21,
+      "score": 64,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 45.8
+    },
+    {
+      "keyword": "ERICA",
+      "rank": 22,
+      "score": 62,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.9
+    },
+    {
+      "keyword": "대구한의대",
+      "rank": 23,
+      "score": 60,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.0
+    },
+    {
+      "keyword": "재학생",
+      "rank": 24,
+      "score": 59,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 43.5
+    },
+    {
+      "keyword": "서울캠",
+      "rank": 25,
+      "score": 57,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 42.7
+    },
+    {
+      "keyword": "전공박람회",
+      "rank": 26,
+      "score": 55,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 41.8
+    },
+    {
+      "keyword": "LG전자",
+      "rank": 27,
+      "score": 53,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.9
+    },
+    {
+      "keyword": "협력사",
+      "rank": 28,
+      "score": 51,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.0
+    },
+    {
+      "keyword": "스페이스X",
+      "rank": 29,
+      "score": 50,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.5
+    },
+    {
+      "keyword": "저궤도위성",
+      "rank": 30,
+      "score": 48,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 38.6
+    },
+    {
+      "keyword": "지주사",
+      "rank": 31,
+      "score": 46,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.7
+    },
+    {
+      "keyword": "리레이팅",
+      "rank": 32,
+      "score": 44,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.8
+    },
+    {
+      "keyword": "SK",
+      "rank": 33,
+      "score": 42,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.9
+    },
+    {
+      "keyword": "아시아",
+      "rank": 34,
+      "score": 41,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.5
+    },
+    {
+      "keyword": "종전보다",
+      "rank": 35,
+      "score": 39,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.5
+    },
+    {
+      "keyword": "금통위",
+      "rank": 36,
+      "score": 37,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 33.7
+    },
+    {
+      "keyword": "네트웍스",
+      "rank": 37,
+      "score": 35,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 32.8
+    },
+    {
+      "keyword": "AI",
+      "rank": 38,
+      "score": 33,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.9
+    },
+    {
+      "keyword": "삼성에스디에스",
+      "rank": 39,
+      "score": 32,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.4
+    },
+    {
+      "keyword": "상한가",
+      "rank": 40,
+      "score": 30,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.5
+    },
+    {
+      "keyword": "아주사설",
+      "rank": 41,
+      "score": 28,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 29.6
+    },
+    {
+      "keyword": "코스피",
+      "rank": 42,
+      "score": 26,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 28.7
+    },
+    {
+      "keyword": "불장인데",
+      "rank": 43,
+      "score": 24,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.8
+    },
+    {
+      "keyword": "줄었나",
+      "rank": 44,
+      "score": 23,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.4
+    },
+    {
+      "keyword": "국민성장펀드",
+      "rank": 45,
+      "score": 21,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.5
+    },
+    {
+      "keyword": "흥행에",
+      "rank": 46,
+      "score": 19,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 25.6
+    },
+    {
+      "keyword": "코스닥",
+      "rank": 47,
+      "score": 17,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 24.6
+    },
+    {
+      "keyword": "금융위원장",
+      "rank": 48,
+      "score": 15,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.8
+    },
+    {
+      "keyword": "기업가치",
+      "rank": 49,
+      "score": 14,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.3
+    },
+    {
+      "keyword": "ETF",
+      "rank": 50,
+      "score": 12,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 22.4
+    }
+  ],
+  "sector_summary": {
+    "사회·이슈": [
+      {
+        "keyword": "김종인",
+        "rank": 1,
+        "score": 100,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 62.0
+      },
+      {
+        "keyword": "잠수함",
+        "rank": 6,
+        "score": 91,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.0
+      },
+      {
+        "keyword": "자막뉴스",
+        "rank": 11,
+        "score": 82,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.9
+      },
+      {
+        "keyword": "박근혜",
+        "rank": 13,
+        "score": 78,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 52.1
+      },
+      {
+        "keyword": "억울한",
+        "rank": 18,
+        "score": 69,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 48.0
+      },
+      {
+        "keyword": "아주사설",
+        "rank": 41,
+        "score": 28,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      }
+    ],
+    "연예·문화": [
+      {
+        "keyword": "박해수",
+        "rank": 2,
+        "score": 98,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 61.1
+      },
+      {
+        "keyword": "마동석",
+        "rank": 5,
+        "score": 93,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.9
+      },
+      {
+        "keyword": "홍보모델로",
+        "rank": 9,
+        "score": 86,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 55.7
+      },
+      {
+        "keyword": "어게인",
+        "rank": 15,
+        "score": 75,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 50.8
+      },
+      {
+        "keyword": "신동욱",
+        "rank": 16,
+        "score": 73,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.9
+      },
+      {
+        "keyword": "허수아비",
+        "rank": 17,
+        "score": 71,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.0
+      },
+      {
+        "keyword": "이희준",
+        "rank": 19,
+        "score": 68,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 47.6
+      },
+      {
+        "keyword": "흥행에",
+        "rank": 46,
+        "score": 19,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      }
+    ],
+    "교육·취업": [
+      {
+        "keyword": "순천대학교",
+        "rank": 3,
+        "score": 96,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 60.2
+      },
+      {
+        "keyword": "한양대",
+        "rank": 21,
+        "score": 64,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      },
+      {
+        "keyword": "ERICA",
+        "rank": 22,
+        "score": 62,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      },
+      {
+        "keyword": "대구한의대",
+        "rank": 23,
+        "score": 60,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      },
+      {
+        "keyword": "재학생",
+        "rank": 24,
+        "score": 59,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      },
+      {
+        "keyword": "서울캠",
+        "rank": 25,
+        "score": 57,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      },
+      {
+        "keyword": "전공박람회",
+        "rank": 26,
+        "score": 55,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      }
+    ],
+    "금융·투자": [
+      {
+        "keyword": "tiger 미국우주테크",
+        "rank": 4,
+        "score": 95,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 59.8
+      },
+      {
+        "keyword": "지주사",
+        "rank": 31,
+        "score": 46,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.7
+      },
+      {
+        "keyword": "리레이팅",
+        "rank": 32,
+        "score": 44,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.8
+      },
+      {
+        "keyword": "금통위",
+        "rank": 36,
+        "score": 37,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 33.7
+      },
+      {
+        "keyword": "상한가",
+        "rank": 40,
+        "score": 30,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.5
+      },
+      {
+        "keyword": "코스피",
+        "rank": 42,
+        "score": 26,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 28.7
+      },
+      {
+        "keyword": "불장인데",
+        "rank": 43,
+        "score": 24,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.8
+      },
+      {
+        "keyword": "국민성장펀드",
+        "rank": 45,
+        "score": 21,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      },
+      {
+        "keyword": "코스닥",
+        "rank": 47,
+        "score": 17,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 24.6
+      },
+      {
+        "keyword": "금융위원장",
+        "rank": 48,
+        "score": 15,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.8
+      },
+      {
+        "keyword": "ETF",
+        "rank": 50,
+        "score": 12,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 22.4
+      }
+    ],
+    "스포츠": [
+      {
+        "keyword": "황영묵",
+        "rank": 7,
+        "score": 89,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 57.1
+      }
+    ],
+    "여행": [
+      {
+        "keyword": "신라면세점",
+        "rank": 8,
+        "score": 87,
+        "sector": "여행",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 56.1
+      },
+      {
+        "keyword": "지바현",
+        "rank": 10,
+        "score": 84,
+        "sector": "여행",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 54.8
+      },
+      {
+        "keyword": "일본서",
+        "rank": 12,
+        "score": 80,
+        "sector": "여행",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.0
+      }
+    ],
+    "기타": [
+      {
+        "keyword": "뛴다지만",
+        "rank": 14,
+        "score": 77,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 51.6
+      },
+      {
+        "keyword": "인터뷰",
+        "rank": 20,
+        "score": 66,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 46.7
+      },
+      {
+        "keyword": "아시아",
+        "rank": 34,
+        "score": 41,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.5
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "LG전자",
+        "rank": 27,
+        "score": 53,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      },
+      {
+        "keyword": "스페이스X",
+        "rank": 29,
+        "score": 50,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      },
+      {
+        "keyword": "저궤도위성",
+        "rank": 30,
+        "score": 48,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 38.6
+      },
+      {
+        "keyword": "네트웍스",
+        "rank": 37,
+        "score": 35,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      },
+      {
+        "keyword": "AI",
+        "rank": 38,
+        "score": 33,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "삼성에스디에스",
+        "rank": 39,
+        "score": 32,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.4
+      }
+    ],
+    "경제·경기": [
+      {
+        "keyword": "협력사",
+        "rank": 28,
+        "score": 51,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      },
+      {
+        "keyword": "SK",
+        "rank": 33,
+        "score": 42,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.9
+      },
+      {
+        "keyword": "종전보다",
+        "rank": 35,
+        "score": 39,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.5
+      },
+      {
+        "keyword": "줄었나",
+        "rank": 44,
+        "score": 23,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      },
+      {
+        "keyword": "기업가치",
+        "rank": 49,
+        "score": 14,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.3
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "theme": "황영묵",
+      "topic": "황영묵, 지금 이 시점에 주목해야 하는 이유 — 세계 랭킹이 말해주는 것",
+      "keyword": "황영묵",
+      "sector": "스포츠",
+      "score": 89,
+      "opportunity_score": 57.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #7 · 경쟁 보통 · 최근 미발행",
+      "angle": "스포츠 팬이 아니어도 '다음 손흥민'의 초기 신호를 포착하는 타이밍 콘텐츠로 확장 가능",
+      "hook": "배드민턴을 잘 모르는데도 이름이 계속 뜨는 이유가 궁금한 독자",
+      "color": "#2ECC71"
+    },
+    {
+      "theme": "신라면세점",
+      "topic": "신라면세점 지금 가야 하는 이유 — 할인율 좋은 시기와 놓치면 후회하는 브랜드",
+      "keyword": "신라면세점",
+      "sector": "여행",
+      "score": 87,
+      "opportunity_score": 56.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #8 · 경쟁 보통 · 최근 미발행",
+      "angle": "면세점 쇼핑 타이밍·루트·가성비 팁을 실용적으로 엮어 구매 직전 독자를 전환",
+      "hook": "면세점은 어차피 비싸다고 생각했던 독자가 '이 가격이 맞나?' 싶은 실제 할인 정보",
+      "color": "#87CEEB"
+    },
+    {
+      "theme": "김종인",
+      "topic": "김종인이 지금 꺼낸 발언, 정치 지형에 어떤 파장을 남기나",
+      "keyword": "김종인",
+      "sector": "사회·이슈",
+      "score": 100,
+      "opportunity_score": 62.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #1 · 경쟁 보통 · 최근 미발행",
+      "angle": "정치 뉴스를 어렵게 느끼는 독자에게 '이 사람이 왜 중요한가'를 구조적으로 설명하는 해설 각도",
+      "hook": "뉴스에서 이름을 봤지만 그게 왜 화제인지 맥락을 모르는 독자의 궁금증",
+      "color": "#778CA3"
+    },
+    {
+      "theme": "박해수",
+      "topic": "박해수 차기작·근황 — 오징어게임 이후 그가 선택한 것들",
+      "keyword": "박해수",
+      "sector": "연예·문화",
+      "score": 98,
+      "opportunity_score": 61.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #2 · 경쟁 보통 · 최근 미발행",
+      "angle": "스타의 '다음 행보'에 대한 팬의 갈증을 필모그래피 흐름과 연결해 기대감 증폭",
+      "hook": "오징어게임 이후 박해수를 검색했지만 정리된 정보가 없어 흩어진 독자",
+      "color": "#E91E63"
+    },
+    {
+      "theme": "순천대학교",
+      "topic": "순천대학교 입결·학과·장학금 — 지방 국립대 중 지금 가장 주목받는 이유",
+      "keyword": "순천대학교",
+      "sector": "교육·취업",
+      "score": 96,
+      "opportunity_score": 60.2,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #3 · 경쟁 보통 · 최근 미발행",
+      "angle": "수험생·학부모의 지방 국립대 재평가 흐름을 타고 실제 입시 데이터로 신뢰도 확보",
+      "hook": "순천대를 들어봤지만 수준·취업률·실제 학과 경쟁률을 모르는 수험생",
+      "color": "#9B59B6"
+    },
+    {
+      "theme": "뛴다지만",
+      "topic": "'뛴다지만' — 지금 온라인에서 이 단어가 퍼지는 진짜 맥락",
+      "keyword": "뛴다지만",
+      "sector": "기타",
+      "score": 77,
+      "opportunity_score": 51.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #14 · 경쟁 보통 · 최근 미발행",
+      "angle": "밈·유행어의 발원지와 사용 맥락을 추적하는 '트렌드 해독' 포맷으로 바이럴 유입 노림",
+      "hook": "피드에서 계속 보이는데 무슨 뜻인지, 어디서 나온 말인지 모르는 독자",
+      "color": "#4A4A4A"
+    },
+    {
+      "theme": "LG전자",
+      "topic": "LG전자 지금 사도 될까 — 주가·신제품·경쟁 구도를 한 번에 정리",
+      "keyword": "LG전자",
+      "sector": "IT·테크",
+      "score": 53,
+      "opportunity_score": 40.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #27 · 경쟁 보통 · 최근 미발행",
+      "angle": "소비자(제품 구매)와 투자자(주가) 두 관심군을 동시에 포착하는 이중 각도",
+      "hook": "LG전자 관련 뉴스는 많은데 내 선택(구매 or 투자)에 어떤 의미인지 모르는 독자",
+      "color": "#00D4FF"
+    },
+    {
+      "theme": "협력사",
+      "topic": "대기업 협력사 직원이라면 반드시 알아야 할 계약·처우·리스크 현실",
+      "keyword": "협력사",
+      "sector": "경제·경기",
+      "score": 51,
+      "opportunity_score": 40.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #28 · 경쟁 보통 · 최근 미발행",
+      "angle": "B2B 이슈를 개인 근로자 시선으로 전환해 실질적 이해관계자 독자를 끌어들이는 각도",
+      "hook": "협력사 소식이 왜 내 연봉·고용 안정에 영향을 주는지 궁금한 재직자",
+      "color": "#F39C12"
+    },
+    {
+      "theme": "TIGER 미국우주테크 ETF",
+      "topic": "TIGER 미국우주테크 ETF, 지금 담아야 할까 — 수익률·구성 종목·리스크 체크",
+      "keyword": "TIGER 미국우주테크 ETF",
+      "sector": "금융·투자",
+      "score": 95,
+      "opportunity_score": 59.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #4 · 경쟁 보통 · 최근 미발행",
+      "angle": "우주산업 테마 ETF에 관심은 있지만 구성 종목과 리스크를 모르는 입문 투자자를 정조준",
+      "hook": "ETF 이름은 들었는데 실제로 어떤 회사에 투자하는 건지, 지금 진입해도 되는지 모르는 개인 투자자",
+      "color": "#FFD700"
+    }
+  ],
+  "extra_angles": [
+    {
+      "theme": "마동석",
+      "topic": "마동석 2026 라인업 — 마블 복귀·국내 신작 동시에 챙기는 방법",
+      "keyword": "마동석",
+      "sector": "연예·문화",
+      "score": 93,
+      "opportunity_score": 58.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 93 · 연예·문화",
+      "angle": "국내외 팬덤이 공존하는 스타의 멀티 프로젝트를 한눈에 정리해 검색 집중 시기 트래픽 극대화",
+      "hook": "마동석이 마블에도 나오고 한국 영화도 찍는다는데 뭐가 먼저 나오는지 모르는 팬",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "잠수함",
+      "topic": "잠수함 관련 뉴스가 연일 뜨는 이유 — 북한·한국 해군·국제 정세 3각 구도",
+      "keyword": "잠수함",
+      "sector": "사회·이슈",
+      "score": 91,
+      "opportunity_score": 58.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 91 · 사회·이슈",
+      "angle": "군사 이슈를 지정학 리스크 + 방산주 흐름과 연결해 일반 독자와 투자자 모두 포착",
+      "hook": "잠수함 뉴스가 왜 이렇게 많이 나오는지, 나와 무슨 상관인지 감이 없는 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "홍보모델",
+      "topic": "연예인 홍보모델 계약, 소비자에게 실제로 어떤 영향을 줄까",
+      "keyword": "홍보모델",
+      "sector": "연예·문화",
+      "score": 86,
+      "opportunity_score": 55.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 86 · 연예·문화",
+      "angle": "브랜드 앰배서더 발표 뉴스를 '제품 마케팅 신뢰도'와 연결해 소비자 시각으로 재해석",
+      "hook": "좋아하는 연예인이 홍보모델이 되면 그 브랜드를 믿어도 되는지 궁금한 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "지바현",
+      "topic": "지바현 여행 실전 코스 — 도쿄 근교인데 한국인이 의외로 모르는 숨은 스팟",
+      "keyword": "지바현",
+      "sector": "여행",
+      "score": 84,
+      "opportunity_score": 54.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 84 · 여행",
+      "angle": "오버투어리즘 피해 한적하게 즐기려는 일본 여행자에게 '덜 알려진 정석 코스' 포지셔닝",
+      "hook": "도쿄는 너무 복잡하고 디즈니씨는 줄이 길어서 지바를 대안으로 검색해본 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "자막뉴스",
+      "topic": "자막뉴스가 화제가 된 사건 — 오해·오역·논란의 전말",
+      "keyword": "자막뉴스",
+      "sector": "사회·이슈",
+      "score": 82,
+      "opportunity_score": 53.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 82 · 사회·이슈",
+      "angle": "미디어 리터러시 관점에서 자막 오류나 논란을 팩트체크하는 해설 포맷으로 신뢰도 확보",
+      "hook": "자막뉴스를 봤는데 맞는 내용인지, 왜 갑자기 이게 화제인지 모르는 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "일본",
+      "topic": "일본에서 벌어진 그 일, 한국 여행객에게 실제로 어떤 영향을 미치나",
+      "keyword": "일본",
+      "sector": "여행",
+      "score": 80,
+      "opportunity_score": 53.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 80 · 여행",
+      "angle": "일본 현지 이슈를 '내 여행 계획에 미치는 실질적 영향'으로 좁혀 실용 독자를 직접 공략",
+      "hook": "일본 관련 뉴스를 봤는데 당장 예약해둔 여행에 문제가 생기는 건지 불안한 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "박근혜",
+      "topic": "박근혜가 다시 검색어에 오른 이유 — 지금 무슨 일이 있었나",
+      "keyword": "박근혜",
+      "sector": "사회·이슈",
+      "score": 78,
+      "opportunity_score": 52.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 78 · 사회·이슈",
+      "angle": "정치 역사 복기보다 '오늘 왜 떴는가'라는 실시간 맥락 해설로 검색 직후 독자 니즈를 충족",
+      "hook": "박근혜 이름이 뜨는 걸 봤는데 무슨 새로운 일이 생긴 건지 궁금한 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "어게인",
+      "topic": "'어게인' 정체 확인 — 지금 난리 난 이 콘텐츠, 뭐가 그렇게 좋은 건가",
+      "keyword": "어게인",
+      "sector": "연예·문화",
+      "score": 75,
+      "opportunity_score": 50.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 75 · 연예·문화",
+      "angle": "드라마·음악·방송 중 무엇인지 불분명한 키워드를 '정체 확인 + 입덕 포인트' 포맷으로 공략",
+      "hook": "SNS에서 '어게인' 얘기가 계속 나오는데 뭔지 몰라서 검색해본 독자",
+      "color": "#4a5568"
+    }
+  ],
+  "content_angles": {
+    "황영묵": {
+      "topic": "황영묵, 지금 이 시점에 주목해야 하는 이유 — 세계 랭킹이 말해주는 것",
+      "angle": "스포츠 팬이 아니어도 '다음 손흥민'의 초기 신호를 포착하는 타이밍 콘텐츠로 확장 가능",
+      "hook": "배드민턴을 잘 모르는데도 이름이 계속 뜨는 이유가 궁금한 독자"
+    },
+    "신라면세점": {
+      "topic": "신라면세점 지금 가야 하는 이유 — 할인율 좋은 시기와 놓치면 후회하는 브랜드",
+      "angle": "면세점 쇼핑 타이밍·루트·가성비 팁을 실용적으로 엮어 구매 직전 독자를 전환",
+      "hook": "면세점은 어차피 비싸다고 생각했던 독자가 '이 가격이 맞나?' 싶은 실제 할인 정보"
+    },
+    "김종인": {
+      "topic": "김종인이 지금 꺼낸 발언, 정치 지형에 어떤 파장을 남기나",
+      "angle": "정치 뉴스를 어렵게 느끼는 독자에게 '이 사람이 왜 중요한가'를 구조적으로 설명하는 해설 각도",
+      "hook": "뉴스에서 이름을 봤지만 그게 왜 화제인지 맥락을 모르는 독자의 궁금증"
+    },
+    "박해수": {
+      "topic": "박해수 차기작·근황 — 오징어게임 이후 그가 선택한 것들",
+      "angle": "스타의 '다음 행보'에 대한 팬의 갈증을 필모그래피 흐름과 연결해 기대감 증폭",
+      "hook": "오징어게임 이후 박해수를 검색했지만 정리된 정보가 없어 흩어진 독자"
+    },
+    "순천대학교": {
+      "topic": "순천대학교 입결·학과·장학금 — 지방 국립대 중 지금 가장 주목받는 이유",
+      "angle": "수험생·학부모의 지방 국립대 재평가 흐름을 타고 실제 입시 데이터로 신뢰도 확보",
+      "hook": "순천대를 들어봤지만 수준·취업률·실제 학과 경쟁률을 모르는 수험생"
+    },
+    "뛴다지만": {
+      "topic": "'뛴다지만' — 지금 온라인에서 이 단어가 퍼지는 진짜 맥락",
+      "angle": "밈·유행어의 발원지와 사용 맥락을 추적하는 '트렌드 해독' 포맷으로 바이럴 유입 노림",
+      "hook": "피드에서 계속 보이는데 무슨 뜻인지, 어디서 나온 말인지 모르는 독자"
+    },
+    "LG전자": {
+      "topic": "LG전자 지금 사도 될까 — 주가·신제품·경쟁 구도를 한 번에 정리",
+      "angle": "소비자(제품 구매)와 투자자(주가) 두 관심군을 동시에 포착하는 이중 각도",
+      "hook": "LG전자 관련 뉴스는 많은데 내 선택(구매 or 투자)에 어떤 의미인지 모르는 독자"
+    },
+    "협력사": {
+      "topic": "대기업 협력사 직원이라면 반드시 알아야 할 계약·처우·리스크 현실",
+      "angle": "B2B 이슈를 개인 근로자 시선으로 전환해 실질적 이해관계자 독자를 끌어들이는 각도",
+      "hook": "협력사 소식이 왜 내 연봉·고용 안정에 영향을 주는지 궁금한 재직자"
+    },
+    "TIGER 미국우주테크 ETF": {
+      "topic": "TIGER 미국우주테크 ETF, 지금 담아야 할까 — 수익률·구성 종목·리스크 체크",
+      "angle": "우주산업 테마 ETF에 관심은 있지만 구성 종목과 리스크를 모르는 입문 투자자를 정조준",
+      "hook": "ETF 이름은 들었는데 실제로 어떤 회사에 투자하는 건지, 지금 진입해도 되는지 모르는 개인 투자자"
+    },
+    "마동석": {
+      "topic": "마동석 2026 라인업 — 마블 복귀·국내 신작 동시에 챙기는 방법",
+      "angle": "국내외 팬덤이 공존하는 스타의 멀티 프로젝트를 한눈에 정리해 검색 집중 시기 트래픽 극대화",
+      "hook": "마동석이 마블에도 나오고 한국 영화도 찍는다는데 뭐가 먼저 나오는지 모르는 팬"
+    },
+    "잠수함": {
+      "topic": "잠수함 관련 뉴스가 연일 뜨는 이유 — 북한·한국 해군·국제 정세 3각 구도",
+      "angle": "군사 이슈를 지정학 리스크 + 방산주 흐름과 연결해 일반 독자와 투자자 모두 포착",
+      "hook": "잠수함 뉴스가 왜 이렇게 많이 나오는지, 나와 무슨 상관인지 감이 없는 독자"
+    },
+    "홍보모델": {
+      "topic": "연예인 홍보모델 계약, 소비자에게 실제로 어떤 영향을 줄까",
+      "angle": "브랜드 앰배서더 발표 뉴스를 '제품 마케팅 신뢰도'와 연결해 소비자 시각으로 재해석",
+      "hook": "좋아하는 연예인이 홍보모델이 되면 그 브랜드를 믿어도 되는지 궁금한 독자"
+    },
+    "지바현": {
+      "topic": "지바현 여행 실전 코스 — 도쿄 근교인데 한국인이 의외로 모르는 숨은 스팟",
+      "angle": "오버투어리즘 피해 한적하게 즐기려는 일본 여행자에게 '덜 알려진 정석 코스' 포지셔닝",
+      "hook": "도쿄는 너무 복잡하고 디즈니씨는 줄이 길어서 지바를 대안으로 검색해본 독자"
+    },
+    "자막뉴스": {
+      "topic": "자막뉴스가 화제가 된 사건 — 오해·오역·논란의 전말",
+      "angle": "미디어 리터러시 관점에서 자막 오류나 논란을 팩트체크하는 해설 포맷으로 신뢰도 확보",
+      "hook": "자막뉴스를 봤는데 맞는 내용인지, 왜 갑자기 이게 화제인지 모르는 독자"
+    },
+    "일본": {
+      "topic": "일본에서 벌어진 그 일, 한국 여행객에게 실제로 어떤 영향을 미치나",
+      "angle": "일본 현지 이슈를 '내 여행 계획에 미치는 실질적 영향'으로 좁혀 실용 독자를 직접 공략",
+      "hook": "일본 관련 뉴스를 봤는데 당장 예약해둔 여행에 문제가 생기는 건지 불안한 독자"
+    },
+    "박근혜": {
+      "topic": "박근혜가 다시 검색어에 오른 이유 — 지금 무슨 일이 있었나",
+      "angle": "정치 역사 복기보다 '오늘 왜 떴는가'라는 실시간 맥락 해설로 검색 직후 독자 니즈를 충족",
+      "hook": "박근혜 이름이 뜨는 걸 봤는데 무슨 새로운 일이 생긴 건지 궁금한 독자"
+    },
+    "어게인": {
+      "topic": "'어게인' 정체 확인 — 지금 난리 난 이 콘텐츠, 뭐가 그렇게 좋은 건가",
+      "angle": "드라마·음악·방송 중 무엇인지 불분명한 키워드를 '정체 확인 + 입덕 포인트' 포맷으로 공략",
+      "hook": "SNS에서 '어게인' 얘기가 계속 나오는데 뭔지 몰라서 검색해본 독자"
+    }
+  },
+  "autocomplete": {},
+  "datalab_used": false,
+  "iot_used": false,
+  "trend_delta": {
+    "prev_date": "2026-05-26",
+    "new_entry": [
+      "김종인",
+      "박해수",
+      "순천대학교",
+      "tiger 미국우주테크",
+      "마동석",
+      "잠수함",
+      "황영묵",
+      "신라면세점",
+      "홍보모델로",
+      "지바현"
+    ],
+    "dropped": [
+      "고성국",
+      "밀워키 브루어스",
+      "김종훈",
+      "아메리칸 뮤직 어워드",
+      "에볼라바이러스",
+      "금융 포용",
+      "장하나",
+      "한국지방재정공제회",
+      "한국관광공사",
+      "관광객"
+    ],
+    "risen": [],
+    "fallen": []
+  }
+}

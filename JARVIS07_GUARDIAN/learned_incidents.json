@@ -1,0 +1,71 @@
+{
+  "incidents": [
+    {
+      "fingerprint": "constitution::네이버 글에 \"섹션n-n. 섹션n-n.\" placeholder 누수",
+      "domain": "constitution",
+      "symptom": "네이버 글에 \"섹션3-5. 섹션3-6.\" placeholder 누수",
+      "expected": "완성된 한국어 문장",
+      "actual": "LLM 출력 형식 예시 그대로 발행",
+      "detection": "user_visual",
+      "source_files": [
+        "JARVIS02_WRITER/tistory_html_writer.py"
+      ],
+      "severity": "high",
+      "hit_count": 1,
+      "first_seen": "2026-05-16T15:48:39",
+      "last_seen": "2026-05-16T15:48:39",
+      "examples": []
+    },
+    {
+      "fingerprint": "category::네이버 경제 브리핑이 주식-테마분류 카테고리로 잘못 발행",
+      "domain": "category",
+      "symptom": "네이버 경제 브리핑이 주식-테마분류 카테고리로 잘못 발행",
+      "expected": "경제 브리핑 카테고리",
+      "actual": "첫 번째 항목으로 fallback",
+      "detection": "user_visual",
+      "source_files": [
+        "JARVIS02_WRITER/naver_poster.py"
+      ],
+      "severity": "high",
+      "hit_count": 1,
+      "first_seen": "2026-05-16T15:48:39",
+      "last_seen": "2026-05-16T15:48:39",
+      "examples": []
+    },
+    {
+      "fingerprint": "image::같은 이미지가 글에 여러 번 비연속 중복 발행",
+      "domain": "image",
+      "symptom": "같은 이미지가 글에 여러 번 비연속 중복 발행",
+      "expected": "각 섹션 다른 이미지",
+      "actual": "같은 차트 여러 번",
+      "detection": "user_visual",
+      "source_files": [
+        "JARVIS02_WRITER/law_enforcer.py"
+      ],
+      "severity": "medium",
+      "hit_count": 1,
+      "first_seen": "2026-05-16T15:48:39",
+      "last_seen": "2026-05-16T15:48:39",
+      "examples": []
+    },
+    {
+      "fingerprint": "image::이미지가 broken (깨진 이미지 마크 표시)",
+      "domain": "image",
+      "symptom": "이미지가 broken (깨진 이미지 마크 표시)",
+      "expected": "정상 표시",
+      "actual": "broken image icon",
+      "detection": "user_visual",
+      "source_files": [],
+      "severity": "medium",
+      "hit_count": 1,
+      "first_seen": "2026-05-16T15:48:39",
+      "last_seen": "2026-05-16T15:48:39",
+      "examples": []
+    }
+  ],
+  "_domain_totals": {
+    "constitution": 1,
+    "category": 1,
+    "image": 2
+  }
+}

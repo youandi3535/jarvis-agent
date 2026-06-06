@@ -1,0 +1,1494 @@
+{
+  "date": "2026-05-14",
+  "collected_at": "15:02:39",
+  "google_trending": [
+    "afc 아시안컵",
+    "구더기",
+    "모두의 창업",
+    "엘지트윈스",
+    "이금희",
+    "scotland vs usa",
+    "67",
+    "무주산골영화제",
+    "연말정산",
+    "장기 기증",
+    "홍명보호",
+    "vs",
+    "한국축구",
+    "아시안컵",
+    "카타르는",
+    "부검했지만",
+    "군검찰",
+    "정부가",
+    "만드는",
+    "한성숙",
+    "중기장관",
+    "모두의",
+    "음주운전",
+    "Scotland",
+    "Vs",
+    "Cook",
+    "Islands",
+    "Score",
+    "SCO",
+    "빛과전자",
+    "바로저축은행",
+    "AI",
+    "금융그룹",
+    "금융감독원",
+    "이례적인",
+    "반도체주",
+    "과열지수",
+    "RSI",
+    "KB",
+    "코스피",
+    "만닉스",
+    "찍었다",
+    "SK",
+    "피하주사로",
+    "찌른다",
+    "알테오젠",
+    "신라젠",
+    "ASCO",
+    "운영에",
+    "전기요금"
+  ],
+  "scored_keywords": [
+    {
+      "keyword": "afc 아시안컵",
+      "rank": 1,
+      "score": 100,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 62.0
+    },
+    {
+      "keyword": "구더기",
+      "rank": 2,
+      "score": 98,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 61.1
+    },
+    {
+      "keyword": "모두의 창업",
+      "rank": 3,
+      "score": 96,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 60.2
+    },
+    {
+      "keyword": "엘지트윈스",
+      "rank": 4,
+      "score": 95,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 59.8
+    },
+    {
+      "keyword": "이금희",
+      "rank": 5,
+      "score": 93,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.9
+    },
+    {
+      "keyword": "scotland vs usa",
+      "rank": 6,
+      "score": 91,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.0
+    },
+    {
+      "keyword": "67",
+      "rank": 7,
+      "score": 89,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 57.1
+    },
+    {
+      "keyword": "무주산골영화제",
+      "rank": 8,
+      "score": 87,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 56.1
+    },
+    {
+      "keyword": "연말정산",
+      "rank": 9,
+      "score": 86,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 55.7
+    },
+    {
+      "keyword": "장기 기증",
+      "rank": 10,
+      "score": 84,
+      "sector": "건강·의료",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 54.8
+    },
+    {
+      "keyword": "홍명보호",
+      "rank": 11,
+      "score": 82,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.9
+    },
+    {
+      "keyword": "vs",
+      "rank": 12,
+      "score": 80,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.0
+    },
+    {
+      "keyword": "한국축구",
+      "rank": 13,
+      "score": 78,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 52.1
+    },
+    {
+      "keyword": "아시안컵",
+      "rank": 14,
+      "score": 77,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 51.6
+    },
+    {
+      "keyword": "카타르는",
+      "rank": 15,
+      "score": 75,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 50.8
+    },
+    {
+      "keyword": "부검했지만",
+      "rank": 16,
+      "score": 73,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.9
+    },
+    {
+      "keyword": "군검찰",
+      "rank": 17,
+      "score": 71,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.0
+    },
+    {
+      "keyword": "정부가",
+      "rank": 18,
+      "score": 69,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 48.0
+    },
+    {
+      "keyword": "만드는",
+      "rank": 19,
+      "score": 68,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 47.6
+    },
+    {
+      "keyword": "한성숙",
+      "rank": 20,
+      "score": 66,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 46.7
+    },
+    {
+      "keyword": "중기장관",
+      "rank": 21,
+      "score": 64,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 45.8
+    },
+    {
+      "keyword": "모두의",
+      "rank": 22,
+      "score": 62,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.9
+    },
+    {
+      "keyword": "음주운전",
+      "rank": 23,
+      "score": 60,
+      "sector": "자동차",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.0
+    },
+    {
+      "keyword": "Scotland",
+      "rank": 24,
+      "score": 59,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 43.5
+    },
+    {
+      "keyword": "Vs",
+      "rank": 25,
+      "score": 57,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 42.7
+    },
+    {
+      "keyword": "Cook",
+      "rank": 26,
+      "score": 55,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 41.8
+    },
+    {
+      "keyword": "Islands",
+      "rank": 27,
+      "score": 53,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.9
+    },
+    {
+      "keyword": "Score",
+      "rank": 28,
+      "score": 51,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.0
+    },
+    {
+      "keyword": "SCO",
+      "rank": 29,
+      "score": 50,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.5
+    },
+    {
+      "keyword": "빛과전자",
+      "rank": 30,
+      "score": 48,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 38.6
+    },
+    {
+      "keyword": "바로저축은행",
+      "rank": 31,
+      "score": 46,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.7
+    },
+    {
+      "keyword": "AI",
+      "rank": 32,
+      "score": 44,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.8
+    },
+    {
+      "keyword": "금융그룹",
+      "rank": 33,
+      "score": 42,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.9
+    },
+    {
+      "keyword": "금융감독원",
+      "rank": 34,
+      "score": 41,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.5
+    },
+    {
+      "keyword": "이례적인",
+      "rank": 35,
+      "score": 39,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.5
+    },
+    {
+      "keyword": "반도체주",
+      "rank": 36,
+      "score": 37,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.8
+    },
+    {
+      "keyword": "과열지수",
+      "rank": 37,
+      "score": 35,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 32.8
+    },
+    {
+      "keyword": "RSI",
+      "rank": 38,
+      "score": 33,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.9
+    },
+    {
+      "keyword": "KB",
+      "rank": 39,
+      "score": 32,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.4
+    },
+    {
+      "keyword": "코스피",
+      "rank": 40,
+      "score": 30,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.5
+    },
+    {
+      "keyword": "만닉스",
+      "rank": 41,
+      "score": 28,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 29.6
+    },
+    {
+      "keyword": "찍었다",
+      "rank": 42,
+      "score": 26,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 28.7
+    },
+    {
+      "keyword": "SK",
+      "rank": 43,
+      "score": 24,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.8
+    },
+    {
+      "keyword": "피하주사로",
+      "rank": 44,
+      "score": 23,
+      "sector": "건강·의료",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.4
+    },
+    {
+      "keyword": "찌른다",
+      "rank": 45,
+      "score": 21,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.5
+    },
+    {
+      "keyword": "알테오젠",
+      "rank": 46,
+      "score": 19,
+      "sector": "건강·의료",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 25.6
+    },
+    {
+      "keyword": "신라젠",
+      "rank": 47,
+      "score": 17,
+      "sector": "건강·의료",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 24.6
+    },
+    {
+      "keyword": "ASCO",
+      "rank": 48,
+      "score": 15,
+      "sector": "건강·의료",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.8
+    },
+    {
+      "keyword": "운영에",
+      "rank": 49,
+      "score": 14,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.3
+    },
+    {
+      "keyword": "전기요금",
+      "rank": 50,
+      "score": 12,
+      "sector": "에너지·환경",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 22.4
+    }
+  ],
+  "sector_summary": {
+    "스포츠": [
+      {
+        "keyword": "afc 아시안컵",
+        "rank": 1,
+        "score": 100,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 62.0
+      },
+      {
+        "keyword": "엘지트윈스",
+        "rank": 4,
+        "score": 95,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 59.8
+      },
+      {
+        "keyword": "scotland vs usa",
+        "rank": 6,
+        "score": 91,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.0
+      },
+      {
+        "keyword": "홍명보호",
+        "rank": 11,
+        "score": 82,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.9
+      },
+      {
+        "keyword": "한국축구",
+        "rank": 13,
+        "score": 78,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 52.1
+      },
+      {
+        "keyword": "아시안컵",
+        "rank": 14,
+        "score": 77,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 51.6
+      },
+      {
+        "keyword": "Scotland",
+        "rank": 24,
+        "score": 59,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      }
+    ],
+    "기타": [
+      {
+        "keyword": "구더기",
+        "rank": 2,
+        "score": 98,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 61.1
+      },
+      {
+        "keyword": "67",
+        "rank": 7,
+        "score": 89,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 57.1
+      },
+      {
+        "keyword": "vs",
+        "rank": 12,
+        "score": 80,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.0
+      },
+      {
+        "keyword": "카타르는",
+        "rank": 15,
+        "score": 75,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 50.8
+      },
+      {
+        "keyword": "부검했지만",
+        "rank": 16,
+        "score": 73,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.9
+      },
+      {
+        "keyword": "만드는",
+        "rank": 19,
+        "score": 68,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 47.6
+      },
+      {
+        "keyword": "모두의",
+        "rank": 22,
+        "score": 62,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      },
+      {
+        "keyword": "Vs",
+        "rank": 25,
+        "score": 57,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      },
+      {
+        "keyword": "Cook",
+        "rank": 26,
+        "score": 55,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      },
+      {
+        "keyword": "Islands",
+        "rank": 27,
+        "score": 53,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      },
+      {
+        "keyword": "Score",
+        "rank": 28,
+        "score": 51,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      },
+      {
+        "keyword": "SCO",
+        "rank": 29,
+        "score": 50,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      },
+      {
+        "keyword": "이례적인",
+        "rank": 35,
+        "score": 39,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.5
+      },
+      {
+        "keyword": "찍었다",
+        "rank": 42,
+        "score": 26,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 28.7
+      },
+      {
+        "keyword": "찌른다",
+        "rank": 45,
+        "score": 21,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      },
+      {
+        "keyword": "운영에",
+        "rank": 49,
+        "score": 14,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.3
+      }
+    ],
+    "교육·취업": [
+      {
+        "keyword": "모두의 창업",
+        "rank": 3,
+        "score": 96,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 60.2
+      }
+    ],
+    "연예·문화": [
+      {
+        "keyword": "이금희",
+        "rank": 5,
+        "score": 93,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.9
+      },
+      {
+        "keyword": "무주산골영화제",
+        "rank": 8,
+        "score": 87,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 56.1
+      }
+    ],
+    "금융·투자": [
+      {
+        "keyword": "연말정산",
+        "rank": 9,
+        "score": 86,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 55.7
+      },
+      {
+        "keyword": "바로저축은행",
+        "rank": 31,
+        "score": 46,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.7
+      },
+      {
+        "keyword": "금융그룹",
+        "rank": 33,
+        "score": 42,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.9
+      },
+      {
+        "keyword": "금융감독원",
+        "rank": 34,
+        "score": 41,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.5
+      },
+      {
+        "keyword": "RSI",
+        "rank": 38,
+        "score": 33,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "KB",
+        "rank": 39,
+        "score": 32,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.4
+      },
+      {
+        "keyword": "코스피",
+        "rank": 40,
+        "score": 30,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.5
+      }
+    ],
+    "건강·의료": [
+      {
+        "keyword": "장기 기증",
+        "rank": 10,
+        "score": 84,
+        "sector": "건강·의료",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 54.8
+      },
+      {
+        "keyword": "피하주사로",
+        "rank": 44,
+        "score": 23,
+        "sector": "건강·의료",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      },
+      {
+        "keyword": "알테오젠",
+        "rank": 46,
+        "score": 19,
+        "sector": "건강·의료",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      },
+      {
+        "keyword": "신라젠",
+        "rank": 47,
+        "score": 17,
+        "sector": "건강·의료",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 24.6
+      },
+      {
+        "keyword": "ASCO",
+        "rank": 48,
+        "score": 15,
+        "sector": "건강·의료",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.8
+      }
+    ],
+    "사회·이슈": [
+      {
+        "keyword": "군검찰",
+        "rank": 17,
+        "score": 71,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.0
+      },
+      {
+        "keyword": "정부가",
+        "rank": 18,
+        "score": 69,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 48.0
+      },
+      {
+        "keyword": "한성숙",
+        "rank": 20,
+        "score": 66,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 46.7
+      },
+      {
+        "keyword": "중기장관",
+        "rank": 21,
+        "score": 64,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      }
+    ],
+    "자동차": [
+      {
+        "keyword": "음주운전",
+        "rank": 23,
+        "score": 60,
+        "sector": "자동차",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "빛과전자",
+        "rank": 30,
+        "score": 48,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 38.6
+      },
+      {
+        "keyword": "AI",
+        "rank": 32,
+        "score": 44,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.8
+      },
+      {
+        "keyword": "반도체주",
+        "rank": 36,
+        "score": 37,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.8
+      },
+      {
+        "keyword": "만닉스",
+        "rank": 41,
+        "score": 28,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      }
+    ],
+    "경제·경기": [
+      {
+        "keyword": "과열지수",
+        "rank": 37,
+        "score": 35,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      },
+      {
+        "keyword": "SK",
+        "rank": 43,
+        "score": 24,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.8
+      }
+    ],
+    "에너지·환경": [
+      {
+        "keyword": "전기요금",
+        "rank": 50,
+        "score": 12,
+        "sector": "에너지·환경",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 22.4
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "theme": "모두의 창업",
+      "topic": "모두의 창업 지원자 70%가 떨어지는 이유, 통과자와의 아이디어 차이점",
+      "keyword": "모두의 창업",
+      "sector": "교육·취업",
+      "score": 96,
+      "opportunity_score": 60.2,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #3 · 경쟁 보통 · 최근 미발행",
+      "angle": "신청 가이드 대신 '실패 패턴 분석'으로 경쟁사 공백 포착",
+      "hook": "떨어진 사람도 합격한 사람도 지원했는데, 정말 다른 것이 무엇인가?",
+      "color": "#9B59B6",
+      "competitor_gap": "경쟁사 10개 모두 '신청 방법'과 '합격 팁'에만 집중했지만, 정작 떨어지는 이유와 통과하는 아이디어의 구체적 특징을 분석한 글이 없다. 실패자의 고통점(왜 떨어졌나)과 사후관리(지원금 받은 후)도 완전히 빠져있다.",
+      "competitor_title": "심사위원이 1초에 떨어뜨리는 것: 모두의 창업 아이디어 검증 체크리스트 5가지"
+    },
+    {
+      "theme": "이금희",
+      "topic": "이금희 라디오 진행자 40년, 개인사가 아닌 '직업적 성공'의 비결",
+      "keyword": "이금희",
+      "sector": "연예·문화",
+      "score": 93,
+      "opportunity_score": 58.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #5 · 경쟁 보통 · 최근 미발행",
+      "angle": "개인의 철학·공감력이 아닌 '오디오 미디어에서의 직업 전문성' 강조",
+      "hook": "K-라디오 황금기 이후 왜 유독 이금희는 영향력을 잃지 않았을까?",
+      "color": "#E91E63",
+      "competitor_gap": "경쟁사는 이금희의 개인사(나이·결혼·건강)와 철학(공감·품격)에만 집중. 세대를 초월해 영향력을 유지한 '라디오 방송인으로서의 직업적 성취'와 '오디오 미디어의 고유한 힘'은 거의 다루지 않음.",
+      "competitor_title": "문자보다 목소리, 화면보다 따뜻함 - 이금희가 40년 라디오로 증명한 오디오 미디어의 남다른 힘"
+    },
+    {
+      "theme": "AFC 아시안컵",
+      "topic": "한국축구 아시안컵 우승 가능성, 역사 데이터와 통계로 읽는 현실",
+      "keyword": "AFC 아시안컵",
+      "sector": "스포츠",
+      "score": 100,
+      "opportunity_score": 62.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #1 · 경쟁 보통 · 최근 미발행",
+      "angle": "경기 일정이 아닌 '데이터 기반 우승 가능성 분석'",
+      "hook": "팬들이 원하는 것은 중계정보가 아니라 '우리가 할 수 있다'는 증거",
+      "color": "#2ECC71"
+    },
+    {
+      "theme": "군검찰",
+      "topic": "군검찰 조사 평균 몇 개월? 기소율 통계와 처리 기준을 아는 것의 중요성",
+      "keyword": "군검찰",
+      "sector": "사회·이슈",
+      "score": 71,
+      "opportunity_score": 49.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #17 · 경쟁 보통 · 최근 미발행",
+      "angle": "변호사 상담 서비스 홍보 대신 '객관적 통계와 기소 기준' 제시",
+      "hook": "피의자로 몰렸을 때 변호사를 찾기 전에 알아야 할 객관적 수치",
+      "color": "#778CA3",
+      "competitor_gap": "현재 글들은 모두 '피의자 입장의 대응 가이드'이거나 '성공사례'이며, 검찰이 실제로 기소를 결정하는 객관적 기준, 통계, 처리 기간 등 '정보 제공 관점'의 글이 거의 없다.",
+      "competitor_title": "군검찰 기소 기준 투명 분석: 영내폭행·횡령·협박죄, 실제 기소율은 몇 %일까? (연도별 통계)"
+    },
+    {
+      "theme": "음주운전",
+      "topic": "음주운전 적발 시 실제 벌금·범칙금·신체 영향의 모든 비용 계산",
+      "keyword": "음주운전",
+      "sector": "자동차",
+      "score": 60,
+      "opportunity_score": 44.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #23 · 경쟁 보통 · 최근 미발행",
+      "angle": "법률 서비스 홍보가 아닌 '현실적 손실 규모와 현장 행동지침'",
+      "hook": "변호사 찾기 전에 알아야 할 '적발 순간부터 처벌까지의 실제 과정'",
+      "color": "#95A5A6",
+      "competitor_gap": "경쟁사의 모든 글이 '지역+변호사 상담' 중심으로 법률 대응 서비스 홍보에만 집중하고 있으며, 정작 일반 독자가 가장 알고 싶어 하는 '적발 시 실제 처벌·비용·손실 규모'와 '경찰 현장 단계에서의 구체적 행동지침'은 거의 다루지 않고 있음.",
+      "competitor_title": "음주운전 1회 적발 시 진짜 비용은? (범칙금·변호사·보험료·운전면허 박탈)"
+    },
+    {
+      "theme": "구더기",
+      "topic": "구더기 번식 조건, 가정에서 즉시 할 수 있는 박멸법 vs 전문가 필요 시점",
+      "keyword": "구더기",
+      "sector": "기타",
+      "score": 98,
+      "opportunity_score": 61.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #2 · 경쟁 보통 · 최근 미발행",
+      "angle": "위생 정보 제공으로 자조적 독자 확보",
+      "hook": "음식물 쓰레기에서 구더기가 나왔을 때 패닉하지 않으려면?",
+      "color": "#4A4A4A"
+    },
+    {
+      "theme": "연말정산",
+      "topic": "2026 연말정산, 직장인이 놓치기 쉬운 '환급 항목' 체크리스트",
+      "keyword": "연말정산",
+      "sector": "금융·투자",
+      "score": 86,
+      "opportunity_score": 55.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #9 · 경쟁 보통 · 최근 미발행",
+      "angle": "일반 정보가 아닌 '개인 상황별 최대 환급 전략'",
+      "hook": "올해 환급 받을 수 있는 사람이 못 받는 이유는 몇 가지 항목을 모르기 때문",
+      "color": "#FFD700"
+    },
+    {
+      "theme": "빛과전자",
+      "topic": "빛과전자 대표 제품, 소비자 리뷰 평가점수와 실제 가성비 분석",
+      "keyword": "빛과전자",
+      "sector": "IT·테크",
+      "score": 48,
+      "opportunity_score": 38.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #30 · 경쟁 보통 · 최근 미발행",
+      "angle": "기술 스펙 나열이 아닌 '소비자 만족도 중심 평가'",
+      "hook": "브랜드 이름만으로는 구매 결정을 못 하는 이유",
+      "color": "#00D4FF"
+    },
+    {
+      "theme": "장기 기증",
+      "topic": "장기 기증 신청 후 실제 어떤 일이 벌어지는가? 기증자 가족이 받는 지원",
+      "keyword": "장기 기증",
+      "sector": "건강·의료",
+      "score": 84,
+      "opportunity_score": 54.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #10 · 경쟁 보통 · 최근 미발행",
+      "angle": "도덕적 호소가 아닌 '현실적 절차와 사후 관리' 정보",
+      "hook": "기증을 결심했을 때 정말 알아야 할 법적·의료적 사실",
+      "color": "#00FF88"
+    },
+    {
+      "theme": "과열지수",
+      "topic": "부동산 과열지수 높은 지역 vs 낮은 지역, 투자자의 기회는 어디인가",
+      "keyword": "과열지수",
+      "sector": "경제·경기",
+      "score": 35,
+      "opportunity_score": 32.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #37 · 경쟁 보통 · 최근 미발행",
+      "angle": "지수 설명이 아닌 '투자 의사결정 활용법'",
+      "hook": "과열지수 수치 해석을 잘못하면 투자 타이밍을 놓친다",
+      "color": "#F39C12"
+    }
+  ],
+  "extra_angles": [
+    {
+      "theme": "엘지 트윈스",
+      "topic": "엘지 트윈스 2026 시즌, 우승 가능성을 좌우하는 핵심 요소와 선수 분석",
+      "keyword": "엘지 트윈스",
+      "sector": "스포츠",
+      "score": 95,
+      "opportunity_score": 59.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 95 · 스포츠",
+      "angle": "단순 경기 일정이 아닌 '팀 전력 분석'",
+      "hook": "야구팬들이 정말 궁금한 것은 '이번 시즌 우리 팀 우승 가능할까'",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "스코틀랜드 vs 미국",
+      "topic": "스코틀랜드 vs 미국 축구 대결, 역사 전적과 예상 경기력 비교",
+      "keyword": "스코틀랜드 vs 미국",
+      "sector": "스포츠",
+      "score": 91,
+      "opportunity_score": 58.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 91 · 스포츠",
+      "angle": "중계 정보가 아닌 '팀 전력 비교 분석'",
+      "hook": "국가대표 경기를 보기 전에 알아야 할 양팀의 강점과 약점",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "67",
+      "topic": "영화 '67' 줄거리·평점 분석, 왜 지금 이 영화가 화제인가?",
+      "keyword": "67",
+      "sector": "기타",
+      "score": 89,
+      "opportunity_score": 57.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 89 · 기타",
+      "angle": "영화 기본 정보 중심 리뷰",
+      "hook": "화제의 영화를 보러 가기 전에 알아야 할 평점과 내용",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "무주산골영화제",
+      "topic": "무주산골영화제 2026, 개최 일정과 상영작·예매 정보 한눈에",
+      "keyword": "무주산골영화제",
+      "sector": "연예·문화",
+      "score": 87,
+      "opportunity_score": 56.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 87 · 연예·문화",
+      "angle": "영화제 기본 정보 제공으로 참가 욕구 자극",
+      "hook": "산골에서의 영화제, 어떻게 즐기고 준비할 것인가?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "홍명보",
+      "topic": "홍명보 감독의 한국축구팀 전술, 아시안컵 전략을 읽는 법",
+      "keyword": "홍명보",
+      "sector": "스포츠",
+      "score": 82,
+      "opportunity_score": 53.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 82 · 스포츠",
+      "angle": "개인의 경력보다 '현재 감독 철학과 전술 분석'",
+      "hook": "팬들이 감독을 평가하는 진정한 기준은 무엇인가?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "축구 대전",
+      "topic": "축구 국가대표팀 친선 경기, 한국 승부 예측을 위한 전력 비교",
+      "keyword": "축구 대전",
+      "sector": "기타",
+      "score": 80,
+      "opportunity_score": 53.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 80 · 기타",
+      "angle": "경기 일정이 아닌 '팀 전력 분석과 승리 가능성'",
+      "hook": "다가오는 경기에서 한국이 이길 가능성을 객관적으로 평가하려면?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "한국 축구",
+      "topic": "한국 축구팀 현 순위와 강점, 아시안컵 이후 미래 전망",
+      "keyword": "한국 축구",
+      "sector": "스포츠",
+      "score": 78,
+      "opportunity_score": 52.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 78 · 스포츠",
+      "angle": "뉴스 요약이 아닌 '데이터 기반 팀 분석'",
+      "hook": "한국 축구팀의 현 위치를 정확히 아는 것의 중요성",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "아시안컵",
+      "topic": "2026 아시안컵 한국의 경로와 상대 분석, 우승까지의 시나리오",
+      "keyword": "아시안컵",
+      "sector": "스포츠",
+      "score": 77,
+      "opportunity_score": 51.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 77 · 스포츠",
+      "angle": "대회 일정이 아닌 '한국팀의 우승 가능성 데이터 분석'",
+      "hook": "팬들이 원하는 것은 중계 정보가 아니라 희망의 통계",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "카타르 축구",
+      "topic": "카타르 축구의 현주소, 왜 아시안 축구의 강자에서 밀려났는가?",
+      "keyword": "카타르 축구",
+      "sector": "기타",
+      "score": 75,
+      "opportunity_score": 50.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 75 · 기타",
+      "angle": "국가 축구 현황의 구조적 분석",
+      "hook": "한때 강자였던 팀의 쇠락 원인을 아는 것이 우리 팀 분석의 시작",
+      "color": "#4a5568"
+    }
+  ],
+  "content_angles": {
+    "모두의 창업": {
+      "topic": "모두의 창업 지원자 70%가 떨어지는 이유, 통과자와의 아이디어 차이점",
+      "angle": "신청 가이드 대신 '실패 패턴 분석'으로 경쟁사 공백 포착",
+      "hook": "떨어진 사람도 합격한 사람도 지원했는데, 정말 다른 것이 무엇인가?"
+    },
+    "이금희": {
+      "topic": "이금희 라디오 진행자 40년, 개인사가 아닌 '직업적 성공'의 비결",
+      "angle": "개인의 철학·공감력이 아닌 '오디오 미디어에서의 직업 전문성' 강조",
+      "hook": "K-라디오 황금기 이후 왜 유독 이금희는 영향력을 잃지 않았을까?"
+    },
+    "AFC 아시안컵": {
+      "topic": "한국축구 아시안컵 우승 가능성, 역사 데이터와 통계로 읽는 현실",
+      "angle": "경기 일정이 아닌 '데이터 기반 우승 가능성 분석'",
+      "hook": "팬들이 원하는 것은 중계정보가 아니라 '우리가 할 수 있다'는 증거"
+    },
+    "군검찰": {
+      "topic": "군검찰 조사 평균 몇 개월? 기소율 통계와 처리 기준을 아는 것의 중요성",
+      "angle": "변호사 상담 서비스 홍보 대신 '객관적 통계와 기소 기준' 제시",
+      "hook": "피의자로 몰렸을 때 변호사를 찾기 전에 알아야 할 객관적 수치"
+    },
+    "음주운전": {
+      "topic": "음주운전 적발 시 실제 벌금·범칙금·신체 영향의 모든 비용 계산",
+      "angle": "법률 서비스 홍보가 아닌 '현실적 손실 규모와 현장 행동지침'",
+      "hook": "변호사 찾기 전에 알아야 할 '적발 순간부터 처벌까지의 실제 과정'"
+    },
+    "구더기": {
+      "topic": "구더기 번식 조건, 가정에서 즉시 할 수 있는 박멸법 vs 전문가 필요 시점",
+      "angle": "위생 정보 제공으로 자조적 독자 확보",
+      "hook": "음식물 쓰레기에서 구더기가 나왔을 때 패닉하지 않으려면?"
+    },
+    "연말정산": {
+      "topic": "2026 연말정산, 직장인이 놓치기 쉬운 '환급 항목' 체크리스트",
+      "angle": "일반 정보가 아닌 '개인 상황별 최대 환급 전략'",
+      "hook": "올해 환급 받을 수 있는 사람이 못 받는 이유는 몇 가지 항목을 모르기 때문"
+    },
+    "빛과전자": {
+      "topic": "빛과전자 대표 제품, 소비자 리뷰 평가점수와 실제 가성비 분석",
+      "angle": "기술 스펙 나열이 아닌 '소비자 만족도 중심 평가'",
+      "hook": "브랜드 이름만으로는 구매 결정을 못 하는 이유"
+    },
+    "장기 기증": {
+      "topic": "장기 기증 신청 후 실제 어떤 일이 벌어지는가? 기증자 가족이 받는 지원",
+      "angle": "도덕적 호소가 아닌 '현실적 절차와 사후 관리' 정보",
+      "hook": "기증을 결심했을 때 정말 알아야 할 법적·의료적 사실"
+    },
+    "과열지수": {
+      "topic": "부동산 과열지수 높은 지역 vs 낮은 지역, 투자자의 기회는 어디인가",
+      "angle": "지수 설명이 아닌 '투자 의사결정 활용법'",
+      "hook": "과열지수 수치 해석을 잘못하면 투자 타이밍을 놓친다"
+    },
+    "엘지 트윈스": {
+      "topic": "엘지 트윈스 2026 시즌, 우승 가능성을 좌우하는 핵심 요소와 선수 분석",
+      "angle": "단순 경기 일정이 아닌 '팀 전력 분석'",
+      "hook": "야구팬들이 정말 궁금한 것은 '이번 시즌 우리 팀 우승 가능할까'"
+    },
+    "스코틀랜드 vs 미국": {
+      "topic": "스코틀랜드 vs 미국 축구 대결, 역사 전적과 예상 경기력 비교",
+      "angle": "중계 정보가 아닌 '팀 전력 비교 분석'",
+      "hook": "국가대표 경기를 보기 전에 알아야 할 양팀의 강점과 약점"
+    },
+    "67": {
+      "topic": "영화 '67' 줄거리·평점 분석, 왜 지금 이 영화가 화제인가?",
+      "angle": "영화 기본 정보 중심 리뷰",
+      "hook": "화제의 영화를 보러 가기 전에 알아야 할 평점과 내용"
+    },
+    "무주산골영화제": {
+      "topic": "무주산골영화제 2026, 개최 일정과 상영작·예매 정보 한눈에",
+      "angle": "영화제 기본 정보 제공으로 참가 욕구 자극",
+      "hook": "산골에서의 영화제, 어떻게 즐기고 준비할 것인가?"
+    },
+    "홍명보": {
+      "topic": "홍명보 감독의 한국축구팀 전술, 아시안컵 전략을 읽는 법",
+      "angle": "개인의 경력보다 '현재 감독 철학과 전술 분석'",
+      "hook": "팬들이 감독을 평가하는 진정한 기준은 무엇인가?"
+    },
+    "축구 대전": {
+      "topic": "축구 국가대표팀 친선 경기, 한국 승부 예측을 위한 전력 비교",
+      "angle": "경기 일정이 아닌 '팀 전력 분석과 승리 가능성'",
+      "hook": "다가오는 경기에서 한국이 이길 가능성을 객관적으로 평가하려면?"
+    },
+    "한국 축구": {
+      "topic": "한국 축구팀 현 순위와 강점, 아시안컵 이후 미래 전망",
+      "angle": "뉴스 요약이 아닌 '데이터 기반 팀 분석'",
+      "hook": "한국 축구팀의 현 위치를 정확히 아는 것의 중요성"
+    },
+    "아시안컵": {
+      "topic": "2026 아시안컵 한국의 경로와 상대 분석, 우승까지의 시나리오",
+      "angle": "대회 일정이 아닌 '한국팀의 우승 가능성 데이터 분석'",
+      "hook": "팬들이 원하는 것은 중계 정보가 아니라 희망의 통계"
+    },
+    "카타르 축구": {
+      "topic": "카타르 축구의 현주소, 왜 아시안 축구의 강자에서 밀려났는가?",
+      "angle": "국가 축구 현황의 구조적 분석",
+      "hook": "한때 강자였던 팀의 쇠락 원인을 아는 것이 우리 팀 분석의 시작"
+    }
+  },
+  "autocomplete": {},
+  "datalab_used": false,
+  "iot_used": false,
+  "trend_delta": {
+    "prev_date": "2026-05-13",
+    "new_entry": [
+      "afc 아시안컵",
+      "구더기",
+      "모두의 창업",
+      "엘지트윈스",
+      "이금희",
+      "scotland vs usa",
+      "67",
+      "무주산골영화제",
+      "연말정산",
+      "장기 기증"
+    ],
+    "dropped": [
+      "gt vs srh",
+      "도깨비",
+      "ios 26.5",
+      "토지거래허가제",
+      "이천수",
+      "아나운서",
+      "tod",
+      "군용기",
+      "rte",
+      "Super"
+    ],
+    "risen": [
+      {
+        "keyword": "코스피",
+        "delta": 7
+      }
+    ],
+    "fallen": []
+  }
+}

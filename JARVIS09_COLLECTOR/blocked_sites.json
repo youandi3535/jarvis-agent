@@ -1,0 +1,12 @@
+{
+  "_comment": "크롤링 금지 도메인 목록. 이용약관 금지·robots.txt Disallow·민감 콘텐츠 포함 사이트.",
+  "blocked_domains": [
+    "facebook.com",
+    "instagram.com",
+    "twitter.com",
+    "x.com",
+    "linkedin.com",
+    "tiktok.com",
+    "namu.wiki"
+  ]
+}

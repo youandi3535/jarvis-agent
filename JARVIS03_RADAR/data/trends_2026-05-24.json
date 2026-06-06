@@ -1,0 +1,1474 @@
+{
+  "date": "2026-05-24",
+  "collected_at": "15:01:28",
+  "google_trending": [
+    "백지영",
+    "풍선 효과",
+    "문채원",
+    "최동원",
+    "이태리",
+    "코스피 200",
+    "김민규",
+    "미국 국방부",
+    "정석원",
+    "마피에",
+    "전입신고도",
+    "엄마가",
+    "나경원",
+    "외지인들이",
+    "민주당",
+    "김상욱",
+    "울산시장",
+    "산업도시",
+    "웹툰은",
+    "순풍산부인과",
+    "맙소사",
+    "정배가",
+    "거래소",
+    "대표지수",
+    "코스피",
+    "DB하이텍",
+    "주담대",
+    "인플레",
+    "고정금리",
+    "반대매매",
+    "이어지는",
+    "리노공업",
+    "AI",
+    "반도체",
+    "배경훈",
+    "부총리",
+    "오르는데",
+    "사이드카",
+    "주간증시전망",
+    "레버리지",
+    "뉴스초점",
+    "합의안",
+    "돌리기",
+    "바쁘다",
+    "하이닉스",
+    "성과급",
+    "반도체만",
+    "알았더니",
+    "에버랜드에",
+    "넷플릭스"
+  ],
+  "scored_keywords": [
+    {
+      "keyword": "백지영",
+      "rank": 1,
+      "score": 100,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 62.0
+    },
+    {
+      "keyword": "풍선 효과",
+      "rank": 2,
+      "score": 98,
+      "sector": "부동산",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 61.1
+    },
+    {
+      "keyword": "문채원",
+      "rank": 3,
+      "score": 96,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 60.2
+    },
+    {
+      "keyword": "최동원",
+      "rank": 4,
+      "score": 95,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 59.8
+    },
+    {
+      "keyword": "이태리",
+      "rank": 5,
+      "score": 93,
+      "sector": "여행",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.9
+    },
+    {
+      "keyword": "코스피 200",
+      "rank": 6,
+      "score": 91,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.0
+    },
+    {
+      "keyword": "김민규",
+      "rank": 7,
+      "score": 89,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 57.1
+    },
+    {
+      "keyword": "미국 국방부",
+      "rank": 8,
+      "score": 87,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 56.1
+    },
+    {
+      "keyword": "정석원",
+      "rank": 9,
+      "score": 86,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 55.7
+    },
+    {
+      "keyword": "마피에",
+      "rank": 10,
+      "score": 84,
+      "sector": "음식·맛집",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 54.8
+    },
+    {
+      "keyword": "전입신고도",
+      "rank": 11,
+      "score": 82,
+      "sector": "부동산",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.9
+    },
+    {
+      "keyword": "엄마가",
+      "rank": 12,
+      "score": 80,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.0
+    },
+    {
+      "keyword": "나경원",
+      "rank": 13,
+      "score": 78,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 52.1
+    },
+    {
+      "keyword": "외지인들이",
+      "rank": 14,
+      "score": 77,
+      "sector": "부동산",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 51.6
+    },
+    {
+      "keyword": "민주당",
+      "rank": 15,
+      "score": 75,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 50.8
+    },
+    {
+      "keyword": "김상욱",
+      "rank": 16,
+      "score": 73,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.9
+    },
+    {
+      "keyword": "울산시장",
+      "rank": 17,
+      "score": 71,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.0
+    },
+    {
+      "keyword": "산업도시",
+      "rank": 18,
+      "score": 69,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 48.0
+    },
+    {
+      "keyword": "웹툰은",
+      "rank": 19,
+      "score": 68,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 47.6
+    },
+    {
+      "keyword": "순풍산부인과",
+      "rank": 20,
+      "score": 66,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 46.7
+    },
+    {
+      "keyword": "맙소사",
+      "rank": 21,
+      "score": 64,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 45.8
+    },
+    {
+      "keyword": "정배가",
+      "rank": 22,
+      "score": 62,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.9
+    },
+    {
+      "keyword": "거래소",
+      "rank": 23,
+      "score": 60,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.0
+    },
+    {
+      "keyword": "대표지수",
+      "rank": 24,
+      "score": 59,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 43.5
+    },
+    {
+      "keyword": "코스피",
+      "rank": 25,
+      "score": 57,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 42.7
+    },
+    {
+      "keyword": "DB하이텍",
+      "rank": 26,
+      "score": 55,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 41.8
+    },
+    {
+      "keyword": "주담대",
+      "rank": 27,
+      "score": 53,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.9
+    },
+    {
+      "keyword": "인플레",
+      "rank": 28,
+      "score": 51,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.0
+    },
+    {
+      "keyword": "고정금리",
+      "rank": 29,
+      "score": 50,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.5
+    },
+    {
+      "keyword": "반대매매",
+      "rank": 30,
+      "score": 48,
+      "sector": "부동산",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 38.6
+    },
+    {
+      "keyword": "이어지는",
+      "rank": 31,
+      "score": 46,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.7
+    },
+    {
+      "keyword": "리노공업",
+      "rank": 32,
+      "score": 44,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.8
+    },
+    {
+      "keyword": "AI",
+      "rank": 33,
+      "score": 42,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.9
+    },
+    {
+      "keyword": "반도체",
+      "rank": 34,
+      "score": 41,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.5
+    },
+    {
+      "keyword": "배경훈",
+      "rank": 35,
+      "score": 39,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.5
+    },
+    {
+      "keyword": "부총리",
+      "rank": 36,
+      "score": 37,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 33.7
+    },
+    {
+      "keyword": "오르는데",
+      "rank": 37,
+      "score": 35,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 32.8
+    },
+    {
+      "keyword": "사이드카",
+      "rank": 38,
+      "score": 33,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.9
+    },
+    {
+      "keyword": "주간증시전망",
+      "rank": 39,
+      "score": 32,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.4
+    },
+    {
+      "keyword": "레버리지",
+      "rank": 40,
+      "score": 30,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.5
+    },
+    {
+      "keyword": "뉴스초점",
+      "rank": 41,
+      "score": 28,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 29.6
+    },
+    {
+      "keyword": "합의안",
+      "rank": 42,
+      "score": 26,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 28.7
+    },
+    {
+      "keyword": "돌리기",
+      "rank": 43,
+      "score": 24,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.8
+    },
+    {
+      "keyword": "바쁘다",
+      "rank": 44,
+      "score": 23,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.4
+    },
+    {
+      "keyword": "하이닉스",
+      "rank": 45,
+      "score": 21,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.5
+    },
+    {
+      "keyword": "성과급",
+      "rank": 46,
+      "score": 19,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 25.6
+    },
+    {
+      "keyword": "반도체만",
+      "rank": 47,
+      "score": 17,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 24.6
+    },
+    {
+      "keyword": "알았더니",
+      "rank": 48,
+      "score": 15,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.8
+    },
+    {
+      "keyword": "에버랜드에",
+      "rank": 49,
+      "score": 14,
+      "sector": "여행",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.3
+    },
+    {
+      "keyword": "넷플릭스",
+      "rank": 50,
+      "score": 12,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 22.4
+    }
+  ],
+  "sector_summary": {
+    "연예·문화": [
+      {
+        "keyword": "백지영",
+        "rank": 1,
+        "score": 100,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 62.0
+      },
+      {
+        "keyword": "문채원",
+        "rank": 3,
+        "score": 96,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 60.2
+      },
+      {
+        "keyword": "김민규",
+        "rank": 7,
+        "score": 89,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 57.1
+      },
+      {
+        "keyword": "정석원",
+        "rank": 9,
+        "score": 86,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 55.7
+      },
+      {
+        "keyword": "엄마가",
+        "rank": 12,
+        "score": 80,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.0
+      },
+      {
+        "keyword": "김상욱",
+        "rank": 16,
+        "score": 73,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.9
+      },
+      {
+        "keyword": "웹툰은",
+        "rank": 19,
+        "score": 68,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 47.6
+      },
+      {
+        "keyword": "순풍산부인과",
+        "rank": 20,
+        "score": 66,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 46.7
+      },
+      {
+        "keyword": "맙소사",
+        "rank": 21,
+        "score": 64,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      },
+      {
+        "keyword": "넷플릭스",
+        "rank": 50,
+        "score": 12,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 22.4
+      }
+    ],
+    "부동산": [
+      {
+        "keyword": "풍선 효과",
+        "rank": 2,
+        "score": 98,
+        "sector": "부동산",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 61.1
+      },
+      {
+        "keyword": "전입신고도",
+        "rank": 11,
+        "score": 82,
+        "sector": "부동산",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.9
+      },
+      {
+        "keyword": "외지인들이",
+        "rank": 14,
+        "score": 77,
+        "sector": "부동산",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 51.6
+      },
+      {
+        "keyword": "반대매매",
+        "rank": 30,
+        "score": 48,
+        "sector": "부동산",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 38.6
+      }
+    ],
+    "스포츠": [
+      {
+        "keyword": "최동원",
+        "rank": 4,
+        "score": 95,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 59.8
+      }
+    ],
+    "여행": [
+      {
+        "keyword": "이태리",
+        "rank": 5,
+        "score": 93,
+        "sector": "여행",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.9
+      },
+      {
+        "keyword": "에버랜드에",
+        "rank": 49,
+        "score": 14,
+        "sector": "여행",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.3
+      }
+    ],
+    "금융·투자": [
+      {
+        "keyword": "코스피 200",
+        "rank": 6,
+        "score": 91,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.0
+      },
+      {
+        "keyword": "거래소",
+        "rank": 23,
+        "score": 60,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      },
+      {
+        "keyword": "대표지수",
+        "rank": 24,
+        "score": 59,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      },
+      {
+        "keyword": "코스피",
+        "rank": 25,
+        "score": 57,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      },
+      {
+        "keyword": "DB하이텍",
+        "rank": 26,
+        "score": 55,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      },
+      {
+        "keyword": "주담대",
+        "rank": 27,
+        "score": 53,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      },
+      {
+        "keyword": "인플레",
+        "rank": 28,
+        "score": 51,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      },
+      {
+        "keyword": "고정금리",
+        "rank": 29,
+        "score": 50,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      },
+      {
+        "keyword": "리노공업",
+        "rank": 32,
+        "score": 44,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.8
+      },
+      {
+        "keyword": "사이드카",
+        "rank": 38,
+        "score": 33,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "주간증시전망",
+        "rank": 39,
+        "score": 32,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.4
+      },
+      {
+        "keyword": "레버리지",
+        "rank": 40,
+        "score": 30,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.5
+      }
+    ],
+    "사회·이슈": [
+      {
+        "keyword": "미국 국방부",
+        "rank": 8,
+        "score": 87,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 56.1
+      },
+      {
+        "keyword": "나경원",
+        "rank": 13,
+        "score": 78,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 52.1
+      },
+      {
+        "keyword": "민주당",
+        "rank": 15,
+        "score": 75,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 50.8
+      },
+      {
+        "keyword": "울산시장",
+        "rank": 17,
+        "score": 71,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.0
+      },
+      {
+        "keyword": "정배가",
+        "rank": 22,
+        "score": 62,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      },
+      {
+        "keyword": "부총리",
+        "rank": 36,
+        "score": 37,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 33.7
+      },
+      {
+        "keyword": "뉴스초점",
+        "rank": 41,
+        "score": 28,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      },
+      {
+        "keyword": "합의안",
+        "rank": 42,
+        "score": 26,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 28.7
+      }
+    ],
+    "음식·맛집": [
+      {
+        "keyword": "마피에",
+        "rank": 10,
+        "score": 84,
+        "sector": "음식·맛집",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 54.8
+      }
+    ],
+    "경제·경기": [
+      {
+        "keyword": "산업도시",
+        "rank": 18,
+        "score": 69,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 48.0
+      },
+      {
+        "keyword": "오르는데",
+        "rank": 37,
+        "score": 35,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      },
+      {
+        "keyword": "성과급",
+        "rank": 46,
+        "score": 19,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      }
+    ],
+    "기타": [
+      {
+        "keyword": "이어지는",
+        "rank": 31,
+        "score": 46,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.7
+      },
+      {
+        "keyword": "돌리기",
+        "rank": 43,
+        "score": 24,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.8
+      },
+      {
+        "keyword": "바쁘다",
+        "rank": 44,
+        "score": 23,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      },
+      {
+        "keyword": "알았더니",
+        "rank": 48,
+        "score": 15,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.8
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "반도체",
+        "rank": 34,
+        "score": 41,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.5
+      },
+      {
+        "keyword": "AI",
+        "rank": 33,
+        "score": 42,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.9
+      },
+      {
+        "keyword": "배경훈",
+        "rank": 35,
+        "score": 39,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.5
+      },
+      {
+        "keyword": "하이닉스",
+        "rank": 45,
+        "score": 21,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      },
+      {
+        "keyword": "반도체만",
+        "rank": 47,
+        "score": 17,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 24.6
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "theme": "최동원",
+      "topic": "최동원은 왜 40년이 지나도 여전히 한국 야구의 전설인가",
+      "keyword": "최동원",
+      "sector": "스포츠",
+      "score": 95,
+      "opportunity_score": 59.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #4 · 경쟁 보통 · 최근 미발행",
+      "angle": "시간이 지날수록 재조명되는 레전드의 이유를 데이터·기록으로 풀면 팬심과 야구 초보 모두 클릭",
+      "hook": "그 시대 기록이 지금도 깨지지 않는 이유가 뭔지 궁금한 독자",
+      "color": "#2ECC71"
+    },
+    {
+      "theme": "마피에",
+      "topic": "마피에, 줄 서기 전에 알아야 할 메뉴 선택 팁과 현실 후기",
+      "keyword": "마피에",
+      "sector": "음식·맛집",
+      "score": 84,
+      "opportunity_score": 54.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #10 · 경쟁 보통 · 최근 미발행",
+      "angle": "검색량 대비 상세 후기가 적어 실전 정보 공백을 파고들 수 있는 타이밍",
+      "hook": "인기 맛집인데 막상 무엇을 시켜야 할지 모르는 첫 방문자",
+      "color": "#FFA500"
+    },
+    {
+      "theme": "풍선 효과",
+      "topic": "서울 규제가 강해질수록 내 집 마련 기회가 생기는 지역 3곳",
+      "keyword": "풍선 효과",
+      "sector": "부동산",
+      "score": 98,
+      "opportunity_score": 61.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #2 · 경쟁 보통 · 최근 미발행",
+      "angle": "부동산 풍선 효과를 위협이 아닌 기회로 프레이밍하면 실수요자 클릭 전환율 높음",
+      "hook": "규제 때문에 서울 대신 어디를 봐야 할지 감이 없는 실수요자",
+      "color": "#E67E22"
+    },
+    {
+      "theme": "백지영",
+      "topic": "백지영이 지금 다시 화제인 진짜 이유 — 단순 컴백이 아닌 것들",
+      "keyword": "백지영",
+      "sector": "연예·문화",
+      "score": 100,
+      "opportunity_score": 62.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #1 · 경쟁 보통 · 최근 미발행",
+      "angle": "팬 외에 뉴스 맥락으로 접근한 독자까지 포괄하는 각도로 트래픽 폭 확장",
+      "hook": "최근 백지영 관련 검색이 갑자기 늘어난 배경이 궁금한 독자",
+      "color": "#E91E63"
+    },
+    {
+      "theme": "미국 국방부",
+      "topic": "미국 국방부 최근 결정이 한국 방산·경제에 미치는 영향 정리",
+      "keyword": "미국 국방부",
+      "sector": "사회·이슈",
+      "score": 87,
+      "opportunity_score": 56.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #8 · 경쟁 보통 · 최근 미발행",
+      "angle": "글로벌 이슈를 한국 독자 개인 이해관계(방산주·안보)로 좁히면 체류 시간 극대화",
+      "hook": "미국 국방부 뉴스가 나와 무슨 상관인지 모르는 일반 독자",
+      "color": "#778CA3"
+    },
+    {
+      "theme": "이탈리아",
+      "topic": "이탈리아 여행 첫 주에 가장 많이 후회하는 실수 7가지",
+      "keyword": "이탈리아",
+      "sector": "여행",
+      "score": 93,
+      "opportunity_score": 58.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #5 · 경쟁 보통 · 최근 미발행",
+      "angle": "성공 가이드보다 실패 방지형 제목이 여행 준비 독자의 불안을 직접 자극해 클릭률 우세",
+      "hook": "떠나기 전에 몰라서 낭패 봤다는 후기가 두려운 여행 준비자",
+      "color": "#87CEEB"
+    },
+    {
+      "theme": "코스피 200",
+      "topic": "코스피 200 ETF, 지금 담으면 늦은 건지 판단하는 기준 3가지",
+      "keyword": "코스피 200",
+      "sector": "금융·투자",
+      "score": 91,
+      "opportunity_score": 58.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #6 · 경쟁 보통 · 최근 미발행",
+      "angle": "지수 투자 초보가 가장 많이 막히는 '타이밍' 고민에 직접 답하는 구조",
+      "hook": "ETF가 좋다는 건 알겠는데 지금 들어가도 되는 건지 확신이 없는 투자 입문자",
+      "color": "#FFD700"
+    },
+    {
+      "theme": "산업도시",
+      "topic": "한국 산업도시가 흔들리기 시작했다 — 지방 부동산·일자리에 생기는 변화",
+      "keyword": "산업도시",
+      "sector": "경제·경기",
+      "score": 69,
+      "opportunity_score": 48.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #18 · 경쟁 보통 · 최근 미발행",
+      "angle": "위기 서사 + 로컬 생활 독자 타겟으로 좁혀 레드오션 경제 키워드를 블루오션 각도로 전환",
+      "hook": "산업도시에 살거나 부동산을 가진 사람이 지금 어떤 준비를 해야 하는지 모르는 독자",
+      "color": "#F39C12"
+    },
+    {
+      "theme": "반도체",
+      "topic": "반도체 주가가 오르는 날 내 포트폴리오가 오히려 빠지는 이유",
+      "keyword": "반도체",
+      "sector": "IT·테크",
+      "score": 41,
+      "opportunity_score": 36.5,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #34 · 경쟁 보통",
+      "angle": "경쟁 포화된 키워드에서 개인 투자자의 실패 경험을 역이용해 좁은 타겟에 집중",
+      "hook": "반도체 호황 뉴스에도 관련주에서 손실 보는 패턴을 이해하지 못한 투자자",
+      "color": "#00D4FF"
+    },
+    {
+      "theme": "이어지는",
+      "topic": "끊이지 않고 이어지는 뉴스, 지금 한국 사회를 관통하는 공통 키워드는",
+      "keyword": "이어지는",
+      "sector": "기타",
+      "score": 46,
+      "opportunity_score": 37.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #31 · 경쟁 보통 · 최근 미발행",
+      "angle": "키워드 자체가 불완전해 직접 연결 콘텐츠보다 주간 이슈 큐레이션으로 전환해 범용성 확보",
+      "hook": "매일 쏟아지는 뉴스 중 진짜 봐야 할 흐름을 놓치고 있는 것 같은 독자",
+      "color": "#4A4A4A"
+    }
+  ],
+  "extra_angles": [
+    {
+      "theme": "문채원",
+      "topic": "문채원 복귀작, 전작 팬이 기대해도 되는 이유와 걱정되는 한 가지",
+      "keyword": "문채원",
+      "sector": "연예·문화",
+      "score": 96,
+      "opportunity_score": 60.2,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 96 · 연예·문화",
+      "angle": "찬성·우려 양면 구조는 팬과 관망층 모두 클릭하게 만들어 트래픽 폭이 넓음",
+      "hook": "문채원 신작이 전작만큼 잘 될지 반신반의하는 팬",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "김민규",
+      "topic": "김민규가 갑자기 화제가 된 배경 — 활동 정리와 앞으로 주목할 이유",
+      "keyword": "김민규",
+      "sector": "연예·문화",
+      "score": 89,
+      "opportunity_score": 57.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 89 · 연예·문화",
+      "angle": "이름만 알고 왜 뜨는지 모르는 라이트 팬을 위한 입문형 각도로 검색 저변 공략",
+      "hook": "김민규가 누구인지는 아는데 왜 요즘 검색되는지 이유를 모르는 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "정석원",
+      "topic": "정석원, 오랜 공백 뒤 다시 주목받는 순간을 만든 결정적 계기",
+      "keyword": "정석원",
+      "sector": "연예·문화",
+      "score": 86,
+      "opportunity_score": 55.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 86 · 연예·문화",
+      "angle": "공백기 이후 재조명 서사는 팬덤 밖 일반 독자의 감성을 자극해 체류 시간 증가",
+      "hook": "한동안 안 보이다 갑자기 다시 보이기 시작한 이유가 궁금한 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "전입신고",
+      "topic": "전입신고 안 하면 생기는 법적 불이익 — 세입자가 반드시 알아야 할 것",
+      "keyword": "전입신고",
+      "sector": "부동산",
+      "score": 82,
+      "opportunity_score": 53.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 82 · 부동산",
+      "angle": "키워드가 검색된다는 것은 의무 인지가 낮다는 뜻 — 실질 피해 예방 정보가 공백",
+      "hook": "이사 후 전입신고를 미루고 있는 세입자의 막연한 불안",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "엄마가",
+      "topic": "'엄마가' 드라마가 지금 이 시점에 울리는 이유 — 공감 포인트 분석",
+      "keyword": "엄마가",
+      "sector": "연예·문화",
+      "score": 80,
+      "opportunity_score": 53.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 80 · 연예·문화",
+      "angle": "콘텐츠 감상 후 '왜 이렇게 찔리지'를 설명해주는 공감형 분석이 공유 바이럴에 강함",
+      "hook": "드라마를 보면서 자기도 모르게 울었던 이유를 언어로 정리하고 싶은 시청자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "나경원",
+      "topic": "나경원 최근 행보가 정치 지형에서 갖는 의미 — 지지층 밖에서 본 시각",
+      "keyword": "나경원",
+      "sector": "사회·이슈",
+      "score": 78,
+      "opportunity_score": 52.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 78 · 사회·이슈",
+      "angle": "지지·비판 어느 쪽도 아닌 구조 분석 포지셔닝으로 정치 무관심층까지 포괄 가능",
+      "hook": "나경원이 왜 자꾸 뉴스에 나오는지 흐름을 한 번에 파악하고 싶은 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "외지인",
+      "topic": "외지인이 우리 동네 집을 사면 실제로 어떤 일이 벌어지나",
+      "keyword": "외지인",
+      "sector": "부동산",
+      "score": 77,
+      "opportunity_score": 51.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 77 · 부동산",
+      "angle": "지역 실거주자의 피부에 와닿는 생활 변화 서사는 부동산 투자 기사와 차별화 가능",
+      "hook": "외지인 투자 유입이 내 전세·매매 가격에 어떤 영향을 미치는지 모르는 실거주자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "민주당",
+      "topic": "민주당 최근 결정이 내 생활과 직접 연결되는 3가지 정책",
+      "keyword": "민주당",
+      "sector": "사회·이슈",
+      "score": 75,
+      "opportunity_score": 50.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 75 · 사회·이슈",
+      "angle": "정치 뉴스를 정책 생활영향으로 번역하면 이념 피로감 없는 실용 독자층까지 흡수",
+      "hook": "정당 뉴스는 많은데 내 삶과 무슨 관계인지 연결이 안 되는 비정치 독자",
+      "color": "#4a5568"
+    }
+  ],
+  "content_angles": {
+    "최동원": {
+      "topic": "최동원은 왜 40년이 지나도 여전히 한국 야구의 전설인가",
+      "angle": "시간이 지날수록 재조명되는 레전드의 이유를 데이터·기록으로 풀면 팬심과 야구 초보 모두 클릭",
+      "hook": "그 시대 기록이 지금도 깨지지 않는 이유가 뭔지 궁금한 독자"
+    },
+    "마피에": {
+      "topic": "마피에, 줄 서기 전에 알아야 할 메뉴 선택 팁과 현실 후기",
+      "angle": "검색량 대비 상세 후기가 적어 실전 정보 공백을 파고들 수 있는 타이밍",
+      "hook": "인기 맛집인데 막상 무엇을 시켜야 할지 모르는 첫 방문자"
+    },
+    "풍선 효과": {
+      "topic": "서울 규제가 강해질수록 내 집 마련 기회가 생기는 지역 3곳",
+      "angle": "부동산 풍선 효과를 위협이 아닌 기회로 프레이밍하면 실수요자 클릭 전환율 높음",
+      "hook": "규제 때문에 서울 대신 어디를 봐야 할지 감이 없는 실수요자"
+    },
+    "백지영": {
+      "topic": "백지영이 지금 다시 화제인 진짜 이유 — 단순 컴백이 아닌 것들",
+      "angle": "팬 외에 뉴스 맥락으로 접근한 독자까지 포괄하는 각도로 트래픽 폭 확장",
+      "hook": "최근 백지영 관련 검색이 갑자기 늘어난 배경이 궁금한 독자"
+    },
+    "미국 국방부": {
+      "topic": "미국 국방부 최근 결정이 한국 방산·경제에 미치는 영향 정리",
+      "angle": "글로벌 이슈를 한국 독자 개인 이해관계(방산주·안보)로 좁히면 체류 시간 극대화",
+      "hook": "미국 국방부 뉴스가 나와 무슨 상관인지 모르는 일반 독자"
+    },
+    "이탈리아": {
+      "topic": "이탈리아 여행 첫 주에 가장 많이 후회하는 실수 7가지",
+      "angle": "성공 가이드보다 실패 방지형 제목이 여행 준비 독자의 불안을 직접 자극해 클릭률 우세",
+      "hook": "떠나기 전에 몰라서 낭패 봤다는 후기가 두려운 여행 준비자"
+    },
+    "코스피 200": {
+      "topic": "코스피 200 ETF, 지금 담으면 늦은 건지 판단하는 기준 3가지",
+      "angle": "지수 투자 초보가 가장 많이 막히는 '타이밍' 고민에 직접 답하는 구조",
+      "hook": "ETF가 좋다는 건 알겠는데 지금 들어가도 되는 건지 확신이 없는 투자 입문자"
+    },
+    "산업도시": {
+      "topic": "한국 산업도시가 흔들리기 시작했다 — 지방 부동산·일자리에 생기는 변화",
+      "angle": "위기 서사 + 로컬 생활 독자 타겟으로 좁혀 레드오션 경제 키워드를 블루오션 각도로 전환",
+      "hook": "산업도시에 살거나 부동산을 가진 사람이 지금 어떤 준비를 해야 하는지 모르는 독자"
+    },
+    "반도체": {
+      "topic": "반도체 주가가 오르는 날 내 포트폴리오가 오히려 빠지는 이유",
+      "angle": "경쟁 포화된 키워드에서 개인 투자자의 실패 경험을 역이용해 좁은 타겟에 집중",
+      "hook": "반도체 호황 뉴스에도 관련주에서 손실 보는 패턴을 이해하지 못한 투자자"
+    },
+    "이어지는": {
+      "topic": "끊이지 않고 이어지는 뉴스, 지금 한국 사회를 관통하는 공통 키워드는",
+      "angle": "키워드 자체가 불완전해 직접 연결 콘텐츠보다 주간 이슈 큐레이션으로 전환해 범용성 확보",
+      "hook": "매일 쏟아지는 뉴스 중 진짜 봐야 할 흐름을 놓치고 있는 것 같은 독자"
+    },
+    "문채원": {
+      "topic": "문채원 복귀작, 전작 팬이 기대해도 되는 이유와 걱정되는 한 가지",
+      "angle": "찬성·우려 양면 구조는 팬과 관망층 모두 클릭하게 만들어 트래픽 폭이 넓음",
+      "hook": "문채원 신작이 전작만큼 잘 될지 반신반의하는 팬"
+    },
+    "김민규": {
+      "topic": "김민규가 갑자기 화제가 된 배경 — 활동 정리와 앞으로 주목할 이유",
+      "angle": "이름만 알고 왜 뜨는지 모르는 라이트 팬을 위한 입문형 각도로 검색 저변 공략",
+      "hook": "김민규가 누구인지는 아는데 왜 요즘 검색되는지 이유를 모르는 독자"
+    },
+    "정석원": {
+      "topic": "정석원, 오랜 공백 뒤 다시 주목받는 순간을 만든 결정적 계기",
+      "angle": "공백기 이후 재조명 서사는 팬덤 밖 일반 독자의 감성을 자극해 체류 시간 증가",
+      "hook": "한동안 안 보이다 갑자기 다시 보이기 시작한 이유가 궁금한 독자"
+    },
+    "전입신고": {
+      "topic": "전입신고 안 하면 생기는 법적 불이익 — 세입자가 반드시 알아야 할 것",
+      "angle": "키워드가 검색된다는 것은 의무 인지가 낮다는 뜻 — 실질 피해 예방 정보가 공백",
+      "hook": "이사 후 전입신고를 미루고 있는 세입자의 막연한 불안"
+    },
+    "엄마가": {
+      "topic": "'엄마가' 드라마가 지금 이 시점에 울리는 이유 — 공감 포인트 분석",
+      "angle": "콘텐츠 감상 후 '왜 이렇게 찔리지'를 설명해주는 공감형 분석이 공유 바이럴에 강함",
+      "hook": "드라마를 보면서 자기도 모르게 울었던 이유를 언어로 정리하고 싶은 시청자"
+    },
+    "나경원": {
+      "topic": "나경원 최근 행보가 정치 지형에서 갖는 의미 — 지지층 밖에서 본 시각",
+      "angle": "지지·비판 어느 쪽도 아닌 구조 분석 포지셔닝으로 정치 무관심층까지 포괄 가능",
+      "hook": "나경원이 왜 자꾸 뉴스에 나오는지 흐름을 한 번에 파악하고 싶은 독자"
+    },
+    "외지인": {
+      "topic": "외지인이 우리 동네 집을 사면 실제로 어떤 일이 벌어지나",
+      "angle": "지역 실거주자의 피부에 와닿는 생활 변화 서사는 부동산 투자 기사와 차별화 가능",
+      "hook": "외지인 투자 유입이 내 전세·매매 가격에 어떤 영향을 미치는지 모르는 실거주자"
+    },
+    "민주당": {
+      "topic": "민주당 최근 결정이 내 생활과 직접 연결되는 3가지 정책",
+      "angle": "정치 뉴스를 정책 생활영향으로 번역하면 이념 피로감 없는 실용 독자층까지 흡수",
+      "hook": "정당 뉴스는 많은데 내 삶과 무슨 관계인지 연결이 안 되는 비정치 독자"
+    }
+  },
+  "autocomplete": {},
+  "datalab_used": false,
+  "iot_used": false,
+  "trend_delta": {
+    "prev_date": "2026-05-23",
+    "new_entry": [
+      "백지영",
+      "풍선 효과",
+      "문채원",
+      "최동원",
+      "이태리",
+      "코스피 200",
+      "김민규",
+      "미국 국방부",
+      "정석원",
+      "마피에"
+    ],
+    "dropped": [
+      "이수정",
+      "유승목",
+      "전현무,기안84",
+      "여자 축구",
+      "한소희",
+      "박완수",
+      "황혼이혼",
+      "화장실",
+      "이승민",
+      "제이쓴"
+    ],
+    "risen": [
+      {
+        "keyword": "AI",
+        "delta": 7
+      },
+      {
+        "keyword": "코스피",
+        "delta": 5
+      }
+    ],
+    "fallen": [
+      {
+        "keyword": "성과급",
+        "delta": 12
+      }
+    ]
+  }
+}

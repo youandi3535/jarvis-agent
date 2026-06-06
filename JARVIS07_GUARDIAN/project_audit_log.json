@@ -1,0 +1,330 @@
+{
+  "version": "1.0",
+  "description": "프로젝트 정책 작업·메타 박제 — runtime fix 패턴 아님",
+  "migrated_at": "2026-05-15T00:58:53.290894",
+  "entries": [
+    {
+      "fingerprint": "ModelInconsistency::ARCHITECT_DESIGN.md 3곳 Sonnet 표기 → Haiku 로 갱신. shared<PATH>·agent_tools.py·architect.py 코드는 이미 Haiku <N>%. Sonnet/Opus 의존 <N> 검증 완료. ERRORS [<N>].",
+      "error_type": "ModelInconsistency",
+      "message_pattern": "ARCHITECT_DESIGN\\.md\\ 3곳\\ Sonnet\\ 표기\\ →\\ Haiku\\ 로\\ 갱신\\.\\ shared/llm\\.py·agent_tools\\.py·arch",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 38,
+          "fixed_file": "JARVIS00_INFRA/ARCHITECT_DESIGN.md",
+          "source": "infra",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "PromptLeak::★ 제0조·제0-B조 자연어 인용 7곳 → '<NAME>' 짧은 참조로 통일. BLOG_SUPREME_LAW.md 단일 진실 소스 보장.",
+      "error_type": "PromptLeak",
+      "message_pattern": "★\\ 제0조·제0\\-B조\\ 자연어\\ 인용\\ 7곳\\ →\\ '\\(헌법\\ 제N조\\ 적용\\)'\\ 짧은\\ 참조로\\ 통일\\.\\ BLOG_SUPREME_LAW\\.md\\ 단일\\ 진실\\ 소스\\ 보장",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 39,
+          "fixed_file": "JARVIS02_WRITER/economic_poster.py",
+          "source": "writer",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "PromptLeak::★ 제0조·제0-B조 자연어 인용 6곳 + 면책 복붙 1곳 → 헌법 참조로 통일.",
+      "error_type": "PromptLeak",
+      "message_pattern": "★\\ 제0조·제0\\-B조\\ 자연어\\ 인용\\ 6곳\\ \\+\\ 면책\\ 복붙\\ 1곳\\ →\\ 헌법\\ 참조로\\ 통일\\.",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 40,
+          "fixed_file": "JARVIS02_WRITER/trend_economic_writer.py",
+          "source": "writer",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "PromptLeak::감성 오프닝 + 면책 인라인 한국어 3곳 → 헌법 제0조·제5조 짧은 참조로 통일.",
+      "error_type": "PromptLeak",
+      "message_pattern": "감성\\ 오프닝\\ \\+\\ 면책\\ 인라인\\ 한국어\\ 3곳\\ →\\ 헌법\\ 제0조·제5조\\ 짧은\\ 참조로\\ 통일\\.",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 41,
+          "fixed_file": "JARVIS02_WRITER/tistory_html_writer.py",
+          "source": "writer",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "PromptLeak::감성 오프닝 + 면책 인라인 한국어 3곳 → 헌법 참조로 통일.",
+      "error_type": "PromptLeak",
+      "message_pattern": "감성\\ 오프닝\\ \\+\\ 면책\\ 인라인\\ 한국어\\ 3곳\\ →\\ 헌법\\ 참조로\\ 통일\\.",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 42,
+          "fixed_file": "JARVIS02_WRITER/wp_html_writer.py",
+          "source": "writer",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "PromptLeak::WP SEO 가이드 2곳에 헌법 제0조·제5조·제1조 참조 명시. 첫 150자·면책 문구 헌법 통합.",
+      "error_type": "PromptLeak",
+      "message_pattern": "WP\\ SEO\\ 가이드\\ 2곳에\\ 헌법\\ 제0조·제5조·제1조\\ 참조\\ 명시\\.\\ 첫\\ 150자·면책\\ 문구\\ 헌법\\ 통합\\.",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 43,
+          "fixed_file": "JARVIS02_WRITER/seo_standards.py",
+          "source": "writer",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "SupremeBlockStatic::build_writing_rules_block() 동적 BLOG_SUPREME_LAW.md 로드로 재설계. 매 호출 파일 read → 12조 추출 → supreme_block 776자 반환. 캐시 <N>. _LAW_FALLBACK_BLOCK 비상 폴백 신설.",
+      "error_type": "SupremeBlockStatic",
+      "message_pattern": "build_writing_rules_block\\(\\)\\ 동적\\ BLOG_SUPREME_LAW\\.md\\ 로드로\\ 재설계\\.\\ 매\\ 호출\\ 파일\\ read\\ →\\ 12조\\ 추",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 44,
+          "fixed_file": "JARVIS02_WRITER/law_enforcer.py",
+          "source": "writer",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "RuleAddition::제13조 데이터 표현 일관성 신설 (수익률 3개월만·면책 격식체·숫자 단위 일관·모호 한정어 금지). CLAUDE_WRITER.md 콘텐츠 정책 누수 흡수.",
+      "error_type": "RuleAddition",
+      "message_pattern": "제13조\\ 데이터\\ 표현\\ 일관성\\ 신설\\ \\(수익률\\ 3개월만·면책\\ 격식체·숫자\\ 단위\\ 일관·모호\\ 한정어\\ 금지\\)\\.\\ CLAUDE_WRITER\\.md\\ 콘텐츠\\ 정책",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 45,
+          "fixed_file": "JARVIS02_WRITER/BLOG_SUPREME_LAW.md",
+          "source": "writer",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "RuleConsolidation::블로그 관련 4개 정책 절(글자수·교차배치·소제목·동적생성) → 2개 위임 절로 축약. 정책 본문 0줄. BLOG_SUPREME_LAW.md 단일 진실 소스 명시.",
+      "error_type": "RuleConsolidation",
+      "message_pattern": "블로그\\ 관련\\ 4개\\ 정책\\ 절\\(글자수·교차배치·소제목·동적생성\\)\\ →\\ 2개\\ 위임\\ 절로\\ 축약\\.\\ 정책\\ 본문\\ 0줄\\.\\ BLOG_SUPREME_LAW\\.md\\ 단",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 46,
+          "fixed_file": "CLAUDE.md",
+          "source": "infra",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "RuleConsolidation::'<NAME>'·'<NAME>'·'<NAME>' 절 → '<NAME>' 1절 축약. 기술 제약만 비직관 규칙 표 보존.",
+      "error_type": "RuleConsolidation",
+      "message_pattern": "'절대\\ 금지'·'수익률\\ 표현'·'투자\\ 주의사항'\\ 절\\ →\\ '콘텐츠\\ 규정\\ —\\ BLOG_SUPREME_LAW\\.md\\ 위임'\\ 1절\\ 축약\\.\\ 기술\\ 제약만\\ 비",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 47,
+          "fixed_file": "JARVIS02_WRITER/CLAUDE_WRITER.md",
+          "source": "writer",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "NoneSlicing::r.get(key,''<NAME>'')[:N] 안전 슬라이싱 통일. dict 값 None 일 때 TypeError 방지. error_type/fixed_file/resolution 컬럼 NULL 대응.",
+      "error_type": "NoneSlicing",
+      "message_pattern": "r\\.get\\(key,''\\)\\[:N\\]\\ 패턴\\ 6곳\\ →\\ \\(r\\.get\\(key\\)\\ or\\ ''\\)\\[:N\\]\\ 안전\\ 슬라이싱\\ 통일\\.\\ dict\\ 값\\ None\\ 일\\ 때\\ Typ",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 48,
+          "fixed_file": "hub.py",
+          "source": "infra",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "FlowDefect::_orchestrate 의 critical / is_auto_fixable=False 분기 status 갱신 누락 수정. critical→'<NAME>' 유지 (수동 검토 대기). 자동 수정 불가→'<NAME>' 마킹.",
+      "error_type": "FlowDefect",
+      "message_pattern": "_orchestrate\\ 의\\ critical\\ /\\ is_auto_fixable=False\\ 분기\\ status\\ 갱신\\ 누락\\ 수정\\.\\ critical→'ne",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 49,
+          "fixed_file": "JARVIS07_GUARDIAN/guardian_agent.py",
+          "source": "guardian",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "SandboxLeak::_SANDBOX_PATH_PAT + _is_sandbox_traceback() 신설. /sessions/.../mnt/ 경로 traceback 호스트 DB INSERT 차단. Sandbox 사고 호스트 누수 방지.",
+      "error_type": "SandboxLeak",
+      "message_pattern": "_SANDBOX_PATH_PAT\\ \\+\\ _is_sandbox_traceback\\(\\)\\ 신설\\.\\ /sessions/\\.\\.\\./mnt/\\ 경로\\ traceback\\ ",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 50,
+          "fixed_file": "JARVIS07_GUARDIAN/error_collector.py",
+          "source": "guardian",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "DashboardFilter::수동검토 탭 SQL status IN ('<NAME>','<NAME>','<NAME>') → ('<NAME>','<NAME>'). wontfix 는 결정 완료 → 화면 잔존 차단. 카드 라벨 '<NAME>' → '<NAME>'.",
+      "error_type": "DashboardFilter",
+      "message_pattern": "수동검토\\ 탭\\ SQL\\ status\\ IN\\ \\('wontfix','new','analyzing'\\)\\ →\\ \\('new','analyzing'\\)\\.\\ wontfi",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 51,
+          "fixed_file": "hub.py",
+          "source": "infra",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "StatusEnumStandard::비표준 '<NAME>' status → '<NAME>' 일괄 UPDATE. status enum 6종 통일 (new/analyzing/fixed/wontfix/ignored/manual).",
+      "error_type": "StatusEnumStandard",
+      "message_pattern": "비표준\\ 'resolved'\\ status\\ →\\ 'fixed'\\ 일괄\\ UPDATE\\.\\ status\\ enum\\ 6종\\ 통일\\ \\(new/analyzing/fixe",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 52,
+          "fixed_file": "shared/jarvis.sqlite",
+          "source": "guardian",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "RelativeImport::L539·<N>·<N> '<NAME>' → '<NAME>' 절대 경로 통일. 다른 디렉토리에서 호출 시 ModuleNotFoundError 방지.",
+      "error_type": "RelativeImport",
+      "message_pattern": "L539·595·629\\ 'from\\ naver_cookie_refresher\\ import'\\ →\\ 'from\\ JARVIS02_WRITER\\.naver_",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 53,
+          "fixed_file": "JARVIS02_WRITER/naver_poster.py",
+          "source": "writer",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "AgentAddition::ARCHITECT 신설 — 새 에이전트·도구·잡 신설 시 <N> 섹션 기획서 자동 산출. 동적 knowledge base 로드 + 5종 검증. v1 자기 자신 설계 테스트 통과.",
+      "error_type": "AgentAddition",
+      "message_pattern": "ARCHITECT\\ 신설\\ —\\ 새\\ 에이전트·도구·잡\\ 신설\\ 시\\ 12\\ 섹션\\ 기획서\\ 자동\\ 산출\\.\\ 동적\\ knowledge\\ base\\ 로드\\ \\+\\ 5종\\ 검증\\.\\ v",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 54,
+          "fixed_file": "JARVIS00_INFRA/architect.py",
+          "source": "infra",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "AutoFixCapability::★ 패턴 기반 자동 수정기 신설 — 5종 패턴(상대 import / NoneType slicing / NameError 오타 / NoneType attribute / ImportError 유사 심볼) LLM 호출 없이 결정적 자동 수정. error_analyzer 가 우선 시도. severity 룰 확장 (PATTERN_FIXABLE_TYPES 자동 시도)",
+      "error_type": "AutoFixCapability",
+      "message_pattern": "★\\ 패턴\\ 기반\\ 자동\\ 수정기\\ 신설\\ —\\ 5종\\ 패턴\\(상대\\ import\\ /\\ NoneType\\ slicing\\ /\\ NameError\\ 오타\\ /\\ NoneType",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 55,
+          "fixed_file": "JARVIS07_GUARDIAN/pattern_fixer.py",
+          "source": "guardian",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    },
+    {
+      "fingerprint": "ManualFixTracking::report_manual_fix() API 신설 — Claude/사용자 수동 수정을 회고적으로 박제 가능. error_log INSERT + status='<NAME>' 즉시 마킹. 수동수정 카드 정확 카운트.",
+      "error_type": "ManualFixTracking",
+      "message_pattern": "report_manual_fix\\(\\)\\ API\\ 신설\\ —\\ Claude/사용자\\ 수동\\ 수정을\\ 회고적으로\\ 박제\\ 가능\\.\\ error_log\\ INSERT\\ \\+\\ s",
+      "fixer": null,
+      "examples": [
+        {
+          "id": 56,
+          "fixed_file": "JARVIS07_GUARDIAN/error_collector.py",
+          "source": "guardian",
+          "status": "manual"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-05-13T02:35:03",
+      "last_seen": "2026-05-13T02:35:03"
+    }
+  ]
+}

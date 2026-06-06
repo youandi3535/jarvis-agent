@@ -1,0 +1,1494 @@
+{
+  "date": "2026-06-02",
+  "collected_at": "15:02:00",
+  "google_trending": [
+    "kdb생명",
+    "허경환",
+    "이의 리",
+    "한채영",
+    "주해은",
+    "공공기관 경영평가",
+    "김해준",
+    "안유진",
+    "로베르트 레반도프스키",
+    "KDB생명",
+    "예비입찰에",
+    "김영희",
+    "전성기",
+    "이상형",
+    "KIA",
+    "이의리",
+    "기약없는",
+    "에이스",
+    "게임이",
+    "좋아지니까",
+    "머레이만",
+    "눈화장",
+    "범죄도시",
+    "마동석과",
+    "공공기관",
+    "경영평가",
+    "인공지능이",
+    "전력망",
+    "전기안전공사",
+    "에너지",
+    "연기금",
+    "순매수",
+    "증권사",
+    "참여율",
+    "코스피",
+    "코스닥",
+    "가시권",
+    "스스로",
+    "반도체",
+    "코스피는",
+    "SK",
+    "텔레콤",
+    "튼튼한",
+    "이현정의",
+    "어프로치",
+    "코스피가",
+    "엔비디아",
+    "셀럽의",
+    "외인도",
+    "우리금융"
+  ],
+  "scored_keywords": [
+    {
+      "keyword": "kdb생명",
+      "rank": 1,
+      "score": 100,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 62.0
+    },
+    {
+      "keyword": "허경환",
+      "rank": 2,
+      "score": 98,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 61.1
+    },
+    {
+      "keyword": "이의 리",
+      "rank": 3,
+      "score": 96,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 60.2
+    },
+    {
+      "keyword": "한채영",
+      "rank": 4,
+      "score": 95,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 59.8
+    },
+    {
+      "keyword": "주해은",
+      "rank": 5,
+      "score": 93,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.9
+    },
+    {
+      "keyword": "공공기관 경영평가",
+      "rank": 6,
+      "score": 91,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.0
+    },
+    {
+      "keyword": "김해준",
+      "rank": 7,
+      "score": 89,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 57.1
+    },
+    {
+      "keyword": "안유진",
+      "rank": 8,
+      "score": 87,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 56.1
+    },
+    {
+      "keyword": "로베르트 레반도프스키",
+      "rank": 9,
+      "score": 86,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 55.7
+    },
+    {
+      "keyword": "KDB생명",
+      "rank": 10,
+      "score": 84,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 54.8
+    },
+    {
+      "keyword": "예비입찰에",
+      "rank": 11,
+      "score": 82,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.9
+    },
+    {
+      "keyword": "김영희",
+      "rank": 12,
+      "score": 80,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.0
+    },
+    {
+      "keyword": "전성기",
+      "rank": 13,
+      "score": 78,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 52.1
+    },
+    {
+      "keyword": "이상형",
+      "rank": 14,
+      "score": 77,
+      "sector": "사랑·관계",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 51.6
+    },
+    {
+      "keyword": "KIA",
+      "rank": 15,
+      "score": 75,
+      "sector": "자동차",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 50.8
+    },
+    {
+      "keyword": "이의리",
+      "rank": 16,
+      "score": 73,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.9
+    },
+    {
+      "keyword": "기약없는",
+      "rank": 17,
+      "score": 71,
+      "sector": "건강·의료",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.0
+    },
+    {
+      "keyword": "에이스",
+      "rank": 18,
+      "score": 69,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 48.0
+    },
+    {
+      "keyword": "게임이",
+      "rank": 19,
+      "score": 68,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 47.6
+    },
+    {
+      "keyword": "좋아지니까",
+      "rank": 20,
+      "score": 66,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 46.7
+    },
+    {
+      "keyword": "머레이만",
+      "rank": 21,
+      "score": 64,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 45.8
+    },
+    {
+      "keyword": "눈화장",
+      "rank": 22,
+      "score": 62,
+      "sector": "뷰티·패션",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.9
+    },
+    {
+      "keyword": "범죄도시",
+      "rank": 23,
+      "score": 60,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.0
+    },
+    {
+      "keyword": "마동석과",
+      "rank": 24,
+      "score": 59,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 43.5
+    },
+    {
+      "keyword": "공공기관",
+      "rank": 25,
+      "score": 57,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 42.7
+    },
+    {
+      "keyword": "경영평가",
+      "rank": 26,
+      "score": 55,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 41.8
+    },
+    {
+      "keyword": "인공지능이",
+      "rank": 27,
+      "score": 53,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.9
+    },
+    {
+      "keyword": "전력망",
+      "rank": 28,
+      "score": 51,
+      "sector": "에너지·환경",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.0
+    },
+    {
+      "keyword": "전기안전공사",
+      "rank": 29,
+      "score": 50,
+      "sector": "부동산",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.5
+    },
+    {
+      "keyword": "에너지",
+      "rank": 30,
+      "score": 48,
+      "sector": "에너지·환경",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.3
+    },
+    {
+      "keyword": "연기금",
+      "rank": 31,
+      "score": 46,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.7
+    },
+    {
+      "keyword": "순매수",
+      "rank": 32,
+      "score": 44,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.8
+    },
+    {
+      "keyword": "증권사",
+      "rank": 33,
+      "score": 42,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.9
+    },
+    {
+      "keyword": "참여율",
+      "rank": 34,
+      "score": 41,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.5
+    },
+    {
+      "keyword": "코스피",
+      "rank": 35,
+      "score": 39,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.5
+    },
+    {
+      "keyword": "코스닥",
+      "rank": 36,
+      "score": 37,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 33.7
+    },
+    {
+      "keyword": "가시권",
+      "rank": 37,
+      "score": 35,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 32.8
+    },
+    {
+      "keyword": "스스로",
+      "rank": 38,
+      "score": 33,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.9
+    },
+    {
+      "keyword": "반도체",
+      "rank": 39,
+      "score": 32,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.6
+    },
+    {
+      "keyword": "코스피는",
+      "rank": 40,
+      "score": 30,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.5
+    },
+    {
+      "keyword": "SK",
+      "rank": 41,
+      "score": 28,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 29.6
+    },
+    {
+      "keyword": "텔레콤",
+      "rank": 42,
+      "score": 26,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 28.7
+    },
+    {
+      "keyword": "튼튼한",
+      "rank": 43,
+      "score": 24,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.8
+    },
+    {
+      "keyword": "이현정의",
+      "rank": 44,
+      "score": 23,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.4
+    },
+    {
+      "keyword": "어프로치",
+      "rank": 45,
+      "score": 21,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.5
+    },
+    {
+      "keyword": "코스피가",
+      "rank": 46,
+      "score": 19,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 25.6
+    },
+    {
+      "keyword": "엔비디아",
+      "rank": 47,
+      "score": 17,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 24.6
+    },
+    {
+      "keyword": "셀럽의",
+      "rank": 48,
+      "score": 15,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.8
+    },
+    {
+      "keyword": "외인도",
+      "rank": 49,
+      "score": 14,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.3
+    },
+    {
+      "keyword": "우리금융",
+      "rank": 50,
+      "score": 12,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 22.4
+    }
+  ],
+  "sector_summary": {
+    "금융·투자": [
+      {
+        "keyword": "kdb생명",
+        "rank": 1,
+        "score": 100,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 62.0
+      },
+      {
+        "keyword": "KDB생명",
+        "rank": 10,
+        "score": 84,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 54.8
+      },
+      {
+        "keyword": "예비입찰에",
+        "rank": 11,
+        "score": 82,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.9
+      },
+      {
+        "keyword": "순매수",
+        "rank": 32,
+        "score": 44,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.8
+      },
+      {
+        "keyword": "증권사",
+        "rank": 33,
+        "score": 42,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.9
+      },
+      {
+        "keyword": "코스피",
+        "rank": 35,
+        "score": 39,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.5
+      },
+      {
+        "keyword": "코스닥",
+        "rank": 36,
+        "score": 37,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 33.7
+      },
+      {
+        "keyword": "코스피는",
+        "rank": 40,
+        "score": 30,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.5
+      },
+      {
+        "keyword": "코스피가",
+        "rank": 46,
+        "score": 19,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      },
+      {
+        "keyword": "우리금융",
+        "rank": 50,
+        "score": 12,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 22.4
+      }
+    ],
+    "연예·문화": [
+      {
+        "keyword": "허경환",
+        "rank": 2,
+        "score": 98,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 61.1
+      },
+      {
+        "keyword": "한채영",
+        "rank": 4,
+        "score": 95,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 59.8
+      },
+      {
+        "keyword": "주해은",
+        "rank": 5,
+        "score": 93,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.9
+      },
+      {
+        "keyword": "김해준",
+        "rank": 7,
+        "score": 89,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 57.1
+      },
+      {
+        "keyword": "안유진",
+        "rank": 8,
+        "score": 87,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 56.1
+      },
+      {
+        "keyword": "김영희",
+        "rank": 12,
+        "score": 80,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.0
+      },
+      {
+        "keyword": "전성기",
+        "rank": 13,
+        "score": 78,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 52.1
+      },
+      {
+        "keyword": "에이스",
+        "rank": 18,
+        "score": 69,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 48.0
+      },
+      {
+        "keyword": "게임이",
+        "rank": 19,
+        "score": 68,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 47.6
+      },
+      {
+        "keyword": "좋아지니까",
+        "rank": 20,
+        "score": 66,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 46.7
+      },
+      {
+        "keyword": "범죄도시",
+        "rank": 23,
+        "score": 60,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      },
+      {
+        "keyword": "마동석과",
+        "rank": 24,
+        "score": 59,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      },
+      {
+        "keyword": "연기금",
+        "rank": 31,
+        "score": 46,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.7
+      },
+      {
+        "keyword": "이현정의",
+        "rank": 44,
+        "score": 23,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      },
+      {
+        "keyword": "셀럽의",
+        "rank": 48,
+        "score": 15,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.8
+      }
+    ],
+    "스포츠": [
+      {
+        "keyword": "이의 리",
+        "rank": 3,
+        "score": 96,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 60.2
+      },
+      {
+        "keyword": "로베르트 레반도프스키",
+        "rank": 9,
+        "score": 86,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 55.7
+      },
+      {
+        "keyword": "이의리",
+        "rank": 16,
+        "score": 73,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.9
+      },
+      {
+        "keyword": "머레이만",
+        "rank": 21,
+        "score": 64,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      },
+      {
+        "keyword": "어프로치",
+        "rank": 45,
+        "score": 21,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      }
+    ],
+    "사회·이슈": [
+      {
+        "keyword": "공공기관 경영평가",
+        "rank": 6,
+        "score": 91,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.0
+      },
+      {
+        "keyword": "공공기관",
+        "rank": 25,
+        "score": 57,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      },
+      {
+        "keyword": "경영평가",
+        "rank": 26,
+        "score": 55,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      },
+      {
+        "keyword": "참여율",
+        "rank": 34,
+        "score": 41,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.5
+      }
+    ],
+    "사랑·관계": [
+      {
+        "keyword": "이상형",
+        "rank": 14,
+        "score": 77,
+        "sector": "사랑·관계",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 51.6
+      }
+    ],
+    "자동차": [
+      {
+        "keyword": "KIA",
+        "rank": 15,
+        "score": 75,
+        "sector": "자동차",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 50.8
+      }
+    ],
+    "건강·의료": [
+      {
+        "keyword": "기약없는",
+        "rank": 17,
+        "score": 71,
+        "sector": "건강·의료",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.0
+      }
+    ],
+    "뷰티·패션": [
+      {
+        "keyword": "눈화장",
+        "rank": 22,
+        "score": 62,
+        "sector": "뷰티·패션",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "인공지능이",
+        "rank": 27,
+        "score": 53,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      },
+      {
+        "keyword": "반도체",
+        "rank": 39,
+        "score": 32,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.6
+      },
+      {
+        "keyword": "텔레콤",
+        "rank": 42,
+        "score": 26,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 28.7
+      },
+      {
+        "keyword": "엔비디아",
+        "rank": 47,
+        "score": 17,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 24.6
+      }
+    ],
+    "에너지·환경": [
+      {
+        "keyword": "전력망",
+        "rank": 28,
+        "score": 51,
+        "sector": "에너지·환경",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      },
+      {
+        "keyword": "에너지",
+        "rank": 30,
+        "score": 48,
+        "sector": "에너지·환경",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.3
+      }
+    ],
+    "부동산": [
+      {
+        "keyword": "전기안전공사",
+        "rank": 29,
+        "score": 50,
+        "sector": "부동산",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      }
+    ],
+    "기타": [
+      {
+        "keyword": "가시권",
+        "rank": 37,
+        "score": 35,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      },
+      {
+        "keyword": "스스로",
+        "rank": 38,
+        "score": 33,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "튼튼한",
+        "rank": 43,
+        "score": 24,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.8
+      },
+      {
+        "keyword": "외인도",
+        "rank": 49,
+        "score": 14,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.3
+      }
+    ],
+    "경제·경기": [
+      {
+        "keyword": "SK",
+        "rank": 41,
+        "score": 28,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "theme": "이상형",
+      "topic": "이상형 기준이 높을수록 연애가 힘든 진짜 이유 — 심리학자의 솔직한 분석",
+      "keyword": "이상형",
+      "sector": "사랑·관계",
+      "score": 77,
+      "opportunity_score": 51.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #14 · 경쟁 보통 · 최근 미발행",
+      "angle": "막연한 '이상형 찾기'가 아닌, 기준의 심리적 메커니즘을 파고들어 실질적 통찰 제공",
+      "hook": "내 이상형 조건이 많아질수록 왜 오히려 외로워지는 걸까?",
+      "color": "#FF4757"
+    },
+    {
+      "theme": "KIA",
+      "topic": "KIA 신차 라인업, 2026년 하반기 실구매자가 진짜 주목해야 할 모델은 이것",
+      "keyword": "KIA",
+      "sector": "자동차",
+      "score": 75,
+      "opportunity_score": 50.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #15 · 경쟁 보통 · 최근 미발행",
+      "angle": "브랜드 광고성 정보가 아닌 실구매 관점의 비교·선택 기준으로 좁은 독자 타겟팅",
+      "hook": "EV9·카니발·K8 중 지금 계약하면 손해 보지 않을 모델은 어떤 건가?",
+      "color": "#95A5A6"
+    },
+    {
+      "theme": "기약없는",
+      "topic": "기약 없는 기다림이 몸과 마음에 미치는 영향 — 만성 불확실성 스트레스 대처법",
+      "keyword": "기약없는",
+      "sector": "건강·의료",
+      "score": 71,
+      "opportunity_score": 49.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #17 · 경쟁 보통 · 최근 미발행",
+      "angle": "불확실한 상황의 장기 대기(취업·치료·관계 등)를 건강·심리 문제로 연결해 광범위 독자 흡수",
+      "hook": "끝이 언제인지 모르는 기다림, 그게 왜 이렇게 몸을 갉아먹는 걸까?",
+      "color": "#00FF88"
+    },
+    {
+      "theme": "허경환",
+      "topic": "허경환이 갑자기 다시 뜨는 이유 — 최근 행보와 근황을 한 번에 정리",
+      "keyword": "허경환",
+      "sector": "연예·문화",
+      "score": 98,
+      "opportunity_score": 61.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #2 · 경쟁 보통 · 최근 미발행",
+      "angle": "급상승 검색어의 즉각적인 '왜 지금?'에 답하며 시의성으로 클릭률 극대화",
+      "hook": "허경환이 요즘 어디서 뭘 하고 있길래 갑자기 검색어에 뜨는 거지?",
+      "color": "#E91E63"
+    },
+    {
+      "theme": "이의리",
+      "topic": "이의리, 지금 시즌 왜 이렇게 다른가 — 구속·제구 변화의 핵심 데이터로 본 성장 비결",
+      "keyword": "이의리",
+      "sector": "스포츠",
+      "score": 96,
+      "opportunity_score": 60.2,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #3 · 경쟁 보통 · 최근 미발행",
+      "angle": "단순 근황이 아닌 투구 데이터 기반 분석으로 야구 팬 심층 독자층 공략",
+      "hook": "올 시즌 이의리의 구속이 올라간 게 우연이 아닌 이유",
+      "color": "#2ECC71"
+    },
+    {
+      "theme": "눈화장",
+      "topic": "눈화장 잘 못하는 사람이 무조건 저지르는 실수 3가지 — 쌍꺼풀 유무별 교정법",
+      "keyword": "눈화장",
+      "sector": "뷰티·패션",
+      "score": 62,
+      "opportunity_score": 44.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #22 · 경쟁 보통 · 최근 미발행",
+      "angle": "쌍꺼풀 여부라는 좁은 타겟 세분화로 레드오션 뷰티 키워드에서 차별화",
+      "hook": "매일 해도 어색한 눈화장, 내가 놓친 단 하나의 포인트는 뭘까?",
+      "color": "#FF69B4"
+    },
+    {
+      "theme": "공공기관 경영평가",
+      "topic": "2025 공공기관 경영평가 결과 발표 — D등급 받은 기관, 직원들은 어떻게 되나",
+      "keyword": "공공기관 경영평가",
+      "sector": "사회·이슈",
+      "score": 91,
+      "opportunity_score": 58.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #6 · 경쟁 보통 · 최근 미발행",
+      "angle": "평가 결과 그 자체보다 '내 직장·취업처에 미치는 실질 영향'으로 실용적 관심 유도",
+      "hook": "공공기관 경영평가 등급이 나쁘면 직원 연봉과 채용에 실제로 어떤 영향이 생기나?",
+      "color": "#778CA3"
+    },
+    {
+      "theme": "전력망",
+      "topic": "한국 전력망 노후화, 일반인이 체감하게 될 시점은 언제인가 — 정전·요금 리스크 시나리오",
+      "keyword": "전력망",
+      "sector": "에너지·환경",
+      "score": 51,
+      "opportunity_score": 40.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #28 · 경쟁 보통 · 최근 미발행",
+      "angle": "에너지 인프라 이슈를 일반인의 '나에게 언제 영향이 오나'로 전환해 관심 유도",
+      "hook": "전력망이 낡았다는 뉴스, 나한테는 정전이나 요금 인상으로 언제 돌아오는 걸까?",
+      "color": "#1ABC9C"
+    },
+    {
+      "theme": "한국전기안전공사",
+      "topic": "한국전기안전공사 취업 현실 — 2025 경영평가 결과 후 채용·처우 어떻게 달라지나",
+      "keyword": "한국전기안전공사",
+      "sector": "부동산",
+      "score": 50,
+      "opportunity_score": 39.5,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #29 · 경쟁 보통 · 최근 미발행",
+      "angle": "공공기관 경영평가 트렌드와 연계해 취준생·재직자 양쪽 수요를 동시에 겨냥",
+      "hook": "전기안전공사 들어가려는데, 이번 경영평가 결과가 입사 후 내 대우에 영향 줄까?",
+      "color": "#E67E22"
+    },
+    {
+      "theme": "KDB생명",
+      "topic": "KDB생명 매각 추진, 내 보험 계약은 안전한가 — 보험사 인수합병 시 계약자 권리 정리",
+      "keyword": "KDB생명",
+      "sector": "금융·투자",
+      "score": 100,
+      "opportunity_score": 62.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #1 · 경쟁 보통 · 최근 미발행",
+      "angle": "M&A 뉴스의 수혜자가 아닌 기존 계약자의 불안감을 직격해 즉각적 공감 유도",
+      "hook": "KDB생명이 팔린다는데, 지금 내가 든 보험 혜택이 바뀌거나 없어지진 않을까?",
+      "color": "#FFD700"
+    },
+    {
+      "theme": "KDB생명",
+      "topic": "KDB생명 예비입찰 참여자는 누구 — 인수 후보별 계약자·직원 시나리오 비교",
+      "keyword": "KDB생명",
+      "sector": "금융·투자",
+      "score": 84,
+      "opportunity_score": 54.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 84 · 금융·투자",
+      "angle": "M&A 과정의 '누가 사느냐'에 따라 달라지는 결과를 구체적으로 제시해 깊이 있는 독자 공략",
+      "hook": "KDB생명 인수전에 누가 뛰어드느냐에 따라 내 보험과 직원 처우가 완전히 달라진다",
+      "color": "#4a5568"
+    }
+  ],
+  "extra_angles": [
+    {
+      "theme": "한채영",
+      "topic": "한채영 근황이 화제인 이유 — 50대 외모 유지 비결로 다시 주목받는 배우의 복귀 스토리",
+      "keyword": "한채영",
+      "sector": "연예·문화",
+      "score": 95,
+      "opportunity_score": 59.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 95 · 연예·문화",
+      "angle": "단순 연예 근황을 '에이징 어게인스트' 트렌드와 결합해 라이프스타일 독자층까지 확장",
+      "hook": "한채영이 지금 다시 언급되는 이유, 단순 나이 대비 외모가 전부가 아니었다",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "주해은",
+      "topic": "주해은 지금 어디서 뭐하나 — 방송 복귀 소식과 함께 다시 뜨는 배경 한 줄로 이해하기",
+      "keyword": "주해은",
+      "sector": "연예·문화",
+      "score": 93,
+      "opportunity_score": 58.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 93 · 연예·문화",
+      "angle": "검색 급증의 직접적 원인(방송 출연·뉴스)에 즉각 답해 정보 탐색 독자 선점",
+      "hook": "주해은이 갑자기 검색어에 뜬 이유, 최근에 무슨 일이 있었던 건가?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "김해준",
+      "topic": "김해준이 다시 주목받는 2026 — 최근 논란·복귀·행보를 팩트만 골라 정리",
+      "keyword": "김해준",
+      "sector": "연예·문화",
+      "score": 89,
+      "opportunity_score": 57.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 89 · 연예·문화",
+      "angle": "감성·팬심보다 '팩트 정리'라는 중립적 포지셔닝으로 긍부정 양쪽 독자 유입",
+      "hook": "김해준 요즘 뭔가 이슈가 있는 것 같은데, 정확히 어떤 상황인 거지?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "안유진",
+      "topic": "안유진이 솔로 행보를 시작한 지금, IVE 팬들이 주목해야 할 변화 포인트",
+      "keyword": "안유진",
+      "sector": "연예·문화",
+      "score": 87,
+      "opportunity_score": 56.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 87 · 연예·문화",
+      "angle": "그룹 내 위치가 아닌 개인 활동으로의 전환점을 팬 관점에서 세밀하게 분석",
+      "hook": "안유진이 개인 활동을 늘리는 지금, IVE의 미래는 어떻게 흘러가는 걸까?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "로베르트 레반도프스키",
+      "topic": "레반도프스키 바르셀로나 잔류냐 이적이냐 — 2026 여름 이적 시장 최신 시나리오 분석",
+      "keyword": "로베르트 레반도프스키",
+      "sector": "스포츠",
+      "score": 86,
+      "opportunity_score": 55.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 86 · 스포츠",
+      "angle": "이적 루머 시즌의 팬 불안감을 직접 건드려 축구 팬 커뮤니티 유입 극대화",
+      "hook": "레반도프스키가 떠난다는 소식, 진짜인지 아닌지 지금 명확히 알 수 있는 정보는?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "예비입찰",
+      "topic": "KDB생명 예비입찰 마감 — M&A 프로세스를 모르는 사람도 이해하는 인수합병 흐름 설명",
+      "keyword": "예비입찰",
+      "sector": "금융·투자",
+      "score": 82,
+      "opportunity_score": 53.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 82 · 금융·투자",
+      "angle": "금융 전문 용어인 '예비입찰'을 일반 독자가 이해할 수 있는 언어로 풀어 검색량 흡수",
+      "hook": "예비입찰이 끝나면 다음에는 뭐가 일어나고, 최종 매각까지 얼마나 걸리나?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "김영희",
+      "topic": "개그우먼 김영희 지금 무슨 일 — 최근 방송 복귀와 화제의 발언 맥락 정리",
+      "keyword": "김영희",
+      "sector": "연예·문화",
+      "score": 80,
+      "opportunity_score": 53.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 80 · 연예·문화",
+      "angle": "시의성 있는 발언·출연 이슈에 즉각 반응해 검색 급증 초기에 트래픽 선점",
+      "hook": "김영희가 갑자기 다시 언급되는 이유, 최근에 어디서 어떤 말을 한 건가?",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "전성기",
+      "topic": "당신의 전성기는 지금도 진행 중인가 — 나이별 '최고점'을 착각하게 만드는 심리 함정",
+      "keyword": "전성기",
+      "sector": "연예·문화",
+      "score": 78,
+      "opportunity_score": 52.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 78 · 연예·문화",
+      "angle": "드라마 제목 검색 유입과 자기계발·심리 독자를 동시에 흡수하는 이중 각도",
+      "hook": "전성기가 이미 지나간 것 같다는 느낌, 그게 사실인지 착각인지 구분하는 방법",
+      "color": "#4a5568"
+    }
+  ],
+  "content_angles": {
+    "이상형": {
+      "topic": "이상형 기준이 높을수록 연애가 힘든 진짜 이유 — 심리학자의 솔직한 분석",
+      "angle": "막연한 '이상형 찾기'가 아닌, 기준의 심리적 메커니즘을 파고들어 실질적 통찰 제공",
+      "hook": "내 이상형 조건이 많아질수록 왜 오히려 외로워지는 걸까?"
+    },
+    "KIA": {
+      "topic": "KIA 신차 라인업, 2026년 하반기 실구매자가 진짜 주목해야 할 모델은 이것",
+      "angle": "브랜드 광고성 정보가 아닌 실구매 관점의 비교·선택 기준으로 좁은 독자 타겟팅",
+      "hook": "EV9·카니발·K8 중 지금 계약하면 손해 보지 않을 모델은 어떤 건가?"
+    },
+    "기약없는": {
+      "topic": "기약 없는 기다림이 몸과 마음에 미치는 영향 — 만성 불확실성 스트레스 대처법",
+      "angle": "불확실한 상황의 장기 대기(취업·치료·관계 등)를 건강·심리 문제로 연결해 광범위 독자 흡수",
+      "hook": "끝이 언제인지 모르는 기다림, 그게 왜 이렇게 몸을 갉아먹는 걸까?"
+    },
+    "허경환": {
+      "topic": "허경환이 갑자기 다시 뜨는 이유 — 최근 행보와 근황을 한 번에 정리",
+      "angle": "급상승 검색어의 즉각적인 '왜 지금?'에 답하며 시의성으로 클릭률 극대화",
+      "hook": "허경환이 요즘 어디서 뭘 하고 있길래 갑자기 검색어에 뜨는 거지?"
+    },
+    "이의리": {
+      "topic": "이의리, 지금 시즌 왜 이렇게 다른가 — 구속·제구 변화의 핵심 데이터로 본 성장 비결",
+      "angle": "단순 근황이 아닌 투구 데이터 기반 분석으로 야구 팬 심층 독자층 공략",
+      "hook": "올 시즌 이의리의 구속이 올라간 게 우연이 아닌 이유"
+    },
+    "눈화장": {
+      "topic": "눈화장 잘 못하는 사람이 무조건 저지르는 실수 3가지 — 쌍꺼풀 유무별 교정법",
+      "angle": "쌍꺼풀 여부라는 좁은 타겟 세분화로 레드오션 뷰티 키워드에서 차별화",
+      "hook": "매일 해도 어색한 눈화장, 내가 놓친 단 하나의 포인트는 뭘까?"
+    },
+    "공공기관 경영평가": {
+      "topic": "2025 공공기관 경영평가 결과 발표 — D등급 받은 기관, 직원들은 어떻게 되나",
+      "angle": "평가 결과 그 자체보다 '내 직장·취업처에 미치는 실질 영향'으로 실용적 관심 유도",
+      "hook": "공공기관 경영평가 등급이 나쁘면 직원 연봉과 채용에 실제로 어떤 영향이 생기나?"
+    },
+    "전력망": {
+      "topic": "한국 전력망 노후화, 일반인이 체감하게 될 시점은 언제인가 — 정전·요금 리스크 시나리오",
+      "angle": "에너지 인프라 이슈를 일반인의 '나에게 언제 영향이 오나'로 전환해 관심 유도",
+      "hook": "전력망이 낡았다는 뉴스, 나한테는 정전이나 요금 인상으로 언제 돌아오는 걸까?"
+    },
+    "한국전기안전공사": {
+      "topic": "한국전기안전공사 취업 현실 — 2025 경영평가 결과 후 채용·처우 어떻게 달라지나",
+      "angle": "공공기관 경영평가 트렌드와 연계해 취준생·재직자 양쪽 수요를 동시에 겨냥",
+      "hook": "전기안전공사 들어가려는데, 이번 경영평가 결과가 입사 후 내 대우에 영향 줄까?"
+    },
+    "KDB생명": {
+      "topic": "KDB생명 예비입찰 참여자는 누구 — 인수 후보별 계약자·직원 시나리오 비교",
+      "angle": "M&A 과정의 '누가 사느냐'에 따라 달라지는 결과를 구체적으로 제시해 깊이 있는 독자 공략",
+      "hook": "KDB생명 인수전에 누가 뛰어드느냐에 따라 내 보험과 직원 처우가 완전히 달라진다"
+    },
+    "한채영": {
+      "topic": "한채영 근황이 화제인 이유 — 50대 외모 유지 비결로 다시 주목받는 배우의 복귀 스토리",
+      "angle": "단순 연예 근황을 '에이징 어게인스트' 트렌드와 결합해 라이프스타일 독자층까지 확장",
+      "hook": "한채영이 지금 다시 언급되는 이유, 단순 나이 대비 외모가 전부가 아니었다"
+    },
+    "주해은": {
+      "topic": "주해은 지금 어디서 뭐하나 — 방송 복귀 소식과 함께 다시 뜨는 배경 한 줄로 이해하기",
+      "angle": "검색 급증의 직접적 원인(방송 출연·뉴스)에 즉각 답해 정보 탐색 독자 선점",
+      "hook": "주해은이 갑자기 검색어에 뜬 이유, 최근에 무슨 일이 있었던 건가?"
+    },
+    "김해준": {
+      "topic": "김해준이 다시 주목받는 2026 — 최근 논란·복귀·행보를 팩트만 골라 정리",
+      "angle": "감성·팬심보다 '팩트 정리'라는 중립적 포지셔닝으로 긍부정 양쪽 독자 유입",
+      "hook": "김해준 요즘 뭔가 이슈가 있는 것 같은데, 정확히 어떤 상황인 거지?"
+    },
+    "안유진": {
+      "topic": "안유진이 솔로 행보를 시작한 지금, IVE 팬들이 주목해야 할 변화 포인트",
+      "angle": "그룹 내 위치가 아닌 개인 활동으로의 전환점을 팬 관점에서 세밀하게 분석",
+      "hook": "안유진이 개인 활동을 늘리는 지금, IVE의 미래는 어떻게 흘러가는 걸까?"
+    },
+    "로베르트 레반도프스키": {
+      "topic": "레반도프스키 바르셀로나 잔류냐 이적이냐 — 2026 여름 이적 시장 최신 시나리오 분석",
+      "angle": "이적 루머 시즌의 팬 불안감을 직접 건드려 축구 팬 커뮤니티 유입 극대화",
+      "hook": "레반도프스키가 떠난다는 소식, 진짜인지 아닌지 지금 명확히 알 수 있는 정보는?"
+    },
+    "예비입찰": {
+      "topic": "KDB생명 예비입찰 마감 — M&A 프로세스를 모르는 사람도 이해하는 인수합병 흐름 설명",
+      "angle": "금융 전문 용어인 '예비입찰'을 일반 독자가 이해할 수 있는 언어로 풀어 검색량 흡수",
+      "hook": "예비입찰이 끝나면 다음에는 뭐가 일어나고, 최종 매각까지 얼마나 걸리나?"
+    },
+    "김영희": {
+      "topic": "개그우먼 김영희 지금 무슨 일 — 최근 방송 복귀와 화제의 발언 맥락 정리",
+      "angle": "시의성 있는 발언·출연 이슈에 즉각 반응해 검색 급증 초기에 트래픽 선점",
+      "hook": "김영희가 갑자기 다시 언급되는 이유, 최근에 어디서 어떤 말을 한 건가?"
+    },
+    "전성기": {
+      "topic": "당신의 전성기는 지금도 진행 중인가 — 나이별 '최고점'을 착각하게 만드는 심리 함정",
+      "angle": "드라마 제목 검색 유입과 자기계발·심리 독자를 동시에 흡수하는 이중 각도",
+      "hook": "전성기가 이미 지나간 것 같다는 느낌, 그게 사실인지 착각인지 구분하는 방법"
+    }
+  },
+  "autocomplete": {},
+  "datalab_used": false,
+  "iot_used": false,
+  "trend_delta": {
+    "prev_date": "2026-06-01",
+    "new_entry": [
+      "kdb생명",
+      "허경환",
+      "이의 리",
+      "한채영",
+      "주해은",
+      "공공기관 경영평가",
+      "김해준",
+      "안유진",
+      "로베르트 레반도프스키",
+      "KDB생명"
+    ],
+    "dropped": [
+      "하이닉스 화재",
+      "네이버 주가",
+      "한화에어로스페이스",
+      "classroom",
+      "경복궁",
+      "국가유산",
+      "국립중앙박물관",
+      "기상청 날씨누리",
+      "크리스티나",
+      "SK하이닉스"
+    ],
+    "risen": [
+      {
+        "keyword": "반도체",
+        "delta": 10
+      },
+      {
+        "keyword": "코스피",
+        "delta": 4
+      }
+    ],
+    "fallen": [
+      {
+        "keyword": "셀럽의",
+        "delta": 10
+      }
+    ]
+  }
+}

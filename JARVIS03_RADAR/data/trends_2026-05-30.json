@@ -1,0 +1,1457 @@
+{
+  "date": "2026-05-30",
+  "collected_at": "15:31:46",
+  "google_trending": [
+    "이영애",
+    "스텔라 루멘",
+    "고양이",
+    "한국마사회",
+    "지상렬",
+    "박준영",
+    "대기업",
+    "돼지고기",
+    "국민연금 제도 확대",
+    "점프샷",
+    "민소매",
+    "토큰화",
+    "비트코인",
+    "주춤한",
+    "예탁결제원",
+    "스텔라",
+    "우리집",
+    "반려묘인데",
+    "양이도",
+    "헌혈을",
+    "마사회",
+    "명마당",
+    "신보람",
+    "김장훈",
+    "박서진",
+    "살림남",
+    "육성선수",
+    "주느니",
+    "글로컬",
+    "초과이익",
+    "기자수첩",
+    "시대와",
+    "AI",
+    "호황에",
+    "구윤철",
+    "주식시장",
+    "과열론",
+    "코스피",
+    "돌파에",
+    "불장에",
+    "역대급",
+    "깐부의",
+    "재현하나",
+    "의대보다",
+    "삼전닉스",
+    "영재학교",
+    "이번엔",
+    "만나나",
+    "카카오페이",
+    "거래일"
+  ],
+  "scored_keywords": [
+    {
+      "keyword": "이영애",
+      "rank": 1,
+      "score": 100,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 62.0
+    },
+    {
+      "keyword": "스텔라 루멘",
+      "rank": 2,
+      "score": 98,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 61.1
+    },
+    {
+      "keyword": "고양이",
+      "rank": 3,
+      "score": 96,
+      "sector": "라이프",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 60.2
+    },
+    {
+      "keyword": "한국마사회",
+      "rank": 4,
+      "score": 95,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 59.8
+    },
+    {
+      "keyword": "지상렬",
+      "rank": 5,
+      "score": 93,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.9
+    },
+    {
+      "keyword": "박준영",
+      "rank": 6,
+      "score": 91,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 58.0
+    },
+    {
+      "keyword": "대기업",
+      "rank": 7,
+      "score": 89,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 57.1
+    },
+    {
+      "keyword": "돼지고기",
+      "rank": 8,
+      "score": 87,
+      "sector": "음식·맛집",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 56.1
+    },
+    {
+      "keyword": "국민연금 제도 확대",
+      "rank": 9,
+      "score": 86,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 55.7
+    },
+    {
+      "keyword": "점프샷",
+      "rank": 10,
+      "score": 84,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 54.8
+    },
+    {
+      "keyword": "민소매",
+      "rank": 11,
+      "score": 82,
+      "sector": "뷰티·패션",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.9
+    },
+    {
+      "keyword": "토큰화",
+      "rank": 12,
+      "score": 80,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 53.0
+    },
+    {
+      "keyword": "비트코인",
+      "rank": 13,
+      "score": 78,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 52.1
+    },
+    {
+      "keyword": "주춤한",
+      "rank": 14,
+      "score": 77,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 51.6
+    },
+    {
+      "keyword": "예탁결제원",
+      "rank": 15,
+      "score": 75,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 50.8
+    },
+    {
+      "keyword": "스텔라",
+      "rank": 16,
+      "score": 73,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.9
+    },
+    {
+      "keyword": "우리집",
+      "rank": 17,
+      "score": 71,
+      "sector": "라이프",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 49.0
+    },
+    {
+      "keyword": "반려묘인데",
+      "rank": 18,
+      "score": 69,
+      "sector": "라이프",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 48.0
+    },
+    {
+      "keyword": "양이도",
+      "rank": 19,
+      "score": 68,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 47.6
+    },
+    {
+      "keyword": "헌혈을",
+      "rank": 20,
+      "score": 66,
+      "sector": "건강·의료",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 46.7
+    },
+    {
+      "keyword": "마사회",
+      "rank": 21,
+      "score": 64,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 45.8
+    },
+    {
+      "keyword": "명마당",
+      "rank": 22,
+      "score": 62,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.9
+    },
+    {
+      "keyword": "신보람",
+      "rank": 23,
+      "score": 60,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 44.0
+    },
+    {
+      "keyword": "김장훈",
+      "rank": 24,
+      "score": 59,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 43.5
+    },
+    {
+      "keyword": "박서진",
+      "rank": 25,
+      "score": 57,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 42.7
+    },
+    {
+      "keyword": "살림남",
+      "rank": 26,
+      "score": 55,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 41.8
+    },
+    {
+      "keyword": "육성선수",
+      "rank": 27,
+      "score": 53,
+      "sector": "스포츠",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.9
+    },
+    {
+      "keyword": "주느니",
+      "rank": 28,
+      "score": 51,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 40.0
+    },
+    {
+      "keyword": "글로컬",
+      "rank": 29,
+      "score": 50,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 39.5
+    },
+    {
+      "keyword": "초과이익",
+      "rank": 30,
+      "score": 48,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 38.6
+    },
+    {
+      "keyword": "기자수첩",
+      "rank": 31,
+      "score": 46,
+      "sector": "사회·이슈",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 37.7
+    },
+    {
+      "keyword": "시대와",
+      "rank": 32,
+      "score": 44,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 36.8
+    },
+    {
+      "keyword": "AI",
+      "rank": 33,
+      "score": 42,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.9
+    },
+    {
+      "keyword": "호황에",
+      "rank": 34,
+      "score": 41,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 35.5
+    },
+    {
+      "keyword": "구윤철",
+      "rank": 35,
+      "score": 39,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 34.5
+    },
+    {
+      "keyword": "주식시장",
+      "rank": 36,
+      "score": 37,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 33.7
+    },
+    {
+      "keyword": "과열론",
+      "rank": 37,
+      "score": 35,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 32.8
+    },
+    {
+      "keyword": "코스피",
+      "rank": 38,
+      "score": 33,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.9
+    },
+    {
+      "keyword": "돌파에",
+      "rank": 39,
+      "score": 32,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 31.4
+    },
+    {
+      "keyword": "불장에",
+      "rank": 40,
+      "score": 30,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 30.5
+    },
+    {
+      "keyword": "역대급",
+      "rank": 41,
+      "score": 28,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 29.6
+    },
+    {
+      "keyword": "깐부의",
+      "rank": 42,
+      "score": 26,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 28.7
+    },
+    {
+      "keyword": "재현하나",
+      "rank": 43,
+      "score": 24,
+      "sector": "연예·문화",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.8
+    },
+    {
+      "keyword": "의대보다",
+      "rank": 44,
+      "score": 23,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 27.4
+    },
+    {
+      "keyword": "삼전닉스",
+      "rank": 45,
+      "score": 21,
+      "sector": "경제·경기",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 26.5
+    },
+    {
+      "keyword": "영재학교",
+      "rank": 46,
+      "score": 19,
+      "sector": "교육·취업",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 25.6
+    },
+    {
+      "keyword": "이번엔",
+      "rank": 47,
+      "score": 17,
+      "sector": "기타",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 24.6
+    },
+    {
+      "keyword": "만나나",
+      "rank": 48,
+      "score": 15,
+      "sector": "사랑·관계",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.8
+    },
+    {
+      "keyword": "카카오페이",
+      "rank": 49,
+      "score": 14,
+      "sector": "IT·테크",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 23.3
+    },
+    {
+      "keyword": "거래일",
+      "rank": 50,
+      "score": 12,
+      "sector": "금융·투자",
+      "velocity": "—",
+      "velocity_score": 0.0,
+      "competition": 50.0,
+      "opportunity_score": 22.4
+    }
+  ],
+  "sector_summary": {
+    "연예·문화": [
+      {
+        "keyword": "이영애",
+        "rank": 1,
+        "score": 100,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 62.0
+      },
+      {
+        "keyword": "지상렬",
+        "rank": 5,
+        "score": 93,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.9
+      },
+      {
+        "keyword": "스텔라",
+        "rank": 16,
+        "score": 73,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.9
+      },
+      {
+        "keyword": "양이도",
+        "rank": 19,
+        "score": 68,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 47.6
+      },
+      {
+        "keyword": "명마당",
+        "rank": 22,
+        "score": 62,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      },
+      {
+        "keyword": "신보람",
+        "rank": 23,
+        "score": 60,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      },
+      {
+        "keyword": "김장훈",
+        "rank": 24,
+        "score": 59,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      },
+      {
+        "keyword": "박서진",
+        "rank": 25,
+        "score": 57,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      },
+      {
+        "keyword": "살림남",
+        "rank": 26,
+        "score": 55,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      },
+      {
+        "keyword": "구윤철",
+        "rank": 35,
+        "score": 39,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.5
+      },
+      {
+        "keyword": "깐부의",
+        "rank": 42,
+        "score": 26,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 28.7
+      },
+      {
+        "keyword": "재현하나",
+        "rank": 43,
+        "score": 24,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.8
+      }
+    ],
+    "금융·투자": [
+      {
+        "keyword": "스텔라 루멘",
+        "rank": 2,
+        "score": 98,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 61.1
+      },
+      {
+        "keyword": "토큰화",
+        "rank": 12,
+        "score": 80,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.0
+      },
+      {
+        "keyword": "비트코인",
+        "rank": 13,
+        "score": 78,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 52.1
+      },
+      {
+        "keyword": "예탁결제원",
+        "rank": 15,
+        "score": 75,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 50.8
+      },
+      {
+        "keyword": "주식시장",
+        "rank": 36,
+        "score": 37,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 33.7
+      },
+      {
+        "keyword": "코스피",
+        "rank": 38,
+        "score": 33,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "불장에",
+        "rank": 40,
+        "score": 30,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 30.5
+      },
+      {
+        "keyword": "거래일",
+        "rank": 50,
+        "score": 12,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 22.4
+      }
+    ],
+    "라이프": [
+      {
+        "keyword": "고양이",
+        "rank": 3,
+        "score": 96,
+        "sector": "라이프",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 60.2
+      },
+      {
+        "keyword": "우리집",
+        "rank": 17,
+        "score": 71,
+        "sector": "라이프",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.0
+      },
+      {
+        "keyword": "반려묘인데",
+        "rank": 18,
+        "score": 69,
+        "sector": "라이프",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 48.0
+      }
+    ],
+    "스포츠": [
+      {
+        "keyword": "한국마사회",
+        "rank": 4,
+        "score": 95,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 59.8
+      },
+      {
+        "keyword": "점프샷",
+        "rank": 10,
+        "score": 84,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 54.8
+      },
+      {
+        "keyword": "마사회",
+        "rank": 21,
+        "score": 64,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      },
+      {
+        "keyword": "육성선수",
+        "rank": 27,
+        "score": 53,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      }
+    ],
+    "사회·이슈": [
+      {
+        "keyword": "박준영",
+        "rank": 6,
+        "score": 91,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.0
+      },
+      {
+        "keyword": "기자수첩",
+        "rank": 31,
+        "score": 46,
+        "sector": "사회·이슈",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 37.7
+      }
+    ],
+    "경제·경기": [
+      {
+        "keyword": "대기업",
+        "rank": 7,
+        "score": 89,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 57.1
+      },
+      {
+        "keyword": "국민연금 제도 확대",
+        "rank": 9,
+        "score": 86,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 55.7
+      },
+      {
+        "keyword": "주춤한",
+        "rank": 14,
+        "score": 77,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 51.6
+      },
+      {
+        "keyword": "초과이익",
+        "rank": 30,
+        "score": 48,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 38.6
+      },
+      {
+        "keyword": "호황에",
+        "rank": 34,
+        "score": 41,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.5
+      },
+      {
+        "keyword": "과열론",
+        "rank": 37,
+        "score": 35,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      },
+      {
+        "keyword": "역대급",
+        "rank": 41,
+        "score": 28,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      },
+      {
+        "keyword": "삼전닉스",
+        "rank": 45,
+        "score": 21,
+        "sector": "경제·경기",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      }
+    ],
+    "음식·맛집": [
+      {
+        "keyword": "돼지고기",
+        "rank": 8,
+        "score": 87,
+        "sector": "음식·맛집",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 56.1
+      }
+    ],
+    "뷰티·패션": [
+      {
+        "keyword": "민소매",
+        "rank": 11,
+        "score": 82,
+        "sector": "뷰티·패션",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.9
+      }
+    ],
+    "건강·의료": [
+      {
+        "keyword": "헌혈을",
+        "rank": 20,
+        "score": 66,
+        "sector": "건강·의료",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 46.7
+      }
+    ],
+    "기타": [
+      {
+        "keyword": "주느니",
+        "rank": 28,
+        "score": 51,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      },
+      {
+        "keyword": "시대와",
+        "rank": 32,
+        "score": 44,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 36.8
+      },
+      {
+        "keyword": "돌파에",
+        "rank": 39,
+        "score": 32,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.4
+      },
+      {
+        "keyword": "이번엔",
+        "rank": 47,
+        "score": 17,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 24.6
+      }
+    ],
+    "교육·취업": [
+      {
+        "keyword": "글로컬",
+        "rank": 29,
+        "score": 50,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      },
+      {
+        "keyword": "의대보다",
+        "rank": 44,
+        "score": 23,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      },
+      {
+        "keyword": "영재학교",
+        "rank": 46,
+        "score": 19,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "AI",
+        "rank": 33,
+        "score": 42,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.9
+      },
+      {
+        "keyword": "카카오페이",
+        "rank": 49,
+        "score": 14,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.3
+      }
+    ],
+    "사랑·관계": [
+      {
+        "keyword": "만나나",
+        "rank": 48,
+        "score": 15,
+        "sector": "사랑·관계",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 23.8
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "theme": "돼지고기",
+      "topic": "삼겹살보다 맛있는 돼지고기 부위, 정육점 사장님이 혼자 먹는 부위는 따로 있다",
+      "keyword": "돼지고기",
+      "sector": "음식·맛집",
+      "score": 87,
+      "opportunity_score": 56.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #8 · 경쟁 보통 · 최근 미발행",
+      "angle": "대중이 모르는 '숨겨진 부위'라는 정보 비대칭 구도가 클릭 욕구를 자극",
+      "hook": "매번 삼겹살·목살만 사는데, 더 저렴하고 맛있는 부위가 있다는 걸 몰랐던 독자",
+      "color": "#FFA500"
+    },
+    {
+      "theme": "민소매",
+      "topic": "팔뚝이 신경 쓰여도 입을 수 있는 민소매 스타일링 5가지 — 체형별 현실 공략",
+      "keyword": "민소매",
+      "sector": "뷰티·패션",
+      "score": 82,
+      "opportunity_score": 53.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #11 · 경쟁 보통 · 최근 미발행",
+      "angle": "민소매 검색의 핵심 불안(팔뚝 노출)을 정면으로 건드리는 공감형 각도",
+      "hook": "민소매를 사고 싶은데 팔뚝 때문에 망설이는 독자의 현실적인 고민",
+      "color": "#FF69B4"
+    },
+    {
+      "theme": "고양이",
+      "topic": "고양이가 갑자기 밥을 안 먹을 때, 집사가 바로 확인해야 할 신호 7가지",
+      "keyword": "고양이",
+      "sector": "라이프",
+      "score": 96,
+      "opportunity_score": 60.2,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #3 · 경쟁 보통 · 최근 미발행",
+      "angle": "고양이 검색자 중 비율이 가장 높은 '이상 행동 불안' 니즈를 좁게 타겟팅",
+      "hook": "어제까지 잘 먹던 고양이가 오늘 사료를 거부할 때 패닉에 빠지는 집사들",
+      "color": "#FF6B6B"
+    },
+    {
+      "theme": "한국마사회",
+      "topic": "한국마사회 경마 처음 도전한다면 — 초보가 절대 하면 안 되는 실수 3가지",
+      "keyword": "한국마사회",
+      "sector": "스포츠",
+      "score": 95,
+      "opportunity_score": 59.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #4 · 경쟁 보통 · 최근 미발행",
+      "angle": "입문자가 겪는 실패 패턴을 '금지 리스트' 형식으로 역설적 접근해 신뢰 확보",
+      "hook": "경마에 처음 관심 생겼지만 어디서 시작해야 할지 모르는 완전 초보 독자",
+      "color": "#2ECC71"
+    },
+    {
+      "theme": "박준영",
+      "topic": "박준영 변호사가 무죄를 끌어낸 사건들 — 억울한 사람을 찾아내는 방식이 다르다",
+      "keyword": "박준영",
+      "sector": "사회·이슈",
+      "score": 91,
+      "opportunity_score": 58.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #6 · 경쟁 보통 · 최근 미발행",
+      "angle": "사회 정의·무죄 석방이라는 강한 감정 서사를 중심으로 인물 조명",
+      "hook": "억울한 수감자 구제 뉴스에 관심 생긴 독자가 박준영이 누구인지 제대로 알고 싶을 때",
+      "color": "#778CA3"
+    },
+    {
+      "theme": "헌혈",
+      "topic": "헌혈 하면 실제로 내 몸에 일어나는 일 — 건강에 좋다는 게 사실일까?",
+      "keyword": "헌혈",
+      "sector": "건강·의료",
+      "score": 66,
+      "opportunity_score": 46.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #20 · 경쟁 보통 · 최근 미발행",
+      "angle": "헌혈의 건강 영향에 대한 상반된 정보를 팩트체크로 풀어내 신뢰도 극대화",
+      "hook": "헌혈이 몸에 좋다고 하는데 반신반의하면서도 궁금한 독자",
+      "color": "#00FF88"
+    },
+    {
+      "theme": "이영애",
+      "topic": "이영애가 20년 만에 다시 드라마로 돌아온 이유 — 배우 본인이 밝힌 선택 기준",
+      "keyword": "이영애",
+      "sector": "연예·문화",
+      "score": 100,
+      "opportunity_score": 62.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #1 · 경쟁 보통 · 최근 미발행",
+      "angle": "복귀라는 이벤트에 '왜'라는 동기 질문을 연결해 심층 콘텐츠로 차별화",
+      "hook": "이영애 복귀 소식을 접한 팬들이 단순 뉴스 이상의 맥락을 원할 때",
+      "color": "#E91E63"
+    },
+    {
+      "theme": "스텔라 루멘 (XLM)",
+      "topic": "스텔라 루멘(XLM) 지금 사도 되나 — 리플과 뭐가 다른지 한 번에 이해하기",
+      "keyword": "스텔라 루멘 (XLM)",
+      "sector": "금융·투자",
+      "score": 98,
+      "opportunity_score": 61.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #2 · 경쟁 보통 · 최근 미발행",
+      "angle": "항상 리플과 비교 검색되는 XLM의 차별점을 비교 포맷으로 명쾌하게 정리",
+      "hook": "리플(XRP)은 들어봤는데 XLM이 뭐가 다른지 몰라서 투자를 망설이는 독자",
+      "color": "#FFD700"
+    },
+    {
+      "theme": "대기업",
+      "topic": "대기업 공채가 줄어드는 지금, 2030이 실제로 입사하고 있는 루트",
+      "keyword": "대기업",
+      "sector": "경제·경기",
+      "score": 89,
+      "opportunity_score": 57.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #7 · 경쟁 보통 · 최근 미발행",
+      "angle": "공채 축소라는 불안 트렌드를 역으로 '살아있는 루트'로 전환해 희망 제공",
+      "hook": "대기업 취업을 원하지만 공채가 사라진다는 뉴스에 방향을 잃은 취준생",
+      "color": "#F39C12"
+    },
+    {
+      "theme": "주느니",
+      "topic": "\"차라리 주느니 안 주겠다\"는 심리, 왜 손해를 감수하고 거부하는 걸까",
+      "keyword": "주느니",
+      "sector": "기타",
+      "score": 51,
+      "opportunity_score": 40.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #28 · 경쟁 보통 · 최근 미발행",
+      "angle": "행동경제학의 '최후통첩 게임' 심리를 일상 언어로 풀어내 지식 콘텐츠화",
+      "hook": "불공평한 제안을 받았을 때 본능적으로 거부하게 되는 내 심리가 궁금한 독자",
+      "color": "#4A4A4A"
+    }
+  ],
+  "extra_angles": [
+    {
+      "theme": "지상렬",
+      "topic": "지상렬이 30년을 버틴 방식 — 개그계에서 살아남은 사람의 공통점",
+      "keyword": "지상렬",
+      "sector": "연예·문화",
+      "score": 93,
+      "opportunity_score": 58.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 93 · 연예·문화",
+      "angle": "인물 서사를 생존·지속성이라는 보편적 주제로 확장해 엔터 팬 이외 독자까지 흡수",
+      "hook": "지상렬 관련 최근 소식을 접하고 그의 커리어와 생존 비결이 궁금해진 독자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "국민연금 제도 확대",
+      "topic": "국민연금 제도 확대, 내 노후에 실제로 얼마나 더 들어오나 — 세대별 계산법",
+      "keyword": "국민연금 제도 확대",
+      "sector": "경제·경기",
+      "score": 86,
+      "opportunity_score": 55.7,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 86 · 경제·경기",
+      "angle": "정책 뉴스를 '내 돈'으로 직결시키는 개인 수혜 계산 각도로 실용성 극대화",
+      "hook": "국민연금 개혁 뉴스는 봤는데 내 수령액이 실제로 달라지는지 모르는 직장인",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "점프샷",
+      "topic": "농구 점프샷 폼이 무너지는 진짜 이유 — 팔이 아니라 이 부위가 문제다",
+      "keyword": "점프샷",
+      "sector": "스포츠",
+      "score": 84,
+      "opportunity_score": 54.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 84 · 스포츠",
+      "angle": "\"팔 문제\"라는 통념을 뒤집는 역설적 진단으로 검색자의 고정관념에 충격",
+      "hook": "점프샷을 연습해도 성공률이 안 오르는 아마추어 농구인의 답답함",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "토큰화",
+      "topic": "부동산·금·채권이 토큰화되면 내가 100만 원으로 강남 빌딩에 투자할 수 있다",
+      "keyword": "토큰화",
+      "sector": "금융·투자",
+      "score": 80,
+      "opportunity_score": 53.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 80 · 금융·투자",
+      "angle": "추상적 개념인 '토큰화'를 독자의 실제 투자 행동과 바로 연결하는 구체화 전략",
+      "hook": "토큰화라는 단어를 들었지만 내 투자 생활과 어떤 관련이 있는지 모르는 일반 투자자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "비트코인",
+      "topic": "비트코인 지금 고점인데 — 기관 투자자들이 여전히 사는 이유가 따로 있다",
+      "keyword": "비트코인",
+      "sector": "금융·투자",
+      "score": 78,
+      "opportunity_score": 52.1,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 78 · 금융·투자",
+      "angle": "개인 투자자의 고점 공포와 기관의 상반된 행동 간 정보 비대칭을 파고드는 각도",
+      "hook": "비트코인이 올랐는데 팔아야 할지 더 사야 할지 갈팡질팡하는 개인 투자자",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "주춤한 경기",
+      "topic": "경기가 주춤할 때 오히려 돈 버는 사람들의 포트폴리오 패턴",
+      "keyword": "주춤한 경기",
+      "sector": "경제·경기",
+      "score": 77,
+      "opportunity_score": 51.6,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 77 · 경제·경기",
+      "angle": "불황 공포를 역전 기회로 재프레이밍해 실용적 행동 지침을 제공",
+      "hook": "경기 침체 뉴스에 불안하지만 어떻게 대응해야 할지 모르는 30~40대 직장인",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "한국예탁결제원",
+      "topic": "한국예탁결제원이 토큰증권을 본격화하면 내 증권 계좌가 달라지는 것들",
+      "keyword": "한국예탁결제원",
+      "sector": "금융·투자",
+      "score": 75,
+      "opportunity_score": 50.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 75 · 금융·투자",
+      "angle": "기관 명칭 검색자는 전문 정보를 원하는 투자자 — 실생활 영향으로 번역해 차별화",
+      "hook": "예탁결제원 뉴스를 봤는데 이게 내 투자 계좌에 어떤 변화를 가져오는지 궁금한 투자자",
+      "color": "#4a5568"
+    }
+  ],
+  "content_angles": {
+    "돼지고기": {
+      "topic": "삼겹살보다 맛있는 돼지고기 부위, 정육점 사장님이 혼자 먹는 부위는 따로 있다",
+      "angle": "대중이 모르는 '숨겨진 부위'라는 정보 비대칭 구도가 클릭 욕구를 자극",
+      "hook": "매번 삼겹살·목살만 사는데, 더 저렴하고 맛있는 부위가 있다는 걸 몰랐던 독자"
+    },
+    "민소매": {
+      "topic": "팔뚝이 신경 쓰여도 입을 수 있는 민소매 스타일링 5가지 — 체형별 현실 공략",
+      "angle": "민소매 검색의 핵심 불안(팔뚝 노출)을 정면으로 건드리는 공감형 각도",
+      "hook": "민소매를 사고 싶은데 팔뚝 때문에 망설이는 독자의 현실적인 고민"
+    },
+    "고양이": {
+      "topic": "고양이가 갑자기 밥을 안 먹을 때, 집사가 바로 확인해야 할 신호 7가지",
+      "angle": "고양이 검색자 중 비율이 가장 높은 '이상 행동 불안' 니즈를 좁게 타겟팅",
+      "hook": "어제까지 잘 먹던 고양이가 오늘 사료를 거부할 때 패닉에 빠지는 집사들"
+    },
+    "한국마사회": {
+      "topic": "한국마사회 경마 처음 도전한다면 — 초보가 절대 하면 안 되는 실수 3가지",
+      "angle": "입문자가 겪는 실패 패턴을 '금지 리스트' 형식으로 역설적 접근해 신뢰 확보",
+      "hook": "경마에 처음 관심 생겼지만 어디서 시작해야 할지 모르는 완전 초보 독자"
+    },
+    "박준영": {
+      "topic": "박준영 변호사가 무죄를 끌어낸 사건들 — 억울한 사람을 찾아내는 방식이 다르다",
+      "angle": "사회 정의·무죄 석방이라는 강한 감정 서사를 중심으로 인물 조명",
+      "hook": "억울한 수감자 구제 뉴스에 관심 생긴 독자가 박준영이 누구인지 제대로 알고 싶을 때"
+    },
+    "헌혈": {
+      "topic": "헌혈 하면 실제로 내 몸에 일어나는 일 — 건강에 좋다는 게 사실일까?",
+      "angle": "헌혈의 건강 영향에 대한 상반된 정보를 팩트체크로 풀어내 신뢰도 극대화",
+      "hook": "헌혈이 몸에 좋다고 하는데 반신반의하면서도 궁금한 독자"
+    },
+    "이영애": {
+      "topic": "이영애가 20년 만에 다시 드라마로 돌아온 이유 — 배우 본인이 밝힌 선택 기준",
+      "angle": "복귀라는 이벤트에 '왜'라는 동기 질문을 연결해 심층 콘텐츠로 차별화",
+      "hook": "이영애 복귀 소식을 접한 팬들이 단순 뉴스 이상의 맥락을 원할 때"
+    },
+    "스텔라 루멘 (XLM)": {
+      "topic": "스텔라 루멘(XLM) 지금 사도 되나 — 리플과 뭐가 다른지 한 번에 이해하기",
+      "angle": "항상 리플과 비교 검색되는 XLM의 차별점을 비교 포맷으로 명쾌하게 정리",
+      "hook": "리플(XRP)은 들어봤는데 XLM이 뭐가 다른지 몰라서 투자를 망설이는 독자"
+    },
+    "대기업": {
+      "topic": "대기업 공채가 줄어드는 지금, 2030이 실제로 입사하고 있는 루트",
+      "angle": "공채 축소라는 불안 트렌드를 역으로 '살아있는 루트'로 전환해 희망 제공",
+      "hook": "대기업 취업을 원하지만 공채가 사라진다는 뉴스에 방향을 잃은 취준생"
+    },
+    "주느니": {
+      "topic": "\"차라리 주느니 안 주겠다\"는 심리, 왜 손해를 감수하고 거부하는 걸까",
+      "angle": "행동경제학의 '최후통첩 게임' 심리를 일상 언어로 풀어내 지식 콘텐츠화",
+      "hook": "불공평한 제안을 받았을 때 본능적으로 거부하게 되는 내 심리가 궁금한 독자"
+    },
+    "지상렬": {
+      "topic": "지상렬이 30년을 버틴 방식 — 개그계에서 살아남은 사람의 공통점",
+      "angle": "인물 서사를 생존·지속성이라는 보편적 주제로 확장해 엔터 팬 이외 독자까지 흡수",
+      "hook": "지상렬 관련 최근 소식을 접하고 그의 커리어와 생존 비결이 궁금해진 독자"
+    },
+    "국민연금 제도 확대": {
+      "topic": "국민연금 제도 확대, 내 노후에 실제로 얼마나 더 들어오나 — 세대별 계산법",
+      "angle": "정책 뉴스를 '내 돈'으로 직결시키는 개인 수혜 계산 각도로 실용성 극대화",
+      "hook": "국민연금 개혁 뉴스는 봤는데 내 수령액이 실제로 달라지는지 모르는 직장인"
+    },
+    "점프샷": {
+      "topic": "농구 점프샷 폼이 무너지는 진짜 이유 — 팔이 아니라 이 부위가 문제다",
+      "angle": "\"팔 문제\"라는 통념을 뒤집는 역설적 진단으로 검색자의 고정관념에 충격",
+      "hook": "점프샷을 연습해도 성공률이 안 오르는 아마추어 농구인의 답답함"
+    },
+    "토큰화": {
+      "topic": "부동산·금·채권이 토큰화되면 내가 100만 원으로 강남 빌딩에 투자할 수 있다",
+      "angle": "추상적 개념인 '토큰화'를 독자의 실제 투자 행동과 바로 연결하는 구체화 전략",
+      "hook": "토큰화라는 단어를 들었지만 내 투자 생활과 어떤 관련이 있는지 모르는 일반 투자자"
+    },
+    "비트코인": {
+      "topic": "비트코인 지금 고점인데 — 기관 투자자들이 여전히 사는 이유가 따로 있다",
+      "angle": "개인 투자자의 고점 공포와 기관의 상반된 행동 간 정보 비대칭을 파고드는 각도",
+      "hook": "비트코인이 올랐는데 팔아야 할지 더 사야 할지 갈팡질팡하는 개인 투자자"
+    },
+    "주춤한 경기": {
+      "topic": "경기가 주춤할 때 오히려 돈 버는 사람들의 포트폴리오 패턴",
+      "angle": "불황 공포를 역전 기회로 재프레이밍해 실용적 행동 지침을 제공",
+      "hook": "경기 침체 뉴스에 불안하지만 어떻게 대응해야 할지 모르는 30~40대 직장인"
+    },
+    "한국예탁결제원": {
+      "topic": "한국예탁결제원이 토큰증권을 본격화하면 내 증권 계좌가 달라지는 것들",
+      "angle": "기관 명칭 검색자는 전문 정보를 원하는 투자자 — 실생활 영향으로 번역해 차별화",
+      "hook": "예탁결제원 뉴스를 봤는데 이게 내 투자 계좌에 어떤 변화를 가져오는지 궁금한 투자자"
+    }
+  },
+  "autocomplete": {},
+  "datalab_used": false,
+  "iot_used": false,
+  "trend_delta": {
+    "prev_date": "2026-05-29",
+    "new_entry": [
+      "이영애",
+      "스텔라 루멘",
+      "고양이",
+      "한국마사회",
+      "지상렬",
+      "박준영",
+      "대기업",
+      "돼지고기",
+      "국민연금 제도 확대",
+      "점프샷"
+    ],
+    "dropped": [
+      "정몽규",
+      "엘지전자",
+      "예스티",
+      "패트릭 위즈덤",
+      "엘지전자주가",
+      "박순천",
+      "아너스클럽",
+      "마비노기 모바일",
+      "경기도지사",
+      "축구협회장"
+    ],
+    "risen": [
+      {
+        "keyword": "AI",
+        "delta": 17
+      }
+    ],
+    "fallen": [
+      {
+        "keyword": "코스피",
+        "delta": 6
+      }
+    ]
+  }
+}
