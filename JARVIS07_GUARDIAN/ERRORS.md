@@ -1,5 +1,31 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [261] 경제 브리핑 HTML 생성 실패 — LLM 일시 장애 + max_attempts 부족 (2026-06-07)
+
+- **증상**: 텔레그램 오류 알림 "HTML 생성 실패" — 경제 브리핑 발행 실패. GUARDIAN 가 재시도 후 성공.
+- **환경**: `JARVIS02_WRITER/tistory_html_writer.py:generate_article_html`, `draft_writer.py:_gen_section_call1/2/3`, `economic_poster.py` harness `max_attempts=2`.
+- **원인**: LLM API 일시 장애로 `invoke_text()` 가 빈 문자열(`""`) 반환 → `_gen_section_callN` 에서 재시도 없이 그대로 빈 결과 반환 → `generate_article_html` 이 `""` 반환 → harness `max_attempts=2` 로는 회복 부족.
+- **헛다리**: 없음 (GUARDIAN 재시도 성공으로 원인 명확히 파악).
+- **해결**:
+  1. `draft_writer.py` `_gen_section_call1/2/3`: `invoke_text()` 반환값이 빈 문자열이면 1회 재시도 추가.
+  2. `economic_poster.py`: harness `max_attempts=2` → `max_attempts=3` 으로 증가.
+- **파일**: `JARVIS02_WRITER/draft_writer.py` · `JARVIS02_WRITER/economic_poster.py`
+- **교훈**: LLM API 는 일시 장애로 빈 문자열을 반환할 수 있음. 섹션 생성처럼 결과가 *반드시 있어야 하는* 호출에는 빈 응답 체크 + 재시도 필수.
+
+---
+
+### [260] auto_repair CLINotFoundError — launchd PATH 최솟값으로 claude 바이너리 미탐지 (2026-06-07)
+
+- **증상**: 텔레그램 오류 "cli_not_found" — 자가 수정 실패. 데몬이 launchd/keeper 로 기동될 때 반복 발생.
+- **환경**: `JARVIS07_GUARDIAN/auto_repair.py`, `claude_code_sdk`, macOS launchd.
+- **원인**: `claude_code_sdk` 가 `claude` 바이너리를 탐색할 때 subprocess의 `env` 파라미터가 아닌 `os.environ["PATH"]` 를 직접 사용. launchd 기동 시 `os.environ["PATH"]` 는 `/usr/bin:/bin` 수준의 최솟값 → `/opt/homebrew/bin` 부재 → `claude` 미탐지.
+- **헛다리**: `ClaudeCodeOptions(env={"PATH": ...})` 로 넘겨도 SDK 내부 탐색엔 효과 없음.
+- **해결**: SDK 호출 직전 `os.environ["PATH"]` 에 `/opt/homebrew/bin` 등 직접 prepend, `finally` 에서 원복. 3곳(`_step_run_cli`, `_run_auto_repair_legacy`, `run_auto_repair_targeted`) 모두 적용.
+- **파일**: `JARVIS07_GUARDIAN/auto_repair.py`
+- **교훈**: `claude_code_sdk` 는 내부적으로 `os.environ["PATH"]` 로 바이너리를 탐색한다. subprocess env 파라미터 전달과 전혀 다른 경로. launchd/keeper 기동 환경에서는 `os.environ["PATH"]` 직접 갱신이 필수.
+
+---
+
 ### [259] RL 모델 자동 부트스트랩·종료 저장 hook 누락 + hub 카드 부재 (2026-06-07)
 
 - **증상**: RL Tier 1.5 도입 ([258], 어제) 후 작동은 하지만 3가지 잠재 결함 — ① `bootstrap_from_patterns()` 가 `__main__` 안에만 있어 데몬 부팅 시 자동 호출 안 됨 → 모델 파일 손상/플래그 삭제/venv 재구성 시 자동 복구 불가 ② `_save_model` 10회마다 저장 → 데몬 종료 (SIGTERM·SIGINT) 시 최대 9회 학습 데이터 손실 ③ hub.py 학습 곡선에 RL 통계 카드 부재 → 사용자가 RL 작동 여부 시각 확인 불가.

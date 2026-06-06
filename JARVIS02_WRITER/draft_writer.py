@@ -421,6 +421,8 @@ CONTENT:
 [CHART_4: 섹션1 추가 분석]   ← (섹션 분량이 길면 차트 추가 가능)
 """
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
+    if not raw:  # 일시 LLM 장애 → 1회 재시도
+        raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     result = strip_html_wrapper(raw)
     chart_count = len(re.findall(r'\[CHART_\d+:', result))
     _call1_min = max(2, _L.MIN_CHART_COUNT // 2)  # 전체 최솟값의 절반 (call-1은 절반 담당)
@@ -453,6 +455,8 @@ def _gen_section_call2(
 [CHART_6: 섹션2 추가 분석]   ← (분량이 길면 차트 추가 가능)
 """
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
+    if not raw:  # 일시 LLM 장애 → 1회 재시도
+        raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     result = strip_html_wrapper(raw)
     chart_count = len(re.findall(r'\[CHART_\d+:', result))
     _call2_min = max(2, _L.MIN_CHART_COUNT // 4)
@@ -487,6 +491,8 @@ def _gen_section_call3(
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 맞춤형 표현으로 작성)</p>
 """
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
+    if not raw:  # 일시 LLM 장애 → 1회 재시도
+        raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     result = strip_html_wrapper(raw)
     chart_count = len(re.findall(r'\[CHART_\d+:', result))
     _call3_min = max(2, _L.MIN_CHART_COUNT // 4)

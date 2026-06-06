@@ -2206,7 +2206,7 @@ def run(post_naver=True, post_tistory=True):
         verify=_verify_all,
         fix=_fix_drafts,
         send=_send_all,
-        max_attempts=2,
+        max_attempts=3,
     )
     _action_result = run_action(
         _econ_action,

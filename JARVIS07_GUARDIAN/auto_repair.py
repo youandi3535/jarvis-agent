@@ -519,12 +519,21 @@ def run_auto_repair() -> None:
                                         parts.append(block.text)
                         return "\n".join(parts)
 
-                stdout = anyio.run(_run_sdk)
+                # ★ os.environ["PATH"] 임시 업데이트 — SDK가 claude 바이너리 탐색 시
+                # ClaudeCodeOptions(env=) 이 아닌 os.environ 을 사용하기 때문
+                _orig_path = os.environ.get("PATH", "")
+                os.environ["PATH"] = ":".join(_EXTRA_PATHS) + ":" + _orig_path
+                try:
+                    stdout = anyio.run(_run_sdk)
+                finally:
+                    os.environ["PATH"] = _orig_path
+
                 elapsed = int(time.time() - t0)
                 log.info("[AutoRepair] SDK 완료 elapsed=%ds stdout=%d", elapsed, len(stdout or ""))
                 return {"returncode": 0, "stdout": stdout or "", "stderr": "", "elapsed": elapsed}
 
-            except CLINotFoundError as e:
+            except CLINotFoundError:
+                log.error("[AutoRepair] claude 바이너리 미발견 — PATH: %s", os.environ.get("PATH", ""))
                 return {"returncode": -1, "stdout": "", "stderr": "cli_not_found", "elapsed": 0}
             except TimeoutError:
                 return {"returncode": -2, "stdout": "", "stderr": "timeout",
@@ -581,8 +590,8 @@ def run_auto_repair() -> None:
                     )
                 elif iss.kind == "cli_not_found":
                     _send_tg(
-                        "❌ *자가 수정 실패*: Claude Code SDK 런타임을 찾을 수 없습니다.\n"
-                        "설치 확인: `npm install -g @anthropic-ai/claude-code` (정식 npm 패키지명, 변경 불가)"
+                        "❌ *자가 수정 실패*: claude 바이너리 PATH 미등록.\n"
+                        "원인: launchd 기동 시 PATH 최솟값. 데몬 재시작 또는 PATH 확인 필요."
                     )
             return [], list(issues)  # 모두 unfixed → harness 재실행
 
@@ -698,7 +707,12 @@ def _run_auto_repair_legacy() -> None:
                                 parts.append(block.text)
                 return "\n".join(parts)
 
-        stdout = anyio.run(_run_sdk)
+        _orig_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = ":".join(_EXTRA_PATHS) + ":" + _orig_path
+        try:
+            stdout = anyio.run(_run_sdk)
+        finally:
+            os.environ["PATH"] = _orig_path
         elapsed = int(time.time() - start)
         summary = _parse_summary(stdout or "")
         _record_repairs_to_guardian(summary)
@@ -707,7 +721,8 @@ def _run_auto_repair_legacy() -> None:
         _save_run_to_db(_MODEL, elapsed, 0, layers, scores, summary)
         _send_tg(f"✅ *자가 진단·수정 완료 (legacy)* ({elapsed}s)\n\n{_esc(summary)}")
     except CLINotFoundError:
-        _send_tg("❌ *자가 수정 실패*: Claude Code SDK 런타임을 찾을 수 없습니다.")
+        log.error("[AutoRepair/Legacy] claude 바이너리 미발견 — PATH: %s", os.environ.get("PATH", ""))
+        _send_tg("❌ *자가 수정 실패*: Claude Code SDK 런타임을 찾을 수 없습니다. PATH 확인 필요.")
     except TimeoutError:
         _send_tg(f"⚠️ *자가 수정 타임아웃* — 다음 회차에 재시도")
     except Exception as e:
@@ -840,7 +855,12 @@ def run_auto_repair_targeted(
                                 parts.append(block.text)
                 return "\n".join(parts)
 
-        output = anyio.run(_run_sdk)
+        _orig_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = ":".join(_EXTRA_PATHS) + ":" + _orig_path
+        try:
+            output = anyio.run(_run_sdk)
+        finally:
+            os.environ["PATH"] = _orig_path
         elapsed = int(time.time() - start)
 
         summary = _parse_summary(output)
@@ -860,8 +880,8 @@ def run_auto_repair_targeted(
         return files_fixed > 0
 
     except CLINotFoundError:
-        log.error("[AutoRepair/Targeted] Claude Code SDK 런타임 없음")
-        _send_tg("❌ *targeted 수정 실패*: Claude Code SDK 런타임을 찾을 수 없습니다.")
+        log.error("[AutoRepair/Targeted] claude 바이너리 미발견 — PATH: %s", os.environ.get("PATH", ""))
+        _send_tg("❌ *targeted 수정 실패*: claude 바이너리 PATH 미등록 — PATH 확인 필요.")
         return False
     except TimeoutError:
         log.error("[AutoRepair/Targeted] timeout (%ds)", _TARGETED_TIMEOUT)
