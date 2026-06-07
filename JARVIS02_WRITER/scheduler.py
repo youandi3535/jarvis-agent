@@ -905,6 +905,16 @@ def run_self_repair_then_economic():
 
     쿠키 점검 실패 시 발행 건너뜀. 자가진단은 결과 무관 발행 진행.
     """
+    # ★ 중복 실행 차단 — 오늘 이미 경제 브리핑 발행 세트가 시작됐으면 스킵
+    from datetime import datetime as _dt
+    _today = _dt.now().strftime('%Y%m%d')
+    _today_logs = list((BASE_DIR / 'logs').glob(f'economic_{_today}*.log'))
+    if _today_logs:
+        _msg = f"⛔ [경제 브리핑] 오늘 이미 실행됨 ({_today_logs[0].name}) — 중복 실행 차단"
+        log(_msg)
+        send_telegram(_msg)
+        return
+
     _cookie_failed = []
     try:
         from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import job_pre_publish_check as _ts_ck
@@ -944,6 +954,13 @@ def run_self_repair_then_theme():
 
     *하나의 세트*: 쿠키 점검 → 자가진단 → 자동수정 → 테마 발행. 시퀀스 보장.
     """
+    # ★ 중복 실행 차단 — 테마 발행이 현재 진행 중이면 세트 전체 스킵
+    if _is_locked_externally():
+        _msg = "⛔ [테마글] 발행 세트 이미 진행 중 — 중복 실행 차단"
+        log(_msg)
+        send_telegram(_msg)
+        return
+
     _cookie_failed = []
     try:
         from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import job_pre_publish_check as _ts_ck
