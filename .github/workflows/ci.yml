@@ -1,0 +1,52 @@
+name: JARVIS CI
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  precommit-check:
+    name: 정책 위반 검증 (precommit_check)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.10 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: 의존성 설치 (grep 기반 검사만 필요한 패키지)
+        run: pip install python-dotenv
+
+      - name: 정책 위반 전수 검사
+        run: |
+          echo "=== JARVIS 정책 위반 전수 검사 ==="
+          python3 shared/precommit_check.py
+        env:
+          JARVIS_STRICT: "1"
+
+  syntax-check:
+    name: Python Syntax 검사
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.10 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: 전체 .py 파일 Syntax 검사
+        run: |
+          echo "=== Python Syntax 전수 검사 ==="
+          find . -name "*.py" \
+            ! -path "./.venv/*" \
+            ! -path "./__pycache__/*" \
+            | xargs python3 -m py_compile && echo "✅ Syntax 오류 없음"
