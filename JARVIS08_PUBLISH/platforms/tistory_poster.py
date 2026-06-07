@@ -621,7 +621,24 @@ def post_to_tistory(
                 _s(1)
             except:
                 pass
-            current = driver.current_url
+            try:
+                current = driver.current_url
+            except Exception as _e_session:
+                # ★ 세션 자체가 무효 (Chrome 크래시 등) — 새 driver 로 복구
+                print(f"  ⚠️ 세션 무효 — 새 driver 생성: {_e_session}")
+                try:
+                    driver.quit()
+                except:
+                    pass
+                driver = _make_driver()
+                if not _login(driver):
+                    return False
+                if edit_post_id:
+                    driver.get(f"https://{TS_BLOG}.tistory.com/manage/post/{edit_post_id}/edit")
+                else:
+                    driver.get(f"https://{TS_BLOG}.tistory.com/manage/newpost")
+                _s(12)
+                current = driver.current_url
 
         print(f"  🔍 현재 URL: {current[:60]}")
         if 'login' in current or 'tistory.com' not in current:

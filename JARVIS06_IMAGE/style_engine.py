@@ -290,6 +290,7 @@ def get_color_from_spec(spec: dict, color_key: str = "primary_color") -> str:
 def generate_sector_colors(sector: str, keyword: str = "") -> dict:
     """섹터/키워드에 맞는 동적 색상 팔레트 생성. 매번 다른 색상."""
     try:
+        from shared.llm import invoke_text
         prompt = f"""Generate a color palette for trend analysis.
 Sector: {sector}
 Theme: {keyword}

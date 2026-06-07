@@ -1,5 +1,62 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [266] Layer 4 부분 발행 실패 — `__send_attempted__` 플래그가 재발행 차단 (2026-06-07)
+
+- **증상**: `⚠️ [GUARDIAN] 자동 수정 실패 — 자체 학습·Claude Code 모두 수정 불가 / RuntimeError @ JARVIS00_INFRA.harness.경제 브리핑 발행 / [harness:경제 브리핑 발행] attempt=1 step=송출 (Layer 4): RuntimeError: [Layer4] ['tistory'] 발행 실패 — 송출 미완료 → 검증 순환 재진입`. attempt=1 부분 실패 (한 플랫폼만 fail) → harness 재진입 → attempt=2 가 *진짜 재발행을 못 하고* skip 처리 → 미발행이 published 로 가짜 카운트되거나 동일 fingerprint abort.
+- **환경**: `JARVIS02_WRITER/economic_poster.py::_send_all` (line 2139~), `JARVIS02_WRITER/trend_theme_writer.py::_send_all` (line 671~). Layer 4 송출 단계의 `__ts_send_attempted__` / `__nv_send_attempted__` 플래그 운용.
+- **원인**: 플래그가 *시도 사실* 만 기록 (성공/실패 무관). 이후 attempt 재진입 시:
+  - "이미 시도했으니 재발행 금지" 분기 → `published.add(<platform>)` *가짜 성공* 처리
+  - 실제로는 발행 실패 상태가 그대로 유지 → 사용자에게 발행 성공 알림 가지만 글은 없음
+  - 또는 strict 모드 raise 가 매 attempt 마다 같은 fingerprint → GUARDIAN escalation
+- **헛다리**: 처음에 *알림에 표시된 플랫폼명* (`['tistory']`) 만 보고 tistory_poster 의 cookie/UI 문제 의심. 실제 로그 (`logs/economic_20260607_122804.log:918`) 는 `['naver']` 실패. 알림 메시지가 *다른 시간대 실행* 의 누적일 수 있음 — 어쨌든 *두 플랫폼 모두 동일 구조 결함*.
+- **해결 — attempt-aware 재발행 자율 회복**:
+  1. **`__send_attempt__` 카운터 신설**: `_send_all` 호출마다 +1. attempt 수 추적.
+  2. **attempt >= 2 + 이전 실패 시 플래그 해제**: `__ts_send_attempted__` True 인데 `state["tistory_ok"] == False` (또는 `ts_pub_result.success == False`) 면 *플래그 해제* → 같은 attempt 내 발행 분기로 떨어짐 → *진짜 재시도*.
+  3. **이중 발행 방지 유지**: `published` set 은 *진짜 성공한* 플랫폼만 보관 (변경 없음). 이미 성공한 플랫폼은 재호출되지 않음.
+  4. **RuntimeError 메시지에 attempt 번호 노출**: `attempt=N` 로 GUARDIAN 학습 정확도 향상.
+  5. **harness max_attempts=3 와 합산**: 외부 사이트 일시 사고 → 최대 3회 자율 재시도 → 모두 실패 시 escalation.
+- **파일**: `JARVIS02_WRITER/economic_poster.py` (line 2139~ `_send_all`), `JARVIS02_WRITER/trend_theme_writer.py` (line 671~ `_send_all`)
+- **JARVIS07 학습 등록**: `learned_patterns.json` 에 fingerprint `Layer4PublishFailed::tistory/naver 발행 실패` 박제 (fixer=`resolved_by_code:attempt_aware_resend`, tier=manual, domain=publish). 같은 fingerprint 재발 시 hit_count++ 추적.
+- **교훈**:
+  - "한 번 시도 = 끝" sentinel 패턴은 *이중 발행 방지* 목적이지만 *부분 실패 케이스* 에서는 *false-success* 의 원인. 시도 성공/실패 분리 추적 필요.
+  - `__send_attempted__` 같은 sentinel 은 "*시도했고 성공*" 만 의미하도록 조건 강화 (`AND ok==True`). 단순 "시도함" 만으로 published 추가 금지.
+  - harness max_attempts 와 _send_all 내부 attempt 카운터를 *맞춰* 운용하면 외부 사이트 일시 사고에서 자율 회복.
+  - GUARDIAN escalation 메시지의 플랫폼명이 *현재 발행* 과 다를 수 있음 — 로그 (`logs/economic_*.log`) 직접 확인이 진단 정답.
+
+---
+
+### [265] 티스토리 발행 InvalidSessionIdException — 세션 무효 시 무보호 재시도 (2026-06-07)
+
+- **증상**: `post_to_tistory` line 616 `driver.current_url` 에서 `InvalidSessionIdException` 발생 → 발행 실패 (`return False`).
+- **환경**: `JARVIS08_PUBLISH/platforms/tistory_poster.py` — Chrome WebDriver 세션이 편집창 로딩 후 무효화 (Chrome 크래시·타임아웃 등).
+- **원인**: line 617 `except:` 블록이 "Alert 때문에 못 읽는 상황"만 가정. line 624 `current = driver.current_url` 재시도가 try-except 밖에서 무보호 실행 → 세션 자체가 죽은 경우 동일 예외 재발생 → 외부 except 전파 → `return False`.
+- **헛다리**: 쿠키 만료 의심 — 쿠키가 아닌 Chrome 프로세스/세션 자체가 죽은 문제.
+- **해결**: line 624 재시도를 `try-except`로 감싸고, `InvalidSessionIdException` 등 세션 무효 시 `driver.quit()` → `_make_driver()` → `_login()` → 편집 페이지 재진입 → `current_url` 복구. 세션 완전 사망도 자동 복구.
+- **파일**: `JARVIS08_PUBLISH/platforms/tistory_poster.py` (line 614~635 영역)
+- **교훈**: `except:` bare catch 후 동일 드라이버 조작 재시도는 *세션 무효* 상황에서 무의미. 세션 자체가 죽었으면 새 드라이버 생성이 유일한 복구 경로.
+
+---
+
+### [264] 경제 브리핑 attempt=2 abort — "트렌드 데이터 없음" 5일 fallback 빈손 (2026-06-07)
+
+- **증상**: MarketSignal_Bot 알림 — `🚨 하네스 검증 순환 한계 — 송출 차단 / 동작: 경제 브리핑 발행 / 사유: 수정 불가 항목 fingerprint 반복 — abort / 시도: 2회 모두 검증 실패 / ② 티스토리 대본 생성 — draft_failed: 대본 생성 실패: 트렌드 데이터 없음 / 전체 — abort: 수정 불가 1건 패턴 반복`. 하네스 attempt=2 도달 → 발행 차단.
+- **환경**: `JARVIS02_WRITER/trend_economic_writer.py::ts_generate_draft / nv_generate_draft` — `load_today_trends()` 호출 후 빈 dict 반환 → `{"success": False, "error": "트렌드 데이터 없음"}` 즉시 반환.
+- **원인**: ERRORS [84] (2026-05-14) 재발 패턴. JARVIS03 RADAR 가 *6일간* 안 돌아감 — `JARVIS03_RADAR/data/trends_*.json` 점검 결과 06-02 ~ 06-06 모두 부재, 06-07 11:57 에 첫 생성. 07:00 경제 브리핑 시점에는 `load_today_trends()` 의 5일 fallback (오늘 + 어제 ~ 4일 전) 이 *모두 빈손*. → 빈 dict → 즉시 실패.
+- **헛다리**: 처음에 `load_today_trends()` 의 5일 fallback 자체가 깨졌다고 의심했으나 코드는 정상. 진짜 원인은 *RADAR 장기 부재로 fallback 범위 밖*.
+- **해결 — 자율 회복 폴백 추가**:
+  1. **5일 → 14일 fallback 확대** (`load_today_trends` line ~84): `range(0, 5)` → `range(0, 14)`. RADAR 가 일주일 이상 안 돌아가도 일단 어제·그저께 데이터 활용 시도.
+  2. **LLM 즉석 폴백 신설** (`_build_emergency_trends`): 14일 fallback 도 실패 시 Sonnet (`analyzer` alias) 호출 → 오늘 날짜 기준 한국 경제 핫이슈 5개 즉석 생성 → RADAR `scored_keywords` 스키마와 *동일* 형식 반환 → `select_*_topic` 무수정 작동.
+  3. **결과 자동 캐싱**: LLM 폴백 성공 시 `JARVIS03_RADAR/data/trends_<YYYY-MM-DD>.json` 으로 저장 → 같은 날 재발행 (예: 16:00 테마글) 은 LLM 재호출 없이 캐시 즉시 활용.
+  4. **마지막 방어선**: LLM 도 실패하면 빈 dict 반환 → 기존 동작 (발행 skip) 유지.
+- **파일**: `JARVIS02_WRITER/trend_economic_writer.py` (load_today_trends 폴백 확대 + _build_emergency_trends 신설)
+- **JARVIS07 학습 등록**: `learned_patterns.json` 에 fingerprint `EconomicPublishFailed::트렌드 데이터 없음` 박제 (fixer=`resolved_by_code:emergency_trends_fallback`, tier=manual, domain=writer). 같은 fingerprint 재발 시 hit_count++ 추적 + emergency 폴백 동작 점검 우선.
+- **교훈**:
+  - 외부 데이터 의존 (RADAR · trends.google.com) 은 *N일 fallback 으로 절대 안전 보장 안됨*. RADAR cron 이 N+1 일 이상 부재하면 fallback 빈손. *외부 의존성 없는* LLM 즉석 폴백을 마지막 방어선으로 박제하면 *자율 회복* 보장.
+  - "고질적 재발" = ERRORS.md 동일 fingerprint 반복 발견 시 *기존 해결책의 가정 검토*. ERRORS [84] 는 *fallback 범위 안에 데이터 존재* 가정 → 6일 부재 시점에 무효. 자율 회복 폴백으로 *가정 자체 제거*.
+  - 폴백 결과 캐싱은 같은 날 N회 발행 (07:00 경제 + 16:00 테마) 에서 LLM 비용·지연 0 효과.
+
+---
+
 ### [263] Bing + HuggingFace 이미지 폴백 완전 삭제 + Anthropic API 흔적 제거 (2026-06-07)
 
 - **배경**: 사용자 박제 — "Bing+HuggingFace 이미지 폴백도 전멸, 이건 이제 사용 안할거야. 우리 에이전트에서 완전히 삭제해. 각주 포함해서 흔적 자체를 전부 삭제해." + "우린 클로드 CLI도, 엔트로픽 API도 사용안해. 우리는 클로드 코드를 사용해!"

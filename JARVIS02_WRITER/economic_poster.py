@@ -2140,16 +2140,39 @@ def run(post_naver=True, post_tistory=True):
         """Layer 4 — 검증 통과 후 2 플랫폼 발행.
 
         ★ ADR 009 v2 strict 모드: 활성 플랫폼 *하나라도* 실패 시 raise → harness 재진입.
-        published_platforms 집합으로 이미 성공한 플랫폼은 재시도 시 스킵 (이중 발행 방지).
+        published_platforms 집합으로 이미 *진짜 성공한* 플랫폼은 재시도 시 스킵 (이중 발행 방지).
+
+        ★ 사용자 박제 2026-06-07 (ERRORS [265]) — 부분 실패 자율 회복:
+          기존: `__send_attempted__` True 면 *진짜 실패였더라도* 다음 attempt 에서
+                skip → `published.add` *가짜 성공*. 사용자 알림만 가고 글은 없음.
+          신규: __send_attempt__ 카운터 + attempt>=2 + 이전 실패 (`*_ok=False`)
+                플래그 해제 → 다음 attempt 에서 *진짜 재발행*. harness max_attempts=3 와
+                함께 최대 3회 발행 시도. ts/nv_publish 가 정확히 success/false 반환하면
+                재시도는 진짜 새 글로 이어지지 않음 (실패 = 발행 안 됨).
         """
         # ★ 이미 발행된 플랫폼 추적 (retry 시 이중 발행 방지)
         published = state.setdefault("published_platforms", set())
 
+        # ★ attempt 추적 — 첫 호출 = 1, 재진입마다 +1
+        send_attempt = state.get("__send_attempt__", 0) + 1
+        state["__send_attempt__"] = send_attempt
+
+        # ★ attempt >= 2 + 이전 실패 플랫폼 *플래그 해제* → 진짜 재발행 기회 (ERRORS [265])
+        if send_attempt >= 2:
+            if (state.get("post_tistory") and "tistory" not in published
+                    and state.get("__ts_send_attempted__") and not state.get("tistory_ok")):
+                print(f"  🔄 [티스토리] attempt={send_attempt} — 이전 발행 실패 → 플래그 해제·재발행 시도")
+                state["__ts_send_attempted__"] = False
+            if (state.get("post_naver") and "naver" not in published
+                    and state.get("__nv_send_attempted__") and not state.get("naver_ok")):
+                print(f"  🔄 [네이버] attempt={send_attempt} — 이전 발행 실패 → 플래그 해제·재발행 시도")
+                state["__nv_send_attempted__"] = False
+
         # 티스토리
         if state.get("post_tistory") and "tistory" not in published:
             if state.get("__ts_send_attempted__"):
-                # ★ 이미 시도했으나 UI 확인 실패 — 중복 발행 방지
-                print("  ⚠️ 티스토리 발행 이미 시도 완료 — 중복 방지로 재발행 안 함")
+                # ★ 이미 시도+성공 케이스 (success=True 잔존) — 이중 발행 방지로 published 처리
+                print("  ⚠️ 티스토리 발행 이미 시도 완료 (이중 방지)")
                 published.add("tistory")
             elif state.get("ts_draft", {}).get("success"):
                 state["__ts_send_attempted__"] = True  # 반드시 시도 *전* 에 설정
@@ -2171,8 +2194,8 @@ def run(post_naver=True, post_tistory=True):
         _ts_kw = state.get("ts_pub_result", {}).get("keyword", "")
         if state.get("post_naver") and "naver" not in published:
             if state.get("__nv_send_attempted__"):
-                # ★ 이미 시도했으나 UI 확인 실패 — 중복 발행 방지
-                print("  ⚠️ 네이버 발행 이미 시도 완료 — 중복 방지로 재발행 안 함")
+                # ★ 이미 시도+성공 케이스 (success=True 잔존) — 이중 발행 방지로 published 처리
+                print("  ⚠️ 네이버 발행 이미 시도 완료 (이중 방지)")
                 published.add("naver")
             elif state.get("nv_draft", {}).get("success"):
                 state["__nv_send_attempted__"] = True  # 반드시 시도 *전* 에 설정
@@ -2196,7 +2219,7 @@ def run(post_naver=True, post_tistory=True):
         missing = required - published
         if missing:
             raise RuntimeError(
-                f"[Layer4] {sorted(missing)} 발행 실패 — 송출 미완료 → 검증 순환 재진입"
+                f"[Layer4] {sorted(missing)} 발행 실패 (attempt={send_attempt}) — 송출 미완료 → 검증 순환 재진입"
             )
 
     _econ_action = ActionDefinition(

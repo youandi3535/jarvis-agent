@@ -390,4 +390,115 @@ def _draw_ground_grid(ax, n, gap, bar_w, bar_d, sy_scale, cols=None):
                 color='#DDE3EE', lw=0.5, zorder=1)
 
 
-__all__ = ['make_iso_bar_chart', 'make_iso_area_chart']
+def make_band_line_chart(
+    labels: list, values: list,
+    title: str, keyword: str, sector: str,
+    out_path: str | Path,
+    run_id: str = '',
+) -> str:
+    """구간 밴드 + 라인 차트 (Style-5) — 시계열 데이터의 현재 위치 맥락 시각화."""
+    try:
+        setup_chart_defaults()
+        n = min(len(labels), len(values), 13)
+        if n < 2:
+            return ''
+        labels, values = labels[:n], values[:n]
+
+        # ── 동적 색상 (run_id + keyword 기반) ──
+        rid = run_id or str(id(labels))
+        seed = int(hashlib.md5(f"{rid}|{keyword}".encode()).hexdigest()[:8], 16)
+        line_color = _PALETTE[seed % len(_PALETTE)]
+        dot_color  = _PALETTE[(seed + 5) % len(_PALETTE)]
+
+        y_min_data = min(values)
+        y_max_data = max(values)
+        y_span = y_max_data - y_min_data
+
+        # 기준금리/정책금리 → 역사적 맥락 고정 구간
+        _rate_keywords = ('기준금리', '정책금리', '금리')
+        if any(k in keyword for k in _rate_keywords):
+            y_lo, y_hi = 0.0, 4.5
+            band_defs = [
+                (0.0, 1.0, '#66BB6A', '저금리 (0~1%)'),
+                (1.0, 2.5, '#FFA726', '중금리 (1~2.5%)'),
+                (2.5, 4.5, '#EF5350', '고금리 (2.5~4.5%)'),
+            ]
+        else:
+            # 그 외 — y 범위 자동 계산 + 3등분
+            if y_span < y_max_data * 0.05 or y_span < 0.01:
+                y_lo = 0.0
+                y_hi = y_max_data * 1.8 if y_max_data > 0 else 10.0
+            else:
+                y_lo = max(0.0, y_min_data - y_span * 0.3)
+                y_hi = y_max_data + y_span * 0.3
+            y_range = y_hi - y_lo
+            b1 = y_lo + y_range * 0.33
+            b2 = y_lo + y_range * 0.66
+            band_defs = [
+                (y_lo, b1,  '#66BB6A', f'하위 (~{b1:.1f})'),
+                (b1,   b2,  '#FFA726', f'중위 ({b1:.1f}~{b2:.1f})'),
+                (b2,   y_hi,'#EF5350', f'상위 ({b2:.1f}~)'),
+            ]
+        y_range = y_hi - y_lo
+
+        fig, ax = plt.subplots(figsize=(16, 9))
+        fig.patch.set_facecolor('#FAFAFA')
+        ax.set_facecolor('#FAFAFA')
+
+        # 구간 배경
+        for lo, hi, col, lbl in band_defs:
+            ax.axhspan(lo, hi, alpha=0.07, color=col, label=lbl)
+
+        # 라인 + 점
+        x = list(range(n))
+        ax.plot(x, values, color=line_color, linewidth=4, zorder=3, solid_capstyle='round')
+        ax.scatter(x, values, s=160, color=dot_color, zorder=4,
+                   edgecolors='white', linewidths=2)
+
+        # 라벨: 점 바로 아래 (오프셋 = y_range의 5%)
+        label_offset = y_range * 0.05
+        for i, (lbl, v) in enumerate(zip(labels, values)):
+            v_str = f'{v:.1f}%' if abs(v) < 100 else f'{v:,.0f}'
+            ax.text(i, v - label_offset,
+                    f'{lbl}\n{v_str}',
+                    ha='center', va='top',
+                    fontsize=_CS["FONT_SMALL"], color=line_color,
+                    fontweight='bold', fontfamily=_KR_FONT, zorder=5)
+
+        ax.set_xlim(-0.5, n - 0.5)
+        ax.set_ylim(y_lo, y_hi)
+        # x축 눈금 숨김 — 포인트 라벨이 대신함
+        ax.set_xticks([])
+        ax.yaxis.set_tick_params(labelsize=_CS["FONT_SMALL"])
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(axis='y', alpha=0.2)
+
+        # 범례
+        ax.legend(fontsize=_CS["FONT_SMALL"], loc='upper right', framealpha=0.75)
+
+        # 제목
+        fig.text(0.06, 0.95, title, fontsize=_CS["FONT_TITLE"],
+                 fontweight='bold', ha='left', fontfamily=_KR_FONT,
+                 transform=fig.transFigure)
+        fig.text(0.06, 0.90, f'{keyword} · {sector}',
+                 fontsize=_CS["FONT_CAPTION"], color='#888888',
+                 ha='left', fontfamily=_KR_FONT, transform=fig.transFigure)
+        fig.text(0.96, 0.97,
+                 datetime.now().strftime('%Y.%m'),
+                 fontsize=_CS["FONT_SMALL"] - 2, color='#bbbbbb',
+                 ha='right', transform=fig.transFigure)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.88])
+
+        out_path = Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(str(out_path), dpi=160, bbox_inches='tight', facecolor='#FAFAFA')
+        plt.close(fig)
+        return str(out_path)
+    except Exception as e:
+        _g_report('isometric_charts', e, module='make_band_line_chart')
+        return ''
+
+
+__all__ = ['make_iso_bar_chart', 'make_iso_area_chart', 'make_band_line_chart']

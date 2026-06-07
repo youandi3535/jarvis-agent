@@ -72,16 +72,22 @@ except ImportError:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def load_today_trends() -> dict:
-    """JARVIS03 RADAR 트렌드 로드 — 오늘 데이터 없으면 최근 N일 fallback 자동 시도.
+    """JARVIS03 RADAR 트렌드 로드 — 다단 폴백 자율 회복.
 
-    fallback 이유: 새벽 trends.google.com 망 사고·radar 일시 실패 등으로 오늘 데이터 없을 때
-    발행이 통째로 skip 되는 사고 방지. 어제·그저께 데이터로라도 발행 유지.
+    ★ 사용자 박제 2026-06-07 — 3단 폴백 + 강제 캐싱:
+      ① 오늘 + 최근 14일 파일/radar_main.load() (확장)
+      ② 14일 모두 실패 시 → LLM 즉석 폴백 (_build_emergency_trends)
+      ③ LLM 도 실패 시 → 빈 dict (발행 skip — 마지막 방어)
+
+    fallback 이유: ERRORS [84] (2026-05-14) → [264] (2026-06-07) 재발 패턴.
+    RADAR cron 이 N일 안 돌면 5일 fallback 도 빈손 → 발행 통째 skip 사고.
+    LLM 폴백으로 RADAR 장기 부재에도 *자율 회복* 보장.
     """
     import json
     from datetime import timedelta as _td
     radar_data_dir = _JARVIS_ROOT / 'JARVIS03_RADAR' / 'data'
 
-    for days_back in range(0, 5):   # 오늘 + 어제 + 그저께 + 3일 전 + 4일 전
+    for days_back in range(0, 14):   # ★ 5 → 14일 확대 (2026-06-07)
         d = (date.today() - _td(days=days_back)).strftime("%Y-%m-%d")
         # ① radar_main.load() 시도
         try:
@@ -113,8 +119,86 @@ def load_today_trends() -> dict:
             except Exception as e:
                 print(f"  ⚠️ 트렌드 파일 파싱 실패 ({path.name}): {e}")
 
-    print(f"  ❌ 최근 5일간 트렌드 데이터 없음 → 빈 dict (발행 불가)")
+    # ★ ② 14일 fallback 실패 → LLM 즉석 폴백 (자율 회복)
+    print(f"  ⚠️ 최근 14일간 트렌드 파일 없음 → LLM 즉석 폴백 시도 (ERRORS [264])")
+    emergency = _build_emergency_trends()
+    if emergency and emergency.get('scored_keywords'):
+        # 폴백 결과를 *오늘 trends 파일로 캐싱* → 같은 날 재호출 시 LLM 재호출 없음
+        try:
+            today_path = radar_data_dir / f"trends_{date.today().strftime('%Y-%m-%d')}.json"
+            radar_data_dir.mkdir(parents=True, exist_ok=True)
+            today_path.write_text(json.dumps(emergency, ensure_ascii=False, indent=2), encoding='utf-8')
+            print(f"  💾 [emergency_trends] 폴백 결과 {today_path.name} 캐싱 — 같은 날 재발행은 즉시 로드")
+        except Exception as _ce:
+            print(f"  ⚠️ [emergency_trends] 캐싱 실패 (무시): {_ce}")
+        return emergency
+
+    # ★ ③ LLM 폴백도 실패 → 빈 dict (최후의 방어선)
+    print(f"  ❌ 트렌드 데이터·LLM 폴백 모두 실패 → 빈 dict (발행 불가)")
     return {}
+
+
+def _build_emergency_trends() -> dict:
+    """RADAR 장기 부재 시 Sonnet 즉석 폴백 — 오늘 경제 핫이슈 5개 생성.
+
+    ★ 사용자 박제 2026-06-07 (ERRORS [264]) — load_today_trends 의 14일 폴백 실패 시
+    호출. RADAR scored_keywords 와 동일 스키마로 반환하여 select_*_topic 함수가
+    수정 없이 그대로 작동.
+
+    실패 시 빈 dict 반환 — 호출자(load_today_trends)는 마지막으로 빈 dict 반환.
+    """
+    try:
+        from shared.llm import invoke_text
+        today = date.today().strftime("%Y-%m-%d")
+        prompt = (
+            f"오늘은 {today} 이다. 한국 경제 블로그 발행용 *경제·금융 관련* 핫이슈 5개를 JSON 으로 출력해라.\n\n"
+            "[형식]\n"
+            "{\n"
+            '  "scored_keywords": [\n'
+            '    {"keyword": "...", "sector": "경제·경기" | "금융·투자" | "에너지·환경" | "IT·테크",\n'
+            '     "score": 70.0, "topic": "..."},\n'
+            "    ...\n"
+            "  ],\n"
+            '  "recommendations": [\n'
+            '    {"keyword": "...", "sector": "...", "opportunity_score": 80.0,\n'
+            '     "reason": "한 문장 사유", "topic": "...", "theme": "..."},\n'
+            "    ...\n"
+            "  ]\n"
+            "}\n\n"
+            "- keyword: 짧고 구체적인 경제 사건/주제 (예: '미 연준 금리 인하', '엔비디아 실적 발표')\n"
+            "- sector: 위 4종 중 하나만 사용\n"
+            "- score / opportunity_score: 60~95 사이 실수\n"
+            "- scored_keywords 5개, recommendations 최소 3개\n"
+            "- 한국 시장과 직접 연관 있는 주제 우선\n"
+            "- JSON 만 출력. 다른 텍스트·코드 블록·주석 금지."
+        )
+        raw = invoke_text("analyzer", prompt, max_tokens=1500, temperature=0.5)
+        if not raw:
+            return {}
+        # JSON 블록 추출 — 마크다운 코드 블록·접두 텍스트 제거
+        import re as _re, json as _j
+        cleaned = _re.sub(r'^```(?:json)?\s*', '', raw.strip())
+        cleaned = _re.sub(r'\s*```$', '', cleaned).strip()
+        m = _re.search(r'\{[\s\S]+\}', cleaned)
+        if not m:
+            print(f"  ⚠️ [emergency_trends] JSON 추출 실패")
+            return {}
+        data = _j.loads(m.group(0))
+        sk = data.get("scored_keywords", [])
+        rec = data.get("recommendations", [])
+        if not sk:
+            print(f"  ⚠️ [emergency_trends] scored_keywords 비어있음")
+            return {}
+        # 메타데이터 박제 — 추후 발행 글에서 'emergency 폴백' 식별 가능
+        data["_emergency_fallback"] = True
+        data["_generated_at"] = today
+        data["recommendations"] = rec or []
+        print(f"  🆘 [emergency_trends] LLM 즉석 생성 {len(sk)}개 키워드 / {len(rec)}개 추천 (RADAR 부재 자율 회복)")
+        return data
+    except Exception as e:
+        print(f"  ❌ [emergency_trends] 실패: {e}")
+        _g_report("writer", e, module=__name__)
+        return {}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -467,6 +551,7 @@ def generate_tistory_article(topic: dict) -> dict:
     run_tistory() 는 규정을 데이터 수집 직후 명시적으로 로드하므로
     이 래퍼는 외부 단독 실행 용도에만 사용.
     """
+    _cleanup_tistory_images()  # 이전 이미지 전체 삭제 후 생성 시작
     from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
     supreme_block = _law_blk()
     text_result   = _generate_tistory_text(topic, supreme_block)
@@ -490,20 +575,21 @@ def generate_tistory_article(topic: dict) -> dict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def _cleanup_tistory_images() -> None:
-    for pat in ['trend_tistory_*.png', 'tistory_thumbnail.png', 'thumbnail_*.png', 'chart_*.png']:
-        for f in TISTORY_IMG_DIR.glob(pat):
+    """티스토리 이미지 폴더 전체 초기화 — 패턴 무관 모든 파일 삭제."""
+    for f in TISTORY_IMG_DIR.iterdir():
+        if f.is_file():
             try:
                 f.unlink(missing_ok=True)
             except (PermissionError, OSError):
                 pass
 
 def _cleanup_naver_images() -> None:
-    """Naver 이미지 폴더 정리 (새 대본 생성 전)."""
+    """Naver 이미지 폴더 전체 초기화 — 패턴 무관 모든 파일 삭제."""
     from JARVIS02_WRITER.economic_poster import ECONOMIC_IMG_DIR
     naver_dir = ECONOMIC_IMG_DIR if hasattr(ECONOMIC_IMG_DIR, 'glob') else Path(ECONOMIC_IMG_DIR)
     naver_dir.mkdir(parents=True, exist_ok=True)
-    for pat in ['trend_naver_*.png', 'naver_thumbnail.png', '*.jpg', '*.png']:
-        for f in naver_dir.glob(pat):
+    for f in naver_dir.iterdir():
+        if f.is_file():
             try:
                 f.unlink(missing_ok=True)
             except (PermissionError, OSError):

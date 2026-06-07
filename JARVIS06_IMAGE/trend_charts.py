@@ -255,7 +255,7 @@ def make_trend_thumbnail(keyword: str, sector: str, platform: str = 'naver',
             "- Use semi-transparent dark panels/gradients behind text so it's readable\n"
             "- Include: keyword (very large), sector label, today's date, a catchy Korean tagline related to the topic\n"
             "- Color scheme: choose colors that match the topic's mood (don't always use the same colors)\n"
-            "- Layout: be creative — left-aligned, centered, split, diagonal, asymmetric — vary it based on topic\n"
+            "- ★ MANDATORY: ALL text MUST be centered at x=900 (canvas center), text-anchor='middle'. NO left/right alignment. Every <text> element must have x='900' and text-anchor='middle'.\n"
             "- Korean font: font-family='Apple SD Gothic Neo'\n"
             "- All font sizes minimum 28px\n"
             "- Output ONLY the <svg> tag, nothing else. No markdown, no explanation.\n"
@@ -324,7 +324,7 @@ def make_trend_thumbnail(keyword: str, sector: str, platform: str = 'naver',
 
 def _make_trend_thumbnail_mpl(keyword: str, sector: str, platform: str,
                                market: dict, out_path: Path) -> str:
-    """matplotlib 썸네일 폴백."""
+    """matplotlib 썸네일 폴백 — 모든 문구 가운데 배치 (사용자 규칙)."""
     _mpl_setup()
     today_str = _today_str()
     today_dow = _today_dow()
@@ -336,21 +336,14 @@ def _make_trend_thumbnail_mpl(keyword: str, sector: str, platform: str,
         import matplotlib.pyplot as plt
         import matplotlib.patches as mpatches
 
-        # ★ 동적 색상 생성 (매번 다른 스타일)
         palette = generate_sector_colors(sector, keyword)
-        accent   = palette.get("primary_color", '#00C9A7')
-        LEFT_BG  = _interpolate_color(palette.get("primary_color", '#060E1F'), '#000000', 0.85)
-        RIGHT_BG = _interpolate_color(palette.get("accent_color", '#0F1E3A'), '#000000', 0.75)
-        WHITE    = palette.get("bg_color", '#FFFFFF')
-        YELLOW   = palette.get("neutral_color", '#FFE234')
-        RED      = palette.get("down_color", '#FF2D55')
-        GREEN    = palette.get("up_color", '#00E676')
-        LGRAY    = palette.get("neutral_color", '#8FA8C8')
-        ORANGE   = palette.get("primary_color", '#FF6B35')
-
-        def hex2rgb(h):
-            h = h.lstrip('#')
-            return tuple(int(h[i:i+2], 16)/255 for i in (0, 2, 4))
+        ACCENT  = palette.get("primary_color", '#00C9A7')
+        BG_TOP  = _interpolate_color(palette.get("accent_color", '#0F1E3A'), '#000000', 0.6)
+        BG_BOT  = _interpolate_color(palette.get("primary_color", '#060E1F'), '#000000', 0.85)
+        WHITE   = '#FFFFFF'
+        RED     = palette.get("down_color", '#FF2D55')
+        GREEN   = palette.get("up_color", '#00E676')
+        LGRAY   = '#8FA8C8'
 
         W, H = 12, 6.75
         fig  = plt.figure(figsize=(W, H), dpi=150)
@@ -358,90 +351,75 @@ def _make_trend_thumbnail_mpl(keyword: str, sector: str, platform: str,
         ax.set_xlim(0, W); ax.set_ylim(0, H)
         ax.axis('off')
 
-        ax.add_patch(mpatches.Rectangle((0,        0), W*0.52, H, color=LEFT_BG,  zorder=0))
-        ax.add_patch(mpatches.Rectangle((W*0.52,   0), W*0.48, H, color=RIGHT_BG, zorder=0))
+        # 배경 그라디언트 (상단 → 하단 — 시각 요소이므로 비중앙 허용)
+        for i in range(100):
+            t = i / 100
+            r1, g1, b1 = [int(BG_TOP.lstrip('#')[j*2:j*2+2], 16)/255 for j in range(3)]
+            r2, g2, b2 = [int(BG_BOT.lstrip('#')[j*2:j*2+2], 16)/255 for j in range(3)]
+            clr = (r1*(1-t)+r2*t, g1*(1-t)+g2*t, b1*(1-t)+b2*t)
+            ax.add_patch(mpatches.Rectangle((0, H * i / 100), W, H / 100, color=clr, zorder=0))
 
-        diag_xs = [W*0.50, W*0.54]
-        ax.fill_betweenx([0, H], diag_xs[0], diag_xs[1], color=accent, alpha=0.85, zorder=2)
-
+        # ━━ 상단: 날짜 + 섹터 ━━ (가운데)
+        ax.text(W/2, H - 0.45, f'{today_str} ({today_dow}요일)',
+                ha='center', va='center', fontsize=14, color=LGRAY, zorder=5)
         ax.add_patch(mpatches.FancyBboxPatch(
-            (0.28, H-0.90), 3.5, 0.62,
-            boxstyle='round,pad=0.06', facecolor=RED, linewidth=0, zorder=5))
-        ax.text(2.03, H-0.58, '  지금 당장 읽어야 할',
+            (W/2 - 1.8, H - 0.98), 3.6, 0.44,
+            boxstyle='round,pad=0.06', facecolor=ACCENT, alpha=0.9, linewidth=0, zorder=5))
+        ax.text(W/2, H - 0.75, f'# {sector}',
                 ha='center', va='center', fontsize=17, fontweight='bold', color=WHITE, zorder=6)
 
-        kw_fs = 70 if len(keyword) <= 4 else (56 if len(keyword) <= 6 else
-                (44 if len(keyword) <= 9 else (34 if len(keyword) <= 13 else 26)))
-        ax.text(W*0.25 + 0.12, H*0.52 - 0.12, keyword,
+        # ━━ 중앙: 키워드 (가장 크게, 가운데) ━━
+        kw_fs = 72 if len(keyword) <= 4 else (58 if len(keyword) <= 6 else
+                (46 if len(keyword) <= 9 else (36 if len(keyword) <= 13 else 28)))
+        # 그림자
+        ax.text(W/2 + 0.12, H/2 + 0.12, keyword,
                 ha='center', va='center', fontsize=kw_fs, fontweight='bold',
-                color=accent, alpha=0.25, zorder=3)
-        ax.text(W*0.25, H*0.52, keyword,
+                color=ACCENT, alpha=0.30, zorder=3)
+        # 본문
+        ax.text(W/2, H/2, keyword,
                 ha='center', va='center', fontsize=kw_fs, fontweight='bold',
                 color=WHITE, zorder=6)
-        kw_w = min(len(keyword) * kw_fs * 0.011 + 0.6, W*0.44)
+        # 키워드 아래 액센트 라인
+        kw_w = min(len(keyword) * kw_fs * 0.011 + 0.8, W * 0.7)
         ax.add_patch(mpatches.Rectangle(
-            (W*0.25 - kw_w/2, H*0.52 - kw_fs*0.011 - 0.22),
-            kw_w, 0.15, color=accent, zorder=5, alpha=0.95))
+            (W/2 - kw_w/2, H/2 - kw_fs * 0.011 - 0.25),
+            kw_w, 0.12, color=ACCENT, zorder=5, alpha=0.95))
 
-        ax.text(W*0.25, H*0.30, f'#{sector}',
-                ha='center', va='center', fontsize=19, fontweight='bold', color=accent, zorder=5)
-        ax.text(W*0.25, H*0.19, f'{today_str} ({today_dow})',
-                ha='center', va='center', fontsize=14, color=LGRAY, zorder=5)
-
-        ax.text(W*0.76, H-0.46, 'JARVIS',
-                ha='center', va='center', fontsize=20, fontweight='bold', color=accent, zorder=5)
-        ax.text(W*0.76, H-0.72, 'ECONOMIC BRIEFING',
-                ha='center', va='center', fontsize=12, color=LGRAY, zorder=5)
-        ax.add_patch(mpatches.Rectangle((W*0.57, H-0.82), W*0.38, 0.04,
-                                        color=accent, alpha=0.4, zorder=4))
-
+        # ━━ 하단: 시장 지표 or 태그라인 (가운데) ━━
         if market:
-            items = list(market.items())[:4]
-            card_y_start = H * 0.72
-            card_h = 0.55
-            card_gap = 0.10
+            items = list(market.items())[:3]
+            total_w = 3.6 * len(items) + 0.3 * (len(items) - 1)
+            start_x = W/2 - total_w/2
+            card_y  = H * 0.24
             for i, (name, mdata) in enumerate(items):
-                cy   = card_y_start - i * (card_h + card_gap)
+                cx   = start_x + i * 3.9 + 1.8
                 chg  = mdata.get('change', 0)
                 clr  = GREEN if chg >= 0 else RED
                 sign = '+' if chg >= 0 else ''
                 arrow = '▲' if chg >= 0 else '▼'
                 ax.add_patch(mpatches.FancyBboxPatch(
-                    (W*0.57, cy - card_h*0.5), W*0.38, card_h,
-                    boxstyle='round,pad=0.04',
-                    facecolor='#162240', linewidth=1, edgecolor=clr, alpha=0.9, zorder=4))
-                ax.text(W*0.62, cy + 0.05, name,
-                        ha='left', va='center', fontsize=13, color=LGRAY, zorder=6)
-                ax.text(W*0.92, cy + 0.05, f"{arrow} {sign}{chg:.2f}%",
-                        ha='right', va='center', fontsize=14, fontweight='bold', color=clr, zorder=6)
-                ax.text(W*0.76, cy - 0.18, str(mdata.get('value', '')),
-                        ha='center', va='center', fontsize=12, color=WHITE, zorder=6)
+                    (cx - 1.7, card_y - 0.34), 3.4, 0.68,
+                    boxstyle='round,pad=0.05',
+                    facecolor='#162240', linewidth=1.2, edgecolor=clr, alpha=0.9, zorder=4))
+                ax.text(cx, card_y + 0.08, name,
+                        ha='center', va='center', fontsize=13, color=LGRAY, zorder=6)
+                ax.text(cx, card_y - 0.18, f'{arrow} {sign}{chg:.1f}%',
+                        ha='center', va='center', fontsize=14, fontweight='bold', color=clr, zorder=6)
         else:
-            ax.add_patch(mpatches.FancyBboxPatch(
-                (W*0.57, H*0.25), W*0.38, H*0.48,
-                boxstyle='round,pad=0.08',
-                facecolor='#162240', linewidth=1.5, edgecolor=accent, alpha=0.9, zorder=4))
-            ax.text(W*0.76, H*0.55, '오늘의 핵심\n경제 이슈',
-                    ha='center', va='center', fontsize=22, fontweight='bold',
-                    color=WHITE, zorder=6, linespacing=1.4)
-            ax.text(W*0.76, H*0.32, f'상세 분석 → {keyword}',
-                    ha='center', va='center', fontsize=14, color=accent, zorder=6)
+            ax.text(W/2, H * 0.26, '오늘의 핵심 경제 이슈',
+                    ha='center', va='center', fontsize=22, fontweight='bold', color=WHITE, zorder=6)
+            ax.text(W/2, H * 0.16, f'지금 바로 확인하세요',
+                    ha='center', va='center', fontsize=16, color=ACCENT, zorder=6)
 
-        ax.add_patch(mpatches.Rectangle((0, 0), W, 0.78, color='#0D1A30', zorder=3))
-        ax.add_patch(mpatches.Rectangle((0, 0.75), W, 0.04, color=ORANGE, alpha=0.8, zorder=4))
+        # ━━ 최하단: CTA 바 (가운데) ━━
+        ax.add_patch(mpatches.Rectangle((0, 0), W, 0.72, color='#0D1A30', zorder=3))
         ax.add_patch(mpatches.FancyBboxPatch(
-            (W/2-4.0, 0.12), 8.0, 0.52,
-            boxstyle='round,pad=0.06', facecolor=ORANGE, alpha=0.92, linewidth=0, zorder=5))
-        ax.text(W/2, 0.38, '▶  지금 읽지 않으면 뒤처진다! 클릭해서 확인하기',
+            (W/2 - 4.2, 0.10), 8.4, 0.52,
+            boxstyle='round,pad=0.06', facecolor=ACCENT, alpha=0.92, linewidth=0, zorder=5))
+        ax.text(W/2, 0.36, '▶  지금 읽지 않으면 뒤처진다! 클릭해서 확인하기',
                 ha='center', va='center', fontsize=16, fontweight='bold', color=WHITE, zorder=6)
 
-        ax.add_patch(mpatches.FancyBboxPatch(
-            (0.20, 0.88), 2.8, 0.44,
-            boxstyle='round,pad=0.05', facecolor=RED, linewidth=0, zorder=6))
-        ax.text(1.60, 1.10, '★ 투자자 필독',
-                ha='center', va='center', fontsize=15, fontweight='bold', color=WHITE, zorder=7)
-
-        fig.savefig(str(out_path), dpi=150, bbox_inches='tight', facecolor=LEFT_BG, pad_inches=0)
+        fig.savefig(str(out_path), dpi=150, bbox_inches='tight', facecolor=BG_BOT, pad_inches=0)
         plt.close(fig)
         print(f"  🖼️ [{platform.upper()}] 썸네일 생성: {out_path.name}")
         return str(out_path)
@@ -1091,6 +1069,17 @@ def make_insight_card(text: str, label: str, card_idx: int,
 def make_line_trend_chart(text: str, keyword: str, sector: str,
                           card_idx: int, platform: str = 'naver', out_dir=None) -> str:
     """추세 라인/에어리어 차트 — 동적 스타일 적용."""
+    # ★ LLM 어드바이저 — 라인 차트보다 더 적합한 viz가 있으면 리다이렉트
+    try:
+        from JARVIS06_IMAGE.chart_advisor import advise_viz_type as _advz
+        _av = _advz(text, f"{keyword} 추세", keyword, sector)
+        if _av and _av not in ("infographic",):
+            print(f"  🧠 [ChartAdvisor] make_line_trend_chart → viz={_av} 리다이렉트")
+            return make_smart_section_image(text, f"{keyword} 추세", keyword, sector,
+                                            card_idx, platform, out_dir)
+    except Exception:
+        pass
+
     from JARVIS06_IMAGE.style_engine import generate_sector_colors
 
     import re
@@ -1162,6 +1151,17 @@ def make_stat_infographic(text: str, keyword: str, sector: str,
                           card_idx: int, platform: str = 'naver',
                           prebuilt: list = None, out_dir=None) -> str:
     """KPI 숫자 인포그래픽 — 큰 숫자 4개 그리드, 다크 배경."""
+    # ★ LLM 어드바이저 — kpi_cards 이외 더 적합한 viz가 있으면 리다이렉트
+    try:
+        from JARVIS06_IMAGE.chart_advisor import advise_viz_type as _advz
+        _av = _advz(text, f"{keyword} 핵심 지표", keyword, sector)
+        if _av and _av not in ("kpi_cards", "infographic"):
+            print(f"  🧠 [ChartAdvisor] make_stat_infographic → viz={_av} 리다이렉트")
+            return make_smart_section_image(text, f"{keyword} 핵심 지표", keyword, sector,
+                                            card_idx, platform, out_dir)
+    except Exception:
+        pass
+
     import re
     today_str = _today_str()
     if prebuilt and len(prebuilt) >= 2:
@@ -1273,6 +1273,17 @@ def make_comparison_chart(text: str, keyword: str, sector: str,
                           card_idx: int, platform: str = 'naver',
                           pros: list = None, cons: list = None, out_dir=None) -> str:
     """좌우 비교 카드 — 긍정/리스크. 동적 스타일 적용."""
+    # ★ LLM 어드바이저 — comparison_table 이외 더 적합한 viz가 있으면 리다이렉트
+    try:
+        from JARVIS06_IMAGE.chart_advisor import advise_viz_type as _advz
+        _av = _advz(text, f"{keyword} 비교 분석", keyword, sector)
+        if _av and _av not in ("comparison_table", "infographic"):
+            print(f"  🧠 [ChartAdvisor] make_comparison_chart → viz={_av} 리다이렉트")
+            return make_smart_section_image(text, f"{keyword} 비교 분석", keyword, sector,
+                                            card_idx, platform, out_dir)
+    except Exception:
+        pass
+
     from JARVIS06_IMAGE.style_engine import generate_sector_colors, _interpolate_color
 
     import re
@@ -1462,15 +1473,31 @@ def make_smart_section_image(
 
     print(f"  🎨 [smart {card_idx}] '{(section_title or keyword)[:20]}' Claude SVG 생성 중...")
 
+    # ── ★ LLM 어드바이저 — 섹션 텍스트 보고 최적 viz_type 먼저 판단 ──
+    _advised_viz = ""
+    try:
+        from JARVIS06_IMAGE.chart_advisor import advise_viz_type as _advise_viz
+        _advised_viz = _advise_viz(text, section_title or keyword, keyword, sector)
+        if _advised_viz:
+            print(f"  🧠 [ChartAdvisor/viz] '{(section_title or keyword)[:20]}' → {_advised_viz}")
+    except Exception:
+        pass
+
     # ── Claude LLM이 섹션 텍스트에서 인포그래픽 스펙 추출 ──────────
     spec: dict | None = None
     try:
         from shared.llm import invoke_text as _inv
+        # 어드바이저가 viz_type을 결정했으면 해당 타입으로 고정 지시
+        _viz_hint = (
+            f'\n★ viz_type은 반드시 "{_advised_viz}"로 설정할 것.'
+            if _advised_viz else ""
+        )
         _spec_prompt = (
             f"섹션 제목: {section_title}\n"
             f"키워드: {keyword} / 섹터: {sector}\n"
             f"본문:\n{text[:800]}\n\n"
             "위 섹션 내용에서 독자에게 가장 유용한 인포그래픽 1개를 설계하라.\n"
+            f"{_viz_hint}\n"
             "JSON만 출력 (마크다운·설명 없음):\n"
             '{"title":"인포그래픽 제목","subtitle":"부제목(선택)",'
             '"key_message":"독자가 가져갈 핵심 1문장",'
