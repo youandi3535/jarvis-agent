@@ -217,9 +217,9 @@
           "ts": "2026-06-07T23:59:57"
         }
       ],
-      "hit_count": 130,
+      "hit_count": 136,
       "first_seen": "2026-05-31T12:20:43",
-      "last_seen": "2026-06-08T00:01:34",
+      "last_seen": "2026-06-08T00:26:29",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -228,7 +228,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-08T00:01:34"
+        "evaluated_at": "2026-06-08T00:26:29"
       }
     },
     {
@@ -239,11 +239,6 @@
       "tier": "manual",
       "domain": "publish",
       "examples": [
-        {
-          "fixed_file": "JARVIS07_GUARDIAN/qa_resolver.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-06-06T15:50:06"
-        },
         {
           "fixed_file": "JARVIS07_GUARDIAN/conversation_hook.py",
           "source": "manual-vscode_claude",
@@ -288,11 +283,16 @@
           "fixed_file": "JARVIS07_GUARDIAN/qa_resolver.py",
           "source": "manual-vscode_claude",
           "ts": "2026-06-07T22:24:33"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/severity.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-08T06:31:25"
         }
       ],
-      "hit_count": 88,
+      "hit_count": 89,
       "first_seen": "2026-05-31T10:17:53",
-      "last_seen": "2026-06-07T22:24:33",
+      "last_seen": "2026-06-08T06:31:25",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -301,7 +301,80 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T22:24:33"
+        "evaluated_at": "2026-06-08T06:31:25"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[8e7d770c] hj : jarvis.sqlite 프로젝트 밖 이동 — .fuse_hidden* 근본 차단 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[8e7d770c\\]\\ hj\\ :\\ jarvis\\.sqlite\\ 프로젝트\\ 밖\\ 이동\\ —\\ \\.fuse_hidden\\*\\ 근본\\ 차단\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "infra",
+      "examples": [
+        {
+          "fixed_file": "JARVIS03_RADAR/data/trends_2026-06-06.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS03_RADAR/data/trends_2026-06-07.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS03_RADAR/learning.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/auto_repair.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/learned_patterns.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "hub.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "shared/claude_sdk_compat.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "shared/db.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "shared/llm.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "tools/diag_perf_collect.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 73,
+      "first_seen": "2026-06-08T03:30:00",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
       }
     },
     {
@@ -366,9 +439,9 @@
           "ts": "2026-05-31T10:04:58"
         }
       ],
-      "hit_count": 57,
+      "hit_count": 61,
       "first_seen": "2026-05-31T10:04:58",
-      "last_seen": "2026-06-08T00:02:03",
+      "last_seen": "2026-06-08T06:31:47",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -377,7 +450,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-08T00:02:03"
+        "evaluated_at": "2026-06-08T06:31:47"
       }
     },
     {
@@ -520,6 +593,152 @@
       }
     },
     {
+      "fingerprint": "GitCommit::[0526d507] hj : 세션 전체 변경 사항 통합 커밋 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[0526d507\\]\\ hj\\ :\\ 세션\\ 전체\\ 변경\\ 사항\\ 통합\\ 커밋\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "writer",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/providers/__init__.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/thumbnail_maker.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/ERRORS.md",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/auto_repair.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/learned_patterns.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/severity.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "_deleted_2026-06-07_bing_hf/bing_provider.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "_deleted_2026-06-07_bing_hf/huggingface_provider.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "hub.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "shared/precommit_check.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 19,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[2e1ea153] feat/hj : chart_advisor LLM 판단 + 썸네일 중앙 정렬 + VSCode 응답 버그 수정 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[2e1ea153\\]\\ feat/hj\\ :\\ chart_advisor\\ LLM\\ 판단\\ \\+\\ 썸네일\\ 중앙\\ 정렬\\ \\+\\ VSCode\\ 응답\\ 버그\\ 수정\\ \\(2026\\-06",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "writer",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/chart_generator.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/isometric_charts.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/providers/pollinations_provider.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/style_engine.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/trend_charts.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/ERRORS.md",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/learned_patterns.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/qa_resolver.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS08_PUBLISH/platforms/tistory_poster.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "test_tistory_images.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        }
+      ],
+      "hit_count": 14,
+      "first_seen": "2026-06-08T03:30:00",
+      "last_seen": "2026-06-08T03:30:00",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:00"
+      }
+    },
+    {
       "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS08_PUBLISH<PATH>.py",
       "error_type": "ExternalEdit",
       "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS08_PUBLISH/publish_agent\\.py",
@@ -611,6 +830,79 @@
       }
     },
     {
+      "fingerprint": "GitCommit::[11dae99b] hj : _deleted 백업폴더 제거 + auto_repair 파일삭제 금지 규칙 추가 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[11dae99b\\]\\ hj\\ :\\ _deleted\\ 백업폴더\\ 제거\\ \\+\\ auto_repair\\ 파일삭제\\ 금지\\ 규칙\\ 추가\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/chart_generator.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/collection_merger.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/draft_processor.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/auto_repair.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/learned_patterns.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS09_COLLECTOR/__init__.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS09_COLLECTOR/collector_engine.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS09_COLLECTOR/models.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "_deleted_2026-06-07_bing_hf/bing_provider.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "_deleted_2026-06-07_bing_hf/huggingface_provider.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        }
+      ],
+      "hit_count": 11,
+      "first_seen": "2026-06-08T03:30:00",
+      "last_seen": "2026-06-08T03:30:00",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:00"
+      }
+    },
+    {
       "fingerprint": "ExternalEdit::VS Code Claude Code 수정: CLAUDE.md",
       "error_type": "ExternalEdit",
       "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ CLAUDE\\.md",
@@ -697,6 +989,64 @@
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-07T18:30:02"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[c5640db4] hj : 3대 버그 수정 — data_empty GUARDIAN 스킵 + TS쿠키 3중갱신 차단 + API키 오버라이드 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[c5640db4\\]\\ hj\\ :\\ 3대\\ 버그\\ 수정\\ —\\ data_empty\\ GUARDIAN\\ 스킵\\ \\+\\ TS쿠키\\ 3중갱신\\ 차단\\ \\+\\ API키\\ 오버라이드\\ \\(2",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "writer",
+      "examples": [
+        {
+          "fixed_file": "JARVIS02_WRITER/scheduler.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS02_WRITER/scheduler_progress.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS02_WRITER/trend_theme_writer.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/ERRORS.md",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/learned_patterns.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "README.md",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 7,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
       }
     },
     {
@@ -1057,6 +1407,92 @@
         "evaluated_at": "2026-06-07T07:05:01"
       },
       "tier": "manual"
+    },
+    {
+      "fingerprint": "GitCommit::[3ea6faf2] feat/hj : image_agent·pollinations 개선 + ERRORS·learned_patterns 업데이트 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[3ea6faf2\\]\\ feat/hj\\ :\\ image_agent·pollinations\\ 개선\\ \\+\\ ERRORS·learned_patterns\\ 업데이트\\ ",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "image",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/image_agent.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/providers/pollinations_provider.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/ERRORS.md",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/learned_patterns.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        }
+      ],
+      "hit_count": 4,
+      "first_seen": "2026-06-08T03:30:00",
+      "last_seen": "2026-06-08T03:30:00",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:00"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[f6483741] main : 자가수정 CLINotFoundError + 경제브리핑 HTML 생성 실패 수정 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[f6483741\\]\\ main\\ :\\ 자가수정\\ CLINotFoundError\\ \\+\\ 경제브리핑\\ HTML\\ 생성\\ 실패\\ 수정\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "writer",
+      "examples": [
+        {
+          "fixed_file": "JARVIS02_WRITER/draft_writer.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS02_WRITER/economic_poster.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/ERRORS.md",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/auto_repair.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 4,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
+      }
     },
     {
       "fingerprint": "RuntimeError::[harness:경제 브리핑 발행] attempt=<N> step=② WP 대본 생성: ② full_html <N>+ 연속 빈 p 검출",
@@ -1454,6 +1890,120 @@
       }
     },
     {
+      "fingerprint": "GitCommit::[c27c4f8c] feat/hj : 섹션 이미지 제목 다양화 + SVG 중간 파일 자동 삭제 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[c27c4f8c\\]\\ feat/hj\\ :\\ 섹션\\ 이미지\\ 제목\\ 다양화\\ \\+\\ SVG\\ 중간\\ 파일\\ 자동\\ 삭제\\ \\(2026\\-06\\-08\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "writer",
+      "examples": [
+        {
+          "fixed_file": "JARVIS02_WRITER/trend_economic_writer.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/providers/claude_svg_provider.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/trend_charts.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        }
+      ],
+      "hit_count": 3,
+      "first_seen": "2026-06-08T03:30:00",
+      "last_seen": "2026-06-08T03:30:00",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:00"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[a5f6ce87] hj : 이미지 퀄리티 4종 개선 — Pollinations flux+enhance·번역기 특화·Sonnet 프롬프트 빌더 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[a5f6ce87\\]\\ hj\\ :\\ 이미지\\ 퀄리티\\ 4종\\ 개선\\ —\\ Pollinations\\ flux\\+enhance·번역기\\ 특화·Sonnet\\ 프롬프트\\ 빌더\\ ",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "image",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/draft_processor.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/prompt_translator.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/providers/pollinations_provider.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 3,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[600d80b7] feat/hj : Bing/HF 폐기 후속 — GUARDIAN 알림 억제 + CLAUDE.md 폴백 체인 업데이트 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[600d80b7\\]\\ feat/hj\\ :\\ Bing/HF\\ 폐기\\ 후속\\ —\\ GUARDIAN\\ 알림\\ 억제\\ \\+\\ CLAUDE\\.md\\ 폴백\\ 체인\\ 업데이트\\ \\(2026",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "image",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/CLAUDE.md",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/learned_patterns.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/severity.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 3,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
+      }
+    },
+    {
       "fingerprint": "NameError::name '<NAME>' is not defined",
       "error_type": "NameError",
       "message_pattern": "name ['\\\"]([^'\\\"]+)['\\\"]\\s+is not defined",
@@ -1824,6 +2374,105 @@
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-07T23:39:47"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[a357f518] hj : .fuse_hidden 정리 — shared/ 한정 → 전체 rglob 확장 + 15분 간격 즉시 삭제 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[a357f518\\]\\ hj\\ :\\ \\.fuse_hidden\\ 정리\\ —\\ shared/\\ 한정\\ →\\ 전체\\ rglob\\ 확장\\ \\+\\ 15분\\ 간격\\ 즉시\\ 삭제\\ \\(2026\\-",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "schedule",
+      "examples": [
+        {
+          "fixed_file": "JARVIS04_SCHEDULER/job_registry.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "shared/file_cleanup.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 2,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[61a66636] hj : .fuse_hidden 파일 일일 자동 정리 추가 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[61a66636\\]\\ hj\\ :\\ \\.fuse_hidden\\ 파일\\ 일일\\ 자동\\ 정리\\ 추가\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "schedule",
+      "examples": [
+        {
+          "fixed_file": "JARVIS04_SCHEDULER/job_registry.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "shared/file_cleanup.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 2,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[7e7a3ef1] hj : rate_limit_event SDK 패치 + 자가진단 정상화 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[7e7a3ef1\\]\\ hj\\ :\\ rate_limit_event\\ SDK\\ 패치\\ \\+\\ 자가진단\\ 정상화\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "radar",
+      "examples": [
+        {
+          "fixed_file": "JARVIS03_RADAR/data/trends_2026-06-07.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/learned_patterns.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 2,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
       }
     },
     {
@@ -7921,6 +8570,146 @@
       "hit_count": 1,
       "first_seen": "2026-06-07T13:30:00",
       "last_seen": "2026-06-07T13:30:00"
+    },
+    {
+      "fingerprint": "GitCommit::[2338ab2e] hj : README.dev.md 팀원 개발환경 가이드 추가 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[2338ab2e\\]\\ hj\\ :\\ README\\.dev\\.md\\ 팀원\\ 개발환경\\ 가이드\\ 추가\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "unknown",
+      "examples": [
+        {
+          "fixed_file": "README.dev.md",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:00"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-08T03:30:00",
+      "last_seen": "2026-06-08T03:30:00",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:00"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[ad780f0c] hj : pre-push 자동 rebase 훅 추가 + learned_patterns 갱신 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[ad780f0c\\]\\ hj\\ :\\ pre\\-push\\ 자동\\ rebase\\ 훅\\ 추가\\ \\+\\ learned_patterns\\ 갱신\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/learned_patterns.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[d8e5e597] hj : 발행 세트 중복 실행 차단 가드 추가 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[d8e5e597\\]\\ hj\\ :\\ 발행\\ 세트\\ 중복\\ 실행\\ 차단\\ 가드\\ 추가\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "writer",
+      "examples": [
+        {
+          "fixed_file": "JARVIS02_WRITER/scheduler.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[1b4cade3] hj : learned_patterns.json 갱신 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[1b4cade3\\]\\ hj\\ :\\ learned_patterns\\.json\\ 갱신\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/learned_patterns.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[5c8a8068] hj : GitHub Actions CI 추가 (정책 위반 검증 + Syntax 검사) (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[5c8a8068\\]\\ hj\\ :\\ GitHub\\ Actions\\ CI\\ 추가\\ \\(정책\\ 위반\\ 검증\\ \\+\\ Syntax\\ 검사\\)\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "unknown",
+      "examples": [
+        {
+          "fixed_file": ".github/workflows/ci.yml",
+          "source": "manual-external_user",
+          "ts": "2026-06-08T03:30:01"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-08T03:30:01",
+      "last_seen": "2026-06-08T03:30:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T03:30:01"
+      }
     }
   ]
 }
