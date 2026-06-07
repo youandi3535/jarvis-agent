@@ -84,9 +84,12 @@ def run_cleanup(verbose: bool = True) -> dict:
         if verbose:
             print(f"  🗑️  .DS_Store: {ds_count}개 삭제")
 
-    # 4. shared/.fuse_hidden* — FUSE 잔여 임시파일
+    # 4. .fuse_hidden* — FUSE 잔여 임시파일 (프로젝트 전체)
+    _deny = {".venv", "chrome_profile", "__pycache__", ".git"}
     fuse_count = 0
-    for fh in (BASE_DIR / "shared").glob(".fuse_hidden*"):
+    for fh in BASE_DIR.rglob(".fuse_hidden*"):
+        if any(d in fh.parts for d in _deny):
+            continue
         fh.unlink(missing_ok=True)
         fuse_count += 1
     if fuse_count:
@@ -111,13 +114,32 @@ def run_cleanup(verbose: bool = True) -> dict:
 
 
 def cleanup_fuse_hidden(verbose: bool = False) -> int:
-    """shared/.fuse_hidden* 전용 빠른 정리 — 매일 새벽 자동 실행."""
+    """프로젝트 전체 .fuse_hidden* + .DS_Store 즉시 정리 — 15분 간격 자동 실행.
+
+    ★ 사용자 박제 2026-06-07 — shared/ 한정 → 프로젝트 전체 rglob 으로 확장.
+    FUSE 임시파일은 생성 즉시 삭제 대상 (보존 이유 없음).
+    """
+    _DENY = {".venv", "chrome_profile", "__pycache__", ".git"}
     count = 0
-    for fh in (BASE_DIR / "shared").glob(".fuse_hidden*"):
-        fh.unlink(missing_ok=True)
-        count += 1
+    for fh in BASE_DIR.rglob(".fuse_hidden*"):
+        if any(d in fh.parts for d in _DENY):
+            continue
+        try:
+            fh.unlink(missing_ok=True)
+            count += 1
+        except Exception:
+            pass
+    # .DS_Store 도 함께 정리 (run_cleanup 대기 없이 즉시)
+    for ds in BASE_DIR.rglob(".DS_Store"):
+        if any(d in ds.parts for d in _DENY):
+            continue
+        try:
+            ds.unlink(missing_ok=True)
+            count += 1
+        except Exception:
+            pass
     if count and verbose:
-        print(f"  🗑️  .fuse_hidden: {count}개 삭제")
+        print(f"  🗑️  즉시 정리: {count}개 삭제")
     return count
 
 
