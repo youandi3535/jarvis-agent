@@ -31,6 +31,7 @@ logs/
 
 # ── IDE·OS ────────────────────────────────────────────────────────
 .DS_Store
+.fuse_hidden*
 .vscode/
 .idea/
 *.swp

@@ -129,6 +129,10 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"day_of_week":"mon", "week":"*/2", "hour":4, "minute":0},
      "callback":"JARVIS00_INFRA.infra_agent.job_file_cleanup",
      "misfire_grace_time":3600, "owner":"jarvis00_infra"},
+    {"id":"fuse_hidden_cleanup", "name":".fuse_hidden 일일 정리 03:30", "trigger":"cron",
+     "kwargs":{"hour":3, "minute":30},
+     "callback":"shared.file_cleanup.cleanup_fuse_hidden",
+     "misfire_grace_time":3600, "owner":"jarvis00_infra"},
     # ── JARVIS02 로그 모니터링 ──────────────────────────────────────
     {"id":"log_monitor_economic", "name":"경제 브리핑 로그 확인 (07:30)", "trigger":"cron",
      "kwargs":{"hour":7, "minute":30},
