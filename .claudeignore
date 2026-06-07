@@ -1,0 +1,23 @@
+# Claude Code VM 파일 마운트 제외 목록
+# shared/ 의 SQLite·대용량 파일이 VM 마운트에 포함되면
+# 데몬 write 시 FUSE가 .fuse_hidden* 생성 → 이 파일로 차단
+
+# DB 파일 (대용량 + 데몬이 지속 write)
+shared/jarvis.sqlite
+shared/jarvis.sqlite-wal
+shared/jarvis.sqlite-shm
+shared/react_checkpoints.sqlite
+
+# Chrome 프로필 (Selenium 전용, 코드 리뷰 불필요)
+JARVIS02_WRITER/chrome_profile/
+
+# 이미지 output (대용량 바이너리)
+JARVIS06_IMAGE/output/
+
+# 로그 (자동 생성, 코드 리뷰 불필요)
+logs/
+JARVIS02_WRITER/logs/
+JARVIS03_RADAR/logs/
+
+# 가상환경
+.venv/
