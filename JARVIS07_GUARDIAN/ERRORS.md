@@ -1,5 +1,47 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [276] JARVIS00 bot 텔레그램 DNS 오류 폭주 — backoff 미적용 (2026-06-08)
+
+- **증상**: Wi-Fi 미연결 상태 데몬 기동 시 `ConnectionError: Failed to resolve api.telegram.org` 5초마다 반복 발생. seen_count=11. 반복 보고로 Guardian 불필요 부하.
+- **환경**: `JARVIS00_INFRA/bot.py` `run_bot_polling()` except Exception 블록. 5초 고정 sleep.
+- **원인**: DNS/연결 오류를 일반 Exception과 동일하게 처리 → 5초 후 재시도 → Wi-Fi 복구까지 반복 폭주.
+- **해결**: `requests.exceptions.ConnectionError` 별도 처리 — 연속 실패마다 backoff(10초×횟수, 최대 2분). 첫 번째만 Guardian 보고.
+- **파일**: `JARVIS00_INFRA/bot.py` (`run_bot_polling`, except ConnectionError 분기 추가)
+- **교훈**: 일시적 네트워크 오류는 고정 재시도 간격이 아닌 exponential backoff 필수. 동일 에러 반복 Guardian 보고는 1회로 제한.
+
+---
+
+### [275] JARVIS05 VisionAPI port 8505 충돌 → SystemExit critical Guardian 경고 (2026-06-08)
+
+- **증상**: 데몬 재시작 후 JARVIS05 API 서버 기동 시 `ERROR: [Errno 48] error while attempting to bind on address ('127.0.0.1', 8505): address already in use`. uvicorn이 `sys.exit(1)` 호출 → `SystemExit` → Guardian critical → 텔레그램 경고.
+- **환경**: `JARVIS05_VISION/api_server.py` `_run()`. 이전 데몬 프로세스가 비정상 종료되면서 8505 포트를 해제하지 않음.
+- **원인**: `_run()`이 `except Exception`만 처리. `SystemExit`는 `BaseException` 직계 → `except Exception`으로 잡히지 않음. uvicorn 내부에서 `sys.exit(1)` 호출 시 스레드 수준에서 Guardian에 critical로 기록.
+- **해결**:
+  1. `_kill_port_occupant(port)`: `lsof -ti :8505`로 기존 프로세스 SIGTERM
+  2. `_run()` 재시도 루프(최대 3회): `SystemExit` + `OSError(EADDRINUSE)` 각각 잡아 kill+sleep 후 재시도
+  3. `severity.py _LOW_PATTERNS`: "address already in use" 패턴 추가 → Guardian critical 분류 방지
+  4. `severity.classify()`: critical 판정 전 `_LOW_PATTERNS` 먼저 확인 (SystemExit라도 low 패턴이면 critical 제외)
+- **파일**: `JARVIS05_VISION/api_server.py`, `JARVIS07_GUARDIAN/severity.py`
+- **교훈**: 포트 충돌은 SystemExit를 유발하지만 코드 버그가 아님. `except Exception`만으로는 `SystemExit`/`BaseException` 미처리. daemon thread에서 발생한 SystemExit는 별도 처리 필수.
+
+---
+
+### [274] 네이버 발행 성공인데 harness Layer4 실패 — _verify_naver_published SPA 전환 지연 false negative (2026-06-08)
+
+- **증상**: `RuntimeError: [Layer4] ['naver'] 발행 실패 (attempt=1) — 송출 미완료 → 검증 순환 재진입`. done.png / done_retry.png 스크린샷 모두 발행 완료된 글 보기 페이지 표시. 실제로는 발행 성공.
+- **환경**: `JARVIS08_PUBLISH/platforms/naver_poster.py` `_verify_naver_published()`. 경제 브리핑 06:30 harness 발행.
+- **원인**: [273] 수정으로 "URL 복사"/"통계" DOM 체크를 1순위로 추가했으나, SPA 전환 지연으로 `time.sleep(4)` 후에도 DOM 갱신 미완료 → JS 쿼리가 null 반환. 이어서 `"write" in current_url` 체크가 전환 중 URL(`postwrite` 등)에서 "write" 매칭 → **즉시 False 반환** (재확인 없이). 결과: 발행은 성공했지만 검증 함수가 false negative → harness가 불필요한 재발행 시도.
+- **헛다리**: [271][273] 에서 DOM 시그널 추가·URL 패턴 보강했으나, 재확인 루프 없이 1회 체크 + 즉시 반환이라 SPA 지연에 무력.
+- **해결**: `_verify_naver_published()` 전면 재작성.
+  1. **재확인 루프 (3회 × 3초 대기)**: SPA 전환 완료까지 최대 ~10초 추가 대기.
+  2. **`"write" in URL` 즉시 반환 삭제**: URL 기반 체크 → DOM 기반 체크 순서로 전부 시도 후, 모든 체크 실패 시에만 재확인 대기. 3회 모두 실패 시 비로소 False.
+  3. **DOM 체크 확장**: `.se-viewer` / `.blog-post` / `.post_ct` / `[class*="PostView"]` 4종 셀렉터 + "URL 복사"/"통계" 버튼 + 토스트 메시지 — 한 가지라도 발견 시 True.
+  4. **`PostView` URL 패턴 추가**: `PostView` + `logNo=` 조합.
+- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` (`_verify_naver_published`)
+- **교훈**: SPA 기반 에디터에서 발행 후 URL·DOM 갱신은 비동기. 단발 체크 + 즉시 반환은 false negative 직결. **반드시 재확인 루프** 필요. `"write" in url` 같은 부정 매칭을 **긍정 시그널보다 먼저** 체크하면 긍정 시그널이 아직 안 나온 상태에서 즉시 실패 판정 → 오탐.
+
+---
+
 ### [273] 네이버 발행 성공인데 "발행 실패" 텔레그램 오알람 — _verify_naver_published 오탐 (2026-06-08)
 
 - **증상**: 네이버 경제 브리핑 실제 발행 완료됐는데 텔레그램으로 "발행 실패" 알림 수신. `⚠️ [Naver] 발행 후 에디터 상태 유지 → 재발행 시도` → `❌ [Naver] 재시도 후에도 발행 미완료`.
@@ -7,10 +49,11 @@
 - **원인**: `_verify_naver_published()`가 URL에 "write" 포함 여부로 성공 판정. 네이버 발행 후 `postwrite?logNo=XXXX&redirect=Update` (발행 완료 후 수정 모드 URL) 로 리다이렉트되면 "write" 포함 → False 반환. 또한 발행 후 4초 대기가 부족해 URL 리다이렉트 전에 체크함.
 - **헛다리**: 없음 (첫 진단).
 - **해결**:
-  1. `_verify_naver_published()`: `postwrite` + `logNo=` 동시 포함 → True (발행 완료 후 수정 URL = 성공)
-  2. 발행 버튼 클릭 후 대기 시간 4초 → 8초 확대
-- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` (`_verify_naver_published`, line ~1251)
-- **교훈**: Naver 스마트에디터 발행 후 URL 이동 패턴이 두 가지: ① 바로 포스트 URL (`/숫자`) ② 수정 모드 URL (`postwrite?logNo=`). 후자도 발행 성공. URL에 "write" 포함 = 실패라는 단순 판정은 오탐 발생. 리다이렉트 타이밍도 4초보다 길 수 있음.
+  1. `_verify_naver_published()` **1순위: on-page 발행 완료 시그널 추가** — "URL 복사" / "통계" 버튼 JS 탐색. 발행 완료 페이지에만 존재하는 고유 요소이므로 URL 패턴 무관하게 확실 감지.
+  2. `_verify_naver_published()`: `postwrite` + `logNo=` 동시 포함 → True (발행 완료 후 수정 URL = 성공)
+  3. `PostView.naver` URL 패턴 추가 (구형 URL 대응)
+- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` (`_verify_naver_published`, line ~440)
+- **교훈**: URL 기반 발행 성공 판정은 네이버 URL 형식 변경에 취약. **on-page DOM 시그널** ("URL 복사", "통계" 버튼)이 더 신뢰성 높음. 스크린샷(done.png)에 발행 완료 페이지가 찍혀 있으면 실제 성공 — `_verify_naver_published` 오탐이 근본 원인.
 
 ---
 

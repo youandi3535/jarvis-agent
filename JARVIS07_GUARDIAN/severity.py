@@ -54,6 +54,11 @@ _LOW_PATTERNS = [
     # ★ ERRORS [272] 박제 2026-06-08 — Pollinations 402 Queue full (IP 레벨 외부 제한)
     # 코드 버그 아님. 서킷 브레이커 + matplotlib 폴백으로 graceful 처리됨 → Guardian 수정 불필요.
     re.compile(r"Queue full for IP|Pollinations.*Queue full|Pollinations.*402|queue full.*max.*1", re.I),
+    # ★ ERRORS [274] 박제 2026-06-08 — 포트 충돌 (데몬 재시작 시 이전 프로세스 잔존)
+    # api_server.py 에서 kill+retry 로 근본 처리됨 → Guardian 수정 불필요.
+    re.compile(r"address already in use|EADDRINUSE|bind on address", re.I),
+    # ★ ERRORS [274] — Wi-Fi 미연결 상태 데몬 기동 시 텔레그램 DNS 오류 (일시적)
+    re.compile(r"Failed to resolve.*telegram|nodename nor servname|NameResolutionError.*telegram", re.I),
 ]
 
 
@@ -67,8 +72,9 @@ def classify(
     et = error_type or ""
     msg = (message or "").lower()
 
-    # critical
-    if et in _CRITICAL_TYPES:
+    # critical (단, _LOW_PATTERNS 매칭 시 제외 — 포트 충돌 SystemExit 등)
+    _is_low = any(pat.search(msg) for pat in _LOW_PATTERNS)
+    if not _is_low and et in _CRITICAL_TYPES:
         return "critical"
     for pat in _CRITICAL_PATTERNS:
         if pat.search(msg):

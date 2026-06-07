@@ -94,11 +94,6 @@
       "domain": "guardian",
       "examples": [
         {
-          "fixed_file": "JARVIS02_WRITER/law_enforcer.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-06-04T11:31:23"
-        },
-        {
           "fixed_file": "JARVIS02_WRITER/seo_learner.py",
           "source": "manual-vscode_claude",
           "ts": "2026-06-04T11:31:28"
@@ -142,11 +137,16 @@
           "fixed_file": "JARVIS02_WRITER/post_type_specs.py",
           "source": "manual-vscode_claude",
           "ts": "2026-06-07T18:50:12"
+        },
+        {
+          "fixed_file": "JARVIS02_WRITER/writer_agent.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-08T08:24:58"
         }
       ],
-      "hit_count": 141,
+      "hit_count": 142,
       "first_seen": "2026-05-31T10:03:36",
-      "last_seen": "2026-06-07T23:59:43",
+      "last_seen": "2026-06-08T08:24:58",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -155,7 +155,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T23:59:43"
+        "evaluated_at": "2026-06-08T08:24:58"
       }
     },
     {
@@ -240,11 +240,6 @@
       "domain": "publish",
       "examples": [
         {
-          "fixed_file": "JARVIS07_GUARDIAN/conversation_hook.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-06-06T15:50:13"
-        },
-        {
           "fixed_file": "JARVIS07_GUARDIAN/vector_store.py",
           "source": "manual-vscode_claude",
           "ts": "2026-06-06T18:10:04"
@@ -288,11 +283,16 @@
           "fixed_file": "JARVIS07_GUARDIAN/severity.py",
           "source": "manual-vscode_claude",
           "ts": "2026-06-08T06:31:25"
+        },
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/auto_repair.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-08T08:24:21"
         }
       ],
-      "hit_count": 89,
+      "hit_count": 92,
       "first_seen": "2026-05-31T10:17:53",
-      "last_seen": "2026-06-08T06:31:25",
+      "last_seen": "2026-06-08T08:53:17",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -301,7 +301,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-08T06:31:25"
+        "evaluated_at": "2026-06-08T08:53:17"
       }
     },
     {
@@ -378,6 +378,34 @@
       }
     },
     {
+      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS07_GUARDIAN<PATH>.md",
+      "error_type": "ExternalEdit",
+      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS07_GUARDIAN/ERRORS\\.md",
+      "fixer": "externaledit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/ERRORS.md",
+          "source": "manual-vscode_claude",
+          "ts": "2026-05-31T10:04:58"
+        }
+      ],
+      "hit_count": 65,
+      "first_seen": "2026-05-31T10:04:58",
+      "last_seen": "2026-06-08T08:56:23",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T08:56:23"
+      }
+    },
+    {
       "fingerprint": "ExternalEdit::VS Code Claude Code 수정: shared<PATH>.py",
       "error_type": "ExternalEdit",
       "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ shared/bus\\.py",
@@ -423,34 +451,6 @@
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-07T18:52:05"
-      }
-    },
-    {
-      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS07_GUARDIAN<PATH>.md",
-      "error_type": "ExternalEdit",
-      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS07_GUARDIAN/ERRORS\\.md",
-      "fixer": "externaledit",
-      "tier": "manual",
-      "domain": "guardian",
-      "examples": [
-        {
-          "fixed_file": "JARVIS07_GUARDIAN/ERRORS.md",
-          "source": "manual-vscode_claude",
-          "ts": "2026-05-31T10:04:58"
-        }
-      ],
-      "hit_count": 61,
-      "first_seen": "2026-05-31T10:04:58",
-      "last_seen": "2026-06-08T06:31:47",
-      "eval_meta": {
-        "should_register": true,
-        "score": 70,
-        "safe": true,
-        "accurate": true,
-        "reusable": true,
-        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
-        "tier": "unknown",
-        "evaluated_at": "2026-06-08T06:31:47"
       }
     },
     {
@@ -576,11 +576,16 @@
           "fixed_file": "JARVIS00_INFRA/preflight.py",
           "source": "manual-vscode_claude",
           "ts": "2026-06-04T11:09:22"
+        },
+        {
+          "fixed_file": "JARVIS00_INFRA/bot.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-08T08:52:46"
         }
       ],
-      "hit_count": 22,
+      "hit_count": 24,
       "first_seen": "2026-05-31T11:04:15",
-      "last_seen": "2026-06-07T18:50:18",
+      "last_seen": "2026-06-08T08:52:55",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -589,7 +594,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T18:50:18"
+        "evaluated_at": "2026-06-08T08:52:55"
       }
     },
     {
@@ -666,6 +671,49 @@
       }
     },
     {
+      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS08_PUBLISH<PATH>.py",
+      "error_type": "ExternalEdit",
+      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS08_PUBLISH/publish_agent\\.py",
+      "fixer": "externaledit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "JARVIS08_PUBLISH/publish_agent.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-05-31T12:13:22"
+        },
+        {
+          "fixed_file": "JARVIS08_PUBLISH/platforms/naver_poster.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-05-31T13:39:23"
+        },
+        {
+          "fixed_file": "JARVIS08_PUBLISH/platforms/tistory_poster.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-04T11:33:21"
+        },
+        {
+          "fixed_file": "JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-07T16:36:46"
+        }
+      ],
+      "hit_count": 16,
+      "first_seen": "2026-05-31T12:13:22",
+      "last_seen": "2026-06-08T08:44:29",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T08:44:29"
+      }
+    },
+    {
       "fingerprint": "GitCommit::[2e1ea153] feat/hj : chart_advisor LLM 판단 + 썸네일 중앙 정렬 + VSCode 응답 버그 수정 (<DATE>)",
       "error_type": "GitCommit",
       "message_pattern": "\\[2e1ea153\\]\\ feat/hj\\ :\\ chart_advisor\\ LLM\\ 판단\\ \\+\\ 썸네일\\ 중앙\\ 정렬\\ \\+\\ VSCode\\ 응답\\ 버그\\ 수정\\ \\(2026\\-06",
@@ -739,49 +787,6 @@
       }
     },
     {
-      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS08_PUBLISH<PATH>.py",
-      "error_type": "ExternalEdit",
-      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS08_PUBLISH/publish_agent\\.py",
-      "fixer": "externaledit",
-      "tier": "manual",
-      "domain": "guardian",
-      "examples": [
-        {
-          "fixed_file": "JARVIS08_PUBLISH/publish_agent.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-05-31T12:13:22"
-        },
-        {
-          "fixed_file": "JARVIS08_PUBLISH/platforms/naver_poster.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-05-31T13:39:23"
-        },
-        {
-          "fixed_file": "JARVIS08_PUBLISH/platforms/tistory_poster.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-06-04T11:33:21"
-        },
-        {
-          "fixed_file": "JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-06-07T16:36:46"
-        }
-      ],
-      "hit_count": 12,
-      "first_seen": "2026-05-31T12:13:22",
-      "last_seen": "2026-06-07T21:10:18",
-      "eval_meta": {
-        "should_register": true,
-        "score": 70,
-        "safe": true,
-        "accurate": true,
-        "reusable": true,
-        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
-        "tier": "unknown",
-        "evaluated_at": "2026-06-07T21:10:18"
-      }
-    },
-    {
       "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS01_MASTER<PATH>.py",
       "error_type": "ExternalEdit",
       "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS01_MASTER/dispatchers\\.py",
@@ -815,9 +820,9 @@
           "ts": "2026-06-04T11:34:20"
         }
       ],
-      "hit_count": 11,
+      "hit_count": 12,
       "first_seen": "2026-05-31T12:04:29",
-      "last_seen": "2026-06-07T18:49:57",
+      "last_seen": "2026-06-08T08:24:28",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -826,7 +831,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T18:49:57"
+        "evaluated_at": "2026-06-08T08:24:28"
       }
     },
     {
@@ -977,9 +982,9 @@
           "ts": "2026-05-31T12:20:39"
         }
       ],
-      "hit_count": 7,
+      "hit_count": 9,
       "first_seen": "2026-05-31T12:04:14",
-      "last_seen": "2026-06-07T18:30:02",
+      "last_seen": "2026-06-08T08:18:33",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -988,7 +993,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T18:30:02"
+        "evaluated_at": "2026-06-08T08:18:33"
       }
     },
     {
@@ -1047,6 +1052,62 @@
         "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-08T03:30:01"
+      }
+    },
+    {
+      "fingerprint": "DraftQualityViolation::분량 상한 초과: 42문장 > 40문장 (post_type=economic)",
+      "error_type": "DraftQualityViolation",
+      "message_pattern": "분량\\ 상한\\ 초과:\\ 42문장\\ >\\ 40문장\\ \\(post_type=economic\\)",
+      "fixer": "harness_inline_naver",
+      "tier": "manual",
+      "domain": "writer",
+      "examples": [
+        {
+          "fixed_file": "JARVIS02_WRITER/draft_fixer.py",
+          "source": "harness_auto_fix",
+          "ts": "2026-05-29T10:49:52"
+        }
+      ],
+      "hit_count": 7,
+      "first_seen": "2026-05-29T10:49:52",
+      "last_seen": "2026-06-08T08:52:07",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (harness_inline_naver) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T08:52:07"
+      }
+    },
+    {
+      "fingerprint": "HarnessIssueFixed::분량 상한 초과: 42문장 > 40문장 (post_type=economic)",
+      "error_type": "HarnessIssueFixed",
+      "message_pattern": "분량\\ 상한\\ 초과:\\ 42문장\\ >\\ 40문장\\ \\(post_type=economic\\)",
+      "fixer": "harness_fix_경제 브리핑 발행",
+      "tier": "manual",
+      "domain": "infra",
+      "examples": [
+        {
+          "fixed_file": "JARVIS00_INFRA/harness.py",
+          "source": "harness_auto_fix",
+          "ts": "2026-05-29T10:49:53"
+        }
+      ],
+      "hit_count": 7,
+      "first_seen": "2026-05-29T10:49:53",
+      "last_seen": "2026-06-08T08:52:07",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (harness_fix_경제 브리핑 발행) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T08:52:07"
       }
     },
     {
@@ -1142,59 +1203,59 @@
       }
     },
     {
-      "fingerprint": "DraftQualityViolation::분량 상한 초과: 42문장 > 40문장 (post_type=economic)",
+      "fingerprint": "DraftQualityViolation::[Layer3 즉시수정] [naver] 분량 상한 초과: 42문장 > 40문장 (post_type=economic) 하네스 검증 실패 항목을 발행 전 inline 패치 완료.",
       "error_type": "DraftQualityViolation",
-      "message_pattern": "분량\\ 상한\\ 초과:\\ 42문장\\ >\\ 40문장\\ \\(post_type=economic\\)",
-      "fixer": "harness_inline_naver",
+      "message_pattern": "\\[Layer3\\ 즉시수정\\]\\ \\[naver\\]\\ 분량\\ 상한\\ 초과:\\ 42문장\\ >\\ 40문장\\ \\(post_type=economic\\)\\\n하네스\\ 검증\\ 실패\\ 항목을\\ 발",
+      "fixer": "draftqualityviolation",
       "tier": "manual",
       "domain": "writer",
       "examples": [
         {
           "fixed_file": "JARVIS02_WRITER/draft_fixer.py",
-          "source": "harness_auto_fix",
+          "source": "manual-harness_auto_fix",
           "ts": "2026-05-29T10:49:52"
         }
       ],
       "hit_count": 6,
       "first_seen": "2026-05-29T10:49:52",
-      "last_seen": "2026-06-07T12:12:04",
+      "last_seen": "2026-06-08T08:52:07",
       "eval_meta": {
         "should_register": true,
         "score": 70,
         "safe": true,
         "accurate": true,
         "reusable": true,
-        "rationale": "알 수 없는 fixer (harness_inline_tistory) — 보수적 통과, 점수 70",
+        "rationale": "알 수 없는 fixer (draftqualityviolation) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T12:12:04"
+        "evaluated_at": "2026-06-08T08:52:07"
       }
     },
     {
-      "fingerprint": "HarnessIssueFixed::분량 상한 초과: 42문장 > 40문장 (post_type=economic)",
+      "fingerprint": "HarnessIssueFixed::[Layer3 즉시수정] attempt=<N> [③ 네이버 대본 생성] 분량 상한 초과: 42문장 > 40문장 (post_type=economic) harness.fix 훅 inline 패치 완료.",
       "error_type": "HarnessIssueFixed",
-      "message_pattern": "분량\\ 상한\\ 초과:\\ 42문장\\ >\\ 40문장\\ \\(post_type=economic\\)",
-      "fixer": "harness_fix_경제 브리핑 발행",
+      "message_pattern": "\\[Layer3\\ 즉시수정\\]\\ attempt=1\\ \\[③\\ 네이버\\ 대본\\ 생성\\]\\ 분량\\ 상한\\ 초과:\\ 42문장\\ >\\ 40문장\\ \\(post_type=economic\\)",
+      "fixer": "harnessissuefixed",
       "tier": "manual",
       "domain": "infra",
       "examples": [
         {
           "fixed_file": "JARVIS00_INFRA/harness.py",
-          "source": "harness_auto_fix",
-          "ts": "2026-05-29T10:49:53"
+          "source": "manual-harness_auto_fix",
+          "ts": "2026-05-29T10:49:52"
         }
       ],
       "hit_count": 6,
-      "first_seen": "2026-05-29T10:49:53",
-      "last_seen": "2026-06-07T12:12:04",
+      "first_seen": "2026-05-29T10:49:52",
+      "last_seen": "2026-06-08T08:52:07",
       "eval_meta": {
         "should_register": true,
         "score": 70,
         "safe": true,
         "accurate": true,
         "reusable": true,
-        "rationale": "알 수 없는 fixer (harness_fix_경제 브리핑 발행) — 보수적 통과, 점수 70",
+        "rationale": "알 수 없는 fixer (harnessissuefixed) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T12:12:04"
+        "evaluated_at": "2026-06-08T08:52:07"
       }
     },
     {
@@ -1226,59 +1287,36 @@
       }
     },
     {
-      "fingerprint": "DraftQualityViolation::[Layer3 즉시수정] [naver] 분량 상한 초과: 42문장 > 40문장 (post_type=economic) 하네스 검증 실패 항목을 발행 전 inline 패치 완료.",
-      "error_type": "DraftQualityViolation",
-      "message_pattern": "\\[Layer3\\ 즉시수정\\]\\ \\[naver\\]\\ 분량\\ 상한\\ 초과:\\ 42문장\\ >\\ 40문장\\ \\(post_type=economic\\)\\\n하네스\\ 검증\\ 실패\\ 항목을\\ 발",
-      "fixer": "draftqualityviolation",
+      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS05_VISION<PATH>.py",
+      "error_type": "ExternalEdit",
+      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS05_VISION/vision_agent\\.py",
+      "fixer": "externaledit",
       "tier": "manual",
-      "domain": "writer",
+      "domain": "guardian",
       "examples": [
         {
-          "fixed_file": "JARVIS02_WRITER/draft_fixer.py",
-          "source": "manual-harness_auto_fix",
-          "ts": "2026-05-29T10:49:52"
+          "fixed_file": "JARVIS05_VISION/vision_agent.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-05-31T12:20:41"
+        },
+        {
+          "fixed_file": "JARVIS05_VISION/api_server.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-08T08:52:23"
         }
       ],
       "hit_count": 5,
-      "first_seen": "2026-05-29T10:49:52",
-      "last_seen": "2026-06-04T08:06:48",
+      "first_seen": "2026-05-31T12:20:41",
+      "last_seen": "2026-06-08T08:58:00",
       "eval_meta": {
         "should_register": true,
         "score": 70,
         "safe": true,
         "accurate": true,
         "reusable": true,
-        "rationale": "알 수 없는 fixer (draftqualityviolation) — 보수적 통과, 점수 70",
+        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-04T08:06:48"
-      }
-    },
-    {
-      "fingerprint": "HarnessIssueFixed::[Layer3 즉시수정] attempt=<N> [③ 네이버 대본 생성] 분량 상한 초과: 42문장 > 40문장 (post_type=economic) harness.fix 훅 inline 패치 완료.",
-      "error_type": "HarnessIssueFixed",
-      "message_pattern": "\\[Layer3\\ 즉시수정\\]\\ attempt=1\\ \\[③\\ 네이버\\ 대본\\ 생성\\]\\ 분량\\ 상한\\ 초과:\\ 42문장\\ >\\ 40문장\\ \\(post_type=economic\\)",
-      "fixer": "harnessissuefixed",
-      "tier": "manual",
-      "domain": "infra",
-      "examples": [
-        {
-          "fixed_file": "JARVIS00_INFRA/harness.py",
-          "source": "manual-harness_auto_fix",
-          "ts": "2026-05-29T10:49:52"
-        }
-      ],
-      "hit_count": 5,
-      "first_seen": "2026-05-29T10:49:52",
-      "last_seen": "2026-06-04T08:06:48",
-      "eval_meta": {
-        "should_register": true,
-        "score": 70,
-        "safe": true,
-        "accurate": true,
-        "reusable": true,
-        "rationale": "알 수 없는 fixer (harnessissuefixed) — 보수적 통과, 점수 70",
-        "tier": "unknown",
-        "evaluated_at": "2026-06-04T08:06:48"
+        "evaluated_at": "2026-06-08T08:58:00"
       }
     },
     {
@@ -7120,34 +7158,6 @@
       }
     },
     {
-      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS05_VISION<PATH>.py",
-      "error_type": "ExternalEdit",
-      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS05_VISION/vision_agent\\.py",
-      "fixer": "externaledit",
-      "tier": "manual",
-      "domain": "guardian",
-      "examples": [
-        {
-          "fixed_file": "JARVIS05_VISION/vision_agent.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-05-31T12:20:41"
-        }
-      ],
-      "hit_count": 1,
-      "first_seen": "2026-05-31T12:20:41",
-      "last_seen": "2026-05-31T12:20:41",
-      "eval_meta": {
-        "should_register": true,
-        "score": 70,
-        "safe": true,
-        "accurate": true,
-        "reusable": true,
-        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
-        "tier": "unknown",
-        "evaluated_at": "2026-05-31T12:20:41"
-      }
-    },
-    {
       "fingerprint": "AutoRepairFix::`SPEC_TEMPLATE` 내 잘못된 이스케이프 시퀀스 `EventType\\.` → `EventType\\\\.` (SyntaxWarning 제거)",
       "error_type": "AutoRepairFix",
       "message_pattern": "`SPEC_TEMPLATE`\\ 내\\ 잘못된\\ 이스케이프\\ 시퀀스\\ `EventType\\\\\\.`\\ →\\ `EventType\\\\\\\\\\.`\\ \\(SyntaxWarning\\ 제거",
@@ -8709,6 +8719,34 @@
         "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-08T03:30:01"
+      }
+    },
+    {
+      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: jarvis_daemon.py",
+      "error_type": "ExternalEdit",
+      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ jarvis_daemon\\.py",
+      "fixer": "externaledit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "jarvis_daemon.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-08T08:24:52"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-08T08:24:52",
+      "last_seen": "2026-06-08T08:24:52",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T08:24:52"
       }
     }
   ]
