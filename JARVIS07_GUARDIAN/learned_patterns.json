@@ -144,9 +144,9 @@
           "ts": "2026-06-07T07:45:17"
         }
       ],
-      "hit_count": 130,
+      "hit_count": 134,
       "first_seen": "2026-05-31T10:03:36",
-      "last_seen": "2026-06-07T12:30:39",
+      "last_seen": "2026-06-07T16:35:43",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -155,7 +155,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T12:30:39"
+        "evaluated_at": "2026-06-07T16:35:43"
       }
     },
     {
@@ -541,11 +541,16 @@
           "fixed_file": "JARVIS08_PUBLISH/platforms/tistory_poster.py",
           "source": "manual-vscode_claude",
           "ts": "2026-06-04T11:33:21"
+        },
+        {
+          "fixed_file": "JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-07T16:36:46"
         }
       ],
-      "hit_count": 10,
+      "hit_count": 11,
       "first_seen": "2026-05-31T12:13:22",
-      "last_seen": "2026-06-04T11:33:21",
+      "last_seen": "2026-06-07T16:36:46",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -554,7 +559,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-04T11:33:21"
+        "evaluated_at": "2026-06-07T16:36:46"
       }
     },
     {
@@ -584,6 +589,34 @@
         "tier": "unknown",
         "evaluated_at": "2026-06-04T11:55:19"
       }
+    },
+    {
+      "fingerprint": "PostingFailure::포스팅 실패 자동 대응: ['<NAME>', '<NAME>'] → 복구 [] | 코드 수정=없음",
+      "error_type": "PostingFailure",
+      "message_pattern": "포스팅\\ 실패\\ 자동\\ 대응:\\ \\['naver',\\ 'tistory'\\]\\ →\\ 복구\\ \\[\\]\\ \\|\\ 코드\\ 수정=없음",
+      "fixer": "postingfailure",
+      "domain": "publish",
+      "examples": [
+        {
+          "fixed_file": "theme_pipeline",
+          "source": "manual-guardian",
+          "ts": "2026-05-24T16:15:50"
+        }
+      ],
+      "hit_count": 10,
+      "first_seen": "2026-05-24T16:15:50",
+      "last_seen": "2026-06-07T16:35:31",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (postingfailure) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T16:35:31"
+      },
+      "tier": "manual"
     },
     {
       "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS01_MASTER<PATH>.py",
@@ -632,34 +665,6 @@
         "tier": "unknown",
         "evaluated_at": "2026-06-04T11:34:20"
       }
-    },
-    {
-      "fingerprint": "PostingFailure::포스팅 실패 자동 대응: ['<NAME>', '<NAME>'] → 복구 [] | 코드 수정=없음",
-      "error_type": "PostingFailure",
-      "message_pattern": "포스팅\\ 실패\\ 자동\\ 대응:\\ \\['naver',\\ 'tistory'\\]\\ →\\ 복구\\ \\[\\]\\ \\|\\ 코드\\ 수정=없음",
-      "fixer": "postingfailure",
-      "domain": "publish",
-      "examples": [
-        {
-          "fixed_file": "theme_pipeline",
-          "source": "manual-guardian",
-          "ts": "2026-05-24T16:15:50"
-        }
-      ],
-      "hit_count": 9,
-      "first_seen": "2026-05-24T16:15:50",
-      "last_seen": "2026-06-05T16:00:54",
-      "eval_meta": {
-        "should_register": true,
-        "score": 70,
-        "safe": true,
-        "accurate": true,
-        "reusable": true,
-        "rationale": "알 수 없는 fixer (postingfailure) — 보수적 통과, 점수 70",
-        "tier": "unknown",
-        "evaluated_at": "2026-06-05T16:00:54"
-      },
-      "tier": "manual"
     },
     {
       "fingerprint": "ModuleNotFoundError::No module named '<NAME>'",
@@ -7498,6 +7503,90 @@
         "rationale": "알 수 없는 fixer (llmresponseformat) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-07T03:16:18"
+      }
+    },
+    {
+      "fingerprint": "SDKAuthLeak::ANTHROPIC_API_KEY=\"\" OAuth 모드 강제 3곳 추가 (_step_run_cli + legacy + targeted) — Claude Code SDK Command failed exit <N> 근본 원인.",
+      "error_type": "SDKAuthLeak",
+      "message_pattern": "ANTHROPIC_API_KEY=\"\"\\ OAuth\\ 모드\\ 강제\\ 3곳\\ 추가\\ \\(_step_run_cli\\ \\+\\ legacy\\ \\+\\ targeted\\)\\ —\\ Cla",
+      "fixer": "sdkauthleak",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/auto_repair.py",
+          "source": "manual-claude_cowork",
+          "ts": "2026-06-07T07:16:03"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T07:16:03",
+      "last_seen": "2026-06-07T07:16:03",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (sdkauthleak) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T07:16:03"
+      }
+    },
+    {
+      "fingerprint": "ProviderRemoval::Bing+HuggingFace 완전 삭제: provider 2종 백업 폐기 + image_agent.py<PATH>.py 단순화 + hub.py 3카드→1카드 + JARVIS05_VISION 갱신",
+      "error_type": "ProviderRemoval",
+      "message_pattern": "Bing\\+HuggingFace\\ 완전\\ 삭제:\\ provider\\ 2종\\ 백업\\ 폐기\\ \\+\\ image_agent\\.py/thumbnail_maker\\.py/pr",
+      "fixer": "providerremoval",
+      "tier": "manual",
+      "domain": "image",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/",
+          "source": "manual-claude_cowork",
+          "ts": "2026-06-07T07:16:04"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T07:16:04",
+      "last_seen": "2026-06-07T07:16:04",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (providerremoval) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T07:16:04"
+      }
+    },
+    {
+      "fingerprint": "ProviderRemoval::AI 이미지 행 Pollinations 단독 + pip install anthropic → claude-code-sdk + ANTHROPIC_ORG_ID 행 제거 → OAuth 안내",
+      "error_type": "ProviderRemoval",
+      "message_pattern": "AI\\ 이미지\\ 행\\ Pollinations\\ 단독\\ \\+\\ pip\\ install\\ anthropic\\ →\\ claude\\-code\\-sdk\\ \\+\\ ANTHROPIC_O",
+      "fixer": "providerremoval",
+      "tier": "manual",
+      "domain": "unknown",
+      "examples": [
+        {
+          "fixed_file": "README.md",
+          "source": "manual-claude_cowork",
+          "ts": "2026-06-07T07:16:04"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T07:16:04",
+      "last_seen": "2026-06-07T07:16:04",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (providerremoval) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T07:16:04"
       }
     }
   ]

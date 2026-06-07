@@ -11,7 +11,7 @@
 | 기능 | 설명 |
 |------|------|
 | 📝 **블로그 자동 발행** | 경제 브리핑(매일 07:00) + 테마주 분석(매일 16:00) — 네이버·티스토리 동시 발행 |
-| 🖼️ **AI 이미지 자동 생성** | Bing → HuggingFace → Pollinations 폴백 체인으로 글마다 새 이미지 창작 |
+| 🖼️ **AI 이미지 자동 생성** | Pollinations.ai 로 글마다 새 이미지 창작 |
 | 📡 **트렌드 레이더** | Google Trends + 네이버 DataLab 실시간 수집 → 핫 키워드 자동 탐지 |
 | 🛡️ **자가 진단·수정** | 오류 발생 시 학습 캐시 → RL 모델 → Claude Code SDK 3단계 자동 복구 |
 | 🧠 **강화 학습 오류 수정** | SGDClassifier 온라인 학습 — 수정 성공/실패를 보상으로 가중치 즉시 갱신 |
@@ -115,7 +115,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 # 의존성 설치
 pip install -r JARVIS02_WRITER/requirements.txt
-pip install anthropic python-dotenv apscheduler streamlit scikit-learn numpy chromadb
+pip install claude-code-sdk python-dotenv apscheduler streamlit scikit-learn numpy chromadb
 
 # 환경변수 설정
 cp .env.example .env
@@ -128,7 +128,7 @@ cp .env.example .env
 
 | 항목 | 설명 | 발급처 |
 |------|------|--------|
-| `ANTHROPIC_ORG_ID` | Claude API Org ID | [console.anthropic.com](https://console.anthropic.com) |
+| (Claude 인증) | **Claude Code SDK** 의 `claude` CLI 가 OAuth (Max 구독) 로 자동 인증 — 별도 API 키 불필요 | `claude auth login` |
 | `TELEGRAM_TOKEN` | 텔레그램 봇 토큰 | [@BotFather](https://t.me/BotFather) |
 | `TELEGRAM_CHAT_ID` | 텔레그램 채팅 ID | getUpdates API |
 | `NV_USERNAME` / `NV_PASSWORD` | 네이버 계정 | [naver.com](https://naver.com) |

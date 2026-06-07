@@ -457,10 +457,12 @@ def run_theme(theme: str) -> dict:
             "naver":   result.get("naver",   {}).get("success", False),
             "tistory": result.get("tistory", {}).get("success", False),
         }
+        _result_data_empty = result.get("data_empty", False)
     except Exception as _tw_e:
         log(f"  ❌ trend_theme_writer 실행 예외: {_tw_e}")
         import traceback; traceback.print_exc()
         results = {"naver": False, "tistory": False}
+        _result_data_empty = False
 
     log(f"  📋 1차 결과: 네이버={'✅' if results.get('naver') else '❌'} | "
         f"티스토리={'✅' if results.get('tistory') else '❌'}")
@@ -489,7 +491,9 @@ def run_theme(theme: str) -> dict:
     )
 
     # ── GUARDIAN 자동 대응 — harness 소진 후 코드 수정 + 재발행 ──────
-    if fail:
+    # ★ data_empty 시 GUARDIAN 스킵 (ERRORS [168][174] 반복 박제 — 동일 테마 재시도 = 동일 실패 반복)
+    # 종목 데이터 0개는 코드 버그가 아닌 데이터 부재 → 테마 교체가 정답, 코드 수정 불필요
+    if fail and not _result_data_empty:
         try:
             from JARVIS07_GUARDIAN.incident_responder import respond_in_background
             _err_ctx = (
@@ -532,6 +536,8 @@ def run_theme(theme: str) -> dict:
             log(f"🛡️ GUARDIAN incident_responder 트리거됨: theme={theme}, fail={fail}")
         except Exception as _ire:
             log(f"⚠️ GUARDIAN 트리거 실패: {_ire}")
+    elif fail and _result_data_empty:
+        log(f"⚠️ [THEME] 종목 데이터 없음 — GUARDIAN 스킵 (테마 교체로 대응 필요): theme={theme}")
 
     return results
 

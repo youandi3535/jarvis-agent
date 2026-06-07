@@ -769,12 +769,13 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
 
     _ts_res = _st.get("ts_pub_result", {"success": False, "url": "", "keyword": theme})
     _nv_res = _st.get("nv_pub_result", {"success": False, "url": "", "keyword": theme})
+    _data_empty = bool(_st.get("_collect_data_empty"))
 
     if not _result.delivered:
         _reason = getattr(_result, "escalation_reason", "최대 시도 초과 또는 abort")
         _tg(f"❌ [THEME] 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
 
-    return {"theme": theme, "tistory": _ts_res, "naver": _nv_res}
+    return {"theme": theme, "tistory": _ts_res, "naver": _nv_res, "data_empty": _data_empty}
 
 
 __all__ = [

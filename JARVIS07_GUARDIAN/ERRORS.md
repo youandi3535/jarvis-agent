@@ -1,5 +1,69 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [263] Bing + HuggingFace 이미지 폴백 완전 삭제 + Anthropic API 흔적 제거 (2026-06-07)
+
+- **배경**: 사용자 박제 — "Bing+HuggingFace 이미지 폴백도 전멸, 이건 이제 사용 안할거야. 우리 에이전트에서 완전히 삭제해. 각주 포함해서 흔적 자체를 전부 삭제해." + "우린 클로드 CLI도, 엔트로픽 API도 사용안해. 우리는 클로드 코드를 사용해!"
+- **원인**: Bing 쿠키 무한 만료 사이클 + HuggingFace `hf-inference` 프로바이더 모델 미지원 + 매번 폴백 체인 통과 비용. Pollinations 단독으로 충분.
+- **해결 — 3단계**:
+  1. **Provider 파일 폐기**: `_deleted_2026-06-07_bing_hf/` 로 이동 — `bing_provider.py`, `huggingface_provider.py`.
+  2. **호출 코드 정리**:
+     - `JARVIS06_IMAGE/image_agent.py:generate_photo()` — Pollinations.ai 단독 호출로 단순화.
+     - `JARVIS06_IMAGE/thumbnail_maker.py` — `_generate_photo_bing`/`_generate_photo_hf` 삭제, Pollinations 직행.
+     - `JARVIS06_IMAGE/providers/__init__.py` — import 2종 제거 + `__all__` 갱신.
+     - `JARVIS05_VISION/registry.py` — `_Image06Adapter.get_health/get_metrics` Pollinations 단독.
+     - `hub.py` — 시스템 탭 프로바이더 카드 3종 → 1종 (Pollinations 단독) + `/3` → `/1`.
+  3. **주석·문서 통일 (각주 포함)**:
+     - `JARVIS02_WRITER/economic_poster.py`, `theme_html_writer.py`, `JARVIS06_IMAGE/draft_processor.py` 주석.
+     - `JARVIS06_IMAGE/image_agent.py` capability description + tags.
+     - `shared/precommit_check.py` 주석.
+     - `README.md` — "AI 이미지" 행 + `pip install anthropic` → `pip install claude-code-sdk` + `.env` 환경변수 표에서 `ANTHROPIC_ORG_ID` 제거 → "Claude Code SDK 의 `claude` CLI 가 OAuth 로 자동 인증 (Max 구독)" 안내로 교체.
+- **잔존 정당**:
+  - `JARVIS02_WRITER/trend_economic_writer.py:139` — `'빙에이아이': 'Bing AI'` 키워드 한글 매핑 — *Microsoft Bing AI* 외부 서비스 이름 정규화용 (사용자 글에서 한국어 "빙에이아이" → "Bing AI" 변환), 우리 이미지 폴백과 무관.
+  - `ERRORS.md` 역사 박제 — 사용자 박제 원칙 (수정 금지).
+  - `shared/llm.py:25` `ANTHROPIC_API_KEY=max-subscription-no-api-cost` setdefault — CrewAI/LangChain native init 우회 트릭. SDK 호출 시 `""` 로 오버라이드 → OAuth 모드 강제. 우리가 *API 호출하지 않음*. 유지.
+- **파일**: `JARVIS06_IMAGE/{image_agent.py, thumbnail_maker.py, draft_processor.py, providers/__init__.py}` · `JARVIS05_VISION/registry.py` · `hub.py` · `JARVIS02_WRITER/{economic_poster.py, theme_html_writer.py}` · `shared/precommit_check.py` · `README.md` · `_deleted_2026-06-07_bing_hf/` (백업)
+- **교훈**:
+  - 외부 무료 API는 *무한 폴백 체인이 미덕*이 아니라 *부채*. 매번 1·2순위 실패 → 3순위 도달 = 응답 지연 + GUARDIAN 학습 노이즈 + 사용자 텔레그램 스팸. 안정 보장된 1종 단독이 우수.
+  - "Bing 쿠키 갱신" 같은 *주기 작업*이 안정화 안 되면 그 도구는 시스템 부담. 폐기 결정이 곧 운영 비용 절감.
+
+---
+
+### [262] Claude Code SDK `Command failed with exit code 1` 근본 원인 = `ANTHROPIC_API_KEY` 가짜 키 미오버라이드 (2026-06-07)
+
+- **증상**: KST 16:00 테마 발행 + 07:00 경제 브리핑 + 자가진단 — 모두 `[harness:auto-repair] attempt=1 step=③ Claude Code SDK 실행: Exception: Command failed with exit code 1 (exit code: 1) / Error output: Check stderr output`. 어제 (06-06) 가짜 모델 ID `claude-opus-4-8` → `claude-opus-4-6` 수정 후 데몬 KST 10:12 재시작 + 모델 ID 적용 확인됐는데도 여전히 실패. 종목 데이터 0개 (홈쇼핑·리튬·스마트팩토리) 도 동일 원인 — LLM 호출 전부 실패.
+- **환경**: macOS 호스트, claude-code-sdk Python 패키지 + `claude` CLI 바이너리 (npm @anthropic-ai/claude-code), MAX 구독 OAuth 인증 모드.
+- **원인 — 환경변수 누수 1곳**:
+  - `shared/llm.py:25` — `os.environ.setdefault("ANTHROPIC_API_KEY", "max-subscription-no-api-cost")` 가짜 키 세팅. CrewAI/LangChain native init 우회용 트릭.
+  - `shared/llm.py:290, 315` — `ClaudeCodeOptions(env={"ANTHROPIC_API_KEY": ""})` 빈 문자열 오버라이드 → SDK 가 OAuth 모드로 fallback.
+  - **그러나** `JARVIS07_GUARDIAN/auto_repair.py:497, 690, 837` 3곳 — `run_env = dict(os.environ); run_env["PATH"] = ...` 만 설정. `ANTHROPIC_API_KEY` 오버라이드 **누락**.
+  - 결과: `ClaudeCodeOptions(env=run_env)` 가 가짜 키 `"max-subscription-no-api-cost"` 그대로 전달 → `claude` CLI 가 *진짜 API 키*로 인식 → Anthropic API 인증 실패 → exit code 1.
+- **헛다리**:
+  - 모델 ID 가짜 의심 → 어제 수정 완료. *진짜 원인 아님*.
+  - SDK 버전 mismatch / rate_limit_event 미지원 → 호스트가 어제 10:16 `message_parser.py` 직접 패치 완료. *진짜 원인 아님*.
+  - claude CLI 미설치 의심 → `cli_not_found` 가 아닌 `Command failed with exit code 1` 이므로 CLI 자체는 존재. *진짜 원인 아님*.
+- **해결**: `auto_repair.py` 3곳 모두 `run_env["ANTHROPIC_API_KEY"] = ""` 추가 — SDK 호출 직전 OAuth 모드 강제. `shared/llm.py` 와 동일 패턴.
+- **파급 효과**:
+  - 종목 데이터 0개 → LLM 호출 (invoke_text) 정상화 → 5단 폴백 모두 정상 시도 → 자동 해결 예상.
+  - 자가진단 SDK 호출 정상화 → harness Layer 3 abort 해소 → `self_repair_runs` DB 박제 정상.
+  - 종목 enrich(`_enrich_leader_desc`) 정상 → 테마글 발행 정상.
+- **검증** (호스트 데몬 재시작 후):
+  ```
+  pkill -f jarvis_daemon.py  # keeper 가 30초 후 자동 재시작
+  # 다음 KST 16:00 테마 발행 또는 자가진단 텔레그램 알림 확인:
+  #   ✅ Claude Code SDK 정상 응답
+  #   ✅ 종목 데이터 N개 (0 아님)
+  #   ✅ harness Layer 3 통과
+  #   ✅ self_repair_runs DB 박제 정상
+  ```
+- **파일**: `JARVIS07_GUARDIAN/auto_repair.py` (3곳: `_step_run_cli` + `_run_auto_repair_legacy` + `run_auto_repair_targeted`)
+- **교훈**:
+  - 환경변수 setdefault 트릭은 *전역 오염*. 그 트릭을 가정한 코드(`shared/llm.py`)는 오버라이드하지만, *모르고 만든 코드*는 가짜 키 전달.
+  - **모든 `dict(os.environ)` 복사 + `ClaudeCodeOptions(env=...)` 패턴은 *반드시* `run_env["ANTHROPIC_API_KEY"] = ""` 동반 의무**. precommit 검증 추가 권고.
+  - 한 모듈의 *우회 트릭*은 다른 모듈에 *함정*. 단일 진입점 (`shared/llm._run_sdk_*`) 으로 강제하거나, 트릭의 *후속 처리*를 의무로 박제해야.
+  - "어제 수정했는데 왜 또?" — 모델 ID 수정만으로는 절반. SDK 호출 *전체 환경 격리*가 진짜 해결.
+
+---
+
 ### [260] `ValueError: JSON not found` @ JARVIS03_RADAR.analyzer — 사용자 오해 + 학습 노이즈 5중 누수 (2026-06-07)
 
 - **증상**: 사용자 텔레그램 알림 `⚠️ [GUARDIAN] 자동 수정 실패 / 자체 학습·Claude Code 모두 수정 불가 / 오류: ValueError @ JARVIS03_RADAR.analyzer / 내용: JSON not found / → 수동 검토 필요`. error_log 4건 누적 (ID 229·395·741·754 / 2026-05-16 ~ 2026-06-07).

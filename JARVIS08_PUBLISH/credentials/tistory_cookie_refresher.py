@@ -530,6 +530,15 @@ def _attempt_once(force: bool, return_driver: bool):
                 pass
 
 
+# ── ★ 멱등성 가드 (사용자 박제 2026-06-07 — ERRORS [264])
+# 동시 발행 잡 + harness 재시도 + incident_responder 가 같은 60초 안에 run() 다중 호출 →
+# 텔레그램 "✅ 티스토리 쿠키 갱신 성공" 알림 N회 중복 발송. 60초 안에 이미 성공했으면 skip.
+import threading as _threading
+_LAST_REFRESH_TS: float = 0.0
+_REFRESH_LOCK = _threading.Lock()
+_REFRESH_COOLDOWN_SEC = 60   # 1분 안에 재호출 시 skip
+
+
 def run(force: bool = False, return_driver: bool = False, notify: bool = True):
     """
     쿠키 확인 및 갱신 — 자동 재시도 (최대 _RETRY_MAX=3회) + 텔레그램 알림.
@@ -543,7 +552,22 @@ def run(force: bool = False, return_driver: bool = False, notify: bool = True):
       - 쿠키 유효 / 갱신 성공: (True, driver|None) 반환
       - 실패: (False, None)
     return_driver=False: bool
+
+    ★ 멱등성 가드 — 60초 안에 이미 성공했으면 즉시 True 반환 (텔레그램 알림 중복 차단).
     """
+    global _LAST_REFRESH_TS
+    import time as _time
+
+    # ── ★ 멱등성 게이트 (모든 force/return_driver 조합 적용 — ERRORS [262] 박제)
+    # 이전 게이트는 force=True 또는 return_driver=True 시 우회 → 3중 갱신 사고.
+    # 수정: cooldown 안에 이미 성공한 갱신이 있으면 항상 skip.
+    # return_driver=True 호출자는 (True, None) 을 수신하며, None driver 처리는 호출자 책임.
+    with _REFRESH_LOCK:
+        _since = _time.time() - _LAST_REFRESH_TS
+        if _since < _REFRESH_COOLDOWN_SEC:
+            print(f"  ⏭️ 티스토리 쿠키 갱신 — {int(_since)}초 전 이미 성공 (cooldown {_REFRESH_COOLDOWN_SEC}초, force={force})")
+            return (True, None) if return_driver else True
+
     print("\n" + "=" * 50)
     print("  🍪 티스토리 쿠키 갱신 체크")
     print("=" * 50)
@@ -567,6 +591,9 @@ def run(force: bool = False, return_driver: bool = False, notify: bool = True):
         try:
             ok, drv = _attempt_once(force, return_driver)
             if ok:
+                # ★ 성공 시 마지막 갱신 시각 박제 (멱등성 가드용)
+                with _REFRESH_LOCK:
+                    _LAST_REFRESH_TS = _time.time()
                 if notify and attempt > 1:
                     _tg_notify(f"✅ 티스토리 쿠키 갱신 성공 (시도 {attempt}/{_RETRY_MAX})")
                 elif notify:
