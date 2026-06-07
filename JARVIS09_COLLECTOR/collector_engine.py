@@ -96,3 +96,72 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
 
     log.info(f"[Engine] 수집 완료: 원본 {len(raw_docs)}건 → 정제 {len(results)}건 → 배분 {len(balanced)}건")
     return balanced
+
+
+# ── delta-aware 교류 프로토콜 (★ 사용자 박제 2026-06-07) ────────────────
+# JARVIS06 등 호출자가 이미 가진 doc fingerprint(content_hash)를 제외하고
+# *신규/갱신분만* 수령할 수 있도록 한 진입점. 단일 진입점 원칙은 그대로 —
+# 호출자는 yfinance/requests 직접 호출 금지. 단, collect_for_theme*만 자유.
+
+# aspect → 우선 노출할 source_type 화이트리스트
+_ASPECT_SOURCES = {
+    "scene_context":  {"naver_news", "news", "blog", "web"},          # 사진·배경 컨텍스트
+    "numeric_facts":  {"dart", "ecos", "kosis", "krx", "finance",
+                       "kor_econ"},                                    # 차트·수치
+    "mixed":          None,  # 전체
+}
+
+
+def collect_for_theme_delta(
+    theme: str,
+    sector: str = "",
+    exclude_hashes: list[str] | set[str] | None = None,
+    aspect: str | None = None,
+) -> dict:
+    """delta-aware 수집 — 이미 가진 hash 제외하고 신규/갱신분만 반환.
+
+    Args:
+        theme:          수집 키워드
+        sector:         섹터 힌트
+        exclude_hashes: 호출자가 이미 보유한 content_hash 목록
+        aspect:         "scene_context" | "numeric_facts" | "mixed" | None
+                        None = mixed (전체)
+
+    Returns:
+        {
+            "status":  "no_change" | "fresh",
+            "added":   list[CollectionResult],  # exclude 제외 + aspect 매칭
+            "version": float (epoch ts),
+            "aspect":  aspect or "mixed",
+            "total_pool": int,                  # 필터링 전 전체 수집량
+        }
+    """
+    import time as _t
+    excl: set[str] = set(exclude_hashes or [])
+    aspect_key = aspect or "mixed"
+    allow_src = _ASPECT_SOURCES.get(aspect_key)
+
+    # 전체 수집 (기존 collect_for_theme 재사용)
+    pool = collect_for_theme(theme, sector=sector)
+
+    # aspect 필터링
+    if allow_src is not None:
+        pool_filtered = [d for d in pool if d.source_type in allow_src]
+    else:
+        pool_filtered = pool
+
+    # exclude_hashes 제외
+    added = [d for d in pool_filtered if d.content_hash not in excl]
+
+    status = "no_change" if not added else "fresh"
+    log.info(
+        f"[Engine/delta] theme='{theme}' aspect={aspect_key} "
+        f"pool={len(pool)} filtered={len(pool_filtered)} added={len(added)} status={status}"
+    )
+    return {
+        "status":     status,
+        "added":      added,
+        "version":    _t.time(),
+        "aspect":     aspect_key,
+        "total_pool": len(pool),
+    }

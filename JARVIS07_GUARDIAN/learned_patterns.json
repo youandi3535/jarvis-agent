@@ -290,9 +290,9 @@
           "ts": "2026-06-07T00:14:17"
         }
       ],
-      "hit_count": 86,
+      "hit_count": 87,
       "first_seen": "2026-05-31T10:17:53",
-      "last_seen": "2026-06-07T07:45:11",
+      "last_seen": "2026-06-07T19:17:54",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -301,7 +301,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T07:45:11"
+        "evaluated_at": "2026-06-07T19:17:54"
       }
     },
     {

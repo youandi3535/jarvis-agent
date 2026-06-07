@@ -15,7 +15,10 @@
     - 다른 에이전트에서 yfinance / pykrx / requests / pytrends 직접 호출
     - JARVIS09 외부에서 수집 로직 신설
 """
-from JARVIS09_COLLECTOR.collector_engine import collect_for_theme
+from JARVIS09_COLLECTOR.collector_engine import (
+    collect_for_theme,
+    collect_for_theme_delta,   # ★ delta-aware 교류 (사용자 박제 2026-06-07)
+)
 from JARVIS09_COLLECTOR.collect_theme import collect_stocks_data
 from JARVIS09_COLLECTOR.providers.economic_data_provider import (
     get_market_data,
@@ -24,6 +27,7 @@ from JARVIS09_COLLECTOR.providers.economic_data_provider import (
 
 __all__ = [
     "collect_for_theme",
+    "collect_for_theme_delta",
     "collect_stocks_data",
     "get_market_data",
     "get_economic_calendar",

@@ -1639,8 +1639,16 @@ def generate_chart(
     out_dir: str | Path = ".",
     chart_idx: int = 1,
     run_id: str = "",
+    collection_docs: list | None = None,
 ) -> str:
-    """차트 설명 → Plotly PNG → 파일 경로. 실패 시 ""."""
+    """차트 설명 → Plotly PNG → 파일 경로. 실패 시 "".
+
+    ★ 사용자 박제 2026-06-07 — collection_docs 인자 추가 + delta-aware 보강:
+       ① context_text 짧으면 먼저 collection_docs 의 facts_for_chart 재사용
+       ② 그래도 부족하면 collection_merger.request_more 로 JARVIS09 delta 호출
+          (aspect="numeric_facts" — 공시·통계·시세 우선)
+       ③ 마지막 폴백: 기존 _build_j09_context (시계열·KRX·market 구조화)
+    """
     try:
         import time
         import numpy as np
@@ -1664,14 +1672,44 @@ def generate_chart(
 
         use_synth = False
 
-        # ★ context_text 빈 경우 JARVIS09 전체 소스로 자동 보강
-        # LLM·파서 모두 더 풍부한 데이터로 작동하도록 선제 수집
+        # ── ① collection_docs 우선 활용 (상위 호출자가 이미 수집한 것 재사용) ──
+        if len(context_text) < 300 and collection_docs:
+            try:
+                from JARVIS06_IMAGE.collection_merger import facts_for_chart
+                _facts = facts_for_chart(collection_docs, max_n=12)
+                if _facts:
+                    _docs_ctx = "[수집 사실 라인]\n" + "\n".join(_facts)
+                    context_text = (context_text + "\n\n" + _docs_ctx).strip() if context_text else _docs_ctx
+                    print(f"  ♻️ [chart_generator] collection_docs facts 재사용 → {len(context_text)}자")
+            except Exception as _e:
+                print(f"  ⚠️ [chart_generator] facts_for_chart 실패: {_e}")
+
+        # ── ② delta 보강 — 그래도 부족하면 JARVIS09에 numeric_facts 추가 요청 ──
         if len(context_text) < 300:
-            print(f"  📡 [chart_generator] context 부족({len(context_text)}자) → JARVIS09 전체 소스 보강...")
+            try:
+                from JARVIS06_IMAGE.collection_merger import request_more as _req_more
+                from JARVIS06_IMAGE.collection_merger import facts_for_chart as _ffc
+                print(f"  🔄 [chart_generator] context 부족({len(context_text)}자) → JARVIS09 delta 요청 (aspect=numeric_facts)")
+                _merged = _req_more(
+                    theme=keyword, existing=collection_docs or [],
+                    sector=sector, aspect="numeric_facts",
+                )
+                if _merged:
+                    _facts2 = _ffc(_merged, max_n=12)
+                    if _facts2:
+                        _delta_ctx = "[수집 사실 라인]\n" + "\n".join(_facts2)
+                        context_text = (context_text + "\n\n" + _delta_ctx).strip() if context_text else _delta_ctx
+                        print(f"  ✅ [chart_generator] delta 보강 완료 → {len(context_text)}자")
+            except Exception as _e:
+                print(f"  ⚠️ [chart_generator] delta 요청 실패: {_e}")
+
+        # ── ③ 마지막 폴백: 기존 _build_j09_context (시계열·KRX·market 등 구조화) ──
+        if len(context_text) < 300:
+            print(f"  📡 [chart_generator] 여전히 부족({len(context_text)}자) → 구조화 소스(ECOS/KRX/market) 보강...")
             _j09_ctx = _build_j09_context(keyword, description)
             if _j09_ctx:
                 context_text = (context_text + "\n\n" + _j09_ctx).strip() if context_text else _j09_ctx
-                print(f"  ✅ [chart_generator] context 보강 완료 → {len(context_text)}자")
+                print(f"  ✅ [chart_generator] 구조화 보강 완료 → {len(context_text)}자")
 
         labels, values = _llm_extract_chart_data(
             description, keyword, sector, context_text, chart_type)
