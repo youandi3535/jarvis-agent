@@ -479,7 +479,7 @@ def main():
         f"🚀 *JARVIS 통합 데몬 v2 시작*\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📰 JARVIS02 Market Signal: {_sched.SCHEDULE_HOURS if _sched else '?'}시\n"
-        f"📰 경제 브리핑: 매일 07:00\n"
+        f"📰 경제 브리핑: 매일 06:30\n"
         f"📡 JARVIS03 트렌드 수집: 매일 09:00 · 12:00 · 15:00\n"
         f"📊 성과 수집: 매일 23:00\n"
         f"━━━━━━━━━━━━━━━━━━\n"

@@ -590,7 +590,7 @@ def run_auto_repair() -> None:
             from datetime import datetime as _dt
             _now = _dt.now()
             _next_pub = ""
-            if _now.hour == 7:
+            if _now.hour == 6:
                 _next_pub = "\n⏰ *다음 페이즈 (동일 세트)*: 경제 브리핑 발행 즉시 시작"
             elif _now.hour == 16:
                 _next_pub = "\n⏰ *다음 페이즈 (동일 세트)*: 테마글 발행 즉시 시작"
