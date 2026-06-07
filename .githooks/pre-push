@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# pre-push: push 전 origin/main 자동 rebase
+
+MAIN_BRANCH="main"
+CURRENT=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+# main 브랜치 직접 push는 rebase 불필요
+if [ "$CURRENT" = "$MAIN_BRANCH" ]; then
+  exit 0
+fi
+
+echo "[pre-push] origin/$MAIN_BRANCH 최신화 후 rebase 시작..."
+
+git fetch origin "$MAIN_BRANCH" --quiet
+
+if git rebase "origin/$MAIN_BRANCH"; then
+  echo "[pre-push] rebase 완료 — push 진행"
+  exit 0
+else
+  echo ""
+  echo "[pre-push] ❌ rebase 충돌 발생 — push 중단"
+  echo "  충돌 해소 후 아래 명령 실행:"
+  echo "  git rebase --continue  (해소 후)"
+  echo "  git rebase --abort     (취소 후 수동 처리)"
+  git rebase --abort 2>/dev/null
+  exit 1
+fi

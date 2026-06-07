@@ -7644,6 +7644,90 @@
         "tier": "unknown",
         "evaluated_at": "2026-06-07T07:43:03"
       }
+    },
+    {
+      "fingerprint": "ImageQualityWeak::_build_photo_prompt_en() Sonnet 빌더 추가 + _generate_photos/_inject_section_images 가 prompt_en 인자로 호출 (Haiku 100자 번역 우회). 섹션 이미지는 sector·section_title 컨텍스트도 함께 전달.",
+      "error_type": "ImageQualityWeak",
+      "message_pattern": "_build_photo_prompt_en\\(\\)\\ Sonnet\\ 빌더\\ 추가\\ \\+\\ _generate_photos/_inject_section_images\\ ",
+      "fixer": "imagequalityweak",
+      "tier": "manual",
+      "domain": "image",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/draft_processor.py",
+          "source": "manual-claude",
+          "ts": "2026-06-07T08:15:30"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T08:15:30",
+      "last_seen": "2026-06-07T08:15:30",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (imagequalityweak) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T08:15:30"
+      }
+    },
+    {
+      "fingerprint": "ImageQualityWeak::translate() 시스템 프롬프트 강화 — 단순 번역 → 이미지 생성 특화(SD/Flux). lighting/camera/style/quality booster + negative cue 자동 첨가. max_tokens <N>→<N>, temperature <N>.<N>→<N>.<N>.",
+      "error_type": "ImageQualityWeak",
+      "message_pattern": "translate\\(\\)\\ 시스템\\ 프롬프트\\ 강화\\ —\\ 단순\\ 번역\\ →\\ 이미지\\ 생성\\ 특화\\(SD/Flux\\)\\.\\ lighting/camera/style/qual",
+      "fixer": "imagequalityweak",
+      "tier": "manual",
+      "domain": "image",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/prompt_translator.py",
+          "source": "manual-claude",
+          "ts": "2026-06-07T08:15:30"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T08:15:30",
+      "last_seen": "2026-06-07T08:15:30",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (imagequalityweak) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T08:15:30"
+      }
+    },
+    {
+      "fingerprint": "ImageQualityWeak::URL에 &model=flux&enhance=true 명시. 옛 동작은 모델 미지정으로 Pollinations 기본값 의존 → 품질 변동. DEFAULT_MODEL='<NAME>' + 호출자가 model 인자로 override 가능.",
+      "error_type": "ImageQualityWeak",
+      "message_pattern": "URL에\\ \\&model=flux\\&enhance=true\\ 명시\\.\\ 옛\\ 동작은\\ 모델\\ 미지정으로\\ Pollinations\\ 기본값\\ 의존\\ →\\ 품질\\ 변동\\.\\ DE",
+      "fixer": "imagequalityweak",
+      "tier": "manual",
+      "domain": "image",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/providers/pollinations_provider.py",
+          "source": "manual-claude",
+          "ts": "2026-06-07T08:15:30"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T08:15:30",
+      "last_seen": "2026-06-07T08:15:30",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (imagequalityweak) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T08:15:30"
+      }
     }
   ]
 }
