@@ -1,5 +1,31 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [268] Pollinations 402 Queue full 재발 — 락 범위 불충분 (동시 요청 허용) (2026-06-08)
+
+- **증상**: `RuntimeError: Pollinations 6회 재시도 모두 실패: Queue full for IP` — [267] 수정 후에도 402 재발. 6회 지수 백오프(20→40→80→120→120→120초) 전부 실패.
+- **환경**: `JARVIS06_IMAGE/image_agent.py`, `JARVIS06_IMAGE/providers/pollinations_provider.py`
+- **원인**: `_POLL_LOCK` 이 쿨다운 체크 구간만 보호하고 **실제 HTTP 요청 중에는 락 해제**. Pollinations 요청이 30~60초 걸리는데 쿨다운 12초 후 다음 스레드가 새 요청 시작 → 2개 동시 요청 → "Queue full (max: 1)" 402.
+- **헛다리**: [267] 에서 쿨다운 시간 증가 + 지수 백오프로 해결 시도했으나, 락 범위가 근본 원인이므로 대기 시간만 늘려서는 동시 요청 문제 해결 불가.
+- **해결**: `_POLL_LOCK` 범위를 **쿨다운 체크 + HTTP 요청 전체**로 확장. 전체 `generate_photo` 호출이 직렬화되어 동시 Pollinations 요청 원천 차단. 완료 시점에 `_last_pollinations_call` 갱신 → 다음 스레드 쿨다운 정확 적용.
+- **파일**: `JARVIS06_IMAGE/image_agent.py` (line 79~100 `generate_photo` 내 `_POLL_LOCK` 범위)
+- **교훈**: IP당 큐 1개 제한 API는 재시도·백오프가 아닌 **요청 직렬화**가 근본 해법. 락이 "대기 판단"만 보호하고 "실제 요청"은 보호하지 않으면, 요청 시간 > 쿨다운 시간일 때 동시 요청 발생 필연.
+
+---
+
+### [267] Pollinations 402 Queue full — IP당 큐 1개 제한 + 전역 쿨다운 부재 (2026-06-07)
+
+- **증상**: `RuntimeError: Pollinations 4회 재시도 모두 실패: Queue full for IP` — `make_ai_section_image` → `generate_photo` → `PollinationsProvider.generate` 경로에서 4회 전부 402 반환.
+- **환경**: `JARVIS06_IMAGE/providers/pollinations_provider.py`, `JARVIS06_IMAGE/image_agent.py`
+- **원인**: Pollinations.ai IP당 큐 제한 (max 1 queued). 연속 이미지 생성 시 이전 요청이 큐에 남아 있는 상태에서 다음 요청 → 402. `image_agent.py`에 요청 간 쿨다운이 없어 연속 호출 시 필연적 충돌.
+- **헛다리**: 없음.
+- **해결**:
+  1. `pollinations_provider.py`: `_MAX_RETRIES` 4→6, 402 Queue full 전용 대기 `_QUEUE_FULL_DELAY=20`초 (지수 백오프: 20→40→80→120), `_saw_queue_full` 플래그로 일반/큐풀 백오프 분리, 최대 대기 120초 cap.
+  2. `image_agent.py`: 전역 `_last_pollinations_call` 타임스탬프 + `_POLLINATIONS_COOLDOWN=10`초 — 연속 `generate_photo` 호출 간 최소 10초 간격 강제.
+- **파일**: `JARVIS06_IMAGE/providers/pollinations_provider.py`, `JARVIS06_IMAGE/image_agent.py`
+- **교훈**: 무료 API의 IP당 큐 제한은 재시도만으로 해결 안 됨 — 요청 *전* 쿨다운이 근본 해법. 단일 프로바이더 구조에서는 전역 쿨다운 필수.
+
+---
+
 ### [266] Layer 4 부분 발행 실패 — `__send_attempted__` 플래그가 재발행 차단 (2026-06-07)
 
 - **증상**: `⚠️ [GUARDIAN] 자동 수정 실패 — 자체 학습·Claude Code 모두 수정 불가 / RuntimeError @ JARVIS00_INFRA.harness.경제 브리핑 발행 / [harness:경제 브리핑 발행] attempt=1 step=송출 (Layer 4): RuntimeError: [Layer4] ['tistory'] 발행 실패 — 송출 미완료 → 검증 순환 재진입`. attempt=1 부분 실패 (한 플랫폼만 fail) → harness 재진입 → attempt=2 가 *진짜 재발행을 못 하고* skip 처리 → 미발행이 published 로 가짜 카운트되거나 동일 fingerprint abort.

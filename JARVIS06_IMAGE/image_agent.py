@@ -23,6 +23,13 @@ log = logging.getLogger("jarvis")
 _ROOT      = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = _ROOT / "JARVIS06_IMAGE" / "output"
 
+# ★ Pollinations 전역 쿨다운 — Queue full (402) 방지
+# IP당 큐 1개 제한이므로 연속 호출 간 최소 간격 필요
+import threading as _threading, time as _time
+_POLL_LOCK = _threading.Lock()
+_last_pollinations_call: float = 0.0
+_POLLINATIONS_COOLDOWN = 18  # 초 (ERRORS [267] 재발 — 12초 부족, 18초로 확대)
+
 
 # ── 공개 API ─────────────────────────────────────────────────
 
@@ -68,13 +75,28 @@ def generate_photo(prompt_ko: str, out_dir: Path | None = None,
     # ★ 사용자 박제 2026-06-07 (ERRORS [263]) — Bing / HuggingFace 완전 삭제.
     # Bing 쿠키 무한 만료 + HuggingFace DNS 차단·hf-inference 미지원 → 전멸.
     # 단일 폴백: Pollinations.ai (키 불필요)
-    log.info("[J06] Pollinations.ai 호출")
-    kw_args: dict = {}
-    if seed is not None:
-        kw_args["seed"] = seed
-    return PollinationsProvider().generate(
-        prompt_en, dest, width=width, height=height, **kw_args
-    )
+
+    # ★ 전역 직렬화 — Queue full (402) 근본 차단 (ERRORS [267] 재발 수정)
+    # Pollinations IP당 큐 1개 제한 → 전체 요청을 락으로 직렬화.
+    # 락 범위: 쿨다운 대기 + HTTP 요청 전체. 동시 요청 원천 차단.
+    global _last_pollinations_call
+    with _POLL_LOCK:
+        elapsed = _time.time() - _last_pollinations_call
+        if elapsed < _POLLINATIONS_COOLDOWN:
+            wait = _POLLINATIONS_COOLDOWN - elapsed
+            log.info(f"[J06] Pollinations 쿨다운 대기 {wait:.1f}초")
+            _time.sleep(wait)
+
+        log.info("[J06] Pollinations.ai 호출")
+        kw_args: dict = {}
+        if seed is not None:
+            kw_args["seed"] = seed
+        result = PollinationsProvider().generate(
+            prompt_en, dest, width=width, height=height, **kw_args
+        )
+        # 완료 시점으로 갱신 — 다음 스레드 쿨다운 기준
+        _last_pollinations_call = _time.time()
+    return result
 
 
 def generate_chart(data: dict[str, Any], chart_type: str, title: str,

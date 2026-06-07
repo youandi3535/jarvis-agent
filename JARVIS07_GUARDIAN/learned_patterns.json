@@ -144,9 +144,9 @@
           "ts": "2026-06-07T18:50:12"
         }
       ],
-      "hit_count": 140,
+      "hit_count": 141,
       "first_seen": "2026-05-31T10:03:36",
-      "last_seen": "2026-06-07T23:29:39",
+      "last_seen": "2026-06-07T23:59:43",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -155,7 +155,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T23:29:39"
+        "evaluated_at": "2026-06-07T23:59:43"
       }
     },
     {
@@ -166,16 +166,6 @@
       "tier": "manual",
       "domain": "image",
       "examples": [
-        {
-          "fixed_file": "JARVIS06_IMAGE/image_agent.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-06-05T12:00:38"
-        },
-        {
-          "fixed_file": "JARVIS06_IMAGE/providers/claude_svg_provider.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-06-05T12:07:58"
-        },
         {
           "fixed_file": "JARVIS06_IMAGE/draft_processor.py",
           "source": "manual-vscode_claude",
@@ -215,11 +205,21 @@
           "fixed_file": "JARVIS06_IMAGE/style_engine.py",
           "source": "manual-vscode_claude",
           "ts": "2026-06-07T23:37:05"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/image_agent.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-07T23:51:55"
+        },
+        {
+          "fixed_file": "JARVIS06_IMAGE/providers/claude_svg_provider.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-07T23:59:57"
         }
       ],
-      "hit_count": 117,
+      "hit_count": 130,
       "first_seen": "2026-05-31T12:20:43",
-      "last_seen": "2026-06-07T23:39:32",
+      "last_seen": "2026-06-08T00:01:34",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -228,7 +228,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T23:39:32"
+        "evaluated_at": "2026-06-08T00:01:34"
       }
     },
     {
@@ -353,6 +353,34 @@
       }
     },
     {
+      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS07_GUARDIAN<PATH>.md",
+      "error_type": "ExternalEdit",
+      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS07_GUARDIAN/ERRORS\\.md",
+      "fixer": "externaledit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/ERRORS.md",
+          "source": "manual-vscode_claude",
+          "ts": "2026-05-31T10:04:58"
+        }
+      ],
+      "hit_count": 57,
+      "first_seen": "2026-05-31T10:04:58",
+      "last_seen": "2026-06-08T00:02:03",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T00:02:03"
+      }
+    },
+    {
       "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS09_COLLECTOR<PATH>.py",
       "error_type": "ExternalEdit",
       "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS09_COLLECTOR/__init__\\.py",
@@ -423,34 +451,6 @@
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-05T08:51:50"
-      }
-    },
-    {
-      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS07_GUARDIAN<PATH>.md",
-      "error_type": "ExternalEdit",
-      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS07_GUARDIAN/ERRORS\\.md",
-      "fixer": "externaledit",
-      "tier": "manual",
-      "domain": "guardian",
-      "examples": [
-        {
-          "fixed_file": "JARVIS07_GUARDIAN/ERRORS.md",
-          "source": "manual-vscode_claude",
-          "ts": "2026-05-31T10:04:58"
-        }
-      ],
-      "hit_count": 55,
-      "first_seen": "2026-05-31T10:04:58",
-      "last_seen": "2026-06-07T21:10:42",
-      "eval_meta": {
-        "should_register": true,
-        "score": 70,
-        "safe": true,
-        "accurate": true,
-        "reusable": true,
-        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
-        "tier": "unknown",
-        "evaluated_at": "2026-06-07T21:10:42"
       }
     },
     {

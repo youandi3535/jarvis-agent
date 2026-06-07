@@ -10,8 +10,9 @@ log = logging.getLogger("jarvis")
 
 _BASE = "https://image.pollinations.ai/prompt/{prompt}"
 _TIMEOUT = 60  # 2026-05-29: 이미지 생성 느린 경우 대비 60초로 증가
-_MAX_RETRIES = 4  # ★ ERRORS [267] 박제 — Queue full 재시도
-_BASE_DELAY = 10  # 첫 재시도 대기 10초 (지수 백오프: 10→20→40→80)
+_MAX_RETRIES = 6  # ★ ERRORS [267] 박제 — Queue full 재시도 (4→6 확대)
+_BASE_DELAY = 10  # 첫 재시도 대기 10초 (지수 백오프)
+_QUEUE_FULL_DELAY = 30  # ★ 402 Queue full 전용 — 큐 해소까지 더 긴 대기 (20→30 ERRORS [267] 재발)
 
 
 class PollinationsProvider:
@@ -48,10 +49,16 @@ class PollinationsProvider:
         url = _BASE.format(prompt=encoded) + params
 
         last_err: Exception | None = None
+        _saw_queue_full = False
         for attempt in range(_MAX_RETRIES):
             if attempt > 0:
-                delay = _BASE_DELAY * (2 ** (attempt - 1))
-                log.warning(f"[Pollinations] 재시도 {attempt}/{_MAX_RETRIES - 1} — {delay}초 대기")
+                # ★ 402 Queue full 시 전용 대기 (큐 해소에 더 긴 시간 필요)
+                if _saw_queue_full:
+                    delay = _QUEUE_FULL_DELAY * (2 ** (attempt - 1))
+                else:
+                    delay = _BASE_DELAY * (2 ** (attempt - 1))
+                delay = min(delay, 120)  # 최대 2분 cap
+                log.warning(f"[Pollinations] 재시도 {attempt}/{_MAX_RETRIES - 1} — {delay}초 대기 (queue_full={_saw_queue_full})")
                 time.sleep(delay)
             try:
                 log.info(f"[Pollinations] GET (attempt={attempt}) {url[:120]}")
@@ -67,9 +74,11 @@ class PollinationsProvider:
                     return out_path
                 # Queue full / 비정상 응답 → 재시도 대상
                 body_preview = r.text[:200]
-                is_queue_full = "Queue full" in body_preview or "queue" in body_preview.lower()
+                is_queue_full = "Queue full" in body_preview or "queue" in body_preview.lower() or r.status_code == 402
                 is_server_err = r.status_code >= 500
                 is_rate_limit = r.status_code == 429
+                if is_queue_full:
+                    _saw_queue_full = True
                 if is_queue_full or is_server_err or is_rate_limit:
                     last_err = RuntimeError(
                         f"Pollinations 일시 오류 (attempt={attempt}, status={r.status_code}, ct={ct}): {body_preview}"
