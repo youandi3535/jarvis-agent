@@ -1,5 +1,19 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [273] 네이버 발행 성공인데 "발행 실패" 텔레그램 오알람 — _verify_naver_published 오탐 (2026-06-08)
+
+- **증상**: 네이버 경제 브리핑 실제 발행 완료됐는데 텔레그램으로 "발행 실패" 알림 수신. `⚠️ [Naver] 발행 후 에디터 상태 유지 → 재발행 시도` → `❌ [Naver] 재시도 후에도 발행 미완료`.
+- **환경**: `JARVIS08_PUBLISH/platforms/naver_poster.py` `_verify_naver_published()` — 2026-06-08 07:01 경제 브리핑 발행
+- **원인**: `_verify_naver_published()`가 URL에 "write" 포함 여부로 성공 판정. 네이버 발행 후 `postwrite?logNo=XXXX&redirect=Update` (발행 완료 후 수정 모드 URL) 로 리다이렉트되면 "write" 포함 → False 반환. 또한 발행 후 4초 대기가 부족해 URL 리다이렉트 전에 체크함.
+- **헛다리**: 없음 (첫 진단).
+- **해결**:
+  1. `_verify_naver_published()`: `postwrite` + `logNo=` 동시 포함 → True (발행 완료 후 수정 URL = 성공)
+  2. 발행 버튼 클릭 후 대기 시간 4초 → 8초 확대
+- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` (`_verify_naver_published`, line ~1251)
+- **교훈**: Naver 스마트에디터 발행 후 URL 이동 패턴이 두 가지: ① 바로 포스트 URL (`/숫자`) ② 수정 모드 URL (`postwrite?logNo=`). 후자도 발행 성공. URL에 "write" 포함 = 실패라는 단순 판정은 오탐 발생. 리다이렉트 타이밍도 4초보다 길 수 있음.
+
+---
+
 ### [272] Pollinations 402 → Guardian "자동 수정 실패" 오알람 — severity 분류 수정 (2026-06-08)
 
 - **증상**: `⚠️ [GUARDIAN] 자동 수정 실패 — RuntimeError @ JARVIS06IMAGE.trendcharts / Pollinations 6회 재시도 모두 실패: Queue full for IP`

@@ -425,21 +425,35 @@ def _dismiss_naver_popup(driver) -> bool:
 def _verify_naver_published(driver) -> bool:
     """발행 후 에디터 이탈 여부로 실제 발행 확인.
 
-    발행 성공 시: URL이 editor에서 blog.naver.com/{id}/숫자 형태로 이동
-    발행 실패 시: 여전히 editor URL 또는 팝업 열려있음
+    발행 성공 패턴:
+      1. URL이 blog.naver.com/{id}/숫자 형태로 이동 (발행 직후 리다이렉트)
+      2. postwrite?logNo=숫자&redirect=Update — 발행 완료 후 수정 모드 URL (성공!)
+      3. 에디터 내 "발행완료" 토스트 메시지
+    발행 실패 패턴:
+      - 파라미터 없는 postwrite URL (새 글 작성 상태 유지)
+      - editor URL 유지
 
     Returns:
         True: 발행 확인됨
         False: 에디터 상태 유지 (발행 미완료)
     """
     try:
+        import re as _re
         current_url = driver.current_url
+
+        # ★ ERRORS [273] 수정 2026-06-08 — logNo 있는 postwrite = 발행 완료 후 수정 URL (성공)
+        # 패턴: postwrite?logNo=XXXXXXX&redirect=Update → 발행된 글이 존재함을 의미
+        if "postwrite" in current_url and "logNo=" in current_url:
+            return True
+
+        # 파라미터 없는 신규 작성 URL은 실패
         if "editor" in current_url or "write" in current_url:
             return False
+
         # 발행 완료 후 URL 패턴: blog.naver.com/ID/숫자
-        import re as _re
         if _re.search(r'blog\.naver\.com/\w+/\d+', current_url):
             return True
+
         # 발행 직후 에디터 내 성공 메시지 확인
         success_msg = driver.execute_script("""
             var toasts = document.querySelectorAll('.se-toast, [class*="toast"], [class*="success"]');
@@ -1234,7 +1248,8 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             _click_in_browser(driver, _pub_btn['x'], _pub_btn['y'], f"최종발행({_pub_btn['text']})")
         else:
             _click_in_browser(driver, 1452, 604, "최종발행(좌표)")
-        time.sleep(4)
+        # ★ ERRORS [273] — 4초 부족 (네이버 리다이렉트 > 4초 소요 사례). 8초로 확대.
+        time.sleep(8)
 
         driver.save_screenshot(str(IMG_RESULT / "done.png"))
 
