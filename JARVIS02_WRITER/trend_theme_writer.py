@@ -672,7 +672,11 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         """Layer 4 — 검증 통과 후 2 플랫폼 발행.
 
         ★ ADR 009 v2 strict 모드: 활성 플랫폼 *하나라도* 실패 시 raise → harness 재진입.
-        published_platforms 집합으로 이미 성공한 플랫폼은 재시도 시 스킵 (이중 발행 방지).
+        published_platforms 집합으로 이미 *진짜 성공한* 플랫폼은 재시도 시 스킵 (이중 발행 방지).
+
+        ★ 사용자 박제 2026-06-07 (ERRORS [265]) — 부분 실패 자율 회복:
+          attempt>=2 + 이전 실패 (success=False) → 플래그 해제 → 진짜 재발행 시도.
+          harness max_attempts=3 와 함께 최대 3회.
         """
         _theme   = state["theme"]
         _sector  = state["sector"]
@@ -681,13 +685,30 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         # ★ 이미 발행된 플랫폼 추적 (retry 시 이중 발행 방지)
         published = state.setdefault("published_platforms", set())
 
-        print(f"\n  📤 [Phase 2] 발행 (Tistory/Naver 순차)")
+        # ★ attempt 추적 — 첫 호출 = 1, 재진입마다 +1 (ERRORS [265])
+        send_attempt = state.get("__send_attempt__", 0) + 1
+        state["__send_attempt__"] = send_attempt
+
+        # ★ attempt >= 2 + 이전 실패 플랫폼 *플래그 해제* → 진짜 재발행 기회
+        if send_attempt >= 2:
+            _ts_prev = state.get("ts_pub_result", {})
+            _nv_prev = state.get("nv_pub_result", {})
+            if ("tistory" not in published and state.get("__ts_send_attempted__")
+                    and not _ts_prev.get("success")):
+                print(f"  🔄 [티스토리] attempt={send_attempt} — 이전 발행 실패 → 플래그 해제·재발행")
+                state["__ts_send_attempted__"] = False
+            if ("naver" not in published and state.get("__nv_send_attempted__")
+                    and not _nv_prev.get("success")):
+                print(f"  🔄 [네이버] attempt={send_attempt} — 이전 발행 실패 → 플래그 해제·재발행")
+                state["__nv_send_attempted__"] = False
+
+        print(f"\n  📤 [Phase 2] 발행 (Tistory/Naver 순차, send_attempt={send_attempt})")
 
         # Tistory
         if "tistory" not in published:
             if state.get("__ts_send_attempted__"):
-                # ★ 이미 시도했으나 확인 실패 — 중복 발행 방지 (비멱등 외부 발행 sentinel)
-                print("  ⚠️ 티스토리 발행 이미 시도 완료 — 확인 실패했으나 중복 방지로 재발행 안 함")
+                # ★ 이미 시도+성공 케이스 — 이중 발행 방지로 published 처리
+                print("  ⚠️ 티스토리 발행 이미 시도 완료 (이중 방지)")
                 published.add("tistory")
             else:
                 state["__ts_send_attempted__"] = True  # 반드시 시도 *전* 에 설정
@@ -699,12 +720,11 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         else:
             print("  ⏭ 티스토리 이미 발행 완료 (재시도 스킵)")
 
-        # Naver — ★ 핵심 버그 수정: 확인 실패 ≠ 미발행. 시도 후 재시도 절대 금지.
+        # Naver
         if "naver" not in published:
             if state.get("__nv_send_attempted__"):
-                # ★ 이미 시도했으나 UI 확인 실패 — 실제로는 발행됐을 가능성 높음
-                # 재발행하면 중복 포스팅 발생 → 발행된 것으로 간주하고 종료
-                print("  ⚠️ 네이버 발행 이미 시도 완료 — UI 확인 실패했으나 중복 방지로 재발행 안 함")
+                # ★ 이미 시도+성공 케이스 — 이중 발행 방지로 published 처리
+                print("  ⚠️ 네이버 발행 이미 시도 완료 (이중 방지)")
                 published.add("naver")
             else:
                 state["__nv_send_attempted__"] = True  # 반드시 시도 *전* 에 설정

@@ -34,7 +34,7 @@ except ImportError:
     def _g_report(*a, **kw): pass
 
 
-_TYPE_POOL = ['iso_bar', 'line', 'bar', 'barh', 'iso_area', 'pie', 'donut', 'area', 'combo', 'step', 'scatter']
+_TYPE_POOL = ['iso_bar', 'line', 'bar', 'barh', 'iso_area', 'pie', 'donut', 'area', 'combo', 'step', 'scatter', 'band_line']
 # ★ 제12조 스타일 중복 금지: bar/barh/iso_bar 는 같은 "막대 계열" — 1개 run에 1종만 허용
 _BAR_FAMILY = frozenset({'bar', 'barh', 'iso_bar'})
 
@@ -190,6 +190,77 @@ def _derive_colors(keyword: str, sector: str, chart_idx: int, run_id: str = "") 
             "tertiary": tertiary, "accent": accent, "list5": list5}
 
 
+def _data_override_type(
+    chart_type: str,
+    labels: list,
+    values: list,
+    description: str,
+    run_id: str,
+) -> str:
+    """labels/values 확정 후 데이터 특성 기반으로 chart_type 재조정.
+
+    키워드 매칭이 놓치는 케이스를 데이터 실수치로 보정:
+      ① 합산 ≈100% → donut (구성비 차트)
+      ② 항목 2~3개 + 시계열 차트 → barh (추이선이 의미없음)
+      ③ 음수 포함 + fill 계열 → combo/bar (fill area 깨짐 방지)
+      ④ flat 데이터 + 시계열 + 비금리 → bar (변화없는 라인은 무의미)
+      ⑤ 항목 수 ≥ 8 + barh → line (가로 막대가 너무 촘촘해짐)
+    """
+    if not labels or not values or len(values) < 2:
+        return chart_type
+
+    n = len(values)
+    v_pos = [v for v in values if isinstance(v, (int, float)) and v > 0]
+    v_sum = sum(v_pos)
+    has_neg = any(isinstance(v, (int, float)) and v < 0 for v in values)
+    v_mean = sum(values) / n if n else 1
+    v_std = (sum((v - v_mean) ** 2 for v in values) / n) ** 0.5 if n else 0
+    is_flat = v_mean != 0 and (v_std / abs(v_mean)) < 0.03
+    is_timeseries = chart_type in ('line', 'area', 'step', 'iso_area', 'combo', 'band_line')
+    is_fill = chart_type in ('area', 'iso_area', 'band_line')
+
+    with _used_types_lock:
+        used = list(_used_types_by_run.get(run_id, []))
+        bar_used = any(t in _BAR_FAMILY for t in used)
+
+    def _swap(new_type: str) -> str:
+        with _used_types_lock:
+            lst = _used_types_by_run.setdefault(run_id, [])
+            try: lst.remove(chart_type)
+            except ValueError: pass
+            lst.append(new_type)
+        print(f"    ⟳ [data_override] {chart_type.upper()} → {new_type.upper()} (데이터 기반 재조정)")
+        return new_type
+
+    _rate_kw = ('기준금리', '정책금리', '금리', '이자율')
+
+    # ① 합산 ≈100% + 항목 3~8개 → donut (시계열 여부 무관, band_line 제외)
+    if 90 <= v_sum <= 110 and 3 <= n <= 8 and chart_type not in ('donut', 'pie', 'band_line'):
+        return _swap('donut' if 'donut' not in used else 'pie')
+
+    # ② 항목 수 ≤ 3 + 시계열 + 비금리 → barh (추이선이 의미없음)
+    if n <= 3 and is_timeseries and chart_type != 'band_line' and not any(k in description for k in _rate_kw):
+        if not bar_used:
+            return _swap('barh')
+        elif 'donut' not in used:
+            return _swap('donut')
+
+    # ③ 음수 포함 + fill 계열 → combo
+    if has_neg and is_fill:
+        return _swap('combo' if 'combo' not in used else 'bar' if not bar_used else 'step')
+
+    # ④ flat 데이터 + 일반 시계열 (금리 키워드 없음) → bar
+    if is_flat and chart_type in ('iso_area', 'line', 'area') and not any(k in description for k in _rate_kw):
+        if not bar_used:
+            return _swap('bar')
+
+    # ⑤ 항목 수 ≥ 8 + barh → line (막대 너무 촘촘)
+    if n >= 8 and chart_type == 'barh':
+        return _swap('line' if 'line' not in used else 'iso_area')
+
+    return chart_type
+
+
 def _detect_type(description: str, chart_idx: int = 1, run_id: str = "") -> str:
     with _used_types_lock:
         rotation = _shuffled_types(run_id)
@@ -223,7 +294,7 @@ def _detect_type(description: str, chart_idx: int = 1, run_id: str = "") -> str:
         elif any(k in d for k in ['점유율', '구성비', '비율 분포']):
             preferred = 'donut' if 'donut' not in used else 'pie'
         elif any(k in d for k in ['기준금리', '정책금리', '변화 과정', '단계적']):
-            preferred = 'step'
+            preferred = 'band_line'
         elif any(k in d for k in ['추이', '변화', '흐름', '트렌드', '시계열', '1년', '최근']):
             # 시계열 — iso_area 우선, 없으면 iso_bar / line / area 순
             preferred = next((t for t in ('iso_area', 'iso_bar', 'line', 'area') if t not in used), None)
@@ -1371,6 +1442,7 @@ def _fetch_from_j09(keyword: str, description: str, chart_type: str) -> tuple[li
     """JARVIS09 모든 소스 활용 → 차트에 맞는 (labels, values) 반환.
 
     수집 소스 (순서대로 시도):
+      0. band_line 전용 — ECOS 금리 시계열 직접 (주가·합성 데이터 절대 금지)
       1. collect_stocks_data  — 종목 재무 (bar/scatter/pie/donut)
       2. KrxProvider          — 실시간 종목 시세 (bar)
       3. EcosProvider         — 거시경제 시계열 (line/area)
@@ -1380,6 +1452,28 @@ def _fetch_from_j09(keyword: str, description: str, chart_type: str) -> tuple[li
     """
     print(f"  🔄 [chart_generator] JARVIS09 전체 소스 수집: '{keyword}' / {chart_type}")
     d_lower = description.lower()
+
+    # ── 0. band_line — ECOS 금리 실데이터 전용, 주가·합성 fallback 절대 금지 ──
+    if chart_type == 'band_line':
+        _rate_kw = ('기준금리', '정책금리', '금리', '이자율')
+        _combined = (keyword or '') + ' ' + (description or '')
+        if any(k in _combined for k in _rate_kw):
+            try:
+                from JARVIS09_COLLECTOR.providers.ecos_provider import EcosProvider
+                ecos_docs = EcosProvider().collect(keyword)
+                if ecos_docs:
+                    ecos_text = ecos_docs[0].raw_text
+                    _bl_labels, _bl_values = _parse_ecos_timeseries(
+                        ecos_text, description, exclude_indicators=_get_ecos_exclude()
+                    )
+                    if len(_bl_labels) >= 3:
+                        print(f"  ✅ [J09] ECOS 기준금리 {len(_bl_labels)}포인트 → BAND_LINE")
+                        return _bl_labels, _bl_values
+            except Exception as _e:
+                print(f"  ⚠️ [J09] EcosProvider(band_line) 실패: {_e}")
+        # 실데이터 없음 — 거짓 차트 방지, 스킵
+        print(f"  🚫 [J09] band_line 실데이터 없음 — 차트 스킵")
+        return [], []
 
     # ── 1. collect_stocks_data (종목 재무 — 기존 로직 유지) ──────────────
     try:
@@ -1664,12 +1758,8 @@ def generate_chart(
         ).hexdigest()[:8]
         fname = out_path / f"chart_{chart_idx:02d}_{_content_hash}.png"
 
-        chart_type  = _detect_type(description, chart_idx, _rid)
-        is_iso      = chart_type in ('iso_bar', 'iso_area')
-        colors      = _derive_colors(keyword, sector, chart_idx, _rid)
-        is_pie_like = chart_type in ('pie', 'donut')
-        is_scatter  = chart_type == 'scatter'
-
+        # ── 컨텍스트 먼저 확보 → LLM 어드바이저가 실데이터 보고 타입 결정 ──
+        colors = _derive_colors(keyword, sector, chart_idx, _rid)
         use_synth = False
 
         # ── ① collection_docs 우선 활용 (상위 호출자가 이미 수집한 것 재사용) ──
@@ -1710,6 +1800,31 @@ def generate_chart(
             if _j09_ctx:
                 context_text = (context_text + "\n\n" + _j09_ctx).strip() if context_text else _j09_ctx
                 print(f"  ✅ [chart_generator] 구조화 보강 완료 → {len(context_text)}자")
+
+        # ── ★ LLM 어드바이저 — 실데이터 본 후 최적 차트 타입 판단 ──────────
+        # _detect_type()은 키워드 매칭 fallback. LLM이 성공하면 LLM 판단 우선.
+        with _used_types_lock:
+            _used_snapshot = list(_used_types_by_run.get(_rid, []))
+        try:
+            from JARVIS06_IMAGE.chart_advisor import advise_chart_type as _advise
+            _advised = _advise(description, keyword, sector, context_text, _used_snapshot)
+        except Exception:
+            _advised = ""
+
+        if _advised:
+            chart_type = _advised
+            # 어드바이저 선택 타입 사용 이력 등록
+            with _used_types_lock:
+                _used_types_by_run.setdefault(_rid, []).append(chart_type)
+            print(f"  🧠 [ChartAdvisor] '{description[:30]}...' → {chart_type.upper()}")
+        else:
+            # LLM 실패 시 키워드 매칭 fallback
+            chart_type = _detect_type(description, chart_idx, _rid)
+            print(f"  🔤 [_detect_type fallback] → {chart_type.upper()}")
+
+        is_iso      = chart_type in ('iso_bar', 'iso_area', 'band_line')
+        is_pie_like = chart_type in ('pie', 'donut')
+        is_scatter  = chart_type == 'scatter'
 
         labels, values = _llm_extract_chart_data(
             description, keyword, sector, context_text, chart_type)
@@ -1781,6 +1896,15 @@ def generate_chart(
                         else:
                             print(f"  ⚠️ [chart_generator] scatter 실데이터 없음 — 차트 스킵")
                             return ""
+            elif chart_type == 'band_line':
+                # band_line: ECOS 금리 실데이터만 허용, 주가·합성 데이터 절대 금지
+                _j9_l, _j9_v = _fetch_from_j09(keyword, description, chart_type)
+                if len(_j9_l) >= 3:
+                    labels, values = _j9_l, _j9_v
+                    use_synth = False
+                else:
+                    print(f"  ⚠️ [chart_generator] band_line 실데이터 없음 — 차트 스킵")
+                    return ""
             elif chart_type in ('line', 'area', 'step', 'iso_area', 'combo'):
                 # 시계열: 개별 종목 주가 이력 우선 → 금융 지수 폴백
                 labels, values = _fetch_stock_price_history(context_text)
@@ -1834,6 +1958,14 @@ def generate_chart(
         if labels and values:
             _n = min(len(labels), len(values))
             labels, values = labels[:_n], values[:_n]
+
+        # ── 데이터 기반 chart_type 재조정 (labels/values 확정 후) ──
+        if labels and values:
+            chart_type = _data_override_type(chart_type, labels, values, description, _rid)
+            is_iso      = chart_type in ('iso_bar', 'iso_area', 'band_line')
+            is_pie_like = chart_type in ('pie', 'donut')
+            is_scatter  = chart_type == 'scatter'
+
         # pie/donut 음수 값 제거 (#373 Wedge sizes must be non negative)
         if is_pie_like and values:
             values = [max(0.0, v) for v in values]
@@ -1842,9 +1974,13 @@ def generate_chart(
 
         if is_iso and labels and values:
             from JARVIS06_IMAGE.isometric_charts import (
-                make_iso_bar_chart, make_iso_area_chart)
+                make_iso_bar_chart, make_iso_area_chart, make_band_line_chart)
             if chart_type == 'iso_bar':
                 result = make_iso_bar_chart(
+                    labels, values, title_short, keyword, sector,
+                    str(fname), run_id=_rid)
+            elif chart_type == 'band_line':
+                result = make_band_line_chart(
                     labels, values, title_short, keyword, sector,
                     str(fname), run_id=_rid)
             else:

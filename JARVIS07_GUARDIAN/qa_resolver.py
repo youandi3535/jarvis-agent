@@ -161,6 +161,12 @@ def resolve(
         similar_qa = []
 
     # Tier 1.5: ChromaDB 시맨틱 벡터 검색 (5중 검증 내장)
+    # fast=True (UserPromptSubmit hook 경로) 에서는 건너뜀 — HuggingFace 모델 로딩 hang 방지
+    if fast:
+        result = _default.copy()
+        result["similar_qa"] = similar_qa
+        return result
+
     try:
         from JARVIS07_GUARDIAN.vector_store import search_vector
         vec_candidates = search_vector(question, top_k=3)
