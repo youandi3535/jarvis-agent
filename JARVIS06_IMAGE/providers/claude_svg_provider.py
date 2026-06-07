@@ -164,6 +164,7 @@ class ClaudeSVGProvider:
             png_path = out_dir / f"{fname_base}.png"
             cairosvg.svg2png(url=str(svg_path), write_to=str(png_path),
                              output_width=width, output_height=height)
+            svg_path.unlink(missing_ok=True)  # PNG 변환 성공 → SVG 중간 파일 삭제
             log.info(f"[ClaudeSVG] PNG 변환 완료: {png_path}")
             return png_path
         except ImportError:

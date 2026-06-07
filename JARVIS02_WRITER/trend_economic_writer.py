@@ -1329,8 +1329,13 @@ def _inject_paragraph_images(html: str, keyword: str, sector: str,
 
             # 이미지를 위한 텍스트: 섹션 전체 텍스트 (자르지 않음 — 설계서 생성에 활용)
             full_section_text = re.sub(r'<[^>]+>', '', part)
-            # 소제목 추출 (h2/h3 첫 번째)
-            _h_m = re.search(r'<h[23][^>]*>(.*?)</h[23]>', part, re.IGNORECASE | re.DOTALL)
+            # 소제목 추출: 현재 <p> 위치까지의 텍스트에서 마지막 h2/h3 탐색
+            # (전체 part에서 re.search하면 항상 첫 번째 h2만 잡힘)
+            _part_before_p = part[:p_matches[p_idx].start()]
+            _h_m = None
+            for _hm_iter in re.finditer(r'<h[23][^>]*>(.*?)</h[23]>', _part_before_p,
+                                         re.IGNORECASE | re.DOTALL):
+                _h_m = _hm_iter  # 현재 단락 직전의 마지막 h2/h3
             _section_title = re.sub(r'<[^>]+>', '', _h_m.group(1)).strip() if _h_m else ''
             # ctx_text: 해당 <p> + 다음 <p> (기존 폴백 함수들 호환용)
             ctx_text = re.sub(r'<[^>]+>', '',
