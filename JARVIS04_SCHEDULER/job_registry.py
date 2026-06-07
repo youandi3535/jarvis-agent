@@ -76,10 +76,10 @@ DEFAULT_JOBS: list[dict] = [
      "callback":"JARVIS02_WRITER.scheduler.cleanup_screenshots",
      "misfire_grace_time":3600, "owner":"jarvis02_writer"},
     # ★ 자가진단 + 발행 *하나의 세트* (사용자 박제 2026-05-18 v2):
-    # 07:00 callback 진입 → 자가진단·자동수정 (max 15분) → 즉시 경제 브리핑 발행.
+    # 06:30 callback 진입 → 자가진단·자동수정 (max 15분) → 즉시 경제 브리핑 발행.
     # callback 함수가 두 단계를 *순차 실행* — 한 묶음.
-    {"id":"j01_economic_post",      "name":"자가진단+경제 브리핑 발행 07:00", "trigger":"cron",
-     "kwargs":{"hour":7, "minute":0},
+    {"id":"j01_economic_post",      "name":"자가진단+경제 브리핑 발행 06:30", "trigger":"cron",
+     "kwargs":{"hour":6, "minute":30},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_economic",
      "misfire_grace_time":3600, "owner":"jarvis02_writer"},
     # ★ 자가진단 + 테마글 발행 *하나의 세트* (사용자 박제 2026-05-18 v2):
@@ -134,8 +134,8 @@ DEFAULT_JOBS: list[dict] = [
      "callback":"shared.file_cleanup.cleanup_fuse_hidden",
      "misfire_grace_time":300, "owner":"jarvis00_infra"},
     # ── JARVIS02 로그 모니터링 ──────────────────────────────────────
-    {"id":"log_monitor_economic", "name":"경제 브리핑 로그 확인 (07:30)", "trigger":"cron",
-     "kwargs":{"hour":7, "minute":30},
+    {"id":"log_monitor_economic", "name":"경제 브리핑 로그 확인 (07:00)", "trigger":"cron",
+     "kwargs":{"hour":7, "minute":0},
      "callback":"JARVIS02_WRITER.log_monitor.job_check_economic_result",
      "misfire_grace_time":1800, "owner":"jarvis02_writer"},
     {"id":"log_monitor_theme",     "name":"테마주 로그 확인 (16:30)", "trigger":"cron",
