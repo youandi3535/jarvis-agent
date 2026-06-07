@@ -6,7 +6,7 @@
   JARVIS02(대본 HTML) + JARVIS09(수집 자료·종목 데이터)
     → process_draft()
         ① [CHART_N] 플레이스홀더 → matplotlib SVG 차트 생성
-        ② [PHOTO_N] 플레이스홀더 → AI 사진 생성 (Bing→HF→Pollinations)
+        ② [PHOTO_N] 플레이스홀더 → AI 사진 생성 (Pollinations.ai — Bing/HF 폐기 2026-06-07)
         ③ h2 소제목 → 섹션 배경 AI 사진 교체
         ④ SVG 캡처 → JPG
         ⑤ 썸네일 생성

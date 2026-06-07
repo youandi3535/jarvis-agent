@@ -213,23 +213,38 @@ def classify_keyword(keyword: str) -> str:
 
 _SECTOR_NAMES = list(SECTORS.keys()) + ["기타"]
 
+# ── ★ 연속 실패 카운터 (사용자 박제 2026-06-07 — ERRORS [260])
+# LLM 응답 형식 오류는 transient(일시적) — 매번 GUARDIAN report 하면 학습 자산 노이즈.
+# N회 연속 실패할 때만 report → 진짜 모델/네트워크 문제만 보고.
+_LLM_CONSECUTIVE_FAIL_COUNT = 0
+_LLM_FAIL_REPORT_THRESHOLD = 3   # 3회 연속 실패 시만 GUARDIAN 보고
+
+
 def _classify_with_llm(keywords: list[str], context: list[str] | None = None) -> dict[str, str]:
-    """규칙으로 분류 못한 키워드를 Claude API로 배치 분류 후 캐시에 저장."""
+    """규칙으로 분류 못한 키워드를 Claude API로 배치 분류 후 캐시에 저장.
+
+    ★ 견고성 강화 (사용자 박제 2026-06-07 — ERRORS [260]):
+      1. raw 가 None/빈 문자열일 때 별도 분기 (ValueError 회피)
+      2. 정규식 `\\{[\\s\\S]*\\}` (멀티라인 안전)
+      3. 1회 실패 시 temperature 변경 후 재시도
+      4. N회 연속 실패 시만 GUARDIAN report → 학습 자산 노이즈 방지
+      5. 폴백: 모든 unknown 키워드 "기타" 로 캐시 → 다음 호출 즉시 재시도 안 함
+    """
+    global _LLM_CONSECUTIVE_FAIL_COUNT
     unknown = [kw for kw in keywords if kw not in _SECTOR_CACHE]
     if not unknown:
         return {kw: _SECTOR_CACHE[kw] for kw in keywords}
 
-    try:
-        from shared.llm import invoke_text as _inv
-        from shared.personas import get as _persona
+    from shared.llm import invoke_text as _inv
+    from shared.personas import get as _persona
 
-        sector_list = "\n".join(f"- {s}" for s in _SECTOR_NAMES)
-        kw_list = "\n".join(f"{i+1}. {kw}" for i, kw in enumerate(unknown))
-        ctx_hint = ""
-        if context:
-            ctx_hint = f"\n참고 — 같은 시기 트렌딩 키워드 전체: {', '.join(context)}\n(단편적 키워드는 위 전체 문맥을 보고 가장 연관된 섹터로 분류)"
+    sector_list = "\n".join(f"- {s}" for s in _SECTOR_NAMES)
+    kw_list = "\n".join(f"{i+1}. {kw}" for i, kw in enumerate(unknown))
+    ctx_hint = ""
+    if context:
+        ctx_hint = f"\n참고 — 같은 시기 트렌딩 키워드 전체: {', '.join(context)}\n(단편적 키워드는 위 전체 문맥을 보고 가장 연관된 섹터로 분류)"
 
-        prompt = f"""다음 한국 검색 트렌드 키워드를 섹터로 분류하세요.
+    prompt = f"""다음 한국 검색 트렌드 키워드를 섹터로 분류하세요.
 {ctx_hint}
 섹터 목록:
 {sector_list}
@@ -249,18 +264,53 @@ def _classify_with_llm(keywords: list[str], context: list[str] | None = None) ->
 - IT기업·앱·플랫폼 → IT·테크
 - 단편적 키워드는 전체 문맥 보고 가장 가까운 섹터 선택 (기타 최소화)"""
 
-        raw = _inv("writer_fast", prompt, system=_persona("jarvis03_radar"), max_tokens=512)
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not m:
-            raise ValueError("JSON not found")
-        _raw_json = m.group()
-        try:
-            parsed: dict[str, str] = json.loads(_raw_json)
-        except json.JSONDecodeError:
-            # Invalid \escape 처리 (#367) — JSON 미허용 백슬래시 이스케이프
-            _clean = re.sub(r'\\(?!["\\/bfnrtu0-9])', r'\\\\', _raw_json)
-            parsed = json.loads(_clean)
+    parsed: dict[str, str] = {}
+    last_err: Exception | None = None
 
+    # 1회 실패 시 temperature 변경 후 재시도 (총 2회 시도)
+    for attempt in range(2):
+        try:
+            temp = 0.0 if attempt == 0 else 0.3
+            raw = _inv(
+                "writer_fast", prompt,
+                system=_persona("jarvis03_radar"),
+                max_tokens=512,
+                temperature=temp,
+            )
+            # ① raw None/빈 — 별도 분기 (ValueError 회피)
+            # [transient] 접두사 → severity.py 가 low 로 분류 → GUARDIAN 자동 수정 skip
+            if not raw or not raw.strip():
+                last_err = RuntimeError(f"[transient] LLM 응답 빈 문자열 (attempt={attempt+1})")
+                continue
+
+            # ② 정규식 강화 — \s\S 멀티라인 안전 + raw or ""
+            m = re.search(r"\{[\s\S]*\}", raw or "")
+            if not m:
+                # 메시지 명확화 + raw 일부 디버그 정보 포함
+                _snippet = (raw or "")[:120].replace("\n", " ")
+                last_err = RuntimeError(
+                    f"[transient] LLM 응답 JSON 형식 누락 (attempt={attempt+1}) — raw[:120]={_snippet!r}"
+                )
+                continue
+
+            _raw_json = m.group()
+            try:
+                parsed = json.loads(_raw_json)
+            except json.JSONDecodeError:
+                # Invalid \escape 처리 (#367)
+                _clean = re.sub(r'\\(?!["\\/bfnrtu0-9])', r'\\\\', _raw_json)
+                parsed = json.loads(_clean)
+
+            # 성공 시 루프 탈출
+            last_err = None
+            break
+
+        except Exception as e:
+            last_err = e
+            continue
+
+    # 파싱 결과 반영
+    if parsed:
         for idx_str, sector in parsed.items():
             try:
                 kw = unknown[int(idx_str) - 1]
@@ -268,13 +318,29 @@ def _classify_with_llm(keywords: list[str], context: list[str] | None = None) ->
                 _SECTOR_CACHE[kw] = sector
             except (IndexError, ValueError):
                 pass
-
         _save_cache()
-
-    except Exception as e:
-        # 실패 시 캐시에 저장하지 않음 — 다음 호출 때 재시도
-        print(f"[LLM분류 실패] {e}", file=sys.stderr)
-        _g_report("radar", e, module=__name__)
+        _LLM_CONSECUTIVE_FAIL_COUNT = 0   # 성공 — 카운터 리셋
+    else:
+        # ④ 연속 실패 카운트 + N회 이상만 report (학습 자산 노이즈 방지)
+        _LLM_CONSECUTIVE_FAIL_COUNT += 1
+        _err_msg = f"[LLM분류 실패 #{_LLM_CONSECUTIVE_FAIL_COUNT}] {last_err}"
+        print(_err_msg, file=sys.stderr)
+        if _LLM_CONSECUTIVE_FAIL_COUNT >= _LLM_FAIL_REPORT_THRESHOLD:
+            # 연속 3회 이상 — 진짜 문제일 가능성. GUARDIAN 에 보고
+            _g_report(
+                "radar",
+                last_err or RuntimeError("LLM 분류 연속 실패"),
+                module=__name__,
+                context={
+                    "consecutive_fail_count": _LLM_CONSECUTIVE_FAIL_COUNT,
+                    "unknown_keywords": unknown[:10],
+                    "kind": "transient_llm_format_error",  # GUARDIAN 분류 힌트
+                },
+            )
+        # ⑤ 폴백: 모든 unknown 키워드 "기타" 로 캐시 → 다음 호출 시 재시도 안 함
+        for kw in unknown:
+            _SECTOR_CACHE.setdefault(kw, "기타")
+        _save_cache()
 
     return {kw: _SECTOR_CACHE.get(kw, "기타") for kw in keywords}
 

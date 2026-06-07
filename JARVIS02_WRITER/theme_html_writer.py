@@ -174,7 +174,7 @@ def _inject_theme_section_images(html: str, theme: str, sector: str, platform: s
 
     section_imgs = {}
     # 순차 이미지 생성 — 외부 API rate limit 방지 (사용자 박제 2026-05-18)
-    # generate_photo → Bing/HF/Pollinations (이미지 외부 API quota).
+    # generate_photo → Pollinations.ai (★ Bing/HF 폐기 2026-06-07 — ERRORS [263]).
     with ThreadPoolExecutor(max_workers=1) as ex:
         futs = {
             ex.submit(make_section_ai_image,

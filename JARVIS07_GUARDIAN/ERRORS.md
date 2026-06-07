@@ -1,5 +1,107 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [263] Bing + HuggingFace 이미지 폴백 완전 삭제 + Anthropic API 흔적 제거 (2026-06-07)
+
+- **배경**: 사용자 박제 — "Bing+HuggingFace 이미지 폴백도 전멸, 이건 이제 사용 안할거야. 우리 에이전트에서 완전히 삭제해. 각주 포함해서 흔적 자체를 전부 삭제해." + "우린 클로드 CLI도, 엔트로픽 API도 사용안해. 우리는 클로드 코드를 사용해!"
+- **원인**: Bing 쿠키 무한 만료 사이클 + HuggingFace `hf-inference` 프로바이더 모델 미지원 + 매번 폴백 체인 통과 비용. Pollinations 단독으로 충분.
+- **해결 — 3단계**:
+  1. **Provider 파일 폐기**: `_deleted_2026-06-07_bing_hf/` 로 이동 — `bing_provider.py`, `huggingface_provider.py`.
+  2. **호출 코드 정리**:
+     - `JARVIS06_IMAGE/image_agent.py:generate_photo()` — Pollinations.ai 단독 호출로 단순화.
+     - `JARVIS06_IMAGE/thumbnail_maker.py` — `_generate_photo_bing`/`_generate_photo_hf` 삭제, Pollinations 직행.
+     - `JARVIS06_IMAGE/providers/__init__.py` — import 2종 제거 + `__all__` 갱신.
+     - `JARVIS05_VISION/registry.py` — `_Image06Adapter.get_health/get_metrics` Pollinations 단독.
+     - `hub.py` — 시스템 탭 프로바이더 카드 3종 → 1종 (Pollinations 단독) + `/3` → `/1`.
+  3. **주석·문서 통일 (각주 포함)**:
+     - `JARVIS02_WRITER/economic_poster.py`, `theme_html_writer.py`, `JARVIS06_IMAGE/draft_processor.py` 주석.
+     - `JARVIS06_IMAGE/image_agent.py` capability description + tags.
+     - `shared/precommit_check.py` 주석.
+     - `README.md` — "AI 이미지" 행 + `pip install anthropic` → `pip install claude-code-sdk` + `.env` 환경변수 표에서 `ANTHROPIC_ORG_ID` 제거 → "Claude Code SDK 의 `claude` CLI 가 OAuth 로 자동 인증 (Max 구독)" 안내로 교체.
+- **잔존 정당**:
+  - `JARVIS02_WRITER/trend_economic_writer.py:139` — `'빙에이아이': 'Bing AI'` 키워드 한글 매핑 — *Microsoft Bing AI* 외부 서비스 이름 정규화용 (사용자 글에서 한국어 "빙에이아이" → "Bing AI" 변환), 우리 이미지 폴백과 무관.
+  - `ERRORS.md` 역사 박제 — 사용자 박제 원칙 (수정 금지).
+  - `shared/llm.py:25` `ANTHROPIC_API_KEY=max-subscription-no-api-cost` setdefault — CrewAI/LangChain native init 우회 트릭. SDK 호출 시 `""` 로 오버라이드 → OAuth 모드 강제. 우리가 *API 호출하지 않음*. 유지.
+- **파일**: `JARVIS06_IMAGE/{image_agent.py, thumbnail_maker.py, draft_processor.py, providers/__init__.py}` · `JARVIS05_VISION/registry.py` · `hub.py` · `JARVIS02_WRITER/{economic_poster.py, theme_html_writer.py}` · `shared/precommit_check.py` · `README.md` · `_deleted_2026-06-07_bing_hf/` (백업)
+- **교훈**:
+  - 외부 무료 API는 *무한 폴백 체인이 미덕*이 아니라 *부채*. 매번 1·2순위 실패 → 3순위 도달 = 응답 지연 + GUARDIAN 학습 노이즈 + 사용자 텔레그램 스팸. 안정 보장된 1종 단독이 우수.
+  - "Bing 쿠키 갱신" 같은 *주기 작업*이 안정화 안 되면 그 도구는 시스템 부담. 폐기 결정이 곧 운영 비용 절감.
+
+---
+
+### [262] Claude Code SDK `Command failed with exit code 1` 근본 원인 = `ANTHROPIC_API_KEY` 가짜 키 미오버라이드 (2026-06-07)
+
+- **증상**: KST 16:00 테마 발행 + 07:00 경제 브리핑 + 자가진단 — 모두 `[harness:auto-repair] attempt=1 step=③ Claude Code SDK 실행: Exception: Command failed with exit code 1 (exit code: 1) / Error output: Check stderr output`. 어제 (06-06) 가짜 모델 ID `claude-opus-4-8` → `claude-opus-4-6` 수정 후 데몬 KST 10:12 재시작 + 모델 ID 적용 확인됐는데도 여전히 실패. 종목 데이터 0개 (홈쇼핑·리튬·스마트팩토리) 도 동일 원인 — LLM 호출 전부 실패.
+- **환경**: macOS 호스트, claude-code-sdk Python 패키지 + `claude` CLI 바이너리 (npm @anthropic-ai/claude-code), MAX 구독 OAuth 인증 모드.
+- **원인 — 환경변수 누수 1곳**:
+  - `shared/llm.py:25` — `os.environ.setdefault("ANTHROPIC_API_KEY", "max-subscription-no-api-cost")` 가짜 키 세팅. CrewAI/LangChain native init 우회용 트릭.
+  - `shared/llm.py:290, 315` — `ClaudeCodeOptions(env={"ANTHROPIC_API_KEY": ""})` 빈 문자열 오버라이드 → SDK 가 OAuth 모드로 fallback.
+  - **그러나** `JARVIS07_GUARDIAN/auto_repair.py:497, 690, 837` 3곳 — `run_env = dict(os.environ); run_env["PATH"] = ...` 만 설정. `ANTHROPIC_API_KEY` 오버라이드 **누락**.
+  - 결과: `ClaudeCodeOptions(env=run_env)` 가 가짜 키 `"max-subscription-no-api-cost"` 그대로 전달 → `claude` CLI 가 *진짜 API 키*로 인식 → Anthropic API 인증 실패 → exit code 1.
+- **헛다리**:
+  - 모델 ID 가짜 의심 → 어제 수정 완료. *진짜 원인 아님*.
+  - SDK 버전 mismatch / rate_limit_event 미지원 → 호스트가 어제 10:16 `message_parser.py` 직접 패치 완료. *진짜 원인 아님*.
+  - claude CLI 미설치 의심 → `cli_not_found` 가 아닌 `Command failed with exit code 1` 이므로 CLI 자체는 존재. *진짜 원인 아님*.
+- **해결**: `auto_repair.py` 3곳 모두 `run_env["ANTHROPIC_API_KEY"] = ""` 추가 — SDK 호출 직전 OAuth 모드 강제. `shared/llm.py` 와 동일 패턴.
+- **파급 효과**:
+  - 종목 데이터 0개 → LLM 호출 (invoke_text) 정상화 → 5단 폴백 모두 정상 시도 → 자동 해결 예상.
+  - 자가진단 SDK 호출 정상화 → harness Layer 3 abort 해소 → `self_repair_runs` DB 박제 정상.
+  - 종목 enrich(`_enrich_leader_desc`) 정상 → 테마글 발행 정상.
+- **검증** (호스트 데몬 재시작 후):
+  ```
+  pkill -f jarvis_daemon.py  # keeper 가 30초 후 자동 재시작
+  # 다음 KST 16:00 테마 발행 또는 자가진단 텔레그램 알림 확인:
+  #   ✅ Claude Code SDK 정상 응답
+  #   ✅ 종목 데이터 N개 (0 아님)
+  #   ✅ harness Layer 3 통과
+  #   ✅ self_repair_runs DB 박제 정상
+  ```
+- **파일**: `JARVIS07_GUARDIAN/auto_repair.py` (3곳: `_step_run_cli` + `_run_auto_repair_legacy` + `run_auto_repair_targeted`)
+- **교훈**:
+  - 환경변수 setdefault 트릭은 *전역 오염*. 그 트릭을 가정한 코드(`shared/llm.py`)는 오버라이드하지만, *모르고 만든 코드*는 가짜 키 전달.
+  - **모든 `dict(os.environ)` 복사 + `ClaudeCodeOptions(env=...)` 패턴은 *반드시* `run_env["ANTHROPIC_API_KEY"] = ""` 동반 의무**. precommit 검증 추가 권고.
+  - 한 모듈의 *우회 트릭*은 다른 모듈에 *함정*. 단일 진입점 (`shared/llm._run_sdk_*`) 으로 강제하거나, 트릭의 *후속 처리*를 의무로 박제해야.
+  - "어제 수정했는데 왜 또?" — 모델 ID 수정만으로는 절반. SDK 호출 *전체 환경 격리*가 진짜 해결.
+
+---
+
+### [260] `ValueError: JSON not found` @ JARVIS03_RADAR.analyzer — 사용자 오해 + 학습 노이즈 5중 누수 (2026-06-07)
+
+- **증상**: 사용자 텔레그램 알림 `⚠️ [GUARDIAN] 자동 수정 실패 / 자체 학습·Claude Code 모두 수정 불가 / 오류: ValueError @ JARVIS03_RADAR.analyzer / 내용: JSON not found / → 수동 검토 필요`. error_log 4건 누적 (ID 229·395·741·754 / 2026-05-16 ~ 2026-06-07).
+- **환경**: `JARVIS03_RADAR/analyzer.py:_classify_with_llm()` — RADAR가 1차 규칙 분류 후 "기타" 키워드를 LLM(writer_fast=sonnet-4-6)에 배치 분류 의뢰. 응답 파싱 단계.
+- **원인 — 5중 누수 동시 검출**:
+  1. **메시지 오해 유발**: `"JSON not found"` 는 *파일 JSON 미존재* 처럼 보이지만 실제로는 *LLM 응답 텍스트에 `{...}` 형식 없음*. 사용자·GUARDIAN·RL 모두 잘못된 진단 방향.
+  2. **raw None/빈 분기 부재**: `re.search(r"\{.*\}", raw, re.DOTALL)` 가 `raw=None` 시 TypeError, `raw=""` 시 매칭 실패. 어제 모델 ID 수정 전 가짜 ID `claude-opus-4-8` 로 빈 응답 자주 발생 → 본 오류 누적.
+  3. **재시도 없음**: 1회 실패 시 즉시 ValueError → except → GUARDIAN report. LLM 응답 형식 일시 변동에 무방비.
+  4. **transient ↔ permanent 미구분**: severity classifier 가 `ValueError` 를 medium 으로 분류 → `_PATTERN_FIXABLE_TYPES` 포함 → `is_auto_fixable=True` → GUARDIAN 자동 수정 시도 → pattern_fixer 7종/RL Tier 1.5/Claude Code SDK Tier 2 *전부 실패* (코드 버그 아니라 LLM 응답 문제) → 사용자에게 "수정 불가" 알림.
+  5. **학습 자산 노이즈**: 매번 GUARDIAN report → error_log 박제 → RL 학습 시 "ValueError → llm_fallback" 신호 강화 → 진짜 ValueError 자동 수정 가능 케이스도 RL이 무력화 가능.
+- **헛다리**:
+  - 파일 JSON 누락 의심 → analyzer.py 가 어떤 .json 파일도 읽지 않음 (LLM 응답 파싱 전용).
+  - eval_agent.py 의 동일 정규식 패턴 의심 → 거기는 `if not raw: return None` + `return None` 안전 처리 (정상).
+- **해결** (5중 패치):
+  1. **메시지 명확화**: `RuntimeError("[transient] LLM 응답 JSON 형식 누락 (attempt=N) — raw[:120]={...!r}")` — 디버그용 raw snippet 포함.
+  2. **raw 안전 처리**: `if not raw or not raw.strip(): last_err = RuntimeError("[transient] LLM 응답 빈 문자열")`.
+  3. **재시도 1회**: `for attempt in range(2)` — temperature 0.0 → 0.3 으로 변동 후 재시도.
+  4. **severity classifier 패치**: `severity.py:_LOW_PATTERNS` 에 `re.compile(r"\[transient\]|transient_llm_format|LLM 응답.*(빈|JSON 형식 누락)", re.I)` 추가 → `[transient]` 메시지 자동 `low` 분류 → GUARDIAN orchestrate `if severity == "low": return` 통과 → 자동 수정 시도 안 함.
+  5. **연속 실패 카운터**: `_LLM_CONSECUTIVE_FAIL_COUNT` + threshold=3 — 1·2회 실패는 *조용히 폴백* ("기타" 캐시), 3회 연속 시만 `_g_report` 호출 (`context.kind="transient_llm_format_error"`). 학습 자산 노이즈 차단.
+  6. **폴백 데이터 일관성**: 실패 시 모든 unknown 키워드 `_SECTOR_CACHE.setdefault(kw, "기타")` + 저장 → 다음 호출 시 즉시 재시도 안 함, 캐시에서 즉시 반환.
+  7. **기존 누적 박제 정리**: error_log ID 229·395·741·754 4건 중 status not in (fixed/resolved/manual) 3건 → `wontfix` + `resolution="transient_llm_format — ERRORS [260] 패치"` 마킹.
+- **검증** (dry-run):
+  ```
+  classify("ValueError",  "JSON not found")               → medium  (구 코드 동작)
+  classify("RuntimeError","[transient] LLM 응답 빈 문자열") → low ✅  (신 코드 동작)
+  classify("RuntimeError","[transient] LLM 응답 JSON 형식 누락") → low ✅
+  classify("TypeError", "NoneType is not subscriptable")  → medium  (정상 자동 수정 유지)
+  classify("SystemExit", "")                              → critical (정상 critical 유지)
+  ```
+- **파일**: `JARVIS03_RADAR/analyzer.py` (`_classify_with_llm` 전면 리팩터 + 모듈 상태 카운터) · `JARVIS07_GUARDIAN/severity.py` (`_LOW_PATTERNS` 1줄 추가)
+- **교훈**:
+  - "JSON not found" 같은 메시지는 *맥락* 없이는 오해. LLM 응답 파싱 실패 시 *반드시* `[transient]` 또는 `[llm_format_error]` 접두사로 *코드 버그 아님* 신호 박제. severity classifier 가 자동 다운그레이드 → GUARDIAN 자동 수정 시도 차단 → 사용자 노이즈 알림 차단.
+  - LLM 호출 의존 코드는 *반드시* ① raw None/빈 분기 ② 재시도 1회 ③ 영구 캐시 폴백 — 3종 세트. 1회 호출 즉시 raise 는 *데몬급 시스템에서 금지*.
+  - **누수 점검의 의미**: "오류 발생 지점만 보면 안 됨". 한 ValueError 가 5개 위치 (메시지·raw·재시도·severity·학습) 에 동시 누수 → 전수 패치만이 근본 해결.
+  - GUARDIAN 자동 수정 정책: transient (네트워크·LLM 응답 형식·timeout) vs permanent (코드 버그) 구분 필수. transient 에 자동 수정 시도 = 사용자 알림 스팸 + RL 학습 신호 오염.
+
+---
+
 ### [261] 경제 브리핑 HTML 생성 실패 — LLM 일시 장애 + max_attempts 부족 (2026-06-07)
 
 - **증상**: 텔레그램 오류 알림 "HTML 생성 실패" — 경제 브리핑 발행 실패. GUARDIAN 가 재시도 후 성공.

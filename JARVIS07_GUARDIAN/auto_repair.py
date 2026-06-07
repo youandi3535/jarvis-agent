@@ -496,6 +496,10 @@ def run_auto_repair() -> None:
 
             run_env = dict(os.environ)
             run_env["PATH"] = ":".join(_EXTRA_PATHS) + ":" + run_env.get("PATH", "")
+            # ★ 사용자 박제 2026-06-07 (ERRORS [262]) — OAuth 모드 강제
+            # shared/llm.py:25 가 ANTHROPIC_API_KEY="max-subscription-no-api-cost" 가짜 키 세팅 →
+            # 빈 문자열로 오버라이드해야 claude CLI 가 OAuth 모드로 인증. 미설정 시 exit code 1.
+            run_env["ANTHROPIC_API_KEY"] = ""
             t0 = time.time()
             try:
                 import anyio
@@ -685,6 +689,7 @@ def _run_auto_repair_legacy() -> None:
     prompt = _BASE_PROMPT.replace("{WORKDIR}", str(ROOT.resolve()))
     run_env = dict(os.environ)
     run_env["PATH"] = ":".join(_EXTRA_PATHS) + ":" + run_env.get("PATH", "")
+    run_env["ANTHROPIC_API_KEY"] = ""  # ★ OAuth 모드 강제 (ERRORS [262])
     try:
         import anyio
         from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
@@ -832,6 +837,7 @@ def run_auto_repair_targeted(
 
     run_env = dict(os.environ)
     run_env["PATH"] = ":".join(_EXTRA_PATHS) + ":" + run_env.get("PATH", "")
+    run_env["ANTHROPIC_API_KEY"] = ""  # ★ OAuth 모드 강제 (ERRORS [262])
 
     start = time.time()
     try:

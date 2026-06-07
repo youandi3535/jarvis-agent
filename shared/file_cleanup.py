@@ -110,6 +110,17 @@ def run_cleanup(verbose: bool = True) -> dict:
     return stats
 
 
+def cleanup_fuse_hidden(verbose: bool = False) -> int:
+    """shared/.fuse_hidden* 전용 빠른 정리 — 매일 새벽 자동 실행."""
+    count = 0
+    for fh in (BASE_DIR / "shared").glob(".fuse_hidden*"):
+        fh.unlink(missing_ok=True)
+        count += 1
+    if count and verbose:
+        print(f"  🗑️  .fuse_hidden: {count}개 삭제")
+    return count
+
+
 if __name__ == "__main__":
     # ★ P1-④ Phase 2 보강 (사용자 박제 2026-05-18) — 파일 삭제 직전 환경 검증
     try:

@@ -386,7 +386,7 @@ def check_autocode(report: Report) -> None:
         "JARVIS08_PUBLISH/platforms/tistory_poster.py",    # 티스토리 발행 (osascript·Selenium)
         "JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py",   # 쿠키 갱신 (subprocess)
         "JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py", # 쿠키 갱신 (subprocess)
-        "JARVIS06_IMAGE/",                    # 이미지 생성 (Bing/HF CLI)
+        "JARVIS06_IMAGE/",                    # 이미지 생성 (Pollinations — Bing/HF 폐기 2026-06-07)
         "JARVIS07_GUARDIAN/",                 # guardian 자가수정·git audit
         "jarvis_keeper.py",                   # 데몬 워치독 — 재시작 subprocess 정당
     )

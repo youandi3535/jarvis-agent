@@ -1,5 +1,5 @@
 {
-  "index": 69,
+  "index": 72,
   "done": [
     "日 수출 규제(국산화 등)",
     "마이데이터",
@@ -101,7 +101,10 @@
     "바이오인식(생체인식)",
     "생명보험",
     "마이크로 LED",
-    "유리 기판"
+    "유리 기판",
+    "홈쇼핑",
+    "리튬",
+    "스마트팩토리(스마트공장)"
   ],
   "platform_status": {
     "IT 대표주": {
@@ -428,8 +431,8 @@
       "tistory": true
     },
     "리튬": {
-      "naver": true,
-      "tistory": true
+      "naver": false,
+      "tistory": false
     },
     "인터넷 대표주": {
       "naver": true,
@@ -514,6 +517,14 @@
     "유리 기판": {
       "naver": false,
       "tistory": false
+    },
+    "홈쇼핑": {
+      "naver": false,
+      "tistory": false
+    },
+    "스마트팩토리(스마트공장)": {
+      "naver": false,
+      "tistory": true
     }
   }
 }

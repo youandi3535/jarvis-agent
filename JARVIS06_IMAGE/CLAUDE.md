@@ -2,7 +2,7 @@
 
 ## 핵심 원칙
 1. 한국어 프롬프트는 반드시 `prompt_translator.translate()` 로 영어 변환 후 제공자에 전달
-2. 폴백 체인: Bing Image Creator(1) → HuggingFace FLUX(2) → Pollinations.ai(3)
+2. **★ 사진 프로바이더 (ERRORS [263] 박제 2026-06-07)**: Pollinations.ai 단일 사용. Bing/HuggingFace 완전 삭제 — Bing 쿠키 무한 만료 + HuggingFace DNS 차단 반복. 차기 1순위로 Nanobana(Gemini) 도입 예정.
 3. SVG 차트·썸네일 오버레이는 Claude LLM 동적 생성 — 고정 템플릿·스타일 풀 절대 금지
 4. **★ 차트/그래프 색상은 매번 LLM으로 새로 생성** (고정 팔레트 금지) — 동일 스타일 반복 시 독자가 AI 감지 → SEO 저품질
 5. **★ 같은 글 내 색상 추적 필수** — 같은 글의 여러 시각화가 같은 색상/스타일이면 안 됨. `exclude_colors` 파라미터로 제어
@@ -33,9 +33,7 @@
 | `section_title.py` | matplotlib 소제목 배너 이미지 |
 | `trend_charts.py` | 트렌드 키워드 차트 + 썸네일 |
 | `economic_charts.py` | 경제 브리핑 차트 + 썸네일 |
-| `providers/bing_provider.py` | Bing Image Creator (DALL-E 기반, BING_COOKIE 필요) |
-| `providers/huggingface_provider.py` | HuggingFace FLUX.1-schnell (HUGGINGFACE_API_KEY 필요) |
-| `providers/pollinations_provider.py` | Pollinations.ai REST 호출 (키 불필요 — 최후 폴백) |
+| `providers/pollinations_provider.py` | Pollinations.ai REST 호출 (키 불필요 — 현재 단일 프로바이더) |
 | `providers/claude_svg_provider.py` | Claude LLM → SVG 동적 생성 → PNG 변환 |
 
 ## 외부에서 호출 방법 (유일한 합법 패턴)
