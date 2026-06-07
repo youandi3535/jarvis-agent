@@ -42,6 +42,64 @@ except ImportError:
     def _g_report(*a, **kw): pass
 
 
+# ── AI 사진 영문 프롬프트 빌더 (★ 사용자 박제 2026-06-07) ─────────
+# Pollinations.ai (SDXL 계열) 친화 프롬프트 직접 생성 → translate() 우회.
+# prompt_translator(Haiku 100자 축약) 대비 디테일·스타일·negative cue 강화.
+
+_PHOTO_PROMPT_SYSTEM = """You are a professional photography art director for premium Korean finance/business blogs.
+Craft vivid, specific English prompts optimized for Stable Diffusion XL (Pollinations.ai backend).
+
+Strict rules:
+- Output ONLY the English prompt — no preface, no markdown, no labels, no quotes.
+- 60-120 words, comma-separated descriptors.
+- Always include in order: SUBJECT, SCENE/ENVIRONMENT, LIGHTING, MOOD, CAMERA ANGLE, STYLE, QUALITY TAGS.
+- Aesthetic: editorial, professional, modern, clean, premium, Korean business context where natural.
+- End with quality boosters: "photorealistic, ultra detailed, 8k, cinematic lighting, depth of field, professional photography, sharp focus".
+- Discourage failure modes by appending: "no text, no letters, no watermark, no logo, no distorted faces, no extra fingers, not cartoon, not anime, not illustration"."""
+
+_PHOTO_PROMPT_TEMPLATE = """Generate the single best English image prompt for this Korean blog visual.
+
+Theme: {theme}
+Sector: {sector}
+Section title: {section_title}
+Korean description: {desc}
+
+Output the prompt now (one line or comma-separated phrases, no preface)."""
+
+
+def _build_photo_prompt_en(theme: str, desc: str, sector: str = "",
+                            section_title: str = "") -> str:
+    """Sonnet으로 Pollinations 친화적 영문 프롬프트 생성.
+
+    실패 시 빈 문자열 반환 — 호출자는 generate_photo()의 prompt_ko 경로(Haiku 번역)
+    로 자동 폴백.
+    """
+    try:
+        from shared.llm import invoke_text
+        prompt = _PHOTO_PROMPT_TEMPLATE.format(
+            theme=(theme or "")[:80],
+            sector=sector or "general business",
+            section_title=(section_title or "")[:60],
+            desc=(desc or "")[:240],
+        )
+        raw = invoke_text(
+            "analyzer", prompt, system=_PHOTO_PROMPT_SYSTEM,
+            max_tokens=500, temperature=0.75,
+        )
+        en = (raw or "").strip()
+        # 마크다운/라벨 잔존분 제거 (image_agent 에서도 한 번 더 정제하지만 방어)
+        en = re.sub(r'^#+\s*[^\n]*\n+', '', en, flags=re.MULTILINE)
+        en = re.sub(r'^\*{1,2}[A-Za-z ]+\*{1,2}:?\s*', '', en).strip().strip('"').strip("'").strip()
+        # 너무 짧으면 무효 (Pollinations 가 빈약한 결과 반환할 위험)
+        if len(en) < 40:
+            return ""
+        return en
+    except Exception as e:
+        log.warning(f"[photo_prompt] 영문 빌더 실패: {e} — Haiku 번역 폴백")
+        _g_report("image", e, module=__name__)
+        return ""
+
+
 # ── 차트 생성 (Pass-2) ────────────────────────────────────────────
 
 def _extract_chart_context(html: str, chart_idx: int) -> str:
@@ -121,10 +179,15 @@ def _generate_photos(html: str, theme: str, out_dir: Path) -> str:
 
     photo_map: dict[int, str] = {}
     with ThreadPoolExecutor(max_workers=1) as ex:
-        futs = {
-            ex.submit(generate_photo, prompt_ko=f"{theme}: {desc.strip()}", out_dir=str(out_dir)): int(idx)
-            for idx, desc in placeholders
-        }
+        futs = {}
+        for idx, desc in placeholders:
+            desc_str = desc.strip()
+            # ★ Sonnet 영문 프롬프트 빌더 (실패 시 prompt_ko 자동 폴백)
+            prompt_en = _build_photo_prompt_en(theme=theme, desc=desc_str)
+            kw = dict(prompt_ko=f"{theme}: {desc_str}", out_dir=str(out_dir))
+            if prompt_en:
+                kw["prompt_en"] = prompt_en
+            futs[ex.submit(generate_photo, **kw)] = int(idx)
         for f in as_completed(futs):
             idx = futs[f]
             try:
@@ -162,14 +225,22 @@ def _inject_section_images(html: str, theme: str, sector: str,
 
     section_imgs: dict[int, str | None] = {}
     with ThreadPoolExecutor(max_workers=1) as ex:
-        futs = {
-            ex.submit(
-                generate_photo,
-                prompt_ko=f"{theme}: {re.sub(r'<[^>]+>', '', m.group(1)).strip()} 섹션 배경",
+        futs = {}
+        for i, m in enumerate(h2_matches):
+            h2_text = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+            desc_ko = f"{h2_text} 섹션 배경 이미지"
+            # ★ Sonnet 영문 프롬프트 빌더 — section_title·sector 컨텍스트 전달
+            prompt_en = _build_photo_prompt_en(
+                theme=theme, desc=desc_ko,
+                sector=sector, section_title=h2_text,
+            )
+            kw = dict(
+                prompt_ko=f"{theme}: {desc_ko}",
                 out_dir=str(section_dir),
-            ): i
-            for i, m in enumerate(h2_matches)
-        }
+            )
+            if prompt_en:
+                kw["prompt_en"] = prompt_en
+            futs[ex.submit(generate_photo, **kw)] = i
         for f in as_completed(futs):
             i = futs[f]
             try:

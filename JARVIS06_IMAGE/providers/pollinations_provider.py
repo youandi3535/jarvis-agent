@@ -16,9 +16,14 @@ class PollinationsProvider:
     PROVIDER_ID = "pollinations"
     requires_approval = False  # 무료·인증 없음 — 승인 불필요
 
+    # ★ 사용자 박제 2026-06-07 — 모델 명시. flux = 무료·고품질 기본값.
+    # 옛 동작: model 파라미터 없음 → Pollinations 가 임의 기본 모델 선택 (품질 변동).
+    DEFAULT_MODEL = "flux"
+
     def generate(self, prompt_en: str, out_dir: Path,
                  width: int = 1024, height: int = 1024,
-                 seed: Optional[int] = None) -> Path:
+                 seed: Optional[int] = None,
+                 model: Optional[str] = None) -> Path:
         """Pollinations.ai 로 이미지 생성 후 로컬 파일 경로 반환.
 
         Raises:
@@ -29,7 +34,11 @@ class PollinationsProvider:
         # Pollinations 가 같은 prompt 받으면 같은 캐시 반환하는 사고 차단.
         if seed is None:
             seed = random.randint(1, 999_999_999)
-        params = f"?width={width}&height={height}&nologo=true&nofeed=true&seed={seed}"
+        _model = model or self.DEFAULT_MODEL
+        params = (
+            f"?width={width}&height={height}&nologo=true&nofeed=true"
+            f"&seed={seed}&model={_model}&enhance=true"
+        )
         encoded = urllib.parse.quote(prompt_en, safe="")
         url = _BASE.format(prompt=encoded) + params
         log.info(f"[Pollinations] GET {url[:120]}")
