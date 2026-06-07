@@ -319,8 +319,8 @@ def fetch_kor_counts(theme: str) -> dict:
         return sum(1 for ch in text if "가" <= ch <= "힣")
 
     # DB에서 URL 조회
-    _root = Path(__file__).parent.parent
-    con = sqlite3.connect(str(_root / "shared" / "jarvis.sqlite"))
+    from shared.db import DB_PATH as _jarvis_db
+    con = sqlite3.connect(str(_jarvis_db))
     rows = con.execute(
         "SELECT platform, url FROM post_analysis "
         "WHERE theme=? ORDER BY created_at DESC LIMIT 6",

@@ -595,7 +595,7 @@ class EnvHealthChecker:
     def _check_db() -> list[Finding]:
         findings = []
         try:
-            db_path = ROOT / "shared" / "jarvis.sqlite"
+            from shared.db import DB_PATH as db_path
             if db_path.exists():
                 size_mb = db_path.stat().st_size / (1024 ** 2)
                 if size_mb >= 500:
