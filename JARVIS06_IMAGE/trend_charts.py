@@ -467,6 +467,7 @@ def make_section_image(section_title: str, section_num: int, keyword: str,
             svg_path = out_path.with_suffix('.svg')
             svg_path.write_text(svg_code, encoding='utf-8')
             if _svg_to_png(svg_path, out_path):
+                svg_path.unlink(missing_ok=True)  # PNG 변환 성공 → SVG 중간 파일 삭제
                 print(f"  ✅ 섹션 배너 [Claude SVG] {section_num:02d}: {out_path.name}")
                 return str(out_path)
             # PNG 변환 실패 → SVG 반환
@@ -1532,6 +1533,7 @@ def make_smart_section_image(
                 svg_path = out_path.with_suffix('.svg')
                 svg_path.write_text(svg_code, encoding='utf-8')
                 if _svg_to_png(svg_path, out_path):
+                    svg_path.unlink(missing_ok=True)  # PNG 변환 성공 → SVG 중간 파일 삭제
                     print(f"  ✅ [smart {card_idx}] Claude SVG ({viz}) → {out_path.name}")
                     return str(out_path)
                 print(f"  ✅ [smart {card_idx}] Claude SVG (PNG실패) → {svg_path.name}")
