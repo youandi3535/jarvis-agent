@@ -363,7 +363,7 @@ def _trend_report() -> str:
     """trends 테이블 — 가장 최근 수집일의 TOP 10 (opportunity_score 순)."""
     try:
         import sqlite3
-        _DB = Path(__file__).parent.parent / "shared" / "jarvis.sqlite"
+        from shared.db import DB_PATH as _DB
         con = sqlite3.connect(str(_DB))
         rows = con.execute("""
             SELECT keyword, opportunity_score, score, sector, source

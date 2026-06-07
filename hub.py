@@ -9,7 +9,8 @@ from pathlib import Path
 import streamlit as st
 
 BASE_DIR = Path(__file__).parent
-DB_PATH  = BASE_DIR / "shared" / "jarvis.sqlite"
+import os as _os
+DB_PATH  = Path(_os.environ.get("JARVIS_DB_PATH", str(BASE_DIR / "shared" / "jarvis.sqlite")))
 sys.path.insert(0, str(BASE_DIR))
 
 st.set_page_config(

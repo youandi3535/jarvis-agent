@@ -21,13 +21,31 @@ def translate(text_ko: str) -> str:
         return text_ko
     try:
         from shared.llm import invoke_text
+        # ★ 사용자 박제 2026-06-07 — 단순 번역 → 이미지 생성 특화 프롬프트 변환.
+        # Pollinations.ai (SDXL/Flux 계열) 가 잘 받아들이는 스타일 키워드 자동 첨가.
+        system_msg = (
+            "You are an image prompt engineer for Stable Diffusion / Flux models "
+            "(Pollinations.ai backend). Convert Korean descriptions into rich, "
+            "image-generation-optimized English prompts.\n\n"
+            "Strict rules:\n"
+            "- Output ONLY the English prompt — no preface, no markdown, no labels, no quotes.\n"
+            "- 50-100 words, comma-separated descriptors.\n"
+            "- Always include: subject, scene, lighting (e.g. 'cinematic lighting', "
+            "'golden hour', 'soft natural light'), camera (e.g. 'f/1.8', 'shallow depth of field', "
+            "'wide angle'), style (e.g. 'photorealistic', 'editorial photography', 'modern minimalist').\n"
+            "- End with quality boosters: 'photorealistic, ultra detailed, 8k, sharp focus, "
+            "professional photography'.\n"
+            "- Append negative cues: 'no text, no letters, no watermark, no logo, "
+            "no distorted faces, not cartoon, not anime, not illustration'.\n"
+            "- Aesthetic: premium Korean business/finance editorial."
+        )
         result = invoke_text(
             "writer_fast",
-            f"Translate the following Korean image prompt to concise English for image generation.\n"
-            f"Korean: {text_ko}\n"
-            "Rules: Output English only, no explanation, max 100 words, vivid and descriptive.",
-            max_tokens=200,
-            temperature=0.3,
+            f"Korean description: {text_ko}\n\n"
+            "Output the optimized English image prompt now.",
+            system=system_msg,
+            max_tokens=400,
+            temperature=0.6,
         )
         en = (result or "").strip()
         # 마크다운 헤더 제거 (# Image Prompt, **English:**, 등)

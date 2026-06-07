@@ -202,9 +202,9 @@ def _check_policy_files(report: PreflightReport) -> None:
 
 def _check_db_integrity(report: PreflightReport) -> None:
     """DB 무결성 검증 — 핵심 테이블 존재 + 열기 가능."""
-    db_path = _ROOT / "shared" / "jarvis.sqlite"
+    from shared.db import DB_PATH as db_path
     if not db_path.exists():
-        report.fail("db", str(db_path.relative_to(_ROOT)), "DB 파일 없음")
+        report.fail("db", str(db_path), "DB 파일 없음")
         return
     try:
         con = sqlite3.connect(str(db_path), timeout=5.0)

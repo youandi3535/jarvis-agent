@@ -1,12 +1,17 @@
 """
 JARVIS 공유 데이터베이스
-모든 에이전트가 읽고 쓰는 단일 SQLite — jarvis-agent/shared/jarvis.sqlite
+모든 에이전트가 읽고 쓰는 단일 SQLite — 기본: jarvis-agent/shared/jarvis.sqlite
+★ JARVIS_DB_PATH 환경변수로 경로 오버라이드 가능.
+  예) ~/.env: JARVIS_DB_PATH=/Users/kimhyojung/.jarvis/jarvis.sqlite
+  → 프로젝트 밖에 두면 Claude Code VM FUSE 마운트 밖 → .fuse_hidden* 생성 차단.
 """
-import sqlite3, json, shutil
+import os, sqlite3, json, shutil
 from pathlib import Path
 from datetime import datetime, date, timedelta
 
-DB_PATH     = Path(__file__).parent / "jarvis.sqlite"
+_default_db = Path(__file__).parent / "jarvis.sqlite"
+DB_PATH     = Path(os.environ.get("JARVIS_DB_PATH", str(_default_db)))
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 BACKUP_DIR  = Path(__file__).parent / "backups"
 
 

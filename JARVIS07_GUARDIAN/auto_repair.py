@@ -130,6 +130,7 @@ find {WORKDIR} -name "*.json" \
 - .py 파일: 수정 전 .bak 백업, 수정 후 ast.parse 검증.
 - 확신 없으면 수정하지 말 것.
 - **파일마다 무조건 Read 금지** — grep/import 검사에서 히트된 파일만 열 것.
+- **파일 삭제 금지**: 미사용 파일이라도 삭제·이동·백업 폴더 생성 절대 금지. `_deleted_*` 폴더 루트 생성 엄금. 필요 시 주석 처리까지만.
 
 완료 후 반드시 출력:
 ---REPAIR-SUMMARY---
@@ -492,56 +493,21 @@ def run_auto_repair() -> None:
         # ── [L2] ③ Claude Code SDK 실행 ────────────────────────────
         @action_step(name="③ Claude Code SDK 실행")
         def _step_run_cli(state: dict):
-            prompt = state["prompt"]
-
-            run_env = dict(os.environ)
-            run_env["PATH"] = ":".join(_EXTRA_PATHS) + ":" + run_env.get("PATH", "")
-            # ★ 사용자 박제 2026-06-07 (ERRORS [262]) — OAuth 모드 강제
-            # shared/llm.py:25 가 ANTHROPIC_API_KEY="max-subscription-no-api-cost" 가짜 키 세팅 →
-            # 빈 문자열로 오버라이드해야 claude CLI 가 OAuth 모드로 인증. 미설정 시 exit code 1.
-            run_env["ANTHROPIC_API_KEY"] = ""
-            t0 = time.time()
-            try:
-                import anyio
-                from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
-                from claude_code_sdk._errors import CLINotFoundError
-
-                async def _run_sdk() -> str:
-                    with anyio.fail_after(_TIMEOUT):
-                        options = ClaudeCodeOptions(
-                            model=_MODEL,
-                            max_turns=60,  # ★ 2026-06-06 박제 — Bash-first 방식: Bash 5턴+히트파일 처리 = 40턴 내외. 80턴은 "파일마다Read" 구 방식 잔재(164턴 소진→실패 반복). 60턴으로 안전 여유.
-                            permission_mode="bypassPermissions",
-                            cwd=str(ROOT),
-                            env=run_env,
-                        )
-                        parts: list[str] = []
-                        async for msg in query(prompt=prompt, options=options):
-                            if isinstance(msg, AssistantMessage):
-                                for block in msg.content:
-                                    if isinstance(block, TextBlock):
-                                        parts.append(block.text)
-                        return "\n".join(parts)
-
-                # ★ os.environ["PATH"] 임시 업데이트 — SDK가 claude 바이너리 탐색 시
-                # ClaudeCodeOptions(env=) 이 아닌 os.environ 을 사용하기 때문
-                _orig_path = os.environ.get("PATH", "")
-                os.environ["PATH"] = ":".join(_EXTRA_PATHS) + ":" + _orig_path
-                try:
-                    stdout = anyio.run(_run_sdk)
-                finally:
-                    os.environ["PATH"] = _orig_path
-
-                elapsed = int(time.time() - t0)
-                log.info("[AutoRepair] SDK 완료 elapsed=%ds stdout=%d", elapsed, len(stdout or ""))
-                return {"returncode": 0, "stdout": stdout or "", "stderr": "", "elapsed": elapsed}
-
-            except CLINotFoundError:
-                log.error("[AutoRepair] claude 바이너리 미발견 — PATH: %s", os.environ.get("PATH", ""))
-                return {"returncode": -1, "stdout": "", "stderr": "cli_not_found", "elapsed": 0}
-            except TimeoutError:
-                return {"returncode": -2, "stdout": "", "stderr": "timeout",
-                        "elapsed": int(time.time() - t0)}
+            # ★ 사용자 박제 2026-06-07 — Claude CLI 잔존 흔적 일소.
+            # 옛 동작: 호출자가 anyio+query 인라인 + PATH·OAuth 직접 관리 (3곳 복붙) →
+            # cli_not_found / MessageParseError / API 가짜 키 누수 반복.
+            # 새 동작: shared.claude_sdk_compat.run_sdk_query 단일 진입점 — 모든 환경 보장.
+            from shared.claude_sdk_compat import run_sdk_query
+            result = run_sdk_query(
+                prompt=state["prompt"], model=_MODEL,
+                cwd=str(ROOT),
+                max_turns=60,  # ★ 2026-06-06 박제 — Bash-first 방식: Bash 5턴 + 히트파일 처리 40턴 내외.
+                permission_mode="bypassPermissions",
+                timeout=_TIMEOUT,
+            )
+            log.info("[AutoRepair] SDK 완료 elapsed=%ds stdout=%d rc=%d",
+                     result["elapsed"], len(result.get("stdout", "")), result["returncode"])
+            return result
 
         # ── [L3] 순수 검증 ─────────────────────────────────────────
         def _verify(state: dict) -> list:
@@ -672,11 +638,23 @@ def run_auto_repair() -> None:
 
         if not result.delivered:
             elapsed_total = int(time.time() - start)
+            _reason = result.escalation_reason or '하네스 검증 한도 초과'
             _send_tg(
                 f"❌ *자가 수정 실패 — 수동 확인 필요*\n"
-                f"사유: {result.escalation_reason or '하네스 검증 한도 초과'}\n"
+                f"사유: {_reason}\n"
                 f"소요: {elapsed_total // 60}분 {elapsed_total % 60}초"
             )
+            # ★ 사용자 박제 2026-06-07 — 실패 회차도 self_repair_runs 박제 (통계 누수 방지).
+            # 옛 동작: delivered=False 면 _send 미호출 → DB 박제 0건 → 대시보드 학습 곡선이
+            #          *성공 회차만* 반영해 실제 상태 왜곡. 발행 callback 안 실패 6회 (6/4~6/7)
+            #          가 통계에 안 보이는 사고 직결.
+            try:
+                _save_run_to_db(
+                    _MODEL, elapsed_total, -99,
+                    {}, {}, f"(송출 실패: {_reason[:160]})"
+                )
+            except Exception as _se:
+                log.warning("[AutoRepair] 실패 회차 박제 실패: %s", _se)
 
     finally:
         # ★ heartbeat 스레드 정지 — 종료 경로 무엇이든 무조건 정지
@@ -684,55 +662,42 @@ def run_auto_repair() -> None:
 
 
 def _run_auto_repair_legacy() -> None:
-    """harness 미가용 시 직접 실행 (backward-compat fallback)."""
+    """harness 미가용 시 직접 실행 (backward-compat fallback).
+
+    ★ 사용자 박제 2026-06-07 — Claude CLI 잔존 흔적 일소.
+    PATH·OAuth·MessageParseError 처리 모두 run_sdk_query 가 흡수.
+    (실제로는 run_auto_repair 가 ImportError 시 차단되므로 *호출 안 됨* — 죽은 코드.
+     안전망 유지 위해 함수는 보존하되 단일 진입점으로 통합.)
+    """
     start = time.time()
     prompt = _BASE_PROMPT.replace("{WORKDIR}", str(ROOT.resolve()))
-    run_env = dict(os.environ)
-    run_env["PATH"] = ":".join(_EXTRA_PATHS) + ":" + run_env.get("PATH", "")
-    run_env["ANTHROPIC_API_KEY"] = ""  # ★ OAuth 모드 강제 (ERRORS [262])
-    try:
-        import anyio
-        from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
-        from claude_code_sdk._errors import CLINotFoundError
-
-        async def _run_sdk() -> str:
-            with anyio.fail_after(_TIMEOUT):
-                options = ClaudeCodeOptions(
-                    model=_MODEL,
-                    max_turns=60,  # ★ 2026-06-06 — Bash-first 방식 60턴
-                    permission_mode="bypassPermissions",
-                    cwd=str(ROOT),
-                    env=run_env,
-                )
-                parts: list[str] = []
-                async for msg in query(prompt=prompt, options=options):
-                    if isinstance(msg, AssistantMessage):
-                        for block in msg.content:
-                            if isinstance(block, TextBlock):
-                                parts.append(block.text)
-                return "\n".join(parts)
-
-        _orig_path = os.environ.get("PATH", "")
-        os.environ["PATH"] = ":".join(_EXTRA_PATHS) + ":" + _orig_path
-        try:
-            stdout = anyio.run(_run_sdk)
-        finally:
-            os.environ["PATH"] = _orig_path
-        elapsed = int(time.time() - start)
-        summary = _parse_summary(stdout or "")
-        _record_repairs_to_guardian(summary)
-        layers = _parse_layer_counts(summary)
-        scores = _parse_self_scores(summary)
-        _save_run_to_db(_MODEL, elapsed, 0, layers, scores, summary)
-        _send_tg(f"✅ *자가 진단·수정 완료 (legacy)* ({elapsed}s)\n\n{_esc(summary)}")
-    except CLINotFoundError:
-        log.error("[AutoRepair/Legacy] claude 바이너리 미발견 — PATH: %s", os.environ.get("PATH", ""))
-        _send_tg("❌ *자가 수정 실패*: Claude Code SDK 런타임을 찾을 수 없습니다. PATH 확인 필요.")
-    except TimeoutError:
-        _send_tg(f"⚠️ *자가 수정 타임아웃* — 다음 회차에 재시도")
-    except Exception as e:
-        _g_report("master", e, module=__name__)
-        _send_tg(f"❌ *자가 수정 예외*: {e}")
+    from shared.claude_sdk_compat import run_sdk_query
+    result = run_sdk_query(
+        prompt=prompt, model=_MODEL,
+        cwd=str(ROOT), max_turns=60,
+        permission_mode="bypassPermissions",
+        timeout=_TIMEOUT,
+    )
+    elapsed = result["elapsed"]
+    rc      = result["returncode"]
+    if rc != 0:
+        kind = result.get("error_kind") or "sdk_error"
+        if kind == "cli_not_found":
+            _send_tg("❌ *자가 수정 실패*: claude 바이너리 PATH 미등록.")
+        elif kind == "timeout":
+            _send_tg("⚠️ *자가 수정 타임아웃* — 다음 회차에 재시도")
+        else:
+            _send_tg(f"❌ *자가 수정 예외*: {result.get('stderr','?')[:200]}")
+        # 실패도 박제 → self_repair_runs 통계 누수 방지
+        _save_run_to_db(_MODEL, elapsed, rc, {}, {}, f"(legacy 실패: {kind})")
+        return
+    stdout = result["stdout"]
+    summary = _parse_summary(stdout or "")
+    _record_repairs_to_guardian(summary)
+    layers = _parse_layer_counts(summary)
+    scores = _parse_self_scores(summary)
+    _save_run_to_db(_MODEL, elapsed, 0, layers, scores, summary)
+    _send_tg(f"✅ *자가 진단·수정 완료 (legacy)* ({elapsed}s)\n\n{_esc(summary)}")
 
 
 def job_auto_repair() -> None:
@@ -835,66 +800,44 @@ def run_auto_repair_targeted(
         context=context[-3000:],
     )
 
-    run_env = dict(os.environ)
-    run_env["PATH"] = ":".join(_EXTRA_PATHS) + ":" + run_env.get("PATH", "")
-    run_env["ANTHROPIC_API_KEY"] = ""  # ★ OAuth 모드 강제 (ERRORS [262])
+    # ★ 사용자 박제 2026-06-07 — Claude CLI 잔존 흔적 일소.
+    # PATH·OAuth·MessageParseError 처리 모두 run_sdk_query 가 자동 흡수.
+    from shared.claude_sdk_compat import run_sdk_query
+    result = run_sdk_query(
+        prompt=prompt, model=_MODEL,
+        cwd=str(ROOT),
+        permission_mode="bypassPermissions",
+        timeout=_TARGETED_TIMEOUT,
+    )
+    elapsed = result["elapsed"]
+    rc      = result["returncode"]
 
-    start = time.time()
-    try:
-        import anyio
-        from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
-        from claude_code_sdk._errors import CLINotFoundError
-
-        async def _run_sdk() -> str:
-            with anyio.fail_after(_TARGETED_TIMEOUT):
-                options = ClaudeCodeOptions(
-                    model=_MODEL,
-                    permission_mode="bypassPermissions",
-                    cwd=str(ROOT),
-                    env=run_env,
-                )
-                parts: list[str] = []
-                async for msg in query(prompt=prompt, options=options):
-                    if isinstance(msg, AssistantMessage):
-                        for block in msg.content:
-                            if isinstance(block, TextBlock):
-                                parts.append(block.text)
-                return "\n".join(parts)
-
-        _orig_path = os.environ.get("PATH", "")
-        os.environ["PATH"] = ":".join(_EXTRA_PATHS) + ":" + _orig_path
-        try:
-            output = anyio.run(_run_sdk)
-        finally:
-            os.environ["PATH"] = _orig_path
-        elapsed = int(time.time() - start)
-
-        summary = _parse_summary(output)
-        counts  = _parse_layer_counts(summary)
-        files_fixed = counts.get("files_fixed", 0)
-
-        log.info("[AutoRepair/Targeted] 완료: %ds, files_fixed=%d", elapsed, files_fixed)
-        _send_tg(
-            f"{'✅' if files_fixed > 0 else '⚠️'} *targeted 수정 완료* "
-            f"(job={job_id}, {elapsed}초)\n"
-            f"파일 수정: {files_fixed}개"
-        )
-
-        if files_fixed > 0:
-            _record_repairs_to_guardian(summary)
-
-        return files_fixed > 0
-
-    except CLINotFoundError:
-        log.error("[AutoRepair/Targeted] claude 바이너리 미발견 — PATH: %s", os.environ.get("PATH", ""))
-        _send_tg("❌ *targeted 수정 실패*: claude 바이너리 PATH 미등록 — PATH 확인 필요.")
+    if rc != 0:
+        kind = result.get("error_kind") or "sdk_error"
+        if kind == "cli_not_found":
+            _send_tg("❌ *targeted 수정 실패*: claude 바이너리 PATH 미등록.")
+        elif kind == "timeout":
+            _send_tg(f"⏰ *targeted 수정 timeout* ({_TARGETED_TIMEOUT}초 초과)")
+        else:
+            _send_tg(f"❌ *targeted 수정 예외*: {result.get('stderr','?')[:200]}")
+        log.error("[AutoRepair/Targeted] 실패(%s): %s", kind, result.get("stderr",""))
         return False
-    except TimeoutError:
-        log.error("[AutoRepair/Targeted] timeout (%ds)", _TARGETED_TIMEOUT)
-        _send_tg(f"⏰ *targeted 수정 timeout* ({_TARGETED_TIMEOUT}초 초과)")
-        return False
-    except Exception as e:
-        log.error("[AutoRepair/Targeted] 예외: %s", e)
-        return False
+
+    output = result["stdout"]
+    summary = _parse_summary(output)
+    counts  = _parse_layer_counts(summary)
+    files_fixed = counts.get("files_fixed", 0)
+
+    log.info("[AutoRepair/Targeted] 완료: %ds, files_fixed=%d", elapsed, files_fixed)
+    _send_tg(
+        f"{'✅' if files_fixed > 0 else '⚠️'} *targeted 수정 완료* "
+        f"(job={job_id}, {elapsed}초)\n"
+        f"파일 수정: {files_fixed}개"
+    )
+
+    if files_fixed > 0:
+        _record_repairs_to_guardian(summary)
+
+    return files_fixed > 0
 
 

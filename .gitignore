@@ -51,6 +51,28 @@ chroma_db/
 JARVIS07_GUARDIAN/rl_model.pkl
 JARVIS07_GUARDIAN/.rl_bootstrapped
 
+# ── ★ 운영 학습 자산 (사용자 박제 2026-06-07 — 팀원 협업 누수 차단) ────
+# 데몬이 *매 발행·매 자가진단* 마다 hit_count 누적·새 엔트리 추가하는 파일들.
+# git 추적 시 팀원 환경(빈 학습 상태)이 push 하면 사용자 운영 학습 자산이 *덮어쓰임*.
+# 학습 자산은 *운영 데몬 1곳에서만* 누적. 팀원은 빈 파일로 시작 → 자기 환경에서 새 누적.
+JARVIS07_GUARDIAN/learned_patterns.json
+JARVIS07_GUARDIAN/learned_incidents.json
+JARVIS07_GUARDIAN/project_audit_log.json
+
+# ── ★ RADAR 트렌드·캐시 (운영 누적 자산) ────────────────────────
+# 매일 cron 수집으로 누적 — 팀원 환경에서 수집 시 덮어쓰기·충돌 위험.
+JARVIS03_RADAR/data/
+
+# ── ★ 발행 누적 상태 (운영 자산) ────────────────────────────────
+# economic_used_tags: 이미 사용한 태그 누적 (덮어쓰면 같은 태그 재발행 사고)
+# scheduler_progress: APScheduler 런타임 진행 상태
+JARVIS02_WRITER/economic_used_tags.json
+JARVIS02_WRITER/scheduler_progress.json
+
+# ── ★ ERRORS.md — 정책 A (사용자 박제 2026-06-07): git 추적 유지하되 *팀원 편집 금지* ──
+# 운영 데몬·Cowork Claude 가 report_manual_fix() 호출로만 갱신. 팀원은 read-only.
+# (ignore 아님 — 단일 진실 소스로 공유 필요. 정책은 README.dev.md 참조.)
+
 # ── 기타 ─────────────────────────────────────────────────────────
 *.pid
 pid/

@@ -410,7 +410,8 @@ def backfill_keyword_embeddings(verbose: bool = True) -> dict:
     반환: {total, new, skipped, failed}
     """
     import sqlite3 as _sq
-    con = _sq.connect(str(ROOT / "shared" / "jarvis.sqlite"))
+    from shared.db import DB_PATH as _jarvis_db
+    con = _sq.connect(str(_jarvis_db))
     all_kws = [r[0] for r in con.execute(
         "SELECT DISTINCT keyword FROM trends ORDER BY keyword"
     ).fetchall()]

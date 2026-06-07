@@ -348,8 +348,7 @@ def analyze_post_type_history(post_type: str, days: int = 30) -> dict:
     """post_analysis DB 분석 — 최근 N일 글 평균 분량 vs 조회수."""
     try:
         import sqlite3
-        from pathlib import Path as _P
-        db_path = _P(__file__).resolve().parent.parent / "shared" / "jarvis.sqlite"
+        from shared.db import DB_PATH as db_path
         if not db_path.exists():
             return {}
         con = sqlite3.connect(str(db_path))

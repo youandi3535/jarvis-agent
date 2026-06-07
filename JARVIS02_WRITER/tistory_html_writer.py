@@ -143,11 +143,14 @@ def _generate_svg_pass2(
     context_text: str = "",
     img_dir: "Path | str | None" = None,
     run_id: str = "",
+    collection_docs: list | None = None,
 ) -> str:
     """차트 1개 단일 진입점 — chart_generator 성공 시 img 태그 반환, 실패 시 "" (스킵).
 
     run_id: _generate_svg_pass2_and_replace 가 글 단위로 단 1회 생성해서 전달.
             일관된 run_id → chart_generator 내부 _used_types_by_run 스타일 중복 방지 작동.
+    collection_docs: ★ 사용자 박제 2026-06-07 — JARVIS09 수집물.
+            chart_generator 가 부족 시 delta 보강 요청에 활용.
     폴백 없음 — 실데이터 없으면 차트 스킵 (CLAUDE.md ★ 규정, ERRORS [44][70]...[182] 10회 박제).
     """
     from JARVIS06_IMAGE.chart_generator import generate_chart as _gen_chart
@@ -163,6 +166,7 @@ def _generate_svg_pass2(
         out_dir=_dir,
         chart_idx=chart_idx,
         run_id=run_id,
+        collection_docs=collection_docs,
     )
     if jpg_path:
         alt = description[:40].replace('"', "'")

@@ -94,11 +94,6 @@
       "domain": "guardian",
       "examples": [
         {
-          "fixed_file": "JARVIS02_WRITER/theme_html_writer.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-06-04T11:31:16"
-        },
-        {
           "fixed_file": "JARVIS02_WRITER/law_enforcer.py",
           "source": "manual-vscode_claude",
           "ts": "2026-06-04T11:31:23"
@@ -142,11 +137,16 @@
           "fixed_file": "JARVIS02_WRITER/draft_writer.py",
           "source": "manual-vscode_claude",
           "ts": "2026-06-07T07:45:17"
+        },
+        {
+          "fixed_file": "JARVIS02_WRITER/post_type_specs.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-07T18:50:12"
         }
       ],
-      "hit_count": 134,
+      "hit_count": 136,
       "first_seen": "2026-05-31T10:03:36",
-      "last_seen": "2026-06-07T16:35:43",
+      "last_seen": "2026-06-07T18:50:12",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -155,7 +155,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T16:35:43"
+        "evaluated_at": "2026-06-07T18:50:12"
       }
     },
     {
@@ -290,9 +290,9 @@
           "ts": "2026-06-07T00:14:17"
         }
       ],
-      "hit_count": 86,
+      "hit_count": 87,
       "first_seen": "2026-05-31T10:17:53",
-      "last_seen": "2026-06-07T07:45:11",
+      "last_seen": "2026-06-07T19:17:54",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -301,7 +301,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T07:45:11"
+        "evaluated_at": "2026-06-07T19:17:54"
       }
     },
     {
@@ -338,9 +338,9 @@
           "ts": "2026-06-04T14:40:56"
         }
       ],
-      "hit_count": 59,
+      "hit_count": 63,
       "first_seen": "2026-05-31T12:03:02",
-      "last_seen": "2026-06-07T16:09:33",
+      "last_seen": "2026-06-07T18:52:05",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -349,7 +349,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T16:09:33"
+        "evaluated_at": "2026-06-07T18:52:05"
       }
     },
     {
@@ -467,9 +467,9 @@
           "ts": "2026-05-31T12:05:30"
         }
       ],
-      "hit_count": 27,
+      "hit_count": 28,
       "first_seen": "2026-05-31T12:05:30",
-      "last_seen": "2026-06-06T15:49:24",
+      "last_seen": "2026-06-07T18:49:47",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -478,7 +478,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-06T15:49:24"
+        "evaluated_at": "2026-06-07T18:49:47"
       }
     },
     {
@@ -505,9 +505,9 @@
           "ts": "2026-06-04T11:09:22"
         }
       ],
-      "hit_count": 21,
+      "hit_count": 22,
       "first_seen": "2026-05-31T11:04:15",
-      "last_seen": "2026-06-05T08:53:11",
+      "last_seen": "2026-06-07T18:50:18",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -516,7 +516,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-05T08:53:11"
+        "evaluated_at": "2026-06-07T18:50:18"
       }
     },
     {
@@ -560,6 +560,54 @@
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-07T16:36:46"
+      }
+    },
+    {
+      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS01_MASTER<PATH>.py",
+      "error_type": "ExternalEdit",
+      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS01_MASTER/dispatchers\\.py",
+      "fixer": "externaledit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "JARVIS01_MASTER/dispatchers.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-05-31T12:04:29"
+        },
+        {
+          "fixed_file": "JARVIS01_MASTER/intents.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-05-31T12:05:14"
+        },
+        {
+          "fixed_file": "JARVIS01_MASTER/core_agent.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-05-31T13:48:25"
+        },
+        {
+          "fixed_file": "JARVIS01_MASTER/agent_tools.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-04T11:10:33"
+        },
+        {
+          "fixed_file": "JARVIS01_MASTER/proactive_monitor.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-04T11:34:20"
+        }
+      ],
+      "hit_count": 11,
+      "first_seen": "2026-05-31T12:04:29",
+      "last_seen": "2026-06-07T18:49:57",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T18:49:57"
       }
     },
     {
@@ -619,42 +667,27 @@
       "tier": "manual"
     },
     {
-      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS01_MASTER<PATH>.py",
+      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS04_SCHEDULER<PATH>.py",
       "error_type": "ExternalEdit",
-      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS01_MASTER/dispatchers\\.py",
+      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS04_SCHEDULER/job_registry\\.py",
       "fixer": "externaledit",
       "tier": "manual",
-      "domain": "guardian",
+      "domain": "schedule",
       "examples": [
         {
-          "fixed_file": "JARVIS01_MASTER/dispatchers.py",
+          "fixed_file": "JARVIS04_SCHEDULER/job_registry.py",
           "source": "manual-vscode_claude",
-          "ts": "2026-05-31T12:04:29"
+          "ts": "2026-05-31T12:04:14"
         },
         {
-          "fixed_file": "JARVIS01_MASTER/intents.py",
+          "fixed_file": "JARVIS04_SCHEDULER/scheduler_agent.py",
           "source": "manual-vscode_claude",
-          "ts": "2026-05-31T12:05:14"
-        },
-        {
-          "fixed_file": "JARVIS01_MASTER/core_agent.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-05-31T13:48:25"
-        },
-        {
-          "fixed_file": "JARVIS01_MASTER/agent_tools.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-06-04T11:10:33"
-        },
-        {
-          "fixed_file": "JARVIS01_MASTER/proactive_monitor.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-06-04T11:34:20"
+          "ts": "2026-05-31T12:20:39"
         }
       ],
-      "hit_count": 9,
-      "first_seen": "2026-05-31T12:04:29",
-      "last_seen": "2026-06-04T11:34:20",
+      "hit_count": 7,
+      "first_seen": "2026-05-31T12:04:14",
+      "last_seen": "2026-06-07T18:30:02",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -663,7 +696,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-04T11:34:20"
+        "evaluated_at": "2026-06-07T18:30:02"
       }
     },
     {
@@ -812,39 +845,6 @@
         "rationale": "알 수 없는 fixer (harness_fix_경제 브리핑 발행) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-07T12:12:04"
-      }
-    },
-    {
-      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS04_SCHEDULER<PATH>.py",
-      "error_type": "ExternalEdit",
-      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS04_SCHEDULER/job_registry\\.py",
-      "fixer": "externaledit",
-      "tier": "manual",
-      "domain": "schedule",
-      "examples": [
-        {
-          "fixed_file": "JARVIS04_SCHEDULER/job_registry.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-05-31T12:04:14"
-        },
-        {
-          "fixed_file": "JARVIS04_SCHEDULER/scheduler_agent.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-05-31T12:20:39"
-        }
-      ],
-      "hit_count": 6,
-      "first_seen": "2026-05-31T12:04:14",
-      "last_seen": "2026-06-07T16:09:42",
-      "eval_meta": {
-        "should_register": true,
-        "score": 70,
-        "safe": true,
-        "accurate": true,
-        "reusable": true,
-        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
-        "tier": "unknown",
-        "evaluated_at": "2026-06-07T16:09:42"
       }
     },
     {
@@ -1416,6 +1416,44 @@
       "tier": "manual"
     },
     {
+      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS03_RADAR<PATH>.py",
+      "error_type": "ExternalEdit",
+      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS03_RADAR/jobs\\.py",
+      "fixer": "externaledit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "JARVIS03_RADAR/jobs.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-05-31T10:42:08"
+        },
+        {
+          "fixed_file": "JARVIS03_RADAR/radar_agent.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-05-31T12:20:37"
+        },
+        {
+          "fixed_file": "JARVIS03_RADAR/learning.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-07T18:50:02"
+        }
+      ],
+      "hit_count": 3,
+      "first_seen": "2026-05-31T10:42:08",
+      "last_seen": "2026-06-07T18:50:02",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T18:50:02"
+      }
+    },
+    {
       "fingerprint": "NameError::name '<NAME>' is not defined",
       "error_type": "NameError",
       "message_pattern": "name ['\\\"]([^'\\\"]+)['\\\"]\\s+is not defined",
@@ -1588,39 +1626,6 @@
         "rationale": "알 수 없는 fixer (auto_patch) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-05-29T07:10:43"
-      }
-    },
-    {
-      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS03_RADAR<PATH>.py",
-      "error_type": "ExternalEdit",
-      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS03_RADAR/jobs\\.py",
-      "fixer": "externaledit",
-      "tier": "manual",
-      "domain": "guardian",
-      "examples": [
-        {
-          "fixed_file": "JARVIS03_RADAR/jobs.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-05-31T10:42:08"
-        },
-        {
-          "fixed_file": "JARVIS03_RADAR/radar_agent.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-05-31T12:20:37"
-        }
-      ],
-      "hit_count": 2,
-      "first_seen": "2026-05-31T10:42:08",
-      "last_seen": "2026-05-31T12:20:37",
-      "eval_meta": {
-        "should_register": true,
-        "score": 70,
-        "safe": true,
-        "accurate": true,
-        "reusable": true,
-        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
-        "tier": "unknown",
-        "evaluated_at": "2026-05-31T12:20:37"
       }
     },
     {
@@ -7643,6 +7648,202 @@
         "rationale": "알 수 없는 fixer (legacyproviderresidual) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-07T07:43:03"
+      }
+    },
+    {
+      "fingerprint": "ImageQualityWeak::_build_photo_prompt_en() Sonnet 빌더 추가 + _generate_photos/_inject_section_images 가 prompt_en 인자로 호출 (Haiku 100자 번역 우회). 섹션 이미지는 sector·section_title 컨텍스트도 함께 전달.",
+      "error_type": "ImageQualityWeak",
+      "message_pattern": "_build_photo_prompt_en\\(\\)\\ Sonnet\\ 빌더\\ 추가\\ \\+\\ _generate_photos/_inject_section_images\\ ",
+      "fixer": "imagequalityweak",
+      "tier": "manual",
+      "domain": "image",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/draft_processor.py",
+          "source": "manual-claude",
+          "ts": "2026-06-07T08:15:30"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T08:15:30",
+      "last_seen": "2026-06-07T08:15:30",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (imagequalityweak) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T08:15:30"
+      }
+    },
+    {
+      "fingerprint": "ImageQualityWeak::translate() 시스템 프롬프트 강화 — 단순 번역 → 이미지 생성 특화(SD/Flux). lighting/camera/style/quality booster + negative cue 자동 첨가. max_tokens <N>→<N>, temperature <N>.<N>→<N>.<N>.",
+      "error_type": "ImageQualityWeak",
+      "message_pattern": "translate\\(\\)\\ 시스템\\ 프롬프트\\ 강화\\ —\\ 단순\\ 번역\\ →\\ 이미지\\ 생성\\ 특화\\(SD/Flux\\)\\.\\ lighting/camera/style/qual",
+      "fixer": "imagequalityweak",
+      "tier": "manual",
+      "domain": "image",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/prompt_translator.py",
+          "source": "manual-claude",
+          "ts": "2026-06-07T08:15:30"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T08:15:30",
+      "last_seen": "2026-06-07T08:15:30",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (imagequalityweak) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T08:15:30"
+      }
+    },
+    {
+      "fingerprint": "ImageQualityWeak::URL에 &model=flux&enhance=true 명시. 옛 동작은 모델 미지정으로 Pollinations 기본값 의존 → 품질 변동. DEFAULT_MODEL='<NAME>' + 호출자가 model 인자로 override 가능.",
+      "error_type": "ImageQualityWeak",
+      "message_pattern": "URL에\\ \\&model=flux\\&enhance=true\\ 명시\\.\\ 옛\\ 동작은\\ 모델\\ 미지정으로\\ Pollinations\\ 기본값\\ 의존\\ →\\ 품질\\ 변동\\.\\ DE",
+      "fixer": "imagequalityweak",
+      "tier": "manual",
+      "domain": "image",
+      "examples": [
+        {
+          "fixed_file": "JARVIS06_IMAGE/providers/pollinations_provider.py",
+          "source": "manual-claude",
+          "ts": "2026-06-07T08:15:30"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T08:15:30",
+      "last_seen": "2026-06-07T08:15:30",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (imagequalityweak) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T08:15:30"
+      }
+    },
+    {
+      "fingerprint": "ImageQualityWeak::신설 — Claude CLI 잔존 흔적 일소 단일 진입점. (<N>) message_parser monkey-patch — unknown message type(rate_limit_event 등) → SystemMessage 흡수 (.venv 수동 패치는 pip install 시 사라짐, 런타임 monkey-patch 만 영구). (<N>) PATH 보장 ",
+      "error_type": "ImageQualityWeak",
+      "message_pattern": "신설\\ —\\ Claude\\ CLI\\ 잔존\\ 흔적\\ 일소\\ 단일\\ 진입점\\.\\ \\(1\\)\\ message_parser\\ monkey\\-patch\\ —\\ unknown\\ messa",
+      "fixer": "imagequalityweak",
+      "tier": "manual",
+      "domain": "writer",
+      "examples": [
+        {
+          "fixed_file": "shared/claude_sdk_compat.py",
+          "source": "manual-claude",
+          "ts": "2026-06-07T08:54:59"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T08:54:59",
+      "last_seen": "2026-06-07T08:54:59",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (imagequalityweak) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T08:54:59"
+      }
+    },
+    {
+      "fingerprint": "MessageParseLeak::모듈 import 시 claude_sdk_compat 자동 로드 — message_parser monkey-patch 발효 + PATH 보장. 옛 동작은 shared<PATH>.py 가 _run_sdk_sync 안에서만 MessageParseError 처리 → auto_repair 3곳에는 미적용 → <N>/<N>~<N>/<N> 발행 직전 자가진단 6회 연",
+      "error_type": "MessageParseLeak",
+      "message_pattern": "모듈\\ import\\ 시\\ claude_sdk_compat\\ 자동\\ 로드\\ —\\ message_parser\\ monkey\\-patch\\ 발효\\ \\+\\ PATH\\ 보장\\.\\ ",
+      "fixer": "messageparseleak",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "shared/llm.py",
+          "source": "manual-claude",
+          "ts": "2026-06-07T08:54:59"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T08:54:59",
+      "last_seen": "2026-06-07T08:54:59",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (messageparseleak) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T08:54:59"
+      }
+    },
+    {
+      "fingerprint": "CliResidualPurge::Claude CLI 잔존 흔적 일소 3곳 통합. (<N>) run_auto_repair → _step_run_cli: anyio+query 인라인 + PATH 임시 변경 + try/except CLINotFoundError 블록 60줄 → run_sdk_query 1회 호출 8줄. (<N>) _run_auto_repair_legacy 동일 패턴 통합. (<",
+      "error_type": "CliResidualPurge",
+      "message_pattern": "Claude\\ CLI\\ 잔존\\ 흔적\\ 일소\\ 3곳\\ 통합\\.\\ \\(1\\)\\ run_auto_repair\\ →\\ _step_run_cli:\\ anyio\\+query\\ 인라인\\ ",
+      "fixer": "cliresidualpurge",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/auto_repair.py",
+          "source": "manual-claude",
+          "ts": "2026-06-07T08:54:59"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T08:54:59",
+      "last_seen": "2026-06-07T08:54:59",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (cliresidualpurge) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T08:54:59"
+      }
+    },
+    {
+      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: tools<PATH>.py",
+      "error_type": "ExternalEdit",
+      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ tools/diag_perf_collect\\.py",
+      "fixer": "externaledit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "tools/diag_perf_collect.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-07T18:50:22"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T18:50:22",
+      "last_seen": "2026-06-07T18:50:22",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T18:50:22"
       }
     }
   ]
