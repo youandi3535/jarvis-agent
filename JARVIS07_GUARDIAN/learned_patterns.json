@@ -7359,6 +7359,34 @@
         "tier": "unknown",
         "evaluated_at": "2026-06-07T10:16:57"
       }
+    },
+    {
+      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: .github<PATH>.yml",
+      "error_type": "ExternalEdit",
+      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ \\.github/workflows/ci\\.yml",
+      "fixer": "externaledit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": ".github/workflows/ci.yml",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-07T11:49:21"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T11:49:21",
+      "last_seen": "2026-06-07T11:49:21",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T11:49:21"
+      }
     }
   ]
 }
