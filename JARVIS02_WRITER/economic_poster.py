@@ -1735,7 +1735,7 @@ def _eco_inject_para_images(blocks: list, keyword: str = '경제') -> list:
     def _gen_para_img(text: str, idx: int) -> str:
         try:
             prompt = _make_prompt(text)
-            # ★ JARVIS06_IMAGE 단일 진입점 위임 (Nanobana→Bing→HuggingFace→Pollinations 체인)
+            # ★ JARVIS06_IMAGE 단일 진입점 위임 (Pollinations 단독 — Bing/HF 폐기 2026-06-07)
             from JARVIS06_IMAGE.image_agent import generate_photo as _gen_photo
             seed = int(hashlib.md5(
                 f"{datetime.now().strftime('%Y-%m-%d')}_{keyword}_eco_{idx}".encode()

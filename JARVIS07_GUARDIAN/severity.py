@@ -46,6 +46,8 @@ _LOW_PATTERNS = [
     re.compile(r"connection reset|connection refused", re.I),
     re.compile(r"rate limit|too many requests", re.I),
     re.compile(r"retry", re.I),
+    # ★ ERRORS [260] 박제 2026-06-07 — transient LLM 응답 형식 오류 (코드 버그 아님)
+    re.compile(r"\[transient\]|transient_llm_format|LLM 응답.*(빈|JSON 형식 누락)", re.I),
 ]
 
 

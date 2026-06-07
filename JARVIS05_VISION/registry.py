@@ -307,28 +307,12 @@ class _Image06Adapter(BaseAgent):
     agent_domain = "image"
 
     def get_health(self) -> dict:
-        try:
-            import os
-            bing_ok = bool(os.getenv("BING_COOKIE", "").strip())
-            hf_ok   = bool(os.getenv("HUGGINGFACE_API_KEY", "").strip())
-            backends = []
-            if bing_ok:  backends.append("Bing")
-            if hf_ok:    backends.append("HuggingFace")
-            backends.append("Pollinations")
-            return {"status": "online", "message": f"활성 백엔드: {', '.join(backends)}"}
-        except Exception as e:
-            return {"status": "warn", "message": f"상태 조회 실패: {e}"}
+        # ★ 사용자 박제 2026-06-07 — Bing / HuggingFace 완전 삭제 (ERRORS [263])
+        return {"status": "online", "message": "활성 백엔드: Pollinations"}
 
     def get_metrics(self) -> dict:
-        try:
-            import os
-            return {
-                "bing_available":         bool(os.getenv("BING_COOKIE", "").strip()),
-                "huggingface_available":  bool(os.getenv("HUGGINGFACE_API_KEY", "").strip()),
-                "pollinations_available": True,
-            }
-        except Exception as e:
-            return {"error": str(e)}
+        # ★ 사용자 박제 2026-06-07 — Bing / HuggingFace 완전 삭제
+        return {"pollinations_available": True}
 
 
 def bootstrap_builtin_adapters() -> None:

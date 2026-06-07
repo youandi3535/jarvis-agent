@@ -1,6 +1,7 @@
 """JARVIS06_IMAGE/image_agent.py — 이미지 생성 에이전트 단일 진입점.
 
-폴백 체인: Nanobana(Gemini) → Bing Image Creator → HuggingFace → Pollinations.ai
+폴백 체인: Nanobana(Gemini) → Pollinations.ai  (★ 사용자 박제 2026-06-07 — ERRORS [263]:
+Bing / HuggingFace 전멸 → 완전 삭제)
 SVG 차트: Claude SVG Provider (LLM 동적 생성, 고정 템플릿 금지)
 버스 연동: image.request 이벤트 수신 → image.response 발행
 """
@@ -31,7 +32,8 @@ def generate_photo(prompt_ko: str, out_dir: Path | None = None,
                    prompt_en: str | None = None) -> Path:
     """사진 이미지 생성.
 
-    폴백 체인: Nanobana(Gemini) → Bing Image Creator → HuggingFace → Pollinations.ai
+    폴백 체인: Nanobana(Gemini) → Pollinations.ai
+    (★ Bing / HuggingFace 완전 삭제 — ERRORS [263] 박제 2026-06-07)
 
     Args:
         prompt_ko:  한국어 이미지 프롬프트 (자동 영어 번역)
@@ -47,8 +49,6 @@ def generate_photo(prompt_ko: str, out_dir: Path | None = None,
         RuntimeError: 모든 백엔드 실패 시.
     """
     from JARVIS06_IMAGE.prompt_translator import translate
-    from JARVIS06_IMAGE.providers.bing_provider import BingProvider
-    from JARVIS06_IMAGE.providers.huggingface_provider import HuggingFaceProvider
     from JARVIS06_IMAGE.providers.pollinations_provider import PollinationsProvider
 
     dest = Path(out_dir) if out_dir else OUTPUT_DIR
@@ -65,40 +65,10 @@ def generate_photo(prompt_ko: str, out_dir: Path | None = None,
 
     log.info(f"[J06] 사진 생성: '{prompt_ko[:40]}' → '{prompt_en[:60]}'")
 
-    errors: list[str] = []
-
-    # 1순위: Bing Image Creator (DALL-E 기반)
-    bing = BingProvider()
-    if bing.available:
-        try:
-            path = bing.generate(prompt_en, dest, width=width, height=height)
-            log.info("[J06] ✅ Bing 생성 완료")
-            return path
-        except Exception as e:
-            msg = f"Bing 실패: {e}"
-            log.warning(f"[J06] {msg} → HuggingFace 폴백")
-            _g_report("image", e, module=__name__)
-            errors.append(msg)
-    else:
-        errors.append("Bing 비활성화 (BING_COOKIE 없음)")
-
-    # 2순위: HuggingFace (FLUX.1-schnell)
-    hf = HuggingFaceProvider()
-    if hf.available:
-        try:
-            path = hf.generate(prompt_en, dest, width=width, height=height, seed=seed)
-            log.info("[J06] ✅ HuggingFace 생성 완료")
-            return path
-        except Exception as e:
-            msg = f"HuggingFace 실패: {e}"
-            log.warning(f"[J06] {msg} → Pollinations 폴백")
-            _g_report("image", e, module=__name__)
-            errors.append(msg)
-    else:
-        errors.append("HuggingFace 비활성화 (HUGGINGFACE_API_KEY 없음)")
-
-    # 3순위: Pollinations.ai (키 불필요 — 최후 폴백)
-    log.info("[J06] Pollinations 최종 폴백 시도")
+    # ★ 사용자 박제 2026-06-07 (ERRORS [263]) — Bing / HuggingFace 완전 삭제.
+    # Bing 쿠키 무한 만료 + HuggingFace DNS 차단·hf-inference 미지원 → 전멸.
+    # 단일 폴백: Pollinations.ai (키 불필요)
+    log.info("[J06] Pollinations.ai 호출")
     kw_args: dict = {}
     if seed is not None:
         kw_args["seed"] = seed
@@ -204,8 +174,8 @@ def _register_capability() -> None:
             tools      = [],
             requires_approval = ["image.generate.photo"],
             cost_class = "low",
-            description= "이미지 생성 에이전트 — Bing→HuggingFace→Pollinations(사진), Claude SVG(차트), 썸네일",
-            tags       = ["image", "chart", "thumbnail", "svg", "bing", "huggingface", "pollinations"],
+            description= "이미지 생성 에이전트 — Pollinations(사진), Claude SVG(차트), 썸네일 (★ Bing/HF 폐기 2026-06-07)",
+            tags       = ["image", "chart", "thumbnail", "svg", "pollinations"],
             help_section=(
                 "🖼️ *이미지 생성 (JARVIS06)*\n"
                 "슬래시 명령어 없음 — 자유 문장으로 요청\n"

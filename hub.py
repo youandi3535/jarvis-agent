@@ -1223,26 +1223,14 @@ def load_image_stats() -> dict:
             for f in files[:10]
         ]
 
-    # .env 에서 프로바이더 키 존재 여부 확인 (값이 비어 있지 않으면 활성)
-    env_file = BASE_DIR / ".env"
-    bing_ok = False
-    hf_ok   = False
-    try:
-        if env_file.exists():
-            env_text = env_file.read_text(encoding="utf-8")
-            bing_ok = bool(_re2.search(r"^BING_COOKIE\s*=\s*\S+", env_text, _re2.MULTILINE))
-            hf_ok   = bool(_re2.search(r"^HUGGINGFACE_API_KEY\s*=\s*\S+", env_text, _re2.MULTILINE))
-    except Exception:
-        pass
-
+    # ★ 사용자 박제 2026-06-07 — Bing / HuggingFace 완전 삭제 (ERRORS [263])
+    # 단일 폴백: Pollinations.ai (키 불필요)
     return {
         "total":         total,
         "by_type":       by_type,
         "total_size_mb": round(total_size_mb, 1),
         "recent":        recent,
         "providers": {
-            "bing":         bing_ok,
-            "huggingface":  hf_ok,
             "pollinations": True,   # 항상 가용 (무키 폴백)
         },
     }
@@ -1566,7 +1554,7 @@ with t_home:
         "j03": {"line1": f"트렌드 {trends['today']}개 · 승인대기 {_qa_pending}건"},
         "j04": {"line1": f"잡 {len(today_jobs)}건 · 성공 {job_ok} / 실패 {_job_fail}"},
         "j05": {"line1": "VISION API :8505" if _j05_ok else "API 연결 대기"},
-        "j06": {"line1": f"이미지 {_img_s['total']}개 · 프로바이더 {_prov_ok}/3"},
+        "j06": {"line1": f"이미지 {_img_s['total']}개 · 프로바이더 {_prov_ok}/1"},
         "j07": {"line1": f"신규 {_gnew}건 · 수정 {_gfix}건 · CRIT {_gurgent}건"},
         "j08": {"line1": f"네이버 {'✅' if _nv_ok else '❌'} 티스토리 {'✅' if _ts_ok else '❌'} · {_nv_age_txt}"},
         "j09": {"line1": f"수집 누적 {_j09_stats['total']}건 · 오늘 {_j09_stats['today']}건"},
@@ -2955,35 +2943,18 @@ with t_sys:
     with ig1: md(kpi("PNG 파일",          img_s["by_type"].get("png", 0),   color="success"))
     with ig2: md(kpi("SVG 파일",          img_s["by_type"].get("svg", 0),   color="primary"))
     with ig3: md(kpi("총 용량",           f'{img_s["total_size_mb"]} MB',   color="muted",    sub="output/ 합계"))
-    with ig4: md(kpi("가용 프로바이더",   f"{prov_ok}/3",
-                     color="success" if prov_ok >= 2 else "warn",
-                     sub="Bing · HuggingFace · Pollinations"))
+    with ig4: md(kpi("가용 프로바이더",   f"{prov_ok}/1",
+                     color="success" if prov_ok >= 1 else "warn",
+                     sub="Pollinations.ai (★ Bing/HF 폐기 — ERRORS [263])"))
 
-    # 프로바이더 상태 카드
-    pr0, pr1, pr2 = st.columns(3)
-    with pr0:
-        md(agent_card(
-            "1순위 Bing DALL-E",
-            "online" if prov["bing"] else "offline",
-            "BING_COOKIE 설정됨 — 고품질 사진 생성 가능" if prov["bing"]
-            else "BING_COOKIE 미설정 — 다음 프로바이더로 폴백",
-            color="success" if prov["bing"] else "warn",
-        ))
-    with pr1:
-        md(agent_card(
-            "2순위 HuggingFace FLUX",
-            "online" if prov["huggingface"] else "offline",
-            "FLUX.1-schnell API 사용 가능" if prov["huggingface"]
-            else "HUGGINGFACE_API_KEY 미설정 — 다음 프로바이더로 폴백",
-            color="success" if prov["huggingface"] else "warn",
-        ))
-    with pr2:
-        md(agent_card(
-            "3순위 Pollinations.ai",
-            "online",
-            "무료 폴백 프로바이더 — 항상 가용<br>키 불필요 · 해상도 제한 있음",
-            color="muted",
-        ))
+    # 프로바이더 상태 카드 — Pollinations 단독
+    md(agent_card(
+        "Pollinations.ai (단일 프로바이더)",
+        "online",
+        "무료 사진 생성 — 항상 가용<br>키 불필요 · 해상도 제한 있음<br>"
+        "(★ 2026-06-07 — Bing/HuggingFace 폐기. 쿠키 만료·DNS 차단 등으로 전멸)",
+        color="success",
+    ))
 
     # 최근 생성 이미지 목록
     if img_s["recent"]:

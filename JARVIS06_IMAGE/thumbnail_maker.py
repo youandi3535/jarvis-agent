@@ -197,62 +197,18 @@ def _draw_text_shadow(img, text: str, x: int, y: int, font, color: tuple):
 
 def _generate_photo(keyword: str, title: str, seed: int, tmp_dir: Path,
                     platform: str = "naver", prompt_en: str = "") -> Path | None:
-    """AI 사진 생성 — Bing(1순위) → HuggingFace(2순위) → Pollinations(3순위)."""
+    """AI 사진 생성 — Pollinations.ai 단독.
+
+    ★ 사용자 박제 2026-06-07 (ERRORS [263]) — Bing / HuggingFace 완전 삭제.
+    Bing 쿠키 무한 만료 + HuggingFace DNS 차단·hf-inference 미지원 → 전멸 → 폐기.
+    """
     base_prompt = prompt_en if prompt_en else (
         f"Professional editorial photography, {keyword} theme, "
         f"dramatic lighting, cinematic wide angle, high quality"
     )
     full_prompt = f"{base_prompt}, ultra high quality, professional photography, 4k, no text no watermark"
 
-    # 1순위: Bing Image Creator
-    result = _generate_photo_bing(full_prompt, tmp_dir)
-    if result:
-        return result
-
-    # 2순위: HuggingFace FLUX
-    result = _generate_photo_hf(full_prompt, seed, tmp_dir)
-    if result:
-        return result
-    log.info("[thumbnail] HuggingFace 실패 → Pollinations 폴백")
-
-    # 3순위: Pollinations.ai
     return _generate_photo_pollinations(full_prompt, seed, tmp_dir)
-
-
-def _generate_photo_bing(full_prompt: str, tmp_dir: Path) -> Path | None:
-    """Bing Image Creator — BING_COOKIE 없거나 실패 시 None 반환."""
-    try:
-        from JARVIS06_IMAGE.providers.bing_provider import BingProvider
-        bing = BingProvider()
-        if not bing.available:
-            return None
-        log.info(f"[thumbnail] Bing 요청: {full_prompt[:70]}")
-        path = bing.generate(full_prompt, tmp_dir, width=W, height=H)
-        log.info(f"[thumbnail] Bing 완료: {path}")
-        return path
-    except Exception as e:
-        log.warning(f"[thumbnail] Bing 실패 ({e})")
-        return None
-
-
-def _generate_photo_hf(full_prompt: str, seed: int, tmp_dir: Path) -> Path | None:
-    """HuggingFace FLUX 생성 — 실패 시 None 반환."""
-    try:
-        from JARVIS06_IMAGE.providers.huggingface_provider import HuggingFaceProvider
-        hf = HuggingFaceProvider()
-        if not hf.available:
-            log.info("[thumbnail] HUGGINGFACE_API_KEY 없음 → Pollinations 폴백")
-            return None
-        log.info(f"[thumbnail] HuggingFace 요청: {full_prompt[:70]}")
-        path = hf.generate(full_prompt, tmp_dir, width=W, height=H, seed=seed)
-        # 파일명에 seed 추가 — 같은 프롬프트 다른 seed = 다른 파일
-        new_path = path.parent / f"hf_{seed:08d}_{path.name}"
-        path.rename(new_path)
-        log.info(f"[thumbnail] HuggingFace 완료: {new_path}")
-        return new_path
-    except Exception as e:
-        log.warning(f"[thumbnail] HuggingFace 실패 ({e})")
-        return None
 
 
 def _generate_photo_pollinations(full_prompt: str, seed: int, tmp_dir: Path) -> Path | None:
