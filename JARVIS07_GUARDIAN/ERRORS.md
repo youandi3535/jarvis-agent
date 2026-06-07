@@ -1,5 +1,63 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [272] Pollinations 402 → Guardian "자동 수정 실패" 오알람 — severity 분류 수정 (2026-06-08)
+
+- **증상**: `⚠️ [GUARDIAN] 자동 수정 실패 — RuntimeError @ JARVIS06IMAGE.trendcharts / Pollinations 6회 재시도 모두 실패: Queue full for IP`
+- **환경**: Guardian `j07_residual_retry` — Pollinations 402 RuntimeError를 "코드 버그"로 분류 → 자동 수정 시도 → 외부 서비스 제한이라 수정 불가 → "자동 수정 실패" 알림
+- **원인**: `severity.py _LOW_PATTERNS`에 "Queue full" 패턴 없음 → Pollinations 402가 severity=medium 분류 → `is_auto_fixable("medium", "RuntimeError")` = True → Guardian이 수정 시도 → 실패 → 알림. 실제 코드 버그 아님: 서킷 브레이커(`image_agent.py`) + matplotlib 폴백으로 이미 graceful 처리됨.
+- **헛다리**: [267][268][269][270] 에서 pollinations_provider.py + image_agent.py 반복 수정했지만 severity 분류 미수정으로 false-alarm 계속 발생.
+- **해결**: `JARVIS07_GUARDIAN/severity.py` `_LOW_PATTERNS`에 Pollinations 402 패턴 추가 → severity=low → `is_auto_fixable()` False → Guardian 자동 수정 시도 안 함 → 알림 없음.
+  - 추가 패턴: `r"Queue full for IP|Pollinations.*Queue full|Pollinations.*402|queue full.*max.*1"`
+- **파일**: `JARVIS07_GUARDIAN/severity.py` (line 53~56)
+- **교훈**: 외부 서비스 일시 제한(IP 큐, Rate limit 등)은 코드로 수정 불가한 런타임 외부 요인. severity=low로 분류해야 Guardian 자동 수정 시도 없음. `_LOW_PATTERNS`가 "too many requests/rate limit"만 있어도 402 Queue full은 매칭 안 됨 — 패턴 명시 필요.
+
+---
+
+### [271] Guardian 잔류 오류 재처리 → "tistory 발행 실패" 오알람 (2026-06-08)
+
+- **증상**: `⚠️ [GUARDIAN] 자동 수정 실패 — RuntimeError @ JARVIS00_INFRA.harness.경제 브리핑 발행 / [Layer4] ['tistory'] 발행 실패`. 사용자에게 수동 검토 요청 알림 수신.
+- **환경**: Guardian 잔류 오류 재처리 잡 (`j07_residual_retry`, 10분 간격) — 6월 7일 에러를 6월 8일에 재처리.
+- **원인**: ERRORS [265][266] 으로 이미 진단·수정된 런타임 에러. Guardian `error_fixer` 는 코드 패치 불가한 Selenium 런타임 오류 → "자동 수정 불가" 판정 → 알림 발송. 실제 코드 수정은 6월 7일에 완료 — `economic_poster.py` attempt-aware resend + `tistory_poster.py` 세션 복구.
+- **헛다리**: tistory 쿠키 만료 의심했으나 `.env TS_COOKIE` 존재 확인 (40자 토큰). 신규 코드 버그 없음.
+- **해결**: 코드 수정 불필요. 현재 코드 상태 확인:
+  - `economic_poster.py` line 2160~2169: attempt ≥ 2 + 플래그 해제 → 진짜 재발행 ✅
+  - `tistory_poster.py` line 626~641: InvalidSessionIdException → 새 드라이버 자동 복구 ✅
+  - 07:00 경제 브리핑 잡 정상 실행 중 (auto_repair subprocess block 증거: daemon.out 06:19 이후 정지).
+- **파일**: 해당 없음 (런타임 에러, 코드 변경 없음)
+- **교훈**: Guardian 잔류 오류 재처리가 "이미 해결된 런타임 에러"를 재시도하면 false-alarm 알림 발생. 수신 시 ERRORS.md [265][266] 먼저 대조 확인. 로그(`logs/economic_*.log`) 직접 확인이 실제 발행 상태 진단 정답.
+
+---
+
+### [270] Pollinations 402 Queue full 재발 — 서킷 브레이커 도입 (2026-06-08)
+
+- **증상**: `RuntimeError: Pollinations 6회 재시도 모두 실패: Queue full for IP` — [269] 조기 중단 수정 후에도 재발. 데몬이 옛 코드로 실행 중이거나, 연속 이미지 생성 시 매번 6회 재시도 × 지수 백오프 → 7분+ 낭비.
+- **환경**: `JARVIS06_IMAGE/image_agent.py`
+- **원인**: [269]의 `_QUEUE_FULL_ABORT=3` 조기 중단은 *단일 `generate_photo` 호출 내부* 에서만 동작. 같은 파이프라인 내 다수 `generate_photo` 호출이 순차 실행되면 각 호출마다 3회 재시도 × N개 이미지 → 여전히 수 분 낭비. IP 레벨 제한이 지속되면 모든 호출이 실패할 것이 명백.
+- **헛다리**: [267][268][269] 에서 쿨다운·락 범위·조기 중단으로 단일 호출 내부 최적화. 그러나 *호출 간* 서킷 브레이커 부재로 후속 호출들이 동일 실패 반복.
+- **해결**: `image_agent.py` 에 **글로벌 서킷 브레이커** 도입.
+  1. `_CIRCUIT_OPEN_UNTIL` 타임스탬프 — Pollinations 실패 시 현재 시각 + 180초로 설정.
+  2. `generate_photo` 진입 시 서킷 open 상태면 즉시 RuntimeError (재시도 없이 0초 실패).
+  3. caller(`trend_charts.make_ai_section_image` 등)는 이미 `return ""` graceful degradation 보유 → 이미지 없이 진행.
+  4. 3분 후 서킷 자동 복구 (half-open 불필요 — 다음 호출이 자연스레 시도).
+- **파일**: `JARVIS06_IMAGE/image_agent.py`
+- **교훈**: IP 레벨 제한은 *단일 호출 내부 최적화* 로 불충분 — *호출 간* 서킷 브레이커가 파이프라인 전체 시간 낭비를 방지. 실패한 것이 확실한 API에 반복 호출하는 것은 시간·리소스 낭비.
+
+---
+
+### [269] Pollinations 402 Queue full 연속 6회 — 조기 중단 + 쿨다운 확대 (2026-06-08)
+
+- **증상**: `RuntimeError: Pollinations 6회 재시도 모두 실패: Queue full for IP` — [268] 락 범위 수정 후에도 402 재발. 6회 지수 백오프(30→60→120→120→120→120초) 전부 실패 → ~7분 낭비.
+- **환경**: `JARVIS06_IMAGE/providers/pollinations_provider.py`, `JARVIS06_IMAGE/image_agent.py`
+- **원인**: IP 레벨 큐 제한이 지속적으로 발동 (다른 프로세스·외부 트래픽 가능성). 6회 모두 402이면 재시도 무의미한데 7분간 대기.
+- **헛다리**: [267][268]에서 쿨다운 증가·락 범위 확장으로 해결 시도. 동일 프로세스 직렬화는 됐지만, IP 단위 외부 요인은 코드로 해결 불가.
+- **해결**:
+  1. `pollinations_provider.py`: 연속 402 `_QUEUE_FULL_ABORT=3`회 시 조기 중단 (나머지 3회 재시도 스킵 → ~4분 절약). jitter 0~5초 추가.
+  2. `image_agent.py`: `_POLLINATIONS_COOLDOWN` 18→25초 확대 + jitter 0~3초 추가.
+- **파일**: `JARVIS06_IMAGE/providers/pollinations_provider.py`, `JARVIS06_IMAGE/image_agent.py`
+- **교훈**: IP 레벨 제한 시 지수 백오프 반복은 시간 낭비. 연속 N회 동일 오류 → 조기 중단이 파이프라인 전체 효율에 기여. 이미지 실패는 caller가 graceful degradation 처리(`return ""`) 하므로 빠른 실패가 나음.
+
+---
+
 ### [268] Pollinations 402 Queue full 재발 — 락 범위 불충분 (동시 요청 허용) (2026-06-08)
 
 - **증상**: `RuntimeError: Pollinations 6회 재시도 모두 실패: Queue full for IP` — [267] 수정 후에도 402 재발. 6회 지수 백오프(20→40→80→120→120→120초) 전부 실패.

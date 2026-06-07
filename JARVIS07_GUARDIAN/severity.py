@@ -51,6 +51,9 @@ _LOW_PATTERNS = [
     # ★ ERRORS [265] 박제 2026-06-07 — 폐기된 provider 잔존 호출 (Bing/HuggingFace 삭제됨)
     # 데몬 미재시작 시 옛 모듈 메모리 잔존 → 호출 → 인증/네트워크 실패 → 알림 폭주 방지
     re.compile(r"Bing 인증 실패|BingProvider|HuggingFaceProvider|api-inference\.huggingface|_U 쿠키 만료", re.I),
+    # ★ ERRORS [272] 박제 2026-06-08 — Pollinations 402 Queue full (IP 레벨 외부 제한)
+    # 코드 버그 아님. 서킷 브레이커 + matplotlib 폴백으로 graceful 처리됨 → Guardian 수정 불필요.
+    re.compile(r"Queue full for IP|Pollinations.*Queue full|Pollinations.*402|queue full.*max.*1", re.I),
 ]
 
 
