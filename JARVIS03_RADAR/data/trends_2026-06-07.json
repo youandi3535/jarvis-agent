@@ -1,121 +1,121 @@
 {
   "date": "2026-06-07",
-  "collected_at": "00:26:04",
+  "collected_at": "09:00:09",
   "google_trending": [
-    "시가총액",
-    "국립 발레단 단장",
-    "두코바니",
-    "상장지수펀드",
-    "마야 흐발린스카",
-    "lpl",
-    "성동구청장.",
-    "로또1227",
-    "양민혁",
-    "뉴욕증시",
-    "반도체주",
-    "폭락에",
-    "금리인상",
-    "최휘영",
-    "문체부",
-    "국립발레단장에",
-    "강수진",
-    "한수원",
-    "김정관",
-    "스페이스X",
-    "올라탈",
-    "키움운용",
-    "프랑스오픈",
-    "나중에",
-    "Bin",
-    "fined",
-    "Chinese",
-    "LoL",
-    "풀영상",
-    "성공의",
-    "코스피",
-    "나왔다",
-    "대한전선",
-    "김대호",
-    "주요공시",
+    "서우림",
+    "참교육",
+    "배준호",
+    "미국 항공 우주국",
+    "부산날씨",
+    "김하성",
+    "해리 케인",
+    "brazil vs egypt",
+    "여배우",
+    "전원주",
+    "전원주인공",
+    "선우용여",
+    "흐리고",
+    "김무열",
+    "주말의",
+    "OTT",
+    "ET포토",
+    "진기주",
+    "차세대",
+    "스토크",
+    "손흥민",
+    "등장에",
+    "ISS",
+    "공기누출로",
+    "국제우주정가장",
+    "국제우주정거장",
+    "VS",
+    "조정장",
+    "우리가",
+    "스페이스",
+    "최고치",
+    "코스피의",
+    "삼전닉스",
+    "주식은",
+    "SOC",
+    "인프라",
+    "신한지주",
+    "KB",
+    "위안화",
+    "월드코인",
     "삼성전자",
-    "김용범",
-    "두산에너빌리티",
-    "우리기술",
-    "대한광통신",
-    "광통신",
-    "코스닥",
-    "금융위기",
-    "심층분석",
-    "반도체",
-    "데일리안",
-    "오늘뉴스",
+    "SK",
+    "하이닉스",
+    "돌파에",
+    "안철수",
+    "앞두고",
+    "역대급",
     "삼성전기",
-    "고르기",
-    "들어간"
+    "코스피",
+    "코스닥지수"
   ],
   "scored_keywords": [
     {
-      "keyword": "시가총액",
+      "keyword": "서우림",
       "rank": 1,
       "score": 100,
-      "sector": "금융·투자",
+      "sector": "기타",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 62.0
     },
     {
-      "keyword": "국립 발레단 단장",
+      "keyword": "참교육",
       "rank": 2,
       "score": 98,
-      "sector": "기타",
+      "sector": "교육·취업",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 61.1
     },
     {
-      "keyword": "두코바니",
+      "keyword": "배준호",
       "rank": 3,
       "score": 96,
-      "sector": "기타",
+      "sector": "연예·문화",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 60.2
     },
     {
-      "keyword": "상장지수펀드",
+      "keyword": "미국 항공 우주국",
       "rank": 4,
       "score": 95,
-      "sector": "금융·투자",
+      "sector": "여행",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 59.8
     },
     {
-      "keyword": "마야 흐발린스카",
+      "keyword": "부산날씨",
       "rank": 5,
       "score": 93,
-      "sector": "기타",
+      "sector": "라이프",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 58.9
     },
     {
-      "keyword": "lpl",
+      "keyword": "김하성",
       "rank": 6,
       "score": 91,
-      "sector": "기타",
+      "sector": "스포츠",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 58.0
     },
     {
-      "keyword": "성동구청장.",
+      "keyword": "해리 케인",
       "rank": 7,
       "score": 89,
       "sector": "기타",
@@ -125,7 +125,7 @@
       "opportunity_score": 57.1
     },
     {
-      "keyword": "로또1227",
+      "keyword": "brazil vs egypt",
       "rank": 8,
       "score": 87,
       "sector": "기타",
@@ -135,57 +135,57 @@
       "opportunity_score": 56.1
     },
     {
-      "keyword": "양민혁",
+      "keyword": "여배우",
       "rank": 9,
       "score": 86,
-      "sector": "기타",
+      "sector": "연예·문화",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 55.7
     },
     {
-      "keyword": "뉴욕증시",
+      "keyword": "전원주",
       "rank": 10,
       "score": 84,
-      "sector": "금융·투자",
+      "sector": "기타",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 54.8
     },
     {
-      "keyword": "반도체주",
+      "keyword": "전원주인공",
       "rank": 11,
       "score": 82,
-      "sector": "IT·테크",
+      "sector": "기타",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
-      "opportunity_score": 55.1
+      "opportunity_score": 53.9
     },
     {
-      "keyword": "폭락에",
+      "keyword": "선우용여",
       "rank": 12,
       "score": 80,
-      "sector": "기타",
+      "sector": "연예·문화",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 53.0
     },
     {
-      "keyword": "금리인상",
+      "keyword": "흐리고",
       "rank": 13,
       "score": 78,
-      "sector": "금융·투자",
+      "sector": "라이프",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 52.1
     },
     {
-      "keyword": "최휘영",
+      "keyword": "김무열",
       "rank": 14,
       "score": 77,
       "sector": "기타",
@@ -195,7 +195,7 @@
       "opportunity_score": 51.6
     },
     {
-      "keyword": "문체부",
+      "keyword": "주말의",
       "rank": 15,
       "score": 75,
       "sector": "기타",
@@ -205,17 +205,17 @@
       "opportunity_score": 50.8
     },
     {
-      "keyword": "국립발레단장에",
+      "keyword": "OTT",
       "rank": 16,
       "score": 73,
-      "sector": "기타",
+      "sector": "연예·문화",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 49.9
     },
     {
-      "keyword": "강수진",
+      "keyword": "ET포토",
       "rank": 17,
       "score": 71,
       "sector": "기타",
@@ -225,7 +225,7 @@
       "opportunity_score": 49.0
     },
     {
-      "keyword": "한수원",
+      "keyword": "진기주",
       "rank": 18,
       "score": 69,
       "sector": "기타",
@@ -235,37 +235,37 @@
       "opportunity_score": 48.0
     },
     {
-      "keyword": "김정관",
+      "keyword": "차세대",
       "rank": 19,
       "score": 68,
-      "sector": "스포츠",
+      "sector": "IT·테크",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 47.6
     },
     {
-      "keyword": "스페이스X",
+      "keyword": "스토크",
       "rank": 20,
       "score": 66,
-      "sector": "IT·테크",
+      "sector": "기타",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 46.7
     },
     {
-      "keyword": "올라탈",
+      "keyword": "손흥민",
       "rank": 21,
       "score": 64,
-      "sector": "기타",
+      "sector": "스포츠",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 45.8
     },
     {
-      "keyword": "키움운용",
+      "keyword": "등장에",
       "rank": 22,
       "score": 62,
       "sector": "기타",
@@ -275,7 +275,7 @@
       "opportunity_score": 44.9
     },
     {
-      "keyword": "프랑스오픈",
+      "keyword": "ISS",
       "rank": 23,
       "score": 60,
       "sector": "기타",
@@ -285,7 +285,7 @@
       "opportunity_score": 44.0
     },
     {
-      "keyword": "나중에",
+      "keyword": "공기누출로",
       "rank": 24,
       "score": 59,
       "sector": "기타",
@@ -295,7 +295,7 @@
       "opportunity_score": 43.5
     },
     {
-      "keyword": "Bin",
+      "keyword": "국제우주정가장",
       "rank": 25,
       "score": 57,
       "sector": "기타",
@@ -305,7 +305,7 @@
       "opportunity_score": 42.7
     },
     {
-      "keyword": "fined",
+      "keyword": "국제우주정거장",
       "rank": 26,
       "score": 55,
       "sector": "기타",
@@ -315,47 +315,47 @@
       "opportunity_score": 41.8
     },
     {
-      "keyword": "Chinese",
+      "keyword": "VS",
       "rank": 27,
       "score": 53,
-      "sector": "사회·이슈",
+      "sector": "기타",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 40.9
     },
     {
-      "keyword": "LoL",
+      "keyword": "조정장",
       "rank": 28,
       "score": 51,
-      "sector": "기타",
+      "sector": "금융·투자",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 40.0
     },
     {
-      "keyword": "풀영상",
+      "keyword": "우리가",
       "rank": 29,
       "score": 50,
-      "sector": "연예·문화",
+      "sector": "기타",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 39.5
     },
     {
-      "keyword": "성공의",
+      "keyword": "스페이스",
       "rank": 30,
       "score": 48,
-      "sector": "기타",
+      "sector": "IT·테크",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 38.6
     },
     {
-      "keyword": "코스피",
+      "keyword": "최고치",
       "rank": 31,
       "score": 46,
       "sector": "금융·투자",
@@ -365,37 +365,37 @@
       "opportunity_score": 37.7
     },
     {
-      "keyword": "나왔다",
+      "keyword": "코스피의",
       "rank": 32,
       "score": 44,
-      "sector": "기타",
+      "sector": "금융·투자",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 36.8
     },
     {
-      "keyword": "대한전선",
+      "keyword": "삼전닉스",
       "rank": 33,
       "score": 42,
-      "sector": "금융·투자",
+      "sector": "경제·경기",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 35.9
     },
     {
-      "keyword": "김대호",
+      "keyword": "주식은",
       "rank": 34,
       "score": 41,
-      "sector": "사회·이슈",
+      "sector": "금융·투자",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 35.5
     },
     {
-      "keyword": "주요공시",
+      "keyword": "SOC",
       "rank": 35,
       "score": 39,
       "sector": "기타",
@@ -405,47 +405,47 @@
       "opportunity_score": 34.5
     },
     {
-      "keyword": "삼성전자",
+      "keyword": "인프라",
       "rank": 36,
       "score": 37,
-      "sector": "IT·테크",
+      "sector": "기타",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 33.7
     },
     {
-      "keyword": "김용범",
+      "keyword": "신한지주",
       "rank": 37,
       "score": 35,
-      "sector": "연예·문화",
+      "sector": "기타",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 32.8
     },
     {
-      "keyword": "두산에너빌리티",
+      "keyword": "KB",
       "rank": 38,
       "score": 33,
-      "sector": "에너지·환경",
+      "sector": "금융·투자",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 31.9
     },
     {
-      "keyword": "우리기술",
+      "keyword": "위안화",
       "rank": 39,
       "score": 32,
-      "sector": "IT·테크",
+      "sector": "기타",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 31.4
     },
     {
-      "keyword": "대한광통신",
+      "keyword": "월드코인",
       "rank": 40,
       "score": 30,
       "sector": "금융·투자",
@@ -455,7 +455,7 @@
       "opportunity_score": 30.5
     },
     {
-      "keyword": "광통신",
+      "keyword": "삼성전자",
       "rank": 41,
       "score": 28,
       "sector": "IT·테크",
@@ -465,27 +465,27 @@
       "opportunity_score": 29.6
     },
     {
-      "keyword": "코스닥",
+      "keyword": "SK",
       "rank": 42,
       "score": 26,
-      "sector": "금융·투자",
+      "sector": "경제·경기",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 28.7
     },
     {
-      "keyword": "금융위기",
+      "keyword": "하이닉스",
       "rank": 43,
       "score": 24,
-      "sector": "금융·투자",
+      "sector": "IT·테크",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 27.8
     },
     {
-      "keyword": "심층분석",
+      "keyword": "돌파에",
       "rank": 44,
       "score": 23,
       "sector": "기타",
@@ -495,17 +495,17 @@
       "opportunity_score": 27.4
     },
     {
-      "keyword": "반도체",
+      "keyword": "안철수",
       "rank": 45,
       "score": 21,
-      "sector": "IT·테크",
+      "sector": "기타",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
-      "opportunity_score": 35.5
+      "opportunity_score": 26.5
     },
     {
-      "keyword": "데일리안",
+      "keyword": "앞두고",
       "rank": 46,
       "score": 19,
       "sector": "기타",
@@ -515,10 +515,10 @@
       "opportunity_score": 25.6
     },
     {
-      "keyword": "오늘뉴스",
+      "keyword": "역대급",
       "rank": 47,
       "score": 17,
-      "sector": "사회·이슈",
+      "sector": "경제·경기",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
@@ -535,20 +535,20 @@
       "opportunity_score": 23.8
     },
     {
-      "keyword": "고르기",
+      "keyword": "코스피",
       "rank": 49,
       "score": 14,
-      "sector": "기타",
+      "sector": "금융·투자",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
       "opportunity_score": 23.3
     },
     {
-      "keyword": "들어간",
+      "keyword": "코스닥지수",
       "rank": 50,
       "score": 12,
-      "sector": "기타",
+      "sector": "금융·투자",
       "velocity": "—",
       "velocity_score": 0.0,
       "competition": 50.0,
@@ -556,49 +556,413 @@
     }
   ],
   "sector_summary": {
-    "금융·투자": [
+    "기타": [
       {
-        "keyword": "시가총액",
+        "keyword": "서우림",
         "rank": 1,
         "score": 100,
-        "sector": "금융·투자",
+        "sector": "기타",
         "velocity": "—",
         "velocity_score": 0.0,
         "competition": 50.0,
         "opportunity_score": 62.0
       },
       {
-        "keyword": "상장지수펀드",
-        "rank": 4,
-        "score": 95,
-        "sector": "금융·투자",
+        "keyword": "해리 케인",
+        "rank": 7,
+        "score": 89,
+        "sector": "기타",
         "velocity": "—",
         "velocity_score": 0.0,
         "competition": 50.0,
-        "opportunity_score": 59.8
+        "opportunity_score": 57.1
       },
       {
-        "keyword": "뉴욕증시",
+        "keyword": "brazil vs egypt",
+        "rank": 8,
+        "score": 87,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 56.1
+      },
+      {
+        "keyword": "전원주",
         "rank": 10,
         "score": 84,
-        "sector": "금융·투자",
+        "sector": "기타",
         "velocity": "—",
         "velocity_score": 0.0,
         "competition": 50.0,
         "opportunity_score": 54.8
       },
       {
-        "keyword": "금리인상",
+        "keyword": "전원주인공",
+        "rank": 11,
+        "score": 82,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.9
+      },
+      {
+        "keyword": "김무열",
+        "rank": 14,
+        "score": 77,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 51.6
+      },
+      {
+        "keyword": "주말의",
+        "rank": 15,
+        "score": 75,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 50.8
+      },
+      {
+        "keyword": "ET포토",
+        "rank": 17,
+        "score": 71,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.0
+      },
+      {
+        "keyword": "진기주",
+        "rank": 18,
+        "score": 69,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 48.0
+      },
+      {
+        "keyword": "스토크",
+        "rank": 20,
+        "score": 66,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 46.7
+      },
+      {
+        "keyword": "등장에",
+        "rank": 22,
+        "score": 62,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.9
+      },
+      {
+        "keyword": "ISS",
+        "rank": 23,
+        "score": 60,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 44.0
+      },
+      {
+        "keyword": "공기누출로",
+        "rank": 24,
+        "score": 59,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 43.5
+      },
+      {
+        "keyword": "국제우주정가장",
+        "rank": 25,
+        "score": 57,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 42.7
+      },
+      {
+        "keyword": "국제우주정거장",
+        "rank": 26,
+        "score": 55,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 41.8
+      },
+      {
+        "keyword": "VS",
+        "rank": 27,
+        "score": 53,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.9
+      },
+      {
+        "keyword": "우리가",
+        "rank": 29,
+        "score": 50,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 39.5
+      },
+      {
+        "keyword": "SOC",
+        "rank": 35,
+        "score": 39,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 34.5
+      },
+      {
+        "keyword": "인프라",
+        "rank": 36,
+        "score": 37,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 33.7
+      },
+      {
+        "keyword": "신한지주",
+        "rank": 37,
+        "score": 35,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 32.8
+      },
+      {
+        "keyword": "위안화",
+        "rank": 39,
+        "score": 32,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.4
+      },
+      {
+        "keyword": "돌파에",
+        "rank": 44,
+        "score": 23,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.4
+      },
+      {
+        "keyword": "안철수",
+        "rank": 45,
+        "score": 21,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 26.5
+      },
+      {
+        "keyword": "앞두고",
+        "rank": 46,
+        "score": 19,
+        "sector": "기타",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 25.6
+      }
+    ],
+    "교육·취업": [
+      {
+        "keyword": "참교육",
+        "rank": 2,
+        "score": 98,
+        "sector": "교육·취업",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 61.1
+      }
+    ],
+    "연예·문화": [
+      {
+        "keyword": "배준호",
+        "rank": 3,
+        "score": 96,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 60.2
+      },
+      {
+        "keyword": "여배우",
+        "rank": 9,
+        "score": 86,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 55.7
+      },
+      {
+        "keyword": "선우용여",
+        "rank": 12,
+        "score": 80,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 53.0
+      },
+      {
+        "keyword": "OTT",
+        "rank": 16,
+        "score": 73,
+        "sector": "연예·문화",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 49.9
+      }
+    ],
+    "여행": [
+      {
+        "keyword": "미국 항공 우주국",
+        "rank": 4,
+        "score": 95,
+        "sector": "여행",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 59.8
+      }
+    ],
+    "라이프": [
+      {
+        "keyword": "부산날씨",
+        "rank": 5,
+        "score": 93,
+        "sector": "라이프",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.9
+      },
+      {
+        "keyword": "흐리고",
         "rank": 13,
         "score": 78,
-        "sector": "금융·투자",
+        "sector": "라이프",
         "velocity": "—",
         "velocity_score": 0.0,
         "competition": 50.0,
         "opportunity_score": 52.1
+      }
+    ],
+    "스포츠": [
+      {
+        "keyword": "김하성",
+        "rank": 6,
+        "score": 91,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 58.0
       },
       {
-        "keyword": "코스피",
+        "keyword": "손흥민",
+        "rank": 21,
+        "score": 64,
+        "sector": "스포츠",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 45.8
+      }
+    ],
+    "IT·테크": [
+      {
+        "keyword": "차세대",
+        "rank": 19,
+        "score": 68,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 47.6
+      },
+      {
+        "keyword": "스페이스",
+        "rank": 30,
+        "score": 48,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 38.6
+      },
+      {
+        "keyword": "삼성전자",
+        "rank": 41,
+        "score": 28,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 29.6
+      },
+      {
+        "keyword": "하이닉스",
+        "rank": 43,
+        "score": 24,
+        "sector": "IT·테크",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 27.8
+      }
+    ],
+    "금융·투자": [
+      {
+        "keyword": "조정장",
+        "rank": 28,
+        "score": 51,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 40.0
+      },
+      {
+        "keyword": "최고치",
         "rank": 31,
         "score": 46,
         "sector": "금융·투자",
@@ -608,17 +972,37 @@
         "opportunity_score": 37.7
       },
       {
-        "keyword": "대한전선",
-        "rank": 33,
-        "score": 42,
+        "keyword": "코스피의",
+        "rank": 32,
+        "score": 44,
         "sector": "금융·투자",
         "velocity": "—",
         "velocity_score": 0.0,
         "competition": 50.0,
-        "opportunity_score": 35.9
+        "opportunity_score": 36.8
       },
       {
-        "keyword": "대한광통신",
+        "keyword": "주식은",
+        "rank": 34,
+        "score": 41,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 35.5
+      },
+      {
+        "keyword": "KB",
+        "rank": 38,
+        "score": 33,
+        "sector": "금융·투자",
+        "velocity": "—",
+        "velocity_score": 0.0,
+        "competition": 50.0,
+        "opportunity_score": 31.9
+      },
+      {
+        "keyword": "월드코인",
         "rank": 40,
         "score": 30,
         "sector": "금융·투자",
@@ -626,26 +1010,6 @@
         "velocity_score": 0.0,
         "competition": 50.0,
         "opportunity_score": 30.5
-      },
-      {
-        "keyword": "코스닥",
-        "rank": 42,
-        "score": 26,
-        "sector": "금융·투자",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 28.7
-      },
-      {
-        "keyword": "금융위기",
-        "rank": 43,
-        "score": 24,
-        "sector": "금융·투자",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 27.8
       },
       {
         "keyword": "삼성전기",
@@ -656,441 +1020,67 @@
         "velocity_score": 0.0,
         "competition": 50.0,
         "opportunity_score": 23.8
-      }
-    ],
-    "기타": [
-      {
-        "keyword": "국립 발레단 단장",
-        "rank": 2,
-        "score": 98,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 61.1
       },
       {
-        "keyword": "두코바니",
-        "rank": 3,
-        "score": 96,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 60.2
-      },
-      {
-        "keyword": "마야 흐발린스카",
-        "rank": 5,
-        "score": 93,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 58.9
-      },
-      {
-        "keyword": "lpl",
-        "rank": 6,
-        "score": 91,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 58.0
-      },
-      {
-        "keyword": "성동구청장.",
-        "rank": 7,
-        "score": 89,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 57.1
-      },
-      {
-        "keyword": "로또1227",
-        "rank": 8,
-        "score": 87,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 56.1
-      },
-      {
-        "keyword": "양민혁",
-        "rank": 9,
-        "score": 86,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 55.7
-      },
-      {
-        "keyword": "폭락에",
-        "rank": 12,
-        "score": 80,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 53.0
-      },
-      {
-        "keyword": "최휘영",
-        "rank": 14,
-        "score": 77,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 51.6
-      },
-      {
-        "keyword": "문체부",
-        "rank": 15,
-        "score": 75,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 50.8
-      },
-      {
-        "keyword": "국립발레단장에",
-        "rank": 16,
-        "score": 73,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 49.9
-      },
-      {
-        "keyword": "강수진",
-        "rank": 17,
-        "score": 71,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 49.0
-      },
-      {
-        "keyword": "한수원",
-        "rank": 18,
-        "score": 69,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 48.0
-      },
-      {
-        "keyword": "올라탈",
-        "rank": 21,
-        "score": 64,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 45.8
-      },
-      {
-        "keyword": "키움운용",
-        "rank": 22,
-        "score": 62,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 44.9
-      },
-      {
-        "keyword": "프랑스오픈",
-        "rank": 23,
-        "score": 60,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 44.0
-      },
-      {
-        "keyword": "나중에",
-        "rank": 24,
-        "score": 59,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 43.5
-      },
-      {
-        "keyword": "Bin",
-        "rank": 25,
-        "score": 57,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 42.7
-      },
-      {
-        "keyword": "fined",
-        "rank": 26,
-        "score": 55,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 41.8
-      },
-      {
-        "keyword": "LoL",
-        "rank": 28,
-        "score": 51,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 40.0
-      },
-      {
-        "keyword": "성공의",
-        "rank": 30,
-        "score": 48,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 38.6
-      },
-      {
-        "keyword": "나왔다",
-        "rank": 32,
-        "score": 44,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 36.8
-      },
-      {
-        "keyword": "주요공시",
-        "rank": 35,
-        "score": 39,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 34.5
-      },
-      {
-        "keyword": "심층분석",
-        "rank": 44,
-        "score": 23,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 27.4
-      },
-      {
-        "keyword": "데일리안",
-        "rank": 46,
-        "score": 19,
-        "sector": "기타",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 25.6
-      },
-      {
-        "keyword": "고르기",
+        "keyword": "코스피",
         "rank": 49,
         "score": 14,
-        "sector": "기타",
+        "sector": "금융·투자",
         "velocity": "—",
         "velocity_score": 0.0,
         "competition": 50.0,
         "opportunity_score": 23.3
       },
       {
-        "keyword": "들어간",
+        "keyword": "코스닥지수",
         "rank": 50,
         "score": 12,
-        "sector": "기타",
+        "sector": "금융·투자",
         "velocity": "—",
         "velocity_score": 0.0,
         "competition": 50.0,
         "opportunity_score": 22.4
       }
     ],
-    "IT·테크": [
+    "경제·경기": [
       {
-        "keyword": "반도체주",
-        "rank": 11,
-        "score": 82,
-        "sector": "IT·테크",
+        "keyword": "삼전닉스",
+        "rank": 33,
+        "score": 42,
+        "sector": "경제·경기",
         "velocity": "—",
         "velocity_score": 0.0,
         "competition": 50.0,
-        "opportunity_score": 55.1
+        "opportunity_score": 35.9
       },
       {
-        "keyword": "스페이스X",
-        "rank": 20,
-        "score": 66,
-        "sector": "IT·테크",
+        "keyword": "SK",
+        "rank": 42,
+        "score": 26,
+        "sector": "경제·경기",
         "velocity": "—",
         "velocity_score": 0.0,
         "competition": 50.0,
-        "opportunity_score": 46.7
+        "opportunity_score": 28.7
       },
       {
-        "keyword": "반도체",
-        "rank": 45,
-        "score": 21,
-        "sector": "IT·테크",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 35.5
-      },
-      {
-        "keyword": "삼성전자",
-        "rank": 36,
-        "score": 37,
-        "sector": "IT·테크",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 33.7
-      },
-      {
-        "keyword": "우리기술",
-        "rank": 39,
-        "score": 32,
-        "sector": "IT·테크",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 31.4
-      },
-      {
-        "keyword": "광통신",
-        "rank": 41,
-        "score": 28,
-        "sector": "IT·테크",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 29.6
-      }
-    ],
-    "스포츠": [
-      {
-        "keyword": "김정관",
-        "rank": 19,
-        "score": 68,
-        "sector": "스포츠",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 47.6
-      }
-    ],
-    "사회·이슈": [
-      {
-        "keyword": "Chinese",
-        "rank": 27,
-        "score": 53,
-        "sector": "사회·이슈",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 40.9
-      },
-      {
-        "keyword": "김대호",
-        "rank": 34,
-        "score": 41,
-        "sector": "사회·이슈",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 35.5
-      },
-      {
-        "keyword": "오늘뉴스",
+        "keyword": "역대급",
         "rank": 47,
         "score": 17,
-        "sector": "사회·이슈",
+        "sector": "경제·경기",
         "velocity": "—",
         "velocity_score": 0.0,
         "competition": 50.0,
         "opportunity_score": 24.6
       }
-    ],
-    "연예·문화": [
-      {
-        "keyword": "풀영상",
-        "rank": 29,
-        "score": 50,
-        "sector": "연예·문화",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 39.5
-      },
-      {
-        "keyword": "김용범",
-        "rank": 37,
-        "score": 35,
-        "sector": "연예·문화",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 32.8
-      }
-    ],
-    "에너지·환경": [
-      {
-        "keyword": "두산에너빌리티",
-        "rank": 38,
-        "score": 33,
-        "sector": "에너지·환경",
-        "velocity": "—",
-        "velocity_score": 0.0,
-        "competition": 50.0,
-        "opportunity_score": 31.9
-      }
     ]
   },
   "recommendations": [
     {
-      "theme": "김정관",
-      "topic": "김정관",
-      "keyword": "김정관",
-      "sector": "스포츠",
-      "score": 68,
-      "opportunity_score": 47.6,
-      "velocity": "—",
-      "competition": 50.0,
-      "reason": "트렌드 순위 #19 · 경쟁 보통 · 최근 미발행",
-      "angle": "",
-      "hook": "",
-      "color": "#2ECC71"
-    },
-    {
-      "theme": "국립 발레단 단장",
-      "topic": "국립 발레단 단장",
-      "keyword": "국립 발레단 단장",
-      "sector": "기타",
+      "theme": "참교육",
+      "topic": "참교육",
+      "keyword": "참교육",
+      "sector": "교육·취업",
       "score": 98,
       "opportunity_score": 61.1,
       "velocity": "—",
@@ -1098,13 +1088,69 @@
       "reason": "트렌드 순위 #2 · 경쟁 보통 · 최근 미발행",
       "angle": "",
       "hook": "",
-      "color": "#4A4A4A"
+      "color": "#9B59B6"
     },
     {
-      "theme": "시가총액",
-      "topic": "시가총액",
-      "keyword": "시가총액",
-      "sector": "금융·투자",
+      "theme": "미국 항공 우주국",
+      "topic": "미국 항공 우주국",
+      "keyword": "미국 항공 우주국",
+      "sector": "여행",
+      "score": 95,
+      "opportunity_score": 59.8,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #4 · 경쟁 보통 · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#87CEEB"
+    },
+    {
+      "theme": "부산날씨",
+      "topic": "부산날씨",
+      "keyword": "부산날씨",
+      "sector": "라이프",
+      "score": 93,
+      "opportunity_score": 58.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #5 · 경쟁 보통 · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#FF6B6B"
+    },
+    {
+      "theme": "배준호",
+      "topic": "배준호",
+      "keyword": "배준호",
+      "sector": "연예·문화",
+      "score": 96,
+      "opportunity_score": 60.2,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #3 · 경쟁 보통 · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#E91E63"
+    },
+    {
+      "theme": "김하성",
+      "topic": "김하성",
+      "keyword": "김하성",
+      "sector": "스포츠",
+      "score": 91,
+      "opportunity_score": 58.0,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "트렌드 순위 #6 · 경쟁 보통 · 최근 미발행",
+      "angle": "",
+      "hook": "",
+      "color": "#2ECC71"
+    },
+    {
+      "theme": "서우림",
+      "topic": "서우림",
+      "keyword": "서우림",
+      "sector": "기타",
       "score": 100,
       "opportunity_score": 62.0,
       "velocity": "—",
@@ -1112,126 +1158,56 @@
       "reason": "트렌드 순위 #1 · 경쟁 보통 · 최근 미발행",
       "angle": "",
       "hook": "",
-      "color": "#FFD700"
+      "color": "#4A4A4A"
     },
     {
-      "theme": "반도체주",
-      "topic": "반도체주",
-      "keyword": "반도체주",
+      "theme": "차세대",
+      "topic": "차세대",
+      "keyword": "차세대",
       "sector": "IT·테크",
-      "score": 82,
-      "opportunity_score": 55.1,
+      "score": 68,
+      "opportunity_score": 47.6,
       "velocity": "—",
       "competition": 50.0,
-      "reason": "트렌드 순위 #11 · 경쟁 보통 · 최근 미발행",
+      "reason": "트렌드 순위 #19 · 경쟁 보통 · 최근 미발행",
       "angle": "",
       "hook": "",
       "color": "#00D4FF"
     },
     {
-      "theme": "풀영상",
-      "topic": "풀영상",
-      "keyword": "풀영상",
-      "sector": "연예·문화",
-      "score": 50,
-      "opportunity_score": 39.5,
+      "theme": "조정장",
+      "topic": "조정장",
+      "keyword": "조정장",
+      "sector": "금융·투자",
+      "score": 51,
+      "opportunity_score": 40.0,
       "velocity": "—",
       "competition": 50.0,
-      "reason": "트렌드 순위 #29 · 경쟁 보통 · 최근 미발행",
+      "reason": "트렌드 순위 #28 · 경쟁 보통 · 최근 미발행",
       "angle": "",
       "hook": "",
-      "color": "#E91E63"
+      "color": "#FFD700"
     },
     {
-      "theme": "Chinese",
-      "topic": "Chinese",
-      "keyword": "Chinese",
-      "sector": "사회·이슈",
-      "score": 53,
-      "opportunity_score": 40.9,
+      "theme": "삼전닉스",
+      "topic": "삼전닉스",
+      "keyword": "삼전닉스",
+      "sector": "경제·경기",
+      "score": 42,
+      "opportunity_score": 35.9,
       "velocity": "—",
       "competition": 50.0,
-      "reason": "트렌드 순위 #27 · 경쟁 보통 · 최근 미발행",
+      "reason": "트렌드 순위 #33 · 경쟁 보통 · 최근 미발행",
       "angle": "",
       "hook": "",
-      "color": "#778CA3"
-    },
-    {
-      "theme": "두산에너빌리티",
-      "topic": "두산에너빌리티",
-      "keyword": "두산에너빌리티",
-      "sector": "에너지·환경",
-      "score": 33,
-      "opportunity_score": 31.9,
-      "velocity": "—",
-      "competition": 50.0,
-      "reason": "트렌드 순위 #38 · 경쟁 보통 · 최근 미발행",
-      "angle": "",
-      "hook": "",
-      "color": "#1ABC9C"
+      "color": "#F39C12"
     }
   ],
   "extra_angles": [
     {
-      "theme": "두코바니",
-      "topic": "두코바니",
-      "keyword": "두코바니",
-      "sector": "기타",
-      "score": 96,
-      "opportunity_score": 60.2,
-      "velocity": "—",
-      "competition": 50.0,
-      "reason": "점수 96 · 기타",
-      "angle": "",
-      "hook": "",
-      "color": "#4a5568"
-    },
-    {
-      "theme": "상장지수펀드",
-      "topic": "상장지수펀드",
-      "keyword": "상장지수펀드",
-      "sector": "금융·투자",
-      "score": 95,
-      "opportunity_score": 59.8,
-      "velocity": "—",
-      "competition": 50.0,
-      "reason": "점수 95 · 금융·투자",
-      "angle": "",
-      "hook": "",
-      "color": "#4a5568"
-    },
-    {
-      "theme": "마야 흐발린스카",
-      "topic": "마야 흐발린스카",
-      "keyword": "마야 흐발린스카",
-      "sector": "기타",
-      "score": 93,
-      "opportunity_score": 58.9,
-      "velocity": "—",
-      "competition": 50.0,
-      "reason": "점수 93 · 기타",
-      "angle": "",
-      "hook": "",
-      "color": "#4a5568"
-    },
-    {
-      "theme": "lpl",
-      "topic": "lpl",
-      "keyword": "lpl",
-      "sector": "기타",
-      "score": 91,
-      "opportunity_score": 58.0,
-      "velocity": "—",
-      "competition": 50.0,
-      "reason": "점수 91 · 기타",
-      "angle": "",
-      "hook": "",
-      "color": "#4a5568"
-    },
-    {
-      "theme": "성동구청장.",
-      "topic": "성동구청장.",
-      "keyword": "성동구청장.",
+      "theme": "해리 케인",
+      "topic": "해리 케인",
+      "keyword": "해리 케인",
       "sector": "기타",
       "score": 89,
       "opportunity_score": 57.1,
@@ -1243,9 +1219,9 @@
       "color": "#4a5568"
     },
     {
-      "theme": "로또1227",
-      "topic": "로또1227",
-      "keyword": "로또1227",
+      "theme": "brazil vs egypt",
+      "topic": "brazil vs egypt",
+      "keyword": "brazil vs egypt",
       "sector": "기타",
       "score": 87,
       "opportunity_score": 56.1,
@@ -1257,65 +1233,79 @@
       "color": "#4a5568"
     },
     {
-      "theme": "양민혁",
-      "topic": "양민혁",
-      "keyword": "양민혁",
-      "sector": "기타",
+      "theme": "여배우",
+      "topic": "여배우",
+      "keyword": "여배우",
+      "sector": "연예·문화",
       "score": 86,
       "opportunity_score": 55.7,
       "velocity": "—",
       "competition": 50.0,
-      "reason": "점수 86 · 기타",
+      "reason": "점수 86 · 연예·문화",
       "angle": "",
       "hook": "",
       "color": "#4a5568"
     },
     {
-      "theme": "뉴욕증시",
-      "topic": "뉴욕증시",
-      "keyword": "뉴욕증시",
-      "sector": "금융·투자",
+      "theme": "전원주",
+      "topic": "전원주",
+      "keyword": "전원주",
+      "sector": "기타",
       "score": 84,
       "opportunity_score": 54.8,
       "velocity": "—",
       "competition": 50.0,
-      "reason": "점수 84 · 금융·투자",
+      "reason": "점수 84 · 기타",
       "angle": "",
       "hook": "",
       "color": "#4a5568"
     },
     {
-      "theme": "폭락에",
-      "topic": "폭락에",
-      "keyword": "폭락에",
+      "theme": "전원주인공",
+      "topic": "전원주인공",
+      "keyword": "전원주인공",
       "sector": "기타",
+      "score": 82,
+      "opportunity_score": 53.9,
+      "velocity": "—",
+      "competition": 50.0,
+      "reason": "점수 82 · 기타",
+      "angle": "",
+      "hook": "",
+      "color": "#4a5568"
+    },
+    {
+      "theme": "선우용여",
+      "topic": "선우용여",
+      "keyword": "선우용여",
+      "sector": "연예·문화",
       "score": 80,
       "opportunity_score": 53.0,
       "velocity": "—",
       "competition": 50.0,
-      "reason": "점수 80 · 기타",
+      "reason": "점수 80 · 연예·문화",
       "angle": "",
       "hook": "",
       "color": "#4a5568"
     },
     {
-      "theme": "금리인상",
-      "topic": "금리인상",
-      "keyword": "금리인상",
-      "sector": "금융·투자",
+      "theme": "흐리고",
+      "topic": "흐리고",
+      "keyword": "흐리고",
+      "sector": "라이프",
       "score": 78,
       "opportunity_score": 52.1,
       "velocity": "—",
       "competition": 50.0,
-      "reason": "점수 78 · 금융·투자",
+      "reason": "점수 78 · 라이프",
       "angle": "",
       "hook": "",
       "color": "#4a5568"
     },
     {
-      "theme": "최휘영",
-      "topic": "최휘영",
-      "keyword": "최휘영",
+      "theme": "김무열",
+      "topic": "김무열",
+      "keyword": "김무열",
       "sector": "기타",
       "score": 77,
       "opportunity_score": 51.6,
@@ -1327,9 +1317,9 @@
       "color": "#4a5568"
     },
     {
-      "theme": "문체부",
-      "topic": "문체부",
-      "keyword": "문체부",
+      "theme": "주말의",
+      "topic": "주말의",
+      "keyword": "주말의",
       "sector": "기타",
       "score": 75,
       "opportunity_score": 50.8,
@@ -1342,98 +1332,93 @@
     }
   ],
   "content_angles": {
-    "김정관": {
-      "topic": "김정관",
+    "참교육": {
+      "topic": "참교육",
       "angle": "",
       "hook": ""
     },
-    "국립 발레단 단장": {
-      "topic": "국립 발레단 단장",
+    "미국 항공 우주국": {
+      "topic": "미국 항공 우주국",
       "angle": "",
       "hook": ""
     },
-    "시가총액": {
-      "topic": "시가총액",
+    "부산날씨": {
+      "topic": "부산날씨",
       "angle": "",
       "hook": ""
     },
-    "반도체주": {
-      "topic": "반도체주",
+    "배준호": {
+      "topic": "배준호",
       "angle": "",
       "hook": ""
     },
-    "풀영상": {
-      "topic": "풀영상",
+    "김하성": {
+      "topic": "김하성",
       "angle": "",
       "hook": ""
     },
-    "Chinese": {
-      "topic": "Chinese",
+    "서우림": {
+      "topic": "서우림",
       "angle": "",
       "hook": ""
     },
-    "두산에너빌리티": {
-      "topic": "두산에너빌리티",
+    "차세대": {
+      "topic": "차세대",
       "angle": "",
       "hook": ""
     },
-    "두코바니": {
-      "topic": "두코바니",
+    "조정장": {
+      "topic": "조정장",
       "angle": "",
       "hook": ""
     },
-    "상장지수펀드": {
-      "topic": "상장지수펀드",
+    "삼전닉스": {
+      "topic": "삼전닉스",
       "angle": "",
       "hook": ""
     },
-    "마야 흐발린스카": {
-      "topic": "마야 흐발린스카",
+    "해리 케인": {
+      "topic": "해리 케인",
       "angle": "",
       "hook": ""
     },
-    "lpl": {
-      "topic": "lpl",
+    "brazil vs egypt": {
+      "topic": "brazil vs egypt",
       "angle": "",
       "hook": ""
     },
-    "성동구청장.": {
-      "topic": "성동구청장.",
+    "여배우": {
+      "topic": "여배우",
       "angle": "",
       "hook": ""
     },
-    "로또1227": {
-      "topic": "로또1227",
+    "전원주": {
+      "topic": "전원주",
       "angle": "",
       "hook": ""
     },
-    "양민혁": {
-      "topic": "양민혁",
+    "전원주인공": {
+      "topic": "전원주인공",
       "angle": "",
       "hook": ""
     },
-    "뉴욕증시": {
-      "topic": "뉴욕증시",
+    "선우용여": {
+      "topic": "선우용여",
       "angle": "",
       "hook": ""
     },
-    "폭락에": {
-      "topic": "폭락에",
+    "흐리고": {
+      "topic": "흐리고",
       "angle": "",
       "hook": ""
     },
-    "금리인상": {
-      "topic": "금리인상",
+    "김무열": {
+      "topic": "김무열",
       "angle": "",
       "hook": ""
     },
-    "최휘영": {
-      "topic": "최휘영",
-      "angle": "",
-      "hook": ""
-    },
-    "문체부": {
-      "topic": "문체부",
+    "주말의": {
+      "topic": "주말의",
       "angle": "",
       "hook": ""
     }
@@ -1444,16 +1429,16 @@
   "trend_delta": {
     "prev_date": "2026-06-06",
     "new_entry": [
-      "시가총액",
-      "국립 발레단 단장",
-      "두코바니",
-      "상장지수펀드",
-      "마야 흐발린스카",
-      "lpl",
-      "성동구청장.",
-      "로또1227",
-      "양민혁",
-      "뉴욕증시"
+      "서우림",
+      "참교육",
+      "배준호",
+      "미국 항공 우주국",
+      "부산날씨",
+      "김하성",
+      "해리 케인",
+      "brazil vs egypt",
+      "여배우",
+      "전원주"
     ],
     "dropped": [
       "고윤정",
@@ -1469,19 +1454,22 @@
     ],
     "risen": [
       {
-        "keyword": "금리인상",
-        "delta": 23
+        "keyword": "삼성전자",
+        "delta": 7
       },
       {
-        "keyword": "삼성전자",
-        "delta": 12
+        "keyword": "SK",
+        "delta": 7
+      },
+      {
+        "keyword": "하이닉스",
+        "delta": 7
+      },
+      {
+        "keyword": "손흥민",
+        "delta": 5
       }
     ],
-    "fallen": [
-      {
-        "keyword": "반도체",
-        "delta": 7
-      }
-    ]
+    "fallen": []
   }
 }

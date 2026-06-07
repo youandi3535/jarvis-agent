@@ -13,6 +13,79 @@
   },
   "patterns": [
     {
+      "fingerprint": "GitCommit::[b000773a] Initial commit: JARVIS multi-agent automation system (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[b000773a\\]\\ Initial\\ commit:\\ JARVIS\\ multi\\-agent\\ automation\\ system\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "constitution",
+      "examples": [
+        {
+          "fixed_file": "shared/file_cleanup.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:04"
+        },
+        {
+          "fixed_file": "shared/llm.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:04"
+        },
+        {
+          "fixed_file": "shared/notify.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:04"
+        },
+        {
+          "fixed_file": "shared/personas.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:04"
+        },
+        {
+          "fixed_file": "shared/precommit_check.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:04"
+        },
+        {
+          "fixed_file": "shared/pytrends_utils.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:04"
+        },
+        {
+          "fixed_file": "shared/record_claude_change.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:04"
+        },
+        {
+          "fixed_file": "shared/seo.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:04"
+        },
+        {
+          "fixed_file": "shared/style.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:04"
+        },
+        {
+          "fixed_file": "shared/tools.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:04"
+        }
+      ],
+      "hit_count": 253,
+      "first_seen": "2026-06-07T03:30:02",
+      "last_seen": "2026-06-07T03:30:04",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T03:30:04"
+      }
+    },
+    {
       "fingerprint": "ExternalEdit::VS Code Claude Code 수정: JARVIS02_WRITER<PATH>.py",
       "error_type": "ExternalEdit",
       "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ JARVIS02_WRITER/economic_poster\\.py",
@@ -20,11 +93,6 @@
       "tier": "manual",
       "domain": "guardian",
       "examples": [
-        {
-          "fixed_file": "JARVIS02_WRITER/economic_poster.py",
-          "source": "manual-vscode_claude",
-          "ts": "2026-06-04T11:30:07"
-        },
         {
           "fixed_file": "JARVIS02_WRITER/theme_html_writer.py",
           "source": "manual-vscode_claude",
@@ -69,11 +137,16 @@
           "fixed_file": "JARVIS02_WRITER/trend_economic_writer.py",
           "source": "manual-vscode_claude",
           "ts": "2026-06-04T14:37:52"
+        },
+        {
+          "fixed_file": "JARVIS02_WRITER/draft_writer.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-07T07:45:17"
         }
       ],
-      "hit_count": 124,
+      "hit_count": 128,
       "first_seen": "2026-05-31T10:03:36",
-      "last_seen": "2026-06-06T16:25:07",
+      "last_seen": "2026-06-07T07:45:30",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -82,7 +155,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-06T16:25:07"
+        "evaluated_at": "2026-06-07T07:45:30"
       }
     },
     {
@@ -217,9 +290,9 @@
           "ts": "2026-06-07T00:14:17"
         }
       ],
-      "hit_count": 81,
+      "hit_count": 86,
       "first_seen": "2026-05-31T10:17:53",
-      "last_seen": "2026-06-07T00:14:17",
+      "last_seen": "2026-06-07T07:45:11",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -228,7 +301,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T00:14:17"
+        "evaluated_at": "2026-06-07T07:45:11"
       }
     },
     {
@@ -366,9 +439,9 @@
           "ts": "2026-05-31T10:04:58"
         }
       ],
-      "hit_count": 53,
+      "hit_count": 54,
       "first_seen": "2026-05-31T10:04:58",
-      "last_seen": "2026-06-07T00:02:21",
+      "last_seen": "2026-06-07T07:45:57",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -377,7 +450,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-07T00:02:21"
+        "evaluated_at": "2026-06-07T07:45:57"
       }
     },
     {
@@ -910,6 +983,77 @@
       "tier": "manual"
     },
     {
+      "fingerprint": "GitCommit::[611e2374] main : RL 학습 패턴 누적, 테스트·진단 도구 추가 (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[611e2374\\]\\ main\\ :\\ RL\\ 학습\\ 패턴\\ 누적,\\ 테스트·진단\\ 도구\\ 추가\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": "JARVIS07_GUARDIAN/learned_patterns.json",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:02"
+        },
+        {
+          "fixed_file": "tests/test_pre_revise_sanitizer.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:02"
+        },
+        {
+          "fixed_file": "tests/test_routing.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:02"
+        },
+        {
+          "fixed_file": "tools/diag_perf_collect.py",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:02"
+        }
+      ],
+      "hit_count": 4,
+      "first_seen": "2026-06-07T03:30:02",
+      "last_seen": "2026-06-07T03:30:02",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T03:30:02"
+      }
+    },
+    {
+      "fingerprint": "PostingFailure::포스팅 실패 자동 대응: ['<NAME>', '<NAME>'] → 복구 ['<NAME>', '<NAME>'] | 코드 수정=없음",
+      "error_type": "PostingFailure",
+      "message_pattern": "포스팅\\ 실패\\ 자동\\ 대응:\\ \\['naver',\\ 'tistory'\\]\\ →\\ 복구\\ \\['naver',\\ 'tistory'\\]\\ \\|\\ 코드\\ 수정=없음",
+      "fixer": "postingfailure",
+      "domain": "publish",
+      "examples": [
+        {
+          "fixed_file": "economic_pipeline",
+          "source": "manual-guardian",
+          "ts": "2026-05-24T07:27:29"
+        }
+      ],
+      "hit_count": 4,
+      "first_seen": "2026-05-24T07:27:29",
+      "last_seen": "2026-06-07T07:05:01",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (postingfailure) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T07:05:01"
+      },
+      "tier": "manual"
+    },
+    {
       "fingerprint": "RuntimeError::[harness:경제 브리핑 발행] attempt=<N> step=② WP 대본 생성: ② full_html <N>+ 연속 빈 p 검출",
       "error_type": "RuntimeError",
       "message_pattern": "\\[harness:경제\\ 브리핑\\ 발행\\]\\ attempt=2\\ step=②\\ WP\\ 대본\\ 생성:\\ ②\\ full_html\\ 3\\+\\ 연속\\ 빈\\ p\\ 검출",
@@ -1263,34 +1407,6 @@
         "rationale": "알 수 없는 fixer (postingfailure) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-04T08:12:02"
-      },
-      "tier": "manual"
-    },
-    {
-      "fingerprint": "PostingFailure::포스팅 실패 자동 대응: ['<NAME>', '<NAME>'] → 복구 ['<NAME>', '<NAME>'] | 코드 수정=없음",
-      "error_type": "PostingFailure",
-      "message_pattern": "포스팅\\ 실패\\ 자동\\ 대응:\\ \\['naver',\\ 'tistory'\\]\\ →\\ 복구\\ \\['naver',\\ 'tistory'\\]\\ \\|\\ 코드\\ 수정=없음",
-      "fixer": "postingfailure",
-      "domain": "publish",
-      "examples": [
-        {
-          "fixed_file": "economic_pipeline",
-          "source": "manual-guardian",
-          "ts": "2026-05-24T07:27:29"
-        }
-      ],
-      "hit_count": 3,
-      "first_seen": "2026-05-24T07:27:29",
-      "last_seen": "2026-06-05T07:05:20",
-      "eval_meta": {
-        "should_register": true,
-        "score": 70,
-        "safe": true,
-        "accurate": true,
-        "reusable": true,
-        "rationale": "알 수 없는 fixer (postingfailure) — 보수적 통과, 점수 70",
-        "tier": "unknown",
-        "evaluated_at": "2026-06-05T07:05:20"
       },
       "tier": "manual"
     },
@@ -7186,6 +7302,62 @@
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-07T00:58:49"
+      }
+    },
+    {
+      "fingerprint": "GitCommit::[fa5e9fca] docs: add README.md (<DATE>)",
+      "error_type": "GitCommit",
+      "message_pattern": "\\[fa5e9fca\\]\\ docs:\\ add\\ README\\.md\\ \\(2026\\-06\\-07\\)",
+      "fixer": "gitcommit",
+      "tier": "manual",
+      "domain": "unknown",
+      "examples": [
+        {
+          "fixed_file": "README.md",
+          "source": "manual-external_user",
+          "ts": "2026-06-07T03:30:02"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T03:30:02",
+      "last_seen": "2026-06-07T03:30:02",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (gitcommit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T03:30:02"
+      }
+    },
+    {
+      "fingerprint": "ExternalEdit::VS Code Claude Code 수정: .venv<PATH>.py",
+      "error_type": "ExternalEdit",
+      "message_pattern": "VS\\ Code\\ Claude\\ Code\\ 수정:\\ \\.venv/lib/python3\\.10/site\\-packages/claude_code_sdk/_inte",
+      "fixer": "externaledit",
+      "tier": "manual",
+      "domain": "guardian",
+      "examples": [
+        {
+          "fixed_file": ".venv/lib/python3.10/site-packages/claude_code_sdk/_internal/message_parser.py",
+          "source": "manual-vscode_claude",
+          "ts": "2026-06-07T10:16:57"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-07T10:16:57",
+      "last_seen": "2026-06-07T10:16:57",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-07T10:16:57"
       }
     }
   ]
