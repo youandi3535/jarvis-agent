@@ -1,5 +1,17 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [280] 경제 브리핑 차트 생성 시 collection_docs 파이프라인 단절 — context 부족 delta 요청 반복 (2026-06-08)
+
+- **증상**: 경제 브리핑 차트 생성 시 `context 부족(235자) → JARVIS09 delta 요청` 패턴이 9개 차트 중 4개에서 반복. JARVIS09가 31건 수집했지만 차트 생성에 활용되지 않음.
+- **환경**: `economic_poster.py` → `ts_generate_draft` → `generate_article_html` → `_generate_svg_pass2_and_replace` → `_generate_svg_pass2` → `chart_generator`. 경제 브리핑 발행 경로.
+- **원인**: JARVIS09 수집 결과(`_j09_results`)가 `_j09_news_context` 문자열로만 변환되고 `collection_docs` 객체로는 전달되지 않았음. 전달 체인 4단계가 전부 `collection_docs=None`이었음: `ts_generate_draft(collection_docs 파라미터 없음)` → `generate_article_html(collection_docs 없음)` → `_generate_svg_pass2_and_replace(collection_docs 없음)` → `_generate_svg_pass2(collection_docs=None)` → chart_generator delta 요청.
+- **헛다리**: 없음 (2026-06-08 최초 발견).
+- **해결**: ① `economic_poster.py`: `_j09_collection_docs` 변수 유지 → `run_action` input_data에 `collection_docs` 추가 → `_step_ts_draft` / `_step_nv_draft`에서 `state.get("collection_docs")` 전달 ② `ts_generate_draft` / `nv_generate_draft`: `collection_docs` 파라미터 추가 + `generate_article_html` 호출 시 전달 ③ `generate_article_html`: `collection_docs` 파라미터 추가 + `_generate_svg_pass2_and_replace` 호출 시 전달 ④ `_generate_svg_pass2_and_replace`: `collection_docs` 파라미터 추가 + `_generate_svg_pass2` 호출 시 전달
+- **파일**: `JARVIS02_WRITER/economic_poster.py` + `JARVIS02_WRITER/trend_economic_writer.py` + `JARVIS02_WRITER/tistory_html_writer.py`
+- **교훈**: 수집한 collection_docs는 *차트 생성 함수 호출 체인 전체*에 명시적으로 전달해야 함. 중간 함수 하나라도 파라미터 누락 시 collection_docs=None으로 전달됨. `draft_processor.py` 경로(테마글)는 이미 정상이었으나 `tistory_html_writer` 경로(경제 브리핑)는 파이프라인 단절이었음.
+
+---
+
 ### [279] 네이버 발행 성공인데 verify False 재발 — 에디터 이탈 자체가 발행 성공 (2026-06-08)
 
 - **증상**: `done.png` / `done_retry.png` 모두 발행 완료 화면("URL 복사"·"통계" 버튼) — 실제 발행 성공. 그런데 `_verify_naver_published()` False 반환 → harness max_attempts 도달 → Guardian "자동 수정 실패" 알림 지속.

@@ -328,7 +328,8 @@ def _generate_svg_pass2_and_replace(
     content: str,
     keyword: str,
     sector: str,
-    platform: str = "tistory"
+    platform: str = "tistory",
+    collection_docs: list | None = None,
 ) -> str:
     """Pass-2: [CHART_N: 설명] 플레이스홀더 → 이미지 병렬 생성 + 치환.
 
@@ -371,6 +372,7 @@ def _generate_svg_pass2_and_replace(
                 _extract_chart_context(content, orig_idx),
                 _img_dir2,
                 _run_id2,
+                collection_docs,
             ): pos
             for pos, orig_idx, desc in _items
         }
@@ -445,6 +447,7 @@ def generate_article_html(
     reason: str,
     supreme_block: str,
     platform: str = "tistory",
+    collection_docs: list | None = None,
 ) -> str:
     """2-pass Claude Code SDK → 텍스트 + inline SVG 완성 원고 HTML.
 
@@ -480,7 +483,7 @@ def generate_article_html(
                 f"{keyword}, 지금 왜 이렇게 주목받는 건가요?"
 
     # ★ Pass-2: [CHART_N: ...] 플레이스홀더 → SVG 치환 (필수!)
-    content = _generate_svg_pass2_and_replace(content, keyword, sector, platform)
+    content = _generate_svg_pass2_and_replace(content, keyword, sector, platform, collection_docs=collection_docs)
 
     kc = _L.count(content)
     svg_count = len(re.findall(r"<svg[\s>]", content, re.IGNORECASE))

@@ -1933,10 +1933,12 @@ def run(post_naver=True, post_tistory=True):
 
     # ── JARVIS09: 경제 뉴스 수집 (단일 진입점 — 2026-05-31 이관) ──────
     _j09_news_context = ""
+    _j09_collection_docs: list = []
     try:
         from JARVIS09_COLLECTOR.collector_engine import collect_for_theme as _j09_collect
         _j09_results = _j09_collect("오늘의 경제 시장 뉴스", "금융")
         if _j09_results:
+            _j09_collection_docs = _j09_results  # ★ chart_generator에 전달할 원본 유지
             _j09_news_context = "\n\n[JARVIS09 수집 뉴스 컨텍스트]\n" + "\n---\n".join(
                 f"제목: {r.title}\n{r.cleaned_text[:300]}" for r in _j09_results[:5]
             )
@@ -2007,6 +2009,7 @@ def run(post_naver=True, post_tistory=True):
         try:
             draft = ts_generate_draft(
                 supreme_block=state.get("supreme_block"),
+                collection_docs=state.get("collection_docs"),
             )
         except Exception as _e:
             print(f"  ❌ [②] 티스토리 대본 생성 오류: {_e}")
@@ -2024,6 +2027,7 @@ def run(post_naver=True, post_tistory=True):
             draft = nv_generate_draft(
                 ts_keyword=_ts_kw,
                 supreme_block=state.get("supreme_block"),
+                collection_docs=state.get("collection_docs"),
             )
         except Exception as _e:
             print(f"  ❌ [③] 네이버 대본 생성 오류: {_e}")
@@ -2233,7 +2237,8 @@ def run(post_naver=True, post_tistory=True):
     )
     _action_result = run_action(
         _econ_action,
-        input_data={"post_naver": post_naver, "post_tistory": post_tistory},
+        input_data={"post_naver": post_naver, "post_tistory": post_tistory,
+                    "collection_docs": _j09_collection_docs},
     )
     _st = _action_result.state
 

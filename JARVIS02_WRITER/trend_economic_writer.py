@@ -2025,7 +2025,7 @@ def run_naver(ts_keyword: str = '') -> dict:
 #  분리 함수 — 대본 생성 + 발행 분리 (병렬화용)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def ts_generate_draft(supreme_block=None) -> dict:
+def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
     """티스토리 대본 생성 (①-⑦ 단계)."""
     print("\n  🔴 [TISTORY-DRAFT] 대본 생성 중...")
     _cleanup_tistory_images()
@@ -2060,7 +2060,8 @@ def ts_generate_draft(supreme_block=None) -> dict:
         )
         from JARVIS06_IMAGE.injectors import assemble_blocks
 
-        html = generate_article_html(keyword, sector, reason, supreme_block)
+        html = generate_article_html(keyword, sector, reason, supreme_block,
+                                     collection_docs=collection_docs)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
@@ -2174,7 +2175,7 @@ def ts_publish(draft: dict) -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
 
-def nv_generate_draft(ts_keyword: str = '', supreme_block=None) -> dict:
+def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=None) -> dict:
     """네이버 대본 생성 (①-⑦ 단계) — 티스토리와 중복되지 않은 주제로."""
     print("\n  🟢 [NAVER-DRAFT] 대본 생성 중...")
     _cleanup_naver_images()   # ★ 재생성 시 직전 시도 이미지 리셋 (TS 와 동일 패턴)
@@ -2210,7 +2211,8 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None) -> dict:
             OUTPUT_HTML_DIR, OUTPUT_IMG_DIR,
         )
 
-        html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver")
+        html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
+                                     collection_docs=collection_docs)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
