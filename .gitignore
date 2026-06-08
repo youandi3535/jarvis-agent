@@ -76,3 +76,4 @@ JARVIS02_WRITER/scheduler_progress.json
 # ── 기타 ─────────────────────────────────────────────────────────
 *.pid
 pid/
+*.lock
