@@ -95,6 +95,54 @@ def _harness_precondition_check(action_name: str) -> list[str]:
     return issues
 
 
+def _clear_all_cookies(label: str) -> None:
+    """발행 전 기존 쿠키·캐시 전체 초기화 — 매번 새 로그인으로 신선한 쿠키 보장.
+
+    삭제 대상:
+      - naver_cookies.pkl (쿠키 파일)
+      - TS_COOKIE 환경변수 (메모리 초기화, .env는 갱신 시 자동 업데이트)
+      - Chrome 캐시 폴더 (Cache / Code Cache / GPUCache / Service Worker)
+        → 로그인 데이터(Cookies, Login Data) 는 보존
+    """
+    import os as _os, shutil as _shutil
+
+    cleared = []
+
+    # 1) 네이버 쿠키 파일 삭제
+    _naver_cookie = BASE_DIR / "naver_cookies.pkl"
+    if _naver_cookie.exists():
+        try:
+            _naver_cookie.unlink()
+            cleared.append("네이버 쿠키 파일")
+        except Exception as _e:
+            log(f"⚠️ [{label}] 네이버 쿠키 파일 삭제 실패: {_e}")
+
+    # 2) 티스토리 TS_COOKIE 환경변수 초기화 (.env 보존 — 갱신 성공 시 자동 업데이트)
+    if _os.environ.get("TS_COOKIE"):
+        _os.environ.pop("TS_COOKIE", None)
+        cleared.append("TS_COOKIE 환경변수")
+
+    # 3) 네이버 Chrome 캐시 폴더 삭제 (로그인·세션 데이터는 보존)
+    _chrome_cache_dirs = [
+        BASE_DIR / "chrome_profile" / "naver" / "Default" / "Cache",
+        BASE_DIR / "chrome_profile" / "naver" / "Default" / "Code Cache",
+        BASE_DIR / "chrome_profile" / "naver" / "Default" / "GPUCache",
+        BASE_DIR / "chrome_profile" / "naver" / "Default" / "Service Worker",
+    ]
+    for _cdir in _chrome_cache_dirs:
+        if _cdir.exists():
+            try:
+                _shutil.rmtree(_cdir)
+                cleared.append(f"Chrome:{_cdir.name}")
+            except Exception as _e:
+                log(f"⚠️ [{label}] Chrome 캐시 삭제 실패 ({_cdir.name}): {_e}")
+
+    if cleared:
+        log(f"🗑️ [{label}] 쿠키·캐시 초기화: {', '.join(cleared)}")
+    else:
+        log(f"ℹ️ [{label}] 삭제할 쿠키·캐시 없음")
+
+
 def _auto_refresh_cookies() -> dict:
     """쿠키 누락·만료 시 자동 갱신 — _harness_precondition_check 직전 호출.
 
@@ -921,6 +969,10 @@ def run_self_repair_then_economic():
         send_telegram(_msg)
         return
 
+    # ─── Step 1: 이전 쿠키·캐시 전체 삭제 ──────────────────────
+    _clear_all_cookies("경제 브리핑")
+
+    # ─── Step 2: 쿠키 체크 (새 로그인으로 갱신) ─────────────────
     _cookie_failed = []
     try:
         from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import job_pre_publish_check as _ts_ck
@@ -941,6 +993,8 @@ def run_self_repair_then_economic():
         log(msg)
         send_telegram(msg)
         return
+
+    # ─── Step 3: 전체 폴더 검증 (자가진단) ──────────────────────
     _phase = _run_self_repair_phase("경제 브리핑")
     try:
         if _phase["code_changed"] > 0:
@@ -967,6 +1021,10 @@ def run_self_repair_then_theme():
         send_telegram(_msg)
         return
 
+    # ─── Step 1: 이전 쿠키·캐시 전체 삭제 ──────────────────────
+    _clear_all_cookies("테마글")
+
+    # ─── Step 2: 쿠키 체크 (새 로그인으로 갱신) ─────────────────
     _cookie_failed = []
     try:
         from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import job_pre_publish_check as _ts_ck
@@ -987,6 +1045,8 @@ def run_self_repair_then_theme():
         log(msg)
         send_telegram(msg)
         return
+
+    # ─── Step 3: 전체 폴더 검증 (자가진단) ──────────────────────
     _phase = _run_self_repair_phase("테마글")
     try:
         if _phase["code_changed"] > 0:

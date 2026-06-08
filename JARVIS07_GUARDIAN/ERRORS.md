@@ -1,5 +1,17 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [277] 네이버 발행 성공인데 harness Layer4 실패 재발 — _verify_naver_published body 텍스트 미검색 (2026-06-08)
+
+- **증상**: `RuntimeError: [Layer4] ['naver'] 발행 실패 (attempt=2)`. done.png / done_retry.png 모두 발행 완료 페이지 ("URL 복사"·"통계" 표시). 실제 발행 성공이나 verify False 반환.
+- **환경**: `JARVIS08_PUBLISH/platforms/naver_poster.py` `_verify_naver_published()`. 경제 브리핑 harness 발행.
+- **원인**: [274] 수정에서 `button, a, span` 태그만 검색했으나, 네이버 블로그 "URL 복사"·"통계" 요소가 다른 태그(`div`, `li` 등) 또는 아이콘 포함 텍스트(`📊통계`)로 렌더링 → `querySelectorAll('button, a, span')` 미매칭 + `innerText === '통계'` 정확 일치 실패. `.se-viewer` 등 DOM 셀렉터도 SPA 특성상 해당 클래스 미생성.
+- **헛다리**: [274]에서 DOM 셀렉터 4종 + 재확인 루프 추가했으나, 태그 종류가 다른 근본 원인 미해결.
+- **해결**: `document.body.innerText` 전체 텍스트에서 "URL 복사" + "통계" 동시 존재 시 `True` 반환하는 fallback 추가. 태그 종류 무관하게 페이지에 텍스트가 보이면 감지.
+- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` (`_verify_naver_published`)
+- **교훈**: 특정 태그 선택자 + 정확 일치 텍스트 비교는 SPA 프레임워크 DOM 구조 변경에 취약. `body.innerText.includes()` 전체 텍스트 검색이 가장 안정적인 최종 fallback.
+
+---
+
 ### [276] JARVIS00 bot 텔레그램 DNS 오류 폭주 — backoff 미적용 (2026-06-08)
 
 - **증상**: Wi-Fi 미연결 상태 데몬 기동 시 `ConnectionError: Failed to resolve api.telegram.org` 5초마다 반복 발생. seen_count=11. 반복 보고로 Guardian 불필요 부하.
