@@ -59,6 +59,10 @@ _LOW_PATTERNS = [
     re.compile(r"address already in use|EADDRINUSE|bind on address", re.I),
     # ★ ERRORS [274] — Wi-Fi 미연결 상태 데몬 기동 시 텔레그램 DNS 오류 (일시적)
     re.compile(r"Failed to resolve.*telegram|nodename nor servname|NameResolutionError.*telegram", re.I),
+    # ★ ERRORS [279] 박제 2026-06-08 — harness Layer4 발행 실패 (Selenium 런타임 — 코드 패치 불가)
+    # verify 버그로 발행 성공인데 실패 판정 → 근본 수정은 _verify_naver_published 개선 (ERRORS [279])
+    # harness escalation → Guardian 수정 시도 → 수정 불가 → "자동 수정 실패" 알림 폭주 방지.
+    re.compile(r"\[Layer4\].*발행 실패|harness.*발행 실패|발행 미완료|에디터 상태 유지|Naver.*재시도 후에도|InvalidSessionId.*Exception", re.I),
 ]
 
 

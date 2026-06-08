@@ -440,7 +440,7 @@ def _verify_naver_published(driver) -> bool:
     import time as _time
     import re as _re
 
-    # ★ ERRORS [278] — 4회 × 4초 = 최대 ~16초 추가 대기 (SPA 전환 충분 보장)
+    # ★ ERRORS [278][279] — 4회 × 4초 = 최대 ~16초 추가 대기 (SPA 전환 충분 보장)
     for _attempt in range(4):
         try:
             current_url = driver.current_url
@@ -448,7 +448,6 @@ def _verify_naver_published(driver) -> bool:
 
             # ── URL 기반 체크 ──────────────────────────────────────
             # ★ ERRORS [278] 핵심 수정: blog.naver.com 에 logNo= 있으면 발행 성공
-            # (Redirect=Log&logNo=, postwrite?logNo=, PostView?logNo= 모두 포괄)
             if "blog.naver.com" in current_url and "logNo=" in current_url:
                 print(f"  [verify] URL logNo 패턴 확인 → 발행 성공")
                 return True
@@ -456,6 +455,12 @@ def _verify_naver_published(driver) -> bool:
             # blog.naver.com/ID/숫자 — 직접 경로 형태
             if _re.search(r'blog\.naver\.com/\w+/\d+', current_url):
                 print(f"  [verify] URL path 패턴 확인 → 발행 성공")
+                return True
+
+            # ★ ERRORS [279] — 에디터 이탈 자체가 발행 성공 시그널
+            # blog.naver.com 에 있고 에디터(/postwrite) 가 아니면 발행 완료 페이지
+            if "blog.naver.com" in current_url and "/postwrite" not in current_url and "/login" not in current_url:
+                print(f"  [verify] 에디터 이탈 확인 ({current_url[:80]}) → 발행 성공")
                 return True
 
             # 에디터 URL (write/postwrite 에 logNo 없음) — 아직 전환 안 됨
@@ -476,13 +481,12 @@ def _verify_naver_published(driver) -> bool:
                 if (document.querySelector('.blog-post')) return 'blog-post';
                 if (document.querySelector('.post_ct')) return 'post_ct';
                 if (document.querySelector('[class*="PostView"]')) return 'PostView';
-                // "URL 복사" / "통계" — 모든 요소에서 부분 일치 검색
+                // ★ ERRORS [279] — children 필터 제거: 버튼 내 아이콘 자식 요소 있어도 검색
                 var allElems = document.querySelectorAll('*');
-                for (var i = 0; i < Math.min(allElems.length, 3000); i++) {
+                for (var i = 0; i < Math.min(allElems.length, 5000); i++) {
                     var e = allElems[i];
-                    if (!e.children || e.children.length > 0) continue;
                     var t = (e.innerText || e.textContent || '').trim();
-                    if (t.includes('URL 복사') || t === '통계' || t.endsWith('통계'))
+                    if (t === 'URL 복사' || t.includes('URL 복사') || t === '통계' || t.endsWith('통계'))
                         return 'elem:' + t.substring(0, 30);
                 }
                 // body 전체 텍스트에서 발행 완료 시그널 (태그 무관 — 최종 fallback)

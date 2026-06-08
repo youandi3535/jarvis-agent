@@ -1,5 +1,17 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [279] 네이버 발행 성공인데 verify False 재발 — 에디터 이탈 자체가 발행 성공 (2026-06-08)
+
+- **증상**: `done.png` / `done_retry.png` 모두 발행 완료 화면("URL 복사"·"통계" 버튼) — 실제 발행 성공. 그런데 `_verify_naver_published()` False 반환 → harness max_attempts 도달 → Guardian "자동 수정 실패" 알림 지속.
+- **환경**: `JARVIS08_PUBLISH/platforms/naver_poster.py` `_verify_naver_published()`. 오늘(2026-06-08) 07:00 경제 브리핑 3회 attempt 모두 verify 실패. DB 발행 기록 0건 (실제로는 발행됨).
+- **원인**: 네이버 발행 후 URL이 `blog.naver.com/SensationalPig/...` 형태인데 [278] 수정의 URL 패턴이 여전히 누락 + DOM `children.length > 0` 필터로 "URL 복사" 버튼(아이콘 자식 요소 있음) 전부 필터링. body.innerText fallback도 실패.
+- **헛다리**: [273][274][277][278] 4회 수정 모두 URL 형태 열거 방식 — 네이버 SPA URL 변형에 취약.
+- **해결**: ① `blog.naver.com` + `/postwrite` 없음 + `/login` 없음 → 에디터 이탈 자체가 발행 성공 (형태 무관) ② DOM children 필터 제거 (3000→5000 확대) ③ severity.py에 harness Layer4 발행 실패 패턴 → low 분류 (Guardian 알림 차단)
+- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` + `JARVIS07_GUARDIAN/severity.py`
+- **교훈**: URL 개별 패턴 열거 < **에디터 이탈 자체를 발행 성공 시그널**로 사용. 네이버 URL 형식은 수시로 변경되므로 "에디터(/postwrite)에서 벗어나면 발행 완료"가 가장 안정적. Guardian이 Selenium 런타임 오류를 수정 시도하면 항상 실패 → severity=low로 선분류 필수.
+
+---
+
 ### [278] 네이버 발행 성공인데 harness Layer4 실패 5회 반복 — _verify_naver_published URL 패턴 누락 + DOM 예외 침묵 (2026-06-08)
 
 - **증상**: `RuntimeError: [Layer4] ['naver'] 발행 실패 (attempt=3)`. done.png / done_retry.png 모두 발행 완료 페이지 ("URL 복사"·"통계" 표시). 실제 발행 성공이나 verify False 반환. [273][274][277] 수정 후에도 재발.
