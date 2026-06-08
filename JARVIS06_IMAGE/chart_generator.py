@@ -1403,6 +1403,13 @@ def _parse_ecos_timeseries(context_text: str, description: str,
             return [], []
         labels = [f"{r[0][2:4]}.{r[0][4:6]}" for r in rows]
         values = [float(r[1]) for r in rows]
+        # ★ flat 데이터 감지: 변화율이 최대값 대비 1% 미만 → 차트 의미 없음 스킵 ([281])
+        if values:
+            v_max = max(abs(v) for v in values)
+            v_range = max(values) - min(values)
+            if v_max > 0 and (v_range / v_max) < 0.01:
+                print(f"  ⚠️ [ECOS] flat 데이터 감지 ({name}, range={v_range:.4f}) — 스킵")
+                return [], []
         _record_ecos_used(name)
         return labels, values
 
@@ -1458,13 +1465,31 @@ def _parse_krx_prices(context_text: str, keyword: str) -> tuple[list, list]:
     return [], []
 
 
+
+# ★ 경제 일반 키워드 — 이 키워드가 포함된 차트에서 collect_stocks_data 스킵 ([281] 2026-06-08)
+_GENERAL_ECON_KWS = frozenset([
+    "줄인상", "물가", "인플레", "생필품", "외식", "공공요금", "cpi", "소비자물가",
+    "가격인상", "가격 인상", "생활물가", "식품값", "장바구니", "라면", "과자",
+    "밀키트", "배달비", "관리비", "전기요금", "가스요금", "수도요금", "버스요금",
+    "지하철요금", "교통요금", "금시세", "금값", "금 시세", "원자재", "유가",
+    "환율", "달러", "원달러", "무역수지", "경상수지", "gdp", "성장률", "실업",
+    "취업률", "고용률", "임금", "연봉", "최저임금",
+])
+
+
+def _is_general_econ_topic(keyword: str, description: str) -> bool:
+    """종목 무관 경제 일반 주제 여부 — True면 collect_stocks_data 스킵."""
+    combined = (keyword or "").lower() + " " + (description or "").lower()
+    return any(k in combined for k in _GENERAL_ECON_KWS)
+
+
 def _fetch_from_j09(keyword: str, description: str, chart_type: str) -> tuple[list, list]:
     """JARVIS09 모든 소스 활용 → 차트에 맞는 (labels, values) 반환.
 
     수집 소스 (순서대로 시도):
       0. band_line 전용 — ECOS 금리 시계열 직접 (주가·합성 데이터 절대 금지)
-      1. collect_stocks_data  — 종목 재무 (bar/scatter/pie/donut)
-      2. KrxProvider          — 실시간 종목 시세 (bar)
+      1. collect_stocks_data  — 종목 재무 (bar/scatter/pie/donut) ★경제일반 글 스킵
+      2. KrxProvider          — 실시간 종목 시세 (bar) ★경제일반 글 스킵
       3. EcosProvider         — 거시경제 시계열 (line/area)
       4. collect_for_theme    — 전체 소스 텍스트 → LLM 숫자 추출
       5. get_market_data      — 글로벌 시장 지표 (line/bar)
@@ -1472,6 +1497,9 @@ def _fetch_from_j09(keyword: str, description: str, chart_type: str) -> tuple[li
     """
     print(f"  🔄 [chart_generator] JARVIS09 전체 소스 수집: '{keyword}' / {chart_type}")
     d_lower = description.lower()
+
+    # ★ 경제 일반 주제 감지 — 종목 데이터 소스 스킵 ([281] 2026-06-08)
+    _skip_stocks = _is_general_econ_topic(keyword, description)
 
     # ── 0. band_line — ECOS 금리 실데이터 전용, 주가·합성 fallback 절대 금지 ──
     if chart_type == 'band_line':
@@ -1495,75 +1523,78 @@ def _fetch_from_j09(keyword: str, description: str, chart_type: str) -> tuple[li
         print(f"  🚫 [J09] band_line 실데이터 없음 — 차트 스킵")
         return [], []
 
-    # ── 1. collect_stocks_data (종목 재무 — 기존 로직 유지) ──────────────
-    try:
-        from JARVIS09_COLLECTOR import collect_stocks_data
-        data   = collect_stocks_data(keyword)
-        stocks = data.get("stocks") or []
+    # ── 1. collect_stocks_data (종목 재무) — 경제 일반 글에서는 스킵 ──────
+    if _skip_stocks:
+        print(f"  🚫 [J09] 경제 일반 주제('{keyword}') — 종목 데이터 소스 스킵 ([281])")
+    else:
+        try:
+            from JARVIS09_COLLECTOR import collect_stocks_data
+            data   = collect_stocks_data(keyword)
+            stocks = data.get("stocks") or []
 
-        if stocks:
-            if chart_type in ('line', 'area', 'step', 'iso_area', 'combo'):
-                leader = next((s for s in stocks if s.get("rank") == 1), stocks[0])
-                ticker = leader.get("ticker") or leader.get("code", "")
-                if ticker and "." not in ticker:
-                    ticker += ".KS"
-                if ticker:
-                    from datetime import timedelta
-                    end   = datetime.now()
-                    start = end - timedelta(days=365)
-                    hist  = _j09_dl(ticker, start=start.strftime('%Y-%m-%d'),
-                                    end=end.strftime('%Y-%m-%d'), interval='1mo')
-                    if not hist.empty:
-                        closes = hist['Close'].dropna()
-                        if len(closes) >= 3:
-                            labels = [idx.strftime('%y.%m') for idx in closes.index]
-                            values = [round(float(v), 0) for v in closes.values]
-                            print(f"  ✅ [J09] 주가이력 {len(labels)}포인트 ({leader.get('name',ticker)})")
-                            return labels, values
+            if stocks:
+                if chart_type in ('line', 'area', 'step', 'iso_area', 'combo'):
+                    leader = next((s for s in stocks if s.get("rank") == 1), stocks[0])
+                    ticker = leader.get("ticker") or leader.get("code", "")
+                    if ticker and "." not in ticker:
+                        ticker += ".KS"
+                    if ticker:
+                        from datetime import timedelta
+                        end   = datetime.now()
+                        start = end - timedelta(days=365)
+                        hist  = _j09_dl(ticker, start=start.strftime('%Y-%m-%d'),
+                                        end=end.strftime('%Y-%m-%d'), interval='1mo')
+                        if not hist.empty:
+                            closes = hist['Close'].dropna()
+                            if len(closes) >= 3:
+                                labels = [idx.strftime('%y.%m') for idx in closes.index]
+                                values = [round(float(v), 0) for v in closes.values]
+                                print(f"  ✅ [J09] 주가이력 {len(labels)}포인트 ({leader.get('name',ticker)})")
+                                return labels, values
 
-            elif chart_type == 'scatter':
-                names, pers, roes = [], [], []
-                for s in stocks:
-                    per = s.get("per")
-                    roe = s.get("roe")
-                    if per and roe and float(per) > 0 and float(roe) != 0:
-                        names.append(s.get("name", "?"))
-                        pers.append(float(per))
-                        roes.append(float(roe))
-                if len(names) >= 2:
-                    interleaved = [v for p, r in zip(pers, roes) for v in (p, r)]
-                    print(f"  ✅ [J09] PER/ROE {len(names)}종목 → SCATTER")
-                    return names, interleaved
+                elif chart_type == 'scatter':
+                    names, pers, roes = [], [], []
+                    for s in stocks:
+                        per = s.get("per")
+                        roe = s.get("roe")
+                        if per and roe and float(per) > 0 and float(roe) != 0:
+                            names.append(s.get("name", "?"))
+                            pers.append(float(per))
+                            roes.append(float(roe))
+                    if len(names) >= 2:
+                        interleaved = [v for p, r in zip(pers, roes) for v in (p, r)]
+                        print(f"  ✅ [J09] PER/ROE {len(names)}종목 → SCATTER")
+                        return names, interleaved
 
-            else:  # bar/barh/pie/donut/step
-                _metric_kw = [
-                    (['per', '주가수익'], 'per'),
-                    (['roe'], 'roe'),
-                    (['영업이익률', '영업마진'], 'op_margin'),
-                    (['현재가', '주가'], 'price'),
-                ]
-                metric = next(
-                    (m for kws, m in _metric_kw if any(k in d_lower for k in kws)),
-                    'marcap'
-                )
-                names, vals = [], []
-                for s in stocks:
-                    v = s.get(metric) or (s.get('price') if metric == 'marcap' else None)
-                    try:
-                        v = float(v)
-                    except (TypeError, ValueError):
-                        continue
-                    if v and v > 0:
-                        names.append(s.get("name", "?"))
-                        vals.append(v)
-                if len(names) >= 2:
-                    print(f"  ✅ [J09] {metric} {len(names)}종목 → {chart_type.upper()}")
-                    return names, vals
-    except Exception as e:
-        print(f"  ⚠️ [J09] collect_stocks_data 실패: {e}")
+                else:  # bar/barh/pie/donut/step
+                    _metric_kw = [
+                        (['per', '주가수익'], 'per'),
+                        (['roe'], 'roe'),
+                        (['영업이익률', '영업마진'], 'op_margin'),
+                        (['현재가', '주가'], 'price'),
+                    ]
+                    metric = next(
+                        (m for kws, m in _metric_kw if any(k in d_lower for k in kws)),
+                        'marcap'
+                    )
+                    names, vals = [], []
+                    for s in stocks:
+                        v = s.get(metric) or (s.get('price') if metric == 'marcap' else None)
+                        try:
+                            v = float(v)
+                        except (TypeError, ValueError):
+                            continue
+                        if v and v > 0:
+                            names.append(s.get("name", "?"))
+                            vals.append(v)
+                    if len(names) >= 2:
+                        print(f"  ✅ [J09] {metric} {len(names)}종목 → {chart_type.upper()}")
+                        return names, vals
+        except Exception as e:
+            print(f"  ⚠️ [J09] collect_stocks_data 실패: {e}")
 
-    # ── 2. KrxProvider — 실시간 종목 시세 (bar/barh 계열) ───────────────
-    if chart_type not in ('line', 'area', 'step', 'iso_area', 'combo', 'scatter'):
+    # ── 2. KrxProvider — 실시간 종목 시세 (bar/barh 계열, 경제일반 스킵) ──
+    if not _skip_stocks and chart_type not in ('line', 'area', 'step', 'iso_area', 'combo', 'scatter'):
         try:
             from JARVIS09_COLLECTOR.providers.krx_provider import KrxProvider
             krx_docs = KrxProvider().collect(keyword, max_items=3)
@@ -1786,7 +1817,8 @@ def generate_chart(
         if len(context_text) < 300 and collection_docs:
             try:
                 from JARVIS06_IMAGE.collection_merger import facts_for_chart
-                _facts = facts_for_chart(collection_docs, max_n=12)
+                # ★ keyword 전달 — 비주식 주제에서 종목 시총 facts 차단 ([281])
+                _facts = facts_for_chart(collection_docs, max_n=12, keyword=keyword)
                 if _facts:
                     _docs_ctx = "[수집 사실 라인]\n" + "\n".join(_facts)
                     context_text = (context_text + "\n\n" + _docs_ctx).strip() if context_text else _docs_ctx
@@ -1981,6 +2013,14 @@ def generate_chart(
 
         # ── 데이터 기반 chart_type 재조정 (labels/values 확정 후) ──
         if labels and values:
+            # ★ flat 시계열 데이터 최종 검증 — 변화율 1% 미만이면 스킵 ([281])
+            if chart_type in ('line', 'area', 'step', 'iso_area', 'combo') and len(values) >= 3:
+                _v_max = max(abs(v) for v in values)
+                _v_range = max(values) - min(values)
+                if _v_max > 0 and (_v_range / _v_max) < 0.01:
+                    print(f"  ⚠️ [chart_generator] flat 시계열 데이터 ({chart_type}) — 차트 스킵")
+                    return ""
+
             chart_type = _data_override_type(chart_type, labels, values, description, _rid)
             is_iso      = chart_type in ('iso_bar', 'iso_area', 'band_line')
             is_pie_like = chart_type in ('pie', 'donut')

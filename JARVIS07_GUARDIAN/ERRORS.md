@@ -1,5 +1,17 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [281] chart_generator가 collection_docs의 주식 시가총액 데이터를 주제 무관 차트에 사용 — BARH 차트 전수 오염 (2026-06-08)
+
+- **증상**: 네이버(줄인상) BARH 차트 3개(01·02·03·08)에 "삼성전자 31조, SK하이닉스 203조, 현대차 64조, 삼성SDI 51조, 셀트리온 16조" 주식 시가총액 데이터가 표시됨. 제목은 "소비자물가지수·가격 인상률·생필품 비교" 등 줄인상 관련인데 X축 레이블이 종목명. 티스토리(금시세) 04·09번 차트도 동일 증상.
+- **환경**: `JARVIS06_IMAGE/chart_generator.py` BARH/BAR 차트 생성 경로. collection_docs 전달 [280] 수정 이후 첫 발행(2026-06-08).
+- **원인**: JARVIS09가 "오늘의 경제 시장 뉴스, 금융" 주제로 수집 시 시장 보고서 안에 "SK하이닉스 시가총액 203.2조" 등 주식 데이터가 사실(fact) 형태로 포함됨. `collection_merger.facts_for_chart()` 가 이 수치를 추출 → chart_generator의 BARH 차트 생성 시 종목명·시총 수치가 category/value 쌍으로 매핑됨. 차트 제목 문맥(줄인상·금시세)은 무시하고 collection_docs 수치를 무조건 사용.
+- **헛다리**: [280] 수정(collection_docs 파이프라인 연결)은 정상 — 연결 자체는 맞으나 collection_docs 내 데이터 도메인 필터링 없음.
+- **해결**: ① `collection_merger.facts_for_chart(docs, max_n, keyword="")` — keyword 파라미터 추가. 주식 테마 키워드(_STOCK_THEME_KWS) 없는 글에서 종목 시가총액 패턴 문장(_STOCK_CAP_PAT) 자동 제외. ② `chart_generator.generate_chart()` — `facts_for_chart(keyword=keyword)` 전달. ③ `chart_generator._fetch_from_j09()` — `_is_general_econ_topic()` 함수로 경제 일반 주제 감지 시 `collect_stocks_data` / `KrxProvider` 스킵. ④ `_parse_ecos_timeseries._extract()` — flat 데이터(v_range/v_max < 1%) → ([], []) 반환. ⑤ `generate_chart()` — labels/values 확보 후 시계열 flat 최종 검증 → `return ""` (차트 스킵).
+- **파일**: `JARVIS06_IMAGE/chart_generator.py` + `JARVIS06_IMAGE/collection_merger.py`
+- **교훈**: collection_docs 연결(파이프라인) ≠ collection_docs 활용 품질. 수집된 데이터가 차트 주제와 도메인이 다를 경우 필터 없이 그대로 사용하면 제목·데이터 불일치 차트 생성. facts_for_chart()는 keyword 기반 도메인 필터 필수. 경제 일반 글에서 collect_stocks_data 1순위 호출은 항상 종목 시총 오염 유발.
+
+---
+
 ### [280] 경제 브리핑 차트 생성 시 collection_docs 파이프라인 단절 — context 부족 delta 요청 반복 (2026-06-08)
 
 - **증상**: 경제 브리핑 차트 생성 시 `context 부족(235자) → JARVIS09 delta 요청` 패턴이 9개 차트 중 4개에서 반복. JARVIS09가 31건 수집했지만 차트 생성에 활용되지 않음.
