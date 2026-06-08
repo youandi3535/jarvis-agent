@@ -64,8 +64,8 @@ def _status_section() -> str:
                     lines.append(f"  {theme[:18]}: N{nv} T{ts}")
         except Exception:
             pass
-        eco_diff = (7 - now.hour) % 24
-        lines.append(f"📊 경제 브리핑: 매일 07:00 ({eco_diff}시간 후)")
+        eco_diff = (6 - now.hour) % 24
+        lines.append(f"📊 경제 브리핑: 매일 06:30 ({eco_diff}시간 후)")
     else:
         lines.append("❌ 스케줄러 로드 실패")
     return "\n".join(lines)

@@ -444,8 +444,8 @@ class JobHealthMonitor:
                         (jid, today_str),
                     ).fetchone()
                     now_h = datetime.now().hour
-                    # 경제 브리핑은 07시 이후, 테마는 16시 이후 실행됐어야 함
-                    expected_h = 7 if jid == "j01_economic_post" else 16
+                    # 경제 브리핑은 06:30 이후, 테마는 16시 이후 실행됐어야 함
+                    expected_h = 6 if jid == "j01_economic_post" else 16
                     if now_h >= expected_h + 1 and row is None:
                         findings.append(Finding(
                             key=f"critical_missing:{jid}:{today_str}",

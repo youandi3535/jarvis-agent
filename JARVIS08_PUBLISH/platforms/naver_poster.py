@@ -425,35 +425,89 @@ def _dismiss_naver_popup(driver) -> bool:
 def _verify_naver_published(driver) -> bool:
     """발행 후 에디터 이탈 여부로 실제 발행 확인.
 
-    발행 성공 시: URL이 editor에서 blog.naver.com/{id}/숫자 형태로 이동
-    발행 실패 시: 여전히 editor URL 또는 팝업 열려있음
+    ★ ERRORS [278] 수정 2026-06-08 — URL 패턴 누락 + DOM 예외 침묵 근본 수정
+    발행 성공 패턴:
+      1. URL: blog.naver.com 에 logNo= 파라미터 존재 (Redirect=Log 등 모든 형태 포괄)
+      2. URL: blog.naver.com/ID/숫자 — 발행 직후 리다이렉트
+      3. DOM 기반 — 글 보기 페이지 요소 (URL 복사·통계·se-viewer 등)
+    발행 실패 패턴:
+      - 4회 재확인 후에도 에디터 URL 유지 + DOM 시그널 없음
 
     Returns:
         True: 발행 확인됨
         False: 에디터 상태 유지 (발행 미완료)
     """
-    try:
-        current_url = driver.current_url
-        if "editor" in current_url or "write" in current_url:
-            return False
-        # 발행 완료 후 URL 패턴: blog.naver.com/ID/숫자
-        import re as _re
-        if _re.search(r'blog\.naver\.com/\w+/\d+', current_url):
-            return True
-        # 발행 직후 에디터 내 성공 메시지 확인
-        success_msg = driver.execute_script("""
-            var toasts = document.querySelectorAll('.se-toast, [class*="toast"], [class*="success"]');
-            for (var t of toasts) {
-                if (t.innerText && (t.innerText.includes('발행') || t.innerText.includes('등록'))) {
-                    return t.innerText.trim();
+    import time as _time
+    import re as _re
+
+    # ★ ERRORS [278][279] — 4회 × 4초 = 최대 ~16초 추가 대기 (SPA 전환 충분 보장)
+    for _attempt in range(4):
+        try:
+            current_url = driver.current_url
+            print(f"  [verify] attempt {_attempt+1}/4 — URL: {current_url[:120]}")
+
+            # ── URL 기반 체크 ──────────────────────────────────────
+            # ★ ERRORS [278] 핵심 수정: blog.naver.com 에 logNo= 있으면 발행 성공
+            if "blog.naver.com" in current_url and "logNo=" in current_url:
+                print(f"  [verify] URL logNo 패턴 확인 → 발행 성공")
+                return True
+
+            # blog.naver.com/ID/숫자 — 직접 경로 형태
+            if _re.search(r'blog\.naver\.com/\w+/\d+', current_url):
+                print(f"  [verify] URL path 패턴 확인 → 발행 성공")
+                return True
+
+            # ★ ERRORS [279] — 에디터 이탈 자체가 발행 성공 시그널
+            # blog.naver.com 에 있고 에디터(/postwrite) 가 아니면 발행 완료 페이지
+            if "blog.naver.com" in current_url and "/postwrite" not in current_url and "/login" not in current_url:
+                print(f"  [verify] 에디터 이탈 확인 ({current_url[:80]}) → 발행 성공")
+                return True
+
+            # 에디터 URL (write/postwrite 에 logNo 없음) — 아직 전환 안 됨
+            if "/postwrite" in current_url and "logNo=" not in current_url:
+                print(f"  [verify] 에디터 URL 유지 (logNo 없음) → 재확인 대기")
+                if _attempt < 3:
+                    _time.sleep(4)
+                continue
+
+        except Exception as _url_err:
+            print(f"  [verify] URL 체크 예외: {_url_err}")
+
+        # ── DOM 기반 체크 ──────────────────────────────────────
+        try:
+            published_signal = driver.execute_script("""
+                // 글 보기 페이지에만 존재하는 요소
+                if (document.querySelector('.se-viewer')) return 'se-viewer';
+                if (document.querySelector('.blog-post')) return 'blog-post';
+                if (document.querySelector('.post_ct')) return 'post_ct';
+                if (document.querySelector('[class*="PostView"]')) return 'PostView';
+                // ★ ERRORS [279] — children 필터 제거: 버튼 내 아이콘 자식 요소 있어도 검색
+                var allElems = document.querySelectorAll('*');
+                for (var i = 0; i < Math.min(allElems.length, 5000); i++) {
+                    var e = allElems[i];
+                    var t = (e.innerText || e.textContent || '').trim();
+                    if (t === 'URL 복사' || t.includes('URL 복사') || t === '통계' || t.endsWith('통계'))
+                        return 'elem:' + t.substring(0, 30);
                 }
-            }
-            return null;
-        """)
-        if success_msg:
-            return True
-    except Exception:
-        pass
+                // body 전체 텍스트에서 발행 완료 시그널 (태그 무관 — 최종 fallback)
+                var bodyText = document.body ? (document.body.innerText || '') : '';
+                if (bodyText.includes('URL 복사') || bodyText.includes('통계'))
+                    return 'body:text_found';
+                return null;
+            """)
+            if published_signal:
+                print(f"  [verify] DOM 기반 발행 확인 (attempt {_attempt+1}): {published_signal}")
+                return True
+            else:
+                print(f"  [verify] DOM 시그널 없음 (attempt {_attempt+1})")
+        except Exception as _dom_err:
+            print(f"  [verify] DOM 체크 예외 (attempt {_attempt+1}): {_dom_err}")
+
+        # 아직 전환 안 됨 → 4초 대기 후 재확인
+        if _attempt < 3:
+            _time.sleep(4)
+
+    print("  [verify] 4회 시도 모두 실패 → 발행 미완료 판정")
     return False
 
 
@@ -1234,7 +1288,8 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             _click_in_browser(driver, _pub_btn['x'], _pub_btn['y'], f"최종발행({_pub_btn['text']})")
         else:
             _click_in_browser(driver, 1452, 604, "최종발행(좌표)")
-        time.sleep(4)
+        # ★ ERRORS [273] — 4초 부족 (네이버 리다이렉트 > 4초 소요 사례). 8초로 확대.
+        time.sleep(8)
 
         driver.save_screenshot(str(IMG_RESULT / "done.png"))
 
@@ -1309,7 +1364,8 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 else:
                     _click_in_browser(driver, 1452, 604, "재발행(좌표)")
 
-            time.sleep(4)
+            # ★ ERRORS [274] 재발 — 재발행 경로도 8초 대기 필수 (SPA 전환 지연)
+            time.sleep(8)
             driver.save_screenshot(str(IMG_RESULT / "done_retry.png"))
 
             if not _verify_naver_published(driver):

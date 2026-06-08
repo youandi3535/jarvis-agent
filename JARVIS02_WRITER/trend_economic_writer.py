@@ -214,6 +214,43 @@ _ECON_SECTORS = {
 }
 _EXCLUDE_SECTORS = {'스포츠', '연예·문화', '정치·사회', '날씨·재난', '기타', '건강·의료', '사회·이슈'}
 
+# ── 최근 사용 키워드 추적 (중복 발행 방지) ────────────────────────
+_USED_KW_FILE = _JARVIS_ROOT / "JARVIS03_RADAR" / "data" / "used_economic_keywords.json"
+_DEDUP_DAYS   = 7  # 최근 N일 이내 사용된 키워드 제외
+
+
+def _get_used_keywords(days: int = _DEDUP_DAYS) -> set[str]:
+    """최근 N일 동안 발행에 사용된 키워드 집합 반환."""
+    import json as _json
+    if not _USED_KW_FILE.exists():
+        return set()
+    try:
+        data: list[dict] = _json.loads(_USED_KW_FILE.read_text(encoding="utf-8"))
+        cutoff = (date.today() - __import__("datetime").timedelta(days=days)).isoformat()
+        return {e["keyword"].strip().lower() for e in data if e.get("date", "") >= cutoff}
+    except Exception:
+        return set()
+
+
+def _mark_keyword_used(keyword: str, platform: str = "") -> None:
+    """발행 성공 키워드를 영구 기록 (중복 방지용)."""
+    import json as _json
+    data: list[dict] = []
+    if _USED_KW_FILE.exists():
+        try:
+            data = _json.loads(_USED_KW_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            data = []
+    data.append({"keyword": keyword, "platform": platform, "date": date.today().isoformat()})
+    # 30일 초과 항목 자동 정리
+    cutoff = (date.today() - __import__("datetime").timedelta(days=30)).isoformat()
+    data = [e for e in data if e.get("date", "") >= cutoff]
+    try:
+        _USED_KW_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _USED_KW_FILE.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as _e:
+        print(f"  ⚠️ [dedup] 키워드 기록 실패: {_e}")
+
 
 def _normalize_keyword(kw: str) -> str:
     """알려진 오표기·축약어를 공식 표기로 교정."""
@@ -244,29 +281,37 @@ def _is_same_topic(rec: dict | str, ref_keyword: str) -> bool:
 
 
 def select_tistory_topic(trends: dict) -> dict | None:
-    """티스토리용 주제 선정 — 경제 섹터 2위."""
+    """티스토리용 주제 선정 — 경제 섹터, 최근 7일 미사용 키워드 우선."""
     recs   = trends.get('recommendations', [])
     scored = trends.get('scored_keywords', [])
+    used   = _get_used_keywords()
+
+    def _not_used(r: dict | str) -> bool:
+        kw = (r.get('keyword', '') if isinstance(r, dict) else r).strip().lower()
+        return kw not in used
 
     econ_recs = [
         r for r in recs
         if r.get('sector', '') in _ECON_SECTORS
         and r.get('sector', '') not in _EXCLUDE_SECTORS
     ]
-    if econ_recs:
-        best = max(econ_recs, key=lambda x: x.get('opportunity_score', 0))
+    # 미사용 우선 → 없으면 사용 이력 무시 (발행 건너뜀 방지)
+    fresh = [r for r in econ_recs if _not_used(r)]
+    pool  = fresh or econ_recs
+    if pool:
+        best = max(pool, key=lambda x: x.get('opportunity_score', 0))
         best['keyword'] = _normalize_keyword(best.get('keyword', ''))
         best['theme']   = best['keyword']
+        reused = "♻️ 재사용(미사용 없음)" if not fresh else ""
         print(f"  📌 티스토리 주제: [{best.get('sector')}] {best.get('keyword')} "
-              f"(기회점수 {best.get('opportunity_score', 0):.1f})")
+              f"(기회점수 {best.get('opportunity_score', 0):.1f}) {reused}")
         return best
 
-    econ_scored = [
-        k for k in scored
-        if k.get('sector', '') in _ECON_SECTORS
-    ]
-    if econ_scored:
-        best = econ_scored[0]
+    econ_scored = [k for k in scored if k.get('sector', '') in _ECON_SECTORS]
+    fresh2 = [k for k in econ_scored if _not_used(k)]
+    pool2  = fresh2 or econ_scored
+    if pool2:
+        best = pool2[0]
         best['keyword'] = _normalize_keyword(best.get('keyword', ''))
         best['theme']   = best['keyword']
         print(f"  📌 티스토리 주제 (폴백): [{best.get('sector')}] {best.get('keyword')}")
@@ -277,9 +322,14 @@ def select_tistory_topic(trends: dict) -> dict | None:
 
 
 def select_naver_topic(trends: dict, ts_keyword: str = '') -> dict | None:
-    """네이버용 주제 선정 — 티스토리 키워드 제외 + 경제 섹터 최고점."""
+    """네이버용 주제 선정 — 티스토리 키워드 제외 + 최근 7일 미사용 + 경제 섹터 최고점."""
     recs   = trends.get('recommendations', [])
     scored = trends.get('scored_keywords', [])
+    used   = _get_used_keywords()
+
+    def _not_used(r: dict | str) -> bool:
+        kw = (r.get('keyword', '') if isinstance(r, dict) else r).strip().lower()
+        return kw not in used
 
     econ_recs = [
         r for r in recs
@@ -287,21 +337,22 @@ def select_naver_topic(trends: dict, ts_keyword: str = '') -> dict | None:
         and not _is_same_topic(r, ts_keyword)
         and r.get('sector', '') not in _EXCLUDE_SECTORS
     ]
-    if econ_recs:
-        best = max(econ_recs, key=lambda x: x.get('opportunity_score', 0))
+    fresh = [r for r in econ_recs if _not_used(r)]
+    pool  = fresh or econ_recs
+    if pool:
+        best = max(pool, key=lambda x: x.get('opportunity_score', 0))
         best['keyword'] = _normalize_keyword(best.get('keyword', ''))
         best['theme']   = best['keyword']
+        reused = "♻️ 재사용(미사용 없음)" if not fresh else ""
         print(f"  📌 네이버 주제: [{best.get('sector')}] {best.get('keyword')} "
-              f"(기회점수 {best.get('opportunity_score', 0):.1f})")
+              f"(기회점수 {best.get('opportunity_score', 0):.1f}) {reused}")
         return best
 
-    econ_scored = [
-        k for k in scored
-        if k.get('sector', '') in _ECON_SECTORS
-        and not _is_same_topic(k, ts_keyword)
-    ]
-    if econ_scored:
-        best = econ_scored[0]
+    econ_scored = [k for k in scored if k.get('sector', '') in _ECON_SECTORS and not _is_same_topic(k, ts_keyword)]
+    fresh2 = [k for k in econ_scored if _not_used(k)]
+    pool2  = fresh2 or econ_scored
+    if pool2:
+        best = pool2[0]
         best['keyword'] = _normalize_keyword(best.get('keyword', ''))
         best['theme']   = best['keyword']
         print(f"  📌 네이버 주제 (폴백): [{best.get('sector')}] {best.get('keyword')}")
@@ -1749,6 +1800,7 @@ def run_tistory() -> dict:
             except Exception as _dbe:
                 print(f"  ⚠️ [DB] 저장 오류 (무시): {_dbe}")
                 _g_report("writer", _dbe, module=__name__)
+            _mark_keyword_used(keyword, "tistory")
             _tg(f"✅ [TISTORY-TREND] 발행 완료!\n제목: {title}\n키워드: {keyword}\n이미지: {len(visual_paths)}개")
             print(f"  ✅ [티스토리] 발행 완료: {title}")
             return {"success": True, "url": "", "keyword": keyword}
@@ -1952,6 +2004,7 @@ def run_naver(ts_keyword: str = '') -> dict:
             except Exception as _dbe:
                 print(f"  ⚠️ [DB] 저장 오류 (무시): {_dbe}")
                 _g_report("writer", _dbe, module=__name__)
+            _mark_keyword_used(keyword, "naver")
             _tg(f"✅ [NAVER-TREND] 발행 완료!\n제목: {title}\n키워드: {keyword}\n이미지: {len(visual_paths)}개")
             print(f"  ✅ [네이버] 발행 완료: {title}")
             return {"success": True, "url": "", "keyword": keyword}

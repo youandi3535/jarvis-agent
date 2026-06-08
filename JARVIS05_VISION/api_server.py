@@ -17,11 +17,25 @@ except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────
 
+import socket as _socket
+import time as _time
+
 log = logging.getLogger("jarvis.vision.api")
 
 VISION_PORT = 8505
 _server_thread: threading.Thread | None = None
 _app = None  # FastAPI 앱 인스턴스 (lazy init)
+
+
+def _port_in_use(port: int) -> bool:
+    """해당 포트가 현재 사용 중인지 확인."""
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+        s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
 
 
 def _build_app():
@@ -172,17 +186,40 @@ def start_api_server() -> None:
     _app = _build_app()
 
     def _run():
-        try:
-            uvicorn.run(
-                _app,
-                host="127.0.0.1",
-                port=VISION_PORT,
-                log_level="warning",
-                access_log=False,
-            )
-        except Exception as e:
-            log.error(f"❌ VISION API 서버 오류: {e}")
-            _g_report("vision", e, module=__name__)
+        # ★ ERRORS [275] 박제 2026-06-08 — port 충돌 시 uvicorn SystemExit(1) 발생
+        # 이전 프로세스가 포트 해제하기까지 대기 후 재시도 (critical Guardian 경고 방지)
+        import errno as _errno
+        for _attempt in range(3):
+            if _attempt > 0 and _port_in_use(VISION_PORT):
+                log.warning(f"⚠️ 포트 {VISION_PORT} 여전히 사용 중 — {3}초 추가 대기 ({_attempt}/2)")
+                _time.sleep(3)
+            try:
+                uvicorn.run(
+                    _app,
+                    host="127.0.0.1",
+                    port=VISION_PORT,
+                    log_level="warning",
+                    access_log=False,
+                )
+                break
+            except SystemExit:
+                if _attempt < 2:
+                    log.warning(f"⚠️ VISION API SystemExit — 포트 충돌 의심, 재시도 ({_attempt+1}/2)")
+                    _time.sleep(3)
+                else:
+                    log.warning("⚠️ VISION API 서버 기동 포기 (재시도 소진)")
+            except OSError as e:
+                if e.errno == _errno.EADDRINUSE and _attempt < 2:
+                    log.warning(f"⚠️ 포트 {VISION_PORT} 충돌 — {3}초 대기 후 재시도")
+                    _time.sleep(3)
+                else:
+                    log.error(f"❌ VISION API 서버 오류: {e}")
+                    _g_report("vision", e, module=__name__, func_name="start_api_server")
+                    break
+            except Exception as e:
+                log.error(f"❌ VISION API 서버 오류: {e}")
+                _g_report("vision", e, module=__name__, func_name="start_api_server")
+                break
 
     _server_thread = threading.Thread(target=_run, daemon=True, name="VisionAPI")
     _server_thread.start()

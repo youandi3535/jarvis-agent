@@ -533,15 +533,20 @@ def _generate_svg_thumbnail(title: str, theme: str, today_str: str, output_path:
         f"Output ONLY the SVG. No explanation."
     )
 
-    for attempt in range(2):
+    # ★ "빈 응답" 반복 사고(ERRORS [275] 박제) — writer(Sonnet) 2회 시도
+    # writer_fast 와 동일 모델이지만, 발행 병렬 SDK 포화 시 재시도로 복구 가능
+    for attempt in range(3):
         try:
-            svg_text = invoke_text("writer_fast", prompt, max_tokens=3500)
+            alias = "writer_fast" if attempt == 0 else "writer"
+            svg_text = invoke_text(alias, prompt, max_tokens=3500)
             if not svg_text:
-                raise RuntimeError("빈 응답")
+                log.warning(f"[thumbnail_maker] Claude SVG attempt={attempt+1} 빈 응답 — alias={alias}")
+                continue
 
             m = _re.search(r"(<svg[\s\S]*?</svg>)", svg_text, _re.IGNORECASE)
             if not m:
-                raise RuntimeError("SVG 태그 없음")
+                log.warning(f"[thumbnail_maker] Claude SVG attempt={attempt+1} SVG 태그 없음")
+                continue
 
             from JARVIS06_IMAGE.providers.claude_svg_provider import _sanitize_svg
             svg = _sanitize_svg(m.group(1))
@@ -561,9 +566,8 @@ def _generate_svg_thumbnail(title: str, theme: str, today_str: str, output_path:
             return output_path
         except Exception as e:
             log.warning(f"[thumbnail_maker] Claude SVG attempt={attempt+1} 실패 ({e})")
-            if attempt == 0:
-                continue
-            raise
+
+    raise RuntimeError(f"SVG 생성 {3}회 모두 실패")
 
 
 def create_thumbnail(theme: str, title: str, output_path: str, body_text: str = "",
@@ -642,17 +646,87 @@ def _create(theme: str, title: str, output_path: str, today_str: str,
 
 
 def _simple_fallback(theme: str, output_path: str, today_str: str) -> str:
+    """matplotlib 기반 동적 썸네일 — AI·SVG 모두 실패 시 최종 폴백.
+
+    테마 해시로 매번 다른 배경색·레이아웃 선택.
+    """
     try:
-        rng = random.Random(int(time.time()))
-        scheme = rng.choice(_COLOR_THEMES)
-        img = _make_gradient_fallback(scheme, rng)
-        d = __import__("PIL.ImageDraw", fromlist=["ImageDraw"]).ImageDraw.Draw(img)
-        f = _load_font(80, bold=True)
-        d.text((W//2, H//2), theme[:10], font=f, fill=scheme["accent"], anchor="mm")
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import hashlib as _hl
+
+        seed = int(_hl.md5(f"{theme}{today_str}".encode()).hexdigest()[:8], 16)
+        rng2 = random.Random(seed)
+
+        # 배경 팔레트 (밝고 다양한 파스텔)
+        bg_options = [
+            ("#E8F4FD", "#1565C0"), ("#FFF3E0", "#E65100"), ("#F3E5F5", "#6A1B9A"),
+            ("#E8F5E9", "#1B5E20"), ("#FFF8E1", "#F57F17"), ("#FCE4EC", "#880E4F"),
+            ("#E3F2FD", "#0D47A1"), ("#F1F8E9", "#33691E"), ("#FBE9E7", "#BF360C"),
+        ]
+        accent_options = [
+            "#1565C0", "#E65100", "#6A1B9A", "#1B5E20", "#F57F17",
+            "#880E4F", "#0D47A1", "#33691E", "#BF360C",
+        ]
+        bg_color, text_color = bg_options[seed % len(bg_options)]
+        accent = accent_options[(seed + 3) % len(accent_options)]
+
+        fig, ax = plt.subplots(figsize=(12, 6.3), dpi=150)
+        fig.patch.set_facecolor(bg_color)
+        ax.set_facecolor(bg_color)
+        ax.axis("off")
+
+        # 상단 강조 바
+        ax.add_patch(mpatches.FancyBboxPatch(
+            (0.0, 0.93), 1.0, 0.07, transform=ax.transAxes,
+            boxstyle="square,pad=0", facecolor=accent, linewidth=0,
+        ))
+        # 날짜
+        ax.text(0.5, 0.88, today_str, transform=ax.transAxes,
+                ha="center", va="top", fontsize=14, color=text_color, alpha=0.7)
+        # 키워드 배지
+        ax.add_patch(mpatches.FancyBboxPatch(
+            (0.15, 0.52), 0.70, 0.22, transform=ax.transAxes,
+            boxstyle="round,pad=0.02", facecolor=accent, linewidth=0, alpha=0.15,
+        ))
+        ax.text(0.5, 0.64, theme[:16], transform=ax.transAxes,
+                ha="center", va="center", fontsize=42, color=accent,
+                fontweight="bold")
+        # 구분선
+        ax.axhline(y=0.48, xmin=0.2, xmax=0.8, color=accent, linewidth=1.5, alpha=0.5,
+                   transform=ax.transAxes)
+        # 장식 원
+        for xi, yi, r, a in rng2.choices(
+            [(0.08, 0.85, 0.06, 0.12), (0.92, 0.85, 0.06, 0.10),
+             (0.05, 0.20, 0.08, 0.08), (0.95, 0.20, 0.08, 0.08)], k=4
+        ):
+            ax.add_patch(plt.Circle((xi, yi), r, transform=ax.transAxes,
+                                    color=accent, alpha=a))
+        # 하단 태그
+        ax.text(0.5, 0.08, f"★ {theme} ★", transform=ax.transAxes,
+                ha="center", va="bottom", fontsize=18, color=accent, alpha=0.8)
+
+        plt.tight_layout(pad=0.1)
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        img.save(output_path, "PNG")
-    except Exception:
-        pass
+        fig.savefig(output_path, dpi=150, bbox_inches="tight", facecolor=bg_color)
+        plt.close(fig)
+        log.info(f"[thumbnail_maker] matplotlib 폴백 썸네일 생성: {output_path}")
+    except Exception as _e:
+        log.warning(f"[thumbnail_maker] matplotlib 폴백도 실패: {_e}")
+        # PIL 최후 폴백
+        try:
+            rng3 = random.Random(int(time.time()))
+            scheme = rng3.choice(_COLOR_THEMES)
+            img = _make_gradient_fallback(scheme, rng3)
+            d = __import__("PIL.ImageDraw", fromlist=["ImageDraw"]).ImageDraw.Draw(img)
+            f = _load_font(80, bold=True)
+            d.text((W//2, H//2), theme[:10], font=f, fill=scheme["accent"], anchor="mm")
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            img.save(output_path, "PNG")
+        except Exception:
+            pass
     return output_path
 
 

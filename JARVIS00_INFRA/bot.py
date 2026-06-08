@@ -769,6 +769,7 @@ def run_bot_polling(shutdown_event: threading.Event):
     time.sleep(2)
 
     _409_count = 0
+    _conn_fail_count = 0  # ★ ERRORS [274] — DNS/연결 오류 연속 횟수 (backoff용)
 
     offset = 0
     try:
@@ -922,8 +923,18 @@ def run_bot_polling(shutdown_event: threading.Event):
                         _answer_callback(cq_id, "처리 오류")
 
         except requests.exceptions.Timeout:
-            pass
+            _conn_fail_count = 0
+        except requests.exceptions.ConnectionError as e:
+            # ★ ERRORS [274] — DNS/연결 오류 backoff (Wi-Fi 재연결 시 폭주 방지)
+            _conn_fail_count += 1
+            wait = min(10 * _conn_fail_count, 120)  # 최대 2분
+            if not shutdown_event.is_set():
+                log.warning(f"[봇] 연결 오류 ({_conn_fail_count}회) — {wait}초 후 재시도")
+                if _conn_fail_count == 1:  # 첫 번째만 Guardian 보고
+                    _g_report("infra", e, module=__name__)
+                time.sleep(wait)
         except Exception as e:
+            _conn_fail_count = 0
             if not shutdown_event.is_set():
                 log.warning(f"[봇] polling 오류: {e}")
                 _g_report("infra", e, module=__name__)
