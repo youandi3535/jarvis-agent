@@ -2028,6 +2028,14 @@ def run_naver(ts_keyword: str = '') -> dict:
 def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
     """티스토리 대본 생성 (①-⑦ 단계)."""
     print("\n  🔴 [TISTORY-DRAFT] 대본 생성 중...")
+    # ★ 글 작성 전 인메모리 캐시 전체 초기화 — 이전 글 잔재 완전 제거
+    try:
+        from JARVIS06_IMAGE.chart_generator import clear_session_cache as _clear_cache
+        _clear_cache()
+    except Exception as _ce:
+        print(f"  ⚠️ [cache clear] 스킵: {_ce}")
+    _section_img_paths.clear()
+    _para_img_paths.clear()
     _cleanup_tistory_images()
 
     keyword = ""
@@ -2191,6 +2199,14 @@ def ts_publish(draft: dict) -> dict:
 def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=None) -> dict:
     """네이버 대본 생성 (①-⑦ 단계) — 티스토리와 중복되지 않은 주제로."""
     print("\n  🟢 [NAVER-DRAFT] 대본 생성 중...")
+    # ★ 글 작성 전 인메모리 캐시 전체 초기화 — 이전 글 잔재 완전 제거
+    try:
+        from JARVIS06_IMAGE.chart_generator import clear_session_cache as _clear_cache
+        _clear_cache()
+    except Exception as _ce:
+        print(f"  ⚠️ [cache clear] 스킵: {_ce}")
+    _section_img_paths.clear()
+    _para_img_paths.clear()
     _cleanup_naver_images()   # ★ 재생성 시 직전 시도 이미지 리셋 (TS 와 동일 패턴)
 
     keyword = ""

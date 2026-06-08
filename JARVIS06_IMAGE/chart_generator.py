@@ -2111,4 +2111,22 @@ def generate_chart(
         return ""
 
 
-__all__ = ["generate_chart"]
+def clear_session_cache() -> None:
+    """글 작성 세션 시작 전 인메모리 캐시 전체 초기화.
+
+    대상:
+      - _J09_CTX_CACHE       : keyword별 JARVIS09 컨텍스트 캐시
+      - _GLOBAL_TYPE_HISTORY : 전역 차트 타입 이력 (글 간 스타일 중복 방지용)
+      - _used_types_by_run   : 실행별 차트 스타일 추적
+
+    호출 위치: 글 작성 최초 진입점 (run_all_themes / ts_generate_draft / nv_generate_draft)
+    """
+    global _GLOBAL_TYPE_HISTORY
+    with _J09_CTX_CACHE_LOCK:
+        _J09_CTX_CACHE.clear()
+    _GLOBAL_TYPE_HISTORY.clear()
+    _used_types_by_run.clear()
+    print("  🧹 [chart_generator] 글 세션 캐시 초기화 완료")
+
+
+__all__ = ["generate_chart", "clear_session_cache"]
