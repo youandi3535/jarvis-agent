@@ -391,9 +391,9 @@
           "ts": "2026-05-31T10:04:58"
         }
       ],
-      "hit_count": 66,
+      "hit_count": 67,
       "first_seen": "2026-05-31T10:04:58",
-      "last_seen": "2026-06-08T09:02:35",
+      "last_seen": "2026-06-08T09:15:01",
       "eval_meta": {
         "should_register": true,
         "score": 70,
@@ -402,7 +402,7 @@
         "reusable": true,
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
-        "evaluated_at": "2026-06-08T09:02:35"
+        "evaluated_at": "2026-06-08T09:15:01"
       }
     },
     {
@@ -8747,6 +8747,34 @@
         "rationale": "알 수 없는 fixer (externaledit) — 보수적 통과, 점수 70",
         "tier": "unknown",
         "evaluated_at": "2026-06-08T08:24:52"
+      }
+    },
+    {
+      "fingerprint": "RuntimeError::_verify_naver_published URL 패턴 누락 근본 수정 — blog.naver.com+logNo= 통합 체크 + DOM 예외 로깅 + OR 조건 완화. ERRORS [<N>][<N>][<N>][<N>] 5회 반복 오탐 근절.",
+      "error_type": "RuntimeError",
+      "message_pattern": "_verify_naver_published\\ URL\\ 패턴\\ 누락\\ 근본\\ 수정\\ —\\ blog\\.naver\\.com\\+logNo=\\ 통합\\ 체크\\ \\+\\ DOM\\ 예외\\ 로",
+      "fixer": "runtime",
+      "tier": "manual",
+      "domain": "publish",
+      "examples": [
+        {
+          "fixed_file": "JARVIS08_PUBLISH/platforms/naver_poster.py",
+          "source": "manual-claude",
+          "ts": "2026-06-08T09:15:10"
+        }
+      ],
+      "hit_count": 1,
+      "first_seen": "2026-06-08T09:15:10",
+      "last_seen": "2026-06-08T09:15:10",
+      "eval_meta": {
+        "should_register": true,
+        "score": 70,
+        "safe": true,
+        "accurate": true,
+        "reusable": true,
+        "rationale": "알 수 없는 fixer (runtime) — 보수적 통과, 점수 70",
+        "tier": "unknown",
+        "evaluated_at": "2026-06-08T09:15:10"
       }
     }
   ]

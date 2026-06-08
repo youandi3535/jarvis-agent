@@ -1,5 +1,17 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [278] 네이버 발행 성공인데 harness Layer4 실패 5회 반복 — _verify_naver_published URL 패턴 누락 + DOM 예외 침묵 (2026-06-08)
+
+- **증상**: `RuntimeError: [Layer4] ['naver'] 발행 실패 (attempt=3)`. done.png / done_retry.png 모두 발행 완료 페이지 ("URL 복사"·"통계" 표시). 실제 발행 성공이나 verify False 반환. [273][274][277] 수정 후에도 재발.
+- **환경**: `JARVIS08_PUBLISH/platforms/naver_poster.py` `_verify_naver_published()`. 경제 브리핑 harness 발행.
+- **원인**: 네이버 발행 후 URL이 `blog.naver.com/ID?Redirect=Log&logNo=NNNNN` 형태로 리다이렉트되는데, 기존 URL 체크 3가지 모두 미매칭: ① `postwrite+logNo` (postwrite 없음) ② `blog.naver.com/\w+/\d+` 정규식 (경로에 숫자 없고 쿼리 파라미터) ③ `PostView+logNo` (PostView 없음). DOM 체크도 `except Exception: pass`로 예외 침묵 → 디버깅 불가.
+- **헛다리**: [273] DOM 셀렉터 추가, [274] 재확인 루프 추가, [277] body.innerText fallback 추가 — 모두 URL 패턴 누락이 근본 원인이라 무효.
+- **해결**: ① URL 체크 통합: `blog.naver.com` + `logNo=` 조합이면 즉시 True (모든 URL 변형 포괄) ② DOM 검색: leaf 요소 전체 + `bodyText.includes('통계')` OR 조건으로 완화 ③ `except Exception: pass` → 실제 오류 출력으로 변경 (디버깅 가능)
+- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` (`_verify_naver_published`)
+- **교훈**: URL 기반 검증은 *개별 형태 열거* 가 아닌 **핵심 파라미터 존재 여부**(`logNo=`)로 판정해야 안정적. 네이버는 리다이렉트 URL 형식을 수시로 변경. `except Exception: pass`는 5회 반복 사고의 디버깅을 불가능하게 만든 근본 원인 — 예외 최소한 print 필수.
+
+---
+
 ### [277] 네이버 발행 성공인데 harness Layer4 실패 재발 — _verify_naver_published body 텍스트 미검색 (2026-06-08)
 
 - **증상**: `RuntimeError: [Layer4] ['naver'] 발행 실패 (attempt=2)`. done.png / done_retry.png 모두 발행 완료 페이지 ("URL 복사"·"통계" 표시). 실제 발행 성공이나 verify False 반환.
