@@ -2054,6 +2054,19 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
             supreme_block = _law_blk()
 
+        # ★ 글 keyword로 JARVIS09 재수집 — 대본 주제에 맞는 데이터로 이미지 생성
+        _kw_collection_docs = list(collection_docs or [])
+        try:
+            from JARVIS09_COLLECTOR import collect_for_theme as _j09_kw_collect
+            _kw_docs = _j09_kw_collect(keyword, sector)
+            if _kw_docs:
+                _kw_collection_docs = _kw_docs
+                print(f"  🕸️ [JARVIS09] '{keyword}' 재수집: {len(_kw_docs)}건 → 이미지 생성 전달")
+            else:
+                print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 0건 — 경제 일반 수집물 유지")
+        except Exception as _j09_kw_e:
+            print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 스킵: {_j09_kw_e}")
+
         from JARVIS02_WRITER.tistory_html_writer import (
             generate_article_html, save_article_html, screenshot_article,
             extract_title, extract_text_content,
@@ -2061,7 +2074,7 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
         from JARVIS06_IMAGE.injectors import assemble_blocks
 
         html = generate_article_html(keyword, sector, reason, supreme_block,
-                                     collection_docs=collection_docs)
+                                     collection_docs=_kw_collection_docs)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
@@ -2206,13 +2219,26 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
             supreme_block = _law_blk()
 
+        # ★ 글 keyword로 JARVIS09 재수집 — 대본 주제에 맞는 데이터로 이미지 생성
+        _kw_collection_docs = list(collection_docs or [])
+        try:
+            from JARVIS09_COLLECTOR import collect_for_theme as _j09_kw_collect
+            _kw_docs = _j09_kw_collect(keyword, sector)
+            if _kw_docs:
+                _kw_collection_docs = _kw_docs
+                print(f"  🕸️ [JARVIS09] '{keyword}' 재수집: {len(_kw_docs)}건 → 이미지 생성 전달")
+            else:
+                print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 0건 — 경제 일반 수집물 유지")
+        except Exception as _j09_kw_e:
+            print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 스킵: {_j09_kw_e}")
+
         from JARVIS02_WRITER.tistory_html_writer import (
             generate_article_html, extract_title, extract_text_content,
             OUTPUT_HTML_DIR, OUTPUT_IMG_DIR,
         )
 
         html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
-                                     collection_docs=collection_docs)
+                                     collection_docs=_kw_collection_docs)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
