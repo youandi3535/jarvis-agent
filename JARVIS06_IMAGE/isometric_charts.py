@@ -39,7 +39,17 @@ except ImportError:
     def _g_report(*a, **kw): pass
 
 # ── 상수 ─────────────────────────────────────────────────────────
-_BG = '#F6F8FF'
+_BG_POOL = ['#F6F8FF', '#FFF8F0', '#F0FFF8', '#FFF0F8', '#F8F0FF', '#F0F8FF', '#FFFBF0', '#F5F5FF']
+
+
+def _iso_bg(run_id: str) -> str:
+    if not run_id:
+        return _BG_POOL[0]
+    import hashlib as _hlib
+    return _BG_POOL[int(_hlib.md5(run_id.encode()).hexdigest()[:4], 16) % len(_BG_POOL)]
+
+
+_BG = _BG_POOL[0]  # 기본값
 
 _PALETTE = [
     '#3A86FF', '#50A060', '#FF8C00', '#E05555', '#5BC0DE',
@@ -129,14 +139,15 @@ def make_iso_bar_chart(
 
         rid = run_id or str(id(labels))
         colors = _shuffled_palette(rid, n)
+        bg = _iso_bg(rid)
 
         vmax = max(abs(v) for v in values) or 1
         max_h = 4.5
         heights = [max(abs(v) / vmax * max_h, 0.08) for v in values]
 
         fig, ax = plt.subplots(figsize=(15, 9), dpi=160)
-        fig.patch.set_facecolor(_BG)
-        ax.set_facecolor(_BG)
+        fig.patch.set_facecolor(bg)
+        ax.set_facecolor(bg)
         # ★ set_aspect('equal') 제거 — 아이소메트릭 X/Y 범위 불균형 시 대형 여백 생성
         ax.axis('off')
 
@@ -233,14 +244,15 @@ def make_iso_area_chart(
         import random
         color = _PALETTE[seed % len(_PALETTE)]
         top_c, front_c, _ = _face_colors(color)
+        bg = _iso_bg(rid)
 
         vmax = max(abs(v) for v in values) or 1
         max_h = 3.8
         heights = [abs(v) / vmax * max_h for v in values]
 
         fig, ax = plt.subplots(figsize=(16, 9), dpi=160)
-        fig.patch.set_facecolor(_BG)
-        ax.set_facecolor(_BG)
+        fig.patch.set_facecolor(bg)
+        ax.set_facecolor(bg)
         # ★ set_aspect('equal') 제거 — 아이소메트릭 X/Y 범위 불균형 시 대형 여백 생성
         ax.axis('off')
 
@@ -363,7 +375,7 @@ def make_iso_area_chart(
         plt.tight_layout(rect=[0.01, 0.02, 0.99, 0.87])
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(str(out_path), dpi=160, bbox_inches='tight',
-                    facecolor=_BG, edgecolor='none')
+                    facecolor=bg, edgecolor='none')
         plt.close(fig)
         return str(out_path)
 

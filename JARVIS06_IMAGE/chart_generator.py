@@ -121,13 +121,31 @@ def _shuffled_types(run_id: str) -> list[str]:
     return pool
 
 
-# ── 테마 상수 ────────────────────────────────────────────────────
-_BG     = "#ffffff"
-_PANEL  = "#fafafa"
+# ── 테마 상수 (고정값은 텍스트·그리드만 — 배경은 run_id 기반 동적 생성) ─────
+_BG_PALETTE = [
+    "#ffffff", "#fafcff", "#fff8f0", "#f0f8ff", "#f5fff5",
+    "#fffbf0", "#f8f0ff", "#f0fffc", "#fff0f8", "#f2f4f8",
+]
+_PANEL_PALETTE = [
+    "#fafafa", "#f5f8ff", "#fff5ee", "#edf5ff", "#f0fff4",
+    "#fffde7", "#f3e8ff", "#e8fff9", "#ffe8f5", "#eef0f5",
+]
 _GRID   = "#e9ecef"
 _TEXT_H = "#212529"
 _TEXT_B = "#6c757d"
 _FONT   = "Apple SD Gothic Neo, Noto Sans KR, NanumGothic, sans-serif"
+
+
+def _bg_for_run(run_id: str) -> tuple[str, str]:
+    """run_id 기반으로 배경·패널 색상 선택 (매 발행마다 다름)."""
+    if not run_id:
+        return _BG_PALETTE[0], _PANEL_PALETTE[0]
+    idx = int(hashlib.md5(run_id.encode()).hexdigest()[:4], 16) % len(_BG_PALETTE)
+    return _BG_PALETTE[idx], _PANEL_PALETTE[idx]
+
+
+_BG     = _BG_PALETTE[0]   # 기본값 (run_id 미지정 시)
+_PANEL  = _PANEL_PALETTE[0]
 
 
 def _fmt_bar_val(v: float) -> str:
@@ -524,7 +542,9 @@ def _synth_data(chart_type: str, keyword: str, chart_idx: int, n_points: int = 6
 # ── Plotly 차트 생성 ─────────────────────────────────────────────
 
 def _base_layout(title: str, keyword: str, sector: str,
-                 use_synth: bool, width: int, height: int) -> dict:
+                 use_synth: bool, width: int, height: int,
+                 run_id: str = "") -> dict:
+    bg, panel = _bg_for_run(run_id)
     annotations = [
         dict(x=0, y=1.12, xref='paper', yref='paper', showarrow=False,
              text=f"<b>{title}</b>",
@@ -548,8 +568,8 @@ def _base_layout(title: str, keyword: str, sector: str,
             borderpad=6, align='center',
         ))
     return dict(
-        paper_bgcolor=_BG,
-        plot_bgcolor=_PANEL,
+        paper_bgcolor=bg,
+        plot_bgcolor=panel,
         font=dict(family=_FONT, size=16, color=_TEXT_B),
         width=width, height=height,
         margin=dict(t=110, b=90, l=80, r=80),
@@ -573,7 +593,7 @@ def _make_plotly_fig(chart_type: str, labels: list, values: list,
     pal    = C['list5']
     W, H   = (960, 840) if chart_type in ('pie', 'donut') else \
              (1200, 860) if chart_type == 'scatter' else (1280, 840)
-    layout = _base_layout(title, keyword, sector, use_synth, W, H)
+    layout = _base_layout(title, keyword, sector, use_synth, W, H, run_id=run_id)
 
     fig = go.Figure()
 
