@@ -77,3 +77,4 @@ JARVIS02_WRITER/scheduler_progress.json
 *.pid
 pid/
 *.lock
+JARVIS07_GUARDIAN/bandit_state.json

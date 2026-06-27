@@ -1,5 +1,21 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [283] Bandit UCB1 강화학습 도입 — 정적 fixer 6종 순서 동적 최적화 (2026-06-27)
+
+- **증상**: 정적 fixer 6종이 항상 같은 순서로 시도됨. error_type별 성공률 차이가 있어도 학습되지 않음.
+- **원인**: 고정 순서 리스트 — 과거 성공/실패 데이터 미활용.
+- **해결**: UCB1 Multi-Armed Bandit 도입. `bandit.py` 신규 생성. error_type별 (fixer → wins/losses/pulls) 추적. 실패 즉시 음의 보상, 파일 수정 성공 후 양의 보상. 데이터 1건부터 작동, JSON 영구 저장.
+- **파일**: `JARVIS07_GUARDIAN/bandit.py`(신규), `pattern_fixer.py`, `error_fixer.py`
+- **교훈**: 파인튜닝(가중치 변경) 아님 — 카운터 기반 온라인 RL. GPU 불필요, 저사양 Mac 무리 없음.
+
+### [282] Tier 1.5 (RL 모델) 제거 + 고빈도 패턴 정적 승격 — 3-Tier → 2-Tier 단순화 (2026-06-27)
+
+- **증상**: Tier 1.5 SGDClassifier RL 예측이 추가 복잡도 대비 실질 효과 낮음. 5회 이상 반복된 학습 패턴이 있음에도 매번 정적 패턴 → 학습 캐시 순으로 탐색해 불필요한 순회 발생.
+- **원인**: 3-Tier 구조 과설계. RL 모델은 "어떤 fixer를 쓸지 예측"하는 역할이었으나, 반복 오류는 이미 학습 캐시에 등록돼 있어 RL 예측이 의미 없는 우회.
+- **해결**: ① Tier 1.5 (RL 블록) 제거 → `error_analyzer.py` Tier 1 → Tier 2 2단 단순화 ② `_HIGH_COUNT_THRESHOLD = 5` — hit_count ≥ 5 패턴을 `_fix_from_high_count`로 최우선 처리 ③ `record_pattern_hit()`에서 hit_count 5 도달 시 "정적 승격" 로그 추가.
+- **파일**: `JARVIS07_GUARDIAN/error_analyzer.py`, `JARVIS07_GUARDIAN/pattern_fixer.py`
+- **교훈**: 반복 5회 이상 검증된 패턴 = 사실상 정적 패턴. ML 예측 불필요, 임계값 기반 승격이 더 결정론적이고 빠름.
+
 ### [281] chart_generator가 collection_docs의 주식 시가총액 데이터를 주제 무관 차트에 사용 — BARH 차트 전수 오염 (2026-06-08)
 
 - **증상**: 네이버(줄인상) BARH 차트 3개(01·02·03·08)에 "삼성전자 31조, SK하이닉스 203조, 현대차 64조, 삼성SDI 51조, 셀트리온 16조" 주식 시가총액 데이터가 표시됨. 제목은 "소비자물가지수·가격 인상률·생필품 비교" 등 줄인상 관련인데 X축 레이블이 종목명. 티스토리(금시세) 04·09번 차트도 동일 증상.

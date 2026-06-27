@@ -29,6 +29,22 @@ _fix_lock = threading.Lock()
 # 처리 중인 error_id 집합 (중복 수정 방지)
 _processing: set[int] = set()
 
+# ── Circuit breaker: 시간당 자동수정 최대 횟수 ──────────────────
+_CB_LOCK      = threading.Lock()
+_cb_count     = 0
+_cb_hour_ts   = 0.0
+_CB_MAX_HOUR  = 10   # 시간당 최대 자동수정 건수
+
+# ── 절대 자동수정 금지 파일 (보안 파일·코어 오케스트레이터) ─────
+_DENY_FIX_PATHS = {
+    ".env", "jarvis_daemon.py",
+    "login_manager.py", "naver_cookies.pkl", "tistory_cookies.pkl",
+}
+
+# ── 빈도 기반 severity 상향 임계값 ──────────────────────────────
+_ESCALATE_WINDOW_SECS = 3600   # 1시간
+_ESCALATE_THRESHOLD   = 3      # 1시간 내 N회 반복 → severity 한 단계 상향
+
 
 # ── capability 선언 + 텔레그램 /status 섹션 ─────────────────────
 
@@ -106,6 +122,133 @@ def _register_capability():
         )
     except Exception as e:
         log.warning(f"[GUARDIAN] capability 등록 실패: {e}")
+
+
+# ── 안전장치 헬퍼 ────────────────────────────────────────────────
+
+def _circuit_breaker_ok() -> bool:
+    """시간당 자동수정 횟수 초과 시 False — 더 이상 수정 안 함."""
+    import time
+    global _cb_count, _cb_hour_ts
+    with _CB_LOCK:
+        now = time.time()
+        if now - _cb_hour_ts >= 3600:
+            _cb_count = 0
+            _cb_hour_ts = now
+        if _cb_count >= _CB_MAX_HOUR:
+            return False
+        _cb_count += 1
+        return True
+
+
+def _is_deny_path(module: str) -> bool:
+    """절대 자동수정 금지 파일인지 확인."""
+    if not module:
+        return False
+    name = Path(module).name
+    return name in _DENY_FIX_PATHS or ".env" in module
+
+
+def _escalate_severity(error_record: dict) -> str:
+    """1시간 내 동일 오류 N회 반복 시 severity 한 단계 자동 상향.
+
+    low  → medium (3회+)
+    medium → high (3회+)
+    high / critical → 유지
+    """
+    base_sev   = error_record.get("severity", "medium")
+    error_type = error_record.get("error_type", "")
+    source     = error_record.get("source", "")
+    message    = (error_record.get("message") or "")[:40]
+
+    if base_sev in ("high", "critical"):
+        return base_sev
+
+    try:
+        from shared.db import get_db
+        from datetime import datetime, timedelta
+        since = (datetime.now() - timedelta(seconds=_ESCALATE_WINDOW_SECS)).isoformat()
+        with get_db() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*) FROM error_log
+                   WHERE error_type = ? AND source = ?
+                     AND SUBSTR(message, 1, 40) = ?
+                     AND created_at >= ?""",
+                (error_type, source, message, since),
+            ).fetchone()
+        count = row[0] if row else 0
+        if count >= _ESCALATE_THRESHOLD:
+            _NEXT = {"low": "medium", "medium": "high"}
+            new_sev = _NEXT.get(base_sev, base_sev)
+            if new_sev != base_sev:
+                log.warning(
+                    f"[GUARDIAN] 빈도 상향: {base_sev}→{new_sev} "
+                    f"({count}회/{_ESCALATE_WINDOW_SECS//60}분) — {error_type}"
+                )
+            return new_sev
+    except Exception:
+        pass
+    return base_sev
+
+
+def _notify_all(error_record: dict, result: str, tier: int = 0, severity: str = ""):
+    """모든 심각도에 텔레그램 알림 — 수정 성공·실패·불가 공통."""
+    sev = severity or error_record.get("severity", "medium")
+    etype   = error_record.get("error_type", "?")
+    source  = error_record.get("source", "?")
+    module  = error_record.get("module", "?")
+    msg     = (error_record.get("message") or "")[:120]
+
+    _ICONS = {
+        "success": "✅", "failed": "❌", "critical_manual": "🔴",
+        "circuit_open": "⚡", "deny_path": "🔒",
+    }
+    _SEV_TAG = {"low": "⚪LOW", "medium": "🟡MED", "high": "🟠HIGH", "critical": "🔴CRIT"}
+    icon     = _ICONS.get(result, "ℹ️")
+    sev_tag  = _SEV_TAG.get(sev, sev.upper())
+
+    if result == "success":
+        text = (
+            f"{icon} *[GUARDIAN] 자동수정 완료*\n"
+            f"심각도: {sev_tag}  Tier {tier}\n"
+            f"소스: {source} / {module}\n"
+            f"유형: {etype}\n"
+            f"내용: {msg}"
+        )
+    elif result == "critical_manual":
+        text = (
+            f"{icon} *[GUARDIAN] CRITICAL — 수동 검토 필요*\n"
+            f"Tier 2 패턴 없음 → LLM 수정 생략 (안전)\n"
+            f"소스: {source} / {module}\n"
+            f"유형: {etype}\n"
+            f"내용: {msg}"
+        )
+    elif result == "circuit_open":
+        text = (
+            f"{icon} *[GUARDIAN] Circuit Breaker 발동*\n"
+            f"시간당 {_CB_MAX_HOUR}건 한도 초과 → 수정 일시 중단\n"
+            f"오류: {etype} @ {module}"
+        )
+    elif result == "deny_path":
+        text = (
+            f"{icon} *[GUARDIAN] 보안 파일 수정 차단*\n"
+            f"자동수정 금지 파일: {module}\n"
+            f"유형: {etype}\n"
+            f"→ 수동 검토 필요"
+        )
+    else:  # failed
+        text = (
+            f"{icon} *[GUARDIAN] 자동수정 실패 — 수동 검토*\n"
+            f"심각도: {sev_tag}  Tier 1·2·3 모두 실패\n"
+            f"소스: {source} / {module}\n"
+            f"유형: {etype}\n"
+            f"내용: {msg}"
+        )
+    try:
+        from shared.notify import send_tg
+        send_tg(text)
+    except Exception:
+        pass
 
 
 # ── 오케스트레이터 ────────────────────────────────────────────────
@@ -189,17 +332,7 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
         else:
             _db.mark_error_status(error_id, "wontfix")
             log.warning(f"[GUARDIAN] #{error_id} SDK 수정 실패 → status=wontfix")
-            try:
-                from shared.notify import send_tg
-                send_tg(
-                    f"⚠️ *[GUARDIAN] 자동 수정 실패*\n"
-                    f"자체 학습·Claude Code 모두 수정 불가\n"
-                    f"오류: {error_record.get('error_type','?')} @ {error_record.get('module','?')}\n"
-                    f"내용: {(error_record.get('message',''))[:150]}\n"
-                    f"→ 수동 검토 필요"
-                )
-            except Exception:
-                pass
+            # 알림은 _orchestrate()의 _notify_all()에서 통합 처리
             return False
 
     except Exception as e:
@@ -215,8 +348,17 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
 def _orchestrate(error_id: int):
     """오류 분석 → 자동 수정 오케스트레이터 (별도 스레드에서 실행).
 
-    1순위: 자체 학습 (패턴형 3회+ 반복 + 저장된 학습 전부, LLM 호출 0)
-    2순위: Claude Code SDK — 성공 시 학습 저장 + 원래 작업 재시도
+    심각도별 처리 매트릭스:
+      low      → Tier 2 → Tier 3 → 알림  (학습 → 다음엔 Tier 2 해결)
+      medium   → Tier 2 → Tier 3 → 알림
+      high     → Tier 2 → Tier 3 → 알림 (항상)
+      critical → Tier 2 → 알림 (LLM 수정은 너무 위험 — 사람 검토)
+
+    안전장치:
+      · 빈도 기반 severity 자동 상향 (1시간 3회 반복 → 한 단계 상향)
+      · Circuit breaker (시간당 최대 10건 자동수정)
+      · 보안 파일 수정 절대 금지 (.env, 인증 파일, 데몬 코어)
+      · 모든 심각도 수정 결과 텔레그램 알림
     """
     with _fix_lock:
         if error_id in _processing:
@@ -225,7 +367,6 @@ def _orchestrate(error_id: int):
 
     try:
         from shared import db as _db
-        from JARVIS07_GUARDIAN.severity import is_auto_fixable
         from JARVIS07_GUARDIAN.error_analyzer import analyze
         from JARVIS07_GUARDIAN.error_fixer import apply_fix
 
@@ -233,43 +374,63 @@ def _orchestrate(error_id: int):
         if not error_record:
             return
 
-        severity   = error_record.get("severity", "medium")
         error_type = error_record.get("error_type", "")
+        module     = error_record.get("module", "")
 
-        log.info(f"[GUARDIAN] 오케스트레이터 시작 — #{error_id} [{severity}] {error_type}")
-
-        if severity == "critical":
-            _notify_critical(error_record)
-            return
-
-        if not is_auto_fixable(severity, error_type):
-            log.info(f"[GUARDIAN] #{error_id} 자동 수정 불가 — wontfix 마킹")
-            _notify_medium(error_record)
+        # ── 안전장치 1: 보안 파일 수정 금지 ───────────────────────
+        if _is_deny_path(module):
+            log.warning(f"[GUARDIAN] #{error_id} 보안 파일 수정 차단 — {module}")
+            _notify_all(error_record, "deny_path")
             _db.mark_error_status(error_id, "wontfix")
             return
 
-        if severity == "low":
+        # ── 안전장치 2: Circuit breaker ───────────────────────────
+        if not _circuit_breaker_ok():
+            log.warning(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — 시간당 한도 초과")
+            _notify_all(error_record, "circuit_open")
+            _db.mark_error_status(error_id, "new")  # 다음 retry_pending 에서 재처리
             return
 
+        # ── 빈도 기반 severity 자동 상향 ─────────────────────────
+        severity = _escalate_severity(error_record)
+        error_record = {**error_record, "severity": severity}  # 상향된 값으로 갱신
+
+        log.info(f"[GUARDIAN] 오케스트레이터 시작 — #{error_id} [{severity}] {error_type}")
         _db.mark_error_status(error_id, "analyzing")
 
-        # Tier 1·1.5: 자체 학습 (fingerprint) + RL 모델
+        # ── Tier 2: 패턴 수정 — 모든 심각도 시도 (LLM 없음, 안전) ─
         analysis = analyze(error_record)
-        success = apply_fix(error_id, analysis, mark_wontfix=False)
-        # RL 보상 — apply_fix 실제 결과(ast.parse + import 검증) 기반
+        success  = apply_fix(error_id, analysis, mark_wontfix=False)
+
+        # RL 보상 신호
         try:
             from JARVIS07_GUARDIAN.incident_responder import _send_rl_reward
             _send_rl_reward(error_record, analysis, success)
         except Exception:
             pass
+
         if success:
-            log.info(f"[GUARDIAN] #{error_id} ✅ Tier1/1.5 수정 완료")
+            log.info(f"[GUARDIAN] #{error_id} ✅ Tier 2 수정 완료")
+            _notify_all(error_record, "success", tier=2, severity=severity)
             _retry_original_job(error_record)
             return
 
-        # 2순위: Claude Code SDK
-        log.info(f"[GUARDIAN] #{error_id} 자체 학습 실패 → 2순위 Claude Code SDK")
-        _try_sdk_targeted_fix(error_id, error_record)
+        # ── critical: Tier 3(LLM) 생략 — 패턴 없으면 사람에게 ───
+        if severity == "critical":
+            log.warning(f"[GUARDIAN] #{error_id} critical + Tier 2 실패 → 수동 검토")
+            _notify_all(error_record, "critical_manual", severity=severity)
+            _db.mark_error_status(error_id, "wontfix")
+            return
+
+        # ── Tier 3: LLM 수정 — low 포함 전 심각도 ────────────────
+        # low도 Tier 3까지 진행 → 학습 데이터 축적 → 다음엔 Tier 2 해결
+        log.info(f"[GUARDIAN] #{error_id} Tier 2 실패 → Tier 3 (LLM, {severity})")
+        fixed = _try_sdk_targeted_fix(error_id, error_record)
+
+        if fixed:
+            _notify_all(error_record, "success", tier=3, severity=severity)
+        else:
+            _notify_all(error_record, "failed", severity=severity)
 
     except Exception as e:
         log.error(f"[GUARDIAN] 오케스트레이터 오류: {e}")

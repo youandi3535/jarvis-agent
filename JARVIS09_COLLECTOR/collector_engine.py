@@ -5,6 +5,16 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .models import RawDocument, CollectionResult
 from .cleaner import clean_document
+
+try:
+    from JARVIS07_GUARDIAN.error_collector import auto_catch as _auto_catch
+except ImportError:
+    import functools
+    class _auto_catch:  # type: ignore[no-redef]
+        def __init__(self, *a, **kw): pass
+        def __call__(self, fn): return fn
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
 from .providers import (
     BlogProvider, NewsProvider, AcademicProvider,
     FinanceProvider, WebProvider, KorEconProvider,
@@ -45,6 +55,7 @@ _PROVIDERS = [
 _MAX_WORKERS = 8   # 병렬 수집
 
 
+@_auto_catch("collector", reraise=True)
 def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
     """주제·섹터에 맞는 전 소스 병렬 수집 → 정제 결과 반환.
 

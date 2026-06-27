@@ -45,6 +45,10 @@ _AGENT_FOLDERS = ("JARVIS00_INFRA", "JARVIS01_MASTER", "JARVIS02_WRITER",
                   "JARVIS03_RADAR", "JARVIS04_SCHEDULER", "JARVIS05_VISION",
                   "JARVIS06_IMAGE", "JARVIS07_GUARDIAN", "JARVIS08_PUBLISH", "shared")
 
+# ★ hit_count 가 이 값에 도달하면 "충분히 검증된 패턴" 로그 출력 (정보 목적)
+# Bandit 풀 편입은 hit_count ≥ 1 — 즉시 (Bandit UCB 가 신뢰도 직접 관리)
+_HIGH_COUNT_THRESHOLD = 3
+
 
 # ──────────────────────────────────────────────────────────────
 # ★ ADR 008 Phase 4 (사용자 박제 2026-05-17) — 도메인 카테고리 분류
@@ -780,7 +784,7 @@ def _save_learned(data: dict) -> None:
         log.warning(f"[GUARDIAN/learned] 저장 실패: {e}")
 
 
-def _fix_from_learned(error_record: dict) -> Optional[dict]:
+def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[dict]:
     """★ 학습된 fingerprint 와 매칭되면 즉시 수정 반환 (LLM 호출 0).
 
     매칭 흐름:
@@ -789,6 +793,8 @@ def _fix_from_learned(error_record: dict) -> Optional[dict]:
       3a. fixer == "llm_patch" → 저장된 patch/target_file 직접 반환 (LLM 재호출 0)
       3b. 그 외 → 등록된 fixer 함수 호출
       4. 미매칭이면 None 반환 (정적 5종 패턴으로 fallback)
+
+    min_hit_count: 이 값 이상인 패턴만 시도 (0 = 전체, 5 = 고빈도 승격 패턴만)
     """
     et  = error_record.get("error_type", "")
     msg = error_record.get("message", "") or ""
@@ -797,6 +803,9 @@ def _fix_from_learned(error_record: dict) -> Optional[dict]:
     data = _load_learned()
     matched = None
     for p in data.get("patterns", []):
+        # hit_count 필터 (고빈도 승격 전용 호출 시)
+        if int(p.get("hit_count", 0)) < min_hit_count:
+            continue
         # 정확 매칭 (fingerprint 동일) 우선
         if p.get("fingerprint") == fp:
             matched = p
@@ -1035,6 +1044,13 @@ def record_pattern_hit(
             if p.get("fingerprint") == fp:
                 p["hit_count"] = int(p.get("hit_count", 0)) + 1
                 p["last_seen"] = now
+                # ★ 고빈도 승격 알림 — hit_count 가 임계값 도달 시 1회 로그
+                if p["hit_count"] == _HIGH_COUNT_THRESHOLD:
+                    log.info(
+                        f"[GUARDIAN/learned] ★ 정적 패턴 승격 — "
+                        f"fp='{fp[:60]}' hit_count={p['hit_count']} "
+                        f"fixer={fixer_name} → _fix_from_high_count 로 처리됨"
+                    )
                 # llm_patch / auto_patch: 최신 패치로 갱신
                 if fixer_name in ("llm_patch", "auto_patch") and patch:
                     p["stored_patch"]       = patch
@@ -1267,44 +1283,197 @@ def backfill_tiers() -> dict:
 
 # ★ 학습 패턴이 최우선 — 동일 사례 즉시 매칭
 # 정적 5종은 학습되지 않은 새 패턴 처리용
-_PATTERN_FIXERS = [
-    # ★ 1순위 — 정적 패턴 (항상 최신 코드 기반, 결정론적)
-    _fix_relative_import,
-    _fix_none_slicing,
-    _fix_name_typo,
-    _fix_none_attribute,
-    _fix_import_name,
-    _fix_unpack_mismatch,    # ★ NEW 2026-05-16 (ERRORS [111])
-    # ★ 2순위 — 저장된 자가 학습 (과거 수정 fingerprint 재적용, LLM 0)
-    _fix_from_learned,
-]
+def _apply_single_pattern(
+    pattern: dict,
+    error_record: dict,
+    data: Optional[dict] = None,
+) -> Optional[dict]:
+    """매칭된 학습 패턴 dict 를 error_record 에 적용 — 공통 적용 로직.
 
-
-def try_pattern_fix(error_record: dict) -> Optional[dict]:
-    """패턴 기반 자동 수정 시도. 성공 시 patch dict 반환, 실패 시 None.
-
-    시도 순서 (★ 사용자 박제 2026-05-31):
-      1. 정적 패턴 6종 (항상 최신 코드 기반, 결정론적)
-      2. _fix_from_learned (저장된 자가 학습 — LLM 호출 0)
-      → 정적 패턴 매칭 시 자동으로 learned_patterns 에 등록 (다음 동일 사례 캐시 매칭)
-
-    반환 형식 (error_fixer.apply_fix 호환):
-        {
-          "fixable": True,
-          "pattern": "relative_import",
-          "target_file": "상대경로.py",
-          "patch_full": "수정 후 전체 파일 텍스트",
-          "patch": "<동일>",
-          "explanation": "수정 사유",
-          "source": "pattern" | "learned",
-          "learned": bool,
-        }
+    _fix_from_learned 내부 로직 + 승격 fixer 클로저에서 재사용.
+    data: 이미 로드된 learned data (None 이면 내부 로드).
     """
-    for fn in _PATTERN_FIXERS:
+    fixer_name = pattern.get("fixer")
+    if not fixer_name:
+        return None
+    fp = pattern.get("fingerprint", "")
+
+    if data is None:
+        data = _load_learned()
+
+    # ── llm_patch ──────────────────────────────────────────────────
+    if fixer_name == "llm_patch":
+        stored_patch  = pattern.get("stored_patch", "")
+        stored_target = pattern.get("stored_target_file", "")
+        if not stored_patch or not stored_target:
+            return None
+        if stored_patch.lstrip().startswith(("---", "@@", "diff ")):
+            new_content = _apply_diff_replacements(stored_target, stored_patch)
+            if new_content is None:
+                return None
+            patch_to_use = new_content
+        else:
+            patch_to_use = stored_patch
+        _bump_hit_count(data, fp)
+        return {
+            "fixable":     True,
+            "target_file": stored_target,
+            "patch":       patch_to_use,
+            "explanation": f"학습 캐시 재적용 — {fp[:60]}",
+            "pattern":     "llm_patch",
+            "source":      "learned_cache",
+            "learned":     True,
+            "fingerprint": fp,
+        }
+
+    # ── auto_patch ─────────────────────────────────────────────────
+    if fixer_name == "auto_patch":
+        stored_diff   = pattern.get("stored_patch", "")
+        stored_target = pattern.get("stored_target_file", "")
+        if not stored_diff or not stored_target:
+            return None
+        new_content = _apply_diff_replacements(stored_target, stored_diff)
+        if new_content is None:
+            return None
+        _bump_hit_count(data, fp)
+        return {
+            "fixable":     True,
+            "target_file": stored_target,
+            "patch":       new_content,
+            "explanation": f"auto_patch 재적용 — {stored_target}",
+            "pattern":     "auto_patch",
+            "source":      "learned_cache",
+            "learned":     True,
+            "fingerprint": fp,
+        }
+
+    # ── 정적 fixer 함수 ─────────────────────────────────────────────
+    if fixer_name not in _FIXER_REGISTRY:
+        return None
+    fn_name = _FIXER_REGISTRY[fixer_name]
+    fn = globals().get(fn_name)
+    if not fn:
+        return None
+    try:
+        result = fn(error_record)
+    except Exception as e:
+        log.debug(f"[GUARDIAN/learned] {fn_name} 실행 실패: {e}")
+        return None
+    if not result:
+        return None
+
+    _bump_hit_count(data, fp)
+    result["learned"]     = True
+    result["fingerprint"] = fp
+    log.info(f"[GUARDIAN/learned] ★ 학습 매칭 — fp='{fp[:70]}' fixer={fixer_name}")
+    return result
+
+
+def _make_learned_fn(pattern: dict, stored_data: dict, source_label: str):
+    """학습 패턴 하나를 fixer 클로저로 변환 — 두 그룹 공용 팩토리."""
+    def _fn(error_record: dict) -> Optional[dict]:
+        et  = error_record.get("error_type", "") or ""
+        msg = error_record.get("message",    "") or ""
+        target_fp = pattern.get("fingerprint", "")
+
+        # 정확 매칭
+        matched = (_make_fingerprint(et, msg) == target_fp)
+        # 부분 매칭 (error_type + message_pattern regex)
+        if not matched and pattern.get("error_type") == et:
+            try:
+                if re.search(pattern.get("message_pattern", ""), msg):
+                    matched = True
+            except re.error:
+                pass
+        if not matched:
+            return None
+
+        r = _apply_single_pattern(pattern, error_record, stored_data)
+        if r:
+            r["source"] = r.get("source", source_label)
+        return r
+    return _fn
+
+
+def _get_verified_fixers() -> list[tuple[str, object]]:
+    """hit_count ≥ _HIGH_COUNT_THRESHOLD 인 검증된 학습 패턴 — Group 1 에 합류.
+
+    3번 이상 수정 성공 → 신뢰도 높음 → static 6 과 같은 그룹에서 Bandit 랭킹.
+    """
+    data = _load_learned()
+    result: list[tuple[str, object]] = []
+    for p in data.get("patterns", []):
+        if int(p.get("hit_count", 0)) < _HIGH_COUNT_THRESHOLD:
+            continue
+        fp = p.get("fingerprint", "")
+        if not fp or not p.get("fixer"):
+            continue
+        result.append((f"verified:{fp[:32]}", _make_learned_fn(p, data, "verified_learned")))
+    if result:
+        log.debug(f"[GUARDIAN/pattern] 검증 학습 패턴 {len(result)}종 (hit≥{_HIGH_COUNT_THRESHOLD})")
+    return result
+
+
+def _get_new_fixers() -> list[tuple[str, object]]:
+    """hit_count 1 ~ (_HIGH_COUNT_THRESHOLD-1) 인 신규 학습 패턴 — Group 2.
+
+    1번이라도 수정 성공한 순간 Bandit 풀 편입 → UCB exploration bonus 받아 탐색.
+    검증된 그룹(Group 1)이 모두 실패한 뒤에 시도.
+    """
+    data = _load_learned()
+    result: list[tuple[str, object]] = []
+    for p in data.get("patterns", []):
+        hc = int(p.get("hit_count", 0))
+        if hc < 1 or hc >= _HIGH_COUNT_THRESHOLD:
+            continue
+        fp = p.get("fingerprint", "")
+        if not fp or not p.get("fixer"):
+            continue
+        result.append((f"new:{fp[:32]}", _make_learned_fn(p, data, "new_learned")))
+    if result:
+        log.debug(f"[GUARDIAN/pattern] 신규 학습 패턴 {len(result)}종 (hit 1~{_HIGH_COUNT_THRESHOLD-1})")
+    return result
+
+
+def _try_fixer_group(
+    error_record: dict,
+    group: list[tuple[str, object]],
+    error_type: str,
+    bandit_rank_fn,
+    bandit_reward_fn,
+) -> Optional[dict]:
+    """fixer 그룹을 Bandit 순서로 시도. 성공 시 결과 반환, 전체 실패 시 None.
+
+    - bandit_rank_fn / bandit_reward_fn 이 None 이면 Bandit 없이 주어진 순서로 실행.
+    - 실패한 fixer 는 즉시 음의 보상 기록.
+    """
+    if not group:
+        return None
+
+    if bandit_rank_fn:
+        names       = [n for n, _ in group]
+        ranked      = bandit_rank_fn(error_record, names)
+        fn_map      = {n: fn for n, fn in group}
+        ordered     = [(n, fn_map[n]) for n in ranked if n in fn_map]
+    else:
+        ordered = group
+
+    failed: list[str] = []
+
+    for fixer_name, fn in ordered:
         try:
-            result = fn(error_record)
+            result = fn(error_record)   # type: ignore[operator]
             if result:
-                # 학습 매칭이 아닌 정적 패턴 매칭일 때 자동 학습 등록
+                # 앞서 실패한 fixer 일괄 음의 보상
+                if bandit_reward_fn and failed:
+                    for fn_fail in failed:
+                        try:
+                            bandit_reward_fn(error_type, fn_fail, success=False,
+                                             error_record=error_record)
+                        except Exception:
+                            pass
+
+                # static fixer 성공 시 자동 학습 등록
                 if not result.get("learned") and result.get("pattern"):
                     try:
                         record_pattern_hit(
@@ -1315,16 +1484,79 @@ def try_pattern_fix(error_record: dict) -> Optional[dict]:
                         )
                     except Exception as e:
                         log.debug(f"[GUARDIAN/learned] 자동 학습 등록 실패: {e}")
-                result["source"] = result.get("source", "pattern")
-                result["patch"]  = result.get("patch", result.get("patch_full", ""))
+
+                result["source"]        = result.get("source", "pattern")
+                result["patch"]         = result.get("patch", result.get("patch_full", ""))
+                result["_bandit_fixer"] = fixer_name
                 log.info(
-                    f"[GUARDIAN/pattern] {fn.__name__} 매칭 — "
+                    f"[GUARDIAN/pattern] {fixer_name} 매칭 — "
                     f"{result.get('target_file','?')} : {result.get('explanation','')[:60]}"
                 )
                 return result
+            else:
+                failed.append(fixer_name)
         except Exception as e:
-            log.debug(f"[GUARDIAN/pattern] {fn.__name__} 시도 실패: {e}")
-            continue
+            log.debug(f"[GUARDIAN/pattern] {fixer_name} 시도 실패: {e}")
+            failed.append(fixer_name)
+
+    # 그룹 전체 실패 → 일괄 음의 보상
+    if bandit_reward_fn and failed:
+        for fn_fail in failed:
+            try:
+                bandit_reward_fn(error_type, fn_fail, success=False, error_record=error_record)
+            except Exception:
+                pass
+    return None
+
+
+# ★ 정적 fixer 코어 6종 — 하드코딩된 기본 집합 (Group 1 에 항상 포함)
+_STATIC_FIXERS_CORE: list[tuple[str, object]] = [
+    ("relative_import", _fix_relative_import),
+    ("none_slicing",    _fix_none_slicing),
+    ("name_typo",       _fix_name_typo),
+    ("none_attribute",  _fix_none_attribute),
+    ("import_name",     _fix_import_name),
+    ("unpack_mismatch", _fix_unpack_mismatch),
+]
+
+# legacy 호환 참조
+_PATTERN_FIXERS = [
+    _fix_relative_import, _fix_none_slicing, _fix_name_typo,
+    _fix_none_attribute,  _fix_import_name,  _fix_unpack_mismatch,
+    _fix_from_learned,
+]
+
+
+def try_pattern_fix(error_record: dict) -> Optional[dict]:
+    """패턴 기반 자동 수정 시도. 성공 시 patch dict 반환, 실패 시 None.
+
+    Tier 2 (패턴 자동 수정) 내부 시도 순서 — 모두 Bandit 학습:
+      Group 1 (검증됨): static 코어 6종 + hit≥3 학습 패턴  → Bandit Linear UCB 랭킹
+      Group 2 (신규):   hit 1~2 학습 패턴                   → Bandit Linear UCB 랭킹
+      전체 실패 시 None → error_analyzer 가 Tier 3 (LLM) 으로 위임
+
+    양의 보상(성공)은 error_fixer.apply_fix() 에서 실제 파일 수정 후 기록.
+    """
+    error_type = error_record.get("error_type", "unknown")
+
+    try:
+        from JARVIS07_GUARDIAN.bandit import rank_fixers as _bandit_rank, reward as _bandit_reward
+        _br, _bw = _bandit_rank, _bandit_reward
+    except Exception:
+        _br, _bw = None, None
+
+    # ── Group 1: 검증됨 (static 6 + hit≥3) ───────────────────────────
+    group1 = _get_verified_fixers() + _STATIC_FIXERS_CORE
+    result = _try_fixer_group(error_record, group1, error_type, _br, _bw)
+    if result:
+        return result
+
+    # ── Group 2: 신규 (hit 1~2) ────────────────────────────────────────
+    group2 = _get_new_fixers()
+    result = _try_fixer_group(error_record, group2, error_type, _br, _bw)
+    if result:
+        return result
+
     return None
 
 
