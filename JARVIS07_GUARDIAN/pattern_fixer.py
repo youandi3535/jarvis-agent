@@ -45,6 +45,9 @@ _AGENT_FOLDERS = ("JARVIS00_INFRA", "JARVIS01_MASTER", "JARVIS02_WRITER",
                   "JARVIS03_RADAR", "JARVIS04_SCHEDULER", "JARVIS05_VISION",
                   "JARVIS06_IMAGE", "JARVIS07_GUARDIAN", "JARVIS08_PUBLISH", "shared")
 
+# ★ hit_count 이 값 이상이면 정적 패턴 수준으로 승격 (Tier 1 최우선 시도)
+_HIGH_COUNT_THRESHOLD = 5
+
 
 # ──────────────────────────────────────────────────────────────
 # ★ ADR 008 Phase 4 (사용자 박제 2026-05-17) — 도메인 카테고리 분류
@@ -780,7 +783,7 @@ def _save_learned(data: dict) -> None:
         log.warning(f"[GUARDIAN/learned] 저장 실패: {e}")
 
 
-def _fix_from_learned(error_record: dict) -> Optional[dict]:
+def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[dict]:
     """★ 학습된 fingerprint 와 매칭되면 즉시 수정 반환 (LLM 호출 0).
 
     매칭 흐름:
@@ -789,6 +792,8 @@ def _fix_from_learned(error_record: dict) -> Optional[dict]:
       3a. fixer == "llm_patch" → 저장된 patch/target_file 직접 반환 (LLM 재호출 0)
       3b. 그 외 → 등록된 fixer 함수 호출
       4. 미매칭이면 None 반환 (정적 5종 패턴으로 fallback)
+
+    min_hit_count: 이 값 이상인 패턴만 시도 (0 = 전체, 5 = 고빈도 승격 패턴만)
     """
     et  = error_record.get("error_type", "")
     msg = error_record.get("message", "") or ""
@@ -797,6 +802,9 @@ def _fix_from_learned(error_record: dict) -> Optional[dict]:
     data = _load_learned()
     matched = None
     for p in data.get("patterns", []):
+        # hit_count 필터 (고빈도 승격 전용 호출 시)
+        if int(p.get("hit_count", 0)) < min_hit_count:
+            continue
         # 정확 매칭 (fingerprint 동일) 우선
         if p.get("fingerprint") == fp:
             matched = p
@@ -1035,6 +1043,13 @@ def record_pattern_hit(
             if p.get("fingerprint") == fp:
                 p["hit_count"] = int(p.get("hit_count", 0)) + 1
                 p["last_seen"] = now
+                # ★ 고빈도 승격 알림 — hit_count 가 임계값 도달 시 1회 로그
+                if p["hit_count"] == _HIGH_COUNT_THRESHOLD:
+                    log.info(
+                        f"[GUARDIAN/learned] ★ 정적 패턴 승격 — "
+                        f"fp='{fp[:60]}' hit_count={p['hit_count']} "
+                        f"fixer={fixer_name} → _fix_from_high_count 로 처리됨"
+                    )
                 # llm_patch / auto_patch: 최신 패치로 갱신
                 if fixer_name in ("llm_patch", "auto_patch") and patch:
                     p["stored_patch"]       = patch
@@ -1267,7 +1282,18 @@ def backfill_tiers() -> dict:
 
 # ★ 학습 패턴이 최우선 — 동일 사례 즉시 매칭
 # 정적 5종은 학습되지 않은 새 패턴 처리용
+def _fix_from_high_count(error_record: dict) -> Optional[dict]:
+    """★ hit_count ≥ _HIGH_COUNT_THRESHOLD 인 학습 패턴 — 5회 이상 반복 검증된 패턴.
+
+    정적 패턴 6종보다 먼저 시도 (Tier 1 최우선).
+    같은 오류가 5번 이상 나타나 수정 성공한 패턴은 사실상 정적 패턴과 동일한 신뢰도.
+    """
+    return _fix_from_learned(error_record, min_hit_count=_HIGH_COUNT_THRESHOLD)
+
+
 _PATTERN_FIXERS = [
+    # ★ 0순위 — 고빈도 승격 패턴 (hit_count ≥ 5: 반복 검증된 자가 학습 → 정적 패턴과 동급)
+    _fix_from_high_count,
     # ★ 1순위 — 정적 패턴 (항상 최신 코드 기반, 결정론적)
     _fix_relative_import,
     _fix_none_slicing,

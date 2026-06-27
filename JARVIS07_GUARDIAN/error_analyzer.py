@@ -156,8 +156,7 @@ def analyze(error_record: dict) -> dict:
     """오류 레코드를 분석해 수정 방안 반환.
 
     우선순위:
-      Tier 1   — 자체 학습 (패턴형 fingerprint + 저장된 학습, LLM 호출 0)
-      Tier 1.5 — RL 모델 (SGDClassifier, 온라인 학습, 일반화 능력)
+      Tier 1   — 고빈도 승격(hit≥5) + 정적 패턴 6종 + 학습 캐시 (LLM 호출 0, 통합)
       Tier 2   — Claude Code SDK targeted (_orchestrate 에서 위임)
 
     Returns:
@@ -172,40 +171,15 @@ def analyze(error_record: dict) -> dict:
         log.info(f"[GUARDIAN] critical 오류 분석 skip: {error_record.get('error_type', '')}")
         return {**_empty, "explanation": "critical 심각도 — 자동 수정 불가, 수동 검토 필요"}
 
-    # Tier 1: 자체 학습 (패턴형 fingerprint + 저장형 전부)
+    # Tier 1: 고빈도 승격 패턴(hit≥5) + 정적 패턴 6종 + 학습 캐시 (LLM 호출 0)
     try:
         from JARVIS07_GUARDIAN.pattern_fixer import try_pattern_fix
         pat_result = try_pattern_fix(error_record)
         if pat_result:
-            log.info(f"[GUARDIAN] Tier1 자체학습 매칭 — {pat_result['pattern']} ({pat_result['target_file']})")
+            log.info(f"[GUARDIAN] Tier1 매칭 — {pat_result.get('pattern','?')} ({pat_result.get('target_file','?')})")
             return pat_result
     except Exception as e:
-        log.warning(f"[GUARDIAN] Tier1 자체학습 매칭 실패: {e}")
+        log.warning(f"[GUARDIAN] Tier1 매칭 실패: {e}")
 
-    # Tier 1.5: RL 모델 — pattern_fixer 미매칭 시 fixer 예측·적용
-    # ★ 보상(reward)은 여기서 주지 않음 — apply_fix() 실제 결과 후 호출자가 rl_reward() 호출.
-    #   (analyze 시점에 reward 주면 파일 검증 전 "성공" 학습 → 잘못된 신호)
-    try:
-        from JARVIS07_GUARDIAN.rl_fixer import predict as rl_predict
-        from JARVIS07_GUARDIAN.pattern_fixer import _FIXER_REGISTRY
-
-        fixer_name, conf = rl_predict(error_record)
-
-        if fixer_name != "llm_fallback" and conf >= 0.35:
-            fixer_fn = _FIXER_REGISTRY.get(fixer_name)
-            if fixer_fn:
-                rl_result = fixer_fn(error_record)
-                if rl_result and rl_result.get("fixable"):
-                    # source 에 RL 메타 기록 → 호출자가 apply_fix 결과 후 rl_reward 호출에 활용
-                    rl_result["source"]     = f"rl:{fixer_name}(conf={conf:.2f})"
-                    rl_result["_rl_fixer"]  = fixer_name
-                    rl_result["_rl_record"] = error_record
-                    log.info(f"[GUARDIAN] Tier1.5 RL 매칭 — {fixer_name} conf={conf:.2f}")
-                    return rl_result
-        else:
-            log.debug(f"[GUARDIAN] Tier1.5 RL skip — {fixer_name} conf={conf:.2f} < 0.35")
-    except Exception as e:
-        log.debug(f"[GUARDIAN] Tier1.5 RL 오류: {e}")
-
-    # Tier 2: 자체학습·RL 모두 실패 → Claude Code SDK 위임
+    # Tier 2: Tier 1 실패 → Claude Code SDK 위임
     return _empty
