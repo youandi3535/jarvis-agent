@@ -154,7 +154,7 @@ def _generate_charts(html: str, theme: str, sector: str, stocks_data: dict,
     if collection_docs:
         try:
             from JARVIS06_IMAGE.collection_merger import facts_for_chart
-            facts = facts_for_chart(collection_docs, max_n=12)
+            facts = facts_for_chart(collection_docs, max_n=12, keyword=theme)
             if facts:
                 docs_facts_text = "[수집 사실 라인]\n" + "\n".join(facts)
         except Exception as e:

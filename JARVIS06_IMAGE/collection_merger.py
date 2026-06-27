@@ -145,6 +145,19 @@ _NUM_PAT = re.compile(
     r"[\d][\d,\.]*\s*(?:%|원|달러|억|조|만|배|p|bp|pts?|포인트|%p|개|건|명|개월|년)"
 )
 
+# ★ 주식 시가총액 문장 패턴 — 비주식 주제 글에서 차트 데이터 오염 방지
+_STOCK_CAP_PAT = re.compile(
+    r"(?:삼성전자|SK하이닉스|현대차|삼성SDI|셀트리온|LG에너지|카카오|네이버|삼성물산"
+    r"|SK이노베이션|POSCO|포스코|KB금융|하나금융|신한지주|우리금융|LG화학|현대모비스"
+    r"|롯데케미칼|한화에어로|HD현대|삼성바이오).{0,30}\d+(?:\.\d+)?조"
+)
+# 주식 테마 키워드 — 이 키워드가 있는 글에서는 종목 시총 데이터 허용
+_STOCK_THEME_KWS = frozenset([
+    "반도체", "2차전지", "배터리", "바이오", "제약", "자동차", "전기차", "게임",
+    "방산", "조선", "철강", "정유", "에너지", "부동산", "건설", "항공", "유통",
+    "플랫폼", "금융주", "은행주", "보험주", "통신주", "시가총액", "주가", "종목",
+])
+
 
 def _safe_field(doc, name: str, default: str = "") -> str:
     return str(getattr(doc, name, default) or default)
@@ -187,14 +200,19 @@ def facts_for_photo(docs: Iterable, max_n: int = 4) -> list[str]:
     return out
 
 
-def facts_for_chart(docs: Iterable, max_n: int = 8) -> list[str]:
+def facts_for_chart(docs: Iterable, max_n: int = 8, keyword: str = "") -> list[str]:
     """차트용 수치 사실 추출 — 숫자·통계 라인 우선.
 
     cleaned_text 에서 숫자 패턴이 들어간 문장 추출.
     공시·통계 source 우선.
+
+    keyword: 글 키워드. 주식 테마가 아닌 경우 종목 시가총액 문장 자동 제외.
     """
     if not docs:
         return []
+    # ★ 경제 일반 글(줄인상·물가 등)에서 주식 시가총액 facts 오염 방지
+    _filter_stock_cap = not any(k in (keyword or "") for k in _STOCK_THEME_KWS)
+
     _priority = {
         "dart": 0, "ecos": 0, "kosis": 0, "krx": 1, "finance": 1,
         "kor_econ": 2, "naver_news": 3, "news": 3,
@@ -215,6 +233,9 @@ def facts_for_chart(docs: Iterable, max_n: int = 8) -> list[str]:
             if len(sent) < 10 or len(sent) > 220:
                 continue
             if not _NUM_PAT.search(sent):
+                continue
+            # ★ 비주식 주제에서 종목 시가총액 문장 제외 ([281] 2026-06-08)
+            if _filter_stock_cap and _STOCK_CAP_PAT.search(sent):
                 continue
             key = sent[:40]
             if key in seen:

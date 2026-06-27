@@ -2025,9 +2025,17 @@ def run_naver(ts_keyword: str = '') -> dict:
 #  분리 함수 — 대본 생성 + 발행 분리 (병렬화용)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def ts_generate_draft(supreme_block=None) -> dict:
+def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
     """티스토리 대본 생성 (①-⑦ 단계)."""
     print("\n  🔴 [TISTORY-DRAFT] 대본 생성 중...")
+    # ★ 글 작성 전 인메모리 캐시 전체 초기화 — 이전 글 잔재 완전 제거
+    try:
+        from JARVIS06_IMAGE.chart_generator import clear_session_cache as _clear_cache
+        _clear_cache()
+    except Exception as _ce:
+        print(f"  ⚠️ [cache clear] 스킵: {_ce}")
+    _section_img_paths.clear()
+    _para_img_paths.clear()
     _cleanup_tistory_images()
 
     keyword = ""
@@ -2054,13 +2062,27 @@ def ts_generate_draft(supreme_block=None) -> dict:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
             supreme_block = _law_blk()
 
+        # ★ 글 keyword로 JARVIS09 재수집 — 대본 주제에 맞는 데이터로 이미지 생성
+        _kw_collection_docs = list(collection_docs or [])
+        try:
+            from JARVIS09_COLLECTOR import collect_for_theme as _j09_kw_collect
+            _kw_docs = _j09_kw_collect(keyword, sector)
+            if _kw_docs:
+                _kw_collection_docs = _kw_docs
+                print(f"  🕸️ [JARVIS09] '{keyword}' 재수집: {len(_kw_docs)}건 → 이미지 생성 전달")
+            else:
+                print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 0건 — 경제 일반 수집물 유지")
+        except Exception as _j09_kw_e:
+            print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 스킵: {_j09_kw_e}")
+
         from JARVIS02_WRITER.tistory_html_writer import (
             generate_article_html, save_article_html, screenshot_article,
             extract_title, extract_text_content,
         )
         from JARVIS06_IMAGE.injectors import assemble_blocks
 
-        html = generate_article_html(keyword, sector, reason, supreme_block)
+        html = generate_article_html(keyword, sector, reason, supreme_block,
+                                     collection_docs=_kw_collection_docs)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
@@ -2174,9 +2196,17 @@ def ts_publish(draft: dict) -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
 
-def nv_generate_draft(ts_keyword: str = '', supreme_block=None) -> dict:
+def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=None) -> dict:
     """네이버 대본 생성 (①-⑦ 단계) — 티스토리와 중복되지 않은 주제로."""
     print("\n  🟢 [NAVER-DRAFT] 대본 생성 중...")
+    # ★ 글 작성 전 인메모리 캐시 전체 초기화 — 이전 글 잔재 완전 제거
+    try:
+        from JARVIS06_IMAGE.chart_generator import clear_session_cache as _clear_cache
+        _clear_cache()
+    except Exception as _ce:
+        print(f"  ⚠️ [cache clear] 스킵: {_ce}")
+    _section_img_paths.clear()
+    _para_img_paths.clear()
     _cleanup_naver_images()   # ★ 재생성 시 직전 시도 이미지 리셋 (TS 와 동일 패턴)
 
     keyword = ""
@@ -2205,12 +2235,26 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None) -> dict:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
             supreme_block = _law_blk()
 
+        # ★ 글 keyword로 JARVIS09 재수집 — 대본 주제에 맞는 데이터로 이미지 생성
+        _kw_collection_docs = list(collection_docs or [])
+        try:
+            from JARVIS09_COLLECTOR import collect_for_theme as _j09_kw_collect
+            _kw_docs = _j09_kw_collect(keyword, sector)
+            if _kw_docs:
+                _kw_collection_docs = _kw_docs
+                print(f"  🕸️ [JARVIS09] '{keyword}' 재수집: {len(_kw_docs)}건 → 이미지 생성 전달")
+            else:
+                print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 0건 — 경제 일반 수집물 유지")
+        except Exception as _j09_kw_e:
+            print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 스킵: {_j09_kw_e}")
+
         from JARVIS02_WRITER.tistory_html_writer import (
             generate_article_html, extract_title, extract_text_content,
             OUTPUT_HTML_DIR, OUTPUT_IMG_DIR,
         )
 
-        html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver")
+        html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
+                                     collection_docs=_kw_collection_docs)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
