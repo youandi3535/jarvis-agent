@@ -2273,10 +2273,13 @@ with t_err:
     try:
         import sqlite3 as _s3
         _c = _s3.connect(str(DB_PATH))
+        # critical: Tier 2 실패 → wontfix 마킹됨 (수동 검토 대상)
+        # high: Tier 2+3 모두 실패 → wontfix 마킹됨
+        # new/analyzing 중 critical/high: 아직 처리 안 됨 (수동 검토 필요)
         _crit_unresolved = _c.execute("""
             SELECT COUNT(*) FROM error_log
             WHERE (status = 'wontfix'
-                   OR (status IN ('new','analyzing') AND severity IN ('critical','high')))
+                   OR (status IN ('new','analyzing') AND severity = 'critical'))
               AND timestamp >= datetime('now','-60 days')
         """).fetchone()[0]
         _c.close()
@@ -2291,16 +2294,55 @@ with t_err:
     with et1:
         # 심각도별 분포
         section("심각도별 분포 (7일)")
-        sv0, sv1, sv2 = st.columns(3)
+        sv0, sv1, sv2, sv3 = st.columns(4)
         sev_items = [
-            ("HIGH",     gd["high"],     "warn"),
-            ("MEDIUM",   gd["medium"],   "primary"),
-            ("LOW",      gd["low"],      "muted"),
+            ("CRITICAL",  gd["critical"], "danger"),
+            ("HIGH",      gd["high"],     "warn"),
+            ("MEDIUM",    gd["medium"],   "primary"),
+            ("LOW",       gd["low"],      "muted"),
         ]
-        for col, (label, cnt, color) in zip([sv0, sv1, sv2], sev_items):
+        for col, (label, cnt, color) in zip([sv0, sv1, sv2, sv3], sev_items):
             pct = int(cnt / gd["total"] * 100) if gd["total"] > 0 else 0
             with col:
                 md(kpi(label, cnt, color=color, sub=f"전체의 {pct}%"))
+
+        # 자동수정 정책 카드
+        section("🤖 자동수정 정책 (현행)")
+        _pol_cols = st.columns(4)
+        _policy = [
+            ("⚪ LOW",      "Tier 2 → Tier 3\n학습 후 다음엔 Tier 2 해결", "muted"),
+            ("🟡 MEDIUM",   "Tier 2 → Tier 3\n수정 실패 시 알림",          "primary"),
+            ("🟠 HIGH",     "Tier 2 → Tier 3\n항상 알림",                  "warn"),
+            ("🔴 CRITICAL", "Tier 2만\nLLM 생략 · 수동 검토",              "danger"),
+        ]
+        for col, (sev, desc, color) in zip(_pol_cols, _policy):
+            with col:
+                md(kpi(sev, desc.split("\n")[0], color=color, sub=desc.split("\n")[1]))
+
+        # 안전장치 현황 카드
+        section("🔒 안전장치 현황")
+        sg_cols = st.columns(3)
+        try:
+            from JARVIS07_GUARDIAN.guardian_agent import _cb_count, _CB_MAX_HOUR, _ESCALATE_THRESHOLD
+            _cb_used = _cb_count
+            _cb_remain = max(0, _CB_MAX_HOUR - _cb_used)
+        except Exception:
+            _cb_used, _cb_remain, _CB_MAX_HOUR, _ESCALATE_THRESHOLD = 0, 10, 10, 3
+        with sg_cols[0]:
+            md(kpi("Circuit Breaker",
+                   f"{_cb_used}/{_CB_MAX_HOUR}",
+                   color="warn" if _cb_used >= _CB_MAX_HOUR * 0.7 else "success",
+                   sub=f"이번 시간 사용 / 최대 ({_cb_remain}건 남음)"))
+        with sg_cols[1]:
+            md(kpi("빈도 상향 임계값",
+                   f"{_ESCALATE_THRESHOLD}회/1시간",
+                   color="primary",
+                   sub="반복 시 severity 자동 상향"))
+        with sg_cols[2]:
+            md(kpi("보안 파일 차단",
+                   "5종",
+                   color="danger",
+                   sub=".env · 인증파일 · jarvis_daemon.py"))
 
         # 일별 추이
         if g_trend:

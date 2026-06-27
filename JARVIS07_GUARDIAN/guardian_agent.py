@@ -66,17 +66,38 @@ def _status_section() -> str:
         if _processing:
             lines.append(f"⚙️ 현재 분석·수정 중: {len(_processing)}건")
 
-        # 심각도별 new 오류 (CRITICAL + HIGH 합침 → CRITICAL로 표시)
+        # 심각도별 분포
         by_sev = stats.get("by_severity", {})
         crit = by_sev.get("critical", 0)
         high = by_sev.get("high", 0)
-        total_urgent = crit + high
-        if total_urgent:
-            lines.append(f"🔴 CRITICAL: {total_urgent}건")
-        else:
+        med  = by_sev.get("medium", 0)
+        low  = by_sev.get("low", 0)
+        if crit:
+            lines.append(f"🔴 CRITICAL {crit}건 — Tier 2 자동 시도 · 수동 검토 필요")
+        if high:
+            lines.append(f"🟠 HIGH {high}건 — Tier 2→3 자동 수정 중")
+        if not crit and not high:
             lines.append("✅ 긴급 오류 없음")
+        lines.append(f"🟡 MEDIUM {med}건 · ⚪ LOW {low}건")
 
-        # 스캔 잡 상태
+        # 자동수정 정책 요약
+        lines.append(
+            "━━━━━━━━━━━━━━━━━━\n"
+            "⚙️ *자동수정 정책*\n"
+            "LOW/MED/HIGH → Tier 2(패턴) → Tier 3(LLM Opus)\n"
+            "CRITICAL     → Tier 2(패턴)만 → 수동 검토\n"
+            f"3회 반복 → severity 자동 상향 | Circuit breaker {_CB_MAX_HOUR}건/시간"
+        )
+
+        # Circuit breaker 현재 사용량
+        import time as _t
+        with _CB_LOCK:
+            _age = _t.time() - _cb_hour_ts
+            _remaining = max(0, _CB_MAX_HOUR - _cb_count)
+        if _cb_count > 0:
+            lines.append(f"⚡ Circuit breaker: 이번 시간 {_cb_count}/{_CB_MAX_HOUR}건 사용 (남은 {_remaining}건)")
+
+        # 로그 스캔 다음 실행
         try:
             from JARVIS04_SCHEDULER.job_catalog import get_apscheduler
             from datetime import datetime as _dt
