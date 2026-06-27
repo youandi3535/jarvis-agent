@@ -4,7 +4,7 @@
 
 **트렌드 감지 → 수집 → 글 생성 → 이미지 → 발행 → 자가학습까지 스스로 도는 10-모듈 멀티에이전트 시스템**
 
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![Claude](https://img.shields.io/badge/Anthropic-Claude%20Sonnet%204.6%20%2F%20Opus%204.6-D97757?style=flat-square&logo=anthropic&logoColor=white)](https://anthropic.com)
 [![LangGraph](https://img.shields.io/badge/LangGraph-ReAct%20Orchestration-FF6B35?style=flat-square)](https://langchain-ai.github.io/langgraph/)
 [![Selenium](https://img.shields.io/badge/Selenium-4.x-43B02A?style=flat-square&logo=selenium&logoColor=white)](https://selenium.dev)
@@ -31,9 +31,9 @@
 
 <div align="center">
 
-| 🗂️ 에이전트 모듈 | 📝 Python 코드 | 📄 파일 수 | 🔧 등록 도구 | 🛡️ 정책 검증 항목 | 🧠 학습 패턴 누적 |
+| 🗂️ 에이전트 모듈 | 📝 Python 코드 | 📄 파일 수 | 🔧 등록 도구 | 🛡️ 정책 검증 항목 | 🧠 누적 오류 자동처리 |
 |:-:|:-:|:-:|:-:|:-:|:-:|
-| **10개** | **68,308 LOC** | **169개** | **42개** | **27종** | **265개 / 870회 적중** |
+| **10개** | **68,900 LOC** | **168개** | **29개** | **40종** | **1,378건 · 해결률 82%** |
 
 </div>
 
@@ -83,9 +83,9 @@
 | 📝 **블로그 자동 발행** | 경제 브리핑(매일 06:30) + 테마주 분석(매일 16:00) — 네이버·티스토리 동시 발행 |
 | 🖼️ **AI 이미지 자동 생성** | 글 키워드 기반 Pollinations.ai → 매 글마다 새로운 이미지 창작 (dedupe 포함) |
 | 📡 **트렌드 레이더** | Google Trends + 네이버 DataLab 실시간 수집 → 핫 키워드 자동 탐지 |
-| 🛡️ **자동 캐치·수정 시스템** | `catch()` 단일 진입점 → Tier 1(패턴·Contextual Bandit) → Tier 2(LLM Opus 4.6) — 전 심각도 자동 복구 |
+| 🛡️ **자동 캐치·수정 시스템** | `catch()` 단일 진입점 → Tier 1(패턴·Contextual Bandit) → Tier 2(LLM Opus 4.6) — LOW/MED/HIGH 자동 복구 (CRITICAL은 패턴만 + 수동 검토) |
 | 🔒 **보안 전문가급 안전장치** | Circuit breaker · 빈도 기반 severity 자동 상향(3회) · 보안 파일 수정 절대 금지 |
-| 🏛️ **헌법형 거버넌스** | `precommit_check.py` 947줄 — 27종 정책을 pre-commit·부팅·주간감사 3중 강제 |
+| 🏛️ **헌법형 거버넌스** | `precommit_check.py` 947줄 — 40종 정책을 pre-commit 훅·주간 감사로 강제 (+ 데몬 부팅은 `preflight.py` 검증) |
 | 📊 **통합 대시보드** | hub.py 단일 진입점(port 9199) — 발행 이력·오류 현황·학습 곡선 한눈에 |
 | 💬 **텔레그램 인터페이스** | 자유 문장 → ReAct 라우터 → 에이전트 디스패치 + 인라인 버튼 HITL 승인 |
 
@@ -104,15 +104,16 @@ flowchart TD
     B --> C["JARVIS03 RADAR\n트렌드 감지·학습\nGoogle Trends + 네이버 DataLab"]
     C --> D["JARVIS09 COLLECTOR\n멀티소스 수집·정제\n뉴스·블로그·금융·학술"]
     D --> E["JARVIS02 WRITER\n글 생성 + 헌법 검증\nBLOG_SUPREME_LAW.md"]
-    E --> F["JARVIS06 IMAGE\nAI 차트·인포그래픽·썸네일\nPollinations.ai 폴백 체인"]
+    E --> F["JARVIS06 IMAGE\nAI 사진·SVG 차트·썸네일\nPollinations.ai + Claude SVG"]
     F --> G["JARVIS08 PUBLISH\n네이버·티스토리 Selenium\n발행 검증 + 스크린샷"]
     G --> H(["📤 성과 수집 → 학습 가중치 갱신"])
     H -. "📈 학습 루프" .-> C
 
     subgraph COMMON["⚙️ 공통 레이어"]
-        I["JARVIS07 GUARDIAN\ncatch() 단일 진입점 → Tier 1(패턴·Bandit) → Tier 2(LLM Opus)\n전 심각도 자동수정 · Circuit breaker · 학습 루프"]
+        I["JARVIS07 GUARDIAN\ncatch() 단일 진입점 → Tier 1(패턴·Bandit) → Tier 2(LLM Opus)\nLOW/MED/HIGH 자동수정(critical 제외) · Circuit breaker · 학습 루프"]
         J["JARVIS00 INFRA\npreflight · harness · event bus\n/status · /restart"]
         K["JARVIS04 SCHEDULER\nAPScheduler 단일 진입점\n모든 cron 잡 관리"]
+        O["JARVIS05 VISION\n전 에이전트 메트릭 수집·집계·시각화\nFastAPI :8505"]
     end
 
     E -. "⚠️ 오류" .-> I
@@ -141,7 +142,8 @@ flowchart TD
 | **JARVIS02** WRITER | `JARVIS02_WRITER/` | 경제 브리핑·테마주 블로그 자동 작성 (헌법 준수) | NY |
 | **JARVIS03** RADAR | `JARVIS03_RADAR/` | Google Trends + 네이버 DataLab 트렌드 수집·분석 | NY |
 | **JARVIS04** SCHEDULER | `JARVIS04_SCHEDULER/` | APScheduler 단일 진입점 — 모든 잡 등록·조회·제어 | HJ |
-| **JARVIS06** IMAGE | `JARVIS06_IMAGE/` | AI 이미지 생성(폴백 체인)·SVG 차트·썸네일·dedupe | NY |
+| **JARVIS05** VISION | `JARVIS05_VISION/` | 전 에이전트 메트릭 수집·집계·시각화 API (FastAPI :8505) | HJ |
+| **JARVIS06** IMAGE | `JARVIS06_IMAGE/` | AI 사진(Pollinations)·Claude SVG 차트·썸네일·dedupe | NY |
 | **JARVIS07** GUARDIAN | `JARVIS07_GUARDIAN/` | 오류 수집·2-Tier 자동 수정(패턴·Bandit→LLM)·자가 진단 | HJ |
 | **JARVIS08** PUBLISH | `JARVIS08_PUBLISH/` | 네이버·티스토리 Selenium 발행자·카테고리·쿠키 관리 | NY |
 | **JARVIS09** COLLECTOR | `JARVIS09_COLLECTOR/` | 주제별 뉴스·블로그·금융 데이터 수집·정제 | NY |
@@ -177,12 +179,14 @@ gantt
         네이버·티스토리 발행 (PUBLISH)  :16:50, 10m
 ```
 
+<sub>※ 실제 cron 잡은 **06:30 / 16:00 두 개의 세트 트리거**뿐입니다. 각 세트는 단일 콜백 안에서 자가진단→수집→글→이미지→발행을 *순차* 실행하며, 위 간트의 하위 단계 시각은 흐름 이해용 예시입니다(자가진단 소요에 따라 실제 발행 시각은 가변).</sub>
+
 | 시각 | 잡 이름 | 내용 |
 |------|---------|------|
 | **06:30** | 경제 브리핑 세트 | 자가 진단 → 경제 지표 수집 → 글 작성 → 이미지 → 발행 |
 | **16:00** | 테마주 분석 세트 | 자가 진단 → 트렌드 테마 선정 → 글 작성 → 이미지 → 발행 |
 | **03:30** | git 회고 | 전날 코드 변경 D-1 학습 자산화 |
-| **04:30** | 헌법 감사 | 정책 위반·드리프트 검출 + 개선 제안 |
+| **매주 일 04:30** | 헌법 감사 | 정책 위반·드리프트 검출 + 개선 제안 (주 1회) |
 | **격주 월 04:00** | 파일 정리 | 오래된 로그·스크린샷·트렌드 캐시 자동 삭제 |
 
 ---
@@ -236,10 +240,11 @@ flowchart LR
 
 | 지표 | 현재 값 | 의미 |
 |------|---------|------|
-| 누적 패턴 | **265개** | fingerprint 즉시 매칭 가능 오류 유형 |
-| 총 적중 수 | **870회** | LLM 호출 없이 자동 처리된 횟수 |
-| 오류 기록 | **285건 / 5,945줄** | `JARVIS07_GUARDIAN/ERRORS.md` 구조화 회고 |
-| 체크포인트 | **51MB** | `react_checkpoints.sqlite` (ReAct 실가동 증거) |
+| 누적 패턴 | **44개** | fingerprint 즉시 매칭 가능 오류 유형 (노이즈 정리 후 유효 패턴) |
+| 총 적중 수 | **249회** | LLM 호출 없이 자동 처리된 횟수 (런타임 누적·증가 중) |
+| 누적 오류 처리 | **1,378건 / 82%** | `error_log` 누적 수집 · 자동+수동 해결률 |
+| 오류 기록 | **289건 / 5,981줄** | `JARVIS07_GUARDIAN/ERRORS.md` 구조화 회고 |
+| 체크포인트 | **50MB** | `react_checkpoints.sqlite` (ReAct 실가동 증거) |
 
 ---
 
@@ -256,7 +261,7 @@ flowchart LR
               │
               ▼
   _safe_path 3중 방어  ───  bash 화이트리스트
-  (경로탈출/심볼릭/deny dir)   (14개 deny 패턴)
+  (경로탈출/심볼릭/deny dir)   (15개 deny 패턴)
               │
               ▼
      .bak 자동 백업 + AST 검증
@@ -266,7 +271,7 @@ flowchart LR
 | 보호 레이어 | 구현 | 역할 |
 |------------|------|------|
 | HITL 승인 게이트 | `approved_context` / `PermissionError` | 외부 영향 도구 100% 차단 |
-| 정책 정적 강제 | `precommit_check.py` 947줄 | 27종 위반 자동 감지 |
+| 정책 정적 강제 | `precommit_check.py` 947줄 | 40종 위반 자동 감지 |
 | 파일 안전 박스 | `_safe_path()` | 경로 탈출·심볼릭·deny dir 차단 |
 | 셸 안전 박스 | `_BASH_WHITELIST` | 화이트리스트 외 명령 차단 |
 | 변경 안전망 | `.bak` 백업 + AST 검증 | 코드 수정 실패 시 자동 롤백 |
@@ -278,14 +283,17 @@ flowchart LR
 | 명령어 | 설명 | 권한 |
 |--------|------|------|
 | `/status` | 전체 에이전트 상태 요약 | 조회 |
-| `/jobs` | 스케줄 잡 목록 + 다음 실행 시각 | 조회 |
-| `/errors` | 최근 오류 목록 | 조회 |
-| `/restart` | 데몬 재시작 | ✅ 승인 필요 |
-| `"경제 브리핑 써줘"` | ReAct 라우터 → WRITER 디스패치 | ✅ 승인 필요 |
-| `"AI 트렌드 분석해줘"` | ReAct 라우터 → RADAR 디스패치 | ✅ 승인 필요 |
-| `"에러 수정해줘"` | ReAct 라우터 → GUARDIAN 디스패치 | ✅ 승인 필요 |
+| `/jobs` · `/jobs_next` | 스케줄 잡 목록 + 다음 실행 시각 | 조회 |
+| `/errors` · `/errors_stats` | 최근 오류 목록 / 통계 | 조회 |
+| `/help` · `/agents` | 명령 도움말 / 등록 에이전트 | 조회 |
+| `/restart` · `/quit` | 데몬 재시작 / 종료 (슬래시는 즉시 실행) | 관리 |
+| `"경제 브리핑 써줘"` | ReAct → WRITER 발행 (blog.economic_post.create) | ✅ 승인 필요 |
+| `"테마주 글 써줘"` | ReAct → WRITER 발행 (blog.theme_post.create) | ✅ 승인 필요 |
+| `"데몬 재시작해줘"` | 자유 문장 → infra.daemon.restart | ✅ 승인 필요 |
+| `"AI 트렌드 분석해줘"` | ReAct → RADAR (trend.report) | 조회 (SAFE) |
+| `"최근 오류 보여줘"` | ReAct → GUARDIAN (error.list) | 조회 (SAFE) |
 
-> 모든 **외부 영향** 명령은 텔레그램 인라인 버튼 ✅/❌ 통과 후에만 실행됩니다.
+> **외부 영향** 동작(발행·잡 변경·자유 문장 데몬 제어)만 텔레그램 인라인 버튼 ✅/❌ 통과 후 실행됩니다. 슬래시 `/restart`·`/quit`은 관리 명령으로 즉시 실행, 조회/SAFE 인텐트는 승인 없이 응답합니다. (오류 자동 수정은 내부 자동 승인 — 인라인 버튼 없음)
 
 ---
 
@@ -293,7 +301,7 @@ flowchart LR
 
 ### 사전 요구사항
 
-- Python 3.11+
+- Python 3.10+ (개발·운영 환경 3.10.19)
 - Chrome + ChromeDriver (Selenium 발행용)
 - 텔레그램 봇 토큰 ([BotFather](https://t.me/BotFather))
 - 네이버 블로그 계정 / 티스토리 블로그 계정
@@ -331,8 +339,10 @@ cp .env.example .env
 | `NV_USERNAME` / `NV_PASSWORD` | 네이버 계정 | [naver.com](https://naver.com) |
 | `TS_USERNAME` / `TS_PASSWORD` | 티스토리 계정 | [tistory.com](https://tistory.com) |
 | `NAVER_CLIENT_ID` / `SECRET` | 네이버 DataLab API | [developers.naver.com](https://developers.naver.com) |
-| `GOOGLE_AI_API_KEY` | Gemini 이미지 생성 | [aistudio.google.com](https://aistudio.google.com) |
 | `BOK_ECOS_KEY` | 한국은행 ECOS API | [ecos.bok.or.kr](https://ecos.bok.or.kr) |
+| `DART_API_KEY` / `KOSIS_API_KEY` | (선택) 전자공시·통계청 수집 | DART / KOSIS |
+
+> 이미지 생성은 **Pollinations.ai(키 불필요) + Claude SVG**를 사용하므로 별도 이미지 API 키가 필요 없습니다.
 
 ### 실행
 
@@ -365,11 +375,11 @@ streamlit run hub.py --server.port 9199
 | **스케줄러** | APScheduler 3.x | cron·interval 단일 진입점 |
 | **브라우저 자동화** | Selenium 4 + Chrome | 네이버·티스토리 발행 |
 | **데이터베이스** | SQLite (WAL 모드) | 공용 DB·체크포인트 |
-| **벡터 검색** | ChromaDB | 수집 자료 유사도 검색 |
+| **벡터 검색** | ChromaDB | 오류·Q&A 시맨틱 검색 (GUARDIAN `qa_resolver`) |
 | **강화학습** | Contextual Bandit (Linear UCB · numpy) | Tier 1 fixer 선택을 보상으로 학습 |
 | **트렌드 수집** | pytrends (Google) + 네이버 DataLab API | 실시간 키워드 분석 |
-| **금융 데이터** | pykrx · yfinance · FinanceDataReader | 주가·지표 수집 |
-| **이미지 생성** | Pollinations.ai (AI 사진) + matplotlib (차트) | 글별 맞춤 이미지 |
+| **금융 데이터** | pykrx · yfinance | 주가·지표 수집 |
+| **이미지 생성** | Pollinations.ai (AI 사진) + Claude SVG·matplotlib (차트) | 글별 맞춤 이미지 |
 | **대시보드** | Streamlit | 통합 현황 모니터링 |
 | **알림** | Telegram Bot API | 실시간 승인·보고 |
 
@@ -387,7 +397,7 @@ git 커밋은 단일 계정(`youandi3535`)으로 기록되지만, 설계·구현
 │   에이전트 플랫폼 · 신뢰성 코어   │  │   콘텐츠 · 수집 · 발행 파이프라인  │
 │                                 │  │                                  │
 │  · JARVIS01 (LangGraph ReAct)   │  │  · JARVIS02 (블로그 글 생성)      │
-│  · JARVIS00 (데몬·검증 하니스)   │  │  · JARVIS03 (트렌드 분석)        │
+│  · JARVIS00·05 (데몬·검증·모니터)│  │  · JARVIS03 (트렌드 분석)        │
 │  · JARVIS07 (2-Tier 자동 수정)  │  │  · JARVIS06 (AI 이미지 생성)     │
 │  · JARVIS04 (APScheduler)       │  │  · JARVIS08 (네이버·티스토리)    │
 │  · shared/ · 거버넌스            │  │  · JARVIS09 (데이터 수집·정제)   │
@@ -400,7 +410,7 @@ git 커밋은 단일 계정(`youandi3535`)으로 기록되지만, 설계·구현
 
 | 멤버 | 역할 | 주력 에이전트 |
 |------|------|-------------|
-| **김효중** (HJ) | 주도 개발 · 에이전트 플랫폼 · 신뢰성 코어 | JARVIS00·01·04·07 · shared/ |
+| **김효중** (HJ) | 주도 개발 · 에이전트 플랫폼 · 신뢰성 코어 | JARVIS00·01·04·05·07 · shared/ |
 | **김나연** (NY) | 공동 개발 · 콘텐츠 · 수집 · 발행 파이프라인 | JARVIS02·03·06·08·09 |
 
 > 운영 데몬은 발행 사고·학습 자산 오염 방지를 위해 개발자 macOS 1곳에서만 상시 실행합니다.
@@ -439,7 +449,7 @@ python shared/agent_registration_check.py
 | **단일 진입점** | 도메인별 책임 폴더 고정 (이미지→J06·발행→J08·스케줄→J04·LLM→shared/llm.py) |
 | **HITL 승인** | 외부 영향 도구는 텔레그램 인라인 버튼 ✅ 후에만 실행 |
 | **오류 기록 의무** | 모든 오류·수정 이력 `JARVIS07_GUARDIAN/ERRORS.md` 단일 저장소 |
-| **정적 강제** | `precommit_check.py` — pre-commit + 부팅 + 주간감사 3중 검증 |
+| **정적 강제** | `precommit_check.py` 40종 — pre-commit 훅 + 주간 감사(Auditor) / 데몬 부팅 검증은 `preflight.py`(Layer 0) 별도 |
 | **학습 루프** | 오류 수정 사례 자동 자산화 → 다음 오류는 LLM 0 즉시 처리 |
 
 자세한 규정은 [CLAUDE.md](CLAUDE.md) 참조.
