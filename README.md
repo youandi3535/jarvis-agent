@@ -9,13 +9,19 @@
 [![LangGraph](https://img.shields.io/badge/LangGraph-ReAct%20Orchestration-FF6B35?style=flat-square)](https://langchain-ai.github.io/langgraph/)
 [![Selenium](https://img.shields.io/badge/Selenium-4.x-43B02A?style=flat-square&logo=selenium&logoColor=white)](https://selenium.dev)
 [![APScheduler](https://img.shields.io/badge/APScheduler-3.x-4DABF7?style=flat-square)](https://apscheduler.readthedocs.io)
-[![scikit-learn](https://img.shields.io/badge/scikit--learn-RL%20Model-F7931E?style=flat-square&logo=scikitlearn&logoColor=white)](https://scikit-learn.org)
+[![Contextual Bandit](https://img.shields.io/badge/Contextual%20Bandit-Linear%20UCB-F7931E?style=flat-square)](https://en.wikipedia.org/wiki/Multi-armed_bandit)
 [![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io)
 [![SQLite](https://img.shields.io/badge/SQLite-WAL%20Mode-003B57?style=flat-square&logo=sqlite&logoColor=white)](https://sqlite.org)
 [![Team](https://img.shields.io/badge/Team-2인%20공동개발-00C851?style=flat-square)](#-팀--역할)
 [![Platform](https://img.shields.io/badge/Platform-macOS-000000?style=flat-square&logo=apple&logoColor=white)](https://apple.com/macos)
 
 > 텔레그램으로 명령하면 알아서 글을 쓰고, 이미지를 만들고, 발행하고, 오류가 나면 스스로 고칩니다.
+
+<br>
+
+<img src="docs/dashboard/01-home.png" alt="JARVIS Hub — 10개 에이전트 실시간 통합 대시보드" width="940"/>
+
+<sub>▲ <b>JARVIS Hub 통합 대시보드</b> (<code>localhost:9199</code>) — 10개 에이전트(JARVIS00~09)의 실시간 상태·상호 연결·메트릭을 한 화면에. 데몬 기동 시 자동 실행.</sub>
 
 </div>
 
@@ -33,6 +39,43 @@
 
 ---
 
+## 🖥️ 웹 대시보드 — 실시간 시연
+
+**▶ 로컬 실행 주소: [`http://localhost:9199`](http://localhost:9199)**
+
+`python jarvis_daemon.py` 한 줄이면 데몬과 함께 Streamlit 통합 현황판(`hub.py` — 대시보드 단일 진입점)이 자동으로 떠오릅니다. 발행·트렌드·품질·성과·AI 학습·오류·스케줄·시스템을 **9개 탭** 한 화면에서 실시간 모니터링합니다.
+
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/dashboard/07-guardian.png" alt="오류 자동 캐치·수정"/><br>
+      <sub><b>🛡️ 오류 자동 캐치·수정</b><br>catch() 단일 진입점 → 2-Tier 자동 복구 · 누적 1,378건 · 자동+수동 해결률 82%</sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/dashboard/02-radar.png" alt="트렌드 레이더"/><br>
+      <sub><b>📡 트렌드 레이더</b><br>Google·Naver 50개 키워드 실시간 수집 + 발행 기회점수 TOP 15</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <img src="docs/dashboard/03-publish.png" alt="발행 관리"/><br>
+      <sub><b>📝 발행 관리</b><br>네이버·티스토리 발행 이력·파이프라인·품질 분석 (이번 달 66건)</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="docs/dashboard/08-scheduler.png" alt="스케줄러"/><br>
+      <sub><b>🗓️ 스케줄러</b><br>cron/interval 35개 잡 단일 진입점 · 오늘 50건 실행 · 성공률 100%</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" colspan="2">
+      <img src="docs/dashboard/09-system.png" alt="시스템 — 10개 에이전트" width="60%"/><br>
+      <sub><b>⚙️ 시스템</b> — 데몬 가동 상태 · DB 용량 · 10개 에이전트별 잡 실행 이력</sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## ✨ 핵심 기능
 
 | 기능 | 설명 |
@@ -40,7 +83,7 @@
 | 📝 **블로그 자동 발행** | 경제 브리핑(매일 06:30) + 테마주 분석(매일 16:00) — 네이버·티스토리 동시 발행 |
 | 🖼️ **AI 이미지 자동 생성** | 글 키워드 기반 Pollinations.ai → 매 글마다 새로운 이미지 창작 (dedupe 포함) |
 | 📡 **트렌드 레이더** | Google Trends + 네이버 DataLab 실시간 수집 → 핫 키워드 자동 탐지 |
-| 🛡️ **자동 캐치·수정 시스템** | `catch()` 단일 진입점 → Tier 2(패턴·Bandit) → Tier 3(Opus 4.6) — 전 심각도 자동 복구 |
+| 🛡️ **자동 캐치·수정 시스템** | `catch()` 단일 진입점 → Tier 1(패턴·Contextual Bandit) → Tier 2(LLM Opus 4.6) — 전 심각도 자동 복구 |
 | 🔒 **보안 전문가급 안전장치** | Circuit breaker · 빈도 기반 severity 자동 상향(3회) · 보안 파일 수정 절대 금지 |
 | 🏛️ **헌법형 거버넌스** | `precommit_check.py` 947줄 — 27종 정책을 pre-commit·부팅·주간감사 3중 강제 |
 | 📊 **통합 대시보드** | hub.py 단일 진입점(port 9199) — 발행 이력·오류 현황·학습 곡선 한눈에 |
@@ -67,7 +110,7 @@ flowchart TD
     H -. "📈 학습 루프" .-> C
 
     subgraph COMMON["⚙️ 공통 레이어"]
-        I["JARVIS07 GUARDIAN\ncatch() 단일 진입점 → Tier 2(패턴) → Tier 3(Opus)\n전 심각도 자동수정 · Circuit breaker · 학습 루프"]
+        I["JARVIS07 GUARDIAN\ncatch() 단일 진입점 → Tier 1(패턴·Bandit) → Tier 2(LLM Opus)\n전 심각도 자동수정 · Circuit breaker · 학습 루프"]
         J["JARVIS00 INFRA\npreflight · harness · event bus\n/status · /restart"]
         K["JARVIS04 SCHEDULER\nAPScheduler 단일 진입점\n모든 cron 잡 관리"]
     end
@@ -99,7 +142,7 @@ flowchart TD
 | **JARVIS03** RADAR | `JARVIS03_RADAR/` | Google Trends + 네이버 DataLab 트렌드 수집·분석 | NY |
 | **JARVIS04** SCHEDULER | `JARVIS04_SCHEDULER/` | APScheduler 단일 진입점 — 모든 잡 등록·조회·제어 | HJ |
 | **JARVIS06** IMAGE | `JARVIS06_IMAGE/` | AI 이미지 생성(폴백 체인)·SVG 차트·썸네일·dedupe | NY |
-| **JARVIS07** GUARDIAN | `JARVIS07_GUARDIAN/` | 오류 수집·3-Tier 자동 수정·RL 학습 엔진·자가 진단 | HJ |
+| **JARVIS07** GUARDIAN | `JARVIS07_GUARDIAN/` | 오류 수집·2-Tier 자동 수정(패턴·Bandit→LLM)·자가 진단 | HJ |
 | **JARVIS08** PUBLISH | `JARVIS08_PUBLISH/` | 네이버·티스토리 Selenium 발행자·카테고리·쿠키 관리 | NY |
 | **JARVIS09** COLLECTOR | `JARVIS09_COLLECTOR/` | 주제별 뉴스·블로그·금융 데이터 수집·정제 | NY |
 
@@ -150,7 +193,7 @@ gantt
 
 ```mermaid
 flowchart LR
-    subgraph CATCH["📡 Tier 1 — 자동 캐치 (catch() 단일 진입점)"]
+    subgraph CATCH["📡 자동 캐치 (catch() 단일 진입점 · 탐지)"]
         H1["sys.excepthook\n메인 스레드 미처리 예외"]
         H2["threading.excepthook\n백그라운드 스레드 예외"]
         H3["APScheduler listener\n스케줄 잡 실패"]
@@ -162,21 +205,21 @@ flowchart LR
 
     C --> SAFE["안전장치\nCircuit breaker\n빈도 상향(3회)\n보안 파일 차단"]
 
-    SAFE --> T2
+    SAFE --> T1
 
-    subgraph TIERS["자동 수정"]
-        T2{"Tier 2\n패턴·Bandit\nGroup1(hit≥3)+Group2(신규)\nLLM 호출 0"}
-        T3{"Tier 3\nClaude Opus 4.6\nAST 검증 + .bak 롤백"}
+    subgraph TIERS["자동 수정 (정수 티어, 1부터)"]
+        T1{"Tier 1\n패턴·Contextual Bandit\nGroup1(hit≥3)+Group2(신규)\nLLM 호출 0"}
+        T2{"Tier 2\nLLM Claude Opus 4.6\nAST 검증 + .bak 롤백"}
     end
 
+    T1 -->|"✅ 수정"| OK
+    T1 -->|"패턴 없음"| T2
     T2 -->|"✅ 수정"| OK
-    T2 -->|"패턴 없음"| T3
-    T3 -->|"✅ 수정"| OK
 
     OK["수정 성공\n잡 재시도\n텔레그램 알림"] --> LEARN["learned_patterns.json\nfingerprint 자동 등록\nhit_count 누적"]
-    LEARN -. "다음엔 Tier 2에서 즉시 처리" .-> T2
+    LEARN -. "다음엔 Tier 1에서 즉시 처리" .-> T1
 
-    T3 -->|"❌ 실패"| ESC["텔레그램 알림\n수동 검토 요청"]
+    T2 -->|"❌ 실패"| ESC["텔레그램 알림\n수동 검토 요청"]
 
     style CATCH fill:#0d1b2a,stroke:#4a9eff,color:#fff
     style TIERS fill:#1a1a2e,stroke:#7c83fd,color:#fff
@@ -184,7 +227,7 @@ flowchart LR
 
 **심각도별 처리 매트릭스:**
 
-| 심각도 | Tier 2 (패턴) | Tier 3 (LLM) | 텔레그램 알림 |
+| 심각도 | Tier 1 (패턴·Bandit) | Tier 2 (LLM) | 텔레그램 알림 |
 |--------|:---:|:---:|:---:|
 | ⚪ LOW | ✅ | ✅ → 학습 저장 | ✅ |
 | 🟡 MEDIUM | ✅ | ✅ | ✅ |
@@ -323,7 +366,7 @@ streamlit run hub.py --server.port 9199
 | **브라우저 자동화** | Selenium 4 + Chrome | 네이버·티스토리 발행 |
 | **데이터베이스** | SQLite (WAL 모드) | 공용 DB·체크포인트 |
 | **벡터 검색** | ChromaDB | 수집 자료 유사도 검색 |
-| **RL 모델** | scikit-learn SGDClassifier | 온라인 학습 오류 분류기 |
+| **강화학습** | Contextual Bandit (Linear UCB · numpy) | Tier 1 fixer 선택을 보상으로 학습 |
 | **트렌드 수집** | pytrends (Google) + 네이버 DataLab API | 실시간 키워드 분석 |
 | **금융 데이터** | pykrx · yfinance · FinanceDataReader | 주가·지표 수집 |
 | **이미지 생성** | Pollinations.ai (AI 사진) + matplotlib (차트) | 글별 맞춤 이미지 |
@@ -345,7 +388,7 @@ git 커밋은 단일 계정(`youandi3535`)으로 기록되지만, 설계·구현
 │                                 │  │                                  │
 │  · JARVIS01 (LangGraph ReAct)   │  │  · JARVIS02 (블로그 글 생성)      │
 │  · JARVIS00 (데몬·검증 하니스)   │  │  · JARVIS03 (트렌드 분석)        │
-│  · JARVIS07 (3-Tier RL 학습)    │  │  · JARVIS06 (AI 이미지 생성)     │
+│  · JARVIS07 (2-Tier 자동 수정)  │  │  · JARVIS06 (AI 이미지 생성)     │
 │  · JARVIS04 (APScheduler)       │  │  · JARVIS08 (네이버·티스토리)    │
 │  · shared/ · 거버넌스            │  │  · JARVIS09 (데이터 수집·정제)   │
 └─────────────────────────────────┘  └──────────────────────────────────┘

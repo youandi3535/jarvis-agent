@@ -1,8 +1,8 @@
 """JARVIS07_GUARDIAN/qa_resolver.py — 3-tier Q&A 자가 해결 엔진.
 
-Tier 1:   로컬 FTS5 캐시 (hit_count ≥ 3, 정확/overlap 게이트)
-Tier 1.5: ChromaDB 시맨틱 벡터 검색 (5중 검증: L1~L5)
-Tier 2:   Claude API fallback (해결 후 학습 누적)
+Tier 1: 로컬 FTS5 캐시 (hit_count ≥ 3, 정확/overlap 게이트)
+Tier 2: ChromaDB 시맨틱 벡터 검색 (5중 검증: L1~L5)
+Tier 3: Claude API fallback (해결 후 학습 누적)
 """
 from __future__ import annotations
 
@@ -129,7 +129,7 @@ def resolve(
     question: str,
     fast: bool = False,
 ) -> dict[str, Any]:
-    """2-tier 자가 해결.
+    """3-tier 자가 해결 (Tier 1 FTS5 캐시 → Tier 2 벡터 검색 → Tier 3 Claude).
 
     Args:
         question: 사용자 질문 원문
@@ -160,7 +160,7 @@ def resolve(
         log.debug(f"[QAResolver] Tier1 오류: {e}")
         similar_qa = []
 
-    # Tier 1.5: ChromaDB 시맨틱 벡터 검색 (5중 검증 내장)
+    # Tier 2: ChromaDB 시맨틱 벡터 검색 (5중 검증 내장)
     # fast=True (UserPromptSubmit hook 경로) 에서는 건너뜀 — HuggingFace 모델 로딩 hang 방지
     if fast:
         result = _default.copy()
@@ -173,7 +173,7 @@ def resolve(
         if vec_candidates:
             best = vec_candidates[0]
             log.info(
-                f"[QAResolver] ✅ Tier1.5 벡터 히트 "
+                f"[QAResolver] ✅ Tier2 벡터 히트 "
                 f"(sim={best['similarity']:.3f} conf={best['confidence']:.3f} "
                 f"hit={best['hit_count']})"
             )
@@ -185,9 +185,9 @@ def resolve(
                 "similar_qa": similar_qa,
             }
     except Exception as e:
-        log.debug(f"[QAResolver] Tier1.5 오류: {e}")
+        log.debug(f"[QAResolver] Tier2 오류: {e}")
 
-    # Tier 2: 해결 실패 → Claude에게 위임 (similar_qa 는 컨텍스트로 전달)
+    # Tier 3: 해결 실패 → Claude에게 위임 (similar_qa 는 컨텍스트로 전달)
     result = _default.copy()
     result["similar_qa"] = similar_qa
     return result

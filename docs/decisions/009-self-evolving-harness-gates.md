@@ -62,9 +62,9 @@ ADR 007 비전: "Self-Evolving Harness" (광의)
   │   └ harness.py           — Layer 1~4 검증 순환 → 송출 엔진 (협의)
   │
   └─ JARVIS07_GUARDIAN/      ← 학습 *두뇌* (지능)
-      ├ error_collector      — 오류 감지·박제
-      ├ pattern_fixer        — 정적 fixer 5종 + learned_patterns
-      ├ error_analyzer       — 3-Tier 분석
+      ├ error_collector      — 오류 감지·박제 (catch() 단일 진입점)
+      ├ pattern_fixer        — static 6종 + learned_patterns + Contextual Bandit
+      ├ error_analyzer       — 2-Tier 분석 (Tier 1 패턴·Bandit → Tier 2 LLM)
       └ ERRORS.md            — 영구 이력
 ```
 
@@ -86,7 +86,7 @@ harness.run_action() → 검증 실패 감지
     ↓ 호출
 error_collector.report(source="harness", context={layer:3, action:..., step:..., kind:..., detail:...})
     ↓
-GUARDIAN 의 apply_fix() — 3-Tier 자동 수정 (학습 캐시 → 정적 → LLM)
+GUARDIAN 의 apply_fix() — 2-Tier 자동 수정 (Tier 1 패턴·Bandit → Tier 2 LLM)
     ↓
 learned_patterns 영구 박제
     ↓ 다음 회차

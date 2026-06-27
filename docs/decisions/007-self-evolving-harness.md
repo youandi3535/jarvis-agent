@@ -26,7 +26,7 @@ JARVIS07 GUARDIAN 을 *Self-Evolving Harness* 의 단일 진입점으로 박제.
 
 ### 진화 루프
 ```
-[오류 발생] → [error_collector] → [pattern_fixer Tier 1·2·3]
+[오류 발생] → [catch() 단일 진입점] → [Tier 1 패턴·Bandit] → [Tier 2 LLM]
                                       ↓
                             [fix 성공] → [learned_patterns 자동 등록]
                                               ↓

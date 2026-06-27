@@ -468,7 +468,7 @@ def run_auto_repair() -> None:
 
     try:
         # ── [L2] ① 정적 패턴 + 학습 패치 우선 적용 ──────────────────
-        # ★ 사용자 박제 2026-05-31 — 1순위: 정적패턴·학습패치 / 3순위: Claude Code SDK
+        # ★ 사용자 박제 2026-05-31 — Tier 1: 정적패턴·학습패치 우선 → Tier 2: Claude Code SDK
         @action_step(name="① 정적 패턴·학습 패치 우선 적용")
         def _step_pre_patch(state: dict):
             pre_applied = 0
@@ -782,7 +782,7 @@ def run_auto_repair_targeted(
 ) -> bool:
     """포스팅 실패에 특화된 targeted fix (빠른 수정, 전체 진단 아님).
 
-    incident_responder Tier 4 — Tier 1·2·3 모두 실패 시 호출.
+    incident_responder Tier 2 (LLM 자동 수정) — Tier 1(패턴·Bandit) 실패 시 호출.
     최대 10분 timeout.
 
     Returns:

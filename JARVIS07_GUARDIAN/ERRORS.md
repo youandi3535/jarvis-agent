@@ -1,5 +1,25 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [286] 수동검토 큐 214건 오염 — 일시적/외부/제어흐름 오류가 wontfix 로 잘못 분류 (2026-06-28)
+
+- **증상**: 대시보드 수동검토 탭에 210+건 누적. 대부분 ① 네트워크 일시오류(ConnectionError telegram·radar) ② Selenium 환경(WebDriverException ERR_INTERNET_DISCONNECTED·SessionNotCreated·InvalidSessionId·TimeoutException) ③ 외부 API(Pollinations 402·HuggingFace HTTP 402/410) ④ 정상 제어흐름(harness "종목 데이터 0개 — 다른 테마로") ⑤ Claude CLI 운영(quota·timeout·cli_not_found) ⑥ 이미 수정된 코드버그(stale) ⑦ stale preflight(모듈 설치됐는데 옛 PATH 런 실패). 진짜 미수정 코드버그는 0건.
+- **원인**: `wontfix`(코드 결함 미해결)와 transient/외부/제어흐름(코드 패치 불가)을 구분하는 게이트 부재. 일시 오류가 Tier 1·2 파이프라인을 거쳐 수정 실패 → `wontfix` 마킹 → 수동검토 큐 오염 + "자동수정 실패" 알림 폭주.
+- **헛다리**: severity.py `_LOW_PATTERNS` 가 이미 일부 transient 를 `low` 로 분류했으나, *심각도만 낮출 뿐* 여전히 fix 파이프라인 진입 → wontfix 도달. 심각도 분류 ≠ 자동수정 대상 제외.
+- **해결**: ① `severity.is_transient(error_type, message, source)` 신설 — 네트워크/Selenium 타입 + 외부·운영·제어흐름 메시지 패턴. 코드버그 타입(Import/Name/Key/Attribute/Type/Value)은 *절대 transient 분류 안 함*(오탐 0). ② `guardian_agent._orchestrate` 진입부 안전장치 0 — transient 면 즉시 `ignored`(자동수정 파이프라인 미진입, wontfix 도달 차단). ③ 라이브 DB 일회성 정리: 214건 재분류(transient/운영 189 → ignored, 이미 수정 확인된 코드버그·stale preflight 25 → resolved) → 수동검토 큐 0건.
+- **검증**: ① 이미 수정 확인 — `_stocks_text` 재export·`_rgba` 비-hex 가드·`min(y_vals)` 빈 시퀀스 가드·`as_completed` 제거·KeyError 'bg' 제거 (3주 전 stale). ② preflight 대상 모듈(crewai·yfinance·selenium·apscheduler·langchain_core·pyautogui) 전수 설치 확인. ③ is_transient 단위검증(코드버그 오탐 0 / 명백 transient 정탐).
+- **파일**: `JARVIS07_GUARDIAN/severity.py`, `JARVIS07_GUARDIAN/guardian_agent.py`
+- **교훈**: 24시간 운영 시스템의 오류 대부분은 *코드 버그가 아니라 환경·외부·제어흐름 노이즈*. `wontfix`(코드 결함 미해결, 사람 검토 필요)와 `ignored`(코드 버그 아님)를 엄격히 구분해야 수동검토 큐가 *진짜 조치 필요* 항목만 담는다. transient 판정은 *코드버그 타입은 절대 포함하지 않도록* 보수적으로.
+
+### [284] 티어 아키텍처 단일 진실 소스 부재 — 대시보드·텔레그램·문서에 옛 Tier 1.5/Tier 0/Tier 3 잔존 (2026-06-28)
+
+- **증상**: [282]에서 Tier 1.5(RL/SGDClassifier) 제거 + catch() 단일 진입점 도입 후에도, 대시보드(hub.py)는 여전히 "Tier 1.5 RL 학습 모델(SGDClassifier)" 카드 표시, 텔레그램 `/status`·README·RESULTS·CLAUDE.md·ADR에 옛 "Tier 2(패턴)/Tier 3(LLM)"·"Tier 0" 혼재. 한 곳 수정해도 전체 반영 안 됨.
+- **원인**: 티어 정의가 *하드코딩으로 N개 파일에 중복*. 단일 진실 소스 부재 → 아키텍처 변경 시 일부만 갱신되어 표시 불일치. (orphan `rl_fixer.py` predict() 미호출 — 데드코드인데 대시보드가 그 통계를 표시.)
+- **헛다리**: 직전 작업에서 hub.py·guardian_agent에 오히려 "Tier 0"·"Tier 1.5 RL Bandit"을 *추가* 함 — 코드 검증 없이 표시만 손댐.
+- **해결**: ① `JARVIS07_GUARDIAN/architecture.py` 신규 — CATCH_MECHANISMS·TIERS·SEVERITY_MATRIX·안전장치 상수·`telegram_summary()`·`tier_flow_for()` 단일 진실 소스. ② hub.py·guardian_agent·error_analyzer·pattern_fixer·incident_responder·qa_resolver·auto_repair·README·RESULTS·CLAUDE.md·ADR 005/007/009 전부 architecture.py 참조 또는 정본(catch→Tier 1 패턴·Bandit→Tier 2 LLM)으로 통일. ③ orphan `rl_fixer.py`·`rl_model.pkl`·`.rl_bootstrapped` 삭제 + 데드 `_send_rl_reward`·`_try_llm_fix` 제거. ④ 대시보드 RL 카드를 실가동 `bandit.py`(Contextual Bandit) 통계로 교체. ⑤ 정수 티어 1부터 강제(Tier 0·1.5·2.5 금지) — qa_resolver도 Tier 1/2/3 정수화.
+- **검증**: 적대적 검증 워크플로(코드·대시보드·텔레그램·문서·데드코드 5영역 병렬 감사) → blocker 3 + minor 4 추가 발견·수정. py_compile·import·precommit 40종 0위반.
+- **파일**: `JARVIS07_GUARDIAN/architecture.py`(신규), `guardian_agent.py`, `error_analyzer.py`, `pattern_fixer.py`, `incident_responder.py`, `qa_resolver.py`, `auto_repair.py`, `hub.py`, `README.md`, `RESULTS.md`, `CLAUDE.md`, `docs/decisions/005·007·009·README.md`
+- **교훈**: "단일 진입점이면 한 곳 수정 시 전체 반영"은 *표시·문서에도* 적용. 중복 하드코딩된 정의는 변경 시 반드시 일부 누락 → 데이터(정의)는 한 모듈에 두고 모든 소비자가 import. 표시만 고치지 말고 *코드(정본)부터* 확인.
+
 ### [283] Bandit UCB1 강화학습 도입 — 정적 fixer 6종 순서 동적 최적화 (2026-06-27)
 
 - **증상**: 정적 fixer 6종이 항상 같은 순서로 시도됨. error_type별 성공률 차이가 있어도 학습되지 않음.

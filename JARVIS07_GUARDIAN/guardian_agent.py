@@ -29,21 +29,19 @@ _fix_lock = threading.Lock()
 # 처리 중인 error_id 집합 (중복 수정 방지)
 _processing: set[int] = set()
 
-# ── Circuit breaker: 시간당 자동수정 최대 횟수 ──────────────────
+# ── 아키텍처 설정 — 단일 진실 소스 (architecture.py) ────────────
+#    티어·안전장치 값 변경은 architecture.py 한 곳만. 여기는 import 만.
+from JARVIS07_GUARDIAN.architecture import (
+    CB_MAX_HOUR as _CB_MAX_HOUR,
+    ESCALATE_THRESHOLD as _ESCALATE_THRESHOLD,
+    ESCALATE_WINDOW_SECS as _ESCALATE_WINDOW_SECS,
+    DENY_FIX_PATHS as _DENY_FIX_PATHS,
+)
+
+# ── Circuit breaker 런타임 상태 (설정값은 architecture.CB_MAX_HOUR) ─
 _CB_LOCK      = threading.Lock()
 _cb_count     = 0
 _cb_hour_ts   = 0.0
-_CB_MAX_HOUR  = 10   # 시간당 최대 자동수정 건수
-
-# ── 절대 자동수정 금지 파일 (보안 파일·코어 오케스트레이터) ─────
-_DENY_FIX_PATHS = {
-    ".env", "jarvis_daemon.py",
-    "login_manager.py", "naver_cookies.pkl", "tistory_cookies.pkl",
-}
-
-# ── 빈도 기반 severity 상향 임계값 ──────────────────────────────
-_ESCALATE_WINDOW_SECS = 3600   # 1시간
-_ESCALATE_THRESHOLD   = 3      # 1시간 내 N회 반복 → severity 한 단계 상향
 
 
 # ── capability 선언 + 텔레그램 /status 섹션 ─────────────────────
@@ -72,22 +70,31 @@ def _status_section() -> str:
         high = by_sev.get("high", 0)
         med  = by_sev.get("medium", 0)
         low  = by_sev.get("low", 0)
+        from JARVIS07_GUARDIAN.architecture import tier_flow_for as _flow
         if crit:
-            lines.append(f"🔴 CRITICAL {crit}건 — Tier 2 자동 시도 · 수동 검토 필요")
+            lines.append(f"🔴 CRITICAL {crit}건 — {_flow('critical')} · 수동 검토 필요")
         if high:
-            lines.append(f"🟠 HIGH {high}건 — Tier 2→3 자동 수정 중")
+            lines.append(f"🟠 HIGH {high}건 — {_flow('high')} 자동 수정 중")
         if not crit and not high:
             lines.append("✅ 긴급 오류 없음")
         lines.append(f"🟡 MEDIUM {med}건 · ⚪ LOW {low}건")
 
-        # 자동수정 정책 요약
-        lines.append(
-            "━━━━━━━━━━━━━━━━━━\n"
-            "⚙️ *자동수정 정책*\n"
-            "LOW/MED/HIGH → Tier 2(패턴) → Tier 3(LLM Opus)\n"
-            "CRITICAL     → Tier 2(패턴)만 → 수동 검토\n"
-            f"3회 반복 → severity 자동 상향 | Circuit breaker {_CB_MAX_HOUR}건/시간"
-        )
+        # Tier 1 Contextual Bandit 학습 상태 (실가동 RL — bandit.py)
+        try:
+            from JARVIS07_GUARDIAN.bandit import stats as _bandit_stats
+            _bs = _bandit_stats()
+            _arms = _bs.get("arm_count", 0)
+            if _arms:
+                lines.append(
+                    f"🎰 Tier 1 Contextual Bandit — fixer {_arms}종 학습 "
+                    f"(Linear UCB · {_bs.get('feature_dim', 0)}차원)"
+                )
+        except Exception:
+            pass
+
+        # 자동수정 정책 요약 — 단일 진실 소스(architecture.telegram_summary)
+        from JARVIS07_GUARDIAN.architecture import telegram_summary as _arch_summary
+        lines.append(_arch_summary())
 
         # Circuit breaker 현재 사용량
         import time as _t
@@ -239,7 +246,7 @@ def _notify_all(error_record: dict, result: str, tier: int = 0, severity: str = 
     elif result == "critical_manual":
         text = (
             f"{icon} *[GUARDIAN] CRITICAL — 수동 검토 필요*\n"
-            f"Tier 2 패턴 없음 → LLM 수정 생략 (안전)\n"
+            f"Tier 1 패턴 없음 → LLM 수정 생략 (안전)\n"
             f"소스: {source} / {module}\n"
             f"유형: {etype}\n"
             f"내용: {msg}"
@@ -260,7 +267,7 @@ def _notify_all(error_record: dict, result: str, tier: int = 0, severity: str = 
     else:  # failed
         text = (
             f"{icon} *[GUARDIAN] 자동수정 실패 — 수동 검토*\n"
-            f"심각도: {sev_tag}  Tier 1·2·3 모두 실패\n"
+            f"심각도: {sev_tag}  Tier 1·2 모두 실패\n"
             f"소스: {source} / {module}\n"
             f"유형: {etype}\n"
             f"내용: {msg}"
@@ -369,15 +376,17 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
 def _orchestrate(error_id: int):
     """오류 분석 → 자동 수정 오케스트레이터 (별도 스레드에서 실행).
 
-    심각도별 처리 매트릭스:
-      low      → Tier 2 → Tier 3 → 알림  (학습 → 다음엔 Tier 2 해결)
-      medium   → Tier 2 → Tier 3 → 알림
-      high     → Tier 2 → Tier 3 → 알림 (항상)
-      critical → Tier 2 → 알림 (LLM 수정은 너무 위험 — 사람 검토)
+    ★ 티어 정의는 architecture.py 단일 진실 소스. catch()→Tier 1(패턴·Bandit)→Tier 2(LLM).
 
-    안전장치:
-      · 빈도 기반 severity 자동 상향 (1시간 3회 반복 → 한 단계 상향)
-      · Circuit breaker (시간당 최대 10건 자동수정)
+    심각도별 처리 매트릭스:
+      low      → Tier 1 → Tier 2 → 알림  (학습 → 다음엔 Tier 1 해결)
+      medium   → Tier 1 → Tier 2 → 알림
+      high     → Tier 1 → Tier 2 → 알림 (항상)
+      critical → Tier 1 → 알림 (LLM 수정은 너무 위험 — 사람 검토)
+
+    안전장치 (값은 architecture.py):
+      · 빈도 기반 severity 자동 상향 (1시간 N회 반복 → 한 단계 상향)
+      · Circuit breaker (시간당 최대 N건 자동수정)
       · 보안 파일 수정 절대 금지 (.env, 인증 파일, 데몬 코어)
       · 모든 심각도 수정 결과 텔레그램 알림
     """
@@ -397,6 +406,16 @@ def _orchestrate(error_id: int):
 
         error_type = error_record.get("error_type", "")
         module     = error_record.get("module", "")
+
+        # ── 안전장치 0: 일시적·외부·제어흐름 오류 → ignored (코드 버그 아님) ──
+        #    ★ ERRORS [286] — 네트워크·Selenium 환경·외부 API 할당량·정상 제어흐름(테마 교체)·
+        #    외부 발행(Layer 4)·Claude CLI 운영 오류는 wontfix 가 아니라 ignored.
+        #    수동검토 큐 오염·알림 폭주 방지. 자동수정 파이프라인 진입 안 함.
+        from JARVIS07_GUARDIAN.severity import is_transient
+        if is_transient(error_type, error_record.get("message", ""), error_record.get("source", "")):
+            log.info(f"[GUARDIAN] #{error_id} 일시적/외부/제어흐름 오류 — ignored (자동수정 비대상): {error_type}")
+            _db.mark_error_status(error_id, "ignored")
+            return
 
         # ── 안전장치 1: 보안 파일 수정 금지 ───────────────────────
         if _is_deny_path(module):
@@ -419,37 +438,31 @@ def _orchestrate(error_id: int):
         log.info(f"[GUARDIAN] 오케스트레이터 시작 — #{error_id} [{severity}] {error_type}")
         _db.mark_error_status(error_id, "analyzing")
 
-        # ── Tier 2: 패턴 수정 — 모든 심각도 시도 (LLM 없음, 안전) ─
+        # ── Tier 1: 패턴 수정 — 모든 심각도 시도 (Bandit, LLM 없음, 안전) ─
+        #    (Bandit 보상은 pattern_fixer/error_fixer 내부에서 자동 기록)
         analysis = analyze(error_record)
         success  = apply_fix(error_id, analysis, mark_wontfix=False)
 
-        # RL 보상 신호
-        try:
-            from JARVIS07_GUARDIAN.incident_responder import _send_rl_reward
-            _send_rl_reward(error_record, analysis, success)
-        except Exception:
-            pass
-
         if success:
-            log.info(f"[GUARDIAN] #{error_id} ✅ Tier 2 수정 완료")
-            _notify_all(error_record, "success", tier=2, severity=severity)
+            log.info(f"[GUARDIAN] #{error_id} ✅ Tier 1 수정 완료")
+            _notify_all(error_record, "success", tier=1, severity=severity)
             _retry_original_job(error_record)
             return
 
-        # ── critical: Tier 3(LLM) 생략 — 패턴 없으면 사람에게 ───
+        # ── critical: Tier 2(LLM) 생략 — 패턴 없으면 사람에게 ───
         if severity == "critical":
-            log.warning(f"[GUARDIAN] #{error_id} critical + Tier 2 실패 → 수동 검토")
+            log.warning(f"[GUARDIAN] #{error_id} critical + Tier 1 실패 → 수동 검토")
             _notify_all(error_record, "critical_manual", severity=severity)
             _db.mark_error_status(error_id, "wontfix")
             return
 
-        # ── Tier 3: LLM 수정 — low 포함 전 심각도 ────────────────
-        # low도 Tier 3까지 진행 → 학습 데이터 축적 → 다음엔 Tier 2 해결
-        log.info(f"[GUARDIAN] #{error_id} Tier 2 실패 → Tier 3 (LLM, {severity})")
+        # ── Tier 2: LLM 수정 — low 포함 전 심각도 ────────────────
+        # low도 Tier 2까지 진행 → 학습 데이터 축적 → 다음엔 Tier 1 해결
+        log.info(f"[GUARDIAN] #{error_id} Tier 1 실패 → Tier 2 (LLM, {severity})")
         fixed = _try_sdk_targeted_fix(error_id, error_record)
 
         if fixed:
-            _notify_all(error_record, "success", tier=3, severity=severity)
+            _notify_all(error_record, "success", tier=2, severity=severity)
         else:
             _notify_all(error_record, "failed", severity=severity)
 
@@ -745,30 +758,7 @@ def register(scheduler, bus):
     except Exception as e:
         log.warning(f"[GUARDIAN] 로그 스캐너 초기화 실패: {e}")
 
-    # 5) ★ RL 모델 부트스트랩 자동 호출 (사용자 박제 2026-06-07 — ERRORS [259])
-    #    — 모델 파일 손상·플래그 삭제·새 venv 재구성 시 자동 복구.
-    #    .rl_bootstrapped 플래그가 있으면 즉시 skip → 부팅 비용 0.
-    try:
-        from JARVIS07_GUARDIAN.rl_fixer import bootstrap_from_patterns
-        n = bootstrap_from_patterns()
-        if n > 0:
-            log.info(f"[GUARDIAN] RL 부트스트랩 완료: {n}개 패턴 선학습")
-    except ImportError:
-        log.warning("[GUARDIAN] rl_fixer 미사용 (sklearn 미설치 추정) — Tier 1.5 비활성")
-    except Exception as e:
-        log.warning(f"[GUARDIAN] RL 부트스트랩 실패: {e}")
-
-    # 6) ★ RL 모델 atexit 저장 hook (사용자 박제 2026-06-07)
-    #    — 데몬 종료 시 (SIGTERM·SIGINT) 마지막 학습 데이터 손실 방지.
-    try:
-        import atexit
-        from JARVIS07_GUARDIAN.rl_fixer import flush_model
-        atexit.register(flush_model)
-        log.info("[GUARDIAN] RL 모델 atexit 저장 hook 등록")
-    except Exception as e:
-        log.debug(f"[GUARDIAN] RL atexit hook 등록 실패 (정상 — rl_fixer 미사용 시): {e}")
-
-    # 7) 스케줄 잡 등록 — JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 에서 관리 (이관 완료)
+    # 5) 스케줄 잡 등록 — JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 에서 관리 (이관 완료)
     # guardian_log_scan / guardian_archive / j07_git_audit / j07_retry_pending
 
     log.info("✅ [GUARDIAN] JARVIS07_GUARDIAN 등록 완료 — 자동 오류 수집·수정 활성화")

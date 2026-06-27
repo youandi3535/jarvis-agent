@@ -133,6 +133,72 @@ _PATTERN_FIXABLE_TYPES = frozenset({
 })
 
 
+# ── 일시적·외부·제어흐름 오류 (코드 버그 아님 — 자동수정 비대상 → ignored) ──
+# ★ ERRORS [286] 박제 2026-06-28 — 이 부류는 wontfix(코드 결함 미해결)가 아니라 ignored.
+#   네트워크·Selenium 환경·외부 API 할당량·정상 제어흐름(테마 교체)·외부 발행(Layer 4)·
+#   Claude CLI 운영 오류는 코드 패치로 해결 불가 → 수동검토 큐 오염 방지.
+_TRANSIENT_TYPES = frozenset({
+    # 네트워크
+    "ConnectionError", "ConnectionResetError", "ConnectionAbortedError",
+    "TimeoutError", "TimeoutException", "ReadTimeout", "ReadTimeoutError",
+    "HTTPError", "MaxRetryError", "NewConnectionError", "ProtocolError",
+    "ChunkedEncodingError", "SSLError", "RemoteDisconnected",
+    # Selenium / Chrome 환경
+    "WebDriverException", "SessionNotCreatedException", "InvalidSessionIdException",
+    "StaleElementReferenceException", "ElementClickInterceptedException",
+    "NoSuchWindowException",
+})
+
+_TRANSIENT_PATTERNS = [
+    # 네트워크 일시 오류
+    re.compile(r"max retries|connection (reset|refused|aborted)|remote end closed|connection aborted", re.I),
+    re.compile(r"failed to resolve|nodename nor servname|NameResolutionError|getaddrinfo", re.I),
+    # Chrome / Selenium 환경
+    re.compile(r"ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ERR_CONNECTION_|ERR_NETWORK_CHANGED"
+               r"|ERR_EMPTY_RESPONSE|ERR_TIMED_OUT|net::ERR_|chrome not reachable|browser has closed"
+               r"|timed out receiving message from renderer", re.I),
+    # 외부 API 할당량·rate limit
+    re.compile(r"rate limit|too many requests|hit your limit|resets \d+\s*(am|pm)", re.I),
+    re.compile(r"Queue full|Pollinations.*(402|재시도.*실패|일시 오류|비정상 응답)", re.I),
+    re.compile(r"Bing 인증 실패|BingProvider|HuggingFaceProvider|api-inference\.huggingface", re.I),
+    # 포트 충돌 (데몬 재시작)
+    re.compile(r"address already in use|EADDRINUSE|bind on address", re.I),
+    # Claude CLI 운영 오류 (auto_repair — 코드 버그 아님)
+    re.compile(r"cli_not_found|CLI 타임아웃|Command failed with exit code|exitcode=-?\d"
+               r"|REPAIR-SUMMARY.*(없음|빈 출력)|MessageParseError|You've hit your limit", re.I),
+    # 정상 제어흐름 (데이터 없음 → 테마 교체) · 외부 발행(Layer 4) — 코드 패치 불가
+    re.compile(r"종목 데이터 0개|다른 테마로|data_empty", re.I),
+    re.compile(r"\[Layer ?4\]|Layer ?4\)|step=송출|송출 \(Layer|발행 실패|발행 미완료|에디터 상태 유지", re.I),
+    # transient LLM 응답 형식
+    re.compile(r"\[transient\]|transient_llm_format|LLM 응답.*(빈|JSON 형식 누락)", re.I),
+    # harness 운영 보고 — auto-repair 가 이미 시도 후 포기한 메타 보고 (코드 버그 아님)
+    re.compile(r"수정 불가.*(패턴 반복|건)|재생성해도 동일 결과", re.I),
+    # 콘텐츠·데이터 생성 운영 실패 (재생성·다음 회차에 해소 — 코드 패치 불가)
+    re.compile(r"HTML 생성 실패|트렌드 데이터 없음|키워드 .*등장|body 등장|카테고리 검색 실패|BrokenPipeError", re.I),
+    # 외부 이미지 모델 API (HuggingFace 폐기 모델·할당량 소진 — 외부 제약)
+    re.compile(r"HTTP \d{3} —|depleted your.*credits|requested model.*(does not exist|deprecated)"
+               r"|black-forest-labs|stabilityai|stable-diffusion-|FLUX\.\d", re.I),
+    # crewai/native provider 환경 (외부 키·런타임 — 코드 버그 아님)
+    re.compile(r"Error importing native provider|OPENAI_API_KEY is required", re.I),
+]
+
+
+def is_transient(error_type: str, message: str = "", source: str = "") -> bool:
+    """일시적·외부·제어흐름 오류 여부 — True 면 자동수정 비대상(ignored 처리).
+
+    코드 패치로 해결 불가능한 부류만 True:
+      네트워크·Selenium 환경·외부 API 할당량·포트 충돌·Claude CLI 운영 오류·
+      정상 제어흐름(테마 교체)·외부 발행 실패(Layer 4).
+    ImportError/NameError/KeyError/AttributeError/TypeError 같은 *코드 버그 타입은
+    절대 transient 로 분류하지 않음* (오탐 방지).
+    """
+    et = error_type or ""
+    msg = message or ""
+    if et in _TRANSIENT_TYPES:
+        return True
+    return any(pat.search(msg) for pat in _TRANSIENT_PATTERNS)
+
+
 def is_auto_fixable(severity: str, error_type: str) -> bool:
     """자동 수정 시도 가능 여부.
 
