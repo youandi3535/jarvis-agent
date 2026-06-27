@@ -407,6 +407,16 @@ def _orchestrate(error_id: int):
         error_type = error_record.get("error_type", "")
         module     = error_record.get("module", "")
 
+        # ── 안전장치 0: 일시적·외부·제어흐름 오류 → ignored (코드 버그 아님) ──
+        #    ★ ERRORS [286] — 네트워크·Selenium 환경·외부 API 할당량·정상 제어흐름(테마 교체)·
+        #    외부 발행(Layer 4)·Claude CLI 운영 오류는 wontfix 가 아니라 ignored.
+        #    수동검토 큐 오염·알림 폭주 방지. 자동수정 파이프라인 진입 안 함.
+        from JARVIS07_GUARDIAN.severity import is_transient
+        if is_transient(error_type, error_record.get("message", ""), error_record.get("source", "")):
+            log.info(f"[GUARDIAN] #{error_id} 일시적/외부/제어흐름 오류 — ignored (자동수정 비대상): {error_type}")
+            _db.mark_error_status(error_id, "ignored")
+            return
+
         # ── 안전장치 1: 보안 파일 수정 금지 ───────────────────────
         if _is_deny_path(module):
             log.warning(f"[GUARDIAN] #{error_id} 보안 파일 수정 차단 — {module}")
