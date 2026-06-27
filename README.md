@@ -40,8 +40,8 @@
 | 📝 **블로그 자동 발행** | 경제 브리핑(매일 06:30) + 테마주 분석(매일 16:00) — 네이버·티스토리 동시 발행 |
 | 🖼️ **AI 이미지 자동 생성** | 글 키워드 기반 Pollinations.ai → 매 글마다 새로운 이미지 창작 (dedupe 포함) |
 | 📡 **트렌드 레이더** | Google Trends + 네이버 DataLab 실시간 수집 → 핫 키워드 자동 탐지 |
-| 🛡️ **3-Tier 자가 진단·수정** | 정적 AST 패턴 → RL 모델(밴딧) → Claude Code SDK 순으로 오류 자동 복구 |
-| 🧠 **강화학습 오류 분류** | SGDClassifier 온라인 학습 — 수정 성공/실패를 보상으로 가중치 즉시 갱신 |
+| 🛡️ **자동 캐치·수정 시스템** | `catch()` 단일 진입점 → Tier 2(패턴·Bandit) → Tier 3(Opus 4.6) — 전 심각도 자동 복구 |
+| 🔒 **보안 전문가급 안전장치** | Circuit breaker · 빈도 기반 severity 자동 상향(3회) · 보안 파일 수정 절대 금지 |
 | 🏛️ **헌법형 거버넌스** | `precommit_check.py` 947줄 — 27종 정책을 pre-commit·부팅·주간감사 3중 강제 |
 | 📊 **통합 대시보드** | hub.py 단일 진입점(port 9199) — 발행 이력·오류 현황·학습 곡선 한눈에 |
 | 💬 **텔레그램 인터페이스** | 자유 문장 → ReAct 라우터 → 에이전트 디스패치 + 인라인 버튼 HITL 승인 |
@@ -67,7 +67,7 @@ flowchart TD
     H -. "📈 학습 루프" .-> C
 
     subgraph COMMON["⚙️ 공통 레이어"]
-        I["JARVIS07 GUARDIAN\n3-Tier 자가수정 + RL 학습엔진\n265패턴 / 870회 적중"]
+        I["JARVIS07 GUARDIAN\ncatch() 단일 진입점 → Tier 2(패턴) → Tier 3(Opus)\n전 심각도 자동수정 · Circuit breaker · 학습 루프"]
         J["JARVIS00 INFRA\npreflight · harness · event bus\n/status · /restart"]
         K["JARVIS04 SCHEDULER\nAPScheduler 단일 진입점\n모든 cron 잡 관리"]
     end
@@ -146,32 +146,50 @@ gantt
 
 ## 🧠 자가 학습 시스템
 
-오류가 발생할수록 점점 똑똑해지는 3계층 폐쇄 학습 루프:
+오류가 발생할수록 점점 똑똑해지는 폐쇄 학습 루프:
 
 ```mermaid
 flowchart LR
-    ERR(["⚠️ 오류 발생"]) --> COL["error_collector\n수집·분류·쿨다운"]
-    COL --> T1
-
-    subgraph TIERS["3-Tier 자동 수정"]
-        T1{"Tier 1\n학습 캐시\nfingerprint 즉시 매칭\nLLM 호출 0"}
-        T2{"Tier 1.5\nRL 모델\nSGDClassifier\n컨텍스추얼 밴딧"}
-        T3{"Tier 2\nClaude Code SDK\n자동 코드 수정\nAST 검증 + 롤백"}
+    subgraph CATCH["📡 Tier 1 — 자동 캐치 (catch() 단일 진입점)"]
+        H1["sys.excepthook\n메인 스레드 미처리 예외"]
+        H2["threading.excepthook\n백그라운드 스레드 예외"]
+        H3["APScheduler listener\n스케줄 잡 실패"]
+        H4["log_scanner\n5분마다 JARVIS*/logs 스캔"]
+        H5["auto_catch 데코레이터\n명시적 보호 함수"]
     end
 
-    T1 -->|"캐시 없음"| T2
-    T2 -->|"확신 없음"| T3
-    T1 -->|"🎯 즉시 수정"| OK
+    H1 & H2 & H3 & H4 & H5 --> C["catch()\n단일 진입점\n쿨다운 · sandbox 차단"]
+
+    C --> SAFE["안전장치\nCircuit breaker\n빈도 상향(3회)\n보안 파일 차단"]
+
+    SAFE --> T2
+
+    subgraph TIERS["자동 수정"]
+        T2{"Tier 2\n패턴·Bandit\nGroup1(hit≥3)+Group2(신규)\nLLM 호출 0"}
+        T3{"Tier 3\nClaude Opus 4.6\nAST 검증 + .bak 롤백"}
+    end
+
     T2 -->|"✅ 수정"| OK
+    T2 -->|"패턴 없음"| T3
     T3 -->|"✅ 수정"| OK
 
-    OK["수정 성공"] --> LEARN["learned_patterns.json\n패턴 자동 등록\nhit_count 누적"]
-    LEARN -. "다음 오류는\nTier 1에서 즉시 처리" .-> T1
+    OK["수정 성공\n잡 재시도\n텔레그램 알림"] --> LEARN["learned_patterns.json\nfingerprint 자동 등록\nhit_count 누적"]
+    LEARN -. "다음엔 Tier 2에서 즉시 처리" .-> T2
 
-    T3 -->|"❌ 실패"| ESC["GUARDIAN escalation\n텔레그램 알림\n사용자 개입"]
+    T3 -->|"❌ 실패"| ESC["텔레그램 알림\n수동 검토 요청"]
 
+    style CATCH fill:#0d1b2a,stroke:#4a9eff,color:#fff
     style TIERS fill:#1a1a2e,stroke:#7c83fd,color:#fff
 ```
+
+**심각도별 처리 매트릭스:**
+
+| 심각도 | Tier 2 (패턴) | Tier 3 (LLM) | 텔레그램 알림 |
+|--------|:---:|:---:|:---:|
+| ⚪ LOW | ✅ | ✅ → 학습 저장 | ✅ |
+| 🟡 MEDIUM | ✅ | ✅ | ✅ |
+| 🟠 HIGH | ✅ | ✅ | ✅ |
+| 🔴 CRITICAL | ✅ | ❌ (LLM 생략 — 안전) | ✅ 항상 |
 
 | 지표 | 현재 값 | 의미 |
 |------|---------|------|
