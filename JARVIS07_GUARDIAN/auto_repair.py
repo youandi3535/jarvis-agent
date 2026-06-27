@@ -70,10 +70,10 @@ find {WORKDIR} -name "*.py" \
 ```
 grep -rn \
   -e "from apscheduler" \
-  -e "BackgroundScheduler\|BlockingScheduler" \
-  -e "schedule\.every\|import schedule" \
-  -e "claude-opus-4-8\|claude-sonnet-4-5\b" \
-  -e "anthropic\.Anthropic()" \
+  -e "BackgroundScheduler\\|BlockingScheduler" \\
+  -e "schedule\\.every\\|import schedule" \\
+  -e "claude-opus-4-8\\|claude-sonnet-4-5\\b" \\
+  -e "anthropic\\.Anthropic()" \\
   --include="*.py" \
   --exclude-dir=.venv --exclude-dir=__pycache__ --exclude-dir=chroma_db \
   {WORKDIR} 2>/dev/null | grep -v "JARVIS04_SCHEDULER/"
@@ -83,8 +83,8 @@ grep -rn \
 ## 단계 3 — 버그 패턴 grep (Bash 1턴)
 ```
 grep -rn \
-  -e "^\s*except:\s*pass" \
-  -e "\[가-힣\]" \
+  -e "^\\s*except:\\s*pass" \\
+  -e "\\[가-힣\\]" \\
   --include="*.py" \
   --exclude-dir=.venv --exclude-dir=__pycache__ \
   {WORKDIR} 2>/dev/null \
