@@ -1291,16 +1291,28 @@ def _fix_from_high_count(error_record: dict) -> Optional[dict]:
     return _fix_from_learned(error_record, min_hit_count=_HIGH_COUNT_THRESHOLD)
 
 
+# ★ 정적 fixer 6종 — Bandit 강화학습 대상 (순서가 동적으로 바뀜)
+# 이름(pattern key)과 함수 쌍으로 관리
+_STATIC_FIXERS: list[tuple[str, object]] = [
+    ("relative_import", _fix_relative_import),
+    ("none_slicing",    _fix_none_slicing),
+    ("name_typo",       _fix_name_typo),
+    ("none_attribute",  _fix_none_attribute),
+    ("import_name",     _fix_import_name),
+    ("unpack_mismatch", _fix_unpack_mismatch),
+]
+
+# 결정론적 lookup — bandit 순서 조정 대상 아님
 _PATTERN_FIXERS = [
     # ★ 0순위 — 고빈도 승격 패턴 (hit_count ≥ 5: 반복 검증된 자가 학습 → 정적 패턴과 동급)
     _fix_from_high_count,
-    # ★ 1순위 — 정적 패턴 (항상 최신 코드 기반, 결정론적)
+    # ★ 1순위 — 정적 패턴 6종 (bandit 순서 조정, 아래 try_pattern_fix 참고)
     _fix_relative_import,
     _fix_none_slicing,
     _fix_name_typo,
     _fix_none_attribute,
     _fix_import_name,
-    _fix_unpack_mismatch,    # ★ NEW 2026-05-16 (ERRORS [111])
+    _fix_unpack_mismatch,
     # ★ 2순위 — 저장된 자가 학습 (과거 수정 fingerprint 재적용, LLM 0)
     _fix_from_learned,
 ]
@@ -1309,28 +1321,59 @@ _PATTERN_FIXERS = [
 def try_pattern_fix(error_record: dict) -> Optional[dict]:
     """패턴 기반 자동 수정 시도. 성공 시 patch dict 반환, 실패 시 None.
 
-    시도 순서 (★ 사용자 박제 2026-05-31):
-      1. 정적 패턴 6종 (항상 최신 코드 기반, 결정론적)
-      2. _fix_from_learned (저장된 자가 학습 — LLM 호출 0)
-      → 정적 패턴 매칭 시 자동으로 learned_patterns 에 등록 (다음 동일 사례 캐시 매칭)
+    시도 순서:
+      0. 고빈도 승격 패턴 (hit_count ≥ 5) — 결정론적, bandit 제외
+      1. 정적 패턴 6종 — UCB1 Bandit 이 error_type 별 성공률 기반 순서 결정
+         실패한 fixer 마다 즉시 음의 보상 기록 (다음번 우선순위 낮아짐)
+      2. _fix_from_learned — 결정론적, bandit 제외
 
-    반환 형식 (error_fixer.apply_fix 호환):
-        {
-          "fixable": True,
-          "pattern": "relative_import",
-          "target_file": "상대경로.py",
-          "patch_full": "수정 후 전체 파일 텍스트",
-          "patch": "<동일>",
-          "explanation": "수정 사유",
-          "source": "pattern" | "learned",
-          "learned": bool,
-        }
+    양의 보상(성공)은 error_fixer.apply_fix() 에서 실제 파일 수정 후 기록.
+    → "patch 생성 성공" 이 아닌 "파일 실제 변경 성공" 이 진짜 reward.
     """
-    for fn in _PATTERN_FIXERS:
+    error_type = error_record.get("error_type", "unknown")
+
+    # ── 0순위: 고빈도 승격 패턴 (bandit 제외) ─────────────────────
+    try:
+        result = _fix_from_high_count(error_record)
+        if result:
+            result["source"] = result.get("source", "learned_high_count")
+            result["patch"]  = result.get("patch", result.get("patch_full", ""))
+            log.info(f"[GUARDIAN/pattern] 고빈도 승격 매칭 — {result.get('target_file','?')}")
+            return result
+    except Exception as e:
+        log.debug(f"[GUARDIAN/pattern] _fix_from_high_count 실패: {e}")
+
+    # ── 1순위: 정적 패턴 6종 — Bandit UCB1 순서 ─────────────────────
+    try:
+        from JARVIS07_GUARDIAN.bandit import rank_fixers as _bandit_rank, reward as _bandit_reward
+        _bandit_available = True
+    except Exception:
+        _bandit_available = False
+
+    static_order: list[tuple[str, object]]
+    if _bandit_available:
+        fixer_names = [n for n, _ in _STATIC_FIXERS]
+        ranked_names = _bandit_rank(error_type, fixer_names)
+        fn_map = {n: fn for n, fn in _STATIC_FIXERS}
+        static_order = [(n, fn_map[n]) for n in ranked_names if n in fn_map]
+    else:
+        static_order = _STATIC_FIXERS
+
+    failed_fixers: list[str] = []   # 음의 보상 대기 목록
+
+    for fixer_name, fn in static_order:
         try:
-            result = fn(error_record)
+            result = fn(error_record)   # type: ignore[operator]
             if result:
-                # 학습 매칭이 아닌 정적 패턴 매칭일 때 자동 학습 등록
+                # 음의 보상 — 이번보다 앞에서 실패한 fixer들 일괄 기록
+                if _bandit_available and failed_fixers:
+                    for fn_fail in failed_fixers:
+                        try:
+                            _bandit_reward(error_type, fn_fail, success=False)
+                        except Exception:
+                            pass
+
+                # 자동 학습 등록 (정적 패턴 → learned_patterns)
                 if not result.get("learned") and result.get("pattern"):
                     try:
                         record_pattern_hit(
@@ -1341,16 +1384,40 @@ def try_pattern_fix(error_record: dict) -> Optional[dict]:
                         )
                     except Exception as e:
                         log.debug(f"[GUARDIAN/learned] 자동 학습 등록 실패: {e}")
-                result["source"] = result.get("source", "pattern")
-                result["patch"]  = result.get("patch", result.get("patch_full", ""))
+
+                result["source"]        = result.get("source", "pattern")
+                result["patch"]         = result.get("patch", result.get("patch_full", ""))
+                result["_bandit_fixer"] = fixer_name   # apply_fix 에서 양의 보상용
                 log.info(
-                    f"[GUARDIAN/pattern] {fn.__name__} 매칭 — "
+                    f"[GUARDIAN/pattern] {fixer_name} 매칭 (bandit 순서) — "
                     f"{result.get('target_file','?')} : {result.get('explanation','')[:60]}"
                 )
                 return result
+            else:
+                failed_fixers.append(fixer_name)
         except Exception as e:
-            log.debug(f"[GUARDIAN/pattern] {fn.__name__} 시도 실패: {e}")
-            continue
+            log.debug(f"[GUARDIAN/pattern] {fixer_name} 시도 실패: {e}")
+            failed_fixers.append(fixer_name)
+
+    # 모든 정적 패턴 실패 → 일괄 음의 보상
+    if _bandit_available and failed_fixers:
+        for fn_fail in failed_fixers:
+            try:
+                _bandit_reward(error_type, fn_fail, success=False)
+            except Exception:
+                pass
+
+    # ── 2순위: 저장된 자가 학습 (bandit 제외) ─────────────────────
+    try:
+        result = _fix_from_learned(error_record)
+        if result:
+            result["source"] = result.get("source", "learned_cache")
+            result["patch"]  = result.get("patch", result.get("patch_full", ""))
+            log.info(f"[GUARDIAN/pattern] 학습 캐시 매칭 — {result.get('target_file','?')}")
+            return result
+    except Exception as e:
+        log.debug(f"[GUARDIAN/pattern] _fix_from_learned 실패: {e}")
+
     return None
 
 

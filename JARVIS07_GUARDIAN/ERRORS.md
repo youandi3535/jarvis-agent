@@ -1,5 +1,13 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [283] Bandit UCB1 강화학습 도입 — 정적 fixer 6종 순서 동적 최적화 (2026-06-27)
+
+- **증상**: 정적 fixer 6종이 항상 같은 순서로 시도됨. error_type별 성공률 차이가 있어도 학습되지 않음.
+- **원인**: 고정 순서 리스트 — 과거 성공/실패 데이터 미활용.
+- **해결**: UCB1 Multi-Armed Bandit 도입. `bandit.py` 신규 생성. error_type별 (fixer → wins/losses/pulls) 추적. 실패 즉시 음의 보상, 파일 수정 성공 후 양의 보상. 데이터 1건부터 작동, JSON 영구 저장.
+- **파일**: `JARVIS07_GUARDIAN/bandit.py`(신규), `pattern_fixer.py`, `error_fixer.py`
+- **교훈**: 파인튜닝(가중치 변경) 아님 — 카운터 기반 온라인 RL. GPU 불필요, 저사양 Mac 무리 없음.
+
 ### [282] Tier 1.5 (RL 모델) 제거 + 고빈도 패턴 정적 승격 — 3-Tier → 2-Tier 단순화 (2026-06-27)
 
 - **증상**: Tier 1.5 SGDClassifier RL 예측이 추가 복잡도 대비 실질 효과 낮음. 5회 이상 반복된 학습 패턴이 있음에도 매번 정적 패턴 → 학습 캐시 순으로 탐색해 불필요한 순회 발생.

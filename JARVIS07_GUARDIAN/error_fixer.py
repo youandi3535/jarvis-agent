@@ -326,6 +326,16 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
     except Exception as e:
         log.debug(f"[GUARDIAN/learned] apply_fix 학습 등록 실패: {e}")
 
+    # ★ Bandit 양의 보상 — 실제 파일 수정 성공 후 기록 (진짜 reward signal)
+    try:
+        from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
+        _et  = (error_record or {}).get("error_type", "")
+        _bfx = analysis.get("_bandit_fixer") or analysis.get("pattern", "")
+        if _et and _bfx:
+            _bandit_reward(_et, _bfx, success=True)
+    except Exception as _be:
+        log.debug(f"[BANDIT] 양의 보상 기록 실패: {_be}")
+
     _update_errors_md(error_record, analysis, success=True)
     _notify_success(error_id, file_path.name, analysis.get("explanation", ""))
     log.info(f"[GUARDIAN] #{error_id} 자동 수정 성공 ✅ — {file_path.name}")
