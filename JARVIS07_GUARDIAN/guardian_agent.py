@@ -80,9 +80,28 @@ def _status_section() -> str:
             lines.append("✅ 긴급 오류 없음")
         lines.append(f"🟡 MEDIUM {med}건 · ⚪ LOW {low}건")
 
+        # Tier 1.5 RL 모델 상태
+        try:
+            from JARVIS07_GUARDIAN.rl_fixer import rl_stats as _rl_s
+            _rs = _rl_s()
+            if not _rs.get("error") and _rs.get("model_exists"):
+                lines.append(
+                    f"🎯 Tier 1.5 RL Bandit 활성 — "
+                    f"패턴 {_rs.get('n_actions', 0)}종 · "
+                    f"보상 업데이트 {_rs.get('update_count', 0)}회"
+                )
+            else:
+                lines.append("🎯 Tier 1.5 RL Bandit 준비 중 (sklearn 설치 시 활성)")
+        except ImportError:
+            lines.append("🎯 Tier 1.5 RL Bandit 비활성 (sklearn 미설치)")
+        except Exception:
+            pass
+
         # 자동수정 정책 요약
         lines.append(
             "━━━━━━━━━━━━━━━━━━\n"
+            "🎣 *오류 캐치 단일 진입점*\n"
+            "catch() ← sys.excepthook · threading · APScheduler · log_scanner · auto_catch · report()\n"
             "⚙️ *자동수정 정책*\n"
             "LOW/MED/HIGH → Tier 2(패턴) → Tier 3(LLM Opus)\n"
             "CRITICAL     → Tier 2(패턴)만 → 수동 검토\n"

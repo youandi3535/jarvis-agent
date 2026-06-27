@@ -202,7 +202,30 @@ def register(scheduler, bus) -> None:
 
 
 def _status_section() -> str:
-    return "🖼️ *JARVIS06 IMAGE* — 이미지 생성 대기 중"
+    lines = ["🖼️ *JARVIS06 IMAGE* — 이미지 생성 에이전트"]
+    try:
+        out_dir = OUTPUT_DIR
+        if out_dir.exists():
+            files = [f for f in out_dir.iterdir()
+                     if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".svg")]
+            total = len(files)
+            png_cnt = sum(1 for f in files if f.suffix.lower() == ".png")
+            svg_cnt = sum(1 for f in files if f.suffix.lower() == ".svg")
+            lines.append(f"📊 생성 이미지: 총 {total}개  (PNG {png_cnt} · SVG {svg_cnt})")
+        else:
+            lines.append("📊 output 디렉토리 없음")
+    except Exception as _e:
+        lines.append(f"📊 통계 조회 실패: {_e}")
+    # 서킷 브레이커 상태
+    import time as _t
+    _cb_open = _CIRCUIT_OPEN_UNTIL > _t.time()
+    if _cb_open:
+        _remain = int(_CIRCUIT_OPEN_UNTIL - _t.time())
+        lines.append(f"⚡ Pollinations 서킷 OPEN ({_remain}초 후 복구)")
+    else:
+        lines.append("✅ Pollinations.ai 가용 (단일 프로바이더)")
+    lines.append("📁 출력: JARVIS06_IMAGE/output/")
+    return "\n".join(lines)
 
 
 def _register_capability() -> None:

@@ -807,6 +807,9 @@ OWNER_LABEL = {
     "jarvis02_writer":   "J02",
     "jarvis03_radar":    "J03",
     "jarvis04_scheduler":"J04",
+    "jarvis05_vision":   "J05",
+    "jarvis06_image":    "J06",
+    "jarvis07_guardian": "J07",
     "jarvis08_publish":  "J08",
     "jarvis09_collector":"J09",
 }
@@ -2306,6 +2309,33 @@ with t_err:
             with col:
                 md(kpi(label, cnt, color=color, sub=f"전체의 {pct}%"))
 
+        # ★ catch() 단일 진입점 아키텍처 카드
+        section("🎣 오류 자동 캐치 아키텍처 — catch() 단일 진입점")
+        _arch_cols = st.columns(3)
+        _tier1_mechs = [
+            ("sys.excepthook", "메인 스레드 미처리 예외", "danger"),
+            ("threading.excepthook", "백그라운드 스레드 예외", "warn"),
+            ("APScheduler EVENT_JOB_ERROR", "스케줄 잡 실패", "warn"),
+            ("log_scanner", "JARVIS*/logs/ ERROR/WARNING 줄", "primary"),
+            ("auto_catch 데코레이터", "함수 단위 wrap — @auto_catch('agent')", "primary"),
+            ("report() / catch() 직접", "try/except 블록 명시 호출", "muted"),
+        ]
+        with _arch_cols[0]:
+            md(kpi("Tier 0 — catch() 단일 진입점", "6개 메커니즘", color="primary",
+                   sub="모든 오류 경로 → catch() 직접 호출"))
+        with _arch_cols[1]:
+            md(kpi("Tier 1.5 — RL Bandit", "SGDClassifier", color="success",
+                   sub="패턴 선택 최적화 (sklearn 설치 시 활성)"))
+        with _arch_cols[2]:
+            md(kpi("Tier 2 → Tier 3", "패턴 → Opus 4.6", color="warn",
+                   sub="CRITICAL = Tier 2만 · 나머지 전 단계"))
+        # 6개 메커니즘 테이블
+        _mech_rows = [[
+            badge(name, color),
+            f'<span style="font-size:14px;color:{N["text2"]}">{desc}</span>',
+        ] for name, desc, color in _tier1_mechs]
+        md(table(["메커니즘", "역할"], _mech_rows))
+
         # 자동수정 정책 카드
         section("🤖 자동수정 정책 (현행)")
         _pol_cols = st.columns(4)
@@ -2448,7 +2478,7 @@ with t_err:
             else:
                 md(empty_state(
                     "자가 진단 회차 데이터 없음",
-                    "다음 08:30 / 18:00 자가 진단 후 학습 곡선이 표시됩니다",
+                    "다음 07:00 경제 브리핑 또는 16:00 테마글 발행 시 자가 진단 후 표시됩니다",
                 ))
         except Exception as _e:
             md(empty_state(f"자가 진단 통계 로드 실패: {_e}"))
@@ -3019,6 +3049,28 @@ with t_sys:
             "블로그 글 발행 시 JARVIS06_IMAGE 가 자동으로 이미지를 생성합니다",
         ))
 
+    # ── J05 VISION 최근 잡 ────────────────────────────────────────────
+    vision_jobs = load_job_runs(owner="jarvis05_vision", days=3, limit=6)
+    if vision_jobs:
+        section("J05 VISION 잡 최근 실행")
+        md(table(
+            ["잡 이름", "시작", "결과", "소요(ms)"],
+            [[esc(j.get("job_name", "—")), _fmt(j.get("started_at", "")),
+              ok_badge(j.get("success")), str(int(j.get("duration_ms") or 0))]
+             for j in vision_jobs]
+        ))
+
+    # ── J06 IMAGE 최근 잡 ────────────────────────────────────────────
+    image_jobs = load_job_runs(owner="jarvis06_image", days=3, limit=6)
+    if image_jobs:
+        section("J06 IMAGE 잡 최근 실행")
+        md(table(
+            ["잡 이름", "시작", "결과", "소요(ms)"],
+            [[esc(j.get("job_name", "—")), _fmt(j.get("started_at", "")),
+              ok_badge(j.get("success")), str(int(j.get("duration_ms") or 0))]
+             for j in image_jobs]
+        ))
+
     # ── J07 GUARDIAN — 요약 (상세는 '오류 관리' 탭 참조) ─────────────────
     section("J07 GUARDIAN — 오류 수집·수정 요약")
     _gd_sys = load_guardian_stats()
@@ -3031,6 +3083,15 @@ with t_sys:
                        color="danger" if (_gd_sys["critical"] + _gd_sys["high"]) > 0 else "muted"))
     md(f'<div style="font-size:14px;color:{N["text2"]};margin-top:8px">'
        f'📋 상세 오류 목록·추이·에이전트별 현황은 <b>오류 관리</b> 탭에서 확인하세요.</div>')
+    guardian_jobs = load_job_runs(owner="jarvis07_guardian", days=3, limit=6)
+    if guardian_jobs:
+        section("J07 GUARDIAN 잡 최근 실행")
+        md(table(
+            ["잡 이름", "시작", "결과", "소요(ms)"],
+            [[esc(j.get("job_name", "—")), _fmt(j.get("started_at", "")),
+              ok_badge(j.get("success")), str(int(j.get("duration_ms") or 0))]
+             for j in guardian_jobs]
+        ))
 
     # ── J08 PUBLISH — 발행 도메인 자격증명·플랫폼 현황 ──────────────────
     section("J08 PUBLISH — 발행 도메인 현황")

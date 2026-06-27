@@ -72,16 +72,22 @@ def _on_theme_queued(payload: dict, source: str) -> None:
 
 def _status_section() -> str:
     """텔레그램 /status 노출용 상태 문자열."""
+    lines = ["📦 *JARVIS09 COLLECTOR*"]
     try:
         from shared import db as _db
         con = _db.get_db()
-        cnt = con.execute("SELECT COUNT(*) FROM collection_results").fetchone()
-        total = cnt[0] if cnt else 0
+        total = (con.execute("SELECT COUNT(*) FROM collection_results").fetchone() or (0,))[0]
+        today = (con.execute(
+            "SELECT COUNT(*) FROM collection_results "
+            "WHERE collected_at >= date('now')"
+        ).fetchone() or (0,))[0]
         con.close()
-        return f"📦 *JARVIS09 COLLECTOR*\n  • DB 수집 레코드: {total}건\n  • 프로바이더: blog·news·academic·finance·web"
-    except Exception:
-        pass
-    return "📦 *JARVIS09 COLLECTOR*\n  • 상태: 대기 중"
+        lines.append(f"📊 DB 수집 레코드: 총 {total}건 · 오늘 {today}건")
+    except Exception as _e:
+        lines.append(f"⚠️ DB 조회 실패: {_e}")
+    lines.append("🔌 프로바이더: NaverNews · GoogleNews · KorEcon · KRX · Blog · Web · DART · ECOS · KOSIS · yfinance · arXiv (11종)")
+    lines.append("📡 THEME_QUEUED → 병렬 수집 → COLLECTION_READY")
+    return "\n".join(lines)
 
 
 def job_cleanup_cache() -> None:
