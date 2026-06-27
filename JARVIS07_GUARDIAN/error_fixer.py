@@ -332,7 +332,7 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
         _et  = (error_record or {}).get("error_type", "")
         _bfx = analysis.get("_bandit_fixer") or analysis.get("pattern", "")
         if _et and _bfx:
-            _bandit_reward(_et, _bfx, success=True)
+            _bandit_reward(_et, _bfx, success=True, error_record=error_record or {})
     except Exception as _be:
         log.debug(f"[BANDIT] 양의 보상 기록 실패: {_be}")
 

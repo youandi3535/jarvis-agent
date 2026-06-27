@@ -1353,7 +1353,7 @@ def try_pattern_fix(error_record: dict) -> Optional[dict]:
     static_order: list[tuple[str, object]]
     if _bandit_available:
         fixer_names = [n for n, _ in _STATIC_FIXERS]
-        ranked_names = _bandit_rank(error_type, fixer_names)
+        ranked_names = _bandit_rank(error_record, fixer_names)   # context 전체 전달
         fn_map = {n: fn for n, fn in _STATIC_FIXERS}
         static_order = [(n, fn_map[n]) for n in ranked_names if n in fn_map]
     else:
@@ -1369,7 +1369,8 @@ def try_pattern_fix(error_record: dict) -> Optional[dict]:
                 if _bandit_available and failed_fixers:
                     for fn_fail in failed_fixers:
                         try:
-                            _bandit_reward(error_type, fn_fail, success=False)
+                            _bandit_reward(error_type, fn_fail, success=False,
+                                           error_record=error_record)
                         except Exception:
                             pass
 
@@ -1403,7 +1404,8 @@ def try_pattern_fix(error_record: dict) -> Optional[dict]:
     if _bandit_available and failed_fixers:
         for fn_fail in failed_fixers:
             try:
-                _bandit_reward(error_type, fn_fail, success=False)
+                _bandit_reward(error_type, fn_fail, success=False,
+                               error_record=error_record)
             except Exception:
                 pass
 
