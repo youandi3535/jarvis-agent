@@ -64,10 +64,10 @@ def _find_module_path(module_name: str) -> Path | None:
 
 
 def analyze_llm_only(error_record: dict) -> dict:
-    """★ 3순위 Claude 직접 분석 — 패턴·캐시 없이 LLM 단독 호출.
+    """★ Tier 2 (LLM) 직접 분석 — 패턴·캐시 없이 LLM 단독 호출.
 
-    apply_fix() 의 1차 수정 실패 시 guardian._orchestrate() 에서 호출하는 최종 fallback.
-    패턴/캐시 단계를 건너뛰고 Claude Code SDK 직접 분석.
+    apply_fix() 의 Tier 1(패턴·Bandit) 수정 실패 시 guardian._orchestrate() 에서 호출하는 최종 fallback.
+    Tier 1 단계를 건너뛰고 Claude Code SDK(Opus 4.6) 직접 분석.
     """
     import re as _re
 
@@ -119,7 +119,7 @@ PATCH:
 """
     try:
         from shared.llm import invoke_text
-        # Tier 3 — 항상 Opus 4.6 ("guardian" alias): 코드 수정 판단은 최고 성능 모델
+        # Tier 2 — 항상 Opus 4.6 ("guardian" alias): 코드 수정 판단은 최고 성능 모델
         raw = invoke_text("guardian", prompt, timeout=300).strip()
     except Exception as e:
         log.error(f"[GUARDIAN] Claude LLM 분석 실패: {e}")
@@ -153,10 +153,10 @@ PATCH:
 def analyze(error_record: dict) -> dict:
     """오류 레코드를 분석해 수정 방안 반환.
 
-    3-Tier 구조:
-      Tier 1 — 오류 캐치     : error_collector.report() / log_scanner  (이 함수 호출 전 완료)
-      Tier 2 — 패턴 자동 수정: Bandit + static 6 + learned patterns    (LLM 호출 0)
-      Tier 3 — LLM 자동 수정 : Claude Code SDK Sonnet 4.6              (_orchestrate 에서 위임)
+    ★ 티어 정의는 architecture.py 단일 진실 소스.
+      catch() 단일 진입점(탐지) 으로 수집된 오류를 아래 티어로 처리:
+      Tier 1 — 패턴 자동 수정: Contextual Bandit + static 6 + learned patterns (LLM 호출 0) ← 이 함수
+      Tier 2 — LLM 자동 수정 : Claude Code SDK · Opus 4.6               (_orchestrate 에서 위임)
 
     Returns:
         dict with keys: fixable, target_file, patch, explanation, source
@@ -170,15 +170,15 @@ def analyze(error_record: dict) -> dict:
         log.info(f"[GUARDIAN] critical 오류 분석 skip: {error_record.get('error_type', '')}")
         return {**_empty, "explanation": "critical 심각도 — 자동 수정 불가, 수동 검토 필요"}
 
-    # Tier 2: 패턴 기반 자동 수정 (LLM 호출 0)
+    # Tier 1: 패턴 기반 자동 수정 (Contextual Bandit + static + learned, LLM 호출 0)
     try:
         from JARVIS07_GUARDIAN.pattern_fixer import try_pattern_fix
         pat_result = try_pattern_fix(error_record)
         if pat_result:
-            log.info(f"[GUARDIAN] Tier2 매칭 — {pat_result.get('pattern','?')} ({pat_result.get('target_file','?')})")
+            log.info(f"[GUARDIAN] Tier1 매칭 — {pat_result.get('pattern','?')} ({pat_result.get('target_file','?')})")
             return pat_result
     except Exception as e:
-        log.warning(f"[GUARDIAN] Tier2 매칭 실패: {e}")
+        log.warning(f"[GUARDIAN] Tier1 매칭 실패: {e}")
 
-    # Tier 3: Tier 2 실패 → Claude Code SDK 위임
+    # Tier 2: Tier 1 실패 → Claude Code SDK (LLM) 위임
     return _empty

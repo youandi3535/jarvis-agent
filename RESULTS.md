@@ -65,7 +65,7 @@ flowchart TD
     PERF -. "Ridge 회귀\n가중치 학습" .-> R
 
     subgraph COMMON["공통 레이어"]
-        G["JARVIS07 GUARDIAN\n3-Tier 자가수정\nTier1 정적AST·Tier1.5 RL·Tier2 SDK"]
+        G["JARVIS07 GUARDIAN\ncatch() 단일 진입점 + 2-Tier 자가수정\nTier1 패턴·Bandit · Tier2 LLM SDK"]
         S["JARVIS04 SCHEDULER\nAPScheduler 단일 진입점"]
         N["JARVIS00 INFRA\npreflight·harness·event bus"]
     end
@@ -112,23 +112,21 @@ sequenceDiagram
 
 ---
 
-### 🛡️ JARVIS07 GUARDIAN — 3-Tier 자가 학습 엔진
+### 🛡️ JARVIS07 GUARDIAN — catch() 단일 진입점 + 2-Tier 자가 학습 엔진
 
 ```mermaid
 flowchart LR
-    subgraph TIER["3-Tier 자동 수정 (우선순위 순)"]
+    subgraph TIER["2-Tier 자동 수정 (정수 티어, 1부터)"]
         direction TB
-        T1["Tier 1\n학습 캐시\nfingerprint 즉시 매칭\nLLM 호출 0"]
-        T15["Tier 1.5\nRL 모델\nSGDClassifier\n컨텍스추얼 밴딧"]
-        T2["Tier 2\nClaude Code SDK\nAST 검증 + .bak 백업\n실패 시 자동 롤백"]
+        T1["Tier 1\n패턴 자동 수정\nstatic 6 + 학습 패턴\n+ Contextual Bandit\nLLM 호출 0"]
+        T2["Tier 2\nLLM · Claude Code SDK\nOpus 4.6\nAST 검증 + .bak 롤백"]
     end
 
-    ERR(["⚠️ 오류"]) --> COL["수집·분류\n쿨다운 60초"]
+    ERR(["⚠️ 오류"]) --> COL["catch() 단일 진입점\n6개 메커니즘 · 쿨다운 60초"]
     COL --> T1
-    T1 -->|"미스"| T15
-    T15 -->|"미스"| T2
-    T1 & T15 & T2 -->|"✅ 수정 성공"| LEARN
-    LEARN["learned_patterns.json\n자동 등록\nhit_count++"] -.->|"다음엔 Tier 1 처리"| T1
+    T1 -->|"패턴 없음"| T2
+    T1 & T2 -->|"✅ 수정 성공"| LEARN
+    LEARN["learned_patterns.json\n자동 등록\nhit_count++"] -.->|"다음엔 Tier 1 즉시 처리"| T1
 
     style TIER fill:#1a1a2e,stroke:#7c83fd,color:#fff
 ```
@@ -136,7 +134,7 @@ flowchart LR
 | 지표 | 값 |
 |------|-----|
 | 정적 패턴 Fixer 종류 | 6종 (상대 import·NoneType·NameError·ImportError 등) |
-| RL 모델 | `SGDClassifier` — 수정 성공/실패를 보상으로 가중치 즉시 갱신 |
+| 강화학습 | `Contextual Bandit (Linear UCB)` — fixer 선택을 성공/실패 보상으로 학습 |
 | 자가 학습 안전망 | `.bak` 자동 백업 + `ast.parse` 검증 + 실패 시 롤백 |
 | 누적 패턴 | **265개** · 총 적중 **870회** |
 | eval 게이트 | `eval_agent` — 안전성·정확성·재사용가치 3축 채점 80+ 통과 분만 등록 |
@@ -265,11 +263,11 @@ mindmap
       티스토리
         Selenium 로그인·발행
     ML/RL
+      Contextual Bandit
+        Linear UCB (numpy)
+        GUARDIAN Tier 1 fixer 선택
       scikit-learn
-        SGDClassifier
-        컨텍스추얼 밴딧
-      Ridge 회귀
-        RADAR 가중치 학습
+        Ridge 회귀 RADAR 가중치
     인프라
       APScheduler
         cron·interval

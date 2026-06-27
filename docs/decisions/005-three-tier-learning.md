@@ -1,7 +1,13 @@
-# 005. 3-tier 자가 학습 — 학습 캐시 → 정적 패턴 → LLM 폴백
+# 005. 자가 학습 — 패턴 자동 수정(캐시·정적·Bandit) → LLM 폴백
 
 ## 상태
-확정 (2026-05-13 박제, JARVIS07_GUARDIAN 업그레이드)
+확정 (2026-05-13 박제) · **★ 2026-06-28 갱신** — Tier 1.5(RL/SGDClassifier) 제거 + 캐시·정적패턴을
+*Tier 1(패턴 자동 수정)* 으로 통합 (ERRORS [282]). 현재 런타임 구조는 **catch() 단일 진입점 → Tier 1(패턴·Contextual Bandit) → Tier 2(LLM Opus 4.6)** 의 *2-Tier*.
+
+> **현재 적용 규칙(티어 정의·번호)의 단일 진실 소스는 `JARVIS07_GUARDIAN/architecture.py`.**
+> 본 ADR 의 "Tier 1 캐시 / Tier 2 정적 / Tier 3 LLM" 번호는 *도입 당시(2026-05) 학습 메커니즘 계층* 의 역사적 기록이다.
+> 이후 캐시·정적·Bandit 은 모두 *Tier 1(패턴 자동 수정)* 으로 통합되었고 LLM 은 *Tier 2* 가 되었다.
+> 티어 번호는 *정수, 1부터* — Tier 0·Tier 1.5 같은 표기 금지 (사용자 박제 2026-06-28).
 
 ## 배경
 JARVIS07 GUARDIAN 의 자동 수정 시스템 도입 초기에는 *모든 오류 → LLM 진단* 단일 경로였다. 운영 후:

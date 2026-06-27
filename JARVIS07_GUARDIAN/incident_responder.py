@@ -1,14 +1,15 @@
 """JARVIS07_GUARDIAN/incident_responder.py — 포스팅 실패 즉각 대응 루프 (Active Incident Responder)
 
-포스팅 job 실패 감지 → 3-tier 자동 수정 → 실패 플랫폼만 재발행 → 학습 기록.
+포스팅 job 실패 감지 → 자동 수정 (canonical 2-tier) → 실패 플랫폼만 재발행 → 학습 기록.
+
+★ 티어 정의는 architecture.py 단일 진실 소스. catch()→Tier 1(패턴·Bandit)→Tier 2(LLM).
 
 흐름:
   1. TG: 🔧 [GUARDIAN] {job_id} 실패 감지 — 자동 대응 시작
   2. 오류 분류: code_bug (ImportError 등) | transient (네트워크·쿠키·셀레니움) | unknown
   3. code_bug / unknown:
-       Tier 1 — learned_patterns 캐시 + 정적 pattern_fixer (~5s)
-       Tier 2 — LLM error_analyzer + apply_fix (~30s-2min)
-       Tier 3 — Claude Code SDK targeted 수정 (~10min) — 1·2 실패 시만
+       Tier 1 — 패턴 자동 수정 (static 6 + learned + Contextual Bandit, ~5s)
+       Tier 2 — LLM 자동 수정 (Claude Code SDK · Opus 4.6, ~10min) — Tier 1 실패 시만
      transient: 30초 대기 후 즉시 재시도 (코드 수정 없음)
   4. retry_fns 호출 (실패 플랫폼만)
   5. learned_patterns 자동 기록
@@ -55,23 +56,6 @@ def _tg(msg: str) -> None:
         pass
 
 
-def _send_rl_reward(error_record: dict, analysis: dict, success: bool) -> None:
-    """analysis['source'] 가 'rl:' 로 시작하면 rl_fixer.reward() 호출.
-
-    apply_fix() 실제 결과(ast.parse + import 검증 통과 여부)를 보상으로 전달.
-    """
-    source = analysis.get("source", "")
-    if not source.startswith("rl:"):
-        return
-    try:
-        fixer_name = analysis.get("_rl_fixer") or source.split(":")[1].split("(")[0]
-        rec = analysis.get("_rl_record") or error_record
-        from JARVIS07_GUARDIAN.rl_fixer import reward as rl_reward
-        rl_reward(rec, fixer_name, success=success)
-    except Exception as e:
-        log.debug(f"[Incident] rl_reward 전송 실패: {e}")
-
-
 def _classify(error_text: str) -> str:
     """오류 유형 분류: 'code_bug' | 'transient' | 'unknown'"""
     for kw in _CODE_BUG_TYPES:
@@ -106,9 +90,9 @@ def _make_error_record(error_text: str, job_id: str) -> dict:
 
 
 def _try_fast_fix(error_record: dict, job_id: str) -> bool:
-    """Tier 1 (learned_patterns) + Tier 1.5 (RL) + Tier 2 (정적 pattern_fixer). ~1-10초.
+    """Tier 1 (패턴 자동 수정 — static 6 + learned + Contextual Bandit). ~1-10초.
 
-    ★ analyze() 경유 — RL Tier 1.5 포함. try_pattern_fix 직접 호출 금지 (RL 우회됨).
+    ★ analyze() 경유 — Bandit 학습 포함. try_pattern_fix 직접 호출 금지 (Bandit 우회됨).
     """
     try:
         from JARVIS07_GUARDIAN.error_analyzer import analyze
@@ -117,31 +101,12 @@ def _try_fast_fix(error_record: dict, job_id: str) -> bool:
         result = analyze(error_record)
         if result and result.get("fixable"):
             success = apply_fix(-1, result)
-            # RL 보상 — apply_fix 실제 결과 기반
-            _send_rl_reward(error_record, result, success)
+            # Bandit 보상은 pattern_fixer/error_fixer 내부에서 자동 기록
             if success:
                 log.info(f"[Incident] fast_fix 성공: {result.get('source')} @ {result.get('target_file')}")
                 return True
     except Exception as e:
         log.warning(f"[Incident] fast_fix 오류: {e}")
-    return False
-
-
-def _try_llm_fix(error_record: dict, job_id: str) -> bool:
-    """Tier 3: error_analyzer (LLM Sonnet 4.6) + apply_fix. ~30s-2min."""
-    try:
-        from JARVIS07_GUARDIAN.error_analyzer import analyze
-        from JARVIS07_GUARDIAN.error_fixer import apply_fix
-
-        analysis = analyze(error_record)
-        if analysis.get("fixable"):
-            success = apply_fix(-1, analysis)
-            _send_rl_reward(error_record, analysis, success)
-            if success:
-                log.info(f"[Incident] llm_fix 성공: {analysis.get('target_file')}")
-                return True
-    except Exception as e:
-        log.warning(f"[Incident] llm_fix 오류: {e}")
     return False
 
 
@@ -151,7 +116,7 @@ def _try_sdk_targeted_fix(
     failed_platforms: list[str],
     theme: str,
 ) -> bool:
-    """Tier 3: Claude Code SDK targeted 수정 (최대 10분). Tier 1-2 모두 실패 시만."""
+    """Tier 2: Claude Code SDK targeted 수정 (최대 10분). Tier 1 실패 시만."""
     try:
         from JARVIS07_GUARDIAN.auto_repair import run_auto_repair_targeted
         return run_auto_repair_targeted(
@@ -212,11 +177,11 @@ def respond(
         _tg(f"🔍 [GUARDIAN] 오류 분석 중 ({error_class})...")
         error_record = _make_error_record(error_text, job_id)
 
-        # 1순위: learned_patterns + 정적 패턴
+        # Tier 1: learned_patterns + 정적 패턴 + Contextual Bandit
         fix_applied = _try_fast_fix(error_record, job_id)
 
         if not fix_applied:
-            # 2순위 LLM 제거 → 3순위 SDK targeted 직행 (★ 사용자 박제 2026-05-31)
+            # Tier 2: Claude Code SDK targeted (Tier 1 실패 시 직행 — ★ 사용자 박제 2026-05-31)
             _tg(f"⚙️ [GUARDIAN] Claude Code SDK targeted 수정 시작 (최대 10분)...")
             fix_applied = _try_sdk_targeted_fix(error_text, job_id, failed_platforms, theme)
     else:

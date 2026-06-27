@@ -1530,10 +1530,10 @@ _PATTERN_FIXERS = [
 def try_pattern_fix(error_record: dict) -> Optional[dict]:
     """패턴 기반 자동 수정 시도. 성공 시 patch dict 반환, 실패 시 None.
 
-    Tier 2 (패턴 자동 수정) 내부 시도 순서 — 모두 Bandit 학습:
+    Tier 1 (패턴 자동 수정) 내부 시도 순서 — 모두 Bandit 학습:
       Group 1 (검증됨): static 코어 6종 + hit≥3 학습 패턴  → Bandit Linear UCB 랭킹
       Group 2 (신규):   hit 1~2 학습 패턴                   → Bandit Linear UCB 랭킹
-      전체 실패 시 None → error_analyzer 가 Tier 3 (LLM) 으로 위임
+      전체 실패 시 None → error_analyzer 가 Tier 2 (LLM) 로 위임
 
     양의 보상(성공)은 error_fixer.apply_fix() 에서 실제 파일 수정 후 기록.
     """

@@ -2276,8 +2276,8 @@ with t_err:
     try:
         import sqlite3 as _s3
         _c = _s3.connect(str(DB_PATH))
-        # critical: Tier 2 실패 → wontfix 마킹됨 (수동 검토 대상)
-        # high: Tier 2+3 모두 실패 → wontfix 마킹됨
+        # critical: Tier 1만 수행 → 패턴 없으면 수동 검토 (wontfix)
+        # high: Tier 1 → Tier 2 모두 실패 → wontfix 마킹됨
         # new/analyzing 중 critical/high: 아직 처리 안 됨 (수동 검토 필요)
         _crit_unresolved = _c.execute("""
             SELECT COUNT(*) FROM error_log
@@ -2309,51 +2309,62 @@ with t_err:
             with col:
                 md(kpi(label, cnt, color=color, sub=f"전체의 {pct}%"))
 
-        # ★ catch() 단일 진입점 아키텍처 카드
-        section("🎣 오류 자동 캐치 아키텍처 — catch() 단일 진입점")
+        # ★ 오류 자동 캐치·수정 아키텍처 카드 — architecture.py 단일 진실 소스
+        try:
+            from JARVIS07_GUARDIAN import architecture as _arch
+            _ARCH_MECHS = _arch.CATCH_MECHANISMS
+            _ARCH_TIERS = _arch.TIERS
+        except Exception:
+            _arch = None
+            _ARCH_MECHS, _ARCH_TIERS = [], []
+
+        section("🎣 오류 자동 캐치·수정 아키텍처 (단일 진입점)")
         _arch_cols = st.columns(3)
-        _tier1_mechs = [
-            ("sys.excepthook", "메인 스레드 미처리 예외", "danger"),
-            ("threading.excepthook", "백그라운드 스레드 예외", "warn"),
-            ("APScheduler EVENT_JOB_ERROR", "스케줄 잡 실패", "warn"),
-            ("log_scanner", "JARVIS*/logs/ ERROR/WARNING 줄", "primary"),
-            ("auto_catch 데코레이터", "함수 단위 wrap — @auto_catch('agent')", "primary"),
-            ("report() / catch() 직접", "try/except 블록 명시 호출", "muted"),
-        ]
         with _arch_cols[0]:
-            md(kpi("Tier 0 — catch() 단일 진입점", "6개 메커니즘", color="primary",
-                   sub="모든 오류 경로 → catch() 직접 호출"))
-        with _arch_cols[1]:
-            md(kpi("Tier 1.5 — RL Bandit", "SGDClassifier", color="success",
-                   sub="패턴 선택 최적화 (sklearn 설치 시 활성)"))
-        with _arch_cols[2]:
-            md(kpi("Tier 2 → Tier 3", "패턴 → Opus 4.6", color="warn",
-                   sub="CRITICAL = Tier 2만 · 나머지 전 단계"))
-        # 6개 메커니즘 테이블
+            md(kpi("catch() 단일 진입점", f"{len(_ARCH_MECHS)}개 메커니즘",
+                   color="primary", sub="모든 오류 → catch() 직접 진입 (탐지)"))
+        # Tier 1 / Tier 2 (architecture.TIERS 기준)
+        _tier_colors = ["success", "warn"]
+        for _i, _t in enumerate(_ARCH_TIERS[:2]):
+            with _arch_cols[_i + 1]:
+                md(kpi(f"Tier {_t['n']} — {_t['name']}",
+                       "LLM 0" if not _t["uses_llm"] else "LLM Opus 4.6",
+                       color=_tier_colors[_i] if _i < len(_tier_colors) else "muted",
+                       sub=_t["engine"]))
+        # 6개 메커니즘 테이블 (색상은 표시용 — SSOT 순서대로)
+        _mech_palette = ["danger", "warn", "warn", "primary", "primary", "muted"]
+        _tier1_mechs = [
+            (name, desc, _mech_palette[i] if i < len(_mech_palette) else "muted")
+            for i, (name, desc) in enumerate(_ARCH_MECHS)
+        ]
         _mech_rows = [[
             badge(name, color),
             f'<span style="font-size:14px;color:{N["text2"]}">{desc}</span>',
         ] for name, desc, color in _tier1_mechs]
         md(table(["메커니즘", "역할"], _mech_rows))
 
-        # 자동수정 정책 카드
+        # 자동수정 정책 카드 — architecture.SEVERITY_MATRIX 단일 진실 소스
         section("🤖 자동수정 정책 (현행)")
-        _pol_cols = st.columns(4)
-        _policy = [
-            ("⚪ LOW",      "Tier 2 → Tier 3\n학습 후 다음엔 Tier 2 해결", "muted"),
-            ("🟡 MEDIUM",   "Tier 2 → Tier 3\n수정 실패 시 알림",          "primary"),
-            ("🟠 HIGH",     "Tier 2 → Tier 3\n항상 알림",                  "warn"),
-            ("🔴 CRITICAL", "Tier 2만\nLLM 생략 · 수동 검토",              "danger"),
-        ]
-        for col, (sev, desc, color) in zip(_pol_cols, _policy):
-            with col:
-                md(kpi(sev, desc.split("\n")[0], color=color, sub=desc.split("\n")[1]))
+        _sev_meta = {
+            "low":      ("⚪ LOW",      "muted"),
+            "medium":   ("🟡 MEDIUM",   "primary"),
+            "high":     ("🟠 HIGH",     "warn"),
+            "critical": ("🔴 CRITICAL", "danger"),
+        }
+        _matrix = getattr(_arch, "SEVERITY_MATRIX", []) if _arch else []
+        if _matrix:
+            _pol_cols = st.columns(len(_matrix))
+            for col, (sev, flow, note) in zip(_pol_cols, _matrix):
+                label, color = _sev_meta.get(sev, (sev.upper(), "muted"))
+                with col:
+                    md(kpi(label, flow, color=color, sub=note))
 
-        # 안전장치 현황 카드
+        # 안전장치 현황 카드 — 설정값은 architecture.py 단일 진실 소스
         section("🔒 안전장치 현황")
         sg_cols = st.columns(3)
         try:
-            from JARVIS07_GUARDIAN.guardian_agent import _cb_count, _CB_MAX_HOUR, _ESCALATE_THRESHOLD
+            from JARVIS07_GUARDIAN.architecture import CB_MAX_HOUR as _CB_MAX_HOUR, ESCALATE_THRESHOLD as _ESCALATE_THRESHOLD
+            from JARVIS07_GUARDIAN.guardian_agent import _cb_count
             _cb_used = _cb_count
             _cb_remain = max(0, _CB_MAX_HOUR - _cb_used)
         except Exception:
@@ -2577,37 +2588,38 @@ with t_err:
         except Exception as _e:
             md(empty_state(f"학습 통계 로드 실패: {_e}"))
 
-        # ★ RL 모델 카드 (사용자 박제 2026-06-07 — ERRORS [258])
+        # ★ Tier 1 강화학습 카드 — Contextual Bandit (Linear UCB, bandit.py)
+        #    Tier 1 패턴 수정의 fixer 시도 순서를 보상으로 학습하는 실가동 RL.
         try:
-            from JARVIS07_GUARDIAN.rl_fixer import rl_stats as _rl_stats
-            _rs = _rl_stats()
-            if not _rs.get("error"):
-                section("🎯 RL 학습 모델 — Tier 1.5 (SGDClassifier · ε=0.15)")
-                rc1, rc2, rc3, rc4 = st.columns(4)
-                with rc1:
-                    _exists = _rs.get("model_exists", False)
-                    md(kpi("모델 파일", "OK" if _exists else "—",
-                           color="success" if _exists else "danger",
-                           sub="rl_model.pkl"))
-                with rc2:
-                    _uc = _rs.get("update_count", 0)
-                    md(kpi("보상 업데이트", _uc,
-                           color="success" if _uc > 0 else "muted",
-                           sub="누적 partial_fit 호출"))
-                with rc3:
-                    _cn = _rs.get("coef_norm", 0.0)
-                    md(kpi("가중치 norm", f"{_cn:.2f}",
-                           color="primary" if _cn > 5.0 else "muted",
-                           sub="모델 학습 강도"))
-                with rc4:
-                    _na = _rs.get("n_actions", 0)
-                    md(kpi("액션 수", f"{_na}종",
-                           color="primary",
-                           sub=f"{_rs.get('n_features', 0)}차원 feature"))
-        except ImportError:
-            pass  # sklearn 미설치 — Tier 1.5 비활성
+            from JARVIS07_GUARDIAN.bandit import stats as _bandit_stats, top_fixers as _bandit_top
+            _bs = _bandit_stats()
+            section("🎰 Tier 1 강화학습 — Contextual Bandit (Linear UCB)")
+            rc1, rc2, rc3, rc4 = st.columns(4)
+            with rc1:
+                _arms = _bs.get("arm_count", 0)
+                md(kpi("학습 fixer (arm)", f"{_arms}종",
+                       color="success" if _arms > 0 else "muted",
+                       sub="보상으로 순위 학습"))
+            with rc2:
+                md(kpi("모델", "Linear UCB",
+                       color="primary", sub=_bs.get("model", "Contextual Bandit")))
+            with rc3:
+                md(kpi("feature 차원", f"{_bs.get('feature_dim', 0)}차원",
+                       color="muted", sub="error_type+module+message 맥락"))
+            with rc4:
+                md(kpi("탐색 계수 α", f"{_bs.get('alpha', 0):.2f}",
+                       color="muted", sub="exploration bonus"))
+            # 예상 보상 Top fixer
+            _top = _bandit_top(5)
+            if _top:
+                _top_rows = [[
+                    f'<span style="font-size:14px">{esc(t.get("fixer", "?"))}</span>',
+                    badge(f'{t.get("mean_reward", 0):.3f}',
+                          "success" if t.get("mean_reward", 0) > 0 else "muted"),
+                ] for t in _top]
+                md(table(["fixer", "예상 보상 (승률)"], _top_rows, max_rows=5))
         except Exception as _e:
-            md(empty_state(f"RL 통계 로드 실패: {_e}"))
+            md(empty_state(f"Contextual Bandit 통계 로드 실패: {_e}"))
 
         # 에이전트별 현황
         if g_source:
