@@ -241,7 +241,7 @@ flowchart LR
 | 지표 | 현재 값 | 의미 |
 |------|---------|------|
 | 누적 패턴 | **44개** | fingerprint 즉시 매칭 가능 오류 유형 (노이즈 정리 후 유효 패턴) |
-| 총 적중 수 | **249회** | LLM 호출 없이 자동 처리된 횟수 (런타임 누적·증가 중) |
+| 총 적중 수 | **250회+** | LLM 호출 없이 자동 처리 (런타임 누적·실시간 증가) |
 | 누적 오류 처리 | **1,378건 / 82%** | `error_log` 누적 수집 · 자동+수동 해결률 |
 | 오류 기록 | **289건 / 5,981줄** | `JARVIS07_GUARDIAN/ERRORS.md` 구조화 회고 |
 | 체크포인트 | **50MB** | `react_checkpoints.sqlite` (ReAct 실가동 증거) |
@@ -453,6 +453,29 @@ python shared/agent_registration_check.py
 | **학습 루프** | 오류 수정 사례 자동 자산화 → 다음 오류는 LLM 0 즉시 처리 |
 
 자세한 규정은 [CLAUDE.md](CLAUDE.md) 참조.
+
+---
+
+## 🔬 운영 증거
+
+| 증거 | 값 / 위치 | 의미 |
+|------|----------|------|
+| `react_checkpoints.sqlite` | **50 MB** | ReAct 라우터 실제 누적 가동 증거 |
+| `JARVIS07_GUARDIAN/ERRORS.md` | **289건 / 5,981줄** | 운영 사고 구조화 회고 → 코드 환류 |
+| RADAR 폐쇄 학습 루프 | 발행 → 성과 수집 → Ridge 회귀 → opportunity_score | 자율 학습 실증 |
+| 자가 학습 LLM 절감 | **250회+ 패턴 적중** | 동일 오류 LLM 0 즉시 처리 (실시간 증가) |
+| 검증 순환 하니스 | 5-Layer (preflight→precondition→step→verify→send) | "결함 있는 결과물은 송출되지 않는다" |
+
+---
+
+## ⚖️ 한계 (정직 기록)
+
+| 구분 | 내용 | 계획 |
+|------|------|------|
+| 🟡 테스트 커버리지 | 핵심 경로(ReAct·harness·발행) 테스트 2개 | 보강 예정 |
+| 🟡 발행 멱등성 | 영구 "오늘 이미 발행" 가드 미완 | 발행 검증 강화 예정 |
+| 🟡 단일 macOS 의존 | GUI 자동화(Selenium) → 서버 환경 미지원 | 발행 워커 분리·컨테이너화 예정 |
+| 🟡 레거시 import 잔존 | `shared/tracing.py`·`schemas.py`를 일부 경로가 참조하나 파일 부재 (대부분 try/except 가드 — 데몬 가동엔 영향 없음) | import 정리 예정 |
 
 ---
 
