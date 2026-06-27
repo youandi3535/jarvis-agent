@@ -6,7 +6,7 @@
 전 과정이 단일 데몬 안에서 자율 동작하는 10-모듈 멀티에이전트 시스템
 
 [![Team](https://img.shields.io/badge/Team-2인%20공동개발-00C851?style=flat-square)](README.md#-팀--역할)
-[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![Claude](https://img.shields.io/badge/Claude-Sonnet%204.6%20%2F%20Opus%204.6-D97757?style=flat-square)](https://anthropic.com)
 [![LangGraph](https://img.shields.io/badge/LangGraph-ReAct%20%2B%20SqliteSaver-FF6B35?style=flat-square)](https://langchain-ai.github.io/langgraph/)
 
@@ -21,12 +21,12 @@
 | 지표 | 값 | 비고 |
 |:----:|:--:|:----:|
 | 🗂️ **에이전트 모듈** | **10개** | JARVIS00_INFRA ~ JARVIS09_COLLECTOR |
-| 📝 **Python 코드** | **68,308 LOC** | 169개 파일 |
-| 🔧 **ReAct 등록 도구** | **42개** | SAFE / APPROVAL 분류, 승인 게이트 |
-| 🛡️ **거버넌스 검증** | **27종** | `precommit_check.py` 947줄 |
-| 🧠 **학습 패턴 누적** | **265개** | 870회 적중 (LLM 호출 절감) |
-| 📦 **체크포인트 DB** | **51 MB** | `react_checkpoints.sqlite` (실가동 증거) |
-| 📋 **오류 기록** | **285건 / 5,945줄** | `ERRORS.md` 구조화 회고 |
+| 📝 **Python 코드** | **68,900 LOC** | 168개 파일 |
+| 🔧 **ReAct 등록 도구** | **29개** | SAFE / APPROVAL 분류, 승인 게이트 |
+| 🛡️ **거버넌스 검증** | **40종** | `precommit_check.py` 947줄 |
+| 🧠 **학습 패턴 누적** | **44개** | 236회 적중 (LLM 호출 절감) |
+| 📦 **체크포인트 DB** | **50 MB** | `react_checkpoints.sqlite` (실가동 증거) |
+| 📋 **오류 기록** | **289건 / 5,981줄** | `ERRORS.md` 구조화 회고 |
 | 💰 **LLM 외부 API 비용** | **₩0** | Claude Max OAuth — 별도 과금 없음 |
 
 </div>
@@ -136,7 +136,7 @@ flowchart LR
 | 정적 패턴 Fixer 종류 | 6종 (상대 import·NoneType·NameError·ImportError 등) |
 | 강화학습 | `Contextual Bandit (Linear UCB)` — fixer 선택을 성공/실패 보상으로 학습 |
 | 자가 학습 안전망 | `.bak` 자동 백업 + `ast.parse` 검증 + 실패 시 롤백 |
-| 누적 패턴 | **265개** · 총 적중 **870회** |
+| 누적 패턴 | **44개** · 총 적중 **236회** |
 | eval 게이트 | `eval_agent` — 안전성·정확성·재사용가치 3축 채점 80+ 통과 분만 등록 |
 
 ---
@@ -243,11 +243,11 @@ mindmap
     데이터
       SQLite WAL
         공용 DB
-        체크포인트 51MB
+        체크포인트 50MB
       ChromaDB
-        벡터 유사도 검색
+        오류·Q&A 시맨틱 검색
       JSON
-        학습 패턴 265개
+        학습 패턴 44개
     수집
       pytrends
         Google Trends
@@ -283,10 +283,10 @@ mindmap
 
 | 증거 | 값 / 위치 | 의미 |
 |------|---------|------|
-| `react_checkpoints.sqlite` | **51 MB** | ReAct 라우터 실제 누적 가동 증거 |
-| `JARVIS07_GUARDIAN/ERRORS.md` | **285건 / 5,945줄** | 운영 사고 구조화 회고 → 코드 환류 |
+| `react_checkpoints.sqlite` | **50 MB** | ReAct 라우터 실제 누적 가동 증거 |
+| `JARVIS07_GUARDIAN/ERRORS.md` | **289건 / 5,981줄** | 운영 사고 구조화 회고 → 코드 환류 |
 | RADAR 학습 루프 | 발행 → 성과 수집 → Ridge 회귀 → opportunity_score | 폐쇄 학습 루프 실증 |
-| 자가 학습 LLM 절감 | 870회 패턴 적중 | 동일 오류 LLM 0 자동 처리 |
+| 자가 학습 LLM 절감 | 236회 패턴 적중 | 동일 오류 LLM 0 자동 처리 |
 
 ---
 
@@ -320,7 +320,7 @@ git 커밋은 단일 계정(`youandi3535`)으로 기록되지만, 설계·구현
 
 | 구분 | 내용 | 계획 |
 |------|------|------|
-| 🔴 `shared/tracing.py`·`shared/schemas.py` 커밋 누락 | 로컬엔 존재 (51MB 체크포인트가 가동 증명)하나 repo 미반영 → clone 시 ReAct import 에러 | 두 파일 커밋으로 재현성 복구 예정 |
+| 🔴 `shared/tracing.py`·`shared/schemas.py` 커밋 누락 | 로컬엔 존재 (50MB 체크포인트가 가동 증명)하나 repo 미반영 → clone 시 ReAct import 에러 | 두 파일 커밋으로 재현성 복구 예정 |
 | 🟡 테스트 커버리지 부족 | 핵심 경로(ReAct·harness·발행) 테스트 2개 | 보강 예정 |
 | 🟡 발행 멱등성 미완 | 영구 "오늘 이미 발행" 가드 부재 | 티스토리 발행 검증 추가 예정 |
 | 🟡 단일 macOS 의존 | GUI 자동화(Selenium) → 서버 환경 미지원 | 발행 워커 분리·컨테이너화 예정 |
