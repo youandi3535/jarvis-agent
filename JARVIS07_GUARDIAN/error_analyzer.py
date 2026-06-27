@@ -119,10 +119,8 @@ PATCH:
 """
     try:
         from shared.llm import invoke_text
-        if severity in ("high", "critical"):
-            raw = invoke_text("coder", prompt, timeout=240).strip()
-        else:
-            raw = invoke_text("writer", prompt, timeout=180).strip()
+        # Tier 3 — 항상 Opus 4.6 ("guardian" alias): 코드 수정 판단은 최고 성능 모델
+        raw = invoke_text("guardian", prompt, timeout=300).strip()
     except Exception as e:
         log.error(f"[GUARDIAN] Claude LLM 분석 실패: {e}")
         return {**_empty, "explanation": f"LLM 분석 실패: {e}"}
@@ -155,9 +153,10 @@ PATCH:
 def analyze(error_record: dict) -> dict:
     """오류 레코드를 분석해 수정 방안 반환.
 
-    우선순위:
-      Tier 1   — 고빈도 승격(hit≥5) + 정적 패턴 6종 + 학습 캐시 (LLM 호출 0, 통합)
-      Tier 2   — Claude Code SDK targeted (_orchestrate 에서 위임)
+    3-Tier 구조:
+      Tier 1 — 오류 캐치     : error_collector.report() / log_scanner  (이 함수 호출 전 완료)
+      Tier 2 — 패턴 자동 수정: Bandit + static 6 + learned patterns    (LLM 호출 0)
+      Tier 3 — LLM 자동 수정 : Claude Code SDK Sonnet 4.6              (_orchestrate 에서 위임)
 
     Returns:
         dict with keys: fixable, target_file, patch, explanation, source
@@ -171,15 +170,15 @@ def analyze(error_record: dict) -> dict:
         log.info(f"[GUARDIAN] critical 오류 분석 skip: {error_record.get('error_type', '')}")
         return {**_empty, "explanation": "critical 심각도 — 자동 수정 불가, 수동 검토 필요"}
 
-    # Tier 1: 고빈도 승격 패턴(hit≥5) + 정적 패턴 6종 + 학습 캐시 (LLM 호출 0)
+    # Tier 2: 패턴 기반 자동 수정 (LLM 호출 0)
     try:
         from JARVIS07_GUARDIAN.pattern_fixer import try_pattern_fix
         pat_result = try_pattern_fix(error_record)
         if pat_result:
-            log.info(f"[GUARDIAN] Tier1 매칭 — {pat_result.get('pattern','?')} ({pat_result.get('target_file','?')})")
+            log.info(f"[GUARDIAN] Tier2 매칭 — {pat_result.get('pattern','?')} ({pat_result.get('target_file','?')})")
             return pat_result
     except Exception as e:
-        log.warning(f"[GUARDIAN] Tier1 매칭 실패: {e}")
+        log.warning(f"[GUARDIAN] Tier2 매칭 실패: {e}")
 
-    # Tier 2: Tier 1 실패 → Claude Code SDK 위임
+    # Tier 3: Tier 2 실패 → Claude Code SDK 위임
     return _empty

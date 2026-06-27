@@ -1,13 +1,17 @@
 """JARVIS07_GUARDIAN/error_collector.py — 전 에이전트 오류 수집기.
 
-수집 경로:
-  A. Python 전역 예외 훅 (sys.excepthook)
-  B. APScheduler EVENT_JOB_ERROR 리스너
-  C. 로그 파일 watchdog (JARVIS02/logs/*.log)
-  D. 직접 호출 API (다른 에이전트가 collect_error() 호출)
+★ 단일 공개 진입점: catch(exc, source, ...)
+  - 외부 에이전트는 이 함수 하나만 호출하면 됨
+  - report = catch  (하위 호환 alias)
+  - auto_catch 데코레이터/컨텍스트 매니저도 내부적으로 catch() 호출
 
-모든 수집은 shared.db.save_error() → error_log 테이블로 단일 저장.
-ERROR_DETECTED 이벤트를 bus에 publish → guardian_agent가 구독 후 처리.
+내부 자동 배선 (install() 로 데몬 부팅 시 1회 설치):
+  · sys.excepthook        → 메인 스레드 미처리 예외
+  · threading.excepthook  → 백그라운드 스레드 미처리 예외
+  · APScheduler listener  → 스케줄 잡 실패
+  · log_scanner           → 모든 JARVIS*/logs/ ERROR/WARNING 줄
+
+모든 경로의 종착점: _collect_error() → shared.db.save_error() + bus.publish(ERROR_DETECTED)
 """
 from __future__ import annotations
 
@@ -30,12 +34,13 @@ _cooldown_lock = threading.Lock()
 _cooldown: dict[str, float] = {}   # key → last_seen epoch
 _COOLDOWN_SECS = 60
 
-# ★ 사용자 박제 2026-05-15 — 정밀화: 로그 레벨이 *실제로* ERROR/CRITICAL 인 줄만 수집.
-# 옛 패턴: 메시지 안에 "Error" 단어만 있어도 매칭 → INFO 줄도 수집 → 재귀 루프.
-# 신 패턴: 줄 시작 또는 표준 로깅 포맷의 *level 필드* 가 ERROR/CRITICAL 인 경우만.
-# 형태: "... [ERROR] ..." 또는 "... ERROR:logger: ..." 또는 "... <ts> ERROR ..." 등.
+# 로그 레벨 ERROR/CRITICAL + WARNING 이면서 *Exception/Error 타입 이름* 이 포함된 줄만 수집.
+# WARNING 단독(메시지만)은 노이즈가 많아 제외 — Exception 타입명이 반드시 있어야 함.
 _LOG_ERROR_PAT = re.compile(
-    r"(?:\[ERROR\]|\[CRITICAL\]|^\s*ERROR\b|^\s*CRITICAL\b|\bERROR:[\w.]+:|\bCRITICAL:[\w.]+:|\s\-\s(?:ERROR|CRITICAL)\s)"
+    r"(?:\[ERROR\]|\[CRITICAL\]|\[WARNING\]"
+    r"|^\s*ERROR\b|^\s*CRITICAL\b|^\s*WARNING\b"
+    r"|\bERROR:[\w.]+:|\bCRITICAL:[\w.]+:|\bWARNING:[\w.]+:"
+    r"|\s\-\s(?:ERROR|CRITICAL|WARNING)\s)"
     r".*?(?P<etype>[A-Z][A-Za-z]{0,40}(?:Error|Exception))"
     r"(?:[:\s]|$)"
     r"(?P<msg>[^\n]{0,200})",
@@ -79,9 +84,9 @@ def _in_cooldown(key: str) -> bool:
         return False
 
 
-# ── 핵심 수집 함수 ───────────────────────────────────────────────
+# ── 핵심 수집 함수 (내부 전용) ──────────────────────────────────
 
-def collect_error(
+def _collect_error(
     source: str,
     error_type: str,
     message: str,
@@ -144,87 +149,31 @@ def collect_error(
     return error_id
 
 
-# ── A. 전역 예외 훅 ─────────────────────────────────────────────
-
-_orig_excepthook = sys.excepthook
-
-
-def _guardian_excepthook(exc_type, exc_val, exc_tb):
-    """전역 미처리 예외를 가로채 수집."""
-    # 원본 훅 먼저 실행
-    _orig_excepthook(exc_type, exc_val, exc_tb)
-
-    try:
-        tb_str = "".join(_tb_mod.format_exception(exc_type, exc_val, exc_tb))
-        # 모듈/함수 추출 (마지막 스택 프레임)
-        module = func = None
-        if exc_tb:
-            frames = _tb_mod.extract_tb(exc_tb)
-            if frames:
-                last = frames[-1]
-                module = Path(last.filename).name if last.filename else None
-                func = last.name
-        collect_error(
-            source="daemon",
-            error_type=exc_type.__name__,
-            message=str(exc_val)[:500],
-            module=module,
-            func_name=func,
-            tb_str=tb_str,
-        )
-    except Exception:
-        pass  # 수집 실패가 데몬을 막으면 안 됨
-
-
-def _thread_excepthook(args):
-    """스레드 내 미처리 예외 수집 — sys.excepthook 이 도달하지 못하는 스레드 예외 커버."""
-    try:
-        import traceback as _tbm
-        tb_str = "".join(_tbm.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
-        thread_name = getattr(args.thread, "name", "unknown_thread")
-        collect_error(
-            source="thread",
-            error_type=args.exc_type.__name__,
-            message=str(args.exc_value)[:500],
-            module=thread_name,
-            func_name=thread_name,
-            tb_str=tb_str,
-        )
-    except Exception:
-        pass
-
-
-def register_global_hook():
-    """sys.excepthook + threading.excepthook 을 guardian 훅으로 교체. daemon 부팅 시 1회 호출."""
-    sys.excepthook = _guardian_excepthook
-    import threading as _threading
-    _threading.excepthook = _thread_excepthook
-    log.info("[GUARDIAN] 전역 예외 훅 등록 완료 (main + thread)")
+# ── A. 전역 예외 훅 — install() 안 클로저로 설치 ─────────────────
 
 
 # ── B. APScheduler 잡 실패 리스너 ────────────────────────────────
 
 def make_scheduler_listener():
-    """APScheduler EVENT_JOB_ERROR 콜백 함수 반환.
-
-    event_type(EVENT_JOB_ERROR)은 JARVIS04_SCHEDULER.job_history.attach_listeners 가 제공.
-    apscheduler import는 JARVIS04 단일 진입점 규정에 따라 이 함수에서 제거.
-    """
+    """APScheduler EVENT_JOB_ERROR 콜백 함수 반환 — 내부에서 catch() 직접 호출."""
     def _on_job_error(event):
         try:
             exc = event.exception
             tb_str = "".join(_tb_mod.format_exception(
                 type(exc), exc, exc.__traceback__
             )) if exc else None
-            collect_error(
-                source="scheduler",
-                error_type=type(exc).__name__ if exc else "JobError",
-                message=str(exc)[:500] if exc else f"Job {event.job_id} failed",
-                module=f"job:{event.job_id}",
-                func_name=event.job_id,
-                tb_str=tb_str,
-                context=f'{{"job_id": "{event.job_id}"}}',
-            )
+            if exc:
+                catch(exc, "scheduler",
+                      module=f"job:{event.job_id}",
+                      func_name=event.job_id,
+                      context=f'{{"job_id": "{event.job_id}"}}',
+                      tb_str=tb_str)
+            else:
+                catch("JobError", "scheduler",
+                      message=f"Job {event.job_id} failed",
+                      module=f"job:{event.job_id}",
+                      func_name=event.job_id,
+                      context=f'{{"job_id": "{event.job_id}"}}')
         except Exception as e:
             log.warning(f"[GUARDIAN] 스케줄러 리스너 오류: {e}")
 
@@ -273,9 +222,9 @@ class _LogFileHandler:
             # ★ 재귀 차단 — GUARDIAN 자체 수집/스캔 로그는 수집 안 함
             if _LOG_SKIP_PAT.search(full_line):
                 continue
-            collect_error(
-                source="log_file",
-                error_type=m.group("etype") or "LogError",
+            catch(
+                m.group("etype") or "LogError",
+                "log_file",
                 message=m.group("msg").strip(),
                 module=log_file.name,
             )
@@ -284,13 +233,25 @@ class _LogFileHandler:
 # 다중 로그 스캐너 (에이전트별 로그 디렉토리 전부 감시)
 _log_scanners: list[_LogFileHandler] = []
 
-# 기본 감시 대상 — 데몬 부팅 시 자동 등록
-_DEFAULT_LOG_DIRS = [
-    _ROOT / "logs",                         # 루트 daemon 로그
-    _ROOT / "JARVIS02_WRITER" / "logs",
-    _ROOT / "JARVIS03_RADAR" / "logs",
-    Path(__file__).parent / "logs",         # JARVIS07 자체 로그
-]
+
+def _discover_log_dirs() -> list[Path]:
+    """JARVIS 프로젝트 내 모든 logs/ 디렉토리를 자동 탐색.
+
+    - _ROOT/logs/ (루트 daemon 로그)
+    - _ROOT/JARVIS*/logs/ (각 에이전트 로그)
+    → 새 에이전트 추가 시 자동 인식 — 하드코딩 불필요.
+    """
+    dirs: list[Path] = []
+    root_log = _ROOT / "logs"
+    if root_log.is_dir():
+        dirs.append(root_log)
+    for jarvis_dir in sorted(_ROOT.glob("JARVIS*")):
+        if not jarvis_dir.is_dir():
+            continue
+        log_dir = jarvis_dir / "logs"
+        if log_dir.is_dir():
+            dirs.append(log_dir)
+    return dirs
 
 
 def get_log_scanner() -> Optional[_LogFileHandler]:
@@ -312,7 +273,6 @@ def register_log_dir(log_dir: Path):
     if not log_dir.exists():
         log.warning(f"[GUARDIAN] 로그 폴더 없음 (건너뜀): {log_dir}")
         return
-    # 중복 방지
     existing = {s._log_dir for s in _log_scanners}
     if log_dir in existing:
         return
@@ -324,58 +284,187 @@ def init_log_scanner(log_dir: Path = None):
     """로그 스캐너 초기화. guardian_agent.register()에서 호출.
 
     log_dir 지정 시 해당 디렉토리만 추가.
-    미지정 시 _DEFAULT_LOG_DIRS 전체 등록.
+    미지정 시 _discover_log_dirs() 로 전체 JARVIS*/logs/ 자동 탐색.
     """
     if log_dir is not None:
         register_log_dir(log_dir)
         return
-    # 기본 전체 등록
-    for d in _DEFAULT_LOG_DIRS:
+    for d in _discover_log_dirs():
         register_log_dir(d)
     log.info(f"[GUARDIAN] 로그 스캐너 초기화 완료 — {len(_log_scanners)}개 디렉토리")
 
 
-# ── D. 공개 래퍼 API (다른 에이전트에서 직접 호출) ──────────────
+# ── D. auto_catch — try/except 없이도 오류 자동 수집 ─────────────
 
-def report(
+import functools
+
+class auto_catch:
+    """데코레이터 + 컨텍스트 매니저 겸용 — 예외를 자동으로 guardian 에 보고.
+
+    데코레이터:
+        @auto_catch("publisher")
+        def post_to_naver(...): ...
+
+    컨텍스트 매니저:
+        with auto_catch("collector"):
+            collect_stocks_data(theme)
+
+    reraise=True(기본): 예외 재발생 — caller 도 실패를 인지.
+    reraise=False: 예외 삼킴 — 오류 보고만 하고 계속 진행.
+    """
+    def __init__(self, source: str, reraise: bool = True):
+        self._source  = source
+        self._reraise = reraise
+
+    # ── 데코레이터 모드 ──────────────────────────────────────────
+    def __call__(self, fn):
+        src = self._source
+        rr  = self._reraise
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as exc:
+                try:
+                    catch(exc, src,
+                          module=getattr(fn, '__module__', src) or src,
+                          func_name=getattr(fn, '__qualname__', fn.__name__))
+                except Exception:
+                    pass
+                if rr:
+                    raise
+        return wrapper
+
+    # ── 컨텍스트 매니저 모드 ─────────────────────────────────────
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_val is not None:
+            try:
+                catch(exc_val, self._source,
+                      module=self._source,
+                      func_name="<context>")
+            except Exception:
+                pass
+        return not self._reraise   # True → 예외 삼킴, False → 재발생
+
+
+# ── E. 단일 공개 진입점 ──────────────────────────────────────────
+
+def catch(
+    exc_or_type,
     source: str,
-    exc: Exception,
+    *,
+    message: str = None,
     module: str = None,
     func_name: str = None,
     context=None,
+    tb_str: str = None,
 ) -> Optional[int]:
-    """다른 에이전트가 try/except 후 오류를 간편하게 보고하는 API.
+    """★ 단일 오류 캐치 진입점 — sys.excepthook·threading·APScheduler·log_scanner·외부 모두 여기로.
 
-    Example:
-        from JARVIS07_GUARDIAN.error_collector import report
-        try:
-            ...
-        except Exception as e:
-            report("writer", e, module="trend_economic_writer.py", func_name="run_naver")
+    두 가지 호출 형태:
+        # Exception 객체 (외부 에이전트, auto_catch, 각종 훅)
+        catch(exc, "writer", module=__name__)
 
-    context 호환성 (ADR 009 — preflight 등 dict 컨텍스트 호출자 안전 박제):
-      - str: 그대로 저장 (표준)
-      - dict / list: json.dumps 자동 직렬화 (sqlite TEXT 컬럼 호환)
-      - 기타 (int/float 등): str() 변환
-      - None: None 그대로
+        # 문자열 error_type (log_scanner 등 Exception 객체 없는 경우)
+        catch("ValueError", "log_file", message="파일 없음", module="foo.log")
+
+    context: str / dict / list 모두 허용 (내부에서 JSON 직렬화)
+    tb_str:  traceback 문자열 직접 전달 (훅 내부에서 미리 포맷한 경우)
     """
-    # 방어 코드 — sqlite TEXT 컬럼은 str / None 만 받음. 다른 타입은 직렬화.
     if context is not None and not isinstance(context, str):
         try:
             import json as _json
             context = _json.dumps(context, ensure_ascii=False, default=str)
         except Exception:
             context = str(context)[:1000]
-    tb_str = _tb_mod.format_exc()
-    return collect_error(
+
+    if isinstance(exc_or_type, BaseException):
+        error_type = type(exc_or_type).__name__
+        msg        = str(exc_or_type)[:500]
+        tb         = tb_str or _tb_mod.format_exc()
+    else:
+        error_type = str(exc_or_type)
+        msg        = (message or "")[:500]
+        tb         = tb_str
+
+    return _collect_error(
         source=source,
-        error_type=type(exc).__name__,
-        message=str(exc)[:500],
+        error_type=error_type,
+        message=msg,
         module=module,
         func_name=func_name,
-        tb_str=tb_str,
+        tb_str=tb,
         context=context,
     )
+
+
+# 하위 호환 alias — 기존 report() 호출 코드 즉시 수정 불필요
+report = catch
+
+
+def install() -> None:
+    """★ 단일 설치 함수 — 데몬 부팅 시 1회 호출.
+
+    아래 모든 자동 배선을 한 번에 설치:
+      · sys.excepthook        (메인 스레드 미처리 예외)
+      · threading.excepthook  (백그라운드 스레드 미처리 예외)
+      · log_scanner           (모든 JARVIS*/logs/ 자동 탐색 + 감시)
+
+    훅 로직이 모두 catch() 를 직접 호출 — 별도 함수 없음.
+
+    APScheduler 리스너는 JARVIS04_SCHEDULER.job_history.attach_listeners() 에서
+    make_scheduler_listener() 콜백을 받아 등록 — JARVIS04 단일 진입점 규정 준수.
+    """
+    _orig = sys.excepthook
+
+    # 1) sys.excepthook — catch() 직접 호출
+    def _main_exc_hook(exc_type, exc_val, exc_tb):
+        _orig(exc_type, exc_val, exc_tb)
+        try:
+            tb_str = "".join(_tb_mod.format_exception(exc_type, exc_val, exc_tb))
+            module = func = None
+            if exc_tb:
+                frames = _tb_mod.extract_tb(exc_tb)
+                if frames:
+                    last = frames[-1]
+                    module = Path(last.filename).name if last.filename else None
+                    func   = last.name
+            catch(exc_val, "daemon", module=module, func_name=func, tb_str=tb_str)
+        except Exception:
+            pass
+
+    sys.excepthook = _main_exc_hook
+
+    # 2) threading.excepthook — catch() 직접 호출
+    import threading as _t
+    def _thread_exc_hook(args):
+        try:
+            tb_str = "".join(_tb_mod.format_exception(
+                args.exc_type, args.exc_value, args.exc_traceback
+            ))
+            thread_name = getattr(args.thread, "name", "unknown_thread")
+            catch(args.exc_value, "thread", module=thread_name, tb_str=tb_str)
+        except Exception:
+            pass
+
+    _t.excepthook = _thread_exc_hook
+
+    # 3) 로그 스캐너 — 전체 JARVIS*/logs/ 자동 탐색
+    for d in _discover_log_dirs():
+        register_log_dir(d)
+
+    log.info(
+        f"[GUARDIAN] install() 완료 — "
+        f"sys.excepthook ✅ threading.excepthook ✅ "
+        f"log_scanner {len(_log_scanners)}개 디렉토리 ✅"
+    )
+
+
+# 하위 호환 alias
+register_global_hook = install
 
 
 def record_external_change(
