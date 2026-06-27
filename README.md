@@ -17,6 +17,12 @@
 
 > 텔레그램으로 명령하면 알아서 글을 쓰고, 이미지를 만들고, 발행하고, 오류가 나면 스스로 고칩니다.
 
+<br>
+
+<img src="docs/dashboard/01-home.png" alt="JARVIS Hub — 10개 에이전트 실시간 통합 대시보드" width="940"/>
+
+<sub>▲ <b>JARVIS Hub 통합 대시보드</b> (<code>localhost:9199</code>) — 10개 에이전트(JARVIS00~09)의 실시간 상태·상호 연결·메트릭을 한 화면에. 데몬 기동 시 자동 실행.</sub>
+
 </div>
 
 ---
@@ -30,6 +36,43 @@
 | **10개** | **68,308 LOC** | **169개** | **42개** | **27종** | **265개 / 870회 적중** |
 
 </div>
+
+---
+
+## 🖥️ 웹 대시보드 — 실시간 시연
+
+**▶ 로컬 실행 주소: [`http://localhost:9199`](http://localhost:9199)**
+
+`python jarvis_daemon.py` 한 줄이면 데몬과 함께 Streamlit 통합 현황판(`hub.py` — 대시보드 단일 진입점)이 자동으로 떠오릅니다. 발행·트렌드·품질·성과·AI 학습·오류·스케줄·시스템을 **9개 탭** 한 화면에서 실시간 모니터링합니다.
+
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/dashboard/07-guardian.png" alt="오류 자동 캐치·수정"/><br>
+      <sub><b>🛡️ 오류 자동 캐치·수정</b><br>catch() 단일 진입점 → 2-Tier 자동 복구 · 누적 1,378건 · 자동+수동 해결률 82%</sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/dashboard/02-radar.png" alt="트렌드 레이더"/><br>
+      <sub><b>📡 트렌드 레이더</b><br>Google·Naver 50개 키워드 실시간 수집 + 발행 기회점수 TOP 15</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <img src="docs/dashboard/03-publish.png" alt="발행 관리"/><br>
+      <sub><b>📝 발행 관리</b><br>네이버·티스토리 발행 이력·파이프라인·품질 분석 (이번 달 66건)</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="docs/dashboard/08-scheduler.png" alt="스케줄러"/><br>
+      <sub><b>🗓️ 스케줄러</b><br>cron/interval 35개 잡 단일 진입점 · 오늘 50건 실행 · 성공률 100%</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" colspan="2">
+      <img src="docs/dashboard/09-system.png" alt="시스템 — 10개 에이전트" width="60%"/><br>
+      <sub><b>⚙️ 시스템</b> — 데몬 가동 상태 · DB 용량 · 10개 에이전트별 잡 실행 이력</sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
