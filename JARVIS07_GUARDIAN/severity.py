@@ -39,6 +39,9 @@ _HIGH_PATTERNS = [
 _LOW_TYPES = frozenset({
     "TimeoutError", "ConnectionError", "HTTPError",
     "StopIteration", "GeneratorExit",
+    # ★ ERRORS [285] 박제 2026-06-27 — Selenium/Chrome 네트워크 오류는 코드 버그 아님
+    # WebDriverException 은 환경 오류(인터넷 끊김·DNS·Chrome 충돌) → 자동 수정 불가 분류
+    "WebDriverException", "selenium.common.exceptions.WebDriverException",
 })
 
 _LOW_PATTERNS = [
@@ -63,6 +66,18 @@ _LOW_PATTERNS = [
     # verify 버그로 발행 성공인데 실패 판정 → 근본 수정은 _verify_naver_published 개선 (ERRORS [279])
     # harness escalation → Guardian 수정 시도 → 수정 불가 → "자동 수정 실패" 알림 폭주 방지.
     re.compile(r"\[Layer4\].*발행 실패|harness.*발행 실패|발행 미완료|에디터 상태 유지|Naver.*재시도 후에도|InvalidSessionId.*Exception", re.I),
+    # ★ ERRORS [285] 박제 2026-06-27 — Chrome/Selenium 네트워크 환경 오류 (코드 수정 불가)
+    # ERR_INTERNET_DISCONNECTED : 인터넷 연결 없음 — 코드 패치로 해결 불가, 재연결 필요
+    # ERR_NAME_NOT_RESOLVED     : DNS 실패
+    # ERR_CONNECTION_REFUSED    : 서버/네트워크 거부
+    # ERR_NETWORK_CHANGED       : 네트워크 전환 (Wi-Fi ↔ 이더넷 등)
+    # chrome not reachable      : Chrome 프로세스 비정상 종료
+    re.compile(
+        r"ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ERR_CONNECTION_REFUSED"
+        r"|ERR_NETWORK_CHANGED|ERR_EMPTY_RESPONSE|ERR_TIMED_OUT"
+        r"|chrome not reachable|net::ERR_|browser has closed",
+        re.I,
+    ),
 ]
 
 

@@ -21,9 +21,20 @@ tistory_cookie_refresher.py
 import os
 import sys
 import time
+import socket
 import subprocess
 from pathlib import Path
 from dotenv import load_dotenv
+
+
+def _is_network_up() -> bool:
+    """인터넷 연결 사전 확인 (Chrome 시작 전). 3초 timeout."""
+    try:
+        socket.setdefaulttimeout(3)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
+        return True
+    except OSError:
+        return False
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
@@ -571,6 +582,15 @@ def run(force: bool = False, return_driver: bool = False, notify: bool = True):
     print("\n" + "=" * 50)
     print("  🍪 티스토리 쿠키 갱신 체크")
     print("=" * 50)
+
+    # ── ★ 네트워크 연결 사전 확인 (ERRORS [285] 2026-06-27)
+    # ERR_INTERNET_DISCONNECTED 는 코드 버그 아님 → Chrome 시작 전 차단
+    if not _is_network_up():
+        msg = "🌐 네트워크 연결 없음 — 티스토리 쿠키 갱신 스킵"
+        print(f"  ⚠️ {msg}")
+        if notify:
+            _tg_notify(f"⚠️ *티스토리 쿠키 갱신 스킵*\n인터넷 연결을 확인하세요.\n(자동 수정 대상 아님 — 네트워크 복구 후 자동 재시도)")
+        return (False, None) if return_driver else False
 
     # ── 환경변수 점검 ───────────────────────────────────────────
     env_ok, missing = _check_env_vars()
