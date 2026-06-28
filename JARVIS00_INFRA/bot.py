@@ -39,6 +39,15 @@ _PENDING_J00: dict = {}
 _PENDING_J00_REACT: dict = {}
 # JARVIS01 계획 승인 대기 { "plan:xxxx": {"goal", "steps", "single_approval"} }
 _PENDING_J00_PLAN: dict = {}
+# JARVIS02 외부 발행 슬래시 명령 승인 대기 (★ 2026-06-28) { "economic:xxxx": {"cmd"} }
+_PENDING_J02_CMD: dict = {}
+# 외부 영향(실제 발행) 명령 → 인라인 버튼 승인 게이트 필수
+_J02_EXT_CMDS = {
+    "/economic":         "경제 브리핑 발행 (네이버+티스토리)",
+    "/economic_naver":   "경제 브리핑 발행 (네이버만)",
+    "/economic_tistory": "경제 브리핑 발행 (티스토리만)",
+    "/next":             "다음 테마 즉시 발행",
+}
 
 
 # ════════════════════════════════════════════════════════════
@@ -570,6 +579,65 @@ def _run_tool_with_heartbeat(tool_name: str, args: dict,
 # 명령어 & 콜백 라우터
 # ════════════════════════════════════════════════════════════
 
+def _handle_radar_query(cmd: str):
+    """JARVIS03 RADAR 읽기 전용 명령 (/trend·/radar·/report) — 승인 불필요."""
+    try:
+        if cmd == "/report":
+            import threading as _th
+            from JARVIS03_RADAR.daily_review import run_daily_review
+            _send_tg("📊 일일 분석 리포트 생성 중...")
+            _th.Thread(target=run_daily_review, daemon=True, name="cmd_report").start()
+            return
+        import glob, json as _json
+        from pathlib import Path as _P
+        _root = _P(__file__).resolve().parent.parent
+        files = sorted(glob.glob(str(_root / "JARVIS03_RADAR" / "data" / "trends_*.json")))
+        if not files:
+            _send_tg("⚠️ 수집된 트렌드 데이터가 없습니다.")
+            return
+        data = _json.loads(_P(files[-1]).read_text(encoding="utf-8"))
+        date = data.get("date", "?")
+        if cmd == "/trend":
+            kws = data.get("google_trending") or data.get("scored_keywords") or []
+            lines = [f"📡 *트렌드 TOP 10* ({date})"]
+            for i, k in enumerate(kws[:10], 1):
+                kw = k.get("keyword") if isinstance(k, dict) else str(k)
+                lines.append(f"{i}. {kw}")
+            _send_tg("\n".join(lines) if len(lines) > 1 else "⚠️ 트렌드 키워드 없음")
+        else:  # /radar
+            recs = data.get("recommendations", [])
+            lines = [f"🎯 *추천 테마 TOP 5* ({date})"]
+            for i, r in enumerate(recs[:5], 1):
+                lines.append(
+                    f"{i}. *{r.get('theme','?')}* (점수 {r.get('score','?')}·{r.get('sector','?')})\n"
+                    f"   {(r.get('topic') or '')[:60]}"
+                )
+            _send_tg("\n".join(lines) if recs else "⚠️ 추천 테마 없음")
+    except Exception as e:
+        _send_tg(f"⚠️ {cmd} 실패: {e}")
+        _g_report("infra", e, module=__name__)
+
+
+def _handle_cookie_refresh(cmd: str):
+    """JARVIS08 쿠키 갱신 (/refresh_naver·/refresh_tistory) — 유지보수(외부 발행 아님), 직접 실행."""
+    import threading as _th
+    def _bg():
+        try:
+            if cmd == "/refresh_naver":
+                from JARVIS08_PUBLISH.credentials.login_manager import refresh_naver_cookies
+                ok = refresh_naver_cookies(force=True)
+                _send_tg("✅ 네이버 쿠키 갱신 완료" if ok else "❌ 네이버 쿠키 갱신 실패 — 수동 확인 필요")
+            else:
+                from JARVIS08_PUBLISH.credentials.login_manager import refresh_tistory_cookies
+                ok = refresh_tistory_cookies(force=True)
+                _send_tg("✅ 티스토리 쿠키 갱신 완료" if ok else "❌ 티스토리 쿠키 갱신 실패 — 수동 확인 필요")
+        except Exception as e:
+            _send_tg(f"⚠️ {cmd} 실패: {e}")
+            _g_report("infra", e, module=__name__)
+    _send_tg(f"🔄 {cmd.lstrip('/')} 진행 중...")
+    _th.Thread(target=_bg, daemon=True, name="cmd_refresh").start()
+
+
 def _dispatch_text_command(text: str):
     """텍스트 명령어를 적절한 핸들러로 라우팅."""
     cmd = text.strip().lower().split()[0] if text.strip() else ""
@@ -730,6 +798,28 @@ def _dispatch_text_command(text: str):
             _send_tg("\n".join(lines))
         except Exception as e:
             _send_tg(f"⚠️ /errors_stats 실패: {e}")
+        return
+
+    # ── JARVIS02 외부 발행 (★ 2026-06-28 — 승인 게이트 필수: 실제 발행 동작) ──
+    if cmd in _J02_EXT_CMDS:
+        key = f"{cmd.lstrip('/')}:{abs(hash(text)) & 0xFFFF:04x}"
+        _PENDING_J02_CMD[key] = {"cmd": cmd}
+        _send_tg_buttons(
+            f"🔒 *승인 필요 — 외부 발행*\n{_J02_EXT_CMDS[cmd]}\n\n"
+            f"실행 시 네이버·티스토리에 *실제 발행* 됩니다. 진행할까요?",
+            [[{"text": "✅ 발행", "callback_data": f"j02cmd_yes:{key}"},
+              {"text": "❌ 취소", "callback_data": f"j02cmd_no:{key}"}]],
+        )
+        return
+
+    # ── JARVIS03 RADAR 조회 (읽기 전용 — 승인 불필요) ──
+    if cmd in ("/trend", "/radar", "/report"):
+        _handle_radar_query(cmd)
+        return
+
+    # ── JARVIS08 쿠키 갱신 (유지보수 — 직접) ──
+    if cmd in ("/refresh_naver", "/refresh_tistory"):
+        _handle_cookie_refresh(cmd)
         return
 
     _sched = _get_sched()
@@ -915,6 +1005,24 @@ def run_bot_polling(shutdown_event: threading.Event):
                                 pass
                             _answer_callback(cq_id, "무시했습니다.")
                             _send_tg("🔕 자가진단 항목 무시됨.")
+                        elif cq_data.startswith("j02cmd_yes:"):
+                            key  = cq_data[len("j02cmd_yes:"):]
+                            pend = _PENDING_J02_CMD.pop(key, None)
+                            _answer_callback(cq_id, "발행을 시작합니다!")
+                            if pend:
+                                _send_tg(f"🚀 발행 시작: `{pend['cmd']}` (백그라운드 실행)")
+                                _s = _get_sched()
+                                if _s:
+                                    _s.handle_telegram_command(pend["cmd"])
+                                else:
+                                    _send_tg("⚠️ JARVIS02 스케줄러 미로드 — 발행 불가")
+                            else:
+                                _send_tg("⚠️ 만료된 승인 요청입니다. 명령을 다시 입력하세요.")
+                        elif cq_data.startswith("j02cmd_no:"):
+                            key = cq_data[len("j02cmd_no:"):]
+                            _PENDING_J02_CMD.pop(key, None)
+                            _answer_callback(cq_id, "취소했습니다.")
+                            _send_tg("❌ 발행 취소됨.")
                         else:
                             _handle_jarvis02_callback(cq)
                     except Exception as e:

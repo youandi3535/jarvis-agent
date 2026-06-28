@@ -842,7 +842,7 @@ def delegate_to_claude_code(prompt: str,
         try:
             with anyio.fail_after(timeout):
                 options = ClaudeCodeOptions(
-                    model="claude-sonnet-4-6",
+                    model="claude-opus-4-6",   # ★ 수정 가능 위임 도구 — Opus 4.6 (사용자 박제: 수정은 모두 Opus 4.6)
                     max_turns=max_turns,
                     allowed_tools=tools_list,
                     cwd=str(_JARVIS_ROOT_ABS),

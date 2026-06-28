@@ -762,6 +762,20 @@ def _make_fingerprint(error_type: str, message: str) -> str:
     return f"{error_type or 'Unknown'}::{_normalize_message(message or '')}"
 
 
+def bandit_arm_name(error_record: dict, hit_count: int) -> str:
+    """학습 fingerprint 의 밴딧 arm 이름 — 단일 진실 소스.
+
+    _get_new_fixers / _get_verified_fixers 가 만드는 arm 이름과 *정확히* 동일해야
+    보상이 다음 랭킹에 반영된다. record_sdk_fix(SDK 경로) + error_fixer.apply_fix(LLM 경로)
+    공용 → arm 이름 규칙 드리프트 방지.
+    """
+    fp = _make_fingerprint(
+        error_record.get("error_type", "") or "",
+        error_record.get("message", "") or "",
+    )
+    return f"verified:{fp[:32]}" if hit_count >= _HIGH_COUNT_THRESHOLD else f"new:{fp[:32]}"
+
+
 def _load_learned() -> dict:
     """learned_patterns.json 로드. 파일 없으면 빈 구조 반환."""
     if not _LEARNED_PATH.exists():
@@ -937,8 +951,12 @@ def record_pattern_hit(
     source: str = "auto",
     patch: str = "",
     target_file: str = "",
-) -> None:
+) -> int:
     """자동/수동 수정 성공 시 learned_patterns 에 fingerprint 등록·누적.
+
+    Returns:
+        int: 등록·갱신된 패턴의 hit_count (skip·eval 거부 시 0).
+             ★ record_sdk_fix 가 이 값으로 밴딧 arm(new:/verified:) 을 결정.
 
     정적 5종 fixer 가 처리한 케이스도 학습 데이터로 박제 → 통계 + 향후 회귀 검증.
     fixer_name == "llm_patch" 일 때 patch / target_file 를 함께 저장 →
@@ -956,13 +974,13 @@ def record_pattern_hit(
     # ★ 노이즈 게이트 1: fixer_name 없으면 *재현 불가 패턴* → 등록 skip
     if not fixer_name or not str(fixer_name).strip():
         log.info(f"[GUARDIAN/learned] skip — fixer_name 없음 (et={et}, source={source})")
-        return
+        return 0
 
     # ★ 노이즈 게이트 2: error_type + message 모두 빈 케이스 → fingerprint 무의미
     norm = _normalize_message(msg)
     if not et and not norm:
         log.info(f"[GUARDIAN/learned] skip — error_type/message 둘 다 빈 채로 학습 시도")
-        return
+        return 0
 
     # ★ 노이즈 게이트 3: *프로젝트 정책 작업 박제* (메시지 없는 사용자 박제)
     # — 런타임 오류 패턴이 아니라 *일회성 작업 이력*. 학습 대상 아님.
@@ -978,11 +996,11 @@ def record_pattern_hit(
     }
     if et in _POLICY_TYPES and not norm:
         log.info(f"[GUARDIAN/learned] skip — 정책 작업 박제 (et={et}, 재현 불가)")
-        return
+        return 0
 
     # ★ A모델 분리 (ADR 007) — eval_agent 학습 자산화 게이트
     # 노이즈 게이트 3종 통과 후 *정밀 평가* 단계. 정적 fixer 는 자동 통과,
-    # llm_patch 는 Sonnet 4.6 으로 안전성·정확성·재사용 가치 채점.
+    # llm_patch 는 Opus 4.6 으로 안전성·정확성·재사용 가치 채점.
     try:
         from JARVIS07_GUARDIAN import eval_agent as _eval_mod
         _eval = _eval_mod.evaluate(
@@ -994,7 +1012,7 @@ def record_pattern_hit(
                 f"[GUARDIAN/learned] eval 거부 — score={_eval.score} "
                 f"safe={_eval.safe} acc={_eval.accurate} : {_eval.rationale}"
             )
-            return
+            return 0
         _eval_meta = _eval_mod.to_meta(_eval)
     except Exception as e:
         # eval_agent 자체 실패 → 보수적 통과 (기존 동작 유지, 학습 중단 방지)
@@ -1037,6 +1055,7 @@ def record_pattern_hit(
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
+    _result_hits = 0
     with _LEARNED_LOCK:
         data = _load_learned()
         found = False
@@ -1044,6 +1063,7 @@ def record_pattern_hit(
             if p.get("fingerprint") == fp:
                 p["hit_count"] = int(p.get("hit_count", 0)) + 1
                 p["last_seen"] = now
+                _result_hits = p["hit_count"]
                 # ★ 고빈도 승격 알림 — hit_count 가 임계값 도달 시 1회 로그
                 if p["hit_count"] == _HIGH_COUNT_THRESHOLD:
                     log.info(
@@ -1096,9 +1116,83 @@ def record_pattern_hit(
             if _eval_meta is not None:
                 entry["eval_meta"] = _eval_meta
             data.setdefault("patterns", []).append(entry)
+            _result_hits = 1
             log.info(f"[GUARDIAN/learned] ★ 신규 패턴 등록 — fp='{fp[:70]}' fixer={fixer_name} tier={_tier} domain={_domain}")
         data["patterns"].sort(key=lambda x: -int(x.get("hit_count", 0)))
         _save_learned(data)
+    return _result_hits
+
+
+def record_sdk_fix(
+    error_record: dict,
+    diffs_by_file: dict[str, str],
+    source: str = "auto-sdk-targeted",
+) -> int:
+    """★ SDK(auto_repair) 반응형 자동수정 성공 → 밴딧 학습 브리지 (사용자 박제 2026-06-28).
+
+    Claude Agent SDK 가 오류 1건을 고쳤을 때 그 결과를 *밴딧·learned_patterns 학습 자산* 으로 전환한다.
+    기존 auto_repair 는 record_external_change(manual tier, 밴딧 보상 0) 만 호출 →
+    SDK 가 아무리 고쳐도 밴딧이 비대해지지 않던 *단절 지점* 을 연결한다.
+
+    흐름:
+      ① 대표 변경 파일 diff 를 *원본 오류 fingerprint* 로 ``llm_patch`` 등록
+         → eval_agent 진짜 LLM 채점(safe·accurate·score≥80) 통과분만 stored_patch 박제
+         → 재발 시 Tier-1 이 LLM 0 으로 재적용
+      ② 등록 성공 시 해당 fingerprint arm 에 bandit 양의 보상 → 다음 동일·유사 오류에서 우선 시도 (밴딧 비대화)
+      ③ 나머지 변경 파일은 ``auto_patch`` 로 best-effort 저장
+
+    Args:
+        error_record  : 원본 오류 레코드 (error_type·message → fingerprint)
+        diffs_by_file : {rel_path: unified_diff_text} — SDK 가 변경한 파일들
+        source        : 학습 출처 라벨
+
+    Returns:
+        int: 1 (등록·보상 성공) / 0 (변경 없음 또는 eval 게이트 거부)
+    """
+    if not error_record or not diffs_by_file:
+        return 0
+    et = error_record.get("error_type", "") or ""
+
+    # 대표 파일 = diff 변경량 최대 — 단일 fingerprint↔단일 stored_patch 스키마 정합
+    primary_rel  = max(diffs_by_file, key=lambda k: len(diffs_by_file[k] or ""))
+    primary_diff = diffs_by_file[primary_rel]
+
+    hits = record_pattern_hit(
+        error_record,
+        fixer_name="llm_patch",      # ★ eval 진짜 채점 + 재적용 가능 경로 (auto_patch/manual 은 보수적 통과 70)
+        fixed_file=primary_rel,
+        source=source,
+        patch=primary_diff,
+        target_file=primary_rel,
+    )
+    if hits <= 0:
+        # eval 게이트 거부 또는 노이즈 → 학습·보상 안 함 (밴딧 오염 방지)
+        log.info(f"[GUARDIAN/sdk-bridge] 등록 보류 — eval 게이트 미통과 (et={et})")
+        return 0
+
+    # ── 밴딧 양의 보상 — bandit_arm_name 단일 진실 소스 (arm 이름 규칙 드리프트 방지) ──
+    arm = bandit_arm_name(error_record, hits)
+    try:
+        from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
+        _bandit_reward(et, arm, success=True, error_record=error_record)
+        log.info(f"[GUARDIAN/sdk-bridge] ★ 밴딧 보상 — arm={arm} hits={hits} (SDK 수정 학습 자산화)")
+    except Exception as e:
+        log.debug(f"[GUARDIAN/sdk-bridge] 밴딧 보상 실패: {e}")
+
+    # ── 나머지 변경 파일 best-effort 저장 (재발 LLM-0) ──
+    for rel, diff in diffs_by_file.items():
+        if rel == primary_rel or not diff:
+            continue
+        try:
+            record_pattern_hit(
+                {"error_type": "AutoRepairFix", "message": rel, "source": source},
+                fixer_name="auto_patch",
+                fixed_file=rel, source=source,
+                patch=diff, target_file=rel,
+            )
+        except Exception:
+            pass
+    return 1
 
 
 def stats() -> dict:
@@ -1561,6 +1655,7 @@ def try_pattern_fix(error_record: dict) -> Optional[dict]:
 
 
 __all__ = [
-    "try_pattern_fix", "record_pattern_hit", "stats", "_make_fingerprint",
+    "try_pattern_fix", "record_pattern_hit", "record_sdk_fix", "bandit_arm_name",
+    "stats", "_make_fingerprint",
     "_infer_domain", "backfill_domains", "backfill_tiers",   # ★ ADR 008 Phase 4
 ]

@@ -75,15 +75,16 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"day_of_week":"sun", "hour":2, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.cleanup_screenshots",
      "misfire_grace_time":3600, "owner":"jarvis02_writer"},
-    # ★ 자가진단 + 발행 *하나의 세트* (사용자 박제 2026-05-18 v2):
-    # 06:30 callback 진입 → 자가진단·자동수정 (max 15분) → 즉시 경제 브리핑 발행.
-    # callback 함수가 두 단계를 *순차 실행* — 한 묶음.
+    # ★ 발행 전 자체수리 + 발행 *하나의 세트* (사용자 박제 2026-06-28):
+    # 06:30 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 경제 브리핑 발행.
+    # 비싼 LLM 심층 감사는 새벽 04:30 j07_deep_audit 로 분리 (발행 지연 0).
     {"id":"j01_economic_post",      "name":"자가진단+경제 브리핑 발행 06:30", "trigger":"cron",
      "kwargs":{"hour":6, "minute":30},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_economic",
      "misfire_grace_time":3600, "owner":"jarvis02_writer"},
-    # ★ 자가진단 + 테마글 발행 *하나의 세트* (사용자 박제 2026-05-18 v2):
-    # 16:00 callback 진입 → 자가진단·자동수정 (max 15분) → 즉시 테마글 발행.
+    # ★ 발행 전 자체수리 + 테마글 발행 *하나의 세트* (사용자 박제 2026-06-28):
+    # 16:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 테마글 발행.
+    # 비싼 LLM 심층 감사는 새벽 04:30 j07_deep_audit 로 분리.
     {"id":"j01_theme_post_16",      "name":"자가진단+테마 발행 16:00 ★", "trigger":"cron",
      "kwargs":{"hour":16, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_theme",
@@ -101,12 +102,11 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"minute":0},
      "callback":"JARVIS01_MASTER.core_agent._job_router_health",
      "misfire_grace_time":600, "owner":"jarvis01_master"},
-    # ── JARVIS07 자가 진단·수정 — *발행과 한 세트* (★ 사용자 박제 2026-05-18 v2) ──
-    # 이전 v1 (06:00 / 15:00 별도 cron) 폐지. 이유: 시간 분리는 *순서 보장 안 됨* —
-    # 자가진단 60분 초과 시 발행이 그냥 진행됨, 진단 실패해도 발행 진행.
-    # 현재 v2: 07:00 / 16:00 발행 잡 callback 안에서 *자가진단 → 발행 순차 실행*.
-    # callback: `run_self_repair_then_economic` / `run_self_repair_then_theme`.
-    # 별도 자가진단 cron 잡 없음 — 잡 카탈로그 단순화.
+    # ── JARVIS07 자가 진단·수정 (★ 사용자 박제 2026-06-28 — 2단 분리) ──
+    # 발행 직전(06:30 / 16:00 callback): Tier-1 LLM-0 자체수리 sweep 만 (수초, 발행 지연 0).
+    #   callback: `run_self_repair_then_economic` / `run_self_repair_then_theme`.
+    # 심층 LLM 감사(backlog Tier1→2 + 광범위 코드 감사): 새벽 04:30 `j07_deep_audit` 별도 cron.
+    # → 학습 자산이 쌓일수록 다음 발행 전 sweep 자동수리율↑ (복리 학습 루프).
     # ── JARVIS02 WRITER — SEO 학습 ────────────────────────────────
     {"id":"weekly_seo_learn",  "name":"주간 SEO 학습·비교·업데이트", "trigger":"cron",
      "kwargs":{"day_of_week":"mon", "hour":6, "minute":0},
@@ -156,6 +156,12 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"j07_git_audit",      "name":"GUARDIAN git 회고 박제 (매일 03:30)", "trigger":"cron",
      "kwargs":{"hour":3, "minute":30},
      "callback":"JARVIS07_GUARDIAN.guardian_agent.job_git_audit",
+     "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
+    # ★ 발행과 분리된 심층 LLM 감사 (사용자 박제 2026-06-28) — DB 백업 03:00 이후.
+    #   1) backlog Tier 1→2 (실제 지문 학습) 2) 광범위 코드 감사. 발행 직전엔 LLM-0 sweep 만.
+    {"id":"j07_deep_audit",     "name":"GUARDIAN 심층 코드 감사 (매일 04:30)", "trigger":"cron",
+     "kwargs":{"hour":4, "minute":30},
+     "callback":"JARVIS07_GUARDIAN.guardian_agent.job_deep_audit",
      "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
     {"id":"j07_retry_pending",  "name":"GUARDIAN 잔류 오류 재처리 (10분)", "trigger":"interval",
      "kwargs":{"minutes":10},

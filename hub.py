@@ -9,9 +9,10 @@ from pathlib import Path
 import streamlit as st
 
 BASE_DIR = Path(__file__).parent
-import os as _os
-DB_PATH  = Path(_os.environ.get("JARVIS_DB_PATH", str(BASE_DIR / "shared" / "jarvis.sqlite")))
 sys.path.insert(0, str(BASE_DIR))
+# ★ DB 경로 단일 진입점 — shared/db.py 가 .env 자가 로드해 JARVIS_DB_PATH(~/.jarvis) 해석.
+#   hub 가 자체 재계산하면 .env 미로드 시 잔재 shared/jarvis.sqlite 로 떨어짐 (2026-06-28 박제).
+from shared.db import DB_PATH
 
 st.set_page_config(
     page_title="JARVIS Hub",
@@ -251,9 +252,9 @@ def ticker_tape(keywords: list) -> str:
 #       → gradient/filter/pattern 전부 제거, solid color + stroke 만 사용
 # ══════════════════════════════════════════════════════════════════
 def _office_view_html(status_map: dict, info_map: dict) -> str:  # noqa: C901
-    """9개 에이전트 — 탑-다운 사무실 v5 (실제 연결 31개 검증 + 사무실 배경 + 파티클).
+    """10개 에이전트 — 탑-다운 사무실 v5 (실제 연결 34개 검증 + 사무실 배경 + 파티클).
     viewBox 860x510 · url(#id) 0 — Streamlit solid SVG 전용.
-    연결: 코드 grep 검증 (cross-agent import 31개 실측).
+    연결: 코드 grep 검증 (cross-agent import 34개 실측).
     """
     import math
 
@@ -277,7 +278,7 @@ def _office_view_html(status_map: dict, info_map: dict) -> str:  # noqa: C901
         ("j07", "J07 GUARD",   "오류 수호자",   "#ff9900", "🛡️",  390, 345),
         ("j08", "J08 PUBLISH", "발행 관리자",   "#00ccff", "🚀",  515, 345),
     ]
-    # ── 실제 연결 (코드 grep 검증 31개) ──────────────────────────
+    # ── 실제 연결 (코드 grep 검증 34개) ──────────────────────────
     # (from, to, color, type, opacity, stroke_w)
     # 라우팅: 같은열=수직직선, 같은행=수평직선, 교차=V→H→V 3단꺾기
     CONNS = [
@@ -2917,7 +2918,7 @@ with t_sys:
     with d1: md(kpi("가동시간", daemon["uptime"], color="primary"))
     with d2:
         db_mb = DB_PATH.stat().st_size / 1024 / 1024 if DB_PATH.exists() else 0
-        md(kpi("DB 용량", f"{db_mb:.1f} MB", color="muted", sub="jarvis.sqlite"))
+        md(kpi("DB 용량", f"{db_mb:.1f} MB", color="muted", sub=f"{DB_PATH.parent.name}/{DB_PATH.name}"))
     with d3:
         # hub.py 자신의 포트 상태 확인
         try:

@@ -288,7 +288,7 @@
 6. **런타임 집행**: 저장 실패는 경고 출력 후 발행은 유지 (발행 차단 금지 — 저장은 보조 기록).
 7. **검증 명령**:
    ```bash
-   python3 -c "import sqlite3,json; con=sqlite3.connect('shared/jarvis.sqlite'); \
+   python3 -c "import sqlite3,json; from shared.db import DB_PATH; con=sqlite3.connect(str(DB_PATH)); \
      rows=con.execute('SELECT platform,title,image_paths FROM post_analysis ORDER BY id DESC LIMIT 5').fetchall(); \
      [print(r[0], r[1][:30], len(json.loads(r[2] or '[]')), '개 이미지') for r in rows]"
    ```

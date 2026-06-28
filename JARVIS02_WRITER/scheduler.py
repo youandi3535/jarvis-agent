@@ -891,38 +891,27 @@ def _run_self_repair_phase(label: str) -> dict:
     import time as _time
     t0 = _time.time()
 
-    log(f"🔧 [{label}] 자가진단·자동수정 페이즈 시작 (max 15분)")
+    log(f"🔧 [{label}] 발행 전 자체수리(Tier-1, LLM-0) 시작")
     try:
         send_telegram(
-            f"🔧 *[{label}] 자가진단 시작*\n"
+            f"🔧 *[{label}] 발행 전 자체수리 시작*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"진단 → 자동수정 → 발행 *하나의 세트* — 진단 페이즈 (max 15분)"
+            f"Tier-1 자체수리 (LLM-0, 수초) → 발행 — 심층 LLM 감사는 새벽 04:30 분리"
         )
     except Exception:
         pass
 
     code_changed = 0
     try:
-        # ★ 통합 호출 — auto_repair.run_auto_repair() 가 harness 5-Layer 거쳐 자체 TG 보고.
-        from JARVIS07_GUARDIAN.auto_repair import run_auto_repair as _ar
-        _ar()
-        # 코드 변경 발생 여부는 self_repair_runs 테이블 최근 행에서 추출
-        try:
-            from shared import db as _db
-            with _db.get_db() as _con:
-                row = _con.execute(
-                    "SELECT layers_json FROM self_repair_runs ORDER BY id DESC LIMIT 1"
-                ).fetchone()
-            if row and row[0]:
-                import json as _json
-                layers = _json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
-                code_changed = sum(int(layers.get(k, 0) or 0) for k in (
-                    "syntax_fixed", "rules_fixed", "length_fixed", "quality_fixed", "data_cleaned"
-                ))
-        except Exception:
-            pass
+        # ★ 2026-06-28 사용자 박제 — 발행 직전엔 *LLM-0 Tier-1 sweep* 만 (수초, 발행 지연 0).
+        #   미해결 오류 중 학습 패턴·정적 fixer·Bandit 로 즉시 고칠 수 있는 것만 소급 수리.
+        #   비싼 LLM 심층 감사(backlog Tier-2 + 광범위 코드 감사)는 새벽 04:30 job_deep_audit 로 분리.
+        from JARVIS07_GUARDIAN.guardian_agent import self_heal_known_errors as _sweep
+        _res = _sweep()
+        code_changed = int(_res.get("fixed", 0))  # 코드 수정 건수 → 데몬 재시작 권장 판단
         elapsed = int(_time.time() - t0)
-        log(f"✅ [{label}] 자가진단 완료 ({elapsed}s, code_changed={code_changed})")
+        log(f"✅ [{label}] 발행 전 자체수리(Tier-1) 완료 ({elapsed}s, "
+            f"수리 {_res.get('fixed', 0)} / 보류 {_res.get('skipped', 0)} / 무시 {_res.get('ignored', 0)})")
         return {"ok": True, "elapsed_sec": elapsed, "code_changed": code_changed, "skip_reason": ""}
     except Exception as _e:
         elapsed = int(_time.time() - t0)
@@ -953,7 +942,8 @@ def run_self_repair_then_economic():
 
     흐름:
       0) 쿠키 점검 (티스토리·네이버) — 만료 시 자동 갱신
-      1) auto_repair (max 15분) — Claude Code SDK Sonnet 4.6 7-Layer 진단·수정
+      1) 발행 전 Tier-1 자체수리 (LLM-0) — 학습 패턴·Bandit 로 미해결 오류 즉시 소급 수리
+         (비싼 LLM 심층 감사는 새벽 04:30 job_deep_audit 로 분리)
       2) [코드 변경 발생 시] 텔레그램 "데몬 재시작 권장" 알림 (이번 발행엔 무효)
       3) economic_poster.run() — harness 5-Layer 경유 발행
 
@@ -1111,6 +1101,40 @@ def _trigger_economic_incident(
         log(f"🛡️ GUARDIAN incident_responder 트리거됨 (harness 경로): {failed}")
     except Exception as _ie:
         log(f"⚠️ GUARDIAN 트리거 실패: {_ie}")
+
+
+def handle_telegram_command(cmd: str) -> None:
+    """텔레그램 슬래시 명령 실행 계층 (JARVIS02) — ★ 사용자 박제 2026-06-28: 유실 디스패처 복원.
+
+    호출 경로:
+      ① bot.py 승인 콜백 — 외부 발행(/economic*·/next)은 *인라인 버튼 ✅ 통과 후* 호출.
+      ② bot.py 직접 — /stop·/resume 내부 제어 (승인 불필요).
+      ③ JARVIS01 ReAct delegate — APPROVAL 게이트 통과 후 호출.
+    외부 발행은 *별도 스레드* 로 띄워 즉시 리턴 (호출자 블로킹 방지 — agent_tools 가정).
+    """
+    global _paused
+    import threading as _th
+    c = (cmd or "").strip().split()[0].lower() if (cmd and cmd.strip()) else ""
+
+    def _bg(fn, *a):
+        _th.Thread(target=fn, args=a, daemon=True, name=f"j02cmd_{c.lstrip('/')}").start()
+
+    if c == "/economic":
+        _bg(run_economic_poster)
+    elif c == "/economic_naver":
+        _bg(run_economic_poster, "--naver-only")
+    elif c == "/economic_tistory":
+        _bg(run_economic_poster, "--tistory-only")
+    elif c == "/next":
+        _bg(run_next)
+    elif c == "/stop":
+        _paused = True
+        send_telegram("⏸ 스케줄러 일시정지됨. 재개하려면 /resume")
+    elif c == "/resume":
+        _paused = False
+        send_telegram("▶ 스케줄러 재개됨.")
+    else:
+        send_telegram(f"❓ 알 수 없는 명령: {c}\n/help 로 명령어를 확인하세요.")
 
 
 def run_economic_poster(*extra_flags):

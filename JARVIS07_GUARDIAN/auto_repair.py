@@ -343,25 +343,16 @@ def _snapshot_py_files() -> dict[str, str]:
     return snap
 
 
-def _capture_diff_patches(layers: dict, py_snapshot: dict | None = None) -> int:
-    """Claude Code SDK 수정 완료 후 변경된 파일 diff → auto_patch 학습 저장.
+def _compute_diffs(py_snapshot: dict | None) -> dict[str, str]:
+    """snapshot 대비 *변경된* 파일들의 unified diff 반환 — {rel_path: diff_text}.
 
-    git repo 유무와 무관하게 동작 (file snapshot 방식).
-    이후 동일 파일에서 같은 위반이 재발하면 LLM/SDK 호출 없이 즉시 재적용 가능.
-    Returns: 저장된 패치 수
+    _capture_diff_patches(배치 sweep) + run_auto_repair_targeted(반응형 밴딧 브리지) 공용.
+    git repo 유무와 무관 (file snapshot 방식).
     """
     if not py_snapshot:
-        return 0
-
+        return {}
     import difflib as _dl
-    try:
-        from JARVIS07_GUARDIAN.pattern_fixer import record_pattern_hit
-    except ImportError:
-        return 0
-
-    stored = 0
-    _DENY = {".venv", "__pycache__", ".git", "chroma_db", "chrome_profile", "logs", "shared/backups"}
-
+    out: dict[str, str] = {}
     for rel_path, before_content in py_snapshot.items():
         target = ROOT / rel_path
         if not target.exists():
@@ -372,7 +363,6 @@ def _capture_diff_patches(layers: dict, py_snapshot: dict | None = None) -> int:
             continue
         if after_content == before_content:
             continue
-        # 변경 감지 — unified diff 계산
         diff_lines = list(_dl.unified_diff(
             before_content.splitlines(keepends=True),
             after_content.splitlines(keepends=True),
@@ -380,9 +370,29 @@ def _capture_diff_patches(layers: dict, py_snapshot: dict | None = None) -> int:
             tofile=f"b/{rel_path}",
             n=5,
         ))
-        if not diff_lines:
-            continue
-        diff_text = "".join(diff_lines)
+        if diff_lines:
+            out[rel_path] = "".join(diff_lines)
+    return out
+
+
+def _capture_diff_patches(layers: dict, py_snapshot: dict | None = None) -> int:
+    """Claude Code SDK 수정 완료 후 변경된 파일 diff → auto_patch 학습 저장.
+
+    git repo 유무와 무관하게 동작 (file snapshot 방식).
+    이후 동일 파일에서 같은 위반이 재발하면 LLM/SDK 호출 없이 즉시 재적용 가능.
+    Returns: 저장된 패치 수
+    """
+    diffs = _compute_diffs(py_snapshot)
+    if not diffs:
+        return 0
+
+    try:
+        from JARVIS07_GUARDIAN.pattern_fixer import record_pattern_hit
+    except ImportError:
+        return 0
+
+    stored = 0
+    for rel_path, diff_text in diffs.items():
         try:
             fake_record = {
                 "error_type": "AutoRepairFix",
@@ -779,11 +789,16 @@ def run_auto_repair_targeted(
     job_id: str,
     failed_platforms: list[str],
     theme: str = "",
+    error_record: dict | None = None,
 ) -> bool:
     """포스팅 실패에 특화된 targeted fix (빠른 수정, 전체 진단 아님).
 
     incident_responder Tier 2 (LLM 자동 수정) — Tier 1(패턴·Bandit) 실패 시 호출.
     최대 10분 timeout.
+
+    ★ 밴딧 학습 브리지 (사용자 박제 2026-06-28): error_record 가 주어지면
+      SDK 실행 전 파일 스냅샷 → 수정 성공 후 diff 를 *원본 오류 fingerprint* llm_patch 로
+      학습 + 밴딧 보상 (pattern_fixer.record_sdk_fix). 이로써 SDK 자동수정이 밴딧을 비대화시킨다.
 
     Returns:
         True: 적어도 1개 파일 수정 완료
@@ -799,6 +814,9 @@ def run_auto_repair_targeted(
         theme_line=theme_line,
         context=context[-3000:],
     )
+
+    # ★ 밴딧 학습 브리지 — error_record 있으면 SDK 실행 전 스냅샷 (수정 후 diff 계산용)
+    _pre_snapshot = _snapshot_py_files() if error_record else None
 
     # ★ 사용자 박제 2026-06-07 — Claude CLI 잔존 흔적 일소.
     # PATH·OAuth·MessageParseError 처리 모두 run_sdk_query 가 자동 흡수.
@@ -837,6 +855,15 @@ def run_auto_repair_targeted(
 
     if files_fixed > 0:
         _record_repairs_to_guardian(summary)
+        # ★ 밴딧 학습 브리지 — SDK 수정 diff → 원본 오류 fingerprint llm_patch 등록 + 밴딧 보상
+        if error_record and _pre_snapshot:
+            try:
+                from JARVIS07_GUARDIAN.pattern_fixer import record_sdk_fix
+                diffs = _compute_diffs(_pre_snapshot)
+                if record_sdk_fix(error_record, diffs):
+                    log.info("[AutoRepair/Targeted] ★ 밴딧 학습 완료 — SDK 수정이 밴딧 arm 으로 자산화")
+            except Exception as e:
+                log.debug("[AutoRepair/Targeted] 밴딧 학습 브리지 실패: %s", e)
 
     return files_fixed > 0
 

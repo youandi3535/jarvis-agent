@@ -35,7 +35,7 @@ JARVIS07 GUARDIAN 의 자동 수정 시스템 도입 초기에는 *모든 오류
 - 성공 시 *learned_patterns 에 자동 등록* → 다음 회차부터 Tier 1 에서 처리
 
 ### Tier 3 — LLM 폴백 (error_analyzer.py)
-- Tier 1·2 모두 실패 시 Sonnet 4.6 진단
+- Tier 1·2 모두 실패 시 Opus 4.6 진단 (★ 사용자 박제 — 수정은 무엇이든 Opus 4.6)
 - 성공 시 *learned_patterns 에 자동 등록* → 다음 회차부터 Tier 1 처리
 
 ## 이유

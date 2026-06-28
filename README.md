@@ -33,7 +33,7 @@
 
 | 🗂️ 에이전트 모듈 | 📝 Python 코드 | 📄 파일 수 | 🔧 등록 도구 | 🛡️ 정책 검증 항목 | 🧠 누적 오류 자동처리 |
 |:-:|:-:|:-:|:-:|:-:|:-:|
-| **10개** | **68,900 LOC** | **168개** | **29개** | **40종** | **1,378건 · 해결률 82%** |
+| **10개** | **68,900 LOC** | **168개** | **29개** | **40종** | **1,378건 · 해결률 82%**<br><sub>(2026-06-28 기준)</sub> |
 
 </div>
 
@@ -49,7 +49,7 @@
   <tr>
     <td width="50%" align="center" valign="top">
       <img src="docs/dashboard/07-guardian.png" alt="오류 자동 캐치·수정"/><br>
-      <sub><b>🛡️ 오류 자동 캐치·수정</b><br>catch() 단일 진입점 → 2-Tier 자동 복구 · 누적 1,378건 · 자동+수동 해결률 82%</sub>
+      <sub><b>🛡️ 오류 자동 캐치·수정</b><br>catch() 단일 진입점 → 2-Tier 자동 복구 · 누적 1,378건 · 자동+수동 해결률 82% (2026-06-28 기준)</sub>
     </td>
     <td width="50%" align="center" valign="top">
       <img src="docs/dashboard/02-radar.png" alt="트렌드 레이더"/><br>
@@ -161,31 +161,33 @@ gantt
     axisFormat %H:%M
 
     section 새벽 유지보수
-        git 커밋 회고 & 학습 자산화     :done, 03:30, 15m
-        헌법 감사 (드리프트 검출)        :done, 04:30, 30m
+        git 커밋 회고 & 학습 자산화          :done, 03:30, 15m
+        심층 코드 감사 (backlog Tier1→2·광범위) :done, 04:30, 40m
+        헌법 감사 (드리프트·주1회 일요일)      :done, 05:10, 20m
 
     section 오전 발행 세트 (06:30)
-        자가 진단 & 코드 수정           :active, 06:15, 15m
+        발행 전 자체수리 (Tier-1·LLM-0)    :active, 06:28, 2m
         경제 지표 수집 (JARVIS09)       :active, 06:30, 10m
         경제 브리핑 글 생성 (WRITER)    :active, 06:40, 15m
         AI 이미지 생성 (IMAGE)          :active, 06:55, 10m
         네이버·티스토리 발행 (PUBLISH)  :active, 07:05, 10m
 
     section 오후 발행 세트 (16:00)
-        자가 진단 & 코드 수정           :16:00, 15m
+        발행 전 자체수리 (Tier-1·LLM-0)    :15:58, 2m
         테마 트렌드 수집 (RADAR+J09)    :16:15, 10m
         테마주 분석 글 생성 (WRITER)    :16:25, 15m
         AI 이미지 생성 (IMAGE)          :16:40, 10m
         네이버·티스토리 발행 (PUBLISH)  :16:50, 10m
 ```
 
-<sub>※ 실제 cron 잡은 **06:30 / 16:00 두 개의 세트 트리거**뿐입니다. 각 세트는 단일 콜백 안에서 자가진단→수집→글→이미지→발행을 *순차* 실행하며, 위 간트의 하위 단계 시각은 흐름 이해용 예시입니다(자가진단 소요에 따라 실제 발행 시각은 가변).</sub>
+<sub>※ 실제 cron 잡은 **06:30 / 16:00 두 개의 세트 트리거**뿐입니다. 각 세트는 단일 콜백 안에서 *발행 전 Tier-1 자체수리(LLM-0, 수초)*→수집→글→이미지→발행을 *순차* 실행합니다. 비싼 LLM 심층 감사는 발행과 분리해 새벽 04:30(`j07_deep_audit`)으로 옮겨, 발행 지연을 0으로 만들었습니다(★ 2026-06-28). 위 간트의 하위 단계 시각은 흐름 이해용 예시입니다.</sub>
 
 | 시각 | 잡 이름 | 내용 |
 |------|---------|------|
-| **06:30** | 경제 브리핑 세트 | 자가 진단 → 경제 지표 수집 → 글 작성 → 이미지 → 발행 |
-| **16:00** | 테마주 분석 세트 | 자가 진단 → 트렌드 테마 선정 → 글 작성 → 이미지 → 발행 |
-| **03:30** | git 회고 | 전날 코드 변경 D-1 학습 자산화 |
+| **06:30** | 경제 브리핑 세트 | 발행 전 Tier-1 자체수리(LLM-0) → 경제 지표 수집 → 글 작성 → 이미지 → 발행 |
+| **16:00** | 테마주 분석 세트 | 발행 전 Tier-1 자체수리(LLM-0) → 트렌드 테마 선정 → 글 작성 → 이미지 → 발행 |
+| **매일 03:30** | git 회고 | 전날 코드 변경 D-1 학습 자산화 |
+| **매일 04:30** | 심층 코드 감사 | 미해결 backlog Tier1→Tier2(LLM, *실제 지문* 학습) + 광범위 코드 감사 → 패턴·밴딧 성장 |
 | **매주 일 04:30** | 헌법 감사 | 정책 위반·드리프트 검출 + 개선 제안 (주 1회) |
 | **격주 월 04:00** | 파일 정리 | 오래된 로그·스크린샷·트렌드 캐시 자동 삭제 |
 
@@ -194,6 +196,11 @@ gantt
 ## 🧠 자가 학습 시스템
 
 오류가 발생할수록 점점 똑똑해지는 폐쇄 학습 루프:
+
+> **★ 2026-06-28 업그레이드 — 자가 학습 루프 완전 폐쇄**
+> - **SDK/LLM 자동수정도 Contextual Bandit 을 학습**: Tier 2(Claude Agent SDK·LLM) 수정이 성공하면 *원본 오류 지문* 으로 `llm_patch` 등록 + 밴딧 arm 에 양의 보상 → 같은 오류 재발 시 Tier 1 이 **LLM 호출 0** 으로 즉시 처리 (`record_sdk_fix` / `apply_fix` fallback).
+> - **품질 게이트**: 모든 학습은 `eval_agent` 의 안전성·정확성·재사용성 채점(Opus 4.6, 80점+)을 통과한 것만 등록 → 밴딧이 *크게* 가 아니라 *똑똑하게* 성장 (나쁜·일회성 패치는 등록·보상 차단).
+> - **발행 전 LLM-0 sweep ↔ 새벽 심층 감사 분리**: 발행 직전엔 패턴·밴딧으로 즉시 고칠 수 있는 것만 (수초, 발행 지연 0), 비싼 LLM 심층 감사는 한가한 새벽 04:30 으로 분리 → 학습 자산이 쌓일수록 다음 발행 전 sweep 자동수리율↑ (**복리 학습 루프**).
 
 ```mermaid
 flowchart LR
@@ -218,10 +225,12 @@ flowchart LR
 
     T1 -->|"✅ 수정"| OK
     T1 -->|"패턴 없음"| T2
-    T2 -->|"✅ 수정"| OK
+    T2 -->|"✅ 수정"| EVAL{"eval_agent 품질 채점\nsafe·accurate·재사용 (Opus 4.6)\n80점+ 통과분만"}
+    EVAL -->|"통과"| OK
+    EVAL -->|"거부"| DROP["학습·보상 안 함\n(밴딧 오염 차단)"]
 
-    OK["수정 성공\n잡 재시도\n텔레그램 알림"] --> LEARN["learned_patterns.json\nfingerprint 자동 등록\nhit_count 누적"]
-    LEARN -. "다음엔 Tier 1에서 즉시 처리" .-> T1
+    OK["수정 성공\n잡 재시도\n텔레그램 알림"] --> LEARN["learned_patterns.json fingerprint 등록\n+ Contextual Bandit arm 양의 보상\nhit_count 누적"]
+    LEARN -. "복리 루프 — 다음 발행 전 sweep 이 LLM-0 으로 즉시 처리" .-> T1
 
     T2 -->|"❌ 실패"| ESC["텔레그램 알림\n수동 검토 요청"]
 
@@ -240,9 +249,10 @@ flowchart LR
 
 | 지표 | 현재 값 | 의미 |
 |------|---------|------|
-| 누적 패턴 | **44개** | fingerprint 즉시 매칭 가능 오류 유형 (노이즈 정리 후 유효 패턴) |
-| 총 적중 수 | **250회+** | LLM 호출 없이 자동 처리 (런타임 누적·실시간 증가) |
-| 누적 오류 처리 | **1,378건 / 82%** | `error_log` 누적 수집 · 자동+수동 해결률 |
+| 누적 학습 패턴 | **68개** | `learned_patterns.json` 등록 fingerprint (eval 품질 게이트 통과분) |
+| 총 적중 수 | **377회** | 등록 패턴 재매칭 누적 (런타임 실시간 증가) |
+| SDK→밴딧 학습 | **NEW (2026-06-28)** | Tier 2 자동수정도 Contextual Bandit arm 자산화 (`record_sdk_fix`) |
+| 누적 오류 처리 | **1,378건 / 82%** <sub>(2026-06-28 기준)</sub> | `error_log` 누적 수집 · 자동+수동 해결률 (대시보드는 라이브 계산) |
 | 오류 기록 | **289건 / 5,981줄** | `JARVIS07_GUARDIAN/ERRORS.md` 구조화 회고 |
 | 체크포인트 | **50MB** | `react_checkpoints.sqlite` (ReAct 실가동 증거) |
 
@@ -370,7 +380,7 @@ streamlit run hub.py --server.port 9199
 
 | 분류 | 사용 기술 | 역할 |
 |------|----------|------|
-| **LLM** | Anthropic Claude Sonnet 4.6 / Opus 4.6 | 글 생성·오류 분석·자가 수정 |
+| **LLM** | Anthropic Claude Sonnet 4.6 / Opus 4.6 | 글 생성·분석 (Sonnet 4.6) · 코드 자가 수정 (Opus 4.6) |
 | **에이전트 프레임워크** | LangGraph ReAct + SqliteSaver | 멀티스텝 추론·체크포인트 |
 | **스케줄러** | APScheduler 3.x | cron·interval 단일 진입점 |
 | **브라우저 자동화** | Selenium 4 + Chrome | 네이버·티스토리 발행 |
@@ -436,7 +446,7 @@ git 커밋은 단일 계정(`youandi3535`)으로 기록되지만, 설계·구현
 
 - **커밋 컨벤션** — `hj : <요약>` / `ny : <요약>`, 버그 수정은 `[이슈번호]` 접두사
 - **머지 전 필수** — `python shared/precommit_check.py` 0건 + `py_compile` 전수 통과
-- **운영 자산 보호** — `learned_patterns.json`·`ERRORS.md`·`react_checkpoints.sqlite`(50MB)·`shared/jarvis.sqlite` 는 `.gitignore` 처리. 데몬만 갱신하며 (`ERRORS.md` 는 `report_manual_fix()` 자동 박제), PR 에 포함되면 머지 거부.
+- **운영 자산 보호** — `learned_patterns.json`·`ERRORS.md`·`react_checkpoints.sqlite`(50MB) 는 `.gitignore` 처리. 실 DB 는 `JARVIS_DB_PATH`(`~/.jarvis/jarvis.sqlite`, repo 밖 — `.fuse_hidden*` 차단). 데몬만 갱신하며 (`ERRORS.md` 는 `report_manual_fix()` 자동 박제), PR 에 포함되면 머지 거부.
 
 ---
 
@@ -486,7 +496,8 @@ python shared/agent_registration_check.py
 | `react_checkpoints.sqlite` | **50 MB** | ReAct 라우터 실제 누적 가동 증거 |
 | `JARVIS07_GUARDIAN/ERRORS.md` | **289건 / 5,981줄** | 운영 사고 구조화 회고 → 코드 환류 |
 | RADAR 폐쇄 학습 루프 | 발행 → 성과 수집 → Ridge 회귀 → opportunity_score | 자율 학습 실증 |
-| 자가 학습 LLM 절감 | **250회+ 패턴 적중** | 동일 오류 LLM 0 즉시 처리 (실시간 증가) |
+| 자가 학습 LLM 절감 | **377회 패턴 적중** | 동일 오류 LLM 0 즉시 처리 (실시간 증가) |
+| SDK→밴딧 폐쇄 루프 | `record_sdk_fix` + `bandit_arm_name` | Tier 2 자동수정 → 밴딧 arm 학습 → 다음 발행 전 sweep 자동수리율↑ (2026-06-28) |
 | 검증 순환 하니스 | 5-Layer (preflight→precondition→step→verify→send) | "결함 있는 결과물은 송출되지 않는다" |
 
 ---
