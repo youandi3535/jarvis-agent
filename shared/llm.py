@@ -103,6 +103,22 @@ MODELS: dict[str, ModelSpec] = {
         temperature=0.2,
         description="복잡 multi-cause traceback 진단·근본 원인 추론 (Opus 4.6)",
     ),
+    # ★ 발행 전 품질 게이트 — 사실성 판정 (Opus 4.6, temp 0 결정성 우선)
+    "fact_judge": ModelSpec(
+        alias="fact_judge",
+        model_id="claude-opus-4-6",
+        max_tokens=4000,
+        temperature=0.0,
+        description="발행 전 사실성 검수 — claim 추출·출처 대조 판정 (Opus 4.6)",
+    ),
+    # ★ 발행 전 품질 게이트 — 유익성·매력도 채점 (Opus 4.6)
+    "engagement_judge": ModelSpec(
+        alias="engagement_judge",
+        model_id="claude-opus-4-6",
+        max_tokens=2500,
+        temperature=0.2,
+        description="발행 전 유익성·매력도 채점 — 독자 흡인력 judge (Opus 4.6)",
+    ),
 }
 
 
@@ -177,6 +193,8 @@ def _build_claude_sdk_chat_model():
                 "guardian":    "claude-opus-4-6",
                 "architect":   "claude-opus-4-6",
                 "diagnostic":  "claude-opus-4-6",
+                "fact_judge":  "claude-opus-4-6",
+                "engagement_judge": "claude-opus-4-6",
             }
             return _map.get(self.alias, "claude-sonnet-4-6")
 
@@ -280,6 +298,8 @@ _ALIAS_MODEL: dict[str, str] = {
     "guardian":    "claude-opus-4-6",
     "architect":   "claude-opus-4-6",
     "diagnostic":  "claude-opus-4-6",
+    "fact_judge":  "claude-opus-4-6",
+    "engagement_judge": "claude-opus-4-6",
 }
 
 
@@ -410,6 +430,8 @@ class ClaudeSDKLLM:
             "guardian":    "claude-opus-4-6",
             "architect":   "claude-opus-4-6",
             "diagnostic":  "claude-opus-4-6",
+            "fact_judge":  "claude-opus-4-6",
+            "engagement_judge": "claude-opus-4-6",
         }
         model = _model_map.get(self.alias, "claude-sonnet-4-6")
         system, prompt = self._format_messages(messages)

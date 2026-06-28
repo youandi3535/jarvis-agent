@@ -170,6 +170,76 @@ def analyze_post_quality(platform: str, title: str, content: str,
 _analyze_with_claude = analyze_post_quality
 
 
+# ─────────────────────────────────────────────────────────────
+# 발행 전 매력도·유익성 judge (★ 사용자 박제 2026-06-28)
+#   analyze_post_quality 는 *개선 제안* 만 생성(점수 없음) → 발행 전 차단 게이트엔
+#   부적합. judge_engagement 는 *점수+통과여부* 를 반환해 prepublish_gate 가
+#   재작성 순환 트리거에 사용한다. _build_learning_block·invoke_text 골격 재사용.
+# ─────────────────────────────────────────────────────────────
+
+_ENGAGEMENT_MIN = 70  # engagement·usefulness 각 차원 통과 임계 (0~100)
+
+ENGAGEMENT_SYSTEM_PROMPT = """당신은 한국어 정보 블로그의 *발행 전* 품질 심사관입니다.
+독자가 끝까지 읽고 싶어하는지(매력도)와 실제로 유익한 정보를 얻는지(유익성)를 0~100으로 채점하세요.
+
+채점 차원:
+- engagement(매력도): 도입부 훅, 가독성·흐름, 지루하지 않은 전개, 끝까지 읽고 싶은가
+- usefulness(유익성): 정보의 깊이·구체성, 독자가 실제로 얻는 가치, 알맹이가 있는가
+
+반드시 아래 JSON 객체 *하나만* 출력하세요 (다른 텍스트·코드블록 금지):
+{"engagement_score": 0~100 정수, "usefulness_score": 0~100 정수, "verdict": "pass" 또는 "revise", "reasons": ["부족한 점 간단히"]}"""
+
+
+def judge_engagement(title: str, content: str, post_type: str = "",
+                     platform: str = "") -> dict:
+    """발행 전 유익성·매력도 채점 — engagement_judge(Opus 4.6).
+
+    Returns:
+        {"passed": bool, "engagement_score": int, "usefulness_score": int,
+         "failed_dims": [str], "reasons": [str]}
+
+    ★ fail-open: LLM 호출·파싱 실패 시 passed=True. 매력도는 진실성과 달리
+      *재생성 사유* 일 뿐이므로, 심사관 불안정으로 정상 글을 무한 재생성시키지 않는다.
+    """
+    _max = _LM.ANALYZER_INPUT_MAX if _LM else len(content)
+    snippet = re.sub(r"<[^>]+>", " ", content or "")[:_max].strip()
+    if not snippet:
+        return {"passed": True, "engagement_score": 0, "usefulness_score": 0,
+                "failed_dims": [], "reasons": ["빈 본문"]}
+
+    user_msg = f"제목: {title}\n\n본문:\n{snippet}"
+    system = ENGAGEMENT_SYSTEM_PROMPT + _build_learning_block(post_type)
+
+    try:
+        from shared.llm import invoke_text as _inv
+        raw = _inv("engagement_judge", user_msg, system=system, max_tokens=600)
+        m = re.search(r"\{.*\}", raw or "", re.DOTALL)
+        if not m:
+            return {"passed": True, "engagement_score": 0, "usefulness_score": 0,
+                    "failed_dims": [], "reasons": ["판정 응답 없음 — fail-open 통과"]}
+        obj = json.loads(m.group())
+    except Exception as e:
+        print(f"  ⚠️ engagement judge 오류: {e} — fail-open 통과")
+        _g_report("radar", e, module=__name__)
+        return {"passed": True, "engagement_score": 0, "usefulness_score": 0,
+                "failed_dims": [], "reasons": [f"판정 오류: {e}"]}
+
+    try:
+        eng = int(obj.get("engagement_score", 0) or 0)
+        use = int(obj.get("usefulness_score", 0) or 0)
+    except (TypeError, ValueError):
+        return {"passed": True, "engagement_score": 0, "usefulness_score": 0,
+                "failed_dims": [], "reasons": ["점수 파싱 실패 — fail-open 통과"]}
+
+    failed: list[str] = []
+    if eng < _ENGAGEMENT_MIN:
+        failed.append("engagement")
+    if use < _ENGAGEMENT_MIN:
+        failed.append("usefulness")
+    return {"passed": not failed, "engagement_score": eng, "usefulness_score": use,
+            "failed_dims": failed, "reasons": list(obj.get("reasons") or [])}
+
+
 def _pick_cta(platform: str) -> str:
     """동적으로 CTA 생성 — LLM이 매번 새로운 문구 창작 (제1-B조)."""
     try:

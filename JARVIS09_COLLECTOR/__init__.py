@@ -9,6 +9,7 @@
         collect_stocks_data,     # 테마 종목 데이터 (시세·재무)
         get_market_data,         # 글로벌 시장 지표 (yfinance)
         get_economic_calendar,   # 경제 일정 (investing.com)
+        web_verify,              # 발행 전 사실성 게이트용 웹 재검증
     )
 
 금지:
@@ -24,6 +25,7 @@ from JARVIS09_COLLECTOR.providers.economic_data_provider import (
     get_market_data,
     get_economic_calendar,
 )
+from JARVIS09_COLLECTOR.providers.verify_provider import web_verify
 
 __all__ = [
     "collect_for_theme",
@@ -31,4 +33,5 @@ __all__ = [
     "collect_stocks_data",
     "get_market_data",
     "get_economic_calendar",
+    "web_verify",
 ]
