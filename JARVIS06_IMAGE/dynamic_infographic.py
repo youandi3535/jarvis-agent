@@ -390,6 +390,9 @@ def generate_dynamic_infographic(
     """
     팩트 데이터 기반 무한 스타일 인포그래픽 생성.
 
+    1순위: HTML+CSS (html_infographic) — 원형 게이지·픽토그램·그리드 패널
+    2순위: matplotlib (LLM 동적 코드) — 폴백
+
     Args:
         theme:       테마명 (예: '반도체')
         purpose:     이 차트가 보여줄 것 (예: '종목별 PER 비교')
@@ -406,6 +409,25 @@ def generate_dynamic_infographic(
 
     _rid   = run_id   or hashlib.md5(f"{theme}|{purpose}|{time.time_ns()}".encode()).hexdigest()[:16]
     _slot  = slot_key or purpose[:12]
+
+    # ── 1순위: HTML+CSS 인포그래픽 ──────────────────────────────────
+    try:
+        from JARVIS06_IMAGE.html_infographic import generate_html_infographic
+        html_result = generate_html_infographic(
+            theme=theme,
+            purpose=purpose,
+            data=data,
+            run_id=_rid,
+            slot_key=_slot,
+            max_retries=1,  # 여기서는 1회, 실패 시 matplotlib 폴백
+        )
+        if html_result:
+            log.info(f"[dynamic_infographic] ✅ HTML인포그래픽 성공: {theme}/{_slot}")
+            return html_result
+    except Exception as _he:
+        log.debug(f"[dynamic_infographic] HTML 인포그래픽 실패 → matplotlib 폴백: {_he}")
+
+    # ── 2순위: matplotlib LLM 동적 코드 (폴백) ─────────────────────
     _style = _pick_style(_rid, _slot)
     _data_str = _format_data_for_prompt(data)
     _out   = f"/tmp/jarvis_infog_{_rid[:12]}_{_slot[:6]}.png"

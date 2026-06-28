@@ -320,10 +320,26 @@ def handle_safe_intent(intent: str, params: dict | None = None) -> bool:
 
 __all__ = [
     "generate_photo", "generate_chart", "generate_thumbnail",
-    "generate_infographic",
+    "generate_infographic", "generate_html_infographic",
     "process_draft",          # ★ 대본+수집자료 → 완성 블록 (JARVIS08 발행 준비)
     "register", "handle_safe_intent",
 ]
+
+
+def generate_html_infographic(
+    theme: str,
+    purpose: str = "",
+    data: dict | None = None,
+    run_id: str = "",
+    slot_key: str = "",
+    out_dir=None,
+) -> str:
+    """HTML+CSS 기반 프리미엄 인포그래픽 생성 — html_infographic 위임."""
+    from JARVIS06_IMAGE.html_infographic import generate_html_infographic as _gen
+    return _gen(
+        theme=theme, purpose=purpose, data=data,
+        run_id=run_id, slot_key=slot_key, out_dir=out_dir,
+    )
 
 
 def process_draft(draft_html: str, theme: str, sector: str,
