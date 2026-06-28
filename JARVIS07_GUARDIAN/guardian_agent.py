@@ -349,12 +349,13 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
             context=error_text,
             job_id=error_record.get("source", "unknown"),
             failed_platforms=[error_record.get("module", error_record.get("source", "unknown"))],
+            error_record=error_record,   # ★ 밴딧 학습 브리지 — SDK 수정 → fingerprint llm_patch + 밴딧 보상
         )
 
         if fixed:
             _db.mark_error_status(error_id, "fixed")
             log.info(f"[GUARDIAN] #{error_id} SDK 수정 성공 → 학습 저장 완료, 작업 재시도 중")
-            # 학습 저장은 run_auto_repair_targeted → _record_repairs_to_guardian 에서 자동 처리
+            # 학습 저장: ① _record_repairs_to_guardian(external_change) ② record_sdk_fix(밴딧 보상 + llm_patch) — 둘 다 run_auto_repair_targeted 내부 자동
             _retry_original_job(error_record)
             return True
         else:
@@ -484,6 +485,148 @@ def _on_error_detected(payload: dict, source: str):
         name=f"guardian_fix_{error_id}", daemon=True,
     )
     t.start()
+
+
+# ── 자체수리 sweep · 심층 감사 backlog (★ 사용자 박제 2026-06-28) ──────
+#
+#  발행 전(LLM-0 Tier-1 sweep) vs 새벽(LLM Tier-2 backlog + 광범위 감사) 분리.
+#  학습 자산(learned_patterns·Bandit)이 비대해질수록 미해결 오류 소급 자동수리율↑.
+#  대상 status: 'new'(미처리) + 'wontfix'(과거 실패 — 패턴 성장 시 재수리 기회).
+
+def _collect_unresolved(limit: int) -> list:
+    """미해결 오류 수집 — status 'new' + 'wontfix' 병합·dedup (최신순)."""
+    try:
+        from shared import db as _db
+    except Exception:
+        return []
+    seen: set = set()
+    out: list = []
+    for st in ("new", "wontfix"):
+        try:
+            for r in _db.list_errors(status=st, limit=limit):
+                i = r.get("id")
+                if i in seen:
+                    continue
+                seen.add(i)
+                out.append(r)
+        except Exception as e:
+            log.debug(f"[GUARDIAN/unresolved] {st} 조회 실패: {e}")
+    return out
+
+
+def self_heal_known_errors(limit: int = 40) -> dict:
+    """발행 전 Tier-1 자체수리 sweep — LLM 호출 0.
+
+    미해결 오류(new·wontfix) 중 *학습 패턴·정적 fixer·Bandit 로 즉시 고칠 수 있는 것만* 수리.
+    Tier 2(LLM) 절대 호출 안 함 — 못 고치면 그대로 남겨 새벽 심층 감사(job_deep_audit)로 위임.
+    apply_fix 성공 시 *실제 오류 지문* 으로 record_pattern_hit + Bandit 양의 보상 자동 기록.
+
+    Returns: {"fixed", "skipped", "ignored", "scanned"}
+    """
+    fixed = skipped = ignored = 0
+    try:
+        from shared import db as _db
+        from JARVIS07_GUARDIAN.error_analyzer import analyze
+        from JARVIS07_GUARDIAN.error_fixer import apply_fix
+        from JARVIS07_GUARDIAN.severity import is_transient
+    except Exception as e:
+        log.warning(f"[GUARDIAN/selfheal] import 실패: {e}")
+        return {"fixed": 0, "skipped": 0, "ignored": 0, "scanned": 0}
+
+    rows = _collect_unresolved(limit)
+    for er in rows:
+        eid = er.get("id")
+        et  = er.get("error_type", "")
+        try:
+            if is_transient(et, er.get("message", ""), er.get("source", "")):
+                _db.mark_error_status(eid, "ignored")
+                ignored += 1
+                continue
+            analysis = analyze(er)  # Tier 1 전용 (패턴·Bandit·정적, LLM 0)
+            if analysis.get("fixable") and apply_fix(eid, analysis, mark_wontfix=False):
+                fixed += 1
+            else:
+                skipped += 1  # LLM 호출 안 함 — 새벽 심층 감사로 위임
+        except Exception as e:
+            log.debug(f"[GUARDIAN/selfheal] #{eid} 처리 예외: {e}")
+            skipped += 1
+
+    log.info(f"[GUARDIAN/selfheal] 발행 전 Tier-1 sweep — 수리 {fixed} / 보류 {skipped} / 무시 {ignored} (스캔 {len(rows)})")
+    return {"fixed": fixed, "skipped": skipped, "ignored": ignored, "scanned": len(rows)}
+
+
+def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
+    """새벽 심층 감사 1부 — 미해결 오류 backlog 를 Tier 1 → Tier 2(LLM) 로 처리.
+
+    ★ 핵심: Tier 2 수정도 apply_fix 경유 → *실제 오류 지문* 으로 record_pattern_hit + Bandit.
+       (_try_sdk_targeted_fix 의 AutoRepairFix 합성 지문과 달리, 다음 발행 전 sweep 이 재사용 가능
+        → 학습 루프가 실제로 조여짐.)
+    max_llm: 1회 실행당 Tier 2(LLM) 시도 상한 (시간 폭주 방지).
+
+    Returns: {"fixed_t1", "fixed_t2", "failed", "ignored", "scanned", "llm_used"}
+    """
+    fixed_t1 = fixed_t2 = failed = ignored = llm_used = 0
+    try:
+        from shared import db as _db
+        from JARVIS07_GUARDIAN.error_analyzer import analyze, analyze_llm_only
+        from JARVIS07_GUARDIAN.error_fixer import apply_fix
+        from JARVIS07_GUARDIAN.severity import is_transient
+    except Exception as e:
+        log.warning(f"[GUARDIAN/deepaudit] import 실패: {e}")
+        return {"fixed_t1": 0, "fixed_t2": 0, "failed": 0, "ignored": 0, "scanned": 0, "llm_used": 0}
+
+    rows = _collect_unresolved(limit)
+    for er in rows:
+        eid = er.get("id")
+        et  = er.get("error_type", "")
+        try:
+            if is_transient(et, er.get("message", ""), er.get("source", "")):
+                _db.mark_error_status(eid, "ignored")
+                ignored += 1
+                continue
+            a1 = analyze(er)  # Tier 1 먼저 (LLM 0)
+            if a1.get("fixable") and apply_fix(eid, a1, mark_wontfix=False):
+                fixed_t1 += 1
+                continue
+            if llm_used >= max_llm:
+                failed += 1
+                continue
+            llm_used += 1
+            a2 = analyze_llm_only(er)  # Tier 2 — apply_fix 경유 *실제 지문* 학습
+            if a2.get("fixable") and apply_fix(eid, a2, mark_wontfix=True):
+                fixed_t2 += 1
+            else:
+                failed += 1
+        except Exception as e:
+            log.debug(f"[GUARDIAN/deepaudit] #{eid} 처리 예외: {e}")
+            failed += 1
+
+    log.info(f"[GUARDIAN/deepaudit] backlog — T1 {fixed_t1} / T2(LLM {llm_used}) {fixed_t2} / 실패 {failed} / 무시 {ignored} (스캔 {len(rows)})")
+    return {"fixed_t1": fixed_t1, "fixed_t2": fixed_t2, "failed": failed,
+            "ignored": ignored, "scanned": len(rows), "llm_used": llm_used}
+
+
+def job_deep_audit() -> None:
+    """매일 04:30 — 심층 코드 감사 (DB 백업 03:00 이후, 발행과 분리).
+
+    2부 구성:
+      1) backlog 처리 (deep_audit_backlog) — 미해결 오류 Tier 1 → Tier 2(LLM), *실제 지문* 학습
+      2) 광범위 코드 감사 (auto_repair.run_auto_repair) — 새 잠재 버그 발굴·수정
+
+    ★ 발행 직전엔 LLM-0 Tier-1 sweep(self_heal_known_errors)만, 비싼 LLM 심층 감사는 한가한 새벽에.
+      결과가 learned_patterns·Bandit 을 키워 다음 발행 전 sweep 자동수리율↑ (복리 학습 루프).
+    """
+    log.info("[GUARDIAN/deepaudit] 새벽 심층 감사 시작")
+    try:
+        b = deep_audit_backlog()
+        log.info(f"[GUARDIAN/deepaudit] backlog 완료: {b}")
+    except Exception as e:
+        log.warning(f"[GUARDIAN/deepaudit] backlog 처리 예외: {e}")
+    try:
+        from JARVIS07_GUARDIAN.auto_repair import run_auto_repair
+        run_auto_repair()
+    except Exception as e:
+        log.warning(f"[GUARDIAN/deepaudit] 광범위 감사 예외: {e}")
 
 
 # ── 스케줄 잡 ─────────────────────────────────────────────────────

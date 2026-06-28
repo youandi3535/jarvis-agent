@@ -302,6 +302,7 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
         error_record = {}
 
     # ★ 학습 등록 — unified diff 로 저장 (full-file 대체) → 파일 변경 후에도 안전 재적용
+    _learned_hits = 0
     try:
         import difflib as _dl
         from JARVIS07_GUARDIAN.pattern_fixer import record_pattern_hit
@@ -315,7 +316,7 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
             n=5,
         ))
         _store_patch = "".join(_diff_lines) if _diff_lines else patch
-        record_pattern_hit(
+        _learned_hits = record_pattern_hit(
             error_record or {},
             fixer_name=analysis.get("pattern") or "llm_patch",
             fixed_file=_rel,
@@ -331,6 +332,11 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
         from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
         _et  = (error_record or {}).get("error_type", "")
         _bfx = analysis.get("_bandit_fixer") or analysis.get("pattern", "")
+        # ★ LLM 직접 수정(analyze_llm_only 등) 은 _bfx 가 비어있음 → 등록된 fingerprint arm 으로
+        #   fallback 보상 (사용자 박제 2026-06-28 #3). _learned_hits>0 = eval 게이트 통과분만 → 품질 유지.
+        if not _bfx and _et and _learned_hits > 0:
+            from JARVIS07_GUARDIAN.pattern_fixer import bandit_arm_name as _arm_name
+            _bfx = _arm_name(error_record or {}, _learned_hits)
         if _et and _bfx:
             _bandit_reward(_et, _bfx, success=True, error_record=error_record or {})
     except Exception as _be:

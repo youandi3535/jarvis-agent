@@ -1,13 +1,12 @@
 """JARVIS07_GUARDIAN/error_analyzer.py — Claude Code SDK 기반 오류 분석기.
 
 역할:
-  1. error_log 레코드 + 관련 파일 내용 → Claude Code SDK(Sonnet 4.6 / Opus 4.6 폴백) 분석
+  1. error_log 레코드 + 관련 파일 내용 → Claude Code SDK(Opus 4.6) 분석
   2. 수정 대상 파일·수정 내용 반환
   3. 과거 resolution 재활용 (DB 조회 우선)
 
-모델 정책 (★ 사용자 박제 2026-06-06: 가짜 ID "claude-opus-4-8" → "claude-opus-4-6" 교체):
-  - 패치 생성: Sonnet 4.6 ("claude-sonnet-4-6") — Opus 대비 3배 빠르고 코드 추론 충분
-  - 폴백: high/critical 심각도에서 Sonnet 빈 결과 → Opus 4.6 ("claude-opus-4-6") 재시도
+모델 정책 (★ 사용자 박제: 수정하는 건 무엇이든 Opus 4.6 — Sonnet 4.6 아님):
+  - 패치 생성: Opus 4.6 ("guardian" alias) — 코드 수정 판단은 최고 성능 모델 단일 사용
 
 반환 형식:
   {

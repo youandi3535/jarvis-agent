@@ -102,6 +102,8 @@ CAPABILITIES = declare(
         "🗓 *잡 스케줄 (JARVIS04)*\n"
         "/jobs        전체 잡 목록\n"
         "/jobs\\_next  다음 실행 예정\n"
+        "/jobs\\_log   최근 실행 이력 (기본 24h)\n"
+        "/jobs\\_report 일일 잡 리포트\n"
         "※ 잡 변경은 자유 문장으로 → 인라인 버튼 ✅ 승인"
     ),
     status_fn=_status_section,

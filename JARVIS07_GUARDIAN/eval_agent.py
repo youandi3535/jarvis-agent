@@ -19,7 +19,7 @@ Tier A — 휴리스틱 (즉시 결정, LLM 호출 0)
   정적 fixer 5종 (relative_import / nonetype_subscript / nametype_typo /
   nonetype_attribute / import_error_alias) 은 *결정적 패턴* 이라 자동 통과.
 
-Tier B — LLM 평가 (Sonnet 4.6, learn_eval alias)
+Tier B — LLM 평가 (Opus 4.6, learn_eval alias)
   llm_patch 결과만 *안전성·정확성·재사용 가치* 3축 채점. 점수 80+ 통과 시만 등록.
   실패 시 텔레그램 알림으로 사용자 검토 요청.
 
@@ -156,7 +156,7 @@ rationale 은 50자 이내 한국어로.
 
 
 def _evaluate_llm_patch(error_record: dict, patch: str, target_file: str) -> EvalResult:
-    """LLM 패치 평가 — Sonnet 4.6 (learn_eval alias).
+    """LLM 패치 평가 — Opus 4.6 (learn_eval alias).
 
     실패·예외 시 보수적 통과 (학습 진행 중단 방지) + 텔레그램 알림으로 사용자 검토 요청.
     """

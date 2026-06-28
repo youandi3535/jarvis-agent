@@ -37,14 +37,17 @@ def _status_section() -> str:
     except Exception:
         apscheduler = None
     if apscheduler:
+        # ★ 실제 잡 ID 와 매칭 (job_registry: radar_trends 는 09/12/15 세 개) — 후보 중 가장 이른 것 표시
         job_map = {
-            "radar_trends": "트렌드 수집",
-            "radar_perf":   "성과 수집",
-            "analyzer_fb":  "분석 fallback",
+            "트렌드 수집":   ["radar_trends_09", "radar_trends_12", "radar_trends_15"],
+            "성과 수집":     ["radar_perf"],
+            "분석 fallback": ["analyzer_fb"],
         }
-        for jid, jname in job_map.items():
-            job = apscheduler.get_job(jid)
-            if job and job.next_run_time:
+        for jname, jids in job_map.items():
+            cand = [apscheduler.get_job(j) for j in jids]
+            cand = [j for j in cand if j and j.next_run_time]
+            if cand:
+                job  = min(cand, key=lambda j: j.next_run_time)
                 nrt  = job.next_run_time.astimezone(now.astimezone().tzinfo)
                 diff = nrt - now.astimezone()
                 th, tr = divmod(int(diff.total_seconds()), 3600)

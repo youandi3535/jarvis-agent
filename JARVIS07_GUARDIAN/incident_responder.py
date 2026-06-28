@@ -115,8 +115,12 @@ def _try_sdk_targeted_fix(
     job_id: str,
     failed_platforms: list[str],
     theme: str,
+    error_record: dict | None = None,
 ) -> bool:
-    """Tier 2: Claude Code SDK targeted 수정 (최대 10분). Tier 1 실패 시만."""
+    """Tier 2: Claude Code SDK targeted 수정 (최대 10분). Tier 1 실패 시만.
+
+    ★ error_record 전달 시 SDK 수정이 밴딧 arm 으로 학습됨 (record_sdk_fix).
+    """
     try:
         from JARVIS07_GUARDIAN.auto_repair import run_auto_repair_targeted
         return run_auto_repair_targeted(
@@ -124,6 +128,7 @@ def _try_sdk_targeted_fix(
             job_id=job_id,
             failed_platforms=failed_platforms,
             theme=theme,
+            error_record=error_record,   # ★ 밴딧 학습 브리지
         )
     except Exception as e:
         log.warning(f"[Incident] sdk_targeted_fix 오류: {e}")
@@ -183,7 +188,7 @@ def respond(
         if not fix_applied:
             # Tier 2: Claude Code SDK targeted (Tier 1 실패 시 직행 — ★ 사용자 박제 2026-05-31)
             _tg(f"⚙️ [GUARDIAN] Claude Code SDK targeted 수정 시작 (최대 10분)...")
-            fix_applied = _try_sdk_targeted_fix(error_text, job_id, failed_platforms, theme)
+            fix_applied = _try_sdk_targeted_fix(error_text, job_id, failed_platforms, theme, error_record)
     else:
         # transient: 코드 수정 없이 대기 후 재시도
         _tg(f"⏳ [GUARDIAN] 일시적 오류({error_class}) — {_TRANSIENT_WAIT}초 대기 후 재시도")

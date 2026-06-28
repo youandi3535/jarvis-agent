@@ -9,6 +9,15 @@ import os, sqlite3, json, shutil
 from pathlib import Path
 from datetime import datetime, date, timedelta
 
+# ★ .env 자가 로드 (단일 진입점 — db.py 가 import 순서와 무관하게 JARVIS_DB_PATH 를 항상 해석).
+#   미로드 시 standalone 호출(검증 one-liner·.env 미로드 프로세스)이 기본 경로로 떨어져
+#   *잔재 shared/jarvis.sqlite* 가 생기던 근본 원인 차단 (사용자 박제 2026-06-28).
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(Path(__file__).parent.parent / ".env")
+except Exception:
+    pass
+
 _default_db = Path(__file__).parent / "jarvis.sqlite"
 DB_PATH     = Path(os.environ.get("JARVIS_DB_PATH", str(_default_db)))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)

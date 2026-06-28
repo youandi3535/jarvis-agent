@@ -268,14 +268,12 @@ class IntegrityChecker:
 
     @staticmethod
     def _in_help(agent_id: str) -> bool:
-        """데몬 /help 텍스트에 에이전트 언급 있나? (jarvis_daemon.py 의 _HELP_TEXT)."""
+        """에이전트가 /help 에 노출되나? — /help 는 capabilities.build_help_text() 동적 조합이므로
+        capability.help_section 보유 여부로 판정 (옛 정적 jarvis_daemon._HELP_TEXT 는 폐기됨)."""
         try:
-            txt = (ROOT / "jarvis_daemon.py").read_text(encoding="utf-8")
-            # _HELP_TEXT 블록만 찾기
-            m = re.search(r'_HELP_TEXT\s*=\s*["\']+(.*?)["\']+', txt, re.DOTALL)
-            if m:
-                return agent_id in m.group(1)
-            return True  # 찾을 수 없으면 통과
+            from shared.capabilities import get as _get_cap
+            cap = _get_cap(agent_id)
+            return bool(cap and getattr(cap, "help_section", "").strip())
         except Exception:
             return True
 
@@ -1274,8 +1272,8 @@ def boot_check():
     """데몬 부팅 후 호출 — 백그라운드 스레드에서 실행.
 
     LLMCodeAuditor 완전 제거 (외부 API 비용 발생 경로).
-    코드 자가 진단·수정은 JARVIS07_GUARDIAN/auto_repair.py 가 담당:
-      08:30 / 18:00 (job_registry auto_repair_morning / auto_repair_evening 잡, Sonnet 4.6).
+    코드 자가 진단·수정은 JARVIS07_GUARDIAN/auto_repair.py 가 담당 (Opus 4.6):
+      발행 세트 callback 내 선행 실행 — 06:30 run_self_repair_then_economic / 16:00 run_self_repair_then_theme.
     """
     def _run():
         time.sleep(15)  # 모든 에이전트 등록 완료 대기
