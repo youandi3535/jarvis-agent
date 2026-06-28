@@ -415,6 +415,29 @@ git 커밋은 단일 계정(`youandi3535`)으로 기록되지만, 설계·구현
 
 > 운영 데몬은 발행 사고·학습 자산 오염 방지를 위해 개발자 macOS 1곳에서만 상시 실행합니다.
 
+### 작업 분담 — 운영 vs 공동
+
+| 작업 | HJ (운영) | NY |
+|------|:--------:|:--:|
+| 코드 작성·수정·테스트·PR | ✅ | ✅ |
+| 운영 데몬 상시 실행 (`jarvis_daemon.py`) | ✅ macOS 1곳 | ❌ |
+| 네이버·티스토리 Selenium 발행 | ✅ | ❌ |
+| 학습 자산 갱신 (`learned_patterns.json`·`ERRORS.md`) | ✅ 데몬 자동 | ❌ 읽기 전용 |
+
+> 운영(데몬·발행·학습 자산)은 HJ macOS 1곳에서만, 코드 작업은 두 사람이 함께.
+
+### 협업 워크플로우
+
+| 브랜치 | 용도 | 정책 |
+|--------|------|------|
+| `main` | 운영 — 데몬 실행 코드 | PR 머지만 (직접 push 금지) |
+| `feat/hj` | 개발 통합 브랜치 | PR → `main` |
+| `feature/<task>` | 개별 기능 작업 | PR → `feat/hj` |
+
+- **커밋 컨벤션** — `hj : <요약>` / `ny : <요약>`, 버그 수정은 `[이슈번호]` 접두사
+- **머지 전 필수** — `python shared/precommit_check.py` 0건 + `py_compile` 전수 통과
+- **운영 자산 보호** — `learned_patterns.json`·`ERRORS.md`·`react_checkpoints.sqlite`(50MB)·`shared/jarvis.sqlite` 는 `.gitignore` 처리. 데몬만 갱신하며 (`ERRORS.md` 는 `report_manual_fix()` 자동 박제), PR 에 포함되면 머지 거부.
+
 ---
 
 ## 🔌 새 에이전트 추가
