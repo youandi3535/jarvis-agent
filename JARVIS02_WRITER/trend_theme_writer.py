@@ -598,8 +598,19 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                 issues.append(Issue(step=step_name, kind="draft_failed",
                     detail=f"대본 생성 실패: {draft.get('error', 'unknown')}"))
                 continue
-            for di in _layer3_verify_draft(draft, platform):
+            di_list = _layer3_verify_draft(draft, platform)
+            for di in di_list:
                 issues.append(Issue(step=step_name, kind="draft_quality", detail=di))
+            # ★ 발행 전 품질 게이트 (2026-06-28) — 구조 검증 통과 시에만.
+            #   테마글은 출처 약함(종목 0개 시 빈 코퍼스) → 웹 재검증을 1차 근거로
+            #   "웹에서도 확인 불가만 차단" (factuality_issues 의 source_weak 완화 자동).
+            if not di_list:
+                from JARVIS02_WRITER.prepublish_gate import prepublish_quality_issues
+                for q in prepublish_quality_issues(
+                        draft, post_type="theme",
+                        source_docs=state.get("collection_docs"),
+                        market_data=None):
+                    issues.append(Issue(step=step_name, kind=q["kind"], detail=q["detail"]))
 
         return issues
 

@@ -1949,6 +1949,18 @@ def run(post_naver=True, post_tistory=True):
     except Exception as _j09_e:
         print(f"  ⚠️ JARVIS09 수집 스킵: {_j09_e}")
 
+    # ── 발행 전 사실성 게이트용 시장 수치 ground truth (★ 2026-06-28) ──────
+    # 작성에 쓰인 시장 지표·경제 일정을 verify 시점 state 로 전달 → 본문 수치를
+    # *신뢰 가능한 구조화 데이터* 와 직접 대조 (웹 재검증 전 1차 근거).
+    _j09_market_data: dict = {}
+    try:
+        _j09_market_data = {
+            "market": _j09_get_market_data() or {},
+            "calendar": _j09_get_economic_calendar() or {},
+        }
+    except Exception as _md_e:
+        print(f"  ⚠️ 시장 수치 수집 스킵(게이트 ground truth): {_md_e}")
+
     cleanup_economic_images(post_naver=post_naver, post_tistory=post_tistory)
 
     def safe(fn, label, *args, **kwargs):
@@ -2097,8 +2109,20 @@ def run(post_naver=True, post_tistory=True):
                     detail=f"대본 생성 실패: {draft.get('error', 'unknown')}",
                 ))
                 continue
-            for di in _layer3_verify_draft(draft, platform):
+            di_list = _layer3_verify_draft(draft, platform)
+            for di in di_list:
                 issues.append(Issue(step=step_name, kind="draft_quality", detail=di))
+            # ★ 발행 전 품질 게이트 (2026-06-28) — 구조 검증 통과 시에만 (LLM 비용 절약).
+            #   사실성(차단)·매력도(재생성). kind 가 draft_quality 아니므로 _fix_drafts 가
+            #   곧장 unfixed → 해당 WRITER step 재실행 = 재작성 순환.
+            if not di_list:
+                from JARVIS02_WRITER.prepublish_gate import prepublish_quality_issues
+                _pt = (draft.get("post_type") or "economic").strip().lower()
+                for q in prepublish_quality_issues(
+                        draft, post_type=_pt,
+                        source_docs=state.get("collection_docs"),
+                        market_data=state.get("market_data")):
+                    issues.append(Issue(step=step_name, kind=q["kind"], detail=q["detail"]))
 
         return issues
 
@@ -2238,7 +2262,8 @@ def run(post_naver=True, post_tistory=True):
     _action_result = run_action(
         _econ_action,
         input_data={"post_naver": post_naver, "post_tistory": post_tistory,
-                    "collection_docs": _j09_collection_docs},
+                    "collection_docs": _j09_collection_docs,
+                    "market_data": _j09_market_data},
     )
     _st = _action_result.state
 

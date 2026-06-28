@@ -1164,6 +1164,260 @@ def audit_factuality(
     return {"suspicious": suspicious, "count": len(suspicious), "passed": passed}
 
 
+# ══════════════════════════════════════════════════════════════════════
+#  발행 전 사실성 게이트 — factuality_issues (★ 사용자 박제 2026-06-28)
+#
+#  audit_factuality(수치·비차단 경고)의 *차단 게이트* 버전.
+#  제2조 "팩트가 생명" 을 발행 *전* harness Layer 3 차단 게이트로 승격하기 위한
+#  핵심 로직. 모든 검증 가능한 사실 주장(수치·고유명사·날짜)을 ① 수집 출처
+#  코퍼스로 1차 grounding → ② 미확인 주장만 웹 재검증(JARVIS09 web_verify).
+#
+#  ★ 두 정책 (사용자 박제 2026-06-28):
+#   1. 테마글 완화 — 출처 코퍼스가 약하면(테마글·빈 코퍼스) 웹 재검증을
+#      1차 근거로 사용, "웹에서도 확인 불가한 것만 차단".
+#   2. 검증 실패 분리 — 사실 판정 LLM 실패 = 차단(fail-closed),
+#      웹 인프라 실패(타임아웃·전송오류) = 통과(fail-open).
+#
+#  반환은 dict(harness 비의존). harness Layer 3 연결(PR5)에서 blocked 를
+#  Issue(step=WRITER) 로 변환한다. LLM 호출은 invoke_text("fact_judge") 단일 진입점.
+#  내부 LLM 헬퍼(_extract_claims/_ground_unsupported/_web_confirms)는 모듈
+#  레벨이라 테스트에서 monkeypatch 가능.
+# ══════════════════════════════════════════════════════════════════════
+
+class FactJudgeError(Exception):
+    """사실 판정 LLM 실패 — 응답 없음·JSON 파싱 실패 등. 게이트는 fail-closed(차단)."""
+
+
+_FACT_MIN_SOURCE_CHARS = 200    # 이 미만이면 출처 약함 → 웹 1차 근거 (테마글 완화)
+_FACT_MAX_CLAIMS = 25           # 검사 주장 상한 (latency 가드)
+_FACT_MAX_WEB_CHECKS = 8        # 웹 재검증 호출 상한 (발행 임계경로 stall 방지)
+_FACT_SOURCE_CORPUS_CAP = 12000  # 출처 코퍼스 길이 상한 (도메인 무관 — 블로그 분량 아님)
+
+
+def _build_source_corpus(source_docs, market_data=None) -> str:
+    """수집 문서 리스트 + 시장 데이터를 grounding 코퍼스 문자열로 합친다.
+
+    source_docs 원소는 JARVIS09 문서객체(.cleaned_text/.raw_text), str, dict 모두 허용.
+    """
+    import json as _json
+    parts: list[str] = []
+    for d in (source_docs or []):
+        if isinstance(d, str):
+            parts.append(d)
+        elif isinstance(d, dict):
+            parts.append(str(d.get("cleaned_text") or d.get("raw_text")
+                            or d.get("text") or d.get("snippet") or ""))
+        else:
+            t = (getattr(d, "cleaned_text", None) or getattr(d, "raw_text", None)
+                 or getattr(d, "text", None))
+            if t:
+                parts.append(str(t))
+    if market_data:
+        md = (market_data if isinstance(market_data, str)
+              else _json.dumps(market_data, ensure_ascii=False, default=str))
+        parts.append("[시장 데이터]\n" + md)
+    corpus = "\n\n".join(p for p in parts if p and p.strip())
+    return corpus[:_FACT_SOURCE_CORPUS_CAP]
+
+
+def _fact_strip_html(html: str) -> str:
+    return re.sub(r"<[^>]+>", " ", html or "")
+
+
+def _fact_parse_json_list(text: str) -> list:
+    """LLM 응답에서 JSON 배열 추출. 없거나 파싱 실패 시 FactJudgeError (fail-closed 트리거)."""
+    import json as _json
+    m = re.search(r"\[.*\]", text or "", re.DOTALL)
+    if not m:
+        raise FactJudgeError("LLM 응답에 JSON 배열 없음 (호출 실패 가능성)")
+    try:
+        v = _json.loads(m.group())
+    except Exception as e:
+        raise FactJudgeError(f"JSON 파싱 실패: {e}")
+    if not isinstance(v, list):
+        raise FactJudgeError("JSON 최상위가 배열 아님")
+    return v
+
+
+def _extract_claims(html: str) -> list[dict]:
+    """본문에서 검증 가능한 사실 주장 추출·분류. (fail-closed: LLM 실패 시 FactJudgeError)"""
+    body = _fact_strip_html(html).strip()
+    if not body:
+        return []
+    from shared.llm import invoke_text
+    prompt = (
+        "다음 블로그 본문에서 *검증 가능한 사실 주장* 만 추출하라. "
+        "수치·통계, 고유명사(기업·인물·기관·제품), 날짜·기간, 인과/단정 서술을 대상으로 한다. "
+        "주관적 감상·일반론·의견은 제외한다.\n"
+        "각 주장을 JSON 배열로 반환: "
+        '[{"text":"주장 원문(본문에서 그대로)","type":"numeric|entity|date|causal","key":true/false}]. '
+        'key 는 글의 핵심 정보면 true. 없으면 []. JSON 외 다른 말 금지.\n\n'
+        "[본문]\n" + body
+    )
+    resp = invoke_text("fact_judge", prompt)
+    out: list[dict] = []
+    for it in _fact_parse_json_list(resp)[:_FACT_MAX_CLAIMS]:
+        if isinstance(it, dict) and str(it.get("text", "")).strip():
+            out.append({
+                "text": str(it["text"]).strip(),
+                "type": str(it.get("type", "fact")),
+                "key": bool(it.get("key", False)),
+            })
+        elif isinstance(it, str) and it.strip():
+            out.append({"text": it.strip(), "type": "fact", "key": False})
+    return out
+
+
+def _ground_unsupported(claims: list[dict], corpus: str) -> list[str]:
+    """출처 코퍼스가 뒷받침하지 *못하는* 주장 텍스트 목록. (fail-closed: LLM 실패 시 FactJudgeError)"""
+    from shared.llm import invoke_text
+    claim_lines = "\n".join(f"- {c['text']}" for c in claims)
+    prompt = (
+        "[출처]에 근거가 *없는* 주장만 골라라. [출처]에 직접 등장하거나 "
+        "명백히 추론되는 주장은 제외한다. "
+        "근거 없는 주장의 원문을 [주장 목록] 그대로 JSON 배열로 반환. 모두 근거 있으면 []. "
+        "JSON 외 다른 말 금지.\n\n"
+        "[출처]\n" + (corpus or "(없음)") + "\n\n[주장 목록]\n" + claim_lines
+    )
+    resp = invoke_text("fact_judge", prompt)
+    return [str(x).strip() for x in _fact_parse_json_list(resp) if str(x).strip()]
+
+
+def _web_confirms(claim: str, evidence: list[dict]) -> bool:
+    """웹 근거가 주장을 뒷받침하는지 판정. 근거 없으면 False(=확인 불가).
+
+    (fail-closed: 판정 LLM 자체 실패 시 FactJudgeError → 호출자가 차단)
+    """
+    import json as _json
+    ev = "\n".join(
+        f"- {e.get('title','')}: {e.get('snippet','')}"
+        for e in (evidence or []) if isinstance(e, dict)
+    ).strip()
+    if not ev:
+        return False  # 웹은 됐으나 근거 못 찾음 → 확인 불가
+    from shared.llm import invoke_text
+    prompt = (
+        "아래 [웹 근거]가 [주장]을 사실로 뒷받침하는가? "
+        'JSON 한 줄로만 답: {"confirmed": true/false}. '
+        "근거가 주장과 무관하거나 모순되면 false.\n\n"
+        "[주장]\n" + claim + "\n\n[웹 근거]\n" + ev
+    )
+    resp = invoke_text("fact_judge", prompt)
+    m = re.search(r"\{.*\}", resp or "", re.DOTALL)
+    if not m:
+        raise FactJudgeError("웹 근거 판정 응답 파싱 실패")
+    try:
+        return bool(_json.loads(m.group()).get("confirmed", False))
+    except Exception as e:
+        raise FactJudgeError(f"웹 근거 판정 JSON 실패: {e}")
+
+
+def factuality_issues(
+    html: str,
+    source_docs=None,
+    post_type: str = "",
+    web_verify_fn=None,
+    market_data=None,
+) -> dict:
+    """발행 전 사실성 차단 게이트 — 출처 대조 + 웹 재검증.
+
+    Args:
+        html:          발행 직전 HTML 본문
+        source_docs:   수집 출처 (JARVIS09 문서 리스트 / str / dict 혼용 허용)
+        post_type:     "economic" / "theme" / "" — theme 은 출처 약함 → 웹 1차 근거
+        web_verify_fn: 웹 재검증 함수 (보통 JARVIS09.web_verify). 호출 시 예외를
+                       던지면 *웹 인프라 실패* 로 보고 fail-open(미차단).
+        market_data:   글 작성에 쓴 구조화 수치(시장지표 등) — 신뢰 가능한 ground truth.
+
+    Returns:
+        {
+          "passed": bool,                # 차단 0 이면 True
+          "blocked": [{"claim","type","reason"}],
+          "checked": int,                # 검사한 주장 수
+          "source_weak": bool,
+          "policy_notes": [str],         # fail-open 적용 등 정책 기록
+        }
+
+    정책:
+      - 사실 판정 LLM(_extract/_ground/_web_confirms) 실패 → FactJudgeError → 차단(fail-closed).
+      - web_verify_fn 예외(타임아웃·전송오류·자격증명없음) → 미차단(fail-open).
+      - 테마글/약한 출처 → 웹 재검증을 1차 근거로 사용, 웹에서도 확인 불가만 차단.
+    """
+    corpus = _build_source_corpus(source_docs, market_data)
+    source_weak = (post_type == "theme") or (len(corpus.strip()) < _FACT_MIN_SOURCE_CHARS)
+
+    def _blocked(reason: str) -> dict:
+        return {"passed": False,
+                "blocked": [{"claim": "(전체)", "type": "judge_error", "reason": reason}],
+                "checked": 0, "source_weak": source_weak, "policy_notes": [reason]}
+
+    # ── 1. 주장 추출 (fail-closed) ──────────────────────────────
+    try:
+        claims = _extract_claims(html)
+    except FactJudgeError as e:
+        log.warning(f"[factuality_gate] 주장 추출 실패 → 차단(fail-closed): {e}")
+        return _blocked(f"사실성 판정 실패(주장 추출) — 안전 차단: {e}")
+
+    if not claims:
+        return {"passed": True, "blocked": [], "checked": 0,
+                "source_weak": source_weak, "policy_notes": []}
+
+    # ── 2. 출처 grounding (fail-closed) ─────────────────────────
+    if corpus.strip():
+        try:
+            unsupported = set(_ground_unsupported(claims, corpus))
+        except FactJudgeError as e:
+            log.warning(f"[factuality_gate] 출처 대조 실패 → 차단(fail-closed): {e}")
+            return _blocked(f"사실성 판정 실패(출처 대조) — 안전 차단: {e}")
+    else:
+        # 출처 코퍼스 없음(테마글 등) → 전 주장이 출처 미확인 → 웹으로 위임
+        unsupported = {c["text"] for c in claims}
+
+    pending = [c for c in claims if c["text"] in unsupported]
+
+    # ── 3. 웹 재검증 + 정책 분기 ────────────────────────────────
+    blocked: list[dict] = []
+    policy_notes: list[str] = []
+    web_checks = 0
+
+    for c in pending:
+        claim = c["text"]
+        if web_verify_fn is not None and web_checks < _FACT_MAX_WEB_CHECKS:
+            web_checks += 1
+            try:
+                evidence = web_verify_fn(claim)            # 인프라 실패 시 예외
+            except Exception as e:                         # noqa: BLE001 — fail-open 의도
+                policy_notes.append(f"웹 검증 불가 → 미차단(fail-open): {claim} [{type(e).__name__}]")
+                continue
+            try:
+                confirmed = _web_confirms(claim, evidence)  # 판정 LLM 실패 시 fail-closed
+            except FactJudgeError as e:
+                blocked.append({"claim": claim, "type": c["type"],
+                                "reason": f"웹 근거 판정 실패 — 안전 차단(fail-closed): {e}"})
+                continue
+            if confirmed:
+                continue                                    # 웹 확인 → 통과
+            blocked.append({"claim": claim, "type": c["type"],
+                            "reason": "출처·웹 모두 확인 불가"})
+        else:
+            # 웹 미가용
+            if source_weak:
+                # 약한 출처 + 웹 미가용 → 검증 수단 없음 → 대량 차단 방지 fail-open
+                policy_notes.append(f"출처 약함·웹 미가용 → 미차단(fail-open): {claim}")
+            else:
+                # 강한 출처(경제글) + 출처 미확인 → 차단(strict)
+                blocked.append({"claim": claim, "type": c["type"],
+                                "reason": "출처 미확인(웹 미가용)"})
+
+    return {
+        "passed": len(blocked) == 0,
+        "blocked": blocked,
+        "checked": len(claims),
+        "source_weak": source_weak,
+        "policy_notes": policy_notes,
+    }
+
+
 __all__ = [
     "enforce_supreme_law", "enforce_spacing", "check_human_intro",
     "fix_human_intro", "notify_violations", "is_blocking",
@@ -1172,6 +1426,7 @@ __all__ = [
     "parse_seo_block", "parse_diff_block",
     "parse_seo_meta", "parse_svg_rules",
     "audit_factuality",
+    "factuality_issues", "FactJudgeError",
 ]
 # NOTE: ADR 008 Phase 1 — 이미지 함수는 JARVIS06_IMAGE 단일 진입점 강제.
 #   enforce_paragraph_pair_image / enforce_image_between_paragraphs / compute_unused_image_pool /
