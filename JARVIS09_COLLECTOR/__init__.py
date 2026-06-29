@@ -7,6 +7,7 @@
     from JARVIS09_COLLECTOR import (
         collect_for_theme,       # 주제 관련 텍스트 자료 (뉴스·블로그·학술 등)
         collect_stocks_data,     # 테마 종목 데이터 (시세·재무)
+        collect_chart_data,      # ★ 주제 연관 차트용 실데이터 (출처 박제 — 2026-06-29)
         get_market_data,         # 글로벌 시장 지표 (yfinance)
         get_economic_calendar,   # 경제 일정 (investing.com)
         web_verify,              # 발행 전 사실성 게이트용 웹 재검증
@@ -21,9 +22,16 @@ from JARVIS09_COLLECTOR.collector_engine import (
     collect_for_theme_delta,   # ★ delta-aware 교류 (사용자 박제 2026-06-07)
 )
 from JARVIS09_COLLECTOR.collect_theme import collect_stocks_data
+from JARVIS09_COLLECTOR.chart_data import (
+    collect_chart_data,
+    get_ecos_raw,        # ★ JARVIS06 차트용 ECOS 원시 수집 (provider 단일 진입점)
+    get_krx_raw,         # ★ JARVIS06 차트용 KRX 원시 수집 (provider 단일 진입점)
+)
 from JARVIS09_COLLECTOR.providers.economic_data_provider import (
     get_market_data,
     get_economic_calendar,
+    get_ticker_history,  # ★ JARVIS06 차트용 yfinance 단일 진입점
+    download_ticker,     # ★ JARVIS06 차트용 yfinance 단일 진입점
 )
 from JARVIS09_COLLECTOR.providers.verify_provider import web_verify
 
@@ -31,7 +39,12 @@ __all__ = [
     "collect_for_theme",
     "collect_for_theme_delta",
     "collect_stocks_data",
+    "collect_chart_data",
+    "get_ecos_raw",
+    "get_krx_raw",
     "get_market_data",
     "get_economic_calendar",
+    "get_ticker_history",
+    "download_ticker",
     "web_verify",
 ]

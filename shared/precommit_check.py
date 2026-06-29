@@ -389,6 +389,8 @@ def check_autocode(report: Report) -> None:
         "JARVIS06_IMAGE/",                    # 이미지 생성 (Pollinations — Bing/HF 폐기 2026-06-07)
         "JARVIS07_GUARDIAN/",                 # guardian 자가수정·git audit
         "jarvis_keeper.py",                   # 데몬 워치독 — 재시작 subprocess 정당
+        # ★ 무료 데이터 라이브러리 자동설치 화이트리스트 (사용자 박제 2026-06-29 — ADR 010)
+        "JARVIS09_COLLECTOR/lib_bootstrap.py",
     )
 
     for p in _iter_py():

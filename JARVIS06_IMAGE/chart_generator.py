@@ -16,8 +16,8 @@ run_id: 글 1건당 1회 생성되는 랜덤 문자열 (uuid4 등).
 차트 종류: run_id 로 셔플된 9종 중 description 우선 선택
 """
 from __future__ import annotations
-# ★ yfinance 단일 진입점 → JARVIS09 (2026-05-31 이관)
-from JARVIS09_COLLECTOR.providers.economic_data_provider import (
+# ★ yfinance 단일 진입점 → JARVIS09 공개 API (2026-06-29 — provider 내부 직접 import 제거)
+from JARVIS09_COLLECTOR import (
     get_ticker_history as _j09_hist,
     download_ticker as _j09_dl,
 )
@@ -1284,14 +1284,12 @@ def _build_j09_context(keyword: str, description: str) -> str:
         return f"[수집 자료]\n{text}"
 
     def _ecos() -> str:
-        from JARVIS09_COLLECTOR.providers.ecos_provider import EcosProvider
-        docs = EcosProvider().collect(keyword)
-        return docs[0].raw_text if docs else ""
+        from JARVIS09_COLLECTOR import get_ecos_raw
+        return get_ecos_raw(keyword)
 
     def _krx() -> str:
-        from JARVIS09_COLLECTOR.providers.krx_provider import KrxProvider
-        docs = KrxProvider().collect(keyword)
-        return "\n".join(d.raw_text for d in docs) if docs else ""
+        from JARVIS09_COLLECTOR import get_krx_raw
+        return get_krx_raw(keyword)
 
     def _market() -> str:
         from JARVIS09_COLLECTOR import get_market_data
@@ -1507,10 +1505,9 @@ def _fetch_from_j09(keyword: str, description: str, chart_type: str) -> tuple[li
         _combined = (keyword or '') + ' ' + (description or '')
         if any(k in _combined for k in _rate_kw):
             try:
-                from JARVIS09_COLLECTOR.providers.ecos_provider import EcosProvider
-                ecos_docs = EcosProvider().collect(keyword)
-                if ecos_docs:
-                    ecos_text = ecos_docs[0].raw_text
+                from JARVIS09_COLLECTOR import get_ecos_raw
+                ecos_text = get_ecos_raw(keyword)
+                if ecos_text:
                     _bl_labels, _bl_values = _parse_ecos_timeseries(
                         ecos_text, description, exclude_indicators=_get_ecos_exclude()
                     )
@@ -1518,7 +1515,7 @@ def _fetch_from_j09(keyword: str, description: str, chart_type: str) -> tuple[li
                         print(f"  ✅ [J09] ECOS 기준금리 {len(_bl_labels)}포인트 → BAND_LINE")
                         return _bl_labels, _bl_values
             except Exception as _e:
-                print(f"  ⚠️ [J09] EcosProvider(band_line) 실패: {_e}")
+                print(f"  ⚠️ [J09] ECOS(band_line) 실패: {_e}")
         # 실데이터 없음 — 거짓 차트 방지, 스킵
         print(f"  🚫 [J09] band_line 실데이터 없음 — 차트 스킵")
         return [], []
@@ -1596,16 +1593,15 @@ def _fetch_from_j09(keyword: str, description: str, chart_type: str) -> tuple[li
     # ── 2. KrxProvider — 실시간 종목 시세 (bar/barh 계열, 경제일반 스킵) ──
     if not _skip_stocks and chart_type not in ('line', 'area', 'step', 'iso_area', 'combo', 'scatter'):
         try:
-            from JARVIS09_COLLECTOR.providers.krx_provider import KrxProvider
-            krx_docs = KrxProvider().collect(keyword, max_items=3)
-            if krx_docs:
-                krx_text = "\n".join(d.raw_text for d in krx_docs)
+            from JARVIS09_COLLECTOR import get_krx_raw
+            krx_text = get_krx_raw(keyword, max_items=3)
+            if krx_text:
                 names, prices = _parse_krx_prices(krx_text, keyword)
                 if len(names) >= 2:
                     print(f"  ✅ [J09] KRX 종목 시세 {len(names)}개 → {chart_type.upper()}")
                     return names, prices
         except Exception as e:
-            print(f"  ⚠️ [J09] KrxProvider 실패: {e}")
+            print(f"  ⚠️ [J09] KRX 시세 실패: {e}")
 
     # ── 2.5 collect_for_theme — 뉴스 직접 수치 파싱 (LLM 없이, 테마별 실데이터) ──
     _theme_docs_cache: list = []
@@ -1635,10 +1631,9 @@ def _fetch_from_j09(keyword: str, description: str, chart_type: str) -> tuple[li
     if chart_type in ('line', 'area', 'step', 'iso_area', 'combo') or \
        any(k in d_lower for k in _ecos_kws):
         try:
-            from JARVIS09_COLLECTOR.providers.ecos_provider import EcosProvider
-            ecos_docs = EcosProvider().collect(keyword)
-            if ecos_docs:
-                ecos_text = ecos_docs[0].raw_text
+            from JARVIS09_COLLECTOR import get_ecos_raw
+            ecos_text = get_ecos_raw(keyword)
+            if ecos_text:
                 labels, values = _parse_ecos_timeseries(
                     ecos_text, description, exclude_indicators=_get_ecos_exclude()
                 )
@@ -1646,7 +1641,7 @@ def _fetch_from_j09(keyword: str, description: str, chart_type: str) -> tuple[li
                     print(f"  ✅ [J09] ECOS 시계열 {len(labels)}포인트 → {chart_type.upper()}")
                     return labels, values
         except Exception as e:
-            print(f"  ⚠️ [J09] EcosProvider 실패: {e}")
+            print(f"  ⚠️ [J09] ECOS 시계열 실패: {e}")
 
     # ── 4. collect_for_theme — LLM 숫자 추출 (직접 파싱 실패 시) ──────────
     try:

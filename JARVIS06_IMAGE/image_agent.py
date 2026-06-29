@@ -138,6 +138,7 @@ def generate_infographic(
     out_path: Path | str,
     sector: str = "",
     section_title: str = "",
+    real_datasets: list | None = None,
 ) -> Path:
     """블로그 섹션 텍스트 → matplotlib 인포그래픽 이미지 생성.
 
@@ -150,6 +151,8 @@ def generate_infographic(
         out_path:      저장 경로 (.jpg / .png)
         sector:        섹터 (선택)
         section_title: 소제목 (선택)
+        real_datasets: JARVIS09 collect_chart_data 의 datasets (사실성 보증용).
+                       None 이면 수치 차트일 때 generate_image_spec 이 자동 수집.
 
     Returns:
         생성된 이미지 Path.
@@ -165,6 +168,7 @@ def generate_infographic(
         keyword=keyword,
         sector=sector,
         section_title=section_title,
+        real_datasets=real_datasets,
     )
     return render_from_spec(spec, dest)
 

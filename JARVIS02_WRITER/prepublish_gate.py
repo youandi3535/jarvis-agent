@@ -18,9 +18,15 @@ economic_poster._verify_all / trend_theme_writer._verify_all 양쪽이 호출한
 ★ 킬스위치(라이브 파이프라인 안전): 환경변수로 즉시 비활성화 가능.
   PREPUBLISH_FACT_GATE=0       사실성 게이트 끔
   PREPUBLISH_ENGAGEMENT_GATE=0 매력도 게이트 끔
+  PREPUBLISH_IMAGE_GATE=0      이미지(차트) 사실성 게이트 끔
+
+★ 이미지 사실성 (사용자 박제 2026-06-29): 본문 수치는 사실성 게이트가, *차트 안의 수치*
+  는 이미지 게이트가 막는다. JARVIS06 render_from_spec 가 검증 우회(실데이터 미확인)
+  차트를 unverified 로 기록 → 여기서 차단 → 재작성 순환.
 """
 from __future__ import annotations
 import os
+import re
 import logging
 log = logging.getLogger(__name__)
 
@@ -49,6 +55,8 @@ def prepublish_quality_issues(draft, post_type: str = "",
         out.extend(_factuality_leg(body, post_type, source_docs, market_data))
     if not _disabled("PREPUBLISH_ENGAGEMENT_GATE"):
         out.extend(_engagement_leg(draft, body, post_type))
+    if not _disabled("PREPUBLISH_IMAGE_GATE"):
+        out.extend(_image_factuality_leg(draft, body))
     return out
 
 
@@ -105,6 +113,62 @@ def _engagement_leg(draft, body, post_type) -> list[dict]:
     # detail 에 점수 raw 금지 — 실패 차원 태그만 (fingerprint 안정)
     log.warning(f"[prepublish_gate] 매력도 미달 차원={tag} → 재작성 순환")
     return [{"kind": "engagement", "detail": f"[매력도/유익성] 임계 미달 차원: {tag}"}]
+
+
+_IMG_EXT = re.compile(r"\.(?:jpg|jpeg|png|webp)$", re.I)
+
+
+def _walk_strings(obj):
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _walk_strings(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _walk_strings(v)
+
+
+def _collect_image_paths(draft, body: str) -> list[str]:
+    """draft blocks + 본문 HTML 에서 이미지 파일 경로 후보 수집."""
+    paths: list[str] = []
+    blocks = draft.get("blocks") if isinstance(draft, dict) else None
+    if isinstance(blocks, (list, tuple)):
+        for s in _walk_strings(blocks):
+            if _IMG_EXT.search(s):
+                paths.append(s)
+    for m in re.finditer(r'src=["\']([^"\']+\.(?:jpg|jpeg|png|webp))["\']', body or "", re.I):
+        paths.append(m.group(1))
+    # dedupe (순서 보존)
+    seen: set = set()
+    return [p for p in paths if not (p in seen or seen.add(p))]
+
+
+def _image_factuality_leg(draft, body) -> list[dict]:
+    """이미지(차트) 사실성 — render 시 unverified 로 기록된 수치 차트가 있으면 차단.
+
+    JARVIS06 render_from_spec 가 모든 생성 이미지의 검증 결과를 provenance 레지스트리에
+    기록한다. 수치 차트가 실데이터로 검증 안 된 채 렌더되면 verified=False 로 남고,
+    여기서 그것을 잡아 재작성 순환으로 보낸다 (fail-open — 게이트 자체 오류는 발행 허용)."""
+    try:
+        from JARVIS06_IMAGE.validators.image_data_verifier import lookup_provenance
+    except Exception as e:
+        log.warning(f"[prepublish_gate] 이미지 검증 import 실패 → 통과: {e}")
+        return []
+    out: list[dict] = []
+    for p in _collect_image_paths(draft, body):
+        try:
+            prov = lookup_provenance(p)
+        except Exception:
+            prov = None
+        if prov and prov.get("verified") is False:
+            out.append({"kind": "factuality",
+                        "detail": f"[이미지사실성] 출처 미검증 수치 차트: {os.path.basename(p)}"})
+    if out:
+        log.warning(f"[prepublish_gate] 이미지 사실성 차단 {len(out)}건 → 재작성 순환")
+        for o in out:
+            log.warning(f"  ↳ {o['detail']}")
+    return out
 
 
 def _report_safe(source: str, exc: Exception, func_name: str) -> None:
