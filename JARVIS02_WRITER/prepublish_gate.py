@@ -79,6 +79,8 @@ def _factuality_leg(body, post_type, source_docs, market_data) -> list[dict]:
         out.append({"kind": "factuality", "detail": f"[사실성] {reason}: {claim}"})
     if out:
         log.warning(f"[prepublish_gate] 사실성 차단 {len(out)}건 → 재작성 순환")
+        for o in out:
+            log.warning(f"  ↳ {o['detail']}")
     return out
 
 
