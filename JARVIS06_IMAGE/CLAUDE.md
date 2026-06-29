@@ -18,7 +18,11 @@
     - **scatter/area/line**: 시계열·2D 전용 — 횡단면 종목 비교에 사용 금지.
     - **min()/max() guard**: 진입 최상단 빈 데이터 guard 필수. `if not x_vals or not y_vals: return ""`
     - **검증**: `grep -rn '_synth_data(' JARVIS06_IMAGE/*.py | grep -v '^.*def _synth_data' | grep -v __pycache__` → 0행이어야 함 (함수 정의 제외, 호출만 검사).
-13. **★ 차트 스타일 단일 진입점 의무 (ERRORS [139][169][175] 3회 반복 박제 — 2026-05-26)**:
+13. **★ 이미지 데이터 사실성 (ERRORS [287] / ADR 010 — 2026-06-29)**:
+    - **차트 수치는 JARVIS09 실데이터로만**. `from JARVIS09_COLLECTOR import collect_chart_data` 로 주제 연관 실데이터(출처 박제) 수집 → 그 데이터로 차트 생성. *본문에서 숫자 짜내기 금지*.
+    - **검증 단일 진입점**: `validators/image_data_verifier.verify_chart_spec(spec, datasets)`. 검증분 재구성 → 0개면 실데이터 대체 → 그것도 없으면 숫자 없는 카드 폴백. `render_from_spec` 이 provenance 레지스트리 기록(트립와이어).
+    - 다른 파일에 차트 데이터 사실성 로직 박지 말 것. 검증: `grep -rn 'def verify_chart_spec' JARVIS06_IMAGE | grep -v image_data_verifier` → 0행.
+14. **★ 차트 스타일 단일 진입점 의무 (ERRORS [139][169][175] 3회 반복 박제 — 2026-05-26)**:
     - **matplotlib 차트**: 모든 함수 최상단에서 `setup_chart_defaults()` 1회 호출 필수. 함수 내 `fontsize=` 하드코딩 금지 — `CHART_STYLE["FONT_*"]` 상수 사용.
     - **Plotly 차트**: `_base_layout()` 사용 (font=16 이상, title=28). `_derive_colors()`로 채도 0.45~0.65 범위 컬러 사용 — 직접 hex 하드코딩 금지.
     - **신규 차트 파일 추가 시**: `from JARVIS06_IMAGE.style_engine import setup_chart_defaults, CHART_STYLE` 먼저 추가 후 작성.

@@ -10,6 +10,11 @@ from JARVIS06_IMAGE.validators.image_validators import (  # noqa: F401
     _dedupe_by_content_hash,
     _dedupe_consecutive_images,
 )
+from JARVIS06_IMAGE.validators.image_data_verifier import (  # noqa: F401
+    verify_chart_spec,
+    has_provenance,
+    source_caption,
+)
 
 __all__ = [
     "_is_heading_img_path",
@@ -17,4 +22,7 @@ __all__ = [
     "_dedupe_all_images",
     "_dedupe_by_content_hash",
     "_dedupe_consecutive_images",
+    "verify_chart_spec",
+    "has_provenance",
+    "source_caption",
 ]

@@ -5979,3 +5979,20 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **원인**: `stabilityai/stable-diffusion-3.5-large-turbo`는 `hf-inference` 프로바이더가 지원하지 않는 모델이라 HTTP 400이 발생함. 파일 docstring에 폴백 모델로 명시된 `stable-diffusion-xl-base-1.0`으로 교체하면 해결됨.
 - **파일**: JARVIS06_IMAGE/providers/huggingface_provider.py
 - **해결**: 자동 수정 적용
+
+---
+
+## [287] 이미지(차트) 사실성 검증 부재 — 데이터 이미지가 거짓 수치로 생성될 수 있었음 (2026-06-29)
+
+- **증상**: 대본(텍스트) 사실성은 `prepublish_gate` 가 검수하나, *차트·인포그래픽 안의 수치* 에는 검증이 전혀 없었음. `image_spec.generate_image_spec()` 이 LLM으로 *본문 텍스트에서 숫자를 추출* → 본문에 수치가 적거나 LLM 오추출·환각 시 거짓 데이터 차트가 발행될 수 있었음.
+- **환경**: 테마글 단락 인포그래픽(`jarvis_main._make_para_image`)·`draft_fixer`·`image_agent.generate_infographic` 경로. (경제 차트 `chart_generator` 경로는 이미 실데이터+스킵가드 보유 — 무관)
+- **원인**: ① 이미지 데이터 출처(provenance) 개념 자체가 없어 "이 숫자가 진짜인지" 검증 근거 부재. ② 본문 추출 경로와 실데이터 경로(chart_generator)가 분리돼, 단락 이미지가 본문 추출(위험) 경로만 탐.
+- **헛다리**: 없음 (구조적 갭, 런타임 오류 아님)
+- **해결** (ADR 010):
+  - JARVIS09 `collect_chart_data(theme, sector, description)` 신설 — 주제 연관 실데이터를 *출처 박제*(`source={provider,name,url,as_of}`)와 함께 반환.
+  - JARVIS06 `validators/image_data_verifier.py` 신설 — 차트 수치를 실데이터로 대조: 검증분만 재구성 → 0개면 실데이터로 대체 → 그것도 없으면 숫자 없는 카드로 폴백 (거짓 차트 < 차트 없음).
+  - `image_spec.generate_image_spec(real_datasets=)` — 실데이터 우선 + 자동 수집 + 검증. `render_from_spec` 트립와이어(provenance 레지스트리 기록).
+  - `prepublish_gate._image_factuality_leg` — `verified=False` 차트 발행 차단 (킬스위치 `PREPUBLISH_IMAGE_GATE`).
+  - 무료 데이터 라이브러리 자동설치: `JARVIS09_COLLECTOR/lib_bootstrap.py` — *갯수 제한 없이* 승인 없이 설치(안전 정책: 데니리스트·PyPI실존·무료 라이선스).
+- **파일**: `JARVIS09_COLLECTOR/{chart_data.py,lib_bootstrap.py,__init__.py}`, `JARVIS06_IMAGE/validators/image_data_verifier.py`, `JARVIS06_IMAGE/{image_spec.py,image_agent.py}`, `JARVIS02_WRITER/prepublish_gate.py`, `shared/precommit_check.py`, `docs/decisions/010-image-factuality-real-data.md`, `CLAUDE.md`.
+- **교훈**: 이미지도 *콘텐츠*다. 텍스트에만 사실성 게이트를 걸면 데이터 시각화가 사각지대가 된다. 수치 이미지는 *반드시* 실데이터 출처를 박고 검증해야 함. 수집은 JARVIS09, 생성은 JARVIS06 — 단일 진입점 협업.

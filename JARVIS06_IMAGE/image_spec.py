@@ -26,6 +26,10 @@ except ImportError:
 
 log = logging.getLogger("jarvis")
 
+# ── 주제 연관 실데이터 캐시 (auto-fetch 시 같은 글 반복 수집 방지) ─────────
+_DS_CACHE: dict[str, tuple[float, list]] = {}
+_DS_TTL = 1800  # 30분
+
 # ── 지원 시각화 타입 ──────────────────────────────────────────────────
 
 # HTML/CSS 렌더러 (Playwright) — 카드·레이아웃 타입
@@ -165,19 +169,127 @@ _SPEC_PROMPT_TEMPLATE = """섹션 제목: {section_title}
 - comparison_kpi의 data.value는 문자열 허용 (before/after 필드 우선)"""
 
 
+def _is_numeric_spec(spec: dict) -> bool:
+    """spec 에 수치 데이터(value/before/after)가 하나라도 있으면 True (= 사실성 검증 대상)."""
+    for d in (spec.get("data") or []):
+        if not isinstance(d, dict):
+            continue
+        for key in ("value", "before", "after"):
+            try:
+                float(str(d.get(key, "")).replace(",", "").replace("%", "").strip())
+                return True
+            except (ValueError, TypeError):
+                continue
+    return False
+
+
+def _datasets_block(datasets: list) -> str:
+    """실데이터 dataset → 프롬프트 주입용 텍스트 블록."""
+    if not datasets:
+        return ""
+    lines = ["", "━━━ 실데이터 (JARVIS09 수집 — 차트는 *반드시* 이 수치만 사용) ━━━"]
+    for ds in datasets:
+        unit = ds.get("unit", "")
+        rows = ", ".join(
+            f"{r.get('label','')} {r.get('value','')}{unit}" for r in (ds.get("data") or [])[:8]
+        )
+        src = (ds.get("source") or {}).get("name", "")
+        lines.append(f"· {ds.get('title','')} ({unit}): {rows}  [출처: {src}]")
+    lines.append("위 실데이터가 있으면 본문에서 숫자를 추측하지 말고 이 수치로 차트를 만드세요.")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
+
+def _auto_fetch_datasets(keyword: str, sector: str, section_text: str) -> list:
+    """real_datasets 미제공 + 수치 차트일 때 JARVIS09 실데이터 자동 수집 (캐시)."""
+    import time
+    now = time.time()
+    hit = _DS_CACHE.get(keyword)
+    if hit and now - hit[0] < _DS_TTL:
+        return hit[1]
+    ds: list = []
+    try:
+        from JARVIS09_COLLECTOR import collect_chart_data
+        res = collect_chart_data(keyword, sector=sector, description=(section_text or "")[:500])
+        ds = res.get("datasets") or []
+    except Exception as e:
+        log.warning(f"[image_spec] collect_chart_data 자동 수집 실패: {e}")
+        _g_report("image", e, module=__name__)
+    _DS_CACHE[keyword] = (now, ds)
+    return ds
+
+
+def _text_card_spec(failed_spec: dict, keyword: str, sector: str) -> dict[str, Any]:
+    """수치 차트가 실데이터로 검증 안 될 때 — 숫자 없는 안전한 텍스트 카드로 대체.
+
+    ★ 거짓 데이터 차트를 만드느니 숫자 없는 카드를 만든다 (사용자 박제 2026-06-29).
+    failed_spec 의 *텍스트* (title/key_message) 만 재사용 — 수치는 전부 버림.
+    """
+    msg = (failed_spec.get("key_message") or failed_spec.get("title") or keyword or "").strip()[:40]
+    title = (failed_spec.get("title") or keyword or "").strip()[:24]
+    return {
+        "viz_type": "highlight_card",
+        "title": title,
+        "key_message": msg,
+        "items": [msg] if msg else [],
+        "data": [],
+        "color_theme": failed_spec.get("color_theme", "blue"),
+        "keyword": keyword,
+        "sector": sector,
+        "_provenance": {"verified": True, "source": {}, "method": "text_card_no_data"},
+    }
+
+
+def _finalize_spec(spec: dict, keyword: str, sector: str,
+                   datasets: list, section_text: str) -> dict[str, Any]:
+    """spec 사실성 검증 → 검증분 재구성 / 실데이터 대체 / 텍스트카드 폴백 + 출처 캡션."""
+    spec.setdefault("keyword", keyword)
+    spec.setdefault("sector", sector)
+    try:
+        from JARVIS06_IMAGE.validators.image_data_verifier import (
+            verify_chart_spec, source_caption,
+        )
+        verified = verify_chart_spec(spec, datasets)
+    except Exception as e:
+        log.warning(f"[image_spec] 데이터 검증 예외: {e}")
+        _g_report("image", e, module=__name__)
+        # 검증 불가 — 수치 차트면 거짓 위험 → 텍스트카드로 안전 폴백
+        return _text_card_spec(spec, keyword, sector) if _is_numeric_spec(spec) else spec
+
+    if verified is None:
+        # 수치 차트인데 실데이터 뒷받침 0 → 텍스트 카드로 대체 (거짓 데이터 금지)
+        return _text_card_spec(spec, keyword, sector)
+
+    # 출처 캡션 가시화 (HTML=source / matplotlib=subtitle 모두 노출)
+    prov = verified.get("_provenance") or {}
+    cap = source_caption(prov.get("source") or {})
+    if cap:
+        verified.setdefault("source", cap)
+        if not verified.get("subtitle"):
+            verified["subtitle"] = cap
+    return verified
+
+
 def generate_image_spec(
     section_text: str,
     keyword: str,
     sector: str = "",
     section_title: str = "",
+    real_datasets: list | None = None,
 ) -> dict[str, Any]:
     """섹션 전체 텍스트 → 이미지 설계서(dict) 생성.
+
+    ★ 사실성 보증 (사용자 박제 2026-06-29): 수치 차트는 *본문 추측이 아니라*
+      JARVIS09 실데이터(real_datasets)로 만든다. 실데이터로 검증 안 되는 수치는
+      검증분만 재구성하거나 실데이터로 대체, 그것도 없으면 숫자 없는 카드로 폴백.
 
     Args:
         section_text:  섹션 전체 본문 (자르지 않고 전달)
         keyword:       블로그 키워드
         sector:        섹터 (예: '경제·경기')
         section_title: 섹션 소제목
+        real_datasets: JARVIS09 collect_chart_data 의 datasets (호출자가 글 단위로 1회
+                       수집해 전달 권장). None 이면 수치 차트일 때 자동 수집.
 
     Returns:
         설계서 dict. 실패 시 fallback 설계서 반환 (절대 None 반환 안 함).
@@ -188,6 +300,8 @@ def generate_image_spec(
         sector=sector or "기타",
         section_text=section_text,
     )
+    if real_datasets:
+        prompt += "\n" + _datasets_block(real_datasets)
 
     try:
         from shared.llm import invoke_text as _inv
@@ -208,15 +322,24 @@ def generate_image_spec(
                         item["value"] = float(str(item.get("value", 0)).replace(",", ""))
                     except (ValueError, TypeError):
                         item["value"] = 0.0
-                spec.setdefault("keyword", keyword)
-                spec.setdefault("sector", sector)
-                log.info(f"[image_spec] ✅ '{keyword}' → {spec['viz_type']} / '{spec.get('title','')}'")
+                # ★ 데이터 사실성 검증 — 수치 차트면 실데이터 확보 후 검증
+                datasets = real_datasets
+                if datasets is None and _is_numeric_spec(spec):
+                    datasets = _auto_fetch_datasets(keyword, sector, section_text)
+                spec = _finalize_spec(spec, keyword, sector, datasets or [], section_text)
+                log.info(f"[image_spec] ✅ '{keyword}' → {spec['viz_type']} / '{spec.get('title','')}'"
+                         f" (검증={(spec.get('_provenance') or {}).get('method','-')})")
                 return spec
     except Exception as e:
         log.warning(f"[image_spec] LLM 설계서 생성 실패: {e}")
         _g_report("image", e, module=__name__)
 
-    return _fallback_spec(section_text, keyword, sector, section_title)
+    fb = _fallback_spec(section_text, keyword, sector, section_title)
+    # 폴백도 본문 숫자 추출이므로 동일하게 검증 (거짓 데이터 차단)
+    datasets = real_datasets
+    if datasets is None and _is_numeric_spec(fb):
+        datasets = _auto_fetch_datasets(keyword, sector, section_text)
+    return _finalize_spec(fb, keyword, sector, datasets or [], section_text)
 
 
 def _fallback_spec(
@@ -266,6 +389,26 @@ def _fallback_spec(
 
 
 def render_from_spec(spec: dict[str, Any], out_path: Path) -> Path:
+    """설계서 → 이미지 파일 생성 + 출처(provenance) 레지스트리 기록.
+
+    ★ 트립와이어 (사용자 박제 2026-06-29): 수치 차트는 _provenance.verified 없이
+      렌더되면 안 됨 (검증 우회). 그런 경우 unverified 로 기록 → prepublish_gate 가 차단.
+    """
+    result = _render_impl(spec, out_path)
+    try:
+        from JARVIS06_IMAGE.validators.image_data_verifier import record_provenance
+        prov = dict(spec.get("_provenance") or {})
+        if not prov:
+            numeric = _is_numeric_spec(spec)
+            prov = {"verified": not numeric,
+                    "method": "unverified_render" if numeric else "no_data"}
+        record_provenance(result, prov)
+    except Exception:
+        pass
+    return result
+
+
+def _render_impl(spec: dict[str, Any], out_path: Path) -> Path:
     """설계서 → 이미지 파일 생성.
 
     렌더링 우선순위 (★ 사용자 박제 2026-05-19 — Plotly 최우선):
