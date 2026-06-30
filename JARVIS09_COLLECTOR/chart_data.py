@@ -290,6 +290,18 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     is_stock = any(k in combined for k in _STOCK_THEME_KWS)
     is_macro = any(k in combined.lower() for k in _MACRO_KWS)
 
+    # ★ 지표 일치성 (사용자 박제 2026-06-30): 직원수·매출·인구처럼 구조화 provider(KRX:PER/ROE/주가)가
+    #   *보유하지 않은* 특정 지표를 요청하면, generic 종목지표를 엉뚱하게 라벨링해 반환하면 안 된다
+    #   (요청≠데이터 = 거짓 정보). → 그런 요청은 종목지표 억제, 웹 실데이터(출처 URL)로만 응답.
+    _SPECIFIC_NON_VALUATION = [
+        "직원", "고용", "인원", "임직원", "매출", "인구", "발행", "가맹점", "점포", "지점",
+        "생산량", "판매량", "수출", "수입액", "점유율", "시장규모", "가입자", "이용자", "방문자",
+        "출하량", "등록", "건수", "보급",
+    ]
+    _wants_specific = any(k in combined for k in _SPECIFIC_NON_VALUATION)
+    if _wants_specific:
+        is_stock = False   # 종목 valuation 지표는 요청과 무관 → 억제 (웹 실데이터로만)
+
     datasets: list[dict] = []
     # 구조화 API 우선 (provenance 명확·고신뢰)
     if is_stock:
