@@ -1,0 +1,128 @@
+"""JARVIS09_COLLECTOR/data_planner.py — 주제별 데이터 소싱 *설계* (LLM, 하드코딩 0).
+
+★ 사용자 박제 2026-06-30: "주제가 결정되면, 그 주제에 맞게 어떤 데이터를·어디서·어떻게
+  받아야겠다라는 *설계*가 먼저 짜져야 한다. 주제가 뭐가 되어도 동작해야 하고 하드코딩 금지."
+
+흐름:  주제 확정 → plan_data_sources(topic) → [설계도: series별 {지표·단위·차트·출처후보·쿼리}]
+       → (실행기 collect_chart_data 가 설계도대로 조준 수집)
+
+설계는 *완전 동적* — LLM 이 주제를 보고 매번 series·출처·쿼리를 새로 결정한다.
+provider(출처 메커니즘)는 *고정 카탈로그*(아래 _SOURCE_CATALOG, 11종)에서 LLM 이 고를 뿐,
+주제별 if-else 분기는 어디에도 없다. 카탈로그는 "가용 도구 목록"이지 주제 로직이 아니다.
+"""
+from __future__ import annotations
+import json
+import logging
+import re
+
+log = logging.getLogger("jarvis.collector.planner")
+
+try:
+    from JARVIS07_GUARDIAN.error_collector import report as _g_report
+except ImportError:
+    def _g_report(*a, **k): pass
+
+# ── 가용 출처 메커니즘 카탈로그 (provider 능력 설명 — LLM 이 주제에 맞게 *선택* 한다) ──────
+#   ★ 이건 "도구 목록"이지 주제 로직이 아님. provider 추가 시 여기에 한 줄 추가하면 LLM 이 자동 활용.
+_SOURCE_CATALOG = {
+    "kosis":      "통계청 국가통계포털 — 인구·산업·고용·물가·소비·지역경제 등 공식 통계표(시계열)",
+    "ecos":       "한국은행 ECOS — 거시경제(기준금리·환율·통화량·물가·국제수지·실업률) 시계열",
+    "dart":       "금융감독원 전자공시 — 상장기업 재무제표·사업보고서·직원수·매출·영업이익",
+    "krx":        "한국거래소 — 상장 종목 주가·등락률·거래량·시가총액",
+    "finance":    "글로벌 시장지표(yfinance) — 해외 지수(S&P·나스닥)·환율·금·유가·미국채",
+    "academic":   "arXiv 학술 논문 — 기술·과학·AI·경제 연구의 수치·통계(논문 출처)",
+    "naver_news": "네이버 뉴스 — 한국어 시사·정책·기업 뉴스에 인용된 수치(가장 정확한 한국어 뉴스)",
+    "news":       "Google News + 경제지(한국경제·매경·연합) — 뉴스 인용 수치",
+    "kor_econ":   "산업부·중소벤처부 보도자료 + 네이버금융 — 정부 정책·산업 공식 발표 수치",
+    "web":        "위키백과·지식백과 — 개념·배경·정의(수치보다 설명 위주)",
+    "blog":       "네이버 블로그 — 체감·후기(보조, 신뢰도 낮음)",
+}
+_VALID_SOURCES = set(_SOURCE_CATALOG)
+
+_PLAN_SYSTEM = """당신은 데이터 저널리스트의 '데이터 소싱 설계자'다. 글 주제가 주어지면,
+그 주제를 가장 잘 설명할 *차트용 데이터 series* 들을 정하고, 각 series 를 *어느 출처에서 어떤
+검색어로* 받을지 설계한다. 절대 수치를 지어내지 않는다 — 설계만 한다(실제 수집은 다른 단계)."""
+
+_PLAN_PROMPT = """글 주제: {topic}
+섹터: {sector}
+맥락: {desc}
+
+[사용 가능한 출처(이 키만 sources 에 사용)]
+{catalog}
+
+이 주제에 *진짜 의미 있는* 차트용 데이터 series 를 3~6개 설계하라. 각 series:
+- name: 지표명(한국어, 구체적). 예: "연도별 발행액 추이"
+- unit: 단위(반드시). 예: "조원","억원","%","명","개","원","pt","달러"
+- chart: line(추이) | bar(항목비교) | stat(단일 핵심수치) | donut(비중)
+- sources: 위 출처 키 중 *이 지표에 맞는* 1~3개 (우선순위 순). 공식 통계·정부·공시를 기사보다 우선.
+- query: 그 출처에서 검색할 *구체적 한국어 검색어*(주제+지표). 예: "지역사랑상품권 발행액 연도별"
+
+원칙:
+- 주제에 맞춰 series·출처·검색어를 *완전히 새로* 설계 (예시 복붙 금지).
+- 출처 우선순위: ① 공식 통계·공시 API(kosis·ecos·dart·kor_econ) → ② **논문(academic)** →
+  ③ 뉴스(naver_news·news)·웹(web). ★ 논문은 거짓이 없으니 *API 다음으로 적극 활용*하라 —
+  연구·시장규모·효과·추세 series 엔 academic 을 꼭 후보에 넣어라.
+- 한 series 의 sources 는 2~4개를 넉넉히(우선순위 순) — 데이터는 많을수록 좋다(여러 출처 시도).
+- 데이터로 만들 수 없는 추상 주장은 series 로 넣지 마라(수치 series 만). series 는 4~6개로 풍부하게.
+
+JSON만 출력:
+{{"series":[{{"name":"...","unit":"...","chart":"line","sources":["kosis","news"],"query":"..."}}]}}"""
+
+
+def _extract_json(raw):
+    if not raw:
+        return None
+    m = re.search(r"\{[\s\S]*\}", str(raw))
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+
+def _sanitize(plan: dict) -> list[dict]:
+    out = []
+    for s in (plan or {}).get("series") or []:
+        name = str(s.get("name", "")).strip()
+        unit = str(s.get("unit", "")).strip()
+        query = str(s.get("query", "")).strip()
+        chart = str(s.get("chart", "bar")).strip().lower()
+        if chart not in ("line", "bar", "stat", "donut"):
+            chart = "bar"
+        srcs = [x for x in (s.get("sources") or []) if x in _VALID_SOURCES]
+        if not name or not query:
+            continue
+        if not srcs:                       # 출처 미지정 → 안전 기본(정부·논문·뉴스)
+            srcs = ["kor_econ", "academic", "naver_news"]
+        out.append({"name": name, "unit": unit, "chart": chart,
+                    "sources": srcs[:4], "query": query})
+    return out[:6]
+
+
+def plan_data_sources(topic: str, sector: str = "", description: str = "") -> list[dict]:
+    """주제 → 데이터 소싱 설계도(series 목록). LLM 동적 설계. 실패 시 빈 리스트(폴백은 호출자 판단).
+
+    반환: [{"name","unit","chart","sources":[provider...],"query"}, ...]
+    """
+    topic = (topic or "").strip()
+    if not topic:
+        return []
+    catalog = "\n".join(f"- {k}: {v}" for k, v in _SOURCE_CATALOG.items())
+    prompt = _PLAN_PROMPT.format(topic=topic, sector=sector or "-",
+                                 desc=(description or topic)[:400], catalog=catalog)
+    try:
+        from shared.llm import invoke_text
+        raw = invoke_text("analyzer", prompt, system=_PLAN_SYSTEM,
+                          max_tokens=1100, temperature=0.2)
+        plan = _sanitize(_extract_json(raw))
+        if plan:
+            log.info(f"[planner] '{topic}' → {len(plan)}개 series 설계")
+            return plan
+    except Exception as e:
+        log.warning(f"[planner] 설계 실패: {e}")
+        _g_report("collector", e, module=__name__, func_name="plan_data_sources")
+    return []
+
+
+__all__ = ["plan_data_sources", "_SOURCE_CATALOG"]

@@ -1769,6 +1769,68 @@ def _fetch_per_roe_scatter(context_text: str) -> tuple:
     return names, [v for pair in zip(pers, roes) for v in pair]
 
 
+# ── 수치 단위 추론 (모든 숫자엔 단위 — 사용자 박제 2026-06-30) ──────────────
+def _infer_unit(description: str, keyword: str = "") -> str:
+    t = f"{description} {keyword}".lower()
+    if any(w in t for w in ['등락률', '상승률', '하락률', '증감률', '수익률', '금리',
+                            '비중', '비율', '퍼센트', '점유율', '증가율', '성장률', '%']):
+        return '%'
+    if any(w in t for w in ['환율', '원/달러', '원달러', '원·달러']):
+        return '원'
+    if any(w in t for w in ['유가', 'wti', '브렌트', '국제유가']):
+        return '달러'
+    if '금값' in t or '국제 금' in t or '금 시세' in t:
+        return '달러'
+    if any(w in t for w in ['지수', '코스피', '코스닥', '나스닥', 's&p', '다우', '닛케이', '항셍']):
+        return 'pt'
+    if any(w in t for w in ['시가총액', '시총']):
+        return '억원'
+    if any(w in t for w in ['주가', '종가', '종목', '주식']):
+        return '원'
+    if any(w in t for w in ['달러', 'usd', '$']):
+        return '달러'
+    if any(w in t for w in ['명', '인구', '가맹점', '개수', '건수', '수 ']):
+        return '개'
+    return ''
+
+
+# ── JARVIS09 협력 — 실데이터 부족 시 요청 (팩트 데이터: API자동설치·뉴스·논문·기사) ──────
+#   ★ 사용자 박제 2026-06-30: 이미지 생성 중 데이터 부족하면 JARVIS09 에 요청 → JARVIS09 가
+#   어떻게든 팩트 기반 실데이터(출처·단위 박제)를 수집해 보내줌 → 그 데이터로만 차트.
+#   거짓 수치 절대 금지: collect_chart_data 는 실제 등장 수치(URL 출처)만 반환.
+_CHART_DATA_POOL: dict = {}   # run_id -> [datasets] (run 당 1회 수집, 슬롯마다 부분집합 회전)
+
+
+def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, run_id):
+    """실데이터 경로 실패 시 JARVIS09 collect_chart_data 요청 → 검증 실데이터로 인포그래픽."""
+    try:
+        pool = _CHART_DATA_POOL.get(run_id)
+        if pool is None:
+            from JARVIS09_COLLECTOR import collect_chart_data
+            res = collect_chart_data(keyword, sector=sector, description=description,
+                                     max_datasets=8)   # 풍부하게 요청 → 고퀄 이미지
+            pool = (res or {}).get("datasets") or []
+            _CHART_DATA_POOL[run_id] = pool
+            print(f"  🕸️ [chart_generator→JARVIS09] '{keyword}' 실데이터 요청 "
+                  f"→ {len(pool)}개 dataset (출처·단위 박제)")
+        if not pool:
+            print(f"  ⚠️ [chart_generator] JARVIS09 도 실데이터 0 — 차트 스킵(거짓 숫자 < 차트 없음)")
+            return ""
+        n = len(pool)
+        st = (chart_idx * 2) % n
+        subset = pool if n <= 4 else (pool + pool)[st:st + 4]   # 슬롯마다 다른 부분집합(다양성)
+        from JARVIS06_IMAGE.infographic_engine import generate_infographic
+        p = generate_infographic(keyword, (description[:60] or keyword), subset,
+                                 run_id=run_id, slot_key=str(chart_idx), out_dir=out_path,
+                                 context=f"{keyword} — {description}")
+        if p and Path(p).exists():
+            print(f"    chart_{chart_idx:02d} → 85점 인포그래픽 [JARVIS09 실데이터 {len(subset)}셋]")
+            return str(Path(p).resolve())
+    except Exception as e:
+        print(f"  ⚠️ [chart_generator] collect_chart_data 폴백 실패: {e}")
+    return ""
+
+
 # ── 공개 API ────────────────────────────────────────────────────
 
 def generate_chart(
@@ -1873,8 +1935,13 @@ def generate_chart(
         is_pie_like = chart_type in ('pie', 'donut')
         is_scatter  = chart_type == 'scatter'
 
-        labels, values = _llm_extract_chart_data(
-            description, keyword, sector, context_text, chart_type)
+        # ★ 수치 팩트체크 (ADR 010 / 사용자 박제 2026-06-30 — 거짓 수치 절대 금지):
+        #   본문 LLM 추출 수치는 *검증 불가*. 실데이터 0인 주제에서 LLM이 본문 가짜 숫자를
+        #   만들어 차트화하면 "예쁜 가짜 이미지" = 치명적. → LLM 추출 수치는 신뢰하지 않는다.
+        #   아래 실데이터 경로(주가 이력·지수·JARVIS09·종목 파싱)로만 채우고, 실데이터 없으면
+        #   차트 스킵(return ""). 거짓 숫자 < 차트 없음. (검증 = "실데이터 출처에서 온 값만 렌더")
+        labels, values = [], []
+        _ = _llm_extract_chart_data  # (사용 보류 — 검증 불가 경로. 함수는 보존)
 
         # ★ ERRORS [175] 2026-05-26: LLM 추출 실패 시 [종목 데이터] 직접 파싱
         # LLM이 합성 데이터를 쓰기 전에 구조화 종목 컨텍스트에서 실수치 획득 시도.
@@ -1941,8 +2008,8 @@ def generate_chart(
                             labels, values = _j9_l, _j9_v
                             use_synth = False
                         else:
-                            print(f"  ⚠️ [chart_generator] scatter 실데이터 없음 — 차트 스킵")
-                            return ""
+                            print(f"  ⚠️ [chart_generator] scatter 실데이터 없음 → JARVIS09 요청")
+                            return _collect_data_fallback(keyword, sector, description, chart_idx, out_path, _rid)
             elif chart_type == 'band_line':
                 # band_line: ECOS 금리 실데이터만 허용, 주가·합성 데이터 절대 금지
                 _j9_l, _j9_v = _fetch_from_j09(keyword, description, chart_type)
@@ -1950,8 +2017,8 @@ def generate_chart(
                     labels, values = _j9_l, _j9_v
                     use_synth = False
                 else:
-                    print(f"  ⚠️ [chart_generator] band_line 실데이터 없음 — 차트 스킵")
-                    return ""
+                    print(f"  ⚠️ [chart_generator] band_line 실데이터 없음 → JARVIS09 요청")
+                    return _collect_data_fallback(keyword, sector, description, chart_idx, out_path, _rid)
             elif chart_type in ('line', 'area', 'step', 'iso_area', 'combo'):
                 # 시계열: 개별 종목 주가 이력 우선 → 금융 지수 폴백
                 labels, values = _fetch_stock_price_history(context_text)
@@ -1975,8 +2042,8 @@ def generate_chart(
                             labels, values = _j9_l, _j9_v
                             use_synth = False
                         else:
-                            print(f"  ⚠️ [chart_generator] 시계열 실데이터 없음 — 차트 스킵")
-                            return ""
+                            print(f"  ⚠️ [chart_generator] 시계열 실데이터 없음 → JARVIS09 요청")
+                            return _collect_data_fallback(keyword, sector, description, chart_idx, out_path, _rid)
             else:
                 # bar/barh/iso_bar/pie/donut/step: 종목 데이터 파싱
                 labels, values = _parse_stock_context(context_text, description)
@@ -1989,8 +2056,8 @@ def generate_chart(
                         labels, values = _j9_l, _j9_v
                         use_synth = False
                     else:
-                        print(f"  ⚠️ [chart_generator] 실데이터 없음 — 차트 스킵")
-                        return ""
+                        print(f"  ⚠️ [chart_generator] 실데이터 없음 → JARVIS09 요청")
+                        return _collect_data_fallback(keyword, sector, description, chart_idx, out_path, _rid)
 
         # 타이틀 — scatter 합성 대체 시 안전한 표현으로 교체
         disp_title = description
@@ -2026,6 +2093,20 @@ def generate_chart(
             values = [max(0.0, v) for v in values]
             if not any(v > 0 for v in values):
                 values = [1.0] * len(labels)  # 모두 0이면 균등 분포
+
+        # ── ★ 85점 인포그래픽 렌더 1순위 (실데이터 → 인포그래픽). 실패 시 아래 iso/Plotly 폴백 ──
+        #     (사용자 박제 2026-06-30: 모든 데이터 차트 = 85점 인포그래픽 디자인. 폭 1280 통일)
+        if labels and values and not use_synth:
+            try:
+                from JARVIS06_IMAGE.infographic_engine import generate_chart_infographic as _gci
+                _infg = _gci(labels, values, chart_type, title_short, out_dir=out_path,
+                             run_id=_rid, slot_key=str(chart_idx), unit=_infer_unit(description, keyword))
+                if _infg and Path(_infg).exists():
+                    _record_global_type(chart_type)
+                    print(f"    chart_{chart_idx:02d} → 85점 인포그래픽 [{chart_type.upper()}]")
+                    return str(Path(_infg).resolve())
+            except Exception as _ie:
+                print(f"  ⚠️ [chart_generator] 인포그래픽 렌더 실패 → 폴백: {_ie}")
 
         if is_iso and labels and values:
             from JARVIS06_IMAGE.isometric_charts import (

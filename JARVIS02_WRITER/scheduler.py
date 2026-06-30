@@ -279,6 +279,15 @@ def _is_locked_externally() -> bool:
             pid = int(pid_line[0].replace('PID:', '').strip())
             if pid == os.getpid():
                 return False  # 나 자신이 소유한 락
+            # ★ 소유 PID 생존 확인 — 죽은 프로세스의 스테일 락 즉시 제거.
+            #   (비정상 종료/강제 kill 시 mtime 3h 룰만으론 최대 3시간 발행이 막히는 결함 차단)
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                LOCK_FILE.unlink(missing_ok=True)
+                return False
+            except PermissionError:
+                pass  # 살아있으나 다른 소유자 — 점유로 간주
     except Exception:
         pass
     return True

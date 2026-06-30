@@ -937,6 +937,58 @@ def parse_svg_rules(platform: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+def keyword_search_terms(keyword: str) -> list[str]:
+    """키워드의 검색 표현 변형 목록 — 검증·작성 *공통* (SSOT).
+
+    "이름 (티커)" 분해 + 공백 제거형 추가.
+    예: "스텔라 루멘 (XLM)" → ["스텔라 루멘", "스텔라루멘", "XLM"]
+    """
+    keyword = (keyword or "").strip()
+    if not keyword:
+        return []
+    m = re.match(r'^(.*?)\s*\(([^)]+)\)\s*$', keyword)
+    terms = [m.group(1).strip(), m.group(2).strip()] if m else [keyword]
+    out: list[str] = []
+    for t in terms:
+        if len(t) >= 2:
+            out.append(t)
+            collapsed = t.replace(" ", "")
+            if collapsed != t and len(collapsed) >= 2:
+                out.append(collapsed)
+    return out
+
+
+def keyword_min_count(keyword: str) -> int:
+    """키워드 최소 본문 출현 횟수 — SEO 검증·작성 *단일 진실 소스*.
+
+    3단어 이상 복합 이벤트 키워드(예: 'SK하이닉스 청주공장 화재')는 반복이 부자연
+    스러워 1회로 완화, 그 외(1~2단어)는 3회. (ERRORS [240][241])
+    """
+    terms = keyword_search_terms(keyword)
+    if not terms:
+        return 0
+    return 1 if len(terms[0].split()) >= 3 else 3
+
+
+def keyword_frequency_rule(keyword: str) -> str:
+    """작성 프롬프트 주입용 키워드 빈도 규칙 — 검증과 *동일 임계* (생성 단계 예방).
+
+    ★ "다 만들고 검증"이 아니라 "처음부터 규정대로" — 검증 게이트(economic_poster
+      _min_kw)와 같은 keyword_min_count() 를 사용해 생성-검증 임계를 일치시킨다.
+    """
+    keyword = (keyword or "").strip()
+    if not keyword:
+        return ""
+    n = keyword_min_count(keyword)
+    if n <= 0:
+        return ""
+    return (
+        f"\n[SEO 키워드 필수 — 자동 검증됨] 핵심 키워드 «{keyword}» 를 본문 문장 안에 "
+        f"*정확히 그 표현 그대로* 최소 {n}회 자연스럽게 포함하세요(제목·소제목·이미지 alt 제외). "
+        f"억지 반복·스터핑은 금지하되 {n}회는 반드시 충족 — 미달 시 발행이 차단됩니다."
+    )
+
+
 def build_writing_rules_block() -> str:
     """BLOG_SUPREME_LAW.md 를 매 호출마다 동적 로드 → 조항 핵심 내용 추출.
 

@@ -869,50 +869,76 @@ def _inject_para_images_into_blocks(blocks: list, theme: str,
 
 
 def enforce_text_between_images(blocks: list, source: str = "") -> list:
-    """★ 글+이미지 규정 강제 — 소제목 이미지(heading_img) 제외, 연속 image 블록 차단.
-    image 블록이 2개 이상 연속되면 사이에 빈 경고 텍스트를 삽입하고 텔레그램 경고 전송.
-    소제목 이미지(heading_* 파일명 또는 타입)는 제외.
+    """★ 글+이미지 규정 강제 (제4조) — 연속 content 이미지를 *재배치*로 분리.
+
+    ★ 사용자 박제 2026-06-29 — "다 만들고 band-aid"가 아니라 *실제 교정*:
+      연속되는 content 이미지를 빈 텍스트로 메우지 않고, 다음 본문 단락 뒤로 *옮겨서*
+      텍스트가 이미지 사이에 오게 한다(이미지-텍스트-이미지). 옮길 본문이 끝까지 없을
+      때만 최후수단으로 스페이서 + 경고(진짜 불가능한 경우만).
+
+    소제목/배너/썸네일 이미지(heading_img)는 연속 판정에서 제외.
+    ★ ERRORS [170]: divider/spacer 로는 연속을 회피할 수 없음 — 배치 플래그 유지.
     """
     def _is_heading_img(btype, bdata) -> bool:
         if btype in ('heading_h2', 'heading_h3', 'heading'):
             return True
         if btype == 'image':
             fname = str(bdata)
-            # ★ ERRORS [170] 2026-05-26: thumbnail_ 추가 — 썸네일은 consecutive 카운터 초기화 대상
             return ('heading_' in fname or 'economic_h2_' in fname
                     or 'section_title' in fname or 'thumbnail_' in fname)
         return False
 
-    result = []
-    consecutive = 0
-    warned = False
-    for idx, (btype, bdata) in enumerate(blocks):
-        if btype == 'image' and not _is_heading_img(btype, bdata):
-            if consecutive >= 1:
-                # 연속 이미지 감지 — 경고 텍스트 삽입
-                if not warned:
-                    msg = f"⚠️ [글+이미지 규정 위반] {source} — 이미지 연속 배치 감지. 텍스트 없이 이미지가 연속됩니다."
-                    print(msg)
-                    try:
-                        import os, requests as _req
-                        token = os.getenv('TELEGRAM_TOKEN', '')
-                        chat  = os.getenv('TELEGRAM_CHAT_ID', '')
-                        if token and chat:
-                            _req.post(
-                                f'https://api.telegram.org/bot{token}/sendMessage',
-                                json={'chat_id': chat, 'text': msg}, timeout=5)
-                    except Exception:
-                        pass
-                    warned = True
-                # 빈 텍스트라도 삽입해 연속 이미지 분리 (발행 중단보다 격리 우선)
-                result.append(('text', '<p style="margin:4px 0;">&nbsp;</p>'))
-            consecutive += 1
+    def _is_text_gap(btype, bdata) -> bool:
+        """이미지를 뒤에 붙일 수 있는 '본문' 블록 (텍스트가 이미지 앞에 오게)."""
+        return btype not in ('image', 'divider', 'spacer',
+                             'heading', 'heading_h2', 'heading_h3')
+
+    result: list = []
+    deferred: list = []          # 연속이라 재배치 대기 중인 content 이미지
+    last_content_img = False      # 직전 emit 블록이 content 이미지인가
+
+    def _emit(b) -> None:
+        nonlocal last_content_img
+        result.append(b)
+        bt = b[0]
+        if bt == 'image' and not _is_heading_img(bt, b[1]):
+            last_content_img = True
+        elif bt in ('divider', 'spacer'):
+            pass  # 유지 — 스페이서는 연속 회피 못함 (ERRORS [170])
         else:
-            # ★ ERRORS [170] 2026-05-26: spacer 도 consecutive 리셋 제외 — spacer 사이에 낀 이미지 감지
-            if btype not in ('divider', 'spacer'):
-                consecutive = 0
-            warned = False
-        result.append((btype, bdata))
+            last_content_img = False
+
+    for btype, bdata in blocks:
+        if btype == 'image' and not _is_heading_img(btype, bdata):
+            if last_content_img:
+                deferred.append((btype, bdata))   # 연속 → 다음 본문 뒤로 재배치
+            else:
+                _emit((btype, bdata))
+        else:
+            _emit((btype, bdata))
+            # 본문 블록 뒤 → 대기 이미지 1개 재배치 (이제 앞에 텍스트가 있음)
+            if deferred and _is_text_gap(btype, bdata):
+                _emit(deferred.pop(0))
+
+    # 남은 대기 이미지: 더 옮길 본문이 없음 → 최후수단(스페이서) + 진짜 위반 경고
+    if deferred:
+        msg = (f"⚠️ [글+이미지 규정 위반] {source} — 이미지 {len(deferred)}개 재배치 불가"
+               f"(뒤따르는 본문 단락 부족). 스페이서로 분리.")
+        print(msg)
+        try:
+            import os, requests as _req
+            token = os.getenv('TELEGRAM_TOKEN', '')
+            chat  = os.getenv('TELEGRAM_CHAT_ID', '')
+            if token and chat:
+                _req.post(f'https://api.telegram.org/bot{token}/sendMessage',
+                          json={'chat_id': chat, 'text': msg}, timeout=5)
+        except Exception:
+            pass
+        for img in deferred:
+            if last_content_img:
+                result.append(('text', '<p style="margin:4px 0;">&nbsp;</p>'))
+            _emit(img)
+
     return result
 
 

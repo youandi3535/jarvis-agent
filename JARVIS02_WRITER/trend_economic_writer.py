@@ -2061,6 +2061,13 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
             supreme_block = _law_blk()
+        # ★ 생성 단계 예방 (사용자 박제 2026-06-29): 키워드 빈도 규칙을 작성 프롬프트에 주입
+        #   — 검증과 동일 임계(keyword_min_count) → "처음부터 규정대로" → 사후 차단 방지
+        try:
+            from JARVIS02_WRITER.law_enforcer import keyword_frequency_rule as _kw_rule
+            supreme_block = (supreme_block or "") + _kw_rule(keyword)
+        except Exception:
+            pass
 
         # ★ 글 keyword로 JARVIS09 재수집 — 대본 주제에 맞는 데이터로 이미지 생성
         _kw_collection_docs = list(collection_docs or [])
@@ -2234,6 +2241,13 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
             supreme_block = _law_blk()
+        # ★ 생성 단계 예방 (사용자 박제 2026-06-29): 키워드 빈도 규칙을 작성 프롬프트에 주입
+        #   — 검증과 동일 임계(keyword_min_count) → "처음부터 규정대로" → 사후 차단 방지
+        try:
+            from JARVIS02_WRITER.law_enforcer import keyword_frequency_rule as _kw_rule
+            supreme_block = (supreme_block or "") + _kw_rule(keyword)
+        except Exception:
+            pass
 
         # ★ 글 keyword로 JARVIS09 재수집 — 대본 주제에 맞는 데이터로 이미지 생성
         _kw_collection_docs = list(collection_docs or [])
