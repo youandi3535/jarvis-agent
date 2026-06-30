@@ -1799,13 +1799,26 @@ def _infer_unit(description: str, keyword: str = "") -> str:
 #   어떻게든 팩트 기반 실데이터(출처·단위 박제)를 수집해 보내줌 → 그 데이터로만 차트.
 #   거짓 수치 절대 금지: collect_chart_data 는 실제 등장 수치(URL 출처)만 반환.
 _CHART_DATA_POOL: dict = {}   # run_id -> [datasets] (run 당 1회 수집, 슬롯마다 부분집합 회전)
+_SESSION_POOL: list = []       # ★ writer 가 대본 전 미리 수집한 풀 (데이터-우선: Pass-2 재수집 0)
+
+
+def set_session_pool(pool):
+    """데이터-우선 — writer 가 대본 작성 전 수집한 실데이터 풀을 등록. Pass-2 가 재수집 없이 사용."""
+    global _SESSION_POOL
+    _SESSION_POOL = list(pool or [])
+
+
+def clear_session_pool():
+    global _SESSION_POOL
+    _SESSION_POOL = []
 
 
 def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, run_id):
-    """실데이터 경로 실패 시 JARVIS09 collect_chart_data 요청 → 검증 실데이터로 인포그래픽."""
+    """실데이터 경로 실패 시 JARVIS09 collect_chart_data 요청 → 검증 실데이터로 인포그래픽.
+    ★ 데이터-우선: writer 가 set_session_pool() 로 미리 수집한 풀이 있으면 재수집 없이 사용."""
     try:
-        pool = _CHART_DATA_POOL.get(run_id)
-        if pool is None:
+        pool = _SESSION_POOL or _CHART_DATA_POOL.get(run_id)
+        if not pool:
             from JARVIS09_COLLECTOR import collect_chart_data
             res = collect_chart_data(keyword, sector=sector, description=description,
                                      max_datasets=12)   # 풍부하게 요청 → 고퀄 이미지
