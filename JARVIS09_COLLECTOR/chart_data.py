@@ -66,19 +66,21 @@ def _fingerprint(title: str, unit: str) -> str:
 
 def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
     """dataset dict 생성. data 가 비거나 값이 부족하면 None."""
-    rows = []
+    rows, _seen = [], set()
     for d in data or []:
         try:
             v = float(str(d.get("value")).replace(",", ""))
         except (TypeError, ValueError):
             continue
-        label = str(d.get("label", "")).strip()[:60]   # 라벨 잘림 방지 (긴 설문 응답 보존)
-        if label and v == v:  # NaN 제외
+        label = _clean_label(d.get("label", ""))   # 괄호 설명 제거 + 길이 제한 (짤림·장황 방지)
+        if label and v == v and label not in _seen:  # NaN·중복 라벨 제외
+            _seen.add(label)
             rows.append({"label": label, "value": v})
     # 차트 의미 최소 기준: kpi 1개, 그 외 2개
     _min = 1 if viz_hint == "kpi_cards" else 2
     if len(rows) < _min:
         return None
+    rows = rows[:10]   # ★ 가독성 — 한 차트 최대 10개 (30셀 막대벽 방지)
     return {
         "title": title.strip()[:30],
         "viz_hint": viz_hint,
@@ -273,6 +275,26 @@ def _web_datasets(theme: str, sector: str, description: str) -> list[dict]:
 #   ★ 사용자 박제 2026-06-30: 필요 라이브러리/API 는 *말 안 해도 자동 설치·연결*. 못 구하면
 #   가만히 있지 말고 설계된 출처를 우선순위로 다 시도. (API 키는 .env 사전 등록 — 가입만 1회 수동.)
 _PROVIDER_REGISTRY: dict = {}
+
+# ★ per-run 수집 캐시 (속도 — 사용자 박제 2026-07-01): KOSIS 등 느린 출처를 step1(series별)+step3
+#   에서 같은 (source,term) 으로 반복 스캔하던 낭비 제거. collect_chart_data 진입 시 clear.
+_COLLECT_CACHE: dict = {}
+
+
+def _cached_collect(prov, source: str, term: str, sector: str, max_items: int) -> list:
+    """provider.collect 결과를 (source,term,sector) 키로 run 내 캐시. 느린 출처 반복 호출 방지."""
+    key = (source, str(term), str(sector))
+    if key in _COLLECT_CACHE:
+        return _COLLECT_CACHE[key]
+    try:
+        docs = prov.collect(term, sector, max_items=max_items) or []
+    except Exception as e:
+        log.warning(f"[chart_data] {source} 수집 실패('{term}'): {e}")
+        docs = []
+    _COLLECT_CACHE[key] = docs
+    return docs
+
+
 _SOURCE_LIBS = {   # source → 자동설치 무료 라이브러리 (import명, pip명)
     "krx":      [("pykrx", "pykrx")],
     "finance":  [("yfinance", "yfinance")],
@@ -300,12 +322,12 @@ def _get_provider(source: str):
         from JARVIS09_COLLECTOR.providers import (
             BlogProvider, NewsProvider, AcademicProvider, FinanceProvider, WebProvider,
             KorEconProvider, NaverNewsProvider, DartProvider, EcosProvider,
-            KosisProvider, KrxProvider,
+            KosisProvider, KrxProvider, KciProvider,
         )
         _m = {"blog": BlogProvider, "news": NewsProvider, "academic": AcademicProvider,
               "finance": FinanceProvider, "web": WebProvider, "kor_econ": KorEconProvider,
               "naver_news": NaverNewsProvider, "dart": DartProvider, "ecos": EcosProvider,
-              "kosis": KosisProvider, "krx": KrxProvider}
+              "kosis": KosisProvider, "krx": KrxProvider, "kci": KciProvider}
         cls = _m.get(source)
         inst = cls() if cls else None
     except Exception as e:
@@ -314,18 +336,116 @@ def _get_provider(source: str):
     return inst
 
 
-_SERIES_SYSTEM = """당신은 수집 자료에서 *실제로 등장한 수치*만 뽑아 차트 데이터로 구조화하는
-데이터 분석가다. 요청 지표와 무관한 수치·자료에 없는 수치는 절대 만들지 않는다."""
+_SERIES_SYSTEM = """당신은 수집 자료에서 *실제로 등장한 수치*만 뽑아 *하나의 일관된 차트* 로
+구조화하는 데이터 분석가다. 자료에 없는 수치는 절대 만들지 않고, 단위가 다른 수치를
+한 차트에 섞지 않는다 (그건 무의미한 차트가 된다)."""
 
-_SERIES_PROMPT = """요청 지표: "{name}"  (단위: {unit})
+_SERIES_PROMPT = """요청 지표: "{name}"  (단위 힌트: {unit})
 
-아래 자료에서 위 지표에 *직접 해당하는 실제 수치*만 뽑아 차트 데이터로 구조화하라.
-각 발췌 앞 [n] 은 출처 인덱스. 지표와 무관한 수치는 넣지 마라. 숫자를 지어내지 마라.
+아래 자료에서 위 지표에 직접 해당하는 *실제 수치*로 *하나의 비교 가능한 차트* 를 만들어라.
+각 발췌 앞 [n] 은 출처 인덱스.
+
+★ 엄격 규칙 (어기면 가짜·무의미 차트):
+1. 모든 항목은 *같은 단위·같은 종류* 여야 한다 (예: 전부 '%', 전부 '억원', 전부 '명').
+   서로 다른 종류(효과 vs 비용, 금액 vs 비율)를 한 차트에 섞지 마라.
+2. 각 수치의 *단위* 를 반드시 식별해 "unit" 에 적어라 (달러/원/억원/조원/%/명/건 등).
+   단위를 확정할 수 없으면 그 수치는 버려라.
+3. 자료에 실제로 적힌 숫자만. 추정·반올림 창작 금지.
+4. 비교 가능한 항목이 2개 미만이면 빈 데이터로 반환.
 
 {excerpts}
 
-출력 JSON만: {{"data": [{{"label": "연도/항목", "value": 숫자, "source_idx": n}}]}}
-관련 수치가 없으면 {{"data": []}}."""
+출력 JSON만: {{"unit": "공통단위", "data": [{{"label": "연도/항목", "value": 숫자, "source_idx": n}}]}}
+일관된 수치가 없으면 {{"unit": "", "data": []}}."""
+
+
+_DEMO_TOTAL = {"전체", "계", "합계", "소계", "총계", "전국", "평균"}
+
+
+def _clean_label(lab: str) -> str:
+    """차트 라벨 정리 — 괄호 설명 제거 + 길이 제한 (짤림·장황함 방지)."""
+    lab = re.sub(r"\s*[(（][^)）]*[)）]", "", str(lab or "")).strip()
+    lab = re.sub(r"\s+", " ", lab)
+    return lab[:22]
+
+
+def _is_demo_value(s: str) -> bool:
+    """세그먼트가 인구통계 분류값(성별·지역·연령)인지 — 교차표 축약 시 차원 식별용."""
+    s = str(s or "").strip()
+    if s in _DEMO_TOTAL:
+        return True
+    return bool(re.search(r"(남자|여자|^남$|^여$|[동읍면시군]부|\d+\s*[~∼\-]\s*\d+\s*세|\d+세|\d+대|"
+                          r"이상|미만|수도권|비수도권|특별시|광역시|^.{1,4}도$|^.{1,5}시$|^.{1,4}군$)", s))
+
+
+def _is_period(s: str) -> bool:
+    s = str(s or "").strip()
+    return bool(re.match(r"^(19|20)\d{2}", s) or re.match(r"^\d{6}$", s))
+
+
+def _reduce_crosstab(rows: list, max_rows: int = 7) -> list:
+    """KOSIS 교차표(성별·지역·업종 × 응답 × 연도 등 다차원 셀)를 *읽을 수 있는 단일 분포* 로 축약.
+    ★ 사용자 박제 2026-07-01: 30셀 덤프 금지. 핵심 = '전체/계' 값을 가진 *모든* 차원을 전체로
+    collapse → 순수 응답 분포만 남김 (성별·지역·업종 무엇이든 일반 처리). 최신 연도만. 라벨은
+    응답명만(괄호 설명 제거), 최대 max_rows개. 전체 차원이 없으면 원본 정리 후 반환."""
+    parsed = []
+    for r in rows:
+        segs = [s.strip() for s in re.split(r"·", str(r.get("label", ""))) if s.strip()]
+        period, rest = None, []
+        for s in segs:
+            if _is_period(s):
+                period = s
+            else:
+                rest.append(s)
+        if not rest:
+            continue
+        parsed.append({"rest": rest, "period": period, "value": r.get("value")})
+    if not parsed:
+        return [{"label": _clean_label(r.get("label", "")), "value": r.get("value")} for r in rows[:max_rows]]
+
+    # 1) 최신 시점만 (연도 혼재 방지)
+    periods = sorted({p["period"] for p in parsed if p["period"]})
+    if periods:
+        latest = periods[-1]
+        kept = [p for p in parsed if p["period"] in (latest, None)]
+        if kept:
+            parsed = kept
+
+    maxseg = max(len(p["rest"]) for p in parsed)
+    if maxseg >= 2:
+        # 2) '전체/계' 값을 가진 *차원 위치* 식별 (성별·지역·업종 무엇이든)
+        total_pos = []
+        for pos in range(maxseg):
+            vals = {p["rest"][pos] for p in parsed if len(p["rest"]) > pos}
+            if vals & _DEMO_TOTAL:
+                total_pos.append(pos)
+        if total_pos:
+            # 3) 전체 차원은 모두 '전체/계'로 고정 → 나머지(응답) 차원만 라벨로
+            ans_positions = [i for i in range(maxseg) if i not in total_pos]
+            out, seen = [], set()
+            for p in parsed:
+                if len(p["rest"]) < maxseg:
+                    continue
+                if not all(p["rest"][tp] in _DEMO_TOTAL for tp in total_pos):
+                    continue
+                lab = _clean_label(" ".join(p["rest"][i] for i in ans_positions)) if ans_positions \
+                    else _clean_label(p["rest"][total_pos[0]])
+                if not lab or lab in seen:
+                    continue
+                seen.add(lab)
+                out.append({"label": lab, "value": p["value"]})
+            if len(out) >= 2:
+                return out[:max_rows]
+
+    # 4) 폴백(전체 차원 없음): 응답명만 라벨로 dedup
+    out, seen = [], set()
+    for p in parsed:
+        lab = _clean_label(" ".join(p["rest"]))
+        if not lab or lab in seen:
+            continue
+        seen.add(lab)
+        out.append({"label": lab, "value": p["value"]})
+    return out[:max_rows]
 
 
 def _parse_clean_doc(doc):
@@ -338,6 +458,7 @@ def _parse_clean_doc(doc):
     for pre in ("KOSIS 통계청 — ", "통계청 KOSIS — "):
         if title.startswith(pre):
             title = title[len(pre):]
+    title = re.sub(r"\s*[(（][^)）]*[)）]", "", title).strip() or "KOSIS 통계"   # 제목 괄호 설명 제거
     unit = ""
     mu = re.search(r"단위:\s*([^)\]]+)", text)
     if mu:
@@ -355,9 +476,19 @@ def _parse_clean_doc(doc):
         rows.append({"label": lab, "value": val})
     if len(rows) < 2:
         return None
+    # ★ 교차표(30셀 덤프) → 읽을 수 있는 단일 분포(전체×최신연도 응답별 ≤7개)로 축약
+    rows = _reduce_crosstab(rows, max_rows=7)
+    if len(rows) < 2:
+        return None
+    # ★ 다질문 표 감지 (사용자 박제 2026-07-01): 한 KOSIS 표에 여러 질문(인지도+구매한도 등)이
+    #   섞이면 비율 합이 100%를 크게 초과(합계 200% 도넛 사고). 이 경우 fast-path 포기 → LLM 추출이
+    #   *하나의 일관된 질문* 만 골라내게 위임 (None 반환 시 _extract_series_from_docs LLM 경로로 진행).
+    _vals = [r["value"] for r in rows]
+    if _vals and all(0 <= v <= 100 for v in _vals) and sum(_vals) > 140:
+        return None
     src = {"provider": "kosis", "name": "통계청 KOSIS",
            "url": getattr(doc, "url", "") or "https://kosis.kr/", "as_of": _now_as_of()}
-    return _mk_dataset(title[:40], "bar_chart", unit, rows[:30], src)
+    return _mk_dataset(title[:40], "bar_chart", unit, rows, src)
 
 
 def _extract_series_from_docs(series: dict, docs: list):
@@ -399,11 +530,19 @@ def _extract_series_from_docs(series: dict, docs: list):
             src_url = getattr(doc, "url", "") or ""
             src_name = getattr(doc, "source_type", "") or ""
         rows.append({"label": str(r.get("label", "")), "value": r.get("value")})
-    if len(rows) < 1 or not src_url:
+    # ★ LLM 추출 라벨도 교차표 축약 (사용자 박제 2026-07-01): LLM이 '합계·신용카드' / '읍소재시장·
+    #   신용카드' 처럼 전체+특정 차원을 섞어 반환하면 _reduce_crosstab 으로 전체 차원 collapse →
+    #   '신용카드' 만 남김 (KOSIS fast-path 와 동일 정리). 단일 차원이면 그대로 보존.
+    rows = _reduce_crosstab(rows, max_rows=8)
+    # ★ 단위 일관성 (사용자 박제 2026-07-01): LLM이 공통 단위를 못 정하면(=비교 불가 수치 짬뽕)
+    #   그 차트는 버린다. 단위 없는 무의미 막대(부가가치 1.9 + 비용 1.88 …) 원천 차단.
+    _llm_unit = str(parsed.get("unit", "") or "").strip()
+    _unit = _llm_unit or str(series.get("unit", "") or "").strip()
+    if len(rows) < 2 or not src_url or not _unit:
         return None
     src = {"provider": src_name or "web", "name": src_name or "web", "url": src_url, "as_of": _now_as_of()}
     viz = {"line": "line_chart", "bar": "bar_chart", "stat": "kpi", "donut": "pie_chart"}.get(series.get("chart"), "bar_chart")
-    return _mk_dataset(series["name"], viz, series.get("unit", ""), rows, src)
+    return _mk_dataset(series["name"], viz, _unit, rows, src)
 
 
 # 일반 경제어 — 관련성 토큰에서 제외(과대매칭 방지). *주제 고유명사*만 토큰화.
@@ -489,7 +628,7 @@ def _query_candidates(series: dict, theme: str) -> list[str]:
 
 
 # 텍스트 출처 — 제목 관련성 1차 필터 적용 대상 (finance 류는 제목이 종목/지수명이라 면제)
-_TEXT_SOURCES = {"kosis", "academic", "kor_econ", "naver_news", "news", "web"}
+_TEXT_SOURCES = {"kosis", "academic", "kci", "kor_econ", "naver_news", "news", "web"}
 
 
 def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: set = None):
@@ -506,11 +645,7 @@ def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: 
             continue
         docs = []
         for q in queries:               # 넓은 쿼리로 재시도 — 0건이면 다음 후보
-            try:
-                docs = prov.collect(q, sector, max_items=10)
-            except Exception as e:
-                log.warning(f"[chart_data] {source} 수집 실패: {e}")
-                docs = []
+            docs = _cached_collect(prov, source, q, sector, 10)
             if docs:
                 break
         # ★ 텍스트 출처: 제목이 주제·series 고유명사와 겹치는 문서만 (엉뚱한 표 차단)
@@ -547,6 +682,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     if not theme:
         return {"theme": theme, "datasets": []}
 
+    _COLLECT_CACHE.clear()   # ★ per-run 수집 캐시 초기화 (이전 주제 잔재 제거 + 이번 run 내 재사용)
     datasets: list[dict] = []
 
     # ── 1) 설계 우선 (data_planner): 주제별 series·출처·쿼리 설계 → 조준 수집(병렬) ──────
@@ -584,11 +720,12 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     if not datasets and is_stock:
         datasets.extend(_stock_datasets(theme))
 
-    # ── 3) 적응형 포착 — 풍부하게 + 관련성 (사용자 박제 2026-06-30): 설계 수집이 빈약하면
-    #    KOSIS(정부통계)·논문(거짓 없음)·정부보도자료를 *설계 쿼리(공식 용어)* 로 직접 수집해
-    #    실제 표/논문 수치를 자연 제목으로 포착. ★ 관련성 필터로 무관 데이터(키프로스·물가 등) 차단.
-    #    모든 데이터 출처(URL) 박제. 데이터는 많을수록 좋다.
-    if len(datasets) < max_datasets:
+    # ── 3) 적응형 *멀티소스* 포착 — ★ '받을 수 있는 곳을 전부' (사용자 박제 2026-07-01):
+    #    KOSIS 만이 아니라 뉴스·정부보도(kor_econ)·논문(academic)·웹에서도 *주제 관련 실데이터* 를
+    #    출처별로 수집. ★ 풀이 차도 멈추지 않음(출처당 캡) → 최종 라운드로빈이 다양성 보장.
+    #    관련성 필터로 무관 데이터(농촌관광·식품소비 등) 차단. 모든 출처 URL 박제. 데이터 많을수록 좋다.
+    _cand_cap = max(max_datasets * 2, max_datasets + 6)   # 후보 상한(비용 가드)
+    if len(datasets) < _cand_cap:
         # 검색어: 주제 + 설명(공식 용어 포함, 예 '지역사랑상품권') + 설계 쿼리
         _raw_terms = [theme, description] + [s.get("query", "") for s in (plan or [])]
         # 검색어 확장: 긴 쿼리는 정부통계·논문 검색에서 0건 → 앞2토큰·핵심명사로 넓힘
@@ -602,7 +739,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                 _terms.append(" ".join(tk[:2]))
             if len(tk) > 1:
                 _terms.append(tk[0])   # 핵심 명사 (예: 지역사랑상품권)
-        _terms = list(dict.fromkeys(_terms))[:10]
+        _terms = list(dict.fromkeys(_terms))[:5]   # 속도: 상위 5개 검색어만 (step1이 설계쿼리 이미 커버)
         # 관련성 토큰: step1 과 동일한 _ref_tokens(주제+설명+설계 동의어 포함) 재사용 → 일관 게이트.
 
         def _natural_title(d):   # provider 접두(주제명 스탬프) 제거한 *실제* 표/논문명
@@ -613,51 +750,84 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
             return t
 
         # ECOS 제외: 항상 '거시 일반(금리·환율·물가)'을 주제명만 찍어 반환 → 무관 혼입원.
-        # 출처 한정 안 함(사용자 박제): 정부통계·논문·정부보도자료·뉴스·웹 폭넓게. 논문 우선.
-        for source in ("kosis", "academic", "kor_econ", "naver_news", "news", "web"):
-            if len(datasets) >= max_datasets:
+        # ★ 출처당 캡(_PER_SOURCE) — 한 출처가 후보를 독점하지 않게 (뉴스·정부보도·논문 슬롯 확보).
+        #   논문(academic)·뉴스(news)·정부보도(kor_econ) 를 KOSIS 와 동등하게 수집. 논문 우선.
+        # ★ 속도 (사용자 박제 2026-07-01): (A) 후보 문서 수집(빠름, 캐시) → (B) LLM 추출 *병렬*.
+        #   기존 순차 추출이 12분 병목이라 추출만 ThreadPool 로 동시 실행.
+        _PER_SOURCE = max(3, (max_datasets + 3) // 3)
+        _cands = []   # (pseudo_name, doc)
+        for source in ("kci", "academic", "news", "kor_econ", "kosis", "naver_news", "web"):
+            if len(_cands) >= _cand_cap:
                 break
             _ensure_source_ready(source)
             prov = _get_provider(source)
             if not prov:
                 continue
+            _from_src = 0
             for term in _terms:
-                if len(datasets) >= max_datasets:
+                if _from_src >= _PER_SOURCE or len(_cands) >= _cand_cap:
                     break
-                try:
-                    docs = prov.collect(term, sector, max_items=8)   # 풍부하게
-                except Exception:
-                    docs = []
+                docs = _cached_collect(prov, source, term, sector, 8)   # 풍부하게(캐시)
                 for d in docs[:5]:
                     nat = _natural_title(d)
                     # 관련성 1차(결정론): 자연 제목이 주제 고유명사와 겹쳐야 채택 (동의어 포함)
                     if not _doc_title_relevant(nat, _ref_tokens):
                         continue
-                    pseudo = {"name": (nat[:40] or term), "unit": "", "chart": "bar"}
-                    ds = _extract_series_from_docs(pseudo, [d])
+                    _cands.append(((nat[:40] or term), d))
+                    _from_src += 1
+                    if _from_src >= _PER_SOURCE or len(_cands) >= _cand_cap:
+                        break
+        # (B) 병렬 추출 — LLM 호출이 느려 동시 실행 (단위 일관성·실수치 게이트는 추출기 내부)
+        if _cands:
+            from concurrent.futures import ThreadPoolExecutor as _TPE2
+
+            def _extract_cand(c):
+                nat, d = c
+                return _extract_series_from_docs({"name": nat, "unit": "", "chart": "bar"}, [d])
+
+            with _TPE2(max_workers=6) as _ex2:
+                for ds in _ex2.map(_extract_cand, _cands):
                     if ds:
                         datasets.append(ds)
-                    if len(datasets) >= max_datasets:
-                        break
 
     # dedup (fingerprint) + exclude_titles 필터
     _excl = {str(t).strip() for t in (exclude_titles or [])}
     seen: set[str] = set()
-    final: list[dict] = []
+    deduped: list[dict] = []
     for ds in datasets:
         fp = ds["fingerprint"]
         if fp in seen or ds["title"] in _excl:
             continue
         seen.add(fp)
-        final.append(ds)
-        if len(final) >= max_datasets:
-            break
+        deduped.append(ds)
 
-    # ── 4) ★ 의미 기반 관련성 게이트 (최종 관문) — 결정론 게이트를 통과한 표 중에서도
-    #    '농촌관광·식품소비행태'처럼 다른 주제 표가 새어든 것을 LLM 의미 판단으로 제거. ──────
-    final = _relevance_filter(theme, description, final)
+    # ── 4) ★ 의미 기반 관련성 게이트 (최종 관문) — '농촌관광·식품소비행태'처럼 다른 주제 표가
+    #    새어든 것을 LLM 의미 판단으로 제거 (선택 *전* 적용 → 깨끗한 후보에서만 선택). ──────
+    deduped = _relevance_filter(theme, description, deduped)
 
-    log.info(f"[chart_data] '{theme}' → {len(final)}개 dataset (설계 {len(plan) if plan else 0} series)")
+    # ── 5) ★ 출처 다양성 선택 (사용자 박제 2026-07-01 '전부 받아와') — provider 별로 묶어
+    #    우선순위 라운드로빈 → 한 출처(KOSIS) 독점 방지, 뉴스·정부보도·논문이 함께 섞임. ──────
+    _PROV_RANK = {"kosis": 0, "ecos": 1, "dart": 1, "academic": 1, "kci": 1, "krx": 2,
+                  "finance": 2, "news": 2, "kor_econ": 2, "naver_news": 3, "web": 4, "market": 3}
+    from collections import OrderedDict as _OD
+    _groups: "_OD[str, list]" = _OD()
+    for ds in sorted(deduped, key=lambda d: _PROV_RANK.get((d.get("source") or {}).get("provider", ""), 5)):
+        p = (ds.get("source") or {}).get("provider", "?")
+        _groups.setdefault(p, []).append(ds)
+    final: list[dict] = []
+    while len(final) < max_datasets and any(_groups.values()):
+        for p in list(_groups):
+            if _groups[p]:
+                final.append(_groups[p].pop(0))
+                if len(final) >= max_datasets:
+                    break
+
+    _prov_mix = {}
+    for d in final:
+        _p = (d.get("source") or {}).get("provider", "?")
+        _prov_mix[_p] = _prov_mix.get(_p, 0) + 1
+    log.info(f"[chart_data] '{theme}' → {len(final)}개 dataset (설계 {len(plan) if plan else 0} series) "
+             f"출처분포 {_prov_mix}")
     return {"theme": theme, "datasets": final}
 
 

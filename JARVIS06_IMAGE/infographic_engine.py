@@ -645,6 +645,7 @@ def _render_single(ds, title, subtitle, out_path, seed, src, chip="", slot=""):
         pal = PALETTES[variant % len(PALETTES)]
         unit = ds.get("unit", "")
         pairs = sorted(zip(L, V), key=lambda x: x[1], reverse=True)
+        pairs = pairs[:8]   # ★ 가독성 — 한 차트 최대 8개 막대 (30셀 막대벽·뭐가뭔지모름 방지)
         n = len(pairs)
         def _e(s):   # 엔티티 라벨 정리 (괄호 제거 + 짧게 — KPI 라벨 잘림 방지)
             return re.split(r"[(（]", str(s))[0].strip()[:8]
