@@ -360,6 +360,39 @@ _SERIES_PROMPT = """요청 지표: "{name}"  (단위 힌트: {unit})
 일관된 수치가 없으면 {{"unit": "", "data": []}}."""
 
 
+_SYNONYM_CACHE: dict = {}
+
+
+def _expand_theme(theme: str) -> list:
+    """주제 → 한국 공식 통계·정부자료 *검색용 정식 명칭·동의어* (LLM, 하드코딩 0).
+    ★ 사용자 박제 2026-07-01: KOSIS 는 '지역사랑상품권'으로 인덱싱돼 '지역화폐'로는 0건.
+    정식 명칭을 검색어·관련성 토큰에 포함해 *수율 안정화* + 동의어 관련성 인정."""
+    theme = (theme or "").strip()
+    if not theme:
+        return []
+    if theme in _SYNONYM_CACHE:
+        return _SYNONYM_CACHE[theme]
+    syns = []
+    try:
+        from shared.llm import invoke_text
+        raw = invoke_text(
+            "analyzer",
+            f'"{theme}" 를 한국 정부통계(KOSIS)·공식자료에서 검색할 때 쓰는 *정식 명칭·동의어* 를 '
+            f'최대 3개 알려줘 (예: "지역화폐"→"지역사랑상품권"). 해당 없으면 빈 배열.\n'
+            'JSON만: {"terms": ["정식명칭1", ...]}',
+            max_tokens=120, temperature=0)
+        m = re.search(r"\{[\s\S]*\}", raw or "")
+        if m:
+            terms = json.loads(m.group(0)).get("terms") or []
+            syns = [str(t).strip() for t in terms if str(t).strip() and str(t).strip() != theme][:3]
+    except Exception as e:
+        log.warning(f"[chart_data] 동의어 확장 실패: {e}")
+    _SYNONYM_CACHE[theme] = syns
+    if syns:
+        log.info(f"[chart_data] '{theme}' 동의어 확장 → {syns}")
+    return syns
+
+
 _DEMO_TOTAL = {"전체", "계", "합계", "소계", "총계", "전국", "평균"}
 
 
@@ -701,17 +734,23 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     _COLLECT_CACHE.clear()   # ★ per-run 수집 캐시 초기화 (이전 주제 잔재 제거 + 이번 run 내 재사용)
     datasets: list[dict] = []
 
+    # ── 0) 동의어 확장 (사용자 박제 2026-07-01): KOSIS 는 정식명('지역사랑상품권')으로 인덱싱돼
+    #    주제명('지역화폐')만으론 0건. 정식 명칭을 검색어·관련성 토큰에 포함 → 수율 안정화. ──────
+    _syns = _expand_theme(theme)
+
     # ── 1) 설계 우선 (data_planner): 주제별 series·출처·쿼리 설계 → 조준 수집(병렬) ──────
     #    ★ 사용자 박제 2026-06-30: 무작정 수집이 아니라 "설계 → 조준 수집". 라이브러리 자동설치.
+    #    동의어를 설명에 합쳐 전달 → planner 가 정식명으로 series·쿼리 설계.
+    _plan_desc = (description or "") + ((" / " + " ".join(_syns)) if _syns else "")
     try:
         from JARVIS09_COLLECTOR.data_planner import plan_data_sources
-        plan = plan_data_sources(theme, sector, description)
+        plan = plan_data_sources(theme, sector, _plan_desc)
     except Exception as e:
         log.warning(f"[chart_data] 설계 실패: {e}")
         plan = []
-    # ★ 관련성 기준 토큰 — 주제 + 설명 + 설계(series명·쿼리, 공식 동의어 포함) 고유명사 집합.
+    # ★ 관련성 기준 토큰 — 주제 + 동의어 + 설명 + 설계(series명·쿼리, 공식 동의어 포함) 고유명사 집합.
     #   설계가 '지역사랑상품권' 같은 공식명을 쿼리로 내면 토큰에 포함 → 동의어 표도 관련 인정.
-    _ref_tokens = _specific_tokens(f"{theme} {description}")
+    _ref_tokens = _specific_tokens(f"{theme} {' '.join(_syns)} {description}")
     for _s in (plan or []):
         _ref_tokens |= _specific_tokens(f"{_s.get('name', '')} {_s.get('query', '')}")
     if plan:
@@ -742,8 +781,8 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     #    관련성 필터로 무관 데이터(농촌관광·식품소비 등) 차단. 모든 출처 URL 박제. 데이터 많을수록 좋다.
     _cand_cap = max(max_datasets * 2, max_datasets + 6)   # 후보 상한(비용 가드)
     if len(datasets) < _cand_cap:
-        # 검색어: 주제 + 설명(공식 용어 포함, 예 '지역사랑상품권') + 설계 쿼리
-        _raw_terms = [theme, description] + [s.get("query", "") for s in (plan or [])]
+        # 검색어: 주제 + 동의어(정식명) + 설명 + 설계 쿼리. ★ 동의어 우선 → KOSIS 정식명 검색.
+        _raw_terms = [theme] + _syns + [description] + [s.get("query", "") for s in (plan or [])]
         # 검색어 확장: 긴 쿼리는 정부통계·논문 검색에서 0건 → 앞2토큰·핵심명사로 넓힘
         _terms = []
         for t in _raw_terms:
@@ -755,7 +794,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                 _terms.append(" ".join(tk[:2]))
             if len(tk) > 1:
                 _terms.append(tk[0])   # 핵심 명사 (예: 지역사랑상품권)
-        _terms = list(dict.fromkeys(_terms))[:5]   # 속도: 상위 5개 검색어만 (step1이 설계쿼리 이미 커버)
+        _terms = list(dict.fromkeys(_terms))[:6]   # 속도: 상위 6개(주제+동의어+설명) — step1이 설계쿼리 커버
         # 관련성 토큰: step1 과 동일한 _ref_tokens(주제+설명+설계 동의어 포함) 재사용 → 일관 게이트.
 
         def _natural_title(d):   # provider 접두(주제명 스탬프) 제거한 *실제* 표/논문명
