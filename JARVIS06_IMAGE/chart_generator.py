@@ -2027,6 +2027,20 @@ def generate_chart(
             if not any(v > 0 for v in values):
                 values = [1.0] * len(labels)  # 모두 0이면 균등 분포
 
+        # ── ★ 85점 인포그래픽 렌더 1순위 (실데이터 → 인포그래픽). 실패 시 아래 iso/Plotly 폴백 ──
+        #     (사용자 박제 2026-06-30: 모든 데이터 차트 = 85점 인포그래픽 디자인. 폭 1280 통일)
+        if labels and values and not use_synth:
+            try:
+                from JARVIS06_IMAGE.infographic_engine import generate_chart_infographic as _gci
+                _infg = _gci(labels, values, chart_type, title_short, out_dir=out_path,
+                             run_id=_rid, slot_key=str(chart_idx))
+                if _infg and Path(_infg).exists():
+                    _record_global_type(chart_type)
+                    print(f"    chart_{chart_idx:02d} → 85점 인포그래픽 [{chart_type.upper()}]")
+                    return str(Path(_infg).resolve())
+            except Exception as _ie:
+                print(f"  ⚠️ [chart_generator] 인포그래픽 렌더 실패 → 폴백: {_ie}")
+
         if is_iso and labels and values:
             from JARVIS06_IMAGE.isometric_charts import (
                 make_iso_bar_chart, make_iso_area_chart, make_band_line_chart)

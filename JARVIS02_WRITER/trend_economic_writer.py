@@ -2125,15 +2125,6 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
             finally:
                 _ts_thumb_exec.shutdown(wait=False)
 
-        # ── 85점 인포그래픽 N개 병렬 삽입 (실데이터·다양 디자인 — 안전: 실패 시 원본 유지) ──
-        try:
-            from JARVIS06_IMAGE.infographic_engine import inject_economic_infographics
-            _n0 = len(blocks)
-            blocks = inject_economic_infographics(blocks, keyword, img_dir, run_id=str(html_path), n=2)
-            print(f"  📊 [TISTORY-DRAFT] 85점 인포그래픽 삽입: {len(blocks) - _n0}장")
-        except Exception as _ig:
-            print(f"  ⚠️ 인포그래픽 주입 스킵(무시): {_ig}")
-
         # 검증
         try:
             from JARVIS02_WRITER.jarvis_main import enforce_text_between_images
@@ -2319,15 +2310,6 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
                 pass
             finally:
                 _nv_thumb_exec.shutdown(wait=False)
-
-        # ── 85점 인포그래픽 N개 병렬 삽입 (실데이터·다양 디자인 — 안전: 실패 시 원본 유지) ──
-        try:
-            from JARVIS06_IMAGE.infographic_engine import inject_economic_infographics
-            _n0 = len(blocks)
-            blocks = inject_economic_infographics(blocks, keyword, img_dir, run_id=str(_html_path), n=2)
-            print(f"  📊 [NAVER-DRAFT] 85점 인포그래픽 삽입: {len(blocks) - _n0}장")
-        except Exception as _ig:
-            print(f"  ⚠️ 인포그래픽 주입 스킵(무시): {_ig}")
 
         # 검증
         try:

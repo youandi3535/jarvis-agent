@@ -3,15 +3,16 @@
 ★ 사용자 박제 2026-06-30 — "모든 글의 모든 이미지를 85점 품질로, 같은 디자인 아닌 무한
   다양성으로, 내용·수치에 맞게, 병렬로." 경제·테마·향후 모든 글종 공통.
 
-설계 원칙 (타임아웃 우회 — 완전한 방식):
-  1. 역할 분리: LLM 은 *작은 설계 결정(JSON)* 만 → 코드가 결정론적 렌더.
-     (LLM 이 17KB HTML 전체를 쓰면 SDK 타임아웃 → 불안정. 그래서 금지.)
-  2. 무한 다양성: 레이아웃(다수) × 팔레트(다수) × 차트종류(데이터 형태로 결정) × 내용
-     → 사실상 무한 조합. 고정 N개 풀에서 랜덤이 *아님*. run 내 레이아웃·팔레트 중복 방지.
-  3. 85점 품질: 그라디언트 채움·글로우 라인·값 배지·스파크라인·도넛 게이지·번호 배지·
-     도트 텍스처·콜아웃 주석·(선택)AI 일러스트 — 챔피언 컴포넌트 내장.
-  4. 100% 신뢰성: Playwright subprocess 렌더 (asyncio 오염 차단). 무거운 LLM 호출 없음.
-  5. 방향 가변: landscape 기본, 데이터 많으면 portrait — 디자인 디렉터/셀렉터가 판단.
+설계 원칙 (LLM 디자인 디렉터 — 타임아웃 우회 + 매번 다른 디자인):
+  1. 역할 분리: LLM 디렉터(_llm_design)가 *글+실데이터 보고 작은 JSON 설계* 만 결정
+     (layout·mood·orientation·panels·kpis·insight) → 코드(render_spec)가 렌더.
+     LLM 이 17KB HTML 전체를 쓰면 SDK 타임아웃 → 금지. 작은 JSON 은 안정 + 폴백 보장.
+  2. 매번 다른 디자인: LLM 이 글 내용 보고 레이아웃 아키타입·무드·패널 구성을 *매번 다르게*
+     연출. 같은 글은 없으므로 같은 디자인도 없음. (사용자 박제: 글마다 구조·구성·스타일 전부 다름)
+  3. 85점+ 품질: 그라디언트·글로우 라인·값 배지·피크별·스파크라인·도넛·번호 배지·도트 텍스처·
+     KPI 카드·인사이트 콜아웃 — 챔피언 컴포넌트 내장. 수치는 코드가 *실데이터로만* 채움(사실성).
+  4. 신뢰성: 작은 LLM 호출(실패 시 _fallback_spec 규칙기반) + Playwright subprocess 렌더.
+  5. 가로형 기본: orientation=landscape 디폴트(썸네일처럼). 세로형은 가끔. 폭 1280 통일·세로 가변.
 
 데이터 입력 = JARVIS09 collect_chart_data 의 datasets:
   [{"title","viz_hint","unit","data":[{"label","value"}],"source":{...},"kind"?}, ...]
@@ -23,6 +24,7 @@
 """
 from __future__ import annotations
 import hashlib
+import json
 import math
 import re
 import subprocess
@@ -194,19 +196,26 @@ def stat_block(value, label, unit, c1, c2, H=260):
 
 
 # ── 헤더 ──────────────────────────────────────────────────────────────
-def _header(pal, title, subtitle, chip):
-    return (f"<div style='position:relative;background:linear-gradient(120deg,{pal['head']});color:#fff;padding:26px 32px;overflow:hidden'>"
+def _header(pal, title, subtitle, chip, icon_key="chart"):
+    iconbox = (f"<div style='width:56px;height:56px;border-radius:16px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.28);"
+               f"display:flex;align-items:center;justify-content:center;flex:none'><div style='transform:scale(1.45)'>{_ICONS.get(icon_key, _ICONS['chart'])}</div></div>")
+    chip_html = (f"<span style='display:inline-block;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.3);border-radius:30px;"
+                 f"padding:5px 14px;font-size:13px;font-weight:700;margin-top:13px;position:relative'>{chip}</span>") if chip else ""
+    return (f"<div style='position:relative;background:linear-gradient(120deg,{pal['head']});color:#fff;padding:28px 34px;overflow:hidden'>"
             f"<div style='position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.10) 1.5px,transparent 1.5px);background-size:20px 20px;opacity:.5'></div>"
-            f"<h1 style='font-size:31px;font-weight:900;letter-spacing:-1px;position:relative'>{title}</h1>"
-            f"<p style='font-size:14.5px;opacity:.92;margin-top:5px;position:relative'>{subtitle}</p>"
-            f"<span style='display:inline-block;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.3);border-radius:30px;padding:5px 14px;font-size:13px;font-weight:700;margin-top:11px;position:relative'>{chip}</span></div>")
+            f"<div style='position:relative;display:flex;align-items:center;gap:16px'>{iconbox}"
+            f"<div><h1 style='font-size:32px;font-weight:900;letter-spacing:-1px'>{title}</h1>"
+            f"<p style='font-size:14.5px;opacity:.92;margin-top:4px'>{subtitle}</p></div></div>"
+            f"{chip_html}</div>")
 
 def _foot(src):
     return (f"<div style='padding:13px 32px;color:#9aa3b2;font-size:12.5px;display:flex;justify-content:space-between;border-top:1px solid #e6ebf3;background:#fff'>"
-            f"<span>{src}</span><span>데이터 기준 자동 작성</span></div>")
+            f"<span>{src}</span></div>")
 
 def _card_title(n, pal, title, unit):
-    return (f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:10px'>{_badge(n, pal['c1'], pal['c2'])}"
+    badge = _badge(n, pal['c1'], pal['c2']) if n is not None else (
+        f"<div style='width:6px;height:24px;border-radius:3px;background:linear-gradient(180deg,{pal['c1']},{pal['c2']})'></div>")
+    return (f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:10px'>{badge}"
             f"<div style='font-size:17px;font-weight:800;color:#16202e;flex:1'>{title}</div>"
             f"<div style='font-size:12.5px;color:#8893a6'>{unit}</div></div>")
 
@@ -254,16 +263,24 @@ def select_design(seed, datasets, orientation=None, used=None):
 
 def render_infographic(spec, datasets, title, subtitle, out_path, src="데이터 출처: 한국거래소 · Yahoo Finance", chip="", illustration_b64=None):
     pal = spec["palette"]; orient = spec["orientation"]
-    W = 1280 if orient == "landscape" else 820
+    valid = [ds for ds in (datasets[:6]) if ds.get("data")]
+    if not valid:
+        return ""
+    n = len(valid)
+    two_col = (orient == "landscape" and n >= 2)   # 가로=2열, 세로=1열 스택 (폭은 동일)
+    W = 1280   # ★ 모든 인포그래픽 가로폭 통일 — 세로폭만 가변 (사용자 박제 2026-06-30)
+    chart_w = 560 if two_col else 1180
     cards = []
-    for i, ds in enumerate(datasets[:6]):
+    for i, ds in enumerate(valid):
         gid = f"g{i}"
-        chart = _chart_for(ds, pal, gid, 560 if orient == "landscape" else 720)
+        chart = _chart_for(ds, pal, gid, chart_w)
         if not chart:
             continue
-        _cw = "flex:1 1 calc(50% - 8px);max-width:calc(50% - 8px)" if orient == "landscape" else "flex:1 1 100%"
+        _cw = "flex:1 1 calc(50% - 8px);max-width:calc(50% - 8px)" if two_col else "flex:1 1 100%"
+        # 단일 카드는 헤더가 제목을 담당 → 카드 제목 생략(중복 방지). 다중 카드만 번호 배지+제목.
+        _title_html = _card_title(i + 1, pal, ds.get('title', ''), ds.get('unit', '')) if n > 1 else ""
         cards.append(f"<div style='{_cw};min-width:300px;background:#fff;border-radius:20px;box-shadow:0 8px 28px rgba(20,40,80,.08);border:1px solid #eef1f7;padding:20px'>"
-                     f"{_card_title(i+1, pal, ds.get('title',''), ds.get('unit',''))}"
+                     f"{_title_html}"
                      f"<div style='display:flex;align-items:center;justify-content:center'>{chart}</div></div>")
     if not cards:
         return ""
@@ -287,14 +304,268 @@ def render_infographic(spec, datasets, title, subtitle, out_path, src="데이터
         return ""
 
 
-def generate_infographic(title, subtitle, datasets, *, run_id="", slot_key="",
-                         out_dir=None, orientation=None, illustration_b64=None,
-                         used=None, chip="", src="데이터 출처: 한국거래소 · Yahoo Finance"):
-    """85점 품질 인포그래픽 1장 생성 (단일 진입점). 실데이터(datasets) 필요.
+# ════════════════════════════════════════════════════════════════════════
+#  LLM 디자인 디렉터 + 스펙 렌더러 (★ 사용자 박제 2026-06-30)
+#  — LLM 이 글+실데이터 보고 *매번 다른* 설계(JSON) 결정 → 코드가 85점+ 렌더.
+#    수치는 코드가 실데이터로만 채움(사실성). 작은 JSON 출력 → 타임아웃 없음.
+# ════════════════════════════════════════════════════════════════════════
+_CARD = "background:#fff;border-radius:20px;box-shadow:0 8px 28px rgba(20,40,80,.08);border:1px solid #eef1f7"
+_MOOD_IDX = {"navy": 0, "blue": 0, "green": 1, "purple": 2, "amber": 3, "ocean": 4, "teal": 6, "rose": 5, "slate": 7}
 
-    datasets: JARVIS09 collect_chart_data 의 datasets (출처 포함). 비면 "" 반환.
-    무한 다양성: run_id+slot_key+title seed → 팔레트·방향·차트종류·배치 조합.
-    실패/데이터없음 시 "" — 호출자가 폴백.
+
+def _lv(ds):
+    L = [str(r.get("label", "")) for r in (ds.get("data") or [])]
+    V = []
+    for r in (ds.get("data") or []):
+        try:
+            V.append(float(str(r.get("value")).replace(",", "")))
+        except (TypeError, ValueError):
+            V.append(0.0)
+    return L, V
+
+
+def _mood_palette(mood, seed):
+    i = _MOOD_IDX.get(str(mood or "").lower().strip())
+    if i is None:
+        i = seed % len(PALETTES)
+    return PALETTES[i % len(PALETTES)]
+
+
+def _kpi_value(ds, metric):
+    L, V = _lv(ds)
+    if not V:
+        return ("-", None, [])
+    m = (metric or "latest").lower()
+    if m == "change":
+        c = ((V[-1] - V[0]) / abs(V[0]) * 100) if V[0] else 0.0
+        return (f"{c:+.1f}%", round(c, 1), V)
+    if m == "max":
+        return (_fmt(max(V)), None, V)
+    if m == "min":
+        return (_fmt(min(V)), None, V)
+    if m == "avg":
+        return (_fmt(sum(V) / len(V)), None, V)
+    if m == "top":
+        return (str(max(zip(L, V), key=lambda x: x[1])[0])[:8], None, [])
+    if m == "count":
+        return (str(len(V)), None, [])
+    return (_fmt(V[-1]), None, V)  # latest
+
+
+def _data_brief(datasets):
+    lines = []
+    for i, ds in enumerate(datasets):
+        L, V = _lv(ds)
+        if not V:
+            continue
+        lines.append(f'key=k{i} | 제목="{ds.get("title","")}" | 종류={_infer_kind(ds)} '
+                     f'| 단위="{ds.get("unit","")}" | 점={len(V)}개 | 최신={_fmt(V[-1])} '
+                     f'| 범위={_fmt(min(V))}~{_fmt(max(V))}')
+    return "\n".join(lines)
+
+
+_DESIGN_PROMPT = """너는 세계적 수준의 통계 인포그래픽 아트디렉터다. 아래 글 맥락과 *실데이터 시리즈*를 보고,
+이 글에 가장 어울리는 **프리미엄 인포그래픽 1장의 설계도(JSON)**를 만든다.
+
+[글 맥락]
+__CONTEXT__
+
+[사용 가능 실데이터 — panels/kpis 는 이 key 만 참조]
+__BRIEF__
+
+[설계 규칙]
+- 매번 *구조·구성·강조가 달라야* 한다. 글 내용에 맞춰 레이아웃·무드·패널 구성을 창의적으로 결정.
+- orientation: 기본 "landscape"(가로형 — 썸네일처럼 가로가 길고 컴팩트). "portrait"(세로형)는
+  데이터가 아주 많을 때 *가끔만*. 한 포스팅엔 가로형이 세로형보다 많아야 한다 → 웬만하면 landscape.
+- layout 하나: dashboard(KPI띠+그리드) | hero_feature(상단 대형 차트+하단 그리드) |
+  report_stack(전폭 세로 스택 보고서) | kpi_hero(대형 KPI 강조+보조차트) | split_compare(2열 비교)
+- mood: navy|blue|green|purple|amber|ocean|teal|rose|slate 중 글 톤에 맞는 하나.
+- header.icon: chart|won|globe|bank|oil|trend|flag 중 주제에 맞는 것.
+- kpis 3~4개: 각 {data,label,metric(latest|change|max|min|avg|top|count),icon}.
+- panels 2~5개: 각 {kind(area|bar|hbar|donut|stat),data,title,span(1=절반,2=전폭)}.
+  데이터 종류에 맞춰(시계열→area, 항목비교→hbar/bar, 단일값→stat, 비중→donut).
+- title/subtitle/insight 한국어. **insight 에 수치를 지어내지 마라**(코드가 실데이터로 채움).
+
+[출력] 설명 없이 JSON 객체 하나만:
+{"orientation":"landscape","layout":"...","mood":"...","header":{"title":"...","subtitle":"...","chip":"...","icon":"..."},
+"kpis":[{"data":"k0","label":"...","metric":"latest","icon":"chart"}],
+"panels":[{"kind":"area","data":"k0","title":"...","span":2}],"insight":"..."}"""
+
+
+def _extract_json(raw):
+    if not raw:
+        return None
+    m = re.search(r"\{.*\}", str(raw), re.S)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+
+def _fallback_spec(datasets, seed):
+    """LLM 실패 시 규칙기반 설계 (신뢰성 보장 — seed 로 레이아웃·무드 변주)."""
+    layouts = ["dashboard", "hero_feature", "report_stack", "kpi_hero", "split_compare"]
+    moods = list(_MOOD_IDX.keys())
+    layout = layouts[seed % len(layouts)]
+    kpis, panels = [], []
+    for i, ds in enumerate(datasets[:4]):
+        k = _infer_kind(ds)
+        kpis.append({"data": f"k{i}", "label": str(ds.get("title", ""))[:10],
+                     "metric": "change" if k == "timeseries" else ("top" if k == "category" else "latest"),
+                     "icon": "chart"})
+    for i, ds in enumerate(datasets[:5]):
+        k = _infer_kind(ds)
+        kind = {"timeseries": "area", "category": "hbar", "ratio": "donut", "kpi": "stat"}.get(k, "bar")
+        panels.append({"kind": kind, "data": f"k{i}", "title": str(ds.get("title", "")),
+                       "span": 2 if (i == 0 and layout in ("hero_feature", "report_stack")) else 1})
+    return {"orientation": "portrait" if seed % 4 == 0 else "landscape",  # 가로형 75%
+            "layout": layout, "mood": moods[(seed >> 3) % len(moods)],
+            "header": {"title": "데이터 인사이트", "subtitle": "실시간 데이터 종합", "chip": "", "icon": "chart"},
+            "kpis": kpis, "panels": panels, "insight": ""}
+
+
+def _llm_design(context, datasets, seed):
+    brief = _data_brief(datasets)
+    try:
+        from shared.llm import invoke_text
+        prompt = _DESIGN_PROMPT.replace("__CONTEXT__", str(context)[:1200]).replace("__BRIEF__", brief)
+        raw = invoke_text("writer_fast", prompt, max_tokens=1600, timeout=90)
+        spec = _extract_json(raw)
+        if spec and spec.get("panels"):
+            return spec, "llm"
+    except Exception as e:
+        _g_report("image", e, module=__name__, func_name="_llm_design")
+    return _fallback_spec(datasets, seed), "fallback"
+
+
+def _callout_box(text, pal):
+    if not text:
+        return ""
+    return (f"<div style='margin-top:16px;display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #eef1f7;"
+            f"border-left:5px solid {pal['c1']};border-radius:14px;padding:14px 18px;box-shadow:0 6px 18px rgba(20,40,80,.06)'>"
+            f"<div style='width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,{pal['c1']},{pal['c2']});"
+            f"display:flex;align-items:center;justify-content:center;flex:none'>{_ICONS['trend']}</div>"
+            f"<div style='font-size:15px;color:#46505f;font-weight:700;line-height:1.4'>{text}</div></div>")
+
+
+def _render_panel(p, dmap, pal, width, num=None, ch=300):
+    ds = dmap.get(p.get("data"))
+    if not ds:
+        return ""
+    L, V = _lv(ds)
+    if not V:
+        return ""
+    kind = (p.get("kind") or "area").lower()
+    unit = ds.get("unit", "")
+    gid = "pn" + re.sub(r"\W", "", str(p.get("data", "p")))
+    if len(V) == 1 and kind not in ("stat", "donut"):
+        kind = "stat"
+    if kind in ("area", "line"):
+        chg = ((V[-1] - V[0]) / abs(V[0]) * 100) if V[0] else 0
+        corner = f"{chg:+.0f}%" if len(V) >= 3 else None
+        chart = area_chart(L, V, gid, pal["c1"], W=width, H=ch, corner=corner)
+    elif kind == "hbar":
+        chart = hbar_chart(sorted(zip(L, V), key=lambda x: x[1], reverse=True), pal["c1"], pal["acc"], unit=unit, W=width)
+    elif kind == "bar":
+        chart = vbar_chart(L, V, gid, pal["c1"], pal["acc"], W=width, H=ch - 20, unit=unit)
+    elif kind == "donut":
+        tot = sum(abs(x) for x in V) or 1
+        chart = donut_chart(round(V[0] / tot * 100, 1), _fmt(V[0]), str(L[0])[:8] if L else "", gid, pal["c1"], pal["c2"])
+    elif kind == "stat":
+        chart = stat_block(_fmt(V[-1]), p.get("title", ds.get("title", "")), unit, pal["c1"], pal["c2"])
+    else:
+        chart = area_chart(L, V, gid, pal["c1"], W=width, H=300)
+    title_html = "" if kind == "stat" else _card_title(num, pal, p.get("title", ds.get("title", "")), unit)
+    return (f"<div style='{_CARD};padding:20px;height:100%'>{title_html}"
+            f"<div style='display:flex;align-items:center;justify-content:center'>{chart}</div></div>")
+
+
+def _grid(items):
+    cells = []
+    for span, h in items:
+        w = "flex:1 1 100%" if span == 2 else "flex:1 1 calc(50% - 8px);max-width:calc(50% - 8px)"
+        cells.append(f"<div style='{w};min-width:300px'>{h}</div>")
+    return f"<div style='display:flex;flex-wrap:wrap;gap:16px'>{''.join(cells)}</div>"
+
+
+def _arrange_layout(layout, kpi_html, items, pal):
+    if not items:
+        return kpi_html
+    if layout == "hero_feature":
+        return f"<div style='margin-bottom:16px'>{items[0][1]}</div>{kpi_html}{_grid(items[1:])}"
+    if layout == "report_stack":
+        stacked = "".join(f"<div style='margin-bottom:16px'>{h}</div>" for _, h in items)
+        return f"{kpi_html}{stacked}"
+    return f"{kpi_html}{_grid(items)}"  # dashboard | kpi_hero | split_compare
+
+
+def render_spec(spec, datasets, out_path, seed=0, src="데이터 출처: 한국거래소 · Yahoo Finance"):
+    try:
+        dmap = {f"k{i}": ds for i, ds in enumerate(datasets)}
+        pal = _mood_palette(spec.get("mood"), seed)
+        # ★ 가로형(landscape) 기본 — 한 포스팅에 가로형이 세로형보다 많아야 함 (사용자 박제)
+        orient = str(spec.get("orientation", "landscape")).lower()
+        if orient not in ("landscape", "portrait"):
+            orient = "landscape"
+        layout = "dashboard" if orient == "landscape" else spec.get("layout", "dashboard")
+        cap = 4 if orient == "landscape" else 6      # 가로형은 패널 적게 → 세로<가로
+        ch = 230 if orient == "landscape" else 300   # 가로형은 차트 낮게
+        hdr = spec.get("header") or {}
+        kcards = []
+        for k in (spec.get("kpis") or [])[:4]:
+            ds = dmap.get(k.get("data"))
+            if not ds:
+                continue
+            val, chg, sv = _kpi_value(ds, k.get("metric", "latest"))
+            kcards.append(kpi_card(k.get("icon", "chart"), pal["c1"], pal["c2"], k.get("label", ""), val, chg, sv))
+        kpi_html = f"<div style='display:flex;gap:14px;margin-bottom:16px'>{''.join(kcards)}</div>" if kcards else ""
+        plist = (spec.get("panels") or [])[:cap]
+        # 스팬: 가로형=전부 2열(절반), 세로형=spec/report 따름
+        if orient == "landscape":
+            spans = [1] * len(plist)
+        else:
+            spans = [2 if (str(p.get("span")) == "2" or layout == "report_stack") else 1 for p in plist]
+        # 외톨이 반쪽 방지(절반 패널 홀수면 마지막을 전폭으로)
+        if spans.count(1) % 2 == 1:
+            for _i in range(len(spans) - 1, -1, -1):
+                if spans[_i] == 1:
+                    spans[_i] = 2
+                    break
+        items = []
+        for j, (p, span) in enumerate(zip(plist, spans)):
+            width = 1180 if span == 2 else 560
+            html = _render_panel(p, dmap, pal, width, num=(j + 1) if len(plist) > 1 else None, ch=ch)
+            if html:
+                items.append((span, html))
+        if not items and not kcards:
+            return ""
+        body_inner = _arrange_layout(layout, kpi_html, items, pal) + _callout_box(spec.get("insight", ""), pal)
+        body = (f"<div style='background:{pal['soft']};background-image:radial-gradient({pal['dot']} 1.2px,transparent 1.2px);"
+                f"background-size:22px 22px;padding:22px'>{body_inner}</div>")
+        W = 1280
+        html = (f"<!DOCTYPE html><html lang=ko><head><meta charset=UTF-8><style>"
+                f"@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;700;800;900&display=swap');"
+                f"*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:{FONT};width:{W}px;background:#fff}}"
+                f"</style></head><body><div style='width:{W}px;background:#fff'>"
+                f"{_header(pal, hdr.get('title', '데이터 인사이트'), hdr.get('subtitle', ''), hdr.get('chip', ''), hdr.get('icon', 'chart'))}"
+                f"{body}{_foot(src)}</div></body></html>")
+        from JARVIS06_IMAGE.html_infographic import _html_to_jpg
+        ok = _html_to_jpg(html, Path(out_path), width=W)
+        return str(out_path) if ok else ""
+    except Exception as e:
+        _g_report("image", e, module=__name__, func_name="render_spec")
+        return ""
+
+
+def generate_infographic(title, subtitle, datasets, *, run_id="", slot_key="",
+                         out_dir=None, context="", orientation=None, illustration_b64=None,
+                         used=None, chip="", src="데이터 출처: 한국거래소 · Yahoo Finance"):
+    """LLM 디자인 디렉터 → 스펙 렌더러로 85점+ 인포그래픽 1장 생성 (단일 진입점).
+
+    LLM 이 글 맥락(context)+실데이터 보고 *매번 다른* 설계(JSON) 결정 → 코드가 렌더.
+    실패 시 규칙기반 설계 폴백(신뢰성). 데이터 없으면 "" 반환. 폭 1280 통일.
     """
     datasets = [d for d in (datasets or []) if d.get("data")]
     if not datasets:
@@ -302,10 +573,53 @@ def generate_infographic(title, subtitle, datasets, *, run_id="", slot_key="",
     out_dir = Path(out_dir) if out_dir else Path(".")
     out_dir.mkdir(parents=True, exist_ok=True)
     seed = _seed_int(run_id, slot_key, title)
-    spec = select_design(seed, datasets, orientation=orientation, used=used)
-    out = out_dir / f"infg_{(run_id or 'x')[:10]}_{(slot_key or 'x')[:8]}_{seed%10000}.jpg"
-    return render_infographic(spec, datasets, title, subtitle, out, src=src,
-                              chip=chip, illustration_b64=illustration_b64)
+    spec, _origin = _llm_design(context or f"{title} — {subtitle}", datasets, seed)
+    spec.setdefault("header", {})
+    spec["header"].setdefault("title", title)
+    spec["header"].setdefault("subtitle", subtitle)
+    if chip:
+        spec["header"].setdefault("chip", chip)
+    _sk = re.sub(r"[^0-9A-Za-z]", "", str(slot_key))[:10] or "s"
+    out = out_dir / f"infg_{_sk}_{seed % 100000000}.jpg"
+    return render_spec(spec, datasets, out, seed=seed, src=src)
+
+
+_VH_MAP = {
+    "line": "line_chart", "area": "line_chart", "step": "line_chart", "combo": "line_chart",
+    "band_line": "line_chart", "iso_area": "line_chart",
+    "bar": "bar_chart", "barh": "bar_chart", "iso_bar": "bar_chart",
+    "pie": "donut", "donut": "donut",
+}
+
+
+def generate_chart_infographic(labels, values, chart_type, title, *, out_dir,
+                               run_id="", slot_key="", unit="",
+                               source_name="한국거래소 · Yahoo Finance"):
+    """[CHART_N] 단일 데이터 차트를 85점 인포그래픽으로 렌더 (chart_generator 진입점).
+
+    실데이터(labels/values)는 호출자가 수집. scatter/빈데이터/오류 시 "" 반환 →
+    호출자가 기존 Plotly 폴백. 폭 1280 고정·팔레트/차트종류 seed 다양.
+    """
+    try:
+        if chart_type == "scatter":
+            return ""  # 산점도는 엔진 미지원 → Plotly 폴백
+        data = []
+        for l, v in zip(labels or [], values or []):
+            try:
+                data.append({"label": str(l), "value": float(str(v).replace(",", ""))})
+            except (TypeError, ValueError):
+                continue
+        if len(data) < 1:
+            return ""
+        ds = {"title": title, "viz_hint": _VH_MAP.get(chart_type, "bar_chart"),
+              "unit": unit, "data": data, "source": {"name": source_name}}
+        return generate_infographic(title, "실시간 데이터 기반", [ds],
+                                    run_id=run_id, slot_key=slot_key, out_dir=out_dir,
+                                    context=f"{title} — 단일 지표 시각화",
+                                    src=f"데이터 출처: {source_name}")
+    except Exception as e:
+        _g_report("image", e, module=__name__, func_name="generate_chart_infographic")
+        return ""
 
 
 # ── 경제 브리핑 통합 — 실데이터 인포그래픽 N개 병렬 생성·본문 삽입 ──────
@@ -406,4 +720,4 @@ def inject_economic_infographics(blocks, keyword="", out_dir=None, *, run_id="",
 
 
 __all__ = ["generate_infographic", "render_infographic", "select_design",
-           "inject_economic_infographics", "PALETTES"]
+           "generate_chart_infographic", "inject_economic_infographics", "PALETTES"]
