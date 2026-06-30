@@ -1880,6 +1880,14 @@ def generate_chart(
         ).hexdigest()[:8]
         fname = out_path / f"chart_{chart_idx:02d}_{_content_hash}.png"
 
+        # ★ 데이터-우선 (사용자 박제 2026-06-30): writer 가 세션풀을 미리 등록했으면, 차트마다
+        #   느린 per-chart 실데이터 수집·6단계 재시도(네트워크 불안정 시 hang)를 *전부 우회*하고
+        #   세션풀의 검증된 실데이터로 즉시 렌더 → 발행 hang 방지 + text↔chart 일치.
+        if _SESSION_POOL:
+            _sp = _collect_data_fallback(keyword, sector, description, chart_idx, out_path, _rid)
+            if _sp:
+                return _sp
+
         # ── 컨텍스트 먼저 확보 → LLM 어드바이저가 실데이터 보고 타입 결정 ──
         colors = _derive_colors(keyword, sector, chart_idx, _rid)
         use_synth = False
