@@ -2077,12 +2077,18 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
             from JARVIS06_IMAGE.chart_generator import set_session_pool as _ssp
             _pool = (_ccd(keyword, sector=sector, description=reason or keyword, max_datasets=12) or {}).get("datasets", [])
+            # ★ 테마 앵커 재시도 (사용자 박제 2026-07-01): reason 이 관광 등으로 드리프트해 게이트가
+            #   풀을 비우면, 주제(keyword) 자체로 재수집 → 항상 *주제* 실데이터로 채움.
+            if len(_pool) < 4:
+                _seen = {d.get("title") for d in _pool}
+                _pool2 = (_ccd(keyword, sector=sector, description=keyword, max_datasets=12) or {}).get("datasets", [])
+                _pool += [d for d in _pool2 if d.get("title") not in _seen]
+            _ssp(_pool)   # ★ 항상 등록(빈 풀 포함) → chart_generator 가 *오직* 이 풀만 사용(garbage 폴백 차단)
             if _pool:
-                _ssp(_pool)
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
                 print(f"  🗂️ [데이터-우선] 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
             else:
-                print("  ⚠️ [데이터-우선] 실데이터 0 — 일반 대본")
+                print("  ⚠️ [데이터-우선] 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
         except Exception as _de:
             print(f"  ⚠️ [데이터-우선] 수집 스킵: {_de}")
 
@@ -2274,12 +2280,18 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
             from JARVIS06_IMAGE.chart_generator import set_session_pool as _ssp
             _pool = (_ccd(keyword, sector=sector, description=reason or keyword, max_datasets=12) or {}).get("datasets", [])
+            # ★ 테마 앵커 재시도 (사용자 박제 2026-07-01): reason 이 관광 등으로 드리프트해 게이트가
+            #   풀을 비우면, 주제(keyword) 자체로 재수집 → 항상 *주제* 실데이터로 채움.
+            if len(_pool) < 4:
+                _seen = {d.get("title") for d in _pool}
+                _pool2 = (_ccd(keyword, sector=sector, description=keyword, max_datasets=12) or {}).get("datasets", [])
+                _pool += [d for d in _pool2 if d.get("title") not in _seen]
+            _ssp(_pool)   # ★ 항상 등록(빈 풀 포함) → chart_generator 가 *오직* 이 풀만 사용(garbage 폴백 차단)
             if _pool:
-                _ssp(_pool)
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
                 print(f"  🗂️ [데이터-우선] 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
             else:
-                print("  ⚠️ [데이터-우선] 실데이터 0 — 일반 대본")
+                print("  ⚠️ [데이터-우선] 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
         except Exception as _de:
             print(f"  ⚠️ [데이터-우선] 수집 스킵: {_de}")
 
