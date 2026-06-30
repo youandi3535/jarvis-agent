@@ -574,38 +574,53 @@ def _doc_title_relevant(title: str, ref_tokens: set) -> bool:
 def _relevance_filter(theme: str, description: str, datasets: list) -> list:
     """★ 의미 기반 관련성 게이트 (사용자 박제 2026-07-01): 주제와 *직접* 관련된 dataset만 남김.
     농촌관광·식품소비행태처럼 다른 주제를 다루며 주제를 스쳐 언급할 뿐인 표를 제거.
-    LLM 호출 *자체* 실패 시에만 fail-open (상류 결정론 게이트가 이미 1차 차단).
-    동의어(지역화폐↔지역사랑상품권)는 의미로 판단 — 토큰 매칭 한계 극복."""
+    ★ 재시도 3회 (사용자 박제 2026-07-01): LLM 일시 실패 시 fail-open 으로 농촌관광이 새던 사고
+    근절 — 게이트가 *확실히* 한 번은 판정하게 재시도. 동의어(지역화폐↔지역사랑상품권)는 의미 판단.
+    최종 실패 시에만 결정론 백스톱(주제 핵심 토큰 미포함 표 제거)."""
     if len(datasets) <= 1:
         return datasets
     listing = "\n".join(f"{i}. {d.get('title', '')}" for i, d in enumerate(datasets))
     prompt = (
         f'블로그 글 주제: "{theme}"' + (f" — {description}" if description else "") + "\n\n"
-        "아래 데이터 표 목록 중, 이 주제의 차트로 쓰기에 *직접 관련된* 표의 번호만 고르세요.\n"
-        "판단 기준:\n"
-        "- 주제와 같은 대상/현상을 다루면 관련 (동의어·공식명칭 포함, 예 '지역화폐'≈'지역사랑상품권').\n"
-        "- *다른 주제*(예: 농촌관광·식품소비행태·인구·날씨)를 다루며 주제를 스쳐 언급할 뿐이면 제외.\n"
-        "- 애매하면 제외(주제 일관성 우선).\n\n"
+        f'아래 데이터 표 목록 중, "{theme}" 자체를 다루는 표의 번호만 고르세요.\n'
+        "판단 기준 (엄격):\n"
+        f'- "{theme}"(또는 그 공식명칭·동의어, 예 \'지역화폐\'≈\'지역사랑상품권\')를 *직접* 다루면 관련.\n'
+        "- *다른 주제*(예: 농촌관광·식품소비행태·인구·관광·날씨)를 다루는 표는, 주제를 스쳐 언급하거나\n"
+        f'  같은 지역/경제권이어도 *제외*. 표의 핵심 대상이 "{theme}" 가 아니면 무조건 제외.\n'
+        "- 애매하면 제외(주제 일관성 최우선).\n\n"
         f"{listing}\n\n"
         'JSON만 출력: {"keep": [관련 번호 목록]}'
     )
-    try:
-        from shared.llm import invoke_text
-        raw = invoke_text("analyzer", prompt, max_tokens=200, temperature=0)
-        m = re.search(r"\{[\s\S]*\}", raw or "")
-        if m:
+    for _attempt in range(3):   # ★ 재시도 — 일시 실패로 인한 fail-open 누수 방지
+        try:
+            from shared.llm import invoke_text
+            raw = invoke_text("analyzer", prompt, max_tokens=200, temperature=0)
+            m = re.search(r"\{[\s\S]*\}", raw or "")
+            if not m:
+                continue
             keep = json.loads(m.group(0)).get("keep")
-            if isinstance(keep, list):
-                idx = {int(i) for i in keep if isinstance(i, int) or str(i).strip().isdigit()}
-                filtered = [d for i, d in enumerate(datasets) if i in idx]
-                if filtered:
-                    if len(filtered) < len(datasets):
-                        log.info(f"[chart_data] 관련성 게이트: {len(datasets)}→{len(filtered)}개 "
-                                 f"(제외 {len(datasets) - len(filtered)})")
-                    return filtered
-                log.info("[chart_data] 관련성 게이트: 전부 무관 판정 → 원본 유지(빈 풀 방지)")
-    except Exception as e:
-        log.warning(f"[chart_data] 관련성 게이트 LLM 실패(유지): {e}")
+            if not isinstance(keep, list):
+                continue
+            idx = {int(i) for i in keep if isinstance(i, int) or str(i).strip().isdigit()}
+            filtered = [d for i, d in enumerate(datasets) if i in idx]
+            if filtered:
+                if len(filtered) < len(datasets):
+                    log.info(f"[chart_data] 관련성 게이트: {len(datasets)}→{len(filtered)}개 "
+                             f"(제외 {len(datasets) - len(filtered)})")
+                return filtered
+            # ★ 전부 무관 → 빈 풀 반환 (사용자 박제 2026-07-01): 농촌관광 등 오답 차트 < 차트 없음.
+            #   '빈 풀 방지'로 원본 유지하던 것이 누수원이었음 — 차라리 차트 없이 AI사진으로 대체.
+            log.warning(f"[chart_data] 관련성 게이트: '{theme}' 무관 {len(datasets)}개 전량 폐기 (빈 풀)")
+            return []
+        except Exception as e:
+            log.warning(f"[chart_data] 관련성 게이트 LLM 시도{_attempt + 1} 실패: {e}")
+    # 3회 모두 실패 → 결정론 백스톱: 주제 핵심 토큰 미포함 표 제거 (농촌관광 등 차단)
+    core = _specific_tokens(theme)
+    if core:
+        kept = [d for d in datasets if _doc_title_relevant(d.get("title", ""), core)]
+        if kept:
+            log.warning(f"[chart_data] 관련성 게이트 LLM 전패 → 결정론 백스톱 {len(datasets)}→{len(kept)}")
+            return kept
     return datasets
 
 
