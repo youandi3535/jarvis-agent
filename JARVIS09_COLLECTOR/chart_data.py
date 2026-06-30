@@ -303,7 +303,10 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     ]
     _wants_specific = any(k in combined for k in _SPECIFIC_NON_VALUATION)
     if _wants_specific:
-        is_stock = False   # 종목 valuation 지표는 요청과 무관 → 억제 (웹 실데이터로만)
+        # 종목 valuation·글로벌 시장 지표 둘 다 요청과 무관 → 억제 (주제 관련 웹 실데이터로만).
+        # (예: '지역화폐 발행 규모' 요청에 글로벌 증시 등락률이 새어들면 불일치=거짓.)
+        is_stock = False
+        is_macro = False
 
     datasets: list[dict] = []
     # 구조화 API 우선 (provenance 명확·고신뢰)
