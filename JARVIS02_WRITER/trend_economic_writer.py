@@ -2069,6 +2069,23 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
         except Exception:
             pass
 
+        # ── ★ 데이터-우선 (사용자 박제 2026-06-30): 대본 작성 *전* 실데이터 풍부 수집 →
+        #    카탈로그를 supreme_block(모든 Pass-1 호출 전달)에 주입 → 대본이 *있는 차트만* 계획.
+        #    세션풀 등록 → Pass-2 가 재수집 없이 같은 실데이터로 인포그래픽 (text↔chart 일치).
+        try:
+            from JARVIS09_COLLECTOR import collect_chart_data as _ccd
+            from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
+            from JARVIS06_IMAGE.chart_generator import set_session_pool as _ssp
+            _pool = (_ccd(keyword, sector=sector, description=reason or keyword, max_datasets=12) or {}).get("datasets", [])
+            if _pool:
+                _ssp(_pool)
+                supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
+                print(f"  🗂️ [데이터-우선] 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
+            else:
+                print("  ⚠️ [데이터-우선] 실데이터 0 — 일반 대본")
+        except Exception as _de:
+            print(f"  ⚠️ [데이터-우선] 수집 스킵: {_de}")
+
         # ★ 글 keyword로 JARVIS09 재수집 — 대본 주제에 맞는 데이터로 이미지 생성
         _kw_collection_docs = list(collection_docs or [])
         try:
@@ -2248,6 +2265,23 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             supreme_block = (supreme_block or "") + _kw_rule(keyword)
         except Exception:
             pass
+
+        # ── ★ 데이터-우선 (사용자 박제 2026-06-30): 대본 작성 *전* 실데이터 풍부 수집 →
+        #    카탈로그를 supreme_block(모든 Pass-1 호출 전달)에 주입 → 대본이 *있는 차트만* 계획.
+        #    세션풀 등록 → Pass-2 가 재수집 없이 같은 실데이터로 인포그래픽 (text↔chart 일치).
+        try:
+            from JARVIS09_COLLECTOR import collect_chart_data as _ccd
+            from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
+            from JARVIS06_IMAGE.chart_generator import set_session_pool as _ssp
+            _pool = (_ccd(keyword, sector=sector, description=reason or keyword, max_datasets=12) or {}).get("datasets", [])
+            if _pool:
+                _ssp(_pool)
+                supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
+                print(f"  🗂️ [데이터-우선] 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
+            else:
+                print("  ⚠️ [데이터-우선] 실데이터 0 — 일반 대본")
+        except Exception as _de:
+            print(f"  ⚠️ [데이터-우선] 수집 스킵: {_de}")
 
         # ★ 글 keyword로 JARVIS09 재수집 — 대본 주제에 맞는 데이터로 이미지 생성
         _kw_collection_docs = list(collection_docs or [])

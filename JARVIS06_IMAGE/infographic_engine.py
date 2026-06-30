@@ -157,7 +157,7 @@ def area_chart(L, V, gid, c1, W=620, H=300, corner=None, mark_peak=True):
     s.append("</svg>"); return "".join(s)
 
 def vbar_chart(L, V, gid, c1, acc, W=560, H=280, unit=""):
-    pl, pr, pt, pb = 16, 16, 36, 46; pw, ph = W - pl - pr, H - pt - pb
+    pl, pr, pt, pb = 16, 16, 36, 58; pw, ph = W - pl - pr, H - pt - pb
     vmax = max(max(V), 0.0); vmin = min(min(V), 0.0); rng = (vmax - vmin) or 1
     zero = pt + (vmax / rng) * ph; n = len(V); slot = pw / n; bw = min(slot * 0.52, 54); last = n - 1
     s = [f"<svg viewBox='0 0 {W} {H}' width='100%' height='auto' preserveAspectRatio='xMidYMid meet' style='display:block' font-family='{FONT}'>"]
@@ -169,16 +169,29 @@ def vbar_chart(L, V, gid, c1, acc, W=560, H=280, unit=""):
         else: by = zero; col = _BLUE_DN; ty = by + h + 15
         s.append(f"<rect x='{bx:.1f}' y='{by:.1f}' width='{bw:.1f}' height='{h:.1f}' rx='5' fill='{col}'/>")
         s.append(f"<text x='{cx:.1f}' y='{ty:.1f}' font-size='13' font-weight='800' fill='#16202e' text-anchor='middle'>{_fmt(v)}{unit}</text>")
-        s.append(f"<text x='{cx:.1f}' y='{H-10}' font-size='12.5' fill='#8893a6' text-anchor='middle'>{lab}</text>")
+        # 하단 라벨 — 길면 2줄 줄바꿈 (잘림 방지)
+        _lab = str(lab); _maxc = max(5, int(slot / 13))
+        if len(_lab) <= _maxc:
+            _lines = [_lab]
+        elif " " in _lab:
+            _p = _lab.split(" "); _lines = [_p[0][:_maxc], " ".join(_p[1:])[:_maxc]]
+        else:
+            _lines = [_lab[:_maxc], _lab[_maxc:_maxc * 2]]
+        for _li, _ln in enumerate(_lines[:2]):
+            s.append(f"<text x='{cx:.1f}' y='{H-26+_li*14:.0f}' font-size='12' fill='#8893a6' text-anchor='middle'>{_ln}</text>")
     s.append("</svg>"); return "".join(s)
 
 def hbar_chart(rows, c1, c2, unit="%", W=420):
-    n = len(rows); rh = 40; H = n * rh + 6; labw = 86; barx = labw + 10; bw = W - barx - 70
-    vmax = max(abs(v) for _, v in rows) or 1
+    """라벨을 막대 *위*에 전체 폭으로 — 긴 한글 설문 응답도 안 잘림."""
+    n = len(rows); rh = 54; H = n * rh + 10; pl = 22
+    bw = W - pl - 96; vmax = max(abs(v) for _, v in rows) or 1
     s = [f"<svg viewBox='0 0 {W} {H}' width='100%' height='auto' preserveAspectRatio='xMidYMid meet' style='display:block' font-family='{FONT}'><defs><linearGradient id='hb{c1[1:]}' x1='0' y1='0' x2='1' y2='0'><stop offset='0' stop-color='{c2}'/><stop offset='1' stop-color='{c1}'/></linearGradient></defs>"]
     for i, (lab, v) in enumerate(rows):
-        cy = 4 + i * rh + rh / 2; w = max(abs(v) / vmax * bw, 4)
-        s.append(f"<text x='{labw}' y='{cy+5:.0f}' font-size='13' font-weight='700' fill='#46505f' text-anchor='end'>{lab}</text><rect x='{barx}' y='{cy-11:.0f}' width='{w:.1f}' height='22' rx='11' fill='url(#hb{c1[1:]})'/><text x='{barx+w+8:.1f}' y='{cy+5:.0f}' font-size='13' font-weight='800' fill='#16202e'>{('+' if v>=0 else '')}{_fmt(v)}{unit}</text>")
+        y0 = 8 + i * rh
+        w = max(abs(v) / vmax * bw, 4)
+        s.append(f"<text x='{pl}' y='{y0+14:.0f}' font-size='14.5' font-weight='700' fill='#46505f'>{str(lab)[:34]}</text>")
+        s.append(f"<rect x='{pl}' y='{y0+22:.0f}' width='{w:.1f}' height='19' rx='9.5' fill='url(#hb{c1[1:]})'/>")
+        s.append(f"<text x='{pl+w+9:.1f}' y='{y0+37:.0f}' font-size='14' font-weight='800' fill='#16202e'>{_fmt(v)}{unit}</text>")
     s.append("</svg>"); return "".join(s)
 
 def donut_chart(ring, disp, sub, gid, c1, c2, W=190, H=190):
@@ -187,6 +200,42 @@ def donut_chart(ring, disp, sub, gid, c1, c2, W=190, H=190):
             f"<defs><linearGradient id='{gid}' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='{c1}'/><stop offset='1' stop-color='{c2}'/></linearGradient></defs>"
             f"<circle cx={cx} cy={cy} r={r} fill='none' stroke='#eef1f7' stroke-width='20'/><circle cx={cx} cy={cy} r={r} fill='none' stroke='url(#{gid})' stroke-width='20' stroke-linecap='round' stroke-dasharray='{dash:.1f} {circ:.1f}' transform='rotate(-90 {cx} {cy})'/>"
             f"<text x={cx} y={cy-1} font-size='32' font-weight='900' fill='#16202e' text-anchor='middle'>{disp}</text><text x={cx} y={cy+22} font-size='13' fill='#8893a6' text-anchor='middle'>{sub}</text></svg>")
+
+_PIE_COLS = ["#2f6fed", "#e8513a", "#1f9d6b", "#7c5cff", "#e08a1e", "#16a39a", "#c0395f", "#465168", "#9aa3b2"]
+
+
+def pie_chart(L, V, gid, pal, W=620, unit=""):
+    """다중 세그먼트 도넛 — 분포 전체를 색상 세그먼트 + 범례(%)로. (단일값 도넛 버그 대체)"""
+    rows = [(str(l), abs(float(v))) for l, v in zip(L, V) if str(v).replace(".", "").replace("-", "").isdigit() or True]
+    rows = [(l, v) for l, v in zip([str(x) for x in L], [float(x) for x in V])]
+    tot = sum(abs(v) for _, v in rows) or 1
+    cx, cy, r = 155, 150, 120
+    s = [f"<svg viewBox='0 0 {W} 300' width='100%' height='auto' preserveAspectRatio='xMidYMid meet' font-family='{FONT}'>"]
+    ang = -90.0
+    for i, (lab, v) in enumerate(rows):
+        sweep = abs(v) / tot * 360
+        if sweep <= 0:
+            continue
+        a1 = math.radians(ang); a2 = math.radians(ang + sweep)
+        x1, y1 = cx + r * math.cos(a1), cy + r * math.sin(a1)
+        x2, y2 = cx + r * math.cos(a2), cy + r * math.sin(a2)
+        large = 1 if sweep > 180 else 0
+        col = _PIE_COLS[i % len(_PIE_COLS)]
+        s.append(f"<path d='M{cx} {cy} L{x1:.1f} {y1:.1f} A{r} {r} 0 {large} 1 {x2:.1f} {y2:.1f} Z' fill='{col}'/>")
+        ang += sweep
+    s.append(f"<circle cx={cx} cy={cy} r='66' fill='#fff'/>")
+    s.append(f"<text x={cx} y={cy-4} font-size='15' fill='#8893a6' text-anchor='middle'>합계</text>"
+             f"<text x={cx} y={cy+22} font-size='24' font-weight='900' fill='#16202e' text-anchor='middle'>{_fmt(tot)}{unit}</text>")
+    for i, (lab, v) in enumerate(rows[:8]):
+        ly = 44 + i * 30
+        col = _PIE_COLS[i % len(_PIE_COLS)]
+        pct = abs(v) / tot * 100
+        s.append(f"<rect x='330' y='{ly}' width='17' height='17' rx='4' fill='{col}'/>"
+                 f"<text x='356' y='{ly+14}' font-size='14.5' fill='#46505f' font-weight='600'>{str(lab)[:38]}</text>"
+                 f"<text x='{W-14}' y='{ly+14}' font-size='14.5' fill='#16202e' font-weight='800' text-anchor='end'>{_fmt(v)}{unit}</text>")
+    s.append("</svg>")
+    return "".join(s)
+
 
 def stat_block(value, label, unit, c1, c2, H=260):
     return (f"<div style='display:flex;flex-direction:column;align-items:center;justify-content:center;height:{H}px;width:100%'>"
@@ -577,9 +626,67 @@ def render_spec(spec, datasets, out_path, seed=0, src="데이터 출처: 한국�
                 f"{body}{_foot(src)}</div></body></html>")
         from JARVIS06_IMAGE.html_infographic import _html_to_jpg
         ok = _html_to_jpg(html, Path(out_path), width=W)
-        return str(out_path) if ok else ""
+        _p = Path(out_path)
+        return str(out_path) if (ok and _p.exists() and _p.stat().st_size > 2000) else ""
     except Exception as e:
         _g_report("image", e, module=__name__, func_name="render_spec")
+        return ""
+
+
+def _render_single(ds, title, subtitle, out_path, seed, src, chip="", slot=""):
+    """단일 데이터셋 전용 렌더 — 분포에서 *서로 다른* KPI 4종 + 분포 차트 1개 (중복 0).
+    ★ 사용자 박제 2026-06-30: 디렉터가 단일 데이터에 같은 KPI·패널을 양산하던 중복 차단.
+    slot(글 내 순번)로 무드·차트종류를 *확실히 분산* → 9장이 전부 다른 디자인."""
+    try:
+        L, V = _lv(ds)
+        if not V:
+            return ""
+        variant = int(slot) if str(slot).isdigit() else seed
+        pal = PALETTES[variant % len(PALETTES)]
+        unit = ds.get("unit", "")
+        pairs = sorted(zip(L, V), key=lambda x: x[1], reverse=True)
+        n = len(pairs)
+        def _e(s):   # 엔티티 라벨 정리 (괄호 제거 + 짧게 — KPI 라벨 잘림 방지)
+            return re.split(r"[(（]", str(s))[0].strip()[:8]
+        # KPI 4종 — 라벨·값 모두 다름 (중복 금지)
+        kc = []
+        kc.append(kpi_card("flag", pal["c1"], pal["c2"], f"최다 · {_e(pairs[0][0])}", f"{_fmt(pairs[0][1])}{unit}", None, []))
+        if n >= 2:
+            kc.append(kpi_card("chart", pal["c1"], pal["c2"], f"2위 · {_e(pairs[1][0])}", f"{_fmt(pairs[1][1])}{unit}", None, []))
+        if n >= 3:
+            kc.append(kpi_card("trend", pal["c1"], pal["c2"], f"최저 · {_e(pairs[-1][0])}", f"{_fmt(pairs[-1][1])}{unit}", None, []))
+        kc.append(kpi_card("won", pal["c1"], pal["c2"], "항목 수", str(n), None, []))
+        kpi_html = f"<div style='display:flex;gap:14px;margin-bottom:16px'>{''.join(kc)}</div>"
+        # 분포 차트 — slot 으로 bar/hbar/pie 변주 (슬롯마다 확실히 다름)
+        kind = ["bar", "hbar", "pie"][variant % 3]
+        if kind == "pie":
+            chart = pie_chart(L, V, "m0", pal, W=1180, unit=unit)
+        elif kind == "hbar":
+            chart = hbar_chart(pairs, pal["c1"], pal["acc"], unit=unit, W=1180)
+        else:
+            chart = vbar_chart(L, V, "m0", pal["c1"], pal["acc"], W=1180, H=300, unit=unit)
+        card_chart = (f"<div style='{_CARD};padding:22px'>"
+                      f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:8px'>"
+                      f"<div style='width:6px;height:24px;border-radius:3px;background:linear-gradient(180deg,{pal['c1']},{pal['c2']})'></div>"
+                      f"<div style='font-size:18px;font-weight:800;color:#16202e'>{str(ds.get('title',''))[:36]}</div>"
+                      f"<div style='flex:1'></div><div style='font-size:13px;color:#8893a6'>단위 {unit or '-'}</div></div>"
+                      f"<div style='display:flex;align-items:center;justify-content:center'>{chart}</div></div>")
+        insight = (f"{pairs[0][0]} 항목이 {_fmt(pairs[0][1])}{unit}로 가장 높고, "
+                   f"{pairs[-1][0]}이(가) {_fmt(pairs[-1][1])}{unit}로 가장 낮습니다 (총 {n}개 항목).")
+        body = (f"<div style='background:{pal['soft']};background-image:radial-gradient({pal['dot']} 1.2px,transparent 1.2px);"
+                f"background-size:22px 22px;padding:22px'>{kpi_html}{card_chart}{_callout_box(insight, pal)}</div>")
+        W = 1280
+        html = (f"<!DOCTYPE html><html lang=ko><head><meta charset=UTF-8><style>"
+                f"@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;700;800;900&display=swap');"
+                f"*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:{FONT};width:{W}px;background:#fff}}"
+                f"</style></head><body><div style='width:{W}px;background:#fff'>"
+                f"{_header(pal, title, subtitle, chip, 'chart')}{body}{_foot(src)}</div></body></html>")
+        from JARVIS06_IMAGE.html_infographic import _html_to_jpg
+        _ok = _html_to_jpg(html, Path(out_path), width=W)
+        _p = Path(out_path)
+        return str(out_path) if (_ok and _p.exists() and _p.stat().st_size > 2000) else ""
+    except Exception as e:
+        _g_report("image", e, module=__name__, func_name="_render_single")
         return ""
 
 
@@ -622,7 +729,26 @@ def generate_infographic(title, subtitle, datasets, *, run_id="", slot_key="",
     out_dir = Path(out_dir) if out_dir else Path(".")
     out_dir.mkdir(parents=True, exist_ok=True)
     seed = _seed_int(run_id, slot_key, title)
+    _sk = re.sub(r"[^0-9A-Za-z]", "", str(slot_key))[:10] or "s"
+    # ★ 단일 데이터셋은 전용 렌더러로 (디렉터 중복 KPI·패널 양산 차단) — 중복 0 + 분포 정확
+    if len(datasets) == 1:
+        _out1 = out_dir / f"infg_{_sk}_{seed % 100000000}.jpg"
+        _r = _render_single(datasets[0], title, subtitle, _out1, seed, src, chip=chip, slot=slot_key)
+        if _r:
+            return _r
     spec, _origin = _llm_design(context or f"{title} — {subtitle}", datasets, seed)
+    # ★ 슬롯마다 시각적 다양성 강제 (사용자 박제: 유사 데이터도 같은 디자인 금지)
+    #   무드(팔레트)·레이아웃·차트종류를 seed 로 변주 → 9장이 전부 다르게 보이도록.
+    _moods = list(_MOOD_IDX.keys())
+    spec["mood"] = _moods[seed % len(_moods)]
+    _layouts = ["dashboard", "hero_feature", "kpi_hero", "split_compare", "report_stack"]
+    spec["layout"] = _layouts[(seed >> 4) % len(_layouts)]
+    # category(분포) 패널의 차트종류도 변주 (bar/hbar/donut)
+    _cat_kinds = ["bar", "hbar", "donut"]
+    _ck = _cat_kinds[(seed >> 7) % len(_cat_kinds)]
+    for p in (spec.get("panels") or []):
+        if str(p.get("kind", "")).lower() in ("bar", "hbar", "donut"):
+            p["kind"] = _ck
     spec.setdefault("header", {})
     spec["header"].setdefault("title", title)
     spec["header"].setdefault("subtitle", subtitle)

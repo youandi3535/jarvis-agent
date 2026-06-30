@@ -306,14 +306,34 @@ def _stocks_text(stocks_data: dict) -> str:
 #  경제 브리핑 텍스트 대본 — 티스토리·네이버 (Pass-1)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+def _build_data_catalog(datasets) -> str:
+    """수집된 실데이터 → 대본 프롬프트용 카탈로그 (대본이 *있는 데이터만* 차트화하도록)."""
+    if not datasets:
+        return ""
+    lines = ["[★ 사용 가능한 실데이터 차트 — 차트는 *이 목록에서만* 골라 쓸 것]"]
+    for i, d in enumerate(datasets, 1):
+        u = d.get("unit", "")
+        lines.append(f"D{i}. {d.get('title', '')}{(' (단위 ' + u + ')') if u else ''}")
+    lines.append("★ 위 목록에 *없는* 수치(예: 목록에 발행액이 없으면 발행액 차트)는 절대 만들지 마라 "
+                 "— 실데이터가 없는 차트는 거짓이 된다.")
+    lines.append("★ [CHART_N: <위 목록의 제목 그대로>] 형태로, 글 흐름에 맞는 위치에 배치하라.")
+    return "\n".join(lines)
+
+
 def _gen_economic_ts_nv(
     keyword: str, sector: str, reason: str,
     supreme_block: str,
     platform: str = "tistory",
+    datasets=None,
 ) -> str:
-    """티스토리·네이버 경제 브리핑 Pass-1: 텍스트 + [CHART_N] 플레이스홀더."""
+    """티스토리·네이버 경제 브리핑 Pass-1: 텍스트 + [CHART_N] 플레이스홀더.
+
+    ★ 데이터-우선 (사용자 박제 2026-06-30): datasets(미리 수집한 실데이터)가 오면 그 목록을
+      카탈로그로 주입 → 대본이 *실제 있는 차트만* 계획 (없는 데이터 상상 금지).
+    """
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     hook = _gen_hook(keyword, platform)
+    _catalog = _build_data_catalog(datasets)
 
     system_msg = f"""당신은 한국 경제 블로그의 전문 작가입니다.
 
@@ -330,6 +350,8 @@ def _gen_economic_ts_nv(
 플랫폼: {spec['name']} | 독자: {spec['reader']}
 날짜: {_TODAY_KR} ({_TODAY_DOW}요일)
 키워드: {keyword} | 섹터: {sector} | 급상승 이유: {reason}
+
+{_catalog}
 
 [출력 형식 — 아래 구조 패턴을 따르되, 차트 개수는 글 분량에 맞게 자유 결정]
 

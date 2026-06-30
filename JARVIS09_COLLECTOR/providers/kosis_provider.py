@@ -148,8 +148,8 @@ class KosisProvider(BaseProvider):
         col_url = "통계표조회URL" if "통계표조회URL" in tbls.columns else ("TBL_VIEW_URL" if "TBL_VIEW_URL" in tbls.columns else None)
 
         results: list[RawDocument] = []
-        for _, t in tbls.head(8).iterrows():
-            if len(results) >= max(2, min(max_items, 4)):
+        for _, t in tbls.head(16).iterrows():           # 더 많은 표 후보 (풍부)
+            if len(results) >= max(4, min(max_items, 10)):
                 break
             org_id = str(t.get(col_org, "") or "").strip()
             tbl_id = str(t.get(col_tbl, "") or "").strip()

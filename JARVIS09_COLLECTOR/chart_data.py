@@ -72,7 +72,7 @@ def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
             v = float(str(d.get("value")).replace(",", ""))
         except (TypeError, ValueError):
             continue
-        label = str(d.get("label", "")).strip()[:20]
+        label = str(d.get("label", "")).strip()[:60]   # 라벨 잘림 방지 (긴 설문 응답 보존)
         if label and v == v:  # NaN 제외
             rows.append({"label": label, "value": v})
     # 차트 의미 최소 기준: kpi 1개, 그 외 2개
@@ -328,10 +328,47 @@ _SERIES_PROMPT = """요청 지표: "{name}"  (단위: {unit})
 관련 수치가 없으면 {{"data": []}}."""
 
 
+def _parse_clean_doc(doc):
+    """KOSIS 등 '[KOSIS 통계표: ...] / 라벨: 값 단위' 정형 텍스트를 LLM 없이 직접 파싱 (빠름).
+    반환 dataset 또는 None. (LLM 추출 호출 폭증 방지 — 풍부 수집 속도 핵심)"""
+    text = getattr(doc, "raw_text", "") or ""
+    if "[KOSIS 통계표:" not in text:
+        return None
+    title = getattr(doc, "title", "") or "KOSIS"
+    for pre in ("KOSIS 통계청 — ", "통계청 KOSIS — "):
+        if title.startswith(pre):
+            title = title[len(pre):]
+    unit = ""
+    mu = re.search(r"단위:\s*([^)\]]+)", text)
+    if mu:
+        unit = mu.group(1).strip()
+    rows = []
+    for line in text.splitlines():
+        m = re.match(r"\s+(.+?):\s*(-?[\d.,]+)\s*(\S*)\s*$", line)
+        if not m:
+            continue
+        lab = m.group(1).strip()
+        try:
+            val = round(float(m.group(2).replace(",", "")), 2)
+        except ValueError:
+            continue
+        rows.append({"label": lab, "value": val})
+    if len(rows) < 2:
+        return None
+    src = {"provider": "kosis", "name": "통계청 KOSIS",
+           "url": getattr(doc, "url", "") or "https://kosis.kr/", "as_of": _now_as_of()}
+    return _mk_dataset(title[:40], "bar_chart", unit, rows[:30], src)
+
+
 def _extract_series_from_docs(series: dict, docs: list):
     """수집 문서에서 *해당 series 에 집중* 추출 → dataset(출처 URL·단위 박제). 없으면 None."""
     if not docs:
         return None
+    # ★ KOSIS 정형 데이터는 LLM 없이 직접 파싱 (속도 — 풍부 수집 시 LLM 폭증 방지)
+    if len(docs) == 1:
+        fast = _parse_clean_doc(docs[0])
+        if fast:
+            return fast
     sel = docs[:8]
     excerpts = "\n\n".join(
         f"[{i}] ({getattr(d, 'source_type', '')}) {getattr(d, 'title', '')}\n"
@@ -414,7 +451,7 @@ def _collect_one_series(series: dict, sector: str, theme: str = ""):
 
 # ── 공개 API ──────────────────────────────────────────────────────────────
 def collect_chart_data(theme: str, sector: str = "", description: str = "",
-                       exclude_titles=None, max_datasets: int = 6) -> dict:
+                       exclude_titles=None, max_datasets: int = 12) -> dict:
     """주제 연관 차트용 실데이터를 출처(provenance)와 함께 수집.
 
     Args:
@@ -468,7 +505,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     #    KOSIS(정부통계)·논문(거짓 없음)·정부보도자료를 *설계 쿼리(공식 용어)* 로 직접 수집해
     #    실제 표/논문 수치를 자연 제목으로 포착. ★ 관련성 필터로 무관 데이터(키프로스·물가 등) 차단.
     #    모든 데이터 출처(URL) 박제. 데이터는 많을수록 좋다.
-    if len(datasets) < 5:
+    if len(datasets) < max_datasets:
         # 검색어: 주제 + 설명(공식 용어 포함, 예 '지역사랑상품권') + 설계 쿼리
         _raw_terms = [theme, description] + [s.get("query", "") for s in (plan or [])]
         # 검색어 확장: 긴 쿼리는 정부통계·논문 검색에서 0건 → 앞2토큰·핵심명사로 넓힘
@@ -497,21 +534,22 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
             return t
 
         # ECOS 제외: 항상 '거시 일반(금리·환율·물가)'을 주제명만 찍어 반환 → 무관 혼입원.
-        for source in ("kosis", "academic", "kor_econ"):   # 논문(academic) API 다음 우선
-            if len(datasets) >= 5:
+        # 출처 한정 안 함(사용자 박제): 정부통계·논문·정부보도자료·뉴스·웹 폭넓게. 논문 우선.
+        for source in ("kosis", "academic", "kor_econ", "naver_news", "news", "web"):
+            if len(datasets) >= max_datasets:
                 break
             _ensure_source_ready(source)
             prov = _get_provider(source)
             if not prov:
                 continue
             for term in _terms:
-                if len(datasets) >= 5:
+                if len(datasets) >= max_datasets:
                     break
                 try:
-                    docs = prov.collect(term, sector, max_items=3)
+                    docs = prov.collect(term, sector, max_items=8)   # 풍부하게
                 except Exception:
                     docs = []
-                for d in docs[:2]:
+                for d in docs[:5]:
                     nat = _natural_title(d)
                     # 관련성: *자연 제목*(주제명 스탬프 제거)에 구체 주제 토큰이 있어야 채택
                     if not any(tok in nat for tok in _theme_tokens):
@@ -520,7 +558,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                     ds = _extract_series_from_docs(pseudo, [d])
                     if ds:
                         datasets.append(ds)
-                    if len(datasets) >= 5:
+                    if len(datasets) >= max_datasets:
                         break
 
     # dedup (fingerprint) + exclude_titles 필터
