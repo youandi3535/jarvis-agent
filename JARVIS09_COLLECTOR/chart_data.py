@@ -269,6 +269,149 @@ def _web_datasets(theme: str, sector: str, description: str) -> list[dict]:
     return out
 
 
+# ── 설계도 실행기 — data_planner 의 series 를 조준 수집 (라이브러리 자동설치 포함) ──────────
+#   ★ 사용자 박제 2026-06-30: 필요 라이브러리/API 는 *말 안 해도 자동 설치·연결*. 못 구하면
+#   가만히 있지 말고 설계된 출처를 우선순위로 다 시도. (API 키는 .env 사전 등록 — 가입만 1회 수동.)
+_PROVIDER_REGISTRY: dict = {}
+_SOURCE_LIBS = {   # source → 자동설치 무료 라이브러리 (import명, pip명)
+    "krx":      [("pykrx", "pykrx")],
+    "finance":  [("yfinance", "yfinance")],
+    "news":     [("feedparser", "feedparser")],
+    "blog":     [("feedparser", "feedparser")],
+    "web":      [("bs4", "beautifulsoup4")],
+    "kor_econ": [("bs4", "beautifulsoup4")],
+}
+
+
+def _ensure_source_ready(source: str) -> None:
+    try:
+        from JARVIS09_COLLECTOR.lib_bootstrap import ensure_lib
+        for imp, pip in _SOURCE_LIBS.get(source, []):
+            ensure_lib(imp, pip)
+    except Exception as e:
+        log.warning(f"[chart_data] {source} 라이브러리 자동설치 스킵: {e}")
+
+
+def _get_provider(source: str):
+    if source in _PROVIDER_REGISTRY:
+        return _PROVIDER_REGISTRY[source]
+    inst = None
+    try:
+        from JARVIS09_COLLECTOR.providers import (
+            BlogProvider, NewsProvider, AcademicProvider, FinanceProvider, WebProvider,
+            KorEconProvider, NaverNewsProvider, DartProvider, EcosProvider,
+            KosisProvider, KrxProvider,
+        )
+        _m = {"blog": BlogProvider, "news": NewsProvider, "academic": AcademicProvider,
+              "finance": FinanceProvider, "web": WebProvider, "kor_econ": KorEconProvider,
+              "naver_news": NaverNewsProvider, "dart": DartProvider, "ecos": EcosProvider,
+              "kosis": KosisProvider, "krx": KrxProvider}
+        cls = _m.get(source)
+        inst = cls() if cls else None
+    except Exception as e:
+        log.warning(f"[chart_data] provider 로드 실패({source}): {e}")
+    _PROVIDER_REGISTRY[source] = inst
+    return inst
+
+
+_SERIES_SYSTEM = """당신은 수집 자료에서 *실제로 등장한 수치*만 뽑아 차트 데이터로 구조화하는
+데이터 분석가다. 요청 지표와 무관한 수치·자료에 없는 수치는 절대 만들지 않는다."""
+
+_SERIES_PROMPT = """요청 지표: "{name}"  (단위: {unit})
+
+아래 자료에서 위 지표에 *직접 해당하는 실제 수치*만 뽑아 차트 데이터로 구조화하라.
+각 발췌 앞 [n] 은 출처 인덱스. 지표와 무관한 수치는 넣지 마라. 숫자를 지어내지 마라.
+
+{excerpts}
+
+출력 JSON만: {{"data": [{{"label": "연도/항목", "value": 숫자, "source_idx": n}}]}}
+관련 수치가 없으면 {{"data": []}}."""
+
+
+def _extract_series_from_docs(series: dict, docs: list):
+    """수집 문서에서 *해당 series 에 집중* 추출 → dataset(출처 URL·단위 박제). 없으면 None."""
+    if not docs:
+        return None
+    sel = docs[:8]
+    excerpts = "\n\n".join(
+        f"[{i}] ({getattr(d, 'source_type', '')}) {getattr(d, 'title', '')}\n"
+        f"{(getattr(d, 'raw_text', '') or getattr(d, 'cleaned_text', '') or '')[:600]}"
+        for i, d in enumerate(sel))
+    try:
+        from shared.llm import invoke_text
+        raw = invoke_text("analyzer",
+                          _SERIES_PROMPT.format(name=series["name"], unit=series.get("unit", ""), excerpts=excerpts),
+                          system=_SERIES_SYSTEM, max_tokens=700, temperature=0.1)
+    except Exception as e:
+        log.warning(f"[chart_data] series 추출 LLM 실패: {e}")
+        return None
+    m = re.search(r"\{[\s\S]*\}", raw or "")
+    if not m:
+        return None
+    try:
+        parsed = json.loads(m.group(0))
+    except Exception:
+        return None
+    rows, src_url, src_name = [], "", ""
+    for r in parsed.get("data") or []:
+        try:
+            doc = sel[int(r.get("source_idx"))]
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not src_url:
+            src_url = getattr(doc, "url", "") or ""
+            src_name = getattr(doc, "source_type", "") or ""
+        rows.append({"label": str(r.get("label", "")), "value": r.get("value")})
+    if len(rows) < 1 or not src_url:
+        return None
+    src = {"provider": src_name or "web", "name": src_name or "web", "url": src_url, "as_of": _now_as_of()}
+    viz = {"line": "line_chart", "bar": "bar_chart", "stat": "kpi", "donut": "pie_chart"}.get(series.get("chart"), "bar_chart")
+    return _mk_dataset(series["name"], viz, series.get("unit", ""), rows, src)
+
+
+def _query_candidates(series: dict, theme: str) -> list[str]:
+    """검색 쿼리 후보 — 구체적 → 점진적으로 넓게 (긴 쿼리는 뉴스검색 0건 → 짧게 재시도)."""
+    q = (series.get("query") or series["name"]).strip()
+    toks = q.split()
+    cands = [q]
+    if len(toks) > 3:
+        cands.append(" ".join(toks[:3]))
+    if len(toks) > 2:
+        cands.append(" ".join(toks[:2]))
+    if theme and theme not in cands:
+        cands.append(theme)
+    # 중복 제거(순서 유지)
+    seen, out = set(), []
+    for c in cands:
+        if c and c not in seen:
+            seen.add(c); out.append(c)
+    return out
+
+
+def _collect_one_series(series: dict, sector: str, theme: str = ""):
+    """한 series 를 설계된 출처 우선순위로 조준 수집 (라이브러리 자동설치 + 쿼리 점진 확장). 첫 성공 사용."""
+    queries = _query_candidates(series, theme)
+    for source in series.get("sources", []):
+        _ensure_source_ready(source)
+        prov = _get_provider(source)
+        if not prov:
+            continue
+        docs = []
+        for q in queries:               # 넓은 쿼리로 재시도 — 0건이면 다음 후보
+            try:
+                docs = prov.collect(q, sector, max_items=10)
+            except Exception as e:
+                log.warning(f"[chart_data] {source} 수집 실패: {e}")
+                docs = []
+            if docs:
+                break
+        ds = _extract_series_from_docs(series, docs) if docs else None
+        if ds:
+            log.info(f"[chart_data] '{series['name']}' ← {source} ({len(ds['data'])}점)")
+            return ds
+    return None
+
+
 # ── 공개 API ──────────────────────────────────────────────────────────────
 def collect_chart_data(theme: str, sector: str = "", description: str = "",
                        exclude_titles=None, max_datasets: int = 6) -> dict:
@@ -289,38 +432,96 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     if not theme:
         return {"theme": theme, "datasets": []}
 
-    combined = f"{theme} {sector} {description}"
-    is_stock = any(k in combined for k in _STOCK_THEME_KWS)
-    is_macro = any(k in combined.lower() for k in _MACRO_KWS)
+    datasets: list[dict] = []
 
-    # ★ 지표 일치성 (사용자 박제 2026-06-30): 직원수·매출·인구처럼 구조화 provider(KRX:PER/ROE/주가)가
-    #   *보유하지 않은* 특정 지표를 요청하면, generic 종목지표를 엉뚱하게 라벨링해 반환하면 안 된다
-    #   (요청≠데이터 = 거짓 정보). → 그런 요청은 종목지표 억제, 웹 실데이터(출처 URL)로만 응답.
+    # ── 1) 설계 우선 (data_planner): 주제별 series·출처·쿼리 설계 → 조준 수집(병렬) ──────
+    #    ★ 사용자 박제 2026-06-30: 무작정 수집이 아니라 "설계 → 조준 수집". 라이브러리 자동설치.
+    try:
+        from JARVIS09_COLLECTOR.data_planner import plan_data_sources
+        plan = plan_data_sources(theme, sector, description)
+    except Exception as e:
+        log.warning(f"[chart_data] 설계 실패: {e}")
+        plan = []
+    if plan:
+        log.info(f"[chart_data] '{theme}' 설계 {len(plan)}개 series → 조준 수집")
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        with _TPE(max_workers=4) as _ex:
+            for ds in _ex.map(lambda s: _collect_one_series(s, sector, theme), plan):
+                if ds:
+                    datasets.append(ds)
+
+    # ── 2) 종목(기업) 테마 보강 — 설계 수집이 0일 때만, *명백한 종목 테마* 에 한해 ──────
+    #    (글로벌 시장 dump(_market_datasets)·ecos dump 는 제거: 비관련 주제에 새어들어 불일치=거짓.
+    #     거시·시장 데이터는 planner 가 finance/ecos/kosis 출처로 *정확히* 조준할 때만 들어옴.)
+    combined = f"{theme} {sector} {description}"
     _SPECIFIC_NON_VALUATION = [
         "직원", "고용", "인원", "임직원", "매출", "인구", "발행", "가맹점", "점포", "지점",
         "생산량", "판매량", "수출", "수입액", "점유율", "시장규모", "가입자", "이용자", "방문자",
-        "출하량", "등록", "건수", "보급",
+        "출하량", "등록", "건수", "보급", "만족도",
     ]
-    _wants_specific = any(k in combined for k in _SPECIFIC_NON_VALUATION)
-    if _wants_specific:
-        # 종목 valuation·글로벌 시장 지표 둘 다 요청과 무관 → 억제 (주제 관련 웹 실데이터로만).
-        # (예: '지역화폐 발행 규모' 요청에 글로벌 증시 등락률이 새어들면 불일치=거짓.)
-        is_stock = False
-        is_macro = False
-
-    datasets: list[dict] = []
-    # 구조화 API 우선 (provenance 명확·고신뢰)
-    if is_stock:
+    is_stock = (any(k in combined for k in _STOCK_THEME_KWS)
+                and not any(k in combined for k in _SPECIFIC_NON_VALUATION))
+    if not datasets and is_stock:
         datasets.extend(_stock_datasets(theme))
-    if is_macro:
-        datasets.extend(_market_datasets())
-        datasets.extend(_ecos_datasets(theme, description))
-    # 웹 출처 보강 (URL 박제) — 항상 시도 (구조화 데이터 부족분 보완)
-    try:
-        datasets.extend(_web_datasets(theme, sector, description))
-    except Exception as e:
-        log.warning(f"[chart_data] 웹 dataset 예외: {e}")
-        _g_report("collector", e, module=__name__)
+
+    # ── 3) 적응형 포착 — 풍부하게 + 관련성 (사용자 박제 2026-06-30): 설계 수집이 빈약하면
+    #    KOSIS(정부통계)·논문(거짓 없음)·정부보도자료를 *설계 쿼리(공식 용어)* 로 직접 수집해
+    #    실제 표/논문 수치를 자연 제목으로 포착. ★ 관련성 필터로 무관 데이터(키프로스·물가 등) 차단.
+    #    모든 데이터 출처(URL) 박제. 데이터는 많을수록 좋다.
+    if len(datasets) < 5:
+        # 검색어: 주제 + 설명(공식 용어 포함, 예 '지역사랑상품권') + 설계 쿼리
+        _raw_terms = [theme, description] + [s.get("query", "") for s in (plan or [])]
+        # 검색어 확장: 긴 쿼리는 정부통계·논문 검색에서 0건 → 앞2토큰·핵심명사로 넓힘
+        _terms = []
+        for t in _raw_terms:
+            if not t:
+                continue
+            tk = t.split()
+            _terms.append(t)
+            if len(tk) > 2:
+                _terms.append(" ".join(tk[:2]))
+            if len(tk) > 1:
+                _terms.append(tk[0])   # 핵심 명사 (예: 지역사랑상품권)
+        _terms = list(dict.fromkeys(_terms))[:10]
+        # 주제 토큰: 주제+설계쿼리에서 *구체 명사*만 (불용어·일반어 제외 → 관련성 정확도↑)
+        _STOP = {"연도별", "추이", "현황", "비교", "규모", "전망", "분석", "통계", "지표", "변화",
+                 "증가", "감소", "월별", "분기", "연간", "전국", "시도", "관련", "주요", "최근", "수준"}
+        _theme_tokens = {t for term in _terms for t in re.split(r"\s+", term)
+                         if len(t) >= 2 and t not in _STOP}
+
+        def _natural_title(d):   # provider 접두(주제명 스탬프) 제거한 *실제* 표/논문명
+            t = getattr(d, "title", "") or ""
+            for pre in ("KOSIS 통계청 — ", "한국은행 ECOS", "arXiv", "통계청 KOSIS"):
+                if t.startswith(pre):
+                    t = t[len(pre):]
+            return t
+
+        # ECOS 제외: 항상 '거시 일반(금리·환율·물가)'을 주제명만 찍어 반환 → 무관 혼입원.
+        for source in ("kosis", "academic", "kor_econ"):   # 논문(academic) API 다음 우선
+            if len(datasets) >= 5:
+                break
+            _ensure_source_ready(source)
+            prov = _get_provider(source)
+            if not prov:
+                continue
+            for term in _terms:
+                if len(datasets) >= 5:
+                    break
+                try:
+                    docs = prov.collect(term, sector, max_items=3)
+                except Exception:
+                    docs = []
+                for d in docs[:2]:
+                    nat = _natural_title(d)
+                    # 관련성: *자연 제목*(주제명 스탬프 제거)에 구체 주제 토큰이 있어야 채택
+                    if not any(tok in nat for tok in _theme_tokens):
+                        continue
+                    pseudo = {"name": (nat[:40] or term), "unit": "", "chart": "bar"}
+                    ds = _extract_series_from_docs(pseudo, [d])
+                    if ds:
+                        datasets.append(ds)
+                    if len(datasets) >= 5:
+                        break
 
     # dedup (fingerprint) + exclude_titles 필터
     _excl = {str(t).strip() for t in (exclude_titles or [])}
@@ -335,8 +536,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         if len(final) >= max_datasets:
             break
 
-    log.info(f"[chart_data] '{theme}' → {len(final)}개 dataset "
-             f"(stock={is_stock} macro={is_macro})")
+    log.info(f"[chart_data] '{theme}' → {len(final)}개 dataset (설계 {len(plan) if plan else 0} series)")
     return {"theme": theme, "datasets": final}
 
 
