@@ -119,8 +119,12 @@ def _stock_datasets(theme: str) -> list[dict]:
                 v = float(v)
             except (TypeError, ValueError):
                 continue
+            # ★ 수치 정확성: ROE·영업이익률은 비율(0.19)로 옴 → % 표기 위해 ×100 (0.1916→19.16%).
+            #   abs<5 일 때만 변환(이미 %인 값 이중변환 방지). 사용자 박제 2026-06-30.
+            if field in ("roe", "op_margin") and 0 < abs(v) < 5:
+                v = v * 100
             if v and v > 0:
-                rows.append({"label": s.get("name", "?"), "value": v})
+                rows.append({"label": s.get("name", "?"), "value": round(v, 2)})
         ds = _mk_dataset(title, "bar_chart", unit, rows, dict(src))
         if ds:
             out.append(ds)
