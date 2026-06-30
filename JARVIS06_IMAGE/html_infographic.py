@@ -92,6 +92,19 @@ def _fmt_data(data: dict | None) -> str:
         lines.append("■ KPI:")
         for k in kpis[:8]:
             lines.append(f"  {k.get('label','?')}: {k.get('value','?')} {k.get('unit','')}")
+    # ★ 2026-06-29: 임의 키도 렌더 (이전엔 stocks/summary/trends/kpis 만 인식 →
+    #   일반 dict 는 "(데이터 없음)" 으로 흘려보내 LLM 이 빈 차트를 그리던 버그)
+    _known = {"stocks", "summary", "trends", "kpis"}
+    for k, v in data.items():
+        if k in _known:
+            continue
+        if isinstance(v, dict):
+            inner = ", ".join(f"{ik}={iv}" for ik, iv in list(v.items())[:14])
+            lines.append(f"■ {k}: {inner}")
+        elif isinstance(v, (list, tuple)):
+            lines.append(f"■ {k}: " + ", ".join(str(x) for x in list(v)[:14]))
+        else:
+            lines.append(f"■ {k}: {v}")
     return "\n".join(lines) if lines else "(데이터 없음)"
 
 
@@ -100,72 +113,36 @@ def _fmt_data(data: dict | None) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 _PROMPT_TEMPLATE = """\
-당신은 세계 최고 데이터 시각화 디자이너이자 Python 전문가입니다.
-아래 데이터를 바탕으로 **HTML 인포그래픽 문자열을 반환하는 Python 코드**를 작성하세요.
+당신은 통계청·기업 연차보고서급 편집 인포그래픽 디자이너입니다.
+아래 실데이터로 **완전한 HTML 문서 하나**를 ```html 코드블록으로 직접 출력하세요.
 
-▣ 인포그래픽 정보
-테마: {theme}
-목적: {purpose}
-기본색 HSL({H},{S}%,{L}%) — 강조색 HSL({H2},{S2}%,{L2}%)
+테마: {theme} / 목적: {purpose}
+기본색 HSL({H},{S}%,{L}%) · 강조색 HSL({H2},{S2}%,{L2}%)
 
-▣ 사용 데이터 (이 수치를 차트에 그대로 사용)
+[실데이터 — 이 수치만 사용. 지어내기·빈차트·"데이터없음" 절대 금지. 없는 항목은 생략]
 {data_str}
 
-▣ 요구 레이아웃 — 아래 요소를 데이터에 맞게 조합
-  ① 원형 진행 게이지: <svg><circle stroke-dasharray="X 100" …> 방식
-  ② CSS div 막대 차트: 연도별/항목별 높이 비례 (flex column-reverse)
-  ③ KPI 숫자 카드: 큰 숫자 + 아이콘 + 설명 (2×2 또는 2×3 그리드)
-  ④ 픽토그램 카드: 이모지(👤🏭📦⚡🌳🔬🏗️💊🚢) 반복으로 수량 표현
-  ⑤ 타임라인 카드: 수평 선 + 연도별 마일스톤 원
-  ⑥ 도넛 차트: SVG <circle> stroke-dasharray 비율 표현
+[형식] ★ 방향은 내용에 맞게 *직접 선택* — **기본은 가로형(landscape)**, 항목·패널이 많으면
+ 세로형(portrait)도 가능. 고정하지 말 것. body 에 디자인 의도에 맞는 *고정 폭* 지정
+ (가로형 1120~1280px·높이는 폭보다 작게 / 세로형 760~880px·높이는 폭보다 크게).
+ - 상단: 그라디언트 헤더(제목+부제+날짜 배지).
+ - KPI 카드 행: 아이콘+큰 숫자+증감 pill(▲빨강/▼파랑)+미니 스파크라인.
+ - 메인: 카드 여러 개를 가로형이면 *가로로*, 세로형이면 *세로로* 배치. 빈 공간 없이 균형.
 
-▣ 디자인 규칙 (반드시 준수)
-- 전체 너비: 900px, 배경: #f4f6f9
-- 헤더: 기본색 배경 + 흰색 제목
-- 6개 패널 → CSS Grid 2열 3행 (gap:16px, padding:20px)
-- 패널: 흰 배경, border-radius:12px, box-shadow:0 2px 8px rgba(0,0,0,.10)
-- 패널 상단: 컬러 dot(8px) + 소제목(14px bold)
-- 최소 글자: 13px(라벨), 16px(본문), 24px(KPI 수치)
-- 원형 게이지: SVG circle stroke-dasharray (pathLength="100" 기준)
-- 막대 차트: div height:calc(value * 1px) flex column-reverse
-- 픽토그램: 이모지 개수로 수량 표현 (예: "👤👤👤" × N)
-- 실데이터 없는 항목: "(추정)" 표기
-- 전체 최소 높이: 700px
-- 웹폰트: @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap');
-- font-family: 'Noto Sans KR', sans-serif
+[차트 어휘 — 데이터 성격에 맞게 *매번 다르게* 골라 조합]
+ 그라디언트 세로/가로 막대 · 그룹막대 · SVG 꺾은선(그리드라인+면적 그라디언트) ·
+ 도넛/파이+레전드 · 원형 진행 게이지 · 픽토그램(이모지 반복) · STEP 화살표 프로세스 ·
+ A vs B 비교 막대 · 랭킹 가로막대 · 마일스톤 타임라인.
+ → **모든 막대·점·게이지에 데이터 값 라벨 필수.** 라벨이 패널 밖으로 나가지 않게(양끝은 안쪽 정렬).
 
-▣ Python 코드 구조 (반드시 이 형식)
-```python
-def build_infographic_html() -> str:
-    # 여기에 HTML f-string 또는 문자열 조립 코드
-    # inline <style> 포함, JavaScript 없음, 외부 이미지 src 없음
-    html = \"\"\"<!DOCTYPE html>
-<html lang="ko">
-<head><meta charset="UTF-8">
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap');
-/* ... 전체 CSS ... */
-</style>
-</head>
-<body>
-<!-- ... 전체 HTML ... -->
-</body>
-</html>\"\"\"
-    return html
+[품질] SVG defs linearGradient 채움, 둥근 카드(radius 14~18, box-shadow), 통일 팔레트,
+ 마지막/최신 값만 강조색, 캡션 1줄, 풍부한 이모지 아이콘. Noto Sans KR
+ (@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;800;900&display=swap')).
+ 최소 글자 12px. 외부 이미지 src 없음(SVG·이모지만). JavaScript 없음.
 
-_RESULT_HTML = build_infographic_html()
-```
+[다양성] ★ 매번 *다른 레이아웃·색조합·차트종류·배치*. 고정 템플릿 재사용 금지.
 
-★ 규칙:
-- ```python 코드 블록 안에 완전한 Python 함수만 출력
-- 마지막 줄: _RESULT_HTML = build_infographic_html()
-- math, colorsys, random 은 이미 주입됨 (import 불필요)
-- os/sys/subprocess/open() 사용 금지
-- 파일 쓰기 금지 — 문자열 반환만
-- 이미지 파일 참조 없음 (SVG·이모지만)
-- 함수 안에서 import 금지 — 위 3개 모듈만 사용 가능
-
-Python 코드만 출력 (```python 블록):
+설명·주석 없이 ```html 블록 *하나만* 출력하세요:
 """
 
 
@@ -243,74 +220,72 @@ def _exec_and_extract_html(code: str) -> str:
 #  5. HTML → JPG via Selenium
 # ══════════════════════════════════════════════════════════════════
 
-def _html_to_jpg(html_str: str, out_path: Path, width: int = 920) -> bool:
-    """Selenium headless Chrome으로 HTML → JPG 캡처."""
-    try:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
+def _html_to_jpg(html_str: str, out_path: Path, width: int = 980) -> bool:
+    """Playwright(headless Chromium)로 HTML → JPG 풀페이지 캡처.
 
+    ★ 2026-06-29: Selenium(chromedriver 미설치로 실패) → Playwright 로 교체.
+       html_renderer._find_chromium() 의 작동하는 Chromium 경로 재사용 + full_page.
+    """
+    import subprocess, sys as _sys
+    try:
+        from JARVIS06_IMAGE.html_renderer import _find_chromium
+        chromium = _find_chromium()
+        png_tmp = out_path.with_suffix(".png")
+
+        # HTML 을 임시 파일로 — subprocess Playwright 가 file:// 로 로드
         with tempfile.NamedTemporaryFile(
             suffix=".html", mode="w", encoding="utf-8", delete=False
         ) as f:
             f.write(html_str)
-            tmp_html = Path(f.name)
+            html_file = f.name
 
-        options = Options()
-        options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
-        options.add_argument(f"--window-size={width},1400")
-        options.add_argument("--force-device-scale-factor=2")
-        options.add_argument("--hide-scrollbars")
-        options.add_argument("--lang=ko-KR")
-
-        driver = webdriver.Chrome(options=options)
+        # ★ 2026-06-29: LLM 호출(claude SDK=asyncio/anyio)이 메인 프로세스 이벤트 루프를
+        #   닫아 in-process Playwright 가 "Event loop is closed" 로 실패 → 렌더를 *완전히
+        #   분리된 subprocess* 에서 실행해 asyncio 오염을 원천 차단.
+        render_code = (
+            "from playwright.sync_api import sync_playwright\n"
+            "with sync_playwright() as p:\n"
+            f"    b = p.chromium.launch(executable_path={chromium!r}, "
+            "args=['--no-sandbox','--disable-dev-shm-usage','--lang=ko-KR'])\n"
+            "    pg = b.new_page(viewport={'width':1560,'height':1100}, device_scale_factor=2)\n"
+            f"    pg.goto({('file://'+html_file)!r}, wait_until='networkidle')\n"
+            "    try:\n"
+            "        pg.evaluate('document.fonts && document.fonts.ready')\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "    pg.wait_for_timeout(900)\n"
+            # ★ 방향 고정 안 함: 디자인의 실제 박스(body)를 캡처 → 가로/세로 무엇이든 딱 맞게
+            "    el = pg.query_selector('body')\n"
+            f"    el.screenshot(path={str(png_tmp)!r}) if el else pg.screenshot(path={str(png_tmp)!r}, full_page=True)\n"
+            "    b.close()\n"
+        )
         try:
-            driver.get(f"file://{tmp_html}")
-            time.sleep(2.5)  # 웹폰트 로딩 대기
-
-            # 콘텐츠 실제 높이 측정 (빈 공간 크롭용)
-            content_h = driver.execute_script("""
-                var els = document.body.querySelectorAll('*');
-                var maxBottom = 0;
-                for (var i = 0; i < els.length; i++) {
-                    var r = els[i].getBoundingClientRect();
-                    if (r.bottom > maxBottom) maxBottom = r.bottom;
-                }
-                return Math.ceil(maxBottom) + 80;
-            """) or 900
-            h = min(int(content_h), 3000)
-            driver.set_window_size(width, h)
-            time.sleep(0.3)
-
-            png_tmp = out_path.with_suffix(".png")
-            driver.save_screenshot(str(png_tmp))
-            if not png_tmp.exists() or png_tmp.stat().st_size < 5000:
-                return False
-
-            try:
-                from PIL import Image
-                img = Image.open(png_tmp)
-                # @2x 렌더링 → 절반 크기 다운스케일
-                if img.width > width * 1.5:
-                    img = img.resize((img.width // 2, img.height // 2), Image.LANCZOS)
-                img.convert("RGB").save(out_path, "JPEG", quality=93, optimize=True)
-                png_tmp.unlink(missing_ok=True)
-            except ImportError:
-                png_tmp.rename(out_path)
-
-            return out_path.exists() and out_path.stat().st_size > 5000
-
+            proc = subprocess.run(
+                [_sys.executable, "-c", render_code],
+                capture_output=True, text=True, timeout=120,
+            )
+            if proc.returncode != 0:
+                log.warning(f"[html_infographic] subprocess 렌더 실패: {(proc.stderr or '')[:300]}")
         finally:
-            driver.quit()
             try:
-                tmp_html.unlink()
+                Path(html_file).unlink(missing_ok=True)
             except Exception:
                 pass
 
+        if not png_tmp.exists() or png_tmp.stat().st_size < 5000:
+            return False
+        try:
+            from PIL import Image
+            img = Image.open(png_tmp)
+            img = img.resize((img.width // 2, img.height // 2), Image.LANCZOS)  # 항상 @2x → 절반
+            img.convert("RGB").save(out_path, "JPEG", quality=93, optimize=True)
+            png_tmp.unlink(missing_ok=True)
+        except ImportError:
+            png_tmp.rename(out_path)
+        return out_path.exists() and out_path.stat().st_size > 5000
+
     except Exception as e:
-        log.warning(f"[html_infographic] Selenium 오류: {e}")
+        log.warning(f"[html_infographic] 렌더 오류: {e}")
         _g_report("image", e, module=__name__, func_name="_html_to_jpg")
         return False
 
@@ -364,36 +339,28 @@ def generate_html_infographic(
                 prompt + f"\n\n[재시도{attempt+1}: 원형 게이지·픽토그램 반드시 포함, 더 풍부하게]"
             )
 
-            raw = invoke_text("writer", _prompt_a, timeout=300)
+            # ★ 2026-06-29: LLM 이 *직접 HTML* 을 출력하게 변경. (이전엔 거대 HTML 을
+            #   Python 삼중따옴표 안에 담아 반환 → SDK 메시지 파서가 응답 0개로 실패.)
+            raw = invoke_text("writer", _prompt_a, timeout=240, max_tokens=11000)
             if not raw:
                 continue
 
-            # Python 코드 블록 추출
-            m = re.search(r'```python\s*\n([\s\S]*?)```', raw)
+            # ```html 코드블록 추출 (없으면 raw 자체에서 <html…</html> 추출)
+            m = re.search(r'```html\s*\n?([\s\S]*?)```', raw, re.IGNORECASE)
             if not m:
                 m = re.search(r'```\s*\n([\s\S]*?)```', raw)
-            code = m.group(1).strip() if m else ""
-            if not code:
-                # _RESULT_HTML 직접 정의된 경우
-                if "_RESULT_HTML" in raw and "def build_infographic_html" in raw:
-                    code = raw
-                else:
-                    log.debug(f"[html_infographic] 코드 블록 없음 (시도 {attempt+1})")
-                    continue
-
-            if not _is_safe(code):
-                log.debug(f"[html_infographic] 안전검사 실패 (시도 {attempt+1})")
-                continue
-
-            html = _exec_and_extract_html(code)
+            html = m.group(1).strip() if m else ""
             if not html:
+                hm = re.search(r'(<!DOCTYPE html[\s\S]*?</html>)', raw, re.IGNORECASE)
+                html = hm.group(1) if hm else ""
+            if not (isinstance(html, str) and len(html) > 500 and "<html" in html.lower()):
                 log.debug(f"[html_infographic] HTML 추출 실패 (시도 {attempt+1})")
                 continue
 
             if _out.exists():
                 _out.unlink(missing_ok=True)
 
-            if _html_to_jpg(html, _out):
+            if _html_to_jpg(html, _out, width=1240):
                 log.info(f"[html_infographic] ✅ {theme}/{_slot} (시도 {attempt+1})")
                 with open(_out, "rb") as f:
                     b64 = base64.b64encode(f.read()).decode()

@@ -212,8 +212,8 @@ def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issu
                 f"[harness:{action_name}] attempt={attempt} step={issue.step}: {issue.detail}"
             )
             g_report(
+                exc,                       # ★ catch(exc_or_type, ...) 첫 위치 인자 (exc= 키워드 없음)
                 source="harness",
-                exc=exc,
                 module=f"JARVIS00_INFRA.harness.{action_name}",
                 func_name=issue.step,
                 context={

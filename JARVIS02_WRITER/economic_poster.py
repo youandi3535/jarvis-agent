@@ -79,26 +79,14 @@ try:
         if keyword and len(keyword) >= 2:
             # HTML 제거 후 텍스트에서 검사 (태그 경계로 키워드가 분리되는 오탐 방지)
             body_plain_kw = _re.sub(r"<[^>]+>", " ", body)
-            # "이름 (티커)" 형식 분해: "스텔라 루멘 (XLM)" → ["스텔라 루멘", "XLM"]
-            _paren = _re.match(r'^(.*?)\s*\(([^)]+)\)\s*$', keyword)
-            if _paren:
-                _terms = [_paren.group(1).strip(), _paren.group(2).strip()]
-            else:
-                _terms = [keyword]
-            # 공백 없는 형태도 추가 (스텔라루멘 등)
-            _search_terms = []
-            for t in _terms:
-                if len(t) >= 2:
-                    _search_terms.append(t)
-                    _collapsed = t.replace(" ", "")
-                    if _collapsed != t and len(_collapsed) >= 2:
-                        _search_terms.append(_collapsed)
-            total_kw_count = sum(body_plain_kw.count(t) for t in _search_terms)
-            # 3단어 이상 복합 이벤트 키워드(예: 'SK하이닉스 청주공장 화재')는 반복 삽입이 어려워 1회로 완화
-            # ERRORS [240] min=2 → [241후속] min=1 (1회 등장으로도 여전히 실패, 대체 표현 사용이 자연스러운 3단어+ 구문)
-            _min_kw = 1 if len(_search_terms[0].split()) >= 3 else 3
-            if total_kw_count < _min_kw:
-                issues.append(f"⑤ 키워드 '{keyword}' body 등장 {total_kw_count}회 (검색어: {_search_terms} — 최소 {_min_kw}회 필요)")
+            # ★ SSOT: 검색어·최소횟수 규칙은 law_enforcer 단일 진입점 (작성 프롬프트와 동일 임계)
+            from JARVIS02_WRITER.law_enforcer import keyword_search_terms, keyword_min_count
+            _search_terms = keyword_search_terms(keyword)
+            if _search_terms:
+                total_kw_count = sum(body_plain_kw.count(t) for t in _search_terms)
+                _min_kw = keyword_min_count(keyword)
+                if total_kw_count < _min_kw:
+                    issues.append(f"⑤ 키워드 '{keyword}' body 등장 {total_kw_count}회 (검색어: {_search_terms} — 최소 {_min_kw}회 필요)")
 
         # ★ ERRORS [139] — 분량 동적 검증 (post_type 별 상한·하한)
         # <p> 태그 내 문장종결부호만 카운트 — 헤더·차트경로·alt텍스트 과산정 방지
