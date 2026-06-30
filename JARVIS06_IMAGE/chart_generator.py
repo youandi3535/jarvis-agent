@@ -1808,7 +1808,7 @@ def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, ru
         if pool is None:
             from JARVIS09_COLLECTOR import collect_chart_data
             res = collect_chart_data(keyword, sector=sector, description=description,
-                                     max_datasets=8)   # 풍부하게 요청 → 고퀄 이미지
+                                     max_datasets=12)   # 풍부하게 요청 → 고퀄 이미지
             pool = (res or {}).get("datasets") or []
             _CHART_DATA_POOL[run_id] = pool
             print(f"  🕸️ [chart_generator→JARVIS09] '{keyword}' 실데이터 요청 "
