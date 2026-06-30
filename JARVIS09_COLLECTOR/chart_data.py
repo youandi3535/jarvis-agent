@@ -81,8 +81,9 @@ def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
     if len(rows) < _min:
         return None
     rows = rows[:10]   # ★ 가독성 — 한 차트 최대 10개 (30셀 막대벽 방지)
+    _title = str(title).split("(")[0].split("（")[0].strip() or str(title).strip()   # 제목 괄호 설명 제거
     return {
-        "title": title.strip()[:30],
+        "title": _title[:30],
         "viz_hint": viz_hint,
         "unit": unit.strip(),
         "data": rows,
