@@ -72,7 +72,7 @@ def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
             v = float(str(d.get("value")).replace(",", ""))
         except (TypeError, ValueError):
             continue
-        label = str(d.get("label", "")).strip()[:20]
+        label = str(d.get("label", "")).strip()[:60]   # 라벨 잘림 방지 (긴 설문 응답 보존)
         if label and v == v:  # NaN 제외
             rows.append({"label": label, "value": v})
     # 차트 의미 최소 기준: kpi 1개, 그 외 2개
