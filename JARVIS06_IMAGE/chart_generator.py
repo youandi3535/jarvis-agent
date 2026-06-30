@@ -1830,14 +1830,15 @@ def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, ru
             print(f"  ⚠️ [chart_generator] JARVIS09 도 실데이터 0 — 차트 스킵(거짓 숫자 < 차트 없음)")
             return ""
         n = len(pool)
-        st = (chart_idx * 2) % n
-        subset = pool if n <= 4 else (pool + pool)[st:st + 4]   # 슬롯마다 다른 부분집합(다양성)
+        # ★ 슬롯마다 *단일 데이터셋* → 신뢰성 높은 _render_single (LLM 디렉터 동시성 빈파일 방지).
+        #   풀을 회전해 슬롯마다 다른 데이터 + 다른 무드·차트(slot 기반) = 다양성.
+        one = pool[(chart_idx - 1) % n]
         from JARVIS06_IMAGE.infographic_engine import generate_infographic
-        p = generate_infographic(keyword, (description[:60] or keyword), subset,
+        p = generate_infographic(str(one.get("title", keyword))[:36], "실데이터 기반", [one],
                                  run_id=run_id, slot_key=str(chart_idx), out_dir=out_path,
-                                 context=f"{keyword} — {description}")
+                                 context=f"{keyword} — {one.get('title','')}")
         if p and Path(p).exists():
-            print(f"    chart_{chart_idx:02d} → 85점 인포그래픽 [JARVIS09 실데이터 {len(subset)}셋]")
+            print(f"    chart_{chart_idx:02d} → 85점 인포그래픽 [{one.get('title','')[:20]}]")
             return str(Path(p).resolve())
     except Exception as e:
         print(f"  ⚠️ [chart_generator] collect_chart_data 폴백 실패: {e}")

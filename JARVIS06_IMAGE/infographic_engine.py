@@ -626,7 +626,8 @@ def render_spec(spec, datasets, out_path, seed=0, src="데이터 출처: 한국�
                 f"{body}{_foot(src)}</div></body></html>")
         from JARVIS06_IMAGE.html_infographic import _html_to_jpg
         ok = _html_to_jpg(html, Path(out_path), width=W)
-        return str(out_path) if ok else ""
+        _p = Path(out_path)
+        return str(out_path) if (ok and _p.exists() and _p.stat().st_size > 2000) else ""
     except Exception as e:
         _g_report("image", e, module=__name__, func_name="render_spec")
         return ""
@@ -681,7 +682,9 @@ def _render_single(ds, title, subtitle, out_path, seed, src, chip="", slot=""):
                 f"</style></head><body><div style='width:{W}px;background:#fff'>"
                 f"{_header(pal, title, subtitle, chip, 'chart')}{body}{_foot(src)}</div></body></html>")
         from JARVIS06_IMAGE.html_infographic import _html_to_jpg
-        return str(out_path) if _html_to_jpg(html, Path(out_path), width=W) else ""
+        _ok = _html_to_jpg(html, Path(out_path), width=W)
+        _p = Path(out_path)
+        return str(out_path) if (_ok and _p.exists() and _p.stat().st_size > 2000) else ""
     except Exception as e:
         _g_report("image", e, module=__name__, func_name="_render_single")
         return ""
