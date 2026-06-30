@@ -1801,6 +1801,7 @@ def _infer_unit(description: str, keyword: str = "") -> str:
 _CHART_DATA_POOL: dict = {}   # run_id -> [datasets] (run 당 1회 수집, 슬롯마다 부분집합 회전)
 _SESSION_POOL: list = []       # ★ writer 가 대본 전 미리 수집한 풀 (데이터-우선: Pass-2 재수집 0)
 _SESSION_POOL_SET: bool = False  # ★ writer 가 명시적으로 풀을 등록했는지 (빈 풀도 존중 — garbage 폴백 차단)
+_USED_POOL_IDX: set = set()     # ★ 현재 글에서 사용한 데이터셋 인덱스 (차트 반복 금지; set_session_pool 마다 리셋)
 
 
 def set_session_pool(pool):
@@ -1810,12 +1811,14 @@ def set_session_pool(pool):
     global _SESSION_POOL, _SESSION_POOL_SET
     _SESSION_POOL = list(pool or [])
     _SESSION_POOL_SET = True
+    _USED_POOL_IDX.clear()   # 새 글 → 사용 인덱스 초기화 (반복 추적 리셋)
 
 
 def clear_session_pool():
     global _SESSION_POOL, _SESSION_POOL_SET
     _SESSION_POOL = []
     _SESSION_POOL_SET = False
+    _USED_POOL_IDX.clear()
 
 
 def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, run_id):
@@ -1837,9 +1840,16 @@ def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, ru
             print(f"  ⚠️ [chart_generator] '{keyword}' 게이트 실데이터 0 — 차트 스킵(거짓·무관 < 차트 없음)")
             return ""
         n = len(pool)
-        # ★ 슬롯마다 *단일 데이터셋* → 신뢰성 높은 _render_single (LLM 디렉터 동시성 빈파일 방지).
-        #   풀을 회전해 슬롯마다 다른 데이터 + 다른 무드·차트(slot 기반) = 다양성.
-        one = pool[(chart_idx - 1) % n]
+        # ★ 반복 금지 (사용자 박제 2026-07-01): 같은 데이터셋을 여러 슬롯에 반복(중복 차트)하지 않는다.
+        #   글 단위 used-set(set_session_pool 마다 리셋)으로 *미사용* 데이터셋만 1회씩 →
+        #   소진되면 "" 반환(AI 사진 대체). run_id 불안정(_rid=time_ns)에도 견고.
+        _avail = [i for i in range(n) if i not in _USED_POOL_IDX]
+        if not _avail:
+            print(f"  ℹ️ [chart_generator] 실데이터 {n}개 모두 소진 → 슬롯 {chart_idx}는 AI 사진 대체(반복 금지)")
+            return ""
+        _pick = _avail[0]
+        _USED_POOL_IDX.add(_pick)
+        one = pool[_pick]
         from JARVIS06_IMAGE.infographic_engine import generate_infographic
         p = generate_infographic(str(one.get("title", keyword))[:36], "실데이터 기반", [one],
                                  run_id=run_id, slot_key=str(chart_idx), out_dir=out_path,
