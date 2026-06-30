@@ -406,6 +406,69 @@ def _extract_series_from_docs(series: dict, docs: list):
     return _mk_dataset(series["name"], viz, series.get("unit", ""), rows, src)
 
 
+# 일반 경제어 — 관련성 토큰에서 제외(과대매칭 방지). *주제 고유명사*만 토큰화.
+_GENERIC_TOKENS = {
+    "소비", "가격", "물가", "경제", "시장", "지수", "효과", "활성화", "동향", "실태",
+    "조사", "행태", "트렌드", "동조성", "현황", "추이", "비교", "규모", "전망", "분석",
+    "통계", "지표", "변화", "증가", "감소", "월별", "분기", "연간", "전국", "시도",
+    "관련", "주요", "최근", "수준", "전체", "평균", "합계", "구성", "비율", "지원",
+    "정책", "사업", "운영", "이용", "현재", "기준", "항목", "결과", "수치", "데이터",
+}
+
+
+def _specific_tokens(text: str) -> set:
+    """주제 고유명사 토큰(len≥2, 일반어 제외) — 관련성 1차(결정론) 판정용."""
+    return {t for t in re.split(r"[\s·,()/\-—]+", str(text or ""))
+            if len(t) >= 2 and t not in _GENERIC_TOKENS}
+
+
+def _doc_title_relevant(title: str, ref_tokens: set) -> bool:
+    """표/문서 제목이 주제 고유명사와 겹치면 관련. 겹침 0 → 무관(농촌관광·식품소비 차단)."""
+    if not ref_tokens:
+        return True
+    title = str(title or "")
+    toks = _specific_tokens(title)
+    return any((rt in title) or (rt in toks) for rt in ref_tokens)
+
+
+def _relevance_filter(theme: str, description: str, datasets: list) -> list:
+    """★ 의미 기반 관련성 게이트 (사용자 박제 2026-07-01): 주제와 *직접* 관련된 dataset만 남김.
+    농촌관광·식품소비행태처럼 다른 주제를 다루며 주제를 스쳐 언급할 뿐인 표를 제거.
+    LLM 호출 *자체* 실패 시에만 fail-open (상류 결정론 게이트가 이미 1차 차단).
+    동의어(지역화폐↔지역사랑상품권)는 의미로 판단 — 토큰 매칭 한계 극복."""
+    if len(datasets) <= 1:
+        return datasets
+    listing = "\n".join(f"{i}. {d.get('title', '')}" for i, d in enumerate(datasets))
+    prompt = (
+        f'블로그 글 주제: "{theme}"' + (f" — {description}" if description else "") + "\n\n"
+        "아래 데이터 표 목록 중, 이 주제의 차트로 쓰기에 *직접 관련된* 표의 번호만 고르세요.\n"
+        "판단 기준:\n"
+        "- 주제와 같은 대상/현상을 다루면 관련 (동의어·공식명칭 포함, 예 '지역화폐'≈'지역사랑상품권').\n"
+        "- *다른 주제*(예: 농촌관광·식품소비행태·인구·날씨)를 다루며 주제를 스쳐 언급할 뿐이면 제외.\n"
+        "- 애매하면 제외(주제 일관성 우선).\n\n"
+        f"{listing}\n\n"
+        'JSON만 출력: {"keep": [관련 번호 목록]}'
+    )
+    try:
+        from shared.llm import invoke_text
+        raw = invoke_text("analyzer", prompt, max_tokens=200, temperature=0)
+        m = re.search(r"\{[\s\S]*\}", raw or "")
+        if m:
+            keep = json.loads(m.group(0)).get("keep")
+            if isinstance(keep, list):
+                idx = {int(i) for i in keep if isinstance(i, int) or str(i).strip().isdigit()}
+                filtered = [d for i, d in enumerate(datasets) if i in idx]
+                if filtered:
+                    if len(filtered) < len(datasets):
+                        log.info(f"[chart_data] 관련성 게이트: {len(datasets)}→{len(filtered)}개 "
+                                 f"(제외 {len(datasets) - len(filtered)})")
+                    return filtered
+                log.info("[chart_data] 관련성 게이트: 전부 무관 판정 → 원본 유지(빈 풀 방지)")
+    except Exception as e:
+        log.warning(f"[chart_data] 관련성 게이트 LLM 실패(유지): {e}")
+    return datasets
+
+
 def _query_candidates(series: dict, theme: str) -> list[str]:
     """검색 쿼리 후보 — 구체적 → 점진적으로 넓게 (긴 쿼리는 뉴스검색 0건 → 짧게 재시도)."""
     q = (series.get("query") or series["name"]).strip()
@@ -425,9 +488,17 @@ def _query_candidates(series: dict, theme: str) -> list[str]:
     return out
 
 
-def _collect_one_series(series: dict, sector: str, theme: str = ""):
-    """한 series 를 설계된 출처 우선순위로 조준 수집 (라이브러리 자동설치 + 쿼리 점진 확장). 첫 성공 사용."""
+# 텍스트 출처 — 제목 관련성 1차 필터 적용 대상 (finance 류는 제목이 종목/지수명이라 면제)
+_TEXT_SOURCES = {"kosis", "academic", "kor_econ", "naver_news", "news", "web"}
+
+
+def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: set = None):
+    """한 series 를 설계된 출처 우선순위로 조준 수집 (라이브러리 자동설치 + 쿼리 점진 확장). 첫 성공 사용.
+    ★ 텍스트 출처는 *제목 관련성* 으로 관련 문서를 우선 → KOSIS 가 엉뚱한 표(농촌관광 등)를
+      반환해도 series·주제와 겹치는 표를 골라 추출. 관련 0이면 그 출처 스킵(엉뚱한 표 채택 금지)."""
     queries = _query_candidates(series, theme)
+    _ser_tokens = set(ref_tokens or set()) | _specific_tokens(
+        f"{series.get('name', '')} {series.get('query', '')}")
     for source in series.get("sources", []):
         _ensure_source_ready(source)
         prov = _get_provider(source)
@@ -442,6 +513,13 @@ def _collect_one_series(series: dict, sector: str, theme: str = ""):
                 docs = []
             if docs:
                 break
+        # ★ 텍스트 출처: 제목이 주제·series 고유명사와 겹치는 문서만 (엉뚱한 표 차단)
+        if source in _TEXT_SOURCES and docs and _ser_tokens:
+            rel = [d for d in docs if _doc_title_relevant(getattr(d, "title", ""), _ser_tokens)]
+            if not rel:
+                log.info(f"[chart_data] '{series['name']}' ← {source}: 관련 표 0 (엉뚱한 표만) → 스킵")
+                continue
+            docs = rel
         ds = _extract_series_from_docs(series, docs) if docs else None
         if ds:
             log.info(f"[chart_data] '{series['name']}' ← {source} ({len(ds['data'])}점)")
@@ -479,11 +557,16 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     except Exception as e:
         log.warning(f"[chart_data] 설계 실패: {e}")
         plan = []
+    # ★ 관련성 기준 토큰 — 주제 + 설명 + 설계(series명·쿼리, 공식 동의어 포함) 고유명사 집합.
+    #   설계가 '지역사랑상품권' 같은 공식명을 쿼리로 내면 토큰에 포함 → 동의어 표도 관련 인정.
+    _ref_tokens = _specific_tokens(f"{theme} {description}")
+    for _s in (plan or []):
+        _ref_tokens |= _specific_tokens(f"{_s.get('name', '')} {_s.get('query', '')}")
     if plan:
         log.info(f"[chart_data] '{theme}' 설계 {len(plan)}개 series → 조준 수집")
         from concurrent.futures import ThreadPoolExecutor as _TPE
         with _TPE(max_workers=4) as _ex:
-            for ds in _ex.map(lambda s: _collect_one_series(s, sector, theme), plan):
+            for ds in _ex.map(lambda s: _collect_one_series(s, sector, theme, _ref_tokens), plan):
                 if ds:
                     datasets.append(ds)
 
@@ -520,11 +603,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
             if len(tk) > 1:
                 _terms.append(tk[0])   # 핵심 명사 (예: 지역사랑상품권)
         _terms = list(dict.fromkeys(_terms))[:10]
-        # 주제 토큰: 주제+설계쿼리에서 *구체 명사*만 (불용어·일반어 제외 → 관련성 정확도↑)
-        _STOP = {"연도별", "추이", "현황", "비교", "규모", "전망", "분석", "통계", "지표", "변화",
-                 "증가", "감소", "월별", "분기", "연간", "전국", "시도", "관련", "주요", "최근", "수준"}
-        _theme_tokens = {t for term in _terms for t in re.split(r"\s+", term)
-                         if len(t) >= 2 and t not in _STOP}
+        # 관련성 토큰: step1 과 동일한 _ref_tokens(주제+설명+설계 동의어 포함) 재사용 → 일관 게이트.
 
         def _natural_title(d):   # provider 접두(주제명 스탬프) 제거한 *실제* 표/논문명
             t = getattr(d, "title", "") or ""
@@ -551,8 +630,8 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                     docs = []
                 for d in docs[:5]:
                     nat = _natural_title(d)
-                    # 관련성: *자연 제목*(주제명 스탬프 제거)에 구체 주제 토큰이 있어야 채택
-                    if not any(tok in nat for tok in _theme_tokens):
+                    # 관련성 1차(결정론): 자연 제목이 주제 고유명사와 겹쳐야 채택 (동의어 포함)
+                    if not _doc_title_relevant(nat, _ref_tokens):
                         continue
                     pseudo = {"name": (nat[:40] or term), "unit": "", "chart": "bar"}
                     ds = _extract_series_from_docs(pseudo, [d])
@@ -573,6 +652,10 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         final.append(ds)
         if len(final) >= max_datasets:
             break
+
+    # ── 4) ★ 의미 기반 관련성 게이트 (최종 관문) — 결정론 게이트를 통과한 표 중에서도
+    #    '농촌관광·식품소비행태'처럼 다른 주제 표가 새어든 것을 LLM 의미 판단으로 제거. ──────
+    final = _relevance_filter(theme, description, final)
 
     log.info(f"[chart_data] '{theme}' → {len(final)}개 dataset (설계 {len(plan) if plan else 0} series)")
     return {"theme": theme, "datasets": final}
