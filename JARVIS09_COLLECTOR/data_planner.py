@@ -112,8 +112,8 @@ def _fallback_plan(topic: str, syns: list) -> list[dict]:
     하드코딩(주제별 if)이 아니라 *aspect 템플릿* — 어떤 주제든 동일 적용."""
     term = (syns[0] if syns else topic)   # 동의어(정식명) 우선 — KOSIS 수율
     return [
-        {"name": f"{topic} 규모·발행 추이", "unit": "", "chart": "line",
-         "sources": ["news", "kor_econ", "kosis", "ecos"], "query": f"{term} 규모 발행"},
+        {"name": f"{topic} 발행액·규모", "unit": "억원", "chart": "bar",
+         "sources": ["news", "kor_econ", "naver_news"], "query": f"{term} 발행액"},
         {"name": f"{topic} 현황·수량 비교", "unit": "", "chart": "bar",
          "sources": ["kosis", "kor_econ", "news"], "query": f"{term} 현황"},
         {"name": f"{topic} 구성·비중", "unit": "%", "chart": "donut",
