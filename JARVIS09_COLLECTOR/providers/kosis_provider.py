@@ -17,8 +17,8 @@ from . import BaseProvider
 import logging
 log = logging.getLogger("jarvis.collector.kosis")
 
-# 조회 시점 타입 우선순위 (F=부정기/조사, A=연간, M=월간, Q=분기, Y=년) — 표마다 다름
-_PRD_TRY = ("F", "A", "M", "Q", "Y")
+# 조회 시점 타입 우선순위 (A=연간, M=월간, F=부정기/조사 — 가장 흔한 3종만; 속도) — 표마다 다름
+_PRD_TRY = ("A", "M", "F")
 _MAX_OBJ_CODES = 30   # 분류값 코드 과다 요청 방지
 
 
@@ -148,8 +148,8 @@ class KosisProvider(BaseProvider):
         col_url = "통계표조회URL" if "통계표조회URL" in tbls.columns else ("TBL_VIEW_URL" if "TBL_VIEW_URL" in tbls.columns else None)
 
         results: list[RawDocument] = []
-        for _, t in tbls.head(16).iterrows():           # 더 많은 표 후보 (풍부)
-            if len(results) >= max(4, min(max_items, 10)):
+        for _, t in tbls.head(10).iterrows():           # 표 후보 (풍부 vs 속도 균형)
+            if len(results) >= max(4, min(max_items, 8)):
                 break
             org_id = str(t.get(col_org, "") or "").strip()
             tbl_id = str(t.get(col_tbl, "") or "").strip()

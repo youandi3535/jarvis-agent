@@ -1800,17 +1800,25 @@ def _infer_unit(description: str, keyword: str = "") -> str:
 #   거짓 수치 절대 금지: collect_chart_data 는 실제 등장 수치(URL 출처)만 반환.
 _CHART_DATA_POOL: dict = {}   # run_id -> [datasets] (run 당 1회 수집, 슬롯마다 부분집합 회전)
 _SESSION_POOL: list = []       # ★ writer 가 대본 전 미리 수집한 풀 (데이터-우선: Pass-2 재수집 0)
+_SESSION_POOL_SET: bool = False  # ★ writer 가 명시적으로 풀을 등록했는지 (빈 풀도 존중 — garbage 폴백 차단)
+_USED_POOL_IDX: set = set()     # ★ 현재 글에서 사용한 데이터셋 인덱스 (차트 반복 금지; set_session_pool 마다 리셋)
 
 
 def set_session_pool(pool):
-    """데이터-우선 — writer 가 대본 작성 전 수집한 실데이터 풀을 등록. Pass-2 가 재수집 없이 사용."""
-    global _SESSION_POOL
+    """데이터-우선 — writer 가 대본 작성 전 수집한 실데이터 풀을 등록. Pass-2 가 재수집 없이 사용.
+    ★ 빈 리스트로 등록해도 '명시적 등록'으로 기록 → chart_generator 가 per-chart garbage 수집으로
+    빠지지 않고 *오직* 이 풀만 사용(없으면 차트 스킵→AI사진)."""
+    global _SESSION_POOL, _SESSION_POOL_SET
     _SESSION_POOL = list(pool or [])
+    _SESSION_POOL_SET = True
+    _USED_POOL_IDX.clear()   # 새 글 → 사용 인덱스 초기화 (반복 추적 리셋)
 
 
 def clear_session_pool():
-    global _SESSION_POOL
+    global _SESSION_POOL, _SESSION_POOL_SET
     _SESSION_POOL = []
+    _SESSION_POOL_SET = False
+    _USED_POOL_IDX.clear()
 
 
 def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, run_id):
@@ -1818,21 +1826,30 @@ def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, ru
     ★ 데이터-우선: writer 가 set_session_pool() 로 미리 수집한 풀이 있으면 재수집 없이 사용."""
     try:
         pool = _SESSION_POOL or _CHART_DATA_POOL.get(run_id)
-        if not pool:
+        # ★ writer 가 세션풀을 명시 등록(빈 풀 포함)했으면 per-chart 재수집 금지 — garbage 차단.
+        if not pool and not _SESSION_POOL_SET:
             from JARVIS09_COLLECTOR import collect_chart_data
-            res = collect_chart_data(keyword, sector=sector, description=description,
+            # ★ 테마 앵커: 섹션 description 이 드리프트해도 *주제(keyword)* 로 수집 → 주제 실데이터 보장.
+            res = collect_chart_data(keyword, sector=sector, description=keyword,
                                      max_datasets=12)   # 풍부하게 요청 → 고퀄 이미지
             pool = (res or {}).get("datasets") or []
             _CHART_DATA_POOL[run_id] = pool
             print(f"  🕸️ [chart_generator→JARVIS09] '{keyword}' 실데이터 요청 "
                   f"→ {len(pool)}개 dataset (출처·단위 박제)")
         if not pool:
-            print(f"  ⚠️ [chart_generator] JARVIS09 도 실데이터 0 — 차트 스킵(거짓 숫자 < 차트 없음)")
+            print(f"  ⚠️ [chart_generator] '{keyword}' 게이트 실데이터 0 — 차트 스킵(거짓·무관 < 차트 없음)")
             return ""
         n = len(pool)
-        # ★ 슬롯마다 *단일 데이터셋* → 신뢰성 높은 _render_single (LLM 디렉터 동시성 빈파일 방지).
-        #   풀을 회전해 슬롯마다 다른 데이터 + 다른 무드·차트(slot 기반) = 다양성.
-        one = pool[(chart_idx - 1) % n]
+        # ★ 반복 금지 (사용자 박제 2026-07-01): 같은 데이터셋을 여러 슬롯에 반복(중복 차트)하지 않는다.
+        #   글 단위 used-set(set_session_pool 마다 리셋)으로 *미사용* 데이터셋만 1회씩 →
+        #   소진되면 "" 반환(AI 사진 대체). run_id 불안정(_rid=time_ns)에도 견고.
+        _avail = [i for i in range(n) if i not in _USED_POOL_IDX]
+        if not _avail:
+            print(f"  ℹ️ [chart_generator] 실데이터 {n}개 모두 소진 → 슬롯 {chart_idx}는 AI 사진 대체(반복 금지)")
+            return ""
+        _pick = _avail[0]
+        _USED_POOL_IDX.add(_pick)
+        one = pool[_pick]
         from JARVIS06_IMAGE.infographic_engine import generate_infographic
         p = generate_infographic(str(one.get("title", keyword))[:36], "실데이터 기반", [one],
                                  run_id=run_id, slot_key=str(chart_idx), out_dir=out_path,
@@ -1880,6 +1897,18 @@ def generate_chart(
         ).hexdigest()[:8]
         fname = out_path / f"chart_{chart_idx:02d}_{_content_hash}.png"
 
+        # ★★ 데이터 단일 경로 (사용자 박제 2026-07-01): 경제 차트 데이터는 *오직* 관련성·단위
+        #   게이트를 통과한 실데이터(collect_chart_data: 세션풀 우선, 없으면 주제 수집)만 사용한다.
+        #   시장지수 dump(_fetch_from_j09: S&P500·NASDAQ)·본문추출·합성 등 *비게이트 경로* 는
+        #   '지역화폐 발행액'인데 S&P500 데이터 같은 *주제 불일치 garbage* 를 만들어 전면 차단.
+        #   게이트 통과 실데이터가 없으면 차트를 만들지 않고 "" 반환 → 상위에서 AI 사진으로 대체.
+        _gated = _collect_data_fallback(keyword, sector, description, chart_idx, out_path, _rid)
+        if _gated:
+            return _gated
+        print(f"  ⚠️ [chart_generator] '{keyword}' 게이트 통과 실데이터 0 → 차트 스킵 (AI 사진 대체, garbage 차단)")
+        return ""
+
+        # ── (이하 레거시 비게이트 경로 — 위 단일 경로가 항상 return 하므로 도달 불가. garbage 방지) ──
         # ── 컨텍스트 먼저 확보 → LLM 어드바이저가 실데이터 보고 타입 결정 ──
         colors = _derive_colors(keyword, sector, chart_idx, _rid)
         use_synth = False

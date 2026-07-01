@@ -623,7 +623,7 @@ def render_spec(spec, datasets, out_path, seed=0, src="데이터 출처: 한국�
                 f"*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:{FONT};width:{W}px;background:#fff}}"
                 f"</style></head><body><div style='width:{W}px;background:#fff'>"
                 f"{_header(pal, hdr.get('title', '데이터 인사이트'), hdr.get('subtitle', ''), hdr.get('chip', ''), hdr.get('icon', 'chart'))}"
-                f"{body}{_foot(src)}</div></body></html>")
+                f"{body}{_foot(_src_label(datasets[0], src) if datasets else src)}</div></body></html>")
         from JARVIS06_IMAGE.html_infographic import _html_to_jpg
         ok = _html_to_jpg(html, Path(out_path), width=W)
         _p = Path(out_path)
@@ -645,6 +645,7 @@ def _render_single(ds, title, subtitle, out_path, seed, src, chip="", slot=""):
         pal = PALETTES[variant % len(PALETTES)]
         unit = ds.get("unit", "")
         pairs = sorted(zip(L, V), key=lambda x: x[1], reverse=True)
+        pairs = pairs[:8]   # ★ 가독성 — 한 차트 최대 8개 막대 (30셀 막대벽·뭐가뭔지모름 방지)
         n = len(pairs)
         def _e(s):   # 엔티티 라벨 정리 (괄호 제거 + 짧게 — KPI 라벨 잘림 방지)
             return re.split(r"[(（]", str(s))[0].strip()[:8]
@@ -680,7 +681,7 @@ def _render_single(ds, title, subtitle, out_path, seed, src, chip="", slot=""):
                 f"@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;700;800;900&display=swap');"
                 f"*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:{FONT};width:{W}px;background:#fff}}"
                 f"</style></head><body><div style='width:{W}px;background:#fff'>"
-                f"{_header(pal, title, subtitle, chip, 'chart')}{body}{_foot(src)}</div></body></html>")
+                f"{_header(pal, title, subtitle, chip, 'chart')}{body}{_foot(_src_label(ds, src))}</div></body></html>")
         from JARVIS06_IMAGE.html_infographic import _html_to_jpg
         _ok = _html_to_jpg(html, Path(out_path), width=W)
         _p = Path(out_path)
@@ -691,6 +692,26 @@ def _render_single(ds, title, subtitle, out_path, seed, src, chip="", slot=""):
 
 
 _TRUSTED_PROVIDERS = {"krx", "yfinance", "ecos", "dart", "kosis", "bok", "web", "market"}
+
+# provider → 사람이 읽는 출처 표기 (footer). 데이터셋마다 *진짜* 출처를 명시 (mislabel 방지).
+_PROVIDER_LABEL = {
+    "kosis": "통계청 KOSIS", "krx": "한국거래소(KRX)", "yfinance": "Yahoo Finance",
+    "ecos": "한국은행 ECOS", "bok": "한국은행", "dart": "금융감독원 DART",
+    "naver_news": "언론 보도", "news": "언론 보도", "kor_econ": "경제 뉴스",
+    "academic": "학술 논문", "web": "웹 공개자료", "market": "시장 데이터",
+}
+
+
+def _src_label(ds, fallback: str = "") -> str:
+    """데이터셋의 실제 source → 'データ 출처: …' footer 문자열. 하드코딩 출처 mislabel 차단."""
+    src = ds.get("source") or {}
+    prov = str(src.get("provider", "")).lower().strip()
+    disp = _PROVIDER_LABEL.get(prov, "")
+    if not disp:
+        disp = str(src.get("name", "")).strip()[:40]
+    if not disp:
+        return fallback or "데이터 출처: 공개 통계"
+    return f"데이터 출처: {disp}"
 
 
 def _verify_dataset(ds) -> bool:
