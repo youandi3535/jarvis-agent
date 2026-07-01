@@ -106,19 +106,37 @@ def _sanitize(plan: dict) -> list[dict]:
     return out[:6]
 
 
+def _fallback_plan(topic: str, syns: list) -> list[dict]:
+    """★ LLM 설계 실패 시 결정론 폴백 (사용자 박제 2026-07-01): 주제 불문 *보편 aspect* 스캐폴드.
+    규모·현황·추이·구성·평가 5차원을 주제명(+동의어)으로 조준 → step1 이 다양한 지표를 수집.
+    하드코딩(주제별 if)이 아니라 *aspect 템플릿* — 어떤 주제든 동일 적용."""
+    term = (syns[0] if syns else topic)   # 동의어(정식명) 우선 — KOSIS 수율
+    return [
+        {"name": f"{topic} 규모·발행 추이", "unit": "", "chart": "line",
+         "sources": ["news", "kor_econ", "kosis", "ecos"], "query": f"{term} 규모 발행"},
+        {"name": f"{topic} 현황·수량 비교", "unit": "", "chart": "bar",
+         "sources": ["kosis", "kor_econ", "news"], "query": f"{term} 현황"},
+        {"name": f"{topic} 구성·비중", "unit": "%", "chart": "donut",
+         "sources": ["kosis", "news", "kor_econ"], "query": f"{term} 비중 구성"},
+        {"name": f"{topic} 평가·효과", "unit": "%", "chart": "bar",
+         "sources": ["kosis", "kci", "academic", "news"], "query": f"{term} 만족도 효과"},
+    ]
+
+
 def plan_data_sources(topic: str, sector: str = "", description: str = "") -> list[dict]:
-    """주제 → 데이터 소싱 설계도(series 목록). LLM 동적 설계. 실패 시 빈 리스트(폴백은 호출자 판단).
+    """주제 → 데이터 소싱 설계도(series 목록). LLM 동적 설계. 실패 시 결정론 aspect 폴백.
 
     반환: [{"name","unit","chart","sources":[provider...],"query"}, ...]
     """
+    import time as _time
     topic = (topic or "").strip()
     if not topic:
         return []
     catalog = "\n".join(f"- {k}: {v}" for k, v in _SOURCE_CATALOG.items())
     prompt = _PLAN_PROMPT.format(topic=topic, sector=sector or "-",
                                  desc=(description or topic)[:400], catalog=catalog)
-    # ★ 재시도 3회 (사용자 박제 2026-07-01): LLM 이 가끔 빈/파싱불가 응답 → 설계 0개 → 수집 0.
-    #   설계는 전체 파이프라인의 시작점이라 *반드시* 한 번은 성공하도록 재시도.
+    # ★ 재시도 3회 + 백오프 (사용자 박제 2026-07-01): LLM 이 가끔 빈/파싱불가/rate-limit 응답 →
+    #   설계 0개 → 수집 만족도 쏠림. 설계는 다양성의 시작점이라 *반드시* 성공하도록 재시도·백오프.
     for _attempt in range(3):
         try:
             from shared.llm import invoke_text
@@ -131,8 +149,17 @@ def plan_data_sources(topic: str, sector: str = "", description: str = "") -> li
         except Exception as e:
             log.warning(f"[planner] 설계 시도{_attempt + 1} 실패: {e}")
             _g_report("collector", e, module=__name__, func_name="plan_data_sources")
-    log.warning(f"[planner] '{topic}' 설계 3회 전패 → 빈 리스트")
-    return []
+        if _attempt < 2:
+            _time.sleep(2 + _attempt * 3)   # 백오프 (rate-limit 회복)
+    # ★ LLM 3회 전패 → 결정론 aspect 폴백 (빈 설계로 만족도 쏠리지 않게 다차원 보장)
+    try:
+        from JARVIS09_COLLECTOR.chart_data import _expand_theme
+        _syns = _expand_theme(topic)
+    except Exception:
+        _syns = []
+    fb = _fallback_plan(topic, _syns)
+    log.warning(f"[planner] '{topic}' LLM 설계 3회 전패 → 결정론 aspect 폴백 {len(fb)}개")
+    return fb
 
 
 __all__ = ["plan_data_sources", "_SOURCE_CATALOG"]
