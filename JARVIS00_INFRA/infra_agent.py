@@ -125,16 +125,20 @@ def _spawn_restart(delay: int = 5) -> None:
 
 # ── 슬래시 명령 핸들러 ──────────────────────────────────────────
 
-def handle_command(cmd: str) -> bool:
-    """슬래시 명령어(/status, /restart, /quit) 처리. 처리했으면 True."""
+def handle_command(cmd: str, reply_fn=None) -> bool:
+    """슬래시 명령어(/status, /restart, /quit) 처리. 처리했으면 True.
+
+    reply_fn: 응답 발신 함수. None이면 _dm._send_tg(owner)로 폴백.
+    """
     import jarvis_daemon as _dm
+    _send = reply_fn or _dm._send_tg
 
     if cmd == "/status":
-        _dm._send_tg(build_status())
+        _send(build_status())
         return True
 
     if cmd in ("/restart", "/restart_daemon"):
-        _dm._send_tg("🔄 JARVIS 재시작 중... 5초 후 자동 재기동됩니다.")
+        _send("🔄 JARVIS 재시작 중... 5초 후 자동 재기동됩니다.")
         log.info("🔄 텔레그램 /restart 명령 — 데몬 재시작")
         _spawn_restart(delay=5)
         if _dm._sched:
@@ -143,7 +147,7 @@ def handle_command(cmd: str) -> bool:
         return True
 
     if cmd == "/quit":
-        _dm._send_tg("🛑 JARVIS 데몬 종료 중... (10초 내 종료)\n다시 시작: /start")
+        _send("🛑 JARVIS 데몬 종료 중... (10초 내 종료)\n다시 시작: /start")
         log.info("🛑 텔레그램 /quit 명령 — 데몬 종료")
         if _dm._sched:
             _dm._sched._shutdown = True
