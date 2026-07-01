@@ -218,26 +218,31 @@ def _ai_photo_html(path: "Path | str", alt: str) -> str:
 
 
 def _generate_ai_photo_for_slot(description: str, keyword: str, out_dir: "Path") -> str:
-    """차트 실패 슬롯 → AI 사진 1장. 해당 슬롯 description 을 프롬프트로 사용."""
+    """차트 실패 슬롯 → *주제 실사진* 1장 (사용자 박제 2026-07-01 부차B).
+
+    ★ 옛 방식은 추상 차트-aspect(description='규모·추이','구성 비중' 등)를 프롬프트에 넣어
+      translate LLM 이 *은유·초현실* 이미지로 해석 → Pollinations 가 기형(미로 돌·기형 동물·
+      정체불명 조형물)으로 렌더 → 사실성·품질 훼손. (사용자 지적 2026-07-01)
+    ★ 새 방식: 추상 aspect 를 *버리고* 주제(keyword)의 *구체적 실사 장면* 만 프롬프트로.
+      keyword 가 주제를 앵커(KTX→열차, 로보스타→로봇, 기흥구→아파트) → 은유 없이 실사.
+      초현실·추상 금지 negative 는 translate() 가 부착(부차B ②)."""
     try:
         from JARVIS06_IMAGE.image_agent import generate_photo as _gp
         import random as _rand, datetime as _dt
-        # 날짜 + 랜덤 관점 seed → 같은 description이라도 매 발행마다 다른 이미지
-        _perspectives = [
-            "사실적인 사무실·도시 배경, 전문적",
-            "데이터 센터·서버실 배경, 첨단 기술",
-            "주식 트레이딩룸 배경, 활기찬 분위기",
-            "글로벌 비즈니스 미팅, 차트 화면",
-            "한국 도심 금융가, 저녁노을",
-            "기업 연구개발 현장, 밝은 조명",
-            "무역항·물류센터, 활발한 움직임",
+        # 구체 촬영 앵글(모두 실사) — 같은 keyword 여러 슬롯이라도 다양화. 추상어 배제.
+        _angles = [
+            "넓은 전경, 자연광",
+            "현장에서 일하는 사람들",
+            "제품·설비 중심 클로즈업",
+            "도시·건물 배경, 낮",
+            "실내 현장, 밝은 조명",
         ]
         _today = _dt.date.today().isoformat()
-        _perspective = _rand.choice(_perspectives)
-        prompt_ko = f"{keyword} — {description} ({_today}, {_perspective})"
+        prompt_ko = (f"{keyword} 를 직접 보여주는 실제 다큐멘터리 사진, "
+                     f"{_rand.choice(_angles)}, 주제와 관련된 구체적 사물·현장·사람, 사실적 ({_today})")
         path = _gp(prompt_ko=prompt_ko, out_dir=out_dir)
         if path:
-            return _ai_photo_html(path, description[:40].replace('"', "'"))
+            return _ai_photo_html(path, (keyword or description)[:40].replace('"', "'"))
     except Exception as e:
         print(f"  ⚠️ AI 사진(슬롯) 실패: {e}")
     return ""

@@ -34,9 +34,13 @@ def translate(text_ko: str) -> str:
             "'golden hour', 'soft natural light'), camera (e.g. 'f/1.8', 'shallow depth of field', "
             "'wide angle'), style (e.g. 'photorealistic', 'editorial photography', 'modern minimalist').\n"
             "- End with quality boosters: 'photorealistic, ultra detailed, 8k, sharp focus, "
-            "professional photography'.\n"
+            "professional photography, real documentary photograph'.\n"
+            "- ★ Keep the SUBJECT literal and concrete — depict the actual real-world thing/place/"
+            "person, NEVER a metaphor or symbol for it.\n"
             "- Append negative cues: 'no text, no letters, no watermark, no logo, "
-            "no distorted faces, not cartoon, not anime, not illustration'.\n"
+            "no distorted faces, no deformed animals, no weird objects, realistic anatomy, "
+            "not abstract, not surreal, not conceptual art, not a metaphor, "
+            "not cartoon, not anime, not illustration'.\n"
             "- Aesthetic: premium Korean business/finance editorial."
         )
         result = invoke_text(

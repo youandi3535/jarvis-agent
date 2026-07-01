@@ -57,8 +57,12 @@ Strict rules:
 - ★ When "Real-world facts" are provided, GROUND the SUBJECT and SCENE in those concrete facts —
   translate the actual entities (companies, products, events, numbers) into specific visual cues.
   Do NOT just paint generic business imagery; reflect the news/story directly.
-- End with quality boosters: "photorealistic, ultra detailed, 8k, cinematic lighting, depth of field, professional photography, sharp focus".
-- Discourage failure modes by appending: "no text, no letters, no watermark, no logo, no distorted faces, no extra fingers, not cartoon, not anime, not illustration"."""
+- ★ ALWAYS keep the SUBJECT literal and concrete — a real photograph of the actual thing/place/
+  person. NEVER a metaphor, symbol, or abstract/surreal representation of the topic (no "a stone
+  symbolizing stability", no conceptual objects). If the topic is a data trend, show a real scene
+  from that domain, not an abstract visualization.
+- End with quality boosters: "photorealistic, ultra detailed, 8k, cinematic lighting, depth of field, professional photography, sharp focus, real documentary photograph".
+- Discourage failure modes by appending: "no text, no letters, no watermark, no logo, no distorted faces, no extra fingers, no deformed animals, no weird objects, realistic anatomy, not abstract, not surreal, not conceptual art, not a metaphor, not cartoon, not anime, not illustration"."""
 
 _PHOTO_PROMPT_TEMPLATE = """Generate the single best English image prompt for this Korean blog visual.
 

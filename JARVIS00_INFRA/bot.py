@@ -28,6 +28,20 @@ log = logging.getLogger("jarvis")
 TG_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# 팀원 읽기 전용 ID (쉼표 구분). 조회·SAFE 인텐트만 허용, APPROVAL 차단.
+_READONLY_IDS: set[str] = set(filter(None, os.getenv("TELEGRAM_READONLY_IDS", "").split(",")))
+# 허용된 모든 ID (소유자 + 읽기전용)
+_ALL_ALLOWED: set[str] = ({TG_CHAT_ID} | _READONLY_IDS) if TG_CHAT_ID else _READONLY_IDS
+
+# 읽기전용 사용자에게 허용되는 슬래시 명령어
+_READONLY_CMDS: frozenset[str] = frozenset({
+    "/start", "/help", "/status", "/agents",
+    "/route", "/jobs", "/jobs_next", "/jobs_log", "/jobs_report", "/errors",
+})
+
+# 현재 메시지를 보낸 사람의 chat_id (polling 루프에서 메시지마다 갱신)
+_response_target: list[str] = [TG_CHAT_ID]  # list 로 감싸서 함수 안에서 수정 가능
+
 JARVIS_ROOT = Path(__file__).resolve().parent.parent
 RADAR_DIR   = JARVIS_ROOT / "JARVIS03_RADAR"
 PLANS_DIR   = JARVIS_ROOT / "logs" / "pending_plans"
@@ -78,6 +92,26 @@ def _send_tg(text: str):
     except Exception as e:
         log.warning(f"[봇] 텔레그램 전송 오류: {e}")
         _g_report("infra", e, module=__name__)
+
+
+def _send_to(chat_id: str, text: str):
+    """특정 chat_id 에게 응답 전송 (팀원·소유자 구분 응답용)."""
+    if not TG_TOKEN or not chat_id:
+        return
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+            timeout=10,
+        )
+        if not r.json().get("ok"):
+            requests.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": text},
+                timeout=10,
+            )
+    except Exception as e:
+        log.warning(f"[봇] _send_to 오류 (chat_id={chat_id}): {e}")
 
 
 def _answer_callback(callback_id: str, text: str = "처리 완료"):
@@ -152,28 +186,34 @@ def _get_sched():
 # 자유 문장 라우팅
 # ════════════════════════════════════════════════════════════
 
-def _route_free_text(text: str, session_id: str = ""):
+def _route_free_text(text: str, session_id: str = "", readonly: bool = False, responder_id: str = ""):
     """자유 문장 → JARVIS01 자동 라우팅.
 
     1) ReAct (다단계) → 2) 레거시 1-step 분류기 fallback.
     session_id: Telegram chat_id → LangGraph thread_id (멀티턴 세션).
+    readonly: True 면 SAFE 인텐트만 허용.
+    responder_id: 응답 대상 chat_id (미지정 시 TG_CHAT_ID).
     """
-    try:
-        ok = _run_react(text, max_steps=12, verbose=False, session_id=session_id)
-    except Exception as e:
-        log.warning(f"[J00] ReAct 라우팅 예외 → fallback: {e}")
-        _g_report("infra", e, module=__name__)
-        ok = False
+    _resp = responder_id or TG_CHAT_ID
 
-    if ok:
-        return
+    # 읽기전용 — ReAct 는 APPROVAL 도구 호출 가능성 있으므로 fallback 경로만 허용
+    if not readonly:
+        try:
+            ok = _run_react(text, max_steps=12, verbose=False, session_id=session_id)
+        except Exception as e:
+            log.warning(f"[J00] ReAct 라우팅 예외 → fallback: {e}")
+            _g_report("infra", e, module=__name__)
+            ok = False
 
-    log.info("[J00] ReAct 미가용 → 레거시 1-step 분류기 fallback")
+        if ok:
+            return
+
+    log.info(f"[J00] 1-step 분류기 (readonly={readonly})")
     try:
         from JARVIS01_MASTER.router import handle as _route00
         r = _route00(text)
     except Exception as e:
-        _send_tg(f"⚠️ JARVIS01 라우터 오류: {e}")
+        _send_to(_resp, f"⚠️ JARVIS01 라우터 오류: {e}")
         return
 
     cls    = r.get("classification", {})
@@ -192,6 +232,11 @@ def _route_free_text(text: str, session_id: str = ""):
     )
     mode = get_dispatch_mode(intent)
 
+    # 읽기전용 사용자 — APPROVAL 인텐트 차단
+    if readonly and mode == "APPROVAL":
+        _send_to(_resp, f"⛔ 조회 권한만 있습니다.\n`{intent}` 는 소유자만 실행할 수 있어요.")
+        return
+
     if mode == "SAFE":
         if intent.startswith("infra."):
             from JARVIS00_INFRA.infra_agent import handle_safe_intent
@@ -201,22 +246,22 @@ def _route_free_text(text: str, session_id: str = ""):
             from shared import capabilities as _caps
             cat = _caps.render_for_router_prompt()
             n = len(_caps.all_capabilities())
-            _send_tg(f"🧭 *등록 에이전트 {n}개*\n```\n{cat}\n```")
+            _send_to(_resp, f"🧭 *등록 에이전트 {n}개*\n```\n{cat}\n```")
         elif intent in ("core.chat", "core.preview_route"):
-            _send_tg(
+            _send_to(_resp,
                 f"안녕하세요! 자비스입니다. 😊\n\n"
                 f"_{cls.get('rationale', '무엇을 도와드릴까요?')}_\n\n"
                 f"/help 로 전체 명령어를 확인하세요."
             )
         elif intent == "core.unknown":
-            _send_tg(
+            _send_to(_resp,
                 f"죄송해요, 이해하지 못했어요.\n\n"
                 f"_{cls.get('rationale', '분류 불가')}_\n\n"
                 f"/help 로 명령어를 확인하거나, 더 구체적으로 말씀해주세요."
             )
         else:
             result = execute_safe(intent, params, text)
-            _send_tg(result or f"✅ `{intent}` 처리 완료")
+            _send_to(_resp, result or f"✅ `{intent}` 처리 완료")
         return
 
     if mode == "APPROVAL":
@@ -229,8 +274,7 @@ def _route_free_text(text: str, session_id: str = ""):
         ]])
         return
 
-    domain = intent.split(".")[0] if "." in intent else intent
-    _send_tg(
+    _send_to(_resp,
         f"🤔 *{text[:60]}*\n\n"
         f"_분류 결과: `{intent}` (신뢰도 {conf:.2f}) — 자동 라우팅 모호_\n\n"
         f"💡 *다시 시도*: 더 구체적으로 말씀해주세요.\n"
@@ -912,31 +956,46 @@ def run_bot_polling(shutdown_event: threading.Event):
                     msg     = upd["message"]
                     chat_id = str(msg.get("chat", {}).get("id", ""))
                     text    = msg.get("text", "")
-                    if not text or chat_id != TG_CHAT_ID:
+
+                    # 허용되지 않은 발신자 무시
+                    if not text or chat_id not in _ALL_ALLOWED:
                         pass
-                    elif text.startswith("/"):
-                        cmd_log = text.split()[0]
-                        log.info(f"  [봇] 명령어 수신: {cmd_log}")
-                        try:
-                            _dispatch_text_command(text)
-                        except Exception as e:
-                            log.warning(f"[봇] 명령 오류 ({cmd_log}): {e}")
-                            _g_report("infra", e, module=__name__)
-                            _send_tg(f"❌ 명령 처리 오류 ({cmd_log}): {e}")
                     else:
-                        log.info(f"  [봇] 자유문장 수신: {text[:40]}")
-                        try:
-                            _route_free_text(text, session_id=chat_id)
-                        except Exception as e:
-                            log.warning(f"[봇] 자유문장 라우팅 오류: {e}")
-                            _g_report("infra", e, module=__name__)
-                            _send_tg(f"❌ 처리 오류: {e}")
+                        is_readonly = chat_id in _READONLY_IDS and chat_id != TG_CHAT_ID
+                        _response_target[0] = chat_id  # 이 메시지 응답 대상 설정
+
+                        if text.startswith("/"):
+                            cmd = text.split()[0].lower()
+                            log.info(f"  [봇] 명령어 수신: {cmd} (readonly={is_readonly})")
+                            # 읽기전용 — 허용 명령어만 통과
+                            if is_readonly and cmd not in _READONLY_CMDS:
+                                _send_to(chat_id, "⛔ 조회 권한만 있습니다. 이 명령은 소유자만 사용 가능합니다.")
+                            else:
+                                try:
+                                    _dispatch_text_command(text)
+                                except Exception as e:
+                                    log.warning(f"[봇] 명령 오류 ({cmd}): {e}")
+                                    _g_report("infra", e, module=__name__)
+                                    _send_to(chat_id, f"❌ 명령 처리 오류 ({cmd}): {e}")
+                        else:
+                            log.info(f"  [봇] 자유문장 수신: {text[:40]} (readonly={is_readonly})")
+                            try:
+                                _route_free_text(text, session_id=chat_id, readonly=is_readonly, responder_id=chat_id)
+                            except Exception as e:
+                                log.warning(f"[봇] 자유문장 라우팅 오류: {e}")
+                                _g_report("infra", e, module=__name__)
+                                _send_to(chat_id, f"❌ 처리 오류: {e}")
 
                 # ── 인라인 버튼 콜백 ───────────────────────────
                 elif "callback_query" in upd:
                     cq      = upd["callback_query"]
                     cq_id   = cq.get("id", "")
                     cq_data = cq.get("data", "")
+                    # 인라인 버튼 승인은 소유자만 가능
+                    cq_sender = str(cq.get("from", {}).get("id", ""))
+                    if cq_sender and cq_sender != TG_CHAT_ID:
+                        _answer_callback(cq_id, "소유자만 승인할 수 있습니다.")
+                        continue
                     try:
                         if cq_data.startswith("j00_yes:"):
                             key = cq_data[len("j00_yes:"):]

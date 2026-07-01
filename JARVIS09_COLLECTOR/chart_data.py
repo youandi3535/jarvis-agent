@@ -303,6 +303,8 @@ _SOURCE_LIBS = {   # source → 자동설치 무료 라이브러리 (import명, 
     "blog":     [("feedparser", "feedparser")],
     "web":      [("bs4", "beautifulsoup4")],
     "kor_econ": [("bs4", "beautifulsoup4")],
+    # ★ discover: 웹 발견·범용 파싱 (ddgs 는 discovery 내부에서 자동설치)
+    "discover": [("bs4", "beautifulsoup4"), ("pandas", "pandas"), ("lxml", "lxml")],
 }
 
 
@@ -323,12 +325,13 @@ def _get_provider(source: str):
         from JARVIS09_COLLECTOR.providers import (
             BlogProvider, NewsProvider, AcademicProvider, FinanceProvider, WebProvider,
             KorEconProvider, NaverNewsProvider, DartProvider, EcosProvider,
-            KosisProvider, KrxProvider, KciProvider,
+            KosisProvider, KrxProvider, KciProvider, DiscoveryProvider,
         )
         _m = {"blog": BlogProvider, "news": NewsProvider, "academic": AcademicProvider,
               "finance": FinanceProvider, "web": WebProvider, "kor_econ": KorEconProvider,
               "naver_news": NaverNewsProvider, "dart": DartProvider, "ecos": EcosProvider,
-              "kosis": KosisProvider, "krx": KrxProvider, "kci": KciProvider}
+              "kosis": KosisProvider, "krx": KrxProvider, "kci": KciProvider,
+              "discover": DiscoveryProvider}
         cls = _m.get(source)
         inst = cls() if cls else None
     except Exception as e:
@@ -732,6 +735,19 @@ def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: 
         if ds:
             log.info(f"[chart_data] '{series['name']}' ← {source} ({len(ds['data'])}점)")
             return ds
+    # ★ 고정 출처 전패 → 웹 발견 폴백 (사용자 박제 2026-07-01): 카탈로그로 못 받으면
+    #   웹검색(구글·네이버·공공데이터)으로 실제 데이터 페이지를 찾아 받는다. 어떤 주제든.
+    if "discover" not in series.get("sources", []):
+        _ensure_source_ready("discover")
+        prov = _get_provider("discover")
+        if prov:
+            for q in queries[:2]:
+                docs = _cached_collect(prov, "discover", q, sector, 6)
+                if docs:
+                    ds = _extract_series_from_docs(series, docs)
+                    if ds:
+                        log.info(f"[chart_data] '{series['name']}' ← discover(웹발견) ({len(ds['data'])}점)")
+                        return ds
     return None
 
 
@@ -835,7 +851,9 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         #   기존 순차 추출이 12분 병목이라 추출만 ThreadPool 로 동시 실행.
         _PER_SOURCE = max(3, (max_datasets + 3) // 3)
         _cands = []   # (pseudo_name, doc)
-        for source in ("kci", "academic", "news", "kor_econ", "kosis", "naver_news", "web"):
+        # ★ discover(웹 발견) 추가 (사용자 박제 2026-07-01): 고정 출처가 못 채우면 웹에서 찾아
+        #   받는다. 비용 가드 — discover 는 검색어 상위 2개만(웹검색·fetch 비쌈).
+        for source in ("kci", "academic", "news", "kor_econ", "kosis", "naver_news", "web", "discover"):
             if len(_cands) >= _cand_cap:
                 break
             _ensure_source_ready(source)
@@ -843,7 +861,8 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
             if not prov:
                 continue
             _from_src = 0
-            for term in _terms:
+            _src_terms = _terms[:2] if source == "discover" else _terms
+            for term in _src_terms:
                 if _from_src >= _PER_SOURCE or len(_cands) >= _cand_cap:
                     break
                 docs = _cached_collect(prov, source, term, sector, 8)   # 풍부하게(캐시)
