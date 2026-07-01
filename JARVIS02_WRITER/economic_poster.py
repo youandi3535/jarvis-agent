@@ -23,6 +23,12 @@ _JARVIS_ROOT = Path(__file__).parent.parent
 if str(_JARVIS_ROOT) not in sys.path:
     sys.path.insert(0, str(_JARVIS_ROOT))
 
+# ★ .env 최상단·명시경로 로드 (부차 A 수정 2026-07-01): 아래 JARVIS import·provider 인스턴스화
+#   *전* 에 키를 실어야 KOSIS/ECOS/DART/NAVER 등이 '없음'으로 스킵되지 않는다. bare load_dotenv()
+#   는 CWD/호출프레임 의존이라 실행 위치(수동 실행·subprocess)에 따라 키 누락 → 명시 경로로 제거.
+#   (데몬 jarvis_daemon.py 의 load_dotenv(JARVIS_ROOT/'.env') 와 동일 패턴.)
+load_dotenv(_JARVIS_ROOT / ".env")
+
 # ★ 수집 단일 진입점 (2026-05-31): get_market_data / get_economic_calendar 본체 → JARVIS09
 from JARVIS09_COLLECTOR.providers.economic_data_provider import (
     get_market_data as _j09_get_market_data,

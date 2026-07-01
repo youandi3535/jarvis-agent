@@ -204,6 +204,13 @@ def _build_claude_sdk_chat_model():
             sys_parts, user_parts = [], []
             for m in messages:
                 content = getattr(m, "content", str(m))
+                # content 가 list 일 때 (tool result 블록·멀티모달) → 텍스트 추출
+                if isinstance(content, list):
+                    content = " ".join(
+                        b.get("text", str(b)) if isinstance(b, dict) else str(b)
+                        for b in content
+                    )
+                content = str(content)
                 if isinstance(m, SystemMessage):
                     sys_parts.append(content)
                 else:
@@ -339,6 +346,7 @@ def _run_sdk_sync(
     full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
     options = ClaudeCodeOptions(model=model, env={"ANTHROPIC_API_KEY": ""})
     parts: list[str] = []
+    throttled = {"v": False}
 
     async def _collect():
         nonlocal parts
@@ -348,6 +356,11 @@ def _run_sdk_sync(
                     for block in msg.content:
                         if isinstance(block, TextBlock):
                             parts.append(block.text)
+                # ★ Max 구독 burst 스로틀 감지 (사용자 박제 2026-07-01): rate-limit 시 CLI 는
+                #   모델을 호출하지 않고 ResultMessage(num_turns=0, duration_api_ms=0, success)만
+                #   흘려 *빈 응답* 을 낸다(예외 아님). 조용한 degrade 방지 위해 플래그로 표식.
+                elif type(msg).__name__ == "ResultMessage" and getattr(msg, "num_turns", 1) == 0:
+                    throttled["v"] = True
 
     try:
         anyio.run(_collect)
@@ -358,17 +371,37 @@ def _run_sdk_sync(
     except Exception as e:
         if not parts:
             print(f"  ❌ SDK 오류: {e}")
+    if throttled["v"] and not parts:
+        # 가시화 — invoke_text 재시도 백오프가 짧은 스로틀을 흡수, 지속 시 호출자 폴백.
+        print("  ⏳ [LLM] rate-limit 스로틀 (num_turns=0, 모델 미호출) — 재시도/폴백")
     return "".join(parts)
 
 
-def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300, **overrides) -> str:
+def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
+                _retries: int = 2, **overrides) -> str:
     """Claude Code SDK 호출 단일 진입점.
 
     텍스트 생성(writer/router/analyzer): Sonnet 4.6
     오류수정·코드·설계(coder/guardian/architect/diagnostic): Opus 4.6
+
+    ★ rate-limit 재시도 (사용자 박제 2026-07-01): claude-code-sdk 는 rate_limit_event 를
+      TextBlock 없이 흘려 *빈 문자열* 을 반환한다(예외 아님). 이걸 그대로 두면 planner 설계·
+      translate·series 추출이 조용히 폴백/원문통과로 degrade. 빈 응답이면 지수 백오프+지터로
+      재시도(rate-limit 창 통과) → 모든 invoke_text 호출자가 자동 견고화. 정상 응답은 즉시 반환.
     """
+    import time as _t, random as _r
     model = _ALIAS_MODEL.get(alias, "claude-sonnet-4-6")
-    return _run_sdk_sync(prompt, model=model, system=system, timeout=timeout) or ""
+    result = ""
+    for _attempt in range(max(1, _retries)):
+        try:
+            result = _run_sdk_sync(prompt, model=model, system=system, timeout=timeout) or ""
+        except Exception:
+            result = ""
+        if result.strip():
+            return result
+        if _attempt < _retries - 1:
+            _t.sleep(3 * (2 ** _attempt) + _r.uniform(0, 1.5))   # ~3s, ~6s (+지터) — rate-limit 회복
+    return result
 
 
 class ClaudeSDKLLM:

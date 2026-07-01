@@ -26,6 +26,7 @@ from .ecos_provider import EcosProvider
 from .kosis_provider import KosisProvider
 from .krx_provider import KrxProvider
 from .kci_provider import KciProvider
+from .discovery_provider import DiscoveryProvider
 
 __all__ = [
     "BaseProvider",
@@ -33,4 +34,5 @@ __all__ = [
     "FinanceProvider", "WebProvider", "KorEconProvider",
     "NaverNewsProvider", "DartProvider", "EcosProvider",
     "KosisProvider", "KrxProvider", "KciProvider",
+    "DiscoveryProvider",
 ]
