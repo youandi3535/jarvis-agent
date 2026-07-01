@@ -629,7 +629,7 @@ def _handle_radar_query(cmd: str):
         if cmd == "/report":
             import threading as _th
             from JARVIS03_RADAR.daily_review import run_daily_review
-            _send_tg("📊 일일 분석 리포트 생성 중...")
+            _reply("📊 일일 분석 리포트 생성 중...")
             _th.Thread(target=run_daily_review, daemon=True, name="cmd_report").start()
             return
         import glob, json as _json
@@ -637,7 +637,7 @@ def _handle_radar_query(cmd: str):
         _root = _P(__file__).resolve().parent.parent
         files = sorted(glob.glob(str(_root / "JARVIS03_RADAR" / "data" / "trends_*.json")))
         if not files:
-            _send_tg("⚠️ 수집된 트렌드 데이터가 없습니다.")
+            _reply("⚠️ 수집된 트렌드 데이터가 없습니다.")
             return
         data = _json.loads(_P(files[-1]).read_text(encoding="utf-8"))
         date = data.get("date", "?")
@@ -647,7 +647,7 @@ def _handle_radar_query(cmd: str):
             for i, k in enumerate(kws[:10], 1):
                 kw = k.get("keyword") if isinstance(k, dict) else str(k)
                 lines.append(f"{i}. {kw}")
-            _send_tg("\n".join(lines) if len(lines) > 1 else "⚠️ 트렌드 키워드 없음")
+            _reply("\n".join(lines) if len(lines) > 1 else "⚠️ 트렌드 키워드 없음")
         else:  # /radar
             recs = data.get("recommendations", [])
             lines = [f"🎯 *추천 테마 TOP 5* ({date})"]
@@ -656,30 +656,37 @@ def _handle_radar_query(cmd: str):
                     f"{i}. *{r.get('theme','?')}* (점수 {r.get('score','?')}·{r.get('sector','?')})\n"
                     f"   {(r.get('topic') or '')[:60]}"
                 )
-            _send_tg("\n".join(lines) if recs else "⚠️ 추천 테마 없음")
+            _reply("\n".join(lines) if recs else "⚠️ 추천 테마 없음")
     except Exception as e:
-        _send_tg(f"⚠️ {cmd} 실패: {e}")
+        _reply(f"⚠️ {cmd} 실패: {e}")
         _g_report("infra", e, module=__name__)
 
 
 def _handle_cookie_refresh(cmd: str):
     """JARVIS08 쿠키 갱신 (/refresh_naver·/refresh_tistory) — 유지보수(외부 발행 아님), 직접 실행."""
     import threading as _th
+    # 백그라운드 스레드 실행 전 발신자 타겟을 캡처
+    _target = _response_target[0] or TG_CHAT_ID
     def _bg():
         try:
             if cmd == "/refresh_naver":
                 from JARVIS08_PUBLISH.credentials.login_manager import refresh_naver_cookies
                 ok = refresh_naver_cookies(force=True)
-                _send_tg("✅ 네이버 쿠키 갱신 완료" if ok else "❌ 네이버 쿠키 갱신 실패 — 수동 확인 필요")
+                _send_to(_target, "✅ 네이버 쿠키 갱신 완료" if ok else "❌ 네이버 쿠키 갱신 실패 — 수동 확인 필요")
             else:
                 from JARVIS08_PUBLISH.credentials.login_manager import refresh_tistory_cookies
                 ok = refresh_tistory_cookies(force=True)
-                _send_tg("✅ 티스토리 쿠키 갱신 완료" if ok else "❌ 티스토리 쿠키 갱신 실패 — 수동 확인 필요")
+                _send_to(_target, "✅ 티스토리 쿠키 갱신 완료" if ok else "❌ 티스토리 쿠키 갱신 실패 — 수동 확인 필요")
         except Exception as e:
-            _send_tg(f"⚠️ {cmd} 실패: {e}")
+            _send_to(_target, f"⚠️ {cmd} 실패: {e}")
             _g_report("infra", e, module=__name__)
-    _send_tg(f"🔄 {cmd.lstrip('/')} 진행 중...")
+    _send_to(_target, f"🔄 {cmd.lstrip('/')} 진행 중...")
     _th.Thread(target=_bg, daemon=True, name="cmd_refresh").start()
+
+
+def _reply(text: str):
+    """현재 메시지 발신자에게 응답 — _response_target[0] 기준."""
+    _send_to(_response_target[0] or TG_CHAT_ID, text)
 
 
 def _dispatch_text_command(text: str):
@@ -687,7 +694,7 @@ def _dispatch_text_command(text: str):
     cmd = text.strip().lower().split()[0] if text.strip() else ""
 
     if cmd == "/start":
-        _send_tg(
+        _reply(
             "✅ JARVIS 데몬이 이미 실행 중입니다.\n"
             "/status — 전체 상태 확인\n"
             "/help   — 명령어 목록"
@@ -696,11 +703,11 @@ def _dispatch_text_command(text: str):
 
     if cmd == "/help":
         from shared.capabilities import build_help_text
-        _send_tg(build_help_text())
+        _reply(build_help_text())
         return
 
     from JARVIS00_INFRA.infra_agent import handle_command as _infra_cmd
-    if _infra_cmd(cmd):
+    if _infra_cmd(cmd, reply_fn=_reply):
         return
 
     if cmd == "/agents":
@@ -708,15 +715,15 @@ def _dispatch_text_command(text: str):
             from shared import capabilities as _caps
             cat = _caps.render_for_router_prompt()
             n = len(_caps.all_capabilities())
-            _send_tg(f"🧭 *등록 에이전트 {n}개*\n```\n{cat}\n```")
+            _reply(f"🧭 *등록 에이전트 {n}개*\n```\n{cat}\n```")
         except Exception as e:
-            _send_tg(f"⚠️ /agents 실패: {e}")
+            _reply(f"⚠️ /agents 실패: {e}")
         return
 
     if cmd == "/react":
         user_msg = text.strip()[len("/react"):].strip()
         if not user_msg:
-            _send_tg(
+            _reply(
                 "사용법: `/react 자유 문장`\n"
                 "예: `/react 최근 발행 글 5개 알려주고, 그 중 반도체 글 한 번 더 발행해줘`\n\n"
                 "ReAct 모드는 SAFE 도구를 자동 호출하고, 외부 영향 도구는 인라인 버튼 승인 후 실행합니다."
@@ -728,7 +735,7 @@ def _dispatch_text_command(text: str):
     if cmd == "/route":
         user_msg = text.strip()[len("/route"):].strip()
         if not user_msg:
-            _send_tg("사용법: `/route 자유 문장 입력`\n예: `/route 오늘 트렌드로 블로그 써줘`")
+            _reply("사용법: `/route 자유 문장 입력`\n예: `/route 오늘 트렌드로 블로그 써줘`")
             return
         try:
             from JARVIS01_MASTER.router import handle as _route
@@ -736,7 +743,7 @@ def _dispatch_text_command(text: str):
             cls = r.get("classification", {})
             tgt = r.get("target_agent")
             disp = r.get("dispatch_result", {})
-            _send_tg(
+            _reply(
                 f"🧭 *라우팅 결과*\n"
                 f"입력: {user_msg}\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
@@ -749,23 +756,23 @@ def _dispatch_text_command(text: str):
                 f"디스패치: {disp.get('note','')[:100]}"
             )
         except Exception as e:
-            _send_tg(f"⚠️ /route 실패: {e}")
+            _reply(f"⚠️ /route 실패: {e}")
         return
 
     if cmd == "/jobs":
         try:
             from JARVIS01_MASTER.dispatchers import _schedule_job_list
-            _send_tg(_schedule_job_list())
+            _reply(_schedule_job_list())
         except Exception as e:
-            _send_tg(f"⚠️ /jobs 실패: {e}")
+            _reply(f"⚠️ /jobs 실패: {e}")
         return
 
     if cmd == "/jobs_next":
         try:
             from JARVIS01_MASTER.dispatchers import _schedule_next_runs
-            _send_tg(_schedule_next_runs({"limit": 10}))
+            _reply(_schedule_next_runs({"limit": 10}))
         except Exception as e:
-            _send_tg(f"⚠️ /jobs_next 실패: {e}")
+            _reply(f"⚠️ /jobs_next 실패: {e}")
         return
 
     if cmd == "/jobs_log":
@@ -776,21 +783,20 @@ def _dispatch_text_command(text: str):
             hours = 24
         try:
             from JARVIS01_MASTER.dispatchers import _schedule_history
-            _send_tg(_schedule_history({"since_hours": hours, "limit": 20}))
+            _reply(_schedule_history({"since_hours": hours, "limit": 20}))
         except Exception as e:
-            _send_tg(f"⚠️ /jobs_log 실패: {e}")
+            _reply(f"⚠️ /jobs_log 실패: {e}")
         return
 
     if cmd == "/jobs_report":
         try:
             from JARVIS04_SCHEDULER.briefing import build_briefing_text
-            _send_tg(build_briefing_text(hours=24))
+            _reply(build_briefing_text(hours=24))
         except Exception as e:
-            _send_tg(f"⚠️ /jobs_report 실패: {e}")
+            _reply(f"⚠️ /jobs_report 실패: {e}")
         return
 
     if cmd == "/errors":
-        # /errors [new|analyzing|fixed|wontfix|ignored] [limit]
         parts = text.strip().split()
         status_filter = parts[1] if len(parts) > 1 and not parts[1].isdigit() else "new"
         limit = int(parts[-1]) if len(parts) > 1 and parts[-1].isdigit() else 10
@@ -798,7 +804,7 @@ def _dispatch_text_command(text: str):
             from shared import db as _db
             errors = _db.list_errors(status=status_filter, limit=limit)
             if not errors:
-                _send_tg(f"✅ [{status_filter}] 오류 없음")
+                _reply(f"✅ [{status_filter}] 오류 없음")
                 return
             sev_icon = {"critical": "🚨", "high": "⚠️", "medium": "ℹ️", "low": "🔵"}
             lines = [f"🛡️ *GUARDIAN 오류 목록* [{status_filter}] {len(errors)}건"]
@@ -811,9 +817,9 @@ def _dispatch_text_command(text: str):
                     f"   {ts} | {e.get('module','?')}\n"
                     f"   {msg}"
                 )
-            _send_tg("\n\n".join(lines))
+            _reply("\n\n".join(lines))
         except Exception as e:
-            _send_tg(f"⚠️ /errors 실패: {e}")
+            _reply(f"⚠️ /errors 실패: {e}")
         return
 
     if cmd == "/errors_stats":
@@ -839,12 +845,12 @@ def _dispatch_text_command(text: str):
                 f"  ℹ️ MEDIUM: {by_sev.get('medium', 0)}",
                 f"  🔵 LOW: {by_sev.get('low', 0)}",
             ]
-            _send_tg("\n".join(lines))
+            _reply("\n".join(lines))
         except Exception as e:
-            _send_tg(f"⚠️ /errors_stats 실패: {e}")
+            _reply(f"⚠️ /errors_stats 실패: {e}")
         return
 
-    # ── JARVIS02 외부 발행 (★ 2026-06-28 — 승인 게이트 필수: 실제 발행 동작) ──
+    # ── JARVIS02 외부 발행 (승인 게이트 필수) ──
     if cmd in _J02_EXT_CMDS:
         key = f"{cmd.lstrip('/')}:{abs(hash(text)) & 0xFFFF:04x}"
         _PENDING_J02_CMD[key] = {"cmd": cmd}
@@ -856,12 +862,12 @@ def _dispatch_text_command(text: str):
         )
         return
 
-    # ── JARVIS03 RADAR 조회 (읽기 전용 — 승인 불필요) ──
+    # ── JARVIS03 RADAR 조회 ──
     if cmd in ("/trend", "/radar", "/report"):
         _handle_radar_query(cmd)
         return
 
-    # ── JARVIS08 쿠키 갱신 (유지보수 — 직접) ──
+    # ── JARVIS08 쿠키 갱신 ──
     if cmd in ("/refresh_naver", "/refresh_tistory"):
         _handle_cookie_refresh(cmd)
         return
@@ -873,9 +879,9 @@ def _dispatch_text_command(text: str):
         except Exception as e:
             log.warning(f"[봇] JARVIS02 명령 처리 오류: {e}")
             _g_report("infra", e, module=__name__)
-            _send_tg(f"❌ 명령어 처리 오류: {e}")
+            _reply(f"❌ 명령어 처리 오류: {e}")
     else:
-        _send_tg("⚠️ JARVIS02 스케줄러가 로드되지 않았습니다.")
+        _reply("⚠️ JARVIS02 스케줄러가 로드되지 않았습니다.")
 
 
 def _handle_jarvis02_callback(cq: dict):
@@ -957,9 +963,15 @@ def run_bot_polling(shutdown_event: threading.Event):
                     chat_id = str(msg.get("chat", {}).get("id", ""))
                     text    = msg.get("text", "")
 
-                    # 허용되지 않은 발신자 무시
-                    if not text or chat_id not in _ALL_ALLOWED:
+                    # 허용되지 않은 발신자 무시 (chat_id 로그에 기록)
+                    if not text:
                         pass
+                    elif chat_id not in _ALL_ALLOWED:
+                        frm  = msg.get("from", {})
+                        name = (frm.get("first_name", "") + " " + frm.get("last_name", "")).strip()
+                        uname = frm.get("username", "없음")
+                        log.info(f"[봇] 미허용 발신자 — chat_id={chat_id}  이름={name}  @{uname}")
+                        _send_tg(f"📋 미허용 접속 시도\nchat_id: `{chat_id}`\n이름: {name}\n@{uname}\n\n`.env` 의 `TELEGRAM_READONLY_IDS` 에 추가하면 팀원으로 등록됩니다.")
                     else:
                         is_readonly = chat_id in _READONLY_IDS and chat_id != TG_CHAT_ID
                         _response_target[0] = chat_id  # 이 메시지 응답 대상 설정
