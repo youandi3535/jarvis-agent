@@ -360,7 +360,20 @@ _SERIES_PROMPT = """요청 지표: "{name}"  (단위 힌트: {unit})
 일관된 수치가 없으면 {{"unit": "", "data": []}}."""
 
 
-_SYNONYM_CACHE: dict = {}
+_SYNONYM_FILE = __import__("pathlib").Path(__file__).parent / "synonym_cache.json"
+
+
+def _load_synonym_cache() -> dict:
+    """영구 동의어 캐시 로드 (사용자 박제 2026-07-01): 한 번 학습한 정식명은 rate-limit 무관 재사용."""
+    try:
+        if _SYNONYM_FILE.exists():
+            return json.loads(_SYNONYM_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+_SYNONYM_CACHE: dict = _load_synonym_cache()
 
 
 def _expand_theme(theme: str) -> list:
@@ -392,6 +405,13 @@ def _expand_theme(theme: str) -> list:
         except Exception as e:
             log.warning(f"[chart_data] 동의어 확장 시도{_attempt + 1} 실패: {e}")
     _SYNONYM_CACHE[theme] = syns
+    # ★ 성공 시에만 영구 저장 (빈 결과는 rate-limit 일 수 있어 저장 안 함 → 다음에 재시도)
+    if syns:
+        try:
+            _SYNONYM_FILE.write_text(json.dumps(_SYNONYM_CACHE, ensure_ascii=False, indent=1),
+                                     encoding="utf-8")
+        except Exception:
+            pass
     if syns:
         log.info(f"[chart_data] '{theme}' 동의어 확장 → {syns}")
     return syns
