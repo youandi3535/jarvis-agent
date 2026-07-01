@@ -112,17 +112,21 @@ def plan_data_sources(topic: str, sector: str = "", description: str = "") -> li
     catalog = "\n".join(f"- {k}: {v}" for k, v in _SOURCE_CATALOG.items())
     prompt = _PLAN_PROMPT.format(topic=topic, sector=sector or "-",
                                  desc=(description or topic)[:400], catalog=catalog)
-    try:
-        from shared.llm import invoke_text
-        raw = invoke_text("analyzer", prompt, system=_PLAN_SYSTEM,
-                          max_tokens=1100, temperature=0.2)
-        plan = _sanitize(_extract_json(raw))
-        if plan:
-            log.info(f"[planner] '{topic}' → {len(plan)}개 series 설계")
-            return plan
-    except Exception as e:
-        log.warning(f"[planner] 설계 실패: {e}")
-        _g_report("collector", e, module=__name__, func_name="plan_data_sources")
+    # ★ 재시도 3회 (사용자 박제 2026-07-01): LLM 이 가끔 빈/파싱불가 응답 → 설계 0개 → 수집 0.
+    #   설계는 전체 파이프라인의 시작점이라 *반드시* 한 번은 성공하도록 재시도.
+    for _attempt in range(3):
+        try:
+            from shared.llm import invoke_text
+            raw = invoke_text("analyzer", prompt, system=_PLAN_SYSTEM,
+                              max_tokens=1100, temperature=0.2 if _attempt == 0 else 0.4)
+            plan = _sanitize(_extract_json(raw))
+            if plan:
+                log.info(f"[planner] '{topic}' → {len(plan)}개 series 설계 (시도 {_attempt + 1})")
+                return plan
+        except Exception as e:
+            log.warning(f"[planner] 설계 시도{_attempt + 1} 실패: {e}")
+            _g_report("collector", e, module=__name__, func_name="plan_data_sources")
+    log.warning(f"[planner] '{topic}' 설계 3회 전패 → 빈 리스트")
     return []
 
 

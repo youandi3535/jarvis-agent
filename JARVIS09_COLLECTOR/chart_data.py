@@ -373,20 +373,24 @@ def _expand_theme(theme: str) -> list:
     if theme in _SYNONYM_CACHE:
         return _SYNONYM_CACHE[theme]
     syns = []
-    try:
-        from shared.llm import invoke_text
-        raw = invoke_text(
-            "analyzer",
-            f'"{theme}" 를 한국 정부통계(KOSIS)·공식자료에서 검색할 때 쓰는 *정식 명칭·동의어* 를 '
-            f'최대 3개 알려줘 (예: "지역화폐"→"지역사랑상품권"). 해당 없으면 빈 배열.\n'
-            'JSON만: {"terms": ["정식명칭1", ...]}',
-            max_tokens=120, temperature=0)
-        m = re.search(r"\{[\s\S]*\}", raw or "")
-        if m:
-            terms = json.loads(m.group(0)).get("terms") or []
-            syns = [str(t).strip() for t in terms if str(t).strip() and str(t).strip() != theme][:3]
-    except Exception as e:
-        log.warning(f"[chart_data] 동의어 확장 실패: {e}")
+    _prompt = (
+        f'"{theme}" 를 한국 정부통계(KOSIS)·공식자료에서 검색할 때 쓰는 *정식 명칭·동의어* 를 '
+        f'최대 3개 알려줘 (예: "지역화폐"→"지역사랑상품권", "전기차"→"전기자동차"). '
+        f'"{theme}" 자체가 이미 정식명이면 유사·상위 개념어라도 1~2개. 정말 없을 때만 빈 배열.\n'
+        'JSON만: {"terms": ["정식명칭1", ...]}')
+    for _attempt in range(3):   # ★ 재시도 — LLM 이 가끔 빈 응답 → 동의어 0 → KOSIS 수율 0
+        try:
+            from shared.llm import invoke_text
+            raw = invoke_text("analyzer", _prompt, max_tokens=120,
+                              temperature=0 if _attempt == 0 else 0.3)
+            m = re.search(r"\{[\s\S]*\}", raw or "")
+            if m:
+                terms = json.loads(m.group(0)).get("terms") or []
+                syns = [str(t).strip() for t in terms if str(t).strip() and str(t).strip() != theme][:3]
+                if syns:
+                    break
+        except Exception as e:
+            log.warning(f"[chart_data] 동의어 확장 시도{_attempt + 1} 실패: {e}")
     _SYNONYM_CACHE[theme] = syns
     if syns:
         log.info(f"[chart_data] '{theme}' 동의어 확장 → {syns}")
@@ -869,13 +873,38 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     for ds in sorted(deduped, key=lambda d: _PROV_RANK.get((d.get("source") or {}).get("provider", ""), 5)):
         p = (ds.get("source") or {}).get("provider", "?")
         _groups.setdefault(p, []).append(ds)
+    # ★ aspect 다양성 (사용자 박제 2026-07-01): 같은 지표어(예 '만족도')가 여러 개 선택돼 단조로운
+    #   차트가 되지 않게, 주제·동의어를 뺀 *구별 지표 토큰* 이 이미 2개 선택되면 그 데이터셋은 후순위로.
+    _theme_syn_tokens = _specific_tokens(f"{theme} {' '.join(_syns)}")
+    _aspect_used: dict = {}
+
+    def _aspect_saturated(ds) -> bool:
+        toks = _specific_tokens(ds.get("title", "")) - _theme_syn_tokens
+        return bool(toks) and any(_aspect_used.get(t, 0) >= 2 for t in toks)
+
+    def _mark_aspect(ds):
+        for t in (_specific_tokens(ds.get("title", "")) - _theme_syn_tokens):
+            _aspect_used[t] = _aspect_used.get(t, 0) + 1
+
     final: list[dict] = []
+    _deferred: list[dict] = []   # aspect 포화로 미룬 것 — 자리 남으면 채움(빈 풀 방지)
     while len(final) < max_datasets and any(_groups.values()):
         for p in list(_groups):
-            if _groups[p]:
-                final.append(_groups[p].pop(0))
-                if len(final) >= max_datasets:
-                    break
+            if not _groups[p]:
+                continue
+            ds = _groups[p].pop(0)
+            if _aspect_saturated(ds):
+                _deferred.append(ds)
+                continue
+            _mark_aspect(ds)
+            final.append(ds)
+            if len(final) >= max_datasets:
+                break
+    # 다양성 우선 선택 후 자리가 남으면 미룬 것으로 보충 (차트 수 확보)
+    for ds in _deferred:
+        if len(final) >= max_datasets:
+            break
+        final.append(ds)
 
     _prov_mix = {}
     for d in final:
