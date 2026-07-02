@@ -486,9 +486,11 @@ def _fallback_spec(datasets, seed):
         kind = {"timeseries": "area", "category": "hbar", "ratio": "donut", "kpi": "stat"}.get(k, "bar")
         panels.append({"kind": kind, "data": f"k{i}", "title": str(ds.get("title", "")),
                        "span": 2 if (i == 0 and layout in ("hero_feature", "report_stack")) else 1})
+    # 헤더 제목은 실제 데이터셋 제목 사용 (없으면 caller title 이 generate_infographic 에서 채움)
+    _ht = str((datasets[0].get("title") if datasets else "") or "").strip()[:24]
     return {"orientation": "portrait" if seed % 4 == 0 else "landscape",  # 가로형 75%
             "layout": layout, "mood": moods[(seed >> 3) % len(moods)],
-            "header": {"title": "데이터 인사이트", "subtitle": "실시간 데이터 종합", "chip": "", "icon": "chart"},
+            "header": {"title": _ht, "subtitle": "", "chip": "", "icon": "chart"},
             "kpis": kpis, "panels": panels, "insight": ""}
 
 
@@ -504,6 +506,80 @@ def _llm_design(context, datasets, seed):
     except Exception as e:
         _g_report("image", e, module=__name__, func_name="_llm_design")
     return _fallback_spec(datasets, seed), "fallback"
+
+
+# ── C1 배치 설계 (사용자 박제 2026-07-02) — 글당 1회 LLM 으로 pool 전체 개별 설계 ──────
+#   차트마다 LLM 호출(N회) → 1회로 급감 (Max 구독 rate-limit 절감). 각 이미지는 여전히 LLM 이
+#   *개별* 설계(배치 안에서 서로 다른 N개). 실패 시 generate_infographic 이 개별 _llm_design 폴백.
+import threading as _ig_threading
+_BATCH_DESIGN_CACHE: dict = {}          # run_id -> {ds_key: spec}
+_BATCH_LOCK = _ig_threading.Lock()
+
+_BATCH_DESIGN_PROMPT = """너는 세계적 통계 인포그래픽 아트디렉터다. 아래 여러 데이터 각각에
+*서로 확연히 다른* 프리미엄 인포그래픽 설계도(JSON)를 만든다. N개 데이터 → N개 설계.
+각 설계는 레이아웃·무드(색)·차트종류·강조가 *서로 달라야* 한다 (같은 글에 실림 — 중복 금지).
+
+[데이터 목록 — 각 항목의 data key(k0) 만 참조]
+__ITEMS__
+
+[각 설계 규칙]
+- orientation: 대부분 "landscape", 데이터 아주 많을 때만 가끔 "portrait".
+- layout: dashboard | hero_feature | report_stack | kpi_hero | split_compare 중 하나 (항목마다 다르게).
+- mood: navy|blue|green|purple|amber|ocean|teal|rose|slate 중 하나 (항목마다 다르게).
+- header.icon: chart|won|globe|bank|oil|trend|flag 중 주제에 맞게.
+- kpis 3~4개: {data,label,metric(latest|change|max|min|avg|top|count),icon}.
+- panels 2~5개: {kind(area|bar|hbar|donut|stat),data,title,span(1|2)} — 데이터 종류에 맞춰.
+- title/subtitle/insight 한국어. insight 에 수치를 지어내지 마라(코드가 실데이터로 채움).
+
+[출력] 설명 없이 JSON 배열 하나만. 각 원소에 "idx"(데이터 번호) 포함:
+[{"idx":0,"orientation":"landscape","layout":"dashboard","mood":"navy","header":{"title":"...","subtitle":"...","chip":"","icon":"chart"},"kpis":[{"data":"k0","label":"...","metric":"latest","icon":"chart"}],"panels":[{"kind":"area","data":"k0","title":"...","span":2}],"insight":"..."}]"""
+
+
+def _ds_key(ds):
+    """데이터셋 식별 키 — title + 상위 라벨."""
+    L = [str(r.get("label", "")) for r in (ds.get("data") or [])][:4]
+    return f"{str(ds.get('title', ''))}|{'|'.join(L)}"
+
+
+def _extract_json_array(raw):
+    if not raw:
+        return None
+    m = re.search(r"\[.*\]", str(raw), re.S)
+    if not m:
+        return None
+    try:
+        arr = json.loads(m.group(0))
+        return arr if isinstance(arr, list) else None
+    except Exception:
+        return None
+
+
+def prime_batch_designs(run_id, pool, context=""):
+    """글당 1회 — pool 의 모든 데이터셋을 *한 번의 LLM 호출* 로 각각 개별 설계 → 캐시.
+    idempotent(run_id 당 1회). 락을 배치 완료까지 보유 → 동시 차트 스레드는 대기 후 캐시 사용.
+    실패해도 빈 캐시 등록(개별 폴백) — 재시도 안 함."""
+    if not run_id or not pool:
+        return
+    with _BATCH_LOCK:
+        if run_id in _BATCH_DESIGN_CACHE:
+            return                       # 이미 다른 스레드가 배치 완료
+        _use = list(pool)[:10]
+        cache: dict = {}
+        try:
+            items = "\n".join(f"[{i}] {_data_brief([ds])}" for i, ds in enumerate(_use))
+            prompt = _BATCH_DESIGN_PROMPT.replace("__ITEMS__", items)
+            from shared.llm import invoke_text
+            raw = invoke_text("writer_fast", prompt, timeout=150)
+            for spec in (_extract_json_array(raw) or []):
+                if not isinstance(spec, dict):
+                    continue
+                idx = spec.get("idx")
+                if isinstance(idx, int) and 0 <= idx < len(_use) and spec.get("panels"):
+                    cache[_ds_key(_use[idx])] = spec
+            print(f"  🎨 [배치설계] {len(cache)}/{len(_use)}개 인포그래픽 LLM 설계 완료 (호출 1회)")
+        except Exception as e:
+            _g_report("image", e, module=__name__, func_name="prime_batch_designs")
+        _BATCH_DESIGN_CACHE[run_id] = cache
 
 
 def _callout_box(text, pal):
@@ -575,7 +651,12 @@ def render_spec(spec, datasets, out_path, seed=0, src="데이터 출처: 한국�
         orient = str(spec.get("orientation", "landscape")).lower()
         if orient not in ("landscape", "portrait"):
             orient = "landscape"
-        layout = "dashboard" if orient == "landscape" else spec.get("layout", "dashboard")
+        # ★ LLM 레이아웃 존중 (사용자 박제 2026-07-02). 단 가로형(landscape)에서 전폭 세로스택
+        #   report_stack 은 부적합 → dashboard 로만 대체. 나머지 4종은 LLM 선택 그대로.
+        _ll = str(spec.get("layout", "dashboard")).lower()
+        if _ll not in ("dashboard", "hero_feature", "report_stack", "kpi_hero", "split_compare"):
+            _ll = "dashboard"
+        layout = "dashboard" if (orient == "landscape" and _ll == "report_stack") else _ll
         cap = 4 if orient == "landscape" else 6      # 가로형은 패널 적게 → 세로<가로
         ch = 230 if orient == "landscape" else 300   # 가로형은 차트 낮게
         hdr = spec.get("header") or {}
@@ -595,9 +676,11 @@ def render_spec(spec, datasets, out_path, seed=0, src="데이터 출처: 한국�
             kcards.append(kpi_card(k.get("icon", "chart"), pal["c1"], pal["c2"], _lbl, val, chg, sv))
         kpi_html = f"<div style='display:flex;gap:14px;margin-bottom:16px'>{''.join(kcards)}</div>" if kcards else ""
         plist = (spec.get("panels") or [])[:cap]
-        # 스팬: 가로형=전부 2열(절반), 세로형=spec/report 따름
+        # 스팬: 가로형 hero_feature=첫 패널 히어로(전폭)+나머지 2열, 그 외 가로형=2열 그리드,
+        #       세로형=spec/report 따름
         if orient == "landscape":
-            spans = [1] * len(plist)
+            spans = ([2 if i == 0 else 1 for i in range(len(plist))]
+                     if layout == "hero_feature" else [1] * len(plist))
         else:
             spans = [2 if (str(p.get("span")) == "2" or layout == "report_stack") else 1 for p in plist]
         # 외톨이 반쪽 방지(절반 패널 홀수면 마지막을 전폭으로)
@@ -751,33 +834,36 @@ def generate_infographic(title, subtitle, datasets, *, run_id="", slot_key="",
     out_dir.mkdir(parents=True, exist_ok=True)
     seed = _seed_int(run_id, slot_key, title)
     _sk = re.sub(r"[^0-9A-Za-z]", "", str(slot_key))[:10] or "s"
-    # ★ 단일 데이터셋은 전용 렌더러로 (디렉터 중복 KPI·패널 양산 차단) — 중복 0 + 분포 정확
-    if len(datasets) == 1:
-        _out1 = out_dir / f"infg_{_sk}_{seed % 100000000}.jpg"
-        _r = _render_single(datasets[0], title, subtitle, _out1, seed, src, chip=chip, slot=slot_key)
-        if _r:
-            return _r
-    spec, _origin = _llm_design(context or f"{title} — {subtitle}", datasets, seed)
-    # ★ 슬롯마다 시각적 다양성 강제 (사용자 박제: 유사 데이터도 같은 디자인 금지)
-    #   무드(팔레트)·레이아웃·차트종류를 seed 로 변주 → 9장이 전부 다르게 보이도록.
+    # ★ C1 배치 설계 캐시 우선 (사용자 박제 2026-07-02) — 글당 1회 LLM 배치 결과 재사용 (rate-limit
+    #   절감). 각 이미지는 배치 안에서 LLM 이 *개별* 설계한 것. 캐시 미스 시에만 개별 _llm_design 폴백.
+    spec = None
+    if run_id:
+        _bc = _BATCH_DESIGN_CACHE.get(run_id)
+        if _bc:
+            _cached = _bc.get(_ds_key(datasets[0]))
+            if _cached:
+                spec = dict(_cached)        # 캐시 원본 보호
+                _origin = "batch"
+    if spec is None:
+        spec, _origin = _llm_design(context or f"{title} — {subtitle}", datasets, seed)
+    # 색상만 슬롯별로 확실히 분산 (제12조 — 같은 글 내 색 중복 금지). 구조는 건드리지 않음.
     _moods = list(_MOOD_IDX.keys())
     spec["mood"] = _moods[seed % len(_moods)]
-    _layouts = ["dashboard", "hero_feature", "kpi_hero", "split_compare", "report_stack"]
-    spec["layout"] = _layouts[(seed >> 4) % len(_layouts)]
-    # category(분포) 패널의 차트종류도 변주 (bar/hbar/donut)
-    _cat_kinds = ["bar", "hbar", "donut"]
-    _ck = _cat_kinds[(seed >> 7) % len(_cat_kinds)]
-    for p in (spec.get("panels") or []):
-        if str(p.get("kind", "")).lower() in ("bar", "hbar", "donut"):
-            p["kind"] = _ck
     spec.setdefault("header", {})
-    spec["header"].setdefault("title", title)
-    spec["header"].setdefault("subtitle", subtitle)
-    if chip:
-        spec["header"].setdefault("chip", chip)
-    _sk = re.sub(r"[^0-9A-Za-z]", "", str(slot_key))[:10] or "s"
+    if not spec["header"].get("title"):          # LLM/폴백이 제목 없으면 caller title 로
+        spec["header"]["title"] = title
+    if not spec["header"].get("subtitle"):
+        spec["header"]["subtitle"] = subtitle
+    if chip and not spec["header"].get("chip"):
+        spec["header"]["chip"] = chip
     out = out_dir / f"infg_{_sk}_{seed % 100000000}.jpg"
-    return render_spec(spec, datasets, out, seed=seed, src=src)
+    _r = render_spec(spec, datasets, out, seed=seed, src=src)
+    if _r:
+        return _r
+    # 렌더 실패(레이아웃/데이터 이슈) 시에만 단일 데이터셋 규칙 폴백 (신뢰성 보장)
+    if len(datasets) == 1:
+        return _render_single(datasets[0], title, subtitle, out, seed, src, chip=chip, slot=slot_key)
+    return ""
 
 
 _VH_MAP = {
@@ -918,5 +1004,91 @@ def inject_economic_infographics(blocks, keyword="", out_dir=None, *, run_id="",
         return blocks
 
 
+def render_table_infographic(table_html, idx=0, out_dir=None, *, title="", run_id=""):
+    """HTML 표 → *인포그래픽 스타일* 이미지 (사용자 박제 2026-07-02: 모든 이미지는 인포그래픽).
+
+    ★ 표 내용을 *그대로 보존* — 수치·라벨 변형 0 → 사실성 안전(새 수치 생성 아님 → _verify_dataset
+      게이트 대상 아님). matplotlib plain 표 대신 팔레트 헤더바·라운드 카드·교차행·출처 푸터.
+    실패 시 "" 반환 → 호출자(block_assembler)가 기존 plain 표 렌더러로 폴백.
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except Exception:
+        return ""
+    try:
+        soup = BeautifulSoup(str(table_html), "html.parser")
+        trs = soup.find_all("tr")
+        if not trs:
+            return ""
+
+        def _ct(el):
+            t = el.get_text(separator=" ", strip=True)
+            t = re.sub(r"[\U0001F000-\U0001FFFF]", "", t).replace("⭐", "★").replace("\U0001F31F", "★")
+            return t.strip()
+
+        first = trs[0]
+        headers = [_ct(c) for c in first.find_all(["th", "td"])]
+        body_trs = trs[1:]
+        rows = []
+        for tr in body_trs:
+            cells = tr.find_all(["td", "th"])
+            row = []
+            for c in cells:
+                txt = _ct(c)
+                col = None
+                if "▲" in txt or ("+" in txt and "%" in txt):
+                    col = "#e8513a"          # 상승 — 빨강 계열
+                elif "▼" in txt or (txt.startswith("-") and "%" in txt):
+                    col = "#1b78d6"          # 하락 — 파랑 계열
+                row.append((txt, col))
+            if any(t for t, _ in row):
+                rows.append(row)
+        if not rows or not headers:
+            return ""
+        ncol = max(len(headers), max(len(r) for r in rows))
+        headers = (headers + [""] * ncol)[:ncol]
+        rows = [(r + [("", None)] * ncol)[:ncol] for r in rows]
+
+        seed = _seed_int(run_id, str(idx), title or (headers[0] if headers else "table"))
+        pal = PALETTES[seed % len(PALETTES)]
+        th = "".join(
+            f"<th style='padding:14px 16px;text-align:{'left' if j == 0 else 'center'};"
+            f"font-size:16px;font-weight:800;color:#fff;white-space:nowrap'>{h}</th>"
+            for j, h in enumerate(headers))
+        body_rows = []
+        for i, row in enumerate(rows):
+            bg = pal["soft"] if i % 2 == 0 else "#ffffff"
+            tds = "".join(
+                f"<td style='padding:13px 16px;text-align:{'left' if j == 0 else 'center'};"
+                f"font-size:16px;font-weight:{'800' if j == 0 else '600'};"
+                f"color:{col or ('#16202e' if j == 0 else '#46505f')};white-space:nowrap'>{txt}</td>"
+                for j, (txt, col) in enumerate(row))
+            body_rows.append(f"<tr style='background:{bg}'>{tds}</tr>")
+        card = (f"<div style='{_CARD};padding:8px;overflow:hidden'>"
+                f"<table style='width:100%;border-collapse:collapse;font-family:{FONT}'>"
+                f"<thead><tr style='background:linear-gradient(135deg,{pal['c1']},{pal['c2']})'>{th}</tr></thead>"
+                f"<tbody>{''.join(body_rows)}</tbody></table></div>")
+        inner = (f"<div style='background:{pal['soft']};background-image:radial-gradient({pal['dot']} 1.2px,transparent 1.2px);"
+                 f"background-size:22px 22px;padding:22px'>{card}</div>")
+        W = 1280
+        _t = str(title or (headers[0] if headers else "데이터 표"))[:24]
+        html = (f"<!DOCTYPE html><html lang=ko><head><meta charset=UTF-8><style>"
+                f"@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;700;800;900&display=swap');"
+                f"*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:{FONT};width:{W}px;background:#fff}}"
+                f"</style></head><body><div style='width:{W}px;background:#fff'>"
+                f"{_header(pal, _t, '', '', 'chart')}{inner}{_foot('데이터 출처: 본문 표 기준')}</div></body></html>")
+        out_dir = Path(out_dir) if out_dir else Path(".")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"tableinfg_{idx}_{seed % 100000000}.jpg"
+        from JARVIS06_IMAGE.html_infographic import _html_to_jpg
+        ok = _html_to_jpg(html, Path(out), width=W)
+        _p = Path(out)
+        return str(out) if (ok and _p.exists() and _p.stat().st_size > 2000) else ""
+    except Exception as e:
+        _g_report("image", e, module=__name__, func_name="render_table_infographic")
+        return ""
+
+
 __all__ = ["generate_infographic", "render_infographic", "select_design",
-           "generate_chart_infographic", "inject_economic_infographics", "PALETTES"]
+           "generate_chart_infographic", "inject_economic_infographics",
+           "render_table_infographic", "prime_batch_designs", "PALETTES"]

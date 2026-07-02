@@ -310,6 +310,48 @@ _ALIAS_MODEL: dict[str, str] = {
 }
 
 
+# ── LLM 호출 실패 근본 차단 (사용자 박제 2026-07-02) ──────────────────
+#  ① embedded null byte: 수집 데이터(뉴스·웹)의 널바이트·제어문자가 프롬프트에 섞이면
+#     claude CLI subprocess spawn 이 ValueError("embedded null byte") 로 크래시 → 사전 제거.
+#  ② Max 구독 burst 초과: 발행이 claude CLI 를 동시에 여러 개(차트 4-way 등) spawn 하면
+#     Max 구독 동시성 한도 초과 → CLI 가 모델 미호출(num_turns=0) 로 빈 응답 → 폴백.
+#     단일 진입점에서 프로세스 전역 세마포어로 spawn 을 직렬화 → 각 호출이 실제 성공.
+import re as _re_ctrl
+import threading as _threading
+import time as _time_pace
+
+_CTRL_RE = _re_ctrl.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _sanitize_prompt(s: str) -> str:
+    """CLI subprocess spawn 안전 — 널바이트·제어문자 제거 (탭·개행·복귀는 보존)."""
+    if not s:
+        return s
+    return _CTRL_RE.sub("", s)
+
+
+# 동시 claude CLI spawn 상한 (기본 1 = 완전 직렬 — Max burst 안전). env 로 튜닝.
+_LLM_MAX_CONCURRENCY = max(1, int(os.getenv("LLM_MAX_CONCURRENCY", "1") or "1"))
+_LLM_SPAWN_SEM = _threading.BoundedSemaphore(_LLM_MAX_CONCURRENCY)
+# spawn 간 최소 간격(초) — 기본 0(off). rate-limit 잦으면 0.5~1 로 상향.
+_LLM_MIN_INTERVAL = float(os.getenv("LLM_MIN_INTERVAL_SEC", "0") or "0")
+_LLM_PACE_LOCK = _threading.Lock()
+_LLM_LAST_SPAWN = [0.0]
+
+
+def _pace_spawn() -> None:
+    """직전 spawn 과 최소 간격 유지 (burst rate-limit 완충). 기본 off."""
+    if _LLM_MIN_INTERVAL <= 0:
+        return
+    with _LLM_PACE_LOCK:
+        _now = _time_pace.monotonic()
+        _wait = _LLM_LAST_SPAWN[0] + _LLM_MIN_INTERVAL - _now
+        if _wait > 0:
+            _time_pace.sleep(_wait)
+            _now = _time_pace.monotonic()
+        _LLM_LAST_SPAWN[0] = _now
+
+
 async def _invoke_sdk_async(
     prompt: str,
     model: str = "claude-sonnet-4-6",
@@ -319,6 +361,7 @@ async def _invoke_sdk_async(
     from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
     from claude_code_sdk._errors import MessageParseError, ProcessError
     full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
+    full_prompt = _sanitize_prompt(full_prompt)   # ★ embedded null byte 크래시 차단
     options = ClaudeCodeOptions(model=model, env={"ANTHROPIC_API_KEY": ""})
     parts: list[str] = []
     try:
@@ -344,6 +387,7 @@ def _run_sdk_sync(
     from claude_code_sdk._errors import MessageParseError, ProcessError
 
     full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
+    full_prompt = _sanitize_prompt(full_prompt)   # ★ embedded null byte 크래시 차단
     options = ClaudeCodeOptions(model=model, env={"ANTHROPIC_API_KEY": ""})
     parts: list[str] = []
     throttled = {"v": False}
@@ -362,15 +406,18 @@ def _run_sdk_sync(
                 elif type(msg).__name__ == "ResultMessage" and getattr(msg, "num_turns", 1) == 0:
                     throttled["v"] = True
 
-    try:
-        anyio.run(_collect)
-    except (MessageParseError, ProcessError):
-        pass  # rate_limit_event 또는 프로세스 종료 — 응답은 이미 수집됨
-    except TimeoutError:
-        print(f"  ⚠️ SDK timeout {timeout}s — 수집된 응답: {len(parts)}개")
-    except Exception as e:
-        if not parts:
-            print(f"  ❌ SDK 오류: {e}")
+    # ★ 프로세스 전역 세마포어 — claude CLI 동시 spawn 직렬화 (Max burst 초과 방지)
+    _pace_spawn()
+    with _LLM_SPAWN_SEM:
+        try:
+            anyio.run(_collect)
+        except (MessageParseError, ProcessError):
+            pass  # rate_limit_event 또는 프로세스 종료 — 응답은 이미 수집됨
+        except TimeoutError:
+            print(f"  ⚠️ SDK timeout {timeout}s — 수집된 응답: {len(parts)}개")
+        except Exception as e:
+            if not parts:
+                print(f"  ❌ SDK 오류: {e}")
     if throttled["v"] and not parts:
         # 가시화 — invoke_text 재시도 백오프가 짧은 스로틀을 흡수, 지속 시 호출자 폴백.
         print("  ⏳ [LLM] rate-limit 스로틀 (num_turns=0, 모델 미호출) — 재시도/폴백")
@@ -378,7 +425,7 @@ def _run_sdk_sync(
 
 
 def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
-                _retries: int = 2, **overrides) -> str:
+                _retries: int = 4, **overrides) -> str:
     """Claude Code SDK 호출 단일 진입점.
 
     텍스트 생성(writer/router/analyzer): Sonnet 4.6
@@ -400,7 +447,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
         if result.strip():
             return result
         if _attempt < _retries - 1:
-            _t.sleep(3 * (2 ** _attempt) + _r.uniform(0, 1.5))   # ~3s, ~6s (+지터) — rate-limit 회복
+            _t.sleep(min(30.0, 4 * (2 ** _attempt)) + _r.uniform(0, 1.5))  # 4·8·16·30s (+지터) — rate-limit 회복
     return result
 
 

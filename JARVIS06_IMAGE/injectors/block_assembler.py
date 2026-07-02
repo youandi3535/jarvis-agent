@@ -71,10 +71,18 @@ def assemble_blocks(html: str, visual_paths: list, out_dir=None) -> list:
             else:
                 blocks.append(("text", elem))
         elif tag == "table":
-            # <table> → PNG 이미지 변환 후 image 블록 (실패 시 text 폴백)
+            # <table> → *인포그래픽 스타일* 이미지 (사용자 박제: 모든 이미지는 인포그래픽).
+            #   표 내용 그대로 보존(수치 변형 0). 실패 시 기존 plain 표 렌더러 → text 순 폴백.
             try:
-                from JARVIS06_IMAGE.economic_charts import render_html_table_as_image as _tbl_img
-                img_path = _tbl_img(elem, table_idx, out_dir)
+                img_path = ""
+                try:
+                    from JARVIS06_IMAGE.infographic_engine import render_table_infographic as _tbl_infg
+                    img_path = _tbl_infg(elem, table_idx, out_dir)
+                except Exception:
+                    img_path = ""
+                if not img_path:
+                    from JARVIS06_IMAGE.economic_charts import render_html_table_as_image as _tbl_img
+                    img_path = _tbl_img(elem, table_idx, out_dir)
                 if img_path:
                     blocks.append(("image", img_path))
                     table_idx += 1

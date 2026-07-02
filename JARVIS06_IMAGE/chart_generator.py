@@ -289,6 +289,13 @@ def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, ru
         if not pool:
             print(f"  ⚠️ [chart_generator] '{keyword}' 게이트 실데이터 0 — 차트 스킵(거짓·무관 < 차트 없음)")
             return ""
+        # ★ C1 배치 설계 (사용자 박제 2026-07-02) — 글당 1회 LLM 으로 pool 전체 인포그래픽 설계.
+        #   idempotent(run_id 당 1회) → 이후 각 차트의 generate_infographic 은 캐시 사용(LLM 0).
+        try:
+            from JARVIS06_IMAGE.infographic_engine import prime_batch_designs
+            prime_batch_designs(run_id, pool, keyword)
+        except Exception:
+            pass
         n = len(pool)
         # ★ 반복 금지 (사용자 박제 2026-07-01): 같은 데이터셋을 여러 슬롯에 반복(중복 차트)하지 않는다.
         #   글 단위 used-set(set_session_pool 마다 리셋)으로 *미사용* 데이터셋만 1회씩 →

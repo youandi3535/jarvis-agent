@@ -5996,3 +5996,20 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
   - 무료 데이터 라이브러리 자동설치: `JARVIS09_COLLECTOR/lib_bootstrap.py` — *갯수 제한 없이* 승인 없이 설치(안전 정책: 데니리스트·PyPI실존·무료 라이선스).
 - **파일**: `JARVIS09_COLLECTOR/{chart_data.py,lib_bootstrap.py,__init__.py}`, `JARVIS06_IMAGE/validators/image_data_verifier.py`, `JARVIS06_IMAGE/{image_spec.py,image_agent.py}`, `JARVIS02_WRITER/prepublish_gate.py`, `shared/precommit_check.py`, `docs/decisions/010-image-factuality-real-data.md`, `CLAUDE.md`.
 - **교훈**: 이미지도 *콘텐츠*다. 텍스트에만 사실성 게이트를 걸면 데이터 시각화가 사각지대가 된다. 수치 이미지는 *반드시* 실데이터 출처를 박고 검증해야 함. 수집은 JARVIS09, 생성은 JARVIS06 — 단일 진입점 협업.
+
+## [288] LLM 호출 실패(null byte·Max burst 스로틀) → 발행 지연·검증 스킵·인포그래픽 폴백 균일화 (2026-07-02)
+
+- **증상**: 테마 발행이 극도로 느리고, 검증이 안 도는 듯 보이며, 인포그래픽 6장이 전부 비슷비슷. 로그에 `rate-limit 스로틀 (num_turns=0, 모델 미호출)` 20+회, `SDK 오류: Failed to start Claude Code: embedded null byte` 4회.
+- **환경**: `shared/llm.py` (claude-code-sdk, Max 구독 OAuth). 테마 발행 경로(`invoke_text` 정적 호출 57곳), 차트 4-way 병렬(theme_html_writer). 인터랙티브 Claude Code 세션·데몬 5분 잡과 같은 Max 구독 공유.
+- **원인**: ① 수집 데이터(뉴스·웹)의 널바이트가 프롬프트에 섞여 `claude` CLI subprocess spawn 이 `ValueError: embedded null byte` 로 크래시. ② 발행이 `claude` CLI 를 4개씩 동시 spawn → Max 구독 burst 한도 초과 → CLI 가 모델 미호출(num_turns=0) 빈 응답 → 폴백. ③ **인포그래픽 균일성은 rate-limit 이 아니라 하드코딩**: 단일 데이터셋은 LLM 디자이너를 우회(`_render_single` 고정 템플릿), 다중은 LLM 설계를 seed 해시로 덮어씀(`generate_infographic` 761-772), landscape 는 무조건 `dashboard` 강제(`render_spec` 578).
+- **헛다리**: "[planner] LLM 설계 실패 → discover 폴백" 로그가 *디자인* 폴백처럼 보이나 실은 *데이터* 소싱 폴백(`data_planner`). 인포그래픽 균일성과 무관.
+- **해결**:
+  - `shared/llm.py`: `_sanitize_prompt()` 널바이트·제어문자 제거(양 SDK 함수) → embedded null byte 근절. 프로세스 전역 `_LLM_SPAWN_SEM`(기본 1) 로 CLI 동시 spawn 직렬화 → Max burst 초과 방지. `invoke_text` 재시도 2→4·백오프 4·8·16·30s. `LLM_MAX_CONCURRENCY`/`LLM_MIN_INTERVAL_SEC` env 튜닝.
+  - `infographic_engine.py`: 단일 데이터셋도 LLM 디자이너 경유(`_render_single` 은 렌더 실패 시 폴백만). LLM 설계 seed-덮어쓰기 제거(구조는 LLM 존중, 색만 제12조용 분산). landscape 도 LLM 레이아웃 존중(report_stack 만 dashboard 대체). 폴백 헤더 제목=데이터셋 제목.
+  - 검증: 널바이트 프롬프트로 크래시 없이 실응답 8.1s, 단일데이터 3장이 색·레이아웃·차트종류 모두 상이하게 렌더 확인.
+- **파일**: `shared/llm.py`, `JARVIS06_IMAGE/infographic_engine.py`.
+- **교훈**: 폴백은 실패를 *가리는* 것 — 실패 *원인*(널바이트·동시 spawn burst)을 단일 진입점에서 제거해야 근본 해결. "다 비슷한 디자인"의 진짜 원인은 rate-limit 이 아니라 *하드코딩된 템플릿 + LLM 설계 덮어쓰기* 였음. 로그의 폴백 메시지(데이터 planner)를 디자인 원인으로 오인 주의.
+- **추가 조치 (④ 표·C1 배치)**:
+  - ④ 표→인포그래픽: `block_assembler.py` `<table>` 분기가 plain matplotlib 로만 갔음 → `infographic_engine.render_table_infographic` 우선(팔레트 헤더·라운드 카드·교차행·▲▼색 보존, 수치 변형 0 = 사실성 안전) → 실패 시 plain 폴백.
+  - C1 배치: ③가 차트마다 LLM 설계(N회)를 부르며 rate-limit 을 악화 → `prime_batch_designs(run_id, pool)` 글당 1회 LLM 으로 pool 전체를 개별 설계·캐시(`_BATCH_DESIGN_CACHE`), `generate_infographic` 은 캐시 사용(LLM 0). `chart_generator._collect_data_fallback` 에서 프라임. 검증: 3 데이터→1 호출, 개별폴백 0, 레이아웃 split_compare/hero_feature/kpi_hero 상이.
+  - **핵심 교훈 (rate-limit)**: Max 구독은 *계정 단위 rate(요청/시간)* 제한 — 단일 호출은 되지만 발행의 호출 폭주(~40)가 천장을 넘음. 인터랙티브 세션·데몬·발행이 *같은 계정* 공유 → 코드 세마포어(프로세스 내)로 못 막음. 해법은 호출 수 자체를 줄이거나(C1) 발행 전용 API 키 분리. 발행은 무경쟁 시각(예약)에.
