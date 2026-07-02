@@ -381,10 +381,11 @@ def get_negative_signal_penalty(keyword: str) -> float:
 def index_keyword_embedding(keyword: str) -> bool:
     """신규 키워드 임베딩 → DB 저장."""
     try:
-        from shared.style import _get_provider, _embed_voyage, _tfidf_fit_transform, _pack  # ★ Phase 2 통합 (2026-05-18)
+        from shared.style import _get_provider, _pack  # ★ Phase 2 통합 (2026-05-18)
         provider, model, dim, fn = _get_provider()
-        if provider == "voyage":
-            v = _embed_voyage([keyword])[0]
+        if provider != "tfidf":
+            # voyage / local_minilm(공유 MiniLM 384d) — fn 직접 호출, model·dim 은 provider 값
+            v = fn([keyword])[0]
         else:
             # TF-IDF — 기존 vectorizer 사용 (없으면 skip)
             import pickle
@@ -403,10 +404,12 @@ def index_keyword_embedding(keyword: str) -> bool:
         return False
 
 
-def backfill_keyword_embeddings(verbose: bool = True) -> dict:
+def backfill_keyword_embeddings(verbose: bool = True, reindex: bool = False) -> dict:
     """trends 테이블 고유 키워드 전체 → keyword_embeddings 일괄 백필.
 
     이미 임베딩된 키워드는 건너뜀. TF-IDF 모드는 기존 vectorizer pickle 사용.
+    reindex=True: 프로바이더 전환(tfidf→local_minilm 등)으로 임베딩 공간이 바뀌었을 때
+      현재 모델과 다른 행을 삭제 후 재임베딩 (마이그레이션 1회용). 기본 False.
     반환: {total, new, skipped, failed}
     """
     import sqlite3 as _sq
@@ -415,6 +418,15 @@ def backfill_keyword_embeddings(verbose: bool = True) -> dict:
     all_kws = [r[0] for r in con.execute(
         "SELECT DISTINCT keyword FROM trends ORDER BY keyword"
     ).fetchall()]
+    if reindex:
+        # 프로바이더 전환 → 임베딩 공간 불일치 → 현재 모델 아닌 행만 삭제 후 재백필
+        from shared.style import _get_provider as _gp
+        _cur_model = _gp()[1]
+        con.execute(
+            "DELETE FROM keyword_embeddings WHERE embed_model IS NULL OR embed_model != ?",
+            (_cur_model,),
+        )
+        con.commit()
     already = {r[0] for r in con.execute(
         "SELECT keyword FROM keyword_embeddings"
     ).fetchall()}

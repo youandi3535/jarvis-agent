@@ -136,6 +136,7 @@ pkill -f jarvis_daemon.py        # 전체 종료
 | `shared/bus.py` | 루트 | 이벤트 버스 — 에이전트 간 유일한 통신 창구 |
 | DB 파일 | `JARVIS_DB_PATH` (`.env`, 기본 `~/.jarvis/jarvis.sqlite`) | 실 DB. `shared/db.py` 가 `.env` 자가 로드 후 `DB_PATH` 로 단일 해석 — 직접 `connect('shared/jarvis.sqlite')` 금지, 항상 `from shared.db import DB_PATH` |
 | `shared/llm.py` | 루트 | **★ LLM 호출 단일 진입점 (ERRORS 4회 반복 박제 2026-05-24)** — 모든 LLM 호출은 `invoke_text(alias, prompt)` 만. 직접 API 키·`anthropic.Anthropic()`·모델 문자열 하드코딩 금지. 모델 변경은 `MODELS` dict 한 곳만. |
+| `shared/embeddings.py` | 루트 | **★ 임베딩(시맨틱 벡터) 단일 진입점 (사용자 박제 2026-07-02)** — 로컬 MiniLM(무료·CPU) 재사용. 오류매칭·밴딧·RADAR·QA검색 공용. `embed_texts / embed_text / encode / cosine_sim / available` 만. 모델명은 `EMBED_MODEL_NAME`·`EMBED_DIM` 두 상수 한 곳 (미래 bge-m3 = 두 줄 교체 + reindex). `vector_store` 도 이 상수 import. `sentence_transformers` 직접 로드·모델명 하드코딩 금지. |
 
 ## 루프 가드 규칙
 - `post_analysis.is_revised=1` 인 글은 재분석 대상에서 자동 제외
@@ -520,6 +521,7 @@ grep -rnE 'requests\.get\(' --include='*.py' . \
 - **★ 수동 수정 기록 의무 (Claude·사용자 공통)**: Claude 또는 사용자가 *발견·수정한 결함* 은 *반드시* `from JARVIS07_GUARDIAN.error_collector import report_manual_fix` 로 박제. *런타임 오류* 가 아닌 *코드 결함 발견 작업* 도 기록. 이렇게 해야 수동수정 카드가 *진정한 작업량* 을 반영. 박제 안 하면 사용자 신뢰 손상 + 회고 불가.
   - 호출 예: `report_manual_fix(source="writer", fixed_file="JARVIS02_WRITER/foo.py", description="...", error_type="PromptLeak", severity="medium", actor="claude")`
   - 적용 대상: 프롬프트 누수·import 경로·NoneType 가드·정책 위반·코드 결함 등 *어떤 수동 수정도 예외 없이* 박제.
+  - **★ 재발 가능한 런타임 오류 수정은 diff 동반 (2026-07-02 — 강화학습 사슬 연결)**: 실제 런타임 오류(NoneType·TypeError·import 깨짐 등)를 고쳤으면 `patch=<unified diff>`, `error_message=<실제 오류 메시지>`, `recurrable=True` 를 함께 넘긴다. 그러면 change-tracking 이 아니라 **actionable `llm_patch`** 로 등록(eval_agent Opus 4.6 게이트) → **Bandit(강화학습) 보상 발화** → 재발 시 LLM-0 재적용. diff 없이 부르면 종전대로 change-tracking(재발 개념 없는 정책/기능 변경). `_MANUAL_POLICY_TYPES`(PromptLeak·ExternalEdit·GitCommit 등)는 recurrable=None 자동 판정에서 actionable 제외.
 - **★ 자동 수정 범위 — catch() 단일 진입점 + 2-Tier (★ 사용자 박제 2026-06-28 — 티어 정의 단일 진실 소스 = `JARVIS07_GUARDIAN/architecture.py`)**:
   - **catch() 단일 진입점**: 6개 메커니즘 (sys.excepthook·threading.excepthook·APScheduler·log_scanner·auto_catch·report) 으로 모든 오류 *직접* 캐치.
   1. **Tier 1 — 패턴 자동 수정** (`pattern_fixer.py`, LLM 호출 0): static 코어 6종 + 학습 패턴(`learned_patterns.json`, hit_count 누적) + **Contextual Bandit (Linear UCB, `bandit.py`)** 가 시도 순서 랭킹. Group 1(static 6 + hit≥3) · Group 2(신규 hit 1~2).

@@ -49,9 +49,19 @@ from shared import db as _db
 # ════════════════════════════════════════════════════════════════════
 
 def _get_provider():
-    """우선순위에 따라 (provider_name, model_name, dim, fn) 반환."""
+    """우선순위 (provider_name, model_name, dim, fn) 반환 — voyage > local_minilm > tfidf.
+
+    ★ 2026-07-02: VOYAGE 키 없을 때 TF-IDF(고전) 대신 로컬 MiniLM(shared.embeddings)
+      384d 사용. 무료·CPU·API키 0. sentence_transformers 미설치 환경만 tfidf 최후 폴백.
+    """
     if os.getenv("VOYAGE_API_KEY"):
         return ("voyage", "voyage-3-lite", 1024, _embed_voyage)
+    try:
+        from shared.embeddings import is_available, EMBED_MODEL_NAME, EMBED_DIM
+        if is_available():
+            return ("local_minilm", EMBED_MODEL_NAME, EMBED_DIM, _embed_local_minilm)
+    except Exception:
+        pass
     return ("tfidf", "tfidf-fallback", 0, _embed_tfidf_placeholder)
 
 
@@ -73,6 +83,15 @@ def _embed_voyage(texts: list[str]) -> np.ndarray:
             out.append(d["embedding"])
         time.sleep(0.1)
     return np.array(out, dtype=np.float32)
+
+
+def _embed_local_minilm(texts: list[str]) -> np.ndarray:
+    """로컬 MiniLM(paraphrase-multilingual-MiniLM-L12-v2, 384d) 재사용 — 무료·CPU·L2정규화.
+
+    shared.embeddings 단일 진입점 위임 → vector_store(ChromaDB)와 동일 캐시 모델 공유.
+    """
+    from shared.embeddings import embed_texts
+    return embed_texts(texts)
 
 
 def _embed_tfidf_placeholder(texts: list[str]) -> np.ndarray:
@@ -215,12 +234,21 @@ def embed_query(text: str) -> tuple[np.ndarray, str, int]:
     else:
         model = rows[0]["embed_model"]
         dim = rows[0]["embed_dim"]
-        provider = "voyage" if "voyage" in model else "tfidf"
+        # 저장 코퍼스 모델로 provider 역추론 (질의·저장 동일 모델 = cosine 공간 일치 전제)
+        from shared.embeddings import EMBED_MODEL_NAME
+        if "voyage" in model:
+            provider = "voyage"
+        elif model == EMBED_MODEL_NAME:
+            provider = "local_minilm"
+        else:
+            provider = "tfidf"
 
     text = clean_text(text)[:8000]
 
     if provider == "voyage":
         v = _embed_voyage([text])[0]
+    elif provider == "local_minilm":
+        v = _embed_local_minilm([text])[0]
     else:
         import pickle
         try:
@@ -318,7 +346,7 @@ def build_few_shot_block(query: str, k: int = 2, max_chars: int = 600,
 
 __all__ = [
     # Indexer (Part 1)
-    "_get_provider", "_embed_voyage", "_embed_tfidf_placeholder",
+    "_get_provider", "_embed_voyage", "_embed_local_minilm", "_embed_tfidf_placeholder",
     "clean_text", "make_excerpt",
     "_pack", "unpack", "_tfidf_fit_transform",
     "run_full_index", "embed_query",

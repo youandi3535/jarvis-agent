@@ -30,7 +30,9 @@ if str(_ROOT) not in sys.path:
 _CHROMA_DIR      = Path(__file__).resolve().parent / "chroma_db"
 # v2: paraphrase-multilingual-MiniLM-L12-v2 (한국어 지원) — 컬렉션명 변경으로 자동 재구축
 _COLLECTION_NAME  = "jarvis_qa_vectors_v2"
-_EMBED_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+# ★ 임베딩 모델명 단일 진입점 — shared.embeddings.EMBED_MODEL_NAME (미래 bge-m3 = 한 곳만 교체)
+#   값은 동일 → ChromaDB EF 재계산·재인덱싱 불필요 (기존 v2 컬렉션 그대로 사용)
+from shared.embeddings import EMBED_MODEL_NAME as _EMBED_MODEL_NAME
 
 # 5중 검증 임계값 (다국어 모델 기준)
 # 주의: paraphrase-multilingual-MiniLM-L12-v2 는 짧은 한국어 명령형 문장들을
