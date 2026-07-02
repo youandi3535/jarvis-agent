@@ -1081,6 +1081,14 @@ def post_to_tistory(
             print(f"  ⚠️ URL 캡처 실패: {_e}")
             _g_report("writer", _e, module=__name__)
 
+        # ★ 발행 성공 확인 (2026-07-02): 클릭=성공으로 간주하던 갭 수정.
+        #   버튼도 못 찾고(published=None) RSS URL 도 못 잡으면 실제 발행 실패.
+        #   버튼 미발견 = 클릭 안 됨 = 발행 안 됨 → False 여도 이중발행 위험 없음.
+        if not published and not _last_post_url:
+            print("  ❌ 티스토리 발행 미확인 — 발행 버튼 미발견 + RSS URL 미포착 → 실패 처리")
+            _g_report("writer", RuntimeError("티스토리 발행 미확인(버튼·URL 모두 없음)"),
+                      module=__name__)
+            return False
         return True
 
     except Exception as e:

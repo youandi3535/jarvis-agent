@@ -2174,6 +2174,9 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
             "img_dir": img_dir,
             "blocks": blocks,
             "visual_paths": visual_paths,
+            # ★ 2-2 (2026-07-02): 작성에 실제 쓴 주제 특화 corpus(kw 재수집, 실패 시 일반)를
+            #   검증(prepublish 사실성 게이트) source_docs 로 노출 — 작성=검증 corpus 정합.
+            "source_docs": _kw_collection_docs,
         }
 
     except Exception as e:
@@ -2381,6 +2384,8 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             "html": html,
             "blocks": blocks,
             "visual_paths": visual_paths,
+            # ★ 2-2: 작성에 실제 쓴 주제 특화 corpus 를 검증 source_docs 로 노출.
+            "source_docs": _kw_collection_docs,
         }
 
     except Exception as e:

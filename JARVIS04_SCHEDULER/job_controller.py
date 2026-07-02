@@ -18,8 +18,14 @@ def pause_job(job_id: str) -> dict:
     sched = get_apscheduler()
     if sched is None:
         return {"ok": False, "error": "APScheduler 미가용"}
+    if sched.get_job(job_id) is None:   # ★ 대상 존재 확인 (2026-07-02)
+        return {"ok": False, "error": f"job '{job_id}' 미존재", "job_id": job_id}
     try:
         sched.pause_job(job_id)
+        # ★ 사후확인: 실제 paused(next_run=None) 반영됐는지
+        j = sched.get_job(job_id)
+        if j is not None and getattr(j, "next_run_time", None) is not None:
+            return {"ok": False, "error": "pause 미반영(next_run 잔존)", "job_id": job_id}
         return {"ok": True, "job_id": job_id, "action": "paused"}
     except Exception as e:
         return {"ok": False, "error": str(e), "job_id": job_id}
@@ -29,6 +35,8 @@ def resume_job(job_id: str) -> dict:
     sched = get_apscheduler()
     if sched is None:
         return {"ok": False, "error": "APScheduler 미가용"}
+    if sched.get_job(job_id) is None:   # ★ 대상 존재 확인
+        return {"ok": False, "error": f"job '{job_id}' 미존재", "job_id": job_id}
     try:
         sched.resume_job(job_id)
         return {"ok": True, "job_id": job_id, "action": "resumed"}
@@ -59,8 +67,13 @@ def remove_job(job_id: str) -> dict:
     sched = get_apscheduler()
     if sched is None:
         return {"ok": False, "error": "APScheduler 미가용"}
+    if sched.get_job(job_id) is None:   # ★ 대상 존재 확인 (2026-07-02)
+        return {"ok": False, "error": f"job '{job_id}' 미존재", "job_id": job_id}
     try:
         sched.remove_job(job_id)
+        # ★ 사후확인: 실제 제거됐는지
+        if sched.get_job(job_id) is not None:
+            return {"ok": False, "error": "remove 미반영(잡 잔존)", "job_id": job_id}
         return {"ok": True, "job_id": job_id, "action": "removed",
                 "note": "데몬 재시작 시 DEFAULT_JOBS 에 박혀 있으면 다시 등록됨"}
     except Exception as e:

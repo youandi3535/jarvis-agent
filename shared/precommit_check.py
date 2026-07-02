@@ -899,6 +899,101 @@ def check_auth(report: Report) -> None:
 CATEGORIES["auth"] = check_auth
 
 
+def check_verification(report: Report) -> None:
+    """범용 작업 검증 레지스트리 무결성 (사용자 박제 2026-07-02).
+
+    "모든 에이전트가 작업 완료 시 작업 종류에 맞는 검증을 통과해야만 통과" 원칙의
+    단일 진입점 JARVIS00_INFRA/verification.py 가 필수 API 를 보유하는지 보장.
+    ① 파일 존재 ② 필수 심볼(register_check/verify_output/CheckResult) 정의
+    ③ register_check 데코레이터 외부 재정의 금지(단일 진입점).
+    """
+    cat = "verification"
+    vpath = ROOT / "JARVIS00_INFRA/verification.py"
+    if not vpath.exists():
+        report.add(Violation(cat, "verification/missing",
+                             "JARVIS00_INFRA/verification.py", 0,
+                             "verification.py 없음 — 범용 검증 레지스트리 단일 진입점"))
+        report.checks_run += 1
+        return
+    src = vpath.read_text(encoding="utf-8")
+    for sym in ("def register_check", "def verify_output", "class CheckResult",
+                "def has_blocking", "def is_valid_image_file"):
+        if sym not in src:
+            report.add(Violation(cat, "verification/symbol-missing",
+                                 "JARVIS00_INFRA/verification.py", 0,
+                                 f"필수 심볼 '{sym}' 없음"))
+    report.checks_run += 1
+
+    # register_check 는 verification.py 만 정의 (외부 재정의 = 레지스트리 분산)
+    pat_def = re.compile(r"^def register_check\b")
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        if rel_s == "JARVIS00_INFRA/verification.py":
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if pat_def.match(line):
+                report.add(Violation(cat, "verification/def-external", rel_s, i, line))
+    report.checks_run += 1
+
+
+CATEGORIES["verification"] = check_verification
+
+
+def check_model(report: Report) -> None:
+    """모델 위생 — 폐기·저급 모델 흔적 잔재 차단 (사용자 박제 2026-07-02).
+
+    리팩터로 모델을 바꿨는데 주석·로그·docstring 에 옛 모델 이름을 남기면
+    (예: 실제론 Sonnet 4.6 인데 주석은 "Haiku") 사람이 로그·grep 에서
+    보고 오해한다. 실행 코드만 검사하는 다른 카테고리와 달리 *모든 라인*
+    (주석·문자열 포함)을 훑어 리팩터 잔재를 커밋 단계에서 원천 차단한다.
+
+    ① haiku 흔적 일체 — 최소 Sonnet 4.6 원칙 (haiku 사용 금지)
+    ② 표준 외 모델 ID — 유효 ID 는 shared/llm.py MODELS 의 2종만
+       (claude-sonnet-4-6 / claude-opus-4-6). 그 외 claude-*-* 는 폐기·미래 잔재.
+
+    예외(allowlist): 모델 이름을 *탐지* 하는 정규식·grep 패턴을 보유한 파일.
+    유효 ID 변경 시 아래 valid_ids 를 shared/llm.py MODELS 와 동시 갱신.
+    """
+    cat = "model"
+    valid_ids = {"claude-sonnet-4-6", "claude-opus-4-6"}
+    # haiku 를 '탐지' 하는 정규식 보유 (모델 ID 파서) — 정당
+    haiku_allow = ("JARVIS01_MASTER/proactive_monitor.py",)
+    # 폐기 모델 ID 를 '탐지' 하는 grep 패턴 + 교체 이력 주석 보유 — 정당
+    modelid_allow = (
+        "JARVIS07_GUARDIAN/auto_repair.py",
+        "JARVIS01_MASTER/proactive_monitor.py",
+    )
+
+    pat_haiku = re.compile(r"haiku", re.IGNORECASE)
+    # 버전 세그먼트는 숫자로 시작 — 문장 끝 마침표("...4-6.") 오탐 방지
+    pat_modelid = re.compile(r"claude-(?:sonnet|opus|haiku|fable)-[0-9][0-9a-z\-]*")
+
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        is_haiku_allow = any(a in rel_s for a in haiku_allow)
+        is_modelid_allow = any(a in rel_s for a in modelid_allow)
+        for i, line in enumerate(text.splitlines(), 1):
+            if not is_haiku_allow and pat_haiku.search(line):
+                report.add(Violation(cat, "model/haiku", rel_s, i, line))
+            if not is_modelid_allow:
+                for mid in pat_modelid.findall(line):
+                    if mid not in valid_ids:
+                        report.add(Violation(cat, "model/stale-id", rel_s, i, line))
+    report.checks_run += 2
+
+
+# model 카테고리 등록
+CATEGORIES["model"] = check_model
+
+
 def run(categories: list[str] | None = None) -> Report:
     """검증 실행. categories=None 이면 전체."""
     rep = Report()

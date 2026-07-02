@@ -19,6 +19,7 @@ economic_poster._verify_all / trend_theme_writer._verify_all 양쪽이 호출한
   PREPUBLISH_FACT_GATE=0       사실성 게이트 끔
   PREPUBLISH_ENGAGEMENT_GATE=0 매력도 게이트 끔
   PREPUBLISH_IMAGE_GATE=0      이미지(차트) 사실성 게이트 끔
+  PREPUBLISH_CROSSCHECK_GATE=0 본문↔차트 수치 교차대조 게이트 끔
 
 ★ 이미지 사실성 (사용자 박제 2026-06-29): 본문 수치는 사실성 게이트가, *차트 안의 수치*
   는 이미지 게이트가 막는다. JARVIS06 render_from_spec 가 검증 우회(실데이터 미확인)
@@ -45,18 +46,74 @@ def _draft_body(draft: dict) -> str:
 
 
 def prepublish_quality_issues(draft, post_type: str = "",
-                              source_docs=None, market_data=None) -> list[dict]:
-    """발행 전 품질 게이트 — 사실성 + 매력도. [{"kind","detail"}] 반환 (빈=통과)."""
+                              source_docs=None, market_data=None,
+                              stocks_data=None) -> list[dict]:
+    """발행 전 품질 게이트 — 사실성 + 매력도. [{"kind","detail"}] 반환 (빈=통과).
+
+    ★ 1-c (2026-07-02): stocks_data(실측 종목 재무)를 넘기면 본문의 PER·ROE·현재가 등
+      수치를 실측값과 *결정론적으로* 대조 — LLM 전사 오류·조작(예: PER 463.9)을 차단한다.
+    """
     body = _draft_body(draft)
     if not body or len(body) < _MIN_BODY:
         return []
     out: list[dict] = []
     if not _disabled("PREPUBLISH_FACT_GATE"):
         out.extend(_factuality_leg(body, post_type, source_docs, market_data))
+        out.extend(_stock_facts_leg(body, stocks_data))   # ★ 1-c 실측 재무 결정론 대조
     if not _disabled("PREPUBLISH_ENGAGEMENT_GATE"):
         out.extend(_engagement_leg(draft, body, post_type))
     if not _disabled("PREPUBLISH_IMAGE_GATE"):
         out.extend(_image_factuality_leg(draft, body))
+    if not _disabled("PREPUBLISH_CROSSCHECK_GATE"):
+        out.extend(_crosscheck_leg(draft, body))   # ★ 2-4 본문↔차트 수치 교차대조
+    return out
+
+
+def _pg_to_float(x):
+    try:
+        return float(str(x).replace(",", "").replace("%", "").replace("원", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+# ★ 1-c (2026-07-02): 본문 재무 수치 ↔ 실측 stocks_data 결정론 대조.
+#   지표별 본문 수치가 *어떤 실측 종목값과도* 허용오차 밖이면 전사 오류/조작으로 간주.
+#   fail-closed(차단)이므로 오탐 방지 위해 관대한 오차 — 명백한 불일치만 잡는다.
+_STOCK_METRIC_PATTERNS = {
+    "per":       (r'PER[^\d\-]{0,6}(-?\d[\d,]*\.?\d*)\s*배', 0.10, 0.5),   # ±10% 또는 ±0.5
+    "roe":       (r'ROE[^\d\-]{0,6}(-?\d[\d,]*\.?\d*)\s*%',  0.10, 0.5),
+    "op_margin": (r'영업이익률[^\d\-]{0,6}(-?\d[\d,]*\.?\d*)\s*%', 0.10, 0.5),
+    "price":     (r'현재가[^\d\-]{0,8}(-?\d[\d,]*)\s*원',    0.05, 0.0),   # ±5%
+}
+
+
+def _stock_facts_leg(body: str, stocks_data) -> list[dict]:
+    stocks = (stocks_data or {}).get("stocks") if isinstance(stocks_data, dict) else None
+    if not stocks:
+        return []
+    # 지표별 실측값 집합
+    real: dict[str, list[float]] = {k: [] for k in _STOCK_METRIC_PATTERNS}
+    for s in stocks:
+        if not isinstance(s, dict):
+            continue
+        for k in real:
+            v = _pg_to_float(s.get(k))
+            if v is not None:
+                real[k].append(v)
+    out: list[dict] = []
+    for metric, (pat, rel, ab) in _STOCK_METRIC_PATTERNS.items():
+        reals = real.get(metric) or []
+        if not reals:
+            continue   # 실측 없으면 판정 보류(fail-open)
+        for m in re.finditer(pat, body):
+            v = _pg_to_float(m.group(1))
+            if v is None:
+                continue
+            if not any(abs(v - rv) <= max(abs(rv) * rel, ab) for rv in reals):
+                out.append({"kind": "factuality",
+                            "detail": f"[사실성] 본문 {metric.upper()} {v} — 실측 종목 데이터와 불일치(전사 오류·조작 의심)"})
+    if out:
+        log.warning(f"[prepublish_gate] 실측 재무 불일치 {len(out)}건 → 재작성 순환")
     return out
 
 
@@ -168,6 +225,77 @@ def _image_factuality_leg(draft, body) -> list[dict]:
         log.warning(f"[prepublish_gate] 이미지 사실성 차단 {len(out)}건 → 재작성 순환")
         for o in out:
             log.warning(f"  ↳ {o['detail']}")
+    return out
+
+
+# ★ 2-4 (2026-07-02): 본문 수치 ↔ 차트 수치 교차대조.
+#   같은 지표가 본문과 차트에서 서로 다른 값이면 독자가 즉시 불신 → 차단.
+#   오탐이 곧 정상글 차단이므로: ① 비율지표(%·배)만 대상(가격·지수는 시점차 드리프트로 제외)
+#   ② 본문에 같은 라벨-단위 수치가 없거나 서로 다른 값이 복수면 판정 보류(fail-open)
+#   ③ ±3% 관대 오차. provenance.values 미존재(대부분) 시 leg no-op(무회귀).
+_CC_SAFE_UNITS = {"%", "퍼센트", "배"}
+_CC_METRIC_KW = re.compile(r"PER|PBR|PSR|ROE|ROA|영업이익률|순이익률|배당|증가율|성장률|점유율|비중|마진")
+_CC_NUM = r"-?\d[\d,]*\.?\d*"
+
+
+def _cc_close(a: float, b: float, rel: float = 0.03, ab: float = 0.5) -> bool:
+    return abs(a - b) <= max(abs(b) * rel, ab)
+
+
+def _cc_image_paths(draft) -> set:
+    paths: set = set()
+    for b in (draft.get("blocks") or []):
+        try:
+            data = b[1] if isinstance(b, (list, tuple)) and len(b) >= 2 else None
+            if isinstance(data, str) and re.search(r'\.(png|jpe?g|webp|svg)$', data, re.I):
+                paths.add(data)
+        except Exception:
+            pass
+    for m in re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', _draft_body(draft) or ""):
+        paths.add(m.group(1))
+    return paths
+
+
+def _cc_body_value(body: str, label: str, unit: str):
+    """본문에서 label 뒤(12자 내) unit 붙은 단일 수치. 서로 다른 값 복수면 None(판정 보류)."""
+    pat = re.compile(re.escape(label) + r'[^\d\-]{0,12}(' + _CC_NUM + r')\s*' + re.escape(unit))
+    vals = set()
+    for m in pat.finditer(body or ""):
+        v = _pg_to_float(m.group(1))
+        if v is not None:
+            vals.add(round(v, 4))
+    return next(iter(vals)) if len(vals) == 1 else None
+
+
+def _crosscheck_leg(draft, body) -> list[dict]:
+    try:
+        from JARVIS06_IMAGE.validators.image_data_verifier import lookup_provenance
+    except Exception:
+        return []
+    out: list[dict] = []
+    seen_labels = set()
+    for path in _cc_image_paths(draft):
+        prov = lookup_provenance(path) or lookup_provenance(os.path.abspath(path))
+        if not prov:
+            continue
+        for row in (prov.get("values") or []):
+            label = str(row.get("label", "")).strip()
+            unit = str(row.get("unit", "")).strip()
+            cv = _pg_to_float(row.get("value"))
+            if cv is None or not label or label in seen_labels:
+                continue
+            # 비율지표만 대상 (가격·지수 원/포인트는 시점차 드리프트 → 제외)
+            if unit not in _CC_SAFE_UNITS and not _CC_METRIC_KW.search(label):
+                continue
+            bv = _cc_body_value(body, label, unit)
+            if bv is None:
+                continue
+            seen_labels.add(label)
+            if not _cc_close(bv, cv):
+                out.append({"kind": "factuality",
+                            "detail": f"[교차대조] '{label}' 본문 {bv}{unit} vs 차트 {cv}{unit} 불일치"})
+    if out:
+        log.warning(f"[prepublish_gate] 본문↔차트 수치 불일치 {len(out)}건 → 재작성 순환")
     return out
 
 

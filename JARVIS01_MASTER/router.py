@@ -485,6 +485,61 @@ def _react_agent_node(state: "ReactAgentState") -> dict:
     return {"messages": [ai_msg], "steps": state.get("steps", 0) + 1}
 
 
+# ── ReAct 되먹임 검증 — 결과 래퍼 + 반복 호출 가드 (2026-07-02) ──────────────
+# ★ SAFE 도구 결과를 검증 없이 LLM 에 되먹이면 ok=False·오류문자열이 유효 데이터로
+#   오인됨. verification.py(task_type 산출물)·harness Layer3(송출)와 층위가 다른,
+#   *ReAct 관찰 정규화* 전용 계층. LLM·vision 없이 dict 검사만 → 레이턴시 0.
+_REACT_REPEAT_LIMIT = 2   # 동일 (도구+인자) 누적 호출이 이 횟수 도달 시 재실행 차단(3번째부터)
+
+
+def _tool_call_sig(tname: str, targs: dict) -> str:
+    """(도구명+정렬된 인자) 안정 시그니처 — 인자 순서 무관 반복 감지용."""
+    import json as _j
+    try:
+        a = _j.dumps(targs or {}, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        a = str(targs)
+    return f"{tname}::{a}"
+
+
+def _repeat_block_reason(prior_log: list, tname: str, targs: dict) -> str:
+    """누적 호출 로그에서 동일 (도구+인자) 반복 횟수 확인. 한도 도달 시 경고문(재실행
+    차단 신호) 반환, 미달이면 '' (통과)."""
+    sig = _tool_call_sig(tname, targs)
+    n = 0
+    for e in (prior_log or []):
+        try:
+            if _tool_call_sig(e.get("name", ""), e.get("args") or {}) == sig:
+                n += 1
+        except Exception:
+            continue
+    if n >= _REACT_REPEAT_LIMIT:
+        return (f"⚠️ 반복 차단: '{tname}' 를 동일 인자로 이미 {n}회 호출했습니다. "
+                f"결과는 바뀌지 않습니다 — 재호출을 멈추고, 지금까지의 관찰로 최종 "
+                f"답변하거나 *다른 도구 또는 다른 인자* 를 사용하세요.")
+    return ""
+
+
+def _tool_observation(tname: str, result) -> str:
+    """도구 결과 → ToolMessage 관찰 문자열. 실패(ok=False / error 필드)를 맨 앞에 명시
+    표기해 LLM 이 오류 출력을 유효 데이터로 오인하지 않게. 성공은 기존과 동일(json[:4000])."""
+    import json as _j
+    try:
+        body = _j.dumps(result, ensure_ascii=False, default=str)
+    except Exception:
+        body = str(result)
+    if isinstance(result, dict):
+        reason = ""
+        if result.get("ok") is False:
+            reason = str(result.get("error") or result.get("note") or "ok=False")
+        elif result.get("error"):
+            reason = str(result.get("error"))
+        if reason:
+            return (f"❌ 도구 실패 [{tname}]: {reason}. 이 출력은 유효 데이터가 아닙니다 — "
+                    f"사실 근거로 삼지 말고 원인을 설명하거나 대안을 찾으세요.\n{body[:3500]}")
+    return body[:4000]
+
+
 def _react_safe_tools_node(state: "ReactAgentState") -> dict:
     """SAFE 도구만 즉시 실행 (ToolNode 역할)."""
     import json as _json
@@ -499,14 +554,20 @@ def _react_safe_tools_node(state: "ReactAgentState") -> dict:
         tcid  = (tc["id"]   if isinstance(tc, dict) else getattr(tc, "id",   "")) or tname
         if tname not in safe_names:
             continue
+        # ★ 반복 호출 가드 — 누적 로그(state) + 현재 스텝 로그(log) 합산
+        block = _repeat_block_reason((state.get("tool_calls_log") or []) + log, tname, targs)
+        if block:
+            results.append(_TM(content=block, tool_call_id=tcid))
+            log.append({"name": tname, "args": targs, "result": {"ok": False, "error": "repeat_blocked"}, "approval": False})
+            continue
         try:
             result = tool_invoke(tname, **targs)
-            res_text = _json.dumps(result, ensure_ascii=False, default=str)
-            results.append(_TM(content=res_text[:4000], tool_call_id=tcid))
+            # ★ 결과 검증 래퍼 — 실패면 관찰에 명시 표기
+            results.append(_TM(content=_tool_observation(tname, result), tool_call_id=tcid))
             log.append({"name": tname, "args": targs, "result": result, "approval": False})
         except Exception as e:
-            results.append(_TM(content=f"tool error: {e}", tool_call_id=tcid))
-            log.append({"name": tname, "args": targs, "result": {"error": str(e)}, "approval": False})
+            results.append(_TM(content=f"❌ 도구 실패 [{tname}]: {e}. 유효 데이터 아님 — 근거로 삼지 마세요.", tool_call_id=tcid))
+            log.append({"name": tname, "args": targs, "result": {"ok": False, "error": str(e)}, "approval": False})
     return {"messages": results, "tool_calls_log": log}
 
 
@@ -541,16 +602,20 @@ def _react_approval_gate_node(state: "ReactAgentState") -> dict:
                 results.append(_TM(content="사용자가 취소했습니다.", tool_call_id=tcid))
                 log.append({"name": tname, "args": targs, "result": "cancelled", "approval": True})
         else:
-            # SAFE 도구 또는 auto_approve → 즉시 실행
+            # SAFE 도구 또는 auto_approve → 즉시 실행 (반복 가드 + 결과 검증)
+            block = _repeat_block_reason((state.get("tool_calls_log") or []) + log, tname, targs)
+            if block:
+                results.append(_TM(content=block, tool_call_id=tcid))
+                log.append({"name": tname, "args": targs, "result": {"ok": False, "error": "repeat_blocked"}, "approval": False})
+                continue
             try:
                 with (approved_context() if tname in approval_names else _noop_ctx()):
                     result = tool_invoke(tname, **targs)
-                res_text = _json.dumps(result, ensure_ascii=False, default=str)
-                results.append(_TM(content=res_text[:4000], tool_call_id=tcid))
+                results.append(_TM(content=_tool_observation(tname, result), tool_call_id=tcid))
                 log.append({"name": tname, "args": targs, "result": result, "approval": False})
             except Exception as e:
-                results.append(_TM(content=f"tool error: {e}", tool_call_id=tcid))
-                log.append({"name": tname, "args": targs, "result": {"error": str(e)}, "approval": False})
+                results.append(_TM(content=f"❌ 도구 실패 [{tname}]: {e}. 유효 데이터 아님 — 근거로 삼지 마세요.", tool_call_id=tcid))
+                log.append({"name": tname, "args": targs, "result": {"ok": False, "error": str(e)}, "approval": False})
     return {"messages": results, "tool_calls_log": log}
 
 

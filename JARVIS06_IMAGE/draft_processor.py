@@ -44,7 +44,7 @@ except ImportError:
 
 # ── AI 사진 영문 프롬프트 빌더 (★ 사용자 박제 2026-06-07) ─────────
 # Pollinations.ai (SDXL 계열) 친화 프롬프트 직접 생성 → translate() 우회.
-# prompt_translator(Haiku 100자 축약) 대비 디테일·스타일·negative cue 강화.
+# prompt_translator(Sonnet 4.6 축약) 대비 디테일·스타일·negative cue 강화.
 
 _PHOTO_PROMPT_SYSTEM = """You are a professional photography art director for premium Korean finance/business blogs.
 Craft vivid, specific English prompts optimized for Stable Diffusion XL (Pollinations.ai backend).
@@ -83,7 +83,7 @@ def _build_photo_prompt_en(theme: str, desc: str, sector: str = "",
        JARVIS09 수집 자료에서 추출한 헤드라인·수치 라인 목록.
        프롬프트의 SUBJECT/SCENE 을 사실에 grounded 시킴 → 추상적 generic 이미지 방지.
 
-    실패 시 빈 문자열 반환 — 호출자는 generate_photo()의 prompt_ko 경로(Haiku 번역)
+    실패 시 빈 문자열 반환 — 호출자는 generate_photo()의 prompt_ko 경로(Sonnet 4.6 번역)
     로 자동 폴백.
     """
     try:
@@ -114,9 +114,57 @@ def _build_photo_prompt_en(theme: str, desc: str, sector: str = "",
             return ""
         return en
     except Exception as e:
-        log.warning(f"[photo_prompt] 영문 빌더 실패: {e} — Haiku 번역 폴백")
+        log.warning(f"[photo_prompt] 영문 빌더 실패: {e} — Sonnet 4.6 번역 폴백")
         _g_report("image", e, module=__name__)
         return ""
+
+
+# ── 사진 관련성 검증 (2026-07-02) — 생성 사진이 섹션과 무관해지는 것을 프롬프트
+#    레벨에서 차단. 무거운 vision 호출 없음(JARVIS05_VISION은 트렌드 레지스트리라
+#    캡션/CLIP 미보유). 신호 = 엔티티 carry-through: 섹션 facts의 실체(영문 고유명사·
+#    수치)가 번역을 넘어 최종 프롬프트에 살아남았는가. 순수 정규식 → 레이턴시 0·루프 불가.
+_ENTITY_RE = re.compile(r'\b[A-Z][A-Za-z0-9&.\-]{2,}\b|\b\d{2,}[\d,.]*%?\b')
+_ENTITY_STOP = {"The", "This", "That", "With", "And", "For",
+                "Korea", "Korean", "Business", "Finance"}
+
+
+def _ascii_entities(*texts: str) -> set:
+    """theme/desc/facts 에서 번역을 넘어 살아남는 실체 토큰(영문 고유명사·수치) 추출."""
+    ents: set = set()
+    for t in texts:
+        for tok in _ENTITY_RE.findall(t or ""):
+            if tok in _ENTITY_STOP:
+                continue
+            ents.add(tok.lower())
+    return ents
+
+
+try:
+    from JARVIS00_INFRA.verification import register_check as _reg_prompt_check
+
+    @_reg_prompt_check("generate_photo_prompt", "프롬프트 사실 grounding 소실", severity="block")
+    def _chk_prompt_grounding(output, ctx):
+        """섹션 실체가 ≥2개 있는데 프롬프트에 0개 반영 → 무관 이미지 위험(드리프트)."""
+        prompt_en = (output or "").strip()
+        if not prompt_en:
+            return ""   # grounded 빌더 실패 → theme+desc 폴백(주제 보장) → 면제(warn 처리)
+        ents = _ascii_entities(ctx.get("theme", ""), ctx.get("desc", ""),
+                               *(ctx.get("facts") or []))
+        if len(ents) < 2:
+            return ""   # 대조할 실체 부족(순한글 주제 등) → 면제(오탐 방지)
+        low = prompt_en.lower()
+        if any(e in low for e in ents):
+            return ""   # 실체 하나라도 살아남음 → grounded
+        return f"섹션 실체 {len(ents)}개 중 프롬프트 반영 0개 — 무관 이미지 위험"
+
+    @_reg_prompt_check("generate_photo_prompt", "프롬프트 grounding 약함", severity="warn")
+    def _chk_prompt_generic(output, ctx):
+        """facts는 있는데 grounded 빌더가 빈 값 반환(generic 번역 폴백) → 경고만."""
+        if (output or "").strip():
+            return ""
+        return "grounded 빌더 실패 → generic 번역 폴백(사실 미주입)" if (ctx.get("facts") or []) else ""
+except Exception:
+    pass
 
 
 # ── 차트 생성 (Pass-2) ────────────────────────────────────────────
@@ -253,6 +301,22 @@ def _generate_photos(html: str, theme: str, out_dir: Path,
             # ★ Sonnet 영문 프롬프트 빌더 (실패 시 prompt_ko 자동 폴백)
             prompt_en = _build_photo_prompt_en(theme=theme, desc=desc_str,
                                                 sector=sector, facts=facts)
+            # ★ 관련성 게이트 (2026-07-02): 그라운딩 소실 프롬프트는 발행 흐름으로
+            #   넘기지 않음 → 폐기 후 theme+desc 기반 안전 프롬프트(prompt_ko)로 생성.
+            #   재생성·LLM 재호출 없음(문자열 판정) → 레이턴시 0·루프 불가.
+            try:
+                from JARVIS00_INFRA.verification import verify_output, has_blocking
+                _rel = verify_output("generate_photo_prompt", prompt_en or "",
+                                     {"desc": desc_str, "theme": theme,
+                                      "sector": sector, "facts": facts})
+                if has_blocking(_rel):
+                    _why = "; ".join(r.detail for r in _rel if r.severity == "block")
+                    print(f"  ⚠️ PHOTO_{idx} 프롬프트 관련성 차단 → theme+desc 안전 폴백 ({_why})")
+                    _g_report("image", RuntimeError(f"photo_prompt_relevance: {_why}"),
+                              module=__name__)
+                    prompt_en = ""   # 드리프트 프롬프트 폐기 → generate_photo가 prompt_ko 사용
+            except Exception as _ve:
+                log.debug(f"[PHOTO] 관련성 검증 스킵: {_ve}")
             kw = dict(prompt_ko=f"{theme}: {desc_str}", out_dir=str(out_dir))
             if prompt_en:
                 kw["prompt_en"] = prompt_en

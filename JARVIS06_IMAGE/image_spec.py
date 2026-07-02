@@ -396,12 +396,15 @@ def render_from_spec(spec: dict[str, Any], out_path: Path) -> Path:
     """
     result = _render_impl(spec, out_path)
     try:
-        from JARVIS06_IMAGE.validators.image_data_verifier import record_provenance
+        from JARVIS06_IMAGE.validators.image_data_verifier import (
+            record_provenance, spec_chart_values)
         prov = dict(spec.get("_provenance") or {})
         if not prov:
             numeric = _is_numeric_spec(spec)
             prov = {"verified": not numeric,
                     "method": "unverified_render" if numeric else "no_data"}
+        # ★ 2-4 (2026-07-02): 본문↔차트 교차대조용 라벨드 수치 박제.
+        prov["values"] = spec_chart_values(spec)
         record_provenance(result, prov)
     except Exception:
         pass

@@ -609,7 +609,8 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                 for q in prepublish_quality_issues(
                         draft, post_type="theme",
                         source_docs=state.get("collection_docs"),
-                        market_data=None):
+                        market_data=None,
+                        stocks_data=state.get("stocks_data")):   # ★ 1-c 실측 재무 결정론 대조
                     issues.append(Issue(step=step_name, kind=q["kind"], detail=q["detail"]))
 
         return issues

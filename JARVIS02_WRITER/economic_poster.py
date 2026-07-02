@@ -2112,9 +2112,16 @@ def run(post_naver=True, post_tistory=True):
             if not di_list:
                 from JARVIS02_WRITER.prepublish_gate import prepublish_quality_issues
                 _pt = (draft.get("post_type") or "economic").strip().lower()
+                # ★ 2-2 (2026-07-02): 작성 corpus ↔ 검증 corpus 정합. 작성에 실제 쓴 주제
+                #   특화 docs(draft.source_docs, kw 재수집) 우선 + 일반 경제 docs 보강(union).
+                #   draft.source_docs 없으면(구드래프트) 일반 docs 폴백 → 무회귀.
+                _used_docs = list(draft.get("source_docs") or [])
+                _gen_docs = list(state.get("collection_docs") or [])
+                _seen_ids = {id(d) for d in _used_docs}
+                _src_docs = _used_docs + [d for d in _gen_docs if id(d) not in _seen_ids]
                 for q in prepublish_quality_issues(
                         draft, post_type=_pt,
-                        source_docs=state.get("collection_docs"),
+                        source_docs=_src_docs,
                         market_data=state.get("market_data")):
                     issues.append(Issue(step=step_name, kind=q["kind"], detail=q["detail"]))
 

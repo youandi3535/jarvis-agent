@@ -534,6 +534,11 @@ def _make_company_biz_desc(theme_name: str, name: str, ticker: str, is_profit: b
         return f"{name}은(는) {theme_name} 분야 관련 사업을 영위하는 기업이에요."
 
 
+# ★ PER 이상치 상한 (2026-07-02) — 순이익이 0 에 가까우면 PER 이 수백~수천으로
+#   폭증(예: 463.9배)해 차트·표를 오도한다. 이 값 초과 PER 은 신뢰 불가 → N/A 처리.
+_PER_OUTLIER_MAX = 200.0
+
+
 def calc_fin(info, ticker_obj=None):
     """폭포수 방식: 네이버(1순위) → yfinance info → yfinance financials"""
     mc  = info.get('marketCap', 0) or 0
@@ -606,6 +611,10 @@ def calc_fin(info, ticker_obj=None):
 
     is_profit = ni > 0  # 순이익 기준으로 흑자/적자 판단
     if not is_profit:
+        per = None
+    # ★ PER 이상치 가드 (2026-07-02): 흑자라도 이익 미미로 PER 이 비정상 과대(예: 463.9)
+    #   하거나 음수면 신뢰 불가 → None(표에 N/A, 차트에서 제외). 거짓 차트 방지.
+    if per is not None and (per <= 0 or per > _PER_OUTLIER_MAX):
         per = None
     # ROE/OM 단위 정규화 (네이버는 소수, yfinance도 소수)
     roe_pct = round(roe*100, 1) if roe and abs(roe) <= 1 else (round(roe, 1) if roe else None)
@@ -1370,6 +1379,33 @@ def generate_report(theme_name: str) -> str:
 #  HTML 생성은 trend_theme_writer 가 Claude Code SDK 1-pass 로 직접.
 # ════════════════════════════════════════════════════════════════
 
+def _valid_stock_price(s: dict) -> bool:
+    """종목이 현재가를 실제로 취득했는지 (거짓/공백 데이터 종목 판별)."""
+    try:
+        return bool(s) and float(s.get("price") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+# ★ 검증 레지스트리 등록 (2026-07-02): collect_stocks_data 산출물 체크포인트.
+#   import 시 자동 등록 → verify_output('collect_stocks_data', data) 로 소비 가능.
+try:
+    from JARVIS00_INFRA.verification import register_check as _register_check
+
+    @_register_check("collect_stocks_data", "실취득 종목(현재가) 확보", severity="block")
+    def _chk_stocks_have_price(output, ctx):
+        stocks = (output or {}).get("stocks") or []
+        bad = [s.get("name", "?") for s in stocks if not _valid_stock_price(s)]
+        return f"현재가 미취득 종목 {bad}" if bad else ""
+
+    @_register_check("collect_stocks_data", "최소 종목수", severity="block")
+    def _chk_stocks_min_count(output, ctx):
+        n = len((output or {}).get("stocks") or [])
+        return f"종목 {n}개 — 2개 미만(테마 교체 필요)" if n < 2 else ""
+except Exception:   # verification 미가용 환경(테스트 등)에서도 수집은 동작
+    pass
+
+
 def collect_stocks_data(theme_name: str) -> dict:
     """테마 키워드 → 종목 {STOCK_COUNT_PER_POST}개 + 시세 + 재무 데이터 수집.
 
@@ -1699,6 +1735,14 @@ def collect_stocks_data(theme_name: str) -> dict:
         except Exception as e:
             print(f"  ⚠️ [stocks_data] {stock['name']} enrich 실패: {e}")
         return stock
+
+    # ★ 검증 (2026-07-02): 현재가 실취득 실패 종목 드롭 — 표·차트에 N/A·거짓수치가
+    #   흘러가지 않게. price 미취득은 스크레이핑 실패로 간주(하류 verification 레지스트리
+    #   'collect_stocks_data' 체크와 짝). 드롭 후 2종목 미만이면 상위가 테마 교체.
+    _n_before = len(stocks)
+    stocks = [s for s in stocks if _valid_stock_price(s)]
+    if len(stocks) < _n_before:
+        print(f"  🧹 [stocks_data] 현재가 미취득 {_n_before - len(stocks)}종목 드롭 (거짓데이터 방지)")
 
     if len(stocks) >= 2:
         # 순차 enrich
