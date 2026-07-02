@@ -65,7 +65,7 @@ _EXEC_PLAN_SYSTEM = """\
   ...
   {
     "tool": "run_bash",
-    "args": {"command": "cd /Users/kimhyojung/jarvis-agent && .venv/bin/python -c \\"import JARVISNN_NAME\\""},
+    "args": {"command": ".venv/bin/python -c \\"import JARVISNN_NAME\\""},
     "note": "import 검증"
   }
 ]

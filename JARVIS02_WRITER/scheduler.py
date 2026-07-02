@@ -1302,5 +1302,5 @@ def show_status():
 # 직접 실행 시:  python jarvis_daemon.py  (루트 디렉토리)
 if __name__ == '__main__':
     print("⚠️  scheduler.py 는 라이브러리 모듈입니다. 직접 실행하지 마세요.")
-    print("   통합 데몬 실행:  python ~/jarvis-agent/jarvis_daemon.py")
+    print("   통합 데몬 실행:  python ~/portfolio/jarvis-agent/jarvis_daemon.py")
     import sys; sys.exit(0)

@@ -108,7 +108,7 @@ def _spawn_restart(delay: int = 5) -> None:
     """
     import subprocess, sys
     python  = sys.executable                          # .venv/bin/python
-    daemon  = str(os.path.abspath(                    # ~/jarvis-agent/jarvis_daemon.py
+    daemon  = str(os.path.abspath(                    # ~/portfolio/jarvis-agent/jarvis_daemon.py
         os.path.join(os.path.dirname(__file__), "..", "jarvis_daemon.py")
     ))
     script  = (
