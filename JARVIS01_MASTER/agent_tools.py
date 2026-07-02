@@ -531,6 +531,28 @@ def syntax_check(path: str) -> dict:
 
 # ── APPROVAL: 파일 변경 ──────────────────────────────────────
 
+def _verify_py_or_rollback(p: Path, backup_path, new_created: bool) -> Optional[dict]:
+    """★ 검증 (2026-07-02): .py 작성 후 ast.parse 검증 → syntax 오류면 자동 롤백.
+    (CLAUDE.md '수정 후 syntax 오류 시 자동 rollback' 요구 충족)
+    통과·비-py 는 None, 실패면 error dict(롤백 완료)."""
+    if p.suffix != ".py":
+        return None
+    import ast as _ast
+    try:
+        _ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        return None
+    except SyntaxError as e:
+        try:
+            if backup_path and Path(backup_path).exists():
+                p.write_bytes(Path(backup_path).read_bytes())   # 이전 내용 복원
+            elif new_created:
+                p.unlink(missing_ok=True)                        # 신규 파일 제거
+        except Exception:
+            pass
+        return {"ok": False, "rolled_back": True,
+                "error": f"syntax 오류 자동 롤백 (line {e.lineno}): {e.msg}"}
+
+
 @register_tool(
     name="write_file",
     domain="code",
@@ -552,6 +574,9 @@ def write_file(path: str, content: str) -> dict:
             backup_path.write_bytes(p.read_bytes())
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
+        _v = _verify_py_or_rollback(p, backup_path, new_created=(backup_path is None))
+        if _v:
+            return _v
         return {
             "ok": True, "path": str(p.relative_to(_JARVIS_ROOT_ABS)),
             "bytes": len(content.encode("utf-8")),
@@ -589,6 +614,9 @@ def edit_file(path: str, old_string: str, new_string: str,
         else:
             new_text = text.replace(old_string, new_string, 1)
         p.write_text(new_text, encoding="utf-8")
+        _v = _verify_py_or_rollback(p, backup_path, new_created=False)
+        if _v:
+            return _v
         return {
             "ok": True, "path": str(p.relative_to(_JARVIS_ROOT_ABS)),
             "replacements": cnt if replace_all else 1,

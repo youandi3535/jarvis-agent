@@ -154,6 +154,27 @@ def _run_with_harness(
     ))
 
 
+def _verify_trends(_result) -> list:
+    """★ 검증 (2026-07-02): 트렌드 수집 신선도·공백 검증 (harness verify_fn).
+    subprocess 산출물(trends_YYYY-MM-DD.json)을 읽어 *명백한 실패만* 잡는다(오탐 방지).
+    검증기 자체 오류는 fail-open(정상 수집 무한 차단 방지)."""
+    import json as _json, datetime as _dt
+    try:
+        today = _dt.date.today().isoformat()
+        fp = _RADAR_DIR / "data" / f"trends_{today}.json"
+        if not fp.exists():
+            return [f"오늘({today}) 트렌드 파일 없음 — 수집 실패 의심"]
+        data = _json.loads(fp.read_text(encoding="utf-8"))
+        issues = []
+        if data.get("date") != today:
+            issues.append(f"트렌드 date({data.get('date')})가 오늘 아님 — 전일 캐시 재사용 의심")
+        if not (data.get("scored_keywords") or []):
+            issues.append("scored_keywords 0개 — 수집 결과 공백")
+        return issues
+    except Exception:
+        return []
+
+
 def job_collect_trends() -> None:
     """★ 하네스 래핑 — 실패 시 자동 재시도 + GUARDIAN 기록."""
     _log.info("=" * 50)
@@ -162,7 +183,7 @@ def job_collect_trends() -> None:
     def _run():
         _run_script_checked(_RADAR_DIR / "radar_main.py", label="트렌드 수집")
 
-    _run_with_harness("트렌드 수집", _run)
+    _run_with_harness("트렌드 수집", _run, verify_fn=_verify_trends)
 
 
 def job_collect_performance() -> None:

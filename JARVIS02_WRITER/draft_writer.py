@@ -126,14 +126,34 @@ _strip_html_wrapper = strip_html_wrapper
 
 
 def _inject_missing_charts(html: str, target_count: int, start_idx: int = 1) -> str:
-    """HTML에 부족한 [CHART_N] 플레이스홀더 자동 삽입."""
+    """HTML에 부족한 [CHART_N] 플레이스홀더 자동 삽입.
+
+    ★ 2026-07-02: 설명을 "섹션 N 관련 데이터 시각화" 같은 플레이스홀더로 두면
+    ① 차트 제목이 무의미 ② _detect_type 에 키워드 0 → 랜덤 타입 ③ collect_chart_data
+    가 주제어 없이 데이터 못 찾아 스킵 — 삼중 문제. 삽입 지점(마지막 문단) 주변
+    본문에서 실제 주제어를 뽑아 데이터·제목 모두 근거 있게 만든다.
+    """
     existing = len(re.findall(r'\[CHART_\d+:', html))
     if existing >= target_count:
         return html
     missing = target_count - existing
+
+    def _last_para_topic(h: str) -> str:
+        # 삽입 위치(마지막 </p>) 앞 문단에서 20자+ 첫 문장 조각을 주제어로
+        paras = re.findall(r'<p[^>]*>(.*?)</p>', h, re.S)
+        for p in reversed(paras):
+            txt = re.sub(r'<[^>]+>', '', p)
+            txt = re.sub(r'\s+', ' ', txt).strip()
+            if len(txt) >= 20:
+                # 첫 문장 또는 앞 30자
+                head = re.split(r'[.!?。]', txt)[0].strip()
+                return (head or txt)[:30]
+        return ""
+
     for i in range(missing):
         chart_idx = start_idx + existing + i
-        description = f"섹션 {chart_idx} 관련 데이터 시각화"
+        topic = _last_para_topic(html)
+        description = f"{topic} 핵심 수치 비교" if topic else "핵심 지표 비교"
         html = re.sub(r'(</p>)(?!.*</p>)', rf'\1\n[CHART_{chart_idx}: {description}]', html, count=1)
     return html
 
@@ -307,15 +327,30 @@ def _stocks_text(stocks_data: dict) -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def _build_data_catalog(datasets) -> str:
-    """수집된 실데이터 → 대본 프롬프트용 카탈로그 (대본이 *있는 데이터만* 차트화하도록)."""
+    """수집된 실데이터 → 대본 프롬프트용 카탈로그.
+
+    ★ 1-d (2026-07-02): 제목·단위뿐 아니라 *실제 값(라벨:값)·기준일* 까지 주입한다.
+      이전엔 제목만 줘서 본문 프로즈의 구체 수치를 LLM 이 지어냈다 — 이제 본문이
+      '있는 실데이터 수치만 그대로' 인용하도록 값을 명시한다.
+    """
     if not datasets:
         return ""
-    lines = ["[★ 사용 가능한 실데이터 차트 — 차트는 *이 목록에서만* 골라 쓸 것]"]
+    lines = ["[★ 사용 가능한 실데이터 — 차트도 본문 수치도 *이 값만* 인용할 것]"]
     for i, d in enumerate(datasets, 1):
         u = d.get("unit", "")
-        lines.append(f"D{i}. {d.get('title', '')}{(' (단위 ' + u + ')') if u else ''}")
-    lines.append("★ 위 목록에 *없는* 수치(예: 목록에 발행액이 없으면 발행액 차트)는 절대 만들지 마라 "
-                 "— 실데이터가 없는 차트는 거짓이 된다.")
+        src = d.get("source") or {}
+        as_of = src.get("as_of", "")
+        head = f"D{i}. {d.get('title', '')}{(' (단위 ' + u + ')') if u else ''}"
+        if as_of:
+            head += f" [기준 {as_of}]"
+        lines.append(head)
+        for r in (d.get("data") or [])[:8]:
+            lbl = str(r.get("label", "")).strip()
+            val = r.get("value", "")
+            if lbl != "" and val != "":
+                lines.append(f"    - {lbl}: {val}{u}")
+    lines.append("★ 위 목록에 *없는* 수치는 본문·차트에 절대 쓰지 마라 — 실데이터 없는 수치는 거짓이다.")
+    lines.append("★ 본문에서 수치를 언급할 땐 위 값을 *그대로* 인용하라 (임의 반올림·창작 금지).")
     lines.append("★ [CHART_N: <위 목록의 제목 그대로>] 형태로, 글 흐름에 맞는 위치에 배치하라.")
     return "\n".join(lines)
 

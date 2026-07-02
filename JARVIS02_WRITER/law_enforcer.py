@@ -153,11 +153,20 @@ _PROMPT_LEAK = re.compile(
 )
 
 
+# ★ 제7조 (2026-07-02): 이미지 위치 지칭 문구 = AI-티. '위 차트는/아래 표에서 보듯' 등
+#   제거. '표현'(표+현) 오매칭 방지 위해 차트어 뒤 *필수 조사* 요구. 위/아래만(가장 명확).
+_IMG_REF = re.compile(
+    r'(?:위|아래)\s*(?:차트|표|그래프|도표)(?:는|은|를|을|에서|에|에는)'
+    r'\s*(?:보(?:면|시면|듯이|듯)|나타난|참고하(?:면|시면))?\s*'
+)
+
+
 def _clean_text(text: str) -> str:
     """단일 텍스트 블록에 7조 규정 적용 + 프롬프트 누설 제거."""
     t = _BANNED_EXACT.sub('', text)
     t = _LLM_LEAK.sub('', t)
     t = _PROMPT_LEAK.sub('', t)             # ★ 발행 직전 최종 차단
+    t = _IMG_REF.sub('', t)                 # ★ 제7조 이미지 위치 지칭 문구 제거
     t = _EMOJI.sub('', t)
     # 마크다운 강조 **text** → text (인라인)
     t = re.sub(r'\*\*([^\*\n]+?)\*\*', r'\1', t)
@@ -1370,6 +1379,40 @@ def _web_confirms(claim: str, evidence: list[dict]) -> bool:
         raise FactJudgeError(f"웹 근거 판정 JSON 실패: {e}")
 
 
+# ── 결정론 수치 스캐너 (★ 2-3 2026-07-02): LLM claims 누락 보완 ──────────────
+# 단위 붙은 구체 수치를 정규식으로 포착. LLM(_extract_claims)이 놓친 수치를
+# factuality_issues 의 검증 대상으로 승격 → 환각/거짓 수치가 무검증 통과하는 갭 차단.
+_NUMERIC_UNIT_RE = re.compile(
+    r'\d[\d,]*(?:\.\d+)?'   # 콤마 유무 무관 (2650·2,650·12·3.2 모두) — 4자리+ 오절단 방지
+    r'(?:\s*%|\s*억|\s*조|\s*배|\s*원|\s*달러|\s*엔|\s*위안|\s*p\b|\s*bp\b)',
+    re.IGNORECASE,
+)
+
+
+def _scan_numeric_tokens(text: str) -> list[str]:
+    """단위 붙은 구체 수치 토큰 리스트 (중복 제거, 등장 순서 유지)."""
+    seen, out = set(), []
+    for m in _NUMERIC_UNIT_RE.finditer(text or ""):
+        tok = m.group(0)
+        k = tok.replace(" ", "")
+        if k not in seen:
+            seen.add(k)
+            out.append(tok)
+    return out
+
+
+def _containing_sentence(text: str, token: str) -> str:
+    """token 을 포함하는 문장 추출 (grounding 문맥 확보용)."""
+    idx = (text or "").find(token)
+    if idx < 0:
+        return token
+    starts = [text.rfind(c, 0, idx) for c in ".!?。\n"]
+    start = max(starts) + 1 if any(s >= 0 for s in starts) else 0
+    ends = [e for e in (text.find(c, idx) for c in ".!?。\n") if e >= 0]
+    end = (min(ends) + 1) if ends else len(text)
+    return text[start:end].strip() or token
+
+
 def factuality_issues(
     html: str,
     source_docs=None,
@@ -1415,6 +1458,23 @@ def factuality_issues(
     except FactJudgeError as e:
         log.warning(f"[factuality_gate] 주장 추출 실패 → 차단(fail-closed): {e}")
         return _blocked(f"사실성 판정 실패(주장 추출) — 안전 차단: {e}")
+
+    # ── 1.5 결정론 수치 보완 (★ 2-3): LLM 이 놓친 단위-수치를 검증 대상으로 승격 ──
+    #   정규식이 잡았는데 LLM claims 어디에도 없는 수치는 문장 통째를 claim 으로 넣어
+    #   기존 grounding+web 파이프라인에 태운다. _FACT_MAX_CLAIMS 캡 준수. 예외는 삼켜
+    #   게이트 자체를 깨지 않음(fail-safe).
+    try:
+        body_text = _fact_strip_html(html)
+        claim_blob = "".join(c.get("text", "") for c in claims).replace(" ", "")
+        for tok in _scan_numeric_tokens(body_text):
+            if len(claims) >= _FACT_MAX_CLAIMS:
+                break
+            if tok.replace(" ", "") in claim_blob:
+                continue  # 이미 LLM claim 에 포함됨
+            claims.append({"text": _containing_sentence(body_text, tok),
+                           "type": "numeric", "key": False})
+    except Exception as e:
+        log.warning(f"[factuality_gate] 결정론 수치 보완 스킵: {e}")
 
     if not claims:
         return {"passed": True, "blocked": [], "checked": 0,

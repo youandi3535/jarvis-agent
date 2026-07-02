@@ -177,17 +177,44 @@ _analyze_with_claude = analyze_post_quality
 #   재작성 순환 트리거에 사용한다. _build_learning_block·invoke_text 골격 재사용.
 # ─────────────────────────────────────────────────────────────
 
-_ENGAGEMENT_MIN = 70  # engagement·usefulness 각 차원 통과 임계 (0~100)
+_ENGAGEMENT_MIN = 70  # engagement·usefulness 기본 임계 (0~100)
+
+# ★ 5축 채점 임계 (2026-07-02) — engagement/usefulness 는 70 유지(회귀 0). 신규 3축은
+#   주관성이 커 임계를 낮춰(오탐=정상 글 차단 최소화) '뻔한 제목·양산형'만 거른다.
+#   dict 순서 = 파싱·failed_dims 정렬 기준. 심사관이 신규 축을 미출력하면 그 축은 채점 제외.
+_DIM_THRESHOLDS = {
+    "engagement": _ENGAGEMENT_MIN,   # 매력도 70
+    "usefulness": _ENGAGEMENT_MIN,   # 유익성 70
+    "title_hook": 60,                # 제목 후킹
+    "originality": 60,               # 독창성
+    "structure": 65,                 # 구성·완결성
+}
 
 ENGAGEMENT_SYSTEM_PROMPT = """당신은 한국어 정보 블로그의 *발행 전* 품질 심사관입니다.
-독자가 끝까지 읽고 싶어하는지(매력도)와 실제로 유익한 정보를 얻는지(유익성)를 0~100으로 채점하세요.
+독자가 끝까지 읽고 싶어하는지(매력도)·실제로 유익한지(유익성)에 더해, 제목이 클릭을
+부르는지·글이 뻔한 양산형이 아닌지·짜임새가 있는지를 0~100으로 채점하세요.
 
-채점 차원:
+채점 차원(5개):
 - engagement(매력도): 도입부 훅, 가독성·흐름, 지루하지 않은 전개, 끝까지 읽고 싶은가
 - usefulness(유익성): 정보의 깊이·구체성, 독자가 실제로 얻는 가치, 알맹이가 있는가
+- title_hook(제목 후킹): 제목이 궁금증·클릭을 유발하는가, 본문과 부합하는가, 뻔한 상투구가 아닌가
+- originality(독창성): 어디서나 보는 양산형 서술이 아니라 고유한 관점·정보가 있는가
+- structure(구성): 소제목 흐름이 논리적이고 도입-전개-마무리가 완결되는가
 
 반드시 아래 JSON 객체 *하나만* 출력하세요 (다른 텍스트·코드블록 금지):
-{"engagement_score": 0~100 정수, "usefulness_score": 0~100 정수, "verdict": "pass" 또는 "revise", "reasons": ["부족한 점 간단히"]}"""
+{"engagement_score": 0~100, "usefulness_score": 0~100, "title_hook_score": 0~100, "originality_score": 0~100, "structure_score": 0~100, "verdict": "pass" 또는 "revise", "reasons": ["부족한 점 간단히"]}"""
+
+
+def _judge_unavailable_alert(post_type: str, err: str) -> None:
+    """매력도 심사관이 재시도에도 실패해 fail-open 통과할 때 가시화 (조용한 무력화 방지)."""
+    msg = f"⚠️ 매력도 심사관(engagement_judge) 재시도 실패 → fail-open 통과 [{post_type}]: {err}"
+    print(f"  {msg}")
+    try:
+        from shared.bus import publish, EventType
+        publish(EventType.ERROR_DETECTED, "engagement_judge",
+                {"detail": msg, "severity": "medium", "post_type": post_type})
+    except Exception:
+        pass
 
 
 def judge_engagement(title: str, content: str, post_type: str = "",
@@ -210,34 +237,57 @@ def judge_engagement(title: str, content: str, post_type: str = "",
     user_msg = f"제목: {title}\n\n본문:\n{snippet}"
     system = ENGAGEMENT_SYSTEM_PROMPT + _build_learning_block(post_type)
 
-    try:
-        from shared.llm import invoke_text as _inv
-        raw = _inv("engagement_judge", user_msg, system=system, max_tokens=600)
-        m = re.search(r"\{.*\}", raw or "", re.DOTALL)
-        if not m:
-            return {"passed": True, "engagement_score": 0, "usefulness_score": 0,
-                    "failed_dims": [], "reasons": ["판정 응답 없음 — fail-open 통과"]}
-        obj = json.loads(m.group())
-    except Exception as e:
-        print(f"  ⚠️ engagement judge 오류: {e} — fail-open 통과")
-        _g_report("radar", e, module=__name__)
-        return {"passed": True, "engagement_score": 0, "usefulness_score": 0,
-                "failed_dims": [], "reasons": [f"판정 오류: {e}"]}
+    # ★ fail-open 강화 (2026-07-02): 즉시 통과 대신 2회 재시도 → 심사관 일시 불안정에
+    #   매력도 게이트가 통째로 무력화되는 것 방지. 재시도도 실패하면 통과하되(진실성과 달리
+    #   재생성 사유일 뿐) '심사 불가'를 가시화(점수 -1 = 미채점, GUARDIAN·버스 경고).
+    from shared.llm import invoke_text as _inv
+    obj = None
+    last_err = ""
+    for _attempt in range(2):
+        try:
+            raw = _inv("engagement_judge", user_msg, system=system, max_tokens=600)
+            m = re.search(r"\{.*\}", raw or "", re.DOTALL)
+            if not m:
+                last_err = "판정 응답 없음"
+                continue
+            obj = json.loads(m.group())
+            break
+        except Exception as e:
+            last_err = str(e)
+            _g_report("radar", e, module=__name__)
 
-    try:
-        eng = int(obj.get("engagement_score", 0) or 0)
-        use = int(obj.get("usefulness_score", 0) or 0)
-    except (TypeError, ValueError):
-        return {"passed": True, "engagement_score": 0, "usefulness_score": 0,
+    if obj is None:
+        _judge_unavailable_alert(post_type, last_err)   # 조용한 무력화 방지
+        return {"passed": True, "engagement_score": -1, "usefulness_score": -1,
+                "failed_dims": [], "reasons": [f"심사 불가(재시도 실패): {last_err}"]}
+
+    # ★ 5축 파싱 (2026-07-02) — _DIM_THRESHOLDS 순서대로 <dim>_score 추출.
+    #   심사관이 신규 3축(title_hook·originality·structure)을 누락하면 그 축은 채점 제외
+    #   (오탐=정상 글 차단 방지). engagement/usefulness 누락·파싱실패는 fail-open(기존 동작).
+    scores: dict[str, int] = {}
+    for _dim in _DIM_THRESHOLDS:
+        _raw = obj.get(f"{_dim}_score", None)
+        if _raw is None:
+            continue
+        try:
+            scores[_dim] = int(_raw)
+        except (TypeError, ValueError):
+            continue
+    if "engagement" not in scores or "usefulness" not in scores:
+        _judge_unavailable_alert(post_type, "핵심 점수(engagement/usefulness) 파싱 실패")
+        return {"passed": True, "engagement_score": -1, "usefulness_score": -1,
                 "failed_dims": [], "reasons": ["점수 파싱 실패 — fail-open 통과"]}
 
-    failed: list[str] = []
-    if eng < _ENGAGEMENT_MIN:
-        failed.append("engagement")
-    if use < _ENGAGEMENT_MIN:
-        failed.append("usefulness")
-    return {"passed": not failed, "engagement_score": eng, "usefulness_score": use,
-            "failed_dims": failed, "reasons": list(obj.get("reasons") or [])}
+    # failed_dims: dict 순서 고정 → fingerprint 안정 (detail 에 점수 raw 안 넣음)
+    failed = [d for d in _DIM_THRESHOLDS if d in scores and scores[d] < _DIM_THRESHOLDS[d]]
+    result = {"passed": not failed,
+              "engagement_score": scores["engagement"],
+              "usefulness_score": scores["usefulness"],
+              "failed_dims": failed, "reasons": list(obj.get("reasons") or [])}
+    for _d in ("title_hook", "originality", "structure"):
+        if _d in scores:
+            result[f"{_d}_score"] = scores[_d]   # 가시화·학습용(하위 소비자는 passed·failed_dims만)
+    return result
 
 
 def _pick_cta(platform: str) -> str:

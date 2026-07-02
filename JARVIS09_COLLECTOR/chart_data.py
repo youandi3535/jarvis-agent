@@ -552,6 +552,32 @@ def _parse_clean_doc(doc):
     return _mk_dataset(title[:40], "bar_chart", unit, rows, src)
 
 
+def _value_grounded(value, doc_text: str) -> bool:
+    """★ 수치 grounding (2026-07-02): LLM이 낸 value 가 출처 본문에 *형식 무관* 등장하는지.
+    명백한 환각만 걸러내도록 관대 매칭 — 집계·스케일 변형된 정당한 값의 오탐(드롭)을 피한다.
+    본문 없음/파싱불가 = 판정 보류(통과)."""
+    if not doc_text:
+        return True
+    try:
+        fv = float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return True
+    nc = doc_text.replace(",", "")
+    cands = {str(fv), f"{fv:.1f}", f"{fv:.2f}"}
+    if fv == int(fv):
+        cands.add(str(int(fv)))
+    for c in cands:
+        if c and c in nc:
+            return True
+    ip = str(int(abs(fv)))                       # 정수부 (형식·스케일 변형 대비)
+    if len(ip) >= 2 and ip in nc:
+        return True
+    sig = str(fv).replace(".", "").lstrip("0")   # 유효숫자열 (예: 45.2 → 452)
+    if len(sig) >= 3 and sig in nc:
+        return True
+    return False
+
+
 def _extract_series_from_docs(series: dict, docs: list):
     """수집 문서에서 *해당 series 에 집중* 추출 → dataset(출처 URL·단위 박제). 없으면 None."""
     if not docs:
@@ -587,10 +613,16 @@ def _extract_series_from_docs(series: dict, docs: list):
             doc = sel[int(r.get("source_idx"))]
         except (TypeError, ValueError, IndexError):
             continue
+        # ★ 수치 grounding: LLM이 낸 value 가 출처 본문에 실제 등장하는지 (환각 차단)
+        _val = r.get("value")
+        _dtext = (getattr(doc, "raw_text", "") or getattr(doc, "cleaned_text", "") or "")
+        if not _value_grounded(_val, _dtext):
+            log.warning(f"[chart_data] 환각 수치 드롭: {r.get('label')}={_val} (출처 본문 미등장)")
+            continue
         if not src_url:
             src_url = getattr(doc, "url", "") or ""
             src_name = getattr(doc, "source_type", "") or ""
-        rows.append({"label": str(r.get("label", "")), "value": r.get("value")})
+        rows.append({"label": str(r.get("label", "")), "value": _val})
     # ★ LLM 추출 라벨도 교차표 축약 (사용자 박제 2026-07-01): LLM이 '합계·신용카드' / '읍소재시장·
     #   신용카드' 처럼 전체+특정 차원을 섞어 반환하면 _reduce_crosstab 으로 전체 차원 collapse →
     #   '신용카드' 만 남김 (KOSIS fast-path 와 동일 정리). 단일 차원이면 그대로 보존.

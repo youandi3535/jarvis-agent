@@ -16,6 +16,16 @@ try:
 except ImportError:
     def _g_report(*a, **kw): pass
 
+# ★ 검증 레지스트리 등록 (2026-07-02): collect_for_theme 산출물 체크포인트.
+try:
+    from JARVIS00_INFRA.verification import register_check as _rc
+
+    @_rc("collect_for_theme", "수집 결과 비공백", severity="block")
+    def _chk_collect_nonempty(output, ctx):
+        return "수집 결과 0건(무성 실패)" if not output else ""
+except Exception:
+    pass
+
 
 def _on_theme_queued(payload: dict, source: str) -> None:
     """THEME_QUEUED 이벤트 수신 → 수집·정제 → COLLECTION_READY 발행."""
@@ -33,6 +43,9 @@ def _on_theme_queued(payload: dict, source: str) -> None:
         results = collect_for_theme(theme, sector)
         if not results:
             log.warning(f"[Collector] 수집 결과 0건: {theme}")
+            # ★ 무성 실패 신호 (2026-07-02): 조용히 return 하지 않고 GUARDIAN 박제 → 가시화
+            _g_report("collector", RuntimeError(f"수집 0건(무성 실패): {theme}"),
+                      module=__name__, func_name="_on_theme_queued")
             return
 
         # COLLECTION_READY 발행 — JARVIS02가 구독

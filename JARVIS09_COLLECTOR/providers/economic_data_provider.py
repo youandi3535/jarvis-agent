@@ -14,6 +14,10 @@ log = logging.getLogger("jarvis.collector.economic")
 
 # ── 시장 데이터 (yfinance) ─────────────────────────────────────────
 _MARKET_TICKERS = {
+    # ★ 2-1 (2026-07-02): 국내 지수(코스피·코스닥) 추가 — 경제 브리핑이 '국내 증시·실생활
+    #   영향'을 다루는데 대조할 국내 지표가 없던 갭 해소.
+    "코스피":     "^KS11",
+    "코스닥":     "^KQ11",
     "S&P500":     "^GSPC",
     "NASDAQ":     "^IXIC",
     "DOW":        "^DJI",
@@ -25,7 +29,11 @@ _MARKET_TICKERS = {
 
 
 def get_market_data() -> dict:
-    """yfinance로 주요 시장 데이터 수집 (JARVIS09 단일 진입점)."""
+    """yfinance로 주요 시장 데이터 수집 (JARVIS09 단일 진입점).
+
+    ★ 2-1 (2026-07-02): 각 지표에 as_of(실제 종가 기준일) 부착 — 06:30 발행 시 미국
+      지수는 전일 종가인데 '오늘'처럼 서술되던 시점 오류를 사실성 게이트가 검증 가능하게.
+    """
     import yfinance as yf
     result = {}
     for name, ticker in _MARKET_TICKERS.items():
@@ -35,10 +43,12 @@ def get_market_data() -> dict:
                 prev = hist["Close"].iloc[-2]
                 curr = hist["Close"].iloc[-1]
                 chg  = (curr - prev) / prev * 100
-                result[name] = {"value": round(curr, 2), "change": round(chg, 2)}
+                as_of = hist.index[-1].strftime("%Y-%m-%d")
+                result[name] = {"value": round(curr, 2), "change": round(chg, 2), "as_of": as_of}
             elif len(hist) == 1:
                 curr = hist["Close"].iloc[-1]
-                result[name] = {"value": round(curr, 2), "change": 0.0}
+                as_of = hist.index[-1].strftime("%Y-%m-%d")
+                result[name] = {"value": round(curr, 2), "change": 0.0, "as_of": as_of}
         except Exception as e:
             log.warning(f"[EconData] {name} 수집 실패: {e}")
     log.info(f"[EconData] 시장 데이터 수집 완료: {len(result)}개 지표")
