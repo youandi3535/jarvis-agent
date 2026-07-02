@@ -475,6 +475,8 @@ def record_external_change(
     severity: str = "low",
     actor: str = "external",
     commit_hash: str = "",
+    patch: str = "",
+    target_file: str = "",
 ) -> Optional[int]:
     """외부 도구(VS Code Claude Code·git·사용자 직접 편집)에서 발생한 코드 변경을 박제.
 
@@ -505,7 +507,20 @@ def record_external_change(
         error_type=error_type,
         severity=severity,
         actor=actor,
+        patch=patch,               # ★ diff 확보 시 actionable llm_patch 경로 진입
+        target_file=target_file,
     )
+
+
+# ★ 정책/기능 변경 타입 (2026-07-02) — '재발할 오류'가 아니라 의도적 변경 → actionable
+#   llm_patch 학습 대상 아님(오탐·헛보상 차단). recurrable=None(자동) 판정에서만 적용;
+#   recurrable=True 명시 opt-in 은 이 목록과 무관하게 actionable.
+_MANUAL_POLICY_TYPES = frozenset({
+    "PromptLeak", "RuleConsolidation", "RuleAddition", "FlowDefect",
+    "DashboardFilter", "AgentAddition", "AutoFixCapability", "ManualFixTracking",
+    "ExternalEdit", "GitCommit", "VSCodeEdit", "ModelInconsistency",
+    "ModelCatalogUpgrade", "HardcodedPath", "ManualFix",
+})
 
 
 def report_manual_fix(
@@ -515,6 +530,10 @@ def report_manual_fix(
     error_type: str = "ManualFix",
     severity: str = "medium",
     actor: str = "claude",
+    patch: str = "",
+    target_file: str = "",
+    error_message: str = "",
+    recurrable: Optional[bool] = None,
 ) -> Optional[int]:
     """Claude 또는 사용자가 *발견·수정한* 결함을 회고적으로 박제하는 API.
 
@@ -569,15 +588,42 @@ def report_manual_fix(
                    WHERE id=?""",
                 (f"[{actor}] {description[:500]}", fixed_file, now, error_id),
             )
-        # ★ 학습 등록 — 수동 수정 사례도 fingerprint 박제 (재발 시 LLM 호출 0)
+        # ★ 학습 등록 (2026-07-02) — 오류수정(재발가능)은 actionable llm_patch(+밴딧 보상)로,
+        #   정책/기능 변경·diff 없음은 legacy change-tracking 으로 분기.
+        #   actionable 이면: record_sdk_fix → eval(Opus 4.6) 게이트 → stored_patch 저장 →
+        #   hits>0 시 bandit.reward → *강화학습 모델(Bandit)이 실제로 학습을 시작*.
         try:
             from JARVIS07_GUARDIAN.pattern_fixer import record_pattern_hit
-            record_pattern_hit(
-                {"error_type": error_type, "message": description},
-                fixer_name=error_type.lower().replace("error", "").replace("warning", "") or "manual",
-                fixed_file=fixed_file,
-                source=f"manual-{actor}",
-            )
+            # actionable 3-state opt-in: True=명시 오류수정 / False=명시 제외 / None=자동(실오류타입+diff)
+            if recurrable is True:
+                _actionable = bool(patch)
+            elif recurrable is False:
+                _actionable = False
+            else:
+                _actionable = bool(patch) and error_type not in _MANUAL_POLICY_TYPES
+
+            _learned = False
+            if _actionable:
+                from JARVIS07_GUARDIAN.pattern_fixer import record_sdk_fix
+                _n = record_sdk_fix(
+                    {"error_type": error_type,
+                     "message": error_message or description,   # ★ 재발 fingerprint = 실오류 메시지
+                     "module": fixed_file},
+                    {(target_file or fixed_file): patch},
+                    source=f"manual-{actor}",
+                )
+                _learned = bool(_n)
+                log.info(f"[GUARDIAN] manual_fix "
+                         f"{'actionable 학습+밴딧 보상 발화' if _n else 'diff 있으나 eval 게이트 미통과→change-tracking'}"
+                         f" — #{error_id}")
+            if not _learned:
+                # 정책/기능 변경 / diff 없음 / eval 미통과 → change-tracking (재발 개념 없음)
+                record_pattern_hit(
+                    {"error_type": error_type, "message": description},
+                    fixer_name=error_type.lower().replace("error", "").replace("warning", "") or "manual",
+                    fixed_file=fixed_file,
+                    source=f"manual-{actor}",
+                )
         except Exception as e:
             log.debug(f"[GUARDIAN/learned] manual_fix 학습 등록 실패: {e}")
         log.info(f"[GUARDIAN] manual_fix 박제 — #{error_id} [{actor}] {fixed_file}")

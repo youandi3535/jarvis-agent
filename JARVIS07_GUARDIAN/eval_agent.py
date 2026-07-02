@@ -161,12 +161,13 @@ def _evaluate_llm_patch(error_record: dict, patch: str, target_file: str) -> Eva
     실패·예외 시 보수적 통과 (학습 진행 중단 방지) + 텔레그램 알림으로 사용자 검토 요청.
     """
     if not patch:
-        # 패치 없으면 평가 불가 → 보수적 통과
+        # ★ 하드닝 (2026-07-02): patch 없는 llm_patch 는 stored_patch 부재 → 재적용 불가
+        #   (비actionable). 학습 자산화 거부 → junk 패턴 등록·밴딧 헛보상 차단.
         return EvalResult(
-            should_register=True,
-            score=70,
-            safe=True, accurate=True, reusable=True,
-            rationale="llm_patch 이지만 patch 본문 없음 — 보수적 통과",
+            should_register=False,
+            score=0,
+            safe=True, accurate=False, reusable=False,
+            rationale="llm_patch 이지만 patch 본문 없음 — 비actionable, 학습 거부",
             tier="llm",
         )
 

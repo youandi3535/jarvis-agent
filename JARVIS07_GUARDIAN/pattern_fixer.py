@@ -667,6 +667,25 @@ _FIXER_REGISTRY = {
     "auto_patch":      "_fix_auto_patch",        # ★ git diff 재적용 (LLM 0)
 }
 
+# ★ 시맨틱 임베딩 폴백 (정확 fingerprint miss 시) — 2026-07-02 사용자 박제.
+#   오탐(다른 오류를 같다 판정 → 엉뚱한 패치 재적용)이 미탐(놓침 → LLM 폴백, 안전)보다
+#   훨씬 비싸다 → 임계는 *보수적(높게)*.
+#   ★ 실측 캘리브레이션 (입력은 _normalize_message 정규화 텍스트임에 주의):
+#     - 폴백은 '정규화 후에도 구조가 다른' 케이스에만 발동 (구조 같으면 exact match 가 선처리).
+#     - 같은 error_type 안 different-fixer 쌍(NEGATIVE) cos 최대 ≈0.60,
+#       same-fixer 쌍(POSITIVE)은 0.63~1.0 로 분산.
+#     → 0.88 은 NEGATIVE 상한(~0.60) 훨씬 위 = 오탐 사실상 0, 대신 저유사 POSITIVE 는
+#       안전하게 놓침(LLM 폴백). 마법 숫자 아님 — FP-안전 보수값(측정 근거).
+#   3중 방어: ① error_type 완전일치 게이트(AND) ② cos ≥ 임계 ③ (llm/auto_patch 는)
+#     _apply_diff_replacements before-text 존재검사 = 4차 방어.
+#   env GUARDIAN_SEMANTIC_SIM_MIN 로 튜너블, calibrate_semantic_threshold() 가 실데이터
+#   누적 시 NEGATIVE 분포를 재측정해 하향 여지 진단 (고정 추측 아닌 계속 측정되는 값).
+import os as _os
+_SEMANTIC_SIM_MIN = float(_os.environ.get("GUARDIAN_SEMANTIC_SIM_MIN", "0.88"))
+_SEMANTIC_ENABLED = _os.environ.get("GUARDIAN_SEMANTIC_MATCH", "1") != "0"
+# 재적용 가능(actionable) fixer 만 시맨틱 재사용 대상 — 정적 6종 + auto_patch + llm_patch
+_ACTIONABLE_FIXERS = set(_FIXER_REGISTRY.keys()) | {"llm_patch"}
+
 
 def _apply_diff_replacements(target_file: str, diff_text: str) -> str | None:
     """unified diff → search-replace 방식으로 파일에 적용. 성공 시 new_content 반환.
@@ -833,6 +852,9 @@ def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[di
             except re.error:
                 continue
 
+    # ★ 정확·정규식 매칭 miss → 시맨틱 임베딩 폴백 (오탐 방지 3중 게이트)
+    if not matched:
+        matched = _semantic_fallback_match(et, msg, data, min_hit_count)
     if not matched:
         return None
 
@@ -942,6 +964,115 @@ def _bump_hit_count(data: dict, fingerprint: str) -> None:
                 p["last_seen"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
                 break
         _save_learned(data)
+
+
+def _semantic_fallback_match(et: str, msg: str, data: dict, min_hit_count: int) -> Optional[dict]:
+    """정확 fingerprint miss 시 임베딩 코사인 유사도로 후보 재사용. 오탐 방지 다중 게이트.
+
+    게이트: ① kill-switch/임베딩 가용 ② error_type 완전일치 + embedding 보유 + actionable
+    + hit_count ③ cos ≥ _SEMANTIC_SIM_MIN(실측 근거). 반환된 matched 는 기존 apply 로직을
+    그대로 타므로 llm/auto_patch 는 before-text 존재검사가 4차 방어가 된다.
+    """
+    if not _SEMANTIC_ENABLED:
+        return None
+    try:
+        from shared import embeddings as _emb
+    except Exception:
+        return None
+    if not _emb.available():
+        return None
+    # 후보 사전 필터 — error_type 완전일치 + embedding 보유 + actionable + hit_count
+    cands = [p for p in data.get("patterns", [])
+             if p.get("error_type") == et
+             and p.get("embedding")
+             and p.get("fixer") in _ACTIONABLE_FIXERS
+             and int(p.get("hit_count", 0)) >= min_hit_count]
+    if not cands:
+        return None   # 후보 0 → 모델 로드조차 안 함 (성능)
+    q = _emb.encode(_normalize_message(msg))
+    if not q:
+        return None
+    best, best_sim = None, 0.0
+    for p in cands:
+        sim = _emb.cosine(q, p["embedding"])
+        if sim > best_sim:
+            best, best_sim = p, sim
+    if best is None or best_sim < _SEMANTIC_SIM_MIN:
+        return None
+    log.info(f"[GUARDIAN/learned] ★ 시맨틱 폴백 매칭 sim={best_sim:.3f} "
+             f"et={et} fp='{best.get('fingerprint','')[:50]}' fixer={best.get('fixer')}")
+    best = dict(best)          # 원본 오염 방지 (표식만 추가)
+    best["_semantic_sim"] = round(best_sim, 4)
+    return best
+
+
+def backfill_embeddings() -> int:
+    """cold-start: embedding 없는 actionable 패턴에 fingerprint→normalized_message 복원 후 채움.
+
+    기존 learned_patterns 는 임베딩이 없어 시맨틱 폴백이 아무것도 못 찾음 → 1회 채우면
+    이후 재사용 가능. 미채움 상태여도 기존 정확매칭 경로는 100% 무해 동작. idempotent.
+    """
+    try:
+        from shared import embeddings as _emb
+    except Exception:
+        return 0
+    if not _emb.available():
+        return 0
+    n = 0
+    with _LEARNED_LOCK:
+        data = _load_learned()
+        for p in data.get("patterns", []):
+            if p.get("embedding") or p.get("fixer") not in _ACTIONABLE_FIXERS:
+                continue
+            parts = p.get("fingerprint", "").split("::", 1)
+            norm = parts[1] if len(parts) == 2 else ""
+            if not norm:
+                continue
+            vec = _emb.encode(norm)
+            if vec:
+                p["embedding"] = [round(float(x), 5) for x in vec]
+                n += 1
+        if n:
+            _save_learned(data)
+    log.info(f"[GUARDIAN/learned] backfill_embeddings — {n}개 패턴 임베딩 채움")
+    return n
+
+
+def calibrate_semantic_threshold() -> dict:
+    """실데이터로 시맨틱 임계값 재측정 — '0.88 이 여전히 안전한가' 진단 (자동 적용 안 함).
+
+    같은 error_type 안에서 패턴 임베딩 쌍의 코사인 분포를 재고, 대부분이 서로 *다른*
+    근본원인(negative proxy)이라는 전제 하에 그 분포의 상위 백분위 + 여유를 제안 임계로
+    보고. 고정 추측이 아니라 *계속 측정되는* 값으로 만드는 게 목적.
+    """
+    try:
+        import numpy as _np
+        from shared import embeddings as _emb
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"의존성 미가용: {e}"}
+    if not _emb.available():
+        return {"error": "임베딩 모델 미가용"}
+    data = _load_learned()
+    by_type: dict[str, list] = {}
+    for p in data.get("patterns", []):
+        if p.get("embedding") and p.get("fixer") in _ACTIONABLE_FIXERS:
+            by_type.setdefault(p.get("error_type", ""), []).append(p["embedding"])
+    sims: list[float] = []
+    for _et, vecs in by_type.items():
+        for i in range(len(vecs)):
+            for j in range(i + 1, len(vecs)):
+                sims.append(_emb.cosine(vecs[i], vecs[j]))
+    if len(sims) < 3:
+        return {"pairs": len(sims), "note": "표본 부족 — 현재 임계 유지", "current": _SEMANTIC_SIM_MIN}
+    arr = _np.array(sims)
+    p50, p90, p95, mx = (float(_np.percentile(arr, q)) for q in (50, 90, 95, 100))
+    suggested = round(min(0.95, max(0.85, p95 + 0.03)), 3)   # 상위 분포 위 + 여유, [0.85,0.95] 클램프
+    return {
+        "pairs": len(sims), "current": _SEMANTIC_SIM_MIN,
+        "cos_p50": round(p50, 3), "cos_p90": round(p90, 3),
+        "cos_p95": round(p95, 3), "cos_max": round(mx, 3),
+        "suggested_min": suggested,
+    }
 
 
 def record_pattern_hit(
@@ -1115,6 +1246,15 @@ def record_pattern_hit(
             # ★ eval_meta 박제 (A모델, ADR 007)
             if _eval_meta is not None:
                 entry["eval_meta"] = _eval_meta
+            # ★ 시맨틱 폴백용 임베딩 저장 (actionable 패턴만 — 재적용 가능·오탐 방지)
+            if fixer_name in _ACTIONABLE_FIXERS:
+                try:
+                    from shared import embeddings as _emb
+                    _vec = _emb.encode(norm)   # norm = _normalize_message(msg) (fingerprint 동일)
+                    if _vec:
+                        entry["embedding"] = [round(float(x), 5) for x in _vec]
+                except Exception as _e:  # noqa: BLE001
+                    log.debug(f"[GUARDIAN/learned] 임베딩 저장 skip: {_e}")
             data.setdefault("patterns", []).append(entry)
             _result_hits = 1
             log.info(f"[GUARDIAN/learned] ★ 신규 패턴 등록 — fp='{fp[:70]}' fixer={fixer_name} tier={_tier} domain={_domain}")
@@ -1283,6 +1423,23 @@ def apply_stored_patches() -> int:
             bumped.append(entry.get("fingerprint", ""))
             log.info(f"[GUARDIAN/patch] ★ 학습 패치 재적용: {target_rel} ({fixer})")
             bak.unlink(missing_ok=True)
+            # ★ 재적용 성공 → 밴딧 양의 보상 (재발→재적용→reward 사슬 완성, 2026-07-02).
+            #   arm 은 *저장된 fingerprint* 로 직접 계산 — bandit_arm_name 재계산 시
+            #   message_pattern(정규식)으로 fp 가 어긋나 다른 arm 에 보상되는 것 방지.
+            try:
+                from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
+                _fp  = entry.get("fingerprint", "")
+                _hc  = int(entry.get("hit_count", 0) or 0)
+                _arm = (f"verified:{_fp[:32]}" if _hc >= _HIGH_COUNT_THRESHOLD
+                        else f"new:{_fp[:32]}")
+                _bandit_reward(
+                    entry.get("error_type", "") or "", _arm, success=True,
+                    error_record={"error_type": entry.get("error_type", "") or "",
+                                  "message": entry.get("message_pattern", "") or "",
+                                  "module": target_rel},
+                )
+            except Exception as _re:
+                log.debug(f"[GUARDIAN/patch] 재적용 보상 실패: {_re}")
         except Exception as _e:
             _shutil.copy2(bak, target_path)
             bak.unlink(missing_ok=True)
