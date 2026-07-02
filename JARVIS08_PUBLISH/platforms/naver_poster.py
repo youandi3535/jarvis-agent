@@ -1102,6 +1102,19 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                         input_text_block(_plain)
                 elif btype == 'image':
                     _insert_image_with_gap(bdata)
+                else:
+                    # ★ 미지 블록 타입 무음 유실 방지 (ADR 012 — 2026-07-02, ERRORS [171] 계열)
+                    #   새 블록 타입 추가 시 양 발행자 동시 갱신 규정 위반을 즉시 가시화.
+                    print(f"  ⚠️ 미지 블록 타입 '{btype}' — 텍스트 폴백 렌더 (양 발행자 핸들러 추가 필요)")
+                    try:
+                        from JARVIS07_GUARDIAN.error_collector import report as _g_rep
+                        _g_rep("publish", RuntimeError(f"naver 미지 블록 타입: {btype}"),
+                               module=__name__, func_name="post_to_naver")
+                    except Exception:
+                        pass
+                    _plain = html_to_naver_text(str(bdata)) if bdata else ""
+                    if _plain.strip():
+                        input_text_block(_plain)
         else:
             _paste(naver_text)
 

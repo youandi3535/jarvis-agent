@@ -160,6 +160,52 @@ def _json_to_text(data, max_chars: int = 2000) -> str:
     return "\n".join(rows)[:max_chars]
 
 
+# ── 기사 전문 추출 (ADR 012 — 사용자 박제 2026-07-02) ──────────────────────────
+# 기존 파이프라인은 제목+스니펫+표 수준만 추출 → 근거 밀도 부족.
+# trafilatura(무료·오픈소스, lib_bootstrap 자동설치)로 본문 전문을 뽑아
+# EvidencePack 의 fact 추출 정확도를 올린다. 실패 시 기존 bs4 프로즈 폴백.
+
+def _article_text(html: str, url: str = "", max_chars: int = 4000) -> str:
+    """HTML → 기사 본문 전문. trafilatura 우선, 실패 시 bs4 프로즈."""
+    try:
+        from JARVIS09_COLLECTOR.lib_bootstrap import ensure_lib
+        traf = ensure_lib("trafilatura", "trafilatura")
+        if traf is not None:
+            body = traf.extract(html, url=url or None, include_comments=False,
+                                include_tables=False, favor_precision=True)
+            if body and len(body.strip()) > 200:
+                return re.sub(r"\s+", " ", body).strip()[:max_chars]
+    except Exception as e:
+        log.debug(f"[fetch] trafilatura 실패({url}): {e}")
+    return _prose_from_html(html, max_chars=max_chars)
+
+
+def fetch_article(url: str, theme: str = "", title: str = "",
+                  source_type: str = "web") -> RawDocument | None:
+    """단일 URL → 기사 전문 RawDocument. robots·rate-limit 준수. 실패 시 None.
+
+    collector_engine.collect_research 의 딥페치 단계가 사용 — 스니펫 수준
+    문서를 본문 전문으로 확장해 근거 밀도를 높인다.
+    """
+    if not url or not url.startswith("http"):
+        return None
+    _ensure_parse_libs()
+    resp, ctype = _fetch(url)
+    if resp is None or "html" not in (ctype or "html"):
+        return None
+    try:
+        body = _article_text(resp.text, url=url)
+    except Exception as e:
+        log.debug(f"[fetch] 전문 추출 실패({url}): {e}")
+        return None
+    if not body or len(body) < 120:
+        return None
+    ttl = (title or url)[:80]
+    return RawDocument(url=url, source_type=source_type,
+                      raw_text=f"{ttl}\n{body}", title=ttl,
+                      extra={"theme": theme, "kind": "article"})
+
+
 def fetch_documents(hits: list[dict], theme: str = "", max_docs: int = 6,
                     max_per_domain: int = 2) -> list[RawDocument]:
     """발견 hit 목록 → 데이터가 든 RawDocument 목록.
@@ -228,4 +274,4 @@ def fetch_documents(hits: list[dict], theme: str = "", max_docs: int = 6,
     return docs
 
 
-__all__ = ["fetch_documents"]
+__all__ = ["fetch_documents", "fetch_article"]

@@ -13,6 +13,7 @@ BASE_DIR      = Path(__file__).parent.parent
 WRITER_DIR    = BASE_DIR / "JARVIS02_WRITER"
 RADAR_DIR     = BASE_DIR / "JARVIS03_RADAR"
 JARVIS06_DIR  = BASE_DIR / "JARVIS06_IMAGE"            # 이미지 단일 진입점 (CLAUDE.md 규정)
+JARVIS09_DIR  = BASE_DIR / "JARVIS09_COLLECTOR"        # 수집 단일 진입점 (CLAUDE.md 규정)
 LOGS_DIR      = WRITER_DIR / "logs"
 
 
@@ -23,6 +24,7 @@ _RULES: list[tuple[Path, str, int]] = [
     (LOGS_DIR,       "market_signal_*.txt",   14),   # Market Signal 로그: 14일
     (LOGS_DIR,       "report_*.txt",          30),   # 원고 리포트: 30일
     (RADAR_DIR/"data", "trends_*.json",       30),   # RADAR 트렌드 캐시: 30일
+    (JARVIS09_DIR/"output"/"evidence", "evidence_*.json", 30),  # 근거 팩 박제 (ADR 012): 30일
 ]
 
 _SCREENSHOT_KEEP_DAYS = 30  # screenshots 폴더: 30일

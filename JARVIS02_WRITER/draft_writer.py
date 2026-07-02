@@ -591,6 +591,141 @@ def _gen_economic_ts_nv_parallel(
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ★ 리서치 근거 주입 + 서사 아웃라인 + 자기비평 (ADR 012 — 사용자 박제 2026-07-02)
+#
+#  "수집한 양질의 데이터가 대본에 *전부* 살아 들어가야 한다."
+#  기존: 수집 문서 상위 5건 앞부분만 잘라 주입 → 근거 대부분 유실.
+#  개선: JARVIS09 EvidencePack(사실 단위·출처 박제) 브리프 주입
+#        + 서사 아웃라인 1패스(구조 설계) + 자기비평 1패스(작성 후 다듬기).
+#  킬스위치: WRITER_RESEARCH_FIRST=0 (근거팩), WRITER_CRITIQUE=0 (비평 패스)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+import os as _os
+
+
+def _build_evidence_block(evidence_pack: dict | None) -> str:
+    """EvidencePack → 대본 프롬프트 근거 블록. 실패·미가용 시 빈 문자열 (fail-open)."""
+    if not evidence_pack or _os.getenv("WRITER_RESEARCH_FIRST", "1") == "0":
+        return ""
+    try:
+        from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
+        return evidence_brief(evidence_pack)
+    except Exception as e:
+        _g_report("writer", e, module=__name__, func_name="_build_evidence_block")
+        return ""
+
+
+_NARRATIVE_CACHE: dict[str, str] = {}     # theme+date → 아웃라인 (양 플랫폼 재사용)
+
+
+def _plan_narrative(theme: str, sector: str, evidence_block: str,
+                    stocks_text: str = "", post_type: str = "theme") -> str:
+    """서사 아웃라인 1패스 — 글의 감정 곡선·섹션 메시지·근거 배정 설계.
+
+    반환: 프롬프트 주입용 아웃라인 텍스트 블록 (실패 시 빈 문자열 — fail-open).
+    구조 뼈대(섹션 순서)는 본 프롬프트가 정하므로, 여기서는 *각 섹션이 전할
+    핵심 메시지·감정 흐름·어떤 근거(F#)를 어디에 쓸지* 만 설계한다.
+    """
+    key = f"{theme}|{post_type}|{_TODAY.isoformat()}"
+    if key in _NARRATIVE_CACHE:
+        return _NARRATIVE_CACHE[key]
+    if not evidence_block and not stocks_text:
+        return ""
+    prompt = f"""주제: {theme} | 섹터: {sector or '-'} | 글 유형: {post_type}
+
+{evidence_block or '(근거 팩 없음 — 종목 데이터 기반으로 설계)'}
+
+{('[종목 데이터 요약]' + chr(10) + stocks_text[:800]) if stocks_text else ''}
+
+이 글의 *서사 설계도* 를 만들어라. 독자의 마음을 움직이는 글은 구조가 먼저다.
+
+출력 (이 형식 그대로, 다른 말 금지):
+공감포인트: 독자가 "내 얘기다" 싶을 구체적 상황 1문장
+긴장: 글 중반까지 끌고 갈 궁금증·문제의식 1문장
+해소: 글이 제시할 답·통찰 1문장
+섹션메시지:
+- 도입: (핵심 메시지 + 사용할 근거 F# 나열)
+- 본론1: (핵심 메시지 + 근거 F#)
+- 본론2: (핵심 메시지 + 근거 F#)
+- 본론3: (핵심 메시지 + 근거 F#)
+- 마무리: (독자가 얻어갈 것 1가지)
+차별화한줄: 다른 블로그와 이 글이 다른 점 1문장"""
+    try:
+        raw = invoke_text("writer_fast", prompt, timeout=90,
+                          system="당신은 콘텐츠 서사 설계자다. 설계만 하고 본문은 쓰지 않는다.",
+                          max_tokens=900, temperature=0.5)
+        outline = strip_html_wrapper(raw or "").strip()
+        if outline and "섹션메시지" in outline:
+            block = f"\n[★ 서사 설계도 — 이 설계의 흐름·근거 배정대로 전개하라]\n{outline}\n"
+            _NARRATIVE_CACHE[key] = block
+            if len(_NARRATIVE_CACHE) > 16:
+                _NARRATIVE_CACHE.pop(next(iter(_NARRATIVE_CACHE)))
+            return block
+    except Exception as e:
+        _g_report("writer", e, module=__name__, func_name="_plan_narrative")
+    return ""
+
+
+def _structure_signature(content: str) -> tuple:
+    """비평 패스 안전 가드용 구조 시그니처 — 플레이스홀더·표·소제목 보존 검증."""
+    charts = sorted(re.findall(r"\[CHART_\d+:", content))
+    photos = sorted(re.findall(r"\[PHOTO_\d+:", content))
+    tables = len(re.findall(r"<table", content, re.IGNORECASE))
+    h2s = len(re.findall(r"<h2", content, re.IGNORECASE))
+    return (tuple(charts), tuple(photos), tables, h2s)
+
+
+def critique_and_refine(content: str, platform: str, evidence_block: str = "",
+                        post_type: str = "theme") -> str:
+    """자기비평 1패스 — 초안을 루브릭으로 점검하고 *문장만* 다듬은 전체본 반환.
+
+    안전 가드: 플레이스홀더·표·소제목 구조가 1개라도 달라지거나 분량이 크게
+    변하면 원본 유지 (구조 훼손 < 문장 미세 개선). 킬스위치 WRITER_CRITIQUE=0.
+    """
+    if not content or _os.getenv("WRITER_CRITIQUE", "1") == "0":
+        return content
+    spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
+    sig_before = _structure_signature(content)
+    prompt = f"""아래는 {spec['name']} 블로그 초안이다. 루브릭으로 점검하고 *문장 수준만* 고쳐라.
+
+[루브릭]
+1) 도입부가 독자 상황에서 시작하는가 (일반론·AI투 시작 금지)
+2) 근거·수치가 문장에 자연스럽게 녹았는가 (나열식 금지)
+3) 같은 어미·같은 문장 구조 3회 이상 반복 없는가
+4) 각 소제목 아래 첫 문장이 그 섹션의 핵심을 즉시 말하는가
+5) 마무리가 요약 반복이 아니라 독자 행동·통찰로 끝나는가
+{('6) 본문 수치가 아래 근거 팩과 일치하는가 (불일치 시 근거 팩 값으로 교체)' + chr(10) + evidence_block) if evidence_block else ''}
+
+[절대 규칙]
+- [CHART_N: ...] / [PHOTO_N: ...] 플레이스홀더는 글자 하나도 바꾸지 말고 그 자리 유지
+- <table>...</table>, <h2>...</h2> 태그·구조·개수 유지 (내용 텍스트 오탈자만 수정 가능)
+- <p> 당 문장 수·전체 분량 유지 (문장 추가·삭제 최소화 — 다듬기만)
+- 문체 유지: {spec['tone']}
+- 수정한 *전체 본문 HTML만* 출력. 설명·주석·코드블록 금지.
+
+[초안]
+{content}"""
+    try:
+        raw = invoke_text("writer", prompt, timeout=300,
+                          system="당신은 냉정한 블로그 편집장이다. 구조는 건드리지 않고 문장만 다듬는다.")
+        refined = strip_html_wrapper(raw or "").strip()
+        if not refined:
+            return content
+        if _structure_signature(refined) != sig_before:
+            print("  ⚠️ [비평] 구조 변형 감지 — 원본 유지")
+            return content
+        ratio = len(refined) / max(1, len(content))
+        if not (0.7 <= ratio <= 1.3):
+            print(f"  ⚠️ [비평] 분량 변동 과다({ratio:.2f}) — 원본 유지")
+            return content
+        print("  ✨ [비평] 자기비평 패스 적용 완료")
+        return refined
+    except Exception as e:
+        _g_report("writer", e, module=__name__, func_name="critique_and_refine")
+        return content
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  테마글 텍스트 대본 — 전 플랫폼 (Pass-1)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -598,6 +733,7 @@ def _gen_theme(
     theme: str, sector: str, stocks_data: dict,
     supreme_block: str, platform: str = "tistory",
     collection_docs: list | None = None,
+    evidence_pack: dict | None = None,
 ) -> str:
     """테마글 Pass-1: 텍스트 + [CHART_N]/[PHOTO_N] 플레이스홀더."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
@@ -653,9 +789,12 @@ def _gen_theme(
 - 금지: 이미지·표 두 개 연속 (예: [CHART_X][CHART_Y]), 문단 3개+ 연속
 - 표(<table>)도 시각 요소로 카운트 — 표 뒤에 즉시 차트 금지, 반드시 <p> 1개 삽입 후 차트."""
 
-    # JARVIS09 수집 자료 → 참고 컨텍스트 블록 (상위 5건, 각 300자 이내)
+    # ★ 근거 주입 (ADR 012) — EvidencePack 브리프 우선, 없으면 종전 문서 발췌 폴백
     _ref_block = ""
-    if collection_docs:
+    _evidence_block = _build_evidence_block(evidence_pack)
+    if _evidence_block:
+        _ref_block = f"\n\n{_evidence_block}"
+    elif collection_docs:
         _lines = []
         for _i, _doc in enumerate(collection_docs[:5], 1):
             _src  = getattr(_doc, "source_type", "")
@@ -663,6 +802,10 @@ def _gen_theme(
             _body = (getattr(_doc, "cleaned_text", "") or "")[:300]
             _lines.append(f"[참고{_i}] ({_src}) {_titl}\n{_body}")
         _ref_block = "\n\n[참고 자료 — JARVIS09 수집 (사실 확인·최신 동향 반영에 활용)]\n" + "\n---\n".join(_lines)
+
+    # ★ 서사 아웃라인 1패스 (ADR 012) — 구조 설계 후 작성 (실패 시 빈 블록)
+    _narrative_block = _plan_narrative(theme, sector, _evidence_block,
+                                       stocks_text=stocks_text, post_type="theme")
 
     user_msg = f"""[오늘 작성 요청 — 테마주 분석 글]
 플랫폼: {spec['name']} | 독자: {spec['reader']}
@@ -673,7 +816,7 @@ def _gen_theme(
 
 [종목 데이터]
 {stocks_text}
-
+{_narrative_block}
 [★ 본문 구조 — 반드시 이 순서 준수 (★ 분량은 헌법 제8조·length_manager.THEME_TOTAL_SENTS 위임. 배치는 제4조 허용 패턴 4가지)]
 ★ 차트 총 개수: {_L.THEME_TOTAL_CHART_COUNT}~{_L.MAX_CHART_COUNT}개 (각 섹션 분량에 따라 자유 결정). 번호는 [CHART_1]부터 순서대로.
 ★ 배치 허용: 문단+이미지+문단 / 문단+이미지+문단+이미지+문단 / 문단+문단+이미지+문단 / 문단+이미지+문단+문단. 이미지 연속·문단 3개+ 연속만 금지.
@@ -802,6 +945,7 @@ def generate_theme_draft(
     stocks_data: dict,
     supreme_block: str,
     collection_docs: list | None = None,
+    evidence_pack: dict | None = None,
 ) -> str:
     """테마글 텍스트 대본 생성 (Pass-1).
 
@@ -812,12 +956,14 @@ def generate_theme_draft(
         stocks_data: {"theme", "stocks": [...], "summary": {...}}
         supreme_block: BLOG_SUPREME_LAW.md 헌법 블록
         collection_docs: JARVIS09 수집 자료 리스트 (CollectionResult)
+        evidence_pack: JARVIS09 collect_research 근거 팩 (ADR 012 — 있으면 우선 주입)
 
     Returns:
         "TITLE: ...\\nCONTENT: ..." 형식 텍스트. 실패 시 빈 문자열.
     """
     return _gen_theme(theme, sector, stocks_data, supreme_block, platform,
-                      collection_docs=collection_docs or [])
+                      collection_docs=collection_docs or [],
+                      evidence_pack=evidence_pack)
 
 
 def generate_draft(
@@ -853,5 +999,7 @@ def generate_draft(
             sector=kwargs.get("sector", ""),
             stocks_data=kwargs.get("stocks_data", {}),
             supreme_block=kwargs["supreme_block"],
+            collection_docs=kwargs.get("collection_docs"),
+            evidence_pack=kwargs.get("evidence_pack"),
         )
     raise ValueError(f"알 수 없는 blog_type: {blog_type!r}. 'economic' 또는 'theme' 만 지원.")
