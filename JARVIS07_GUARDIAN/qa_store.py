@@ -22,7 +22,9 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 _CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
-_PROJECT_KEY = "-Users-kimhyojung-jarvis-agent"
+# Claude Code 는 프로젝트 절대경로의 "/" 를 "-" 로 치환해 세션 폴더명으로 씀.
+# 하드코딩 시 폴더 이동하면 구 폴더만 스캔 → 신규 세션 미수집. _ROOT 에서 동적 도출.
+_PROJECT_KEY = str(_ROOT).replace("/", "-")
 
 # ★ Cowork (Claude Desktop App local-agent-mode) transcript 위치 — 사용자 박제 2026-05-25
 #   Cowork 는 VS Code Claude Code 와 별도 채널. ingest_cowork_sessions() 가 이 폴더를 스캔.
