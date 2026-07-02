@@ -6013,3 +6013,23 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
   - ④ 표→인포그래픽: `block_assembler.py` `<table>` 분기가 plain matplotlib 로만 갔음 → `infographic_engine.render_table_infographic` 우선(팔레트 헤더·라운드 카드·교차행·▲▼색 보존, 수치 변형 0 = 사실성 안전) → 실패 시 plain 폴백.
   - C1 배치: ③가 차트마다 LLM 설계(N회)를 부르며 rate-limit 을 악화 → `prime_batch_designs(run_id, pool)` 글당 1회 LLM 으로 pool 전체를 개별 설계·캐시(`_BATCH_DESIGN_CACHE`), `generate_infographic` 은 캐시 사용(LLM 0). `chart_generator._collect_data_fallback` 에서 프라임. 검증: 3 데이터→1 호출, 개별폴백 0, 레이아웃 split_compare/hero_feature/kpi_hero 상이.
   - **핵심 교훈 (rate-limit)**: Max 구독은 *계정 단위 rate(요청/시간)* 제한 — 단일 호출은 되지만 발행의 호출 폭주(~40)가 천장을 넘음. 인터랙티브 세션·데몬·발행이 *같은 계정* 공유 → 코드 세마포어(프로세스 내)로 못 막음. 해법은 호출 수 자체를 줄이거나(C1) 발행 전용 API 키 분리. 발행은 무경쟁 시각(예약)에.
+
+## [289] 수집→작성 병목 — 근거 대부분이 대본 프롬프트에 미도달 (2026-07-02, ADR 012)
+
+- **증상**: JARVIS09가 문서 수십 건을 수집해도 테마글 본문의 근거 밀도가 낮음. 사실성 게이트가 대조할 출처도 빈약. 글이 일반론 위주로 흐름.
+- **환경**: `JARVIS02_WRITER/draft_writer.py` `_gen_theme` — collection_docs 주입부.
+- **원인**: 수집 문서를 상위 5건 × 앞 300자(≤1,500자)만 잘라 프롬프트에 주입. 출처 URL·기준 시점 미전달. 텍스트 수집 자체도 설계 없는 11-프로바이더 블라인드 스윕(커버리지 개념 없음, 부족해도 재수집 없음), 뉴스·웹은 제목+스니펫 수준만 추출.
+- **헛다리**: 프롬프트 지시문 강화("참고 자료 활용하라")만으로는 개선 안 됨 — 재료 자체가 프롬프트에 없었음.
+- **해결**: ADR 012 설계-우선 리서치 파이프라인. ① `research_planner.plan_research` 질문 설계 → ② `collect_research` 조준 수집+전문 딥페치(trafilatura) → ③ `evidence_pack` fact 단위 추출·출처 박제·임베딩 dedupe·커버리지 측정 → ④ 갭 질문만 2라운드 재수집 → ⑤ `evidence_brief` 로 근거팩 전체를 대본 프롬프트 주입 + `as_source_docs` 로 사실성 게이트 대조군 합류. 킬스위치 `RESEARCH_FIRST=0`/`WRITER_RESEARCH_FIRST=0`.
+- **파일**: `JARVIS09_COLLECTOR/{research_planner,evidence_pack,source_onboarding,collector_engine,generic_fetch,__init__}.py`, `JARVIS02_WRITER/{draft_writer,theme_html_writer,trend_theme_writer}.py`, `JARVIS06_IMAGE/draft_processor.py`, `shared/file_cleanup.py`.
+- **교훈**: 수집량이 아니라 *프롬프트 도달량* 이 병목이었다. 스테이지 간 계약(무엇을 얼마나 넘기는가)을 구조체(EvidencePack)로 명시해야 누수가 보인다. 수집은 "설계→수집→측정→재수집" 순환이어야 '충분한가'에 답할 수 있다.
+
+## [290] 대본 단일 패스 — 아웃라인·자기비평 부재로 흐름 단절·어미 반복 (2026-07-02, ADR 012)
+
+- **증상**: 섹션 간 서사 단절(각 섹션이 따로 노는 느낌), 같은 어미 반복, 마무리가 요약 재탕. 독자 감정 곡선 설계 없음.
+- **환경**: `JARVIS02_WRITER/draft_writer.py` — Pass-1 단일 호출로 전체 본문 생성.
+- **원인**: 구조 설계(아웃라인) 패스와 작성 후 점검(비평) 패스가 없음 — LLM 1회 호출 산출물을 그대로 후처리 게이트로만 보냄.
+- **헛다리**: 프롬프트에 "매력적으로 써라" 류 형용사 추가 — 구조 문제는 지시문으로 안 고쳐짐.
+- **해결**: ① `_plan_narrative` 서사 설계 1패스(공감포인트·긴장·해소·섹션 메시지·근거 F# 배정, theme+date 캐시로 플랫폼 간 재사용) ② `critique_and_refine` 자기비평 1패스(루브릭 5종 + 근거 일치 점검, *문장만* 수정). 구조 시그니처 가드(플레이스홀더·표·h2 세트 + 분량 ±30%) 위반 시 원본 유지. 킬스위치 `WRITER_CRITIQUE=0`.
+- **파일**: `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/theme_html_writer.py`.
+- **교훈**: 작성 품질은 "설계 → 작성 → 비평" 다층 패스가 기본기. 비평 패스에는 반드시 *구조 보존 가드* 를 붙여야 한다 — LLM 재작성은 플레이스홀더·표를 쉽게 훼손한다.

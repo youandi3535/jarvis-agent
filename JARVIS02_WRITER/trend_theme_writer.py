@@ -102,7 +102,8 @@ def _collect(theme: str) -> dict:
 
 def _build_blocks(theme: str, sector: str, stocks_data: dict, platform: str, img_dir: Path,
                   supreme_block: str | None = None,
-                  collection_docs: list | None = None) -> dict:
+                  collection_docs: list | None = None,
+                  evidence_pack: dict | None = None) -> dict:
     """대본 생성(JARVIS02) → 이미지 생성(JARVIS06) → 완성 블록 반환.
 
     ★ 사용자 박제 2026-05-31 — 역할 분리:
@@ -137,17 +138,18 @@ def _build_blocks(theme: str, sector: str, stocks_data: dict, platform: str, img
     if removed:
         print(f"  🔄 [Theme/{platform}] 이전 이미지 {removed}개 삭제 (폴더 유지)")
 
-    # ── JARVIS02: Pass-1 텍스트 대본 생성 ──────────────────────
+    # ── JARVIS02: Pass-1 텍스트 대본 생성 (★ ADR 012 — 근거 팩 주입) ──────
     from JARVIS02_WRITER.theme_html_writer import generate_theme_html, extract_text_content
     draft_html = generate_theme_html(
         theme, sector, stocks_data, supreme_block,
         platform=platform, collection_docs=collection_docs or [],
+        evidence_pack=evidence_pack,
     )
     if not draft_html:
         return {"success": False, "error": "Pass-1 대본 생성 실패", "blocks": [],
                 "title": "", "content": "", "html": ""}
 
-    # ── JARVIS06: 이미지 생성 + 블록 조립 ──────────────────────
+    # ── JARVIS06: 이미지 생성 + 블록 조립 (★ ADR 012 — 근거 팩 접지) ──────
     from JARVIS06_IMAGE.draft_processor import process_draft
     result = process_draft(
         draft_html=draft_html,
@@ -156,6 +158,7 @@ def _build_blocks(theme: str, sector: str, stocks_data: dict, platform: str, img
         collection_docs=collection_docs or [],
         platform=platform,
         out_dir=img_dir,
+        evidence_pack=evidence_pack,
     )
     blocks = result["blocks"]
     html   = result["html"]
@@ -460,14 +463,31 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         _col_exec = _TExec(max_workers=1)
 
         def _run_jarvis09():
+            """★ ADR 012 — 설계-우선 리서치 수집 (킬스위치 RESEARCH_FIRST=0 → 종전 스윕).
+
+            반환: {"docs": [...], "pack": dict|None}
+            """
+            try:
+                if os.getenv("RESEARCH_FIRST", "1") != "0":
+                    from JARVIS09_COLLECTOR import collect_research
+                    res = collect_research(state["theme"], state.get("sector", ""))
+                    docs = res.get("docs") or []
+                    pack = res.get("evidence_pack") or None
+                    n_facts = len((pack or {}).get("facts", []))
+                    print(f"  ✅ [THEME] JARVIS09 리서치 수집 완료: 문서 {len(docs)}건 "
+                          f"· 근거 fact {n_facts}개")
+                    return {"docs": docs, "pack": pack}
+            except Exception as e:
+                print(f"  ⚠️ [THEME] 리서치 수집 실패 — 종전 스윕 폴백: {e}")
+                _g_report("writer", e, module=__name__, func_name="_run_jarvis09")
             try:
                 from JARVIS09_COLLECTOR.collector_engine import collect_for_theme
                 docs = collect_for_theme(state["theme"], state.get("sector", ""))
-                print(f"  ✅ [THEME] JARVIS09 수집 완료: {len(docs)}건")
-                return docs
+                print(f"  ✅ [THEME] JARVIS09 수집 완료(폴백): {len(docs)}건")
+                return {"docs": docs, "pack": None}
             except Exception as e:
                 print(f"  ⚠️ [THEME] JARVIS09 수집 실패: {e}")
-                return []
+                return {"docs": [], "pack": None}
 
         _col_fut = _col_exec.submit(_run_jarvis09)
 
@@ -484,7 +504,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                 pass
             print("  ⏭️ [② 수집] 종목 0개 — TS 쿠키·JARVIS09 수집 취소")
             return {"stocks_data": data, "_collect_data_empty": True,
-                    "ts_driver": None, "collection_docs": []}
+                    "ts_driver": None, "collection_docs": [], "evidence_pack": None}
 
         # ★ 글 작성 전 쿠키 갱신 완료 대기 (글 작성 시작 전 로그인 보장)
         _ts_driver = None
@@ -496,17 +516,20 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         finally:
             _exec.shutdown(wait=False)
 
-        # JARVIS09 결과 수령
+        # JARVIS09 결과 수령 (★ ADR 012 — 리서치 수집은 LLM 추출 포함, 넉넉히 대기)
         try:
-            collection_docs = _col_fut.result(timeout=60) or []
+            _col_res = _col_fut.result(timeout=600) or {}
         except Exception:
-            collection_docs = []
+            _col_res = {}
         finally:
             _col_exec.shutdown(wait=False)
+        collection_docs = _col_res.get("docs") or []
+        evidence_pack   = _col_res.get("pack") or None
 
         print(f"  {'✅' if _ts_driver else '⚠️'} [THEME] ⓪ 로그인 {'완료' if _ts_driver else '실패 — 발행 시 재시도'} | 글 작성 시작")
         return {"stocks_data": data, "ts_driver": _ts_driver,
-                "collection_docs": collection_docs}
+                "collection_docs": collection_docs,
+                "evidence_pack": evidence_pack}
 
     @action_step(name="③ 티스토리 대본 생성")
     def _step_ts_draft(state):
@@ -521,6 +544,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                 state["theme"], state["sector"], sd, "tistory", TISTORY_IMG_DIR,
                 supreme_block=state.get("supreme_block"),
                 collection_docs=state.get("collection_docs") or [],
+                evidence_pack=state.get("evidence_pack"),
             )
         except Exception as e:
             _g_report("writer", e, module=__name__)
@@ -540,6 +564,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                 state["theme"], state["sector"], sd, "naver", NAVER_IMG_DIR,
                 supreme_block=state.get("supreme_block"),
                 collection_docs=state.get("collection_docs") or [],
+                evidence_pack=state.get("evidence_pack"),
             )
         except Exception as e:
             _g_report("writer", e, module=__name__)
@@ -606,9 +631,17 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             #   "웹에서도 확인 불가만 차단" (factuality_issues 의 source_weak 완화 자동).
             if not di_list:
                 from JARVIS02_WRITER.prepublish_gate import prepublish_quality_issues
+                # ★ ADR 012 — 사실성 게이트 대조군에 근거 팩(fact 단위·출처 박제) 합류
+                _src_docs = list(state.get("collection_docs") or [])
+                try:
+                    if state.get("evidence_pack"):
+                        from JARVIS09_COLLECTOR.evidence_pack import as_source_docs
+                        _src_docs = _src_docs + as_source_docs(state["evidence_pack"])
+                except Exception:
+                    pass
                 for q in prepublish_quality_issues(
                         draft, post_type="theme",
-                        source_docs=state.get("collection_docs"),
+                        source_docs=_src_docs,
                         market_data=None,
                         stocks_data=state.get("stocks_data")):   # ★ 1-c 실측 재무 결정론 대조
                     issues.append(Issue(step=step_name, kind=q["kind"], detail=q["detail"]))

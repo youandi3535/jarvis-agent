@@ -20,6 +20,17 @@
 from JARVIS09_COLLECTOR.collector_engine import (
     collect_for_theme,
     collect_for_theme_delta,   # ★ delta-aware 교류 (사용자 박제 2026-06-07)
+    collect_research,          # ★ 설계-우선 리서치 수집 (ADR 012 — 2026-07-02)
+)
+from JARVIS09_COLLECTOR.evidence_pack import (
+    evidence_brief,            # ★ 대본 프롬프트용 근거 브리프 (ADR 012)
+    as_source_docs,            # ★ prepublish 사실성 게이트용 어댑터 (ADR 012)
+)
+from JARVIS09_COLLECTOR.research_planner import plan_research
+from JARVIS09_COLLECTOR.source_onboarding import (
+    check_and_notify as check_source_onboarding,
+    register_key as register_source_key,
+    onboarding_status,
 )
 from JARVIS09_COLLECTOR.collect_theme import collect_stocks_data
 from JARVIS09_COLLECTOR.chart_data import (
@@ -38,6 +49,13 @@ from JARVIS09_COLLECTOR.providers.verify_provider import web_verify
 __all__ = [
     "collect_for_theme",
     "collect_for_theme_delta",
+    "collect_research",
+    "evidence_brief",
+    "as_source_docs",
+    "plan_research",
+    "check_source_onboarding",
+    "register_source_key",
+    "onboarding_status",
     "collect_stocks_data",
     "collect_chart_data",
     "get_ecos_raw",

@@ -925,6 +925,18 @@ def post_to_tistory(
                     _dismiss_any_popup(driver)  # 이미지 업로드 후 팝업 체크
                     # _upload_image() 내부에서 이미 커서를 이미지 아래로 이동 완료
                     # _focus_editor() 추가하면 body.click()이 커서를 중간으로 밀어버릴 수 있음
+                else:
+                    # ★ 미지 블록 타입 무음 유실 방지 (ADR 012 — 2026-07-02, ERRORS [171] 계열)
+                    #   새 블록 타입 추가 시 양 발행자 동시 갱신 규정 위반을 즉시 가시화.
+                    print(f"  ⚠️ 미지 블록 타입 '{btype}' — 텍스트 폴백 렌더 (양 발행자 핸들러 추가 필요)")
+                    try:
+                        from JARVIS07_GUARDIAN.error_collector import report as _g_rep
+                        _g_rep("publish", RuntimeError(f"tistory 미지 블록 타입: {btype}"),
+                               module=__name__, func_name="post_to_tistory")
+                    except Exception:
+                        pass
+                    if bdata:
+                        _inject_html_block(f"<p>{str(bdata)[:500]}</p>", driver=driver)
         elif html_content:
             # HTML 직접 주입 (경제 브리핑 등 이미지 없는 HTML 포스트)
             print("  📄 HTML 본문 직접 주입...")

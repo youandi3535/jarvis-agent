@@ -363,6 +363,7 @@ def process_draft(
     collection_docs: list | None,
     platform: str,
     out_dir: Path,
+    evidence_pack: dict | None = None,
 ) -> dict:
     """대본 HTML + 수집 자료 → 완성 블록 (JARVIS08 발행 준비 완료).
 
@@ -374,6 +375,8 @@ def process_draft(
         collection_docs: JARVIS09 collect_for_theme() 반환값
         platform:        "tistory" | "naver"
         out_dir:         이미지 저장 폴더
+        evidence_pack:   JARVIS09 collect_research 근거 팩 (ADR 012 — 있으면
+                         fact 문장을 차트·사진 컨텍스트 최우선 재료로 합류)
 
     Returns:
         {
@@ -385,6 +388,19 @@ def process_draft(
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ★ ADR 012 — 근거 팩 fact(출처 박제된 한 문장 사실)를 수집 문서 앞에 합류.
+    #   facts_for_chart/facts_for_photo 가 그대로 소비 → 차트 수치·사진 장면이
+    #   검증된 사실에 접지된다. 기존 플럼빙 재사용 (신규 경로 0).
+    if evidence_pack:
+        try:
+            from JARVIS09_COLLECTOR.evidence_pack import as_source_docs
+            _fact_docs = as_source_docs(evidence_pack)
+            if _fact_docs:
+                collection_docs = _fact_docs + list(collection_docs or [])
+                print(f"  🧾 [{platform}] 근거 팩 fact {len(_fact_docs)}개 → 이미지 컨텍스트 합류")
+        except Exception as e:
+            log.warning(f"근거 팩 합류 실패(무시): {e}")
 
     # ① [CHART_N] → matplotlib SVG (★ collection_docs 의 수치 사실 컨텍스트 주입)
     html = _generate_charts(draft_html, theme, sector, stocks_data, platform, out_dir,

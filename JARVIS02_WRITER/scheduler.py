@@ -713,7 +713,23 @@ def run_radar_top_theme():
     recent_themes = [r["theme"] for r in recent_rows]
 
     def _is_similar_theme(candidate: str) -> str | None:
-        """이미 발행된 유사 테마 반환. 없으면 None."""
+        """이미 발행된 유사 테마 반환. 없으면 None.
+
+        ★ ADR 012 (2026-07-02): 1차 판정 = 임베딩 의미 유사도 (shared/embeddings
+        단일 진입점 — 고정 그룹이 못 잡는 '로봇 ↔ 휴머노이드' 류 커버).
+        임베딩 미가용 시 종전 고정 그룹 폴백.
+        """
+        # 1차 — 임베딩 의미 유사도
+        try:
+            from shared.embeddings import embed_texts, cosine_sim, available
+            if available() and recent_themes:
+                _vecs = embed_texts([candidate] + recent_themes)
+                for _ri, _rt in enumerate(recent_themes, 1):
+                    if cosine_sim(_vecs[0], _vecs[_ri]) >= 0.80:
+                        return _rt
+        except Exception:
+            pass
+        # 2차 — 고정 그룹 폴백
         c = candidate.lower().replace(" ", "").replace("·", "")
         # 반도체 계열 키워드 그룹
         _SIMILAR_GROUPS = [

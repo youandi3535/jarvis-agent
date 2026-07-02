@@ -221,6 +221,7 @@ def generate_theme_html(
     supreme_block: str,
     platform: str = "tistory",
     collection_docs: list | None = None,
+    evidence_pack: dict | None = None,
 ) -> str:
     """테마주 Pass-1 대본 생성 — 텍스트 + [CHART_N]/[PHOTO_N] 플레이스홀더.
 
@@ -234,12 +235,14 @@ def generate_theme_html(
         supreme_block:  build_writing_rules_block() 반환값
         platform:       "tistory" | "naver"
         collection_docs: JARVIS09 수집 자료
+        evidence_pack:  JARVIS09 collect_research 근거 팩 (ADR 012)
 
     Returns:
         str: 플레이스홀더 포함 HTML. 실패 시 빈 문자열.
     """
     raw = _generate_text_pass1_theme(platform, theme, sector, stocks_data, supreme_block,
-                                     collection_docs=collection_docs or [])
+                                     collection_docs=collection_docs or [],
+                                     evidence_pack=evidence_pack)
     if not raw:
         print(f"  ❌ [Theme/{platform}] Pass-1 텍스트 생성 실패")
         return ""
@@ -269,7 +272,8 @@ def generate_theme_html(
         print(f"  ⚠️ [Theme/{platform}] 문장 {sent_count}<{_L.MIN_SENTENCES_THRESHOLD} — 재생성 1회 시도")
         try:
             raw2 = _generate_text_pass1_theme(platform, theme, sector, stocks_data, supreme_block,
-                                              collection_docs=collection_docs or [])
+                                              collection_docs=collection_docs or [],
+                                              evidence_pack=evidence_pack)
             if raw2:
                 parts2 = raw2.split("CONTENT:", 1)
                 content2 = parts2[1].strip() if len(parts2) > 1 else raw2
@@ -281,6 +285,18 @@ def generate_theme_html(
         except Exception as e:
             print(f"  ⚠️ 재생성 실패: {e}")
             _g_report("writer", e, module=__name__)
+
+    # ── ★ 자기비평 1패스 (ADR 012) — 구조 보존 가드 내장, 실패 시 원본 유지 ──
+    try:
+        from JARVIS02_WRITER.draft_writer import critique_and_refine, _build_evidence_block
+        content = critique_and_refine(
+            content, platform,
+            evidence_block=_build_evidence_block(evidence_pack),
+            post_type="theme",
+        )
+    except Exception as e:
+        print(f"  ⚠️ [Theme/{platform}] 비평 패스 스킵: {e}")
+        _g_report("writer", e, module=__name__)
 
     html = f"""<!DOCTYPE html>
 <html lang="ko">
