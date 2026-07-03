@@ -2015,6 +2015,7 @@ def run(post_naver=True, post_tistory=True):
             draft = nv_generate_draft(
                 supreme_block=state.get("supreme_block"),
                 collection_docs=state.get("collection_docs"),
+                gate_feedback=state.get("_nv_draft_gate_feedback"),
             )
         except Exception as _e:
             print(f"  ❌ [②] 네이버 대본 생성 오류: {_e}")
@@ -2034,6 +2035,7 @@ def run(post_naver=True, post_tistory=True):
                 supreme_block=state.get("supreme_block"),
                 collection_docs=state.get("collection_docs"),
                 nv_keyword=_nv_kw,
+                gate_feedback=state.get("_ts_draft_gate_feedback"),
             )
         except Exception as _e:
             print(f"  ❌ [③] 티스토리 대본 생성 오류: {_e}")
@@ -2123,6 +2125,18 @@ def run(post_naver=True, post_tistory=True):
                      if not (i.kind == "draft_quality" and i.step == step_name)]
         fixed_all: list = []
         unfixed_all: list = list(non_draft)
+
+        # ★ 게이트 차단 사유 → 재작성 프롬프트 피드백 (ERRORS [311] — 미전달 시
+        #   같은 창작 수치를 재생산해 max_attempts 그대로 소진)
+        _gate_details = [i.detail for i in non_draft
+                         if i.kind in ("factuality", "engagement") and i.detail]
+        if _gate_details:
+            _fb = list(state.get(f"_{draft_key}_gate_feedback") or [])
+            for d in _gate_details:
+                if d not in _fb:
+                    _fb.append(d)
+            state[f"_{draft_key}_gate_feedback"] = _fb[-8:]
+
         if raw_strs:
             fixed_strs, unfixed_strs = _fx(state, draft_key, platform, raw_strs, "economic")
             for s in fixed_strs:

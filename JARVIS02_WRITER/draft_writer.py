@@ -414,8 +414,11 @@ def _build_data_catalog(datasets) -> str:
     lines.append("[/CHART_1]")
     lines.append("- 종류는 bar|line|area|pie|kpi 중 1 (시계열=line/area, 비교=bar, 비율=pie, 단일수치=kpi)")
     lines.append("- 데이터 값은 위 카탈로그(D1..)의 값을 *그대로 복사* — 창작·변형·반올림 금지")
+    lines.append("- 단위도 그 데이터셋의 단위 *그대로* — 값과 단위는 한 몸 (값만 복사하고 단위를 바꾸면 거짓)")
     lines.append("- 한 슬롯 = 카탈로그 한 데이터셋 기반. 시간 라벨은 과거→최근 순서")
     lines.append("- 같은 데이터셋으로 슬롯 2개 만들지 마라 (중복 금지)")
+    lines.append("- 한 슬롯 안에서 *같은 값을 다른 라벨로 반복* 금지 (예: '매출=16.59 | 매출액=16.59' ✗)")
+    lines.append("- 슬롯 제목에 데이터 값 숫자를 그대로 쓰지 마라 (차트 본체와 중복 표기 방지)")
     lines.append("★ 본문 수치는 위 카탈로그·근거 팩·수집 자료 전문에 *명시된* 값만 그대로 인용"
                  " (창작·임의 반올림 금지 — 출처 없는 숫자는 거짓이다).")
     return "\n".join(lines)
@@ -795,11 +798,29 @@ def critique_and_refine(content: str, platform: str, evidence_block: str = "",
 #  테마글 텍스트 대본 — 전 플랫폼 (Pass-1)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+def build_gate_feedback_block(gate_feedback: list | None) -> str:
+    """★ 재작성 순환 피드백 (ERRORS [311]) — 직전 시도의 발행 차단 사유를 Pass-1 프롬프트에 주입.
+
+    없으면 같은 창작 수치를 재생산해 max_attempts 를 그대로 소진한다."""
+    items = [str(s).strip() for s in (gate_feedback or []) if str(s).strip()]
+    if not items:
+        return ""
+    lines = "\n".join(f"- {s[:300]}" for s in items[-8:])
+    return f"""
+
+★★ 직전 시도 발행 차단 사유 (반드시 반영 — 어길 시 또 차단):
+아래 주장·수치는 출처·웹 어디서도 검증되지 않아 발행이 차단됐다. 이번 대본에서는
+해당 수치·주장을 *아예 쓰지 말라*. 비슷한 변형(수치만 바꾼 같은 주장)도 금지.
+근거 자료에 실재하는 수치로 대체하거나, 수치 없이 정성 서술로 바꿔라.
+{lines}"""
+
+
 def _gen_theme(
     theme: str, sector: str, stocks_data: dict,
     supreme_block: str, platform: str = "tistory",
     collection_docs: list | None = None,
     evidence_pack: dict | None = None,
+    gate_feedback: list | None = None,
 ) -> str:
     """테마글 Pass-1: 텍스트 + [CHART_N]/[PHOTO_N] 플레이스홀더."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
@@ -844,6 +865,11 @@ def _gen_theme(
 - <svg>·<img> 태그 직접 쓰지 말 것 — 반드시 위 플레이스홀더만 사용
 - 문체: {spec['tone']}
 - 종목 데이터의 수치는 *그대로 인용* (가공·임의 변경 금지). 없으면 "N/A" 표기.
+- ★ 출처 없는 역사적 수치 창작 절대 금지 — 특정 연도·분기·기간의 가격·비용·규모·비율·지수 등은
+  아래 수집 자료나 종목 데이터에 *명시된 값만* 인용. 근거 없는 임의 수치는 사실성 게이트에서
+  차단된다. 없으면 "수치를 확인할 수 없었습니다" 등 정성 서술로 대체.
+- ★ 수치 없이도 설득력 있게 서술 — 맥락·경향·비교 표현은 검증 불가 숫자보다 낫다.
+  과거 특정 시점 임의 통계("2023년 1분기 ○○원" 류) 생성 금지.
 - 위 지시문(헌법 조항·"N문장"·"플레이스홀더 포함" 등) 본문에 그대로 출력 금지
 - *완성된 HTML 만* 출력. 설명·주석·코드블록 금지.
 
@@ -965,6 +991,10 @@ CONTENT:
         f"{_L.THEME_TOTAL_CHART_COUNT}~{_L.MAX_CHART_COUNT}",
         f"{_theme_floor}~{_theme_max}"
     )
+    _fb_block = build_gate_feedback_block(gate_feedback)
+    if _fb_block:
+        user_msg += _fb_block
+        print(f"  🔁 [Theme/Pass-1/{platform}] 직전 차단 사유 {len(gate_feedback or [])}건 주입 — 재작성")
     print(f"  ✍️  [Theme/Pass-1/{platform}] 텍스트 생성 (system 분리): {theme}...")
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     return strip_html_wrapper(raw)
@@ -1008,6 +1038,7 @@ def generate_theme_draft(
     supreme_block: str,
     collection_docs: list | None = None,
     evidence_pack: dict | None = None,
+    gate_feedback: list | None = None,
 ) -> str:
     """테마글 텍스트 대본 생성 (Pass-1).
 
@@ -1025,7 +1056,8 @@ def generate_theme_draft(
     """
     return _gen_theme(theme, sector, stocks_data, supreme_block, platform,
                       collection_docs=collection_docs or [],
-                      evidence_pack=evidence_pack)
+                      evidence_pack=evidence_pack,
+                      gate_feedback=gate_feedback)
 
 
 def generate_draft(

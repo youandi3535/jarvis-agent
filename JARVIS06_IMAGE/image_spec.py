@@ -459,6 +459,68 @@ def enforce_time_axis_ltr(rows: list) -> list:
     return rows
 
 
+def dedupe_chart_rows(rows: list) -> list:
+    """★ 차트 내 동일 수치 중복 제거 (사용자 박제 2026-07-03).
+
+    "차트 이미지 속에 같은 수치값이 여러 번 중복으로 나오는 문제" —
+      ① 정규화 라벨이 같은 행 반복 → 첫 행만 유지
+      ② 값이 같고 라벨 토큰이 60%+ 겹치는 행 (예: '매출'/'매출액' = 같은 값) → 첫 행만
+    단, *시계열* 라벨(연·월·분기)이 과반이면 무변경 — 평평한 시계열(기준금리
+    2.5% 6개월 연속 등)의 동일값은 정당한 데이터다.
+    """
+    if not rows or len(rows) < 2:
+        return rows
+    import re as _re_d
+    # 시계열 판정 — 시간 라벨 과반이면 dedupe 대상 아님
+    _t_keys = [_time_axis_key((r or {}).get("label")) for r in rows if isinstance(r, dict)]
+    if sum(1 for k in _t_keys if k is not None) >= max(2, int(len(rows) * 0.5)):
+        return rows
+
+    def _norm(s: str) -> str:
+        return _re_d.sub(r"[^가-힣a-z0-9]", "", str(s or "").lower())
+
+    def _toks(s: str) -> set:
+        # 한국어는 2자+, 라틴/숫자는 1자도 토큰 — '시나리오 A/B'·'Day 1/2' 의
+        # 단일문자 판별자를 버리면 다른 항목을 같은 항목으로 오판 (ERRORS [312])
+        return set(_re_d.findall(r"[가-힣]{2,}|[a-z0-9]+", str(s or "").lower()))
+
+    kept: list = []
+    for r in rows:
+        if not isinstance(r, dict):
+            kept.append(r)
+            continue
+        lb, val = _norm(r.get("label")), r.get("value")
+        dup = False
+        for k in kept:
+            if not isinstance(k, dict):
+                continue
+            k_lb = _norm(k.get("label"))
+            if lb and lb == k_lb:
+                dup = True   # 동일 라벨 반복
+                break
+            try:
+                same_val = abs(float(val) - float(k.get("value"))) < 1e-9
+            except (TypeError, ValueError):
+                same_val = False
+            if same_val:
+                t1, t2 = _toks(r.get("label")), _toks(k.get("label"))
+                if t1 and t2:
+                    # 접두 포함 매칭 ('매출'↔'매출액' 같은 접미 변형을 같은 항목으로)
+                    # 단, 접두 규칙은 2자+ 토큰만 — '1'↔'10' 오병합 방지, 1자는 정확 일치만
+                    _m = sum(1 for a in t1
+                             if any(a == b or (len(a) > 1 and len(b) > 1
+                                               and (a.startswith(b) or b.startswith(a)))
+                                    for b in t2))
+                    if _m / max(len(t1), len(t2)) >= 0.6:
+                        dup = True   # 같은 값 + 사실상 같은 항목
+                        break
+        if not dup:
+            kept.append(r)
+    if len(kept) < len(rows):
+        print(f"  🧹 [dedupe] 차트 동일 수치 중복 {len(rows) - len(kept)}행 제거")
+    return kept
+
+
 def render_from_spec(spec: dict[str, Any], out_path: Path) -> Path:
     """설계서 → 이미지 파일 생성 + 출처(provenance) 레지스트리 기록.
 
@@ -472,6 +534,10 @@ def render_from_spec(spec: dict[str, Any], out_path: Path) -> Path:
             if _fixed is not spec["data"]:
                 print("  ⏩ [시간축] 라벨 시간 순서 교정 — 과거→최근 (좌→우)")
                 spec = {**spec, "data": _fixed}
+            # ★ 동일 수치 중복 제거 (사용자 박제 2026-07-03)
+            _dd = dedupe_chart_rows(spec["data"])
+            if _dd is not spec["data"] and len(_dd) != len(spec["data"]):
+                spec = {**spec, "data": _dd}
     except Exception:
         pass
     result = _render_impl(spec, out_path)

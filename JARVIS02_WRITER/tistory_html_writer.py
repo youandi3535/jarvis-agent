@@ -468,6 +468,7 @@ def generate_article_html(
     platform: str = "tistory",
     collection_docs: list | None = None,
     ref_datasets: list | None = None,
+    gate_feedback: list | None = None,
 ) -> str:
     """2-pass Claude Code SDK → 텍스트 + inline SVG 완성 원고 HTML.
 
@@ -478,6 +479,13 @@ def generate_article_html(
     Returns:
         str: 완전한 HTML 문서. 실패 시 빈 문자열.
     """
+    # ★ 게이트 차단 사유 주입 (ERRORS [311]) — supreme_block 합류로 병렬·CLI 폴백
+    #   모든 Pass-1 변형이 자동 상속 (재작성 시 같은 창작 수치 재생산 방지)
+    if gate_feedback:
+        from JARVIS02_WRITER.draft_writer import build_gate_feedback_block as _gfb
+        supreme_block = (supreme_block or "") + _gfb(gate_feedback)
+        print(f"  🔁 [Pass-1/{platform}] 직전 차단 사유 {len(gate_feedback)}건 주입 — 재작성")
+
     # Pass-1 선택: 기존(느림) vs 섹션별 병렬(빠름)
     # 기본: 섹션별 병렬로 생성하고, 오류 시 기존 방식 폴백
     raw = _generate_text_pass1_parallel(keyword, sector, reason, supreme_block, platform)

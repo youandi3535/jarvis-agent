@@ -357,8 +357,22 @@ def push_to_shared(data: dict):
                 for r in recs
             ]
 
+        # ── ★ 공식 테마 게이트 (사용자 박제 2026-07-03 — ERRORS [306]) ──────────
+        # 테마주 글의 주제는 KRX/네이버 금융 *공식 테마* 에서만 선정 — 비공식 테마는
+        # 큐잉 자체를 차단 (실행 시 stocks_data 게이트가 2차 방어).
+        try:
+            from JARVIS09_COLLECTOR.collect_theme import is_official_theme
+            _before_cnt = len(pipeline_items)
+            _dropped = [it["theme"] for it in pipeline_items if not is_official_theme(it["theme"])]
+            pipeline_items = [it for it in pipeline_items if it["theme"] not in set(_dropped)]
+            if _dropped:
+                print(f"[RADAR→WRITER] ⛔ 공식 테마 게이트 — 비공식 {len(_dropped)}개 제외: "
+                      f"{', '.join(_dropped[:5])}{' …' if len(_dropped) > 5 else ''}")
+        except Exception as _ge:
+            print(f"[RADAR→WRITER] 공식 테마 게이트 스킵(오류): {_ge}")
+
         push_pipeline(pipeline_items)
-        print(f"[RADAR→WRITER] 파이프라인 {len(pipeline_items)}개 등록")
+        print(f"[RADAR→WRITER] 파이프라인 {len(pipeline_items)}개 등록 (공식 테마만)")
 
         recs = data.get("recommendations", [])
         on_trend_detected(data["date"], data["google_trending"], recs)

@@ -197,6 +197,79 @@ def _naver_fin(code: str) -> dict:
         return {}
 
 
+# ── ★ 공식 테마 카탈로그 (사용자 박제 2026-07-03) ─────────────────────────────
+# "테마주는 KRX/네이버 금융 공식 테마를 먼저 확인하고, 미작성 테마로 주제를 선정한다."
+# 종전엔 1페이지(40개)만 읽어 공식 테마 280여 개의 1/7만 매칭 — 전 페이지 수집 + 캐시.
+_THEME_CATALOG_CACHE: dict = {"themes": {}, "ts": 0.0}
+_THEME_CATALOG_TTL = 3600.0   # 1시간
+
+
+def _fetch_naver_theme_catalog(timeout: int = 8) -> dict:
+    """네이버 금융 공식 테마 전체 카탈로그 {테마명: 테마번호} — 전 페이지 + 1h 캐시."""
+    import time as _t
+    if _THEME_CATALOG_CACHE["themes"] and _t.time() - _THEME_CATALOG_CACHE["ts"] < _THEME_CATALOG_TTL:
+        return _THEME_CATALOG_CACHE["themes"]
+    import requests
+    from bs4 import BeautifulSoup
+    _hdrs = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'Referer': 'https://finance.naver.com/',
+    }
+    themes: dict = {}
+    try:
+        for page in range(1, 11):   # 공식 테마 ~8페이지 — 여유 10
+            r = requests.get(f'https://finance.naver.com/sise/theme.naver?page={page}',
+                             headers=_hdrs, timeout=timeout)
+            if r.status_code != 200:
+                break
+            soup = BeautifulSoup(r.content, 'html.parser')
+            table = soup.find('table', {'class': 'type_1'})
+            if not table:
+                break
+            before = len(themes)
+            for a in table.find_all('a', href=re.compile(r'sise_group_detail')):
+                tname = a.get_text(strip=True)
+                m = re.search(r'no=(\d+)', a.get('href', ''))
+                if tname and m:
+                    themes[tname] = m.group(1)
+            if len(themes) == before:   # 새 항목 없음 = 마지막 페이지 지나침
+                break
+    except Exception as e:
+        print(f"  ⚠️ [theme_catalog] 수집 오류: {e}")
+    if themes:
+        _THEME_CATALOG_CACHE["themes"] = themes
+        _THEME_CATALOG_CACHE["ts"] = _t.time()
+        print(f"  📚 [theme_catalog] 네이버 금융 공식 테마 {len(themes)}개 로드")
+    return themes or dict(_THEME_CATALOG_CACHE["themes"])
+
+
+def _ko_common_len(a: str, b: str) -> int:
+    """두 문자열 간 공통 한국어 부분 문자열 최대 길이 (공식 테마 매칭 기준)."""
+    a_ko = re.sub(r'[^가-힣]', '', a)
+    b_ko = re.sub(r'[^가-힣]', '', b)
+    if not a_ko or not b_ko:
+        return 0
+    best = 0
+    for L in range(2, min(len(a_ko), len(b_ko)) + 1):
+        for i in range(len(a_ko) - L + 1):
+            if a_ko[i:i + L] in b_ko:
+                best = max(best, L)
+    return best
+
+
+def is_official_theme(theme_name: str) -> bool:
+    """★ 공식 테마 판정 (사용자 박제 2026-07-03) — 네이버 금융 공식 테마 카탈로그와
+    한국어 3자+ 매칭. 카탈로그 수집 실패 시 True(fail-open — 네트워크 장애로 전면
+    차단되는 것 방지, 실행 시 게이트가 2차 방어)."""
+    catalog = _fetch_naver_theme_catalog()
+    if not catalog:
+        return True
+    _ko = re.sub(r'[^가-힣]', '', theme_name)
+    return any(_ko_common_len(theme_name, t) >= 3
+               or (_ko and _ko == re.sub(r'[^가-힣]', '', t))   # 2글자 테마 정확 일치 (예: 리튬)
+               for t in catalog)
+
+
 def _naver_fin_theme_search(theme_name: str, timeout: int = 8) -> list:
     """네이버 금융 테마 목록에서 유사 테마를 찾아 종목 코드 목록 반환.
 
@@ -210,28 +283,13 @@ def _naver_fin_theme_search(theme_name: str, timeout: int = 8) -> list:
     try:
         import requests
         from bs4 import BeautifulSoup
-
         _hdrs = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
             'Referer': 'https://finance.naver.com/',
         }
 
-        # 1) 테마 목록 수집
-        r = requests.get('https://finance.naver.com/sise/theme.naver', headers=_hdrs, timeout=timeout)
-        if r.status_code != 200:
-            return []
-        soup = BeautifulSoup(r.content, 'html.parser')
-        table = soup.find('table', {'class': 'type_1'})
-        if not table:
-            return []
-
-        naver_themes = {}
-        for a in table.find_all('a', href=re.compile(r'sise_group_detail')):
-            tname = a.get_text(strip=True)
-            m = re.search(r'no=(\d+)', a.get('href', ''))
-            if m:
-                naver_themes[tname] = m.group(1)
-
+        # 1) 테마 목록 수집 — ★ 전 페이지 카탈로그 (사용자 박제 2026-07-03)
+        naver_themes = _fetch_naver_theme_catalog(timeout=timeout)
         if not naver_themes:
             return []
 
@@ -1444,6 +1502,16 @@ def collect_stocks_data(theme_name: str) -> dict:
     # 전략: Naver Finance 40개 테마 fuzzy match → 3자+ 공통 부분 있으면 즉시 사용,
     #        매칭 없으면 LLM 폴백으로 fall-through.
     _naver_pre_pairs = _naver_fin_theme_search(theme_name)
+
+    # ── ★ 공식 테마 게이트 (사용자 박제 2026-07-03 — ERRORS [306]) ──────────────
+    # "KRX/네이버 금융 공식 테마를 먼저 확인하고, 미작성 공식 테마로 주제를 선정한다.
+    #  글을 다 쓰고 테마가 있는지 찾는 건 역순."
+    # 공식 테마 매칭 실패 = 이 테마로 글을 쓰지 않는다 — LLM 종목 작문 폴백 금지,
+    # 즉시 빈 반환 → 상위 data_empty 흐름이 테마 교체. 킬스위치 THEME_OFFICIAL_ONLY=0.
+    if not _naver_pre_pairs and os.getenv("THEME_OFFICIAL_ONLY", "1") != "0":
+        print(f"  ⛔ [stocks_data] '{theme_name}' — 네이버 금융 공식 테마 미등록. "
+              f"종목 작문 폴백 금지 → 테마 교체 필요 (ERRORS [306])")
+        return {"theme": theme_name, "stocks": [], "summary": {}}
 
     # ── ① Claude Sonnet — 종목 N개(=7개) 추출 — 사용자 박제: 반드시 7개 ──
     from shared.llm import invoke_text

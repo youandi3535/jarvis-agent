@@ -2112,7 +2112,8 @@ def run_naver(ts_keyword: str = '') -> dict:
 #  분리 함수 — 대본 생성 + 발행 분리 (병렬화용)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str = '') -> dict:
+def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str = '',
+                      gate_feedback: list | None = None) -> dict:
     """티스토리 대본 생성 (①-⑦ 단계) — 네이버와 중복되지 않은 주제로 (네이버 우선 직렬)."""
     from datetime import datetime as _dt_ts
     print(f"\n  🔴 [TISTORY-DRAFT] 대본 생성 중... [{_dt_ts.now().strftime('%H:%M:%S')}]")
@@ -2240,7 +2241,7 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
         #   (사용자 확정 2026-07-03: 슬롯에 데이터가 내장되므로 전체 자료 불필요.
         #    문서 전문은 02 의 작성 프롬프트·사실성 게이트 대조군 용도로만.)
         html = generate_article_html(keyword, sector, reason, supreme_block,
-                                     ref_datasets=_pool)
+                                     ref_datasets=_pool, gate_feedback=gate_feedback)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
@@ -2357,7 +2358,8 @@ def ts_publish(draft: dict) -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
 
-def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=None) -> dict:
+def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=None,
+                      gate_feedback: list | None = None) -> dict:
     """네이버 대본 생성 (①-⑦ 단계) — 티스토리와 중복되지 않은 주제로."""
     from datetime import datetime as _dt_nv
     print(f"\n  🟢 [NAVER-DRAFT] 대본 생성 중... [{_dt_nv.now().strftime('%H:%M:%S')}]")
@@ -2481,7 +2483,7 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
 
         # ★ 자비스06에는 대본+검증 ref(수 KB)만 — 수집 문서 전문은 전달하지 않음
         html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
-                                     ref_datasets=_pool)
+                                     ref_datasets=_pool, gate_feedback=gate_feedback)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
