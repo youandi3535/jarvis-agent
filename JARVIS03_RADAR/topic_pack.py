@@ -127,7 +127,7 @@ def _precollect(keyword: str, sector: str, summary: str) -> dict:
     ★ 넉넉한 수집 (사용자 박제 2026-07-03 — ADR 013): "설계한 후, 제한을 두지 말고
     최대한 많은 진실성 있는 데이터를 전부" — 발행 창 밖(06:00 잡)이라 시간 여유 있음.
     """
-    _max_ds = int(os.getenv("TOPIC_PACK_MAX_DATASETS", "40") or "40")
+    _max_ds = int(os.getenv("TOPIC_PACK_MAX_DATASETS", "64") or "64")
     _rounds = int(os.getenv("TOPIC_PACK_RESEARCH_ROUNDS", "3") or "3")
     out: dict = {"datasets": [], "docs": [], "evidence_path": ""}
     try:

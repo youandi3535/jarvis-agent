@@ -144,6 +144,7 @@ def _generate_svg_pass2(
     img_dir: "Path | str | None" = None,
     run_id: str = "",
     collection_docs: list | None = None,
+    seed_datasets: list | None = None,
 ) -> str:
     """차트 1개 단일 진입점 — chart_generator 성공 시 img 태그 반환, 실패 시 "" (스킵).
 
@@ -167,6 +168,7 @@ def _generate_svg_pass2(
         chart_idx=chart_idx,
         run_id=run_id,
         collection_docs=collection_docs,
+        seed_datasets=seed_datasets,
     )
     if jpg_path:
         alt = description[:40].replace('"', "'")

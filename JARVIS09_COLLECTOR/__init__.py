@@ -32,7 +32,8 @@ from JARVIS09_COLLECTOR.source_onboarding import (
     register_key as register_source_key,
     onboarding_status,
 )
-from JARVIS09_COLLECTOR.collect_theme import collect_stocks_data
+from JARVIS09_COLLECTOR.collect_theme import collect_stocks_data, stocks_to_datasets
+from JARVIS09_COLLECTOR.evidence_pack import facts_to_datasets   # 텍스트 수치 → 차트 승격 (ERRORS [302][315])
 from JARVIS09_COLLECTOR.chart_data import (
     collect_chart_data,
     get_ecos_raw,        # ★ JARVIS06 차트용 ECOS 원시 수집 (provider 단일 진입점)
@@ -57,6 +58,8 @@ __all__ = [
     "register_source_key",
     "onboarding_status",
     "collect_stocks_data",
+    "stocks_to_datasets",
+    "facts_to_datasets",
     "collect_chart_data",
     "get_ecos_raw",
     "get_krx_raw",

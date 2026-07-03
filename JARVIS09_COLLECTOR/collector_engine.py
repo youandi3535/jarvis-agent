@@ -25,19 +25,22 @@ from .providers import (
 
 log = logging.getLogger("jarvis.collector.engine")
 
-# 소스별 수집 한도 — provider마다 다르게 설정
+# ★ 수집 풍부 원칙 (사용자 박제 2026-07-03 ×2 — ADR 013 / ERRORS [314]):
+#   "주제가 설정되면 그 주제에 맞는 정보는 싹다 받아버려, 제한 두지 말고."
+#   "데이터가 부족해서 이미지를 생성 못하는 상황을 만들지 마라. 데이터는 충분해야 해."
+#   아래 상한은 무한루프 방지용 안전망일 뿐 — 신뢰순 *선별* 은 사용 시점(주입·검증)에.
 _PROVIDER_LIMITS = {
-    "naver_news": 20,  # 네이버 뉴스 API: 가장 정확한 한국어 뉴스
-    "news":       15,  # Google News + 경제지 RSS
-    "kor_econ":   10,  # 네이버 금융 + 전문 경제지
-    "krx":         8,  # KRX 시장 통계 (키 불필요)
-    "blog":        8,  # 네이버 블로그
-    "web":         5,  # 위키 + 지식백과 + 다음
-    "dart":        5,  # DART 전자공시
-    "ecos":        3,  # 한국은행 거시경제 지표
-    "kosis":       3,  # 통계청 산업 통계
-    "finance":     3,  # yfinance 글로벌 지표
-    "academic":    3,  # arxiv 논문
+    "naver_news": 30,  # 네이버 뉴스 API: 가장 정확한 한국어 뉴스
+    "news":       25,  # Google News + 경제지 RSS
+    "kor_econ":   15,  # 네이버 금융 + 전문 경제지
+    "krx":        12,  # KRX 시장 통계 (키 불필요)
+    "blog":       10,  # 네이버 블로그
+    "web":        10,  # 위키 + 지식백과 + 다음
+    "dart":       10,  # DART 전자공시
+    "ecos":        8,  # 한국은행 거시경제 지표
+    "kosis":       8,  # 통계청 산업 통계
+    "finance":     8,  # yfinance 글로벌 지표
+    "academic":   10,  # arxiv 논문 (신뢰서열 1위 — 적게 받을 이유 없음)
 }
 
 _PROVIDERS = [
@@ -69,7 +72,7 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
         # ★ 수집 폭 배율 (사용자 박제 2026-07-03 — ADR 013): "제한을 두지 말고 최대한
         #   많은 진실성 있는 데이터를 전부" — 프로바이더별 상한에 배율. env 튜닝.
         limit = int(_PROVIDER_LIMITS.get(prov.source_type, 8)
-                    * max(1.0, float(_os.getenv("J09_BREADTH", "2.0") or "2.0")))
+                    * max(1.0, float(_os.getenv("J09_BREADTH", "3.0") or "3.0")))
         try:
             docs = prov.collect(theme, sector, max_items=limit)
             log.info(f"[Engine] {prov.source_type} → {len(docs)}건 수집")
@@ -116,8 +119,8 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
 
     # 소스 다양성 확보: 같은 source_type에서 너무 많이 몰리지 않도록 배분
     _per_source: dict[str, int] = {}
-    # ★ 12 → 30 상향 + env 튜닝 (사용자 박제 2026-07-03 — 이미 받은 데이터 과잉 절삭 금지)
-    _MAX_PER_SOURCE = int(_os.getenv("J09_MAX_PER_SOURCE", "30") or "30")
+    # ★ 30 → 100 상향 (풍부 원칙 [314] — 이미 받은 데이터 절삭 금지, 사실상 무제한)
+    _MAX_PER_SOURCE = int(_os.getenv("J09_MAX_PER_SOURCE", "100") or "100")
     balanced = []
     for r in results:
         src = r.source_type
@@ -156,7 +159,7 @@ def _collect_for_question(question: dict, theme: str, sector: str) -> list[RawDo
             if src == "discover":
                 from .discovery import web_search
                 from .generic_fetch import fetch_documents
-                hits = web_search(q_main, max_results=6)
+                hits = web_search(q_main, max_results=12)   # 질문당 6→12 (풍부 원칙 [314])
                 docs.extend(fetch_documents(hits, theme=theme, max_docs=3))
                 continue
             prov = _PROVIDER_BY_TYPE.get(src)
@@ -220,7 +223,7 @@ def _clean_raw_docs(raw_docs: list[RawDocument], theme: str,
 
 @_auto_catch("collector", reraise=True)
 def collect_research(theme: str, sector: str = "", angle: str = "",
-                     max_rounds: int = 2) -> dict:
+                     max_rounds: int = 3) -> dict:
     """설계-우선 리서치 수집 — 광역 스윕 + 질문별 조준 수집 + 갭 재수집 순환.
 
     Returns:

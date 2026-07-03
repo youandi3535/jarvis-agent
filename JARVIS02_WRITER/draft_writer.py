@@ -822,10 +822,26 @@ def _gen_theme(
     evidence_pack: dict | None = None,
     gate_feedback: list | None = None,
 ) -> str:
-    """테마글 Pass-1: 텍스트 + [CHART_N]/[PHOTO_N] 플레이스홀더."""
+    """테마글 Pass-1: 텍스트 + 데이터 내장 [CHART_N] 블록 (+구형식 폴백)."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     stocks_text = _stocks_text(stocks_data)
     hook = _gen_hook_theme(theme, platform)
+
+    # ★ 데이터 내장 슬롯 카탈로그 (ADR 013 테마 이행 — ERRORS [316]): 경제와 동일 로직.
+    #   종목 시세 승격 + 텍스트 수치 승격 → 카탈로그 주입, 슬롯 안에 차트 데이터까지 내장.
+    #   카탈로그에 맞는 데이터 없는 슬롯만 구형식 유지 → 자비스06 Pass-2 실데이터 폴백.
+    _theme_catalog = ""
+    try:
+        from JARVIS09_COLLECTOR import stocks_to_datasets as _s2d_t, facts_to_datasets as _f2d_t
+        _cat_ds = _s2d_t(stocks_data) + _f2d_t(evidence_pack or {})
+        _theme_catalog = _build_data_catalog(_cat_ds)
+    except Exception as _ce:
+        print(f"  ⚠️ [Theme/Pass-1] 카탈로그 구성 실패 (구형식 슬롯으로 진행): {_ce}")
+    if _theme_catalog:
+        _theme_catalog += ("\n★ 위 구조 예시의 [CHART_N: 설명] 자리 작성 규칙: 카탈로그(D1..)에 맞는 "
+                           "데이터가 있으면 *반드시* 블록 형식([CHART_N]...[/CHART_N])으로 데이터까지 "
+                           "내장해 작성. 맞는 데이터가 없는 슬롯만 [CHART_N: 설명] 형식 유지 "
+                           "(그 슬롯은 자비스06이 검증된 실데이터로 채운다).")
     summary = (stocks_data or {}).get("summary", {})
     leader = summary.get("leader_name", "")
     second = summary.get("second_name", "")
@@ -984,6 +1000,7 @@ CONTENT:
 <p>(여기에 면책 2문장 — 본문에 맞춤형 표현. 헌법 제5조 적용 — 정보 제공·투자 권유 아님·판단 책임은 독자)</p>
 
 지금 바로 TITLE: 부터 출력. 위 출력 형식 외의 설명·주석·코드블록 절대 금지.
+{_theme_catalog}
 {_ref_block}"""
     _theme_floor = max(6, _L.THEME_TOTAL_CHART_COUNT)  # 테마: 7~10 범위 하한선
     _theme_max   = _spec_theme.max_images if _spec_theme else 10

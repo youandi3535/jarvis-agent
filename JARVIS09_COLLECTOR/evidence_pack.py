@@ -375,7 +375,7 @@ def _label_batch(statements: list[str]) -> list[str]:
     return fallback
 
 
-def facts_to_datasets(pack: dict, max_datasets: int = 12) -> list[dict]:
+def facts_to_datasets(pack: dict, max_datasets: int = 24) -> list[dict]:
     """★ 수치 fact → 인포그래픽 데이터셋 승격 (사용자 박제 2026-07-03 — ADR 013 보강).
 
     "수치는 텍스트 안에도 많다" — 근거팩의 kind=stat fact(값·단위·기준일·출처 박제)를

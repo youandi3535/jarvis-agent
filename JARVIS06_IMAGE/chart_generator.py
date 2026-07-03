@@ -251,7 +251,10 @@ _GENERAL_ECON_KWS = frozenset([
 _CHART_DATA_POOL: dict = {}   # run_id -> [datasets] (run 당 1회 수집, 슬롯마다 부분집합 회전)
 _SESSION_POOL: list = []       # ★ writer 가 대본 전 미리 수집한 풀 (데이터-우선: Pass-2 재수집 0)
 _SESSION_POOL_SET: bool = False  # ★ writer 가 명시적으로 풀을 등록했는지 (빈 풀도 존중 — garbage 폴백 차단)
-_USED_POOL_IDX: set = set()     # ★ 현재 글에서 사용한 데이터셋 인덱스 (차트 반복 금지; set_session_pool 마다 리셋)
+# ★ 사용 인덱스는 *풀 정체* 별 (ERRORS [313]): 전역 set 이면 재작성·타 플랫폼의 *새 풀* 이
+#   이전 시도의 인덱스에 굶주림 (4/7→1/7→0/7 사고). "session" = 세션풀, "run:{id}" = 런 풀.
+_USED_POOL_IDX: dict = {}
+_POOL_LOCK = _threading.Lock()   # 병렬 슬롯 워커의 중복 수집 방지 (동일 run 3중 수집 사고)
 
 
 def set_session_pool(pool):
@@ -271,21 +274,28 @@ def clear_session_pool():
     _USED_POOL_IDX.clear()
 
 
-def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, run_id):
+def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, run_id,
+                           seed_datasets=None):
     """실데이터 경로 실패 시 JARVIS09 collect_chart_data 요청 → 검증 실데이터로 인포그래픽.
-    ★ 데이터-우선: writer 가 set_session_pool() 로 미리 수집한 풀이 있으면 재수집 없이 사용."""
+    ★ 데이터-우선: writer 가 set_session_pool() 로 미리 수집한 풀이 있으면 재수집 없이 사용.
+    ★ seed_datasets (ERRORS [313]): 호출자가 이미 보유한 확실한 실데이터(테마 종목 시세 등)
+      — 웹 수집과 *합류*. 테마주 글이 손에 쥔 시세를 두고 굶는 사고 차단."""
     try:
-        pool = _SESSION_POOL or _CHART_DATA_POOL.get(run_id)
-        # ★ writer 가 세션풀을 명시 등록(빈 풀 포함)했으면 per-chart 재수집 금지 — garbage 차단.
-        if not pool and not _SESSION_POOL_SET:
-            from JARVIS09_COLLECTOR import collect_chart_data
-            # ★ 테마 앵커: 섹션 description 이 드리프트해도 *주제(keyword)* 로 수집 → 주제 실데이터 보장.
-            res = collect_chart_data(keyword, sector=sector, description=keyword,
-                                     max_datasets=12)   # 풍부하게 요청 → 고퀄 이미지
-            pool = (res or {}).get("datasets") or []
-            _CHART_DATA_POOL[run_id] = pool
-            print(f"  🕸️ [chart_generator→JARVIS09] '{keyword}' 실데이터 요청 "
-                  f"→ {len(pool)}개 dataset (출처·단위 박제)")
+        with _POOL_LOCK:   # 병렬 워커 동시 진입 → 같은 run 3중 수집 방지 (ERRORS [313])
+            pool = _SESSION_POOL or _CHART_DATA_POOL.get(run_id)
+            # ★ writer 가 세션풀을 명시 등록(빈 풀 포함)했으면 per-chart 재수집 금지 — garbage 차단.
+            if not pool and not _SESSION_POOL_SET:
+                from JARVIS09_COLLECTOR import collect_chart_data
+                # ★ 테마 앵커: 섹션 description 이 드리프트해도 *주제(keyword)* 로 수집 → 주제 실데이터 보장.
+                res = collect_chart_data(keyword, sector=sector, description=keyword,
+                                         max_datasets=24)   # ★ 풍부 원칙 [314] — 슬롯 7개+재작성 여유
+                collected = (res or {}).get("datasets") or []
+                seed = list(seed_datasets or [])
+                _titles = {str(d.get("title", "")) for d in seed}
+                pool = seed + [d for d in collected if str(d.get("title", "")) not in _titles]
+                _CHART_DATA_POOL[run_id] = pool
+                print(f"  🕸️ [chart_generator→JARVIS09] '{keyword}' 실데이터 요청 "
+                      f"→ 수집 {len(collected)} + 종목시세 승격 {len(seed)} = {len(pool)}개 dataset")
         if not pool:
             print(f"  ⚠️ [chart_generator] '{keyword}' 게이트 실데이터 0 — 차트 스킵(거짓·무관 < 차트 없음)")
             return ""
@@ -298,14 +308,16 @@ def _collect_data_fallback(keyword, sector, description, chart_idx, out_path, ru
             pass
         n = len(pool)
         # ★ 반복 금지 (사용자 박제 2026-07-01): 같은 데이터셋을 여러 슬롯에 반복(중복 차트)하지 않는다.
-        #   글 단위 used-set(set_session_pool 마다 리셋)으로 *미사용* 데이터셋만 1회씩 →
-        #   소진되면 "" 반환(AI 사진 대체). run_id 불안정(_rid=time_ns)에도 견고.
-        _avail = [i for i in range(n) if i not in _USED_POOL_IDX]
-        if not _avail:
-            print(f"  ℹ️ [chart_generator] 실데이터 {n}개 모두 소진 → 슬롯 {chart_idx}는 AI 사진 대체(반복 금지)")
-            return ""
-        _pick = _avail[0]
-        _USED_POOL_IDX.add(_pick)
+        #   used-set 은 *이 풀* 스코프 (ERRORS [313]) — 재작성/타 플랫폼의 새 풀은 새 추적.
+        _ukey = "session" if _SESSION_POOL else f"run:{run_id}"
+        with _POOL_LOCK:
+            _used = _USED_POOL_IDX.setdefault(_ukey, set())
+            _avail = [i for i in range(n) if i not in _used]
+            if not _avail:
+                print(f"  ℹ️ [chart_generator] 실데이터 {n}개 모두 소진 → 슬롯 {chart_idx}는 AI 사진 대체(반복 금지)")
+                return ""
+            _pick = _avail[0]
+            _used.add(_pick)
         one = pool[_pick]
         from JARVIS06_IMAGE.infographic_engine import generate_infographic
         p = generate_infographic(str(one.get("title", keyword))[:36], "실데이터 기반", [one],
@@ -330,6 +342,7 @@ def generate_chart(
     chart_idx: int = 1,
     run_id: str = "",
     collection_docs: list | None = None,
+    seed_datasets: list | None = None,
 ) -> str:
     """차트 설명 → Plotly PNG → 파일 경로. 실패 시 "".
 
@@ -359,7 +372,8 @@ def generate_chart(
         #   시장지수 dump(_fetch_from_j09: S&P500·NASDAQ)·본문추출·합성 등 *비게이트 경로* 는
         #   '지역화폐 발행액'인데 S&P500 데이터 같은 *주제 불일치 garbage* 를 만들어 전면 차단.
         #   게이트 통과 실데이터가 없으면 차트를 만들지 않고 "" 반환 → 상위에서 AI 사진으로 대체.
-        _gated = _collect_data_fallback(keyword, sector, description, chart_idx, out_path, _rid)
+        _gated = _collect_data_fallback(keyword, sector, description, chart_idx, out_path, _rid,
+                                        seed_datasets=seed_datasets)
         if _gated:
             return _gated
         print(f"  ⚠️ [chart_generator] '{keyword}' 게이트 통과 실데이터 0 → 차트 스킵 (AI 사진 대체, garbage 차단)")
@@ -386,6 +400,9 @@ def clear_session_cache() -> None:
         _J09_CTX_CACHE.clear()
     _GLOBAL_TYPE_HISTORY.clear()
     _used_types_by_run.clear()
+    with _POOL_LOCK:                 # 런 풀·사용 인덱스도 새 글에서 리셋 (ERRORS [313])
+        _CHART_DATA_POOL.clear()
+        _USED_POOL_IDX.clear()
     print("  🧹 [chart_generator] 글 세션 캐시 초기화 완료")
 
 

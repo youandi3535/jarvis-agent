@@ -611,7 +611,7 @@ def prime_batch_designs(run_id, pool, context=""):
         if run_id in _BATCH_DESIGN_CACHE:
             return                       # 이미 다른 스레드가 배치 완료
         # ★ 렌더와 동일 정규화 (사본) — 캐시 키 정합 (ERRORS [312])
-        _use = [_normalize_ds({**d, "data": list(d.get("data") or [])}) for d in list(pool)[:10]]
+        _use = [_normalize_ds({**d, "data": list(d.get("data") or [])}) for d in list(pool)[:16]]
         cache: dict = {}
         try:
             items = "\n".join(f"[{i}] {_data_brief([ds])}" for i, ds in enumerate(_use))
