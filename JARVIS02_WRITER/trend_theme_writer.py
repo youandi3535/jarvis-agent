@@ -467,10 +467,23 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
 
             반환: {"docs": [...], "pack": dict|None}
             """
+            # ★ 키워드 단독 전송 금지 (사용자 박제 2026-07-03 — ADR 013 강제):
+            #   테마 키워드도 자비스03 프로필(정의·관련어)을 동봉해 JARVIS09 에 전달.
+            _angle = ""
+            try:
+                from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
+                _prof = _kw_prof(state["theme"], state.get("sector", ""))
+                _angle = (_prof.get("summary") or "").strip()
+                if _angle:
+                    state["theme_profile"] = _prof
+                    print(f"  🏷️ [THEME] 자비스03 프로필: {_angle[:60]}")
+            except Exception:
+                pass
             try:
                 if os.getenv("RESEARCH_FIRST", "1") != "0":
                     from JARVIS09_COLLECTOR import collect_research
-                    res = collect_research(state["theme"], state.get("sector", ""))
+                    res = collect_research(state["theme"], state.get("sector", ""),
+                                           angle=_angle)
                     docs = res.get("docs") or []
                     pack = res.get("evidence_pack") or None
                     n_facts = len((pack or {}).get("facts", []))

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os as _os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .models import RawDocument, CollectionResult
 from .cleaner import clean_document
@@ -65,7 +66,10 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
     raw_docs: list[RawDocument] = []
 
     def _run_provider(prov):
-        limit = _PROVIDER_LIMITS.get(prov.source_type, 8)
+        # ★ 수집 폭 배율 (사용자 박제 2026-07-03 — ADR 013): "제한을 두지 말고 최대한
+        #   많은 진실성 있는 데이터를 전부" — 프로바이더별 상한에 배율. env 튜닝.
+        limit = int(_PROVIDER_LIMITS.get(prov.source_type, 8)
+                    * max(1.0, float(_os.getenv("J09_BREADTH", "2.0") or "2.0")))
         try:
             docs = prov.collect(theme, sector, max_items=limit)
             log.info(f"[Engine] {prov.source_type} → {len(docs)}건 수집")
@@ -95,9 +99,25 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
         except Exception as e:
             log.warning(f"[Engine] 정제 실패 ({raw.url}): {e}")
 
+    # ★ 신뢰 우선 정렬 + 동일 내용 중복 시 고신뢰 소스 유지 (사용자 박제 2026-07-03 — ADR 013)
+    #   "논문 > API > 뉴스 > 기사 > 웹 — 겹치면 이 순서로 선택. 수집 자체는 전부."
+    from .models import trust_rank as _trust
+    results.sort(key=lambda r: _trust(r.source_type))   # stable — 티어 내 원래 순서 보존
+    _seen_hash: set[str] = set()
+    _uniq: list = []
+    for r in results:
+        h = getattr(r, "content_hash", "") or ""
+        if h and h in _seen_hash:
+            continue    # 동일 내용 — 앞선(더 신뢰 높은) 소스가 이미 보존됨
+        if h:
+            _seen_hash.add(h)
+        _uniq.append(r)
+    results = _uniq
+
     # 소스 다양성 확보: 같은 source_type에서 너무 많이 몰리지 않도록 배분
     _per_source: dict[str, int] = {}
-    _MAX_PER_SOURCE = 12
+    # ★ 12 → 30 상향 + env 튜닝 (사용자 박제 2026-07-03 — 이미 받은 데이터 과잉 절삭 금지)
+    _MAX_PER_SOURCE = int(_os.getenv("J09_MAX_PER_SOURCE", "30") or "30")
     balanced = []
     for r in results:
         src = r.source_type

@@ -332,9 +332,14 @@ def _build_data_catalog(datasets) -> str:
     ★ 1-d (2026-07-02): 제목·단위뿐 아니라 *실제 값(라벨:값)·기준일* 까지 주입한다.
       이전엔 제목만 줘서 본문 프로즈의 구체 수치를 LLM 이 지어냈다 — 이제 본문이
       '있는 실데이터 수치만 그대로' 인용하도록 값을 명시한다.
+    ★ 프롬프트 상한 (2026-07-03 — ADR 013 넉넉한 수집 도입 후): 세션풀은 전량 보유하되
+      카탈로그는 상위 N개만 주입 — 프롬프트 비대로 인한 절단·품질 저하 방지.
     """
     if not datasets:
         return ""
+    import os as _os_cat
+    _cat_max = int(_os_cat.getenv("DATA_CATALOG_MAX", "16") or "16")
+    datasets = list(datasets)[:_cat_max]
     lines = ["[★ 사용 가능한 실데이터 — 차트도 본문 수치도 *이 값만* 인용할 것]"]
     for i, d in enumerate(datasets, 1):
         u = d.get("unit", "")

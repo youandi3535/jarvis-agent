@@ -45,13 +45,10 @@ except ImportError:
 
 _OUT_DIR = Path(__file__).parent / "output" / "evidence"
 
-# 출처 신뢰 등급 (discovery.py 도메인 티어와 동일 철학 — 표시용 간이 맵)
-_TIER_BY_TYPE = {
-    "kosis": 1, "ecos": 1, "dart": 1, "krx": 1, "kor_econ": 1,
-    "academic": 1, "kci": 1,
-    "naver_news": 2, "news": 2, "finance": 2, "web_data": 2,
-    "web": 3, "blog": 4,
-}
+# ★ 출처 신뢰 등급 — models.SOURCE_TRUST_TIER 단일 진입점 (사용자 박제 2026-07-03 — ADR 013)
+#   논문(1) > 공식 API(2) > 뉴스(3) > 기사(4) > 웹(5) > 블로그(6).
+#   중복 fact 충돌 시 낮은 티어(=높은 신뢰)가 이긴다 (_dedupe_facts).
+from .models import SOURCE_TRUST_TIER as _TIER_BY_TYPE
 
 _EXTRACT_SYSTEM = """당신은 팩트체커 겸 리서처다. 수집 문서에서 *문서에 실제로 적힌*
 사실만 추출한다. 문서에 없는 내용을 추론·창작하면 절대 안 된다.
@@ -155,7 +152,7 @@ def _extract_facts_batch(theme: str, plan: dict, docs: list,
                 "name": str(_doc_attr(d, "title"))[:80] or src_type,
                 "url": str(_doc_attr(d, "url")),
                 "type": src_type,
-                "tier": _TIER_BY_TYPE.get(src_type, 3),
+                "tier": _TIER_BY_TYPE.get(src_type, 5),
             },
             "confidence": conf,
         })
@@ -167,7 +164,7 @@ def _dedupe_facts(facts: list[dict], sim_threshold: float = 0.86) -> list[dict]:
     if len(facts) <= 1:
         return facts
     # 티어(낮을수록 좋음) → confidence 순 정렬 후 앞선 것 우선 보존
-    ordered = sorted(facts, key=lambda f: (f["source"].get("tier", 3), -f.get("confidence", 0)))
+    ordered = sorted(facts, key=lambda f: (f["source"].get("tier", 5), -f.get("confidence", 0)))
     kept: list[dict] = []
     try:
         from shared.embeddings import embed_texts, available
@@ -226,7 +223,7 @@ def build_evidence_pack(theme: str, plan: dict, docs: list,
     문서 우선순위: 신뢰 티어 좋은 소스 먼저 배치에 태운다 (배치 수 제한 내 최대 가치).
     """
     docs = list(docs or [])
-    docs.sort(key=lambda d: _TIER_BY_TYPE.get(str(_doc_attr(d, "source_type")), 3))
+    docs.sort(key=lambda d: _TIER_BY_TYPE.get(str(_doc_attr(d, "source_type")), 5))
     facts: list[dict] = []
     for bi in range(max_llm_batches):
         chunk = docs[bi * batch_size:(bi + 1) * batch_size]

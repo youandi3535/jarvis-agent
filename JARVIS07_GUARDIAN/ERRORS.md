@@ -1,5 +1,23 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [295] ADR 013 — 에이전트 파이프라인 정본 흐름 4대 원칙 (★ 사용자 박제 2026-07-03)
+
+- **결정 (ADR 013 단일 진실 소스 — `docs/decisions/013-agent-pipeline-flow.md`)**: 03(주제+프로필)→02·09 동시 제공 → 09 설계 후 무제한 수집 → 02 매력 대본 → 06 이미지 → 08 발행 (네이버 우선 직렬).
+- **원칙 ① 키워드 단독 전송 금지 (강제)**: 자비스03이 키워드를 누구에게 보내든 프로필(정의·관련어·엔티티유형) 동봉 의무 — '배'(과일? 선박? 인체?) 판별 불가 문제. 단일 진입점 `topic_pack.keyword_profile()`. 테마 파이프라인도 `collect_research(angle=프로필)` 동봉.
+- **원칙 ② 수집은 전부, 선택은 신뢰순**: "논문 > API > 뉴스 > 기사 > 웹" — 겹치면 이 순서로 선택, 수집 범위 제한 금지. 단일 진입점 `JARVIS09_COLLECTOR/models.SOURCE_TRUST_TIER`/`trust_rank()` (evidence_pack `_TIER_BY_TYPE` 이관, kor_econ 1→4 강등). `collect_for_theme` 신뢰순 정렬+content_hash 중복 시 고신뢰 유지. 수집 폭: `J09_BREADTH`(2.0배)·`J09_MAX_PER_SOURCE`(30)·`TOPIC_PACK_MAX_DATASETS`(40)·`TOPIC_PACK_RESEARCH_ROUNDS`(3).
+- **원칙 ③ 수치만 하드 게이트, 프로즈 자유**: "숫자 수치 데이터는 무조건 진실. 글은 상상·추론·예상 가능." — `law_enforcer._extract_claims/_ground_unsupported` 를 수치 포함 주장 한정으로 재정의. BLOG_SUPREME_LAW 제2조 개정 (7항 신설). 데이터 카탈로그 프롬프트 상한 `DATA_CATALOG_MAX`(16) — 넉넉 수집 도입 후 프롬프트 비대 방지 (세션풀은 전량 보유).
+- **파일**: `docs/decisions/013-agent-pipeline-flow.md`(신설), `JARVIS09_COLLECTOR/{models,collector_engine,evidence_pack}.py`, `JARVIS02_WRITER/{law_enforcer,draft_writer,trend_theme_writer}.py`, `JARVIS02_WRITER/BLOG_SUPREME_LAW.md`, `JARVIS03_RADAR/{topic_pack.py,CLAUDE_RADAR.md}`, 루트 `CLAUDE.md`
+- **검증**: `keyword_profile('배')` → "동음이의어로 과일·선박·복부…" 프로필 실증. trust_rank 서열 단위 테스트 통과. precommit 44종 0건.
+- **교훈**: 게이트는 *지킬 것(수치)* 과 *풀 것(서사)* 을 정확히 갈라야 한다 — 전부 조이면 재작성 순환 낭비, 전부 풀면 거짓 수치. 수집은 넓게, 선택은 신뢰순, 전달은 맥락 동봉.
+
+### [294] 주제 패키지 파이프라인 — 자비스03이 자비스02·09에 동시 제공 (★ 사용자 박제 2026-07-03)
+
+- **증상**: [290]의 구조적 원인 — 주제 *키워드 문자열* 이 자비스03→02→09 로 중계되며 프로필 정보(키워드의 실체)가 전달되지 않아, 09 가 '은행나무'류 중의적 키워드를 혼동 없이 수집할 방법이 없었음. 폴백 주제는 reason 조차 없이 keyword 단독 전달.
+- **사용자 박제 (원문 취지)**: "키워드만 보내지 말고 키워드를 설명하는 기본 정보(예: 은행나무 = 활엽수·산림·은행열매)까지 보내라" + "자비스03 → 자비스09 직접 구조. 자비스02를 거치지 마라. 폴백도 만들지 마라" + "제목은 자비스02가 만들어야 하니 자비스03이 자비스02와 자비스09에게 *동시에* 트렌드 정보를 제공한다".
+- **해결 (`JARVIS03_RADAR/topic_pack.py` 신설)**: ① 트렌드 수집 잡 말미 자동 실행 — 경제 후보 추출(사용이력 dedup·점수 정렬) → LLM 배치 1회로 후보별 {적합성, 프로필(한줄정의·관련어 5·엔티티유형), 교정 섹터} — *프로필 생성 자체가 오분류 트립와이어*. ② 적합 상위 2개 → **JARVIS09 직접 선수집**: `collect_research(angle=프로필요약)` + `collect_chart_data(description=프로필요약)` → `data/topic_pack_YYYY-MM-DD.json` 박제. ③ 자비스02 `nv/ts_generate_draft` 는 `pick_candidate()` 소비만 — `select_*_topic`·`collect_for_theme`/`collect_chart_data` 직접 호출 전면 폐지 (폴백 없음, 팩 부재 시 `build_topic_pack()` 즉석 실행 = 동일 단일 경로). 프로필은 `[주제 프로필 — 자비스03]` 블록으로 작성 프롬프트에 주입 → 제목·대본이 주제 실체 혼동 불가. ④ 강제 주제(JARVIS_FORCE_*)도 `build_for_keyword()` 경유 — 03→09 구조 유지. ⑤ docs 는 CollectionResult asdict 직렬화 → `restore_docs()` 복원 (JARVIS06·prepublish 게이트 호환).
+- **파일**: `JARVIS03_RADAR/topic_pack.py`(신설), `JARVIS03_RADAR/jobs.py`, `JARVIS02_WRITER/trend_economic_writer.py`, `JARVIS03_RADAR/CLAUDE_RADAR.md`, `JARVIS02_WRITER/CLAUDE_WRITER.md`
+- **교훈**: 에이전트 간 인터페이스에 *문자열 하나* 만 흘리면 하류가 맥락을 재구성할 수 없다 — 구조체(키워드+프로필+선수집 데이터)로 전달. 부수 효과: 수집이 발행 창(06:30) 밖(06:00 잡)으로 이동 → 타임아웃 예산 확보. `select_naver/tistory_topic` 은 레거시(run_naver/run_tistory, guard 차단)에만 잔존.
+
 ### [293] 네이버 최종 발행 클릭 실패 — 주간/in-daemon 실행에서 OS 물리 클릭이 팝업만 닫음 (★ 사용자 박제 2026-07-03)
 
 - **증상**: 사용자 증언 "편집창 작성 다 하고 발행창을 못 띄움". 실측(스크린샷 popup.png/before_publish.png 08:53): 발행 팝업은 정상 오픈 + 카테고리·태그 완료 — 실패 지점은 팝업 내 최종 '발행' 버튼의 OS 물리 클릭(고정 좌표 CGEvent)이 버튼을 빗맞혀 **팝업만 닫힘**. 클릭 후 URL /postwrite 유지 → 재시도 시 버튼 미발견 → Layer4 발행 실패.
