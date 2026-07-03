@@ -1,5 +1,27 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [301] 플랫폼 단위 끝까지 직렬 — harness 2액션 분리 + 적대 리뷰 7건 수정 (★ 사용자 박제 2026-07-03)
+
+- **결정 (사용자 지시 원문)**: "트렌드 분석으로 주제가 정해지면 네이버 순차 진행(수집부터 발행까지), 네이버 발행이 끝나면 그 다음 티스토리 수집 시작해서 발행까지 마무리." — 종전 *단계 직렬* (NV대본→TS대본→둘 검증→NV발행→TS발행, 검증에서 두 플랫폼 운명 결합)을 *플랫폼 직렬* 로 재구조화.
+- **구현**: economic_poster — `_nv_action`(①규정→②NV대본→검증순환→발행, max 3) 완전 종결 후 `_ts_action`(①규정→③TS대본(`nv_keyword_final` 주제 제외)→검증→발행). trend_theme_writer — `_nv_action_def`(①규정→②종목·근거 수집(공유)→③NV대본) 종결 후 `_ts_action_def`(④TS쿠키 *신선* 갱신→⑤TS대본). verify/fix/send 는 `_verify/_fix/_send_(theme_)platform` 파라미터화 + lambda 바인딩. 효과: 한쪽 재작성 순환·실패가 다른 쪽 무지연·무차단, TS 선로그인 세션 사망 문제 해소(발행 직전 갱신).
+- **적대 리뷰 (워크플로 11 에이전트) 확정 결함 7건 → 전부 수정**:
+  1. [HIGH] 테마 `skip_regen` 이 게이트(factuality/engagement) 이슈에도 True — 재작성 0회로 fingerprint abort 직행 → *해당 step 의 어떤 이슈든* skip 금지로 복원.
+  2. [HIGH] EP 결과 파일이 run() 말미 단일 기록 — 직렬화로 NV완료~종료 구간이 길어져 timeout kill 시 NV 재발행(이중 발행) → 액션 종결마다 즉시 증분 기록 + scheduler 예외 경로가 결과 파일 읽고 실패 플랫폼만 incident.
+  3. [MEDIUM] 공유 precondition 이 상대 플랫폼 자격증명까지 요구 → `_precondition_for(platform)` 분리.
+  4. [MEDIUM] `if not verify_all_logins()` — dict 항상 truthy 라 로그인 레그 영구 사문(기존 잠복) → 플랫폼별 `ok` 직접 판정 (economic+theme 양쪽).
+  5. [MEDIUM] 테마 `data_empty` 판정이 수집 미실행(사전조건 실패·동시성 차단)까지 테마 교체로 오분류 → *수집 실행 후 빈 경우만* data_empty.
+  6. [MEDIUM] LLM 데드라인 45분 단일 예산 — TS 생성이 상시 강등 → 액션마다 40분 리셋.
+  7. [MEDIUM] NV 액션의 동시 실행 중복 차단 시 TS 무조건 진행 — 인터리브 이중 발행 창 → 차단 감지 시 TS 도 중단.
+- **파일**: `JARVIS02_WRITER/{economic_poster,trend_theme_writer,scheduler}.py`, `JARVIS02_WRITER/CLAUDE_WRITER.md`
+- **교훈**: 검증·발행을 플랫폼별 액션으로 쪼갤 때 회귀 지뢰는 ① 공유 훅의 암묵 결합(precondition·skip_regen·데드라인) ② 프로세스 경계 아티팩트(결과 파일)의 기록 시점. 발행 코드 구조 변경은 적대 리뷰 의무.
+
+### [300] 수집 설계 단계 보강 — 설계 LLM 필수 면제 + 폴백 가시화 + 근거 부족 주제 교체 (★ 사용자 승인 2026-07-03)
+
+- **증상**: ① rate-limit 회로 차단 중 설계 LLM(research_planner·data_planner)이 즉시 "" 폴백 → 보편 5차원 템플릿 설계로 *조용히* 강등 (같은 팩 빌드에서 '고려아연'=정교한 LLM 설계 6문항 vs '지속가능경영보고서'=템플릿 5문항 실증). ② 재수집 3라운드 소진 후 커버리지 0/N·fact 0개여도 무조건 통과(fail-open) — 근거 없는 주제로 진행.
+- **해결**: ① `shared/llm.invoke_text(_essential=True)` 호출 단위 회로 면제 신설 → research_planner·data_planner·topic_pack 프로필 배치 3곳 적용 (설계·프로필 = 품질 조타수, 스로틀 중에도 1회 실시도). ② `plan_research` 폴백 시 `plan["fallback"]=True` 박제 → `collect_research` 반환에 `plan_fallback`·`coverage_ratio`·`insufficient`(커버리지 0 또는 fact<3) 추가. ③ `topic_pack.build_topic_pack` — 선수집 결과 insufficient 면 **다음 적합 후보로 주제 교체**, 충분 후보 부족 시 근거 얇은 후보로 보충(플래그 유지 — 02 게이트 최종 방어) + 폴백/부족/교체 발생 시 텔레그램 1회 통보. ④ 테마 파이프라인은 경고만 (종목 실데이터가 1차 근거).
+- **파일**: `shared/llm.py`, `JARVIS09_COLLECTOR/{research_planner,data_planner,collector_engine}.py`, `JARVIS03_RADAR/topic_pack.py`, `JARVIS02_WRITER/trend_theme_writer.py`
+- **교훈**: 설계는 수집 품질의 조타수 — 회로 차단기의 "비필수 즉시 폴백" 대상에서 반드시 제외. 조용한 강등(플래그·알림 없는 degrade)은 몇 주짜리 품질 저하를 숨긴다 ([299]와 동일 교훈의 LLM판).
+
 ### [299] RADAR 트렌드 수집 — DataLab·경쟁강도·자동완성 4개 지연 import 전멸 (datalab_used 영구 False) (2026-07-03)
 
 - **증상**: 매일 `trends_*.json` 에 `datalab_used: False, iot_used: False` — 50개 키워드 전부 velocity "—"·competition 50.0(중립 기본값). 점수가 사실상 *구글 순위 하나* 로만 계산됨. 텔레그램 경고 0회 (조용한 degrade).

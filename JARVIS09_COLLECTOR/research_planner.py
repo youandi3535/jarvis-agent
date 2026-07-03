@@ -157,17 +157,23 @@ def plan_research(topic: str, sector: str = "", angle: str = "") -> dict:
     for _attempt in range(2):
         try:
             from shared.llm import invoke_text
+            # ★ _essential=True (ERRORS [300]): 설계는 수집 품질의 조타수 —
+            #   회로 차단 중에도 1회 실시도 보장 (즉시 폴백 금지).
             raw = invoke_text("analyzer", prompt, system=_PLAN_SYSTEM,
-                              max_tokens=1600, temperature=0.2 if _attempt == 0 else 0.5)
+                              max_tokens=1600, temperature=0.2 if _attempt == 0 else 0.5,
+                              _essential=True)
             plan = _sanitize(_extract_json(raw), topic)
             if plan:
                 log.info(f"[research] '{topic}' → 질문 {len(plan['questions'])}개 설계 "
                          f"(시도 {_attempt + 1})")
+                plan["fallback"] = False
                 return plan
         except Exception as e:
             log.warning(f"[research] 설계 시도{_attempt + 1} 실패: {e}")
             _g_report("collector", e, module=__name__, func_name="plan_research")
     fb = _fallback_plan(topic, sector)
+    # ★ 폴백 플래그 (ERRORS [300]) — 조용한 강등 금지: 팩·알림에서 가시화.
+    fb["fallback"] = True
     log.warning(f"[research] '{topic}' LLM 설계 실패 → 보편 5차원 폴백")
     return fb
 

@@ -1959,12 +1959,11 @@ def run(post_naver=True, post_tistory=True):
             _g_report("writer", e, module=__name__)
             return None
 
-    # ── 1. 트렌드글 생성·검증·발행 (harness 5-Layer — ADR 009 v2) ───────────
-    # Layer 1: precondition (트렌드 데이터·로그인 확인)
-    # Layer 2: ① 규정 로드 → ② 네이버 대본 → ③ 티스토리 대본 (★ 네이버 우선 직렬 — 2026-07-03)
-    # Layer 3: 2 플랫폼 대본 전체 검증 (문제 0까지 재작성 순환, max_attempts=3)
-    # Layer 4: 검증 통과 시에만 발행 (티스토리/네이버 순차)
-    print("\n📤 [1/4] 경제 브리핑 생성·검증·발행 (harness 5-Layer)...")
+    # ── 1. 트렌드글 생성·검증·발행 (harness — ★ 플랫폼 단위 끝까지 직렬, 2026-07-03) ──
+    # 네이버 액션: ①규정 → ②네이버 대본 → 검증 순환 → 발행 [완전 종결]
+    #   → 티스토리 액션: ①규정 → ③티스토리 대본(네이버 주제 제외) → 검증 순환 → 발행
+    # 한쪽의 재작성 순환·실패가 다른 쪽을 지연·차단하지 않음 (실패 격리, max_attempts 각 3)
+    print("\n📤 [1/4] 경제 브리핑 생성·검증·발행 (harness — 플랫폼 직렬)...")
 
     from JARVIS00_INFRA.harness import action_step, ActionDefinition, run_action, Issue
     from JARVIS02_WRITER.trend_economic_writer import (
@@ -1973,26 +1972,31 @@ def run(post_naver=True, post_tistory=True):
     )
 
     # ── Layer 1: precondition (harness 내장 — scheduler 수동 체크 대체) ──────
-    def _precondition(state):
-        """환경·쿠키·모듈 검증 — 실패 시 harness가 즉시 발행 차단 + GUARDIAN 박제."""
-        pc_issues = []
-        for _k in ("NV_USERNAME", "NV_PASSWORD",
-                   "TS_URL", "TS_USERNAME", "TS_PASSWORD", "TS_COOKIE",
-                   "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID"):
-            if not os.environ.get(_k, "").strip():
-                pc_issues.append(Issue(step="① 전제조건", kind="env_missing",
-                                       detail=f"환경변수 {_k} 누락"))
-        try:
-            import importlib as _il
-            _il.import_module("JARVIS02_WRITER.collect_theme")
-        except Exception as _e:
-            pc_issues.append(Issue(step="① 전제조건", kind="import_error",
-                                   detail=f"collect_theme import 실패: {type(_e).__name__}: {str(_e)[:80]}"))
-        _nv_cookie = BASE_DIR / "naver_cookies.pkl"
-        if not _nv_cookie.exists():
-            pc_issues.append(Issue(step="① 전제조건", kind="cookie_missing",
-                                   detail=f"네이버 쿠키 파일 누락: {_nv_cookie.name}"))
-        return pc_issues
+    # ★ 리뷰 확정 수정 (2026-07-03): 플랫폼별 분리 — 상대 플랫폼 자격증명 결손이
+    #   이쪽 발행을 차단하지 않도록 (실패 격리 목표를 Layer 1 까지 관철).
+    def _precondition_for(platform: str):
+        _plat_keys = (("NV_USERNAME", "NV_PASSWORD") if platform == "naver"
+                      else ("TS_URL", "TS_USERNAME", "TS_PASSWORD", "TS_COOKIE"))
+
+        def _pc(state):
+            pc_issues = []
+            for _k in _plat_keys + ("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID"):
+                if not os.environ.get(_k, "").strip():
+                    pc_issues.append(Issue(step="① 전제조건", kind="env_missing",
+                                           detail=f"환경변수 {_k} 누락"))
+            try:
+                import importlib as _il
+                _il.import_module("JARVIS02_WRITER.collect_theme")
+            except Exception as _e:
+                pc_issues.append(Issue(step="① 전제조건", kind="import_error",
+                                       detail=f"collect_theme import 실패: {type(_e).__name__}: {str(_e)[:80]}"))
+            if platform == "naver":
+                _nv_cookie = BASE_DIR / "naver_cookies.pkl"
+                if not _nv_cookie.exists():
+                    pc_issues.append(Issue(step="① 전제조건", kind="cookie_missing",
+                                           detail=f"네이버 쿠키 파일 누락: {_nv_cookie.name}"))
+            return pc_issues
+        return _pc
 
     @action_step(name="① 규정 로드")
     def _step_load_rules(state):
@@ -2023,7 +2027,8 @@ def run(post_naver=True, post_tistory=True):
         if not state.get("post_tistory"):
             print("  ─ [③] 티스토리 건너뜀")
             return {"ts_draft": {"success": False, "keyword": ""}}
-        _nv_kw = state.get("nv_draft", {}).get("keyword", "")
+        # ★ 플랫폼 직렬 (2026-07-03): 네이버 액션 종결 후 확정 키워드를 input_data 로 수령
+        _nv_kw = state.get("nv_keyword_final", "")
         try:
             draft = ts_generate_draft(
                 supreme_block=state.get("supreme_block"),
@@ -2036,30 +2041,35 @@ def run(post_naver=True, post_tistory=True):
             draft = {"success": False, "keyword": ""}
         return {"ts_draft": draft}
 
-    def _verify_all(state):
-        """Layer 3 — 2 플랫폼 대본 전체 검증. list[Issue] 반환 (빈 리스트 = 통과).
+    # ── Layer 3·4 플랫폼 단위 헬퍼 (★ 사용자 박제 2026-07-03 — 플랫폼 끝까지 직렬) ──
+    def _verify_platform(state, platform: str, draft_key: str, step_name: str):
+        """Layer 3 — *단일 플랫폼* 대본 검증. list[Issue] 반환 (빈 리스트 = 통과).
 
-        ★ 순수 검증만 — 즉시 수정·fingerprint·abort는 harness fix 훅(_fix_drafts)이 담당.
-        검증 범위 (사용자 박제 2026-05-17):
-          - [L1] 로그인 세션 유효성 (만료 시 자동 갱신 시도 → 실패 시 Issue)
-          - [L3] 2 플랫폼 각각 규정 준수: 분량·키워드·이미지·헤더 등
+        ★ 순수 검증만 — 즉시 수정·fingerprint·abort는 harness fix 훅이 담당.
+        검증 범위: [L1] 로그인 세션 / [L3] 대본 규정(분량·키워드·이미지·헤더)
+        + 발행 전 품질 게이트(사실성·매력도·이미지).
         """
         issues = []
         from datetime import datetime as _dt_v
-        print(f"  🔍 [Layer 3] 검증 진입 [{_dt_v.now().strftime('%H:%M:%S')}]")
+        print(f"  🔍 [Layer 3] {platform} 검증 진입 [{_dt_v.now().strftime('%H:%M:%S')}]")
 
         # ── [L1] 로그인 세션 검증 (대본 생성 중 만료 대응) ─────────────────
+        # ★ 리뷰 확정 수정 (2026-07-03): verify_all_logins() 는 항상 dict 반환(truthy) —
+        #   종전 `if not _verify_logins()` 는 영구 통과 사문. *해당 플랫폼* ok 를 직접 판정.
         try:
             from JARVIS08_PUBLISH.credentials.login_manager import (
                 auto_refresh_if_needed as _auto_refresh,
                 verify_all_logins as _verify_logins,
             )
             _auto_refresh()           # 만료 임박 쿠키 선제 갱신
-            if not _verify_logins():  # 갱신 후에도 실패 → 진짜 로그인 오류
+            _login_res = _verify_logins() or {}
+            _pl = _login_res.get(platform) or {}
+            if not _pl.get("ok", True):   # 구조 변경 시 fail-open
+                _why = "; ".join(_pl.get("issues") or ["재로그인 필요"])[:150]
                 issues.append(Issue(
                     step="① 전제조건",
                     kind="login_invalid",
-                    detail="로그인 세션 만료 — 재로그인 필요 (auto_refresh 후에도 실패)",
+                    detail=f"{platform} 로그인 세션 무효 — {_why}",
                 ))
         except Exception as _le:
             issues.append(Issue(
@@ -2068,212 +2078,202 @@ def run(post_naver=True, post_tistory=True):
                 detail=f"로그인 확인 오류: {_le}",
             ))
 
-        # ── [L3] 3 플랫폼 대본 규정 준수 검증 (순수 "발견"만) ────────────────
-        # ★ 수정·fingerprint·abort는 harness fix 훅(_fix_drafts)이 자동 담당
-        # ★ P2-⑦ 패치 (사용자 박제 2026-05-18): flag 변조 방어 — 활성 플랫폼이 *최소 1개* 보장 +
-        #   비활성 플랫폼에 draft.success=True 가 남아 있으면 *flag 변조 검출* 로 차단.
-        _flag_map = {
-            "nv_draft":  ("post_naver",    "② 네이버 대본 생성",   "naver"),
-            "ts_draft":  ("post_tistory",  "③ 티스토리 대본 생성", "tistory"),
-        }
-
-        # P2-⑦ — 활성 플랫폼 0개: 재생성으로 해결 불가 → 즉시 abort
-        if not any(state.get(flag) for flag, _, _ in _flag_map.values()):
+        # ── [L3] 단일 플랫폼 대본 규정 준수 검증 (순수 "발견"만) ─────────────
+        draft = state.get(draft_key) or {}
+        if not draft.get("success"):
             issues.append(Issue(
-                step="① 전제조건", kind="abort",
-                detail="활성 플랫폼 0개 — post_tistory/post_naver 모두 False (발행 불가, 즉시 차단)",
+                step=step_name, kind="draft_failed",
+                detail=f"대본 생성 실패: {draft.get('error', 'unknown')}",
             ))
-
-        for key, (flag, step_name, platform) in _flag_map.items():
-            draft = state.get(key) or {}
-            if not state.get(flag):
-                # 비활성 플랫폼: draft 가 success=True 면 flag 변조 의심 → 즉시 검출
-                if draft.get("success"):
-                    issues.append(Issue(
-                        step=step_name, kind="abort",
-                        detail=f"{platform} 비활성인데 draft.success=True — flag 변조 의심 (즉시 차단)",
-                    ))
-                continue  # 검증 skip
-            if not draft.get("success"):
-                issues.append(Issue(
-                    step=step_name, kind="draft_failed",
-                    detail=f"대본 생성 실패: {draft.get('error', 'unknown')}",
-                ))
-                continue
-            di_list = _layer3_verify_draft(draft, platform)
-            for di in di_list:
-                issues.append(Issue(step=step_name, kind="draft_quality", detail=di))
-            # ★ 발행 전 품질 게이트 (2026-06-28) — 구조 검증 통과 시에만 (LLM 비용 절약).
-            #   사실성(차단)·매력도(재생성). kind 가 draft_quality 아니므로 _fix_drafts 가
-            #   곧장 unfixed → 해당 WRITER step 재실행 = 재작성 순환.
-            if not di_list:
-                from JARVIS02_WRITER.prepublish_gate import prepublish_quality_issues
-                _pt = (draft.get("post_type") or "economic").strip().lower()
-                # ★ 2-2 (2026-07-02): 작성 corpus ↔ 검증 corpus 정합. 작성에 실제 쓴 주제
-                #   특화 docs(draft.source_docs, kw 재수집) 우선 + 일반 경제 docs 보강(union).
-                #   draft.source_docs 없으면(구드래프트) 일반 docs 폴백 → 무회귀.
-                _used_docs = list(draft.get("source_docs") or [])
-                _gen_docs = list(state.get("collection_docs") or [])
-                _seen_ids = {id(d) for d in _used_docs}
-                _src_docs = _used_docs + [d for d in _gen_docs if id(d) not in _seen_ids]
-                for q in prepublish_quality_issues(
-                        draft, post_type=_pt,
-                        source_docs=_src_docs,
-                        market_data=state.get("market_data")):
-                    issues.append(Issue(step=step_name, kind=q["kind"], detail=q["detail"]))
-
+            return issues
+        di_list = _layer3_verify_draft(draft, platform)
+        for di in di_list:
+            issues.append(Issue(step=step_name, kind="draft_quality", detail=di))
+        # ★ 발행 전 품질 게이트 (2026-06-28) — 구조 검증 통과 시에만 (LLM 비용 절약).
+        #   사실성(차단)·매력도(재생성). kind 가 draft_quality 아니므로 fix 훅이
+        #   곧장 unfixed → 해당 WRITER step 재실행 = 재작성 순환.
+        if not di_list:
+            from JARVIS02_WRITER.prepublish_gate import prepublish_quality_issues
+            _pt = (draft.get("post_type") or "economic").strip().lower()
+            # ★ 2-2 (2026-07-02): 작성 corpus ↔ 검증 corpus 정합. 작성에 실제 쓴 주제
+            #   특화 docs(draft.source_docs) 우선 + 일반 경제 docs 보강(union).
+            _used_docs = list(draft.get("source_docs") or [])
+            _gen_docs = list(state.get("collection_docs") or [])
+            _seen_ids = {id(d) for d in _used_docs}
+            _src_docs = _used_docs + [d for d in _gen_docs if id(d) not in _seen_ids]
+            for q in prepublish_quality_issues(
+                    draft, post_type=_pt,
+                    source_docs=_src_docs,
+                    market_data=state.get("market_data")):
+                issues.append(Issue(step=step_name, kind=q["kind"], detail=q["detail"]))
         return issues
 
-    def _fix_drafts(state: dict, issues: list) -> tuple:
-        """harness fix 훅 — Layer 3 draft_quality 이슈 즉시 패치 + GUARDIAN 학습.
+    def _fix_platform(state: dict, issues: list, platform: str,
+                      draft_key: str, step_name: str) -> tuple:
+        """harness fix 훅 — *단일 플랫폼* draft_quality 인라인 패치 + GUARDIAN 학습.
 
-        ★ 전체 에이전트 디폴트 — harness.run_action이 verify 후 자동 호출.
         흐름: 이슈 발견 → inline 패치(state 직접 수정) → GUARDIAN 2단 박제
-              (report_manual_fix + record_pattern_hit) → (fixed, unfixed) 반환.
-        harness가 fixed→학습, unfixed→fingerprint, 전체→재생성 자동 처리.
-        login_invalid / draft_failed 등 패치 불가 항목은 unfixed 그대로 반환.
+              → (fixed, unfixed) 반환. login_invalid / draft_failed 등
+        패치 불가 항목은 unfixed 그대로 반환 (harness 가 재생성 순환).
         """
         from JARVIS02_WRITER.draft_fixer import fix_and_learn as _fx
-
-        _key_map = {
-            "② 네이버 대본 생성":   ("nv_draft",  "naver"),
-            "③ 티스토리 대본 생성": ("ts_draft",  "tistory"),
-        }
-
-        # draft_quality 이슈를 step별로 묶기; 나머지(login 등)는 즉시 unfixed
-        by_step: dict = {}
-        non_draft: list = []
-        for iss in issues:
-            if iss.kind == "draft_quality" and iss.step in _key_map:
-                by_step.setdefault(iss.step, []).append(iss.detail)
-            else:
-                non_draft.append(iss)
-
+        raw_strs = [i.detail for i in issues
+                    if i.kind == "draft_quality" and i.step == step_name]
+        non_draft = [i for i in issues
+                     if not (i.kind == "draft_quality" and i.step == step_name)]
         fixed_all: list = []
         unfixed_all: list = list(non_draft)
-
-        for step_name, raw_strs in by_step.items():
-            draft_key, platform = _key_map[step_name]
+        if raw_strs:
             fixed_strs, unfixed_strs = _fx(state, draft_key, platform, raw_strs, "economic")
             for s in fixed_strs:
                 fixed_all.append(Issue(step=step_name, kind="draft_fixed", detail=s))
             for s in unfixed_strs:
                 unfixed_all.append(Issue(step=step_name, kind="draft_invalid", detail=s))
-
         return fixed_all, unfixed_all
 
-    def _send_all(state):
-        """Layer 4 — 검증 통과 후 2 플랫폼 발행.
+    def _send_platform(state, platform: str, draft_key: str, publish_fn,
+                       ok_key: str, result_key: str, attempted_key: str):
+        """Layer 4 — *단일 플랫폼* 발행. 실패 시 raise → 이 플랫폼만 검증 순환 재진입.
 
-        ★ ADR 009 v2 strict 모드: 활성 플랫폼 *하나라도* 실패 시 raise → harness 재진입.
-        published_platforms 집합으로 이미 *진짜 성공한* 플랫폼은 재시도 시 스킵 (이중 발행 방지).
-
-        ★ 사용자 박제 2026-06-07 (ERRORS [265]) — 부분 실패 자율 회복:
-          기존: `__send_attempted__` True 면 *진짜 실패였더라도* 다음 attempt 에서
-                skip → `published.add` *가짜 성공*. 사용자 알림만 가고 글은 없음.
-          신규: __send_attempt__ 카운터 + attempt>=2 + 이전 실패 (`*_ok=False`)
-                플래그 해제 → 다음 attempt 에서 *진짜 재발행*. harness max_attempts=3 와
-                함께 최대 3회 발행 시도. ts/nv_publish 가 정확히 success/false 반환하면
-                재시도는 진짜 새 글로 이어지지 않음 (실패 = 발행 안 됨).
+        ★ ADR 009 v2 strict + 센티널 (ERRORS [265]):
+          attempted 플래그는 시도 *전* 설정 (이중 발행 방지).
+          attempt>=2 + 이전 실패(ok=False) → 플래그 해제 → 진짜 재발행 기회.
+          harness max_attempts=3 과 함께 플랫폼당 최대 3회 발행 시도.
         """
         from datetime import datetime as _dt_s
-        print(f"  📤 [Layer 4] 발행 진입 [{_dt_s.now().strftime('%H:%M:%S')}]")
-        # ★ 이미 발행된 플랫폼 추적 (retry 시 이중 발행 방지)
-        published = state.setdefault("published_platforms", set())
-
-        # ★ attempt 추적 — 첫 호출 = 1, 재진입마다 +1
         send_attempt = state.get("__send_attempt__", 0) + 1
         state["__send_attempt__"] = send_attempt
+        print(f"  📤 [Layer 4] {platform} 발행 진입 (attempt={send_attempt}) "
+              f"[{_dt_s.now().strftime('%H:%M:%S')}]")
+        published = state.setdefault("published_platforms", set())
 
-        # ★ attempt >= 2 + 이전 실패 플랫폼 *플래그 해제* → 진짜 재발행 기회 (ERRORS [265])
-        if send_attempt >= 2:
-            if (state.get("post_naver") and "naver" not in published
-                    and state.get("__nv_send_attempted__") and not state.get("naver_ok")):
-                print(f"  🔄 [네이버] attempt={send_attempt} — 이전 발행 실패 → 플래그 해제·재발행 시도")
-                state["__nv_send_attempted__"] = False
-            if (state.get("post_tistory") and "tistory" not in published
-                    and state.get("__ts_send_attempted__") and not state.get("tistory_ok")):
-                print(f"  🔄 [티스토리] attempt={send_attempt} — 이전 발행 실패 → 플래그 해제·재발행 시도")
-                state["__ts_send_attempted__"] = False
+        # ★ attempt >= 2 + 이전 실패 → 플래그 해제 (진짜 재발행, ERRORS [265])
+        if (send_attempt >= 2 and platform not in published
+                and state.get(attempted_key) and not state.get(ok_key)):
+            print(f"  🔄 [{platform}] 이전 발행 실패 → 플래그 해제·재발행 시도")
+            state[attempted_key] = False
 
-        # ★ 네이버 먼저 발행 — 직렬 (사용자 박제 2026-07-03)
-        if state.get("post_naver") and "naver" not in published:
-            if state.get("__nv_send_attempted__"):
-                # ★ 이미 시도+성공 케이스 (success=True 잔존) — 이중 발행 방지로 published 처리
-                print("  ⚠️ 네이버 발행 이미 시도 완료 (이중 방지)")
-                published.add("naver")
-            elif state.get("nv_draft", {}).get("success"):
-                state["__nv_send_attempted__"] = True  # 반드시 시도 *전* 에 설정
-                _nv_r = nv_publish(state["nv_draft"])
-                state["nv_pub_result"] = _nv_r
-                state["naver_ok"] = _nv_r.get("success", False)
-                if state["naver_ok"]:
-                    published.add("naver")
-                print(f"  {'✅' if state['naver_ok'] else '⚠️'} 네이버 {'완료' if state['naver_ok'] else '미발행'}")
-        elif "naver" in published:
-            print("  ⏭ 네이버 이미 발행 완료 (재시도 스킵)")
-        else:
-            state.setdefault("naver_ok", False)
-            state.setdefault("nv_pub_result", {"success": False, "url": ""})
-            if not state.get("post_naver"):
-                print("  ─ 네이버 건너뜀")
-
-        # 티스토리 — 네이버 완료 후 직렬
-        if state.get("post_tistory") and "tistory" not in published:
-            if state.get("__ts_send_attempted__"):
-                # ★ 이미 시도+성공 케이스 (success=True 잔존) — 이중 발행 방지로 published 처리
-                print("  ⚠️ 티스토리 발행 이미 시도 완료 (이중 방지)")
-                published.add("tistory")
-            elif state.get("ts_draft", {}).get("success"):
-                state["__ts_send_attempted__"] = True  # 반드시 시도 *전* 에 설정
-                _ts_r = ts_publish(state["ts_draft"])
-                state["ts_pub_result"] = _ts_r
-                state["tistory_ok"] = _ts_r.get("success", False)
-                if state["tistory_ok"]:
-                    published.add("tistory")
-                print(f"  {'✅' if state['tistory_ok'] else '⚠️'} 티스토리 {'완료' if state['tistory_ok'] else '미발행'}")
-        elif "tistory" in published:
-            print("  ⏭ 티스토리 이미 발행 완료 (재시도 스킵)")
-        else:
-            state.setdefault("tistory_ok", False)
-            state.setdefault("ts_pub_result", {"success": False, "url": ""})
-            if not state.get("post_tistory"):
-                print("  ─ 티스토리 건너뜀")
-
-        # ★ ADR 009 v2 strict: 활성 플랫폼 *하나라도* 미발행 시 raise → 검증 순환 재진입
-        required = {p for p, flag in [("tistory", "post_tistory"), ("naver", "post_naver")]
-                    if state.get(flag)}
-        missing = required - published
-        if missing:
+        if platform in published:
+            print(f"  ⏭ {platform} 이미 발행 완료 (재시도 스킵)")
+            return
+        if state.get(attempted_key):
+            # 시도 플래그 잔존 + 해제 미발동(=성공 잔존) — 이중 발행 방지로 published 처리
+            print(f"  ⚠️ {platform} 발행 이미 시도 완료 (이중 방지)")
+            published.add(platform)
+            return
+        if state.get(draft_key, {}).get("success"):
+            state[attempted_key] = True  # 반드시 시도 *전* 에 설정
+            _r = publish_fn(state[draft_key])
+            state[result_key] = _r
+            state[ok_key] = _r.get("success", False)
+            if state[ok_key]:
+                published.add(platform)
+            print(f"  {'✅' if state[ok_key] else '⚠️'} {platform} "
+                  f"{'완료' if state[ok_key] else '미발행'}")
+        # ★ strict: 미발행이면 raise → 이 플랫폼만 검증 순환 재진입 (타 플랫폼 무영향)
+        if platform not in published:
             raise RuntimeError(
-                f"[Layer4] {sorted(missing)} 발행 실패 (attempt={send_attempt}) — 송출 미완료 → 검증 순환 재진입"
+                f"[Layer4] ['{platform}'] 발행 실패 (attempt={send_attempt}) — 송출 미완료 → 검증 순환 재진입"
             )
 
-    _econ_action = ActionDefinition(
-        name="경제 브리핑 발행",
-        precondition=_precondition,          # ★ Layer 1 harness 내장 (scheduler 수동 체크 대체)
-        steps=[_step_load_rules, _step_nv_draft, _step_ts_draft],
-        verify=_verify_all,
-        fix=_fix_drafts,
-        send=_send_all,
+    # ── 하네스 실행 — ★ 플랫폼 단위 끝까지 직렬 (사용자 박제 2026-07-03) ──────
+    # 네이버: 대본 → 검증 순환 → 발행 *완전 종결* → 그 다음에야 티스토리 시작.
+    # 한쪽의 재작성 순환·실패가 다른 쪽을 지연·차단하지 않는다 (실패 격리).
+    _nv_action = ActionDefinition(
+        name="경제 브리핑 발행 — 네이버",
+        precondition=_precondition_for("naver"),   # ★ Layer 1 — 네이버 자격증명만
+        steps=[_step_load_rules, _step_nv_draft],
+        verify=lambda st: _verify_platform(st, "naver", "nv_draft", "② 네이버 대본 생성"),
+        fix=lambda st, iss: _fix_platform(st, iss, "naver", "nv_draft", "② 네이버 대본 생성"),
+        send=lambda st: _send_platform(st, "naver", "nv_draft", nv_publish,
+                                       "naver_ok", "nv_pub_result", "__nv_send_attempted__"),
         max_attempts=3,
     )
-    _action_result = run_action(
-        _econ_action,
-        input_data={"post_naver": post_naver, "post_tistory": post_tistory,
-                    "collection_docs": _j09_collection_docs,
-                    "market_data": _j09_market_data},
+    _ts_action = ActionDefinition(
+        name="경제 브리핑 발행 — 티스토리",
+        precondition=_precondition_for("tistory"),  # ★ Layer 1 — 티스토리 자격증명만
+        steps=[_step_load_rules, _step_ts_draft],
+        verify=lambda st: _verify_platform(st, "tistory", "ts_draft", "③ 티스토리 대본 생성"),
+        fix=lambda st, iss: _fix_platform(st, iss, "tistory", "ts_draft", "③ 티스토리 대본 생성"),
+        send=lambda st: _send_platform(st, "tistory", "ts_draft", ts_publish,
+                                       "tistory_ok", "ts_pub_result", "__ts_send_attempted__"),
+        max_attempts=3,
     )
-    _st = _action_result.state
 
-    # harness 결과 추출 — 이하 기존 tg 요약·품질 분석 코드가 그대로 사용
-    naver_ok   = bool(_st.get("naver_ok"))
-    tistory_ok = bool(_st.get("tistory_ok"))
-    ts_keyword = _st.get("ts_draft", {}).get("keyword", "")
+    _results: dict = {}          # platform → ActionResult (EP 결과 파일·incident 용)
+    _nv_state: dict = {}
+    _ts_state: dict = {}
+    naver_ok = tistory_ok = False
+    nv_keyword = ts_keyword = ""
+    _concurrent_blocked = False
 
-    if not _action_result.delivered:
-        print(f"\n  🚫 harness max_attempts 도달 — 발행 차단 (attempts={_action_result.attempts})")
-        tg(f"🚫 경제 브리핑 harness max_attempts 도달 — 발행 차단\nattempts={_action_result.attempts}")
+    def _write_ep_partial():
+        """★ 리뷰 확정 수정 (2026-07-03): 각 액션 종결 직후 플랫폼 결과를 즉시 기록.
+
+        플랫폼 직렬화로 '네이버 완료 ~ 프로세스 종료' 구간이 티스토리 액션 시간만큼
+        길어짐 — 그 사이 subprocess timeout 시 결과 파일이 없으면 incident responder 가
+        *이미 발행된 네이버까지* 재발행 (이중 발행). 부분 기록으로 차단.
+        """
+        _f = os.environ.get("JARVIS_EP_RESULT_FILE", "")
+        if not _f:
+            return
+        try:
+            import json as _jp
+            with open(_f, "w", encoding="utf-8") as _rf:
+                _jp.dump({"naver": bool(naver_ok), "tistory": bool(tistory_ok)}, _rf)
+        except Exception:
+            pass
+
+    import time as _tm_act
+    if post_naver:
+        # ★ 액션별 LLM 데드라인 (리뷰 확정 수정): 직렬화로 티스토리 시작이 늦어져
+        #   단일 45분 예산이면 티스토리 생성이 상시 강등됨 — 액션마다 40분 리셋.
+        os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + 2400)
+        _nv_res = run_action(
+            _nv_action,
+            input_data={"post_naver": True, "post_tistory": False,
+                        "collection_docs": _j09_collection_docs,
+                        "market_data": _j09_market_data},
+        )
+        _results["naver"] = _nv_res
+        _nv_state = _nv_res.state
+        naver_ok = bool(_nv_state.get("naver_ok"))
+        nv_keyword = (_nv_state.get("nv_draft") or {}).get("keyword", "")
+        _write_ep_partial()
+        if not _nv_res.delivered:
+            _esc = getattr(_nv_res, "escalation_reason", "") or ""
+            if "동시 실행 중복 차단" in _esc:
+                # ★ 리뷰 확정 수정: 다른 실행이 진행 중 — 티스토리도 중단 (인터리브 방지)
+                _concurrent_blocked = True
+                print("  🚫 동시 실행 중복 차단 — 티스토리 액션도 중단 (인터리브 이중 발행 방지)")
+            else:
+                print(f"\n  🚫 [네이버] harness max_attempts 도달 — 발행 차단 (attempts={_nv_res.attempts})")
+                tg(f"🚫 경제 브리핑(네이버) harness max_attempts 도달 — 발행 차단\nattempts={_nv_res.attempts}")
+    else:
+        print("  ─ 네이버 건너뜀 (플래그 OFF)")
+
+    # ★ 티스토리는 네이버 *종결 후* 에만 시작 — 네이버 성패와 무관하게 독립 진행
+    if post_tistory and not _concurrent_blocked:
+        os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + 2400)
+        _ts_res = run_action(
+            _ts_action,
+            input_data={"post_naver": False, "post_tistory": True,
+                        "collection_docs": _j09_collection_docs,
+                        "market_data": _j09_market_data,
+                        "nv_keyword_final": nv_keyword},
+        )
+        _results["tistory"] = _ts_res
+        _ts_state = _ts_res.state
+        tistory_ok = bool(_ts_state.get("tistory_ok"))
+        ts_keyword = (_ts_state.get("ts_draft") or {}).get("keyword", "")
+        _write_ep_partial()
+        if not _ts_res.delivered:
+            print(f"\n  🚫 [티스토리] harness max_attempts 도달 — 발행 차단 (attempts={_ts_res.attempts})")
+            tg(f"🚫 경제 브리핑(티스토리) harness max_attempts 도달 — 발행 차단\nattempts={_ts_res.attempts}")
+    elif _concurrent_blocked:
+        print("  ⏭ 티스토리 스킵 — 동시 실행 중복 차단")
+    else:
+        print("  ─ 티스토리 건너뜀 (플래그 OFF)")
 
     _nv_r  = '✅' if naver_ok   else ('⏭' if not post_naver   else '❌')
     _ts_r  = '✅' if tistory_ok else ('⏭' if not post_tistory else '❌')
@@ -2290,9 +2290,9 @@ def run(post_naver=True, post_tistory=True):
     # 발행 성공한 플랫폼마다 post_analysis 레코드 생성 → 분석기 트리거
     if _QUALITY_ENABLED:
         import subprocess as _sp
-        # 네이버·티스토리 발행 URL — harness state 에서 직접 읽음 (ADR 009 v2)
-        _naver_pub_url   = _st.get("nv_pub_result", {}).get("url", "")
-        _tistory_pub_url = _st.get("ts_pub_result", {}).get("url", "")
+        # 네이버·티스토리 발행 URL — 각 플랫폼 액션 state 에서 직접 읽음 (ADR 009 v2)
+        _naver_pub_url   = _nv_state.get("nv_pub_result", {}).get("url", "")
+        _tistory_pub_url = _ts_state.get("ts_pub_result", {}).get("url", "")
 
         _eco_theme = f"경제 브리핑 {TODAY_STR}"
 
@@ -2394,12 +2394,15 @@ def run(post_naver=True, post_tistory=True):
             # ★ 하네스 이슈 구조화 데이터도 함께 기록 (incident_responder 에 정확한 컨텍스트 전달)
             _harness_issues: list[str] = []
             _escalation_reason = ""
-            if not (_action_result.delivered if "_action_result" in dir() else True):
-                _escalation_reason = getattr(_action_result, "escalation_reason", "")
-                for _hist in (getattr(_action_result, "issues_history", None) or []):
+            # ★ 플랫폼별 2액션 (2026-07-03) — 실패한 액션들의 이슈를 병합 기록
+            for _plat_name, _plat_res in _results.items():
+                if getattr(_plat_res, "delivered", True):
+                    continue
+                _escalation_reason = _escalation_reason or getattr(_plat_res, "escalation_reason", "")
+                for _hist in (getattr(_plat_res, "issues_history", None) or []):
                     for _iss in _hist:
                         _harness_issues.append(
-                            f"{getattr(_iss,'step','?')}: {getattr(_iss,'kind','?')}: "
+                            f"[{_plat_name}] {getattr(_iss,'step','?')}: {getattr(_iss,'kind','?')}: "
                             f"{getattr(_iss,'detail','?')[:120]}"
                         )
             with open(_ep_result_file, "w", encoding="utf-8") as _rf:

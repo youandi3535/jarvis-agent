@@ -96,6 +96,7 @@ def _profile_batch(cands: list[dict]) -> list[dict]:
     )
     raw = invoke_text(
         "analyzer",
+        # (_essential — 프로필은 키워드 단독 전송 금지 규정의 심장: 회로 차단 중에도 1회 실시도)
         "다음 트렌드 키워드 각각에 대해 JSON 배열로만 답해라 (다른 말 금지).\n"
         "각 항목: {\"keyword\": 원문 그대로, \"fit\": true|false, \"sector\": 교정 섹터,\n"
         "  \"summary\": 키워드가 무엇인지 한 문장 (동음이의 구분 명확히),\n"
@@ -106,6 +107,7 @@ def _profile_batch(cands: list[dict]) -> list[dict]:
         " '기준금리'·'반도체 수출'은 true).\n\n"
         f"[키워드 목록]\n{lines}",
         max_tokens=2000,
+        _essential=True,
     )
     if not (raw or "").strip():
         return []
@@ -142,9 +144,14 @@ def _precollect(keyword: str, sector: str, summary: str) -> dict:
                               max_rounds=_rounds) or {}
         out["docs"] = [asdict(d) for d in (rs.get("docs") or [])]
         out["evidence_path"] = rs.get("evidence_path") or ""
+        # ★ 품질 플래그 (ERRORS [300]): 폴백 설계·근거 부족을 팩에 가시화
+        out["plan_fallback"] = bool(rs.get("plan_fallback"))
+        out["coverage_ratio"] = rs.get("coverage_ratio", 0.0)
+        out["insufficient"] = bool(rs.get("insufficient"))
     except Exception as e:
         log.warning(f"[topic_pack] 리서치 선수집 실패({keyword}): {e}")
         _g_report("radar", e, module=__name__, func_name="_precollect")
+        out["insufficient"] = True   # 리서치 자체 실패 = 근거 없음
     return out
 
 
@@ -199,31 +206,68 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
                 "entity_type": p.get("entity_type", ""),
             },
         })
-        if len(selected) >= publish_slots:
-            break
     if not selected:
         log.info("[topic_pack] 적합 후보 0개 — 팩 생성 실패 (부적합 키워드 강행 금지)")
         return None
 
-    # ★ JARVIS09 직접 선수집 (자비스02 경유 없음)
+    # ★ JARVIS09 직접 선수집 + 근거 부족 시 주제 교체 (ERRORS [300] — 사용자 승인 2026-07-03)
+    #   적합 후보를 순서대로 선수집 → insufficient(커버리지 0·fact<3) 면 다음 후보로 교체.
+    #   충분 후보가 슬롯을 못 채우면 근거 얇은 후보로 보충 (플래그 유지 — 02 게이트가 최종 방어).
+    final: list[dict] = []
+    thin_pool: list[dict] = []
     for cand in selected:
+        if len(final) >= publish_slots:
+            break
         summ = cand["profile"]["summary"]
         log.info(f"[topic_pack] JARVIS09 선수집: '{cand['keyword']}' — {summ[:50]}")
         cand.update(_precollect(cand["keyword"], cand["sector"], summ))
+        if cand.get("insufficient"):
+            log.warning(f"[topic_pack] '{cand['keyword']}' 근거 부족 "
+                        f"(커버리지 {cand.get('coverage_ratio')}) → 다음 후보로 교체")
+            thin_pool.append(cand)
+            continue
+        final.append(cand)
+    if len(final) < publish_slots and thin_pool:
+        _fill = thin_pool[:publish_slots - len(final)]
+        log.warning(f"[topic_pack] 충분 근거 후보 부족 — 근거 얇은 후보 {len(_fill)}개로 보충")
+        final += _fill
+    if not final:
+        log.warning("[topic_pack] 선수집 가능한 후보 0개 — 팩 생성 실패")
+        return None
 
     pack = {
         "date": date.today().isoformat(),
         "generated_at": datetime.now().isoformat(),
-        "candidates": selected,
+        "candidates": final,
     }
     try:
         _DATA_DIR.mkdir(parents=True, exist_ok=True)
         _pack_path().write_text(
             json.dumps(pack, ensure_ascii=False, default=str), encoding="utf-8")
-        log.info(f"[topic_pack] 박제 완료: {len(selected)}개 후보 → {_pack_path().name}")
+        log.info(f"[topic_pack] 박제 완료: {len(final)}개 후보 → {_pack_path().name}")
     except Exception as e:
         log.warning(f"[topic_pack] 박제 실패: {e}")
         return None
+
+    # ★ 품질 저하 가시화 (조용한 강등 금지): 폴백 설계·근거 부족 시 텔레그램 1회 통보
+    try:
+        _issues = []
+        for c in final:
+            tags = []
+            if c.get("plan_fallback"):
+                tags.append("설계 폴백(템플릿)")
+            if c.get("insufficient"):
+                tags.append(f"근거 부족(커버리지 {c.get('coverage_ratio')})")
+            if tags:
+                _issues.append(f"· {c['keyword']}: {', '.join(tags)}")
+        swapped = [c["keyword"] for c in thin_pool if c not in final]
+        if swapped:
+            _issues.append(f"· 주제 교체됨(근거 부족): {', '.join(swapped)}")
+        if _issues:
+            from shared.notify import send_tg
+            send_tg("⚠️ [자비스03] 주제 패키지 품질 경고\n" + "\n".join(_issues))
+    except Exception:
+        pass
     return pack
 
 

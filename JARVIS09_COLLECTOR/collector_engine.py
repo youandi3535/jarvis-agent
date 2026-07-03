@@ -309,11 +309,23 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
     # ⑥ 박제 + 반환
     path = persist_evidence(pack)
     cov = pack.get("coverage") or {}
-    log.info(f"[research] 완료: 문서 {len(all_docs)}건 · fact {len(pack.get('facts', []))}개 "
-             f"· 커버리지 {sum(1 for c in cov.values() if c.get('ok'))}/{len(cov)} "
+    cov_ok = sum(1 for c in cov.values() if c.get("ok"))
+    n_facts = len(pack.get("facts", []))
+    log.info(f"[research] 완료: 문서 {len(all_docs)}건 · fact {n_facts}개 "
+             f"· 커버리지 {cov_ok}/{len(cov)} "
              f"· 라운드 {rounds}")
+    # ★ 근거 품질 판정 (ERRORS [300] — 사용자 승인 2026-07-03): 재수집 순환을 다 써도
+    #   커버리지 0 이거나 fact < 3 이면 insufficient 플래그 — 반환은 유지(fail-open)하되
+    #   호출자(topic_pack 주제 교체 / theme 경고)가 분기할 수 있게 가시화.
+    coverage_ratio = round(cov_ok / len(cov), 2) if cov else 0.0
+    insufficient = bool(cov) and (cov_ok == 0 or n_facts < 3)
+    if insufficient:
+        log.warning(f"[research] '{theme}' 근거 부족 — 커버리지 {cov_ok}/{len(cov)}, "
+                    f"fact {n_facts}개 (insufficient=True)")
     return {"evidence_pack": pack, "docs": all_docs, "plan": plan,
-            "evidence_path": path}
+            "evidence_path": path,
+            "coverage_ratio": coverage_ratio, "insufficient": insufficient,
+            "plan_fallback": bool(plan.get("fallback"))}
 
 
 # ── delta-aware 교류 프로토콜 (★ 사용자 박제 2026-06-07) ────────────────

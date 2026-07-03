@@ -1246,7 +1246,18 @@ def run_economic_poster(*extra_flags):
         except Exception:
             pass
         if not extra_flags:
-            _trigger_economic_incident(["naver", "tistory"], str(e))
+            # ★ 리뷰 확정 수정 (2026-07-03): 타임아웃 kill 이어도 결과 파일(증분 기록)을
+            #   읽어 *이미 성공한 플랫폼은 재발행 제외* (플랫폼 직렬화 이중 발행 차단).
+            _failed = ["naver", "tistory"]
+            try:
+                _pr = json.loads(Path(_res_path).read_text(encoding="utf-8"))
+                _failed = [k for k in ("naver", "tistory") if not _pr.get(k)]
+            except Exception:
+                pass
+            if _failed:
+                _trigger_economic_incident(_failed, str(e))
+            else:
+                log("ℹ️ 예외 발생했으나 결과 파일상 양 플랫폼 발행 완료 — incident 생략")
     finally:
         _lock_release()
         try:

@@ -482,7 +482,7 @@ def _circuit_gate() -> str:
 
 
 def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
-                _retries: int = 4, **overrides) -> str:
+                _retries: int = 4, _essential: bool = False, **overrides) -> str:
     """Claude Code SDK 호출 단일 진입점.
 
     텍스트 생성(writer/router/analyzer): Sonnet 4.6
@@ -507,10 +507,11 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
     except Exception:
         pass
 
-    # ★ 회로 차단기 게이트
+    # ★ 회로 차단기 게이트 (_essential=True 는 호출 단위 필수 면제 —
+    #   설계 planner 등 품질 조타수 호출이 스로틀 중에도 1회 실시도, ERRORS [300])
     _gate = _circuit_gate()
     if _gate == "open":
-        if alias in _CIRCUIT_EXEMPT_ALIASES:
+        if _essential or alias in _CIRCUIT_EXEMPT_ALIASES:
             retries, backoff = 1, False   # 필수 호출 — open 중에도 1회 실시도
         else:
             print("  ⏳ [LLM] 회로 차단 중 — 즉시 폴백 (재시도 생략)")

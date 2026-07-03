@@ -24,7 +24,7 @@
 
 | 항목 | 규칙 |
 |------|------|
-| **★ 발행 순서 — 네이버 먼저, 티스토리 나중 (사용자 박제 2026-07-03 — ERRORS [289])** | 경제(economic_poster)·테마(trend_theme_writer) 모두 *네이버 우선 직렬* — 대본 생성 스텝 순서 + `_send_all` 발행 순서 동시 적용. 스텝 이름·`_flag_map`·`_key_map` 3곳 문자열 일치 필수 |
+| **★ 플랫폼 단위 끝까지 직렬 (사용자 박제 2026-07-03 — ERRORS [289][301])** | 경제(economic_poster)·테마(trend_theme_writer) 모두 harness 액션이 *플랫폼별 2개*: 네이버 액션(대본→검증 순환→발행) **완전 종결 후** 티스토리 액션 시작. 한쪽 실패·재작성이 다른 쪽을 지연·차단 금지 (실패 격리). verify/fix 의 step 이름 문자열은 해당 `@action_step` 이름과 정확히 일치 필수 (harness resume). 공유 자원(경제=키워드 제외 `nv_keyword_final`, 테마=수집 결과)은 액션1 state → 액션2 input_data 로 전달 |
 | **★ 경제 브리핑 주제·데이터 = 자비스03 topic_pack 단독 (사용자 박제 2026-07-03)** | `nv/ts_generate_draft` 는 `JARVIS03_RADAR.topic_pack.pick_candidate()` 로만 주제 수령 (keyword+sector+프로필+선수집 datasets/docs). 02 에서 `select_*_topic` 호출·`collect_for_theme`/`collect_chart_data` 직접 호출 금지 — 폴백 없음, 팩 부재 시 `build_topic_pack()` 즉석 실행(동일 경로). 강제 주제는 `build_for_keyword()` 경유 |
 | max_tokens | **8192 고정** — 더 높이면 API 중간 절단 |
 | 섹션 문장수 임계값 | `length_manager.py` 단일 진입점 (`SEC_SENTS` 등). 다른 파일에 박지 말 것 |

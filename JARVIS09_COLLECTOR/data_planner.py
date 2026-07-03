@@ -149,8 +149,11 @@ def plan_data_sources(topic: str, sector: str = "", description: str = "") -> li
     for _attempt in range(2):
         try:
             from shared.llm import invoke_text
+            # ★ _essential=True (ERRORS [300]): 설계는 수집 품질의 조타수 —
+            #   회로 차단 중에도 1회 실시도 보장 (즉시 폴백 금지).
             raw = invoke_text("analyzer", prompt, system=_PLAN_SYSTEM,
-                              max_tokens=1100, temperature=0.2 if _attempt == 0 else 0.5)
+                              max_tokens=1100, temperature=0.2 if _attempt == 0 else 0.5,
+                              _essential=True)
             plan = _sanitize(_extract_json(raw))
             if plan:
                 log.info(f"[planner] '{topic}' → {len(plan)}개 series 설계 (시도 {_attempt + 1})")
