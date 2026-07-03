@@ -1,5 +1,15 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [299] RADAR 트렌드 수집 — DataLab·경쟁강도·자동완성 4개 지연 import 전멸 (datalab_used 영구 False) (2026-07-03)
+
+- **증상**: 매일 `trends_*.json` 에 `datalab_used: False, iot_used: False` — 50개 키워드 전부 velocity "—"·competition 50.0(중립 기본값). 점수가 사실상 *구글 순위 하나* 로만 계산됨. 텔레그램 경고 0회 (조용한 degrade).
+- **환경**: `JARVIS03_RADAR/radar_main.py` — 잡(`_run_script_checked`)이 스크립트로 직접 실행 (`python radar_main.py`, cwd=JARVIS03_RADAR).
+- **원인**: `collect_today()` 안의 지연 import 4곳이 *상대 import* (`from .collectors.naver_collector import ...`) — 스크립트 실행은 패키지 컨텍스트가 없어 `ImportError: attempted relative import with no known parent package` → DataLab·IOT 폴백·경쟁강도·자동완성 **전부** except 로 조용히 스킵. 파일 상단은 같은 사유로 이미 절대 import 로 고쳐져 있었으나(주석 존재) 함수 내 지연 import 만 누락된 *부분 수정* 잔재.
+- **헛다리**: API 키 누락·쿼터·키워드 특수문자 의심 — 전부 아님 (레포 루트에서 직접 호출 시 20/20 정상, 경쟁강도도 응답).
+- **해결**: 지연 import 4곳을 상단과 동일한 절대 import (`from JARVIS03_RADAR.collectors...`) 로 통일. 잡과 동일 조건 재실행으로 datalab_used=True·velocity 분포·competition 다양화 검증.
+- **파일**: `JARVIS03_RADAR/radar_main.py` (171·183·195·208행)
+- **교훈**: ① 스크립트+패키지 겸용 모듈에서 상대 import 는 지연 import 포함 *전수* 절대화 — 상단만 고치는 부분 수정은 시한폭탄. ② 보조 데이터 실패를 조용히 스킵하면 "작동하는 척" 이 몇 주간 지속됨 — degrade 는 산출물 플래그(`datalab_used`) 뿐 아니라 *알림* 으로도 승격 필요. 검증: `grep -rn "from \.collectors" JARVIS03_RADAR/*.py` → 0행.
+
 ### [298] ★ report(source, exc) 역순 호출 314곳 전원 무음 no-op — catch() 단일 진입점 양순서 정규화 (Cowork Claude 2026-07-03)
 
 - **증상**: 리포지토리 전반 `_g_report("writer", e, ...)` 형태 오류 보고 314곳이 *전부* 기록 실패(무음 no-op). 오류 자동 캐치망의 최대 단일 구멍 — writer/publish 도메인의 명시적 report 가 error_log 에 사실상 안 쌓이고 있었음.

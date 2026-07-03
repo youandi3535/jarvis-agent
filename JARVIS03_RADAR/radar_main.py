@@ -168,7 +168,7 @@ def collect_today() -> dict:
     # ── 1. Naver DataLab: 30일 추세 곡선 ─────────────────────────
     datalab: dict = {}
     try:
-        from .collectors.naver_collector import get_batch_datalab, has_api_key
+        from JARVIS03_RADAR.collectors.naver_collector import get_batch_datalab, has_api_key
         if has_api_key():
             print("[RADAR] Naver DataLab 트렌드 수집 중...")
             datalab = get_batch_datalab(trending[:20], days=30)
@@ -180,7 +180,7 @@ def collect_today() -> dict:
     iot_used = False
     if not datalab:
         try:
-            from .collectors.google_collector import get_interest_over_time
+            from JARVIS03_RADAR.collectors.google_collector import get_interest_over_time
             print("[RADAR] Google interest_over_time velocity fallback 수집 중...")
             datalab = get_interest_over_time(trending[:20], days=30)
             if datalab:
@@ -192,7 +192,7 @@ def collect_today() -> dict:
     # ── 2. 경쟁 강도 분석 (네이버 뉴스 검색량 기반) ───────────────
     competition: dict = {}
     try:
-        from .collectors.naver_collector import get_competition_score, has_api_key
+        from JARVIS03_RADAR.collectors.naver_collector import get_competition_score, has_api_key
         if has_api_key():
             print("[RADAR] 경쟁 강도 분석 중...")
             for kw in trending[:15]:
@@ -205,7 +205,7 @@ def collect_today() -> dict:
     # ── 3. 자동완성 연관 키워드 (전체 trending, 인증 불필요) ────────
     autocomplete: dict = {}
     try:
-        from .collectors.naver_collector import get_autocomplete
+        from JARVIS03_RADAR.collectors.naver_collector import get_autocomplete
         for kw in trending[:20]:  # 10→20으로 확대
             ac = get_autocomplete(kw)
             if ac:

@@ -1,6 +1,7 @@
 # JARVIS06_IMAGE 비직관 규칙
 
 ## 핵심 원칙
+0. **★ 시간축 좌→우 강제 (사용자 박제 2026-07-03)**: 시간·기간 라벨(연도·월·분기·날짜)이 있는 모든 차트·인포그래픽은 *과거 → 최근* 순서 (예: 2025년 좌, 2026년 우). 단일 진입점 `image_spec.enforce_time_axis_ltr()` — `render_from_spec`·`infographic_engine.generate_infographic` 양쪽에서 렌더 직전 자동 교정 + spec 생성 프롬프트에도 명시. 새 렌더 경로 추가 시 이 함수 경유 의무. 카테고리 라벨(비시간)은 무변경 (80% 파싱 임계).
 1. 한국어 프롬프트는 반드시 `prompt_translator.translate()` 로 영어 변환 후 제공자에 전달
 2. **★ 사진 프로바이더 (ERRORS [263] 박제 2026-06-07)**: Pollinations.ai 단일 사용. Bing/HuggingFace 완전 삭제 — Bing 쿠키 무한 만료 + HuggingFace DNS 차단 반복. 차기 1순위로 Nanobana(Gemini) 도입 예정.
 3. SVG 차트·썸네일 오버레이는 Claude LLM 동적 생성 — 고정 템플릿·스타일 풀 절대 금지

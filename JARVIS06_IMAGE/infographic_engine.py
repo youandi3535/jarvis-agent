@@ -830,6 +830,16 @@ def generate_infographic(title, subtitle, datasets, *, run_id="", slot_key="",
     datasets = [d for d in (datasets or []) if d.get("data") and _verify_dataset(d)]
     if not datasets:
         return ""
+    # ★ 시간축 좌→우 강제 (사용자 박제 2026-07-03): 시간 라벨은 과거→최근 정렬.
+    try:
+        from JARVIS06_IMAGE.image_spec import enforce_time_axis_ltr as _ltr
+        for _d in datasets:
+            _fixed = _ltr(_d.get("data") or [])
+            if _fixed is not _d.get("data"):
+                print("  ⏩ [시간축] 인포그래픽 데이터 시간 순서 교정 — 과거→최근 (좌→우)")
+                _d["data"] = _fixed
+    except Exception:
+        pass
     out_dir = Path(out_dir) if out_dir else Path(".")
     out_dir.mkdir(parents=True, exist_ok=True)
     seed = _seed_int(run_id, slot_key, title)

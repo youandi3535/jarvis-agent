@@ -119,7 +119,9 @@ _SPEC_SYSTEM = """당신은 블로그 콘텐츠 전문 시각화 디자이너입
 - 본문에 있는 숫자·수치를 그대로 사용 (추측 금지)
 - 단위 반드시 포함 (%, 억원, 만명 등)
 - 라벨은 본문 맥락에 맞는 명사 2~6글자
-- comparison_kpi는 data 항목마다 before/after 필드 사용"""
+- comparison_kpi는 data 항목마다 before/after 필드 사용
+- ★ 시간·기간 라벨(연도·월·분기·날짜)은 반드시 *과거 → 최근* 순서로 나열
+  (차트에서 시간은 좌→우로 흐른다. 예: 2025년이 왼쪽, 2026년이 오른쪽)"""
 
 _SPEC_PROMPT_TEMPLATE = """섹션 제목: {section_title}
 키워드: {keyword}
@@ -388,12 +390,90 @@ def _fallback_spec(
     }
 
 
+def _time_axis_key(label) -> tuple | None:
+    """시간 라벨 파싱 → (year, month, day) 정렬 키. 시간 라벨 아니면 None.
+
+    지원: '2026', '2026년', "'25년", '2026년 5월', '2026-05', '2026.05.12',
+          '5월', '3분기', 'Q1', '5월 12일' 등 한국어·ISO 혼용.
+    """
+    import re as _re
+    s = str(label or "").strip()
+    if not s:
+        return None
+    year = month = day = quarter = None
+    m = _re.search(r"\b((?:19|20)\d{2})\b", s)
+    if m:
+        year = int(m.group(1))
+    else:
+        m2 = _re.search(r"['’‘]?(\d{2})\s*년", s)
+        if m2:
+            year = 2000 + int(m2.group(1))
+    mq = _re.search(r"([1-4])\s*분기", s) or _re.search(r"\bQ([1-4])\b", s, _re.I)
+    if mq:
+        quarter = int(mq.group(1))
+    miso = _re.match(r"^\s*(?:19|20)\d{2}[-./](\d{1,2})(?:[-./](\d{1,2}))?", s)
+    mm = _re.search(r"(\d{1,2})\s*월", s)
+    if mm:
+        month = int(mm.group(1))
+    elif miso:
+        month = int(miso.group(1))
+        if miso.group(2):
+            day = int(miso.group(2))
+    md = _re.search(r"(\d{1,2})\s*일", s)
+    if md:
+        day = int(md.group(1))
+    if quarter is not None and month is None:
+        month = quarter * 3
+    if year is None and month is None and day is None:
+        return None
+    if month is not None and not (1 <= month <= 12):
+        return None
+    return (year if year is not None else -1, month or 0, day or 0)
+
+
+def enforce_time_axis_ltr(rows: list) -> list:
+    """★ 시간축 좌→우 강제 (사용자 박제 2026-07-03): "이미지에서 시간 흐름은 항상
+    좌→우 — 25년이 좌, 26년이 우." data 행의 라벨이 시간이면 과거→최근 정렬.
+
+    정책 (카테고리 차트 오폭 방지):
+      - 라벨 80% 미만이 시간 파싱되거나 키가 1종이면 무변경.
+      - 연도 정보가 있으면 오름차순 안정 정렬.
+      - 연도 없는 라벨(월·분기만)은 *엄격 내림차순일 때만* 역순 (연말→연초 랩 보존).
+    """
+    if not rows or len(rows) < 2:
+        return rows
+    keys = [(_time_axis_key(r.get("label")) if isinstance(r, dict) else None) for r in rows]
+    parsed = [k for k in keys if k is not None]
+    if len(parsed) < max(2, int(len(rows) * 0.8)) or len(set(parsed)) < 2:
+        return rows
+    has_year = all(k[0] != -1 for k in parsed)
+    full = [k if k is not None else (9999, 99, 99) for k in keys]  # 미파싱은 뒤로
+    if has_year:
+        if full != sorted(full):
+            order = sorted(range(len(rows)), key=lambda i: full[i])
+            return [rows[i] for i in order]
+        return rows
+    # 연도 없음 — 엄격 내림차순일 때만 역순
+    if all(full[i] > full[i + 1] for i in range(len(full) - 1)):
+        return list(reversed(rows))
+    return rows
+
+
 def render_from_spec(spec: dict[str, Any], out_path: Path) -> Path:
     """설계서 → 이미지 파일 생성 + 출처(provenance) 레지스트리 기록.
 
     ★ 트립와이어 (사용자 박제 2026-06-29): 수치 차트는 _provenance.verified 없이
       렌더되면 안 됨 (검증 우회). 그런 경우 unverified 로 기록 → prepublish_gate 가 차단.
+    ★ 시간축 좌→우 강제 (사용자 박제 2026-07-03): 렌더 직전 data 행 시간 정렬.
     """
+    try:
+        if isinstance(spec.get("data"), list):
+            _fixed = enforce_time_axis_ltr(spec["data"])
+            if _fixed is not spec["data"]:
+                print("  ⏩ [시간축] 라벨 시간 순서 교정 — 과거→최근 (좌→우)")
+                spec = {**spec, "data": _fixed}
+    except Exception:
+        pass
     result = _render_impl(spec, out_path)
     try:
         from JARVIS06_IMAGE.validators.image_data_verifier import (
