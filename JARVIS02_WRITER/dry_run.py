@@ -144,20 +144,11 @@ def run_draft(topic: str, post_type: str = "economic", market: Optional[dict] = 
     _os.environ["JARVIS_FORCE_SECTOR"] = "dry_run"
     _os.environ["JARVIS_FORCE_REASON"] = "dry_run 사용자 지정"
 
-    if market is None:
-        try:
-            from JARVIS02_WRITER.trend_economic_writer import collect_market_data
-            market = collect_market_data()
-        except Exception as e:
-            market = {"_error": f"market 수집 실패: {e}"}
-
+    # ★ 2026-07-03: collect_market_data 미존재 + market 을 supreme_block 위치에 오전달하던 결함 수정.
+    #   ts_generate_draft 는 topic_pack(JARVIS03)·JARVIS09 로 데이터를 자체 수집 — market 인자 불필요.
     try:
-        if post_type == "economic":
-            from JARVIS02_WRITER.trend_economic_writer import ts_generate_draft
-            draft = ts_generate_draft(market or {})
-        else:
-            from JARVIS02_WRITER.trend_economic_writer import ts_generate_draft
-            draft = ts_generate_draft(market or {})
+        from JARVIS02_WRITER.trend_economic_writer import ts_generate_draft
+        draft = ts_generate_draft()
         # ★ post_type 강제 박기 — 검증 함수가 올바른 spec 사용
         if isinstance(draft, dict):
             draft["post_type"] = post_type
@@ -203,20 +194,11 @@ def run_full(topic: str, post_type: str = "economic", market: Optional[dict] = N
     _os.environ["JARVIS_FORCE_SECTOR"] = "dry_run"
     _os.environ["JARVIS_FORCE_REASON"] = "dry_run 사용자 지정"
 
-    if market is None:
-        try:
-            from JARVIS02_WRITER.trend_economic_writer import collect_market_data
-            market = collect_market_data()
-        except Exception as e:
-            market = {"_error": f"market 수집 실패: {e}"}
-
+    # ★ 2026-07-03: collect_market_data 미존재 + market 을 supreme_block 위치에 오전달하던 결함 수정.
+    #   ts_generate_draft 는 topic_pack(JARVIS03)·JARVIS09 로 데이터를 자체 수집 — market 인자 불필요.
     try:
-        if post_type == "economic":
-            from JARVIS02_WRITER.trend_economic_writer import ts_generate_draft
-            draft = ts_generate_draft(market or {})
-        else:
-            from JARVIS02_WRITER.trend_economic_writer import ts_generate_draft
-            draft = ts_generate_draft(market or {})
+        from JARVIS02_WRITER.trend_economic_writer import ts_generate_draft
+        draft = ts_generate_draft()
         # ★ post_type 강제 박기 — Layer 3 검증이 올바른 spec 사용
         if isinstance(draft, dict):
             draft["post_type"] = post_type

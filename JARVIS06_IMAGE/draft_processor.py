@@ -181,9 +181,35 @@ def _extract_chart_context(html: str, chart_idx: int) -> str:
     return ""
 
 
+def _stock_numbers(stocks_data: dict) -> list[float]:
+    """테마 내장 슬롯 검증 ref — 종목 실데이터의 모든 수치 값 (재귀 수집)."""
+    vals: list[float] = []
+
+    def _walk(o):
+        if isinstance(o, dict):
+            for v in o.values():
+                _walk(v)
+        elif isinstance(o, (list, tuple)):
+            for v in o:
+                _walk(v)
+        elif isinstance(o, bool):
+            return
+        elif isinstance(o, (int, float)):
+            vals.append(float(o))
+        elif isinstance(o, str):
+            s = o.replace(",", "").strip().rstrip("%")
+            try:
+                vals.append(float(s))
+            except ValueError:
+                pass
+    _walk(stocks_data or {})
+    return vals
+
+
 def _generate_charts(html: str, theme: str, sector: str, stocks_data: dict,
                      platform: str, out_dir: Path,
-                     collection_docs: list | None = None) -> str:
+                     collection_docs: list | None = None,
+                     evidence_pack: dict | None = None) -> str:
     """[CHART_N: 설명] → matplotlib SVG 치환. 치환된 HTML 반환.
 
     ★ 사용자 박제 2026-06-07 — collection_docs 를 context_text 에 주입.
@@ -193,6 +219,27 @@ def _generate_charts(html: str, theme: str, sector: str, stocks_data: dict,
     from JARVIS02_WRITER.tistory_html_writer import _generate_svg_pass2
     from JARVIS02_WRITER import draft_writer as _dw
 
+    # ── 0단계: ★ 데이터 내장 슬롯 렌더 (사용자 박제 2026-07-03 — 자비스06=렌더러) ──
+    #   자비스02 가 [CHART_N]...[/CHART_N] 블록에 데이터를 박아 옴. 검증 ref = 종목
+    #   실데이터 값 (테마 차트의 원천). 실패 슬롯은 구형식으로 강등 → 아래 경로가 폴백.
+    try:
+        from JARVIS06_IMAGE.slot_renderer import render_slots_in_text
+        # 검증 ref: ① 단위 동봉 승격 데이터셋 (종목+텍스트 fact — 단위 정합까지 검증,
+        #   ERRORS [308][313][315]) + ② 전체 수치 캐치올 (단위 미상 — 값만 검증)
+        _ref_ds = []
+        try:
+            from JARVIS09_COLLECTOR import stocks_to_datasets as _s2d, facts_to_datasets as _f2d
+            _ref_ds = _s2d(stocks_data) + _f2d(evidence_pack or {})
+        except Exception:
+            pass
+        _ref_ds = _ref_ds + [{"data": [{"value": v} for v in _stock_numbers(stocks_data)]}]
+        html, _s_ok, _s_total = render_slots_in_text(
+            html, _ref_ds, out_dir, run_id=uuid.uuid4().hex[:8], theme=theme)
+        if _s_total:
+            print(f"  🎨 [{platform}] 데이터 내장 슬롯 {_s_ok}/{_s_total}개 렌더")
+    except Exception as _sre:
+        print(f"  ⚠️ [{platform}] 내장 슬롯 처리 스킵: {_sre}")
+
     placeholders = re.findall(r"\[CHART_(\d+):\s*([^\]]+)\]", html)
     if not placeholders:
         return html
@@ -200,6 +247,31 @@ def _generate_charts(html: str, theme: str, sector: str, stocks_data: dict,
     print(f"  🎨 [{platform}] [CHART] {len(placeholders)}개 생성 (matplotlib)...")
     run_id = uuid.uuid4().hex
     stocks_text = _dw._stocks_text(stocks_data) if hasattr(_dw, "_stocks_text") else ""
+
+    # ★ 종목 시세 → 차트 데이터셋 승격 (ERRORS [313]): 테마주 글의 가장 확실한
+    #   실데이터(이미 수집된 시세·재무)를 chart_generator 풀에 합류 — 웹 수집이
+    #   빈약해도 슬롯이 굶지 않는다.
+    _seed_ds: list = []
+    try:
+        from JARVIS09_COLLECTOR import stocks_to_datasets
+        _seed_ds = stocks_to_datasets(stocks_data)
+        if _seed_ds:
+            print(f"  📈 [{platform}] 종목 시세 승격 → 차트 데이터셋 {len(_seed_ds)}개 "
+                  f"({', '.join(d['title'].split()[-1] for d in _seed_ds)})")
+    except Exception as _se:
+        log.warning(f"stocks_to_datasets 실패: {_se}")
+    # ★ 텍스트 수치 → 데이터셋 승격도 합류 (ERRORS [315] — 사용자 박제: "텍스트
+    #   데이터에도 수치가 있잖아. 추출하면 되지"). 근거팩 fact 의 수치+출처를 차트 재료로.
+    try:
+        from JARVIS09_COLLECTOR import facts_to_datasets
+        _fact_ds = facts_to_datasets(evidence_pack or {})
+        if _fact_ds:
+            _titles = {str(d.get("title", "")) for d in _seed_ds}
+            _fact_ds = [d for d in _fact_ds if str(d.get("title", "")) not in _titles]
+            _seed_ds = _seed_ds + _fact_ds
+            print(f"  📈 [{platform}] 텍스트 수치 승격 → 차트 데이터셋 +{len(_fact_ds)}개 (근거팩 fact)")
+    except Exception as _fe:
+        log.warning(f"facts_to_datasets 실패: {_fe}")
 
     # ★ collection_docs 의 수치 사실 라인을 차트 컨텍스트로 변환
     docs_facts_text = ""
@@ -230,7 +302,8 @@ def _generate_charts(html: str, theme: str, sector: str, stocks_data: dict,
 
         futs = {
             ex.submit(_generate_svg_pass2, pos, desc, theme, sector,
-                      _ctx(orig_idx), out_dir, run_id, collection_docs): pos
+                      _ctx(orig_idx), out_dir, run_id, collection_docs,
+                      _seed_ds): pos
             for pos, orig_idx, desc in items
         }
         for f in as_completed(futs):
@@ -404,6 +477,7 @@ def process_draft(
 
     # ① [CHART_N] → matplotlib SVG (★ collection_docs 의 수치 사실 컨텍스트 주입)
     html = _generate_charts(draft_html, theme, sector, stocks_data, platform, out_dir,
+                            evidence_pack=evidence_pack,
                             collection_docs=collection_docs)
 
     # ② [PHOTO_N] → AI 사진 (★ collection_docs 의 헤드라인 facts 주입)

@@ -280,8 +280,84 @@ def _is_same_topic(rec: dict | str, ref_keyword: str) -> bool:
     return False
 
 
-def select_tistory_topic(trends: dict) -> dict | None:
-    """티스토리용 주제 선정 — 경제 섹터, 최근 7일 미사용 키워드 우선."""
+def _topic_econ_fit(keyword: str, sector: str) -> bool | None:
+    """경제·금융 브리핑 주제 적합성 LLM 판정 (ERRORS [290] — 2026-07-03).
+
+    '은행나무'(임업)가 '은행' 부분 매칭 오분류로 [금융·투자] 주제로 선정 →
+    경제 브리핑에 임업 재배면적 글 발행 사고 방지. True=적합 / False=부적합 /
+    None=판정 불가(LLM 미가용 — 호출자가 결정론 폴백 사용).
+    """
+    try:
+        from shared.llm import invoke_text
+        raw = invoke_text(
+            "analyzer",
+            f"키워드: {keyword} (분류된 섹터: {sector})\n\n"
+            "이 키워드가 한국 *경제·금융·산업·투자* 독자를 위한 경제 블로그 주제로 "
+            "적합한지 판정해라. 동식물·자연물·인물·연예·스포츠·일상 등 경제 콘텐츠와 "
+            "무관한 대상이면 부적합이다 (예: '은행나무'는 나무이므로 부적합, "
+            "'기준금리'·'반도체 수출'은 적합).\n"
+            "다른 말 없이 정확히 한 단어로만 답: 적합 또는 부적합",
+            max_tokens=10,
+        )
+        t = (raw or "").strip()
+        if not t:
+            return None
+        if "부적합" in t:
+            return False
+        if "적합" in t:
+            return True
+        return None
+    except Exception:
+        return None
+
+
+def _first_fit_topic(pool: list, label: str) -> dict | None:
+    """후보 풀에서 경제 주제 적합 첫 후보 선택 — LLM 판정 우선, 미가용 시 분류 신뢰도(결정론).
+
+    ★ 부적합 후보 강행 금지 (사용자 박제 2026-07-03): "데이터는 실질적·유익·진실해야".
+    적합 후보가 없으면 None — 호출자가 emergency trends(경제 핫이슈 LLM 생성)로 폴백.
+    """
+    for cand in pool[:5]:   # LLM 비용 상한 — 상위 5 후보만
+        kw = (cand.get('keyword', '') or '').strip()
+        if not kw:
+            continue
+        fit = _topic_econ_fit(kw, cand.get('sector', ''))
+        if fit is True:
+            return cand
+        if fit is False:
+            print(f"  ⛔ [{label}] '{kw}' 경제 주제 부적합 판정 → 다음 후보")
+            continue
+        # LLM 미가용 — 결정론 폴백: 섹터 분류 신뢰도로 복합어 오분류('은행나무' 류) 차단
+        try:
+            from JARVIS03_RADAR.analyzer import classify_keyword_conf
+            _sec2, _conf = classify_keyword_conf(kw)
+            if _conf and _sec2 in _ECON_SECTORS:
+                return cand
+            print(f"  ⛔ [{label}] '{kw}' 저신뢰 섹터 분류 (LLM 미가용) → 다음 후보")
+        except Exception:
+            return cand   # 판정 수단 전무 — 기존 동작 유지 (차단보다 발행 우선)
+    return None
+
+
+def _emergency_topic(ref_keyword: str, label: str) -> dict | None:
+    """적합 후보 전무 시 최후 폴백 — LLM 즉석 경제 핫이슈에서 주제 선택."""
+    print(f"  ⚠️ [{label}] 적합 경제 주제 없음 → emergency 경제 이슈 폴백")
+    em = _build_emergency_trends() or {}
+    for r in (em.get('recommendations') or []) + (em.get('scored_keywords') or []):
+        if r.get('keyword') and not _is_same_topic(r, ref_keyword):
+            r['keyword'] = _normalize_keyword(r.get('keyword', ''))
+            r['theme']   = r['keyword']
+            print(f"  📌 [{label}] emergency 주제: [{r.get('sector')}] {r.get('keyword')}")
+            return r
+    return None
+
+
+def select_tistory_topic(trends: dict, nv_keyword: str = '') -> dict | None:
+    """티스토리용 주제 선정 — 네이버 키워드 제외 + 경제 섹터, 최근 7일 미사용 키워드 우선.
+
+    ★ 네이버 우선 직렬 (사용자 박제 2026-07-03): 네이버가 먼저 작성되므로
+    중복 방지 방향이 naver→tistory 로 반전. nv_keyword 와 동일 주제 제외.
+    """
     recs   = trends.get('recommendations', [])
     scored = trends.get('scored_keywords', [])
     used   = _get_used_keywords()
@@ -293,28 +369,39 @@ def select_tistory_topic(trends: dict) -> dict | None:
     econ_recs = [
         r for r in recs
         if r.get('sector', '') in _ECON_SECTORS
+        and not _is_same_topic(r, nv_keyword)
         and r.get('sector', '') not in _EXCLUDE_SECTORS
     ]
     # 미사용 우선 → 없으면 사용 이력 무시 (발행 건너뜀 방지)
     fresh = [r for r in econ_recs if _not_used(r)]
     pool  = fresh or econ_recs
     if pool:
-        best = max(pool, key=lambda x: x.get('opportunity_score', 0))
-        best['keyword'] = _normalize_keyword(best.get('keyword', ''))
-        best['theme']   = best['keyword']
-        reused = "♻️ 재사용(미사용 없음)" if not fresh else ""
-        print(f"  📌 티스토리 주제: [{best.get('sector')}] {best.get('keyword')} "
-              f"(기회점수 {best.get('opportunity_score', 0):.1f}) {reused}")
-        return best
+        pool = sorted(pool, key=lambda x: x.get('opportunity_score', 0), reverse=True)
+        best = _first_fit_topic(pool, "티스토리")   # ★ 주제 적합성 게이트 (ERRORS [290])
+        if best:
+            best['keyword'] = _normalize_keyword(best.get('keyword', ''))
+            best['theme']   = best['keyword']
+            reused = "♻️ 재사용(미사용 없음)" if not fresh else ""
+            print(f"  📌 티스토리 주제: [{best.get('sector')}] {best.get('keyword')} "
+                  f"(기회점수 {best.get('opportunity_score', 0):.1f}) {reused}")
+            return best
 
-    econ_scored = [k for k in scored if k.get('sector', '') in _ECON_SECTORS]
+    econ_scored = [k for k in scored
+                   if k.get('sector', '') in _ECON_SECTORS and not _is_same_topic(k, nv_keyword)]
     fresh2 = [k for k in econ_scored if _not_used(k)]
     pool2  = fresh2 or econ_scored
     if pool2:
-        best = pool2[0]
-        best['keyword'] = _normalize_keyword(best.get('keyword', ''))
-        best['theme']   = best['keyword']
-        print(f"  📌 티스토리 주제 (폴백): [{best.get('sector')}] {best.get('keyword')}")
+        pool2 = sorted(pool2, key=lambda x: x.get('opportunity_score', x.get('score', 0)), reverse=True)
+        best = _first_fit_topic(pool2, "티스토리 폴백")   # ★ 주제 적합성 게이트 (ERRORS [290])
+        if best:
+            best['keyword'] = _normalize_keyword(best.get('keyword', ''))
+            best['theme']   = best['keyword']
+            print(f"  📌 티스토리 주제 (폴백): [{best.get('sector')}] {best.get('keyword')}")
+            return best
+
+    # ★ 적합 후보 전무 → 부적합 키워드 강행 대신 emergency 경제 이슈 (사용자 박제 2026-07-03)
+    best = _emergency_topic(nv_keyword, "티스토리")
+    if best:
         return best
 
     print("  ⚠️ 티스토리 경제 관련 트렌드 주제 없음")
@@ -340,22 +427,31 @@ def select_naver_topic(trends: dict, ts_keyword: str = '') -> dict | None:
     fresh = [r for r in econ_recs if _not_used(r)]
     pool  = fresh or econ_recs
     if pool:
-        best = max(pool, key=lambda x: x.get('opportunity_score', 0))
-        best['keyword'] = _normalize_keyword(best.get('keyword', ''))
-        best['theme']   = best['keyword']
-        reused = "♻️ 재사용(미사용 없음)" if not fresh else ""
-        print(f"  📌 네이버 주제: [{best.get('sector')}] {best.get('keyword')} "
-              f"(기회점수 {best.get('opportunity_score', 0):.1f}) {reused}")
-        return best
+        pool = sorted(pool, key=lambda x: x.get('opportunity_score', 0), reverse=True)
+        best = _first_fit_topic(pool, "네이버")   # ★ 주제 적합성 게이트 (ERRORS [290])
+        if best:
+            best['keyword'] = _normalize_keyword(best.get('keyword', ''))
+            best['theme']   = best['keyword']
+            reused = "♻️ 재사용(미사용 없음)" if not fresh else ""
+            print(f"  📌 네이버 주제: [{best.get('sector')}] {best.get('keyword')} "
+                  f"(기회점수 {best.get('opportunity_score', 0):.1f}) {reused}")
+            return best
 
     econ_scored = [k for k in scored if k.get('sector', '') in _ECON_SECTORS and not _is_same_topic(k, ts_keyword)]
     fresh2 = [k for k in econ_scored if _not_used(k)]
     pool2  = fresh2 or econ_scored
     if pool2:
-        best = pool2[0]
-        best['keyword'] = _normalize_keyword(best.get('keyword', ''))
-        best['theme']   = best['keyword']
-        print(f"  📌 네이버 주제 (폴백): [{best.get('sector')}] {best.get('keyword')}")
+        pool2 = sorted(pool2, key=lambda x: x.get('opportunity_score', x.get('score', 0)), reverse=True)
+        best = _first_fit_topic(pool2, "네이버 폴백")   # ★ 주제 적합성 게이트 (ERRORS [290])
+        if best:
+            best['keyword'] = _normalize_keyword(best.get('keyword', ''))
+            best['theme']   = best['keyword']
+            print(f"  📌 네이버 주제 (폴백): [{best.get('sector')}] {best.get('keyword')}")
+            return best
+
+    # ★ 적합 후보 전무 → 부적합 키워드 강행 대신 emergency 경제 이슈 (사용자 박제 2026-07-03)
+    best = _emergency_topic(ts_keyword, "네이버")
+    if best:
         return best
 
     print("  ⚠️ 네이버 경제 관련 트렌드 주제 없음")
@@ -500,7 +596,7 @@ def _generate_tistory_text(topic: dict, supreme_block: str) -> dict:
         .replace("{Q2}", _L.build_length_phrase(*_TS_Q2)) \
         .replace("{Q3}", _L.build_length_phrase(*_TS_Q3)) \
         .replace("{Q4}", _L.build_length_phrase(*_TS_Q4))
-    learn_block = _load_learn_insights("economic")
+    learn_block = _load_learn_insights("economic", platform="tistory")
 
     _seed = int(hashlib.md5(f"{TODAY_STR}{keyword}tistory".encode()).hexdigest(), 16) % 10000
     hook_style = random.Random(_seed).choice([
@@ -1526,24 +1622,15 @@ _section_img_paths: dict[int, str] = {}
 _para_img_paths:    dict[int, str] = {}
 
 
-def _load_learn_insights(scope: str) -> str:
-    """DB에서 학습 지침 로드 → 프롬프트 주입 블록 반환."""
+def _load_learn_insights(scope: str, platform: str = "") -> str:
+    """학습 지침 블록 — ★ ADR 014 (2026-07-03): JARVIS07 quality_learner 위임.
+
+    UCB 랭킹 선택 + 사용 기록(보상 귀속 대기) 포함. 실패 시 "" (글 작성 절대 안 막음).
+    """
     try:
-        from shared import db as _db
-        rows = _db.get_top_learning_insights(limit=6, days=14, scope=scope)
-        if not rows:
-            return ""
-        lines = [
-            "",
-            "─" * 30,
-            "📚 *과거 글 분석 기반 작성 지침 — 반드시 적용:*",
-            "",
-        ]
-        for i, r in enumerate(rows, 1):
-            d = (r.get("directive") or r.get("description") or "").strip()
-            if d:
-                lines.append(f"{i}. {d}  (재발견 {r.get('occurrences', 1)}회)")
-        return "\n".join(lines) + "\n"
+        from JARVIS07_GUARDIAN.quality_learner import build_insights_block
+        blk = build_insights_block(scope=scope, platform=platform, limit=6)
+        return (blk + "\n") if blk else ""
     except Exception as e:
         print(f"  ⚠️ 학습 지침 로드 실패(무시): {e}")
         _g_report("writer", e, module=__name__)
@@ -1710,7 +1797,7 @@ def run_tistory() -> dict:
         _ts_thumb_fut = _ts_thumb_exec.submit(
             _gen_thumb, title=title, keyword=keyword, sector=sector,
             platform="tistory", out_dir=_P(img_dir),
-            body_text=content[:400],
+            body_text=content[:3000],   # ★ 전체 대본 기반 썸네일 (사용자 박제 2026-07-03)
         )
         print("  🖼️  [티스토리] 썸네일 생성 시작 (백그라운드)...")
     except Exception as _te:
@@ -1923,7 +2010,7 @@ def run_naver(ts_keyword: str = '') -> dict:
             _nv_thumb_fut = _nv_thumb_exec.submit(
                 _gen_thumb, title=title, keyword=keyword, sector=sector,
                 platform="naver", out_dir=_img_dir,
-                body_text=content[:400],
+                body_text=content[:3000],   # ★ 전체 대본 기반 썸네일 (사용자 박제 2026-07-03)
             )
             print("  🖼️  [네이버] 썸네일 생성 시작 (백그라운드)...")
         except Exception as _te:
@@ -2025,9 +2112,11 @@ def run_naver(ts_keyword: str = '') -> dict:
 #  분리 함수 — 대본 생성 + 발행 분리 (병렬화용)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
-    """티스토리 대본 생성 (①-⑦ 단계)."""
-    print("\n  🔴 [TISTORY-DRAFT] 대본 생성 중...")
+def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str = '',
+                      gate_feedback: list | None = None) -> dict:
+    """티스토리 대본 생성 (①-⑦ 단계) — 네이버와 중복되지 않은 주제로 (네이버 우선 직렬)."""
+    from datetime import datetime as _dt_ts
+    print(f"\n  🔴 [TISTORY-DRAFT] 대본 생성 중... [{_dt_ts.now().strftime('%H:%M:%S')}]")
     # ★ 글 작성 전 인메모리 캐시 전체 초기화 — 이전 글 잔재 완전 제거
     try:
         from JARVIS06_IMAGE.chart_generator import clear_session_cache as _clear_cache
@@ -2041,22 +2130,37 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
     keyword = ""
     try:
         import os as _os
+        # ★ 주제+데이터 단일 공급원 = 자비스03 topic_pack (사용자 박제 2026-07-03)
+        #   "자비스03이 자비스02와 자비스09에게 동시에 트렌드 정보를 제공한다."
+        #   02 는 주제 선정·JARVIS09 수집 호출을 하지 않는다 — 폴백 없음.
+        from JARVIS03_RADAR.topic_pack import (
+            pick_candidate as _tp_pick, build_topic_pack as _tp_build,
+            build_for_keyword as _tp_for_kw, restore_docs as _tp_docs,
+        )
         _force = _os.environ.get("JARVIS_FORCE_TOPIC", "").strip()
         if _force:
-            keyword = _force
-            sector = _os.environ.get("JARVIS_FORCE_SECTOR", "").strip() or "강제 지정"
-            reason = _os.environ.get("JARVIS_FORCE_REASON", "").strip() or "사용자 강제 주제"
-            print(f"  📌 [강제 주제 — 티스토리] {keyword}")
+            _cand = _tp_for_kw(
+                _force,
+                sector=_os.environ.get("JARVIS_FORCE_SECTOR", "").strip() or "강제 지정",
+                reason=_os.environ.get("JARVIS_FORCE_REASON", "").strip() or "사용자 강제 주제",
+            )
+            print(f"  📌 [강제 주제 — 티스토리] {_force}")
         else:
-            trends = load_today_trends()
-            if not trends:
-                return {"success": False, "keyword": "", "error": "트렌드 데이터 없음"}
-            topic = select_tistory_topic(trends)
-            if not topic:
-                return {"success": False, "keyword": "", "error": "경제 주제 없음"}
-            keyword = topic.get('keyword', '')
-            sector = topic.get('sector', '')
-            reason = topic.get('reason', '')
+            _cand = _tp_pick(exclude_keyword=nv_keyword)
+            if _cand is None:
+                # 당일 팩 부재/소진 — 자비스03 파이프라인 즉석 실행 (동일 단일 경로)
+                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행")
+                _tp_build()
+                _cand = _tp_pick(exclude_keyword=nv_keyword)
+            if _cand is None:
+                return {"success": False, "keyword": "",
+                        "error": "자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)"}
+        keyword = _cand.get('keyword', '')
+        sector = _cand.get('sector', '')
+        _profile = _cand.get('profile') or {}
+        reason = _profile.get('summary') or _cand.get('reason', '')
+        print(f"  📌 [티스토리 주제 — 자비스03 팩] [{sector}] {keyword}"
+              + (f" — {reason[:60]}" if reason else ""))
 
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
@@ -2068,42 +2172,64 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
             supreme_block = (supreme_block or "") + _kw_rule(keyword)
         except Exception:
             pass
+        # ★ 주제 프로필 주입 (사용자 박제 2026-07-03) — 제목·대본이 주제의 실체를
+        #   혼동하지 않도록 자비스03 프로필(정의·관련어)을 작성 프롬프트에 전달.
+        _rel_terms = ", ".join(_profile.get('related_terms') or [])
+        if reason:
+            supreme_block = (supreme_block or "") + (
+                f"\n\n[주제 프로필 — 자비스03]\n- 주제: {keyword} ({sector})\n- 정의: {reason}"
+                + (f"\n- 관련어: {_rel_terms}" if _rel_terms else ""))
 
-        # ── ★ 데이터-우선 (사용자 박제 2026-06-30): 대본 작성 *전* 실데이터 풍부 수집 →
-        #    카탈로그를 supreme_block(모든 Pass-1 호출 전달)에 주입 → 대본이 *있는 차트만* 계획.
-        #    세션풀 등록 → Pass-2 가 재수집 없이 같은 실데이터로 인포그래픽 (text↔chart 일치).
+        # ── ★ 데이터-우선 (사용자 박제 2026-06-30 → 2026-07-03 개편): 자비스03 팩의
+        #    *선수집* 실데이터 사용 — 02 의 JARVIS09 직접 호출 폐지.
         try:
-            from JARVIS09_COLLECTOR import collect_chart_data as _ccd
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
             from JARVIS06_IMAGE.chart_generator import set_session_pool as _ssp
-            _pool = (_ccd(keyword, sector=sector, description=reason or keyword, max_datasets=12) or {}).get("datasets", [])
-            # ★ 테마 앵커 재시도 (사용자 박제 2026-07-01): reason 이 관광 등으로 드리프트해 게이트가
-            #   풀을 비우면, 주제(keyword) 자체로 재수집 → 항상 *주제* 실데이터로 채움.
-            if len(_pool) < 4:
-                _seen = {d.get("title") for d in _pool}
-                _pool2 = (_ccd(keyword, sector=sector, description=keyword, max_datasets=12) or {}).get("datasets", [])
-                _pool += [d for d in _pool2 if d.get("title") not in _seen]
-            _ssp(_pool)   # ★ 항상 등록(빈 풀 포함) → chart_generator 가 *오직* 이 풀만 사용(garbage 폴백 차단)
+            _pool = list(_cand.get("datasets") or [])
+            # ★ 자비스09→06 직공급 폐지 (사용자 박제 2026-07-03): 차트 데이터는 자비스02 가
+            #   대본 슬롯에 직접 내장 — 세션풀은 *빈 풀* 등록 (legacy 자체 수집 차단 유지).
+            _ssp([])
             if _pool:
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
-                print(f"  🗂️ [데이터-우선] 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
+                print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
             else:
-                print("  ⚠️ [데이터-우선] 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
+                print("  ⚠️ [데이터-우선] 팩 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
         except Exception as _de:
-            print(f"  ⚠️ [데이터-우선] 수집 스킵: {_de}")
+            print(f"  ⚠️ [데이터-우선] 팩 데이터 주입 스킵: {_de}")
 
-        # ★ 글 keyword로 JARVIS09 재수집 — 대본 주제에 맞는 데이터로 이미지 생성
-        _kw_collection_docs = list(collection_docs or [])
+        # ★ 근거 브리프 주입 (사용자 지적 2026-07-03 — ERRORS [303]): 수집 문서에서
+        #   추출된 fact(출처 표기)를 대본 프롬프트에 직접 주입 — ADR 012 작성측 연결이
+        #   테마 경로에만 있고 경제 경로에 누락돼 "수집 자산 대본 미도달"이던 병목 해소.
         try:
-            from JARVIS09_COLLECTOR import collect_for_theme as _j09_kw_collect
-            _kw_docs = _j09_kw_collect(keyword, sector)
-            if _kw_docs:
-                _kw_collection_docs = _kw_docs
-                print(f"  🕸️ [JARVIS09] '{keyword}' 재수집: {len(_kw_docs)}건 → 이미지 생성 전달")
-            else:
-                print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 0건 — 경제 일반 수집물 유지")
-        except Exception as _j09_kw_e:
-            print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 스킵: {_j09_kw_e}")
+            _ev_path = _cand.get("evidence_path") or ""
+            if _ev_path:
+                import json as _ej
+                from pathlib import Path as _EPath
+                _ev_pack = _ej.loads(_EPath(_ev_path).read_text(encoding="utf-8"))
+                from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
+                _brief = evidence_brief(_ev_pack)
+                if _brief:
+                    supreme_block = (supreme_block or "") + "\n\n" + _brief
+                    print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
+                          f"→ 대본 프롬프트 직접 주입")
+        except Exception as _ebe:
+            print(f"  ⚠️ [근거 브리프] 주입 스킵: {_ebe}")
+
+        # ★ 주제 문서 — 자비스03 팩의 선수집 문서 (JARVIS09 재수집 없음)
+        _kw_collection_docs = _tp_docs(_cand) or list(collection_docs or [])
+        print(f"  🕸️ [topic_pack] '{keyword}' 선수집 문서 {len(_kw_collection_docs)}건 사용")
+
+        # ★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다"):
+        #   브리프(수치 규율)에 더해 문서 전체를 서사 재료로 대본 프롬프트에 전달.
+        try:
+            from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
+            _corpus = _bcb(_kw_collection_docs)
+            if _corpus:
+                supreme_block = (supreme_block or "") + "\n\n" + _corpus
+                print(f"  📖 [수집 전문] 문서 {len(_kw_collection_docs)}건 "
+                      f"→ 대본 프롬프트 전문 주입 (~{len(_corpus) // 1000}K자)")
+        except Exception as _cbe:
+            print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
         from JARVIS02_WRITER.tistory_html_writer import (
             generate_article_html, save_article_html, screenshot_article,
@@ -2111,8 +2237,11 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
         )
         from JARVIS06_IMAGE.injectors import assemble_blocks
 
+        # ★ 자비스06에는 대본+검증 ref(수 KB)만 — 수집 문서 전문은 전달하지 않음
+        #   (사용자 확정 2026-07-03: 슬롯에 데이터가 내장되므로 전체 자료 불필요.
+        #    문서 전문은 02 의 작성 프롬프트·사실성 게이트 대조군 용도로만.)
         html = generate_article_html(keyword, sector, reason, supreme_block,
-                                     collection_docs=_kw_collection_docs)
+                                     ref_datasets=_pool, gate_feedback=gate_feedback)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
@@ -2133,7 +2262,7 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
             _ts_thumb_fut = _ts_thumb_exec.submit(
                 _gen_thumb, title=title, keyword=keyword, sector=sector,
                 platform="tistory", out_dir=__import__('pathlib').Path(img_dir),
-                body_text=content[:400],
+                body_text=content[:3000],   # ★ 전체 대본 기반 썸네일 (사용자 박제 2026-07-03)
             )
         except Exception as _te:
             _g_report("writer", _te, module=__name__)
@@ -2229,9 +2358,11 @@ def ts_publish(draft: dict) -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
 
-def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=None) -> dict:
+def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=None,
+                      gate_feedback: list | None = None) -> dict:
     """네이버 대본 생성 (①-⑦ 단계) — 티스토리와 중복되지 않은 주제로."""
-    print("\n  🟢 [NAVER-DRAFT] 대본 생성 중...")
+    from datetime import datetime as _dt_nv
+    print(f"\n  🟢 [NAVER-DRAFT] 대본 생성 중... [{_dt_nv.now().strftime('%H:%M:%S')}]")
     # ★ 글 작성 전 인메모리 캐시 전체 초기화 — 이전 글 잔재 완전 제거
     try:
         from JARVIS06_IMAGE.chart_generator import clear_session_cache as _clear_cache
@@ -2245,24 +2376,37 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
     keyword = ""
     try:
         import os as _os
+        # ★ 주제+데이터 단일 공급원 = 자비스03 topic_pack (사용자 박제 2026-07-03)
+        #   "자비스03이 자비스02와 자비스09에게 동시에 트렌드 정보를 제공한다."
+        #   02 는 주제 선정·JARVIS09 수집 호출을 하지 않는다 — 폴백 없음.
+        from JARVIS03_RADAR.topic_pack import (
+            pick_candidate as _tp_pick, build_topic_pack as _tp_build,
+            build_for_keyword as _tp_for_kw, restore_docs as _tp_docs,
+        )
         _force_nv = _os.environ.get("JARVIS_FORCE_NV_TOPIC", "").strip()
         if _force_nv:
-            keyword = _force_nv
-            sector = _os.environ.get("JARVIS_FORCE_NV_SECTOR", "").strip() or "강제 지정"
-            reason = _os.environ.get("JARVIS_FORCE_NV_REASON", "").strip() or "사용자 강제 주제"
-            print(f"  📌 [강제 주제 — 네이버] {keyword}")
+            _cand = _tp_for_kw(
+                _force_nv,
+                sector=_os.environ.get("JARVIS_FORCE_NV_SECTOR", "").strip() or "강제 지정",
+                reason=_os.environ.get("JARVIS_FORCE_NV_REASON", "").strip() or "사용자 강제 주제",
+            )
+            print(f"  📌 [강제 주제 — 네이버] {_force_nv}")
         else:
-            trends = load_today_trends()
-            if not trends:
-                return {"success": False, "keyword": "", "error": "트렌드 데이터 없음"}
-
-            topic = select_naver_topic(trends, ts_keyword=ts_keyword)
-            if not topic:
-                return {"success": False, "keyword": "", "error": "경제 주제 없음"}
-
-            keyword = topic.get('keyword', '')
-            sector = topic.get('sector', '')
-            reason = topic.get('reason', '')
+            _cand = _tp_pick(exclude_keyword=ts_keyword)
+            if _cand is None:
+                # 당일 팩 부재/소진 — 자비스03 파이프라인 즉석 실행 (동일 단일 경로)
+                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행")
+                _tp_build()
+                _cand = _tp_pick(exclude_keyword=ts_keyword)
+            if _cand is None:
+                return {"success": False, "keyword": "",
+                        "error": "자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)"}
+        keyword = _cand.get('keyword', '')
+        sector = _cand.get('sector', '')
+        _profile = _cand.get('profile') or {}
+        reason = _profile.get('summary') or _cand.get('reason', '')
+        print(f"  📌 [네이버 주제 — 자비스03 팩] [{sector}] {keyword}"
+              + (f" — {reason[:60]}" if reason else ""))
 
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
@@ -2274,50 +2418,72 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             supreme_block = (supreme_block or "") + _kw_rule(keyword)
         except Exception:
             pass
+        # ★ 주제 프로필 주입 (사용자 박제 2026-07-03) — 제목·대본이 주제의 실체를
+        #   혼동하지 않도록 자비스03 프로필(정의·관련어)을 작성 프롬프트에 전달.
+        _rel_terms = ", ".join(_profile.get('related_terms') or [])
+        if reason:
+            supreme_block = (supreme_block or "") + (
+                f"\n\n[주제 프로필 — 자비스03]\n- 주제: {keyword} ({sector})\n- 정의: {reason}"
+                + (f"\n- 관련어: {_rel_terms}" if _rel_terms else ""))
 
-        # ── ★ 데이터-우선 (사용자 박제 2026-06-30): 대본 작성 *전* 실데이터 풍부 수집 →
-        #    카탈로그를 supreme_block(모든 Pass-1 호출 전달)에 주입 → 대본이 *있는 차트만* 계획.
-        #    세션풀 등록 → Pass-2 가 재수집 없이 같은 실데이터로 인포그래픽 (text↔chart 일치).
+        # ── ★ 데이터-우선 (사용자 박제 2026-06-30 → 2026-07-03 개편): 자비스03 팩의
+        #    *선수집* 실데이터 사용 — 02 의 JARVIS09 직접 호출 폐지.
         try:
-            from JARVIS09_COLLECTOR import collect_chart_data as _ccd
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
             from JARVIS06_IMAGE.chart_generator import set_session_pool as _ssp
-            _pool = (_ccd(keyword, sector=sector, description=reason or keyword, max_datasets=12) or {}).get("datasets", [])
-            # ★ 테마 앵커 재시도 (사용자 박제 2026-07-01): reason 이 관광 등으로 드리프트해 게이트가
-            #   풀을 비우면, 주제(keyword) 자체로 재수집 → 항상 *주제* 실데이터로 채움.
-            if len(_pool) < 4:
-                _seen = {d.get("title") for d in _pool}
-                _pool2 = (_ccd(keyword, sector=sector, description=keyword, max_datasets=12) or {}).get("datasets", [])
-                _pool += [d for d in _pool2 if d.get("title") not in _seen]
-            _ssp(_pool)   # ★ 항상 등록(빈 풀 포함) → chart_generator 가 *오직* 이 풀만 사용(garbage 폴백 차단)
+            _pool = list(_cand.get("datasets") or [])
+            # ★ 자비스09→06 직공급 폐지 (사용자 박제 2026-07-03): 차트 데이터는 자비스02 가
+            #   대본 슬롯에 직접 내장 — 세션풀은 *빈 풀* 등록 (legacy 자체 수집 차단 유지).
+            _ssp([])
             if _pool:
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
-                print(f"  🗂️ [데이터-우선] 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
+                print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
             else:
-                print("  ⚠️ [데이터-우선] 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
+                print("  ⚠️ [데이터-우선] 팩 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
         except Exception as _de:
-            print(f"  ⚠️ [데이터-우선] 수집 스킵: {_de}")
+            print(f"  ⚠️ [데이터-우선] 팩 데이터 주입 스킵: {_de}")
 
-        # ★ 글 keyword로 JARVIS09 재수집 — 대본 주제에 맞는 데이터로 이미지 생성
-        _kw_collection_docs = list(collection_docs or [])
+        # ★ 근거 브리프 주입 (사용자 지적 2026-07-03 — ERRORS [303]): 수집 문서에서
+        #   추출된 fact(출처 표기)를 대본 프롬프트에 직접 주입 — 경제 경로 병목 해소.
         try:
-            from JARVIS09_COLLECTOR import collect_for_theme as _j09_kw_collect
-            _kw_docs = _j09_kw_collect(keyword, sector)
-            if _kw_docs:
-                _kw_collection_docs = _kw_docs
-                print(f"  🕸️ [JARVIS09] '{keyword}' 재수집: {len(_kw_docs)}건 → 이미지 생성 전달")
-            else:
-                print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 0건 — 경제 일반 수집물 유지")
-        except Exception as _j09_kw_e:
-            print(f"  ⚠️ [JARVIS09] '{keyword}' 재수집 스킵: {_j09_kw_e}")
+            _ev_path = _cand.get("evidence_path") or ""
+            if _ev_path:
+                import json as _ej
+                from pathlib import Path as _EPath
+                _ev_pack = _ej.loads(_EPath(_ev_path).read_text(encoding="utf-8"))
+                from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
+                _brief = evidence_brief(_ev_pack)
+                if _brief:
+                    supreme_block = (supreme_block or "") + "\n\n" + _brief
+                    print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
+                          f"→ 대본 프롬프트 직접 주입")
+        except Exception as _ebe:
+            print(f"  ⚠️ [근거 브리프] 주입 스킵: {_ebe}")
+
+        # ★ 주제 문서 — 자비스03 팩의 선수집 문서 (JARVIS09 재수집 없음)
+        _kw_collection_docs = _tp_docs(_cand) or list(collection_docs or [])
+        print(f"  🕸️ [topic_pack] '{keyword}' 선수집 문서 {len(_kw_collection_docs)}건 사용")
+
+        # ★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다"):
+        #   브리프(수치 규율)에 더해 문서 전체를 서사 재료로 대본 프롬프트에 전달.
+        try:
+            from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
+            _corpus = _bcb(_kw_collection_docs)
+            if _corpus:
+                supreme_block = (supreme_block or "") + "\n\n" + _corpus
+                print(f"  📖 [수집 전문] 문서 {len(_kw_collection_docs)}건 "
+                      f"→ 대본 프롬프트 전문 주입 (~{len(_corpus) // 1000}K자)")
+        except Exception as _cbe:
+            print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
         from JARVIS02_WRITER.tistory_html_writer import (
             generate_article_html, extract_title, extract_text_content,
             OUTPUT_HTML_DIR, OUTPUT_IMG_DIR,
         )
 
+        # ★ 자비스06에는 대본+검증 ref(수 KB)만 — 수집 문서 전문은 전달하지 않음
         html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
-                                     collection_docs=_kw_collection_docs)
+                                     ref_datasets=_pool, gate_feedback=gate_feedback)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 

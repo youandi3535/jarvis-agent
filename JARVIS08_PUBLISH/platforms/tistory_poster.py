@@ -183,7 +183,30 @@ def _login(driver) -> bool:
     driver.refresh()
     _s(2)
     _cur_url = driver.current_url or ""
+    # ★ 로그인 판정 강화 (ERRORS [292] — 2026-07-03): 종전 "'login' not in url" 은
+    #   www.tistory.com 이 비로그인이어도 리다이렉트가 없어 *항상 성공* 오탐 →
+    #   만료 쿠키로 에디터 진입 시도 → manage/newpost 에서 /auth/login 튕김 반복.
+    #   manage 페이지 접근으로 실판정.
+    _logged_in = False
     if "login" not in _cur_url:
+        try:
+            from selenium.common.exceptions import UnexpectedAlertPresentException
+            try:
+                driver.get(f"https://{TS_BLOG}.tistory.com/manage/newpost/")
+                _s(3)
+            except UnexpectedAlertPresentException:
+                try:
+                    driver.switch_to.alert.dismiss()
+                    _s(1)
+                except Exception:
+                    pass
+            _mng_url = (driver.current_url or "").lower()
+            _logged_in = ("/auth/login" not in _mng_url
+                          and "accounts.kakao.com" not in _mng_url)
+        except Exception as _le:
+            print(f"  ⚠️ manage 판정 오류({_le}) — 만료로 간주")
+            _logged_in = False
+    if _logged_in:
         # ★ 강제 이동 (검증 retry + 멈춤 차단 + SOS) — 사용자 박제 2026-05-14
         # tistory_cookie_refresher.force_my_blog() 위임 — 단일 진입점.
         try:
@@ -198,8 +221,28 @@ def _login(driver) -> bool:
                     _s(2)
                 except Exception:
                     pass
-        print("  ✅ 쿠키 로그인 성공")
+        print("  ✅ 쿠키 로그인 성공 (manage 접근 확인)")
         return True
+    # ★ 선제 갱신 (ERRORS [292]): 만료 확인 즉시 refresher 호출 — 에디터 진입 후
+    #   튕김→재로그인 지연 폴백 체인을 단축 (기존 폴백은 안전망으로 잔존).
+    print("  ❌ TSSESSION 만료 — 쿠키 즉시 갱신 시도")
+    try:
+        from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import refresh_cookie as _rc
+        _new_cookie = _rc(driver)
+        if _new_cookie:
+            driver.get("https://www.tistory.com")
+            _s(1)
+            driver.delete_all_cookies()
+            driver.add_cookie({
+                "name": "TSSESSION", "value": _new_cookie,
+                "domain": ".tistory.com", "path": "/",
+            })
+            driver.refresh()
+            _s(2)
+            print("  ✅ 쿠키 갱신 후 로그인 성공")
+            return True
+    except Exception as _re:
+        print(f"  ⚠️ 선제 쿠키 갱신 실패: {_re}")
     print("  ❌ TSSESSION 만료 — .env의 TS_COOKIE 갱신 필요")
     return False
 

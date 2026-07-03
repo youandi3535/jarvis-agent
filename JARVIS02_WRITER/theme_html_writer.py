@@ -222,6 +222,7 @@ def generate_theme_html(
     platform: str = "tistory",
     collection_docs: list | None = None,
     evidence_pack: dict | None = None,
+    gate_feedback: list | None = None,
 ) -> str:
     """테마주 Pass-1 대본 생성 — 텍스트 + [CHART_N]/[PHOTO_N] 플레이스홀더.
 
@@ -242,7 +243,8 @@ def generate_theme_html(
     """
     raw = _generate_text_pass1_theme(platform, theme, sector, stocks_data, supreme_block,
                                      collection_docs=collection_docs or [],
-                                     evidence_pack=evidence_pack)
+                                     evidence_pack=evidence_pack,
+                                     gate_feedback=gate_feedback)
     if not raw:
         print(f"  ❌ [Theme/{platform}] Pass-1 텍스트 생성 실패")
         return ""
@@ -273,7 +275,8 @@ def generate_theme_html(
         try:
             raw2 = _generate_text_pass1_theme(platform, theme, sector, stocks_data, supreme_block,
                                               collection_docs=collection_docs or [],
-                                              evidence_pack=evidence_pack)
+                                              evidence_pack=evidence_pack,
+                                              gate_feedback=gate_feedback)
             if raw2:
                 parts2 = raw2.split("CONTENT:", 1)
                 content2 = parts2[1].strip() if len(parts2) > 1 else raw2

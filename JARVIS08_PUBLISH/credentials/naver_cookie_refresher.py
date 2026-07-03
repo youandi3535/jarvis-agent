@@ -171,7 +171,7 @@ def refresh_naver_cookies(force: bool = False) -> bool:
     if not _is_network_up():
         print("  ⚠️ 네트워크 연결 없음 — 네이버 쿠키 갱신 스킵")
         try:
-            from shared.notify import send as _notify
+            from shared.notify import send_tg as _notify  # ★ 2026-07-03: 'send' 미존재 — 조용히 죽던 알림 복구
             _notify("⚠️ *네이버 쿠키 갱신 스킵*\n인터넷 연결을 확인하세요.\n(자동 수정 대상 아님 — 네트워크 복구 후 자동 재시도)")
         except Exception:
             pass

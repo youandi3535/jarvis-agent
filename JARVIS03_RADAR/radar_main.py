@@ -168,7 +168,7 @@ def collect_today() -> dict:
     # ── 1. Naver DataLab: 30일 추세 곡선 ─────────────────────────
     datalab: dict = {}
     try:
-        from .collectors.naver_collector import get_batch_datalab, has_api_key
+        from JARVIS03_RADAR.collectors.naver_collector import get_batch_datalab, has_api_key
         if has_api_key():
             print("[RADAR] Naver DataLab 트렌드 수집 중...")
             datalab = get_batch_datalab(trending[:20], days=30)
@@ -180,7 +180,7 @@ def collect_today() -> dict:
     iot_used = False
     if not datalab:
         try:
-            from .collectors.google_collector import get_interest_over_time
+            from JARVIS03_RADAR.collectors.google_collector import get_interest_over_time
             print("[RADAR] Google interest_over_time velocity fallback 수집 중...")
             datalab = get_interest_over_time(trending[:20], days=30)
             if datalab:
@@ -192,7 +192,7 @@ def collect_today() -> dict:
     # ── 2. 경쟁 강도 분석 (네이버 뉴스 검색량 기반) ───────────────
     competition: dict = {}
     try:
-        from .collectors.naver_collector import get_competition_score, has_api_key
+        from JARVIS03_RADAR.collectors.naver_collector import get_competition_score, has_api_key
         if has_api_key():
             print("[RADAR] 경쟁 강도 분석 중...")
             for kw in trending[:15]:
@@ -205,7 +205,7 @@ def collect_today() -> dict:
     # ── 3. 자동완성 연관 키워드 (전체 trending, 인증 불필요) ────────
     autocomplete: dict = {}
     try:
-        from .collectors.naver_collector import get_autocomplete
+        from JARVIS03_RADAR.collectors.naver_collector import get_autocomplete
         for kw in trending[:20]:  # 10→20으로 확대
             ac = get_autocomplete(kw)
             if ac:
@@ -357,8 +357,22 @@ def push_to_shared(data: dict):
                 for r in recs
             ]
 
+        # ── ★ 공식 테마 게이트 (사용자 박제 2026-07-03 — ERRORS [306]) ──────────
+        # 테마주 글의 주제는 KRX/네이버 금융 *공식 테마* 에서만 선정 — 비공식 테마는
+        # 큐잉 자체를 차단 (실행 시 stocks_data 게이트가 2차 방어).
+        try:
+            from JARVIS09_COLLECTOR.collect_theme import is_official_theme
+            _before_cnt = len(pipeline_items)
+            _dropped = [it["theme"] for it in pipeline_items if not is_official_theme(it["theme"])]
+            pipeline_items = [it for it in pipeline_items if it["theme"] not in set(_dropped)]
+            if _dropped:
+                print(f"[RADAR→WRITER] ⛔ 공식 테마 게이트 — 비공식 {len(_dropped)}개 제외: "
+                      f"{', '.join(_dropped[:5])}{' …' if len(_dropped) > 5 else ''}")
+        except Exception as _ge:
+            print(f"[RADAR→WRITER] 공식 테마 게이트 스킵(오류): {_ge}")
+
         push_pipeline(pipeline_items)
-        print(f"[RADAR→WRITER] 파이프라인 {len(pipeline_items)}개 등록")
+        print(f"[RADAR→WRITER] 파이프라인 {len(pipeline_items)}개 등록 (공식 테마만)")
 
         recs = data.get("recommendations", [])
         on_trend_detected(data["date"], data["google_trending"], recs)

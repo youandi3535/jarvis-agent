@@ -326,32 +326,101 @@ def _stocks_text(stocks_data: dict) -> str:
 #  경제 브리핑 텍스트 대본 — 티스토리·네이버 (Pass-1)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+def build_corpus_block(docs, max_total: int | None = None, per_doc: int = 2500) -> str:
+    """★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다").
+
+    자비스09 수집 문서 전부를 대본 프롬프트에 전달 — LLM 이 모든 자료를 보고
+    주제·서사·통찰을 구성한다. evidence_brief(수치 규율)와 *병행* 주입.
+    신뢰 서열(논문>API>뉴스>기사>웹) 정렬 — 상한 초과 시 저신뢰부터 생략(건수 명시).
+    """
+    if not docs:
+        return ""
+    import os as _os_c
+    if max_total is None:
+        max_total = int(_os_c.getenv("DRAFT_CORPUS_MAX_CHARS", "120000") or "120000")
+
+    def _a(d, k, default=""):
+        return d.get(k, default) if isinstance(d, dict) else getattr(d, k, default)
+
+    try:
+        from JARVIS09_COLLECTOR.models import trust_rank
+        docs = sorted(docs, key=lambda d: trust_rank(str(_a(d, "source_type"))))
+    except Exception:
+        docs = list(docs)
+
+    lines = ["[★ 수집 자료 전문 — 글의 서사·맥락·통찰은 아래 *모든 자료* 를 근거로 "
+             "풍부하게 구성하라. 수치 인용 규칙은 실데이터 카탈로그·근거 팩 참조]"]
+    used = 0
+    included = 0
+    for i, d in enumerate(docs, 1):
+        body = str(_a(d, "cleaned_text") or "").strip()[:per_doc]
+        if not body:
+            continue
+        entry = f"--- 자료 {i} [{_a(d, 'source_type')}] {str(_a(d, 'title'))[:70]}\n{body}"
+        if used + len(entry) > max_total:
+            break
+        lines.append(entry)
+        used += len(entry)
+        included += 1
+    omitted = len(docs) - included
+    lines.append(f"(수집 자료 {len(docs)}건 중 {included}건 수록"
+                 + (f" — 길이 상한으로 신뢰 낮은 순 {omitted}건 생략" if omitted > 0 else "")
+                 + ")")
+    return "\n".join(lines)
+
+
 def _build_data_catalog(datasets) -> str:
     """수집된 실데이터 → 대본 프롬프트용 카탈로그.
 
     ★ 1-d (2026-07-02): 제목·단위뿐 아니라 *실제 값(라벨:값)·기준일* 까지 주입한다.
       이전엔 제목만 줘서 본문 프로즈의 구체 수치를 LLM 이 지어냈다 — 이제 본문이
       '있는 실데이터 수치만 그대로' 인용하도록 값을 명시한다.
+    ★ 프롬프트 상한 (2026-07-03 — ADR 013 넉넉한 수집 도입 후): 세션풀은 전량 보유하되
+      카탈로그는 상위 N개만 주입 — 프롬프트 비대로 인한 절단·품질 저하 방지.
     """
     if not datasets:
         return ""
+    import os as _os_cat
+    _cat_max = int(_os_cat.getenv("DATA_CATALOG_MAX", "16") or "16")
+    datasets = list(datasets)[:_cat_max]
     lines = ["[★ 사용 가능한 실데이터 — 차트도 본문 수치도 *이 값만* 인용할 것]"]
     for i, d in enumerate(datasets, 1):
         u = d.get("unit", "")
         src = d.get("source") or {}
         as_of = src.get("as_of", "")
+        src_name = (src.get("name") or src.get("provider") or "").strip()
         head = f"D{i}. {d.get('title', '')}{(' (단위 ' + u + ')') if u else ''}"
         if as_of:
             head += f" [기준 {as_of}]"
+        if src_name:
+            head += f" [출처 {src_name[:40]}]"
         lines.append(head)
         for r in (d.get("data") or [])[:8]:
             lbl = str(r.get("label", "")).strip()
             val = r.get("value", "")
             if lbl != "" and val != "":
                 lines.append(f"    - {lbl}: {val}{u}")
-    lines.append("★ 위 목록에 *없는* 수치는 본문·차트에 절대 쓰지 마라 — 실데이터 없는 수치는 거짓이다.")
-    lines.append("★ 본문에서 수치를 언급할 땐 위 값을 *그대로* 인용하라 (임의 반올림·창작 금지).")
-    lines.append("★ [CHART_N: <위 목록의 제목 그대로>] 형태로, 글 흐름에 맞는 위치에 배치하라.")
+    # ★ 데이터 내장 슬롯 (사용자 박제 2026-07-03): 작성자가 차트 설계까지 완료 —
+    #   슬롯 안에 차트를 만들 *모든 수치* 를 직접 박는다. 자비스06 은 렌더만.
+    lines.append("")
+    lines.append("★★ 차트 슬롯 작성 규칙 — 차트가 들어갈 자리마다 아래 *블록 형식* 으로")
+    lines.append("차트 데이터 전체를 직접 박는다 (여기서 차트 설계까지 끝낸다):")
+    lines.append("[CHART_1]")
+    lines.append("제목: <차트 제목>")
+    lines.append("종류: bar")
+    lines.append("단위: <단위>")
+    lines.append("데이터: 라벨A=값 | 라벨B=값 | 라벨C=값")
+    lines.append("출처: <위 카탈로그의 출처 그대로>")
+    lines.append("[/CHART_1]")
+    lines.append("- 종류는 bar|line|area|pie|kpi 중 1 (시계열=line/area, 비교=bar, 비율=pie, 단일수치=kpi)")
+    lines.append("- 데이터 값은 위 카탈로그(D1..)의 값을 *그대로 복사* — 창작·변형·반올림 금지")
+    lines.append("- 단위도 그 데이터셋의 단위 *그대로* — 값과 단위는 한 몸 (값만 복사하고 단위를 바꾸면 거짓)")
+    lines.append("- 한 슬롯 = 카탈로그 한 데이터셋 기반. 시간 라벨은 과거→최근 순서")
+    lines.append("- 같은 데이터셋으로 슬롯 2개 만들지 마라 (중복 금지)")
+    lines.append("- 한 슬롯 안에서 *같은 값을 다른 라벨로 반복* 금지 (예: '매출=16.59 | 매출액=16.59' ✗)")
+    lines.append("- 슬롯 제목에 데이터 값 숫자를 그대로 쓰지 마라 (차트 본체와 중복 표기 방지)")
+    lines.append("★ 본문 수치는 위 카탈로그·근거 팩·수집 자료 전문에 *명시된* 값만 그대로 인용"
+                 " (창작·임의 반올림 금지 — 출처 없는 숫자는 거짓이다).")
     return "\n".join(lines)
 
 
@@ -729,16 +798,50 @@ def critique_and_refine(content: str, platform: str, evidence_block: str = "",
 #  테마글 텍스트 대본 — 전 플랫폼 (Pass-1)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+def build_gate_feedback_block(gate_feedback: list | None) -> str:
+    """★ 재작성 순환 피드백 (ERRORS [311]) — 직전 시도의 발행 차단 사유를 Pass-1 프롬프트에 주입.
+
+    없으면 같은 창작 수치를 재생산해 max_attempts 를 그대로 소진한다."""
+    items = [str(s).strip() for s in (gate_feedback or []) if str(s).strip()]
+    if not items:
+        return ""
+    lines = "\n".join(f"- {s[:300]}" for s in items[-8:])
+    return f"""
+
+★★ 직전 시도 발행 차단 사유 (반드시 반영 — 어길 시 또 차단):
+아래 주장·수치는 출처·웹 어디서도 검증되지 않아 발행이 차단됐다. 이번 대본에서는
+해당 수치·주장을 *아예 쓰지 말라*. 비슷한 변형(수치만 바꾼 같은 주장)도 금지.
+근거 자료에 실재하는 수치로 대체하거나, 수치 없이 정성 서술로 바꿔라.
+{lines}"""
+
+
 def _gen_theme(
     theme: str, sector: str, stocks_data: dict,
     supreme_block: str, platform: str = "tistory",
     collection_docs: list | None = None,
     evidence_pack: dict | None = None,
+    gate_feedback: list | None = None,
 ) -> str:
-    """테마글 Pass-1: 텍스트 + [CHART_N]/[PHOTO_N] 플레이스홀더."""
+    """테마글 Pass-1: 텍스트 + 데이터 내장 [CHART_N] 블록 (+구형식 폴백)."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     stocks_text = _stocks_text(stocks_data)
     hook = _gen_hook_theme(theme, platform)
+
+    # ★ 데이터 내장 슬롯 카탈로그 (ADR 013 테마 이행 — ERRORS [316]): 경제와 동일 로직.
+    #   종목 시세 승격 + 텍스트 수치 승격 → 카탈로그 주입, 슬롯 안에 차트 데이터까지 내장.
+    #   카탈로그에 맞는 데이터 없는 슬롯만 구형식 유지 → 자비스06 Pass-2 실데이터 폴백.
+    _theme_catalog = ""
+    try:
+        from JARVIS09_COLLECTOR import stocks_to_datasets as _s2d_t, facts_to_datasets as _f2d_t
+        _cat_ds = _s2d_t(stocks_data) + _f2d_t(evidence_pack or {})
+        _theme_catalog = _build_data_catalog(_cat_ds)
+    except Exception as _ce:
+        print(f"  ⚠️ [Theme/Pass-1] 카탈로그 구성 실패 (구형식 슬롯으로 진행): {_ce}")
+    if _theme_catalog:
+        _theme_catalog += ("\n★ 위 구조 예시의 [CHART_N: 설명] 자리 작성 규칙: 카탈로그(D1..)에 맞는 "
+                           "데이터가 있으면 *반드시* 블록 형식([CHART_N]...[/CHART_N])으로 데이터까지 "
+                           "내장해 작성. 맞는 데이터가 없는 슬롯만 [CHART_N: 설명] 형식 유지 "
+                           "(그 슬롯은 자비스06이 검증된 실데이터로 채운다).")
     summary = (stocks_data or {}).get("summary", {})
     leader = summary.get("leader_name", "")
     second = summary.get("second_name", "")
@@ -778,6 +881,11 @@ def _gen_theme(
 - <svg>·<img> 태그 직접 쓰지 말 것 — 반드시 위 플레이스홀더만 사용
 - 문체: {spec['tone']}
 - 종목 데이터의 수치는 *그대로 인용* (가공·임의 변경 금지). 없으면 "N/A" 표기.
+- ★ 출처 없는 역사적 수치 창작 절대 금지 — 특정 연도·분기·기간의 가격·비용·규모·비율·지수 등은
+  아래 수집 자료나 종목 데이터에 *명시된 값만* 인용. 근거 없는 임의 수치는 사실성 게이트에서
+  차단된다. 없으면 "수치를 확인할 수 없었습니다" 등 정성 서술로 대체.
+- ★ 수치 없이도 설득력 있게 서술 — 맥락·경향·비교 표현은 검증 불가 숫자보다 낫다.
+  과거 특정 시점 임의 통계("2023년 1분기 ○○원" 류) 생성 금지.
 - 위 지시문(헌법 조항·"N문장"·"플레이스홀더 포함" 등) 본문에 그대로 출력 금지
 - *완성된 HTML 만* 출력. 설명·주석·코드블록 금지.
 
@@ -789,19 +897,15 @@ def _gen_theme(
 - 금지: 이미지·표 두 개 연속 (예: [CHART_X][CHART_Y]), 문단 3개+ 연속
 - 표(<table>)도 시각 요소로 카운트 — 표 뒤에 즉시 차트 금지, 반드시 <p> 1개 삽입 후 차트."""
 
-    # ★ 근거 주입 (ADR 012) — EvidencePack 브리프 우선, 없으면 종전 문서 발췌 폴백
+    # ★ 근거 주입 (ADR 012 → 2026-07-03 확대): EvidencePack 브리프(수치 규율) +
+    #   수집 자료 *전문*(서사 재료) 병행 — "내용이 풍부해야 퀄리티도 높다" (사용자 박제).
     _ref_block = ""
     _evidence_block = _build_evidence_block(evidence_pack)
     if _evidence_block:
-        _ref_block = f"\n\n{_evidence_block}"
-    elif collection_docs:
-        _lines = []
-        for _i, _doc in enumerate(collection_docs[:5], 1):
-            _src  = getattr(_doc, "source_type", "")
-            _titl = getattr(_doc, "title", "") or ""
-            _body = (getattr(_doc, "cleaned_text", "") or "")[:300]
-            _lines.append(f"[참고{_i}] ({_src}) {_titl}\n{_body}")
-        _ref_block = "\n\n[참고 자료 — JARVIS09 수집 (사실 확인·최신 동향 반영에 활용)]\n" + "\n---\n".join(_lines)
+        _ref_block += f"\n\n{_evidence_block}"
+    _corpus_block = build_corpus_block(collection_docs)
+    if _corpus_block:
+        _ref_block += f"\n\n{_corpus_block}"
 
     # ★ 서사 아웃라인 1패스 (ADR 012) — 구조 설계 후 작성 (실패 시 빈 블록)
     _narrative_block = _plan_narrative(theme, sector, _evidence_block,
@@ -896,6 +1000,7 @@ CONTENT:
 <p>(여기에 면책 2문장 — 본문에 맞춤형 표현. 헌법 제5조 적용 — 정보 제공·투자 권유 아님·판단 책임은 독자)</p>
 
 지금 바로 TITLE: 부터 출력. 위 출력 형식 외의 설명·주석·코드블록 절대 금지.
+{_theme_catalog}
 {_ref_block}"""
     _theme_floor = max(6, _L.THEME_TOTAL_CHART_COUNT)  # 테마: 7~10 범위 하한선
     _theme_max   = _spec_theme.max_images if _spec_theme else 10
@@ -903,6 +1008,10 @@ CONTENT:
         f"{_L.THEME_TOTAL_CHART_COUNT}~{_L.MAX_CHART_COUNT}",
         f"{_theme_floor}~{_theme_max}"
     )
+    _fb_block = build_gate_feedback_block(gate_feedback)
+    if _fb_block:
+        user_msg += _fb_block
+        print(f"  🔁 [Theme/Pass-1/{platform}] 직전 차단 사유 {len(gate_feedback or [])}건 주입 — 재작성")
     print(f"  ✍️  [Theme/Pass-1/{platform}] 텍스트 생성 (system 분리): {theme}...")
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     return strip_html_wrapper(raw)
@@ -946,6 +1055,7 @@ def generate_theme_draft(
     supreme_block: str,
     collection_docs: list | None = None,
     evidence_pack: dict | None = None,
+    gate_feedback: list | None = None,
 ) -> str:
     """테마글 텍스트 대본 생성 (Pass-1).
 
@@ -963,7 +1073,8 @@ def generate_theme_draft(
     """
     return _gen_theme(theme, sector, stocks_data, supreme_block, platform,
                       collection_docs=collection_docs or [],
-                      evidence_pack=evidence_pack)
+                      evidence_pack=evidence_pack,
+                      gate_feedback=gate_feedback)
 
 
 def generate_draft(

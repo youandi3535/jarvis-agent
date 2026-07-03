@@ -542,27 +542,14 @@ def generate_triple_articles(theme: str, report_html: str, text_slot_headings: l
         print(f"  ⚠️ 브랜드 보이스 검색 실패(무시하고 진행): {e}")
         _g_report("writer", e, module=__name__)
 
-    # ── 누적 학습 지침 — 초기 생성 단계 주입 (learning_insights → 초안 prompt) ──
+    # ── 누적 학습 지침 — ★ ADR 014 (2026-07-03): JARVIS07 quality_learner 단일 진입점.
+    #    UCB 랭킹 선택 + 사용 기록(보상 귀속 대기) → 검증된 지침만 살아남는 강화학습.
     _learn_block = ""
     try:
-        from shared import db as _shared_db
-        _li_rows = _shared_db.get_top_learning_insights(limit=8, days=14, scope="theme")
-        if _li_rows:
-            _ll = [
-                "",
-                "─" * 30,
-                "📚 *과거 글 분석에서 도출된 작성 지침* — 이번 글 작성 시 반드시 적용:",
-                "",
-            ]
-            for _i, _r in enumerate(_li_rows, 1):
-                _d = (_r.get("directive") or _r.get("description") or "").strip()
-                _occ = _r.get("occurrences", 1)
-                _sc = _r.get("scope", "all")
-                _stag = "" if _sc == "all" else f" [{_sc}]"
-                if _d:
-                    _ll.append(f"{_i}.{_stag} {_d}  (재발견 {_occ}회)")
-            _learn_block = "\n".join(_ll)
-            print(f"  📚 테마글 학습 지침 {len(_li_rows)}개 주입됨")
+        from JARVIS07_GUARDIAN.quality_learner import build_insights_block as _ql_block
+        _learn_block = _ql_block(scope="theme", theme=str(theme or ""))
+        if _learn_block:
+            print("  📚 테마글 학습 지침 주입됨 (강화학습 랭킹)")
     except Exception as _le:
         print(f"  ⚠️ 학습 블록 로드 실패(무시): {_le}")
         _g_report("writer", _le, module=__name__)

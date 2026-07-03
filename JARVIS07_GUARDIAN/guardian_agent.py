@@ -92,6 +92,20 @@ def _status_section() -> str:
         except Exception:
             pass
 
+        # ★ 글 품질 강화학습 상태 (ADR 014 — quality_learner.py)
+        try:
+            from JARVIS07_GUARDIAN.quality_learner import stats as _ql_stats
+            _qs = _ql_stats()
+            if _qs.get("active") or _qs.get("total_usage"):
+                _avg = _qs.get("avg_reward")
+                lines.append(
+                    f"✍️ 글 품질 RL — 활성 지침 {_qs.get('active', 0)}개 · "
+                    f"주입 {_qs.get('total_usage', 0)}회 · 검증 {_qs.get('total_rewards', 0)}회"
+                    + (f" · 평균 보상 {_avg}" if _avg is not None else "")
+                )
+        except Exception:
+            pass
+
         # 자동수정 정책 요약 — 단일 진실 소스(architecture.telegram_summary)
         from JARVIS07_GUARDIAN.architecture import telegram_summary as _arch_summary
         lines.append(_arch_summary())

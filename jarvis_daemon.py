@@ -4,7 +4,7 @@ JARVIS 마스터 통합 데몬 v2
 JARVIS02 (Market Signal) + JARVIS03 (RADAR) 전체를 단일 프로세스로 관리.
 
 포함 기능:
-  1. JARVIS04_SCHEDULER — *모든* 시간 기반 잡 단일 컨트롤 타워 (25개 default 잡 + 일일 브리핑)
+  1. JARVIS04_SCHEDULER — *모든* 시간 기반 잡 단일 컨트롤 타워 (DEFAULT_JOBS + 일일 브리핑)
   2. 통합 텔레그램 봇 — JARVIS02 명령어 + JARVIS01 ReAct + JARVIS03 인라인 승인 버튼 통합
   3. 파일 락      — fcntl LOCK_EX + PID 파일 이중 방어 (어떤 경우에도 단일 인스턴스 강제)
 
@@ -488,7 +488,12 @@ def main():
 
     log.info("\n✅ 모든 컴포넌트 시작 완료. Ctrl+C로 종료.")
     log.info("   - 통합 텔레그램 봇 (JARVIS01 ReAct + JARVIS02 명령어 + JARVIS03 인라인 버튼)")
-    log.info("   - JARVIS04 SCHEDULER — 모든 잡 통합 관리 (25개 default + 일일 브리핑)")
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS as _dj
+        _n_jobs = f"{len(_dj)}개"
+    except Exception:
+        _n_jobs = "DEFAULT_JOBS"
+    log.info(f"   - JARVIS04 SCHEDULER — 모든 잡 통합 관리 ({_n_jobs} default + 일일 브리핑)")
 
     # 8. 메인 루프 — 스레드 감시 + 종료 이벤트 대기
     try:

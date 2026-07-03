@@ -25,6 +25,7 @@ _RULES: list[tuple[Path, str, int]] = [
     (LOGS_DIR,       "report_*.txt",          30),   # 원고 리포트: 30일
     (RADAR_DIR/"data", "trends_*.json",       30),   # RADAR 트렌드 캐시: 30일
     (JARVIS09_DIR/"output"/"evidence", "evidence_*.json", 30),  # 근거 팩 박제 (ADR 012): 30일
+    (RADAR_DIR/"data", "topic_pack_*.json",   30),   # 주제 패키지 (ADR 013): 30일
 ]
 
 _SCREENSHOT_KEEP_DAYS = 30  # screenshots 폴더: 30일

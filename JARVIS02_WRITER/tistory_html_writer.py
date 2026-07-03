@@ -144,6 +144,7 @@ def _generate_svg_pass2(
     img_dir: "Path | str | None" = None,
     run_id: str = "",
     collection_docs: list | None = None,
+    seed_datasets: list | None = None,
 ) -> str:
     """차트 1개 단일 진입점 — chart_generator 성공 시 img 태그 반환, 실패 시 "" (스킵).
 
@@ -167,6 +168,7 @@ def _generate_svg_pass2(
         chart_idx=chart_idx,
         run_id=run_id,
         collection_docs=collection_docs,
+        seed_datasets=seed_datasets,
     )
     if jpg_path:
         alt = description[:40].replace('"', "'")
@@ -260,19 +262,20 @@ def _generate_extra_ai_photos(keyword: str, sector: str, count: int, out_dir: "P
     _today2 = _dt2.date.today().isoformat()
     # 날짜를 seed에 포함시켜 매일 다른 프롬프트 조합 선택
     _rng = _rand2.Random(hash(f"{keyword}|{_today2}"))
+    # ★ 글 관련성 강제 (사용자 박제 2026-07-03): 모든 프롬프트는 keyword(글 주제)를
+    #   *실제 피사체* 로 앵커. 야경·정부청사 등 주제 비고정 배경 프롬프트 금지 —
+    #   주제와 무관한 임의 사진(poll_*.png 무관 이미지 사고) 원인. 슬롯 사진과 동일 원칙(부차B).
     _base_prompts = [
-        f"{keyword} 산업 현황과 미래 전망, 활기찬 비즈니스 현장",
-        f"{keyword} 관련 주식 시장 분석, 트레이딩 화면과 차트",
-        f"{sector} 섹터 투자 트렌드, 현대적인 오피스",
-        f"{keyword} 기업 성장 동력, 연구개발 현장",
-        f"{keyword} 글로벌 시장 경쟁, 항공사진 도시 전경",
-        f"{sector} 혁신 기술 현장, 스마트 팩토리",
-        f"{keyword} 공급망 현황, 물류 허브",
-        f"{keyword} 투자 포인트, 한국 증권가 야경",
-        f"{keyword} 미래 성장 산업, 첨단 기술 연구소",
-        f"{sector} 시장 경쟁 구도, 도심 금융지구",
-        f"{keyword} 소비자 트렌드, 활기찬 시장 거리",
-        f"{keyword} 정책 변화 영향, 국회의사당·정부청사",
+        f"{keyword} 를 직접 보여주는 실제 다큐멘터리 사진, 넓은 전경, 자연광",
+        f"{keyword} 관련 제품·설비 중심 클로즈업, 실제 현장, 사실적",
+        f"{keyword} 현장에서 일하는 사람들, 실제 작업 장면, 자연광",
+        f"{keyword} 관련 실제 산업 현장 내부, 밝은 조명, 사실적",
+        f"{keyword} 관련 실제 장소·건물 외관, 도시 배경, 낮, 실사",
+        f"{keyword} 관련 물류·운송 현장, 실제 차량·설비, 사실적",
+        f"{keyword} 관련 연구개발 현장, 실제 실험실 장비와 연구원",
+        f"{keyword} 자료를 검토하는 사람, 실제 사무실, 모니터 화면, 자연광",
+        f"{keyword} 관련 생산 라인, 실제 공장 내부, 사실적",
+        f"{keyword} 관련 매장·거래 현장, 실제 사람들, 낮, 실사",
     ]
     _rng.shuffle(_base_prompts)
     prompts = _base_prompts[:count]
@@ -335,25 +338,38 @@ def _generate_svg_pass2_and_replace(
     sector: str,
     platform: str = "tistory",
     collection_docs: list | None = None,
+    ref_datasets: list | None = None,
 ) -> str:
-    """Pass-2: [CHART_N: 설명] 플레이스홀더 → 이미지 병렬 생성 + 치환.
+    """Pass-2: 차트 슬롯 → 이미지 생성 + 치환.
 
-    1단계: 데이터 기반 차트 생성 (병렬)
-    2단계: 차트 실패 슬롯 → AI 사진으로 대체 (병렬)
-    3단계: 총 이미지 < _MIN_IMAGES → 추가 AI 사진 생성 후 이미지 없는 섹션에 배포
+    ★ 데이터 내장 슬롯 우선 (사용자 박제 2026-07-03): 자비스02 가 대본에
+    [CHART_N]...[/CHART_N] 블록으로 차트 데이터 전체를 박아 옴 → 자비스06 은
+    ref_datasets(자비스09 원본 — 검증 대조용) 대조 후 렌더만. 검증·렌더 실패
+    슬롯은 구형식 [CHART_N: 제목] 으로 강등 → 아래 AI 사진 폴백이 이어받음.
 
-    Args:
-        content: Pass-1 텍스트 ([CHART_N: ...] 플레이스홀더 포함)
-        keyword: 글 주제
-        sector: 섹터
-        platform: 플랫폼 (tistory/naver)
+    (구형식 [CHART_N: 설명] 슬롯 = 세션풀 기반 종전 경로 — 폴백 호환)
 
     Returns:
-        str: 플레이스홀더가 실제 이미지로 치환된 content (최소 _MIN_IMAGES 장 보장 시도)
+        str: 슬롯이 실제 이미지로 치환된 content (최소 _MIN_IMAGES 장 보장 시도)
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # [CHART_N: description] 플레이스홀더 찾기
+    _img_dir_slot = OUTPUT_IMG_DIR / (f"economic_{platform}" if platform in ("tistory", "naver") else "economic_tistory")
+    _img_dir_slot.mkdir(parents=True, exist_ok=True)
+
+    # ── 0단계: ★ 데이터 내장 슬롯 렌더 (자비스06 = 렌더러) ─────────────────
+    try:
+        from JARVIS06_IMAGE.slot_renderer import render_slots_in_text
+        import uuid as _uuid_s
+        content, _slot_ok, _slot_total = render_slots_in_text(
+            content, ref_datasets, _img_dir_slot,
+            run_id=_uuid_s.uuid4().hex[:8], theme=keyword)
+        if _slot_total:
+            print(f"  🎨 [Pass-2/{platform}] 데이터 내장 슬롯 {_slot_ok}/{_slot_total}개 렌더")
+    except Exception as _sre:
+        print(f"  ⚠️ [Pass-2/{platform}] 내장 슬롯 처리 스킵: {_sre}")
+
+    # [CHART_N: description] 플레이스홀더 찾기 (구형식 + 내장 슬롯 강등분)
     placeholders = re.findall(r"\[CHART_(\d+):\s*([^\]]+)\]", content)
     if not placeholders:
         return content
@@ -453,6 +469,8 @@ def generate_article_html(
     supreme_block: str,
     platform: str = "tistory",
     collection_docs: list | None = None,
+    ref_datasets: list | None = None,
+    gate_feedback: list | None = None,
 ) -> str:
     """2-pass Claude Code SDK → 텍스트 + inline SVG 완성 원고 HTML.
 
@@ -463,6 +481,13 @@ def generate_article_html(
     Returns:
         str: 완전한 HTML 문서. 실패 시 빈 문자열.
     """
+    # ★ 게이트 차단 사유 주입 (ERRORS [311]) — supreme_block 합류로 병렬·CLI 폴백
+    #   모든 Pass-1 변형이 자동 상속 (재작성 시 같은 창작 수치 재생산 방지)
+    if gate_feedback:
+        from JARVIS02_WRITER.draft_writer import build_gate_feedback_block as _gfb
+        supreme_block = (supreme_block or "") + _gfb(gate_feedback)
+        print(f"  🔁 [Pass-1/{platform}] 직전 차단 사유 {len(gate_feedback)}건 주입 — 재작성")
+
     # Pass-1 선택: 기존(느림) vs 섹션별 병렬(빠름)
     # 기본: 섹션별 병렬로 생성하고, 오류 시 기존 방식 폴백
     raw = _generate_text_pass1_parallel(keyword, sector, reason, supreme_block, platform)
@@ -488,7 +513,9 @@ def generate_article_html(
                 f"{keyword}, 지금 왜 이렇게 주목받는 건가요?"
 
     # ★ Pass-2: [CHART_N: ...] 플레이스홀더 → SVG 치환 (필수!)
-    content = _generate_svg_pass2_and_replace(content, keyword, sector, platform, collection_docs=collection_docs)
+    content = _generate_svg_pass2_and_replace(content, keyword, sector, platform,
+                                              collection_docs=collection_docs,
+                                              ref_datasets=ref_datasets)
 
     kc = _L.count(content)
     svg_count = len(re.findall(r"<svg[\s>]", content, re.IGNORECASE))
@@ -595,8 +622,13 @@ def save_article_html(html: str, keyword: str, platform: str = "") -> tuple:
     html_dir.mkdir(parents=True, exist_ok=True)
     img_dir.mkdir(parents=True, exist_ok=True)
 
-    # JPG(SVG 스크린샷) 만 삭제 — PNG(matplotlib 차트)는 Pass-2 에서 이미 생성됨
+    # ★ 발행 도중 이미지 삭제 금지 (ERRORS [291] — 2026-07-03): 인포그래픽 엔진(2026-06-30)이
+    #   차트를 .jpg 로 출력하면서, 옛 "JPG=SVG 스크린샷" 가정의 일괄 삭제가 Pass-2 인포그래픽
+    #   전량을 렌더 직후 파괴 → image-validate 누락 → 제4조 위반 순환. 폴더 리셋은 draft 시작 시
+    #   _cleanup_*_images() 가 담당 — 여기서는 *본문이 참조하지 않는* 잔재만 제거.
     for old_f in img_dir.glob("*.jpg"):
+        if old_f.name in html or str(old_f) in html:
+            continue   # 본문 참조 이미지 — 삭제 금지
         old_f.unlink(missing_ok=True)
     old_html = html_dir / "article.html"
     if old_html.exists():

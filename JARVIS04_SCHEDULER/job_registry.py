@@ -30,6 +30,11 @@ except ImportError:
 
 DEFAULT_JOBS: list[dict] = [
     # ── JARVIS03 RADAR ─────────────────────────────────────────
+    # ★ 06:00 조기 수집 (ERRORS [290] — 2026-07-03): 종전 최조기 09:00 은 06:30 경제
+    #   브리핑보다 늦어 아침 발행이 *항상* 전일 폴백 데이터(신선도·DataLab 無) 사용.
+    {"id":"radar_trends_06", "name":"트렌드 수집(06시 — 경제 브리핑 前)", "trigger":"cron",
+     "kwargs":{"hour":6,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
+     "misfire_grace_time":1200, "owner":"jarvis03_radar"},
     {"id":"radar_trends_09", "name":"트렌드 수집(09시)",  "trigger":"cron",
      "kwargs":{"hour":9,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
      "misfire_grace_time":3600, "owner":"jarvis03_radar"},
@@ -184,6 +189,13 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"j07_vector_backfill", "name":"벡터 인덱스 백필 (매주 일요일 02:30)", "trigger":"cron",
      "kwargs":{"day_of_week":"sun", "hour":2, "minute":30},
      "callback":"JARVIS07_GUARDIAN.vector_store.job_build_vector_index",
+     "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
+    # ★ 글 품질 강화학습 보상 귀속 (ADR 014 — 2026-07-03) — 매일 23:45.
+    #   daily_review(22:00)·learn_log(23:30) 이후 실행: 주입 인사이트 ↔ 분석 결과
+    #   매칭 → 보상 계산 → weight EMA 갱신. LLM 호출 0 (순수 통계).
+    {"id":"j07_quality_learn",  "name":"글 품질 강화학습 보상 귀속 (매일 23:45)", "trigger":"cron",
+     "kwargs":{"hour":23, "minute":45},
+     "callback":"JARVIS07_GUARDIAN.quality_learner.job_quality_learn",
      "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
     # ── JARVIS09 COLLECTOR ────────────────────────────────────────────
     {"id":"j09_cleanup",        "name":"COLLECTOR 7일 캐시 정리 (매주 월요일 03:00)", "trigger":"cron",

@@ -26,6 +26,7 @@ exit code 1 → git pre-commit 훅이 자동 차단.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -62,12 +63,50 @@ def _is_excluded(path: Path, extra: tuple[str, ...] = ()) -> bool:
     return False
 
 
+# ★ 성능 (2026-07-03): rglob 이 .venv 수천 파일까지 매 검증마다 재탐색하던 것을
+#   root 별 1회 walk 로 캐시. os.walk 로 제외 디렉토리는 하강 자체를 차단.
+#   ⚠️ 캐시는 one-shot 프로세스 전제 — 장수 프로세스에서 run() 재호출 금지 (stale).
+#   ⚠️ _PRUNE_DIRS 는 _GLOBAL_EXCLUDE 의 *부분집합*(무조건 제외만) 유지 —
+#      'backups' 처럼 경로 한정 제외(shared/backups)는 _is_excluded 가 담당.
+_RGLOB_CACHE: dict[str, list[Path]] = {}
+_PRUNE_DIRS = {"__pycache__", ".venv", ".git", "node_modules", "chrome_profile"}
+
+
+def _walk_py(root: Path) -> list[Path]:
+    key = str(root)
+    if key not in _RGLOB_CACHE:
+        found: list[Path] = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRS]
+            for fn in filenames:
+                if fn.endswith(".py"):
+                    found.append(Path(dirpath) / fn)
+        _RGLOB_CACHE[key] = found
+    return _RGLOB_CACHE[key]
+
+
 def _iter_py(extra_exclude: tuple[str, ...] = (), root: Path = ROOT) -> Iterable[Path]:
     """ROOT 하위 *.py 순회 (제외 경로 자동 필터)."""
-    for p in root.rglob("*.py"):
+    for p in _walk_py(root):
         if _is_excluded(p, extra_exclude):
             continue
         yield p
+
+
+# ★ 성능 (2026-07-03): 검증 30여 종이 각각 전체 트리를 재읽던 것을 1회 읽기로.
+#   precommit 은 one-shot 프로세스 — 실행 중 파일 변경 없음 전제로 캐시 안전.
+_FILE_CACHE: dict[str, str | None] = {}
+
+
+def _read_py(p: Path) -> str | None:
+    """파일 내용 반환 (읽기 실패 시 None). 프로세스 수명 동안 캐시."""
+    key = str(p)
+    if key not in _FILE_CACHE:
+        try:
+            _FILE_CACHE[key] = p.read_text(encoding="utf-8")
+        except Exception:
+            _FILE_CACHE[key] = None
+    return _FILE_CACHE[key]
 
 
 def _docstring_lines(source: str) -> set[int]:
@@ -146,9 +185,8 @@ def check_infra(report: Report) -> None:
     pat3 = re.compile(r"^def (handle_command|handle_safe_intent|execute_approval)\b")
 
     for p in _iter_py(extra_exclude=extra):
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         rel = p.relative_to(ROOT)
         rel_s = str(rel)
@@ -216,9 +254,8 @@ def check_length(report: Report) -> None:
         for p in _iter_py(root=root):
             if any(a in str(p) for a in allowed):
                 continue
-            try:
-                text = p.read_text(encoding="utf-8")
-            except Exception:
+            text = _read_py(p)
+            if text is None:
                 continue
             rel = p.relative_to(ROOT)
             rel_s = str(rel)
@@ -259,9 +296,8 @@ def check_blog(report: Report) -> None:
     writer = ROOT / "JARVIS02_WRITER"
     if writer.exists():
         for p in _iter_py(root=writer):
-            try:
-                text = p.read_text(encoding="utf-8")
-            except Exception:
+            text = _read_py(p)
+            if text is None:
                 continue
             rel = p.relative_to(ROOT)
             for i, line in enumerate(text.splitlines(), 1):
@@ -293,9 +329,8 @@ def check_schedule(report: Report) -> None:
     for p in _iter_py():
         rel = p.relative_to(ROOT)
         rel_s = str(rel)
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             ls = line.strip()
@@ -396,9 +431,8 @@ def check_autocode(report: Report) -> None:
     for p in _iter_py():
         rel = p.relative_to(ROOT)
         rel_s = str(rel)
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if pat1.search(line) and "JARVIS01_MASTER/agent_tools.py" not in rel_s:
@@ -436,9 +470,8 @@ def check_tools(report: Report) -> None:
         # tests 디렉토리는 도구 등록 검증 대상 외 (테스트용 등록 정당)
         if "/tests/" in rel_s or rel_s.startswith("tests/"):
             continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         lines = text.splitlines()
         for i, line in enumerate(lines, 1):
@@ -487,9 +520,8 @@ def check_image(report: Report) -> None:
         rel_s = str(rel)
         if img_dir in rel_s or any(a in rel_s for a in allow_files):
             continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if pat1.search(line):
@@ -589,21 +621,37 @@ def check_domain_diffusion(report: Report) -> None:
     각 도메인의 *active* 가 True 인 것만 적용 (Phase 진행에 따라 단계적 활성).
     """
     cat = "domain"
-    for owner in _DOMAIN_OWNERSHIP:
-        if not owner.get("active", False):
+    active_owners = [o for o in _DOMAIN_OWNERSHIP if o.get("active", False)]
+    if not active_owners:
+        return
+    # ★ 성능 (2026-07-03): 파일 1회 읽기 + 전체 텍스트 프리필터.
+    #   종전 owner×files 재읽기 O(5×N) → O(N). 대부분 파일은 패턴 미포함 →
+    #   라인 단위 스캔 자체를 스킵. 데몬 부팅·pre-commit 훅 지연 제거.
+    #   ★ 프리필터는 반드시 MULTILINE 재컴파일 사용 — 패턴의 `^` 가 라인 단위
+    #   시멘틱(종전 pat.search(line))을 유지해야 함. 전체 텍스트에 원본 패턴을
+    #   그대로 쓰면 `^`=파일 첫 바이트가 되어 검출이 무력화됨 (교차 리뷰 발견).
+    for owner in active_owners:
+        if "_prefilter" not in owner:
+            owner["_prefilter"] = [
+                re.compile(pat.pattern, pat.flags | re.MULTILINE)
+                for pat, _ in owner["patterns"]
+            ]
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        text = _read_py(p)
+        if text is None:
             continue
-        owner_dirs = owner["owner_dirs"]
-        for p in _iter_py():
-            rel = p.relative_to(ROOT)
-            rel_s = str(rel)
+        lines = None  # lazy split — 프리필터 통과 시에만
+        for owner in active_owners:
             # owner 안이면 검증 제외
-            if any(od in rel_s for od in owner_dirs):
+            if any(od in rel_s for od in owner["owner_dirs"]):
                 continue
-            try:
-                text = p.read_text(encoding="utf-8")
-            except Exception:
+            # 전체 텍스트 프리필터 (MULTILINE) — 어떤 패턴도 없으면 라인 스캔 생략
+            if not any(mpat.search(text) for mpat in owner["_prefilter"]):
                 continue
-            for i, line in enumerate(text.splitlines(), 1):
+            if lines is None:
+                lines = text.splitlines()
+            for i, line in enumerate(lines, 1):
                 ls = line.strip()
                 if ls.startswith("#"):
                     continue
@@ -617,7 +665,7 @@ def check_domain_diffusion(report: Report) -> None:
                             f"{desc} — {line.strip()[:80]}",
                         ))
                         break
-        report.checks_run += 1
+    report.checks_run += len(active_owners)
 
 
 # ============================================================================
@@ -643,9 +691,8 @@ def check_harness(report: Report) -> None:
         rel_s = str(p.relative_to(ROOT))
         if rel_s == legit_file or rel_s == "shared/precommit_check.py":
             continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if pat_def.match(line):
@@ -679,9 +726,8 @@ def check_harness(report: Report) -> None:
         rel_s = str(p.relative_to(ROOT))
         if rel_s == "shared/precommit_check.py":
             continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         if "from JARVIS00_INFRA.harness import" not in text:
             continue
@@ -710,9 +756,8 @@ def check_harness(report: Report) -> None:
         if rel_s in ("shared/precommit_check.py",
                      "JARVIS02_WRITER/trend_economic_writer.py"):
             continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if pat_legacy_pub.search(line):
@@ -759,9 +804,8 @@ def check_preflight(report: Report) -> None:
         rel_s = str(p.relative_to(ROOT))
         if rel_s == legit_file or rel_s == "shared/precommit_check.py":
             continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if pat_def.match(line):
@@ -851,9 +895,8 @@ def check_auth(report: Report) -> None:
             continue
         if any(l == rel_s for l in legit):
             continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             ls = line.strip()
@@ -869,9 +912,8 @@ def check_auth(report: Report) -> None:
         rel_s = str(p.relative_to(ROOT))
         if any(l == rel_s for l in legit):
             continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if pat_def.match(line):
@@ -930,9 +972,8 @@ def check_verification(report: Report) -> None:
         rel_s = str(p.relative_to(ROOT))
         if rel_s == "JARVIS00_INFRA/verification.py":
             continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if pat_def.match(line):
@@ -974,9 +1015,8 @@ def check_model(report: Report) -> None:
 
     for p in _iter_py():
         rel_s = str(p.relative_to(ROOT))
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
+        text = _read_py(p)
+        if text is None:
             continue
         is_haiku_allow = any(a in rel_s for a in haiku_allow)
         is_modelid_allow = any(a in rel_s for a in modelid_allow)

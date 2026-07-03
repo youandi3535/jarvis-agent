@@ -150,13 +150,24 @@ SECTOR_COLORS: dict[str, str] = {
 # ── 분류 ──────────────────────────────────────────────────────
 
 def classify_keyword(keyword: str) -> str:
+    """키워드 → 섹터 분류 (하위 호환 wrapper — 신뢰도는 classify_keyword_conf 사용)."""
+    sector, _confident = classify_keyword_conf(keyword)
+    return sector
+
+
+def classify_keyword_conf(keyword: str) -> tuple[str, bool]:
     """
-    키워드 → 섹터 분류 (3단계 우선순위)
+    키워드 → (섹터, 신뢰도) 분류 (3단계 우선순위)
 
     1. COMPOUND_PRIORITY: 복합 단어 조합이 모두 포함되면 즉시 반환
        예) "이란 미국" → 사회·이슈 (여행 오분류 방지)
     2. 완전 매칭 / 하위문자열 매칭: 가장 긴 hint가 이긴다 (specificity 우선)
     3. 단어 단위 매칭: 가중치 0.8 (단독 단어는 복합보다 낮은 우선순위)
+
+    ★ 신뢰도 (ERRORS [290] — 2026-07-03): '은행나무'가 힌트 '은행'(2글자) 부분 포함만으로
+    금융·투자 오분류 → 경제 브리핑에 임업 글 발행 사고. 짧은 힌트(≤2글자)의 부분 문자열
+    매칭만으로 결정되고 키워드가 힌트보다 긴 경우 confident=False — 호출자(score_keywords)가
+    LLM 재분류 대상에 포함해 교정 기회 부여.
     """
     kw_lower    = keyword.lower()
     kw_no_space = re.sub(r"[^가-힣a-z0-9]", "", kw_lower)
@@ -165,15 +176,17 @@ def classify_keyword(keyword: str) -> str:
     # ── 1단계: 복합 패턴 우선 ──────────────────────────────
     for required_words, sector in COMPOUND_PRIORITY:
         if all(w in kw_words or w in kw_lower for w in required_words):
-            return sector
+            return sector, True
 
     best_sector = "기타"
     best_score  = 0
+    best_hint_len = 0
+    best_exact_word = False
 
     # ── 엔티티 기반 오버라이드 ─────────────────────────────
     for entity_hint, sector in ENTITY_SECTOR_OVERRIDES.items():
         if entity_hint.lower() in kw_lower:
-            return sector
+            return sector, True
 
     for sector, hints in SECTORS.items():
         for hint in hints:
@@ -182,19 +195,21 @@ def classify_keyword(keyword: str) -> str:
 
             # ── 2단계: 완전 매칭 (최고 우선) ───────────────
             if kw_lower == hint_lower or kw_no_space == hint_no_space:
-                return sector
+                return sector, True
 
             # ── 2단계: 부분 문자열 매칭 ─────────────────────
             if hint_lower in kw_lower or kw_lower in hint_lower:
                 score = len(hint_lower) * 1.0
                 if score > best_score:
                     best_score, best_sector = score, sector
+                    best_hint_len, best_exact_word = len(hint_lower), False
                 continue
 
             if hint_no_space in kw_no_space or kw_no_space in hint_no_space:
                 score = len(hint_no_space) * 1.0
                 if score > best_score:
                     best_score, best_sector = score, sector
+                    best_hint_len, best_exact_word = len(hint_no_space), False
                 continue
 
             # ── 3단계: 단어 단위 매칭 (낮은 우선순위) ────────
@@ -205,8 +220,16 @@ def classify_keyword(keyword: str) -> str:
                     score = len(word) * 0.7
                     if score > best_score:
                         best_score, best_sector = score, sector
+                        best_hint_len = len(word)
+                        best_exact_word = (word == hint_lower)
 
-    return best_sector
+    if best_sector == "기타":
+        return best_sector, True   # '기타'는 기존 경로대로 LLM 재분류 대상
+
+    # ★ 저신뢰: 2글자 이하 힌트의 부분 매칭 + 키워드가 힌트보다 긴 복합어
+    #   ('은행나무'·'금리는'·'대출은' 류) → LLM 재검증 필요
+    confident = best_exact_word or best_hint_len >= 3 or len(kw_no_space) <= best_hint_len
+    return best_sector, confident
 
 
 # ── LLM Fallback 분류 ────────────────────────────────────────
@@ -386,7 +409,7 @@ def score_keywords(
     competition = competition or {}
 
     for i, kw in enumerate(trending):
-        sector    = classify_keyword(kw)
+        sector, _sec_conf = classify_keyword_conf(kw)
         rank_score = max(10, round(100 - (i / max(total, 1)) * 90))
 
         # DataLab velocity
@@ -406,7 +429,8 @@ def score_keywords(
             "competition":    comp_val,
         }
         results.append(item)
-        if sector == "기타":
+        # ★ '기타' + 저신뢰 매칭(짧은 힌트 부분 포함 — '은행나무' 류) 모두 LLM 재분류 (ERRORS [290])
+        if sector == "기타" or not _sec_conf:
             llm_needed.append(kw)
 
     if llm_needed:

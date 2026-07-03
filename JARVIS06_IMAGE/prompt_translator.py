@@ -60,9 +60,16 @@ def translate(text_ko: str) -> str:
             log.debug(f"[Translator] '{text_ko[:30]}' → '{en[:60]}'")
             return en
     except Exception as e:
-        log.warning(f"[Translator] 번역 실패: {e} — 원문 사용")
+        log.warning(f"[Translator] 번역 실패: {e}")
         _g_report("image", e, module=__name__)
-    return text_ko
+    # ★ LLM 실패·빈 응답(rate-limit) 폴백 (사용자 박제 2026-07-03) — 한국어 원문 *단독* 반환 금지.
+    #   Flux/SDXL 은 한국어 해석이 약해 주제 무관 임의 이미지가 나옴 (poll_*.png 무관 사진 사고).
+    #   한국어 주제를 유지하되 영어 실사 스타일·negative 앵커로 감싸 주제 이탈 최소화.
+    log.warning(f"[Translator] LLM 미가용 — 스타일 앵커 폴백 사용: '{text_ko[:40]}'")
+    return (f"{text_ko}, real documentary photograph of this exact subject, "
+            "photorealistic, ultra detailed, sharp focus, professional photography, "
+            "no text, no letters, no watermark, no logo, "
+            "not abstract, not surreal, not conceptual art, not a metaphor")
 
 
 __all__ = ["translate"]

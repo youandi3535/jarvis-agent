@@ -367,6 +367,35 @@ def init_db():
         except Exception:
             pass
 
+        # ★ 글 품질 강화학습 (2026-07-03 — ADR 014): 인사이트 주입→성과 보상 귀속 사슬.
+        #   learning_insights 에 보상 누적 컬럼 + 주입 사용 기록(insight_usage) 테이블.
+        #   엔진 = JARVIS07_GUARDIAN/quality_learner.py (단일 진입점).
+        for _mig in (
+            "ALTER TABLE learning_insights ADD COLUMN reward_sum REAL DEFAULT 0",
+            "ALTER TABLE learning_insights ADD COLUMN reward_count INTEGER DEFAULT 0",
+            "ALTER TABLE learning_insights ADD COLUMN last_used_at TEXT",
+        ):
+            try:
+                conn.execute(_mig)
+            except Exception:
+                pass
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS insight_usage (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id    TEXT NOT NULL,          -- 같은 글에 함께 주입된 묶음
+                insight_id  INTEGER NOT NULL,       -- learning_insights.id
+                scope       TEXT DEFAULT 'all',     -- economic / theme / all
+                platform    TEXT DEFAULT '',        -- naver / tistory / '' (양쪽)
+                theme       TEXT DEFAULT '',
+                used_at     TEXT DEFAULT (datetime('now','localtime')),
+                analysis_id INTEGER,                -- 보상 귀속된 post_analysis.id
+                reward      REAL,                   -- NULL = 미귀속
+                rewarded_at TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_iu_pending ON insight_usage(reward, used_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_iu_insight ON insight_usage(insight_id)")
+
         # learn_log.naver_rank: 네이버 검색 노출 순위 (1~100, NULL = 미측정).
         # 조회수 외 핵심 학습 신호. 낮을수록 좋음 (1위 = 최상). actual_views 와 함께 적재.
         try:
@@ -2058,6 +2087,97 @@ def decay_learning_insights(min_weight: float = 0.05) -> int:
         )
         n = cur.rowcount or 0
     return n
+
+
+# ── 글 품질 강화학습 보상 사슬 (ADR 014 — 2026-07-03) ─────────────
+#   알고리즘(UCB 선택·보상 계산·EMA 갱신)은 JARVIS07_GUARDIAN/quality_learner.py
+#   단일 진입점. 여기는 순수 SQL 헬퍼만.
+
+def get_ranked_learning_insights(scope: str = "", limit: int = 8,
+                                 days: int = 21) -> list[dict]:
+    """UCB 랭킹용 원자료 — effective_weight + 사용횟수 + 평균보상 포함."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT li.*,
+                      li.weight * power(0.7, max(0, julianday('now','localtime')
+                                                    - julianday(li.last_seen)) / 7.0)
+                          AS effective_weight,
+                      COALESCE(u.uses, 0)         AS uses,
+                      COALESCE(u.rewarded, 0)     AS rewarded
+               FROM learning_insights li
+               LEFT JOIN (SELECT insight_id, COUNT(*) AS uses,
+                                 COUNT(reward) AS rewarded
+                          FROM insight_usage GROUP BY insight_id) u
+                    ON u.insight_id = li.id
+               WHERE li.last_seen >= date('now','localtime',?)
+                 AND (? = '' OR COALESCE(li.scope,'all') IN (?, 'all'))
+               ORDER BY effective_weight DESC
+               LIMIT ?""",
+            (f"-{int(days)} day", scope, scope, int(limit) * 3),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def record_insight_usage(batch_id: str, insight_ids: list,
+                         scope: str = "all", platform: str = "",
+                         theme: str = "") -> int:
+    """주입된 인사이트 묶음을 사용 기록 (보상 귀속 대기)."""
+    if not insight_ids:
+        return 0
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        conn.executemany(
+            "INSERT INTO insight_usage (batch_id, insight_id, scope, platform, theme) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [(batch_id, int(i), scope, platform, theme[:120]) for i in insight_ids],
+        )
+        conn.execute(
+            f"UPDATE learning_insights SET last_used_at = ? "
+            f"WHERE id IN ({','.join('?' * len(insight_ids))})",
+            [now, *[int(i) for i in insight_ids]],
+        )
+    return len(insight_ids)
+
+
+def get_unrewarded_usage(days: int = 3) -> list[dict]:
+    """reward 미귀속 사용 기록 (최근 N일)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT * FROM insight_usage
+               WHERE reward IS NULL
+                 AND used_at >= datetime('now','localtime',?)
+               ORDER BY used_at ASC""",
+            (f"-{int(days)} day",),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def apply_insight_reward(usage_id: int, insight_id: int, analysis_id: int,
+                         reward: float, alpha: float = 0.3,
+                         update_weight: bool = True) -> None:
+    """보상 귀속 — usage 행 마감 + learning_insights 가중치 EMA 갱신.
+
+    weight ← clamp(0.05, 3.0, weight + alpha*(reward - 0.5))
+    reward 0.5 중립 기준: 좋은 글(제안 적음) → weight ↑, 나쁜 글 → ↓.
+    update_weight=False: usage 마감(부기)만 — 같은 (insight, analysis) 쌍
+    중복 보상 방지용 (quality_learner 가 판단).
+    """
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE insight_usage SET reward = ?, analysis_id = ?, rewarded_at = ? "
+            "WHERE id = ?",
+            (float(reward), int(analysis_id), now, int(usage_id)),
+        )
+        if update_weight:
+            conn.execute(
+                """UPDATE learning_insights
+                   SET reward_sum   = COALESCE(reward_sum, 0) + ?,
+                       reward_count = COALESCE(reward_count, 0) + 1,
+                       weight       = max(0.05, min(3.0, weight + ? * (? - 0.5)))
+                   WHERE id = ?""",
+                (float(reward), float(alpha), float(reward), int(insight_id)),
+            )
 
 
 # ── JARVIS05 VISION ───────────────────────────────────────────

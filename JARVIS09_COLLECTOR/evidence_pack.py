@@ -45,13 +45,10 @@ except ImportError:
 
 _OUT_DIR = Path(__file__).parent / "output" / "evidence"
 
-# 출처 신뢰 등급 (discovery.py 도메인 티어와 동일 철학 — 표시용 간이 맵)
-_TIER_BY_TYPE = {
-    "kosis": 1, "ecos": 1, "dart": 1, "krx": 1, "kor_econ": 1,
-    "academic": 1, "kci": 1,
-    "naver_news": 2, "news": 2, "finance": 2, "web_data": 2,
-    "web": 3, "blog": 4,
-}
+# ★ 출처 신뢰 등급 — models.SOURCE_TRUST_TIER 단일 진입점 (사용자 박제 2026-07-03 — ADR 013)
+#   논문(1) > 공식 API(2) > 뉴스(3) > 기사(4) > 웹(5) > 블로그(6).
+#   중복 fact 충돌 시 낮은 티어(=높은 신뢰)가 이긴다 (_dedupe_facts).
+from .models import SOURCE_TRUST_TIER as _TIER_BY_TYPE
 
 _EXTRACT_SYSTEM = """당신은 팩트체커 겸 리서처다. 수집 문서에서 *문서에 실제로 적힌*
 사실만 추출한다. 문서에 없는 내용을 추론·창작하면 절대 안 된다.
@@ -155,7 +152,7 @@ def _extract_facts_batch(theme: str, plan: dict, docs: list,
                 "name": str(_doc_attr(d, "title"))[:80] or src_type,
                 "url": str(_doc_attr(d, "url")),
                 "type": src_type,
-                "tier": _TIER_BY_TYPE.get(src_type, 3),
+                "tier": _TIER_BY_TYPE.get(src_type, 5),
             },
             "confidence": conf,
         })
@@ -167,7 +164,7 @@ def _dedupe_facts(facts: list[dict], sim_threshold: float = 0.86) -> list[dict]:
     if len(facts) <= 1:
         return facts
     # 티어(낮을수록 좋음) → confidence 순 정렬 후 앞선 것 우선 보존
-    ordered = sorted(facts, key=lambda f: (f["source"].get("tier", 3), -f.get("confidence", 0)))
+    ordered = sorted(facts, key=lambda f: (f["source"].get("tier", 5), -f.get("confidence", 0)))
     kept: list[dict] = []
     try:
         from shared.embeddings import embed_texts, available
@@ -226,7 +223,7 @@ def build_evidence_pack(theme: str, plan: dict, docs: list,
     문서 우선순위: 신뢰 티어 좋은 소스 먼저 배치에 태운다 (배치 수 제한 내 최대 가치).
     """
     docs = list(docs or [])
-    docs.sort(key=lambda d: _TIER_BY_TYPE.get(str(_doc_attr(d, "source_type")), 3))
+    docs.sort(key=lambda d: _TIER_BY_TYPE.get(str(_doc_attr(d, "source_type")), 5))
     facts: list[dict] = []
     for bi in range(max_llm_batches):
         chunk = docs[bi * batch_size:(bi + 1) * batch_size]
@@ -350,7 +347,93 @@ def persist_evidence(pack: dict) -> str:
         return ""
 
 
+def _label_batch(statements: list[str]) -> list[str]:
+    """stat fact 문장 → 차트 라벨(6~14자) 배치 생성. LLM 1회, 실패 시 문장 앞부분 폴백.
+
+    ★ 숫자·단위·출처는 여기서 절대 다루지 않는다 — 라벨(이름)만 작명.
+    """
+    fallback = [s[:14] for s in statements]
+    try:
+        from shared.llm import invoke_text
+        joined = "\n".join(f"{i + 1}. {s[:90]}" for i, s in enumerate(statements))
+        raw = invoke_text(
+            "analyzer",
+            "다음 각 문장의 수치가 *무엇의 값* 인지 나타내는 6~14자 한국어 라벨을 지어라.\n"
+            "차트 축 라벨용 — 명사구만, 조사·서술어 금지 (예: '온실가스 감축률', '기준금리', "
+            "'태양광 설비용량').\n"
+            "★ 라벨은 수치의 *종류와 일치* — 금액이면 '~액'(예: 영업이익액), "
+            "비율(%)이면 '~률/비중', 개수면 '~수'. 문장 속 다른 지표명을 빌려오지 마라.\n"
+            f'문장 수와 같은 길이의 JSON 문자열 배열만 출력:\n{joined}',
+            max_tokens=800,
+        )
+        m = re.search(r"\[[\s\S]*\]", raw or "")
+        parsed = json.loads(m.group(0)) if m else None
+        if isinstance(parsed, list) and len(parsed) == len(statements):
+            return [str(x).strip()[:14] or fb for x, fb in zip(parsed, fallback)]
+    except Exception:
+        pass
+    return fallback
+
+
+def facts_to_datasets(pack: dict, max_datasets: int = 24) -> list[dict]:
+    """★ 수치 fact → 인포그래픽 데이터셋 승격 (사용자 박제 2026-07-03 — ADR 013 보강).
+
+    "수치는 텍스트 안에도 많다" — 근거팩의 kind=stat fact(값·단위·기준일·출처 박제)를
+    차트 엔진 dataset 형식으로 변환해, 공식 통계 테이블이 없는 주제에서도 인포그래픽
+    공급을 확대한다. 진실성 불변 조건:
+      - 값·단위·기준일·출처 = fact 그대로 (LLM 은 라벨 작명만)
+      - 범위값('1708~1733')·비수치 값은 스킵 (단일 수치만 — 거짓 차트 < 차트 없음)
+    그룹핑: (question_id, unit) — 같은 질문·같은 단위 fact 들이 한 차트의 행.
+    1행 그룹도 유효 (KPI 카드형 렌더).
+    """
+    stats = [f for f in (pack.get("facts") or []) if f.get("kind") == "stat"]
+    rows: list[tuple[dict, float]] = []
+    for f in stats:
+        _v = str(f.get("value", "")).replace(",", "").strip()
+        if not re.fullmatch(r"-?\d+(\.\d+)?", _v):
+            continue   # 범위·비수치 — 정직하게 차트화 불가 → 스킵
+        try:
+            rows.append((f, float(_v)))
+        except Exception:
+            continue
+    if not rows:
+        return []
+
+    labels = _label_batch([f["statement"] for f, _ in rows])
+
+    q_text_map = {q.get("id"): q.get("q", "")
+                  for q in (pack.get("plan") or {}).get("questions", [])}
+    theme = pack.get("theme", "")
+    groups: dict = {}
+    for (f, v), lb in zip(rows, labels):
+        key = (f.get("question_id") or "", (f.get("unit") or "").strip())
+        groups.setdefault(key, []).append((f, v, lb))
+
+    out: list[dict] = []
+    for (qid, unit), items in groups.items():
+        # 대표 출처 = 신뢰 티어 최상 fact (논문>API>뉴스>기사>웹 — ADR 013)
+        best = min(items, key=lambda x: x[0].get("source", {}).get("tier", 5))[0]
+        _q = (q_text_map.get(qid) or "").strip()
+        title = (_q[:26] if _q else f"{theme} 핵심 수치") + (f" ({unit})" if unit else "")
+        data = [{"label": (lb or f["statement"][:14]), "value": v}
+                for f, v, lb in items[:8]]
+        src = best.get("source") or {}
+        out.append({
+            "title": title,
+            "unit": unit,
+            "data": data,
+            "source": {"provider": f"evidence:{src.get('type', '')}",
+                       "name": src.get("name", ""),
+                       "url": src.get("url", ""),
+                       "as_of": best.get("as_of", "")},
+            "_from_facts": True,
+        })
+    out.sort(key=lambda d: -len(d["data"]))   # 다행(多行) 차트 우선
+    return out[:max_datasets]
+
+
 __all__ = [
     "build_evidence_pack", "coverage_gaps", "merge_pack",
     "evidence_brief", "as_source_docs", "persist_evidence",
+    "facts_to_datasets",
 ]

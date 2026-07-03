@@ -103,7 +103,8 @@ def _collect(theme: str) -> dict:
 def _build_blocks(theme: str, sector: str, stocks_data: dict, platform: str, img_dir: Path,
                   supreme_block: str | None = None,
                   collection_docs: list | None = None,
-                  evidence_pack: dict | None = None) -> dict:
+                  evidence_pack: dict | None = None,
+                  gate_feedback: list | None = None) -> dict:
     """대본 생성(JARVIS02) → 이미지 생성(JARVIS06) → 완성 블록 반환.
 
     ★ 사용자 박제 2026-05-31 — 역할 분리:
@@ -144,6 +145,7 @@ def _build_blocks(theme: str, sector: str, stocks_data: dict, platform: str, img
         theme, sector, stocks_data, supreme_block,
         platform=platform, collection_docs=collection_docs or [],
         evidence_pack=evidence_pack,
+        gate_feedback=gate_feedback,
     )
     if not draft_html:
         return {"success": False, "error": "Pass-1 대본 생성 실패", "blocks": [],
@@ -403,7 +405,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
 
     Layer 0: preflight (데몬 부팅 시 완료)
     Layer 1: precondition (theme 비어있지 않음)
-    Layer 2: ①규정로드 → ②수집+TS쿠키완료(글작성前보장) → ③TS → ④NV 대본 → ⑤쿠키확인
+    Layer 2: ①규정로드 → ②수집+TS쿠키완료(글작성前보장) → ③NV → ④TS 대본 → ⑤쿠키확인 (★ 네이버 우선 직렬 2026-07-03)
     Layer 3: 로그인 세션 + 2 플랫폼 draft 품질 검증 (최대 5회, 동일 실패 패턴 즉시 차단)
     Layer 4: Tistory/Naver Selenium 순차 발행
 
@@ -429,36 +431,17 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         print("  📜 [① 규정 로드] BLOG_SUPREME_LAW.md 숙지 완료")
         return {"supreme_block": sb}
 
-    @action_step(name="② 종목 수집 + TS쿠키 완료")
+    @action_step(name="② 종목·근거 수집")
     def _step_collect(state):
+        """공유 수집 — 종목 데이터 + JARVIS09 리서치. 두 플랫폼이 함께 사용.
+
+        ★ 플랫폼 직렬 (사용자 박제 2026-07-03): TS 쿠키 갱신은 여기서 하지 않는다 —
+        티스토리 *차례*(액션 2 시작)에 갱신해야 세션이 신선하다 (선로그인 대기 사망 방지).
+        """
         # ★ data_empty 재시도 스킵 (ERRORS [174]) — attempt 2+에서 종목 0개가 반복될 경우
         if state.get("_collect_data_empty"):
             print("  ⏭️ [② 수집] 이전 시도 종목 0개 — collect 재실행 스킵 (결과 동일 예상)")
             return {}
-
-        # ⓪ TS 쿠키 갱신 + 종목 수집 + JARVIS09 — 3개 동시 시작, 모두 완료 후 리턴
-        # 글 작성(③④) 전에 로그인 완료 보장
-        _exec = _TExec(max_workers=1)
-
-        def _refresh_ts():
-            try:
-                from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr
-                ok, drv = _tcr(force=True, return_driver=True)
-                if ok:
-                    load_dotenv(override=True)
-                    print("  ✅ [THEME] ⓪ 티스토리 쿠키 갱신 완료")
-                    return drv
-                if drv:
-                    try: drv.quit()
-                    except Exception: pass
-                return None
-            except Exception as e:
-                print(f"  ❌ [THEME] ⓪ 티스토리 쿠키 갱신 예외: {e}")
-                _g_report("writer", e, module=__name__)
-                return None
-
-        print("  🍪 [THEME] ⓪ 티스토리 쿠키 갱신 시작 (종목 수집과 병렬)")
-        _ts_fut = _exec.submit(_refresh_ts)
 
         _col_exec = _TExec(max_workers=1)
 
@@ -467,15 +450,38 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
 
             반환: {"docs": [...], "pack": dict|None}
             """
+            # ★ 키워드 단독 전송 금지 (사용자 박제 2026-07-03 — ADR 013 강제):
+            #   테마 키워드도 자비스03 프로필(정의·관련어)을 동봉해 JARVIS09 에 전달.
+            _angle = ""
+            try:
+                from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
+                _prof = _kw_prof(state["theme"], state.get("sector", ""))
+                _angle = (_prof.get("summary") or "").strip()
+                if _angle:
+                    state["theme_profile"] = _prof
+                    print(f"  🏷️ [THEME] 자비스03 프로필: {_angle[:60]}")
+            except Exception:
+                pass
             try:
                 if os.getenv("RESEARCH_FIRST", "1") != "0":
                     from JARVIS09_COLLECTOR import collect_research
-                    res = collect_research(state["theme"], state.get("sector", ""))
+                    res = collect_research(state["theme"], state.get("sector", ""),
+                                           angle=_angle)
                     docs = res.get("docs") or []
                     pack = res.get("evidence_pack") or None
                     n_facts = len((pack or {}).get("facts", []))
                     print(f"  ✅ [THEME] JARVIS09 리서치 수집 완료: 문서 {len(docs)}건 "
                           f"· 근거 fact {n_facts}개")
+                    # ★ 근거 품질 경고 (ERRORS [300]): 테마는 종목 실데이터가 1차 근거라
+                    #   차단하지 않고 가시화만 (조용한 강등 금지).
+                    if res.get("insufficient") or res.get("plan_fallback"):
+                        _tags = []
+                        if res.get("plan_fallback"):
+                            _tags.append("설계 폴백")
+                        if res.get("insufficient"):
+                            _tags.append(f"근거 부족(커버리지 {res.get('coverage_ratio')})")
+                        print(f"  ⚠️ [THEME] 리서치 품질 경고: {', '.join(_tags)}")
+                        _tg(f"⚠️ [THEME] '{state['theme']}' 리서치 품질 경고: {', '.join(_tags)}")
                     return {"docs": docs, "pack": pack}
             except Exception as e:
                 print(f"  ⚠️ [THEME] 리서치 수집 실패 — 종전 스윕 폴백: {e}")
@@ -496,25 +502,13 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         _empty = not (data.get("stocks") or [])
         if _empty:
             try:
-                _ts_fut.cancel()
-                _exec.shutdown(wait=False)
                 _col_fut.cancel()
                 _col_exec.shutdown(wait=False)
             except Exception:
                 pass
-            print("  ⏭️ [② 수집] 종목 0개 — TS 쿠키·JARVIS09 수집 취소")
+            print("  ⏭️ [② 수집] 종목 0개 — JARVIS09 수집 취소")
             return {"stocks_data": data, "_collect_data_empty": True,
-                    "ts_driver": None, "collection_docs": [], "evidence_pack": None}
-
-        # ★ 글 작성 전 쿠키 갱신 완료 대기 (글 작성 시작 전 로그인 보장)
-        _ts_driver = None
-        try:
-            _ts_driver = _ts_fut.result(timeout=300)
-        except Exception as e:
-            print(f"  ❌ [THEME] ⓪ 티스토리 쿠키 수령 실패: {e}")
-            _g_report("writer", e, module=__name__)
-        finally:
-            _exec.shutdown(wait=False)
+                    "collection_docs": [], "evidence_pack": None}
 
         # JARVIS09 결과 수령 (★ ADR 012 — 리서치 수집은 LLM 추출 포함, 넉넉히 대기)
         try:
@@ -526,35 +520,16 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         collection_docs = _col_res.get("docs") or []
         evidence_pack   = _col_res.get("pack") or None
 
-        print(f"  {'✅' if _ts_driver else '⚠️'} [THEME] ⓪ 로그인 {'완료' if _ts_driver else '실패 — 발행 시 재시도'} | 글 작성 시작")
-        return {"stocks_data": data, "ts_driver": _ts_driver,
+        print(f"  ✅ [② 수집] 종목 {len(data.get('stocks') or [])}개 · 문서 {len(collection_docs)}건 | 글 작성 시작")
+        return {"stocks_data": data,
                 "collection_docs": collection_docs,
                 "evidence_pack": evidence_pack}
 
-    @action_step(name="③ 티스토리 대본 생성")
-    def _step_ts_draft(state):
-        if state.get("_ts_draft_skip_regen"):
-            print("  ⏭️ [③ 티스토리] 이전 대본 검증 통과 — 재생성 건너뜀")
-            return {}
-        sd = state.get("stocks_data") or {}
-        if not sd.get("stocks"):
-            return {"ts_draft": {"success": False, "error": "종목 데이터 없음", "blocks": [], "content": "", "html": ""}}
-        try:
-            draft = _build_blocks(
-                state["theme"], state["sector"], sd, "tistory", TISTORY_IMG_DIR,
-                supreme_block=state.get("supreme_block"),
-                collection_docs=state.get("collection_docs") or [],
-                evidence_pack=state.get("evidence_pack"),
-            )
-        except Exception as e:
-            _g_report("writer", e, module=__name__)
-            draft = {"success": False, "error": str(e)[:120], "blocks": [], "content": "", "html": ""}
-        return {"ts_draft": draft, "_ts_draft_skip_regen": False}
-
-    @action_step(name="④ 네이버 대본 생성")
+    # ★ 직렬 순서 — 네이버 먼저, 티스토리 나중 (사용자 박제 2026-07-03)
+    @action_step(name="③ 네이버 대본 생성")
     def _step_nv_draft(state):
         if state.get("_nv_draft_skip_regen"):
-            print("  ⏭️ [④ 네이버] 이전 대본 검증 통과 — 재생성 건너뜀")
+            print("  ⏭️ [③ 네이버] 이전 대본 검증 통과 — 재생성 건너뜀")
             return {}
         sd = state.get("stocks_data") or {}
         if not sd.get("stocks"):
@@ -565,243 +540,226 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                 supreme_block=state.get("supreme_block"),
                 collection_docs=state.get("collection_docs") or [],
                 evidence_pack=state.get("evidence_pack"),
+                gate_feedback=state.get("_nv_draft_gate_feedback"),
             )
         except Exception as e:
             _g_report("writer", e, module=__name__)
             draft = {"success": False, "error": str(e)[:120], "blocks": [], "content": "", "html": ""}
         return {"nv_draft": draft, "_nv_draft_skip_regen": False}
 
-    @action_step(name="⑤ 티스토리 쿠키 확인")
-    def _step_ts_cookie_collect(state):
-        # ② 에서 이미 완료 — state 그대로 전달
-        _ts_driver = state.get("ts_driver")
-        print(f"  {'✅' if _ts_driver else '⚠️'} [⑤] 티스토리 driver {'준비됨' if _ts_driver else '없음 — 발행 시 재시도'}")
-        return {"ts_driver": _ts_driver}
+    @action_step(name="⑤ 티스토리 대본 생성")
+    def _step_ts_draft(state):
+        if state.get("_ts_draft_skip_regen"):
+            print("  ⏭️ [⑤ 티스토리] 이전 대본 검증 통과 — 재생성 건너뜀")
+            return {}
+        sd = state.get("stocks_data") or {}
+        if not sd.get("stocks"):
+            return {"ts_draft": {"success": False, "error": "종목 데이터 없음", "blocks": [], "content": "", "html": ""}}
+        try:
+            draft = _build_blocks(
+                state["theme"], state["sector"], sd, "tistory", TISTORY_IMG_DIR,
+                supreme_block=state.get("supreme_block"),
+                collection_docs=state.get("collection_docs") or [],
+                evidence_pack=state.get("evidence_pack"),
+                gate_feedback=state.get("_ts_draft_gate_feedback"),
+            )
+        except Exception as e:
+            _g_report("writer", e, module=__name__)
+            draft = {"success": False, "error": str(e)[:120], "blocks": [], "content": "", "html": ""}
+        return {"ts_draft": draft, "_ts_draft_skip_regen": False}
 
-    # ── Layer 3 검증 함수 ────────────────────────────────────
+    @action_step(name="④ 티스토리 쿠키 갱신")
+    def _step_ts_cookie(state):
+        """★ 플랫폼 직렬 (2026-07-03): 티스토리 액션 *시작* 시 갱신 — 세션 신선 보장.
 
-    def _verify_all(state):
-        """Layer 3 — 2 플랫폼 대본 전체 검증. list[Issue] 반환 (빈 리스트 = 통과).
-
-        ★ 순수 검증만 — 즉시 수정·fingerprint·abort는 harness fix 훅(_fix_theme_drafts)이 담당.
-        검증 범위 (사용자 박제 2026-05-17):
-          - [L1] 로그인 세션 유효성 (만료 시 자동 갱신 시도 → 실패 시 Issue)
-          - [L2] 종목 데이터 유효성
-          - [L3] 2 플랫폼 각각 규정 준수: 분량·키워드·이미지·헤더 등
+        (종전에는 ②에서 선로그인 후 네이버 발행 내내 대기 → 세션 사망 위험, ERRORS [265])
         """
+        if state.get("ts_driver") is not None:
+            print("  ⏭️ [④] 티스토리 driver 이미 준비됨 (재시도 — 재갱신 스킵)")
+            return {}
+        try:
+            from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr
+            ok, drv = _tcr(force=True, return_driver=True)
+            if ok:
+                load_dotenv(override=True)
+                print("  ✅ [④] 티스토리 쿠키 갱신 완료 (신선 세션)")
+                return {"ts_driver": drv}
+            if drv:
+                try:
+                    drv.quit()
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"  ❌ [④] 티스토리 쿠키 갱신 예외: {e}")
+            _g_report("writer", e, module=__name__)
+        print("  ⚠️ [④] 티스토리 driver 없음 — 발행 시 재로그인 폴백")
+        return {"ts_driver": None}
+
+    # ── Layer 3 검증·수정 — ★ 플랫폼 단위 (사용자 박제 2026-07-03: 끝까지 직렬) ──
+
+    def _verify_theme_platform(state, platform: str, draft_key: str, step_name: str,
+                               check_data: bool = False):
+        """Layer 3 — *단일 플랫폼* 대본 검증. list[Issue] 반환 (빈 리스트 = 통과)."""
         issues = []
 
-        # [L1] 로그인 세션 검증 (편집창 접속 가능 여부까지)
+        # [L1] 로그인 세션 검증 — ★ 리뷰 확정 수정 (2026-07-03): dict 반환은 항상
+        #   truthy 라 종전 체크 사문. *해당 플랫폼* ok 직접 판정.
         try:
             from JARVIS08_PUBLISH.credentials.login_manager import (
                 auto_refresh_if_needed as _auto_refresh,
                 verify_all_logins      as _verify_logins,
             )
             _auto_refresh()
-            if not _verify_logins():
+            _login_res = _verify_logins() or {}
+            _pl = _login_res.get(platform) or {}
+            if not _pl.get("ok", True):   # 구조 변경 시 fail-open
+                _why = "; ".join(_pl.get("issues") or ["재로그인 필요"])[:150]
                 issues.append(Issue(step="① 전제조건", kind="login_invalid",
-                    detail="로그인 세션 만료 — 재로그인 필요 (auto_refresh 후에도 실패)"))
+                    detail=f"{platform} 로그인 세션 무효 — {_why}"))
         except Exception as _le:
             issues.append(Issue(step="① 전제조건", kind="login_error",
                 detail=f"로그인 확인 오류: {_le}"))
 
-        # [L2] 종목 데이터 유효성
-        sd = state.get("stocks_data") or {}
-        if not sd.get("stocks"):
-            issues.append(Issue(step="② 종목 수집 + TS쿠키 시작", kind="data_empty",
-                detail="종목 데이터 0개 — 수집 실패"))
+        # [L2] 종목 데이터 유효성 (공유 수집을 실행한 네이버 액션에서만)
+        if check_data:
+            sd = state.get("stocks_data") or {}
+            if not sd.get("stocks"):
+                issues.append(Issue(step="② 종목·근거 수집", kind="data_empty",
+                    detail="종목 데이터 0개 — 수집 실패"))
 
-        # [L3] 2 플랫폼 대본 규정 준수 검증 (순수 "발견"만) ──────────────────
-        # ★ 수정·fingerprint·abort는 harness fix 훅(_fix_theme_drafts)이 자동 담당
-        _draft_map = {
-            "ts_draft": ("③ 티스토리 대본 생성", "tistory"),
-            "nv_draft": ("④ 네이버 대본 생성",   "naver"),
-        }
-        for key, (step_name, platform) in _draft_map.items():
-            draft = state.get(key) or {}
-            if not draft.get("success"):
-                issues.append(Issue(step=step_name, kind="draft_failed",
-                    detail=f"대본 생성 실패: {draft.get('error', 'unknown')}"))
-                continue
-            di_list = _layer3_verify_draft(draft, platform)
-            for di in di_list:
-                issues.append(Issue(step=step_name, kind="draft_quality", detail=di))
-            # ★ 발행 전 품질 게이트 (2026-06-28) — 구조 검증 통과 시에만.
-            #   테마글은 출처 약함(종목 0개 시 빈 코퍼스) → 웹 재검증을 1차 근거로
-            #   "웹에서도 확인 불가만 차단" (factuality_issues 의 source_weak 완화 자동).
-            if not di_list:
-                from JARVIS02_WRITER.prepublish_gate import prepublish_quality_issues
-                # ★ ADR 012 — 사실성 게이트 대조군에 근거 팩(fact 단위·출처 박제) 합류
-                _src_docs = list(state.get("collection_docs") or [])
-                try:
-                    if state.get("evidence_pack"):
-                        from JARVIS09_COLLECTOR.evidence_pack import as_source_docs
-                        _src_docs = _src_docs + as_source_docs(state["evidence_pack"])
-                except Exception:
-                    pass
-                for q in prepublish_quality_issues(
-                        draft, post_type="theme",
-                        source_docs=_src_docs,
-                        market_data=None,
-                        stocks_data=state.get("stocks_data")):   # ★ 1-c 실측 재무 결정론 대조
-                    issues.append(Issue(step=step_name, kind=q["kind"], detail=q["detail"]))
-
+        # [L3] 단일 플랫폼 대본 규정 준수 검증 (순수 "발견"만)
+        draft = state.get(draft_key) or {}
+        if not draft.get("success"):
+            issues.append(Issue(step=step_name, kind="draft_failed",
+                detail=f"대본 생성 실패: {draft.get('error', 'unknown')}"))
+            return issues
+        di_list = _layer3_verify_draft(draft, platform)
+        for di in di_list:
+            issues.append(Issue(step=step_name, kind="draft_quality", detail=di))
+        # ★ 발행 전 품질 게이트 (2026-06-28) — 구조 검증 통과 시에만.
+        if not di_list:
+            from JARVIS02_WRITER.prepublish_gate import prepublish_quality_issues
+            # ★ ADR 012 — 사실성 게이트 대조군에 근거 팩(fact 단위·출처 박제) 합류
+            _src_docs = list(state.get("collection_docs") or [])
+            try:
+                if state.get("evidence_pack"):
+                    from JARVIS09_COLLECTOR.evidence_pack import as_source_docs
+                    _src_docs = _src_docs + as_source_docs(state["evidence_pack"])
+            except Exception:
+                pass
+            for q in prepublish_quality_issues(
+                    draft, post_type="theme",
+                    source_docs=_src_docs,
+                    market_data=None,
+                    stocks_data=state.get("stocks_data")):   # ★ 1-c 실측 재무 결정론 대조
+                issues.append(Issue(step=step_name, kind=q["kind"], detail=q["detail"]))
         return issues
 
-    def _fix_theme_drafts(state: dict, issues: list) -> tuple:
-        """harness fix 훅 — Layer 3 draft_quality 이슈 즉시 패치 + GUARDIAN 학습.
+    def _fix_theme_platform(state: dict, issues: list, platform: str,
+                            draft_key: str, step_name: str) -> tuple:
+        """harness fix 훅 — *단일 플랫폼* draft_quality 인라인 패치 + GUARDIAN 학습.
 
-        ★ 전체 에이전트 디폴트 — harness.run_action이 verify 후 자동 호출.
-        흐름: 이슈 발견 → inline 패치(state 직접 수정) → GUARDIAN 2단 박제
-              (report_manual_fix + record_pattern_hit) → (fixed, unfixed) 반환.
-        harness가 fixed→학습, unfixed→fingerprint, 전체→재생성 자동 처리.
-        login_invalid / data_empty / draft_failed 등 패치 불가 항목은 unfixed 그대로 반환.
+        회복 불가(data_empty)는 kind="abort" 즉시 반환 → 상위가 테마 교체.
+        draft_failed 는 재생성 순환에 맡긴다 (LLM 재시도 기회 — _LLM_SKIP_PATTERNS 가
+        반복 거부 테마를 별도 차단).
         """
         from JARVIS02_WRITER.draft_fixer import fix_and_learn as _fx
-
-        _key_map = {
-            "③ 티스토리 대본 생성": ("ts_draft", "tistory"),
-            "④ 네이버 대본 생성":   ("nv_draft", "naver"),
-        }
-
-        # draft_quality 이슈를 step별로 묶기; 나머지(login, data_empty 등)는 즉시 unfixed
-        by_step: dict = {}
-        non_draft: list = []
-        for iss in issues:
-            if iss.kind == "draft_quality" and iss.step in _key_map:
-                by_step.setdefault(iss.step, []).append(iss.detail)
-            else:
-                non_draft.append(iss)
-
+        raw_strs = [i.detail for i in issues
+                    if i.kind == "draft_quality" and i.step == step_name]
+        non_draft = [i for i in issues
+                     if not (i.kind == "draft_quality" and i.step == step_name)]
         fixed_all: list = []
         unfixed_all: list = list(non_draft)
 
-        # 이슈가 없는 플랫폼은 재생성 불필요 표시 (재시도 시 이미지 폴더 불필요 리셋 방지)
-        # ★ draft_failed 이슈가 있는 플랫폼은 skip_regen 설정 금지 — 재생성해야 함
-        _non_draft_steps = {iss.step for iss in non_draft}
-        for step_name, (draft_key, _plat) in _key_map.items():
-            if step_name not in by_step and step_name not in _non_draft_steps:
-                state[f"_{draft_key}_skip_regen"] = True  # 이슈 없음 → 재생성 불필요
+        # ★ 게이트 차단 사유 → 재작성 프롬프트 피드백 (ERRORS [311] — 미전달 시
+        #   같은 창작 수치를 재생산해 max_attempts 그대로 소진)
+        _gate_details = [i.detail for i in non_draft
+                         if i.kind in ("factuality", "engagement") and i.detail]
+        if _gate_details:
+            _fb = list(state.get(f"_{draft_key}_gate_feedback") or [])
+            for d in _gate_details:
+                if d not in _fb:
+                    _fb.append(d)
+            state[f"_{draft_key}_gate_feedback"] = _fb[-8:]
 
-        for step_name, raw_strs in by_step.items():
-            draft_key, platform = _key_map[step_name]
+        # 재생성 필요성 표시 (재시도 시 이미지 폴더 불필요 리셋 방지)
+        # ★ 리뷰 확정 수정 (2026-07-03): 해당 step 의 *어떤* 이슈든(draft_failed 뿐 아니라
+        #   prepublish 게이트 factuality/engagement 포함) 있으면 skip 금지 — 재작성 순환 보존.
+        _has_step_issue = any(i.step == step_name for i in non_draft)
+        if not raw_strs and not _has_step_issue:
+            state[f"_{draft_key}_skip_regen"] = True   # 대본 이슈 없음 → 재생성 불필요
+        if raw_strs:
             fixed_strs, unfixed_strs = _fx(state, draft_key, platform, raw_strs, "theme")
             for s in fixed_strs:
                 fixed_all.append(Issue(step=step_name, kind="draft_fixed", detail=s))
             for s in unfixed_strs:
                 unfixed_all.append(Issue(step=step_name, kind="draft_invalid", detail=s))
-            # 수정 불가 이슈가 있으면 재생성 필요, 없으면 인라인 패치로 해결됨 → 재생성 불필요
+            # 수정 불가 이슈가 있으면 재생성 필요, 없으면 인라인 패치로 해결
             state[f"_{draft_key}_skip_regen"] = not bool(unfixed_strs)
 
-        # ★ 회복 불가 조건 → kind="abort" 직접 반환 (harness 즉시 차단, 2차 시도 낭비 없음)
-        _has_data_empty = any(iss.kind == "data_empty" for iss in non_draft)
-        _has_login_issue = any(iss.kind in ("login_invalid", "login_error") for iss in non_draft)
-        _all_steps = set(_key_map.keys())
-        _failed_steps = {iss.step for iss in non_draft if iss.kind == "draft_failed"}
-        _has_all_draft_failed = bool(_failed_steps) and _failed_steps >= _all_steps
-        _platforms_with_unfixed = {iss.step for iss in unfixed_all
-                                    if iss.kind in ("draft_failed", "draft_invalid")}
-        _has_partial_abort = (bool(_failed_steps) and _platforms_with_unfixed >= _all_steps)
-
-        _should_abort = (
-            (_has_data_empty or _has_all_draft_failed or _has_partial_abort)
-            and not _has_login_issue  # 로그인 오류는 재시도 가능 — abort 제외
-        )
-        if _should_abort:
-            _reason = (
-                "종목 데이터 0개 — 다른 테마로 전환 필요" if _has_data_empty else
-                "전 플랫폼 대본 생성 실패 — LLM 거부 또는 구조적 실패" if _has_all_draft_failed else
-                "부분 draft_failed + 나머지 플랫폼 수정 불가 — 재시도해도 동일 결과"
-            )
-            print(f"  ⚡ [fix] 회복 불가 확정 → abort 즉시 발동: {_reason}")
-            return fixed_all, [Issue(step="전체", kind="abort", detail=_reason)]
-
+        # ★ 회복 불가 조건 → abort (harness 즉시 차단, 2차 시도 낭비 없음)
+        _has_data_empty = any(i.kind == "data_empty" for i in non_draft)
+        _has_login_issue = any(i.kind in ("login_invalid", "login_error") for i in non_draft)
+        if _has_data_empty and not _has_login_issue:
+            print("  ⚡ [fix] 회복 불가 확정 → abort: 종목 데이터 0개 — 다른 테마로 전환 필요")
+            return fixed_all, [Issue(step="전체", kind="abort",
+                                     detail="종목 데이터 0개 — 다른 테마로 전환 필요")]
         return fixed_all, unfixed_all
 
-    # ── Layer 4 발행 함수 ────────────────────────────────────
+    # ── Layer 4 발행 — ★ 플랫폼 단위 (사용자 박제 2026-07-03: 끝까지 직렬) ──────
 
-    def _send_all(state):
-        """Layer 4 — 검증 통과 후 2 플랫폼 발행.
+    def _send_theme_platform(state, platform: str, draft_key: str,
+                             result_key: str, attempted_key: str):
+        """Layer 4 — *단일 플랫폼* 발행. 실패 시 raise → 이 플랫폼만 검증 순환 재진입.
 
-        ★ ADR 009 v2 strict 모드: 활성 플랫폼 *하나라도* 실패 시 raise → harness 재진입.
-        published_platforms 집합으로 이미 *진짜 성공한* 플랫폼은 재시도 시 스킵 (이중 발행 방지).
-
-        ★ 사용자 박제 2026-06-07 (ERRORS [265]) — 부분 실패 자율 회복:
-          attempt>=2 + 이전 실패 (success=False) → 플래그 해제 → 진짜 재발행 시도.
-          harness max_attempts=3 와 함께 최대 3회.
+        ★ 센티널 (ERRORS [265]): attempted 플래그는 시도 *전* 설정 (이중 발행 방지),
+          attempt>=2 + 이전 실패(success=False) → 플래그 해제 → 진짜 재발행 기회.
         """
-        _theme   = state["theme"]
-        _sector  = state["sector"]
-        _ts_drv  = state.get("ts_driver")
-
-        # ★ 이미 발행된 플랫폼 추적 (retry 시 이중 발행 방지)
-        published = state.setdefault("published_platforms", set())
-
-        # ★ attempt 추적 — 첫 호출 = 1, 재진입마다 +1 (ERRORS [265])
+        _theme  = state["theme"]
+        _sector = state["sector"]
         send_attempt = state.get("__send_attempt__", 0) + 1
         state["__send_attempt__"] = send_attempt
+        print(f"\n  📤 [Phase 2] {platform} 발행 (send_attempt={send_attempt})")
+        published = state.setdefault("published_platforms", set())
 
-        # ★ attempt >= 2 + 이전 실패 플랫폼 *플래그 해제* → 진짜 재발행 기회
-        if send_attempt >= 2:
-            _ts_prev = state.get("ts_pub_result", {})
-            _nv_prev = state.get("nv_pub_result", {})
-            if ("tistory" not in published and state.get("__ts_send_attempted__")
-                    and not _ts_prev.get("success")):
-                print(f"  🔄 [티스토리] attempt={send_attempt} — 이전 발행 실패 → 플래그 해제·재발행")
-                state["__ts_send_attempted__"] = False
-            if ("naver" not in published and state.get("__nv_send_attempted__")
-                    and not _nv_prev.get("success")):
-                print(f"  🔄 [네이버] attempt={send_attempt} — 이전 발행 실패 → 플래그 해제·재발행")
-                state["__nv_send_attempted__"] = False
+        # ★ attempt >= 2 + 이전 실패 → 플래그 해제 (진짜 재발행, ERRORS [265])
+        if (send_attempt >= 2 and platform not in published
+                and state.get(attempted_key)
+                and not (state.get(result_key) or {}).get("success")):
+            print(f"  🔄 [{platform}] 이전 발행 실패 → 플래그 해제·재발행")
+            state[attempted_key] = False
 
-        print(f"\n  📤 [Phase 2] 발행 (Tistory/Naver 순차, send_attempt={send_attempt})")
+        if platform in published:
+            print(f"  ⏭ {platform} 이미 발행 완료 (재시도 스킵)")
+            return
+        if state.get(attempted_key):
+            # 시도 플래그 잔존 + 해제 미발동(=성공 잔존) — 이중 발행 방지
+            print(f"  ⚠️ {platform} 발행 이미 시도 완료 (이중 방지)")
+            published.add(platform)
+            return
 
-        # Tistory
-        if "tistory" not in published:
-            if state.get("__ts_send_attempted__"):
-                # ★ 이미 시도+성공 케이스 — 이중 발행 방지로 published 처리
-                print("  ⚠️ 티스토리 발행 이미 시도 완료 (이중 방지)")
-                published.add("tistory")
-            else:
-                state["__ts_send_attempted__"] = True  # 반드시 시도 *전* 에 설정
-                ts_res = _publish_tistory(state.get("ts_draft", {}), _theme, _sector,
-                                          preloaded_driver=_ts_drv)
-                state["ts_pub_result"] = ts_res
-                if ts_res.get("success"):
-                    published.add("tistory")
+        state[attempted_key] = True  # 반드시 시도 *전* 에 설정
+        if platform == "naver":
+            res = _publish_naver(state.get(draft_key, {}), _theme, _sector)
         else:
-            print("  ⏭ 티스토리 이미 발행 완료 (재시도 스킵)")
+            _ts_drv = state.get("ts_driver")
+            if _ts_drv is not None:
+                try:
+                    _ = _ts_drv.title   # 세션 생존 확인
+                except Exception:
+                    print("  ⚠️ 티스토리 driver 세션 만료 — 발행 시 재로그인")
+                    _ts_drv = None
+            res = _publish_tistory(state.get(draft_key, {}), _theme, _sector,
+                                   preloaded_driver=_ts_drv)
+        state[result_key] = res
+        if res.get("success"):
+            published.add(platform)
+        print(f"  {'✅' if res.get('success') else '❌'} [{platform}] 테마 발행: {_theme}")
 
-        # Naver
-        if "naver" not in published:
-            if state.get("__nv_send_attempted__"):
-                # ★ 이미 시도+성공 케이스 — 이중 발행 방지로 published 처리
-                print("  ⚠️ 네이버 발행 이미 시도 완료 (이중 방지)")
-                published.add("naver")
-            else:
-                state["__nv_send_attempted__"] = True  # 반드시 시도 *전* 에 설정
-                nv_res = _publish_naver(state.get("nv_draft", {}), _theme, _sector)
-                state["nv_pub_result"] = nv_res
-                if nv_res.get("success"):
-                    published.add("naver")
-        else:
-            print("  ⏭ 네이버 이미 발행 완료 (재시도 스킵)")
-
-        ts_ok = "tistory" in published
-        nv_ok = "naver" in published
-
-        print(f"\n{'='*60}")
-        print(f"  ★ 테마 발행: {_theme}")
-        print(f"     Tistory : {'✅' if ts_ok else '❌'}")
-        print(f"     Naver   : {'✅' if nv_ok else '❌'}")
-        print(f"{'='*60}\n")
-
-        # ★ ADR 009 v2 strict: 활성 플랫폼 *하나라도* 미발행 시 raise → 검증 순환 재진입
-        required = {"tistory", "naver"}  # 테마글은 양쪽 모두 항상 활성
-        missing = required - published
-        if missing:
+        # ★ strict: 미발행이면 raise → 이 플랫폼만 검증 순환 재진입 (타 플랫폼 무영향)
+        if platform not in published:
             raise RuntimeError(
-                f"[Layer4] {sorted(missing)} 발행 실패 (theme={_theme}) — 송출 미완료 → 검증 순환 재진입"
+                f"[Layer4] ['{platform}'] 발행 실패 (theme={_theme}) — 송출 미완료 → 검증 순환 재진입"
             )
 
     # ── 하네스 실행 ──────────────────────────────────────────
@@ -816,36 +774,70 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                           detail="theme 미입력 — run_all_themes(theme=...) 확인 필요")]
         return []
 
-    _action_def = ActionDefinition(
-        name=f"theme-publish-{theme}",
-        steps=[
-            _step_load_rules,
-            _step_collect,
-            _step_ts_draft,
-            _step_nv_draft,
-            _step_ts_cookie_collect,
-        ],
-        verify=_verify_all,
-        fix=_fix_theme_drafts,  # ★ "수정→기록→누적→순환" 전체 에이전트 디폴트 (사용자 박제 2026-05-18)
-        send=_send_all,
+    # ── ★ 플랫폼 단위 끝까지 직렬 (사용자 박제 2026-07-03) ──────────────────
+    # 네이버 액션(공유 수집 포함): ①규정 → ②수집 → ③NV대본 → 검증 순환 → 발행 [종결]
+    #   → 티스토리 액션: ④TS쿠키(신선 로그인) → ⑤TS대본 → 검증 순환 → 발행
+    # 한쪽의 재작성 순환·실패가 다른 쪽을 지연·차단하지 않음 (실패 격리, max_attempts 각 2)
+    _nv_action_def = ActionDefinition(
+        name=f"theme-publish-{theme}-naver",
+        steps=[_step_load_rules, _step_collect, _step_nv_draft],
+        verify=lambda st: _verify_theme_platform(st, "naver", "nv_draft",
+                                                 "③ 네이버 대본 생성", check_data=True),
+        fix=lambda st, iss: _fix_theme_platform(st, iss, "naver", "nv_draft",
+                                                "③ 네이버 대본 생성"),
+        send=lambda st: _send_theme_platform(st, "naver", "nv_draft",
+                                             "nv_pub_result", "__nv_send_attempted__"),
         precondition=_precondition,
         max_attempts=2,  # ★ 외부 발행은 비멱등 → 최대 2회 (sentinel이 중복 방지)
+    )
+    _ts_action_def = ActionDefinition(
+        name=f"theme-publish-{theme}-tistory",
+        steps=[_step_ts_cookie, _step_ts_draft],
+        verify=lambda st: _verify_theme_platform(st, "tistory", "ts_draft",
+                                                 "⑤ 티스토리 대본 생성"),
+        fix=lambda st, iss: _fix_theme_platform(st, iss, "tistory", "ts_draft",
+                                                "⑤ 티스토리 대본 생성"),
+        send=lambda st: _send_theme_platform(st, "tistory", "ts_draft",
+                                             "ts_pub_result", "__ts_send_attempted__"),
+        precondition=_precondition,
+        max_attempts=2,
     )
 
     # ★ 단일 진입점 — 새 테마 = 전체 상태 초기화
     from JARVIS09_COLLECTOR.run_context import new_run as _new_run
     _new_run(theme)
 
-    _result = run_action(_action_def, {"theme": theme, "sector": sector})
-    _st = _result.state
+    # ① 네이버 액션 (공유 수집 포함) — 완전 종결까지
+    _nv_result = run_action(_nv_action_def, {"theme": theme, "sector": sector})
+    _nv_st = _nv_result.state
+    _nv_res = _nv_st.get("nv_pub_result", {"success": False, "url": "", "keyword": theme})
+    # ★ 리뷰 확정 수정 (2026-07-03): data_empty 는 *수집이 실행되어 비었을 때만* —
+    #   precondition 실패·동시성 차단 등 수집 미실행을 테마 교체로 오분류 금지.
+    _sd = _nv_st.get("stocks_data")
+    _stocks_ok = bool((_sd or {}).get("stocks"))
+    _data_empty = bool(_nv_st.get("_collect_data_empty")) or (_sd is not None and not _stocks_ok)
+    if not _nv_result.delivered:
+        _reason = getattr(_nv_result, "escalation_reason", "최대 시도 초과 또는 abort")
+        _tg(f"❌ [THEME] 네이버 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
 
-    _ts_res = _st.get("ts_pub_result", {"success": False, "url": "", "keyword": theme})
-    _nv_res = _st.get("nv_pub_result", {"success": False, "url": "", "keyword": theme})
-    _data_empty = bool(_st.get("_collect_data_empty"))
-
-    if not _result.delivered:
-        _reason = getattr(_result, "escalation_reason", "최대 시도 초과 또는 abort")
-        _tg(f"❌ [THEME] 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
+    # ② 티스토리 액션 — 네이버 *종결 후* 시작. 종목 데이터 없으면 스킵
+    #    (진짜 data_empty → 상위 테마 교체 / 수집 미실행 → 교체 아닌 단순 실패)
+    _ts_res = {"success": False, "url": "", "keyword": theme}
+    if not _stocks_ok:
+        print(f"  ⏭️ [티스토리] 종목 데이터 {'0개' if _data_empty else '미수집(네이버 액션 조기 종결)'} — 발행 스킵")
+    else:
+        _ts_result = run_action(_ts_action_def, {
+            "theme": theme, "sector": sector,
+            "stocks_data": _nv_st.get("stocks_data"),
+            "collection_docs": _nv_st.get("collection_docs") or [],
+            "evidence_pack": _nv_st.get("evidence_pack"),
+            "supreme_block": _nv_st.get("supreme_block"),
+        })
+        _ts_st = _ts_result.state
+        _ts_res = _ts_st.get("ts_pub_result", {"success": False, "url": "", "keyword": theme})
+        if not _ts_result.delivered:
+            _reason = getattr(_ts_result, "escalation_reason", "최대 시도 초과 또는 abort")
+            _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
 
     return {"theme": theme, "tistory": _ts_res, "naver": _nv_res, "data_empty": _data_empty}
 

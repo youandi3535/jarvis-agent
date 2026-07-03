@@ -1182,14 +1182,20 @@ def run_economic_poster(*extra_flags):
     os.close(_res_fd)
     _env = dict(os.environ)
     _env["JARVIS_EP_RESULT_FILE"] = _res_path
+    # ★ 로그 유실 방지 (ERRORS [289] — 2026-07-03): 파일 리다이렉트 시 블록 버퍼링 →
+    #   타임아웃 SIGKILL 시 마지막 수 분의 로그(발행 단계) 통째 유실. 무버퍼 강제.
+    _env["PYTHONUNBUFFERED"] = "1"
 
     try:
         from datetime import datetime as _dt
         _ts = _dt.now().strftime('%Y%m%d_%H%M%S')
         _logpath = BASE_DIR / 'logs' / f'economic_{_ts}.log'
         cmd = [PYTHON, str(BASE_DIR / 'economic_poster.py'), '--scheduled'] + list(extra_flags)
+        # ★ timeout 3600→5400 (ERRORS [288][289] — 2026-07-03): rate-limit 지연 날에 발행
+        #   *도중* SIGKILL(편집창 작성 완료 후 발행창 직전) 이 최악의 실패 모드.
+        #   생성 속도는 shared/llm.py 회로 차단기가 담당, 여기는 발행 완주 여유 확보.
         with open(_logpath, 'w', encoding='utf-8') as _lf:
-            result = subprocess.run(cmd, timeout=3600, stdout=_lf, stderr=subprocess.STDOUT, env=_env)
+            result = subprocess.run(cmd, timeout=5400, stdout=_lf, stderr=subprocess.STDOUT, env=_env)
 
         # 플랫폼별 결과 읽기 (economic_poster.py 가 JARVIS_EP_RESULT_FILE 에 기록)
         _platform_results = {"naver": True, "tistory": True}
@@ -1226,8 +1232,32 @@ def run_economic_poster(*extra_flags):
 
     except Exception as e:
         log(f"❌ {label} 예외: {e}")
+        # ★ 타임아웃 SIGKILL 시 손자 프로세스(Chrome)가 편집창 연 채 방치 (ERRORS [289])
+        #   — 자동화 프로필 Chrome 만 정리 (사용자 개인 Chrome 은 프로필 경로 불일치로 안전).
+        try:
+            import subprocess as _sp2
+            _prof_root = str(BASE_DIR / "chrome_profile")
+            _pg = _sp2.run(["pgrep", "-f", f"user-data-dir={_prof_root}"],
+                           capture_output=True, text=True)
+            _pids = [p.strip() for p in _pg.stdout.splitlines() if p.strip()]
+            if _pids:
+                _sp2.run(["kill"] + _pids, capture_output=True)
+                log(f"🔪 방치된 자동화 Chrome {len(_pids)}개 정리 (timeout 잔존)")
+        except Exception:
+            pass
         if not extra_flags:
-            _trigger_economic_incident(["naver", "tistory"], str(e))
+            # ★ 리뷰 확정 수정 (2026-07-03): 타임아웃 kill 이어도 결과 파일(증분 기록)을
+            #   읽어 *이미 성공한 플랫폼은 재발행 제외* (플랫폼 직렬화 이중 발행 차단).
+            _failed = ["naver", "tistory"]
+            try:
+                _pr = json.loads(Path(_res_path).read_text(encoding="utf-8"))
+                _failed = [k for k in ("naver", "tistory") if not _pr.get(k)]
+            except Exception:
+                pass
+            if _failed:
+                _trigger_economic_incident(_failed, str(e))
+            else:
+                log("ℹ️ 예외 발생했으나 결과 파일상 양 플랫폼 발행 완료 — incident 생략")
     finally:
         _lock_release()
         try:

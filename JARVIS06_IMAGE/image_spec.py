@@ -119,7 +119,9 @@ _SPEC_SYSTEM = """당신은 블로그 콘텐츠 전문 시각화 디자이너입
 - 본문에 있는 숫자·수치를 그대로 사용 (추측 금지)
 - 단위 반드시 포함 (%, 억원, 만명 등)
 - 라벨은 본문 맥락에 맞는 명사 2~6글자
-- comparison_kpi는 data 항목마다 before/after 필드 사용"""
+- comparison_kpi는 data 항목마다 before/after 필드 사용
+- ★ 시간·기간 라벨(연도·월·분기·날짜)은 반드시 *과거 → 최근* 순서로 나열
+  (차트에서 시간은 좌→우로 흐른다. 예: 2025년이 왼쪽, 2026년이 오른쪽)"""
 
 _SPEC_PROMPT_TEMPLATE = """섹션 제목: {section_title}
 키워드: {keyword}
@@ -388,12 +390,156 @@ def _fallback_spec(
     }
 
 
+def _time_axis_key(label) -> tuple | None:
+    """시간 라벨 파싱 → (year, month, day) 정렬 키. 시간 라벨 아니면 None.
+
+    지원: '2026', '2026년', "'25년", '2026년 5월', '2026-05', '2026.05.12',
+          '5월', '3분기', 'Q1', '5월 12일' 등 한국어·ISO 혼용.
+    """
+    import re as _re
+    s = str(label or "").strip()
+    if not s:
+        return None
+    year = month = day = quarter = None
+    m = _re.search(r"\b((?:19|20)\d{2})\b", s)
+    if m:
+        year = int(m.group(1))
+    else:
+        m2 = _re.search(r"['’‘]?(\d{2})\s*년", s)
+        if m2:
+            year = 2000 + int(m2.group(1))
+    mq = _re.search(r"([1-4])\s*분기", s) or _re.search(r"\bQ([1-4])\b", s, _re.I)
+    if mq:
+        quarter = int(mq.group(1))
+    miso = _re.match(r"^\s*(?:19|20)\d{2}[-./](\d{1,2})(?:[-./](\d{1,2}))?", s)
+    mm = _re.search(r"(\d{1,2})\s*월", s)
+    if mm:
+        month = int(mm.group(1))
+    elif miso:
+        month = int(miso.group(1))
+        if miso.group(2):
+            day = int(miso.group(2))
+    md = _re.search(r"(\d{1,2})\s*일", s)
+    if md:
+        day = int(md.group(1))
+    if quarter is not None and month is None:
+        month = quarter * 3
+    if year is None and month is None and day is None:
+        return None
+    if month is not None and not (1 <= month <= 12):
+        return None
+    return (year if year is not None else -1, month or 0, day or 0)
+
+
+def enforce_time_axis_ltr(rows: list) -> list:
+    """★ 시간축 좌→우 강제 (사용자 박제 2026-07-03): "이미지에서 시간 흐름은 항상
+    좌→우 — 25년이 좌, 26년이 우." data 행의 라벨이 시간이면 과거→최근 정렬.
+
+    정책 (카테고리 차트 오폭 방지):
+      - 라벨 80% 미만이 시간 파싱되거나 키가 1종이면 무변경.
+      - 연도 정보가 있으면 오름차순 안정 정렬.
+      - 연도 없는 라벨(월·분기만)은 *엄격 내림차순일 때만* 역순 (연말→연초 랩 보존).
+    """
+    if not rows or len(rows) < 2:
+        return rows
+    keys = [(_time_axis_key(r.get("label")) if isinstance(r, dict) else None) for r in rows]
+    parsed = [k for k in keys if k is not None]
+    if len(parsed) < max(2, int(len(rows) * 0.8)) or len(set(parsed)) < 2:
+        return rows
+    has_year = all(k[0] != -1 for k in parsed)
+    full = [k if k is not None else (9999, 99, 99) for k in keys]  # 미파싱은 뒤로
+    if has_year:
+        if full != sorted(full):
+            order = sorted(range(len(rows)), key=lambda i: full[i])
+            return [rows[i] for i in order]
+        return rows
+    # 연도 없음 — 엄격 내림차순일 때만 역순
+    if all(full[i] > full[i + 1] for i in range(len(full) - 1)):
+        return list(reversed(rows))
+    return rows
+
+
+def dedupe_chart_rows(rows: list) -> list:
+    """★ 차트 내 동일 수치 중복 제거 (사용자 박제 2026-07-03).
+
+    "차트 이미지 속에 같은 수치값이 여러 번 중복으로 나오는 문제" —
+      ① 정규화 라벨이 같은 행 반복 → 첫 행만 유지
+      ② 값이 같고 라벨 토큰이 60%+ 겹치는 행 (예: '매출'/'매출액' = 같은 값) → 첫 행만
+    단, *시계열* 라벨(연·월·분기)이 과반이면 무변경 — 평평한 시계열(기준금리
+    2.5% 6개월 연속 등)의 동일값은 정당한 데이터다.
+    """
+    if not rows or len(rows) < 2:
+        return rows
+    import re as _re_d
+    # 시계열 판정 — 시간 라벨 과반이면 dedupe 대상 아님
+    _t_keys = [_time_axis_key((r or {}).get("label")) for r in rows if isinstance(r, dict)]
+    if sum(1 for k in _t_keys if k is not None) >= max(2, int(len(rows) * 0.5)):
+        return rows
+
+    def _norm(s: str) -> str:
+        return _re_d.sub(r"[^가-힣a-z0-9]", "", str(s or "").lower())
+
+    def _toks(s: str) -> set:
+        # 한국어는 2자+, 라틴/숫자는 1자도 토큰 — '시나리오 A/B'·'Day 1/2' 의
+        # 단일문자 판별자를 버리면 다른 항목을 같은 항목으로 오판 (ERRORS [312])
+        return set(_re_d.findall(r"[가-힣]{2,}|[a-z0-9]+", str(s or "").lower()))
+
+    kept: list = []
+    for r in rows:
+        if not isinstance(r, dict):
+            kept.append(r)
+            continue
+        lb, val = _norm(r.get("label")), r.get("value")
+        dup = False
+        for k in kept:
+            if not isinstance(k, dict):
+                continue
+            k_lb = _norm(k.get("label"))
+            if lb and lb == k_lb:
+                dup = True   # 동일 라벨 반복
+                break
+            try:
+                same_val = abs(float(val) - float(k.get("value"))) < 1e-9
+            except (TypeError, ValueError):
+                same_val = False
+            if same_val:
+                t1, t2 = _toks(r.get("label")), _toks(k.get("label"))
+                if t1 and t2:
+                    # 접두 포함 매칭 ('매출'↔'매출액' 같은 접미 변형을 같은 항목으로)
+                    # 단, 접두 규칙은 2자+ 토큰만 — '1'↔'10' 오병합 방지, 1자는 정확 일치만
+                    _m = sum(1 for a in t1
+                             if any(a == b or (len(a) > 1 and len(b) > 1
+                                               and (a.startswith(b) or b.startswith(a)))
+                                    for b in t2))
+                    if _m / max(len(t1), len(t2)) >= 0.6:
+                        dup = True   # 같은 값 + 사실상 같은 항목
+                        break
+        if not dup:
+            kept.append(r)
+    if len(kept) < len(rows):
+        print(f"  🧹 [dedupe] 차트 동일 수치 중복 {len(rows) - len(kept)}행 제거")
+    return kept
+
+
 def render_from_spec(spec: dict[str, Any], out_path: Path) -> Path:
     """설계서 → 이미지 파일 생성 + 출처(provenance) 레지스트리 기록.
 
     ★ 트립와이어 (사용자 박제 2026-06-29): 수치 차트는 _provenance.verified 없이
       렌더되면 안 됨 (검증 우회). 그런 경우 unverified 로 기록 → prepublish_gate 가 차단.
+    ★ 시간축 좌→우 강제 (사용자 박제 2026-07-03): 렌더 직전 data 행 시간 정렬.
     """
+    try:
+        if isinstance(spec.get("data"), list):
+            _fixed = enforce_time_axis_ltr(spec["data"])
+            if _fixed is not spec["data"]:
+                print("  ⏩ [시간축] 라벨 시간 순서 교정 — 과거→최근 (좌→우)")
+                spec = {**spec, "data": _fixed}
+            # ★ 동일 수치 중복 제거 (사용자 박제 2026-07-03)
+            _dd = dedupe_chart_rows(spec["data"])
+            if _dd is not spec["data"] and len(_dd) != len(spec["data"]):
+                spec = {**spec, "data": _dd}
+    except Exception:
+        pass
     result = _render_impl(spec, out_path)
     try:
         from JARVIS06_IMAGE.validators.image_data_verifier import (

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os as _os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .models import RawDocument, CollectionResult
 from .cleaner import clean_document
@@ -24,19 +25,22 @@ from .providers import (
 
 log = logging.getLogger("jarvis.collector.engine")
 
-# 소스별 수집 한도 — provider마다 다르게 설정
+# ★ 수집 풍부 원칙 (사용자 박제 2026-07-03 ×2 — ADR 013 / ERRORS [314]):
+#   "주제가 설정되면 그 주제에 맞는 정보는 싹다 받아버려, 제한 두지 말고."
+#   "데이터가 부족해서 이미지를 생성 못하는 상황을 만들지 마라. 데이터는 충분해야 해."
+#   아래 상한은 무한루프 방지용 안전망일 뿐 — 신뢰순 *선별* 은 사용 시점(주입·검증)에.
 _PROVIDER_LIMITS = {
-    "naver_news": 20,  # 네이버 뉴스 API: 가장 정확한 한국어 뉴스
-    "news":       15,  # Google News + 경제지 RSS
-    "kor_econ":   10,  # 네이버 금융 + 전문 경제지
-    "krx":         8,  # KRX 시장 통계 (키 불필요)
-    "blog":        8,  # 네이버 블로그
-    "web":         5,  # 위키 + 지식백과 + 다음
-    "dart":        5,  # DART 전자공시
-    "ecos":        3,  # 한국은행 거시경제 지표
-    "kosis":       3,  # 통계청 산업 통계
-    "finance":     3,  # yfinance 글로벌 지표
-    "academic":    3,  # arxiv 논문
+    "naver_news": 30,  # 네이버 뉴스 API: 가장 정확한 한국어 뉴스
+    "news":       25,  # Google News + 경제지 RSS
+    "kor_econ":   15,  # 네이버 금융 + 전문 경제지
+    "krx":        12,  # KRX 시장 통계 (키 불필요)
+    "blog":       10,  # 네이버 블로그
+    "web":        10,  # 위키 + 지식백과 + 다음
+    "dart":       10,  # DART 전자공시
+    "ecos":        8,  # 한국은행 거시경제 지표
+    "kosis":       8,  # 통계청 산업 통계
+    "finance":     8,  # yfinance 글로벌 지표
+    "academic":   10,  # arxiv 논문 (신뢰서열 1위 — 적게 받을 이유 없음)
 }
 
 _PROVIDERS = [
@@ -65,7 +69,10 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
     raw_docs: list[RawDocument] = []
 
     def _run_provider(prov):
-        limit = _PROVIDER_LIMITS.get(prov.source_type, 8)
+        # ★ 수집 폭 배율 (사용자 박제 2026-07-03 — ADR 013): "제한을 두지 말고 최대한
+        #   많은 진실성 있는 데이터를 전부" — 프로바이더별 상한에 배율. env 튜닝.
+        limit = int(_PROVIDER_LIMITS.get(prov.source_type, 8)
+                    * max(1.0, float(_os.getenv("J09_BREADTH", "3.0") or "3.0")))
         try:
             docs = prov.collect(theme, sector, max_items=limit)
             log.info(f"[Engine] {prov.source_type} → {len(docs)}건 수집")
@@ -95,9 +102,25 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
         except Exception as e:
             log.warning(f"[Engine] 정제 실패 ({raw.url}): {e}")
 
+    # ★ 신뢰 우선 정렬 + 동일 내용 중복 시 고신뢰 소스 유지 (사용자 박제 2026-07-03 — ADR 013)
+    #   "논문 > API > 뉴스 > 기사 > 웹 — 겹치면 이 순서로 선택. 수집 자체는 전부."
+    from .models import trust_rank as _trust
+    results.sort(key=lambda r: _trust(r.source_type))   # stable — 티어 내 원래 순서 보존
+    _seen_hash: set[str] = set()
+    _uniq: list = []
+    for r in results:
+        h = getattr(r, "content_hash", "") or ""
+        if h and h in _seen_hash:
+            continue    # 동일 내용 — 앞선(더 신뢰 높은) 소스가 이미 보존됨
+        if h:
+            _seen_hash.add(h)
+        _uniq.append(r)
+    results = _uniq
+
     # 소스 다양성 확보: 같은 source_type에서 너무 많이 몰리지 않도록 배분
     _per_source: dict[str, int] = {}
-    _MAX_PER_SOURCE = 12
+    # ★ 30 → 100 상향 (풍부 원칙 [314] — 이미 받은 데이터 절삭 금지, 사실상 무제한)
+    _MAX_PER_SOURCE = int(_os.getenv("J09_MAX_PER_SOURCE", "100") or "100")
     balanced = []
     for r in results:
         src = r.source_type
@@ -136,7 +159,7 @@ def _collect_for_question(question: dict, theme: str, sector: str) -> list[RawDo
             if src == "discover":
                 from .discovery import web_search
                 from .generic_fetch import fetch_documents
-                hits = web_search(q_main, max_results=6)
+                hits = web_search(q_main, max_results=12)   # 질문당 6→12 (풍부 원칙 [314])
                 docs.extend(fetch_documents(hits, theme=theme, max_docs=3))
                 continue
             prov = _PROVIDER_BY_TYPE.get(src)
@@ -200,7 +223,7 @@ def _clean_raw_docs(raw_docs: list[RawDocument], theme: str,
 
 @_auto_catch("collector", reraise=True)
 def collect_research(theme: str, sector: str = "", angle: str = "",
-                     max_rounds: int = 2) -> dict:
+                     max_rounds: int = 3) -> dict:
     """설계-우선 리서치 수집 — 광역 스윕 + 질문별 조준 수집 + 갭 재수집 순환.
 
     Returns:
@@ -289,11 +312,23 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
     # ⑥ 박제 + 반환
     path = persist_evidence(pack)
     cov = pack.get("coverage") or {}
-    log.info(f"[research] 완료: 문서 {len(all_docs)}건 · fact {len(pack.get('facts', []))}개 "
-             f"· 커버리지 {sum(1 for c in cov.values() if c.get('ok'))}/{len(cov)} "
+    cov_ok = sum(1 for c in cov.values() if c.get("ok"))
+    n_facts = len(pack.get("facts", []))
+    log.info(f"[research] 완료: 문서 {len(all_docs)}건 · fact {n_facts}개 "
+             f"· 커버리지 {cov_ok}/{len(cov)} "
              f"· 라운드 {rounds}")
+    # ★ 근거 품질 판정 (ERRORS [300] — 사용자 승인 2026-07-03): 재수집 순환을 다 써도
+    #   커버리지 0 이거나 fact < 3 이면 insufficient 플래그 — 반환은 유지(fail-open)하되
+    #   호출자(topic_pack 주제 교체 / theme 경고)가 분기할 수 있게 가시화.
+    coverage_ratio = round(cov_ok / len(cov), 2) if cov else 0.0
+    insufficient = bool(cov) and (cov_ok == 0 or n_facts < 3)
+    if insufficient:
+        log.warning(f"[research] '{theme}' 근거 부족 — 커버리지 {cov_ok}/{len(cov)}, "
+                    f"fact {n_facts}개 (insufficient=True)")
     return {"evidence_pack": pack, "docs": all_docs, "plan": plan,
-            "evidence_path": path}
+            "evidence_path": path,
+            "coverage_ratio": coverage_ratio, "insufficient": insufficient,
+            "plan_fallback": bool(plan.get("fallback"))}
 
 
 # ── delta-aware 교류 프로토콜 (★ 사용자 박제 2026-06-07) ────────────────

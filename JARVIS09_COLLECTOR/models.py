@@ -17,6 +17,25 @@ def _hash_text(text: str) -> str:
     return hashlib.sha1((text or "").encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
+# ★ 출처 신뢰 우선순위 — 단일 진입점 (사용자 박제 2026-07-03 — ADR 013)
+#   "논문 > API > 뉴스 > 기사 > 웹. 데이터가 겹치면 이 순서로 하나를 선택.
+#    단, 수집은 받을 수 있는 곳 전부에서 다 받는다 — 논문만 받으면 안 된다."
+#   이 티어는 *중복·충돌 해소 전용* — 수집 범위 제한에 사용 금지.
+SOURCE_TRUST_TIER: dict[str, int] = {
+    "academic": 1, "kci": 1,                                   # 논문
+    "kosis": 2, "ecos": 2, "dart": 2, "krx": 2, "finance": 2,  # 공식 데이터 API
+    "naver_news": 3, "news": 3,                                # 뉴스
+    "kor_econ": 4, "web_data": 4,                              # 기사·전문지
+    "web": 5,                                                  # 웹
+    "blog": 6,                                                 # 블로그
+}
+
+
+def trust_rank(source_type: str) -> int:
+    """출처 신뢰 순위 (낮을수록 신뢰 높음). 미지 소스는 웹 수준(5)."""
+    return SOURCE_TRUST_TIER.get((source_type or "").strip().lower(), 5)
+
+
 @dataclass
 class RawDocument:
     """수집 직후 원본 문서."""

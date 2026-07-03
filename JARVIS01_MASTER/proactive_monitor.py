@@ -710,10 +710,14 @@ class ContentQualityMonitor:
         findings = []
         try:
             from shared import db as _db
-            from JARVIS02_WRITER.length_manager import MIN_BODY_CHARS
+            # ★ 2026-07-03 (ERRORS [297]): 2중 사망 복구 — ① MIN_BODY_CHARS 미존재 →
+            #   MIN_VALID 사용 ② post_analysis 에 char_count 컬럼 없음 (style_corpus 전용)
+            #   → LENGTH(original_content) 로 대체. 종전엔 둘 다 except 에 삼켜져 무증상.
+            from JARVIS02_WRITER.length_manager import MIN_VALID as MIN_BODY_CHARS
             with _db.get_db() as conn:
                 rows = conn.execute(
-                    "SELECT char_count FROM post_analysis ORDER BY id DESC LIMIT 5"
+                    "SELECT LENGTH(COALESCE(original_content, '')) AS char_count "
+                    "FROM post_analysis ORDER BY id DESC LIMIT 5"
                 ).fetchall()
             if len(rows) < 3:
                 return findings

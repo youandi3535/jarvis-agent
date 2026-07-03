@@ -1,5 +1,319 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [316] 테마 Pass-1 데이터 내장 슬롯 이행 — 경제와 작성 로직 동렬화 완성 (★ 사용자 확인 요청 2026-07-03)
+
+- **경위 (사용자)**: "테마글도 경제 브리핑글 작성 로직처럼 되어 있는 거지? 주제만 다르고 전부 같잖아." — 대조 결과 ADR 013 의 *데이터 내장 차트 슬롯* 이 경제에만 이행돼 있었음 (테마 Pass-1 은 구형식 `[CHART_N: 설명]` 만).
+- **해결**: `_gen_theme` 에 경제와 동일한 `_build_data_catalog` 주입 — 카탈로그 = `stocks_to_datasets`(종목 시세 승격 [313]) + `facts_to_datasets`(텍스트 수치 승격 [315]). 혼합 규칙: 카탈로그에 맞는 데이터 있는 슬롯 = 데이터 내장 블록(`[CHART_N]...데이터: 라벨=값...[/CHART_N]`, 02가 설계까지) / 없는 슬롯만 구형식 유지(자비스06 Pass-2 실데이터 폴백). 파이프라인은 이미 양형식 지원(0단계 render_slots_in_text → 잔여 구형식 → 풀) — 프롬프트만 이행하면 끝나는 상태였음.
+- **검증**: 가짜 invoke 로 Pass-1 프롬프트 캡처 — 카탈로그(종목 값+텍스트 fact)·블록 형식 규칙·혼합 규칙 주입 확인.
+- **경제와 남은 차이 (의도적 — 사용자 지시 로직)**: ① 주제 공급 (경제 = 자비스03 topic_pack / 테마 = KRX·네이버 공식 테마 카탈로그 → 기작성 확인 → 미작성 선정 + 종목 수집) ② 1차 근거 (경제 = 지표·통계 / 테마 = 종목 실데이터). 그 외 작성·검증·발행 로직 전부 공유.
+- **파일**: `JARVIS02_WRITER/draft_writer.py`
+- **교훈**: "같은 로직" 은 코드 공유로 보장된다 — 프롬프트 규칙도 빌더 함수(_build_data_catalog) 하나를 양 경로가 공유해야 드리프트가 없다.
+
+### [315] 텍스트 수치 승격의 테마 미배선 — facts_to_datasets 가 경제(topic_pack)에만 연결 (★ 사용자 지적 2026-07-03)
+
+- **지시 (사용자 원문)**: "꼭 수치 데이터가 아니더라도 텍스트 데이터에도 수치가 있잖아. 추출하면 되지. 받을 수 있는 데이터(텍스트 및 수치)는 다 받아."
+- **증상**: 승격 엔진 `facts_to_datasets`([302])는 존재하나 **경제 topic_pack 에만 배선** — 테마 글의 근거팩 fact(뉴스·통계 텍스트에서 추출된 수치+출처)가 테마 차트 풀·슬롯 검증 ref 에 합류하지 않음. 테마 이미지는 종목 시세([313])+웹 수집만 사용.
+- **해결**: ① `draft_processor._generate_charts(evidence_pack=)` 파라미터 신설 — 시드 = `stocks_to_datasets`(종목) + `facts_to_datasets`(텍스트 수치, 제목 dedupe) 합류 → chart_generator 풀에 전달. ② 슬롯 검증 ref 에도 fact 데이터셋(단위 동봉) 합류 — 대본이 텍스트 수치를 슬롯에 쓰면 단위까지 정합 검증. ③ `JARVIS09_COLLECTOR.__init__` 에 `facts_to_datasets` 공식 export (종전 서브모듈 직접 import만 가능).
+- **검증**: stat fact 2건(만 톤·조원, 출처 동봉) → 데이터셋 2개 승격 + quote 스킵 확인.
+- **파일**: `JARVIS06_IMAGE/draft_processor.py`, `JARVIS09_COLLECTOR/__init__.py`
+- **교훈**: 좋은 엔진을 만들어도 *모든 소비 경로에 배선* 하지 않으면 반쪽 — 새 승격/변환 기능은 경제·테마 양 경로 배선을 체크리스트로.
+
+### [314] 수집 풍부 원칙 — 수집 사슬 상한 전면 확대 (★ 사용자 박제 2026-07-03 ×2)
+
+- **지시 (사용자 원문)**: "수집 사이트 API가 확실한데 왜 제한해서 받아? 자료 데이터는 풍부해야 글도 풍부하게 매력적으로 작성되고, 이미지도 충분한 데이터가 있어야 고퀄리티 이미지가 생성된다. 테마주 주제가 설정되면 그 주제에 맞는 정보는 싹다 받아버려 제한 두지 말고." + "데이터가 부족해서 이미지를 생성 못하는 상황을 만들지 마라. 데이터는 충분해야 해."
+- **원칙**: 수집 상한은 무한루프 방지 안전망일 뿐 — 양은 무제한 지향, 신뢰순 *선별* 은 사용 시점(프롬프트 주입·검증 대조)에 한다 (ADR 013).
+- **확대 내역**:
+  | 항목 | 종전 | 확대 |
+  |------|------|------|
+  | provider 기본 상한 (`_PROVIDER_LIMITS`) | 논문 3·통계 3·공시 5·웹 5... | 논문 10·통계 8·공시 10·웹 10·뉴스 30... (~2배) |
+  | 수집 폭 배율 `J09_BREADTH` 기본 | 2.0 | 3.0 (실효 ~3배) |
+  | 소스별 최종 절삭 `J09_MAX_PER_SOURCE` | 30 | 100 (사실상 무절삭) |
+  | 리서치 질문당 웹 수집 | 6건 | 12건 |
+  | `collect_research` 갭 재수집 라운드 | 2 | 3 |
+  | 차트 실데이터 요청 `max_datasets` (테마 Pass-2) | 12 | 24 |
+  | fact→데이터셋 승격 상한 | 12 | 24 |
+  | 배치 인포그래픽 설계 대상 | 10 | 16 |
+  | topic_pack 데이터셋 상한 | 40 | 64 |
+- **이미지 데이터 충분 보장 (與 [313] 합산)**: 테마 = 종목 시세 승격 5종(항상 확보) + 웹 수집 24 요청 → 슬롯 7개가 데이터 부족으로 굶는 상황 구조적 차단.
+- **파일**: `JARVIS09_COLLECTOR/{collector_engine,evidence_pack}.py`, `JARVIS06_IMAGE/{chart_generator,infographic_engine}.py`, `JARVIS03_RADAR/topic_pack.py`
+- **교훈**: "적게 받고 정확히"가 아니라 "전부 받고 사용 시 신뢰순 선별" — 상한 기본값은 진실성 요건이 아니라 비용 습관이었다. 남는 데이터는 재작성·다른 플랫폼·설계 다양성의 재료가 된다.
+
+### [313] 테마 차트 슬롯 데이터 기근 — 종목 시세 미승격 + 소진 마킹 전역 오염 + 수집 3중 레이스 (★ 사용자 지적 2026-07-03)
+
+- **증상 (사용자 지적)**: "테마주는 확실히 데이터를 받을 수 있는데, 왜 이미지 슬롯에 데이터가 없다고 하지?" — LNG 런에서 차트 치환이 네이버 1차 4/7 → 재작성 1/7 → 티스토리 0/7 로 갈수록 굶주림. 정작 종목 7개의 시세·재무 실데이터는 손에 쥔 채였음.
+- **원인 3중**:
+  1. **종목 시세 미승격**: 차트 풀은 JARVIS09 웹 수집(collect_chart_data, 4~5개)만 — 이미 수집된 stocks_data(테마주 글의 가장 확실한 수치)가 차트 데이터셋으로 변환되는 경로 자체가 없음.
+  2. **소진 마킹 전역 오염**: `_USED_POOL_IDX` 가 모듈 전역 set 인데 테마 경로는 리셋 지점(set_session_pool)을 안 거침 → 네이버 1차가 소진한 인덱스 0~3 이 재작성·티스토리의 *다른 풀* 에도 '사용됨' 판정 → 새 풀 4개가 첫 슬롯부터 소진 상태 (다른 풀의 인덱스를 공유하는 의미론적 오류).
+  3. **수집 3중 레이스**: 4-워커 병렬 슬롯이 락 없이 동시에 빈 풀을 보고 collect_chart_data 를 3회 중복 호출 (쿼터 낭비).
+- **헛다리**: rate-limit 만 원인으로 봄 — 스로틀은 풀 크기를 줄였을 뿐, 소진 오염이 없었으면 재작성·티스토리도 4개씩은 받았음.
+- **해결**: ① `JARVIS09.stocks_to_datasets(stocks_data)` 신설 — 종목 현재가(원)·시가총액(조원)·ROE(%)·PER(배)·연매출(조원) 5종 데이터셋 승격, 출처 provenance(네이버 금융 KRX) 동봉 = 사실성 게이트 통과. 단위는 `_naver_fin` 파서 실측 근거(가격=원, 시총·매출=원 저장, ROE=소수). `draft_processor._generate_charts` 가 seed 로 chart_generator 에 전달 → 웹 수집과 합류(제목 dedupe). ② `_USED_POOL_IDX` 를 풀 정체 키("session"/"run:{id}") dict 로 — 재작성·타 플랫폼의 새 풀은 새 추적. clear_session_cache 가 런 풀·인덱스도 리셋. ③ `_POOL_LOCK` 으로 수집·픽 직렬화 — 중복 수집 0. ④ 테마 슬롯 검증 ref 도 승격 데이터셋(단위 동봉) + 수치 캐치올 병행 — 단위 정합 검증이 테마에도 작동.
+- **검증**: LNG 7종목 실데이터 재현 → 승격 5종(원·조원·%·배·조원) 전부 `_verify_dataset` 통과, run:A 소진이 run:B 에 미오염 확인.
+- **파일**: `JARVIS09_COLLECTOR/{collect_theme,__init__}.py`, `JARVIS06_IMAGE/{chart_generator,draft_processor}.py`, `JARVIS02_WRITER/tistory_html_writer.py`
+- **교훈**: "데이터가 없다"는 로그는 *수집 실패* 가 아니라 *배관 실패* 일 수 있다 — 가장 확실한 데이터가 풀에 합류하는 경로가 있는지부터 확인. 그리고 소진/사용 추적 자료구조는 반드시 추적 대상(풀)과 같은 수명·스코프를 가져야 한다.
+
+### [312] 인포그래픽 진실성 수정([308]~[310])의 적대 리뷰 확정 결함 6종 일괄 수리 (2026-07-03)
+
+- **경위**: [308]~[310] 수정 직후 18-에이전트 적대 리뷰(3렌즈 발견→건별 반박 검증, 전 건 실코드 재현) — 확정 9건/기각 1건.
+- **확정 결함 → 수리**:
+  1. **슬롯 혼합 단위 뭉개기**: `verify_slot` 의 corrected_unit 이 슬롯 전체 단일 변수 → '기준금리 2.5(%)' 행이 '원' 교정에 뭉개져 "2.5원". → 행별 해석 단위 추적 + *합의 단위* 강제(다수결, 동률 시 슬롯 단위) — 갈리는 행 제거.
+  2. **ref 단위 미상('') 오교정**: 테마 경로 ref 가 unit 없이 오면 슬롯의 진실 단위를 '' 로 삭제. → 미상 ref 는 값만 검증, 단위 교정 금지.
+  3. **가짜 변화율·이질 평균**: `_kpi_value` change/avg 가드가 category 만 커버 — 2행(kpi-kind)·ratio 데이터가 '매출액→영업이익 −92.6%' 같은 실존하지 않는 수치 생성, 신규 대체 루프가 이를 능동 주입. → 비시계열 전체로 가드 확장(min/max/top 은 항목 라벨 동반, avg 는 category 동질 비교만), 대체 지표 후보도 kind 별 제한.
+  4. **값-단독 중복 키의 과잉 차단**: (data,값) 키가 '삼성전자 100/SK하이닉스 100' *정당한 동률* 을 중복 오판·교체. → `_item_ident()` 로 (data, 항목, 값) 3-튜플 키 — 사용자 규칙(같은 항목+같은 값만 중복) 정확 구현.
+  5. **stat 시계열/else 분기 중복 미차단 + 2행 정체불명 잔존**: category 만 used_vals 대조. → 전 분기 대조 — 비시계열은 순위 항목(항목명), 시계열은 최신→기간 최고→최저→평균 순 미노출 값, 단일값은 항목명 병기, 전부 소진 시 패널 드롭(중복<없음).
+  6. **배치설계 캐시 키 어긋남**: 렌더는 dedupe/시간축 정규화 *후* 키 계산, 프라임은 원본 pool 로 계산 → 중복행 데이터셋은 캐시 미스 확정 = 차트마다 개별 LLM 설계(rate-limit 악화·설계 다양성 소실). → `_normalize_ds()` 공통 정규화를 프라임(사본)·렌더 양쪽 적용 — 키 정합 테스트 통과.
+  7. **dedupe 단일문자 판별자 유실**: '시나리오 A/B'·'Day 1/2' 가 같은 값이면 같은 항목 오판·제거. → 라틴/숫자 1자 토큰 보존(한국어는 2자+), 접두 매칭은 2자+ 토큰만('1'↔'10' 오병합 방지).
+  8. **제목 괄호 단위 검출기 미탐/오탐**: 화이트리스트 밖(USD·%p·조) 모순 통과 + '조 원'↔'(조원)' 공백 불일치로 정당 괄호 오삭제. → 토큰 확장 + 공백 제거 정규화 비교.
+- **검증**: 단위 테스트 19케이스 + 적대 시나리오 3종 실렌더 스크린샷 (동률 보존/시계열 stat 기간최저 대체/2행 항목 라벨 명시·격차 13.5배).
+- **파일**: `JARVIS06_IMAGE/{infographic_engine,slot_renderer,image_spec}.py`
+- **교훈**: 진실성 게이트 코드는 그 자체가 거짓을 만들 수 있다(오교정·과잉 차단) — 수정 직후 적대 리뷰로 "게이트가 만드는 거짓"을 잡아야 한다. 중복 판정의 키는 사용자 규칙의 정의(항목+값)를 *그대로* 자료구조에 옮겨야 하며, 근사 키(값만·라벨 토큰만)는 반드시 과잉/과소 차단을 낳는다.
+
+### [311] 재작성 순환에 게이트 차단 사유 미전달 — 같은 창작 수치 재생산으로 max_attempts 소진 (2026-07-03)
+
+- **증상**: LNG 네이버 액션이 사실성 게이트 차단("2023년 1분기 가계 연료비 16만 원, 전 분기 대비 두 배" — 출처·웹 확인 불가)으로 검증 실패 → 재작성했는데 attempt 2 가 *거의 같은 문장* 을 다시 창작 → 같은 차단 → max_attempts(2) 도달, 발행 못 함 (게이트 차단 자체는 정상 — 수치 진실 원칙).
+- **원인**: harness fix 훅이 factuality/engagement 이슈를 unfixed 로 넘겨 WRITER step 재실행은 시키지만, *무엇이 왜 차단됐는지* 를 Pass-1 프롬프트에 전달하지 않음 — LLM 은 같은 주제·같은 근거로 쓰니 같은 창작 수치를 재생산.
+- **헛다리**: max_attempts 상향 — 피드백 없는 재시도는 횟수만 늘려도 같은 실패 반복.
+- **해결**: ① 게이트 피드백 배선 (테마+경제 전 경로). fix 훅(`_fix_theme_platform`/`_fix_platform`)이 factuality/engagement 이슈 detail 을 `state["_{draft_key}_gate_feedback"]` 에 축적(중복 제거, 최근 8건). 대본 step 이 재실행 시 이를 전달. `draft_writer.build_gate_feedback_block()` — "직전 시도 차단 사유 — 해당 수치·주장·유사 변형 금지, 근거 실재 수치로 대체 또는 정성 서술" 블록을 테마는 user 프롬프트 말미, 경제는 supreme_block 합류(병렬 3-call·CLI 폴백 자동 상속)로 주입. ② 테마 작성 프롬프트 선제 강화 (`_gen_theme` system_msg `[절대 제약]`): "출처 없는 역사적 수치 창작 절대 금지 — 특정 연도·분기 가격·규모·비율 등은 수집 자료·종목 데이터 명시 값만 인용, 없으면 정성 서술 대체", "수치 없이도 설득력 있게 서술 — 과거 특정 시점 임의 통계 생성 금지". 반응적 피드백(재작성 시)과 선제 제약(초기 작성 시) 양쪽 모두 적용.
+- **파일**: `JARVIS02_WRITER/{draft_writer,theme_html_writer,trend_theme_writer,tistory_html_writer,trend_economic_writer,economic_poster}.py`
+- **교훈**: 검증 순환은 "재시도"가 아니라 "피드백 루프"여야 한다 — 차단 사유가 작성기에 돌아가지 않으면 순환이 아니라 같은 실패의 반복이다. 또한 재작성 피드백(반응적)과 초기 작성 제약(선제적)을 함께 적용해야 같은 창작 수치가 *처음부터* 생성되지 않는다.
+
+### [310] KPI 'SK 690,000원' 3연발 + stat 패널 정체불명 수치 — category 지표 수렴·무의미 라벨 (★ 사용자 지적 2026-07-03)
+
+- **증상 (사용자 지적 2건)**: ① KPI 카드 4장 중 3장이 전부 'SK 690,000원' ("이런거 안된다고"). ② 거대 stat 패널이 "최고·최저 가격 **비율**" 제목(비율이면 %)에 **1,141원** — 실체는 *최저 종목(케일럼)의 가격* 인데 종목명 없이 '분포 요약'처럼 게시 ("이러니까 내가 엉터리라는 거야").
+- **원인 3중**: ① `_kpi_value` category 분기가 latest·min·max·top 을 *전부 최고 항목으로 수렴* (min 조차 최고값!) → 설계가 지표를 분산해도 값이 같아짐. ② category 에 change 는 리스트 첫↔끝 항목 비교라는 무의미 계산. ③ stat 패널이 `V[-1]`(데이터 마지막 행)을 LLM 창작 제목 아래 그대로 박음 — 값의 정체(어느 항목·어느 지표) 미표기 + 제목 괄호 단위와 데이터 단위 모순 무검증.
+- **헛다리**: [309]의 KPI 중복 *드롭* 만으로는 카드가 2장으로 줄어 허전 — 드롭이 아니라 교체가 정답.
+- **해결**: ① `_kpi_value`: category min=최저 항목(항목명 라벨 교정), change="-" 무효, 스파크라인은 시계열만(항목 나열을 추세선처럼 그리기 금지). ② KPI 루프: 중복·무효 카드는 대체 지표(min→avg→change→count)로 *교체*, 라벨 '최저 — 케일럼' 형식으로 지표 의미 명시. ③ stat 패널: category 는 KPI 미노출 순위 항목("최고/2위 — 항목명") 선택, 전 항목 노출 시 최고/최저 격차(배) 파생값, 시계열은 "(최신)" 명시 — `used_vals`(KPI 노출 값) 대조로 한 이미지 내 같은 항목+값 재탕 차단. ④ `_reconcile_title_unit`: 제목 괄호 단위 ≠ 데이터 단위면 괄호 제거. ⑤ 설계 프롬프트 2곳에 "제목·라벨 표현은 단위와 일치 (%아니면 비율/률 금지)" 규칙.
+- **검증**: 사고 스펙 그대로 렌더 재현 — KPI 4장이 'SK 690,000원/최저 — 케일럼 1,141원/평균 162,642원/종목 수 7' 로 분산, stat 히어로 '2위 — SK가스 218,500원'(KPI 값과 무중복), "(%)"모순 괄호 제거 확인 (스크린샷 검증).
+- **파일**: `JARVIS06_IMAGE/infographic_engine.py`
+- **교훈**: 수치의 진실성은 값만이 아니라 *정체(항목·지표·단위)의 진실성* — "1,141원"이 참이어도 '비율'이라 부르면 거짓. 그리고 지표 다양화는 프롬프트 지시가 아니라 값 계산 층(_kpi_value)이 실제로 다른 값을 돌려줘야 성립.
+
+### [309] 인포그래픽 디자인 균일 — 배치설계 캐시 키 충돌로 한 설계를 여러 데이터셋이 공유 (★ 사용자 지적 2026-07-03)
+
+- **증상 (사용자 지적)**: "인포그래픽 디자인이 왜 다 똑같아?" — LNG 런 infg_3·4·5 세 장이 헤더 문구·KPI 4장 구성·패널 구조(hbar→거대 KPI→bar)·인사이트 문장까지 *완전 동일*, 색(mood)만 다름. 부수 사고 2건: ① %-데이터셋에 "가격 비교 **(원)**" 제목 렌더(단위 모순 — 원-데이터용 설계 재사용 탓) ② KPI 카드에 'SK가스 13.79%' 가 3연발.
+- **환경**: `infographic_engine.prime_batch_designs` 배치설계 캐시 → `generate_infographic` 캐시 히트 경로.
+- **원인**: `_ds_key = title + 상위 라벨 4개` — 같은 종목 목록에 *지표만 다른* 데이터셋(등락률% / 주가원)이 전부 같은 키 → 첫 설계 1개를 셋이 공유. mood 만 seed 로 강제 분산되어 "색만 다른 같은 그림". 단위 모순도 같은 뿌리(원-설계가 %-데이터에 적용).
+- **헛다리**: 설계 프롬프트에 "다양하게" 지시 강화 — 설계 자체가 재사용되므로 프롬프트로는 불가.
+- **해결**: ① `_ds_key` 에 단위 + 값 해시(md5 8자) 포함 — 값·단위 다르면 반드시 다른 설계. 완전 동일 데이터셋만 캐시 히트(정당). ② KPI 렌더 루프에 `(data_key, 표시값)` seen-set — 같은 데이터셋의 같은 값 KPI 카드 반복 차단([307] 항목+값 기준과 동일 원칙).
+- **검증**: 같은 제목·같은 종목의 %·%·원 3개 데이터셋 → 키 3개 분리 / 동일 데이터셋은 같은 키 유지.
+- **파일**: `JARVIS06_IMAGE/infographic_engine.py`
+- **교훈**: 캐시 키는 *산출물을 결정하는 모든 입력* 을 포함해야 한다 — 제목·라벨만 넣으면 "같은 종목, 다른 지표"가 한 설계로 뭉개진다. 디자인 균일의 원인은 프롬프트가 아니라 캐시였다.
+
+### [308] 차트 슬롯 단위-값 정합 미검증 — "단위는 원인데 숫자는 %" 차단 (★ 사용자 박제 2026-07-03)
+
+- **증상 (사용자 지적)**: "단위 신경 안써? 단위는 원이라고 해놓고 숫자는 %로 넣으면 어떻게 하냐?" — 슬롯 검증(`verify_slot`)이 값만 원본 대조하고 단위는 안 봄. 카탈로그의 15.3(%) 값을 복사하며 `단위: 원` 으로 쓰면 "15.3원"으로 렌더될 구멍.
+- **환경**: `JARVIS06_IMAGE/slot_renderer.py` 데이터 내장 슬롯 검증 경로 (ADR 013).
+- **원인**: `_ref_values` 가 원본 데이터셋에서 *값 집합만* 수집 — 값·단위가 한 몸이라는 계약이 검증에 없었음.
+- **해결**: ① `_ref_value_units` — 원본을 (값, 단위) 짝 목록으로 수집. ② `verify_slot` — 값 일치(±0.5%) 후 단위 대조: 원본 단위 *유일* → 슬롯 단위 자동 교정(진실 우선), *복수(애매)* → 행 제거. ③ 슬롯 작성 규칙에 "단위도 그 데이터셋 그대로 — 값만 복사하고 단위 바꾸면 거짓" 명문화.
+- **검증**: 3케이스 — 정상 통과 / 원(오기)→%(원본) 자동 교정 / 50.0 이 %·원 양쪽 존재(애매) → 행 제거.
+- **파일**: `JARVIS06_IMAGE/slot_renderer.py`, `JARVIS02_WRITER/draft_writer.py`
+- **교훈**: 수치 진실성 검증은 값 스칼라가 아니라 (값, 단위) 튜플 단위 — 단위가 빠지면 "숫자는 맞는 거짓"이 통과한다.
+
+### [307] 차트 이미지 내 동일 수치 중복 표기 차단 (★ 사용자 박제 2026-07-03)
+
+- **결정 (사용자 정의)**: 중복 = *같은 항목(라벨) + 같은 값* 의 반복 (예: '삼성전자 100' 이 한 차트에 두 번 = ✗). *항목이 다르면* 같은 값이라도 진실 데이터로 보존 ('삼성전자 100' + 'SK하이닉스 100' = ○).
+- **해결**: ① `image_spec.dedupe_chart_rows()` — 동일 정규화 라벨 반복 제거 + 같은 값·접두 포함 라벨 변형('매출'↔'매출액') 제거. *시계열 라벨 과반이면 무변경* (기준금리 6개월 연속 2.5% 같은 평평 구간은 정당). 적용 3곳: `render_from_spec`·`generate_infographic`·`slot_renderer.verify_slot`. ② 예방 프롬프트: 슬롯 작성 규칙(같은 값 다른 라벨 반복 금지·슬롯 제목에 값 표기 금지) + 인포그래픽 설계 규칙(KPI 와 패널이 *같은 항목의 같은 값* 반복 노출 금지 — metric 분산).
+- **검증**: 5케이스 — 삼성전자 중복 제거 / 타항목 동일값 3개 보존 / 매출·매출액 변형 제거 / 평평 시계열 보존 / 같은 접두·다른 값 보존.
+- **파일**: `JARVIS06_IMAGE/{image_spec,infographic_engine,slot_renderer}.py`, `JARVIS02_WRITER/draft_writer.py`
+- **교훈**: dedupe 기준은 "값"이 아니라 "항목+값" — 값 기준 제거는 진실 데이터(동률)를 파괴한다. 시계열 예외 필수.
+
+### [306] LNG 테마 티스토리 대본 SDK 타임아웃 — [303] 반복, 일시적 API 불가용 (코드 수정 불필요, 2026-07-03)
+
+- **증상**: `theme-publish-LNG(액화천연가스)-tistory` 하네스 step "⑤ 티스토리 대본 생성" 에서 `Pass-1 대본 생성 실패`. 네이버 대본은 SDK timeout 2회 후 3차 시도에서 성공(1575자, 35문장). 티스토리 대본 생성 시점에서도 SDK timeout 연속 발생.
+- **환경**: 16:17 테마 시작, 수집 단계 rate-limit 스로틀 8회+, 17:22 데몬 재시작(코드 변경 ERRORS [305] 반영), 수동 재실행(18:03) 에서도 동일 타임아웃 패턴.
+- **원인**: [303]과 동일 — Claude Code SDK 300s 타임아웃 연속. Max 구독 동시 세션 경합(데몬+수동실행+Claude Code 세션) 가능성. 프롬프트·테마 특수문자 무관.
+- **헛다리**: 없음 (로그 분석 즉시 확인, 회로 차단기 면제 alias 정상 작동).
+- **해결**: 코드 수정 불필요 — 일시적 API 불가용. 재시도 로직(4회+지수 백오프), 회로 차단기 면제("writer" alias), 하네스 2회 순환 모두 정상 작동. API 복구 후 재발행으로 해소.
+- **파일**: 변경 없음.
+- **교훈**: SDK 타임아웃 연속은 동시 세션 경합 시 악화 — 수동 재실행은 데몬 잡과 겹치지 않는 시간대에.
+
+### [306] 테마 주제 선정 역순 — 공식 테마 카탈로그 1페이지 버그 + 공식 테마 게이트 신설 (★ 사용자 박제 2026-07-03)
+
+- **증상 (사용자 지적)**: "글을 다 쓰고 테마가 있니 없니를 찾고 있니? 로직이 잘못됐다." — LNG(액화천연가스) 테마가 "네이버 금융 테마 매칭 없음(best=0)" 판정 후에도 LLM 종목 작문 폴백(3-loop → 6차)으로 대본까지 완성 → Pass-2 차트 데이터 단계에서야 5차·6차 폴백 전패로 데이터 부재 확정.
+- **원인 2중**: ① **카탈로그 커버리지 버그** — `_naver_fin_theme_search` 가 공식 테마 목록을 *1페이지(40개)만* 수집. 실제 공식 테마는 266개 — LNG 는 뒷페이지에 실존하는 공식 테마였는데 못 찾은 것. ② **원칙 침식** — 매칭 실패 신호를 "테마 교체"가 아니라 "LLM 으로 종목 작문해서 진행"으로 처리 (데이터 공백 사고를 버티려 쌓은 5·6차 폴백이 "공식 테마에서만 선정" 원칙을 삼킴).
+- **해결**: ① `_fetch_naver_theme_catalog()` — 전 페이지(266개) 수집 + 1h 캐시, 매처가 이를 사용 (커버리지 7배). ② `is_official_theme()` 신설 (한국어 3자+ 매칭, 2글자 테마 정확 일치 보완, 카탈로그 실패 시 fail-open). ③ **Gate A (실행)**: `collect_stocks_data` — 공식 매칭 실패 시 LLM 종목 작문 금지, 즉시 빈 반환 → data_empty 테마 교체 (킬스위치 `THEME_OFFICIAL_ONLY=0`). ④ **Gate B (선정)**: `radar_main.push_to_shared` — 비공식 테마는 파이프라인 큐잉 자체 차단.
+- **검증**: 전체 카탈로그 로드 266개. LNG·2차전지·반도체·리튬 = 공식 ✅ / 은행나무 = 차단 ⛔. 파이프라인 대기 15개 중 비공식 0~1개 식별.
+- **파일**: `JARVIS09_COLLECTOR/collect_theme.py`, `JARVIS03_RADAR/radar_main.py`
+- **교훈**: 폴백은 *일시 장애* 용이지 *원칙 위반* 용이 아니다 — "없으면 만들어서 진행" 폴백은 선정 원칙을 침식한다. 그리고 카탈로그류 수집은 페이지네이션 전수 확인 필수 (1페이지 = 커버리지 15%).
+
+### [305] 데이터 내장 차트 슬롯 — 자비스02가 설계까지, 자비스06은 렌더만 (★ 사용자 박제 2026-07-03 — 로직 전면 개정)
+
+- **결정 (사용자 지시 원문)**: "자비스09는 모든 자료를 자비스02에게만 준다. 자비스06에게는 안 준다. 자비스02는 대본을 쓸 때 차트 슬롯 안에 차트를 만드는 *모든 수치 데이터까지* 넣는다 — 이미지만 안 만들었지, 만들 준비를 다 해주는 것. 대본을 통째로 자비스06에게 넘기면 06은 슬롯 데이터로 이미지를 생성하고, 제목과 전체 대본을 보고 썸네일을 만든 뒤, 대본과 이미지를 자비스08에 넘긴다."
+- **구현**:
+  1. **슬롯 표준** — 대본 내 블록: `[CHART_N]` 제목/종류(bar|line|area|pie|kpi)/단위/데이터(라벨=값|…)/출처 `[/CHART_N]`. Pass-1 프롬프트(`_build_data_catalog`)가 카탈로그 값 *그대로 복사* 지시 (창작·변형 금지, 시간 라벨 과거→최근, 데이터셋 중복 슬롯 금지). 카탈로그에 출처 표기 추가.
+  2. **`JARVIS06_IMAGE/slot_renderer.py` 신설** — parse(블록→spec) → **verify**(슬롯 값 ↔ 대본 패키지 동승 ref_datasets(자비스09 원본) ±0.5% 대조 — 불일치 행 제거, 0행이면 슬롯 무효) → render(infographic_engine 위임). 검증 재료도 09→02→(대본 패키지)→06 으로 흐름 — 09→06 직공급 0.
+  3. **경제 경로**: `_ssp([])` — 세션풀 빈 풀 등록 (09→06 직공급 폐지 + legacy 자체수집 차단). `generate_article_html(ref_datasets=)` 로 검증 재료 동승. Pass-2 0단계에서 내장 슬롯 렌더, 실패 슬롯은 구형식 강등 → AI 사진 폴백.
+  4. **테마 경로**: `draft_processor._generate_charts` 0단계 동일 (검증 ref = 종목 실데이터 수치 재귀 수집 `_stock_numbers`).
+  5. **썸네일**: body_text 400→3,000자 (제목+전체 대본 기반) — 3곳.
+- **검증**: 파서 3슬롯 정확 파싱 + 조작 수치 슬롯(99.9) 차단·정상 슬롯 통과 단위 테스트. precommit 44종 0건.
+- **파일**: `JARVIS06_IMAGE/slot_renderer.py`(신설), `JARVIS06_IMAGE/draft_processor.py`, `JARVIS02_WRITER/{draft_writer,tistory_html_writer,trend_economic_writer}.py`
+- **후속 확정 (사용자 2026-07-03)**: 수집 문서 *전문* 은 자비스06 에 전달하지 않는다 — 슬롯에 데이터가 내장되므로 불필요. 06 이 받는 것 = 대본(슬롯 포함)+제목+검증 ref(원본 수치 값 수 KB, 조작 슬롯 렌더 전 차단용)뿐. 문서 전문은 02 의 작성 프롬프트·사실성 게이트 대조군 용도로만. (경제 경로 적용 — 테마 Pass-1 의 블록 슬롯 이행 시 동일 적용 예정)
+- **교훈**: 설계(무엇을 어떤 데이터로)와 렌더(그리기)의 책임 분리 — 데이터 선택권이 두 곳(02 대본 + 06 세션풀)에 있으면 본문↔차트 불일치가 구조적으로 발생한다. 작성자가 설계까지 끝내면 글과 이미지가 한 몸이 된다. 구형식 폴백 유지로 무회귀.
+
+### [304] 수집 자료 *전문* 대본 주입 — "내용이 풍부해야 퀄리티도 높다" (★ 사용자 박제 2026-07-03)
+
+- **결정 (사용자 지시)**: "자비스03 트렌드 정보 + 자비스09 수집 정보 *전부* 를 자비스02에 전달, 그 *모든 자료* 로 LLM 이 주제·대본(이미지 자리 포함)을 만들고, 같은 수집 정보로 검증 대조한다." — [303]의 브리프(요약 24 fact) 주입만으로는 부족, 문서 전문까지.
+- **해결**: ① `draft_writer.build_corpus_block(docs)` 신설 — 수집 문서 *전부* 를 신뢰 서열(논문>API>뉴스>기사>웹) 정렬로 프롬프트 블록화 (per_doc 2,500자·총 상한 `DRAFT_CORPUS_MAX_CHARS`=120K, 초과 시 저신뢰부터 생략+건수 명시). ② 경제 경로 nv/ts_generate_draft 2곳 + 테마 경로 _gen_theme(종전 "브리프 or 5건×300자 발췌" either/or → **브리프+전문 병행**) 주입. ③ 수치 규칙 정교화: 차트([CHART_N])=카탈로그 값만 / 본문 수치=카탈로그·근거팩·수집 전문에 *명시된* 값만 (창작 금지 — 수치 게이트가 동일 corpus 로 대조하므로 정합).
+- **검증**: 고려아연 팩 문서 61건 → 52,280자 전문 블록, 61/61건 수록 (API 데이터 선두 정렬) 확인.
+- **파일**: `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/trend_economic_writer.py`
+- **교훈**: 프롬프트 경제(요약 주입)는 모델 관점 최적화였지 글 품질 관점이 아니었다 — 재료 전부를 보이고 모델이 고르게 하는 것이 사용자가 정의한 품질 경로. 요약(규율)과 전문(풍부함)은 대체재가 아니라 보완재.
+
+### [303] 테마글 LNG(액화천연가스) Pass-1 대본 SDK 타임아웃 — 일시적 API 불가용 (코드 수정 불필요, 2026-07-03)
+
+- **증상**: `theme-publish-LNG(액화천연가스)-naver` 하네스 step "③ 네이버 대본 생성" 에서 `Pass-1 대본 생성 실패`. invoke_text("writer") → `⚠️ SDK timeout 300s — 수집된 응답: 0개` 4회 연속 (attempt 1), 2차 시도(attempt 2)도 동일 타임아웃.
+- **환경**: 16:20~16:28 수집 단계 중 rate-limit 스로틀 다수 관측 (6회+). 수집 자체는 정상 완료(문서 109건, fact 25개). 16:28:59 Pass-1 SDK 호출 시작 → 16:49:53 harness 실패 보고 (300s × 4 = 20분 타임아웃 소진).
+- **원인**: Claude Code SDK(`claude-code-sdk.query`) 가 300s 내에 응답을 반환하지 못함. rate-limit 스로틀(num_turns=0)이 아닌 순수 타임아웃 — API 완전 무응답 상태. 프롬프트 크기·테마 특수문자 무관.
+- **헛다리**: 없음 (로그 분석으로 즉시 확인).
+- **해결**: 코드 수정 불필요 — 일시적 API 불가용. 재시도 로직(4회 + 지수 백오프), 회로 차단기 면제("writer" 면제 alias), 하네스 2회 순환 모두 정상 작동. API 복구 후 재발행으로 해소.
+- **파일**: 변경 없음.
+- **교훈**: SDK 타임아웃 연속은 재시도로 해소 불가한 일시적 상태. 현 시스템은 올바르게 에스컬레이션하므로 추가 조치 불필요.
+
+### [303] 경제 대본에 수집 자산 미도달 — 근거 브리프 주입 누락 (사용자 지적 2026-07-03)
+
+- **증상 (사용자 지적 "그 많은 데이터는 어디가고?")**: 자비스09가 주제당 문서 44~61건(~5만 자)·fact 27~41개를 수집하는데, 경제 브리핑 Pass-1 대본 프롬프트에는 keyword·sector·프로필요약·supreme_block(데이터 카탈로그)만 전달 — **수집 문서·fact 가 대본 작성에 0자 도달**. 문서는 사실성 게이트 대조군·이미지 컨텍스트로만 사용.
+- **원인**: ADR 012 의 작성측 연결(`draft_writer._build_evidence_block` → evidence_brief 주입)이 *테마 경로*(_gen_theme)에만 배선. 경제 경로(tistory_html_writer Pass-1 = `_gen_economic_ts_nv*`)는 미배선 — 오전 조사에서 "경제는 collect_research 미사용" 지적 후 수집측(topic_pack)은 연결했으나 작성측 주입이 누락된 반쪽 연결.
+- **해결**: `nv/ts_generate_draft` — 팩 후보의 `evidence_path` JSON 로드 → `evidence_brief(pack)`(각도·독자의도·fact 24개+출처, ~3.6KB) 를 supreme_block 에 append → Pass-1 세 섹션 콜 전부에 근거 도달. 실측: 고려아연 팩 fact 41개 → 브리프 3,623자 주입 확인.
+- **파일**: `JARVIS02_WRITER/trend_economic_writer.py` (nv/ts_generate_draft 2곳)
+- **교훈**: 파이프라인 연결은 *수집측·작성측 양단* 을 함께 확인해야 완결 — 한쪽만 이으면 "수집은 풍성한데 글은 빈약"이 조용히 지속된다. 원시 문서 전체가 아니라 *정제된 fact 브리프* 를 주입하는 것이 ADR 012 설계 (프롬프트 경제 + 출처 강제).
+
+### [302] 수치 fact → 인포그래픽 데이터셋 승격 — 텍스트 속 수치의 차트 공급로 개통 (★ 사용자 박제 2026-07-03)
+
+- **배경 (사용자 관찰)**: "텍스트는 수집이 많이 되는데 수치 데이터는 잘 안 되네?" — 공식 통계 API(KOSIS·ECOS·DART·KRX)는 임의 주제 커버리지가 좁아 데이터셋 1~3개 → 인포그래픽 1~3개 상한(1 dataset=1 인포그래픽), 나머지 슬롯 AI 사진. 반면 근거팩의 stat fact(뉴스·공시 속 수치, 출처·기준일 박제)는 글당 19~41개인데 본문 서술에만 쓰이고 차트로 미승격.
+- **해결 (`evidence_pack.facts_to_datasets()` 신설 — 사용자 승인 "당연한거였어! 바로 만들어")**: stat fact → 차트 엔진 dataset 변환. **진실성 불변 조건**: ① 값·단위·기준일·출처 = fact 그대로 (LLM 은 라벨 작명만 — `_label_batch`, 단위 일치 규칙) ② 범위값('1708~1733')·비수치 스킵 (단일 수치만 — 거짓 차트 < 차트 없음) ③ 그룹 대표 출처 = 신뢰 티어 최상 (ADR 013 서열). 그룹핑 (question_id, unit) — 1행 그룹은 KPI 카드형. `topic_pack._precollect` 에 합류 (공식 수집분과 제목 dedup 후 병합).
+- **검증 (오늘 고려아연 실팩)**: stat 19개 → 12개 데이터셋 승격 (매출액·영업이익·ROE·온실가스 감축률·기준금리·금 현물가 등), 승격 전 수치 전수가 원본 fact 와 일치 확인. 효과: 공식 1개 + 승격 12개 = 13개 → 인포그래픽 공급 약 10배.
+- **파일**: `JARVIS09_COLLECTOR/evidence_pack.py`, `JARVIS03_RADAR/topic_pack.py`
+- **교훈**: "수치 데이터 빈곤"의 답이 수집 확대만은 아니다 — 이미 수집된 텍스트 안의 수치(출처 보존)를 구조화 트랙으로 승격하는 다리가 더 크게 벌어준다. 진실성 규정(값 불변·범위 스킵·출처 승계)만 지키면 ADR 010 과 완전 호환.
+
+### [301] 플랫폼 단위 끝까지 직렬 — harness 2액션 분리 + 적대 리뷰 7건 수정 (★ 사용자 박제 2026-07-03)
+
+- **결정 (사용자 지시 원문)**: "트렌드 분석으로 주제가 정해지면 네이버 순차 진행(수집부터 발행까지), 네이버 발행이 끝나면 그 다음 티스토리 수집 시작해서 발행까지 마무리." — 종전 *단계 직렬* (NV대본→TS대본→둘 검증→NV발행→TS발행, 검증에서 두 플랫폼 운명 결합)을 *플랫폼 직렬* 로 재구조화.
+- **구현**: economic_poster — `_nv_action`(①규정→②NV대본→검증순환→발행, max 3) 완전 종결 후 `_ts_action`(①규정→③TS대본(`nv_keyword_final` 주제 제외)→검증→발행). trend_theme_writer — `_nv_action_def`(①규정→②종목·근거 수집(공유)→③NV대본) 종결 후 `_ts_action_def`(④TS쿠키 *신선* 갱신→⑤TS대본). verify/fix/send 는 `_verify/_fix/_send_(theme_)platform` 파라미터화 + lambda 바인딩. 효과: 한쪽 재작성 순환·실패가 다른 쪽 무지연·무차단, TS 선로그인 세션 사망 문제 해소(발행 직전 갱신).
+- **적대 리뷰 (워크플로 11 에이전트) 확정 결함 7건 → 전부 수정**:
+  1. [HIGH] 테마 `skip_regen` 이 게이트(factuality/engagement) 이슈에도 True — 재작성 0회로 fingerprint abort 직행 → *해당 step 의 어떤 이슈든* skip 금지로 복원.
+  2. [HIGH] EP 결과 파일이 run() 말미 단일 기록 — 직렬화로 NV완료~종료 구간이 길어져 timeout kill 시 NV 재발행(이중 발행) → 액션 종결마다 즉시 증분 기록 + scheduler 예외 경로가 결과 파일 읽고 실패 플랫폼만 incident.
+  3. [MEDIUM] 공유 precondition 이 상대 플랫폼 자격증명까지 요구 → `_precondition_for(platform)` 분리.
+  4. [MEDIUM] `if not verify_all_logins()` — dict 항상 truthy 라 로그인 레그 영구 사문(기존 잠복) → 플랫폼별 `ok` 직접 판정 (economic+theme 양쪽).
+  5. [MEDIUM] 테마 `data_empty` 판정이 수집 미실행(사전조건 실패·동시성 차단)까지 테마 교체로 오분류 → *수집 실행 후 빈 경우만* data_empty.
+  6. [MEDIUM] LLM 데드라인 45분 단일 예산 — TS 생성이 상시 강등 → 액션마다 40분 리셋.
+  7. [MEDIUM] NV 액션의 동시 실행 중복 차단 시 TS 무조건 진행 — 인터리브 이중 발행 창 → 차단 감지 시 TS 도 중단.
+- **파일**: `JARVIS02_WRITER/{economic_poster,trend_theme_writer,scheduler}.py`, `JARVIS02_WRITER/CLAUDE_WRITER.md`
+- **교훈**: 검증·발행을 플랫폼별 액션으로 쪼갤 때 회귀 지뢰는 ① 공유 훅의 암묵 결합(precondition·skip_regen·데드라인) ② 프로세스 경계 아티팩트(결과 파일)의 기록 시점. 발행 코드 구조 변경은 적대 리뷰 의무.
+
+### [300] 수집 설계 단계 보강 — 설계 LLM 필수 면제 + 폴백 가시화 + 근거 부족 주제 교체 (★ 사용자 승인 2026-07-03)
+
+- **증상**: ① rate-limit 회로 차단 중 설계 LLM(research_planner·data_planner)이 즉시 "" 폴백 → 보편 5차원 템플릿 설계로 *조용히* 강등 (같은 팩 빌드에서 '고려아연'=정교한 LLM 설계 6문항 vs '지속가능경영보고서'=템플릿 5문항 실증). ② 재수집 3라운드 소진 후 커버리지 0/N·fact 0개여도 무조건 통과(fail-open) — 근거 없는 주제로 진행.
+- **해결**: ① `shared/llm.invoke_text(_essential=True)` 호출 단위 회로 면제 신설 → research_planner·data_planner·topic_pack 프로필 배치 3곳 적용 (설계·프로필 = 품질 조타수, 스로틀 중에도 1회 실시도). ② `plan_research` 폴백 시 `plan["fallback"]=True` 박제 → `collect_research` 반환에 `plan_fallback`·`coverage_ratio`·`insufficient`(커버리지 0 또는 fact<3) 추가. ③ `topic_pack.build_topic_pack` — 선수집 결과 insufficient 면 **다음 적합 후보로 주제 교체**, 충분 후보 부족 시 근거 얇은 후보로 보충(플래그 유지 — 02 게이트 최종 방어) + 폴백/부족/교체 발생 시 텔레그램 1회 통보. ④ 테마 파이프라인은 경고만 (종목 실데이터가 1차 근거).
+- **파일**: `shared/llm.py`, `JARVIS09_COLLECTOR/{research_planner,data_planner,collector_engine}.py`, `JARVIS03_RADAR/topic_pack.py`, `JARVIS02_WRITER/trend_theme_writer.py`
+- **교훈**: 설계는 수집 품질의 조타수 — 회로 차단기의 "비필수 즉시 폴백" 대상에서 반드시 제외. 조용한 강등(플래그·알림 없는 degrade)은 몇 주짜리 품질 저하를 숨긴다 ([299]와 동일 교훈의 LLM판).
+
+### [299] RADAR 트렌드 수집 — DataLab·경쟁강도·자동완성 4개 지연 import 전멸 (datalab_used 영구 False) (2026-07-03)
+
+- **증상**: 매일 `trends_*.json` 에 `datalab_used: False, iot_used: False` — 50개 키워드 전부 velocity "—"·competition 50.0(중립 기본값). 점수가 사실상 *구글 순위 하나* 로만 계산됨. 텔레그램 경고 0회 (조용한 degrade).
+- **환경**: `JARVIS03_RADAR/radar_main.py` — 잡(`_run_script_checked`)이 스크립트로 직접 실행 (`python radar_main.py`, cwd=JARVIS03_RADAR).
+- **원인**: `collect_today()` 안의 지연 import 4곳이 *상대 import* (`from .collectors.naver_collector import ...`) — 스크립트 실행은 패키지 컨텍스트가 없어 `ImportError: attempted relative import with no known parent package` → DataLab·IOT 폴백·경쟁강도·자동완성 **전부** except 로 조용히 스킵. 파일 상단은 같은 사유로 이미 절대 import 로 고쳐져 있었으나(주석 존재) 함수 내 지연 import 만 누락된 *부분 수정* 잔재.
+- **헛다리**: API 키 누락·쿼터·키워드 특수문자 의심 — 전부 아님 (레포 루트에서 직접 호출 시 20/20 정상, 경쟁강도도 응답).
+- **해결**: 지연 import 4곳을 상단과 동일한 절대 import (`from JARVIS03_RADAR.collectors...`) 로 통일. 잡과 동일 조건 재실행으로 datalab_used=True·velocity 분포·competition 다양화 검증.
+- **파일**: `JARVIS03_RADAR/radar_main.py` (171·183·195·208행)
+- **교훈**: ① 스크립트+패키지 겸용 모듈에서 상대 import 는 지연 import 포함 *전수* 절대화 — 상단만 고치는 부분 수정은 시한폭탄. ② 보조 데이터 실패를 조용히 스킵하면 "작동하는 척" 이 몇 주간 지속됨 — degrade 는 산출물 플래그(`datalab_used`) 뿐 아니라 *알림* 으로도 승격 필요. 검증: `grep -rn "from \.collectors" JARVIS03_RADAR/*.py` → 0행.
+
+### [298] ★ report(source, exc) 역순 호출 314곳 전원 무음 no-op — catch() 단일 진입점 양순서 정규화 (Cowork Claude 2026-07-03)
+
+- **증상**: 리포지토리 전반 `_g_report("writer", e, ...)` 형태 오류 보고 314곳이 *전부* 기록 실패(무음 no-op). 오류 자동 캐치망의 최대 단일 구멍 — writer/publish 도메인의 명시적 report 가 error_log 에 사실상 안 쌓이고 있었음.
+- **환경**: `error_collector.catch(exc_or_type, source, ...)` 에 `report = catch` 별칭. 그러나 CLAUDE.md 오류 관리 규정과 기존 314개 호출부는 구 시그니처 `report("agent_name", exc)` (source 먼저). 스텁 DB 실증: 역순 호출 시 `save_error(source=<Exception>)` sqlite 바인딩 실패 → return None (기록·메시지 전부 소실).
+- **원인**: report→catch 별칭 도입 시 구 시그니처 호출부 미이관 + 실패가 내부 try/except 에 삼켜져 무증상.
+- **헛다리**: 314곳 개별 수정 — 규모상 회귀 위험. (거부)
+- **해결**: `catch()` 진입 직후 순서 자동 교정 1곳 — `if isinstance(source, BaseException) and not isinstance(exc_or_type, BaseException): exc_or_type, source = source, str(exc_or_type)`. 구·신 양 형태 + 문자열 2-인자 형태(`catch("ValueError","log_file")`) 모두 정상. 검증: 역순/정순/문자열형 3형태 스텁 DB 라운드트립 통과.
+- **파일**: `JARVIS07_GUARDIAN/error_collector.py`
+- **교훈**: 공개 API 시그니처 변경 시 별칭은 *어댑터* 여야 한다 — 단순 이름 별칭은 문서·호출부와 조용히 어긋난다. 4중 점검의 독립 교차 리뷰(스텁 실증)가 자동 검증(컴파일·grep)이 못 잡는 시멘틱 결함을 잡았다.
+
+### [297] 전수 감사 — 조용히 죽어 있던 연결 5곳 복구 + precommit 50배 가속 (Cowork Claude 2026-07-03)
+
+- **증상**: 런타임 오류 0으로 보였으나, try/except 에 삼켜져 *조용히 무력화* 된 연결 5곳 발견 (기능은 죽고 로그만 조용). ① 네이버 쿠키 갱신 네트워크-다운 알림 미발송 ② proactive_monitor 글자수 미달 반복 감지 영구 스킵 ③ auditor 주간 감사 결과가 DB(audit_runs)에 한 번도 저장 안 됨 ④ VS Code 훅(guardian_error_hook)의 오류 수집 전면 불능 — catch 6메커니즘 중 외부 훅 경로 구멍 ⑤ dry_run CLI market 수집 + ts_generate_draft 오호출(market dict 를 supreme_block 위치에 전달).
+- **환경**: 정적 AST import-그래프 전수 검사기(188모듈)로 발견 — py_compile·precommit 은 심볼 수준 미검증이라 통과했음.
+- **원인**: 심볼 리네임·이관 후 호출자 미동기화 (`send`→`send_tg`, `get_conn`→`get_db`, `MIN_BODY_CHARS` 미존재, `collect_error` 비공개, `collect_market_data` 폐지). 모두 try/except 로 감싸져 ImportError 가 무증상.
+- **헛다리**: 없음.
+- **해결**: ①`naver_cookie_refresher` send_tg ②`proactive_monitor` MIN_VALID as MIN_BODY_CHARS **+ post_analysis 에 없는 char_count 컬럼 → LENGTH(original_content) (교차 리뷰가 import 수정만으론 여전히 죽음을 발견 — 2중 결함)** ③`auditor._save_to_db` get_db ④`error_collector` 에 `collect_error = _collect_error` 공개 별칭 (.claude 훅은 보호 경로라 수신측 복구) ⑤`dry_run` ts_generate_draft() 무인자 호출로 교정. + `preflight._REQUIRED_EXTERNAL_MODULES` 에 feedparser 추가 (J09 providers top-level import 인데 Layer 0 미검증이었음). + `precommit_check.py` 성능: owner별 전체 재읽기 O(5N)→파일 1회 읽기+텍스트 프리필터, rglob 30회(.venv 수천 파일 포함)→os.walk 1회 캐시 — 전체 44종 42s+→0.7s (데몬 부팅·pre-commit 훅 지연 제거). + 스테일 .bak 2건 삭제, CLAUDE.md 이미지 폴백 체인 문서 드리프트(Bing/HF→Nanobana/Pollinations 실상) 동기화.
+- **파일**: `JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py`, `JARVIS01_MASTER/proactive_monitor.py`, `JARVIS07_GUARDIAN/{auditor,error_collector}.py`, `JARVIS02_WRITER/dry_run.py`, `JARVIS00_INFRA/preflight.py`, `shared/precommit_check.py`, `CLAUDE.md`
+- **교훈**: try/except 방어는 *가용성* 을 지키지만 *결함 가시성* 을 죽인다 — 심볼 수준 정적 import 검사(AST)가 py_compile·grep 이 못 잡는 "조용한 단선"을 잡는다. 리네임·이관 시 `grep -rn "옛이름"` 전수 확인 의무.
+
+### [296] ADR 014 — 글 품질 강화학습 폐쇄 루프 신설 (★ 사용자 박제 2026-07-03)
+
+- **증상**: 글 품질 학습이 *누적* 에서 정지 — learning_insights 가 쌓이고 주입은 되나(3곳), 주입된 지침이 실제 글을 좋게 했는지 *검증·보상·도태가 전무*. 무효 지침도 재발견만 되면 영원히 주입. 오류 쪽(bandit)과 달리 글 품질엔 강화학습이 없었음.
+- **원인**: 사용 기록(어떤 인사이트가 어느 글에 들어갔는지) 부재 → 보상 귀속 불가 → weight 가 결과와 무관.
+- **해결 (ADR 014 — `docs/decisions/014-writing-quality-reinforcement.md` 단일 진실 소스)**: `JARVIS07_GUARDIAN/quality_learner.py` 신설 (엔진 단독). ① 작성 시 `build_insights_block()` — UCB 랭킹(가중치+탐색 보너스) 선택 + `insight_usage` 기록 ② 매일 23:45 `j07_quality_learn` — 사용↔분석(post_analysis.suggestions) 매칭 → 보상=1−Σ(high .25/med .12/low .05) → weight EMA(α=.3) 갱신 + 저성과(5회+·평균<.35) 가속 감쇠 ③ 소비 3곳(jarvis_main·economic_poster·trend_economic_writer) 은 위임 1줄로 교체 (중복 포맷 코드 3벌 제거). LLM 호출 0·실패 시 "" (작성 절대 안 막음). guardian /status 에 ✍️ 글 품질 RL 지표 노출.
+- **파일**: `JARVIS07_GUARDIAN/{quality_learner.py(신설),guardian_agent.py}`, `shared/db.py`(insight_usage 테이블+헬퍼 4종+reward 컬럼 마이그레이션), `JARVIS02_WRITER/{jarvis_main,economic_poster,trend_economic_writer}.py`, `JARVIS04_SCHEDULER/job_registry.py`(j07_quality_learn), `docs/decisions/014-*.md`(신설), `CLAUDE.md`
+- **검증**: 스크래치 DB e2e — 좋은 글(보상 .95) weight 1.2→1.335↑, 나쁜 글(보상 .01) 1.335→1.188↓, 2회차 블록에 `검증 보상` 태그, job 무예외. callback 38종 전수 resolve.
+- **교훈**: "누적"과 "강화"는 다르다 — 폐쇄 루프는 주입→관측→보상→갱신 4박자가 모두 있어야 한다. 사용 기록이 없으면 귀속이 없고, 귀속이 없으면 학습이 아니라 적재다.
+
+### [295] ADR 013 — 에이전트 파이프라인 정본 흐름 4대 원칙 (★ 사용자 박제 2026-07-03)
+
+- **결정 (ADR 013 단일 진실 소스 — `docs/decisions/013-agent-pipeline-flow.md`)**: 03(주제+프로필)→02·09 동시 제공 → 09 설계 후 무제한 수집 → 02 매력 대본 → 06 이미지 → 08 발행 (네이버 우선 직렬).
+- **원칙 ① 키워드 단독 전송 금지 (강제)**: 자비스03이 키워드를 누구에게 보내든 프로필(정의·관련어·엔티티유형) 동봉 의무 — '배'(과일? 선박? 인체?) 판별 불가 문제. 단일 진입점 `topic_pack.keyword_profile()`. 테마 파이프라인도 `collect_research(angle=프로필)` 동봉.
+- **원칙 ② 수집은 전부, 선택은 신뢰순**: "논문 > API > 뉴스 > 기사 > 웹" — 겹치면 이 순서로 선택, 수집 범위 제한 금지. 단일 진입점 `JARVIS09_COLLECTOR/models.SOURCE_TRUST_TIER`/`trust_rank()` (evidence_pack `_TIER_BY_TYPE` 이관, kor_econ 1→4 강등). `collect_for_theme` 신뢰순 정렬+content_hash 중복 시 고신뢰 유지. 수집 폭: `J09_BREADTH`(2.0배)·`J09_MAX_PER_SOURCE`(30)·`TOPIC_PACK_MAX_DATASETS`(40)·`TOPIC_PACK_RESEARCH_ROUNDS`(3).
+- **원칙 ③ 수치만 하드 게이트, 프로즈 자유**: "숫자 수치 데이터는 무조건 진실. 글은 상상·추론·예상 가능." — `law_enforcer._extract_claims/_ground_unsupported` 를 수치 포함 주장 한정으로 재정의. BLOG_SUPREME_LAW 제2조 개정 (7항 신설). 데이터 카탈로그 프롬프트 상한 `DATA_CATALOG_MAX`(16) — 넉넉 수집 도입 후 프롬프트 비대 방지 (세션풀은 전량 보유).
+- **파일**: `docs/decisions/013-agent-pipeline-flow.md`(신설), `JARVIS09_COLLECTOR/{models,collector_engine,evidence_pack}.py`, `JARVIS02_WRITER/{law_enforcer,draft_writer,trend_theme_writer}.py`, `JARVIS02_WRITER/BLOG_SUPREME_LAW.md`, `JARVIS03_RADAR/{topic_pack.py,CLAUDE_RADAR.md}`, 루트 `CLAUDE.md`
+- **검증**: `keyword_profile('배')` → "동음이의어로 과일·선박·복부…" 프로필 실증. trust_rank 서열 단위 테스트 통과. precommit 44종 0건.
+- **교훈**: 게이트는 *지킬 것(수치)* 과 *풀 것(서사)* 을 정확히 갈라야 한다 — 전부 조이면 재작성 순환 낭비, 전부 풀면 거짓 수치. 수집은 넓게, 선택은 신뢰순, 전달은 맥락 동봉.
+
+### [294] 주제 패키지 파이프라인 — 자비스03이 자비스02·09에 동시 제공 (★ 사용자 박제 2026-07-03)
+
+- **증상**: [290]의 구조적 원인 — 주제 *키워드 문자열* 이 자비스03→02→09 로 중계되며 프로필 정보(키워드의 실체)가 전달되지 않아, 09 가 '은행나무'류 중의적 키워드를 혼동 없이 수집할 방법이 없었음. 폴백 주제는 reason 조차 없이 keyword 단독 전달.
+- **사용자 박제 (원문 취지)**: "키워드만 보내지 말고 키워드를 설명하는 기본 정보(예: 은행나무 = 활엽수·산림·은행열매)까지 보내라" + "자비스03 → 자비스09 직접 구조. 자비스02를 거치지 마라. 폴백도 만들지 마라" + "제목은 자비스02가 만들어야 하니 자비스03이 자비스02와 자비스09에게 *동시에* 트렌드 정보를 제공한다".
+- **해결 (`JARVIS03_RADAR/topic_pack.py` 신설)**: ① 트렌드 수집 잡 말미 자동 실행 — 경제 후보 추출(사용이력 dedup·점수 정렬) → LLM 배치 1회로 후보별 {적합성, 프로필(한줄정의·관련어 5·엔티티유형), 교정 섹터} — *프로필 생성 자체가 오분류 트립와이어*. ② 적합 상위 2개 → **JARVIS09 직접 선수집**: `collect_research(angle=프로필요약)` + `collect_chart_data(description=프로필요약)` → `data/topic_pack_YYYY-MM-DD.json` 박제. ③ 자비스02 `nv/ts_generate_draft` 는 `pick_candidate()` 소비만 — `select_*_topic`·`collect_for_theme`/`collect_chart_data` 직접 호출 전면 폐지 (폴백 없음, 팩 부재 시 `build_topic_pack()` 즉석 실행 = 동일 단일 경로). 프로필은 `[주제 프로필 — 자비스03]` 블록으로 작성 프롬프트에 주입 → 제목·대본이 주제 실체 혼동 불가. ④ 강제 주제(JARVIS_FORCE_*)도 `build_for_keyword()` 경유 — 03→09 구조 유지. ⑤ docs 는 CollectionResult asdict 직렬화 → `restore_docs()` 복원 (JARVIS06·prepublish 게이트 호환).
+- **파일**: `JARVIS03_RADAR/topic_pack.py`(신설), `JARVIS03_RADAR/jobs.py`, `JARVIS02_WRITER/trend_economic_writer.py`, `JARVIS03_RADAR/CLAUDE_RADAR.md`, `JARVIS02_WRITER/CLAUDE_WRITER.md`
+- **교훈**: 에이전트 간 인터페이스에 *문자열 하나* 만 흘리면 하류가 맥락을 재구성할 수 없다 — 구조체(키워드+프로필+선수집 데이터)로 전달. 부수 효과: 수집이 발행 창(06:30) 밖(06:00 잡)으로 이동 → 타임아웃 예산 확보. `select_naver/tistory_topic` 은 레거시(run_naver/run_tistory, guard 차단)에만 잔존.
+
+### [293] 네이버 최종 발행 클릭 실패 — 주간/in-daemon 실행에서 OS 물리 클릭이 팝업만 닫음 (★ 사용자 박제 2026-07-03)
+
+- **증상**: 사용자 증언 "편집창 작성 다 하고 발행창을 못 띄움". 실측(스크린샷 popup.png/before_publish.png 08:53): 발행 팝업은 정상 오픈 + 카테고리·태그 완료 — 실패 지점은 팝업 내 최종 '발행' 버튼의 OS 물리 클릭(고정 좌표 CGEvent)이 버튼을 빗맞혀 **팝업만 닫힘**. 클릭 후 URL /postwrite 유지 → 재시도 시 버튼 미발견 → Layer4 발행 실패.
+- **환경**: `JARVIS08_PUBLISH/platforms/naver_poster.py` 최종 발행 클릭 (ERRORS [247]에서 JS click 차단 우회용으로 도입한 물리 클릭). 새벽 subprocess 런(06-08~06-19)은 전부 성공, 주간/in-daemon 런(06-04 4회·06-07·07-03 2회)은 전부 실패 — **사용자 기기 사용 중 화면/윈도우 전면 상태 의존이 원인**.
+- **헛다리**: "발행창(팝업)이 안 뜬다" 가정 — 팝업은 떴음. 실패는 팝업 내 *최종 클릭*.
+- **해결 (`naver_poster.py`)**: ① `_click_publish_btn()` 신설 — dim 오버레이 제거 → 버튼 WebElement 탐색 → **ActionChains 클릭** (CDP 신뢰 이벤트, OS 포커스·화면좌표 무관 — 같은 팝업의 태그 입력이 이미 동일 방식으로 성공 중인 것이 실증). ② ElementClickInterceptedException 시 dim 재제거 후 1회 재시도, ActionChains 예외 시에만 물리 클릭 폴백. ③ 최초 발행·재발행·팝업 재오픈 3개 경로 모두 교체. ④ viewport(1440px) 밖 좌표 폴백 (1452,604) 제거.
+- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py`
+- **교훈**: OS 물리 클릭(CGEvent/pyautogui)은 *사용자가 기기를 쓰는 주간*에 창 가림·포커스 이동으로 결정론적으로 실패. ERRORS [247]의 "JS click 차단"은 `b.click()`(isTrusted=false) 한정 — ActionChains(isTrusted=true)는 차단 대상 아님. **주간 시간대(/economic_naver 수동 트리거) 재현 검증 필수.**
+
+### [292] 티스토리 쿠키 유효성 판정 오탐 — 공개 페이지 기준 검사로 만료 쿠키 통과 (2026-07-03)
+
+- **증상**: 아침 발행 시 TSSESSION 만료 상태(실측 수명 ≤13.5h)인데 쿠키 점검 통과 → 에디터 진입 시 `manage/newpost` → `/auth/login` 튕김 반복 (07-03 09:16 재발행 2회 튕김 후 갱신 성공, 2.5시간 지연).
+- **원인 2가지**: ① `tistory_cookie_refresher.check_cookie_valid()` 가 *공개 블로그 홈* 에서 `TS_BLOG in page` 검사 — 비로그인에도 블로그명은 항상 포함 → 만료 쿠키 유효 판정. ② `tistory_poster._login()` 성공 판정 `'login' not in current_url` — www.tistory.com 은 비로그인이어도 리다이렉트 없음 → 항상 성공 오탐.
+- **헛다리**: "티스토리 Selenium 반복 실패" — 최근 2주 셀레늄 자체 실패 패턴 없음. 문제는 유효성 *판정* 오탐.
+- **해결**: ① `check_cookie_valid()` — `manage/newpost` 진입 후 `/auth/login`·`accounts.kakao.com` 리다이렉트 여부로 실판정 (임시저장 alert dismiss 처리). ② `_login()` — 동일 manage 기준 판정 + 만료 확인 즉시 `refresh_cookie()` **선제 갱신** (기존 튕김→재로그인 지연 폴백은 안전망 잔존).
+- **파일**: `JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py`, `JARVIS08_PUBLISH/platforms/tistory_poster.py`
+- **교훈**: 로그인 유효성은 반드시 *로그인 필수 페이지* 접근으로 판정. 공개 페이지 문자열 검사는 구조적 오탐.
+
+### [291] 인포그래픽 렌더 직후 전량 소실 — save_article_html 의 *.jpg 일괄 삭제 (2026-07-03)
+
+- **증상**: `[배치설계] 4/4개 인포그래픽 LLM 설계 완료` + `차트 완료` 로그 후 `[image-validate] 누락 — infg_1~4.jpg` 4건 전부 파일 없음 → law_enforcer 블록 제거 → 제4조 위반(글 연속+이미지 부재 3개 섹션) 재작성 순환. 사용자 체감 "인포그래픽 5개밖에 안 나옴".
+- **원인**: 인포그래픽 엔진(2026-06-30, 85점 엔진)이 차트 출력을 .png→**.jpg** 로 변경했는데, `tistory_html_writer.save_article_html()` 의 옛 정리 로직("JPG=SVG 스크린샷만 삭제" 가정)이 Pass-2 렌더 *직후* `img_dir.glob("*.jpg")` 일괄 삭제 → 방금 만든 인포그래픽 전량 파괴. (동종 사고: 과거 save_article_html PNG 삭제 건 — 같은 클래스 재발.)
+- **헛다리**: rate-limit — 인포그래픽 설계·렌더는 양 플랫폼 모두 성공했음(설계 LLM 1회 성공). 개수 자체(TS 4/NV 2)는 버그 아니라 *게이트 통과 실데이터 수 상한* (1 dataset = 1 인포그래픽, 반복 금지) — 개수를 늘리려면 주제·데이터 품질 개선이 경로 (ERRORS [290]).
+- **해결**: ① `save_article_html()` — *본문(html)이 참조하는* jpg 는 삭제 제외 (참조 가드). 폴더 리셋은 draft 시작 시 `_cleanup_*_images()` 담당. ② `image_validators._validate_image_files()` — 누락 2건+ 시 GUARDIAN `report()` 연동 (조용한 블록 드롭 → 학습 루프 미포착 해소).
+- **파일**: `JARVIS02_WRITER/tistory_html_writer.py`, `JARVIS06_IMAGE/validators/image_validators.py`
+- **교훈**: 파이프라인 *도중* 산출물 폴더 일괄 삭제는 순수 파괴 행위 — 정리는 파이프라인 *시작* 시점에만. 이미지 포맷 변경 시 정리 로직의 포맷 가정 전수 grep 필수.
+
+### [290] 경제 브리핑 주제 '은행나무' — 섹터 오분류 + 주제 적합성 게이트 부재 (★ 사용자 박제 2026-07-03 — "데이터는 실질적·유익·진실해야")
+
+- **증상**: 네이버 경제 브리핑 주제로 "[금융·투자] 은행나무"(나무!) 선정 → KOSIS *임업 재배면적* 통계로 인포그래픽 생성 → "가을을 물들이는 은행나무 재배 현황" 글이 경제 브리핑으로 완성 단계까지 무저항 진행. 오분류가 "은행나무가 금융 섹션에 뜨는 이유: 자산운용 시장의 새로운 테마" 허위 전제 앵글까지 전파.
+- **원인 사슬**: ① `JARVIS03_RADAR/analyzer.py` 부분 문자열 매칭 — 힌트 '은행'(2글자) ⊂ '은행나무' → 금융·투자 (LLM 재분류는 sector=='기타' 만 대상이라 교정 기회 차단. '은행나무를'·'대출은'·'금리는' 조사 파편도 동일). ② `select_naver_topic` 폴백이 scored_keywords 첫 항목을 점수 임계·적합성 검증 0으로 채택. ③ 트렌드 수집 최조기 09:00 > 브리핑 06:30 → 아침 발행 항상 전일 폴백 데이터. ④ 발행 전 게이트에 주제 적합성 레그 부재 (사실성 레그는 source_docs=은행나무 문서 대비 자기일관성만 검사).
+- **헛다리**: 데이터 *수집* 결함 — 수집은 키워드 '은행나무'의 진짜 실데이터(임업 통계)를 성실히 수집했음. 진원은 주제 선정(GIGO). chart_generator 의 garbage 차단 게이트도 정상 작동.
+- **해결**: ① `analyzer.classify_keyword_conf()` — 2글자 이하 힌트 부분매칭 + 키워드가 힌트보다 긴 복합어 = 저신뢰 → LLM 재분류 대상 확대 (`score_keywords` 연동). ② `trend_economic_writer._topic_econ_fit()` + `_first_fit_topic()` — 주제 선정 시 LLM 적합성 판정(상위 5 후보), LLM 미가용 시 분류 신뢰도 결정론 폴백. 부적합 후보 강행 금지 — 전 후보 부적합 시 `_build_emergency_trends()`(경제 핫이슈 LLM 생성) 폴백. select_naver/tistory_topic 양쪽 + 폴백 풀 opportunity_score 정렬 적용. ③ `job_registry` 에 `radar_trends_06`(06:00) 조기 수집 잡 추가.
+- **파일**: `JARVIS03_RADAR/analyzer.py`, `JARVIS02_WRITER/trend_economic_writer.py`, `JARVIS04_SCHEDULER/job_registry.py`
+- **교훈**: 짧은 힌트 부분 문자열 매칭은 한국어 복합어에서 구조적 오분류 ('은행나무'·'금리는'). 주제 선정은 *적합성 게이트* 필수 — 데이터 품질 붕괴의 진원은 수집이 아니라 주제(GIGO). 부적합 키워드 강행 < 발행 지연.
+
+### [289] 발행 파이프라인 시간 보호 — 네이버 우선 직렬화 + 데드라인 + 로그 유실 방지 (★ 사용자 박제 2026-07-03)
+
+- **증상**: [288] 타임아웃 시 ① SIGKILL 로 마지막 ~8KB(수 분) 로그 유실(블록 버퍼링) — 발행 단계 진입 여부 진단 불가 ② 고아 Chrome 이 편집창 연 채 방치(사용자가 목격) ③ 티스토리 우선 순서라 네이버가 후순위로 밀림.
+- **해결**: ① **네이버 먼저 → 티스토리 직렬** (★ 사용자 박제): economic_poster steps ②네이버→③티스토리 + `_send_all` 네이버 먼저, `select_tistory_topic(nv_keyword=)` 중복 배제 방향 반전. trend_theme_writer 도 동일 스왑 (③NV→④TS + 발행 순서, 선로그인 ts_driver 헬스체크 추가). jarvis_main 은 이미 네이버 우선. ② `scheduler.run_economic_poster` — `PYTHONUNBUFFERED=1`(로그 유실 방지) + timeout 3600→5400 + 타임아웃 예외 시 자동화 프로필 Chrome 정리. ③ `economic_poster.run()` 시작 시 `JARVIS_LLM_DEADLINE_TS`(+2700s) 설정 → `invoke_text` 잔여 <10분 시 재시도 1회·백오프 0 강등 — 발행(Layer 4) 시간 보장. ④ 주요 마커 4곳([TISTORY/NAVER-DRAFT]·Layer3·Layer4) timestamp 접두.
+- **파일**: `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/trend_economic_writer.py`, `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS02_WRITER/scheduler.py`, `shared/llm.py`
+- **교훈**: subprocess stdout 파일 리다이렉트는 블록 버퍼링 — SIGKILL 진단력 확보에 `PYTHONUNBUFFERED=1` 필수. 발행 도중 kill 이 최악의 실패 모드 — 생성 단계에 데드라인, 발행 단계에 시간 여유.
+
+### [288] economic_poster 3600초 타임아웃 재발 — rate-limit 재시도 누적 (108회 throttle) (2026-07-03)
+
+- **증상**: `Command '[...economic_poster.py', '--scheduled']' timed out after 3599.999s` — naver, tistory 양쪽 발행 실패. ERRORS [241]과 동일 타임아웃이나 원인 상이.
+- **환경**: `shared/llm.py:invoke_text` rate-limit 재시도 로직 (2026-07-01 추가). 경제 브리핑 전체 파이프라인.
+- **원인**: Anthropic API rate-limit 지속 → `invoke_text` 4회 재시도 × 지수 백오프(4·8·16·30s) × 파이프라인 내 다수 LLM 호출 = 누적 지연. 로그에 rate-limit 스로틀 메시지 **108회** 발생. 각 `invoke_text` 호출이 독립적으로 ~30초 백오프 소모 → 27+ 호출 × 30초 = 810초+ 백오프만으로 파이프라인 총 시간 3600초 초과. research_planner·chart_generator·AI사진 대체 각각 독립 재시도 → 글로벌 조율 부재.
+- **헛다리**: [241]의 `_build_j09_context` 블로킹과는 별개 — 이미 캐시+shutdown(wait=False)로 해결됨. 이번은 LLM 호출 자체의 누적 재시도가 원인.
+- **해결 (`shared/llm.py`)**: 글로벌 rate-limit 회로 차단기 도입. ① `_circuit_consecutive_throttles` — 연속 throttle 카운터. ② 연속 ≥3회(`_CIRCUIT_THRESHOLD`) throttle 시 회로 open → `invoke_text` 즉시 "" 반환 (재시도 0, 백오프 0). ③ 쿨다운 90초(`_CIRCUIT_COOLDOWN_SEC`) 경과 후 probe 1회 허용 → 성공 시 close. ④ 정상 응답 시 즉시 close. env 튜닝: `LLM_CIRCUIT_THRESHOLD`, `LLM_CIRCUIT_COOLDOWN_SEC`.
+- **파일**: `shared/llm.py`
+- **교훈**: 개별 호출의 재시도 로직은 단발 rate-limit에는 효과적이나, 지속적 rate-limit 시 파이프라인 내 다수 호출의 재시도가 **곱셈적으로 누적**되어 전체 타임아웃 초과. 글로벌 회로 차단기로 "지속 rate-limit" 상태를 조기 감지하고 즉시 폴백으로 전환해야 파이프라인 진행 보장.
+
 ### [286] 수동검토 큐 214건 오염 — 일시적/외부/제어흐름 오류가 wontfix 로 잘못 분류 (2026-06-28)
 
 - **증상**: 대시보드 수동검토 탭에 210+건 누적. 대부분 ① 네트워크 일시오류(ConnectionError telegram·radar) ② Selenium 환경(WebDriverException ERR_INTERNET_DISCONNECTED·SessionNotCreated·InvalidSessionId·TimeoutException) ③ 외부 API(Pollinations 402·HuggingFace HTTP 402/410) ④ 정상 제어흐름(harness "종목 데이터 0개 — 다른 테마로") ⑤ Claude CLI 운영(quota·timeout·cli_not_found) ⑥ 이미 수정된 코드버그(stale) ⑦ stale preflight(모듈 설치됐는데 옛 PATH 런 실패). 진짜 미수정 코드버그는 0건.
