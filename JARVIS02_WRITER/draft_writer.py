@@ -326,6 +326,49 @@ def _stocks_text(stocks_data: dict) -> str:
 #  경제 브리핑 텍스트 대본 — 티스토리·네이버 (Pass-1)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+def build_corpus_block(docs, max_total: int | None = None, per_doc: int = 2500) -> str:
+    """★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다").
+
+    자비스09 수집 문서 전부를 대본 프롬프트에 전달 — LLM 이 모든 자료를 보고
+    주제·서사·통찰을 구성한다. evidence_brief(수치 규율)와 *병행* 주입.
+    신뢰 서열(논문>API>뉴스>기사>웹) 정렬 — 상한 초과 시 저신뢰부터 생략(건수 명시).
+    """
+    if not docs:
+        return ""
+    import os as _os_c
+    if max_total is None:
+        max_total = int(_os_c.getenv("DRAFT_CORPUS_MAX_CHARS", "120000") or "120000")
+
+    def _a(d, k, default=""):
+        return d.get(k, default) if isinstance(d, dict) else getattr(d, k, default)
+
+    try:
+        from JARVIS09_COLLECTOR.models import trust_rank
+        docs = sorted(docs, key=lambda d: trust_rank(str(_a(d, "source_type"))))
+    except Exception:
+        docs = list(docs)
+
+    lines = ["[★ 수집 자료 전문 — 글의 서사·맥락·통찰은 아래 *모든 자료* 를 근거로 "
+             "풍부하게 구성하라. 수치 인용 규칙은 실데이터 카탈로그·근거 팩 참조]"]
+    used = 0
+    included = 0
+    for i, d in enumerate(docs, 1):
+        body = str(_a(d, "cleaned_text") or "").strip()[:per_doc]
+        if not body:
+            continue
+        entry = f"--- 자료 {i} [{_a(d, 'source_type')}] {str(_a(d, 'title'))[:70]}\n{body}"
+        if used + len(entry) > max_total:
+            break
+        lines.append(entry)
+        used += len(entry)
+        included += 1
+    omitted = len(docs) - included
+    lines.append(f"(수집 자료 {len(docs)}건 중 {included}건 수록"
+                 + (f" — 길이 상한으로 신뢰 낮은 순 {omitted}건 생략" if omitted > 0 else "")
+                 + ")")
+    return "\n".join(lines)
+
+
 def _build_data_catalog(datasets) -> str:
     """수집된 실데이터 → 대본 프롬프트용 카탈로그.
 
@@ -354,8 +397,9 @@ def _build_data_catalog(datasets) -> str:
             val = r.get("value", "")
             if lbl != "" and val != "":
                 lines.append(f"    - {lbl}: {val}{u}")
-    lines.append("★ 위 목록에 *없는* 수치는 본문·차트에 절대 쓰지 마라 — 실데이터 없는 수치는 거짓이다.")
-    lines.append("★ 본문에서 수치를 언급할 땐 위 값을 *그대로* 인용하라 (임의 반올림·창작 금지).")
+    lines.append("★ 차트([CHART_N])의 수치는 위 목록의 값만 사용한다 — 목록 밖 수치 차트 금지.")
+    lines.append("★ 본문 수치는 위 카탈로그·근거 팩·수집 자료 전문에 *명시된* 값만 그대로 인용"
+                 " (창작·임의 반올림 금지 — 출처 없는 숫자는 거짓이다).")
     lines.append("★ [CHART_N: <위 목록의 제목 그대로>] 형태로, 글 흐름에 맞는 위치에 배치하라.")
     return "\n".join(lines)
 
@@ -794,19 +838,15 @@ def _gen_theme(
 - 금지: 이미지·표 두 개 연속 (예: [CHART_X][CHART_Y]), 문단 3개+ 연속
 - 표(<table>)도 시각 요소로 카운트 — 표 뒤에 즉시 차트 금지, 반드시 <p> 1개 삽입 후 차트."""
 
-    # ★ 근거 주입 (ADR 012) — EvidencePack 브리프 우선, 없으면 종전 문서 발췌 폴백
+    # ★ 근거 주입 (ADR 012 → 2026-07-03 확대): EvidencePack 브리프(수치 규율) +
+    #   수집 자료 *전문*(서사 재료) 병행 — "내용이 풍부해야 퀄리티도 높다" (사용자 박제).
     _ref_block = ""
     _evidence_block = _build_evidence_block(evidence_pack)
     if _evidence_block:
-        _ref_block = f"\n\n{_evidence_block}"
-    elif collection_docs:
-        _lines = []
-        for _i, _doc in enumerate(collection_docs[:5], 1):
-            _src  = getattr(_doc, "source_type", "")
-            _titl = getattr(_doc, "title", "") or ""
-            _body = (getattr(_doc, "cleaned_text", "") or "")[:300]
-            _lines.append(f"[참고{_i}] ({_src}) {_titl}\n{_body}")
-        _ref_block = "\n\n[참고 자료 — JARVIS09 수집 (사실 확인·최신 동향 반영에 활용)]\n" + "\n---\n".join(_lines)
+        _ref_block += f"\n\n{_evidence_block}"
+    _corpus_block = build_corpus_block(collection_docs)
+    if _corpus_block:
+        _ref_block += f"\n\n{_corpus_block}"
 
     # ★ 서사 아웃라인 1패스 (ADR 012) — 구조 설계 후 작성 (실패 시 빈 블록)
     _narrative_block = _plan_narrative(theme, sector, _evidence_block,

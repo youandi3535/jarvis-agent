@@ -2194,9 +2194,39 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
         except Exception as _de:
             print(f"  ⚠️ [데이터-우선] 팩 데이터 주입 스킵: {_de}")
 
+        # ★ 근거 브리프 주입 (사용자 지적 2026-07-03 — ERRORS [303]): 수집 문서에서
+        #   추출된 fact(출처 표기)를 대본 프롬프트에 직접 주입 — ADR 012 작성측 연결이
+        #   테마 경로에만 있고 경제 경로에 누락돼 "수집 자산 대본 미도달"이던 병목 해소.
+        try:
+            _ev_path = _cand.get("evidence_path") or ""
+            if _ev_path:
+                import json as _ej
+                from pathlib import Path as _EPath
+                _ev_pack = _ej.loads(_EPath(_ev_path).read_text(encoding="utf-8"))
+                from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
+                _brief = evidence_brief(_ev_pack)
+                if _brief:
+                    supreme_block = (supreme_block or "") + "\n\n" + _brief
+                    print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
+                          f"→ 대본 프롬프트 직접 주입")
+        except Exception as _ebe:
+            print(f"  ⚠️ [근거 브리프] 주입 스킵: {_ebe}")
+
         # ★ 주제 문서 — 자비스03 팩의 선수집 문서 (JARVIS09 재수집 없음)
         _kw_collection_docs = _tp_docs(_cand) or list(collection_docs or [])
         print(f"  🕸️ [topic_pack] '{keyword}' 선수집 문서 {len(_kw_collection_docs)}건 사용")
+
+        # ★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다"):
+        #   브리프(수치 규율)에 더해 문서 전체를 서사 재료로 대본 프롬프트에 전달.
+        try:
+            from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
+            _corpus = _bcb(_kw_collection_docs)
+            if _corpus:
+                supreme_block = (supreme_block or "") + "\n\n" + _corpus
+                print(f"  📖 [수집 전문] 문서 {len(_kw_collection_docs)}건 "
+                      f"→ 대본 프롬프트 전문 주입 (~{len(_corpus) // 1000}K자)")
+        except Exception as _cbe:
+            print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
         from JARVIS02_WRITER.tistory_html_writer import (
             generate_article_html, save_article_html, screenshot_article,
@@ -2404,9 +2434,38 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
         except Exception as _de:
             print(f"  ⚠️ [데이터-우선] 팩 데이터 주입 스킵: {_de}")
 
+        # ★ 근거 브리프 주입 (사용자 지적 2026-07-03 — ERRORS [303]): 수집 문서에서
+        #   추출된 fact(출처 표기)를 대본 프롬프트에 직접 주입 — 경제 경로 병목 해소.
+        try:
+            _ev_path = _cand.get("evidence_path") or ""
+            if _ev_path:
+                import json as _ej
+                from pathlib import Path as _EPath
+                _ev_pack = _ej.loads(_EPath(_ev_path).read_text(encoding="utf-8"))
+                from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
+                _brief = evidence_brief(_ev_pack)
+                if _brief:
+                    supreme_block = (supreme_block or "") + "\n\n" + _brief
+                    print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
+                          f"→ 대본 프롬프트 직접 주입")
+        except Exception as _ebe:
+            print(f"  ⚠️ [근거 브리프] 주입 스킵: {_ebe}")
+
         # ★ 주제 문서 — 자비스03 팩의 선수집 문서 (JARVIS09 재수집 없음)
         _kw_collection_docs = _tp_docs(_cand) or list(collection_docs or [])
         print(f"  🕸️ [topic_pack] '{keyword}' 선수집 문서 {len(_kw_collection_docs)}건 사용")
+
+        # ★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다"):
+        #   브리프(수치 규율)에 더해 문서 전체를 서사 재료로 대본 프롬프트에 전달.
+        try:
+            from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
+            _corpus = _bcb(_kw_collection_docs)
+            if _corpus:
+                supreme_block = (supreme_block or "") + "\n\n" + _corpus
+                print(f"  📖 [수집 전문] 문서 {len(_kw_collection_docs)}건 "
+                      f"→ 대본 프롬프트 전문 주입 (~{len(_corpus) // 1000}K자)")
+        except Exception as _cbe:
+            print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
         from JARVIS02_WRITER.tistory_html_writer import (
             generate_article_html, extract_title, extract_text_content,

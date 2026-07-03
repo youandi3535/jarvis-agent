@@ -148,6 +148,19 @@ def _precollect(keyword: str, sector: str, summary: str) -> dict:
         out["plan_fallback"] = bool(rs.get("plan_fallback"))
         out["coverage_ratio"] = rs.get("coverage_ratio", 0.0)
         out["insufficient"] = bool(rs.get("insufficient"))
+        # ★ 수치 fact → 데이터셋 승격 (사용자 박제 2026-07-03 — ERRORS [302]):
+        #   텍스트 근거 속 수치(값·단위·출처 박제)를 인포그래픽 공급원으로 합류.
+        try:
+            from JARVIS09_COLLECTOR.evidence_pack import facts_to_datasets
+            _fact_ds = facts_to_datasets(rs.get("evidence_pack") or {})
+            if _fact_ds:
+                _seen_titles = {d.get("title") for d in out["datasets"]}
+                _new = [d for d in _fact_ds if d.get("title") not in _seen_titles]
+                out["datasets"] = list(out["datasets"]) + _new
+                log.info(f"[topic_pack] 수치 fact → 데이터셋 승격 {len(_new)}개 "
+                         f"(공식수집 {len(_seen_titles)} + fact 승격 = 총 {len(out['datasets'])})")
+        except Exception as _fe:
+            log.warning(f"[topic_pack] fact 데이터셋 승격 스킵: {_fe}")
     except Exception as e:
         log.warning(f"[topic_pack] 리서치 선수집 실패({keyword}): {e}")
         _g_report("radar", e, module=__name__, func_name="_precollect")
