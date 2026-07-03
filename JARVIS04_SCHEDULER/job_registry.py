@@ -30,6 +30,11 @@ except ImportError:
 
 DEFAULT_JOBS: list[dict] = [
     # ── JARVIS03 RADAR ─────────────────────────────────────────
+    # ★ 06:00 조기 수집 (ERRORS [290] — 2026-07-03): 종전 최조기 09:00 은 06:30 경제
+    #   브리핑보다 늦어 아침 발행이 *항상* 전일 폴백 데이터(신선도·DataLab 無) 사용.
+    {"id":"radar_trends_06", "name":"트렌드 수집(06시 — 경제 브리핑 前)", "trigger":"cron",
+     "kwargs":{"hour":6,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
+     "misfire_grace_time":1200, "owner":"jarvis03_radar"},
     {"id":"radar_trends_09", "name":"트렌드 수집(09시)",  "trigger":"cron",
      "kwargs":{"hour":9,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
      "misfire_grace_time":3600, "owner":"jarvis03_radar"},

@@ -260,19 +260,20 @@ def _generate_extra_ai_photos(keyword: str, sector: str, count: int, out_dir: "P
     _today2 = _dt2.date.today().isoformat()
     # 날짜를 seed에 포함시켜 매일 다른 프롬프트 조합 선택
     _rng = _rand2.Random(hash(f"{keyword}|{_today2}"))
+    # ★ 글 관련성 강제 (사용자 박제 2026-07-03): 모든 프롬프트는 keyword(글 주제)를
+    #   *실제 피사체* 로 앵커. 야경·정부청사 등 주제 비고정 배경 프롬프트 금지 —
+    #   주제와 무관한 임의 사진(poll_*.png 무관 이미지 사고) 원인. 슬롯 사진과 동일 원칙(부차B).
     _base_prompts = [
-        f"{keyword} 산업 현황과 미래 전망, 활기찬 비즈니스 현장",
-        f"{keyword} 관련 주식 시장 분석, 트레이딩 화면과 차트",
-        f"{sector} 섹터 투자 트렌드, 현대적인 오피스",
-        f"{keyword} 기업 성장 동력, 연구개발 현장",
-        f"{keyword} 글로벌 시장 경쟁, 항공사진 도시 전경",
-        f"{sector} 혁신 기술 현장, 스마트 팩토리",
-        f"{keyword} 공급망 현황, 물류 허브",
-        f"{keyword} 투자 포인트, 한국 증권가 야경",
-        f"{keyword} 미래 성장 산업, 첨단 기술 연구소",
-        f"{sector} 시장 경쟁 구도, 도심 금융지구",
-        f"{keyword} 소비자 트렌드, 활기찬 시장 거리",
-        f"{keyword} 정책 변화 영향, 국회의사당·정부청사",
+        f"{keyword} 를 직접 보여주는 실제 다큐멘터리 사진, 넓은 전경, 자연광",
+        f"{keyword} 관련 제품·설비 중심 클로즈업, 실제 현장, 사실적",
+        f"{keyword} 현장에서 일하는 사람들, 실제 작업 장면, 자연광",
+        f"{keyword} 관련 실제 산업 현장 내부, 밝은 조명, 사실적",
+        f"{keyword} 관련 실제 장소·건물 외관, 도시 배경, 낮, 실사",
+        f"{keyword} 관련 물류·운송 현장, 실제 차량·설비, 사실적",
+        f"{keyword} 관련 연구개발 현장, 실제 실험실 장비와 연구원",
+        f"{keyword} 자료를 검토하는 사람, 실제 사무실, 모니터 화면, 자연광",
+        f"{keyword} 관련 생산 라인, 실제 공장 내부, 사실적",
+        f"{keyword} 관련 매장·거래 현장, 실제 사람들, 낮, 실사",
     ]
     _rng.shuffle(_base_prompts)
     prompts = _base_prompts[:count]
@@ -595,8 +596,13 @@ def save_article_html(html: str, keyword: str, platform: str = "") -> tuple:
     html_dir.mkdir(parents=True, exist_ok=True)
     img_dir.mkdir(parents=True, exist_ok=True)
 
-    # JPG(SVG 스크린샷) 만 삭제 — PNG(matplotlib 차트)는 Pass-2 에서 이미 생성됨
+    # ★ 발행 도중 이미지 삭제 금지 (ERRORS [291] — 2026-07-03): 인포그래픽 엔진(2026-06-30)이
+    #   차트를 .jpg 로 출력하면서, 옛 "JPG=SVG 스크린샷" 가정의 일괄 삭제가 Pass-2 인포그래픽
+    #   전량을 렌더 직후 파괴 → image-validate 누락 → 제4조 위반 순환. 폴더 리셋은 draft 시작 시
+    #   _cleanup_*_images() 가 담당 — 여기서는 *본문이 참조하지 않는* 잔재만 제거.
     for old_f in img_dir.glob("*.jpg"):
+        if old_f.name in html or str(old_f) in html:
+            continue   # 본문 참조 이미지 — 삭제 금지
         old_f.unlink(missing_ok=True)
     old_html = html_dir / "article.html"
     if old_html.exists():

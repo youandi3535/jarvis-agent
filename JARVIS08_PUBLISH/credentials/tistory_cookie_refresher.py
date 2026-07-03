@@ -250,12 +250,28 @@ def check_cookie_valid(driver) -> bool:
         # ★ 강제 이동 — 다른 블로그(the3rdfloor) 잔류·멈춤 완전 차단 (사용자 박제)
         force_my_blog(driver)
 
-        page = driver.page_source
-        if "로그아웃" in page or "글쓰기" in page or TS_BLOG in page:
-            print("  ✅ 쿠키 유효 — 로그인 상태 정상")
+        # ★ 로그인 *필수* 페이지로 판정 (ERRORS [292] — 2026-07-03): 종전 'TS_BLOG in page'
+        #   휴리스틱은 *공개 블로그 홈* 검사라 비로그인에도 블로그명이 항상 포함 → 만료
+        #   쿠키가 유효 판정되는 오탐. manage 진입 시 /auth/login 리다이렉트 여부가 진실.
+        try:
+            from selenium.common.exceptions import UnexpectedAlertPresentException
+            try:
+                driver.get(f"https://{TS_BLOG}.tistory.com/manage/newpost/")
+                _s(3)
+            except UnexpectedAlertPresentException:
+                try:
+                    driver.switch_to.alert.dismiss()   # 임시저장 alert — 새 글 기준
+                    _s(1)
+                except Exception:
+                    pass
+            _cur = (driver.current_url or "").lower()
+            if "/auth/login" in _cur or "accounts.kakao.com" in _cur:
+                print("  ❌ 쿠키 만료 — manage 진입이 로그인으로 리다이렉트")
+                return False
+            print("  ✅ 쿠키 유효 — manage 페이지 접근 정상")
             return True
-        else:
-            print("  ❌ 쿠키 만료 — 갱신 필요")
+        except Exception as _me:
+            print(f"  ⚠️ manage 판정 오류({_me}) — 보수적으로 만료 처리")
             return False
     except Exception as e:
         print(f"  ❌ 쿠키 체크 오류: {e}")

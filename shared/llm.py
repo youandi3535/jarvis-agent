@@ -338,6 +338,25 @@ _LLM_MIN_INTERVAL = float(os.getenv("LLM_MIN_INTERVAL_SEC", "0") or "0")
 _LLM_PACE_LOCK = _threading.Lock()
 _LLM_LAST_SPAWN = [0.0]
 
+# ★ Rate-limit 회로 차단기 (ERRORS [288] — 2026-07-03)
+# 연속 *진짜 스로틀* N회 시 open → 비필수 호출은 즉시 "" 반환 (재시도 0)
+# 쿨다운 후 probe 1회(1샷) 허용 → 성공 시 close.
+_CIRCUIT_THRESHOLD = int(os.getenv("LLM_CIRCUIT_THRESHOLD", "3") or "3")
+_CIRCUIT_COOLDOWN_SEC = float(os.getenv("LLM_CIRCUIT_COOLDOWN_SEC", "90") or "90")
+# 필수 alias 면제 셋 — open 중에도 1회 실시도 허용 (대본 본문·사실성 게이트가 "" 즉사
+# → 발행 통째 실패로 번지는 것 방지). 장식성 호출(번역·라벨·태그)만 즉시 폴백.
+_CIRCUIT_EXEMPT_ALIASES = {
+    a.strip() for a in
+    (os.getenv("LLM_CIRCUIT_EXEMPT", "writer,fact_judge,engagement_judge") or "").split(",")
+    if a.strip()
+}
+_circuit_lock = _threading.Lock()
+_circuit_consecutive_throttles = [0]
+_circuit_open_since = [0.0]  # monotonic timestamp; 0 = closed
+# ★ 직전 _run_sdk_sync 호출의 스로틀 여부 (스레드별) — CLI 부재·auth 오류 등
+# 비스로틀 빈 응답으로 회로가 열리는 오탐 방지 (결함 b)
+_LAST_CALL = _threading.local()
+
 
 def _pace_spawn() -> None:
     """직전 spawn 과 최소 간격 유지 (burst rate-limit 완충). 기본 off."""
@@ -418,10 +437,48 @@ def _run_sdk_sync(
         except Exception as e:
             if not parts:
                 print(f"  ❌ SDK 오류: {e}")
-    if throttled["v"] and not parts:
-        # 가시화 — invoke_text 재시도 백오프가 짧은 스로틀을 흡수, 지속 시 호출자 폴백.
+    _was_throttled = bool(throttled["v"] and not parts)
+    _LAST_CALL.throttled = _was_throttled   # ★ 호출자(invoke_text)가 진짜 스로틀만 카운트
+    if _was_throttled:
         print("  ⏳ [LLM] rate-limit 스로틀 (num_turns=0, 모델 미호출) — 재시도/폴백")
     return "".join(parts)
+
+
+def _circuit_record_throttle() -> None:
+    """rate-limit 빈 응답 → 연속 카운터 증가, 임계 초과 시 회로 open."""
+    with _circuit_lock:
+        _circuit_consecutive_throttles[0] += 1
+        if (_circuit_consecutive_throttles[0] >= _CIRCUIT_THRESHOLD
+                and _circuit_open_since[0] == 0.0):
+            import time as _tm
+            _circuit_open_since[0] = _tm.monotonic()
+            print(f"  🔴 [LLM] rate-limit 회로 차단 — 연속 {_circuit_consecutive_throttles[0]}회 throttle, "
+                  f"{_CIRCUIT_COOLDOWN_SEC}s 쿨다운")
+
+
+def _circuit_record_success() -> None:
+    """정상 응답 → 회로 즉시 close."""
+    with _circuit_lock:
+        _circuit_consecutive_throttles[0] = 0
+        _circuit_open_since[0] = 0.0
+
+
+def _circuit_gate() -> str:
+    """회로 상태 조회 + probe 획득 (★ 상태 전이 있음 — 순수 술어 아님).
+
+    반환: 'closed' 정상 / 'open' 차단(비필수 호출 즉시 폴백) /
+          'probe' 쿨다운 경과 — 이 호출 1회를 1샷 실시도로 허용 (open_since 리셋
+          → 다음 probe 는 다시 쿨다운 후. 락 직렬화로 probe 폭주 없음).
+    """
+    with _circuit_lock:
+        if _circuit_open_since[0] == 0.0:
+            return "closed"
+        import time as _tm
+        elapsed = _tm.monotonic() - _circuit_open_since[0]
+        if elapsed >= _CIRCUIT_COOLDOWN_SEC:
+            _circuit_open_since[0] = _tm.monotonic()
+            return "probe"
+        return "open"
 
 
 def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
@@ -431,23 +488,55 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
     텍스트 생성(writer/router/analyzer): Sonnet 4.6
     오류수정·코드·설계(coder/guardian/architect/diagnostic): Opus 4.6
 
-    ★ rate-limit 재시도 (사용자 박제 2026-07-01): claude-code-sdk 는 rate_limit_event 를
-      TextBlock 없이 흘려 *빈 문자열* 을 반환한다(예외 아님). 이걸 그대로 두면 planner 설계·
-      translate·series 추출이 조용히 폴백/원문통과로 degrade. 빈 응답이면 지수 백오프+지터로
-      재시도(rate-limit 창 통과) → 모든 invoke_text 호출자가 자동 견고화. 정상 응답은 즉시 반환.
+    ★ rate-limit 재시도 (사용자 박제 2026-07-01): 빈 응답이면 지수 백오프+지터로
+      재시도. ★ 회로 차단기 (ERRORS [288] — 2026-07-03): 연속 *진짜 스로틀* ≥3 회 시
+      쿨다운 동안 비필수 호출 즉시 "" 폴백. 필수 alias(_CIRCUIT_EXEMPT_ALIASES)와
+      probe 는 1샷 실시도. ★ 데드라인 강등: JARVIS_LLM_DEADLINE_TS(epoch) 잔여 <10분
+      이면 재시도 1회·백오프 0 — 발행(Layer 4) 시간 보호.
     """
     import time as _t, random as _r
+
+    retries = max(1, _retries)
+    backoff = True
+
+    # ★ 글로벌 데드라인 강등 — 발행 파이프라인(economic_poster 등)이 설정
+    try:
+        _dl = float(os.environ.get("JARVIS_LLM_DEADLINE_TS", "0") or "0")
+        if _dl and (_dl - _t.time()) < 600:
+            retries, backoff = 1, False
+    except Exception:
+        pass
+
+    # ★ 회로 차단기 게이트
+    _gate = _circuit_gate()
+    if _gate == "open":
+        if alias in _CIRCUIT_EXEMPT_ALIASES:
+            retries, backoff = 1, False   # 필수 호출 — open 중에도 1회 실시도
+        else:
+            print("  ⏳ [LLM] 회로 차단 중 — 즉시 폴백 (재시도 생략)")
+            return ""
+    elif _gate == "probe":
+        retries, backoff = 1, False       # probe 는 1샷 — 최악 1 spawn 만 소모
+
     model = _ALIAS_MODEL.get(alias, "claude-sonnet-4-6")
     result = ""
-    for _attempt in range(max(1, _retries)):
+    throttled_seen = False
+    for _attempt in range(retries):
         try:
+            _LAST_CALL.throttled = False
             result = _run_sdk_sync(prompt, model=model, system=system, timeout=timeout) or ""
         except Exception:
             result = ""
         if result.strip():
+            _circuit_record_success()
             return result
-        if _attempt < _retries - 1:
-            _t.sleep(min(30.0, 4 * (2 ** _attempt)) + _r.uniform(0, 1.5))  # 4·8·16·30s (+지터) — rate-limit 회복
+        if getattr(_LAST_CALL, "throttled", False):
+            throttled_seen = True
+        if backoff and _attempt < retries - 1:
+            _t.sleep(min(30.0, 4 * (2 ** _attempt)) + _r.uniform(0, 1.5))
+    # 모든 재시도 실패 — *진짜 스로틀* 관측 시에만 카운트 (CLI 부재·auth 오류 오탐 방지)
+    if throttled_seen:
+        _circuit_record_throttle()
     return result
 
 

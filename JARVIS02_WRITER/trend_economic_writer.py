@@ -280,8 +280,84 @@ def _is_same_topic(rec: dict | str, ref_keyword: str) -> bool:
     return False
 
 
-def select_tistory_topic(trends: dict) -> dict | None:
-    """티스토리용 주제 선정 — 경제 섹터, 최근 7일 미사용 키워드 우선."""
+def _topic_econ_fit(keyword: str, sector: str) -> bool | None:
+    """경제·금융 브리핑 주제 적합성 LLM 판정 (ERRORS [290] — 2026-07-03).
+
+    '은행나무'(임업)가 '은행' 부분 매칭 오분류로 [금융·투자] 주제로 선정 →
+    경제 브리핑에 임업 재배면적 글 발행 사고 방지. True=적합 / False=부적합 /
+    None=판정 불가(LLM 미가용 — 호출자가 결정론 폴백 사용).
+    """
+    try:
+        from shared.llm import invoke_text
+        raw = invoke_text(
+            "analyzer",
+            f"키워드: {keyword} (분류된 섹터: {sector})\n\n"
+            "이 키워드가 한국 *경제·금융·산업·투자* 독자를 위한 경제 블로그 주제로 "
+            "적합한지 판정해라. 동식물·자연물·인물·연예·스포츠·일상 등 경제 콘텐츠와 "
+            "무관한 대상이면 부적합이다 (예: '은행나무'는 나무이므로 부적합, "
+            "'기준금리'·'반도체 수출'은 적합).\n"
+            "다른 말 없이 정확히 한 단어로만 답: 적합 또는 부적합",
+            max_tokens=10,
+        )
+        t = (raw or "").strip()
+        if not t:
+            return None
+        if "부적합" in t:
+            return False
+        if "적합" in t:
+            return True
+        return None
+    except Exception:
+        return None
+
+
+def _first_fit_topic(pool: list, label: str) -> dict | None:
+    """후보 풀에서 경제 주제 적합 첫 후보 선택 — LLM 판정 우선, 미가용 시 분류 신뢰도(결정론).
+
+    ★ 부적합 후보 강행 금지 (사용자 박제 2026-07-03): "데이터는 실질적·유익·진실해야".
+    적합 후보가 없으면 None — 호출자가 emergency trends(경제 핫이슈 LLM 생성)로 폴백.
+    """
+    for cand in pool[:5]:   # LLM 비용 상한 — 상위 5 후보만
+        kw = (cand.get('keyword', '') or '').strip()
+        if not kw:
+            continue
+        fit = _topic_econ_fit(kw, cand.get('sector', ''))
+        if fit is True:
+            return cand
+        if fit is False:
+            print(f"  ⛔ [{label}] '{kw}' 경제 주제 부적합 판정 → 다음 후보")
+            continue
+        # LLM 미가용 — 결정론 폴백: 섹터 분류 신뢰도로 복합어 오분류('은행나무' 류) 차단
+        try:
+            from JARVIS03_RADAR.analyzer import classify_keyword_conf
+            _sec2, _conf = classify_keyword_conf(kw)
+            if _conf and _sec2 in _ECON_SECTORS:
+                return cand
+            print(f"  ⛔ [{label}] '{kw}' 저신뢰 섹터 분류 (LLM 미가용) → 다음 후보")
+        except Exception:
+            return cand   # 판정 수단 전무 — 기존 동작 유지 (차단보다 발행 우선)
+    return None
+
+
+def _emergency_topic(ref_keyword: str, label: str) -> dict | None:
+    """적합 후보 전무 시 최후 폴백 — LLM 즉석 경제 핫이슈에서 주제 선택."""
+    print(f"  ⚠️ [{label}] 적합 경제 주제 없음 → emergency 경제 이슈 폴백")
+    em = _build_emergency_trends() or {}
+    for r in (em.get('recommendations') or []) + (em.get('scored_keywords') or []):
+        if r.get('keyword') and not _is_same_topic(r, ref_keyword):
+            r['keyword'] = _normalize_keyword(r.get('keyword', ''))
+            r['theme']   = r['keyword']
+            print(f"  📌 [{label}] emergency 주제: [{r.get('sector')}] {r.get('keyword')}")
+            return r
+    return None
+
+
+def select_tistory_topic(trends: dict, nv_keyword: str = '') -> dict | None:
+    """티스토리용 주제 선정 — 네이버 키워드 제외 + 경제 섹터, 최근 7일 미사용 키워드 우선.
+
+    ★ 네이버 우선 직렬 (사용자 박제 2026-07-03): 네이버가 먼저 작성되므로
+    중복 방지 방향이 naver→tistory 로 반전. nv_keyword 와 동일 주제 제외.
+    """
     recs   = trends.get('recommendations', [])
     scored = trends.get('scored_keywords', [])
     used   = _get_used_keywords()
@@ -293,28 +369,39 @@ def select_tistory_topic(trends: dict) -> dict | None:
     econ_recs = [
         r for r in recs
         if r.get('sector', '') in _ECON_SECTORS
+        and not _is_same_topic(r, nv_keyword)
         and r.get('sector', '') not in _EXCLUDE_SECTORS
     ]
     # 미사용 우선 → 없으면 사용 이력 무시 (발행 건너뜀 방지)
     fresh = [r for r in econ_recs if _not_used(r)]
     pool  = fresh or econ_recs
     if pool:
-        best = max(pool, key=lambda x: x.get('opportunity_score', 0))
-        best['keyword'] = _normalize_keyword(best.get('keyword', ''))
-        best['theme']   = best['keyword']
-        reused = "♻️ 재사용(미사용 없음)" if not fresh else ""
-        print(f"  📌 티스토리 주제: [{best.get('sector')}] {best.get('keyword')} "
-              f"(기회점수 {best.get('opportunity_score', 0):.1f}) {reused}")
-        return best
+        pool = sorted(pool, key=lambda x: x.get('opportunity_score', 0), reverse=True)
+        best = _first_fit_topic(pool, "티스토리")   # ★ 주제 적합성 게이트 (ERRORS [290])
+        if best:
+            best['keyword'] = _normalize_keyword(best.get('keyword', ''))
+            best['theme']   = best['keyword']
+            reused = "♻️ 재사용(미사용 없음)" if not fresh else ""
+            print(f"  📌 티스토리 주제: [{best.get('sector')}] {best.get('keyword')} "
+                  f"(기회점수 {best.get('opportunity_score', 0):.1f}) {reused}")
+            return best
 
-    econ_scored = [k for k in scored if k.get('sector', '') in _ECON_SECTORS]
+    econ_scored = [k for k in scored
+                   if k.get('sector', '') in _ECON_SECTORS and not _is_same_topic(k, nv_keyword)]
     fresh2 = [k for k in econ_scored if _not_used(k)]
     pool2  = fresh2 or econ_scored
     if pool2:
-        best = pool2[0]
-        best['keyword'] = _normalize_keyword(best.get('keyword', ''))
-        best['theme']   = best['keyword']
-        print(f"  📌 티스토리 주제 (폴백): [{best.get('sector')}] {best.get('keyword')}")
+        pool2 = sorted(pool2, key=lambda x: x.get('opportunity_score', x.get('score', 0)), reverse=True)
+        best = _first_fit_topic(pool2, "티스토리 폴백")   # ★ 주제 적합성 게이트 (ERRORS [290])
+        if best:
+            best['keyword'] = _normalize_keyword(best.get('keyword', ''))
+            best['theme']   = best['keyword']
+            print(f"  📌 티스토리 주제 (폴백): [{best.get('sector')}] {best.get('keyword')}")
+            return best
+
+    # ★ 적합 후보 전무 → 부적합 키워드 강행 대신 emergency 경제 이슈 (사용자 박제 2026-07-03)
+    best = _emergency_topic(nv_keyword, "티스토리")
+    if best:
         return best
 
     print("  ⚠️ 티스토리 경제 관련 트렌드 주제 없음")
@@ -340,22 +427,31 @@ def select_naver_topic(trends: dict, ts_keyword: str = '') -> dict | None:
     fresh = [r for r in econ_recs if _not_used(r)]
     pool  = fresh or econ_recs
     if pool:
-        best = max(pool, key=lambda x: x.get('opportunity_score', 0))
-        best['keyword'] = _normalize_keyword(best.get('keyword', ''))
-        best['theme']   = best['keyword']
-        reused = "♻️ 재사용(미사용 없음)" if not fresh else ""
-        print(f"  📌 네이버 주제: [{best.get('sector')}] {best.get('keyword')} "
-              f"(기회점수 {best.get('opportunity_score', 0):.1f}) {reused}")
-        return best
+        pool = sorted(pool, key=lambda x: x.get('opportunity_score', 0), reverse=True)
+        best = _first_fit_topic(pool, "네이버")   # ★ 주제 적합성 게이트 (ERRORS [290])
+        if best:
+            best['keyword'] = _normalize_keyword(best.get('keyword', ''))
+            best['theme']   = best['keyword']
+            reused = "♻️ 재사용(미사용 없음)" if not fresh else ""
+            print(f"  📌 네이버 주제: [{best.get('sector')}] {best.get('keyword')} "
+                  f"(기회점수 {best.get('opportunity_score', 0):.1f}) {reused}")
+            return best
 
     econ_scored = [k for k in scored if k.get('sector', '') in _ECON_SECTORS and not _is_same_topic(k, ts_keyword)]
     fresh2 = [k for k in econ_scored if _not_used(k)]
     pool2  = fresh2 or econ_scored
     if pool2:
-        best = pool2[0]
-        best['keyword'] = _normalize_keyword(best.get('keyword', ''))
-        best['theme']   = best['keyword']
-        print(f"  📌 네이버 주제 (폴백): [{best.get('sector')}] {best.get('keyword')}")
+        pool2 = sorted(pool2, key=lambda x: x.get('opportunity_score', x.get('score', 0)), reverse=True)
+        best = _first_fit_topic(pool2, "네이버 폴백")   # ★ 주제 적합성 게이트 (ERRORS [290])
+        if best:
+            best['keyword'] = _normalize_keyword(best.get('keyword', ''))
+            best['theme']   = best['keyword']
+            print(f"  📌 네이버 주제 (폴백): [{best.get('sector')}] {best.get('keyword')}")
+            return best
+
+    # ★ 적합 후보 전무 → 부적합 키워드 강행 대신 emergency 경제 이슈 (사용자 박제 2026-07-03)
+    best = _emergency_topic(ts_keyword, "네이버")
+    if best:
         return best
 
     print("  ⚠️ 네이버 경제 관련 트렌드 주제 없음")
@@ -2025,9 +2121,10 @@ def run_naver(ts_keyword: str = '') -> dict:
 #  분리 함수 — 대본 생성 + 발행 분리 (병렬화용)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
-    """티스토리 대본 생성 (①-⑦ 단계)."""
-    print("\n  🔴 [TISTORY-DRAFT] 대본 생성 중...")
+def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str = '') -> dict:
+    """티스토리 대본 생성 (①-⑦ 단계) — 네이버와 중복되지 않은 주제로 (네이버 우선 직렬)."""
+    from datetime import datetime as _dt_ts
+    print(f"\n  🔴 [TISTORY-DRAFT] 대본 생성 중... [{_dt_ts.now().strftime('%H:%M:%S')}]")
     # ★ 글 작성 전 인메모리 캐시 전체 초기화 — 이전 글 잔재 완전 제거
     try:
         from JARVIS06_IMAGE.chart_generator import clear_session_cache as _clear_cache
@@ -2051,7 +2148,7 @@ def ts_generate_draft(supreme_block=None, collection_docs=None) -> dict:
             trends = load_today_trends()
             if not trends:
                 return {"success": False, "keyword": "", "error": "트렌드 데이터 없음"}
-            topic = select_tistory_topic(trends)
+            topic = select_tistory_topic(trends, nv_keyword=nv_keyword)
             if not topic:
                 return {"success": False, "keyword": "", "error": "경제 주제 없음"}
             keyword = topic.get('keyword', '')
@@ -2231,7 +2328,8 @@ def ts_publish(draft: dict) -> dict:
 
 def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=None) -> dict:
     """네이버 대본 생성 (①-⑦ 단계) — 티스토리와 중복되지 않은 주제로."""
-    print("\n  🟢 [NAVER-DRAFT] 대본 생성 중...")
+    from datetime import datetime as _dt_nv
+    print(f"\n  🟢 [NAVER-DRAFT] 대본 생성 중... [{_dt_nv.now().strftime('%H:%M:%S')}]")
     # ★ 글 작성 전 인메모리 캐시 전체 초기화 — 이전 글 잔재 완전 제거
     try:
         from JARVIS06_IMAGE.chart_generator import clear_session_cache as _clear_cache

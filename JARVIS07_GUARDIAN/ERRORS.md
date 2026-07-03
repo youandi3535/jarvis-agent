@@ -1,5 +1,58 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [293] 네이버 최종 발행 클릭 실패 — 주간/in-daemon 실행에서 OS 물리 클릭이 팝업만 닫음 (★ 사용자 박제 2026-07-03)
+
+- **증상**: 사용자 증언 "편집창 작성 다 하고 발행창을 못 띄움". 실측(스크린샷 popup.png/before_publish.png 08:53): 발행 팝업은 정상 오픈 + 카테고리·태그 완료 — 실패 지점은 팝업 내 최종 '발행' 버튼의 OS 물리 클릭(고정 좌표 CGEvent)이 버튼을 빗맞혀 **팝업만 닫힘**. 클릭 후 URL /postwrite 유지 → 재시도 시 버튼 미발견 → Layer4 발행 실패.
+- **환경**: `JARVIS08_PUBLISH/platforms/naver_poster.py` 최종 발행 클릭 (ERRORS [247]에서 JS click 차단 우회용으로 도입한 물리 클릭). 새벽 subprocess 런(06-08~06-19)은 전부 성공, 주간/in-daemon 런(06-04 4회·06-07·07-03 2회)은 전부 실패 — **사용자 기기 사용 중 화면/윈도우 전면 상태 의존이 원인**.
+- **헛다리**: "발행창(팝업)이 안 뜬다" 가정 — 팝업은 떴음. 실패는 팝업 내 *최종 클릭*.
+- **해결 (`naver_poster.py`)**: ① `_click_publish_btn()` 신설 — dim 오버레이 제거 → 버튼 WebElement 탐색 → **ActionChains 클릭** (CDP 신뢰 이벤트, OS 포커스·화면좌표 무관 — 같은 팝업의 태그 입력이 이미 동일 방식으로 성공 중인 것이 실증). ② ElementClickInterceptedException 시 dim 재제거 후 1회 재시도, ActionChains 예외 시에만 물리 클릭 폴백. ③ 최초 발행·재발행·팝업 재오픈 3개 경로 모두 교체. ④ viewport(1440px) 밖 좌표 폴백 (1452,604) 제거.
+- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py`
+- **교훈**: OS 물리 클릭(CGEvent/pyautogui)은 *사용자가 기기를 쓰는 주간*에 창 가림·포커스 이동으로 결정론적으로 실패. ERRORS [247]의 "JS click 차단"은 `b.click()`(isTrusted=false) 한정 — ActionChains(isTrusted=true)는 차단 대상 아님. **주간 시간대(/economic_naver 수동 트리거) 재현 검증 필수.**
+
+### [292] 티스토리 쿠키 유효성 판정 오탐 — 공개 페이지 기준 검사로 만료 쿠키 통과 (2026-07-03)
+
+- **증상**: 아침 발행 시 TSSESSION 만료 상태(실측 수명 ≤13.5h)인데 쿠키 점검 통과 → 에디터 진입 시 `manage/newpost` → `/auth/login` 튕김 반복 (07-03 09:16 재발행 2회 튕김 후 갱신 성공, 2.5시간 지연).
+- **원인 2가지**: ① `tistory_cookie_refresher.check_cookie_valid()` 가 *공개 블로그 홈* 에서 `TS_BLOG in page` 검사 — 비로그인에도 블로그명은 항상 포함 → 만료 쿠키 유효 판정. ② `tistory_poster._login()` 성공 판정 `'login' not in current_url` — www.tistory.com 은 비로그인이어도 리다이렉트 없음 → 항상 성공 오탐.
+- **헛다리**: "티스토리 Selenium 반복 실패" — 최근 2주 셀레늄 자체 실패 패턴 없음. 문제는 유효성 *판정* 오탐.
+- **해결**: ① `check_cookie_valid()` — `manage/newpost` 진입 후 `/auth/login`·`accounts.kakao.com` 리다이렉트 여부로 실판정 (임시저장 alert dismiss 처리). ② `_login()` — 동일 manage 기준 판정 + 만료 확인 즉시 `refresh_cookie()` **선제 갱신** (기존 튕김→재로그인 지연 폴백은 안전망 잔존).
+- **파일**: `JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py`, `JARVIS08_PUBLISH/platforms/tistory_poster.py`
+- **교훈**: 로그인 유효성은 반드시 *로그인 필수 페이지* 접근으로 판정. 공개 페이지 문자열 검사는 구조적 오탐.
+
+### [291] 인포그래픽 렌더 직후 전량 소실 — save_article_html 의 *.jpg 일괄 삭제 (2026-07-03)
+
+- **증상**: `[배치설계] 4/4개 인포그래픽 LLM 설계 완료` + `차트 완료` 로그 후 `[image-validate] 누락 — infg_1~4.jpg` 4건 전부 파일 없음 → law_enforcer 블록 제거 → 제4조 위반(글 연속+이미지 부재 3개 섹션) 재작성 순환. 사용자 체감 "인포그래픽 5개밖에 안 나옴".
+- **원인**: 인포그래픽 엔진(2026-06-30, 85점 엔진)이 차트 출력을 .png→**.jpg** 로 변경했는데, `tistory_html_writer.save_article_html()` 의 옛 정리 로직("JPG=SVG 스크린샷만 삭제" 가정)이 Pass-2 렌더 *직후* `img_dir.glob("*.jpg")` 일괄 삭제 → 방금 만든 인포그래픽 전량 파괴. (동종 사고: 과거 save_article_html PNG 삭제 건 — 같은 클래스 재발.)
+- **헛다리**: rate-limit — 인포그래픽 설계·렌더는 양 플랫폼 모두 성공했음(설계 LLM 1회 성공). 개수 자체(TS 4/NV 2)는 버그 아니라 *게이트 통과 실데이터 수 상한* (1 dataset = 1 인포그래픽, 반복 금지) — 개수를 늘리려면 주제·데이터 품질 개선이 경로 (ERRORS [290]).
+- **해결**: ① `save_article_html()` — *본문(html)이 참조하는* jpg 는 삭제 제외 (참조 가드). 폴더 리셋은 draft 시작 시 `_cleanup_*_images()` 담당. ② `image_validators._validate_image_files()` — 누락 2건+ 시 GUARDIAN `report()` 연동 (조용한 블록 드롭 → 학습 루프 미포착 해소).
+- **파일**: `JARVIS02_WRITER/tistory_html_writer.py`, `JARVIS06_IMAGE/validators/image_validators.py`
+- **교훈**: 파이프라인 *도중* 산출물 폴더 일괄 삭제는 순수 파괴 행위 — 정리는 파이프라인 *시작* 시점에만. 이미지 포맷 변경 시 정리 로직의 포맷 가정 전수 grep 필수.
+
+### [290] 경제 브리핑 주제 '은행나무' — 섹터 오분류 + 주제 적합성 게이트 부재 (★ 사용자 박제 2026-07-03 — "데이터는 실질적·유익·진실해야")
+
+- **증상**: 네이버 경제 브리핑 주제로 "[금융·투자] 은행나무"(나무!) 선정 → KOSIS *임업 재배면적* 통계로 인포그래픽 생성 → "가을을 물들이는 은행나무 재배 현황" 글이 경제 브리핑으로 완성 단계까지 무저항 진행. 오분류가 "은행나무가 금융 섹션에 뜨는 이유: 자산운용 시장의 새로운 테마" 허위 전제 앵글까지 전파.
+- **원인 사슬**: ① `JARVIS03_RADAR/analyzer.py` 부분 문자열 매칭 — 힌트 '은행'(2글자) ⊂ '은행나무' → 금융·투자 (LLM 재분류는 sector=='기타' 만 대상이라 교정 기회 차단. '은행나무를'·'대출은'·'금리는' 조사 파편도 동일). ② `select_naver_topic` 폴백이 scored_keywords 첫 항목을 점수 임계·적합성 검증 0으로 채택. ③ 트렌드 수집 최조기 09:00 > 브리핑 06:30 → 아침 발행 항상 전일 폴백 데이터. ④ 발행 전 게이트에 주제 적합성 레그 부재 (사실성 레그는 source_docs=은행나무 문서 대비 자기일관성만 검사).
+- **헛다리**: 데이터 *수집* 결함 — 수집은 키워드 '은행나무'의 진짜 실데이터(임업 통계)를 성실히 수집했음. 진원은 주제 선정(GIGO). chart_generator 의 garbage 차단 게이트도 정상 작동.
+- **해결**: ① `analyzer.classify_keyword_conf()` — 2글자 이하 힌트 부분매칭 + 키워드가 힌트보다 긴 복합어 = 저신뢰 → LLM 재분류 대상 확대 (`score_keywords` 연동). ② `trend_economic_writer._topic_econ_fit()` + `_first_fit_topic()` — 주제 선정 시 LLM 적합성 판정(상위 5 후보), LLM 미가용 시 분류 신뢰도 결정론 폴백. 부적합 후보 강행 금지 — 전 후보 부적합 시 `_build_emergency_trends()`(경제 핫이슈 LLM 생성) 폴백. select_naver/tistory_topic 양쪽 + 폴백 풀 opportunity_score 정렬 적용. ③ `job_registry` 에 `radar_trends_06`(06:00) 조기 수집 잡 추가.
+- **파일**: `JARVIS03_RADAR/analyzer.py`, `JARVIS02_WRITER/trend_economic_writer.py`, `JARVIS04_SCHEDULER/job_registry.py`
+- **교훈**: 짧은 힌트 부분 문자열 매칭은 한국어 복합어에서 구조적 오분류 ('은행나무'·'금리는'). 주제 선정은 *적합성 게이트* 필수 — 데이터 품질 붕괴의 진원은 수집이 아니라 주제(GIGO). 부적합 키워드 강행 < 발행 지연.
+
+### [289] 발행 파이프라인 시간 보호 — 네이버 우선 직렬화 + 데드라인 + 로그 유실 방지 (★ 사용자 박제 2026-07-03)
+
+- **증상**: [288] 타임아웃 시 ① SIGKILL 로 마지막 ~8KB(수 분) 로그 유실(블록 버퍼링) — 발행 단계 진입 여부 진단 불가 ② 고아 Chrome 이 편집창 연 채 방치(사용자가 목격) ③ 티스토리 우선 순서라 네이버가 후순위로 밀림.
+- **해결**: ① **네이버 먼저 → 티스토리 직렬** (★ 사용자 박제): economic_poster steps ②네이버→③티스토리 + `_send_all` 네이버 먼저, `select_tistory_topic(nv_keyword=)` 중복 배제 방향 반전. trend_theme_writer 도 동일 스왑 (③NV→④TS + 발행 순서, 선로그인 ts_driver 헬스체크 추가). jarvis_main 은 이미 네이버 우선. ② `scheduler.run_economic_poster` — `PYTHONUNBUFFERED=1`(로그 유실 방지) + timeout 3600→5400 + 타임아웃 예외 시 자동화 프로필 Chrome 정리. ③ `economic_poster.run()` 시작 시 `JARVIS_LLM_DEADLINE_TS`(+2700s) 설정 → `invoke_text` 잔여 <10분 시 재시도 1회·백오프 0 강등 — 발행(Layer 4) 시간 보장. ④ 주요 마커 4곳([TISTORY/NAVER-DRAFT]·Layer3·Layer4) timestamp 접두.
+- **파일**: `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/trend_economic_writer.py`, `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS02_WRITER/scheduler.py`, `shared/llm.py`
+- **교훈**: subprocess stdout 파일 리다이렉트는 블록 버퍼링 — SIGKILL 진단력 확보에 `PYTHONUNBUFFERED=1` 필수. 발행 도중 kill 이 최악의 실패 모드 — 생성 단계에 데드라인, 발행 단계에 시간 여유.
+
+### [288] economic_poster 3600초 타임아웃 재발 — rate-limit 재시도 누적 (108회 throttle) (2026-07-03)
+
+- **증상**: `Command '[...economic_poster.py', '--scheduled']' timed out after 3599.999s` — naver, tistory 양쪽 발행 실패. ERRORS [241]과 동일 타임아웃이나 원인 상이.
+- **환경**: `shared/llm.py:invoke_text` rate-limit 재시도 로직 (2026-07-01 추가). 경제 브리핑 전체 파이프라인.
+- **원인**: Anthropic API rate-limit 지속 → `invoke_text` 4회 재시도 × 지수 백오프(4·8·16·30s) × 파이프라인 내 다수 LLM 호출 = 누적 지연. 로그에 rate-limit 스로틀 메시지 **108회** 발생. 각 `invoke_text` 호출이 독립적으로 ~30초 백오프 소모 → 27+ 호출 × 30초 = 810초+ 백오프만으로 파이프라인 총 시간 3600초 초과. research_planner·chart_generator·AI사진 대체 각각 독립 재시도 → 글로벌 조율 부재.
+- **헛다리**: [241]의 `_build_j09_context` 블로킹과는 별개 — 이미 캐시+shutdown(wait=False)로 해결됨. 이번은 LLM 호출 자체의 누적 재시도가 원인.
+- **해결 (`shared/llm.py`)**: 글로벌 rate-limit 회로 차단기 도입. ① `_circuit_consecutive_throttles` — 연속 throttle 카운터. ② 연속 ≥3회(`_CIRCUIT_THRESHOLD`) throttle 시 회로 open → `invoke_text` 즉시 "" 반환 (재시도 0, 백오프 0). ③ 쿨다운 90초(`_CIRCUIT_COOLDOWN_SEC`) 경과 후 probe 1회 허용 → 성공 시 close. ④ 정상 응답 시 즉시 close. env 튜닝: `LLM_CIRCUIT_THRESHOLD`, `LLM_CIRCUIT_COOLDOWN_SEC`.
+- **파일**: `shared/llm.py`
+- **교훈**: 개별 호출의 재시도 로직은 단발 rate-limit에는 효과적이나, 지속적 rate-limit 시 파이프라인 내 다수 호출의 재시도가 **곱셈적으로 누적**되어 전체 타임아웃 초과. 글로벌 회로 차단기로 "지속 rate-limit" 상태를 조기 감지하고 즉시 폴백으로 전환해야 파이프라인 진행 보장.
+
 ### [286] 수동검토 큐 214건 오염 — 일시적/외부/제어흐름 오류가 wontfix 로 잘못 분류 (2026-06-28)
 
 - **증상**: 대시보드 수동검토 탭에 210+건 누적. 대부분 ① 네트워크 일시오류(ConnectionError telegram·radar) ② Selenium 환경(WebDriverException ERR_INTERNET_DISCONNECTED·SessionNotCreated·InvalidSessionId·TimeoutException) ③ 외부 API(Pollinations 402·HuggingFace HTTP 402/410) ④ 정상 제어흐름(harness "종목 데이터 0개 — 다른 테마로") ⑤ Claude CLI 운영(quota·timeout·cli_not_found) ⑥ 이미 수정된 코드버그(stale) ⑦ stale preflight(모듈 설치됐는데 옛 PATH 런 실패). 진짜 미수정 코드버그는 0건.

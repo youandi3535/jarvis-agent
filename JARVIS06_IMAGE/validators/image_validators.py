@@ -75,6 +75,17 @@ def _validate_image_files(blocks: list[tuple[str, str]]) -> tuple[list[tuple[str
             removed += 1
             continue
         out.append((btype, bdata))
+    # ★ 다건 누락 = 파이프라인 파괴 시그널 (ERRORS [291] — 2026-07-03): 렌더 성공 로그 후
+    #   파일 부재(발행 도중 삭제 등)는 조용한 블록 드롭으로 끝내면 GUARDIAN 학습 루프에
+    #   안 잡힘. 2건 이상 누락 시 보고 (쿨다운·dedup 은 error_collector 내장).
+    if removed >= 2:
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report as _g_rep
+            _g_rep("image",
+                   RuntimeError(f"이미지 파일 누락·빈 파일 {removed}건 — 렌더 후 파일 소실 의심"),
+                   module=__name__, func_name="_validate_image_files")
+        except Exception:
+            pass
     return out, removed
 
 

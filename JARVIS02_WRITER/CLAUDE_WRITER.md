@@ -24,6 +24,7 @@
 
 | 항목 | 규칙 |
 |------|------|
+| **★ 발행 순서 — 네이버 먼저, 티스토리 나중 (사용자 박제 2026-07-03 — ERRORS [289])** | 경제(economic_poster)·테마(trend_theme_writer) 모두 *네이버 우선 직렬* — 대본 생성 스텝 순서 + `_send_all` 발행 순서 동시 적용. 중복 배제 방향 naver→tistory (`select_tistory_topic(nv_keyword=)`). 스텝 이름·`_flag_map`·`_key_map` 3곳 문자열 일치 필수 |
 | max_tokens | **8192 고정** — 더 높이면 API 중간 절단 |
 | 섹션 문장수 임계값 | `length_manager.py` 단일 진입점 (`SEC_SENTS` 등). 다른 파일에 박지 말 것 |
 | pytrends 패치 | `.venv/.../pytrends/request.py`: `method_whitelist` → `allowed_methods` |

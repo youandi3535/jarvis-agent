@@ -147,7 +147,7 @@ def _naver_fin(code: str) -> dict:
                 elif label == 'PER(%)' and not result.get('per'):
                     if v > 0:
                         result['per'] = v
-            except: pass
+            except Exception: pass
 
         # 영업이익률 계산
         if result.get('op_income') and result.get('revenue') and result['revenue'] != 0:
@@ -163,7 +163,7 @@ def _naver_fin(code: str) -> dict:
                 corp_name = title_txt.split(':')[0].strip()
                 if corp_name and corp_name != '네이버 금융':
                     result['corp_name'] = corp_name
-        except: pass
+        except Exception: pass
         
         for row in soup.select('tr'):
             th = row.select_one('th')
@@ -177,7 +177,7 @@ def _naver_fin(code: str) -> dict:
                     result['price'] = float(vals[0])
                 elif '시가총액(억)' in label and not result.get('marcap'):
                     result['marcap'] = float(vals[0]) * 1e8
-            except: pass
+            except Exception: pass
 
         # PER - 별도 파싱 (N/A면 적자)
         if not result.get('per'):
@@ -189,7 +189,7 @@ def _naver_fin(code: str) -> dict:
                         txt = clean(td.text.split('l')[0])
                         if txt and txt != 'NA' and txt != '':
                             try: result['per'] = float(txt)
-                            except: pass
+                            except Exception: pass
                     break
 
         return result

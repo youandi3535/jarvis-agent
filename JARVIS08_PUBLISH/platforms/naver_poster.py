@@ -528,6 +528,69 @@ def _click_in_browser(driver, rel_x: int, rel_y: int, label: str = ""):
     _click(bx + rel_x, by + rel_y, label)
 
 
+def _find_publish_btn_el(driver):
+    """발행 팝업 내 최종 '발행/등록' 버튼 WebElement 탐색 (우측 하단 팝업 영역)."""
+    from selenium.webdriver.common.by import By
+    try:
+        for b in driver.find_elements(By.TAG_NAME, "button"):
+            try:
+                txt = (b.text or "").strip()
+                if txt not in ("발행", "등록"):
+                    continue
+                rect = b.rect or {}
+                if rect.get("x", 0) > 900 and rect.get("y", 0) > 500 and b.is_displayed():
+                    return b
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def _click_publish_btn(driver, label: str = "최종발행") -> bool:
+    """발행 팝업 내 최종 발행 버튼 클릭 — Selenium 신뢰 이벤트 (ERRORS [293] — 2026-07-03).
+
+    ★ 종전 OS 물리 클릭(고정/DOM 좌표 CGEvent)은 화면·윈도우 전면 상태 의존 —
+    주간(사용자 기기 사용 중)·in-daemon 실행에서 클릭이 버튼을 빗맞혀 팝업만 닫는
+    실패가 결정론적으로 재현 (새벽 subprocess 런은 전부 성공, 06-04~07-03 6회 대조).
+    ActionChains 는 CDP 신뢰 이벤트(isTrusted=true)라 OS 포커스·화면 좌표 무관 —
+    같은 팝업의 태그 입력이 이미 동일 방식으로 성공 중인 것이 실증.
+    ActionChains 실패 시에만 물리 클릭 폴백. 버튼 미발견 시 False (호출자가 재오픈 처리).
+    """
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.common.exceptions import ElementClickInterceptedException
+    _dim_js = ("document.querySelectorAll('.se-popup-dim:not(.se-popup-dim-transparent)')"
+               ".forEach(function(d) { d.remove(); });")
+    for _try in range(2):
+        try:
+            driver.execute_script(_dim_js)   # dim 오버레이 선제 제거 (ERRORS [247])
+        except Exception:
+            pass
+        btn = _find_publish_btn_el(driver)
+        if btn is None:
+            return False
+        txt = (btn.text or "").strip()
+        try:
+            ActionChains(driver).move_to_element(btn).pause(0.3).click(btn).perform()
+            print(f"  🖱️ {label}({txt}) ActionChains 클릭 완료")
+            return True
+        except ElementClickInterceptedException:
+            print(f"  ⚠️ {label} 클릭 가로챔 — dim 재제거 후 재시도")
+            continue
+        except Exception as _ce:
+            print(f"  ⚠️ {label} ActionChains 실패({_ce}) — 물리 클릭 폴백")
+            try:
+                r = btn.rect or {}
+                _click_in_browser(driver,
+                                  int(r.get("x", 0) + r.get("width", 0) / 2),
+                                  int(r.get("y", 0) + r.get("height", 0) / 2),
+                                  f"{label}(물리 폴백)")
+                return True
+            except Exception:
+                return False
+    return False
+
+
 def _js_login(driver) -> bool:
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
@@ -736,7 +799,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             # naver 프로필은 네이버가 "등록된 기기"로 인식 → CAPTCHA 없이 로그인 가능
             print("  🔄 드라이버 재시작 & 프로필 재로그인 시도...")
             try: driver.quit()
-            except: pass
+            except Exception: pass
             driver = None
             try:
                 from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import refresh_naver_cookies
@@ -780,7 +843,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                     for c in pickle.load(open(COOKIE_FILE, "rb")):
                         c.pop("sameSite", None)
                         try: driver.add_cookie(c)
-                        except: pass
+                        except Exception: pass
                     driver.get(f"https://blog.naver.com/{NV_ID}/postwrite")
                     time.sleep(8)
                     if 'nidlogin' in driver.current_url:
@@ -1284,23 +1347,10 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
         # ── 최종 발행 ─────────────────────────────────
         print("  ✅ 최종 발행 클릭...")
         driver.save_screenshot(str(IMG_PUBLISH / "before_publish.png"))
-        # ★ JS b.click() 대신 CGEvent 실제 마우스 클릭 (오버레이 차단 우회)
-        _pub_btn = driver.execute_script("""
-            var btns = document.querySelectorAll('button');
-            for (var b of btns) {
-                var rect = b.getBoundingClientRect();
-                var txt = b.innerText.trim();
-                if ((txt === '발행' || txt === '등록') && rect.x > 900 && rect.y > 500) {
-                    return {x: Math.round(rect.x + rect.width/2), y: Math.round(rect.y + rect.height/2), text: txt};
-                }
-            }
-            return null;
-        """)
-        if _pub_btn:
-            print(f"  ✅ 최종발행 버튼({_pub_btn['text']}) 위치: ({_pub_btn['x']}, {_pub_btn['y']})")
-            _click_in_browser(driver, _pub_btn['x'], _pub_btn['y'], f"최종발행({_pub_btn['text']})")
-        else:
-            _click_in_browser(driver, 1452, 604, "최종발행(좌표)")
+        # ★ ActionChains 신뢰 이벤트 클릭 (ERRORS [293]) — OS 물리 클릭은 주간/in-daemon
+        #   실행에서 버튼 빗맞음 → 팝업만 닫힘. 물리 클릭은 헬퍼 내부 폴백 전용.
+        if not _click_publish_btn(driver, "최종발행"):
+            print("  ⚠️ 최종발행 버튼 미발견 — 검증 단계에서 재시도")
         # ★ ERRORS [273] — 4초 부족 (네이버 리다이렉트 > 4초 소요 사례). 8초로 확대.
         time.sleep(8)
 
@@ -1316,22 +1366,8 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             """)
             time.sleep(1.0)
 
-            # 발행 버튼 실제 좌표 획득 후 CGEvent 클릭
-            _retry_btn = driver.execute_script("""
-                var btns = document.querySelectorAll('button');
-                for (var b of btns) {
-                    var rect = b.getBoundingClientRect();
-                    var txt = b.innerText.trim();
-                    if ((txt === '발행' || txt === '등록') && rect.x > 900 && rect.y > 500) {
-                        return {x: Math.round(rect.x + rect.width/2), y: Math.round(rect.y + rect.height/2), text: txt};
-                    }
-                }
-                return null;
-            """)
-            if _retry_btn:
-                print(f"  🖱️ 재발행 버튼({_retry_btn['text']}) CGEvent 클릭: ({_retry_btn['x']}, {_retry_btn['y']})")
-                _click_in_browser(driver, _retry_btn['x'], _retry_btn['y'], f"재발행({_retry_btn['text']})")
-            else:
+            # ★ 재발행 — ActionChains 신뢰 이벤트 (ERRORS [293])
+            if not _click_publish_btn(driver, "재발행"):
                 # 발행 팝업이 닫힌 경우 — 툴바 '발행' 버튼으로 재오픈 후 카테고리 재선택
                 print("  ⚠️ 재발행 버튼 미발견 → 발행 팝업 재오픈")
                 driver.execute_script("""
@@ -1359,23 +1395,10 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                     }}
                 """)
                 time.sleep(0.5)
-                # 최종 발행 버튼 CGEvent 클릭
-                _retry_btn2 = driver.execute_script("""
-                    var btns = document.querySelectorAll('button');
-                    for (var b of btns) {
-                        var rect = b.getBoundingClientRect();
-                        var txt = b.innerText.trim();
-                        if ((txt === '발행' || txt === '등록') && rect.x > 900 && rect.y > 500) {
-                            return {x: Math.round(rect.x + rect.width/2), y: Math.round(rect.y + rect.height/2), text: txt};
-                        }
-                    }
-                    return null;
-                """)
-                if _retry_btn2:
-                    print(f"  🖱️ 재오픈 후 발행({_retry_btn2['text']}) CGEvent 클릭: ({_retry_btn2['x']}, {_retry_btn2['y']})")
-                    _click_in_browser(driver, _retry_btn2['x'], _retry_btn2['y'], f"재발행2({_retry_btn2['text']})")
-                else:
-                    _click_in_browser(driver, 1452, 604, "재발행(좌표)")
+                # ★ 재오픈 후 최종 발행 — ActionChains (ERRORS [293]).
+                #   구 좌표 폴백 (1452, 604) 는 viewport(1440px) 밖 — 제거.
+                if not _click_publish_btn(driver, "재발행2"):
+                    print("  ⚠️ 재오픈 후에도 발행 버튼 미발견")
 
             # ★ ERRORS [274] 재발 — 재발행 경로도 8초 대기 필수 (SPA 전환 지연)
             time.sleep(8)
