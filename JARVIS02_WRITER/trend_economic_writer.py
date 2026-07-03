@@ -1797,7 +1797,7 @@ def run_tistory() -> dict:
         _ts_thumb_fut = _ts_thumb_exec.submit(
             _gen_thumb, title=title, keyword=keyword, sector=sector,
             platform="tistory", out_dir=_P(img_dir),
-            body_text=content[:400],
+            body_text=content[:3000],   # ★ 전체 대본 기반 썸네일 (사용자 박제 2026-07-03)
         )
         print("  🖼️  [티스토리] 썸네일 생성 시작 (백그라운드)...")
     except Exception as _te:
@@ -2010,7 +2010,7 @@ def run_naver(ts_keyword: str = '') -> dict:
             _nv_thumb_fut = _nv_thumb_exec.submit(
                 _gen_thumb, title=title, keyword=keyword, sector=sector,
                 platform="naver", out_dir=_img_dir,
-                body_text=content[:400],
+                body_text=content[:3000],   # ★ 전체 대본 기반 썸네일 (사용자 박제 2026-07-03)
             )
             print("  🖼️  [네이버] 썸네일 생성 시작 (백그라운드)...")
         except Exception as _te:
@@ -2185,7 +2185,9 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
             from JARVIS06_IMAGE.chart_generator import set_session_pool as _ssp
             _pool = list(_cand.get("datasets") or [])
-            _ssp(_pool)   # ★ 항상 등록(빈 풀 포함) → chart_generator 가 *오직* 이 풀만 사용(garbage 폴백 차단)
+            # ★ 자비스09→06 직공급 폐지 (사용자 박제 2026-07-03): 차트 데이터는 자비스02 가
+            #   대본 슬롯에 직접 내장 — 세션풀은 *빈 풀* 등록 (legacy 자체 수집 차단 유지).
+            _ssp([])
             if _pool:
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
                 print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
@@ -2234,8 +2236,11 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
         )
         from JARVIS06_IMAGE.injectors import assemble_blocks
 
+        # ★ 자비스06에는 대본+검증 ref(수 KB)만 — 수집 문서 전문은 전달하지 않음
+        #   (사용자 확정 2026-07-03: 슬롯에 데이터가 내장되므로 전체 자료 불필요.
+        #    문서 전문은 02 의 작성 프롬프트·사실성 게이트 대조군 용도로만.)
         html = generate_article_html(keyword, sector, reason, supreme_block,
-                                     collection_docs=_kw_collection_docs)
+                                     ref_datasets=_pool)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
@@ -2256,7 +2261,7 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
             _ts_thumb_fut = _ts_thumb_exec.submit(
                 _gen_thumb, title=title, keyword=keyword, sector=sector,
                 platform="tistory", out_dir=__import__('pathlib').Path(img_dir),
-                body_text=content[:400],
+                body_text=content[:3000],   # ★ 전체 대본 기반 썸네일 (사용자 박제 2026-07-03)
             )
         except Exception as _te:
             _g_report("writer", _te, module=__name__)
@@ -2425,7 +2430,9 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
             from JARVIS06_IMAGE.chart_generator import set_session_pool as _ssp
             _pool = list(_cand.get("datasets") or [])
-            _ssp(_pool)   # ★ 항상 등록(빈 풀 포함) → chart_generator 가 *오직* 이 풀만 사용(garbage 폴백 차단)
+            # ★ 자비스09→06 직공급 폐지 (사용자 박제 2026-07-03): 차트 데이터는 자비스02 가
+            #   대본 슬롯에 직접 내장 — 세션풀은 *빈 풀* 등록 (legacy 자체 수집 차단 유지).
+            _ssp([])
             if _pool:
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
                 print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
@@ -2472,8 +2479,9 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             OUTPUT_HTML_DIR, OUTPUT_IMG_DIR,
         )
 
+        # ★ 자비스06에는 대본+검증 ref(수 KB)만 — 수집 문서 전문은 전달하지 않음
         html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
-                                     collection_docs=_kw_collection_docs)
+                                     ref_datasets=_pool)
         if not html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 

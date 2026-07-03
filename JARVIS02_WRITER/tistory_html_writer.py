@@ -336,25 +336,38 @@ def _generate_svg_pass2_and_replace(
     sector: str,
     platform: str = "tistory",
     collection_docs: list | None = None,
+    ref_datasets: list | None = None,
 ) -> str:
-    """Pass-2: [CHART_N: 설명] 플레이스홀더 → 이미지 병렬 생성 + 치환.
+    """Pass-2: 차트 슬롯 → 이미지 생성 + 치환.
 
-    1단계: 데이터 기반 차트 생성 (병렬)
-    2단계: 차트 실패 슬롯 → AI 사진으로 대체 (병렬)
-    3단계: 총 이미지 < _MIN_IMAGES → 추가 AI 사진 생성 후 이미지 없는 섹션에 배포
+    ★ 데이터 내장 슬롯 우선 (사용자 박제 2026-07-03): 자비스02 가 대본에
+    [CHART_N]...[/CHART_N] 블록으로 차트 데이터 전체를 박아 옴 → 자비스06 은
+    ref_datasets(자비스09 원본 — 검증 대조용) 대조 후 렌더만. 검증·렌더 실패
+    슬롯은 구형식 [CHART_N: 제목] 으로 강등 → 아래 AI 사진 폴백이 이어받음.
 
-    Args:
-        content: Pass-1 텍스트 ([CHART_N: ...] 플레이스홀더 포함)
-        keyword: 글 주제
-        sector: 섹터
-        platform: 플랫폼 (tistory/naver)
+    (구형식 [CHART_N: 설명] 슬롯 = 세션풀 기반 종전 경로 — 폴백 호환)
 
     Returns:
-        str: 플레이스홀더가 실제 이미지로 치환된 content (최소 _MIN_IMAGES 장 보장 시도)
+        str: 슬롯이 실제 이미지로 치환된 content (최소 _MIN_IMAGES 장 보장 시도)
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # [CHART_N: description] 플레이스홀더 찾기
+    _img_dir_slot = OUTPUT_IMG_DIR / (f"economic_{platform}" if platform in ("tistory", "naver") else "economic_tistory")
+    _img_dir_slot.mkdir(parents=True, exist_ok=True)
+
+    # ── 0단계: ★ 데이터 내장 슬롯 렌더 (자비스06 = 렌더러) ─────────────────
+    try:
+        from JARVIS06_IMAGE.slot_renderer import render_slots_in_text
+        import uuid as _uuid_s
+        content, _slot_ok, _slot_total = render_slots_in_text(
+            content, ref_datasets, _img_dir_slot,
+            run_id=_uuid_s.uuid4().hex[:8], theme=keyword)
+        if _slot_total:
+            print(f"  🎨 [Pass-2/{platform}] 데이터 내장 슬롯 {_slot_ok}/{_slot_total}개 렌더")
+    except Exception as _sre:
+        print(f"  ⚠️ [Pass-2/{platform}] 내장 슬롯 처리 스킵: {_sre}")
+
+    # [CHART_N: description] 플레이스홀더 찾기 (구형식 + 내장 슬롯 강등분)
     placeholders = re.findall(r"\[CHART_(\d+):\s*([^\]]+)\]", content)
     if not placeholders:
         return content
@@ -454,6 +467,7 @@ def generate_article_html(
     supreme_block: str,
     platform: str = "tistory",
     collection_docs: list | None = None,
+    ref_datasets: list | None = None,
 ) -> str:
     """2-pass Claude Code SDK → 텍스트 + inline SVG 완성 원고 HTML.
 
@@ -489,7 +503,9 @@ def generate_article_html(
                 f"{keyword}, 지금 왜 이렇게 주목받는 건가요?"
 
     # ★ Pass-2: [CHART_N: ...] 플레이스홀더 → SVG 치환 (필수!)
-    content = _generate_svg_pass2_and_replace(content, keyword, sector, platform, collection_docs=collection_docs)
+    content = _generate_svg_pass2_and_replace(content, keyword, sector, platform,
+                                              collection_docs=collection_docs,
+                                              ref_datasets=ref_datasets)
 
     kc = _L.count(content)
     svg_count = len(re.findall(r"<svg[\s>]", content, re.IGNORECASE))

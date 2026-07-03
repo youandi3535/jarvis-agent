@@ -388,19 +388,36 @@ def _build_data_catalog(datasets) -> str:
         u = d.get("unit", "")
         src = d.get("source") or {}
         as_of = src.get("as_of", "")
+        src_name = (src.get("name") or src.get("provider") or "").strip()
         head = f"D{i}. {d.get('title', '')}{(' (단위 ' + u + ')') if u else ''}"
         if as_of:
             head += f" [기준 {as_of}]"
+        if src_name:
+            head += f" [출처 {src_name[:40]}]"
         lines.append(head)
         for r in (d.get("data") or [])[:8]:
             lbl = str(r.get("label", "")).strip()
             val = r.get("value", "")
             if lbl != "" and val != "":
                 lines.append(f"    - {lbl}: {val}{u}")
-    lines.append("★ 차트([CHART_N])의 수치는 위 목록의 값만 사용한다 — 목록 밖 수치 차트 금지.")
+    # ★ 데이터 내장 슬롯 (사용자 박제 2026-07-03): 작성자가 차트 설계까지 완료 —
+    #   슬롯 안에 차트를 만들 *모든 수치* 를 직접 박는다. 자비스06 은 렌더만.
+    lines.append("")
+    lines.append("★★ 차트 슬롯 작성 규칙 — 차트가 들어갈 자리마다 아래 *블록 형식* 으로")
+    lines.append("차트 데이터 전체를 직접 박는다 (여기서 차트 설계까지 끝낸다):")
+    lines.append("[CHART_1]")
+    lines.append("제목: <차트 제목>")
+    lines.append("종류: bar")
+    lines.append("단위: <단위>")
+    lines.append("데이터: 라벨A=값 | 라벨B=값 | 라벨C=값")
+    lines.append("출처: <위 카탈로그의 출처 그대로>")
+    lines.append("[/CHART_1]")
+    lines.append("- 종류는 bar|line|area|pie|kpi 중 1 (시계열=line/area, 비교=bar, 비율=pie, 단일수치=kpi)")
+    lines.append("- 데이터 값은 위 카탈로그(D1..)의 값을 *그대로 복사* — 창작·변형·반올림 금지")
+    lines.append("- 한 슬롯 = 카탈로그 한 데이터셋 기반. 시간 라벨은 과거→최근 순서")
+    lines.append("- 같은 데이터셋으로 슬롯 2개 만들지 마라 (중복 금지)")
     lines.append("★ 본문 수치는 위 카탈로그·근거 팩·수집 자료 전문에 *명시된* 값만 그대로 인용"
                  " (창작·임의 반올림 금지 — 출처 없는 숫자는 거짓이다).")
-    lines.append("★ [CHART_N: <위 목록의 제목 그대로>] 형태로, 글 흐름에 맞는 위치에 배치하라.")
     return "\n".join(lines)
 
 

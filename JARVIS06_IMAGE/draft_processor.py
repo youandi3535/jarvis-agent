@@ -181,6 +181,31 @@ def _extract_chart_context(html: str, chart_idx: int) -> str:
     return ""
 
 
+def _stock_numbers(stocks_data: dict) -> list[float]:
+    """테마 내장 슬롯 검증 ref — 종목 실데이터의 모든 수치 값 (재귀 수집)."""
+    vals: list[float] = []
+
+    def _walk(o):
+        if isinstance(o, dict):
+            for v in o.values():
+                _walk(v)
+        elif isinstance(o, (list, tuple)):
+            for v in o:
+                _walk(v)
+        elif isinstance(o, bool):
+            return
+        elif isinstance(o, (int, float)):
+            vals.append(float(o))
+        elif isinstance(o, str):
+            s = o.replace(",", "").strip().rstrip("%")
+            try:
+                vals.append(float(s))
+            except ValueError:
+                pass
+    _walk(stocks_data or {})
+    return vals
+
+
 def _generate_charts(html: str, theme: str, sector: str, stocks_data: dict,
                      platform: str, out_dir: Path,
                      collection_docs: list | None = None) -> str:
@@ -192,6 +217,19 @@ def _generate_charts(html: str, theme: str, sector: str, stocks_data: dict,
     """
     from JARVIS02_WRITER.tistory_html_writer import _generate_svg_pass2
     from JARVIS02_WRITER import draft_writer as _dw
+
+    # ── 0단계: ★ 데이터 내장 슬롯 렌더 (사용자 박제 2026-07-03 — 자비스06=렌더러) ──
+    #   자비스02 가 [CHART_N]...[/CHART_N] 블록에 데이터를 박아 옴. 검증 ref = 종목
+    #   실데이터 값 (테마 차트의 원천). 실패 슬롯은 구형식으로 강등 → 아래 경로가 폴백.
+    try:
+        from JARVIS06_IMAGE.slot_renderer import render_slots_in_text
+        _ref_ds = [{"data": [{"value": v} for v in _stock_numbers(stocks_data)]}]
+        html, _s_ok, _s_total = render_slots_in_text(
+            html, _ref_ds, out_dir, run_id=uuid.uuid4().hex[:8], theme=theme)
+        if _s_total:
+            print(f"  🎨 [{platform}] 데이터 내장 슬롯 {_s_ok}/{_s_total}개 렌더")
+    except Exception as _sre:
+        print(f"  ⚠️ [{platform}] 내장 슬롯 처리 스킵: {_sre}")
 
     placeholders = re.findall(r"\[CHART_(\d+):\s*([^\]]+)\]", html)
     if not placeholders:
