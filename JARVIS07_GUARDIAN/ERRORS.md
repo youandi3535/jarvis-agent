@@ -1,5 +1,34 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [298] ★ report(source, exc) 역순 호출 314곳 전원 무음 no-op — catch() 단일 진입점 양순서 정규화 (Cowork Claude 2026-07-03)
+
+- **증상**: 리포지토리 전반 `_g_report("writer", e, ...)` 형태 오류 보고 314곳이 *전부* 기록 실패(무음 no-op). 오류 자동 캐치망의 최대 단일 구멍 — writer/publish 도메인의 명시적 report 가 error_log 에 사실상 안 쌓이고 있었음.
+- **환경**: `error_collector.catch(exc_or_type, source, ...)` 에 `report = catch` 별칭. 그러나 CLAUDE.md 오류 관리 규정과 기존 314개 호출부는 구 시그니처 `report("agent_name", exc)` (source 먼저). 스텁 DB 실증: 역순 호출 시 `save_error(source=<Exception>)` sqlite 바인딩 실패 → return None (기록·메시지 전부 소실).
+- **원인**: report→catch 별칭 도입 시 구 시그니처 호출부 미이관 + 실패가 내부 try/except 에 삼켜져 무증상.
+- **헛다리**: 314곳 개별 수정 — 규모상 회귀 위험. (거부)
+- **해결**: `catch()` 진입 직후 순서 자동 교정 1곳 — `if isinstance(source, BaseException) and not isinstance(exc_or_type, BaseException): exc_or_type, source = source, str(exc_or_type)`. 구·신 양 형태 + 문자열 2-인자 형태(`catch("ValueError","log_file")`) 모두 정상. 검증: 역순/정순/문자열형 3형태 스텁 DB 라운드트립 통과.
+- **파일**: `JARVIS07_GUARDIAN/error_collector.py`
+- **교훈**: 공개 API 시그니처 변경 시 별칭은 *어댑터* 여야 한다 — 단순 이름 별칭은 문서·호출부와 조용히 어긋난다. 4중 점검의 독립 교차 리뷰(스텁 실증)가 자동 검증(컴파일·grep)이 못 잡는 시멘틱 결함을 잡았다.
+
+### [297] 전수 감사 — 조용히 죽어 있던 연결 5곳 복구 + precommit 50배 가속 (Cowork Claude 2026-07-03)
+
+- **증상**: 런타임 오류 0으로 보였으나, try/except 에 삼켜져 *조용히 무력화* 된 연결 5곳 발견 (기능은 죽고 로그만 조용). ① 네이버 쿠키 갱신 네트워크-다운 알림 미발송 ② proactive_monitor 글자수 미달 반복 감지 영구 스킵 ③ auditor 주간 감사 결과가 DB(audit_runs)에 한 번도 저장 안 됨 ④ VS Code 훅(guardian_error_hook)의 오류 수집 전면 불능 — catch 6메커니즘 중 외부 훅 경로 구멍 ⑤ dry_run CLI market 수집 + ts_generate_draft 오호출(market dict 를 supreme_block 위치에 전달).
+- **환경**: 정적 AST import-그래프 전수 검사기(188모듈)로 발견 — py_compile·precommit 은 심볼 수준 미검증이라 통과했음.
+- **원인**: 심볼 리네임·이관 후 호출자 미동기화 (`send`→`send_tg`, `get_conn`→`get_db`, `MIN_BODY_CHARS` 미존재, `collect_error` 비공개, `collect_market_data` 폐지). 모두 try/except 로 감싸져 ImportError 가 무증상.
+- **헛다리**: 없음.
+- **해결**: ①`naver_cookie_refresher` send_tg ②`proactive_monitor` MIN_VALID as MIN_BODY_CHARS **+ post_analysis 에 없는 char_count 컬럼 → LENGTH(original_content) (교차 리뷰가 import 수정만으론 여전히 죽음을 발견 — 2중 결함)** ③`auditor._save_to_db` get_db ④`error_collector` 에 `collect_error = _collect_error` 공개 별칭 (.claude 훅은 보호 경로라 수신측 복구) ⑤`dry_run` ts_generate_draft() 무인자 호출로 교정. + `preflight._REQUIRED_EXTERNAL_MODULES` 에 feedparser 추가 (J09 providers top-level import 인데 Layer 0 미검증이었음). + `precommit_check.py` 성능: owner별 전체 재읽기 O(5N)→파일 1회 읽기+텍스트 프리필터, rglob 30회(.venv 수천 파일 포함)→os.walk 1회 캐시 — 전체 44종 42s+→0.7s (데몬 부팅·pre-commit 훅 지연 제거). + 스테일 .bak 2건 삭제, CLAUDE.md 이미지 폴백 체인 문서 드리프트(Bing/HF→Nanobana/Pollinations 실상) 동기화.
+- **파일**: `JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py`, `JARVIS01_MASTER/proactive_monitor.py`, `JARVIS07_GUARDIAN/{auditor,error_collector}.py`, `JARVIS02_WRITER/dry_run.py`, `JARVIS00_INFRA/preflight.py`, `shared/precommit_check.py`, `CLAUDE.md`
+- **교훈**: try/except 방어는 *가용성* 을 지키지만 *결함 가시성* 을 죽인다 — 심볼 수준 정적 import 검사(AST)가 py_compile·grep 이 못 잡는 "조용한 단선"을 잡는다. 리네임·이관 시 `grep -rn "옛이름"` 전수 확인 의무.
+
+### [296] ADR 014 — 글 품질 강화학습 폐쇄 루프 신설 (★ 사용자 박제 2026-07-03)
+
+- **증상**: 글 품질 학습이 *누적* 에서 정지 — learning_insights 가 쌓이고 주입은 되나(3곳), 주입된 지침이 실제 글을 좋게 했는지 *검증·보상·도태가 전무*. 무효 지침도 재발견만 되면 영원히 주입. 오류 쪽(bandit)과 달리 글 품질엔 강화학습이 없었음.
+- **원인**: 사용 기록(어떤 인사이트가 어느 글에 들어갔는지) 부재 → 보상 귀속 불가 → weight 가 결과와 무관.
+- **해결 (ADR 014 — `docs/decisions/014-writing-quality-reinforcement.md` 단일 진실 소스)**: `JARVIS07_GUARDIAN/quality_learner.py` 신설 (엔진 단독). ① 작성 시 `build_insights_block()` — UCB 랭킹(가중치+탐색 보너스) 선택 + `insight_usage` 기록 ② 매일 23:45 `j07_quality_learn` — 사용↔분석(post_analysis.suggestions) 매칭 → 보상=1−Σ(high .25/med .12/low .05) → weight EMA(α=.3) 갱신 + 저성과(5회+·평균<.35) 가속 감쇠 ③ 소비 3곳(jarvis_main·economic_poster·trend_economic_writer) 은 위임 1줄로 교체 (중복 포맷 코드 3벌 제거). LLM 호출 0·실패 시 "" (작성 절대 안 막음). guardian /status 에 ✍️ 글 품질 RL 지표 노출.
+- **파일**: `JARVIS07_GUARDIAN/{quality_learner.py(신설),guardian_agent.py}`, `shared/db.py`(insight_usage 테이블+헬퍼 4종+reward 컬럼 마이그레이션), `JARVIS02_WRITER/{jarvis_main,economic_poster,trend_economic_writer}.py`, `JARVIS04_SCHEDULER/job_registry.py`(j07_quality_learn), `docs/decisions/014-*.md`(신설), `CLAUDE.md`
+- **검증**: 스크래치 DB e2e — 좋은 글(보상 .95) weight 1.2→1.335↑, 나쁜 글(보상 .01) 1.335→1.188↓, 2회차 블록에 `검증 보상` 태그, job 무예외. callback 38종 전수 resolve.
+- **교훈**: "누적"과 "강화"는 다르다 — 폐쇄 루프는 주입→관측→보상→갱신 4박자가 모두 있어야 한다. 사용 기록이 없으면 귀속이 없고, 귀속이 없으면 학습이 아니라 적재다.
+
 ### [295] ADR 013 — 에이전트 파이프라인 정본 흐름 4대 원칙 (★ 사용자 박제 2026-07-03)
 
 - **결정 (ADR 013 단일 진실 소스 — `docs/decisions/013-agent-pipeline-flow.md`)**: 03(주제+프로필)→02·09 동시 제공 → 09 설계 후 무제한 수집 → 02 매력 대본 → 06 이미지 → 08 발행 (네이버 우선 직렬).

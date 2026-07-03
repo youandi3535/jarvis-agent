@@ -75,6 +75,7 @@ _REQUIRED_EXTERNAL_MODULES = (
     "bs4",            # 네이버 금융 파싱
     "PIL",            # 이미지 처리 (Pillow → PIL)
     "matplotlib",     # 차트 생성
+    "feedparser",     # ★ 2026-07-03: JARVIS09 news/blog provider RSS 파싱 (providers/__init__ top-level import)
 )
 
 # ★ 환경변수 — 발행 잡이 필요로 하는 *필수* 키만 (선택 키는 검증 안 함)

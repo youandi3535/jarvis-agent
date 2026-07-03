@@ -374,6 +374,13 @@ def catch(
     context: str / dict / list 모두 허용 (내부에서 JSON 직렬화)
     tb_str:  traceback 문자열 직접 전달 (훅 내부에서 미리 포맷한 경우)
     """
+    # ★ 2026-07-03 (ERRORS [298]) — 하위 호환 자동 교정: 구 report(source, exc) 역순 호출.
+    #   report=catch 별칭 도입 시 문서화된 구 시그니처(report("writer", e))의 기존 호출
+    #   314곳이 조용히 무음 no-op 이 되어 있었음 (source 에 Exception 바인딩 실패).
+    #   단일 진입점에서 순서 감지·교정 — 양 형태 모두 정상 동작.
+    if isinstance(source, BaseException) and not isinstance(exc_or_type, BaseException):
+        exc_or_type, source = source, str(exc_or_type)
+
     if context is not None and not isinstance(context, str):
         try:
             import json as _json
@@ -403,6 +410,11 @@ def catch(
 
 # 하위 호환 alias — 기존 report() 호출 코드 즉시 수정 불필요
 report = catch
+
+# ★ 2026-07-03: .claude/hooks/guardian_error_hook.py 가 kwargs 형태
+#   collect_error(source=, error_type=, message=, module=, context=) 로 호출하나
+#   공개 심볼이 없어 훅이 조용히 죽어 있었음 → 공개 별칭 제공 (catch 6메커니즘 중 외부 훅 경로 복구)
+collect_error = _collect_error
 
 
 def install() -> None:

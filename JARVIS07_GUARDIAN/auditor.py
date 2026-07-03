@@ -430,11 +430,12 @@ def _send_telegram_report(result: AuditResult) -> None:
 def _save_to_db(result: AuditResult) -> None:
     """audit_runs 테이블 (없으면 생성)."""
     try:
-        from shared.db import get_conn  # type: ignore
+        # ★ 2026-07-03: get_conn 미존재 (shared.db 는 get_db) — audit 이력이 DB에 한 번도 저장 안 되고 있었음
+        from shared.db import get_db  # type: ignore
     except Exception:
         return
 
-    con = get_conn()
+    con = get_db()
     cur = con.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS audit_runs (

@@ -596,7 +596,7 @@ def _generate_tistory_text(topic: dict, supreme_block: str) -> dict:
         .replace("{Q2}", _L.build_length_phrase(*_TS_Q2)) \
         .replace("{Q3}", _L.build_length_phrase(*_TS_Q3)) \
         .replace("{Q4}", _L.build_length_phrase(*_TS_Q4))
-    learn_block = _load_learn_insights("economic")
+    learn_block = _load_learn_insights("economic", platform="tistory")
 
     _seed = int(hashlib.md5(f"{TODAY_STR}{keyword}tistory".encode()).hexdigest(), 16) % 10000
     hook_style = random.Random(_seed).choice([
@@ -1622,24 +1622,15 @@ _section_img_paths: dict[int, str] = {}
 _para_img_paths:    dict[int, str] = {}
 
 
-def _load_learn_insights(scope: str) -> str:
-    """DB에서 학습 지침 로드 → 프롬프트 주입 블록 반환."""
+def _load_learn_insights(scope: str, platform: str = "") -> str:
+    """학습 지침 블록 — ★ ADR 014 (2026-07-03): JARVIS07 quality_learner 위임.
+
+    UCB 랭킹 선택 + 사용 기록(보상 귀속 대기) 포함. 실패 시 "" (글 작성 절대 안 막음).
+    """
     try:
-        from shared import db as _db
-        rows = _db.get_top_learning_insights(limit=6, days=14, scope=scope)
-        if not rows:
-            return ""
-        lines = [
-            "",
-            "─" * 30,
-            "📚 *과거 글 분석 기반 작성 지침 — 반드시 적용:*",
-            "",
-        ]
-        for i, r in enumerate(rows, 1):
-            d = (r.get("directive") or r.get("description") or "").strip()
-            if d:
-                lines.append(f"{i}. {d}  (재발견 {r.get('occurrences', 1)}회)")
-        return "\n".join(lines) + "\n"
+        from JARVIS07_GUARDIAN.quality_learner import build_insights_block
+        blk = build_insights_block(scope=scope, platform=platform, limit=6)
+        return (blk + "\n") if blk else ""
     except Exception as e:
         print(f"  ⚠️ 학습 지침 로드 실패(무시): {e}")
         _g_report("writer", e, module=__name__)
