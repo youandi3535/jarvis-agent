@@ -165,7 +165,7 @@
 - **파일**: `JARVIS06_IMAGE/{image_spec,infographic_engine,slot_renderer}.py`, `JARVIS02_WRITER/draft_writer.py`
 - **교훈**: dedupe 기준은 "값"이 아니라 "항목+값" — 값 기준 제거는 진실 데이터(동률)를 파괴한다. 시계열 예외 필수.
 
-### [306] LNG 테마 티스토리 대본 SDK 타임아웃 — [303] 반복, 일시적 API 불가용 (코드 수정 불필요, 2026-07-03)
+### [322] LNG 테마 티스토리 대본 SDK 타임아웃 — [303] 반복, 일시적 API 불가용 (코드 수정 불필요, 2026-07-03)
 
 - **증상**: `theme-publish-LNG(액화천연가스)-tistory` 하네스 step "⑤ 티스토리 대본 생성" 에서 `Pass-1 대본 생성 실패`. 네이버 대본은 SDK timeout 2회 후 3차 시도에서 성공(1575자, 35문장). 티스토리 대본 생성 시점에서도 SDK timeout 연속 발생.
 - **환경**: 16:17 테마 시작, 수집 단계 rate-limit 스로틀 8회+, 17:22 데몬 재시작(코드 변경 ERRORS [305] 반영), 수동 재실행(18:03) 에서도 동일 타임아웃 패턴.
@@ -206,7 +206,7 @@
 - **파일**: `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/trend_economic_writer.py`
 - **교훈**: 프롬프트 경제(요약 주입)는 모델 관점 최적화였지 글 품질 관점이 아니었다 — 재료 전부를 보이고 모델이 고르게 하는 것이 사용자가 정의한 품질 경로. 요약(규율)과 전문(풍부함)은 대체재가 아니라 보완재.
 
-### [303] 테마글 LNG(액화천연가스) Pass-1 대본 SDK 타임아웃 — 일시적 API 불가용 (코드 수정 불필요, 2026-07-03)
+### [323] 테마글 LNG(액화천연가스) Pass-1 대본 SDK 타임아웃 — 일시적 API 불가용 (코드 수정 불필요, 2026-07-03)
 
 - **증상**: `theme-publish-LNG(액화천연가스)-naver` 하네스 step "③ 네이버 대본 생성" 에서 `Pass-1 대본 생성 실패`. invoke_text("writer") → `⚠️ SDK timeout 300s — 수집된 응답: 0개` 4회 연속 (attempt 1), 2차 시도(attempt 2)도 동일 타임아웃.
 - **환경**: 16:20~16:28 수집 단계 중 rate-limit 스로틀 다수 관측 (6회+). 수집 자체는 정상 완료(문서 109건, fact 25개). 16:28:59 Pass-1 SDK 호출 시작 → 16:49:53 harness 실패 보고 (300s × 4 = 20분 타임아웃 소진).
@@ -722,7 +722,7 @@
 
 ---
 
-### [260] `ValueError: JSON not found` @ JARVIS03_RADAR.analyzer — 사용자 오해 + 학습 노이즈 5중 누수 (2026-06-07)
+### [324] `ValueError: JSON not found` @ JARVIS03_RADAR.analyzer — 사용자 오해 + 학습 노이즈 5중 누수 (2026-06-07)
 
 - **증상**: 사용자 텔레그램 알림 `⚠️ [GUARDIAN] 자동 수정 실패 / 자체 학습·Claude Code 모두 수정 불가 / 오류: ValueError @ JARVIS03_RADAR.analyzer / 내용: JSON not found / → 수동 검토 필요`. error_log 4건 누적 (ID 229·395·741·754 / 2026-05-16 ~ 2026-06-07).
 - **환경**: `JARVIS03_RADAR/analyzer.py:_classify_with_llm()` — RADAR가 1차 규칙 분류 후 "기타" 키워드를 LLM(writer_fast=sonnet-4-6)에 배치 분류 의뢰. 응답 파싱 단계.
@@ -1323,7 +1323,7 @@
 - **파일**: `JARVIS02_WRITER/scheduler.py` lines 614-699.
 - **교훈**: done_set 제외와 동일하게 failed_set 제외도 필수. 실패 테마를 폴백 재선정에서 막지 않으면 동일 실패가 매 세션마다 반복됨.
 
-### [219] 신규상장 계열 테마 5차 폴백 — LLM 다운 시 0개 반환 (2026-05-31)
+### [325] 신규상장 계열 테마 5차 폴백 — LLM 다운 시 0개 반환 (2026-05-31)
 
 - **증상**: `[harness:theme-publish-2026 상반기 신규상장] attempt=1 step=② 종목 수집 + TS쿠키 시작: 종목 데이터 0개 — 수집 실패`. ERRORS [174][176] 수정 이후에도 동일 테마 재실패.
 - **환경**: "2026 상반기 신규상장" 테마 — LLM 학습 범위 밖 최신 IPO 정보.
@@ -1333,7 +1333,7 @@
 - **파일**: `JARVIS09_COLLECTOR/collect_theme.py` lines 1541~1575 (5차 폴백 신규상장 분기).
 - **교훈**: LLM-의존 폴백은 LLM 다운 시 동일하게 실패. 마지막 보루 폴백은 반드시 LLM 비의존(하드코딩 or 스크레이핑) 시드 선행 확보 필수.
 
-### [219] _make_theme_retry() tistory_html_writer 리로드 누락 — [218] 수정 후 동일 ImportError 반복 (2026-05-31)
+### [326] _make_theme_retry() tistory_html_writer 리로드 누락 — [218] 수정 후 동일 ImportError 반복 (2026-05-31)
 
 - **증상**: [218] 수정 후에도 `ImportError: cannot import name '_stocks_text' from 'JARVIS02_WRITER.tistory_html_writer'` 반복 — harness theme-publish-우크라이나 재건 ③ 티스토리 대본 생성 단계 실패.
 - **원인**: [218]에서 `theme_html_writer`, `draft_processor`, `draft_writer`를 reload 목록에 추가했으나 `tistory_html_writer` 미포함. `theme_html_writer.py` 모듈 레벨에서 `from JARVIS02_WRITER.tistory_html_writer import (...)`를 하는데, reload 시 `tistory_html_writer`는 `sys.modules`에 OLD 버전으로 캐시된 채 남음 → `theme_html_writer` reload 효과가 없음.
@@ -1560,7 +1560,7 @@
   - 신규 함수 3개: `_fetch_tickers_from_context`, `_fetch_stock_price_history`, `_fetch_per_roe_scatter`
 - **교훈**: 실데이터 없으면 차트 스킵 (`return ""`). 거짓 차트 > 차트 없음.
 
-### [180] 네이버·티스토리 블록 간 과도한 여백 — "몇 칸씩" 간격 버그 (★ 사용자 박제 2026-05-27)
+### [327] 네이버·티스토리 블록 간 과도한 여백 — "몇 칸씩" 간격 버그 (★ 사용자 박제 2026-05-27)
 - **증상**: 문단↔문단, 문단↔이미지, 이미지↔문단 사이가 2~5줄씩 떨어짐. 사용자 요구: "딱 1칸씩만 띄우면 된다".
 - **근본 원인 (naver 4곳, tistory 6곳)**:
   - **(N1) naver `input_text_block` trailing Enter**: 블록 끝에 `_pg.press('enter')` → 이미 마지막 sentence-group의 Enter가 있어 +1칸 중복.
@@ -1732,7 +1732,7 @@
 
 ---
 
-### [172] 중복 이미지 추가 원인 — 파일 MD5 감지 + area 시드 + 개념차트 고정 팔레트 (★ 사용자 박제 2026-05-26)
+### [328] 중복 이미지 추가 원인 — 파일 MD5 감지 + area 시드 + 개념차트 고정 팔레트 (★ 사용자 박제 2026-05-26)
 - **증상**: [171] 수정 후에도 시각적으로 동일한 차트가 반복될 가능성 잔존 (독립 실행 간 동일 합성 데이터·고정 팔레트).
 - **원인 1 — `area` 차트 v2 시리즈 seed에 `run_id` 미포함** (`chart_generator.py:_make_plotly_fig`):
   `seed2 = hashlib.md5(title.encode())` → `run_id` 없음 → 같은 제목 글이면 v2 시리즈가 항상 동일 → 두 area 차트가 v2 기준으로 같은 모양.
@@ -1752,7 +1752,7 @@
 
 ---
 
-### [171] 중복 차트 이미지 — 3곳 원인 전수 수정 (★ 사용자 박제 2026-05-26)
+### [329] 중복 차트 이미지 — 3곳 원인 전수 수정 (★ 사용자 박제 2026-05-26)
 - **증상**: 블로그 글 안에서 같은 차트 이미지가 여러 번 등장. 수십 종 차트 타입이 있는데도 동일한 차트만 반복.
 - **원인 1 — `chart_generator.py` 파일명 고정** (CLAUDE.md 위반):
   `fname = out_path / f"chart_{chart_idx:02d}.png"` → 내용 해시 없음. LLM이 같은 idx를 두 번 쓰면 두 번째 차트가 첫 번째 파일을 덮어쓰고 svg_map[idx]도 덮어쓰임. 두 위치 모두 같은 chart HTML 참조 → 시각적 중복.
@@ -1965,7 +1965,7 @@
 
 ---
 
-### [139] 차트 이미지 오른쪽 절반 빈 공간 + 텍스트 콩알 + 중복 타입 (2026-05-24)
+### [330] 차트 이미지 오른쪽 절반 빈 공간 + 텍스트 콩알 + 중복 타입 (2026-05-24)
 - **증상**: ① STEP 차트 오른쪽 ~40% 빈 공간 (데이터 없음). ② 모든 차트 텍스트·레이블이 콩알만하게 작음. ③ 같은 글에 동일 차트 타입 중복 삽입.
 - **원인 1 (빈 공간)**: STEP 차트가 12개 데이터 포인트별로 어노테이션 박스를 `x=lbl, y=v` 데이터 좌표로 삽입 → Plotly가 마지막 라벨(26.05) 우측에 어노테이션 텍스트 박스 공간 확보를 위해 x축 범위를 자동 연장 → 오른쪽 빈 공간 발생.
 - **원인 2 (텍스트 작음)**: `_base_layout()` 전역 폰트 `size=13`, 틱 폰트 `size=12`, 타이틀 `size=20` — 실제 렌더링 시 가독성 불가.
@@ -3044,7 +3044,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [109] 자가 진단 회차 — SEO 프롬프트 상수 미정의 + 이관 완전성 헌법 박제 (2026-05-15)
+### [331] 자가 진단 회차 — SEO 프롬프트 상수 미정의 + 이관 완전성 헌법 박제 (2026-05-15)
 - **증상**: Layer 3 검증 명령에서 `trend_economic_writer.py`, `wp_html_writer.py`, `economic_poster.py` 등 6개 파일에서 SEO 제목·메타·시나리오 관련 글자수가 하드코딩("35자 이내", "140자 이내", "15자 이내") 상태로 잔존. `length_manager.py` 에 대응 상수가 미정의였음.
 - **환경**: Layer 3 자동 진단 — JARVIS02_WRITER 전체.
 - **원인**: ERRORS [42] (2026-05-11) 에서 블로그 본문 분량 상수화는 완료했으나 SEO 메타 제목·시나리오 라벨용 프롬프트 상수는 추가되지 않음. 누락 지속.
@@ -3053,7 +3053,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS02_WRITER/length_manager.py`, `trend_economic_writer.py`, `wp_html_writer.py`, `economic_poster.py`
 - **교훈**: SEO 메타 제목·시나리오 라벨 글자수도 `length_manager` 상수 사용 대상. 신규 프롬프트에 "N자 이내" 직접 박기 절대 금지 — `_L.상수명` 사용.
 
-### [110] Layer 7 헌법 박제 — 이관 완전성 규정 (2026-05-15)
+### [332] Layer 7 헌법 박제 — 이관 완전성 규정 (2026-05-15)
 - **증상**: ERRORS.md 교훈 분석에서 "이관 시 last-def override" 관련 교훈이 3회 반복 발생([60], [63], [58] 등). import 추가만 하고 구 함수 본체를 남겨두면 Python이 구 정의로 override.
 - **환경**: JARVIS 전체 — 특히 JARVIS06 이관, JARVIS07 이관 시 발생.
 - **해결**: `CLAUDE.md` 인프라 관리 규정 "이관 절차" 항목에 ★ 이관 완전성 규정 추가. `grep -rn "^def <함수명>" --include="*.py" .` 검증 명령 명시.
@@ -3062,7 +3062,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [108] SVG 차트 짤림·반복·썸네일 수렴 3종 동시 해결 (2026-05-15)
+### [333] SVG 차트 짤림·반복·썸네일 수렴 3종 동시 해결 (2026-05-15)
 - **증상**: ① 버블/산점도 차트 요소가 viewBox 경계 밖으로 잘림 ② 테마주 글마다 버블 산점도 스타일만 반복됨 ③ 동일 키워드 썸네일 배경이 매번 같음.
 - **환경**: 테마주글 전 플랫폼 해당. `tistory_html_writer.py` SVG 생성, `image_agent.py` / `thumbnail_maker.py` 썸네일 생성.
 - **원인**:
@@ -3079,7 +3079,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [106] 티스토리 카테고리 오선택·미설정 (2026-05-15)
+### [334] 티스토리 카테고리 오선택·미설정 (2026-05-15)
 - **증상**: ① 카테고리가 아예 설정 안 됨 ② 경제 브리핑 발행인데 "테마주 분석" 카테고리가 선택됨.
 - **환경**: `JARVIS02_WRITER/tistory_poster.py` `post_to_tistory()` 카테고리 선택 블록.
 - **원인**: `querySelectorAll('li, a, div[role], button')` 순회 시 *부모 `<li>` 요소*가 자식 텍스트를 모두 포함(`innerText`)해 `t.includes(cat)` 에서 first-match. 부모 클릭은 효과 없음 → 이전 세션 기본 카테고리("테마주 분석") 그대로 남음. 또한 `_s(2)` 드롭다운 대기가 불충분한 경우 `category-list` 미탐지.
@@ -3326,7 +3326,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [101] 7-Layer 자가 진단 회차 — 규정 위반 4건 수정 (2026-05-15)
+### [335] 7-Layer 자가 진단 회차 — 규정 위반 4건 수정 (2026-05-15)
 - **증상 및 발견**:
   1. `hub.py` 폰트 `font-size:13px` 2곳 — CLAUDE.md 웹 대시보드 14px 최소 규정 위반.
   2. `JARVIS07_GUARDIAN/guardian_agent.py` — `register()` 안에서 `scheduler.add_job()` 4회 직접 호출 — 스케줄 관리 규정 위반 (단일 진입점: `JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS`).
@@ -4575,7 +4575,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [67] JARVIS06 이미지 폴더 구조 + heading 컨텍스트 전달 (2026-05-11)
+### [336] JARVIS06 이미지 폴더 구조 + heading 컨텍스트 전달 (2026-05-11)
 - **증상**: 이미지가 `JARVIS02_WRITER/screenshots/` 임시 경로에 흩어져 JARVIS06 관리 밖. 섹션 이미지 생성 시 현재 소제목 컨텍스트 없어 이미지 품질 저하.
 - **원인**: `jarvis_main.py`의 `img_save_dir` 경로가 `JARVIS02_WRITER/screenshots/` 고정. `_gen()` → `_make_para_image()` 에 heading 미전달.
 - **헛다리**: 버스 즉시 실행(THEME_QUEUED 구독) 추가했다가 제거 — 발행 스케줄은 반드시 `j01_economic_post`(07:00)·`j01_theme_post_16`(16:00) 고정 시간에만 실행해야 함. 시도 때도 없는 즉시 실행은 하루 발행 수 제어 불가.
@@ -4585,7 +4585,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS02_WRITER/jarvis_main.py` (경로·heading 전달)
 - **교훈**: 이미지 경로는 JARVIS06 관리 구조 따를 것. 발행 스케줄은 07:00/16:00 고정 — 버스 즉시 실행으로 우회 금지.
 
-### [66] matplotlib 차트 헤더 한글 전부 미표시 — _strip_emoji 한글 범위 포함 버그 (2026-05-11)
+### [337] matplotlib 차트 헤더 한글 전부 미표시 — _strip_emoji 한글 범위 포함 버그 (2026-05-11)
 - **증상**: bar_chart/line_chart 등 matplotlib 차트에서 제목·부제목·key_message 의 한글이 전혀 렌더링되지 않음. "HBM 분기별 출하량" → "HBM", "4분기 연속 성장" → "4", "2024년 기준" → "2024". ASCII/숫자만 표시됨.
 - **원인**: `_strip_emoji()` 의 정규식 범위 `\U000024C2-\U0001F251` 이 U+24C2(9410)~U+1F251(127569)을 커버하는데, 한글 음절 블록 U+AC00(44032)~U+D7AF(55215)가 이 범위 안에 포함됨. `render()` 에서 `title`/`subtitle`/`key_message` 에 `_strip_emoji()` 를 적용할 때 한글 전부 제거됨.
 - **헛다리**: ① FontProperties(fname=...) 합성 볼드 문제 추정 → 제거해도 동일 ② fig.text() vs ax_h.text() 클리핑 추정 → 변경해도 동일 ③ 4회 이상 접근법 변경 낭비.
@@ -4593,7 +4593,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS06_IMAGE/matplotlib_renderer.py` — `_strip_emoji()`
 - **교훈**: 이모지 범위 지정 시 CJK 블록(U+AC00-U+D7AF) 포함 여부 반드시 확인. 광범위 유니코드 범위 `\U000024C2-\U0001F251` 는 한글·한자 다수 포함 — 절대 사용 금지.
 
-### [65] 섹션 이미지 반복/재탕 — SVG 파일명 충돌 + AI 이미지 고정 프롬프트 (2026-05-11)
+### [338] 섹션 이미지 반복/재탕 — SVG 파일명 충돌 + AI 이미지 고정 프롬프트 (2026-05-11)
 - **증상**: 한 글 내 여러 섹션에서 동일한 이미지가 반복 표시됨. stat_card/line_trend 등 차트 이미지가 모든 섹션에서 똑같음. AI 사진도 섹션 내용과 무관하게 재탕.
 - **원인**:
   1. `claude_svg_provider.py` 파일명 = `svg_{type}_{hash(title)}` — title이 `"{keyword} 핵심 수치"` 등 모든 섹션 동일 → 해시 동일 → 같은 파일명에 순서대로 덮어쓰기 → 마지막 생성 이미지가 모든 섹션에 표시.
@@ -4607,7 +4607,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [64] stat_card KPI 차트 라벨 오류 + 폰트 너무 작음 (2026-05-11)
+### [339] stat_card KPI 차트 라벨 오류 + 폰트 너무 작음 (2026-05-11)
 - **증상**: `make_stat_infographic` / `_extract_for_chart` stat_card 결과에서 KPI 라벨이 "비중을", "비중을 %", "오늘 회", "당장은 회" 등 조사·부사로 출력됨. 전체 글자 크기도 너무 작아 읽기 어려움.
 - **원인**: 정규식 `([가-힣]{1,8}[은는이가도의]?\s*)?` 가 숫자 직전 어절 전체를 캡처 → `rstrip('은는이가도의 ')` 만으로는 "비중을", "오늘", "당장은" 같은 경우 제거 안 됨. 폰트 min 14px는 KPI 카드에 너무 작음.
 - **헛다리**: `rstrip` 확장만으로는 을/를/에서 등 다른 격조사 처리 불가.
@@ -4704,7 +4704,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ## 기록
 
-### [54] 티스토리 경제 브리핑 이모지·문체 규정 위반 (2026-05-09)
+### [340] 티스토리 경제 브리핑 이모지·문체 규정 위반 (2026-05-09)
 - **증상**: 티스토리 경제 브리핑 본문에 `+1.71% 🔥` 처럼 이모지가 포함되고, 문체가 `~했어요` 해요체로 출력됨
 - **환경**: `trend_economic_writer.generate_tistory_article()` — 티스토리용 Q&A 원고 생성 프롬프트
 - **원인**: 프롬프트 line 1003에 `해요체(~해요/~이에요/~예요). 이모지 2~4개 이내.` 명시 → LLM이 지시 그대로 해요체·이모지 사용. WP 프롬프트도 `이모지 최소화 (헤더 1개 이하)` 로 이모지를 암묵적으로 허용 중. 이모지 후처리 없음.
@@ -4734,7 +4734,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `BLOG_SUPREME_LAW.md`, `length_manager.py`, `trend_economic_writer.py`, `economic_poster.py`, `law_enforcer.py`
 - **교훈**: LLM은 "훅을 잡아", "감성적으로" 같은 모호한 지시를 무시하고 안전한 팩트 오프닝을 선택함. 구체적 예시(OK/NG)와 절대 금지 패턴을 프롬프트에 명시해야 효과. 런타임 감지로 회귀 방지 보완.
 
-### [55] 티스토리 본문 HTML 태그 노출 + 섹션 이미지 파일명 깨짐 (2026-05-09)
+### [341] 티스토리 본문 HTML 태그 노출 + 섹션 이미지 파일명 깨짐 (2026-05-09)
 - **증상**: 티스토리 발행 글에 `<p> 글 </p>` HTML 태그가 화면에 그대로 노출. 섹션 이미지 파일명이 `section_01_'_'_2026-05-09.png` 처럼 한글이 모두 제거돼 의미없는 잔해만 남음.
 - **환경**: `tistory_poster.post_to_tistory()` 블록 삽입 루프, `trend_economic_writer.generate_section_image()`
 - **원인**:
@@ -4747,7 +4747,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS02_WRITER/tistory_poster.py` (L742), `JARVIS02_WRITER/trend_economic_writer.py` (L662)
 - **교훈**: `('text', bdata)` 블록이더라도 `bdata`가 HTML일 수 있다. btype 이름이 아닌 bdata 내용 형식을 확인해 핸들러 선택 필요. 또는 `run_tistory()` 에서 HTML 텍스트 블록은 `('html', ...)` 로 분류해야 혼선 없음. 파일명 safe 변환 시 `[^\x00-\x7F]` 은 한글도 제거하므로 한국어 프로젝트에 부적합 — `[^\w가-힣\s]` 또는 MD5 해시 사용.
 
-### [53] 티스토리 경제 브리핑 미발행 — sector 미정의 + _LM UnboundLocalError (2026-05-09)
+### [342] 티스토리 경제 브리핑 미발행 — sector 미정의 + _LM UnboundLocalError (2026-05-09)
 - **증상**: 07:00 경제 브리핑 잡 실행 시 WP·네이버는 발행됐으나 티스토리만 누락. 로그에 `NameError: name 'sector' is not defined` 및 `UnboundLocalError: local variable '_LM' referenced before assignment`
 - **환경**: `j01_economic_post` 잡 (07:00 자동 실행), `trend_economic_writer.py run_tistory()`, `post_quality_analyzer.py analyze_post_quality()`
 - **원인**:

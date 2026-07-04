@@ -287,7 +287,7 @@ flowchart LR
 | 밴딧 상태 크기 | **402MB → 45B** <sub>(ADR 016)</sub> | arm을 오류지문이 아닌 소수 fixer 전략으로 고정 + 오염 게이트 → 파일 비대·죽은 신호 제거 |
 | SDK→밴딧 학습 | **폐쇄 루프** | Tier 2 LLM 자동수정도 Contextual Bandit arm 자산화 → 재발 시 Tier 1 LLM-0 처리 (`record_sdk_fix`) |
 | 누적 오류 처리 | **1,960건 / 88%** <sub>(2026-07-04 기준)</sub> | `error_log` 누적 수집 · 자동+수동 해결률 (대시보드는 라이브 계산) |
-| 오류 기록 | **321건 / 6,410줄** | `JARVIS07_GUARDIAN/ERRORS.md` 구조화 회고 |
+| 오류 기록 | **313건 / 6,410줄** | `JARVIS07_GUARDIAN/ERRORS.md` 구조화 회고 |
 | 체크포인트 | **50MB** | `react_checkpoints.sqlite` (ReAct 실가동 증거) |
 
 ---
@@ -529,7 +529,7 @@ python shared/agent_registration_check.py
 | 증거 | 값 / 위치 | 의미 |
 |------|----------|------|
 | `react_checkpoints.sqlite` | **50 MB** | ReAct 라우터 실제 누적 가동 증거 |
-| `JARVIS07_GUARDIAN/ERRORS.md` | **321건 / 6,410줄** | 운영 사고 구조화 회고 → 코드 환류 |
+| `JARVIS07_GUARDIAN/ERRORS.md` | **313건 / 6,410줄** | 운영 사고 구조화 회고 → 코드 환류 |
 | RADAR 폐쇄 학습 루프 | 발행 → 성과 수집 → Ridge 회귀 → opportunity_score | 자율 학습 실증 |
 | 자가 학습 LLM 절감 | **패턴 적중 누적** | 동일 오류 LLM 0 즉시 처리 (실시간 증가) |
 | SDK→밴딧 폐쇄 루프 | `record_sdk_fix` + `bandit_arm_name` | Tier 2 자동수정 → 밴딧 arm 학습 → 다음 발행 전 sweep 자동수리율↑ (2026-06-28) |
