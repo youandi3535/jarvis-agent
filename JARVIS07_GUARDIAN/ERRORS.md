@@ -1,5 +1,55 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [321] 데몬 이중 기동 레이스 — 느린 종료 중 keeper 재기동 + 구 데몬이 새 데몬 pid 파일 삭제 (★ 사용자 지적 2026-07-04)
+
+- **증상**: 데몬 재시작 시 프로세스가 2개(구 잔존 + 신규) 공존. pid 파일이 사라져 keeper 가 반복 중복 기동.
+- **원인**: `kill -INT`/`/restart` 로 종료하면 `main()` finally → `_release_lock` 가 pid·lock 파일을 *조건 없이* 삭제하는데, 종료 정리(scheduler.shutdown·streamlit stop·telegram)가 느려 프로세스가 링거링. 그 사이 keeper(30초 폴링)가 pid 부재를 보고 새 데몬을 띄움 → 뒤늦게 종료하는 구 데몬의 atexit `_release_lock` 가 *새 데몬이 방금 쓴* pid 파일을 삭제 → keeper 가 또 새로 기동하는 연쇄. `_LOCK_FILE.unlink` 도 flock inode 정체성을 깨 이중 락 위험.
+- **헛다리**: fcntl 락이 있으니 이중 라이브는 없다고 안심 → 실제 문제는 *pid 파일 clobber* 에 의한 keeper 연쇄였음. 프로세스 존재(pid 파일) ≠ 소유권.
+- **해결**: `_release_lock` 에 **소유권 확인** — pid 파일 내용이 *내 pid 일 때만* 삭제(재기동된 새 데몬 pid 파일 보호). `_LOCK_FILE` 은 unlink 하지 않음(inode 안정 — 삭제 시 다른 데몬이 새 inode 로 별도 flock 획득 위험). `_acquire_lock` 는 truncate 로 LOCK_FILE 에 현재 pid 만 유지. 단위검증: pid=99999(새 데몬) 파일은 구 데몬 정리가 보호, 내 pid 파일만 제거.
+- **파일**: `jarvis_daemon.py`.
+- **교훈**: 여러 프로세스가 공유하는 상태 파일(pid)을 지울 땐 반드시 *소유권 확인* 후 삭제. 종료 정리가 느릴 수 있으면 감시자(keeper) 재기동 폴링과 겹쳐 "구 프로세스가 새 프로세스의 파일을 지우는" 레이스가 난다. 락 파일은 unlink 하지 말 것(flock 은 inode 기반).
+
+### [320] 표시 계층 하드코딩 — 웹·텔레그램이 코드 정본(SSOT)에서 자동 파생하도록 전면 전환 (★ 사용자 박제 2026-07-04)
+
+- **증상**: 코드(모델·스케줄·개수 등)를 바꿔도 웹 대시보드·텔레그램 표시가 안 따라와, 코드+웹+텔레그램 2중·3중 수정을 반복. 예: 모델 마이그레이션 후에도 대시보드 "Opus 4.6", 트렌드 "09/12/15"(06 누락), train_weights "매일"(→매주 일요일).
+- **원인**: 표시 계층(hub.py·각 status_fn·데몬 메시지)이 사실을 *복제 하드코딩*. 정본(shared/llm.py·DEFAULT_JOBS·architecture 상수 등)과 따로 놀아 드리프트.
+- **해결**: 워크플로우로 전 표시면 하드코딩 22건 인벤토리 → SSOT 파생 전환. 접근자/상수: `shared.llm.model_label`, `job_registry.cron_phrase`/`cron_times`/`job_ids`, `collector_engine.list_provider_names`/`SOURCE_CATEGORIES`, `architecture.DOMAIN_SKEW_THRESHOLD`/`ERROR_STATS_WINDOW_DAYS`, `harness.HARNESS_VERSION`, `jarvis_daemon._ST_MAX_FAIL`, 기존 `VISION_PORT`·`HUB_PORT`·`DENY_FIX_PATHS`·`CB_MAX_HOUR`. OWNER_LABEL 은 id→'J0N' 규칙 파생(신규 에이전트 자동). precommit `ssot` 카테고리 신설 — 표시 파일 모델라벨·스케줄 하드코딩을 커밋·부팅 차단.
+- **파일**: `hub.py`·`shared/llm.py`·`JARVIS04_SCHEDULER/job_registry.py`·`JARVIS07_GUARDIAN/architecture.py`·`JARVIS09_COLLECTOR/collector_engine.py`·`JARVIS00_INFRA/{infra_agent,harness}.py`·`jarvis_daemon.py`·`{writer,radar,collector,guardian,vision}_agent.py`·`bot.py`·`shared/precommit_check.py`.
+- **교훈**: 표시 계층은 사실을 *하드코딩하지 말고 정본에서 파생*. 뷰 전용(좌표·색·이모지)은 로컬 유지 정당하나 *사실*(값·개수·시각·목록)은 SSOT 단일. 가드가 없으면 재발하므로 precommit 로 강제.
+
+### [319] Streamlit 정리 로직이 LISTEN 아닌 *클라이언트*까지 종료 + SIGTERM 후 미대기 → 오살·공존 위험 (★ 사용자 지적 2026-07-04)
+
+- **증상**: 데몬이 새 Streamlit(대시보드)을 띄울 때 이전 서버가 확실히 죽지 않고 공존할 여지. 또한 포트 9199 에 *연결된* 브라우저 탭(Chrome)까지 종료 대상에 포함되는 오살 버그.
+- **환경**: `jarvis_daemon.py:_kill_orphan_streamlits`. `lsof -ti TCP:9199` 는 LISTEN(서버) + ESTABLISHED(클라이언트) 를 *모두* 반환. 실제로 대시보드를 열어둔 Chrome Helper(PID 32882)가 목록에 섞여 "stale streamlit" 으로 오인됨(초기 오진의 원인).
+- **원인**: ① lsof 에 `-sTCP:LISTEN` 상태 필터 부재 → 클라이언트 연결도 kill 대상. ② SIGTERM 만 보내고 죽음을 *기다리지 않은 채* 곧바로 새 서버 기동 → 느리게 죽는 구 서버가 포트를 쥔 채 새 서버와 잠깐 공존/바인딩 충돌 가능(SIGKILL 에스컬레이션·포트해제 확인 없음).
+- **헛다리**: 처음엔 32882 를 "죽지 않은 구 streamlit" 으로 오진 → `ps`로 보니 Chrome Helper(브라우저 클라이언트)였고, 실제 서버는 40489 단 하나였음. *프로세스 존재(포트 연결) ≠ 서버*.
+- **해결**: `_streamlit_listeners()` 신설 — `lsof -t -iTCP:9199 -sTCP:LISTEN` 로 *서버만* 조준(클라이언트 불살). `_kill_orphan_streamlits` 재작성: LISTEN 대상 + `ps` 로 우리 hub.py 확인 → SIGTERM → 최대 8초 대기 → 잔존 시 SIGKILL → 포트 LISTEN 해제 확인 후 반환. `_start_streamlit` 이 이 함수 완료 후에만 새 서버 기동하므로 공존 원천 차단. 라이브 검증: 재시작 후 streamlit LISTEN 정확히 1개, 구 서버 종료, **Chrome 탭 보존**, HTTP 200.
+- **파일**: `jarvis_daemon.py`.
+- **교훈**: 포트로 프로세스를 다룰 땐 반드시 *LISTEN* 만 조준 — `lsof -ti`(상태 무필터)는 클라이언트를 함께 잡아 남의 프로세스를 죽인다. "새 것을 띄우면 옛 것이 죽는다"는 *SIGTERM 발사*가 아니라 *죽음 확인 + 포트 해제 확인*까지 해야 성립한다.
+
+### [318] 데몬 hang(메인스레드 무한 파이썬 루프)으로 06:30 경제 브리핑 미발화 — keeper PID-only 감시의 사각지대 (★ 사용자 지적 2026-07-04)
+
+- **증상**: 07-04 아침 06:30 경제 브리핑 글이 작성/발행되지 않음. `JARVIS02_WRITER/logs/economic_20260704_*.log` 자체가 없음 = 잡이 *시작조차* 안 됨. 텔레그램 실패 알림도 없음.
+- **환경**: 데몬 PID 59973(21:31 기동). `daemon.log`/`daemon_stdout.log` 가 **06:07:01 이후 완전 정지**. `ps` 상 CPU 625%, 메인스레드 + 워커 스레드 2개가 각각 ~100% 스핀(CPU time 260분·180분), 메모리 peak 3.8GB.
+- **원인**: 06:07:01 수집/작성 파이프라인(트렌드→topic_pack→collector engine, LLM rate-limit 회로 차단 직후)에서 **데몬 메인스레드가 순수 파이썬 무한 루프/재귀에 빠짐**(macOS `sample`: 전 프레임이 `_PyEval_EvalFrameDefault`, C 확장 아님). 메인스레드가 GIL을 물고 스핀 → APScheduler 백그라운드 잡 전부 **기아(starvation)** → 06:30 `j01_economic_post` cron 미발화. 프로세스는 *살아있어*(PID 유효) `jarvis_keeper.py` 의 `os.kill(pid,0)` PID-only 검사를 계속 통과 → **hang을 death로 못 봐 재시작 안 함** → 오전 내내 방치. (무한 루프의 *정확한* 파이썬 위치는 당시 faulthandler 미탑재로 미확정 — 아래 방어3으로 다음 재발 시 자동 포착.)
+- **헛다리**: PID 살아있음 → "데몬 정상"으로 오판. keeper 로그에 `데몬 꺼짐 감지` 없음 = 정상처럼 보였음. 프로세스 존재 ≠ 프로세스 건강.
+- **해결 (3중 방어)**:
+  - **방어1 — 스케줄러 생존 heartbeat**: `JARVIS00_INFRA.infra_agent.job_heartbeat` 가 60초 interval(`JARVIS04_SCHEDULER/job_registry.py` `infra_heartbeat` 잡)로 `logs/daemon.heartbeat` mtime 갱신. interval 잡이라 스케줄러 기아 시 *동반 정지* = 정확한 hang 신호. 부팅 즉시 `touch_heartbeat()` 로 오탐 방지.
+  - **방어2 — keeper hang 워치독**: `jarvis_keeper.py` 가 PID 생존 + heartbeat 신선도(`HANG_THRESHOLD=360s`) 동시 검사. stale 시 SIGUSR1(스택덤프)→SIGKILL→재시작 + 텔레그램/GUARDIAN 알림. `(재)시작 후 HANG_GRACE=180s` 유예.
+  - **방어3 — hang 포렌식**: 데몬 부팅 시 `enable_hang_forensics()` 로 faulthandler 활성화 + SIGUSR1 등록 → keeper가 강제킬 前 SIGUSR1 로 **무한루프의 정확한 파이썬 함수·라인**을 `logs/daemon_faulthandler.log` 에 자동 기록(faulthandler는 C 핸들러라 GIL 잠긴 hang 중에도 동작 — py-spy·root 불필요). **실제 keeper 함수(`_heartbeat_age`·`_dump_and_kill`)로 end-to-end 드릴 검증 완료**: stale heartbeat 감지 → SIGUSR1 덤프(스핀 함수·라인 포착) → SIGKILL 전 과정 통과.
+  - **부가 — 로그 소음 억제**: heartbeat 잡은 상태 신호일 뿐이라 APScheduler 실행 로그(60초 주기, 하루 ~1440줄)를 `quiet_heartbeat_logs()`(infra_agent, threadpool executor 로거 타깃 필터)로 영구 억제. *버그가 아니라 정상 로그의 타깃 억제* — 다른 잡 로그는 유지. 데몬 부팅 시 1회 부착(중복 가드).
+- **파일**: `jarvis_keeper.py`, `JARVIS00_INFRA/infra_agent.py`, `jarvis_daemon.py`, `JARVIS04_SCHEDULER/job_registry.py`.
+- **교훈**: 프로세스 *존재* 감시(`os.kill(pid,0)`)만으로는 hang을 못 잡는다 — 반드시 *일하고 있는지*(heartbeat)를 감시해야 한다. heartbeat 생산자는 실패하는 서브시스템(여기선 스케줄러) 안에 두어야 신호가 의미를 가진다. GIL을 물고 스핀하는 순수 파이썬 루프는 전 스레드를 기아시켜 로그·잡·알림을 한꺼번에 침묵시킨다 → 외부 감시자(keeper)의 hang 판정 + faulthandler 포렌식이 필수.
+
+### [317] evidence_brief KeyError: 'id' — fact dict에 id 키 미보유 시 크래시 (2026-07-03)
+
+- **증상**: `_build_evidence_block` → `evidence_brief` 호출 시 `f['id']` KeyError. fact가 `build_evidence_pack` 을 거치지 않은 경로(예: 직렬화 후 필드 누락, 외부 구성 팩)로 전달되면 `id` 키 부재.
+- **원인**: `_extract_facts_batch`는 fact에 `id`를 넣지 않음. `build_evidence_pack`(235행)·`merge_pack`(265행)이 후처리로 부여하지만, `evidence_brief`가 이를 전제하고 `f['id']` 직접 접근.
+- **헛다리**: 없음 (즉시 수정).
+- **해결**: `evidence_brief` 내 `f['id']` → `f.get('id') or f"F{fi}"` 방어적 처리. `f['statement']` → `f.get('statement', '')` 동시 전환. enumerate 로 그룹 내 인덱스 부여.
+- **파일**: `JARVIS09_COLLECTOR/evidence_pack.py`
+- **교훈**: dict 키 접근은 외부 입력이 통과하는 경로에서 항상 `.get()` 방어적 접근 사용. 후처리에서만 키를 부여하는 설계는 소비자 측에서 방어가 필요.
+
 ### [316] 테마 Pass-1 데이터 내장 슬롯 이행 — 경제와 작성 로직 동렬화 완성 (★ 사용자 확인 요청 2026-07-03)
 
 - **경위 (사용자)**: "테마글도 경제 브리핑글 작성 로직처럼 되어 있는 거지? 주제만 다르고 전부 같잖아." — 대조 결과 ADR 013 의 *데이터 내장 차트 슬롯* 이 경제에만 이행돼 있었음 (테마 Pass-1 은 구형식 `[CHART_N: 설명]` 만).
@@ -115,7 +165,7 @@
 - **파일**: `JARVIS06_IMAGE/{image_spec,infographic_engine,slot_renderer}.py`, `JARVIS02_WRITER/draft_writer.py`
 - **교훈**: dedupe 기준은 "값"이 아니라 "항목+값" — 값 기준 제거는 진실 데이터(동률)를 파괴한다. 시계열 예외 필수.
 
-### [306] LNG 테마 티스토리 대본 SDK 타임아웃 — [303] 반복, 일시적 API 불가용 (코드 수정 불필요, 2026-07-03)
+### [322] LNG 테마 티스토리 대본 SDK 타임아웃 — [303] 반복, 일시적 API 불가용 (코드 수정 불필요, 2026-07-03)
 
 - **증상**: `theme-publish-LNG(액화천연가스)-tistory` 하네스 step "⑤ 티스토리 대본 생성" 에서 `Pass-1 대본 생성 실패`. 네이버 대본은 SDK timeout 2회 후 3차 시도에서 성공(1575자, 35문장). 티스토리 대본 생성 시점에서도 SDK timeout 연속 발생.
 - **환경**: 16:17 테마 시작, 수집 단계 rate-limit 스로틀 8회+, 17:22 데몬 재시작(코드 변경 ERRORS [305] 반영), 수동 재실행(18:03) 에서도 동일 타임아웃 패턴.
@@ -156,7 +206,7 @@
 - **파일**: `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/trend_economic_writer.py`
 - **교훈**: 프롬프트 경제(요약 주입)는 모델 관점 최적화였지 글 품질 관점이 아니었다 — 재료 전부를 보이고 모델이 고르게 하는 것이 사용자가 정의한 품질 경로. 요약(규율)과 전문(풍부함)은 대체재가 아니라 보완재.
 
-### [303] 테마글 LNG(액화천연가스) Pass-1 대본 SDK 타임아웃 — 일시적 API 불가용 (코드 수정 불필요, 2026-07-03)
+### [323] 테마글 LNG(액화천연가스) Pass-1 대본 SDK 타임아웃 — 일시적 API 불가용 (코드 수정 불필요, 2026-07-03)
 
 - **증상**: `theme-publish-LNG(액화천연가스)-naver` 하네스 step "③ 네이버 대본 생성" 에서 `Pass-1 대본 생성 실패`. invoke_text("writer") → `⚠️ SDK timeout 300s — 수집된 응답: 0개` 4회 연속 (attempt 1), 2차 시도(attempt 2)도 동일 타임아웃.
 - **환경**: 16:20~16:28 수집 단계 중 rate-limit 스로틀 다수 관측 (6회+). 수집 자체는 정상 완료(문서 109건, fact 25개). 16:28:59 Pass-1 SDK 호출 시작 → 16:49:53 harness 실패 보고 (300s × 4 = 20분 타임아웃 소진).
@@ -672,7 +722,7 @@
 
 ---
 
-### [260] `ValueError: JSON not found` @ JARVIS03_RADAR.analyzer — 사용자 오해 + 학습 노이즈 5중 누수 (2026-06-07)
+### [324] `ValueError: JSON not found` @ JARVIS03_RADAR.analyzer — 사용자 오해 + 학습 노이즈 5중 누수 (2026-06-07)
 
 - **증상**: 사용자 텔레그램 알림 `⚠️ [GUARDIAN] 자동 수정 실패 / 자체 학습·Claude Code 모두 수정 불가 / 오류: ValueError @ JARVIS03_RADAR.analyzer / 내용: JSON not found / → 수동 검토 필요`. error_log 4건 누적 (ID 229·395·741·754 / 2026-05-16 ~ 2026-06-07).
 - **환경**: `JARVIS03_RADAR/analyzer.py:_classify_with_llm()` — RADAR가 1차 규칙 분류 후 "기타" 키워드를 LLM(writer_fast=sonnet-4-6)에 배치 분류 의뢰. 응답 파싱 단계.
@@ -1273,7 +1323,7 @@
 - **파일**: `JARVIS02_WRITER/scheduler.py` lines 614-699.
 - **교훈**: done_set 제외와 동일하게 failed_set 제외도 필수. 실패 테마를 폴백 재선정에서 막지 않으면 동일 실패가 매 세션마다 반복됨.
 
-### [219] 신규상장 계열 테마 5차 폴백 — LLM 다운 시 0개 반환 (2026-05-31)
+### [325] 신규상장 계열 테마 5차 폴백 — LLM 다운 시 0개 반환 (2026-05-31)
 
 - **증상**: `[harness:theme-publish-2026 상반기 신규상장] attempt=1 step=② 종목 수집 + TS쿠키 시작: 종목 데이터 0개 — 수집 실패`. ERRORS [174][176] 수정 이후에도 동일 테마 재실패.
 - **환경**: "2026 상반기 신규상장" 테마 — LLM 학습 범위 밖 최신 IPO 정보.
@@ -1283,7 +1333,7 @@
 - **파일**: `JARVIS09_COLLECTOR/collect_theme.py` lines 1541~1575 (5차 폴백 신규상장 분기).
 - **교훈**: LLM-의존 폴백은 LLM 다운 시 동일하게 실패. 마지막 보루 폴백은 반드시 LLM 비의존(하드코딩 or 스크레이핑) 시드 선행 확보 필수.
 
-### [219] _make_theme_retry() tistory_html_writer 리로드 누락 — [218] 수정 후 동일 ImportError 반복 (2026-05-31)
+### [326] _make_theme_retry() tistory_html_writer 리로드 누락 — [218] 수정 후 동일 ImportError 반복 (2026-05-31)
 
 - **증상**: [218] 수정 후에도 `ImportError: cannot import name '_stocks_text' from 'JARVIS02_WRITER.tistory_html_writer'` 반복 — harness theme-publish-우크라이나 재건 ③ 티스토리 대본 생성 단계 실패.
 - **원인**: [218]에서 `theme_html_writer`, `draft_processor`, `draft_writer`를 reload 목록에 추가했으나 `tistory_html_writer` 미포함. `theme_html_writer.py` 모듈 레벨에서 `from JARVIS02_WRITER.tistory_html_writer import (...)`를 하는데, reload 시 `tistory_html_writer`는 `sys.modules`에 OLD 버전으로 캐시된 채 남음 → `theme_html_writer` reload 효과가 없음.
@@ -1510,7 +1560,7 @@
   - 신규 함수 3개: `_fetch_tickers_from_context`, `_fetch_stock_price_history`, `_fetch_per_roe_scatter`
 - **교훈**: 실데이터 없으면 차트 스킵 (`return ""`). 거짓 차트 > 차트 없음.
 
-### [180] 네이버·티스토리 블록 간 과도한 여백 — "몇 칸씩" 간격 버그 (★ 사용자 박제 2026-05-27)
+### [327] 네이버·티스토리 블록 간 과도한 여백 — "몇 칸씩" 간격 버그 (★ 사용자 박제 2026-05-27)
 - **증상**: 문단↔문단, 문단↔이미지, 이미지↔문단 사이가 2~5줄씩 떨어짐. 사용자 요구: "딱 1칸씩만 띄우면 된다".
 - **근본 원인 (naver 4곳, tistory 6곳)**:
   - **(N1) naver `input_text_block` trailing Enter**: 블록 끝에 `_pg.press('enter')` → 이미 마지막 sentence-group의 Enter가 있어 +1칸 중복.
@@ -1682,7 +1732,7 @@
 
 ---
 
-### [172] 중복 이미지 추가 원인 — 파일 MD5 감지 + area 시드 + 개념차트 고정 팔레트 (★ 사용자 박제 2026-05-26)
+### [328] 중복 이미지 추가 원인 — 파일 MD5 감지 + area 시드 + 개념차트 고정 팔레트 (★ 사용자 박제 2026-05-26)
 - **증상**: [171] 수정 후에도 시각적으로 동일한 차트가 반복될 가능성 잔존 (독립 실행 간 동일 합성 데이터·고정 팔레트).
 - **원인 1 — `area` 차트 v2 시리즈 seed에 `run_id` 미포함** (`chart_generator.py:_make_plotly_fig`):
   `seed2 = hashlib.md5(title.encode())` → `run_id` 없음 → 같은 제목 글이면 v2 시리즈가 항상 동일 → 두 area 차트가 v2 기준으로 같은 모양.
@@ -1702,7 +1752,7 @@
 
 ---
 
-### [171] 중복 차트 이미지 — 3곳 원인 전수 수정 (★ 사용자 박제 2026-05-26)
+### [329] 중복 차트 이미지 — 3곳 원인 전수 수정 (★ 사용자 박제 2026-05-26)
 - **증상**: 블로그 글 안에서 같은 차트 이미지가 여러 번 등장. 수십 종 차트 타입이 있는데도 동일한 차트만 반복.
 - **원인 1 — `chart_generator.py` 파일명 고정** (CLAUDE.md 위반):
   `fname = out_path / f"chart_{chart_idx:02d}.png"` → 내용 해시 없음. LLM이 같은 idx를 두 번 쓰면 두 번째 차트가 첫 번째 파일을 덮어쓰고 svg_map[idx]도 덮어쓰임. 두 위치 모두 같은 chart HTML 참조 → 시각적 중복.
@@ -1915,7 +1965,7 @@
 
 ---
 
-### [139] 차트 이미지 오른쪽 절반 빈 공간 + 텍스트 콩알 + 중복 타입 (2026-05-24)
+### [330] 차트 이미지 오른쪽 절반 빈 공간 + 텍스트 콩알 + 중복 타입 (2026-05-24)
 - **증상**: ① STEP 차트 오른쪽 ~40% 빈 공간 (데이터 없음). ② 모든 차트 텍스트·레이블이 콩알만하게 작음. ③ 같은 글에 동일 차트 타입 중복 삽입.
 - **원인 1 (빈 공간)**: STEP 차트가 12개 데이터 포인트별로 어노테이션 박스를 `x=lbl, y=v` 데이터 좌표로 삽입 → Plotly가 마지막 라벨(26.05) 우측에 어노테이션 텍스트 박스 공간 확보를 위해 x축 범위를 자동 연장 → 오른쪽 빈 공간 발생.
 - **원인 2 (텍스트 작음)**: `_base_layout()` 전역 폰트 `size=13`, 틱 폰트 `size=12`, 타이틀 `size=20` — 실제 렌더링 시 가독성 불가.
@@ -2994,7 +3044,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [109] 자가 진단 회차 — SEO 프롬프트 상수 미정의 + 이관 완전성 헌법 박제 (2026-05-15)
+### [331] 자가 진단 회차 — SEO 프롬프트 상수 미정의 + 이관 완전성 헌법 박제 (2026-05-15)
 - **증상**: Layer 3 검증 명령에서 `trend_economic_writer.py`, `wp_html_writer.py`, `economic_poster.py` 등 6개 파일에서 SEO 제목·메타·시나리오 관련 글자수가 하드코딩("35자 이내", "140자 이내", "15자 이내") 상태로 잔존. `length_manager.py` 에 대응 상수가 미정의였음.
 - **환경**: Layer 3 자동 진단 — JARVIS02_WRITER 전체.
 - **원인**: ERRORS [42] (2026-05-11) 에서 블로그 본문 분량 상수화는 완료했으나 SEO 메타 제목·시나리오 라벨용 프롬프트 상수는 추가되지 않음. 누락 지속.
@@ -3003,7 +3053,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS02_WRITER/length_manager.py`, `trend_economic_writer.py`, `wp_html_writer.py`, `economic_poster.py`
 - **교훈**: SEO 메타 제목·시나리오 라벨 글자수도 `length_manager` 상수 사용 대상. 신규 프롬프트에 "N자 이내" 직접 박기 절대 금지 — `_L.상수명` 사용.
 
-### [110] Layer 7 헌법 박제 — 이관 완전성 규정 (2026-05-15)
+### [332] Layer 7 헌법 박제 — 이관 완전성 규정 (2026-05-15)
 - **증상**: ERRORS.md 교훈 분석에서 "이관 시 last-def override" 관련 교훈이 3회 반복 발생([60], [63], [58] 등). import 추가만 하고 구 함수 본체를 남겨두면 Python이 구 정의로 override.
 - **환경**: JARVIS 전체 — 특히 JARVIS06 이관, JARVIS07 이관 시 발생.
 - **해결**: `CLAUDE.md` 인프라 관리 규정 "이관 절차" 항목에 ★ 이관 완전성 규정 추가. `grep -rn "^def <함수명>" --include="*.py" .` 검증 명령 명시.
@@ -3012,7 +3062,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [108] SVG 차트 짤림·반복·썸네일 수렴 3종 동시 해결 (2026-05-15)
+### [333] SVG 차트 짤림·반복·썸네일 수렴 3종 동시 해결 (2026-05-15)
 - **증상**: ① 버블/산점도 차트 요소가 viewBox 경계 밖으로 잘림 ② 테마주 글마다 버블 산점도 스타일만 반복됨 ③ 동일 키워드 썸네일 배경이 매번 같음.
 - **환경**: 테마주글 전 플랫폼 해당. `tistory_html_writer.py` SVG 생성, `image_agent.py` / `thumbnail_maker.py` 썸네일 생성.
 - **원인**:
@@ -3029,7 +3079,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [106] 티스토리 카테고리 오선택·미설정 (2026-05-15)
+### [334] 티스토리 카테고리 오선택·미설정 (2026-05-15)
 - **증상**: ① 카테고리가 아예 설정 안 됨 ② 경제 브리핑 발행인데 "테마주 분석" 카테고리가 선택됨.
 - **환경**: `JARVIS02_WRITER/tistory_poster.py` `post_to_tistory()` 카테고리 선택 블록.
 - **원인**: `querySelectorAll('li, a, div[role], button')` 순회 시 *부모 `<li>` 요소*가 자식 텍스트를 모두 포함(`innerText`)해 `t.includes(cat)` 에서 first-match. 부모 클릭은 효과 없음 → 이전 세션 기본 카테고리("테마주 분석") 그대로 남음. 또한 `_s(2)` 드롭다운 대기가 불충분한 경우 `category-list` 미탐지.
@@ -3276,7 +3326,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [101] 7-Layer 자가 진단 회차 — 규정 위반 4건 수정 (2026-05-15)
+### [335] 7-Layer 자가 진단 회차 — 규정 위반 4건 수정 (2026-05-15)
 - **증상 및 발견**:
   1. `hub.py` 폰트 `font-size:13px` 2곳 — CLAUDE.md 웹 대시보드 14px 최소 규정 위반.
   2. `JARVIS07_GUARDIAN/guardian_agent.py` — `register()` 안에서 `scheduler.add_job()` 4회 직접 호출 — 스케줄 관리 규정 위반 (단일 진입점: `JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS`).
@@ -4525,7 +4575,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [67] JARVIS06 이미지 폴더 구조 + heading 컨텍스트 전달 (2026-05-11)
+### [336] JARVIS06 이미지 폴더 구조 + heading 컨텍스트 전달 (2026-05-11)
 - **증상**: 이미지가 `JARVIS02_WRITER/screenshots/` 임시 경로에 흩어져 JARVIS06 관리 밖. 섹션 이미지 생성 시 현재 소제목 컨텍스트 없어 이미지 품질 저하.
 - **원인**: `jarvis_main.py`의 `img_save_dir` 경로가 `JARVIS02_WRITER/screenshots/` 고정. `_gen()` → `_make_para_image()` 에 heading 미전달.
 - **헛다리**: 버스 즉시 실행(THEME_QUEUED 구독) 추가했다가 제거 — 발행 스케줄은 반드시 `j01_economic_post`(07:00)·`j01_theme_post_16`(16:00) 고정 시간에만 실행해야 함. 시도 때도 없는 즉시 실행은 하루 발행 수 제어 불가.
@@ -4535,7 +4585,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS02_WRITER/jarvis_main.py` (경로·heading 전달)
 - **교훈**: 이미지 경로는 JARVIS06 관리 구조 따를 것. 발행 스케줄은 07:00/16:00 고정 — 버스 즉시 실행으로 우회 금지.
 
-### [66] matplotlib 차트 헤더 한글 전부 미표시 — _strip_emoji 한글 범위 포함 버그 (2026-05-11)
+### [337] matplotlib 차트 헤더 한글 전부 미표시 — _strip_emoji 한글 범위 포함 버그 (2026-05-11)
 - **증상**: bar_chart/line_chart 등 matplotlib 차트에서 제목·부제목·key_message 의 한글이 전혀 렌더링되지 않음. "HBM 분기별 출하량" → "HBM", "4분기 연속 성장" → "4", "2024년 기준" → "2024". ASCII/숫자만 표시됨.
 - **원인**: `_strip_emoji()` 의 정규식 범위 `\U000024C2-\U0001F251` 이 U+24C2(9410)~U+1F251(127569)을 커버하는데, 한글 음절 블록 U+AC00(44032)~U+D7AF(55215)가 이 범위 안에 포함됨. `render()` 에서 `title`/`subtitle`/`key_message` 에 `_strip_emoji()` 를 적용할 때 한글 전부 제거됨.
 - **헛다리**: ① FontProperties(fname=...) 합성 볼드 문제 추정 → 제거해도 동일 ② fig.text() vs ax_h.text() 클리핑 추정 → 변경해도 동일 ③ 4회 이상 접근법 변경 낭비.
@@ -4543,7 +4593,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS06_IMAGE/matplotlib_renderer.py` — `_strip_emoji()`
 - **교훈**: 이모지 범위 지정 시 CJK 블록(U+AC00-U+D7AF) 포함 여부 반드시 확인. 광범위 유니코드 범위 `\U000024C2-\U0001F251` 는 한글·한자 다수 포함 — 절대 사용 금지.
 
-### [65] 섹션 이미지 반복/재탕 — SVG 파일명 충돌 + AI 이미지 고정 프롬프트 (2026-05-11)
+### [338] 섹션 이미지 반복/재탕 — SVG 파일명 충돌 + AI 이미지 고정 프롬프트 (2026-05-11)
 - **증상**: 한 글 내 여러 섹션에서 동일한 이미지가 반복 표시됨. stat_card/line_trend 등 차트 이미지가 모든 섹션에서 똑같음. AI 사진도 섹션 내용과 무관하게 재탕.
 - **원인**:
   1. `claude_svg_provider.py` 파일명 = `svg_{type}_{hash(title)}` — title이 `"{keyword} 핵심 수치"` 등 모든 섹션 동일 → 해시 동일 → 같은 파일명에 순서대로 덮어쓰기 → 마지막 생성 이미지가 모든 섹션에 표시.
@@ -4557,7 +4607,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [64] stat_card KPI 차트 라벨 오류 + 폰트 너무 작음 (2026-05-11)
+### [339] stat_card KPI 차트 라벨 오류 + 폰트 너무 작음 (2026-05-11)
 - **증상**: `make_stat_infographic` / `_extract_for_chart` stat_card 결과에서 KPI 라벨이 "비중을", "비중을 %", "오늘 회", "당장은 회" 등 조사·부사로 출력됨. 전체 글자 크기도 너무 작아 읽기 어려움.
 - **원인**: 정규식 `([가-힣]{1,8}[은는이가도의]?\s*)?` 가 숫자 직전 어절 전체를 캡처 → `rstrip('은는이가도의 ')` 만으로는 "비중을", "오늘", "당장은" 같은 경우 제거 안 됨. 폰트 min 14px는 KPI 카드에 너무 작음.
 - **헛다리**: `rstrip` 확장만으로는 을/를/에서 등 다른 격조사 처리 불가.
@@ -4654,7 +4704,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ## 기록
 
-### [54] 티스토리 경제 브리핑 이모지·문체 규정 위반 (2026-05-09)
+### [340] 티스토리 경제 브리핑 이모지·문체 규정 위반 (2026-05-09)
 - **증상**: 티스토리 경제 브리핑 본문에 `+1.71% 🔥` 처럼 이모지가 포함되고, 문체가 `~했어요` 해요체로 출력됨
 - **환경**: `trend_economic_writer.generate_tistory_article()` — 티스토리용 Q&A 원고 생성 프롬프트
 - **원인**: 프롬프트 line 1003에 `해요체(~해요/~이에요/~예요). 이모지 2~4개 이내.` 명시 → LLM이 지시 그대로 해요체·이모지 사용. WP 프롬프트도 `이모지 최소화 (헤더 1개 이하)` 로 이모지를 암묵적으로 허용 중. 이모지 후처리 없음.
@@ -4684,7 +4734,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `BLOG_SUPREME_LAW.md`, `length_manager.py`, `trend_economic_writer.py`, `economic_poster.py`, `law_enforcer.py`
 - **교훈**: LLM은 "훅을 잡아", "감성적으로" 같은 모호한 지시를 무시하고 안전한 팩트 오프닝을 선택함. 구체적 예시(OK/NG)와 절대 금지 패턴을 프롬프트에 명시해야 효과. 런타임 감지로 회귀 방지 보완.
 
-### [55] 티스토리 본문 HTML 태그 노출 + 섹션 이미지 파일명 깨짐 (2026-05-09)
+### [341] 티스토리 본문 HTML 태그 노출 + 섹션 이미지 파일명 깨짐 (2026-05-09)
 - **증상**: 티스토리 발행 글에 `<p> 글 </p>` HTML 태그가 화면에 그대로 노출. 섹션 이미지 파일명이 `section_01_'_'_2026-05-09.png` 처럼 한글이 모두 제거돼 의미없는 잔해만 남음.
 - **환경**: `tistory_poster.post_to_tistory()` 블록 삽입 루프, `trend_economic_writer.generate_section_image()`
 - **원인**:
@@ -4697,7 +4747,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS02_WRITER/tistory_poster.py` (L742), `JARVIS02_WRITER/trend_economic_writer.py` (L662)
 - **교훈**: `('text', bdata)` 블록이더라도 `bdata`가 HTML일 수 있다. btype 이름이 아닌 bdata 내용 형식을 확인해 핸들러 선택 필요. 또는 `run_tistory()` 에서 HTML 텍스트 블록은 `('html', ...)` 로 분류해야 혼선 없음. 파일명 safe 변환 시 `[^\x00-\x7F]` 은 한글도 제거하므로 한국어 프로젝트에 부적합 — `[^\w가-힣\s]` 또는 MD5 해시 사용.
 
-### [53] 티스토리 경제 브리핑 미발행 — sector 미정의 + _LM UnboundLocalError (2026-05-09)
+### [342] 티스토리 경제 브리핑 미발행 — sector 미정의 + _LM UnboundLocalError (2026-05-09)
 - **증상**: 07:00 경제 브리핑 잡 실행 시 WP·네이버는 발행됐으나 티스토리만 누락. 로그에 `NameError: name 'sector' is not defined` 및 `UnboundLocalError: local variable '_LM' referenced before assignment`
 - **환경**: `j01_economic_post` 잡 (07:00 자동 실행), `trend_economic_writer.py run_tistory()`, `post_quality_analyzer.py analyze_post_quality()`
 - **원인**:
@@ -6347,3 +6397,14 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **해결**: ① `_plan_narrative` 서사 설계 1패스(공감포인트·긴장·해소·섹션 메시지·근거 F# 배정, theme+date 캐시로 플랫폼 간 재사용) ② `critique_and_refine` 자기비평 1패스(루브릭 5종 + 근거 일치 점검, *문장만* 수정). 구조 시그니처 가드(플레이스홀더·표·h2 세트 + 분량 ±30%) 위반 시 원본 유지. 킬스위치 `WRITER_CRITIQUE=0`.
 - **파일**: `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/theme_html_writer.py`.
 - **교훈**: 작성 품질은 "설계 → 작성 → 비평" 다층 패스가 기본기. 비평 패스에는 반드시 *구조 보존 가드* 를 붙여야 한다 — LLM 재작성은 플레이스홀더·표를 쉽게 훼손한다.
+
+
+## [320] 밴딧 강화학습 붕괴 — arm=오류지문 → 402MB·죽은 신호·오염 (2026-07-04, ADR 016)
+
+- **증상**: `bandit_state.json` 402MB(매 보상마다 통째 로드 ≈8초·재저장), 89개 arm 전부 mean_reward≈0(-0.005, 좋은/나쁜 fixer 무차별), 89 arm 중 83개가 변경추적(GitCommit 31·ExternalEdit·PolicyChange…). `learned_patterns.json` 126개 중 119개가 재적용 불가한 변경추적 이력(stored_patch 0개).
+- **환경**: `JARVIS07_GUARDIAN/bandit.py`(Linear UCB Contextual Bandit), `pattern_fixer.py`(record_pattern_hit·try_pattern_fix·_get_verified_fixers/_get_new_fixers). 유입: `error_collector.record_external_change`/`report_manual_fix`.
+- **원인**: `bandit_arm_name()` 이 arm 을 *오류 지문(error_type::message)* 으로 생성 + `_get_verified_fixers`/`_get_new_fixers` 가 학습 패턴을 개별 밴딧 후보 arm 으로 펼침 → 오류·커밋마다 arm 신규 생성(무한 증식). 컨텍스추얼 밴딧 전제(소수 arm+context) 붕괴. 적응형 사다리가 obs_count(전체)로 승급 판단 → 404D 폭주하는데 arm당 관측 1~25건 → ridge 가 신호 압도(θ≈0). 변경추적(`_MANUAL_POLICY_TYPES`)이 노이즈 게이트를 통과해 learned_patterns·밴딧 오염.
+- **헛다리**: 대시보드 "pulls" 수치(예: 12,696)를 실제 학습량으로 신뢰 — 밀집 임베딩으로 부풀려진 허수(‖A-λI‖_fro)였음. "압축·차원 상한만" 시도도 헛다리 — arm=지문 구조를 안 고치면 신호는 여전히 죽고 arm 은 계속 증식.
+- **해결** (ADR 016): ① `bandit._arm_key()` 로 모든 arm 을 유한 전략(정적6 + auto_patch + learned_verified/new + llm)으로 접음 ② `record_pattern_hit` 노이즈 게이트 4 = actionable(`_ACTIONABLE_FIXERS`) fixer 만 등록(변경추적 영구 차단) ③ `try_pattern_fix` = `_fix_from_learned` 단일조회 + 정적6(개별 펼침 폐기) ④ 차원 상한 28D + 실관측 n/보상합 rsum + compact 저장 ⑤ 상태 초기화(402MB→45B)·learned 프루닝(126→7, 백업 `_refactor_backup/`). 검증: 시뮬레이션 8종 + 오염 게이트 5종 + 스모크 + precommit 44종 0건.
+- **파일**: `JARVIS07_GUARDIAN/bandit.py`, `JARVIS07_GUARDIAN/pattern_fixer.py`, `JARVIS07_GUARDIAN/_refactor_backup/`(백업), `docs/decisions/016-bandit-finite-strategy-arms.md`, `docs/decisions/README.md`, `CLAUDE.md`.
+- **교훈**: 컨텍스추얼 밴딧의 arm 은 *전략* 이어야 한다 — *컨텍스트(오류)* 를 arm 으로 쓰면 arm 이 무한 증식하고 arm당 데이터가 말라 학습이 죽는다. "밴딧 비대화"는 목표가 아니라 병증이었다. 변경추적(재발 없는 이력)은 강화학습 대상이 아니다 — actionable 여부가 단일 기준. 차원은 데이터가 감당할 만큼만(관측≪차원 = 콜드스타트 파국). ★ 회귀 금지: `_get_verified_fixers`/`_get_new_fixers` 를 다시 밴딧 후보로 되돌리지 말 것.

@@ -988,25 +988,31 @@ def check_model(report: Report) -> None:
     """모델 위생 — 폐기·저급 모델 흔적 잔재 차단 (사용자 박제 2026-07-02).
 
     리팩터로 모델을 바꿨는데 주석·로그·docstring 에 옛 모델 이름을 남기면
-    (예: 실제론 Sonnet 4.6 인데 주석은 "Haiku") 사람이 로그·grep 에서
+    (예: 실제론 Sonnet 5 인데 주석은 "Haiku") 사람이 로그·grep 에서
     보고 오해한다. 실행 코드만 검사하는 다른 카테고리와 달리 *모든 라인*
     (주석·문자열 포함)을 훑어 리팩터 잔재를 커밋 단계에서 원천 차단한다.
 
-    ① haiku 흔적 일체 — 최소 Sonnet 4.6 원칙 (haiku 사용 금지)
+    ① haiku 흔적 일체 — Haiku 완전 폐지 원칙 (사용자 박제 2026-07-04, ADR 015 — haiku 사용 금지)
     ② 표준 외 모델 ID — 유효 ID 는 shared/llm.py MODELS 의 2종만
-       (claude-sonnet-4-6 / claude-opus-4-6). 그 외 claude-*-* 는 폐기·미래 잔재.
+       (claude-sonnet-5 / claude-opus-4-8). 그 외 claude-*-* 는 폐기·미래 잔재.
 
     예외(allowlist): 모델 이름을 *탐지* 하는 정규식·grep 패턴을 보유한 파일.
     유효 ID 변경 시 아래 valid_ids 를 shared/llm.py MODELS 와 동시 갱신.
     """
     cat = "model"
-    valid_ids = {"claude-sonnet-4-6", "claude-opus-4-6"}
-    # haiku 를 '탐지' 하는 정규식 보유 (모델 ID 파서) — 정당
-    haiku_allow = ("JARVIS01_MASTER/proactive_monitor.py",)
+    valid_ids = {"claude-sonnet-5", "claude-opus-4-8"}
+    # haiku 를 '탐지' 하는 정규식·grep 패턴 보유 (모델 ID 파서 / 감사 grep) — 정당
+    #   shared/llm.py = 모델 SSOT + 라벨 파서(pretty_model_id) — 모델명 언급이 본질.
+    haiku_allow = (
+        "JARVIS01_MASTER/proactive_monitor.py",
+        "JARVIS07_GUARDIAN/auto_repair.py",
+        "shared/llm.py",
+    )
     # 폐기 모델 ID 를 '탐지' 하는 grep 패턴 + 교체 이력 주석 보유 — 정당
     modelid_allow = (
         "JARVIS07_GUARDIAN/auto_repair.py",
         "JARVIS01_MASTER/proactive_monitor.py",
+        "shared/llm.py",
     )
 
     pat_haiku = re.compile(r"haiku", re.IGNORECASE)
@@ -1032,6 +1038,39 @@ def check_model(report: Report) -> None:
 
 # model 카테고리 등록
 CATEGORIES["model"] = check_model
+
+
+def check_ssot(report: Report) -> None:
+    """표시 계층 SSOT — 웹 대시보드가 모델명을 *하드코딩* 하지 못하게 강제.
+
+    사용자 박제 2026-07-04: "코드만 바꾸면 웹·텔레그램이 자동으로 따라와야 한다."
+    hub.py 는 모델명을 'Opus 4.8' 처럼 직접 쓰지 말고 shared.llm.model_label()
+    로 파생해야 한다 → 코드(shared/llm.py MODELS)가 모델을 바꾸면 대시보드가
+    자동 갱신, 2중·3중 수정 제거. 하드코딩 리터럴 발견 시 커밋·부팅 단계에서 차단.
+
+    표시 파일 추가 시 display_files 에 등록. (텔레그램 표시는 architecture.py
+    telegram_summary 등이 이미 model_label 로 파생 — 함수 파생이라 리터럴 없음.)
+    """
+    cat = "ssot"
+    pat_label = re.compile(r"\b(?:Opus|Sonnet|Haiku|Fable)\s+[0-9]")        # 사람이 읽는 모델 라벨
+    pat_sched = re.compile(r"(?:매일|매주|매월)[가-힣\s·]*[0-9]{1,2}:[0-9]{2}")  # 스케줄 구절(매일 06:30 등)
+    display_files = ("hub.py",)   # 웹 대시보드 (SSOT 파생 강제 대상 — job_registry.cron_phrase/cron_times, shared.llm.model_label 사용)
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        if not any(rel_s == f or rel_s.endswith("/" + f) for f in display_files):
+            continue
+        text = _read_py(p)
+        if text is None:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if pat_label.search(line):
+                report.add(Violation(cat, "ssot/model-label", rel_s, i, line))
+            if pat_sched.search(line):
+                report.add(Violation(cat, "ssot/schedule", rel_s, i, line))
+    report.checks_run += 2
+
+
+CATEGORIES["ssot"] = check_ssot
 
 
 def run(categories: list[str] | None = None) -> Report:

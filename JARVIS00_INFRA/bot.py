@@ -825,11 +825,12 @@ def _dispatch_text_command(text: str):
     if cmd == "/errors_stats":
         try:
             from shared import db as _db
-            s = _db.get_error_stats(days=7)
+            from JARVIS07_GUARDIAN.architecture import ERROR_STATS_WINDOW_DAYS
+            s = _db.get_error_stats(days=ERROR_STATS_WINDOW_DAYS)
             by_status = s.get("by_status", {})
             by_sev    = s.get("by_severity", {})
             lines = [
-                "🛡️ *GUARDIAN 오류 통계 (최근 7일)*",
+                f"🛡️ *GUARDIAN 오류 통계 (최근 {ERROR_STATS_WINDOW_DAYS}일)*",
                 f"총계: *{s.get('total', 0)}건*",
                 "",
                 "📋 상태별",

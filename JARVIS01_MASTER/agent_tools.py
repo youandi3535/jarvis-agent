@@ -870,7 +870,7 @@ def delegate_to_claude_code(prompt: str,
         try:
             with anyio.fail_after(timeout):
                 options = ClaudeCodeOptions(
-                    model="claude-opus-4-6",   # ★ 수정 가능 위임 도구 — Opus 4.6 (사용자 박제: 수정은 모두 Opus 4.6)
+                    model="claude-opus-4-8",   # ★ 수정 가능 위임 도구 — Opus 4.8 (사용자 박제: 수정은 모두 Opus 4.8)
                     max_turns=max_turns,
                     allowed_tools=tools_list,
                     cwd=str(_JARVIS_ROOT_ABS),
@@ -990,14 +990,14 @@ def ask_claude(prompt: str, system: str = "",
         text = invoke_text("writer", prompt,
                            max_tokens=int(max_tokens),
                            **({"system": system} if system else {}))
-        return {"ok": True, "text": text or "", "model": "claude-sonnet-4-6"}
+        return {"ok": True, "text": text or "", "model": "claude-sonnet-5"}
     except Exception as e:
         # fallback — invoke_text 직접 호출
         try:
             from shared.llm import invoke_text as _inv_cli
             _full = f"{system}\n\n{prompt}".strip() if system else prompt
             text2 = _inv_cli("writer", _full, timeout=300)
-            return {"ok": True, "text": text2 or "", "model": "claude-sonnet-4-6"}
+            return {"ok": True, "text": text2 or "", "model": "claude-sonnet-5"}
         except Exception as e2:
             return {"ok": False, "error": f"{e}; fallback: {e2}"}
 

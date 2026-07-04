@@ -36,6 +36,7 @@ from JARVIS07_GUARDIAN.architecture import (
     ESCALATE_THRESHOLD as _ESCALATE_THRESHOLD,
     ESCALATE_WINDOW_SECS as _ESCALATE_WINDOW_SECS,
     DENY_FIX_PATHS as _DENY_FIX_PATHS,
+    ERROR_STATS_WINDOW_DAYS as _ERROR_STATS_WINDOW_DAYS,
 )
 
 # ── Circuit breaker 런타임 상태 (설정값은 architecture.CB_MAX_HOUR) ─
@@ -51,14 +52,14 @@ def _status_section() -> str:
     lines = ["🛡️ *JARVIS07 — GUARDIAN*"]
     try:
         from shared import db as _db
-        stats = _db.get_error_stats(days=7)
+        stats = _db.get_error_stats(days=_ERROR_STATS_WINDOW_DAYS)
         total   = stats.get("total", 0)
         new_    = stats.get("by_status", {}).get("new", 0)
         fixed   = stats.get("by_status", {}).get("fixed", 0)
         wontfix = stats.get("by_status", {}).get("wontfix", 0)
         manual  = stats.get("by_status", {}).get("manual", 0)
         ignored = stats.get("by_status", {}).get("ignored", 0)
-        lines.append(f"📊 최근 7일: 총 {total}건 (신규 {new_} · 자동수정 {fixed} · 수정불가 {wontfix} · 수동수정 {manual} · 무시됨 {ignored})")
+        lines.append(f"📊 최근 {_ERROR_STATS_WINDOW_DAYS}일: 총 {total}건 (신규 {new_} · 자동수정 {fixed} · 수정불가 {wontfix} · 수동수정 {manual} · 무시됨 {ignored})")
 
         # 처리 중 오류 수
         if _processing:
@@ -157,7 +158,7 @@ def _register_capability():
             help_section=(
                 "🛡️ *오류 관리 (JARVIS07)*\n"
                 "/errors          최근 오류 목록\n"
-                "/errors_stats    7일 오류 통계\n"
+                f"/errors_stats    {_ERROR_STATS_WINDOW_DAYS}일 오류 통계\n"
                 "자유 문장: \"최근 오류 보여줘\""
             ),
             status_fn=_status_section,

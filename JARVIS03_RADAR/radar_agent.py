@@ -37,11 +37,13 @@ def _status_section() -> str:
     except Exception:
         apscheduler = None
     if apscheduler:
-        # ★ 실제 잡 ID 와 매칭 (job_registry: radar_trends 는 09/12/15 세 개) — 후보 중 가장 이른 것 표시
+        # ★ 잡 ID 는 DEFAULT_JOBS(SSOT)에서 파생 — 하드코딩 금지 (사용자 박제 2026-07-04).
+        #   트렌드 잡이 추가/변경되면(예: 06시 신설) 자동 반영. 후보 중 가장 이른 것 표시.
+        from JARVIS04_SCHEDULER.job_registry import job_ids as _jids
         job_map = {
-            "트렌드 수집":   ["radar_trends_09", "radar_trends_12", "radar_trends_15"],
-            "성과 수집":     ["radar_perf"],
-            "분석 fallback": ["analyzer_fb"],
+            "트렌드 수집":   _jids("radar_trends"),
+            "성과 수집":     _jids("radar_perf"),
+            "분석 fallback": _jids("analyzer_fb"),
         }
         for jname, jids in job_map.items():
             cand = [apscheduler.get_job(j) for j in jids]

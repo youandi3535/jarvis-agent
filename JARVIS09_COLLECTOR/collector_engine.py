@@ -143,6 +143,20 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 _PROVIDER_BY_TYPE = {p.source_type: p for p in _PROVIDERS}
+
+
+SOURCE_CATEGORIES = ["blog", "news", "academic", "finance", "web"]
+"""수집 소스 카테고리 (표시 SSOT — 대시보드가 이 목록·개수에서 파생)."""
+
+
+def list_provider_names() -> list[str]:
+    """등록된 수집 프로바이더 이름 목록 (표시용 SSOT — 사용자 박제 2026-07-04).
+
+    프로바이더를 추가/제거하면 텔레그램 /status·대시보드 표시가 자동으로 따라온다.
+    """
+    return [p.source_type for p in _PROVIDERS]
+
+
 _TARGET_LIMIT_PER_Q = 4          # 질문·출처당 조준 수집 상한
 _DEEPFETCH_MAX = 8               # 전문 딥페치 상한 (시간 가드)
 _DEEPFETCH_MIN_WORDS = 90        # 이보다 짧으면 스니펫 수준 → 전문 시도

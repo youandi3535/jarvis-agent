@@ -1,7 +1,7 @@
 # 002. 모델 다층 분리 — Haiku / Sonnet 4.6 / Opus 4.6
 
 ## 상태
-확정 (2026-05-14 박제, 메모리 `project_model_status.md`)
+폐기 (2026-07-04) — 대체됨 by [015-model-tier-upgrade.md](015-model-tier-upgrade.md). 확정 당시(2026-05-14 박제, 메모리 `project_model_status.md`) 기록은 아래 배경·결정·이유·포기한 대안에 역사적으로 보존.
 
 ## 배경
 JARVIS 의 LLM 호출은 *글 작성·코드 수정·아키텍처 진단* 세 가지 성격이 매우 다르다. 단일 모델로 처리할 경우:

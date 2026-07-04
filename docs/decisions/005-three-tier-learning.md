@@ -2,7 +2,7 @@
 
 ## 상태
 확정 (2026-05-13 박제) · **★ 2026-06-28 갱신** — Tier 1.5(RL/SGDClassifier) 제거 + 캐시·정적패턴을
-*Tier 1(패턴 자동 수정)* 으로 통합 (ERRORS [282]). 현재 런타임 구조는 **catch() 단일 진입점 → Tier 1(패턴·Contextual Bandit) → Tier 2(LLM Opus 4.6)** 의 *2-Tier*.
+*Tier 1(패턴 자동 수정)* 으로 통합 (ERRORS [282]). 현재 런타임 구조는 **catch() 단일 진입점 → Tier 1(패턴·Contextual Bandit) → Tier 2(LLM Opus 4.8)** 의 *2-Tier* (★ 2026-07-04 모델 상향 — ADR 015).
 
 > **현재 적용 규칙(티어 정의·번호)의 단일 진실 소스는 `JARVIS07_GUARDIAN/architecture.py`.**
 > 본 ADR 의 "Tier 1 캐시 / Tier 2 정적 / Tier 3 LLM" 번호는 *도입 당시(2026-05) 학습 메커니즘 계층* 의 역사적 기록이다.

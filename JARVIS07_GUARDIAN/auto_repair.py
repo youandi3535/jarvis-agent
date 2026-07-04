@@ -28,7 +28,7 @@ ROOT = Path(__file__).parent.parent
 
 _TIMEOUT    = 1200  # 최대 20분 (★ ERRORS 박제 — 164파일 전수 검토 시 900s 초과 → 1200s, --max-turns 80 병행)
 _MAX_TG_LEN = 3500  # 텔레그램 메시지 최대 글자
-_MODEL      = "claude-opus-4-6"    # ★ 오류 수정 최고 모델 — Opus 4.6 (사용자 박제 2026-06-06: 가짜 ID "claude-opus-4-8" → "claude-opus-4-6" 교체 — CLI exit code 1 근본 원인). 전체 model ID 명시 (ERRORS [184] — alias "opus" 는 1M context 자동 승격 위험).
+_MODEL      = "claude-opus-4-8"    # ★ 오류 수정 최고 모델 — Opus 4.8 (사용자 박제 2026-07-04, ADR 015). 전체 model ID 명시 (ERRORS [184] — alias "opus" 는 1M context 자동 승격 위험).
 
 # macOS npm/nvm 설치 경로 포함 확장 PATH
 _EXTRA_PATHS = [
@@ -41,7 +41,7 @@ _EXTRA_PATHS = [
 
 
 
-# ── 자가 진단 프롬프트 (Opus 4.6 — Bash-first 전수 검토) ─────────────
+# ── 자가 진단 프롬프트 (Opus 4.8 — Bash-first 전수 검토) ─────────────
 # ★ 누수 점검 (2026-05-17) — `{WORKDIR}` placeholder, 런타임에 `ROOT` 절대경로 치환.
 # ★ 2026-06-06 Bash-first 리팩터 — 기존 "파일마다 Read" 방식이 164파일 × 1턴 = 164턴 소진 →
 #   max_turns 80 초과 반복 (회차 38·39·41·42 연속 실패). Bash grep 배치 먼저 → 히트 파일만 Read.
@@ -72,7 +72,7 @@ grep -rn \
   -e "from apscheduler" \
   -e "BackgroundScheduler\\|BlockingScheduler" \\
   -e "schedule\\.every\\|import schedule" \\
-  -e "claude-opus-4-8\\|claude-sonnet-4-5\\b" \\
+  -e "claude-opus-4-6\\|claude-sonnet-4-6\\|claude-haiku" \\
   -e "anthropic\\.Anthropic()" \\
   --include="*.py" \
   --exclude-dir=.venv --exclude-dir=__pycache__ --exclude-dir=chroma_db \
@@ -426,7 +426,7 @@ def _heartbeat_thread(start_ts: float, stop_event):
         m, s = elapsed // 60, elapsed % 60
         _send_tg(
             f"⏳ *자가 진단·수정 진행 중* — {m}분 {s}초 경과\n"
-            f"Claude Code SDK Opus 4.6 가 전체 파일 정밀 검토 진행 중..."
+            f"Claude Code SDK Opus 4.8 가 전체 파일 정밀 검토 진행 중..."
         )
 
 
@@ -463,7 +463,7 @@ def run_auto_repair() -> None:
     elif _hr == 16:
         _pre_label = " — 테마글 세트 (진단 → 발행)"
     _send_tg(
-        f"🚀 *JARVIS 자가 진단·수정 시작*{_pre_label} (Opus 4.6)\n"
+        f"🚀 *JARVIS 자가 진단·수정 시작*{_pre_label} (Opus 4.8)\n"
         "전체 파일 정밀 검토 중... (최대 20분)\n"
         "5분 간격 진행 상황 자동 알림"
     )
@@ -631,7 +631,7 @@ def run_auto_repair() -> None:
                 if scores["next"]:
                     _score_note += f"\n  • 다음 회차: {_esc(scores['next'][:120])}"
             _send_tg(
-                f"✅ *자가 진단·수정 완료* (Opus 4.6, run #{run_id or '?'} "
+                f"✅ *자가 진단·수정 완료* (Opus 4.8, run #{run_id or '?'} "
                 f"— {elapsed // 60}분 {elapsed % 60}초){_next_pub}\n\n{_esc(summary)}"
                 f"{_pre_note}{_gd_note}{_score_note}{trend}{_restart_hint}"
             )

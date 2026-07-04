@@ -1129,6 +1129,16 @@ def record_pattern_hit(
         log.info(f"[GUARDIAN/learned] skip — 정책 작업 박제 (et={et}, 재현 불가)")
         return 0
 
+    # ★ 노이즈 게이트 4 (사용자 박제 2026-07-04): actionable fixer 만 학습 등록.
+    #   변경추적·정책 이벤트(GitCommit·ExternalEdit·PolicyChange·ArchitectureChange…)는
+    #   fixer 가 registry/llm_patch 에 없음 → _fix_from_learned 가 절대 적용 못 하는 *죽은 패턴*.
+    #   등록해도 재적용 불가 + 밴딧 arm 오염(무한 증식)만 유발 → 여기서 단일 초크포인트로 차단.
+    #   (error_log status='manual' 변경추적 기록은 그대로 유지 — 작업량 카드 불변.)
+    if fixer_name not in _ACTIONABLE_FIXERS:
+        log.info(f"[GUARDIAN/learned] skip — 비-actionable fixer '{fixer_name}' "
+                 f"(et={et}) → 변경추적/정책은 학습·밴딧 대상 아님")
+        return 0
+
     # ★ A모델 분리 (ADR 007) — eval_agent 학습 자산화 게이트
     # 노이즈 게이트 3종 통과 후 *정밀 평가* 단계. 정적 fixer 는 자동 통과,
     # llm_patch 는 Opus 4.6 으로 안전성·정확성·재사용 가치 채점.
@@ -1646,10 +1656,15 @@ def _make_learned_fn(pattern: dict, stored_data: dict, source_label: str):
     return _fn
 
 
+# ⚠️ DEPRECATED (사용자 박제 2026-07-04) — _get_verified_fixers / _get_new_fixers 는
+#   더 이상 try_pattern_fix 의 *밴딧 후보* 로 쓰지 않는다. 학습 패턴을 개별 arm 으로 펼치면
+#   오류 지문마다 arm 이 생겨 밴딧이 무한 증식(402MB·θ≈0 죽은 신호)한다.
+#   학습 캐시 조회는 _fix_from_learned 단일 경로가 담당(정확→정규식→시맨틱 매칭).
+#   ★ 이 함수들을 밴딧 후보 리스트로 되돌리지 말 것 — 오염 회귀 금지. (잔존 이유: 하위호환)
 def _get_verified_fixers() -> list[tuple[str, object]]:
-    """hit_count ≥ _HIGH_COUNT_THRESHOLD 인 검증된 학습 패턴 — Group 1 에 합류.
+    """(레거시 — 밴딧 후보 아님) hit_count ≥ _HIGH_COUNT_THRESHOLD 인 검증된 학습 패턴.
 
-    3번 이상 수정 성공 → 신뢰도 높음 → static 6 과 같은 그룹에서 Bandit 랭킹.
+    ⚠️ try_pattern_fix 는 이제 이 함수를 호출하지 않는다 (위 DEPRECATED 배너 참조).
     """
     data = _load_learned()
     result: list[tuple[str, object]] = []
@@ -1781,10 +1796,13 @@ _PATTERN_FIXERS = [
 def try_pattern_fix(error_record: dict) -> Optional[dict]:
     """패턴 기반 자동 수정 시도. 성공 시 patch dict 반환, 실패 시 None.
 
-    Tier 1 (패턴 자동 수정) 내부 시도 순서 — 모두 Bandit 학습:
-      Group 1 (검증됨): static 코어 6종 + hit≥3 학습 패턴  → Bandit Linear UCB 랭킹
-      Group 2 (신규):   hit 1~2 학습 패턴                   → Bandit Linear UCB 랭킹
-      전체 실패 시 None → error_analyzer 가 Tier 2 (LLM) 로 위임
+    ★ Tier 1 시도 순서 — Bandit 랭킹, arm 은 *유한한 전략* (사용자 박제 2026-07-04):
+      후보 = "learned"(학습 캐시 정확·정규식·시맨틱 단일 조회) + 정적 코어 6종
+      → Bandit Linear UCB 가 이 소수 전략의 시도 순서를 학습.
+      ★ 학습 패턴을 개별 arm 으로 펼치지 않는다 — 구 _get_verified/_get_new 방식은
+        오류 지문마다 arm 을 만들어 밴딧 무한증식(402MB·죽은 신호)의 원인이었다.
+        _fix_from_learned 가 내부에서 정확→정규식→시맨틱 매칭으로 THE 패턴 1건을 직접 재적용.
+      전체 실패 시 None → error_analyzer 가 Tier 2 (LLM) 로 위임.
 
     양의 보상(성공)은 error_fixer.apply_fix() 에서 실제 파일 수정 후 기록.
     """
@@ -1796,15 +1814,12 @@ def try_pattern_fix(error_record: dict) -> Optional[dict]:
     except Exception:
         _br, _bw = None, None
 
-    # ── Group 1: 검증됨 (static 6 + hit≥3) ───────────────────────────
-    group1 = _get_verified_fixers() + _STATIC_FIXERS_CORE
-    result = _try_fixer_group(error_record, group1, error_type, _br, _bw)
-    if result:
-        return result
+    # ── 후보: learned 캐시 단일 조회 + 정적 코어 6종 (arm 상한 ~8) ──────────
+    def _learned_fixer(er: dict) -> Optional[dict]:
+        return _fix_from_learned(er)
 
-    # ── Group 2: 신규 (hit 1~2) ────────────────────────────────────────
-    group2 = _get_new_fixers()
-    result = _try_fixer_group(error_record, group2, error_type, _br, _bw)
+    group = [("learned", _learned_fixer)] + _STATIC_FIXERS_CORE
+    result = _try_fixer_group(error_record, group, error_type, _br, _bw)
     if result:
         return result
 

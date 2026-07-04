@@ -41,85 +41,136 @@ class ModelSpec:
     description: str = ""
 
 
+# ★ 모델 계층 — 사용자 박제 2026-07-04 (ADR 015): Sonnet 5 / Opus 4.8 2계층 단일화.
+#   alias→model_id 매핑은 이 MODELS dict 가 시스템 전체의 유일 소스 — 다른 곳은 전부 파생.
 # 자비스 모델 카탈로그 — 한 곳에서 관리
 MODELS: dict[str, ModelSpec] = {
     "writer": ModelSpec(
         alias="writer",
-        model_id="claude-sonnet-4-6",
+        model_id="claude-sonnet-5",
         max_tokens=8000,
         temperature=0.4,
-        description="블로그 본문·도입부 생성 (Sonnet 4.6 — 복잡한 헌법 규정 준수용)",
+        description="블로그 본문·도입부 생성 (Sonnet 5 — 복잡한 헌법 규정 준수용)",
     ),
     "writer_fast": ModelSpec(
         alias="writer_fast",
-        model_id="claude-sonnet-4-6",
+        model_id="claude-sonnet-5",
         max_tokens=8000,
         temperature=0.4,
-        description="짧은 본문·압축·재작성 (Sonnet 4.6)",
+        description="짧은 본문·압축·재작성 (Sonnet 5)",
     ),
     "router": ModelSpec(
         alias="router",
-        model_id="claude-sonnet-4-6",
+        model_id="claude-sonnet-5",
         max_tokens=1000,
         temperature=0.0,
-        description="마스터 라우터 — 인텐트 분류·도메인 매칭 (Sonnet 4.6)",
+        description="마스터 라우터 — 인텐트 분류·도메인 매칭 (Sonnet 5)",
     ),
     "analyzer": ModelSpec(
         alias="analyzer",
-        model_id="claude-sonnet-4-6",
+        model_id="claude-sonnet-5",
         max_tokens=2500,
         temperature=0.2,
-        description="post_quality·daily_review 분석 (Sonnet 4.6)",
+        description="post_quality·daily_review 분석 (Sonnet 5)",
     ),
-    # ★ 코드 수정·오류 분석 (Opus 4.6) — 사용자 박제 2026-06-06 (4-8 가짜 ID → 4-6 교체)
+    # ★ 코드 수정·오류 분석 (Opus 4.8)
     "coder": ModelSpec(
         alias="coder",
-        model_id="claude-opus-4-6",
+        model_id="claude-opus-4-8",
         max_tokens=8000,
         temperature=0.1,
-        description="코드 수정·patch 생성·자가수정 (Opus 4.6 — 최강 추론, 오류 수정 전용)",
+        description="코드 수정·patch 생성·자가수정 (Opus 4.8 — 최강 추론, 오류 수정 전용)",
     ),
-    # ★ 오류 분석·패치 생성 (Opus 4.6) — 사용자 박제 2026-06-06
+    # ★ 오류 분석·패치 생성 (Opus 4.8)
     "guardian": ModelSpec(
         alias="guardian",
-        model_id="claude-opus-4-6",
+        model_id="claude-opus-4-8",
         max_tokens=8000,
         temperature=0.1,
-        description="JARVIS07 오류 분석·패치 생성 (Opus 4.6 — 최강 추론)",
+        description="JARVIS07 오류 분석·패치 생성 (Opus 4.8 — 최강 추론)",
     ),
-    # ★ 아키텍처 설계 (Opus 4.6 — 최신·최강)
+    # ★ 아키텍처 설계 (Opus 4.8 — 최신·최강)
     "architect": ModelSpec(
         alias="architect",
-        model_id="claude-opus-4-6",
+        model_id="claude-opus-4-8",
         max_tokens=10000,
         temperature=0.3,
-        description="ARCHITECT 새 에이전트·시스템 설계 (Opus 4.6 — 최강 추론)",
+        description="ARCHITECT 새 에이전트·시스템 설계 (Opus 4.8 — 최강 추론)",
     ),
-    # ★ 복잡 진단·디버깅 (Opus 4.6)
+    # ★ 복잡 진단·디버깅 (Opus 4.8)
     "diagnostic": ModelSpec(
         alias="diagnostic",
-        model_id="claude-opus-4-6",
+        model_id="claude-opus-4-8",
         max_tokens=6000,
         temperature=0.2,
-        description="복잡 multi-cause traceback 진단·근본 원인 추론 (Opus 4.6)",
+        description="복잡 multi-cause traceback 진단·근본 원인 추론 (Opus 4.8)",
     ),
-    # ★ 발행 전 품질 게이트 — 사실성 판정 (Opus 4.6, temp 0 결정성 우선)
+    # ★ 자가 학습 평가 게이트 (Opus 4.8) — eval_agent 가 llm_patch 등록 여부 채점
+    "learn_eval": ModelSpec(
+        alias="learn_eval",
+        model_id="claude-opus-4-8",
+        max_tokens=4000,
+        temperature=0.1,
+        description="learned_patterns 등록 게이트 — patch 안전성·정확성·재사용 가치 채점 (Opus 4.8)",
+    ),
+    # ★ 발행 전 품질 게이트 — 사실성 판정 (Opus 4.8, temp 0 결정성 우선)
     "fact_judge": ModelSpec(
         alias="fact_judge",
-        model_id="claude-opus-4-6",
+        model_id="claude-opus-4-8",
         max_tokens=4000,
         temperature=0.0,
-        description="발행 전 사실성 검수 — claim 추출·출처 대조 판정 (Opus 4.6)",
+        description="발행 전 사실성 검수 — claim 추출·출처 대조 판정 (Opus 4.8)",
     ),
-    # ★ 발행 전 품질 게이트 — 유익성·매력도 채점 (Opus 4.6)
+    # ★ 발행 전 품질 게이트 — 유익성·매력도 채점 (Opus 4.8)
     "engagement_judge": ModelSpec(
         alias="engagement_judge",
-        model_id="claude-opus-4-6",
+        model_id="claude-opus-4-8",
         max_tokens=2500,
         temperature=0.2,
-        description="발행 전 유익성·매력도 채점 — 독자 흡인력 judge (Opus 4.6)",
+        description="발행 전 유익성·매력도 채점 — 독자 흡인력 judge (Opus 4.8)",
     ),
 }
+
+# 전 모듈 alias→model_id 단일 참조 — MODELS 에서 파생 (중복 리터럴 매핑 금지)
+_ALIAS_MODEL: dict[str, str] = {alias: spec.model_id for alias, spec in MODELS.items()}
+_DEFAULT_MODEL_ID = MODELS["writer"].model_id
+
+
+# ════════════════════════════════════════════════════════════════
+# ★ 표시용 모델 라벨 — 단일 진실 소스 파생 (SSOT, 사용자 박제 2026-07-04)
+# ════════════════════════════════════════════════════════════════
+# 웹 대시보드(hub.py)·텔레그램·문서가 모델명을 *하드코딩하지 말고* 이 함수로 파생.
+# MODELS 한 곳만 바꾸면 모든 표시가 자동으로 따라온다 (2중·3중 수정 불필요).
+# 하드코딩 금지는 precommit `ssot` 카테고리가 강제.
+
+def pretty_model_id(model_id: str) -> str:
+    """모델 ID → 사람이 읽는 라벨.
+
+    'claude-opus-4-8'           → 'Opus 4.8'
+    'claude-sonnet-5'           → 'Sonnet 5'
+    'claude-haiku-4-5-20251001' → 'Haiku 4.5'   (날짜 접미사 절단)
+    """
+    s = (model_id or "").replace("claude-", "")
+    parts = [p for p in s.split("-") if p]
+    if not parts:
+        return model_id or "?"
+    family = parts[0].capitalize()
+    ver: list[str] = []
+    for p in parts[1:]:
+        if p.isdigit() and len(p) <= 2:   # 버전 조각만 (긴 날짜 접미사 제외)
+            ver.append(p)
+        else:
+            break
+    return (f"{family} {'.'.join(ver)}" if ver else family).strip()
+
+
+def model_label(alias: str) -> str:
+    """alias(writer/guardian/…) → 사람이 읽는 모델명. MODELS 에서 파생.
+
+    코드가 모델을 바꾸면 이 라벨을 쓰는 모든 표시(웹·텔레그램)가 자동 갱신된다.
+    표시 코드에 'Opus 4.x' 같은 리터럴을 직접 쓰지 말고 이 함수를 호출할 것.
+    """
+    return pretty_model_id(_ALIAS_MODEL.get(alias, _DEFAULT_MODEL_ID))
 
 
 def get_spec(alias: str) -> ModelSpec:
@@ -173,7 +224,7 @@ def _build_claude_sdk_chat_model():
         지원: .invoke / with_structured_output / bind_tools
         """
         alias: str = Field(default="writer")
-        model_id: str = Field(default="claude-sonnet-4-6")
+        model_id: str = Field(default=_DEFAULT_MODEL_ID)
         max_tokens: int = Field(default=4000)
         temperature: float = Field(default=0.7)
         bound_tools: Optional[list] = Field(default=None)
@@ -183,20 +234,7 @@ def _build_claude_sdk_chat_model():
             return "claude-sdk"
 
         def _sdk_model(self) -> str:
-            _map = {
-                "writer":      "claude-sonnet-4-6",
-                "writer_fast": "claude-sonnet-4-6",
-                "router":      "claude-sonnet-4-6",
-                "analyzer":    "claude-sonnet-4-6",
-                "learn_eval":  "claude-opus-4-6",
-                "coder":       "claude-opus-4-6",
-                "guardian":    "claude-opus-4-6",
-                "architect":   "claude-opus-4-6",
-                "diagnostic":  "claude-opus-4-6",
-                "fact_judge":  "claude-opus-4-6",
-                "engagement_judge": "claude-opus-4-6",
-            }
-            return _map.get(self.alias, "claude-sonnet-4-6")
+            return _ALIAS_MODEL.get(self.alias, _DEFAULT_MODEL_ID)
 
         @staticmethod
         def _messages_to_prompt(messages) -> tuple[str, str]:
@@ -294,20 +332,7 @@ except ImportError:
 
 
 # ── 직접 호출 헬퍼 ────────────────────────────────────────────
-
-_ALIAS_MODEL: dict[str, str] = {
-    "writer":      "claude-sonnet-4-6",
-    "writer_fast": "claude-sonnet-4-6",
-    "router":      "claude-sonnet-4-6",
-    "analyzer":    "claude-sonnet-4-6",
-    "learn_eval":  "claude-opus-4-6",
-    "coder":       "claude-opus-4-6",
-    "guardian":    "claude-opus-4-6",
-    "architect":   "claude-opus-4-6",
-    "diagnostic":  "claude-opus-4-6",
-    "fact_judge":  "claude-opus-4-6",
-    "engagement_judge": "claude-opus-4-6",
-}
+# (alias→model_id 는 모듈 상단 _ALIAS_MODEL 단일 소스 — 여기 재정의 금지)
 
 
 # ── LLM 호출 실패 근본 차단 (사용자 박제 2026-07-02) ──────────────────
@@ -373,7 +398,7 @@ def _pace_spawn() -> None:
 
 async def _invoke_sdk_async(
     prompt: str,
-    model: str = "claude-sonnet-4-6",
+    model: str = _DEFAULT_MODEL_ID,
     system: str = "",
 ) -> str:
     """claude-code-sdk 비동기 호출 — Max 구독 OAuth, API 비용 0."""
@@ -396,7 +421,7 @@ async def _invoke_sdk_async(
 
 def _run_sdk_sync(
     prompt: str,
-    model: str = "claude-sonnet-4-6",
+    model: str = _DEFAULT_MODEL_ID,
     system: str = "",
     timeout: int = 300,
 ) -> str:
@@ -485,8 +510,8 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
                 _retries: int = 4, _essential: bool = False, **overrides) -> str:
     """Claude Code SDK 호출 단일 진입점.
 
-    텍스트 생성(writer/router/analyzer): Sonnet 4.6
-    오류수정·코드·설계(coder/guardian/architect/diagnostic): Opus 4.6
+    텍스트 생성(writer/router/analyzer): Sonnet 5
+    오류수정·코드·설계(coder/guardian/architect/diagnostic/learn_eval): Opus 4.8
 
     ★ rate-limit 재시도 (사용자 박제 2026-07-01): 빈 응답이면 지수 백오프+지터로
       재시도. ★ 회로 차단기 (ERRORS [288] — 2026-07-03): 연속 *진짜 스로틀* ≥3 회 시
@@ -519,7 +544,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
     elif _gate == "probe":
         retries, backoff = 1, False       # probe 는 1샷 — 최악 1 spawn 만 소모
 
-    model = _ALIAS_MODEL.get(alias, "claude-sonnet-4-6")
+    model = _ALIAS_MODEL.get(alias, _DEFAULT_MODEL_ID)
     result = ""
     throttled_seen = False
     for _attempt in range(retries):
@@ -590,20 +615,7 @@ class ClaudeSDKLLM:
 
     def call(self, messages, **_kwargs) -> str:
         """CrewAI 진입점."""
-        _model_map = {
-            "writer":      "claude-sonnet-4-6",
-            "writer_fast": "claude-sonnet-4-6",
-            "router":      "claude-sonnet-4-6",
-            "analyzer":    "claude-sonnet-4-6",
-            "learn_eval":  "claude-opus-4-6",
-            "coder":       "claude-opus-4-6",
-            "guardian":    "claude-opus-4-6",
-            "architect":   "claude-opus-4-6",
-            "diagnostic":  "claude-opus-4-6",
-            "fact_judge":  "claude-opus-4-6",
-            "engagement_judge": "claude-opus-4-6",
-        }
-        model = _model_map.get(self.alias, "claude-sonnet-4-6")
+        model = _ALIAS_MODEL.get(self.alias, _DEFAULT_MODEL_ID)
         system, prompt = self._format_messages(messages)
         return _run_sdk_sync(prompt, model=model, system=system) or ""
 
@@ -622,7 +634,7 @@ def render_catalog() -> str:
 
 # ── CrewAI BaseLLM virtual subclass 등록 ────────────────────────
 # ClaudeSDKLLM 은 crewai 의 LLM/BaseLLM 을 상속하지 않으므로
-# crewai create_llm() 이 강제 변환 시도 → "claude-sonnet-4-6" 모델을
+# crewai create_llm() 이 강제 변환 시도 → "claude-sonnet-5" 모델을
 # ANTHROPIC_MODELS 상수에 미등록 → provider=openai 기본값 → OPENAI_API_KEY 에러.
 # ABC.register() 로 virtual subclass 등록 → isinstance 체크 통과 → 변환 없이 반환.
 try:
