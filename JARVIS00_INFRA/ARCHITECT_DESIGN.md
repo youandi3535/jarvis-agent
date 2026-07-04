@@ -32,8 +32,8 @@
 
 | # | 책임 | 구현 |
 |---|------|------|
-| 1 | 의도 파악 | `_parse_intent(user_text)` — Haiku 호출 → 정형 스펙 dict (역할·범위·side_effect·스케줄·외부 의존성) |
-| 2 | 설계 산출 | `_generate_spec(parsed, ctx)` — Haiku 호출 (`invoke_text("writer")`) + 표준 양식 강제 prompt → 기획서 마크다운 |
+| 1 | 의도 파악 | `_parse_intent(user_text)` — Sonnet 호출 → 정형 스펙 dict (역할·범위·side_effect·스케줄·외부 의존성) |
+| 2 | 설계 산출 | `_generate_spec(parsed, ctx)` — Sonnet 호출 (`invoke_text("writer")`) + 표준 양식 강제 prompt → 기획서 마크다운 |
 | 3 | 일관성 검증 | `_verify_against_rules(spec)` — CLAUDE.md 검증 명령 5종 시뮬레이션 (스케줄·승인 게이트·하드코딩·인프라·글자수) |
 | 4 | 대안 제시 | `_check_alternative(parsed)` — "이건 에이전트 필요 없음 — skill/도구로 충분" 자동 판단 |
 | 5 | 계획 위임 | `_emit_plan_steps(spec)` — `create_plan` 인자 형태로 단계 dict 리스트 반환. 사용자 ✅ 후 실행 |
@@ -106,7 +106,7 @@ def _load_context() -> dict:
     side_effect="none",
     requires_approval=False,
     rollback="N/A (read-only + 단일 마크다운 산출)",
-    cost="LLM 2-3 호출 (Haiku 의도 파싱 + Haiku 설계 + Haiku 검증) — 전체 Haiku 단일 모델",
+    cost="LLM 2-3 호출 (Sonnet 의도 파싱 + Sonnet 설계 + Sonnet 검증) — 전체 Sonnet 5 단일 모델",
 )
 def design_new_agent(
     user_intent: str,           # 사용자 자유 문장
@@ -388,7 +388,7 @@ plan_steps = [
 ## 15. 위험·우려 (evenhandedness)
 
 - **메타 무한루프**: ARCHITECT 가 ARCHITECT v2 설계. → `scope="meta"` 호출 시 재귀 깊이 1 제한 박제.
-- **LLM 호출 비용**: 호출당 Haiku 3회 (의도 파싱 + 설계 + 검증) ≈ 호출당 ~$0.01. 자비스 전체가 Haiku 단일 모델로 통일 — Sonnet/Opus 의존 0. 사용자 자유 문장 라우팅에서 너무 자주 호출되지 않도록 ROUTER_SYSTEM_PROMPT 에 *명시적 키워드* 매핑 (§8) — 모호한 문장은 매칭 안 함.
+- **LLM 호출 비용**: 호출당 Sonnet 5 (`writer` alias) 3회 (의도 파싱 + 설계 + 검증). 사용자 자유 문장 라우팅에서 너무 자주 호출되지 않도록 ROUTER_SYSTEM_PROMPT 에 *명시적 키워드* 매핑 (§8) — 모호한 문장은 매칭 안 함.
 - **양식 변경 비용**: §7 12 섹션 양식이 미래에 부적합해질 수 있음. → 양식은 `architect.py` 의 `SPEC_TEMPLATE` 상수로 분리. 단일 수정으로 전체 반영.
 - **자기 검증의 한계**: ARCHITECT 가 자기 자신을 검증하면 같은 사각지대 공유. → `_verify_against_rules` 는 *외부 grep 검증 명령* 시뮬레이션 (CLAUDE.md 박제 명령). LLM 자체 판단 의존 최소화.
 

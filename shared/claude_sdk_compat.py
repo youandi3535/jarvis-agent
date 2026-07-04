@@ -26,7 +26,7 @@
 사용:
     from shared.claude_sdk_compat import run_sdk_query
     text = run_sdk_query(
-        prompt="...", model="claude-opus-4-6",
+        prompt="...", model="claude-opus-4-8",
         max_turns=60, cwd=str(ROOT), timeout=1200,
     )
 
@@ -137,7 +137,7 @@ def _install_message_parser_patch() -> None:
 
 def run_sdk_query(
     prompt: str,
-    model: str = "claude-sonnet-4-6",
+    model: str = "claude-sonnet-5",
     *,
     cwd: str | None = None,
     max_turns: int | None = None,

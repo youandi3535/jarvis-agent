@@ -59,4 +59,4 @@
 - **fingerprint 안정성 (★ 비직관)**: `Issue.detail` 에 *점수 raw·attempt 변동값 금지*. factuality=claim 텍스트, engagement=실패 차원 태그만. 변동값 넣으면 매 attempt 지문이 달라져 abort 안 됨 → max_attempts 낭비.
 - **정책**: 사실 판정 LLM 실패=차단(fail-closed) / 웹 인프라 실패=통과(fail-open) / 테마글(약한 출처)=웹 1차 근거로 "웹도 확인 불가만 차단" / engagement LLM 실패=통과(fail-open, 재생성 사유일 뿐).
 - **킬스위치 (라이브 안전)**: `PREPUBLISH_FACT_GATE=0` / `PREPUBLISH_ENGAGEMENT_GATE=0` → 코드 수정 없이 각 레그 즉시 비활성화.
-- **모델 alias**: `fact_judge`·`engagement_judge` (둘 다 Opus 4.6) — `shared/llm.py` 의 `MODELS`·`_sdk_model`·`_ALIAS_MODEL`·`_model_map` 4곳 등록.
+- **모델 alias**: `fact_judge`·`engagement_judge` (둘 다 Opus 4.8) — `shared/llm.py` 의 `MODELS` dict 한 곳만 등록(★ 2026-07-04 단일소스화 — `_ALIAS_MODEL`/`_DEFAULT_MODEL_ID` 는 이 dict 에서 자동 파생).
