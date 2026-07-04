@@ -8,6 +8,7 @@ chrome_profile/
 *.sqlite-wal
 *.sqlite-shm
 shared/backups/
+JARVIS07_GUARDIAN/_refactor_backup/
 
 # ── 파이썬 캐시·빌드 ─────────────────────────────────────────────
 __pycache__/
