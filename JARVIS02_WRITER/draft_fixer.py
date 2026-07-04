@@ -195,9 +195,9 @@ def _fix_excessive_empty_p(draft: dict) -> bool:
 
 
 def _fix_image_count_underflow(draft: dict, platform: str) -> bool:
-    """제8조 위반 — 썸네일 제외 이미지 최소 8장 미달 시 AI 사진 추가.
+    """제8조 위반 — 썸네일 제외 이미지 최소 5장(5+α) 미달 시 AI 사진 추가.
 
-    ★ 사용자 박제 2026-06-01: 8장은 디폴트가 아닌 절대 최솟값.
+    ★ 사용자 박제 2026-06-01 → 2026-07-05 정정 8→5: 5장은 디폴트가 아닌 절대 최솟값.
     blocks에서 content 이미지(heading_ 제외)를 세어 MIN_IMAGES 미달이면
     render_from_spec으로 AI 인포그래픽을 생성하여 text 블록 사이에 삽입.
     """
@@ -286,7 +286,7 @@ def _route_fix(issue_str: str, draft: dict, platform: str) -> bool:
     if any(k in issue_str for k in ("제3조", "제4조", "제9조", "헌법 위반", "enforce")):
         return _fix_law_violations(draft, platform)
 
-    # ★ 사용자 박제 2026-06-01: 이미지 최소 8장 미달 (제8조)
+    # ★ 사용자 박제 2026-06-01 → 2026-07-05 정정: 이미지 최소 5장 미달 (제8조 5+α)
     if "이미지 최소 미달" in issue_str or "image underflow" in s or "이미지 부족" in issue_str:
         return _fix_image_count_underflow(draft, platform)
 

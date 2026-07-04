@@ -68,8 +68,8 @@ SEC_SENTS_MAX:      int = 6      # 섹션 최대 문장 수
 MAX_CONSECUTIVE_PARAGRAPHS_WITHOUT_IMAGE: int = 2   # 초과(3+) 시 위반
 
 # ── 차트·이미지 개수 — 문장수 기반 동적 계산 (하드코딩 금지) ─────────────
-# ★ 사용자 박제 2026-06-01: 썸네일 제외 최소 이미지 8장 (디폴트 아닌 절대 최솟값)
-MIN_IMAGES: int = _SPEC_ECON.min_images   # 8 — 썸네일 제외, 모든 글 공통
+# ★ 사용자 박제 2026-07-05 (8→5): 썸네일 제외 최소 이미지 5장 (디폴트 아닌 절대 최솟값)
+MIN_IMAGES: int = _SPEC_ECON.min_images   # 5 — 썸네일 제외, 모든 글 공통
 
 # 예: TARGET_SENTENCES=30(목표), MAX_CONSECUTIVE=2 → 30÷3=10 → MIN_CHART_COUNT=10
 MIN_CHART_COUNT: int = max(

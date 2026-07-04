@@ -33,7 +33,7 @@
 
 | 🗂️ 에이전트 모듈 | 📝 Python 코드 | 📄 파일 수 | 🔧 등록 도구 | 🛡️ 정책 검증 항목 | 🧠 누적 오류 자동처리 |
 |:-:|:-:|:-:|:-:|:-:|:-:|
-| **10개** | **78,400+ LOC** | **190개** | **24개** | **45종** | **1,960+건 · 해결률 88%**<br><sub>(2026-07-04 기준)</sub> |
+| **10개** | **79,200+ LOC** | **190개** | **24개** | **46종** | **1,960+건 · 해결률 88%**<br><sub>(2026-07-05 기준)</sub> |
 
 </div>
 
@@ -81,6 +81,7 @@
 | 기능 | 설명 |
 |------|------|
 | 📝 **블로그 자동 발행** | 경제 브리핑(매일 06:30) + 테마주 분석(매일 16:00) — 네이버·티스토리 동시 발행 |
+| 🔗 **통합 콘텐츠 파이프라인 (★ 2026-07-05)** | 경제·테마·미래 카테고리가 **하나의 공통 경로** — J09 `CollectedData` 단일 상자 → J02 대본(데이터 내장 슬롯) → **J06 `process_draft` 단일 이미지 진입점**(실패차트→AI사진·최소 5장 보장·썸네일 필수) → J08. 카테고리는 데이터 공급원과 `CATEGORY_POLICY` 노브만 다름 |
 | 🔎 **발행 전 품질 게이트** | 발행 *전* harness Layer 3 에서 사실성(출처 대조 + 웹 재검증)·유익성·매력도를 LLM(Opus 4.8)으로 검수 → 미달 시 통과할 때까지 재작성 (결함은 절대 송출 안 됨) ★ 2026-06-28 |
 | 🖼️ **AI 이미지 · 85점 인포그래픽 엔진** | Pollinations.ai 사진(매 글 새 이미지·dedupe) + **LLM 디자인 디렉터**가 데이터마다 고유 인포그래픽 설계(레이아웃·차트·색 매번 다름) — 표도 인포그래픽화. 차트 수치는 **JARVIS09 실데이터로만**(거짓 수치 원천 차단, ADR 010) |
 | 📡 **트렌드 레이더** | Google Trends + 네이버 DataLab 실시간 수집 → 핫 키워드 자동 탐지 |
@@ -92,10 +93,11 @@
 
 ---
 
-## 🆕 최근 주요 업데이트 (2026-06-29 ~ 07-04)
+## 🆕 최근 주요 업데이트 (2026-06-29 ~ 07-05)
 
 | 영역 | 변경 | 근거 |
 |------|------|------|
+| **★ 통합 콘텐츠 파이프라인** | 경제·테마가 **하나의 공통 파이프라인**을 탄다 — J09 단일 `CollectedData`(datasets·docs·facts·**entities**) → J02 대본(데이터 내장 슬롯) → **J06 `process_draft` 단일 이미지 진입점**(실패차트→AI사진 폴백·최소 5장 top-up·썸네일 필수) → J08. 경제 embed-first→placeholder-first 컷오버, 검증 tolerance 통일(`grounds()` — 표시 올림/버림 or ±5%, 종목 재무밴드 ±10% 유지). 미래 카테고리는 `CATEGORY_POLICY` dict 한 줄로 상속 | 사용자 공동설계 2026-07-05 |
 | **표시 SSOT — 코드가 진실** | 웹 대시보드·텔레그램이 모델명·스케줄·개수 등 사실을 *하드코딩하지 않고 코드 정본에서 자동 파생*. 코드만 고치면 두 표시가 알아서 따라옴(2중·3중 수정 제거). `precommit ssot` 가드가 표시 파일 하드코딩을 커밋·부팅 시 차단 | 사용자 박제 |
 | **데몬 hang 자동 복구** | keeper 워치독이 프로세스 생존뿐 아니라 *스케줄러 heartbeat 신선도*까지 감시 → hang 시 SIGUSR1(faulthandler 스택 덤프)→SIGKILL→재시작. 얼어붙은 채 방치되던 사각지대 제거 | [ERRORS 319](JARVIS07_GUARDIAN/ERRORS.md) |
 | **모델 계층 상향** | Sonnet 4.6/Opus 4.6 → **Sonnet 5 / Opus 4.8** 2계층 단일화, Haiku 완전 폐지. 잔존 구 ID는 자가치유가 자동 정정 | [ADR 015](docs/decisions/015-model-tier-upgrade.md) |
@@ -118,9 +120,9 @@ flowchart TD
     end
 
     B --> C["JARVIS03 RADAR\n트렌드 감지·학습\nGoogle Trends + 네이버 DataLab"]
-    C --> D["JARVIS09 COLLECTOR\n멀티소스 수집·정제\n뉴스·블로그·금융·학술"]
-    D --> E["JARVIS02 WRITER\n글 생성 + 헌법 검증\nBLOG_SUPREME_LAW.md"]
-    E --> F["JARVIS06 IMAGE\nAI 사진 + 85점 인포그래픽 엔진\nLLM 디자인 디렉터 · 차트 사실성"]
+    C --> D["JARVIS09 COLLECTOR\n멀티소스 수집·정제\nCollectedData 단일 상자"]
+    D --> E["JARVIS02 WRITER\n대본(데이터 내장 슬롯) + 품질 게이트\nBLOG_SUPREME_LAW.md"]
+    E --> F["JARVIS06 IMAGE\nprocess_draft 단일 이미지 진입점\nAI 사진 + 인포그래픽 · 차트 사실성"]
     F --> G["JARVIS08 PUBLISH\n네이버·티스토리 Selenium\n발행 검증 + 스크린샷"]
     G --> H(["📤 성과 수집 → 학습 가중치 갱신"])
     H -. "📈 학습 루프" .-> C
@@ -159,10 +161,10 @@ flowchart TD
 | **JARVIS03** RADAR | `JARVIS03_RADAR/` | Google Trends + 네이버 DataLab 트렌드 수집·분석 | NY |
 | **JARVIS04** SCHEDULER | `JARVIS04_SCHEDULER/` | APScheduler 단일 진입점 — 모든 잡 등록·조회·제어 | HJ |
 | **JARVIS05** VISION | `JARVIS05_VISION/` | 전 에이전트 메트릭 수집·집계·시각화 API (FastAPI :8505) | HJ |
-| **JARVIS06** IMAGE | `JARVIS06_IMAGE/` | AI 사진(Pollinations)·**85점 인포그래픽 엔진(LLM 디자인 디렉터)**·표 인포그래픽·차트 사실성 검증·썸네일·dedupe | NY |
+| **JARVIS06** IMAGE | `JARVIS06_IMAGE/` | **`process_draft` 단일 이미지 진입점**(경제·테마 공통)·AI 사진(Pollinations)·**85점 인포그래픽 엔진(LLM 디자인 디렉터)**·표 인포그래픽·차트 사실성 검증·썸네일·dedupe | NY |
 | **JARVIS07** GUARDIAN | `JARVIS07_GUARDIAN/` | 오류 수집·2-Tier 자동 수정(패턴·Bandit→LLM)·자가 진단 | HJ |
 | **JARVIS08** PUBLISH | `JARVIS08_PUBLISH/` | 네이버·티스토리 Selenium 발행자·카테고리·쿠키 관리 | NY |
-| **JARVIS09** COLLECTOR | `JARVIS09_COLLECTOR/` | **주제 적응형 동적 수집**(고정 카탈로그→웹 discover, ADR 011)·뉴스·블로그·금융·통계·학술·차트 실데이터(출처 박제) | NY |
+| **JARVIS09** COLLECTOR | `JARVIS09_COLLECTOR/` | **주제 적응형 동적 수집**(ADR 011) → **`CollectedData` 단일 상자**(datasets·docs·facts·entities)·뉴스·블로그·금융·통계·학술·차트 실데이터(출처 박제) | NY |
 
 > **HJ** = 김효중 (주도 개발) &nbsp;|&nbsp; **NY** = 김나연 (공동 개발)
 
@@ -223,6 +225,7 @@ gantt
 - **실패 정책**: 사실 판정 LLM 실패 = 차단(fail-closed) / 웹 인프라 실패 = 통과(fail-open) / 테마글(약한 출처) = 웹을 1차 근거로 "웹에서도 확인 불가한 것만 차단".
 - **재작성 트리거**: 게이트 Issue 는 harness `_find_resume_step` 이 WRITER step 을 재실행하도록 라우팅 → 통과할 때까지 재작성(max 3회, fingerprint 반복 시 abort + 텔레그램 escalation).
 - **단일 진입점**: `JARVIS02_WRITER/prepublish_gate.py` — 경제·테마 두 발행 경로가 공유. 사실성=`law_enforcer.factuality_issues`, 매력도=`post_quality_analyzer.judge_engagement`.
+- **통일 수치 tolerance (★ 2026-07-05)**: 본문·차트 수치 grounding 은 단일 `models.grounds()` — *수집값의 표시 올림/버림 또는 ±5%* 만 인정(그 외 조작으로 차단). 종목 재무지표(PER/ROE/영업이익률)는 출처별 편차를 감안해 ±10% 밴드 유지. 정답 소스는 `CollectedData.all_numbers()` 단일.
 - **킬스위치(라이브 안전)**: `PREPUBLISH_FACT_GATE=0` / `PREPUBLISH_ENGAGEMENT_GATE=0` → 코드 수정 없이 각 레그 즉시 비활성화.
 
 ---
@@ -287,7 +290,7 @@ flowchart LR
 | 밴딧 상태 크기 | **402MB → 45B** <sub>(ADR 016)</sub> | arm을 오류지문이 아닌 소수 fixer 전략으로 고정 + 오염 게이트 → 파일 비대·죽은 신호 제거 |
 | SDK→밴딧 학습 | **폐쇄 루프** | Tier 2 LLM 자동수정도 Contextual Bandit arm 자산화 → 재발 시 Tier 1 LLM-0 처리 (`record_sdk_fix`) |
 | 누적 오류 처리 | **1,960건 / 88%** <sub>(2026-07-04 기준)</sub> | `error_log` 누적 수집 · 자동+수동 해결률 (대시보드는 라이브 계산) |
-| 오류 기록 | **313건 / 6,410줄** | `JARVIS07_GUARDIAN/ERRORS.md` 구조화 회고 |
+| 오류 기록 | **339건 / 6,507줄** | `JARVIS07_GUARDIAN/ERRORS.md` 구조화 회고 |
 | 체크포인트 | **50MB** | `react_checkpoints.sqlite` (ReAct 실가동 증거) |
 
 ---
@@ -529,7 +532,7 @@ python shared/agent_registration_check.py
 | 증거 | 값 / 위치 | 의미 |
 |------|----------|------|
 | `react_checkpoints.sqlite` | **50 MB** | ReAct 라우터 실제 누적 가동 증거 |
-| `JARVIS07_GUARDIAN/ERRORS.md` | **313건 / 6,410줄** | 운영 사고 구조화 회고 → 코드 환류 |
+| `JARVIS07_GUARDIAN/ERRORS.md` | **339건 / 6,507줄** | 운영 사고 구조화 회고 → 코드 환류 |
 | RADAR 폐쇄 학습 루프 | 발행 → 성과 수집 → Ridge 회귀 → opportunity_score | 자율 학습 실증 |
 | 자가 학습 LLM 절감 | **패턴 적중 누적** | 동일 오류 LLM 0 즉시 처리 (실시간 증가) |
 | SDK→밴딧 폐쇄 루프 | `record_sdk_fix` + `bandit_arm_name` | Tier 2 자동수정 → 밴딧 arm 학습 → 다음 발행 전 sweep 자동수리율↑ (2026-06-28) |
@@ -546,6 +549,7 @@ python shared/agent_registration_check.py
 | 🟡 단일 macOS 의존 | GUI 자동화(Selenium) → 서버 환경 미지원 | 발행 워커 분리·컨테이너화 예정 |
 | 🟡 레거시 import 잔존 | `shared/tracing.py`·`schemas.py`를 일부 경로가 참조하나 파일 부재 (대부분 try/except 가드 — 데몬 가동엔 영향 없음) | import 정리 예정 |
 | 🟡 품질 게이트 실발행 미검증 | 배선·정책·killswitch·재작성 트리거는 결정론 테스트 완료. 단 `fact_judge`/`engagement_judge` 프롬프트의 실제 판정 정확도·임계값(70)·오탐율은 실발행으로 미검증 | 첫 며칠 발행 모니터링 후 임계·프롬프트 튜닝 (오탐 잦으면 killswitch) |
+| 🟡 통합 파이프라인 실발행 미검증 | 경제·테마 통합(`CollectedData`+`process_draft`)은 구조 검증(precommit 46종·전수 py_compile·단위테스트) + 테마 dry-run(블록 조립·이미지≥5·썸네일·grounding) 통과. 단 실제 스케줄 발행 E2E(경제 06:30·테마)는 첫 라이브에서 검증 | 첫 발행 모니터링 후 필요 시 튜닝 |
 | 🟡 Max 구독 rate 천장 | 발행은 LLM 호출을 몰아서 함 → 인터랙티브 세션·데몬과 같은 Max 계정 공유 시 rate-limit 스로틀 가능. C1 배치(차트 설계 7→1회)로 완화, 발행은 무경쟁 시각(예약 06:30/16:00) 권장 | 발행 전용 API 키 분리 검토 |
 
 ---

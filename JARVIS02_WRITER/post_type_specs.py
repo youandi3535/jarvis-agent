@@ -74,7 +74,7 @@ class PostTypeSpec:
     min_sentences: int
     max_korean: int
     max_images: int
-    min_images: int = 8  # ★ 사용자 박제 2026-06-01 — 썸네일 제외 최소 이미지 수
+    min_images: int = 5  # ★ 사용자 박제 2026-07-05 (8→5) — 썸네일 제외 최소 이미지 (제8조 5+α)
     # 선택
     required_sections: list[str] = field(default_factory=list)
     style_hints: list[str] = field(default_factory=list)
