@@ -37,7 +37,8 @@ def _status_section() -> str:
         lines.append(f"📊 헬스: {pct}%")
     except Exception:
         lines.append("⚠️ 메트릭 조회 실패 (collector 미초기화)")
-    lines.append("🌐 API: http://127.0.0.1:8505/docs")
+    from JARVIS05_VISION.api_server import VISION_PORT
+    lines.append(f"🌐 API: http://127.0.0.1:{VISION_PORT}/docs")
     return "\n".join(lines)
 
 
@@ -131,4 +132,5 @@ def register(scheduler, bus) -> None:
         log.warning(f"  ⚠️ 이벤트 버스 구독 실패 (무시): {e}")
         _g_report("vision", e, module=__name__)
 
-    log.info("✅ JARVIS05_VISION 등록 완료 — API: http://127.0.0.1:8505/docs")
+    from JARVIS05_VISION.api_server import VISION_PORT
+    log.info(f"✅ JARVIS05_VISION 등록 완료 — API: http://127.0.0.1:{VISION_PORT}/docs")

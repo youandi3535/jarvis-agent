@@ -98,7 +98,9 @@ def _status_section() -> str:
         lines.append(f"📊 DB 수집 레코드: 총 {total}건 · 오늘 {today}건")
     except Exception as _e:
         lines.append(f"⚠️ DB 조회 실패: {_e}")
-    lines.append("🔌 프로바이더: NaverNews · GoogleNews · KorEcon · KRX · Blog · Web · DART · ECOS · KOSIS · yfinance · arXiv (11종)")
+    from JARVIS09_COLLECTOR.collector_engine import list_provider_names as _lpn
+    _provs = _lpn()
+    lines.append(f"🔌 프로바이더: {' · '.join(_provs)} ({len(_provs)}종)")
     lines.append("📡 THEME_QUEUED → 병렬 수집 → COLLECTION_READY")
     return "\n".join(lines)
 

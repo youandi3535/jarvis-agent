@@ -84,6 +84,9 @@ _log = logging.getLogger("jarvis")
 DEFAULT_MAX_ATTEMPTS = 5
 """검증 순환 무한 루프 방지 — 기본 5회. 동작별 ActionDefinition.max_attempts 로 재정의 가능."""
 
+HARNESS_VERSION = "v3"
+"""Self-Evolving Harness 진화 단계 표기 (표시 SSOT — 대시보드·문서가 이 상수에서 파생)."""
+
 
 # ── ★ P1-⑤ 패치 (사용자 박제 2026-05-18 — ADR 009 v2 동시성 보호) ──────────
 # 동일 ActionDefinition.name 동시 실행 차단. cron + 텔레그램 + 자유 문장이

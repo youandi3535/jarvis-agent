@@ -45,7 +45,9 @@ def _status_section() -> str:
             failed = len(p.get("failed", []))
             total  = len(themes)
             next_t = themes[idx] if idx < total else "전체 완료"
-            sched_hours = getattr(sched, "SCHEDULE_HOURS", [16])
+            from JARVIS04_SCHEDULER.job_registry import cron_times as _ct
+            _thm = [int(t.split(":")[0]) for t in _ct(job_id_prefix="j01_theme_post")]
+            sched_hours = getattr(sched, "SCHEDULE_HOURS", _thm or [16])
             next_h = next((h for h in sorted(sched_hours) if h > now.hour), sorted(sched_hours)[0])
             diff_h = (next_h - now.hour) % 24
             lines.append(f"📋 테마: {done}/{total}개 완료" + (f" | 실패 {failed}개" if failed else ""))
@@ -64,8 +66,10 @@ def _status_section() -> str:
                     lines.append(f"  {theme[:18]}: N{nv} T{ts}")
         except Exception:
             pass
-        eco_diff = (6 - now.hour) % 24
-        lines.append(f"📊 경제 브리핑: 매일 06:30 ({eco_diff}시간 후)")
+        from JARVIS04_SCHEDULER.job_registry import cron_times as _ct
+        _eco = (_ct(job_id_prefix="j01_economic_post") or ["06:30"])[0]
+        eco_diff = (int(_eco.split(":")[0]) - now.hour) % 24
+        lines.append(f"📊 경제 브리핑: 매일 {_eco} ({eco_diff}시간 후)")
     else:
         lines.append("❌ 스케줄러 로드 실패")
     return "\n".join(lines)

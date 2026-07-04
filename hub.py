@@ -13,6 +13,14 @@ sys.path.insert(0, str(BASE_DIR))
 # ★ DB 경로 단일 진입점 — shared/db.py 가 .env 자가 로드해 JARVIS_DB_PATH(~/.jarvis) 해석.
 #   hub 가 자체 재계산하면 .env 미로드 시 잔재 shared/jarvis.sqlite 로 떨어짐 (2026-06-28 박제).
 from shared.db import DB_PATH
+from shared.llm import model_label as _model_label   # ★ 모델명 SSOT — 하드코딩 금지
+from JARVIS04_SCHEDULER.job_registry import cron_phrase as _cron_phrase, cron_times as _cron_times  # ★ 스케줄 SSOT
+from JARVIS05_VISION.api_server import VISION_PORT as _VISION_PORT   # ★ VISION 포트 SSOT (8505)
+from JARVIS00_INFRA.harness import HARNESS_VERSION                    # ★ 하네스 버전 SSOT (v3)
+from JARVIS09_COLLECTOR.collector_engine import SOURCE_CATEGORIES     # ★ 수집 카테고리 SSOT
+import os as _os
+import re as _re
+_HUB_PORT = _os.getenv("HUB_PORT", "9199")   # ★ 포트 SSOT (jarvis_daemon ST_PORT 동일 소스)
 
 st.set_page_config(
     page_title="JARVIS Hub",
@@ -465,7 +473,7 @@ def _office_view_html(status_map: dict, info_map: dict) -> str:  # noqa: C901
         '<line x1="345" y1="61" x2="515" y2="61" stroke="#182c44" stroke-width="0.7"/>'
         '<text x="430" y="72" text-anchor="middle" '
         'font-family="Inter,AppleSDGothicNeo,sans-serif" '
-        'font-size="7.5" fill="#6090b0">자동화 · 트렌드 · 자가학습 · Self-Evolving v3</text>'
+        f'font-size="7.5" fill="#6090b0">자동화 · 트렌드 · 자가학습 · Self-Evolving {HARNESS_VERSION}</text>'
     )
 
     # ── 직선 연결선 렌더 (L자 라우팅 — 사선 없음) ──────────────────
@@ -802,18 +810,18 @@ def _fmt(s) -> str:
     try: return datetime.fromisoformat(str(s)).strftime("%m/%d %H:%M")
     except: return str(s)[:16]
 
-OWNER_LABEL = {
-    "jarvis00_infra":    "J00",
-    "jarvis01_master":   "J01",
-    "jarvis02_writer":   "J02",
-    "jarvis03_radar":    "J03",
-    "jarvis04_scheduler":"J04",
-    "jarvis05_vision":   "J05",
-    "jarvis06_image":    "J06",
-    "jarvis07_guardian": "J07",
-    "jarvis08_publish":  "J08",
-    "jarvis09_collector":"J09",
-}
+class _OwnerLabels:
+    """agent_id → 'J0N' 규칙 파생 (★ SSOT — 하드코딩 매핑 제거, 사용자 박제 2026-07-04).
+
+    'jarvis07_guardian' → 'J07'. 새 에이전트가 추가돼도 자동 매핑 → 대시보드가 코드를
+    따라온다. .get(key, default) 인터페이스는 기존 호출부 그대로 유지.
+    """
+    _pat = _re.compile(r"jarvis(\d\d)")
+    def get(self, key, default=None):
+        m = self._pat.search(str(key or ""))
+        return f"J{m.group(1)}" if m else default
+
+OWNER_LABEL = _OwnerLabels()
 PLAT_COLOR = {"naver": "success", "tistory": "warn"}
 
 # ══════════════════════════════════════════════════════════════════
@@ -1179,7 +1187,7 @@ def load_vision_agents() -> list[dict]:
     """JARVIS05 VISION API (8505) 에서 에이전트 상태 + 메트릭 조회."""
     try:
         import requests as _req
-        r = _req.get("http://127.0.0.1:8505/api/agents", timeout=3)
+        r = _req.get(f"http://127.0.0.1:{_VISION_PORT}/api/agents", timeout=3)
         if r.ok:
             return r.json()
     except Exception:
@@ -1191,7 +1199,7 @@ def load_vision_summary() -> dict:
     """JARVIS05 VISION API (8505) 시스템 KPI 요약."""
     try:
         import requests as _req
-        r = _req.get("http://127.0.0.1:8505/api/metrics/summary", timeout=3)
+        r = _req.get(f"http://127.0.0.1:{_VISION_PORT}/api/metrics/summary", timeout=3)
         if r.ok:
             return r.json()
     except Exception:
@@ -1558,8 +1566,8 @@ with t_home:
         "j02": {"line1": f"오늘 {posts.get('today', 0)}건 · 대기 {_pend}건"},
         "j03": {"line1": f"트렌드 {trends['today']}개 · 승인대기 {_qa_pending}건"},
         "j04": {"line1": f"잡 {len(today_jobs)}건 · 성공 {job_ok} / 실패 {_job_fail}"},
-        "j05": {"line1": "VISION API :8505" if _j05_ok else "API 연결 대기"},
-        "j06": {"line1": f"이미지 {_img_s['total']}개 · 프로바이더 {_prov_ok}/1"},
+        "j05": {"line1": f"VISION API :{_VISION_PORT}" if _j05_ok else "API 연결 대기"},
+        "j06": {"line1": f"이미지 {_img_s['total']}개 · 프로바이더 {_prov_ok}/{len(_img_s['providers'])}"},
         "j07": {"line1": f"신규 {_gnew}건 · 수정 {_gfix}건 · CRIT {_gurgent}건"},
         "j08": {"line1": f"네이버 {'✅' if _nv_ok else '❌'} 티스토리 {'✅' if _ts_ok else '❌'} · {_nv_age_txt}"},
         "j09": {"line1": f"수집 누적 {_j09_stats['total']}건 · 오늘 {_j09_stats['today']}건"},
@@ -1853,7 +1861,7 @@ with t_qa:
         if not pending_list:
             md(empty_state(
                 "대기 중인 개선 제안이 없습니다",
-                "발행된 글이 자동 분석되면 여기에 나타납니다 (매 5분 주기)"
+                f"발행된 글이 자동 분석되면 여기에 나타납니다 ({_cron_phrase('analyzer_fb')})"
             ))
         else:
             for row in pending_list:
@@ -2023,7 +2031,7 @@ with t_perf:
             ))
 
         if not hist and not top_posts:
-            md(empty_state("아직 뷰 데이터가 없습니다", "성과 수집 잡(23:00) 실행 후 채워집니다"))
+            md(empty_state("아직 뷰 데이터가 없습니다", f"성과 수집 잡({' · '.join(_cron_times(job_id_prefix='radar_perf')) or '?'}) 실행 후 채워집니다"))
 
     # ── 키워드 성과 ───────────────────────────────────────────────
     with perf_t2:
@@ -2093,7 +2101,7 @@ with t_perf:
                     except Exception:
                         pass
         else:
-            md(empty_state("일일 리뷰 없음", "daily_review 잡(22:00) 실행 후 채워집니다"))
+            md(empty_state("일일 리뷰 없음", f"daily_review 잡({' · '.join(_cron_times(job_id_prefix='daily_review')) or '?'}) 실행 후 채워집니다"))
 
 # ──────────────────────────────────────────────────────────────────
 # AI 학습
@@ -2156,7 +2164,7 @@ with t_ai:
                            f'백테스트 점수: {bs:.3f} '
                            f'({"우수" if bs>=0.7 else "보통" if bs>=0.5 else "개선 필요"})</div>')
         else:
-            md(empty_state("학습된 가중치 없음", "train_weights 잡(매일 04:00) 실행 후 채워집니다"))
+            md(empty_state("학습된 가중치 없음", f"train_weights 잡({_cron_phrase('train_weights')}) 실행 후 채워집니다"))
 
     # ── 백테스트 이력 ────────────────────────────────────────────
     with ai_t2:
@@ -2329,7 +2337,7 @@ with t_err:
         for _i, _t in enumerate(_ARCH_TIERS[:2]):
             with _arch_cols[_i + 1]:
                 md(kpi(f"Tier {_t['n']} — {_t['name']}",
-                       "LLM 0" if not _t["uses_llm"] else "LLM Opus 4.6",
+                       "LLM 0" if not _t["uses_llm"] else f"LLM {_model_label('guardian')}",
                        color=_tier_colors[_i] if _i < len(_tier_colors) else "muted",
                        sub=_t["engine"]))
         # 6개 메커니즘 테이블 (색상은 표시용 — SSOT 순서대로)
@@ -2369,7 +2377,13 @@ with t_err:
             _cb_used = _cb_count
             _cb_remain = max(0, _CB_MAX_HOUR - _cb_used)
         except Exception:
-            _cb_used, _cb_remain, _CB_MAX_HOUR, _ESCALATE_THRESHOLD = 0, 10, 10, 3
+            # _cb_count 조회 실패 — 설정값은 여전히 SSOT 에서 재시도, 리터럴은 최후 폴백
+            try:
+                from JARVIS07_GUARDIAN.architecture import CB_MAX_HOUR as _CB_MAX_HOUR, ESCALATE_THRESHOLD as _ESCALATE_THRESHOLD
+            except Exception:
+                _CB_MAX_HOUR, _ESCALATE_THRESHOLD = 10, 3
+            _cb_used = 0
+            _cb_remain = _CB_MAX_HOUR
         with sg_cols[0]:
             md(kpi("Circuit Breaker",
                    f"{_cb_used}/{_CB_MAX_HOUR}",
@@ -2381,10 +2395,11 @@ with t_err:
                    color="primary",
                    sub="반복 시 severity 자동 상향"))
         with sg_cols[2]:
+            from JARVIS07_GUARDIAN.architecture import DENY_FIX_PATHS as _deny  # ★ SSOT
             md(kpi("보안 파일 차단",
-                   "5종",
+                   f"{len(_deny)}종",
                    color="danger",
-                   sub=".env · 인증파일 · jarvis_daemon.py"))
+                   sub=" · ".join(sorted(_deny))))
 
         # 일별 추이
         if g_trend:
@@ -2428,7 +2443,7 @@ with t_err:
             """).fetchall()
             _c.close()
             if _srr:
-                section("🤖 자가 진단 학습 곡선 (최근 10회 — Opus 4.6)")
+                section(f"🤖 자가 진단 학습 곡선 (최근 10회 — {_model_label('guardian')})")
                 # KPI — 최신 / 누적 / 추세
                 _latest = _srr[0]
                 _oldest = _srr[-1] if len(_srr) > 1 else _latest
@@ -2490,7 +2505,7 @@ with t_err:
             else:
                 md(empty_state(
                     "자가 진단 회차 데이터 없음",
-                    "다음 07:00 경제 브리핑 또는 16:00 테마글 발행 시 자가 진단 후 표시됩니다",
+                    f"다음 {' · '.join(_cron_times(job_id_prefix='j01_economic_post')) or '?'} 경제 브리핑 또는 {' · '.join(_cron_times(job_id_prefix='j01_theme_post')) or '?'} 테마글 발행 시 자가 진단 후 표시됩니다",
                 ))
         except Exception as _e:
             md(empty_state(f"자가 진단 통계 로드 실패: {_e}"))
@@ -2558,7 +2573,7 @@ with t_err:
                     "master":       "muted",    "radar":       "primary",
                     "writer":       "success",  "unknown":     "muted",
                 }
-                _skew_threshold = 25  # ADR 008 Phase 4 임계값
+                from JARVIS07_GUARDIAN.architecture import DOMAIN_SKEW_THRESHOLD as _skew_threshold  # ★ SSOT
                 _dom_rows = []
                 for _d, _n in sorted(_by_dom.items(), key=lambda x: -x[1]):
                     _h = _by_dom_h.get(_d, 0)
@@ -2602,7 +2617,7 @@ with t_err:
                        color="success" if _arms > 0 else "muted",
                        sub="보상으로 순위 학습"))
             with rc2:
-                md(kpi("모델", "Linear UCB",
+                md(kpi("모델", _bs.get("model", "Contextual Bandit").replace(" Contextual Bandit", ""),
                        color="primary", sub=_bs.get("model", "Contextual Bandit")))
             with rc3:
                 md(kpi("feature 차원", f"{_bs.get('feature_dim', 0)}차원",
@@ -2922,10 +2937,10 @@ with t_sys:
     with d3:
         # hub.py 자신의 포트 상태 확인
         try:
-            lsof = subprocess.run(["lsof", "-ti", "TCP:9199"], capture_output=True, text=True, timeout=3)
+            lsof = subprocess.run(["lsof", "-ti", f"TCP:{_HUB_PORT}"], capture_output=True, text=True, timeout=3)
             hub_alive = lsof.returncode == 0 and bool(lsof.stdout.strip())
         except: hub_alive = True  # 실행 중이므로 True
-        md(kpi("대시보드 9199", "가동 중", color="success", sub="JARVIS Hub (이 화면)"))
+        md(kpi(f"대시보드 {_HUB_PORT}", "가동 중", color="success", sub="JARVIS Hub (이 화면)"))
 
     # 인프라 잡 최근 실행
     infra_jobs = load_job_runs(owner="jarvis00_infra", days=7, limit=8)
@@ -3029,7 +3044,7 @@ with t_sys:
     with ig1: md(kpi("PNG 파일",          img_s["by_type"].get("png", 0),   color="success"))
     with ig2: md(kpi("SVG 파일",          img_s["by_type"].get("svg", 0),   color="primary"))
     with ig3: md(kpi("총 용량",           f'{img_s["total_size_mb"]} MB',   color="muted",    sub="output/ 합계"))
-    with ig4: md(kpi("가용 프로바이더",   f"{prov_ok}/1",
+    with ig4: md(kpi("가용 프로바이더",   f"{prov_ok}/{len(prov)}",
                      color="success" if prov_ok >= 1 else "warn",
                      sub="Pollinations.ai (★ Bing/HF 폐기 — ERRORS [263])"))
 
@@ -3146,11 +3161,11 @@ with t_sys:
         _j9s = _j9db.get_collection_stats()
         _j9c0, _j9c1 = st.columns(2)
         with _j9c0: md(kpi("누적 수집 레코드", _j9s["total"], color="primary", sub="7일 캐시 유지"))
-        with _j9c1: md(kpi("오늘 수집", _j9s["today"], color="success", sub="blog·news·academic·finance·web"))
+        with _j9c1: md(kpi("오늘 수집", _j9s["today"], color="success", sub="·".join(SOURCE_CATEGORIES)))
         md(agent_card(
             "JARVIS09 COLLECTOR",
             "online",
-            "THEME_QUEUED 구독 → 5종 프로바이더 병렬 수집<br>robots.txt 준수 · 공식 API 우선<br>정제 원본 → COLLECTION_READY 발행",
+            f"THEME_QUEUED 구독 → {len(SOURCE_CATEGORIES)}종 프로바이더 병렬 수집<br>robots.txt 준수 · 공식 API 우선<br>정제 원본 → COLLECTION_READY 발행",
             color="primary",
         ))
     except Exception as _j9e:
