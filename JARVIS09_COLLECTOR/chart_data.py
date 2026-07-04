@@ -60,8 +60,8 @@ def _now_as_of() -> str:
 
 
 def _fingerprint(title: str, unit: str) -> str:
-    seed = f"{title.strip()}|{unit.strip()}"
-    return hashlib.sha1(seed.encode("utf-8", errors="replace")).hexdigest()[:12]
+    from JARVIS09_COLLECTOR.models import dataset_fingerprint
+    return dataset_fingerprint(title, unit)   # 단일 소스 (3 생산자 공통)
 
 
 def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:

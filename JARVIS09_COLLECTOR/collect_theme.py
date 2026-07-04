@@ -318,37 +318,72 @@ def _naver_fin_theme_search(theme_name: str, timeout: int = 8) -> list:
                 best_name = tname
 
         # 한국어 3자 미만 매칭은 너무 느슨함 (2자 = "상장"·"항공" 등 단독 단어는 오매칭 위험)
+        # → ★ LLM 의미 매칭 폴백 (사용자 박제 2026-07-04, ERRORS [352]): 부분문자열이
+        #   실패해도 테마 키워드에 가장 부합하는 *네이버 공식 테마* 를 LLM 이 카탈로그에서
+        #   직접 고른다. "테마주명이 있으면 그 안에 종목도 있다" — 종목 작문이 아니라 공식
+        #   테마의 *실제 구성종목* 을 가져오는 것. (예: '백신/진단시약/방역(신종플루, AI 등)'
+        #   처럼 표기가 조금 달라 부분문자열 매칭이 어긋나도 공식 테마로 정확히 매핑.)
         if best_score < 3 or not best_no:
-            print(f"  ℹ️ [naver_theme] '{theme_name}' — 네이버 금융 테마 매칭 없음 (best={best_score})")
-            return []
+            try:
+                from shared.llm import invoke_text as _llm
+                _names = list(naver_themes.keys())
+                _numbered = "\n".join(f"{i+1}. {nm}" for i, nm in enumerate(_names))
+                _resp = (_llm(
+                    "router",
+                    f"아래 [네이버 금융 공식 테마 목록] 중 '{theme_name}' 과 가장 부합하는 테마 "
+                    f"하나의 *번호만* 출력하라(예: 12). 의미상 부합하는 테마가 전혀 없으면 0. "
+                    f"숫자만, 다른 말 금지.\n\n[목록]\n{_numbered}",
+                ) or "").strip()
+                _mm = re.search(r'\d+', _resp)
+                _idx = (int(_mm.group()) - 1) if _mm else -1
+                if 0 <= _idx < len(_names):
+                    best_name = _names[_idx]
+                    best_no = naver_themes[best_name]
+                    print(f"  🔍 [naver_theme] LLM 의미매칭 '{theme_name}' → '{best_name}' (no={best_no})")
+            except Exception as _e:
+                print(f"  ⚠️ [naver_theme] LLM 의미매칭 실패: {_e}")
+            if not best_no:
+                print(f"  ℹ️ [naver_theme] '{theme_name}' — 부합 공식 테마 없음 (부분문자열 best={best_score})")
+                return []
 
         print(f"  🔍 [naver_theme] '{theme_name}' → 네이버 금융 '{best_name}' (no={best_no}, score={best_score})")
 
-        # 3) 종목 추출
-        r2 = requests.get(
-            f'https://finance.naver.com/sise/sise_group_detail.naver?type=theme&no={best_no}',
-            headers=_hdrs, timeout=timeout
-        )
-        soup2 = BeautifulSoup(r2.content, 'html.parser')
+        # 3) 종목 추출 — ★ 재시도 (사용자 박제 2026-07-04, ERRORS [352]): 공식 테마로
+        #    매칭됐는데도 상세페이지 fetch 가 *일시* 실패/빈응답이면 종목 0개로 테마가 통째로
+        #    폐기되던 사고 방지. "테마주명이 있으면 그 안에 종목도 있다" — 네트워크 순간
+        #    장애로 그 종목을 못 가져오는 것뿐이므로 최대 3회 백오프 재시도.
+        import time as _t2
         stocks = []
-        for a in soup2.find_all('a', href=re.compile(r'item/main\.naver\?code=')):
-            code = re.search(r'code=(\d{6})', a.get('href', ''))
-            if not code:
-                continue
-            code = code.group(1)
-            name = a.get_text(strip=True)
-            if name and code:
-                # KS/KQ 구분 (코스닥 0으로 시작하는 경우 많음 — 간단 휴리스틱)
-                suffix = '.KQ' if code.startswith(('0', '1', '2', '3')) and int(code) < 400000 else '.KS'
-                # 추가: _naver_fin 으로 시장 확인 가능하나 속도 위해 생략
-                stocks.append({
-                    "name": name,
-                    "code": code,
-                    "ticker": f"{code}{suffix}",
-                    "_naver_theme": best_name,
-                })
+        for _try in range(3):
+            try:
+                r2 = requests.get(
+                    f'https://finance.naver.com/sise/sise_group_detail.naver?type=theme&no={best_no}',
+                    headers=_hdrs, timeout=timeout,
+                )
+                soup2 = BeautifulSoup(r2.content, 'html.parser')
+                _found = []
+                for a in soup2.find_all('a', href=re.compile(r'item/main\.naver\?code=')):
+                    code = re.search(r'code=(\d{6})', a.get('href', ''))
+                    if not code:
+                        continue
+                    code = code.group(1)
+                    name = a.get_text(strip=True)
+                    if name and code:
+                        # KS/KQ 구분 (코스닥 0으로 시작하는 경우 많음 — 간단 휴리스틱)
+                        suffix = '.KQ' if code.startswith(('0', '1', '2', '3')) and int(code) < 400000 else '.KS'
+                        _found.append({
+                            "name": name, "code": code,
+                            "ticker": f"{code}{suffix}", "_naver_theme": best_name,
+                        })
+                if _found:
+                    stocks = _found
+                    break
+                print(f"  ⚠️ [naver_theme] 상세페이지 종목 0개 (시도 {_try+1}/3) — 재시도")
+            except Exception as _e2:
+                print(f"  ⚠️ [naver_theme] 상세페이지 fetch 실패 (시도 {_try+1}/3): {_e2}")
+            _t2.sleep(1.5 * (_try + 1))
 
-        print(f"  ✅ [naver_theme] 네이버 금융 테마 종목 {len(stocks)}개 확보")
+        print(f"  ✅ [naver_theme] 네이버 금융 '{best_name}' 종목 {len(stocks)}개 확보")
         return stocks
 
     except Exception as e:
@@ -597,6 +632,19 @@ def _make_company_biz_desc(theme_name: str, name: str, ticker: str, is_profit: b
 _PER_OUTLIER_MAX = 200.0
 
 
+def _cap_per(per):
+    """★ ERRORS [347] — PER 이상치 상한을 *모든* 종목수집 경로에 일관 적용.
+    calc_fin 은 캡하지만 SSOT 경로(collect_stocks_data._enrich→_naver_fin)와
+    ThemeFinanceTool._run 은 원값을 그대로 흘려, 218.5배 같은 신뢰 불가 PER 이
+    본문·grounding 코퍼스·차트에 유입돼 오도 + 사실성 게이트 혼란을 유발했다.
+    흑자 무관, per<=0 또는 >_PER_OUTLIER_MAX 는 None(N/A) 로 정규화한다."""
+    try:
+        p = float(per)
+    except (TypeError, ValueError):
+        return None
+    return round(p, 1) if 0 < p <= _PER_OUTLIER_MAX else None
+
+
 def calc_fin(info, ticker_obj=None):
     """폭포수 방식: 네이버(1순위) → yfinance info → yfinance financials"""
     mc  = info.get('marketCap', 0) or 0
@@ -767,7 +815,7 @@ class ThemeFinanceTool(BaseTool):
                     roe_pct = round(roe*100, 1) if roe and abs(roe) <= 1 else (round(roe, 1) if roe else None)
                     
                     fin = {
-                        'per': round(per_v, 1) if per_v else None,
+                        'per': _cap_per(per_v),   # ★ ERRORS [347] 아웃라이어 캡 일관
                         'roe': roe_pct,
                         'op_margin': op_margin_pct,
                         'net_income': ni,
@@ -1475,6 +1523,7 @@ def stocks_to_datasets(stocks_data: dict, max_stocks: int = 8) -> list[dict]:
     / roe·op_margin=소수(0.15=15%) / per=배.
     """
     from datetime import date as _d_std
+    from JARVIS09_COLLECTOR.models import dataset_fingerprint as _dfp
     stocks = [s for s in (stocks_data or {}).get("stocks") or [] if s.get("name")][:max_stocks]
     if len(stocks) < 2:
         return []
@@ -1493,19 +1542,29 @@ def stocks_to_datasets(stocks_data: dict, max_stocks: int = 8) -> list[dict]:
                 out.append({"label": str(s["name"])[:12], "value": round(v * scale, nd)})
         return out
 
+    # ★ ERRORS [347] — nd(소수 자리)는 본문 포맷터(draft_writer)와 *정합* 필수.
+    #   조원 필드(marcap·revenue)는 본문 `_fmt_marcap` 이 `.1f`(1 자리, "5.9조원")로
+    #   쓰는데 승격값이 nd=2("5.88조원")면 grounding LLM 이 진실 시가총액을 매칭 실패
+    #   → "출처·웹 모두 확인 불가" false-positive 차단. roe/op_margin/per(.1f)·price(콤마정수)
+    #   는 이미 정합. 조원 두 필드만 nd=1 로 본문 표기와 일치시킨다. [346] 표기정합 원칙 연장.
     specs = [
-        ("price",  1.0,   0, False, f"{theme} 관련주 현재가",   "원",  "bar_chart"),
-        ("marcap", 1e-12, 2, False, f"{theme} 관련주 시가총액", "조원", "bar_chart"),
-        ("roe",    100.0, 1, True,  f"{theme} 관련주 ROE",     "%",   "bar_chart"),
-        ("per",    1.0,   1, False, f"{theme} 관련주 PER",     "배",  "bar_chart"),
-        ("revenue", 1e-12, 2, False, f"{theme} 관련주 연매출",  "조원", "bar_chart"),
+        ("price",     1.0,   0, False, f"{theme} 관련주 현재가",   "원",  "bar_chart"),
+        ("marcap",    1e-12, 1, False, f"{theme} 관련주 시가총액", "조원", "bar_chart"),
+        ("roe",       100.0, 1, True,  f"{theme} 관련주 ROE",     "%",   "bar_chart"),
+        # ★ op_margin 승격 (ERRORS [344] — [343] 대칭 갭). roe 와 동일하게 소수(0.136)로
+        #   저장되므로 scale=100.0 로 %(13.6) 변환. 누락 시 진실한 "영업이익률 13.6%" 가
+        #   grounding 코퍼스에 없어 "출처·웹 확인 불가"로 false-positive 차단됨.
+        ("op_margin", 100.0, 1, True,  f"{theme} 관련주 영업이익률", "%", "bar_chart"),
+        ("per",       1.0,   1, False, f"{theme} 관련주 PER",     "배",  "bar_chart"),
+        ("revenue",   1e-12, 1, False, f"{theme} 관련주 연매출",  "조원", "bar_chart"),
     ]
     datasets = []
     for field, scale, nd, neg, title, unit, viz in specs:
         rows = _rows(field, scale, nd, neg)
         if len(rows) >= 2:      # 1행짜리는 비교 차트로 무의미 — 승격 제외
             datasets.append({"title": title, "unit": unit, "viz_hint": viz,
-                             "data": rows, "source": dict(_src)})
+                             "data": rows, "source": dict(_src),
+                             "fingerprint": _dfp(title, unit)})
     return datasets
 
 
@@ -1796,7 +1855,7 @@ def collect_stocks_data(theme_name: str) -> dict:
             "ticker":     pair["ticker"],
             "price":      fin.get("price"),
             "marcap":     fin.get("marcap"),
-            "per":        fin.get("per"),
+            "per":        _cap_per(fin.get("per")),   # ★ ERRORS [347] 아웃라이어 캡 일관
             "roe":        fin.get("roe"),
             "op_margin":  fin.get("op_margin"),
             "revenue":    fin.get("revenue"),

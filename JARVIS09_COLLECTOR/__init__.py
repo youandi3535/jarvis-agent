@@ -17,10 +17,19 @@
     - 다른 에이전트에서 yfinance / pykrx / requests / pytrends 직접 호출
     - JARVIS09 외부에서 수집 로직 신설
 """
+from JARVIS09_COLLECTOR.models import (
+    CollectedData,             # ★ 통합 수집 계약 (4-part) — 전 카테고리 단일 상자
+    CATEGORY_POLICY,           # ★ 카테고리 정책 레지스트리 (min_images 등)
+    policy_for,
+    grounds,                   # ★ 통일 수치 grounding 예측자 (올림/버림 or ±5%)
+    ATTR_UNITS,
+)
 from JARVIS09_COLLECTOR.collector_engine import (
     collect_for_theme,
     collect_for_theme_delta,   # ★ delta-aware 교류 (사용자 박제 2026-06-07)
     collect_research,          # ★ 설계-우선 리서치 수집 (ADR 012 — 2026-07-02)
+    collect_all,               # ★ 통합 수집 컴포저 → CollectedData (Step 3 — 2026-07-05)
+    compose_collected,         # ★ 조각 → CollectedData 조립 (재수집 없음)
 )
 from JARVIS09_COLLECTOR.evidence_pack import (
     evidence_brief,            # ★ 대본 프롬프트용 근거 브리프 (ADR 012)
@@ -48,9 +57,16 @@ from JARVIS09_COLLECTOR.providers.economic_data_provider import (
 from JARVIS09_COLLECTOR.providers.verify_provider import web_verify
 
 __all__ = [
+    "CollectedData",
+    "CATEGORY_POLICY",
+    "policy_for",
+    "grounds",
+    "ATTR_UNITS",
     "collect_for_theme",
     "collect_for_theme_delta",
     "collect_research",
+    "collect_all",
+    "compose_collected",
     "evidence_brief",
     "as_source_docs",
     "plan_research",

@@ -47,19 +47,21 @@ def _draft_body(draft: dict) -> str:
 
 def prepublish_quality_issues(draft, post_type: str = "",
                               source_docs=None, market_data=None,
-                              stocks_data=None) -> list[dict]:
+                              stocks_data=None, collected=None) -> list[dict]:
     """발행 전 품질 게이트 — 사실성 + 매력도. [{"kind","detail"}] 반환 (빈=통과).
 
     ★ 1-c (2026-07-02): stocks_data(실측 종목 재무)를 넘기면 본문의 PER·ROE·현재가 등
       수치를 실측값과 *결정론적으로* 대조 — LLM 전사 오류·조작(예: PER 463.9)을 차단한다.
+    ★ Step 10 (2026-07-05): collected(CollectedData) 넘기면 사실성 grounding 정답을
+      단일 소스에서 보강(경제 topic_pack datasets·facts 포함). 종목밴드는 stocks_data 로 유지.
     """
     body = _draft_body(draft)
     if not body or len(body) < _MIN_BODY:
         return []
     out: list[dict] = []
     if not _disabled("PREPUBLISH_FACT_GATE"):
-        out.extend(_factuality_leg(body, post_type, source_docs, market_data))
-        out.extend(_stock_facts_leg(body, stocks_data))   # ★ 1-c 실측 재무 결정론 대조
+        out.extend(_factuality_leg(body, post_type, source_docs, market_data, stocks_data, collected))
+        out.extend(_stock_facts_leg(body, stocks_data))   # ★ 1-c 실측 재무 결정론 대조 (±10% 밴드 유지)
     if not _disabled("PREPUBLISH_ENGAGEMENT_GATE"):
         out.extend(_engagement_leg(draft, body, post_type))
     if not _disabled("PREPUBLISH_IMAGE_GATE"):
@@ -99,6 +101,11 @@ def _stock_facts_leg(body: str, stocks_data) -> list[dict]:
         for k in real:
             v = _pg_to_float(s.get(k))
             if v is not None:
+                # ★ 단위 정합 (ERRORS [344]): roe·op_margin 은 stocks_data 에 소수(0.15)로
+                #   저장되나 본문·패턴은 %(15) 단위 → |v|<=1 이면 비율로 보고 ×100 승격.
+                #   미승격 시 13.6%(본문) vs 0.136(실측) 비교로 진실 수치를 오차단.
+                if k in ("roe", "op_margin") and abs(v) <= 1:
+                    v *= 100
                 real[k].append(v)
     out: list[dict] = []
     for metric, (pat, rel, ab) in _STOCK_METRIC_PATTERNS.items():
@@ -117,8 +124,11 @@ def _stock_facts_leg(body: str, stocks_data) -> list[dict]:
     return out
 
 
-def _factuality_leg(body, post_type, source_docs, market_data) -> list[dict]:
-    """출처 대조 + 웹 재검증. 게이트 자체 크래시는 발행을 막지 않음(GUARDIAN 박제 후 통과)."""
+def _factuality_leg(body, post_type, source_docs, market_data, stocks_data=None, collected=None) -> list[dict]:
+    """출처 대조 + 웹 재검증. 게이트 자체 크래시는 발행을 막지 않음(GUARDIAN 박제 후 통과).
+
+    ★ stocks_data(실측 종목 재무)를 넘기면 결정론 수치 grounding 으로 진실 수치를
+      웹-차단 없이 통과시킨다 (ERRORS [350] 근본 수정)."""
     try:
         from JARVIS02_WRITER.law_enforcer import factuality_issues
     except Exception as e:
@@ -130,7 +140,8 @@ def _factuality_leg(body, post_type, source_docs, market_data) -> list[dict]:
         _wv = None
     try:
         res = factuality_issues(body, source_docs=source_docs, post_type=post_type,
-                                web_verify_fn=_wv, market_data=market_data)
+                                web_verify_fn=_wv, market_data=market_data,
+                                stocks_data=stocks_data, collected=collected)
     except Exception as e:
         log.error(f"[prepublish_gate] 사실성 게이트 예외 → 통과(보고): {e}")
         _report_safe("writer", e, "_factuality_leg")

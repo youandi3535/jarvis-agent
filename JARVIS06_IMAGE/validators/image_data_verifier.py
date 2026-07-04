@@ -52,8 +52,7 @@ def lookup_provenance(image_path) -> dict | None:
 _MIN_ROWS = {"kpi_cards": 1, "comparison_kpi": 1, "highlight_card": 1, "insight_card": 1}
 _DEFAULT_MIN = 2
 
-# 값 매칭 허용 오차
-_REL_TOL = 0.02   # ±2%
+# 값 매칭 — dv==0 zero-guard 절대바닥. 그 외 tolerance 는 통일 grounds() 위임 (Step 8)
 _ABS_TOL = 0.5
 
 
@@ -132,9 +131,10 @@ def _tokens(s: str) -> set[str]:
 
 
 def _value_match(v: float, dv: float) -> bool:
+    from JARVIS09_COLLECTOR.models import grounds   # ★ Step 8 단일 tolerance (올림/내림 or ±5%)
     if dv == 0:
         return abs(v) <= _ABS_TOL
-    return abs(v - dv) <= max(abs(dv) * _REL_TOL, _ABS_TOL)
+    return grounds(v, dv)
 
 
 def _match_row(label: str, value: float, dataset_rows) -> tuple[dict, float] | tuple[None, None]:

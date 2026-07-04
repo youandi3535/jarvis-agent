@@ -194,11 +194,11 @@
 
 **분량은 *결과*, 섹션 *자체*도 *결과*. spec 박제 = 추상 범위만.**
 
-**★ 이미지 최솟값 (사용자 박제 2026-06-01 — ERRORS [187] 박제)**:
-- 모든 블로그 글은 **썸네일 제외 이미지 최소 8장** 보장. 8장은 디폴트가 아닌 *절대 최솟값*.
-- 기술 단일 진입점: `JARVIS02_WRITER/post_type_specs.py` 의 `PostTypeSpec.min_images = 8`.
-- 코드 상수: `length_manager.MIN_IMAGES = 8`. 다른 파일 숫자 직박제 금지.
-- 집행: 발행 전 `draft_fixer._fix_image_count_underflow()` 자동 검사. 8장 미달 시 AI 사진 추가.
+**★ 이미지 최솟값 (사용자 박제 2026-06-01 → 2026-07-05 정정 8→5)**:
+- 모든 블로그 글은 **썸네일 제외 이미지 최소 5장(5+α)** 보장. 5장은 디폴트가 아닌 *절대 최솟값*.
+- 기술 단일 진입점: `JARVIS02_WRITER/post_type_specs.py` 의 `PostTypeSpec.min_images = 5`.
+- 코드 상수: `length_manager.MIN_IMAGES = 5` (post_type_specs 파생). 다른 파일 숫자 직박제 금지.
+- 집행: 발행 전 `draft_fixer._fix_image_count_underflow()` + `process_draft` min-N top-up 이중 보장. 5장 미달 시 AI 사진 추가.
 
 1. **단일 진실 소스**: `JARVIS02_WRITER/post_type_specs.py` 의 `PostTypeSpec` — *추상 범위만* 박제:
    - 글 종류 정의 (purpose·audience·style_hints)

@@ -14,7 +14,7 @@
   - extract_text_content      텍스트 추출 (SVG 제거)
 
 신설:
-  - generate_theme_html(theme, sector, stocks_data, supreme_block, platform)
+  - generate_theme_html(collected, supreme_block, platform)   # ★ Step 7 — collected 단일 소스
     → tistory_html_writer.generate_article_html 의 테마 버전
 """
 from __future__ import annotations
@@ -215,32 +215,28 @@ def _inject_theme_section_images(html: str, theme: str, sector: str, platform: s
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def generate_theme_html(
-    theme: str,
-    sector: str,
-    stocks_data: dict,
+    collected,
     supreme_block: str,
     platform: str = "tistory",
-    collection_docs: list | None = None,
-    evidence_pack: dict | None = None,
     gate_feedback: list | None = None,
 ) -> str:
     """테마주 Pass-1 대본 생성 — 텍스트 + [CHART_N]/[PHOTO_N] 플레이스홀더.
 
+    ★ Step 7 (2026-07-05): collected(CollectedData) 단일 소스. 프롬프트 빌더가
+      쓰는 종목 dict 는 collected.meta['raw_stocks'] 에서 무손실 복원(품질 유지).
     ★ 이미지 생성(Pass-2)은 JARVIS06.draft_processor.process_draft 단독 담당.
-    이 함수는 플레이스홀더가 포함된 HTML만 반환. SVG/이미지 치환 없음.
-
-    Args:
-        theme:          테마명
-        sector:         섹터
-        stocks_data:    collect_stocks_data() 반환값
-        supreme_block:  build_writing_rules_block() 반환값
-        platform:       "tistory" | "naver"
-        collection_docs: JARVIS09 수집 자료
-        evidence_pack:  JARVIS09 collect_research 근거 팩 (ADR 012)
+      이 함수는 플레이스홀더가 포함된 HTML만 반환.
 
     Returns:
         str: 플레이스홀더 포함 HTML. 실패 시 빈 문자열.
     """
+    theme = collected.meta.get("keyword", "")
+    sector = collected.meta.get("sector", "")
+    stocks_data = collected.meta.get("raw_stocks") or {}
+    collection_docs = list(collected.docs or [])
+    evidence_pack = ({"facts": collected.facts, "plan": {},
+                      "created_at": collected.meta.get("as_of", ""), "theme": theme}
+                     if collected.facts else None)
     raw = _generate_text_pass1_theme(platform, theme, sector, stocks_data, supreme_block,
                                      collection_docs=collection_docs or [],
                                      evidence_pack=evidence_pack,

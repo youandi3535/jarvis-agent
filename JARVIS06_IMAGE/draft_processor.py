@@ -15,16 +15,14 @@
 
 호출자 (JARVIS02 _build_blocks):
     from JARVIS06_IMAGE.draft_processor import process_draft
-    result = process_draft(
-        draft_html=html,
-        theme=theme, sector=sector,
-        stocks_data=stocks_data,
-        collection_docs=collection_docs,
-        platform=platform,
-        out_dir=img_dir,
-    )
+    result = process_draft(draft_html=html, collected=collected,
+                           platform=platform, out_dir=img_dir)
     blocks         = result["blocks"]
     thumbnail_path = result["thumbnail_path"]
+
+★ v2 (Step 6, 2026-07-05): 단일 인자 collected(CollectedData)로 통일. keyword/sector/
+  category·검증정답·차트seed·이미지컨텍스트를 전부 collected 에서 파생. 카테고리 노브는
+  CATEGORY_POLICY 레지스트리. 실패차트→AI사진 폴백 + min-N top-up + 썸네일 필수(누락0).
 """
 from __future__ import annotations
 
@@ -206,33 +204,199 @@ def _stock_numbers(stocks_data: dict) -> list[float]:
     return vals
 
 
-def _generate_charts(html: str, theme: str, sector: str, stocks_data: dict,
-                     platform: str, out_dir: Path,
-                     collection_docs: list | None = None,
-                     evidence_pack: dict | None = None) -> str:
-    """[CHART_N: 설명] → matplotlib SVG 치환. 치환된 HTML 반환.
+# ══════════════════════════════════════════════════════════════════════════
+# ★ process_draft v2 헬퍼 (Step 6, UNIFIED_PIPELINE_SPEC 2026-07-05)
+#   실패차트→AI사진 폴백 · min-N top-up · 로컬 썸네일 폴백 · collected 검증 ref.
+#   (경제 embed-first 래퍼 tistory_html_writer 의 검증된 로직을 단일 소스로 이식)
+# ══════════════════════════════════════════════════════════════════════════
 
-    ★ 사용자 박제 2026-06-07 — collection_docs 를 context_text 에 주입.
-       chart_generator 가 또 다시 JARVIS09 호출하지 않도록 상위 docs 우선 사용.
-       단, 부족 감지 시 chart_generator 가 자율로 _build_j09_context 호출 가능.
-    """
-    from JARVIS02_WRITER.tistory_html_writer import _generate_svg_pass2
-    from JARVIS02_WRITER import draft_writer as _dw
+def _slot_ref_datasets(collected) -> list:
+    """CollectedData → slot_renderer 검증 ref (datasets + 단위별 all_numbers 그룹).
+    entities 수치까지 포함해 슬롯 진실성 게이트가 굶지 않게 함."""
+    ref = list(collected.datasets or [])
+    by_unit: dict = {}
+    for v, u in collected.all_numbers():
+        by_unit.setdefault(u, []).append({"value": v})
+    for u, rows in by_unit.items():
+        ref.append({"unit": u, "data": rows})
+    return ref
 
-    # ── 0단계: ★ 데이터 내장 슬롯 렌더 (사용자 박제 2026-07-03 — 자비스06=렌더러) ──
-    #   자비스02 가 [CHART_N]...[/CHART_N] 블록에 데이터를 박아 옴. 검증 ref = 종목
-    #   실데이터 값 (테마 차트의 원천). 실패 슬롯은 구형식으로 강등 → 아래 경로가 폴백.
+
+def _entities_text(entities) -> str:
+    """CollectedData.entities → 차트 컨텍스트용 종목 텍스트 (표시단위 부착)."""
+    if not entities:
+        return ""
     try:
-        from JARVIS06_IMAGE.slot_renderer import render_slots_in_text
-        # 검증 ref: ① 단위 동봉 승격 데이터셋 (종목+텍스트 fact — 단위 정합까지 검증,
-        #   ERRORS [308][313][315]) + ② 전체 수치 캐치올 (단위 미상 — 값만 검증)
-        _ref_ds = []
+        from JARVIS09_COLLECTOR.models import ATTR_UNITS
+    except Exception:
+        ATTR_UNITS = {}
+    lines = []
+    for e in entities[:12]:
+        name = e.get("name", "")
+        attrs = e.get("attrs") or {}
+        parts = []
+        for k, v in attrs.items():
+            val = v.get("value") if isinstance(v, dict) else v
+            unit = (v.get("unit") if isinstance(v, dict) else "") or ATTR_UNITS.get(k, "")
+            parts.append(f"{k} {val}{unit}")
+        if name and parts:
+            lines.append(f"- {name}: {', '.join(parts)}")
+    return "\n".join(lines)
+
+
+def _count_images(html: str) -> int:
+    return len(re.findall(r"<img\b", html, re.I)) + len(re.findall(r"<svg\b", html, re.I))
+
+
+def _ai_photo_html(path, alt: str) -> str:
+    return (f'<p><img src="{path}" alt="{alt}" '
+            f'style="width:100%;max-width:760px;border-radius:8px;'
+            f'margin:16px auto;display:block;"></p>')
+
+
+def _photo_for_failed_slot(description: str, keyword: str, out_dir: Path) -> str:
+    """실패 [CHART_N] 슬롯 → 주제 실사진 1장 (사용자 박제 2026-07-01 — 은유·추상 금지)."""
+    try:
+        from JARVIS06_IMAGE.image_agent import generate_photo as _gp
+        import random as _rand, datetime as _dt
+        _angles = ["넓은 전경, 자연광", "현장에서 일하는 사람들",
+                   "제품·설비 중심 클로즈업", "도시·건물 배경, 낮", "실내 현장, 밝은 조명"]
+        _today = _dt.date.today().isoformat()
+        prompt_ko = (f"{keyword} 를 직접 보여주는 실제 다큐멘터리 사진, "
+                     f"{_rand.choice(_angles)}, 주제와 관련된 구체적 사물·현장·사람, 사실적 ({_today})")
+        path = _gp(prompt_ko=prompt_ko, out_dir=out_dir)
+        if path:
+            return _ai_photo_html(path, (keyword or description)[:40].replace('"', "'"))
+    except Exception as e:
+        print(f"  ⚠️ AI 사진(슬롯) 실패: {e}")
+    return ""
+
+
+def _extra_photos(keyword: str, sector: str, count: int, out_dir: Path) -> list:
+    """최소 이미지 수 충족용 추가 AI 사진 — 주제 앵커 실사 (max_workers=1 순차)."""
+    if count <= 0:
+        return []
+    try:
+        from JARVIS06_IMAGE.image_agent import generate_photo as _gp
+    except ImportError:
+        return []
+    import random as _rand2, datetime as _dt2
+    _today2 = _dt2.date.today().isoformat()
+    _rng = _rand2.Random(hash(f"{keyword}|{_today2}"))
+    _base_prompts = [
+        f"{keyword} 를 직접 보여주는 실제 다큐멘터리 사진, 넓은 전경, 자연광",
+        f"{keyword} 관련 제품·설비 중심 클로즈업, 실제 현장, 사실적",
+        f"{keyword} 현장에서 일하는 사람들, 실제 작업 장면, 자연광",
+        f"{keyword} 관련 실제 산업 현장 내부, 밝은 조명, 사실적",
+        f"{keyword} 관련 실제 장소·건물 외관, 도시 배경, 낮, 실사",
+        f"{keyword} 관련 물류·운송 현장, 실제 차량·설비, 사실적",
+        f"{keyword} 관련 연구개발 현장, 실제 실험실 장비와 연구원",
+        f"{keyword} 자료를 검토하는 사람, 실제 사무실, 모니터 화면, 자연광",
+        f"{keyword} 관련 생산 라인, 실제 공장 내부, 사실적",
+        f"{keyword} 관련 매장·거래 현장, 실제 사람들, 낮, 실사",
+    ]
+    _rng.shuffle(_base_prompts)
+    prompts = _base_prompts[:count]
+    results: dict[int, str] = {}
+    with ThreadPoolExecutor(max_workers=1) as ex:   # ★ 순차 강제 (Pollinations 429 방지)
+        futs = {ex.submit(_gp, prompt_ko=p, out_dir=out_dir): (i, p)
+                for i, p in enumerate(prompts)}
+        for fut in as_completed(futs):
+            idx, prompt = futs[fut]
+            try:
+                path = fut.result()
+                if path:
+                    results[idx] = _ai_photo_html(path, prompt[:40].replace('"', "'"))
+                    print(f"  🖼️ 추가 AI 사진 {idx+1}/{count} 완료")
+            except Exception as e:
+                print(f"  ⚠️ 추가 AI 사진 {idx+1} 실패: {e}")
+    return [results[i] for i in sorted(results)]
+
+
+def _insert_extra_photos(content: str, photos: list) -> str:
+    """추가 AI 사진을 이미지 없는 h2/h3 섹션에 배포 + 나머지는 말미."""
+    if not photos:
+        return content
+    h_matches = list(re.finditer(r'<h[23][^>]*>.*?</h[23]>', content, re.IGNORECASE | re.DOTALL))
+    if not h_matches:
+        return content + "\n" + "\n".join(photos)
+    img_free_ends: list[int] = []
+    for i, m in enumerate(h_matches):
+        end = h_matches[i + 1].start() if i + 1 < len(h_matches) else len(content)
+        section = content[m.start():end]
+        if "<img" not in section and "<figure" not in section and "<svg" not in section:
+            img_free_ends.append(end)
+    result = content
+    slots_used = min(len(img_free_ends), len(photos))
+    for pos, photo in zip(reversed(img_free_ends[:slots_used]), reversed(photos[:slots_used])):
+        result = result[:pos] + "\n" + photo + "\n" + result[pos:]
+    remaining = photos[slots_used:]
+    if remaining:
+        result += "\n" + "\n".join(remaining)
+    return result
+
+
+def _local_text_thumbnail(title: str, keyword: str, out_dir: Path):
+    """최후 로컬 썸네일 폴백 — 외부 API 없이 타이틀 카드 (누락 0 보장)."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import hashlib
         try:
-            from JARVIS09_COLLECTOR import stocks_to_datasets as _s2d, facts_to_datasets as _f2d
-            _ref_ds = _s2d(stocks_data) + _f2d(evidence_pack or {})
+            from JARVIS06_IMAGE.style_engine import setup_chart_defaults
+            setup_chart_defaults()
         except Exception:
             pass
-        _ref_ds = _ref_ds + [{"data": [{"value": v} for v in _stock_numbers(stocks_data)]}]
+        h = hashlib.md5((keyword or title or "x").encode("utf-8")).hexdigest()
+        accent = "#" + h[:6]
+        fig = plt.figure(figsize=(12.8, 6.72), dpi=100)
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.axis("off")
+        ax.add_patch(plt.Rectangle((0, 0), 1, 1, color="#1a2230"))
+        ax.add_patch(plt.Rectangle((0, 0), 0.018, 1, color=accent))
+        ax.text(0.06, 0.5, (title or keyword or "")[:38], fontsize=34,
+                color="white", va="center", ha="left")
+        out = Path(out_dir) / f"thumb_local_{h[:8]}.png"
+        fig.savefig(str(out), facecolor="#1a2230")
+        plt.close(fig)
+        return str(out)
+    except Exception as e:
+        log.warning(f"로컬 썸네일 폴백 실패: {e}")
+        return None
+
+
+def _mandatory_thumbnail(title: str, keyword: str, sector: str, platform: str,
+                         out_dir: Path, body_text: str):
+    """★ 썸네일 필수 생성 (사용자 박제 2026-07-05) — 재시도 2회 + 로컬 폴백 → 누락 0."""
+    from JARVIS06_IMAGE.image_agent import generate_thumbnail
+    for attempt in range(2):
+        try:
+            p = generate_thumbnail(title=title, keyword=keyword, sector=sector,
+                                   platform=platform, out_dir=out_dir, body_text=body_text)
+            if p:
+                return p
+        except Exception as e:
+            log.warning(f"썸네일 시도 {attempt+1} 실패: {e}")
+            _g_report("image", e, module=__name__)
+    return _local_text_thumbnail(title, keyword, out_dir)   # 최후 로컬 카드
+
+
+def _generate_charts(html: str, theme: str, sector: str, collected,
+                     platform: str, out_dir: Path,
+                     chart_ai_fallback: bool = True,
+                     context_docs: list | None = None) -> str:
+    """[CHART_N: 설명] → matplotlib SVG 치환. 실패 슬롯은 AI 사진 대체(정책).
+
+    검증 정답·차트 seed·종목 컨텍스트 모두 CollectedData 단일 소스에서 파생.
+    """
+    from JARVIS02_WRITER.tistory_html_writer import _generate_svg_pass2
+
+    # ── 0단계: ★ 데이터 내장 슬롯 렌더 (자비스06 = 렌더러) ──
+    #   검증 ref = CollectedData(datasets+facts+entities) 단일 소스.
+    try:
+        from JARVIS06_IMAGE.slot_renderer import render_slots_in_text
+        _ref_ds = _slot_ref_datasets(collected)
         html, _s_ok, _s_total = render_slots_in_text(
             html, _ref_ds, out_dir, run_id=uuid.uuid4().hex[:8], theme=theme)
         if _s_total:
@@ -246,39 +410,16 @@ def _generate_charts(html: str, theme: str, sector: str, stocks_data: dict,
 
     print(f"  🎨 [{platform}] [CHART] {len(placeholders)}개 생성 (matplotlib)...")
     run_id = uuid.uuid4().hex
-    stocks_text = _dw._stocks_text(stocks_data) if hasattr(_dw, "_stocks_text") else ""
+    stocks_text = _entities_text(collected.entities)
+    # ★ 차트 seed = CollectedData.datasets (종목 시세·텍스트 fact 승격분 이미 포함 — Step 2/3/4)
+    _seed_ds = list(collected.datasets or [])
 
-    # ★ 종목 시세 → 차트 데이터셋 승격 (ERRORS [313]): 테마주 글의 가장 확실한
-    #   실데이터(이미 수집된 시세·재무)를 chart_generator 풀에 합류 — 웹 수집이
-    #   빈약해도 슬롯이 굶지 않는다.
-    _seed_ds: list = []
-    try:
-        from JARVIS09_COLLECTOR import stocks_to_datasets
-        _seed_ds = stocks_to_datasets(stocks_data)
-        if _seed_ds:
-            print(f"  📈 [{platform}] 종목 시세 승격 → 차트 데이터셋 {len(_seed_ds)}개 "
-                  f"({', '.join(d['title'].split()[-1] for d in _seed_ds)})")
-    except Exception as _se:
-        log.warning(f"stocks_to_datasets 실패: {_se}")
-    # ★ 텍스트 수치 → 데이터셋 승격도 합류 (ERRORS [315] — 사용자 박제: "텍스트
-    #   데이터에도 수치가 있잖아. 추출하면 되지"). 근거팩 fact 의 수치+출처를 차트 재료로.
-    try:
-        from JARVIS09_COLLECTOR import facts_to_datasets
-        _fact_ds = facts_to_datasets(evidence_pack or {})
-        if _fact_ds:
-            _titles = {str(d.get("title", "")) for d in _seed_ds}
-            _fact_ds = [d for d in _fact_ds if str(d.get("title", "")) not in _titles]
-            _seed_ds = _seed_ds + _fact_ds
-            print(f"  📈 [{platform}] 텍스트 수치 승격 → 차트 데이터셋 +{len(_fact_ds)}개 (근거팩 fact)")
-    except Exception as _fe:
-        log.warning(f"facts_to_datasets 실패: {_fe}")
-
-    # ★ collection_docs 의 수치 사실 라인을 차트 컨텍스트로 변환
+    # ★ 수집 문서(=facts 합류본)의 수치 사실 라인을 차트 컨텍스트로 변환
     docs_facts_text = ""
-    if collection_docs:
+    if context_docs:
         try:
             from JARVIS06_IMAGE.collection_merger import facts_for_chart
-            facts = facts_for_chart(collection_docs, max_n=12, keyword=theme)
+            facts = facts_for_chart(context_docs, max_n=12, keyword=theme)
             if facts:
                 docs_facts_text = "[수집 사실 라인]\n" + "\n".join(facts)
         except Exception as e:
@@ -302,7 +443,7 @@ def _generate_charts(html: str, theme: str, sector: str, stocks_data: dict,
 
         futs = {
             ex.submit(_generate_svg_pass2, pos, desc, theme, sector,
-                      _ctx(orig_idx), out_dir, run_id, collection_docs,
+                      _ctx(orig_idx), out_dir, run_id, context_docs,
                       _seed_ds): pos
             for pos, orig_idx, desc in items
         }
@@ -317,13 +458,23 @@ def _generate_charts(html: str, theme: str, sector: str, stocks_data: dict,
                 _g_report("image", e, module=__name__)
                 svg_map[pos_key] = ""
 
+    # ★ 실패 슬롯 → AI 사진 대체 (chart_ai_fallback) — 순차(Pollinations rate limit).
+    #   "가짜 차트 < 차트 없음"과 충돌 없음: 사진은 조작 데이터가 아님. 이미지 수·맥락 유지.
+    _desc_by_pos = {pos: desc for pos, _oi, desc in items}
+    if chart_ai_fallback:
+        _failed = [p for p in svg_map if not svg_map[p]]
+        if _failed:
+            print(f"  🔄 [{platform}] 실패 차트 {len(_failed)}개 → AI 사진 대체")
+            for p in _failed:
+                svg_map[p] = _photo_for_failed_slot(_desc_by_pos.get(p, ""), theme, out_dir)
+
     _pos = [0]
 
     def _replace(m: re.Match) -> str:
         _pos[0] += 1
         chunk = svg_map.get(_pos[0], "")
         if not chunk:
-            print(f"  ⚠️ CHART_pos{_pos[0]} 차트 실패 — 제거")
+            print(f"  ⚠️ CHART_pos{_pos[0]} 차트+사진 모두 실패 — 제거")
         return chunk
 
     result = re.sub(r"\[CHART_(\d+):[^\]]+\]", _replace, html)
@@ -428,67 +579,72 @@ def _generate_photos(html: str, theme: str, out_dir: Path,
 
 # ── 공개 API ──────────────────────────────────────────────────────
 
-def process_draft(
-    draft_html: str,
-    theme: str,
-    sector: str,
-    stocks_data: dict,
-    collection_docs: list | None,
-    platform: str,
-    out_dir: Path,
-    evidence_pack: dict | None = None,
-) -> dict:
-    """대본 HTML + 수집 자료 → 완성 블록 (JARVIS08 발행 준비 완료).
+def process_draft(draft_html: str, collected, platform: str = "tistory",
+                  out_dir: Path = None) -> dict:
+    """★ v2 (Step 6, 2026-07-05) — 대본 HTML + CollectedData → 완성 블록.
+
+    전 카테고리 공통 이미지 오케스트레이터. keyword/sector/category·검증 정답·
+    차트 seed·이미지 컨텍스트를 *모두* CollectedData 단일 상자에서 파생.
+    카테고리별 노브(min_images·chart_ai_fallback·thumbnail_body_chars)는
+    CATEGORY_POLICY[category] 레지스트리에서 조회.
 
     Args:
-        draft_html:      generate_theme_html() 반환값 (플레이스홀더 포함)
-        theme:           테마명
-        sector:          섹터
-        stocks_data:     JARVIS09 collect_stocks_data() 반환값
-        collection_docs: JARVIS09 collect_for_theme() 반환값
-        platform:        "tistory" | "naver"
-        out_dir:         이미지 저장 폴더
-        evidence_pack:   JARVIS09 collect_research 근거 팩 (ADR 012 — 있으면
-                         fact 문장을 차트·사진 컨텍스트 최우선 재료로 합류)
+        draft_html:  Pass-1 대본 (플레이스홀더 [CHART_N]/[PHOTO_N] 포함)
+        collected:   JARVIS09 CollectedData (meta+datasets+docs+facts+entities) — 필수
+        platform:    "tistory" | "naver"
+        out_dir:     이미지 저장 폴더
 
     Returns:
-        {
-            "blocks":         list[tuple],  # JARVIS08이 바로 발행 가능한 완성본
-            "thumbnail_path": str | None,
-            "title":          str,
-            "html":           str,          # 최종 HTML (DB 저장용)
-        }
+        {"blocks": list[tuple], "thumbnail_path": str|None, "title": str, "html": str, "html_path": str}
     """
+    from JARVIS09_COLLECTOR.models import policy_for
+    if collected is None or not hasattr(collected, "all_numbers"):
+        raise TypeError("process_draft: collected(CollectedData) 필수 — "
+                        "호출자는 compose_collected/cand_collected 로 조립해 전달")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ★ ADR 012 — 근거 팩 fact(출처 박제된 한 문장 사실)를 수집 문서 앞에 합류.
-    #   facts_for_chart/facts_for_photo 가 그대로 소비 → 차트 수치·사진 장면이
-    #   검증된 사실에 접지된다. 기존 플럼빙 재사용 (신규 경로 0).
-    if evidence_pack:
-        try:
-            from JARVIS09_COLLECTOR.evidence_pack import as_source_docs
-            _fact_docs = as_source_docs(evidence_pack)
-            if _fact_docs:
-                collection_docs = _fact_docs + list(collection_docs or [])
-                print(f"  🧾 [{platform}] 근거 팩 fact {len(_fact_docs)}개 → 이미지 컨텍스트 합류")
-        except Exception as e:
-            log.warning(f"근거 팩 합류 실패(무시): {e}")
+    meta = collected.meta or {}
+    theme = meta.get("keyword", "")
+    sector = meta.get("sector", "")
+    category = meta.get("category", "theme")
+    policy = policy_for(category)
+    min_images = int(policy.get("min_images", 5))
+    chart_ai_fallback = bool(policy.get("chart_ai_fallback", True))
+    thumb_chars = int(policy.get("thumbnail_body_chars", 3000))
 
-    # ① [CHART_N] → matplotlib SVG (★ collection_docs 의 수치 사실 컨텍스트 주입)
-    html = _generate_charts(draft_html, theme, sector, stocks_data, platform, out_dir,
-                            evidence_pack=evidence_pack,
-                            collection_docs=collection_docs)
+    # 이미지 컨텍스트 = 근거 fact(어댑터) + 수집 문서 (fact-grounding 보존).
+    #   facts_for_chart/facts_for_photo 가 그대로 소비 → 차트 수치·사진 장면 접지.
+    context_docs = list(collected.docs or [])
+    try:
+        from JARVIS09_COLLECTOR.evidence_pack import as_source_docs
+        _fact_docs = as_source_docs(collected.facts)
+        if _fact_docs:
+            context_docs = _fact_docs + context_docs
+            print(f"  🧾 [{platform}] 근거 fact {len(_fact_docs)}개 → 이미지 컨텍스트 합류")
+    except Exception as e:
+        log.warning(f"근거 fact 합류 실패(무시): {e}")
 
-    # ② [PHOTO_N] → AI 사진 (★ collection_docs 의 헤드라인 facts 주입)
-    html = _generate_photos(html, theme, out_dir,
-                            sector=sector,
-                            collection_docs=collection_docs)
+    # ① [CHART_N] → SVG (실패 슬롯은 chart_ai_fallback 정책에 따라 AI 사진 대체)
+    html = _generate_charts(draft_html, theme, sector, collected, platform, out_dir,
+                            chart_ai_fallback=chart_ai_fallback, context_docs=context_docs)
 
-    # ③ (옛 h2→이미지 교체 폐기 — 사용자 박제 2026-05-15 ↔ 2026-06-07)
-    #    h2 소제목은 텍스트로 유지. 본문 사이 이미지는 [CHART_N]/[PHOTO_N] 단일 경로만.
+    # ② [PHOTO_N] → AI 사진
+    html = _generate_photos(html, theme, out_dir, sector=sector,
+                            collection_docs=context_docs)
 
-    # ④ 제목 추출
+    # ★ min-N top-up 안전망 (썸네일 제외 본문 이미지 ≥ min_images 보장)
+    n_img = _count_images(html)
+    if n_img < min_images:
+        need = min_images - n_img
+        print(f"  📸 [{platform}] 본문 이미지 {n_img} < 최소 {min_images} → AI 사진 {need}개 보충")
+        extra = _extra_photos(theme, sector, need, out_dir)
+        if extra:
+            html = _insert_extra_photos(html, extra)
+
+    # ③ (옛 h2→이미지 교체 폐기) — 본문 이미지는 [CHART_N]/[PHOTO_N] 단일 경로만.
+
+    # ④ 제목
     from JARVIS02_WRITER.tistory_html_writer import extract_title, save_article_html, screenshot_article
     title = extract_title(html, theme)
 
@@ -501,20 +657,13 @@ def process_draft(
     if not visual_paths:
         print(f"  ⚠️ [{platform}] 스크린샷 0개 — 텍스트 전용 진행")
 
-    # ⑦ 썸네일 생성 (백그라운드)
-    thumbnail_path = None
-    try:
-        from JARVIS06_IMAGE.image_agent import generate_thumbnail
-        body_text = re.sub(r"<[^>]+>", "", html)[:400]
-        thumbnail_path = generate_thumbnail(
-            title=title, keyword=theme, sector=sector,
-            platform=platform, out_dir=out_dir,
-            body_text=body_text,
-        )
+    # ⑦ 썸네일 필수 (body 3000, 재시도 + 로컬 폴백 → 누락 0)
+    body_text = re.sub(r"<[^>]+>", "", html)[:thumb_chars]
+    thumbnail_path = _mandatory_thumbnail(title, theme, sector, platform, out_dir, body_text)
+    if thumbnail_path:
         print(f"  🖼️ [{platform}] 썸네일 생성 완료")
-    except Exception as e:
-        log.warning(f"썸네일 실패: {e}")
-        _g_report("image", e, module=__name__)
+    else:
+        print(f"  ⛔ [{platform}] 썸네일 최종 실패 (로컬 폴백까지 실패)")
 
     # ⑧ assemble_blocks → 완성 블록
     from JARVIS06_IMAGE.injectors import assemble_blocks
@@ -526,4 +675,5 @@ def process_draft(
         "thumbnail_path": thumbnail_path,
         "title":          title,
         "html":           html,
+        "html_path":      str(html_path),   # ★ Step 9: 경제 반환 계약 호환 (재저장 금지)
     }

@@ -209,6 +209,9 @@ def _gen_hook(keyword: str, platform: str = "tistory") -> str:
             "writer",
             f"{supreme_block}\n\n{spec['name']} 글 첫 문장. 키워드: '{keyword}'.\n"
             f"독자({spec['reader']})가 공감할 수 있는 일상 관찰·질문·감성 표현 {_L.build_length_phrase(1)}.\n"
+            "★ 이 문장은 근거 데이터 없이 생성되므로 특정 수치·통계 창작 절대 금지 — "
+            "연도·분기+금액('2023년 1분기 16만원' 류)·비율(%)·'~배 증가/폭등' 비교·지수·명명된 통계를 "
+            "넣지 말 것. 근거 없는 수치는 사실성 게이트에서 차단된다. 정성적 관찰·질문·감성 서술만.\n"
             "마침표로 끝낼 것. 이모지 금지. 문장만 출력.",
             timeout=30,
         ).strip().split("\n")[0].strip()
@@ -227,6 +230,9 @@ def _gen_hook_theme(theme: str, platform: str = "tistory") -> str:
             "writer",
             f"{supreme_block}\n\n{spec['name']} 블로그 첫 문장. 테마: '{theme}'.\n"
             f"독자({spec['reader']})가 공감할 수 있는 일상 관찰·궁금증·감성 표현 {_L.build_length_phrase(1)}.\n"
+            "★ 이 문장은 근거 데이터 없이 생성되므로 특정 수치·통계 창작 절대 금지 — "
+            "연도·분기+금액('2023년 1분기 16만원' 류)·비율(%)·'~배 증가/폭등' 비교·지수·명명된 통계를 "
+            "넣지 말 것. 근거 없는 수치는 사실성 게이트에서 차단된다. 정성적 관찰·궁금증·감성 서술만.\n"
             "마침표로 끝낼 것. 이모지 금지. 문장만 출력.",
             timeout=30,
         ).strip().split("\n")[0].strip()

@@ -94,13 +94,14 @@ def _ref_value_units(ref_datasets: list | None) -> list[tuple[float, str]]:
 
 
 def verify_slot(slot: dict, ref_pairs: list[tuple[float, str]]) -> dict | None:
-    """슬롯 (값+단위) ↔ 자비스09 원본 (값+단위) 짝 대조 (값 ±0.5%).
+    """슬롯 (값+단위) ↔ 자비스09 원본 (값+단위) 짝 대조 (★ 통일 grounds: 올림/내림 표시 또는 ±5%).
 
     ★ 단위 검증 (사용자 박제 2026-07-03): "단위는 원이라고 해놓고 숫자는 %면?" —
       값만 맞고 단위가 다르면: 원본에서 그 값의 단위가 *유일* → 슬롯 단위 자동 교정,
       *복수(애매)* → 행 제거. 검증 행만 유지, 0행이면 None.
     ref 가 비어 있으면(검증 재료 미동봉) 보수적으로 슬롯 무효 — 거짓 차트 < 차트 없음.
     """
+    from JARVIS09_COLLECTOR.models import grounds as _grounds   # ★ Step 8 단일 tolerance
     if not slot.get("data"):
         return None
     if not ref_pairs:
@@ -110,8 +111,7 @@ def verify_slot(slot: dict, ref_pairs: list[tuple[float, str]]) -> dict | None:
     rows: list[tuple[dict, str]] = []   # (행, 해석 단위) — 행별 추적 (ERRORS [312])
     for r in slot["data"]:
         v = r["value"]
-        matches = [(rv, ru) for rv, ru in ref_pairs
-                   if abs(v - rv) <= max(abs(rv) * 0.005, 1e-9)]
+        matches = [(rv, ru) for rv, ru in ref_pairs if _grounds(v, rv)]
         if not matches:
             log.warning(f"[slot] CHART_{slot['idx']} 값 {r['label']}={v} — 원본 불일치 → 행 제거")
             continue
