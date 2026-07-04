@@ -268,12 +268,16 @@ def merge_pack(pack: dict, extra_facts: list[dict]) -> dict:
     return pack
 
 
-def evidence_brief(pack: dict, max_facts: int = 24) -> str:
+def evidence_brief(pack, max_facts: int = 24) -> str:
     """대본 프롬프트 주입용 근거 브리프 — 질문별 그룹 + 출처 표기.
 
     JARVIS02 draft_writer 가 그대로 프롬프트에 삽입한다. 사실 번호(F#)로
     글쓴이가 근거를 지목할 수 있게 하고, 목록 밖 수치 사용을 금지한다.
+
+    ★ pack(dict) 또는 facts(list) 둘 다 수용 (Step 3 — collected.facts 직접 입력 지원).
     """
+    if isinstance(pack, list):
+        pack = {"facts": pack, "plan": {}}
     if not pack or not pack.get("facts"):
         return ""
     plan = pack.get("plan") or {}
@@ -319,8 +323,13 @@ class _FactDoc:
         self.meta = {}
 
 
-def as_source_docs(pack: dict) -> list:
-    """EvidencePack → 발행 전 사실성 게이트(source_docs)용 문서 목록."""
+def as_source_docs(pack) -> list:
+    """EvidencePack → 발행 전 사실성 게이트(source_docs)용 문서 목록.
+
+    ★ pack(dict) 또는 facts(list) 둘 다 수용 (Step 3 — collected.facts 직접 입력 지원).
+    """
+    if isinstance(pack, list):
+        pack = {"facts": pack, "theme": ""}
     docs = []
     theme = (pack or {}).get("theme", "")
     for f in (pack or {}).get("facts", []):
@@ -410,6 +419,7 @@ def facts_to_datasets(pack: dict, max_datasets: int = 24) -> list[dict]:
         key = (f.get("question_id") or "", (f.get("unit") or "").strip())
         groups.setdefault(key, []).append((f, v, lb))
 
+    from JARVIS09_COLLECTOR.models import dataset_fingerprint as _dfp
     out: list[dict] = []
     for (qid, unit), items in groups.items():
         # 대표 출처 = 신뢰 티어 최상 fact (논문>API>뉴스>기사>웹 — ADR 013)
@@ -422,12 +432,14 @@ def facts_to_datasets(pack: dict, max_datasets: int = 24) -> list[dict]:
         out.append({
             "title": title,
             "unit": unit,
+            "viz_hint": "bar_chart",      # ★ 스키마 통일 (Step 2) — 3 생산자 공통 키
             "data": data,
             "source": {"provider": f"evidence:{src.get('type', '')}",
                        "name": src.get("name", ""),
                        "url": src.get("url", ""),
                        "as_of": best.get("as_of", "")},
-            "_from_facts": True,
+            "fingerprint": _dfp(title, unit),
+            "_from_facts": True,          # all_numbers dedupe 근거 (fact 이중표현 표시)
         })
     out.sort(key=lambda d: -len(d["data"]))   # 다행(多行) 차트 우선
     return out[:max_datasets]

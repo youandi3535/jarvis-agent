@@ -345,6 +345,119 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
             "plan_fallback": bool(plan.get("fallback"))}
 
 
+# ── ★ 통합 수집 컴포저 — CollectedData 방출 (Step 3, UNIFIED_PIPELINE_SPEC) ──
+#   전 카테고리 J09-측 단일 진입점. 종목(테마)→entities, research→docs+facts,
+#   stocks/facts→datasets(통일 스키마). 대본·process_draft·검증이 이 상자만 소비.
+
+# 엔티티 attr 표시단위 스케일 — ATTR_UNITS 와 정합 필수
+#   (marcap·revenue: 원→조원, net_income: 원→억원, roe·op_margin: 소수→%)
+_ENTITY_SCALE = {
+    "price": 1.0, "per": 1.0,
+    "marcap": 1e-12, "revenue": 1e-12, "net_income": 1e-8,
+    "roe": 100.0, "op_margin": 100.0,
+}
+
+
+def _stocks_to_entities(stocks_data: dict) -> list[dict]:
+    """collect_stocks_data.stocks → CollectedData.entities (다속성 레코드).
+    attrs 값은 ATTR_UNITS 표시단위로 스케일 (all_numbers grounding 정합)."""
+    from datetime import date as _d
+    src = {"name": "네이버 금융(KRX 시세)", "url": "https://finance.naver.com",
+           "as_of": _d.today().isoformat()}
+    ents: list[dict] = []
+    for s in (stocks_data or {}).get("stocks") or []:
+        name = s.get("name")
+        if not name:
+            continue
+        attrs: dict = {}
+        for k, scale in _ENTITY_SCALE.items():
+            raw = s.get(k)
+            if raw in (None, ""):
+                continue
+            try:
+                attrs[k] = round(float(raw) * scale, 2)
+            except (TypeError, ValueError):
+                continue
+        ents.append({"name": str(name), "type": "stock",
+                     "code": s.get("code") or s.get("ticker") or "",
+                     "attrs": attrs, "source": dict(src)})
+    return ents
+
+
+def _dedupe_datasets(datasets: list[dict]) -> list[dict]:
+    """fingerprint(=title|unit) 기준 dataset dedupe — 생산자 간 중복 제거."""
+    seen: set = set()
+    out: list[dict] = []
+    for ds in datasets or []:
+        fp = ds.get("fingerprint") or (str(ds.get("title", "")), str(ds.get("unit", "")))
+        if fp in seen:
+            continue
+        seen.add(fp)
+        out.append(ds)
+    return out
+
+
+def compose_collected(keyword: str, stocks_data: dict | None = None,
+                      docs: list | None = None, evidence_pack: dict | None = None,
+                      sector: str = "", category: str = "theme",
+                      profile: dict | None = None,
+                      extra_datasets: list | None = None,
+                      extra_meta: dict | None = None) -> "CollectedData":
+    """★ 이미 수집된 조각 → CollectedData 조립 (재수집 없음).
+
+    테마 하네스처럼 자체 수집 흐름(병렬 stocks + research)을 가진 호출자가
+    조각을 넘겨 표준 상자를 만든다. process_draft 마이그레이션 브리지도 이 함수 사용.
+    meta['raw_stocks'] 로 원본 종목 dict 를 side-channel 보존 (프롬프트 빌더용).
+    """
+    from datetime import datetime as _dt
+    from .models import CollectedData
+    from .collect_theme import stocks_to_datasets
+    from .evidence_pack import facts_to_datasets
+    stocks_data = stocks_data or {}
+    pack = evidence_pack or {}
+    entities = _stocks_to_entities(stocks_data)
+    stock_ds = stocks_to_datasets(stocks_data) if stocks_data.get("stocks") else []
+    fact_ds = facts_to_datasets(pack) if pack else []
+    datasets = _dedupe_datasets(list(extra_datasets or []) + list(stock_ds) + list(fact_ds))
+    facts = list(pack.get("facts") or [])
+    meta = {
+        "keyword": keyword, "profile": profile or {}, "sector": sector,
+        "category": category,
+        "as_of": pack.get("created_at") or _dt.now().isoformat(),
+        "summary": (stocks_data or {}).get("summary") or {},
+        "raw_stocks": stocks_data,        # ★ 프롬프트 빌더용 원본 side-channel
+    }
+    if extra_meta:
+        meta.update(extra_meta)
+    return CollectedData(meta=meta, datasets=datasets, docs=list(docs or []),
+                         facts=facts, entities=entities)
+
+
+def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
+                category: str = "theme", angle: str = "") -> "CollectedData":
+    """★ 통합 수집 — J09-측 컴포저 (수집 + compose_collected).
+
+    theme 카테고리는 종목(entities)+research(docs+facts)+datasets 를,
+    그 외 카테고리는 research 만 수집(종목 없으면 entities 빈 리스트).
+    """
+    from .collect_theme import collect_stocks_data
+    stocks_data: dict = {}
+    if (category or "").strip().lower() == "theme":
+        try:
+            stocks_data = collect_stocks_data(keyword) or {}
+        except Exception as e:
+            log.warning(f"[collect_all] 종목 수집 실패: {e}")
+    rs = collect_research(keyword, sector=sector, angle=angle) or {}
+    return compose_collected(
+        keyword, stocks_data=stocks_data, docs=rs.get("docs"),
+        evidence_pack=rs.get("evidence_pack"), sector=sector,
+        category=category, profile=profile,
+        extra_meta={"coverage_ratio": rs.get("coverage_ratio", 0.0),
+                    "insufficient": rs.get("insufficient", False),
+                    "plan_fallback": rs.get("plan_fallback", False),
+                    "evidence_path": rs.get("evidence_path", "")})
+
+
 # ── delta-aware 교류 프로토콜 (★ 사용자 박제 2026-06-07) ────────────────
 # JARVIS06 등 호출자가 이미 가진 doc fingerprint(content_hash)를 제외하고
 # *신규/갱신분만* 수령할 수 있도록 한 진입점. 단일 진입점 원칙은 그대로 —

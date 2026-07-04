@@ -7,8 +7,9 @@
 """
 from __future__ import annotations
 import hashlib
+import math
 import time as _time_mod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
 
@@ -73,3 +74,160 @@ class CollectionResult:
         if not self.content_hash:
             seed = f"{self.url}|{self.title}|{self.cleaned_text}"
             self.content_hash = _hash_text(seed)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ★ 통합 콘텐츠 파이프라인 계약 (사용자 공동설계 2026-07-05 — UNIFIED_PIPELINE_SPEC)
+#   경제·테마·미래 카테고리가 동일 오케스트레이션을 타기 위한 단일 데이터 계약.
+#   이 모듈은 stdlib-only leaf — JARVIS02/06 어디서 import 해도 순환 없음.
+# ══════════════════════════════════════════════════════════════════════════
+
+# ★ 엔티티 attr → 단위 표 (단일 소스). 암묵 단위를 명시화해 all_numbers() 가
+#   단위보유 grounding 에서 엔티티 수치를 누락하지 않도록 함.
+#   ★ 새 재무지표(예: PBR·배당수익률) 를 collect_stocks_data 에 추가하면
+#     반드시 이 표도 동시 갱신 (미갱신 시 그 수치가 단위없이 방출 → 오차단 위험).
+ATTR_UNITS: dict[str, str] = {
+    "price": "원", "current_price": "원", "eps": "원", "bps": "원",
+    "marcap": "조원", "market_cap": "조원", "revenue": "조원",
+    "net_income": "억원", "op_income": "억원", "operating_income": "억원",
+    "per": "배", "pbr": "배", "pcr": "배", "psr": "배",
+    "roe": "%", "roa": "%", "op_margin": "%", "operating_margin": "%",
+    "dividend_yield": "%", "change": "%", "change_pct": "%",
+}
+
+# ★ 카테고리 정책 레지스트리 (단일 소스). process_draft v2 가 collected.meta.category
+#   로 조회. 새 카테고리 = dict 한 줄. min_images 는 BLOG_SUPREME_LAW 제8조(5+α) 준수.
+CATEGORY_POLICY: dict[str, dict] = {
+    "theme":    {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000},
+    "economic": {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000},
+}
+_DEFAULT_POLICY = {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000}
+
+
+def policy_for(category: str) -> dict:
+    """카테고리 정책 조회 (미등록 카테고리는 기본값 — 미래 카테고리 안전 상속)."""
+    return CATEGORY_POLICY.get((category or "").strip().lower(), _DEFAULT_POLICY)
+
+
+def dataset_fingerprint(title: str, unit: str) -> str:
+    """dataset dedupe fingerprint (title|unit sha1[:12]) — 3 생산자(_mk_dataset·
+    stocks_to_datasets·facts_to_datasets) 공통 단일 소스."""
+    seed = f"{(title or '').strip()}|{(unit or '').strip()}"
+    return hashlib.sha1(seed.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+_GROUND_ABS_FLOOR = 1e-9   # g 가 0 근처일 때 절대 바닥 tolerance
+
+
+def _decimals_of(x: float) -> int:
+    """부동소수 표시 소수 자릿수 추정 (display_precision 폴백)."""
+    s = repr(float(x))
+    if "e" in s or "E" in s:
+        return 0
+    if "." in s:
+        return len(s.split(".", 1)[1].rstrip("0"))
+    return 0
+
+
+def grounds(n, g, display_precision: int | None = None) -> bool:
+    """대본 수치 n 이 수집값 g 에 grounding 되는가 (★ 단위 일치는 호출측 게이트).
+
+    통과 조건 (하나라도 참):
+      ① |n − g| ≤ max(5%·|g|, 절대바닥)          — ±5% (사용자 박제 tolerance)
+      ② n 이 g 의 표시자리 올림(ceil) 또는 버림(floor) — 읽기용 반올림 허용
+
+    display_precision: 대본 원토큰의 소수 자릿수. None 이면 n 에서 추정
+                       (★ _canon_num 이 정밀도를 버리므로 호출측이 원토큰 자릿수 전달 권장).
+    """
+    try:
+        n = float(n)
+        g = float(g)
+    except (TypeError, ValueError):
+        return False
+    # ① ±5% (절대 바닥 포함)
+    if abs(n - g) <= max(abs(g) * 0.05, _GROUND_ABS_FLOOR):
+        return True
+    # ② 표시자리 올림/버림 (같은 단위 기준 — 단위 일치는 호출측 책임)
+    dp = display_precision if display_precision is not None else _decimals_of(n)
+    q = 10.0 ** dp
+    floor_v = math.floor(g * q) / q
+    ceil_v = math.ceil(g * q) / q
+    return abs(n - floor_v) <= 1e-9 or abs(n - ceil_v) <= 1e-9
+
+
+@dataclass
+class CollectedData:
+    """★ 통합 수집 계약 (4-part) — 전 카테고리 J09 가 이 구조로 방출.
+
+    대본 작성기·process_draft·prepublish_gate·law_enforcer 검증이 *모두* 이 상자를 소비.
+      meta     : {keyword, profile, sector, category, as_of, + 사이드채널(coverage_ratio…)}
+      datasets : 차트-준비 수치 [{title, viz_hint, unit, data:[{label,value}], source, fingerprint}]
+      docs     : 텍스트 코퍼스 [CollectionResult]  (논문>API>뉴스>기사>웹)
+      facts    : 원자적 검증 수치 [{claim/statement, value, unit, source, as_of}]
+      entities : 다속성 도메인 객체 [{name, type, attrs, source}] (종목·매물·코인…)
+    """
+    meta: dict = field(default_factory=dict)
+    datasets: list = field(default_factory=list)
+    docs: list = field(default_factory=list)
+    facts: list = field(default_factory=list)
+    entities: list = field(default_factory=list)
+
+    def all_numbers(self) -> list[tuple[float, str]]:
+        """검증 정답 풀 — (value, unit) 튜플 리스트.
+
+        datasets(row value + dataset.unit) + facts(value+unit) +
+        entities.attrs(value + ATTR_UNITS 단위) 를 평탄화.
+        ★ fact-유래 dataset 과 원본 fact 가 같은 수를 이중표현하므로 (value,unit) dedupe.
+        """
+        seen: set = set()
+        out: list[tuple[float, str]] = []
+
+        def _add(v, u) -> None:
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                return
+            unit = (u or "").strip()
+            key = (round(fv, 6), unit)
+            if key in seen:
+                return
+            seen.add(key)
+            out.append((fv, unit))
+
+        for ds in self.datasets or []:
+            unit = (ds.get("unit") or "").strip()
+            for row in ds.get("data") or []:
+                _add(row.get("value"), unit)
+        for f in self.facts or []:
+            _add(f.get("value"), f.get("unit"))
+        for e in self.entities or []:
+            for k, av in (e.get("attrs") or {}).items():
+                if isinstance(av, dict):
+                    _add(av.get("value"), av.get("unit") or ATTR_UNITS.get(k, ""))
+                else:
+                    _add(av, ATTR_UNITS.get(k, ""))
+        return out
+
+    def to_dict(self) -> dict:
+        """JSON 직렬화용 (topic_pack round-trip). docs 만 asdict, 나머지 dict 유지."""
+        return {
+            "meta": self.meta,
+            "datasets": self.datasets,
+            "docs": [asdict(x) if isinstance(x, CollectionResult) else x for x in self.docs],
+            "facts": self.facts,
+            "entities": self.entities,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CollectedData":
+        """JSON 역직렬화 — docs 는 CollectionResult 객체로 rehydrate, 나머지 dict 유지."""
+        d = d or {}
+        docs = [x if isinstance(x, CollectionResult) else CollectionResult(**x)
+                for x in (d.get("docs") or [])]
+        return cls(
+            meta=dict(d.get("meta") or {}),
+            datasets=list(d.get("datasets") or []),
+            docs=docs,
+            facts=list(d.get("facts") or []),
+            entities=list(d.get("entities") or []),
+        )
