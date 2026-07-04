@@ -1417,12 +1417,150 @@ def _containing_sentence(text: str, token: str) -> str:
     return text[start:end].strip() or token
 
 
+# ── 결정론 수치 grounding (★ 근본 수정 2026-07-04 — ERRORS [350]) ───────────────
+# 사용자 박제: "수치는 수집된 데이터 그대로 들어가야 한다. 수집을 했으면 출처는 분명하다."
+# LLM 문자열 매칭(_ground_unsupported)은 본문 포맷(단위·콤마·소수)이 코퍼스와 조금만
+# 달라도 진실 수치를 오차단 → [343]~[348] 의 포맷-렌더 whack-a-mole 을 유발했다.
+# 근본 대체: 본문 수치를 수집 구조화 데이터(stocks_data·market_data·datasets)의 실측값과
+# *숫자로* 대조. 단위(조·억·만·%·배)를 canonical 크기로 정규화 후 허용오차 비교 —
+# 데이터에 실재하는 수치면 '진실(데이터에서 옴)' 로 통과, 없으면 임의삽입/변형 의심 →
+# 기존 LLM/웹 경로로 검증(예: ERRORS [345] 처럼 근거 없이 창작된 통계는 여전히 차단).
+_MAG_UNITS = (("조", 1e12), ("억", 1e8), ("만", 1e4), ("천", 1e3))
+
+
+def _canon_num(tok: str):
+    """단위 붙은 수치 토큰 → canonical 크기. '5.9조원'→5.9e12, '13.6%'→13.6,
+    '461,500원'→461500, '8.2배'→8.2, '2,644억원'→2.644e11. 실패 시 None."""
+    m = re.match(r'\s*(-?\d[\d,]*(?:\.\d+)?)\s*(.*)', tok or "")
+    if not m:
+        return None
+    try:
+        val = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    unit = m.group(2) or ""
+    for u, f in _MAG_UNITS:
+        if u in unit:
+            return val * f
+    return val
+
+
+def _collect_gt_floats(*sources) -> list:
+    """구조화 데이터에서 모든 수치를 canonical 크기로 수집 (grounding ground-truth).
+
+    비율(|v|<=1)은 %(×100) 형태도 함께 등록(op_margin 0.136 ↔ 본문 13.6%).
+    문자열 안의 단위수치('5.9조원')도 파싱. dict/list 재귀 순회.
+    """
+    gt: list = []
+
+    def _walk(o):
+        if isinstance(o, bool):
+            return
+        if isinstance(o, (int, float)):
+            f = float(o)
+            gt.append(f)
+            if 0 < abs(f) <= 1:
+                gt.append(f * 100.0)
+            return
+        if isinstance(o, str):
+            for mm in _NUMERIC_UNIT_RE.finditer(o):
+                c = _canon_num(mm.group(0))
+                if c is not None:
+                    gt.append(c)
+            try:
+                gt.append(float(o.replace(",", "")))
+            except ValueError:
+                pass
+            return
+        if isinstance(o, dict):
+            for v in o.values():
+                _walk(v)
+        elif isinstance(o, (list, tuple)):
+            for v in o:
+                _walk(v)
+
+    for s in sources:
+        if s:
+            _walk(s)
+    return gt
+
+
+def _num_parts(tok: str):
+    """토큰 → (표시값, 단위스케일, 소수자릿수). '5.9조원'→(5.9,1e12,1),
+    '13.6%'→(13.6,1,1), '461,500원'→(461500,1,0). 실패 시 None.
+
+    ★ Step 8: _canon_num 은 표시 정밀도를 버려(5.9조원→5.9e12) grounds 의 올림/버림
+      표시-반올림이 불가. 여기서 표시값+스케일+자릿수를 분리해 grounds 가 *표시 스케일*
+      에서 ceil/floor 를 판정하게 한다 (5.87조원 → "5조"(버림)·"6조"(올림) 인정)."""
+    m = re.match(r'\s*(-?\d[\d,]*(?:\.\d+)?)\s*(.*)', tok or "")
+    if not m:
+        return None
+    numstr = m.group(1).replace(",", "")
+    try:
+        disp = float(numstr)
+    except ValueError:
+        return None
+    decimals = len(numstr.split(".")[1]) if "." in numstr else 0
+    unit = m.group(2) or ""
+    scale = 1.0
+    for u, f in _MAG_UNITS:
+        if u in unit:
+            scale = f
+            break
+    return disp, scale, decimals
+
+
+def _claim_all_grounded(text: str, gt: list, rel: float = 0.02, ab: float = 0.5) -> bool:
+    """본문 주장의 *모든* 단위수치가 수집 데이터에 실재하면 True (데이터 grounded).
+
+    한 수치라도 데이터에 없으면 False → LLM/웹 경로가 검증(임의삽입/변형 차단).
+    ★ Step 8 (2026-07-05): 통일 grounds() — *표시 올림/버림 또는 ±5%*. rel/ab 은 무시
+      (하위호환 시그니처 유지). gt(magnitude)를 토큰 표시 단위로 환산 후 표시 스케일 판정.
+    """
+    from JARVIS09_COLLECTOR.models import grounds
+    toks = list(_NUMERIC_UNIT_RE.finditer(text or ""))
+    if not toks or not gt:
+        return False
+    for m in toks:
+        parts = _num_parts(m.group(0))
+        if parts is None:
+            return False
+        disp, scale, decimals = parts
+        if not any(grounds(disp, (g / scale) if scale else g, display_precision=decimals)
+                   for g in gt):
+            return False
+    return True
+
+
+def _collected_gt(collected) -> list:
+    """CollectedData.all_numbers() (표시값,단위) → magnitude gt (grounding ground-truth).
+
+    ★ Step 10 (2026-07-05): 경제·테마 통일 grounding 정답을 collected 단일 소스에서 보강.
+      표시값(5.9조원)을 단위 스케일로 magnitude(5.9e12) 환산해 기존 gt(market/stocks)에 합류.
+    """
+    if collected is None or not hasattr(collected, "all_numbers"):
+        return []
+    out: list = []
+    for v, u in collected.all_numbers():
+        scale = 1.0
+        for key, f in _MAG_UNITS:
+            if key in (u or ""):
+                scale = f
+                break
+        out.append(v * scale)
+        if 0 < abs(v) <= 1:          # 비율 → %(×100) 변형 (0.136 ↔ 13.6)
+            out.append(v * 100.0)
+    return out
+
+
 def factuality_issues(
     html: str,
     source_docs=None,
     post_type: str = "",
     web_verify_fn=None,
     market_data=None,
+    stocks_data=None,
+    collected=None,
 ) -> dict:
     """발행 전 사실성 차단 게이트 — 출처 대조 + 웹 재검증.
 
@@ -1495,11 +1633,27 @@ def factuality_issues(
         # 출처 코퍼스 없음(테마글 등) → 전 주장이 출처 미확인 → 웹으로 위임
         unsupported = {c["text"] for c in claims}
 
-    pending = [c for c in claims if c["text"] in unsupported]
+    # ── 2.5 결정론 수치 grounding (★ 근본 수정 — ERRORS [350]) ──────────────
+    #   LLM(_ground_unsupported)이 unsupported 로 오판한 주장이라도, 그 안의 *모든*
+    #   수치가 수집 구조화 데이터(stocks_data·market_data)에 실재하면 '진실(데이터에서
+    #   옴)' 으로 보고 rescue → 취약한 웹-차단 경로를 우회. [343]~[348] 코퍼스 포맷-렌더
+    #   whack-a-mole 을 대체. 수치가 데이터에 *없는* 주장만 웹 검증으로 넘어간다.
+    gt_floats = _collect_gt_floats(market_data, stocks_data) + _collected_gt(collected)
+    pending, _rescued = [], 0
+    for c in claims:
+        if c["text"] not in unsupported:
+            continue
+        if _claim_all_grounded(c["text"], gt_floats):
+            _rescued += 1
+            continue
+        pending.append(c)
 
     # ── 3. 웹 재검증 + 정책 분기 ────────────────────────────────
     blocked: list[dict] = []
-    policy_notes: list[str] = []
+    policy_notes: list[str] = (
+        [f"결정론 수치 grounding — 수집 데이터 실측 일치 {_rescued}건 통과(웹검증 생략)"]
+        if _rescued else []
+    )
     web_checks = 0
 
     for c in pending:

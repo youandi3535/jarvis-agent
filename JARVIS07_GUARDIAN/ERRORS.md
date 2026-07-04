@@ -1,5 +1,102 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+### [352] 공식 테마인데 종목 0개 — 네이버 테마 상세페이지 fetch 무재시도 + 이름 fuzzy 매칭 취약 (★ 사용자 지적 2026-07-04)
+
+- **증상**: 테마 발행('백신/진단시약/방역(신종플루, AI 등)')이 `종목 데이터 없음`으로 폐기·테마 교체. 사용자 지적: "네이버/KRX 테마주명이 만들어져 있으면 그 안에 종목도 있는데 0개가 말이 되냐."
+- **원인**: 확인 결과 그 테마는 네이버 공식 테마(no=108)에 실재하고 **종목 43개(한미약품 등) 보유**. 0개의 실제 원인은 `collect_theme._naver_fin_theme_search` 의 상세페이지 fetch(`sise_group_detail.naver?no=`)가 **단 1회·무재시도** — 그 순간 네트워크 일시 실패/빈응답이면 종목 0개로 반환 → 공식 테마 게이트가 테마 통째 폐기. 부차: 테마명↔카탈로그 매칭이 한글 부분문자열(≥3자)뿐이라 표기가 조금만 달라도 미매칭.
+- **헛다리**: [343]~[350] 처럼 게이트/수치 문제로 오인할 뻔했으나 — 여기선 *종목 수집 자체가 일시 네트워크 실패로 비어 반환*된 것. 게이트는 정상.
+- **해결**: (1) 상세페이지 fetch **3회 백오프 재시도**(빈응답 포함) — 일시 장애로 공식 테마 종목을 못 가져오는 사고 차단. (2) 부분문자열 매칭 실패 시 **LLM 의미 매칭 폴백** — 네이버 공식 테마 목록에서 키워드에 가장 부합하는 테마를 골라 그 *실제 구성종목* 확보(종목 작문 아님). 검증: 실제 테마 → 43개 확보 성공.
+- **파일**: `JARVIS09_COLLECTOR/collect_theme.py`(`_naver_fin_theme_search`).
+- **교훈**: 외부 API/스크래핑으로 얻는 *필수 데이터* 는 반드시 재시도를 둔다 — 무재시도 1회 fetch 실패가 "데이터 없음"으로 오인돼 상위(테마 폐기)까지 파급된다. 정본 카탈로그(네이버 공식 테마)가 있으면 이름 fuzzy 대신 그 정본에서 직접 구성종목을 가져오는 것이 근본.
+
+### [351] 테마 파이프라인이 종목 결손을 전체 폐기로 결합 — 경제와 달리 다소스 리서치까지 취소 (★ 사용자 박제 2026-07-04)
+
+- **증상**: KRX 종목이 안 잡히면 논문·뉴스·DART·ECOS·웹 등 JARVIS09 다소스 리서치가 충분해도 글 자체가 폐기·테마 교체. 사용자 요구: "테마주도 경제 브리핑처럼 모든 소스 수집→모든 자료로 작성·이미지·검증."
+- **원인**: `trend_theme_writer._step_collect` 가 stocks 0개면 `_col_fut.cancel()`+shutdown 으로 진행 중인 collect_research 를 통째 취소하고 collection_docs=[]·evidence_pack=None 반환. `_step_nv/ts_draft` 도 stocks 0개면 즉시 success=False. 즉 KRX 종목을 전체 파이프라인의 하드 게이트로 결합 — 경제글이 구조데이터 0개여도 collection_docs·evidence_pack 보존하고 계속 쓰는 것과 대조(6단계 파이프라인 대칭성 감사로 확정).
+- **해결**: 종목 0개여도 다소스 리서치를 *취소하지 않고 항상 수령·보존*. `_collect_data_empty`(테마 교체 트리거)는 *종목·리서치·근거가 전부* 비었을 때만. 대본 생성도 stocks 없어도 collection_docs/evidence_pack 있으면 진행(차트는 실데이터/AI사진 폴백 — 빈 stocks 크래시 없음 검증). [352]로 종목 0개 자체가 희귀해지고, 이건 그 최종 안전망.
+- **파일**: `JARVIS02_WRITER/trend_theme_writer.py`(`_step_collect`·`_step_nv_draft`·`_step_ts_draft`).
+- **교훈**: 다소스 수집의 강건함은 "한 소스 결손 ≠ 전체 폐기". 소스 간 결합(coupling)을 끊고 각 소스가 독립적으로 degrade 하게 — 경제 파이프라인의 graceful degradation 을 정본으로 삼는다.
+
+### [350] 테마 사실성 게이트 수치 오차단 근본 수정 — LLM 문자열 grounding 폐기, 결정론 수치 대조 도입 ([343]~[348] whack-a-mole 종식, ★ 사용자 박제 2026-07-04)
+
+- **증상**: 테마 발행(백신/진단시약/방역) 네이버/티스토리 대본이 `[사실성] 출처·웹 모두 확인 불가: 한미약품 시가총액 5.9조원` / `영업이익률 13.6%` 로 attempt=2 차단 → max_attempts 소진 → 발행 실패. [343]~[348] 6번을 고쳤는데도 재발.
+- **원인 (근본)**: `factuality_issues` 가 본문 수치를 `_ground_unsupported`(**LLM 문자열 매칭**)로 코퍼스와 대조. 수집된 `stocks_data`(marcap·op_margin·price·per 실측)를 *텍스트로 렌더*해 코퍼스에 넣고 LLM이 본문 숫자를 문자열로 찾게 하는 구조 → 본문 포맷(단위 조↔억, 콤마 461500↔461,500, 소수 nd, %↔비율)이 코퍼스와 조금만 달라도 진실 수치를 unsupported 판정 → 웹검증 실패 → 오차단. [343]시총·[344]영익률·[346]현재가·[347]소수·[348]단위는 *모두* "코퍼스를 본문 포맷에 맞춰 렌더"하는 땜질 — 포맷 조합이 무한이라 이길 수 없는 whack-a-mole.
+- **헛다리**: [343]~[348] 처럼 코퍼스 렌더 포맷을 지표별로 맞추는 접근 — 근본이 "LLM 문자열 매칭에 수치 검증을 의존" 하는 것이라 지표를 아무리 추가해도 새 포맷에서 재발.
+- **해결 (사용자 원칙: "수치는 수집 데이터 그대로. 수집했으면 출처는 분명하다")**: 결정론 수치 grounding 신설(`law_enforcer._canon_num`·`_collect_gt_floats`·`_claim_all_grounded`). 본문 수치를 수집 구조화 데이터(stocks_data·market_data)의 실측값과 *숫자로* 대조 — 단위(조·억·만·%·배)를 canonical 크기로 정규화 후 허용오차(상대 2%) 비교. 데이터에 실재하는 수치면 진실(데이터에서 옴)로 **rescue**(웹-차단 우회), 없으면 임의삽입/변형 의심 → 기존 LLM/웹 경로로 검증(ERRORS [345] 처럼 창작 통계는 여전히 차단). `stocks_data` 를 `prepublish_quality_issues`→`_factuality_leg`→`factuality_issues` 까지 전달.
+- **파일**: `JARVIS02_WRITER/law_enforcer.py`(결정론 grounding + factuality_issues rescue), `JARVIS02_WRITER/prepublish_gate.py`(stocks_data 전달).
+- **검증**: 9/9 — 시총 5.9조원·영익률 13.6%·2,644억원·ROE 15%·현재가 461,500원·PER 8.2배 통과, 조작(가계연료비 16만원·영익률 99.9%) 차단. 데몬 재시작(21266)으로 발효.
+- **교훈**: 수치의 사실성은 *LLM 문자열 매칭이 아니라 구조화 데이터와의 결정론적 숫자 비교*로 판정해야 한다. 텍스트 코퍼스에 수치를 렌더해 매칭시키는 방식은 표기 포맷 조합이 무한이라 반드시 whack-a-mole 이 된다. 같은 클래스 오류를 3회 이상 지표별로 땜질하고 있으면 그 자체가 "근본 로직이 틀렸다"는 신호(★ [343]~[348] 6회 = 강한 신호).
+
+### [349] GUARDIAN Tier 2(Opus 4.8) 자동수정이 실제로 성공해도 "Tier 1·2 모두 실패" 오보고 — targeted 프롬프트·파서 포맷 불일치 (★ 사용자 지적 2026-07-04)
+
+- **증상**: `[GUARDIAN] 자동수정 실패 — 수동 검토 / Tier 1·2 모두 실패` 텔레그램 알림 수신. 사용자가 "Tier 2는 Opus 4.8인데 수정실패가 말이 되냐, 로직이 잘못되지 않고서야 실패할 수 없다"고 지적 — 실제로 [343]~[348] 근본 수정(grounding 코퍼스 unit/format 정합)이 이미 작업 트리에 반영돼 있었는데도 GUARDIAN 은 "실패"로 기록.
+- **환경**: `guardian_agent._orchestrate` → Tier 1 실패 시 `_try_sdk_targeted_fix` → `auto_repair.run_auto_repair_targeted()`(Tier 2, `claude-opus-4-8`, `permission_mode=bypassPermissions`). 성공 판정은 오직 `files_fixed = _parse_layer_counts(_parse_summary(sdk_stdout))["files_fixed"]; return files_fixed > 0` 한 줄.
+- **원인**: `run_auto_repair_targeted` 가 사용하는 `_TARGETED_PROMPT_TMPL` 의 완료 보고 포맷은 `files_fixed: <N>`(영문 필드명) 인데, 공용 파서 `_parse_layer_counts` 의 정규식은 `수정 파일[:\s]*(\d+)`(한글 문구) **만** 인식했다. 이 한글 포맷은 *다른* 프롬프트인 `_BASE_PROMPT`(전체 감사, 04:30 `job_deep_audit`)전용 — 두 프롬프트가 같은 파서 함수를 공유하면서 포맷이 갈라진 것. 결과: Opus 4.8 이 몇 개를 고치든 `files_fixed` 는 항상 0으로 파싱 → `run_auto_repair_targeted` 는 **항상** `False` 반환 → 실시간 포스팅 실패 대응 경로(Tier 2)는 구조적으로 절대 "성공"을 보고할 수 없었다.
+- **헛다리**: 없음 — 사용자가 "모델이 실패할 리 없다"고 정확히 짚었고, 조사 결과 모델이 아니라 *성공 신호를 버리는 파서* 가 원인이었음을 확인.
+- **해결**: `_parse_layer_counts` 정규식을 `수정\s*파일[:\s]*(\d+)|files_fixed[:\s]*(\d+)` 로 확장 — 두 프롬프트 포맷 모두 인식. 다른 호출부(`_BASE_PROMPT` 경로)는 기존 그대로 정상 동작.
+- **파일**: `JARVIS07_GUARDIAN/auto_repair.py`(`_parse_layer_counts`).
+- **교훈**: 완료 보고 포맷을 프롬프트마다 새로 만들 때는 그 출력을 소비하는 파서가 *모든* 포맷 변형을 인식하는지 반드시 대조할 것. 한쪽 프롬프트만 보고 파서를 검증하면, 다른 프롬프트 경로는 실제 성공 여부와 무관하게 항상 동일한 (잘못된) 결과를 반환하는 조용한 회귀가 생긴다 — 특히 이런 버그는 "모델이 무능해서 실패한다"는 그럴듯한 오해를 유발해 근본 원인 추적을 지연시킨다.
+
+### [348] 테마 사실성 게이트 false-positive #5 — grounding 코퍼스 marcap 단위 고정(조원)이 본문 소형주 억원 표기와 불일치 + PER 아웃라이어 캡 SSOT 경로 미적용 (2026-07-04)
+
+- **증상**: 테마 발행(백신/진단시약/방역) 네이버·티스토리 **양쪽** max_attempts(2) 소진. 차단 수치(daemon_stdout 실측): `시가총액 5.9조원(한미약품)`·`시가총액 2,644억원(일성아이에스)`·`ROE 14.3%`·`PER 218.5배(일성아이에스)`·`영업이익률 13.6%/-3.0%`·`현재가 461,500/19,880원`. [343][344][346][347] 로 marcap·op_margin·price·nd 를 하나씩 승격/정합했는데도 *매 attempt 다른 지표* 가 계속 오차단되는 whack-a-mole.
+- **환경**: `harness.theme-publish-*-{naver,tistory}`, step ③/⑤ 대본 생성. `prepublish_gate` → `_factuality_leg`(grounding). ★ **1차 근인은 데몬 import 캐시**: 데몬 12:20 기동(구 코드) → 16:01 테마 실행 중 이전 repair 패스들이 [343~347] 픽스를 17:11~17:40 디스크에 썼지만 **재시작 없이는 발효 안 됨** → 실행은 계속 구 코드로 차단.
+- **원인 (재시작해도 재발할 2 잔존 갭)**: ① **money 단위 고정**. `stocks_to_datasets` 는 marcap·revenue 를 *항상 조원 단일 단위*(`scale=1e-12`)로 렌더 → 소형주(일성아이에스 2.644e11 → "0.26조원")가, 본문 `draft_writer._fmt_marcap`(v<1e12 → **억원**, "2,644억원")과 표기 불일치 → grounding LLM 이 진실 시총 매칭 실패. [346](float↔콤마)·[347](nd 자리)와 동일 계열의 *단위* 변종. ② **PER 아웃라이어 캡 우회**. `_PER_OUTLIER_MAX=200` 을 `calc_fin` 은 적용하나 SSOT 경로(`collect_stocks_data._enrich→_naver_fin`)·`ThemeFinanceTool._run` 은 미적용 → 신뢰 불가 PER 218.5배가 본문·코퍼스·차트에 유입(문서화된 "차트·표 오도 방지" 정책 우회).
+- **헛다리**: [343~347] 로 "이제 다 통과할 것"이라 오인 — 지표를 하나씩 땜질했을 뿐 *본문이 규모별로 단위를 바꾼다*(조원↔억원)는 표기 클래스를 못 봤다. nd 자리 정합([347])만으론 소형주 억원 표기를 못 살림. 또 grounding 은 종목 재무를 `_stock_facts_leg`(결정론)가 대조하니 충분하다는 착각 — 그 leg 는 marcap 을 패턴에 두지 않아 fail-open, 차단은 순수 grounding 표기 매칭 실패.
+- **해결 (whack-a-mole 종결)**: ① `_verify_theme_platform` grounding 코퍼스 빌더가 raw `stocks_data` 에서 marcap·revenue 를 **본문 정본 포맷터 `_fmt_marcap` + 억원 대체표기 두 단위**(예 "시가총액 5.9조원(59,000억원)", "시가총액 2644억원(2,644억원)")로 합류 → 종목 규모 무관 표기 정합. ② `collect_theme._cap_per()` 헬퍼 신설, SSOT `_enrich`·`_run` 두 경로의 per 를 `_cap_per` 경유 → >200·<=0 은 None(N/A). ③ **데몬 재시작** — import 캐시로 [343~348] 전체 발효. 단위검증: 대형주 5.9조원 + 소형주 2,644억원 코퍼스 동시 정합, `_cap_per(218.5)=None`·`_cap_per(20.3)=20.3`·경계 200 정확.
+- **파일**: `JARVIS02_WRITER/trend_theme_writer.py`(`_verify_theme_platform`), `JARVIS09_COLLECTOR/collect_theme.py`(`_cap_per`·`_enrich`·`_run`).
+- **교훈**: (1) 표기정합 원칙([346] 콤마·[347] 소수자리)의 최종 형태는 *단위 선택까지 포함* — 본문이 값의 크기에 따라 단위를 바꾸면(조원↔억원) 코퍼스는 **본문과 동일한 포맷터로, 가능한 모든 단위를** 렌더해야 한다. 지표별 땜질 대신 *본문 정본 포맷터 재사용*이 근본해다. (2) 이상치 캡 같은 정규화 정책은 *모든* 생산 경로(SSOT 포함)에 균일 적용해야 한다 — 한 경로만 캡하면 다른 경로가 오염값을 흘려 하류(사실성 게이트)를 교란한다. (3) ★ **코드 수정 후 데몬 재시작이 없으면 어떤 픽스도 발효되지 않는다** — import 캐시 때문에 실행 중 디스크 수정은 무효. 반복 실패 진단 시 *데몬 기동 시각 vs 파일 mtime* 부터 대조할 것.
+
+### [347] 테마 사실성 게이트 false-positive #4 — 조원 필드(marcap·revenue) 승격값 소수 자리(nd=2)가 본문 `_fmt_marcap`(.1f)과 불일치 → 진실 시가총액 오차단 (2026-07-04)
+
+- **증상**: 테마 발행(백신/진단시약/방역) *티스토리* 대본 attempt=2 검증에서 `[사실성] 출처·웹 모두 확인 불가: 한미약품 시가총액 5.9조원` 로 차단 → 재작성 순환 → max_attempts 소진. [343](시가총액 grounding 승격)·[346](price 표기정합)을 다 넣었는데 *시가총액만* 여전히 오차단.
+- **환경**: `harness.theme-publish-*-tistory`, step "⑤ 티스토리 대본 생성". `prepublish_gate.prepublish_quality_issues` → `_factuality_leg` → `law_enforcer.factuality_issues`(출처 grounding + 웹 재검증). reason "출처·웹 모두 확인 불가" = grounding unsupported + web unconfirmed.
+- **원인 (소수 자리 표기 불일치)**: 본문 작성기 `draft_writer._fmt_marcap` 은 시가총액을 `f"{v/1e12:.1f}조원"` = **1 자리**("5.9조원")로 LLM 에 제공/렌더하는데, grounding 코퍼스를 만드는 `stocks_to_datasets` 의 marcap spec 은 **`nd=2`**(`round(v*1e-12, 2)`) → 승격값 "5.88조원"(2 자리). 한미약품 실측 시총의 2번째 소수가 0이 아니면(예 5.87조) 코퍼스는 "5.87조원", 본문은 "5.9조원" → grounding LLM 이 *진실한* 수치를 매칭 실패해 unsupported 판정. [346] 이 price 를 표기정합(콤마정수)했지만 *조원 필드(marcap·revenue)의 소수 자리 정합* 은 빠뜨림. roe·op_margin·per(본문 `.1f`, spec nd=1)와 price(콤마정수)는 이미 정합 — 조원 두 필드만 nd=2 잔존.
+- **헛다리**: ① [343] grounding 승격이 이미 있으니 tistory 도 통과할 것이라 오인 — 승격은 됐으나 승격값의 *소수 자리*가 본문과 어긋난 게 진짜 갭. ② `_stock_facts_leg`(결정론 ±5% 대조)는 marcap 을 패턴에 두지 않고([343] 헛다리) fail-open 이라 차단원 아님 — 차단은 순수 grounding LLM 표기 매칭 실패.
+- **해결**: `stocks_to_datasets` specs 에서 조원 필드 **marcap·revenue 의 nd 2 → 1** 로 낮춰 본문 `_fmt_marcap`(.1f)과 정합. 승격값 = "5.9조원" = 본문 표기 동일 → grounding supported. 차트 값도 조원 스케일에서 1 자리는 표준(정밀도 손실 무의미). 함수 시그니처·다른 필드 spec·`_verify_theme_platform` 렌더(`_fmt_val`)는 불변. 단위검증: marcap 5.87조/5.94조/12.38조 모두 body(.1f) == corpus(nd=1) True, nd=2 는 5.87 vs 5.9 mismatch 재현.
+- **파일**: `JARVIS09_COLLECTOR/collect_theme.py`(`stocks_to_datasets` specs).
+- **교훈**: [346] 표기정합 원칙(코퍼스 수치 = 본문 표기 그대로)은 *정수 콤마* 뿐 아니라 *소수 자리 수*까지 포함한다. 승격 엔진의 `nd`(반올림 자리)는 반드시 소비 지점(본문 포맷터)의 `.Nf` 와 일치시켜야 grounding LLM 매칭이 결정론적이다 — 같은 값 5.9조라도 "5.88" vs "5.9" 처럼 자리수가 어긋나면 진실 수치가 오차단된다. 새 재무 지표 승격 시 body 포맷터의 자리수를 spec nd 체크리스트로.
+
+### [346] 테마 사실성 게이트 false-positive #3 — grounding 코퍼스의 현재가 표기가 본문과 불일치(461500.0 vs 461,500) + 실측 docs 코퍼스 후미 배치로 truncation 위험 (2026-07-04)
+
+- **증상**: 테마 발행(백신/진단시약/방역) *티스토리* 대본 attempt=1 검증에서 `[사실성] 출처·웹 모두 확인 불가: 현재가 461,500원` 로 차단 → 재작성 순환 → max_attempts 소진. [343](시가총액)·[344](영업이익률) grounding 승격을 다 넣었는데 *현재가(price)만* 여전히 오차단. 네이버 경로의 marcap("5.9조원")·op_margin("13.6%")은 통과했으나 티스토리의 price 만 실패.
+- **환경**: `harness.theme-publish-*-tistory`, step "⑤ 티스토리 대본 생성". `prepublish_gate.prepublish_quality_issues` → `_factuality_leg` → `law_enforcer.factuality_issues`(출처 grounding + 웹 재검증). reason "출처·웹 모두 확인 불가" = grounding unsupported + web unconfirmed.
+- **원인 (2중 갭)**: ① **표기 불일치**. `stocks_to_datasets` 의 price spec 은 `round(v, 0)` 로 **float `461500.0`** 를 만들고, `_verify_theme_platform` 이 이를 `f"{value}{unit}"` = "461500.0원" 으로 코퍼스에 넣는데, *본문은* `collect_theme.py:976` `f'{price:,}원'` = **"461,500원"**(천단위 콤마). marcap/op_margin 은 "5.9"·"13.6" 처럼 소수 포맷이 자연스러워 grounding LLM 이 매칭했지만, 큰 정수의 `.0` + 콤마 부재("461500.0" vs "461,500")는 grounding LLM 이 진실한 실측 현재가를 매칭 실패해 unsupported 판정. ② **truncation 위험**. 실측 종목 docs 를 `_src_docs` *후미* append 하는데 `_build_source_corpus` 가 `_FACT_SOURCE_CORPUS_CAP=12000자` 로 절단 — collection_docs(주제당 ~5만 자, [251])가 앞을 다 채우면 최고 신뢰 ground truth(실측 수치)가 코퍼스에서 탈락.
+- **헛다리**: [343]/[344] 처럼 *새 지표 승격 누락* 으로 오인할 뻔했으나 — price 는 이미 spec 1번으로 승격 중. 문제는 승격 *여부* 가 아니라 승격값의 *표기 정합*(소수/콤마)이었음. `_stock_facts_leg`(결정론 ±5% 대조)는 진실 price 를 통과시키므로(불일치 아님) 차단원이 아님 — 차단은 순수 grounding LLM 매칭 실패.
+- **해결**: `trend_theme_writer._verify_theme_platform` 의 실측 docs 렌더에 ① `_fmt_val()` 추가 — 정수 실수(461500.0)는 `f"{int(v):,}"` = "461,500"(본문 표기와 정합), 소수(5.9·13.6)는 그대로. ② 실측 docs 를 `_src_docs` *앞* 에 prepend(`_stock_docs + _src_docs`) — collection_docs 절단 시에도 ground truth 보존. 함수 시그니처·stocks_to_datasets·chart 값(numeric 유지)은 불변 — 렌더 문자열만 정합.
+- **파일**: `JARVIS02_WRITER/trend_theme_writer.py`(`_verify_theme_platform`).
+- **교훈**: grounding 코퍼스의 수치는 *본문이 실제로 쓰는 표기 그대로*(천단위 콤마·소수 자리) 넣어야 LLM 매칭이 결정론적이다 — 같은 값이라도 "461500.0" vs "461,500" 처럼 포맷이 어긋나면 진실 수치가 오차단된다. 또한 최고 신뢰 ground truth(실측 수치)는 코퍼스 *앞* 에 두어 길이 상한 truncation 으로부터 보호할 것. [343]"모든 신뢰 데이터를 코퍼스에 포함"의 완결 조건 = *포함 + 표기정합 + 미절단*.
+
+### [345] 테마 발행 LNG 하네스 실패 — 감성 도입부(hook) LLM이 근거 없는 가계 연료비 통계 창작 → 사실성 게이트 차단 (2026-07-04)
+
+- **증상**: 테마 발행('LNG(액화천연가스)') 네이버/티스토리 대본이 max_attempts=2 로 소진되며 발행 실패. 사실성 게이트가 `2023년 1분기 평균 가계 연료비가 16만 원을 넘어서며 전 분기 대비 두 배 가까이 폭등했을 때` 문장을 차단 — 수집 리서치에 출처가 전혀 없는 조작된 가계 연료비 통계.
+- **환경**: `harness.theme-publish-*`(네이버·티스토리 양쪽). `prepublish_gate.prepublish_quality_issues` → `_factuality_leg` → `law_enforcer.factuality_issues`. 조작 문장은 본문 최상단 감성 도입부(hook)에서 발생.
+- **원인**: 감성 도입부 생성기 `_gen_hook`(경제)·`_gen_hook_theme`(테마) 두 함수가 *격리된* `invoke_text("writer", ...)` 로 "일상 관찰·질문·감성 표현" 첫 문장을 요청하는데, ① *어떤 근거 데이터도 주입받지 않고*(source_docs·evidence_pack·수집 통계 0) ② *특정 수치·통계 창작을 막는 제약이 프롬프트에 전혀 없었음*. 본문 생성 프롬프트(884~888행)에는 "출처 없는 역사적 수치 창작 절대 금지" 실데이터 화이트리스트가 있지만, 이 두 hook 프롬프트에는 그 방어가 누락 — LLM이 "관찰" 프레임 아래 설득력을 위해 "~했을 때" 절 형태의 가짜 분기·금액·배수를 끼워 넣어 게이트를 유발.
+- **헛다리**: [343]/[344] 처럼 grounding 코퍼스 승격(진실 수치가 코퍼스에 없어 오차단)으로 오인할 뻔했으나 — 여기선 검증 파이프라인 버그가 아니라 *애초에 근거 없이 창작된 거짓 수치*로 게이트가 **정상 작동**한 것. 승격으로는 해결 불가(참조할 실데이터 자체가 없는 단문 hook 생성기).
+- **해결**: `_gen_hook`·`_gen_hook_theme` 두 프롬프트에 반-조작 제약 명시 추가 — "이 문장은 근거 데이터 없이 생성되므로 특정 수치·통계 창작 절대 금지(연도·분기+금액·비율%·'~배 증가/폭등' 비교·명명된 통계), 정성적 관찰·질문·감성 서술만". 함수 시그니처·폴백 문자열(이미 정성적·안전)·source_docs 배선은 불변(헌법 제1-B조 동적 생성 단문 hook 설계 유지). 프롬프트 문자열만 수정.
+- **파일**: `JARVIS02_WRITER/draft_writer.py`(`_gen_hook`·`_gen_hook_theme`).
+- **교훈**: 근거 데이터를 주입받지 못하는 격리 LLM 호출(단문 hook·CTA 등)은 *반드시* 반-조작(수치·통계 창작 금지) 제약을 프롬프트에 박아야 한다. "일상 관찰·감성 표현" 프레임은 LLM에게 설득력용 가짜 통계를 삽입할 여지를 남긴다 — 본문 생성기의 실데이터 화이트리스트 방어를 *모든* 텍스트 생성 진입점에 대칭 적용할 것.
+
+### [344] 테마 사실성 게이트 false-positive #2 — 영업이익률(op_margin)이 [343] grounding 승격에서 누락 + _stock_facts_leg 단위 불일치 (2026-07-04)
+
+- **증상**: 테마 발행(백신/진단시약/방역) 네이버 대본 attempt=2 검증에서 `[사실성] 출처·웹 모두 확인 불가: 영업이익률 13.6%를 꾸준히 유지하고 있다` 로 차단 → 재작성 순환 → max_attempts 소진. [343]([종목 실측] 시가총액 등 승격)을 고쳤는데 *영업이익률만* 여전히 오차단.
+- **환경**: `harness.theme-publish-*-naver`, step "③ 네이버 대본 생성". `prepublish_gate.prepublish_quality_issues` → `_factuality_leg` → `law_enforcer.factuality_issues`.
+- **원인 (2중 갭)**: ① `stocks_to_datasets`(collect_theme) 가 price·marcap·roe·per·revenue 5종만 grounding 데이터셋으로 승격하고 **op_margin 을 누락** — [343] 이 승격을 도입할 때 영업이익률만 빠뜨림. 그래서 진실한 실측 영업이익률이 grounding 코퍼스(`_src_docs`)에 합류하지 못해 "출처·웹 확인 불가" 로 차단. ② `_stock_facts_leg`(결정론 대조)는 op_margin/roe 를 `stocks_data` 에서 **소수(0.136·0.15)** 로 읽는데 본문·패턴은 **%(13.6·15)** 단위 → 승격으로 grounding 을 통과시켜도 이 leg 가 `13.6 vs 0.136` 비교로 진실 수치를 재차단할 잠재 버그(대개 Naver 본문에 해당 행이 없어 real-list 공백→fail-open 이라 은닉).
+- **헛다리**: [343] 으로 다 고쳤다고 오인 — marcap 만 예시로 박제하고 *모든 재무 지표 대칭 승격* 을 체크리스트화 안 함. `_naver_fin`(SSOT 경로 `collect_stocks_data`)은 roe=`v/100`·op_margin=`op_income/revenue` 로 **소수** 저장 → stocks_to_datasets 가 roe 처럼 scale=100.0 필요.
+- **해결**: ① `stocks_to_datasets` specs 에 `("op_margin", 100.0, 1, True, "…영업이익률", "%")` 추가 — roe 와 동형(소수→% ×100). 이제 대본의 실측 영업이익률이 `[종목 실측] …영업이익률: 한미약품 13.6%, …` 로 코퍼스 합류 → grounding supported. ② `_stock_facts_leg` real 빌드에서 roe·op_margin 은 `abs(v)<=1 이면 ×100` 단위 정합 — 진실 13.6% 통과, 거짓 90.0% 는 여전히 "실측 불일치" 차단(false-negative 0). 단위검증: 승격 op_margin dataset [13.6·24.0]% 생성 + truthful 13.6%/15% 이슈 0 + false 90% 차단 확인.
+- **파일**: `JARVIS09_COLLECTOR/collect_theme.py`(stocks_to_datasets), `JARVIS02_WRITER/prepublish_gate.py`(_stock_facts_leg).
+- **교훈**: [343] 의 "grounding 코퍼스는 글이 참조한 모든 신뢰 데이터를 포함" 은 *한 지표 예시* 가 아니라 *전 재무 지표 대칭 승격* 으로 이행해야 한다. 새 승격/변환 엔진은 지표 목록을 체크리스트로 (price·marcap·roe·op_margin·per·revenue). 또한 grounding 통과와 결정론 대조 leg 의 *단위* 가 어긋나면 한쪽을 고쳐도 다른 쪽이 진실 수치를 재차단한다 — 소수/% 저장 단위를 소비 지점마다 정합시킬 것.
+
+### [343] 테마 사실성 게이트 false-positive — 수집한 실측 종목 재무가 grounding 코퍼스에 없어 진실 수치 차단 (2026-07-04)
+
+- **증상**: 테마 발행(백신/진단시약/방역) 네이버 대본 검증에서 `[사실성] 출처·웹 모두 확인 불가: 시가총액 5.9조원 (한미약품)` 로 차단 → 재작성 순환. 실제로는 JARVIS09 가 수집한 한미약품 시가총액(네이버 금융/KRX 실측)으로, *진실한 수치인데도* 차단.
+- **환경**: `harness.theme-publish-*-naver` attempt=1, step "③ 네이버 대본 생성". `prepublish_gate.prepublish_quality_issues` → `law_enforcer.factuality_issues`.
+- **원인**: `factuality_issues` 의 grounding 코퍼스는 `source_docs`(collection_docs + evidence_pack = **뉴스·논문 텍스트**) + `market_data` 로만 구성. 테마 경로는 `market_data=None` 을 넘겨, 가장 확실한 ground truth 인 수집 `stocks_data`(현재가·시가총액·PER·ROE·매출)가 코퍼스에 *합류하지 않음*. 그래서 대본이 쓴 실측 시가총액이 출처 미확인 → 웹 재검증에서 뉴스 스니펫이 정확한 수치를 확인 못하면 차단. 경제글은 `market_data`(구조화 신뢰수치)를 ground truth 로 넘기는데, 테마글은 그 대응물(stocks_data)을 안 넘긴 비대칭이 근본 원인.
+- **헛다리**: `_stock_facts_leg`(prepublish_gate)가 종목 재무를 대조하니 충분하다는 착각 — 그 leg 는 per/roe/op_margin/price *모순 검출* 만 하고 **시가총액은 패턴에 없으며**, 매칭 실패 시 fail-open(판정 보류)일 뿐 grounding 근거를 제공하지 않음.
+- **해결**: `trend_theme_writer._verify_theme_platform` 에서 게이트 호출 직전, `state["stocks_data"]` 를 `stocks_to_datasets()`(라벨+단위+출처 provenance 보유)로 변환해 `[종목 실측] 시가총액: 한미약품 5.9조원, …` 형태의 groundable 텍스트 doc 으로 `_src_docs` 에 합류. 이제 대본의 실측 시가총액이 출처 대조에서 supported → 웹 재검증 도달 전 통과. 값이 실측과 다르면(전사 오류) 여전히 차단 → false-negative 없음. 경제글의 market_data ground truth 패턴과 동형화.
+- **파일**: `JARVIS02_WRITER/trend_theme_writer.py`
+- **교훈**: 사실성 게이트의 grounding 코퍼스는 *글이 실제로 참조한 모든 신뢰 데이터*를 포함해야 한다. 수집한 구조화 수치(stocks_data)를 텍스트 출처에서 빠뜨리면, 진실한 수치가 "출처·웹 확인 불가"로 오차단되어 재작성 사이클을 낭비한다. 경제=market_data / 테마=stocks_data 를 대칭으로 ground truth 합류.
+
 ### [321] 데몬 이중 기동 레이스 — 느린 종료 중 keeper 재기동 + 구 데몬이 새 데몬 pid 파일 삭제 (★ 사용자 지적 2026-07-04)
 
 - **증상**: 데몬 재시작 시 프로세스가 2개(구 잔존 + 신규) 공존. pid 파일이 사라져 keeper 가 반복 중복 기동.

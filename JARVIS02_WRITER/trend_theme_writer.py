@@ -100,21 +100,19 @@ def _collect(theme: str) -> dict:
 #  공통 파이프라인 — ②~⑦ (플랫폼 무관)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _build_blocks(theme: str, sector: str, stocks_data: dict, platform: str, img_dir: Path,
+def _build_blocks(collected, platform: str, img_dir: Path,
                   supreme_block: str | None = None,
-                  collection_docs: list | None = None,
-                  evidence_pack: dict | None = None,
                   gate_feedback: list | None = None) -> dict:
-    """대본 생성(JARVIS02) → 이미지 생성(JARVIS06) → 완성 블록 반환.
+    """대본 생성(JARVIS02) → 이미지 생성(JARVIS06 process_draft v2) → 완성 블록.
 
-    ★ 사용자 박제 2026-05-31 — 역할 분리:
-      JARVIS02: Pass-1 텍스트 대본 + 플레이스홀더 생성
-      JARVIS06: [CHART_N]/[PHOTO_N]/섹션이미지/썸네일 생성 + 블록 조립
-      JARVIS08: 완성 블록 수신 후 발행
+    ★ Step 7 (2026-07-05): collected(CollectedData) 단일 소스. theme/sector·검증정답·
+      이미지 컨텍스트를 모두 collected 에서 파생. (JARVIS02 Pass-1 / JARVIS06 이미지·조립)
 
     Returns:
         {"success", "title", "content", "html", "blocks", "error"}
     """
+    theme = collected.meta.get("keyword", "")
+    sector = collected.meta.get("sector", "")
     # 규정 로드
     if supreme_block is None:
         try:
@@ -139,29 +137,17 @@ def _build_blocks(theme: str, sector: str, stocks_data: dict, platform: str, img
     if removed:
         print(f"  🔄 [Theme/{platform}] 이전 이미지 {removed}개 삭제 (폴더 유지)")
 
-    # ── JARVIS02: Pass-1 텍스트 대본 생성 (★ ADR 012 — 근거 팩 주입) ──────
+    # ── JARVIS02: Pass-1 텍스트 대본 생성 (collected 단일 소스) ──────
     from JARVIS02_WRITER.theme_html_writer import generate_theme_html, extract_text_content
-    draft_html = generate_theme_html(
-        theme, sector, stocks_data, supreme_block,
-        platform=platform, collection_docs=collection_docs or [],
-        evidence_pack=evidence_pack,
-        gate_feedback=gate_feedback,
-    )
+    draft_html = generate_theme_html(collected, supreme_block, platform=platform,
+                                     gate_feedback=gate_feedback)
     if not draft_html:
         return {"success": False, "error": "Pass-1 대본 생성 실패", "blocks": [],
                 "title": "", "content": "", "html": ""}
 
-    # ── JARVIS06: 이미지 생성 + 블록 조립 (★ ADR 012 — 근거 팩 접지) ──────
+    # ── JARVIS06: 이미지 생성 + 블록 조립 (process_draft v2 — collected) ──────
     from JARVIS06_IMAGE.draft_processor import process_draft
-    result = process_draft(
-        draft_html=draft_html,
-        theme=theme, sector=sector,
-        stocks_data=stocks_data,
-        collection_docs=collection_docs or [],
-        platform=platform,
-        out_dir=img_dir,
-        evidence_pack=evidence_pack,
-    )
+    result = process_draft(draft_html, collected=collected, platform=platform, out_dir=img_dir)
     blocks = result["blocks"]
     html   = result["html"]
     title  = result["title"]
@@ -341,7 +327,9 @@ def run_tistory_theme(theme: str, sector: str = "",
         return {"success": False, "url": "", "keyword": theme, "error": "종목 데이터 없음"}
 
     # ── ②~⑦ HTML 생성 + 블록 조립 + 검증 ─────────────────────
-    draft = _build_blocks(theme, sector, stocks_data, "tistory", TISTORY_IMG_DIR)
+    from JARVIS09_COLLECTOR import compose_collected
+    collected = compose_collected(theme, stocks_data=stocks_data, sector=sector, category="theme")
+    draft = _build_blocks(collected, "tistory", TISTORY_IMG_DIR)
     # ── ⑧ 발행 (⓪에서 받은 driver 재사용) ─────────────────────
     return _publish_tistory(draft, theme, sector, preloaded_driver=_preloaded_driver)
 
@@ -361,7 +349,9 @@ def run_naver_theme(theme: str, sector: str = "",
     if not stocks_data.get("stocks"):
         _tg(f"⚠️ [THEME-NAVER] 종목 데이터 없음 — 발행 건너뜀: {theme}")
         return {"success": False, "url": "", "keyword": theme, "error": "종목 데이터 없음"}
-    draft = _build_blocks(theme, sector, stocks_data, "naver", NAVER_IMG_DIR)
+    from JARVIS09_COLLECTOR import compose_collected
+    collected = compose_collected(theme, stocks_data=stocks_data, sector=sector, category="theme")
+    draft = _build_blocks(collected, "naver", NAVER_IMG_DIR)
     return _publish_naver(draft, theme, sector)
 
 
@@ -499,18 +489,13 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
 
         # 종목 데이터 수집 (주식 시세·재무)
         data = _collect(state["theme"])
-        _empty = not (data.get("stocks") or [])
-        if _empty:
-            try:
-                _col_fut.cancel()
-                _col_exec.shutdown(wait=False)
-            except Exception:
-                pass
-            print("  ⏭️ [② 수집] 종목 0개 — JARVIS09 수집 취소")
-            return {"stocks_data": data, "_collect_data_empty": True,
-                    "collection_docs": [], "evidence_pack": None}
 
-        # JARVIS09 결과 수령 (★ ADR 012 — 리서치 수집은 LLM 추출 포함, 넉넉히 대기)
+        # ★ 다소스 결손 분리 (사용자 박제 2026-07-04 — 경제 파이프라인과 동렬화, ERRORS [351]):
+        #   종목(stocks)이 0개여도 JARVIS09 다소스 리서치(논문·뉴스·DART·ECOS·웹 등)를
+        #   *취소하지 않고 항상 수령*. 경제글이 구조데이터 0개여도 collection_docs·
+        #   evidence_pack 을 보존하고 계속 쓰는 것과 동일. 리서치만으로도 글은 성립하며,
+        #   차트는 실데이터 폴백/AI 사진으로 대체(_generate_charts). 진짜 폐기·테마 교체는
+        #   종목·리서치·근거가 *전부* 비었을 때만 (KRX 종속 결합 해제).
         try:
             _col_res = _col_fut.result(timeout=600) or {}
         except Exception:
@@ -520,10 +505,24 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         collection_docs = _col_res.get("docs") or []
         evidence_pack   = _col_res.get("pack") or None
 
-        print(f"  ✅ [② 수집] 종목 {len(data.get('stocks') or [])}개 · 문서 {len(collection_docs)}건 | 글 작성 시작")
-        return {"stocks_data": data,
-                "collection_docs": collection_docs,
-                "evidence_pack": evidence_pack}
+        _n_stocks = len(data.get("stocks") or [])
+        _n_facts  = len((evidence_pack or {}).get("facts") or [])
+        # ★ Step 7: 조각 → CollectedData 단일 상자 (재수집 없음). 옛 state 키는 back-compat 유지.
+        from JARVIS09_COLLECTOR import compose_collected
+        collected = compose_collected(
+            state["theme"], stocks_data=data, docs=collection_docs,
+            evidence_pack=evidence_pack, sector=state.get("sector", ""),
+            category="theme", profile=state.get("theme_profile"))
+        if _n_stocks == 0 and not collection_docs and _n_facts == 0:
+            print("  ⏭️ [② 수집] 종목·리서치·근거 전부 0 — 데이터 없음(테마 교체 대상)")
+            return {"collected": collected, "_collect_data_empty": True,
+                    "stocks_data": data, "collection_docs": [], "evidence_pack": None}
+
+        if _n_stocks == 0:
+            print(f"  ℹ️ [② 수집] 종목 0개지만 리서치 보존 — 문서 {len(collection_docs)}건·근거 {_n_facts}개로 작성 진행")
+        print(f"  ✅ [② 수집] 종목 {_n_stocks}개 · 문서 {len(collection_docs)}건 · 근거 {_n_facts}개 | 글 작성 시작")
+        return {"collected": collected, "stocks_data": data,
+                "collection_docs": collection_docs, "evidence_pack": evidence_pack}
 
     # ★ 직렬 순서 — 네이버 먼저, 티스토리 나중 (사용자 박제 2026-07-03)
     @action_step(name="③ 네이버 대본 생성")
@@ -531,15 +530,15 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         if state.get("_nv_draft_skip_regen"):
             print("  ⏭️ [③ 네이버] 이전 대본 검증 통과 — 재생성 건너뜀")
             return {}
-        sd = state.get("stocks_data") or {}
-        if not sd.get("stocks"):
-            return {"nv_draft": {"success": False, "error": "종목 데이터 없음", "blocks": [], "content": "", "html": ""}}
+        collected = state.get("collected")
+        # ★ 종목 0개여도 다소스 리서치가 있으면 작성 진행 (경제 동렬화, ERRORS [351] —
+        #   차트는 실데이터/AI사진 대체). 종목·리서치·근거 전부 없을 때만 실패.
+        if collected is None or not (collected.entities or collected.docs or collected.facts):
+            return {"nv_draft": {"success": False, "error": "데이터 없음(종목·리서치 모두 0)", "blocks": [], "content": "", "html": ""}}
         try:
             draft = _build_blocks(
-                state["theme"], state["sector"], sd, "naver", NAVER_IMG_DIR,
+                collected, "naver", NAVER_IMG_DIR,
                 supreme_block=state.get("supreme_block"),
-                collection_docs=state.get("collection_docs") or [],
-                evidence_pack=state.get("evidence_pack"),
                 gate_feedback=state.get("_nv_draft_gate_feedback"),
             )
         except Exception as e:
@@ -552,15 +551,14 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         if state.get("_ts_draft_skip_regen"):
             print("  ⏭️ [⑤ 티스토리] 이전 대본 검증 통과 — 재생성 건너뜀")
             return {}
-        sd = state.get("stocks_data") or {}
-        if not sd.get("stocks"):
-            return {"ts_draft": {"success": False, "error": "종목 데이터 없음", "blocks": [], "content": "", "html": ""}}
+        collected = state.get("collected")
+        # ★ 종목 0개여도 다소스 리서치가 있으면 작성 진행 (경제 동렬화, ERRORS [351]).
+        if collected is None or not (collected.entities or collected.docs or collected.facts):
+            return {"ts_draft": {"success": False, "error": "데이터 없음(종목·리서치 모두 0)", "blocks": [], "content": "", "html": ""}}
         try:
             draft = _build_blocks(
-                state["theme"], state["sector"], sd, "tistory", TISTORY_IMG_DIR,
+                collected, "tistory", TISTORY_IMG_DIR,
                 supreme_block=state.get("supreme_block"),
-                collection_docs=state.get("collection_docs") or [],
-                evidence_pack=state.get("evidence_pack"),
                 gate_feedback=state.get("_ts_draft_gate_feedback"),
             )
         except Exception as e:
@@ -647,11 +645,82 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                     _src_docs = _src_docs + as_source_docs(state["evidence_pack"])
             except Exception:
                 pass
+            # ★ 종목 실측 재무를 grounding 코퍼스에 합류 (ERRORS [343] — 수집된 실데이터
+            #   시가총액·현재가·PER 등이 출처 코퍼스에 없어, 진실한 수치인데도
+            #   "출처·웹 모두 확인 불가"로 false-positive 차단되던 갭. 경제글이
+            #   market_data 를 ground truth 로 넘기는 것과 동일하게, 테마글은
+            #   stocks_data(네이버 금융/KRX 실측)를 groundable 텍스트로 합류시킨다.)
+            try:
+                _sd = state.get("stocks_data") or {}
+                if _sd.get("stocks"):
+                    from JARVIS09_COLLECTOR.collect_theme import stocks_to_datasets
+
+                    def _fmt_val(v):
+                        # ★ ERRORS [346] — 코퍼스 수치를 본문 표기와 정합.
+                        #   본문은 "461,500원"(천단위 콤마)로 쓰는데 승격값은
+                        #   461500.0(round(nd=0) float .0) → 진실한 현재가인데도
+                        #   grounding LLM 이 매칭 실패 → "출처·웹 모두 확인 불가" 오차단.
+                        #   정수 실수는 천단위 콤마 정수로, 소수(5.9·13.6)는 그대로.
+                        if isinstance(v, float) and v.is_integer():
+                            return f"{int(v):,}"
+                        if isinstance(v, int):
+                            return f"{v:,}"
+                        return f"{v}"
+
+                    _stock_docs = []
+                    for _ds in stocks_to_datasets(_sd):
+                        _unit = _ds.get("unit", "")
+                        _rows = ", ".join(
+                            f"{_r['label']} {_fmt_val(_r['value'])}{_unit}"
+                            for _r in _ds.get("data", []))
+                        if _rows:
+                            _stock_docs.append(
+                                f"[종목 실측] {_ds.get('title', '')}: {_rows} "
+                                f"(출처: {(_ds.get('source') or {}).get('name', 'KRX 시세')})")
+                    # ★ ERRORS [347] — 조원 필드(marcap·revenue)를 본문 표기와 정합.
+                    #   본문(_stocks_text→프로즈)은 `_fmt_marcap` 으로 규모별 조원(대형주
+                    #   5.9조원)/억원(소형주 2,644억원)을 택하는데, stocks_to_datasets 는
+                    #   항상 조원 단일 단위(0.26조원)로만 렌더 → 소형주 억원 표기가 코퍼스에
+                    #   없어 진실 시가총액이 grounding false-positive 로 오차단([346] 단위 변종,
+                    #   nd 자리 정합만으론 미해결). 본문 정본 포맷터(_fmt_marcap)로 두 단위
+                    #   (조원·억원)를 코퍼스에 합류 — 종목 규모 무관 표기 정합 보증.
+                    try:
+                        from JARVIS02_WRITER.draft_writer import _fmt_marcap as _fmc
+                        for _s in _sd.get("stocks", []):
+                            if not isinstance(_s, dict):
+                                continue
+                            _nm = str(_s.get("name") or "").strip()
+                            if not _nm:
+                                continue
+                            _flds = []
+                            for _f, _lb in (("marcap", "시가총액"), ("revenue", "연매출")):
+                                try:
+                                    _mv = float(_s.get(_f) or 0)
+                                except (TypeError, ValueError):
+                                    _mv = 0.0
+                                if _mv >= 1e8:
+                                    _flds.append(f"{_lb} {_fmc(_mv)}({_mv/1e8:,.0f}억원)")
+                                elif _mv > 0:
+                                    _flds.append(f"{_lb} {_fmc(_mv)}")
+                            if _flds:
+                                _stock_docs.append(
+                                    f"[종목 실측] {_nm}: {', '.join(_flds)} "
+                                    f"(출처: 네이버 금융/KRX)")
+                    except Exception:
+                        pass
+                    # ★ ERRORS [346] — 최고 신뢰 ground truth 는 코퍼스 *앞* 에 배치.
+                    #   collection_docs(수만 자)가 _FACT_SOURCE_CORPUS_CAP(12000자)로
+                    #   잘리면 뒤에 붙인 실측 수치가 코퍼스에서 탈락 → 진실 수치 오차단.
+                    #   앞에 두어 [343] grounding 승격을 truncation 으로부터 보증.
+                    _src_docs = _stock_docs + _src_docs
+            except Exception:
+                pass
             for q in prepublish_quality_issues(
                     draft, post_type="theme",
                     source_docs=_src_docs,
                     market_data=None,
-                    stocks_data=state.get("stocks_data")):   # ★ 1-c 실측 재무 결정론 대조
+                    stocks_data=state.get("stocks_data"),   # ★ 1-c 실측 재무 ±10% 밴드
+                    collected=state.get("collected")):      # ★ Step 10: 통일 grounding
                 issues.append(Issue(step=step_name, kind=q["kind"], detail=q["detail"]))
         return issues
 
@@ -828,7 +897,8 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     else:
         _ts_result = run_action(_ts_action_def, {
             "theme": theme, "sector": sector,
-            "stocks_data": _nv_st.get("stocks_data"),
+            "collected": _nv_st.get("collected"),          # ★ Step 7: 액션1 → 액션2 전달
+            "stocks_data": _nv_st.get("stocks_data"),      # back-compat (verify 등)
             "collection_docs": _nv_st.get("collection_docs") or [],
             "evidence_pack": _nv_st.get("evidence_pack"),
             "supreme_block": _nv_st.get("supreme_block"),

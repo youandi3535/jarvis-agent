@@ -181,9 +181,15 @@ def _extract_fix_items(summary: str) -> list[tuple[str, str]]:
 
 
 def _parse_layer_counts(summary: str) -> dict:
-    """수정 파일 수 파싱 — 전체 파일 검토 방식 (★ 사용자 박제 2026-05-30)."""
-    m = re.search(r'수정 파일[:\s]*(\d+)', summary)
-    files_fixed = int(m.group(1)) if m else 0
+    """수정 파일 수 파싱 — 전체 파일 검토(수정 파일: N개) + targeted(files_fixed: N) 두 포맷 모두 지원.
+
+    ★ ERRORS [349] — `_TARGETED_PROMPT_TMPL`(Tier 2 targeted fix) 의 완료 보고 포맷은
+      영문 `files_fixed: <N>` 인데, 본 정규식이 한글 "수정 파일" 만 인식해 targeted 경로는
+      실제 수정 성공 여부와 무관하게 항상 0 으로 파싱 → `run_auto_repair_targeted` 가
+      매번 False 반환, GUARDIAN 이 "Tier 1·2 모두 실패" 로 오보고했다. 두 포맷 모두 매치.
+    """
+    m = re.search(r'수정\s*파일[:\s]*(\d+)|files_fixed[:\s]*(\d+)', summary)
+    files_fixed = int(m.group(1) or m.group(2)) if m else 0
     return {
         "files_fixed":   files_fixed,
         "syntax_fixed":  files_fixed,
