@@ -290,7 +290,8 @@ def evidence_brief(pack: dict, max_facts: int = 24) -> str:
     for qid, group in by_q.items():
         q_text = q_map.get(qid, "")
         lines.append(f"\n◆ {qid}{(': ' + q_text) if q_text else ''}")
-        for f in group:
+        for fi, f in enumerate(group, 1):
+            fid = f.get("id") or f"F{fi}"
             src = f.get("source") or {}
             tail = []
             if f.get("as_of"):
@@ -298,7 +299,7 @@ def evidence_brief(pack: dict, max_facts: int = 24) -> str:
             if src.get("name"):
                 tail.append(f"출처: {src['name']}")
             tail_s = f" ({', '.join(tail)})" if tail else ""
-            lines.append(f"  {f['id']}. {f['statement']}{tail_s}")
+            lines.append(f"  {fid}. {f.get('statement', '')}{tail_s}")
     lines.append("\n★ 위 근거에 *없는* 수치·사실을 본문에 쓰지 마라 — 근거 없는 수치는 거짓이다.")
     lines.append("★ 근거는 그대로 복붙하지 말고 글 흐름에 자연스럽게 녹여 쓰되, 수치는 원값 그대로.")
     return "\n".join(lines)
