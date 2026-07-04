@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime
+from pathlib import Path
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
@@ -20,6 +22,12 @@ except ImportError:
 # ─────────────────────────────────────────────────────
 
 log = logging.getLogger("jarvis")
+
+# ── 데몬 hang 워치독 자원 (ERRORS [318] — 2026-07-04) ──────────────
+_PROJECT_ROOT   = Path(__file__).resolve().parent.parent
+_HEARTBEAT_FILE = _PROJECT_ROOT / "logs" / "daemon.heartbeat"
+_FAULT_LOG      = _PROJECT_ROOT / "logs" / "daemon_faulthandler.log"
+_fh_file = None   # faulthandler 출력 핸들 — GC 방지 위해 모듈 레벨 보존
 
 
 def register_capability() -> None:
@@ -74,11 +82,11 @@ def build_status() -> str:
     lines.append("🟢 *JARVIS 통합 데몬 실행 중*")
     lines.append(f"⚙️ *JARVIS00_INFRA*  |  가동 {uptime}  |  PID {os.getpid()}")
     if _dm._st_disabled:
-        lines.append("❌ 대시보드: 자동재시작 중단 (5회 실패)")
+        lines.append(f"❌ 대시보드: 자동재시작 중단 ({_dm._ST_MAX_FAIL}회 실패)")
     elif _dm._streamlit_alive():
         lines.append(f"🖥 대시보드: 가동 중 (port {_dm.ST_PORT}, PID {_dm._st_proc.pid})")
     else:
-        lines.append(f"⚠️ 대시보드: 다운 ({_dm._st_fail_count}/5)")
+        lines.append(f"⚠️ 대시보드: 다운 ({_dm._st_fail_count}/{_dm._ST_MAX_FAIL})")
 
     # 각 에이전트 섹션 — capability registry 순회 (agent_id 사전순 = JARVIS01→05)
     from shared import capabilities as _caps
@@ -370,9 +378,87 @@ def job_file_cleanup() -> None:
         _g_report("infra", e, module=__name__)
 
 
+# ── 데몬 hang 워치독 (ERRORS [318] — 2026-07-04) ──────────────────
+# 06:07 사고: 데몬 메인스레드가 무한 파이썬 루프 → GIL 기아 → APScheduler 전
+# 잡 정지 → 06:30 경제 브리핑 미발화. 그런데 프로세스는 살아있어(PID 유효)
+# jarvis_keeper 의 PID-only 검사가 재시작을 못 함 → 오전 내내 방치.
+# 대책: (1) 스케줄러가 60초마다 heartbeat 파일 갱신(job_heartbeat) → keeper 가
+# 신선도 감시 (2) faulthandler 로 다음 hang 의 *정확한 파이썬 위치* 자동 기록.
+
+def touch_heartbeat() -> None:
+    """데몬 생존 신호 — heartbeat 파일 mtime 갱신. keeper 워치독이 신선도 감시."""
+    try:
+        _HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _HEARTBEAT_FILE.write_text(str(int(time.time())))
+    except Exception:
+        pass
+
+
+def job_heartbeat() -> None:
+    """interval 60초 — 스케줄러 스레드풀이 살아있음을 heartbeat 로 각인.
+
+    interval 잡이라 스케줄러가 기아/hang 이면 이 잡도 멎어 heartbeat 가 stale →
+    keeper 가 '스케줄러 정지' 를 정확히 감지 (PID 생존만으로는 못 잡던 사각지대).
+    """
+    touch_heartbeat()
+
+
+def enable_hang_forensics() -> None:
+    """faulthandler 활성화 + SIGUSR1 → 전 스레드 파이썬 스택 덤프 등록.
+
+    keeper 가 hang 감지 시 SIGKILL 前에 SIGUSR1 을 보내 무한 루프의 *정확한
+    파이썬 위치* 를 logs/daemon_faulthandler.log 에 남긴다. faulthandler 는 C
+    시그널 핸들러라 GIL 이 잠긴 hang 중에도 스택을 뜰 수 있음 (py-spy·root 불필요).
+    데몬 부팅 시 1회 호출 (jarvis_daemon.main).
+    """
+    global _fh_file
+    import faulthandler
+    import signal
+    try:
+        _FAULT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        _fh_file = open(_FAULT_LOG, "a")   # 핸들 유지 — faulthandler 가 나중에 씀
+        faulthandler.enable(file=_fh_file, all_threads=True)
+        if hasattr(signal, "SIGUSR1"):
+            faulthandler.register(signal.SIGUSR1, file=_fh_file,
+                                  all_threads=True, chain=False)
+        log.info("🩺 hang 포렌식 활성화 — SIGUSR1 → 전 스레드 스택 덤프")
+    except Exception as e:
+        log.warning(f"⚠️ faulthandler 활성화 실패: {e}")
+
+
+class _HeartbeatLogFilter(logging.Filter):
+    """heartbeat 잡 실행 로그(하루 ~1440줄)만 억제 — 다른 잡 로그는 유지.
+
+    APScheduler 는 잡 실행마다 executor 로거로 'Running job ...' /
+    'Job ... executed successfully' INFO 를 남긴다. heartbeat 는 60초 주기라
+    daemon.log 를 오염시키는데, 이 잡은 상태 신호일 뿐 로그 가치가 없음.
+    잡 *이름* 문자열로 정확히 그 두 줄만 드롭 (버그가 아니라 정상 로그의
+    타깃 억제 — ERRORS [318]).
+    """
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        return not ("데몬 heartbeat" in msg or "infra_heartbeat" in msg)
+
+
+def quiet_heartbeat_logs() -> None:
+    """heartbeat 잡의 APScheduler 실행 로그를 영구 억제 (데몬 부팅 시 1회 호출).
+
+    threadpool executor 로거에 타깃 필터 부착. 중복 부착 방지 가드 포함.
+    """
+    logger = logging.getLogger("apscheduler.executors.default")
+    if any(isinstance(f, _HeartbeatLogFilter) for f in logger.filters):
+        return
+    logger.addFilter(_HeartbeatLogFilter())
+
+
 __all__ = [
     "register", "register_capability",
     "build_status",
     "handle_command", "handle_safe_intent", "execute_approval",
     "job_db_backup", "job_cleanup_events", "job_file_cleanup",
+    "touch_heartbeat", "job_heartbeat", "enable_hang_forensics",
+    "quiet_heartbeat_logs",
 ]

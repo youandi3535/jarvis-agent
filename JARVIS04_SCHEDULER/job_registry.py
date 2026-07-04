@@ -124,6 +124,15 @@ DEFAULT_JOBS: list[dict] = [
      "misfire_grace_time":7200, "owner":"jarvis02_writer"},
     # j05_sla_monitor 비활성화 — SLA 경고 불필요 (2026-05-09 사용자 요청)
     # ── JARVIS00_INFRA ───────────────────────────────────────────
+    # ★ 데몬 hang 워치독 신호 (ERRORS [318] — 2026-07-04): 스케줄러 스레드풀이
+    #   *실제로 잡을 실행 중* 임을 60초마다 heartbeat 파일 mtime 으로 각인.
+    #   06:07 hang 사고(메인스레드 무한 파이썬 루프 → GIL 기아 → 전 잡 정지)처럼
+    #   PID 는 살아있어도 스케줄러가 멎으면 이 잡이 안 돌아 heartbeat stale →
+    #   jarvis_keeper.py 워치독이 강제 재시작. interval 잡이라 스케줄러 기아 시
+    #   동반 정지 = 정확한 hang 신호.
+    {"id":"infra_heartbeat", "name":"데몬 heartbeat (keeper 워치독)", "trigger":"interval",
+     "kwargs":{"seconds":60}, "callback":"JARVIS00_INFRA.infra_agent.job_heartbeat",
+     "misfire_grace_time":30, "owner":"jarvis00_infra"},
     {"id":"db_backup",       "name":"DB 백업",              "trigger":"cron",
      "kwargs":{"hour":3, "minute":0}, "callback":"JARVIS00_INFRA.infra_agent.job_db_backup",
      "misfire_grace_time":3600, "owner":"jarvis00_infra"},
@@ -262,7 +271,66 @@ def render_default_summary() -> str:
     return "\n".join(lines)
 
 
+def cron_times(*, job_id_prefix: str = "", callback_contains: str = "") -> list[str]:
+    """DEFAULT_JOBS 의 cron 잡 실행시각 'HH:MM' 목록 (표시용 SSOT 파생).
+
+    ★ 사용자 박제 2026-07-04: 데몬 시작 메시지·대시보드가 스케줄을 *하드코딩*
+      하지 말고 이 함수로 파생 → DEFAULT_JOBS 를 바꾸면 텔레그램·웹 표시가
+      자동으로 따라온다 (2중·3중 수정 제거).
+    """
+    out: set[str] = set()
+    for j in DEFAULT_JOBS:
+        if j.get("trigger") != "cron":
+            continue
+        if job_id_prefix and not str(j.get("id", "")).startswith(job_id_prefix):
+            continue
+        if callback_contains and callback_contains not in str(j.get("callback", "")):
+            continue
+        kw = j.get("kwargs", {})
+        if "hour" in kw:
+            out.add(f"{int(kw['hour']):02d}:{int(kw.get('minute', 0)):02d}")
+    return sorted(out)
+
+
+_DOW_KO = {"mon": "월", "tue": "화", "wed": "수", "thu": "목",
+           "fri": "금", "sat": "토", "sun": "일"}
+
+
+def job_ids(prefix: str) -> list[str]:
+    """id 접두사로 잡 ID 목록 파생 (표시용 SSOT). 예: 'radar_trends' → 06/09/12/15."""
+    return [str(j["id"]) for j in DEFAULT_JOBS if str(j.get("id", "")).startswith(prefix)]
+
+
+def cron_phrase(job_id: str) -> str:
+    """잡 1개의 실행 주기를 사람이 읽는 한글 구절로 (표시용 SSOT 파생).
+
+    cron:     '매일 06:30' / '매주 일요일 04:00' / '격주 월요일 04:00' / '매월 1일 03:00'
+    interval: '5분 주기' / '30분 주기' / '15분 주기'
+    ★ 사용자 박제 2026-07-04: 표시 계층이 스케줄을 하드코딩하지 말고 이 함수로 파생.
+    """
+    j = next((x for x in DEFAULT_JOBS if x.get("id") == job_id), None)
+    if not j:
+        return "?"
+    kw = j.get("kwargs", {}) or {}
+    if j.get("trigger") == "interval":
+        for unit, ko in (("weeks", "주"), ("days", "일"), ("hours", "시간"),
+                         ("minutes", "분"), ("seconds", "초")):
+            if unit in kw:
+                return f"{kw[unit]}{ko} 주기"
+        return "주기 실행"
+    hm = f"{int(kw['hour']):02d}:{int(kw.get('minute', 0)):02d}" if "hour" in kw else ""
+    dow = kw.get("day_of_week")
+    if dow:
+        parts = [_DOW_KO.get(d.strip().lower(), d.strip()) for d in str(dow).split(",")]
+        prefix = "격주 " if kw.get("week") else "매주 "
+        return f"{prefix}{'·'.join(parts)}요일 {hm}".rstrip()
+    if "day" in kw:
+        return f"매월 {kw['day']}일 {hm}".rstrip()
+    return f"매일 {hm}".rstrip() if hm else "매일"
+
+
 __all__ = [
     "DEFAULT_JOBS", "register_default_jobs",
     "get_owner", "render_default_summary",
+    "cron_times", "cron_phrase", "job_ids",
 ]

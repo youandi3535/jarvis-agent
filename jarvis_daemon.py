@@ -105,7 +105,9 @@ def _acquire_lock():
                 pass
         log.error(f"🚫 데몬 이미 실행 중{pid_hint}. 중복 실행 거부 — 종료합니다.")
         sys.exit(1)
-    # 락 획득 성공 → PID 기록
+    # 락 획득 성공 → PID 기록 (LOCK_FILE 은 현재 pid 만 유지 — 소유권 판별·무증식)
+    _lock_fd.seek(0)
+    _lock_fd.truncate()
     _lock_fd.write(str(os.getpid()))
     _lock_fd.flush()
     PID_FILE.write_text(str(os.getpid()))
@@ -113,14 +115,25 @@ def _acquire_lock():
 
 
 def _release_lock():
+    # ★ 데몬 이중 기동 레이스 방지 (사용자 박제 2026-07-04 — ERRORS [321]):
+    #   느린 SIGINT/`/restart` 종료 도중 keeper 가 이미 새 데몬을 띄웠을 수 있다.
+    #   뒤늦게 종료하는 구 데몬이 *새 데몬의* pid 파일을 지우면 keeper 가 또 중복 기동하는
+    #   연쇄가 발생 → pid 파일은 *내 pid 일 때만* 제거(소유권 확인). LOCK_FILE 은 unlink
+    #   하지 않는다(inode 안정 — 삭제 시 다른 데몬이 새 inode 로 별도 flock 획득 = 이중 락
+    #   위험). fcntl 락은 OS 가 프로세스 종료 시 자동 해제하므로 이중 라이브는 _acquire_lock
+    #   이 이미 차단.
+    _me = str(os.getpid())
     try:
         if _lock_fd:
             fcntl.flock(_lock_fd, fcntl.LOCK_UN)
             _lock_fd.close()
     except Exception:
         pass
-    PID_FILE.unlink(missing_ok=True)
-    _LOCK_FILE.unlink(missing_ok=True)
+    try:
+        if PID_FILE.exists() and PID_FILE.read_text().strip() == _me:
+            PID_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _remove_pid():
@@ -139,6 +152,7 @@ _st_proc = None
 _st_last_start = 0.0
 _st_fail_count = 0
 _st_disabled = False
+_ST_MAX_FAIL = 5   # ★ Streamlit 자동재시작 최대 연속 실패 (표시 SSOT — infra_agent build_status 도 참조)
 
 ST_PORT  = int(os.getenv("HUB_PORT", "9199"))
 ST_LOG   = LOG_DIR / "streamlit.log"
@@ -149,30 +163,94 @@ def _streamlit_alive() -> bool:
     return _st_proc is not None and _st_proc.poll() is None
 
 
-def _kill_orphan_streamlits():
-    """포트 9199를 점유한 고아 Streamlit 프로세스를 모두 종료.
-    데몬 재시작 시 이전 자식이 orphan으로 남아 포트를 막는 현상 방지."""
-    import signal as _sig
+def _pid_alive(pid: int) -> bool:
     try:
-        res = subprocess.run(["lsof", "-ti", f"TCP:{ST_PORT}"],
-                             capture_output=True, text=True)
-        own_pid = _st_proc.pid if _st_proc and _st_proc.poll() is None else None
-        for raw in res.stdout.strip().split():
-            try:
-                pid = int(raw)
-            except ValueError:
-                continue
-            if pid == own_pid:
-                continue
-            try:
-                os.kill(pid, _sig.SIGTERM)
-                log.info(f"🧹 포트 {ST_PORT} 점유 고아 프로세스 PID {pid} 종료")
-            except ProcessLookupError:
-                pass
-            except Exception as e:
-                log.warning(f"고아 프로세스 종료 오류 PID {pid}: {e}")
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _streamlit_listeners(exclude_pid: int | None = None) -> list[int]:
+    """포트 9199 를 *LISTEN* 하는 프로세스 PID 목록 (클라이언트 연결 제외).
+
+    ★ 공존 방지 핵심 (ERRORS [319] — 2026-07-04): `-sTCP:LISTEN` 로 *서버* 만 조준.
+      구 `lsof -ti TCP:9199` 는 9199 에 *연결된* 클라이언트(브라우저 탭 등)까지 반환 →
+      Chrome 탭에 SIGTERM 을 쏘는 오살 버그였다. LISTEN 필터가 단일 진실.
+    """
+    try:
+        res = subprocess.run(
+            ["lsof", "-t", f"-iTCP:{ST_PORT}", "-sTCP:LISTEN"],
+            capture_output=True, text=True,
+        )
     except Exception as e:
-        log.warning(f"_kill_orphan_streamlits 오류: {e}")
+        log.warning(f"_streamlit_listeners lsof 오류: {e}")
+        return []
+    pids = []
+    for raw in res.stdout.strip().split():
+        try:
+            pid = int(raw)
+        except ValueError:
+            continue
+        if exclude_pid is not None and pid == exclude_pid:
+            continue
+        pids.append(pid)
+    return pids
+
+
+def _kill_orphan_streamlits():
+    """포트 9199 를 LISTEN 하는 이전 Streamlit *서버* 만 확실히 종료.
+
+    ★ 공존 방지 (ERRORS [319] — 사용자 박제 2026-07-04): 새 서버를 띄우면 옛 서버는
+      *반드시* 먼저 죽어야 한다.
+      ① LISTEN 만 대상 — 클라이언트 연결(브라우저 탭 등)은 절대 종료하지 않음.
+      ② SIGTERM → 대기 → SIGKILL 에스컬레이션 → 포트 해제 확인. 느리게 죽는 구 서버가
+         새 서버와 잠깐이라도 공존·포트충돌하지 못하도록 강제(단순 SIGTERM 후 즉시
+         새 서버 기동하던 공백 제거).
+    """
+    import signal as _sig
+    own_pid = _st_proc.pid if _st_proc and _st_proc.poll() is None else None
+
+    def _is_our_streamlit(pid: int) -> bool:
+        # 무관한 LISTEN 프로세스 오살 방지 — 우리 hub.py Streamlit 인지 확인.
+        try:
+            out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)],
+                                 capture_output=True, text=True).stdout
+            return ("streamlit" in out and "hub.py" in out) or "hub.py" in out
+        except Exception:
+            return True   # 확인 실패 시 보수적으로 orphan 취급 (우리 포트 LISTEN 이므로)
+
+    targets = [p for p in _streamlit_listeners(exclude_pid=own_pid) if _is_our_streamlit(p)]
+    if not targets:
+        return
+    for pid in targets:
+        try:
+            os.kill(pid, _sig.SIGTERM)
+            log.info(f"🧹 이전 Streamlit 서버 PID {pid} 종료(SIGTERM)")
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            log.warning(f"Streamlit 종료 오류 PID {pid}: {e}")
+    # SIGTERM 후 최대 8초 대기 (0.4s 폴링) — 다 죽으면 조기 탈출
+    for _ in range(20):
+        if not any(_pid_alive(p) for p in targets):
+            break
+        time.sleep(0.4)
+    # 잔존 → SIGKILL
+    for pid in targets:
+        if _pid_alive(pid):
+            try:
+                os.kill(pid, _sig.SIGKILL)
+                log.warning(f"🧹 SIGTERM 무응답 → SIGKILL PID {pid}")
+            except Exception:
+                pass
+    # 포트 LISTEN 해제 확인 (새 서버 바인딩 보장)
+    for _ in range(12):
+        if not _streamlit_listeners(exclude_pid=own_pid):
+            break
+        time.sleep(0.3)
+    if _streamlit_listeners(exclude_pid=own_pid):
+        log.warning(f"⚠️ 포트 {ST_PORT} LISTEN 잔존 — 새 Streamlit 바인딩 실패 가능")
 
 
 def _start_streamlit():
@@ -236,13 +314,13 @@ def _watch_streamlit():
     if time.time() - _st_last_start < 30:
         return
     _st_fail_count += 1
-    if _st_fail_count >= 5:
+    if _st_fail_count >= _ST_MAX_FAIL:
         _st_disabled = True
-        log.error("❌ Streamlit 5회 연속 실패 — 자동 재시작 중단. 수동 진단 필요.")
-        _report_daemon(RuntimeError("Streamlit 5회 연속 실패"), "_watch_streamlit")
-        _send_tg("⚠️ Streamlit 대시보드 5회 연속 실패\nlogs/streamlit.log 확인 후 daemon 재시작 필요")
+        log.error(f"❌ Streamlit {_ST_MAX_FAIL}회 연속 실패 — 자동 재시작 중단. 수동 진단 필요.")
+        _report_daemon(RuntimeError(f"Streamlit {_ST_MAX_FAIL}회 연속 실패"), "_watch_streamlit")
+        _send_tg(f"⚠️ Streamlit 대시보드 {_ST_MAX_FAIL}회 연속 실패\nlogs/streamlit.log 확인 후 daemon 재시작 필요")
         return
-    log.warning(f"⚠️ Streamlit 다운 감지 — 재시작 ({_st_fail_count}/5)")
+    log.warning(f"⚠️ Streamlit 다운 감지 — 재시작 ({_st_fail_count}/{_ST_MAX_FAIL})")
     _start_streamlit()
 
 
@@ -429,6 +507,16 @@ def main():
     log.info(f"   시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     log.info("=" * 60)
 
+    # -1. ★ hang 포렌식 (ERRORS [318] — 2026-07-04): faulthandler + SIGUSR1 스택 덤프.
+    #     06:07 사고(메인스레드 무한 파이썬 루프 → GIL 기아 → 스케줄러 정지) 재발 시
+    #     keeper 가 SIGUSR1 로 무한루프의 정확한 파이썬 위치를 자동 기록하도록 준비.
+    #     가장 먼저 활성화 — 이후 어떤 hang 도 스택 덤프 대상.
+    try:
+        from JARVIS00_INFRA.infra_agent import enable_hang_forensics
+        enable_hang_forensics()
+    except Exception as _e_fh:
+        log.warning(f"⚠️ hang 포렌식 활성화 실패: {_e_fh}")
+
     # 0. ★ Layer 0 preflight — 사용자 박제 2026-05-17 (ADR 009)
     #    부팅·환경 검증. 실패 시 sys.exit(1) 으로 *다른 어떤 코드 도달 전* 차단.
     #    7시 사고 (ImportError on collect_theme) 같은 type 영구 차단. 위임 형태 (CLAUDE.md
@@ -453,6 +541,16 @@ def main():
     # 5. JARVIS03 APScheduler
     scheduler = _start_scheduler()
 
+    # 5.1 ★ 부팅 즉시 heartbeat 각인 (ERRORS [318] — 2026-07-04): keeper 워치독이
+    #     부팅 직후 stale heartbeat 로 오탐·강제킬 하지 않도록 신선한 신호를 먼저 남김.
+    #     이후 infra_heartbeat interval 잡(60초)이 지속 갱신.
+    try:
+        from JARVIS00_INFRA.infra_agent import touch_heartbeat, quiet_heartbeat_logs
+        touch_heartbeat()
+        quiet_heartbeat_logs()   # heartbeat 잡 실행 로그(60초 주기) 억제 — daemon.log 오염 방지
+    except Exception as _e_hb:
+        log.warning(f"⚠️ heartbeat 초기화 실패: {_e_hb}")
+
     # 5.5 Streamlit 대시보드 — 고아 정리 후 시작
     _kill_orphan_streamlits()
     _start_streamlit()
@@ -474,14 +572,19 @@ def main():
     # 6. 시작 시 즉시 실행 (오늘 트렌드 없으면)
     _run_startup_jobs()
 
-    # 7. 텔레그램 시작 알림
+    # 7. 텔레그램 시작 알림 — ★ 스케줄은 DEFAULT_JOBS(SSOT)에서 파생 (하드코딩 금지,
+    #    사용자 박제 2026-07-04): DEFAULT_JOBS 를 바꾸면 이 메시지가 자동으로 따라온다.
+    from JARVIS04_SCHEDULER.job_registry import cron_times as _cron_times
+    _econ   = " · ".join(_cron_times(job_id_prefix="j01_economic_post")) or "?"
+    _trends = " · ".join(_cron_times(job_id_prefix="radar_trends"))       or "?"
+    _perf   = " · ".join(_cron_times(job_id_prefix="radar_perf"))         or "?"
     _send_tg(
         f"🚀 *JARVIS 통합 데몬 v2 시작*\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📰 JARVIS02 Market Signal: {_sched.SCHEDULE_HOURS if _sched else '?'}시\n"
-        f"📰 경제 브리핑: 매일 06:30\n"
-        f"📡 JARVIS03 트렌드 수집: 매일 09:00 · 12:00 · 15:00\n"
-        f"📊 성과 수집: 매일 23:00\n"
+        f"📰 경제 브리핑: 매일 {_econ}\n"
+        f"📡 JARVIS03 트렌드 수집: 매일 {_trends}\n"
+        f"📊 성과 수집: 매일 {_perf}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"명령어: /help"
     )
