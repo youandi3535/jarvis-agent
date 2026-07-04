@@ -376,13 +376,8 @@ def generate_html_infographic(
     )
 
 
-def process_draft(draft_html: str, theme: str, sector: str,
-                  stocks_data: dict, collection_docs: list | None,
-                  platform: str, out_dir) -> dict:
-    """대본 HTML + JARVIS09 수집 자료 → 완성 블록. draft_processor 위임."""
+def process_draft(*args, **kwargs) -> dict:
+    """대본 HTML + CollectedData → 완성 블록. draft_processor 위임 (v2 — Step 6).
+    브리지 호환을 위해 인자 그대로 전달 (신·구 시그니처 모두 수용)."""
     from JARVIS06_IMAGE.draft_processor import process_draft as _proc
-    return _proc(
-        draft_html=draft_html, theme=theme, sector=sector,
-        stocks_data=stocks_data, collection_docs=collection_docs,
-        platform=platform, out_dir=out_dir,
-    )
+    return _proc(*args, **kwargs)

@@ -182,11 +182,13 @@ def _generate_complete_article_cli(
     keyword: str, sector: str, reason: str,
     supreme_block: str,
     platform: str = "tistory",
+    pass2: bool = True,
 ) -> str:
     """2-pass 원고 생성 오케스트레이터.
 
     Pass-1(sonnet): 텍스트 + [CHART_N: 설명] 플레이스홀더
     Pass-2(sonnet × 8 병렬): 각 플레이스홀더 → SVG 치환
+    ★ pass2=False (경제 placeholder 모드): Pass-2 스킵 → 플레이스홀더 유지.
 
     Returns:
         str: "TITLE: ...\\nCONTENT: ..." 형식 원시 텍스트. 실패 시 빈 문자열.
@@ -204,9 +206,10 @@ def _generate_complete_article_cli(
         title_part = ""
         content_part = raw1
 
-    # ── Pass-2: _generate_svg_pass2_and_replace 단일 진입점 위임 ──
-    # run_id 생성·스타일 중복 방지·차트 스킵 로직 모두 거기서 관리.
-    content_final = _generate_svg_pass2_and_replace(content_part, keyword, sector, platform)
+    # ── Pass-2: _generate_svg_pass2_and_replace 단일 진입점 위임 (pass2=False 면 스킵) ──
+    content_final = content_part
+    if pass2:
+        content_final = _generate_svg_pass2_and_replace(content_part, keyword, sector, platform)
     return title_part + "CONTENT:" + content_final
 
 
@@ -471,12 +474,16 @@ def generate_article_html(
     collection_docs: list | None = None,
     ref_datasets: list | None = None,
     gate_feedback: list | None = None,
+    pass2: bool = True,
 ) -> str:
     """2-pass Claude Code SDK → 텍스트 + inline SVG 완성 원고 HTML.
 
     Pass-1(sonnet): 텍스트 + 플레이스홀더
     Pass-2(sonnet × 병렬): SVG 치환
     platform: "tistory" | "naver"
+
+    ★ Step 9 (2026-07-05): pass2=False 면 Pass-2 스킵 → 플레이스홀더 HTML 반환
+      (경제도 JARVIS06 process_draft 단일 이미지 경로 사용 — placeholder-first).
 
     Returns:
         str: 완전한 HTML 문서. 실패 시 빈 문자열.
@@ -493,7 +500,7 @@ def generate_article_html(
     raw = _generate_text_pass1_parallel(keyword, sector, reason, supreme_block, platform)
     if not raw:
         print("  ⚠️ [Pass-1 병렬] 실패 → 기존 방식 재시도...")
-        raw = _generate_complete_article_cli(keyword, sector, reason, supreme_block, platform)
+        raw = _generate_complete_article_cli(keyword, sector, reason, supreme_block, platform, pass2=pass2)
     if not raw:
         print("  ❌ [2-pass] 원고 생성 실패")
         return ""
@@ -512,10 +519,11 @@ def generate_article_html(
         title = re.sub(r"<[^>]+>", "", h2_m.group(1)).strip() if h2_m else \
                 f"{keyword}, 지금 왜 이렇게 주목받는 건가요?"
 
-    # ★ Pass-2: [CHART_N: ...] 플레이스홀더 → SVG 치환 (필수!)
-    content = _generate_svg_pass2_and_replace(content, keyword, sector, platform,
-                                              collection_docs=collection_docs,
-                                              ref_datasets=ref_datasets)
+    # ★ Pass-2: [CHART_N: ...] 플레이스홀더 → SVG 치환. pass2=False 면 스킵(placeholder 유지).
+    if pass2:
+        content = _generate_svg_pass2_and_replace(content, keyword, sector, platform,
+                                                  collection_docs=collection_docs,
+                                                  ref_datasets=ref_datasets)
 
     kc = _L.count(content)
     svg_count = len(re.findall(r"<svg[\s>]", content, re.IGNORECASE))
@@ -527,7 +535,9 @@ def generate_article_html(
     print(f"  ✅ [2-pass] 완성 원고 ({kc}자, SVG {svg_count}개, 약 {sent_count}문장)")
 
     # ── 문장수 미달 시 1회 재시도 (SVG는 Pass-2 보장이므로 미포함) ──────────
-    if sent_count < _L.MIN_SENTENCES_THRESHOLD:
+    #   ★ pass2=False(경제 placeholder 모드)에서는 스킵 — _generate_complete_article_cli 가
+    #     Pass-2 를 내부 수행하므로 placeholder 계약 위반. 문장 미달은 harness verify 루프가 처리.
+    if sent_count < _L.MIN_SENTENCES_THRESHOLD and pass2:
         print(f"  ⚠️ [검증 실패] 문장 {sent_count}<{_L.MIN_SENTENCES_THRESHOLD} — 재생성 시도...")
         try:
             from shared.notify import send_tg as _tg_warn

@@ -2106,7 +2106,8 @@ def run(post_naver=True, post_tistory=True):
             for q in prepublish_quality_issues(
                     draft, post_type=_pt,
                     source_docs=_src_docs,
-                    market_data=state.get("market_data")):
+                    market_data=state.get("market_data"),
+                    collected=draft.get("collected")):   # ★ Step 10: 통일 grounding (topic_pack)
                 issues.append(Issue(step=step_name, kind=q["kind"], detail=q["detail"]))
         return issues
 

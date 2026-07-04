@@ -2231,51 +2231,33 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
         except Exception as _cbe:
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
-        from JARVIS02_WRITER.tistory_html_writer import (
-            generate_article_html, save_article_html, screenshot_article,
-            extract_title, extract_text_content,
-        )
-        from JARVIS06_IMAGE.injectors import assemble_blocks
+        from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
+        from JARVIS03_RADAR.topic_pack import cand_collected
+        from JARVIS06_IMAGE.draft_processor import process_draft
+        from pathlib import Path as _P9
 
-        # ★ 자비스06에는 대본+검증 ref(수 KB)만 — 수집 문서 전문은 전달하지 않음
-        #   (사용자 확정 2026-07-03: 슬롯에 데이터가 내장되므로 전체 자료 불필요.
-        #    문서 전문은 02 의 작성 프롬프트·사실성 게이트 대조군 용도로만.)
-        html = generate_article_html(keyword, sector, reason, supreme_block,
-                                     ref_datasets=_pool, gate_feedback=gate_feedback)
-        if not html:
+        # ★ Step 9 (2026-07-05): Pass-1-only 대본(placeholder) → process_draft v2 단일 이미지 경로.
+        #   경제도 테마와 동일한 JARVIS06 이미지 오케스트레이터 (embed-first 폐지). 실패차트→AI사진
+        #   폴백·min-5 top-up·썸네일 필수는 process_draft(CATEGORY_POLICY['economic'])가 담당.
+        draft_html = generate_article_html(keyword, sector, reason, supreme_block,
+                                           gate_feedback=gate_feedback, pass2=False)
+        if not draft_html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
-        title = extract_title(html, keyword)
+        collected = cand_collected(_cand)          # topic_pack cand → CollectedData (Step 4)
+        result = process_draft(draft_html, collected=collected, platform="tistory",
+                               out_dir=TISTORY_IMG_DIR)
+        html = result["html"]
+        title = result["title"]
         content = extract_text_content(html)
-        html_path, img_dir = save_article_html(html, keyword, platform="tistory")
-
-        visual_paths = screenshot_article(html_path, img_dir)
-        blocks = assemble_blocks(html, visual_paths, out_dir=img_dir)
-
-        # 썸네일 생성
-        from concurrent.futures import ThreadPoolExecutor as _TsTPE
-        _ts_thumb_exec = _TsTPE(max_workers=1)
-        _ts_thumb_fut = None
-        thumb_path = None
-        try:
-            from JARVIS06_IMAGE.image_agent import generate_thumbnail as _gen_thumb
-            _ts_thumb_fut = _ts_thumb_exec.submit(
-                _gen_thumb, title=title, keyword=keyword, sector=sector,
-                platform="tistory", out_dir=__import__('pathlib').Path(img_dir),
-                body_text=content[:3000],   # ★ 전체 대본 기반 썸네일 (사용자 박제 2026-07-03)
-            )
-        except Exception as _te:
-            _g_report("writer", _te, module=__name__)
-
-        if _ts_thumb_fut:
-            try:
-                thumb_path = _ts_thumb_fut.result(timeout=300)
-                if thumb_path and __import__('pathlib').Path(thumb_path).exists():
-                    blocks = [("image", thumb_path)] + blocks
-            except Exception:
-                pass
-            finally:
-                _ts_thumb_exec.shutdown(wait=False)
+        html_path = result.get("html_path", "")
+        img_dir = str(TISTORY_IMG_DIR)
+        visual_paths = []
+        blocks = result["blocks"]
+        # 썸네일 맨 앞 (process_draft 가 필수 생성 — 누락 0)
+        thumb_path = result.get("thumbnail_path")
+        if thumb_path and _P9(thumb_path).exists():
+            blocks = [("image", str(thumb_path))] + blocks
 
         # 검증
         try:
@@ -2306,6 +2288,7 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
             # ★ 2-2 (2026-07-02): 작성에 실제 쓴 주제 특화 corpus(kw 재수집, 실패 시 일반)를
             #   검증(prepublish 사실성 게이트) source_docs 로 노출 — 작성=검증 corpus 정합.
             "source_docs": _kw_collection_docs,
+            "collected": collected,   # ★ Step 10: prepublish grounding 정답 (topic_pack)
         }
 
     except Exception as e:
@@ -2476,55 +2459,31 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
         except Exception as _cbe:
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
-        from JARVIS02_WRITER.tistory_html_writer import (
-            generate_article_html, extract_title, extract_text_content,
-            OUTPUT_HTML_DIR, OUTPUT_IMG_DIR,
-        )
+        from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
+        from JARVIS03_RADAR.topic_pack import cand_collected
+        from JARVIS06_IMAGE.draft_processor import process_draft
+        from pathlib import Path as _P9
 
-        # ★ 자비스06에는 대본+검증 ref(수 KB)만 — 수집 문서 전문은 전달하지 않음
-        html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
-                                     ref_datasets=_pool, gate_feedback=gate_feedback)
-        if not html:
+        # ★ Step 9 (2026-07-05): Pass-1-only 대본(placeholder) → process_draft v2 단일 이미지 경로.
+        #   네이버 dir 리셋(_cleanup_naver_images)은 이 함수 앞에서 이미 수행. process_draft 는
+        #   out_dir mkdir(exist_ok=True)만 — 리셋 안 함(잔재 없음).
+        draft_html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
+                                           gate_feedback=gate_feedback, pass2=False)
+        if not draft_html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
-        title = extract_title(html, keyword)
-        _kw_hash = __import__('hashlib').md5(f"{keyword}_naver".encode()).hexdigest()[:8]
-        _html_dir = OUTPUT_HTML_DIR / f"{_kw_hash}_naver"
-        _img_dir = NAVER_IMG_DIR  # ★ 플랫폼별 폴더만 사용 (새 폴더 생성 X)
-        _html_dir.mkdir(parents=True, exist_ok=True)
-        _img_dir.mkdir(parents=True, exist_ok=True)
-        _html_path = str(_html_dir / "article.html")
-        __import__('pathlib').Path(_html_path).write_text(html, encoding="utf-8")
-        img_dir = str(_img_dir)
-
-        from JARVIS02_WRITER.tistory_html_writer import screenshot_article
-        from JARVIS06_IMAGE.injectors import assemble_blocks
-        visual_paths = screenshot_article(_html_path, img_dir)
-        blocks = assemble_blocks(html, visual_paths, out_dir=img_dir)
-
-        # 썸네일 생성
-        from concurrent.futures import ThreadPoolExecutor as _NvTPE
-        _nv_thumb_exec = _NvTPE(max_workers=1)
-        _nv_thumb_fut = None
-        thumb_path = None
-        try:
-            from JARVIS06_IMAGE.image_agent import generate_thumbnail as _gen_thumb
-            _nv_thumb_fut = _nv_thumb_exec.submit(
-                _gen_thumb, title=title, keyword=keyword, sector=sector,
-                platform="naver", out_dir=_img_dir,
-            )
-        except Exception:
-            _g_report("writer", Exception(), module=__name__)
-
-        if _nv_thumb_fut:
-            try:
-                thumb_path = _nv_thumb_fut.result(timeout=300)
-                if thumb_path and __import__('pathlib').Path(thumb_path).exists():
-                    blocks = [("image", thumb_path)] + blocks
-            except Exception:
-                pass
-            finally:
-                _nv_thumb_exec.shutdown(wait=False)
+        collected = cand_collected(_cand)          # topic_pack cand → CollectedData (Step 4)
+        result = process_draft(draft_html, collected=collected, platform="naver",
+                               out_dir=NAVER_IMG_DIR)
+        html = result["html"]
+        title = result["title"]
+        img_dir = str(NAVER_IMG_DIR)
+        visual_paths = []
+        blocks = result["blocks"]
+        # 썸네일 맨 앞 (process_draft 가 필수 생성 — 누락 0)
+        thumb_path = result.get("thumbnail_path")
+        if thumb_path and _P9(thumb_path).exists():
+            blocks = [("image", str(thumb_path))] + blocks
 
         # 검증
         try:
@@ -2552,6 +2511,7 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             "visual_paths": visual_paths,
             # ★ 2-2: 작성에 실제 쓴 주제 특화 corpus 를 검증 source_docs 로 노출.
             "source_docs": _kw_collection_docs,
+            "collected": collected,   # ★ Step 10: prepublish grounding 정답 (topic_pack)
         }
 
     except Exception as e:

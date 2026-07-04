@@ -121,15 +121,20 @@ def _profile_batch(cands: list[dict]) -> list[dict]:
         return []
 
 
-def _precollect(keyword: str, sector: str, summary: str) -> dict:
+def _precollect(keyword: str, sector: str, summary: str,
+                profile: dict | None = None, category: str = "economic") -> dict:
     """★ JARVIS09 직접 선수집 — 프로필 요약을 angle/description 으로 앵커.
 
     ★ 넉넉한 수집 (사용자 박제 2026-07-03 — ADR 013): "설계한 후, 제한을 두지 말고
     최대한 많은 진실성 있는 데이터를 전부" — 발행 창 밖(06:00 잡)이라 시간 여유 있음.
+
+    ★ Step 4 (2026-07-05): CollectedData 동봉 방출 (facts 인라인 + category 스탬프).
+      기존 flat 키(datasets/docs/evidence_path)는 back-compat 로 유지 (경제 writer 는
+      Step 9 에서 collected 소비로 전환 — 그 전까지 옛 키 필요).
     """
     _max_ds = int(os.getenv("TOPIC_PACK_MAX_DATASETS", "64") or "64")
     _rounds = int(os.getenv("TOPIC_PACK_RESEARCH_ROUNDS", "3") or "3")
-    out: dict = {"datasets": [], "docs": [], "evidence_path": ""}
+    out: dict = {"datasets": [], "docs": [], "facts": [], "evidence_path": ""}
     try:
         from JARVIS09_COLLECTOR import collect_chart_data
         cd = collect_chart_data(keyword, sector=sector,
@@ -144,6 +149,8 @@ def _precollect(keyword: str, sector: str, summary: str) -> dict:
                               max_rounds=_rounds) or {}
         out["docs"] = [asdict(d) for d in (rs.get("docs") or [])]
         out["evidence_path"] = rs.get("evidence_path") or ""
+        # ★ Step 4: facts 인라인 (오늘까지 evidence_path 파일로만 남아 CollectedData.facts 유실)
+        out["facts"] = list((rs.get("evidence_pack") or {}).get("facts") or [])
         # ★ 품질 플래그 (ERRORS [300]): 폴백 설계·근거 부족을 팩에 가시화
         out["plan_fallback"] = bool(rs.get("plan_fallback"))
         out["coverage_ratio"] = rs.get("coverage_ratio", 0.0)
@@ -165,6 +172,28 @@ def _precollect(keyword: str, sector: str, summary: str) -> dict:
         log.warning(f"[topic_pack] 리서치 선수집 실패({keyword}): {e}")
         _g_report("radar", e, module=__name__, func_name="_precollect")
         out["insufficient"] = True   # 리서치 자체 실패 = 근거 없음
+    # ★ Step 4: CollectedData 방출 (facts 인라인 + category 스탬프 + round-trip 가능).
+    #   경제는 종목 리스트 산문화 불필요 → entities=[] (수치는 datasets/facts 로 커버).
+    try:
+        from JARVIS09_COLLECTOR.models import CollectedData
+        collected = CollectedData.from_dict({
+            "meta": {
+                "keyword": keyword, "sector": sector, "category": category,
+                "profile": profile or {},
+                "as_of": datetime.now().isoformat(),
+                "coverage_ratio": out.get("coverage_ratio", 0.0),
+                "insufficient": out.get("insufficient", False),
+                "plan_fallback": out.get("plan_fallback", False),
+                "evidence_path": out.get("evidence_path", ""),
+            },
+            "datasets": out.get("datasets") or [],
+            "docs": out.get("docs") or [],       # asdict dict → from_dict 가 객체로 rehydrate
+            "facts": out.get("facts") or [],
+            "entities": [],
+        })
+        out["collected"] = collected.to_dict()   # JSON 직렬화 형태로 cand 에 박제
+    except Exception as _ce:
+        log.warning(f"[topic_pack] CollectedData 조립 실패({keyword}): {_ce}")
     return out
 
 
@@ -233,7 +262,8 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
             break
         summ = cand["profile"]["summary"]
         log.info(f"[topic_pack] JARVIS09 선수집: '{cand['keyword']}' — {summ[:50]}")
-        cand.update(_precollect(cand["keyword"], cand["sector"], summ))
+        cand.update(_precollect(cand["keyword"], cand["sector"], summ,
+                                profile=cand["profile"], category="economic"))
         if cand.get("insufficient"):
             log.warning(f"[topic_pack] '{cand['keyword']}' 근거 부족 "
                         f"(커버리지 {cand.get('coverage_ratio')}) → 다음 후보로 교체")
@@ -357,7 +387,8 @@ def build_for_keyword(keyword: str, sector: str = "", reason: str = "") -> dict:
             "entity_type": prof.get("entity_type", ""),
         },
     }
-    cand.update(_precollect(keyword, cand["sector"], summary))
+    cand.update(_precollect(keyword, cand["sector"], summary,
+                            profile=cand["profile"], category="economic"))
     return cand
 
 
@@ -376,5 +407,25 @@ def restore_docs(cand: dict) -> list:
         return []
 
 
+def cand_collected(cand: dict):
+    """cand → CollectedData 복원 (★ Step 4 — 경제 writer 소비용, Step 9 전환점).
+
+    collected 키가 있으면 그대로 rehydrate. 옛 팩(collected 부재)이면 flat 키로 조립.
+    """
+    from JARVIS09_COLLECTOR.models import CollectedData
+    if cand and cand.get("collected"):
+        return CollectedData.from_dict(cand["collected"])
+    return CollectedData.from_dict({
+        "meta": {"keyword": (cand or {}).get("keyword", ""),
+                 "sector": (cand or {}).get("sector", ""),
+                 "category": "economic",
+                 "profile": (cand or {}).get("profile") or {}},
+        "datasets": (cand or {}).get("datasets") or [],
+        "docs": (cand or {}).get("docs") or [],
+        "facts": (cand or {}).get("facts") or [],
+        "entities": [],
+    })
+
+
 __all__ = ["build_topic_pack", "load_topic_pack", "pick_candidate",
-           "build_for_keyword", "keyword_profile", "restore_docs"]
+           "build_for_keyword", "keyword_profile", "restore_docs", "cand_collected"]
