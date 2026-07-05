@@ -405,7 +405,18 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     # chart_generator 경로 폐기 — infographic_engine 경로로 통합 (ERRORS [355])
 
     from concurrent.futures import ThreadPoolExecutor as _TExec
-    from JARVIS00_INFRA.harness import action_step, ActionDefinition, run_action, Issue
+    from JARVIS00_INFRA.harness import (
+        action_step, ActionDefinition, run_action, Issue, interpreter_shutting_down,
+    )
+
+    # ── ★ 인터프리터 종료 레이스 가드 (근본 원인 — ERRORS [362]) ──
+    # 데몬 재시작으로 인터프리터가 종료 단계면 발행을 *시작하지 않고* 연기.
+    # 여기서 시작하면 ②수집 스텝 ThreadPoolExecutor 가 크래시 → 헛된 실패 보고.
+    if interpreter_shutting_down():
+        print("  ⏸ [THEME] 인터프리터 종료 중(데몬 재시작) — 테마 발행 연기, 재시작 후 재시도")
+        return {"theme": theme, "tistory": {"success": False, "url": "", "keyword": theme},
+                "naver": {"success": False, "url": "", "keyword": theme},
+                "data_empty": False, "shutdown_deferred": True}
 
     # ── Layer 2 스텝 정의 ────────────────────────────────────
 
@@ -480,7 +491,15 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                 print(f"  ⚠️ [THEME] JARVIS09 수집 실패: {e}")
                 return {"docs": [], "pack": None}
 
-        _col_fut = _col_exec.submit(_run_jarvis09)
+        # ★ 인터프리터 종료 레이스 (ERRORS [361]): 데몬 재시작 등으로 인터프리터가
+        #   종료 단계에 들어가면 ThreadPoolExecutor.submit 이
+        #   'cannot schedule new futures after interpreter shutdown' RuntimeError 를 던진다.
+        #   병렬 이득만 포기하고 리서치 수집은 동기 폴백으로 이어간다 — 종료 레이스로 발행 크래시 금지.
+        try:
+            _col_fut = _col_exec.submit(_run_jarvis09)
+        except RuntimeError as _sub_e:
+            print(f"  ⚠️ [② 수집] 스레드 스케줄 불가(인터프리터 종료 중?) — 동기 폴백: {_sub_e}")
+            _col_fut = None
 
         # 종목 데이터 수집 (주식 시세·재무)
         data = _collect(state["theme"])
@@ -491,12 +510,20 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         #   evidence_pack 을 보존하고 계속 쓰는 것과 동일. 리서치만으로도 글은 성립하며,
         #   차트는 실데이터 폴백/AI 사진으로 대체(_generate_charts). 진짜 폐기·테마 교체는
         #   종목·리서치·근거가 *전부* 비었을 때만 (KRX 종속 결합 해제).
-        try:
-            _col_res = _col_fut.result(timeout=600) or {}
-        except Exception:
-            _col_res = {}
-        finally:
+        if _col_fut is not None:
+            try:
+                _col_res = _col_fut.result(timeout=600) or {}
+            except Exception:
+                _col_res = {}
+            finally:
+                _col_exec.shutdown(wait=False)
+        else:
+            # submit 실패(인터프리터 종료 레이스) → 리서치를 동기 실행(스레드 미사용)
             _col_exec.shutdown(wait=False)
+            try:
+                _col_res = _run_jarvis09() or {}
+            except Exception:
+                _col_res = {}
         collection_docs = _col_res.get("docs") or []
         evidence_pack   = _col_res.get("pack") or None
 
@@ -687,8 +714,13 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                             _nm = str(_s.get("name") or "").strip()
                             if not _nm:
                                 continue
+                            # ★ '연매출' 거짓 라벨 방지 (ERRORS [367]): 네이버 재무는 최근 *분기*.
+                            #   fin_period 있으면 기간 명시, 없으면 '최근 실적'. grounding 코퍼스가
+                            #   정확해야 본문도 정확한 기간으로 작성·검증됨.
+                            _fp = str(_s.get("fin_period") or "").strip()
+                            _rev_lb = f"매출액({_fp} 기준)" if _fp else "매출액(최근 실적)"
                             _flds = []
-                            for _f, _lb in (("marcap", "시가총액"), ("revenue", "연매출")):
+                            for _f, _lb in (("marcap", "시가총액"), ("revenue", _rev_lb)):
                                 try:
                                     _mv = float(_s.get(_f) or 0)
                                 except (TypeError, ValueError):
@@ -700,7 +732,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                             if _flds:
                                 _stock_docs.append(
                                     f"[종목 실측] {_nm}: {', '.join(_flds)} "
-                                    f"(출처: 네이버 금융/KRX)")
+                                    f"(출처: 네이버 금융 재무제표·시세)")
                     except Exception:
                         pass
                     # ★ ERRORS [346] — 최고 신뢰 ground truth 는 코퍼스 *앞* 에 배치.
@@ -880,9 +912,15 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     _sd = _nv_st.get("stocks_data")
     _stocks_ok = bool((_sd or {}).get("stocks"))
     _data_empty = bool(_nv_st.get("_collect_data_empty")) or (_sd is not None and not _stocks_ok)
-    if not _nv_result.delivered:
+    _deferred = bool(getattr(_nv_result, "deferred", False))
+    if not _nv_result.delivered and not _deferred:
         _reason = getattr(_nv_result, "escalation_reason", "최대 시도 초과 또는 abort")
         _tg(f"❌ [THEME] 네이버 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
+    if _deferred:
+        print("  ⏸ [THEME] 네이버 액션 연기(인터프리터 종료) — 티스토리·보고 스킵, 재시작 후 재시도")
+        return {"theme": theme,
+                "tistory": {"success": False, "url": "", "keyword": theme},
+                "naver": _nv_res, "data_empty": False, "shutdown_deferred": True}
 
     # ② 티스토리 액션 — 네이버 *종결 후* 시작. 종목 데이터 없으면 스킵
     #    (진짜 data_empty → 상위 테마 교체 / 수집 미실행 → 교체 아닌 단순 실패)

@@ -315,8 +315,12 @@ def _hero_texture(tex, pal):
 def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
     pal = recipe or _pick_palette(seed)
     # ★ 학습된 레이아웃 템플릿 우선 — 임의 레이아웃 재현 (ERRORS [360]). 실패 시 기본 레이아웃 폴백.
+    # ★ 단, 다중 슬롯 템플릿은 데이터셋 2개+ 일 때만 (사용자 박제 2026-07-05, ERRORS [365]):
+    #   데이터 1개로 다중 슬롯 레이아웃을 채우면 빈 카드·우측 여백이 생김. 단일 데이터셋은
+    #   기본 풀레이아웃(히어로+차트)이 프레임을 꽉 채운다 ("양쪽 공백 없이").
+    _n_ds = len([d for d in (datasets or []) if d.get("data")])
     tmpl = pal.get("template")
-    if tmpl:
+    if tmpl and _n_ds >= 2:
         try:
             from JARVIS06_IMAGE.template_engine import render_layout, has_all_slots_resolved
             _h = render_layout(tmpl, title, subtitle, datasets, pal, src=src)

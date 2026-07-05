@@ -886,36 +886,92 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
         driver.save_screenshot(str(IMG_EDITOR / "before_input.png"))
         print("  ✅ 에디터 준비 완료")
 
-        # ── 제목 입력 ─────────────────────────────────
+        # ── 제목 입력 ── (★ 선택자 기반 포커스 — 고정좌표·OS포커스 취약성 근본수정, ERRORS [365])
+        #   좌표(283,336) 클릭이 창 위치·툴바 높이 변화로 제목칸을 빗나가면 제목 미입력→발행 실패
+        #   (에디터 URL 유지·logNo 없음). SmartEditor ONE 제목 = *최상단* contenteditable.
+        #   본문 포커스(_focus_editor_body)와 동일한 CDP 방식으로 안정 포커스.
         print("  ✏️  제목 입력...")
         driver.execute_script("window.scrollTo(0,0)")
         time.sleep(0.5)
-        _click(283, 336, "제목 클릭")
-        time.sleep(0.8)
         import pyautogui as _pg2
+        import pyperclip
+
+        _TITLE_FOCUS_JS = """
+        var t = document.querySelector(
+          '.se-documentTitle [contenteditable="true"], .se-section-documentTitle [contenteditable="true"],'
+          + ' .se-title-text, .se-documentTitle .se-text-paragraph');
+        if(!t){
+          // 폴백: 최상단(top 최소) contenteditable 단락 = 제목 (본문은 그 아래)
+          var all = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+          t = all.filter(function(el){var r=el.getBoundingClientRect(); return r.width>100 && r.top>=0;})
+                 .sort(function(a,b){return a.getBoundingClientRect().top - b.getBoundingClientRect().top;})[0]||null;
+        }
+        if(t){ try{t.scrollIntoView({block:'center'});}catch(e){} t.click(); t.focus(); return true; }
+        return false;
+        """
+        _TITLE_READ_JS = """
+        var t = document.querySelector(
+          '.se-documentTitle [contenteditable="true"], .se-section-documentTitle [contenteditable="true"],'
+          + ' .se-title-text, .se-documentTitle .se-text-paragraph');
+        if(!t){
+          var all = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+          t = all.filter(function(el){var r=el.getBoundingClientRect(); return r.width>100 && r.top>=0;})
+                 .sort(function(a,b){return a.getBoundingClientRect().top - b.getBoundingClientRect().top;})[0]||null;
+        }
+        return t ? (t.innerText||t.textContent||'').trim() : '__NOSEL__';
+        """
+
+        def _focus_title():
+            try:
+                return bool(driver.execute_script(_TITLE_FOCUS_JS))
+            except Exception:
+                return False
+
+        def _paste_title():
+            _activate_window()
+            pyperclip.copy(title)
+            time.sleep(0.3)
+            _activate_window()
+            _pg2.hotkey('command', 'v') if IS_MAC else _pg2.hotkey('ctrl', 'v')
+            time.sleep(0.8)
+
+        if not _focus_title():
+            print("  ⚠️ 제목 선택자 미발견 → 좌표 폴백")
+            _click(283, 336, "제목 클릭")
+        time.sleep(0.6)
         _activate_window()
         _pg2.press('escape')
         time.sleep(0.2)
         # 수정 모드면 기존 제목 전체 선택 → 삭제
         if edit_log_no:
             _activate_window()
-            if IS_MAC:
-                _pg2.hotkey('command', 'a')
-            else:
-                _pg2.hotkey('ctrl', 'a')
+            _pg2.hotkey('command', 'a') if IS_MAC else _pg2.hotkey('ctrl', 'a')
             time.sleep(0.3)
             _pg2.press('delete')
             time.sleep(0.3)
-        import pyperclip
-        pyperclip.copy(title)
-        time.sleep(0.3)
-        _activate_window()
-        if IS_MAC:
-            _pg2.hotkey('command', 'v')
-        else:
-            _pg2.hotkey('ctrl', 'v')
-        time.sleep(0.8)
-        print("  ✅ 제목 입력 완료")
+        _paste_title()
+
+        # ★ 제목 입력 검증 — 비었으면 재포커스+재입력 (발행 블로커 근본 차단)
+        try:
+            _tt = driver.execute_script(_TITLE_READ_JS)
+        except Exception:
+            _tt = "__NOSEL__"
+        if _tt == "":   # 요소는 찾았는데 텍스트가 비어있음 = 붙여넣기 실패
+            print("  ⚠️ 제목 비어있음 감지 → 재포커스 후 재입력")
+            _focus_title()
+            time.sleep(0.4)
+            _paste_title()
+            if not (driver.execute_script(_TITLE_READ_JS) or "").strip():
+                # 최후: CDP 타이핑 (클립보드·OS포커스 무관)
+                try:
+                    from selenium.webdriver.common.action_chains import ActionChains as _ACt
+                    _focus_title()
+                    _ACt(driver).send_keys(title).perform()
+                    time.sleep(0.6)
+                except Exception as _te:
+                    print(f"  ⚠️ CDP 제목 타이핑 실패: {_te}")
+        _fin = "" if _tt == "__NOSEL__" else (driver.execute_script(_TITLE_READ_JS) or "")
+        print(f"  ✅ 제목 입력 완료{(' — ' + _fin[:30]) if _fin and _fin!='__NOSEL__' else ''}")
         time.sleep(1)
 
         # ── 본문 입력 (텍스트 + 이미지 블록 순서대로) ──

@@ -50,7 +50,7 @@ _SLA: dict[str, int] = {
     "radar_perf":              1500,  # 23:00 1회
     "j01_daily_report":        1500,  # 23:55 1회
     "j01_economic_post":       1500,  # 07:00 1회
-    "j01_theme_post_16":       1500,  # 16:00 1회
+    "j01_theme_post_21":       1500,  # 21:00 1회
 "db_backup":               1500,  # 03:00 1회
 
     # 하루 3회 cron 잡 — 최대 간격(18h 야간) + 여유 = 1100분

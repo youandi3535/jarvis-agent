@@ -2,6 +2,134 @@
 
 ---
 
+## [370] 대시보드 "오늘 발행 글=0" 인데 경제 브리핑은 발행됨 — 경제 발행이 DB에 기록 안 됨 (2026-07-05)
+
+- **증상**: 웹 대시보드(hub.py) 홈의 "오늘 발행 글"이 **0**. 그러나 오늘 아침 경제 브리핑이 네이버(logNo=224336739310)·티스토리 **발행 성공**. 사용자: "코드가 바뀌면 대시보드·텔레그램도 자동으로 같이 변해야 하는데 안 변한다. 하드코딩이거나 로직이 잘못된 것."
+- **환경**: `posts`(대시보드가 셈)·`post_analysis` 두 테이블 모두 오늘 0행, 최신 07-01. `on_post_published_detail`(shared/bus.py)이 *둘 다* 기록하는 단일 진입점.
+- **원인**: 경제 브리핑 **하네스 발행 흐름**(`economic_poster.run` → `_send_platform` → `trend_economic_writer.nv_publish/ts_publish`)이 `on_post_published_detail` 을 *호출하지 않음*. emit 은 *레거시* `run_naver`/`run_tistory` 에만 있고 하네스는 이걸 안 씀. economic_poster 자체 후속 emit 은 `_empty_art`(content="")+`_html=""` 하드코딩이라 "이미 상류가 emit함(중복차단)" 판단으로 항상 스킵 — 그런데 상류(JARVIS08 발행자)도 emit 안 함. → **성공 발행이 어느 테이블에도 기록 0**. (테마는 `_publish_naver/tistory` 가 emit 해서 정상이었음 — 경제만 리팩터 중 누락). 대시보드 자체는 라이브 쿼리·하드코딩 0 (정상) — *기록 누락이 데이터 흐름을 끊은 것*.
+- **헛다리**: "대시보드가 하드코딩·정적이다." 아니다 — 대시보드는 posts/post_analysis 라이브 쿼리. 문제는 발행→DB 기록 단계.
+- **해결**: `trend_economic_writer.nv_publish/ts_publish` 성공 블록에 `on_post_published_detail` emit 추가(테마 `_publish_*` 와 동일 패턴) → posts·post_analysis *둘 다* 기록 → 대시보드·Daily Review 자동 반영. 4개 발행 함수(경제 nv/ts + 테마 nv/ts) 전부 emit 확인. 오늘 발행분 2건 백필(즉시 반영).
+- **파일**: `JARVIS02_WRITER/trend_economic_writer.py`.
+- **교훈**: **발행 흐름 리팩터 시 "성공 발행 → DB 기록" emit 이 새 경로로 함께 이동했는지 반드시 확인.** 대시보드·텔레그램이 "자동으로 안 변하는" 원인은 대개 표시부가 아니라 *기록부의 누락*. 표시부는 라이브 소스만 읽으면 자동 동기화된다. 새 발행 함수 추가 시 *반드시* `on_post_published_detail` 호출(모든 성공 발행의 단일 기록 진입점).
+
+---
+
+## [369] 발행 파이프라인이 단계마다 LLM 스로틀에 무너짐 — 임계경로 다중 LLM에 스로틀 방어 부재 (설계 결함, 2026-07-05)
+
+- **증상**: 수정 후 수동 재발행할 때마다 *다른 단계*에서 몇 분씩 멈춤. 대본 자기비평 껐더니(WRITER_CRITIQUE=0) 이번엔 발행 전 사실성·매력도 게이트에서 또 멈춤. 사용자: "단계마다 잘 작동되게 꼼꼼히 구축했어야지. 얼마나 허술하면 뭐 하나 고치고 돌릴 때마다 이런 문제가 계속 나냐."
+- **환경**: 블로그 발행 임계경로에 LLM 호출 6~7군데 — 대본 섹션 → 자기비평 → 사실성 게이트(fact_judge) → 매력도(engagement_judge) → 이미지 번역 → 썸네일. `shared/llm.invoke_text`는 Max 구독 SDK. rate limit 시 `num_turns=0`.
+- **원인 (설계 결함)**: 시스템이 *예약 시간(신선 한도·경합 없음)* 실행 전제로 설계됨. 인터랙티브 세션이 오래 무겁게 쓴 뒤 *수동 실행*하면 한도 소진 → 임계경로 LLM 호출들이 각각 스로틀(재시도·백오프·최대 300초 timeout)로 블로킹 → 단계마다 병목. **비필수 LLM(폴백 있는 것)조차 임계경로를 막는 방어가 없었음.** 자기비평은 회로차단 *면제* alias(writer)라 스로틀에도 재시도.
+- **헛다리**: "예약 실행에선 잘 되니 됐다" / "재발행 다시" — 어떤 조건에서도 발행이 완료(또는 깔끔히 연기)돼야 견고. 재발행 반복은 해결 아님.
+- **해결 (임계경로 LLM 스로틀 내성)**: `invoke_text(_nonessential=True)` 신설 — *비필수*(폴백 있어 없어도 발행되는 것)는 스로틀(회로 open/probe) 시 **SDK 호출 없이 즉시 "" 폴백**(timeout·재시도 0), 정상일 때도 1샷·≤45초 시간상자. 필수 면제(writer)보다 우선. 적용: **자기비평·매력도·이미지 번역·썸네일**. 사실성 게이트(fact_judge, fail-closed 필수)는 timeout 90초로 hang만 차단(fingerprint-abort가 반복 유한화). 검증: 회로 open 시 비필수 호출 0.00초 즉시 "".
+- **파일**: `shared/llm.py`(`_nonessential`), `JARVIS02_WRITER/draft_writer.py`(자기비평), `JARVIS03_RADAR/post_quality_analyzer.py`(매력도), `JARVIS06_IMAGE/prompt_translator.py`·`thumbnail_maker.py`, `JARVIS02_WRITER/law_enforcer.py`(fact_judge timeout).
+- **교훈**: **임계경로에 LLM을 여러 개 두면 각각이 스로틀 시 단일 실패점.** 폴백 있는 비필수 LLM은 *스로틀 감지 시 즉시 폴백*(SDK 미호출)해 임계경로를 절대 막지 말 것. 필수(대본·사실성)만 남기고 시간상자로 hang 차단. "예약 실행 전제" 설계는 수동·부하 조건에서 무너진다 — 모든 조건에서 완료 또는 연기. 새 발행 단계 LLM 추가 시 *반드시* 필수/비필수 분류 후 비필수는 `_nonessential=True`.
+
+---
+
+## [368] 테마 사실성 게이트 차단 — LLM이 *날짜 없는 산업 규모 수치* 창작 (석유화학 "생산능력 25%·370만 톤 감축 로드맵") (2026-07-05)
+
+- **증상**: 석유화학 테마 네이버 대본 attempt=1 이 `[사실성] 출처·웹 모두 확인 불가: 업계 전체로 보면 중국발 공급 과잉 여파로 국내 나프타분해시설 생산능력의 최대 25%, 약 370만 톤을 감축하는 로드맵이 추진되고 있어요` 로 차단. 게이트 차단 자체는 정상(수집 근거팩에 해당 수치 출처 없음 → fail-closed).
+- **환경**: `harness.theme-publish-석유화학-naver`, step "③ 네이버 대본 생성". `prepublish_gate` → `law_enforcer.factuality_issues`. 창작 문장은 본문 업계 동향 서술부.
+- **원인 (근본)**: 테마 작성기 선제 제약(`draft_writer._gen_theme` system_msg `[절대 제약]`)이 "**특정 연도·분기·기간의** 가격·비용·규모·비율" 로 *날짜가 붙은 역사적 통계*에 초점([345] 대응). 그런데 이번 문장은 **날짜 없는 산업 규모 추정치**("현재 추진 중인 로드맵", "생산능력 25%", "370만 톤"). LLM은 이를 "특정 시점 통계"가 아니라 일반 업계 상식으로 해석 → 학습 지식에서 창작 → 수집 출처엔 없어 게이트 차단.
+- **헛다리**: ① 게이트 약화(진실성 원칙 위반 — 절대 금지). ② "규모·비율" 이 이미 제약에 있으니 커버됨 — 실제론 "특정 연도·분기·기간의" 한정어가 날짜 없는 산업 수치를 빠뜨림.
+- **해결**: `_gen_theme` `[절대 제약]` 을 확장 — 날짜 유무 무관 *산업·업계 단위 수치*(생산능력·감축/증설 톤수·시장 규모·점유율·"○○% 감축/증설 로드맵" 류)도 수집 자료·종목 데이터 명시 값만 인용, 없으면 "구조조정 논의 진행 중" 식 정성 서술로 대체하도록 명시. ★ **동일 제약을 `_gen_hook_theme`(감성 도입부 — 별도 LLM 호출) 프롬프트에도 조화**(잔여 누수 경로 차단 — hook 제약은 종전 "연도·분기+금액·%" 만 커버해 산업 규모 수치를 빠뜨림, ERRORS [345] 은 hook 창작 전례). 게이트 피드백 배선([311])은 이미 존재 → 재작성 시 차단 사유도 함께 주입.
+- **파일**: `JARVIS02_WRITER/draft_writer.py` (`_gen_theme` `[절대 제약]` + `_gen_hook_theme` 프롬프트).
+- **교훈**: "출처 없는 수치 창작 금지" 제약은 *날짜 있는 역사 통계*뿐 아니라 *날짜 없는 산업 규모/로드맵 수치*까지 명시해야 한다. LLM은 "특정 연도·분기" 한정어를 좁게 해석해 "업계 전체 로드맵" 류 미래·현재 산업 추정치를 자유롭게 창작한다. 사실성 게이트는 정상 작동(fail-closed) — 근본 수정은 게이트가 아니라 *작성 프롬프트에서 창작을 막는 것*. ★ 본문·hook 등 *글에 문장을 넣는 모든 LLM 호출*에 동일 제약을 걸어야 한 경로가 누수구가 되지 않는다(ERRORS [345] hook 창작 전례와 동일 클래스).
+
+---
+
+## [367] 수치는 참인데 *타이틀이 거짓* — '연매출'인데 실제는 직전 분기 매출, 출처도 부정확 (2026-07-05)
+
+- **증상**: 인포그래픽/본문에 "석유화학 관련주 **연매출**"이라 표기됐지만, 그 값은 네이버 금융의 *최근 분기* 매출(연간 아님). 수치는 진실이나 **타이틀이 거짓** → 거짓 팩트. 출처도 재무 데이터에 "네이버 금융(KRX 시세)"라 잘못 표기. 사용자: "수치만 정확하면 뭐하나, 타이틀과 매칭돼야 진정한 팩트. 몇년 몇분기인지 명확히. 출처는 실제 수집처. 이런 검증이 없냐."
+- **환경**: `JARVIS09_COLLECTOR/collect_theme.py` `_naver_fin`(재무 파싱) + `stocks_to_datasets`(데이터셋 승격) / `JARVIS02_WRITER/trend_theme_writer.py`(사실성 게이트 grounding 코퍼스).
+- **원인**: ① `_naver_fin` 이 재무표 `vals[0]`(최근 분기 값)만 취하고 **기간(period)을 안 잡음**. ② `stocks_to_datasets` 가 revenue 를 **하드코딩 "연매출"** 로 라벨(기간 무관, 연간이라 단정). ③ 출처를 모든 데이터셋에 **단일 `"네이버 금융(KRX 시세)"`** — 시세(현재가·시총)와 재무(매출·ROE·PER)를 구분 안 함(재무는 KRX 시세가 아님). ④ 사실성 게이트(image_data_verifier·law_enforcer)는 *수치*만 검증하고 *타이틀-데이터 의미 일치*는 검증 안 함 → 거짓 라벨 통과.
+- **헛다리**: "수치가 실데이터면 사실." 아니다 — 라벨(기간·단위·의미)이 데이터와 불일치하면 거짓.
+- **해결**: ① `_naver_fin` 이 재무표 thead 기간 헤더(YYYY.MM 중 td[0] 정렬분)를 `fin_period` 로 포착 → 종목 dict 전파. ② `stocks_to_datasets`: revenue 라벨을 **`매출액 (2025.09 기준)`**(기간 있으면) / **`매출액 (최근 실적 기준)`**(없으면) 로 — '연매출' 단정 제거. 출처를 **시세(현재가·시총) vs 재무제표(매출·ROE·영업이익률·PER)** 로 분리 표기(실제 수집처 반영). ③ grounding 코퍼스(trend_theme_writer)도 동일 기간 라벨 → 본문이 정확한 기간으로 작성·검증됨. ④ 라벨은 이제 *수집 시점에 데이터와 함께 결정*(source-level 정확성 = 구성에 의한 검증).
+- **파일**: `JARVIS09_COLLECTOR/collect_theme.py`, `JARVIS02_WRITER/trend_theme_writer.py`.
+- **교훈**: **진짜 팩트 = 수치 + 라벨(기간·단위·의미·출처)가 모두 데이터와 일치**. 수치 검증만으론 부족 — 타이틀이 데이터의 실제 기간/의미를 정확히 말해야 한다. 파서가 값을 취할 때 *그 값의 기간·출처를 함께 박제*해 라벨을 구성으로 참이 되게 하라. 하드코딩 라벨('연매출')은 데이터와 어긋날 수 있는 잠재적 거짓.
+
+---
+
+## [366] 인포그래픽 우측·하단 여백(빈 카드) — 단일 데이터셋에 다중 슬롯 레이아웃 템플릿 적용 (2026-07-05)
+
+- **증상**: 실데이터 인포그래픽이 생성은 되는데 *우측·하단이 비어 있음*(빈 흰 카드, 텅 빈 슬롯). 사용자: "이미지를 가로로 늘려 양쪽 공백 없이 꽉 채워라."
+- **환경**: `JARVIS06_IMAGE/pro_templates.py build_html`. `_next_data_infographic`(ERRORS [364] top-up)이 dataset *1개씩* 넘겨 인포그래픽 생성.
+- **원인**: `build_html` 이 recipe 의 `template`(학습된 다중 슬롯 레이아웃 — dashboard-grid·report-stack 등, ERRORS [360])을 seed 로 골라 `render_layout` 로 채우는데, **데이터셋이 1개면 CHART_2·CHART_3·MINI_CARDS 슬롯이 빈 채로 렌더** → 빈 카드·여백. `has_all_slots_resolved` 는 `{{SLOT}}` 토큰만 확인해 *빈 문자열로 치환된 슬롯*은 통과시킴(빈 카드 못 걸러냄).
+- **헛다리**: 이미지 폭(1280) 문제로 오해. 실제는 *레이아웃 슬롯 미충족*.
+- **해결**: `build_html` 에서 다중 슬롯 템플릿은 **데이터셋 2개+ 일 때만** 사용(`_n_ds >= 2`). 단일 데이터셋은 기본 풀레이아웃(히어로 밴드 + 단일 막대차트 카드)이 프레임을 꽉 채움. 검증: PER(단일) 재렌더 → 빈 카드 사라지고 히어로+차트로 꽉 참.
+- **파일**: `JARVIS06_IMAGE/pro_templates.py`.
+- **교훈**: 학습된 다중 슬롯 레이아웃은 *데이터가 풍부할 때만* 어울린다. 슬롯 수 > 데이터 수 이면 빈 카드. 렌더 전 데이터 개수로 레이아웃 복잡도를 게이팅해야 한다. (top-up 은 dataset 1개씩이라 항상 단일 → 풀레이아웃)
+
+---
+
+## [365] 네이버 제목 미입력 → 발행 실패 (에디터 URL 유지·logNo 없음) — 고정 좌표 클릭 취약 (2026-07-05)
+
+- **증상**: 대본·이미지 다 만들어졌는데 네이버 발행이 안 됨. 로그: 발행 버튼 클릭 후 `[verify] 에디터 URL 유지(logNo 없음)` 4회 반복 → `발행 미완료 판정`. 사용자 관찰: *제목이 입력 안 됨*.
+- **환경**: `JARVIS08_PUBLISH/platforms/naver_poster.py post_to_naver` 제목 입력부.
+- **원인**: 제목칸 포커스를 **고정 좌표 `_click(283, 336)`(pyautogui 스크린 좌표)** 로 클릭. 브라우저 창 위치·크기·툴바 높이·배너 유무가 바뀌면 제목칸을 빗나가 → 이어지는 클립보드 붙여넣기(Cmd+V)가 엉뚱한 곳(본문·허공)으로 감 → 제목 비어 있음 → 네이버가 제목 없는 글 발행 거부 → 에디터(postwrite) URL 에 머물러 발행 미완료. (본문은 이미 CDP 선택자 포커스 `_focus_editor_body` 로 안정적인데 제목만 좌표 방식이었음)
+- **헛다리**: 발행 버튼 클릭 로직 문제로 오해. 실제는 *그 전 제목 미입력*.
+- **해결**: 제목도 본문과 동일한 **선택자 기반 CDP 포커스**(`_focus_title`) 로 전환 — SmartEditor ONE 제목 셀렉터(`.se-documentTitle [contenteditable]` 등) + 폴백(최상단 contenteditable). 좌표 클릭은 셀렉터 실패 시 폴백으로만 잔존(회귀 0). **입력 후 검증**(`_TITLE_READ_JS`): 비어 있으면 재포커스+재붙여넣기 → 그래도 비면 CDP 타이핑(ActionChains send_keys)까지 3중 안전망. (라이브 네이버 DOM 대상이라 실발행 1회로 최종 확인 필요)
+- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py`.
+- **교훈**: Selenium 자동화에서 *고정 스크린 좌표 클릭은 금물* — 창 상태 변화에 취약. contenteditable·버튼은 반드시 셀렉터(CDP) 로 잡는다. 외부 발행처럼 비멱등·블로킹 작업은 *핵심 입력(제목)에 검증+재시도* 안전망 필수.
+
+---
+
+## [364] 본문 이미지가 전부 AI사진·인포그래픽 0장 — 실데이터가 있는데도 인포그래픽 미생성 (모든 글 공통, 2026-07-05)
+
+- **증상**: 테마 발행 시 본문 이미지 5장이 *전부 AI 사진(`poll_*.png`)*, 데이터 인포그래픽 0장. 사용자: "대본 이미지 슬롯엔 실데이터(API+텍스트)가 무조건 들어있다 → 인포그래픽이 무조건 만들어져야 한다. 안 되면 로직 결함. 경제·모든 글도 마찬가지."
+- **환경**: `JARVIS06_IMAGE/draft_processor.py process_draft` — 경제·테마 *공통* 이미지 오케스트레이터. min_images=5(CATEGORY_POLICY).
+- **원인 (근본 — 로직 결함 2가지)**:
+  1. **인포그래픽 생성이 LLM 이 `[CHART_N]…[/CHART_N]` 슬롯을 emit 하는 것에 100% 의존.** 수집된 실데이터(`collected.datasets` = `stocks_to_datasets`+`facts_to_datasets`, compose_collected 가 출처 박제 조립)는 LLM 슬롯을 *검증*하는 데만 쓰이고, *독립적으로 인포그래픽을 만드는 데는 안 씀*. LLM 이 슬롯 0개면(스로틀·품질저하) 인포그래픽 0장.
+  2. **min-N top-up(`_extra_photos`)과 실패-슬롯 폴백(`_photo_for_failed_slot`)이 인포그래픽이 아니라 AI 사진으로 채움** — 실데이터가 있는데도. → "AI사진 5, 인포그래픽 0" 확정.
+- **경위**: LLM 스로틀(이 세션+데몬 동시 사용, ERRORS [288])로 대본이 CHART 슬롯을 하나도 못 넣음 → 인포그래픽 0 → min-5 가 AI사진 5장으로 때움. 결함①이 스로틀로 노출되고, 결함②가 AI사진으로 굳힘.
+- **헛다리**: "발행 전 일괄 이미지 확보 = 안전". 실데이터가 항상 있으므로(사용자 원칙), *어떤 경우에도* 데이터 인포그래픽을 먼저 만들어야 한다. AI 사진은 데이터가 *정말* 0일 때만.
+- **해결 (단일 함수 `_next_data_infographic` — 모든 글 공통)**: 수집 실데이터에서 아직 안 쓴 dataset 1개 → `generate_infographic`(결정론·LLM 0회·pro_templates)로 인포그래픽 `<p><img></p>` 생성. **세 경로 전부 이 함수를 AI사진보다 우선 호출**: ① 구형식/실패 슬롯(`_generate_charts`) ② min-N top-up(`_extra_infographics`). `used_titles` 를 process_draft 가 생성·공유 → 슬롯·top-up 이 *같은 dataset 을 중복* 시각화 안 함. 데이터 소진 시에만 AI 사진. 사실성: `generate_infographic` 내부 `_verify_dataset` 가 출처 없는 dataset 제거(거짓 차트 금지 규정 12 유지). generate_infographic 은 *경로* 반환 → `_ai_photo_html` 로 `<p><img></p>` 감싸야 `assemble_blocks` 가 image 블록 인식(경로만은 누락).
+- **파일**: `JARVIS06_IMAGE/draft_processor.py` (`_next_data_infographic` 신설, `_extra_infographics`·`_generate_charts`·`process_draft` 연결).
+- **교훈**: 데이터 시각화(인포그래픽)를 *스로틀 가능한 LLM 이 슬롯을 emit 하는 것*에 의존시키면 안 된다. 실데이터가 있으면(항상 있음) 인포그래픽은 *결정론으로 무조건 생성*돼야 한다. AI 사진은 폴백의 폴백. 경제·테마 등 전 카테고리가 단일 `process_draft` 를 공유하므로 한 곳 수정이 전체에 적용.
+
+---
+
+## [363] 발행 진입 콜백이 네이버 차례에 티스토리 쿠키까지 미리 로그인 — 선로그인 대기 사망·원칙 위반 (2026-07-05)
+
+- **증상**: 16시 테마 발행을 시작하자마자 "🍪 티스토리 쿠키 갱신 체크" 가 뜸. 사용자 지적: "지금은 네이버 작성 타임인데 왜 티스토리 로그인 쿠키를 여기서 확인·갱신하냐".
+- **환경**: `JARVIS02_WRITER/scheduler.py` `run_self_repair_then_theme` / `run_self_repair_then_economic` 의 Step 2 — `_clear_all_cookies` 직후 티스토리(`job_pre_publish_check`)·네이버(`job_pre_naver_check`) 쿠키를 *둘 다 선행* 갱신.
+- **원인**: 플랫폼 직렬 발행(네이버 액션 완전 종결 → 티스토리 액션)인데 티스토리 카카오 세션을 *네이버 시작 시점*에 미리 발급 → 네이버 대본 생성·발행(10분+) 내내 방치 → 티스토리 차례엔 세션 만료(선로그인 대기 사망, ERRORS [265]). 게다가 티스토리 쿠키는 이미 *티스토리 차례*에 강제 재갱신됨(테마 `trend_theme_writer._step_ts_cookie` 액션2 시작 / 경제 `economic_poster.post_to_tistory_economic` 발행 직전, 둘 다 `force=True`) → 선행 갱신은 조기·중복·이중 카카오 로그인.
+- **헛다리**: "발행 전 모든 쿠키를 미리 확보해야 안전" — 오히려 티스토리는 미리 열면 방치돼 죽는다. 각 플랫폼은 *자기 차례*에 갱신해야 신선.
+- **해결**: 진입 콜백 Step 2 에서 *네이버 쿠키만* 선행 갱신(`_clear_all_cookies` 가 `naver_cookies.pkl` 삭제 → 네이버 precondition 위해 필수). 티스토리 선행 로그인 제거. 티스토리는 자기 차례(force 갱신)에 처리. 경제글은 티스토리 액션 precondition 이 `TS_COOKIE` 환경변수를 확인하므로, `_clear_all_cookies` 가 pop 한 값을 `load_dotenv(override=True)` 로 *로그인 없이* 복원(실제 신선 로그인은 발행 직전 force). 부수 효과: 티스토리 로그인 실패가 더 이상 네이버 발행까지 막지 않음(실패 격리 — "플랫폼 단위 끝까지 직렬" 원칙 강화).
+- **파일**: `JARVIS02_WRITER/scheduler.py`.
+- **교훈**: "발행 전 일괄 쿠키 확보"는 직렬 파이프라인에서 반(反)패턴. 로그인 세션은 *쓰기 직전*에 발급해야 신선하다. 각 플랫폼 쿠키는 *그 플랫폼 작성 차례*에만 확인·갱신 — 네이버 타임엔 네이버만.
+
+---
+
+## [362] 발행 "글자수 실패"의 진짜 원인 = 데몬 재시작 레이스 (인터프리터 종료 중 발행 잡 실행) — 근본 수정 (2026-07-05)
+
+- **증상**: 텔레그램 `⚠️ [IT 대표주] 완료 / ✅ 성공: 없음 / ❌ 실패: naver, tistory / 📝 네이버 글자수: 실패 / 📝 티스토리 글자수: 실패`. 발행이 6초 만에 실패(정상은 수 분).
+- **환경**: 2026-07-05 16:01. keeper 가 16:00:09 옛 데몬 꺼짐 감지 → 새 데몬 PID 46137 기동. 16:00 테마 크론잡이 misfire 유예(misfire_grace_time=7200)로 16:01:43 뒤늦게 실행.
+- **원인 (근본)**: "글자수 실패"는 *증상*일 뿐 — `scheduler._fmt()` 가 발행 실패(`results[key]==False`) 시 글자수 자리에 "실패"를 표시. 진짜 원인은 harness `theme-publish-...-naver` `② 종목·근거 수집` 스텝의 `RuntimeError: cannot schedule new futures after interpreter shutdown`. 옛 데몬이 kill 되며 CPython `concurrent.futures.thread._python_exit`(atexit)가 전역 `_shutdown=True` 로 바꾼 뒤, 아직 살아있던 워커 스레드가 misfire 잡을 실행(트레이스백: `_python_exit → t.join() → ... → submit → RuntimeError`) → 수집 스텝의 `ThreadPoolExecutor.submit()` 폭발. 임베딩도 같은 순간 같은 에러(fail-open 처리됨).
+- **헛다리**: ① [361]의 부분 수정 — `_col_exec.submit()` 만 `try/except` 로 감쌌으나 크래시는 `_collect()`(종목 병렬 수집)·임베딩 등 *다른 executor 경로*로 새어나옴. 한 줄 방어로는 프로세스 전역 `_shutdown` 을 못 막음. ② harness retry — 종료 중엔 재시도해도 동일 실패(fingerprint abort 로 이미 차단됨). ③ GUARDIAN incident — 코드 버그가 아니라 재시작 레이스라 헛발.
+- **해결 (근본 — 발행을 *시작하지 않음*)**: 인터프리터 종료 감지 단일 진입점 `harness.interpreter_shutting_down()` 신설 (전역 `concurrent.futures.thread._shutdown` + `jarvis_daemon._daemon_shutdown` 확인). 5중 가드로 "종료 중이면 발행을 시작조차 안 하고 *연기(deferred)*":
+  1. `harness.run_action` 최상단 — 모든 액션 공통(발행·경제·ReAct). deferred=True 반환(스텝 미실행 → 크래시 원천 차단).
+  2. `scheduler.run_self_repair_then_theme` / `run_self_repair_then_economic` — 진입 콜백에서 세트 전체(쿠키·자가수리·발행) 건너뜀.
+  3. `scheduler.run_radar_top_theme` — 테마 선정·폴백 캐스케이드 차단.
+  4. `scheduler.run_theme` + `trend_theme_writer.run_all_themes` — "글자수 실패" 텔레그램·GUARDIAN·실패 오기록 스킵.
+  5. `scheduler.run_next` / `_run_one_theme` — 진행상태(index·done/failed) 미기록 → 재시작 후 같은 테마 재시도 보장.
+- **파일**: `JARVIS00_INFRA/harness.py` (`interpreter_shutting_down`·`ActionResult.deferred`·`run_action` 가드), `JARVIS02_WRITER/scheduler.py`, `JARVIS02_WRITER/trend_theme_writer.py`.
+- **교훈**: 장수 데몬 + "코드 변경 후 상시 재시작" 정책에서는 *발행 잡이 종료 중 인터프리터에서 misfire 재실행*되는 레이스가 필연. 방어는 크래시 지점을 한 줄씩 막는 게 아니라 *무거운 동작을 아예 시작하지 않는* 단일 게이트(harness 진입점)여야 한다. 종료 중 실패는 "실패"가 아니라 "연기" — 실패로 오기록하면 테마가 `failed_set` 에 박혀 영구 스킵된다. [361]의 부분 수정은 이 항목으로 대체.
+
+---
+
+## [361] 테마 발행 ② 수집 — `cannot schedule new futures after interpreter shutdown` (데몬 재시작 레이스)
+
+- **증상**: harness `theme-publish-...-naver` attempt=1 step=`② 종목·근거 수집` 에서 `RuntimeError: cannot schedule new futures after interpreter shutdown` (severity medium).
+- **환경**: `JARVIS02_WRITER/trend_theme_writer.py` `_step_collect` — `_col_exec = ThreadPoolExecutor(max_workers=1)` 로 `_run_jarvis09`(JARVIS09 리서치)를 종목 수집과 병렬 실행.
+- **원인**: 발행 스레드가 살아있는 채로 데몬이 재시작(종료 단계 진입)하면 CPython `concurrent.futures.thread._python_exit`(atexit)가 전역 `_shutdown=True` 설정 → 그 뒤 `_col_exec.submit(...)` 이 위 RuntimeError 를 던짐. 코드 변경 후 데몬 상시 재시작 정책상 발행 중 재시작 레이스가 반복 발생.
+- **헛다리**: harness retry — 인터프리터가 종료 중이므로 재시도해도 동일 실패. `shutdown(wait=False)` 만으로는 submit 자체를 못 막음.
+- **해결**: `submit` 을 `try/except RuntimeError` 로 감싸 실패 시 `_col_fut=None` → 리서치를 *동기 실행* 폴백(스레드 미사용)으로 이어 수집 계속. 병렬 이득만 포기, 발행 크래시 제거.
+- **파일**: `JARVIS02_WRITER/trend_theme_writer.py`.
+- **교훈**: 장수 데몬에서 발행 같은 in-flight 스레드 작업은 인터프리터 종료 레이스에 노출된다. 스레드 스케줄(`ThreadPoolExecutor.submit`)은 종료 중 던질 수 있으므로 *동기 폴백 경로*를 항상 마련해야 한다. (관련: [148] CLI 병렬, [1266행대] executor 블로킹)
+
+---
+
 ## [360] 인포그래픽 임의 레이아웃 재현 — 슬롯 기반 레이아웃 템플릿 엔진 (★ 사용자 요청 2026-07-05)
 
 - **맥락**: [359] 실이미지 학습은 *색/스타일 DNA* 만 전이했고 레이아웃은 고정 1종이라 "임의 레퍼런스 레이아웃 재현" 불가. 사용자 — "임의 레이아웃 완벽 재현까지 이어서, 찝찝하게 남기지 말고 완벽하게".

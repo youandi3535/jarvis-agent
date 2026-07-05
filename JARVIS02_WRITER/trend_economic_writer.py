@@ -2317,6 +2317,19 @@ def ts_publish(draft: dict) -> dict:
         )
 
         if result:
+            # ★ DB 기록 (ERRORS [370]): 성공 발행 → on_post_published_detail 이 posts·post_analysis
+            #   *둘 다* 기록 → 대시보드(오늘 발행 글)·Daily Review 자동 동기화. 하네스 경제 흐름은
+            #   이 함수를 send 콜백으로 쓰는데 emit 이 누락돼 07-01 이후 발행이 기록 0 이었음.
+            try:
+                from shared.bus import on_post_published_detail as _emit
+                _imgs = [str(b[1]) for b in (blocks or []) if b and b[0] == "image"]
+                _emit(theme=keyword, platform="tistory", title=draft['title'],
+                      content=draft.get('content', ''), html=html,
+                      source_keyword=keyword, post_type="economic", image_paths=_imgs)
+                print(f"  ✅ [DB] post_analysis·posts 저장 완료 (이미지 {len(_imgs)}개)")
+            except Exception as _dbe:
+                print(f"  ⚠️ [DB] 저장 오류(무시): {_dbe}")
+                _g_report("writer", _dbe, module=__name__)
             _tg(f"✅ [TISTORY-TREND] 발행 완료!\n제목: {draft['title']}\n키워드: {keyword}")
             print(f"  ✅ [TISTORY-PUB] 완료")
             return {"success": True, "url": "", "keyword": keyword}
@@ -2530,6 +2543,17 @@ def nv_publish(draft: dict, ts_keyword: str = '') -> dict:
         )
 
         if result:
+            # ★ DB 기록 (ERRORS [370]): 성공 발행 → posts·post_analysis 둘 다 기록 → 대시보드 동기화
+            try:
+                from shared.bus import on_post_published_detail as _emit
+                _imgs = [str(b[1]) for b in (blocks or []) if b and b[0] == "image"]
+                _emit(theme=keyword, platform="naver", title=draft['title'],
+                      content=draft.get('content', ''), html=draft.get('html', ''),
+                      source_keyword=keyword, post_type="economic", image_paths=_imgs)
+                print(f"  ✅ [DB] post_analysis·posts 저장 완료 (이미지 {len(_imgs)}개)")
+            except Exception as _dbe:
+                print(f"  ⚠️ [DB] 저장 오류(무시): {_dbe}")
+                _g_report("writer", _dbe, module=__name__)
             _tg(f"✅ [NAVER-TREND] 발행 완료!\n제목: {draft['title']}\n키워드: {keyword}")
             print(f"  ✅ [NAVER-PUB] 완료")
             return {"success": True, "url": "", "keyword": keyword}

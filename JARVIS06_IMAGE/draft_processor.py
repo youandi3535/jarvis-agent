@@ -316,6 +316,64 @@ def _extra_photos(keyword: str, sector: str, count: int, out_dir: Path) -> list:
     return [results[i] for i in sorted(results)]
 
 
+def _next_data_infographic(collected, out_dir: Path, run_id: str, used_titles: set,
+                           platform: str = "", html_so_far: str = "") -> str:
+    """수집 실데이터에서 *아직 안 쓴* dataset 1개 → 결정론(LLM 0회) 인포그래픽 <p><img></p>.
+
+    ★ 사용자 박제 2026-07-05 (ERRORS [364]): "실데이터(API+텍스트)는 항상 있다 →
+    인포그래픽 무조건 생성". collected.datasets = stocks_to_datasets + facts_to_datasets
+    (compose_collected 가 출처 박제 조립). used_titles 로 슬롯·top-up 간 중복 방지.
+    거짓 차트 금지(규정 12): generate_infographic 내부 _verify_dataset 가 출처 없는 dataset 제거.
+    없으면 "" 반환(→ 호출자가 AI 사진 폴백).
+    """
+    try:
+        from JARVIS06_IMAGE.infographic_engine import generate_infographic
+    except ImportError:
+        return ""
+    theme = (getattr(collected, "meta", None) or {}).get("keyword", "")
+    for ds in (getattr(collected, "datasets", None) or []):
+        if not ds.get("data"):
+            continue
+        _title = (ds.get("title") or f"{theme} 핵심 수치").strip()
+        if _title in used_titles or (html_so_far and _title and _title in html_so_far):
+            continue
+        used_titles.add(_title)   # 성공·실패 무관 1회만 시도 (중복·무한 방지)
+        try:
+            _src = (ds.get("source") or {}).get("name") or "자비스09 수집"
+            # ★ generate_infographic 은 렌더된 jpg *경로* 반환 → 사진과 동일하게
+            #   <p><img></p> 로 감싸야 assemble_blocks 가 image 블록으로 인식(경로만은 누락).
+            _path = generate_infographic(
+                _title, "수집 실데이터 기반", [ds],
+                run_id=run_id or theme, slot_key=f"dg{len(used_titles)}", out_dir=out_dir,
+                context=f"{theme} — {_title}", src=f"데이터 출처: {_src}",
+            )
+            if _path:
+                print(f"  📊 [{platform}] 실데이터 인포그래픽: {_title[:30]}")
+                return _ai_photo_html(_path, _title[:40].replace('"', "'"))
+        except Exception as e:
+            print(f"  ⚠️ [{platform}] 실데이터 인포그래픽 실패({_title[:20]}): {e}")
+    return ""
+
+
+def _extra_infographics(collected, out_dir: Path, count: int,
+                        run_id: str = "", platform: str = "",
+                        html_so_far: str = "", used_titles: set = None) -> list:
+    """★ min-N top-up 을 *실데이터 인포그래픽* 으로 채운다 (사용자 박제 2026-07-05, ERRORS [364]).
+
+    데이터 있으면 무조건 인포그래픽 — AI 사진 폴백 *이전*. datasets 소진 시 빈 리스트.
+    """
+    if count <= 0:
+        return []
+    used = used_titles if used_titles is not None else set()
+    out: list = []
+    while len(out) < count:
+        fig = _next_data_infographic(collected, out_dir, run_id, used, platform, html_so_far)
+        if not fig:
+            break
+        out.append(fig)
+    return out
+
+
 def _insert_extra_photos(content: str, photos: list) -> str:
     """추가 AI 사진을 이미지 없는 h2/h3 섹션에 배포 + 나머지는 말미."""
     if not photos:
@@ -389,7 +447,8 @@ def _mandatory_thumbnail(title: str, keyword: str, sector: str, platform: str,
 def _generate_charts(html: str, theme: str, sector: str, collected,
                      platform: str, out_dir: Path,
                      chart_ai_fallback: bool = True,
-                     context_docs: list | None = None) -> str:
+                     context_docs: list | None = None,
+                     run_id: str = "", used_titles: set = None) -> str:
     """[CHART_N]...[/CHART_N] 데이터 내장 슬롯 → infographic_engine 고퀄리티 인포그래픽.
 
     구형식 [CHART_N: 설명] 잔존 슬롯 = 데이터 없음 → AI 사진 직행 (거짓 차트 금지).
@@ -413,15 +472,22 @@ def _generate_charts(html: str, theme: str, sector: str, collected,
     if not placeholders:
         return html
 
-    print(f"  ⚠️ [{platform}] 구형식 슬롯 {len(placeholders)}개 발견 (데이터 없음 → AI 사진 직행)")
+    # ★ 실데이터 인포그래픽 우선 (사용자 박제 2026-07-05, ERRORS [364]): 구형식/실패 슬롯도
+    #   LLM 이 "차트 자리"라 판단한 곳 → 수집 실데이터로 인포그래픽을 먼저 채우고, 데이터
+    #   소진 시에만 AI 사진. ("데이터 있으면 무조건 인포그래픽" — top-up 과 동일 원칙·중복방지)
+    print(f"  ⚠️ [{platform}] 구형식 슬롯 {len(placeholders)}개 발견 → 실데이터 인포그래픽 우선 (소진 시 AI 사진)")
     _desc_by_pos = {i + 1: desc.strip() for i, (_, desc) in enumerate(placeholders)}
+    _used = used_titles if used_titles is not None else set()
     svg_map: dict[int, str] = {}
 
-    if chart_ai_fallback:
-        for pos, desc in _desc_by_pos.items():
+    for pos, desc in _desc_by_pos.items():
+        _info = _next_data_infographic(collected, out_dir, run_id, _used, platform, html)
+        if _info:
+            svg_map[pos] = _info
+        elif chart_ai_fallback:
             svg_map[pos] = _photo_for_failed_slot(desc, theme, out_dir)
-    else:
-        svg_map = {pos: "" for pos in _desc_by_pos}
+        else:
+            svg_map[pos] = ""
 
     _pos = [0]
 
@@ -580,22 +646,40 @@ def process_draft(draft_html: str, collected, platform: str = "tistory",
     except Exception as e:
         log.warning(f"근거 fact 합류 실패(무시): {e}")
 
-    # ① [CHART_N] → SVG (실패 슬롯은 chart_ai_fallback 정책에 따라 AI 사진 대체)
+    # ① [CHART_N] → 인포그래픽 (실패/구형식 슬롯도 실데이터 인포그래픽 우선, 소진 시 AI 사진)
+    #   used_titles: 슬롯·top-up 이 *같은 dataset 을 중복* 시각화하지 않도록 공유 (ERRORS [364])
+    _run_id = str(meta.get("run_id") or theme)
+    _used_titles: set = set()
     html = _generate_charts(draft_html, theme, sector, collected, platform, out_dir,
-                            chart_ai_fallback=chart_ai_fallback, context_docs=context_docs)
+                            chart_ai_fallback=chart_ai_fallback, context_docs=context_docs,
+                            run_id=_run_id, used_titles=_used_titles)
 
     # ② [PHOTO_N] → AI 사진
     html = _generate_photos(html, theme, out_dir, sector=sector,
                             collection_docs=context_docs)
 
-    # ★ min-N top-up 안전망 (썸네일 제외 본문 이미지 ≥ min_images 보장)
+    # ★ min-N top-up 안전망 — 실데이터 인포그래픽 *우선* (사용자 박제 2026-07-05, ERRORS [364]):
+    #   "실데이터(API+텍스트)는 항상 있다 → 인포그래픽 무조건 생성". collected.datasets
+    #   (stocks_to_datasets+facts_to_datasets, 출처 박제)로 결정론 인포그래픽을 먼저 채우고,
+    #   *데이터가 정말 소진됐을 때만* AI 사진 폴백. 경제·테마 등 전 카테고리 공통 경로.
     n_img = _count_images(html)
     if n_img < min_images:
         need = min_images - n_img
-        print(f"  📸 [{platform}] 본문 이미지 {n_img} < 최소 {min_images} → AI 사진 {need}개 보충")
-        extra = _extra_photos(theme, sector, need, out_dir)
-        if extra:
-            html = _insert_extra_photos(html, extra)
+        print(f"  🖼️ [{platform}] 본문 이미지 {n_img} < 최소 {min_images} → 실데이터 인포그래픽 {need}개 우선 보충")
+        infos = _extra_infographics(collected, out_dir, need, run_id=_run_id,
+                                    platform=platform, html_so_far=html,
+                                    used_titles=_used_titles)
+        if infos:
+            html = _insert_extra_photos(html, infos)
+            n_img = _count_images(html)
+            print(f"  📊 [{platform}] 실데이터 인포그래픽 {len(infos)}개 보충 완료 → 본문 이미지 {n_img}/{min_images}")
+        # 실데이터가 *정말* 소진됐을 때만 AI 사진 (극단적 경우 — 데이터 0)
+        if n_img < min_images:
+            need2 = min_images - n_img
+            print(f"  📸 [{platform}] 실데이터 소진 → AI 사진 {need2}개 보충 (최후)")
+            extra = _extra_photos(theme, sector, need2, out_dir)
+            if extra:
+                html = _insert_extra_photos(html, extra)
 
     # ③ (옛 h2→이미지 교체 폐기) — 본문 이미지는 [CHART_N]/[PHOTO_N] 단일 경로만.
 

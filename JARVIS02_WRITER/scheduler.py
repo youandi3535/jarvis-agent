@@ -46,7 +46,7 @@ PYTHON        = sys.executable
 
 sys.path.insert(0, str(BASE_DIR.parent))  # shared/ 접근
 
-SCHEDULE_HOURS      = [16]
+SCHEDULE_HOURS      = [21]   # ★ 테마 발행 시간 (표시용 — 실제 트리거는 DEFAULT_JOBS j01_theme_post_21). 16→21 (2026-07-05)
 RADAR_CHECK_HOURS   = [9, 15]   # RADAR 파이프라인 확인: 오전 09:00 · 오후 15:00
 MAX_RETRY           = 3
 TG_TOKEN        = os.getenv("TELEGRAM_TOKEN", "")
@@ -500,6 +500,14 @@ def run_theme(theme: str) -> dict:
     log(f"▶ 테마 시작: {theme}")
     log("=" * 50)
 
+    # ── ★ 인터프리터 종료 레이스 가드 (근본 원인 — ERRORS [362]) ──
+    # 데몬 재시작으로 인터프리터가 종료 단계면 발행을 *시작하지 않고* 연기.
+    # (호출자 run_next/_run_one_theme 도 종료 중이면 진행상태를 실패로 기록하지 않음)
+    from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
+    if _isd():
+        log(f"⏸ [{theme}] 인터프리터 종료 중(데몬 재시작) — 발행 연기, 재시작 후 재시도")
+        return {"naver": False, "tistory": False}
+
     # 캐시 초기화 (새 테마 시작 시)
     clear_theme_cache(theme)
 
@@ -515,6 +523,11 @@ def run_theme(theme: str) -> dict:
             "tistory": result.get("tistory", {}).get("success", False),
         }
         _result_data_empty = result.get("data_empty", False)
+        # ★ 인터프리터 종료 레이스 (ERRORS [362]) — 발행이 시작조차 못 함(연기).
+        #   "글자수 실패" 텔레그램·GUARDIAN·실패 오기록 전부 스킵하고 즉시 반환 → 재시작 후 재시도.
+        if result.get("shutdown_deferred"):
+            log(f"⏸ [{theme}] 발행 연기(데몬 재시작) — 보고·GUARDIAN·진행기록 스킵, 재시작 후 재시도")
+            return {"naver": False, "tistory": False}
     except Exception as _tw_e:
         log(f"  ❌ trend_theme_writer 실행 예외: {_tw_e}")
         import traceback; traceback.print_exc()
@@ -643,6 +656,13 @@ def run_next():
         log(f"📋 [{idx+1}/{len(themes)}] {theme}")
         results = run_theme(theme)
 
+        # ★ 인터프리터 종료 레이스 (ERRORS [362]) — 발행 미시작(연기).
+        #   index 전진·done/failed 기록 금지 → 재시작 후 같은 테마 재시도 보장.
+        from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
+        if _isd() and not any(results.values()):
+            log(f"⏸ [{theme}] 발행 연기(데몬 재시작) — 진행상태 미기록, 재시작 후 재시도")
+            return
+
         p['index'] = idx + 1
         if 'platform_status' not in p:
             p['platform_status'] = {}
@@ -661,6 +681,12 @@ def run_next():
 
 def run_radar_top_theme():
     """오늘 RADAR 추천 중 미작성 최상위 테마 실행. 없으면 순차 실행(run_next) 폴백."""
+    # ── ★ 인터프리터 종료 레이스 가드 (근본 원인 — ERRORS [362]) ──
+    # 종료 중이면 테마 선정·발행·폴백 캐스케이드 전부 건너뜀 (헛된 실패 연쇄 차단).
+    from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
+    if _isd():
+        log("⏸ [RADAR] 인터프리터 종료 중(데몬 재시작) — 발행 연기, 재시작 후 재시도")
+        return
     if _paused:
         send_telegram("⏸ 일시정지 상태입니다.\n재개하려면 /resume")
         return
@@ -824,6 +850,14 @@ def run_radar_top_theme():
             os.environ["JARVIS_POST_TYPE"]      = "theme"
             _results = run_theme(_theme)
 
+            # ★ 인터프리터 종료 레이스 (ERRORS [362]) — 발행 미시작(연기). 실패 오기록·폴백
+            #   캐스케이드 금지: pipeline 은 'suggested'(재시도 대상)로 되돌리고 True 반환해
+            #   상위 폴백 루프를 멈춘다 (죽어가는 인터프리터에서 다른 테마 시도 무의미).
+            if _isd() and not any(_results.values()):
+                log(f"⏸ [{_theme}] 발행 연기(데몬 재시작) — 실패 미기록·폴백 스킵, 재시작 후 재시도")
+                update_pipeline_status(item['id'], 'suggested')
+                return True
+
             # 결과 판정 — 최소 1 플랫폼 성공이면 OK
             _any_ok = any(_results.values())
             _all_ok = all(_results.values())
@@ -974,6 +1008,15 @@ def run_self_repair_then_economic():
 
     쿠키 점검 실패 시 발행 건너뜀. 자가진단은 결과 무관 발행 진행.
     """
+    # ── ★ 인터프리터 종료 레이스 가드 (근본 원인 — ERRORS [362]) ──
+    # 데몬 재시작 시 misfire 유예로 뒤늦게 실행되는 07:00 잡이 죽어가는 인터프리터에서
+    # 돌면 수집 ThreadPoolExecutor 크래시 → 헛된 실패. 종료 중이면 세트 자체를 건너뜀
+    # (쿠키·자가수리·발행 전부). keeper 재기동 새 프로세스가 misfire 재실행 → 정상 발행.
+    from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
+    if _isd():
+        log("⏸ [경제 브리핑] 인터프리터 종료 중(데몬 재시작) — 발행 세트 연기, 재시작 후 재시도")
+        return
+
     # ★ 중복 실행 차단 — 오늘 이미 경제 브리핑 발행 세트가 시작됐으면 스킵
     from datetime import datetime as _dt
     _today = _dt.now().strftime('%Y%m%d')
@@ -987,15 +1030,15 @@ def run_self_repair_then_economic():
     # ─── Step 1: 이전 쿠키·캐시 전체 삭제 ──────────────────────
     _clear_all_cookies("경제 브리핑")
 
-    # ─── Step 2: 쿠키 체크 (새 로그인으로 갱신) ─────────────────
+    # ─── Step 2: 쿠키 체크 — ★ 네이버만 (사용자 박제 2026-07-05, ERRORS [363]) ─────
+    # 네이버가 첫 액션 → 네이버 쿠키만 지금 갱신. 티스토리 쿠키는 *티스토리 발행 직전*
+    # (`economic_poster.post_to_tistory_economic`, force=True)에 강제 갱신 → 신선 세션.
+    # 여기서 티스토리를 미리 로그인하면 네이버 발행 내내 카카오 세션이 방치·만료된다.
+    # ★ TS_COOKIE 는 _clear_all_cookies 가 os.environ 에서 pop 했으므로, 티스토리 액션
+    #   precondition(TS_COOKIE 존재 확인) 통과용으로 .env 값만 복원(로그인 없음).
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(override=True)
     _cookie_failed = []
-    try:
-        from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import job_pre_publish_check as _ts_ck
-        if not _ts_ck():
-            _cookie_failed.append("티스토리")
-    except Exception as _e:
-        log(f"⚠️ [경제 브리핑] 티스토리 쿠키 점검 예외: {_e}")
-        _cookie_failed.append("티스토리")
     try:
         from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import job_pre_naver_check as _nv_ck
         if not _nv_ck():
@@ -1004,7 +1047,7 @@ def run_self_repair_then_economic():
         log(f"⚠️ [경제 브리핑] 네이버 쿠키 점검 예외: {_e}")
         _cookie_failed.append("네이버")
     if _cookie_failed:
-        msg = f"🚨 쿠키 점검 실패 ({', '.join(_cookie_failed)}) — 경제 브리핑 발행 건너뜀"
+        msg = f"🚨 네이버 쿠키 점검 실패 — 경제 브리핑 발행 건너뜀 (티스토리는 티스토리 차례에 갱신)"
         log(msg)
         send_telegram(msg)
         return
@@ -1029,6 +1072,14 @@ def run_self_repair_then_theme():
 
     *하나의 세트*: 쿠키 점검 → 자가진단 → 자동수정 → 테마 발행. 시퀀스 보장.
     """
+    # ── ★ 인터프리터 종료 레이스 가드 (근본 원인 — ERRORS [362]) ──
+    # 데몬 재시작 시 misfire 유예로 뒤늦게 실행되는 16:00 잡이 죽어가는 인터프리터에서
+    # 돌면 수집 ThreadPoolExecutor 크래시 → 헛된 "글자수 실패". 종료 중이면 세트 자체 건너뜀.
+    from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
+    if _isd():
+        log("⏸ [테마글] 인터프리터 종료 중(데몬 재시작) — 발행 세트 연기, 재시작 후 재시도")
+        return
+
     # ★ 중복 실행 차단 — 테마 발행이 현재 진행 중이면 세트 전체 스킵
     if _is_locked_externally():
         _msg = "⛔ [테마글] 발행 세트 이미 진행 중 — 중복 실행 차단"
@@ -1039,15 +1090,12 @@ def run_self_repair_then_theme():
     # ─── Step 1: 이전 쿠키·캐시 전체 삭제 ──────────────────────
     _clear_all_cookies("테마글")
 
-    # ─── Step 2: 쿠키 체크 (새 로그인으로 갱신) ─────────────────
+    # ─── Step 2: 쿠키 체크 — ★ 네이버만 (사용자 박제 2026-07-05, ERRORS [363]) ─────
+    # 네이버가 첫 액션 → 네이버 쿠키만 지금 갱신. 티스토리 쿠키는 *티스토리 차례*
+    # (`trend_theme_writer._step_ts_cookie`, 액션 2 시작)에 force 갱신 → 신선 세션.
+    # 여기서 티스토리를 미리 로그인하면 네이버 발행 내내(10분+) 카카오 세션이 방치·만료된다
+    # (선로그인 대기 사망, ERRORS [265]). "네이버 작성 타임엔 네이버 쿠키만".
     _cookie_failed = []
-    try:
-        from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import job_pre_publish_check as _ts_ck
-        if not _ts_ck():
-            _cookie_failed.append("티스토리")
-    except Exception as _e:
-        log(f"⚠️ [테마글] 티스토리 쿠키 점검 예외: {_e}")
-        _cookie_failed.append("티스토리")
     try:
         from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import job_pre_naver_check as _nv_ck
         if not _nv_ck():
@@ -1056,7 +1104,7 @@ def run_self_repair_then_theme():
         log(f"⚠️ [테마글] 네이버 쿠키 점검 예외: {_e}")
         _cookie_failed.append("네이버")
     if _cookie_failed:
-        msg = f"🚨 쿠키 점검 실패 ({', '.join(_cookie_failed)}) — 테마글 발행 건너뜀"
+        msg = f"🚨 네이버 쿠키 점검 실패 — 테마글 발행 건너뜀 (티스토리는 티스토리 차례에 갱신)"
         log(msg)
         send_telegram(msg)
         return
@@ -1327,7 +1375,7 @@ def job_radar_pipeline_check():
 #  즉시 실행(버스 구독) 방식은 사용하지 않음.
 #  발행 스케줄은 JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 가 단독 관리:
 #    07:00  j01_economic_post   → run_economic_poster()  (경제 브리핑, 3개 블로그 각각 다르게)
-#    16:00  j01_theme_post_16   → run_radar_top_theme()  (테마주, RADAR 최상위 키워드 → 3개 블로그 다르게)
+#    21:00  j01_theme_post_21   → run_radar_top_theme()  (테마주, RADAR 최상위 키워드 → 3개 블로그 다르게)
 #  JARVIS03 는 09/12/15시 트렌드 수집 후 DB 파이프라인에 적재.
 #  16시 잡이 DB에서 당일 최고 점수 테마를 꺼내 실행.
 # ══════════════════════════════════════════
