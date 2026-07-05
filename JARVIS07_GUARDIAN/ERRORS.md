@@ -1,5 +1,114 @@
 # JARVIS AGENT — 오류 기록 (수정 이력)
 
+---
+
+## [360] 인포그래픽 임의 레이아웃 재현 — 슬롯 기반 레이아웃 템플릿 엔진 (★ 사용자 요청 2026-07-05)
+
+- **맥락**: [359] 실이미지 학습은 *색/스타일 DNA* 만 전이했고 레이아웃은 고정 1종이라 "임의 레퍼런스 레이아웃 재현" 불가. 사용자 — "임의 레이아웃 완벽 재현까지 이어서, 찝찝하게 남기지 말고 완벽하게".
+- **핵심 판단**: 레이아웃을 *렌더 시점 LLM 저작*으로 하면 [358] latency 재발. 정답 = **레이아웃을 *학습 시점(나이틀리·비전)* 에 재사용 HTML 템플릿(데이터 슬롯 포함)으로 저작 → 렌더 시점은 슬롯에 검증 실데이터만 채워 즉시·안전**. LLM 저작을 렌더 임계경로에서 뺀 채 임의 레이아웃 재현.
+- **구현**:
+  1. `JARVIS06_IMAGE/template_engine.py` 신설 — 슬롯 어휘(`{{TITLE}}`·`{{HERO_STATS}}`·`{{CHART_1..3}}`·`{{MINI_CARDS}}`·`{{SOURCE}}` + 색 CSS 변수 `var(--a1)` 등). `render_layout()` 이 슬롯에 실데이터 콘텐츠(pro_templates 빌더 재사용) 주입 + `:root` 색변수 주입. `verify_layout_output`(수치 grounding — 템플릿 하드코딩 숫자 차단) + `has_all_slots_resolved`(미정의 슬롯 탐지).
+  2. `pro_templates.build_html` — 레시피에 `template` 있으면 `render_layout` 로 재현, 실패 시 기본 레이아웃 폴백.
+  3. `design_learner._analyze_reference` — 비전이 팔레트 + **레이아웃 템플릿**을 함께 저작(마커 `===PALETTE===`/`===TEMPLATE===`). `_test_render` 가 템플릿 슬롯치환·데이터안전 직접 검증(실패 시 template 제거 → 색만 폴백).
+  4. Workflow `seed-layout-templates` — 6 아키타입(대시보드/매거진/빅넘버/비교/리포트스택/볼드배너) 병렬 저작·검증 → 라이브러리 즉시 시드.
+- **데이터 안전**: 렌더는 코드가 슬롯에 실데이터 주입 → 템플릿 정적 텍스트의 임의 숫자는 `verify_layout_output` 이 차단. 실패 시 폴백.
+- **파일**: `JARVIS06_IMAGE/{template_engine.py(신설),pro_templates.py,design_learner.py,design_recipes.json}`.
+- **교훈**: 렌더러의 표현력(레이아웃)도 *학습 대상*이다. LLM 저작을 렌더가 아닌 *학습 시점*에 두고 산출물을 재사용 템플릿(슬롯)으로 박제하면, 속도·데이터안전을 지키며 임의 레이아웃을 재현할 수 있다. "품질은 코드/자산에 박제, LLM은 학습 시점에만"의 확장.
+
+---
+
+## [359] 인포그래픽 디자인 나이틀리 강화학습 — 검증된 디자인 레시피 누적 (★ 사용자 요청 2026-07-05)
+
+- **맥락**: 사용자 — "저 수많은 인포그래픽 레퍼런스를 매일 새벽 조용히 누적 강화학습(오류학습처럼)시키면 품질이 복리로 오르지 않을까? 하루 1개, 05:00." (기능 요청 — 오류 아님, 학습 자산 신설 박제)
+- **핵심 판단 (사용자에게 정정)**: "이미지로 모델 파인튜닝"은 불가(Max 구독 SDK·하루 10장으론 생성능력 안 오름·저작권). 되는 버전 = **오류학습과 동형 — 검증 게이트 통과한 *디자인 레시피(코드 자산)* 를 누적**. 이미지가 아니라 팔레트+스타일 노브를 쌓는다.
+- **구현**:
+  1. `JARVIS06_IMAGE/design_recipes.json` — 레시피 레지스트리(기본 5종 시드: 팔레트 10색 + hero_texture + card_radius).
+  2. `JARVIS06_IMAGE/design_learner.py` — `job_learn_design()`(05:00 콜백): Claude 가 로테이션 미감(_AESTHETICS 12종)으로 새 원본 레시피 1개 창작 → 게이트(_validate_recipe: 구조·hero 대비·soft 밝기·강조 채도·두 강조색 구분·독창성 dist>45 · card_radius 범위) → `_test_render`(샘플 실렌더 성공) → 통과분만 append + 텔레그램 알림. 3회 실패 시 조용히 스킵(다음 새벽 재시도). `get_recipes()`/`pick_recipe()` 로 pro_templates 소비.
+  3. `pro_templates.build_html` — `_pick_palette(seed)` 가 레지스트리(기본+학습)에서 선택 → 학습분이 자동 로테이션 진입. hero_texture(grid/dots/glow/diagonal/none)·card_radius 노브 렌더.
+  4. `JARVIS04 DEFAULT_JOBS` — `j06_design_learn` cron 05:00.
+- **왜 우리 셋업에 맞나**: GPU·훈련 0. 나이틀리 소형 JSON LLM 1회 + 실렌더 1회. 스로틀 시 fast-fail 스킵(발행 무관). 기존 인프라(스케줄러·shared/llm·pro_templates) 재사용.
+- **★ 실이미지 세밀 학습 (사용자 박제 2026-07-05 보강 — "사이트 이미지를 디테일까지 제대로 학습")**: 비전 가능 확인됨 — SDK 에이전트 `allowed_tools=['Read']`+`bypassPermissions` 로 이미지 파일을 직접 읽어 세밀 분석(실증: 코스피 인포그래픽의 색·차트·주석·수치까지 정확 서술). 단일 진입점 `shared/llm.invoke_vision`. Phase0(최우선): `_fetch_reference`(Playwright Bing, requests.get 금지 규정 회피) 후보 수집 → **비전 관련성 게이트**(인포그래픽 아니면 reject — 여행사진·클립아트 등 오염 차단) → `_analyze_reference` 세밀 분석(팔레트·hero_texture·card_radius + notes 5+). 실패 시 Phase1(지식) → Phase2(결정론) 폴백.
+- **헛다리(수집)**: Bing `filterui:photo-photo` 필터를 넣었더니 인포그래픽 대신 여행사진 수집됨 — 인포그래픽은 '사진' 카테고리가 아님. 필터 제거 + 비전 관련성 게이트로 해결.
+- **저작권**: 레퍼런스 복제 금지 — 세밀 분석으로 *디자인 원리·색 시스템* 만 추출해 우리 데이터에 적용(우리 데이터가 다르므로 픽셀 복제 아님). 임시 이미지는 장기 저장 안 함. (phase-2) 발행 성과→Bandit 보상으로 레시피 선택 강화 훅.
+- **파일**: `JARVIS06_IMAGE/{design_recipes.json,design_learner.py,pro_templates.py}`, `JARVIS04_SCHEDULER/job_registry.py`.
+- **교훈**: "강화학습"을 모델 훈련으로만 보면 우리 셋업에선 막힌다. *검증 게이트 통과 자산의 누적 + 성과 기반 선택*으로 재정의하면 오류학습과 동형으로 실현 가능하다. 주입량(하루 10개)이 아니라 *게이트 통과분*이 실질 개선이다.
+
+---
+
+## [358] 인포그래픽 이미지 1장에 수십 분 — LLM 실시간 HTML 저작을 임계경로에 둔 게 근본 실수 (★ 사용자 지적 2026-07-05)
+
+- **증상**: [357]에서 도입한 design-gen(LLM이 이미지마다 7000토큰 HTML 실시간 저작)이 이미지 한 장 뽑는 데 수십 분 소요. 사용자: "얼마나 로직이 엉망이면 이미지 한 장에 몇십 분을 소비하냐".
+- **환경**: `JARVIS06_IMAGE/infographic_engine.py` `_designgen` → `shared.llm.invoke_text`.
+- **원인**: (1) `invoke_text`가 SDK 스로틀 시 재시도(최대 4회 × 200초)로 10분+ 블로킹. (2) 이 환경은 인터랙티브 Claude 세션+데몬+테스트가 같은 Max 구독 SDK를 경합 → 대형 생성이 항상 스로틀. (3) "이미지=LLM 대형 생성 1회"를 임계경로에 넣은 설계 자체가 오류 — 전문 품질을 *LLM 실시간 저작*으로 얻으려다 속도·신뢰성을 다 잃음.
+- **헛다리**: fast-fail(재시도 축소)만으로 해결하려 함 — 여전히 이미지당 최대 110초 + 스로틀 상시화라 근본 해결 아님.
+- **핵심 통찰**: 전문 품질과 속도는 상충하지 않는다. 손으로 저작한 전문 HTML은 *동일 렌더러*로 LLM 0회·5.4초에 렌더됨. → **전문 디자인을 코드 템플릿에 박제**하고 검증된 실데이터만 꽂으면 즉시·전문가급·조작불가.
+- **해결** (design-generation → **결정론 pro_templates**):
+  1. `JARVIS06_IMAGE/pro_templates.py` 신설 — 팔레트 5종(seed 회전)·데이터형태 자동판별(시계열/카테고리/비중)·딥컬러 히어로 밴드·초대형 히어로 스탯+스파크라인·듀오톤 area 라인·그라디언트 랭킹 막대·도넛+범례·값배지·출처 푸터. **전부 코드 결정론 렌더(LLM 0회)**. 수치는 검증 실데이터로 코드가 채움 → 조작 불가.
+  2. `generate_infographic` 1순위 = `render_pro`(happy path는 LLM 스펙조차 호출 안 함, 5.4초). design-gen은 opt-in(`INFOGRAPHIC_DESIGNGEN=1`, 기본 OFF). render_spec은 최종 폴백.
+  3. `_designgen`의 fast-fail(단일시도·timeout110·retries1)은 opt-in 경로에만 유지.
+- **파일**: `JARVIS06_IMAGE/pro_templates.py`(신설), `JARVIS06_IMAGE/infographic_engine.py`.
+- **교훈**: "품질을 LLM으로 뽑는다"와 "품질을 코드에 박제한다"는 다르다. *디자인은 한 번 사람이 잘 만들어 코드로 박제*하고, LLM은 데이터 수집·검증에만 쓰는 게 옳다. LLM을 이미지 렌더 임계경로에 넣으면 지연·비용·스로틀이 사용자 경험을 파괴한다. [357]의 design-gen은 opt-in으로 강등.
+
+---
+
+## [357] 본문 인포그래픽이 "matplotlib +1" 수준 — design-selection 구조가 품질 천장 (★ 사용자 지적 2026-07-05, design-gen은 [358]에서 결정론 템플릿으로 대체)
+
+- **증상**: 본문 데이터 인포그래픽이 전문 디자이너 수준이 아니라 범용 관리자 대시보드 템플릿(단색 teal·흰 라운드 카드 그리드·구조 동일·도넛 한조각·좌하단 큰 여백)에 머묾. 사용자: "누가 봐도 맵플로릭의 살짝 상위 버전".
+- **환경**: `JARVIS06_IMAGE/infographic_engine.py` — `generate_infographic` → `_llm_design`(JSON 스펙) → `render_spec`(손코딩 렌더러).
+- **원인**: **design-selection 구조** — LLM은 고정 어휘(layout enum 5·mood enum 9·chart enum 6)에서 *스펙만 선택*하고, 실제 그림은 손코딩된 SVG 함수들이 그림. 디자인 어휘가 코드에 얼어붙어 전문가급이 원천 불가. 렌더러는 Chromium(HTML→PNG)이라 임의 디자인을 찍을 수 있는데도 HTML을 손코딩 함수가 만드는 게 병목.
+- **헛다리**: 손코딩 컴포넌트를 더 추가(색·차트종류 확장) — 여전히 템플릿 채우기라 천장 못 넘음.
+- **해결** (design-selection → **design-generation** 전환, 사용자 승인 "전면 전환 + 검증 게이트"):
+  1. `_designgen()` 신설 — LLM 아트디렉터가 실데이터로 *전문가급 완결 HTML/CSS/SVG 직접 저작* → 기존 `_html_to_jpg`(Chromium) 렌더. `generate_infographic`의 **1순위**.
+  2. 데이터 진실성 게이트 `_dg_verify_html()` — LLM 저작 HTML의 *표시 텍스트*(`>...<` 노드, SVG `<text>` 포함, 좌표 attribute 제외) 수치를 실데이터+파생값(`_dg_allowed`: 최소·최대·합·평균·증감·증감률·쌍차)에 `grounds()` tolerance로 대조. 스캐폴딩(0~100 정수·연도·데이터범위 축눈금) 허용. 조작 과다(>2개 or >20%) 시 리젝트.
+  3. 신뢰성 이중 폴백 — design-gen 실패·검증탈락·발행 데드라인 강등 시 즉시 `render_spec`(design-selection) 폴백. `invoke_text` 내장 재시도·회로차단기·데드라인 강등 활용. 킬스위치 `INFOGRAPHIC_DESIGNGEN=0`.
+  4. 아트디렉션 풀 `_DG_ART`(5종) seed 회전 + few-shot 예시(`_DG_FEWSHOT`)로 품질 하한선·다양성 확보.
+- **파일**: `JARVIS06_IMAGE/infographic_engine.py`.
+- **교훈**: "디자인 선택 vs 디자인 생성"은 품질 천장을 가른다. LLM에게 *템플릿을 고르게* 하면 템플릿 수준이 상한이고, *디자인을 만들게* 하면 상한이 열린다. 렌더러가 이미 Chromium이면 병목은 렌더러가 아니라 "HTML을 누가 쓰느냐"다. 단, design-generation은 수치 조작 리스크가 생기므로 표시-텍스트 grounding 게이트 + 안전 폴백이 필수 (ADR 010 사실성 유지).
+
+---
+
+## [356] 썸네일이 저품질 SVG 인포그래픽으로 나옴 — SVG 경로가 1순위 (★ 사용자 지적 2026-07-05)
+
+- **증상**: 블로그 대표 썸네일이 값싼 SVG 인포그래픽 스타일(작은 텍스트·배지·미니 차트, 실사진 없음)로 생성됨. 사용자: "촌스럽고 저품질, 누가 클릭하고 싶겠냐". 원하는 스타일 = 주제를 대표하는 AI 실사(예: 지역화폐→돈 이미지)를 폴라로이드 프레임에 임베드 + 깔끔한 제목/부제 오버레이.
+- **환경**: `JARVIS06_IMAGE/thumbnail_maker.py` `create_thumbnail()`.
+- **원인**: `create_thumbnail` 폴백 순서가 **① Claude SVG 썸네일(`_generate_svg_thumbnail`) → ② AI 사진 에디토리얼(`_create`)**. SVG가 성공하면 저품질 인포그래픽(이미지2)이, SVG가 실패해야 고품질 AI사진(이미지1)이 나옴 → *어느 스타일이 나올지 비결정적*. 경제글은 SVG 실패로 우연히 좋은 게, 테마글은 SVG 성공으로 나쁜 게 나왔음.
+- **헛다리**: 없음
+- **해결**:
+  1. `create_thumbnail` 순서 역전 — **AI 사진 에디토리얼을 1순위**로, SVG 경로 완전 제거. 폴백은 그라디언트(`_create` 내부) → matplotlib 카드(`_simple_fallback`).
+  2. `_generate_svg_thumbnail` 함수 **완전 삭제**(~100줄, cairosvg 의존 포함).
+  3. `_create` — 실사진 확보 시 *항상* `_apply_editorial`(폴라로이드), triptych 는 사진 실패 폴백 전용.
+  4. `_llm_thumbnail_params` 사진 프롬프트를 *대표성 우선 + 고품질(영화적 조명)* 로 재작성 — 추상·은유 금지, "독자가 1초 안에 주제를 알아보는 실사".
+  5. 하단 카테고리 태그 동적화 — 하드코딩 "경제 브리핑" → `tag_line` 파라미터. `draft_processor.process_draft` 가 `category`("economic"→"경제 브리핑", "theme"→"테마 분석") 로 계산해 `generate_thumbnail` 까지 전달.
+- **파일**: `JARVIS06_IMAGE/thumbnail_maker.py`, `JARVIS06_IMAGE/image_agent.py`, `JARVIS06_IMAGE/draft_processor.py`.
+- **검증**: 지역화폐(경제)·원화강세(테마) 실렌더 2건 — 둘 다 대표 AI 실사 + 폴라로이드 + 동적 태그("경제 브리핑"/"테마 분석") 확인. 모든 썸네일이 `create_thumbnail` 단일 초크포인트로 수렴 → 누수 0.
+- **교훈**: 폴백 순서는 *품질 순* 이어야 한다 — 저품질 경로를 1순위로 두면 "성공했지만 나쁜 결과"가 최선을 가로챈다. 두 경로가 비결정적으로 갈리면 사용자는 가끔 좋은 걸 보고 착각하다가 나쁜 걸 보고 분노한다. 대표 이미지(실사)와 데이터 이미지(인포그래픽)는 용도가 다르다 — 썸네일은 *대표 실사*, 본문 데이터는 *인포그래픽*(ERRORS [355]).
+
+---
+
+## [355] 블로그 이미지 파이프라인 — matplotlib/Plotly 차트 경로 잔존 (2026-07-05)
+
+- **증상**: `draft_processor._generate_charts()` 가 구형식 `[CHART_N: 설명]` 슬롯을 `chart_generator`(Plotly) 로 처리. `tistory_html_writer._generate_svg_pass2_and_replace()`·`theme_html_writer._generate_svg_pass2_and_replace_theme()` 모두 동일 경로. 신형식 `[CHART_N]...[/CHART_N]` 슬롯용 `infographic_engine`(85점 고품질) 이 있는데도 구버전 Plotly 경로가 활성화되어 저품질 차트 생성.
+- **환경**: `JARVIS06_IMAGE/draft_processor.py`, `JARVIS02_WRITER/tistory_html_writer.py`, `JARVIS02_WRITER/theme_html_writer.py`, `JARVIS02_WRITER/draft_writer.py` (LLM 프롬프트).
+- **원인**: (1) LLM 프롬프트가 구형식 `[CHART_N: 설명]` 을 가르쳐 LLM이 계속 구형식 생성 → Plotly 경로 활성화. (2) `_generate_charts()` 가 `_generate_svg_pass2` (Plotly) 를 ThreadPoolExecutor 병렬 호출. (3) `_generate_svg_pass2_and_replace_theme()` 도 Plotly 직접 호출.
+- **헛다리**: 없음
+- **해결**:
+  1. `draft_processor._generate_charts()` 전면 재작성 — ① 신형식 슬롯 → `slot_renderer → infographic_engine` (0단계) ② 구형식 잔존 슬롯 → AI 사진 직행 (1단계). `chart_generator`·`_generate_svg_pass2` 참조 0.
+  2. `tistory_html_writer._generate_svg_pass2()` stub化 → 항상 `""` 반환 (호환 시그니처 보존). `_generate_svg_pass2_and_replace()` 내 주석 정리.
+  3. `theme_html_writer._generate_svg_pass2_and_replace_theme()` 전면 교체 → 구형식 슬롯 AI 사진 직행.
+  4. `draft_writer.py` LLM 프롬프트 전수 교체 — `[CHART_N: text]` → `[CHART_N]...[/CHART_N]` 신형식. `_inject_missing_charts()` 도 `[PHOTO_N: desc]` AI 사진 슬롯으로 교체.
+- **파일**: `JARVIS06_IMAGE/draft_processor.py`, `JARVIS02_WRITER/tistory_html_writer.py`, `JARVIS02_WRITER/theme_html_writer.py`, `JARVIS02_WRITER/draft_writer.py`.
+- **교훈**: LLM 프롬프트와 실행 경로는 *같은 사양을 공유*해야 한다. 프롬프트가 구형식을 가르치면 LLM이 구형식을 생성하고, 실행 경로가 구형식을 받아 구버전 Plotly를 활성화한다. 두 곳 동시 수정 필수. 신형식(데이터 내장) → `infographic_engine`, 구형식(데이터 없음) → AI 사진, 절대 거짓 차트 생성 금지.
+
+### [353] 경제 브리핑 차트가 전부 AI 사진 — set_session_pool([]) 항상 빈 풀 등록으로 실데이터 차단 (★ 사용자 지적 2026-07-05)
+
+- **증상**: 경제 브리핑 글(네이버·티스토리 모두) 이미지가 전부 AI 사진. 데이터 차트·인포그래픽 0개. 로그: `⚠️ [chart_generator] '캐나다' 게이트 실데이터 0 — 차트 스킵` 9개 연속.
+- **환경**: `trend_economic_writer.ts_generate_draft` / `nv_generate_draft`. 팩 실데이터는 11개(캐나다), 8개(개미수다) 정상 수집.
+- **원인**: `trend_economic_writer.py` 두 경로(tistory·naver) 모두 `set_session_pool([])` (빈 풀)을 **항상** 먼저 호출 → `_SESSION_POOL_SET=True` + `_SESSION_POOL=[]`. 이 상태에서 `chart_generator._collect_data_fallback` 의 조건 `if not pool and not _SESSION_POOL_SET:` 이 `False` → JARVIS09 재수집 차단. `collected.datasets` 를 `seed_datasets` 로 전달해도 이 분기 안에서만 사용되므로 완전 무시. 결과: 차트 데이터 경로 전부 차단 → "게이트 실데이터 0 — 차트 스킵" → AI 사진 대체.
+- **헛다리**: `process_draft` 에서 `collected.datasets` 를 `seed_datasets` 로 전달하는 경로가 있어서 동작할 것이라 착각. 실제로 이 경로는 `_SESSION_POOL_SET=False` 일 때만 유효.
+- **해결**: `_ssp([])` 무조건 선행 호출 → `if _pool: _ssp(_pool)` / `else: _ssp([])` 조건부로 변경. 데이터 있으면 실풀 등록(chart_generator 가 사용), 없으면 빈 풀 등록(JARVIS09 garbage 차단). 양쪽 경로(tistory·naver) 동일 패턴 적용.
+- **파일**: `JARVIS02_WRITER/trend_economic_writer.py` (tistory·naver 두 경로 `set_session_pool` 호출 조건화).
+- **교훈**: "세션풀 등록"이라고 출력하면서 실제로는 `_ssp([])` 로 빈 풀을 등록하는 코드 — 출력 메시지와 실제 동작이 다르면 오랫동안 발견이 어렵다. `print("세션풀 등록")` 이 있더라도 그 직전/직후 실제 함수 호출을 검증해야. 또한 전역 상태(`_SESSION_POOL_SET`)를 차단 목적으로 쓸 때는 "차단 의도"와 "데이터 경로"를 명확히 분리해야 함.
+
 ### [352] 공식 테마인데 종목 0개 — 네이버 테마 상세페이지 fetch 무재시도 + 이름 fuzzy 매칭 취약 (★ 사용자 지적 2026-07-04)
 
 - **증상**: 테마 발행('백신/진단시약/방역(신종플루, AI 등)')이 `종목 데이터 없음`으로 폐기·테마 교체. 사용자 지적: "네이버/KRX 테마주명이 만들어져 있으면 그 안에 종목도 있는데 0개가 말이 되냐."
@@ -6505,3 +6614,27 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **해결** (ADR 016): ① `bandit._arm_key()` 로 모든 arm 을 유한 전략(정적6 + auto_patch + learned_verified/new + llm)으로 접음 ② `record_pattern_hit` 노이즈 게이트 4 = actionable(`_ACTIONABLE_FIXERS`) fixer 만 등록(변경추적 영구 차단) ③ `try_pattern_fix` = `_fix_from_learned` 단일조회 + 정적6(개별 펼침 폐기) ④ 차원 상한 28D + 실관측 n/보상합 rsum + compact 저장 ⑤ 상태 초기화(402MB→45B)·learned 프루닝(126→7, 백업 `_refactor_backup/`). 검증: 시뮬레이션 8종 + 오염 게이트 5종 + 스모크 + precommit 44종 0건.
 - **파일**: `JARVIS07_GUARDIAN/bandit.py`, `JARVIS07_GUARDIAN/pattern_fixer.py`, `JARVIS07_GUARDIAN/_refactor_backup/`(백업), `docs/decisions/016-bandit-finite-strategy-arms.md`, `docs/decisions/README.md`, `CLAUDE.md`.
 - **교훈**: 컨텍스추얼 밴딧의 arm 은 *전략* 이어야 한다 — *컨텍스트(오류)* 를 arm 으로 쓰면 arm 이 무한 증식하고 arm당 데이터가 말라 학습이 죽는다. "밴딧 비대화"는 목표가 아니라 병증이었다. 변경추적(재발 없는 이력)은 강화학습 대상이 아니다 — actionable 여부가 단일 기준. 차원은 데이터가 감당할 만큼만(관측≪차원 = 콜드스타트 파국). ★ 회귀 금지: `_get_verified_fixers`/`_get_new_fixers` 를 다시 밴딧 후보로 되돌리지 말 것.
+
+---
+
+## [353] 경제 브리핑 이미지 전부 AI사진 — set_session_pool([]) 무조건 호출 (2026-07-05)
+
+- **증상**: 경제 브리핑 네이버·티스토리 발행글의 이미지가 전부 AI사진. 데이터 차트·인포그래픽 0개.
+- **환경**: `JARVIS02_WRITER/trend_economic_writer.py` — 네이버(`_nv_generate_draft`)·티스토리(`_ts_generate_draft`) 양쪽 데이터 주입 구간.
+- **원인**: `_ssp([])` (set_session_pool with empty list) 가 `_pool` 유무와 무관하게 *항상* 먼저 실행됨. `_SESSION_POOL_SET=True` + 빈 풀 상태로 고정 → `chart_generator._collect_data_fallback()`이 "세션 풀 등록됨, 하지만 빈 풀" 조건에서 차트 생성 포기 → 전 이미지 AI사진 대체. 로그에는 "세션풀 등록"이라 출력되어 정상처럼 보였음.
+- **헛다리**: 없음 (로그 메시지가 정상처럼 보여 원인 파악 지연)
+- **해결**: `_pool` 존재 여부를 먼저 확인 후 조건부로 `_ssp()` 호출. 데이터가 있으면 `_ssp(_pool)` + 카탈로그 주입; 없으면 `_ssp([])` (거짓 차트 금지 원칙 유지). 네이버·티스토리 양쪽 동시 수정.
+- **파일**: `JARVIS02_WRITER/trend_economic_writer.py` (네이버 `_nv_generate_draft`, 티스토리 `_ts_generate_draft` 각 1구간)
+- **교훈**: `set_session_pool([])` 과 `set_session_pool(data)` 는 *의미*가 완전히 다름 — 전자는 "거짓차트 금지" 게이트, 후자는 "실데이터 사용". 조건 확인 전 기본값으로 빈 풀 등록하는 패턴은 데이터가 있어도 차트를 막는 버그. 로그 메시지("세션풀 등록")가 실데이터 유무를 표시하지 않아 정상 동작처럼 위장됨 — 로그에 `len(_pool)` 명시 필수.
+
+---
+
+## [354] 구버전 모델 ID 코드 전반 잔존 — Sonnet 4.6·Opus 4.6·Haiku (2026-07-05)
+
+- **증상**: 주석·docstring·탐지 프롬프트에 `Sonnet 4.6`, `Opus 4.6`, `Haiku` 구버전 표기 10+건 잔존. `shared/llm.py` `MODELS` dict 런타임은 이미 `claude-sonnet-5`/`claude-opus-4-8` 로 정확했으나 주석이 구버전 기술.
+- **환경**: `JARVIS06_IMAGE/draft_processor.py`, `JARVIS07_GUARDIAN/error_analyzer.py`, `JARVIS07_GUARDIAN/auto_repair.py`, `JARVIS00_INFRA/architect.py`, `JARVIS01_MASTER/proactive_monitor.py`, `jarvis_daemon.py`, `JARVIS03_RADAR/post_quality_analyzer.py`, `JARVIS07_GUARDIAN/{auditor,eval_agent,error_collector,pattern_fixer,incident_responder}.py`, `shared/llm.py`.
+- **원인**: 모델 버전 정책 갱신(Sonnet→5, Opus→4.8, Haiku 완전 폐지) 시 런타임 코드는 수정했으나 주석·docstring은 일괄 스크럽 미실시.
+- **헛다리**: 없음
+- **해결**: 전수 grep(`Sonnet 4.[0-9]`, `Opus 4.[0-7]`, `Haiku\b`, `claude-haiku`) → 10+ 파일 주석·docstring 일괄 수정. 최소 버전 = Sonnet 5. Haiku는 완전 폐지(detection 패턴으로만 존재 허용).
+- **파일**: 위 열거 10+ 파일 (코드 런타임 변경 0 — 주석·docstring만)
+- **교훈**: 런타임 단일 진입점(`shared/llm.py MODELS` dict)이 정확해도 주석이 구버전이면 다음 작업자가 혼동함. 모델 정책 변경 시 런타임 + 주석·docstring 동시 전수 스크럽 의무.

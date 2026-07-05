@@ -156,6 +156,13 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"hour":16, "minute":30},
      "callback":"JARVIS02_WRITER.log_monitor.job_check_theme_result",
      "misfire_grace_time":1800, "owner":"jarvis02_writer"},
+    # ── JARVIS06 IMAGE — 인포그래픽 디자인 강화학습 (★ 사용자 박제 2026-07-05) ──
+    # 매일 05:00 Claude 가 새 전문 디자인 레시피 1개 창작 → 게이트 통과분만 누적 → pro_templates 소비.
+    # 오류학습과 동형: 검증된 자산만 생존 → 다양성·품질 복리 상승. (ERRORS [359])
+    {"id":"j06_design_learn",   "name":"인포그래픽 디자인 학습 05:00 (하루 1개)", "trigger":"cron",
+     "kwargs":{"hour":5, "minute":0},
+     "callback":"JARVIS06_IMAGE.design_learner.job_learn_design",
+     "misfire_grace_time":7200, "owner":"jarvis06_image"},
     # ── JARVIS07 GUARDIAN ─────────────────────────────────────────
     {"id":"auditor_weekly",     "name":"GUARDIAN Auditor (헌법 위반·드리프트 — 일요일 04:30)",
      "trigger":"cron",

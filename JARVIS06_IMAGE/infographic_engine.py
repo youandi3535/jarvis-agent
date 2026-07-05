@@ -3,16 +3,20 @@
 ★ 사용자 박제 2026-06-30 — "모든 글의 모든 이미지를 85점 품질로, 같은 디자인 아닌 무한
   다양성으로, 내용·수치에 맞게, 병렬로." 경제·테마·향후 모든 글종 공통.
 
-설계 원칙 (LLM 디자인 디렉터 — 타임아웃 우회 + 매번 다른 디자인):
-  1. 역할 분리: LLM 디렉터(_llm_design)가 *글+실데이터 보고 작은 JSON 설계* 만 결정
-     (layout·mood·orientation·panels·kpis·insight) → 코드(render_spec)가 렌더.
-     LLM 이 17KB HTML 전체를 쓰면 SDK 타임아웃 → 금지. 작은 JSON 은 안정 + 폴백 보장.
-  2. 매번 다른 디자인: LLM 이 글 내용 보고 레이아웃 아키타입·무드·패널 구성을 *매번 다르게*
-     연출. 같은 글은 없으므로 같은 디자인도 없음. (사용자 박제: 글마다 구조·구성·스타일 전부 다름)
-  3. 85점+ 품질: 그라디언트·글로우 라인·값 배지·피크별·스파크라인·도넛·번호 배지·도트 텍스처·
-     KPI 카드·인사이트 콜아웃 — 챔피언 컴포넌트 내장. 수치는 코드가 *실데이터로만* 채움(사실성).
-  4. 신뢰성: 작은 LLM 호출(실패 시 _fallback_spec 규칙기반) + Playwright subprocess 렌더.
-  5. 가로형 기본: orientation=landscape 디폴트(썸네일처럼). 세로형은 가끔. 폭 1280 통일·세로 가변.
+설계 원칙 (★ 2026-07-05 전환 — design-generation 주 경로 + design-selection 폴백):
+  1. ★ 디자인-생성(design-generation) 1순위: LLM 아트디렉터(_designgen)가 실데이터로
+     *전문가급 완결 HTML/CSS/SVG 를 직접 저작* → Chromium 렌더. 손코딩 템플릿의 품질
+     천장(옛 "matplotlib +1")을 넘기 위함(사용자 박제 — ERRORS [357]).
+  2. 데이터 진실성 게이트: 슬롯 데이터는 slot_renderer.verify_slot 이 자비스09 원본과 이미
+     대조 검증. LLM 이 없는 수치를 넣는 리스크는 _dg_verify_html(표시 텍스트 grounding)이
+     차단 → 실패 시 폴백. 차트 좌표(attribute)는 검사 안 함.
+  3. ★ 신뢰성 = 폴백 이중화: design-generation 실패·타임아웃·검증탈락·발행 데드라인 강등 시
+     즉시 design-selection(_llm_design→render_spec, 작은 JSON 스펙+손코딩 렌더러)으로 폴백.
+     폴백 엔진은 그라디언트·스파크라인·값배지·도넛·KPI 카드 등 챔피언 컴포넌트 내장(믿을 수
+     있는 하한선). 킬스위치 INFOGRAPHIC_DESIGNGEN=0.
+  4. 매번 다른 디자인: design-generation 은 아트디렉션 풀(_DG_ART)을 seed 로 회전 + LLM 창작 →
+     글마다 구조·색·구성 전부 다름. 폴백 엔진도 layout·mood 매번 변주.
+  5. 폭 1280 통일·세로 가변. 수치는 실데이터에서만(사실성 절대).
 
 데이터 입력 = JARVIS09 collect_chart_data 의 datasets:
   [{"title","viz_hint","unit","data":[{"label","value"}],"source":{...},"kind"?}, ...]
@@ -26,11 +30,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 import sys
 import base64
+import logging
 from pathlib import Path
+
+log = logging.getLogger("jarvis")
 
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
@@ -983,6 +991,213 @@ def _verify_dataset(ds) -> bool:
     return False
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# ★ 디자인-생성(design-generation) — LLM 이 전문가급 HTML/CSS/SVG 직접 저작
+#   (사용자 박제 2026-07-05 — ERRORS [357]). design-selection(render_spec)은 폴백.
+#   데이터는 slot_renderer.verify_slot 가 자비스09 원본과 이미 대조 검증 → 신뢰.
+#   추가 리스크(LLM 이 없는 수치 삽입)는 _dg_verify_html 게이트가 차단(→ 폴백).
+# ══════════════════════════════════════════════════════════════════════════
+# ★ LLM 실시간 HTML 저작은 SDK 스로틀 시 이미지당 수 분 latency → 기본 OFF (opt-in).
+#   기본 경로는 pro_templates(결정론 전문 템플릿, LLM 0회, 2~6초). ERRORS [358].
+_DESIGNGEN_ON = os.getenv("INFOGRAPHIC_DESIGNGEN", "0") == "1"
+
+_DG_ART = [
+    "프리미엄 금융 매거진 에디토리얼 — 딥네이비 히어로 밴드 + 골드/민트 듀오톤, 좌측 초대형 히어로 스탯. 고급·신뢰.",
+    "밝은 K-블로그 프리미엄 — 크림/화이트 배경 + 코랄·틸 그라디언트, 큼직한 라운드 카드와 곡선 모티프. 친근하지만 정교.",
+    "모던 데이터 저널리즘 — 화이트 배경 + 단일 딥컬러 강조, 굵은 타이포 위계와 얇은 헤어라인, 절제된 미니멀.",
+    "다크 대시보드 프리미엄 — 차콜/딥블루 배경 + 네온 액센트 1색, 글래스 카드와 발광 포인트, 미래적.",
+    "웜 파스텔 인포그래픽 — 아이보리/피치 배경 + 딥틸·머스타드, 둥근 기하 모티프와 친근한 인라인 아이콘.",
+]
+
+_DG_FEWSHOT = """<!-- 참고 구조 예시 (품질·구성 수준의 하한선. 그대로 베끼지 말고 이 수준 이상으로) -->
+<div style="width:1280px;background:#eef2f8;font-family:'Noto Sans KR',sans-serif">
+  <div style="padding:52px 64px;background:linear-gradient(135deg,#0a1730,#16345f);position:relative;overflow:hidden">
+    <div style="display:inline-flex;gap:9px;padding:8px 16px;border:1px solid rgba(245,184,41,.4);border-radius:999px;color:#ffd466;font-size:15px;font-weight:700">● 리포트 라벨</div>
+    <h1 style="margin:20px 0 10px;color:#fff;font-size:56px;font-weight:900;letter-spacing:-.02em">임팩트 있는 제목</h1>
+    <div style="color:#a9bad6;font-size:19px">부제 · 기간</div>
+    <div style="display:flex;gap:26px;margin-top:38px">
+      <div style="flex:1;padding:26px 28px;border-radius:20px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09)">
+        <div style="color:#cdd8ec;font-weight:700">항목 A</div>
+        <div style="font-size:76px;font-weight:900;color:#ffce54">＋10.2<span style="font-size:40px">%</span></div>
+        <div style="color:#9fb0cc">실제값 맥락</div>
+      </div>
+      <div style="flex:1;padding:26px 28px;border-radius:20px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09)">
+        <div style="color:#cdd8ec;font-weight:700">항목 B</div>
+        <div style="font-size:76px;font-weight:900;color:#37d6cf">＋7.1<span style="font-size:40px">%</span></div>
+      </div>
+    </div>
+  </div>
+  <div style="padding:40px 64px">
+    <div style="background:#fff;border-radius:24px;padding:34px 38px;box-shadow:0 18px 50px rgba(18,42,83,.10)">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;gap:14px;align-items:center"><div style="width:34px;height:34px;border-radius:10px;background:#0f1b33;color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center">01</div><h2 style="font-size:24px;font-weight:800;color:#0f1b33">차트 제목</h2></div>
+        <div style="font-size:15px;color:#37476a;font-weight:700">범례 · 축 설명</div>
+      </div>
+      <svg width="100%" viewBox="0 0 960 330"><!-- 인라인 SVG 차트: 그라디언트 area + 라인 + 축라벨 + 끝점 강조 + 주석 --></svg>
+    </div>
+    <div style="display:flex;gap:20px;margin-top:22px">
+      <div style="flex:1;background:#fff;border-radius:18px;padding:22px 24px;border:1px solid #e7ecf5"><div style="color:#64748b;font-size:15px">라벨</div><div style="font-size:30px;font-weight:900;color:#0f1b33">값</div></div>
+    </div>
+  </div>
+  <div style="padding:20px 64px 30px;display:flex;justify-content:space-between;color:#8b98af;font-size:14px"><span>데이터 출처 · ...</span><span style="font-weight:800;color:#0f1b33">JARVIS · 데이터 인사이트</span></div>
+</div>"""
+
+_DG_RUBRIC = """너는 세계 최정상급 편집 인포그래픽 아트디렉터다 (Bloomberg Graphics / 뉴욕타임스 그래픽 / Information is Beautiful 수준).
+아래 *실데이터* 로 전문 디자이너가 만든 프리미엄 인포그래픽 1장을 완결 HTML 로 저작한다.
+
+[품질 기준 — 전부 충족]
+1. 컨셉: 데이터를 카드에 나열만 하지 말 것. 하나의 시각적 스토리(히어로 스탯→근거→맥락).
+2. 타이포 위계: 디스플레이급 초대형 숫자(80px+)·굵기 대비·아이브로우 라벨. 숫자가 디자인 요소.
+3. 색 시스템: 단색 flat 금지. 주색1+강조1~2+그라디언트/듀오톤. 여러 시리즈는 서로 다른 색. 배경도 미묘한 그라디언트.
+4. 구도: 비대칭 균형·명확한 포컬포인트·의도적 여백. 죽은 여백 금지.
+5. 데이터-잉크: 차트에 직접 라벨·시작/끝점 강조·핵심 주석(annotation)·비교 프레이밍. 범례 의존 최소.
+6. 장식: 주제 연관 인라인 SVG 아이콘·기하 모티프·번호칩·구분선 등 일관 장식 언어. 과하지 않게.
+7. 깊이: 레이어링·부드러운 그림자·카드 elevation·유리질감 절제.
+8. 편집 완성도: 출처 푸터·일관 spacing·정렬 규율.
+
+[아트디렉션] __ART__
+
+[데이터 정확성 — 절대]
+- 아래 데이터의 수치만 사용. 어떤 숫자도 새로 지어내지 말 것. (증감률·합계·평균·최대/최소는 이 데이터로 산출 가능한 것만.)
+- 차트 선/막대/도넛의 길이·각도·좌표는 실제 값에 비례. 시간축은 과거→최근 좌→우.
+
+[기술 규격]
+- 출력: 완결 HTML 하나만. 설명·마크다운·코드펜스 금지. <!DOCTYPE html> 로 시작 </html> 로 끝.
+- 루트 컨테이너 width 정확히 1280px, 배경 흰색. 높이는 내용에 맞게.
+- 폰트: @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;800;900&display=swap'); font-family:'Noto Sans KR'. 무게 900 사용 가능.
+- 차트는 인라인 SVG 로 직접 그려라 (외부 라이브러리·이미지·JS 금지). CSS 는 인라인/<style> 만. 전부 self-contained (아이콘=인라인 SVG path).
+
+[제목] __TITLE__
+[부제] __SUB__
+[글 맥락] __CTX__
+
+[데이터 — 아래 수치만 사용]
+__DATA__
+
+__FEWSHOT__
+
+이제 위 기준을 전부 충족하는 완결 HTML 을 저작하라. HTML 만 출력."""
+
+
+def _dg_data_block(datasets) -> str:
+    lines = []
+    for i, ds in enumerate(datasets):
+        kind = _infer_kind(ds)
+        unit = ds.get("unit", "")
+        title = ds.get("title", f"시리즈{i+1}")
+        pairs = " | ".join(f"{r.get('label')}={_fmt(r.get('value'))}"
+                           for r in (ds.get("data") or []) if r.get("label") is not None)
+        lines.append(f'· "{title}" (단위:{unit or "—"}, 유형:{kind}): {pairs}')
+    return "\n".join(lines)
+
+
+def _dg_allowed(datasets):
+    """실데이터 원본값 + 파생값(최소·최대·합·평균·증감·증감률·쌍차) 집합 — grounding 대조군."""
+    vals, raw = set(), []
+    for ds in datasets:
+        nums = []
+        for r in ds.get("data") or []:
+            try:
+                nums.append(float(str(r.get("value")).replace(",", "")))
+            except (TypeError, ValueError):
+                continue
+        raw += nums
+        if nums:
+            vals.update([min(nums), max(nums), sum(nums), sum(nums) / len(nums),
+                         float(len(nums)), nums[0], nums[-1], nums[-1] - nums[0]])
+            if nums[0]:
+                vals.add((nums[-1] - nums[0]) / abs(nums[0]) * 100.0)
+            for a in nums:
+                vals.add(a)
+                for b in nums:
+                    vals.add(abs(a - b))
+    return vals, raw
+
+
+def _dg_verify_html(html, datasets) -> bool:
+    """LLM 저작 HTML 의 *표시 텍스트* 수치가 실데이터·파생값에 grounding 되는지 검증.
+
+    좌표(attribute)는 검사 안 함 — '>텍스트<' 노드(SVG <text> 포함)의 수치만 대상.
+    스캐폴딩(0~100 정수·연도·데이터 범위 내 축눈금)은 허용. 조작 과다 시 False → 폴백.
+
+    ★ <style>/<script> 블록은 표시 텍스트가 아니므로 스캔에서 제외 (사용자 박제 2026-07-05):
+      template_engine.render_layout 이 팔레트 hex 를 <style>:root{--hero0:#14171c;…}</style>
+      로 주입하는데, 이 CSS hex(#14171c→14171 등)가 '>…<' 노드로 잡혀 데이터로 오인되면
+      *모든* 레이아웃 템플릿이 SAFE=False → design_learner._test_render 가 전량 폐기(feature dead).
+    """
+    from JARVIS09_COLLECTOR.models import grounds as _grounds
+    allowed, raw = _dg_allowed(datasets)
+    dmin = min(raw) if raw else 0.0
+    dmax = max(raw) if raw else 0.0
+    scan = re.sub(r"<(style|script)\b[^>]*>.*?</\1>", "", html, flags=re.S | re.I)
+    nums = []
+    for t in re.findall(r">([^<]+)<", scan):
+        for tok in re.findall(r"-?\d[\d,]*\.?\d*", t):
+            try:
+                nums.append(float(tok.replace(",", "")))
+            except ValueError:
+                continue
+    if not nums:
+        return True
+    def _ok(n):
+        an = abs(n)
+        if n == int(n) and 0 <= int(n) <= 100:
+            return True                                    # 축·스케일·퍼센트·카운트 스캐폴딩
+        if n == int(n) and 2000 <= n <= 2100:
+            return True                                    # 연도
+        if dmax > 0 and dmin * 0.7 <= an <= dmax * 1.3:
+            return True                                    # 데이터 범위 내 축 눈금
+        return any(_grounds(n, a) for a in allowed)
+    bad = [n for n in nums if not _ok(n)]
+    if bad:
+        log.warning(f"[designgen] grounding 실패 수치 {bad[:6]} (총 {len(nums)}개 중 {len(bad)})")
+    return len(bad) <= 2 and (len(bad) / len(nums)) <= 0.20
+
+
+def _designgen(title, subtitle, datasets, out_path, context, seed) -> str:
+    """LLM design-generation → 수치 검증 → Chromium 렌더. 성공 시 경로, 실패 시 "" (→ render_spec 폴백)."""
+    if not _DESIGNGEN_ON or not datasets:
+        return ""
+    try:
+        from shared.llm import invoke_text
+        from JARVIS06_IMAGE.html_infographic import _html_to_jpg
+    except Exception:
+        return ""
+    art = _DG_ART[seed % len(_DG_ART)]
+    prompt = (_DG_RUBRIC.replace("__ART__", art)
+              .replace("__TITLE__", str(title))
+              .replace("__SUB__", str(subtitle))
+              .replace("__CTX__", str(context)[:600])
+              .replace("__DATA__", _dg_data_block(datasets))
+              .replace("__FEWSHOT__", _DG_FEWSHOT))
+    # ★ 하드 예산(fast-fail) — SDK 스로틀 시 재시도 지옥(4×200s) 대신 즉시 폴백.
+    #   단일 시도 + 짧은 timeout + _retries=1. invoke_text 회로차단기가 연속 스로틀 시
+    #   "" 즉시 반환 → 발행 지연 0. 실패는 곧 render_spec(안전 폴백)이라 손해 없음.
+    try:
+        raw = invoke_text("writer", prompt, max_tokens=7000, timeout=110, _retries=1)
+        if not raw:
+            log.info("[designgen] LLM 저작 미수신(스로틀/타임아웃) → render_spec 폴백")
+            return ""
+        m = (re.search(r"(<!DOCTYPE html>.*?</html>)", raw, re.S | re.I)
+             or re.search(r"(<html.*?</html>)", raw, re.S | re.I))
+        if not m:
+            log.info("[designgen] HTML 추출 실패 → render_spec 폴백")
+            return ""
+        html = m.group(1)
+        if not _dg_verify_html(html, datasets):
+            log.warning("[designgen] 수치 검증 실패 → render_spec 폴백")
+            return ""
+        ok = _html_to_jpg(html, Path(out_path), width=1280)
+        _p = Path(out_path)
+        if ok and _p.exists() and _p.stat().st_size > 3000:
+            log.info(f"[designgen] 전문가급 인포그래픽 저작 완료 (art={seed % len(_DG_ART)})")
+            return str(out_path)
+    except Exception as e:
+        log.warning(f"[designgen] 실패 → render_spec 폴백: {e}")
+        _g_report("image", e, module=__name__, func_name="_designgen")
+    return ""
+
+
 def generate_infographic(title, subtitle, datasets, *, run_id="", slot_key="",
                          out_dir=None, context="", orientation=None, illustration_b64=None,
                          used=None, chip="", src="데이터 출처: 한국거래소 · Yahoo Finance"):
@@ -1003,8 +1218,25 @@ def generate_infographic(title, subtitle, datasets, *, run_id="", slot_key="",
     out_dir.mkdir(parents=True, exist_ok=True)
     seed = _seed_int(run_id, slot_key, title)
     _sk = re.sub(r"[^0-9A-Za-z]", "", str(slot_key))[:10] or "s"
-    # ★ C1 배치 설계 캐시 우선 (사용자 박제 2026-07-02) — 글당 1회 LLM 배치 결과 재사용 (rate-limit
-    #   절감). 각 이미지는 배치 안에서 LLM 이 *개별* 설계한 것. 캐시 미스 시에만 개별 _llm_design 폴백.
+    out = out_dir / f"infg_{_sk}_{seed % 100000000}.jpg"
+
+    # ★ 1순위: pro_templates (결정론 전문 템플릿, LLM 0회, 2~6초) — happy path 는 LLM 스펙조차
+    #   호출 안 함(수 분 latency 제거, ERRORS [358]). 데이터만 꽂아 전문가급 즉시 렌더.
+    try:
+        from JARVIS06_IMAGE.pro_templates import render_pro
+        _pt = render_pro(title, subtitle, datasets, seed, out, src=src, chip=chip)
+        if _pt:
+            return _pt
+    except Exception as _pte:
+        _g_report("image", _pte, module=__name__, func_name="generate_infographic")
+
+    # 2순위(opt-in): design-generation (LLM HTML 저작 — INFOGRAPHIC_DESIGNGEN=1, 기본 OFF)
+    if _DESIGNGEN_ON:
+        _dg = _designgen(title, subtitle, datasets, out, context or f"{title} — {subtitle}", seed)
+        if _dg:
+            return _dg
+
+    # 3순위 폴백: design-selection (작은 JSON 스펙 → 손코딩 렌더러). 여기서만 _llm_design 호출.
     spec = None
     if run_id:
         _bc = _BATCH_DESIGN_CACHE.get(run_id)
@@ -1012,20 +1244,17 @@ def generate_infographic(title, subtitle, datasets, *, run_id="", slot_key="",
             _cached = _bc.get(_ds_key(datasets[0]))
             if _cached:
                 spec = dict(_cached)        # 캐시 원본 보호
-                _origin = "batch"
     if spec is None:
         spec, _origin = _llm_design(context or f"{title} — {subtitle}", datasets, seed)
-    # 색상만 슬롯별로 확실히 분산 (제12조 — 같은 글 내 색 중복 금지). 구조는 건드리지 않음.
     _moods = list(_MOOD_IDX.keys())
     spec["mood"] = _moods[seed % len(_moods)]
     spec.setdefault("header", {})
-    if not spec["header"].get("title"):          # LLM/폴백이 제목 없으면 caller title 로
+    if not spec["header"].get("title"):
         spec["header"]["title"] = title
     if not spec["header"].get("subtitle"):
         spec["header"]["subtitle"] = subtitle
     if chip and not spec["header"].get("chip"):
         spec["header"]["chip"] = chip
-    out = out_dir / f"infg_{_sk}_{seed % 100000000}.jpg"
     _r = render_spec(spec, datasets, out, seed=seed, src=src)
     if _r:
         return _r

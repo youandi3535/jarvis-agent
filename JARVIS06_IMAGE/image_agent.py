@@ -205,8 +205,11 @@ def generate_infographic(
 
 def generate_thumbnail(title: str, keyword: str, sector: str = "",
                        platform: str = "naver", out_dir: Path | None = None,
-                       body_text: str = "") -> str:
-    """썸네일 생성 → 파일 경로 반환 (thumbnail_maker 위임)."""
+                       body_text: str = "", tag_line: str = "") -> str:
+    """썸네일 생성 → 파일 경로 반환 (thumbnail_maker 위임).
+
+    tag_line: 썸네일 하단 카테고리 라벨 (예: '경제 브리핑' / '테마 분석'). 미지정 시 keyword.
+    """
     from JARVIS06_IMAGE.thumbnail_maker import create_thumbnail
     import time as _t
     dest_dir = Path(out_dir) if out_dir else OUTPUT_DIR
@@ -223,7 +226,8 @@ def generate_thumbnail(title: str, keyword: str, sector: str = "",
     _ts = int(_t.time()) % 100000
     out_file = str(dest_dir / f"thumbnail_{safe_kw}_{_ts}.png")
     return create_thumbnail(theme=keyword, title=title, output_path=out_file,
-                            body_text=body_text, platform=platform)
+                            body_text=body_text, platform=platform,
+                            tag_line=(tag_line or sector))
 
 
 # ── 데몬 등록 진입점 ─────────────────────────────────────────

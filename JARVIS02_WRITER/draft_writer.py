@@ -126,35 +126,31 @@ _strip_html_wrapper = strip_html_wrapper
 
 
 def _inject_missing_charts(html: str, target_count: int, start_idx: int = 1) -> str:
-    """HTML에 부족한 [CHART_N] 플레이스홀더 자동 삽입.
+    """HTML에 부족한 [PHOTO_N] 슬롯 자동 삽입.
 
-    ★ 2026-07-02: 설명을 "섹션 N 관련 데이터 시각화" 같은 플레이스홀더로 두면
-    ① 차트 제목이 무의미 ② _detect_type 에 키워드 0 → 랜덤 타입 ③ collect_chart_data
-    가 주제어 없이 데이터 못 찾아 스킵 — 삼중 문제. 삽입 지점(마지막 문단) 주변
-    본문에서 실제 주제어를 뽑아 데이터·제목 모두 근거 있게 만든다.
+    ★ 구형식 [CHART_N: 설명] 삽입 폐기 (2026-07-05): 데이터 없이 차트 슬롯 삽입 →
+    거짓 차트 경로 진입 위험. 대신 [PHOTO_N: 설명] AI 사진 슬롯 삽입 (데이터 불필요).
     """
-    existing = len(re.findall(r'\[CHART_\d+:', html))
+    existing = len(re.findall(r'\[CHART_\d+\]|\[PHOTO_\d+:', html))
     if existing >= target_count:
         return html
     missing = target_count - existing
 
     def _last_para_topic(h: str) -> str:
-        # 삽입 위치(마지막 </p>) 앞 문단에서 20자+ 첫 문장 조각을 주제어로
         paras = re.findall(r'<p[^>]*>(.*?)</p>', h, re.S)
         for p in reversed(paras):
             txt = re.sub(r'<[^>]+>', '', p)
             txt = re.sub(r'\s+', ' ', txt).strip()
             if len(txt) >= 20:
-                # 첫 문장 또는 앞 30자
                 head = re.split(r'[.!?。]', txt)[0].strip()
                 return (head or txt)[:30]
         return ""
 
     for i in range(missing):
-        chart_idx = start_idx + existing + i
+        photo_idx = start_idx + existing + i
         topic = _last_para_topic(html)
-        description = f"{topic} 핵심 수치 비교" if topic else "핵심 지표 비교"
-        html = re.sub(r'(</p>)(?!.*</p>)', rf'\1\n[CHART_{chart_idx}: {description}]', html, count=1)
+        description = f"{topic} 관련 사진" if topic else "관련 사진"
+        html = re.sub(r'(</p>)(?!.*</p>)', rf'\1\n[PHOTO_{photo_idx}: {description}]', html, count=1)
     return html
 
 
@@ -451,8 +447,9 @@ def _gen_economic_ts_nv(
 
 [절대 제약 — 출력 시 반드시 준수 (위 헌법 블록 전체 적용)]
 - <p> 태그 15개 이상 (한 <p>에 최대 2문장)
-- [CHART_N: 설명] 플레이스홀더 {_L.MIN_CHART_COUNT}개 이상 — <svg> 태그 직접 쓰지 말 것
-- 연속 <p>↔<p> 사이마다 [CHART_N: 설명] 삽입 (h2 직전·면책 직전 제외)
+- [CHART_N]...[/CHART_N] 데이터 내장 슬롯 {_L.MIN_CHART_COUNT}개 이상 (★ 위 카탈로그 데이터 직접 박기)
+- <svg>·<img> 태그 직접 쓰지 말 것
+- 연속 <p>↔<p> 사이마다 슬롯 삽입 (h2 직전·면책 직전 제외)
 - 문체: {spec['tone']}
 - 위 지시문(괄호 안 설명·헌법 조항 번호·"정확히 N문장" 등) 본문에 그대로 출력 금지 — *완성된 HTML만* 출력"""
 
@@ -473,19 +470,49 @@ TITLE: {spec['title_style']}
 CONTENT:
 <p>감성 오프닝1. 감성 오프닝2.</p>        ← 힌트: "{hook}"
 <p>배경1. 배경2.</p>
-[CHART_1: {keyword} 관련 핵심 지표 차트]
+[CHART_1]
+제목: {keyword} 핵심 지표
+종류: bar
+단위: (D1 단위 그대로)
+데이터: (D1 라벨=값 그대로)
+출처: (D1 출처 그대로)
+[/CHART_1]
 <p>본문1. 본문2.</p>
-[CHART_2: 섹터 비교 또는 추이 차트]
+[CHART_2]
+제목: 섹터 비교 또는 추이
+종류: line
+단위: (D2 단위 그대로)
+데이터: (D2 라벨=값 그대로)
+출처: (D2 출처 그대로)
+[/CHART_2]
 <p>전환.</p>
 <h2>소제목1</h2>
 <p>섹션1 단락.</p>
-[CHART_3: 섹션1 관련 시각화]
+[CHART_3]
+제목: 섹션1 관련 시각화
+종류: bar
+단위: (D3 단위)
+데이터: (D3 라벨=값)
+출처: (D3 출처)
+[/CHART_3]
 <p>섹션1 단락.</p>
-[CHART_4: 섹션1 추가]   ← 섹션 분량이 길면 차트 더 추가 가능
+[CHART_4]
+제목: 섹션1 추가 분석
+종류: bar
+단위: (D4 단위)
+데이터: (D4 라벨=값)
+출처: (D4 출처)
+[/CHART_4]   ← 섹션 분량이 길면 차트 더 추가 가능
 ...
 <h2>소제목N</h2>
 <p>마지막 섹션 단락.</p>
-[CHART_M: 마무리 차트]
+[CHART_M]
+제목: 마무리 차트
+종류: bar
+단위: (Dm 단위)
+데이터: (Dm 라벨=값)
+출처: (Dm 출처)
+[/CHART_M]
 <p>마무리.</p>
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 *맞춤형 표현*으로 작성)</p>
 
@@ -513,7 +540,7 @@ def _build_section_system_msg(supreme_block: str, platform: str) -> str:
 
 [절대 제약 — 출력 시 반드시 준수 (위 헌법 블록 전체 적용)]
 - 한 <p> 태그에 최대 2문장
-- [CHART_N: 설명] 플레이스홀더는 *그대로 유지* (내용 채우지 말 것)
+- [CHART_N]...[/CHART_N] 슬롯은 *그대로 유지* (내용 채우지 말 것)
 - 문체: {spec['tone']}
 - *위 지시문(헌법 조항 번호·"정확히 N문장"·"플레이스홀더 포함" 등) 본문에 그대로 출력 금지* — *완성된 HTML 만* 출력
 - 출력 형식 외 설명·주석·코드블록 절대 금지"""
@@ -542,21 +569,45 @@ TITLE: {spec['title_style']}
 CONTENT:
 <p>감성 오프닝1. 감성 오프닝2.</p>        ← 힌트: "{hook}"
 <p>배경1. 배경2.</p>
-[CHART_1: {keyword} 관련 핵심 지표 차트]
+[CHART_1]
+제목: {keyword} 핵심 지표
+종류: bar
+단위: (카탈로그 D1 단위)
+데이터: (카탈로그 D1 라벨=값)
+출처: (카탈로그 D1 출처)
+[/CHART_1]
 <p>본문1. 본문2.</p>
-[CHART_2: 섹터 비교 또는 추이 차트]
+[CHART_2]
+제목: 섹터 비교 또는 추이
+종류: line
+단위: (카탈로그 D2 단위)
+데이터: (카탈로그 D2 라벨=값)
+출처: (카탈로그 D2 출처)
+[/CHART_2]
 <p>전환.</p>
 <h2>소제목1</h2>
 <p>섹션1 단락.</p>
-[CHART_3: 섹션1 관련 시각화]
+[CHART_3]
+제목: 섹션1 관련 시각화
+종류: bar
+단위: (카탈로그 D3 단위)
+데이터: (카탈로그 D3 라벨=값)
+출처: (카탈로그 D3 출처)
+[/CHART_3]
 <p>섹션1 단락.</p>
-[CHART_4: 섹션1 추가 분석]   ← (섹션 분량이 길면 차트 추가 가능)
+[CHART_4]
+제목: 섹션1 추가 분석
+종류: bar
+단위: (카탈로그 D4 단위)
+데이터: (카탈로그 D4 라벨=값)
+출처: (카탈로그 D4 출처)
+[/CHART_4]   ← (섹션 분량이 길면 차트 추가 가능)
 """
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
         raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     result = strip_html_wrapper(raw)
-    chart_count = len(re.findall(r'\[CHART_\d+:', result))
+    chart_count = len(re.findall(r'\[CHART_\d+\]', result))
     _call1_min = max(2, _L.MIN_CHART_COUNT // 2)  # 전체 최솟값의 절반 (call-1은 절반 담당)
     if chart_count < _call1_min:
         print(f"  ⚠️ [Pass-1 Call-1] CHART 부족 ({chart_count}/{_call1_min}) — 강제 삽입")
@@ -582,15 +633,27 @@ def _gen_section_call2(
 
 <h2>소제목2</h2>
 <p>섹션2 단락.</p>
-[CHART_5: 섹션2 관련 시각화]
+[CHART_5]
+제목: 섹션2 관련 시각화
+종류: bar
+단위: (카탈로그 D5 단위)
+데이터: (카탈로그 D5 라벨=값)
+출처: (카탈로그 D5 출처)
+[/CHART_5]
 <p>섹션2 단락.</p>
-[CHART_6: 섹션2 추가 분석]   ← (분량이 길면 차트 추가 가능)
+[CHART_6]
+제목: 섹션2 추가 분석
+종류: bar
+단위: (카탈로그 D6 단위)
+데이터: (카탈로그 D6 라벨=값)
+출처: (카탈로그 D6 출처)
+[/CHART_6]   ← (분량이 길면 차트 추가 가능)
 """
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
         raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     result = strip_html_wrapper(raw)
-    chart_count = len(re.findall(r'\[CHART_\d+:', result))
+    chart_count = len(re.findall(r'\[CHART_\d+\]', result))
     _call2_min = max(2, _L.MIN_CHART_COUNT // 4)
     if chart_count < _call2_min:
         print(f"  ⚠️ [Pass-1 Call-2] CHART 부족 ({chart_count}/{_call2_min}) — 강제 삽입")
@@ -616,9 +679,21 @@ def _gen_section_call3(
 
 <h2>소제목3</h2>
 <p>섹션3 단락.</p>
-[CHART_7: 섹션3 관련 시각화]
+[CHART_7]
+제목: 섹션3 관련 시각화
+종류: bar
+단위: (카탈로그 D7 단위)
+데이터: (카탈로그 D7 라벨=값)
+출처: (카탈로그 D7 출처)
+[/CHART_7]
 <p>섹션3 단락.</p>
-[CHART_8: 섹션3 마무리 차트]   ← (분량이 길면 차트 추가 가능)
+[CHART_8]
+제목: 섹션3 마무리 차트
+종류: bar
+단위: (카탈로그 D8 단위)
+데이터: (카탈로그 D8 라벨=값)
+출처: (카탈로그 D8 출처)
+[/CHART_8]   ← (분량이 길면 차트 추가 가능)
 <p>마무리.</p>
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 맞춤형 표현으로 작성)</p>
 """
@@ -626,7 +701,7 @@ def _gen_section_call3(
     if not raw:  # 일시 LLM 장애 → 1회 재시도
         raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     result = strip_html_wrapper(raw)
-    chart_count = len(re.findall(r'\[CHART_\d+:', result))
+    chart_count = len(re.findall(r'\[CHART_\d+\]', result))
     _call3_min = max(2, _L.MIN_CHART_COUNT // 4)
     if chart_count < _call3_min:
         print(f"  ⚠️ [Pass-1 Call-3] CHART 부족 ({chart_count}/{_call3_min}) — 강제 삽입")
@@ -844,10 +919,9 @@ def _gen_theme(
     except Exception as _ce:
         print(f"  ⚠️ [Theme/Pass-1] 카탈로그 구성 실패 (구형식 슬롯으로 진행): {_ce}")
     if _theme_catalog:
-        _theme_catalog += ("\n★ 위 구조 예시의 [CHART_N: 설명] 자리 작성 규칙: 카탈로그(D1..)에 맞는 "
-                           "데이터가 있으면 *반드시* 블록 형식([CHART_N]...[/CHART_N])으로 데이터까지 "
-                           "내장해 작성. 맞는 데이터가 없는 슬롯만 [CHART_N: 설명] 형식 유지 "
-                           "(그 슬롯은 자비스06이 검증된 실데이터로 채운다).")
+        _theme_catalog += ("\n★ 위 모든 [CHART_N] 슬롯은 *반드시* 블록 형식([CHART_N]...[/CHART_N])으로 "
+                           "카탈로그(D1..) 실데이터를 직접 박아 작성. "
+                           "카탈로그에 맞는 데이터 없는 슬롯은 [PHOTO_N: 설명] AI 사진으로 대체.")
     summary = (stocks_data or {}).get("summary", {})
     leader = summary.get("leader_name", "")
     second = summary.get("second_name", "")
@@ -883,8 +957,9 @@ def _gen_theme(
 - 길게 풀어쓰지 말 것. 핵심만 *간결한 문장* 으로.
 
 [절대 제약 — 출력 시 반드시 준수 (위 헌법 블록 전체 적용)]
-- [CHART_N: 설명] = SVG 차트 플레이스홀더, [PHOTO_N: 설명] = AI 사진 플레이스홀더
-- <svg>·<img> 태그 직접 쓰지 말 것 — 반드시 위 플레이스홀더만 사용
+- [CHART_N]...[/CHART_N] = 데이터 내장 인포그래픽 슬롯 (★ 카탈로그 데이터 직접 박기)
+- [PHOTO_N: 설명] = AI 사진 슬롯 (카탈로그 데이터 없는 슬롯에 사용)
+- <svg>·<img> 태그 직접 쓰지 말 것 — 반드시 위 슬롯만 사용
 - 문체: {spec['tone']}
 - 종목 데이터의 수치는 *그대로 인용* (가공·임의 변경 금지). 없으면 "N/A" 표기.
 - ★ 출처 없는 역사적 수치 창작 절대 금지 — 특정 연도·분기·기간의 가격·비용·규모·비율·지수 등은
@@ -950,7 +1025,13 @@ TITLE: {spec['title_style']}
 
 CONTENT:
 <p>감성 오프닝 2문장.</p>        ← 힌트: "{hook}"
-[CHART_1: {theme} 테마 개념 — 산업 지도·수급 트렌드·주가 흐름]
+[CHART_1]
+제목: {theme} 테마 — 주가 흐름·수급 트렌드
+종류: line
+단위: (카탈로그 D1 단위)
+데이터: (카탈로그 D1 라벨=값)
+출처: (카탈로그 D1 출처)
+[/CHART_1]
 <p>{theme} 테마 배경 2문장.</p>
 
 <h2>대장주 — {leader}</h2>
@@ -964,7 +1045,13 @@ CONTENT:
   <tr><td>영업이익률</td><td>(데이터 수치)</td></tr>
 </table>
 <p>핵심 기술·실적 2문장.</p>
-[CHART_2: {leader} 재무지표 비교 (시총·PER·ROE·영업이익률)]
+[CHART_2]
+제목: {leader} 재무지표 비교
+종류: bar
+단위: (카탈로그 D2 단위)
+데이터: (카탈로그 D2 라벨=값)
+출처: (카탈로그 D2 출처)
+[/CHART_2]
 <p>투자 포인트 1문장.</p>
 ← (대장주 섹션이 길면 차트 추가 가능)
 
@@ -979,27 +1066,57 @@ CONTENT:
   <tr><td>영업이익률</td><td>(데이터 수치)</td></tr>
 </table>
 <p>핵심 기술·실적 2문장.</p>
-[CHART_3: {second} 재무지표 비교]
+[CHART_3]
+제목: {second} 재무지표 비교
+종류: bar
+단위: (카탈로그 D3 단위)
+데이터: (카탈로그 D3 라벨=값)
+출처: (카탈로그 D3 출처)
+[/CHART_3]
 <p>투자 포인트 1문장.</p>
 ← (부대장주 섹션이 길면 차트 추가 가능)
 
 <h2>그 외 주목 종목 5개</h2>
 <p>{others_csv} 종목 1·2 톺아보기 2문장.</p>
-[CHART_4: 5종목 시총·주가 비교]
+[CHART_4]
+제목: 종목별 시총·주가 비교
+종류: bar
+단위: (카탈로그 D4 단위)
+데이터: (카탈로그 D4 라벨=값)
+출처: (카탈로그 D4 출처)
+[/CHART_4]
 <p>종목 3·4 섹터 흐름·실적 분석 2문장.</p>
-[CHART_5: 5종목 PER·ROE 분포]
+[CHART_5]
+제목: 종목별 PER·ROE 분포
+종류: bar
+단위: (카탈로그 D5 단위)
+데이터: (카탈로그 D5 라벨=값)
+출처: (카탈로그 D5 출처)
+[/CHART_5]
 <p>종목 5 + 5종목 종합 평가 2문장.</p>
 ← (종목 섹션이 길면 차트 추가 가능)
 
 <h2>섹터 & 시장 분석</h2>
 <p>관련 섹터 흐름·업계 동향 2문장.</p>
-[CHART_6: 업계 성장률·이익률 추이]
+[CHART_6]
+제목: 업계 성장률·이익률 추이
+종류: line
+단위: (카탈로그 D6 단위)
+데이터: (카탈로그 D6 라벨=값)
+출처: (카탈로그 D6 출처)
+[/CHART_6]
 <p>시장 환경 + 자금 흐름 종합 2문장.</p>
 ← (섹터 섹션이 길면 차트 추가 가능)
 
 <h2>투자 전략 & 위험 요인</h2>
 <p>진입 시점·단기·중기 매매 시그널 2문장.</p>
-[CHART_7: 종목별 기회·위험도 매트릭스]
+[CHART_7]
+제목: 종목별 기회·위험도 비교
+종류: bar
+단위: (카탈로그 D7 단위)
+데이터: (카탈로그 D7 라벨=값)
+출처: (카탈로그 D7 출처)
+[/CHART_7]
 <p>리스크 관리·손절선·위험 요인 2문장.</p>
 ← (전략 섹션이 길면 차트 추가 가능)
 

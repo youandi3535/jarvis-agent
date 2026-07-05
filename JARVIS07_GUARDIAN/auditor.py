@@ -21,7 +21,7 @@ audit_learned_patterns_meta_learning() — 5회+ 반복 → 새 fixer 신설 제
 AuditResult dataclass — 텔레그램 인라인 버튼 ✅/❌ 게이트로 사용자 결정 받음.
 
 # 모델
-대부분 정적 검사. 메타 학습 제안 시만 Opus 4.6 (audit_refine alias) 호출 — 추론 깊이 필요.
+대부분 정적 검사. 메타 학습 제안 시만 Opus 4.8 (audit_refine alias) 호출 — 추론 깊이 필요.
 """
 from __future__ import annotations
 

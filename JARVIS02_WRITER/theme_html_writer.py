@@ -48,7 +48,6 @@ from JARVIS02_WRITER.tistory_html_writer import (
     extract_title,
     extract_text_content,
     OUTPUT_IMG_DIR as _THEME_IMG_BASE,
-    _generate_svg_pass2,
 )
 # Pass-1 대본 생성 단일 진입점 (draft_writer.py)
 from JARVIS02_WRITER.draft_writer import (
@@ -85,61 +84,36 @@ def _generate_svg_pass2_and_replace_theme(
     stocks_data: dict,
     platform: str = "tistory",
 ) -> str:
-    """Pass-2: [CHART_N: ...] SVG 병렬 생성 + 치환.
+    """★ 구버전 Plotly 경로 폐기 (사용자 박제 2026-07-05 — ERRORS [355]).
 
-    모든 시각 자료는 SVG 차트 (그래프 종류는 LLM 이 본문 컨텍스트 보고 자유 선택).
-    AI 사진은 *대표 썸네일·도입부* 용으로 jarvis_main 단계에서 별도 처리.
+    신형식 [CHART_N]...[/CHART_N] 슬롯은 process_draft → slot_renderer → infographic_engine.
+    구형식 [CHART_N: text] 잔존 슬롯 → AI 사진 직행 (거짓 차트 금지).
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    stocks_text = _stocks_text(stocks_data)
-
     chart_placeholders = re.findall(r"\[CHART_(\d+):\s*([^\]]+)\]", content)
     if not chart_placeholders:
         return content
 
-    print(f"  🎨 [Theme/Pass-2/{platform}] 차트 {len(chart_placeholders)}개 생성 (matplotlib)...")
+    print(f"  ⚠️ [Theme/Pass-2/{platform}] 구형식 슬롯 {len(chart_placeholders)}개 → AI 사진 대체")
     _timg = _THEME_IMG_BASE / f"theme_{platform}"
+    _timg.mkdir(parents=True, exist_ok=True)
 
-    # 글 1건당 run_id 1회 생성 — 같은 글의 차트는 색상 계열 통일, 다음 글은 달라짐
-    import uuid as _uuid
-    _run_id = _uuid.uuid4().hex
+    from JARVIS02_WRITER.tistory_html_writer import _generate_ai_photo_for_slot
+    svg_map: dict[int, str] = {}
+    for pos, (_, desc) in enumerate(chart_placeholders, 1):
+        svg_map[pos] = _generate_ai_photo_for_slot(desc.strip(), theme, _timg) or ""
 
-    # ★ ERRORS [171] 2026-05-26: 위치 기반 pos 사용 — LLM 중복 idx 덮어쓰기 방지
-    _items_t = [(pos, int(idx), desc.strip()) for pos, (idx, desc) in enumerate(chart_placeholders, 1)]
-    svg_map: dict[int, str] = {}  # key = pos
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        def _ctx(orig_idx: int) -> str:
-            para = _extract_chart_context(content, orig_idx)
-            return f"{para}\n\n[종목 데이터]\n{stocks_text}" if para else f"[종목 데이터]\n{stocks_text}"
-        futs = {
-            ex.submit(_generate_svg_pass2, pos, desc, theme, sector, _ctx(orig_idx), _timg, _run_id): pos
-            for pos, orig_idx, desc in _items_t
-        }
-        for f in as_completed(futs):
-            pos_key = futs[f]
-            try:
-                chart_html = f.result()
-                svg_map[pos_key] = chart_html if chart_html else ""
-                print(f"  {'✅' if chart_html else '❌'} CHART_pos{pos_key} matplotlib {'완료' if chart_html else '실패'}")
-            except Exception as e:
-                print(f"  ⚠️ CHART_pos{pos_key} 스레드 오류: {e}")
-                _g_report("writer", e, module=__name__)
-                svg_map[pos_key] = ""
-
-    _replace_pos_t = [0]
+    _replace_pos = [0]
 
     def _replace_chart(m: re.Match) -> str:
-        pos_key = _replace_pos_t[0] + 1
-        _replace_pos_t[0] += 1
-        html_chunk = svg_map.get(pos_key, "")
-        if html_chunk:
-            return html_chunk
-        print(f"  ⚠️ CHART_pos{pos_key} 차트 실패 — placeholder 제거")
-        return ""
+        _replace_pos[0] += 1
+        chunk = svg_map.get(_replace_pos[0], "")
+        if not chunk:
+            print(f"  ⚠️ CHART_pos{_replace_pos[0]} AI 사진도 실패 — 슬롯 제거")
+        return chunk
 
     content_final = re.sub(r"\[CHART_(\d+):[^\]]+\]", _replace_chart, content)
-    chart_ok = sum(1 for v in svg_map.values() if v)
-    print(f"  ✅ [Theme/Pass-2/{platform}] 차트 {chart_ok}/{len(chart_placeholders)}개 치환")
+    ok = sum(1 for v in svg_map.values() if v)
+    print(f"  ✅ [Theme/Pass-2/{platform}] 구형식 슬롯 {ok}/{len(chart_placeholders)}개 AI사진 치환")
     return content_final
 
 

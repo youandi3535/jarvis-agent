@@ -72,7 +72,7 @@ grep -rn \
   -e "from apscheduler" \
   -e "BackgroundScheduler\\|BlockingScheduler" \\
   -e "schedule\\.every\\|import schedule" \\
-  -e "claude-opus-4-6\\|claude-sonnet-4-6\\|claude-haiku" \\
+  -e "claude-opus-4-6\\|claude-sonnet-4-6\\|claude-opus-4-7\\|claude-haiku" \\
   -e "anthropic\\.Anthropic()" \\
   --include="*.py" \
   --exclude-dir=.venv --exclude-dir=__pycache__ --exclude-dir=chroma_db \

@@ -219,7 +219,7 @@ def _judge_unavailable_alert(post_type: str, err: str) -> None:
 
 def judge_engagement(title: str, content: str, post_type: str = "",
                      platform: str = "") -> dict:
-    """발행 전 유익성·매력도 채점 — engagement_judge(Opus 4.6).
+    """발행 전 유익성·매력도 채점 — engagement_judge(Opus 4.8).
 
     Returns:
         {"passed": bool, "engagement_score": int, "usefulness_score": int,
