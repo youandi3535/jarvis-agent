@@ -480,7 +480,15 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                 print(f"  ⚠️ [THEME] JARVIS09 수집 실패: {e}")
                 return {"docs": [], "pack": None}
 
-        _col_fut = _col_exec.submit(_run_jarvis09)
+        # ★ 인터프리터 종료 레이스 (ERRORS [361]): 데몬 재시작 등으로 인터프리터가
+        #   종료 단계에 들어가면 ThreadPoolExecutor.submit 이
+        #   'cannot schedule new futures after interpreter shutdown' RuntimeError 를 던진다.
+        #   병렬 이득만 포기하고 리서치 수집은 동기 폴백으로 이어간다 — 종료 레이스로 발행 크래시 금지.
+        try:
+            _col_fut = _col_exec.submit(_run_jarvis09)
+        except RuntimeError as _sub_e:
+            print(f"  ⚠️ [② 수집] 스레드 스케줄 불가(인터프리터 종료 중?) — 동기 폴백: {_sub_e}")
+            _col_fut = None
 
         # 종목 데이터 수집 (주식 시세·재무)
         data = _collect(state["theme"])
@@ -491,12 +499,20 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         #   evidence_pack 을 보존하고 계속 쓰는 것과 동일. 리서치만으로도 글은 성립하며,
         #   차트는 실데이터 폴백/AI 사진으로 대체(_generate_charts). 진짜 폐기·테마 교체는
         #   종목·리서치·근거가 *전부* 비었을 때만 (KRX 종속 결합 해제).
-        try:
-            _col_res = _col_fut.result(timeout=600) or {}
-        except Exception:
-            _col_res = {}
-        finally:
+        if _col_fut is not None:
+            try:
+                _col_res = _col_fut.result(timeout=600) or {}
+            except Exception:
+                _col_res = {}
+            finally:
+                _col_exec.shutdown(wait=False)
+        else:
+            # submit 실패(인터프리터 종료 레이스) → 리서치를 동기 실행(스레드 미사용)
             _col_exec.shutdown(wait=False)
+            try:
+                _col_res = _run_jarvis09() or {}
+            except Exception:
+                _col_res = {}
         collection_docs = _col_res.get("docs") or []
         evidence_pack   = _col_res.get("pack") or None
 

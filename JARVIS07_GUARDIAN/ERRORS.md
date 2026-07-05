@@ -2,6 +2,18 @@
 
 ---
 
+## [361] 테마 발행 ② 수집 — `cannot schedule new futures after interpreter shutdown` (데몬 재시작 레이스)
+
+- **증상**: harness `theme-publish-...-naver` attempt=1 step=`② 종목·근거 수집` 에서 `RuntimeError: cannot schedule new futures after interpreter shutdown` (severity medium).
+- **환경**: `JARVIS02_WRITER/trend_theme_writer.py` `_step_collect` — `_col_exec = ThreadPoolExecutor(max_workers=1)` 로 `_run_jarvis09`(JARVIS09 리서치)를 종목 수집과 병렬 실행.
+- **원인**: 발행 스레드가 살아있는 채로 데몬이 재시작(종료 단계 진입)하면 CPython `concurrent.futures.thread._python_exit`(atexit)가 전역 `_shutdown=True` 설정 → 그 뒤 `_col_exec.submit(...)` 이 위 RuntimeError 를 던짐. 코드 변경 후 데몬 상시 재시작 정책상 발행 중 재시작 레이스가 반복 발생.
+- **헛다리**: harness retry — 인터프리터가 종료 중이므로 재시도해도 동일 실패. `shutdown(wait=False)` 만으로는 submit 자체를 못 막음.
+- **해결**: `submit` 을 `try/except RuntimeError` 로 감싸 실패 시 `_col_fut=None` → 리서치를 *동기 실행* 폴백(스레드 미사용)으로 이어 수집 계속. 병렬 이득만 포기, 발행 크래시 제거.
+- **파일**: `JARVIS02_WRITER/trend_theme_writer.py`.
+- **교훈**: 장수 데몬에서 발행 같은 in-flight 스레드 작업은 인터프리터 종료 레이스에 노출된다. 스레드 스케줄(`ThreadPoolExecutor.submit`)은 종료 중 던질 수 있으므로 *동기 폴백 경로*를 항상 마련해야 한다. (관련: [148] CLI 병렬, [1266행대] executor 블로킹)
+
+---
+
 ## [360] 인포그래픽 임의 레이아웃 재현 — 슬롯 기반 레이아웃 템플릿 엔진 (★ 사용자 요청 2026-07-05)
 
 - **맥락**: [359] 실이미지 학습은 *색/스타일 DNA* 만 전이했고 레이아웃은 고정 1종이라 "임의 레퍼런스 레이아웃 재현" 불가. 사용자 — "임의 레이아웃 완벽 재현까지 이어서, 찝찝하게 남기지 말고 완벽하게".
