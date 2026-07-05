@@ -6,9 +6,10 @@
 
 - **증상**: 재발행이 대본 단계에서 20분 갇힘. 로그 `Pass-1 완성 (0자)` 반복. 수집은 정상(188문서·21근거·7종목). 인포그래픽은 종목 datasets 로 만들어졌으나(대본 텍스트 무관) 본문 0자라 harness Layer3 검증 실패 → 이미지 삭제·재생성 반복.
 - **원인**: ① Max 구독 스로틀 → 대본 LLM 빈 응답(직접 원인 = 직전 456K 토큰 워크플로우로 할당량 소진). ② 설계-우선 [376] 증폭 — 스로틀로 LLM 이 `<design>` 블록만 반환/부분응답하면 `_strip_design` 이 본문을 0자로 만듦. 두 설계-우선 호출(경제 581·테마 1202)에 빈응답/설계-only 가드가 없었음.
-- **해결**: `_draft_invoke(system_msg, user_msg)` 헬퍼 신설 — ① 빈 응답 1회 재시도 ② `<design>`만·본문 없음이면 설계 지시 제거한 프롬프트로 1회 재시도(설계 없이라도 본문 확보). 경제·테마 양쪽 적용 → 대본이 절대 0자로 넘어가지 않음(LLM 이 응답만 하면).
-- **파일**: `JARVIS02_WRITER/draft_writer.py`.
-- **교훈**: (1) 설계-우선 `<design>`+strip 은 부분응답 시 전체를 날릴 위험 — strip 후 0자면 반드시 폴백. (2) 근본 자원은 Max 할당량 — 대화 세션의 대량 워크플로우가 발행 대본을 굶긴다(self-competition). 발행 검증 중엔 무거운 작업 금지.
+- **해결**: `_draft_invoke(system_msg, user_msg)` 헬퍼 신설 — ① 빈 응답 1회 재시도 ② `<design>`만·본문 없음이면 설계 지시 제거한 프롬프트로 1회 재시도(설계 없이라도 본문 확보). 경제·테마 양쪽 적용 → 대본이 절대 0자로 넘어가지 않음(LLM 이 응답만 하면). ③ **`_strip_design` 자체 견고화 (2026-07-06 보강)** — LLM 이 본문 전체를 하나의 `<design>...</design>` 로 감싸거나 닫는 태그를 맨 끝에 두면 비탐욕 정규식이 `TITLE:/CONTENT:` 본문까지 통째로 지워 0자가 됐다. 제거로 본문 마커가 유실되면 원본에서 `TITLE:/CONTENT:` 지점부터 복원(선행 설계 텍스트·짝 안 맞는 design 태그도 정리), 마커 없이 설계만 오면 빈 문자열 반환(재시도 신호). → *감싸진 본문은 추가 LLM 호출 0회로 즉시 복구* (스로틀 재발 회피), *설계만* 온 경우만 재시도로 위임.
+- **해결 보강 (④ 최종 구조 게이트 — 2026-07-06, 오류 #2120-2122)**: `_draft_invoke` 는 *빈 응답·`<design>`-only* 는 막지만, **비어있지 않으나 구조가 퇴화한 응답**(예: `TITLE: 제목` 만·`CONTENT`/`<p>` 누락)은 통과시켰다. 이 경우 `if not raw` 는 통과하지만 하류 `assemble_blocks` 가 텍스트 블록 0개 → `process_draft` 가 썸네일 1장만 붙여 발행 시도 → `블록 수 부족(1개)/텍스트 블록 없음/본문 한글 0자` **3중 오류**(#2120·#2121·#2122, 석유화학-naver 01:25)로 harness 무의미 재작성. `draft_writer.has_publishable_body(content)` 헬퍼 신설 — ① `<p>`/`<h1~6>` 텍스트 블록 ≥1 ② 한글 본문 ≥`INDEXER_BODY_MIN`(≈200자). `generate_theme_html`·`generate_article_html` 이 html 조립 *직전* 호출 → 미달 시 `return ""` → 호출자(`_build_blocks`/`trend_economic_writer`)가 `draft_failed` 로 깔끔히 재생성(스로틀 해소 시 성공). *퇴화 대본이 절대 발행 파이프라인에 진입하지 않음.*
+- **파일**: `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/theme_html_writer.py`, `JARVIS02_WRITER/tistory_html_writer.py`.
+- **교훈**: (1) 설계-우선 `<design>`+strip 은 부분응답 시 전체를 날릴 위험 — strip 후 0자면 반드시 폴백. (2) 근본 자원은 Max 할당량 — 대화 세션의 대량 워크플로우가 발행 대본을 굶긴다(self-competition). 발행 검증 중엔 무거운 작업 금지. (3) *비어있지 않음* 은 *발행 가능* 이 아니다 — LLM 생성물은 반드시 *구조*(텍스트 블록 존재 + 본문 길이)를 상류에서 검증해 퇴화 응답을 `draft_failed` 로 되돌려야, 하류에서 여러 검증 오류로 흩어지지 않는다.
 
 ---
 

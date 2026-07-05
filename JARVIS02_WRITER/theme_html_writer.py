@@ -271,6 +271,14 @@ def generate_theme_html(
         print(f"  ⚠️ [Theme/{platform}] 비평 패스 스킵: {e}")
         _g_report("writer", e, module=__name__)
 
+    # ── ★ 최종 구조 게이트 (ERRORS [381] 보강) — 스로틀 절단 응답 차단 ──
+    #   비어있지 않아도 <p>/<h*> 구조·본문 길이가 없으면 하류에서 '텍스트 블록 없음/본문 0자'
+    #   3중 오류(#2120-2122)를 낸다. 여기서 생성 실패로 판정 → 호출자 draft_failed 로 재생성.
+    from JARVIS02_WRITER.draft_writer import has_publishable_body
+    if not has_publishable_body(content):
+        print(f"  ❌ [Theme/{platform}] Pass-1 본문 구조 미달(스로틀 절단 추정) — 생성 실패로 재생성 위임")
+        return ""
+
     html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>

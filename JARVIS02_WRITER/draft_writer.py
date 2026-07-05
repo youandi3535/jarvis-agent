@@ -480,6 +480,35 @@ def _strip_design(raw: str) -> str:
     return out[m.start():].strip() if m else out
 
 
+def has_publishable_body(content: str, min_korean: int | None = None) -> bool:
+    """Pass-1 대본이 *발행 가능한 본문 구조* 를 갖췄는지 최종 검증.
+
+    ★ 근본 (ERRORS [381] 보강 — 스로틀 절단 응답): `_draft_invoke` 는 빈 응답·`<design>`-only
+      는 막지만, 비어있지 않으나 구조가 퇴화한 응답(예: 'TITLE: 제목' 만·CONTENT/<p> 누락)은
+      통과시킨다. 이 경우 `if not raw` 검사는 통과하지만 하류 assemble_blocks 가 텍스트 블록
+      0개를 만들어 process_draft 가 썸네일 1장만 붙여 '블록 수 부족(1개)/텍스트 블록 없음/
+      본문 한글 0자' 3중 오류를 낸다(#2120-2122). 이를 *생성 실패* 로 상류에서 판정 →
+      호출자가 return "" → harness 가 draft_failed 로 깔끔히 재생성(스로틀 해소 시 성공).
+
+    판정 기준 (둘 다 만족해야 발행 가능):
+      ① <p> 또는 <h1~6> 텍스트 블록이 최소 1개 (assemble_blocks 의 텍스트 블록 생성 전제)
+      ② 한글 본문이 최소 min_korean(기본 INDEXER_BODY_MIN≈200자) — Layer3 임계와 동일
+    """
+    if not content or not content.strip():
+        return False
+    import re as _re_b
+    # ① 발행 본문은 최소 1개의 <p> 또는 <h1~6> 텍스트 블록 필요.
+    if not _re_b.search(r"<(?:p|h[1-6])\b[^>]*>[\s\S]*?</(?:p|h[1-6])>", content, _re_b.I):
+        return False
+    # ② 한글 본문 최소 길이 (Layer3 '본문 한글 N자' 임계와 동일 기준 — 상류 선차단).
+    try:
+        from JARVIS02_WRITER import length_manager as _Lm
+    except ImportError:
+        import length_manager as _Lm
+    floor = _Lm.INDEXER_BODY_MIN if min_korean is None else min_korean
+    return _Lm.count(content) >= floor
+
+
 def _draft_invoke(system_msg: str, user_msg: str) -> str:
     """설계-우선 대본 1회 호출 + 견고성 가드 (ERRORS [381] — 사용자 박제 2026-07-06).
 
