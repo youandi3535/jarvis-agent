@@ -342,7 +342,7 @@ def _request_integrity_fix(agent_id: str, missing: list[str]):
 # 2. JobHealthMonitor — 잡 실행 건강성
 # ════════════════════════════════════════════════════════════════
 
-_CRITICAL_JOBS = {"j01_economic_post", "j01_theme_post_16"}  # 실패 즉시 알림
+_CRITICAL_JOBS = {"j01_economic_post", "j01_theme_post_21"}  # 실패 즉시 알림
 _CONSEC_FAIL_THRESHOLD = 3   # 연속 실패 N회 이상이면 alert
 
 

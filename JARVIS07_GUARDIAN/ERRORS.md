@@ -2,6 +2,18 @@
 
 ---
 
+## [370] 대시보드 "오늘 발행 글=0" 인데 경제 브리핑은 발행됨 — 경제 발행이 DB에 기록 안 됨 (2026-07-05)
+
+- **증상**: 웹 대시보드(hub.py) 홈의 "오늘 발행 글"이 **0**. 그러나 오늘 아침 경제 브리핑이 네이버(logNo=224336739310)·티스토리 **발행 성공**. 사용자: "코드가 바뀌면 대시보드·텔레그램도 자동으로 같이 변해야 하는데 안 변한다. 하드코딩이거나 로직이 잘못된 것."
+- **환경**: `posts`(대시보드가 셈)·`post_analysis` 두 테이블 모두 오늘 0행, 최신 07-01. `on_post_published_detail`(shared/bus.py)이 *둘 다* 기록하는 단일 진입점.
+- **원인**: 경제 브리핑 **하네스 발행 흐름**(`economic_poster.run` → `_send_platform` → `trend_economic_writer.nv_publish/ts_publish`)이 `on_post_published_detail` 을 *호출하지 않음*. emit 은 *레거시* `run_naver`/`run_tistory` 에만 있고 하네스는 이걸 안 씀. economic_poster 자체 후속 emit 은 `_empty_art`(content="")+`_html=""` 하드코딩이라 "이미 상류가 emit함(중복차단)" 판단으로 항상 스킵 — 그런데 상류(JARVIS08 발행자)도 emit 안 함. → **성공 발행이 어느 테이블에도 기록 0**. (테마는 `_publish_naver/tistory` 가 emit 해서 정상이었음 — 경제만 리팩터 중 누락). 대시보드 자체는 라이브 쿼리·하드코딩 0 (정상) — *기록 누락이 데이터 흐름을 끊은 것*.
+- **헛다리**: "대시보드가 하드코딩·정적이다." 아니다 — 대시보드는 posts/post_analysis 라이브 쿼리. 문제는 발행→DB 기록 단계.
+- **해결**: `trend_economic_writer.nv_publish/ts_publish` 성공 블록에 `on_post_published_detail` emit 추가(테마 `_publish_*` 와 동일 패턴) → posts·post_analysis *둘 다* 기록 → 대시보드·Daily Review 자동 반영. 4개 발행 함수(경제 nv/ts + 테마 nv/ts) 전부 emit 확인. 오늘 발행분 2건 백필(즉시 반영).
+- **파일**: `JARVIS02_WRITER/trend_economic_writer.py`.
+- **교훈**: **발행 흐름 리팩터 시 "성공 발행 → DB 기록" emit 이 새 경로로 함께 이동했는지 반드시 확인.** 대시보드·텔레그램이 "자동으로 안 변하는" 원인은 대개 표시부가 아니라 *기록부의 누락*. 표시부는 라이브 소스만 읽으면 자동 동기화된다. 새 발행 함수 추가 시 *반드시* `on_post_published_detail` 호출(모든 성공 발행의 단일 기록 진입점).
+
+---
+
 ## [369] 발행 파이프라인이 단계마다 LLM 스로틀에 무너짐 — 임계경로 다중 LLM에 스로틀 방어 부재 (설계 결함, 2026-07-05)
 
 - **증상**: 수정 후 수동 재발행할 때마다 *다른 단계*에서 몇 분씩 멈춤. 대본 자기비평 껐더니(WRITER_CRITIQUE=0) 이번엔 발행 전 사실성·매력도 게이트에서 또 멈춤. 사용자: "단계마다 잘 작동되게 꼼꼼히 구축했어야지. 얼마나 허술하면 뭐 하나 고치고 돌릴 때마다 이런 문제가 계속 나냐."

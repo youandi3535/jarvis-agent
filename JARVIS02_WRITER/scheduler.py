@@ -46,7 +46,7 @@ PYTHON        = sys.executable
 
 sys.path.insert(0, str(BASE_DIR.parent))  # shared/ 접근
 
-SCHEDULE_HOURS      = [16]
+SCHEDULE_HOURS      = [21]   # ★ 테마 발행 시간 (표시용 — 실제 트리거는 DEFAULT_JOBS j01_theme_post_21). 16→21 (2026-07-05)
 RADAR_CHECK_HOURS   = [9, 15]   # RADAR 파이프라인 확인: 오전 09:00 · 오후 15:00
 MAX_RETRY           = 3
 TG_TOKEN        = os.getenv("TELEGRAM_TOKEN", "")
@@ -1375,7 +1375,7 @@ def job_radar_pipeline_check():
 #  즉시 실행(버스 구독) 방식은 사용하지 않음.
 #  발행 스케줄은 JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 가 단독 관리:
 #    07:00  j01_economic_post   → run_economic_poster()  (경제 브리핑, 3개 블로그 각각 다르게)
-#    16:00  j01_theme_post_16   → run_radar_top_theme()  (테마주, RADAR 최상위 키워드 → 3개 블로그 다르게)
+#    21:00  j01_theme_post_21   → run_radar_top_theme()  (테마주, RADAR 최상위 키워드 → 3개 블로그 다르게)
 #  JARVIS03 는 09/12/15시 트렌드 수집 후 DB 파이프라인에 적재.
 #  16시 잡이 DB에서 당일 최고 점수 테마를 꺼내 실행.
 # ══════════════════════════════════════════
