@@ -402,12 +402,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     Returns:
         {"theme", "tistory": {...}, "naver": {...}}
     """
-    # ★ 글 작성 전 인메모리 캐시 전체 초기화 — 이전 글 잔재 완전 제거
-    try:
-        from JARVIS06_IMAGE.chart_generator import clear_session_cache as _clear_cache
-        _clear_cache()
-    except Exception as _ce:
-        print(f"  ⚠️ [cache clear] 스킵: {_ce}")
+    # chart_generator 경로 폐기 — infographic_engine 경로로 통합 (ERRORS [355])
 
     from concurrent.futures import ThreadPoolExecutor as _TExec
     from JARVIS00_INFRA.harness import action_step, ActionDefinition, run_action, Issue

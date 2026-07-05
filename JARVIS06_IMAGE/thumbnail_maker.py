@@ -87,32 +87,37 @@ _COLOR_THEMES = [
 ]
 
 def _llm_thumbnail_params(title: str, keyword: str) -> dict:
-    """LLM이 글 내용 보고 사진 프롬프트·색상 테마·레이아웃을 한번에 결정.
+    """LLM이 글 내용 보고 *주제를 대표하는* 사진 프롬프트 + 색상 테마 결정.
 
-    반환: {"photo_prompt": str, "color_theme": str, "layout": str}
+    반환: {"photo_prompt": str, "color_theme": str}
     실패 시 빈 dict → 호출자가 random fallback 처리.
+    ★ 핵심(사용자 박제 2026-07-05): 썸네일 사진은 독자가 한눈에 주제를 알아보는
+      *가장 대표적인 실사* 여야 한다 (지역화폐→동전더미, 반도체→웨이퍼). 추상·은유로
+      빠지지 말 것. 동시에 고품질(영화적 조명·구도)이어야 클릭을 유도한다.
     """
     import json, re
     theme_names = [t["name"] for t in _COLOR_THEMES]
     try:
         from shared.llm import invoke_text
         req = (
-            f"You are a creative director for a Korean financial blog.\n"
-            f"Design a thumbnail for this article.\n\n"
+            f"You are a creative director for a Korean blog. Pick the single most\n"
+            f"RECOGNIZABLE hero photo that represents this article at a glance.\n\n"
             f"Article title: {title}\n"
             f"Topic: {keyword}\n\n"
             f"Available color themes: {', '.join(theme_names)}\n\n"
             f"Return ONLY a JSON object, no explanation:\n"
             f'{{\n'
-            f'  "photo_prompt": "<unique English scene — specific setting, lighting, camera angle, mood. NO text/numbers>",\n'
-            f'  "color_theme": "<one theme name from the list that best matches the article mood and topic>",\n'
-            f'  "layout": "<triptych or editorial>"\n'
+            f'  "photo_prompt": "<English scene that CLEARLY represents the topic — a real, concrete subject a reader instantly links to the topic>",\n'
+            f'  "color_theme": "<one theme name from the list that best matches the mood>"\n'
             f'}}\n\n'
-            f"photo_prompt rules:\n"
-            f"- Be SPECIFIC and unexpected — no clichés like 'financial district' or 'circuit board'\n"
-            f"- Think metaphorically: what visual scene FEELS like this topic?\n"
-            f"- Examples of good specificity: 'Close-up of morning dew on a spider web backlit by sunrise', "
-            f"'Aerial view of a shipping port at blue hour with cranes silhouetted against the sky'\n"
+            f"photo_prompt rules (STRICT):\n"
+            f"- REPRESENTATIVE FIRST: the main subject must be the obvious real-world object/scene of the topic "
+            f"(money topic → stacks of coins/banknotes; oil → refinery/oil drums; housing → apartment complex; "
+            f"AI chips → glowing semiconductor wafers). A viewer must 'get it' in under 1 second.\n"
+            f"- Then make it PREMIUM: photorealistic, cinematic lighting (golden hour / studio bokeh), "
+            f"shallow depth of field, editorial magazine quality.\n"
+            f"- Concrete photography ONLY — NO abstract metaphors, NO text, NO numbers, NO charts, NO logos, NO words.\n"
+            f"- Avoid tired stock clichés ('suited handshake', 'generic skyline') but stay ON-TOPIC and literal.\n"
             f"- color_theme must match the emotional tone (e.g. crimson=danger/biotech, forest=green energy, "
             f"volcanic=oil/energy, indigo=tech, ocean=global finance, vivid_violet=entertainment)"
         )
@@ -122,10 +127,9 @@ def _llm_thumbnail_params(title: str, keyword: str) -> dict:
             data = json.loads(m.group())
             photo = data.get("photo_prompt", "").strip().strip('"\'')
             theme = data.get("color_theme", "").strip()
-            layout = data.get("layout", "").strip()
             if len(photo) > 20 and theme in theme_names:
-                log.info(f"[thumbnail] LLM → theme={theme}, layout={layout}, prompt={photo[:80]}")
-                return {"photo_prompt": photo, "color_theme": theme, "layout": layout}
+                log.info(f"[thumbnail] LLM → theme={theme}, prompt={photo[:80]}")
+                return {"photo_prompt": photo, "color_theme": theme}
     except Exception as e:
         log.warning(f"[thumbnail] LLM 파라미터 실패 ({e})")
     return {}
@@ -237,7 +241,7 @@ def _generate_photo_pollinations(full_prompt: str, seed: int, tmp_dir: Path) -> 
 
 def _apply_triptych(photo: "Image.Image", title: str, keyword: str,
                     today: str, scheme: dict, rng: random.Random,
-                    show_dividers: bool = True) -> "Image.Image":
+                    show_dividers: bool = True, tag_line: str = "") -> "Image.Image":
     """사진을 3분할해 각 패널에 살짝 다른 색조 → 대형 키워드 글로우 오버레이."""
     from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
@@ -302,6 +306,12 @@ def _apply_triptych(photo: "Image.Image", title: str, keyword: str,
     draw.text((IW - 44, IH - 32), today, font=_load_font(20),
               fill=(180, 185, 195), anchor="rm")
 
+    # 카테고리 태그 (좌하단) — 제공 시만
+    _tag = (tag_line or "").strip()
+    if _tag:
+        draw.text((44, IH - 32), f"★ {_tag} ★", font=_load_font(18),
+                  fill=scheme["accent"], anchor="lm")
+
     # 상단 얇은 액센트 바
     draw.rectangle([(0, 0), (IW, 6)], fill=scheme["accent"])
 
@@ -311,7 +321,8 @@ def _apply_triptych(photo: "Image.Image", title: str, keyword: str,
 # ── 레이아웃 2: 에디토리얼 (폴라로이드) ──────────────────────
 
 def _apply_editorial(photo: "Image.Image", title: str, keyword: str,
-                     today: str, scheme: dict, rng: random.Random) -> "Image.Image":
+                     today: str, scheme: dict, rng: random.Random,
+                     tag_line: str = "") -> "Image.Image":
     """폴라로이드 프레임 + 파스텔 배경 + 데코 요소 — 감성 블로그 스타일."""
     from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 
@@ -396,8 +407,9 @@ def _apply_editorial(photo: "Image.Image", title: str, keyword: str,
         t_font = _load_font(30 if li == 0 else 26, bold=(li == 0))
         draw.text((tx, ty2 + li * 40), ln, font=t_font, fill=dark_c)
 
-    # 소형 태그 라인
-    draw.text((tx, IH - 48), "★ 경제 브리핑 ★", font=_load_font(18),
+    # 소형 태그 라인 — 카테고리 라벨 동적 (경제 브리핑 / 테마 분석 / 키워드)
+    _tag = (tag_line or keyword or "").strip() or keyword
+    draw.text((tx, IH - 48), f"★ {_tag} ★", font=_load_font(18),
               fill=scheme["badge"])
 
     return canvas
@@ -470,134 +482,32 @@ def _make_gradient_fallback(scheme: dict, rng: random.Random) -> "Image.Image":
 
 # ── 퍼블릭 API ───────────────────────────────────────────────
 
-def _generate_svg_thumbnail(title: str, theme: str, today_str: str, output_path: str) -> str:
-    """Claude LLM이 SVG 썸네일을 직접 디자인 → CairoSVG로 PNG 변환.
-
-    외부 이미지 API 불필요. Max 구독 invoke_text 로 동작.
-    """
-    from shared.llm import invoke_text
-    import re as _re, xml.etree.ElementTree as _ET
-
-    # 키워드 영문 번역 (SVG 대형 텍스트용 — XML 안전)
-    kw_en_resp = invoke_text("writer_fast",
-        f"Translate this Korean finance/stock topic to 1-2 English words, uppercase: '{theme}'. "
-        f"Output ONLY the translation, nothing else.", max_tokens=20)
-    kw_en = (kw_en_resp or theme).strip().upper()[:15]
-
-    prompt = (
-        f"You are a world-class graphic designer creating a Korean blog thumbnail.\n\n"
-        f"Korean keyword: {theme}\n"
-        f"Korean title: {title}\n"
-        f"Date: {today_str}\n\n"
-        f"=== STRICT XML RULES ===\n"
-        f"1. Output ONLY <svg viewBox=\"0 0 1200 630\" xmlns=\"http://www.w3.org/2000/svg\">...</svg>\n"
-        f"2. ALL Korean text MUST use CDATA: <text ...><![CDATA[한국어]]></text>\n"
-        f"3. ZERO & < > characters outside CDATA sections.\n"
-        f"4. Double quotes on all attributes. Self-close empty tags: <rect .../>\n"
-        f"5. No feGaussianBlur or feTurbulence filters — skip filters entirely.\n\n"
-        f"=== LAYOUT — TEXT MUST BE DEAD CENTER ===\n"
-        f"Canvas: 1200 x 630px. Canvas center: x=600, y=315.\n\n"
-        f"BACKGROUND (full canvas):\n"
-        f"  - Rich gradient or pattern filling the ENTIRE 1200x630 canvas\n"
-        f"  - Add decorative SVG shapes/illustrations that represent the topic\n"
-        f"    (e.g. battery icons, chart bars, circuit lines, coins — whatever fits)\n"
-        f"  - Dark semi-transparent overlay rect over the whole canvas for text readability\n"
-        f"    (rect x=0 y=0 width=1200 height=630, fill with rgba via opacity or dark color + opacity attr)\n\n"
-        f"TEXT LAYER — ALL CENTERED AT x=600, text-anchor='middle':\n"
-        f"  1. Top accent bar: rect x=0 y=0 width=1200 height=6, bright accent color\n"
-        f"  2. Date: x=600, y=80, font-size=22, text-anchor='middle', light color, CDATA\n"
-        f"  3. Keyword BADGE (centered):\n"
-        f"       rect x=340 y=200 width=520 height=90 rx=16, fill=accent color\n"
-        f"       text x=600 y=258 font-size=52 font-weight=bold fill=white text-anchor=middle CDATA\n"
-        f"  4. Horizontal accent line: line x1=400 y1=320 x2=800 y2=320, stroke=accent, stroke-width=2\n"
-        f"  5. Title line 1: x=600, y=370, font-size=32, text-anchor='middle', fill=white, bold, CDATA\n"
-        f"  6. Title line 2 (if title is long): x=600, y=412, font-size=32, text-anchor='middle', fill=white, CDATA\n"
-        f"  7. Tag line: x=600, y=580, font-size=20, text-anchor='middle', fill=accent, CDATA: '★ {theme} ★'\n\n"
-        f"=== RULE: NO left/right split. Everything centered at x=600. ===\n\n"
-        f"=== COLOR — BRIGHT PASTEL MANDATORY ===\n"
-        f"ABSOLUTE RULE: Background must be LIGHT and BRIGHT. Any dark color = FAIL.\n"
-        f"- ALL background colors must have RGB values ABOVE 180 (light pastels/creams only)\n"
-        f"- FORBIDDEN background hex ranges: #0??, #1??, #2??, #3?? → these are TOO DARK\n"
-        f"- USE THESE BRIGHT PALETTES (pick one):\n"
-        f"    * Peach+Coral: #FFF0E6 → #FFD4B2 → #FFAA80\n"
-        f"    * Sky+Mint: #E8F8FF → #B8EEFF → #80D8FF\n"
-        f"    * Lavender+Pink: #F5E8FF → #E8C8FF → #FFB6C1\n"
-        f"    * Lemon+Gold: #FFFDE7 → #FFF59D → #FFD54F\n"
-        f"    * Mint+Teal: #E8FFF5 → #B2DFDB → #80CBC4\n"
-        f"    * Rose+Salmon: #FFF0F3 → #FFCDD2 → #FF8A80\n"
-        f"- Background overlay (for text readability): use WHITE with 0.3 opacity, NOT black\n"
-        f"- Text colors: use DARK colors (navy #1A237E, dark purple #4A148C, dark teal #004D40) for contrast\n"
-        f"- Keyword badge: vivid saturated color (hot pink #E91E63, electric blue #2196F3, vivid orange #FF6D00)\n"
-        f"- Decorative elements: bright colored stars ★, sparkle dots, colorful circles — festive K-blog style\n"
-        f"- Overall mood: BRIGHT, AIRY, CHEERFUL, K-BLOG STYLE — like a popular Korean lifestyle blog\n\n"
-        f"Output ONLY the SVG. No explanation."
-    )
-
-    # ★ "빈 응답" 반복 사고(ERRORS [275] 박제) — writer(Sonnet) 2회 시도
-    # writer_fast 와 동일 모델이지만, 발행 병렬 SDK 포화 시 재시도로 복구 가능
-    for attempt in range(3):
-        try:
-            alias = "writer_fast" if attempt == 0 else "writer"
-            svg_text = invoke_text(alias, prompt, max_tokens=3500)
-            if not svg_text:
-                log.warning(f"[thumbnail_maker] Claude SVG attempt={attempt+1} 빈 응답 — alias={alias}")
-                continue
-
-            m = _re.search(r"(<svg[\s\S]*?</svg>)", svg_text, _re.IGNORECASE)
-            if not m:
-                log.warning(f"[thumbnail_maker] Claude SVG attempt={attempt+1} SVG 태그 없음")
-                continue
-
-            from JARVIS06_IMAGE.providers.claude_svg_provider import _sanitize_svg
-            svg = _sanitize_svg(m.group(1))
-
-            # XML 유효성 검사
-            _ET.fromstring(svg.encode("utf-8"))
-
-            svg_path = Path(output_path).with_suffix(".svg")
-            svg_path.write_text(svg, encoding="utf-8")
-
-            import cairosvg
-            cairosvg.svg2png(url=str(svg_path), write_to=output_path,
-                             output_width=1200, output_height=630)
-            svg_path.unlink(missing_ok=True)
-
-            log.info(f"[thumbnail_maker] Claude SVG 완료 (attempt={attempt+1}): {output_path}")
-            return output_path
-        except Exception as e:
-            log.warning(f"[thumbnail_maker] Claude SVG attempt={attempt+1} 실패 ({e})")
-
-    raise RuntimeError(f"SVG 생성 {3}회 모두 실패")
-
-
 def create_thumbnail(theme: str, title: str, output_path: str, body_text: str = "",
-                     platform: str = "naver") -> str:
-    """블로그 대표 썸네일 생성.
+                     platform: str = "naver", tag_line: str = "") -> str:
+    """블로그 대표 썸네일 생성 — 주제를 대표하는 AI 사진 임베드 (★ 사용자 박제 2026-07-05).
 
-    1) Claude SVG 썸네일 (외부 API 불필요 — Max 구독 동작)
-    2) AI 사진 + PIL 합성 (Bing → HuggingFace → Pollinations)
-    3) PIL 그라디언트 폴백
+    1) AI 사진 + 감성 에디토리얼(폴라로이드) 오버레이 — 주제 대표 이미지 임베드 (기본)
+    2) 그라디언트 폴백 (사진 실패 시 _create 내부에서 자동 처리)
+    3) matplotlib 카드 (최후)
+
+    ★ 구버전 저품질 SVG 인포그래픽 썸네일 폐기 (ERRORS [356]) — 실사진 없는
+      값싼 그래픽은 클릭을 유도하지 못함. 데이터 이미지가 아닌 *대표 사진* 이 원칙.
     """
     today_str = date.today().strftime("%Y.%m.%d")
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # 1순위: Claude SVG 썸네일
+    # 1순위: AI 사진 기반 에디토리얼 (주제 대표 이미지 임베드)
     try:
-        return _generate_svg_thumbnail(title, theme, today_str, output_path)
+        return _create(theme, title, output_path, today_str, platform=platform,
+                       tag_line=tag_line)
     except Exception as e:
-        log.warning(f"[thumbnail_maker] Claude SVG 폴백 → AI 사진 시도 ({e})")
-
-    # 2순위: AI 사진 기반
-    try:
-        return _create(theme, title, output_path, today_str, platform=platform)
-    except Exception as e:
-        log.warning(f"[thumbnail_maker] AI 사진도 실패 ({e})")
+        log.warning(f"[thumbnail_maker] AI 사진 실패 → matplotlib 폴백 ({e})")
         _g_report("image", e, module=__name__)
         return _simple_fallback(theme, output_path, today_str)
 
 
 def _create(theme: str, title: str, output_path: str, today_str: str,
-            platform: str = "naver") -> str:
+            platform: str = "naver", tag_line: str = "") -> str:
     import tempfile
     from PIL import Image
 
@@ -606,17 +516,13 @@ def _create(theme: str, title: str, output_path: str, today_str: str,
     rng = random.Random(seed_ns)
     seed_poll = seed_ns % 999_999_999
 
-    # LLM이 글 내용 보고 사진 프롬프트·색상·레이아웃 동시 결정
+    # LLM이 글 내용 보고 대표 사진 프롬프트·색상 결정
     params = _llm_thumbnail_params(title, theme)
 
     # 색상 테마 — LLM 선택 우선, 실패 시 완전 랜덤
     theme_name = params.get("color_theme", "")
     matched = [t for t in _COLOR_THEMES if t["name"] == theme_name]
     scheme = matched[0] if matched else rng.choice(_COLOR_THEMES)
-
-    # 레이아웃 — LLM 선택 우선, 실패 시 랜덤 (triptych 가중치)
-    layout_hint = params.get("layout", "")
-    layout = layout_hint if layout_hint in ("triptych", "editorial") else rng.choice(["triptych", "editorial", "triptych"])
 
     # 사진 프롬프트 — LLM 생성 우선, 실패 시 generic fallback
     photo_prompt = params.get("photo_prompt", "")
@@ -625,19 +531,18 @@ def _create(theme: str, title: str, output_path: str, today_str: str,
     photo_path = _generate_photo(theme, title, seed_poll, tmp_dir, platform=platform,
                                   prompt_en=photo_prompt)
 
-    is_real_photo = False
+    # ★ 레이아웃 (사용자 박제 2026-07-05): 실사진 확보 시 *항상* 에디토리얼(폴라로이드).
+    #   주제 대표 사진을 프레임에 임베드하는 것이 사용자 선호 스타일. triptych 는
+    #   사진을 못 구한 그라디언트 폴백 전용 (저품질 SVG 는 폐기됨).
     if photo_path and photo_path.exists():
         photo = Image.open(str(photo_path)).convert("RGB").resize((W, H), Image.LANCZOS)
-        is_real_photo = True
+        img = _apply_editorial(photo, title, theme, today_str, scheme, rng, tag_line=tag_line)
+        layout = "editorial"
     else:
         photo = _make_gradient_fallback(scheme, rng)
-        layout = "triptych"  # 폴백엔 triptych만 (editorial은 사진 필요)
-
-    if layout == "triptych":
         img = _apply_triptych(photo, title, theme, today_str, scheme, rng,
-                              show_dividers=is_real_photo)
-    else:
-        img = _apply_editorial(photo, title, theme, today_str, scheme, rng)
+                              show_dividers=False, tag_line=tag_line)
+        layout = "triptych(fallback)"
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     img.save(output_path, "PNG", dpi=(144, 144))

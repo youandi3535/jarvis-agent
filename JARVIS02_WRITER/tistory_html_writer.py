@@ -146,35 +146,12 @@ def _generate_svg_pass2(
     collection_docs: list | None = None,
     seed_datasets: list | None = None,
 ) -> str:
-    """차트 1개 단일 진입점 — chart_generator 성공 시 img 태그 반환, 실패 시 "" (스킵).
+    """★ 구버전 Plotly 경로 폐기 (사용자 박제 2026-07-05 — ERRORS [355]).
 
-    run_id: _generate_svg_pass2_and_replace 가 글 단위로 단 1회 생성해서 전달.
-            일관된 run_id → chart_generator 내부 _used_types_by_run 스타일 중복 방지 작동.
-    collection_docs: ★ 사용자 박제 2026-06-07 — JARVIS09 수집물.
-            chart_generator 가 부족 시 delta 보강 요청에 활용.
-    폴백 없음 — 실데이터 없으면 차트 스킵 (CLAUDE.md ★ 규정, ERRORS [44][70]...[182] 10회 박제).
+    신형식 [CHART_N]...[/CHART_N] 슬롯은 slot_renderer → infographic_engine 이 처리.
+    구형식 [CHART_N: text] 잔존 슬롯은 _generate_svg_pass2_and_replace 의 AI 사진 폴백이 처리.
+    이 함수는 호환성을 위해 시그니처를 유지하나 항상 "" 반환 (AI 사진 폴백이 이어받음).
     """
-    from JARVIS06_IMAGE.chart_generator import generate_chart as _gen_chart
-
-    _dir = Path(img_dir) if img_dir else (OUTPUT_IMG_DIR / "economic_tistory")
-    _dir.mkdir(parents=True, exist_ok=True)
-
-    jpg_path = _gen_chart(
-        description=description,
-        keyword=keyword,
-        sector=sector,
-        context_text=context_text,
-        out_dir=_dir,
-        chart_idx=chart_idx,
-        run_id=run_id,
-        collection_docs=collection_docs,
-        seed_datasets=seed_datasets,
-    )
-    if jpg_path:
-        alt = description[:40].replace('"', "'")
-        return (f'<p><img src="{jpg_path}" alt="{alt}" '
-                f'style="width:100%;max-width:760px;border-radius:8px;'
-                f'margin:16px auto;display:block;"></p>')
     return ""
 
 
@@ -372,20 +349,17 @@ def _generate_svg_pass2_and_replace(
     except Exception as _sre:
         print(f"  ⚠️ [Pass-2/{platform}] 내장 슬롯 처리 스킵: {_sre}")
 
-    # [CHART_N: description] 플레이스홀더 찾기 (구형식 + 내장 슬롯 강등분)
+    # 구형식 [CHART_N: 설명] 잔존 슬롯 — _generate_svg_pass2는 "" 반환(폐기), AI 사진 폴백이 처리
     placeholders = re.findall(r"\[CHART_(\d+):\s*([^\]]+)\]", content)
     if not placeholders:
         return content
 
-    print(f"  🎨 [Pass-2/{platform}] 차트 {len(placeholders)}개 생성 시도...")
+    print(f"  ⚠️ [Pass-2/{platform}] 구형식 슬롯 {len(placeholders)}개 → AI 사진 대체")
     _img_dir2 = OUTPUT_IMG_DIR / (f"economic_{platform}" if platform in ("tistory", "naver") else "economic_tistory")
-
-    # ★ run_id 단일 생성소 — 이 함수에서 1회만 생성, 모든 차트에 동일 값 전달.
-    # 동일 run_id → chart_generator._used_types_by_run 이 글 전체에서 스타일 중복 방지.
     import uuid as _uuid2
     _run_id2 = _uuid2.uuid4().hex[:8]
 
-    # ── 1단계: 차트 생성 (병렬) ──────────────────────────────────────────────
+    # ── 1단계: _generate_svg_pass2 호출 (현재 항상 "" 반환 — Plotly 경로 폐기) ──────────
     _items = [(pos, int(idx), desc.strip()) for pos, (idx, desc) in enumerate(placeholders, 1)]
     svg_map: dict[int, str] = {}
     with ThreadPoolExecutor(max_workers=4) as executor:

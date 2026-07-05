@@ -2117,12 +2117,7 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
     """티스토리 대본 생성 (①-⑦ 단계) — 네이버와 중복되지 않은 주제로 (네이버 우선 직렬)."""
     from datetime import datetime as _dt_ts
     print(f"\n  🔴 [TISTORY-DRAFT] 대본 생성 중... [{_dt_ts.now().strftime('%H:%M:%S')}]")
-    # ★ 글 작성 전 인메모리 캐시 전체 초기화 — 이전 글 잔재 완전 제거
-    try:
-        from JARVIS06_IMAGE.chart_generator import clear_session_cache as _clear_cache
-        _clear_cache()
-    except Exception as _ce:
-        print(f"  ⚠️ [cache clear] 스킵: {_ce}")
+    # chart_generator 경로 폐기 — infographic_engine 경로로 통합 (ERRORS [355])
     _section_img_paths.clear()
     _para_img_paths.clear()
     _cleanup_tistory_images()
@@ -2184,14 +2179,10 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
         #    *선수집* 실데이터 사용 — 02 의 JARVIS09 직접 호출 폐지.
         try:
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
-            from JARVIS06_IMAGE.chart_generator import set_session_pool as _ssp
             _pool = list(_cand.get("datasets") or [])
-            # ★ 자비스09→06 직공급 폐지 (사용자 박제 2026-07-03): 차트 데이터는 자비스02 가
-            #   대본 슬롯에 직접 내장 — 세션풀은 *빈 풀* 등록 (legacy 자체 수집 차단 유지).
-            _ssp([])
             if _pool:
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
-                print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
+                print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입")
             else:
                 print("  ⚠️ [데이터-우선] 팩 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
         except Exception as _de:
@@ -2346,12 +2337,7 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
     """네이버 대본 생성 (①-⑦ 단계) — 티스토리와 중복되지 않은 주제로."""
     from datetime import datetime as _dt_nv
     print(f"\n  🟢 [NAVER-DRAFT] 대본 생성 중... [{_dt_nv.now().strftime('%H:%M:%S')}]")
-    # ★ 글 작성 전 인메모리 캐시 전체 초기화 — 이전 글 잔재 완전 제거
-    try:
-        from JARVIS06_IMAGE.chart_generator import clear_session_cache as _clear_cache
-        _clear_cache()
-    except Exception as _ce:
-        print(f"  ⚠️ [cache clear] 스킵: {_ce}")
+    # chart_generator 경로 폐기 — infographic_engine 경로로 통합 (ERRORS [355])
     _section_img_paths.clear()
     _para_img_paths.clear()
     _cleanup_naver_images()   # ★ 재생성 시 직전 시도 이미지 리셋 (TS 와 동일 패턴)
@@ -2413,14 +2399,10 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
         #    *선수집* 실데이터 사용 — 02 의 JARVIS09 직접 호출 폐지.
         try:
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
-            from JARVIS06_IMAGE.chart_generator import set_session_pool as _ssp
             _pool = list(_cand.get("datasets") or [])
-            # ★ 자비스09→06 직공급 폐지 (사용자 박제 2026-07-03): 차트 데이터는 자비스02 가
-            #   대본 슬롯에 직접 내장 — 세션풀은 *빈 풀* 등록 (legacy 자체 수집 차단 유지).
-            _ssp([])
             if _pool:
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
-                print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입 + 세션풀 등록")
+                print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입")
             else:
                 print("  ⚠️ [데이터-우선] 팩 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
         except Exception as _de:

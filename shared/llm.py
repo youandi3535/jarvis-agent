@@ -146,9 +146,8 @@ _DEFAULT_MODEL_ID = MODELS["writer"].model_id
 def pretty_model_id(model_id: str) -> str:
     """모델 ID → 사람이 읽는 라벨.
 
-    'claude-opus-4-8'           → 'Opus 4.8'
-    'claude-sonnet-5'           → 'Sonnet 5'
-    'claude-haiku-4-5-20251001' → 'Haiku 4.5'   (날짜 접미사 절단)
+    'claude-opus-4-8'  → 'Opus 4.8'
+    'claude-sonnet-5'  → 'Sonnet 5'
     """
     s = (model_id or "").replace("claude-", "")
     parts = [p for p in s.split("-") if p]
@@ -469,6 +468,61 @@ def _run_sdk_sync(
     return "".join(parts)
 
 
+def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
+                       timeout: int = 180, cwd: str | None = None) -> str:
+    """★ 비전(이미지 입력) SDK 호출 (사용자 박제 2026-07-05) — Read 도구로 이미지 파일 분석.
+
+    invoke_text 는 텍스트 전용이라 이미지를 못 본다. SDK 가 구동하는 claude 에이전트에
+    allowed_tools=['Read'] 를 주면 이미지 파일을 읽어 분석한다. 인포그래픽 디자인 학습 등
+    실이미지 세밀 분석에 사용. permission_mode=bypassPermissions (Read 는 읽기전용, 안전).
+    """
+    import anyio
+    from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
+    from claude_code_sdk._errors import MessageParseError, ProcessError
+
+    imgs = "\n".join(f"- {p}" for p in image_paths)
+    full = _sanitize_prompt(f"다음 이미지 파일들을 Read 도구로 열어서 직접 보고 분석하라:\n{imgs}\n\n{prompt}")
+    options = ClaudeCodeOptions(model=model, allowed_tools=["Read"],
+                                permission_mode="bypassPermissions", max_turns=6,
+                                cwd=cwd, env={"ANTHROPIC_API_KEY": ""})
+    parts: list[str] = []
+
+    async def _collect():
+        with anyio.fail_after(timeout):
+            async for msg in query(prompt=full, options=options):
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, TextBlock):
+                            parts.append(block.text)
+
+    _pace_spawn()
+    with _LLM_SPAWN_SEM:
+        try:
+            anyio.run(_collect)
+        except (MessageParseError, ProcessError):
+            pass
+        except TimeoutError:
+            print(f"  ⚠️ vision SDK timeout {timeout}s — 수집 {len(parts)}개")
+        except Exception as e:
+            if not parts:
+                print(f"  ❌ vision SDK 오류: {e}")
+    return "".join(parts)
+
+
+def invoke_vision(alias: str, prompt: str, image_paths: list,
+                  timeout: int = 180, cwd: str | None = None) -> str:
+    """이미지 입력 LLM 단일 진입점 (SDK Read 도구). 텍스트 결과 반환. 실패/미가용 시 ""."""
+    if not image_paths:
+        return ""
+    model = _ALIAS_MODEL.get(alias, _DEFAULT_MODEL_ID)
+    try:
+        return _invoke_sdk_vision(prompt, model, [str(p) for p in image_paths],
+                                  timeout=timeout, cwd=cwd)
+    except Exception as e:
+        print(f"  ❌ invoke_vision 오류: {e}")
+        return ""
+
+
 def _circuit_record_throttle() -> None:
     """rate-limit 빈 응답 → 연속 카운터 증가, 임계 초과 시 회로 open."""
     with _circuit_lock:
@@ -650,7 +704,7 @@ ClaudeCLILLM = ClaudeSDKLLM
 
 __all__ = [
     "ModelSpec", "MODELS", "get_spec",
-    "chat", "invoke_text",
+    "chat", "invoke_text", "invoke_vision",
     "is_langchain_available", "render_catalog",
     "ClaudeSDKLLM", "ClaudeCLILLM",
 ]

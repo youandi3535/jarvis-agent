@@ -4,7 +4,13 @@
 0. **★ 시간축 좌→우 강제 (사용자 박제 2026-07-03)**: 시간·기간 라벨(연도·월·분기·날짜)이 있는 모든 차트·인포그래픽은 *과거 → 최근* 순서 (예: 2025년 좌, 2026년 우). 단일 진입점 `image_spec.enforce_time_axis_ltr()` — `render_from_spec`·`infographic_engine.generate_infographic` 양쪽에서 렌더 직전 자동 교정 + spec 생성 프롬프트에도 명시. 새 렌더 경로 추가 시 이 함수 경유 의무. 카테고리 라벨(비시간)은 무변경 (80% 파싱 임계).
 1. 한국어 프롬프트는 반드시 `prompt_translator.translate()` 로 영어 변환 후 제공자에 전달
 2. **★ 사진 프로바이더 (ERRORS [263] 박제 2026-06-07)**: Pollinations.ai 단일 사용. Bing/HuggingFace 완전 삭제 — Bing 쿠키 무한 만료 + HuggingFace DNS 차단 반복. 차기 1순위로 Nanobana(Gemini) 도입 예정.
-3. SVG 차트·썸네일 오버레이는 Claude LLM 동적 생성 — 고정 템플릿·스타일 풀 절대 금지
+3. SVG 차트 오버레이는 Claude LLM 동적 생성 — 고정 템플릿·스타일 풀 절대 금지
+3-B. **★ 썸네일 = 주제 대표 AI 실사 + 에디토리얼(폴라로이드) (사용자 박제 2026-07-05 — ERRORS [356])**: 대표 썸네일은 *주제를 한눈에 알아보는 실사*(지역화폐→돈, 반도체→웨이퍼)를 폴라로이드 프레임에 임베드 + PIL 오버레이. 단일 경로 `thumbnail_maker.create_thumbnail → _create → _apply_editorial`. **저품질 SVG 인포그래픽 썸네일(`_generate_svg_thumbnail`) 완전 폐기 — 재도입 금지.** 폴백 순서는 반드시 *품질 순*(AI사진→그라디언트→matplotlib). 하단 카테고리 태그는 `tag_line` 동적(하드코딩 금지). 데이터 인포그래픽(본문)과 대표 실사(썸네일)는 용도가 다름.
+3-C. **★ 본문 인포그래픽 = 결정론 전문 템플릿 (사용자 박제 2026-07-05 — ERRORS [357][358])**: `infographic_engine.generate_infographic` 1순위는 `pro_templates.render_pro` — *전문 디자인을 코드에 박제*(팔레트 5종 seed 회전·데이터형태 자동판별·히어로 밴드·듀오톤 라인·랭킹 막대·도넛)하고 검증 실데이터만 꽂아 **LLM 0회·5.4초** 렌더. 수치는 코드가 실데이터로 채움 → 조작 불가. **LLM 실시간 HTML 저작(`_designgen`)은 이미지당 수 분 latency(SDK 스로틀)로 폐기 → opt-in(`INFOGRAPHIC_DESIGNGEN=1`, 기본 OFF)**. 폴백 순서: pro_templates → (opt-in)design-gen → render_spec(손코딩 스펙). **교훈: 디자인 품질은 LLM 실시간 생성이 아니라 코드 템플릿에 박제. LLM은 데이터 수집·검증에만.** 새 데이터 형태 추가 시 `pro_templates.build_html` 분기 확장(다른 파일에 렌더 로직 신설 금지).
+3-D. **★ 인포그래픽 디자인 나이틀리 강화학습 (사용자 박제 2026-07-05 — ERRORS [359])**: 오류학습과 동형 — `design_learner.job_learn_design`(DEFAULT_JOBS `j06_design_learn`, 05:00)이 매일 새 전문 디자인 레시피 1개를 **게이트 통과분만** `design_recipes.json` 누적 → `pro_templates._pick_palette`가 기본+학습 소비 → 다양성 복리 상승. **모델 파인튜닝 아님**(불가) — *검증 통과 코드 자산 누적*.
+   - **학습 소스 3단(폴백)**: ① Phase0 = **실제 사이트 이미지 세밀 학습** — `_fetch_reference`(Playwright Bing, requests.get 금지) 로 후보 수집 → **비전 관련성 게이트**(`invoke_vision` = `shared/llm` SDK Read 도구, 인포그래픽 아니면 reject) → 세밀 분석으로 팔레트·스타일·notes 추출. ② Phase1 = LLM 지식기반 창작. ③ Phase2 = **결정론 색이론**(`_generate_recipe_deterministic`, LLM 0).
+   - **★ 1회 학습 필수 보장 (사용자 강조)**: 실이미지·LLM 실패해도 Phase2 결정론이 매일 +1 보장. "조용히 스킵" 금지.
+   - 게이트 = `_validate_recipe`(대비·채도·독창성) + `_test_render`(실렌더). 레퍼런스 복제 금지(원본 합성·저작권). 새 스타일 노브 추가 시 recipe schema + `_validate_recipe` + `build_html` 렌더 동시 갱신.
 4. **★ 차트/그래프 색상은 매번 LLM으로 새로 생성** (고정 팔레트 금지) — 동일 스타일 반복 시 독자가 AI 감지 → SEO 저품질
 5. **★ 같은 글 내 색상 추적 필수** — 같은 글의 여러 시각화가 같은 색상/스타일이면 안 됨. `exclude_colors` 파라미터로 제어
 6. `prompt_en=` 파라미터: Claude가 영어 프롬프트를 직접 생성한 경우 번역 생략

@@ -1276,7 +1276,7 @@ def boot_check():
     """데몬 부팅 후 호출 — 백그라운드 스레드에서 실행.
 
     LLMCodeAuditor 완전 제거 (외부 API 비용 발생 경로).
-    코드 자가 진단·수정은 JARVIS07_GUARDIAN/auto_repair.py 가 담당 (Opus 4.6):
+    코드 자가 진단·수정은 JARVIS07_GUARDIAN/auto_repair.py 가 담당 (Opus 4.8):
       발행 세트 callback 내 선행 실행 — 06:30 run_self_repair_then_economic / 16:00 run_self_repair_then_theme.
     """
     def _run():

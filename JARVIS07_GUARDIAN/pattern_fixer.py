@@ -1141,7 +1141,7 @@ def record_pattern_hit(
 
     # ★ A모델 분리 (ADR 007) — eval_agent 학습 자산화 게이트
     # 노이즈 게이트 3종 통과 후 *정밀 평가* 단계. 정적 fixer 는 자동 통과,
-    # llm_patch 는 Opus 4.6 으로 안전성·정확성·재사용 가치 채점.
+    # llm_patch 는 Opus 4.8 으로 안전성·정확성·재사용 가치 채점.
     try:
         from JARVIS07_GUARDIAN import eval_agent as _eval_mod
         _eval = _eval_mod.evaluate(

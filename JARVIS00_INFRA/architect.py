@@ -961,7 +961,7 @@ def _generate_exec_plan_from_spec(spec_md: str) -> list[dict]:
         "위 계획을 바탕으로 신규 파일 write_file JSON 배열을 출력하세요. JSON 배열만, 다른 텍스트 없이."
     )
     try:
-        # ★ exec_plan 생성 — Sonnet 4.6 (사용자 박제 2026-05-14)
+        # ★ exec_plan 생성 — Sonnet 5 (사용자 박제 2026-05-14)
         # 신규 파일 write_file JSON 배열 = 코드 스켈레톤 생성 → coder alias
         from shared.llm import invoke_text
         raw = invoke_text(
