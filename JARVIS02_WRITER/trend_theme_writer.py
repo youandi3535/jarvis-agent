@@ -714,8 +714,13 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                             _nm = str(_s.get("name") or "").strip()
                             if not _nm:
                                 continue
+                            # ★ '연매출' 거짓 라벨 방지 (ERRORS [367]): 네이버 재무는 최근 *분기*.
+                            #   fin_period 있으면 기간 명시, 없으면 '최근 실적'. grounding 코퍼스가
+                            #   정확해야 본문도 정확한 기간으로 작성·검증됨.
+                            _fp = str(_s.get("fin_period") or "").strip()
+                            _rev_lb = f"매출액({_fp} 기준)" if _fp else "매출액(최근 실적)"
                             _flds = []
-                            for _f, _lb in (("marcap", "시가총액"), ("revenue", "연매출")):
+                            for _f, _lb in (("marcap", "시가총액"), ("revenue", _rev_lb)):
                                 try:
                                     _mv = float(_s.get(_f) or 0)
                                 except (TypeError, ValueError):
@@ -727,7 +732,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                             if _flds:
                                 _stock_docs.append(
                                     f"[종목 실측] {_nm}: {', '.join(_flds)} "
-                                    f"(출처: 네이버 금융/KRX)")
+                                    f"(출처: 네이버 금융 재무제표·시세)")
                     except Exception:
                         pass
                     # ★ ERRORS [346] — 최고 신뢰 ground truth 는 코퍼스 *앞* 에 배치.

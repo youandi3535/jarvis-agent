@@ -245,7 +245,10 @@ def judge_engagement(title: str, content: str, post_type: str = "",
     last_err = ""
     for _attempt in range(2):
         try:
-            raw = _inv("engagement_judge", user_msg, system=system, max_tokens=600)
+            # ★ 비필수 (ERRORS [368]): 매력도는 fail-open(폴백=통과)이므로 스로틀 시 즉시 폴백
+            #   — 발행 임계경로를 매력도 LLM 대기로 막지 않는다(재생성 사유일 뿐).
+            raw = _inv("engagement_judge", user_msg, system=system, max_tokens=600,
+                       timeout=45, _nonessential=True)
             m = re.search(r"\{.*\}", raw or "", re.DOTALL)
             if not m:
                 last_err = "판정 응답 없음"

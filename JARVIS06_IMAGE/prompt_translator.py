@@ -43,6 +43,8 @@ def translate(text_ko: str) -> str:
             "not cartoon, not anime, not illustration'.\n"
             "- Aesthetic: premium Korean business/finance editorial."
         )
+        # ★ 비필수 (ERRORS [368]): 번역은 스타일 앵커 폴백이 있으므로 스로틀 시 즉시 폴백
+        #   — 이미지 프롬프트 번역 LLM 대기로 임계경로를 막지 않는다.
         result = invoke_text(
             "writer_fast",
             f"Korean description: {text_ko}\n\n"
@@ -50,6 +52,8 @@ def translate(text_ko: str) -> str:
             system=system_msg,
             max_tokens=400,
             temperature=0.6,
+            timeout=45,
+            _nonessential=True,
         )
         en = (result or "").strip()
         # 마크다운 헤더 제거 (# Image Prompt, **English:**, 등)

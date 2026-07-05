@@ -192,6 +192,28 @@ def _naver_fin(code: str) -> dict:
                             except Exception: pass
                     break
 
+        # ── ★ 재무 기간(period) 포착 — vals[0] 이 *어느 시점* 값인지 명시 (거짓 '연매출'
+        #   라벨 방지, ERRORS [367]). 매출액 행을 가진 표의 thead 기간 헤더(YYYY.MM) 중
+        #   *td[0] 과 정렬되는 첫 기간* = 파서가 취한 vals[0] 의 실제 기간. 최근 분기/연간을
+        #   라벨이 그대로 말해줌(예 '2025.09'=3분기, '2024.12'=연간결산). ──
+        try:
+            import re as _re_per
+            _fin_tbl = None
+            for _t in soup.select('table'):
+                if _t.find(string=_re_per.compile('매출액')):
+                    _fin_tbl = _t
+                    break
+            if _fin_tbl is not None:
+                _head = _fin_tbl.select_one('thead') or _fin_tbl
+                _pers = [th.get_text(' ', strip=True) for th in _head.select('th')
+                         if _re_per.search(r'20\d\d[.\-/]\d{1,2}', th.get_text(' ', strip=True))]
+                if _pers:
+                    _m0 = _re_per.search(r'20\d\d[.\-/]\d{1,2}', _pers[0])  # td[0] 정렬 = 첫 기간
+                    if _m0:
+                        result['fin_period'] = _m0.group(0).replace('-', '.').replace('/', '.')
+        except Exception:
+            pass
+
         return result
     except Exception as e:
         return {}
@@ -730,6 +752,7 @@ def calc_fin(info, ticker_obj=None):
         'roe': roe_pct,
         'op_margin': om_pct,
         'net_income': ni, 'revenue': rv, 'is_profit': is_profit,
+        'fin_period': naver.get('fin_period', ''),  # ★ 재무 vals[0] 실제 기간 (라벨 정확화, ERRORS [367])
         '_marcap': mc,   # 네이버/yfinance 시총
         '_price': naver.get('price', 0),  # 네이버 현재가
     }
@@ -821,6 +844,8 @@ class ThemeFinanceTool(BaseTool):
                         'net_income': ni,
                         'revenue': rv,
                         'is_profit': is_profit,
+                        # ★ 재무 기간 (네이버=분기 실적 기간, 있을 때만. yfinance 폴백=빈값, ERRORS [367])
+                        'fin_period': naver.get('fin_period', '') if isinstance(naver, dict) else '',
                     }
                     
                     if not price and not cap:
@@ -1528,8 +1553,21 @@ def stocks_to_datasets(stocks_data: dict, max_stocks: int = 8) -> list[dict]:
     if len(stocks) < 2:
         return []
     theme = str((stocks_data or {}).get("theme") or "").strip() or "테마"
-    _src = {"provider": "krx", "name": "네이버 금융(KRX 시세)",
-            "url": "https://finance.naver.com", "as_of": _d_std.today().isoformat()}
+    # ★ 출처 정확화 (사용자 박제 2026-07-05, ERRORS [367]): 시세(현재가·시총)와 재무제표
+    #   (매출·ROE·영업이익률·PER)는 *다른 데이터* — 출처를 구분해 실제 수집처를 표기.
+    _src_price = {"provider": "naver_finance", "name": "네이버 금융 · 시세",
+                  "url": "https://finance.naver.com", "as_of": _d_std.today().isoformat()}
+    _src_fin   = {"provider": "naver_finance", "name": "네이버 금융 · 재무제표",
+                  "url": "https://finance.naver.com", "as_of": _d_std.today().isoformat()}
+    # ★ 재무 기간 (거짓 '연매출' 라벨 방지, ERRORS [367]): 종목들의 fin_period 최빈값.
+    #   네이버 분기 실적이면 'YYYY.MM'(예 2025.09) — 라벨에 명시. 없으면 '최근 실적'(정직).
+    _pers = [str(s.get("fin_period") or "").strip() for s in stocks if str(s.get("fin_period") or "").strip()]
+    _period = ""
+    if _pers:
+        from collections import Counter as _Ctr
+        _period = _Ctr(_pers).most_common(1)[0][0]
+    _rev_title = (f"{theme} 관련주 매출액 ({_period} 기준)" if _period
+                  else f"{theme} 관련주 매출액 (최근 실적 기준)")
 
     def _rows(field, scale=1.0, nd=2, allow_neg=False):
         out = []
@@ -1548,22 +1586,23 @@ def stocks_to_datasets(stocks_data: dict, max_stocks: int = 8) -> list[dict]:
     #   → "출처·웹 모두 확인 불가" false-positive 차단. roe/op_margin/per(.1f)·price(콤마정수)
     #   는 이미 정합. 조원 두 필드만 nd=1 로 본문 표기와 일치시킨다. [346] 표기정합 원칙 연장.
     specs = [
-        ("price",     1.0,   0, False, f"{theme} 관련주 현재가",   "원",  "bar_chart"),
-        ("marcap",    1e-12, 1, False, f"{theme} 관련주 시가총액", "조원", "bar_chart"),
-        ("roe",       100.0, 1, True,  f"{theme} 관련주 ROE",     "%",   "bar_chart"),
+        ("price",     1.0,   0, False, f"{theme} 관련주 현재가",   "원",  "bar_chart", _src_price),
+        ("marcap",    1e-12, 1, False, f"{theme} 관련주 시가총액", "조원", "bar_chart", _src_price),
+        ("roe",       100.0, 1, True,  f"{theme} 관련주 ROE",     "%",   "bar_chart", _src_fin),
         # ★ op_margin 승격 (ERRORS [344] — [343] 대칭 갭). roe 와 동일하게 소수(0.136)로
         #   저장되므로 scale=100.0 로 %(13.6) 변환. 누락 시 진실한 "영업이익률 13.6%" 가
         #   grounding 코퍼스에 없어 "출처·웹 확인 불가"로 false-positive 차단됨.
-        ("op_margin", 100.0, 1, True,  f"{theme} 관련주 영업이익률", "%", "bar_chart"),
-        ("per",       1.0,   1, False, f"{theme} 관련주 PER",     "배",  "bar_chart"),
-        ("revenue",   1e-12, 1, False, f"{theme} 관련주 연매출",  "조원", "bar_chart"),
+        ("op_margin", 100.0, 1, True,  f"{theme} 관련주 영업이익률", "%", "bar_chart", _src_fin),
+        ("per",       1.0,   1, False, f"{theme} 관련주 PER",     "배",  "bar_chart", _src_fin),
+        # ★ '연매출'(연간) → 실제 기간 라벨 (ERRORS [367]): 네이버 재무는 최근 *분기* 값.
+        ("revenue",   1e-12, 1, False, _rev_title,               "조원", "bar_chart", _src_fin),
     ]
     datasets = []
-    for field, scale, nd, neg, title, unit, viz in specs:
+    for field, scale, nd, neg, title, unit, viz, src in specs:
         rows = _rows(field, scale, nd, neg)
         if len(rows) >= 2:      # 1행짜리는 비교 차트로 무의미 — 승격 제외
             datasets.append({"title": title, "unit": unit, "viz_hint": viz,
-                             "data": rows, "source": dict(_src),
+                             "data": rows, "source": dict(src),
                              "fingerprint": _dfp(title, unit)})
     return datasets
 

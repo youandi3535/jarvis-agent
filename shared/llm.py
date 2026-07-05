@@ -561,7 +561,8 @@ def _circuit_gate() -> str:
 
 
 def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
-                _retries: int = 4, _essential: bool = False, **overrides) -> str:
+                _retries: int = 4, _essential: bool = False,
+                _nonessential: bool = False, **overrides) -> str:
     """Claude Code SDK 호출 단일 진입점.
 
     텍스트 생성(writer/router/analyzer): Sonnet 5
@@ -572,6 +573,11 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
       쿨다운 동안 비필수 호출 즉시 "" 폴백. 필수 alias(_CIRCUIT_EXEMPT_ALIASES)와
       probe 는 1샷 실시도. ★ 데드라인 강등: JARVIS_LLM_DEADLINE_TS(epoch) 잔여 <10분
       이면 재시도 1회·백오프 0 — 발행(Layer 4) 시간 보호.
+
+    ★ _nonessential (사용자 박제 2026-07-05, ERRORS [368]): *비필수* 호출(자기비평·
+      매력도·번역·썸네일 등 — 폴백이 있어 없어도 발행되는 것). 스로틀(회로 open/probe)
+      감지 시 *SDK 호출 없이 즉시 "" 반환* — timeout·재시도로 임계경로를 막지 않는다.
+      회로 정상일 때도 1회·시간상자(≤45초). 필수 alias 면제(writer 등)보다 *우선* 적용.
     """
     import time as _t, random as _r
 
@@ -589,7 +595,13 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
     # ★ 회로 차단기 게이트 (_essential=True 는 호출 단위 필수 면제 —
     #   설계 planner 등 품질 조타수 호출이 스로틀 중에도 1회 실시도, ERRORS [300])
     _gate = _circuit_gate()
-    if _gate == "open":
+    # ★ 비필수 호출 — 스로틀 시 임계경로 블로킹 절대 금지 (ERRORS [368]). 필수 면제보다 우선.
+    if _nonessential:
+        if _gate in ("open", "probe"):
+            return ""                      # 스로틀 중 — SDK 미호출·즉시 폴백 (발행 안 막음)
+        retries, backoff = 1, False        # 정상일 때도 1샷
+        timeout = min(timeout, 45)         # 시간 상자 — 최악 45초
+    elif _gate == "open":
         if _essential or alias in _CIRCUIT_EXEMPT_ALIASES:
             retries, backoff = 1, False   # 필수 호출 — open 중에도 1회 실시도
         else:
