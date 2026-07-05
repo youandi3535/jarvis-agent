@@ -1955,17 +1955,10 @@ def collect_stocks_data(theme_name: str) -> dict:
     if len(stocks) < _n_before:
         print(f"  🧹 [stocks_data] 현재가 미취득 {_n_before - len(stocks)}종목 드롭 (거짓데이터 방지)")
 
-    if len(stocks) >= 2:
-        # 순차 enrich
-        # _enrich_leader_desc → invoke_text("writer_fast") → Claude Code SDK 통과.
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            futs = [ex.submit(_enrich_leader_desc, stocks[i], theme_name) for i in (0, 1)]
-            for fut in as_completed(futs):
-                try:
-                    fut.result(timeout=30)
-                except Exception as _e:
-                    _g_report("collect_theme", _e, module="collect_theme", func_name="stocks_data.enrich_future")
-        print(f"  ✅ [stocks_data] 대장주·부대장주 사업/기술/관계 enrich 완료")
+    # ★ 대장주·부대장주 enrich(사업/기술/관계) LLM 2회 폐지 → 대본 흡수 (ERRORS [375]).
+    #   _stocks_text 의 business/tech/relation 주입은 조건부라 빈 채로 두면 생략되고,
+    #   대본이 대장주 섹션(사업성·핵심기술)을 corpus·종목데이터에서 직접 서술한다
+    #   (수치는 사실성 게이트가, 정성 서술은 ADR 013 대로 자유). LLM 호출 2회 절감.
 
     pc = sum(1 for s in stocks if s.get("is_profit"))
     lc = len(stocks) - pc

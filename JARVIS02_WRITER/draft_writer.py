@@ -428,6 +428,79 @@ def _build_data_catalog(datasets) -> str:
     return "\n".join(lines)
 
 
+# ── ★ 동적 설계-우선 (사용자 박제 2026-07-05, ERRORS [376]) ───────────────────────
+#   "무턱대고 쓰지 말고, 먼저 이 자료에 맞는 설계를 하고 그 설계대로 써라." 추가 LLM
+#   호출 없이 *같은 생성* 안에서 설계→작성(plan-and-solve). 설계는 <design> 블록에 담고
+#   발행 전 제거 — 하드코딩 아님(매 글의 자료에 따라 LLM 이 동적으로 설계).
+_DESIGN_FIRST_BLOCK = (
+    "\n[★ 작성 전 — 먼저 *전문 편집 기획서* 를 작성 (무턱대고 쓰지 말 것)]\n"
+    "위 자료(종목 데이터·수집 문서 전문·근거 팩)를 *전문 에디터의 눈* 으로 종합 검토해,\n"
+    "이 글만의 *상세 기획서* 를 <design>...</design> 안에 작성하라. 하드코딩이 아니라 *이 자료에\n"
+    "맞춰 동적으로* — 기획이 꼼꼼·전문·디테일할수록 다음 작성이 수월하고 품질이 높다.\n"
+    "각 항목 1~2줄, 전체 18줄 이내로 밀도 있게:\n"
+    "1. [핵심 논지] 이 글이 주는 단 하나의 통찰 + 독자가 *지금* 읽어야 할 시의성.\n"
+    "2. [독자 니즈] 이 독자가 궁금해하고 불안해하는 지점 → 글이 그걸 어떻게 풀어주나.\n"
+    "3. [섹션별 설계] 각 <h2> 마다: ⓐ 핵심 메시지 1줄 ⓑ *이 자료 중 무엇* 으로 뒷받침 "
+    "ⓒ 앞뒤 섹션과의 서사 연결(흐름이 끊기지 않게).\n"
+    "4. [이미지 슬롯 설계] 각 [CHART_N] 마다: 카탈로그 D몇 + 차트 종류 + *그 차트가 보여주는\n"
+    "   인사이트 1줄*(왜 이 데이터를 하필 이 자리에). 데이터 없는 슬롯은 [PHOTO_N] 으로.\n"
+    "5. [도입·마무리 전략] 감성 도입부의 구체 앵글(독자 상황에서 시작) + 마무리의 행동·통찰.\n"
+    "6. [자료 공백 처리] 수치·근거가 얕은 부분은 어떤 정성 서술(맥락·비교·경향)로 설득력 있게 메울지.\n"
+    "그 다음, *네가 짠 그 기획서 그대로* 아래 형식으로 작성하라. "
+    "<design> 블록은 기획용 — 발행 본문 아님(시스템이 자동 제거).\n"
+)
+
+
+def _strip_design(raw: str) -> str:
+    """대본 응답에서 <design> 설계 블록 제거 (발행 본문 아님, ERRORS [376]).
+
+    ★ 안전판 (ERRORS [381]): LLM 이 본문 전체를 하나의 <design>...</design> 로 감싸거나
+      닫는 태그를 맨 끝에 두면, 비탐욕 정규식이 TITLE:/CONTENT: 본문까지 통째로 지워
+      '본문 한글 0자' 로 발행이 실패했다. 제거로 본문 마커가 유실되면 TITLE:/CONTENT:
+      지점부터 본문을 복원하고, 짝 안 맞는 design 태그 잔존물을 마저 정리한다.
+    """
+    import re as _re_d
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    # 1) 정상 <design>...</design> 블록 제거 (비탐욕)
+    out = _re_d.sub(r"<design>[\s\S]*?</design>", "", raw, flags=_re_d.I).strip()
+    had_body  = ("TITLE:" in raw) or ("CONTENT:" in raw)
+    lost_body = had_body and ("TITLE:" not in out) and ("CONTENT:" not in out)
+    if not out or lost_body:
+        # design 이 본문을 삼킴(전체 래핑·미종료). 본문 마커가 있으면 원본에서 복원하고,
+        # 없으면(설계만 쓰고 본문 누락) 빈 문자열 반환 → harness 가 재생성하게 둔다.
+        if not had_body:
+            return ""
+        out = raw
+    # 2) 짝 안 맞는 여는/닫는 <design> 태그 잔존물 제거 (본문 유실 없이)
+    out = _re_d.sub(r"</?design[^>]*>", "", out, flags=_re_d.I).strip()
+    # 3) 본문 마커가 있으면 그 지점부터 = 발행 본문 (선행 설계 텍스트 잔존 차단)
+    m = _re_d.search(r"TITLE\s*:|CONTENT\s*:", out, flags=_re_d.I)
+    return out[m.start():].strip() if m else out
+
+
+def _draft_invoke(system_msg: str, user_msg: str) -> str:
+    """설계-우선 대본 1회 호출 + 견고성 가드 (ERRORS [381] — 사용자 박제 2026-07-06).
+
+    설계-우선(<design>)이 스로틀·부분응답 시 *본문 없이 설계만* 반환하면 _strip_design 이
+    0자로 만들어 발행이 20분 재시도로 갇히던 문제를 근본 차단:
+      ① 빈 응답(스로틀) → 1회 재시도.
+      ② <design>만 오고 본문 없음 → 설계 지시 제거한 프롬프트로 1회 재시도 (설계 없이라도 본문 확보).
+    → 대본은 *절대 0자로 넘어가지 않는다* (LLM 이 응답만 하면 본문 확보).
+    """
+    raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
+    if not (raw or "").strip():                       # ① 빈 응답(스로틀) → 재시도
+        raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
+    body = _strip_design(raw)
+    if not body and (raw or "").strip():              # ② <design>만·본문 없음 → 설계 빼고 재시도
+        _plain = (user_msg.replace(_DESIGN_FIRST_BLOCK, "")
+                  if _DESIGN_FIRST_BLOCK in (user_msg or "") else user_msg)
+        raw2 = invoke_text("writer", _plain, timeout=300, system=system_msg)
+        body = _strip_design(raw2) or (raw2 or "").strip()
+    return body
+
+
 def _gen_economic_ts_nv(
     keyword: str, sector: str, reason: str,
     supreme_block: str,
@@ -440,7 +513,7 @@ def _gen_economic_ts_nv(
       카탈로그로 주입 → 대본이 *실제 있는 차트만* 계획 (없는 데이터 상상 금지).
     """
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
-    hook = _gen_hook(keyword, platform)
+    # ★ 대본 1회 호출 (ERRORS [373]): 도입부(hook) 별도 LLM 호출 폐지 — 아래 구조에 지시 내장.
     _catalog = _build_data_catalog(datasets)
 
     system_msg = f"""당신은 한국 경제 블로그의 전문 작가입니다.
@@ -470,7 +543,7 @@ def _gen_economic_ts_nv(
 TITLE: {spec['title_style']}
 
 CONTENT:
-<p>감성 오프닝1. 감성 오프닝2.</p>        ← 힌트: "{hook}"
+<p>감성 오프닝1. 감성 오프닝2. — 독자의 구체적 상황·감정에서 시작 (일반론·AI투 시작 금지).</p>
 <p>배경1. 배경2.</p>
 [CHART_1]
 제목: {keyword} 핵심 지표
@@ -518,7 +591,8 @@ CONTENT:
 <p>마무리.</p>
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 *맞춤형 표현*으로 작성)</p>
 
-지금 바로 TITLE: 부터 출력. 위 출력 형식 외의 설명·주석·코드블록 절대 금지.
+{_DESIGN_FIRST_BLOCK}
+먼저 <design>설계</design> 블록을 쓰고, *그 다음* 위 형식대로 TITLE: 부터 작성. <design> 외에는 위 출력 형식만 — 설명·주석·코드블록 금지.
 """
     _chart_floor = max(8, _L.MAX_CHART_COUNT * 2 // 3)  # 경제: 8~12 범위 하한선
     user_msg = user_msg.replace(
@@ -526,7 +600,8 @@ CONTENT:
         f"{_chart_floor}~{_L.MAX_CHART_COUNT}"
     )
     print(f"  ✍️  [Pass-1/{platform}] 텍스트 생성 (system 분리 적용): {keyword}...")
-    raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
+    # ★ 동적 설계-우선 (ERRORS [376]): 같은 호출에서 설계→작성. <design> 블록 제거 후 반환.
+    raw = _draft_invoke(system_msg, user_msg)   # ★ 견고성 가드 (빈응답·design-only 방어, ERRORS [381])
     return strip_html_wrapper(raw)
 
 
@@ -569,7 +644,7 @@ def _gen_section_call1(
 TITLE: {spec['title_style']}
 
 CONTENT:
-<p>감성 오프닝1. 감성 오프닝2.</p>        ← 힌트: "{hook}"
+<p>감성 오프닝1. 감성 오프닝2. — 독자의 구체적 상황·감정에서 시작 (일반론·AI투 시작 금지).</p>
 <p>배경1. 배경2.</p>
 [CHART_1]
 제목: {keyword} 핵심 지표
@@ -907,10 +982,14 @@ def _gen_theme(
     evidence_pack: dict | None = None,
     gate_feedback: list | None = None,
 ) -> str:
-    """테마글 Pass-1: 텍스트 + 데이터 내장 [CHART_N] 블록 (+구형식 폴백)."""
+    """테마글 Pass-1: 텍스트 + 데이터 내장 [CHART_N] 블록 (+구형식 폴백).
+
+    ★ 대본 1회 호출 (사용자 박제 2026-07-05, ERRORS [373]): 도입부(hook)·아웃라인(plan)
+      별도 LLM 호출 폐지 — user_msg 에 7섹션 구조·도입부 지시가 이미 완비돼 중복이었다.
+      LLM 호출 3→1 로 축소 → rate-limit 압박·프로세스 스폰 오버헤드 대폭 감소.
+    """
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     stocks_text = _stocks_text(stocks_data)
-    hook = _gen_hook_theme(theme, platform)
 
     # ★ 데이터 내장 슬롯 카탈로그 (ADR 013 테마 이행 — ERRORS [316]): 경제와 동일 로직.
     #   종목 시세 승격 + 텍스트 수치 승격 → 카탈로그 주입, 슬롯 안에 차트 데이터까지 내장.
@@ -994,9 +1073,8 @@ def _gen_theme(
     if _corpus_block:
         _ref_block += f"\n\n{_corpus_block}"
 
-    # ★ 서사 아웃라인 1패스 (ADR 012) — 구조 설계 후 작성 (실패 시 빈 블록)
-    _narrative_block = _plan_narrative(theme, sector, _evidence_block,
-                                       stocks_text=stocks_text, post_type="theme")
+    # ★ 아웃라인(plan) 별도 호출 폐지 (ERRORS [373]) — user_msg 의 7섹션 구조가 곧 아웃라인.
+    _narrative_block = ""
 
     user_msg = f"""[오늘 작성 요청 — 테마주 분석 글]
 플랫폼: {spec['name']} | 독자: {spec['reader']}
@@ -1030,7 +1108,7 @@ def _gen_theme(
 TITLE: {spec['title_style']}
 
 CONTENT:
-<p>감성 오프닝 2문장.</p>        ← 힌트: "{hook}"
+<p>감성 오프닝 2문장 — 독자의 구체적 상황·감정에서 시작 (일반론·AI투 시작 금지).</p>
 [CHART_1]
 제목: {theme} 테마 — 주가 흐름·수급 트렌드
 종류: line
@@ -1128,7 +1206,8 @@ CONTENT:
 
 <p>(여기에 면책 2문장 — 본문에 맞춤형 표현. 헌법 제5조 적용 — 정보 제공·투자 권유 아님·판단 책임은 독자)</p>
 
-지금 바로 TITLE: 부터 출력. 위 출력 형식 외의 설명·주석·코드블록 절대 금지.
+{_DESIGN_FIRST_BLOCK}
+먼저 <design>설계</design> 블록을 쓰고, *그 다음* 위 형식대로 TITLE: 부터 작성. <design> 외에는 위 출력 형식만 — 설명·주석·코드블록 금지.
 {_theme_catalog}
 {_ref_block}"""
     _theme_floor = max(6, _L.THEME_TOTAL_CHART_COUNT)  # 테마: 7~10 범위 하한선
@@ -1142,7 +1221,8 @@ CONTENT:
         user_msg += _fb_block
         print(f"  🔁 [Theme/Pass-1/{platform}] 직전 차단 사유 {len(gate_feedback or [])}건 주입 — 재작성")
     print(f"  ✍️  [Theme/Pass-1/{platform}] 텍스트 생성 (system 분리): {theme}...")
-    raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
+    # ★ 동적 설계-우선 (ERRORS [376]): 같은 호출에서 설계→작성. <design> 블록 제거 후 반환.
+    raw = _draft_invoke(system_msg, user_msg)   # ★ 견고성 가드 (빈응답·design-only 방어, ERRORS [381])
     return strip_html_wrapper(raw)
 
 
@@ -1169,10 +1249,12 @@ def generate_economic_draft(
     Returns:
         "TITLE: ...\\n[EXCERPT: ...\\n]CONTENT: ..." 형식 텍스트. 실패 시 빈 문자열.
     """
-    # tistory / naver: 섹션별 순차 생성 시도 → 폴백
-    raw = _gen_economic_ts_nv_parallel(keyword, sector, reason, supreme_block, platform)
+    # ★ 대본 1회 호출 + 동적 설계-우선 (ERRORS [373][376]): 단일 호출 _gen_economic_ts_nv 를
+    #   *주 경로* 로 — 설계-우선으로 전체 경제글 생성. 3섹션 순차(_parallel)는 실패 시 폴백만
+    #   (rate-limit 압박·스폰 3→1, 테마와 동일 구조). 경제 브리핑도 이제 1회 호출.
+    raw = _gen_economic_ts_nv(keyword, sector, reason, supreme_block, platform)
     if not raw:
-        raw = _gen_economic_ts_nv(keyword, sector, reason, supreme_block, platform)
+        raw = _gen_economic_ts_nv_parallel(keyword, sector, reason, supreme_block, platform)
     return raw
 
 

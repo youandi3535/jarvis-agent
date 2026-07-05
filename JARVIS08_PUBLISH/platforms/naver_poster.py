@@ -928,50 +928,65 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 return False
 
         def _paste_title():
+            # ★ 순서 (사용자 박제 2026-07-06): 윈도우 활성화 → 제목칸 캐럿(JS focus) → Cmd+V.
+            #   기존엔 focus 후 Escape/윈도우전환으로 캐럿이 blur → OS 붙여넣기가 허공에 감(제목 미입력).
             _activate_window()
+            _focus_title()
+            time.sleep(0.2)
             pyperclip.copy(title)
             time.sleep(0.3)
-            _activate_window()
             _pg2.hotkey('command', 'v') if IS_MAC else _pg2.hotkey('ctrl', 'v')
             time.sleep(0.8)
 
+        _want = (title or "").strip()
+
+        def _title_ok(rb):
+            """읽은 값이 *실제 제목*인지. ★ 빈칸/플레이스홀더('제목')/불일치는 실패 (ERRORS [365] 보강).
+            검증이 ''(빈칸)만 봐서 플레이스홀더 '제목'을 성공으로 오판하던 구멍을 막는다."""
+            rb = (rb or "").strip()
+            if not rb or rb == "제목" or rb == "__NOSEL__":
+                return False
+            _w = _want.replace(" ", ""); _r = rb.replace(" ", "")
+            return _r == _w or (len(_w) >= 6 and _w[:6] in _r)
+
+        # 초기 포커스 + 팝업 정리 (이후 _paste_title 가 매번 재포커스)
         if not _focus_title():
             print("  ⚠️ 제목 선택자 미발견 → 좌표 폴백")
             _click(283, 336, "제목 클릭")
-        time.sleep(0.6)
+        time.sleep(0.4)
         _activate_window()
         _pg2.press('escape')
         time.sleep(0.2)
-        # 수정 모드면 기존 제목 전체 선택 → 삭제
-        if edit_log_no:
-            _activate_window()
+        if edit_log_no:   # 수정 모드면 기존 제목 비우기
+            _focus_title(); _activate_window()
             _pg2.hotkey('command', 'a') if IS_MAC else _pg2.hotkey('ctrl', 'a')
-            time.sleep(0.3)
-            _pg2.press('delete')
-            time.sleep(0.3)
-        _paste_title()
+            time.sleep(0.3); _pg2.press('delete'); time.sleep(0.3)
 
-        # ★ 제목 입력 검증 — 비었으면 재포커스+재입력 (발행 블로커 근본 차단)
-        try:
-            _tt = driver.execute_script(_TITLE_READ_JS)
-        except Exception:
-            _tt = "__NOSEL__"
-        if _tt == "":   # 요소는 찾았는데 텍스트가 비어있음 = 붙여넣기 실패
-            print("  ⚠️ 제목 비어있음 감지 → 재포커스 후 재입력")
-            _focus_title()
-            time.sleep(0.4)
-            _paste_title()
-            if not (driver.execute_script(_TITLE_READ_JS) or "").strip():
-                # 최후: CDP 타이핑 (클립보드·OS포커스 무관)
+        # ★ 3-tier 제목 입력 — 클립보드 붙여넣기 ×2, 실패 시 Selenium 실 키입력(OS포커스 무관)
+        _fin = ""
+        for _attempt in range(3):
+            if _attempt < 2:
+                _paste_title()                       # 재포커스 + Cmd+V
+            else:
                 try:
                     from selenium.webdriver.common.action_chains import ActionChains as _ACt
-                    _focus_title()
+                    _focus_title(); time.sleep(0.3)
                     _ACt(driver).send_keys(title).perform()
                     time.sleep(0.6)
                 except Exception as _te:
-                    print(f"  ⚠️ CDP 제목 타이핑 실패: {_te}")
-        _fin = "" if _tt == "__NOSEL__" else (driver.execute_script(_TITLE_READ_JS) or "")
-        print(f"  ✅ 제목 입력 완료{(' — ' + _fin[:30]) if _fin and _fin!='__NOSEL__' else ''}")
+                    print(f"  ⚠️ Selenium 제목 타이핑 실패: {_te}")
+            try:
+                _fin = driver.execute_script(_TITLE_READ_JS) or ""
+            except Exception:
+                _fin = ""
+            if _title_ok(_fin):
+                break
+            print(f"  ⚠️ 제목 미확인(읽음='{_fin[:20]}') → 재시도 {_attempt + 1}/3")
+
+        if _title_ok(_fin):
+            print(f"  ✅ 제목 입력 완료 — {_fin[:30]}")
+        else:
+            print(f"  ❌ 제목 입력 실패 — 읽음='{_fin[:30]}' (발행 블로커)")
         time.sleep(1)
 
         # ── 본문 입력 (텍스트 + 이미지 블록 순서대로) ──
