@@ -105,6 +105,43 @@ def _acquire_action_lock(name: str) -> Optional[threading.Lock]:
     return None
 
 
+# ── ★ 인터프리터 종료 레이스 가드 (근본 원인 — ERRORS [362]) ────────────────
+def interpreter_shutting_down() -> bool:
+    """인터프리터(파이썬 실행기)가 종료 단계에 진입했는지 — 데몬 재시작 레이스 감지.
+
+    ★ 근본 원인: 데몬 재시작 시 옛 프로세스가 종료되며 파이썬 표준 정리 훅
+    `concurrent.futures.thread._python_exit` 가 전역 `_shutdown=True` 로 바꾼다.
+    그 순간, misfire 유예(misfire_grace_time)로 *뒤늦게* 실행되던 발행 잡이 남아
+    있으면 수집 단계의 ThreadPoolExecutor.submit() 이
+    'cannot schedule new futures after interpreter shutdown' RuntimeError 로 폭발
+    → 헛된 "발행 실패 / 글자수 실패" 보고 + GUARDIAN 트리거 + 테마 실패 오기록.
+
+    → 종료 중이면 무거운 동작(발행)을 *아예 시작하지 않고* 연기(deferred)한다.
+    keeper 가 재기동한 *새* 프로세스가 같은 misfire 잡을 재실행 → 정상 발행.
+
+    두 신호를 확인한다 (둘 중 하나라도 참이면 종료 중):
+      ① concurrent.futures 전역 `_shutdown` — 크래시를 유발하는 *바로 그 조건* (권위 신호)
+      ② jarvis_daemon `_daemon_shutdown` 이벤트 — 공개 신호 (이미 로드된 경우만, 순환 import 회피)
+    """
+    # ① 크래시를 유발하는 바로 그 전역 플래그 (표준 라이브러리 — 여러 파이썬 버전 안정)
+    try:
+        import concurrent.futures.thread as _cft
+        if getattr(_cft, "_shutdown", False):
+            return True
+    except Exception:
+        pass
+    # ② 데몬 자체 종료 이벤트 (이미 import 된 경우만 — 순환/재import 회피)
+    try:
+        import sys as _sys
+        _dm = _sys.modules.get("jarvis_daemon")
+        _ev = getattr(_dm, "_daemon_shutdown", None)
+        if _ev is not None and _ev.is_set():
+            return True
+    except Exception:
+        pass
+    return False
+
+
 # ── 데이터 클래스 ──────────────────────────────────────
 
 @dataclass
@@ -174,6 +211,7 @@ class ActionResult:
     final_state: dict = field(default_factory=dict)
     issues_history: list[list[Issue]] = field(default_factory=list)
     escalation_reason: str = ""             # 송출 안 된 사유 (delivered=False 일 때만)
+    deferred: bool = False                  # ★ 인터프리터 종료 레이스로 *연기* (실패 아님 — 재시도 대상)
 
     @property
     def state(self) -> dict:
@@ -389,6 +427,16 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
     """
     state: dict = dict(input_data or {})
     result = ActionResult(delivered=False, final_state=state)
+
+    # ── ★ 인터프리터 종료 레이스 가드 (근본 원인 — ERRORS [362]) ──
+    # 데몬 재시작 등으로 인터프리터가 종료 단계면 무거운 발행을 *시작하지 않고* 연기.
+    # 실행 시 ThreadPoolExecutor 크래시 → 헛된 "발행 실패" 를 원천 차단.
+    # deferred=True 는 *실패 아님* — 호출자는 재시도 대상으로 처리 (진행상태 미기록·GUARDIAN 스킵).
+    if interpreter_shutting_down():
+        _log.warning(f"[harness] ⏸ 인터프리터 종료 중(데몬 재시작) — 동작 연기(deferred): {action_def.name}")
+        result.deferred = True
+        result.escalation_reason = "인터프리터 종료 중(데몬 재시작) — 발행 연기, 재시작 후 재시도"
+        return result
 
     # ── ★ P1-⑤ 동시성 락 (비블로킹) ──
     _lock = _acquire_action_lock(action_def.name)
@@ -640,5 +688,6 @@ __all__ = [
     "ActionResult",
     "action_step",
     "run_action",
+    "interpreter_shutting_down",
     "DEFAULT_MAX_ATTEMPTS",
 ]

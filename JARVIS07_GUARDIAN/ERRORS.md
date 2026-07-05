@@ -2,6 +2,50 @@
 
 ---
 
+## [364] 본문 이미지가 전부 AI사진·인포그래픽 0장 — 실데이터가 있는데도 인포그래픽 미생성 (모든 글 공통, 2026-07-05)
+
+- **증상**: 테마 발행 시 본문 이미지 5장이 *전부 AI 사진(`poll_*.png`)*, 데이터 인포그래픽 0장. 사용자: "대본 이미지 슬롯엔 실데이터(API+텍스트)가 무조건 들어있다 → 인포그래픽이 무조건 만들어져야 한다. 안 되면 로직 결함. 경제·모든 글도 마찬가지."
+- **환경**: `JARVIS06_IMAGE/draft_processor.py process_draft` — 경제·테마 *공통* 이미지 오케스트레이터. min_images=5(CATEGORY_POLICY).
+- **원인 (근본 — 로직 결함 2가지)**:
+  1. **인포그래픽 생성이 LLM 이 `[CHART_N]…[/CHART_N]` 슬롯을 emit 하는 것에 100% 의존.** 수집된 실데이터(`collected.datasets` = `stocks_to_datasets`+`facts_to_datasets`, compose_collected 가 출처 박제 조립)는 LLM 슬롯을 *검증*하는 데만 쓰이고, *독립적으로 인포그래픽을 만드는 데는 안 씀*. LLM 이 슬롯 0개면(스로틀·품질저하) 인포그래픽 0장.
+  2. **min-N top-up(`_extra_photos`)과 실패-슬롯 폴백(`_photo_for_failed_slot`)이 인포그래픽이 아니라 AI 사진으로 채움** — 실데이터가 있는데도. → "AI사진 5, 인포그래픽 0" 확정.
+- **경위**: LLM 스로틀(이 세션+데몬 동시 사용, ERRORS [288])로 대본이 CHART 슬롯을 하나도 못 넣음 → 인포그래픽 0 → min-5 가 AI사진 5장으로 때움. 결함①이 스로틀로 노출되고, 결함②가 AI사진으로 굳힘.
+- **헛다리**: "발행 전 일괄 이미지 확보 = 안전". 실데이터가 항상 있으므로(사용자 원칙), *어떤 경우에도* 데이터 인포그래픽을 먼저 만들어야 한다. AI 사진은 데이터가 *정말* 0일 때만.
+- **해결 (단일 함수 `_next_data_infographic` — 모든 글 공통)**: 수집 실데이터에서 아직 안 쓴 dataset 1개 → `generate_infographic`(결정론·LLM 0회·pro_templates)로 인포그래픽 `<p><img></p>` 생성. **세 경로 전부 이 함수를 AI사진보다 우선 호출**: ① 구형식/실패 슬롯(`_generate_charts`) ② min-N top-up(`_extra_infographics`). `used_titles` 를 process_draft 가 생성·공유 → 슬롯·top-up 이 *같은 dataset 을 중복* 시각화 안 함. 데이터 소진 시에만 AI 사진. 사실성: `generate_infographic` 내부 `_verify_dataset` 가 출처 없는 dataset 제거(거짓 차트 금지 규정 12 유지). generate_infographic 은 *경로* 반환 → `_ai_photo_html` 로 `<p><img></p>` 감싸야 `assemble_blocks` 가 image 블록 인식(경로만은 누락).
+- **파일**: `JARVIS06_IMAGE/draft_processor.py` (`_next_data_infographic` 신설, `_extra_infographics`·`_generate_charts`·`process_draft` 연결).
+- **교훈**: 데이터 시각화(인포그래픽)를 *스로틀 가능한 LLM 이 슬롯을 emit 하는 것*에 의존시키면 안 된다. 실데이터가 있으면(항상 있음) 인포그래픽은 *결정론으로 무조건 생성*돼야 한다. AI 사진은 폴백의 폴백. 경제·테마 등 전 카테고리가 단일 `process_draft` 를 공유하므로 한 곳 수정이 전체에 적용.
+
+---
+
+## [363] 발행 진입 콜백이 네이버 차례에 티스토리 쿠키까지 미리 로그인 — 선로그인 대기 사망·원칙 위반 (2026-07-05)
+
+- **증상**: 16시 테마 발행을 시작하자마자 "🍪 티스토리 쿠키 갱신 체크" 가 뜸. 사용자 지적: "지금은 네이버 작성 타임인데 왜 티스토리 로그인 쿠키를 여기서 확인·갱신하냐".
+- **환경**: `JARVIS02_WRITER/scheduler.py` `run_self_repair_then_theme` / `run_self_repair_then_economic` 의 Step 2 — `_clear_all_cookies` 직후 티스토리(`job_pre_publish_check`)·네이버(`job_pre_naver_check`) 쿠키를 *둘 다 선행* 갱신.
+- **원인**: 플랫폼 직렬 발행(네이버 액션 완전 종결 → 티스토리 액션)인데 티스토리 카카오 세션을 *네이버 시작 시점*에 미리 발급 → 네이버 대본 생성·발행(10분+) 내내 방치 → 티스토리 차례엔 세션 만료(선로그인 대기 사망, ERRORS [265]). 게다가 티스토리 쿠키는 이미 *티스토리 차례*에 강제 재갱신됨(테마 `trend_theme_writer._step_ts_cookie` 액션2 시작 / 경제 `economic_poster.post_to_tistory_economic` 발행 직전, 둘 다 `force=True`) → 선행 갱신은 조기·중복·이중 카카오 로그인.
+- **헛다리**: "발행 전 모든 쿠키를 미리 확보해야 안전" — 오히려 티스토리는 미리 열면 방치돼 죽는다. 각 플랫폼은 *자기 차례*에 갱신해야 신선.
+- **해결**: 진입 콜백 Step 2 에서 *네이버 쿠키만* 선행 갱신(`_clear_all_cookies` 가 `naver_cookies.pkl` 삭제 → 네이버 precondition 위해 필수). 티스토리 선행 로그인 제거. 티스토리는 자기 차례(force 갱신)에 처리. 경제글은 티스토리 액션 precondition 이 `TS_COOKIE` 환경변수를 확인하므로, `_clear_all_cookies` 가 pop 한 값을 `load_dotenv(override=True)` 로 *로그인 없이* 복원(실제 신선 로그인은 발행 직전 force). 부수 효과: 티스토리 로그인 실패가 더 이상 네이버 발행까지 막지 않음(실패 격리 — "플랫폼 단위 끝까지 직렬" 원칙 강화).
+- **파일**: `JARVIS02_WRITER/scheduler.py`.
+- **교훈**: "발행 전 일괄 쿠키 확보"는 직렬 파이프라인에서 반(反)패턴. 로그인 세션은 *쓰기 직전*에 발급해야 신선하다. 각 플랫폼 쿠키는 *그 플랫폼 작성 차례*에만 확인·갱신 — 네이버 타임엔 네이버만.
+
+---
+
+## [362] 발행 "글자수 실패"의 진짜 원인 = 데몬 재시작 레이스 (인터프리터 종료 중 발행 잡 실행) — 근본 수정 (2026-07-05)
+
+- **증상**: 텔레그램 `⚠️ [IT 대표주] 완료 / ✅ 성공: 없음 / ❌ 실패: naver, tistory / 📝 네이버 글자수: 실패 / 📝 티스토리 글자수: 실패`. 발행이 6초 만에 실패(정상은 수 분).
+- **환경**: 2026-07-05 16:01. keeper 가 16:00:09 옛 데몬 꺼짐 감지 → 새 데몬 PID 46137 기동. 16:00 테마 크론잡이 misfire 유예(misfire_grace_time=7200)로 16:01:43 뒤늦게 실행.
+- **원인 (근본)**: "글자수 실패"는 *증상*일 뿐 — `scheduler._fmt()` 가 발행 실패(`results[key]==False`) 시 글자수 자리에 "실패"를 표시. 진짜 원인은 harness `theme-publish-...-naver` `② 종목·근거 수집` 스텝의 `RuntimeError: cannot schedule new futures after interpreter shutdown`. 옛 데몬이 kill 되며 CPython `concurrent.futures.thread._python_exit`(atexit)가 전역 `_shutdown=True` 로 바꾼 뒤, 아직 살아있던 워커 스레드가 misfire 잡을 실행(트레이스백: `_python_exit → t.join() → ... → submit → RuntimeError`) → 수집 스텝의 `ThreadPoolExecutor.submit()` 폭발. 임베딩도 같은 순간 같은 에러(fail-open 처리됨).
+- **헛다리**: ① [361]의 부분 수정 — `_col_exec.submit()` 만 `try/except` 로 감쌌으나 크래시는 `_collect()`(종목 병렬 수집)·임베딩 등 *다른 executor 경로*로 새어나옴. 한 줄 방어로는 프로세스 전역 `_shutdown` 을 못 막음. ② harness retry — 종료 중엔 재시도해도 동일 실패(fingerprint abort 로 이미 차단됨). ③ GUARDIAN incident — 코드 버그가 아니라 재시작 레이스라 헛발.
+- **해결 (근본 — 발행을 *시작하지 않음*)**: 인터프리터 종료 감지 단일 진입점 `harness.interpreter_shutting_down()` 신설 (전역 `concurrent.futures.thread._shutdown` + `jarvis_daemon._daemon_shutdown` 확인). 5중 가드로 "종료 중이면 발행을 시작조차 안 하고 *연기(deferred)*":
+  1. `harness.run_action` 최상단 — 모든 액션 공통(발행·경제·ReAct). deferred=True 반환(스텝 미실행 → 크래시 원천 차단).
+  2. `scheduler.run_self_repair_then_theme` / `run_self_repair_then_economic` — 진입 콜백에서 세트 전체(쿠키·자가수리·발행) 건너뜀.
+  3. `scheduler.run_radar_top_theme` — 테마 선정·폴백 캐스케이드 차단.
+  4. `scheduler.run_theme` + `trend_theme_writer.run_all_themes` — "글자수 실패" 텔레그램·GUARDIAN·실패 오기록 스킵.
+  5. `scheduler.run_next` / `_run_one_theme` — 진행상태(index·done/failed) 미기록 → 재시작 후 같은 테마 재시도 보장.
+- **파일**: `JARVIS00_INFRA/harness.py` (`interpreter_shutting_down`·`ActionResult.deferred`·`run_action` 가드), `JARVIS02_WRITER/scheduler.py`, `JARVIS02_WRITER/trend_theme_writer.py`.
+- **교훈**: 장수 데몬 + "코드 변경 후 상시 재시작" 정책에서는 *발행 잡이 종료 중 인터프리터에서 misfire 재실행*되는 레이스가 필연. 방어는 크래시 지점을 한 줄씩 막는 게 아니라 *무거운 동작을 아예 시작하지 않는* 단일 게이트(harness 진입점)여야 한다. 종료 중 실패는 "실패"가 아니라 "연기" — 실패로 오기록하면 테마가 `failed_set` 에 박혀 영구 스킵된다. [361]의 부분 수정은 이 항목으로 대체.
+
+---
+
 ## [361] 테마 발행 ② 수집 — `cannot schedule new futures after interpreter shutdown` (데몬 재시작 레이스)
 
 - **증상**: harness `theme-publish-...-naver` attempt=1 step=`② 종목·근거 수집` 에서 `RuntimeError: cannot schedule new futures after interpreter shutdown` (severity medium).
