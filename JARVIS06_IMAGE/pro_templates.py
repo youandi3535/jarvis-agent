@@ -191,28 +191,68 @@ def _line_chart(series, pal, W=980, H=340):
 
 
 def _bar_chart(rows, pal, W=980):
-    """가로 막대 랭킹 — 그라디언트 바 + 값 라벨. rows: [(label,value)]."""
+    """가로 막대 랭킹 — 값 *내림차순 정렬 가정* (호출자가 실제값 desc 정렬).
+
+    ★ 음수 처리 (사용자 박제 2026-07-06): 값에 음수가 있으면 0 기준선 발산형 —
+    양수는 우측, 음수는 좌측으로. 순위·막대길이·1위 강조 모두 *절댓값 아닌 실제값* 기준
+    (예: ROE -72.4% 는 1등이 아니라 꼴찌 · 좌측 막대). 값 라벨은 우측 정렬 컬럼.
+    """
     rows = rows[:7]
     if not rows:
         return ""
-    mx = max(abs(v) for _, v in rows) or 1
+    vals = [v for _, v in rows]
+    vmax, vmin = max(vals), min(vals)
+    _defs = ("<defs>"
+             f"<linearGradient id='bg' x1='0' y1='0' x2='1' y2='0'>"
+             f"<stop offset='0' stop-color='{pal['a1']}'/><stop offset='1' stop-color='{pal['a2']}'/></linearGradient></defs>")
+
+    if vmin < 0:
+        # ── 발산형(0 중앙): 항목명 중앙(0축) 위, 양수 우측 · 음수 좌측 ──
+        L, R = 40, W - 40
+        cx = (L + R) / 2.0                       # 0 기준선 = 중앙
+        half = (R - L) / 2.0 - 55                 # 값 라벨용 여백 확보
+        span = max(abs(vmax), abs(vmin)) or 1.0
+        rowH, gap, barH = 62, 16, 26
+        H = len(rows) * (rowH + gap) + 16
+        parts = [f"<svg width='100%' viewBox='0 0 {W} {H}' fill='none' style='display:block'>", _defs,
+                 f"<line x1='{cx:.0f}' y1='6' x2='{cx:.0f}' y2='{H - 10}' stroke='{pal['muted']}' stroke-width='1.6' opacity='.45'/>"]
+        y = 12
+        for i, (lb, v) in enumerate(rows):
+            top = i == 0
+            bl = abs(v) / span * half
+            bx = cx if v >= 0 else cx - bl
+            fill = "url(#bg)" if top else (pal['a2'] if v >= 0 else pal['muted'])
+            parts.append(f"<text x='{cx:.0f}' y='{y + 15}' text-anchor='middle' fill='{pal['ink']}' "
+                         f"font-size='16' font-weight='{800 if top else 700}'>{lb}</text>")
+            parts.append(f"<rect x='{bx:.0f}' y='{y + 24}' width='{max(4, bl):.0f}' height='{barH}' rx='8' fill='{fill}'/>")
+            if v >= 0:
+                parts.append(f"<text x='{cx + bl + 10:.0f}' y='{y + 43}' fill='{pal['ink']}' "
+                             f"font-size='17' font-weight='800'>{_fmt(v)}</text>")
+            else:
+                parts.append(f"<text x='{cx - bl - 10:.0f}' y='{y + 43}' text-anchor='end' fill='{pal['ink']}' "
+                             f"font-size='17' font-weight='800'>{_fmt(v)}</text>")
+            y += rowH + gap
+        parts.append("</svg>")
+        return "".join(parts)
+
+    # ── 전부 동일 부호: 좌측 라벨 + 좌정렬 막대 + 우측 값 컬럼 ──
+    labelX, trackX = 150, 168
     barMax = W - 300
     rowH, gap = 46, 20
     H = len(rows) * (rowH + gap) + 20
-    parts = [f"<svg width='100%' viewBox='0 0 {W} {H}' fill='none' style='display:block'>", "<defs>"
-             f"<linearGradient id='bg' x1='0' y1='0' x2='1' y2='0'>"
-             f"<stop offset='0' stop-color='{pal['a1']}'/><stop offset='1' stop-color='{pal['a2']}'/></linearGradient></defs>"]
+    valX = trackX + barMax + 12
+    mx = vmax or 1.0
+    parts = [f"<svg width='100%' viewBox='0 0 {W} {H}' fill='none' style='display:block'>", _defs]
     y = 10
     for i, (lb, v) in enumerate(rows):
-        bw = max(8, abs(v) / mx * barMax)
         top = i == 0
-        parts.append(f"<text x='150' y='{y + 20}' text-anchor='end' fill='{pal['ink']}' "
-                     f"font-size='17' font-weight='{800 if top else 700}'>{lb}</text>")
-        parts.append(f"<rect x='168' y='{y + 4}' width='{barMax}' height='{rowH - 20}' rx='9' fill='{pal['grid']}'/>")
+        bw = max(8, v / mx * barMax)
         fill = "url(#bg)" if top else pal['a2']
-        parts.append(f"<rect x='168' y='{y + 4}' width='{bw:.0f}' height='{rowH - 20}' rx='9' fill='{fill}'/>")
-        parts.append(f"<text x='{168 + bw + 14:.0f}' y='{y + 20}' fill='{pal['ink']}' "
-                     f"font-size='18' font-weight='800'>{_fmt(v)}</text>")
+        parts.append(f"<text x='{labelX}' y='{y + 20}' text-anchor='end' fill='{pal['ink']}' "
+                     f"font-size='17' font-weight='{800 if top else 700}'>{lb}</text>")
+        parts.append(f"<rect x='{trackX}' y='{y + 4}' width='{barMax}' height='{rowH - 20}' rx='9' fill='{pal['grid']}'/>")
+        parts.append(f"<rect x='{trackX}' y='{y + 4}' width='{bw:.0f}' height='{rowH - 20}' rx='9' fill='{fill}'/>")
+        parts.append(f"<text x='{valX:.0f}' y='{y + 20}' fill='{pal['ink']}' font-size='18' font-weight='800'>{_fmt(v)}</text>")
         y += rowH + gap
     parts.append("</svg>")
     return "".join(parts)
@@ -352,16 +392,18 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
         icon_key = "trend"
     elif cats:
         d = cats[0]
-        pts = sorted(_pairs(d), key=lambda kv: -abs(kv[1]))
+        _unit = d.get("unit", "")
+        pts = sorted(_pairs(d), key=lambda kv: -kv[1])   # ★ 실제값 desc (절댓값 아님 — ROE 음수=꼴찌)
         if pts:
-            top = pts[0]
+            top = pts[0]                                  # 최고 = 실제 최댓값
             hero_blocks.append(_hero_stat(pal, f"최고 · {d.get('title','')}",
-                                          f"{_fmt(top[1])}<span style='font-size:30px'> {d.get('unit','')}</span>",
+                                          f"{_fmt(top[1])}<span style='font-size:30px'> {_unit}</span>",
                                           f"{top[0]}", pal['a1'], pal['a1s']))
             if len(pts) > 1:
-                hero_blocks.append(_hero_stat(pal, "항목 수",
-                                              f"{len(pts)}<span style='font-size:30px'>개</span>",
-                                              f"합계 {_fmt(sum(v for _, v in pts))}{d.get('unit','')}", pal['a2'], pal['a2s']))
+                low = pts[-1]                             # ★ 최저 = 실제 최솟값 (꼴찌 명시 — 무의미한 합계 폐기)
+                hero_blocks.append(_hero_stat(pal, f"최저 · {d.get('title','')}",
+                                              f"{_fmt(low[1])}<span style='font-size:30px'> {_unit}</span>",
+                                              f"{low[0]}", pal['a2'], pal['a2s']))
         icon_key = "bar"
 
     hero_stats = (f"<div style='display:flex;gap:24px;margin-top:36px'>{''.join(hero_blocks)}</div>"
@@ -403,7 +445,7 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
             inner = (f"<div style='display:flex;align-items:center;gap:36px'>{donut}"
                      f"<div style='flex:1'>{legend}</div></div>")
         else:
-            inner = _bar_chart(sorted(pts, key=lambda kv: -abs(kv[1])), pal)
+            inner = _bar_chart(sorted(pts, key=lambda kv: -kv[1]), pal)   # ★ 실제값 desc
         body_cards.append(_card(pal, f"{n:02d}", d.get("title", ""), unit or "", inner, rad=rad))
         n += 1
 

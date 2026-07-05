@@ -545,7 +545,8 @@ def _generate_human_intro(keyword: str, platform: str) -> str:
     )
     try:
         from shared.llm import invoke_text
-        result = invoke_text("writer", prompt, timeout=60)
+        # ★ 비필수 (ERRORS [368/372]): 도입부 개선은 실패 시 폴백("")·비차단 → 스로틀 즉시 폴백
+        result = invoke_text("writer", prompt, timeout=45, _nonessential=True)
         if result:
             # HTML 태그 제거 후 순수 텍스트로
             return re.sub(r'<[^>]+>', '', result).strip()
@@ -1246,7 +1247,18 @@ def audit_factuality(
 # ══════════════════════════════════════════════════════════════════════
 
 class FactJudgeError(Exception):
-    """사실 판정 LLM 실패 — 응답 없음·JSON 파싱 실패 등. 게이트는 fail-closed(차단)."""
+    """사실 판정 LLM *형식* 실패 — 응답은 있으나 JSON 파싱 실패 등. 게이트는 fail-closed(차단)."""
+
+
+class FactJudgeUnavailable(FactJudgeError):
+    """사실 판정 LLM *호출* 실패 — 빈 응답(rate-limit 스로틀·num_turns=0 추정).
+
+    ★ ERRORS [371]: 이건 *판정 결과* 가 아니라 *인프라 미가용*. fail-closed 로 전체 차단하면
+    스로틀 지속 시 harness 재작성이 무한 반복(같은 인프라 실패). 따라서 호출자는 이 예외를
+    *판정 실패* 가 아니라 *그 LLM 레그 미가용* 으로 보고, throttle-proof 한 대체 검증 경로
+    (결정론 수치 grounding + 웹 재검증)로 위임한다. FactJudgeError 하위라서 기존
+    `except FactJudgeError` 는 여전히 잡히지만, 호출자는 *반드시* 이 예외를 먼저 분기한다.
+    """
 
 
 _FACT_MIN_SOURCE_CHARS = 200    # 이 미만이면 출처 약함 → 웹 1차 근거 (테마글 완화)
@@ -1286,11 +1298,17 @@ def _fact_strip_html(html: str) -> str:
 
 
 def _fact_parse_json_list(text: str) -> list:
-    """LLM 응답에서 JSON 배열 추출. 없거나 파싱 실패 시 FactJudgeError (fail-closed 트리거)."""
+    """LLM 응답에서 JSON 배열 추출.
+
+    빈 응답 → FactJudgeUnavailable(호출 실패 — 대체 경로 위임).
+    응답은 있으나 배열 없음·파싱 실패 → FactJudgeError(형식 오류 — fail-closed).
+    """
     import json as _json
-    m = re.search(r"\[.*\]", text or "", re.DOTALL)
+    if not (text or "").strip():
+        raise FactJudgeUnavailable("LLM 응답 없음 — 판정 호출 실패(rate-limit 스로틀 추정)")
+    m = re.search(r"\[.*\]", text, re.DOTALL)
     if not m:
-        raise FactJudgeError("LLM 응답에 JSON 배열 없음 (호출 실패 가능성)")
+        raise FactJudgeError("LLM 응답에 JSON 배열 없음 (형식 오류)")
     try:
         v = _json.loads(m.group())
     except Exception as e:
@@ -1374,7 +1392,9 @@ def _web_confirms(claim: str, evidence: list[dict]) -> bool:
         "[주장]\n" + claim + "\n\n[웹 근거]\n" + ev
     )
     resp = invoke_text("fact_judge", prompt, timeout=90)  # ★ ERRORS [368] hang 방지
-    m = re.search(r"\{.*\}", resp or "", re.DOTALL)
+    if not (resp or "").strip():
+        raise FactJudgeUnavailable("웹 근거 판정 응답 없음 — 호출 실패(rate-limit 스로틀 추정)")
+    m = re.search(r"\{.*\}", resp, re.DOTALL)
     if not m:
         raise FactJudgeError("웹 근거 판정 응답 파싱 실패")
     try:
@@ -1594,12 +1614,16 @@ def factuality_issues(
                 "blocked": [{"claim": "(전체)", "type": "judge_error", "reason": reason}],
                 "checked": 0, "source_weak": source_weak, "policy_notes": [reason]}
 
-    # ── 1. 주장 추출 (fail-closed) ──────────────────────────────
+    # ── 1. 주장 추출 — ★ LLM *어떤* 실패든 결정론 위임 (ERRORS [372]) ────────
+    #   빈 응답(스로틀)이든 형식 오류든, LLM 추출 실패는 *판정* 이 아니라 *추출기 미가용*.
+    #   사실성 안전망은 LLM 이 아니라 결정론 수치 대조(수집 실데이터)다 — 아래 1.5 정규식
+    #   스캔이 본문 수치를 전부 승격 → 2.5 데이터 grounding + 웹으로 검증. LLM 실패로
+    #   발행을 하드-차단하지 않는다(스로틀 지속 시 재작성 무한 반복 방지 — 21시 사고 근본).
     try:
         claims = _extract_claims(html)
     except FactJudgeError as e:
-        log.warning(f"[factuality_gate] 주장 추출 실패 → 차단(fail-closed): {e}")
-        return _blocked(f"사실성 판정 실패(주장 추출) — 안전 차단: {e}")
+        log.warning(f"[factuality_gate] 주장 추출 LLM 미가용 → 결정론 수치 스캔 위임: {e}")
+        claims = []
 
     # ── 1.5 결정론 수치 보완 (★ 2-3): LLM 이 놓친 단위-수치를 검증 대상으로 승격 ──
     #   정규식이 잡았는데 LLM claims 어디에도 없는 수치는 문장 통째를 claim 으로 넣어
@@ -1622,13 +1646,17 @@ def factuality_issues(
         return {"passed": True, "blocked": [], "checked": 0,
                 "source_weak": source_weak, "policy_notes": []}
 
-    # ── 2. 출처 grounding (fail-closed) ─────────────────────────
+    # ── 2. 출처 grounding — ★ LLM *어떤* 실패든 결정론+웹 위임 (ERRORS [372]) ─────
     if corpus.strip():
         try:
             unsupported = set(_ground_unsupported(claims, corpus))
         except FactJudgeError as e:
-            log.warning(f"[factuality_gate] 출처 대조 실패 → 차단(fail-closed): {e}")
-            return _blocked(f"사실성 판정 실패(출처 대조) — 안전 차단: {e}")
+            # 빈 응답(스로틀)이든 형식 오류든 LLM 대조 미가용 = *판정 결과 아님*.
+            #   전 주장을 미확인으로 두고 throttle-proof 결정론 수치 grounding(수집 데이터
+            #   실측) + 웹 재검증으로 위임. 데이터/웹으로 못 살린 수치는 아래에서 여전히
+            #   차단(경제=strict) / 테마=fail-open. LLM 실패로 하드-차단하지 않음.
+            log.warning(f"[factuality_gate] 출처 대조 LLM 미가용 → 결정론+웹 위임: {e}")
+            unsupported = {c["text"] for c in claims}
     else:
         # 출처 코퍼스 없음(테마글 등) → 전 주장이 출처 미확인 → 웹으로 위임
         unsupported = {c["text"] for c in claims}
@@ -1666,10 +1694,13 @@ def factuality_issues(
                 policy_notes.append(f"웹 검증 불가 → 미차단(fail-open): {claim} [{type(e).__name__}]")
                 continue
             try:
-                confirmed = _web_confirms(claim, evidence)  # 판정 LLM 실패 시 fail-closed
+                confirmed = _web_confirms(claim, evidence)
             except FactJudgeError as e:
-                blocked.append({"claim": claim, "type": c["type"],
-                                "reason": f"웹 근거 판정 실패 — 안전 차단(fail-closed): {e}"})
+                # ★ ERRORS [372]: 웹 근거 판정 LLM *어떤* 실패든(빈응답·형식오류) = 웹 검증
+                #   인프라 미가용 → fail-open (web_verify_fn 예외와 동일 취급). LLM 실패로
+                #   발행을 막지 않는다. 경제글 미확인 수치의 strict 차단은 웹 미가용 분기에서 유지.
+                policy_notes.append(
+                    f"웹 근거 판정 LLM 미가용 → 미차단(fail-open): {claim} [{type(e).__name__}]")
                 continue
             if confirmed:
                 continue                                    # 웹 확인 → 통과
@@ -1702,7 +1733,7 @@ __all__ = [
     "parse_seo_block", "parse_diff_block",
     "parse_seo_meta", "parse_svg_rules",
     "audit_factuality",
-    "factuality_issues", "FactJudgeError",
+    "factuality_issues", "FactJudgeError", "FactJudgeUnavailable",
 ]
 # NOTE: ADR 008 Phase 1 — 이미지 함수는 JARVIS06_IMAGE 단일 진입점 강제.
 #   enforce_paragraph_pair_image / enforce_image_between_paragraphs / compute_unused_image_pool /

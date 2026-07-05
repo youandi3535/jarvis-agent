@@ -239,14 +239,17 @@ def _generate_recipe(existing: list, aesthetic: str) -> dict | None:
 
 
 # ── 실제 사이트 이미지 세밀 학습 (★ 사용자 박제 2026-07-05 — 진짜 이미지 학습) ────────
-def _fetch_reference(out_dir: Path, n: int = 5) -> list:
+def _fetch_reference(out_dir: Path, n: int = 5, exclude_urls: set | None = None,
+                     name_prefix: str = "ref") -> list:
     """Bing 이미지에서 인포그래픽 레퍼런스 후보 여러 장 다운로드 (best-effort).
 
     Playwright 브라우저 컨텍스트로 검색+다운로드 (requests.get 수집 금지 규정 회피).
     ★ 관련성은 비전 게이트(_analyze_reference)가 최종 판정 — 여기선 후보만 모은다
     (검색 결과엔 무관 이미지 섞임: 여행사진·클립아트 등 → 비전이 reject). 실패 시 [].
+    ★ 반환: [(경로, 원본URL)] — exclude_urls 로 앞 배치와 *URL 중복* 회피(2차 10장용).
     저작권: 학습(분석)용 임시 파일, 장기 저장 안 함 — 추출한 *디자인 원리* 만 남긴다.
     """
+    exclude_urls = exclude_urls or set()
     out: list = []
     try:
         from JARVIS06_IMAGE.html_renderer import _find_chromium
@@ -280,6 +283,8 @@ def _fetch_reference(out_dir: Path, n: int = 5) -> list:
                     continue
                 if not murl or not murl.startswith("http"):
                     continue
+                if murl in exclude_urls:      # ★ 앞 배치(1차 5장)와 겹치는 URL 은 건너뜀
+                    continue
                 try:
                     resp = ctx.request.get(murl, timeout=12000)
                     body = resp.body()
@@ -287,9 +292,9 @@ def _fetch_reference(out_dir: Path, n: int = 5) -> list:
                     # 확장자 대신 content-type 으로 판정(Bing CDN URL 확장자 없는 경우 다수)
                     if resp.ok and ct.startswith("image") and 20000 < len(body) < 8_000_000:
                         ext = ".png" if "png" in ct else ".jpg"
-                        dst = out_dir / f"ref{i}{ext}"
+                        dst = out_dir / f"{name_prefix}{i}{ext}"
                         dst.write_bytes(body)
-                        out.append(dst)
+                        out.append((dst, murl))
                         i += 1
                 except Exception:
                     continue
@@ -438,6 +443,22 @@ def _commit(rec: dict, recs: list, today: str, aesthetic: str, via: str) -> str:
     _tg(msg)
     return f"learned {rec['id']} via {via} (total={len(recs)})"
 
+
+def _learn_from_batch(refs: list, recs: list, today: str) -> str | None:
+    """레퍼런스 배치 [(경로,URL)] 를 순회하며 비전 분석 → 게이트 통과 시 커밋 후 결과 반환.
+    배치에 인포그래픽이 하나도 없으면(전부 비전 reject/게이트 탈락) None → 다음 단계로."""
+    for ref, _url in refs:
+        rec = _analyze_reference(ref, recs)
+        if not rec:
+            continue                                  # 무관 이미지/분석 실패 → 다음 후보
+        rec = _assign_id(rec, recs, today, "learned-vision")
+        ok, why = _validate_recipe(rec, recs)
+        if ok and _test_render(rec):
+            return _commit(rec, recs, today, rec.get("aesthetic", "실이미지 분석"), "실이미지비전")
+        log.info(f"[design_learner] 비전 레시피 게이트 탈락({why}) → 다음 후보")
+    return None
+
+
 def job_learn_design() -> str:
     """하루 1개 새 디자인 레시피 학습 (05:00). ★ 사용자 박제: 1회 학습은 *반드시* 성공.
 
@@ -449,23 +470,30 @@ def job_learn_design() -> str:
     aesthetic = _AESTHETICS[len(recs) % len(_AESTHETICS)]
     log.info(f"[design_learner] 나이틀리 학습 시작 (기존 {len(recs)}개, 미감='{aesthetic}')")
 
-    # ── Phase 0: 실제 사이트 이미지 세밀 학습 (★ 사용자 박제 — 최우선) ──
-    #   Bing 레퍼런스 후보 수집 → 비전 관련성 게이트(인포그래픽만) → 세밀 분석 → 상세 레시피.
-    #   후보 최대 3장까지 시도(무관 이미지는 비전이 reject). 사이트 차단/스로틀 시 폴백.
+    # ── Phase 0: 실제 사이트 이미지 세밀 학습 (★ 사용자 박제 2026-07-06 — 5→10 단계 캡처) ──
+    #   1차: 사이트에서 5장 캡처 → 인포그래픽 있으면 그 중 1개 추출(즉시 종료).
+    #   없으면 2차: *새* 10장 캡처(1차와 URL 중복 금지) → 인포그래픽 있으면 1개 추출.
+    #   무관 이미지는 비전 게이트(_analyze_reference)가 reject. 전부 실패/사이트 차단 시
+    #   Phase 1(LLM)·Phase 2(결정론)로 *매일 1개 보장*.
     try:
         _tmp = Path(tempfile.mkdtemp())
-        refs = _fetch_reference(_tmp)
-        for ref in refs[:3]:
-            rec = _analyze_reference(ref, recs)
-            if not rec:
-                continue                                  # 무관 이미지/분석 실패 → 다음 후보
-            rec = _assign_id(rec, recs, today, "learned-vision")
-            ok, why = _validate_recipe(rec, recs)
-            if ok and _test_render(rec):
-                return _commit(rec, recs, today, rec.get("aesthetic", "실이미지 분석"), "실이미지비전")
-            log.info(f"[design_learner] 비전 레시피 게이트 탈락({why}) → 다음 후보/폴백")
-        if not refs:
+        seen_urls: set = set()
+        # 1차 — 5장
+        batch1 = _fetch_reference(_tmp, n=5, exclude_urls=seen_urls, name_prefix="a")
+        seen_urls |= {u for _, u in batch1}
+        res = _learn_from_batch(batch1, recs, today)
+        if res:
+            return res
+        # 1차에 인포그래픽 없음 → 2차 *새* 10장 (1차 URL 제외 = 겹침 방지)
+        log.info(f"[design_learner] 1차 {len(batch1)}장에 인포그래픽 없음 → 2차 새 10장 캡처")
+        batch2 = _fetch_reference(_tmp, n=10, exclude_urls=seen_urls, name_prefix="b")
+        res = _learn_from_batch(batch2, recs, today)
+        if res:
+            return res
+        if not batch1 and not batch2:
             log.info("[design_learner] 레퍼런스 수집 실패(사이트 차단) → 지식기반 폴백")
+        else:
+            log.info("[design_learner] 1·2차 모두 인포그래픽 미발견 → 지식기반 폴백")
     except Exception as e:
         log.warning(f"[design_learner] Phase0 비전 학습 예외 → 폴백: {e}")
 

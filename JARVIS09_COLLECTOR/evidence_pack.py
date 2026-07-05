@@ -72,6 +72,14 @@ _EXTRACT_PROMPT = """주제: {theme}
 [수집 문서]
 {docs_block}
 
+[★ 추출 전 — 먼저 *전문 리서처의 추출 전략* 을 설계 (꼼꼼·전문·디테일)]
+먼저 <design> 안에 추출 전략을 세워라 (중괄호 절대 금지, 6줄 이내):
+① [문서 유형·신뢰도] 각 문서가 뉴스·재무·통계·논문·블로그 중 무엇이고 어느 게 신뢰 우선인지.
+② [질문 매핑] 위 핵심 질문 각각에 답이 될 수치·사실이 어느 문서(doc 번호)에 있는지.
+③ [우선 추출] 수치가 살아있는 사실(kind=stat)을 최우선 — 구체 금액·비율·규모·시점.
+④ [상충·중복] 문서 간 값이 다르면 신뢰 높은 출처 채택, 같은 사실은 한 번만.
+그 다음 그 전략대로 아래 JSON 을 출력하라. <design> 다음 첫 '{{' 부터가 결과 JSON.
+
 JSON만 출력:
 {{"facts":[{{"statement":"...","kind":"stat","value":"12.3","unit":"%","as_of":"2026-05","question_id":"Q1","doc_idx":1,"confidence":0.9}}]}}"""
 
@@ -117,8 +125,9 @@ def _extract_facts_batch(theme: str, plan: dict, docs: list,
     raw = None
     try:
         from shared.llm import invoke_text
+        # ★ 단일 호출로 전 문서 처리 (ERRORS [374]) — max_tokens 상향(더 많은 fact 수용)
         raw = invoke_text("analyzer", prompt, system=_EXTRACT_SYSTEM,
-                          max_tokens=2400, temperature=0.1)
+                          max_tokens=3200, temperature=0.1)
     except Exception as e:
         log.warning(f"[evidence] fact 추출 실패: {e}")
         _g_report("collector", e, module=__name__, func_name="_extract_facts_batch")
@@ -217,19 +226,19 @@ def _measure_coverage(plan: dict, facts: list[dict]) -> dict:
 
 
 def build_evidence_pack(theme: str, plan: dict, docs: list,
-                        max_llm_batches: int = 3, batch_size: int = 7) -> dict:
-    """수집 문서 → EvidencePack. LLM 배치 추출 + 임베딩 dedupe + 커버리지 측정.
+                        max_docs: int = 16, per_doc_chars: int = 900) -> dict:
+    """수집 문서 → EvidencePack. ★ fact 추출 *1회 호출* (사용자 박제 2026-07-05, ERRORS [374]).
 
-    문서 우선순위: 신뢰 티어 좋은 소스 먼저 배치에 태운다 (배치 수 제한 내 최대 가치).
+    종전 3배치×7문서=3회 → 신뢰 티어 상위 max_docs 문서를 압축 excerpt(per_doc_chars)로
+    *단일 프롬프트*에 담아 한 번에 추출. 문서를 신뢰순 정렬해 상위가 프롬프트에 우선 담기므로
+    가치 손실 최소. "LLM 한 번에 다 처리" — 설계를 잘 해 입력을 압축·구조화한 결과.
     """
     docs = list(docs or [])
     docs.sort(key=lambda d: _TIER_BY_TYPE.get(str(_doc_attr(d, "source_type")), 5))
-    facts: list[dict] = []
-    for bi in range(max_llm_batches):
-        chunk = docs[bi * batch_size:(bi + 1) * batch_size]
-        if not chunk:
-            break
-        facts.extend(_extract_facts_batch(theme, plan, chunk))
+    # ★ 상위 신뢰 문서만 단일 호출에 담는다 (배치 폐지 — LLM 호출 3→1)
+    top_docs = docs[:max_docs]
+    facts = _extract_facts_batch(theme, plan, top_docs,
+                                 max_facts=20, per_doc_chars=per_doc_chars)
     facts = _dedupe_facts(facts)
     for i, f in enumerate(facts, 1):
         f["id"] = f"F{i}"

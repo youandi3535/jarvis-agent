@@ -247,7 +247,9 @@ def _html_to_jpg(html_str: str, out_path: Path, width: int = 980) -> bool:
             "with sync_playwright() as p:\n"
             f"    b = p.chromium.launch(executable_path={chromium!r}, "
             "args=['--no-sandbox','--disable-dev-shm-usage','--lang=ko-KR'])\n"
-            "    pg = b.new_page(viewport={'width':1560,'height':1100}, device_scale_factor=2)\n"
+            # ★ 뷰포트 폭 = 내용 폭(width 파라미터) — body 가 뷰포트까지 늘어나 우측 여백이
+            #   생기던 버그 수정(사용자 박제 2026-07-06). 1560 고정 → 캡처가 내용보다 넓어 우측 공백.
+            f"    pg = b.new_page(viewport={{'width':{max(int(width), 320)},'height':1100}}, device_scale_factor=2)\n"
             f"    pg.goto({('file://'+html_file)!r}, wait_until='networkidle')\n"
             "    try:\n"
             "        pg.evaluate('document.fonts && document.fonts.ready')\n"
