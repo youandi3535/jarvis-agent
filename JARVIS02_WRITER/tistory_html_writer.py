@@ -549,6 +549,14 @@ def generate_article_html(
             else:
                 print(f"  ⚠️ [재생성 미채택] 원본 유지")
 
+    # ── ★ 최종 구조 게이트 (ERRORS [381] 보강) — 스로틀 절단 응답 차단 ──
+    #   비어있지 않아도 <p>/<h*> 구조·본문 길이가 없으면 하류에서 '텍스트 블록 없음/본문 0자'
+    #   3중 오류를 낸다. 여기서 생성 실패로 판정 → 호출자 draft_failed 로 재생성.
+    from JARVIS02_WRITER.draft_writer import has_publishable_body
+    if not has_publishable_body(content):
+        print(f"  ❌ [HTML Writer/{platform}] Pass-1 본문 구조 미달(스로틀 절단 추정) — 생성 실패로 재생성 위임")
+        return ""
+
     html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
