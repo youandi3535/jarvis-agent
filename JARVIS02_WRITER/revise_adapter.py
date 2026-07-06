@@ -389,10 +389,14 @@ def run_approved():
 
 
 def run_watch(interval: int = 30):
+    # ★ 무한 폴링 데몬 — while 전체 루프는 절대 guard_main 으로 감싸지 않는다 (watchdog 규정).
+    #   폴 1건 처리 단위(run_approved)만 감싸 freeze/deadline 방어 (사용자 박제 2026-07-06).
+    from JARVIS00_INFRA.watchdog import guard_main  # 지역 import (순환 방지)
     print(f"🔧 재발행 데몬 시작 (폴링 {interval}s)")
     while True:
         try:
-            run_approved()
+            with guard_main("재발행", deadline_sec=1800):
+                run_approved()
         except Exception as e:
             print(f"⚠️ 재발행 루프 오류: {e}")
             _g_report("writer", e, module=__name__)
@@ -407,11 +411,16 @@ if __name__ == "__main__":
     except Exception as _ee:
         print(f"⚠️ preflight 호출 실패: {_ee}")
 
+    # ★ 정지 방어 (watchdog) — 단발 발행 경로만 감싼다. --watch 무한 루프는 감싸지 않음.
+    from JARVIS00_INFRA.watchdog import guard_main
+
     args = sys.argv[1:]
     if "--watch" in args:
+        # 무한 폴링 데몬 — 전체 루프는 감싸지 않는다. 폴 1건 처리 단위는 run_watch 내부에서 감쌈.
         run_watch(int(os.getenv("REVISE_POLL_SEC", "30")))
     elif "--all" in args:
-        n = run_approved()
+        with guard_main("재발행", deadline_sec=1800):
+            n = run_approved()
         print(f"\n✅ 재발행 완료: {n}개")
     else:
         # 특정 analysis_id
@@ -419,9 +428,11 @@ if __name__ == "__main__":
         if aid:
             record = db.get_analysis_by_id(int(aid))
             if record and record.get("status") == "approved":
-                process_one(record)
+                with guard_main("재발행", deadline_sec=1800):
+                    process_one(record)
             else:
                 print(f"ID {aid}: 승인 상태가 아니거나 없음 (status={record.get('status') if record else 'N/A'})")
         else:
-            n = run_approved()
+            with guard_main("재발행", deadline_sec=1800):
+                n = run_approved()
             print(f"\n✅ 재발행 완료: {n}개")

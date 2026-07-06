@@ -581,7 +581,9 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
     """
     import time as _t, random as _r
 
-    retries = max(1, _retries)
+    # ★ 재시도 최대 3회 상한 (사용자 박제 2026-07-06): 어떤 재시도도 3회 초과 금지.
+    #   기본 _retries=4 → 실효 3으로 캡. deadline/_nonessential/probe/open 강등은 더 낮춤.
+    retries = max(1, min(3, _retries))
     backoff = True
 
     # ★ 글로벌 데드라인 강등 — 발행 파이프라인(economic_poster 등)이 설정
@@ -614,6 +616,13 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
     result = ""
     throttled_seen = False
     for _attempt in range(retries):
+        # ★ 전역 하트비트 (사용자 박제 2026-07-06): LLM 호출 = 진행 신호 → freeze 워치독
+        #   이 오래 걸리는 정상 LLM 작업을 멈춤으로 오탐하지 않도록 매 시도마다 beat.
+        try:
+            from JARVIS00_INFRA.watchdog import beat as _wd_beat
+            _wd_beat()
+        except Exception:
+            pass
         try:
             _LAST_CALL.throttled = False
             result = _run_sdk_sync(prompt, model=model, system=system, timeout=timeout) or ""

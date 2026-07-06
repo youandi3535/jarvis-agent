@@ -2203,6 +2203,7 @@ def run(post_naver=True, post_tistory=True):
         send=lambda st: _send_platform(st, "naver", "nv_draft", nv_publish,
                                        "naver_ok", "nv_pub_result", "__nv_send_attempted__"),
         max_attempts=3,
+        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
     )
     _ts_action = ActionDefinition(
         name="경제 브리핑 발행 — 티스토리",
@@ -2213,6 +2214,7 @@ def run(post_naver=True, post_tistory=True):
         send=lambda st: _send_platform(st, "tistory", "ts_draft", ts_publish,
                                        "tistory_ok", "ts_pub_result", "__ts_send_attempted__"),
         max_attempts=3,
+        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
     )
 
     _results: dict = {}          # platform → ActionResult (EP 결과 파일·incident 용)
@@ -2470,11 +2472,15 @@ if __name__ == "__main__":
             encoding='utf-8'
         )
         try:
-            run(post_naver=post_naver, post_tistory=post_tistory)
+            from JARVIS00_INFRA.watchdog import guard_main
+            with guard_main("경제 발행", deadline_sec=3540):   # 부모 60분 backstop보다 먼저 곱게 종료
+                run(post_naver=post_naver, post_tistory=post_tistory)
         except Exception as _e:
             _g_report("writer", _e, module=__name__, func_name="run")
             raise
         finally:
             LOCK_FILE.unlink(missing_ok=True)
     else:
-        run(post_naver=post_naver, post_tistory=post_tistory)
+        from JARVIS00_INFRA.watchdog import guard_main
+        with guard_main("경제 발행", deadline_sec=3540):   # 부모 60분 backstop보다 먼저 곱게 종료
+            run(post_naver=post_naver, post_tistory=post_tistory)

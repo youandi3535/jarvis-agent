@@ -152,7 +152,7 @@ _st_proc = None
 _st_last_start = 0.0
 _st_fail_count = 0
 _st_disabled = False
-_ST_MAX_FAIL = 5   # ★ Streamlit 자동재시작 최대 연속 실패 (표시 SSOT — infra_agent build_status 도 참조)
+_ST_MAX_FAIL = 3   # ★ Streamlit 자동재시작 최대 연속 실패 (★ 사용자 박제 2026-07-06: 재시작 어떤 경우라도 최대 3회. 표시 SSOT — infra_agent build_status 도 참조)
 
 ST_PORT  = int(os.getenv("HUB_PORT", "9199"))
 ST_LOG   = LOG_DIR / "streamlit.log"

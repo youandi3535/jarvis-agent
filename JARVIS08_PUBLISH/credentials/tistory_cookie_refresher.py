@@ -685,7 +685,11 @@ if __name__ == "__main__":
         print(f"⚠️ preflight 호출 실패: {_ee}")
 
     force   = "--force" in sys.argv
-    success = run(force=force)
+    # ★ 정지 방어 (사용자 박제 2026-07-06) — 일회성 쿠키 갱신 작업을 watchdog 로 감싼다.
+    #   freeze(무진전) 300초 / deadline 600초 초과 시 GUARDIAN 보고 후 안전 종료.
+    from JARVIS00_INFRA.watchdog import guard_main
+    with guard_main("티스토리 쿠키갱신", deadline_sec=600):
+        success = run(force=force)
     sys.exit(0 if success else 1)
 
 

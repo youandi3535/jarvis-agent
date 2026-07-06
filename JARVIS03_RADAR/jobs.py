@@ -185,27 +185,6 @@ def job_collect_trends() -> None:
 
     _run_with_harness("트렌드 수집", _run, verify_fn=_verify_trends)
 
-    # ★ 주제 패키지 파이프라인 (사용자 박제 2026-07-03): 자비스03이 주제+프로필을
-    #   생성해 JARVIS09 선수집까지 직접 수행 → 자비스02(제목·대본)·09(수집) 동시 제공.
-    #   당일 팩이 이미 있으면 스킵 (발행 사용 키워드는 pick_candidate 가 자동 제외).
-    try:
-        from JARVIS03_RADAR.topic_pack import build_topic_pack, load_topic_pack
-        if load_topic_pack() is None:
-            _log.info("🎁 [JARVIS03] 주제 패키지 생성 + JARVIS09 선수집 시작")
-            pack = build_topic_pack()
-            if pack:
-                _kws = [c.get("keyword") for c in pack.get("candidates", [])]
-                _log.info(f"🎁 [JARVIS03] 주제 패키지 완료: {_kws}")
-        else:
-            _log.info("🎁 [JARVIS03] 당일 주제 패키지 존재 — 생성 스킵")
-    except Exception as _tp_e:
-        _log.warning(f"⚠️ [JARVIS03] 주제 패키지 생성 실패: {_tp_e}")
-        try:
-            from JARVIS07_GUARDIAN.error_collector import report as _rep
-            _rep("radar", _tp_e, module=__name__, func_name="job_collect_trends")
-        except Exception:
-            pass
-
 
 def job_collect_performance() -> None:
     """매일 23:00 — 발행글 조회수 수집 + 결과 텔레그램 보고. ★ 하네스 래핑."""

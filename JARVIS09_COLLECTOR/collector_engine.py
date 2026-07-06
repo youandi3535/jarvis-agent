@@ -81,9 +81,14 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
             log.warning(f"[Engine] {prov.source_type} 실패: {e}")
             return []
 
+    try:
+        from JARVIS00_INFRA.watchdog import beat  # 지역 import (순환 방지)
+    except Exception:
+        def beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
     with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as exe:
         futures = {exe.submit(_run_provider, p): p.source_type for p in _PROVIDERS}
         for fut in as_completed(futures):
+            beat()   # ★ 프로바이더 결과 취합마다 진행신호 — 장시간 HTTP 수집 freeze 오탐 방지
             docs = fut.result()
             raw_docs.extend(docs)
 
@@ -235,6 +240,64 @@ def _clean_raw_docs(raw_docs: list[RawDocument], theme: str,
     return out
 
 
+def select_by_trust_quota(docs: list[CollectionResult],
+                          budget: int | None = None) -> list[CollectionResult]:
+    """★ 신뢰 서열 쿼터 선별 (사용자 박제 2026-07-06 v2 — "인포그래픽 만들 만큼 총 15개").
+
+    논문 최대 3 · API 최대 7 · 나머지 5(소스별 1개씩), 총 `budget`(기본 15)개.
+    상위 티어 미달분은 다음 티어로 이월(cascade):
+      논문 2개 → API 8개까지 / 논문 0개 → API 10개까지 /
+      논문·API 모두 0 → 나머지에서 budget 전부.
+    나머지는 source_type 라운드로빈(각 1개씩 우선)으로 다양성 확보.
+    env: J09_QUOTA_BUDGET(총량)·J09_PAPER_CAP·J09_API_CAP 로 튜닝.
+    """
+    from .models import (quota_group, trust_rank,
+                         COLLECT_QUOTA_BUDGET, COLLECT_PAPER_CAP, COLLECT_API_CAP)
+    budget = int(_os.getenv("J09_QUOTA_BUDGET", str(budget or COLLECT_QUOTA_BUDGET))
+                 or COLLECT_QUOTA_BUDGET)
+    paper_cap = int(_os.getenv("J09_PAPER_CAP", str(COLLECT_PAPER_CAP)) or COLLECT_PAPER_CAP)
+    api_cap = int(_os.getenv("J09_API_CAP", str(COLLECT_API_CAP)) or COLLECT_API_CAP)
+
+    groups: dict[str, list] = {"paper": [], "api": [], "rest": []}
+    for d in docs:
+        groups[quota_group(d.source_type)].append(d)
+    # 각 그룹 내부: 신뢰 높은 소스 우선 (stable — 티어 내 원래 관련도 순서 보존)
+    for g in groups.values():
+        g.sort(key=lambda r: trust_rank(r.source_type))
+
+    selected: list[CollectionResult] = []
+    remaining = budget
+
+    # 논문: 최대 paper_cap
+    take = groups["paper"][:min(paper_cap, remaining)]
+    selected += take
+    remaining -= len(take)
+
+    # API: 최대 api_cap + 논문 미달분 이월
+    api_allow = api_cap + (paper_cap - len(take))
+    take_api = groups["api"][:min(api_allow, remaining)]
+    selected += take_api
+    remaining -= len(take_api)
+
+    # 나머지: 라운드로빈(각 source_type 1개씩) — 남은 예산 전부 (논문·API 미달분 자동 이월)
+    if remaining > 0 and groups["rest"]:
+        by_src: dict[str, list] = {}
+        for d in groups["rest"]:   # 이미 trust 정렬됨 → 삽입 순서가 신뢰 순
+            by_src.setdefault(d.source_type, []).append(d)
+        while remaining > 0 and any(by_src.values()):
+            for lst in by_src.values():
+                if remaining <= 0:
+                    break
+                if lst:
+                    selected.append(lst.pop(0))
+                    remaining -= 1
+
+    log.info(f"[quota] 신뢰 쿼터 선별: 논문 {len(take)} · API {len(take_api)} · "
+             f"나머지 {len(selected) - len(take) - len(take_api)} = 총 {len(selected)}건 "
+             f"(후보 {len(docs)}건 중, 예산 {budget})")
+    return selected
+
+
 @_auto_catch("collector", reraise=True)
 def collect_research(theme: str, sector: str = "", angle: str = "",
                      max_rounds: int = 3) -> dict:
@@ -249,6 +312,11 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
     from .research_planner import plan_research
     from .evidence_pack import (build_evidence_pack, coverage_gaps, merge_pack,
                                 persist_evidence, _extract_facts_batch)
+
+    try:
+        from JARVIS00_INFRA.watchdog import beat  # 지역 import (순환 방지)
+    except Exception:
+        def beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
 
     log.info(f"[research] 설계-우선 수집 시작: theme='{theme}'")
 
@@ -270,6 +338,7 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
                   for q in plan.get("questions", [])}
         targeted_raw: list[RawDocument] = []
         for fut in as_completed(q_futs):
+            beat()   # ★ 질문별 조준 수집 결과 취합마다 진행신호 (freeze 오탐 방지)
             try:
                 targeted_raw.extend(fut.result() or [])
             except Exception as e:
@@ -294,6 +363,7 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
     # ⑤ 갭 재수집 순환 — 미충족 질문만, 변형 쿼리 + discover 강제
     rounds = 1
     while rounds < max_rounds:
+        beat()   # ★ 갭 재수집 라운드마다 진행신호 (장시간 재수집 freeze 오탐 방지)
         gaps = coverage_gaps(pack)
         if not gaps:
             break
@@ -310,6 +380,7 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
                 q2["sources"] = (["discover"] + srcs)[:3]          # discover 강제 선두
                 futs.append(exe.submit(_collect_for_question, q2, theme, sector))
             for fut in as_completed(futs):
+                beat()   # ★ 갭 질문별 재수집 결과 취합마다 진행신호 (freeze 오탐 방지)
                 try:
                     gap_raw.extend(fut.result() or [])
                 except Exception:
@@ -323,12 +394,18 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
         extra_facts = _extract_facts_batch(theme, plan, gap_docs[:8])
         pack = merge_pack(pack, extra_facts)
 
-    # ⑥ 박제 + 반환
+    # ⑥ 신뢰 서열 쿼터로 최종 15개 확정 → 근거 팩도 그 15개로 국한 → 박제 + 반환
+    #   ★ 사용자 박제 2026-07-06 v2: "총 15개만 수집" — 문서(서사)도 수치(fact)도 *같은*
+    #   확정 15개에서만 나온다. 논문 3·API 7·나머지 5, 이월 cascade. 넓은 후보 더미는
+    #   "신뢰 높은 15개를 고르기 위한 탐색 과정"일 뿐 — 결과는 15개 (숫자도 그 15개 소속).
+    from .evidence_pack import restrict_pack_to_docs
+    all_docs = select_by_trust_quota(all_docs)
+    pack = restrict_pack_to_docs(pack, {getattr(d, "url", "") for d in all_docs})
     path = persist_evidence(pack)
     cov = pack.get("coverage") or {}
     cov_ok = sum(1 for c in cov.values() if c.get("ok"))
     n_facts = len(pack.get("facts", []))
-    log.info(f"[research] 완료: 문서 {len(all_docs)}건 · fact {n_facts}개 "
+    log.info(f"[research] 완료: 확정 문서 {len(all_docs)}건 · fact {n_facts}개(그 문서 소속) "
              f"· 커버리지 {cov_ok}/{len(cov)} "
              f"· 라운드 {rounds}")
     # ★ 근거 품질 판정 (ERRORS [300] — 사용자 승인 2026-07-03): 재수집 순환을 다 써도

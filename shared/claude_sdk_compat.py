@@ -186,11 +186,20 @@ def run_sdk_query(
         if max_turns is not None:
             opts_kw["max_turns"] = max_turns
 
+        # ★ 전역 하트비트 (사용자 박제 2026-07-06): 장시간 SDK 호출(auto_repair 심층감사 등)이
+        #   메시지를 흘리는 동안 beat() → freeze 워치독이 정상 장시간 작업을 오탐 안 함.
+        try:
+            from JARVIS00_INFRA.watchdog import beat as _wd_beat
+        except Exception:
+            _wd_beat = lambda: None
+
         async def _collect() -> str:
             parts: list[str] = []
+            _wd_beat()
             with anyio.fail_after(timeout):
                 options = ClaudeCodeOptions(**opts_kw)
                 async for msg in query(prompt=prompt, options=options):
+                    _wd_beat()   # 메시지 수신 = 진행 신호 (SDK 살아있음)
                     if isinstance(msg, AssistantMessage):
                         for block in msg.content:
                             if isinstance(block, TextBlock):

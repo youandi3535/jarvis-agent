@@ -37,6 +37,26 @@ def trust_rank(source_type: str) -> int:
     return SOURCE_TRUST_TIER.get((source_type or "").strip().lower(), 5)
 
 
+# ★ 수집 쿼터 (사용자 박제 2026-07-06, v2 정정): "인포그래픽을 만들 수 있을 만큼"의 자료를
+#   신뢰 서열대로 총 15개 확보 — 논문 최대 3, API 최대 7, 나머지 5(소스별 1개씩 라운드로빈).
+#   상위 티어가 슬롯을 못 채우면 미달분을 다음 티어로 이월(cascade). 예: 논문 2개면
+#   API 는 7+1=8개, 논문 0개면 API 10개, 논문·API 모두 0이면 나머지에서 15개 전부.
+COLLECT_QUOTA_BUDGET = 15   # 총 수집 상한
+COLLECT_PAPER_CAP    = 3    # 논문(academic·kci) 기본 상한
+COLLECT_API_CAP      = 7    # 공식 데이터 API(kosis·ecos·dart·krx·finance) 기본 상한
+
+_QUOTA_GROUP: dict[str, str] = {
+    "academic": "paper", "kci": "paper",
+    "kosis": "api", "ecos": "api", "dart": "api", "krx": "api", "finance": "api",
+    # 나머지(naver_news·news·kor_econ·web·web_data·blog·discover 등) → "rest"
+}
+
+
+def quota_group(source_type: str) -> str:
+    """수집 쿼터 그룹: paper(논문) | api(공식데이터) | rest(뉴스·기사·웹·블로그)."""
+    return _QUOTA_GROUP.get((source_type or "").strip().lower(), "rest")
+
+
 @dataclass
 class RawDocument:
     """수집 직후 원본 문서."""

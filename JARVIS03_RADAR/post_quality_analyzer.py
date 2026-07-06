@@ -593,12 +593,16 @@ if __name__ == "__main__":
     # python post_quality_analyzer.py         → 미처리 pending 1회 전체 처리
     args = sys.argv[1:]
     if "--watch" in args:
+        # ★ 무한 폴링 데몬 — 전체 루프는 감싸지 않음 (상주 데몬). 폴 1건 단위 가드는 run_watch 내부 몫.
         run_watch(interval=int(os.getenv("ANALYZER_POLL_SEC", "300")))
     else:
-        aid = next((a for a in args if a.isdigit()), None)
-        if aid:
-            ok = run_single(int(aid))
-            print(f"\n✅ 분석 {'완료' if ok else '건너뜀'}: id={aid}")
-        else:
-            n = run_once()
-            print(f"\n✅ 분석 완료: {n}개")
+        # ★ 정지 방어: fire-and-forget 자식이라 자체 가드 필수 — 일회성 작업(run_single/run_once)만 감쌈.
+        from JARVIS00_INFRA.watchdog import guard_main
+        with guard_main("품질 분석", deadline_sec=900):
+            aid = next((a for a in args if a.isdigit()), None)
+            if aid:
+                ok = run_single(int(aid))
+                print(f"\n✅ 분석 {'완료' if ok else '건너뜀'}: id={aid}")
+            else:
+                n = run_once()
+                print(f"\n✅ 분석 완료: {n}개")

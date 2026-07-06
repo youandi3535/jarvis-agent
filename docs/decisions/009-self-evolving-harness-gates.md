@@ -158,7 +158,7 @@ learned_patterns 영구 박제
   - `@action_step(name=..., verify=...)` 데코레이터 — 수행 단계 정의
   - `ActionDefinition` — 동작 = 단계 시퀀스 + verify 함수 + send 콜백
   - `run_action(action_def, input)` — 검증 순환 실행 엔진
-  - 무한 루프 방지: `max_attempts` 박제 (기본 5회)
+  - 무한 루프 방지: `max_attempts` 박제 (기본 3회 — ★ 사용자 박제 2026-07-06: 어떤 재시도도 최대 3회)
   - max 도달 시: GUARDIAN escalation + 사용자 텔레그램 + *송출 안 함*
 
 **Phase 2 — 기존 동작 마이그레이션 (phased, 각 동작별 사용자 승인)**:

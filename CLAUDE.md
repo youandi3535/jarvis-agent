@@ -720,7 +720,7 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
 - **새 동작 추가 시 *반드시* `harness.py` 표준 사용**: `@action_step` 데코레이터 + `ActionDefinition` + `run_action()`. 직접 송출 행위 (외부 API·파일 쓰기·텔레그램 전송) 호출 금지 — *반드시* Layer 4 `send` 콜백 통과.
 - **Layer 0 (preflight)**: `JARVIS00_INFRA/preflight.py` 단독 관리. 새 필수 import / 외부 의존 / 환경변수 / DB 테이블 추가 시 preflight 항목 동시 갱신.
 - **Layer 3 검증 실패는 GUARDIAN 진입점 단일화**: `error_collector.report(source="harness", context={"layer":3, "action":..., "step":..., "issue":...})`. 직접 DB / 로그 / 텔레그램으로 끝내지 말 것.
-- **무한 루프 방지**: `max_attempts` 박제 (기본 5회). max 도달 시 GUARDIAN escalation + 사용자 텔레그램 + *송출 절대 안 함*.
+- **무한 루프 방지**: `max_attempts` 박제 (기본 3회 — ★ 사용자 박제 2026-07-06: 어떤 재시도도 최대 3회). max 도달 시 GUARDIAN escalation + 사용자 텔레그램 + *송출 절대 안 함*.
 
 ### 마이그레이션 (Phase 2 — 기존 동작 → harness 표준)
 - *Phase 1 (즉시 적용)*: `harness.py` 표준 인프라 신설 ✅

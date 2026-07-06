@@ -1,22 +1,16 @@
 """JARVIS03_RADAR/topic_pack.py — 주제 패키지 파이프라인 (★ 사용자 박제 2026-07-03).
 
-"자비스03이 자비스02와 자비스09에게 *동시에* 트렌드 정보를 제공한다. 폴백 없음."
-— 주제 키워드+프로필의 *유일한* 공급 경로. 자비스03이 팩 생성 시점에 JARVIS09 를
-직접 호출해 수집시키고(→09), 자비스02는 같은 팩에서 주제·프로필을 받아 제목·대본을
-쓴다(→02). 자비스02의 자체 주제 선정(select_*_topic)·자체 JARVIS09 수집 호출은 폐지
-(키워드 문자열 중계 중 프로필 유실·드리프트 — ERRORS [290] '은행나무' GIGO — 구조 차단).
+topic_pack = 키워드 + 프로필(한줄요약·관련어·엔티티유형) *만*.
+JARVIS09 수집은 파이프라인(trend_economic_writer)이 팩 소비 시점에 직접 수행.
 
-흐름 (트렌드 수집 잡 말미에 자동 실행 + 팩 부재 시 즉석 호출):
+흐름 (경제 브리핑 파이프라인 시작 시 즉석 생성 + 당일 캐시 재사용):
   ① 경제 섹터 후보 추출 — recommendations+scored_keywords, 최근 7일 사용이력 제외, 점수 정렬
   ② LLM 배치 1회 — 후보별 {경제 주제 적합성, 프로필(한줄요약·관련어·엔티티유형), 교정 섹터}
      → 프로필 생성 자체가 오분류 트립와이어 ('은행나무' 프로필 = 활엽수·산림 → 부적합 즉시 검출)
-  ③ 적합 상위 publish_slots개 → ★ JARVIS09 *직접* 선수집 (자비스02 경유 0):
-       collect_research(keyword, sector, angle=프로필요약)      → 근거팩 + 정제 문서
-       collect_chart_data(keyword, sector, description=프로필요약) → 인포그래픽 실데이터
-  ④ data/topic_pack_YYYY-MM-DD.json 박제 — 자비스02는 발행 시 *소비만* (재수집 0)
+  ③ 적합 상위 publish_slots개 → data/topic_pack_YYYY-MM-DD.json 박제
+  ④ 자비스02가 pick_candidate() 로 소비 → JARVIS09 직접 수집 → 대본 생성
 
-팩을 만들 수 없으면(트렌드 없음·적합 후보 0·LLM 미가용) 발행은 명확한 오류로 차단 —
-부적합 키워드 강행보다 발행 지연이 우선 (사용자 박제: 데이터 진실성).
+팩을 만들 수 없으면(트렌드 없음·적합 후보 0·LLM 미가용) 발행은 명확한 오류로 차단.
 import 방향: 02→03(소비) 단방향. 03은 02를 import 하지 않는다 (순환 금지).
 """
 from __future__ import annotations
@@ -24,7 +18,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -121,85 +114,18 @@ def _profile_batch(cands: list[dict]) -> list[dict]:
         return []
 
 
-def _precollect(keyword: str, sector: str, summary: str,
-                profile: dict | None = None, category: str = "economic") -> dict:
-    """★ JARVIS09 직접 선수집 — 프로필 요약을 angle/description 으로 앵커.
-
-    ★ 넉넉한 수집 (사용자 박제 2026-07-03 — ADR 013): "설계한 후, 제한을 두지 말고
-    최대한 많은 진실성 있는 데이터를 전부" — 발행 창 밖(06:00 잡)이라 시간 여유 있음.
-
-    ★ Step 4 (2026-07-05): CollectedData 동봉 방출 (facts 인라인 + category 스탬프).
-      기존 flat 키(datasets/docs/evidence_path)는 back-compat 로 유지 (경제 writer 는
-      Step 9 에서 collected 소비로 전환 — 그 전까지 옛 키 필요).
-    """
-    _max_ds = int(os.getenv("TOPIC_PACK_MAX_DATASETS", "64") or "64")
-    _rounds = int(os.getenv("TOPIC_PACK_RESEARCH_ROUNDS", "3") or "3")
-    out: dict = {"datasets": [], "docs": [], "facts": [], "evidence_path": ""}
-    try:
-        from JARVIS09_COLLECTOR import collect_chart_data
-        cd = collect_chart_data(keyword, sector=sector,
-                                description=summary or keyword, max_datasets=_max_ds) or {}
-        out["datasets"] = cd.get("datasets") or []
-    except Exception as e:
-        log.warning(f"[topic_pack] 차트 데이터 선수집 실패({keyword}): {e}")
-        _g_report("radar", e, module=__name__, func_name="_precollect")
-    try:
-        from JARVIS09_COLLECTOR import collect_research
-        rs = collect_research(keyword, sector=sector, angle=summary or "",
-                              max_rounds=_rounds) or {}
-        out["docs"] = [asdict(d) for d in (rs.get("docs") or [])]
-        out["evidence_path"] = rs.get("evidence_path") or ""
-        # ★ Step 4: facts 인라인 (오늘까지 evidence_path 파일로만 남아 CollectedData.facts 유실)
-        out["facts"] = list((rs.get("evidence_pack") or {}).get("facts") or [])
-        # ★ 품질 플래그 (ERRORS [300]): 폴백 설계·근거 부족을 팩에 가시화
-        out["plan_fallback"] = bool(rs.get("plan_fallback"))
-        out["coverage_ratio"] = rs.get("coverage_ratio", 0.0)
-        out["insufficient"] = bool(rs.get("insufficient"))
-        # ★ 수치 fact → 데이터셋 승격 (사용자 박제 2026-07-03 — ERRORS [302]):
-        #   텍스트 근거 속 수치(값·단위·출처 박제)를 인포그래픽 공급원으로 합류.
-        try:
-            from JARVIS09_COLLECTOR.evidence_pack import facts_to_datasets
-            _fact_ds = facts_to_datasets(rs.get("evidence_pack") or {})
-            if _fact_ds:
-                _seen_titles = {d.get("title") for d in out["datasets"]}
-                _new = [d for d in _fact_ds if d.get("title") not in _seen_titles]
-                out["datasets"] = list(out["datasets"]) + _new
-                log.info(f"[topic_pack] 수치 fact → 데이터셋 승격 {len(_new)}개 "
-                         f"(공식수집 {len(_seen_titles)} + fact 승격 = 총 {len(out['datasets'])})")
-        except Exception as _fe:
-            log.warning(f"[topic_pack] fact 데이터셋 승격 스킵: {_fe}")
-    except Exception as e:
-        log.warning(f"[topic_pack] 리서치 선수집 실패({keyword}): {e}")
-        _g_report("radar", e, module=__name__, func_name="_precollect")
-        out["insufficient"] = True   # 리서치 자체 실패 = 근거 없음
-    # ★ Step 4: CollectedData 방출 (facts 인라인 + category 스탬프 + round-trip 가능).
-    #   경제는 종목 리스트 산문화 불필요 → entities=[] (수치는 datasets/facts 로 커버).
-    try:
-        from JARVIS09_COLLECTOR.models import CollectedData
-        collected = CollectedData.from_dict({
-            "meta": {
-                "keyword": keyword, "sector": sector, "category": category,
-                "profile": profile or {},
-                "as_of": datetime.now().isoformat(),
-                "coverage_ratio": out.get("coverage_ratio", 0.0),
-                "insufficient": out.get("insufficient", False),
-                "plan_fallback": out.get("plan_fallback", False),
-                "evidence_path": out.get("evidence_path", ""),
-            },
-            "datasets": out.get("datasets") or [],
-            "docs": out.get("docs") or [],       # asdict dict → from_dict 가 객체로 rehydrate
-            "facts": out.get("facts") or [],
-            "entities": [],
-        })
-        out["collected"] = collected.to_dict()   # JSON 직렬화 형태로 cand 에 박제
-    except Exception as _ce:
-        log.warning(f"[topic_pack] CollectedData 조립 실패({keyword}): {_ce}")
-    return out
 
 
 def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
-                     max_candidates: int = 8) -> dict | None:
-    """주제 패키지 생성 + JARVIS09 선수집 + 박제. 실패 시 None (02 는 현행 폴백)."""
+                     max_candidates: int | None = None) -> dict | None:
+    """주제 패키지 생성 + 박제. topic_pack = 키워드 + 프로필만 (수집은 파이프라인에서). 실패 시 None.
+
+    ★ 발행 슬롯만큼만 선정 (사용자 박제 2026-07-06): 네이버·티스토리 각 1개 = 2개만 쓴다.
+    쓰지도 않을 주제를 프로파일링·박제하는 건 낭비 → 후보는 publish_slots + 소폭 버퍼(2)만
+    LLM 프로파일링(부적합 판정으로 걸러질 것 대비), 팩에는 적합 상위 publish_slots개만 박제.
+    """
+    if max_candidates is None:
+        max_candidates = publish_slots + 2
     if trends is None:
         try:
             from JARVIS03_RADAR.radar_main import load as _load
@@ -252,30 +178,9 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
         log.info("[topic_pack] 적합 후보 0개 — 팩 생성 실패 (부적합 키워드 강행 금지)")
         return None
 
-    # ★ JARVIS09 직접 선수집 + 근거 부족 시 주제 교체 (ERRORS [300] — 사용자 승인 2026-07-03)
-    #   적합 후보를 순서대로 선수집 → insufficient(커버리지 0·fact<3) 면 다음 후보로 교체.
-    #   충분 후보가 슬롯을 못 채우면 근거 얇은 후보로 보충 (플래그 유지 — 02 게이트가 최종 방어).
-    final: list[dict] = []
-    thin_pool: list[dict] = []
-    for cand in selected:
-        if len(final) >= publish_slots:
-            break
-        summ = cand["profile"]["summary"]
-        log.info(f"[topic_pack] JARVIS09 선수집: '{cand['keyword']}' — {summ[:50]}")
-        cand.update(_precollect(cand["keyword"], cand["sector"], summ,
-                                profile=cand["profile"], category="economic"))
-        if cand.get("insufficient"):
-            log.warning(f"[topic_pack] '{cand['keyword']}' 근거 부족 "
-                        f"(커버리지 {cand.get('coverage_ratio')}) → 다음 후보로 교체")
-            thin_pool.append(cand)
-            continue
-        final.append(cand)
-    if len(final) < publish_slots and thin_pool:
-        _fill = thin_pool[:publish_slots - len(final)]
-        log.warning(f"[topic_pack] 충분 근거 후보 부족 — 근거 얇은 후보 {len(_fill)}개로 보충")
-        final += _fill
+    final = selected[:publish_slots]
     if not final:
-        log.warning("[topic_pack] 선수집 가능한 후보 0개 — 팩 생성 실패")
+        log.warning("[topic_pack] 적합 후보 0개 — 팩 생성 실패")
         return None
 
     pack = {
@@ -291,26 +196,6 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
     except Exception as e:
         log.warning(f"[topic_pack] 박제 실패: {e}")
         return None
-
-    # ★ 품질 저하 가시화 (조용한 강등 금지): 폴백 설계·근거 부족 시 텔레그램 1회 통보
-    try:
-        _issues = []
-        for c in final:
-            tags = []
-            if c.get("plan_fallback"):
-                tags.append("설계 폴백(템플릿)")
-            if c.get("insufficient"):
-                tags.append(f"근거 부족(커버리지 {c.get('coverage_ratio')})")
-            if tags:
-                _issues.append(f"· {c['keyword']}: {', '.join(tags)}")
-        swapped = [c["keyword"] for c in thin_pool if c not in final]
-        if swapped:
-            _issues.append(f"· 주제 교체됨(근거 부족): {', '.join(swapped)}")
-        if _issues:
-            from shared.notify import send_tg
-            send_tg("⚠️ [자비스03] 주제 패키지 품질 경고\n" + "\n".join(_issues))
-    except Exception:
-        pass
     return pack
 
 
@@ -331,8 +216,7 @@ def load_topic_pack(day: str | None = None) -> dict | None:
 def pick_candidate(exclude_keyword: str = "") -> dict | None:
     """자비스02 소비용 — 당일 팩에서 미사용·미중복 첫 후보 반환.
 
-    반환 dict: keyword/sector/profile/datasets/docs(직렬화)/evidence_path.
-    docs 복원은 restore_docs() 사용.
+    반환 dict: keyword/sector/profile.
     """
     pack = load_topic_pack()
     if not pack:
@@ -369,10 +253,10 @@ def keyword_profile(keyword: str, sector: str = "") -> dict:
 
 
 def build_for_keyword(keyword: str, sector: str = "", reason: str = "") -> dict:
-    """강제 지정 주제(JARVIS_FORCE_*_TOPIC)용 — 프로필 생성 + JARVIS09 선수집.
+    """강제 지정 주제(JARVIS_FORCE_*_TOPIC)용 — 프로필 생성만.
 
-    강제 주제도 03→09 단일 구조 유지 (02 는 09 를 직접 호출하지 않음).
     사용자가 명시 지정한 주제이므로 fit 판정은 적용하지 않는다.
+    수집은 파이프라인에서 직접 수행.
     """
     prof_list = _profile_batch([{"keyword": keyword, "sector": sector}])
     prof = prof_list[0] if prof_list else {}
@@ -387,45 +271,8 @@ def build_for_keyword(keyword: str, sector: str = "", reason: str = "") -> dict:
             "entity_type": prof.get("entity_type", ""),
         },
     }
-    cand.update(_precollect(keyword, cand["sector"], summary,
-                            profile=cand["profile"], category="economic"))
     return cand
 
 
-def restore_docs(cand: dict) -> list:
-    """직렬화된 docs → CollectionResult 객체 복원 (JARVIS06·prepublish 호환)."""
-    try:
-        from JARVIS09_COLLECTOR.models import CollectionResult
-        out = []
-        for d in cand.get("docs") or []:
-            try:
-                out.append(CollectionResult(**d))
-            except Exception:
-                continue
-        return out
-    except Exception:
-        return []
-
-
-def cand_collected(cand: dict):
-    """cand → CollectedData 복원 (★ Step 4 — 경제 writer 소비용, Step 9 전환점).
-
-    collected 키가 있으면 그대로 rehydrate. 옛 팩(collected 부재)이면 flat 키로 조립.
-    """
-    from JARVIS09_COLLECTOR.models import CollectedData
-    if cand and cand.get("collected"):
-        return CollectedData.from_dict(cand["collected"])
-    return CollectedData.from_dict({
-        "meta": {"keyword": (cand or {}).get("keyword", ""),
-                 "sector": (cand or {}).get("sector", ""),
-                 "category": "economic",
-                 "profile": (cand or {}).get("profile") or {}},
-        "datasets": (cand or {}).get("datasets") or [],
-        "docs": (cand or {}).get("docs") or [],
-        "facts": (cand or {}).get("facts") or [],
-        "entities": [],
-    })
-
-
 __all__ = ["build_topic_pack", "load_topic_pack", "pick_candidate",
-           "build_for_keyword", "keyword_profile", "restore_docs", "cand_collected"]
+           "build_for_keyword", "keyword_profile"]

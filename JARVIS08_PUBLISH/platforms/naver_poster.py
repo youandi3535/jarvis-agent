@@ -1517,8 +1517,10 @@ if __name__ == "__main__":
     except Exception as _ee:
         print(f"⚠️ preflight 호출 실패: {_ee}")
 
-    ok = post_to_naver(
-        "[마켓시그널] 테스트 테마 완전 정복 리포트",
-        "<h1>테스트</h1><p>pyautogui 좌표 기반 테스트입니다.</p>",
-    )
+    from JARVIS00_INFRA.watchdog import guard_main
+    with guard_main("네이버 발행 테스트", deadline_sec=1800):
+        ok = post_to_naver(
+            "[마켓시그널] 테스트 테마 완전 정복 리포트",
+            "<h1>테스트</h1><p>pyautogui 좌표 기반 테스트입니다.</p>",
+        )
     print("결과:", "✅ 성공" if ok else "❌ 실패")

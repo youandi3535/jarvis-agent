@@ -2130,7 +2130,7 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
         #   02 는 주제 선정·JARVIS09 수집 호출을 하지 않는다 — 폴백 없음.
         from JARVIS03_RADAR.topic_pack import (
             pick_candidate as _tp_pick, build_topic_pack as _tp_build,
-            build_for_keyword as _tp_for_kw, restore_docs as _tp_docs,
+            build_for_keyword as _tp_for_kw,
         )
         _force = _os.environ.get("JARVIS_FORCE_TOPIC", "").strip()
         if _force:
@@ -2175,43 +2175,46 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
                 f"\n\n[주제 프로필 — 자비스03]\n- 주제: {keyword} ({sector})\n- 정의: {reason}"
                 + (f"\n- 관련어: {_rel_terms}" if _rel_terms else ""))
 
-        # ── ★ 데이터-우선 (사용자 박제 2026-06-30 → 2026-07-03 개편): 자비스03 팩의
-        #    *선수집* 실데이터 사용 — 02 의 JARVIS09 직접 호출 폐지.
+        # ★ JARVIS09 직접 수집 (topic_pack = 키워드+프로필만 — 선수집 없음)
+        _pool: list = []
+        _ev_pack: dict = {}
+        _kw_collection_docs: list = []
+        try:
+            from JARVIS09_COLLECTOR import collect_research, collect_chart_data
+            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
+            _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
+            _pool = list(_chart.get("datasets") or [])
+            _res = collect_research(keyword, sector=sector, angle=reason) or {}
+            _ev_pack = _res.get("evidence_pack") or {}
+            _kw_collection_docs = list(_res.get("docs") or [])
+            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
+                  f"데이터셋 {len(_pool)}개")
+        except Exception as _je:
+            print(f"  ⚠️ [JARVIS09] 수집 실패: {_je}")
+
+        # 데이터 카탈로그 주입
         try:
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
-            _pool = list(_cand.get("datasets") or [])
             if _pool:
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
-                print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입")
+                print(f"  🗂️ [데이터-우선] 실데이터 {len(_pool)}개 → 카탈로그 주입")
             else:
-                print("  ⚠️ [데이터-우선] 팩 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
+                print("  ⚠️ [데이터-우선] 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
         except Exception as _de:
-            print(f"  ⚠️ [데이터-우선] 팩 데이터 주입 스킵: {_de}")
+            print(f"  ⚠️ [데이터-우선] 데이터 주입 스킵: {_de}")
 
-        # ★ 근거 브리프 주입 (사용자 지적 2026-07-03 — ERRORS [303]): 수집 문서에서
-        #   추출된 fact(출처 표기)를 대본 프롬프트에 직접 주입 — ADR 012 작성측 연결이
-        #   테마 경로에만 있고 경제 경로에 누락돼 "수집 자산 대본 미도달"이던 병목 해소.
+        # 근거 브리프 주입
         try:
-            _ev_path = _cand.get("evidence_path") or ""
-            if _ev_path:
-                import json as _ej
-                from pathlib import Path as _EPath
-                _ev_pack = _ej.loads(_EPath(_ev_path).read_text(encoding="utf-8"))
-                from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
-                _brief = evidence_brief(_ev_pack)
-                if _brief:
-                    supreme_block = (supreme_block or "") + "\n\n" + _brief
-                    print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
-                          f"→ 대본 프롬프트 직접 주입")
+            from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
+            _brief = evidence_brief(_ev_pack)
+            if _brief:
+                supreme_block = (supreme_block or "") + "\n\n" + _brief
+                print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
+                      f"→ 대본 프롬프트 직접 주입")
         except Exception as _ebe:
             print(f"  ⚠️ [근거 브리프] 주입 스킵: {_ebe}")
 
-        # ★ 주제 문서 — 자비스03 팩의 선수집 문서 (JARVIS09 재수집 없음)
-        _kw_collection_docs = _tp_docs(_cand) or list(collection_docs or [])
-        print(f"  🕸️ [topic_pack] '{keyword}' 선수집 문서 {len(_kw_collection_docs)}건 사용")
-
-        # ★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다"):
-        #   브리프(수치 규율)에 더해 문서 전체를 서사 재료로 대본 프롬프트에 전달.
+        # 수집 자료 전문 주입
         try:
             from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
             _corpus = _bcb(_kw_collection_docs)
@@ -2223,19 +2226,30 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
         from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
-        from JARVIS03_RADAR.topic_pack import cand_collected
         from JARVIS06_IMAGE.draft_processor import process_draft
+        from JARVIS09_COLLECTOR.models import CollectedData
         from pathlib import Path as _P9
 
-        # ★ Step 9 (2026-07-05): Pass-1-only 대본(placeholder) → process_draft v2 단일 이미지 경로.
-        #   경제도 테마와 동일한 JARVIS06 이미지 오케스트레이터 (embed-first 폐지). 실패차트→AI사진
-        #   폴백·min-5 top-up·썸네일 필수는 process_draft(CATEGORY_POLICY['economic'])가 담당.
+        # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
         draft_html = generate_article_html(keyword, sector, reason, supreme_block,
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
-        collected = cand_collected(_cand)          # topic_pack cand → CollectedData (Step 4)
+        try:
+            from dataclasses import asdict as _asdict
+            _docs_ser = [_asdict(d) if hasattr(d, '__dataclass_fields__') else d
+                         for d in _kw_collection_docs]
+        except Exception:
+            _docs_ser = []
+        collected = CollectedData.from_dict({
+            "meta": {"keyword": keyword, "sector": sector, "category": "economic",
+                     "profile": _cand.get("profile") or {}},
+            "datasets": _pool,
+            "docs": _docs_ser,
+            "facts": list(_ev_pack.get("facts") or []),
+            "entities": [],
+        })
         result = process_draft(draft_html, collected=collected, platform="tistory",
                                out_dir=TISTORY_IMG_DIR)
         html = result["html"]
@@ -2363,7 +2377,7 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
         #   02 는 주제 선정·JARVIS09 수집 호출을 하지 않는다 — 폴백 없음.
         from JARVIS03_RADAR.topic_pack import (
             pick_candidate as _tp_pick, build_topic_pack as _tp_build,
-            build_for_keyword as _tp_for_kw, restore_docs as _tp_docs,
+            build_for_keyword as _tp_for_kw,
         )
         _force_nv = _os.environ.get("JARVIS_FORCE_NV_TOPIC", "").strip()
         if _force_nv:
@@ -2408,42 +2422,46 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
                 f"\n\n[주제 프로필 — 자비스03]\n- 주제: {keyword} ({sector})\n- 정의: {reason}"
                 + (f"\n- 관련어: {_rel_terms}" if _rel_terms else ""))
 
-        # ── ★ 데이터-우선 (사용자 박제 2026-06-30 → 2026-07-03 개편): 자비스03 팩의
-        #    *선수집* 실데이터 사용 — 02 의 JARVIS09 직접 호출 폐지.
+        # ★ JARVIS09 직접 수집 (topic_pack = 키워드+프로필만 — 선수집 없음)
+        _pool: list = []
+        _ev_pack: dict = {}
+        _kw_collection_docs: list = []
+        try:
+            from JARVIS09_COLLECTOR import collect_research, collect_chart_data
+            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
+            _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
+            _pool = list(_chart.get("datasets") or [])
+            _res = collect_research(keyword, sector=sector, angle=reason) or {}
+            _ev_pack = _res.get("evidence_pack") or {}
+            _kw_collection_docs = list(_res.get("docs") or [])
+            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
+                  f"데이터셋 {len(_pool)}개")
+        except Exception as _je:
+            print(f"  ⚠️ [JARVIS09] 수집 실패: {_je}")
+
+        # 데이터 카탈로그 주입
         try:
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
-            _pool = list(_cand.get("datasets") or [])
             if _pool:
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
-                print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입")
+                print(f"  🗂️ [데이터-우선] 실데이터 {len(_pool)}개 → 카탈로그 주입")
             else:
-                print("  ⚠️ [데이터-우선] 팩 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
+                print("  ⚠️ [데이터-우선] 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
         except Exception as _de:
-            print(f"  ⚠️ [데이터-우선] 팩 데이터 주입 스킵: {_de}")
+            print(f"  ⚠️ [데이터-우선] 데이터 주입 스킵: {_de}")
 
-        # ★ 근거 브리프 주입 (사용자 지적 2026-07-03 — ERRORS [303]): 수집 문서에서
-        #   추출된 fact(출처 표기)를 대본 프롬프트에 직접 주입 — 경제 경로 병목 해소.
+        # 근거 브리프 주입
         try:
-            _ev_path = _cand.get("evidence_path") or ""
-            if _ev_path:
-                import json as _ej
-                from pathlib import Path as _EPath
-                _ev_pack = _ej.loads(_EPath(_ev_path).read_text(encoding="utf-8"))
-                from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
-                _brief = evidence_brief(_ev_pack)
-                if _brief:
-                    supreme_block = (supreme_block or "") + "\n\n" + _brief
-                    print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
-                          f"→ 대본 프롬프트 직접 주입")
+            from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
+            _brief = evidence_brief(_ev_pack)
+            if _brief:
+                supreme_block = (supreme_block or "") + "\n\n" + _brief
+                print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
+                      f"→ 대본 프롬프트 직접 주입")
         except Exception as _ebe:
             print(f"  ⚠️ [근거 브리프] 주입 스킵: {_ebe}")
 
-        # ★ 주제 문서 — 자비스03 팩의 선수집 문서 (JARVIS09 재수집 없음)
-        _kw_collection_docs = _tp_docs(_cand) or list(collection_docs or [])
-        print(f"  🕸️ [topic_pack] '{keyword}' 선수집 문서 {len(_kw_collection_docs)}건 사용")
-
-        # ★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다"):
-        #   브리프(수치 규율)에 더해 문서 전체를 서사 재료로 대본 프롬프트에 전달.
+        # 수집 자료 전문 주입
         try:
             from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
             _corpus = _bcb(_kw_collection_docs)
@@ -2455,19 +2473,30 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
         from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
-        from JARVIS03_RADAR.topic_pack import cand_collected
         from JARVIS06_IMAGE.draft_processor import process_draft
+        from JARVIS09_COLLECTOR.models import CollectedData
         from pathlib import Path as _P9
 
-        # ★ Step 9 (2026-07-05): Pass-1-only 대본(placeholder) → process_draft v2 단일 이미지 경로.
-        #   네이버 dir 리셋(_cleanup_naver_images)은 이 함수 앞에서 이미 수행. process_draft 는
-        #   out_dir mkdir(exist_ok=True)만 — 리셋 안 함(잔재 없음).
+        # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
         draft_html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
-        collected = cand_collected(_cand)          # topic_pack cand → CollectedData (Step 4)
+        try:
+            from dataclasses import asdict as _asdict
+            _docs_ser = [_asdict(d) if hasattr(d, '__dataclass_fields__') else d
+                         for d in _kw_collection_docs]
+        except Exception:
+            _docs_ser = []
+        collected = CollectedData.from_dict({
+            "meta": {"keyword": keyword, "sector": sector, "category": "economic",
+                     "profile": _cand.get("profile") or {}},
+            "datasets": _pool,
+            "docs": _docs_ser,
+            "facts": list(_ev_pack.get("facts") or []),
+            "entities": [],
+        })
         result = process_draft(draft_html, collected=collected, platform="naver",
                                out_dir=NAVER_IMG_DIR)
         html = result["html"]

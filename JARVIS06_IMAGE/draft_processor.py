@@ -119,9 +119,15 @@ def _build_photo_prompt_en(theme: str, desc: str, sector: str = "",
 
 # ── 사진 관련성 검증 (2026-07-02) — 생성 사진이 섹션과 무관해지는 것을 프롬프트
 #    레벨에서 차단. 무거운 vision 호출 없음(JARVIS05_VISION은 트렌드 레지스트리라
-#    캡션/CLIP 미보유). 신호 = 엔티티 carry-through: 섹션 facts의 실체(영문 고유명사·
-#    수치)가 번역을 넘어 최종 프롬프트에 살아남았는가. 순수 정규식 → 레이턴시 0·루프 불가.
-_ENTITY_RE = re.compile(r'\b[A-Z][A-Za-z0-9&.\-]{2,}\b|\b\d{2,}[\d,.]*%?\b')
+#    캡션/CLIP 미보유). 신호 = 엔티티 carry-through: 섹션 facts의 실체(영문 고유명사)가
+#    번역을 넘어 최종 프롬프트에 살아남았는가. 순수 정규식 → 레이턴시 0·루프 불가.
+# ★ 순수 수치(연도·금액·%·건수)는 grounding 신호에서 제외 (2026-07-06 — 오탐 근본수정):
+#    사진 프롬프트는 _PHOTO_PROMPT_SYSTEM 이 "no text, no letters" 를 강제하므로 숫자는
+#    픽셀로 렌더될 수 없다(시각적 단서로만 번역). facts 는 뉴스 헤드라인이라 숫자 위주라,
+#    숫자를 carry-through 실체로 세면 정상 장면 프롬프트도 "실체 N개 중 0개 반영" 오탐 →
+#    무관 이미지 오판·prompt_en 폐기·GUARDIAN 노이즈. 사진의 피사체가 될 수 있는 영문
+#    고유명사(회사·제품·지명)만 grounding 신호로 인정.
+_ENTITY_RE = re.compile(r'\b[A-Z][A-Za-z0-9&.\-]{2,}\b')
 _ENTITY_STOP = {"The", "This", "That", "With", "And", "For",
                 "Korea", "Korean", "Business", "Finance"}
 

@@ -885,6 +885,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                                              "nv_pub_result", "__nv_send_attempted__"),
         precondition=_precondition,
         max_attempts=2,  # ★ 외부 발행은 비멱등 → 최대 2회 (sentinel이 중복 방지)
+        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
     )
     _ts_action_def = ActionDefinition(
         name=f"theme-publish-{theme}-tistory",
@@ -897,6 +898,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                                              "ts_pub_result", "__ts_send_attempted__"),
         precondition=_precondition,
         max_attempts=2,
+        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
     )
 
     # ★ 단일 진입점 — 새 테마 = 전체 상태 초기화
@@ -974,13 +976,16 @@ if __name__ == "__main__":
     p.add_argument("--tistory-only", action="store_true")
     args = p.parse_args()
 
-    if args.naver_only:
-        r = run_naver_theme(args.theme, args.sector)
-        sys.exit(0 if r.get("success") else 1)
-    if args.tistory_only:
-        r = run_tistory_theme(args.theme, args.sector)
-        sys.exit(0 if r.get("success") else 1)
-    # 기본 — 2개 통합
-    r = run_all_themes(args.theme, args.sector)
-    ok = any(r.get(p, {}).get("success") for p in ("tistory", "naver"))
-    sys.exit(0 if ok else 1)
+    # ★ 정지 방어 (사용자 박제 2026-07-06): 일회성 발행 작업 freeze/deadline 가드.
+    from JARVIS00_INFRA.watchdog import guard_main
+    with guard_main("테마 발행", deadline_sec=3600):   # 전체 2블로그×30분 (테마는 데몬 내부 실행 — 부모 subprocess 없음)
+        if args.naver_only:
+            r = run_naver_theme(args.theme, args.sector)
+            sys.exit(0 if r.get("success") else 1)
+        if args.tistory_only:
+            r = run_tistory_theme(args.theme, args.sector)
+            sys.exit(0 if r.get("success") else 1)
+        # 기본 — 2개 통합
+        r = run_all_themes(args.theme, args.sector)
+        ok = any(r.get(p, {}).get("success") for p in ("tistory", "naver"))
+        sys.exit(0 if ok else 1)
