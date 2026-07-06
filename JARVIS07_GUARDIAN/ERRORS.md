@@ -2,6 +2,18 @@
 
 ---
 
+## [386] 본문 AI 이미지 전면 폐기 — 본문 이미지 = 인포그래픽 디자인만 (2026-07-06)
+
+- **증상/요청**: 본문(썸네일 제외) 인포그래픽 실패 시 AI 사진(Pollinations) 폴백이 토큰을 태움. 사용자: "본문 이미지는 인포그래픽 디자인만. 못 만들면 비워. 폴백이든 뭐든 다 지워. 썸네일은 예외."
+- **해결**:
+  1. `JARVIS06_IMAGE/draft_processor.py`(활성 이미지 오케스트레이터): [CHART_N]/[PHOTO_N] → 실데이터 인포그래픽만, 실패 시 빈 슬롯. 삭제: `_photo_for_failed_slot`·`_extra_photos`·`_generate_photos`(→`_render_photo_slots` 인포그래픽 치환)·`_build_photo_prompt_en`·`_PHOTO_PROMPT_*`·사진 관련성 검증. min-N top-up도 인포그래픽만(소진 시 그대로 둠). `chart_ai_fallback` 정책 노브 제거.
+  2. 라이터측 죽은/조건부 AI 사진 코드 제거: `theme_html_writer`(`_generate_svg_pass2_and_replace_theme`·`_inject_theme_section_images` 삭제), `jarvis_main`(`_inject_para_images_into_blocks` 삭제), `tistory_html_writer`(`_generate_ai_photo_for_slot`·AI top-up·`_ai_photo_html`·`_insert_extra_photos`·`_MIN_IMAGES` 삭제, `_generate_svg_pass2_and_replace` AI 부분 중립화→빈 슬롯).
+  - 검증: 기사 본문 발행 경로(process_draft + Pass-1)에 `generate_photo` 호출 0. 남은 2곳(image_agent 버스 핸들러·trend_charts 레거시 docstring)은 본문 경로 아님.
+- **파일**: `JARVIS06_IMAGE/draft_processor.py`, `JARVIS02_WRITER/{theme_html_writer,tistory_html_writer,jarvis_main}.py`.
+- **교훈**: 거짓/무관 이미지보다 빈 슬롯이 낫다. 본문은 실데이터 인포그래픽만 — 폴백 체인(AI·matplotlib) 전부 제거해 토큰·품질 리스크 동시 차단. 썸네일(대표 실사)은 용도가 달라 예외.
+
+---
+
 ## [385] 정지 방어 전면 도입 — 재시도 3회 캡 + 300초 freeze 워치독 + 블로그 30분 데드라인 (2026-07-06)
 
 - **증상**: 06:30 경제 발행 subprocess 가 LLM 스로틀 재시도 루프에 갇혀 2시간+ 멈춤(livelock). 부모 timeout 90분·재시도 무한이라 방치.
