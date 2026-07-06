@@ -154,7 +154,7 @@ STOCK_CARD_OTHER_SENTS_MAX:  int = 3                                            
 STOCK_CARD_OTHER_MIN:  int = STOCK_CARD_OTHER_SENTS_MIN * KOREAN_PER_SENTENCE    # 약 100자
 STOCK_CARD_OTHER_MAX:  int = STOCK_CARD_OTHER_SENTS_MAX * KOREAN_PER_SENTENCE    # 약 150자
 
-# ── 회사 비즈 설명 (collect_theme: _make_company_biz_desc) ──
+# ── 회사 비즈 설명 (종목 카드 사업 설명 분량) ──
 BIZ_DESC_LEADER_SENTS_MIN: int = 4                                              # 4문장
 BIZ_DESC_LEADER_SENTS_MAX: int = 5                                              # 5문장
 BIZ_DESC_LEADER_MIN:   int = BIZ_DESC_LEADER_SENTS_MIN * KOREAN_PER_SENTENCE    # 약 200자

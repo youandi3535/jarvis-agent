@@ -32,8 +32,6 @@ _JARVIS_ROOT = Path(__file__).parent.parent
 if str(_JARVIS_ROOT) not in sys.path:
     sys.path.insert(0, str(_JARVIS_ROOT))
 
-# 이제 절대 import 가능
-from JARVIS02_WRITER.collect_theme import generate_report
 
 # 실시간 출력 (VS Code 터미널용) — 두 가지 방법 모두 적용
 # ── JARVIS07 오류 보고 API ───────────────────────────
@@ -797,53 +795,3 @@ def _build_jsonld(title: str, excerpt: str, keywords: str, date_str: str) -> str
         "inLanguage": "ko-KR",
     }
     return f'<script type="application/ld+json">{_json.dumps(schema, ensure_ascii=False)}</script>\n'
-
-
-# ══════════════════════════════════════════
-#  원고 로드 (캐시 우선)
-# ══════════════════════════════════════════
-
-def load_or_generate_report(theme: str, platform: str = "naver") -> str | None:
-    """캐시 원고 있으면 재사용 (24h 이내), 없거나 만료면 새로 생성.
-    만료된 캐시 파일은 즉시 삭제.
-
-    ★ new_run() 은 캐시 히트·미스 모두 먼저 호출 — 이미지 상태 격리 보장.
-    """
-    from JARVIS09_COLLECTOR.run_context import new_run as _new_run
-    _new_run(theme, platform=platform, post_type="theme")
-
-    cache_pattern = str(LOGS_DIR / f"report_{theme.replace('/', '_').replace(' ', '_')}_*.txt")
-    cached = sorted(glob.glob(cache_pattern))
-
-    # 만료된 캐시 파일 삭제
-    for f in cached:
-        age_hours = (time.time() - Path(f).stat().st_mtime) / 3600
-        if age_hours >= 24:
-            Path(f).unlink(missing_ok=True)
-            print(f"  🗑️ 만료 캐시 삭제: {Path(f).name} ({age_hours:.0f}h)")
-
-    # 유효한 캐시 재검색
-    cached = sorted(glob.glob(cache_pattern))
-    if cached:
-        cache_file = Path(cached[-1])
-        age_hours = (time.time() - cache_file.stat().st_mtime) / 3600
-        print(f"\n📂 캐시 원고 재사용: {cache_file.name} ({age_hours:.1f}h 전)")
-        report = cache_file.read_text(encoding='utf-8')
-        print(f"  ✅ 원고 로드 완료 ({len(report):,}자)")
-        return report
-
-    print("\n🧠 CrewAI 테마 분석 & 원고 생성 중...")
-    try:
-        report = generate_report(theme)
-        print(f"  ✅ 원고 생성 완료 ({len(report):,}자)")
-        # 캐시 저장
-        ts         = datetime.now().strftime('%Y%m%d_%H%M%S')
-        safe       = theme.replace("/", "_").replace(" ", "_")
-        cache_path = LOGS_DIR / f"report_{safe}_{ts}.txt"
-        cache_path.write_text(report, encoding='utf-8')
-        print(f"  💾 원고 캐시 저장: {cache_path.name}")
-        return report
-    except Exception as e:
-        print(f"  ❌ 원고 생성 실패: {e}")
-        _g_report("writer", e, module=__name__)
-        return None
