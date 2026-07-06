@@ -10,7 +10,7 @@ log = logging.getLogger("jarvis")
 
 _BASE = "https://image.pollinations.ai/prompt/{prompt}"
 _TIMEOUT = 60  # 2026-05-29: 이미지 생성 느린 경우 대비 60초로 증가
-_MAX_RETRIES = 6  # ★ ERRORS [267] 박제 — Queue full 재시도 (4→6 확대)
+_MAX_RETRIES = 3  # ★ 사용자 박제 2026-07-06: 재시도 어떤 경우라도 최대 3회 (옛 ERRORS [267] 6→3 하향, 썸네일 전용)
 _BASE_DELAY = 10  # 첫 재시도 대기 10초 (지수 백오프)
 _QUEUE_FULL_DELAY = 30  # ★ 402 Queue full 전용 — 큐 해소까지 더 긴 대기 (20→30 ERRORS [267] 재발)
 _QUEUE_FULL_ABORT = 3   # ★ ERRORS [269] — 연속 402 N회 후 조기 중단 (7분 낭비 방지)

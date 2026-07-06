@@ -431,7 +431,7 @@ def _verify_naver_published(driver) -> bool:
       2. URL: blog.naver.com/ID/숫자 — 발행 직후 리다이렉트
       3. DOM 기반 — 글 보기 페이지 요소 (URL 복사·통계·se-viewer 등)
     발행 실패 패턴:
-      - 4회 재확인 후에도 에디터 URL 유지 + DOM 시그널 없음
+      - 3회 재확인 후에도 에디터 URL 유지 + DOM 시그널 없음
 
     Returns:
         True: 발행 확인됨
@@ -440,11 +440,12 @@ def _verify_naver_published(driver) -> bool:
     import time as _time
     import re as _re
 
-    # ★ ERRORS [278][279] — 4회 × 4초 = 최대 ~16초 추가 대기 (SPA 전환 충분 보장)
-    for _attempt in range(4):
+    # ★ ERRORS [278][279] — 3회 × 4초 = 최대 ~12초 추가 대기 (SPA 전환 충분 보장)
+    # ★ 사용자 박제 2026-07-06 — 재시도 상한 전역 3회 통일 (기존 4회 × 4초)
+    for _attempt in range(3):
         try:
             current_url = driver.current_url
-            print(f"  [verify] attempt {_attempt+1}/4 — URL: {current_url[:120]}")
+            print(f"  [verify] attempt {_attempt+1}/3 — URL: {current_url[:120]}")
 
             # ── URL 기반 체크 ──────────────────────────────────────
             # ★ ERRORS [278] 핵심 수정: blog.naver.com 에 logNo= 있으면 발행 성공
@@ -466,7 +467,7 @@ def _verify_naver_published(driver) -> bool:
             # 에디터 URL (write/postwrite 에 logNo 없음) — 아직 전환 안 됨
             if "/postwrite" in current_url and "logNo=" not in current_url:
                 print(f"  [verify] 에디터 URL 유지 (logNo 없음) → 재확인 대기")
-                if _attempt < 3:
+                if _attempt < 2:
                     _time.sleep(4)
                 continue
 
@@ -504,10 +505,10 @@ def _verify_naver_published(driver) -> bool:
             print(f"  [verify] DOM 체크 예외 (attempt {_attempt+1}): {_dom_err}")
 
         # 아직 전환 안 됨 → 4초 대기 후 재확인
-        if _attempt < 3:
+        if _attempt < 2:
             _time.sleep(4)
 
-    print("  [verify] 4회 시도 모두 실패 → 발행 미완료 판정")
+    print("  [verify] 3회 시도 모두 실패 → 발행 미완료 판정")
     return False
 
 
@@ -561,7 +562,8 @@ def _click_publish_btn(driver, label: str = "최종발행") -> bool:
     from selenium.common.exceptions import ElementClickInterceptedException
     _dim_js = ("document.querySelectorAll('.se-popup-dim:not(.se-popup-dim-transparent)')"
                ".forEach(function(d) { d.remove(); });")
-    for _try in range(2):
+    # ★ 사용자 박제 2026-07-06 — 재시도 상한 전역 3회 통일 (기존 2회)
+    for _try in range(3):
         try:
             driver.execute_script(_dim_js)   # dim 오버레이 선제 제거 (ERRORS [247])
         except Exception:
@@ -1517,8 +1519,10 @@ if __name__ == "__main__":
     except Exception as _ee:
         print(f"⚠️ preflight 호출 실패: {_ee}")
 
-    ok = post_to_naver(
-        "[마켓시그널] 테스트 테마 완전 정복 리포트",
-        "<h1>테스트</h1><p>pyautogui 좌표 기반 테스트입니다.</p>",
-    )
+    from JARVIS00_INFRA.watchdog import guard_main
+    with guard_main("네이버 발행 테스트", deadline_sec=1800):
+        ok = post_to_naver(
+            "[마켓시그널] 테스트 테마 완전 정복 리포트",
+            "<h1>테스트</h1><p>pyautogui 좌표 기반 테스트입니다.</p>",
+        )
     print("결과:", "✅ 성공" if ok else "❌ 실패")

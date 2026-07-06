@@ -5,7 +5,7 @@
 **트렌드 감지 → 수집 → 글 생성 → 이미지 → 발행 → 자가학습까지 스스로 도는 10-모듈 멀티에이전트 시스템**
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![Claude](https://img.shields.io/badge/Anthropic-Claude%20Sonnet%205%20%2F%20Opus%204.8-D97757?style=flat-square&logo=anthropic&logoColor=white)](https://anthropic.com)
+[![Claude](https://img.shields.io/badge/Anthropic-Claude%20Sonnet%205-D97757?style=flat-square&logo=anthropic&logoColor=white)](https://anthropic.com)
 [![LangGraph](https://img.shields.io/badge/LangGraph-ReAct%20Orchestration-FF6B35?style=flat-square)](https://langchain-ai.github.io/langgraph/)
 [![Selenium](https://img.shields.io/badge/Selenium-4.x-43B02A?style=flat-square&logo=selenium&logoColor=white)](https://selenium.dev)
 [![APScheduler](https://img.shields.io/badge/APScheduler-3.x-4DABF7?style=flat-square)](https://apscheduler.readthedocs.io)
@@ -82,10 +82,10 @@
 |------|------|
 | 📝 **블로그 자동 발행** | 경제 브리핑(매일 06:30) + 테마주 분석(매일 16:00) — 네이버·티스토리 동시 발행 |
 | 🔗 **통합 콘텐츠 파이프라인 (★ 2026-07-05)** | 경제·테마·미래 카테고리가 **하나의 공통 경로** — J09 `CollectedData` 단일 상자 → J02 대본(데이터 내장 슬롯) → **J06 `process_draft` 단일 이미지 진입점**(실패차트→AI사진·최소 5장 보장·썸네일 필수) → J08. 카테고리는 데이터 공급원과 `CATEGORY_POLICY` 노브만 다름 |
-| 🔎 **발행 전 품질 게이트** | 발행 *전* harness Layer 3 에서 사실성(출처 대조 + 웹 재검증)·유익성·매력도를 LLM(Opus 4.8)으로 검수 → 미달 시 통과할 때까지 재작성 (결함은 절대 송출 안 됨) ★ 2026-06-28 |
+| 🔎 **발행 전 품질 게이트** | 발행 *전* harness Layer 3 에서 사실성(출처 대조 + 웹 재검증)·유익성·매력도를 LLM(Sonnet 5)으로 검수 → 미달 시 통과할 때까지 재작성 (결함은 절대 송출 안 됨) ★ 2026-06-28 |
 | 🖼️ **AI 이미지 · 85점 인포그래픽 엔진** | Pollinations.ai 사진(매 글 새 이미지·dedupe) + **LLM 디자인 디렉터**가 데이터마다 고유 인포그래픽 설계(레이아웃·차트·색 매번 다름) — 표도 인포그래픽화. 차트 수치는 **JARVIS09 실데이터로만**(거짓 수치 원천 차단, ADR 010) |
 | 📡 **트렌드 레이더** | Google Trends + 네이버 DataLab 실시간 수집 → 핫 키워드 자동 탐지 |
-| 🛡️ **자동 캐치·수정 시스템** | `catch()` 단일 진입점 → Tier 1(패턴·Contextual Bandit) → Tier 2(LLM Opus 4.8) — LOW/MED/HIGH 자동 복구 (CRITICAL은 패턴만 + 수동 검토) |
+| 🛡️ **자동 캐치·수정 시스템** | `catch()` 단일 진입점 → Tier 1(패턴·Contextual Bandit) → Tier 2(LLM Sonnet 5) — LOW/MED/HIGH 자동 복구 (CRITICAL은 패턴만 + 수동 검토) |
 | 🔒 **보안 전문가급 안전장치** | Circuit breaker · 빈도 기반 severity 자동 상향(3회) · 보안 파일 수정 절대 금지 |
 | 🏛️ **헌법형 거버넌스** | `precommit_check.py` 1,123줄 — 45종 정책을 pre-commit 훅·주간 감사로 강제 (+ 데몬 부팅은 `preflight.py` 검증) |
 | 📊 **통합 대시보드** | hub.py 단일 진입점(port 9199) — 발행 이력·오류 현황·학습 곡선 한눈에 |
@@ -93,14 +93,16 @@
 
 ---
 
-## 🆕 최근 주요 업데이트 (2026-06-29 ~ 07-05)
+## 🆕 최근 주요 업데이트 (2026-06-29 ~ 07-06)
 
 | 영역 | 변경 | 근거 |
 |------|------|------|
+| **★ 재시도 상한 전면 3회 통일** | 코드베이스 전수 스캔(17개 파일)으로 "실패 시 N회 재시도 후 포기" 패턴을 모두 찾아 **max 3회**로 통일 — Tier 2(LLM) 자동수정 재시도 상한(`MAX_LLM_ATTEMPTS`) 신설 포함. 조용히 반복 호출되며 토큰을 소모하던 `job_retry_pending` 의 타임스탬프 키 버그(근본원인)도 함께 수정 | 사용자 박제 2026-07-06 |
 | **★ 통합 콘텐츠 파이프라인** | 경제·테마가 **하나의 공통 파이프라인**을 탄다 — J09 단일 `CollectedData`(datasets·docs·facts·**entities**) → J02 대본(데이터 내장 슬롯) → **J06 `process_draft` 단일 이미지 진입점**(실패차트→AI사진 폴백·최소 5장 top-up·썸네일 필수) → J08. 경제 embed-first→placeholder-first 컷오버, 검증 tolerance 통일(`grounds()` — 표시 올림/버림 or ±5%, 종목 재무밴드 ±10% 유지). 미래 카테고리는 `CATEGORY_POLICY` dict 한 줄로 상속 | 사용자 공동설계 2026-07-05 |
 | **표시 SSOT — 코드가 진실** | 웹 대시보드·텔레그램이 모델명·스케줄·개수 등 사실을 *하드코딩하지 않고 코드 정본에서 자동 파생*. 코드만 고치면 두 표시가 알아서 따라옴(2중·3중 수정 제거). `precommit ssot` 가드가 표시 파일 하드코딩을 커밋·부팅 시 차단 | 사용자 박제 |
 | **데몬 hang 자동 복구** | keeper 워치독이 프로세스 생존뿐 아니라 *스케줄러 heartbeat 신선도*까지 감시 → hang 시 SIGUSR1(faulthandler 스택 덤프)→SIGKILL→재시작. 얼어붙은 채 방치되던 사각지대 제거 | [ERRORS 319](JARVIS07_GUARDIAN/ERRORS.md) |
-| **모델 계층 상향** | Sonnet 4.6/Opus 4.6 → **Sonnet 5 / Opus 4.8** 2계층 단일화, Haiku 완전 폐지. 잔존 구 ID는 자가치유가 자동 정정 | [ADR 015](docs/decisions/015-model-tier-upgrade.md) |
+| **★ 모델 단일 계층 통일** | Sonnet 5 / Opus 4.8 2계층 → **Sonnet 5 단일 모델**로 재통일 (Opus 4.8 폐지) — 고비용 모델 오호출 구조적 차단 | [ADR 017](docs/decisions/017-model-single-tier-sonnet5.md) |
+| **모델 계층 상향** (대체됨 by ADR 017) | Sonnet 4.6/Opus 4.6 → **Sonnet 5 / Opus 4.8** 2계층 단일화, Haiku 완전 폐지. 잔존 구 ID는 자가치유가 자동 정정 | [ADR 015](docs/decisions/015-model-tier-upgrade.md) |
 | **밴딧 = 유한 전략** | Tier 1 Contextual Bandit 정밀보완 — arm을 오류지문이 아닌 *소수 fixer 전략*으로 고정(오염 게이트+차원 상한) → 상태 **402MB→45B**, 죽은 신호 제거 | [ADR 016](docs/decisions/016-bandit-finite-strategy-arms.md) |
 | **설계-우선 리서치 + 3-패스 작성** | 리서치 설계→근거팩(fact·출처·커버리지)→갭 재수집 순환 + 서사 설계·자기비평 다층 패스로 대본 품질 강화 | [ADR 012](docs/decisions/012-research-first-pipeline.md) |
 | **인포그래픽 엔진** | 고정 템플릿 → **LLM 디자인 디렉터** — 데이터마다 레이아웃·차트·색이 다른 85점 인포그래픽. `<table>`도 인포그래픽화(내용 보존). 차트 설계 LLM을 **글당 1회 배치**로 묶어 rate-limit 최소화 | ERRORS [288] |
@@ -128,7 +130,7 @@ flowchart TD
     H -. "📈 학습 루프" .-> C
 
     subgraph COMMON["⚙️ 공통 레이어"]
-        I["JARVIS07 GUARDIAN\ncatch() 단일 진입점 → Tier 1(패턴·Bandit) → Tier 2(LLM Opus)\nLOW/MED/HIGH 자동수정(critical 제외) · Circuit breaker · 학습 루프"]
+        I["JARVIS07 GUARDIAN\ncatch() 단일 진입점 → Tier 1(패턴·Bandit) → Tier 2(LLM Sonnet 5)\nLOW/MED/HIGH 자동수정(critical 제외) · Circuit breaker · 학습 루프"]
         J["JARVIS00 INFRA\npreflight · harness · event bus\n/status · /restart"]
         K["JARVIS04 SCHEDULER\nAPScheduler 단일 진입점\n모든 cron 잡 관리"]
         O["JARVIS05 VISION\n전 에이전트 메트릭 수집·집계·시각화\nFastAPI :8505"]
@@ -218,7 +220,7 @@ gantt
 | 검수 차원 | 방식 | 실패 시 |
 |----------|------|--------|
 | **사실성** (거짓 0) | 모든 사실 주장 → 수집 출처 대조 + JARVIS09 웹 재검증(`web_verify`) | 출처·웹 모두 확인 불가 → **차단** |
-| **유익성·매력도** | `engagement_judge`(Opus 4.8) 0~100 채점, 임계 70/70 | 미달 → **재작성 순환** |
+| **유익성·매력도** | `engagement_judge`(Sonnet 5) 0~100 채점, 임계 70/70 | 미달 → **재작성 순환** |
 | **이미지·차트 사실성** (ADR 010) | 차트 수치를 JARVIS09 실데이터와 대조(`verify_chart_spec`) · 출처(provenance) 없는 수치 렌더 차단 | 검증분 재구성 → 실데이터 대체 → 없으면 숫자 없는 카드 |
 
 - **두 검증 철학**: 사실성은 *출처 grounding*(LLM이 "진실인가"가 아니라 "출처가 뒷받침하는가"를 판정 → 환각 원천 차단), 매력도는 *LLM judge*(잘못 판단해도 비용 낮음 → 재생성).
@@ -236,7 +238,7 @@ gantt
 
 > **★ 2026-06-28 업그레이드 — 자가 학습 루프 완전 폐쇄**
 > - **SDK/LLM 자동수정도 Contextual Bandit 을 학습**: Tier 2(Claude Agent SDK·LLM) 수정이 성공하면 *원본 오류 지문* 으로 `llm_patch` 등록 + 밴딧 arm 에 양의 보상 → 같은 오류 재발 시 Tier 1 이 **LLM 호출 0** 으로 즉시 처리 (`record_sdk_fix` / `apply_fix` fallback).
-> - **품질 게이트**: 모든 학습은 `eval_agent` 의 안전성·정확성·재사용성 채점(Opus 4.8, 80점+)을 통과한 것만 등록 → 밴딧이 *크게* 가 아니라 *똑똑하게* 성장 (나쁜·일회성 패치는 등록·보상 차단).
+> - **품질 게이트**: 모든 학습은 `eval_agent` 의 안전성·정확성·재사용성 채점(Sonnet 5, 80점+)을 통과한 것만 등록 → 밴딧이 *크게* 가 아니라 *똑똑하게* 성장 (나쁜·일회성 패치는 등록·보상 차단).
 > - **발행 전 LLM-0 sweep ↔ 새벽 심층 감사 분리**: 발행 직전엔 패턴·밴딧으로 즉시 고칠 수 있는 것만 (수초, 발행 지연 0), 비싼 LLM 심층 감사는 한가한 새벽 04:30 으로 분리 → 학습 자산이 쌓일수록 다음 발행 전 sweep 자동수리율↑ (**복리 학습 루프**).
 
 ```mermaid
@@ -257,12 +259,12 @@ flowchart LR
 
     subgraph TIERS["자동 수정 (정수 티어, 1부터)"]
         T1{"Tier 1\n패턴·Contextual Bandit\nGroup1(hit≥3)+Group2(신규)\nLLM 호출 0"}
-        T2{"Tier 2\nLLM Claude Opus 4.8\nAST 검증 + .bak 롤백"}
+        T2{"Tier 2\nLLM Claude Sonnet 5\nAST 검증 + .bak 롤백"}
     end
 
     T1 -->|"✅ 수정"| OK
     T1 -->|"패턴 없음"| T2
-    T2 -->|"✅ 수정"| EVAL{"eval_agent 품질 채점\nsafe·accurate·재사용 (Opus 4.8)\n80점+ 통과분만"}
+    T2 -->|"✅ 수정"| EVAL{"eval_agent 품질 채점\nsafe·accurate·재사용 (Sonnet 5)\n80점+ 통과분만"}
     EVAL -->|"통과"| OK
     EVAL -->|"거부"| DROP["학습·보상 안 함\n(밴딧 오염 차단)"]
 
@@ -417,7 +419,7 @@ streamlit run hub.py --server.port 9199
 
 | 분류 | 사용 기술 | 역할 |
 |------|----------|------|
-| **LLM** | Anthropic Claude Sonnet 5 / Opus 4.8 | 글 생성·분석 (Sonnet 5) · 코드 자가 수정 (Opus 4.8) |
+| **LLM** | Anthropic Claude Sonnet 5 | 글 생성·분석·코드 자가 수정 전체 — 단일 모델 통일 (ADR 017) |
 | **에이전트 프레임워크** | LangGraph ReAct + SqliteSaver | 멀티스텝 추론·체크포인트 |
 | **스케줄러** | APScheduler 3.x | cron·interval 단일 진입점 |
 | **브라우저 자동화** | Selenium 4 + Chrome | 네이버·티스토리 발행 |

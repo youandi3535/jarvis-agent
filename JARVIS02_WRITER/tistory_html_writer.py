@@ -149,8 +149,8 @@ def _generate_svg_pass2(
     """★ 구버전 Plotly 경로 폐기 (사용자 박제 2026-07-05 — ERRORS [355]).
 
     신형식 [CHART_N]...[/CHART_N] 슬롯은 slot_renderer → infographic_engine 이 처리.
-    구형식 [CHART_N: text] 잔존 슬롯은 _generate_svg_pass2_and_replace 의 AI 사진 폴백이 처리.
-    이 함수는 호환성을 위해 시그니처를 유지하나 항상 "" 반환 (AI 사진 폴백이 이어받음).
+    구형식 [CHART_N: text] 잔존 슬롯은 렌더 실패 시 빈 슬롯으로 남긴다.
+    이 함수는 호환성을 위해 시그니처를 유지하나 항상 "" 반환.
     """
     return ""
 
@@ -190,128 +190,6 @@ def _generate_complete_article_cli(
     return title_part + "CONTENT:" + content_final
 
 
-_MIN_IMAGES = 8  # 썸네일 제외 본문 최소 이미지 수
-
-
-def _ai_photo_html(path: "Path | str", alt: str) -> str:
-    return (f'<p><img src="{path}" alt="{alt}" '
-            f'style="width:100%;max-width:760px;border-radius:8px;'
-            f'margin:16px auto;display:block;"></p>')
-
-
-def _generate_ai_photo_for_slot(description: str, keyword: str, out_dir: "Path") -> str:
-    """차트 실패 슬롯 → *주제 실사진* 1장 (사용자 박제 2026-07-01 부차B).
-
-    ★ 옛 방식은 추상 차트-aspect(description='규모·추이','구성 비중' 등)를 프롬프트에 넣어
-      translate LLM 이 *은유·초현실* 이미지로 해석 → Pollinations 가 기형(미로 돌·기형 동물·
-      정체불명 조형물)으로 렌더 → 사실성·품질 훼손. (사용자 지적 2026-07-01)
-    ★ 새 방식: 추상 aspect 를 *버리고* 주제(keyword)의 *구체적 실사 장면* 만 프롬프트로.
-      keyword 가 주제를 앵커(KTX→열차, 로보스타→로봇, 기흥구→아파트) → 은유 없이 실사.
-      초현실·추상 금지 negative 는 translate() 가 부착(부차B ②)."""
-    try:
-        from JARVIS06_IMAGE.image_agent import generate_photo as _gp
-        import random as _rand, datetime as _dt
-        # 구체 촬영 앵글(모두 실사) — 같은 keyword 여러 슬롯이라도 다양화. 추상어 배제.
-        _angles = [
-            "넓은 전경, 자연광",
-            "현장에서 일하는 사람들",
-            "제품·설비 중심 클로즈업",
-            "도시·건물 배경, 낮",
-            "실내 현장, 밝은 조명",
-        ]
-        _today = _dt.date.today().isoformat()
-        prompt_ko = (f"{keyword} 를 직접 보여주는 실제 다큐멘터리 사진, "
-                     f"{_rand.choice(_angles)}, 주제와 관련된 구체적 사물·현장·사람, 사실적 ({_today})")
-        path = _gp(prompt_ko=prompt_ko, out_dir=out_dir)
-        if path:
-            return _ai_photo_html(path, (keyword or description)[:40].replace('"', "'"))
-    except Exception as e:
-        print(f"  ⚠️ AI 사진(슬롯) 실패: {e}")
-    return ""
-
-
-def _generate_extra_ai_photos(keyword: str, sector: str, count: int, out_dir: "Path") -> list:
-    """최소 이미지 수 충족 목적 추가 AI 사진. 글 주제에 맞는 다양한 관점으로 생성."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    try:
-        from JARVIS06_IMAGE.image_agent import generate_photo as _gp
-    except ImportError:
-        return []
-
-    import random as _rand2, datetime as _dt2
-    _today2 = _dt2.date.today().isoformat()
-    # 날짜를 seed에 포함시켜 매일 다른 프롬프트 조합 선택
-    _rng = _rand2.Random(hash(f"{keyword}|{_today2}"))
-    # ★ 글 관련성 강제 (사용자 박제 2026-07-03): 모든 프롬프트는 keyword(글 주제)를
-    #   *실제 피사체* 로 앵커. 야경·정부청사 등 주제 비고정 배경 프롬프트 금지 —
-    #   주제와 무관한 임의 사진(poll_*.png 무관 이미지 사고) 원인. 슬롯 사진과 동일 원칙(부차B).
-    _base_prompts = [
-        f"{keyword} 를 직접 보여주는 실제 다큐멘터리 사진, 넓은 전경, 자연광",
-        f"{keyword} 관련 제품·설비 중심 클로즈업, 실제 현장, 사실적",
-        f"{keyword} 현장에서 일하는 사람들, 실제 작업 장면, 자연광",
-        f"{keyword} 관련 실제 산업 현장 내부, 밝은 조명, 사실적",
-        f"{keyword} 관련 실제 장소·건물 외관, 도시 배경, 낮, 실사",
-        f"{keyword} 관련 물류·운송 현장, 실제 차량·설비, 사실적",
-        f"{keyword} 관련 연구개발 현장, 실제 실험실 장비와 연구원",
-        f"{keyword} 자료를 검토하는 사람, 실제 사무실, 모니터 화면, 자연광",
-        f"{keyword} 관련 생산 라인, 실제 공장 내부, 사실적",
-        f"{keyword} 관련 매장·거래 현장, 실제 사람들, 낮, 실사",
-    ]
-    _rng.shuffle(_base_prompts)
-    prompts = _base_prompts[:count]
-    results: dict[int, str] = {}
-
-    # ★ JARVIS06 CLAUDE.md 규정: 외부 이미지 API 순차 실행 (max_workers=1 강제)
-    # 병렬 실행(max_workers≥2) 시 Pollinations 429 오류 전부 실패 직결
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        futures = {
-            executor.submit(_gp, prompt_ko=p, out_dir=out_dir): (i, p)
-            for i, p in enumerate(prompts)
-        }
-        for future in as_completed(futures):
-            idx, prompt = futures[future]
-            try:
-                path = future.result()
-                if path:
-                    results[idx] = _ai_photo_html(path, prompt[:40].replace('"', "'"))
-                    print(f"  🖼️ 추가 AI 사진 {idx+1}/{count} 완료")
-            except Exception as e:
-                print(f"  ⚠️ 추가 AI 사진 {idx+1} 실패: {e}")
-
-    return [results[i] for i in sorted(results)]
-
-
-def _insert_extra_photos(content: str, photos: list) -> str:
-    """추가 AI 사진을 이미지 없는 h2/h3 섹션에 배포하고 나머지는 말미에 추가."""
-    if not photos:
-        return content
-
-    h_matches = list(re.finditer(r'<h[23][^>]*>.*?</h[23]>', content, re.IGNORECASE | re.DOTALL))
-    if not h_matches:
-        return content + "\n" + "\n".join(photos)
-
-    # 이미지 없는 섹션 끝 위치 수집
-    img_free_ends: list[int] = []
-    for i, m in enumerate(h_matches):
-        end = h_matches[i + 1].start() if i + 1 < len(h_matches) else len(content)
-        section = content[m.start():end]
-        if "<img" not in section and "<figure" not in section and "<svg" not in section:
-            img_free_ends.append(end)
-
-    # 역순으로 삽입 (뒤에서 앞으로 — 오프셋 변화 영향 없음)
-    result = content
-    slots_used = min(len(img_free_ends), len(photos))
-    for pos, photo in zip(reversed(img_free_ends[:slots_used]), reversed(photos[:slots_used])):
-        result = result[:pos] + "\n" + photo + "\n" + result[pos:]
-
-    # 남은 사진은 말미에 추가
-    remaining = photos[slots_used:]
-    if remaining:
-        result += "\n" + "\n".join(remaining)
-
-    return result
-
-
 def _generate_svg_pass2_and_replace(
     content: str,
     keyword: str,
@@ -325,12 +203,13 @@ def _generate_svg_pass2_and_replace(
     ★ 데이터 내장 슬롯 우선 (사용자 박제 2026-07-03): 자비스02 가 대본에
     [CHART_N]...[/CHART_N] 블록으로 차트 데이터 전체를 박아 옴 → 자비스06 은
     ref_datasets(자비스09 원본 — 검증 대조용) 대조 후 렌더만. 검증·렌더 실패
-    슬롯은 구형식 [CHART_N: 제목] 으로 강등 → 아래 AI 사진 폴백이 이어받음.
+    슬롯은 구형식 [CHART_N: 제목] 으로 강등 → 빈 슬롯으로 남김
+    (★ 본문 AI 사진 전면 폐기 2026-07-06 — 거짓/무관 이미지 < 이미지 없음).
 
-    (구형식 [CHART_N: 설명] 슬롯 = 세션풀 기반 종전 경로 — 폴백 호환)
+    (구형식 [CHART_N: 설명] 슬롯 = 세션풀 기반 종전 경로 — 렌더 실패 시 빈 슬롯)
 
     Returns:
-        str: 슬롯이 실제 이미지로 치환된 content (최소 _MIN_IMAGES 장 보장 시도)
+        str: 슬롯이 실제 이미지로 치환된 content (구형식 실패 슬롯은 빈 슬롯)
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -349,12 +228,12 @@ def _generate_svg_pass2_and_replace(
     except Exception as _sre:
         print(f"  ⚠️ [Pass-2/{platform}] 내장 슬롯 처리 스킵: {_sre}")
 
-    # 구형식 [CHART_N: 설명] 잔존 슬롯 — _generate_svg_pass2는 "" 반환(폐기), AI 사진 폴백이 처리
+    # 구형식 [CHART_N: 설명] 잔존 슬롯 — _generate_svg_pass2는 "" 반환(폐기), 렌더 실패 시 빈 슬롯
     placeholders = re.findall(r"\[CHART_(\d+):\s*([^\]]+)\]", content)
     if not placeholders:
         return content
 
-    print(f"  ⚠️ [Pass-2/{platform}] 구형식 슬롯 {len(placeholders)}개 → AI 사진 대체")
+    print(f"  ⚠️ [Pass-2/{platform}] 구형식 슬롯 {len(placeholders)}개 → 빈 슬롯 처리")
     _img_dir2 = OUTPUT_IMG_DIR / (f"economic_{platform}" if platform in ("tistory", "naver") else "economic_tistory")
     import uuid as _uuid2
     _run_id2 = _uuid2.uuid4().hex[:8]
@@ -385,30 +264,9 @@ def _generate_svg_pass2_and_replace(
                 print(f"  ⚠️ CHART_pos{pos} 스레드 오류: {e}")
                 svg_map[pos] = ""
 
-    # ── 2단계: 차트 실패 슬롯 → AI 사진 대체 (병렬) ─────────────────────────
-    failed_slots = [(pos, desc.strip()) for pos, (_idx, desc) in zip(
-        [p for p, _, _ in _items], placeholders
-    ) if not svg_map.get(pos)]
-
-    if failed_slots:
-        print(f"  📸 [Pass-2] 차트 실패 {len(failed_slots)}개 슬롯 → AI 사진 대체...")
-        # ★ JARVIS06 CLAUDE.md 규정: 외부 이미지 API 순차 실행 (max_workers=1 강제)
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            ai_futures = {
-                executor.submit(_generate_ai_photo_for_slot, desc, keyword, _img_dir2): pos
-                for pos, desc in failed_slots
-            }
-            for future in as_completed(ai_futures):
-                pos = ai_futures[future]
-                try:
-                    ai_html = future.result()
-                    if ai_html:
-                        svg_map[pos] = ai_html
-                        print(f"  🖼️ CHART_pos{pos} AI 사진으로 대체 완료")
-                    else:
-                        print(f"  ⏭️ CHART_pos{pos} AI 사진도 실패 — 슬롯 제거")
-                except Exception as e:
-                    print(f"  ⚠️ CHART_pos{pos} AI 사진 오류: {e}")
+    # ── 2단계: 차트 실패 슬롯 → 빈 슬롯 (★ 본문 AI 사진 전면 폐기 2026-07-06) ──
+    #   렌더 실패 구형식 슬롯은 AI 사진으로 대체하지 않고 빈 슬롯으로 남긴다.
+    #   본문 시각물은 인포그래픽 디자인만 사용 (거짓/무관 이미지 < 이미지 없음).
 
     # ── 플레이스홀더 치환 ─────────────────────────────────────────────────────
     _replace_pos = [0]
@@ -420,21 +278,8 @@ def _generate_svg_pass2_and_replace(
 
     content_final = re.sub(r"\[CHART_(\d+):[^\]]+\]", _replace_placeholder, content)
 
-    # ── 3단계: 최소 이미지 수 확인 → 부족분 AI 사진 추가 ──────────────────────
     total_ok = sum(1 for v in svg_map.values() if v)
-    print(f"  ✅ [Pass-2/{platform}] 이미지 {total_ok}/{len(placeholders)}개 치환 (차트+AI사진)")
-
-    if total_ok < _MIN_IMAGES:
-        needed = _MIN_IMAGES - total_ok
-        print(f"  📸 [Pass-2] 이미지 {total_ok}개 < 최소 {_MIN_IMAGES}개 → AI 사진 {needed}개 추가 생성...")
-        extra = _generate_extra_ai_photos(keyword, sector, needed, _img_dir2)
-        if extra:
-            content_final = _insert_extra_photos(content_final, extra)
-            print(f"  ✅ [Pass-2] 추가 AI 사진 {len(extra)}개 삽입 → 총 {total_ok + len(extra)}개")
-        else:
-            print(f"  ⚠️ [Pass-2] 추가 AI 사진 생성 실패")
-    else:
-        print(f"  ✅ [Pass-2] 최소 이미지 수 {_MIN_IMAGES}장 충족")
+    print(f"  ✅ [Pass-2/{platform}] 이미지 {total_ok}/{len(placeholders)}개 치환 (구형식 실패 슬롯은 빈 슬롯)")
 
     return content_final
 

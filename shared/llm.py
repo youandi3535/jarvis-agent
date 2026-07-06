@@ -41,7 +41,7 @@ class ModelSpec:
     description: str = ""
 
 
-# ★ 모델 계층 — 사용자 박제 2026-07-04 (ADR 015): Sonnet 5 / Opus 4.8 2계층 단일화.
+# ★ 모델 계층 — 사용자 박제 2026-07-06 (ADR 017): Sonnet 5 단일 모델 통일 (ADR 015 폐지).
 #   alias→model_id 매핑은 이 MODELS dict 가 시스템 전체의 유일 소스 — 다른 곳은 전부 파생.
 # 자비스 모델 카탈로그 — 한 곳에서 관리
 MODELS: dict[str, ModelSpec] = {
@@ -73,61 +73,54 @@ MODELS: dict[str, ModelSpec] = {
         temperature=0.2,
         description="post_quality·daily_review 분석 (Sonnet 5)",
     ),
-    # ★ 코드 수정·오류 분석 (Opus 4.8)
     "coder": ModelSpec(
         alias="coder",
-        model_id="claude-opus-4-8",
+        model_id="claude-sonnet-5",
         max_tokens=8000,
         temperature=0.1,
-        description="코드 수정·patch 생성·자가수정 (Opus 4.8 — 최강 추론, 오류 수정 전용)",
+        description="코드 수정·patch 생성·자가수정 (Sonnet 5 — 오류 수정 전용)",
     ),
-    # ★ 오류 분석·패치 생성 (Opus 4.8)
     "guardian": ModelSpec(
         alias="guardian",
-        model_id="claude-opus-4-8",
+        model_id="claude-sonnet-5",
         max_tokens=8000,
         temperature=0.1,
-        description="JARVIS07 오류 분석·패치 생성 (Opus 4.8 — 최강 추론)",
+        description="JARVIS07 오류 분석·패치 생성 (Sonnet 5)",
     ),
-    # ★ 아키텍처 설계 (Opus 4.8 — 최신·최강)
     "architect": ModelSpec(
         alias="architect",
-        model_id="claude-opus-4-8",
+        model_id="claude-sonnet-5",
         max_tokens=10000,
         temperature=0.3,
-        description="ARCHITECT 새 에이전트·시스템 설계 (Opus 4.8 — 최강 추론)",
+        description="ARCHITECT 새 에이전트·시스템 설계 (Sonnet 5)",
     ),
-    # ★ 복잡 진단·디버깅 (Opus 4.8)
     "diagnostic": ModelSpec(
         alias="diagnostic",
-        model_id="claude-opus-4-8",
+        model_id="claude-sonnet-5",
         max_tokens=6000,
         temperature=0.2,
-        description="복잡 multi-cause traceback 진단·근본 원인 추론 (Opus 4.8)",
+        description="복잡 multi-cause traceback 진단·근본 원인 추론 (Sonnet 5)",
     ),
-    # ★ 자가 학습 평가 게이트 (Opus 4.8) — eval_agent 가 llm_patch 등록 여부 채점
     "learn_eval": ModelSpec(
         alias="learn_eval",
-        model_id="claude-opus-4-8",
+        model_id="claude-sonnet-5",
         max_tokens=4000,
         temperature=0.1,
-        description="learned_patterns 등록 게이트 — patch 안전성·정확성·재사용 가치 채점 (Opus 4.8)",
+        description="learned_patterns 등록 게이트 — patch 안전성·정확성·재사용 가치 채점 (Sonnet 5)",
     ),
-    # ★ 발행 전 품질 게이트 — 사실성 판정 (Opus 4.8, temp 0 결정성 우선)
     "fact_judge": ModelSpec(
         alias="fact_judge",
-        model_id="claude-opus-4-8",
+        model_id="claude-sonnet-5",
         max_tokens=4000,
         temperature=0.0,
-        description="발행 전 사실성 검수 — claim 추출·출처 대조 판정 (Opus 4.8)",
+        description="발행 전 사실성 검수 — claim 추출·출처 대조 판정 (Sonnet 5, temp 0 결정성 우선)",
     ),
-    # ★ 발행 전 품질 게이트 — 유익성·매력도 채점 (Opus 4.8)
     "engagement_judge": ModelSpec(
         alias="engagement_judge",
-        model_id="claude-opus-4-8",
+        model_id="claude-sonnet-5",
         max_tokens=2500,
         temperature=0.2,
-        description="발행 전 유익성·매력도 채점 — 독자 흡인력 judge (Opus 4.8)",
+        description="발행 전 유익성·매력도 채점 — 독자 흡인력 judge (Sonnet 5)",
     ),
 }
 
@@ -146,7 +139,6 @@ _DEFAULT_MODEL_ID = MODELS["writer"].model_id
 def pretty_model_id(model_id: str) -> str:
     """모델 ID → 사람이 읽는 라벨.
 
-    'claude-opus-4-8'  → 'Opus 4.8'
     'claude-sonnet-5'  → 'Sonnet 5'
     """
     s = (model_id or "").replace("claude-", "")
@@ -565,8 +557,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
                 _nonessential: bool = False, **overrides) -> str:
     """Claude Code SDK 호출 단일 진입점.
 
-    텍스트 생성(writer/router/analyzer): Sonnet 5
-    오류수정·코드·설계(coder/guardian/architect/diagnostic/learn_eval): Opus 4.8
+    모든 alias — Sonnet 5 단일 모델 (ADR 017, 사용자 박제 2026-07-06 — ADR 015 폐지).
 
     ★ rate-limit 재시도 (사용자 박제 2026-07-01): 빈 응답이면 지수 백오프+지터로
       재시도. ★ 회로 차단기 (ERRORS [288] — 2026-07-03): 연속 *진짜 스로틀* ≥3 회 시
@@ -581,7 +572,9 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
     """
     import time as _t, random as _r
 
-    retries = max(1, _retries)
+    # ★ 재시도 최대 3회 상한 (사용자 박제 2026-07-06): 어떤 재시도도 3회 초과 금지.
+    #   기본 _retries=4 → 실효 3으로 캡. deadline/_nonessential/probe/open 강등은 더 낮춤.
+    retries = max(1, min(3, _retries))
     backoff = True
 
     # ★ 글로벌 데드라인 강등 — 발행 파이프라인(economic_poster 등)이 설정
@@ -614,6 +607,13 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
     result = ""
     throttled_seen = False
     for _attempt in range(retries):
+        # ★ 전역 하트비트 (사용자 박제 2026-07-06): LLM 호출 = 진행 신호 → freeze 워치독
+        #   이 오래 걸리는 정상 LLM 작업을 멈춤으로 오탐하지 않도록 매 시도마다 beat.
+        try:
+            from JARVIS00_INFRA.watchdog import beat as _wd_beat
+            _wd_beat()
+        except Exception:
+            pass
         try:
             _LAST_CALL.throttled = False
             result = _run_sdk_sync(prompt, model=model, system=system, timeout=timeout) or ""

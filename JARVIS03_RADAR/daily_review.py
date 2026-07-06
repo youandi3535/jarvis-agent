@@ -612,5 +612,7 @@ if __name__ == "__main__":
         print(f"⚠️ preflight 호출 실패: {_ee}")
 
     arg = sys.argv[1] if len(sys.argv) > 1 else None
-    res = run_daily_review(arg)
+    from JARVIS00_INFRA.watchdog import guard_main
+    with guard_main("일일 회고", deadline_sec=1800):
+        res = run_daily_review(arg)
     print(json.dumps(res, ensure_ascii=False, indent=2))

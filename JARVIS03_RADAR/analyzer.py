@@ -290,8 +290,8 @@ def _classify_with_llm(keywords: list[str], context: list[str] | None = None) ->
     parsed: dict[str, str] = {}
     last_err: Exception | None = None
 
-    # 1회 실패 시 temperature 변경 후 재시도 (총 2회 시도)
-    for attempt in range(2):
+    # 실패 시 temperature 변경 후 재시도 (총 3회 시도 — 재시도 상한 통일)
+    for attempt in range(3):
         try:
             temp = 0.0 if attempt == 0 else 0.3
             raw = _inv(

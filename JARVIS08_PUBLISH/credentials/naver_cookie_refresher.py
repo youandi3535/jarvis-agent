@@ -481,9 +481,17 @@ if __name__ == "__main__":
 
     if "--manual" in sys.argv:
         # 수동 로그인 모드 (CAPTCHA 상황)
+        # ※ watchdog 미적용(보수적 스킵) — manual_login_and_save() 는 input() 으로 사람의
+        #    수동 로그인을 무한 대기하는 *대화형* 경로(무인 일회성 작업 아님). guard_main
+        #    (freeze 300s 무진전·deadline 초과 시 os._exit)으로 감싸면 사람이 CAPTCHA/기기인증을
+        #    푸는 도중 세션이 강제 종료됨 → 기존 동작(무한 대기) 위반이므로 감싸지 않음.
         success = manual_login_and_save()
         sys.exit(0 if success else 1)
 
     force = "--force" in sys.argv
-    success = refresh_naver_cookies(force=force)
+    # ── 정지 방어: --force/기본 자동 갱신은 무인 일회성 Selenium 작업 → guard_main 래핑
+    #    (freeze 300s 무진전 또는 deadline 600s 초과 시 GUARDIAN 보고 후 os._exit → 다음 예약 재시도)
+    from JARVIS00_INFRA.watchdog import guard_main  # 지역 import (순환 방지)
+    with guard_main("네이버 쿠키갱신", deadline_sec=600):
+        success = refresh_naver_cookies(force=force)
     sys.exit(0 if success else 1)

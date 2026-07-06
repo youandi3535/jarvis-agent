@@ -73,16 +73,22 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+
+from JARVIS00_INFRA.watchdog import (
+    Watchdog, StuckError, DEFAULT_ACTION_DEADLINE_SEC, FREEZE_LIMIT_SEC,
+)
 
 _log = logging.getLogger("jarvis")
 
 
 # ── 상수 ─────────────────────────────────────────────
 
-DEFAULT_MAX_ATTEMPTS = 5
-"""검증 순환 무한 루프 방지 — 기본 5회. 동작별 ActionDefinition.max_attempts 로 재정의 가능."""
+DEFAULT_MAX_ATTEMPTS = 3
+"""검증 순환 무한 루프 방지 — 기본 3회 (★ 사용자 박제 2026-07-06: 어떤 재시도도 최대 3회).
+동작별 ActionDefinition.max_attempts 로 재정의 가능(현 호출자 economic=3·theme=2·revise=3 등)."""
 
 HARNESS_VERSION = "v3"
 """Self-Evolving Harness 진화 단계 표기 (표시 SSOT — 대시보드·문서가 이 상수에서 파생)."""
@@ -192,7 +198,7 @@ class ActionDefinition:
                       - fixed_issues  : 즉시 패치 완료 (재생성 트리거 O, fingerprint 제외)
                       - unfixed_issues: 패치 불가   (재생성 트리거 O, fingerprint 포함)
                       등록하지 않으면 기존 GUARDIAN 보고만 → backward-compat 완전 보장.
-        max_attempts: 검증 순환 한계 (기본 DEFAULT_MAX_ATTEMPTS=5)
+        max_attempts: 검증 순환 한계 (기본 DEFAULT_MAX_ATTEMPTS=3)
     """
     name: str
     steps: list[ActionStep]
@@ -201,6 +207,10 @@ class ActionDefinition:
     precondition: Optional[Callable[[dict], list[Issue]]] = None
     fix: Optional[Callable[[dict, list[Issue]], tuple[list[Issue], list[Issue]]]] = None
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
+    # ★ 정지 방어 (사용자 박제 2026-07-06): 전체 데드라인(초) — 초과 시 중단(송출 안 함).
+    #   블로그 발행 액션은 1800(30분/블로그) 명시. 미지정 시 넉넉한 기본(60분) 안전망.
+    #   멈춤(freeze) 300초 워치독은 데드라인과 무관하게 항상 적용.
+    deadline_sec: float = DEFAULT_ACTION_DEADLINE_SEC
 
 
 @dataclass
@@ -370,11 +380,13 @@ def _find_resume_step(action_def: ActionDefinition, last_issues: list[Issue]) ->
 
 
 def _execute_steps(action_def: ActionDefinition, state: dict,
-                   from_step_name: Optional[str] = None) -> dict:
+                   from_step_name: Optional[str] = None,
+                   wd: Optional[Watchdog] = None) -> dict:
     """Layer 2 — 수행 단계 시퀀스 실행.
 
     from_step_name 가 주어지면 그 step 부터 *재실행*. 이전 step 의 결과는 state 에 유지.
     step 실행 자체가 폭발 시 state["__step_error__"] = Issue 박고 즉시 반환.
+    wd(워치독): 스텝마다 beat()(freeze 리셋) + check()(데드라인 초과면 StuckError 전파).
     """
     start_idx = 0
     if from_step_name:
@@ -384,6 +396,9 @@ def _execute_steps(action_def: ActionDefinition, state: dict,
                 break
 
     for step in action_def.steps[start_idx:]:
+        if wd is not None:
+            wd.check()      # 데드라인 초과 시 StuckError → run_action 이 escalation
+            wd.beat()       # 스텝 진입 = 진행 신호 (freeze 카운터 리셋)
         try:
             state = step(state)
         except Exception as e:
@@ -454,15 +469,42 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
         _notify_escalation(action_def.name, 0, [dup_issue], reason=reason)
         return result
 
+    # ── ★ 정지 방어 워치독 (사용자 박제 2026-07-06) ──
+    #   · 데드라인: action_def.deadline_sec 초과 시 중단(블로그 발행=30분).
+    #   · 멈춤(freeze): 300초 무진전 시 중단. killable subprocess 면 os._exit(다음 예약 재시도).
+    #   중단 = 검증 순환 밖 강제 종료 → escalation(송출 절대 안 함) + GUARDIAN 원인 진단.
+    def _on_stuck(name: str, reason: str) -> None:
+        try:
+            iss = [Issue(step="전체", kind="stuck", detail=reason)]
+            _report_issues_to_guardian(name, result.attempts, iss)
+            _notify_escalation(name, result.attempts, iss, reason=reason)
+        except Exception:
+            pass
+
     try:
         _log.info(f"[harness] ▶️ 동작 시작: {action_def.name}")
-        return _run_action_locked(action_def, state, result)
+        with Watchdog(action_def.name, deadline_sec=action_def.deadline_sec,
+                      freeze_sec=FREEZE_LIMIT_SEC, on_stuck=_on_stuck) as _wd:
+            return _run_action_locked(action_def, state, result, _wd)
+    except StuckError as _se:
+        reason = str(_se)
+        _log.error(f"[harness] ⏱ 정지 감지 — {action_def.name}: {reason} (송출 안 함)")
+        iss = [Issue(step="전체", kind="stuck", detail=reason)]
+        result.issues_history.append(iss)
+        result.escalation_reason = reason
+        try:
+            _report_issues_to_guardian(action_def.name, result.attempts, iss)
+            _notify_escalation(action_def.name, result.attempts, iss, reason=reason)
+        except Exception:
+            pass
+        return result
     finally:
         _lock.release()
 
 
 def _run_action_locked(action_def: ActionDefinition, state: dict,
-                       result: ActionResult) -> ActionResult:
+                       result: ActionResult,
+                       wd: Optional[Watchdog] = None) -> ActionResult:
     """run_action 본체 — 락 보유 상태에서만 호출. _ACTION_LOCKS 외부에서 직접 호출 금지."""
 
     # ── Layer 1: precondition (선택) ──
@@ -487,6 +529,8 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
     # ── Layer 2 + 3: 수행 + 검증 순환 ──
     for attempt in range(1, action_def.max_attempts + 1):
         result.attempts = attempt
+        if wd is not None:
+            wd.check()      # 시도 시작 전 데드라인 체크 (초과 시 StuckError → escalation)
 
         # 재시도는 *문제 step 부터* (이전 시도의 issues 에서 식별)
         from_step = None
@@ -494,7 +538,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             from_step = _find_resume_step(action_def, result.issues_history[-1])
 
         # Layer 2: 수행 단계 실행
-        state = _execute_steps(action_def, state, from_step_name=from_step)
+        state = _execute_steps(action_def, state, from_step_name=from_step, wd=wd)
         result.final_state = state
 
         # Layer 2 자체 실패 → 즉시 issue 로 박제

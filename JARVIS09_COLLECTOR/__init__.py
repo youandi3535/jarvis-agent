@@ -30,6 +30,7 @@ from JARVIS09_COLLECTOR.collector_engine import (
     collect_research,          # ★ 설계-우선 리서치 수집 (ADR 012 — 2026-07-02)
     collect_all,               # ★ 통합 수집 컴포저 → CollectedData (Step 3 — 2026-07-05)
     compose_collected,         # ★ 조각 → CollectedData 조립 (재수집 없음)
+    select_by_trust_quota,     # ★ 신뢰 서열 쿼터 선별 (사용자 박제 2026-07-06)
 )
 from JARVIS09_COLLECTOR.evidence_pack import (
     evidence_brief,            # ★ 대본 프롬프트용 근거 브리프 (ADR 012)
@@ -67,6 +68,7 @@ __all__ = [
     "collect_research",
     "collect_all",
     "compose_collected",
+    "select_by_trust_quota",
     "evidence_brief",
     "as_source_docs",
     "plan_research",

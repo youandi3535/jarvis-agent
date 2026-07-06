@@ -171,7 +171,7 @@ def _fetch_pytrends_trending(limit: int) -> list[str]:
     try:
         pt = TrendReq(
             hl="ko", tz=540,
-            timeout=(10, 30), retries=0,
+            timeout=(10, 30), retries=3,
             requests_args={"verify": True},
         )
         _disable_pytrends_proxy(pt)
@@ -199,7 +199,7 @@ def _fetch_pytrends_realtime(limit: int) -> list[str]:
     try:
         pt = TrendReq(
             hl="ko", tz=540,
-            timeout=(10, 30), retries=0,
+            timeout=(10, 30), retries=3,
             requests_args={"verify": True},
         )
         _disable_pytrends_proxy(pt)
@@ -344,7 +344,7 @@ def get_trending_searches(limit: int = 30) -> list[str]:
 
 
 def _pytrends() -> TrendReq:
-    return TrendReq(hl="ko", tz=540, timeout=(10, 25), retries=2, backoff_factor=0.5)
+    return TrendReq(hl="ko", tz=540, timeout=(10, 25), retries=3, backoff_factor=0.5)
 
 
 def get_interest_over_time(keywords: list[str], days: int = 30) -> dict[str, list[float]]:
@@ -365,7 +365,7 @@ def get_interest_over_time(keywords: list[str], days: int = 30) -> dict[str, lis
     timeframe = _safe_timeframe(days)
     for batch in batches:
         try:
-            pt = TrendReq(hl="ko", tz=540, timeout=(10, 30), retries=1)
+            pt = TrendReq(hl="ko", tz=540, timeout=(10, 30), retries=3)
             _disable_pytrends_proxy(pt)
             _build_payload_with_fallback(pt, batch, timeframe, geo="KR", cat=0)
             df = pt.interest_over_time()

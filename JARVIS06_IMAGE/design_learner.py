@@ -226,7 +226,9 @@ def _generate_recipe(existing: list, aesthetic: str) -> dict | None:
         '"eyebrow":"#000000","grid":"#eeeeee","hero_texture":"grid","card_radius":24}'
     )
     try:
-        raw = invoke_text("writer", prompt, max_tokens=700, timeout=90, _retries=1)
+        # ★ 재시도 최대 3회 (사용자 박제 2026-07-06) — 기존 1회는 비용/latency 고려로
+        #   의도적으로 낮춘 값이었으나 "무조건 3회" 지시에 따라 통일.
+        raw = invoke_text("writer", prompt, max_tokens=700, timeout=90, _retries=3)
         if not raw:
             return None
         m = re.search(r"\{.*\}", raw, re.S)
@@ -497,8 +499,8 @@ def job_learn_design() -> str:
     except Exception as e:
         log.warning(f"[design_learner] Phase0 비전 학습 예외 → 폴백: {e}")
 
-    # ── Phase 1: LLM 지식기반 창작 (best-effort, 2회) ──
-    for attempt in range(2):
+    # ── Phase 1: LLM 지식기반 창작 (best-effort, 3회 — 사용자 박제 2026-07-06) ──
+    for attempt in range(3):
         rec = _generate_recipe(recs, aesthetic)
         if not rec:
             continue
@@ -520,7 +522,9 @@ def job_learn_design() -> str:
             return _commit(rec, recs, today, "알고리즘 색이론", "결정론")
 
     # ── 최후 보루: 독창성만 완화(구조·대비·실렌더는 여전히 통과) — 그래도 1개 보장 ──
-    for s in range(9973, 9973 + 40):
+    #   ★ 재시도 최대 3회 (사용자 박제 2026-07-06): 게이트가 seed 무관 결정론이라
+    #   결과는 첫 반복에서 결정 — 40폭은 재시도 이득 0. 실패 시 GUARDIAN 에스컬레이션.
+    for s in range(9973, 9973 + 3):
         rec = _assign_id(_generate_recipe_deterministic(recs, s), recs, today, "learned-auto")
         try:
             _hex_rgb(rec["hero"][0])

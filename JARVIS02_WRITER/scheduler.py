@@ -427,16 +427,6 @@ def load_platform_result(theme: str) -> dict:
     return {"naver": False, "tistory": False}
 
 
-def reset_platform_result(theme: str, *platforms):
-    """특정 플랫폼 결과를 False로 리셋 — 텔레그램 단독 실행 명령 시 강제 재실행 보장"""
-    path = get_result_path(theme)
-    result = load_platform_result(theme)
-    for p in platforms:
-        result[p] = False
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
-    log(f"  🔄 결과 리셋: {theme} → {list(platforms)} = False")
-
 
 def clear_theme_cache(theme: str):
     """테마 원고 캐시 + 결과 파일 삭제"""
@@ -1239,11 +1229,12 @@ def run_economic_poster(*extra_flags):
         _ts = _dt.now().strftime('%Y%m%d_%H%M%S')
         _logpath = BASE_DIR / 'logs' / f'economic_{_ts}.log'
         cmd = [PYTHON, str(BASE_DIR / 'economic_poster.py'), '--scheduled'] + list(extra_flags)
-        # ★ timeout 3600→5400 (ERRORS [288][289] — 2026-07-03): rate-limit 지연 날에 발행
-        #   *도중* SIGKILL(편집창 작성 완료 후 발행창 직전) 이 최악의 실패 모드.
-        #   생성 속도는 shared/llm.py 회로 차단기가 담당, 여기는 발행 완주 여유 확보.
+        # ★ 부모 벽시계 backstop = 60분 (사용자 박제 2026-07-06: 5400→3600). 자식(harness)이
+        #   블로그(네이버·티스토리) 액션당 30분 데드라인 + 300초 freeze 워치독으로 스스로 중단
+        #   → 부모 timeout 은 그마저 안 될 때의 OS 최종 안전망(2블로그×30). 자식이 killable
+        #   subprocess(--scheduled)라 freeze 시 os._exit → 부모는 대개 이 값에 안 닿음.
         with open(_logpath, 'w', encoding='utf-8') as _lf:
-            result = subprocess.run(cmd, timeout=5400, stdout=_lf, stderr=subprocess.STDOUT, env=_env)
+            result = subprocess.run(cmd, timeout=3600, stdout=_lf, stderr=subprocess.STDOUT, env=_env)
 
         # 플랫폼별 결과 읽기 (economic_poster.py 가 JARVIS_EP_RESULT_FILE 에 기록)
         _platform_results = {"naver": True, "tistory": True}
@@ -1386,9 +1377,6 @@ def job_radar_pipeline_check():
 # ══════════════════════════════════════════
 #  진입점
 # ══════════════════════════════════════════
-
-def show_status():
-    print(get_status_text())
 
 
 # ── 진입점 제거됨 ────────────────────────────────────────────

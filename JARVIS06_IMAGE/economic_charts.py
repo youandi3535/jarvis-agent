@@ -72,65 +72,10 @@ def generate_thumbnail(market: dict, out_dir=None, body_text: str = "") -> str:
 # 2. 필러 차트 — Plotly chart_generator (테마주 동일 방식)
 # ══════════════════════════════════════════════════════════════
 
-def _build_market_context(market: dict) -> str:
-    """시장 데이터 → chart_generator가 파싱할 수 있는 context_text 형식."""
-    if not market:
-        return ""
-    lines = ["[시장 데이터]"]
-    for name, data in market.items():
-        ch = data.get("change", 0)
-        val = data.get("value", 0)
-        lines.append(f"{name}: {val:,.2f} ({'+' if ch >= 0 else ''}{ch:.2f}%)")
-    return "\n".join(lines)
-
-
-def _market_description(market: dict, idx: int) -> tuple[str, str]:
-    """idx 기반으로 다양한 차트 설명 + 키워드 반환."""
-    descs = [
-        ("글로벌 주요 지수 등락률 비교", "글로벌 시장"),
-        ("오늘의 시장 현황 — 주요 자산별 변동",  "경제 브리핑"),
-        ("주요 시장 변화율 분포",               "시장 동향"),
-        ("글로벌 투자 지표 현황",               "투자 지표"),
-    ]
-    return descs[idx % len(descs)]
-
-
-def generate_filler_image(idx: int, market: dict = None, out_dir=None) -> str:
-    """경제 브리핑 필러 차트 — chart_generator (Plotly + LLM 동적 스타일)."""
-    import uuid
-    from JARVIS06_IMAGE.chart_generator import generate_chart
-
-    market = market or {}
-    dest   = _out(out_dir)
-    run_id = str(uuid.uuid4())[:8]
-    desc, kw = _market_description(market, idx)
-    ctx  = _build_market_context(market)
-
-    path = generate_chart(
-        description=desc,
-        keyword=kw,
-        sector="market",
-        context_text=ctx,
-        out_dir=str(dest),
-        chart_idx=idx,
-        run_id=run_id,
-    )
-    if path:
-        log.info(f"[EcoCharts] 필러 차트 [{idx}]: {path}")
-    return path or ""
-
 
 # ══════════════════════════════════════════════════════════════
 # 3. 인사이트 카드 — section_title 소제목 배너 (테마주 동일 방식)
 # ══════════════════════════════════════════════════════════════
-
-def generate_insight_card(heading: str, idx: int, out_dir=None) -> str | None:
-    """섹션 헤더 → 소제목 배너 이미지 — section_title.make_section_title_image."""
-    from JARVIS06_IMAGE.section_title import make_section_title_image
-    dest = _out(out_dir)
-    out_path = str(dest / f"economic_h2_{idx}.png")
-    ok = make_section_title_image(heading, save_path=out_path, level=2, number=idx)
-    return out_path if ok else None
 
 
 # ══════════════════════════════════════════════════════════════
@@ -261,101 +206,6 @@ def render_html_table_as_image(table_html: str, idx: int, out_dir=None):
     log.info(f"[EcoCharts] 테이블 이미지 [{idx}]: {path}")
     return path
 
-
-def render_market_table(market: dict, out_dir=None) -> str:
-    """시장 현황 표 이미지 — 동적 스타일 적용."""
-    from JARVIS06_IMAGE.style_engine import generate_style_spec, _interpolate_color
-
-    style_spec   = generate_style_spec("overview", "경제_시장")
-    header_color = style_spec.get("primary_color", "#1565c0")
-    accent_color = style_spec.get("accent_color", "#0891b2")
-
-    _mpl_setup()
-    import matplotlib.pyplot as plt
-
-    headers = ['지수 / 자산', '현재값', '등락률']
-    rows, row_colors, changes_list = [], [], []
-
-    for i, (name, data) in enumerate(market.items()):
-        ch = data['change']
-        ar = '▲' if ch > 0 else '▼' if ch < 0 else '─'
-        rows.append([name, f"{data['value']:,}", f'{ar} {ch:+.2f}%'])
-        row_colors.append(
-            [_interpolate_color(accent_color, 'ffffff', 0.3) if i % 2 == 0 else 'white'] * 3
-        )
-        changes_list.append(ch)
-
-    fig, ax = plt.subplots(figsize=(10, len(rows) * 0.62 + 1.4))
-    ax.axis('off')
-    ax.set_title('오늘의 시장 현황', fontsize=16, fontweight='bold', pad=14, color=header_color)
-
-    tbl = ax.table(cellText=rows, colLabels=headers,
-                   cellLoc='center', loc='center', cellColours=row_colors)
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(12)
-    tbl.scale(1, 2.3)
-
-    for j in range(len(headers)):
-        tbl[(0, j)].set_facecolor(header_color)
-        tbl[(0, j)].set_text_props(color='white', fontweight='bold')
-
-    up_color   = accent_color
-    down_color = _interpolate_color(header_color, accent_color, 0.5)
-    for i, ch in enumerate(changes_list):
-        tbl[(i + 1, 2)].set_text_props(
-            color=up_color if ch > 0 else down_color if ch < 0 else '#666',
-            fontweight='bold',
-        )
-
-    plt.tight_layout()
-    path = str(_out(out_dir) / 'economic_market_table.png')
-    plt.savefig(path, dpi=250, bbox_inches='tight', facecolor='white')
-    plt.close()
-    print(f"  ✅ 시장표: {path}")
-    return path
-
-
-def render_calendar_table(calendar: list, out_dir=None):
-    """경제 캘린더 표 이미지 — 동적 스타일 적용. 데이터 없으면 None."""
-    if not calendar:
-        return None
-    from JARVIS06_IMAGE.style_engine import generate_style_spec, _interpolate_color
-
-    style_spec   = generate_style_spec("timeline", "경제_캘린더")
-    header_color = style_spec.get("primary_color", "#1a5276")
-    accent_color = style_spec.get("accent_color", "#0891b2")
-
-    _mpl_setup()
-    import matplotlib.pyplot as plt
-
-    headers = ['시간', '지표명', '실제', '예상', '이전']
-    rows, row_colors = [], []
-    for i, e in enumerate(calendar):
-        rows.append([e['time'], e['name'][:18], e['actual'], e['forecast'], e['previous']])
-        row_colors.append(
-            [_interpolate_color(accent_color, 'ffffff', 0.3) if i % 2 == 0 else 'white'] * 5
-        )
-
-    fig, ax = plt.subplots(figsize=(12, len(rows) * 0.65 + 1.4))
-    ax.axis('off')
-    ax.set_title('오늘의 경제 캘린더', fontsize=16, fontweight='bold', pad=14, color=header_color)
-
-    tbl = ax.table(cellText=rows, colLabels=headers,
-                   cellLoc='center', loc='center', cellColours=row_colors)
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(11)
-    tbl.scale(1, 2.3)
-
-    for j in range(len(headers)):
-        tbl[(0, j)].set_facecolor(header_color)
-        tbl[(0, j)].set_text_props(color='white', fontweight='bold')
-
-    plt.tight_layout()
-    path = str(_out(out_dir) / 'economic_calendar_table.png')
-    plt.savefig(path, dpi=250, bbox_inches='tight', facecolor='white')
-    plt.close()
-    print(f"  ✅ 캘린더표: {path}")
-    return path
 
 
 __all__ = [

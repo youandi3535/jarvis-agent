@@ -399,5 +399,7 @@ if __name__ == "__main__":
         print(f"⚠️ preflight 호출 실패: {_ee}")
 
     today_only = "--today" in sys.argv
-    result = collect_all(today_only=today_only)
+    from JARVIS00_INFRA.watchdog import guard_main
+    with guard_main("성과 수집", deadline_sec=1800):
+        result = collect_all(today_only=today_only)
     print(f"\n✅ 최종: {result['updated']}개 글 조회수 업데이트 완료")

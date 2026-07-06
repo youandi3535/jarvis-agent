@@ -870,7 +870,7 @@ def delegate_to_claude_code(prompt: str,
         try:
             with anyio.fail_after(timeout):
                 options = ClaudeCodeOptions(
-                    model="claude-opus-4-8",   # ★ 수정 가능 위임 도구 — Opus 4.8 (사용자 박제: 수정은 모두 Opus 4.8)
+                    model="claude-sonnet-5",   # ★ 수정 가능 위임 도구 — Sonnet 5 단일 통일 (사용자 박제 2026-07-06, ADR 017)
                     max_turns=max_turns,
                     allowed_tools=tools_list,
                     cwd=str(_JARVIS_ROOT_ABS),

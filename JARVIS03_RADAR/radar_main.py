@@ -420,15 +420,19 @@ if __name__ == "__main__":
         else:
             print(f"[RADAR] {d} 데이터 없음")
     else:
-        data     = collect_today()
-        save(data)
-        no_push  = "--no-push" in args
-        if not no_push:
-            push_to_shared(data)
+        # ★ 정지 방어 — 일회성 레이더 수집 작업 (freeze 300초 + deadline 900초 초과 시
+        #   GUARDIAN 보고 후 os._exit → 다음 예약 재시도). --date 조회는 감싸지 않음.
+        from JARVIS00_INFRA.watchdog import guard_main
+        with guard_main("레이더 수집", deadline_sec=900):
+            data     = collect_today()
+            save(data)
+            no_push  = "--no-push" in args
+            if not no_push:
+                push_to_shared(data)
 
-        print("\n[RADAR] 섹터별 TOP 3:")
-        for sector, kws in data["sector_summary"].items():
-            print(f"  {sector}: {', '.join(k['keyword'] for k in kws[:3])}")
-        print("\n[RADAR] WRITER 파이프라인 추천:")
-        for rec in data["recommendations"]:
-            print(f"  [{rec['sector']}] {rec['theme']} (기회점수: {rec.get('opportunity_score', rec.get('score'))})")
+            print("\n[RADAR] 섹터별 TOP 3:")
+            for sector, kws in data["sector_summary"].items():
+                print(f"  {sector}: {', '.join(k['keyword'] for k in kws[:3])}")
+            print("\n[RADAR] WRITER 파이프라인 추천:")
+            for rec in data["recommendations"]:
+                print(f"  [{rec['sector']}] {rec['theme']} (기회점수: {rec.get('opportunity_score', rec.get('score'))})")

@@ -5,7 +5,7 @@ JARVIS04_SCHEDULER DEFAULT_JOBS callback 대상.
 
 ★ 하네스 5-Layer 게이트 (사용자 박제 2026-05-18):
    모든 잡은 _run_with_harness() 를 통해 실행.
-   실행 오류 감지 → GUARDIAN 자동 기록 → 재시도 (max_attempts=2) → 검증 순환.
+   실행 오류 감지 → GUARDIAN 자동 기록 → 재시도 (max_attempts=3) → 검증 순환.
 """
 from __future__ import annotations
 import logging
@@ -28,32 +28,6 @@ _ROOT = _RADAR_DIR.parent
 _WRITER_DIR = _ROOT / "JARVIS02_WRITER"
 _PYTHON = sys.executable
 
-
-def _run_script(script: Path, args: list = None, label: str = "") -> None:
-    """스크립트 실행 — 오류 내부 처리 (레거시 호환용). 실패 시 logging만."""
-    cmd = [_PYTHON, str(script)] + (args or [])
-    _log.info(f"▶ {label or script.name} 시작")
-    try:
-        result = subprocess.run(
-            cmd, cwd=str(script.parent),
-            capture_output=True, text=True, timeout=600,
-        )
-        for line in (result.stdout or "").strip().splitlines()[-15:]:
-            _log.info(f"  {line}")
-        if result.returncode != 0:
-            err_tail = (result.stderr or "").strip()[:300]
-            _log.warning(f"  STDERR: {err_tail}")
-            _g_report("radar", RuntimeError(f"{label or script.name} 실패 (rc={result.returncode}): {err_tail[:200]}"),
-                      module=__name__, func_name=label or script.name)
-        else:
-            _log.info(f"✅ {label or script.name} 완료")
-    except subprocess.TimeoutExpired:
-        _log.error(f"⏰ {label} 타임아웃 (600s)")
-        _g_report("radar", RuntimeError(f"{label} subprocess timeout (600s)"),
-                  module=__name__, func_name=label)
-    except Exception as e:
-        _log.error(f"❌ {label} 오류: {e}")
-        _g_report("radar", e, module=__name__)
 
 
 def _run_script_checked(script: Path, args: list = None, label: str = "") -> None:
@@ -87,7 +61,7 @@ def _run_with_harness(
     run_fn: Callable,
     verify_fn: Optional[Callable] = None,
     send_fn: Optional[Callable] = None,
-    max_attempts: int = 2,
+    max_attempts: int = 3,
 ) -> None:
     """★ 하네스 5-Layer 게이트 래퍼 — 전체 잡에 "수정→기록→누적→순환" 적용.
 
@@ -96,7 +70,7 @@ def _run_with_harness(
         run_fn:      실행할 함수 (예외 발생 시 execution_error 검출)
         verify_fn:   선택 — run_fn() 결과를 받아 추가 검증. 오류 문자열 list 반환.
         send_fn:     선택 — 검증 통과 후 notify/저장 등 송출. run_fn() 결과를 인자로 받음.
-        max_attempts: 하네스 재시도 한도 (기본 2)
+        max_attempts: 하네스 재시도 한도 (기본 3)
     """
     # ★ P1-③ 패치 (사용자 박제 2026-05-18 — ADR 009 v2): harness ImportError fallback 제거.
     # 이전: harness 미가용 시 직접 실행 (검증 0회 우회 송출 위험).
@@ -184,27 +158,6 @@ def job_collect_trends() -> None:
         _run_script_checked(_RADAR_DIR / "radar_main.py", label="트렌드 수집")
 
     _run_with_harness("트렌드 수집", _run, verify_fn=_verify_trends)
-
-    # ★ 주제 패키지 파이프라인 (사용자 박제 2026-07-03): 자비스03이 주제+프로필을
-    #   생성해 JARVIS09 선수집까지 직접 수행 → 자비스02(제목·대본)·09(수집) 동시 제공.
-    #   당일 팩이 이미 있으면 스킵 (발행 사용 키워드는 pick_candidate 가 자동 제외).
-    try:
-        from JARVIS03_RADAR.topic_pack import build_topic_pack, load_topic_pack
-        if load_topic_pack() is None:
-            _log.info("🎁 [JARVIS03] 주제 패키지 생성 + JARVIS09 선수집 시작")
-            pack = build_topic_pack()
-            if pack:
-                _kws = [c.get("keyword") for c in pack.get("candidates", [])]
-                _log.info(f"🎁 [JARVIS03] 주제 패키지 완료: {_kws}")
-        else:
-            _log.info("🎁 [JARVIS03] 당일 주제 패키지 존재 — 생성 스킵")
-    except Exception as _tp_e:
-        _log.warning(f"⚠️ [JARVIS03] 주제 패키지 생성 실패: {_tp_e}")
-        try:
-            from JARVIS07_GUARDIAN.error_collector import report as _rep
-            _rep("radar", _tp_e, module=__name__, func_name="job_collect_trends")
-        except Exception:
-            pass
 
 
 def job_collect_performance() -> None:

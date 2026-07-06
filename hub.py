@@ -2429,7 +2429,7 @@ with t_err:
         else:
             md(empty_state("추이 데이터 없음", "오류가 수집되면 일별 추이가 표시됩니다"))
 
-        # ★ 자가 진단 학습 곡선 카드 (사용자 박제 2026-05-15) — Opus 회차별 누적 추이
+        # ★ 자가 진단 학습 곡선 카드 (사용자 박제 2026-05-15) — 회차별 누적 추이
         try:
             import sqlite3 as _s3
             _c = _s3.connect(str(DB_PATH))

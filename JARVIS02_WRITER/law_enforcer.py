@@ -1465,11 +1465,36 @@ def _canon_num(tok: str):
     return val
 
 
+# ── 복합 한국어 수(조+억) 파서 ────────────────────────────────────────────
+#   '1조 3,492억원' = 1조(1e12) + 3,492억(3.492e11) = 1.3492e12. LLM 은 본문에
+#   자주 정규화값을 병기한다('1조 3,492억원(13492억원)'). _canon_num 은 앞 단위만
+#   읽어(→1e12) 정규화 토큰(13492억=1.3492e12)을 못 살린다. 이 파서가 복합 표기의
+#   *결합 magnitude* 를 grounding 정답에 등록해 정규화 토큰까지 매칭되게 한다.
+_COMPOUND_JOEOK_RE = re.compile(
+    r'(-?\d[\d,]*(?:\.\d+)?)\s*조\s*(\d[\d,]*(?:\.\d+)?)\s*(천억|억)'
+)
+
+
+def _compound_magnitudes(text: str) -> list:
+    """'N조 M억' / 'N조 M천억' 복합 표기 → 결합 magnitude 리스트."""
+    out: list = []
+    for m in _COMPOUND_JOEOK_RE.finditer(text or ""):
+        try:
+            jo = float(m.group(1).replace(",", ""))
+            rest = float(m.group(2).replace(",", ""))
+        except ValueError:
+            continue
+        rest_mag = rest * (1e11 if m.group(3) == "천억" else 1e8)
+        out.append(jo * 1e12 + rest_mag)
+    return out
+
+
 def _collect_gt_floats(*sources) -> list:
     """구조화 데이터에서 모든 수치를 canonical 크기로 수집 (grounding ground-truth).
 
     비율(|v|<=1)은 %(×100) 형태도 함께 등록(op_margin 0.136 ↔ 본문 13.6%).
-    문자열 안의 단위수치('5.9조원')도 파싱. dict/list 재귀 순회.
+    문자열 안의 단위수치('5.9조원')도 파싱. 복합 한국어 수('1조 3,492억')는
+    결합 magnitude 도 함께 등록. dict/list 재귀 순회.
     """
     gt: list = []
 
@@ -1487,6 +1512,7 @@ def _collect_gt_floats(*sources) -> list:
                 c = _canon_num(mm.group(0))
                 if c is not None:
                     gt.append(c)
+            gt.extend(_compound_magnitudes(o))   # ★ '1조 3,492억' → 1.3492e12
             try:
                 gt.append(float(o.replace(",", "")))
             except ValueError:
@@ -1663,10 +1689,16 @@ def factuality_issues(
 
     # ── 2.5 결정론 수치 grounding (★ 근본 수정 — ERRORS [350]) ──────────────
     #   LLM(_ground_unsupported)이 unsupported 로 오판한 주장이라도, 그 안의 *모든*
-    #   수치가 수집 구조화 데이터(stocks_data·market_data)에 실재하면 '진실(데이터에서
-    #   옴)' 으로 보고 rescue → 취약한 웹-차단 경로를 우회. [343]~[348] 코퍼스 포맷-렌더
-    #   whack-a-mole 을 대체. 수치가 데이터에 *없는* 주장만 웹 검증으로 넘어간다.
-    gt_floats = _collect_gt_floats(market_data, stocks_data) + _collected_gt(collected)
+    #   수치가 수집 데이터에 실재하면 '진실(데이터에서 옴)' 으로 보고 rescue → 취약한
+    #   웹-차단 경로를 우회. [343]~[348] 코퍼스 포맷-렌더 whack-a-mole 을 대체.
+    #   ★ ERRORS [382]: 구조화 데이터(stocks·market)뿐 아니라 *수집 문서 텍스트 corpus*
+    #     도 grounding 정답에 포함 — 뉴스에서 온 수치(건설 수주액·재개발 규모 등)는
+    #     structured data 에 없고 corpus 에만 있다. LLM 문자열 매칭(_ground_unsupported)이
+    #     스로틀/포맷으로 실패하면 corpus 실재 수치도 웹-차단됐다("수집했으면 출처는
+    #     분명하다" — ERRORS [350] 원칙의 결정론 안전망을 corpus 로 확장). 수치가 데이터·
+    #     문서 어디에도 *없는* 주장(창작)만 웹 검증으로 넘어간다.
+    gt_floats = (_collect_gt_floats(market_data, stocks_data, corpus)
+                 + _collected_gt(collected))
     pending, _rescued = [], 0
     for c in claims:
         if c["text"] not in unsupported:

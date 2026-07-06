@@ -277,6 +277,24 @@ def merge_pack(pack: dict, extra_facts: list[dict]) -> dict:
     return pack
 
 
+def restrict_pack_to_docs(pack: dict, doc_urls) -> dict:
+    """★ 근거 팩을 최종 선별 문서로 국한 (사용자 박제 2026-07-06 — "10개만" 일관).
+
+    수치(fact)는 그 fact 를 뽑아낸 출처 문서(source.url)가 최종 확정 문서 집합 안에
+    있을 때만 남긴다. 즉 글도 숫자도 *같은 확정 문서*에서만 나온다 (LLM 재호출 0).
+    """
+    urls = {(u or "").strip() for u in (doc_urls or set()) if u}
+    if not urls:
+        return pack
+    kept = [f for f in pack.get("facts", [])
+            if ((f.get("source") or {}).get("url") or "").strip() in urls]
+    for i, f in enumerate(kept, 1):
+        f["id"] = f"F{i}"
+    pack["facts"] = kept
+    pack["coverage"] = _measure_coverage(pack.get("plan"), kept)
+    return pack
+
+
 def evidence_brief(pack, max_facts: int = 24) -> str:
     """대본 프롬프트 주입용 근거 브리프 — 질문별 그룹 + 출처 표기.
 

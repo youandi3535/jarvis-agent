@@ -479,25 +479,6 @@ def _tg(msg: str) -> None:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  4. 썸네일 이미지 생성 (matplotlib)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  4. 이미지 생성 — JARVIS06_IMAGE 위임 (trend_charts.py)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-from JARVIS06_IMAGE.trend_charts import (
-    make_trend_thumbnail      as _j06_make_trend_thumbnail,
-    make_section_image        as _j06_make_section_image,
-    make_market_chart         as _j06_make_market_chart,
-    make_checklist_chart      as _j06_make_checklist_chart,
-    make_scenario_chart       as _j06_make_scenario_chart,
-    make_impact_chart         as _j06_make_impact_chart,
-    make_highlight_card       as _j06_make_highlight_card,
-    make_insight_card         as _j06_make_insight_card,
-    make_line_trend_chart     as _j06_make_line_trend_chart,
-    make_stat_infographic     as _j06_make_stat_infographic,
-    make_comparison_chart     as _j06_make_comparison_chart,
-    make_ai_section_image     as _j06_make_ai_section_image,
-    make_smart_section_image  as _j06_make_smart_section_image,   # NEW
-)
 
 
 def _img_dir(platform: str):
@@ -506,21 +487,6 @@ def _img_dir(platform: str):
         return NAVER_IMG_DIR
     return TISTORY_IMG_DIR
 
-
-def make_trend_thumbnail(keyword: str, sector: str, platform: str = 'naver',
-                         market: dict = None) -> str:
-    return _j06_make_trend_thumbnail(keyword, sector, platform, market, out_dir=_img_dir(platform))
-
-
-def _make_trend_thumbnail_mpl(keyword, sector, platform, market, out_path):
-    raise NotImplementedError("_LEGACY: 이 함수는 JARVIS06_IMAGE/trend_charts.py 로 이관됨")
-
-
-def make_section_image(section_title: str, section_num: int, keyword: str,
-                       sector: str, platform: str = 'naver',
-                       key_points: list = None) -> str:
-    return _j06_make_section_image(section_title, section_num, keyword, sector,
-                                   platform, key_points, out_dir=_img_dir(platform))
 
 
 
@@ -568,152 +534,6 @@ _TS_Q1 = (4, 5)
 _TS_Q2 = (5, 6)
 _TS_Q3 = (5, 6)
 _TS_Q4 = (4, 5)
-
-
-def _generate_tistory_text(topic: dict, supreme_block: str) -> dict:
-    """① 원고 생성 — 텍스트만 (이미지 생성 없음).
-
-    규정은 run_tistory()에서 데이터 수집 직후 로드해 주입.
-    Returns: {"title": str, "content": str, "keyword": str, "sector": str}
-    """
-    from shared.llm import invoke_text
-
-    keyword = topic.get('keyword', '')
-    sector  = topic.get('sector', '')
-    reason  = topic.get('reason', '')
-
-    print(f"  ✍️ [티스토리] Q&A형 원고 생성 중: {keyword} ({sector})")
-
-    ts_target = _L.TARGET_KOREAN
-    _ts_sec_sents = (_L.TARGET_SENTENCES - _L.INTRO_SENTS_MIN - _L.OUTRO_SENTS) // 4
-    sections  = _TS_SECTIONS \
-        .replace("{INTRO_SENTS_PHRASE}", _L.build_length_phrase(_L.INTRO_SENTS_MIN, _L.INTRO_SENTS_MAX)) \
-        .replace("{SEC_SENTS_PHRASE}",   _L.build_length_phrase(_ts_sec_sents)) \
-        .replace("{OUTRO_SENTS_PHRASE}", _L.build_length_phrase(_L.OUTRO_SENTS)) \
-        .replace("{TOTAL_SENTS_PHRASE}", _L.build_length_phrase(_L.TARGET_SENTENCES)) \
-        .replace("{KEYWORD}", keyword) \
-        .replace("{Q1}", _L.build_length_phrase(*_TS_Q1)) \
-        .replace("{Q2}", _L.build_length_phrase(*_TS_Q2)) \
-        .replace("{Q3}", _L.build_length_phrase(*_TS_Q3)) \
-        .replace("{Q4}", _L.build_length_phrase(*_TS_Q4))
-    learn_block = _load_learn_insights("economic", platform="tistory")
-
-    _seed = int(hashlib.md5(f"{TODAY_STR}{keyword}tistory".encode()).hexdigest(), 16) % 10000
-    hook_style = random.Random(_seed).choice([
-        "요즘 주변에서 이 얘기가 부쩍 많아졌더라고요.",
-        "지난주 뉴스를 보다가 문득 궁금해진 게 있었는데요.",
-        "커피 한 잔 마시면서 생각해봤는데, 참 신기하더라고요.",
-        "최근에 지인이 물어봐서 같이 찾아봤습니다.",
-        "솔직히 저도 처음엔 잘 몰랐는데, 공부하다 보니 꽤 중요한 내용이더라고요.",
-        "이걸 알고 나면 뉴스 볼 때 느낌이 달라질 거예요.",
-        "혹시 요즘 이런 단어 들어보셨나요? 저도 궁금해서 한번 정리해봤어요.",
-    ])
-
-    prompt = f"""{supreme_block}
-오늘({TODAY_STR} {TODAY_DOW}요일) 경제 브리핑 블로그 — 티스토리 생활 밀착 Q&A형 글을 작성해줘.
-
-[오늘의 트렌드 키워드]
-- 키워드: {keyword}
-- 섹터: {sector}
-- 급상승 이유: {reason}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[글 스타일 — 위 헌법 블록(supreme_block) 전체 적용. 오프닝 힌트: "{hook_style}"]
-- 독자: 경제 초보자 포함 20~40대 모바일 독자 / 문체: 격식체(~습니다)
-- 목표 분량: {_L.TARGET_SENTENCES}문장(약 {ts_target}자)
-- HTML h2 태그로 Q 소제목 구조화. 각 Q 아래 <p> 단락 2개 이상 분리 (이미지 삽입 슬롯)
-- 숫자·비교·실생활 예시 포함으로 공감도 강화
-{learn_block}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[섹션 구조]
-{sections}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[출력 형식]
-TITLE:
-(제목 — 궁금증 유발하는 클릭 유도형, {_L.TITLE_PROMPT_MAX}자 이내, 해요체)
-
-CONTENT:
-(본문 HTML — h2 태그 포함, p 태그로 단락 구분)
-"""
-
-    raw = invoke_text("writer", prompt, temperature=0.68, max_tokens=5000)
-    if not raw:
-        print("  ❌ [티스토리] LLM 응답 없음")
-        return {}
-
-    title   = _parse_block(raw, "TITLE:",   "CONTENT:")
-    content = _parse_block(raw, "CONTENT:", None)
-    if not title or not content:
-        print("  ⚠️ [티스토리] 파싱 실패 — raw 응답 활용")
-        title   = f"{keyword}, 나한테 어떤 영향이 있을까요? — {TODAY_STR}"
-        content = raw
-
-    import re as _re_em
-    _emoji_re = _re_em.compile(
-        r'[\U00010000-\U0010FFFF\U00002700-\U000027BF\U0001F300-\U0001F9FF\U00002600-\U000026FF]+',
-        flags=_re_em.UNICODE)
-    title   = _emoji_re.sub("", title).strip()
-    content = _emoji_re.sub("", content)
-
-    _L.warn_length(keyword, "tistory-trend", content)
-    content = _enforce_paragraph_rule(content)   # 제0-B조 자동 적용
-    print(f"  ✅ [티스토리] 텍스트 원고 완료: '{title}' ({_L.count(content)}자)")
-    return {"title": title, "content": content, "keyword": keyword, "sector": sector}
-
-
-def _assemble_tistory_blocks(content: str, thumb_path: str) -> list:
-    """HTML + placeholder → blocks 리스트 변환."""
-    import re as _re_fig
-    _all = {}
-    _all.update({f'__SECTION_IMG_{n}__': p for n, p in _section_img_paths.items()})
-    _all.update({f'__PARA_IMG_{n}__':    p for n, p in _para_img_paths.items()})
-
-    blocks: list = []
-    if thumb_path and Path(thumb_path).exists():
-        blocks.append(('image', thumb_path))
-
-    for part in _re_fig.split(r'(<figure[^>]*>.*?</figure>)', content, flags=_re_fig.DOTALL):
-        part = part.strip()
-        if not part:
-            continue
-        if part.startswith('<figure'):
-            m_ph = _re_fig.search(r'src=["\'](__(?:SECTION|PARA)_IMG_\d+__)["\']', part)
-            if m_ph:
-                actual = _all.get(m_ph.group(1), '')
-                if actual and Path(actual).exists():
-                    blocks.append(('image', actual))
-            else:
-                m_src = _re_fig.search(r'src=["\']([^"\']+)["\']', part)
-                if m_src:
-                    blocks.append(('image', m_src.group(1)))
-        else:
-            blocks.append(('text', part))
-    return blocks
-
-
-def generate_tistory_article(topic: dict) -> dict:
-    """[하위 호환 래퍼] 단독 호출 시 규정 자체 로드 후 단계별 실행.
-
-    run_tistory() 는 규정을 데이터 수집 직후 명시적으로 로드하므로
-    이 래퍼는 외부 단독 실행 용도에만 사용.
-    """
-    _cleanup_tistory_images()  # 이전 이미지 전체 삭제 후 생성 시작
-    from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
-    supreme_block = _law_blk()
-    text_result   = _generate_tistory_text(topic, supreme_block)
-    if not text_result:
-        return {}
-    keyword = text_result['keyword']
-    sector  = text_result['sector']
-    content = text_result['content']
-    _section_img_paths.clear(); _para_img_paths.clear()
-    content = _inject_section_images(content, keyword, sector, platform='tistory')
-    content = _inject_paragraph_images(content, keyword, sector, platform='tistory')
-    thumb_path = make_trend_thumbnail(keyword, sector, platform='tistory')
-    blocks = _assemble_tistory_blocks(content, thumb_path)
-    print(f"  ✅ [티스토리] 완료: '{text_result['title']}' / 블록 {len(blocks)}개")
-    return {"title": text_result['title'], "html": content, "blocks": blocks, "thumb_path": thumb_path}
 
 
 
@@ -792,20 +612,6 @@ def _enforce_paragraph_rule(html: str) -> str:
     return re.sub(r'<p>(.*?)</p>', process_p, html, flags=re.DOTALL)
 
 
-def _inject_section_images(html: str, keyword: str, sector: str,
-                            platform: str = 'naver') -> str:
-    """h2 소제목 유지 (★ 사용자 박제 2026-05-15 — 옛 h2→이미지 교체 동작 폐기).
-
-    사용자 박제 구조: <h2> 유지 + <p>2문장</p> + [차트] + <p>2문장</p> + [섹션이미지] + <p>2문장</p>
-    섹션 이미지는 `_inject_paragraph_images()` 에서 <p> 사이에 동적 삽입.
-    소제목 앞뒤 여백은 `law_enforcer.enforce_spacing()` 가 발행 직전 자동 처리.
-    """
-    import re
-    _section_img_paths.clear()
-    h2_count = len(re.findall(r'<h2>', html, re.IGNORECASE))
-    print(f"  🖼️ h2 소제목 {h2_count}개 보존 — 섹션 이미지는 단락 사이 동적 삽입")
-    return html
-
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  섹션별 콘텐츠 차트 생성 — 섹션 내용 유형에 맞는 실제 시각화
@@ -874,465 +680,9 @@ def _extract_scenarios(html: str) -> list:
     return result
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  콘텐츠 차트 — JARVIS06_IMAGE 위임 (trend_charts.py)
+#  콘텐츠 차트 — JARVIS06_IMAGE draft_processor 위임
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def make_market_chart(market: dict, keyword: str, sector: str,
-                       card_idx: int, platform: str = 'naver') -> str:
-    return _j06_make_market_chart(market, keyword, sector, card_idx, platform, out_dir=_img_dir(platform))
-
-
-def make_checklist_chart(items: list, keyword: str, sector: str,
-                          card_idx: int, platform: str = 'naver') -> str:
-    return _j06_make_checklist_chart(items, keyword, sector, card_idx, platform, out_dir=_img_dir(platform))
-
-
-def make_scenario_chart(scenarios: list, keyword: str, sector: str,
-                         card_idx: int, platform: str = 'naver') -> str:
-    return _j06_make_scenario_chart(scenarios, keyword, sector, card_idx, platform, out_dir=_img_dir(platform))
-
-
-def make_impact_chart(factors: list, keyword: str, sector: str,
-                       card_idx: int, platform: str = 'naver') -> str:
-    return _j06_make_impact_chart(factors, keyword, sector, card_idx, platform, out_dir=_img_dir(platform))
-
-
-def make_highlight_card(text: str, keyword: str, sector: str,
-                         card_idx: int, platform: str = 'naver') -> str:
-    return _j06_make_highlight_card(text, keyword, sector, card_idx, platform, out_dir=_img_dir(platform))
-
-
-def make_insight_card(text: str, label: str, card_idx: int,
-                      keyword: str, sector: str, platform: str = 'naver') -> str:
-    return _j06_make_insight_card(text, label, card_idx, keyword, sector, platform, out_dir=_img_dir(platform))
-
-
-def make_line_trend_chart(text: str, keyword: str, sector: str,
-                          card_idx: int, platform: str = 'naver') -> str:
-    return _j06_make_line_trend_chart(text, keyword, sector, card_idx, platform, out_dir=_img_dir(platform))
-
-
-def make_stat_infographic(text: str, keyword: str, sector: str,
-                          card_idx: int, platform: str = 'naver',
-                          prebuilt: list = None) -> str:
-    return _j06_make_stat_infographic(text, keyword, sector, card_idx, platform, prebuilt, out_dir=_img_dir(platform))
-
-
-def make_comparison_chart(text: str, keyword: str, sector: str,
-                          card_idx: int, platform: str = 'naver',
-                          pros: list = None, cons: list = None) -> str:
-    return _j06_make_comparison_chart(text, keyword, sector, card_idx, platform, pros, cons, out_dir=_img_dir(platform))
-
-
-def make_ai_section_image(section_text: str, keyword: str, sector: str,
-                           card_idx: int, platform: str = 'naver') -> str:
-    return _j06_make_ai_section_image(section_text, keyword, sector, card_idx, platform, out_dir=_img_dir(platform))
-
-
-def make_smart_section_image(section_text: str, section_title: str, keyword: str,
-                              sector: str, card_idx: int, platform: str = 'naver',
-                              out_dir=None) -> str:
-    return _j06_make_smart_section_image(
-        section_text=section_text, section_title=section_title,
-        keyword=keyword, sector=sector, card_idx=card_idx,
-        platform=platform, out_dir=out_dir or _img_dir(platform),
-    )
-
-
-
-def _llm_extract_chart_data(text: str, keyword: str, chart_type: str) -> dict | None:
-    """Claude LLM으로 차트 데이터를 동적 추출. 실패 시 None 반환."""
-    try:
-        from shared.llm import invoke_text as _inv
-        import json as _j, re as _re2
-
-        _PROMPTS = {
-            'impact': (
-                f"본문(앞 500자):\n{text[:500]}\n\n"
-                f"키워드: {keyword}\n"
-                "위 본문에서 주요 영향 요인 4~6개를 추출하라.\n"
-                "각 요인은 2~5글자 경제 명사 라벨 + 영향 강도(-3.0~3.0) + 방향(긍정/부정).\n"
-                "JSON만 출력: [{\"label\":\"금리\",\"value\":2.5,\"dir\":\"긍정\"}, ...]"
-            ),
-            'checklist': (
-                f"본문(앞 400자):\n{text[:400]}\n\n"
-                f"키워드: {keyword}\n"
-                "위 본문에서 투자자가 확인해야 할 핵심 체크포인트 4~5개를 한 문장씩 추출하라.\n"
-                "JSON만 출력: [\"첫 번째 포인트\", \"두 번째 포인트\", ...]"
-            ),
-            'scenario': (
-                f"본문(앞 400자):\n{text[:400]}\n\n"
-                f"키워드: {keyword}\n"
-                f"위 본문 기반으로 상승·하락·중립 시나리오 3개를 작성하라. 각 {_L.SCENARIO_LABEL_MAX}자 이내.\n"
-                "JSON만 출력: [{\"title\":\"▲ 상승 전망\",\"desc\":\"...\"},{\"title\":\"▼ 하락 위험\",\"desc\":\"...\"},{\"title\":\"= 중립 관점\",\"desc\":\"...\"}]"
-            ),
-            'line_trend': (
-                f"본문(앞 500자):\n{text[:500]}\n\n"
-                f"키워드: {keyword}, 오늘: {__import__('datetime').date.today().strftime('%Y년 %m월')}\n"
-                "위 본문 내용 기반으로 시계열 트렌드 데이터 4~6개를 만들어라.\n"
-                "라벨 규칙: 반드시 사람이 이해하는 실제 시점 표현 사용 (예: '22년', '23년', '24년', '25년', '1분기', '2분기', '1월', '6월' 등).\n"
-                "T1·T2·S1·S2 같은 무의미한 임시 라벨 절대 금지. 본문에 시점이 없으면 최근 연도를 추론해 사용.\n"
-                "값은 본문 내 수치 또는 맥락에서 추론한 상대적 강도(0~100).\n"
-                "JSON만 출력: [{\"label\":\"22년\",\"value\":45}, {\"label\":\"23년\",\"value\":60}, ...]"
-            ),
-            'stat_card': (
-                f"본문(앞 500자):\n{text[:500]}\n\n"
-                f"키워드: {keyword}\n"
-                "위 본문에서 핵심 수치 KPI 3~4개를 추출하라. 라벨은 2~6글자 경제 명사.\n"
-                "JSON만 출력: [{\"label\":\"영업이익\",\"val\":\"2.3\",\"unit\":\"조\"}, ...]"
-            ),
-            'comparison': (
-                f"본문(앞 400자):\n{text[:400]}\n\n"
-                f"키워드: {keyword}\n"
-                f"위 본문에서 긍정 요인 2~3개, 부정 요인 2~3개를 각 {_L.SCENARIO_LABEL_MAX}자 이내로 추출하라.\n"
-                "JSON만 출력: {\"pros\":[\"...\"],\"cons\":[\"...\"]}"
-            ),
-            'highlight': (
-                f"본문(앞 400자):\n{text[:400]}\n\n"
-                f"키워드: {keyword}\n"
-                f"위 본문에서 가장 핵심적인 인사이트 문장 1개({_L.INSIGHT_KEY_MAX}자 이내)를 추출하라.\n"
-                "JSON만 출력: {\"text\":\"...\"}"
-            ),
-        }
-
-        prompt = _PROMPTS.get(chart_type)
-        if not prompt:
-            return None
-
-        raw = _inv("writer_fast", prompt, max_tokens=300, temperature=0.2)
-        # JSON 블록 추출
-        m = _re2.search(r'(\[[\s\S]*?\]|\{[\s\S]*?\})', raw)
-        if not m:
-            return None
-        data = _j.loads(m.group(1))
-
-        if chart_type == 'impact':
-            if not isinstance(data, list) or not data:
-                return None
-            factors = [(str(d.get('label', keyword))[:8], float(d.get('value', 1.0)),
-                        d.get('dir', '긍정')) for d in data if d.get('label')]
-            return {'data': factors[:6], 'label': f'{keyword} 영향 요인 분석',
-                    'title': f'{keyword} 주요 영향 분석'}
-
-        if chart_type == 'checklist':
-            if not isinstance(data, list) or not data:
-                return None
-            return {'data': [str(i)[:24] for i in data[:5]],
-                    'label': f'{keyword} 체크포인트',
-                    'title': f'{keyword} 투자자 체크리스트'}
-
-        if chart_type == 'scenario':
-            if not isinstance(data, list) or len(data) < 2:
-                return None
-            scenarios = [{'title': str(d.get('title',''))[:12],
-                          'desc': str(d.get('desc',''))[:20]} for d in data[:3]]
-            return {'data': scenarios, 'label': '시나리오 분석',
-                    'title': f'{keyword} 향후 시나리오'}
-
-        if chart_type == 'line_trend':
-            if not isinstance(data, list) or not data:
-                return None
-            points = [(str(d.get('label','T'))[:4], float(d.get('value', 0))) for d in data if d.get('label')]
-            return {'data': points[:8], 'label': f'{keyword} 트렌드 추이',
-                    'title': f'{keyword} 수치 변화 추이'}
-
-        if chart_type == 'stat_card':
-            if not isinstance(data, list) or not data:
-                return None
-            stats = [{'label': str(d.get('label', keyword))[:6],
-                      'val': str(d.get('val', '')), 'unit': str(d.get('unit', ''))}
-                     for d in data if d.get('label') and d.get('val')]
-            return {'data': stats[:4], 'label': f'{keyword} 핵심 수치',
-                    'title': f'{keyword} 주요 지표'}
-
-        if chart_type == 'comparison':
-            if not isinstance(data, dict):
-                return None
-            return {'pros': [str(p)[:22] for p in data.get('pros', [])[:3]],
-                    'cons': [str(c)[:22] for c in data.get('cons', [])[:3]],
-                    'label': '비교 분석', 'title': f'{keyword} 긍·부정 분석'}
-
-        if chart_type == 'highlight':
-            if not isinstance(data, dict):
-                return None
-            return {'data': str(data.get('text', ''))[:40], 'label': '핵심 인사이트',
-                    'title': f'{keyword} 핵심 포인트'}
-
-    except Exception:
-        pass
-    return None
-
-
-def _extract_for_chart(text: str, keyword: str, chart_type: str) -> dict:
-    """차트 데이터 추출 — LLM 우선, regex 폴백.
-
-    원칙: LLM이 본문을 이해해 의미 있는 라벨/데이터를 생성. regex는 LLM 실패 시만.
-    """
-    # LLM 우선 시도
-    llm_result = _llm_extract_chart_data(text, keyword, chart_type)
-    if llm_result:
-        return llm_result
-
-    import re as _re
-
-    # ── 공통 전처리 ──────────────────────────────
-    # 마침표·줄바꿈으로 먼저 분리, 부족하면 40자 단위 분할
-    raw = [s.strip() for s in _re.split(r'[。.!?\n]+', text) if len(s.strip()) > 8]
-    if len(raw) < 2 and len(text) > 20:
-        raw = [text[i:i+40].strip() for i in range(0, len(text), 40)
-               if text[i:i+40].strip()]
-    sents = raw
-
-    # 핵심 명사 불용어 (접속사·부사·서술어·조사결합어)
-    _STOP = {
-        '다만','또한','하지만','그러나','그리고','따라서','이에','이는','이로','이와',
-        '반면','한편','특히','현재','이후','향후','최근','이미','아직','더욱','여전히',
-        '지속','계속','점점','매우','다소','앞서','이전','오늘','어제','내일','올해',
-        '지난해','이번','지금','당시','이상','이하','그래서','물론','비록','설령',
-        '있어서','있으며','있습니다','합니다','됩니다','있다','한다','된다','이다',
-        '때문에','이러한','다음과','관련해','관련된','중에서','대해서','에서는',
-        '이라고','이라는','라고는','라는것','라면서','라며','하며','하면서','하는데',
-        '상승','증가','호조','성장','개선','강세','수혜','기회','확대','호황','급등',
-        '회복','하락','감소','부진','위축','우려','약세','악화','위기','폭락','감속',
-        '침체','리스크','올랐','내렸','늘었','줄었',
-    }
-    nouns = list(dict.fromkeys(n for n in _re.findall(r'[가-힣]{2,6}', text)
-                               if n not in _STOP))
-
-    num_matches = _re.findall(
-        r'([가-힣]{1,8}[은는이가도의]?\s*)?(\d[\d,]*\.?\d*)\s*(%|억|조|만|bp|배|위|명|개|년|원)?',
-        text)
-
-    POS = ['상승','증가','호조','성장','개선','강세','수혜','기회','확대','호황','급등','회복','올랐','늘었']
-    NEG = ['하락','감소','부진','위축','우려','약세','악화','위기','폭락','감속','침체','리스크','내렸','줄었']
-
-    def _trim(s: str, n: int) -> str:
-        return s[:n].rstrip()
-
-    def _wrap(s: str, width: int = 12) -> str:
-        """한글 width자 단위 줄 바꿈, 최대 3줄"""
-        parts, i = [], 0
-        while i < len(s):
-            parts.append(s[i:i+width])
-            i += width
-        return '\n'.join(parts[:3])
-
-    # ─────────────────────────────────────────────────
-    if chart_type == 'impact':
-        factors = []
-        _SENT_STOP = _STOP | {'유가도','금리도','달러도','주가도','환율도'}
-        for sent in sents[:10]:
-            pos_c = sum(1 for k in POS if k in sent)
-            neg_c = sum(1 for k in NEG if k in sent)
-            if pos_c == 0 and neg_c == 0:
-                continue
-            # 불용어+감성어 제외, 3자 이상 우선, 가장 긴 단어 선택
-            cands = [w for w in _re.findall(r'[가-힣]{2,6}', sent)
-                     if w not in _SENT_STOP and w not in POS + NEG]
-            # 3자 이상 우선 선택, 없으면 2자 사용
-            long_cands = [w for w in cands if len(w) >= 3]
-            best = (long_cands[0] if long_cands else (cands[0] if cands else None))
-            lbl = _trim(best, 8) if best else _trim(keyword, 8)
-            val = round((pos_c - neg_c) * 2.5, 1) or (1.0 if pos_c else -1.0)
-            factors.append((lbl, val))
-        if len(factors) < 3:
-            core = [n for n in nouns if n not in POS + NEG and n not in _SENT_STOP and len(n) >= 2]
-            for i, w in enumerate(core[:max(0, 5-len(factors))]):
-                factors.append((_trim(w, 8), round(2.5 - i * 0.8, 1)))
-        # LLM으로 라벨 보정 — 의미없는 접속사/부사 라벨이 남아있으면 교체
-        _bad_lbls = _SENT_STOP | {'다만','오늘','내일','이번','현재','또한','특히','최근','향후'}
-        if factors and any(lbl in _bad_lbls or len(lbl) <= 1 for lbl, _ in factors):
-            try:
-                from shared.llm import invoke_text as _inv
-                import json as _j
-                _lbls_req = (
-                    f"본문(앞 300자):\n{text[:300]}\n\n"
-                    f"키워드: {keyword}\n"
-                    f"아래 {len(factors[:6])}개 항목의 영향 요인 KPI 라벨을 2~5글자 경제 명사로 교체하라.\n"
-                    f"현재 라벨(참고용): {[l for l, _ in factors[:6]]}\n"
-                    f"JSON 배열만 출력. 예: [\"금리\",\"환율\",\"수출\",\"유가\",\"주가\"]"
-                )
-                _raw = _inv("writer_fast", _lbls_req, max_tokens=80, temperature=0.2)
-                import re as _re2
-                _m = _re2.search(r'\[.*?\]', _raw, _re2.DOTALL)
-                if _m:
-                    _new_lbls = _j.loads(_m.group(0))
-                    factors = [(_trim(str(_new_lbls[i]).strip(), 8) if i < len(_new_lbls) and _new_lbls[i] else lbl, val)
-                               for i, (lbl, val) in enumerate(factors[:6])]
-            except Exception:
-                pass
-        return {'data': factors[:6], 'label': f'{keyword} 영향 요인 분석',
-                'title': f'{keyword} 주요 영향 분석'}
-
-    # ─────────────────────────────────────────────────
-    elif chart_type == 'checklist':
-        items = []
-        for sent in sents[:5]:
-            # 12자 단위 줄 바꿈, 2줄까지만
-            wrapped = _wrap(_trim(sent, 24), 12)
-            lines = wrapped.split('\n')
-            items.append('\n'.join(lines[:2]))
-        if not items:
-            items = [_wrap(f'{keyword} 최신 동향', 12),
-                     _wrap('시장 영향 분석', 12),
-                     _wrap('주요 리스크 확인', 12)]
-        return {'data': items[:5], 'label': f'{keyword} 체크포인트',
-                'title': f'{keyword} 투자자 체크리스트'}
-
-    # ─────────────────────────────────────────────────
-    elif chart_type == 'scenario':
-        pos_s = [s for s in sents if any(k in s for k in POS)]
-        neg_s = [s for s in sents if any(k in s for k in NEG)]
-        neu_s = [s for s in sents if s not in pos_s and s not in neg_s]
-        # 긍정 시나리오 텍스트
-        p_txt = _trim(pos_s[0], 20) if pos_s else _trim(sents[0], 20) if sents else f'{keyword} 회복 기대'
-        # 부정 시나리오 텍스트
-        n_txt = _trim(neg_s[0], 20) if neg_s else _trim(sents[-1], 20) if sents else f'{keyword} 하락 위험'
-        # 중립 시나리오 텍스트
-        t_txt = _trim(neu_s[0], 20) if neu_s else (_trim(sents[len(sents)//2], 20) if len(sents) >= 2 else f'{keyword} 현황 유지')
-        scenarios = [
-            {'title': '▲ 상승 전망', 'desc': _wrap(p_txt, 10)},
-            {'title': '▼ 하락 위험', 'desc': _wrap(n_txt, 10)},
-            {'title': '= 중립 관점', 'desc': _wrap(t_txt, 10)},
-        ]
-        return {'data': scenarios, 'label': '시나리오 분석',
-                'title': f'{keyword} 향후 시나리오'}
-
-    # ─────────────────────────────────────────────────
-    elif chart_type == 'line_trend':
-        _FUNC_WORDS = {'오늘','현재','지금','당장','이미','또한','특히','이후','이전',
-                       '이상','이하','이번','지난','약','총','각각','최대','최소',
-                       '최고','최저','기존','다음','이런','이같','따라','통해'}
-        nums, xlabels = [], []
-        for lgrp, val_str, unit in num_matches:
-            try:
-                val = float(val_str.replace(',', ''))
-            except Exception:
-                continue
-            if val == 0:
-                continue
-            if val > 100_000: val = round(val / 10_000, 1)
-            elif val > 10_000: val = round(val / 1_000, 1)
-            elif val > 1_000:  val = round(val / 100, 1)
-            lbl = lgrp.strip().rstrip('은는이가도의을를에서도 ') if lgrp.strip() else ''
-            if lbl in _FUNC_WORDS: lbl = ''
-            import datetime as _dt2
-            _cur_yr = _dt2.date.today().year
-            _fallback_lbl = _trim(lbl, 4) if lbl else f'{_cur_yr - 4 + len(nums)}년'
-            nums.append(val)
-            xlabels.append(_fallback_lbl)
-        if len(nums) < 3:
-            # 최근 연도 기반 시점 라벨 생성 (S1/S2 대신)
-            import datetime as _dt
-            _cur_year = _dt.date.today().year
-            _time_lbls = [f'{_cur_year - 4 + i}년' for i in range(6)]
-            for i, s in enumerate(sents[:6]):
-                pc = sum(1 for k in POS if k in s)
-                nc = sum(1 for k in NEG if k in s)
-                nums.append(50 + (pc - nc) * 10)
-                xlabels.append(_time_lbls[i] if i < len(_time_lbls) else f'{_cur_year - 1 + i}년')
-        # LLM으로 x축 라벨 보정 (T{n} 라벨이 과반이면 LLM으로 의미있는 이름 추출)
-        t_count = sum(1 for l in xlabels if l.startswith('T') or l.startswith('S'))
-        if t_count >= len(xlabels) // 2 and text:
-            try:
-                from shared.llm import invoke_text as _inv
-                import json as _j
-                _p = (
-                    f"본문(앞 400자):\n{text[:400]}\n\n"
-                    f"키워드: {keyword}, 수치 {len(xlabels[:8])}개의 x축 라벨(2~4글자 명사)을 JSON 배열로만 출력.\n"
-                    f"예: [\"수출\",\"수입\",\"무역수지\",\"환율\"], 배열 길이={len(xlabels[:8])}"
-                )
-                _raw = _inv("writer_fast", _p, max_tokens=100, temperature=0.3)
-                _m = re.search(r'\[.*?\]', _raw, re.DOTALL)
-                if _m:
-                    _labels = _j.loads(_m.group(0))
-                    for i, lbl in enumerate(_labels[:len(xlabels)]):
-                        if lbl and str(lbl).strip():
-                            xlabels[i] = _trim(str(lbl).strip(), 4)
-            except Exception:
-                pass
-        return {'data': list(zip(xlabels[:8], nums[:8])),
-                'label': f'{keyword} 트렌드 추이',
-                'title': f'{keyword} 수치 변화 추이'}
-
-    # ─────────────────────────────────────────────────
-    elif chart_type == 'stat_card':
-        stats = []
-        for lgrp, val_str, unit in num_matches:
-            try:
-                float(val_str.replace(',', ''))
-            except Exception:
-                continue
-            u   = unit or ''
-            # 임시 폴백 라벨 (파티클 제거)
-            raw_lbl = lgrp.strip().rstrip('은는이가도의을를에서도 ') if lgrp.strip() else ''
-            if not raw_lbl:
-                idx = text.find(val_str)
-                pre = _re.findall(r'[가-힣]{2,5}', text[max(0, idx-30):idx])
-                raw_lbl = pre[-1] if pre else keyword
-            stats.append({'val': val_str.replace(',', ''), 'unit': u,
-                          'label': _trim(raw_lbl, 6)})
-        # 중복 제거
-        seen: set = set()
-        stats = [s for s in stats if not (s['val'] in seen or seen.add(s['val']))]
-        # 부족하면 핵심 명사 + 언급 빈도 수치로 보완
-        if len(stats) < 4:
-            core_n = [n for n in nouns if n not in POS + NEG and len(n) >= 2]
-            for n in core_n[:max(0, 4 - len(stats))]:
-                cnt = text.count(n)
-                stats.append({'val': str(cnt), 'unit': '회', 'label': _trim(n, 6)})
-        # LLM으로 의미 있는 KPI 제목 보정
-        try:
-            from shared.llm import invoke_text as _inv
-            import json as _j
-            _nums = [f"{s['val']}{s['unit']}" for s in stats[:4]]
-            _p = (
-                f"본문(앞 600자):\n{text[:600]}\n\n"
-                f"키워드: {keyword}\n"
-                f"수치 목록: {', '.join(_nums)}\n\n"
-                f"각 수치에 대해 본문 맥락에 맞는 2~5글자 KPI 명사 제목을 JSON 배열로만 출력.\n"
-                f"배열 길이={len(_nums)}, 예: [\"영업이익\",\"매출액\",\"성장률\",\"점유율\"]"
-            )
-            _raw = _inv("writer_fast", _p, max_tokens=120, temperature=0.3)
-            _m = re.search(r'\[.*?\]', _raw, re.DOTALL)
-            if _m:
-                _labels = _j.loads(_m.group(0))
-                for i, lbl in enumerate(_labels[:len(stats)]):
-                    if lbl and str(lbl).strip():
-                        stats[i]['label'] = _trim(str(lbl).strip(), 6)
-        except Exception:
-            pass  # 폴백 label 유지
-        return {'data': stats[:4], 'label': f'{keyword} 핵심 수치',
-                'title': f'{keyword} 주요 지표'}
-
-    # ─────────────────────────────────────────────────
-    elif chart_type == 'comparison':
-        pros = [_trim(s, 14) for s in sents if any(k in s for k in POS)][:3]
-        cons = [_trim(s, 14) for s in sents if any(k in s for k in NEG)][:3]
-        # 키워드 없으면 앞/뒤 문장으로 대체
-        if not pros:
-            pros = [_trim(s, 14) for s in sents[:3]]
-        if not cons:
-            cons = [_trim(s, 14) for s in reversed(sents[-3:])]
-        # 그래도 없으면 keyword 기반 단어
-        if not pros:
-            pros = [f'{keyword} 성장 기대', '수요 확대 기대', '기회 요인 부각']
-        if not cons:
-            cons = [f'{keyword} 변동성', '공급 불균형', '규제 불확실성']
-        return {'pros': pros, 'cons': cons, 'label': '비교 분석',
-                'title': f'{keyword} 긍·부정 분석'}
-
-    # ─────────────────────────────────────────────────
-    elif chart_type == 'highlight':
-        ranked = sorted(sents, key=lambda s: (
-            sum(1 for k in POS + NEG if k in s) +
-            len(_re.findall(r'\d', s)) * 0.4
-        ), reverse=True)
-        best = _trim(ranked[0], 40) if ranked else keyword + ' 핵심 동향'
-        return {'data': best, 'label': '핵심 인사이트',
-                'title': f'{keyword} 핵심 포인트'}
-
-    return {'data': None, 'label': keyword, 'title': keyword}
 
 
 def _analyze_section_content(text_plain: str, keyword: str) -> dict:
@@ -1429,192 +779,6 @@ def _split_long_paragraphs(html: str) -> str:
 
     return re.sub(r'<p>(.*?)</p>', _split_p, html, flags=re.DOTALL)
 
-
-def _inject_paragraph_images(html: str, keyword: str, sector: str,
-                               market: dict = None, platform: str = 'naver') -> str:
-    """섹션당 이미지 2개 삽입 — 첫 <p> 뒤 + 중간 <p> 뒤.
-
-    AI 이미지(Pollinations)는 ThreadPoolExecutor 5개 병렬 생성.
-    matplotlib 차트는 스레드 안전 문제로 순차 생성.
-    모든 이미지는 글 내용 기반 동적 생성 (위치 고정 없음).
-    """
-    import re
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    from collections import defaultdict
-
-    # 2문장(약 100자)+ 문장이 있는 <p>를 먼저 1문장씩 분리 (이미지 삽입 슬롯 자동 증가)
-    html = _split_long_paragraphs(html)
-
-    parts = re.split(
-        r'(<figure[^>]*class="blog-image[^"]*"[^>]*>.*?</figure>)',
-        html, flags=re.DOTALL)
-
-    # ── PASS 1: 각 섹션에서 삽입 위치 2곳 수집 ─────────────────────
-    cidx_counter = [0]
-    market_used  = [False]
-    task_list    = []   # dict: part_idx, insert_after(p index), text, orig_p_matches
-
-    for pi, part in enumerate(parts):
-        if part.startswith('<figure'):
-            continue
-        p_matches = list(re.finditer(r'<p>(.*?)</p>', part, re.DOTALL))
-        if len(p_matches) < 2:
-            continue
-
-        n        = len(p_matches)
-        text_full = re.sub(r'<[^>]+>', '', part)
-        is_market_section = (not market_used[0] and market
-                             and re.search(r'시장|주가|지수|환율|금리|코스피|나스닥|S&P', text_full))
-        if is_market_section:
-            market_used[0] = True
-
-        # 마지막 <p> 제외하고 모든 <p> 뒤에 이미지 삽입
-        # 패턴: <p>글</p> → [이미지] → <p>글</p> → [이미지] → ... → <p>글</p>(마지막, 이미지 없음)
-        for p_idx in range(n - 1):
-            cidx_counter[0] += 1
-            cidx = cidx_counter[0]
-
-            # 이미지를 위한 텍스트: 섹션 전체 텍스트 (자르지 않음 — 설계서 생성에 활용)
-            full_section_text = re.sub(r'<[^>]+>', '', part)
-            # 소제목 추출: 현재 <p> 위치까지의 텍스트에서 마지막 h2/h3 탐색
-            # (전체 part에서 re.search하면 항상 첫 번째 h2만 잡힘)
-            _part_before_p = part[:p_matches[p_idx].start()]
-            _h_m = None
-            for _hm_iter in re.finditer(r'<h[23][^>]*>(.*?)</h[23]>', _part_before_p,
-                                         re.IGNORECASE | re.DOTALL):
-                _h_m = _hm_iter  # 현재 단락 직전의 마지막 h2/h3
-            _section_title = re.sub(r'<[^>]+>', '', _h_m.group(1)).strip() if _h_m else ''
-            # ctx_text: 해당 <p> + 다음 <p> (기존 폴백 함수들 호환용)
-            ctx_text = re.sub(r'<[^>]+>', '',
-                              p_matches[p_idx].group(0) + p_matches[p_idx + 1].group(0))
-
-            task_list.append({
-                'part_idx'      : pi,
-                'insert_after'  : p_idx,      # 이 인덱스의 <p> 뒤에 삽입
-                'orig_p_matches': p_matches,
-                'cidx'          : cidx,
-                'text'          : ctx_text,          # 기존 폴백용 (2문단)
-                'full_text'     : full_section_text,  # NEW: 섹션 전체 텍스트
-                'section_title' : _section_title,     # NEW: 소제목
-                'market_chart'  : bool(is_market_section and p_idx == 0),
-                'part_html'     : part,
-            })
-
-    # ── 이미지 개수 동적 결정 (★ 사용자 박제 2026-05-15) ──────
-    # 박제 구조: 1 intro + 4섹션×2 + 1 outro = 10개. h2 4개 기준 상한 10.
-    # h2 적을 때 (h2_count < 4) 도 안전: max(3, ...) 보장.
-    h2_count = len(re.findall(r'<h[23][^>]*>', html, re.IGNORECASE))
-    MAX_IMGS = max(3, min(h2_count * 2 + 2, 10))
-    if len(task_list) > MAX_IMGS:
-        market_tasks = [t for t in task_list if t['market_chart']]
-        other_tasks  = [t for t in task_list if not t['market_chart']]
-        slots = max(0, MAX_IMGS - len(market_tasks))
-        if slots > 0 and other_tasks:
-            step = max(1, len(other_tasks) // slots)
-            selected = [other_tasks[min(i * step, len(other_tasks) - 1)] for i in range(slots)]
-        else:
-            selected = []
-        task_list = market_tasks + selected
-        print(f"  📸 섹션 이미지 동적 제한: h2/h3={h2_count}개 → 최대 {MAX_IMGS}개 (전체 슬롯 {len(market_tasks)+len(other_tasks)} → {len(task_list)}개 선택)")
-
-    # ── PASS 2 & 3: 동적 이미지 유형 배정 (이미지 개수만큼 최대 다양성) ──────
-    # 전체 유형 풀에서 겹치지 않게 순환 — 이미지 수가 많을수록 더 다양한 타입
-    import time as _time_p3
-    import random as _random
-
-    # 전체 가용 유형 (market_chart 제외)
-    _ALL_IMG_TYPES = [
-        'ai',           # Pollinations AI 사진
-        'impact',       # 수평 바차트 (영향 요인)
-        'checklist',    # 체크리스트/테이블
-        'scenario',     # 시나리오 카드
-        'line_trend',   # 라인/에어리어 트렌드 차트
-        'stat_card',    # KPI 숫자 인포그래픽
-        'comparison',   # 좌우 비교 카드
-        'highlight',    # 텍스트 하이라이트 카드
-    ]
-
-    def _build_slot_sequence(n: int) -> list:
-        """n개 슬롯에 중복 최소화한 유형 시퀀스 반환."""
-        seq = []
-        pool = _ALL_IMG_TYPES[:]
-        while len(seq) < n:
-            chunk = pool[:]
-            _random.seed(int(TODAY_STR.replace('-','')) + len(seq))  # 날짜 고정 시드 → 재실행해도 동일
-            _random.shuffle(chunk)
-            # 첫 사이클: AI를 앞쪽에 배치 (가장 시각적으로 다름)
-            if not seq:
-                chunk.remove('ai'); chunk.insert(0, 'ai')
-            seq.extend(chunk)
-        return seq[:n]
-
-    # market_chart가 아닌 슬롯만 카운트
-    non_market = [t for t in task_list if not t['market_chart']]
-    slot_seq   = _build_slot_sequence(len(non_market))
-    slot_map   = {t['cidx']: slot_seq[i] for i, t in enumerate(non_market)}
-
-    img_results: dict[int, tuple[str, str]] = {}
-
-    for task in task_list:
-        cidx          = task['cidx']
-        text          = task['text']             # 2문단 텍스트 (폴백용)
-        full_text     = task.get('full_text', text)   # 섹션 전체 텍스트
-        section_title = task.get('section_title', '')
-
-        # ── 시장 현황 차트 (고정 — 데이터 기반)
-        if task['market_chart']:
-            path = make_market_chart(market, keyword, sector, cidx, platform)
-            img_results[cidx] = (path, '글로벌 시장 현황')
-            continue
-
-        # ── NEW: 스마트 이미지 — 설계서 기반 전문 시각화 ─────────────────
-        # 섹션 전체 텍스트 → Claude 설계서 → Plotly/SVG 렌더링
-        # (내부에서 실패 시 AI 사진으로 자동 폴백)
-        path = make_smart_section_image(
-            section_text  = full_text,
-            section_title = section_title,
-            keyword       = keyword,
-            sector        = sector,
-            card_idx      = cidx,
-            platform      = platform,
-            out_dir       = _img_dir(platform),
-        )
-        label = section_title or f'{keyword} 핵심 데이터'
-
-        if path:
-            img_results[cidx] = (path, label)
-        else:
-            print(f"  ⚠️ 이미지 생성 실패 (cidx={cidx})")
-
-    # ── PASS 4: 역순 삽입 (높은 위치부터 → 낮은 위치 보존) ──────────
-    tasks_by_part: dict[int, list] = defaultdict(list)
-    for task in task_list:
-        cidx = task['cidx']
-        if cidx not in img_results:
-            continue
-        path, label = img_results[cidx]
-        if not path or not Path(path).exists():
-            continue
-        insert_pos = task['orig_p_matches'][task['insert_after']].end()
-        tasks_by_part[task['part_idx']].append((insert_pos, cidx, path, label))
-
-    result_parts = list(parts)
-    inserted = 0
-
-    for pi, insertions in tasks_by_part.items():
-        part = result_parts[pi]
-        # 높은 위치부터 처리 → 낮은 위치 오프셋 불변
-        for pos, cidx, path, label in sorted(insertions, key=lambda x: x[0], reverse=True):
-            placeholder = f'__PARA_IMG_{cidx}__'
-            fig_html    = (f'\n<figure class="blog-image size-large">'
-                           f'<img src="{placeholder}" alt="{label}" /></figure>\n')
-            _para_img_paths[cidx] = path
-            part     = part[:pos] + fig_html + part[pos:]
-            inserted += 1
-        result_parts[pi] = part
-
-    print(f"  📊 섹션별 콘텐츠 이미지 {inserted}개 삽입 완료 (<p> 사이마다 1개, 마지막 제외)")
-    return ''.join(result_parts)
 
 
 # 섹션 이미지 + 단락 이미지 경로 임시 저장 (generate → run 간 전달)
@@ -2130,7 +1294,7 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
         #   02 는 주제 선정·JARVIS09 수집 호출을 하지 않는다 — 폴백 없음.
         from JARVIS03_RADAR.topic_pack import (
             pick_candidate as _tp_pick, build_topic_pack as _tp_build,
-            build_for_keyword as _tp_for_kw, restore_docs as _tp_docs,
+            build_for_keyword as _tp_for_kw,
         )
         _force = _os.environ.get("JARVIS_FORCE_TOPIC", "").strip()
         if _force:
@@ -2175,43 +1339,48 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
                 f"\n\n[주제 프로필 — 자비스03]\n- 주제: {keyword} ({sector})\n- 정의: {reason}"
                 + (f"\n- 관련어: {_rel_terms}" if _rel_terms else ""))
 
-        # ── ★ 데이터-우선 (사용자 박제 2026-06-30 → 2026-07-03 개편): 자비스03 팩의
-        #    *선수집* 실데이터 사용 — 02 의 JARVIS09 직접 호출 폐지.
+        # ★ JARVIS09 직접 수집 (topic_pack = 키워드+프로필만 — 선수집 없음)
+        _pool: list = []
+        _ev_pack: dict = {}
+        _kw_collection_docs: list = []
+        try:
+            from JARVIS09_COLLECTOR import collect_research, collect_chart_data
+            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
+            _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
+            _pool = list(_chart.get("datasets") or [])
+            _res = collect_research(keyword, sector=sector, angle=reason) or {}
+            _kw_collection_docs = list(_res.get("docs") or [])
+            # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
+            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
+            _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}
+            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
+                  f"데이터셋 {len(_pool)}개")
+        except Exception as _je:
+            print(f"  ⚠️ [JARVIS09] 수집 실패: {_je}")
+
+        # 데이터 카탈로그 주입
         try:
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
-            _pool = list(_cand.get("datasets") or [])
             if _pool:
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
-                print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입")
+                print(f"  🗂️ [데이터-우선] 실데이터 {len(_pool)}개 → 카탈로그 주입")
             else:
-                print("  ⚠️ [데이터-우선] 팩 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
+                print("  ⚠️ [데이터-우선] 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
         except Exception as _de:
-            print(f"  ⚠️ [데이터-우선] 팩 데이터 주입 스킵: {_de}")
+            print(f"  ⚠️ [데이터-우선] 데이터 주입 스킵: {_de}")
 
-        # ★ 근거 브리프 주입 (사용자 지적 2026-07-03 — ERRORS [303]): 수집 문서에서
-        #   추출된 fact(출처 표기)를 대본 프롬프트에 직접 주입 — ADR 012 작성측 연결이
-        #   테마 경로에만 있고 경제 경로에 누락돼 "수집 자산 대본 미도달"이던 병목 해소.
+        # 근거 브리프 주입
         try:
-            _ev_path = _cand.get("evidence_path") or ""
-            if _ev_path:
-                import json as _ej
-                from pathlib import Path as _EPath
-                _ev_pack = _ej.loads(_EPath(_ev_path).read_text(encoding="utf-8"))
-                from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
-                _brief = evidence_brief(_ev_pack)
-                if _brief:
-                    supreme_block = (supreme_block or "") + "\n\n" + _brief
-                    print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
-                          f"→ 대본 프롬프트 직접 주입")
+            from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
+            _brief = evidence_brief(_ev_pack)
+            if _brief:
+                supreme_block = (supreme_block or "") + "\n\n" + _brief
+                print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
+                      f"→ 대본 프롬프트 직접 주입")
         except Exception as _ebe:
             print(f"  ⚠️ [근거 브리프] 주입 스킵: {_ebe}")
 
-        # ★ 주제 문서 — 자비스03 팩의 선수집 문서 (JARVIS09 재수집 없음)
-        _kw_collection_docs = _tp_docs(_cand) or list(collection_docs or [])
-        print(f"  🕸️ [topic_pack] '{keyword}' 선수집 문서 {len(_kw_collection_docs)}건 사용")
-
-        # ★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다"):
-        #   브리프(수치 규율)에 더해 문서 전체를 서사 재료로 대본 프롬프트에 전달.
+        # 수집 자료 전문 주입
         try:
             from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
             _corpus = _bcb(_kw_collection_docs)
@@ -2223,19 +1392,30 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
         from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
-        from JARVIS03_RADAR.topic_pack import cand_collected
         from JARVIS06_IMAGE.draft_processor import process_draft
+        from JARVIS09_COLLECTOR.models import CollectedData
         from pathlib import Path as _P9
 
-        # ★ Step 9 (2026-07-05): Pass-1-only 대본(placeholder) → process_draft v2 단일 이미지 경로.
-        #   경제도 테마와 동일한 JARVIS06 이미지 오케스트레이터 (embed-first 폐지). 실패차트→AI사진
-        #   폴백·min-5 top-up·썸네일 필수는 process_draft(CATEGORY_POLICY['economic'])가 담당.
+        # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
         draft_html = generate_article_html(keyword, sector, reason, supreme_block,
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
-        collected = cand_collected(_cand)          # topic_pack cand → CollectedData (Step 4)
+        try:
+            from dataclasses import asdict as _asdict
+            _docs_ser = [_asdict(d) if hasattr(d, '__dataclass_fields__') else d
+                         for d in _kw_collection_docs]
+        except Exception:
+            _docs_ser = []
+        collected = CollectedData.from_dict({
+            "meta": {"keyword": keyword, "sector": sector, "category": "economic",
+                     "profile": _cand.get("profile") or {}},
+            "datasets": _pool,
+            "docs": _docs_ser,
+            "facts": list(_ev_pack.get("facts") or []),
+            "entities": [],
+        })
         result = process_draft(draft_html, collected=collected, platform="tistory",
                                out_dir=TISTORY_IMG_DIR)
         html = result["html"]
@@ -2363,7 +1543,7 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
         #   02 는 주제 선정·JARVIS09 수집 호출을 하지 않는다 — 폴백 없음.
         from JARVIS03_RADAR.topic_pack import (
             pick_candidate as _tp_pick, build_topic_pack as _tp_build,
-            build_for_keyword as _tp_for_kw, restore_docs as _tp_docs,
+            build_for_keyword as _tp_for_kw,
         )
         _force_nv = _os.environ.get("JARVIS_FORCE_NV_TOPIC", "").strip()
         if _force_nv:
@@ -2408,42 +1588,48 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
                 f"\n\n[주제 프로필 — 자비스03]\n- 주제: {keyword} ({sector})\n- 정의: {reason}"
                 + (f"\n- 관련어: {_rel_terms}" if _rel_terms else ""))
 
-        # ── ★ 데이터-우선 (사용자 박제 2026-06-30 → 2026-07-03 개편): 자비스03 팩의
-        #    *선수집* 실데이터 사용 — 02 의 JARVIS09 직접 호출 폐지.
+        # ★ JARVIS09 직접 수집 (topic_pack = 키워드+프로필만 — 선수집 없음)
+        _pool: list = []
+        _ev_pack: dict = {}
+        _kw_collection_docs: list = []
+        try:
+            from JARVIS09_COLLECTOR import collect_research, collect_chart_data
+            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
+            _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
+            _pool = list(_chart.get("datasets") or [])
+            _res = collect_research(keyword, sector=sector, angle=reason) or {}
+            _kw_collection_docs = list(_res.get("docs") or [])
+            # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
+            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
+            _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}
+            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
+                  f"데이터셋 {len(_pool)}개")
+        except Exception as _je:
+            print(f"  ⚠️ [JARVIS09] 수집 실패: {_je}")
+
+        # 데이터 카탈로그 주입
         try:
             from JARVIS02_WRITER.draft_writer import _build_data_catalog as _bdc
-            _pool = list(_cand.get("datasets") or [])
             if _pool:
                 supreme_block = (supreme_block or "") + "\n\n" + _bdc(_pool)
-                print(f"  🗂️ [데이터-우선] 팩 실데이터 {len(_pool)}개 → 카탈로그 주입")
+                print(f"  🗂️ [데이터-우선] 실데이터 {len(_pool)}개 → 카탈로그 주입")
             else:
-                print("  ⚠️ [데이터-우선] 팩 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
+                print("  ⚠️ [데이터-우선] 실데이터 0 — 차트는 AI사진 대체(거짓차트 금지)")
         except Exception as _de:
-            print(f"  ⚠️ [데이터-우선] 팩 데이터 주입 스킵: {_de}")
+            print(f"  ⚠️ [데이터-우선] 데이터 주입 스킵: {_de}")
 
-        # ★ 근거 브리프 주입 (사용자 지적 2026-07-03 — ERRORS [303]): 수집 문서에서
-        #   추출된 fact(출처 표기)를 대본 프롬프트에 직접 주입 — 경제 경로 병목 해소.
+        # 근거 브리프 주입
         try:
-            _ev_path = _cand.get("evidence_path") or ""
-            if _ev_path:
-                import json as _ej
-                from pathlib import Path as _EPath
-                _ev_pack = _ej.loads(_EPath(_ev_path).read_text(encoding="utf-8"))
-                from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
-                _brief = evidence_brief(_ev_pack)
-                if _brief:
-                    supreme_block = (supreme_block or "") + "\n\n" + _brief
-                    print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
-                          f"→ 대본 프롬프트 직접 주입")
+            from JARVIS09_COLLECTOR.evidence_pack import evidence_brief
+            _brief = evidence_brief(_ev_pack)
+            if _brief:
+                supreme_block = (supreme_block or "") + "\n\n" + _brief
+                print(f"  📚 [근거 브리프] fact {len(_ev_pack.get('facts', []))}개 "
+                      f"→ 대본 프롬프트 직접 주입")
         except Exception as _ebe:
             print(f"  ⚠️ [근거 브리프] 주입 스킵: {_ebe}")
 
-        # ★ 주제 문서 — 자비스03 팩의 선수집 문서 (JARVIS09 재수집 없음)
-        _kw_collection_docs = _tp_docs(_cand) or list(collection_docs or [])
-        print(f"  🕸️ [topic_pack] '{keyword}' 선수집 문서 {len(_kw_collection_docs)}건 사용")
-
-        # ★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다"):
-        #   브리프(수치 규율)에 더해 문서 전체를 서사 재료로 대본 프롬프트에 전달.
+        # 수집 자료 전문 주입
         try:
             from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
             _corpus = _bcb(_kw_collection_docs)
@@ -2455,19 +1641,30 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
         from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
-        from JARVIS03_RADAR.topic_pack import cand_collected
         from JARVIS06_IMAGE.draft_processor import process_draft
+        from JARVIS09_COLLECTOR.models import CollectedData
         from pathlib import Path as _P9
 
-        # ★ Step 9 (2026-07-05): Pass-1-only 대본(placeholder) → process_draft v2 단일 이미지 경로.
-        #   네이버 dir 리셋(_cleanup_naver_images)은 이 함수 앞에서 이미 수행. process_draft 는
-        #   out_dir mkdir(exist_ok=True)만 — 리셋 안 함(잔재 없음).
+        # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
         draft_html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
 
-        collected = cand_collected(_cand)          # topic_pack cand → CollectedData (Step 4)
+        try:
+            from dataclasses import asdict as _asdict
+            _docs_ser = [_asdict(d) if hasattr(d, '__dataclass_fields__') else d
+                         for d in _kw_collection_docs]
+        except Exception:
+            _docs_ser = []
+        collected = CollectedData.from_dict({
+            "meta": {"keyword": keyword, "sector": sector, "category": "economic",
+                     "profile": _cand.get("profile") or {}},
+            "datasets": _pool,
+            "docs": _docs_ser,
+            "facts": list(_ev_pack.get("facts") or []),
+            "entities": [],
+        })
         result = process_draft(draft_html, collected=collected, platform="naver",
                                out_dir=NAVER_IMG_DIR)
         html = result["html"]

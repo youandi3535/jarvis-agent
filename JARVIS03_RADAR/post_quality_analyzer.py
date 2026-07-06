@@ -219,7 +219,7 @@ def _judge_unavailable_alert(post_type: str, err: str) -> None:
 
 def judge_engagement(title: str, content: str, post_type: str = "",
                      platform: str = "") -> dict:
-    """발행 전 유익성·매력도 채점 — engagement_judge(Opus 4.8).
+    """발행 전 유익성·매력도 채점 — engagement_judge(Sonnet 5).
 
     Returns:
         {"passed": bool, "engagement_score": int, "usefulness_score": int,
@@ -237,13 +237,15 @@ def judge_engagement(title: str, content: str, post_type: str = "",
     user_msg = f"제목: {title}\n\n본문:\n{snippet}"
     system = ENGAGEMENT_SYSTEM_PROMPT + _build_learning_block(post_type)
 
-    # ★ fail-open 강화 (2026-07-02): 즉시 통과 대신 2회 재시도 → 심사관 일시 불안정에
-    #   매력도 게이트가 통째로 무력화되는 것 방지. 재시도도 실패하면 통과하되(진실성과 달리
-    #   재생성 사유일 뿐) '심사 불가'를 가시화(점수 -1 = 미채점, GUARDIAN·버스 경고).
+    # ★ fail-open 강화 (2026-07-02): 즉시 통과 대신 3회 재시도(★ 사용자 박제
+    #   2026-07-06 — 재시도 상한 예외 없이 3회 통일, 기존 2회에서 상향) → 심사관
+    #   일시 불안정에 매력도 게이트가 통째로 무력화되는 것 방지. 재시도도 실패하면
+    #   통과하되(진실성과 달리 재생성 사유일 뿐) '심사 불가'를 가시화(점수 -1 = 미채점,
+    #   GUARDIAN·버스 경고).
     from shared.llm import invoke_text as _inv
     obj = None
     last_err = ""
-    for _attempt in range(2):
+    for _attempt in range(3):
         try:
             # ★ 비필수 (ERRORS [368]): 매력도는 fail-open(폴백=통과)이므로 스로틀 시 즉시 폴백
             #   — 발행 임계경로를 매력도 LLM 대기로 막지 않는다(재생성 사유일 뿐).
@@ -593,12 +595,16 @@ if __name__ == "__main__":
     # python post_quality_analyzer.py         → 미처리 pending 1회 전체 처리
     args = sys.argv[1:]
     if "--watch" in args:
+        # ★ 무한 폴링 데몬 — 전체 루프는 감싸지 않음 (상주 데몬). 폴 1건 단위 가드는 run_watch 내부 몫.
         run_watch(interval=int(os.getenv("ANALYZER_POLL_SEC", "300")))
     else:
-        aid = next((a for a in args if a.isdigit()), None)
-        if aid:
-            ok = run_single(int(aid))
-            print(f"\n✅ 분석 {'완료' if ok else '건너뜀'}: id={aid}")
-        else:
-            n = run_once()
-            print(f"\n✅ 분석 완료: {n}개")
+        # ★ 정지 방어: fire-and-forget 자식이라 자체 가드 필수 — 일회성 작업(run_single/run_once)만 감쌈.
+        from JARVIS00_INFRA.watchdog import guard_main
+        with guard_main("품질 분석", deadline_sec=900):
+            aid = next((a for a in args if a.isdigit()), None)
+            if aid:
+                ok = run_single(int(aid))
+                print(f"\n✅ 분석 {'완료' if ok else '건너뜀'}: id={aid}")
+            else:
+                n = run_once()
+                print(f"\n✅ 분석 완료: {n}개")

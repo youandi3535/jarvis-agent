@@ -464,20 +464,12 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                     res = collect_research(state["theme"], state.get("sector", ""),
                                            angle=_angle)
                     docs = res.get("docs") or []
-                    pack = res.get("evidence_pack") or None
+                    # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
+                    from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
+                    pack = _bep(state["theme"], res.get("plan") or {}, docs) or None
                     n_facts = len((pack or {}).get("facts", []))
-                    print(f"  ✅ [THEME] JARVIS09 리서치 수집 완료: 문서 {len(docs)}건 "
-                          f"· 근거 fact {n_facts}개")
-                    # ★ 근거 품질 경고 (ERRORS [300]): 테마는 종목 실데이터가 1차 근거라
-                    #   차단하지 않고 가시화만 (조용한 강등 금지).
-                    if res.get("insufficient") or res.get("plan_fallback"):
-                        _tags = []
-                        if res.get("plan_fallback"):
-                            _tags.append("설계 폴백")
-                        if res.get("insufficient"):
-                            _tags.append(f"근거 부족(커버리지 {res.get('coverage_ratio')})")
-                        print(f"  ⚠️ [THEME] 리서치 품질 경고: {', '.join(_tags)}")
-                        _tg(f"⚠️ [THEME] '{state['theme']}' 리서치 품질 경고: {', '.join(_tags)}")
+                    print(f"  ✅ [THEME] JARVIS09 원시 수집 완료: 문서 {len(docs)}건 "
+                          f"→ 02 fact 추출 {n_facts}개")
                     return {"docs": docs, "pack": pack}
             except Exception as e:
                 print(f"  ⚠️ [THEME] 리서치 수집 실패 — 종전 스윕 폴백: {e}")
@@ -873,7 +865,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     # ── ★ 플랫폼 단위 끝까지 직렬 (사용자 박제 2026-07-03) ──────────────────
     # 네이버 액션(공유 수집 포함): ①규정 → ②수집 → ③NV대본 → 검증 순환 → 발행 [종결]
     #   → 티스토리 액션: ④TS쿠키(신선 로그인) → ⑤TS대본 → 검증 순환 → 발행
-    # 한쪽의 재작성 순환·실패가 다른 쪽을 지연·차단하지 않음 (실패 격리, max_attempts 각 2)
+    # 한쪽의 재작성 순환·실패가 다른 쪽을 지연·차단하지 않음 (실패 격리, max_attempts 각 3 — 사용자 지시로 3회 통일)
     _nv_action_def = ActionDefinition(
         name=f"theme-publish-{theme}-naver",
         steps=[_step_load_rules, _step_collect, _step_nv_draft],
@@ -884,7 +876,8 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         send=lambda st: _send_theme_platform(st, "naver", "nv_draft",
                                              "nv_pub_result", "__nv_send_attempted__"),
         precondition=_precondition,
-        max_attempts=2,  # ★ 외부 발행은 비멱등 → 최대 2회 (sentinel이 중복 방지)
+        max_attempts=3,  # ★ 외부 발행은 비멱등 → 원래 최대 2회였으나 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__nv_send_attempted__)이 중복 발행 방지
+        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
     )
     _ts_action_def = ActionDefinition(
         name=f"theme-publish-{theme}-tistory",
@@ -896,7 +889,8 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         send=lambda st: _send_theme_platform(st, "tistory", "ts_draft",
                                              "ts_pub_result", "__ts_send_attempted__"),
         precondition=_precondition,
-        max_attempts=2,
+        max_attempts=3,  # ★ 원래 최대 2회(비멱등 발행) — 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__ts_send_attempted__)이 중복 발행 방지
+        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
     )
 
     # ★ 단일 진입점 — 새 테마 = 전체 상태 초기화
@@ -974,13 +968,16 @@ if __name__ == "__main__":
     p.add_argument("--tistory-only", action="store_true")
     args = p.parse_args()
 
-    if args.naver_only:
-        r = run_naver_theme(args.theme, args.sector)
-        sys.exit(0 if r.get("success") else 1)
-    if args.tistory_only:
-        r = run_tistory_theme(args.theme, args.sector)
-        sys.exit(0 if r.get("success") else 1)
-    # 기본 — 2개 통합
-    r = run_all_themes(args.theme, args.sector)
-    ok = any(r.get(p, {}).get("success") for p in ("tistory", "naver"))
-    sys.exit(0 if ok else 1)
+    # ★ 정지 방어 (사용자 박제 2026-07-06): 일회성 발행 작업 freeze/deadline 가드.
+    from JARVIS00_INFRA.watchdog import guard_main
+    with guard_main("테마 발행", deadline_sec=3600):   # 전체 2블로그×30분 (테마는 데몬 내부 실행 — 부모 subprocess 없음)
+        if args.naver_only:
+            r = run_naver_theme(args.theme, args.sector)
+            sys.exit(0 if r.get("success") else 1)
+        if args.tistory_only:
+            r = run_tistory_theme(args.theme, args.sector)
+            sys.exit(0 if r.get("success") else 1)
+        # 기본 — 2개 통합
+        r = run_all_themes(args.theme, args.sector)
+        ok = any(r.get(p, {}).get("success") for p in ("tistory", "naver"))
+        sys.exit(0 if ok else 1)

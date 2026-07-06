@@ -2,6 +2,75 @@
 
 ---
 
+## [386] 본문 AI 이미지 전면 폐기 — 본문 이미지 = 인포그래픽 디자인만 (2026-07-06)
+
+- **증상/요청**: 본문(썸네일 제외) 인포그래픽 실패 시 AI 사진(Pollinations) 폴백이 토큰을 태움. 사용자: "본문 이미지는 인포그래픽 디자인만. 못 만들면 비워. 폴백이든 뭐든 다 지워. 썸네일은 예외."
+- **해결**:
+  1. `JARVIS06_IMAGE/draft_processor.py`(활성 이미지 오케스트레이터): [CHART_N]/[PHOTO_N] → 실데이터 인포그래픽만, 실패 시 빈 슬롯. 삭제: `_photo_for_failed_slot`·`_extra_photos`·`_generate_photos`(→`_render_photo_slots` 인포그래픽 치환)·`_build_photo_prompt_en`·`_PHOTO_PROMPT_*`·사진 관련성 검증. min-N top-up도 인포그래픽만(소진 시 그대로 둠). `chart_ai_fallback` 정책 노브 제거.
+  2. 라이터측 죽은/조건부 AI 사진 코드 제거: `theme_html_writer`(`_generate_svg_pass2_and_replace_theme`·`_inject_theme_section_images` 삭제), `jarvis_main`(`_inject_para_images_into_blocks` 삭제), `tistory_html_writer`(`_generate_ai_photo_for_slot`·AI top-up·`_ai_photo_html`·`_insert_extra_photos`·`_MIN_IMAGES` 삭제, `_generate_svg_pass2_and_replace` AI 부분 중립화→빈 슬롯).
+  - 검증: 기사 본문 발행 경로(process_draft + Pass-1)에 `generate_photo` 호출 0. 남은 2곳(image_agent 버스 핸들러·trend_charts 레거시 docstring)은 본문 경로 아님.
+- **파일**: `JARVIS06_IMAGE/draft_processor.py`, `JARVIS02_WRITER/{theme_html_writer,tistory_html_writer,jarvis_main}.py`.
+- **교훈**: 거짓/무관 이미지보다 빈 슬롯이 낫다. 본문은 실데이터 인포그래픽만 — 폴백 체인(AI·matplotlib) 전부 제거해 토큰·품질 리스크 동시 차단. 썸네일(대표 실사)은 용도가 달라 예외.
+
+---
+
+## [385] 정지 방어 전면 도입 — 재시도 3회 캡 + 300초 freeze 워치독 + 블로그 30분 데드라인 (2026-07-06)
+
+- **증상**: 06:30 경제 발행 subprocess 가 LLM 스로틀 재시도 루프에 갇혀 2시간+ 멈춤(livelock). 부모 timeout 90분·재시도 무한이라 방치.
+- **원인**: ① 재시도 상한 부재/과다(llm=4·harness=5·design_learner=40·pollinations=6). ② 멈춤 감지 메커니즘 전무. ③ 부모 subprocess timeout 90분(정책 3배).
+- **해결 (전 시스템 — 사용자 박제 "어떤 경우라도 재시도 3회·멈춤 300초")**:
+  1. **재시도/재시작 최대 3회**: `shared/llm.py`(retries max(1,min(3,_retries))), `harness.DEFAULT_MAX_ATTEMPTS`(5→3), `design_learner`(40→3), `pollinations`(6→3), `jarvis_daemon._ST_MAX_FAIL`(재시작 5→3). CLAUDE.md·ADR 009 문서 동기화.
+  2. **`JARVIS00_INFRA/watchdog.py` 신설**(정지 감지 단일 진입점): `Watchdog`(deadline+freeze) + `guard_main`(독립 스크립트) + 전역 `beat()`(진행신호). freeze 300초 무진전 시 GUARDIAN 보고 → killable subprocess(`--scheduled`)면 os._exit(다음 예약 재시도), 데몬 본체면 보고만(안전).
+  3. **harness `run_action` 연결** → 모든 액션 자동 상속. 경제·테마 발행 네이버/티스토리 액션 `deadline_sec=1800`(블로그당 30분).
+  4. **전역 beat 배선**: `shared/llm.py`·`shared/claude_sdk_compat.py`(SDK 루프)·`JARVIS09 collector_engine`(수집 6곳) → 오래 걸리는 정상 작업을 freeze 오탐 안 함.
+  5. **독립 스크립트 10개 `__main__` guard_main 래핑**(economic_poster·trend_theme_writer·revise_adapter·radar_main·performance_collector·post_quality_analyzer·daily_review·naver/tistory_cookie_refresher·naver_poster). ★ --watch 무한폴링·--manual 대화형 로그인은 올바르게 제외.
+  6. **부모 subprocess 백스톱**: economic timeout 90→60분(자식이 harness 30분/블로그·freeze로 먼저 자기중단, 자식 __main__ 59분 곱게, 부모 60분 최후).
+- **파일**: `JARVIS00_INFRA/{watchdog.py,harness.py}`, `shared/{llm.py,claude_sdk_compat.py}`, `JARVIS02_WRITER/{economic_poster,trend_theme_writer,revise_adapter,scheduler}.py`, `JARVIS03_RADAR/{radar_main,performance_collector,post_quality_analyzer,daily_review}.py`, `JARVIS08_PUBLISH/**`, `JARVIS09_COLLECTOR/collector_engine.py`, `jarvis_daemon.py`, `JARVIS06_IMAGE/{design_learner,providers/pollinations_provider}.py`, `CLAUDE.md`, ADR 009.
+- **교훈**: 멈춤은 두 종류 — (A)진짜 얼어붙음(freeze)은 워치독 300초, (B)헛돌기(livelock)는 재시도 캡 3 + 전체 데드라인. "3분 멈춤 감지"는 (B)를 못 잡음(로그는 갱신됨). "처음부터 재시작"은 원인 지속 시 무한 재시작 위험 → 중단·GUARDIAN 진단·다음 예약이 정답. 정지 감지는 *진입점*(harness·__main__·subprocess)에만 걸면 안쪽 루프 자동 커버.
+
+---
+
+## [384] 수집 신뢰 서열 쿼터 도입 + topic_pack 후보 수 = 발행 슬롯 (2026-07-06)
+
+- **증상**: (개선) 수집이 "싹 다 받아"(무제한)라 대본에 자료 과다 + 낭비. topic_pack 이 발행 안 할 5~8개 주제까지 프로파일링.
+- **원인**: ADR 013 "수집 전부" 방침에 상한 개념 부재 — 사용자 의도는 "인포그래픽 만들 만큼"이지 무제한 아님. topic_pack `max_candidates=8` 인데 실제 발행은 2건(네이버·티스토리).
+- **해결**:
+  1. `JARVIS09_COLLECTOR.select_by_trust_quota(docs, budget=15)` 신설 — 논문 최대3·API 최대7·나머지 5, 총 15개(★ v2 정정 2026-07-06: 10→15), 상위 티어 미달분 다음 티어 이월(cascade). 나머지는 source_type 라운드로빈(다양성). `collect_research` 확정 docs + `restrict_pack_to_docs` 로 fact 도 그 15개 문서에서만. 예시 단위테스트 전부 통과.
+  2. 티어 그룹 정의 `models.quota_group()` + 상수(COLLECT_QUOTA_BUDGET·PAPER_CAP·API_CAP). env: J09_QUOTA_BUDGET·J09_PAPER_CAP·J09_API_CAP.
+  3. 인포그래픽 수치(evidence facts)·collect_chart_data datasets 는 쿼터와 분리 — 전체 수집에서 추출해 인포그래픽 밀도 최대 유지.
+  4. `build_topic_pack(publish_slots=2, max_candidates=None→publish_slots+2)` — 발행 슬롯만큼만 선정, 프로파일링은 소폭 버퍼(부적합 판정 대비), 팩 박제는 적합 상위 2개.
+- **파일**: `JARVIS09_COLLECTOR/models.py`, `JARVIS09_COLLECTOR/collector_engine.py`, `JARVIS09_COLLECTOR/__init__.py`, `JARVIS03_RADAR/topic_pack.py`.
+- **교훈**: "충분히 많이 수집"의 진짜 뜻은 "인포그래픽 디자인을 만들 수 있을 만큼" — 신뢰 서열(논문>API>뉴스>기사>웹)대로 총 10개면 충분. 발행 슬롯(2)만큼만 주제 선정하고, 쓰지 않을 주제는 프로파일링도 낭비.
+- **토큰**: 원시 데이터 fetch(arxiv·API·웹)는 Claude 토큰 0. 수집 안 LLM 단계(research_planner·chart_data·evidence_pack·collect_theme)는 Max 구독 사용량 소비(외부 API 달러 과금 0, 우리 대화와 같은 구독 풀).
+
+---
+
+## [383] topic_pack 선수집 설계 역전 — 06:30 경제 브리핑 43분 지연 + LLM 스로틀 폭탄 (2026-07-06)
+
+- **증상**: 06:30 경제 브리핑 미발행. 로그 기준 12회 연속 스로틀 → 서킷브레이커 → 사실성 게이트 실패(fail-closed).
+- **환경**: `JARVIS02_WRITER/trend_economic_writer.py` (네이버·티스토리 두 draft 함수). `JARVIS03_RADAR/topic_pack.py build_topic_pack()`.
+- **원인 (근본)**: ERRORS [300](2026-07-03 승인) 에서 topic_pack 에 JARVIS09 *선수집*(`_precollect`)을 추가. 이 때문에 `build_topic_pack()` 호출 1회에 `collect_research` + `collect_chart_data` × 후보수 = ~43분 소요. 06:04 트렌드 잡이 topic_pack 생성 착수 → 06:47 완료이지만, 06:30 파이프라인이 "topic_pack 없음" 판정 → 즉석 재실행(또 43분) → LLM 버스트 스로틀 폭발.
+- **헛다리**: "Max 구독 동시성 한도 초과" 진단 → 실제 원인은 선수집 LLM 병렬 폭발. claude.ai 웹과 claude-code-sdk는 별도 채널.
+- **해결**: topic_pack = 키워드 + 프로필(요약/관련어/엔티티유형)만. 선수집 제거.
+  1. `topic_pack.py`: `_precollect()` 함수 삭제. `build_topic_pack()` 선수집 루프 → `final = selected[:publish_slots]` 단순 슬라이스. `restore_docs()` / `cand_collected()` 삭제. `__all__` 정리.
+  2. `trend_economic_writer.py` (네이버·티스토리 두 곳): `restore_docs`/`cand_collected` import 제거 → 파이프라인 내 `collect_chart_data` + `collect_research` 직접 호출 → `CollectedData.from_dict()` 조립.
+  3. `jobs.py`: `job_collect_trends` 말미의 topic_pack 자동 생성 블록 제거 (트렌드 잡은 트렌드 수집만).
+- **파일**: `JARVIS03_RADAR/topic_pack.py`, `JARVIS02_WRITER/trend_economic_writer.py`, `JARVIS03_RADAR/jobs.py`.
+- **교훈**: topic_pack은 "JARVIS09가 수집할 때 키워드 의미를 알게 해주는 프로필" — 선수집 자체가 아님. 파이프라인 시작 시점(06:30)에 생성하고 그 자리에서 즉시 JARVIS09 수집으로 이어지는 구조가 올바름. topic_pack 생성은 LLM 1회 배치(~1-2분)여야 한다.
+
+---
+
+## [382] 경제 브리핑 사실성 게이트 — 뉴스 유래 수치가 웹-차단 오차단 (결정론 grounding 이 텍스트 corpus 미대조 + 복합 한국어 수 미파싱, 2026-07-06)
+
+- **증상**: 경제 브리핑 네이버 대본 attempt=1 이 `② 네이버 대본 생성: [사실성] 출처·웹 모두 확인 불가: 성수4지구 재개발사업 수주액 1조 3,492억원(13492억원)` 로 차단 → 재작성 순환.
+- **환경**: `harness.경제 브리핑 발행 — 네이버` step ②. `prepublish_gate._factuality_leg` → `law_enforcer.factuality_issues` → 2.5 결정론 grounding(`_claim_all_grounded`) → 웹 재검증.
+- **원인 (근본)**: ① **결정론 grounding 정답이 구조화 데이터(stocks·market·collected)만** 수집 — 건설 수주액·재개발 규모 같은 *뉴스 유래 수치* 는 structured data 에 없고 **수집 문서 텍스트 corpus 에만** 존재. corpus 는 LLM 문자열매칭(`_ground_unsupported`)만 검사하는데, 스로틀/포맷 불일치로 실패하면 corpus 실재 수치도 rescue 못 하고 웹-차단으로 넘어감(경제=strict → 차단). ② **복합 한국어 수 미파싱** — `_canon_num('1조 3,492억원')` 은 앞 단위만 읽어 1e12 만 등록. LLM 이 본문에 정규화값을 병기(`1조 3,492억원(13492억원)`)하면 `13492억`=1.3492e12 토큰이 gt 에 없어 grounding 실패.
+- **해결 (ERRORS [350] 결정론 안전망을 corpus 로 확장 — "수집했으면 출처는 분명하다")**: ① `factuality_issues` 의 `gt_floats` 에 **source 텍스트 corpus 포함**(`_collect_gt_floats(market_data, stocks_data, corpus)`). 뉴스에 실재하는 수치는 결정론적으로 rescue. ② `_compound_magnitudes()` 신설 — `N조 M억`/`N조 M천억` 복합 표기의 *결합 magnitude*(1.3492e12)를 `_collect_gt_floats` 문자열 처리에 등록 → 정규화 병기값(13492억)까지 매칭. **corpus·데이터 어디에도 없는 창작 수치는 여전히 차단**(게이트 엄격성 유지 — 검증됨).
+- **파일**: `JARVIS02_WRITER/law_enforcer.py` (`_compound_magnitudes` 신설, `_collect_gt_floats` 복합수 반영, `factuality_issues` gt 에 corpus 추가).
+- **교훈**: 사실성 결정론 안전망은 *구조화 데이터뿐 아니라 수집 문서 텍스트* 도 정답으로 삼아야 한다 — 경제 브리핑은 종목표가 아닌 뉴스 수치(수주액·재개발 규모)가 본문 주력인데, 그 grounding 을 LLM 문자열매칭에만 맡기면 스로틀 시 웹-차단으로 새어나간다. 한국어 복합 수(조+억)는 LLM 이 정규화값을 병기하므로 결합 magnitude 파싱 필수.
+
+---
+
 ## [381] 설계-우선 대본이 0자 → 발행 20분 재시도 갇힘 (스로틀 증폭, 사용자 박제 2026-07-06)
 
 - **증상**: 재발행이 대본 단계에서 20분 갇힘. 로그 `Pass-1 완성 (0자)` 반복. 수집은 정상(188문서·21근거·7종목). 인포그래픽은 종목 datasets 로 만들어졌으나(대본 텍스트 무관) 본문 0자라 harness Layer3 검증 실패 → 이미지 삭제·재생성 반복.
