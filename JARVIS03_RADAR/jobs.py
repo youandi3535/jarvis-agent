@@ -29,32 +29,6 @@ _WRITER_DIR = _ROOT / "JARVIS02_WRITER"
 _PYTHON = sys.executable
 
 
-def _run_script(script: Path, args: list = None, label: str = "") -> None:
-    """스크립트 실행 — 오류 내부 처리 (레거시 호환용). 실패 시 logging만."""
-    cmd = [_PYTHON, str(script)] + (args or [])
-    _log.info(f"▶ {label or script.name} 시작")
-    try:
-        result = subprocess.run(
-            cmd, cwd=str(script.parent),
-            capture_output=True, text=True, timeout=600,
-        )
-        for line in (result.stdout or "").strip().splitlines()[-15:]:
-            _log.info(f"  {line}")
-        if result.returncode != 0:
-            err_tail = (result.stderr or "").strip()[:300]
-            _log.warning(f"  STDERR: {err_tail}")
-            _g_report("radar", RuntimeError(f"{label or script.name} 실패 (rc={result.returncode}): {err_tail[:200]}"),
-                      module=__name__, func_name=label or script.name)
-        else:
-            _log.info(f"✅ {label or script.name} 완료")
-    except subprocess.TimeoutExpired:
-        _log.error(f"⏰ {label} 타임아웃 (600s)")
-        _g_report("radar", RuntimeError(f"{label} subprocess timeout (600s)"),
-                  module=__name__, func_name=label)
-    except Exception as e:
-        _log.error(f"❌ {label} 오류: {e}")
-        _g_report("radar", e, module=__name__)
-
 
 def _run_script_checked(script: Path, args: list = None, label: str = "") -> None:
     """★ 하네스용 스크립트 실행 — 실패 시 RuntimeError raise (harness 가 재시도).

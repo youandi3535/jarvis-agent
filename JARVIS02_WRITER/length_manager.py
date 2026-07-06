@@ -391,19 +391,6 @@ def sum_korean(*texts: str) -> int:
     return sum(count(t) for t in texts)
 
 
-def is_within(text: str, max_korean: int = MAX_KOREAN) -> bool:
-    return count(text) <= max_korean
-
-
-def is_over(text: str, max_korean: int = MAX_KOREAN) -> bool:
-    return count(text) > max_korean
-
-
-def is_minor_overflow(text: str, max_korean: int = MAX_KOREAN) -> bool:
-    """한도 초과 ~ 한도*1.10 사이 (LLM 거치지 않고 그대로 통과 대상)."""
-    n = count(text)
-    return max_korean < n <= int(max_korean * PASSTHROUGH_RATIO)
-
 
 # ──────────────────────────────────────────────────────────────
 # 압축 (cap) — LLM 없는 문장 경계 hard-cut
@@ -439,18 +426,6 @@ def warn_length(theme: str, platform: str, text: str, label: str = "") -> int:
     return n
 
 
-def warn_if_over(theme: str, platform: str, text: str,
-                 label: str = "", max_korean: int = MAX_KOREAN) -> int:
-    """분량 로그 전용. 잘라내기·경고 없음."""
-    s = count_sentences(text)
-    n = count(text)
-    try:
-        tag = f"[{label} {platform}]" if label else f"[{platform}]"
-        print(f"  📏 {tag} {s}문장 / 한글 {n:,}자 (목표 {TARGET_SENTENCES}문장)")
-    except Exception:
-        pass
-    return n
-
 
 # ──────────────────────────────────────────────────────────────
 # 블록 누적 cap (pre_revise.py 용)
@@ -466,29 +441,10 @@ def cap_blocks(blocks: list, context: str = "pre_revise",
 # 섹션 리스트 cap (jarvis_main.py 후처리 용)
 # ──────────────────────────────────────────────────────────────
 
-def cap_section_list(intro: str, sections: list, outro: str,
-                     context: str = "post_generate",
-                     max_korean: int = MAX_KOREAN) -> tuple:
-    """잘라내기 없음 — 모든 섹션 그대로 반환. 호환성 유지용 passthrough."""
-    total = count(intro) + sum(count(s) for s in sections) + count(outro)
-    return list(sections), False, total
-
 
 # ──────────────────────────────────────────────────────────────
 # 진단 헬퍼
 # ──────────────────────────────────────────────────────────────
-
-def diagnose(text: str) -> dict:
-    """본문 한 개의 길이 정책 충족도 진단. 디버그/테스트용."""
-    n = count(text)
-    return {
-        "korean": n,
-        "within_max": n <= MAX_KOREAN,
-        "minor_overflow": MAX_KOREAN < n <= int(MAX_KOREAN * PASSTHROUGH_RATIO),
-        "above_passthrough": n > int(MAX_KOREAN * PASSTHROUGH_RATIO),
-        "below_target_low": n < TARGET_LOW,
-        "below_min_valid": n < MIN_VALID,
-    }
 
 
 # ──────────────────────────────────────────────────────────────
@@ -635,10 +591,10 @@ __all__ = [
     "BRIEF_SECTION_LO", "BRIEF_SECTION_HI",
     # 함수
     "count_sentences", "count", "sum_korean",
-    "is_within", "is_over", "is_minor_overflow",
+      
     "compress", "cap_for_publish",
-    "warn_length", "warn_if_over",
-    "cap_blocks", "cap_section_list",
-    "diagnose",
+    "warn_length", 
+    "cap_blocks", 
+    
     "build_prompt_length_block", "build_short_length_phrase",
 ]

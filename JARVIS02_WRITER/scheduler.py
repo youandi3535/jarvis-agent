@@ -427,16 +427,6 @@ def load_platform_result(theme: str) -> dict:
     return {"naver": False, "tistory": False}
 
 
-def reset_platform_result(theme: str, *platforms):
-    """특정 플랫폼 결과를 False로 리셋 — 텔레그램 단독 실행 명령 시 강제 재실행 보장"""
-    path = get_result_path(theme)
-    result = load_platform_result(theme)
-    for p in platforms:
-        result[p] = False
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
-    log(f"  🔄 결과 리셋: {theme} → {list(platforms)} = False")
-
 
 def clear_theme_cache(theme: str):
     """테마 원고 캐시 + 결과 파일 삭제"""
@@ -1387,9 +1377,6 @@ def job_radar_pipeline_check():
 # ══════════════════════════════════════════
 #  진입점
 # ══════════════════════════════════════════
-
-def show_status():
-    print(get_status_text())
 
 
 # ── 진입점 제거됨 ────────────────────────────────────────────
