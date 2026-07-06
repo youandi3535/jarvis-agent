@@ -2185,8 +2185,10 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
             _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
-            _ev_pack = _res.get("evidence_pack") or {}
             _kw_collection_docs = list(_res.get("docs") or [])
+            # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
+            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
+            _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
                   f"데이터셋 {len(_pool)}개")
         except Exception as _je:
@@ -2432,8 +2434,10 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
-            _ev_pack = _res.get("evidence_pack") or {}
             _kw_collection_docs = list(_res.get("docs") or [])
+            # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
+            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
+            _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
                   f"데이터셋 {len(_pool)}개")
         except Exception as _je:

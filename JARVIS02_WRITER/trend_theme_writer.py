@@ -464,20 +464,12 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                     res = collect_research(state["theme"], state.get("sector", ""),
                                            angle=_angle)
                     docs = res.get("docs") or []
-                    pack = res.get("evidence_pack") or None
+                    # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
+                    from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
+                    pack = _bep(state["theme"], res.get("plan") or {}, docs) or None
                     n_facts = len((pack or {}).get("facts", []))
-                    print(f"  ✅ [THEME] JARVIS09 리서치 수집 완료: 문서 {len(docs)}건 "
-                          f"· 근거 fact {n_facts}개")
-                    # ★ 근거 품질 경고 (ERRORS [300]): 테마는 종목 실데이터가 1차 근거라
-                    #   차단하지 않고 가시화만 (조용한 강등 금지).
-                    if res.get("insufficient") or res.get("plan_fallback"):
-                        _tags = []
-                        if res.get("plan_fallback"):
-                            _tags.append("설계 폴백")
-                        if res.get("insufficient"):
-                            _tags.append(f"근거 부족(커버리지 {res.get('coverage_ratio')})")
-                        print(f"  ⚠️ [THEME] 리서치 품질 경고: {', '.join(_tags)}")
-                        _tg(f"⚠️ [THEME] '{state['theme']}' 리서치 품질 경고: {', '.join(_tags)}")
+                    print(f"  ✅ [THEME] JARVIS09 원시 수집 완료: 문서 {len(docs)}건 "
+                          f"→ 02 fact 추출 {n_facts}개")
                     return {"docs": docs, "pack": pack}
             except Exception as e:
                 print(f"  ⚠️ [THEME] 리서치 수집 실패 — 종전 스윕 폴백: {e}")

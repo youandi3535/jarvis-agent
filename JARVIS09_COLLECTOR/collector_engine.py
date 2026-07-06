@@ -301,26 +301,27 @@ def select_by_trust_quota(docs: list[CollectionResult],
 @_auto_catch("collector", reraise=True)
 def collect_research(theme: str, sector: str = "", angle: str = "",
                      max_rounds: int = 3) -> dict:
-    """설계-우선 리서치 수집 — 광역 스윕 + 질문별 조준 수집 + 갭 재수집 순환.
+    """★ 단순 수집 (사용자 박제 2026-07-06 — 자비스09 단순 수집기 재설계):
+    설계 → 광역+질문별 수집 → 티어순 최대 15개 원시 문서 확정 → *원시 그대로* 반환.
+
+    ADR 012 커버리지 재수집 루프 폐지 + fact 추출 폐지 — 09는 수집만 한다.
+    fact 추출·차트 숫자·종목 설명은 JARVIS02(작성기)가 받은 docs 로 직접 수행한다.
+    (max_rounds 는 시그니처 호환용 — 더 이상 재수집 루프에 쓰이지 않음.)
 
     Returns:
-        {"evidence_pack": dict,          # evidence_pack.build_evidence_pack 산출물
-         "docs": list[CollectionResult], # 전체 정제 문서 (JARVIS06·prepublish 용)
-         "plan": dict,                   # research_planner 설계도
-         "evidence_path": str}           # 박제 JSON 경로
+        {"docs": list[CollectionResult],  # 신뢰순 최대 15개 원시 문서
+         "plan": dict}                    # research_planner 설계도 (02 fact 추출 시 질문 맥락)
     """
     from .research_planner import plan_research
-    from .evidence_pack import (build_evidence_pack, coverage_gaps, merge_pack,
-                                persist_evidence, _extract_facts_batch)
 
     try:
         from JARVIS00_INFRA.watchdog import beat  # 지역 import (순환 방지)
     except Exception:
         def beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
 
-    log.info(f"[research] 설계-우선 수집 시작: theme='{theme}'")
+    log.info(f"[research] 단순 수집 시작: theme='{theme}'")
 
-    # ① 설계
+    # ① 설계 (수집 설계 — 09 유지)
     plan = plan_research(theme, sector=sector, angle=angle)
 
     # ①-b 키 누락 소스 감지 → 텔레그램 온보딩 안내 (fail-open)
@@ -354,72 +355,14 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
     all_docs: list[CollectionResult] = list(broad_docs)
     all_docs.extend(_clean_raw_docs(targeted_raw, theme, seen_urls))
 
-    # ③ 얇은 문서 전문 딥페치
+    # ③ 얇은 문서 전문 딥페치 (수집 밀도 — 여전히 수집 영역)
     all_docs = _deep_fetch_thin_docs(all_docs, theme)
 
-    # ④ 근거 팩 추출 + 커버리지 측정
-    pack = build_evidence_pack(theme, plan, all_docs)
-
-    # ⑤ 갭 재수집 순환 — 미충족 질문만, 변형 쿼리 + discover 강제
-    rounds = 1
-    while rounds < max_rounds:
-        beat()   # ★ 갭 재수집 라운드마다 진행신호 (장시간 재수집 freeze 오탐 방지)
-        gaps = coverage_gaps(pack)
-        if not gaps:
-            break
-        rounds += 1
-        log.info(f"[research] 커버리지 미충족 {len(gaps)}개 질문 → {rounds}라운드 재수집")
-        gap_raw: list[RawDocument] = []
-        with ThreadPoolExecutor(max_workers=4) as exe:
-            futs = []
-            for q in gaps:
-                q2 = dict(q)
-                queries = list(q.get("queries") or [theme])
-                q2["queries"] = queries[1:] + queries[:1]          # 변형 쿼리 우선
-                srcs = [s for s in (q.get("sources") or []) if s != "discover"]
-                q2["sources"] = (["discover"] + srcs)[:3]          # discover 강제 선두
-                futs.append(exe.submit(_collect_for_question, q2, theme, sector))
-            for fut in as_completed(futs):
-                beat()   # ★ 갭 질문별 재수집 결과 취합마다 진행신호 (freeze 오탐 방지)
-                try:
-                    gap_raw.extend(fut.result() or [])
-                except Exception:
-                    pass
-        gap_docs = _clean_raw_docs(gap_raw, theme, seen_urls)
-        if not gap_docs:
-            log.info("[research] 재수집 신규 문서 0건 — 순환 종료")
-            break
-        gap_docs = _deep_fetch_thin_docs(gap_docs, theme)
-        all_docs.extend(gap_docs)
-        extra_facts = _extract_facts_batch(theme, plan, gap_docs[:8])
-        pack = merge_pack(pack, extra_facts)
-
-    # ⑥ 신뢰 서열 쿼터로 최종 15개 확정 → 근거 팩도 그 15개로 국한 → 박제 + 반환
-    #   ★ 사용자 박제 2026-07-06 v2: "총 15개만 수집" — 문서(서사)도 수치(fact)도 *같은*
-    #   확정 15개에서만 나온다. 논문 3·API 7·나머지 5, 이월 cascade. 넓은 후보 더미는
-    #   "신뢰 높은 15개를 고르기 위한 탐색 과정"일 뿐 — 결과는 15개 (숫자도 그 15개 소속).
-    from .evidence_pack import restrict_pack_to_docs
+    # ④ 신뢰 서열 쿼터로 최종 15개 확정 → 원시 그대로 반환 (fact 추출·재수집 루프 없음)
+    #   논문 3·API 7·나머지 5, 이월 cascade. fact·수치 추출은 JARVIS02 가 이 docs 로 수행.
     all_docs = select_by_trust_quota(all_docs)
-    pack = restrict_pack_to_docs(pack, {getattr(d, "url", "") for d in all_docs})
-    path = persist_evidence(pack)
-    cov = pack.get("coverage") or {}
-    cov_ok = sum(1 for c in cov.values() if c.get("ok"))
-    n_facts = len(pack.get("facts", []))
-    log.info(f"[research] 완료: 확정 문서 {len(all_docs)}건 · fact {n_facts}개(그 문서 소속) "
-             f"· 커버리지 {cov_ok}/{len(cov)} "
-             f"· 라운드 {rounds}")
-    # ★ 근거 품질 판정 (ERRORS [300] — 사용자 승인 2026-07-03): 재수집 순환을 다 써도
-    #   커버리지 0 이거나 fact < 3 이면 insufficient 플래그 — 반환은 유지(fail-open)하되
-    #   호출자(topic_pack 주제 교체 / theme 경고)가 분기할 수 있게 가시화.
-    coverage_ratio = round(cov_ok / len(cov), 2) if cov else 0.0
-    insufficient = bool(cov) and (cov_ok == 0 or n_facts < 3)
-    if insufficient:
-        log.warning(f"[research] '{theme}' 근거 부족 — 커버리지 {cov_ok}/{len(cov)}, "
-                    f"fact {n_facts}개 (insufficient=True)")
-    return {"evidence_pack": pack, "docs": all_docs, "plan": plan,
-            "evidence_path": path,
-            "coverage_ratio": coverage_ratio, "insufficient": insufficient,
-            "plan_fallback": bool(plan.get("fallback"))}
+    log.info(f"[research] 완료(단순 수집): 원시 문서 {len(all_docs)}건 → JARVIS02 가 fact·수치 추출")
+    return {"docs": all_docs, "plan": plan}
 
 
 # ── ★ 통합 수집 컴포저 — CollectedData 방출 (Step 3, UNIFIED_PIPELINE_SPEC) ──
@@ -525,14 +468,12 @@ def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
         except Exception as e:
             log.warning(f"[collect_all] 종목 수집 실패: {e}")
     rs = collect_research(keyword, sector=sector, angle=angle) or {}
+    # ★ 09는 원시 수집만 (단순 수집기 재설계 2026-07-06) — fact 추출은 02 몫.
+    #   compose_collected 는 evidence_pack=None → facts 없이 docs+entities 만.
     return compose_collected(
         keyword, stocks_data=stocks_data, docs=rs.get("docs"),
-        evidence_pack=rs.get("evidence_pack"), sector=sector,
-        category=category, profile=profile,
-        extra_meta={"coverage_ratio": rs.get("coverage_ratio", 0.0),
-                    "insufficient": rs.get("insufficient", False),
-                    "plan_fallback": rs.get("plan_fallback", False),
-                    "evidence_path": rs.get("evidence_path", "")})
+        evidence_pack=None, sector=sector,
+        category=category, profile=profile)
 
 
 # ── delta-aware 교류 프로토콜 (★ 사용자 박제 2026-06-07) ────────────────
