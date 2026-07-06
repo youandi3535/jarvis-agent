@@ -37,6 +37,7 @@ from JARVIS07_GUARDIAN.architecture import (
     ESCALATE_WINDOW_SECS as _ESCALATE_WINDOW_SECS,
     DENY_FIX_PATHS as _DENY_FIX_PATHS,
     ERROR_STATS_WINDOW_DAYS as _ERROR_STATS_WINDOW_DAYS,
+    MAX_LLM_ATTEMPTS as _MAX_LLM_ATTEMPTS,
 )
 
 # ── Circuit breaker 런타임 상태 (설정값은 architecture.CB_MAX_HOUR) ─
@@ -244,7 +245,7 @@ def _notify_all(error_record: dict, result: str, tier: int = 0, severity: str = 
 
     _ICONS = {
         "success": "✅", "failed": "❌", "critical_manual": "🔴",
-        "circuit_open": "⚡", "deny_path": "🔒",
+        "circuit_open": "⚡", "deny_path": "🔒", "llm_cap_reached": "🛑",
     }
     _SEV_TAG = {"low": "⚪LOW", "medium": "🟡MED", "high": "🟠HIGH", "critical": "🔴CRIT"}
     icon     = _ICONS.get(result, "ℹ️")
@@ -278,6 +279,15 @@ def _notify_all(error_record: dict, result: str, tier: int = 0, severity: str = 
             f"자동수정 금지 파일: {module}\n"
             f"유형: {etype}\n"
             f"→ 수동 검토 필요"
+        )
+    elif result == "llm_cap_reached":
+        text = (
+            f"{icon} *[GUARDIAN] Tier 2(LLM) 재시도 상한 도달 — 자동 종결*\n"
+            f"이 오류는 이미 {_MAX_LLM_ATTEMPTS}회 LLM 수정을 시도했습니다 → 더 이상 재시도 안 함\n"
+            f"소스: {source} / {module}\n"
+            f"유형: {etype}\n"
+            f"내용: {msg}\n"
+            f"→ wontfix 로 표시, 수동 검토 필요"
         )
     else:  # failed
         text = (
@@ -472,9 +482,20 @@ def _orchestrate(error_id: int):
             _db.mark_error_status(error_id, "wontfix")
             return
 
+        # ── 안전장치 3: Tier 2(LLM) 재시도 횟수 상한 (★ 사용자 박제 2026-07-06) ──
+        #    'analyzing' 상태로 멈춘 오류가 job_retry_pending 에 의해 재투입될 때마다
+        #    Tier 2(LLM) 를 무제한 재호출하는 사고(조용한 토큰 소모) 재발 방지.
+        #    같은 error_id 가 이미 MAX_LLM_ATTEMPTS 회 시도됐으면 재시도 없이 종결.
+        attempts = _db.bump_llm_attempts(error_id)
+        if attempts > _MAX_LLM_ATTEMPTS:
+            log.warning(f"[GUARDIAN] #{error_id} Tier 2 시도 {attempts}회 — 상한({_MAX_LLM_ATTEMPTS}) 초과, 재시도 중단")
+            _notify_all(error_record, "llm_cap_reached", severity=severity)
+            _db.mark_error_status(error_id, "wontfix")
+            return
+
         # ── Tier 2: LLM 수정 — low 포함 전 심각도 ────────────────
         # low도 Tier 2까지 진행 → 학습 데이터 축적 → 다음엔 Tier 1 해결
-        log.info(f"[GUARDIAN] #{error_id} Tier 1 실패 → Tier 2 (LLM, {severity})")
+        log.info(f"[GUARDIAN] #{error_id} Tier 1 실패 → Tier 2 (LLM, {severity}, 시도 {attempts}/{_MAX_LLM_ATTEMPTS})")
         fixed = _try_sdk_targeted_fix(error_id, error_record)
 
         if fixed:
@@ -770,7 +791,10 @@ def job_retry_pending(*, max_per_run: int = 20, stuck_minutes: int = 30):
         stuck_rows = _db.list_errors(status="analyzing", limit=max_per_run)
         threshold = datetime.now() - timedelta(minutes=stuck_minutes)
         for r in stuck_rows:
-            ts = r.get("created_at") or r.get("detected_at") or ""
+            # ★ error_log 실제 컬럼명은 'timestamp' 단독 (created_at/detected_at 없음 —
+            #   과거엔 존재하지 않는 키만 읽어 매번 except 로 빠지며 리셋이 영구 no-op 이었음.
+            #   사용자 박제 2026-07-06 — job_retry_pending 근본원인 수정)
+            ts = r.get("timestamp") or ""
             try:
                 dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00").split("+")[0])
             except Exception:

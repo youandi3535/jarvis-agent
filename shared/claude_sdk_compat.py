@@ -26,7 +26,7 @@
 사용:
     from shared.claude_sdk_compat import run_sdk_query
     text = run_sdk_query(
-        prompt="...", model="claude-opus-4-8",
+        prompt="...", model="claude-sonnet-5",
         max_turns=60, cwd=str(ROOT), timeout=1200,
     )
 

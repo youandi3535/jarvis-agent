@@ -154,7 +154,7 @@ def plan_research(topic: str, sector: str = "", angle: str = "") -> dict:
     catalog = "\n".join(f"- {k}: {v}" for k, v in _SOURCE_CATALOG.items())
     prompt = _PLAN_PROMPT.format(topic=topic, sector=sector or "-",
                                  angle=(angle or "-")[:300], catalog=catalog)
-    for _attempt in range(2):
+    for _attempt in range(3):
         try:
             from shared.llm import invoke_text
             # ★ _essential=True (ERRORS [300]): 설계는 수집 품질의 조타수 —

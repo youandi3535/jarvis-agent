@@ -1171,10 +1171,12 @@ def _designgen(title, subtitle, datasets, out_path, context, seed) -> str:
               .replace("__DATA__", _dg_data_block(datasets))
               .replace("__FEWSHOT__", _DG_FEWSHOT))
     # ★ 하드 예산(fast-fail) — SDK 스로틀 시 재시도 지옥(4×200s) 대신 즉시 폴백.
-    #   단일 시도 + 짧은 timeout + _retries=1. invoke_text 회로차단기가 연속 스로틀 시
-    #   "" 즉시 반환 → 발행 지연 0. 실패는 곧 render_spec(안전 폴백)이라 손해 없음.
+    #   짧은 timeout + _retries=3(재시도 상한 통일 — 사용자 박제 2026-07-06, 원래는
+    #   단일 시도(_retries=1)로 낮춰 latency 를 아꼈으나 재시도 상한 3회 통일 원칙 적용).
+    #   invoke_text 회로차단기가 연속 스로틀 시 "" 즉시 반환 → 발행 지연 0.
+    #   실패는 곧 render_spec(안전 폴백)이라 손해 없음.
     try:
-        raw = invoke_text("writer", prompt, max_tokens=7000, timeout=110, _retries=1)
+        raw = invoke_text("writer", prompt, max_tokens=7000, timeout=110, _retries=3)
         if not raw:
             log.info("[designgen] LLM 저작 미수신(스로틀/타임아웃) → render_spec 폴백")
             return ""

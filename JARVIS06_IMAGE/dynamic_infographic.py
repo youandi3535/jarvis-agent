@@ -419,7 +419,7 @@ def generate_dynamic_infographic(
             data=data,
             run_id=_rid,
             slot_key=_slot,
-            max_retries=1,  # 여기서는 1회, 실패 시 matplotlib 폴백
+            max_retries=3,  # 재시도 상한 3회 통일 (기존: 1회, 실패 시 matplotlib 폴백)
         )
         if html_result:
             log.info(f"[dynamic_infographic] ✅ HTML인포그래픽 성공: {theme}/{_slot}")

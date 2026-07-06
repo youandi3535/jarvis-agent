@@ -865,7 +865,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     # ── ★ 플랫폼 단위 끝까지 직렬 (사용자 박제 2026-07-03) ──────────────────
     # 네이버 액션(공유 수집 포함): ①규정 → ②수집 → ③NV대본 → 검증 순환 → 발행 [종결]
     #   → 티스토리 액션: ④TS쿠키(신선 로그인) → ⑤TS대본 → 검증 순환 → 발행
-    # 한쪽의 재작성 순환·실패가 다른 쪽을 지연·차단하지 않음 (실패 격리, max_attempts 각 2)
+    # 한쪽의 재작성 순환·실패가 다른 쪽을 지연·차단하지 않음 (실패 격리, max_attempts 각 3 — 사용자 지시로 3회 통일)
     _nv_action_def = ActionDefinition(
         name=f"theme-publish-{theme}-naver",
         steps=[_step_load_rules, _step_collect, _step_nv_draft],
@@ -876,7 +876,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         send=lambda st: _send_theme_platform(st, "naver", "nv_draft",
                                              "nv_pub_result", "__nv_send_attempted__"),
         precondition=_precondition,
-        max_attempts=2,  # ★ 외부 발행은 비멱등 → 최대 2회 (sentinel이 중복 방지)
+        max_attempts=3,  # ★ 외부 발행은 비멱등 → 원래 최대 2회였으나 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__nv_send_attempted__)이 중복 발행 방지
         deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
     )
     _ts_action_def = ActionDefinition(
@@ -889,7 +889,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         send=lambda st: _send_theme_platform(st, "tistory", "ts_draft",
                                              "ts_pub_result", "__ts_send_attempted__"),
         precondition=_precondition,
-        max_attempts=2,
+        max_attempts=3,  # ★ 원래 최대 2회(비멱등 발행) — 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__ts_send_attempted__)이 중복 발행 방지
         deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
     )
 

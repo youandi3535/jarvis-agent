@@ -303,7 +303,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS self_repair_runs (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 ran_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime')),
-                model           TEXT    NOT NULL DEFAULT 'opus',
+                model           TEXT    NOT NULL DEFAULT 'sonnet-5',
                 elapsed_sec     INTEGER NOT NULL DEFAULT 0,
                 returncode      INTEGER NOT NULL DEFAULT 0,
                 -- 7-Layer 결과 카운트
@@ -333,6 +333,11 @@ def init_db():
             conn.execute("ALTER TABLE post_analysis ADD COLUMN current_views INTEGER DEFAULT 0")
         except Exception:
             pass  # 이미 존재하면 무시
+        # llm_attempts: error_log 행별 Tier 2(LLM) 시도 횟수 상한 캡 (job_retry_pending 무한 재시도 방지)
+        try:
+            conn.execute("ALTER TABLE error_log ADD COLUMN llm_attempts INTEGER DEFAULT 0")
+        except Exception:
+            pass
         # NOTE: retry_count / retry_at / last_error 컬럼은 사후 retry 잡 폐기로 더 이상
         # 사용하지 않음. 기존 DB 에 남아 있어도 무시됨 (drop 하지 않음 — 데이터 보존).
         # source_keyword: RADAR pipeline 에서 발행 트리거 시 채워지는 trends.keyword 와
@@ -2286,6 +2291,17 @@ def mark_error_status(error_id: int, status: str):
     """오류 상태 변경 (analyzing / wontfix / ignored)."""
     with get_db() as conn:
         conn.execute("UPDATE error_log SET status=? WHERE id=?", (status, error_id))
+
+
+def bump_llm_attempts(error_id: int) -> int:
+    """Tier 2(LLM) 시도 횟수 +1 하고 갱신된 값 반환 (job_retry_pending 무한 재시도 캡 판정용)."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE error_log SET llm_attempts = COALESCE(llm_attempts, 0) + 1 WHERE id=?",
+            (error_id,),
+        )
+        row = conn.execute("SELECT llm_attempts FROM error_log WHERE id=?", (error_id,)).fetchone()
+        return int(row["llm_attempts"]) if row and row["llm_attempts"] is not None else 1
 
 
 def get_error_resolution(error_type: str, module: str = None) -> str | None:

@@ -204,9 +204,9 @@ def _local_text_thumbnail(title: str, keyword: str, out_dir: Path):
 
 def _mandatory_thumbnail(title: str, keyword: str, sector: str, platform: str,
                          out_dir: Path, body_text: str, tag_line: str = ""):
-    """★ 썸네일 필수 생성 (사용자 박제 2026-07-05) — 재시도 2회 + 로컬 폴백 → 누락 0."""
+    """★ 썸네일 필수 생성 (사용자 박제 2026-07-05) — 재시도 3회(원래 2회, 사용자 지시로 통일 2026-07-06) + 로컬 폴백 → 누락 0."""
     from JARVIS06_IMAGE.image_agent import generate_thumbnail
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             p = generate_thumbnail(title=title, keyword=keyword, sector=sector,
                                    platform=platform, out_dir=out_dir, body_text=body_text,

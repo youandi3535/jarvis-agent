@@ -9,7 +9,7 @@
   2. 오류 분류: code_bug (ImportError 등) | transient (네트워크·쿠키·셀레니움) | unknown
   3. code_bug / unknown:
        Tier 1 — 패턴 자동 수정 (static 6 + learned + Contextual Bandit, ~5s)
-       Tier 2 — LLM 자동 수정 (Claude Code SDK · Opus 4.8, ~10min) — Tier 1 실패 시만
+       Tier 2 — LLM 자동 수정 (Claude Code SDK · Sonnet 5, ~10min) — Tier 1 실패 시만
      transient: 30초 대기 후 즉시 재시도 (코드 수정 없음)
   4. retry_fns 호출 (실패 플랫폼만)
   5. learned_patterns 자동 기록

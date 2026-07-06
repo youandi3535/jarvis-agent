@@ -602,7 +602,7 @@ def report_manual_fix(
             )
         # ★ 학습 등록 (2026-07-02) — 오류수정(재발가능)은 actionable llm_patch(+밴딧 보상)로,
         #   정책/기능 변경·diff 없음은 legacy change-tracking 으로 분기.
-        #   actionable 이면: record_sdk_fix → eval(Opus 4.8) 게이트 → stored_patch 저장 →
+        #   actionable 이면: record_sdk_fix → eval(Sonnet 5) 게이트 → stored_patch 저장 →
         #   hits>0 시 bandit.reward → *강화학습 모델(Bandit)이 실제로 학습을 시작*.
         try:
             from JARVIS07_GUARDIAN.pattern_fixer import record_pattern_hit

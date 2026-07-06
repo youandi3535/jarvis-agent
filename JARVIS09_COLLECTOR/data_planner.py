@@ -143,10 +143,11 @@ def plan_data_sources(topic: str, sector: str = "", description: str = "") -> li
     catalog = "\n".join(f"- {k}: {v}" for k, v in _SOURCE_CATALOG.items())
     prompt = _PLAN_PROMPT.format(topic=topic, sector=sector or "-",
                                  desc=(description or topic)[:400], catalog=catalog)
-    # ★ 재시도 (사용자 박제 2026-07-01 v2): rate-limit(빈 응답) 백오프는 이제 invoke_text 가
-    #   단일 진입점에서 흡수한다 → 여기 재시도는 *JSON 파싱 실패* 대응만(온도 변주로 출력 다양화).
-    #   중복 백오프 제거(invoke_text 가 이미 대기) → 2회면 충분.
-    for _attempt in range(2):
+    # ★ 재시도 (사용자 박제 2026-07-06: 재시도 상한 예외 없이 3회 통일): rate-limit(빈 응답)
+    #   백오프는 이제 invoke_text 가 단일 진입점에서 흡수한다 → 여기 재시도는
+    #   *JSON 파싱 실패* 대응만(온도 변주로 출력 다양화). (구 사유: 중복 백오프 제거
+    #   〈invoke_text 가 이미 대기〉로 2회면 충분 — 이제 3회로 통일)
+    for _attempt in range(3):
         try:
             from shared.llm import invoke_text
             # ★ _essential=True (ERRORS [300]): 설계는 수집 품질의 조타수 —

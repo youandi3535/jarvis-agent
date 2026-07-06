@@ -217,10 +217,10 @@ def _generate_photo(keyword: str, title: str, seed: int, tmp_dir: Path,
 
 
 def _generate_photo_pollinations(full_prompt: str, seed: int, tmp_dir: Path) -> Path | None:
-    """Pollinations.ai 생성 — 큐 제한 시 8초 후 1회 재시도."""
+    """Pollinations.ai 생성 — 큐 제한 시 8초 후 최대 3회 재시도 (사용자 박제 2026-07-06: 재시도 상한 통일 3회)."""
     from JARVIS06_IMAGE.providers.pollinations_provider import PollinationsProvider
     log.info(f"[thumbnail] Pollinations 요청: {full_prompt[:70]}")
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             path = PollinationsProvider().generate(
                 full_prompt, tmp_dir, width=W, height=H, seed=seed + attempt
@@ -229,7 +229,7 @@ def _generate_photo_pollinations(full_prompt: str, seed: int, tmp_dir: Path) -> 
             return path
         except Exception as e:
             err_msg = str(e)
-            if attempt == 0 and ("Queue full" in err_msg or "429" in err_msg):
+            if attempt < 2 and ("Queue full" in err_msg or "429" in err_msg):
                 log.info("[thumbnail] Pollinations 큐 제한 → 8초 후 재시도")
                 time.sleep(8)
                 continue

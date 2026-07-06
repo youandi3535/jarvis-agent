@@ -1,7 +1,8 @@
 # 015. 모델 계층 상향 — Sonnet 5 / Opus 4.8 2계층 단일화 (Haiku 폐지)
 
 ## 상태
-확정 (사용자 박제 2026-07-04) — [ADR 002](002-model-layering.md) (Haiku / Sonnet 4.6 / Opus 4.6 3계층) 대체.
+대체됨 (2026-07-06) by [ADR 017](017-model-single-tier-sonnet5.md) (Sonnet 5 단일 통일 — Opus 4.8 폐지).
+원 확정일 2026-07-04 — [ADR 002](002-model-layering.md) (Haiku / Sonnet 4.6 / Opus 4.6 3계층) 대체.
 
 ## 배경
 ADR 002 가 도입한 3계층 (Haiku 4.5 글쓰기 / Sonnet 4.6 라우팅 / Opus 4.6 코드 수정·진단) 은

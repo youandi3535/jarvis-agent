@@ -302,7 +302,7 @@ def generate_html_infographic(
     data: dict | None = None,
     run_id: str = "",
     slot_key: str = "",
-    max_retries: int = 2,
+    max_retries: int = 3,
     out_dir: str | Path | None = None,
 ) -> str:
     """

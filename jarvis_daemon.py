@@ -566,7 +566,7 @@ def main():
         _report_daemon(e, "main.bus_autoregister")
 
     # 5.8 ProactiveMonitor 부팅 자가진단 — 제거됨.
-    # 코드 자가 진단·수정은 JARVIS07_GUARDIAN/auto_repair.py 담당 (Opus 4.8):
+    # 코드 자가 진단·수정은 JARVIS07_GUARDIAN/auto_repair.py 담당 (Sonnet 5):
     #   발행 세트 callback 내 선행 실행 — 06:30 run_self_repair_then_economic / 16:00 run_self_repair_then_theme
 
     # 6. 시작 시 즉시 실행 (오늘 트렌드 없으면)

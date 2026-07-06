@@ -5,7 +5,7 @@ JARVIS04_SCHEDULER DEFAULT_JOBS callback 대상.
 
 ★ 하네스 5-Layer 게이트 (사용자 박제 2026-05-18):
    모든 잡은 _run_with_harness() 를 통해 실행.
-   실행 오류 감지 → GUARDIAN 자동 기록 → 재시도 (max_attempts=2) → 검증 순환.
+   실행 오류 감지 → GUARDIAN 자동 기록 → 재시도 (max_attempts=3) → 검증 순환.
 """
 from __future__ import annotations
 import logging
@@ -61,7 +61,7 @@ def _run_with_harness(
     run_fn: Callable,
     verify_fn: Optional[Callable] = None,
     send_fn: Optional[Callable] = None,
-    max_attempts: int = 2,
+    max_attempts: int = 3,
 ) -> None:
     """★ 하네스 5-Layer 게이트 래퍼 — 전체 잡에 "수정→기록→누적→순환" 적용.
 
@@ -70,7 +70,7 @@ def _run_with_harness(
         run_fn:      실행할 함수 (예외 발생 시 execution_error 검출)
         verify_fn:   선택 — run_fn() 결과를 받아 추가 검증. 오류 문자열 list 반환.
         send_fn:     선택 — 검증 통과 후 notify/저장 등 송출. run_fn() 결과를 인자로 받음.
-        max_attempts: 하네스 재시도 한도 (기본 2)
+        max_attempts: 하네스 재시도 한도 (기본 3)
     """
     # ★ P1-③ 패치 (사용자 박제 2026-05-18 — ADR 009 v2): harness ImportError fallback 제거.
     # 이전: harness 미가용 시 직접 실행 (검증 0회 우회 송출 위험).

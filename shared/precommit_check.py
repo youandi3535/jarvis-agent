@@ -993,14 +993,15 @@ def check_model(report: Report) -> None:
     (주석·문자열 포함)을 훑어 리팩터 잔재를 커밋 단계에서 원천 차단한다.
 
     ① haiku 흔적 일체 — Haiku 완전 폐지 원칙 (사용자 박제 2026-07-04, ADR 015 — haiku 사용 금지)
-    ② 표준 외 모델 ID — 유효 ID 는 shared/llm.py MODELS 의 2종만
-       (claude-sonnet-5 / claude-opus-4-8). 그 외 claude-*-* 는 폐기·미래 잔재.
+    ② 표준 외 모델 ID — 유효 ID 는 shared/llm.py MODELS 의 1종만
+       (claude-sonnet-5 — Sonnet 5 단일 통일, 사용자 박제 2026-07-06 ADR 017. Opus 4.8 폐지).
+       그 외 claude-*-* 는 폐기·미래 잔재.
 
     예외(allowlist): 모델 이름을 *탐지* 하는 정규식·grep 패턴을 보유한 파일.
     유효 ID 변경 시 아래 valid_ids 를 shared/llm.py MODELS 와 동시 갱신.
     """
     cat = "model"
-    valid_ids = {"claude-sonnet-5", "claude-opus-4-8"}
+    valid_ids = {"claude-sonnet-5"}
     # haiku 를 '탐지' 하는 정규식·grep 패턴 보유 (모델 ID 파서 / 감사 grep) — 정당
     #   shared/llm.py = 모델 SSOT + 라벨 파서(pretty_model_id) — 모델명 언급이 본질.
     haiku_allow = (

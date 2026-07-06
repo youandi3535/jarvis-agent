@@ -219,7 +219,7 @@ def _judge_unavailable_alert(post_type: str, err: str) -> None:
 
 def judge_engagement(title: str, content: str, post_type: str = "",
                      platform: str = "") -> dict:
-    """발행 전 유익성·매력도 채점 — engagement_judge(Opus 4.8).
+    """발행 전 유익성·매력도 채점 — engagement_judge(Sonnet 5).
 
     Returns:
         {"passed": bool, "engagement_score": int, "usefulness_score": int,
@@ -237,13 +237,15 @@ def judge_engagement(title: str, content: str, post_type: str = "",
     user_msg = f"제목: {title}\n\n본문:\n{snippet}"
     system = ENGAGEMENT_SYSTEM_PROMPT + _build_learning_block(post_type)
 
-    # ★ fail-open 강화 (2026-07-02): 즉시 통과 대신 2회 재시도 → 심사관 일시 불안정에
-    #   매력도 게이트가 통째로 무력화되는 것 방지. 재시도도 실패하면 통과하되(진실성과 달리
-    #   재생성 사유일 뿐) '심사 불가'를 가시화(점수 -1 = 미채점, GUARDIAN·버스 경고).
+    # ★ fail-open 강화 (2026-07-02): 즉시 통과 대신 3회 재시도(★ 사용자 박제
+    #   2026-07-06 — 재시도 상한 예외 없이 3회 통일, 기존 2회에서 상향) → 심사관
+    #   일시 불안정에 매력도 게이트가 통째로 무력화되는 것 방지. 재시도도 실패하면
+    #   통과하되(진실성과 달리 재생성 사유일 뿐) '심사 불가'를 가시화(점수 -1 = 미채점,
+    #   GUARDIAN·버스 경고).
     from shared.llm import invoke_text as _inv
     obj = None
     last_err = ""
-    for _attempt in range(2):
+    for _attempt in range(3):
         try:
             # ★ 비필수 (ERRORS [368]): 매력도는 fail-open(폴백=통과)이므로 스로틀 시 즉시 폴백
             #   — 발행 임계경로를 매력도 LLM 대기로 막지 않는다(재생성 사유일 뿐).
