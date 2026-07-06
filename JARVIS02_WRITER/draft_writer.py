@@ -874,53 +874,6 @@ def _build_evidence_block(evidence_pack: dict | None) -> str:
 _NARRATIVE_CACHE: dict[str, str] = {}     # theme+date → 아웃라인 (양 플랫폼 재사용)
 
 
-def _plan_narrative(theme: str, sector: str, evidence_block: str,
-                    stocks_text: str = "", post_type: str = "theme") -> str:
-    """서사 아웃라인 1패스 — 글의 감정 곡선·섹션 메시지·근거 배정 설계.
-
-    반환: 프롬프트 주입용 아웃라인 텍스트 블록 (실패 시 빈 문자열 — fail-open).
-    구조 뼈대(섹션 순서)는 본 프롬프트가 정하므로, 여기서는 *각 섹션이 전할
-    핵심 메시지·감정 흐름·어떤 근거(F#)를 어디에 쓸지* 만 설계한다.
-    """
-    key = f"{theme}|{post_type}|{_TODAY.isoformat()}"
-    if key in _NARRATIVE_CACHE:
-        return _NARRATIVE_CACHE[key]
-    if not evidence_block and not stocks_text:
-        return ""
-    prompt = f"""주제: {theme} | 섹터: {sector or '-'} | 글 유형: {post_type}
-
-{evidence_block or '(근거 팩 없음 — 종목 데이터 기반으로 설계)'}
-
-{('[종목 데이터 요약]' + chr(10) + stocks_text[:800]) if stocks_text else ''}
-
-이 글의 *서사 설계도* 를 만들어라. 독자의 마음을 움직이는 글은 구조가 먼저다.
-
-출력 (이 형식 그대로, 다른 말 금지):
-공감포인트: 독자가 "내 얘기다" 싶을 구체적 상황 1문장
-긴장: 글 중반까지 끌고 갈 궁금증·문제의식 1문장
-해소: 글이 제시할 답·통찰 1문장
-섹션메시지:
-- 도입: (핵심 메시지 + 사용할 근거 F# 나열)
-- 본론1: (핵심 메시지 + 근거 F#)
-- 본론2: (핵심 메시지 + 근거 F#)
-- 본론3: (핵심 메시지 + 근거 F#)
-- 마무리: (독자가 얻어갈 것 1가지)
-차별화한줄: 다른 블로그와 이 글이 다른 점 1문장"""
-    try:
-        raw = invoke_text("writer_fast", prompt, timeout=90,
-                          system="당신은 콘텐츠 서사 설계자다. 설계만 하고 본문은 쓰지 않는다.",
-                          max_tokens=900, temperature=0.5)
-        outline = strip_html_wrapper(raw or "").strip()
-        if outline and "섹션메시지" in outline:
-            block = f"\n[★ 서사 설계도 — 이 설계의 흐름·근거 배정대로 전개하라]\n{outline}\n"
-            _NARRATIVE_CACHE[key] = block
-            if len(_NARRATIVE_CACHE) > 16:
-                _NARRATIVE_CACHE.pop(next(iter(_NARRATIVE_CACHE)))
-            return block
-    except Exception as e:
-        _g_report("writer", e, module=__name__, func_name="_plan_narrative")
-    return ""
-
 
 def _structure_signature(content: str) -> tuple:
     """비평 패스 안전 가드용 구조 시그니처 — 플레이스홀더·표·소제목 보존 검증."""
@@ -1316,41 +1269,3 @@ def generate_theme_draft(
                       evidence_pack=evidence_pack,
                       gate_feedback=gate_feedback)
 
-
-def generate_draft(
-    blog_type: str,
-    platform: str,
-    **kwargs,
-) -> str:
-    """블로그 텍스트 대본 생성 통합 진입점.
-
-    Args:
-        blog_type: "economic" | "theme"
-        platform:  "tistory" | "naver"
-        **kwargs:  blog_type 에 맞는 파라미터 전달
-
-    Examples:
-        generate_draft("economic", "tistory",
-            keyword="빌 게이츠", sector="IT·테크", reason="...", supreme_block="...")
-        generate_draft("theme", "tistory",
-            theme="AI 반도체", sector="반도체", stocks_data={...}, supreme_block="...")
-    """
-    if blog_type == "economic":
-        return generate_economic_draft(
-            platform=platform,
-            keyword=kwargs["keyword"],
-            sector=kwargs["sector"],
-            reason=kwargs["reason"],
-            supreme_block=kwargs["supreme_block"],
-        )
-    if blog_type == "theme":
-        return generate_theme_draft(
-            platform=platform,
-            theme=kwargs["theme"],
-            sector=kwargs.get("sector", ""),
-            stocks_data=kwargs.get("stocks_data", {}),
-            supreme_block=kwargs["supreme_block"],
-            collection_docs=kwargs.get("collection_docs"),
-            evidence_pack=kwargs.get("evidence_pack"),
-        )
-    raise ValueError(f"알 수 없는 blog_type: {blog_type!r}. 'economic' 또는 'theme' 만 지원.")

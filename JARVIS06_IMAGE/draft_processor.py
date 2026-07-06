@@ -59,30 +59,6 @@ def _extract_chart_context(html: str, chart_idx: int) -> str:
     return ""
 
 
-def _stock_numbers(stocks_data: dict) -> list[float]:
-    """테마 내장 슬롯 검증 ref — 종목 실데이터의 모든 수치 값 (재귀 수집)."""
-    vals: list[float] = []
-
-    def _walk(o):
-        if isinstance(o, dict):
-            for v in o.values():
-                _walk(v)
-        elif isinstance(o, (list, tuple)):
-            for v in o:
-                _walk(v)
-        elif isinstance(o, bool):
-            return
-        elif isinstance(o, (int, float)):
-            vals.append(float(o))
-        elif isinstance(o, str):
-            s = o.replace(",", "").strip().rstrip("%")
-            try:
-                vals.append(float(s))
-            except ValueError:
-                pass
-    _walk(stocks_data or {})
-    return vals
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # ★ process_draft v2 헬퍼 (Step 6, UNIFIED_PIPELINE_SPEC 2026-07-05)
@@ -104,27 +80,6 @@ def _slot_ref_datasets(collected) -> list:
         ref.append({"unit": u, "data": rows})
     return ref
 
-
-def _entities_text(entities) -> str:
-    """CollectedData.entities → 차트 컨텍스트용 종목 텍스트 (표시단위 부착)."""
-    if not entities:
-        return ""
-    try:
-        from JARVIS09_COLLECTOR.models import ATTR_UNITS
-    except Exception:
-        ATTR_UNITS = {}
-    lines = []
-    for e in entities[:12]:
-        name = e.get("name", "")
-        attrs = e.get("attrs") or {}
-        parts = []
-        for k, v in attrs.items():
-            val = v.get("value") if isinstance(v, dict) else v
-            unit = (v.get("unit") if isinstance(v, dict) else "") or ATTR_UNITS.get(k, "")
-            parts.append(f"{k} {val}{unit}")
-        if name and parts:
-            lines.append(f"- {name}: {', '.join(parts)}")
-    return "\n".join(lines)
 
 
 def _count_images(html: str) -> int:
