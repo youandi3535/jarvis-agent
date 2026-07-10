@@ -395,6 +395,11 @@ def process_draft(draft_html: str, collected, platform: str = "tistory",
     Returns:
         {"blocks": list[tuple], "thumbnail_path": str|None, "title": str, "html": str, "html_path": str}
     """
+    try:
+        from shared.pipeline_activity import mark_active
+        mark_active("e3")  # J02→J06 대본 전달 활성화
+    except Exception:
+        pass
     from JARVIS09_COLLECTOR.models import policy_for
     if collected is None or not hasattr(collected, "all_numbers"):
         raise TypeError("process_draft: collected(CollectedData) 필수 — "
@@ -530,6 +535,11 @@ def publish_assembled(result: dict, publish_fn, platform: str = "") -> dict:
     """
     blocks = list(result.get("blocks") or [])
     title  = result.get("title", "")
+    try:
+        from shared.pipeline_activity import mark_active
+        mark_active("e6")  # J06→J08 발행 활성화
+    except Exception:
+        pass
     print(f"  📤 [J06→J08] {platform} 발행 위임 — 블록 {len(blocks)}개")
     try:
         return publish_fn(blocks=blocks, title=title)

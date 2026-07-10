@@ -218,6 +218,12 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
     Returns:
         bool: 수정 성공 여부
     """
+    try:
+        from shared.pipeline_activity import mark_active
+        mark_active("e8")  # J07→J02 코드 수정 활성화
+    except Exception:
+        pass
+
     def _fail(reason: str) -> bool:
         if mark_wontfix:
             _mark_wontfix(error_id, reason)

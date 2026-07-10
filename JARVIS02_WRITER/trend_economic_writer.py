@@ -1325,6 +1325,11 @@ def ts_collect(nv_keyword: str = '', supreme_block=None) -> dict:
         _kw_collection_docs: list = []
         try:
             from JARVIS09_COLLECTOR import collect_research, collect_chart_data
+            try:
+                from shared.pipeline_activity import mark_active
+                mark_active(["e1", "e2"])  # J03→J09 선수집 요청, J09→J02 데이터 전달
+            except Exception:
+                pass
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
             _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
             _pool = list(_chart.get("datasets") or [])
@@ -1577,6 +1582,11 @@ def nv_collect(ts_keyword: str = '', supreme_block=None) -> dict:
         _kw_collection_docs: list = []
         try:
             from JARVIS09_COLLECTOR import collect_research, collect_chart_data
+            try:
+                from shared.pipeline_activity import mark_active
+                mark_active(["e1", "e2"])  # J03→J09 선수집 요청, J09→J02 데이터 전달
+            except Exception:
+                pass
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
             _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
             _pool = list(_chart.get("datasets") or [])

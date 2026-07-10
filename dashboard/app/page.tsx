@@ -249,8 +249,8 @@ function mkRobot(color: string, uid: string, size = 50): string {
 // 에이전트 카드 (AGT 좌표는 레거시 참조용 — 엣지 라우팅은 path 문자열로 직접)
 // ═══════════════════════════════════════════════
 function AgentCard({
-  num, label, sub, color, stat, big = false,
-}: { num:string; label:string; sub:string; color:string; stat?:string; big?:boolean }) {
+  num, label, sub, color, stat, big = false, isActive = false,
+}: { num:string; label:string; sub:string; color:string; stat?:string; big?:boolean; isActive?:boolean }) {
   const [hov, setHov] = useState(false);
   const w = big ? BIG_W : CARD_W, h = big ? BIG_H : CARD_H;
   const rSz = big ? 62 : 50;
@@ -261,17 +261,21 @@ function AgentCard({
       onMouseLeave={() => setHov(false)}
       style={{
         width:w, height:h, position:"relative", overflow:"hidden",
-        background:"linear-gradient(145deg,#131827 0%,#0b0d1a 100%)",
+        background: isActive
+          ? `linear-gradient(145deg,#1a1f35 0%,#0e1020 100%)`
+          : `linear-gradient(145deg,#131827 0%,#0b0d1a 100%)`,
         border:`2px solid ${color}`,
         borderRadius:12,
         padding:"7px 9px",
         transform: hov
           ? `perspective(450px) rotateX(-7deg) rotateY(5deg) scale(1.05) translateZ(8px)`
           : `perspective(450px) rotateX(0) rotateY(0) scale(1)`,
-        transition:"transform 0.26s cubic-bezier(0.23,1,0.32,1), box-shadow 0.26s ease",
+        transition:"transform 0.26s cubic-bezier(0.23,1,0.32,1), box-shadow 0.3s ease",
         boxShadow: hov
           ? `0 0 36px ${color}66, 0 22px 55px rgba(0,0,0,0.65), inset 0 1px 0 ${color}55`
-          : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
+          : isActive
+            ? `0 0 42px ${color}aa, 0 0 80px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}66`
+            : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
         cursor:"default",
       }}
     >
@@ -329,35 +333,55 @@ function computeEdgeLabels(edges: ComputedEdge[]): EdgeLabel[] {
 // ═══════════════════════════════════════════════
 // SVG 연결선 + 흐름 점 — 직선(orthogonal) 전용
 // ═══════════════════════════════════════════════
-function buildEdgeSvg(edges: ComputedEdge[]): string {
+// 엣지 설명 — 실시간 활동 배너용
+const EDGE_DESC: Record<string, string> = {
+  e1:"J03→J09 선수집", e2:"J09→J02 데이터 전달", e3:"J02→J06 대본 전달",
+  e5:"J03→J02 topic_pack", e6:"J06→J08 발행 중", e7:"J02→J07 오류 보고",
+  e8:"J07→J02 코드 수정", e9:"J09→J05 수집 완료", e10:"J05→J07 헬스 리포트",
+  e11:"J00→J01 인프라", e12:"J01→J02 라우팅", e13:"J04→J03 트리거", e14:"J04→J02 트리거",
+};
+
+function buildEdgeSvg(edges: ComputedEdge[], activeEdgeIds: Set<string>): string {
   const filters = edges.map(e =>
     `<filter id="gd${e.id}" x="-50%" y="-50%" width="200%" height="200%">` +
-    `<feGaussianBlur stdDeviation="1.8" result="b"/>` +
+    `<feGaussianBlur stdDeviation="${activeEdgeIds.has(e.id) ? "2.5" : "1.4"}" result="b"/>` +
     `<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
   ).join("");
 
   const lines = edges.flatMap(e => {
-    const wt = e.wt ?? 1.6;
+    const on = activeEdgeIds.has(e.id);
+    const wt   = (e.wt ?? 1.6) * (on ? 1.15 : 0.75);
+    const lineO = on ? 0.88 : 0.14;
+    const glowO = on ? 0.22 : 0.025;
+    const dotR  = on ? 5.5  : 2.2;
+    const dotO  = on ? 0.98 : 0.22;
+    const dur   = on ? e.dur * 0.5 : e.dur * 2.8;
+    const cnt   = on ? Math.max(e.dots * 2, 3) : 1;
+
     const segs: string[] = [];
-    // 보이지 않는 path (animateMotion mpath 용)
     segs.push(`<path id="${e.id}" d="${e.path}" fill="none"/>`);
-    // 글로우 배경
-    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + 2.5}" opacity="0.06" stroke-linecap="round"/>`);
-    // 실선 (직선이므로 dash 없이 solid, 가는 선)
-    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt}" opacity="0.5" stroke-linecap="round" stroke-linejoin="round"/>`);
-    // 방향 점 애니메이션
-    for (let k = 0; k < e.dots; k++) {
-      const begin = (k * e.dur / e.dots).toFixed(2);
+    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + (on ? 5 : 2)}" opacity="${glowO}" stroke-linecap="round"/>`);
+    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt}" opacity="${lineO}" stroke-linecap="round" stroke-linejoin="round"/>`);
+
+    if (on) {
+      // 맥박(pulse) — 활성 엣지에만
+      segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + 2}" opacity="0" stroke-linecap="round"><animate attributeName="opacity" values="0;0.5;0" dur="0.75s" repeatCount="indefinite"/></path>`);
+    }
+
+    for (let k = 0; k < cnt; k++) {
+      const begin = (k * dur / cnt).toFixed(2);
       segs.push(
-        `<circle r="4" fill="${e.col}" opacity="0.92" filter="url(#gd${e.id})">` +
-        `<animateMotion dur="${e.dur}s" repeatCount="indefinite" begin="${begin}s">` +
+        `<circle r="${dotR}" fill="${e.col}" opacity="${dotO}" filter="url(#gd${e.id})">` +
+        `<animateMotion dur="${dur}s" repeatCount="indefinite" begin="${begin}s">` +
         `<mpath href="#${e.id}"/></animateMotion></circle>`
       );
-      segs.push(
-        `<circle r="1.8" fill="white" opacity="0.65">` +
-        `<animateMotion dur="${e.dur}s" repeatCount="indefinite" begin="${begin}s">` +
-        `<mpath href="#${e.id}"/></animateMotion></circle>`
-      );
+      if (on) {
+        segs.push(
+          `<circle r="2.4" fill="white" opacity="0.82">` +
+          `<animateMotion dur="${dur}s" repeatCount="indefinite" begin="${begin}s">` +
+          `<mpath href="#${e.id}"/></animateMotion></circle>`
+        );
+      }
     }
     return segs;
   });
@@ -384,6 +408,17 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   const bnd = useMemo(() => buildBounds(AGENTS), []);
   const resolvedEdges = useMemo(() => resolveEdges(graphData?.edges ?? [], bnd), [graphData, bnd]);
 
+  // 실시간 파이프라인 활동 — 2초 폴링
+  const { data: actData } = useSWR<{active: string[]}>("/api/pipeline/activity", fetcher, { refreshInterval: 2000 });
+  const activeEdgeSet = useMemo(() => new Set<string>(actData?.active ?? []), [actData]);
+  const activeAgentSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of graphData?.edges ?? []) {
+      if (activeEdgeSet.has(e.id)) { s.add(e.from); s.add(e.to); }
+    }
+    return s;
+  }, [activeEdgeSet, graphData]);
+
   const stats: Record<string, string> = {
     j00: `PID ${ov?.daemon?.pid ?? "—"} · ${ov?.daemon?.uptime ?? "—"}`,
     j01: `라우터 · 인텐트 분류`,
@@ -397,7 +432,7 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
     j07: `신규 ${fmtNum(ov?.guardian?.new)} · CRIT ${fmtNum(ov?.guardian?.critical)}`,
   };
 
-  const edgeSvg = buildEdgeSvg(resolvedEdges);
+  const edgeSvg = buildEdgeSvg(resolvedEdges, activeEdgeSet);
   const edgeLabels = computeEdgeLabels(resolvedEdges);
 
   return (
@@ -428,6 +463,27 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
           </span>
         </div>
       </div>
+
+      {/* 실시간 활동 배너 — 파이프라인 실행 중일 때만 표시 */}
+      {activeEdgeSet.size > 0 && (
+        <div style={{
+          display:"flex", alignItems:"center", gap:12,
+          padding:"6px 20px", borderBottom:"1px solid #4ade8022",
+          background:"rgba(74,222,128,0.05)",
+        }}>
+          <span style={{ display:"flex",alignItems:"center",gap:5,flexShrink:0 }}>
+            <span style={{
+              width:7, height:7, borderRadius:"50%", background:"#4ade80",
+              boxShadow:"0 0 8px #4ade80", display:"inline-block",
+              animation:"pulse 0.8s ease-in-out infinite",
+            }}/>
+            <span style={{ fontSize:9,fontWeight:800,color:"#4ade80",letterSpacing:1.5 }}>ACTIVE</span>
+          </span>
+          <span style={{ fontSize:11, color:"#6ee7b7", letterSpacing:0.3 }}>
+            {Array.from(activeEdgeSet).map(id => EDGE_DESC[id] ?? id).join("  →  ")}
+          </span>
+        </div>
+      )}
 
       {/* 사무실 본체 */}
       <div style={{ overflowX:"auto" }}>
@@ -468,18 +524,23 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
           />
 
           {/* 엣지 레이블 */}
-          {edgeLabels.map((lb, i) => (
-            <div key={i} style={{
-              position:"absolute",
-              left: lb.x - 28, top: lb.y - 8,
-              width: 56, textAlign:"center",
-              fontSize:8, fontWeight:700,
-              color: lb.col, opacity:0.75,
-              letterSpacing:0.3,
-              pointerEvents:"none", zIndex:2,
-              textShadow:`0 0 8px ${lb.col}88`,
-            }}>{lb.text}</div>
-          ))}
+          {edgeLabels.map((lb, i) => {
+            const edgeId = resolvedEdges.find(e => e.lbl?.text === lb.text)?.id ?? "";
+            const on = activeEdgeSet.has(edgeId);
+            return (
+              <div key={i} style={{
+                position:"absolute",
+                left: lb.x - 28, top: lb.y - 8,
+                width: 56, textAlign:"center",
+                fontSize:8, fontWeight: on ? 900 : 700,
+                color: lb.col, opacity: on ? 1 : 0.55,
+                letterSpacing:0.3,
+                pointerEvents:"none", zIndex:2,
+                textShadow: on ? `0 0 12px ${lb.col}cc` : `0 0 8px ${lb.col}44`,
+                transition:"opacity 0.3s, font-weight 0.2s",
+              }}>{lb.text}</div>
+            );
+          })}
 
           {/* CCTV — J00 우측 ↔ Mission Board 사이 빈 공간 (top 18) */}
           <div style={{
@@ -519,6 +580,7 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
               <AgentCard
                 num={a.num} label={a.label} sub={a.sub}
                 color={a.color} stat={stats[a.id]} big={a.big}
+                isActive={activeAgentSet.has(a.id)}
               />
             </div>
           ))}

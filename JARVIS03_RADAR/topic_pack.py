@@ -124,6 +124,11 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
     쓰지도 않을 주제를 프로파일링·박제하는 건 낭비 → 후보는 publish_slots + 소폭 버퍼(2)만
     LLM 프로파일링(부적합 판정으로 걸러질 것 대비), 팩에는 적합 상위 publish_slots개만 박제.
     """
+    try:
+        from shared.pipeline_activity import mark_active
+        mark_active("e13")  # J04→J03 스케줄 트리거
+    except Exception:
+        pass
     if max_candidates is None:
         max_candidates = publish_slots + 2
     if trends is None:
@@ -242,6 +247,11 @@ def pick_candidate(exclude_keyword: str = "") -> dict | None:
             continue
         if ex and (kw == ex or kw in ex or ex in kw):
             continue
+        try:
+            from shared.pipeline_activity import mark_active
+            mark_active("e5")  # J03→J02 topic_pack 전달 활성화
+        except Exception:
+            pass
         return cand
     return None
 
