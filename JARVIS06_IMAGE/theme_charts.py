@@ -1419,6 +1419,192 @@ def make_stock_chart(yf_ticker, name) -> str:
         return ''
 
 
+def make_leader_price_chart_from_data(rows: list, name: str, period: str = "") -> str:
+    """JARVIS09 분기별 주가 이력 rows → 주가 차트 HTML.
+
+    rows: [{"label": "2021.Q1", "value": 80000}, ...] (stocks_to_datasets 출력)
+    실데이터 없으면 '' (ADR 010). draft_processor._inject_leader_price_charts 주 경로.
+    """
+    if not rows or len(rows) < 4:
+        return ''
+    try:
+        import pandas as pd
+        setup_chart_defaults(_FONT_PATH)
+
+        labels = [r["label"] for r in rows]
+        values = [float(r["value"]) for r in rows]
+        # 라벨 형식: "2021.01" (월별) — "YYYY.MM-01" 로 파싱
+        dates  = pd.to_datetime(
+            [f"{lb.replace('.', '-')}-01" for lb in labels], errors="coerce"
+        )
+
+        is_up = values[-1] >= values[0]
+        color = '#00d4aa' if is_up else '#ff6b6b'
+        period_label = f"최근 {period}" if period else ""
+
+        fig, ax1 = plt.subplots(figsize=(10, 4.5), facecolor='#0d1117')
+        ax1.set_facecolor('#161b22')
+        ax1.plot(dates, values, color=color, linewidth=2.2, marker='o',
+                 markersize=4, zorder=3)
+        ax1.fill_between(dates, values, min(values) * 0.99,
+                         alpha=0.18, color=color, zorder=2)
+        ax1.set_ylabel('주가 (원)', color='#8b949e', fontsize=9)
+        ax1.tick_params(colors='#8b949e', labelsize=8)
+        for s in ax1.spines.values():
+            s.set_visible(False)
+        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{int(x):,}'))
+        ax1.grid(axis='y', color='#21262d', linewidth=0.7, zorder=1)
+
+        chg = (values[-1] - values[0]) / values[0] * 100 if values[0] else 0
+        title_str = f'{name}   ₩{values[-1]:,.0f}'
+        if period_label:
+            title_str += f'   [{period_label}]'
+        ax1.set_title(title_str, color='#e6edf3',
+                      fontsize=CHART_STYLE["FONT_LABEL"],
+                      fontweight='bold', pad=12, loc='left', x=0.02)
+        ax1.annotate(f'{"+" if chg >= 0 else ""}{chg:.1f}%',
+                     xy=(0.98, 0.90), xycoords='axes fraction',
+                     color='#00d4aa' if chg >= 0 else '#ff6b6b',
+                     fontsize=11, fontweight='bold', ha='right')
+
+        # 월별 60개 포인트 → 12개월(1년) 단위로 x축 표시
+        step = max(len(dates) // 6, 1)
+        ax1.set_xticks(dates[::step])
+        # 라벨: "2021.01" → "2021년" (연도만 표시, 겹침 방지)
+        ax1.set_xticklabels(
+            [lb[:4] + "년" for lb in labels[::step]],
+            color='#8b949e', fontsize=7, rotation=0,
+        )
+        fig.tight_layout(pad=1.2)
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=140, bbox_inches='tight',
+                    facecolor='#0d1117', edgecolor='none')
+        plt.close(fig)
+        buf.seek(0)
+        b64 = base64.b64encode(buf.read()).decode('utf-8')
+        return (
+            f'<div style="background:linear-gradient(135deg,#0d1117,#161b22);'
+            f'padding:20px;border-radius:16px;border:1px solid #30363d;'
+            f'margin:20px 0;box-shadow:0 4px 24px rgba(0,0,0,0.4);">'
+            f'<img src="data:image/png;base64,{b64}" '
+            f'style="width:100%;max-width:760px;display:block;margin:0 auto;border-radius:8px;" '
+            f'alt="{name} 주가 흐름"/></div>'
+        )
+    except Exception as e:
+        log.error(f"[LeaderChartData] {name} 오류: {e}")
+        _g_report("image", e, module=__name__)
+        return ''
+
+
+def make_leader_price_chart(yf_ticker: str, name: str) -> str:
+    """대장주·부대장주 전용 주가 차트 HTML (최대 5년, 있는 만큼 사용).
+
+    직접 HTML 반환 (CHART_STORE 미사용). 실데이터 없으면 '' (ADR 010).
+    수집 데이터 없을 때의 폴백 경로 — 주 경로는 make_leader_price_chart_from_data().
+    """
+    # alt 티커 목록 (KQ↔KS 폴백)
+    alt_tickers = [yf_ticker]
+    if yf_ticker.endswith('.KQ'):
+        alt_tickers += [yf_ticker.replace('.KQ', '.KS'), yf_ticker.split('.')[0]]
+    elif yf_ticker.endswith('.KS'):
+        alt_tickers += [yf_ticker.replace('.KS', '.KQ'), yf_ticker.split('.')[0]]
+
+    # 최신 시점 기준 최대 5년 — yfinance가 상장 이후 있는 만큼만 반환
+    import pandas as pd
+    df = pd.DataFrame()
+    for ticker in alt_tickers:
+        df = _j09_hist(ticker, period="5y")
+        if not df.empty and len(df) >= 6:
+            break
+
+    if df.empty:
+        log.warning(f"[LeaderChart] {name}: 주가 데이터 없음 ({yf_ticker})")
+        return ''
+
+    try:
+        setup_chart_defaults(_FONT_PATH)
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 5),
+                                        gridspec_kw={'height_ratios': [3, 1]},
+                                        facecolor='#0d1117')
+        fig.subplots_adjust(hspace=0.04)
+        close, volume, dates = df['Close'], df['Volume'], df.index
+
+        color = '#00d4aa' if close.iloc[-1] >= close.iloc[0] else '#ff6b6b'
+
+        # 상단: 주가 라인
+        ax1.set_facecolor('#161b22')
+        ax1.plot(dates, close, color=color, linewidth=2.0, zorder=3)
+        ax1.fill_between(dates, close, close.min() * 0.99, alpha=0.18, color=color, zorder=2)
+        ax1.set_ylabel('주가 (원)', color='#8b949e', fontsize=9)
+        ax1.tick_params(colors='#8b949e', labelsize=8)
+        for s in ax1.spines.values():
+            s.set_visible(False)
+        ax1.set_xticklabels([])
+        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{int(x):,}'))
+        ax1.grid(axis='y', color='#21262d', linewidth=0.7, zorder=1)
+
+        current = close.iloc[-1]
+        chg = (close.iloc[-1] - close.iloc[-2]) / close.iloc[-2] * 100 if len(close) > 1 else 0
+        # 실제 기간 계산
+        n_months = max(round((dates[-1] - dates[0]).days / 30), 1)
+        n_years, n_rem = divmod(n_months, 12)
+        if n_years >= 1 and n_rem > 0:
+            period_label = f"최근 {n_years}년 {n_rem}개월"
+        elif n_years >= 1:
+            period_label = f"최근 {n_years}년"
+        else:
+            period_label = f"최근 {n_months}개월"
+
+        ax1.set_title(f'{name}   ₩{current:,.0f}   [{period_label}]',
+                      color='#e6edf3',
+                      fontsize=CHART_STYLE["FONT_LABEL"],
+                      fontweight='bold', pad=12, loc='left', x=0.02)
+        ax1.annotate(f'{"+" if chg >= 0 else ""}{chg:.2f}%',
+                     xy=(0.98, 0.90), xycoords='axes fraction',
+                     color='#00d4aa' if chg >= 0 else '#ff6b6b',
+                     fontsize=11, fontweight='bold', ha='right')
+
+        # 하단: 거래량
+        ax2.set_facecolor('#161b22')
+        vcols = ['#00d4aa' if c >= o else '#ff6b6b'
+                 for c, o in zip(df['Close'], df['Open'])]
+        ax2.bar(dates, volume, color=vcols, width=0.8, alpha=0.8)
+        ax2.set_ylabel('거래량', color='#8b949e', fontsize=8)
+        ax2.tick_params(colors='#8b949e', labelsize=7)
+        for s in ax2.spines.values():
+            s.set_visible(False)
+        ax2.grid(axis='y', color='#21262d', linewidth=0.5)
+
+        # x축: 1년 이상이면 연도, 1년 미만이면 연월
+        step = max(len(dates) // 5, 1)
+        date_fmt = '%Y' if n_years >= 1 else '%Y/%m'
+        ax2.set_xticks(dates[::step])
+        ax2.set_xticklabels([d.strftime(date_fmt) for d in dates[::step]],
+                            color='#8b949e', fontsize=7)
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=140, bbox_inches='tight',
+                    facecolor='#0d1117', edgecolor='none')
+        plt.close(fig)
+        buf.seek(0)
+        b64 = base64.b64encode(buf.read()).decode('utf-8')
+
+        return (
+            f'<div style="background:linear-gradient(135deg,#0d1117,#161b22);'
+            f'padding:20px;border-radius:16px;border:1px solid #30363d;'
+            f'margin:20px 0;box-shadow:0 4px 24px rgba(0,0,0,0.4);">'
+            f'<img src="data:image/png;base64,{b64}" '
+            f'style="width:100%;max-width:760px;display:block;margin:0 auto;border-radius:8px;" '
+            f'alt="{name} 주가차트 ({period_label})"/></div>'
+        )
+    except Exception as e:
+        log.error(f"[LeaderChart] {name} 오류: {e}")
+        _g_report("image", e, module=__name__)
+        return ''
+
+
 __all__ = [
     "_cap", "set_font", "fig_to_b64", "wrap_img", "CHART_STORE",
     "make_theme_overview_chart", "make_investment_radar_chart",
@@ -1428,5 +1614,5 @@ __all__ = [
     "make_terms_chart", "make_profit_donut", "make_cap_bar", "make_per_bar",
     "make_profitability_chart", "make_revenue_chart", "make_theme_return_chart",
     "make_risk_chart", "make_portfolio_chart", "make_checklist_chart",
-    "make_stock_chart",
+    "make_stock_chart", "make_leader_price_chart", "make_leader_price_chart_from_data",
 ]

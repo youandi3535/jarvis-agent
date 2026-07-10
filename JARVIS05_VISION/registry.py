@@ -315,8 +315,147 @@ class _Image06Adapter(BaseAgent):
         return {"pollinations_available": True}
 
 
+class _Guardian07Adapter(BaseAgent):
+    agent_id     = "jarvis07_guardian"
+    agent_name   = "JARVIS07 GUARDIAN"
+    agent_domain = "guardian"
+
+    def get_health(self) -> dict:
+        try:
+            from shared import db as _db
+            stats = _db.get_error_stats(days=7)
+            crit  = stats.get("by_severity", {}).get("critical", 0)
+            high  = stats.get("by_severity", {}).get("high", 0)
+            new_  = stats.get("by_status", {}).get("new", 0)
+            if crit > 0:
+                return {"status": "warn", "message": f"CRITICAL 오류 {crit}건 — 수동 검토 필요"}
+            if high > 0:
+                return {"status": "warn", "message": f"HIGH 오류 {high}건 — 자동 수정 중"}
+            return {"status": "online", "message": f"신규 오류 {new_}건 · 긴급 없음"}
+        except Exception as e:
+            return {"status": "warn", "message": f"오류 통계 조회 실패: {e}"}
+
+    def get_metrics(self) -> dict:
+        try:
+            from shared import db as _db
+            stats = _db.get_error_stats(days=7)
+            by_status   = stats.get("by_status", {})
+            by_severity = stats.get("by_severity", {})
+            try:
+                from JARVIS07_GUARDIAN.pattern_fixer import stats as _pf
+                pf = _pf()
+                pattern_count = pf.get("total_patterns", 0)
+                hits_total    = pf.get("total_hits", 0)
+            except Exception:
+                pattern_count = 0
+                hits_total    = 0
+            return {
+                "total_7d":      stats.get("total", 0),
+                "new":           by_status.get("new", 0),
+                "fixed":         by_status.get("fixed", 0),
+                "critical":      by_severity.get("critical", 0),
+                "high":          by_severity.get("high", 0),
+                "pattern_count": pattern_count,
+                "hits_total":    hits_total,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+
+class _Publish08Adapter(BaseAgent):
+    agent_id     = "jarvis08_publish"
+    agent_name   = "JARVIS08 PUBLISH"
+    agent_domain = "publish"
+
+    def get_health(self) -> dict:
+        try:
+            from pathlib import Path
+            from datetime import datetime
+            _ROOT   = Path(__file__).resolve().parent.parent
+            nv_path = _ROOT / "JARVIS02_WRITER" / "naver_cookies.pkl"
+            nv_ok   = nv_path.exists()
+            from JARVIS08_PUBLISH.credentials.login_manager import get_tistory_cookie
+            ts_ok = bool(get_tistory_cookie())
+            if nv_ok and ts_ok:
+                return {"status": "online", "message": "네이버·티스토리 쿠키 정상"}
+            issues = []
+            if not nv_ok:
+                issues.append("네이버 쿠키 없음")
+            if not ts_ok:
+                issues.append("티스토리 쿠키 미설정")
+            return {"status": "warn", "message": " / ".join(issues)}
+        except Exception as e:
+            return {"status": "warn", "message": f"자격증명 조회 실패: {e}"}
+
+    def get_metrics(self) -> dict:
+        try:
+            from pathlib import Path
+            from datetime import datetime
+            _ROOT   = Path(__file__).resolve().parent.parent
+            nv_path = _ROOT / "JARVIS02_WRITER" / "naver_cookies.pkl"
+            nv_ok   = nv_path.exists()
+            nv_age  = None
+            if nv_ok:
+                age = datetime.now() - datetime.fromtimestamp(nv_path.stat().st_mtime)
+                nv_age = round(age.total_seconds() / 3600, 1)
+            from JARVIS08_PUBLISH.credentials.login_manager import get_tistory_cookie
+            ts_ok = bool(get_tistory_cookie())
+            from shared.db import get_db
+            with get_db() as conn:
+                rows = conn.execute(
+                    """SELECT platform, COUNT(*) as cnt FROM post_analysis
+                       WHERE created_at >= datetime('now','localtime','-7 days')
+                       GROUP BY platform"""
+                ).fetchall()
+            by_plat = {r["platform"]: r["cnt"] for r in rows}
+            return {
+                "naver_cookie_ok":  nv_ok,
+                "naver_cookie_age": nv_age,
+                "ts_cookie_ok":     ts_ok,
+                "7d_naver":         by_plat.get("naver", 0),
+                "7d_tistory":       by_plat.get("tistory", 0),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+
+class _Collector09Adapter(BaseAgent):
+    agent_id     = "jarvis09_collector"
+    agent_name   = "JARVIS09 COLLECTOR"
+    agent_domain = "collection"
+
+    def get_health(self) -> dict:
+        try:
+            import JARVIS09_COLLECTOR.collector_agent  # noqa
+            return {"status": "online", "message": "COLLECTOR 에이전트 정상"}
+        except Exception as e:
+            return {"status": "warn", "message": f"COLLECTOR 로드 실패: {e}"}
+
+    def get_metrics(self) -> dict:
+        try:
+            from shared.db import get_db
+            with get_db() as conn:
+                total = conn.execute("SELECT COUNT(*) FROM collection_results").fetchone()[0]
+                today = conn.execute(
+                    "SELECT COUNT(*) FROM collection_results "
+                    "WHERE collected_at >= date('now','localtime')"
+                ).fetchone()[0]
+            try:
+                from JARVIS09_COLLECTOR.collector_engine import list_provider_names as _lpn
+                providers = len(_lpn())
+            except Exception:
+                providers = 0
+            return {
+                "total_records": total,
+                "today_records": today,
+                "providers":     providers,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+
 def bootstrap_builtin_adapters() -> None:
-    """JARVIS00~06 어댑터를 레지스트리에 등록. vision_agent.register() 에서 1회 호출."""
+    """JARVIS00~09 어댑터를 레지스트리에 등록. vision_agent.register() 에서 1회 호출."""
     for cls in [
         _Infra00Adapter,
         _Master01Adapter,
@@ -325,6 +464,9 @@ def bootstrap_builtin_adapters() -> None:
         _Scheduler04Adapter,
         _Vision05Adapter,
         _Image06Adapter,
+        _Guardian07Adapter,
+        _Publish08Adapter,
+        _Collector09Adapter,
     ]:
         try:
             _registry.register(cls())
@@ -338,7 +480,8 @@ def bootstrap_builtin_adapters() -> None:
 _BUILTIN_IDS = {
     "jarvis00_infra", "jarvis01_master", "jarvis02_writer",
     "jarvis03_radar", "jarvis04_scheduler", "jarvis05_vision",
-    "jarvis06_image",
+    "jarvis06_image", "jarvis07_guardian", "jarvis08_publish",
+    "jarvis09_collector",
 }
 
 

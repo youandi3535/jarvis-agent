@@ -795,6 +795,20 @@ def empty_state(msg: str, sub: str = "") -> str:
         f'</div>'
     )
 
+def _big_metric(label: str, value, sub: str = "", color: str = "primary") -> str:
+    """44px 대형 숫자 KPI 카드 — 한 눈에 들어오는 핵심 숫자."""
+    c = C.get(color, C["primary"])
+    return (
+        f'<div style="background:{N["card"]};border:1px solid {N["bdr"]};'
+        f'border-top:3px solid {c};border-radius:12px;'
+        f'padding:24px 16px 20px;text-align:center">'
+        f'<div style="font-size:14px;color:{N["text2"]};font-weight:500;margin-bottom:12px">{esc(label)}</div>'
+        f'<div style="font-size:44px;font-weight:800;color:{c};'
+        f'line-height:1;letter-spacing:-1px">{esc(str(value))}</div>'
+        f'<div style="font-size:14px;color:{N["text5"]};margin-top:10px">{esc(str(sub))}</div>'
+        f'</div>'
+    )
+
 # ══════════════════════════════════════════════════════════════════
 # DB 헬퍼
 # ══════════════════════════════════════════════════════════════════
@@ -1440,6 +1454,71 @@ def load_guardian_source_stats(days: int = 7) -> list[dict]:
         return []
 
 
+@st.cache_data(ttl=30)
+def load_db_stats() -> dict:
+    """DB 통계 — 테이블별 행 수·마지막 쓰기·백업 현황."""
+    result: dict = {
+        "size_mb": 0.0, "tables": [], "backup_files": [],
+        "total_rows": 0, "wal_exists": False,
+    }
+    if DB_PATH.exists():
+        result["size_mb"] = round(DB_PATH.stat().st_size / 1024 / 1024, 2)
+        result["wal_exists"] = (DB_PATH.parent / (DB_PATH.name + "-wal")).exists()
+
+    backup_dir = BASE_DIR / "shared" / "backups"
+    if backup_dir.exists():
+        for bf in sorted(backup_dir.glob("jarvis_*.sqlite"), reverse=True)[:10]:
+            result["backup_files"].append({
+                "name": bf.name,
+                "size_mb": round(bf.stat().st_size / 1024 / 1024, 2),
+                "mtime": datetime.fromtimestamp(bf.stat().st_mtime).strftime("%Y-%m-%d"),
+            })
+
+    con = _db()
+    if not con:
+        return result
+    try:
+        tables = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        ).fetchall()
+        today = datetime.now().strftime("%Y-%m-%d")
+        for t in tables:
+            name = t[0]
+            try:
+                cnt = con.execute(f"SELECT COUNT(*) FROM [{name}]").fetchone()[0]
+            except Exception:
+                cnt = 0
+            last_write = "—"
+            for col in ["created_at","recorded_at","timestamp","updated_at","logged_at","ran_at","indexed_at","reviewed_at"]:
+                try:
+                    row = con.execute(f"SELECT MAX([{col}]) FROM [{name}]").fetchone()
+                    if row and row[0]:
+                        last_write = str(row[0])[:16]
+                        break
+                except Exception:
+                    continue
+            today_cnt = 0
+            for col in ["created_at","recorded_at","timestamp","logged_at","ran_at","indexed_at"]:
+                try:
+                    row = con.execute(
+                        f"SELECT COUNT(*) FROM [{name}] WHERE date([{col}])=?", (today,)
+                    ).fetchone()
+                    if row:
+                        today_cnt = row[0]
+                        break
+                except Exception:
+                    continue
+            result["tables"].append({
+                "name": name, "rows": cnt,
+                "last_write": last_write, "today_rows": today_cnt,
+            })
+            result["total_rows"] += cnt
+        con.close()
+    except Exception:
+        pass
+    return result
+
+
 # ══════════════════════════════════════════════════════════════════
 # 헤더 + 새로고침
 # ══════════════════════════════════════════════════════════════════
@@ -1474,9 +1553,9 @@ try:
 except Exception:
     pass
 
-_qa_tab_label = f"품질 관리 🔔{_qa_pending_count}" if _qa_pending_count > 0 else "품질 관리"
+_qual_label = "품질" + (f" 🔔{_qa_pending_count}" if _qa_pending_count > 0 else "")
 
-# 오류 탭 레이블 — 미처리 critical/high 건수 표시
+# 오류 수 — 시스템 탭 레이블용
 _err_new_count = 0
 try:
     _con_err = get_db()
@@ -1487,12 +1566,21 @@ try:
     _con_err.close()
 except Exception:
     pass
-_err_tab_label = f"오류 관리 🚨{_err_new_count}" if _err_new_count > 0 else "오류 관리"
+_sys_label = "시스템" + (f" 🚨{_err_new_count}" if _err_new_count > 0 else "")
 
-t_home, t_radar, t_pub, t_qa, t_perf, t_ai, t_err, t_sched, t_sys = st.tabs([
-    "홈", "레이더", "발행 관리", _qa_tab_label, "성과", "AI 학습",
-    _err_tab_label, "스케줄러", "시스템",
+# ── 6탭 구조 ─────────────────────────────────────────────────────
+t_home, _t_pub_outer, _t_qual_outer, t_perf, _t_sys_outer, t_db = st.tabs([
+    "홈", "발행", _qual_label, "성과", _sys_label, "🗄️ DB",
 ])
+# 발행 탭: 레이더 + 발행 파이프라인
+with _t_pub_outer:
+    t_radar, t_pub = st.tabs(["📡 레이더", "✍️ 발행 파이프라인"])
+# 품질 탭: 품질 검토 + AI 학습
+with _t_qual_outer:
+    t_qa, t_ai = st.tabs(["✅ 품질 검토", "🧠 AI 학습"])
+# 시스템 탭: 오류 + 스케줄러 + 인프라
+with _t_sys_outer:
+    t_err, t_sched, t_sys = st.tabs(["🚨 오류", "⏰ 스케줄러", "⚙️ 인프라"])
 
 # ──────────────────────────────────────────────────────────────────
 # 홈
@@ -1570,94 +1658,179 @@ with t_home:
 
     md(_office_view_html(_status_map, _info_map))
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    section("오늘 KPI")
-    k0, k1, k2, k3, k4 = st.columns(5)
-    p_today = pipeline.get("today", {})
-    pend_cnt = p_today.get("suggested", 0) + p_today.get("pending", 0)
-    with k0: md(kpi("오늘 발행 글",    posts.get("today", 0),  color="success",  sub="posts 테이블"))
-    with k1: md(kpi("파이프라인 대기", pend_cnt, color="warn" if pend_cnt > 0 else "muted", sub=f"완료 {p_today.get('done',0)}건"))
-    with k2: md(kpi("오늘 트렌드",     trends["today"],         color="primary",  sub="Google·Naver"))
-    with k3: md(kpi("오늘 잡 실행",    len(today_jobs),         color="success",  sub=f"성공 {job_ok}건"))
-    with k4: md(kpi("누적 블로그 뷰",  f"{perf['total_views']:,}", color="primary", sub="post_analysis"))
+    # ── 시스템 상태 배너 ──────────────────────────────────────────────
+    _health_issues = []
+    if not daemon["alive"]:  _health_issues.append(("danger", "데몬 중단"))
+    if _gurgent > 0:         _health_issues.append(("danger", f"CRITICAL/HIGH 오류 {_gurgent}건"))
+    if _job_fail > 2:        _health_issues.append(("warn",   f"잡 실패 {_job_fail}건"))
+    if not _nv_ok:           _health_issues.append(("warn",   "네이버 쿠키 만료"))
 
-    # 일일 리뷰 — 시스템 자기분석 최신 결과
-    reviews = load_daily_review(days=1)
-    if reviews:
-        rev = reviews[0]
-        section("📋 오늘의 시스템 자기분석 (Daily Review)")
-        rev_cols = st.columns([1, 1, 2])
-        with rev_cols[0]:
-            md(kpi("오늘 발행 글", rev.get("posts_count", 0), color="success",
-                   sub=f"품질점수 {rev.get('quality_score', '—'):.1f}" if rev.get("quality_score") else ""))
-        with rev_cols[1]:
-            md(kpi("평균 조회수", f'{rev.get("avg_views", 0):.0f}', color="primary", sub="오늘 발행 기준"))
-        with rev_cols[2]:
-            insights_text = rev.get("insights") or ""
-            if insights_text:
-                md(f'<div style="background:{_alpha(C["primary"],.05)};border:1px solid {_alpha(C["primary"],.2)};'
-                   f'border-left:4px solid {C["primary"]};border-radius:10px;padding:14px 16px">'
-                   f'<div style="font-size:14px;font-weight:700;color:{C["primary"]};margin-bottom:8px">💡 AI 인사이트</div>'
-                   f'<div style="font-size:14px;color:{N["text2"]};line-height:1.8">{esc(insights_text[:300])}{"…" if len(insights_text)>300 else ""}</div>'
-                   f'</div>')
-        # common_issues
-        try:
-            issues = json.loads(rev.get("common_issues") or "[]")
-            if issues:
-                def _issue_label(iss) -> str:
-                    if isinstance(iss, dict):
-                        t = iss.get("type") or iss.get("issue") or str(iss)
-                        c = iss.get("count")
-                        return f'{t} ({c}건)' if c else t
-                    return str(iss)
-                issues_html = " ".join(
-                    f'<span style="background:{_alpha(C["warn"],.12)};color:{C["warn"]};font-size:14px;'
-                    f'padding:2px 10px;border-radius:9999px;margin:2px">{esc(_issue_label(iss))}</span>'
-                    for iss in issues[:6]
-                )
-                md(f'<div style="margin-top:10px"><span style="font-size:14px;color:{N["text5"]};margin-right:8px">반복 이슈:</span>'
-                   f'{issues_html}</div>')
-        except Exception:
-            pass
-
-    section("최근 이벤트")
-    events = load_recent_events(10)
-    if events:
-        md(table(["이벤트 타입", "소스", "시각"],
-                 [[esc(e["event_type"]), esc(e["source"]), _fmt(e["created_at"])]
-                  for e in events]))
+    if not _health_issues:
+        _hc, _hl, _hicon = C["success"], "모든 시스템 정상 운영 중", "✅"
+    elif any(c == "danger" for c, _ in _health_issues):
+        _hc, _hl, _hicon = C["danger"], "즉시 확인 필요", "🚨"
     else:
-        md(empty_state("이벤트 없음", "시스템이 조용히 동작 중입니다"))
+        _hc, _hl, _hicon = C["warn"], "주의 필요", "⚠️"
 
-    if today_jobs:
-        section("오늘 잡 실행 이력")
-        md(table(
-            ["잡 이름", "소유", "시작", "결과", "소요(ms)"],
-            [[esc(j.get("job_name", "—")),
-              badge(OWNER_LABEL.get(j.get("owner_agent", ""), j.get("owner_agent", "?")), "muted"),
-              _fmt(j.get("started_at", "")),
-              ok_badge(j.get("success")),
-              str(int(j.get("duration_ms") or 0))]
-             for j in today_jobs[:15]]
+    _issue_chips = "".join(
+        f'<span style="background:{_alpha(C[s],.20)};color:{C[s]};font-size:14px;'
+        f'font-weight:600;padding:4px 14px;border-radius:9999px;margin-left:8px">{esc(t)}</span>'
+        for s, t in _health_issues
+    )
+    md(f'<div style="background:{_alpha(_hc,.07)};border:1.5px solid {_alpha(_hc,.35)};'
+       f'border-radius:14px;padding:18px 24px;margin:20px 0 24px;'
+       f'display:flex;align-items:center;gap:16px">'
+       f'<span style="font-size:36px;line-height:1">{_hicon}</span>'
+       f'<div style="flex:1">'
+       f'<div style="font-size:22px;font-weight:800;color:{_hc};line-height:1.2">{esc(_hl)}</div>'
+       f'<div style="font-size:14px;color:{N["text5"]};margin-top:4px">마지막 갱신 {datetime.now().strftime("%H:%M:%S")}</div>'
+       f'</div>'
+       f'{_issue_chips}</div>')
+
+    # ── 오늘의 핵심 지표 ────────────────────────────────────────────
+    _today_posts  = posts.get("today", 0)
+    _by_p         = posts.get("by_platform", {})
+    _new_errors   = _gd.get("new", 0)
+    _success_rate = round(job_ok / len(today_jobs) * 100) if today_jobs else 100
+
+    def _big_kpi(label, value, sub, color):
+        return (
+            f'<div style="background:{N["card"]};border:1px solid {N["bdr"]};'
+            f'border-top:3px solid {color};border-radius:12px;'
+            f'padding:22px 16px 18px;text-align:center">'
+            f'<div style="font-size:14px;color:{N["text2"]};font-weight:500;margin-bottom:10px">{esc(label)}</div>'
+            f'<div style="font-size:44px;font-weight:800;color:{color};'
+            f'line-height:1;letter-spacing:-1px">{esc(str(value))}</div>'
+            f'<div style="font-size:14px;color:{N["text5"]};margin-top:10px">{esc(sub)}</div>'
+            f'</div>'
+        )
+
+    _kc0, _kc1, _kc2, _kc3 = st.columns(4)
+    with _kc0:
+        md(_big_kpi(
+            "오늘 발행",
+            _today_posts,
+            f'네이버 {_by_p.get("naver", 0)} · 티스토리 {_by_p.get("tistory", 0)}',
+            C["success"] if _today_posts > 0 else N["bdr"],
         ))
+    with _kc1:
+        md(_big_kpi(
+            "수집 트렌드",
+            trends["today"],
+            "Google · Naver 합산",
+            C["primary"],
+        ))
+    with _kc2:
+        md(_big_kpi(
+            "신규 오류",
+            _new_errors,
+            "없음 ✨" if _new_errors == 0 else f"CRIT/HIGH {_gurgent}건 포함",
+            C["success"] if _new_errors == 0 else (C["danger"] if _gurgent > 0 else C["warn"]),
+        ))
+    with _kc3:
+        md(_big_kpi(
+            "잡 성공률",
+            f"{_success_rate}%",
+            f"실행 {len(today_jobs)}건 · 실패 {_job_fail}건",
+            C["success"] if _success_rate >= 90 else C["warn"],
+        ))
+
+    # ── 오늘 발행 이력 ──────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    md(f'<div style="font-size:18px;font-weight:700;color:{N["text"]};margin-bottom:12px">📋 오늘 발행 이력</div>')
+
+    _home_quality  = load_quality_stats()
+    _today_str     = datetime.now().strftime("%Y-%m-%d")
+    _home_posts    = [r for r in _home_quality.get("recent", [])
+                      if (r.get("created_at") or "").startswith(_today_str)]
+
+    if _home_posts:
+        for _rp in _home_posts:
+            _plat       = _rp.get("platform", "")
+            _plat_emoji = "🟢" if _plat == "naver" else "🟠"
+            _plat_label = "네이버" if _plat == "naver" else "티스토리"
+            _title      = (_rp.get("title") or "제목 없음")[:50]
+            _status     = _rp.get("status", "")
+            _st_label, _st_col = QA_STATUS_LABEL.get(_status, ("—", N["text5"]))
+            _t_str      = (_rp.get("created_at") or "")
+            _t_disp     = _t_str[11:16] if len(_t_str) > 11 else "—"
+            _views      = _rp.get("current_views") or 0
+            _views_html = (f'<span style="font-size:14px;color:{N["text5"]}">👁 {_views:,}</span>'
+                           if _views else "")
+            md(f'<div style="display:flex;align-items:center;gap:12px;'
+               f'padding:12px 18px;border-radius:10px;margin-bottom:8px;'
+               f'background:{N["card"]};border:1px solid {N["bdr"]}">'
+               f'<span style="font-size:20px">{_plat_emoji}</span>'
+               f'<span style="font-size:14px;color:{N["text5"]};width:40px;flex-shrink:0">{_t_disp}</span>'
+               f'<span style="font-size:16px;color:{N["text"]};font-weight:500;flex:1">{esc(_title)}</span>'
+               f'<span style="font-size:14px;color:{N["text2"]}">{esc(_plat_label)}</span>'
+               f'<span style="background:{_alpha(_st_col,.15)};color:{_st_col};font-size:13px;'
+               f'padding:3px 12px;border-radius:9999px;font-weight:600;white-space:nowrap">{esc(_st_label)}</span>'
+               f'{_views_html}</div>')
+    else:
+        _next_sched = "21:00" if datetime.now().hour < 21 else "내일 07:00"
+        md(f'<div style="display:flex;align-items:center;gap:16px;padding:18px 22px;'
+           f'border-radius:10px;background:{N["card"]};border:1px solid {N["bdr"]}">'
+           f'<span style="font-size:28px">⏳</span>'
+           f'<div>'
+           f'<div style="font-size:16px;color:{N["text2"]}">'
+           f'{"오늘 아직 발행된 글이 없습니다" if datetime.now().hour >= 8 else "오늘 발행 준비 중"}'
+           f'</div>'
+           f'<div style="font-size:14px;color:{N["text5"]};margin-top:4px">다음 발행 예정: {esc(_next_sched)}</div>'
+           f'</div></div>')
+
+    # ── 지금 할 일 (있을 때만 표시) ────────────────────────────────
+    _action_items = []
+    if _qa_pending > 0:
+        _action_items.append(("warn",   f"품질 검토 승인 대기 {_qa_pending}건",          "👉 품질 탭에서 처리"))
+    if _today_posts == 0 and datetime.now().hour >= 10:
+        _action_items.append(("warn",   "오늘 발행 글 없음",                            "발행 탭 확인"))
+    if _gurgent > 0:
+        _action_items.append(("danger", f"미처리 오류 {_gurgent}건 (CRITICAL/HIGH)",     "👉 시스템 탭 → 오류"))
+
+    if _action_items:
+        st.markdown("<br>", unsafe_allow_html=True)
+        md(f'<div style="font-size:18px;font-weight:700;color:{N["text"]};margin-bottom:12px">🎯 지금 할 일</div>')
+        for _ac, _at, _ah in _action_items:
+            md(f'<div style="background:{_alpha(C[_ac],.07)};'
+               f'border:1px solid {_alpha(C[_ac],.30)};'
+               f'border-left:4px solid {C[_ac]};border-radius:0 10px 10px 0;'
+               f'padding:14px 20px;margin:8px 0;'
+               f'display:flex;justify-content:space-between;align-items:center">'
+               f'<span style="font-size:16px;color:{N["text"]};font-weight:600">{esc(_at)}</span>'
+               f'<span style="font-size:14px;color:{N["text2"]}">{esc(_ah)}</span></div>')
 
 # ──────────────────────────────────────────────────────────────────
 # 레이더
 # ──────────────────────────────────────────────────────────────────
 with t_radar:
     trends = load_trends()
-
-    section("오늘 트렌드 현황")
-    r0, r1, r2 = st.columns(3)
     top1 = trends["top"][0] if trends["top"] else {}
-    with r0: md(kpi("수집 키워드",   trends["today"],                              color="primary", sub="Google·Naver 합산"))
-    with r1: md(kpi("섹터 수",       len(trends["sectors"]),                        color="success", sub="오늘 등장 섹터"))
-    with r2: md(kpi("최고 기회점수", f'{top1.get("opportunity_score",0):.1f}' if top1 else "—",
-                    color="warn", sub=top1.get("keyword", "—")[:20] if top1 else ""))
 
-    # 수집 트리거 — KPI 아래 별도 행 (버튼과 KPI 혼재 방지)
-    btn_col, _ = st.columns([1, 3])
-    with btn_col:
+    # 인라인 핵심 숫자 + 수집 버튼
+    h_col, b_col = st.columns([4, 1])
+    with h_col:
+        _top1_kw    = (top1.get("keyword") or "—")[:25] if top1 else "—"
+        _top1_score = f'{top1.get("opportunity_score", 0):.1f}' if top1 else "—"
+        md(
+            f'<div style="display:flex;align-items:center;gap:28px;padding:16px 0 8px">'
+            f'<div style="text-align:center">'
+            f'<div style="font-size:44px;font-weight:800;color:{C["primary"]};line-height:1">{esc(str(trends["today"]))}</div>'
+            f'<div style="font-size:14px;color:{N["text2"]};margin-top:4px">수집 키워드</div>'
+            f'</div>'
+            f'<div style="width:1px;height:40px;background:{N["bdr"]}"></div>'
+            f'<div style="text-align:center">'
+            f'<div style="font-size:44px;font-weight:800;color:{C["success"]};line-height:1">{len(trends["sectors"])}</div>'
+            f'<div style="font-size:14px;color:{N["text2"]};margin-top:4px">섹터</div>'
+            f'</div>'
+            f'<div style="width:1px;height:40px;background:{N["bdr"]}"></div>'
+            f'<div style="font-size:14px;color:{N["text2"]}">'
+            f'최고 기회 <span style="font-size:22px;font-weight:700;color:{C["warn"]}">{esc(_top1_score)}</span>'
+            f' &nbsp;—&nbsp; <span style="color:{N["text"]}">{esc(_top1_kw)}</span></div>'
+            f'</div>'
+        )
+    with b_col:
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
         if st.button("📡 지금 수집", key="_collect_now", use_container_width=True):
             try:
                 subprocess.Popen(
@@ -1677,7 +1850,8 @@ with t_radar:
 
     # 기회점수 TOP 키워드 테이블
     if trends["top"]:
-        section("발행 기회 키워드 TOP 15 (기회점수 순)")
+        st.markdown("<br>", unsafe_allow_html=True)
+        section("발행 기회 키워드 TOP 15")
         rows = []
         max_score = max((t.get("opportunity_score", 0) or 0) for t in trends["top"]) or 1
         for i, t in enumerate(trends["top"], 1):
@@ -1732,46 +1906,24 @@ with t_radar:
 # 발행 관리
 # ──────────────────────────────────────────────────────────────────
 with t_pub:
-    posts    = load_posts_stats()
-    pipeline = load_pipeline()
-    quality  = load_quality_stats()
+    posts   = load_posts_stats()
+    quality = load_quality_stats()
 
-    section("오늘 발행 현황")
-    p0, p1, p2, p3, p4 = st.columns(5)
-    p_today = pipeline.get("today", {})
-    pend = p_today.get("suggested", 0) + p_today.get("pending", 0)
-    with p0: md(kpi("오늘 발행",       posts.get("today", 0),      color="success"))
-    with p1: md(kpi("이번 주",         posts.get("week", 0),        color="primary"))
-    with p2: md(kpi("이번 달",         posts.get("month", 0),       color="primary"))
-    with p3: md(kpi("파이프라인 대기", pend,  color="warn" if pend > 0 else "muted"))
-    with p4: md(kpi("파이프라인 완료", p_today.get("done", 0),      color="success"))
+    # 3개 핵심 KPI
+    by_p   = posts.get("by_platform", {})
+    nv_cnt = by_p.get("naver", 0)
+    ts_cnt = by_p.get("tistory", 0)
+    p0, p1, p2 = st.columns(3)
+    with p0: md(_big_metric("오늘 발행", posts.get("today", 0),
+                             f"네이버 {nv_cnt} · 티스토리 {ts_cnt}", "success"))
+    with p1: md(_big_metric("이번 주",  posts.get("week", 0),  "글 기준", "primary"))
+    with p2: md(_big_metric("이번 달",  posts.get("month", 0), "글 기준", "primary"))
 
-    section("플랫폼별 오늘 발행")
-    by_p = posts.get("by_platform", {})
-    pp0, pp1 = st.columns(2)
-    for col, (plat, label, color) in zip(
-        [pp0, pp1],
-        [("naver", "네이버", "success"), ("tistory", "티스토리", "warn")]
-    ):
-        with col: md(kpi(label, by_p.get(plat, 0), color=color, sub=plat))
-
-    # 발행 상태 요약
-    by_status = quality.get("by_status", {})
-    section("분석 상태 요약")
-    s0, s1, s2, s3, s4 = st.columns(5)
-    with s0: md(kpi("승인 대기",  by_status.get("pending_approval", 0), color="warn",    sub="품질 관리 탭에서 처리"))
-    with s1: md(kpi("분석 대기",  by_status.get("pending_analysis", 0), color="primary"))
-    with s2: md(kpi("분석 완료",  by_status.get("analyzed", 0),         color="primary"))
-    with s3: md(kpi("수정 완료",  by_status.get("revised", 0),          color="success"))
-    with s4: md(kpi("건너뜀",     by_status.get("revise_skipped", 0) + by_status.get("rejected", 0), color="muted"))
+    st.markdown("<br>", unsafe_allow_html=True)
 
     # 최근 발행 목록
     section("최근 발행 목록")
     recent = quality.get("recent", [])
-    STATUS_COLOR = {
-        "revised": "success", "approved": "warn", "revise_skipped": "muted",
-        "analyzing": "primary", "done": "success", "pending_approval": "warn",
-    }
     if recent:
         md(table(
             ["플랫폼", "제목", "상태", "발행일", "뷰"],
@@ -1788,18 +1940,6 @@ with t_pub:
         ))
     else:
         md(empty_state("발행 이력이 없습니다", "첫 글이 발행되면 자동으로 채워집니다"))
-
-    # 파이프라인 최근 테마
-    pip_recent = pipeline.get("recent", [])
-    if pip_recent:
-        section("파이프라인 최근 테마")
-        md(table(
-            ["테마", "상태", "등록일"],
-            [[esc(r["theme"]),
-              badge(r["status"], "success" if r["status"] == "done" else "muted"),
-              _fmt(r["created_at"])]
-             for r in pip_recent]
-        ))
 
 # ──────────────────────────────────────────────────────────────────
 # 품질 관리
@@ -1966,13 +2106,12 @@ with t_perf:
     perf     = load_performance()
     kw_perf  = load_keyword_performance(30)
 
-    # 상단 KPI — 서브탭 위
-    pf0, pf1, pf2, pf3 = st.columns(4)
+    # 상단 핵심 KPI
     pv = perf.get("platform_views", {})
-    with pf0: md(kpi("누적 총 뷰",  f"{perf['total_views']:,}",     color="primary", sub="전 플랫폼 합산"))
-    with pf1: md(kpi("네이버 뷰",   f"{pv.get('naver',0):,}",        color="success"))
-    with pf2: md(kpi("티스토리 뷰", f"{pv.get('tistory',0):,}",      color="warn"))
-    _ = pf3  # 빈 컬럼 (4열 레이아웃 유지)
+    pf0, pf1, pf2 = st.columns(3)
+    with pf0: md(_big_metric("누적 총 뷰",  f"{perf['total_views']:,}", "전 플랫폼 합산", "primary"))
+    with pf1: md(_big_metric("네이버",      f"{pv.get('naver',0):,}",   "누적 뷰",        "success"))
+    with pf2: md(_big_metric("티스토리",    f"{pv.get('tistory',0):,}", "누적 뷰",        "warn"))
 
     st.markdown("<br>", unsafe_allow_html=True)
     perf_t1, perf_t2, perf_t3 = st.tabs(["📈 추세 & 상위 포스트", "🔑 키워드 성과", "📅 일일 리뷰 히스토리"])
@@ -1981,7 +2120,6 @@ with t_perf:
     with perf_t1:
         hist = perf.get("history", [])
         if hist:
-            section("7일 뷰 추세")
             max_v = max((h["v"] for h in hist), default=1) or 1
             bar_html = '<div style="display:flex;align-items:flex-end;gap:6px;height:88px;margin:12px 0">'
             for h in hist:
@@ -1999,6 +2137,7 @@ with t_perf:
 
         top_posts = perf.get("top_posts", [])
         if top_posts:
+            st.markdown("<br>", unsafe_allow_html=True)
             section("뷰 상위 포스트")
             md(table(
                 ["플랫폼", "제목", "뷰", "네이버 순위", "발행일"],
@@ -2031,7 +2170,6 @@ with t_perf:
     # ── 키워드 성과 ───────────────────────────────────────────────
     with perf_t2:
         if kw_perf:
-            section("키워드별 누적 성과 (composite_score 순)")
             kp_max = max((r.get("composite_score") or 0 for r in kw_perf), default=1) or 1
             kw_rows = []
             for i, r in enumerate(kw_perf, 1):
@@ -2112,16 +2250,15 @@ with t_ai:
     ll_stat = learn.get("learn_log", {})
 
     latest_bt_score = bt_list[0].get("score") if bt_list else None
+    mae = ll_stat.get("mae")
     ai_k0, ai_k1, ai_k2, ai_k3 = st.columns(4)
-    with ai_k0: md(kpi("학습 세션",   len(w_list),            color="primary", sub="learned_weights"))
-    with ai_k1: md(kpi("학습 인사이트", len(ins_list),          color="success", sub="누적 학습 결과"))
-    with ai_k2: md(kpi("예측 데이터",  ll_stat.get("cnt", 0),  color="primary", sub="learn_log 누적"))
-    with ai_k3:
-        mae = ll_stat.get("mae")
-        md(kpi("예측 오차(MAE)",
-               f"{mae:.1f}" if mae is not None else "—",
-               color="success" if (mae or 0) < 50 else "warn",
-               sub="뷰 수 기준"))
+    with ai_k0: md(_big_metric("학습 세션",   len(w_list),           "가중치 학습 횟수",  "primary"))
+    with ai_k1: md(_big_metric("인사이트",    len(ins_list),          "누적 학습 결과",   "success"))
+    with ai_k2: md(_big_metric("예측 데이터", ll_stat.get("cnt", 0), "learn_log 누적",   "primary"))
+    with ai_k3: md(_big_metric("예측 오차",
+                               f"{mae:.1f}" if mae is not None else "—",
+                               "MAE (뷰 수 기준)",
+                               "success" if (mae or 0) < 50 else "warn"))
 
     st.markdown("<br>", unsafe_allow_html=True)
     ai_t1, ai_t2, ai_t3, ai_t4 = st.tabs(["⚖️ 학습된 가중치", "📊 백테스트 이력", "💡 학습 인사이트", "🚫 피드백 패턴"])
@@ -2129,7 +2266,6 @@ with t_ai:
     # ── 학습된 가중치 ─────────────────────────────────────────────
     with ai_t1:
         if w_list:
-            section("AI 학습 가중치 (최신)")
             for w in w_list:
                 try:
                     wdata = json.loads(w.get("weights_json") or "{}")
@@ -2238,40 +2374,23 @@ with t_err:
     g_trend  = load_guardian_trend(days=14)
     g_source = load_guardian_source_stats(days=7)
 
-    # ── 누적 전체 KPI (영구 보존) ────────────────────────────────
-    section("🗄️ 누적 전체 (영구 보존)")
-    a0, a1, a2, a3, a4, a5, a6 = st.columns(7)
+    # ── 4개 핵심 KPI ─────────────────────────────────────────────
     _auto_fix_all = gd_all["fixed"] + gd_all["manual"]
     _fix_rate     = int(_auto_fix_all / gd_all["total"] * 100) if gd_all["total"] > 0 else 0
-    with a0: md(kpi("총 누적 오류", gd_all["total"],   color="primary",
-                    sub=f"최초 수집: {gd_all['first']}"))
-    with a1: md(kpi("자동수정 ✅",  gd_all["fixed"],   color="success", sub="GUARDIAN 누적"))
-    with a2: md(kpi("수동수정",      gd_all["manual"],  color="success", sub="사람 누적"))
-    with a3: md(kpi("수정률",        f"{_fix_rate}%",   color="success" if _fix_rate >= 50 else "warn",
-                    sub="(자동+수동) / 전체"))
-    with a4: md(kpi("미해결",        gd_all["new"],     color="danger" if gd_all["new"] > 0 else "muted",
-                    sub="처리 대기"))
-    with a5: md(kpi("수정불가",      gd_all["wontfix"], color="warn"   if gd_all["wontfix"] > 0 else "muted"))
-    with a6: md(kpi("무시됨",        gd_all["ignored"], color="muted"))
-
-    st.divider()
-
-    # ── 상단 KPI (7일) ───────────────────────────────────────────
-    section("📅 최근 7일")
-    e0, e1, e2, e3, e4, e5, e6 = st.columns(7)
-    with e0: md(kpi("총 오류 (7일)", gd["total"], color="primary", sub="수집 건수"))
-    with e1: md(kpi("신규 🆕",     gd["new"],
-                    color="danger" if gd["new"] > 0 else "success",
-                    sub="처리 대기"))
-    with e2: md(kpi("분석 중",     gd["analyzing"], color="primary"))
-    with e3: md(kpi("자동 수정 불가", gd["wontfix"],
-                    color="warn" if gd["wontfix"] > 0 else "muted",
-                    sub="시스템 판정"))
-    with e4: md(kpi("무시됨",      gd["ignored"],   color="muted"))
-    with e5: md(kpi("자동수정 ✅", gd["fixed"],     color="success", sub="GUARDIAN 자동"))
-    with e6: md(kpi("수동수정",    gd["manual"],
-                    color="success" if gd["manual"] > 0 else "muted",
-                    sub="사람이 수정 완료"))
+    _urgent       = gd["critical"] + gd["high"]
+    e0, e1, e2, e3 = st.columns(4)
+    with e0: md(_big_metric("미해결 오류",  gd["new"],
+                             "즉시 확인 필요" if gd["new"] > 0 else "모두 처리 완료",
+                             "danger" if gd["new"] > 0 else "success"))
+    with e1: md(_big_metric("CRITICAL·HIGH", _urgent,
+                             "7일 기준 심각 오류",
+                             "danger" if _urgent > 0 else "muted"))
+    with e2: md(_big_metric("자동 수정",    gd_all["fixed"],
+                             f"수동 포함 수정률 {_fix_rate}%",
+                             "success"))
+    with e3: md(_big_metric("7일 총 오류",  gd["total"],
+                             f"누적 {gd_all['total']}건",
+                             "primary"))
 
     # ── 서브탭 ───────────────────────────────────────────────────
     _new_label  = f"🆕 신규 ({gd['new']})" if gd["new"] > 0 else "🆕 신규"
@@ -2298,8 +2417,6 @@ with t_err:
 
     # ── [현황] ────────────────────────────────────────────────────
     with et1:
-        # 심각도별 분포
-        section("심각도별 분포 (7일)")
         sv0, sv1, sv2, sv3 = st.columns(4)
         sev_items = [
             ("CRITICAL",  gd["critical"], "danger"),
@@ -2840,14 +2957,15 @@ with t_sched:
     failed     = load_failed_jobs(days=7)
     today_jobs = load_job_runs(days=1, limit=50)
 
-    section("스케줄러 현황")
-    sc0, sc1, sc2, sc3 = st.columns(4)
     job_ok = sum(1 for j in today_jobs if j.get("success"))
     rate   = int(job_ok / len(today_jobs) * 100) if today_jobs else 100
-    with sc0: md(kpi("등록 잡",     len(dj),          color="primary", sub="DEFAULT_JOBS"))
-    with sc1: md(kpi("오늘 실행",   len(today_jobs),   color="success", sub=f"성공 {job_ok}건"))
-    with sc2: md(kpi("성공률",      f"{rate}%",        color="success" if rate >= 90 else ("warn" if rate >= 70 else "danger")))
-    with sc3: md(kpi("실패 (7일)", len(failed),        color="danger" if failed else "muted"))
+    sc0, sc1, sc2, sc3 = st.columns(4)
+    with sc0: md(_big_metric("등록 잡",    len(dj),         "DEFAULT_JOBS",  "primary"))
+    with sc1: md(_big_metric("오늘 실행",  len(today_jobs),  f"성공 {job_ok}건", "success"))
+    with sc2: md(_big_metric("성공률",     f"{rate}%",       "오늘 기준",
+                              "success" if rate >= 90 else ("warn" if rate >= 70 else "danger")))
+    with sc3: md(_big_metric("실패 (7일)", len(failed),      "잡 실패 건수",
+                              "danger" if failed else "muted"))
 
     # 다음 실행 시각 — APScheduler에서 가져오기
     _next_run_map: dict = {}
@@ -2863,7 +2981,8 @@ with t_sched:
         pass
 
     # 잡 카탈로그
-    section("잡 카탈로그 (전체)")
+    st.markdown("<br>", unsafe_allow_html=True)
+    section("잡 카탈로그")
     if dj:
         job_rows = []
         for j in dj:
@@ -2885,18 +3004,6 @@ with t_sched:
             ])
         md(table(["잡 이름", "소유", "트리거", "마지막 실행", "다음 실행", "결과", "실행 환경"], job_rows, max_rows=40))
 
-    # 에이전트별 잡 분포
-    section("에이전트별 잡 분포")
-    owner_cnt: dict = {}
-    for j in dj:
-        o = j.get("owner", "unknown")
-        owner_cnt[o] = owner_cnt.get(o, 0) + 1
-    md(table(
-        ["에이전트", "agent_id", "잡 수"],
-        [[badge(OWNER_LABEL.get(o, o), "primary"), esc(o), str(n)]
-         for o, n in sorted(owner_cnt.items(), key=lambda x: -x[1])]
-    ))
-
     # 실패 잡 목록
     if failed:
         section("실패 잡 (최근 7일)", "danger")
@@ -2917,94 +3024,34 @@ with t_sys:
     caps       = load_capabilities()
     tool_stats = load_tool_stats()
 
-    section("J00 인프라 — 데몬 상태")
-    d0, d1, d2, d3 = st.columns(4)
-    with d0: md(kpi("데몬",     "가동 중" if daemon["alive"] else "정지",
-                    color="success" if daemon["alive"] else "danger",
-                    sub=f"PID {daemon['pid'] or '—'}"))
-    with d1: md(kpi("가동시간", daemon["uptime"], color="primary"))
-    with d2:
-        db_mb = DB_PATH.stat().st_size / 1024 / 1024 if DB_PATH.exists() else 0
-        md(kpi("DB 용량", f"{db_mb:.1f} MB", color="muted", sub=f"{DB_PATH.parent.name}/{DB_PATH.name}"))
-    with d3:
-        # hub.py 자신의 포트 상태 확인
-        try:
-            lsof = subprocess.run(["lsof", "-ti", f"TCP:{_HUB_PORT}"], capture_output=True, text=True, timeout=3)
-            hub_alive = lsof.returncode == 0 and bool(lsof.stdout.strip())
-        except: hub_alive = True  # 실행 중이므로 True
-        md(kpi(f"대시보드 {_HUB_PORT}", "가동 중", color="success", sub="JARVIS Hub (이 화면)"))
-
-    # 인프라 잡 최근 실행
-    infra_jobs = load_job_runs(owner="jarvis00_infra", days=7, limit=8)
-    if infra_jobs:
-        section("인프라 잡 최근 실행")
-        md(table(
-            ["잡 이름", "시작", "결과", "소요(ms)"],
-            [[esc(j.get("job_name", "—")), _fmt(j.get("started_at", "")),
-              ok_badge(j.get("success")), str(int(j.get("duration_ms") or 0))]
-             for j in infra_jobs]
-        ))
-
-    section("J01 마스터 — 라우터 & 에이전트")
-    m0, m1, m2 = st.columns(3)
+    # 데몬 상태 + J01 마스터 핵심 숫자
+    db_mb      = DB_PATH.stat().st_size / 1024 / 1024 if DB_PATH.exists() else 0
     n_intents  = sum(len(c.get("intents", [])) for c in caps)
     tool_calls = sum(t.get("calls", 0) for t in tool_stats)
-    tool_ok_s  = sum(t.get("ok", 0) for t in tool_stats)
-    with m0: md(kpi("등록 에이전트", len(caps),       color="primary"))
-    with m1: md(kpi("총 인텐트",     n_intents,        color="success"))
-    with m2: md(kpi("도구 호출 (24h)", tool_calls,    color="warn", sub=f"성공 {tool_ok_s}건"))
+    d0, d1, d2, d3 = st.columns(4)
+    with d0: md(_big_metric("데몬",
+                             "가동 중" if daemon["alive"] else "정지",
+                             f"PID {daemon['pid'] or '—'} · {daemon['uptime']}",
+                             "success" if daemon["alive"] else "danger"))
+    with d1: md(_big_metric("DB",        f"{db_mb:.1f} MB", "jarvis.sqlite",   "muted"))
+    with d2: md(_big_metric("에이전트",  len(caps),          f"인텐트 {n_intents}개", "primary"))
+    with d3: md(_big_metric("도구 호출", tool_calls,         "최근 24h",         "warn" if tool_calls > 0 else "muted"))
 
-    if caps:
-        section("등록된 에이전트 & 인텐트")
-        cap_rows = []
-        for c in caps:
-            intents = c.get("intents", [])
-            preview = ", ".join(intents[:5])
-            if len(intents) > 5: preview += f" +{len(intents)-5}개"
-            cap_rows.append([
-                badge(c.get("agent_id", "—"), "primary"),
-                str(len(intents)),
-                f'<span style="font-size:14px;color:{N["text2"]}">{esc(preview)}</span>',
-            ])
-        md(table(["에이전트 ID", "인텐트 수", "인텐트 목록"], cap_rows))
-
-    if tool_stats:
-        section("도구 실행 통계 (최근 24시간)")
-        md(table(
-            ["도구명", "도메인", "호출 수", "성공률", "평균(ms)"],
-            [[esc(t.get("tool_name", "—")), esc(t.get("domain", "—")),
-              str(t.get("calls", 0)),
-              f'{int(t["ok"] / t["calls"] * 100) if t.get("calls") else 0}%',
-              f'{int(t.get("avg_ms") or 0)}']
-             for t in tool_stats]
-        ))
-
-    # 마스터 잡
-    master_jobs = load_job_runs(owner="jarvis01_master", days=3, limit=8)
-    if master_jobs:
-        section("마스터 잡 최근 실행")
-        md(table(
-            ["잡 이름", "시작", "결과", "소요(ms)"],
-            [[esc(j.get("job_name", "—")), _fmt(j.get("started_at", "")),
-              ok_badge(j.get("success")), str(int(j.get("duration_ms") or 0))]
-             for j in master_jobs]
-        ))
-
-    # VISION 에이전트 상태 (JARVIS05 → 8505 API)
-    section("J05 VISION — 에이전트 실시간 상태")
+    # VISION 에이전트 그리드 — 10개 에이전트 실시간 상태
+    st.markdown("<br>", unsafe_allow_html=True)
+    section("에이전트 실시간 상태")
     v_agents  = load_vision_agents()
     v_summary = load_vision_summary()
     if v_summary:
-        va0, va1, va2, va3 = st.columns(4)
         total   = v_summary.get("total", 0)
         online  = v_summary.get("online", 0)
         warn    = v_summary.get("warn", 0)
-        offline = v_summary.get("offline", 0)
         hpct    = v_summary.get("health_pct", 0)
-        with va0: md(kpi("전체 에이전트", total,   color="primary"))
-        with va1: md(kpi("정상 (ONLINE)", online,  color="success"))
-        with va2: md(kpi("경고 (WARN)",   warn,    color="warn"))
-        with va3: md(kpi("건강도",        f"{hpct}%", color="success" if hpct >= 80 else "warn" if hpct >= 50 else "danger"))
+        va0, va1, va2 = st.columns(3)
+        with va0: md(_big_metric("전체 에이전트", total,      "JARVIS00~09",      "primary"))
+        with va1: md(_big_metric("정상",          online,     f"경고 {warn}개",    "success" if online == total else "warn"))
+        with va2: md(_big_metric("건강도",        f"{hpct}%", "VISION 판정",
+                                 "success" if hpct >= 80 else "warn" if hpct >= 50 else "danger"))
     if v_agents:
         cols = st.columns(2)
         for i, a in enumerate(v_agents):
@@ -3026,19 +3073,18 @@ with t_sys:
         md(empty_state("VISION API 연결 불가", "데몬이 실행 중이면 30초 후 자동 연결됩니다"))
 
     # ── J06 IMAGE — 이미지 생성 현황 ─────────────────────────────────
-    section("J06 IMAGE — 이미지 생성 현황")
+    st.markdown("<br>", unsafe_allow_html=True)
+    section("J06 IMAGE — 이미지 현황")
     img_s  = load_image_stats()
     prov   = img_s["providers"]
     prov_ok = sum(1 for v in prov.values() if v)
 
-    ig0, ig1, ig2, ig3, ig4 = st.columns(5)
-    with ig0: md(kpi("생성 이미지 총계",  img_s["total"],                  color="primary",  sub="output/ 디렉토리"))
-    with ig1: md(kpi("PNG 파일",          img_s["by_type"].get("png", 0),   color="success"))
-    with ig2: md(kpi("SVG 파일",          img_s["by_type"].get("svg", 0),   color="primary"))
-    with ig3: md(kpi("총 용량",           f'{img_s["total_size_mb"]} MB',   color="muted",    sub="output/ 합계"))
-    with ig4: md(kpi("가용 프로바이더",   f"{prov_ok}/{len(prov)}",
+    ig0, ig1, ig2 = st.columns(3)
+    with ig0: md(kpi("생성 이미지",  img_s["total"],                color="primary", sub="output/ 디렉토리"))
+    with ig1: md(kpi("총 용량",      f'{img_s["total_size_mb"]} MB', color="muted",   sub="output/ 합계"))
+    with ig2: md(kpi("프로바이더",   f"{prov_ok}/{len(prov)}",
                      color="success" if prov_ok >= 1 else "warn",
-                     sub="Pollinations.ai (★ Bing/HF 폐기 — ERRORS [263])"))
+                     sub="Pollinations.ai"))
 
     # 프로바이더 상태 카드 — Pollinations 단독
     md(agent_card(
@@ -3069,49 +3115,19 @@ with t_sys:
             "블로그 글 발행 시 JARVIS06_IMAGE 가 자동으로 이미지를 생성합니다",
         ))
 
-    # ── J05 VISION 최근 잡 ────────────────────────────────────────────
-    vision_jobs = load_job_runs(owner="jarvis05_vision", days=3, limit=6)
-    if vision_jobs:
-        section("J05 VISION 잡 최근 실행")
-        md(table(
-            ["잡 이름", "시작", "결과", "소요(ms)"],
-            [[esc(j.get("job_name", "—")), _fmt(j.get("started_at", "")),
-              ok_badge(j.get("success")), str(int(j.get("duration_ms") or 0))]
-             for j in vision_jobs]
-        ))
-
-    # ── J06 IMAGE 최근 잡 ────────────────────────────────────────────
-    image_jobs = load_job_runs(owner="jarvis06_image", days=3, limit=6)
-    if image_jobs:
-        section("J06 IMAGE 잡 최근 실행")
-        md(table(
-            ["잡 이름", "시작", "결과", "소요(ms)"],
-            [[esc(j.get("job_name", "—")), _fmt(j.get("started_at", "")),
-              ok_badge(j.get("success")), str(int(j.get("duration_ms") or 0))]
-             for j in image_jobs]
-        ))
 
     # ── J07 GUARDIAN — 요약 (상세는 '오류 관리' 탭 참조) ─────────────────
-    section("J07 GUARDIAN — 오류 수집·수정 요약")
+    section("J07 GUARDIAN — 오류 수집·수정")
     _gd_sys = load_guardian_stats()
     _gs0, _gs1, _gs2, _gs3 = st.columns(4)
     with _gs0: md(kpi("총 오류 (7일)",   _gd_sys["total"],    color="primary"))
     with _gs1: md(kpi("신규",            _gd_sys["new"],
                        color="danger" if _gd_sys["new"] > 0 else "success"))
     with _gs2: md(kpi("자동수정 완료",   _gd_sys["fixed"],    color="success"))
-    with _gs3: md(kpi("CRITICAL",        _gd_sys["critical"] + _gd_sys["high"],
+    with _gs3: md(kpi("CRITICAL·HIGH",   _gd_sys["critical"] + _gd_sys["high"],
                        color="danger" if (_gd_sys["critical"] + _gd_sys["high"]) > 0 else "muted"))
     md(f'<div style="font-size:14px;color:{N["text2"]};margin-top:8px">'
        f'📋 상세 오류 목록·추이·에이전트별 현황은 <b>오류 관리</b> 탭에서 확인하세요.</div>')
-    guardian_jobs = load_job_runs(owner="jarvis07_guardian", days=3, limit=6)
-    if guardian_jobs:
-        section("J07 GUARDIAN 잡 최근 실행")
-        md(table(
-            ["잡 이름", "시작", "결과", "소요(ms)"],
-            [[esc(j.get("job_name", "—")), _fmt(j.get("started_at", "")),
-              ok_badge(j.get("success")), str(int(j.get("duration_ms") or 0))]
-             for j in guardian_jobs]
-        ))
 
     # ── J08 PUBLISH — 발행 도메인 자격증명·플랫폼 현황 ──────────────────
     section("J08 PUBLISH — 발행 도메인 현황")
@@ -3163,14 +3179,152 @@ with t_sys:
     except Exception as _j9e:
         md(empty_state(f"COLLECTOR 현황 조회 실패: {_j9e}"))
 
-    # 최근 이벤트
-    section("최근 이벤트")
-    events = load_recent_events(15)
-    if events:
+
+# ──────────────────────────────────────────────────────────────────
+# 🗄️ DB
+# ──────────────────────────────────────────────────────────────────
+_DB_TABLE_META: dict = {
+    "trends":               ("J03 RADAR",    "30일",     "트렌드 키워드 수집 원본 (날짜별 덮어쓰기)"),
+    "pipeline":             ("J03→J02",      "영구",     "RADAR→WRITER 파이프라인 큐"),
+    "posts":                ("J02 WRITER",   "영구",     "발행된 포스트 이력"),
+    "performance":          ("J03 RADAR",    "영구",     "일별 블로그 조회수"),
+    "keyword_performance":  ("J03/J02",      "영구",     "키워드별 누적 성과 (발행 수·조회수·순위)"),
+    "events":               ("전체",         "30일",     "에이전트 이벤트 로그 (cleanup 자동 삭제)"),
+    "post_analysis":        ("J02/J03",      "영구",     "발행 글 상세 — 분석·승인·재발행 상태"),
+    "keyword_favorites":    ("사용자",       "영구",     "즐겨찾기 키워드 (대시보드 watchlist)"),
+    "user_settings":        ("전체",         "영구",     "사용자 설정 key-value 저장소"),
+    "style_corpus":         ("J07 GUARDIAN", "영구",     "브랜드 보이스 임베딩 코퍼스 (BLOB)"),
+    "learn_log":            ("J03/J02",      "1년",      "(예측 feature, 실측 조회수) 페어 — 회귀학습 입력"),
+    "learned_weights":      ("J03 RADAR",    "영구",     "학습된 기회 점수 가중치 (주별 신규 행 추가)"),
+    "feedback_penalty":     ("J03 RADAR",    "영구",     "사용자 승인/거부 누적 패널티"),
+    "keyword_embeddings":   ("J09/J07",      "영구",     "키워드 벡터 임베딩 (cold-start 일반화, BLOB)"),
+    "backtest_history":     ("J03 RADAR",    "영구",     "백테스트 정확도 추이 (주별 적재)"),
+    "daily_review":         ("J02/J03",      "영구",     "일일 종합 분석 — 22:00 자동 적재"),
+    "learning_insights":    ("J07 GUARDIAN", "30일decay","누적 학습 인사이트 (weight 0.5 감쇠·min 삭제)"),
+    "insight_usage":        ("J07 GUARDIAN", "3일active","인사이트 주입·보상 귀속 기록"),
+    "job_runs":             ("J04 SCHED",    "영구",     "APScheduler 잡 실행 이력 (EventListener 자동 적재)"),
+    "tool_runs":            ("J01 MASTER",   "영구",     "도구 호출 관측 이력 (24h 통계용)"),
+    "error_log":            ("J07 GUARDIAN", "30일",     "오류 수집·자동수정 이력 (fixed/ignored 30일 후 삭제)"),
+    "self_repair_runs":     ("J07 GUARDIAN", "영구",     "자가 진단 회차 메트릭 — 학습 곡선 추적"),
+    "vision_agent_status":  ("J05 VISION",   "영구",     "비전 에이전트 현재 상태 스냅샷"),
+    "vision_agent_history": ("J05 VISION",   "7일",      "에이전트 상태 히스토리 (30초 주기 수집 → DB 팽창 주의)"),
+    "collection_results":   ("J09 COLLECT",  "영구",     "수집 결과 원문 캐시"),
+    "sqlite_sequence":      ("시스템",       "시스템",   "AUTOINCREMENT 시퀀스 (SQLite 내부)"),
+    "backtest_history":     ("J03 RADAR",    "영구",     "백테스트 이력"),
+}
+_RETENTION_COLOR = {
+    "영구": "muted", "30일": "warn", "30일decay": "warn",
+    "7일": "danger", "1년": "success", "3일active": "danger",
+    "시스템": "muted",
+}
+
+with t_db:
+    db_s = load_db_stats()
+
+    # ── KPI 행 ──────────────────────────────────────────────────
+    d0, d1, d2, d3, d4 = st.columns(5)
+    with d0: md(kpi("DB 파일 크기",  f"{db_s['size_mb']} MB",
+                    color="success" if db_s['size_mb'] < 100 else "warn" if db_s['size_mb'] < 400 else "danger",
+                    sub="SQLite 단일 파일"))
+    with d1: md(kpi("테이블 수",     len(db_s["tables"]),  color="primary"))
+    with d2: md(kpi("총 행 수",      f"{db_s['total_rows']:,}", color="primary"))
+    with d3: md(kpi("백업 파일",     len(db_s["backup_files"]), color="muted", sub="30일 보관"))
+    with d4:
+        today_total = sum(t["today_rows"] for t in db_s["tables"])
+        md(kpi("오늘 신규 행",  today_total, color="success"))
+
+    # ── 기술 스택 ──────────────────────────────────────────────
+    section("기술 스택 & 연결 구조")
+    _tech_cols = st.columns(2)
+    with _tech_cols[0]:
+        md(f"""
+<div style="background:{N['card']};border:1px solid {N['bdr']};border-top:3px solid {C['primary']};
+border-radius:10px;padding:20px 24px;line-height:2">
+<div style="font-size:20px;font-weight:700;color:{C['primary']};margin-bottom:12px">⚙️ 엔진</div>
+<div style="font-size:16px;color:{N['text']}"><b>SQLite 3</b> — 단일 파일 RDBMS</div>
+<div style="font-size:14px;color:{N['text2']}">경로: <code style="color:{C['warn']}">{esc(str(DB_PATH))}</code></div>
+<div style="font-size:14px;color:{N['text2']}">경로 오버라이드: <code style="color:{C['muted']}">JARVIS_DB_PATH</code> 환경변수</div>
+<div style="font-size:16px;color:{N['text']};margin-top:8px"><b>WAL 모드</b> (Write-Ahead Logging)</div>
+<div style="font-size:14px;color:{N['text2']}">다중 에이전트 동시 접근 허용 · 읽기 블로킹 없음</div>
+<div style="font-size:14px;color:{''+C['success'] if db_s['wal_exists'] else C['muted']}">
+WAL 파일: {'활성 중' if db_s['wal_exists'] else '없음 (체크포인트 완료)'}</div>
+</div>""")
+    with _tech_cols[1]:
+        md(f"""
+<div style="background:{N['card']};border:1px solid {N['bdr']};border-top:3px solid {C['success']};
+border-radius:10px;padding:20px 24px;line-height:2">
+<div style="font-size:20px;font-weight:700;color:{C['success']};margin-bottom:12px">🔌 연결 패턴</div>
+<div style="font-size:16px;color:{N['text']}"><b>get_db()</b> — 단일 진입점 (shared/db.py)</div>
+<div style="font-size:14px;color:{N['text2']}">timeout=10s · check_same_thread=False</div>
+<div style="font-size:16px;color:{N['text']};margin-top:8px"><b>_AutoCloseConnection</b></div>
+<div style="font-size:14px;color:{N['text2']}"><code>with get_db() as conn:</code> 종료 시 close() 자동 호출</div>
+<div style="font-size:14px;color:{N['text2']}">연결 누수 방지 — WAL 체크포인트 정체·DB 비대화 사고 방지</div>
+<div style="font-size:14px;color:{N['text2']};margin-top:4px">★ ERRORS [318][3322] 교훈 — 148곳 호출부 일괄 해소</div>
+</div>""")
+
+    # ── 백업 현황 ──────────────────────────────────────────────
+    section("백업 현황")
+    if db_s["backup_files"]:
+        latest = db_s["backup_files"][0]
+        bc0, bc1, bc2 = st.columns(3)
+        with bc0: md(kpi("마지막 백업", latest["mtime"], color="success", sub=latest["name"]))
+        with bc1: md(kpi("백업 크기",   f"{latest['size_mb']} MB", color="muted"))
+        with bc2: md(kpi("보관 파일 수", len(db_s["backup_files"]), color="primary", sub="30일 보관 후 자동 삭제"))
+
         md(table(
-            ["이벤트 타입", "소스", "시각"],
-            [[esc(e["event_type"]), esc(e["source"]), _fmt(e["created_at"])]
-             for e in events]
+            ["파일명", "날짜", "크기"],
+            [[f'<span style="font-size:14px;color:{N["text"]}">{esc(b["name"])}</span>',
+              f'<span style="font-size:14px;color:{N["text2"]}">{esc(b["mtime"])}</span>',
+              f'<span style="font-size:14px;color:{N["text2"]}">{b["size_mb"]} MB</span>']
+             for b in db_s["backup_files"]],
+        ))
+        md(f'<div style="font-size:14px;color:{N["text2"]};margin-top:8px">'
+           f'📁 백업 위치: <code style="color:{C["muted"]}">{esc(str(BASE_DIR / "shared" / "backups"))}</code>'
+           f' &nbsp;·&nbsp; 정책: <b>job_db_backup</b> 자동 실행 (J04 DEFAULT_JOBS) · SQLite WAL flush 후 백업 · 30일 초과분 자동 삭제</div>')
+    else:
+        md(empty_state("백업 파일 없음", "shared/backups/ 에 백업이 생성되면 여기에 표시됩니다"))
+
+    # ── 테이블 목록 ──────────────────────────────────────────────
+    section("테이블 목록 — 담당·보존·오늘 쓰기")
+    if db_s["tables"]:
+        tbl_rows = []
+        for t in sorted(db_s["tables"], key=lambda x: -x["rows"]):
+            meta = _DB_TABLE_META.get(t["name"], ("—", "영구", ""))
+            owner_str, retention, desc = meta
+            ret_color = _RETENTION_COLOR.get(retention, "muted")
+            owner_parts = [p.strip() for p in owner_str.replace("→", "/").split("/")]
+            owner_html = " ".join(badge(p, "primary") for p in owner_parts if p and p != "—")
+            today_html = (
+                f'<span style="color:{C["success"]};font-size:14px;font-weight:600">+{t["today_rows"]}</span>'
+                if t["today_rows"] > 0
+                else f'<span style="color:{N["text5"]};font-size:14px">—</span>'
+            )
+            tbl_rows.append([
+                f'<code style="font-size:14px;color:{C["primary"]}">{esc(t["name"])}</code>',
+                f'<span style="font-size:16px;font-weight:600;color:{N["text"]}">{t["rows"]:,}</span>',
+                today_html,
+                f'<span style="font-size:14px;color:{N["text2"]}">{esc(t["last_write"])}</span>',
+                owner_html,
+                badge(retention, ret_color),
+                f'<span style="font-size:14px;color:{N["text5"]}">{esc(desc)}</span>',
+            ])
+        md(table(
+            ["테이블", "행 수", "오늘 +", "마지막 쓰기", "담당", "보존", "설명"],
+            tbl_rows, max_rows=40,
         ))
     else:
-        md(empty_state("이벤트 없음"))
+        md(empty_state("테이블 정보를 불러올 수 없습니다"))
+
+    # ── 오늘 활발한 테이블 ──────────────────────────────────────
+    active_tables = sorted(
+        [t for t in db_s["tables"] if t["today_rows"] > 0],
+        key=lambda x: -x["today_rows"]
+    )
+    if active_tables:
+        section("오늘 실시간 쓰기 현황")
+        _at_cols = st.columns(min(len(active_tables), 4))
+        for i, at in enumerate(active_tables[:8]):
+            meta = _DB_TABLE_META.get(at["name"], ("—", "영구", ""))
+            with _at_cols[i % 4]:
+                md(kpi(at["name"], f"+{at['today_rows']}행",
+                       color="success", sub=meta[0]))

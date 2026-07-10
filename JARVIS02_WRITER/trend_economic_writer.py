@@ -1264,22 +1264,19 @@ def run_naver(ts_keyword: str = '') -> dict:
 #  분리 함수 — 대본 생성 + 발행 분리 (병렬화용)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str = '',
-                      gate_feedback: list | None = None) -> dict:
-    """티스토리 대본 생성 (①-⑦ 단계) — 네이버와 중복되지 않은 주제로 (네이버 우선 직렬)."""
+def ts_collect(nv_keyword: str = '', supreme_block=None) -> dict:
+    """티스토리 주제선정 + JARVIS09 수집 + CollectedData 조립.
+
+    Returns: success, keyword, sector, reason, collected (CollectedData),
+             supreme_block (enriched), source_docs
+    """
     from datetime import datetime as _dt_ts
-    print(f"\n  🔴 [TISTORY-DRAFT] 대본 생성 중... [{_dt_ts.now().strftime('%H:%M:%S')}]")
-    # chart_generator 경로 폐기 — infographic_engine 경로로 통합 (ERRORS [355])
-    _section_img_paths.clear()
-    _para_img_paths.clear()
-    _cleanup_tistory_images()
+    print(f"\n  🔴 [TISTORY-COLLECT] 주제 선정 + 수집 중... [{_dt_ts.now().strftime('%H:%M:%S')}]")
 
     keyword = ""
     try:
         import os as _os
         # ★ 주제+데이터 단일 공급원 = 자비스03 topic_pack (사용자 박제 2026-07-03)
-        #   "자비스03이 자비스02와 자비스09에게 동시에 트렌드 정보를 제공한다."
-        #   02 는 주제 선정·JARVIS09 수집 호출을 하지 않는다 — 폴백 없음.
         from JARVIS03_RADAR.topic_pack import (
             pick_candidate as _tp_pick, build_topic_pack as _tp_build,
             build_for_keyword as _tp_for_kw,
@@ -1295,7 +1292,6 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
         else:
             _cand = _tp_pick(exclude_keyword=nv_keyword)
             if _cand is None:
-                # 당일 팩 부재/소진 — 자비스03 파이프라인 즉석 실행 (동일 단일 경로)
                 print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행")
                 _tp_build()
                 _cand = _tp_pick(exclude_keyword=nv_keyword)
@@ -1312,15 +1308,11 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
             supreme_block = _law_blk()
-        # ★ 생성 단계 예방 (사용자 박제 2026-06-29): 키워드 빈도 규칙을 작성 프롬프트에 주입
-        #   — 검증과 동일 임계(keyword_min_count) → "처음부터 규정대로" → 사후 차단 방지
         try:
             from JARVIS02_WRITER.law_enforcer import keyword_frequency_rule as _kw_rule
             supreme_block = (supreme_block or "") + _kw_rule(keyword)
         except Exception:
             pass
-        # ★ 주제 프로필 주입 (사용자 박제 2026-07-03) — 제목·대본이 주제의 실체를
-        #   혼동하지 않도록 자비스03 프로필(정의·관련어)을 작성 프롬프트에 전달.
         _rel_terms = ", ".join(_profile.get('related_terms') or [])
         if reason:
             supreme_block = (supreme_block or "") + (
@@ -1379,17 +1371,8 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
         except Exception as _cbe:
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
-        from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
-        from JARVIS06_IMAGE.draft_processor import process_draft
+        # CollectedData 조립
         from JARVIS09_COLLECTOR.models import CollectedData
-        from pathlib import Path as _P9
-
-        # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
-        draft_html = generate_article_html(keyword, sector, reason, supreme_block,
-                                           gate_feedback=gate_feedback, pass2=False)
-        if not draft_html:
-            return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
-
         try:
             from dataclasses import asdict as _asdict
             _docs_ser = [_asdict(d) if hasattr(d, '__dataclass_fields__') else d
@@ -1404,6 +1387,51 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
             "facts": list(_ev_pack.get("facts") or []),
             "entities": [],
         })
+
+        print(f"  ✅ [TISTORY-COLLECT] 완료: {keyword}")
+        return {
+            "success": True,
+            "keyword": keyword,
+            "sector": sector,
+            "reason": reason,
+            "collected": collected,
+            "supreme_block": supreme_block,
+            "source_docs": _kw_collection_docs,
+        }
+
+    except Exception as e:
+        import traceback
+        print(f"  ❌ [TISTORY-COLLECT] 예외: {e}")
+        _g_report("writer", e, module=__name__)
+        traceback.print_exc()
+        return {"success": False, "keyword": keyword, "error": str(e)[:100]}
+
+
+def ts_generate_draft(keyword: str, sector: str, reason: str,
+                      collected, supreme_block=None,
+                      gate_feedback: list | None = None,
+                      source_docs: list | None = None) -> dict:
+    """티스토리 Pass-1 대본 생성 + JARVIS06 이미지 파이프라인.
+
+    ts_collect() 결과를 받아 대본 생성 단계만 담당.
+    """
+    from datetime import datetime as _dt_ts
+    print(f"\n  🔴 [TISTORY-DRAFT] 대본 생성 중... [{_dt_ts.now().strftime('%H:%M:%S')}]")
+    _section_img_paths.clear()
+    _para_img_paths.clear()
+    _cleanup_tistory_images()
+
+    try:
+        from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
+        from JARVIS06_IMAGE.draft_processor import process_draft
+        from pathlib import Path as _P9
+
+        # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
+        draft_html = generate_article_html(keyword, sector, reason, supreme_block,
+                                           gate_feedback=gate_feedback, pass2=False)
+        if not draft_html:
+            return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
+
         result = process_draft(draft_html, collected=collected, platform="tistory",
                                out_dir=TISTORY_IMG_DIR)
         html = result["html"]
@@ -1444,10 +1472,8 @@ def ts_generate_draft(supreme_block=None, collection_docs=None, nv_keyword: str 
             "img_dir": img_dir,
             "blocks": blocks,
             "visual_paths": visual_paths,
-            # ★ 2-2 (2026-07-02): 작성에 실제 쓴 주제 특화 corpus(kw 재수집, 실패 시 일반)를
-            #   검증(prepublish 사실성 게이트) source_docs 로 노출 — 작성=검증 corpus 정합.
-            "source_docs": _kw_collection_docs,
-            "collected": collected,   # ★ Step 10: prepublish grounding 정답 (topic_pack)
+            "source_docs": source_docs or [],
+            "collected": collected,
         }
 
     except Exception as e:
@@ -1513,22 +1539,19 @@ def ts_publish(draft: dict) -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
 
-def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=None,
-                      gate_feedback: list | None = None) -> dict:
-    """네이버 대본 생성 (①-⑦ 단계) — 티스토리와 중복되지 않은 주제로."""
+def nv_collect(ts_keyword: str = '', supreme_block=None) -> dict:
+    """네이버 주제선정 + JARVIS09 수집 + CollectedData 조립.
+
+    Returns: success, keyword, sector, reason, collected (CollectedData),
+             supreme_block (enriched), source_docs
+    """
     from datetime import datetime as _dt_nv
-    print(f"\n  🟢 [NAVER-DRAFT] 대본 생성 중... [{_dt_nv.now().strftime('%H:%M:%S')}]")
-    # chart_generator 경로 폐기 — infographic_engine 경로로 통합 (ERRORS [355])
-    _section_img_paths.clear()
-    _para_img_paths.clear()
-    _cleanup_naver_images()   # ★ 재생성 시 직전 시도 이미지 리셋 (TS 와 동일 패턴)
+    print(f"\n  🟢 [NAVER-COLLECT] 주제 선정 + 수집 중... [{_dt_nv.now().strftime('%H:%M:%S')}]")
 
     keyword = ""
     try:
         import os as _os
         # ★ 주제+데이터 단일 공급원 = 자비스03 topic_pack (사용자 박제 2026-07-03)
-        #   "자비스03이 자비스02와 자비스09에게 동시에 트렌드 정보를 제공한다."
-        #   02 는 주제 선정·JARVIS09 수집 호출을 하지 않는다 — 폴백 없음.
         from JARVIS03_RADAR.topic_pack import (
             pick_candidate as _tp_pick, build_topic_pack as _tp_build,
             build_for_keyword as _tp_for_kw,
@@ -1544,7 +1567,6 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
         else:
             _cand = _tp_pick(exclude_keyword=ts_keyword)
             if _cand is None:
-                # 당일 팩 부재/소진 — 자비스03 파이프라인 즉석 실행 (동일 단일 경로)
                 print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행")
                 _tp_build()
                 _cand = _tp_pick(exclude_keyword=ts_keyword)
@@ -1561,15 +1583,11 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
             supreme_block = _law_blk()
-        # ★ 생성 단계 예방 (사용자 박제 2026-06-29): 키워드 빈도 규칙을 작성 프롬프트에 주입
-        #   — 검증과 동일 임계(keyword_min_count) → "처음부터 규정대로" → 사후 차단 방지
         try:
             from JARVIS02_WRITER.law_enforcer import keyword_frequency_rule as _kw_rule
             supreme_block = (supreme_block or "") + _kw_rule(keyword)
         except Exception:
             pass
-        # ★ 주제 프로필 주입 (사용자 박제 2026-07-03) — 제목·대본이 주제의 실체를
-        #   혼동하지 않도록 자비스03 프로필(정의·관련어)을 작성 프롬프트에 전달.
         _rel_terms = ", ".join(_profile.get('related_terms') or [])
         if reason:
             supreme_block = (supreme_block or "") + (
@@ -1628,17 +1646,8 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
         except Exception as _cbe:
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
-        from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
-        from JARVIS06_IMAGE.draft_processor import process_draft
+        # CollectedData 조립
         from JARVIS09_COLLECTOR.models import CollectedData
-        from pathlib import Path as _P9
-
-        # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
-        draft_html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
-                                           gate_feedback=gate_feedback, pass2=False)
-        if not draft_html:
-            return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
-
         try:
             from dataclasses import asdict as _asdict
             _docs_ser = [_asdict(d) if hasattr(d, '__dataclass_fields__') else d
@@ -1653,6 +1662,51 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             "facts": list(_ev_pack.get("facts") or []),
             "entities": [],
         })
+
+        print(f"  ✅ [NAVER-COLLECT] 완료: {keyword}")
+        return {
+            "success": True,
+            "keyword": keyword,
+            "sector": sector,
+            "reason": reason,
+            "collected": collected,
+            "supreme_block": supreme_block,
+            "source_docs": _kw_collection_docs,
+        }
+
+    except Exception as e:
+        import traceback
+        print(f"  ❌ [NAVER-COLLECT] 예외: {e}")
+        _g_report("writer", e, module=__name__)
+        traceback.print_exc()
+        return {"success": False, "keyword": keyword, "error": str(e)[:100]}
+
+
+def nv_generate_draft(keyword: str, sector: str, reason: str,
+                      collected, supreme_block=None,
+                      gate_feedback: list | None = None,
+                      source_docs: list | None = None) -> dict:
+    """네이버 Pass-1 대본 생성 + JARVIS06 이미지 파이프라인.
+
+    nv_collect() 결과를 받아 대본 생성 단계만 담당.
+    """
+    from datetime import datetime as _dt_nv
+    print(f"\n  🟢 [NAVER-DRAFT] 대본 생성 중... [{_dt_nv.now().strftime('%H:%M:%S')}]")
+    _section_img_paths.clear()
+    _para_img_paths.clear()
+    _cleanup_naver_images()
+
+    try:
+        from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
+        from JARVIS06_IMAGE.draft_processor import process_draft
+        from pathlib import Path as _P9
+
+        # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
+        draft_html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
+                                           gate_feedback=gate_feedback, pass2=False)
+        if not draft_html:
+            return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
+
         result = process_draft(draft_html, collected=collected, platform="naver",
                                out_dir=NAVER_IMG_DIR)
         html = result["html"]
@@ -1689,9 +1743,8 @@ def nv_generate_draft(ts_keyword: str = '', supreme_block=None, collection_docs=
             "html": html,
             "blocks": blocks,
             "visual_paths": visual_paths,
-            # ★ 2-2: 작성에 실제 쓴 주제 특화 corpus 를 검증 source_docs 로 노출.
-            "source_docs": _kw_collection_docs,
-            "collected": collected,   # ★ Step 10: prepublish grounding 정답 (topic_pack)
+            "source_docs": source_docs or [],
+            "collected": collected,
         }
 
     except Exception as e:

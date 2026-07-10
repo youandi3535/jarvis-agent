@@ -524,6 +524,86 @@ def stocks_to_datasets(stocks_data: dict, max_stocks: int = 8) -> list[dict]:
             datasets.append({"title": title, "unit": unit, "viz_hint": viz,
                              "data": rows, "source": dict(src),
                              "fingerprint": _dfp(title, unit)})
+
+    # ★ 대장주(rank=1)/부대장주(rank=2) 주가 이력 — 분기별 종가 요약 (5y→3y→1y 폴백)
+    #   LLM 이 슬롯에 박을 수 있는 데이터셋으로 승격. viz_hint="stock_price" 로 표시해
+    #   JARVIS06 이 인포그래픽 대신 전용 주가 차트 렌더러로 분기한다.
+    _LEADER_RANKS = {1: "leader", 2: "second"}
+    _src_hist = {"provider": "yfinance", "name": "Yahoo Finance · 주가 이력",
+                 "url": "https://finance.yahoo.com", "as_of": _d_std.today().isoformat()}
+    for stock in sorted(stocks, key=lambda s: s.get("rank") or 99):
+        rank = stock.get("rank")
+        if rank not in _LEADER_RANKS:
+            continue
+        ticker = stock.get("ticker", "")
+        name   = stock.get("name", "")
+        if not ticker or not name:
+            continue
+
+        # 최대 5년 요청 — yfinance 가 상장 이후 데이터만 반환하므로 있는 만큼만 사용.
+        # alt 티커 포함 순서대로 시도.
+        alt_tickers = [ticker]
+        if ticker.endswith(".KS"):
+            alt_tickers.append(ticker.replace(".KS", ".KQ"))
+        elif ticker.endswith(".KQ"):
+            alt_tickers.append(ticker.replace(".KQ", ".KS"))
+
+        hist_df = pd.DataFrame()
+        for tk in alt_tickers:
+            try:
+                h = yf.Ticker(tk).history(period="5y")
+                if not h.empty and len(h) >= 6:
+                    hist_df = h
+                    break
+            except Exception:
+                pass
+
+        if hist_df.empty:
+            print(f"  ⚠️ [stocks_to_datasets] {name}({ticker}) 주가 이력 없음 — 스킵")
+            continue
+
+        # 월별 마지막 종가 요약
+        try:
+            hist_df.index = pd.to_datetime(hist_df.index).tz_localize(None)
+            monthly = hist_df["Close"].resample("ME").last().dropna()
+        except Exception:
+            try:
+                monthly = hist_df["Close"].resample("M").last().dropna()
+            except Exception:
+                continue
+        if len(monthly) < 6:
+            continue
+
+        m_rows = [{"label": f"{ts.year}.{ts.month:02d}", "value": round(float(v), 0)}
+                  for ts, v in monthly.items()]
+
+        # 실제 보유 기간 문자열 (5년 5개월 / 3년 / 8개월 등)
+        n_months = len(m_rows)
+        n_years, n_rem = divmod(n_months, 12)
+        if n_years >= 1 and n_rem > 0:
+            period_str = f"{n_years}년 {n_rem}개월"
+        elif n_years >= 1:
+            period_str = f"{n_years}년"
+        else:
+            period_str = f"{n_months}개월"
+
+        label_key  = _LEADER_RANKS[rank]
+        title_hist = f"{name} 주가 흐름 (최근 {period_str})"
+        datasets.append({
+            "title":      title_hist,
+            "unit":       "원",
+            "viz_hint":   "stock_price",
+            "label_key":  label_key,
+            "ticker":     ticker,
+            "name":       name,
+            "rank":       rank,
+            "period":     period_str,   # "3년 2개월" 형태 — 차트 제목에 사용
+            "data":       m_rows,
+            "source":     dict(_src_hist),
+            "fingerprint": _dfp(title_hist, "원"),
+        })
+        print(f"  📈 [stocks_to_datasets] {name} 주가 이력 {n_months}개월 (최근 {period_str}) 승격")
+
     return datasets
 
 

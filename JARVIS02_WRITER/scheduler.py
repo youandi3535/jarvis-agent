@@ -143,12 +143,13 @@ def _clear_all_cookies(label: str) -> None:
         log(f"ℹ️ [{label}] 삭제할 쿠키·캐시 없음")
 
 
-def _auto_refresh_cookies() -> dict:
+def _auto_refresh_cookies(naver_only: bool = False) -> dict:
     """쿠키 누락·만료 시 자동 갱신 — _harness_precondition_check 직전 호출.
 
     갱신 대상:
       - 네이버: naver_cookies.pkl 없거나 10시간 이상 경과 → refresh_naver_cookies()
       - 티스토리: TS_COOKIE env 없으면 → tistory_cookie_refresher.run()
+        (naver_only=True 이면 티스토리 갱신 생략 — 티스토리 액션 step ④ 에서 처리)
 
     Returns:
         {"naver": True/False, "tistory": True/False}  — 갱신 시도 결과
@@ -182,7 +183,8 @@ def _auto_refresh_cookies() -> dict:
             result["naver"] = False
 
     # ── 티스토리 쿠키 (TS_COOKIE env 방식) ──────────────────────────────
-    if not os.environ.get("TS_COOKIE", "").strip():
+    # naver_only=True 이면 건너뜀 — 티스토리는 액션 step ④ 에서 직전 갱신
+    if not naver_only and not os.environ.get("TS_COOKIE", "").strip():
         log("🔄 TS_COOKIE 누락 — 티스토리 쿠키 자동 갱신 시작")
         send_telegram("🔄 티스토리 TS_COOKIE 자동 갱신 중...")
         try:
@@ -1069,10 +1071,21 @@ def run_self_repair_then_theme():
         send_telegram(_msg)
         return
 
-    # ─── Step 1: 이전 쿠키·캐시 전체 삭제 ──────────────────────
+    # ─── Step 1: 자가 치유 먼저 — 쿠키 관련 코드가 수정될 수 있으므로 ──────
+    _phase = _run_self_repair_phase("테마글")
+    try:
+        if _phase["code_changed"] > 0:
+            send_telegram(
+                f"🔁 *데몬 재시작 권장*\n"
+                f"자가진단이 코드 {_phase['code_changed']}건 수정 → 이번 발행엔 무효 (Python import 캐시).\n"
+                f"이번 테마 발행 끝나고 `pkill -f jarvis_daemon.py && python jarvis_daemon.py` 권장."
+            )
+    except Exception:
+        pass
+    # ─── Step 2: 이전 쿠키·캐시 전체 삭제 ──────────────────────
     _clear_all_cookies("테마글")
 
-    # ─── Step 2: 쿠키 체크 — ★ 네이버만 (사용자 박제 2026-07-05, ERRORS [363]) ─────
+    # ─── Step 3: 쿠키 체크 — ★ 네이버만 (사용자 박제 2026-07-05, ERRORS [363]) ─────
     # 네이버가 첫 액션 → 네이버 쿠키만 지금 갱신. 티스토리 쿠키는 *티스토리 차례*
     # (`trend_theme_writer._step_ts_cookie`, 액션 2 시작)에 force 갱신 → 신선 세션.
     # 여기서 티스토리를 미리 로그인하면 네이버 발행 내내(10분+) 카카오 세션이 방치·만료된다
@@ -1086,22 +1099,11 @@ def run_self_repair_then_theme():
         log(f"⚠️ [테마글] 네이버 쿠키 점검 예외: {_e}")
         _cookie_failed.append("네이버")
     if _cookie_failed:
-        msg = f"🚨 네이버 쿠키 점검 실패 — 테마글 발행 건너뜀 (티스토리는 티스토리 차례에 갱신)"
+        msg = "🚨 네이버 쿠키 점검 실패 — 테마글 발행 건너뜀 (티스토리는 티스토리 차례에 갱신)"
         log(msg)
         send_telegram(msg)
         return
 
-    # ─── Step 3: 전체 폴더 검증 (자가진단) ──────────────────────
-    _phase = _run_self_repair_phase("테마글")
-    try:
-        if _phase["code_changed"] > 0:
-            send_telegram(
-                f"🔁 *데몬 재시작 권장*\n"
-                f"자가진단이 코드 {_phase['code_changed']}건 수정 → 이번 발행엔 무효 (Python import 캐시).\n"
-                f"이번 테마 발행 끝나고 `pkill -f jarvis_daemon.py && python jarvis_daemon.py` 권장."
-            )
-    except Exception:
-        pass
     log(f"📤 [테마글] 발행 페이즈 진입 (자가진단 {_phase['elapsed_sec']}s 종료)")
     return run_radar_top_theme()
 
@@ -1198,11 +1200,7 @@ def run_economic_poster(*extra_flags):
     if extra_flags:
         label += f" ({' '.join(extra_flags)})"
 
-    # ★ 쿠키 자동 갱신 — harness precondition 직전 (누락·만료 시 갱신 후 재검증)
-    if not extra_flags:
-        _auto_refresh_cookies()
     # Layer 1 precondition 은 economic_poster.py ActionDefinition 내장 — 여기서 수동 체크 없음
-
     if not _lock_acquire(label):
         return
     log(f"⏰ {label} 실행 시작")
