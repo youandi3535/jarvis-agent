@@ -91,6 +91,10 @@ function buildBounds(agents: AgentDef[]): Record<string, AgentBounds> {
   );
 }
 
+// 같은 행 임계값 — J01(BIG, h=215)과 J00/J04(h=170)의 중심y 차이 22.5px를 수용
+const SAME_ROW_THR = 60;
+const SAME_COL_THR = 20;
+
 function routeEdge(e: PipelineEdge, bnd: Record<string, AgentBounds>): string {
   const f = bnd[e.from], t = bnd[e.to];
   if (!f || !t) return "";
@@ -99,15 +103,15 @@ function routeEdge(e: PipelineEdge, bnd: Record<string, AgentBounds>): string {
     const ly = e.lane_y;
     return `M${f.cx},${ly < f.cy ? f.top : f.bot} V${ly} H${t.cx} V${ly < t.cy ? t.top : t.bot}`;
   }
-  if (Math.abs(f.cy - t.cy) < 20) {           // 같은 행 → 수평
+  if (Math.abs(f.cy - t.cy) < SAME_ROW_THR) {  // 같은 행 → 수평
     const [fx, tx] = f.cx < t.cx ? [f.right, t.left] : [f.left, t.right];
-    return `M${fx},${f.cy} H${tx}`;
+    return `M${fx},${(f.cy + t.cy) / 2} H${tx}`;
   }
-  if (Math.abs(f.cx - t.cx) < 20) {           // 같은 열 → 수직
+  if (Math.abs(f.cx - t.cx) < SAME_COL_THR) {  // 같은 열 → 수직
     const [fy, ty] = f.cy < t.cy ? [f.bot, t.top] : [f.top, t.bot];
     return `M${f.cx + dx},${fy} V${ty}`;
   }
-  const fy = f.cy < t.cy ? f.bot : f.top;     // L-shape fallback
+  const fy = f.cy < t.cy ? f.bot : f.top;       // L-shape fallback
   return `M${f.cx},${fy} V${f.cy < t.cy ? t.top : t.bot}`;
 }
 
@@ -117,11 +121,11 @@ function lblPos(e: PipelineEdge, bnd: Record<string, AgentBounds>): { x:number; 
   if (!f || !t) return null;
   if (e.route === "via_lane" && e.lane_y != null)
     return { x: (f.cx + t.cx) / 2, y: e.lane_y - 11 };
-  if (Math.abs(f.cy - t.cy) < 20) {
+  if (Math.abs(f.cy - t.cy) < SAME_ROW_THR) {
     const [fx, tx] = f.cx < t.cx ? [f.right, t.left] : [f.left, t.right];
-    return { x: (fx + tx) / 2, y: f.cy - 11 };
+    return { x: (fx + tx) / 2, y: (f.cy + t.cy) / 2 - 11 };
   }
-  if (Math.abs(f.cx - t.cx) < 20)
+  if (Math.abs(f.cx - t.cx) < SAME_COL_THR)
     return { x: f.cx + (e.dx ?? 0) + 5, y: (f.cy + t.cy) / 2 - 5 };
   return { x: (f.cx + t.cx) / 2, y: (f.cy + t.cy) / 2 };
 }
@@ -350,12 +354,12 @@ function buildEdgeSvg(edges: ComputedEdge[], activeEdgeIds: Set<string>): string
 
   const lines = edges.flatMap(e => {
     const on = activeEdgeIds.has(e.id);
-    const wt   = (e.wt ?? 1.6) * (on ? 1.15 : 0.85);
-    const lineO = on ? 0.88 : 0.28;
-    const glowO = on ? 0.22 : 0.04;
-    const dotR  = on ? 5.5  : 2.8;
-    const dotO  = on ? 0.98 : 0.32;
-    const dur   = on ? e.dur * 0.5 : e.dur * 2.2;
+    const wt   = (e.wt ?? 1.6) * (on ? 1.15 : 1.0);
+    const lineO = on ? 0.88 : 0.42;
+    const glowO = on ? 0.22 : 0.06;
+    const dotR  = on ? 5.5  : 3.2;
+    const dotO  = on ? 0.98 : 0.45;
+    const dur   = on ? e.dur * 0.5 : e.dur * 2.0;
     const cnt   = on ? Math.max(e.dots * 2, 3) : 1;
 
     const segs: string[] = [];
