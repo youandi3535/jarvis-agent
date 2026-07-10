@@ -129,10 +129,6 @@ def tools_by_domain(domain: str) -> list[ToolMeta]:
     return [t for t in _TOOLS.values() if t.domain == domain]
 
 
-def tools_by_names(names: list[str]) -> list[ToolMeta]:
-    return [_TOOLS[n] for n in names if n in _TOOLS]
-
-
 # ── 호출 ───────────────────────────────────────────────────────
 
 def tool_invoke(name: str, **kwargs) -> Any:
@@ -288,24 +284,11 @@ def all_langchain_tools(domain: Optional[str] = None) -> list:
     return out
 
 
-# ── 진단 ──────────────────────────────────────────────────────
-
-def render_for_router_prompt() -> str:
-    """등록된 도구 카탈로그 (마스터 라우터 prompt 보조)."""
-    if not _TOOLS:
-        return "(등록된 도구 없음)"
-    lines = []
-    for m in _TOOLS.values():
-        lines.append(f"- {m.name} [{m.domain}] side={m.side_effect}, cost={m.cost_class}: {m.description}")
-    return "\n".join(lines)
-
-
 # ── public ────────────────────────────────────────────────────
 
 __all__ = [
     "ToolMeta", "register_tool", "tool_invoke",
-    "get_tool", "all_tools", "tools_by_domain", "tools_by_names",
+    "get_tool", "all_tools", "tools_by_domain",
     "to_langchain_tool", "all_langchain_tools",
-    "render_for_router_prompt",
     "approved_context",
 ]

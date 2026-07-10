@@ -2,7 +2,7 @@
 """JARVIS Hub — 통합 시스템 현황판 (port 9199)
 탭: 홈 / 레이더 / 발행 관리 / 품질 관리 / 성과 / 스케줄러 / 시스템
 """
-import sys, html as _html, json, subprocess, sqlite3
+import sys, html as _html, json, subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -12,7 +12,7 @@ BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR))
 # ★ DB 경로 단일 진입점 — shared/db.py 가 .env 자가 로드해 JARVIS_DB_PATH(~/.jarvis) 해석.
 #   hub 가 자체 재계산하면 .env 미로드 시 잔재 shared/jarvis.sqlite 로 떨어짐 (2026-06-28 박제).
-from shared.db import DB_PATH
+from shared.db import DB_PATH, get_db
 from shared.llm import model_label as _model_label   # ★ 모델명 SSOT — 하드코딩 금지
 from JARVIS04_SCHEDULER.job_registry import cron_phrase as _cron_phrase, cron_times as _cron_times  # ★ 스케줄 SSOT
 from JARVIS05_VISION.api_server import VISION_PORT as _VISION_PORT   # ★ VISION 포트 SSOT (8505)
@@ -801,9 +801,7 @@ def empty_state(msg: str, sub: str = "") -> str:
 def _db():
     if not DB_PATH.exists():
         return None
-    con = sqlite3.connect(str(DB_PATH))
-    con.row_factory = sqlite3.Row
-    return con
+    return get_db()
 
 def _fmt(s) -> str:
     if not s: return "—"
@@ -1301,8 +1299,7 @@ def load_publish_stats() -> dict:
 def load_guardian_stats() -> dict:
     """JARVIS07 오류 현황 — error_log 테이블 조회."""
     try:
-        con = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-        con.row_factory = sqlite3.Row
+        con = get_db()
         stats_row = con.execute("""
             SELECT
                 SUM(CASE WHEN status IN ('new','analyzing','fixed','resolved','wontfix','ignored','manual') THEN 1 ELSE 0 END) AS total,
@@ -1347,8 +1344,7 @@ def load_guardian_stats() -> dict:
 def load_guardian_stats_alltime() -> dict:
     """JARVIS07 오류 현황 — 전체 누적 (영구 보존 정책 2026-05-25)."""
     try:
-        con = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-        con.row_factory = sqlite3.Row
+        con = get_db()
         r = con.execute("""
             SELECT
                 COUNT(*) AS total,
@@ -1381,8 +1377,7 @@ def load_guardian_errors(status: str = None, severity: str = None,
                           days: int = 30, limit: int = 200) -> list[dict]:
     """오류 목록 조회 — status/severity/days 필터 지원."""
     try:
-        con = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-        con.row_factory = sqlite3.Row
+        con = get_db()
         where = [f"timestamp >= datetime('now', '-{days} days', 'localtime')"]
         params: list = []
         if status:
@@ -1406,7 +1401,7 @@ def load_guardian_errors(status: str = None, severity: str = None,
 def load_guardian_trend(days: int = 14) -> list[dict]:
     """일별 오류 발생 추이 — 최근 N일."""
     try:
-        con = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        con = get_db()
         rows = con.execute(f"""
             SELECT DATE(timestamp, 'localtime') AS day,
                    COUNT(*) AS total,
@@ -1427,7 +1422,7 @@ def load_guardian_trend(days: int = 14) -> list[dict]:
 def load_guardian_source_stats(days: int = 7) -> list[dict]:
     """에이전트(source)별 오류 통계."""
     try:
-        con = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        con = get_db()
         rows = con.execute(f"""
             SELECT source,
                    COUNT(*) AS total,
@@ -1484,7 +1479,7 @@ _qa_tab_label = f"품질 관리 🔔{_qa_pending_count}" if _qa_pending_count > 
 # 오류 탭 레이블 — 미처리 critical/high 건수 표시
 _err_new_count = 0
 try:
-    _con_err = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    _con_err = get_db()
     _err_new_count = _con_err.execute(
         "SELECT COUNT(*) FROM error_log WHERE status='new' "
         "AND severity IN ('critical','high')"
@@ -2283,8 +2278,7 @@ with t_err:
     # 수동검토 탭 카운트: wontfix 전체 + (new/analyzing 중 critical/high)
     _crit_unresolved = con_for_count = None
     try:
-        import sqlite3 as _s3
-        _c = _s3.connect(str(DB_PATH))
+        _c = get_db()
         # critical: Tier 1만 수행 → 패턴 없으면 수동 검토 (wontfix)
         # high: Tier 1 → Tier 2 모두 실패 → wontfix 마킹됨
         # new/analyzing 중 critical/high: 아직 처리 안 됨 (수동 검토 필요)
@@ -2431,9 +2425,7 @@ with t_err:
 
         # ★ 자가 진단 학습 곡선 카드 (사용자 박제 2026-05-15) — 회차별 누적 추이
         try:
-            import sqlite3 as _s3
-            _c = _s3.connect(str(DB_PATH))
-            _c.row_factory = _s3.Row
+            _c = get_db()
             _srr = _c.execute("""
                 SELECT id, ran_at, total_fixed, patterns_count, hits_total,
                        score_quality, score_learning, score_vision,

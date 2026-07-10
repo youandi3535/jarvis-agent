@@ -78,5 +78,32 @@
     "aesthetic": "순백 배경 위 옅은 그리드와 플랫 컬러(네이비·코랄·틸·오렌지)로 구성된 다채널 차트·아이콘 대시보드 스타일",
     "via": "실이미지비전",
     "total": 13
+  },
+  {
+    "date": "2026-07-07",
+    "action": "learned",
+    "id": "rec13",
+    "name": "rec13",
+    "aesthetic": "알고리즘 색이론",
+    "via": "결정론",
+    "total": 14
+  },
+  {
+    "date": "2026-07-09",
+    "action": "learned",
+    "id": "rec14",
+    "name": "rec14",
+    "aesthetic": "알고리즘 색이론",
+    "via": "결정론",
+    "total": 15
+  },
+  {
+    "date": "2026-07-10",
+    "action": "learned",
+    "id": "rec15",
+    "name": "rec15",
+    "aesthetic": "알고리즘 색이론",
+    "via": "결정론",
+    "total": 16
   }
 ]

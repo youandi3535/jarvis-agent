@@ -139,6 +139,11 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"ev_cleanup",      "name":"events 정리",          "trigger":"cron",
      "kwargs":{"day_of_week":"sun", "hour":3, "minute":30}, "callback":"JARVIS00_INFRA.infra_agent.job_cleanup_events",
      "misfire_grace_time":3600, "owner":"jarvis00_infra"},
+    # ★ vision_agent_history 는 30초 주기 수집(에이전트당 1행)이라 events 보다 훨씬
+    #   빨리 누적 — 방치 시 DB 팽창 → get_db() 지연 → keeper hang 오탐 (본 사고 원인).
+    {"id":"vision_history_cleanup", "name":"VISION 이력 정리", "trigger":"cron",
+     "kwargs":{"hour":3, "minute":15}, "callback":"JARVIS00_INFRA.infra_agent.job_cleanup_vision_history",
+     "misfire_grace_time":3600, "owner":"jarvis00_infra"},
     {"id":"file_cleanup",    "name":"파일 정리",            "trigger":"cron",
      "kwargs":{"day_of_week":"mon", "week":"*/2", "hour":4, "minute":0},
      "callback":"JARVIS00_INFRA.infra_agent.job_file_cleanup",

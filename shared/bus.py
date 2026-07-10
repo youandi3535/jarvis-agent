@@ -263,11 +263,6 @@ def on_post_published(theme: str, platform: str, source: str = "scheduled"):
     db.save_post(theme, platform, "published", source)
 
 
-def on_post_failed(theme: str, platform: str):
-    publish(EventType.POST_FAILED, "WRITER", {"theme": theme, "platform": platform})
-    db.save_post(theme, platform, "failed", "scheduled")
-
-
 def on_post_published_detail(theme: str, platform: str, title: str,
                               url: str = "",
                               content: str = "", html: str = "",
@@ -330,9 +325,3 @@ def on_post_revised(analysis_id: int, platform: str, theme: str, url: str):
     })
 
 
-def on_performance_updated(date: str, naver: int, tistory: int):
-    publish(EventType.PERFORMANCE_UPDATED, "WRITER", {
-        "date": date, "naver": naver, "tistory": tistory,
-    })
-    db.save_performance(date, naver, tistory)
-    db.update_keyword_views(date)

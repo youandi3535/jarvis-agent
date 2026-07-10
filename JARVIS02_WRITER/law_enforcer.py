@@ -313,16 +313,8 @@ def enforce_no_placeholders(
         msg = "\n".join(msg_lines)
 
         try:
-            import os as _os
-            import requests as _req
-            token = _os.getenv('TELEGRAM_TOKEN', '')
-            chat = _os.getenv('TELEGRAM_CHAT_ID', '')
-            if token and chat:
-                _req.post(
-                    f'https://api.telegram.org/bot{token}/sendMessage',
-                    json={'chat_id': chat, 'text': msg, 'parse_mode': 'Markdown'},
-                    timeout=5,
-                )
+            from shared.notify import send_tg
+            send_tg(msg)
         except Exception:
             pass
 
@@ -1106,27 +1098,6 @@ def build_writing_rules_block() -> str:
     return "\n".join(out)
 
 
-def wrap_prompt_with_law(prompt: str) -> str:
-    """원고 생성 프롬프트에 BLOG_SUPREME_LAW를 자동 주입하는 래퍼.
-
-    CLAUDE_WRITER.md 의무 2단계 규정 1단계를 단일 함수로 보장.
-    모든 원고 생성 함수에서 직접 `build_writing_rules_block()` + f-string 대신
-    이 함수를 사용하면 규정 누락 불가.
-
-    Usage:
-        prompt = wrap_prompt_with_law(f"[원고 작성 요청] ...")
-        raw = invoke_text("writer", prompt, ...)
-
-    Note:
-        이미 supreme_block이 앞에 붙어 있는 경우(중복 주입 방지):
-        '블로그 글쓰기 최상위 헌법' 문자열이 있으면 그대로 반환.
-    """
-    if "블로그 글쓰기 최상위 헌법" in prompt:
-        return prompt  # 이미 주입됨 — 중복 방지
-    supreme_block = build_writing_rules_block()
-    return f"{supreme_block}\n\n{prompt}"
-
-
 def audit_factuality(
     html: str,
     source_data: str = "",
@@ -1201,22 +1172,15 @@ def audit_factuality(
     # ── 텔레그램 경고 ─────────────────────────────────────────────
     if not passed and notify:
         try:
-            import os, requests as _req
-            token = os.getenv('TELEGRAM_TOKEN', '')
-            chat  = os.getenv('TELEGRAM_CHAT_ID', '')
-            if token and chat:
-                lines = "\n".join(f"  • {s}" for s in suspicious[:8])
-                msg = (
-                    f"⚠️ *제2조 진실성 감사 — 의심 수치 발견*\n"
-                    f"포스트 타입: {post_type or '미지정'}\n"
-                    f"의심 항목 {len(suspicious)}개:\n{lines}\n"
-                    f"발행 계속 진행 (차단 아님) — 수동 검토 권장."
-                )
-                _req.post(
-                    f'https://api.telegram.org/bot{token}/sendMessage',
-                    json={'chat_id': chat, 'text': msg, 'parse_mode': 'Markdown'},
-                    timeout=5,
-                )
+            from shared.notify import send_tg
+            lines = "\n".join(f"  • {s}" for s in suspicious[:8])
+            msg = (
+                f"⚠️ *제2조 진실성 감사 — 의심 수치 발견*\n"
+                f"포스트 타입: {post_type or '미지정'}\n"
+                f"의심 항목 {len(suspicious)}개:\n{lines}\n"
+                f"발행 계속 진행 (차단 아님) — 수동 검토 권장."
+            )
+            send_tg(msg)
         except Exception:
             pass
 

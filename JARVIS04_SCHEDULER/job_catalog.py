@@ -101,26 +101,6 @@ def list_jobs() -> list[dict]:
     return out
 
 
-def get_job(job_id: str) -> Optional[dict]:
-    if _APSCHED is None:
-        return None
-    try:
-        j = _APSCHED.get_job(job_id)
-        if j is None:
-            return None
-        from JARVIS04_SCHEDULER.job_registry import get_owner
-        nr = getattr(j, "next_run_time", None)
-        return {
-            "id": j.id, "name": j.name or "",
-            "next_run": nr.strftime("%Y-%m-%d %H:%M:%S") if nr else None,
-            "paused": nr is None,
-            "trigger": str(j.trigger),
-            "owner": get_owner(j.id) or "",
-        }
-    except Exception:
-        return None
-
-
 def next_runs(limit: int = 10) -> list[dict]:
     """가장 가까운 N개 잡."""
     jobs = [j for j in list_jobs() if j["next_run"]]
@@ -130,5 +110,5 @@ def next_runs(limit: int = 10) -> list[dict]:
 __all__ = [
     "create_scheduler",
     "set_apscheduler", "get_apscheduler",
-    "list_jobs", "get_job", "next_runs",
+    "list_jobs", "next_runs",
 ]

@@ -470,20 +470,9 @@ def _send_telegram_analysis(record: dict, suggestions: list):
     keyboard = _build_partial_keyboard(analysis_id, suggestions, list(range(n_shown)))
 
     try:
-        resp = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={
-                "chat_id": TG_CHAT_ID,
-                "text": text,
-                "parse_mode": "Markdown",
-                "reply_markup": keyboard,
-            },
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            print(f"  ⚠️ 텔레그램 전송 실패: {resp.text[:200]}")
-        else:
-            print(f"  ✅ 텔레그램 전송 완료 (analysis_id={analysis_id})")
+        from shared.notify import send_tg_with_buttons
+        send_tg_with_buttons(text, keyboard["inline_keyboard"])
+        print(f"  ✅ 텔레그램 전송 완료 (analysis_id={analysis_id})")
     except Exception as e:
         print(f"  ⚠️ 텔레그램 전송 오류: {e}")
         _g_report("radar", e, module=__name__)

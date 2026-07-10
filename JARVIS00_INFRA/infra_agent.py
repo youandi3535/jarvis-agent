@@ -359,6 +359,17 @@ def job_cleanup_events() -> None:
         _g_report("infra", e, module=__name__)
 
 
+def job_cleanup_vision_history() -> None:
+    """매일 03:15 — vision_agent_history 테이블 7일 이전 row 삭제 (무제한 누적 방지)."""
+    from shared import db
+    try:
+        n = db.cleanup_vision_history(days=7)
+        log.info(f"🧹 vision_agent_history 정리: {n}건 삭제")
+    except Exception as e:
+        log.error(f"❌ vision_agent_history 정리 실패: {e}")
+        _g_report("infra", e, module=__name__)
+
+
 def job_file_cleanup() -> None:
     """격주 월요일 04:00 — 오래된 로그·임시파일·스크린샷 자동 정리."""
     try:
@@ -458,7 +469,7 @@ __all__ = [
     "register", "register_capability",
     "build_status",
     "handle_command", "handle_safe_intent", "execute_approval",
-    "job_db_backup", "job_cleanup_events", "job_file_cleanup",
+    "job_db_backup", "job_cleanup_events", "job_cleanup_vision_history", "job_file_cleanup",
     "touch_heartbeat", "job_heartbeat", "enable_hang_forensics",
     "quiet_heartbeat_logs",
 ]

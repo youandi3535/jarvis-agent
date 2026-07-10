@@ -51,14 +51,9 @@ TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 
 def _tg(msg: str):
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "Markdown"},
-            timeout=10,
-        )
+        from shared.notify import send_tg
+        send_tg(msg)
     except Exception:
         pass
 

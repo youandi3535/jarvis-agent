@@ -447,14 +447,9 @@ def _build_telegram_report(date_str: str, agg: dict, insights: list[dict]) -> st
 
 
 def _send_tg(text: str):
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown"},
-            timeout=10,
-        )
+        from shared.notify import send_tg
+        send_tg(text)
     except Exception:
         pass
 

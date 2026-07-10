@@ -22,13 +22,6 @@ _KOR_FONT_CANDIDATES = [
 ]
 
 
-def _find_kor_font() -> str | None:
-    for p in _KOR_FONT_CANDIDATES:
-        if Path(p).exists():
-            return p
-    return None
-
-
 _KOR_FONT_NAME = "Apple SD Gothic Neo"  # fontconfig에 등록된 한국어 폰트
 
 

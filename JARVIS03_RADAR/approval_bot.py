@@ -40,11 +40,8 @@ def _answer_callback(callback_id: str, text: str = "처리 완료"):
 
 
 def _send_tg(text: str, chat_id: str = None):
-    requests.post(
-        f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-        json={"chat_id": chat_id or TG_CHAT_ID, "text": text, "parse_mode": "Markdown"},
-        timeout=10,
-    )
+    from shared.notify import send_tg
+    send_tg(text, chat_id=chat_id)
 
 
 def _edit_keyboard(chat_id, message_id, keyboard):

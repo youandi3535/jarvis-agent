@@ -831,17 +831,6 @@ def job_retry_pending(*, max_per_run: int = 20, stuck_minutes: int = 30):
         log.info(f"[GUARDIAN/retry_pending] analyzing→new 리셋 {reset_n}건 / new 재처리 큐 {retry_n}건")
 
 
-def job_archive_errors():
-    """격주 월요일 04:30 — 30일 초과 해결 오류 아카이브."""
-    try:
-        from shared import db as _db
-        deleted = _db.archive_old_errors(days=30)
-        if deleted > 0:
-            log.info(f"[GUARDIAN] 오래된 오류 {deleted}건 아카이브 완료")
-    except Exception as e:
-        log.warning(f"[GUARDIAN] 아카이브 잡 오류: {e}")
-
-
 # ── 텔레그램 알림 헬퍼 (비활성 — 사용자 박제) ──────────────────
 
 def _notify_critical(error_record: dict):
@@ -883,16 +872,6 @@ def _notify_medium(error_record: dict):
 
 
 # ── 공개 도구 API ─────────────────────────────────────────────────
-
-def list_errors(status: str = "new", limit: int = 20) -> list:
-    from shared import db as _db
-    return _db.list_errors(status=status, limit=limit)
-
-
-def get_stats(days: int = 7) -> dict:
-    from shared import db as _db
-    return _db.get_error_stats(days=days)
-
 
 def mark_ignored(error_id: int) -> bool:
     from shared import db as _db

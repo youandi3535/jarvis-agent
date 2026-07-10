@@ -135,19 +135,6 @@ def _type_string_cgevent(text: str, delay_min=0.04, delay_max=0.10):
         return False
 
 
-def _type_string_clipboard(text: str):
-    """클립보드 붙여넣기 fallback"""
-    import pyperclip, subprocess
-    pyperclip.copy(text)
-    time.sleep(0.4)
-    subprocess.run(
-        ["osascript", "-e",
-         'tell application "System Events" to keystroke "v" using {command down}'],
-        capture_output=True
-    )
-    time.sleep(0.5)
-
-
 def _activate_chrome():
     import subprocess
     subprocess.run(

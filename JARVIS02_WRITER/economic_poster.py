@@ -233,14 +233,9 @@ TODAY_DOW = ["월", "화", "수", "목", "금", "토", "일"][TODAY.weekday()]
 # ══════════════════════════════════════════
 
 def tg(msg: str):
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": msg},
-            timeout=10,
-        )
+        from shared.notify import send_tg
+        send_tg(msg)
     except Exception:
         pass
 

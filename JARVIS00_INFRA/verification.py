@@ -111,11 +111,6 @@ def has_blocking(results: list[CheckResult]) -> bool:
     return any(r.severity == "block" for r in (results or []))
 
 
-def registered_task_types() -> list[str]:
-    """등록된 task_type 목록 (내성·테스트용)."""
-    return sorted(_REGISTRY.keys())
-
-
 def checkpoints_for(task_type: str) -> list[str]:
     return [c.name for c in _REGISTRY.get(task_type, [])]
 
@@ -152,5 +147,5 @@ def is_valid_image_file(path) -> str:
 
 __all__ = [
     "CheckResult", "register_check", "verify_output", "has_blocking",
-    "registered_task_types", "checkpoints_for", "is_valid_image_file",
+    "checkpoints_for", "is_valid_image_file",
 ]

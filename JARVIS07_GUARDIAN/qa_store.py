@@ -659,22 +659,8 @@ def job_ingest_cowork_sessions() -> None:
         log.debug(f"[QAStore/Cowork] 잡 완료 (변경 없음): {result}")
 
 
-def vector_search(query: str, top_k: int = 5) -> list[dict]:
-    """시맨틱 벡터 검색 — ChromaDB 5중 검증 통과 후보 반환.
-
-    FTS5 키워드 검색과 달리 의미 유사도 기반.
-    Returns: list of dicts (vector_store.search_vector 형식)
-    """
-    try:
-        from JARVIS07_GUARDIAN.vector_store import search_vector
-        return search_vector(query, top_k=top_k)
-    except Exception as e:
-        log.debug(f"[QAStore] 벡터 검색 실패 (fallback to FTS only): {e}")
-        return []
-
-
 __all__ = [
-    "search", "vector_search", "upsert", "stats",
+    "search", "upsert", "stats",
     "ingest_sessions", "job_ingest_sessions",
     "ingest_cowork_sessions", "job_ingest_cowork_sessions",
 ]

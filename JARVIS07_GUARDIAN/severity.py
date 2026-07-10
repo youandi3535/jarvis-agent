@@ -180,6 +180,11 @@ _TRANSIENT_PATTERNS = [
                r"|black-forest-labs|stabilityai|stable-diffusion-|FLUX\.\d", re.I),
     # crewai/native provider 환경 (외부 키·런타임 — 코드 버그 아님)
     re.compile(r"Error importing native provider|OPENAI_API_KEY is required", re.I),
+    # ★ ERRORS [387] 박제 2026-07-06 — jarvis_keeper 워치독 hang 감지/복구 알림
+    # (ERRORS [318][385] 설계상 정상 동작 — heartbeat stale 시 강제 재시작하는 자가 치유).
+    # 재시작 "완료" 보고에는 코드 결함 정보(파일·라인·traceback) 자체가 없어 Tier1/2 가
+    # 고칠 대상이 없음 — Sonnet 5 낭비 호출 방지. hang 의 근본원인은 daemon_faulthandler.log 로 별도 추적.
+    re.compile(r"데몬 HANG 감지|데몬 강제 재시작 완료|hang 복구", re.I),
 ]
 
 

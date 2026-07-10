@@ -117,13 +117,23 @@ def generate_photo(prompt_ko: str, out_dir: Path | None = None,
     # 락 범위: 쿨다운 대기 + HTTP 요청 전체. 동시 요청 원천 차단.
     global _last_pollinations_call
     import random as _random
-    with _POLL_LOCK:
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        def _wd_beat() -> None: pass  # watchdog 부재 시 no-op
+
+    # ★ 사용자 박제 2026-07-06 후속: 다른 스레드/액션이 락을 오래 쥐고 있어도
+    #   (직렬화 대기 자체는 정상 동작) freeze 워치독이 오탐하지 않도록 폴링 대기 + beat().
+    while not _POLL_LOCK.acquire(timeout=15):
+        _wd_beat()
+    try:
         elapsed = _time.time() - _last_pollinations_call
         if elapsed < _POLLINATIONS_COOLDOWN:
             wait = _POLLINATIONS_COOLDOWN - elapsed + _random.uniform(0, 3)
             log.info(f"[J06] Pollinations 쿨다운 대기 {wait:.1f}초")
             _time.sleep(wait)
 
+        _wd_beat()  # ★ 쿨다운 이후·HTTP 재시도 루프 진입 전 진행 신호
         log.info("[J06] Pollinations.ai 호출")
         kw_args: dict = {}
         if seed is not None:
@@ -140,6 +150,8 @@ def generate_photo(prompt_ko: str, out_dir: Path | None = None,
             raise
         # 완료 시점으로 갱신 — 다음 스레드 쿨다운 기준
         _last_pollinations_call = _time.time()
+    finally:
+        _POLL_LOCK.release()
     # ★ 검증 (2026-07-02): 생성 이미지가 유효한가(0바이트·손상) — 깨진 이미지 발행 방지.
     #   실패 시 raise → 호출자 폴백/스킵(이중발행 위험 없는 안전 실패).
     _iv = _verify_image_file(result)

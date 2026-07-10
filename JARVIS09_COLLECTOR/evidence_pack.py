@@ -257,44 +257,6 @@ def build_evidence_pack(theme: str, plan: dict, docs: list,
     return pack
 
 
-def coverage_gaps(pack: dict) -> list[dict]:
-    """미충족 질문 목록 반환 — 2라운드 갭 재수집 대상."""
-    plan_qs = {q["id"]: q for q in (pack.get("plan") or {}).get("questions", [])}
-    gaps = []
-    for qid, c in (pack.get("coverage") or {}).items():
-        if not c.get("ok") and qid in plan_qs:
-            gaps.append(plan_qs[qid])
-    return gaps
-
-
-def merge_pack(pack: dict, extra_facts: list[dict]) -> dict:
-    """2라운드 추가 fact 병합 (dedupe + 커버리지 재측정)."""
-    facts = _dedupe_facts(list(pack.get("facts", [])) + list(extra_facts or []))
-    for i, f in enumerate(facts, 1):
-        f["id"] = f"F{i}"
-    pack["facts"] = facts
-    pack["coverage"] = _measure_coverage(pack.get("plan"), facts)
-    return pack
-
-
-def restrict_pack_to_docs(pack: dict, doc_urls) -> dict:
-    """★ 근거 팩을 최종 선별 문서로 국한 (사용자 박제 2026-07-06 — "10개만" 일관).
-
-    수치(fact)는 그 fact 를 뽑아낸 출처 문서(source.url)가 최종 확정 문서 집합 안에
-    있을 때만 남긴다. 즉 글도 숫자도 *같은 확정 문서*에서만 나온다 (LLM 재호출 0).
-    """
-    urls = {(u or "").strip() for u in (doc_urls or set()) if u}
-    if not urls:
-        return pack
-    kept = [f for f in pack.get("facts", [])
-            if ((f.get("source") or {}).get("url") or "").strip() in urls]
-    for i, f in enumerate(kept, 1):
-        f["id"] = f"F{i}"
-    pack["facts"] = kept
-    pack["coverage"] = _measure_coverage(pack.get("plan"), kept)
-    return pack
-
-
 def evidence_brief(pack, max_facts: int = 24) -> str:
     """대본 프롬프트 주입용 근거 브리프 — 질문별 그룹 + 출처 표기.
 
@@ -369,19 +331,6 @@ def as_source_docs(pack) -> list:
             cleaned_text=f.get("statement", ""),
         ))
     return docs
-
-
-def persist_evidence(pack: dict) -> str:
-    """근거 팩 JSON 영구 박제 — 관찰 가능성 + 재수집 없이 재사용 (파일 정리 30일)."""
-    try:
-        _OUT_DIR.mkdir(parents=True, exist_ok=True)
-        safe = re.sub(r"[^\w가-힣]+", "_", (pack.get("theme") or "theme"))[:40]
-        path = _OUT_DIR / f"evidence_{datetime.now().strftime('%Y-%m-%d')}_{safe}.json"
-        path.write_text(json.dumps(pack, ensure_ascii=False, indent=1), encoding="utf-8")
-        return str(path)
-    except Exception as e:
-        log.warning(f"[evidence] 박제 실패: {e}")
-        return ""
 
 
 def _label_batch(statements: list[str]) -> list[str]:
@@ -473,7 +422,7 @@ def facts_to_datasets(pack: dict, max_datasets: int = 24) -> list[dict]:
 
 
 __all__ = [
-    "build_evidence_pack", "coverage_gaps", "merge_pack",
-    "evidence_brief", "as_source_docs", "persist_evidence",
+    "build_evidence_pack",
+    "evidence_brief", "as_source_docs",
     "facts_to_datasets",
 ]

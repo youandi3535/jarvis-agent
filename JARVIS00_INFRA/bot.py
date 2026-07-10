@@ -15,6 +15,8 @@ from __future__ import annotations
 import os, sys, time, threading, logging, requests, uuid as _uuid
 from pathlib import Path
 
+from shared.notify import call_with_hard_timeout
+
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
@@ -69,26 +71,9 @@ _J02_EXT_CMDS = {
 # ════════════════════════════════════════════════════════════
 
 def _send_tg(text: str):
-    if not TG_TOKEN or not TG_CHAT_ID:
-        log.warning("[봇] _send_tg 스킵: TOKEN 또는 CHAT_ID 없음")
-        return
     try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown"},
-            timeout=10,
-        )
-        if not r.json().get("ok"):
-            desc = r.json().get("description", "")
-            log.warning(f"[봇] sendMessage 실패 ({r.status_code}): {desc}")
-            if "can't parse" in desc or "parse" in desc.lower():
-                r2 = requests.post(
-                    f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                    json={"chat_id": TG_CHAT_ID, "text": text},
-                    timeout=10,
-                )
-                if not r2.json().get("ok"):
-                    log.warning(f"[봇] plain text 재시도도 실패: {r2.json().get('description')}")
+        from shared.notify import send_tg
+        send_tg(text)
     except Exception as e:
         log.warning(f"[봇] 텔레그램 전송 오류: {e}")
         _g_report("infra", e, module=__name__)
@@ -96,20 +81,9 @@ def _send_tg(text: str):
 
 def _send_to(chat_id: str, text: str):
     """특정 chat_id 에게 응답 전송 (팀원·소유자 구분 응답용)."""
-    if not TG_TOKEN or not chat_id:
-        return
     try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-            timeout=10,
-        )
-        if not r.json().get("ok"):
-            requests.post(
-                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                json={"chat_id": chat_id, "text": text},
-                timeout=10,
-            )
+        from shared.notify import send_tg
+        send_tg(text, chat_id=chat_id)
     except Exception as e:
         log.warning(f"[봇] _send_to 오류 (chat_id={chat_id}): {e}")
 
@@ -126,34 +100,10 @@ def _answer_callback(callback_id: str, text: str = "처리 완료"):
 
 
 def _send_tg_buttons(text: str, buttons: list[list[dict]]):
-    """인라인 키보드 버튼이 달린 메시지 전송. Markdown 실패 시 plain text 재시도."""
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
+    """인라인 키보드 버튼이 달린 메시지 전송."""
     try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={
-                "chat_id": TG_CHAT_ID,
-                "text": text,
-                "parse_mode": "Markdown",
-                "reply_markup": {"inline_keyboard": buttons},
-            },
-            timeout=10,
-        )
-        if not r.json().get("ok"):
-            desc = r.json().get("description", "")
-            log.warning(f"[봇] _send_tg_buttons Markdown 실패: {desc}")
-            r2 = requests.post(
-                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                json={
-                    "chat_id": TG_CHAT_ID,
-                    "text": text,
-                    "reply_markup": {"inline_keyboard": buttons},
-                },
-                timeout=10,
-            )
-            if not r2.json().get("ok"):
-                log.warning(f"[봇] _send_tg_buttons plain text 재시도도 실패: {r2.json().get('description')}")
+        from shared.notify import send_tg_with_buttons
+        send_tg_with_buttons(text, buttons)
     except Exception as e:
         log.warning(f"[봇] _send_tg_buttons 오류: {e}")
         _g_report("infra", e, module=__name__)
@@ -914,10 +864,12 @@ def run_bot_polling(shutdown_event: threading.Event):
 
     offset = 0
     try:
-        _r = requests.get(
+        _r = call_with_hard_timeout(
+            requests.get,
             f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
             params={"offset": -1, "timeout": 0},
             timeout=10,
+            hard_timeout=15,
         )
         _results = _r.json().get("result", [])
         if _results:
@@ -928,13 +880,15 @@ def run_bot_polling(shutdown_event: threading.Event):
 
     while not shutdown_event.is_set():
         try:
-            resp = requests.get(
+            resp = call_with_hard_timeout(
+                requests.get,
                 f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
                 params={
                     "offset": offset, "timeout": 30,
                     "allowed_updates": ["message", "callback_query"],
                 },
                 timeout=35,
+                hard_timeout=45,
             )
 
             if resp.status_code == 409:

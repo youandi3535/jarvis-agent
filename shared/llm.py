@@ -387,29 +387,6 @@ def _pace_spawn() -> None:
         _LLM_LAST_SPAWN[0] = _now
 
 
-async def _invoke_sdk_async(
-    prompt: str,
-    model: str = _DEFAULT_MODEL_ID,
-    system: str = "",
-) -> str:
-    """claude-code-sdk 비동기 호출 — Max 구독 OAuth, API 비용 0."""
-    from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
-    from claude_code_sdk._errors import MessageParseError, ProcessError
-    full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
-    full_prompt = _sanitize_prompt(full_prompt)   # ★ embedded null byte 크래시 차단
-    options = ClaudeCodeOptions(model=model, env={"ANTHROPIC_API_KEY": ""})
-    parts: list[str] = []
-    try:
-        async for msg in query(prompt=full_prompt, options=options):
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, TextBlock):
-                        parts.append(block.text)
-    except (MessageParseError, ProcessError):
-        pass  # rate_limit_event 등 SDK 미지원 메시지 — 응답은 이미 수집됨
-    return "".join(parts)
-
-
 def _run_sdk_sync(
     prompt: str,
     model: str = _DEFAULT_MODEL_ID,
@@ -427,10 +404,17 @@ def _run_sdk_sync(
     parts: list[str] = []
     throttled = {"v": False}
 
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        _wd_beat = lambda: None
+
     async def _collect():
         nonlocal parts
+        _wd_beat()
         with anyio.fail_after(timeout):
             async for msg in query(prompt=full_prompt, options=options):
+                _wd_beat()   # ★ 메시지 수신 = 진행 신호 (SDK 살아있음 — 워치독 오탐 freeze-kill 방지)
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
                         if isinstance(block, TextBlock):
@@ -479,9 +463,16 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
                                 cwd=cwd, env={"ANTHROPIC_API_KEY": ""})
     parts: list[str] = []
 
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        _wd_beat = lambda: None
+
     async def _collect():
+        _wd_beat()
         with anyio.fail_after(timeout):
             async for msg in query(prompt=full, options=options):
+                _wd_beat()   # ★ 메시지 수신 = 진행 신호 (SDK 살아있음 — 워치독 오탐 freeze-kill 방지)
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
                         if isinstance(block, TextBlock):
@@ -692,12 +683,6 @@ class ClaudeSDKLLM:
 
 # ── 진단 ──────────────────────────────────────────────────────
 
-def render_catalog() -> str:
-    lines = [f"  {a:12s} {s.model_id:40s} max_tokens={s.max_tokens}, temp={s.temperature}"
-             for a, s in MODELS.items()]
-    return "\n".join(lines)
-
-
 # ── CrewAI BaseLLM virtual subclass 등록 ────────────────────────
 # ClaudeSDKLLM 은 crewai 의 LLM/BaseLLM 을 상속하지 않으므로
 # crewai create_llm() 이 강제 변환 시도 → "claude-sonnet-5" 모델을
@@ -717,6 +702,6 @@ ClaudeCLILLM = ClaudeSDKLLM
 __all__ = [
     "ModelSpec", "MODELS", "get_spec",
     "chat", "invoke_text", "invoke_vision",
-    "is_langchain_available", "render_catalog",
+    "is_langchain_available",
     "ClaudeSDKLLM", "ClaudeCLILLM",
 ]

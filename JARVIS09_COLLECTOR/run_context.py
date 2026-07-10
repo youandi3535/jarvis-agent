@@ -68,11 +68,6 @@ def new_run(theme: str, platform: str = "naver", post_type: str = "theme") -> Ru
     return ctx
 
 
-def active_ctx() -> RunContext | None:
-    """현재 활성 RunContext (글 생성 밖에서는 None)."""
-    return _active_ctx
-
-
 def _rebind_globals(ctx: RunContext) -> None:
     """모든 관련 모듈의 전역 상태를 ctx 의 dict 로 교체 (lazy import)."""
     try:

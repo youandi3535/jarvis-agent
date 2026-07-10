@@ -310,16 +310,8 @@ def log(msg: str):
 # ══════════════════════════════════════════
 
 def send_telegram(msg: str):
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": msg},
-            timeout=10,
-        )
-    except Exception as e:
-        log(f"⚠️ 텔레그램 오류: {e}")
+    from shared.notify import send_tg
+    send_tg(msg)
 
 
 def get_telegram_updates():
@@ -368,7 +360,7 @@ def get_result_path(theme: str) -> Path:
 
 def fetch_kor_counts(theme: str) -> dict:
     """각 플랫폼 실제 발행 URL 크롤링 → 한글 글자수 반환. {naver: N, tistory: N}"""
-    import re as _re, sqlite3, requests as _req
+    import re as _re, requests as _req
 
     _headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
@@ -376,8 +368,8 @@ def fetch_kor_counts(theme: str) -> dict:
         return sum(1 for ch in text if "가" <= ch <= "힣")
 
     # DB에서 URL 조회
-    from shared.db import DB_PATH as _jarvis_db
-    con = sqlite3.connect(str(_jarvis_db))
+    from shared.db import get_db as _get_db
+    con = _get_db()
     rows = con.execute(
         "SELECT platform, url FROM post_analysis "
         "WHERE theme=? ORDER BY created_at DESC LIMIT 6",

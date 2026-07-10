@@ -49,10 +49,18 @@ class PollinationsProvider:
         encoded = urllib.parse.quote(prompt_en, safe="")
         url = _BASE.format(prompt=encoded) + params
 
+        try:
+            from JARVIS00_INFRA.watchdog import beat as _wd_beat
+        except Exception:
+            def _wd_beat() -> None: pass  # watchdog 부재 시 no-op
+
         last_err: Exception | None = None
         _saw_queue_full = False
         _consecutive_queue_full = 0
         for attempt in range(_MAX_RETRIES):
+            # ★ 전역 하트비트 (사용자 박제 2026-07-06): 재시도/대기도 진행 신호 —
+            #   느린 Pollinations 큐(최악 ~300초)를 freeze 워치독이 오탐하지 않도록.
+            _wd_beat()
             if attempt > 0:
                 # ★ 402 Queue full 시 전용 대기 (큐 해소에 더 긴 시간 필요)
                 if _saw_queue_full:

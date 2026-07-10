@@ -116,14 +116,6 @@ def list_intents() -> list[str]:
     return sorted(seen)
 
 
-def requires_approval(intent: str) -> bool:
-    """이 intent 가 휴먼 승인 필수인가."""
-    for c in _REGISTRY.values():
-        if intent in c.requires_approval:
-            return True
-    return False
-
-
 def render_for_router_prompt() -> str:
     """마스터 라우터 LLM prompt 에 박을 capability 카탈로그 (자연어).
 

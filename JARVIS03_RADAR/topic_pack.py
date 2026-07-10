@@ -140,6 +140,19 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
                 except Exception:
                     trends = None
     if not trends or not (trends.get("scored_keywords") or trends.get("recommendations")):
+        # ★ 당일 캐시 부재 — 즉석 실제 수집 (사용자 박제 2026-07-10: 기존엔 캐시 재조회만
+        #   하고 "즉석 실행"이라 주장했으나 실제 수집을 트리거하지 않아 아침 06시 잡이
+        #   지연/유실되면 자가 치유가 불가능했음 — collect_today() 로 진짜 수집 수행)
+        log.info("[topic_pack] 당일 트렌드 캐시 없음 — 즉석 수집 실행")
+        try:
+            from JARVIS03_RADAR.radar_main import collect_today as _collect, save as _save
+            trends = _collect()
+            _save(trends)
+            log.info("[topic_pack] 즉석 트렌드 수집 완료")
+        except Exception as e:
+            log.warning(f"[topic_pack] 즉석 트렌드 수집 실패: {e}")
+            trends = None
+    if not trends or not (trends.get("scored_keywords") or trends.get("recommendations")):
         log.info("[topic_pack] 트렌드 데이터 없음 — 팩 생성 스킵")
         return None
 

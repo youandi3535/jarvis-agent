@@ -24,8 +24,28 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 BACKUP_DIR  = Path(__file__).parent / "backups"
 
 
+class _AutoCloseConnection(sqlite3.Connection):
+    """`with get_db() as conn:` 종료 시 커밋/롤백뿐 아니라 연결 자체도 닫는다.
+
+    ★ ERRORS [318][3322] 재발 방지 — 표준 sqlite3.Connection 의 컨텍스트 매니저는
+    트랜잭션(commit/rollback)만 관리하고 close() 는 하지 않는다. 148곳 호출부가
+    전부 `with get_db() as conn:` 관용구를 쓰는데 이 gotcha 를 몰라 연결이 누적
+    누수 → WAL 체크포인트 정체 → DB 비대화(453MB) → get_db() 자체가 무기한 대기
+    → 데몬 hang(heartbeat 정체) 로 이어졌다. 단일 진입점(get_db)에서 한 번만 고치면
+    148곳 호출부 전부 해소된다.
+    """
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return super().__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self.close()
+
+
 def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH), timeout=10, check_same_thread=False)
+    conn = sqlite3.connect(
+        str(DB_PATH), timeout=10, check_same_thread=False, factory=_AutoCloseConnection
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")  # 다중 에이전트 동시 접근 허용
     return conn
@@ -449,25 +469,6 @@ def save_trends(date_str: str, scored_keywords: list):
         )
 
 
-def get_trend_history(days: int = 14) -> list:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT date, keyword, sector, score, opportunity_score FROM trends "
-            "ORDER BY date DESC, opportunity_score DESC LIMIT ?",
-            (days * 30,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_keyword_trend_history(keyword: str) -> list:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT date, score, opportunity_score FROM trends WHERE keyword = ? ORDER BY date",
-            (keyword,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
 # ── Pipeline ──────────────────────────────────────────────────
 
 def push_pipeline(items: list):
@@ -538,16 +539,6 @@ def get_recent_published_themes(days: int = 30) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_pipeline_history(limit: int = 50) -> list:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT id, theme, sector, opportunity_score, status, created_at, processed_at "
-            "FROM pipeline ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
 # ── Posts ─────────────────────────────────────────────────────
 
 def save_post(theme: str, platform: str = "all", status: str = "published", source: str = "scheduled"):
@@ -564,17 +555,6 @@ def save_post(theme: str, platform: str = "all", status: str = "published", sour
                    last_used  = datetime('now','localtime')""",
             (theme,),
         )
-
-
-def get_post_history(days: int = 30) -> list:
-    cutoff = (date.today() - timedelta(days=days)).isoformat()
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT theme, platform, status, source, created_at FROM posts "
-            "WHERE created_at >= ? ORDER BY created_at DESC",
-            (cutoff,),
-        ).fetchall()
-    return [dict(r) for r in rows]
 
 
 # ── Performance ───────────────────────────────────────────────
@@ -600,32 +580,6 @@ def save_performance(date_str: str, naver: int = None, tistory: int = None):
                    updated_at    = datetime('now','localtime')""",
             (date_str, naver, tistory),
         )
-
-
-def update_keyword_views(date_str: str):
-    """당일 성과를 바탕으로 keyword_performance 조회수 업데이트 (ANALYST 핵심)."""
-    with get_db() as conn:
-        perf = conn.execute(
-            "SELECT naver_views, tistory_views FROM performance WHERE date = ?",
-            (date_str,),
-        ).fetchone()
-        if not perf:
-            return
-        total_views = sum(v or 0 for v in [perf["naver_views"], perf["tistory_views"]])
-        posts_today = conn.execute(
-            "SELECT theme FROM posts WHERE date(created_at) = ?", (date_str,)
-        ).fetchall()
-        if not posts_today:
-            return
-        views_per_post = total_views / len(posts_today)
-        for post in posts_today:
-            conn.execute(
-                """UPDATE keyword_performance SET
-                    best_views = CASE WHEN best_views > ? THEN best_views ELSE ? END,
-                    avg_views  = (avg_views * (post_count - 1) + ?) / post_count
-                   WHERE keyword = ?""",
-                (views_per_post, views_per_post, views_per_post, post["theme"]),
-            )
 
 
 def get_keyword_performance(keyword: str) -> dict:
@@ -1005,30 +959,6 @@ def update_keyword_views_from_posts():
             )
 
 
-def get_best_publish_hour(platform: str) -> int:
-    """
-    platform별 최적 발행 시간(시) 반환.
-    성과 데이터(조회수 있는 글 2개 이상)가 충분할 때만 학습값 반환.
-    데이터 부족 시 None 반환 → 호출부에서 "현재 시간에 발행" 처리.
-    """
-    try:
-        with get_db() as conn:
-            rows = conn.execute(
-                """SELECT CAST(strftime('%H', created_at) AS INTEGER) as hour,
-                          AVG(current_views) as avg_views, COUNT(*) as cnt
-                   FROM post_analysis
-                   WHERE platform=? AND current_views > 0
-                   GROUP BY hour HAVING cnt >= 2
-                   ORDER BY avg_views DESC LIMIT 1""",
-                (platform,),
-            ).fetchall()
-            if rows:
-                return rows[0]["hour"]
-    except Exception:
-        pass
-    return None  # 데이터 부족 — 현재 시간에 발행
-
-
 def get_recycle_candidates() -> list:
     """
     재활용 후보 글 목록.
@@ -1042,43 +972,6 @@ def get_recycle_candidates() -> list:
                  AND is_revised = 0
                ORDER BY current_views DESC
                LIMIT 20"""
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_today_posts() -> list:
-    """오늘 발행된 글 목록 (성과 대시보드용)."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT id, platform, theme, title, url, current_views, status, created_at
-               FROM post_analysis
-               WHERE date(created_at) = date('now', 'localtime')
-               ORDER BY created_at DESC"""
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_pipeline_with_sector() -> list:
-    """파이프라인 목록 + 섹터 정보 (콘텐츠 캘린더용)."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT id, theme, sector, opportunity_score, status, created_at
-               FROM pipeline
-               WHERE status IN ('pending', 'scheduled', 'suggested')
-               ORDER BY opportunity_score DESC
-               LIMIT 30"""
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_performance_history(days: int = 14) -> list:
-    """일자별 성과 이력 (성과현황 차트용)."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT date, naver_views, tistory_views
-               FROM performance
-               ORDER BY date DESC LIMIT ?""",
-            (days,),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -1134,420 +1027,6 @@ def is_favorite(keyword: str) -> bool:
             "SELECT 1 FROM keyword_favorites WHERE keyword=?", (keyword,)
         ).fetchone()
     return bool(row)
-
-
-# ── 라이프사이클 분류 ─────────────────────────────────────────
-
-def classify_lifecycle(history: list) -> str:
-    """trends 14일 히스토리 → Emerging/Rising/Peak/Declining/Dead.
-
-    history: [{date, score}, ...] 시간순 정렬 가정. 빈 리스트면 'Unknown'.
-    """
-    if not history:
-        return "Unknown"
-    scores = [float(h.get("score", 0) or 0) for h in history]
-    n = len(scores)
-    if n == 1:
-        return "Emerging"
-    recent = scores[-3:] if n >= 3 else scores
-    older  = scores[:-3] if n >= 6 else scores[:max(1, n // 2)]
-    avg_recent = sum(recent) / len(recent)
-    avg_older  = sum(older)  / max(1, len(older))
-    peak       = max(scores)
-
-    # Dead — 거의 0
-    if avg_recent < 5 and peak < 30:
-        return "Dead"
-    # Declining — 최근이 과거보다 30% 이상 하락
-    if avg_older > 0 and avg_recent < avg_older * 0.7:
-        return "Declining"
-    # Peak — 최고점이 최근 3일 안에 있고 점수도 높음
-    if peak >= 70 and scores.index(peak) >= n - 3:
-        return "Peak"
-    # Rising — 최근이 과거보다 20% 이상 상승
-    if avg_older > 0 and avg_recent > avg_older * 1.2:
-        return "Rising"
-    # 신규 (히스토리 짧거나 점수 낮은데 양수)
-    if n <= 3 or avg_recent < 30:
-        return "Emerging"
-    return "Rising"
-
-
-# ── Action Board ──────────────────────────────────────────────
-
-def get_action_board() -> dict:
-    """첫 화면 액션 카드 데이터.
-    Returns: {high_opp, declining, recycle, golden_time, insights}
-    """
-    today = date.today().isoformat()
-    out   = {"high_opp": [], "declining": [], "recycle": [], "golden_time": {}, "insights": []}
-
-    with get_db() as conn:
-        # 1) 즉시 발행 추천 — 오늘 트렌드 중 opp 80+ 미발행
-        rows = conn.execute(
-            """SELECT t.keyword, t.sector, t.score, t.opportunity_score, t.source
-                 FROM trends t
-                WHERE t.date = ?
-                  AND t.opportunity_score >= 80
-                  AND NOT EXISTS (
-                      SELECT 1 FROM post_analysis p WHERE p.theme = t.keyword
-                  )
-                ORDER BY t.opportunity_score DESC
-                LIMIT 5""",
-            (today,),
-        ).fetchall()
-        out["high_opp"] = [dict(r) for r in rows]
-
-        # 2) 식어가는 키워드 — 14일 내 발행했고 keyword_performance 데이터 있는데 최근 트렌드 점수 하락
-        rows = conn.execute(
-            """SELECT k.keyword, k.avg_views, k.last_used,
-                      (SELECT score FROM trends WHERE keyword=k.keyword ORDER BY date DESC LIMIT 1) AS recent_score,
-                      (SELECT AVG(score) FROM trends WHERE keyword=k.keyword AND date >= date('now','-14 days')) AS avg_score
-                 FROM keyword_performance k
-                WHERE k.last_used >= date('now','-30 days')"""
-        ).fetchall()
-        for r in rows:
-            d = dict(r)
-            recent = d.get("recent_score") or 0
-            avg    = d.get("avg_score") or 0
-            if avg and recent < avg * 0.6:
-                out["declining"].append(d)
-        out["declining"] = sorted(out["declining"], key=lambda x: -(x.get("avg_views") or 0))[:5]
-
-        # 3) 재활용 후보 — 90~180일 전 잘 됐던 글 (조회수 상위) 중 재발행 안 한 테마
-        rows = conn.execute(
-            """SELECT theme, MAX(current_views) AS best_views, MIN(date(created_at)) AS first_date
-                 FROM post_analysis
-                WHERE date(created_at) BETWEEN date('now','-180 days') AND date('now','-90 days')
-                  AND current_views > 50
-                GROUP BY theme
-                HAVING NOT EXISTS (
-                    SELECT 1 FROM post_analysis p2
-                     WHERE p2.theme = post_analysis.theme
-                       AND date(p2.created_at) > date('now','-30 days')
-                )
-                ORDER BY best_views DESC
-                LIMIT 5"""
-        ).fetchall()
-        out["recycle"] = [dict(r) for r in rows]
-
-        # 4) 골든타임 — 플랫폼별 최적 발행 시간 vs 현재 시각
-        from datetime import datetime as _dt
-        now_h = _dt.now().hour
-        for plat in ("naver", "tistory"):
-            row = conn.execute(
-                """SELECT CAST(strftime('%H', created_at) AS INTEGER) AS hh,
-                          AVG(current_views) AS avg_v,
-                          COUNT(*) AS cnt
-                     FROM post_analysis
-                    WHERE platform = ? AND current_views > 0
-                    GROUP BY hh
-                   HAVING cnt >= 2
-                    ORDER BY avg_v DESC
-                    LIMIT 1""",
-                (plat,),
-            ).fetchone()
-            if row:
-                best_h    = row["hh"]
-                avg_v     = row["avg_v"] or 0
-                hours_off = abs(best_h - now_h)
-                out["golden_time"][plat] = {
-                    "best_hour": best_h,
-                    "avg_views": int(avg_v),
-                    "is_now":    hours_off <= 1,
-                    "hours_off": hours_off,
-                }
-
-    # 5) 인사이트 자동 생성 (데이터 기반)
-    insights = []
-    if out["high_opp"]:
-        kw = out["high_opp"][0]
-        insights.append(f"🚀 *{kw['keyword']}* — 기회점수 {kw['opportunity_score']:.0f}, 즉시 발행 추천")
-    if out["declining"]:
-        insights.append(f"📉 식어가는 키워드 *{len(out['declining'])}개* — 더 늦으면 효과 ↓")
-    if out["recycle"]:
-        kw = out["recycle"][0]
-        insights.append(f"🔄 *{kw['theme']}* — 과거 {kw['best_views']:,}뷰, 재활용 시점")
-    out["insights"] = insights
-
-    return out
-
-
-# ── Funnel 메트릭 ─────────────────────────────────────────────
-
-def get_funnel_metrics(days: int = 30) -> dict:
-    """추천→큐→발행→조회 단계별 카운트 + 전환율."""
-    with get_db() as conn:
-        suggested = conn.execute(
-            "SELECT COUNT(*) FROM pipeline WHERE date(created_at) >= date('now',?)",
-            (f"-{days} days",),
-        ).fetchone()[0]
-        approved = conn.execute(
-            "SELECT COUNT(*) FROM pipeline "
-            " WHERE date(created_at) >= date('now',?) AND status IN ('approved','published')",
-            (f"-{days} days",),
-        ).fetchone()[0]
-        published = conn.execute(
-            "SELECT COUNT(*) FROM post_analysis WHERE date(created_at) >= date('now',?)",
-            (f"-{days} days",),
-        ).fetchone()[0]
-        with_views = conn.execute(
-            "SELECT COUNT(*), COALESCE(AVG(current_views),0), COALESCE(SUM(current_views),0) "
-            "  FROM post_analysis WHERE date(created_at) >= date('now',?) AND current_views > 0",
-            (f"-{days} days",),
-        ).fetchone()
-    return {
-        "suggested":  suggested,
-        "approved":   approved,
-        "published":  published,
-        "with_views": with_views[0],
-        "avg_views":  round(with_views[1] or 0, 1),
-        "sum_views":  with_views[2] or 0,
-    }
-
-
-def get_opportunity_vs_views(days: int = 60) -> list:
-    """opportunity_score (pipeline) vs 실측 조회수 (post_analysis) — 자가검증용 산점도."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT p.theme, p.opportunity_score, pa.current_views, pa.platform
-                 FROM pipeline p
-                 JOIN post_analysis pa ON pa.theme = p.theme
-                WHERE date(p.created_at) >= date('now',?)
-                  AND pa.current_views > 0
-                  AND p.opportunity_score > 0""",
-            (f"-{days} days",),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-# ── 수정 효과 (Did it work?) ──────────────────────────────────
-
-def get_revision_effect(days: int = 60) -> dict:
-    """수정 적용 글 vs 미적용 글의 평균 조회수 비교."""
-    with get_db() as conn:
-        revised = conn.execute(
-            """SELECT COUNT(*), COALESCE(AVG(current_views),0)
-                 FROM post_analysis
-                WHERE is_revised = 1 AND current_views > 0
-                  AND date(created_at) >= date('now',?)""",
-            (f"-{days} days",),
-        ).fetchone()
-        non_revised = conn.execute(
-            """SELECT COUNT(*), COALESCE(AVG(current_views),0)
-                 FROM post_analysis
-                WHERE is_revised = 0 AND status IN ('rejected','approved','revised')
-                  AND current_views > 0
-                  AND date(created_at) >= date('now',?)""",
-            (f"-{days} days",),
-        ).fetchone()
-        per_post = conn.execute(
-            """SELECT theme, platform, current_views, is_revised, status,
-                      decided_at, revised_at, created_at
-                 FROM post_analysis
-                WHERE current_views > 0
-                  AND date(created_at) >= date('now',?)
-                ORDER BY created_at DESC
-                LIMIT 50""",
-            (f"-{days} days",),
-        ).fetchall()
-    revised_n,  revised_avg     = revised
-    non_n,      non_avg         = non_revised
-    lift_pct = round(((revised_avg / non_avg) - 1) * 100, 1) if non_avg else 0
-    return {
-        "revised_n":   revised_n,
-        "revised_avg": round(revised_avg or 0, 1),
-        "non_n":       non_n,
-        "non_avg":     round(non_avg or 0, 1),
-        "lift_pct":    lift_pct,
-        "per_post":    [dict(r) for r in per_post],
-    }
-
-
-# ── 운영 메트릭 ───────────────────────────────────────────────
-
-def get_ops_metrics() -> dict:
-    """시스템 탭용 운영 통계."""
-    with get_db() as conn:
-        today = conn.execute(
-            "SELECT COUNT(*) FROM post_analysis WHERE date(created_at)=date('now','localtime')"
-        ).fetchone()[0]
-        pending = conn.execute(
-            "SELECT COUNT(*) FROM post_analysis WHERE status='pending_approval'"
-        ).fetchone()[0]
-        auto_approved = conn.execute(
-            """SELECT COUNT(*) FROM post_analysis
-                WHERE status IN ('approved','revised')
-                  AND revision_patch LIKE '%"auto":%true%'
-                  AND date(decided_at) >= date('now','-7 days')"""
-        ).fetchone()[0]
-        manual_approved = conn.execute(
-            """SELECT COUNT(*) FROM post_analysis
-                WHERE status IN ('approved','revised')
-                  AND (revision_patch IS NULL OR revision_patch NOT LIKE '%"auto":%true%')
-                  AND date(decided_at) >= date('now','-7 days')"""
-        ).fetchone()[0]
-        events_today = conn.execute(
-            "SELECT COUNT(*) FROM events WHERE date(created_at)=date('now','localtime')"
-        ).fetchone()[0]
-        events_total = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        pa_total = conn.execute("SELECT COUNT(*) FROM post_analysis").fetchone()[0]
-        trends_total = conn.execute("SELECT COUNT(*) FROM trends").fetchone()[0]
-
-    db_size_mb = round(DB_PATH.stat().st_size / (1024 * 1024), 2) if DB_PATH.exists() else 0
-    backups = []
-    if BACKUP_DIR.exists():
-        for p in sorted(BACKUP_DIR.glob("jarvis_*.sqlite"), reverse=True):
-            try:
-                d = date.fromisoformat(p.stem.replace("jarvis_", ""))
-                backups.append({"date": d.isoformat(), "size_kb": p.stat().st_size // 1024})
-            except Exception:
-                continue
-
-    return {
-        "today_posts":    today,
-        "pending":        pending,
-        "auto_approved":  auto_approved,
-        "manual_approved": manual_approved,
-        "events_today":   events_today,
-        "events_total":   events_total,
-        "pa_total":       pa_total,
-        "trends_total":   trends_total,
-        "db_size_mb":     db_size_mb,
-        "backups":        backups[:30],
-    }
-
-
-def get_event_timeline(days: int = 1) -> list:
-    """최근 N일 이벤트 시계열 (시스템 탭 타임라인용)."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT id, event_type, source, payload, created_at
-                 FROM events
-                WHERE created_at >= datetime('now','localtime',?)
-                ORDER BY created_at DESC
-                LIMIT 200""",
-            (f"-{days} days",),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-# ── 사용자 설정 (key-value) ────────────────────────────────────
-
-def get_setting(key: str, default=None):
-    """user_settings 단일 키 조회. JSON 디코드 자동."""
-    with get_db() as conn:
-        row = conn.execute("SELECT value FROM user_settings WHERE key=?", (key,)).fetchone()
-    if not row:
-        return default
-    raw = row["value"]
-    try:
-        return json.loads(raw)
-    except Exception:
-        return raw if raw is not None else default
-
-
-def set_setting(key: str, value) -> None:
-    """user_settings 저장 (str/int/dict/list 자동 JSON 인코딩)."""
-    serialized = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-    with get_db() as conn:
-        conn.execute(
-            "INSERT INTO user_settings(key,value,updated_at) VALUES(?,?,datetime('now','localtime')) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-            (key, serialized),
-        )
-
-
-def get_all_settings() -> dict:
-    with get_db() as conn:
-        rows = conn.execute("SELECT key,value FROM user_settings").fetchall()
-    out = {}
-    for r in rows:
-        try:
-            out[r["key"]] = json.loads(r["value"])
-        except Exception:
-            out[r["key"]] = r["value"]
-    return out
-
-
-# ── Keyword Performance 학습 자산 시각화 ──────────────────────
-
-def get_top_keywords(limit: int = 20, min_posts: int = 1) -> list:
-    """keyword_performance 학습된 상위 키워드 (avg_views * post_count 가중).
-    total_views 는 (avg_views * post_count) 로 산출."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT keyword, avg_views, post_count, best_views, last_used,
-                      (avg_views * post_count) AS total_views
-                 FROM keyword_performance
-                WHERE post_count >= ?
-                ORDER BY (avg_views * post_count) DESC
-                LIMIT ?""",
-            (min_posts, limit),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_keyword_perf_scatter(limit: int = 200) -> list:
-    """post_count vs avg_views 산점도용 — 학습된 모든 키워드."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT keyword, avg_views, post_count, last_used,
-                      (avg_views * post_count) AS total_views
-                 FROM keyword_performance
-                WHERE avg_views > 0
-                ORDER BY post_count DESC
-                LIMIT ?""",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-# ── 글별 수정 라이프사이클 (Did it work? 글 단위) ──────────────
-
-def get_revision_lifecycle(days: int = 60, limit: int = 60) -> list:
-    """글별 발행→분석→수정 시간선 + 조회수 (lifecycle 타임라인용)."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT id, theme, platform, status, current_views,
-                      is_revised, created_at, analyzed_at, decided_at, revised_at
-                 FROM post_analysis
-                WHERE date(created_at) >= date('now',?)
-                ORDER BY created_at DESC
-                LIMIT ?""",
-            (f"-{days} days", limit),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-# ── 다음 수집 스케줄 안내 ──────────────────────────────────────
-
-def next_collection_eta() -> dict:
-    """jarvis_daemon.py 의 트렌드 수집 스케줄 (10:00, 17:00, 21:00) 기준 다음 ETA."""
-    from datetime import datetime as _dt
-    now = _dt.now()
-    fixed = [(10, 0), (17, 0), (21, 0)]
-    today_eta = []
-    for h, m in fixed:
-        cand = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        if cand > now:
-            today_eta.append(cand)
-    if today_eta:
-        nxt = today_eta[0]
-    else:
-        # 오늘 일정 끝 → 내일 첫 일정
-        nxt = now.replace(hour=fixed[0][0], minute=fixed[0][1], second=0, microsecond=0)
-        nxt = nxt.replace(day=now.day) if now.hour < fixed[0][0] else nxt
-        from datetime import timedelta as _td
-        if nxt <= now:
-            nxt += _td(days=1)
-    delta = nxt - now
-    mins = int(delta.total_seconds() // 60)
-    return {
-        "next_at":   nxt.strftime("%Y-%m-%d %H:%M"),
-        "minutes":   mins,
-        "schedule":  "10:00 / 17:00 / 21:00 KST",
-    }
 
 
 # ── Maintenance (백업·정리) ───────────────────────────────────
@@ -1615,6 +1094,27 @@ def cleanup_events(days: int = 30) -> int:
     return deleted
 
 
+def cleanup_vision_history(days: int = 7) -> int:
+    """vision_agent_history 테이블에서 N일 이전 row 삭제. 삭제 row 수 반환.
+
+    ★ 30초 주기 수집(에이전트당 1행)이 무제한 누적되면 DB 가 수백MB 로 팽창해
+    get_db() 신규 커넥션 오픈이 지연되고, GUARDIAN 오케스트레이터 스레드가 그
+    커넥션 대기로 정체되면서 스케줄러 heartbeat 지연 → keeper 가 데몬을 hang
+    으로 오판해 강제 재시작하는 사고로 이어진다.
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM vision_agent_history WHERE recorded_at < datetime('now','localtime',?)",
+            (f"-{days} days",),
+        )
+        deleted = cur.rowcount
+        conn.commit()
+    if deleted:
+        with sqlite3.connect(str(DB_PATH), timeout=30) as v:
+            v.execute("VACUUM")
+    return deleted
+
+
 # ─────────────────────────────────────────────────────────────
 # 브랜드 보이스 학습 코퍼스 (style_corpus)
 # ─────────────────────────────────────────────────────────────
@@ -1647,12 +1147,6 @@ def style_corpus_upsert(
              embedding_bytes, embed_model, embed_dim, char_count,
              published_at, views),
         )
-
-
-def style_corpus_count() -> int:
-    with get_db() as conn:
-        row = conn.execute("SELECT COUNT(*) AS c FROM style_corpus").fetchone()
-    return int(row["c"]) if row else 0
 
 
 def style_corpus_unindexed_post_ids(min_chars: int = 200) -> list[int]:
@@ -1691,25 +1185,6 @@ def style_corpus_all_embeddings() -> list[dict]:
                       char_count, published_at, views
                  FROM style_corpus""").fetchall()
     return [dict(r) for r in rows]
-
-
-def style_corpus_stats() -> dict:
-    """대시보드 패널용."""
-    with get_db() as conn:
-        row = conn.execute(
-            """SELECT COUNT(*) AS n,
-                      AVG(char_count) AS avg_chars,
-                      MAX(indexed_at) AS last_indexed,
-                      MIN(published_at) AS first_published,
-                      MAX(published_at) AS last_published
-                 FROM style_corpus""").fetchone()
-        # 플랫폼 분포
-        plat = conn.execute(
-            "SELECT platform, COUNT(*) AS c FROM style_corpus GROUP BY platform"
-        ).fetchall()
-    out = dict(row) if row else {}
-    out["by_platform"] = {p["platform"]: p["c"] for p in plat}
-    return out
 
 
 def style_corpus_clear() -> int:
@@ -1806,14 +1281,6 @@ def learned_weights_latest() -> dict:
     return dict(row) if row else dict(DEFAULT_WEIGHTS)
 
 
-def learned_weights_history(limit: int = 12) -> list[dict]:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM learned_weights ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
 # ── 자가학습 — feedback_penalty ─────────────────────────────────
 
 def feedback_penalty_upsert(target: str, *, rejected_inc: int = 0,
@@ -1860,14 +1327,6 @@ def feedback_penalty_recompute_all() -> int:
             )
             n += 1
         return n
-
-
-def feedback_penalty_all() -> list[dict]:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM feedback_penalty ORDER BY penalty ASC LIMIT 50"
-        ).fetchall()
-    return [dict(r) for r in rows]
 
 
 # ── 자가학습 — keyword_embeddings ───────────────────────────────
@@ -1976,25 +1435,6 @@ def upsert_daily_review(review_date: str, payload: dict) -> None:
                   reviewed_at = datetime('now','localtime')""",
             (review_date, *vals),
         )
-
-
-def get_daily_review(review_date: str) -> dict | None:
-    with get_db() as conn:
-        r = conn.execute(
-            "SELECT * FROM daily_review WHERE review_date = ?", (review_date,)
-        ).fetchone()
-    return dict(r) if r else None
-
-
-def get_recent_daily_reviews(days: int = 7) -> list[dict]:
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT * FROM daily_review
-               WHERE review_date >= date('now','localtime',?)
-               ORDER BY review_date DESC""",
-            (f"-{int(days)} day",),
-        ).fetchall()
-    return [dict(r) for r in rows]
 
 
 # ── 누적 학습 인사이트 (learning_insights) ────────────────────────
@@ -2302,19 +1742,6 @@ def bump_llm_attempts(error_id: int) -> int:
         )
         row = conn.execute("SELECT llm_attempts FROM error_log WHERE id=?", (error_id,)).fetchone()
         return int(row["llm_attempts"]) if row and row["llm_attempts"] is not None else 1
-
-
-def get_error_resolution(error_type: str, module: str = None) -> str | None:
-    """과거에 동일 오류를 해결한 resolution 반환 (자동 수정 재활용)."""
-    with get_db() as conn:
-        row = conn.execute(
-            """SELECT resolution FROM error_log
-               WHERE error_type=? AND (module IS NULL OR module=?)
-                 AND status='fixed' AND resolution IS NOT NULL
-               ORDER BY fixed_at DESC LIMIT 1""",
-            (error_type, module),
-        ).fetchone()
-        return row["resolution"] if row else None
 
 
 def get_error_stats(days: int = 7) -> dict:

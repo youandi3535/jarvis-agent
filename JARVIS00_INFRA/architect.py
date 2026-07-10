@@ -994,24 +994,6 @@ def _generate_exec_plan_from_spec(spec_md: str) -> list[dict]:
 _EXEC_PLAN_RE = re.compile(r"<exec_plan>\s*([\s\S]*?)\s*</exec_plan>", re.IGNORECASE)
 
 
-def _extract_exec_plan(text: str) -> list[dict]:
-    """LLM 출력에서 <exec_plan>...</exec_plan> JSON 추출. 실패 시 빈 리스트."""
-    m = _EXEC_PLAN_RE.search(text)
-    if not m:
-        return []
-    try:
-        raw = m.group(1).strip()
-        steps = json.loads(raw)
-        if not isinstance(steps, list):
-            return []
-        # 최소 검증: tool + args 필드 존재
-        return [s for s in steps if isinstance(s, dict) and "tool" in s and "args" in s]
-    except Exception as e:
-        log.warning(f"⚠️ architect: exec_plan JSON 파싱 실패: {e}")
-        _g_report("infra", e, module=__name__)
-        return []
-
-
 def _strip_exec_plan(text: str) -> str:
     """spec_md 에서 <exec_plan> 블록 제거 (파일 저장 전)."""
     return _EXEC_PLAN_RE.sub("", text).strip()
@@ -1183,6 +1165,5 @@ def _build_summary(parsed: dict, verdict: str, n_steps: int, n_warnings: int) ->
 __all__ = [
     "design_new_agent",
     "SPEC_TEMPLATE",
-    "_extract_exec_plan",
     "_strip_exec_plan",
 ]

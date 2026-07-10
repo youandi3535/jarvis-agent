@@ -205,13 +205,7 @@ def _build_emergency_trends() -> dict:
 #  2. 주제 선정 — 경제/금융 관련 트렌드 필터링
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-_ECON_SECTORS = {
-    # JARVIS03 실제 섹터명 기준 (확인: 2026-05-08)
-    '경제·경기', '금융·투자', '에너지·환경', 'IT·테크',
-    # 추후 추가될 수 있는 섹터명
-    '금융·은행', '주식·투자', '부동산', '산업·기업',
-    '기술·IT', '에너지·자원', '무역·통상', '정책·규제', '글로벌·해외',
-}
+from JARVIS03_RADAR.topic_pack import _ECON_SECTORS  # SSOT: topic_pack.py 단일 진입점
 _EXCLUDE_SECTORS = {'스포츠', '연예·문화', '정치·사회', '날씨·재난', '기타', '건강·의료', '사회·이슈'}
 
 # ── 최근 사용 키워드 추적 (중복 발행 방지) ────────────────────────
@@ -464,14 +458,8 @@ def select_naver_topic(trends: dict, ts_keyword: str = '') -> dict | None:
 
 def _tg(msg: str) -> None:
     try:
-        import requests
-        token = os.getenv('TELEGRAM_TOKEN', '')
-        chat  = os.getenv('TELEGRAM_CHAT_ID', '')
-        if token and chat:
-            requests.post(
-                f'https://api.telegram.org/bot{token}/sendMessage',
-                json={'chat_id': chat, 'text': msg, 'parse_mode': 'HTML'},
-                timeout=5)
+        from shared.notify import send_tg
+        send_tg(msg, parse_mode="HTML")
     except Exception:
         pass
 
