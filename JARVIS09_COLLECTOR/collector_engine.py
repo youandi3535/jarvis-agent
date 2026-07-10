@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import os as _os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FutureTimeout
 from .models import RawDocument, CollectionResult
 from .cleaner import clean_document
 
@@ -85,12 +85,27 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
         from JARVIS00_INFRA.watchdog import beat  # 지역 import (순환 방지)
     except Exception:
         def beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as exe:
-        futures = {exe.submit(_run_provider, p): p.source_type for p in _PROVIDERS}
-        for fut in as_completed(futures):
-            beat()   # ★ 프로바이더 결과 취합마다 진행신호 — 장시간 HTTP 수집 freeze 오탐 방지
-            docs = fut.result()
+    # ★ shutdown(wait=False): 타임아웃된 프로바이더 스레드를 버리고 즉시 진행
+    #   (yfinance 등 무한 hang 방지 — ERRORS [401])
+    exe = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
+    futures = {exe.submit(_run_provider, p): p.source_type for p in _PROVIDERS}
+    try:
+        for fut in as_completed(futures, timeout=90):  # 전체 90초 상한
+            beat()
+            try:
+                docs = fut.result(timeout=30)  # 개별 프로바이더 30초 상한
+            except _FutureTimeout:
+                ptype = futures.get(fut, "unknown")
+                log.warning(f"[Engine] {ptype} 30초 타임아웃 — 스킵")
+                docs = []
+            except Exception as e:
+                log.warning(f"[Engine] 프로바이더 결과 취합 실패: {e}")
+                docs = []
             raw_docs.extend(docs)
+    except _FutureTimeout:
+        log.warning("[Engine] 전체 수집 90초 초과 — 수집된 데이터만 사용")
+    finally:
+        exe.shutdown(wait=False)  # 잔여 스레드 백그라운드로 버림
 
     # 정제 + 중복 URL 제거
     seen_urls: set[str] = set()
@@ -333,22 +348,34 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
 
     # ② 광역 스윕(기존 collect_for_theme) ∥ 질문별 조준 수집
     seen_urls: set[str] = set()
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as exe:
-        broad_fut = exe.submit(collect_for_theme, theme, sector)
-        q_futs = {exe.submit(_collect_for_question, q, theme, sector): q["id"]
+    # ★ shutdown(wait=False): 타임아웃된 스레드 버리고 즉시 진행 (ERRORS [401])
+    exe2 = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
+    try:
+        broad_fut = exe2.submit(collect_for_theme, theme, sector)
+        q_futs = {exe2.submit(_collect_for_question, q, theme, sector): q["id"]
                   for q in plan.get("questions", [])}
         targeted_raw: list[RawDocument] = []
-        for fut in as_completed(q_futs):
-            beat()   # ★ 질문별 조준 수집 결과 취합마다 진행신호 (freeze 오탐 방지)
-            try:
-                targeted_raw.extend(fut.result() or [])
-            except Exception as e:
-                log.debug(f"[research] 질문 {q_futs[fut]} 수집 실패: {e}")
         try:
-            broad_docs = broad_fut.result() or []
+            for fut in as_completed(q_futs, timeout=120):
+                beat()   # ★ 질문별 조준 수집 결과 취합마다 진행신호 (freeze 오탐 방지)
+                try:
+                    targeted_raw.extend(fut.result(timeout=30) or [])
+                except _FutureTimeout:
+                    log.warning(f"[research] 질문 {q_futs.get(fut)} 30초 타임아웃 — 스킵")
+                except Exception as e:
+                    log.debug(f"[research] 질문 {q_futs.get(fut)} 수집 실패: {e}")
+        except _FutureTimeout:
+            log.warning("[research] 질문별 조준 수집 120초 초과 — 수집된 데이터만 사용")
+        try:
+            broad_docs = broad_fut.result(timeout=120) or []
+        except _FutureTimeout:
+            log.warning("[research] 광역 스윕 120초 타임아웃 — 빈 결과로 계속")
+            broad_docs = []
         except Exception as e:
             log.warning(f"[research] 광역 스윕 실패: {e}")
             broad_docs = []
+    finally:
+        exe2.shutdown(wait=False)  # 잔여 스레드 백그라운드로 버림
 
     for d in broad_docs:
         seen_urls.add(d.url)
@@ -399,7 +426,9 @@ def _stocks_to_entities(stocks_data: dict) -> list[dict]:
             except (TypeError, ValueError):
                 continue
         ents.append({"name": str(name), "type": "stock",
-                     "code": s.get("code") or s.get("ticker") or "",
+                     "code": s.get("code") or "",
+                     "ticker": s.get("ticker") or "",   # yfinance 형식 (005930.KS) — price chart 폴백용
+                     "rank": s.get("rank"),              # 대장주=1, 부대장주=2 — _inject_leader_price_charts 폴백용
                      "attrs": attrs, "source": dict(src)})
     return ents
 

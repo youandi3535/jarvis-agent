@@ -1,11 +1,32 @@
 """금융 데이터 프로바이더 — yfinance 공식 API (허용)."""
 from __future__ import annotations
 import yfinance as yf
+import requests
+from requests.adapters import HTTPAdapter
 from ..models import RawDocument
 from . import BaseProvider
 
 import logging
 log = logging.getLogger("jarvis.collector.finance")
+
+
+class _TimeoutAdapter(HTTPAdapter):
+    """yfinance HTTP 호출에 강제 타임아웃 적용 (ERRORS [401] — hang 방지)."""
+    def __init__(self, timeout: int = 10, **kw):
+        self._timeout = timeout
+        super().__init__(**kw)
+
+    def send(self, request, *args, **kwargs):
+        kwargs.setdefault("timeout", self._timeout)
+        return super().send(request, *args, **kwargs)
+
+
+def _make_session(timeout: int = 10) -> requests.Session:
+    sess = requests.Session()
+    adapter = _TimeoutAdapter(timeout=timeout)
+    sess.mount("https://", adapter)
+    sess.mount("http://", adapter)
+    return sess
 
 
 class FinanceProvider(BaseProvider):
@@ -19,10 +40,11 @@ class FinanceProvider(BaseProvider):
             "달러/원": "KRW=X", "금": "GC=F", "유가(WTI)": "CL=F", "미국채10년": "^TNX",
         }
         from datetime import datetime
+        sess = _make_session(timeout=10)  # ★ 10초 타임아웃 (ERRORS [401])
         lines = [f"[시장 데이터 — {theme} / {datetime.now().strftime('%Y-%m-%d')}]", ""]
         for name, ticker in _TICKERS.items():
             try:
-                hist = yf.Ticker(ticker).history(period="2d")
+                hist = yf.Ticker(ticker, session=sess).history(period="2d")
                 if len(hist) >= 2:
                     prev = hist["Close"].iloc[-2]
                     curr = hist["Close"].iloc[-1]

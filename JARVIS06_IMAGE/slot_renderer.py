@@ -37,7 +37,9 @@ except ImportError:
         pass
 # ─────────────────────────────────────────────────────
 
-_SLOT_RE = re.compile(r"\[CHART_(\d+)\]\s*(.*?)\s*\[/CHART_\1\]", re.DOTALL)
+_SLOT_OPEN_RE = re.compile(r"\[CHART_(\d+)\]")
+_SLOT_CLOSE_RE = re.compile(r"^\[/CHART_(\d+)\]\s*$")
+_FIELD_LINE_RE = re.compile(r"^(제목|단위|데이터|출처|종류)\s*:\s*(.*)$")
 _VIZ_MAP = {"bar": "bar_chart", "line": "line_chart", "area": "area_chart",
             "pie": "pie_chart", "kpi": "kpi_cards"}
 
@@ -65,18 +67,38 @@ def _infer_viz_type(data: list, unit: str = "") -> str:
 
 
 def parse_chart_slots(text: str) -> list[dict]:
-    """대본에서 데이터 내장 슬롯 추출 → [{idx, title, viz, unit, data, source, raw}]."""
+    """대본에서 데이터 내장 슬롯 추출 → [{idx, title, viz, unit, data, source, raw}].
+
+    ★ 닫는 태그 인덱스 불일치·누락에도 관용적 매칭 (2026-07-11 — RuntimeError
+    "[사실성] 출처·웹 모두 확인 불가: <라벨>=<값>" 사고 박제): LLM이 [CHART_2]...
+    [/CHART_3] 처럼 인덱스를 틀리거나 닫는 태그를 아예 빠뜨리면 옛 정규식
+    (`\\1` 백레퍼런스)이 매칭 실패 → 원본 카탈로그 문법(`데이터: 라벨=값`)이
+    렌더 없이 본문에 그대로 새어나가 팩트체크 LLM이 이를 "주장"으로 오인 추출
+    → 사실성 게이트가 무단위·비문장 조각을 검증 불가로 차단. 필드 라인
+    (제목/단위/데이터/출처/종류) 또는 아무 인덱스나의 닫는 태그가 나오는 동안만
+    소비 → 필드 아닌 라인을 만나면 즉시 블록 종료(본문 삼켜먹기 방지).
+    """
     out: list[dict] = []
-    for m in _SLOT_RE.finditer(text or ""):
+    text = text or ""
+    for m in _SLOT_OPEN_RE.finditer(text):
         idx = int(m.group(1))
-        body = m.group(2)
+        start = m.end()
+        consumed = 0
         fields: dict = {}
-        for line in body.splitlines():
-            line = line.strip()
-            if ":" not in line:
+        for line in text[start:].splitlines(keepends=True):
+            stripped = line.strip()
+            if _SLOT_CLOSE_RE.match(stripped):
+                consumed += len(line)
+                break
+            if not stripped:
+                consumed += len(line)
                 continue
-            k, _, v = line.partition(":")
-            fields[k.strip()] = v.strip()
+            fm = _FIELD_LINE_RE.match(stripped)
+            if not fm:
+                break  # 필드 아닌 라인 → 닫는 태그 없어도 슬롯 블록 종료
+            fields[fm.group(1)] = fm.group(2).strip()
+            consumed += len(line)
+        raw = text[m.start():start + consumed]
         data = []
         for pair in (fields.get("데이터", "") or "").split("|"):
             pair = pair.strip()
@@ -95,7 +117,7 @@ def parse_chart_slots(text: str) -> list[dict]:
             "unit": fields.get("단위", "").strip(),
             "data": data,
             "source_name": fields.get("출처", "").strip(),
-            "raw": m.group(0),
+            "raw": raw,
         })
     return out
 

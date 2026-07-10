@@ -72,7 +72,27 @@ import pandas as pd
 #     → 차트 함수들이 모두 JARVIS06_IMAGE.theme_charts 에 이관됨 (이미 _mpl_setup 으로 Agg 백엔드 설정).
 # 새: JARVIS06_IMAGE.theme_charts 만 import — collect_theme.py 안에서 matplotlib 직접 사용 0.
 import yfinance as yf
+import requests as _requests
+from requests.adapters import HTTPAdapter as _HTTPAdapter
 from dotenv import load_dotenv
+
+
+# ★ yfinance 타임아웃 세션 (ERRORS [401] — hang 방지)
+class _YfTimeoutAdapter(_HTTPAdapter):
+    def __init__(self, timeout: int = 10, **kw):
+        self._timeout = timeout
+        super().__init__(**kw)
+    def send(self, request, *args, **kwargs):
+        kwargs.setdefault("timeout", self._timeout)
+        return super().send(request, *args, **kwargs)
+
+
+def _make_yf_session(timeout: int = 10) -> _requests.Session:
+    sess = _requests.Session()
+    a = _YfTimeoutAdapter(timeout=timeout)
+    sess.mount("https://", a)
+    sess.mount("http://", a)
+    return sess
 
 load_dotenv()
 
@@ -549,9 +569,10 @@ def stocks_to_datasets(stocks_data: dict, max_stocks: int = 8) -> list[dict]:
             alt_tickers.append(ticker.replace(".KQ", ".KS"))
 
         hist_df = pd.DataFrame()
+        _yf_sess = _make_yf_session(timeout=10)  # ★ 10초 타임아웃 (ERRORS [401])
         for tk in alt_tickers:
             try:
-                h = yf.Ticker(tk).history(period="5y")
+                h = yf.Ticker(tk, session=_yf_sess).history(period="5y")
                 if not h.empty and len(h) >= 6:
                     hist_df = h
                     break
@@ -903,15 +924,22 @@ def collect_stocks_data(theme_name: str) -> dict:
             "is_profit":  (fin.get("net_income") or 0) > 0,
         }
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futures = {ex.submit(_enrich, p): p for p in pairs}
-        for fut in as_completed(futures):
-            try:
-                stocks.append(fut.result(timeout=15))
-            except Exception as e:
-                p = futures[fut]
-                print(f"  ⚠️ [stocks_data] _naver_fin 실패 ({p['name']}): {e}")
-                stocks.append({**p, "price": None, "marcap": None, "is_profit": False})
+    # ★ shutdown(wait=False): 타임아웃된 스레드 버리고 즉시 진행 (ERRORS [401])
+    _enrich_ex = ThreadPoolExecutor(max_workers=4)
+    try:
+        futures = {_enrich_ex.submit(_enrich, p): p for p in pairs}
+        try:
+            for fut in as_completed(futures, timeout=60):
+                try:
+                    stocks.append(fut.result(timeout=15))
+                except Exception as e:
+                    p = futures[fut]
+                    print(f"  ⚠️ [stocks_data] _naver_fin 실패 ({p['name']}): {e}")
+                    stocks.append({**p, "price": None, "marcap": None, "is_profit": False})
+        except Exception:
+            pass  # 전체 타임아웃 — 수집된 것만 사용
+    finally:
+        _enrich_ex.shutdown(wait=False)
 
     # 시총 큰 순 정렬 + rank 부여
     stocks.sort(key=lambda s: (s.get("marcap") or 0), reverse=True)

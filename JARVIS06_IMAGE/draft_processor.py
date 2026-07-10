@@ -362,12 +362,13 @@ def _inject_leader_price_charts(html: str, collected) -> str:
                 period=ds.get("period", ""),
             )
 
-        # 폴백: entities ticker 로 실시간 조회
+        # 폴백: entities ticker 로 실시간 조회 (ticker 없으면 code 사용 — ERRORS [402] 연관)
         if not chart_html:
             stock = _by_rank.get(rank)
-            if stock and stock.get("ticker") and stock.get("name"):
+            _yf_ticker = stock.get("ticker") or stock.get("code") or "" if stock else ""
+            if stock and _yf_ticker and stock.get("name"):
                 chart_html = make_leader_price_chart(
-                    yf_ticker=stock["ticker"], name=stock["name"]
+                    yf_ticker=_yf_ticker, name=stock["name"]
                 )
 
         html = slot_pat.sub(chart_html, html)  # 차트 없으면 chart_html="" → 슬롯 제거

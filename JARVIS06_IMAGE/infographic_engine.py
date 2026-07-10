@@ -947,7 +947,7 @@ def _render_single(ds, title, subtitle, out_path, seed, src, chip="", slot=""):
         return ""
 
 
-_TRUSTED_PROVIDERS = {"krx", "yfinance", "ecos", "dart", "kosis", "bok", "web", "market"}
+_TRUSTED_PROVIDERS = {"krx", "yfinance", "ecos", "dart", "kosis", "bok", "web", "market", "draft_slot"}  # draft_slot = [CHART_N]...[/CHART_N] 대본 내장 데이터
 
 # provider → 사람이 읽는 출처 표기 (footer). 데이터셋마다 *진짜* 출처를 명시 (mislabel 방지).
 _PROVIDER_LABEL = {

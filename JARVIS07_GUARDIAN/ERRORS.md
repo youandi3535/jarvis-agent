@@ -2,6 +2,54 @@
 
 ---
 
+## [403] 테마주 가격 차트 없음 + 섹터 인포그래픽 없음 — 3개 버그 연쇄 (2026-07-11)
+
+- **증상**: 테마주 글에 대장주/부대장주 5년 월별 가격 차트 없음. 각 섹터 인포그래픽(`[CHART_N]...[/CHART_N]` 슬롯) 없이 글만 나열됨.
+- **환경**: `JARVIS09_COLLECTOR/collector_engine.py` → `JARVIS06_IMAGE/draft_processor.py` → `JARVIS06_IMAGE/infographic_engine.py`.
+- **버그 1 — entities에 rank/ticker 누락 (`collector_engine.py` 428번)**:
+  - `_stocks_to_entities()`가 entity dict에 `rank`와 `ticker` 키를 복사하지 않음.
+  - `draft_processor._inject_leader_price_charts()` 에서 `_by_rank = {e["rank"]: e for e in entities if e.get("rank")}` 가 항상 빈 dict 반환 → 폴백 경로에서 대장주/부대장주를 찾지 못해 가격 차트 전혀 생성 불가.
+  - **해결**: `rank`와 `ticker` 키를 entity dict에 명시적 추가.
+- **버그 2 — draft_slot 미신뢰 (`infographic_engine.py` 950번)**:
+  - `_TRUSTED_PROVIDERS`에 `"draft_slot"` 없음 → `[CHART_N]...[/CHART_N]` 슬롯에서 파싱한 모든 데이터가 `_verify_dataset()` 실패 → `datasets = []` → `return ""`.
+  - ALL new-format 슬롯이 무조건 빈 이미지로 렌더됨.
+  - **해결**: `_TRUSTED_PROVIDERS`에 `"draft_slot"` 추가.
+- **버그 3 — 폴백 키 불일치 (`draft_processor.py` 368번)**:
+  - 가격 차트 폴백 경로에서 `stock.get("ticker")`를 참조하지만, 버그 1 수정 후에도 entities는 `ticker` 키를 가질 수도 있고 없을 수도 있음 → `code`를 백업으로 사용해야 함.
+  - **해결**: `_yf_ticker = stock.get("ticker") or stock.get("code") or ""` 로 교체.
+- **파일**: `JARVIS09_COLLECTOR/collector_engine.py`, `JARVIS06_IMAGE/infographic_engine.py`, `JARVIS06_IMAGE/draft_processor.py`.
+- **교훈**: 파이프라인 3단계(수집→대본→이미지)가 각자 독립적으로 실패해도 결과만 보면 "이미지 없음"으로 동일하게 보임. 각 단계의 출력을 단계별로 로그에 남겨야 어디서 끊겼는지 파악 가능.
+
+---
+
+## [402] slot_renderer — 차트 슬롯 닫는 태그 인덱스 불일치/누락 시 원본 카탈로그 문법 본문 유출 → 사실성 게이트 오탐 차단 (2026-07-11)
+
+- **증상**: `harness:theme-publish-피지컬 AI/휴머노이드 로봇-naver` step `③ 네이버 대본 생성`에서 `RuntimeError: [사실성] 출처·웹 모두 확인 불가: 전북 피지컬AI 사업=7300`. 단위도 없고 문장 형태도 아닌 `라벨=값` 조각이 "주장"으로 잡혀 사실성 게이트에 막힘.
+- **환경**: `JARVIS06_IMAGE/slot_renderer.py` (`parse_chart_slots`). 호출 경로: `trend_theme_writer.py` → `JARVIS06_IMAGE.draft_processor.process_draft()` → `_generate_charts()` Step 0 → `slot_renderer.render_slots_in_text()`.
+- **원인 (근본)**: `_SLOT_RE = re.compile(r"\[CHART_(\d+)\]\s*(.*?)\s*\[/CHART_\1\]")` 가 여는 태그와 *같은 인덱스*의 닫는 태그(`\1` 백레퍼런스)만 매칭. LLM이 `[CHART_2]...[/CHART_3]` 처럼 인덱스를 틀리거나 닫는 태그를 아예 빠뜨리면 정규식이 매칭 실패 → 해당 블록 전체(내부 카탈로그 문법 `데이터: 라벨=값` 포함)가 슬롯 처리 없이 원문 그대로 본문에 남음. 구형식 폴백(`[CHART_N: 설명]`) 정규식도 다른 문법이라 못 잡음 → `law_enforcer._extract_claims()` 가 이 raw 조각을 "본문 그대로" 주장으로 추출 → 단위 없어 `_NUMERIC_UNIT_RE` 매칭 안 됨 + 자연어 아니라 웹 검색도 확인 불가 → 차단.
+- **헛다리**: 없음 — ERRORS.md 전수 검색 결과 "출처·웹 모두 확인 불가" 계열 기존 항목([244][357][368][634][664][665][674][675][694][696][704][710][831])은 전부 *진짜 근거 없는 수치* 케이스였고, 이번처럼 *내부 문법 조각이 본문에 유출*된 케이스는 미기록 — 신규 버그 유형.
+- **해결**: `parse_chart_slots()` 를 라인 단위 관용 파서로 교체. 여는 태그(`_SLOT_OPEN_RE`) 이후, 필드 라인(제목/단위/데이터/출처/종류 — `_FIELD_LINE_RE`)이거나 빈 줄인 동안만 소비하고 ① 임의 인덱스의 닫는 태그를 만나면 그 줄까지 포함해 종료 ② 필드 아닌 줄을 만나면(닫는 태그 없어도) 즉시 종료 — 두 경우 모두 뒤 문단은 절대 삼키지 않음. `render_slots_in_text()` 는 그 `raw` 구간을 검증 실패 시 구형식 플레이스홀더(`[CHART_N: 제목]`)로 강등 → 기존 빈 슬롯/AI 사진 폴백 경로가 이어받음. `_SLOT_RE`(백레퍼런스 정규식) 완전 삭제.
+- **파일**: `JARVIS06_IMAGE/slot_renderer.py`.
+- **교훈**: LLM이 자체 정의한 마크업 문법(여는/닫는 태그 쌍)을 파싱할 때 *같은 인덱스* 매칭을 요구하는 정규식은 LLM의 인덱스 오기입 한 번에 전체 매칭이 깨진다. "거짓 차트 < 차트 없음" 철학처럼, 파서도 "느슨하게 관용적으로 소비 후 실패 시 빈 슬롯"이 "엄격 매칭 실패 시 원문 그대로 유출"보다 안전 — 특히 그 원문이 사실성 게이트 같은 하류 검증기를 오탐시킬 수 있는 내부 전용 문법일 때.
+
+---
+
+## [401] collector_engine + finance_provider — yfinance 무한 hang (타임아웃 없음) (2026-07-11)
+
+- **증상**: `run_self_repair_then_theme()` 실행 후 "1차 통합 실행" 로그에서 CPU 0.0%, 10분+ 무반응. `lsof`로 Yahoo Finance(`e2-bmr.ycpi.vip.twd.yahoo.com:https`) ESTABLISHED 소켓 확인. 프로세스 kill 필요.
+- **환경**: `JARVIS09_COLLECTOR/providers/finance_provider.py` + `JARVIS09_COLLECTOR/collector_engine.py`.
+- **원인**: `FinanceProvider.collect()`가 `yf.Ticker(ticker).history(period="2d")` 를 타임아웃 없이 호출 → Yahoo Finance 응답 없을 때 스레드 무한 대기. `collector_engine.py`의 `ThreadPoolExecutor` + `as_completed(futures)` + `fut.result()`에 타임아웃이 없어 hung 스레드가 전체 프로세스를 잠금.
+- **헛다리**: 없음.
+- **해결**:
+  1. `finance_provider.py`: `_TimeoutAdapter(HTTPAdapter)` + `_make_session(timeout=10)` 추가. yfinance에 10초 HTTP 타임아웃 세션 주입 (`yf.Ticker(ticker, session=sess).history(...)`).
+  2. `collector_engine.py collect_for_theme()`: `with ThreadPoolExecutor` → 수동 `exe = ThreadPoolExecutor()` + `as_completed(futures, timeout=90)` + `fut.result(timeout=30)` + `finally: exe.shutdown(wait=False)`. 90초 전체 상한, 개별 프로바이더 30초 상한. 타임아웃 프로바이더는 스킵 후 계속.
+  3. `collector_engine.py collect_research()`: 동일 패턴. `exe2 = ThreadPoolExecutor()` + `as_completed(q_futs, timeout=120)` + `broad_fut.result(timeout=120)` + `finally: exe2.shutdown(wait=False)`.
+- **파일**: `JARVIS09_COLLECTOR/providers/finance_provider.py`, `JARVIS09_COLLECTOR/collector_engine.py`, `JARVIS09_COLLECTOR/collect_theme.py`.
+- **★ 추가 발견 (2026-07-11)**: `collect_theme.py` line 554에도 `yf.Ticker(tk).history(period="5y")` 타임아웃 없는 호출 존재 — `stocks_to_datasets()` 대장주 주가 이력 수집이 주 스레드에서 동기 실행 → 2차 hang. `_make_yf_session(timeout=10)` + `shutdown(wait=False)` 동일 패턴으로 함께 수정.
+- **교훈**: `ThreadPoolExecutor`를 context manager(`with` 블록)로 쓰면 `shutdown(wait=True)`가 자동 호출 → hung 스레드가 있으면 프로그램 전체 잠금. 외부 HTTP API(yfinance·requests 등)를 ThreadPool에 넣을 때는 반드시: ① HTTP 레벨 타임아웃 ② `fut.result(timeout=N)` ③ `shutdown(wait=False)` 세 층 모두 필요. **yfinance 사용처를 전수 검색해야 한다** — `grep -rn "yf.Ticker\|yfinance" --include="*.py" .`으로 모든 호출 확인.
+
+---
+
 ## [400] chart_data — 병렬 LLM 6개 + 2개 미수정 range(3) 루프 = TPM 초과로 plan_research 연쇄 스로틀 (2026-07-11)
 
 - **증상**: `collect_chart_data()` 실행 후 `collect_research()` → `plan_research()` 가 빈 응답(스로틀)으로 폴백. ERRORS [399] 에서 `plan_research` / `plan_data_sources` 의 외부 3회 루프를 수정했지만, `chart_data.py` 안의 LLM 호출 3곳은 수정 범위에서 누락됨.
@@ -7141,3 +7189,12 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **해결**: 전수 grep(`Sonnet 4.[0-9]`, `Opus 4.[0-7]`, `Haiku\b`, `claude-haiku`) → 10+ 파일 주석·docstring 일괄 수정. 최소 버전 = Sonnet 5. Haiku는 완전 폐지(detection 패턴으로만 존재 허용).
 - **파일**: 위 열거 10+ 파일 (코드 런타임 변경 0 — 주석·docstring만)
 - **교훈**: 런타임 단일 진입점(`shared/llm.py MODELS` dict)이 정확해도 주석이 구버전이면 다음 작업자가 혼동함. 모델 정책 변경 시 런타임 + 주석·docstring 동시 전수 스크럽 의무.
+
+## [402] 네이버 제목이 본문에 입력 — pyautogui Cmd+V → OS focus(본문) 전달 (2026-07-11)
+- **증상**: 네이버 발행 시 글 제목이 제목 칸이 아닌 본문 맨 앞에 입력됨. 경제 브리핑·테마주 모두 동일.
+- **환경**: `JARVIS08_PUBLISH/platforms/naver_poster.py` `_paste_title()` / SmartEditor ONE
+- **원인**: `_focus_title()`은 JS `execute_script`로 DOM-level focus만 제목 칸으로 이전. 그러나 `_pg2.hotkey('command', 'v')` (pyautogui HID 이벤트)는 OS-level focus 기준으로 키 이벤트 전달. SmartEditor ONE이 페이지 로드 시 본문 에디터에 OS focus를 자동 설정하므로, JS DOM focus가 제목 칸에 있어도 pyautogui Cmd+V는 OS focus가 있는 본문에 전달.
+- **헛다리**: `_focus_title()` 자체는 정상 동작 (JS click/focus로 DOM focus 이전 성공).
+- **해결**: `_paste_title()` 내 `_pg2.hotkey('command', 'v')` → `ActionChains(driver).key_down(Keys.COMMAND).send_keys('v').key_up(Keys.COMMAND).perform()`. ActionChains는 ChromeDriver CDP 프로토콜로 전달 → OS focus 무관하게 브라우저 DOM focus(제목 칸) 직접 전달.
+- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` 816번 줄
+- **교훈**: SmartEditor ONE 같은 리치 에디터에서 JS focus + pyautogui HID 조합은 OS/DOM focus 불일치로 버그 발생. 에디터 내 입력은 반드시 Selenium ActionChains CDP 방식 사용.

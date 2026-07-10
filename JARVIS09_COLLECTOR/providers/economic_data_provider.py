@@ -6,8 +6,28 @@
 """
 from __future__ import annotations
 import logging
+import requests as _req
+from requests.adapters import HTTPAdapter as _HTTPAdapter
 from . import BaseProvider
 from ..models import RawDocument
+
+
+# ★ yfinance 타임아웃 세션 (ERRORS [401] — hang 방지)
+class _YfTimeoutAdapter(_HTTPAdapter):
+    def __init__(self, timeout: int = 10, **kw):
+        self._timeout = timeout
+        super().__init__(**kw)
+    def send(self, request, *args, **kwargs):
+        kwargs.setdefault("timeout", self._timeout)
+        return super().send(request, *args, **kwargs)
+
+
+def _make_yf_session(timeout: int = 10) -> _req.Session:
+    sess = _req.Session()
+    a = _YfTimeoutAdapter(timeout=timeout)
+    sess.mount("https://", a)
+    sess.mount("http://", a)
+    return sess
 
 log = logging.getLogger("jarvis.collector.economic")
 
@@ -35,10 +55,11 @@ def get_market_data() -> dict:
       지수는 전일 종가인데 '오늘'처럼 서술되던 시점 오류를 사실성 게이트가 검증 가능하게.
     """
     import yfinance as yf
+    _sess = _make_yf_session(timeout=10)  # ★ 10초 타임아웃 (ERRORS [401])
     result = {}
     for name, ticker in _MARKET_TICKERS.items():
         try:
-            hist = yf.Ticker(ticker).history(period="2d")
+            hist = yf.Ticker(ticker, session=_sess).history(period="2d")
             if len(hist) >= 2:
                 prev = hist["Close"].iloc[-2]
                 curr = hist["Close"].iloc[-1]
@@ -115,7 +136,7 @@ def get_ticker_history(ticker: str, period: str = "2d", interval: str = "1d"):
     """
     import yfinance as yf
     try:
-        return yf.Ticker(ticker).history(period=period, interval=interval)
+        return yf.Ticker(ticker, session=_make_yf_session(10)).history(period=period, interval=interval)
     except Exception as e:
         log.warning(f"[EconData] 티커 히스토리 실패 ({ticker}): {e}")
         return None
@@ -125,7 +146,7 @@ def download_ticker(ticker: str, start: str, end: str = None, interval: str = "1
     """yfinance.download 래퍼 — JARVIS06_IMAGE 차트 생성 시 호출."""
     import yfinance as yf
     try:
-        kwargs = {"start": start, "interval": interval}
+        kwargs = {"start": start, "interval": interval, "session": _make_yf_session(10)}
         if end:
             kwargs["end"] = end
         return yf.download(ticker, **kwargs)
