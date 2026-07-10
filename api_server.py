@@ -701,6 +701,20 @@ def get_overview():
     }
 
 
+@app.get("/api/graph")
+def get_pipeline_graph():
+    """파이프라인 연결 그래프 — 대시보드 동적 렌더용 (사용자 박제 2026-07-11).
+
+    shared/pipeline_graph.py 를 단일 진실 소스로 사용.
+    파이프라인 연결 변경 시 pipeline_graph.py 만 수정하면 대시보드 자동 갱신.
+    """
+    try:
+        from shared.pipeline_graph import PIPELINE_EDGES, LEGEND
+        return {"edges": PIPELINE_EDGES, "legend": LEGEND}
+    except ImportError:
+        return {"edges": [], "legend": []}
+
+
 # ══════════════════════════════════════════════════════════════════
 # 실행 진입점
 # ══════════════════════════════════════════════════════════════════

@@ -1424,7 +1424,6 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
     try:
         from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
         from JARVIS06_IMAGE.draft_processor import process_draft
-        from pathlib import Path as _P9
 
         # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
         draft_html = generate_article_html(keyword, sector, reason, supreme_block,
@@ -1440,26 +1439,7 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
         html_path = result.get("html_path", "")
         img_dir = str(TISTORY_IMG_DIR)
         visual_paths = []
-        blocks = result["blocks"]
-        # 썸네일 맨 앞 (process_draft 가 필수 생성 — 누락 0)
-        thumb_path = result.get("thumbnail_path")
-        if thumb_path and _P9(thumb_path).exists():
-            blocks = [("image", str(thumb_path))] + blocks
-
-        # 검증
-        try:
-            from JARVIS02_WRITER.jarvis_main import enforce_text_between_images
-            blocks = enforce_text_between_images(blocks, source='TISTORY-DRAFT')
-        except Exception as _ee:
-            print(f"  ⚠️ enforce_text_between_images(tistory-draft) 오류 (무시): {_ee}")
-            _g_report("writer", _ee, module=__name__)
-
-        try:
-            from JARVIS02_WRITER.law_enforcer import enforce_supreme_law, notify_violations
-            blocks, _ts_v = enforce_supreme_law(blocks, "tistory", "Tistory-경제글")
-            notify_violations(_ts_v, "tistory", "Tistory-경제글")
-        except Exception:
-            _g_report("writer", Exception(), module=__name__)
+        blocks = result["blocks"]  # J06 이 썸네일 prepend + 법률집행 완료
 
         print(f"  ✅ [TISTORY-DRAFT] 완료: {keyword}")
         return {
@@ -1490,25 +1470,22 @@ def ts_publish(draft: dict) -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
     try:
+        from JARVIS06_IMAGE.draft_processor import publish_assembled
         from JARVIS08_PUBLISH.platforms import post_to_tistory
-        print(f"  📤 [TISTORY-PUB] 발행 중...")
+        print(f"  📤 [TISTORY-PUB] J06→J08 발행 중...")
         keyword = draft['keyword']
         blocks = draft['blocks']
         html = draft['html']
 
-        try:
-            from JARVIS02_WRITER.law_enforcer import enforce_supreme_law, notify_violations
-            blocks, _ts_v = enforce_supreme_law(blocks, "tistory", "Tistory-경제글-발행")
-            notify_violations(_ts_v, "tistory", "Tistory-경제글-발행")
-        except Exception:
-            pass
+        def _pub_fn(blocks, title, **_kw):
+            return post_to_tistory(
+                title=title,
+                html_content=draft['content'],
+                blocks=blocks,
+                category=ECONOMIC_CATEGORY,
+            )
 
-        result = post_to_tistory(
-            title=draft['title'],
-            html_content=draft['content'],
-            blocks=blocks,
-            category=ECONOMIC_CATEGORY,
-        )
+        result = publish_assembled(draft, _pub_fn, "tistory")
 
         if result:
             # ★ DB 기록 (ERRORS [370]): 성공 발행 → on_post_published_detail 이 posts·post_analysis
@@ -1699,7 +1676,6 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
     try:
         from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
         from JARVIS06_IMAGE.draft_processor import process_draft
-        from pathlib import Path as _P9
 
         # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
         draft_html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
@@ -1713,26 +1689,7 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
         title = result["title"]
         img_dir = str(NAVER_IMG_DIR)
         visual_paths = []
-        blocks = result["blocks"]
-        # 썸네일 맨 앞 (process_draft 가 필수 생성 — 누락 0)
-        thumb_path = result.get("thumbnail_path")
-        if thumb_path and _P9(thumb_path).exists():
-            blocks = [("image", str(thumb_path))] + blocks
-
-        # 검증
-        try:
-            from JARVIS02_WRITER.jarvis_main import enforce_text_between_images
-            blocks = enforce_text_between_images(blocks, source='NAVER-DRAFT')
-        except Exception as _ee:
-            print(f"  ⚠️ enforce_text_between_images(naver-draft) 오류 (무시): {_ee}")
-            _g_report("writer", _ee, module=__name__)
-
-        try:
-            from JARVIS02_WRITER.law_enforcer import enforce_supreme_law, notify_violations
-            blocks, _nv_v = enforce_supreme_law(blocks, "naver", "Naver-경제글")
-            notify_violations(_nv_v, "naver", "Naver-경제글")
-        except Exception:
-            _g_report("writer", Exception(), module=__name__)
+        blocks = result["blocks"]  # J06 이 썸네일 prepend + 법률집행 완료
 
         print(f"  ✅ [NAVER-DRAFT] 완료: {keyword}")
         return {
@@ -1761,24 +1718,21 @@ def nv_publish(draft: dict, ts_keyword: str = '') -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
     try:
+        from JARVIS06_IMAGE.draft_processor import publish_assembled
         from JARVIS08_PUBLISH.platforms import post_to_naver
-        print(f"  📤 [NAVER-PUB] 발행 중...")
+        print(f"  📤 [NAVER-PUB] J06→J08 발행 중...")
         keyword = draft['keyword']
         blocks = draft['blocks']
 
-        try:
-            from JARVIS02_WRITER.law_enforcer import enforce_supreme_law, notify_violations
-            blocks, _nv_v = enforce_supreme_law(blocks, "naver", "Naver-경제글-발행")
-            notify_violations(_nv_v, "naver", "Naver-경제글-발행")
-        except Exception:
-            pass
+        def _pub_fn(blocks, title, **_kw):
+            return post_to_naver(
+                title=title,
+                html_content=draft['content'],
+                blocks=blocks,
+                category=ECONOMIC_CATEGORY,
+            )
 
-        result = post_to_naver(
-            title=draft['title'],
-            html_content=draft['content'],
-            blocks=blocks,
-            category=ECONOMIC_CATEGORY,
-        )
+        result = publish_assembled(draft, _pub_fn, "naver")
 
         if result:
             # ★ DB 기록 (ERRORS [370]): 성공 발행 → posts·post_analysis 둘 다 기록 → 대시보드 동기화

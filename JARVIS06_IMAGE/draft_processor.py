@@ -486,6 +486,25 @@ def process_draft(draft_html: str, collected, platform: str = "tistory",
     from JARVIS06_IMAGE.injectors import assemble_blocks
     blocks = assemble_blocks(html, visual_paths, out_dir=out_dir)
 
+    # ⑨ 썸네일 맨 앞 prepend — J06 책임으로 통합 (사용자 박제 2026-07-11)
+    if thumbnail_path and Path(thumbnail_path).exists():
+        blocks = [("image", str(thumbnail_path))] + blocks
+
+    # ⑩ 블록 법률 집행 — 이미지 연속 방지 + 헌법 검증 (J06 책임으로 통합)
+    try:
+        from JARVIS02_WRITER.jarvis_main import enforce_text_between_images as _etbi
+        blocks = _etbi(blocks, source=f"J06-{platform.upper()}")
+    except Exception as _ee:
+        log.warning(f"[{platform}] enforce_text_between_images 오류(무시): {_ee}")
+    try:
+        from JARVIS02_WRITER.law_enforcer import (
+            enforce_supreme_law as _esl, notify_violations as _nviol
+        )
+        blocks, _viols = _esl(blocks, platform, f"J06-{platform}")
+        _nviol(_viols, platform, f"J06-{platform}")
+    except Exception as _ee:
+        log.warning(f"[{platform}] enforce_supreme_law 오류(무시): {_ee}")
+
     print(f"  ✅ [{platform}] process_draft 완료 — 블록 {len(blocks)}개")
     return {
         "blocks":         blocks,
@@ -494,3 +513,27 @@ def process_draft(draft_html: str, collected, platform: str = "tistory",
         "html":           html,
         "html_path":      str(html_path),   # ★ Step 9: 경제 반환 계약 호환 (재저장 금지)
     }
+
+
+def publish_assembled(result: dict, publish_fn, platform: str = "") -> dict:
+    """★ J06 발행 진입점 — process_draft() 완성 블록을 J08 에 직접 넘긴다 (사용자 박제 2026-07-11).
+
+    J06 이 이미지·썸네일·법률집행까지 끝낸 result 를 받아 publish_fn(J08) 을 직접 호출.
+    J02 가 J08 을 직접 호출하던 역방향 흐름 제거 — J06 → J08 단방향.
+
+    Args:
+        result:     process_draft() 반환값 {"blocks", "title", "html", ...}
+        publish_fn: J08 발행 함수 — (blocks, title, **kw) → dict{"success": bool, ...}
+        platform:   로깅 용도 ("naver" | "tistory")
+    Returns:
+        publish_fn 반환값 (최소 "success" 키 필수)
+    """
+    blocks = list(result.get("blocks") or [])
+    title  = result.get("title", "")
+    print(f"  📤 [J06→J08] {platform} 발행 위임 — 블록 {len(blocks)}개")
+    try:
+        return publish_fn(blocks=blocks, title=title)
+    except Exception as _pe:
+        log.error(f"[J06→J08] {platform} 발행 실패: {_pe}")
+        _g_report("image", _pe, module=__name__, func_name="publish_assembled")
+        return None

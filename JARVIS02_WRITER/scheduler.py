@@ -664,12 +664,16 @@ def run_next():
 
 
 def run_radar_top_theme():
-    """오늘 RADAR 추천 중 미작성 최상위 테마 실행. 없으면 순차 실행(run_next) 폴백."""
-    # ── ★ 인터프리터 종료 레이스 가드 (근본 원인 — ERRORS [362]) ──
-    # 종료 중이면 테마 선정·발행·폴백 캐스케이드 전부 건너뜀 (헛된 실패 연쇄 차단).
+    """★ 네이버 금융 공식 테마 카탈로그 → 미발행 테마 임의 선정 → 발행.
+
+    테마주 주제 선정 원칙: 오늘 트렌드 키워드(RADAR)가 아니라 네이버 금융 공식 테마
+    목록을 전부 로드한 뒤, 지금껏 발행하지 않은 테마를 임의로 하나 골라 발행한다.
+    실패 시 최대 3개 후보까지 재선정.
+    """
+    import random
     from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
     if _isd():
-        log("⏸ [RADAR] 인터프리터 종료 중(데몬 재시작) — 발행 연기, 재시작 후 재시도")
+        log("⏸ [CATALOG] 인터프리터 종료 중(데몬 재시작) — 발행 연기, 재시작 후 재시도")
         return
     if _paused:
         send_telegram("⏸ 일시정지 상태입니다.\n재개하려면 /resume")
@@ -678,235 +682,111 @@ def run_radar_top_theme():
         log("⚠️ 외부 포스팅 작업 진행 중 — 스케줄 실행 건너뜀")
         return
 
-    # ★ 데몬 재시작 없이 최신 코드 보장 — 핵심 모듈 선행 reload (ERRORS [222][224] 박제)
-    # 의존성 순서 정렬 필수: draft_writer → tistory_html_writer → theme_html_writer → ...
-    # 순서 어기면 theme_html_writer reload 시 OLD tistory_html_writer 캐시에서 _stocks_text 못 찾아 실패
+    # ── 1. 네이버 금융 공식 테마 카탈로그 로드 ────────────────────────────
     try:
-        import importlib as _il, sys as _sys
-        _ordered_pre = [
-            "draft_writer",
-            "tistory_html_writer",
-            "theme_html_writer",
-            "draft_processor",
-            "trend_theme_writer",
-        ]
-        for _kw in _ordered_pre:
-            for _k in list(_sys.modules.keys()):
-                if _kw in _k:
-                    try:
-                        _il.reload(_sys.modules[_k])
-                    except Exception:
-                        pass
-    except Exception:
-        pass
-
-    try:
-        from shared.db import get_todays_pipeline, update_pipeline_status
-        candidates = get_todays_pipeline(limit=20)
-    except Exception as e:
-        log(f"⚠️ RADAR 파이프라인 조회 오류: {e} — 순차 실행")
+        from JARVIS09_COLLECTOR.collect_theme import _fetch_naver_theme_catalog
+        catalog = _fetch_naver_theme_catalog()
+    except Exception as _ce:
+        log(f"⚠️ 네이버 금융 테마 카탈로그 로드 실패: {_ce} — 순차 실행 폴백")
         run_next()
         return
 
-    if not candidates:
-        log("📡 오늘 RADAR 추천 없음 → 순차 실행")
+    if not catalog:
+        log("⚠️ 네이버 금융 테마 카탈로그 비어있음 — 순차 실행 폴백")
         run_next()
         return
 
-    p          = load_progress()
-    done_set   = set(p.get('done', []))
-    failed_set = set(p.get('failed', []))
-
-    # ★ 최근 30일 발행 테마 로드 — 유사 주제 중복 방지 (사용자 박제 2026-05-23)
+    # ── 2. 기발행 테마 조회 (DB 전체 이력 기준, 365일) ───────────────────
     from shared.db import get_recent_published_themes
-    recent_rows  = get_recent_published_themes(days=30)
-    recent_themes = [r["theme"] for r in recent_rows]
+    published = {r["theme"] for r in get_recent_published_themes(days=365)}
 
-    def _is_similar_theme(candidate: str) -> str | None:
-        """이미 발행된 유사 테마 반환. 없으면 None.
+    p        = load_progress()
+    done_set = set(p.get("done", []))
 
-        ★ ADR 012 (2026-07-02): 1차 판정 = 임베딩 의미 유사도 (shared/embeddings
-        단일 진입점 — 고정 그룹이 못 잡는 '로봇 ↔ 휴머노이드' 류 커버).
-        임베딩 미가용 시 종전 고정 그룹 폴백.
-        """
-        # 1차 — 임베딩 의미 유사도
-        try:
-            from shared.embeddings import embed_texts, cosine_sim, available
-            if available() and recent_themes:
-                _vecs = embed_texts([candidate] + recent_themes)
-                for _ri, _rt in enumerate(recent_themes, 1):
-                    if cosine_sim(_vecs[0], _vecs[_ri]) >= 0.80:
-                        return _rt
-        except Exception:
-            pass
-        # 2차 — 고정 그룹 폴백
-        c = candidate.lower().replace(" ", "").replace("·", "")
-        # 반도체 계열 키워드 그룹
-        _SIMILAR_GROUPS = [
-            {"반도체", "파운드리", "시스템반도체", "메모리반도체", "hbm", "tsmc", "칩"},
-            {"부동산", "아파트", "재건축", "청약", "분양", "주택"},
-            {"금리", "기준금리", "fed", "연준", "채권", "국채"},
-            {"환율", "달러", "원달러", "외환"},
-            {"인터넷", "플랫폼", "카카오", "네이버"},
-            {"배터리", "2차전지", "전기차", "ev", "배터리셀"},
-            {"바이오", "제약", "신약", "임상"},
-            {"ai", "인공지능", "llm", "딥러닝"},
-        ]
-        for group in _SIMILAR_GROUPS:
-            if any(k in c for k in group):
-                # 같은 그룹에 속한 최근 발행 테마 있는지
-                for rt in recent_themes:
-                    rt_c = rt.lower().replace(" ", "").replace("·", "")
-                    if any(k in rt_c for k in group):
-                        return rt
-        return None
+    # ── 3. 미발행 공식 테마 필터링 ───────────────────────────────────────
+    available = [t for t in catalog if t not in published and t not in done_set]
 
-    selected = None
-    skipped  = []
-    for item in candidates:
-        theme = item['theme']
-        if theme in done_set:
-            skipped.append(f"{theme}(완료)")
-            continue
-        if theme in failed_set:
-            skipped.append(f"{theme}(실패이력)")
-            continue
-        result = load_platform_result(theme)
-        if all(result.values()):
-            skipped.append(f"{theme}(완료)")
-            continue
-        # 최근 30일 유사 주제 중복 체크
-        similar = _is_similar_theme(theme)
-        if similar:
-            skipped.append(f"{theme}(유사주제:'{similar}')")
-            continue
-        selected = item
-        break
+    if not available:
+        # ★ 전체 소진 → done/failed 리셋 후 그 시점 카탈로그 전체로 재시작 (동적 — 하드코딩 없음)
+        log(f"🎉 네이버 금융 공식 테마 전체 발행 완료 ({len(catalog)}개) — 처음부터 다시 시작")
+        send_telegram(
+            f"🎉 네이버 금융 공식 테마 전체 발행 완료!\n"
+            f"({len(catalog)}개 소진) 처음부터 다시 시작합니다."
+        )
+        p["done"] = []
+        p["failed"] = []
+        save_progress(p)
+        available = list(catalog.keys())   # 재로드 시점 카탈로그 반영 (265개든 270개든)
 
-    if not selected:
-        log("📡 오늘 RADAR 추천 전부 완료 → 순차 실행")
-        send_telegram("📡 오늘 RADAR 추천 테마 전부 완료\n순차 테마로 전환합니다.")
-        run_next()
-        return
+    log(f"📊 카탈로그 현황: 전체 {len(catalog)}개 · 미발행 {len(available)}개")
 
-    theme = selected['theme']
-    skip_msg = f"\n건너뜀: {', '.join(skipped)}" if skipped else ""
-    log(f"📡 RADAR 선택: {theme} (기회점수 {selected['opportunity_score']:.0f}){skip_msg}")
-    send_telegram(
-        f"📡 RADAR 추천 테마 실행\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"테마: {theme}\n"
-        f"섹터: {selected['sector']} | 기회점수: {selected['opportunity_score']:.0f}"
-        + (f"\n건너뜀: {', '.join(skipped)}" if skipped else "")
-    )
+    # ── 4. 임의 선정 → 최대 3회 폴백 ────────────────────────────────────
+    tried: list[str] = []
+    result_any_ok   = False
 
-    update_pipeline_status(selected['id'], 'processing')
-
-    # ★ data_empty 자동 전환 (ERRORS [168] 박제 2026-05-25 / [174] 개선 2026-05-26)
-    # 원인: _fallback_candidates 에 완료·유사주제 테마가 포함되어 전부 필터 아웃됨.
-    # 해결: 폴백 후보 선정 시 완료(done_set) + 유사주제 사전 필터링 후 최대 5개 확보.
-    _tried = [selected]
-    _fallback_candidates: list = []
-    for _fc in candidates:
-        if _fc['theme'] == theme:
-            continue
-        if _fc['theme'] in done_set:
-            continue  # 이미 완료된 테마 폴백 제외 (중복 발행 방지)
-        if _fc['theme'] in failed_set:
-            continue  # 이미 실패(data_empty 등)한 테마 폴백 재선정 방지
-        _load_res = load_platform_result(_fc['theme'])
-        if all(_load_res.values()):
-            continue  # platform_result 로도 완료 확인
-        if _is_similar_theme(_fc['theme']):
-            continue  # 유사주제 사전 필터
-        _fallback_candidates.append(_fc)
-        if len(_fallback_candidates) >= 5:
+    for attempt in range(min(3, len(available))):
+        remaining = [t for t in available if t not in tried]
+        if not remaining:
             break
+        theme = random.choice(remaining)
+        tried.append(theme)
 
-    def _run_one_theme(item: dict) -> bool:
-        """단일 테마 실행. 성공(최소 1 플랫폼) 시 True 반환."""
-        _theme = item['theme']
-        if not _lock_acquire(f"RADAR: {_theme}"):
-            update_pipeline_status(item['id'], 'suggested')
-            return False
+        log(f"📋 카탈로그 선정 (시도 {attempt + 1}/3): {theme}")
+        if attempt == 0:
+            send_telegram(
+                f"📋 네이버 금융 테마 선정\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"테마: {theme}\n"
+                f"미발행 {len(available)}/{len(catalog)}개 중 임의 선정"
+            )
+        else:
+            send_telegram(f"⚠️ 이전 테마 실패 → 재선정: {theme}")
+
+        if not _lock_acquire(f"카탈로그: {theme}"):
+            continue
         try:
-            os.environ["JARVIS_SOURCE_KEYWORD"] = _theme
+            os.environ["JARVIS_SOURCE_KEYWORD"] = theme
             os.environ["JARVIS_POST_TYPE"]      = "theme"
-            _results = run_theme(_theme)
+            results = run_theme(theme)
 
-            # ★ 인터프리터 종료 레이스 (ERRORS [362]) — 발행 미시작(연기). 실패 오기록·폴백
-            #   캐스케이드 금지: pipeline 은 'suggested'(재시도 대상)로 되돌리고 True 반환해
-            #   상위 폴백 루프를 멈춘다 (죽어가는 인터프리터에서 다른 테마 시도 무의미).
-            if _isd() and not any(_results.values()):
-                log(f"⏸ [{_theme}] 발행 연기(데몬 재시작) — 실패 미기록·폴백 스킵, 재시작 후 재시도")
-                update_pipeline_status(item['id'], 'suggested')
-                return True
+            if _isd() and not any(results.values()):
+                log(f"⏸ [{theme}] 발행 연기(데몬 재시작) — 재시작 후 재시도")
+                return
 
-            # 결과 판정 — 최소 1 플랫폼 성공이면 OK
-            _any_ok = any(_results.values())
-            _all_ok = all(_results.values())
-            update_pipeline_status(item['id'], 'done' if _any_ok else 'failed')
-
-            try:
-                from shared.bus import on_post_published
-                if _any_ok:
-                    on_post_published(_theme, "all", source="radar")
-            except Exception as _bus_e:
-                try:
-                    from JARVIS07_GUARDIAN.error_collector import report as _gr
-                    _gr("scheduler", _bus_e, module="scheduler", func_name="run_radar_top_theme.on_post_published")
-                except Exception:
-                    pass
+            _any_ok = any(results.values())
 
             _p2 = load_progress()
-            _p2.setdefault('platform_status', {})[_theme] = _results
-            if _all_ok and _theme not in _p2.get('done', []):
-                _p2['done'].append(_theme)
-            elif not _all_ok and _theme not in _p2.get('failed', []):
-                _p2['failed'].append(_theme)
+            _p2.setdefault("platform_status", {})[theme] = results
+            if _any_ok and theme not in _p2.get("done", []):
+                _p2["done"].append(theme)
+            elif not _any_ok and theme not in _p2.get("failed", []):
+                _p2["failed"].append(theme)
             save_progress(_p2)
-            return _any_ok
+
+            if _any_ok:
+                result_any_ok = True
+                try:
+                    from shared.bus import on_post_published
+                    on_post_published(theme, "all", source="catalog")
+                except Exception:
+                    pass
+                break
+            else:
+                log(f"🔄 '{theme}' 발행 실패 — 다음 후보로")
         except Exception as _e:
-            log(f"⚠️ RADAR 테마 실행 오류 ({_theme}): {_e}")
-            update_pipeline_status(item['id'], 'suggested')
-            return False
+            log(f"⚠️ 카탈로그 테마 실행 오류 ({theme}): {_e}")
         finally:
             os.environ.pop("JARVIS_SOURCE_KEYWORD", None)
             os.environ.pop("JARVIS_POST_TYPE", None)
             _lock_release()
 
-    # 첫 번째 시도
-    _ok = _run_one_theme(selected)
-
-    # 실패 시 다음 후보 테마 자동 전환 (data_empty / 전체 플랫폼 실패)
-    # 폴백 후보는 위에서 이미 완료·유사주제 필터 완료 — 추가 체크 불필요
-    if not _ok:
-        update_pipeline_status(selected['id'], 'failed')
-        if not _fallback_candidates:
-            log("⚠️ 폴백 테마 후보 없음 (모두 완료·유사주제·RADAR 미선정)")
-        for _fb in _fallback_candidates:
-            _fb_theme = _fb['theme']
-            send_telegram(
-                f"⚠️ '{theme}' 발행 실패\n"
-                f"▶ 폴백 테마 자동 전환: {_fb_theme}"
-            )
-            log(f"🔄 폴백 테마 전환: {theme} → {_fb_theme}")
-            _tried.append(_fb)
-            _ok = _run_one_theme(_fb)
-            if _ok:
-                break
-            update_pipeline_status(_fb['id'], 'failed')
-
-        if not _ok:
-            send_telegram(
-                f"❌ 테마글 전체 실패\n"
-                f"시도한 테마: {', '.join(c['theme'] for c in _tried)}\n"
-                f"종목 수집 0개 — 순차 실행(run_next)으로 대체 발행 시도"
-            )
-            log(f"❌ 테마글 전체 실패: 모든 폴백 테마도 실패")
-            # ★ 최종 폴백 — RADAR 전체 실패 시 순차 테마로 대체 발행 (ERRORS [245] 박제)
-            log("🔄 RADAR 전체 실패 → 순차 실행(run_next) 최종 폴백 시도")
-            run_next()
+    if not result_any_ok:
+        send_telegram(
+            f"❌ 테마글 전체 실패\n"
+            f"시도한 테마: {', '.join(tried)}\n"
+            f"종목 수집 0개 또는 발행 오류"
+        )
+        log(f"❌ 테마글 전체 실패: {tried}")
 
 
 

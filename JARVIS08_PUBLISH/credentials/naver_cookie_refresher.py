@@ -103,7 +103,7 @@ def cookie_needs_refresh() -> bool:
     """
     쿠키 갱신이 필요한지 판단:
     1) 파일이 없으면 → True
-    2) 파일 나이가 COOKIE_MAX_AGE_HOURS 이상 → 실제 유효성 확인
+    2) 파일 나이가 COOKIE_MAX_AGE_HOURS 이상 → 실제 유효성 확인 (유효하면 mtime 리셋)
     3) 파일 나이가 짧아도 실제 확인 결과 만료 → True
     """
     if not COOKIE_FILE.exists():
@@ -112,8 +112,17 @@ def cookie_needs_refresh() -> bool:
     if age_hours < COOKIE_MAX_AGE_HOURS:
         # 파일이 최신이어도 실제 확인
         return not check_cookie_valid()
-    # 파일이 오래됐으면 실제 확인
-    return not check_cookie_valid()
+    # 파일이 오래됐으면 실제 확인 — 여전히 유효하면 나이 판정 기준(mtime)을 리셋.
+    # 리셋 안 하면 전체 재로그인(Selenium) 없이는 age>10h 판정이 매 호출마다 반복돼
+    # login_manager.verify_all_logins()/harness precondition 이 살아있는 세션을
+    # 계속 "쿠키 만료 임박/세션 무효"로 오판 (재발 원인).
+    still_valid = check_cookie_valid()
+    if still_valid:
+        try:
+            COOKIE_FILE.touch()
+        except OSError as e:
+            print(f"  ⚠️ 쿠키 mtime 리셋 실패: {e}")
+    return not still_valid
 
 
 def _type_string_cgevent(text: str, delay_min=0.04, delay_max=0.10):

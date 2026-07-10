@@ -154,23 +154,36 @@ def plan_research(topic: str, sector: str = "", angle: str = "") -> dict:
     catalog = "\n".join(f"- {k}: {v}" for k, v in _SOURCE_CATALOG.items())
     prompt = _PLAN_PROMPT.format(topic=topic, sector=sector or "-",
                                  angle=(angle or "-")[:300], catalog=catalog)
-    for _attempt in range(3):
+    # ★ 외부 재시도 = JSON 파싱 실패 시만 (ERRORS [399] — 스로틀 근본 차단).
+    # 이전: 3 outer × 3 inner = 9 스폰 → 스로틀 시 _circuit_record_throttle 3회 누적 →
+    #   회로 차단기 개방 → 후속 대본·품질 게이트 LLM 전체 차단.
+    # 수정: 빈 응답(=Max 스로틀)이면 외부 루프 즉시 종료 → 폴백.
+    #   JSON 파싱 실패(응답은 있지만 형식 오류)인 경우만 온도 0.5 로 1회 재시도.
+    # 효과: 스로틀 시 스폰 9→3, throttle 레코드 3→1 (회로 차단 임계 3회에 도달 방지).
+    from shared.llm import invoke_text
+    for _attempt in range(2):
         try:
-            from shared.llm import invoke_text
             # ★ _essential=True (ERRORS [300]): 설계는 수집 품질의 조타수 —
             #   회로 차단 중에도 1회 실시도 보장 (즉시 폴백 금지).
             raw = invoke_text("analyzer", prompt, system=_PLAN_SYSTEM,
                               max_tokens=1600, temperature=0.2 if _attempt == 0 else 0.5,
                               _essential=True)
-            plan = _sanitize(_extract_json(raw), topic)
-            if plan:
-                log.info(f"[research] '{topic}' → 질문 {len(plan['questions'])}개 설계 "
-                         f"(시도 {_attempt + 1})")
-                plan["fallback"] = False
-                return plan
         except Exception as e:
-            log.warning(f"[research] 설계 시도{_attempt + 1} 실패: {e}")
+            log.warning(f"[research] 설계 시도{_attempt + 1} 예외: {e}")
             _g_report("collector", e, module=__name__, func_name="plan_research")
+            break  # 예외 → 폴백
+        if not raw.strip():
+            # ★ 빈 응답 = Max 스로틀 → 외부 루프 즉시 종료 (추가 스폰 금지)
+            log.warning(f"[research] '{topic}' 빈 응답(스로틀) → 즉시 폴백 (회로차단기 보호)")
+            break
+        plan = _sanitize(_extract_json(raw), topic)
+        if plan:
+            log.info(f"[research] '{topic}' → 질문 {len(plan['questions'])}개 설계 "
+                     f"(시도 {_attempt + 1})")
+            plan["fallback"] = False
+            return plan
+        # 응답은 있지만 JSON 파싱 실패 → 온도 0.5 로 1회 재시도 (탈출 아님)
+        log.debug(f"[research] 시도{_attempt + 1} JSON 파싱 실패 — 온도 상향 재시도")
     fb = _fallback_plan(topic, sector)
     # ★ 폴백 플래그 (ERRORS [300]) — 조용한 강등 금지: 팩·알림에서 가시화.
     fb["fallback"] = True

@@ -33,3 +33,12 @@ export type Pattern    = { fingerprint: string; fixer_name: string; hit_count: n
 export type DbTable    = { name: string; rows: number; last_write: string; today_rows: number };
 export type DbStats    = { size_mb: number; tables: DbTable[]; backup_files: BackupFile[]; total_rows: number; wal_exists: boolean };
 export type BackupFile = { name: string; size_mb: number; mtime: string };
+
+// 파이프라인 그래프 — /api/graph (사용자 박제 2026-07-11)
+export type PipelineEdge = {
+  id: string; from: string; to: string;
+  label?: string | null; col: string; dur: number; dots: number; wt?: number;
+  route?: string; lane_y?: number; dx?: number;
+};
+export type LegendItem = { col: string; label: string };
+export type GraphData  = { edges: PipelineEdge[]; legend: LegendItem[] };

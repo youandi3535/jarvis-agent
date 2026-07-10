@@ -148,28 +148,9 @@ def _build_blocks(collected, platform: str, img_dir: Path,
     # ── JARVIS06: 이미지 생성 + 블록 조립 (process_draft v2 — collected) ──────
     from JARVIS06_IMAGE.draft_processor import process_draft
     result = process_draft(draft_html, collected=collected, platform=platform, out_dir=img_dir)
-    blocks = result["blocks"]
+    blocks = result["blocks"]  # J06 이 썸네일 prepend + 법률집행 완료
     html   = result["html"]
     title  = result["title"]
-
-    # 썸네일 맨 앞에 추가
-    thumb = result.get("thumbnail_path")
-    if thumb and Path(thumb).exists():
-        blocks = [("image", str(thumb))] + blocks
-        print(f"  ✅ 썸네일: {Path(thumb).name}")
-
-    # ── 품질 검증 ───────────────────────────────────────────────
-    try:
-        from JARVIS02_WRITER.jarvis_main import enforce_text_between_images
-        blocks = enforce_text_between_images(blocks, source=f'THEME-{platform.upper()}')
-    except Exception as e:
-        _g_report("writer", e, module=__name__)
-    try:
-        from JARVIS02_WRITER.law_enforcer import enforce_supreme_law, notify_violations
-        blocks, viols = enforce_supreme_law(blocks, platform, f"THEME-{platform.upper()}")
-        notify_violations(viols, platform, f"THEME-{platform.upper()}")
-    except Exception as e:
-        _g_report("writer", e, module=__name__)
 
     content = extract_text_content(html)
     n_text = sum(1 for b in blocks if b[0] == "text")
@@ -208,18 +189,23 @@ def _publish_tistory(draft: dict, theme: str, sector: str,
         from JARVIS08_PUBLISH.credentials.login_manager import get_tistory_cookie
         _tp_mod.TS_COOKIE = get_tistory_cookie().strip('"').strip("'")
         from JARVIS08_PUBLISH.platforms import post_to_tistory
+        from JARVIS06_IMAGE.draft_processor import publish_assembled
 
         # ★ 사용자 박제 2026-05-15 — 태그 특수기호 절대 금지 (제14조 단일 진입점)
         from shared.seo import sanitize_tags as _stg
         tags = _stg([theme, sector, '테마주', '주식', '투자'])
-        ok_pub = post_to_tistory(
-            title=draft["title"],
-            html_content=draft["content"],
-            blocks=draft["blocks"],
-            category=THEME_CATEGORY,
-            preloaded_driver=preloaded_driver,
-            tags=tags,
-        )
+
+        def _pub_fn(blocks, title, **_kw):
+            return post_to_tistory(
+                title=title,
+                html_content=draft["content"],
+                blocks=blocks,
+                category=THEME_CATEGORY,
+                preloaded_driver=preloaded_driver,
+                tags=tags,
+            )
+
+        ok_pub = publish_assembled(draft, _pub_fn, "tistory")
         if ok_pub:
             _tg(f"✅ [THEME-TISTORY] 발행 완료\n제목: {draft['title']}\n테마: {theme}")
             try:
@@ -248,16 +234,21 @@ def _publish_naver(draft: dict, theme: str, sector: str) -> dict:
         return {"success": False, "url": "", "keyword": theme}
     try:
         from JARVIS08_PUBLISH.platforms import post_to_naver
+        from JARVIS06_IMAGE.draft_processor import publish_assembled
         # ★ 사용자 박제 2026-05-15 — 태그 특수기호 절대 금지 (제14조 단일 진입점)
         from shared.seo import sanitize_tags as _stg
         tags = _stg([theme, sector, '테마주', '주식', '투자'])
-        ok_pub = post_to_naver(
-            title=draft["title"],
-            html_content=draft["content"],
-            blocks=draft["blocks"],
-            category=THEME_CATEGORY,
-            tags=tags,
-        )
+
+        def _pub_fn(blocks, title, **_kw):
+            return post_to_naver(
+                title=title,
+                html_content=draft["content"],
+                blocks=blocks,
+                category=THEME_CATEGORY,
+                tags=tags,
+            )
+
+        ok_pub = publish_assembled(draft, _pub_fn, "naver")
         if ok_pub:
             _tg(f"✅ [THEME-NAVER] 발행 완료\n제목: {draft['title']}\n테마: {theme}")
             try:

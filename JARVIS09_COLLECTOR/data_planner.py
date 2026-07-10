@@ -143,26 +143,35 @@ def plan_data_sources(topic: str, sector: str = "", description: str = "") -> li
     catalog = "\n".join(f"- {k}: {v}" for k, v in _SOURCE_CATALOG.items())
     prompt = _PLAN_PROMPT.format(topic=topic, sector=sector or "-",
                                  desc=(description or topic)[:400], catalog=catalog)
-    # ★ 재시도 (사용자 박제 2026-07-06: 재시도 상한 예외 없이 3회 통일): rate-limit(빈 응답)
-    #   백오프는 이제 invoke_text 가 단일 진입점에서 흡수한다 → 여기 재시도는
-    #   *JSON 파싱 실패* 대응만(온도 변주로 출력 다양화). (구 사유: 중복 백오프 제거
-    #   〈invoke_text 가 이미 대기〉로 2회면 충분 — 이제 3회로 통일)
-    for _attempt in range(3):
+    # ★ 외부 재시도 = JSON 파싱 실패 시만 (ERRORS [399] — 스로틀 근본 차단).
+    # 이전: 3 outer × 3 inner = 9 스폰 → 스로틀 시 _circuit_record_throttle 3회 누적 →
+    #   회로 차단기 개방 → 후속 대본·품질 게이트 LLM 전체 차단.
+    # 수정: 빈 응답(=Max 스로틀)이면 외부 루프 즉시 종료 → 폴백.
+    #   JSON 파싱 실패(응답은 있지만 형식 오류)인 경우만 온도 0.5 로 1회 재시도.
+    # 효과: 스로틀 시 스폰 9→3, throttle 레코드 3→1 (회로 차단 임계 3회에 도달 방지).
+    from shared.llm import invoke_text
+    for _attempt in range(2):
         try:
-            from shared.llm import invoke_text
             # ★ _essential=True (ERRORS [300]): 설계는 수집 품질의 조타수 —
             #   회로 차단 중에도 1회 실시도 보장 (즉시 폴백 금지).
             raw = invoke_text("analyzer", prompt, system=_PLAN_SYSTEM,
                               max_tokens=1100, temperature=0.2 if _attempt == 0 else 0.5,
                               _essential=True)
-            plan = _sanitize(_extract_json(raw))
-            if plan:
-                log.info(f"[planner] '{topic}' → {len(plan)}개 series 설계 (시도 {_attempt + 1})")
-                return plan
         except Exception as e:
-            log.warning(f"[planner] 설계 시도{_attempt + 1} 실패: {e}")
+            log.warning(f"[planner] 설계 시도{_attempt + 1} 예외: {e}")
             _g_report("collector", e, module=__name__, func_name="plan_data_sources")
-    # ★ LLM 3회 전패 → 결정론 aspect 폴백 (빈 설계로 만족도 쏠리지 않게 다차원 보장)
+            break  # 예외 → 폴백
+        if not raw.strip():
+            # ★ 빈 응답 = Max 스로틀 → 외부 루프 즉시 종료 (추가 스폰 금지)
+            log.warning(f"[planner] '{topic}' 빈 응답(스로틀) → 즉시 폴백 (회로차단기 보호)")
+            break
+        plan = _sanitize(_extract_json(raw))
+        if plan:
+            log.info(f"[planner] '{topic}' → {len(plan)}개 series 설계 (시도 {_attempt + 1})")
+            return plan
+        # 응답은 있지만 JSON 파싱 실패 → 온도 0.5 로 1회 재시도 (탈출 아님)
+        log.debug(f"[planner] 시도{_attempt + 1} JSON 파싱 실패 — 온도 상향 재시도")
+    # ★ LLM 2회 전패(스로틀·파싱실패) → 결정론 aspect 폴백 (빈 설계로 만족도 쏠리지 않게 다차원 보장)
     try:
         from JARVIS09_COLLECTOR.chart_data import _expand_theme
         _syns = _expand_theme(topic)

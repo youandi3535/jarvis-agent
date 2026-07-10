@@ -258,19 +258,19 @@ def _expand_theme(theme: str) -> list:
         f'최대 3개 알려줘 (예: "지역화폐"→"지역사랑상품권", "전기차"→"전기자동차"). '
         f'"{theme}" 자체가 이미 정식명이면 유사·상위 개념어라도 1~2개. 정말 없을 때만 빈 배열.\n'
         'JSON만: {"terms": ["정식명칭1", ...]}')
-    for _attempt in range(3):   # ★ 재시도 — LLM 이 가끔 빈 응답 → 동의어 0 → KOSIS 수율 0
+    for _attempt in range(1):   # ★ 1회만 (ERRORS [400]): 재시도 없음 — 스로틀·파싱실패 모두 그냥 통과
         try:
             from shared.llm import invoke_text
-            raw = invoke_text("analyzer", _prompt, max_tokens=120,
-                              temperature=0 if _attempt == 0 else 0.3)
-            m = re.search(r"\{[\s\S]*\}", raw or "")
+            raw = invoke_text("analyzer", _prompt, max_tokens=120, temperature=0)
+            if not raw or not raw.strip():
+                log.warning(f"[chart_data] '{theme}' 동의어 확장 빈 응답(스로틀) → 동의어 없이 통과")
+                break
+            m = re.search(r"\{[\s\S]*\}", raw)
             if m:
                 terms = json.loads(m.group(0)).get("terms") or []
                 syns = [str(t).strip() for t in terms if str(t).strip() and str(t).strip() != theme][:3]
-                if syns:
-                    break
         except Exception as e:
-            log.warning(f"[chart_data] 동의어 확장 시도{_attempt + 1} 실패: {e}")
+            log.warning(f"[chart_data] 동의어 확장 실패: {e}")
     _SYNONYM_CACHE[theme] = syns
     # ★ 성공 시에만 영구 저장 (빈 결과는 rate-limit 일 수 있어 저장 안 함 → 다음에 재시도)
     if syns:
@@ -547,11 +547,15 @@ def _relevance_filter(theme: str, description: str, datasets: list) -> list:
         f"{listing}\n\n"
         'JSON만 출력: {"keep": [관련 번호 목록]}'
     )
-    for _attempt in range(3):   # ★ 재시도 — 일시 실패로 인한 fail-open 누수 방지
+    for _attempt in range(2):   # ★ 재시도 — JSON 파싱 실패 시만 (ERRORS [399] 동일 패턴)
         try:
             from shared.llm import invoke_text
             raw = invoke_text("analyzer", prompt, max_tokens=200, temperature=0)
-            m = re.search(r"\{[\s\S]*\}", raw or "")
+            if not raw or not raw.strip():
+                # ★ 빈 응답 = Max 스로틀 → 즉시 종료 (추가 스폰 금지)
+                log.warning(f"[chart_data] '{theme}' 관련성 게이트 빈 응답(스로틀) → 결정론 백스톱")
+                break
+            m = re.search(r"\{[\s\S]*\}", raw)
             if not m:
                 continue
             keep = json.loads(m.group(0)).get("keep")
@@ -771,7 +775,9 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                     _from_src += 1
                     if _from_src >= _PER_SOURCE or len(_cands) >= _cand_cap:
                         break
-        # (B) 병렬 추출 — LLM 호출이 느려 동시 실행 (단위 일관성·실수치 게이트는 추출기 내부)
+        # (B) 병렬 추출 — LLM 호출이 느려 동시 실행.
+        # ★ max_workers=2 (ERRORS [399] 동일 원인): 6→2 제한 — 동시 LLM 6개가 TPM 초과 → 스로틀 직격.
+        #   2개 동시 실행으로 분당 토큰 소비 안정화. 추출 지연 < 후속 plan_research 스로틀 피해.
         if _cands:
             from concurrent.futures import ThreadPoolExecutor as _TPE2
 
@@ -779,7 +785,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                 nat, d = c
                 return _extract_series_from_docs({"name": nat, "unit": "", "chart": "bar"}, [d])
 
-            with _TPE2(max_workers=6) as _ex2:
+            with _TPE2(max_workers=1) as _ex2:
                 for ds in _ex2.map(_extract_cand, _cands):
                     if ds:
                         datasets.append(ds)

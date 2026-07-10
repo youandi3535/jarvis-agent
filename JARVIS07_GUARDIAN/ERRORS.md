@@ -2,6 +2,53 @@
 
 ---
 
+## [400] chart_data — 병렬 LLM 6개 + 2개 미수정 range(3) 루프 = TPM 초과로 plan_research 연쇄 스로틀 (2026-07-11)
+
+- **증상**: `collect_chart_data()` 실행 후 `collect_research()` → `plan_research()` 가 빈 응답(스로틀)으로 폴백. ERRORS [399] 에서 `plan_research` / `plan_data_sources` 의 외부 3회 루프를 수정했지만, `chart_data.py` 안의 LLM 호출 3곳은 수정 범위에서 누락됨.
+- **환경**: `JARVIS09_COLLECTOR/chart_data.py`. 호출 순서: `collect_chart_data()` (먼저) → `collect_research()` (나중).
+- **원인 (근본)**: `collect_chart_data()` 안에 LLM 스로틀 대량 발생 지점 3곳이 있었다.
+  1. `_expand_theme()` — `range(3)` 외부 루프, 빈 응답에 `continue` → 스로틀 시 9 스폰.
+  2. 병렬 series 추출 — `ThreadPoolExecutor(max_workers=6)` 로 최대 6개 LLM 동시 실행 → TPM 한도 초과.
+  3. `_relevance_filter()` — `range(3)` 외부 루프, 빈 응답에 `continue` → 스로틀 시 9 스폰.
+  이 세 곳이 연속으로 API를 소진하고, 그 직후 `collect_research()` → `plan_research()` 가 호출되면 API가 이미 스로틀 상태 → 빈 응답 → 폴백.
+- **헛다리**: ERRORS [399]에서 `research_planner` / `data_planner` 만 수정하고 `chart_data.py` 는 같은 문제를 안고 있었는데 누락.
+- **해결**:
+  1. `_expand_theme()`: `range(3)` → `range(2)` + 빈 응답 즉시 `break` + 예외 즉시 `break`.
+  2. `ThreadPoolExecutor(max_workers=6)` → `max_workers=2` — 동시 LLM 호출 6→2.
+  3. `_relevance_filter()`: `range(3)` → `range(2)` + 빈 응답 즉시 `break`.
+- **파일**: `JARVIS09_COLLECTOR/chart_data.py`.
+- **교훈**: "LLM 호출이 있는 함수는 전부 빈 응답 즉시 break 여부를 확인해야 한다." 수정 시 단일 파일만 보면 같은 패턴이 다른 파일에도 잔존. `chart_data.py` 처럼 한 함수 안에서 설계(plan_data_sources) + 동의어 확장(_expand_theme) + 병렬 추출 + 관련성 게이트(_relevance_filter) 가 모두 LLM을 부르는 구조는 누적 TPM 소비가 매우 크다 — 병렬 워커 수 상한이 핵심 레버.
+
+---
+
+## [399] 연구 설계·데이터 설계 — 외부 3회 루프가 스로틀 시 회로차단기 연속 개방 (2026-07-10)
+
+- **증상**: 블로그 발행 파이프라인에서 LLM 연구 설계(`plan_research`) / 데이터 설계(`plan_data_sources`) 단계가 폴백 처리되고, 이후 대본 생성·품질 게이트 LLM 호출도 연쇄 차단.
+- **환경**: `JARVIS09_COLLECTOR/research_planner.py plan_research()` / `data_planner.py plan_data_sources()` 의 `for _attempt in range(3)` 외부 루프 + `invoke_text(..., _essential=True)` 내부 3회 재시도.
+- **원인 (근본)**: 두 함수 모두 **외부 3회 × 내부 3회 = 9번 스폰**을 시도한다. Max 구독 스로틀 시 `invoke_text()` 가 빈 응답을 반환하면 외부 루프는 즉시 재시도한다 — 즉, 스로틀된 상태에서 각 외부 시도마다 1회 `_circuit_record_throttle()` 가 호출된다. 외부 루프 3회 완료 시 연속 throttle 카운터 3 = `_CIRCUIT_THRESHOLD` 도달 → **회로 차단기 개방**. 이후 같은 파이프라인의 대본 생성·사실성 게이트·매력도 판정(alias=writer/fact_judge/engagement_judge) 모든 LLM 호출이 open 회로를 마주해 1샷 또는 즉시 폴백 처리됨. `_circuit_record_success()` 가 연속 카운터를 0으로 리셋하려면 1회 성공이 필요한데, 9번 모두 스로틀이면 리셋 기회가 없다.
+- **헛다리**: 없음 — `invoke_text()` 내부 재시도 로직과 외부 루프의 상호작용, `_circuit_record_throttle()` 호출 경로를 `shared/llm.py` 코드에서 직접 추적해 특정.
+- **해결**: `research_planner.plan_research()` / `data_planner.plan_data_sources()` 두 곳 모두 동일하게 수정:
+  1. `range(3)` → `range(2)` (외부 루프 상한 축소)
+  2. **빈 응답(Max 스로틀) 감지 즉시 `break` → 폴백** — 추가 스폰 0, throttle 레코드 1회에 고정.
+  3. 외부 루프 2번째 시도는 *응답은 있지만 JSON 파싱 실패* 인 경우만 진입 (온도 0.5 변주).
+  효과: 스로틀 시 스폰 9→3, throttle 레코드 3→1 → 회로 차단 임계(3회) 도달 방지. 대본·품질 게이트 LLM 호출 보호.
+- **파일**: `JARVIS09_COLLECTOR/research_planner.py`, `JARVIS09_COLLECTOR/data_planner.py`.
+- **교훈**: `invoke_text()` 내부에 이미 재시도 로직(3회 + 지수 백오프)이 있음에도 외부에 또 N회 루프를 두면, 스로틀 시 N번의 연속 throttle 레코드가 누적된다 — 회로 차단기가 N-shot 내에 개방되어 후속 호출 전체를 막는다. 외부 재시도는 **응답은 왔으나 파싱 실패** 케이스에만 의미가 있고, **빈 응답(스로틀)** 케이스에서는 즉시 폴백이 옳다. "결정론 폴백은 나쁜 것이 아니라, 회로가 닫힌 상태를 보존해 대본 생성에 LLM 기회를 넘겨주는 선택"이다.
+
+---
+
+## [398] cookie_needs_refresh() 유효 확인해도 mtime 미리셋 → naver precondition 무한 재발 오판 (2026-07-10)
+
+- **증상**: harness `theme-publish-파운드리-naver` precondition 이 `RuntimeError: [harness:theme-publish-파운드리-naver] attempt=1 step=① 전제조건: naver 로그인 세션 무효 — 쿠키 만료 임박 (15.2h > 10h)` 로 실패 보고(source=harness, module=`JARVIS00_INFRA.harness.theme-publish-파운드리-naver`, func_name=`① 전제조건`).
+- **환경**: `JARVIS02_WRITER/trend_theme_writer.py` `_verify_theme_platform()` 의 [L1] 로그인 세션 검증 — `login_manager.auto_refresh_if_needed()` 호출 직후 `login_manager.verify_all_logins()` 로 판정. `verify_all_logins()`(`JARVIS08_PUBLISH/credentials/login_manager.py:178-180`)는 `naver_cookie_age_hours()`(=`naver_cookies.pkl` mtime 경과시간)가 10h 초과면 실제 세션 유효 여부와 무관하게 "쿠키 만료 임박" issue 를 추가.
+- **원인 (근본)**: `auto_refresh_if_needed()` → `refresh_naver_cookies(force=False)` → `naver_cookie_refresher.cookie_needs_refresh()` 흐름에서, 파일 나이가 `COOKIE_MAX_AGE_HOURS`(10h) 를 넘으면 `check_cookie_valid()` 로 *실제* 네이버 로그인 상태(HTTP 요청)를 재확인하지만, 유효 판정이 나와도 쿠키 파일의 mtime 을 갱신하지 않았다. 그 결과 `refresh_naver_cookies(force=False)` 는 "갱신 불필요"로 조용히 스킵하고 Selenium 전체 재로그인(mtime 을 실제로 리셋하는 유일한 경로)은 일어나지 않아, 파일 나이는 계속 10h 를 초과한 상태로 남는다. 이후 매번 `verify_all_logins()` 가 동일하게 "쿠키 만료 임박"을 재보고 — 세션이 실제로는 멀쩡한데도 precondition 이 무한히 "세션 무효"로 오판하는 자기영속적 버그.
+- **헛다리**: 없음 — `login_manager.py`/`naver_cookie_refresher.py` 를 정독해 age 기준 판정과 실유효성 확인(`check_cookie_valid()`) 사이의 결과 불일치를 코드 상에서 바로 특정. `.venv` 로 `cookie_needs_refresh()` 를 실행해 실제로 "✅ 쿠키 유효" 인데도 mtime 이 리셋되지 않는 것을 재현 확인 후 수정.
+- **해결**: `naver_cookie_refresher.cookie_needs_refresh()` — 파일 나이가 `COOKIE_MAX_AGE_HOURS` 초과해 `check_cookie_valid()` 를 호출하는 분기에서, 유효 판정(`still_valid=True`) 시 `COOKIE_FILE.touch()` 로 mtime 을 지금 시점으로 리셋하도록 추가. 실행 후 `naver_cookie_age_hours()` 가 15.4h → 0.00h 로 리셋되고 `login_manager.verify_all_logins()["naver"]["ok"]` 가 `True` 로 전환됨을 직접 실행해 확인.
+- **파일**: `JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py`.
+- **교훈**: "실제 유효성을 재확인하는 함수"와 "그 결과를 캐시(mtime)로 기억하는 책임"이 분리돼 있으면, 확인은 매번 성공해도 그 결과가 기록되지 않아 상위 판정 로직(파일 나이 기반)이 영원히 낡은 신호만 본다. 유효성을 실측하는 지점에서 *반드시* 그 결과를 다음 판정의 기준값(mtime)에도 반영해야 한다 — 그렇지 않으면 "확인은 계속 통과하는데 판정은 계속 실패"하는 모순이 재발한다.
+
+---
+
 ## [397] radar_main.py 순차 네트워크 루프에 beat() 미배선 — [394] 후속 조치 완료 (2026-07-10)
 
 - **증상**: watchdog 이 `트렌드 수집 실패 (rc=75): ... [watchdog] 🛑 '레이더 수집': 멈춤(freeze) 1548s > 300s` RuntimeError 보고(source=radar, module=`JARVIS03_RADAR.jobs`). rc=75 는 스크립트 자체 실패가 아니라 `JARVIS00_INFRA/watchdog.py` 의 freeze 감시 스레드가 `os._exit(75)`(EX_TEMPFAIL)로 강제 종료한 결과 — stderr 에 찍힌 `RequestsDependencyWarning` 은 우연히 같이 출력된 무관한 경고일 뿐 원인이 아님.
