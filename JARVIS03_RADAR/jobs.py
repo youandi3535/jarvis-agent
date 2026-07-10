@@ -22,6 +22,11 @@ except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────
 
+try:
+    from JARVIS00_INFRA.watchdog import WATCHDOG_KILL_RC
+except ImportError:
+    WATCHDOG_KILL_RC = 75
+
 _log = logging.getLogger("radar.jobs")
 _RADAR_DIR = Path(__file__).parent
 _ROOT = _RADAR_DIR.parent
@@ -50,6 +55,15 @@ def _run_script_checked(script: Path, args: list = None, label: str = "") -> Non
             err_tail = (result.stderr or "").strip()[-300:]
             if err_tail:
                 _log.warning(f"  STDERR: {err_tail}")
+            if result.returncode == WATCHDOG_KILL_RC:
+                # ★ 워치독 강제킬(os._exit)은 자체 stderr를 남기지 않음 — err_tail은
+                #   킬 이전에 우연히 남아있던 무관한 내용(import 경고 등)이라 오진단 유발.
+                #   (2026-07-10 — RequestsDependencyWarning 잔재를 실패 원인으로 오인할 뻔한 사고)
+                raise RuntimeError(
+                    f"{lbl} 실패 (rc={result.returncode} EX_TEMPFAIL): "
+                    f"워치독 정지(freeze/deadline) 감지로 강제 종료 — 네트워크·외부 API 응답 지연 의심 "
+                    f"(stderr 꼬리는 킬 이전 무관 내용일 수 있음: {err_tail[:120]!r})"
+                )
             raise RuntimeError(f"{lbl} 실패 (rc={result.returncode}): {err_tail[:200]}")
         _log.info(f"✅ {lbl} 완료")
     except subprocess.TimeoutExpired:

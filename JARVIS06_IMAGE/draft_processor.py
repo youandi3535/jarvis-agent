@@ -306,6 +306,75 @@ def _render_photo_slots(html: str, collected, out_dir: Path, run_id: str,
 # 흐름에서도 호출 제거 (① 차트 / ② 사진 / 썸네일 / 캡처 / 조립).
 
 
+def _inject_leader_price_charts(html: str, collected) -> str:
+    """[PRICE_CHART_LEADER]...[/PRICE_CHART_LEADER] 슬롯 → 주가 차트 교체.
+
+    주 경로: collected.datasets 의 viz_hint="stock_price" 데이터로 차트 생성
+    폴백   : 데이터 없으면 collected.entities ticker 로 yfinance 직접 조회
+    실데이터 없으면 슬롯 제거 (ADR 010 — 거짓 차트 금지).
+
+    rank는 1-indexed (collect_theme.py enumerate(stocks, 1)):
+      rank=1 → 대장주 (label_key="leader")
+      rank=2 → 부대장주 (label_key="second")
+    """
+    try:
+        from JARVIS06_IMAGE.theme_charts import (
+            make_leader_price_chart_from_data,
+            make_leader_price_chart,
+        )
+    except ImportError:
+        for key in ("LEADER", "SECOND"):
+            html = re.sub(rf'\[PRICE_CHART_{key}\].*?\[/PRICE_CHART_{key}\]',
+                          '', html, flags=re.DOTALL)
+        return html
+
+    _SLOTS = [("LEADER", "leader", 1), ("SECOND", "second", 2)]
+
+    # datasets 에서 viz_hint="stock_price" 항목 인덱스
+    datasets = list(getattr(collected, "datasets", None) or [])
+    _price_ds = {
+        d.get("label_key"): d
+        for d in datasets
+        if d.get("viz_hint") == "stock_price" and d.get("label_key")
+    }
+
+    # entities 에서 rank=1,2 인덱스 (폴백용 ticker)
+    entities = list(getattr(collected, "entities", None) or [])
+    _by_rank = {e.get("rank"): e for e in entities
+                if isinstance(e.get("rank"), int) and e.get("rank") in (1, 2)}
+
+    for slot_key, label_key, rank in _SLOTS:
+        slot_pat = re.compile(
+            rf'\[PRICE_CHART_{slot_key}\](.*?)\[/PRICE_CHART_{slot_key}\]',
+            re.DOTALL,
+        )
+        if not slot_pat.search(html):
+            continue
+
+        chart_html = ""
+
+        # 주 경로: collected.datasets 의 분기별 데이터
+        ds = _price_ds.get(label_key)
+        if ds and ds.get("data"):
+            chart_html = make_leader_price_chart_from_data(
+                rows=ds["data"],
+                name=ds.get("name", label_key),
+                period=ds.get("period", ""),
+            )
+
+        # 폴백: entities ticker 로 실시간 조회
+        if not chart_html:
+            stock = _by_rank.get(rank)
+            if stock and stock.get("ticker") and stock.get("name"):
+                chart_html = make_leader_price_chart(
+                    yf_ticker=stock["ticker"], name=stock["name"]
+                )
+
+        html = slot_pat.sub(chart_html, html)  # 차트 없으면 chart_html="" → 슬롯 제거
+
+    return html
+
+
 # ── 공개 API ──────────────────────────────────────────────────────
 
 def process_draft(draft_html: str, collected, platform: str = "tistory",
@@ -363,6 +432,12 @@ def process_draft(draft_html: str, collected, platform: str = "tistory",
 
     # ② [PHOTO_N] → 인포그래픽 디자인(데이터 있으면) 아니면 슬롯 제거. ★ 본문 AI 사진 폐기.
     html = _render_photo_slots(html, collected, out_dir, _run_id, _used_titles, platform)
+
+    # ②-B 대장주·부대장주 주가 차트 (카테고리=theme 시, rank=1/2 종목, ADR 010)
+    #   주 경로: collected.datasets 의 viz_hint="stock_price" 분기별 데이터
+    #   폴백:   collected.entities 의 ticker 로 yfinance 실시간 조회
+    if category == "theme":
+        html = _inject_leader_price_charts(html, collected)
 
     # ★ min-N top-up — 실데이터 인포그래픽만 (사용자 박제 2026-07-06: 본문 이미지 = 인포그래픽
     #   디자인만, 폴백 없음). datasets 로 결정론 인포그래픽을 채우고, *소진되면 그대로 둔다*

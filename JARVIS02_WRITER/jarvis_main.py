@@ -86,14 +86,9 @@ TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 def tg(msg: str):
     """텔레그램 알림 전송 (실패해도 무시)"""
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": msg},
-            timeout=10,
-        )
+        from shared.notify import send_tg
+        send_tg(msg)
     except Exception:
         pass
 
@@ -174,12 +169,8 @@ def enforce_text_between_images(blocks: list, source: str = "") -> list:
                f"(뒤따르는 본문 단락 부족). 스페이서로 분리.")
         print(msg)
         try:
-            import os, requests as _req
-            token = os.getenv('TELEGRAM_TOKEN', '')
-            chat  = os.getenv('TELEGRAM_CHAT_ID', '')
-            if token and chat:
-                _req.post(f'https://api.telegram.org/bot{token}/sendMessage',
-                          json={'chat_id': chat, 'text': msg}, timeout=5)
+            from shared.notify import send_tg
+            send_tg(msg)
         except Exception:
             pass
         for img in deferred:

@@ -24,6 +24,7 @@ log = logging.getLogger("jarvis.watchdog")
 # ── 불변식 상수 (SSOT) ──
 FREEZE_LIMIT_SEC = 300      # 멈춤 상한 — 어떤 경우라도 5분 무진전이면 정지
 MAX_RETRIES = 3             # 재시도·재시작 상한 — 어떤 경우라도 3회
+WATCHDOG_KILL_RC = 75       # EX_TEMPFAIL — 이 코드로 종료된 subprocess는 워치독 강제킬(원인은 GUARDIAN 진단, stderr 무관)
 
 # ── ★ 전역 하트비트 (진행 신호 단일 진입점) ──
 #   LLM 호출·수집 라운드·Selenium 액션 등 *모든 진행*이 이걸 갱신 → "정말 아무 진행도
@@ -110,8 +111,22 @@ class Watchdog:
 
     # ── 백그라운드 감시 (freeze — 협조적 체크가 못 도는 진짜 얼어붙음) ──
     def _monitor(self) -> None:
+        last_tick = time.time()
         while not self._stop.wait(self.poll_sec):
             now = time.time()
+            # ★ 자기 루프 간격(gap) 절전 감지 (ERRORS [389] 동일 원리 — jarvis_keeper.py
+            #   의 "자기 루프 gap" 방식을 이 워치독에도 적용). 이 감시 스레드가 poll_sec
+            #   마다 깨어나야 하는데 그보다 훨씬 크게 벌어졌다면, 이 스레드 자신도 그 구간
+            #   동안 멈춰 있었다는 직접 증거 — OS 절전(맥 Maintenance Sleep 등)으로 프로세스
+            #   전체가 함께 정지된 것이지 스텝이 진짜로 얼어붙은 게 아니다. beat 를 지금
+            #   시점으로 리셋해 무고한 freeze 판정을 면제하고 이번 틱의 판정을 건너뛴다.
+            gap = now - last_tick
+            last_tick = now
+            if gap > self.poll_sec * 3:
+                log.info(f"[watchdog] 💤 '{self.name}' 감시 루프 간격 {gap:.0f}s(기대 {self.poll_sec:.0f}s) "
+                         f"— 시스템 절전 감지, 이번 틱 freeze/데드라인 판정 유예")
+                self._last_beat = now
+                continue
             # freeze = 로컬 beat(스텝 사이) 와 전역 beat(LLM·수집 등 진행) 중 *최근* 것 기준
             #   → 오래 걸리는 정상 작업(LLM 반복 호출 등)은 전역 beat 로 살아있음 = 오탐 방지
             last = max(self._last_beat, _GLOBAL_BEAT[0])
@@ -134,7 +149,7 @@ class Watchdog:
                 if self.kill_on_freeze:
                     log.error(f"[watchdog] '{self.name}' 강제 종료(os._exit 75) — killable subprocess. "
                               f"원인은 GUARDIAN 진단, 다음 예약이 깨끗하게 재시도.")
-                    os._exit(75)   # EX_TEMPFAIL
+                    os._exit(WATCHDOG_KILL_RC)   # EX_TEMPFAIL
                 return             # kill 금지 프로세스 — 1회 보고 후 감시 종료(재보고 방지)
 
     def __enter__(self) -> "Watchdog":
@@ -181,5 +196,5 @@ def guard_main(name: str, deadline_sec: float | None = None,
 
 __all__ = ["Watchdog", "StuckError", "guard_main", "beat", "last_global_beat",
            "is_killable_subprocess",
-           "FREEZE_LIMIT_SEC", "MAX_RETRIES",
+           "FREEZE_LIMIT_SEC", "MAX_RETRIES", "WATCHDOG_KILL_RC",
            "BLOG_ACTION_DEADLINE_SEC", "DEFAULT_ACTION_DEADLINE_SEC"]

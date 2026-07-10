@@ -233,14 +233,9 @@ TODAY_DOW = ["월", "화", "수", "목", "금", "토", "일"][TODAY.weekday()]
 # ══════════════════════════════════════════
 
 def tg(msg: str):
-    if not TG_TOKEN or not TG_CHAT_ID:
-        return
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": msg},
-            timeout=10,
-        )
+        from shared.notify import send_tg
+        send_tg(msg)
     except Exception:
         pass
 
@@ -384,24 +379,6 @@ def run(post_naver=True, post_tistory=True):
     tg(f"📰 경제 브리핑 포스팅 시작 ({TODAY_STR})\n"
        f"2개 플랫폼 각기 다른 트렌드 주제로 발행")
 
-    # ── JARVIS09: 경제 뉴스 수집 (단일 진입점 — 2026-05-31 이관) ──────
-    _j09_news_context = ""
-    _j09_collection_docs: list = []
-    try:
-        from JARVIS09_COLLECTOR.collector_engine import collect_for_theme as _j09_collect
-        _j09_results = _j09_collect("오늘의 경제 시장 뉴스", "금융")
-        if _j09_results:
-            _j09_collection_docs = _j09_results  # ★ chart_generator에 전달할 원본 유지
-            _j09_news_context = "\n\n[JARVIS09 수집 뉴스 컨텍스트]\n" + "\n---\n".join(
-                f"제목: {r.title}\n{r.cleaned_text[:300]}" for r in _j09_results[:5]
-            )
-            tg(f"🕸️ JARVIS09 뉴스 수집: {len(_j09_results)}건 → 기사 컨텍스트 반영")
-            print(f"  🕸️ JARVIS09 수집 완료: {len(_j09_results)}건")
-        else:
-            print("  🕸️ JARVIS09 수집: 0건 (컨텍스트 없이 진행)")
-    except Exception as _j09_e:
-        print(f"  ⚠️ JARVIS09 수집 스킵: {_j09_e}")
-
     # ── 발행 전 사실성 게이트용 시장 수치 ground truth (★ 2026-06-28) ──────
     # 작성에 쓰인 시장 지표·경제 일정을 verify 시점 state 로 전달 → 본문 수치를
     # *신뢰 가능한 구조화 데이터* 와 직접 대조 (웹 재검증 전 1차 근거).
@@ -432,7 +409,8 @@ def run(post_naver=True, post_tistory=True):
 
     from JARVIS00_INFRA.harness import action_step, ActionDefinition, run_action, Issue
     from JARVIS02_WRITER.trend_economic_writer import (
-        ts_generate_draft, nv_generate_draft,
+        nv_collect, nv_generate_draft,
+        ts_collect, ts_generate_draft,
         ts_publish, nv_publish,
     )
 
@@ -471,39 +449,107 @@ def run(post_naver=True, post_tistory=True):
         return {"supreme_block": sb}
 
     # ★ 직렬 순서 — 네이버 먼저, 티스토리 나중 (사용자 박제 2026-07-03)
-    @action_step(name="② 네이버 대본 생성")
-    def _step_nv_draft(state):
+    @action_step(name="② NV 수집")
+    def _step_nv_collect(state):
         if not state.get("post_naver"):
-            print("  ─ [②] 네이버 건너뜀")
-            return {"nv_draft": {"success": False, "keyword": ""}}
+            print("  ─ [②] 네이버 수집 건너뜀")
+            return {"nv_collect_result": {"success": False, "keyword": ""}}
         try:
-            draft = nv_generate_draft(
+            result = nv_collect(
+                ts_keyword=state.get("ts_keyword_final", ""),
                 supreme_block=state.get("supreme_block"),
-                collection_docs=state.get("collection_docs"),
-                gate_feedback=state.get("_nv_draft_gate_feedback"),
             )
         except Exception as _e:
-            print(f"  ❌ [②] 네이버 대본 생성 오류: {_e}")
+            print(f"  ❌ [②] 네이버 수집 오류: {_e}")
+            _g_report("writer", _e, module=__name__)
+            result = {"success": False, "keyword": ""}
+        return {
+            "nv_collect_result": result,
+            "nv_keyword": result.get("keyword", "") if result.get("success") else "",
+        }
+
+    @action_step(name="③ NV 대본 생성")
+    def _step_nv_draft(state):
+        if not state.get("post_naver"):
+            print("  ─ [③] 네이버 대본 건너뜀")
+            return {"nv_draft": {"success": False, "keyword": ""}}
+        collect_result = state.get("nv_collect_result") or {}
+        if not collect_result.get("success"):
+            return {"nv_draft": {"success": False, "keyword": "",
+                                 "error": collect_result.get("error", "수집 실패")}}
+        try:
+            draft = nv_generate_draft(
+                keyword=collect_result["keyword"],
+                sector=collect_result["sector"],
+                reason=collect_result["reason"],
+                collected=collect_result["collected"],
+                supreme_block=collect_result.get("supreme_block"),
+                gate_feedback=state.get("_nv_draft_gate_feedback"),
+                source_docs=collect_result.get("source_docs"),
+            )
+        except Exception as _e:
+            print(f"  ❌ [③] 네이버 대본 생성 오류: {_e}")
             _g_report("writer", _e, module=__name__)
             draft = {"success": False, "keyword": ""}
         return {"nv_draft": draft}
 
-    @action_step(name="③ 티스토리 대본 생성")
-    def _step_ts_draft(state):
-        if not state.get("post_tistory"):
-            print("  ─ [③] 티스토리 건너뜀")
-            return {"ts_draft": {"success": False, "keyword": ""}}
-        # ★ 플랫폼 직렬 (2026-07-03): 네이버 액션 종결 후 확정 키워드를 input_data 로 수령
-        _nv_kw = state.get("nv_keyword_final", "")
+    @action_step(name="④ TS 쿠키")
+    def _step_ts_cookie(state):
+        if state.get("ts_driver") is not None:
+            print("  ⏭️ [④] 티스토리 driver 이미 준비됨 (재시도 — 재갱신 스킵)")
+            return {}
         try:
-            draft = ts_generate_draft(
+            from dotenv import load_dotenv
+            from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr
+            ok, drv = _tcr(force=True, return_driver=True)
+            if ok:
+                load_dotenv(override=True)
+                return {"ts_driver": drv}
+            if drv:
+                try: drv.quit()
+                except Exception: pass
+        except Exception as _e:
+            print(f"  ❌ [④] 티스토리 쿠키 갱신 예외: {_e}")
+        return {"ts_driver": None}
+
+    @action_step(name="⑤ TS 수집")
+    def _step_ts_collect(state):
+        if not state.get("post_tistory"):
+            print("  ─ [⑤] 티스토리 수집 건너뜀")
+            return {"ts_collect_result": {"success": False, "keyword": ""}}
+        # ★ 플랫폼 직렬 (2026-07-03): 네이버 액션 종결 후 확정 키워드를 input_data 로 수령
+        try:
+            result = ts_collect(
+                nv_keyword=state.get("nv_keyword_final", ""),
                 supreme_block=state.get("supreme_block"),
-                collection_docs=state.get("collection_docs"),
-                nv_keyword=_nv_kw,
-                gate_feedback=state.get("_ts_draft_gate_feedback"),
             )
         except Exception as _e:
-            print(f"  ❌ [③] 티스토리 대본 생성 오류: {_e}")
+            print(f"  ❌ [⑤] 티스토리 수집 오류: {_e}")
+            _g_report("writer", _e, module=__name__)
+            result = {"success": False, "keyword": ""}
+        return {"ts_collect_result": result}
+
+    @action_step(name="⑥ TS 대본 생성")
+    def _step_ts_draft(state):
+        if not state.get("post_tistory"):
+            print("  ─ [⑥] 티스토리 대본 건너뜀")
+            return {"ts_draft": {"success": False, "keyword": ""}}
+        collect_result = state.get("ts_collect_result") or {}
+        if not collect_result.get("success"):
+            return {"ts_draft": {"success": False, "keyword": "",
+                                 "error": collect_result.get("error", "수집 실패")}}
+        try:
+            draft = ts_generate_draft(
+                keyword=collect_result["keyword"],
+                sector=collect_result["sector"],
+                reason=collect_result["reason"],
+                collected=collect_result["collected"],
+                supreme_block=collect_result.get("supreme_block"),
+                gate_feedback=state.get("_ts_draft_gate_feedback"),
+                source_docs=collect_result.get("source_docs"),
+            )
+        except Exception as _e:
+            print(f"  ❌ [⑥] 티스토리 대본 생성 오류: {_e}")
             _g_report("writer", _e, module=__name__)
             draft = {"success": False, "keyword": ""}
         return {"ts_draft": draft}
@@ -662,9 +708,9 @@ def run(post_naver=True, post_tistory=True):
     _nv_action = ActionDefinition(
         name="경제 브리핑 발행 — 네이버",
         precondition=_precondition_for("naver"),   # ★ Layer 1 — 네이버 자격증명만
-        steps=[_step_load_rules, _step_nv_draft],
-        verify=lambda st: _verify_platform(st, "naver", "nv_draft", "② 네이버 대본 생성"),
-        fix=lambda st, iss: _fix_platform(st, iss, "naver", "nv_draft", "② 네이버 대본 생성"),
+        steps=[_step_load_rules, _step_nv_collect, _step_nv_draft],
+        verify=lambda st: _verify_platform(st, "naver", "nv_draft", "③ NV 대본 생성"),
+        fix=lambda st, iss: _fix_platform(st, iss, "naver", "nv_draft", "③ NV 대본 생성"),
         send=lambda st: _send_platform(st, "naver", "nv_draft", nv_publish,
                                        "naver_ok", "nv_pub_result", "__nv_send_attempted__"),
         max_attempts=3,
@@ -673,9 +719,9 @@ def run(post_naver=True, post_tistory=True):
     _ts_action = ActionDefinition(
         name="경제 브리핑 발행 — 티스토리",
         precondition=_precondition_for("tistory"),  # ★ Layer 1 — 티스토리 자격증명만
-        steps=[_step_load_rules, _step_ts_draft],
-        verify=lambda st: _verify_platform(st, "tistory", "ts_draft", "③ 티스토리 대본 생성"),
-        fix=lambda st, iss: _fix_platform(st, iss, "tistory", "ts_draft", "③ 티스토리 대본 생성"),
+        steps=[_step_load_rules, _step_ts_cookie, _step_ts_collect, _step_ts_draft],
+        verify=lambda st: _verify_platform(st, "tistory", "ts_draft", "⑥ TS 대본 생성"),
+        fix=lambda st, iss: _fix_platform(st, iss, "tistory", "ts_draft", "⑥ TS 대본 생성"),
         send=lambda st: _send_platform(st, "tistory", "ts_draft", ts_publish,
                                        "tistory_ok", "ts_pub_result", "__ts_send_attempted__"),
         max_attempts=3,
@@ -714,13 +760,13 @@ def run(post_naver=True, post_tistory=True):
         _nv_res = run_action(
             _nv_action,
             input_data={"post_naver": True, "post_tistory": False,
-                        "collection_docs": _j09_collection_docs,
                         "market_data": _j09_market_data},
         )
         _results["naver"] = _nv_res
         _nv_state = _nv_res.state
         naver_ok = bool(_nv_state.get("naver_ok"))
-        nv_keyword = (_nv_state.get("nv_draft") or {}).get("keyword", "")
+        # ★ 수집 스텝(② NV 수집)이 state["nv_keyword"] 에 저장 — 대본 스킵돼도 키워드 확보
+        nv_keyword = _nv_state.get("nv_keyword", "")
         _write_ep_partial()
         if not _nv_res.delivered:
             _esc = getattr(_nv_res, "escalation_reason", "") or ""
@@ -740,7 +786,6 @@ def run(post_naver=True, post_tistory=True):
         _ts_res = run_action(
             _ts_action,
             input_data={"post_naver": False, "post_tistory": True,
-                        "collection_docs": _j09_collection_docs,
                         "market_data": _j09_market_data,
                         "nv_keyword_final": nv_keyword},
         )

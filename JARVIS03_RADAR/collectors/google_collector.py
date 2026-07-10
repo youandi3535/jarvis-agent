@@ -320,6 +320,11 @@ def get_trending_searches(limit: int = 30) -> list[str]:
     4) 네이버 뉴스 RSS
     5) 네이버 검색 API (보유 키 활용)
     """
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        def _wd_beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
+
     steps = [
         ("Google Trends RSS",           lambda: _fetch_google_rss(limit)),
         ("pytrends trending_searches",  lambda: _fetch_pytrends_trending(limit)),
@@ -329,6 +334,7 @@ def get_trending_searches(limit: int = 30) -> list[str]:
     ]
 
     for name, fn in steps:
+        _wd_beat()   # ★ fallback 단계 단위 진행 신호 — pytrends 재시도로 장시간 소요 가능 (freeze 오탐 방지)
         try:
             result = fn()
             if len(result) >= 10:
@@ -341,10 +347,6 @@ def get_trending_searches(limit: int = 30) -> list[str]:
 
     print("[RADAR] 모든 수집 방법 실패 — 빈 결과 반환")
     return []
-
-
-def _pytrends() -> TrendReq:
-    return TrendReq(hl="ko", tz=540, timeout=(10, 25), retries=3, backoff_factor=0.5)
 
 
 def get_interest_over_time(keywords: list[str], days: int = 30) -> dict[str, list[float]]:
@@ -361,9 +363,15 @@ def get_interest_over_time(keywords: list[str], days: int = 30) -> dict[str, lis
         print(f"[Google IOT] 쿨다운 중 — skip ({len(keywords)}개 키워드)")
         return result
 
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        def _wd_beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
+
     batches = [keywords[i:i+5] for i in range(0, min(len(keywords), 20), 5)]
     timeframe = _safe_timeframe(days)
     for batch in batches:
+        _wd_beat()   # ★ 배치 단위 진행 신호 — freeze 오탐 방지 (pytrends 재시도로 장시간 소요 가능)
         try:
             pt = TrendReq(hl="ko", tz=540, timeout=(10, 30), retries=3)
             _disable_pytrends_proxy(pt)
@@ -388,70 +396,3 @@ def get_interest_over_time(keywords: list[str], days: int = 30) -> dict[str, lis
     return result
 
 
-def get_interest_over_time_df(keywords: list[str], timeframe: str = "now 7-d") -> pd.DataFrame:
-    """키워드 리스트 7일간 검색 트렌드. 5개씩 배치 처리."""
-    _reset_pytrends_block_log()
-    if _pytrends_blocked():
-        return pd.DataFrame()
-    frames = []
-    try:
-        pt = _pytrends()
-        _disable_pytrends_proxy(pt)
-        for i in range(0, len(keywords), 5):
-            batch = keywords[i : i + 5]
-            try:
-                _build_payload_with_fallback(pt, batch, timeframe, geo="KR")
-                df = pt.interest_over_time()
-                if not df.empty:
-                    df = df.drop(columns=["isPartial"], errors="ignore")
-                    frames.append(df)
-                time.sleep(1.5)
-            except Exception as e_inner:
-                if _is_rate_limited_error(e_inner):
-                    _mark_pytrends_blocked(reason="get_interest_over_time_df")
-                    break
-                raise
-    except Exception as e:
-        if not _is_rate_limited_error(e):
-            print(f"[Google] interest_over_time 오류: {e}")
-            _g_report("radar", e, module=__name__)
-    return pd.concat(frames, axis=1) if frames else pd.DataFrame()
-
-
-def get_related_queries(keyword: str) -> dict:
-    """키워드 관련 검색어 (top + rising)."""
-    _reset_pytrends_block_log()
-    if _pytrends_blocked():
-        return {}
-    try:
-        pt = _pytrends()
-        _disable_pytrends_proxy(pt)
-        _build_payload_with_fallback(pt, [keyword], "now 7-d", geo="KR")
-        related = pt.related_queries()
-        result = {}
-        if keyword in related:
-            top    = related[keyword].get("top")
-            rising = related[keyword].get("rising")
-            if top    is not None: result["top"]    = top[["query", "value"]].to_dict("records")
-            if rising is not None: result["rising"] = rising[["query", "value"]].to_dict("records")
-        return result
-    except Exception as e:
-        print(f"[Google] related_queries 오류: {e}")
-        _g_report("radar", e, module=__name__)
-        return {}
-
-
-def get_interest_by_region(keyword: str) -> pd.DataFrame:
-    """키워드 지역별 관심도 (한국 시/도)."""
-    _reset_pytrends_block_log()
-    if _pytrends_blocked():
-        return pd.DataFrame()
-    try:
-        pt = _pytrends()
-        _disable_pytrends_proxy(pt)
-        _build_payload_with_fallback(pt, [keyword], "now 7-d", geo="KR")
-        return pt.interest_by_region(resolution="REGION", inc_low_vol=True)
-    except Exception as e:
-        print(f"[Google] interest_by_region 오류: {e}")
-        _g_report("radar", e, module=__name__)
-        return pd.DataFrame()

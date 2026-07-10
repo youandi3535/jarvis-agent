@@ -148,19 +148,34 @@ def _remove_pid():
 # 5회 연속 실패 시 비활성화 + 텔레그램 경고.
 # ════════════════════════════════════════════════════════════
 
-_st_proc = None
-_st_last_start = 0.0
-_st_fail_count = 0
-_st_disabled = False
-_ST_MAX_FAIL = 3   # ★ Streamlit 자동재시작 최대 연속 실패 (★ 사용자 박제 2026-07-06: 재시작 어떤 경우라도 최대 3회. 표시 SSOT — infra_agent build_status 도 참조)
+_api_proc  = None   # FastAPI uvicorn (포트 9198)
+_next_proc = None   # Next.js (포트 9199)
 
-ST_PORT  = int(os.getenv("HUB_PORT", "9199"))
-ST_LOG   = LOG_DIR / "streamlit.log"
-ST_VENV  = JARVIS_ROOT / ".venv" / "bin" / "streamlit"
+_api_last_start  = 0.0
+_next_last_start = 0.0
+_api_fail_count  = 0
+_next_fail_count = 0
+_api_disabled    = False
+_next_disabled   = False
+_HUB_MAX_FAIL    = 3   # ★ Hub 서버 자동재시작 최대 연속 실패 (★ 사용자 박제 2026-07-06: 재시작 어떤 경우라도 최대 3회)
+
+API_PORT  = int(os.getenv("HUB_API_PORT", "9198"))
+NEXT_PORT = int(os.getenv("HUB_PORT",     "9199"))
+API_LOG   = LOG_DIR / "api_server.log"
+NEXT_LOG  = LOG_DIR / "next_server.log"
+
+# 하위 호환: 기존 ST_PORT (infra_agent 등 참조용)
+ST_PORT = NEXT_PORT
+ST_LOG  = NEXT_LOG
+
+
+def _proc_alive(proc) -> bool:
+    return proc is not None and proc.poll() is None
 
 
 def _streamlit_alive() -> bool:
-    return _st_proc is not None and _st_proc.poll() is None
+    """Hub 서버(FastAPI + Next.js) 중 하나라도 살아있으면 True."""
+    return _proc_alive(_api_proc) or _proc_alive(_next_proc)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -171,20 +186,15 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def _streamlit_listeners(exclude_pid: int | None = None) -> list[int]:
-    """포트 9199 를 *LISTEN* 하는 프로세스 PID 목록 (클라이언트 연결 제외).
-
-    ★ 공존 방지 핵심 (ERRORS [319] — 2026-07-04): `-sTCP:LISTEN` 로 *서버* 만 조준.
-      구 `lsof -ti TCP:9199` 는 9199 에 *연결된* 클라이언트(브라우저 탭 등)까지 반환 →
-      Chrome 탭에 SIGTERM 을 쏘는 오살 버그였다. LISTEN 필터가 단일 진실.
-    """
+def _port_listeners(port: int, exclude_pid: int | None = None) -> list[int]:
+    """해당 포트를 LISTEN 중인 PID 목록 (클라이언트 연결 제외)."""
     try:
         res = subprocess.run(
-            ["lsof", "-t", f"-iTCP:{ST_PORT}", "-sTCP:LISTEN"],
+            ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
             capture_output=True, text=True,
         )
     except Exception as e:
-        log.warning(f"_streamlit_listeners lsof 오류: {e}")
+        log.warning(f"_port_listeners lsof 오류 (port {port}): {e}")
         return []
     pids = []
     for raw in res.stdout.strip().split():
@@ -198,130 +208,170 @@ def _streamlit_listeners(exclude_pid: int | None = None) -> list[int]:
     return pids
 
 
-def _kill_orphan_streamlits():
-    """포트 9199 를 LISTEN 하는 이전 Streamlit *서버* 만 확실히 종료.
+def _streamlit_listeners(exclude_pid: int | None = None) -> list[int]:
+    """하위 호환: 포트 9199 LISTEN PID 목록."""
+    return _port_listeners(NEXT_PORT, exclude_pid=exclude_pid)
 
-    ★ 공존 방지 (ERRORS [319] — 사용자 박제 2026-07-04): 새 서버를 띄우면 옛 서버는
-      *반드시* 먼저 죽어야 한다.
-      ① LISTEN 만 대상 — 클라이언트 연결(브라우저 탭 등)은 절대 종료하지 않음.
-      ② SIGTERM → 대기 → SIGKILL 에스컬레이션 → 포트 해제 확인. 느리게 죽는 구 서버가
-         새 서버와 잠깐이라도 공존·포트충돌하지 못하도록 강제(단순 SIGTERM 후 즉시
-         새 서버 기동하던 공백 제거).
-    """
+
+def _kill_port(port: int, tag: str, our_proc=None):
+    """포트 LISTEN 중인 이전 서버 확실히 종료 (SIGTERM → SIGKILL)."""
     import signal as _sig
-    own_pid = _st_proc.pid if _st_proc and _st_proc.poll() is None else None
-
-    def _is_our_streamlit(pid: int) -> bool:
-        # 무관한 LISTEN 프로세스 오살 방지 — 우리 hub.py Streamlit 인지 확인.
-        try:
-            out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)],
-                                 capture_output=True, text=True).stdout
-            return ("streamlit" in out and "hub.py" in out) or "hub.py" in out
-        except Exception:
-            return True   # 확인 실패 시 보수적으로 orphan 취급 (우리 포트 LISTEN 이므로)
-
-    targets = [p for p in _streamlit_listeners(exclude_pid=own_pid) if _is_our_streamlit(p)]
+    own_pid = our_proc.pid if our_proc and our_proc.poll() is None else None
+    targets = _port_listeners(port, exclude_pid=own_pid)
     if not targets:
         return
     for pid in targets:
         try:
             os.kill(pid, _sig.SIGTERM)
-            log.info(f"🧹 이전 Streamlit 서버 PID {pid} 종료(SIGTERM)")
+            log.info(f"🧹 이전 {tag} PID {pid} 종료(SIGTERM)")
         except ProcessLookupError:
             pass
         except Exception as e:
-            log.warning(f"Streamlit 종료 오류 PID {pid}: {e}")
-    # SIGTERM 후 최대 8초 대기 (0.4s 폴링) — 다 죽으면 조기 탈출
+            log.warning(f"{tag} 종료 오류 PID {pid}: {e}")
     for _ in range(20):
         if not any(_pid_alive(p) for p in targets):
             break
         time.sleep(0.4)
-    # 잔존 → SIGKILL
     for pid in targets:
         if _pid_alive(pid):
             try:
                 os.kill(pid, _sig.SIGKILL)
-                log.warning(f"🧹 SIGTERM 무응답 → SIGKILL PID {pid}")
+                log.warning(f"🧹 SIGTERM 무응답 → SIGKILL {tag} PID {pid}")
             except Exception:
                 pass
-    # 포트 LISTEN 해제 확인 (새 서버 바인딩 보장)
     for _ in range(12):
-        if not _streamlit_listeners(exclude_pid=own_pid):
+        if not _port_listeners(port, exclude_pid=own_pid):
             break
         time.sleep(0.3)
-    if _streamlit_listeners(exclude_pid=own_pid):
-        log.warning(f"⚠️ 포트 {ST_PORT} LISTEN 잔존 — 새 Streamlit 바인딩 실패 가능")
+    if _port_listeners(port, exclude_pid=own_pid):
+        log.warning(f"⚠️ 포트 {port} LISTEN 잔존 — {tag} 바인딩 실패 가능")
+
+
+def _kill_orphan_streamlits():
+    """Hub 서버 포트 고아 정리 — 하위 호환 함수명 유지."""
+    _kill_port(API_PORT,  "FastAPI",  _api_proc)
+    _kill_port(NEXT_PORT, "Next.js",  _next_proc)
+
+
+def _build_env() -> dict:
+    """자식 프로세스용 환경변수 — PATH prepend 포함."""
+    _EXTRA = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"]
+    env = os.environ.copy()
+    env["PATH"] = ":".join(_EXTRA) + ":" + env.get("PATH", "")
+    return env
+
+
+def _start_api():
+    """FastAPI uvicorn 자식 프로세스 시작 (포트 9198)."""
+    global _api_proc, _api_last_start
+    if _api_disabled or _proc_alive(_api_proc):
+        return
+    _kill_port(API_PORT, "FastAPI", _api_proc)
+    _api_last_start = time.time()
+    uvicorn = JARVIS_ROOT / ".venv" / "bin" / "uvicorn"
+    bin_ = str(uvicorn) if uvicorn.exists() else "uvicorn"
+    cmd = [bin_, "api_server:app", "--host", "127.0.0.1", "--port", str(API_PORT), "--no-access-log"]
+    try:
+        log_f = open(API_LOG, "a")
+        _api_proc = subprocess.Popen(
+            cmd, stdout=log_f, stderr=log_f,
+            cwd=str(JARVIS_ROOT), start_new_session=True, env=_build_env(),
+        )
+        log.info(f"🖥  FastAPI 서버 시작 — PID {_api_proc.pid} (port {API_PORT})")
+    except Exception as e:
+        log.error(f"❌ FastAPI 시작 실패: {e}")
+        _report_daemon(e, "_start_api")
+        _api_proc = None
+
+
+def _start_next():
+    """Next.js 대시보드 자식 프로세스 시작 (포트 9199)."""
+    global _next_proc, _next_last_start
+    if _next_disabled or _proc_alive(_next_proc):
+        return
+    _kill_port(NEXT_PORT, "Next.js", _next_proc)
+    _next_last_start = time.time()
+    dash_dir = JARVIS_ROOT / "dashboard"
+    if not dash_dir.exists():
+        log.warning("⚠️ dashboard/ 폴더 없음 — Next.js 스킵")
+        return
+    npm_candidates = ["/opt/homebrew/bin/npm", "/usr/local/bin/npm", "npm"]
+    npm_bin = next((c for c in npm_candidates if Path(c).exists()), "npm")
+    cmd = [npm_bin, "run", "dev"]
+    try:
+        log_f = open(NEXT_LOG, "a")
+        _next_proc = subprocess.Popen(
+            cmd, stdout=log_f, stderr=log_f,
+            cwd=str(dash_dir), start_new_session=True, env=_build_env(),
+        )
+        log.info(f"🌐 Next.js dev 서버 시작 — PID {_next_proc.pid} (port {NEXT_PORT}, HMR 활성)")
+    except Exception as e:
+        log.error(f"❌ Next.js 시작 실패: {e}")
+        _report_daemon(e, "_start_next")
+        _next_proc = None
 
 
 def _start_streamlit():
-    """JARVIS Hub 대시보드를 자식 프로세스로 띄움."""
-    global _st_proc, _st_last_start
-    if _st_disabled or _streamlit_alive():
-        return
-    _kill_orphan_streamlits()  # 시작 전 고아 정리
-    _st_last_start = time.time()
-    bin_ = str(ST_VENV) if ST_VENV.exists() else "streamlit"
-    cmd = [
-        bin_, "run", str(JARVIS_ROOT / "hub.py"),
-        f"--server.port={ST_PORT}",
-        "--server.address=127.0.0.1",
-        "--server.headless=true",
-        "--browser.gatherUsageStats=false",
-    ]
-    try:
-        log_f = open(ST_LOG, "a")
-        _st_proc = subprocess.Popen(
-            cmd, stdout=log_f, stderr=log_f,
-            cwd=str(JARVIS_ROOT), start_new_session=True,
-        )
-        log.info(f"🖥  Streamlit 대시보드 시작 — PID {_st_proc.pid} (port {ST_PORT})")
-    except Exception as e:
-        log.error(f"❌ Streamlit 시작 실패: {e}")
-        _report_daemon(e, "_start_streamlit")
-        _st_proc = None
+    """Hub 서버(FastAPI + Next.js) 시작 — 하위 호환 함수명 유지."""
+    _start_api()
+    _start_next()
 
 
 def _stop_streamlit():
-    global _st_proc
-    if not _streamlit_alive():
-        _st_proc = None
-        return
-    try:
-        log.info("🛑 Streamlit 종료 중…")
-        _st_proc.terminate()
+    """Hub 서버 종료 — 하위 호환 함수명 유지."""
+    global _api_proc, _next_proc
+    for proc, tag in [(_api_proc, "FastAPI"), (_next_proc, "Next.js")]:
+        if not _proc_alive(proc):
+            continue
         try:
-            _st_proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            _st_proc.kill()
-            _st_proc.wait(timeout=5)
-    except Exception as e:
-        log.warning(f"Streamlit 종료 오류: {e}")
-    finally:
-        _st_proc = None
+            log.info(f"🛑 {tag} 종료 중…")
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+        except Exception as e:
+            log.warning(f"{tag} 종료 오류: {e}")
+    _api_proc  = None
+    _next_proc = None
 
 
 def _watch_streamlit():
     """메인 루프(60초 주기)에서 호출 — 죽었으면 백오프 재시작."""
-    global _st_fail_count, _st_disabled
-    if _st_disabled:
-        return
-    if _streamlit_alive():
-        # 60초 이상 안정 동작이면 카운터 리셋
-        if time.time() - _st_last_start > 60:
-            _st_fail_count = 0
-        return
-    # 죽음 감지 — 30초 백오프
-    if time.time() - _st_last_start < 30:
-        return
-    _st_fail_count += 1
-    if _st_fail_count >= _ST_MAX_FAIL:
-        _st_disabled = True
-        log.error(f"❌ Streamlit {_ST_MAX_FAIL}회 연속 실패 — 자동 재시작 중단. 수동 진단 필요.")
-        _report_daemon(RuntimeError(f"Streamlit {_ST_MAX_FAIL}회 연속 실패"), "_watch_streamlit")
-        _send_tg(f"⚠️ Streamlit 대시보드 {_ST_MAX_FAIL}회 연속 실패\nlogs/streamlit.log 확인 후 daemon 재시작 필요")
-        return
-    log.warning(f"⚠️ Streamlit 다운 감지 — 재시작 ({_st_fail_count}/{_ST_MAX_FAIL})")
-    _start_streamlit()
+    global _api_fail_count, _next_fail_count, _api_disabled, _next_disabled
+
+    # FastAPI 감시
+    if not _api_disabled:
+        if _proc_alive(_api_proc):
+            if time.time() - _api_last_start > 60:
+                _api_fail_count = 0
+        elif time.time() - _api_last_start >= 30:
+            _api_fail_count += 1
+            if _api_fail_count >= _HUB_MAX_FAIL:
+                _api_disabled = True
+                log.error(f"❌ FastAPI {_HUB_MAX_FAIL}회 연속 실패 — 자동 재시작 중단.")
+                _report_daemon(RuntimeError(f"FastAPI {_HUB_MAX_FAIL}회 실패"), "_watch_streamlit")
+                _send_tg(f"⚠️ FastAPI 서버 {_HUB_MAX_FAIL}회 연속 실패\nlogs/api_server.log 확인 후 daemon 재시작 필요")
+            else:
+                log.warning(f"⚠️ FastAPI 다운 감지 — 재시작 ({_api_fail_count}/{_HUB_MAX_FAIL})")
+                _start_api()
+
+    # Next.js 감시
+    if not _next_disabled:
+        if _proc_alive(_next_proc):
+            if time.time() - _next_last_start > 60:
+                _next_fail_count = 0
+        elif time.time() - _next_last_start >= 30:
+            _next_fail_count += 1
+            if _next_fail_count >= _HUB_MAX_FAIL:
+                _next_disabled = True
+                log.error(f"❌ Next.js {_HUB_MAX_FAIL}회 연속 실패 — 자동 재시작 중단.")
+                _report_daemon(RuntimeError(f"Next.js {_HUB_MAX_FAIL}회 실패"), "_watch_streamlit")
+                _send_tg(f"⚠️ Next.js 대시보드 {_HUB_MAX_FAIL}회 연속 실패\nlogs/next_server.log 확인 후 daemon 재시작 필요")
+            else:
+                log.warning(f"⚠️ Next.js 다운 감지 — 재시작 ({_next_fail_count}/{_HUB_MAX_FAIL})")
+                _start_next()
 
 
 # ════════════════════════════════════════════════════════════

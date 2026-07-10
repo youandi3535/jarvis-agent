@@ -58,16 +58,6 @@ def _mpl_setup():
 # 1. 썸네일 — AI 사진 + 텍스트 오버레이 (테마주 동일 방식)
 # ══════════════════════════════════════════════════════════════
 
-def generate_thumbnail(market: dict, out_dir=None, body_text: str = "") -> str:
-    """경제 브리핑 썸네일 — image_agent.generate_thumbnail (AI 사진 기반)."""
-    from JARVIS06_IMAGE.image_agent import generate_thumbnail as _gen
-    today = _today_str()
-    dow   = _today_dow()
-    title = f"경제 브리핑 {today} ({dow})"
-    dest  = _out(out_dir)
-    return _gen(title=title, keyword="경제 브리핑", platform="naver", out_dir=str(dest))
-
-
 # ══════════════════════════════════════════════════════════════
 # 2. 필러 차트 — Plotly chart_generator (테마주 동일 방식)
 # ══════════════════════════════════════════════════════════════

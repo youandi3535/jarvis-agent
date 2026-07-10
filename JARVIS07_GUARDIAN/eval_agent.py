@@ -109,16 +109,6 @@ def evaluate(
     )
 
 
-def should_register(
-    error_record: dict,
-    fixer_name: str,
-    patch: str = "",
-    target_file: str = "",
-) -> bool:
-    """간편 진입점 — bool 만 반환."""
-    return evaluate(error_record, fixer_name, patch, target_file).should_register
-
-
 def to_meta(result: EvalResult) -> dict[str, Any]:
     """learned_patterns 의 `eval_meta` 필드용 dict 변환."""
     return asdict(result)
@@ -185,14 +175,6 @@ def _evaluate_llm_patch(error_record: dict, patch: str, target_file: str) -> Eva
     try:
         from shared.llm import invoke_text  # type: ignore
         raw = invoke_text("learn_eval", prompt, max_tokens=300)
-    except ImportError:
-        # learn_eval alias 가 아직 shared/llm.py MODELS 에 등록 안 됐을 수 있음 → fallback
-        try:
-            from shared.llm import invoke_text  # type: ignore
-            raw = invoke_text("code_fix", prompt, max_tokens=300)
-        except Exception as e:
-            log.warning("[GUARDIAN/eval] LLM 호출 실패 → 보수적 통과: %s", e)
-            return _conservative_pass("LLM 호출 실패", e)
     except Exception as e:
         log.warning("[GUARDIAN/eval] LLM 호출 실패 → 보수적 통과: %s", e)
         return _conservative_pass("LLM 호출 실패", e)

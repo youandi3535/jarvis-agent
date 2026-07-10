@@ -2,6 +2,138 @@
 
 ---
 
+## [397] radar_main.py 순차 네트워크 루프에 beat() 미배선 — [394] 후속 조치 완료 (2026-07-10)
+
+- **증상**: watchdog 이 `트렌드 수집 실패 (rc=75): ... [watchdog] 🛑 '레이더 수집': 멈춤(freeze) 1548s > 300s` RuntimeError 보고(source=radar, module=`JARVIS03_RADAR.jobs`). rc=75 는 스크립트 자체 실패가 아니라 `JARVIS00_INFRA/watchdog.py` 의 freeze 감시 스레드가 `os._exit(75)`(EX_TEMPFAIL)로 강제 종료한 결과 — stderr 에 찍힌 `RequestsDependencyWarning` 은 우연히 같이 출력된 무관한 경고일 뿐 원인이 아님.
+- **환경**: `JARVIS03_RADAR/jobs.py` `job_collect_trends` → `_run_script_checked()` 가 `radar_main.py` 를 subprocess(`timeout=600`)로 실행, `radar_main.py` `__main__` 은 `guard_main("레이더 수집", deadline_sec=900)`(freeze_sec 기본 300s)로 감싸짐. `collect_today()` 내부에 economic-키워드 뉴스 조회 루프(`_QUERIES[:6]`)·경쟁강도 스코어링 루프(`trending[:15]`)·자동완성 루프(`trending[:20]`) 등 순차 HTTP 호출 루프 다수, `collectors/naver_collector.get_batch_datalab()`·`collectors/google_collector.get_interest_over_time()` 도 5개씩 배치 순차 호출.
+- **원인 (근본)**: [394]가 이미 규명한 것과 동일한 버그 클래스 — `guard_main()` 은 로컬 `Watchdog` 인스턴스를 호출자에 노출하지 않고, `radar_main.py`·`naver_collector.py`·`google_collector.py` 의 다건 순차 네트워크 루프는 `shared/llm.py` 등 기존 전역 `beat()` 배선 지점을 전혀 거치지 않아 진행 신호가 프로세스 시작 시점 이후 갱신되지 않음. [394] 의 교훈에서 "유사한 다건 순차 네트워크 루프를 가진 다른 독립 스크립트(예: `radar_main.py`)도 같은 결함이 없는지 확인이 필요"라고 명시적으로 지목했던 후속 조치가 이번까지 미착수 상태였음.
+- **헛다리**: 없음 — [394] 를 먼저 대조해 동일 버그 클래스임을 즉시 확인, stderr 의 `RequestsDependencyWarning` 텍스트에 낚이지 않고 watchdog freeze 로그 한 줄(`멈춤(freeze) 1548s > 300s`)이 근본 원인이라고 바로 특정.
+- **해결**: `collector_engine.py`/`performance_collector.py` 와 동일한 지역 import + no-op 폴백 패턴(`try: from JARVIS00_INFRA.watchdog import beat as _wd_beat / except: def _wd_beat(): pass`)을 `radar_main.py` 모듈 레벨에 배선하고, economic-키워드 뉴스 루프·경쟁강도 루프·자동완성 루프 3곳 각 반복마다 `_wd_beat()` 호출 추가. `naver_collector.get_batch_datalab()`·`google_collector.get_interest_over_time()` 의 배치 루프에도 동일하게 배선. 세 파일 모두 `python3 -m py_compile` 통과.
+- **파일**: `JARVIS03_RADAR/radar_main.py`, `JARVIS03_RADAR/collectors/naver_collector.py`, `JARVIS03_RADAR/collectors/google_collector.py`.
+- **교훈**: [394] 처럼 특정 파일 하나를 고치고 끝내지 않고 "교훈"란에 남긴 후속 점검 대상(유사 순차 네트워크 루프를 가진 다른 스크립트)을 실제로 추적해 완료하는 것이 재발 방지의 핵심 — 이번 건은 정확히 그 후속 조치. 참고로 [396] 은 같은 "트렌드 수집 freeze" 증상 클래스의 *다른* 근본 원인(watchdog 감시 스레드 자체가 맥 절전으로 함께 멈췄다가 깨어나며 오판)을 다룸 — 두 수정은 상호 배타적이지 않고 상호 보완적(하나는 "진짜 오래 걸리는 정상 작업"을 오탐에서 구제, 다른 하나는 "OS 절전으로 인한 완전한 가짜 freeze"를 구제).
+
+---
+
+## [396] harness Watchdog — 맥 절전을 "트렌드 수집" freeze 로 오판 ([389] 동일 원리 미적용) (2026-07-10)
+
+- **증상**: `job_collect_trends`(JARVIS03 트렌드 수집)가 `RuntimeError: [harness:트렌드 수집] attempt=1 step=전체: 멈춤(freeze) 1992s > 300s 무진전` 로 실패 보고. traceback 은 `NoneType: None`(실제 예외 아님, watchdog 이 직접 report 로 생성한 인공 RuntimeError). ★ [395]가 같은 날 발견한 "06:00/09:00 트렌드 수집 잡 미발화, 데몬 05:30~14:03 장시간 지연" 정황과 같은 시간대 — 데몬이 그 구간 실제로 멈춘 게 아니라 이 오탐이 시사하듯 맥 절전을 반복 겪었을 가능성이 높다(직접 인과관계는 별도 확인 필요, 이 항목은 오탐 자체의 근본 수정).
+- **환경**: `JARVIS03_RADAR/jobs.py` `job_collect_trends` → `_run_with_harness("트렌드 수집", ...)` → `JARVIS00_INFRA/harness.py` `run_action()` 가 `Watchdog(freeze_sec=300, poll_sec=15)` 로 감시. 실행 스텝은 `_run_script_checked()` — `subprocess.run(radar_main.py, timeout=600)` 단일 블로킹 호출(600s 넘게 블로킹될 수 없는 구조).
+- **원인 (근본)**: `JARVIS00_INFRA/watchdog.py` `Watchdog._monitor()` 배경 스레드가 `poll_sec`(15초) 간격으로 `now - last_beat` 를 순수 wall-clock(`time.time()`) 으로만 비교해 freeze 를 판정한다. 맥이 절전(Maintenance Sleep/DarkWake)에 들어가면 이 감시 스레드를 포함해 프로세스 전체가 그대로 멈췄다가 깨어나는데, 깨어난 직후 첫 tick 이 계산하는 `now - last_beat` 는 실제 절전 시간만큼 커져(관측값 1992s) 300초 문턱을 훨씬 초과 — 진짜 멈춤이 아닌데도 정지로 오판. `jarvis_keeper.py` 는 [389] 에서 최초 `sysctl kern.waketime` 대조 방식이 실전에서 0건 발동해 폐기되고, "keeper 자기 루프 간격(gap) 이 CHECK_INTERVAL 의 3배 초과하면 그 자체가 절전 증거"라는 방식으로 재수정되어 안정적으로 동작 중이었다. 그러나 이 gap-감지 방식은 `jarvis_keeper.py` 안에만 적용되고, [385] 가 도입해 harness 등 시스템 전역에서 공유하는 `JARVIS00_INFRA/watchdog.py` 의 `Watchdog` 클래스에는 이식되지 않아 동일 오탐이 재발.
+- **헛다리**: 없음 — [389]/[394] 를 먼저 대조해 "freeze 오탐" 계열 사고임을 확인했고, subprocess.run 의 timeout(600s) 자체가 정상 작동한다면 1992s 까지 블로킹될 수 없다는 점에서 watchdog 판정 로직 자체(감시 스레드가 절전과 함께 멈췄다가 깨어난 뒤 wall-clock 만으로 판단)를 근본 원인으로 바로 특정.
+- **해결**: `JARVIS00_INFRA/watchdog.py` `Watchdog._monitor()` 에 `jarvis_keeper.py` 와 동일한 "자기 루프 간격(gap)" 감지를 이식 — 매 tick 마다 직전 tick 과의 실제 간격(`gap`)을 측정해 `poll_sec * 3` 을 초과하면(이 감시 스레드 자신이 그 구간 동안 멈춰 있었다는 직접 증거) 절전으로 판단해 `_last_beat` 를 지금 시점으로 리셋하고 이번 tick 의 freeze/데드라인 판정을 건너뜀(`continue`). 진짜 freeze(정상 폴링 중 beat 미갱신)·정상 케이스·절전 시뮬레이션(gap 폭증) 3가지 시나리오를 가짜 시계로 유닛 테스트해 기대대로 동작 확인 — 정상 시 무반응, 진짜 freeze 시 정확히 트리거, 절전 시뮬레이션 시 무반응.
+- **파일**: `JARVIS00_INFRA/watchdog.py`.
+- **교훈**: freeze/hang 감시 로직을 여러 파일에 나눠 구현하면 한쪽에서 발견·수정한 오탐 방지 기법(OS 절전 인지)이 다른 쪽엔 반영되지 않는다. `watchdog.py` 자체가 "다른 파일에 freeze 감지 로직 신설 금지 — 이 모듈 경유" 단일 진입점으로 박제돼 있었음에도, 그 안의 판정 알고리즘이 [389] 가 검증한 안전장치를 누락한 채로 남아있었던 것 — 단일 진입점 원칙은 *호출 경로*뿐 아니라 *판정 로직 자체의 최신 안전장치 이식*까지 포함해야 한다.
+
+---
+
+## [395] topic_pack "즉석 실행" 자가치유가 실제로는 캐시 재조회만 함 — 06시 트렌드 수집 유실 시 경제 브리핑 통째 실패 (2026-07-10)
+
+- **증상**: harness 가 "[harness:경제 브리핑 발행 — 네이버] attempt=1 step=② 네이버 대본 생성: 대본 생성 실패: 자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)" RuntimeError 보고(source=harness, module=`JARVIS00_INFRA.harness.경제 브리핑 발행 — 네이버`).
+- **환경**: `JARVIS02_WRITER/trend_economic_writer.py` `nv_generate_draft`/`ts_generate_draft` — `topic_pack.pick_candidate()` 가 None 이면 "당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행" 로그 후 `build_topic_pack()` 재호출, 그래도 None 이면 하드 실패.
+- **원인 (근본)**: 오늘(07-10) `radar_trends_06`(06:00, "트렌드 수집 — 경제 브리핑 前")·`radar_trends_09` 두 크론 잡이 job_runs 에 실행 기록 자체가 없음(미발화 — 데몬이 05:30~14:03 구간 다른 장시간 작업으로 지연된 정황) → `trends_2026-07-10.json` 부재 상태로 06:30 경제 브리핑 파이프라인 진입. `topic_pack.build_topic_pack()` 은 `trends is None` 일 때 `radar_main.load()`(=캐시 파일 읽기 전용) 만 시도 — **캐시가 없으면 그냥 포기**하고 `실제 수집(collect_today())`은 절대 트리거하지 않음. 즉 `nv/ts_generate_draft` 의 "자비스03 파이프라인 즉석 실행" 로그 문구는 거짓 약속이었고, `_tp_build()` 재호출은 동일하게 빈손으로 돌아와 곧장 하드 실패로 귀결.
+- **헛다리**: 없음 — job_runs 조회로 06/09시 잡 미발화를 직접 확인 후 `topic_pack.build_topic_pack()` 코드를 정독해 "즉석 실행" 이라는 주석과 달리 실제 수집 호출이 없다는 구조적 결함을 바로 특정.
+- **해결**: `JARVIS03_RADAR/topic_pack.py build_topic_pack()` — 캐시(`radar_main.load()` + `trends_{date}.json` 직접 읽기) 모두 실패한 경우에만 `radar_main.collect_today()` + `radar_main.save()` 를 호출해 **진짜 즉석 수집**을 수행하도록 폴백 추가. 수집도 실패하면 기존과 동일하게 "트렌드 데이터 없음 — 팩 생성 스킵" → None 반환(발행 차단 유지, 거짓 주제 강행 없음). harness 플랫폼당 `deadline_sec=1800`·`max_attempts=3` 여유 안에서 수용 가능(정상 수집은 통상 1분 내외). `py_compile` + import 스모크 테스트(.venv) 통과.
+- **파일**: `JARVIS03_RADAR/topic_pack.py`.
+- **교훈**: "즉석 실행"이라는 주석/로그 문구가 실제로 무엇을 호출하는지 검증 없이 신뢰하면 안 된다 — 이번 경우 함수명(`build_topic_pack`)이 프로필 생성만 담당하고 수집은 별도 함수(`collect_today`)라는 모듈 설계([383]에서 의도적으로 분리)를 self-heal 경로가 놓쳐, "포기 후 재시도"가 사실은 "포기 후 동일하게 포기"였다. 자가치유 폴백을 작성할 때는 실제로 상태를 바꾸는 호출(재수집·재생성)이 포함되어 있는지, 단순 재조회에 그치지 않는지 반드시 확인해야 한다. 06시 잡 자체가 왜 미발화했는지(데몬 장시간 작업 지연 의심)는 별도 관찰 필요 — 이번 수정은 그 상황에서도 발행이 자가치유되도록 하는 방어선.
+
+---
+
+## [394] performance_collector — beat() 미배선으로 정상 다건 수집을 freeze 오탐 (2026-07-08)
+
+- **증상**: watchdog 이 "정지 감지 — 성과 수집: 멈춤(freeze) 1866s > 300s 무진전" RuntimeError 보고(source=watchdog, module=`JARVIS00_INFRA.watchdog`, func_name=`성과 수집`).
+- **환경**: `JARVIS03_RADAR/performance_collector.py` `collect_all()` — `__main__` 에서 `guard_main("성과 수집", deadline_sec=1800)` 로 감싸짐. `db.get_posts_for_view_collection()` 이 최대 100개 글을 반환하고, 각 글마다 네이버/티스토리 스크래핑(`requests.get` 최대 15초 timeout × 최대 3개 후보 URL + 네이버 rank API 10초) + `time.sleep(0.3)`/`time.sleep(1.0)` 를 순차 수행 — 다건일 때 총 소요가 300초를 쉽게 넘김.
+- **원인 (근본)**: [385] 가 도입한 `JARVIS00_INFRA/watchdog.py` 의 freeze 판정은 `max(로컬 beat, 전역 beat)` 기준인데, `guard_main()` 컨텍스트매니저는 `Watchdog` 인스턴스를 호출자에 노출하지 않아 로컬 `wd.beat()` 호출이 애초에 불가능하고, `collect_all()` 루프 내부는 `shared/llm.py`·`claude_sdk_compat.py`·`JARVIS09_COLLECTOR/collector_engine.py` 같은 전역 `beat()` 배선 지점을 전혀 거치지 않는다. 결과적으로 진행 신호가 `__enter__` 시점(작업 시작)에 딱 한 번 찍힌 뒤 전 구간 갱신되지 않아, 글이 많아 정상적으로 오래 걸리는 실제 작업도 300초 freeze 문턱을 넘기면 무조건 "멈춤"으로 오판됨. `JARVIS09_COLLECTOR/collector_engine.py:85-91` 가 이미 동일 클래스의 "장시간 HTTP 수집" 문제를 프로바이더 결과 취합마다 `beat()` 호출로 해결해둔 선례가 있었으나 `performance_collector.py` 는 [385] 전역 배선 대상 6곳에 포함되지 않아 누락.
+- **헛다리**: 없음 — traceback 이 `NoneType: None`(실제 예외 아님)이라는 점에서 [389](맥 절전 오탐)와 유형이 유사할 가능성을 먼저 검토했으나, `pmset` 대조 없이도 코드 상 "글 단위 진행신호 부재"가 명백해 바로 근본 원인으로 확정.
+- **해결**: `collect_all()` 의 `for post in posts:` 루프 진입 직후 `_wd_beat()` 호출 추가(`collector_engine.py` 와 동일 패턴 — 지역 import + watchdog 부재 시 no-op 폴백). 글 단위로 진행 신호가 갱신되어, 100개 글을 순회하는 정상 작업은 더 이상 freeze 오탐 대상이 아니게 됨. 단, 개별 글 처리 자체(단일 `requests.get` 호출)가 300초 넘게 물리는 진짜 hang 은 여전히 잡힘(다음 `beat()` 전까지는 카운터가 그대로 흐르므로).
+- **파일**: `JARVIS03_RADAR/performance_collector.py`.
+- **교훈**: freeze 워치독을 새 진입점(`guard_main`)에 씌우는 것만으로는 부족하다 — 그 안에서 실제로 오래 걸리는 반복 작업(다건 순차 네트워크 스크래핑 등)이 있으면 *그 루프 안에서도* `beat()` 를 명시적으로 호출해야 한다. [385] 가 명시한 "전역 beat 배선 대상"(LLM·SDK·JARVIS09 수집) 목록은 완전한 것이 아니었고, 유사한 다건 순차 네트워크 루프를 가진 다른 독립 스크립트(예: `radar_main.py`·`post_quality_analyzer.py`)도 같은 결함이 없는지 확인이 필요.
+
+---
+
+## [393] keeper 가 부팅 중인 데몬을 "꺼짐"으로 오판 → 동일 시각대 최대 3개 인스턴스 중복 스폰 (2026-07-06)
+
+- **증상**: 자동 파이프라인이 넘긴 실패 인스턴스(PID=45042, `jarvis_keeper.watchdog` RuntimeError "♻️ 데몬 강제 재시작 완료 … hang 복구")를 조사하며 로그 전체를 훑던 중, 이 인스턴스 자체와는 별개로 **09:56~13:16 구간에서 `daemon_stdout.log`에 "🚀 JARVIS 마스터 통합 데몬 v2 시작" 로그가 30초 간격으로 반복 출현**(12:12:00 / 12:12:30 / 12:13:05 — 3연속)하는 패턴을 발견. `daemon.log` 에는 같은 창구에서 `🚫 데몬 이미 실행 중 (PID 34435). 중복 실행 거부 — 종료합니다.` 가 12:13:18·12:14:25 두 차례 찍힘 — 뒤늦게 preflight 를 마친 중복 인스턴스들이 lock 획득에 실패하고 스스로 죽은 흔적.
+- **환경**: `jarvis_keeper.py` — `CHECK_INTERVAL=30`, `_start_daemon()` 은 `subprocess.Popen()` 후 **단 3초만 대기**하고 `proc.poll() is None` 이면 "시작 완료"로 간주. 반면 실제 데몬은 crewai/langgraph/claude_sdk_compat 등 무거운 import + `JARVIS00_INFRA.preflight.run_preflight()` 를 모두 마쳐야 `_acquire_lock()`(=`PID_FILE` 기록) 에 도달 — 로그 실측 약 **60~70초** 소요(`daemon.log` 12:12:00 스폰→12:13:04 "✅ Layer 0 preflight 통과" 확인).
+- **원인 (근본)**: keeper `main()` 루프는 "직전에 이미 스폰을 시도해 그 프로세스가 아직 살아서 부팅 중"이라는 상태를 전혀 추적하지 않았다. `_read_pid()` 가 `PID_FILE` 부재로 `None` 을 반환하면 무조건 "꺼짐"으로 판단해 `_start_daemon()` 을 또 호출 — CHECK_INTERVAL(30초) < 실제 부팅 소요(60~70초) 이므로, 한 인스턴스가 preflight 를 마치기 전에 keeper 가 최소 1~2회 더 스폰을 반복(관측된 사례: 12:12:00 / 12:12:30 / 12:13:05, 3개 동시 부팅). 먼저 preflight 를 마친 인스턴스가 lock 을 잡고(PID 34435 추정) 나머지는 뒤늦게 lock 획득 실패로 `sys.exit(1)` — 그 사이 crewai/langgraph/sentence-transformers 등 무거운 라이브러리 import 를 최대 3벌 동시 수행해 CPU/메모리를 낭비하고, 이는 이후 시간대([390] 이 근본 수정한 DB 커넥션 누수와는 별개로) 시스템 자원 압박에 기여했을 개연성이 있다.
+- **헛다리**: 최초엔 이 태스크가 넘긴 PID=45042 hang-복구 알림 자체가 버그인 줄 의심했으나, `_notify()` 설계상 hang 복구 성공 메시지를 `report_error=False` 로 GUARDIAN 에 넘기는 정상 동작이며(코드 확인), PID=45042 는 16:29:11 스폰 후 16:36:20 재-hang(427초 정체) — 이는 이미 `[390]`(get_db 148곳 연결 누수 → WAL 체크포인트 정체) 이 근본원인을 밝히고 수정·재배포(PID 49023)까지 완료한 동일 계열 사고였다. 즉 이 태스크의 *특정 인스턴스*는 이미 해결된 사안 — 대신 로그 전체를 훑는 과정에서 [390]/[391]/[392] 과는 다른, 오전 시간대의 **미문서화 중복 기동 버그**를 별도로 발견해 수정.
+- **해결**: `jarvis_keeper.py` — ① `_start_daemon()` 반환값을 `int`(pid) 대신 `subprocess.Popen` 객체로 변경(호출자가 `.poll()` 로 생사 계속 추적 가능하도록). ② `main()` 에 `pending_proc`/`pending_since` 상태 신설 — 데몬이 `_is_running()` 으로 확인되면(=PID_FILE 반영=부팅 완료) `pending_proc=None` 으로 추적 종료. `_read_pid()` 가 `None` 인 "else" 분기에서, `pending_proc` 이 아직 살아있으면(`poll() is None`) 신규 스폰을 **보류**하고 다음 30초 루프로 넘어감(`continue`) — 단, `BOOT_TIMEOUT=180`(관측된 60~70초의 넉넉한 상한) 초과 시엔 진짜로 멈춘 것으로 보고 `kill()` 후 재시도. `py_compile` 통과 확인.
+- **파일**: `jarvis_keeper.py`.
+- **교훈**: 프로세스 재시작 워치독은 "방금 막 스폰한 프로세스가 아직 정상 부팅 중"이라는 제3의 상태를 반드시 별도로 추적해야 한다. "생사(`_is_running`)" 이분법만으로는 부팅 소요시간이 폴링 주기보다 길 때 반드시 중복 스폰을 일으킨다 — 특히 무거운 라이브러리 import 가 많은 프로세스일수록 폴링 주기 대비 부팅 시간 여유를 코드로 명시(타임아웃 상수)해 추적해야 하며, 단순 `time.sleep(N)` 스폰-직후 체크는 "즉사하지 않았다" 만 보장할 뿐 "정상 기동 완료"는 보장하지 않는다.
+
+---
+
+## [392] keeper hang 재알림(#2304, PID=45454) 중복 오류 레코드 정리 — [390] 후속 (2026-07-06)
+
+- **증상**: keeper 가 "🚨 데몬 HANG 감지 (PID=45454) — heartbeat 943초 정체" 로 자동 수정 요청(error_log #2304) 발생. `ERRORS.md` 선행 조회 결과 `[390]` 이 이미 동일 근본원인(`get_db()` 연결 누수 → WAL 정체 → 반복 hang)을 진단·수정·검증(daemon PID 49023 재기동, heartbeat 정상)까지 완료한 상태 — 코드 재수정 불필요, 헛다리 방지를 위해 즉시 확인 절차로 전환.
+- **환경**: `#2304` 는 keeper.log 상 17:12:12(PID 45454 기동)~17:27:58(hang 감지) 구간 — `[390]` 이 인용한 faulthandler 덤프(3스레드 `get_db`/`get_error`/`_orchestrate:429` 정체)와 동일 사고의 마지막 회차. 같은 날 발생한 동일 계열 오류 12건(#2289·2290·2292·2293·2294·2297·2298·2299·2301·2302·2304·2305)이 처리 스레드 자체가 이 버그에 물려 `analyzing`/`new` 상태로 영구 정체 — `_processing` 세트가 중복 스레드 재투입은 막았지만 상태를 `fixed`/`wontfix` 로 전이시키지 못해 `job_retry_pending` 이 30분마다 `analyzing→new` 리셋만 무의미하게 반복 중이었음.
+- **원인**: 코드 버그 아님 — `[390]` 의 실제 수정(`shared/db.py _AutoCloseConnection`)이 이미 적용·검증된 이후, DB 상의 잔여 레코드만 정리되지 않은 상태였음.
+- **헛다리**: 없음 — 동일 fingerprint 재진단·재수정 시도하지 않고 기존 해결책 그대로 적용(원칙: "매칭되는 항목 있으면 기록된 해결책 적용, 헛다리 항목 재시도 금지").
+- **해결**: 코드 변경 없음. `shared.db.mark_error_fixed()` 로 위 12건 + `#2304` 를 `[390]` 자원 참조하며 일괄 `status='fixed'` 종결. 재발 여부 재확인: `[390]` 수정이 반영된 daemon(PID 49023, 이후 세대 포함) 기동 시각(17:45:11) 이후 `logs/keeper.log` 에 신규 `HANG 감지` 0건 — 재발 없음 확인.
+- **파일**: 없음 (DB 레코드 정리만, `shared/db.py`/`JARVIS07_GUARDIAN/auditor.py` 는 `[390]` 참조).
+- **교훈**: 하나의 근본원인이 짧은 시간에 여러 번 재발하면 오류 레코드도 여러 건 동시 생성된다 — 그 중 하나만 고치고 끝내면 나머지는 "고쳤지만 기록은 analyzing 에 방치된" 유령 레코드로 남아 대시보드·`job_retry_pending` 을 계속 오염시킨다. 근본 수정 후에는 *같은 fingerprint 의 형제 레코드까지* 함께 종결해야 학습 데이터와 대시보드 상태가 실제 시스템 상태와 일치한다.
+
+---
+
+## [391] `vision_agent_history` 무제한 누적 — [390] 후속 관찰 조치 (2026-07-06)
+
+- **증상**: keeper 워치독 hang 알림(PID=44855, "♻️ 데몬 강제 재시작 완료 … hang 복구")을 대응하며 DB 팽창 원인을 조사하던 중, `[390]`(get_db 커넥션 누수) 항목이 "후속 관찰" 로만 남기고 조치 범위 밖으로 남겨둔 `vision_agent_history` 테이블을 확인 — 95만 행 누적, 보존정책 전무.
+- **환경**: `JARVIS05_VISION/collector.py` — `_collector_loop()` 가 raw `threading.Thread` 로 30초 간격 실행, 매 사이클 등록된 에이전트(7개) 각각에 대해 `vision_agent_history` 에 append-only INSERT. 삭제 로직이 파일 전체에 전무.
+- **원인**: 이벤트(30초) 단위로 무기한 누적되는 테이블에 대해 다른 테이블(`events`)에 이미 있는 `cleanup_events(days=30)` 같은 보존 잡이 신설되지 않음 — 149개 커넥션 중 가장 높은 빈도(1일 2880회 호출)로 `get_db()` 를 여는 호출자였기 때문에, `[390]` 의 연결 누수 버그와 결합해 DB 비대화·`get_db()` 지연에 가장 크게 기여했을 개연성이 높음(faulthandler 덤프에서 `get_db`/`get_error` 지점 정체 관찰과 정합).
+- **헛다리**: 없음 — `[390]` 이 근본(연결 누수) 원인을 이미 고쳤으므로 동일 문제를 다시 진단하지 않고, 그 항목이 명시적으로 남긴 "이번 수정 범위 아님" 갭만 targeted 로 메움.
+- **해결**: 기존 `cleanup_events(days=30)` 패턴을 그대로 따라 `shared/db.py` 에 `cleanup_vision_history(days=7)` 신설(삭제 후 `VACUUM`) → `JARVIS00_INFRA/infra_agent.py` 에 `job_cleanup_vision_history()` 래퍼 추가(`__all__` 갱신) → `JARVIS04_SCHEDULER/job_registry.py DEFAULT_JOBS` 에 `vision_history_cleanup`(매일 03:15 cron, owner=jarvis00_infra) 등록. `py_compile` + import 스모크 테스트 통과, `[390]` 의 `_AutoCloseConnection` 변경과 같은 파일(`shared/db.py`) 내 비중첩 영역이라 충돌 없음 확인.
+- **파일**: `shared/db.py`, `JARVIS00_INFRA/infra_agent.py`, `JARVIS04_SCHEDULER/job_registry.py`.
+- **교훈**: 고빈도(초 단위) 이벤트를 테이블에 append 만 하는 코드는 신설 시점에 보존 정책을 함께 설계해야 한다. 사고 대응 중 "이번 수정 범위 아님" 으로 명시적으로 남겨진 후속 관찰 항목은 별도 세션에서라도 반드시 후속 조치해야 동일 계열 사고(DB 비대화→hang 오탐) 재발을 막는다.
+
+---
+
+## [390] `get_db()` 148곳 호출부 연결 누수 → WAL 체크포인트 정체 → 데몬 반복 hang (2026-07-06)
+
+- **증상**: keeper 가 하루 동안 여러 차례(14:06·15:27·16:01·16:18·16:28·16:36·17:12·17:28) 데몬 hang 을 감지·강제 재시작(#2294 heartbeat 2012초 정체 포함). [318]/[389] 와 달리 재시작 후 짧으면 10여 분 만에 재발 — 순수 절전([389])도, 메인스레드 무한루프([318])도 아님.
+- **환경**: `daemon_faulthandler.log` 최신 덤프에서 **서로 다른 스레드 3개가 동시에** `shared/db.py:30(get_db, PRAGMA journal_mode=WAL)` → `shared/db.py:2263(get_error)` → `guardian_agent.py:429(_orchestrate)` 지점에 정체. 해당 hang(#2294)은 daemon PID 44855 가 15:27:52 기동한 직후부터 kill 시각(16:01:26)까지 heartbeat 가 **단 한 번도 갱신되지 않음**(2012s ≈ 전체 수명) — 즉 부팅 직후부터 스케줄러 스레드풀(`ThreadPoolExecutor(10)`, `JARVIS04_SCHEDULER/job_catalog.py`)이 DB 접근 정체로 고갈되어 `infra_heartbeat` 잡이 슬롯을 못 받음.
+- **원인 (근본)**: `shared/db.py get_db()` 를 호출하는 151곳 중 **148곳**이 `with get_db() as conn:` 관용구 사용. Python `sqlite3.Connection` 의 컨텍스트 매니저는 `__exit__` 에서 **커밋/롤백만 하고 `close()` 는 하지 않는다** — 표준 라이브러리의 잘 알려진 gotcha. `_orchestrate`(오류 분석)는 이벤트마다 + `job_retry_pending` 주기 재시도마다 raw `threading.Thread(target=_orchestrate, ...)` 로 무제한 생성되며, 그때마다 새 `get_db()` 커넥션을 열고 `with` 종료 시 닫지 않은 채 방치. 장기간 운영(수백~수천 잡 사이클)에 걸쳐 열린-채-방치된 커넥션이 누적 → WAL 체크포인트가 오래된 리더 스냅샷 때문에 진행 못 함 → DB 파일이 453MB 로 비대화(`vision_agent_history` 95만행·`job_runs` 10만행 등 미정리 이력도 기여) → 새 커넥션의 `PRAGMA journal_mode=WAL` 자체가 무기한 대기 → 스레드풀 슬롯 고갈 → heartbeat 미갱신 → keeper hang 판정. ERRORS [3322](`proactive_monitor.py` 단일 사례)와 동일 버그 클래스가 전체 코드베이스 규모로 존재했던 것.
+- **헛다리**: 자동 GUARDIAN 파이프라인(`AutoRepair/Targeted`, job=keeper)이 이 사고를 자체 진단해 `JARVIS07_GUARDIAN/bandit_state.json` 을 수정했으나 eval_agent 가 "데몬 행 원인과 무관한 데이터 파일 수정, 근본원인 미해결"(score=10)로 학습 등록 거부 — 근본 원인에 도달 못 함. faulthandler 스택에서 동일 지점(`get_db`/`get_error`)에 스레드 3개가 몰린 것을 직접 대조하고서야 확정.
+- **해결**: `shared/db.py` 에 `_AutoCloseConnection(sqlite3.Connection)` 서브클래스 신설 — `__exit__` 에서 부모(commit/rollback) 호출 후 `finally: self.close()`. `get_db()` 가 `sqlite3.connect(..., factory=_AutoCloseConnection)` 로 이 클래스를 사용하도록 변경 — **단일 진입점 한 곳만 수정해 148개 호출부 전부 자동 해결**(호출부 코드 변경 0건). `with`-블록 밖에서 재사용하는 3곳(`auditor.py`·`collector_agent.py` 2곳) 은 패턴이 달라 영향 없음 확인, 그중 미종료였던 `auditor.py:_save_to_db` 에도 `con.close()` 추가. 정상/예외 양쪽 경로 모두 커넥션이 닫히는지, 그리고 커밋/롤백·예외 전파가 종전과 동일한지 별도 스모크 테스트로 검증 후 데몬 재기동(PID 49023, heartbeat 정상 갱신 확인).
+- **파일**: `shared/db.py`, `JARVIS07_GUARDIAN/auditor.py`.
+- **후속 관찰 (조치는 별도 판단 필요 — 이번 수정 범위 아님)**: `vision_agent_history` 95만행·`job_runs` 10만행 등 보존기간 정책 부재로 무한 누적 중 — DB 비대화의 또 다른 축. 이번 커넥션 누수 fix 로 향후 WAL 체크포인트는 정상화되지만, 이미 불어난 453MB 파일 자체는 자연 수축에 시간이 걸리거나 `VACUUM`/보존정책 신설이 별도로 필요할 수 있음.
+- **교훈**: `with get_db() as conn:` 은 "커넥션을 안전하게 정리해준다"는 직관과 달리 *트랜잭션만* 정리한다 — sqlite3 표준 컨텍스트 매니저의 이 gotcha 를 모르면 코드 리뷰로는 못 잡는다. 이런 전역 관용구 버그는 호출부 하나하나를 고치는 대신 **단일 진입점(get_db) 자체를 고쳐 관용구 그대로 안전해지도록** 만드는 것이 148곳을 손대는 것보다 안전하고 확실하다. 또한 hang 의 표면 증상(heartbeat 정체)만 보고 재시작을 반복하면 근본 원인(누수→비대화→정체)은 절대 발견 못 하며, faulthandler 스택 덤프처럼 "정확히 어디서 여러 스레드가 동시에 멈췄는지"를 대조하는 것만이 진짜 원인을 드러낸다.
+
+---
+
+## [389] keeper hang 워치독 오탐 — macOS 시스템 절전을 코드 hang으로 오판 (2026-07-06)
+
+- **증상**: keeper 가 "🚨 데몬 HANG 감지 (PID=44957) — heartbeat 617초 정체" 로 daemon 강제 킬+재시작. `daemon_faulthandler.log` 스택 덤프를 보면 [318]과 달리 *모든 스레드가 정상 대기 상태*(`_worker` idle·`threading.wait`·`selectors.select`·bot 롱폴 등) — CPU 스핀(`_PyEval_EvalFrameDefault` 전 프레임 점유) 흔적 전혀 없음.
+- **환경**: `jarvis_keeper.py` (HANG_THRESHOLD=360s). daemon.log 도 17:10~17:29 구간 완전 공백.
+- **원인**: `pmset -g log` 대조 결과 17:17:57 "Entering Sleep state due to 'Maintenance Sleep' … 581 secs" → 17:27:38 "Wake from Deep Idle". 즉 **맥 자체가 절전에 들어가 데몬 전 스레드가 그대로 정지**됐다가 깨어난 것 — 코드 버그 아님. 절전 중엔 wall-clock(heartbeat mtime 기준 staleness)만 흐르고 프로세스는 통째로 멈추므로, PID-only 검사([318] 이전)처럼 "진짜 hang"과 구분이 안 됨. keeper 자신도 같은 머신에서 같이 멈췄다가 깨어난 직후 stale heartbeat 를 보고 즉시 킬 판정.
+- **헛다리**: 없음 — 스택 덤프에 스핀 스레드가 하나도 없다는 점에서 [318]과 다른 유형임을 즉시 식별, `pmset -g log` 로 바로 확인.
+- **해결**: `jarvis_keeper.py` 에 `_last_wake_ts()`(`sysctl kern.waketime` 파싱) + `_heartbeat_mtime()` 신설. hang 판정 직전 "마지막 wake 시각이 마지막 heartbeat 갱신 이후이고, 아직 HANG_GRACE(180s) 이내"면 `slept_through=True` → **절전 기인으로 판단해 이번 회차 강제킬을 유예**(로그만, 텔레그램 알림 없음). 그 유예 안에도 heartbeat 가 회복 안 되면 다음 루프에서 (wake 로부터 HANG_GRACE 초과) 정상적으로 진짜 hang 판정 → 킬. 과거 [318] 실제 수치(hb_mtime=wake-594s, now=wake+23s)로 회귀 시뮬레이션 + 대조군(절전 없는 진짜 hang) 모두 기대대로 동작 확인.
+- **파일**: `jarvis_keeper.py`.
+- **교훈**: heartbeat staleness 는 "코드가 안 돈다"만 알려줄 뿐 *왜*(무한루프 vs OS 절전)는 구분 못 한다. 노트북을 서버로 쓰는 한 시스템 절전은 정상적으로 반복 발생 — hang 판정 로직은 반드시 OS 레벨 sleep/wake 신호(`sysctl kern.waketime`)를 대조해 "그 사이 진짜 절전이 있었나"를 먼저 배제해야 오탐 강제킬(진행 중 작업 손실)을 막을 수 있다.
+
+---
+
+## [388] keeper hang 복구 성공 메시지가 RuntimeError 로 오분류 — 오류 학습 데이터 오염 (2026-07-06)
+
+- **증상**: keeper 작업(source=keeper, module=jarvis_keeper, func_name=watchdog) 이 "♻️ 데몬 강제 재시작 완료 PID=45211 (hang 복구)" 라는 메시지로 RuntimeError·severity=medium 실패 보고. traceback 은 `NoneType: None` (실제 예외 발생 없음).
+- **환경**: `jarvis_keeper.py` — [385] 에서 신설된 hang 워치독([385] `_dump_and_kill` + 강제 재시작).
+- **원인 (근본)**: `_notify(msg)` 헬퍼가 "hang 감지"(실제 문제)와 "재시작 완료"(정상 복구 확인) 두 종류 메시지를 구분 없이 *둘 다* `RuntimeError(msg)` 로 포장해 `JARVIS07_GUARDIAN.error_collector.report()` 에 넘김. 성공 확인 메시지까지 오류로 잡혀, hang 복구가 *성공할 때마다* 가짜 RuntimeError 가 오류 로그·학습 데이터에 쌓임. 실제 예외 없이 `RuntimeError(msg)` 를 생성만 하고 raise 안 했으므로 `traceback.format_exc()` 가 `NoneType: None` 반환.
+- **해결**: `_notify(msg, *, report_error=True)` — `report_error=False` 로 호출하면 로그+텔레그램만 하고 GUARDIAN 보고 자체를 생략(성공 메시지는 error_log 에 아예 안 남음). hang *감지* 메시지는 report_error=True(기본, 실제 문제 신호 유지) / 재시작 *완료* 메시지는 report_error=False. [387](severity.py `_TRANSIENT_PATTERNS`) 이 "report 는 하되 Tier1/2 만 skip"(감사 기록 보존) 방식인 것과 달리, 이 fix 는 재시작 완료 메시지 자체를 report 경로에서 원천 제외 — 두 수정은 서로 다른 레이어(호출부 vs 분류기)에서 중복 방어. 이후 [389](macOS 절전 오탐 방지)가 이 `report_error` 파라미터를 그대로 사용해 확장.
+- **파일**: `jarvis_keeper.py`.
+- **교훈**: 알림 헬퍼를 "문제 신호"와 "성공 확인"에 공용으로 쓰면 성공 이벤트가 오류로 오분류되어 학습 데이터를 오염시킨다. 알림 함수 설계 시 *실패/이상 신호만* 오류 보고 경로로 보내고, 정상 동작 확인(복구 완료 등)은 로그·텔레그램 알림에 그쳐야 함.
+
+---
+
+## [387] jarvis_keeper 워치독 hang 복구 알림이 GUARDIAN 자동수정 파이프라인 낭비 진입 (2026-07-06)
+
+- **증상**: `jarvis_keeper.py` 가 데몬 hang(heartbeat stale)을 감지해 강제 재시작한 뒤 `♻️ 데몬 강제 재시작 완료 PID=44957 (hang 복구)` 를 `RuntimeError`로 GUARDIAN 에 report. `severity.classify()` 가 medium 판정 + `is_transient()` 미매칭 → Tier1(패턴, 실패)→Tier2(LLM, Sonnet 5 auto_repair 소환) 까지 전체 자동수정 파이프라인 진입. 이 메시지 자체엔 파일·라인·traceback 이 전혀 없어(`NoneType: None`) LLM 이 고칠 대상이 없음 — 매 hang 복구마다 LLM 호출 낭비.
+- **환경**: `jarvis_keeper.py` (ERRORS [318][385] 에서 도입된 hang 워치독 — *설계상 정상 동작*, hang 자체가 버그가 아니라 복구 성공 알림).
+- **원인**: `_notify()` 가 HANG 감지·복구완료 두 메시지 모두 `error_collector.report()` 로 넘기는데, `JARVIS07_GUARDIAN/severity.py` 의 `_TRANSIENT_PATTERNS` 에 이 키워드가 없어 "일시적/운영 보고(코드 버그 아님)" 로 걸러지지 않고 medium severity 로 자동수정 대상이 됨.
+- **헛다리 아님 — 왜 코드 수정이 아니라 분류만 고쳤나**: hang 자체의 근본원인(어느 파이썬 루프가 GIL 기아를 유발했는지)은 이 알림 메시지엔 없고 `logs/daemon_faulthandler.log` 스택 덤프에만 있음. 이 오류 레코드를 "고친다"는 것 자체가 성립 불가 — 성공 알림을 코드 버그로 오분류한 게 진짜 결함.
+- **해결**: `severity.py` `_TRANSIENT_PATTERNS` 에 `데몬 HANG 감지|데몬 강제 재시작 완료|hang 복구` 패턴 추가 → `is_transient()` True → `guardian_agent._orchestrate()` 안전장치 0 에서 즉시 `ignored` 처리(Tier1/2 미진입). Telegram 알림·error_log 기록(감사 추적)은 그대로 유지.
+- **파일**: `JARVIS07_GUARDIAN/severity.py`.
+- **교훈**: 워치독처럼 "성공적 자가치유"를 보고하는 메시지도 `RuntimeError` 로 report 하면 severity.classify() 기본값(medium)이 자동수정 대상으로 흘러간다. 코드 버그가 아닌 운영/상태 보고를 report() 경유로 감사기록할 땐 반드시 `_TRANSIENT_PATTERNS` 에 매칭 키워드를 동반 등록해야 Tier1/2 낭비 진입을 막는다.
+
+---
+
 ## [386] 본문 AI 이미지 전면 폐기 — 본문 이미지 = 인포그래픽 디자인만 (2026-07-06)
 
 - **증상/요청**: 본문(썸네일 제외) 인포그래픽 실패 시 AI 사진(Pollinations) 폴백이 토큰을 태움. 사용자: "본문 이미지는 인포그래픽 디자인만. 못 만들면 비워. 폴백이든 뭐든 다 지워. 썸네일은 예외."

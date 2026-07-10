@@ -119,11 +119,9 @@ def _append_log(entry: dict) -> None:
 
 
 def _tg(msg: str) -> None:
-    if not (_TG_TOKEN and _TG_CHAT_ID):
-        return
     try:
-        _req.post(f"https://api.telegram.org/bot{_TG_TOKEN}/sendMessage",
-                  json={"chat_id": _TG_CHAT_ID, "text": msg}, timeout=8)
+        from shared.notify import send_tg
+        send_tg(msg)
     except Exception:
         pass
 
@@ -288,7 +286,7 @@ def _fetch_reference(out_dir: Path, n: int = 5, exclude_urls: set | None = None,
                 if murl in exclude_urls:      # ★ 앞 배치(1차 5장)와 겹치는 URL 은 건너뜀
                     continue
                 try:
-                    resp = ctx.request.get(murl, timeout=12000)
+                    resp = ctx.request.get(murl, timeout=30000)
                     body = resp.body()
                     ct = resp.headers.get("content-type", "")
                     # 확장자 대신 content-type 으로 판정(Bing CDN URL 확장자 없는 경우 다수)
@@ -514,7 +512,7 @@ def job_learn_design() -> str:
 
     # ── Phase 2: 결정론 색이론 — 매일 1개 *보장* (LLM 0) ──
     log.info("[design_learner] LLM 실패 → 결정론 색이론 폴백(보장)")
-    for s in range(len(recs) * 7, len(recs) * 7 + 60):
+    for s in range(len(recs) * 7, len(recs) * 7 + 3):  # ★ max 3회 (사용자 박제 — _test_render 포함)
         rec = _generate_recipe_deterministic(recs, s)
         rec = _assign_id(rec, recs, today, "learned-auto")
         ok, _ = _validate_recipe(rec, recs)

@@ -255,23 +255,4 @@ def learn_from_claude(
 
 # ── 통계 ───────────────────────────────────────────────────────────────────
 
-def resolver_stats() -> dict:
-    """현재 리졸버 상태 반환 (FTS5 + 벡터 스토어 포함)."""
-    from JARVIS07_GUARDIAN.qa_store import stats as qa_stats
-
-    qa = qa_stats()
-    vec = {}
-    try:
-        from JARVIS07_GUARDIAN.vector_store import vector_stats
-        vec = vector_stats()
-    except Exception:
-        vec = {"available": False}
-
-    return {
-        "hit_count_threshold": _HIT_COUNT_THRESHOLD,
-        "vector_store":        vec,
-        **qa,
-    }
-
-
-__all__ = ["resolve", "learn_from_claude", "resolver_stats"]
+__all__ = ["resolve", "learn_from_claude"]

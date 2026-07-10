@@ -362,9 +362,8 @@ def _schedule_daily_briefing() -> str:
 def _trend_report() -> str:
     """trends 테이블 — 가장 최근 수집일의 TOP 10 (opportunity_score 순)."""
     try:
-        import sqlite3
-        from shared.db import DB_PATH as _DB
-        con = sqlite3.connect(str(_DB))
+        from shared.db import get_db as _get_db
+        con = _get_db()
         rows = con.execute("""
             SELECT keyword, opportunity_score, score, sector, source
             FROM trends

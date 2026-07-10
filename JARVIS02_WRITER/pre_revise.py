@@ -103,23 +103,13 @@ def _is_meta_after(after: str) -> tuple[bool, str]:
 def _notify_meta_skip(mode: str, skipped: list):
     """메타 패턴으로 차단된 suggestion 들을 텔레그램으로 알림 — 학습 신호."""
     try:
-        import os, requests
-        from dotenv import load_dotenv
-        load_dotenv(JARVIS_ROOT / ".env")
-        tok = os.getenv("TELEGRAM_TOKEN", "")
-        cid = os.getenv("TELEGRAM_CHAT_ID", "")
-        if not (tok and cid):
-            return
+        from shared.notify import send_tg
         lines = [f"🚫 *pre_revise sanitizer 차단* ({mode}, {len(skipped)}건)"]
         for i, s in enumerate(skipped, 1):
             lines.append(f"  [{i}] type={s['type']} / 패턴 hit: `{s['hit']}`")
             lines.append(f"      after: {s['after']}")
         lines.append("\n→ Claude 가 메타 지시문을 반환했지만 sanitizer가 막음. 본문 누출 없음.")
-        requests.post(
-            f"https://api.telegram.org/bot{tok}/sendMessage",
-            json={"chat_id": cid, "text": "\n".join(lines), "parse_mode": "Markdown"},
-            timeout=10,
-        )
+        send_tg("\n".join(lines))
     except Exception:
         pass
 

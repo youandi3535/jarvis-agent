@@ -8,6 +8,7 @@
 from __future__ import annotations
 import logging
 import os
+import threading
 from pathlib import Path
 
 import requests
@@ -22,27 +23,58 @@ except Exception:
 _log = logging.getLogger("notify")
 
 
-def send_tg(text: str) -> None:
+def call_with_hard_timeout(fn, *args, hard_timeout: float = 15.0, **kwargs):
+    """fn(*args, **kwargs) 을 데몬 스레드로 실행해 wall-clock 상한을 강제 (2026-07-06).
+
+    `requests` 의 `timeout=` 은 post-sleep-wake 좀비 소켓 등 OS/네트워크 이상 상태에서
+    종종 무력화된다(실전 확인: ssl.py 내부 read 가 명시적 timeout=35 를 넘겨 정지).
+    이 래퍼는 그런 상황에서도 호출자가 확실히 제어를 돌려받도록 보장한다.
+    하드 타임아웃 초과 시 TimeoutError — 방치된 스레드는 daemon=True 라 프로세스
+    종료를 막지 않는다.
+    """
+    box: dict = {}
+
+    def _run():
+        try:
+            box["value"] = fn(*args, **kwargs)
+        except Exception as e:
+            box["error"] = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(hard_timeout)
+    if t.is_alive():
+        raise TimeoutError(f"{getattr(fn, '__name__', fn)} 하드 타임아웃 {hard_timeout:.0f}초 초과")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def send_tg(text: str, parse_mode: str = "Markdown", chat_id: str = None) -> None:
     token = os.getenv("TELEGRAM_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
+    _chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not _chat_id:
         _log.debug("send_tg 스킵: TOKEN/CHAT_ID 없음")
         return
     try:
-        r = requests.post(
+        r = call_with_hard_timeout(
+            requests.post,
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+            json={"chat_id": _chat_id, "text": text, "parse_mode": parse_mode},
             timeout=10,
+            hard_timeout=15,
         )
         data = r.json()
         if not data.get("ok"):
             desc = data.get("description", "")
             _log.warning(f"sendMessage 실패: {desc}")
             if "parse" in desc.lower():
-                r2 = requests.post(
+                r2 = call_with_hard_timeout(
+                    requests.post,
                     f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={"chat_id": chat_id, "text": text},
+                    json={"chat_id": _chat_id, "text": text},
                     timeout=10,
+                    hard_timeout=15,
                 )
                 if not r2.json().get("ok"):
                     _log.warning(f"plain text 재시도 실패: {r2.json().get('description')}")
@@ -50,4 +82,38 @@ def send_tg(text: str) -> None:
         _log.warning(f"텔레그램 전송 오류: {e}")
 
 
-__all__ = ["send_tg"]
+def send_tg_with_buttons(text: str, buttons: list, chat_id: str = None,
+                          parse_mode: str = "Markdown") -> None:
+    """인라인 키보드 버튼이 달린 텔레그램 메시지 전송."""
+    token = os.getenv("TELEGRAM_TOKEN", "")
+    _chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not _chat_id:
+        _log.debug("send_tg_with_buttons 스킵: TOKEN/CHAT_ID 없음")
+        return
+    try:
+        payload = {"chat_id": _chat_id, "text": text,
+                   "parse_mode": parse_mode,
+                   "reply_markup": {"inline_keyboard": buttons}}
+        r = call_with_hard_timeout(
+            requests.post,
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json=payload, timeout=10, hard_timeout=15,
+        )
+        data = r.json()
+        if not data.get("ok"):
+            desc = data.get("description", "")
+            _log.warning(f"send_tg_with_buttons 실패: {desc}")
+            if "parse" in desc.lower():
+                payload.pop("parse_mode", None)
+                r2 = call_with_hard_timeout(
+                    requests.post,
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json=payload, timeout=10, hard_timeout=15,
+                )
+                if not r2.json().get("ok"):
+                    _log.warning(f"plain text 재시도 실패: {r2.json().get('description')}")
+    except Exception as e:
+        _log.warning(f"텔레그램 버튼 메시지 전송 오류: {e}")
+
+
+__all__ = ["send_tg", "send_tg_with_buttons", "call_with_hard_timeout"]

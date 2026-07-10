@@ -464,6 +464,7 @@ def _save_to_db(result: AuditResult) -> None:
         ),
     )
     con.commit()
+    con.close()
 
 
 # ──────────────────────────────────────────────────────────────

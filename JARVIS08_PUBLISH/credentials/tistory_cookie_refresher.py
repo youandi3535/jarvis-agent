@@ -654,28 +654,6 @@ def run(force: bool = False, return_driver: bool = False, notify: bool = True):
     return (False, None) if return_driver else False
 
 
-def job_pre_publish_check() -> bool:
-    """발행 직전 티스토리 쿠키 유효성 검사·갱신. True=쿠키 정상, False=갱신 실패.
-
-    ★ 사용자 박제 2026-05-15 — force=False (만료 시에만 갱신, 카카오 2회 차단).
-    ★ 사용자 박제 2026-05-30 — bool 반환 추가 (실패 시 발행 콜백 조기 종료용).
-    """
-    print(f"\n🍪 [쿠키 점검] 티스토리 쿠키 유효성 검사")
-    try:
-        ok = run(force=False, return_driver=False, notify=True)
-        if ok:
-            print("  ✅ 티스토리 쿠키 정상")
-        else:
-            print("  ❌ 티스토리 쿠키 갱신 실패")
-            _tg_notify("🚨 티스토리 쿠키 갱신 실패 — 발행 건너뜀")
-        return bool(ok)
-    except Exception as e:
-        print(f"  ❌ 티스토리 쿠키 점검 예외: {e}")
-        _g_report("writer", e, module=__name__)
-        _tg_notify(f"🚨 티스토리 쿠키 점검 예외: {e}")
-        return False
-
-
 if __name__ == "__main__":
     # ★ P1-④ Phase 2 보강 (사용자 박제 2026-05-18) — Selenium 로그인 직전 환경 검증
     try:
@@ -693,4 +671,4 @@ if __name__ == "__main__":
     sys.exit(0 if success else 1)
 
 
-__all__ = ["run", "job_pre_publish_check", "check_cookie_valid", "refresh_cookie", "update_env_cookie"]
+__all__ = ["run", "check_cookie_valid", "refresh_cookie", "update_env_cookie"]

@@ -678,45 +678,6 @@ def run_auto_repair() -> None:
         _hb_stop.set()
 
 
-def _run_auto_repair_legacy() -> None:
-    """harness 미가용 시 직접 실행 (backward-compat fallback).
-
-    ★ 사용자 박제 2026-06-07 — Claude CLI 잔존 흔적 일소.
-    PATH·OAuth·MessageParseError 처리 모두 run_sdk_query 가 흡수.
-    (실제로는 run_auto_repair 가 ImportError 시 차단되므로 *호출 안 됨* — 죽은 코드.
-     안전망 유지 위해 함수는 보존하되 단일 진입점으로 통합.)
-    """
-    start = time.time()
-    prompt = _BASE_PROMPT.replace("{WORKDIR}", str(ROOT.resolve()))
-    from shared.claude_sdk_compat import run_sdk_query
-    result = run_sdk_query(
-        prompt=prompt, model=_MODEL,
-        cwd=str(ROOT), max_turns=60,
-        permission_mode="bypassPermissions",
-        timeout=_TIMEOUT,
-    )
-    elapsed = result["elapsed"]
-    rc      = result["returncode"]
-    if rc != 0:
-        kind = result.get("error_kind") or "sdk_error"
-        if kind == "cli_not_found":
-            _send_tg("❌ *자가 수정 실패*: claude 바이너리 PATH 미등록.")
-        elif kind == "timeout":
-            _send_tg("⚠️ *자가 수정 타임아웃* — 다음 회차에 재시도")
-        else:
-            _send_tg(f"❌ *자가 수정 예외*: {result.get('stderr','?')[:200]}")
-        # 실패도 박제 → self_repair_runs 통계 누수 방지
-        _save_run_to_db(_MODEL, elapsed, rc, {}, {}, f"(legacy 실패: {kind})")
-        return
-    stdout = result["stdout"]
-    summary = _parse_summary(stdout or "")
-    _record_repairs_to_guardian(summary)
-    layers = _parse_layer_counts(summary)
-    scores = _parse_self_scores(summary)
-    _save_run_to_db(_MODEL, elapsed, 0, layers, scores, summary)
-    _send_tg(f"✅ *자가 진단·수정 완료 (legacy)* ({elapsed}s)\n\n{_esc(summary)}")
-
-
 def job_auto_repair() -> None:
     """APScheduler 콜백 진입점."""
     try:

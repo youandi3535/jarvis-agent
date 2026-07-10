@@ -191,31 +191,6 @@ def _strip_imports(code: str) -> str:
     return "\n".join(lines)
 
 
-def _exec_and_extract_html(code: str) -> str:
-    """Python 코드 실행 → _RESULT_HTML 변수에서 HTML 문자열 추출."""
-    import math as _math
-    import colorsys as _colorsys
-    import random as _random
-
-    code = _strip_imports(code)
-
-    ns: dict = {
-        "__builtins__": _SAFE_BUILTINS,
-        # 자주 쓰이는 안전 모듈 사전 주입
-        "math": _math,
-        "colorsys": _colorsys,
-        "random": _random,
-    }
-    try:
-        exec(code, ns)
-        html = ns.get("_RESULT_HTML", "")
-        if isinstance(html, str) and len(html) > 500 and "<html" in html.lower():
-            return html
-    except Exception as e:
-        log.debug(f"[html_infographic] exec 오류: {e}")
-    return ""
-
-
 # ══════════════════════════════════════════════════════════════════
 #  5. HTML → JPG via Selenium
 # ══════════════════════════════════════════════════════════════════

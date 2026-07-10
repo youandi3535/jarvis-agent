@@ -423,97 +423,6 @@ def _cap_per(per):
     return round(p, 1) if 0 < p <= _PER_OUTLIER_MAX else None
 
 
-def calc_fin(info, ticker_obj=None):
-    """폭포수 방식: 네이버(1순위) → yfinance info → yfinance financials"""
-    mc  = info.get('marketCap', 0) or 0
-    ni  = info.get('netIncomeToCommon', 0) or 0
-    rv  = info.get('totalRevenue', 0) or 0
-    roe = info.get('returnOnEquity', 0) or 0
-    om  = info.get('operatingMargins', 0) or 0
-    tpe = info.get('trailingPE', 0) or 0
-    fpe = info.get('forwardPE', 0) or 0
-    per = None
-
-    # ── 1순위: 네이버 금융 (가장 정확) ──
-    naver = {}
-    if ticker_obj:
-        try:
-            code = ticker_obj.ticker.replace('.KQ','').replace('.KS','')
-            naver = _naver_fin(code)
-            # 상장폐지 확인
-            if naver.get('delisted'):
-                return {'per':None,'roe':None,'op_margin':None,
-                        'net_income':0,'revenue':0,'is_profit':False,'delisted':True}
-            if naver.get('per'):   per = naver['per']
-            if naver.get('roe'):   roe = naver['roe']
-            if naver.get('op_margin'): om = naver['op_margin']
-            if naver.get('net_income'): ni = naver['net_income']
-            if naver.get('revenue'):    rv = naver['revenue']
-            if naver.get('marcap') and not mc: mc = naver['marcap']
-            if naver.get('marcap'): info['naver_marcap'] = naver['marcap']
-            if naver.get('price') and not info.get('currentPrice'):
-                info['currentPrice'] = naver['price']
-        except Exception as _e:
-            _g_report("collect_theme", _e, module="collect_theme", func_name="calc_fin.naver")
-
-    # ── 2순위: yfinance info 보완 ──
-    if not ni:  ni  = info.get('netIncomeToCommon', 0) or 0
-    if not rv:  rv  = info.get('totalRevenue', 0) or 0
-    if not roe: roe = info.get('returnOnEquity', 0) or 0
-    if not om:  om  = info.get('operatingMargins', 0) or 0
-    if not mc:  mc  = info.get('marketCap', 0) or 0
-    if not per:
-        tpe = info.get('trailingPE', 0) or 0
-        fpe = info.get('forwardPE', 0) or 0
-        if tpe > 0: per = round(float(tpe), 1)
-        elif fpe > 0: per = round(float(fpe), 1)
-
-    # ── 3순위: yfinance financials 직접 파싱 ──
-    if ticker_obj and (not ni or not rv or not om):
-        try:
-            fin = ticker_obj.financials
-            if fin is not None and not fin.empty:
-                def _get(keys):
-                    for k in keys:
-                        if k in fin.index:
-                            v = fin.loc[k].iloc[0]
-                            if v and not (hasattr(v,'__float__') and __import__('math').isnan(float(v))):
-                                return float(v)
-                    return 0
-                ni2 = _get(['Net Income','NetIncome'])
-                rv2 = _get(['Total Revenue','TotalRevenue'])
-                oi2 = _get(['Operating Income','OperatingIncome','EBIT'])
-                if not ni and ni2: ni = ni2
-                if not rv and rv2: rv = rv2
-                if not om and oi2 and rv2: om = oi2/rv2
-        except Exception as _e:
-            _g_report("collect_theme", _e, module="collect_theme", func_name="calc_fin.yfinance_financials")
-
-    # PER 최종 계산
-    if not per and ni > 0 and mc > 0:
-        per = round(mc/ni, 1)
-
-    is_profit = ni > 0  # 순이익 기준으로 흑자/적자 판단
-    if not is_profit:
-        per = None
-    # ★ PER 이상치 가드 (2026-07-02): 흑자라도 이익 미미로 PER 이 비정상 과대(예: 463.9)
-    #   하거나 음수면 신뢰 불가 → None(표에 N/A, 차트에서 제외). 거짓 차트 방지.
-    if per is not None and (per <= 0 or per > _PER_OUTLIER_MAX):
-        per = None
-    # ROE/OM 단위 정규화 (네이버는 소수, yfinance도 소수)
-    roe_pct = round(roe*100, 1) if roe and abs(roe) <= 1 else (round(roe, 1) if roe else None)
-    om_pct  = round(om*100, 1)  if om  and abs(om)  <= 1 else (round(om,  1) if om  else None)
-    return {
-        'per': round(per, 1) if per else None,
-        'roe': roe_pct,
-        'op_margin': om_pct,
-        'net_income': ni, 'revenue': rv, 'is_profit': is_profit,
-        'fin_period': naver.get('fin_period', ''),  # ★ 재무 vals[0] 실제 기간 (라벨 정확화, ERRORS [367])
-        '_marcap': mc,   # 네이버/yfinance 시총
-        '_price': naver.get('price', 0),  # 네이버 현재가
-    }
-
-
 
 # ════════════════════════════════════════════════════════════════
 #  ★ 경량 종목 데이터 수집 (CrewAI 제거 — trend_theme_writer 용)
@@ -615,6 +524,86 @@ def stocks_to_datasets(stocks_data: dict, max_stocks: int = 8) -> list[dict]:
             datasets.append({"title": title, "unit": unit, "viz_hint": viz,
                              "data": rows, "source": dict(src),
                              "fingerprint": _dfp(title, unit)})
+
+    # ★ 대장주(rank=1)/부대장주(rank=2) 주가 이력 — 분기별 종가 요약 (5y→3y→1y 폴백)
+    #   LLM 이 슬롯에 박을 수 있는 데이터셋으로 승격. viz_hint="stock_price" 로 표시해
+    #   JARVIS06 이 인포그래픽 대신 전용 주가 차트 렌더러로 분기한다.
+    _LEADER_RANKS = {1: "leader", 2: "second"}
+    _src_hist = {"provider": "yfinance", "name": "Yahoo Finance · 주가 이력",
+                 "url": "https://finance.yahoo.com", "as_of": _d_std.today().isoformat()}
+    for stock in sorted(stocks, key=lambda s: s.get("rank") or 99):
+        rank = stock.get("rank")
+        if rank not in _LEADER_RANKS:
+            continue
+        ticker = stock.get("ticker", "")
+        name   = stock.get("name", "")
+        if not ticker or not name:
+            continue
+
+        # 최대 5년 요청 — yfinance 가 상장 이후 데이터만 반환하므로 있는 만큼만 사용.
+        # alt 티커 포함 순서대로 시도.
+        alt_tickers = [ticker]
+        if ticker.endswith(".KS"):
+            alt_tickers.append(ticker.replace(".KS", ".KQ"))
+        elif ticker.endswith(".KQ"):
+            alt_tickers.append(ticker.replace(".KQ", ".KS"))
+
+        hist_df = pd.DataFrame()
+        for tk in alt_tickers:
+            try:
+                h = yf.Ticker(tk).history(period="5y")
+                if not h.empty and len(h) >= 6:
+                    hist_df = h
+                    break
+            except Exception:
+                pass
+
+        if hist_df.empty:
+            print(f"  ⚠️ [stocks_to_datasets] {name}({ticker}) 주가 이력 없음 — 스킵")
+            continue
+
+        # 월별 마지막 종가 요약
+        try:
+            hist_df.index = pd.to_datetime(hist_df.index).tz_localize(None)
+            monthly = hist_df["Close"].resample("ME").last().dropna()
+        except Exception:
+            try:
+                monthly = hist_df["Close"].resample("M").last().dropna()
+            except Exception:
+                continue
+        if len(monthly) < 6:
+            continue
+
+        m_rows = [{"label": f"{ts.year}.{ts.month:02d}", "value": round(float(v), 0)}
+                  for ts, v in monthly.items()]
+
+        # 실제 보유 기간 문자열 (5년 5개월 / 3년 / 8개월 등)
+        n_months = len(m_rows)
+        n_years, n_rem = divmod(n_months, 12)
+        if n_years >= 1 and n_rem > 0:
+            period_str = f"{n_years}년 {n_rem}개월"
+        elif n_years >= 1:
+            period_str = f"{n_years}년"
+        else:
+            period_str = f"{n_months}개월"
+
+        label_key  = _LEADER_RANKS[rank]
+        title_hist = f"{name} 주가 흐름 (최근 {period_str})"
+        datasets.append({
+            "title":      title_hist,
+            "unit":       "원",
+            "viz_hint":   "stock_price",
+            "label_key":  label_key,
+            "ticker":     ticker,
+            "name":       name,
+            "rank":       rank,
+            "period":     period_str,   # "3년 2개월" 형태 — 차트 제목에 사용
+            "data":       m_rows,
+            "source":     dict(_src_hist),
+            "fingerprint": _dfp(title_hist, "원"),
+        })
+        print(f"  📈 [stocks_to_datasets] {name} 주가 이력 {n_months}개월 (최근 {period_str}) 승격")
+
     return datasets
 
 
@@ -928,35 +917,6 @@ def collect_stocks_data(theme_name: str) -> dict:
     stocks.sort(key=lambda s: (s.get("marcap") or 0), reverse=True)
     for i, s in enumerate(stocks, 1):
         s["rank"] = i
-
-    # ── ③ 대장주·부대장주 사업·기술·관계 enrich (★ 사용자 박제 2026-05-14) ──
-    # 시총 1·2위만 LLM 으로 사업/기술/관계 3필드 채움. 나머지 5종목은 통합 섹션
-    # 사용 → 개별 enrich 불필요. theme_html_writer Pass-1 prompt 가 이 필드를 사용.
-    def _enrich_leader_desc(stock: dict, theme: str) -> dict:
-        try:
-            from shared.llm import invoke_text
-            _phrase = _LM.build_length_phrase(1, 2)  # "1~2문장(약 50~100자)"
-            prompt = (
-                f"한국 KRX 상장사 '{stock['name']}' (테마: {theme}).\n"
-                f"아래 3항목을 각 {_phrase} 으로 작성. JSON 만 출력. 마크다운·이모지 금지.\n"
-                f"{{\n"
-                f'  "business":  "사업성·주력 제품·매출 구조 ({_phrase})",\n'
-                f'  "tech":      "핵심 기술·경쟁력·R&D ({_phrase})",\n'
-                f'  "relation":  "타 회사와의 영업·공급망·경쟁 관계 ({_phrase})"\n'
-                f"}}"
-            )
-            raw = invoke_text("writer_fast", prompt, temperature=0.3, max_tokens=400)
-            import json as _json
-            import re as _re
-            m = _re.search(r"\{[\s\S]*\}", raw or "")
-            if m:
-                obj = _json.loads(m.group(0))
-                stock["business"] = (obj.get("business") or "").strip()
-                stock["tech"]     = (obj.get("tech") or "").strip()
-                stock["relation"] = (obj.get("relation") or "").strip()
-        except Exception as e:
-            print(f"  ⚠️ [stocks_data] {stock['name']} enrich 실패: {e}")
-        return stock
 
     # ★ 검증 (2026-07-02): 현재가 실취득 실패 종목 드롭 — 표·차트에 N/A·거짓수치가
     #   흘러가지 않게. price 미취득은 스크레이핑 실패로 간주(하류 verification 레지스트리

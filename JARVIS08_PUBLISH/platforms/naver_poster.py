@@ -80,32 +80,6 @@ def rand(a=0.5, b=1.5):
 
 
 
-def _split_into_paragraphs(text: str, min_len: int = None) -> list:
-    """문장이 완전히 끝나는 지점에서 단락 분리.
-
-    min_len 자 이상 누적됐을 때만 분리 — 문장 중간에 끊지 않음.
-    기본값은 length_manager.PARAGRAPH_MIN_KOREAN (사람이 읽기 자연스러운 단락 최소).
-    """
-    import re
-    if min_len is None:
-        try:
-            from JARVIS02_WRITER import length_manager as _LM
-        except ImportError:
-            import length_manager as _LM
-        min_len = _LM.PARAGRAPH_MIN_KOREAN
-    sentences = re.split(r'(?<!\d)\.\s+|[!?]\s+', text.strip())
-    sentences = [s.strip() for s in sentences if s.strip()]
-
-    paragraphs = []
-    current = ''
-    for sent in sentences:
-        current += sent + '. '
-        if len(current.strip()) >= min_len:
-            paragraphs.append(current.strip())
-            current = ''
-    if current.strip():
-        paragraphs.append(current.strip())
-    return paragraphs if paragraphs else [text.strip()]
 
 
 def _generate_smart_tags(title: str, body_text: str) -> list:
@@ -260,33 +234,6 @@ def _click(x: int, y: int, label: str = ""):
     time.sleep(0.5)
     if label:
         print(f"  🖱️  {label} ({x},{y})")
-
-
-def _switch_to_english():
-    """입력기를 확실히 영문으로 전환"""
-    import subprocess
-    # 현재 입력 소스를 영문(ABC)으로 강제 전환
-    subprocess.run(["osascript", "-e", """
-tell application "System Events"
-    tell process "TextInputMenuAgent"
-        -- do nothing, just ensure English
-    end tell
-end tell
-"""], capture_output=True)
-    # 가장 확실한 방법: 영문 입력 소스로 직접 전환
-    subprocess.run(["osascript", "-e", """
-tell application "System Events"
-    set inputSources to every input source
-    repeat with src in inputSources
-        if name of src contains "ABC" or name of src contains "Roman" then
-            select src
-            exit repeat
-        end if
-    end repeat
-end tell
-"""], capture_output=True)
-    import time
-    time.sleep(0.3)
 
 
 def _paste(text: str):
@@ -591,77 +538,6 @@ def _click_publish_btn(driver, label: str = "최종발행") -> bool:
             except Exception:
                 return False
     return False
-
-
-def _js_login(driver) -> bool:
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.common.by import By
-
-    print("  🔐 JS 로그인 중...")
-    driver.get("https://nid.naver.com/nidlogin.login")
-
-    # 아이디/비밀번호 입력 필드가 실제로 나타날 때까지 대기
-    try:
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.ID, "id"))
-        )
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.ID, "pw"))
-        )
-    except Exception:
-        print("  ⚠️ 로그인 폼 로드 타임아웃")
-        return False
-
-    rand(1, 1.5)
-
-    # 입력 필드가 비어 있는지 확인 후 입력
-    result = driver.execute_script("""
-        var s = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-        var id = document.getElementById('id');
-        var pw = document.getElementById('pw');
-        if (!id || !pw) return false;
-        s.call(id, arguments[0]);
-        id.dispatchEvent(new Event('input',  {bubbles:true}));
-        id.dispatchEvent(new Event('change', {bubbles:true}));
-        s.call(pw, arguments[1]);
-        pw.dispatchEvent(new Event('input',  {bubbles:true}));
-        pw.dispatchEvent(new Event('change', {bubbles:true}));
-        return true;
-    """, NV_ID, NV_PW)
-
-    if not result:
-        print("  ⚠️ 입력 필드 접근 실패")
-        return False
-
-    rand(1, 1.5)
-
-    # 로그인 버튼이 클릭 가능한 상태일 때 클릭
-    try:
-        WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "log.login"))
-        ).click()
-    except Exception:
-        print("  ⚠️ 로그인 버튼 클릭 실패")
-        return False
-
-    # 로그인 완료 또는 실패를 URL 변화로 감지 (최대 10초)
-    try:
-        WebDriverWait(driver, 10).until(
-            lambda d: 'nidlogin' not in d.current_url
-        )
-    except Exception:
-        print("  ⚠️ 로그인 후 페이지 전환 없음 (CAPTCHA 또는 차단 가능성)")
-        return False
-
-    rand(1, 2)
-    logged = '로그아웃' in driver.page_source or NV_ID in driver.page_source
-    if logged:
-        pickle.dump(driver.get_cookies(), open(COOKIE_FILE, "wb"))
-        print("  ✅ 로그인 성공")
-    else:
-        print("  ⚠️ 로그인 페이지 벗어났으나 로그인 미확인")
-    return logged
 
 
 def _load_cookies_to_browser(driver):
@@ -1127,10 +1003,6 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                     _enter()
 
             # ★ 간격 수정 2026-05-27: 블록 끝 trailing Enter 제거 — spacer 블록이 간격 담당
-            pass
-
-        def input_divider():
-            """구분선 — 제거됨 (소제목 이미지로 대체)"""
             pass
 
         if blocks:

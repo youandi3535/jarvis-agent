@@ -44,6 +44,7 @@ _GLOBAL_EXCLUDE = (
     "__pycache__",
     ".venv",
     ".git",
+    ".claude",                         # Claude Code worktree / 세션 파일 제외
     "shared/backups",
     "chrome_profile",
     "/node_modules/",
@@ -426,6 +427,7 @@ def check_autocode(report: Report) -> None:
         "jarvis_keeper.py",                   # 데몬 워치독 — 재시작 subprocess 정당
         # ★ 무료 데이터 라이브러리 자동설치 화이트리스트 (사용자 박제 2026-06-29 — ADR 010)
         "JARVIS09_COLLECTOR/lib_bootstrap.py",
+        "api_server.py",               # FastAPI REST 백엔드 — PID/프로세스 조회 목적
     )
 
     for p in _iter_py():

@@ -7,11 +7,13 @@
 슬롯 표준 (대본 내 블록):
     [CHART_1]
     제목: 고려아연 연간 실적
-    종류: bar          (bar|line|area|pie|kpi 중 1)
     단위: 조원
     데이터: 매출액=16.59 | 영업이익=1.23
     출처: 데이터스캐너 (2025-12)
     [/CHART_1]
+
+    ★ 종류: 필드 없음 — 차트 종류는 JARVIS06이 데이터 성격 보고 자율 결정
+      (시계열 라벨→line / 단일값→kpi / %단위+소수개→pie / 나머지→bar)
 
 원칙:
   - 자비스06은 데이터를 수집·선택하지 않는다 — 슬롯에 적힌 값 그대로 렌더.
@@ -38,6 +40,28 @@ except ImportError:
 _SLOT_RE = re.compile(r"\[CHART_(\d+)\]\s*(.*?)\s*\[/CHART_\1\]", re.DOTALL)
 _VIZ_MAP = {"bar": "bar_chart", "line": "line_chart", "area": "area_chart",
             "pie": "pie_chart", "kpi": "kpi_cards"}
+
+_TIME_LABEL_RE = re.compile(
+    r"^(\d{4}[.\-/]\d{1,2}|\d{4}[년Q]\d?|Q[1-4]\s*\d{4}|\d{4}$)", re.IGNORECASE
+)
+_RATIO_KEYWORDS = ("%" , "퍼센트", "비율", "점유율", "비중", "분포")
+
+
+def _infer_viz_type(data: list, unit: str = "") -> str:
+    """데이터 성격으로 차트 종류 자동 추론 — 종류: 필드 대체."""
+    if len(data) == 1:
+        return "kpi_cards"
+    if not data:
+        return "bar_chart"
+    labels = [str(d["label"]) for d in data]
+    # 날짜/연도 라벨 70%+ → 시계열 라인
+    time_count = sum(1 for lb in labels if _TIME_LABEL_RE.match(lb.strip()))
+    if time_count >= len(labels) * 0.7:
+        return "line_chart"
+    # % 단위 + 5개 이하 → 파이 (비율)
+    if any(kw in unit for kw in _RATIO_KEYWORDS) and len(data) <= 5:
+        return "pie_chart"
+    return "bar_chart"
 
 
 def parse_chart_slots(text: str) -> list[dict]:
@@ -67,7 +91,7 @@ def parse_chart_slots(text: str) -> list[dict]:
         out.append({
             "idx": idx,
             "title": fields.get("제목", "").strip(),
-            "viz": _VIZ_MAP.get((fields.get("종류", "bar") or "bar").strip().lower(), "bar_chart"),
+            "viz": _VIZ_MAP.get(fields.get("종류", ""), _infer_viz_type(data, fields.get("단위", ""))),
             "unit": fields.get("단위", "").strip(),
             "data": data,
             "source_name": fields.get("출처", "").strip(),

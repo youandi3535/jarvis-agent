@@ -63,32 +63,6 @@ def get_datalab_trend(
     return {}
 
 
-def get_shopping_trend(keywords: list[str], start_date: str = None, end_date: str = None) -> dict:
-    """네이버 쇼핑 인사이트 — 분야별 트렌드."""
-    if not NAVER_CLIENT_ID:
-        return {}
-    if end_date   is None: end_date   = date.today().strftime("%Y-%m-%d")
-    if start_date is None: start_date = (date.today() - timedelta(days=30)).strftime("%Y-%m-%d")
-
-    body = {
-        "startDate": start_date,
-        "endDate":   end_date,
-        "timeUnit":  "date",
-        "category":  [{"name": kw, "param": [kw]} for kw in keywords],
-    }
-    try:
-        r = requests.post(
-            "https://openapi.naver.com/v1/datalab/shopping/categories",
-            headers=_HEADERS(), json=body, timeout=10,
-        )
-        if r.status_code == 200:
-            return r.json()
-    except Exception as e:
-        print(f"[Naver Shopping] 오류: {e}")
-        _g_report("radar", e, module=__name__)
-    return {}
-
-
 def get_autocomplete(query: str) -> list[str]:
     """네이버 자동완성 — 연관 키워드 (인증 불필요)."""
     try:
@@ -115,10 +89,15 @@ def get_batch_datalab(keywords: list[str], days: int = 30) -> dict[str, list[flo
     """DataLab 일별 ratio 배열 반환. 5개씩 배치. {kw: [ratio, ...]}"""
     if not has_api_key() or not keywords:
         return {}
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        def _wd_beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
     end   = date.today().strftime("%Y-%m-%d")
     start = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
     result: dict[str, list[float]] = {}
     for i in range(0, len(keywords), 5):
+        _wd_beat()   # ★ 배치 단위 진행 신호 — freeze 오탐 방지
         batch = keywords[i : i + 5]
         data  = get_datalab_trend(batch, start_date=start, end_date=end, time_unit="date")
         for r in data.get("results", []):

@@ -223,16 +223,8 @@ def enforce_image_between_paragraphs(
         msg = "\n".join(msg_parts)
         log.warning(f"[image-injector/제4조-3] {msg}")
         try:
-            import os as _os
-            import requests as _req
-            token = _os.getenv('TELEGRAM_TOKEN', '')
-            chat = _os.getenv('TELEGRAM_CHAT_ID', '')
-            if token and chat:
-                _req.post(
-                    f'https://api.telegram.org/bot{token}/sendMessage',
-                    json={'chat_id': chat, 'text': msg, 'parse_mode': 'Markdown'},
-                    timeout=5,
-                )
+            from shared.notify import send_tg
+            send_tg(msg)
         except Exception:
             pass
 

@@ -322,12 +322,18 @@ def collect_all(today_only: bool = False) -> dict:
         today = date.today().strftime("%Y-%m-%d")
         posts = [p for p in posts if (p.get("created_at") or "").startswith(today)]
 
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        def _wd_beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
+
     print(f"\n📊 성과 수집 시작: {len(posts)}개 글")
     updated    = 0
     by_platform: dict[str, list[int]] = {}
 
     rank_updated = 0
     for post in posts:
+        _wd_beat()   # ★ 글 단위 진행 신호 — 다건 스크래핑 장시간 실행 freeze 오탐 방지
         aid      = post["id"]
         platform = post["platform"]
         title    = post.get("title") or post.get("theme") or "?"

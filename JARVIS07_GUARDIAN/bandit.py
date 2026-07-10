@@ -545,16 +545,6 @@ def reward(
     )
 
 
-def negative_reward_for_skipped(
-    error_type: str,
-    fixer_names: list[str],
-    error_record: Optional[dict] = None,
-) -> None:
-    """결과를 생성하지 못한 fixer들에 일괄 음의 보상."""
-    for name in fixer_names:
-        reward(error_type, name, success=False, error_record=error_record)
-
-
 # ── 통계 / 대시보드 ───────────────────────────────────────────────
 
 def _arm_avg_reward(arm_data: dict) -> float:
@@ -563,14 +553,6 @@ def _arm_avg_reward(arm_data: dict) -> float:
     if n <= 0:
         return 0.0
     return float(arm_data.get("rsum", 0.0)) / n
-
-
-def _arm_win_rate(name: str, state: dict) -> Optional[float]:
-    """arm 의 평균 보상 (-1~+1). 전략 키 기준."""
-    arm_data = state["arms"].get(_arm_key(name) or name)
-    if not arm_data:
-        return None
-    return _arm_avg_reward(arm_data)
 
 
 def stats() -> dict:
@@ -607,14 +589,3 @@ def top_fixers(n: int = 5) -> list[dict]:
     return rows[:n]
 
 
-def learning_summary() -> str:
-    """텔레그램 알림용 한 줄 요약."""
-    s = stats()
-    if not s["arms"]:
-        return "🎰 Contextual Bandit: 아직 학습 없음"
-    best = max(s["arms"].items(), key=lambda x: x[1]["mean_reward"], default=(None, {}))
-    return (
-        f"🎰 Contextual Bandit ({s['feature_dim']}D Linear UCB, v{s['feature_version']}): "
-        f"{s['arm_count']}개 arm 학습 중 "
-        f"/ 현재 최우선 fixer: {best[0]} (mean_reward={best[1].get('mean_reward', '?')})"
-    )

@@ -357,14 +357,9 @@ except ImportError:
 
 def _tg(msg: str) -> None:
     """텔레그램 알림 (실패 무시)."""
-    if not (_requests and _TG_TOKEN and _TG_CHAT_ID):
-        return
     try:
-        _requests.post(
-            f"https://api.telegram.org/bot{_TG_TOKEN}/sendMessage",
-            json={"chat_id": _TG_CHAT_ID, "text": msg},
-            timeout=10,
-        )
+        from shared.notify import send_tg
+        send_tg(msg)
     except Exception:
         pass
 

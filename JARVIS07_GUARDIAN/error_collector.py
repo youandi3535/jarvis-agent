@@ -254,11 +254,6 @@ def _discover_log_dirs() -> list[Path]:
     return dirs
 
 
-def get_log_scanner() -> Optional[_LogFileHandler]:
-    """레거시 호환용 — 첫 번째 스캐너 반환."""
-    return _log_scanners[0] if _log_scanners else None
-
-
 def scan_all_logs():
     """등록된 모든 로그 디렉토리 스캔 (job_scan_logs 에서 호출)."""
     for scanner in _log_scanners:

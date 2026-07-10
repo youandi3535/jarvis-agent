@@ -81,12 +81,18 @@ def build_status() -> str:
     uptime = f"{h}시간 {m}분" if h else f"{m}분"
     lines.append("🟢 *JARVIS 통합 데몬 실행 중*")
     lines.append(f"⚙️ *JARVIS00_INFRA*  |  가동 {uptime}  |  PID {os.getpid()}")
-    if _dm._st_disabled:
-        lines.append(f"❌ 대시보드: 자동재시작 중단 ({_dm._ST_MAX_FAIL}회 실패)")
+    _hub_disabled = getattr(_dm, "_api_disabled", False) or getattr(_dm, "_next_disabled", False)
+    if _hub_disabled:
+        max_fail = getattr(_dm, "_HUB_MAX_FAIL", 3)
+        lines.append(f"❌ 대시보드: 자동재시작 중단 ({max_fail}회 실패)")
     elif _dm._streamlit_alive():
-        lines.append(f"🖥 대시보드: 가동 중 (port {_dm.ST_PORT}, PID {_dm._st_proc.pid})")
+        api_pid  = _dm._api_proc.pid  if getattr(_dm, "_api_proc",  None) and _dm._api_proc.poll()  is None else "—"
+        next_pid = _dm._next_proc.pid if getattr(_dm, "_next_proc", None) and _dm._next_proc.poll() is None else "—"
+        lines.append(f"🖥 대시보드: 가동 중 (API:{api_pid} port {getattr(_dm,'API_PORT',9198)}, Next:{next_pid} port {getattr(_dm,'NEXT_PORT',9199)})")
     else:
-        lines.append(f"⚠️ 대시보드: 다운 ({_dm._st_fail_count}/{_dm._ST_MAX_FAIL})")
+        fail_cnt = getattr(_dm, "_api_fail_count", 0) + getattr(_dm, "_next_fail_count", 0)
+        max_fail = getattr(_dm, "_HUB_MAX_FAIL", 3)
+        lines.append(f"⚠️ 대시보드: 다운 (실패 {fail_cnt}/{max_fail})")
 
     # 각 에이전트 섹션 — capability registry 순회 (agent_id 사전순 = JARVIS01→05)
     from shared import capabilities as _caps
@@ -359,6 +365,17 @@ def job_cleanup_events() -> None:
         _g_report("infra", e, module=__name__)
 
 
+def job_cleanup_vision_history() -> None:
+    """매일 03:15 — vision_agent_history 테이블 7일 이전 row 삭제 (무제한 누적 방지)."""
+    from shared import db
+    try:
+        n = db.cleanup_vision_history(days=7)
+        log.info(f"🧹 vision_agent_history 정리: {n}건 삭제")
+    except Exception as e:
+        log.error(f"❌ vision_agent_history 정리 실패: {e}")
+        _g_report("infra", e, module=__name__)
+
+
 def job_file_cleanup() -> None:
     """격주 월요일 04:00 — 오래된 로그·임시파일·스크린샷 자동 정리."""
     try:
@@ -458,7 +475,7 @@ __all__ = [
     "register", "register_capability",
     "build_status",
     "handle_command", "handle_safe_intent", "execute_approval",
-    "job_db_backup", "job_cleanup_events", "job_file_cleanup",
+    "job_db_backup", "job_cleanup_events", "job_cleanup_vision_history", "job_file_cleanup",
     "touch_heartbeat", "job_heartbeat", "enable_hang_forensics",
     "quiet_heartbeat_logs",
 ]

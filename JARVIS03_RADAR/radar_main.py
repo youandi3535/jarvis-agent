@@ -18,6 +18,13 @@ except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────
 
+# ── watchdog 진행 신호 (freeze 오탐 방지 — ERRORS [394] 동일 버그 클래스) ──
+try:
+    from JARVIS00_INFRA.watchdog import beat as _wd_beat
+except Exception:
+    def _wd_beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
+# ─────────────────────────────────────────────────────
+
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -113,6 +120,7 @@ def _collect_finance_headlines() -> list[str]:
         _QUERIES = ["주식 급등", "증시 강세", "코스피 업종", "반도체 주가", "배터리 주가",
                     "바이오 임상", "방산 수주", "AI 반도체", "전기차 시장"]
         for q in _QUERIES[:6]:
+            _wd_beat()   # ★ 쿼리 단위 진행 신호 — 다건 순차 네트워크 루프 freeze 오탐 방지
             try:
                 r = sess.get(
                     "https://openapi.naver.com/v1/search/news.json",
@@ -196,6 +204,7 @@ def collect_today() -> dict:
         if has_api_key():
             print("[RADAR] 경쟁 강도 분석 중...")
             for kw in trending[:15]:
+                _wd_beat()   # ★ 키워드 단위 진행 신호 — 다건 순차 네트워크 루프 freeze 오탐 방지
                 competition[kw] = get_competition_score(kw)
                 time.sleep(0.2)
             print(f"[RADAR] 경쟁 강도 분석 완료: {len(competition)}개")
@@ -207,6 +216,7 @@ def collect_today() -> dict:
     try:
         from JARVIS03_RADAR.collectors.naver_collector import get_autocomplete
         for kw in trending[:20]:  # 10→20으로 확대
+            _wd_beat()   # ★ 키워드 단위 진행 신호 — 다건 순차 네트워크 루프 freeze 오탐 방지
             ac = get_autocomplete(kw)
             if ac:
                 autocomplete[kw] = ac

@@ -347,12 +347,10 @@ def save_learned_adjustment(post_type: str, key: str, value) -> bool:
 def analyze_post_type_history(post_type: str, days: int = 30) -> dict:
     """post_analysis DB 분석 — 최근 N일 글 평균 분량 vs 조회수."""
     try:
-        import sqlite3
-        from shared.db import DB_PATH as db_path
-        if not db_path.exists():
+        from shared.db import DB_PATH as _db_path, get_db as _get_db
+        if not _db_path.exists():
             return {}
-        con = sqlite3.connect(str(db_path))
-        con.row_factory = sqlite3.Row
+        con = _get_db()
         rows = con.execute(f"""
             SELECT id, post_type, original_html, current_views
             FROM post_analysis

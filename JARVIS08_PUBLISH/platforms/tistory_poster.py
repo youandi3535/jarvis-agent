@@ -130,11 +130,6 @@ def _split_into_paragraphs(text: str) -> list:
     return paragraphs if paragraphs else [text.strip()]
 
 def _s(sec=1.0): time.sleep(sec)
-def _ss(name):   _pg.screenshot(str(SS_DIR / f"{name}.png"))
-
-def _capslock_reset():
-    for _ in range(3):
-        _pg.press('capslock'); _s(0.1)
 
 def _cgevent_paste():
     """HID 레벨 Cmd+V — 한국어 IME·포커스 문제 완전 우회 (CGEventPost kCGHIDEventTap)"""
