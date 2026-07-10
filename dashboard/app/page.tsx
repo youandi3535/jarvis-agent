@@ -350,12 +350,12 @@ function buildEdgeSvg(edges: ComputedEdge[], activeEdgeIds: Set<string>): string
 
   const lines = edges.flatMap(e => {
     const on = activeEdgeIds.has(e.id);
-    const wt   = (e.wt ?? 1.6) * (on ? 1.15 : 0.75);
-    const lineO = on ? 0.88 : 0.14;
-    const glowO = on ? 0.22 : 0.025;
-    const dotR  = on ? 5.5  : 2.2;
-    const dotO  = on ? 0.98 : 0.22;
-    const dur   = on ? e.dur * 0.5 : e.dur * 2.8;
+    const wt   = (e.wt ?? 1.6) * (on ? 1.15 : 0.85);
+    const lineO = on ? 0.88 : 0.28;
+    const glowO = on ? 0.22 : 0.04;
+    const dotR  = on ? 5.5  : 2.8;
+    const dotO  = on ? 0.98 : 0.32;
+    const dur   = on ? e.dur * 0.5 : e.dur * 2.2;
     const cnt   = on ? Math.max(e.dots * 2, 3) : 1;
 
     const segs: string[] = [];

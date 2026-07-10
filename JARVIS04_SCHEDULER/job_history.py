@@ -49,10 +49,10 @@ def _on_job_submitted(event):
     except Exception:
         pass
     try:
-        edges = _JOB_EDGES.get(event.job_id)
-        if edges:
-            from shared.pipeline_activity import mark_active
-            mark_active(edges)
+        from shared.pipeline_activity import mark_active
+        # 모든 잡은 J00 데몬이 실행 → e11(J00→J01) 항상 활성
+        edges = ["e11"] + (_JOB_EDGES.get(event.job_id) or [])
+        mark_active(edges)
     except Exception:
         pass
 

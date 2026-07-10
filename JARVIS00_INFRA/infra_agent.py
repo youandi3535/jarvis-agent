@@ -70,6 +70,11 @@ def build_status() -> str:
     각 에이전트의 status_fn() 을 순서대로 호출해 조립.
     새 에이전트는 declare(status_fn=...) 만 추가하면 자동 포함.
     """
+    try:
+        from shared.pipeline_activity import mark_active
+        mark_active("e11")  # J00→J01 인프라 상태 보고 활성화
+    except Exception:
+        pass
     import jarvis_daemon as _dm
     now    = datetime.now()
     lines  = []
