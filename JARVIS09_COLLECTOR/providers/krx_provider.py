@@ -52,10 +52,22 @@ def _fmt_chg(v) -> str:
         return "N/A"
 
 
+def _last_trading_day():
+    """가장 최근 거래일 반환. 토요일→금요일, 일요일→금요일."""
+    from datetime import date, timedelta
+    today = date.today()
+    dow = today.weekday()  # 0=월 … 4=금 5=토 6=일
+    if dow == 5:
+        return today - timedelta(days=1)
+    if dow == 6:
+        return today - timedelta(days=2)
+    return today
+
+
 def _recent_dates() -> tuple[str, str]:
-    """최근 7영업일 범위 (start, end)."""
-    from datetime import datetime, timedelta
-    end = datetime.now()
+    """최근 7영업일 범위 (start, end). 주말이면 마지막 거래일 기준."""
+    from datetime import timedelta
+    end = _last_trading_day()
     start = end - timedelta(days=10)
     return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 

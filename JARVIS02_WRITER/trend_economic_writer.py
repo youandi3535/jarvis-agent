@@ -1436,7 +1436,9 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
         from JARVIS06_IMAGE.draft_processor import process_draft
 
         # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
+        _ref_ds_ts = getattr(collected, "datasets", None) or []
         draft_html = generate_article_html(keyword, sector, reason, supreme_block,
+                                           ref_datasets=_ref_ds_ts,
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
@@ -1694,7 +1696,9 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
         from JARVIS06_IMAGE.draft_processor import process_draft
 
         # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
+        _ref_ds = getattr(collected, "datasets", None) or []
         draft_html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
+                                           ref_datasets=_ref_ds,
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}

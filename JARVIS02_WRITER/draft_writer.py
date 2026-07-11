@@ -654,16 +654,19 @@ def _build_section_system_msg(supreme_block: str, platform: str) -> str:
 def _gen_section_call1(
     keyword: str, sector: str, reason: str,
     supreme_block: str, platform: str = "tistory",
+    datasets=None,
 ) -> str:
     """Call-1: 오프닝 + 섹션1 생성."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     hook = _gen_hook(keyword, platform)
     system_msg = _build_section_system_msg(supreme_block, platform)
+    _catalog = _build_data_catalog(datasets)
     user_msg = f"""[작성 요청] {platform} 경제 글 — 오프닝 + 섹션1만 생성
 
 플랫폼: {spec['name']} | 독자: {spec['reader']}
 키워드: {keyword} | 섹터: {sector} | 이유: {reason}
 
+{_catalog}
 ★ CHART 최소 3개 이상 포함. 단락 수·분량에 따라 추가 배치 가능. 번호는 [CHART_1]부터 순서대로.
 ★ 문단-이미지 배치 (제4조): 이미지 연속 금지, 문단 3개+ 연속 금지. 문단+문단+이미지+문단 / 문단+이미지+문단+문단 패턴 OK.
 
@@ -719,14 +722,17 @@ CONTENT:
 def _gen_section_call2(
     keyword: str, sector: str, reason: str,
     supreme_block: str, platform: str = "tistory",
+    datasets=None,
 ) -> str:
     """Call-2: 섹션2만 생성."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     system_msg = _build_section_system_msg(supreme_block, platform)
+    _catalog = _build_data_catalog(datasets)
     user_msg = f"""[작성 요청] {platform} 경제 글 — 섹션2만 생성 (독립적)
 
 플랫폼: {spec['name']} | 키워드: {keyword} | 섹터: {sector}
 
+{_catalog}
 ★ CHART 최소 2개 이상 포함. 단락 수·분량에 따라 추가 배치 가능. 번호는 [CHART_5]부터 시작.
 ★ 문단-이미지 배치 (제4조): 이미지 연속 금지, 문단 3개+ 연속 금지. 문단+문단+이미지+문단 패턴 OK.
 
@@ -763,14 +769,17 @@ def _gen_section_call2(
 def _gen_section_call3(
     keyword: str, sector: str, reason: str,
     supreme_block: str, platform: str = "tistory",
+    datasets=None,
 ) -> str:
     """Call-3: 섹션3 + 마무리 생성."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     system_msg = _build_section_system_msg(supreme_block, platform)
+    _catalog = _build_data_catalog(datasets)
     user_msg = f"""[작성 요청] {platform} 경제 글 — 섹션3 + 마무리 생성
 
 플랫폼: {spec['name']} | 키워드: {keyword} | 섹터: {sector}
 
+{_catalog}
 ★ CHART 최소 2개 이상 포함. 단락 수·분량에 따라 추가 배치 가능. 번호는 [CHART_7]부터 시작.
 ★ 문단-이미지 배치 (제4조): 이미지 연속 금지, 문단 3개+ 연속 금지. 문단+이미지+문단+문단 패턴 OK.
 
@@ -809,20 +818,21 @@ def _gen_section_call3(
 def _gen_economic_ts_nv_parallel(
     keyword: str, sector: str, reason: str,
     supreme_block: str, platform: str = "tistory",
+    datasets=None,
 ) -> str:
     """티스토리·네이버 Pass-1: 3개 섹션 순차 생성 (rate limit 방지)."""
     print(f"  ⚡ [Pass-1/{platform}] 섹션별 순차 생성 ...")
     with ThreadPoolExecutor(max_workers=1) as executor:
-        call1_fut = executor.submit(_gen_section_call1, keyword, sector, reason, supreme_block, platform)
-        call2_fut = executor.submit(_gen_section_call2, keyword, sector, reason, supreme_block, platform)
-        call3_fut = executor.submit(_gen_section_call3, keyword, sector, reason, supreme_block, platform)
+        call1_fut = executor.submit(_gen_section_call1, keyword, sector, reason, supreme_block, platform, datasets)
+        call2_fut = executor.submit(_gen_section_call2, keyword, sector, reason, supreme_block, platform, datasets)
+        call3_fut = executor.submit(_gen_section_call3, keyword, sector, reason, supreme_block, platform, datasets)
         try:
             call1_content = call1_fut.result(timeout=300)
             call2_content = call2_fut.result(timeout=300)
             call3_content = call3_fut.result(timeout=300)
         except Exception as e:
             print(f"  ❌ [Pass-1/{platform}] 순차 생성 오류: {e}")
-            return _gen_economic_ts_nv(keyword, sector, reason, supreme_block, platform)
+            return _gen_economic_ts_nv(keyword, sector, reason, supreme_block, platform, datasets)
 
     if "CONTENT:" not in call1_content:
         return ""
