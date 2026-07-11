@@ -124,31 +124,8 @@ _strip_html_wrapper = strip_html_wrapper
 
 
 def _inject_missing_charts(html: str, target_count: int, start_idx: int = 1) -> str:
-    """HTML에 부족한 [PHOTO_N] 슬롯 자동 삽입.
-
-    ★ 구형식 [CHART_N: 설명] 삽입 폐기 (2026-07-05): 데이터 없이 차트 슬롯 삽입 →
-    거짓 차트 경로 진입 위험. 대신 [PHOTO_N: 설명] AI 사진 슬롯 삽입 (데이터 불필요).
-    """
-    existing = len(re.findall(r'\[CHART_\d+\]|\[PHOTO_\d+:', html))
-    if existing >= target_count:
-        return html
-    missing = target_count - existing
-
-    def _last_para_topic(h: str) -> str:
-        paras = re.findall(r'<p[^>]*>(.*?)</p>', h, re.S)
-        for p in reversed(paras):
-            txt = re.sub(r'<[^>]+>', '', p)
-            txt = re.sub(r'\s+', ' ', txt).strip()
-            if len(txt) >= 20:
-                head = re.split(r'[.!?。]', txt)[0].strip()
-                return (head or txt)[:30]
-        return ""
-
-    for i in range(missing):
-        photo_idx = start_idx + existing + i
-        topic = _last_para_topic(html)
-        description = f"{topic} 관련 사진" if topic else "관련 사진"
-        html = re.sub(r'(</p>)(?!.*</p>)', rf'\1\n[PHOTO_{photo_idx}: {description}]', html, count=1)
+    """CHART 부족 시 no-op. 본문 이미지 = 인포그래픽 디자인만 (AI 사진·폴백 삽입 금지).
+    못 만들면 빈 슬롯 — 차트 없는 채로 반환."""
     return html
 
 
