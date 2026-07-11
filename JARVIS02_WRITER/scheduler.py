@@ -1103,8 +1103,30 @@ def run_economic_poster(*extra_flags):
         #   블로그(네이버·티스토리) 액션당 30분 데드라인 + 300초 freeze 워치독으로 스스로 중단
         #   → 부모 timeout 은 그마저 안 될 때의 OS 최종 안전망(2블로그×30). 자식이 killable
         #   subprocess(--scheduled)라 freeze 시 os._exit → 부모는 대개 이 값에 안 닿음.
+        import sys as _sys
+        _is_tty = _sys.stdout.isatty() or bool(os.environ.get("JARVIS_VERBOSE"))
         with open(_logpath, 'w', encoding='utf-8') as _lf:
-            result = subprocess.run(cmd, timeout=3600, stdout=_lf, stderr=subprocess.STDOUT, env=_env)
+            if _is_tty:
+                # 터미널 직접 실행 시 — 로그파일 + 터미널 동시 출력
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, env=_env)
+                try:
+                    for _line in proc.stdout:
+                        _decoded = _line.decode("utf-8", errors="replace")
+                        _sys.stdout.write(_decoded)
+                        _sys.stdout.flush()
+                        _lf.write(_decoded)
+                    proc.wait(timeout=3600)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+
+                class _R:
+                    returncode = proc.returncode
+                result = _R()
+            else:
+                result = subprocess.run(cmd, timeout=3600, stdout=_lf,
+                                        stderr=subprocess.STDOUT, env=_env)
 
         # 플랫폼별 결과 읽기 (economic_poster.py 가 JARVIS_EP_RESULT_FILE 에 기록)
         _platform_results = {"naver": True, "tistory": True}
