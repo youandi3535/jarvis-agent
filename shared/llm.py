@@ -353,6 +353,25 @@ _LLM_SPAWN_SEM = _threading.BoundedSemaphore(_LLM_MAX_CONCURRENCY)
 _LLM_MIN_INTERVAL = float(os.getenv("LLM_MIN_INTERVAL_SEC", "0") or "0")
 _LLM_PACE_LOCK = _threading.Lock()
 _LLM_LAST_SPAWN = [0.0]
+_LLM_SEM_POLL_SEC = 15.0  # 세마포어 대기 중 heartbeat 주기 (watchdog freeze_sec=300 보다 충분히 작게)
+
+
+def _acquire_llm_sem() -> None:
+    """★ 전역 LLM 세마포어 획득 — 대기 중에도 워치독 진행 신호 전송 (freeze 오탐 방지).
+
+    다른 에이전트(GUARDIAN 심층감사·WRITER 장문 생성 등)가 슬롯을 오래 점유해도
+    대기 자체는 정상 흐름이다. plain `with _LLM_SPAWN_SEM:` 은 대기 구간에 beat가
+    없어 워치독이 300초 무진전으로 오판해 강제 종료(os._exit 75)하는 사고 원인이었다.
+    호출 후 반드시 `try/finally: _LLM_SPAWN_SEM.release()` 로 짝을 맞출 것.
+    """
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _beat
+    except Exception:
+        def _beat() -> None: pass
+    _beat()
+    while not _LLM_SPAWN_SEM.acquire(timeout=_LLM_SEM_POLL_SEC):
+        _beat()   # ★ 세마포어 대기 중에도 진행 신호 — freeze-kill 오탐 방지
+
 
 # ★ Rate-limit 회로 차단기 (ERRORS [288] — 2026-07-03)
 # 연속 *진짜 스로틀* N회 시 open → 비필수 호출은 즉시 "" 반환 (재시도 0)
@@ -363,7 +382,7 @@ _CIRCUIT_COOLDOWN_SEC = float(os.getenv("LLM_CIRCUIT_COOLDOWN_SEC", "90") or "90
 # → 발행 통째 실패로 번지는 것 방지). 장식성 호출(번역·라벨·태그)만 즉시 폴백.
 _CIRCUIT_EXEMPT_ALIASES = {
     a.strip() for a in
-    (os.getenv("LLM_CIRCUIT_EXEMPT", "writer,fact_judge,engagement_judge") or "").split(",")
+    (os.getenv("LLM_CIRCUIT_EXEMPT", "writer,fact_judge,engagement_judge,analyzer") or "").split(",")
     if a.strip()
 }
 _circuit_lock = _threading.Lock()
@@ -427,7 +446,8 @@ def _run_sdk_sync(
 
     # ★ 프로세스 전역 세마포어 — claude CLI 동시 spawn 직렬화 (Max burst 초과 방지)
     _pace_spawn()
-    with _LLM_SPAWN_SEM:
+    _acquire_llm_sem()
+    try:
         try:
             anyio.run(_collect)
         except (MessageParseError, ProcessError):
@@ -437,6 +457,8 @@ def _run_sdk_sync(
         except Exception as e:
             if not parts:
                 print(f"  ❌ SDK 오류: {e}")
+    finally:
+        _LLM_SPAWN_SEM.release()
     _was_throttled = bool(throttled["v"] and not parts)
     _LAST_CALL.throttled = _was_throttled   # ★ 호출자(invoke_text)가 진짜 스로틀만 카운트
     if _was_throttled:
@@ -479,7 +501,8 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
                             parts.append(block.text)
 
     _pace_spawn()
-    with _LLM_SPAWN_SEM:
+    _acquire_llm_sem()
+    try:
         try:
             anyio.run(_collect)
         except (MessageParseError, ProcessError):
@@ -489,6 +512,8 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
         except Exception as e:
             if not parts:
                 print(f"  ❌ vision SDK 오류: {e}")
+    finally:
+        _LLM_SPAWN_SEM.release()
     return "".join(parts)
 
 

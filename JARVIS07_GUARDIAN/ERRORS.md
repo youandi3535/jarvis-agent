@@ -2,6 +2,46 @@
 
 ---
 
+## [406] job_collect_trends 말미 topic_pack 사전 생성 누락 — 06:30 포스터에서 LLM 경합 → throttle 재발 구조 (2026-07-11)
+
+- **증상**: 06:30 경제 브리핑이 매번 "자비스03 주제 패키지 없음"으로 실패. [404][405] 수정 후에도 재발.
+- **환경**: `JARVIS03_RADAR/jobs.py` `job_collect_trends()` + `JARVIS03_RADAR/topic_pack.py` `build_topic_pack()`.
+- **원인 (근본)**: CLAUDE_RADAR.md 에 "job_collect_trends 말미 자동 생성"이라 명시됐지만 `jobs.py` 에 실제로 `build_topic_pack()` 호출이 없었음. 결과: 06:00 트렌드 파일(`trends_YYYY-MM-DD.json`)은 생성되지만 `topic_pack_YYYY-MM-DD.json`은 생성되지 않음. 06:30 포스터가 `_tp_pick()` → None → `_tp_build()` → `_profile_batch()` LLM 호출을 시도하는 시점은 대본 생성 LLM 과 동일 시간대 → 동시성 경합 → throttle. [404][405]는 이 증상의 대응책이었으나 근본(설계-구현 불일치)은 미해결 상태.
+- **헛다리**: [404][405] 수정으로 해결됐다고 오판. 실제론 두 수정 모두 증상 완화(재시도 폭 확대·GUARDIAN 오분류 차단)였고 LLM 경합 자체를 없애지 못함.
+- **해결**:
+  1. `JARVIS03_RADAR/jobs.py` `job_collect_trends()` 말미에 `build_topic_pack()` 호출 추가. 트렌드 하네스 완료 후 즉시 팩 사전 생성 → 06:30 포스터가 `_tp_pick()` 즉시 성공 → pack 재생성 LLM 경합 0.
+  2. `shared/llm.py` `_CIRCUIT_EXEMPT_ALIASES` 기본값에 `"analyzer"` 추가 → circuit open 중에도 `_profile_batch()` 1샷 실시도 보장 (이중 방어).
+- **파일**: `JARVIS03_RADAR/jobs.py`, `shared/llm.py`.
+- **교훈**: 설계 문서(CLAUDE.md)에 "말미 자동 생성"이라 적혀 있어도 실제 코드에 호출이 없으면 없는 것. 파이프라인 종속성(A가 B를 필요로 할 때 A 시작 전 B가 이미 준비돼 있어야 한다는 보장)은 코드에서 명시적으로 구현해야 한다 — 문서 위임으로 대체 불가.
+
+---
+
+## [405] "주제 패키지 없음" 미분류 → GUARDIAN Tier2 SDK 낭비 세션이 재시도 LLM 슬롯과 경합해 재발 (2026-07-11)
+
+- **증상**: `[harness:경제 브리핑 발행 — 네이버] attempt=1 step=③ NV 대본 생성: 대본 생성 실패: 자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)`. 06:30 파이프라인에서 네이버·티스토리 둘 다 같은 원인으로 실패. `economic_20260711_063036.log` 확인 결과 `topic_pack._profile_batch()` LLM 호출(`_essential=True`)이 3회 연속 "rate-limit 스로틀 (num_turns=0, 모델 미호출)" — 트렌드 캐시(`trends_2026-07-11.json`, 06:03 생성)와 경제 섹터 후보(23개)는 정상 존재, LLM 프로필 배치만 실패.
+- **환경**: `JARVIS07_GUARDIAN/severity.py` (`_TRANSIENT_PATTERNS`, `is_transient`) + `JARVIS07_GUARDIAN/guardian_agent.py` (`_orchestrate` 안전장치 0) + `JARVIS07_GUARDIAN/incident_responder.py` (`_TRANSIENT_KEYWORDS`, `_classify`).
+- **원인 (근본)**: `daemon.log` 대조 결과 harness RuntimeError(#2745, message="...주제 패키지 없음...")가 `severity.is_transient()`에서 `_TRANSIENT_PATTERNS` 어디에도 매칭되지 않아 False 반환 → `guardian_agent._orchestrate()` 가 일반 오류로 취급 → Tier 1 실패 → **Tier 2 Claude Code SDK targeted 수정 세션 시작(job=harness, 최대 10분, 06:32:23~)**. 그런데 이 오류는 [383]/[395]/[404]와 같은 카테고리 — LLM rate-limit/회로차단으로 인한 `topic_pack._profile_batch()` 일시적 실패이지 코드 버그가 아니다(고칠 코드가 없음, 실제로 `#2745 fixable=False`). 이 무의미한 Tier2 SDK 세션이 Claude Code 동시성 슬롯을 10분간 점유하는 동안, 별도 경로인 `incident_responder.respond()`가 (우연히 로그 tail에 포함된 "쿠키" 문구로 `_classify()`가 transient 판정 → 30초 대기 후) economic_poster 재시도를 실행 → 재시도 내부에서 다시 `topic_pack.build_topic_pack()` LLM 프로필 호출을 시도하지만 Tier2 SDK 세션과 자원 경합 → 다시 스로틀 → 재차 동일 오류 재발(06:33:09~06:33:27 로그로 확인). 즉 **GUARDIAN이 스스로 고치려는 시도가 고쳐야 할 진짜 재시도의 LLM 자원을 뺏어 문제를 지속시키는 자기강화 루프**.
+- **헛다리**: 없음 — [395]/[404]는 `topic_pack.py`/`trend_economic_writer.py` 자체의 로직 결함(즉석 수집 미트리거·소진 재탐색 폭 부족)이었고 이미 수정 반영되어 있음(재빌드 시 `max_candidates=8` 확장 재탐색 코드 확인됨). 이번 사고는 그 수정들과 무관하게, GUARDIAN 오류 분류기가 이 오류 유형을 놓쳐 낭비 SDK 세션을 켜는 *별도* 결함.
+- **해결**:
+  1. `severity.py` `_TRANSIENT_PATTERNS` 에 `주제 패키지 없음` 패턴 추가 → `is_transient()` True → `guardian_agent._orchestrate()` 안전장치 0 에서 즉시 `ignored` 처리(Tier1/2 미진입, 낭비 SDK 세션 원천 차단).
+  2. `incident_responder.py` `_TRANSIENT_KEYWORDS` 에도 동일 문자열 추가 — 로그 tail에 우연히 "쿠키" 등 다른 transient 키워드가 없어도 이 경로에서 안정적으로 transient(코드 수정 없이 대기 후 재시도)로 분류되도록 일관성 확보.
+- **파일**: `JARVIS07_GUARDIAN/severity.py`, `JARVIS07_GUARDIAN/incident_responder.py`.
+- **교훈**: [387]과 동일한 교훈의 재확인 — "코드 버그가 아닌 운영/일시적 자원 보고를 `report()` 경유로 감사기록할 땐 반드시 `_TRANSIENT_PATTERNS`에 매칭 키워드를 동반 등록해야 Tier1/2 낭비 진입을 막는다." 새 harness 오류 메시지 문구를 추가할 때마다 이 게이트 등록을 빠뜨리면, GUARDIAN의 "자동 수정 시도" 자체가 Claude Code SDK 동시성 자원을 점유해 *진짜 필요한 재시도*의 LLM 호출과 경합하는 부작용을 낳는다 — 자동 수정 시스템이 스스로 병목이 되는 역설.
+
+---
+
+## [404] topic_pack 소진 — 팩 2개 중 fit 1개뿐이면 티스토리(2번 주자)가 재빌드해도 영구 소진 (2026-07-11)
+
+- **증상**: `[harness:경제 브리핑 발행 — 티스토리] attempt=1 step=③ 티스토리 대본 생성: 대본 생성 실패: 자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)`. 네이버는 정상 발행(같은 날 트렌드·LLM 모두 정상 작동 확인됨) — [395](2026-07-10, 06시 크론 미발화로 트렌드 캐시 자체가 없던 케이스)와는 다른 원인.
+- **환경**: `JARVIS02_WRITER/trend_economic_writer.py` `ts_collect()`/`nv_collect()` — `JARVIS03_RADAR/topic_pack.py` `pick_candidate()`/`build_topic_pack()`.
+- **원인 (근본)**: ERRORS [384](2026-07-06 사용자 박제)로 `build_topic_pack()`은 `max_candidates=publish_slots+2`(=4)만 LLM 프로파일링하고 fit 판정 통과분 중 상위 `publish_slots`(=2)개만 팩에 박제. 오늘 후보 4개 중 fit 판정을 통과한 게 1개뿐이면 팩엔 사실상 1개만 저장됨. 네이버(1번 주자)가 그 1개를 선점 → 티스토리(2번 주자)가 `pick_candidate(exclude_keyword=nv_keyword)` 호출 시 유일한 후보가 `exclude_keyword`와 일치해 걸러짐 → `None`. 소진 복구 시도로 `build_topic_pack()`을 재호출하지만 같은 날 트렌드 캐시가 그대로이고 `max_candidates`도 그대로(4)라 LLM이 같은 4개 후보를 같은 방식으로 재분류 → 결정론적으로 동일하게 fit 1개만 재생산 → 재시도 무의미, 영구 소진.
+- **헛다리**: 없음. [395]와 증상 문구가 동일해 처음엔 같은 원인으로 의심했으나, 네이버가 같은 날 정상 발행했다는 사실이 "트렌드 캐시 부재"(=[395] 원인) 가설을 배제 — 팩 내부 후보 수 부족이 진짜 원인.
+- **해결**: `ts_collect()`/`nv_collect()`의 **소진 복구 재빌드 경로에서만** `build_topic_pack(max_candidates=8)`로 후보 탐색 폭을 넓힘 (평상시 최초 팩 생성은 여전히 `publish_slots+2`=4 그대로 — [384] "낭비 방지" 원칙 유지, 재시도 시에만 예외). 넓은 풀에서 fit 판정 통과 후보가 2개 이상 나오면 팩에 서로 다른 주제 2개가 들어가 2번 주자도 소진 없이 선택 가능.
+- **파일**: `JARVIS02_WRITER/trend_economic_writer.py` (`ts_collect`, `nv_collect`).
+- **교훈**: "팩에는 발행 슬롯 수만큼만 박제"(비용 절감)와 "각 플랫폼이 서로 다른 주제를 골라야 함"(exclude_keyword)은 fit 통과율이 100%가 아닌 이상 구조적으로 충돌한다 — 슬롯 수만큼만 프로파일링하면 fit 탈락이 하나만 생겨도 뒷 순번 소비자가 굶는다. 소진 시 재시도는 *같은 입력으로 같은 결정론적 절차를 반복*하면 반드시 같은 결과가 나온다는 점을 항상 의심해야 한다 — 재시도가 의미 있으려면 최소 하나의 파라미터(여기선 탐색 폭)가 달라져야 한다.
+
+---
+
 ## [403] 테마주 가격 차트 없음 + 섹터 인포그래픽 없음 — 3개 버그 연쇄 (2026-07-11)
 
 - **증상**: 테마주 글에 대장주/부대장주 5년 월별 가격 차트 없음. 각 섹터 인포그래픽(`[CHART_N]...[/CHART_N]` 슬롯) 없이 글만 나열됨.
@@ -7198,3 +7238,30 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **해결**: `_paste_title()` 내 `_pg2.hotkey('command', 'v')` → `ActionChains(driver).key_down(Keys.COMMAND).send_keys('v').key_up(Keys.COMMAND).perform()`. ActionChains는 ChromeDriver CDP 프로토콜로 전달 → OS focus 무관하게 브라우저 DOM focus(제목 칸) 직접 전달.
 - **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` 816번 줄
 - **교훈**: SmartEditor ONE 같은 리치 에디터에서 JS focus + pyautogui HID 조합은 OS/DOM focus 불일치로 버그 발생. 에디터 내 입력은 반드시 Selenium ActionChains CDP 방식 사용.
+
+## [403] 성과 수집 watchdog 데드라인 초과(블로킹) — deadline_sec 1800 하드코딩 미스매치 (2026-07-11)
+- **증상**: watchdog 이 "정지 감지 — 성과 수집: 데드라인 초과(블로킹) 1979s > 1800s" RuntimeError 보고(source=watchdog, module=`JARVIS00_INFRA.watchdog`, func_name=`성과 수집`). traceback 은 `NoneType: None`(watchdog 이 직접 report 로 생성한 인공 RuntimeError, freeze 오탐 아님).
+- **환경**: `JARVIS03_RADAR/performance_collector.py` `__main__` — `guard_main("성과 수집", deadline_sec=1800)`.
+- **원인**: [150]에서 글 단위 `_wd_beat()` 를 추가해 "무진전(freeze)" 오탐은 이미 해결됐으나, 이번 건은 `Watchdog._monitor()` 의 별개 분기(`elapsed > deadline_sec` — 협조적 check 밖의 블로킹 전체 데드라인)로, beat 는 정상 갱신되는데도 순수하게 총 소요시간이 30분을 넘김. `deadline_sec=1800` 은 블로그 발행 액션(네이버/티스토리 각 30분, `BLOG_ACTION_DEADLINE_SEC`) 용 값이 복붙된 것으로, 성과 수집은 100+글을 순차로 스크래핑(글당 최대 requests 15초×3후보+rank API 10초+sleep 1.3초)하는 별개 성격의 배치 작업이라 애초에 그 값이 부적합. 발행 글이 늘어나며 실제로 30분을 초과.
+- **헛다리**: 없음 — [150]을 먼저 대조해 동일 모듈·잡의 *다른* 판정 분기(freeze 아닌 블로킹 데드라인)임을 바로 특정.
+- **해결**: `deadline_sec=1800` → `DEFAULT_ACTION_DEADLINE_SEC`(3600, "그 외 액션" 60분 안전망) 로 교체. `job_registry.py` 의 `radar_perf` misfire_grace_time(3600) 과도 정합.
+- **파일**: `JARVIS03_RADAR/performance_collector.py`
+- **교훈**: `guard_main(deadline_sec=...)` 호출 시 숫자를 다른 액션에서 복붙하지 말고 작업 성격(단발 selenium 발행 vs N건 순차 배치)에 맞는 워치독 SSOT 상수(`BLOG_ACTION_DEADLINE_SEC` vs `DEFAULT_ACTION_DEADLINE_SEC`)를 그대로 import 해서 쓸 것 — 값이 같은 파일(watchdog.py)에 이미 정의돼 있음에도 호출부마다 raw 숫자를 재입력하면 작업량 증가에 따라 재발.
+
+---
+### [2026-07-11 05:01] ✅ 자동수정 — RuntimeError
+- **증상**: 트렌드 수집 실패 (rc=75): it__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+[watchdog] 🛑 '레이더 수집': 멈춤(f
+- **모듈**: JARVIS03_RADAR.jobs
+- **원인**: `_run_sdk_sync`/`_invoke_sdk_vision`이 전역 세마포어(`_LLM_SPAWN_SEM`, 기본 동시성 1)를 plain `with`으로 블로킹 획득하는데, 이 대기 구간에는 워치독 heartbeat(`_wd_beat()`)가 전혀 호출되지 않는다. 다른 에이전트가 세마포어를 오래 점유 중이면 RADAR 등 대기자는 정상적으로 순서를 기다리는 것뿐인데도 진행 신호가 300초 넘게 끊겨 워치독이 freeze로 오판, `os._exit(75)`로 강제 종료된다. 세마포어 획득을 타임아웃 폴링 방식으로 바꿔 대기 중에도 주기적으로 beat를 보내면 해결된다.
+- **파일**: shared/llm.py
+- **해결**: 자동 수정 적용
+
+---
+### [2026-07-11 05:22] ✅ 자동수정 — RuntimeError
+- **증상**: [harness:성과 수집] attempt=1 step=① 성과 수집: RuntimeError: 성과 수집 실패 (rc=75): _init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a support
+- **모듈**: JARVIS00_INFRA.harness.성과 수집
+- **원인**: `_collect_naver_views`/`_collect_tistory_views`/`_collect_naver_rank` 내부의 `requests.get(..., timeout=N)`은 TCP 연결·응답 타임아웃만 보장할 뿐, DNS 조회(getaddrinfo)가 멈추거나 소켓 레벨에서 무응답이 발생하면 지정한 timeout을 넘겨 무한정 블로킹될 수 있다(이전 ERRORS [401] yfinance hang과 동일 근본 원인 클래스). 이 파일은 게시글 1건당 한 번만 `_wd_beat()`를 호출하므로, 특정 게시글 처리 중 위와 같은 소켓 레벨 hang이 발생하면 300초 무진전 기준을 넘겨 watchdog이 freeze로 판단해 `os._exit(75)`로 강제 종료시킨다. `RequestsDependencyWarning`은 종료 시점에 버퍼에 남아있던 무해한 경고 텍스트일 뿐 실제 원인이 아니다.
+- **파일**: JARVIS03_RADAR/performance_collector.py
+- **해결**: 자동 수정 적용

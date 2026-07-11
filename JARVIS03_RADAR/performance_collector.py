@@ -16,6 +16,7 @@ import time
 import requests
 from pathlib import Path
 from datetime import date
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
@@ -50,6 +51,26 @@ _BOT_HEADERS = {
     "User-Agent": "JARVIS-Bot/1.0 (+https://jarvis-agent.local; Mozilla/5.0 compatible; bot)",
     "Accept-Language": "ko-KR,ko;q=0.9",
 }
+
+
+# ─────────────────────────────────────────────────────────────
+# ★ 외부 wall-clock 상한 헬퍼 (ERRORS [401] 동일 패턴 — HTTP timeout= 파라미터만으론
+#   DNS/소켓 레벨 hang을 못 막음. ThreadPoolExecutor + fut.result(timeout=N) 으로
+#   호출 자체가 응답 없이 무한 대기하는 것을 방지. 내부 스레드는 leak 될 수 있으나
+#   shutdown(wait=False)로 메인 루프를 블로킹하지 않음.
+# ─────────────────────────────────────────────────────────────
+def _bounded(fn, *args, timeout: float = 30.0, default=None, **kwargs):
+    exe = ThreadPoolExecutor(max_workers=1)
+    try:
+        fut = exe.submit(fn, *args, **kwargs)
+        try:
+            return fut.result(timeout=timeout)
+        except _FutureTimeoutError:
+            name = getattr(fn, "__name__", str(fn))
+            print(f"  [경고] {name} 응답 없음 {timeout:.0f}s 초과 — 스킵")
+            return default
+    finally:
+        exe.shutdown(wait=False)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -343,7 +364,9 @@ def collect_all(today_only: bool = False) -> dict:
             continue
 
         print(f"\n  [{platform.upper()}] {title[:40]}")
-        views = collector(post)
+        # ★ 게시글당 60초 상한 — DNS/소켓 hang이 있어도 다음 글로 진행 보장
+        views = _bounded(collector, post, timeout=60.0, default=0)
+        _wd_beat()  # 상한 통과 직후 재신호 (긴 정상 스크래핑도 freeze 오탐 방지)
 
         if views > 0:
             db.update_post_views(aid, views)
@@ -357,7 +380,9 @@ def collect_all(today_only: bool = False) -> dict:
             if not kw:
                 kw = (title or "").split("|")[0].split("-")[0].strip()[:30]
             if kw:
-                rank = _collect_naver_rank(kw, post.get("url", ""))
+                # ★ 20초 상한
+                rank = _bounded(_collect_naver_rank, kw, post.get("url", ""),
+                                 timeout=20.0, default=None)
                 db.update_naver_rank(aid, rank)
                 if rank is not None:
                     rank_updated += 1

@@ -173,6 +173,23 @@ def job_collect_trends() -> None:
 
     _run_with_harness("트렌드 수집", _run, verify_fn=_verify_trends)
 
+    # ★ 트렌드 수집 완료 직후 topic_pack 즉석 생성 (사용자 박제 2026-07-11 — ERRORS [406])
+    # CLAUDE_RADAR.md "job_collect_trends 말미 자동 생성" 규정 구현.
+    # 목적: 06:30 경제 포스터가 _tp_pick() 즉시 성공 → pack 재생성 LLM 호출 불필요.
+    #       LLM 경합(트렌드수집↔대본생성↔pack생성 동시) → rate-limit throttle 연쇄를 원천 차단.
+    # 실패해도 06:30 포스터가 _tp_build() 즉석 폴백(기존 동작) → 발행 안 막음.
+    try:
+        from JARVIS03_RADAR.topic_pack import build_topic_pack as _btp
+        _pack = _btp()
+        if _pack:
+            cands = len((_pack.get("candidates") or []))
+            _log.info(f"✅ [topic_pack] 사전 생성 완료: {cands}개 후보")
+        else:
+            _log.warning("[topic_pack] 사전 생성 실패 — 06:30 포스터에서 즉석 재시도")
+    except Exception as _e:
+        _log.warning(f"[topic_pack] 사전 생성 예외 (발행은 폴백으로 계속): {_e}")
+        _g_report("radar", _e, module=__name__)
+
 
 def job_collect_performance() -> None:
     """매일 23:00 — 발행글 조회수 수집 + 결과 텔레그램 보고. ★ 하네스 래핑."""

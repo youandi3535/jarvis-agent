@@ -1292,8 +1292,13 @@ def ts_collect(nv_keyword: str = '', supreme_block=None) -> dict:
         else:
             _cand = _tp_pick(exclude_keyword=nv_keyword)
             if _cand is None:
-                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행")
-                _tp_build()
+                # ★ ERRORS [404]: 팩이 publish_slots(=2)개만 박제(ERRORS [384])되므로
+                #   fit 후보가 1개뿐이면 네이버가 선점한 뒤 재빌드해도 동일 1개만
+                #   재생산돼 티스토리가 영구 소진. 소진 복구 재빌드만 max_candidates
+                #   를 넓혀 더 깊은 후보 풀에서 fit 대안을 찾는다(평시 프로파일링
+                #   비용은 그대로 — ERRORS [384] 원칙 유지, 소진 시에만 예외).
+                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행(확장 재탐색)")
+                _tp_build(max_candidates=8)
                 _cand = _tp_pick(exclude_keyword=nv_keyword)
             if _cand is None:
                 return {"success": False, "keyword": "",
@@ -1549,8 +1554,9 @@ def nv_collect(ts_keyword: str = '', supreme_block=None) -> dict:
         else:
             _cand = _tp_pick(exclude_keyword=ts_keyword)
             if _cand is None:
-                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행")
-                _tp_build()
+                # ★ ERRORS [404] — ts_collect 와 동일 사유로 소진 복구 재빌드만 확장 재탐색.
+                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행(확장 재탐색)")
+                _tp_build(max_candidates=8)
                 _cand = _tp_pick(exclude_keyword=ts_keyword)
             if _cand is None:
                 return {"success": False, "keyword": "",

@@ -175,6 +175,10 @@ _TRANSIENT_PATTERNS = [
     re.compile(r"수정 불가.*(패턴 반복|건)|재생성해도 동일 결과", re.I),
     # 콘텐츠·데이터 생성 운영 실패 (재생성·다음 회차에 해소 — 코드 패치 불가)
     re.compile(r"HTML 생성 실패|트렌드 데이터 없음|키워드 .*등장|body 등장|카테고리 검색 실패|BrokenPipeError", re.I),
+    # ★ ERRORS [405] 박제 2026-07-11 — topic_pack 생성 실패(트렌드·적합 후보·LLM 미가용)는
+    # 코드 버그가 아니라 LLM rate-limit/회로차단으로 인한 일시적 자원 경합(topic_pack._profile_batch
+    # 스로틀). Tier2 SDK 낭비 세션이 재시도의 LLM 슬롯과 경합해 재발을 야기하는 자기강화 루프 방지.
+    re.compile(r"주제 패키지 없음", re.I),
     # 외부 이미지 모델 API (HuggingFace 폐기 모델·할당량 소진 — 외부 제약)
     re.compile(r"HTTP \d{3} —|depleted your.*credits|requested model.*(does not exist|deprecated)"
                r"|black-forest-labs|stabilityai|stable-diffusion-|FLUX\.\d", re.I),

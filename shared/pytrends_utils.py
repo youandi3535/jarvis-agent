@@ -36,6 +36,11 @@ def build_payload_with_fallback(pt, kw_list: list, timeframe: str,
     시도 순서: 원본 → now 1-d → today 1-m. 모두 실패 시 마지막 예외 재발생.
     반환: 성공한 timeframe 문자열.
     """
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        def _wd_beat() -> None: pass  # watchdog 부재 시 no-op
+
     candidates = [timeframe, "now 1-d", "today 1-m"]
     seen: set = set()
     last_err = None
@@ -43,6 +48,9 @@ def build_payload_with_fallback(pt, kw_list: list, timeframe: str,
         if tf in seen:
             continue
         seen.add(tf)
+        # ★ 후보 timeframe 단위 진행 신호 — pytrends 재시도(timeout=30s×retries=3)가
+        #   후보 3개 누적되면 5분 freeze 상한을 넘겨 워치독 오탐-강제킬(rc=75)될 수 있음
+        _wd_beat()
         try:
             pt.build_payload(kw_list, cat=cat, timeframe=tf, geo=geo)
             return tf
