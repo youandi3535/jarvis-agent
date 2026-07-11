@@ -67,6 +67,7 @@ def _fingerprint(title: str, unit: str) -> str:
 def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
     """dataset dict 생성. data 가 비거나 값이 부족하면 None."""
     rows, _seen = [], set()
+    _is_bar = viz_hint == "bar_chart"
     for d in data or []:
         try:
             v = float(str(d.get("value")).replace(",", ""))
@@ -74,6 +75,8 @@ def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
             continue
         label = _clean_label(d.get("label", ""))   # 괄호 설명 제거 + 길이 제한 (짤림·장황 방지)
         if label and v == v and label not in _seen:  # NaN·중복 라벨 제외
+            if _is_bar and v == 0:  # ★ bar_chart에서 0값 제외 (수집 실패·의미 없는 0)
+                continue
             _seen.add(label)
             rows.append({"label": label, "value": v})
     # 차트 의미 최소 기준: kpi 1개, 그 외 2개
@@ -104,8 +107,11 @@ def _stock_datasets(theme: str) -> list[dict]:
     if len(stocks) < 2:
         return []
 
+    # ★ as_of: 실제 최근 거래일 기준
+    from JARVIS09_COLLECTOR.providers.krx_provider import _last_trading_day
+    _td = _last_trading_day()
     src = {"provider": "krx", "name": "한국거래소·금융감독원 DART",
-           "url": "https://data.krx.co.kr", "as_of": _now_as_of()}
+           "url": "https://data.krx.co.kr", "as_of": f"{_td.year}년 {_td.month}월 {_td.day}일"}
     # (metric 필드, 제목, 단위)
     _metrics = [
         ("per",       f"{theme} 주요 종목 PER",   "배"),
@@ -375,7 +381,12 @@ def _reduce_crosstab(rows: list, max_rows: int = 7) -> list:
 
 def _parse_clean_doc(doc):
     """KOSIS 등 '[KOSIS 통계표: ...] / 라벨: 값 단위' 정형 텍스트를 LLM 없이 직접 파싱 (빠름).
-    반환 dataset 또는 None. (LLM 추출 호출 폭증 방지 — 풍부 수집 속도 핵심)"""
+    반환 dataset 또는 None. (LLM 추출 호출 폭증 방지 — 풍부 수집 속도 핵심)
+
+    ★ 단위 혼용 분리 (사용자 박제 2026-07-11): 행별 단위가 다른 경우(회사수=개, 자산총계=백만원)
+      단위 그룹별로 별도 dataset 생성 → 첫 번째(또는 대표) dataset 반환.
+      단위가 "개"인 재무 항목(값>100,000)은 단위를 "백만원"으로 자동 정정.
+    """
     text = getattr(doc, "raw_text", "") or ""
     if "[KOSIS 통계표:" not in text:
         return None
@@ -384,11 +395,14 @@ def _parse_clean_doc(doc):
         if title.startswith(pre):
             title = title[len(pre):]
     title = re.sub(r"\s*[(（][^)）]*[)）]", "", title).strip() or "KOSIS 통계"   # 제목 괄호 설명 제거
-    unit = ""
+    # 헤더 단위 (폴백)
+    _header_unit = ""
     mu = re.search(r"단위:\s*([^)\]]+)", text)
     if mu:
-        unit = mu.group(1).strip()
-    rows = []
+        _header_unit = mu.group(1).strip()
+
+    # ★ 행별 단위 파싱 (m.group(3) = 행 끝 단위 토큰)
+    rows_by_unit: dict[str, list] = {}   # unit → [{label, value}]
     for line in text.splitlines():
         m = re.match(r"\s+(.+?):\s*(-?[\d.,]+)\s*(\S*)\s*$", line)
         if not m:
@@ -398,7 +412,26 @@ def _parse_clean_doc(doc):
             val = round(float(m.group(2).replace(",", "")), 2)
         except ValueError:
             continue
-        rows.append({"label": lab, "value": val})
+        row_unit = m.group(3).strip() if m.group(3) else _header_unit
+        # ★ 단위 자동 정정: "개"이지만 재무 항목(값>100,000)이면 백만원으로 정정
+        _fin_kws = {"자산", "부채", "자본", "매출", "이익", "영업", "경상", "당기", "순이익"}
+        if row_unit == "개" and val > 100_000 and any(kw in lab for kw in _fin_kws):
+            row_unit = "백만원"
+        rows_by_unit.setdefault(row_unit, []).append({"label": lab, "value": val})
+
+    if not rows_by_unit:
+        return None
+
+    # 단위 그룹 중 가장 많은 항목을 가진 그룹 선택 (단, "개" 그룹이 재무 그룹보다 작으면 재무 우선)
+    _fin_units = {"백만원", "억원", "조원", "원", "%"}
+    def _group_priority(u):
+        if u in _fin_units:
+            return (0, -len(rows_by_unit[u]))   # 재무 단위 우선
+        return (1, -len(rows_by_unit[u]))
+    best_unit = sorted(rows_by_unit, key=_group_priority)[0]
+    rows = rows_by_unit[best_unit]
+    unit = best_unit
+
     if len(rows) < 2:
         return None
     # ★ 교차표(30셀 덤프) → 읽을 수 있는 단일 분포(전체×최신연도 응답별 ≤7개)로 축약
@@ -411,8 +444,16 @@ def _parse_clean_doc(doc):
     _vals = [r["value"] for r in rows]
     if _vals and all(0 <= v <= 100 for v in _vals) and sum(_vals) > 140:
         return None
+    # ★ as_of: 오늘 날짜가 아닌 수집된 데이터의 실제 최신 날짜 박제 (사용자 박제 2026-07-11)
+    # "202605", "202509" 형태 날짜 코드에서 최신값 추출 → "2026년 5월" 같은 형태로 표시
+    _date_codes = re.findall(r'\b(20\d{2})([01]\d)\b', text)   # (년, 월) 튜플 리스트
+    if _date_codes:
+        _latest = max(_date_codes)
+        _as_of = f"{_latest[0]}년 {int(_latest[1])}월"
+    else:
+        _as_of = _now_as_of()
     src = {"provider": "kosis", "name": "통계청 KOSIS",
-           "url": getattr(doc, "url", "") or "https://kosis.kr/", "as_of": _now_as_of()}
+           "url": getattr(doc, "url", "") or "https://kosis.kr/", "as_of": _as_of}
     return _mk_dataset(title[:40], "bar_chart", unit, rows, src)
 
 
@@ -497,7 +538,12 @@ def _extract_series_from_docs(series: dict, docs: list):
     _unit = _llm_unit or str(series.get("unit", "") or "").strip()
     if len(rows) < 2 or not src_url or not _unit:
         return None
-    src = {"provider": src_name or "web", "name": src_name or "web", "url": src_url, "as_of": _now_as_of()}
+    # ★ as_of: 출처 문서에서 최신 날짜 코드 추출 (오늘 날짜 아닌 실제 데이터 기준)
+    _ref_doc = sel[0] if sel else None
+    _ref_text = (getattr(_ref_doc, "raw_text", "") or "") if _ref_doc else ""
+    _dc = re.findall(r'\b(20\d{2})([01]\d)\b', _ref_text)
+    _as_of_s = f"{max(_dc)[0]}년 {int(max(_dc)[1])}월" if _dc else _now_as_of()
+    src = {"provider": src_name or "web", "name": src_name or "web", "url": src_url, "as_of": _as_of_s}
     viz = {"line": "line_chart", "bar": "bar_chart", "stat": "kpi", "donut": "pie_chart"}.get(series.get("chart"), "bar_chart")
     return _mk_dataset(series["name"], viz, _unit, rows, src)
 

@@ -190,7 +190,7 @@ def _line_chart(series, pal, W=980, H=340):
     return "".join(parts), note
 
 
-def _bar_chart(rows, pal, W=980):
+def _bar_chart(rows, pal, W=980, unit=""):
     """가로 막대 랭킹 — 값 *내림차순 정렬 가정* (호출자가 실제값 desc 정렬).
 
     ★ 음수 처리 (사용자 박제 2026-07-06): 값에 음수가 있으면 0 기준선 발산형 —
@@ -205,6 +205,8 @@ def _bar_chart(rows, pal, W=980):
     _defs = ("<defs>"
              f"<linearGradient id='bg' x1='0' y1='0' x2='1' y2='0'>"
              f"<stop offset='0' stop-color='{pal['a1']}'/><stop offset='1' stop-color='{pal['a2']}'/></linearGradient></defs>")
+    # ★ 단위 접미사: % 는 값 바로 뒤, 나머지는 공백+단위
+    _u = unit if unit == "%" else (f" {unit}" if unit else "")
 
     if vmin < 0:
         # ── 발산형(0 중앙): 항목명 중앙(0축) 위, 양수 우측 · 음수 좌측 ──
@@ -225,12 +227,13 @@ def _bar_chart(rows, pal, W=980):
             parts.append(f"<text x='{cx:.0f}' y='{y + 15}' text-anchor='middle' fill='{pal['ink']}' "
                          f"font-size='16' font-weight='{800 if top else 700}'>{lb}</text>")
             parts.append(f"<rect x='{bx:.0f}' y='{y + 24}' width='{max(4, bl):.0f}' height='{barH}' rx='8' fill='{fill}'/>")
+            _val_txt = f"{_fmt(v)}{_u}"
             if v >= 0:
                 parts.append(f"<text x='{cx + bl + 10:.0f}' y='{y + 43}' fill='{pal['ink']}' "
-                             f"font-size='17' font-weight='800'>{_fmt(v)}</text>")
+                             f"font-size='17' font-weight='800'>{_val_txt}</text>")
             else:
                 parts.append(f"<text x='{cx - bl - 10:.0f}' y='{y + 43}' text-anchor='end' fill='{pal['ink']}' "
-                             f"font-size='17' font-weight='800'>{_fmt(v)}</text>")
+                             f"font-size='17' font-weight='800'>{_val_txt}</text>")
             y += rowH + gap
         parts.append("</svg>")
         return "".join(parts)
@@ -252,7 +255,7 @@ def _bar_chart(rows, pal, W=980):
                      f"font-size='17' font-weight='{800 if top else 700}'>{lb}</text>")
         parts.append(f"<rect x='{trackX}' y='{y + 4}' width='{barMax}' height='{rowH - 20}' rx='9' fill='{pal['grid']}'/>")
         parts.append(f"<rect x='{trackX}' y='{y + 4}' width='{bw:.0f}' height='{rowH - 20}' rx='9' fill='{fill}'/>")
-        parts.append(f"<text x='{valX:.0f}' y='{y + 20}' fill='{pal['ink']}' font-size='18' font-weight='800'>{_fmt(v)}</text>")
+        parts.append(f"<text x='{valX:.0f}' y='{y + 20}' fill='{pal['ink']}' font-size='18' font-weight='800'>{_fmt(v)}{_u}</text>")
         y += rowH + gap
     parts.append("</svg>")
     return "".join(parts)
@@ -445,7 +448,7 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
             inner = (f"<div style='display:flex;align-items:center;gap:36px'>{donut}"
                      f"<div style='flex:1'>{legend}</div></div>")
         else:
-            inner = _bar_chart(sorted(pts, key=lambda kv: -kv[1]), pal)   # ★ 실제값 desc
+            inner = _bar_chart(sorted(pts, key=lambda kv: -kv[1]), pal, unit=unit)   # ★ 실제값 desc
         body_cards.append(_card(pal, f"{n:02d}", d.get("title", ""), unit or "", inner, rad=rad))
         n += 1
 
@@ -468,7 +471,18 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
 
     eyebrow = chip or "데이터 인사이트"
     body_html = "".join(f"<div style='margin-top:22px'>{c}</div>" for c in body_cards)
+    # ★ 데이터 기간 표시: 각 dataset source 의 as_of 를 수집해 출처에 병기
+    _as_of_parts = []
+    for _d in datasets:
+        _s = _d.get("source") or {}
+        if isinstance(_s, dict):
+            _ao = _s.get("as_of", "")
+            if _ao and _ao not in _as_of_parts:
+                _as_of_parts.append(_ao)
+    _period_str = (" · ".join(_as_of_parts[:2]) + " 기준") if _as_of_parts else ""
     src_txt = src or "데이터 출처 · JARVIS"
+    if _period_str:
+        src_txt = f"{src_txt}  ({_period_str})"
 
     return f"""<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;800;900&display=swap');

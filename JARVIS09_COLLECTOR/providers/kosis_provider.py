@@ -94,7 +94,12 @@ class KosisProvider(BaseProvider):
 
     @staticmethod
     def _df_to_text(tbl_nm: str, df) -> str:
-        """값 DataFrame → 깨끗한 텍스트 (라벨: 값 단위) — 실행기 LLM 추출이 차트화하기 쉽게."""
+        """값 DataFrame → 깨끗한 텍스트 (라벨: 값 단위) — 실행기 LLM 추출이 차트화하기 쉽게.
+
+        ★ 단위 행별 개별 처리 (사용자 박제 2026-07-11 — ERRORS: 자산총계에 "개" 붙는 버그):
+          첫 번째 행 단위를 전체에 적용하던 방식 → 각 행의 단위명 컬럼을 개별 읽어 출력.
+          이로써 회사수(개)와 자산총계(백만원)가 섞인 표에서 각각 올바른 단위 표시.
+        """
         c_v1 = "분류값명1" if "분류값명1" in df.columns else None
         c_v2 = "분류값명2" if "분류값명2" in df.columns else None
         c_prd = "수록시점" if "수록시점" in df.columns else ("PRD_DE" if "PRD_DE" in df.columns else None)
@@ -102,12 +107,15 @@ class KosisProvider(BaseProvider):
         c_un = "단위명" if "단위명" in df.columns else ("UNIT_NM" if "UNIT_NM" in df.columns else None)
         if not c_dt:
             return ""
-        unit = ""
+        # 헤더용 대표 단위 (가장 빈도 높은 것)
+        _header_unit = ""
         try:
-            unit = str(df[c_un].dropna().iloc[0]) if c_un else ""
+            if c_un:
+                _counts = df[c_un].dropna().value_counts()
+                _header_unit = str(_counts.index[0]) if not _counts.empty else ""
         except Exception:
-            unit = ""
-        lines = [f"[KOSIS 통계표: {tbl_nm}{(' (단위: ' + unit + ')') if unit else ''}]"]
+            _header_unit = ""
+        lines = [f"[KOSIS 통계표: {tbl_nm}{(' (단위: ' + _header_unit + ')') if _header_unit else ''}]"]
         for _, row in df.head(40).iterrows():
             lab_parts = []
             if c_v1 and str(row.get(c_v1, "")).strip():
@@ -119,7 +127,13 @@ class KosisProvider(BaseProvider):
             val = str(row.get(c_dt, "")).strip()
             if not val or val in ("-", "nan"):
                 continue
-            lines.append(f"  {' · '.join(lab_parts)}: {val} {unit}".rstrip())
+            # ★ 행별 단위 개별 읽기
+            row_unit = ""
+            try:
+                row_unit = str(row.get(c_un, "") or "").strip() if c_un else ""
+            except Exception:
+                row_unit = _header_unit
+            lines.append(f"  {' · '.join(lab_parts)}: {val} {row_unit}".rstrip())
         return "\n".join(lines) if len(lines) > 1 else ""
 
     def collect(self, theme: str, sector: str = "", max_items: int = 5) -> list[RawDocument]:
