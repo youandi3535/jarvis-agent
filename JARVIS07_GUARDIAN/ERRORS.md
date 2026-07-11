@@ -2,6 +2,65 @@
 
 ---
 
+## [412] strip_html_wrapper가 유효한 [CHART_N] 오프닝 태그 제거 → 차트 0개 (2026-07-11)
+
+- **증상**: 실데이터 9개 수집 완료 후 Pass-1 대본 생성 시 `⚠️ [Pass-1 Call-1] CHART 부족 (0/5) — 강제 삽입`. 실데이터가 있음에도 차트 슬롯이 0개.
+- **환경**: `JARVIS02_WRITER/draft_writer.py` `strip_html_wrapper()` + `_gen_section_call1/2/3()`.
+- **원인**: `strip_html_wrapper`의 `leak_patterns` 목록에 `` r"`?\[CHART_\d+\]`?" `` 패턴이 있어 LLM이 생성한 유효한 `[CHART_1]`, `[CHART_2]` 등 오프닝 태그가 전부 제거됨. 클로징 태그 `[/CHART_N]`는 패턴에 없어서 잔존 → 깨진 슬롯. 결과: `chart_count = 0` → `_inject_missing_charts`가 `[PHOTO_N]`으로 대체 → 실데이터 차트 전혀 생성되지 않음.
+- **헛다리**: 없음.
+- **해결**: `strip_html_wrapper`의 leak_patterns에서 `[CHART_N]` 관련 2개 패턴 삭제. `[CHART_N]`은 프롬프트 누수가 아닌 LLM이 생성해야 할 유효 출력 형식임.
+- **파일**: `JARVIS02_WRITER/draft_writer.py`.
+- **교훈**: `strip_html_wrapper`의 leak_patterns에 LLM이 실제 출력으로 써야 하는 포맷 태그(`[CHART_N]`)를 추가하면 안 된다. 프롬프트 지시 텍스트와 유효 출력 태그가 형태가 같을 경우 구분 불가 → 유효 출력 삭제. 누수 제거는 문맥(backtick으로 감싸진 것, 쉼표로 나열된 것)을 기준으로 해야 함.
+
+---
+
+## [411] _nonessential SDK timeout 45s + 경제 캘린더 수집 경고 노이즈 (2026-07-11)
+
+- **증상**: ① `⚠️ SDK timeout 45s — 수집된 응답: 0개` 터미널 print 2회 → 90초 블로킹. ② `경제 캘린더 수집 실패: Expecting value: line 1 column 1` warning 매 실행 출력.
+- **환경**: `shared/llm.py` `_nonessential=True` 경로 + `JARVIS09_COLLECTOR/providers/economic_data_provider.py`.
+- **원인**: ① `_nonessential=True` 의 timeout cap `min(timeout, 45)` 가 `_extract_series_from_docs` (max_tokens=700) 에 적용되어 45초 내 응답 불가 → timeout. `_run_sdk_sync` 가 print 로 출력해 터미널에 노출. ② investing.com Cloudflare 차단 시 빈 응답 → `res.json()` JSONDecodeError → warning 레벨 출력.
+- **헛다리**: 없음.
+- **해결**: ① `shared/llm.py` — timeout cap 45 → 90, SDK timeout/오류 print → log.warning. ② `economic_data_provider.py` — `get_economic_calendar` 에 `res.ok` + `res.content` 선행 체크 추가 (비정상 응답 → log.debug 조용히 반환), JSON decode 실패 → log.debug.
+- **파일**: `shared/llm.py`, `JARVIS09_COLLECTOR/providers/economic_data_provider.py`.
+- **교훈**: `_nonessential` timeout 캡은 짧은 호출(max_tokens≤120)에는 적합하지만 긴 응답(max_tokens=700)에는 부족하다. 캡을 넉넉하게 설정하고, 외부 API 수집 실패는 warning 대신 debug/info 로 처리해 노이즈 최소화.
+
+---
+
+## [410] pykrx KRX 로그인 실패 — .env KRX_ID/PW 미설정 (2026-07-11)
+
+- **증상**: 경제 브리핑 실행 시 `KRX 로그인 실패: KRX_ID 또는 KRX_PW 환경 변수가 설정되지 않았습니다.` 출력.
+- **환경**: `JARVIS09_COLLECTOR/providers/krx_provider.py` + pykrx 1.x `website/comm/webio.py`.
+- **원인**: pykrx `webio.py:12` 에서 `build_krx_session()` 이 모듈 로드 즉시 실행 → `os.getenv("KRX_ID/PW")` 읽음. `.env` 에 KRX_ID/PW 항목 자체가 없어서 항상 None → 로그인 실패 메시지 출력. (종목 시세 API 는 로그인 없이도 동작 — 경고만 출력되고 수집 자체는 성공.)
+- **헛다리**: 없음. pykrx auth.py 소스 직접 확인으로 원인 즉시 파악.
+- **해결**: ① `.env` 에 `KRX_ID=`, `KRX_PW=` placeholder 추가 (data.krx.co.kr 계정 입력 시 자동 로그인). ② `krx_provider.py` 모듈 레벨에서 pykrx import 전 `load_dotenv(..., override=False)` 추가 — daemon 외부 직접 실행 경로 보장.
+- **파일**: `.env`, `JARVIS09_COLLECTOR/providers/krx_provider.py`.
+- **교훈**: pykrx는 import 시 세션을 즉시 생성한다. `.env` 로드가 pykrx import 보다 반드시 먼저여야 한다.
+
+---
+
+## [409] KOSIS 단위 혼용 — 자산총계에 "개" 단위 붙는 버그 (2026-07-11)
+
+- **증상**: 인포그래픽에서 자산총계(백만원) 수치에 "개" 단위가 표시됨.
+- **환경**: `JARVIS09_COLLECTOR/providers/kosis_provider.py` `_df_to_text()`.
+- **원인 (근본)**: `_df_to_text`가 첫 번째 행(회사수)의 단위("개")를 `_header_unit`으로 결정한 후 *전체 행*에 동일 적용. 자산총계(백만원)·부채(백만원) 등 다른 단위 행이 모두 "개"로 출력.
+- **헛다리**: 차트 레벨 0값 제외만 수정 → 근본 원인(단위 혼용) 미해결.
+- **해결**: 각 행의 `c_un` 컬럼(`단위명`)을 *행별 개별 읽기*로 변경. 헤더에는 빈도 최다 단위 표시, 각 값 줄에는 해당 행 단위 개별 출력. 추가로 `_parse_clean_doc`에서 금융 키워드(`자산·부채·매출·이익...`) + 값 > 100,000 인 행이 "개" 단위면 "백만원"으로 자동 교정.
+- **파일**: `JARVIS09_COLLECTOR/providers/kosis_provider.py`, `JARVIS09_COLLECTOR/chart_data.py`.
+- **교훈**: 표 안의 항목들이 서로 다른 단위를 가질 수 있다. 헤더 단위를 전체에 적용하지 말고 행별로 읽어야 한다.
+
+---
+
+## [408] as_of 날짜 — 항상 오늘 날짜로 고정 (2026-07-11)
+
+- **증상**: 인포그래픽 하단 데이터 기준 날짜가 항상 오늘 날짜. KOSIS 데이터는 2025년, KRX는 최근 거래일 등 소스마다 최신 날짜가 다름.
+- **환경**: `JARVIS09_COLLECTOR/chart_data.py` `_mk_dataset()` / `_parse_clean_doc()`.
+- **원인**: `as_of` 필드를 `_now_as_of()` (오늘 날짜)로 하드코딩. 실제 데이터 기준일 추출 로직 없음.
+- **해결**: ① `_parse_clean_doc`에서 텍스트 안의 `YYYYMM` 패턴을 regex로 추출 → 가장 최신 날짜를 `as_of`로 사용. ② KRX 수집은 `_last_trading_day()` 로 실제 마지막 거래일 박제. ③ `pro_templates.py` footer에 `datasets[].source.as_of` 집계 → "X년 Y월 기준" 표시.
+- **파일**: `JARVIS09_COLLECTOR/chart_data.py`, `JARVIS06_IMAGE/pro_templates.py`.
+- **교훈**: 데이터 기준일은 수집 소스에서 읽어야 한다. 오늘 날짜는 "언제 수집했나"지 "어느 기간 데이터인가"가 아니다.
+
+---
+
 ## [407] yfinance 1.x — requests.Session 주입 불가 → 전체 시장 지표 수집 0개 (2026-07-11)
 
 - **증상**: `economic_poster.py` 기동 시 코스피·코스닥·S&P500·NASDAQ 등 9개 지표 전부 `수집 실패: Yahoo API requires curl_cffi session not <class 'requests.sessions.Session'>`.
