@@ -65,6 +65,20 @@ def get_market_data() -> dict:
                 result[name] = {"value": round(curr, 2), "change": 0.0, "as_of": as_of}
         except Exception as e:
             log.warning(f"[EconData] {name} 수집 실패: {e}")
+    # ★ 한국은행 공식 지표 병합 (기준금리·달러원·CPI) — BOK_ECOS_KEY 미설정 시 자동 스킵
+    try:
+        from .bok_provider import get_bok_indicators
+        for name, info in get_bok_indicators().items():
+            result[name] = {
+                "value": float(info["value"]) if info["value"] else 0.0,
+                "change": None,           # BOK 지표는 전일비 미제공
+                "as_of": info["as_of"],
+                "unit": info["unit"],
+                "source": info["source"],
+            }
+    except Exception as e:
+        log.warning(f"[EconData] BOK 지표 병합 실패: {e}")
+
     log.info(f"[EconData] 시장 데이터 수집 완료: {len(result)}개 지표")
     return result
 
