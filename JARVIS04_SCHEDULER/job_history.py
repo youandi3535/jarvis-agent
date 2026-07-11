@@ -33,10 +33,26 @@ except ImportError:
 _job_start_ts: dict[str, float] = {}
 
 
+_JOB_EDGES: dict = {
+    "j03_collect_trends":       ["e13"],           # J04→J03 스케줄 트리거
+    "j03_performance_collect":  ["e9", "e10"],      # J09→J05, J05→J07 헬스
+    "j07_self_heal_economic":   ["e14"],            # J04→J02 트리거
+    "j07_self_heal_theme":      ["e14"],
+    "j07_deep_audit":           ["e8"],             # J07→J02 코드 수정
+}
+
+
 def _on_job_submitted(event):
-    """EVENT_JOB_SUBMITTED — 잡 시작 직전. start ts 기록만."""
+    """EVENT_JOB_SUBMITTED — 잡 시작 직전. start ts 기록 + 파이프라인 활동 표시."""
     try:
         _job_start_ts[event.job_id] = time.time()
+    except Exception:
+        pass
+    try:
+        from shared.pipeline_activity import mark_active
+        # 모든 잡은 J00 데몬이 실행 → e11(J00→J01) 항상 활성
+        edges = ["e11"] + (_JOB_EDGES.get(event.job_id) or [])
+        mark_active(edges)
     except Exception:
         pass
 

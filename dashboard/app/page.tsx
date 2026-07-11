@@ -1,84 +1,149 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { fetcher, OverviewData, VisionAgent } from "@/lib/api";
+import { fetcher, OverviewData, VisionAgent, PipelineEdge, GraphData } from "@/lib/api";
 import { C, fmtNum, fmtTime, severityColor } from "@/lib/utils";
 
-// ═══════════════════════════════════════════════
-// 레이아웃 상수 — 1130 × 640 컨테이너 / 4열 그리드
-// ═══════════════════════════════════════════════
-const W = 1130, H = 640;
+// ═══════════════════════════════════════════════════════
+// 레이아웃 상수 — 실제 JARVIS 파이프라인 기준 (10개 에이전트)
+// 상단: J00 INFRA | J01 MASTER(BIG) | J04 SCHED
+// 중단: J03 RADAR → J09 COLLECT → J02 WRITER → J06 IMAGE → J08 PUBLISH (J06→J08 직접)
+// 하단: J05 VISION (헬스 모니터링) | J07 GUARDIAN (오류·수정)
+// ═══════════════════════════════════════════════════════
+const W = 1130, H = 660;
 const CARD_W = 158, CARD_H = 170;
 const BIG_W  = 210, BIG_H  = 215;
 
-// 그리드 열 (카드 left-x)
-const C0 = 14, C1 = 240, C2 = 500, C3 = 800;
-// 그리드 행 (카드 top-y)
-const R0 = 70, R1 = 260, R2 = 450;
-// 카드 중앙 좌표 헬퍼
-const mid = (x: number, y: number, w = CARD_W, h = CARD_H) =>
-  ({ x: x + w / 2, y: y + h / 2 });
+// ── Row 0 (상단 관리층) ──
+const ROW0_Y = 16;
+const J00_X  = 18;
+const J01_X  = (W - BIG_W) / 2;   // 460 — 정중앙
+const J04_X  = W - 18 - CARD_W;   // 954
 
-// J01 MASTER — 중앙에 크게
-const MASTER_X = 460, MASTER_Y = 252;
-const MASTER_CX = MASTER_X + BIG_W / 2; // 565
-const MASTER_CY = MASTER_Y + BIG_H / 2; // 360
+// ── Row 1 (파이프라인 5개) ──
+const ROW1_Y = 252;
+// 5카드 균등 배치: 간격=(1130-36-5×158)/4 = 76
+const PIP_GAP = 76;
+const J03_X  = 18;
+const J09_X  = J03_X + CARD_W + PIP_GAP;   // 252
+const J02_X  = J09_X + CARD_W + PIP_GAP;   // 486
+const J06_X  = J02_X + CARD_W + PIP_GAP;   // 720
+const J08_X  = J06_X + CARD_W + PIP_GAP;   // 954
 
-// ───────────────────────────────────────────────
-// 에이전트 정의
-// ───────────────────────────────────────────────
-type AgentDef = { id: string; num: string; label: string; sub: string; color: string; x: number; y: number };
-const AGENTS: AgentDef[] = [
-  // Row 0: 입력 에이전트 3개
-  { id:"j03", num:"03", label:"J03 RADAR",   sub:"트렌드 레이더",     color:"#fbbf24", x:C0, y:R0 },
-  { id:"j09", num:"09", label:"J09 COLLECT", sub:"데이터 수집",       color:"#38bdf8", x:C1, y:R0 },
-  { id:"j04", num:"04", label:"J04 SCHED",   sub:"작업 스케줄러",     color:"#fb923c", x:C3, y:R0 },
-  // Row 1: 지원 에이전트 (J01은 별도)
-  { id:"j00", num:"00", label:"J00 INFRA",   sub:"인프라 관리자",     color:"#4ade80", x:C0, y:R1 },
-  { id:"j07", num:"07", label:"J07 GUARD",   sub:"오류 수호자",       color:"#f43f5e", x:C3, y:R1 },
-  // Row 2: 출력 파이프라인 4개
-  { id:"j06", num:"06", label:"J06 IMAGE",   sub:"이미지 생성",       color:"#e879f9", x:C0, y:R2 },
-  { id:"j05", num:"05", label:"J05 VISION",  sub:"에이전트 레지스트리", color:"#84cc16", x:C1, y:R2 },
-  { id:"j02", num:"02", label:"J02 WRITER",  sub:"블로그 라이터",     color:"#a78bfa", x:C2, y:R2 },
-  { id:"j08", num:"08", label:"J08 PUBLISH", sub:"발행 관리자",       color:"#22d3ee", x:C3, y:R2 },
-];
+// ── Row 2 (감시·가디언 층) ──
+// J05 VISION: 전 에이전트 헬스 메트릭 수집·모니터링 (30초 주기, FastAPI :8505)
+// J07 GUARDIAN: 오류 수집·자동수정·품질 강화학습
+const ROW2_Y = 462;
+const J05_X  = J09_X;   // J09 아래 — 전 에이전트 감시
+const J07_X  = J02_X;   // J02 아래 — 오류·수정 주 담당
 
-// 에이전트 중앙 좌표
-const AGT: Record<string, {x:number;y:number}> = {
-  j03: mid(C0, R0), j09: mid(C1, R0), j04: mid(C3, R0),
-  j00: mid(C0, R1), j07: mid(C3, R1),
-  j06: mid(C0, R2), j05: mid(C1, R2), j02: mid(C2, R2), j08: mid(C3, R2),
-  j01: { x: MASTER_CX, y: MASTER_CY },
+// ── 중심 좌표 헬퍼 ──
+const cx = (x: number, w = CARD_W) => x + w / 2;
+const cy = (y: number, h = CARD_H) => y + h / 2;
+
+// 에이전트 경계 박스 — AGENTS 에서 자동 계산 (하드코딩 금지)
+type AgentBounds = { cx:number; cy:number; top:number; bot:number; left:number; right:number };
+function mkBounds(x:number, y:number, w=CARD_W, h=CARD_H): AgentBounds {
+  return { cx:x+w/2, cy:y+h/2, top:y, bot:y+h, left:x, right:x+w };
+}
+
+// ─────────────────────────────────────────────────────
+// 에이전트 카드 정의 (실제 존재하는 10개 전부)
+// ─────────────────────────────────────────────────────
+type AgentDef = {
+  id: string; num: string; label: string; sub: string; color: string;
+  x: number; y: number; big?: boolean;
 };
-
-// 연결선 — 실제 JARVIS 파이프라인 플로우 (ADR 013 기준)
-const EDGES = [
-  // ── 스케줄 트리거 ──
-  { a:"j04", b:"j01", col:"#fb923c", dur:4.2, dots:1 },   // 스케줄러 → 마스터 (잡 실행 신호)
-  // ── 트렌드·주제 수집 ──
-  { a:"j01", b:"j03", col:"#4f90d9", dur:2.0, dots:1 },   // 마스터 → 레이더 (트렌드 요청)
-  { a:"j03", b:"j01", col:"#fbbf24", dur:2.2, dots:2 },   // 레이더 → 마스터 (주제 패키지 반환)
-  // ── 데이터 수집 ──
-  { a:"j01", b:"j09", col:"#4f90d9", dur:1.7, dots:1 },   // 마스터 → 수집기 (수집 지시)
-  { a:"j09", b:"j02", col:"#38bdf8", dur:2.0, dots:2 },   // 수집기 → 라이터 (데이터 직접 전달)
-  // ── 글 작성 ──
-  { a:"j01", b:"j02", col:"#a78bfa", dur:1.6, dots:2 },   // 마스터 → 라이터 (작성 지시)
-  // ── 이미지 생성 ──
-  { a:"j02", b:"j06", col:"#e879f9", dur:1.5, dots:2 },   // 라이터 → 이미지 (생성 요청)
-  { a:"j06", b:"j02", col:"#e879f9", dur:2.1, dots:1 },   // 이미지 → 라이터 (완성 반환)
-  // ── 품질 검증 ──
-  { a:"j02", b:"j07", col:"#f43f5e", dur:2.6, dots:1 },   // 라이터 → 가디언 (검증 요청)
-  { a:"j07", b:"j02", col:"#f43f5e", dur:2.9, dots:1 },   // 가디언 → 라이터 (승인/재작성)
-  // ── 발행 ──
-  { a:"j02", b:"j08", col:"#22d3ee", dur:1.6, dots:2 },   // 라이터 → 발행기 (발행 요청)
-  // ── 인프라·모니터링 (상시) ──
-  { a:"j00", b:"j01", col:"#4ade80", dur:5.5, dots:1 },   // 인프라 → 마스터 (상태 보고)
-  { a:"j05", b:"j01", col:"#84cc16", dur:4.8, dots:1 },   // 비전 → 마스터 (에이전트 레지스트리)
+const AGENTS: AgentDef[] = [
+  // 상단 관리층
+  { id:"j00", num:"00", label:"J00 INFRA",   sub:"인프라 관리자",   color:"#4ade80", x:J00_X, y:ROW0_Y },
+  { id:"j01", num:"01", label:"J01 MASTER",  sub:"마스터 라우터",   color:"#4f90d9", x:J01_X, y:ROW0_Y, big:true },
+  { id:"j04", num:"04", label:"J04 SCHED",   sub:"작업 스케줄러",   color:"#fb923c", x:J04_X, y:ROW0_Y },
+  // 파이프라인
+  { id:"j03", num:"03", label:"J03 RADAR",   sub:"트렌드 레이더",   color:"#fbbf24", x:J03_X, y:ROW1_Y },
+  { id:"j09", num:"09", label:"J09 COLLECT", sub:"데이터 수집기",   color:"#38bdf8", x:J09_X, y:ROW1_Y },
+  { id:"j02", num:"02", label:"J02 WRITER",  sub:"블로그 라이터",   color:"#a78bfa", x:J02_X, y:ROW1_Y },
+  { id:"j06", num:"06", label:"J06 IMAGE",   sub:"이미지 생성",     color:"#e879f9", x:J06_X, y:ROW1_Y },
+  { id:"j08", num:"08", label:"J08 PUBLISH", sub:"발행 관리자",     color:"#22d3ee", x:J08_X, y:ROW1_Y },
+  // 하단 감시층
+  { id:"j05", num:"05", label:"J05 VISION",  sub:"메트릭 모니터링", color:"#34d399", x:J05_X, y:ROW2_Y },
+  { id:"j07", num:"07", label:"J07 GUARD",   sub:"오류 수호자",     color:"#f43f5e", x:J07_X, y:ROW2_Y },
 ];
+
+// ─────────────────────────────────────────────────────
+// 에이전트 경계 박스 — AGENTS 에서 자동 계산 (하드코딩 금지)
+// 파이프라인 연결은 shared/pipeline_graph.py 단일 진실 소스 → /api/graph
+// ─────────────────────────────────────────────────────
+// BOUNDS: AGENTS 배열에서 동적으로 계산됨 (OfficeView 내부에서 사용)
+
+// 렌더용 엣지 타입 (자동 라우팅 결과)
+type ComputedEdge = {
+  id: string; path: string; col: string; dur: number; dots: number; wt?: number;
+  lbl?: { x: number; y: number; text: string };
+};
+// ─────────────────────────────────────────────────────
+// 자동 라우팅 — 파이프라인 엣지 (shared/pipeline_graph.py → /api/graph)
+// BOUNDS: OfficeView 내부에서 AGENTS 로 동적 계산
+// ─────────────────────────────────────────────────────
+function buildBounds(agents: AgentDef[]): Record<string, AgentBounds> {
+  return Object.fromEntries(
+    agents.map(a => [a.id, mkBounds(a.x, a.y, a.big ? BIG_W : CARD_W, a.big ? BIG_H : CARD_H)])
+  );
+}
+
+// 같은 행 임계값 — J01(BIG, h=215)과 J00/J04(h=170)의 중심y 차이 22.5px를 수용
+const SAME_ROW_THR = 60;
+const SAME_COL_THR = 20;
+
+function routeEdge(e: PipelineEdge, bnd: Record<string, AgentBounds>): string {
+  const f = bnd[e.from], t = bnd[e.to];
+  if (!f || !t) return "";
+  const dx = e.dx ?? 0;
+  if (e.route === "via_lane" && e.lane_y != null) {
+    const ly = e.lane_y;
+    return `M${f.cx},${ly < f.cy ? f.top : f.bot} V${ly} H${t.cx} V${ly < t.cy ? t.top : t.bot}`;
+  }
+  if (Math.abs(f.cy - t.cy) < SAME_ROW_THR) {  // 같은 행 → 수평
+    const [fx, tx] = f.cx < t.cx ? [f.right, t.left] : [f.left, t.right];
+    return `M${fx},${(f.cy + t.cy) / 2} H${tx}`;
+  }
+  if (Math.abs(f.cx - t.cx) < SAME_COL_THR) {  // 같은 열 → 수직
+    const [fy, ty] = f.cy < t.cy ? [f.bot, t.top] : [f.top, t.bot];
+    return `M${f.cx + dx},${fy} V${ty}`;
+  }
+  const fy = f.cy < t.cy ? f.bot : f.top;       // L-shape fallback
+  return `M${f.cx},${fy} V${f.cy < t.cy ? t.top : t.bot}`;
+}
+
+function lblPos(e: PipelineEdge, bnd: Record<string, AgentBounds>): { x:number; y:number } | null {
+  if (!e.label) return null;
+  const f = bnd[e.from], t = bnd[e.to];
+  if (!f || !t) return null;
+  if (e.route === "via_lane" && e.lane_y != null)
+    return { x: (f.cx + t.cx) / 2, y: e.lane_y - 11 };
+  if (Math.abs(f.cy - t.cy) < SAME_ROW_THR) {
+    const [fx, tx] = f.cx < t.cx ? [f.right, t.left] : [f.left, t.right];
+    return { x: (fx + tx) / 2, y: (f.cy + t.cy) / 2 - 11 };
+  }
+  if (Math.abs(f.cx - t.cx) < SAME_COL_THR)
+    return { x: f.cx + (e.dx ?? 0) + 5, y: (f.cy + t.cy) / 2 - 5 };
+  return { x: (f.cx + t.cx) / 2, y: (f.cy + t.cy) / 2 };
+}
+
+function resolveEdges(raw: PipelineEdge[], bnd: Record<string, AgentBounds>): ComputedEdge[] {
+  return raw.map(e => {
+    const pos = lblPos(e, bnd);
+    return {
+      id: e.id, path: routeEdge(e, bnd), col: e.col,
+      dur: e.dur, dots: e.dots, wt: e.wt,
+      lbl: (e.label && pos) ? { ...pos, text: e.label } : undefined,
+    };
+  });
+}
 
 // ═══════════════════════════════════════════════
-// 로봇 SVG — 3D 책상·컴퓨터 작업 (viewBox 0 0 72 80)
-// 2.5D: trapezoid 상판 + 우측면 depth + 구형 하이라이트
+// 로봇 SVG — 3D 책상·컴퓨터 작업
+// 책상: 배경과 구분되는 명도로 조정
 // ═══════════════════════════════════════════════
 function mkRobot(color: string, uid: string, size = 50): string {
   const h = Math.round(size * 80 / 72);
@@ -102,14 +167,16 @@ function mkRobot(color: string, uid: string, size = 50): string {
 </defs>
 <!-- ══ 바닥 그림자 ══ -->
 <ellipse cx="36" cy="78" rx="24" ry="3" fill="black" opacity="0.32"/>
-<!-- ══ 책상 3D ══ -->
-<rect x="16" y="44" width="4" height="17" rx="2" fill="#080e1c"/>
-<rect x="52" y="44" width="4" height="17" rx="2" fill="#080e1c"/>
-<rect x="9" y="49" width="5" height="22" rx="2.5" fill="#0f1a2f"/>
-<rect x="58" y="49" width="5" height="22" rx="2.5" fill="#0f1a2f"/>
-<path d="M7 44 L65 44 L65 49 L7 49 Z" fill="#09111f"/>
-<path d="M11 39 L61 39 L65 44 L7 44 Z" fill="#112035"/>
-<path d="M11 39 L61 39 L61 40.5 L11 40.5 Z" fill="${color}" opacity="0.09"/>
+<!-- ══ 책상 3D (배경과 구분되는 청회색) ══ -->
+<rect x="16" y="44" width="4" height="17" rx="2" fill="#1e3252"/>
+<rect x="52" y="44" width="4" height="17" rx="2" fill="#1e3252"/>
+<rect x="9"  y="49" width="5" height="22" rx="2.5" fill="#243c5c"/>
+<rect x="58" y="49" width="5" height="22" rx="2.5" fill="#243c5c"/>
+<path d="M7 44 L65 44 L65 49 L7 49 Z" fill="#152d4a"/>
+<path d="M11 39 L61 39 L65 44 L7 44 Z" fill="#1e3d65"/>
+<path d="M11 39 L61 39 L61 40.5 L11 40.5 Z" fill="${color}" opacity="0.28"/>
+<!-- ══ 책상 표면 하이라이트 ══ -->
+<path d="M12 39.5 L60 39.5 L60 40 L12 40 Z" fill="white" opacity="0.07"/>
 <!-- ══ 모니터 3D ══ -->
 <path d="M48 4 L53 7 L53 31 L48 28 Z" fill="${color}" opacity="0.18"/>
 <path d="M14 28 L48 28 L53 31 L19 31 Z" fill="${color}" opacity="0.12"/>
@@ -127,13 +194,13 @@ function mkRobot(color: string, uid: string, size = 50): string {
 <path d="M26 37 L47 37 L50 39.5 L23 39.5 Z" fill="${color}" opacity="0.15"/>
 <rect x="26" y="35" width="21" height="4" rx="1.5" fill="${color}" opacity="0.22"/>
 <!-- ══ 키보드 3D ══ -->
-<path d="M16 37.5 L56 37.5 L56 39.5 L16 39.5 Z" fill="#060811"/>
-<path d="M18 34 L54 34 L56 37.5 L16 37.5 Z" fill="#080a18" stroke="${color}" stroke-width="0.7" stroke-opacity="0.22"/>
-<rect x="20" y="34.5" width="4" height="2" rx="0.4" fill="${color}" opacity="0.18"/>
-<rect x="25" y="34.5" width="4" height="2" rx="0.4" fill="${color}" opacity="0.18"/>
-<rect x="30" y="34.5" width="4" height="2" rx="0.4" fill="${color}" opacity="0.18"/>
-<rect x="35" y="34.5" width="4" height="2" rx="0.4" fill="${color}" opacity="0.18"/>
-<rect x="40" y="34.5" width="9" height="2" rx="0.4" fill="${color}" opacity="0.25"><animate attributeName="opacity" values="0.1;0.5;0.1" dur="0.4s" repeatCount="indefinite"/></rect>
+<path d="M16 37.5 L56 37.5 L56 39.5 L16 39.5 Z" fill="#0e1c30"/>
+<path d="M18 34 L54 34 L56 37.5 L16 37.5 Z" fill="#112236" stroke="${color}" stroke-width="0.7" stroke-opacity="0.3"/>
+<rect x="20" y="34.5" width="4" height="2" rx="0.4" fill="${color}" opacity="0.25"/>
+<rect x="25" y="34.5" width="4" height="2" rx="0.4" fill="${color}" opacity="0.25"/>
+<rect x="30" y="34.5" width="4" height="2" rx="0.4" fill="${color}" opacity="0.25"/>
+<rect x="35" y="34.5" width="4" height="2" rx="0.4" fill="${color}" opacity="0.25"/>
+<rect x="40" y="34.5" width="9" height="2" rx="0.4" fill="${color}" opacity="0.32"><animate attributeName="opacity" values="0.1;0.55;0.1" dur="0.4s" repeatCount="indefinite"/></rect>
 <!-- ══ 안테나 ══ -->
 <rect x="33.5" y="20" width="2" height="9" rx="1" fill="${color}" opacity="0.8"/>
 <circle cx="34.5" cy="20" r="3.2" fill="${color}" filter="url(#fw${uid})">
@@ -163,7 +230,7 @@ function mkRobot(color: string, uid: string, size = 50): string {
 <circle cx="33" cy="49.5" r="1.9" fill="${color}" filter="url(#fw${uid})"><animate attributeName="opacity" values="0.25;1;0.25" dur="1.7s" repeatCount="indefinite"/></circle>
 <circle cx="36.5" cy="49.5" r="1.9" fill="#4ade80" filter="url(#fw${uid})"><animate attributeName="opacity" values="0.55;1;0.55" dur="1.05s" repeatCount="indefinite"/></circle>
 <circle cx="40" cy="49.5" r="1.9" fill="${color}" filter="url(#fw${uid})"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="2.2s" repeatCount="indefinite"/></circle>
-<!-- ══ 팔 3D (키보드 방향) ══ -->
+<!-- ══ 팔 3D ══ -->
 <path d="M18 42.5 L28 44.5 L28 48 L17 47 Z" fill="url(#gLR${uid})" opacity="0.6"/>
 <path d="M17 47 L28 48 L28 49.5 L16 48.5 Z" fill="${color}" opacity="0.22"/>
 <path d="M44 44.5 L54 42.5 L55 47 L44 48 Z" fill="url(#gLR${uid})" opacity="0.6"/>
@@ -172,19 +239,22 @@ function mkRobot(color: string, uid: string, size = 50): string {
 <path d="M44 56 L48 58.5 L48 65 L44 62.5 Z" fill="${color}" opacity="0.2"/>
 <rect x="26" y="56" width="18" height="9" rx="2.5" fill="url(#gLR${uid})" opacity="0.52"/>
 <rect x="26" y="56" width="18" height="9" rx="2.5" fill="url(#gHL${uid})"/>
-<rect x="29" y="65" width="3.5" height="8" rx="1.75" fill="#0c1628"/>
-<rect x="39.5" y="65" width="3.5" height="8" rx="1.75" fill="#0c1628"/>
-<rect x="33" y="63" width="2.5" height="6" rx="1.25" fill="#07101e"/>
-<rect x="36.5" y="63" width="2.5" height="6" rx="1.25" fill="#07101e"/>
+<rect x="29" y="65" width="3.5" height="8" rx="1.75" fill="#1a2d45"/>
+<rect x="39.5" y="65" width="3.5" height="8" rx="1.75" fill="#1a2d45"/>
+<rect x="33" y="63" width="2.5" height="6" rx="1.25" fill="#121f35"/>
+<rect x="36.5" y="63" width="2.5" height="6" rx="1.25" fill="#121f35"/>
+<!-- ══ 커피잔 (책상 위) ══ -->
+<rect x="57" y="37" width="5" height="4" rx="1" fill="#2a1608" stroke="${color}" stroke-width="0.5" stroke-opacity="0.4"/>
+<path d="M57.5 38 Q59.5 37.2 61.5 38" stroke="${color}" stroke-width="0.6" fill="none" opacity="0.5"/>
 </svg>`;
 }
 
 // ═══════════════════════════════════════════════
-// 에이전트 카드 (3D)
+// 에이전트 카드 (AGT 좌표는 레거시 참조용 — 엣지 라우팅은 path 문자열로 직접)
 // ═══════════════════════════════════════════════
-function AgentCard({ num, label, sub, color, stat, big = false }: {
-  num:string; label:string; sub:string; color:string; stat?:string; big?:boolean;
-}) {
+function AgentCard({
+  num, label, sub, color, stat, big = false, isActive = false,
+}: { num:string; label:string; sub:string; color:string; stat?:string; big?:boolean; isActive?:boolean }) {
   const [hov, setHov] = useState(false);
   const w = big ? BIG_W : CARD_W, h = big ? BIG_H : CARD_H;
   const rSz = big ? 62 : 50;
@@ -195,17 +265,21 @@ function AgentCard({ num, label, sub, color, stat, big = false }: {
       onMouseLeave={() => setHov(false)}
       style={{
         width:w, height:h, position:"relative", overflow:"hidden",
-        background:"linear-gradient(145deg,#131827 0%,#0b0d1a 100%)",
+        background: isActive
+          ? `linear-gradient(145deg,#1a1f35 0%,#0e1020 100%)`
+          : `linear-gradient(145deg,#131827 0%,#0b0d1a 100%)`,
         border:`2px solid ${color}`,
         borderRadius:12,
         padding:"7px 9px",
         transform: hov
           ? `perspective(450px) rotateX(-7deg) rotateY(5deg) scale(1.05) translateZ(8px)`
           : `perspective(450px) rotateX(0) rotateY(0) scale(1)`,
-        transition:"transform 0.26s cubic-bezier(0.23,1,0.32,1), box-shadow 0.26s ease",
+        transition:"transform 0.26s cubic-bezier(0.23,1,0.32,1), box-shadow 0.3s ease",
         boxShadow: hov
           ? `0 0 36px ${color}66, 0 22px 55px rgba(0,0,0,0.65), inset 0 1px 0 ${color}55`
-          : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
+          : isActive
+            ? `0 0 42px ${color}aa, 0 0 80px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}66`
+            : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
         cursor:"default",
       }}
     >
@@ -215,26 +289,23 @@ function AgentCard({ num, label, sub, color, stat, big = false }: {
         background:"repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.06) 3px,rgba(0,0,0,0.06) 4px)",
       }}/>
       {/* 코너 브라켓 */}
-      <div style={{ position:"absolute",top:0,left:0,width:12,height:12,
-        borderTop:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"10px 0 0 0" }}/>
-      <div style={{ position:"absolute",top:0,right:0,width:12,height:12,
-        borderTop:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 10px 0 0" }}/>
-      <div style={{ position:"absolute",bottom:0,left:0,width:12,height:12,
-        borderBottom:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"0 0 0 10px" }}/>
-      <div style={{ position:"absolute",bottom:0,right:0,width:12,height:12,
-        borderBottom:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 0 10px 0" }}/>
-
+      {[
+        {top:0,left:0,borderTop:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"10px 0 0 0"},
+        {top:0,right:0,borderTop:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 10px 0 0"},
+        {bottom:0,left:0,borderBottom:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"0 0 0 10px"},
+        {bottom:0,right:0,borderBottom:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 0 10px 0"},
+      ].map((s,i) => (
+        <div key={i} style={{ position:"absolute",width:12,height:12,...s }}/>
+      ))}
       {/* 번호 + 상태 LED */}
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2 }}>
         <span style={{ fontSize:9,fontWeight:900,color,letterSpacing:1.5,opacity:0.7 }}>J{num}</span>
         <span style={{ width:5,height:5,borderRadius:"50%",background:"#4ade80",
           boxShadow:"0 0 6px #4ade80",display:"inline-block" }}/>
       </div>
-
       {/* 로봇 */}
       <div style={{ display:"flex",justifyContent:"center",marginBottom:3 }}
         dangerouslySetInnerHTML={{ __html: mkRobot(color, `r${num}`, rSz) }}/>
-
       {/* 이름 */}
       <div style={{ textAlign:"center",fontSize:big?13:11,fontWeight:900,
         letterSpacing:0.5,color,textShadow:`0 0 12px ${color}cc`,marginBottom:1 }}>
@@ -254,38 +325,72 @@ function AgentCard({ num, label, sub, color, stat, big = false }: {
 }
 
 // ═══════════════════════════════════════════════
-// SVG 연결선 + 흐름 점 (Quadratic bezier, 법선 굴곡)
+// 연결선 레이블 — ComputedEdge[] 에서 읽음
 // ═══════════════════════════════════════════════
-function buildEdgeSvg(): string {
-  const L: string[] = [];
-  EDGES.forEach((e, i) => {
-    const f = AGT[e.a], t = AGT[e.b];
-    if (!f || !t) return;
-    const dx = t.x - f.x, dy = t.y - f.y;
-    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    // 법선 방향으로 자연스러운 아치 — 수평 연결도 굴곡
-    const sag = Math.min(dist * 0.24, 52);
-    const nx = -dy / dist, ny = dx / dist;
-    const mx = (f.x + t.x) / 2 + nx * sag;
-    const my = (f.y + t.y) / 2 + ny * sag;
-    const d = `M${f.x},${f.y} Q${mx.toFixed(1)},${my.toFixed(1)} ${t.x},${t.y}`;
-    L.push(`<path id="e${i}" d="${d}" fill="none"/>`);
-    // 배경 선 (글로우 효과)
-    L.push(`<path d="${d}" fill="none" stroke="${e.col}" stroke-width="3.5" opacity="0.08"/>`);
-    // 대시 선
-    L.push(`<path d="${d}" fill="none" stroke="${e.col}" stroke-width="1.6" opacity="0.3" stroke-dasharray="6 6"/>`);
-    // 흐름 점들
-    for (let k = 0; k < e.dots; k++) {
-      const begin = (k * e.dur / e.dots).toFixed(2);
-      L.push(`<circle r="4.5" fill="${e.col}" opacity="0.88" filter="url(#gd${i})"><animateMotion dur="${e.dur}s" repeatCount="indefinite" begin="${begin}s"><mpath href="#e${i}"/></animateMotion></circle>`);
-      L.push(`<circle r="2" fill="white" opacity="0.5"><animateMotion dur="${e.dur}s" repeatCount="indefinite" begin="${begin}s"><mpath href="#e${i}"/></animateMotion></circle>`);
+type EdgeLabel = { x: number; y: number; text: string; col: string };
+function computeEdgeLabels(edges: ComputedEdge[]): EdgeLabel[] {
+  return edges
+    .filter(e => e.lbl)
+    .map(e => ({ x: e.lbl!.x, y: e.lbl!.y, text: e.lbl!.text, col: e.col }));
+}
+
+// ═══════════════════════════════════════════════
+// SVG 연결선 + 흐름 점 — 직선(orthogonal) 전용
+// ═══════════════════════════════════════════════
+// 엣지 설명 — 실시간 활동 배너용
+const EDGE_DESC: Record<string, string> = {
+  e1:"J03→J09 선수집", e2:"J09→J02 데이터 전달", e3:"J02→J06 대본 전달",
+  e5:"J03→J02 topic_pack", e6:"J06→J08 발행 중", e7:"J02→J07 오류 보고",
+  e8:"J07→J02 코드 수정", e9:"J09→J05 수집 완료", e10:"J05→J07 헬스 리포트",
+  e11:"J00→J01 인프라", e12:"J01→J02 라우팅", e13:"J04→J03 트리거", e14:"J04→J02 트리거",
+};
+
+function buildEdgeSvg(edges: ComputedEdge[], activeEdgeIds: Set<string>): string {
+  const filters = edges.map(e =>
+    `<filter id="gd${e.id}" x="-50%" y="-50%" width="200%" height="200%">` +
+    `<feGaussianBlur stdDeviation="${activeEdgeIds.has(e.id) ? "2.5" : "1.4"}" result="b"/>` +
+    `<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
+  ).join("");
+
+  const lines = edges.flatMap(e => {
+    const on = activeEdgeIds.has(e.id);
+    const wt   = (e.wt ?? 1.6) * (on ? 1.15 : 1.0);
+    const lineO = on ? 0.88 : 0.42;
+    const glowO = on ? 0.22 : 0.06;
+    const dotR  = on ? 5.5  : 3.2;
+    const dotO  = on ? 0.98 : 0.45;
+    const dur   = on ? e.dur * 0.5 : e.dur * 2.0;
+    const cnt   = on ? Math.max(e.dots * 2, 3) : 1;
+
+    const segs: string[] = [];
+    segs.push(`<path id="${e.id}" d="${e.path}" fill="none"/>`);
+    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + (on ? 5 : 2)}" opacity="${glowO}" stroke-linecap="round"/>`);
+    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt}" opacity="${lineO}" stroke-linecap="round" stroke-linejoin="round"/>`);
+
+    if (on) {
+      // 맥박(pulse) — 활성 엣지에만
+      segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + 2}" opacity="0" stroke-linecap="round"><animate attributeName="opacity" values="0;0.5;0" dur="0.75s" repeatCount="indefinite"/></path>`);
     }
+
+    for (let k = 0; k < cnt; k++) {
+      const begin = (k * dur / cnt).toFixed(2);
+      segs.push(
+        `<circle r="${dotR}" fill="${e.col}" opacity="${dotO}" filter="url(#gd${e.id})">` +
+        `<animateMotion dur="${dur}s" repeatCount="indefinite" begin="${begin}s">` +
+        `<mpath href="#${e.id}"/></animateMotion></circle>`
+      );
+      if (on) {
+        segs.push(
+          `<circle r="2.4" fill="white" opacity="0.82">` +
+          `<animateMotion dur="${dur}s" repeatCount="indefinite" begin="${begin}s">` +
+          `<mpath href="#${e.id}"/></animateMotion></circle>`
+        );
+      }
+    }
+    return segs;
   });
-  // 글로우 필터 defs
-  const defs = EDGES.map((e, i) =>
-    `<filter id="gd${i}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
-  ).join("\n");
-  return `<defs>${defs}</defs>\n` + L.join("\n");
+
+  return `<defs>${filters}</defs>\n` + lines.join("\n");
 }
 
 // ═══════════════════════════════════════════════
@@ -302,20 +407,37 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
     return () => clearInterval(id);
   }, []);
 
-  const stats: Record<string,string> = {
+  // 파이프라인 엣지 — shared/pipeline_graph.py → /api/graph 동적 로드
+  const { data: graphData } = useSWR<GraphData>("/api/graph", fetcher, { refreshInterval: 300000 });
+  const bnd = useMemo(() => buildBounds(AGENTS), []);
+  const resolvedEdges = useMemo(() => resolveEdges(graphData?.edges ?? [], bnd), [graphData, bnd]);
+
+  // 실시간 파이프라인 활동 — 2초 폴링
+  const { data: actData } = useSWR<{active: string[]}>("/api/pipeline/activity", fetcher, { refreshInterval: 2000 });
+  const activeEdgeSet = useMemo(() => new Set<string>(actData?.active ?? []), [actData]);
+  const activeAgentSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of graphData?.edges ?? []) {
+      if (activeEdgeSet.has(e.id)) { s.add(e.from); s.add(e.to); }
+    }
+    return s;
+  }, [activeEdgeSet, graphData]);
+
+  const stats: Record<string, string> = {
+    j00: `PID ${ov?.daemon?.pid ?? "—"} · ${ov?.daemon?.uptime ?? "—"}`,
+    j01: `라우터 · 인텐트 분류`,
+    j04: `잡 등록 · APScheduler`,
     j03: `트렌드 ${fmtNum(ov?.trends?.today)}개`,
     j09: `수집 ${fmtNum(ov?.trends?.today)}건`,
-    j04: `잡 등록 — · 대기 0건`,
-    j00: `PID ${ov?.daemon?.pid ?? "—"}`,
-    j07: `신규 ${fmtNum(ov?.guardian?.new)} · CRIT ${fmtNum(ov?.guardian?.critical)}`,
-    j06: `이미지 0개`,
-    j05: `에이전트 ${fmtNum(ov?.vision?.total_agents ?? 0)}개 등록`,
     j02: `오늘 ${fmtNum(ov?.posts?.today)}건`,
-    j08: `네이버 ✓ 티스토리 ✓`,
-    j01: `에이전트 ${fmtNum(ov?.vision?.total_agents ?? 0)}개 가동 중`,
+    j06: `인포그래픽 생성`,
+    j08: `네이버·티스토리 ✓`,
+    j05: `에이전트 ${fmtNum(ov?.vision?.total_agents ?? 0)}개 헬스 ${fmtNum(ov?.vision?.healthy ?? 0)}✓`,
+    j07: `신규 ${fmtNum(ov?.guardian?.new)} · CRIT ${fmtNum(ov?.guardian?.critical)}`,
   };
 
-  const edgeSvg = buildEdgeSvg();
+  const edgeSvg = buildEdgeSvg(resolvedEdges, activeEdgeSet);
+  const edgeLabels = computeEdgeLabels(resolvedEdges);
 
   return (
     <div style={{
@@ -346,101 +468,151 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
         </div>
       </div>
 
+      {/* 실시간 활동 배너 — 파이프라인 실행 중일 때만 표시 */}
+      {activeEdgeSet.size > 0 && (
+        <div style={{
+          display:"flex", alignItems:"center", gap:12,
+          padding:"6px 20px", borderBottom:"1px solid #4ade8022",
+          background:"rgba(74,222,128,0.05)",
+        }}>
+          <span style={{ display:"flex",alignItems:"center",gap:5,flexShrink:0 }}>
+            <span style={{
+              width:7, height:7, borderRadius:"50%", background:"#4ade80",
+              boxShadow:"0 0 8px #4ade80", display:"inline-block",
+              animation:"pulse 0.8s ease-in-out infinite",
+            }}/>
+            <span style={{ fontSize:9,fontWeight:800,color:"#4ade80",letterSpacing:1.5 }}>ACTIVE</span>
+          </span>
+          <span style={{ fontSize:11, color:"#6ee7b7", letterSpacing:0.3 }}>
+            {Array.from(activeEdgeSet).map(id => EDGE_DESC[id] ?? id).join("  →  ")}
+          </span>
+        </div>
+      )}
+
       {/* 사무실 본체 */}
       <div style={{ overflowX:"auto" }}>
         <div style={{ position:"relative", width:W, height:H, margin:"0 auto" }}>
 
           {/* 배경 그리드 */}
           <div style={{
-            position:"absolute",inset:0,
+            position:"absolute", inset:0,
             backgroundImage:"linear-gradient(#1a2035 1px,transparent 1px),linear-gradient(90deg,#1a2035 1px,transparent 1px)",
             backgroundSize:"44px 44px", opacity:0.2,
           }}/>
           {/* 중앙 방사 그라디언트 */}
           <div style={{
-            position:"absolute",inset:0,
-            background:"radial-gradient(ellipse 55% 45% at 50% 44%,#1a2540 0%,#090b14 100%)",
+            position:"absolute", inset:0,
+            background:"radial-gradient(ellipse 60% 50% at 50% 38%,#1a2540 0%,#090b14 100%)",
           }}/>
 
-          {/* 연결선 SVG overlay */}
+          {/* 파이프라인 흐름 표시줄 (ROW1 배경 하이라이트) */}
+          <div style={{
+            position:"absolute",
+            left:J03_X, top:ROW1_Y - 8,
+            width:J08_X + CARD_W - J03_X, height:CARD_H + 16,
+            background:"rgba(255,255,255,0.015)",
+            border:"1px solid rgba(255,255,255,0.04)",
+            borderRadius:16,
+          }}/>
+          {/* 파이프라인 라벨 */}
+          <div style={{
+            position:"absolute", left:J03_X, top:ROW1_Y - 22,
+            fontSize:9, fontWeight:700, color:"#2d3d55", letterSpacing:1.5,
+          }}>— 발행 파이프라인 ——————————————————————————————————————————————</div>
+
+          {/* 연결선 SVG */}
           <svg
-            style={{ position:"absolute",top:0,left:0,width:"100%",height:"100%",pointerEvents:"none" }}
+            style={{ position:"absolute",top:0,left:0,width:"100%",height:"100%",pointerEvents:"none",zIndex:1 }}
             viewBox={`0 0 ${W} ${H}`}
             dangerouslySetInnerHTML={{ __html: edgeSvg }}
           />
 
-          {/* CCTV */}
+          {/* 엣지 레이블 */}
+          {edgeLabels.map((lb, i) => {
+            const edgeId = resolvedEdges.find(e => e.lbl?.text === lb.text)?.id ?? "";
+            const on = activeEdgeSet.has(edgeId);
+            return (
+              <div key={i} style={{
+                position:"absolute",
+                left: lb.x - 28, top: lb.y - 8,
+                width: 56, textAlign:"center",
+                fontSize:8, fontWeight: on ? 900 : 700,
+                color: lb.col, opacity: on ? 1 : 0.55,
+                letterSpacing:0.3,
+                pointerEvents:"none", zIndex:2,
+                textShadow: on ? `0 0 12px ${lb.col}cc` : `0 0 8px ${lb.col}44`,
+                transition:"opacity 0.3s, font-weight 0.2s",
+              }}>{lb.text}</div>
+            );
+          })}
+
+          {/* CCTV — J00 우측 ↔ Mission Board 사이 빈 공간 (top 18) */}
           <div style={{
-            position:"absolute", left:14, top:10,
+            position:"absolute", left:192, top:18,
             background:"#090b14", border:"1.5px solid #38bdf8",
-            borderRadius:8, padding:"6px 12px",
+            borderRadius:8, padding:"5px 10px",
             boxShadow:"0 0 14px #38bdf822",
-            display:"flex", alignItems:"center", gap:8,
+            display:"flex", alignItems:"center", gap:7,
+            zIndex:3,
           }}>
-            <div style={{ width:9,height:9,borderRadius:"50%",background:"#f43f5e",
+            <div style={{ width:8,height:8,borderRadius:"50%",background:"#f43f5e",
               boxShadow:"0 0 8px #f43f5e", opacity:blink?1:0.35, transition:"opacity 0.5s" }}/>
             <div>
-              <div style={{ fontSize:9.5,fontWeight:900,color:"#38bdf8",letterSpacing:1.5 }}>CCTV</div>
+              <div style={{ fontSize:9,fontWeight:900,color:"#38bdf8",letterSpacing:1.5 }}>CCTV</div>
               <div style={{ fontSize:8,color:"#2d3d55" }}>REC 24/7</div>
             </div>
           </div>
 
           {/* MISSION BOARD */}
           <div style={{
-            position:"absolute", left:"50%", top:10, transform:"translateX(-50%)",
+            position:"absolute", left:"50%", top:8, transform:"translateX(-50%)",
             background:"#090b14", border:"1.5px solid #4f90d9",
-            borderRadius:8, padding:"7px 24px", textAlign:"center",
-            boxShadow:"0 0 22px #4f90d933",
+            borderRadius:8, padding:"6px 22px", textAlign:"center",
+            boxShadow:"0 0 22px #4f90d933", zIndex:3,
           }}>
-            <div style={{ fontSize:13,fontWeight:900,color:"#4f90d9",letterSpacing:2 }}>
+            <div style={{ fontSize:12,fontWeight:900,color:"#4f90d9",letterSpacing:2 }}>
               🖥 JARVIS MISSION BOARD
             </div>
-            <div style={{ fontSize:9.5,color:"#2d3d55",marginTop:2 }}>
+            <div style={{ fontSize:9,color:"#2d3d55",marginTop:1 }}>
               자동화 · 트렌드 · 자가학습 · Self-Evolving v3
             </div>
           </div>
 
-          {/* 에이전트 카드 */}
+          {/* 에이전트 카드 렌더 */}
           {AGENTS.map(a => (
             <div key={a.id} style={{ position:"absolute", left:a.x, top:a.y, zIndex:2 }}>
-              <AgentCard num={a.num} label={a.label} sub={a.sub} color={a.color} stat={stats[a.id]}/>
+              <AgentCard
+                num={a.num} label={a.label} sub={a.sub}
+                color={a.color} stat={stats[a.id]} big={a.big}
+                isActive={activeAgentSet.has(a.id)}
+              />
             </div>
           ))}
 
-          {/* J01 MASTER — 중앙 크게 */}
-          <div style={{ position:"absolute", left:MASTER_X, top:MASTER_Y, zIndex:2 }}>
-            <AgentCard num="01" label="J01 MASTER" sub="마스터 라우터" color="#4f90d9" stat={stats.j01} big/>
-          </div>
-
-          {/* 연결 범례 — J08 오른쪽 빈 공간 */}
+          {/* 연결 범례 */}
           <div style={{
-            position:"absolute", right:10, top:260,
-            background:"rgba(9,11,20,0.88)", border:"1px solid #1e2640",
-            borderRadius:8, padding:"10px 14px",
-            backdropFilter:"blur(8px)", zIndex:3,
+            position:"absolute", right:12, bottom:14,
+            background:"rgba(9,11,20,0.9)", border:"1px solid #1e2640",
+            borderRadius:8, padding:"9px 13px",
+            backdropFilter:"blur(8px)", zIndex:4,
           }}>
-            <div style={{ fontSize:9,fontWeight:700,color:"#374460",marginBottom:7,letterSpacing:1 }}>연결 범례</div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"4px 16px" }}>
-              {[
-                {c:"#4f90d9",l:"Master"}, {c:"#4ade80",l:"Infra"},
-                {c:"#a78bfa",l:"Writer"}, {c:"#fbbf24",l:"Radar"},
-                {c:"#fb923c",l:"Sched"},  {c:"#38bdf8",l:"Collect"},
-                {c:"#e879f9",l:"Image"},  {c:"#22d3ee",l:"Publish"},
-                {c:"#f43f5e",l:"Guard"},  {c:"#84cc16",l:"Vision"},
-              ].map(it => (
-                <div key={it.l} style={{ display:"flex",alignItems:"center",gap:5 }}>
-                  <div style={{ width:16,height:2,background:it.c,borderRadius:1,
-                    boxShadow:`0 0 4px ${it.c}88` }}/>
-                  <span style={{ fontSize:9.5,color:"#7a8aaa" }}>{it.l}</span>
+            <div style={{ fontSize:9,fontWeight:700,color:"#374460",marginBottom:6,letterSpacing:1 }}>연결 범례</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+              {(graphData?.legend ?? []).map(it => (
+                <div key={it.label} style={{ display:"flex",alignItems:"center",gap:6 }}>
+                  <div style={{ width:20,height:2,background:it.col,borderRadius:1,
+                    boxShadow:`0 0 4px ${it.col}88`,flexShrink:0 }}/>
+                  <span style={{ fontSize:9,color:"#7a8aaa" }}>{it.label}</span>
                 </div>
               ))}
             </div>
           </div>
 
           {/* 소품 */}
-          <div style={{ position:"absolute",right:730,bottom:18,fontSize:28,opacity:0.22 }}>🌱</div>
-          <div style={{ position:"absolute",right:690,bottom:10,fontSize:24,opacity:0.18 }}>☕</div>
-          <div style={{ position:"absolute",left:14, bottom:14,fontSize:22,opacity:0.18 }}>🖨️</div>
+          <div style={{ position:"absolute",left:600,bottom:14,fontSize:22,opacity:0.35 }}>🌱</div>
+          <div style={{ position:"absolute",left:640,bottom:12,fontSize:18,opacity:0.4 }}>☕</div>
+          <div style={{ position:"absolute",left:14, bottom:14,fontSize:20,opacity:0.35 }}>🖨️</div>
+          <div style={{ position:"absolute",right:12, top:12,fontSize:18,opacity:0.28 }}>📡</div>
         </div>
       </div>
     </div>

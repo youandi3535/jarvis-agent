@@ -2,6 +2,422 @@
 
 ---
 
+## [425] 인포그래픽 막대차트 — 큰 숫자 단위 미변환 + 긴 라벨 뷰박스 클리핑 (2026-07-11)
+
+- **증상**: "코스닥 상장사 재무구조" 인포그래픽에서 ① 자산총계 350,701,103(백만원)이 "350.7 조원" 대신 원시 숫자 그대로 표시 ② 막대차트 우측 값 라벨이 박스 밖으로 잘림 ③ 도넛 차트 중앙값 미스케일.
+- **환경**: `JARVIS06_IMAGE/pro_templates.py` `_auto_scale()`, `_bar_chart()`, `_donut()`
+- **원인**:
+  1. `_auto_scale()`에 "억원" 단위 처리 없음 → "억원" 단위 데이터는 조원 변환 안 됨.
+  2. `_bar_chart()`의 `labelX=150, trackX=168` — 긴 한글 라벨(예: "이익잉여금결손금" 9자)이 x<0 영역으로 뻗어 SVG 뷰박스 클리핑 발생.
+  3. `_donut()`에 `_auto_scale` 미적용 — 중앙값·범례값 항상 원시 숫자.
+- **해결**:
+  1. `_auto_scale()`: "억원" 분기 추가(`av >= 10_000 → 조원`).
+  2. `_bar_chart()`: `labelX 150→210, trackX 168→228, barMax = W-470`. 라벨 영역 60px 확장(~12자 수용), 값 라벨 영역 230px 확보.
+  3. `_donut(unit="")` 파라미터 추가, 중앙값·범례값 `_auto_scale` 적용. `build_html`에서 `_donut(pts, pal, unit=unit)` 전달.
+- **파일**: `JARVIS06_IMAGE/pro_templates.py`
+- **교훈**: 금융 데이터 단위는 "백만원"/"억원"/"원" 등 다양 — `_auto_scale`은 모든 한국 금융 단위를 커버해야 한다. SVG 뷰박스는 기본 `overflow:hidden` — 라벨 영역을 viewBox 내에 넉넉히 확보할 것.
+
+---
+
+## [424] 코스닥·코스피 주간 등락률 인포그래픽 — web_data 크롤링 수치 사용 → 코스피 +1.9% (실제 -7.57%, 9.5p 오차) (2026-07-11)
+
+- **증상**: "코스닥과 코스피, 주간 등락률 비교" 인포그래픽에 코스피 +1.9%, 코스피200 +2.1%, 코스닥 -0.9%, 코스닥150 -2.0% 표시. 실제(yfinance): 코스피 -7.57%, 코스피200 -4.92%, 코스닥 -3.57%, 코스닥150 ETF -5.32%. 모든 값 완전히 틀림. 이미지 하단 `데이터 출처: web_data`.
+- **환경**: `JARVIS09_COLLECTOR/chart_data.py` `_collect_one_series()`, `data_planner.py` `_MARKET_INDICATOR_KWS`, `providers/finance_provider.py`
+- **원인**:
+  1. "주간 등락률"이 `_MARKET_INDICATOR_KWS`에 없음 → web 소스 허용.
+  2. `_NO_WEB_FALLBACK_KWS`에도 없음 → discover/web 폴백 실행.
+  3. `FinanceProvider`에 주간 등락률 계산 경로 없음 → finance 소스 있어도 0건 반환 → web 폴백.
+  4. web_data가 엉뚱한 날짜의 수치(또는 LLM 합성값)를 반환.
+- **해결**:
+  1. `data_planner.py` `_MARKET_INDICATOR_KWS`: "주간 등락률", "등락률", "등락", "수익률", "주간수익률", "주간변동", "이번주", "금주" 추가.
+  2. `chart_data.py` `_NO_WEB_FALLBACK_KWS`: 동일 키워드 추가.
+  3. `finance_provider.py` `_collect_weekly_returns()` 신설: yfinance로 코스피(^KS11)·코스피200(^KS200)·코스닥(^KQ11)·코스닥150 ETF(229200.KS) 5거래일 등락률 직접 계산.
+  4. `FinanceProvider.collect()`: 주간 등락률 키워드 감지 시 `_collect_weekly_returns()` 즉시 반환(web 경로 완전 차단).
+- **파일**: `JARVIS09_COLLECTOR/providers/finance_provider.py`, `data_planner.py`, `chart_data.py`
+- **교훈**: 등락률·수익률은 반드시 실가격 데이터에서 직접 계산해야 한다. web_data로 받은 "등락률"은 날짜·기준·계산방식이 다를 수 있어 검증 불가. 새 시장 지표 유형 추가 시 항상 전용 yfinance/KRX 수집 경로를 먼저 만들 것.
+
+---
+
+## [423] collect_research — 광역수집 후 절삭 방식 → 논문·API·나머지 처음부터 티어별 상한 수집으로 재구성 (2026-07-11)
+
+- **증상**: `collect_research`가 `collect_for_theme`(모든 프로바이더 3x 배율) + 질문별 수집으로 200+개 수집 후 `select_by_trust_quota`로 마지막에 15개 절삭. 사용자 정책("처음부터 논문3·API7·나머지5") 위반.
+- **환경**: `JARVIS09_COLLECTOR/collector_engine.py` `collect_research()`
+- **원인**: 수집 시점에 티어 상한 적용 없음 → naver_news=90, news=75, academic=30 등 합산 300+건 수집 후 15개로 줄이는 역설 발생.
+- **해결**: `_collect_tier(provs, theme, sector, cap, seen_urls)` 신설 — 각 프로바이더 `max_items=min(자체상한, cap)` 강제 + 결과 `[:cap]` 하드 컷. `collect_research` 재구성: paper→api→rest 순 티어별 호출, cascade 이월 계산. `collect_for_theme` 호출 제거. `select_by_trust_quota` 후처리 제거(중복).
+- **파일**: `JARVIS09_COLLECTOR/collector_engine.py`
+- **교훈**: 우선순위 정책은 후처리 선별이 아니라 수집 시점에 적용해야 의미 있다.
+
+---
+
+## [422] collect_chart_data — LLM 설계 소스 순서 그대로 실행 → web이 API보다 먼저 돌아 틀린 수치 채택 (2026-07-11)
+
+- **증상**: "코스닥 업종별 비중" 등 시장 지표 인포그래픽에서 KRX/KOSIS 공식 데이터 대신 web_data(웹 기사) 수치가 채택됨. 예: 바이오 35.2%(web 출처) vs KRX 실값.
+- **환경**: `JARVIS09_COLLECTOR/chart_data.py` `_collect_one_series()`
+- **원인**:
+  1. `for source in series.get("sources", [])` — LLM이 data_planner에서 설계한 소스 목록 순서를 그대로 순회. LLM이 `["web", "kosis"]`로 설계하면 web이 먼저 돌고 kosis는 건너뜀.
+  2. `_collect_one_series()` 성공 즉시 return → 먼저 성공한 소스가 채택. 신뢰도 무관.
+  3. 시장 지표 series에도 discover/web 폴백 자동 허용 → 공식 API 전부 실패해도 웹 검색으로 채워짐.
+- **헛다리**: data_planner `_MARKET_INDICATOR_KWS`에 키워드 추가(소스 설계 제한)만으로는 불충분 — LLM이 올바른 소스를 설계해도 *실행 순서*가 잘못되면 무용지물.
+- **해결**:
+  1. `_SOURCE_TRUST_RANK` dict 추가 (`chart_data.py`) — `finance/krx/ecos/dart/kosis=1순위, news=4, web=6, blog=7`.
+  2. `_collect_one_series()`: `sources_sorted = sorted(raw_sources, key=lambda s: _SOURCE_TRUST_RANK.get(s, 99))` 로 LLM 설계 순서 무관 재정렬 후 순회.
+  3. `_NO_WEB_FALLBACK_KWS` frozenset 추가 — 코스닥·시가총액·업종별·섹터 등 시장 지표 series는 discover/web 폴백 완전 차단.
+- **파일**: `JARVIS09_COLLECTOR/chart_data.py`
+- **교훈**: LLM 소스 설계(data_planner)와 소스 *실행 순서*는 별개다. 설계 단계 제어만으로는 부족하고, 실행 단계에서 신뢰도 기반 재정렬을 강제해야 한다. "우선순위"는 설계가 아닌 실행에 박아야 효과 있다.
+
+---
+
+## [421] LLM 합성 차트 수치가 검증 게이트를 통과하는 근본 구조 버그 (2026-07-11)
+
+- **증상**: `[CHART_N]...[/CHART_N]` 슬롯에 LLM이 임의로 쓴 수치(예: 코스피=24조원)가 `verify_slot()` 통과 → 틀린 수치로 인포그래픽 생성.
+- **환경**: `JARVIS06_IMAGE/slot_renderer.py verify_slot()`, `JARVIS06_IMAGE/draft_processor.py _slot_ref_datasets()`
+- **원인 (두 구멍)**:
+  1. `_slot_ref_datasets()` 가 `collected.all_numbers()`(웹 기사·팩트 텍스트 추출 숫자)를 ref에 포함 → 기사 텍스트에 우연히 LLM 합성값과 유사한 숫자가 있으면 `_grounds()` ±5% 통과.
+  2. `verify_slot(slot, ref_pairs)` 가 ref_pairs를 모든 dataset의 값을 flat으로 합쳐 비교 → "코스피 거래대금" 슬롯이 "삼성전자 PER=25" dataset의 25 로 우연 매칭 가능 (|24-25|/25 = 4% < 5%).
+- **헛다리**: `_build_data_catalog()` 에서 "카탈로그 값만 인용"을 이미 지시했지만 LLM이 무시함 → 프롬프트 강화만으로는 근본 해결 불가.
+- **해결**:
+  1. `_slot_ref_datasets()`: `all_numbers()` 완전 제거 — 오직 `collected.datasets`(구조화 API 데이터)만 ref로 사용.
+  2. `slot_renderer.py`: `_title_words()` + `_filter_datasets_by_title()` 추가 — Jaccard ≥ 0.25로 슬롯 제목과 주제 연관 dataset만 추출. `render_slots_in_text()`에서 슬롯별 `_filter_datasets_by_title()` 경유 후 ref 계산.
+  3. `_build_data_catalog()`: 검증 게이트 경고 문구 추가 ("임의 수치 쓰면 슬롯 자동 폐기").
+- **파일**: `JARVIS06_IMAGE/draft_processor.py`, `JARVIS06_IMAGE/slot_renderer.py`, `JARVIS02_WRITER/draft_writer.py`
+- **교훈**: LLM 제약은 프롬프트가 아니라 검증 코드로 걸어야 한다. 검증 ref에 맥락 없는 숫자(기사 텍스트 파싱)를 포함시키면 어떤 수치도 통과될 수 있다. 검증은 "이 슬롯의 주제와 관련 있는 dataset의 실값과 ±5% 대조"여야 한다.
+- **후속 수정 (2026-07-11 — 사용자 박제)**: verify 게이트 강화만으로는 불충분 — LLM이 일부 값만 선택하거나 다른 값을 써도 통과 가능. `render_slots_from_collected()` 신설: LLM이 쓴 슬롯 수치를 **완전히 무시**하고 슬롯 제목 Jaccard 매칭으로 `collected.datasets` 실데이터를 직접 주입. LLM은 제목(의도)만 선언, 수치는 JARVIS09 실데이터가 채운다. `_build_data_catalog()` 슬롯 형식도 제목만으로 단순화.
+
+---
+
+## [420] 코스닥 150 섹터 지수 인포그래픽 — 8개 섹터 중 3개만 수집 → 최고 KPI 오표시 (2026-07-11)
+
+- **증상**: "코스닥 150 섹터 지수" 인포그래픽에 최고 섹터를 "코스닥 150 소재(3,194)"로 표시. 실제(2026-05-30 KRX): 헬스케어(5,873)가 최고이고 소재는 2위. 8개 섹터 중 3개만 차트에 표시됨.
+- **환경**: `JARVIS09_COLLECTOR/chart_data.py`, `data_planner.py`, `providers/krx_provider.py`
+- **원인**:
+  1. "코스닥 150 섹터 지수"를 KOSIS 소스에서 수집 → 8개 섹터 중 3개(소재/코스닥150/산업재)만 반환.
+  2. KrxProvider에 8개 섹터 전체를 수집하는 `_collect_kosdaq150_sectors()` 경로가 없었음.
+  3. `_MARKET_INDICATOR_KWS`에 "코스닥 150" 키워드가 없어서 krx 소스 강제 미작동.
+  4. chart_data.py step 2.5에 코스닥 150 전용 dataset 함수가 없었음.
+  - **수치는 정확**: 수집된 3개 항목의 수치는 KRX 실데이터와 정확히 일치. 문제는 데이터 불완전(누락).
+- **헛다리**: pykrx `get_index_ohlcv_by_date`로 각 섹터 코드(2212~2218)를 직접 조회하면 8개 전부 정상 반환됨.
+- **해결**:
+  1. `krx_provider.py`: `_KOSDAQ150_SECTOR_CODES` + `_KOSDAQ150_KWS` 추가. `_collect_kosdaq150_sectors()` 함수 신설 — 8개 섹터 지수 전체 수집 + 최고/최저 박제.
+  2. `KrxProvider.collect()`: "코스닥150", "섹터지수" 등 키워드 감지 시 자동 호출 (step 0-A).
+  3. `data_planner.py`: `_MARKET_INDICATOR_KWS`에 "코스닥 150", "섹터 지수" 추가 → krx 소스 강제.
+  4. `chart_data.py`: `_kosdaq150_sector_datasets()` + step 2.5 호출 추가 — 8개 전체 dataset 보장.
+- **파일**: `JARVIS09_COLLECTOR/providers/krx_provider.py`, `JARVIS09_COLLECTOR/chart_data.py`, `JARVIS09_COLLECTOR/data_planner.py`
+- **교훈**: 지수 섹터처럼 상위/하위 계층이 있는 데이터는 반드시 전체를 수집해야 함. 일부만 수집하면 최고/최저 KPI가 틀림. 고정 개수(N개)가 있는 데이터는 전용 수집 경로 필수.
+
+---
+
+## [419] 코스닥 업종별 시가총액 비중 오류 — 업종 쿼리 web 폴백 + KrxProvider 업종 API 미연결 (2026-07-11)
+
+- **증상**: "코스닥 업종별 시가총액 비중" 인포그래픽에 바이오 35.2%, 반도체 15.7% 표시. 실제(2026-07-10 KRX): 전기·전자 20.1%, 기계·장비 20.1%, 제약 13.6%. 방향도 반대(반도체가 바이오 추월 역사적 사건 미반영).
+- **환경**: `data_planner.py`, `krx_provider.py`
+- **원인**:
+  1. pykrx `get_market_sector_classifications`로 업종별 집계 가능하지만 KrxProvider에 연결 안 됨.
+  2. `_MARKET_INDICATOR_KWS`에 "업종별", "바이오 반도체" 등 업종 비중 관련 키워드 없음 → "바이오 반도체 IT 비중" 쿼리가 web 소스로 떨어져 틀린 수치 통과.
+- **헛다리**: pykrx `get_market_sector_classifications`는 로그인 필요 → 로그인 없이는 빈 응답. .env에 KRX_ID/KRX_PW가 있고 krx_provider.py가 import 전 dotenv 로드하므로 실제로는 동작함.
+- **해결**:
+  1. `krx_provider.py`: `_collect_sector_market_cap(market)` 추가 — pykrx 업종별 집계 → 전체 시가총액 대비 비중 계산 → KOSIS 형식 텍스트 반환. KRX 실데이터 없으면 None.
+  2. `KrxProvider.collect()`: `_SECTOR_BREAKDOWN_KWS` 감지 시 `_collect_sector_market_cap()` 자동 호출.
+  3. `data_planner.py`: `_MARKET_INDICATOR_KWS`에 "업종별", "업종비중", "섹터비중", "업종구성", "바이오 반도체", "반도체 바이오" 추가 → krx 공식 소스 강제.
+- **파일**: `JARVIS09_COLLECTOR/providers/krx_provider.py`, `JARVIS09_COLLECTOR/data_planner.py`
+- **교훈**: 업종별 비중 같은 시장 구성 데이터는 KRX 로그인 API로만 신뢰할 수 있음. 관련 쿼리를 web/news에 떨어뜨리는 즉시 틀린 수치가 들어옴. 업종·비중 키워드 = 시장 지표로 분류 필수.
+
+---
+
+## [418] 코스피/코스닥 일평균 거래대금 인포그래픽 — LLM 합성 수치 사용 (2026-07-11)
+
+- **증상**: "코스닥 일평균 거래대금 추이" 인포그래픽에 코스피 24조원·코스닥 10조원 표시. 실제(2026-07 4주 평균): 코스피 45.6조원·코스닥 8.6조원. 코스피 오차 90%+.
+- **환경**: `JARVIS09_COLLECTOR/chart_data.py`, `JARVIS09_COLLECTOR/providers/krx_provider.py`
+- **원인**: `collect_chart_data('코스닥')`이 KRX 시장 전체 거래대금 수집 경로를 갖지 않아 플래너·KOSIS 폴백이 거래대금 관련 dataset을 0건 반환 → draft 작성 LLM이 수치를 임의 생성 → ADR 010 위반.
+- **헛다리**: KrxProvider는 개별 종목 시세만, FinanceProvider는 해외 지표만 — 시장 전체 일평균 거래대금 수집 경로 전무.
+- **해결**:
+  1. `krx_provider.py`: `collect_market_trading_volume()` 추가 — pykrx `get_market_trading_value_by_date`(KOSPI/KOSDAQ) + `get_index_ohlcv_by_date` 이중 폴백, 4주 평균 계산, 조원 반환. 수집 실패 시 None.
+  2. `chart_data.py`: `_MARKET_KWS`, `_market_trading_volume_datasets()` 추가 — 코스피/코스닥/증시 주제 감지 시 실데이터 dataset 생성. 실데이터 없으면 빈 리스트(ADR 010 준수).
+  3. `collect_chart_data()` step 2.5로 호출 삽입.
+- **파일**: `JARVIS09_COLLECTOR/providers/krx_provider.py`, `JARVIS09_COLLECTOR/chart_data.py`
+- **교훈**: 시장 전체 집계 지표(일평균 거래대금·시가총액·거래량)는 전용 수집 경로가 없으면 LLM 합성으로 빠진다. 새 집계 지표 필요 시 provider에 함수 → chart_data에 _*_datasets() 패턴으로 추가.
+
+---
+
+## [417] 코스닥 시가총액 인포그래픽 전 수치 오류 — FinanceProvider/KrxProvider에 시장 전체 지표 없어 web 폴백 → 틀린 수치 게이트 통과 (2026-07-11)
+
+- **증상**: "코스닥 시가총액 추이" 인포그래픽에 최근 506조원 표시. 실제 2026-07-07 기준 약 420조원. 방향성도 반대 (인포: 최근>6개월평균, 실제: 최근<6개월평균). 7개 수치 중 5개 FAIL(오차 10%+).
+- **환경**: `JARVIS09_COLLECTOR/providers/finance_provider.py`, `data_planner.py`
+- **원인 (파이프라인 3단 구멍)**:
+  1. `FinanceProvider.collect()` → S&P500·달러·금 등 해외 지표만, 코스닥/코스피 지수 없음
+  2. `KrxProvider.collect()` → 삼성전자 등 개별 종목 시세만, 시장 전체 지표 없음
+  3. → 두 provider 모두 수집 0건 → web/news 소스 폴백 → 잘못된 수치 파싱
+  4. `_value_grounded()` → "문서에 수치가 있으면 통과" (문서 자체가 틀려도 OK)
+  5. `image_data_verifier` → 본문·데이터셋 둘 다 같은 잘못된 web 소스 → 일치 → 통과
+- **헛다리**: data_planner가 `finance`/`krx` 소스를 설계해도 provider가 실제 데이터를 못 주므로 소스 설계만 바꾸는 것으로는 불충분.
+- **해결**:
+  1. `FinanceProvider`: 코스닥/코스피/시가총액 키워드 감지 → yfinance `^KQ11`/`^KS11` 20년 역사 데이터로 기간별 이동평균 KOSIS 형식 문서 생성 (`_collect_kr_index_history`). 단위 pt 명시.
+  2. `data_planner._sanitize()`: `_MARKET_INDICATOR_KWS` 키워드 감지 시 소스를 `finance`/`ecos`/`krx`/`kosis`/`kor_econ` 으로 강제, `web`/`blog` 제거.
+- **파일**: `JARVIS09_COLLECTOR/providers/finance_provider.py`, `JARVIS09_COLLECTOR/data_planner.py`
+- **교훈**: `_value_grounded`는 "출처 문서에 수치가 있는지"만 확인하고 "그 문서가 신뢰할 수 있는지"는 확인하지 않음. web 소스 자체가 틀린 수치를 담고 있으면 모든 게이트를 통과한다. 핵심 시장 지표(시가총액·지수·금리·환율)는 공식 API(finance/ecos/krx) 소스만 허용 + provider가 실제로 그 데이터를 제공할 수 있어야 함.
+
+---
+
+## [416] 인포그래픽 차트에 합계 행("전체: 355개")·0값("숙박음식점업: 0개") 혼입 (2026-07-11)
+
+- **증상**: 경제 브리핑 인포그래픽 bar_chart에 "전체: 355개"가 개별 업종과 함께 표시되고, "숙박 및 음식점업: 0개"가 막대로 표시됨. 독자가 "코스닥 상장기업이 355개"로 오해.
+- **환경**: `JARVIS09_COLLECTOR/chart_data.py` `_reduce_crosstab` 폴백(4번) + `_mk_dataset`
+- **원인 1 — "전체: 355"**: KOSIS 1D 테이블(라벨에 `·` 구분자 없음) → `maxseg=1` → `_reduce_crosstab`의 교차표 처리 로직(2·3번) 미실행 → 폴백(4번)에서 "전체" 행이 세부 업종 행과 함께 그대로 통과. "전체"는 합계이므로 개별 항목과 동일 차트에 놓이면 비교 왜곡.
+- **원인 2 — "숙박음식점업: 0"**: `_mk_dataset`의 0값 필터가 `_is_bar and v == 0` 조건이었음. viz_hint 가 "kpi"·"pie" 등이거나 LLM 경로가 kpi로 설계한 경우 `_is_bar=False` → 0 통과.
+- **헛다리**: `_mk_dataset`에만 필터 추가 — LLM 경로에서도 `_reduce_crosstab`을 경유하지 않아 "전체" 행이 들어올 수 있음. 두 경로 모두 수정 필요.
+- **해결**:
+  1. `_reduce_crosstab` 폴백(4번) 끝에: `non_total = [r for r in out if r["label"] not in _DEMO_TOTAL]` → 세부 항목이 2개 이상이면 합계 행 제거.
+  2. `_mk_dataset` 0값 필터: `_is_bar and v == 0` → `v == 0` (viz_hint 무관). bar_chart 합계 행도 추가 방어.
+- **파일**: `JARVIS09_COLLECTOR/chart_data.py` (`_reduce_crosstab` 394~403줄, `_mk_dataset` 77~79줄)
+- **교훈**: KOSIS 데이터는 1D 테이블(단순 라벨:값)과 교차표(라벨·차원·시점) 두 형태로 온다. `_reduce_crosstab`은 교차표만 처리했으므로 1D 테이블의 합계 행("전체/계")은 통과됐음. 신규 테이블 형태 추가 시 `_DEMO_TOTAL` 제거 로직이 1D·2D 모두에서 작동하는지 확인 필수. 0값 필터는 viz_hint에 관계없이 적용해야 함.
+
+---
+
+## [414] RADAR watchdog "데드라인 초과(블로킹)" 오탐 — 절전 gap 보정이 freeze 분기만 면제, deadline 분기(elapsed 기준 self._start) 미보정 (2026-07-11)
+
+- **증상**: `JARVIS03_RADAR.jobs` 가 `RuntimeError: 트렌드 수집 실패 (rc=75 EX_TEMPFAIL): 워치독 정지(freeze/deadline) 감지로 강제 종료` 보고(GUARDIAN error id 2774). 같은 사고로 `JARVIS00_INFRA.harness.트렌드 수집` 도 별도 error id(2772/2775/2776)로 중복 보고. daemon 로그 대조 결과 잡은 15:20:15 시작, 16:24:35~42 강제종료 — 총 elapsed 3860s 중 3110s+690s ≈ 3800s 가 두 차례의 macOS 절전(Maintenance Sleep) 구간으로 확인됨(실제 작업 시간은 ~60s). stderr 꼬리의 `RequestsDependencyWarning` 은 [213]이 이미 명시한 킬 이전 무관 노이즈.
+- **환경**: `JARVIS00_INFRA/watchdog.py` `Watchdog._monitor()` — 외부(harness, `deadline_sec≈3600`)·내부(`radar_main.py guard_main("레이더 수집", deadline_sec=900)`) 두 워치독 인스턴스가 각각 독립적으로 감시 스레드를 돌림.
+- **원인**: [396]이 도입한 "자기 감시루프 gap 절전 감지"(`gap = now - last_tick; if gap > poll_sec*3`)는 감지 시 `self._last_beat = now` 만 갱신해 *freeze* 분기(`frozen > freeze_sec`)의 오탐만 면제했다. 그러나 바로 옆의 *별개* 분기인 "데드라인 초과(블로킹)"(`elapsed = now - self._start; elapsed > deadline_sec + poll_sec`)는 `self._start` 를 그대로 두므로, 절전으로 흘러간 시간이 고스란히 `elapsed` 에 누적되어 다음 틱에서 데드라인 오탐으로 재발한다. 이번 사고는 절전 3800s가 외부(harness, deadline≈3600s)·내부(radar_main, deadline=900s) 두 워치독의 데드라인을 모두 넘겨 각각 독립적으로 `os._exit(75)` — 하나의 절전 사건이 여러 GUARDIAN error id 로 중복 보고됨.
+- **헛다리**: `radar_main.py` 의 `guard_main(deadline_sec=900)` 값을 늘리는 방향은 기각 — 실제 작업 시간이 ~60s 뿐이라 900s 는 이미 충분하고, 값을 늘리는 건 절전 오탐이라는 근본 원인을 가리는 우회일 뿐 재발 방지가 안 됨.
+- **해결**: `Watchdog._monitor()` 의 절전 gap 감지 분기에 `self._start += gap` 추가 — freeze 뿐 아니라 deadline 기산점도 절전 구간만큼 함께 미뤄 `elapsed()`/`check()`/`_monitor()` 세 곳 모두 "실제 진행 시간" 기준을 유지. (본 수정은 동일 사고를 다룬 병행 GUARDIAN 세션이 이미 적용·`py_compile` 검증까지 완료한 상태였음 — 본 세션은 해당 수정이 error id 2774 의 근본 원인과 정확히 일치함을 코드·로그 대조로 확인하고 학습 기록만 보강.)
+- **파일**: `JARVIS00_INFRA/watchdog.py` (`_monitor()`)
+- **교훈**: freeze 와 deadline 은 같은 절전-gap 문제의 *두 개의 독립된 판정 분기* — 한쪽만 절전 면제 처리하면 나머지 한쪽에서 동일 사고가 다른 얼굴(다른 error id·다른 모듈명)로 재발한다. 절전/gap 보정 로직 추가 시 그 판정 함수 안의 *모든* 분기(freeze·deadline·향후 추가될 분기 포함)를 전수 점검할 것. 참고: [389](jarvis_keeper 자기루프 gap 원조) → [396](freeze 분기만 보정, 이번 gap 의 직접 전조) → 본 항목(deadline 분기 보정으로 완결).
+
+---
+
+## [415] performance_collector "성과 수집" deadline 수정이 기록만 되고 코드 미반영 + _run_script_checked 외곽 timeout 이 내부 deadline보다 짧음 (2026-07-11)
+
+- **증상**: [414] 사고(레이더 수집 데드라인 오탐)를 조사하며 유사 증상인 [403]("성과 수집 deadline_sec=1800→DEFAULT_ACTION_DEADLINE_SEC 교체" 해결 기록)을 대조하던 중, `performance_collector.py` 실제 코드가 여전히 `deadline_sec=1800` 인 것을 발견 — ERRORS.md 기록(해결됨)과 실제 코드(미반영)가 불일치. 아울러 `JARVIS03_RADAR/jobs.py` `_run_script_checked()` 의 외곽 `subprocess.run(timeout=600)` 이 두 스크립트 내부 워치독 deadline(900s/1800s) 보다 항상 짧게 하드코딩돼, 내부 워치독의 절전 보정·GUARDIAN 리포트 흐름을 거치지 못하고 subprocess.run 자체가 먼저 강제 종료할 수 있는 설계 불일치도 함께 확인.
+- **환경**: `JARVIS03_RADAR/performance_collector.py` `__main__`, `JARVIS03_RADAR/jobs.py` `_run_script_checked()`.
+- **원인**: ① [403] 세션이 해결책을 ERRORS.md 에는 기록했으나 실제 파일 수정을 반영하지 않고 종료(문서-코드 드리프트, git blame 상 해당 라인 변경 이력 없음). ② `_run_script_checked()` 의 outer `timeout=600` 은 두 스크립트의 내부 `guard_main` deadline_sec(900/1800) 보다 짧게 독립적으로 하드코딩되어 있어, 값이 어긋나기 쉬운 구조.
+- **헛다리**: `radar_main.py` 의 `deadline_sec=900` 도 함께 올리려 했으나 [414] 대조 후 기각 — 실작업 ~60s, 절전 오탐이 진짜 원인이며 `watchdog.py` 자체 수정(`self._start += gap`)으로 이미 해결됨. `radar_main.py` 는 원상 유지(주석만 추가).
+- **해결**: ① `performance_collector.py` `deadline_sec=1800` → `DEFAULT_ACTION_DEADLINE_SEC`(3600, SSOT) 실제 코드 반영. ② `jobs.py` 에 `_SUBPROCESS_TIMEOUT_SEC = DEFAULT_ACTION_DEADLINE_SEC + 300`(3900s) 도입, `_run_script_checked()` 의 `subprocess.run(timeout=600)` → `timeout=_SUBPROCESS_TIMEOUT_SEC` 로 교체(두 스크립트 공용 — 항상 내부 deadline 보다 크게 유지). `py_compile` + import 스모크 테스트 통과.
+- **파일**: `JARVIS03_RADAR/performance_collector.py`, `JARVIS03_RADAR/jobs.py`.
+- **교훈**: ERRORS.md 에 "해결" 로 기록됐다고 실제 코드 반영을 신뢰하지 말 것 — 유사 증상 대조 시 기록된 해결책을 그대로 "적용됨" 취급하기 전에 실제 파일 상태를 grep/git blame 으로 먼저 확인해야 한다(이번 건은 [403] 문서만 있고 코드 미반영). 또한 내부 워치독(`guard_main deadline_sec`)과 외곽 subprocess timeout 을 서로 다른 파일에서 각각 하드코딩하면 대소관계가 깨지기 쉽다 — 외곽 timeout 은 항상 내부 deadline 보다 크게 SSOT 상수 기반으로 유지할 것.
+
+---
+
+## [413] harness 트렌드 수집 — pytrends TrendReq 단일 호출이 freeze 창(300s) 초과 가능 (2026-07-11)
+
+- **증상**: `JARVIS00_INFRA.harness.트렌드 수집` 이 `RuntimeError: [harness:트렌드 수집] attempt=1 step=① 트렌드 수집: RuntimeError: 트렌드 수집 실패 (rc=75 EX_TEMPFAIL): 워치독 정지(freeze/deadline) 감지로 강제 종료 — 네트워크·외부 API 응답 지연 의심` 보고. traceback 은 `NoneType: None` (watchdog 이 직접 report 로 생성한 인공 RuntimeError, 코드 결함 위치 정보 없음).
+- **환경**: `JARVIS03_RADAR/jobs.py` `job_collect_trends` → `_run_script_checked()` 가 `radar_main.py` subprocess 실행, 내부는 `guard_main("레이더 수집", deadline_sec=900)`(freeze_sec 기본 300s)로 감싸짐. `collect_today()` → `google_collector.get_trending_searches()` 의 5단계 fallback 중 `_fetch_pytrends_trending`/`_fetch_pytrends_realtime`, `get_interest_over_time()` 배치 루프가 각각 `pytrends.TrendReq(...)` 호출.
+- **원인 (근본)**: [213]이 각 fallback 단계·배치 진입 시점에 `_wd_beat()` 를 배선해 *단계 사이* freeze 오탐은 막았지만, *단계 내부*는 여전히 무방비. `TrendReq()` 생성자가 내부적으로 쿠키 조회 HTTP 호출을 별도로 수행하고, 지정한 `timeout=(10, 30)` + `retries=3` 조합도 네트워크 상태(DNS 지연·연결 재시도 누적)에 따라 그 명목 상한을 넘겨 블로킹될 수 있다 — [401]이 이미 밝힌 것과 같은 클래스의 버그(yfinance `Ticker.history()` 가 지정 timeout 을 무시하고 무한 대기했던 사례)로, pytrends 도 동일하게 `timeout=` 파라미터만으론 단일 호출의 벽시계 상한을 보장하지 못한다. 하나의 fallback 단계(또는 IOT 배치) 안에서 beat 없이 300초 이상 블로킹되면 워치독이 freeze 로 오판(혹은 실제 hang)해 `os._exit(75)`.
+- **헛다리**: 없음 — stderr 꼬리의 `RequestsDependencyWarning` 은 [213]이 이미 "킬 이전 무관 내용" 이라 명시해둔 노이즈, 낚이지 않고 즉시 무시.
+- **해결**:
+  1. `google_collector.py` — [401] 과 동일한 `_bounded(fn, timeout=N, default=...)` 헬퍼(`ThreadPoolExecutor` + `fut.result(timeout=N)` + `shutdown(wait=False)`) 신설.
+  2. `_fetch_pytrends_trending` / `_fetch_pytrends_realtime` — `TrendReq` 생성+호출 전체를 `_do()` 클로저로 감싸 `_bounded(_do, timeout=90.0)` 로 실행. 레이트리밋 예외는 기존과 동일하게 `_bounded` 밖에서 그대로 전파·처리.
+  3. `get_interest_over_time()` 배치 루프 — 동일 패턴으로 배치별 `TrendReq` 호출을 `_bounded(_do, timeout=90.0)` 로 벽시계 상한.
+  4. `JARVIS07_GUARDIAN/severity.py` `_TRANSIENT_PATTERNS` — `워치독 정지\(freeze/deadline\) 감지로 강제 종료` 패턴 추가([387]과 동일 원리: 이 보고 자체는 watchdog 의 설계된 자가치유 — 다음 예약이 깨끗하게 재시도 — 이므로 Tier1/2 낭비 호출 방지).
+- **파일**: `JARVIS03_RADAR/collectors/google_collector.py`, `JARVIS07_GUARDIAN/severity.py`.
+- **교훈**: 순차 루프의 "단계 사이" beat 배선([213])만으론 "단계 내부"의 단일 SDK 호출이 자체 timeout 을 넘겨 블로킹되는 걸 못 막는다. `timeout=` 파라미터를 받는 서드파티 SDK(yfinance·pytrends 등)라도 내부에 재시도·부가 호출이 있으면 명목 상한을 넘길 수 있어, freeze 창(300초)보다 확실히 작은 값으로 `ThreadPoolExecutor` 벽시계 상한을 별도로 씌워야 한다([401]과 동일 원칙 — 매번 신규 SDK 도입 시 전수 점검 필요).
+
+---
+
+## [412] strip_html_wrapper가 유효한 [CHART_N] 오프닝 태그 제거 → 차트 0개 (2026-07-11)
+
+- **증상**: 실데이터 9개 수집 완료 후 Pass-1 대본 생성 시 `⚠️ [Pass-1 Call-1] CHART 부족 (0/5) — 강제 삽입`. 실데이터가 있음에도 차트 슬롯이 0개.
+- **환경**: `JARVIS02_WRITER/draft_writer.py` `strip_html_wrapper()` + `_gen_section_call1/2/3()`.
+- **원인**: `strip_html_wrapper`의 `leak_patterns` 목록에 `` r"`?\[CHART_\d+\]`?" `` 패턴이 있어 LLM이 생성한 유효한 `[CHART_1]`, `[CHART_2]` 등 오프닝 태그가 전부 제거됨. 클로징 태그 `[/CHART_N]`는 패턴에 없어서 잔존 → 깨진 슬롯. 결과: `chart_count = 0` → `_inject_missing_charts`가 `[PHOTO_N]`으로 대체 → 실데이터 차트 전혀 생성되지 않음.
+- **헛다리**: 없음.
+- **해결**: `strip_html_wrapper`의 leak_patterns에서 `[CHART_N]` 관련 2개 패턴 삭제. `[CHART_N]`은 프롬프트 누수가 아닌 LLM이 생성해야 할 유효 출력 형식임.
+- **파일**: `JARVIS02_WRITER/draft_writer.py`.
+- **교훈**: `strip_html_wrapper`의 leak_patterns에 LLM이 실제 출력으로 써야 하는 포맷 태그(`[CHART_N]`)를 추가하면 안 된다. 프롬프트 지시 텍스트와 유효 출력 태그가 형태가 같을 경우 구분 불가 → 유효 출력 삭제. 누수 제거는 문맥(backtick으로 감싸진 것, 쉼표로 나열된 것)을 기준으로 해야 함.
+
+---
+
+## [411] _nonessential SDK timeout 45s + 경제 캘린더 수집 경고 노이즈 (2026-07-11)
+
+- **증상**: ① `⚠️ SDK timeout 45s — 수집된 응답: 0개` 터미널 print 2회 → 90초 블로킹. ② `경제 캘린더 수집 실패: Expecting value: line 1 column 1` warning 매 실행 출력.
+- **환경**: `shared/llm.py` `_nonessential=True` 경로 + `JARVIS09_COLLECTOR/providers/economic_data_provider.py`.
+- **원인**: ① `_nonessential=True` 의 timeout cap `min(timeout, 45)` 가 `_extract_series_from_docs` (max_tokens=700) 에 적용되어 45초 내 응답 불가 → timeout. `_run_sdk_sync` 가 print 로 출력해 터미널에 노출. ② investing.com Cloudflare 차단 시 빈 응답 → `res.json()` JSONDecodeError → warning 레벨 출력.
+- **헛다리**: 없음.
+- **해결**: ① `shared/llm.py` — timeout cap 45 → 90, SDK timeout/오류 print → log.warning. ② `economic_data_provider.py` — `get_economic_calendar` 에 `res.ok` + `res.content` 선행 체크 추가 (비정상 응답 → log.debug 조용히 반환), JSON decode 실패 → log.debug.
+- **파일**: `shared/llm.py`, `JARVIS09_COLLECTOR/providers/economic_data_provider.py`.
+- **교훈**: `_nonessential` timeout 캡은 짧은 호출(max_tokens≤120)에는 적합하지만 긴 응답(max_tokens=700)에는 부족하다. 캡을 넉넉하게 설정하고, 외부 API 수집 실패는 warning 대신 debug/info 로 처리해 노이즈 최소화.
+
+---
+
+## [410] pykrx KRX 로그인 실패 — .env KRX_ID/PW 미설정 (2026-07-11)
+
+- **증상**: 경제 브리핑 실행 시 `KRX 로그인 실패: KRX_ID 또는 KRX_PW 환경 변수가 설정되지 않았습니다.` 출력.
+- **환경**: `JARVIS09_COLLECTOR/providers/krx_provider.py` + pykrx 1.x `website/comm/webio.py`.
+- **원인**: pykrx `webio.py:12` 에서 `build_krx_session()` 이 모듈 로드 즉시 실행 → `os.getenv("KRX_ID/PW")` 읽음. `.env` 에 KRX_ID/PW 항목 자체가 없어서 항상 None → 로그인 실패 메시지 출력. (종목 시세 API 는 로그인 없이도 동작 — 경고만 출력되고 수집 자체는 성공.)
+- **헛다리**: 없음. pykrx auth.py 소스 직접 확인으로 원인 즉시 파악.
+- **해결**: ① `.env` 에 `KRX_ID=`, `KRX_PW=` placeholder 추가 (data.krx.co.kr 계정 입력 시 자동 로그인). ② `krx_provider.py` 모듈 레벨에서 pykrx import 전 `load_dotenv(..., override=False)` 추가 — daemon 외부 직접 실행 경로 보장.
+- **파일**: `.env`, `JARVIS09_COLLECTOR/providers/krx_provider.py`.
+- **교훈**: pykrx는 import 시 세션을 즉시 생성한다. `.env` 로드가 pykrx import 보다 반드시 먼저여야 한다.
+
+---
+
+## [409] KOSIS 단위 혼용 — 자산총계에 "개" 단위 붙는 버그 (2026-07-11)
+
+- **증상**: 인포그래픽에서 자산총계(백만원) 수치에 "개" 단위가 표시됨.
+- **환경**: `JARVIS09_COLLECTOR/providers/kosis_provider.py` `_df_to_text()`.
+- **원인 (근본)**: `_df_to_text`가 첫 번째 행(회사수)의 단위("개")를 `_header_unit`으로 결정한 후 *전체 행*에 동일 적용. 자산총계(백만원)·부채(백만원) 등 다른 단위 행이 모두 "개"로 출력.
+- **헛다리**: 차트 레벨 0값 제외만 수정 → 근본 원인(단위 혼용) 미해결.
+- **해결**: 각 행의 `c_un` 컬럼(`단위명`)을 *행별 개별 읽기*로 변경. 헤더에는 빈도 최다 단위 표시, 각 값 줄에는 해당 행 단위 개별 출력. 추가로 `_parse_clean_doc`에서 금융 키워드(`자산·부채·매출·이익...`) + 값 > 100,000 인 행이 "개" 단위면 "백만원"으로 자동 교정.
+- **파일**: `JARVIS09_COLLECTOR/providers/kosis_provider.py`, `JARVIS09_COLLECTOR/chart_data.py`.
+- **교훈**: 표 안의 항목들이 서로 다른 단위를 가질 수 있다. 헤더 단위를 전체에 적용하지 말고 행별로 읽어야 한다.
+
+---
+
+## [408] as_of 날짜 — 항상 오늘 날짜로 고정 (2026-07-11)
+
+- **증상**: 인포그래픽 하단 데이터 기준 날짜가 항상 오늘 날짜. KOSIS 데이터는 2025년, KRX는 최근 거래일 등 소스마다 최신 날짜가 다름.
+- **환경**: `JARVIS09_COLLECTOR/chart_data.py` `_mk_dataset()` / `_parse_clean_doc()`.
+- **원인**: `as_of` 필드를 `_now_as_of()` (오늘 날짜)로 하드코딩. 실제 데이터 기준일 추출 로직 없음.
+- **해결**: ① `_parse_clean_doc`에서 텍스트 안의 `YYYYMM` 패턴을 regex로 추출 → 가장 최신 날짜를 `as_of`로 사용. ② KRX 수집은 `_last_trading_day()` 로 실제 마지막 거래일 박제. ③ `pro_templates.py` footer에 `datasets[].source.as_of` 집계 → "X년 Y월 기준" 표시.
+- **파일**: `JARVIS09_COLLECTOR/chart_data.py`, `JARVIS06_IMAGE/pro_templates.py`.
+- **교훈**: 데이터 기준일은 수집 소스에서 읽어야 한다. 오늘 날짜는 "언제 수집했나"지 "어느 기간 데이터인가"가 아니다.
+
+---
+
+## [407] yfinance 1.x — requests.Session 주입 불가 → 전체 시장 지표 수집 0개 (2026-07-11)
+
+- **증상**: `economic_poster.py` 기동 시 코스피·코스닥·S&P500·NASDAQ 등 9개 지표 전부 `수집 실패: Yahoo API requires curl_cffi session not <class 'requests.sessions.Session'>`.
+- **환경**: yfinance 1.2.0, `JARVIS09_COLLECTOR/providers/economic_data_provider.py` `get_market_data()` + `finance_provider.py` `FinanceProvider.collect()` + `collect_theme.py` `_stocks_to_datasets()`.
+- **원인**: yfinance 1.x 업그레이드로 Cloudflare 우회를 위해 `curl_cffi` 세션만 허용. 기존 코드는 ERRORS [401] hang 방지를 위해 `requests.Session + HTTPAdapter(timeout)` 를 세션으로 주입 → yfinance가 타입 체크 실패 → 즉시 에러.
+- **헛다리**: 없음 — 에러 메시지가 원인과 해결책을 직접 명시 ("stop setting session, let YF handle").
+- **해결**: 3개 파일에서 `_make_yf_session()` / `_make_session()` / `_YfTimeoutAdapter` 전부 제거. `yf.Ticker(ticker, session=...)` → `yf.Ticker(ticker)`. ERRORS [401] hang 방지는 `concurrent.futures.ThreadPoolExecutor` + `future.result(timeout=15)` 패턴으로 대체.
+- **파일**: `JARVIS09_COLLECTOR/providers/economic_data_provider.py`, `JARVIS09_COLLECTOR/providers/finance_provider.py`, `JARVIS09_COLLECTOR/collect_theme.py`.
+- **교훈**: 라이브러리 버전 업그레이드 시 세션 주입 패턴이 깨지는 경우 있음. hang 방지 timeout은 라이브러리 세션 파라미터가 아닌 스레드 래핑으로 구현해야 라이브러리 내부 구현 변경에 독립적.
+
+---
+
+## [406] job_collect_trends 말미 topic_pack 사전 생성 누락 — 06:30 포스터에서 LLM 경합 → throttle 재발 구조 (2026-07-11)
+
+- **증상**: 06:30 경제 브리핑이 매번 "자비스03 주제 패키지 없음"으로 실패. [404][405] 수정 후에도 재발.
+- **환경**: `JARVIS03_RADAR/jobs.py` `job_collect_trends()` + `JARVIS03_RADAR/topic_pack.py` `build_topic_pack()`.
+- **원인 (근본)**: CLAUDE_RADAR.md 에 "job_collect_trends 말미 자동 생성"이라 명시됐지만 `jobs.py` 에 실제로 `build_topic_pack()` 호출이 없었음. 결과: 06:00 트렌드 파일(`trends_YYYY-MM-DD.json`)은 생성되지만 `topic_pack_YYYY-MM-DD.json`은 생성되지 않음. 06:30 포스터가 `_tp_pick()` → None → `_tp_build()` → `_profile_batch()` LLM 호출을 시도하는 시점은 대본 생성 LLM 과 동일 시간대 → 동시성 경합 → throttle. [404][405]는 이 증상의 대응책이었으나 근본(설계-구현 불일치)은 미해결 상태.
+- **헛다리**: [404][405] 수정으로 해결됐다고 오판. 실제론 두 수정 모두 증상 완화(재시도 폭 확대·GUARDIAN 오분류 차단)였고 LLM 경합 자체를 없애지 못함.
+- **해결**:
+  1. `JARVIS03_RADAR/jobs.py` `job_collect_trends()` 말미에 `build_topic_pack()` 호출 추가. 트렌드 하네스 완료 후 즉시 팩 사전 생성 → 06:30 포스터가 `_tp_pick()` 즉시 성공 → pack 재생성 LLM 경합 0.
+  2. `shared/llm.py` `_CIRCUIT_EXEMPT_ALIASES` 기본값에 `"analyzer"` 추가 → circuit open 중에도 `_profile_batch()` 1샷 실시도 보장 (이중 방어).
+- **파일**: `JARVIS03_RADAR/jobs.py`, `shared/llm.py`.
+- **교훈**: 설계 문서(CLAUDE.md)에 "말미 자동 생성"이라 적혀 있어도 실제 코드에 호출이 없으면 없는 것. 파이프라인 종속성(A가 B를 필요로 할 때 A 시작 전 B가 이미 준비돼 있어야 한다는 보장)은 코드에서 명시적으로 구현해야 한다 — 문서 위임으로 대체 불가.
+
+---
+
+## [405] "주제 패키지 없음" 미분류 → GUARDIAN Tier2 SDK 낭비 세션이 재시도 LLM 슬롯과 경합해 재발 (2026-07-11)
+
+- **증상**: `[harness:경제 브리핑 발행 — 네이버] attempt=1 step=③ NV 대본 생성: 대본 생성 실패: 자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)`. 06:30 파이프라인에서 네이버·티스토리 둘 다 같은 원인으로 실패. `economic_20260711_063036.log` 확인 결과 `topic_pack._profile_batch()` LLM 호출(`_essential=True`)이 3회 연속 "rate-limit 스로틀 (num_turns=0, 모델 미호출)" — 트렌드 캐시(`trends_2026-07-11.json`, 06:03 생성)와 경제 섹터 후보(23개)는 정상 존재, LLM 프로필 배치만 실패.
+- **환경**: `JARVIS07_GUARDIAN/severity.py` (`_TRANSIENT_PATTERNS`, `is_transient`) + `JARVIS07_GUARDIAN/guardian_agent.py` (`_orchestrate` 안전장치 0) + `JARVIS07_GUARDIAN/incident_responder.py` (`_TRANSIENT_KEYWORDS`, `_classify`).
+- **원인 (근본)**: `daemon.log` 대조 결과 harness RuntimeError(#2745, message="...주제 패키지 없음...")가 `severity.is_transient()`에서 `_TRANSIENT_PATTERNS` 어디에도 매칭되지 않아 False 반환 → `guardian_agent._orchestrate()` 가 일반 오류로 취급 → Tier 1 실패 → **Tier 2 Claude Code SDK targeted 수정 세션 시작(job=harness, 최대 10분, 06:32:23~)**. 그런데 이 오류는 [383]/[395]/[404]와 같은 카테고리 — LLM rate-limit/회로차단으로 인한 `topic_pack._profile_batch()` 일시적 실패이지 코드 버그가 아니다(고칠 코드가 없음, 실제로 `#2745 fixable=False`). 이 무의미한 Tier2 SDK 세션이 Claude Code 동시성 슬롯을 10분간 점유하는 동안, 별도 경로인 `incident_responder.respond()`가 (우연히 로그 tail에 포함된 "쿠키" 문구로 `_classify()`가 transient 판정 → 30초 대기 후) economic_poster 재시도를 실행 → 재시도 내부에서 다시 `topic_pack.build_topic_pack()` LLM 프로필 호출을 시도하지만 Tier2 SDK 세션과 자원 경합 → 다시 스로틀 → 재차 동일 오류 재발(06:33:09~06:33:27 로그로 확인). 즉 **GUARDIAN이 스스로 고치려는 시도가 고쳐야 할 진짜 재시도의 LLM 자원을 뺏어 문제를 지속시키는 자기강화 루프**.
+- **헛다리**: 없음 — [395]/[404]는 `topic_pack.py`/`trend_economic_writer.py` 자체의 로직 결함(즉석 수집 미트리거·소진 재탐색 폭 부족)이었고 이미 수정 반영되어 있음(재빌드 시 `max_candidates=8` 확장 재탐색 코드 확인됨). 이번 사고는 그 수정들과 무관하게, GUARDIAN 오류 분류기가 이 오류 유형을 놓쳐 낭비 SDK 세션을 켜는 *별도* 결함.
+- **해결**:
+  1. `severity.py` `_TRANSIENT_PATTERNS` 에 `주제 패키지 없음` 패턴 추가 → `is_transient()` True → `guardian_agent._orchestrate()` 안전장치 0 에서 즉시 `ignored` 처리(Tier1/2 미진입, 낭비 SDK 세션 원천 차단).
+  2. `incident_responder.py` `_TRANSIENT_KEYWORDS` 에도 동일 문자열 추가 — 로그 tail에 우연히 "쿠키" 등 다른 transient 키워드가 없어도 이 경로에서 안정적으로 transient(코드 수정 없이 대기 후 재시도)로 분류되도록 일관성 확보.
+- **파일**: `JARVIS07_GUARDIAN/severity.py`, `JARVIS07_GUARDIAN/incident_responder.py`.
+- **교훈**: [387]과 동일한 교훈의 재확인 — "코드 버그가 아닌 운영/일시적 자원 보고를 `report()` 경유로 감사기록할 땐 반드시 `_TRANSIENT_PATTERNS`에 매칭 키워드를 동반 등록해야 Tier1/2 낭비 진입을 막는다." 새 harness 오류 메시지 문구를 추가할 때마다 이 게이트 등록을 빠뜨리면, GUARDIAN의 "자동 수정 시도" 자체가 Claude Code SDK 동시성 자원을 점유해 *진짜 필요한 재시도*의 LLM 호출과 경합하는 부작용을 낳는다 — 자동 수정 시스템이 스스로 병목이 되는 역설.
+
+---
+
+## [404] topic_pack 소진 — 팩 2개 중 fit 1개뿐이면 티스토리(2번 주자)가 재빌드해도 영구 소진 (2026-07-11)
+
+- **증상**: `[harness:경제 브리핑 발행 — 티스토리] attempt=1 step=③ 티스토리 대본 생성: 대본 생성 실패: 자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)`. 네이버는 정상 발행(같은 날 트렌드·LLM 모두 정상 작동 확인됨) — [395](2026-07-10, 06시 크론 미발화로 트렌드 캐시 자체가 없던 케이스)와는 다른 원인.
+- **환경**: `JARVIS02_WRITER/trend_economic_writer.py` `ts_collect()`/`nv_collect()` — `JARVIS03_RADAR/topic_pack.py` `pick_candidate()`/`build_topic_pack()`.
+- **원인 (근본)**: ERRORS [384](2026-07-06 사용자 박제)로 `build_topic_pack()`은 `max_candidates=publish_slots+2`(=4)만 LLM 프로파일링하고 fit 판정 통과분 중 상위 `publish_slots`(=2)개만 팩에 박제. 오늘 후보 4개 중 fit 판정을 통과한 게 1개뿐이면 팩엔 사실상 1개만 저장됨. 네이버(1번 주자)가 그 1개를 선점 → 티스토리(2번 주자)가 `pick_candidate(exclude_keyword=nv_keyword)` 호출 시 유일한 후보가 `exclude_keyword`와 일치해 걸러짐 → `None`. 소진 복구 시도로 `build_topic_pack()`을 재호출하지만 같은 날 트렌드 캐시가 그대로이고 `max_candidates`도 그대로(4)라 LLM이 같은 4개 후보를 같은 방식으로 재분류 → 결정론적으로 동일하게 fit 1개만 재생산 → 재시도 무의미, 영구 소진.
+- **헛다리**: 없음. [395]와 증상 문구가 동일해 처음엔 같은 원인으로 의심했으나, 네이버가 같은 날 정상 발행했다는 사실이 "트렌드 캐시 부재"(=[395] 원인) 가설을 배제 — 팩 내부 후보 수 부족이 진짜 원인.
+- **해결**: `ts_collect()`/`nv_collect()`의 **소진 복구 재빌드 경로에서만** `build_topic_pack(max_candidates=8)`로 후보 탐색 폭을 넓힘 (평상시 최초 팩 생성은 여전히 `publish_slots+2`=4 그대로 — [384] "낭비 방지" 원칙 유지, 재시도 시에만 예외). 넓은 풀에서 fit 판정 통과 후보가 2개 이상 나오면 팩에 서로 다른 주제 2개가 들어가 2번 주자도 소진 없이 선택 가능.
+- **파일**: `JARVIS02_WRITER/trend_economic_writer.py` (`ts_collect`, `nv_collect`).
+- **교훈**: "팩에는 발행 슬롯 수만큼만 박제"(비용 절감)와 "각 플랫폼이 서로 다른 주제를 골라야 함"(exclude_keyword)은 fit 통과율이 100%가 아닌 이상 구조적으로 충돌한다 — 슬롯 수만큼만 프로파일링하면 fit 탈락이 하나만 생겨도 뒷 순번 소비자가 굶는다. 소진 시 재시도는 *같은 입력으로 같은 결정론적 절차를 반복*하면 반드시 같은 결과가 나온다는 점을 항상 의심해야 한다 — 재시도가 의미 있으려면 최소 하나의 파라미터(여기선 탐색 폭)가 달라져야 한다.
+
+---
+
+## [403] 테마주 가격 차트 없음 + 섹터 인포그래픽 없음 — 3개 버그 연쇄 (2026-07-11)
+
+- **증상**: 테마주 글에 대장주/부대장주 5년 월별 가격 차트 없음. 각 섹터 인포그래픽(`[CHART_N]...[/CHART_N]` 슬롯) 없이 글만 나열됨.
+- **환경**: `JARVIS09_COLLECTOR/collector_engine.py` → `JARVIS06_IMAGE/draft_processor.py` → `JARVIS06_IMAGE/infographic_engine.py`.
+- **버그 1 — entities에 rank/ticker 누락 (`collector_engine.py` 428번)**:
+  - `_stocks_to_entities()`가 entity dict에 `rank`와 `ticker` 키를 복사하지 않음.
+  - `draft_processor._inject_leader_price_charts()` 에서 `_by_rank = {e["rank"]: e for e in entities if e.get("rank")}` 가 항상 빈 dict 반환 → 폴백 경로에서 대장주/부대장주를 찾지 못해 가격 차트 전혀 생성 불가.
+  - **해결**: `rank`와 `ticker` 키를 entity dict에 명시적 추가.
+- **버그 2 — draft_slot 미신뢰 (`infographic_engine.py` 950번)**:
+  - `_TRUSTED_PROVIDERS`에 `"draft_slot"` 없음 → `[CHART_N]...[/CHART_N]` 슬롯에서 파싱한 모든 데이터가 `_verify_dataset()` 실패 → `datasets = []` → `return ""`.
+  - ALL new-format 슬롯이 무조건 빈 이미지로 렌더됨.
+  - **해결**: `_TRUSTED_PROVIDERS`에 `"draft_slot"` 추가.
+- **버그 3 — 폴백 키 불일치 (`draft_processor.py` 368번)**:
+  - 가격 차트 폴백 경로에서 `stock.get("ticker")`를 참조하지만, 버그 1 수정 후에도 entities는 `ticker` 키를 가질 수도 있고 없을 수도 있음 → `code`를 백업으로 사용해야 함.
+  - **해결**: `_yf_ticker = stock.get("ticker") or stock.get("code") or ""` 로 교체.
+- **파일**: `JARVIS09_COLLECTOR/collector_engine.py`, `JARVIS06_IMAGE/infographic_engine.py`, `JARVIS06_IMAGE/draft_processor.py`.
+- **교훈**: 파이프라인 3단계(수집→대본→이미지)가 각자 독립적으로 실패해도 결과만 보면 "이미지 없음"으로 동일하게 보임. 각 단계의 출력을 단계별로 로그에 남겨야 어디서 끊겼는지 파악 가능.
+
+---
+
+## [402] slot_renderer — 차트 슬롯 닫는 태그 인덱스 불일치/누락 시 원본 카탈로그 문법 본문 유출 → 사실성 게이트 오탐 차단 (2026-07-11)
+
+- **증상**: `harness:theme-publish-피지컬 AI/휴머노이드 로봇-naver` step `③ 네이버 대본 생성`에서 `RuntimeError: [사실성] 출처·웹 모두 확인 불가: 전북 피지컬AI 사업=7300`. 단위도 없고 문장 형태도 아닌 `라벨=값` 조각이 "주장"으로 잡혀 사실성 게이트에 막힘.
+- **환경**: `JARVIS06_IMAGE/slot_renderer.py` (`parse_chart_slots`). 호출 경로: `trend_theme_writer.py` → `JARVIS06_IMAGE.draft_processor.process_draft()` → `_generate_charts()` Step 0 → `slot_renderer.render_slots_in_text()`.
+- **원인 (근본)**: `_SLOT_RE = re.compile(r"\[CHART_(\d+)\]\s*(.*?)\s*\[/CHART_\1\]")` 가 여는 태그와 *같은 인덱스*의 닫는 태그(`\1` 백레퍼런스)만 매칭. LLM이 `[CHART_2]...[/CHART_3]` 처럼 인덱스를 틀리거나 닫는 태그를 아예 빠뜨리면 정규식이 매칭 실패 → 해당 블록 전체(내부 카탈로그 문법 `데이터: 라벨=값` 포함)가 슬롯 처리 없이 원문 그대로 본문에 남음. 구형식 폴백(`[CHART_N: 설명]`) 정규식도 다른 문법이라 못 잡음 → `law_enforcer._extract_claims()` 가 이 raw 조각을 "본문 그대로" 주장으로 추출 → 단위 없어 `_NUMERIC_UNIT_RE` 매칭 안 됨 + 자연어 아니라 웹 검색도 확인 불가 → 차단.
+- **헛다리**: 없음 — ERRORS.md 전수 검색 결과 "출처·웹 모두 확인 불가" 계열 기존 항목([244][357][368][634][664][665][674][675][694][696][704][710][831])은 전부 *진짜 근거 없는 수치* 케이스였고, 이번처럼 *내부 문법 조각이 본문에 유출*된 케이스는 미기록 — 신규 버그 유형.
+- **해결**: `parse_chart_slots()` 를 라인 단위 관용 파서로 교체. 여는 태그(`_SLOT_OPEN_RE`) 이후, 필드 라인(제목/단위/데이터/출처/종류 — `_FIELD_LINE_RE`)이거나 빈 줄인 동안만 소비하고 ① 임의 인덱스의 닫는 태그를 만나면 그 줄까지 포함해 종료 ② 필드 아닌 줄을 만나면(닫는 태그 없어도) 즉시 종료 — 두 경우 모두 뒤 문단은 절대 삼키지 않음. `render_slots_in_text()` 는 그 `raw` 구간을 검증 실패 시 구형식 플레이스홀더(`[CHART_N: 제목]`)로 강등 → 기존 빈 슬롯/AI 사진 폴백 경로가 이어받음. `_SLOT_RE`(백레퍼런스 정규식) 완전 삭제.
+- **파일**: `JARVIS06_IMAGE/slot_renderer.py`.
+- **교훈**: LLM이 자체 정의한 마크업 문법(여는/닫는 태그 쌍)을 파싱할 때 *같은 인덱스* 매칭을 요구하는 정규식은 LLM의 인덱스 오기입 한 번에 전체 매칭이 깨진다. "거짓 차트 < 차트 없음" 철학처럼, 파서도 "느슨하게 관용적으로 소비 후 실패 시 빈 슬롯"이 "엄격 매칭 실패 시 원문 그대로 유출"보다 안전 — 특히 그 원문이 사실성 게이트 같은 하류 검증기를 오탐시킬 수 있는 내부 전용 문법일 때.
+
+---
+
+## [401] collector_engine + finance_provider — yfinance 무한 hang (타임아웃 없음) (2026-07-11)
+
+- **증상**: `run_self_repair_then_theme()` 실행 후 "1차 통합 실행" 로그에서 CPU 0.0%, 10분+ 무반응. `lsof`로 Yahoo Finance(`e2-bmr.ycpi.vip.twd.yahoo.com:https`) ESTABLISHED 소켓 확인. 프로세스 kill 필요.
+- **환경**: `JARVIS09_COLLECTOR/providers/finance_provider.py` + `JARVIS09_COLLECTOR/collector_engine.py`.
+- **원인**: `FinanceProvider.collect()`가 `yf.Ticker(ticker).history(period="2d")` 를 타임아웃 없이 호출 → Yahoo Finance 응답 없을 때 스레드 무한 대기. `collector_engine.py`의 `ThreadPoolExecutor` + `as_completed(futures)` + `fut.result()`에 타임아웃이 없어 hung 스레드가 전체 프로세스를 잠금.
+- **헛다리**: 없음.
+- **해결**:
+  1. `finance_provider.py`: `_TimeoutAdapter(HTTPAdapter)` + `_make_session(timeout=10)` 추가. yfinance에 10초 HTTP 타임아웃 세션 주입 (`yf.Ticker(ticker, session=sess).history(...)`).
+  2. `collector_engine.py collect_for_theme()`: `with ThreadPoolExecutor` → 수동 `exe = ThreadPoolExecutor()` + `as_completed(futures, timeout=90)` + `fut.result(timeout=30)` + `finally: exe.shutdown(wait=False)`. 90초 전체 상한, 개별 프로바이더 30초 상한. 타임아웃 프로바이더는 스킵 후 계속.
+  3. `collector_engine.py collect_research()`: 동일 패턴. `exe2 = ThreadPoolExecutor()` + `as_completed(q_futs, timeout=120)` + `broad_fut.result(timeout=120)` + `finally: exe2.shutdown(wait=False)`.
+- **파일**: `JARVIS09_COLLECTOR/providers/finance_provider.py`, `JARVIS09_COLLECTOR/collector_engine.py`, `JARVIS09_COLLECTOR/collect_theme.py`.
+- **★ 추가 발견 (2026-07-11)**: `collect_theme.py` line 554에도 `yf.Ticker(tk).history(period="5y")` 타임아웃 없는 호출 존재 — `stocks_to_datasets()` 대장주 주가 이력 수집이 주 스레드에서 동기 실행 → 2차 hang. `_make_yf_session(timeout=10)` + `shutdown(wait=False)` 동일 패턴으로 함께 수정.
+- **교훈**: `ThreadPoolExecutor`를 context manager(`with` 블록)로 쓰면 `shutdown(wait=True)`가 자동 호출 → hung 스레드가 있으면 프로그램 전체 잠금. 외부 HTTP API(yfinance·requests 등)를 ThreadPool에 넣을 때는 반드시: ① HTTP 레벨 타임아웃 ② `fut.result(timeout=N)` ③ `shutdown(wait=False)` 세 층 모두 필요. **yfinance 사용처를 전수 검색해야 한다** — `grep -rn "yf.Ticker\|yfinance" --include="*.py" .`으로 모든 호출 확인.
+
+---
+
+## [400] chart_data — 병렬 LLM 6개 + 2개 미수정 range(3) 루프 = TPM 초과로 plan_research 연쇄 스로틀 (2026-07-11)
+
+- **증상**: `collect_chart_data()` 실행 후 `collect_research()` → `plan_research()` 가 빈 응답(스로틀)으로 폴백. ERRORS [399] 에서 `plan_research` / `plan_data_sources` 의 외부 3회 루프를 수정했지만, `chart_data.py` 안의 LLM 호출 3곳은 수정 범위에서 누락됨.
+- **환경**: `JARVIS09_COLLECTOR/chart_data.py`. 호출 순서: `collect_chart_data()` (먼저) → `collect_research()` (나중).
+- **원인 (근본)**: `collect_chart_data()` 안에 LLM 스로틀 대량 발생 지점 3곳이 있었다.
+  1. `_expand_theme()` — `range(3)` 외부 루프, 빈 응답에 `continue` → 스로틀 시 9 스폰.
+  2. 병렬 series 추출 — `ThreadPoolExecutor(max_workers=6)` 로 최대 6개 LLM 동시 실행 → TPM 한도 초과.
+  3. `_relevance_filter()` — `range(3)` 외부 루프, 빈 응답에 `continue` → 스로틀 시 9 스폰.
+  이 세 곳이 연속으로 API를 소진하고, 그 직후 `collect_research()` → `plan_research()` 가 호출되면 API가 이미 스로틀 상태 → 빈 응답 → 폴백.
+- **헛다리**: ERRORS [399]에서 `research_planner` / `data_planner` 만 수정하고 `chart_data.py` 는 같은 문제를 안고 있었는데 누락.
+- **해결**:
+  1. `_expand_theme()`: `range(3)` → `range(2)` + 빈 응답 즉시 `break` + 예외 즉시 `break`.
+  2. `ThreadPoolExecutor(max_workers=6)` → `max_workers=2` — 동시 LLM 호출 6→2.
+  3. `_relevance_filter()`: `range(3)` → `range(2)` + 빈 응답 즉시 `break`.
+- **파일**: `JARVIS09_COLLECTOR/chart_data.py`.
+- **교훈**: "LLM 호출이 있는 함수는 전부 빈 응답 즉시 break 여부를 확인해야 한다." 수정 시 단일 파일만 보면 같은 패턴이 다른 파일에도 잔존. `chart_data.py` 처럼 한 함수 안에서 설계(plan_data_sources) + 동의어 확장(_expand_theme) + 병렬 추출 + 관련성 게이트(_relevance_filter) 가 모두 LLM을 부르는 구조는 누적 TPM 소비가 매우 크다 — 병렬 워커 수 상한이 핵심 레버.
+
+---
+
+## [399] 연구 설계·데이터 설계 — 외부 3회 루프가 스로틀 시 회로차단기 연속 개방 (2026-07-10)
+
+- **증상**: 블로그 발행 파이프라인에서 LLM 연구 설계(`plan_research`) / 데이터 설계(`plan_data_sources`) 단계가 폴백 처리되고, 이후 대본 생성·품질 게이트 LLM 호출도 연쇄 차단.
+- **환경**: `JARVIS09_COLLECTOR/research_planner.py plan_research()` / `data_planner.py plan_data_sources()` 의 `for _attempt in range(3)` 외부 루프 + `invoke_text(..., _essential=True)` 내부 3회 재시도.
+- **원인 (근본)**: 두 함수 모두 **외부 3회 × 내부 3회 = 9번 스폰**을 시도한다. Max 구독 스로틀 시 `invoke_text()` 가 빈 응답을 반환하면 외부 루프는 즉시 재시도한다 — 즉, 스로틀된 상태에서 각 외부 시도마다 1회 `_circuit_record_throttle()` 가 호출된다. 외부 루프 3회 완료 시 연속 throttle 카운터 3 = `_CIRCUIT_THRESHOLD` 도달 → **회로 차단기 개방**. 이후 같은 파이프라인의 대본 생성·사실성 게이트·매력도 판정(alias=writer/fact_judge/engagement_judge) 모든 LLM 호출이 open 회로를 마주해 1샷 또는 즉시 폴백 처리됨. `_circuit_record_success()` 가 연속 카운터를 0으로 리셋하려면 1회 성공이 필요한데, 9번 모두 스로틀이면 리셋 기회가 없다.
+- **헛다리**: 없음 — `invoke_text()` 내부 재시도 로직과 외부 루프의 상호작용, `_circuit_record_throttle()` 호출 경로를 `shared/llm.py` 코드에서 직접 추적해 특정.
+- **해결**: `research_planner.plan_research()` / `data_planner.plan_data_sources()` 두 곳 모두 동일하게 수정:
+  1. `range(3)` → `range(2)` (외부 루프 상한 축소)
+  2. **빈 응답(Max 스로틀) 감지 즉시 `break` → 폴백** — 추가 스폰 0, throttle 레코드 1회에 고정.
+  3. 외부 루프 2번째 시도는 *응답은 있지만 JSON 파싱 실패* 인 경우만 진입 (온도 0.5 변주).
+  효과: 스로틀 시 스폰 9→3, throttle 레코드 3→1 → 회로 차단 임계(3회) 도달 방지. 대본·품질 게이트 LLM 호출 보호.
+- **파일**: `JARVIS09_COLLECTOR/research_planner.py`, `JARVIS09_COLLECTOR/data_planner.py`.
+- **교훈**: `invoke_text()` 내부에 이미 재시도 로직(3회 + 지수 백오프)이 있음에도 외부에 또 N회 루프를 두면, 스로틀 시 N번의 연속 throttle 레코드가 누적된다 — 회로 차단기가 N-shot 내에 개방되어 후속 호출 전체를 막는다. 외부 재시도는 **응답은 왔으나 파싱 실패** 케이스에만 의미가 있고, **빈 응답(스로틀)** 케이스에서는 즉시 폴백이 옳다. "결정론 폴백은 나쁜 것이 아니라, 회로가 닫힌 상태를 보존해 대본 생성에 LLM 기회를 넘겨주는 선택"이다.
+
+---
+
+## [398] cookie_needs_refresh() 유효 확인해도 mtime 미리셋 → naver precondition 무한 재발 오판 (2026-07-10)
+
+- **증상**: harness `theme-publish-파운드리-naver` precondition 이 `RuntimeError: [harness:theme-publish-파운드리-naver] attempt=1 step=① 전제조건: naver 로그인 세션 무효 — 쿠키 만료 임박 (15.2h > 10h)` 로 실패 보고(source=harness, module=`JARVIS00_INFRA.harness.theme-publish-파운드리-naver`, func_name=`① 전제조건`).
+- **환경**: `JARVIS02_WRITER/trend_theme_writer.py` `_verify_theme_platform()` 의 [L1] 로그인 세션 검증 — `login_manager.auto_refresh_if_needed()` 호출 직후 `login_manager.verify_all_logins()` 로 판정. `verify_all_logins()`(`JARVIS08_PUBLISH/credentials/login_manager.py:178-180`)는 `naver_cookie_age_hours()`(=`naver_cookies.pkl` mtime 경과시간)가 10h 초과면 실제 세션 유효 여부와 무관하게 "쿠키 만료 임박" issue 를 추가.
+- **원인 (근본)**: `auto_refresh_if_needed()` → `refresh_naver_cookies(force=False)` → `naver_cookie_refresher.cookie_needs_refresh()` 흐름에서, 파일 나이가 `COOKIE_MAX_AGE_HOURS`(10h) 를 넘으면 `check_cookie_valid()` 로 *실제* 네이버 로그인 상태(HTTP 요청)를 재확인하지만, 유효 판정이 나와도 쿠키 파일의 mtime 을 갱신하지 않았다. 그 결과 `refresh_naver_cookies(force=False)` 는 "갱신 불필요"로 조용히 스킵하고 Selenium 전체 재로그인(mtime 을 실제로 리셋하는 유일한 경로)은 일어나지 않아, 파일 나이는 계속 10h 를 초과한 상태로 남는다. 이후 매번 `verify_all_logins()` 가 동일하게 "쿠키 만료 임박"을 재보고 — 세션이 실제로는 멀쩡한데도 precondition 이 무한히 "세션 무효"로 오판하는 자기영속적 버그.
+- **헛다리**: 없음 — `login_manager.py`/`naver_cookie_refresher.py` 를 정독해 age 기준 판정과 실유효성 확인(`check_cookie_valid()`) 사이의 결과 불일치를 코드 상에서 바로 특정. `.venv` 로 `cookie_needs_refresh()` 를 실행해 실제로 "✅ 쿠키 유효" 인데도 mtime 이 리셋되지 않는 것을 재현 확인 후 수정.
+- **해결**: `naver_cookie_refresher.cookie_needs_refresh()` — 파일 나이가 `COOKIE_MAX_AGE_HOURS` 초과해 `check_cookie_valid()` 를 호출하는 분기에서, 유효 판정(`still_valid=True`) 시 `COOKIE_FILE.touch()` 로 mtime 을 지금 시점으로 리셋하도록 추가. 실행 후 `naver_cookie_age_hours()` 가 15.4h → 0.00h 로 리셋되고 `login_manager.verify_all_logins()["naver"]["ok"]` 가 `True` 로 전환됨을 직접 실행해 확인.
+- **파일**: `JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py`.
+- **교훈**: "실제 유효성을 재확인하는 함수"와 "그 결과를 캐시(mtime)로 기억하는 책임"이 분리돼 있으면, 확인은 매번 성공해도 그 결과가 기록되지 않아 상위 판정 로직(파일 나이 기반)이 영원히 낡은 신호만 본다. 유효성을 실측하는 지점에서 *반드시* 그 결과를 다음 판정의 기준값(mtime)에도 반영해야 한다 — 그렇지 않으면 "확인은 계속 통과하는데 판정은 계속 실패"하는 모순이 재발한다.
+
+---
+
 ## [397] radar_main.py 순차 네트워크 루프에 beat() 미배선 — [394] 후속 조치 완료 (2026-07-10)
 
 - **증상**: watchdog 이 `트렌드 수집 실패 (rc=75): ... [watchdog] 🛑 '레이더 수집': 멈춤(freeze) 1548s > 300s` RuntimeError 보고(source=radar, module=`JARVIS03_RADAR.jobs`). rc=75 는 스크립트 자체 실패가 아니라 `JARVIS00_INFRA/watchdog.py` 의 freeze 감시 스레드가 `os._exit(75)`(EX_TEMPFAIL)로 강제 종료한 결과 — stderr 에 찍힌 `RequestsDependencyWarning` 은 우연히 같이 출력된 무관한 경고일 뿐 원인이 아님.
@@ -7094,3 +7510,39 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **해결**: 전수 grep(`Sonnet 4.[0-9]`, `Opus 4.[0-7]`, `Haiku\b`, `claude-haiku`) → 10+ 파일 주석·docstring 일괄 수정. 최소 버전 = Sonnet 5. Haiku는 완전 폐지(detection 패턴으로만 존재 허용).
 - **파일**: 위 열거 10+ 파일 (코드 런타임 변경 0 — 주석·docstring만)
 - **교훈**: 런타임 단일 진입점(`shared/llm.py MODELS` dict)이 정확해도 주석이 구버전이면 다음 작업자가 혼동함. 모델 정책 변경 시 런타임 + 주석·docstring 동시 전수 스크럽 의무.
+
+## [402] 네이버 제목이 본문에 입력 — pyautogui Cmd+V → OS focus(본문) 전달 (2026-07-11)
+- **증상**: 네이버 발행 시 글 제목이 제목 칸이 아닌 본문 맨 앞에 입력됨. 경제 브리핑·테마주 모두 동일.
+- **환경**: `JARVIS08_PUBLISH/platforms/naver_poster.py` `_paste_title()` / SmartEditor ONE
+- **원인**: `_focus_title()`은 JS `execute_script`로 DOM-level focus만 제목 칸으로 이전. 그러나 `_pg2.hotkey('command', 'v')` (pyautogui HID 이벤트)는 OS-level focus 기준으로 키 이벤트 전달. SmartEditor ONE이 페이지 로드 시 본문 에디터에 OS focus를 자동 설정하므로, JS DOM focus가 제목 칸에 있어도 pyautogui Cmd+V는 OS focus가 있는 본문에 전달.
+- **헛다리**: `_focus_title()` 자체는 정상 동작 (JS click/focus로 DOM focus 이전 성공).
+- **해결**: `_paste_title()` 내 `_pg2.hotkey('command', 'v')` → `ActionChains(driver).key_down(Keys.COMMAND).send_keys('v').key_up(Keys.COMMAND).perform()`. ActionChains는 ChromeDriver CDP 프로토콜로 전달 → OS focus 무관하게 브라우저 DOM focus(제목 칸) 직접 전달.
+- **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` 816번 줄
+- **교훈**: SmartEditor ONE 같은 리치 에디터에서 JS focus + pyautogui HID 조합은 OS/DOM focus 불일치로 버그 발생. 에디터 내 입력은 반드시 Selenium ActionChains CDP 방식 사용.
+
+## [403] 성과 수집 watchdog 데드라인 초과(블로킹) — deadline_sec 1800 하드코딩 미스매치 (2026-07-11)
+- **증상**: watchdog 이 "정지 감지 — 성과 수집: 데드라인 초과(블로킹) 1979s > 1800s" RuntimeError 보고(source=watchdog, module=`JARVIS00_INFRA.watchdog`, func_name=`성과 수집`). traceback 은 `NoneType: None`(watchdog 이 직접 report 로 생성한 인공 RuntimeError, freeze 오탐 아님).
+- **환경**: `JARVIS03_RADAR/performance_collector.py` `__main__` — `guard_main("성과 수집", deadline_sec=1800)`.
+- **원인**: [150]에서 글 단위 `_wd_beat()` 를 추가해 "무진전(freeze)" 오탐은 이미 해결됐으나, 이번 건은 `Watchdog._monitor()` 의 별개 분기(`elapsed > deadline_sec` — 협조적 check 밖의 블로킹 전체 데드라인)로, beat 는 정상 갱신되는데도 순수하게 총 소요시간이 30분을 넘김. `deadline_sec=1800` 은 블로그 발행 액션(네이버/티스토리 각 30분, `BLOG_ACTION_DEADLINE_SEC`) 용 값이 복붙된 것으로, 성과 수집은 100+글을 순차로 스크래핑(글당 최대 requests 15초×3후보+rank API 10초+sleep 1.3초)하는 별개 성격의 배치 작업이라 애초에 그 값이 부적합. 발행 글이 늘어나며 실제로 30분을 초과.
+- **헛다리**: 없음 — [150]을 먼저 대조해 동일 모듈·잡의 *다른* 판정 분기(freeze 아닌 블로킹 데드라인)임을 바로 특정.
+- **해결**: `deadline_sec=1800` → `DEFAULT_ACTION_DEADLINE_SEC`(3600, "그 외 액션" 60분 안전망) 로 교체. `job_registry.py` 의 `radar_perf` misfire_grace_time(3600) 과도 정합.
+- **파일**: `JARVIS03_RADAR/performance_collector.py`
+- **교훈**: `guard_main(deadline_sec=...)` 호출 시 숫자를 다른 액션에서 복붙하지 말고 작업 성격(단발 selenium 발행 vs N건 순차 배치)에 맞는 워치독 SSOT 상수(`BLOG_ACTION_DEADLINE_SEC` vs `DEFAULT_ACTION_DEADLINE_SEC`)를 그대로 import 해서 쓸 것 — 값이 같은 파일(watchdog.py)에 이미 정의돼 있음에도 호출부마다 raw 숫자를 재입력하면 작업량 증가에 따라 재발.
+
+---
+### [2026-07-11 05:01] ✅ 자동수정 — RuntimeError
+- **증상**: 트렌드 수집 실패 (rc=75): it__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+[watchdog] 🛑 '레이더 수집': 멈춤(f
+- **모듈**: JARVIS03_RADAR.jobs
+- **원인**: `_run_sdk_sync`/`_invoke_sdk_vision`이 전역 세마포어(`_LLM_SPAWN_SEM`, 기본 동시성 1)를 plain `with`으로 블로킹 획득하는데, 이 대기 구간에는 워치독 heartbeat(`_wd_beat()`)가 전혀 호출되지 않는다. 다른 에이전트가 세마포어를 오래 점유 중이면 RADAR 등 대기자는 정상적으로 순서를 기다리는 것뿐인데도 진행 신호가 300초 넘게 끊겨 워치독이 freeze로 오판, `os._exit(75)`로 강제 종료된다. 세마포어 획득을 타임아웃 폴링 방식으로 바꿔 대기 중에도 주기적으로 beat를 보내면 해결된다.
+- **파일**: shared/llm.py
+- **해결**: 자동 수정 적용
+
+---
+### [2026-07-11 05:22] ✅ 자동수정 — RuntimeError
+- **증상**: [harness:성과 수집] attempt=1 step=① 성과 수집: RuntimeError: 성과 수집 실패 (rc=75): _init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a support
+- **모듈**: JARVIS00_INFRA.harness.성과 수집
+- **원인**: `_collect_naver_views`/`_collect_tistory_views`/`_collect_naver_rank` 내부의 `requests.get(..., timeout=N)`은 TCP 연결·응답 타임아웃만 보장할 뿐, DNS 조회(getaddrinfo)가 멈추거나 소켓 레벨에서 무응답이 발생하면 지정한 timeout을 넘겨 무한정 블로킹될 수 있다(이전 ERRORS [401] yfinance hang과 동일 근본 원인 클래스). 이 파일은 게시글 1건당 한 번만 `_wd_beat()`를 호출하므로, 특정 게시글 처리 중 위와 같은 소켓 레벨 hang이 발생하면 300초 무진전 기준을 넘겨 watchdog이 freeze로 판단해 `os._exit(75)`로 강제 종료시킨다. `RequestsDependencyWarning`은 종료 시점에 버퍼에 남아있던 무해한 경고 텍스트일 뿐 실제 원인이 아니다.
+- **파일**: JARVIS03_RADAR/performance_collector.py
+- **해결**: 자동 수정 적용

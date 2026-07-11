@@ -5,11 +5,21 @@
    호출자는 이 모듈만 import.
 """
 from __future__ import annotations
+import concurrent.futures as _cf
 import logging
 from . import BaseProvider
 from ..models import RawDocument
 
 log = logging.getLogger("jarvis.collector.economic")
+
+
+# ★ yfinance 1.x 는 curl_cffi 세션만 지원 — requests.Session 주입 금지 (ERRORS [407])
+# 타임아웃은 ThreadPoolExecutor + future.result(timeout=N) 로 대체.
+def _yf_with_timeout(fn, timeout: int = 15):
+    """yfinance 호출을 별도 스레드로 실행, timeout 초 내 완료 보장."""
+    with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(fn)
+        return fut.result(timeout=timeout)
 
 
 # ── 시장 데이터 (yfinance) ─────────────────────────────────────────
@@ -38,7 +48,11 @@ def get_market_data() -> dict:
     result = {}
     for name, ticker in _MARKET_TICKERS.items():
         try:
-            hist = yf.Ticker(ticker).history(period="2d")
+            # ★ session= 제거 (ERRORS [407]): yfinance 1.x는 curl_cffi 세션만 허용
+            #   타임아웃은 futures로 대체 (ERRORS [401] hang 방지 유지)
+            def _fetch(t=ticker):
+                return yf.Ticker(t).history(period="2d")
+            hist = _yf_with_timeout(_fetch, timeout=15)
             if len(hist) >= 2:
                 prev = hist["Close"].iloc[-2]
                 curr = hist["Close"].iloc[-1]
@@ -51,6 +65,20 @@ def get_market_data() -> dict:
                 result[name] = {"value": round(curr, 2), "change": 0.0, "as_of": as_of}
         except Exception as e:
             log.warning(f"[EconData] {name} 수집 실패: {e}")
+    # ★ 한국은행 공식 지표 병합 (기준금리·달러원·CPI) — BOK_ECOS_KEY 미설정 시 자동 스킵
+    try:
+        from .bok_provider import get_bok_indicators
+        for name, info in get_bok_indicators().items():
+            result[name] = {
+                "value": float(info["value"]) if info["value"] else 0.0,
+                "change": None,           # BOK 지표는 전일비 미제공
+                "as_of": info["as_of"],
+                "unit": info["unit"],
+                "source": info["source"],
+            }
+    except Exception as e:
+        log.warning(f"[EconData] BOK 지표 병합 실패: {e}")
+
     log.info(f"[EconData] 시장 데이터 수집 완료: {len(result)}개 지표")
     return result
 
@@ -79,7 +107,15 @@ def get_economic_calendar() -> list:
             },
             timeout=15,
         )
-        html = res.json().get("data", "")
+        if not res.ok or not res.content.strip():
+            log.debug(f"[EconData] 경제 캘린더 응답 없음 (status={res.status_code}) — 건너뜀")
+            return []
+        try:
+            payload = res.json()
+        except Exception:
+            log.debug("[EconData] 경제 캘린더 응답이 JSON이 아님 (Cloudflare 차단 추정) — 건너뜀")
+            return []
+        html = payload.get("data", "")
         soup = BeautifulSoup(html, "html.parser")
         events = []
         for row in soup.select("tr[id^='eventRowId']"):
@@ -103,7 +139,7 @@ def get_economic_calendar() -> list:
         log.info(f"[EconData] 경제 캘린더 수집 완료: {len(events[:8])}건")
         return events[:8]
     except Exception as e:
-        log.warning(f"[EconData] 경제 캘린더 수집 실패: {e}")
+        log.info(f"[EconData] 경제 캘린더 수집 실패 (네트워크/차단): {type(e).__name__}")
         return []
 
 
@@ -115,7 +151,9 @@ def get_ticker_history(ticker: str, period: str = "2d", interval: str = "1d"):
     """
     import yfinance as yf
     try:
-        return yf.Ticker(ticker).history(period=period, interval=interval)
+        def _fetch():
+            return yf.Ticker(ticker).history(period=period, interval=interval)
+        return _yf_with_timeout(_fetch, timeout=15)
     except Exception as e:
         log.warning(f"[EconData] 티커 히스토리 실패 ({ticker}): {e}")
         return None
@@ -125,10 +163,12 @@ def download_ticker(ticker: str, start: str, end: str = None, interval: str = "1
     """yfinance.download 래퍼 — JARVIS06_IMAGE 차트 생성 시 호출."""
     import yfinance as yf
     try:
-        kwargs = {"start": start, "interval": interval}
-        if end:
-            kwargs["end"] = end
-        return yf.download(ticker, **kwargs)
+        def _fetch():
+            kwargs = {"start": start, "interval": interval}
+            if end:
+                kwargs["end"] = end
+            return yf.download(ticker, **kwargs)
+        return _yf_with_timeout(_fetch, timeout=15)
     except Exception as e:
         log.warning(f"[EconData] download 실패 ({ticker}): {e}")
         return None

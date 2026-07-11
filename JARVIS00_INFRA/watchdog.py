@@ -99,12 +99,15 @@ class Watchdog:
         self._last_beat = time.time()
 
     def elapsed(self) -> float:
+        """실질 경과 시간. 절전 구간은 _monitor() 가 감지 시 self._start 를 함께
+        미뤄 자동 제외한다 (ERRORS [396] 후속 — freeze 오탐만 고치고 deadline 오탐은
+        self._start 미조정으로 남아있던 것을 여기 elapsed()/check() 공용 계산으로 정리)."""
         return time.time() - self._start if self._start else 0.0
 
     # ── 협조적 데드라인 체크 (스텝/시도 사이) ──
     def check(self) -> None:
         """데드라인 초과면 StuckError. 스텝·시도 사이에서 호출 (안전한 중단점)."""
-        if self.deadline_sec and self._start and (time.time() - self._start) > self.deadline_sec:
+        if self.deadline_sec and self._start and self.elapsed() > self.deadline_sec:
             self.stuck_reason = (f"데드라인 초과 {self.elapsed():.0f}s > {self.deadline_sec:.0f}s "
                                  f"({self.deadline_sec/60:.0f}분)")
             raise StuckError(self.stuck_reason)
@@ -126,12 +129,18 @@ class Watchdog:
                 log.info(f"[watchdog] 💤 '{self.name}' 감시 루프 간격 {gap:.0f}s(기대 {self.poll_sec:.0f}s) "
                          f"— 시스템 절전 감지, 이번 틱 freeze/데드라인 판정 유예")
                 self._last_beat = now
+                # ★ ERRORS [396] 후속 — freeze 오탐만 면제하고 self._start 는 그대로 두면
+                #   절전 구간이 wall-clock elapsed 에 그대로 누적되어 다음 틱(들)에서
+                #   "데드라인 초과(블로킹)" 오탐으로 재발한다(elapsed()/check()/이 분기 모두
+                #   self._start 기준). 절전으로 흘러간 시간만큼 시작점을 함께 미뤄야
+                #   deadline_sec 이 "실제 진행 시간" 기준으로 유지된다.
+                self._start += gap
                 continue
             # freeze = 로컬 beat(스텝 사이) 와 전역 beat(LLM·수집 등 진행) 중 *최근* 것 기준
             #   → 오래 걸리는 정상 작업(LLM 반복 호출 등)은 전역 beat 로 살아있음 = 오탐 방지
             last = max(self._last_beat, _GLOBAL_BEAT[0])
             frozen = (now - last) if last else 0.0
-            elapsed = (now - self._start) if self._start else 0.0
+            elapsed = self.elapsed()
             reason = None
             if frozen > self.freeze_sec:
                 reason = f"멈춤(freeze) {frozen:.0f}s > {self.freeze_sec:.0f}s 무진전"

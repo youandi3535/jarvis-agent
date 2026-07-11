@@ -316,7 +316,7 @@ def generate_article_html(
 
     # Pass-1 선택: 기존(느림) vs 섹션별 병렬(빠름)
     # 기본: 섹션별 병렬로 생성하고, 오류 시 기존 방식 폴백
-    raw = _generate_text_pass1_parallel(keyword, sector, reason, supreme_block, platform)
+    raw = _generate_text_pass1_parallel(keyword, sector, reason, supreme_block, platform, ref_datasets)
     if not raw:
         print("  ⚠️ [Pass-1 병렬] 실패 → 기존 방식 재시도...")
         raw = _generate_complete_article_cli(keyword, sector, reason, supreme_block, platform, pass2=pass2)

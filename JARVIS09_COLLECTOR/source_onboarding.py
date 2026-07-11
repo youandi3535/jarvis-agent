@@ -64,11 +64,11 @@ SOURCE_REGISTRY: dict[str, dict] = {
     },
     "ecos": {
         "name": "한국은행 ECOS OpenAPI",
-        "env_keys": ["ECOS_API_KEY"],
+        "env_keys": ["BOK_ECOS_KEY"],
         "signup_url": "https://ecos.bok.or.kr/api/#/AuthKeyApply",
         "mode": "assisted",
         "steps": ("① 이메일 회원가입 → 인증키 신청 (즉시)\n"
-                  "② .env 에 ECOS_API_KEY=... 추가"),
+                  "② .env 에 BOK_ECOS_KEY=... 추가"),
         "value": "기준금리·환율·물가 등 거시 시계열 — 경제 글 차트 원천",
     },
     "kosis": {

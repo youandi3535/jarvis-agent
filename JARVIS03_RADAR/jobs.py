@@ -23,9 +23,16 @@ except ImportError:
 # ─────────────────────────────────────────────────────
 
 try:
-    from JARVIS00_INFRA.watchdog import WATCHDOG_KILL_RC
+    from JARVIS00_INFRA.watchdog import WATCHDOG_KILL_RC, DEFAULT_ACTION_DEADLINE_SEC
 except ImportError:
     WATCHDOG_KILL_RC = 75
+    DEFAULT_ACTION_DEADLINE_SEC = 3600
+
+# ★ subprocess 외곽 timeout — 내부 guard_main(deadline_sec=DEFAULT_ACTION_DEADLINE_SEC) 보다
+#   짧으면 내부 워치독이 판단하기 전에 subprocess.run 이 먼저 TimeoutExpired 로 강제킬해
+#   "정지 감지" 대신 "타임아웃" 오진단이 나고, 정상 장시간 작업도 무조건 실패 처리된다
+#   (radar_main.py/performance_collector.py 둘 다 이 값으로 감싸이므로 여기서 한 번만 정합).
+_SUBPROCESS_TIMEOUT_SEC = DEFAULT_ACTION_DEADLINE_SEC + 300  # 내부 데드라인 + 5분 여유
 
 _log = logging.getLogger("radar.jobs")
 _RADAR_DIR = Path(__file__).parent
@@ -47,7 +54,7 @@ def _run_script_checked(script: Path, args: list = None, label: str = "") -> Non
     try:
         result = subprocess.run(
             cmd, cwd=str(script.parent),
-            capture_output=True, text=True, timeout=600,
+            capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_SEC,
         )
         for line in (result.stdout or "").strip().splitlines()[-15:]:
             _log.info(f"  {line}")
@@ -67,7 +74,7 @@ def _run_script_checked(script: Path, args: list = None, label: str = "") -> Non
             raise RuntimeError(f"{lbl} 실패 (rc={result.returncode}): {err_tail[:200]}")
         _log.info(f"✅ {lbl} 완료")
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"{lbl} 타임아웃 (600s)")
+        raise RuntimeError(f"{lbl} 타임아웃 ({_SUBPROCESS_TIMEOUT_SEC:.0f}s)")
 
 
 def _run_with_harness(
@@ -172,6 +179,23 @@ def job_collect_trends() -> None:
         _run_script_checked(_RADAR_DIR / "radar_main.py", label="트렌드 수집")
 
     _run_with_harness("트렌드 수집", _run, verify_fn=_verify_trends)
+
+    # ★ 트렌드 수집 완료 직후 topic_pack 즉석 생성 (사용자 박제 2026-07-11 — ERRORS [406])
+    # CLAUDE_RADAR.md "job_collect_trends 말미 자동 생성" 규정 구현.
+    # 목적: 06:30 경제 포스터가 _tp_pick() 즉시 성공 → pack 재생성 LLM 호출 불필요.
+    #       LLM 경합(트렌드수집↔대본생성↔pack생성 동시) → rate-limit throttle 연쇄를 원천 차단.
+    # 실패해도 06:30 포스터가 _tp_build() 즉석 폴백(기존 동작) → 발행 안 막음.
+    try:
+        from JARVIS03_RADAR.topic_pack import build_topic_pack as _btp
+        _pack = _btp()
+        if _pack:
+            cands = len((_pack.get("candidates") or []))
+            _log.info(f"✅ [topic_pack] 사전 생성 완료: {cands}개 후보")
+        else:
+            _log.warning("[topic_pack] 사전 생성 실패 — 06:30 포스터에서 즉석 재시도")
+    except Exception as _e:
+        _log.warning(f"[topic_pack] 사전 생성 예외 (발행은 폴백으로 계속): {_e}")
+        _g_report("radar", _e, module=__name__)
 
 
 def job_collect_performance() -> None:

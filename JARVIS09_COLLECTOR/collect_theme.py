@@ -71,8 +71,15 @@ import pandas as pd
 # 옛: matplotlib·plt·fm·mpatches·FancyBboxPatch·Circle 직접 import
 #     → 차트 함수들이 모두 JARVIS06_IMAGE.theme_charts 에 이관됨 (이미 _mpl_setup 으로 Agg 백엔드 설정).
 # 새: JARVIS06_IMAGE.theme_charts 만 import — collect_theme.py 안에서 matplotlib 직접 사용 0.
+import concurrent.futures as _cf
 import yfinance as yf
 from dotenv import load_dotenv
+
+
+# ★ yfinance 1.x 는 curl_cffi 세션만 지원 — requests.Session 주입 금지 (ERRORS [407])
+def _yf_with_timeout(fn, timeout: int = 15):
+    with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(fn).result(timeout=timeout)
 
 load_dotenv()
 
@@ -551,7 +558,9 @@ def stocks_to_datasets(stocks_data: dict, max_stocks: int = 8) -> list[dict]:
         hist_df = pd.DataFrame()
         for tk in alt_tickers:
             try:
-                h = yf.Ticker(tk).history(period="5y")
+                def _fetch(t=tk):
+                    return yf.Ticker(t).history(period="5y")
+                h = _yf_with_timeout(_fetch, timeout=15)
                 if not h.empty and len(h) >= 6:
                     hist_df = h
                     break
@@ -903,15 +912,22 @@ def collect_stocks_data(theme_name: str) -> dict:
             "is_profit":  (fin.get("net_income") or 0) > 0,
         }
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futures = {ex.submit(_enrich, p): p for p in pairs}
-        for fut in as_completed(futures):
-            try:
-                stocks.append(fut.result(timeout=15))
-            except Exception as e:
-                p = futures[fut]
-                print(f"  ⚠️ [stocks_data] _naver_fin 실패 ({p['name']}): {e}")
-                stocks.append({**p, "price": None, "marcap": None, "is_profit": False})
+    # ★ shutdown(wait=False): 타임아웃된 스레드 버리고 즉시 진행 (ERRORS [401])
+    _enrich_ex = ThreadPoolExecutor(max_workers=4)
+    try:
+        futures = {_enrich_ex.submit(_enrich, p): p for p in pairs}
+        try:
+            for fut in as_completed(futures, timeout=60):
+                try:
+                    stocks.append(fut.result(timeout=15))
+                except Exception as e:
+                    p = futures[fut]
+                    print(f"  ⚠️ [stocks_data] _naver_fin 실패 ({p['name']}): {e}")
+                    stocks.append({**p, "price": None, "marcap": None, "is_profit": False})
+        except Exception:
+            pass  # 전체 타임아웃 — 수집된 것만 사용
+    finally:
+        _enrich_ex.shutdown(wait=False)
 
     # 시총 큰 순 정렬 + rank 부여
     stocks.sort(key=lambda s: (s.get("marcap") or 0), reverse=True)

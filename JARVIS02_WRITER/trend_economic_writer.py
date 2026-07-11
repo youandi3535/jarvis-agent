@@ -1292,8 +1292,13 @@ def ts_collect(nv_keyword: str = '', supreme_block=None) -> dict:
         else:
             _cand = _tp_pick(exclude_keyword=nv_keyword)
             if _cand is None:
-                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행")
-                _tp_build()
+                # ★ ERRORS [404]: 팩이 publish_slots(=2)개만 박제(ERRORS [384])되므로
+                #   fit 후보가 1개뿐이면 네이버가 선점한 뒤 재빌드해도 동일 1개만
+                #   재생산돼 티스토리가 영구 소진. 소진 복구 재빌드만 max_candidates
+                #   를 넓혀 더 깊은 후보 풀에서 fit 대안을 찾는다(평시 프로파일링
+                #   비용은 그대로 — ERRORS [384] 원칙 유지, 소진 시에만 예외).
+                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행(확장 재탐색)")
+                _tp_build(max_candidates=8)
                 _cand = _tp_pick(exclude_keyword=nv_keyword)
             if _cand is None:
                 return {"success": False, "keyword": "",
@@ -1325,8 +1330,14 @@ def ts_collect(nv_keyword: str = '', supreme_block=None) -> dict:
         _kw_collection_docs: list = []
         try:
             from JARVIS09_COLLECTOR import collect_research, collect_chart_data
+            try:
+                from shared.pipeline_activity import mark_active
+                mark_active(["e1", "e2"])  # J03→J09 선수집 요청, J09→J02 데이터 전달
+            except Exception:
+                pass
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
-            _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
+            _chart = collect_chart_data(keyword, sector=sector, description=reason,
+                                        synonyms=_cand.get("synonyms")) or {}
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
@@ -1424,10 +1435,11 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
     try:
         from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
         from JARVIS06_IMAGE.draft_processor import process_draft
-        from pathlib import Path as _P9
 
         # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
+        _ref_ds_ts = getattr(collected, "datasets", None) or []
         draft_html = generate_article_html(keyword, sector, reason, supreme_block,
+                                           ref_datasets=_ref_ds_ts,
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
@@ -1440,26 +1452,7 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
         html_path = result.get("html_path", "")
         img_dir = str(TISTORY_IMG_DIR)
         visual_paths = []
-        blocks = result["blocks"]
-        # 썸네일 맨 앞 (process_draft 가 필수 생성 — 누락 0)
-        thumb_path = result.get("thumbnail_path")
-        if thumb_path and _P9(thumb_path).exists():
-            blocks = [("image", str(thumb_path))] + blocks
-
-        # 검증
-        try:
-            from JARVIS02_WRITER.jarvis_main import enforce_text_between_images
-            blocks = enforce_text_between_images(blocks, source='TISTORY-DRAFT')
-        except Exception as _ee:
-            print(f"  ⚠️ enforce_text_between_images(tistory-draft) 오류 (무시): {_ee}")
-            _g_report("writer", _ee, module=__name__)
-
-        try:
-            from JARVIS02_WRITER.law_enforcer import enforce_supreme_law, notify_violations
-            blocks, _ts_v = enforce_supreme_law(blocks, "tistory", "Tistory-경제글")
-            notify_violations(_ts_v, "tistory", "Tistory-경제글")
-        except Exception:
-            _g_report("writer", Exception(), module=__name__)
+        blocks = result["blocks"]  # J06 이 썸네일 prepend + 법률집행 완료
 
         print(f"  ✅ [TISTORY-DRAFT] 완료: {keyword}")
         return {
@@ -1490,25 +1483,22 @@ def ts_publish(draft: dict) -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
     try:
+        from JARVIS06_IMAGE.draft_processor import publish_assembled
         from JARVIS08_PUBLISH.platforms import post_to_tistory
-        print(f"  📤 [TISTORY-PUB] 발행 중...")
+        print(f"  📤 [TISTORY-PUB] J06→J08 발행 중...")
         keyword = draft['keyword']
         blocks = draft['blocks']
         html = draft['html']
 
-        try:
-            from JARVIS02_WRITER.law_enforcer import enforce_supreme_law, notify_violations
-            blocks, _ts_v = enforce_supreme_law(blocks, "tistory", "Tistory-경제글-발행")
-            notify_violations(_ts_v, "tistory", "Tistory-경제글-발행")
-        except Exception:
-            pass
+        def _pub_fn(blocks, title, **_kw):
+            return post_to_tistory(
+                title=title,
+                html_content=draft['content'],
+                blocks=blocks,
+                category=ECONOMIC_CATEGORY,
+            )
 
-        result = post_to_tistory(
-            title=draft['title'],
-            html_content=draft['content'],
-            blocks=blocks,
-            category=ECONOMIC_CATEGORY,
-        )
+        result = publish_assembled(draft, _pub_fn, "tistory")
 
         if result:
             # ★ DB 기록 (ERRORS [370]): 성공 발행 → on_post_published_detail 이 posts·post_analysis
@@ -1567,8 +1557,9 @@ def nv_collect(ts_keyword: str = '', supreme_block=None) -> dict:
         else:
             _cand = _tp_pick(exclude_keyword=ts_keyword)
             if _cand is None:
-                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행")
-                _tp_build()
+                # ★ ERRORS [404] — ts_collect 와 동일 사유로 소진 복구 재빌드만 확장 재탐색.
+                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행(확장 재탐색)")
+                _tp_build(max_candidates=8)
                 _cand = _tp_pick(exclude_keyword=ts_keyword)
             if _cand is None:
                 return {"success": False, "keyword": "",
@@ -1600,8 +1591,14 @@ def nv_collect(ts_keyword: str = '', supreme_block=None) -> dict:
         _kw_collection_docs: list = []
         try:
             from JARVIS09_COLLECTOR import collect_research, collect_chart_data
+            try:
+                from shared.pipeline_activity import mark_active
+                mark_active(["e1", "e2"])  # J03→J09 선수집 요청, J09→J02 데이터 전달
+            except Exception:
+                pass
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
-            _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
+            _chart = collect_chart_data(keyword, sector=sector, description=reason,
+                                        synonyms=_cand.get("synonyms")) or {}
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
@@ -1699,10 +1696,11 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
     try:
         from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
         from JARVIS06_IMAGE.draft_processor import process_draft
-        from pathlib import Path as _P9
 
         # Pass-1-only 대본(placeholder) → process_draft 단일 이미지 경로
+        _ref_ds = getattr(collected, "datasets", None) or []
         draft_html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
+                                           ref_datasets=_ref_ds,
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
@@ -1713,26 +1711,7 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
         title = result["title"]
         img_dir = str(NAVER_IMG_DIR)
         visual_paths = []
-        blocks = result["blocks"]
-        # 썸네일 맨 앞 (process_draft 가 필수 생성 — 누락 0)
-        thumb_path = result.get("thumbnail_path")
-        if thumb_path and _P9(thumb_path).exists():
-            blocks = [("image", str(thumb_path))] + blocks
-
-        # 검증
-        try:
-            from JARVIS02_WRITER.jarvis_main import enforce_text_between_images
-            blocks = enforce_text_between_images(blocks, source='NAVER-DRAFT')
-        except Exception as _ee:
-            print(f"  ⚠️ enforce_text_between_images(naver-draft) 오류 (무시): {_ee}")
-            _g_report("writer", _ee, module=__name__)
-
-        try:
-            from JARVIS02_WRITER.law_enforcer import enforce_supreme_law, notify_violations
-            blocks, _nv_v = enforce_supreme_law(blocks, "naver", "Naver-경제글")
-            notify_violations(_nv_v, "naver", "Naver-경제글")
-        except Exception:
-            _g_report("writer", Exception(), module=__name__)
+        blocks = result["blocks"]  # J06 이 썸네일 prepend + 법률집행 완료
 
         print(f"  ✅ [NAVER-DRAFT] 완료: {keyword}")
         return {
@@ -1761,24 +1740,21 @@ def nv_publish(draft: dict, ts_keyword: str = '') -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
     try:
+        from JARVIS06_IMAGE.draft_processor import publish_assembled
         from JARVIS08_PUBLISH.platforms import post_to_naver
-        print(f"  📤 [NAVER-PUB] 발행 중...")
+        print(f"  📤 [NAVER-PUB] J06→J08 발행 중...")
         keyword = draft['keyword']
         blocks = draft['blocks']
 
-        try:
-            from JARVIS02_WRITER.law_enforcer import enforce_supreme_law, notify_violations
-            blocks, _nv_v = enforce_supreme_law(blocks, "naver", "Naver-경제글-발행")
-            notify_violations(_nv_v, "naver", "Naver-경제글-발행")
-        except Exception:
-            pass
+        def _pub_fn(blocks, title, **_kw):
+            return post_to_naver(
+                title=title,
+                html_content=draft['content'],
+                blocks=blocks,
+                category=ECONOMIC_CATEGORY,
+            )
 
-        result = post_to_naver(
-            title=draft['title'],
-            html_content=draft['content'],
-            blocks=blocks,
-            category=ECONOMIC_CATEGORY,
-        )
+        result = publish_assembled(draft, _pub_fn, "naver")
 
         if result:
             # ★ DB 기록 (ERRORS [370]): 성공 발행 → posts·post_analysis 둘 다 기록 → 대시보드 동기화

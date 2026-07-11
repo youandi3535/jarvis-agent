@@ -37,7 +37,9 @@ except ImportError:
         pass
 # ─────────────────────────────────────────────────────
 
-_SLOT_RE = re.compile(r"\[CHART_(\d+)\]\s*(.*?)\s*\[/CHART_\1\]", re.DOTALL)
+_SLOT_OPEN_RE = re.compile(r"\[CHART_(\d+)\]")
+_SLOT_CLOSE_RE = re.compile(r"^\[/CHART_(\d+)\]\s*$")
+_FIELD_LINE_RE = re.compile(r"^(제목|단위|데이터|출처|종류|데이터셋)\s*:\s*(.*)$")
 _VIZ_MAP = {"bar": "bar_chart", "line": "line_chart", "area": "area_chart",
             "pie": "pie_chart", "kpi": "kpi_cards"}
 
@@ -65,18 +67,38 @@ def _infer_viz_type(data: list, unit: str = "") -> str:
 
 
 def parse_chart_slots(text: str) -> list[dict]:
-    """대본에서 데이터 내장 슬롯 추출 → [{idx, title, viz, unit, data, source, raw}]."""
+    """대본에서 데이터 내장 슬롯 추출 → [{idx, title, viz, unit, data, source, raw}].
+
+    ★ 닫는 태그 인덱스 불일치·누락에도 관용적 매칭 (2026-07-11 — RuntimeError
+    "[사실성] 출처·웹 모두 확인 불가: <라벨>=<값>" 사고 박제): LLM이 [CHART_2]...
+    [/CHART_3] 처럼 인덱스를 틀리거나 닫는 태그를 아예 빠뜨리면 옛 정규식
+    (`\\1` 백레퍼런스)이 매칭 실패 → 원본 카탈로그 문법(`데이터: 라벨=값`)이
+    렌더 없이 본문에 그대로 새어나가 팩트체크 LLM이 이를 "주장"으로 오인 추출
+    → 사실성 게이트가 무단위·비문장 조각을 검증 불가로 차단. 필드 라인
+    (제목/단위/데이터/출처/종류) 또는 아무 인덱스나의 닫는 태그가 나오는 동안만
+    소비 → 필드 아닌 라인을 만나면 즉시 블록 종료(본문 삼켜먹기 방지).
+    """
     out: list[dict] = []
-    for m in _SLOT_RE.finditer(text or ""):
+    text = text or ""
+    for m in _SLOT_OPEN_RE.finditer(text):
         idx = int(m.group(1))
-        body = m.group(2)
+        start = m.end()
+        consumed = 0
         fields: dict = {}
-        for line in body.splitlines():
-            line = line.strip()
-            if ":" not in line:
+        for line in text[start:].splitlines(keepends=True):
+            stripped = line.strip()
+            if _SLOT_CLOSE_RE.match(stripped):
+                consumed += len(line)
+                break
+            if not stripped:
+                consumed += len(line)
                 continue
-            k, _, v = line.partition(":")
-            fields[k.strip()] = v.strip()
+            fm = _FIELD_LINE_RE.match(stripped)
+            if not fm:
+                break  # 필드 아닌 라인 → 닫는 태그 없어도 슬롯 블록 종료
+            fields[fm.group(1)] = fm.group(2).strip()
+            consumed += len(line)
+        raw = text[m.start():start + consumed]
         data = []
         for pair in (fields.get("데이터", "") or "").split("|"):
             pair = pair.strip()
@@ -91,17 +113,56 @@ def parse_chart_slots(text: str) -> list[dict]:
         out.append({
             "idx": idx,
             "title": fields.get("제목", "").strip(),
+            "dataset_key": fields.get("데이터셋", "").strip(),  # "D2" 형태 직접 참조
             "viz": _VIZ_MAP.get(fields.get("종류", ""), _infer_viz_type(data, fields.get("단위", ""))),
             "unit": fields.get("단위", "").strip(),
             "data": data,
             "source_name": fields.get("출처", "").strip(),
-            "raw": m.group(0),
+            "raw": raw,
         })
     return out
 
 
 def _norm_unit(u: str) -> str:
     return re.sub(r"\s+", "", str(u or ""))
+
+
+_STOP_WORDS = frozenset(["의", "에", "는", "이", "가", "을", "를", "한", "하", "및",
+                          "과", "와", "도", "로", "으로", "에서", "부터", "까지", "추이",
+                          "현황", "비교", "분석", "현황", "동향", "변화", "증감"])
+
+
+def _title_words(title: str) -> frozenset:
+    return frozenset(w for w in re.sub(r"[^\w]", " ", title).split()
+                     if w and w not in _STOP_WORDS and len(w) >= 2)
+
+
+def _filter_datasets_by_title(slot_title: str, ref_datasets: list) -> list:
+    """슬롯 제목과 키워드가 겹치는 dataset만 반환 (Jaccard ≥ 0.10).
+
+    ★ 핵심 보안 게이트 (2026-07-11 — ERRORS [421]): "코스피 거래대금" 슬롯이
+    "삼성전자 PER=25" dataset 의 25 를 우연 매칭하는 것을 차단.
+    슬롯과 주제가 다른 dataset 의 값은 검증 ref 에서 완전 배제.
+    임계값 0.10 = 1개 단어 겹침으로 충분히 느슨 (완전히 무관한 경우만 제외).
+    매칭 dataset 0개 → 빈 리스트 반환 → verify_slot 이 None 반환 → 차트 없음.
+    실데이터 없으면 차트 없음 원칙 (ADR 010) — 폴백 없음.
+    """
+    if not slot_title or not ref_datasets:
+        return []
+    sw = _title_words(slot_title)
+    if not sw:
+        return []
+    matched = []
+    for ds in ref_datasets:
+        dw = _title_words(ds.get("title", ""))
+        if not dw:
+            continue
+        overlap = len(sw & dw)
+        union = len(sw | dw)
+        jaccard = overlap / union if union else 0.0
+        if jaccard >= 0.10:
+            matched.append(ds)
+    return matched
 
 
 def _ref_value_units(ref_datasets: list | None) -> list[tuple[float, str]]:
@@ -213,15 +274,20 @@ def render_slots_in_text(text: str, ref_datasets: list | None, out_dir,
                          run_id: str = "", theme: str = "") -> tuple[str, int, int]:
     """대본 내 데이터 내장 슬롯 전부 처리 → (치환된 텍스트, 성공 수, 전체 슬롯 수).
 
-    실패 슬롯은 플레이스홀더 `[CHART_N: <제목>]` (구형식) 으로 강등 — 호출자의
-    기존 AI 사진 폴백 경로가 이어받는다.
+    ★ 슬롯별 제목 매칭 검증 (2026-07-11 — ERRORS [418]): 슬롯 제목과 관련 없는
+    dataset 의 수치가 우연 매칭되는 False Positive 를 차단하기 위해, 각 슬롯마다
+    _filter_datasets_by_title() 로 주제 연관 dataset 만 ref 로 좁힌다.
+    실패 슬롯은 플레이스홀더 `[CHART_N: <제목>]` (구형식) 으로 강등.
     """
     slots = parse_chart_slots(text)
     if not slots:
         return text, 0, 0
-    refs = _ref_value_units(ref_datasets)
     ok = 0
     for slot in slots:
+        slot_title = slot.get("title") or theme
+        # ★ 핵심: 슬롯 제목과 연관된 dataset만 ref로 사용
+        slot_ds = _filter_datasets_by_title(slot_title, ref_datasets or [])
+        refs = _ref_value_units(slot_ds)
         verified = verify_slot(slot, refs)
         html = render_slot(verified, out_dir, run_id=run_id, theme=theme) if verified else ""
         if html:
@@ -231,8 +297,87 @@ def render_slots_in_text(text: str, ref_datasets: list | None, out_dir,
         else:
             fallback = f"[CHART_{slot['idx']}: {slot.get('title') or theme}]"
             text = text.replace(slot["raw"], fallback, 1)
-            print(f"  ⏭️ [slot] CHART_{slot['idx']} 무효(검증 실패/렌더 실패) → AI 사진 폴백 위임")
+            print(f"  ⏭️ [slot] CHART_{slot['idx']} 무효(검증 실패/렌더 실패) → 실데이터 인포그래픽 위임")
     return text, ok, len(slots)
 
 
-__all__ = ["parse_chart_slots", "verify_slot", "render_slot", "render_slots_in_text"]
+def render_slots_from_collected(text: str, collected_datasets: list, out_dir,
+                                run_id: str = "", theme: str = "") -> tuple[str, int, int]:
+    """슬롯 제목 → collected.datasets 매칭 → 실데이터 직접 렌더 (LLM 수치 완전 무시).
+
+    ★ 사용자 박제 2026-07-11: LLM이 차트 수치를 임의로 기입하는 것을 원천 차단.
+      슬롯에 LLM이 뭘 써도 무시 — 항상 collected.datasets 의 실데이터로 렌더.
+      슬롯 제목 키워드 매칭(Jaccard ≥ 0.10)으로 연관 dataset 을 찾아 그대로 사용.
+      매칭 없으면 [CHART_N: 제목] 구형식 강등 → _next_data_infographic 경로 이어받음.
+    """
+    try:
+        from JARVIS06_IMAGE.infographic_engine import generate_infographic
+    except ImportError:
+        return text, 0, 0
+
+    slots = parse_chart_slots(text)
+    if not slots:
+        return text, 0, 0
+
+    ok = 0
+    for slot in slots:
+        slot_title = slot.get("title") or theme
+        dataset_key = slot.get("dataset_key", "").upper()  # "D2" 형태
+
+        # ★ 1순위: D번호 직접 참조 (정확, 오류 없음)
+        best = None
+        if dataset_key and dataset_key.startswith("D") and dataset_key[1:].isdigit():
+            didx = int(dataset_key[1:]) - 1  # D1 → 0, D2 → 1
+            if 0 <= didx < len(collected_datasets or []):
+                best = collected_datasets[didx]
+
+        # ★ 2순위 폴백: 제목 Jaccard 매칭 (D번호 없거나 범위 초과 시)
+        if best is None:
+            matched = _filter_datasets_by_title(slot_title, collected_datasets or [])
+            if not matched:
+                fallback = f"[CHART_{slot['idx']}: {slot_title}]"
+                text = text.replace(slot["raw"], fallback, 1)
+                print(f"  ⏭️ [slot] CHART_{slot['idx']} 실데이터 없음 → 구형식 강등")
+                continue
+            best = max(matched,
+                       key=lambda d: len(_title_words(d.get("title", "")) & _title_words(slot_title)))
+        render_ds = {
+            "title": slot_title or best.get("title", ""),
+            "viz_hint": _infer_viz_type(best.get("data", []), best.get("unit", "")),
+            "unit": best.get("unit", ""),
+            "data": best.get("data", []),
+            "source": best.get("source") or {"provider": "jarvis09",
+                                              "name": "자비스09 수집", "url": ""},
+        }
+        if not render_ds["data"]:
+            fallback = f"[CHART_{slot['idx']}: {slot_title}]"
+            text = text.replace(slot["raw"], fallback, 1)
+            print(f"  ⏭️ [slot] CHART_{slot['idx']} dataset 데이터 행 없음 → 강등")
+            continue
+
+        try:
+            html = generate_infographic(
+                render_ds["title"], "수집 실데이터 기반", [render_ds],
+                run_id=run_id, slot_key=f"slot{slot['idx']}", out_dir=out_dir,
+                context=f"{theme} — {render_ds['title']}",
+                src=f"데이터 출처: {render_ds['source'].get('name', '자비스09')}",
+            ) or ""
+        except Exception as e:
+            log.warning(f"[slot] CHART_{slot['idx']} 렌더 실패: {e}")
+            _g_report("image", e, module=__name__, func_name="render_slots_from_collected")
+            html = ""
+
+        if html:
+            text = text.replace(slot["raw"], html, 1)
+            ok += 1
+            print(f"  ✅ [slot] CHART_{slot['idx']} 실데이터 렌더 완료 [{best.get('title','')}]")
+        else:
+            fallback = f"[CHART_{slot['idx']}: {slot_title}]"
+            text = text.replace(slot["raw"], fallback, 1)
+            print(f"  ⚠️ [slot] CHART_{slot['idx']} 렌더 실패 → 강등")
+
+    return text, ok, len(slots)
+
+
+__all__ = ["parse_chart_slots", "verify_slot", "render_slot", "render_slots_in_text",
+           "render_slots_from_collected"]

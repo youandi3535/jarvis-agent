@@ -245,13 +245,17 @@ def judge_engagement(title: str, content: str, post_type: str = "",
     from shared.llm import invoke_text as _inv
     obj = None
     last_err = ""
-    for _attempt in range(3):
+    for _attempt in range(2):
         try:
             # ★ 비필수 (ERRORS [368]): 매력도는 fail-open(폴백=통과)이므로 스로틀 시 즉시 폴백
             #   — 발행 임계경로를 매력도 LLM 대기로 막지 않는다(재생성 사유일 뿐).
             raw = _inv("engagement_judge", user_msg, system=system, max_tokens=600,
                        timeout=45, _nonessential=True)
-            m = re.search(r"\{.*\}", raw or "", re.DOTALL)
+            if not raw or not raw.strip():
+                # ★ 빈 응답 = 스로틀 → 즉시 폴백 (ERRORS [400] 동일 패턴 — 회로차단기 보호)
+                last_err = "스로틀(빈 응답)"
+                break
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
             if not m:
                 last_err = "판정 응답 없음"
                 continue
@@ -260,6 +264,7 @@ def judge_engagement(title: str, content: str, post_type: str = "",
         except Exception as e:
             last_err = str(e)
             _g_report("radar", e, module=__name__)
+            break
 
     if obj is None:
         _judge_unavailable_alert(post_type, last_err)   # 조용한 무력화 방지

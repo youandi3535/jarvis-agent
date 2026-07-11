@@ -36,6 +36,9 @@ _TRANSIENT_KEYWORDS = [
     "쿠키", "cookie", "TS_COOKIE", "NID_SES",
     "HTTP Error", "503", "502", "rate limit", "403",
     "ConnectionError", "ReadTimeout", "SSLError", "network",
+    # ★ ERRORS [405] — topic_pack 생성 실패는 LLM rate-limit/회로차단 자원 경합
+    # (코드 버그 아님). Tier2 SDK 낭비 세션이 재시도 LLM 슬롯과 경합해 재발 유발.
+    "주제 패키지 없음",
 ]
 
 _CODE_BUG_TYPES = [

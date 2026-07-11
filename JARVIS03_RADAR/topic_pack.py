@@ -124,6 +124,11 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
     쓰지도 않을 주제를 프로파일링·박제하는 건 낭비 → 후보는 publish_slots + 소폭 버퍼(2)만
     LLM 프로파일링(부적합 판정으로 걸러질 것 대비), 팩에는 적합 상위 publish_slots개만 박제.
     """
+    try:
+        from shared.pipeline_activity import mark_active
+        mark_active("e13")  # J04→J03 스케줄 트리거
+    except Exception:
+        pass
     if max_candidates is None:
         max_candidates = publish_slots + 2
     if trends is None:
@@ -196,6 +201,18 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
         log.warning("[topic_pack] 적합 후보 0개 — 팩 생성 실패")
         return None
 
+    # ★ 동의어 선행 확장 (방향 2 — 위상 분리): topic_pack 생성 시점(LLM 부하 낮음)에
+    #   chart_data 동의어를 미리 확장·캐시. collect_chart_data 진입 시 캐시 히트 → LLM 0회.
+    #   실패해도 chart_data 가 런타임에 재시도하므로 예외 무시.
+    try:
+        from JARVIS09_COLLECTOR.chart_data import warm_synonyms as _warm_syns
+        _syn_map = _warm_syns([c["keyword"] for c in final])
+        for c in final:
+            c["synonyms"] = _syn_map.get(c["keyword"]) or []
+        log.info(f"[topic_pack] 동의어 선행 확장: { {k: v for k, v in _syn_map.items() if v} }")
+    except Exception as _e:
+        log.warning(f"[topic_pack] 동의어 선행 확장 실패 (무시): {_e}")
+
     pack = {
         "date": date.today().isoformat(),
         "generated_at": datetime.now().isoformat(),
@@ -242,6 +259,11 @@ def pick_candidate(exclude_keyword: str = "") -> dict | None:
             continue
         if ex and (kw == ex or kw in ex or ex in kw):
             continue
+        try:
+            from shared.pipeline_activity import mark_active
+            mark_active("e5")  # J03→J02 topic_pack 전달 활성화
+        except Exception:
+            pass
         return cand
     return None
 

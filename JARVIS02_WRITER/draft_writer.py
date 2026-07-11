@@ -105,8 +105,6 @@ def strip_html_wrapper(raw: str) -> str:
         r"\d+개\s*차트\s*플레이스홀더[^.\n]{0,40}",
         r"플레이스홀더\s*포함[^.\n]{0,40}",
         r"소제목\s*앞\s*\d+행\s*여백[^.\n]{0,40}",
-        r"`?\[CHART_\d+\]`?\s*,?\s*`?\[CHART_\d+\]`?[^.\n]{0,80}",
-        r"`?\[CHART_\d+\]`?",
         r"발행\s*시\s*자동\s*삽입",
         r"섹션\s*\d+\s*\+\s*마무리\s*생성",
         r"변경\s*금지",
@@ -125,33 +123,67 @@ def strip_html_wrapper(raw: str) -> str:
 _strip_html_wrapper = strip_html_wrapper
 
 
-def _inject_missing_charts(html: str, target_count: int, start_idx: int = 1) -> str:
-    """HTML에 부족한 [PHOTO_N] 슬롯 자동 삽입.
-
-    ★ 구형식 [CHART_N: 설명] 삽입 폐기 (2026-07-05): 데이터 없이 차트 슬롯 삽입 →
-    거짓 차트 경로 진입 위험. 대신 [PHOTO_N: 설명] AI 사진 슬롯 삽입 (데이터 불필요).
-    """
-    existing = len(re.findall(r'\[CHART_\d+\]|\[PHOTO_\d+:', html))
-    if existing >= target_count:
+def _inject_missing_charts(html: str, target_count: int, start_idx: int = 1,
+                           datasets=None) -> str:
+    """CHART 부족 시 미사용 실데이터로 신형식 슬롯([CHART_N]...[/CHART_N]) 삽입.
+    datasets 없으면 no-op — 실데이터 없이 차트 생성 금지(규정 12)."""
+    existing_nums = sorted(int(m.group(1)) for m in re.finditer(r'\[CHART_(\d+)\]', html))
+    existing = len(existing_nums)
+    needed = target_count - existing
+    ds_list = list(datasets or [])
+    if needed <= 0 or not ds_list:
         return html
-    missing = target_count - existing
 
-    def _last_para_topic(h: str) -> str:
-        paras = re.findall(r'<p[^>]*>(.*?)</p>', h, re.S)
-        for p in reversed(paras):
-            txt = re.sub(r'<[^>]+>', '', p)
-            txt = re.sub(r'\s+', ' ', txt).strip()
-            if len(txt) >= 20:
-                head = re.split(r'[.!?。]', txt)[0].strip()
-                return (head or txt)[:30]
-        return ""
+    next_num = (existing_nums[-1] + 1) if existing_nums else start_idx
+    new_slots = []
+    for i in range(needed):
+        ds_idx = existing + i
+        if ds_idx >= len(ds_list):
+            break  # 남은 dataset 없음 → 더 삽입 불가
+        ds = ds_list[ds_idx]
+        data_str = " | ".join(
+            f"{str(r.get('label', '')).strip()}={r.get('value', '')}"
+            for r in (ds.get("data") or [])[:8]
+            if r.get("label") and r.get("value") is not None
+        )
+        src = ds.get("source") or {}
+        src_name = (src.get("name") or src.get("provider") or "").strip()
+        new_slots.append(
+            f"[CHART_{next_num}]\n"
+            f"제목: {ds.get('title', '추가 데이터 시각화')}\n"
+            f"단위: {ds.get('unit', '')}\n"
+            f"데이터: {data_str}\n"
+            f"출처: {src_name}\n"
+            f"[/CHART_{next_num}]"
+        )
+        next_num += 1
 
-    for i in range(missing):
-        photo_idx = start_idx + existing + i
-        topic = _last_para_topic(html)
-        description = f"{topic} 관련 사진" if topic else "관련 사진"
-        html = re.sub(r'(</p>)(?!.*</p>)', rf'\1\n[PHOTO_{photo_idx}: {description}]', html, count=1)
-    return html
+    if not new_slots:
+        return html
+
+    # 삽입 위치: </p> 뒤 중 차트 닫는 태그([/CHART_N]) 직후가 아닌 곳 (이미지 연속 방지)
+    candidates = []
+    for m in re.finditer(r'</p>', html, re.IGNORECASE):
+        before = html[:m.start()].rstrip()
+        if re.search(r'\[/CHART_\d+\]\s*$', before):
+            continue
+        candidates.append(m.end())
+
+    if not candidates:
+        return html + "\n" + "\n".join(new_slots) + "\n"
+
+    # 균등 분산 삽입 (step 간격으로 후보 위치 선택)
+    step = max(1, len(candidates) // (len(new_slots) + 1))
+    result = html
+    offset = 0
+    for i, slot in enumerate(new_slots):
+        idx = min((i + 1) * step, len(candidates) - 1)
+        pos = candidates[idx] + offset
+        insert = f"\n{slot}\n"
+        result = result[:pos] + insert + result[pos:]
+        offset += len(insert)
+
+    return result
 
 
 def _renumber_charts(html: str) -> str:
@@ -404,25 +436,20 @@ def _build_data_catalog(datasets) -> str:
             val = r.get("value", "")
             if lbl != "" and val != "":
                 lines.append(f"    - {lbl}: {val}{u}")
-    # ★ 데이터 내장 슬롯 (사용자 박제 2026-07-03): 작성자가 차트 설계까지 완료 —
-    #   슬롯 안에 차트를 만들 *모든 수치* 를 직접 박는다. 자비스06 은 렌더만.
+    # ★ 차트 슬롯 형식 (2026-07-11 — 사용자 박제): LLM은 D번호+제목만 선언,
+    #   수치는 JARVIS가 D번호로 실데이터를 직접 가져온다. LLM이 수치를 쓰는 행위 전면 금지.
     lines.append("")
-    lines.append("★★ 차트 슬롯 작성 규칙 — 차트가 들어갈 자리마다 아래 *블록 형식* 으로")
-    lines.append("차트 데이터 전체를 직접 박는다 (여기서 차트 설계까지 끝낸다):")
+    lines.append("★★ 차트 슬롯 규칙 — 차트가 필요한 자리에 D번호와 제목만 선언한다:")
     lines.append("[CHART_1]")
-    lines.append("제목: <차트 제목>")
-    lines.append("단위: <단위>")
-    lines.append("데이터: 라벨A=값 | 라벨B=값 | 라벨C=값")
-    lines.append("출처: <위 카탈로그의 출처 그대로>")
+    lines.append("데이터셋: D2")
+    lines.append("제목: <독자에게 보여줄 차트 제목 (한국어, 명확하게)>")
     lines.append("[/CHART_1]")
-    lines.append("★ 종류: 필드 쓰지 말 것 — 차트 종류는 JARVIS06이 데이터 성격 보고 자율 결정")
-    lines.append("- 데이터 값은 위 카탈로그(D1..)의 값을 *그대로 복사* — 창작·변형·반올림 금지")
-    lines.append("- 단위도 그 데이터셋의 단위 *그대로* — 값과 단위는 한 몸 (값만 복사하고 단위를 바꾸면 거짓)")
-    lines.append("- 한 슬롯 = 카탈로그 한 데이터셋 기반. 시간 라벨은 과거→최근 순서")
-    lines.append("- 같은 데이터셋으로 슬롯 2개 만들지 마라 (중복 금지)")
-    lines.append("- 한 슬롯 안에서 *같은 값을 다른 라벨로 반복* 금지 (예: '매출=16.59 | 매출액=16.59' ✗)")
-    lines.append("- 슬롯 제목에 데이터 값 숫자를 그대로 쓰지 마라 (차트 본체와 중복 표기 방지)")
-    lines.append("★ 본문 수치는 위 카탈로그·근거 팩·수집 자료 전문에 *명시된* 값만 그대로 인용"
+    lines.append("- 데이터셋: 위 카탈로그(D1, D2, D3...)의 번호를 그대로 적는다 — 수치 연결용.")
+    lines.append("- 제목: 인포그래픽 상단에 표시될 실제 제목. D번호가 아닌 한국어로.")
+    lines.append("- 데이터·단위·출처·종류 필드 절대 쓰지 말 것.")
+    lines.append("  수치는 JARVIS가 D번호로 실데이터를 직접 가져온다 — 네가 적으면 무시된다.")
+    lines.append("- 카탈로그에 없는 번호 쓰지 말 것. 같은 D번호로 슬롯 2개 쓰지 마라.")
+    lines.append("★ 본문 수치는 카탈로그·근거 팩에 *명시된* 값만 그대로 인용"
                  " (창작·임의 반올림 금지 — 출처 없는 숫자는 거짓이다).")
     return "\n".join(lines)
 
@@ -654,17 +681,21 @@ def _build_section_system_msg(supreme_block: str, platform: str) -> str:
 def _gen_section_call1(
     keyword: str, sector: str, reason: str,
     supreme_block: str, platform: str = "tistory",
+    datasets=None,
 ) -> str:
     """Call-1: 오프닝 + 섹션1 생성."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     hook = _gen_hook(keyword, platform)
     system_msg = _build_section_system_msg(supreme_block, platform)
+    _catalog = _build_data_catalog(datasets)
+    _call1_min = max(2, _L.MIN_CHART_COUNT // 2)  # 전체 최솟값의 절반 (call-1은 절반 담당)
     user_msg = f"""[작성 요청] {platform} 경제 글 — 오프닝 + 섹션1만 생성
 
 플랫폼: {spec['name']} | 독자: {spec['reader']}
 키워드: {keyword} | 섹터: {sector} | 이유: {reason}
 
-★ CHART 최소 3개 이상 포함. 단락 수·분량에 따라 추가 배치 가능. 번호는 [CHART_1]부터 순서대로.
+{_catalog}
+★ CHART 최소 {_call1_min}개 이상 포함. 카탈로그 데이터가 충분하면 더 추가 가능. 번호는 [CHART_1]부터 순서대로.
 ★ 문단-이미지 배치 (제4조): 이미지 연속 금지, 문단 3개+ 연속 금지. 문단+문단+이미지+문단 / 문단+이미지+문단+문단 패턴 OK.
 
 [출력 형식] — 아래만 생성하고 STOP
@@ -702,51 +733,60 @@ CONTENT:
 단위: (카탈로그 D4 단위)
 데이터: (카탈로그 D4 라벨=값)
 출처: (카탈로그 D4 출처)
-[/CHART_4]   ← (섹션 분량이 길면 차트 추가 가능)
+[/CHART_4]
+<p>섹션1 단락.</p>
+[CHART_5]
+제목: 섹션1 심화 데이터
+단위: (카탈로그 D5 단위)
+데이터: (카탈로그 D5 라벨=값)
+출처: (카탈로그 D5 출처)
+[/CHART_5]   ← (카탈로그에 데이터가 충분하면 [CHART_6] 추가 가능)
 """
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
         raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     result = strip_html_wrapper(raw)
     chart_count = len(re.findall(r'\[CHART_\d+\]', result))
-    _call1_min = max(2, _L.MIN_CHART_COUNT // 2)  # 전체 최솟값의 절반 (call-1은 절반 담당)
     if chart_count < _call1_min:
         print(f"  ⚠️ [Pass-1 Call-1] CHART 부족 ({chart_count}/{_call1_min}) — 강제 삽입")
-        result = _inject_missing_charts(result, _call1_min, 1)
+        result = _inject_missing_charts(result, _call1_min, 1, datasets)
     return result
 
 
 def _gen_section_call2(
     keyword: str, sector: str, reason: str,
     supreme_block: str, platform: str = "tistory",
+    datasets=None,
 ) -> str:
     """Call-2: 섹션2만 생성."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     system_msg = _build_section_system_msg(supreme_block, platform)
+    _catalog = _build_data_catalog(datasets)
     user_msg = f"""[작성 요청] {platform} 경제 글 — 섹션2만 생성 (독립적)
 
 플랫폼: {spec['name']} | 키워드: {keyword} | 섹터: {sector}
 
-★ CHART 최소 2개 이상 포함. 단락 수·분량에 따라 추가 배치 가능. 번호는 [CHART_5]부터 시작.
+{_catalog}
+★ CHART 최소 2개 이상 포함. 단락 수·분량에 따라 추가 배치 가능. 번호는 [CHART_6]부터 시작.
 ★ 문단-이미지 배치 (제4조): 이미지 연속 금지, 문단 3개+ 연속 금지. 문단+문단+이미지+문단 패턴 OK.
 
 [출력 형식] — 섹션2만 생성
 
 <h2>소제목2</h2>
 <p>섹션2 단락.</p>
-[CHART_5]
-제목: 섹션2 관련 시각화
-단위: (카탈로그 D5 단위)
-데이터: (카탈로그 D5 라벨=값)
-출처: (카탈로그 D5 출처)
-[/CHART_5]
-<p>섹션2 단락.</p>
 [CHART_6]
-제목: 섹션2 추가 분석
+제목: 섹션2 관련 시각화
 단위: (카탈로그 D6 단위)
 데이터: (카탈로그 D6 라벨=값)
 출처: (카탈로그 D6 출처)
-[/CHART_6]   ← (분량이 길면 차트 추가 가능)
+[/CHART_6]
+<p>섹션2 단락.</p>
+[CHART_7]
+제목: 섹션2 추가 분석
+단위: (카탈로그 D7 단위)
+데이터: (카탈로그 D7 라벨=값)
+출처: (카탈로그 D7 출처)
+[/CHART_7]   ← (분량이 길면 차트 추가 가능)
 """
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
@@ -756,41 +796,44 @@ def _gen_section_call2(
     _call2_min = max(2, _L.MIN_CHART_COUNT // 4)
     if chart_count < _call2_min:
         print(f"  ⚠️ [Pass-1 Call-2] CHART 부족 ({chart_count}/{_call2_min}) — 강제 삽입")
-        result = _inject_missing_charts(result, _call2_min, 5)
+        result = _inject_missing_charts(result, _call2_min, 6, datasets)
     return result
 
 
 def _gen_section_call3(
     keyword: str, sector: str, reason: str,
     supreme_block: str, platform: str = "tistory",
+    datasets=None,
 ) -> str:
     """Call-3: 섹션3 + 마무리 생성."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     system_msg = _build_section_system_msg(supreme_block, platform)
+    _catalog = _build_data_catalog(datasets)
     user_msg = f"""[작성 요청] {platform} 경제 글 — 섹션3 + 마무리 생성
 
 플랫폼: {spec['name']} | 키워드: {keyword} | 섹터: {sector}
 
-★ CHART 최소 2개 이상 포함. 단락 수·분량에 따라 추가 배치 가능. 번호는 [CHART_7]부터 시작.
+{_catalog}
+★ CHART 최소 2개 이상 포함. 단락 수·분량에 따라 추가 배치 가능. 번호는 [CHART_8]부터 시작.
 ★ 문단-이미지 배치 (제4조): 이미지 연속 금지, 문단 3개+ 연속 금지. 문단+이미지+문단+문단 패턴 OK.
 
 [출력 형식] — 섹션3 + 마무리 생성
 
 <h2>소제목3</h2>
 <p>섹션3 단락.</p>
-[CHART_7]
-제목: 섹션3 관련 시각화
-단위: (카탈로그 D7 단위)
-데이터: (카탈로그 D7 라벨=값)
-출처: (카탈로그 D7 출처)
-[/CHART_7]
-<p>섹션3 단락.</p>
 [CHART_8]
-제목: 섹션3 마무리 차트
+제목: 섹션3 관련 시각화
 단위: (카탈로그 D8 단위)
 데이터: (카탈로그 D8 라벨=값)
 출처: (카탈로그 D8 출처)
-[/CHART_8]   ← (분량이 길면 차트 추가 가능)
+[/CHART_8]
+<p>섹션3 단락.</p>
+[CHART_9]
+제목: 섹션3 마무리 차트
+단위: (카탈로그 D9 단위)
+데이터: (카탈로그 D9 라벨=값)
+출처: (카탈로그 D9 출처)
+[/CHART_9]   ← (분량이 길면 차트 추가 가능)
 <p>마무리.</p>
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 맞춤형 표현으로 작성)</p>
 """
@@ -802,27 +845,28 @@ def _gen_section_call3(
     _call3_min = max(2, _L.MIN_CHART_COUNT // 4)
     if chart_count < _call3_min:
         print(f"  ⚠️ [Pass-1 Call-3] CHART 부족 ({chart_count}/{_call3_min}) — 강제 삽입")
-        result = _inject_missing_charts(result, _call3_min, 7)
+        result = _inject_missing_charts(result, _call3_min, 8, datasets)
     return result
 
 
 def _gen_economic_ts_nv_parallel(
     keyword: str, sector: str, reason: str,
     supreme_block: str, platform: str = "tistory",
+    datasets=None,
 ) -> str:
     """티스토리·네이버 Pass-1: 3개 섹션 순차 생성 (rate limit 방지)."""
     print(f"  ⚡ [Pass-1/{platform}] 섹션별 순차 생성 ...")
     with ThreadPoolExecutor(max_workers=1) as executor:
-        call1_fut = executor.submit(_gen_section_call1, keyword, sector, reason, supreme_block, platform)
-        call2_fut = executor.submit(_gen_section_call2, keyword, sector, reason, supreme_block, platform)
-        call3_fut = executor.submit(_gen_section_call3, keyword, sector, reason, supreme_block, platform)
+        call1_fut = executor.submit(_gen_section_call1, keyword, sector, reason, supreme_block, platform, datasets)
+        call2_fut = executor.submit(_gen_section_call2, keyword, sector, reason, supreme_block, platform, datasets)
+        call3_fut = executor.submit(_gen_section_call3, keyword, sector, reason, supreme_block, platform, datasets)
         try:
             call1_content = call1_fut.result(timeout=300)
             call2_content = call2_fut.result(timeout=300)
             call3_content = call3_fut.result(timeout=300)
         except Exception as e:
             print(f"  ❌ [Pass-1/{platform}] 순차 생성 오류: {e}")
-            return _gen_economic_ts_nv(keyword, sector, reason, supreme_block, platform)
+            return _gen_economic_ts_nv(keyword, sector, reason, supreme_block, platform, datasets)
 
     if "CONTENT:" not in call1_content:
         return ""

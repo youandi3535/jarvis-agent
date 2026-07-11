@@ -81,9 +81,9 @@
 | 기능 | 설명 |
 |------|------|
 | 📝 **블로그 자동 발행** | 경제 브리핑(매일 06:30) + 테마주 분석(매일 16:00) — 네이버·티스토리 동시 발행 |
-| 🔗 **통합 콘텐츠 파이프라인 (★ 2026-07-05)** | 경제·테마·미래 카테고리가 **하나의 공통 경로** — J09 `CollectedData` 단일 상자 → J02 대본(데이터 내장 슬롯) → **J06 `process_draft` 단일 이미지 진입점**(실패차트→AI사진·최소 5장 보장·썸네일 필수) → J08. 카테고리는 데이터 공급원과 `CATEGORY_POLICY` 노브만 다름 |
+| 🔗 **통합 콘텐츠 파이프라인 (★ 2026-07-05)** | 경제·테마·미래 카테고리가 **하나의 공통 경로** — J09 `CollectedData` 단일 상자 → J02 대본(D-번호 슬롯) → **J06 `process_draft` 단일 이미지 진입점**(실패차트→AI사진·최소 5장 보장·썸네일 필수) → J08 |
 | 🔎 **발행 전 품질 게이트** | 발행 *전* harness Layer 3 에서 사실성(출처 대조 + 웹 재검증)·유익성·매력도를 LLM(Sonnet 5)으로 검수 → 미달 시 통과할 때까지 재작성 (결함은 절대 송출 안 됨) ★ 2026-06-28 |
-| 🖼️ **AI 이미지 · 85점 인포그래픽 엔진** | Pollinations.ai 사진(매 글 새 이미지·dedupe) + **LLM 디자인 디렉터**가 데이터마다 고유 인포그래픽 설계(레이아웃·차트·색 매번 다름) — 표도 인포그래픽화. 차트 수치는 **JARVIS09 실데이터로만**(거짓 수치 원천 차단, ADR 010) |
+| 🖼️ **인포그래픽 엔진 (★ 2026-07-11 다양성 복원)** | **결정론 코드 템플릿 8가지** × 매일 새 팔레트 = 글마다 다른 인포그래픽. 차트 수치는 **D-번호 슬롯**으로 JARVIS09 실데이터 직접 주입(LLM 수치 날조 구조적 차단). **단위 자동 스케일**(`_auto_scale`: 백만원→조원/억원) |
 | 📡 **트렌드 레이더** | Google Trends + 네이버 DataLab 실시간 수집 → 핫 키워드 자동 탐지 |
 | 🛡️ **자동 캐치·수정 시스템** | `catch()` 단일 진입점 → Tier 1(패턴·Contextual Bandit) → Tier 2(LLM Sonnet 5) — LOW/MED/HIGH 자동 복구 (CRITICAL은 패턴만 + 수동 검토) |
 | 🔒 **보안 전문가급 안전장치** | Circuit breaker · 빈도 기반 severity 자동 상향(3회) · 보안 파일 수정 절대 금지 |
@@ -93,19 +93,24 @@
 
 ---
 
-## 🆕 최근 주요 업데이트 (2026-06-29 ~ 07-06)
+## 🆕 최근 주요 업데이트 (2026-06-29 ~ 07-11)
 
 | 영역 | 변경 | 근거 |
 |------|------|------|
+| **★ 차트 실데이터 강제 — D-번호 슬롯 (2026-07-11)** | LLM이 차트 슬롯에 직접 수치를 쓰던 구조를 **완전 폐기**. LLM은 `D1 · 제목`만 작성하고, JARVIS가 `collected.datasets`에서 D-번호 인덱스로 실데이터를 주입(`slot_renderer.py`). Jaccard 제목 매칭은 보조 폴백. LLM이 수치를 쓸 수 있는 경로 구조적 차단 → **수치 날조 근본 원인 제거** (ERRORS [421]) | ERRORS [421] |
+| **★ 인포그래픽 단위 자동 스케일 (2026-07-11)** | 차트에 9자리 숫자(예: `23,491,406백만원`)가 그대로 나타나던 문제 해결. `_auto_scale(val, unit)` — 백만원 ≥ 1조 → 조원, ≥ 100억 → 억원; 원 → 조/억/만원 자동 변환. `_scale_rows_uniform()` 으로 데이터셋 전체를 균일 단위로 일괄 변환 (막대·꺾은선·히어로 통계·미니카드 동일 단위) | pro_templates.py |
+| **★ 인포그래픽 레이아웃 다양성 복원 (2026-07-11)** | `design_recipes.json` 에 구조 레이아웃 템플릿 8개가 있었지만 실제로 하나도 안 쓰이던 버그 수정. 원인: `build_html()` 의 `_n_ds >= 2` 조건이 슬롯이 항상 1개 전달로 절대 True가 안 됨 → `>= 1` 로 수정해 **8가지 HTML 구조 레이아웃** 즉시 활성화. Playwright CSS `card:empty{display:none}` 으로 빈 카드 슬롯 자동 숨김 | pro_templates.py |
+| **★ Phase2 레시피 레이아웃 포함 (2026-07-11)** | 매일 새벽 05:00 생성되는 Phase2(결정론) 레시피가 색상 팔레트만 갖고 레이아웃은 없었음. 수정: `_generate_recipe_deterministic()` 이 기존 레지스트리에서 무작위로 레이아웃 템플릿을 골라 배정 → **색상 × 레이아웃 독립 조합**으로 경우의 수 대폭 증가 | design_learner.py |
+| **★ 차트 클리핑 수정 (2026-07-11)** | ① 막대차트 오른쪽 숫자 잘림 — `barMax = W-300 → W-420` (오른쪽 여백 240px 확보). ② 꺾은선 Y축 라벨 왼쪽 넘침 — `xL = 84 → 120` (9자리 숫자도 안전). 단위 자동 스케일로 긴 숫자 자체도 줄어듦 | pro_templates.py |
+| **★ KRX 시장 거래대금 데이터 (2026-07-11)** | KOSPI·KOSDAQ 일평균 거래대금 수집 추가 — `krx_provider.collect_market_trading_volume()`, `chart_data._market_trading_volume_datasets()`. 시장 활황·침체 흐름 차트 가능 | JARVIS09_COLLECTOR |
 | **★ 재시도 상한 전면 3회 통일** | 코드베이스 전수 스캔(17개 파일)으로 "실패 시 N회 재시도 후 포기" 패턴을 모두 찾아 **max 3회**로 통일 — Tier 2(LLM) 자동수정 재시도 상한(`MAX_LLM_ATTEMPTS`) 신설 포함. 조용히 반복 호출되며 토큰을 소모하던 `job_retry_pending` 의 타임스탬프 키 버그(근본원인)도 함께 수정 | 사용자 박제 2026-07-06 |
 | **★ 통합 콘텐츠 파이프라인** | 경제·테마가 **하나의 공통 파이프라인**을 탄다 — J09 단일 `CollectedData`(datasets·docs·facts·**entities**) → J02 대본(데이터 내장 슬롯) → **J06 `process_draft` 단일 이미지 진입점**(실패차트→AI사진 폴백·최소 5장 top-up·썸네일 필수) → J08. 경제 embed-first→placeholder-first 컷오버, 검증 tolerance 통일(`grounds()` — 표시 올림/버림 or ±5%, 종목 재무밴드 ±10% 유지). 미래 카테고리는 `CATEGORY_POLICY` dict 한 줄로 상속 | 사용자 공동설계 2026-07-05 |
 | **표시 SSOT — 코드가 진실** | 웹 대시보드·텔레그램이 모델명·스케줄·개수 등 사실을 *하드코딩하지 않고 코드 정본에서 자동 파생*. 코드만 고치면 두 표시가 알아서 따라옴(2중·3중 수정 제거). `precommit ssot` 가드가 표시 파일 하드코딩을 커밋·부팅 시 차단 | 사용자 박제 |
 | **데몬 hang 자동 복구** | keeper 워치독이 프로세스 생존뿐 아니라 *스케줄러 heartbeat 신선도*까지 감시 → hang 시 SIGUSR1(faulthandler 스택 덤프)→SIGKILL→재시작. 얼어붙은 채 방치되던 사각지대 제거 | [ERRORS 319](JARVIS07_GUARDIAN/ERRORS.md) |
 | **★ 모델 단일 계층 통일** | Sonnet 5 / Opus 4.8 2계층 → **Sonnet 5 단일 모델**로 재통일 (Opus 4.8 폐지) — 고비용 모델 오호출 구조적 차단 | [ADR 017](docs/decisions/017-model-single-tier-sonnet5.md) |
-| **모델 계층 상향** (대체됨 by ADR 017) | Sonnet 4.6/Opus 4.6 → **Sonnet 5 / Opus 4.8** 2계층 단일화, Haiku 완전 폐지. 잔존 구 ID는 자가치유가 자동 정정 | [ADR 015](docs/decisions/015-model-tier-upgrade.md) |
 | **밴딧 = 유한 전략** | Tier 1 Contextual Bandit 정밀보완 — arm을 오류지문이 아닌 *소수 fixer 전략*으로 고정(오염 게이트+차원 상한) → 상태 **402MB→45B**, 죽은 신호 제거 | [ADR 016](docs/decisions/016-bandit-finite-strategy-arms.md) |
 | **설계-우선 리서치 + 3-패스 작성** | 리서치 설계→근거팩(fact·출처·커버리지)→갭 재수집 순환 + 서사 설계·자기비평 다층 패스로 대본 품질 강화 | [ADR 012](docs/decisions/012-research-first-pipeline.md) |
-| **인포그래픽 엔진** | 고정 템플릿 → **LLM 디자인 디렉터** — 데이터마다 레이아웃·차트·색이 다른 85점 인포그래픽. `<table>`도 인포그래픽화(내용 보존). 차트 설계 LLM을 **글당 1회 배치**로 묶어 rate-limit 최소화 | ERRORS [288] |
+| **인포그래픽 엔진** | 고정 템플릿 → **결정론 코드 박제** — 데이터마다 레이아웃·차트·색이 다른 85점 인포그래픽. `<table>`도 인포그래픽화(내용 보존). LLM 실시간 HTML 저작 폐기(latency 분 단위) → 코드 템플릿 + 매일 새 팔레트 학습 | ERRORS [288][357][358] |
 | **이미지·차트 사실성** | 차트 수치는 JARVIS09 **실데이터로만** — 출처(provenance) 없는 수치 렌더 차단 + 발행 전 이미지 팩트 게이트 | [ADR 010](docs/decisions/010-image-factuality-real-data.md) |
 | **주제 적응형 수집** | 고정 카탈로그 → **웹 discover** 범용 수집(뉴스·통계·학술·금융) + 의미 기반 관련성 게이트로 주제 누수 차단 | [ADR 011](docs/decisions/011-topic-adaptive-data-sourcing.md) |
 
@@ -123,8 +128,8 @@ flowchart TD
 
     B --> C["JARVIS03 RADAR\n트렌드 감지·학습\nGoogle Trends + 네이버 DataLab"]
     C --> D["JARVIS09 COLLECTOR\n멀티소스 수집·정제\nCollectedData 단일 상자"]
-    D --> E["JARVIS02 WRITER\n대본(데이터 내장 슬롯) + 품질 게이트\nBLOG_SUPREME_LAW.md"]
-    E --> F["JARVIS06 IMAGE\nprocess_draft 단일 이미지 진입점\nAI 사진 + 인포그래픽 · 차트 사실성"]
+    D --> E["JARVIS02 WRITER\n대본(D-번호 슬롯) + 품질 게이트\nBLOG_SUPREME_LAW.md"]
+    E --> F["JARVIS06 IMAGE\nprocess_draft 단일 이미지 진입점\n결정론 인포그래픽(8레이아웃·단위자동스케일) + 실데이터 주입"]
     F --> G["JARVIS08 PUBLISH\n네이버·티스토리 Selenium\n발행 검증 + 스크린샷"]
     G --> H(["📤 성과 수집 → 학습 가중치 갱신"])
     H -. "📈 학습 루프" .-> C
@@ -159,14 +164,14 @@ flowchart TD
 |---------|------|------|--------|
 | **JARVIS00** INFRA | `JARVIS00_INFRA/` | 데몬 라이프사이클·시스템 상태·검증 하니스 | HJ |
 | **JARVIS01** MASTER | `JARVIS01_MASTER/` | 자유 문장 → 인텐트 분류 → ReAct 디스패치 (LangGraph) | HJ |
-| **JARVIS02** WRITER | `JARVIS02_WRITER/` | 경제 브리핑·테마주 블로그 자동 작성 (헌법 준수) | NY |
+| **JARVIS02** WRITER | `JARVIS02_WRITER/` | 경제 브리핑·테마주 블로그 자동 작성 (헌법 준수) · **D-번호 슬롯 대본** | NY |
 | **JARVIS03** RADAR | `JARVIS03_RADAR/` | Google Trends + 네이버 DataLab 트렌드 수집·분석 | NY |
 | **JARVIS04** SCHEDULER | `JARVIS04_SCHEDULER/` | APScheduler 단일 진입점 — 모든 잡 등록·조회·제어 | HJ |
 | **JARVIS05** VISION | `JARVIS05_VISION/` | 전 에이전트 메트릭 수집·집계·시각화 API (FastAPI :8505) | HJ |
-| **JARVIS06** IMAGE | `JARVIS06_IMAGE/` | **`process_draft` 단일 이미지 진입점**(경제·테마 공통)·AI 사진(Pollinations)·**85점 인포그래픽 엔진(LLM 디자인 디렉터)**·표 인포그래픽·차트 사실성 검증·썸네일·dedupe | NY |
+| **JARVIS06** IMAGE | `JARVIS06_IMAGE/` | **`process_draft` 단일 이미지 진입점**(경제·테마 공통) · **결정론 인포그래픽 엔진**(8레이아웃·매일 팔레트 학습·단위 자동스케일) · **D-번호 실데이터 주입**(`slot_renderer`) · AI 사진(Pollinations) · 차트 사실성 검증 · 썸네일(AI 실사+폴라로이드) · dedupe | NY |
 | **JARVIS07** GUARDIAN | `JARVIS07_GUARDIAN/` | 오류 수집·2-Tier 자동 수정(패턴·Bandit→LLM)·자가 진단 | HJ |
 | **JARVIS08** PUBLISH | `JARVIS08_PUBLISH/` | 네이버·티스토리 Selenium 발행자·카테고리·쿠키 관리 | NY |
-| **JARVIS09** COLLECTOR | `JARVIS09_COLLECTOR/` | **주제 적응형 동적 수집**(ADR 011) → **`CollectedData` 단일 상자**(datasets·docs·facts·entities)·뉴스·블로그·금융·통계·학술·차트 실데이터(출처 박제) | NY |
+| **JARVIS09** COLLECTOR | `JARVIS09_COLLECTOR/` | **주제 적응형 동적 수집**(ADR 011) → **`CollectedData` 단일 상자**(datasets·docs·facts·entities)·뉴스·블로그·금융·통계·학술·차트 실데이터(출처 박제) · **KRX 시장 거래대금**(`collect_market_trading_volume`) | NY |
 
 > **HJ** = 김효중 (주도 개발) &nbsp;|&nbsp; **NY** = 김나연 (공동 개발)
 
@@ -183,6 +188,7 @@ gantt
     section 새벽 유지보수
         git 커밋 회고 & 학습 자산화          :done, 03:30, 15m
         심층 코드 감사 (backlog Tier1→2·광범위) :done, 04:30, 40m
+        인포그래픽 디자인 나이틀리 학습        :done, 05:00, 10m
         헌법 감사 (드리프트·주1회 일요일)      :done, 05:10, 20m
 
     section 오전 발행 세트 (06:30)
@@ -200,7 +206,7 @@ gantt
         네이버·티스토리 발행 (PUBLISH)  :16:50, 10m
 ```
 
-<sub>※ 실제 cron 잡은 **06:30 / 16:00 두 개의 세트 트리거**뿐입니다. 각 세트는 단일 콜백 안에서 *발행 전 Tier-1 자체수리(LLM-0, 수초)*→수집→글→이미지→발행을 *순차* 실행합니다. 비싼 LLM 심층 감사는 발행과 분리해 새벽 04:30(`j07_deep_audit`)으로 옮겨, 발행 지연을 0으로 만들었습니다(★ 2026-06-28). 위 간트의 하위 단계 시각은 흐름 이해용 예시입니다.</sub>
+<sub>※ 실제 cron 잡은 **06:30 / 16:00 두 개의 세트 트리거**뿐입니다. 각 세트는 단일 콜백 안에서 *발행 전 Tier-1 자체수리(LLM-0, 수초)*→수집→글→이미지→발행을 *순차* 실행합니다. 비싼 LLM 심층 감사는 발행과 분리해 새벽 04:30(`j07_deep_audit`)으로 옮겨, 발행 지연을 0으로 만들었습니다(★ 2026-06-28). 인포그래픽 디자인 나이틀리 학습은 매일 05:00(`j06_design_learn`) — Phase0(실이미지)·Phase1(LLM 창작)·Phase2(결정론, 항상 보장). 위 간트의 하위 단계 시각은 흐름 이해용 예시입니다.</sub>
 
 | 시각 | 잡 이름 | 내용 |
 |------|---------|------|
@@ -208,8 +214,56 @@ gantt
 | **16:00** | 테마주 분석 세트 | 발행 전 Tier-1 자체수리(LLM-0) → 트렌드 테마 선정 → 글 작성 → 이미지 → **품질 게이트(사실성·매력도)** → 발행 |
 | **매일 03:30** | git 회고 | 전날 코드 변경 D-1 학습 자산화 |
 | **매일 04:30** | 심층 코드 감사 | 미해결 backlog Tier1→Tier2(LLM, *실제 지문* 학습) + 광범위 코드 감사 → 패턴·밴딧 성장 |
+| **매일 05:00** | 인포그래픽 디자인 학습 | Phase0(실이미지 비전학습)→Phase1(LLM 창작)→Phase2(결정론 팔레트, 항상 +1 보장) → `design_recipes.json` 누적 |
 | **매주 일 04:30** | 헌법 감사 | 정책 위반·드리프트 검출 + 개선 제안 (주 1회) |
 | **격주 월 04:00** | 파일 정리 | 오래된 로그·스크린샷·트렌드 캐시 자동 삭제 |
+
+---
+
+## 🎨 인포그래픽 엔진 (★ 2026-07-11 대폭 강화)
+
+**"LLM은 데이터만, 디자인은 코드에 박제."** 매 글마다 다른 인포그래픽이 자동 생성됩니다.
+
+### D-번호 슬롯 — 실데이터 주입 구조
+
+```
+대본 작성 (LLM)             실데이터 주입 (JARVIS)
+──────────────────────      ──────────────────────────────────
+D1 · 경제성장률 변화    →   collected.datasets[0] (ECOS 실데이터)
+D2 · 수출입 동향        →   collected.datasets[1] (관세청 실데이터)
+D3 · 고용률 추이        →   collected.datasets[2] (통계청 실데이터)
+```
+
+- LLM이 수치를 직접 쓸 수 있는 경로 **구조적 차단** (ERRORS [421])
+- Jaccard 제목 매칭으로 슬롯-데이터셋 오연결 방지
+- 실데이터 없는 슬롯은 빈 슬롯 처리 (거짓 차트 절대 불가)
+
+### 단위 자동 스케일
+
+| 입력 | 출력 |
+|------|------|
+| `350,701,103 백만원` | `350.7 조원` |
+| `23,491,406 백만원` | `23.5 조원` |
+| `800,000,000,000 원` | `8,000 억원` |
+| `1,234,567 원` | `123.5 만원` |
+
+### 레이아웃 다양성 — 색상 × 레이아웃 독립 조합
+
+```
+design_recipes.json (총 17개 레시피, 매일 +1)
+├── 색상 팔레트 (Phase0·1·2 학습 누적)
+│   ├── Phase0: 실사이트 이미지 비전학습 → 팔레트 추출
+│   ├── Phase1: LLM 지식기반 창작
+│   └── Phase2: 색이론 결정론 (매일 +1 보장)
+└── 레이아웃 템플릿 (8종 HTML 구조)
+    ├── 히어로 밴드 + 듀오톤 라인차트
+    ├── 랭킹 막대차트 풀스크린
+    ├── 도넛 + KPI 카드
+    └── ... (5개 추가 레이아웃)
+
+seed = MD5(run_id|slot_key|title) → 팔레트 × 레이아웃 독립 선택
+경우의 수 = 팔레트 수 × 8 (레이아웃)  ← 매일 증가
+```
 
 ---
 
@@ -391,7 +445,7 @@ cp .env.example .env
 | `BOK_ECOS_KEY` | 한국은행 ECOS API | [ecos.bok.or.kr](https://ecos.bok.or.kr) |
 | `DART_API_KEY` / `KOSIS_API_KEY` | (선택) 전자공시·통계청 수집 | DART / KOSIS |
 
-> 이미지 생성은 **Pollinations.ai(키 불필요) + Claude SVG**를 사용하므로 별도 이미지 API 키가 필요 없습니다.
+> 이미지 생성은 **Pollinations.ai(키 불필요) + 결정론 코드 템플릿**을 사용하므로 별도 이미지 API 키가 필요 없습니다.
 
 ### 실행
 
@@ -428,8 +482,9 @@ streamlit run hub.py --server.port 9199
 | **벡터 검색** | ChromaDB | 오류·Q&A 시맨틱 검색 (GUARDIAN `qa_resolver`) |
 | **강화학습** | Contextual Bandit (Linear UCB · numpy) | Tier 1 fixer 선택을 보상으로 학습 |
 | **트렌드 수집** | pytrends (Google) + 네이버 DataLab API | 실시간 키워드 분석 |
-| **금융 데이터** | pykrx · yfinance | 주가·지표 수집 |
-| **이미지 생성** | Pollinations.ai (AI 사진) + 85점 인포그래픽 엔진 (LLM 디자인 디렉터·HTML→이미지) + matplotlib | 데이터마다 고유 인포그래픽 |
+| **금융 데이터** | pykrx · yfinance · KRX 거래대금 | 주가·지표·시장 거래량 수집 |
+| **인포그래픽 엔진** | **결정론 코드 템플릿**(8레이아웃·단위자동스케일) + Playwright 렌더 + 매일 팔레트 학습(`design_learner`) | D-번호 실데이터 주입 · LLM 수치 날조 차단 |
+| **AI 사진** | Pollinations.ai | 썸네일·본문 이미지 (키 불필요) |
 | **대시보드** | Streamlit | 통합 현황 모니터링 |
 | **알림** | Telegram Bot API | 실시간 승인·보고 |
 
@@ -539,6 +594,7 @@ python shared/agent_registration_check.py
 | 자가 학습 LLM 절감 | **패턴 적중 누적** | 동일 오류 LLM 0 즉시 처리 (실시간 증가) |
 | SDK→밴딧 폐쇄 루프 | `record_sdk_fix` + `bandit_arm_name` | Tier 2 자동수정 → 밴딧 arm 학습 → 다음 발행 전 sweep 자동수리율↑ (2026-06-28) |
 | 검증 순환 하니스 | 5-Layer (preflight→precondition→step→verify→send) | "결함 있는 결과물은 송출되지 않는다" |
+| 인포그래픽 나이틀리 학습 | `design_recipes.json` 매일 +1 | 색상 × 8레이아웃 조합으로 다양성 복리 상승 |
 
 ---
 

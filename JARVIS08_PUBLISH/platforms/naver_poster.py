@@ -808,12 +808,18 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
         def _paste_title():
             # ★ 순서 (사용자 박제 2026-07-06): 윈도우 활성화 → 제목칸 캐럿(JS focus) → Cmd+V.
             #   기존엔 focus 후 Escape/윈도우전환으로 캐럿이 blur → OS 붙여넣기가 허공에 감(제목 미입력).
+            # ★ pyautogui→ActionChains 교체 (ERRORS [402]): pyautogui HID Cmd+V 는 OS-level focus
+            #   (SmartEditor ONE 이 자동포커스한 본문)로 전달 → 제목이 본문에 입력되는 버그.
+            #   ActionChains CDP Cmd+V 는 JS t.focus() 로 잡은 DOM-focus(제목 칸) 직접 전달.
             _activate_window()
             _focus_title()
             time.sleep(0.2)
             pyperclip.copy(title)
             time.sleep(0.3)
-            _pg2.hotkey('command', 'v') if IS_MAC else _pg2.hotkey('ctrl', 'v')
+            from selenium.webdriver.common.action_chains import ActionChains as _ACv
+            from selenium.webdriver.common.keys import Keys as _Kv
+            _ACv(driver).key_down(_Kv.COMMAND if IS_MAC else _Kv.CONTROL).send_keys('v') \
+                        .key_up(_Kv.COMMAND if IS_MAC else _Kv.CONTROL).perform()
             time.sleep(0.8)
 
         _want = (title or "").strip()

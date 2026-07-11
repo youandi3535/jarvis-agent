@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import os as _os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FutureTimeout
 from .models import RawDocument, CollectionResult
 from .cleaner import clean_document
 
@@ -85,12 +85,27 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
         from JARVIS00_INFRA.watchdog import beat  # 지역 import (순환 방지)
     except Exception:
         def beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as exe:
-        futures = {exe.submit(_run_provider, p): p.source_type for p in _PROVIDERS}
-        for fut in as_completed(futures):
-            beat()   # ★ 프로바이더 결과 취합마다 진행신호 — 장시간 HTTP 수집 freeze 오탐 방지
-            docs = fut.result()
+    # ★ shutdown(wait=False): 타임아웃된 프로바이더 스레드를 버리고 즉시 진행
+    #   (yfinance 등 무한 hang 방지 — ERRORS [401])
+    exe = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
+    futures = {exe.submit(_run_provider, p): p.source_type for p in _PROVIDERS}
+    try:
+        for fut in as_completed(futures, timeout=90):  # 전체 90초 상한
+            beat()
+            try:
+                docs = fut.result(timeout=30)  # 개별 프로바이더 30초 상한
+            except _FutureTimeout:
+                ptype = futures.get(fut, "unknown")
+                log.warning(f"[Engine] {ptype} 30초 타임아웃 — 스킵")
+                docs = []
+            except Exception as e:
+                log.warning(f"[Engine] 프로바이더 결과 취합 실패: {e}")
+                docs = []
             raw_docs.extend(docs)
+    except _FutureTimeout:
+        log.warning("[Engine] 전체 수집 90초 초과 — 수집된 데이터만 사용")
+    finally:
+        exe.shutdown(wait=False)  # 잔여 스레드 백그라운드로 버림
 
     # 정제 + 중복 URL 제거
     seen_urls: set[str] = set()
@@ -298,70 +313,122 @@ def select_by_trust_quota(docs: list[CollectionResult],
     return selected
 
 
+def _collect_tier(provs: list, theme: str, sector: str, cap: int,
+                  seen_urls: set | None = None) -> list[CollectionResult]:
+    """티어 내 프로바이더 병렬 수집 → cap 개 이하 반환 (신뢰 순 정렬).
+
+    ★ 처음부터 cap 적용 (ERRORS [423]): 광역수집 후 절삭 방식 폐지.
+    각 프로바이더 max_items = min(자체 상한, cap) → 티어 전체 합계도 cap 이하.
+    """
+    if cap <= 0 or not provs:
+        return []
+    if seen_urls is None:
+        seen_urls = set()
+    from .models import trust_rank as _trust
+
+    raw_docs: list[RawDocument] = []
+
+    def _run(prov):
+        limit = min(_PROVIDER_LIMITS.get(prov.source_type, 8), cap)
+        try:
+            docs = prov.collect(theme, sector, max_items=limit)
+            log.info(f"[tier] {prov.source_type} → {len(docs)}건")
+            return docs
+        except Exception as e:
+            log.warning(f"[tier] {prov.source_type} 실패: {e}")
+            return []
+
+    exe = ThreadPoolExecutor(max_workers=min(len(provs), _MAX_WORKERS))
+    futures = {exe.submit(_run, p): p.source_type for p in provs}
+    try:
+        for fut in as_completed(futures, timeout=90):
+            try:
+                raw_docs.extend(fut.result(timeout=30) or [])
+            except _FutureTimeout:
+                log.warning(f"[tier] {futures.get(fut)} 30초 타임아웃 — 스킵")
+            except Exception as e:
+                log.warning(f"[tier] 결과 취합 실패: {e}")
+    except _FutureTimeout:
+        log.warning("[tier] 전체 90초 초과 — 수집된 데이터만 사용")
+    finally:
+        exe.shutdown(wait=False)
+
+    results = []
+    for raw in raw_docs:
+        if raw.url in seen_urls:
+            continue
+        seen_urls.add(raw.url)
+        try:
+            raw.extra["theme"] = raw.extra.get("theme") or theme
+            cleaned = clean_document(raw)
+            if cleaned.word_count >= 20:
+                results.append(cleaned)
+        except Exception:
+            pass
+
+    results.sort(key=lambda r: _trust(r.source_type))
+    return results[:cap]  # ★ 티어 상한 강제
+
+
 @_auto_catch("collector", reraise=True)
 def collect_research(theme: str, sector: str = "", angle: str = "",
                      max_rounds: int = 3) -> dict:
-    """★ 단순 수집 (사용자 박제 2026-07-06 — 자비스09 단순 수집기 재설계):
-    설계 → 광역+질문별 수집 → 티어순 최대 15개 원시 문서 확정 → *원시 그대로* 반환.
-
-    ADR 012 커버리지 재수집 루프 폐지 + fact 추출 폐지 — 09는 수집만 한다.
-    fact 추출·차트 숫자·종목 설명은 JARVIS02(작성기)가 받은 docs 로 직접 수행한다.
-    (max_rounds 는 시그니처 호환용 — 더 이상 재수집 루프에 쓰이지 않음.)
+    """★ 티어순 상한 수집 (사용자 박제 2026-07-11 — ERRORS [423]):
+    처음부터 논문 최대 3·API 최대 7·나머지 최대 5, cascade 이월.
+    광역수집 후 절삭 방식 완전 폐지 — 각 티어가 수집 시점에 상한 적용.
 
     Returns:
         {"docs": list[CollectionResult],  # 신뢰순 최대 15개 원시 문서
-         "plan": dict}                    # research_planner 설계도 (02 fact 추출 시 질문 맥락)
+         "plan": dict}                    # research_planner 설계도
     """
     from .research_planner import plan_research
+    from .models import (quota_group,
+                         COLLECT_QUOTA_BUDGET, COLLECT_PAPER_CAP, COLLECT_API_CAP)
 
-    try:
-        from JARVIS00_INFRA.watchdog import beat  # 지역 import (순환 방지)
-    except Exception:
-        def beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
+    paper_cap = int(_os.getenv("J09_PAPER_CAP",    str(COLLECT_PAPER_CAP))    or COLLECT_PAPER_CAP)
+    api_cap   = int(_os.getenv("J09_API_CAP",      str(COLLECT_API_CAP))      or COLLECT_API_CAP)
+    budget    = int(_os.getenv("J09_QUOTA_BUDGET", str(COLLECT_QUOTA_BUDGET)) or COLLECT_QUOTA_BUDGET)
 
-    log.info(f"[research] 단순 수집 시작: theme='{theme}'")
+    log.info(f"[research] 티어순 수집 시작: theme='{theme}' "
+             f"쿼터=논문{paper_cap}·API{api_cap}·총{budget}")
 
-    # ① 설계 (수집 설계 — 09 유지)
     plan = plan_research(theme, sector=sector, angle=angle)
-
-    # ①-b 키 누락 소스 감지 → 텔레그램 온보딩 안내 (fail-open)
     try:
         from .source_onboarding import check_and_notify
         check_and_notify(plan)
     except Exception:
         pass
 
-    # ② 광역 스윕(기존 collect_for_theme) ∥ 질문별 조준 수집
+    # 티어별 프로바이더 분류
+    paper_provs = [p for p in _PROVIDERS if quota_group(p.source_type) == "paper"]
+    api_provs   = [p for p in _PROVIDERS if quota_group(p.source_type) == "api"]
+    rest_provs  = [p for p in _PROVIDERS if quota_group(p.source_type) == "rest"]
+
     seen_urls: set[str] = set()
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as exe:
-        broad_fut = exe.submit(collect_for_theme, theme, sector)
-        q_futs = {exe.submit(_collect_for_question, q, theme, sector): q["id"]
-                  for q in plan.get("questions", [])}
-        targeted_raw: list[RawDocument] = []
-        for fut in as_completed(q_futs):
-            beat()   # ★ 질문별 조준 수집 결과 취합마다 진행신호 (freeze 오탐 방지)
-            try:
-                targeted_raw.extend(fut.result() or [])
-            except Exception as e:
-                log.debug(f"[research] 질문 {q_futs[fut]} 수집 실패: {e}")
-        try:
-            broad_docs = broad_fut.result() or []
-        except Exception as e:
-            log.warning(f"[research] 광역 스윕 실패: {e}")
-            broad_docs = []
 
-    for d in broad_docs:
-        seen_urls.add(d.url)
-    all_docs: list[CollectionResult] = list(broad_docs)
-    all_docs.extend(_clean_raw_docs(targeted_raw, theme, seen_urls))
+    # ① 논문: 최대 paper_cap
+    paper_docs = _collect_tier(paper_provs, theme, sector, paper_cap, seen_urls)
+    log.info(f"[research] 논문 {len(paper_docs)}/{paper_cap}건 확보")
 
-    # ③ 얇은 문서 전문 딥페치 (수집 밀도 — 여전히 수집 영역)
+    # ② API: 최대 api_cap + 논문 이월
+    api_allow = api_cap + (paper_cap - len(paper_docs))
+    api_docs  = _collect_tier(api_provs, theme, sector, api_allow, seen_urls)
+    log.info(f"[research] API {len(api_docs)}/{api_allow}건 확보")
+
+    # ③ 나머지: 남은 예산 전부 (cascade 자동)
+    rest_allow = budget - len(paper_docs) - len(api_docs)
+    rest_docs  = (_collect_tier(rest_provs, theme, sector, rest_allow, seen_urls)
+                  if rest_allow > 0 else [])
+    log.info(f"[research] 나머지 {len(rest_docs)}/{rest_allow}건 확보")
+
+    all_docs = paper_docs + api_docs + rest_docs
+
+    # 얇은 문서 전문 딥페치
     all_docs = _deep_fetch_thin_docs(all_docs, theme)
 
-    # ④ 신뢰 서열 쿼터로 최종 15개 확정 → 원시 그대로 반환 (fact 추출·재수집 루프 없음)
-    #   논문 3·API 7·나머지 5, 이월 cascade. fact·수치 추출은 JARVIS02 가 이 docs 로 수행.
-    all_docs = select_by_trust_quota(all_docs)
-    log.info(f"[research] 완료(단순 수집): 원시 문서 {len(all_docs)}건 → JARVIS02 가 fact·수치 추출")
+    total = len(all_docs)
+    log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
+             f"+나머지{len(rest_docs)}={total}건 → JARVIS02 fact·수치 추출")
     return {"docs": all_docs, "plan": plan}
 
 
@@ -399,7 +466,9 @@ def _stocks_to_entities(stocks_data: dict) -> list[dict]:
             except (TypeError, ValueError):
                 continue
         ents.append({"name": str(name), "type": "stock",
-                     "code": s.get("code") or s.get("ticker") or "",
+                     "code": s.get("code") or "",
+                     "ticker": s.get("ticker") or "",   # yfinance 형식 (005930.KS) — price chart 폴백용
+                     "rank": s.get("rank"),              # 대장주=1, 부대장주=2 — _inject_leader_price_charts 폴백용
                      "attrs": attrs, "source": dict(src)})
     return ents
 

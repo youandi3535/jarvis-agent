@@ -175,6 +175,10 @@ _TRANSIENT_PATTERNS = [
     re.compile(r"수정 불가.*(패턴 반복|건)|재생성해도 동일 결과", re.I),
     # 콘텐츠·데이터 생성 운영 실패 (재생성·다음 회차에 해소 — 코드 패치 불가)
     re.compile(r"HTML 생성 실패|트렌드 데이터 없음|키워드 .*등장|body 등장|카테고리 검색 실패|BrokenPipeError", re.I),
+    # ★ ERRORS [405] 박제 2026-07-11 — topic_pack 생성 실패(트렌드·적합 후보·LLM 미가용)는
+    # 코드 버그가 아니라 LLM rate-limit/회로차단으로 인한 일시적 자원 경합(topic_pack._profile_batch
+    # 스로틀). Tier2 SDK 낭비 세션이 재시도의 LLM 슬롯과 경합해 재발을 야기하는 자기강화 루프 방지.
+    re.compile(r"주제 패키지 없음", re.I),
     # 외부 이미지 모델 API (HuggingFace 폐기 모델·할당량 소진 — 외부 제약)
     re.compile(r"HTTP \d{3} —|depleted your.*credits|requested model.*(does not exist|deprecated)"
                r"|black-forest-labs|stabilityai|stable-diffusion-|FLUX\.\d", re.I),
@@ -185,6 +189,11 @@ _TRANSIENT_PATTERNS = [
     # 재시작 "완료" 보고에는 코드 결함 정보(파일·라인·traceback) 자체가 없어 Tier1/2 가
     # 고칠 대상이 없음 — Sonnet 5 낭비 호출 방지. hang 의 근본원인은 daemon_faulthandler.log 로 별도 추적.
     re.compile(r"데몬 HANG 감지|데몬 강제 재시작 완료|hang 복구", re.I),
+    # ★ ERRORS [413] 박제 2026-07-11 — [213]/[396]과 동일 클래스: watchdog 이 killable
+    # subprocess(트렌드·성과 수집 등)를 freeze/deadline 감지로 os._exit(75) 강제 종료한
+    # "정상 자가치유" 보고(jobs.py _run_script_checked). traceback 은 NoneType — 코드 결함
+    # 위치 정보 자체가 없어 Tier1/2 가 고칠 대상이 없고, 다음 예약 실행이 깨끗하게 재시도한다.
+    re.compile(r"워치독 정지\(freeze/deadline\) 감지로 강제 종료", re.I),
 ]
 
 
