@@ -126,8 +126,9 @@ def _extract_facts_batch(theme: str, plan: dict, docs: list,
     try:
         from shared.llm import invoke_text
         # ★ 단일 호출로 전 문서 처리 (ERRORS [374]) — max_tokens 상향(더 많은 fact 수용)
+        # timeout=150: 스로틀 시 5분 무한대기 방지 (빈 facts로 계속 진행)
         raw = invoke_text("analyzer", prompt, system=_EXTRACT_SYSTEM,
-                          max_tokens=3200, temperature=0.1)
+                          max_tokens=3200, temperature=0.1, timeout=150)
     except Exception as e:
         log.warning(f"[evidence] fact 추출 실패: {e}")
         _g_report("collector", e, module=__name__, func_name="_extract_facts_batch")

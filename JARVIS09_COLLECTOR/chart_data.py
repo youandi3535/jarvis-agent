@@ -48,6 +48,9 @@ _STOCK_THEME_KWS = frozenset([
     "코스피", "코스닥", "증시", "상장", "기업", "그룹", "전자", "화학", "엔터",
 ])
 
+# 시장 전체 거래대금 dataset 적용 대상 키워드
+_MARKET_KWS = frozenset(["코스피", "코스닥", "증시", "주식시장", "한국증시"])
+
 # 거시경제·시장 키워드 — market/ECOS dataset 허용 판정
 _MACRO_KWS = frozenset([
     "금리", "기준금리", "물가", "cpi", "환율", "달러", "수출", "수입", "실업",
@@ -67,7 +70,6 @@ def _fingerprint(title: str, unit: str) -> str:
 def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
     """dataset dict 생성. data 가 비거나 값이 부족하면 None."""
     rows, _seen = [], set()
-    _is_bar = viz_hint == "bar_chart"
     for d in data or []:
         try:
             v = float(str(d.get("value")).replace(",", ""))
@@ -75,10 +77,16 @@ def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
             continue
         label = _clean_label(d.get("label", ""))   # 괄호 설명 제거 + 길이 제한 (짤림·장황 방지)
         if label and v == v and label not in _seen:  # NaN·중복 라벨 제외
-            if _is_bar and v == 0:  # ★ bar_chart에서 0값 제외 (수집 실패·의미 없는 0)
+            if v == 0:  # ★ 0값 제외 (viz_hint 무관) — 0개 항목은 데이터 없음·비교 불가
                 continue
             _seen.add(label)
             rows.append({"label": label, "value": v})
+    # ★ bar_chart: 합계 행과 세부 항목이 섞이면 합계 행 제거 (LLM·KOSIS 양 경로 공통)
+    # "전체/계/합계" 라벨은 개별 항목들의 집계이므로 동일 차트에 놓으면 비교 왜곡.
+    if viz_hint == "bar_chart" and len(rows) > 2:
+        non_total = [r for r in rows if r["label"] not in _DEMO_TOTAL]
+        if len(non_total) >= 2:
+            rows = non_total
     # 차트 의미 최소 기준: kpi 1개, 그 외 2개
     _min = 1 if viz_hint == "kpi_cards" else 2
     if len(rows) < _min:
@@ -95,7 +103,101 @@ def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
     }
 
 
-# ── 1. 종목 재무 dataset (collect_stocks_data) ───────────────────────────
+# ── 0. 코스닥 150 섹터 지수 dataset (ERRORS [420]) ───────────────────────────
+_KOSDAQ150_KWS = frozenset(["코스닥 150", "kosdaq 150", "kosdaq150", "150 섹터", "150 지수",
+                             "150 소재", "150 헬스케어", "150 정보기술", "150 산업재", "섹터 지수"])
+
+
+def _kosdaq150_sector_datasets(theme: str) -> list[dict]:
+    """코스닥 150 섹터 지수(8개 전체) dataset.
+
+    ★ 왜 필요: KOSIS/web 수집 시 8개 중 일부만 반환 → 최고/최저 KPI 오표시 (ERRORS [420]).
+      KRX get_index_ohlcv_by_date 로 8개 전부 보장.
+    실데이터 실패 시 빈 리스트 — ADR 010: 합성 수치 절대 금지.
+    """
+    theme_lower = theme.lower()
+    if not any(kw in theme_lower for kw in _KOSDAQ150_KWS):
+        return []
+    try:
+        from JARVIS09_COLLECTOR.providers.krx_provider import (
+            _collect_kosdaq150_sectors, _last_trading_day,
+        )
+        doc = _collect_kosdaq150_sectors()
+        if not doc:
+            log.info("[chart_data] 코스닥 150 섹터 지수 실데이터 없음 — 차트 스킵 (ADR 010)")
+            return []
+
+        # RawDocument → rows 파싱
+        rows = []
+        in_table = False
+        for line in doc.raw_text.splitlines():
+            if line.startswith("섹터명|"):
+                in_table = True
+                continue
+            if in_table and "|" in line:
+                parts = line.split("|")
+                if len(parts) >= 2:
+                    try:
+                        rows.append({"label": parts[0].strip(), "value": float(parts[1].strip())})
+                    except (ValueError, TypeError):
+                        pass
+
+        if len(rows) < 3:
+            return []
+
+        _td = _last_trading_day()
+        src = {
+            "provider": "krx",
+            "name": "한국거래소 KRX",
+            "url": "https://data.krx.co.kr",
+            "as_of": f"{_td.year}년 {_td.month}월",
+        }
+        ds = _mk_dataset("코스닥 150 섹터 지수", "bar_chart", "pt", rows, src)
+        log.info(f"[chart_data] 코스닥 150 섹터 지수 {len(rows)}개 dataset 생성")
+        return [ds] if ds else []
+    except Exception as e:
+        log.warning(f"[chart_data] 코스닥 150 섹터 dataset 실패: {e}")
+        return []
+
+
+# ── 1. 시장 거래대금 dataset (코스피·코스닥 주제 전용) ─────────────────────
+def _market_trading_volume_datasets(theme: str) -> list[dict]:
+    """코스피·코스닥 일평균 거래대금 비교 dataset.
+
+    실데이터(pykrx) 획득 실패 시 빈 리스트 반환 — ADR 010: 합성 수치 절대 금지.
+    """
+    if not any(k in theme for k in _MARKET_KWS):
+        return []
+    try:
+        from JARVIS09_COLLECTOR.providers.krx_provider import (
+            collect_market_trading_volume, _last_trading_day,
+        )
+        vol = collect_market_trading_volume()
+        if not vol:
+            log.info("[chart_data] 시장 거래대금 실데이터 없음 — 차트 스킵 (ADR 010)")
+            return []
+        rows = []
+        if vol.get("kospi") is not None:
+            rows.append({"label": "코스피", "value": vol["kospi"]})
+        if vol.get("kosdaq") is not None:
+            rows.append({"label": "코스닥", "value": vol["kosdaq"]})
+        if len(rows) < 2:
+            return []
+        _td = _last_trading_day()
+        src = {
+            "provider": "krx",
+            "name": "한국거래소 KRX",
+            "url": "https://data.krx.co.kr",
+            "as_of": vol.get("as_of", f"{_td.year}년 {_td.month}월"),
+        }
+        ds = _mk_dataset("코스피·코스닥 일평균 거래대금", "bar_chart", "조원", rows, src)
+        return [ds] if ds else []
+    except Exception as e:
+        log.warning(f"[chart_data] 시장 거래대금 dataset 실패: {e}")
+        return []
+
+
+# ── 2. 종목 재무 dataset (collect_stocks_data) ───────────────────────────
 def _stock_datasets(theme: str) -> list[dict]:
     try:
         from JARVIS09_COLLECTOR import collect_stocks_data
@@ -252,42 +354,65 @@ _SYNONYM_CACHE: dict = _load_synonym_cache()
 def _expand_theme(theme: str) -> list:
     """주제 → 한국 공식 통계·정부자료 *검색용 정식 명칭·동의어* (LLM, 하드코딩 0).
     ★ 사용자 박제 2026-07-01: KOSIS 는 '지역사랑상품권'으로 인덱싱돼 '지역화폐'로는 0건.
-    정식 명칭을 검색어·관련성 토큰에 포함해 *수율 안정화* + 동의어 관련성 인정."""
+    정식 명칭을 검색어·관련성 토큰에 포함해 *수율 안정화* + 동의어 관련성 인정.
+
+    ★ 캐시 두 계층화: throttle 실패는 캐시 미저장(다음 호출 재시도),
+      LLM 정상 응답은 [] 포함 영구 저장(확정 빈값 = 재호출 낭비 없음)."""
     theme = (theme or "").strip()
     if not theme:
         return []
-    if theme in _SYNONYM_CACHE:
+    if theme in _SYNONYM_CACHE:   # [] 포함 — 확정 결과는 캐시 히트로 LLM 0회
         return _SYNONYM_CACHE[theme]
     syns = []
+    _throttled = False
     _prompt = (
         f'"{theme}" 를 한국 정부통계(KOSIS)·공식자료에서 검색할 때 쓰는 *정식 명칭·동의어* 를 '
         f'최대 3개 알려줘 (예: "지역화폐"→"지역사랑상품권", "전기차"→"전기자동차"). '
         f'"{theme}" 자체가 이미 정식명이면 유사·상위 개념어라도 1~2개. 정말 없을 때만 빈 배열.\n'
         'JSON만: {"terms": ["정식명칭1", ...]}')
-    for _attempt in range(1):   # ★ 1회만 (ERRORS [400]): 재시도 없음 — 스로틀·파싱실패 모두 그냥 통과
-        try:
-            from shared.llm import invoke_text
-            raw = invoke_text("analyzer", _prompt, max_tokens=120, temperature=0)
-            if not raw or not raw.strip():
-                log.warning(f"[chart_data] '{theme}' 동의어 확장 빈 응답(스로틀) → 동의어 없이 통과")
-                break
+    try:
+        from shared.llm import invoke_text
+        # ★ _nonessential=True: 스로틀 시 즉시 폴백, circuit breaker 카운트 제외
+        raw = invoke_text("analyzer", _prompt, max_tokens=120, temperature=0, _nonessential=True)
+        if not raw or not raw.strip():
+            # 빈 응답 = 회로차단기 선제 차단 or API 스로틀 — 캐시 미저장, 다음 호출 재시도
+            _throttled = True
+            log.warning(f"[chart_data] '{theme}' 동의어 확장 빈 응답(스로틀) → 동의어 없이 통과")
+        else:
             m = re.search(r"\{[\s\S]*\}", raw)
             if m:
                 terms = json.loads(m.group(0)).get("terms") or []
                 syns = [str(t).strip() for t in terms if str(t).strip() and str(t).strip() != theme][:3]
-        except Exception as e:
-            log.warning(f"[chart_data] 동의어 확장 실패: {e}")
-    _SYNONYM_CACHE[theme] = syns
-    # ★ 성공 시에만 영구 저장 (빈 결과는 rate-limit 일 수 있어 저장 안 함 → 다음에 재시도)
-    if syns:
+    except Exception as e:
+        _throttled = True
+        log.warning(f"[chart_data] 동의어 확장 실패: {e}")
+
+    if not _throttled:
+        # 정상 응답([] 포함) → 확정 결과 캐시 + 파일 영구 저장
+        _SYNONYM_CACHE[theme] = syns
         try:
             _SYNONYM_FILE.write_text(json.dumps(_SYNONYM_CACHE, ensure_ascii=False, indent=1),
                                      encoding="utf-8")
         except Exception:
             pass
+    # throttle 시: _SYNONYM_CACHE 미저장 → 다음 호출 시 재시도(캐시 미스 → LLM 재요청)
+
     if syns:
         log.info(f"[chart_data] '{theme}' 동의어 확장 → {syns}")
     return syns
+
+
+def warm_synonyms(themes: list) -> dict:
+    """주제 목록의 동의어를 미리 확장·캐시. topic_pack 빌드 시 선행 호출용.
+
+    chart_data 파이프라인 LLM 부하 시작 전(topic_pack 생성 시점)에 실행하여
+    위상 분리 — collect_chart_data 진입 시 _expand_theme 가 캐시 히트 → LLM 0회."""
+    result = {}
+    for t in (themes or []):
+        t = (t or "").strip()
+        if t:
+            result[t] = _expand_theme(t)
+    return result
 
 
 _DEMO_TOTAL = {"전체", "계", "합계", "소계", "총계", "전국", "평균"}
@@ -376,6 +501,13 @@ def _reduce_crosstab(rows: list, max_rows: int = 7) -> list:
             continue
         seen.add(lab)
         out.append({"label": lab, "value": p["value"]})
+    # ★ 1D 테이블 합계 행 분리: "전체/계" 라벨과 세부 항목이 섞이면 합계 행 제거.
+    # "전체: 355, 정보통신업: 136, ..." → 전체는 합계이지 비교 대상이 아님.
+    # maxseg<2 인 1D 테이블(교차표 아님)에서도 동일 원칙 적용.
+    if len(out) > 2:
+        non_total = [r for r in out if r["label"] not in _DEMO_TOTAL]
+        if len(non_total) >= 2:
+            out = non_total
     return out[:max_rows]
 
 
@@ -457,9 +589,108 @@ def _parse_clean_doc(doc):
     return _mk_dataset(title[:40], "bar_chart", unit, rows, src)
 
 
+def _korean_num_variants(fv: float) -> list[str]:
+    """float 값의 한국어 조/억/만/천/백 단위 표기 후보 반환.
+
+    출처 문서가 아라비아 숫자 대신 "11만5천", "5천661", "1백29", "3억2천만" 등으로
+    표기한 경우도 grounding 이 통과하도록 가능한 표기 변형을 모두 생성.
+    콤마(110,000 / 110000)는 _value_grounded ① 에서 nc(콤마제거) 로 이미 처리.
+
+    예:
+      115000   → ["11만5000","11만 5000","11만5천","11만 5천"]
+      155661   → ["15만5661","15만 5661","15만5천661","15만5천6백61", ...]
+      5000     → ["5000","5천"]
+      129      → ["129","1백29"]
+      50000000 → ["5000만","5천만"]
+    """
+    if fv != int(fv) or fv <= 0 or fv >= 1e16:
+        return []
+    v = int(fv)
+
+    def _천형(n: int) -> list[str]:
+        """0-9999 → 천/백 포함 한국어 표기 + 숫자. 0 → [""]."""
+        if n == 0:
+            return [""]
+        forms = [str(n)]
+        천 = n // 1000
+        남_천 = n % 1000
+        백 = 남_천 // 100
+        남_백 = 남_천 % 100
+        if 천 > 0:
+            p천 = "천" if 천 == 1 else f"{천}천"
+            forms.append(p천 + (str(남_천) if 남_천 else ""))        # "5천661"
+            if 백 > 0:
+                p백 = "백" if 백 == 1 else f"{백}백"
+                forms.append(p천 + p백 + (str(남_백) if 남_백 else ""))  # "5천6백61"
+        elif 백 > 0:
+            p백 = "백" if 백 == 1 else f"{백}백"
+            forms.append(p백 + (str(남_백) if 남_백 else ""))        # "1백29"
+        return list(dict.fromkeys(forms))
+
+    def _만형(n: int) -> list[str]:
+        """0-99,999,999 → 만/천/백 포함 한국어 표기. 0 → [""]."""
+        if n == 0:
+            return [""]
+        만_cnt = n // 10_000
+        남_만 = n % 10_000
+        if 만_cnt == 0:
+            return _천형(n)
+        만_cnts = _천형(만_cnt)   # 만 개수 자체의 천 표기 (5000만→5천만)
+        남_forms = _천형(남_만)
+        forms = []
+        for mc in 만_cnts:
+            만_str = mc + "만"
+            for s in 남_forms:
+                forms.append(만_str + s)
+                if s:
+                    forms.append(만_str + " " + s)
+        return list(dict.fromkeys(forms))
+
+    results: list[str] = []
+    조 = v // 1_000_000_000_000
+    rem_조 = v % 1_000_000_000_000
+    억 = rem_조 // 100_000_000
+    rem_억 = rem_조 % 100_000_000
+
+    if 조 > 0:
+        조_str = f"{조}조"
+        if rem_조 == 0:
+            results.append(조_str)
+        elif 억 == 0:
+            for s in _만형(rem_조):
+                results.append(조_str + s)
+                if s:
+                    results.append(조_str + " " + s)
+        else:
+            억_str = f"{억}억"
+            for s in _만형(rem_억):
+                results.append(조_str + 억_str + s)
+                if s:
+                    results.append(조_str + 억_str + " " + s)
+            if not rem_억:
+                results.append(조_str + 억_str)
+    elif 억 > 0:
+        억_str = f"{억}억"
+        if rem_억 == 0:
+            results.append(억_str)
+        else:
+            for s in _만형(rem_억):
+                results.append(억_str + s)
+                if s:
+                    results.append(억_str + " " + s)
+    else:
+        results.extend(_만형(v))
+
+    return list(dict.fromkeys(r for r in results if r and r.strip()))
+
+
 def _value_grounded(value, doc_text: str) -> bool:
-    """★ 수치 grounding (2026-07-02): LLM이 낸 value 가 출처 본문에 *형식 무관* 등장하는지.
-    명백한 환각만 걸러내도록 관대 매칭 — 집계·스케일 변형된 정당한 값의 오탐(드롭)을 피한다.
+    """★ 수치 grounding: LLM이 낸 value 가 출처 본문에 *형식·근사 무관* 등장하는지.
+
+    ① 정확 매칭: 다양한 형식(콤마 제거·소수·정수부·유효숫자)으로 문자열 검색
+    ② 한국어 만/억 단위 표기 매칭: "11만5000" → 115000 인정
+    ③ 근사 매칭: 문서 내 모든 수치와 ±5% / 표시자리 올림·버림 비교 (models.grounds 재사용)
+       "약 1030" → 1031 팩트로 인정, 스케일 10배 차이는 거부.
     본문 없음/파싱불가 = 판정 보류(통과)."""
     if not doc_text:
         return True
@@ -468,6 +699,7 @@ def _value_grounded(value, doc_text: str) -> bool:
     except (TypeError, ValueError):
         return True
     nc = doc_text.replace(",", "")
+    # ① 정확 매칭 (형식 변형 포함)
     cands = {str(fv), f"{fv:.1f}", f"{fv:.2f}"}
     if fv == int(fv):
         cands.add(str(int(fv)))
@@ -480,6 +712,22 @@ def _value_grounded(value, doc_text: str) -> bool:
     sig = str(fv).replace(".", "").lstrip("0")   # 유효숫자열 (예: 45.2 → 452)
     if len(sig) >= 3 and sig in nc:
         return True
+    # ② 한국어 만/억 단위 표기 매칭 — "11만5000" → 115000 (LLM이 아라비아 숫자로 변환한 경우)
+    # nc(콤마 제거)에서도 검색 — "3만7,000" → nc에서 "3만7000" 매칭
+    for kor in _korean_num_variants(fv):
+        if kor and (kor in doc_text or kor in nc):
+            return True
+    # ③ 근사 매칭 — 문서 내 수치 전수 비교, ±5%/올림·버림 허용 (약 1030 → 1031 통과)
+    try:
+        from JARVIS09_COLLECTOR.models import grounds as _gnd
+        for _m in re.findall(r'\d+(?:\.\d+)?', nc):
+            try:
+                if _gnd(fv, float(_m)):
+                    return True
+            except Exception:
+                pass
+    except ImportError:
+        pass
     return False
 
 
@@ -495,13 +743,14 @@ def _extract_series_from_docs(series: dict, docs: list):
     sel = docs[:8]
     excerpts = "\n\n".join(
         f"[{i}] ({getattr(d, 'source_type', '')}) {getattr(d, 'title', '')}\n"
-        f"{(getattr(d, 'raw_text', '') or getattr(d, 'cleaned_text', '') or '')[:600]}"
+        f"{(getattr(d, 'raw_text', '') or getattr(d, 'cleaned_text', '') or '')[:1500]}"
         for i, d in enumerate(sel))
     try:
         from shared.llm import invoke_text
+        # ★ _nonessential=True: 스로틀 시 즉시 폴백, circuit breaker 카운트 제외
         raw = invoke_text("analyzer",
                           _SERIES_PROMPT.format(name=series["name"], unit=series.get("unit", ""), excerpts=excerpts),
-                          system=_SERIES_SYSTEM, max_tokens=700, temperature=0.1)
+                          system=_SERIES_SYSTEM, max_tokens=700, temperature=0.1, _nonessential=True)
     except Exception as e:
         log.warning(f"[chart_data] series 추출 LLM 실패: {e}")
         return None
@@ -513,16 +762,22 @@ def _extract_series_from_docs(series: dict, docs: list):
     except Exception:
         return None
     rows, src_url, src_name = [], "", ""
+    # grounding 전체 문서 합본 (source_idx 오지정 대비 — 실제 수치가 다른 문서에 있는 경우)
+    _all_dtext = " ".join(
+        getattr(d, "raw_text", "") or getattr(d, "cleaned_text", "") or ""
+        for d in sel
+    )
     for r in parsed.get("data") or []:
         try:
             doc = sel[int(r.get("source_idx"))]
         except (TypeError, ValueError, IndexError):
             continue
         # ★ 수치 grounding: LLM이 낸 value 가 출처 본문에 실제 등장하는지 (환각 차단)
+        # source_idx 지정 문서 우선 → 없으면 전체 수집 문서에서 재검색 (source_idx 오지정 보완)
         _val = r.get("value")
         _dtext = (getattr(doc, "raw_text", "") or getattr(doc, "cleaned_text", "") or "")
-        if not _value_grounded(_val, _dtext):
-            log.warning(f"[chart_data] 환각 수치 드롭: {r.get('label')}={_val} (출처 본문 미등장)")
+        if not _value_grounded(_val, _dtext) and not _value_grounded(_val, _all_dtext):
+            log.warning(f"[chart_data] 환각 수치 드롭: {r.get('label')}={_val} (전체 문서 미등장)")
             continue
         if not src_url:
             src_url = getattr(doc, "url", "") or ""
@@ -596,9 +851,9 @@ def _relevance_filter(theme: str, description: str, datasets: list) -> list:
     for _attempt in range(2):   # ★ 재시도 — JSON 파싱 실패 시만 (ERRORS [399] 동일 패턴)
         try:
             from shared.llm import invoke_text
-            raw = invoke_text("analyzer", prompt, max_tokens=200, temperature=0)
+            # ★ _nonessential=True: 스로틀 시 즉시 폴백, circuit breaker 카운트 제외
+            raw = invoke_text("analyzer", prompt, max_tokens=200, temperature=0, _nonessential=True)
             if not raw or not raw.strip():
-                # ★ 빈 응답 = Max 스로틀 → 즉시 종료 (추가 스폰 금지)
                 log.warning(f"[chart_data] '{theme}' 관련성 게이트 빈 응답(스로틀) → 결정론 백스톱")
                 break
             m = re.search(r"\{[\s\S]*\}", raw)
@@ -652,15 +907,60 @@ def _query_candidates(series: dict, theme: str) -> list[str]:
 # 텍스트 출처 — 제목 관련성 1차 필터 적용 대상 (finance 류는 제목이 종목/지수명이라 면제)
 _TEXT_SOURCES = {"kosis", "academic", "kci", "kor_econ", "naver_news", "news", "web"}
 
+# ★ 소스 신뢰도 순위 — LLM 설계 순서 무관, 항상 이 순위로 재정렬 (ERRORS [421])
+# 근거: ADR 013 "신뢰순위 논문>API>뉴스>기사>웹". LLM이 ["web","kosis"] 설계해도
+# 실행은 항상 kosis → web 순서. web/blog가 먼저 실행되어 틀린 수치 채택 사고 원천 차단.
+_SOURCE_TRUST_RANK: dict[str, int] = {
+    "finance": 1,     # yfinance — 공식 금융 API
+    "krx":     1,     # 한국거래소 공식 API
+    "ecos":    1,     # 한국은행 ECOS 공식 API
+    "dart":    2,     # 금감원 전자공시 API
+    "kosis":   2,     # 통계청 공식 통계 DB
+    "kor_econ":3,     # 정부 보도자료
+    "academic":3,     # 학술 논문 (arXiv 등)
+    "kci":     3,     # 국내 학술논문
+    "naver_news":4,   # 네이버 뉴스
+    "news":    4,     # 언론사 뉴스
+    "discover":5,     # 웹 발견 (구글·네이버 검색)
+    "web":     6,     # 웹 (낮은 신뢰도)
+    "blog":    7,     # 블로그 (최저 신뢰도)
+}
+
+# 시장 지표 키워드 — discover 웹 폴백 차단 대상 (ERRORS [421])
+# 이 키워드가 series name/query에 있으면 API/kosis 실패해도 웹 검색 폴백 금지.
+# 웹에서 가져온 시장 수치는 검증 불가 → 차트 없는 게 틀린 차트보다 낫다.
+_NO_WEB_FALLBACK_KWS = frozenset([
+    "시가총액", "코스닥", "코스피", "주가지수", "지수", "증시",
+    "기준금리", "환율", "달러", "나스닥", "s&p",
+    "업종별", "섹터", "업종비중", "코스닥 150", "섹터지수",
+    "kosdaq", "kospi", "nasdaq",
+    # ★ 주간 등락률 — web 크롤링 수치 완전히 틀림 (ERRORS [424])
+    "등락률", "주간등락률", "등락", "수익률", "주간수익률",
+    "주간변동", "이번주", "금주",
+])
+
 
 def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: set = None):
-    """한 series 를 설계된 출처 우선순위로 조준 수집 (라이브러리 자동설치 + 쿼리 점진 확장). 첫 성공 사용.
-    ★ 텍스트 출처는 *제목 관련성* 으로 관련 문서를 우선 → KOSIS 가 엉뚱한 표(농촌관광 등)를
-      반환해도 series·주제와 겹치는 표를 골라 추출. 관련 0이면 그 출처 스킵(엉뚱한 표 채택 금지)."""
+    """한 series 를 신뢰도 순으로 조준 수집. 첫 성공 소스 사용.
+
+    ★ 소스 신뢰도 강제 재정렬 (ERRORS [421]): LLM 설계 순서 무관, _SOURCE_TRUST_RANK 순으로
+      항상 재정렬. API(1) → 공식통계(2) → 논문/정부(3) → 뉴스(4) → discover(5) → web(6) → blog(7).
+      LLM이 ["web","kosis"] 설계해도 실행은 kosis → web 순서.
+    ★ 텍스트 출처: 제목 관련성 필터 — KOSIS 가 엉뚱한 표 반환해도 주제·series 겹치는 것만 채택.
+    ★ 시장 지표 discover 폴백 차단 (ERRORS [421]): _NO_WEB_FALLBACK_KWS 키워드 있는 series 는
+      API/공식통계 실패해도 웹 검색 폴백 금지. 틀린 차트보다 차트 없음이 낫다.
+    """
     queries = _query_candidates(series, theme)
     _ser_tokens = set(ref_tokens or set()) | _specific_tokens(
         f"{series.get('name', '')} {series.get('query', '')}")
-    for source in series.get("sources", []):
+
+    # ★ 핵심: 소스를 신뢰도 순으로 재정렬 (LLM 설계 순서 무시)
+    raw_sources = series.get("sources", [])
+    sources_sorted = sorted(raw_sources, key=lambda s: _SOURCE_TRUST_RANK.get(s, 99))
+    if sources_sorted != raw_sources:
+        log.debug(f"[chart_data] '{series['name']}' 소스 재정렬: {raw_sources} → {sources_sorted}")
+
+    for source in sources_sorted:
         _ensure_source_ready(source)
         prov = _get_provider(source)
         if not prov:
@@ -681,8 +981,15 @@ def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: 
         if ds:
             log.info(f"[chart_data] '{series['name']}' ← {source} ({len(ds['data'])}점)")
             return ds
-    # ★ 고정 출처 전패 → 웹 발견 폴백 (사용자 박제 2026-07-01): 카탈로그로 못 받으면
-    #   웹검색(구글·네이버·공공데이터)으로 실제 데이터 페이지를 찾아 받는다. 어떤 주제든.
+
+    # ★ discover 웹 폴백 — 시장 지표 series는 차단 (ERRORS [421])
+    _combined = (series.get("name", "") + " " + series.get("query", "")).lower()
+    _is_market = any(kw in _combined for kw in _NO_WEB_FALLBACK_KWS)
+    if _is_market:
+        log.info(f"[chart_data] '{series['name']}' 시장지표 — discover 웹 폴백 차단. 차트 없음 선택.")
+        return None
+
+    # 일반 주제: 고정 출처 전패 → 웹 발견 폴백 (사용자 박제 2026-07-01)
     if "discover" not in series.get("sources", []):
         _ensure_source_ready("discover")
         prov = _get_provider("discover")
@@ -699,7 +1006,8 @@ def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: 
 
 # ── 공개 API ──────────────────────────────────────────────────────────────
 def collect_chart_data(theme: str, sector: str = "", description: str = "",
-                       exclude_titles=None, max_datasets: int = 12) -> dict:
+                       exclude_titles=None, max_datasets: int = 12,
+                       synonyms: list | None = None) -> dict:
     """주제 연관 차트용 실데이터를 출처(provenance)와 함께 수집.
 
     Args:
@@ -708,6 +1016,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         description:    관련 섹션 본문/설명 — 관련 dataset 우선순위 힌트.
         exclude_titles: 이미 사용한 dataset title 집합 (같은 글 내 중복 방지).
         max_datasets:   반환 최대 dataset 수.
+        synonyms:       topic_pack 선행 확장 결과 (있으면 _expand_theme LLM 호출 스킵).
 
     Returns:
         {"theme": theme, "datasets": [dataset, ...]}.
@@ -719,10 +1028,19 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
 
     _COLLECT_CACHE.clear()   # ★ per-run 수집 캐시 초기화 (이전 주제 잔재 제거 + 이번 run 내 재사용)
     datasets: list[dict] = []
+    import time as _time
+    _t0 = _time.monotonic()
+
+    def _elapsed(label: str):
+        log.info(f"[chart_data] ⏱ {label}: {_time.monotonic() - _t0:.1f}s")
 
     # ── 0) 동의어 확장 (사용자 박제 2026-07-01): KOSIS 는 정식명('지역사랑상품권')으로 인덱싱돼
-    #    주제명('지역화폐')만으론 0건. 정식 명칭을 검색어·관련성 토큰에 포함 → 수율 안정화. ──────
+    #    주제명('지역화폐')만으론 0건. 정식 명칭을 검색어·관련성 토큰에 포함 → 수율 안정화.
+    #    ★ synonyms 제공 시(topic_pack 선행 확장): 캐시 주입 후 _expand_theme 캐시 히트 → LLM 0회.
+    if synonyms is not None and theme not in _SYNONYM_CACHE:
+        _SYNONYM_CACHE[theme] = list(synonyms)
     _syns = _expand_theme(theme)
+    _elapsed("0) 동의어 확장")
 
     # ── 1) 설계 우선 (data_planner): 주제별 series·출처·쿼리 설계 → 조준 수집(병렬) ──────
     #    ★ 사용자 박제 2026-06-30: 무작정 수집이 아니라 "설계 → 조준 수집". 라이브러리 자동설치.
@@ -746,6 +1064,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
             for ds in _ex.map(lambda s: _collect_one_series(s, sector, theme, _ref_tokens), plan):
                 if ds:
                     datasets.append(ds)
+    _elapsed(f"1) 설계+조준수집 (datasets={len(datasets)})")
 
     # ── 2) 종목(기업) 테마 보강 — 설계 수집이 0일 때만, *명백한 종목 테마* 에 한해 ──────
     #    (글로벌 시장 dump(_market_datasets)·ecos dump 는 제거: 비관련 주제에 새어들어 불일치=거짓.
@@ -760,6 +1079,13 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                 and not any(k in combined for k in _SPECIFIC_NON_VALUATION))
     if not datasets and is_stock:
         datasets.extend(_stock_datasets(theme))
+    _elapsed(f"2) 종목보강 (datasets={len(datasets)})")
+
+    # ── 2.5) 시장 전용 dataset (코스닥·코스피, 코스닥 150) ───────────────────
+    #   ADR 010: 실데이터 없으면 빈 리스트 반환 — 합성 수치 사용 금지.
+    datasets.extend(_market_trading_volume_datasets(theme))
+    datasets.extend(_kosdaq150_sector_datasets(theme))   # ★ 코스닥 150 섹터 지수 전체 보장 (ERRORS [420])
+    _elapsed(f"2.5) 시장 dataset (datasets={len(datasets)})")
 
     # ── 3) 적응형 *멀티소스* 포착 — ★ '받을 수 있는 곳을 전부' (사용자 박제 2026-07-01):
     #    KOSIS 만이 아니라 뉴스·정부보도(kor_econ)·논문(academic)·웹에서도 *주제 관련 실데이터* 를
@@ -780,7 +1106,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                 _terms.append(" ".join(tk[:2]))
             if len(tk) > 1:
                 _terms.append(tk[0])   # 핵심 명사 (예: 지역사랑상품권)
-        _terms = list(dict.fromkeys(_terms))[:6]   # 속도: 상위 6개(주제+동의어+설명) — step1이 설계쿼리 커버
+        _terms = list(dict.fromkeys(_terms))[:4]   # 속도: 상위 4개 — step1이 설계쿼리 커버, 8출처×4=32요청
         # 관련성 토큰: step1 과 동일한 _ref_tokens(주제+설명+설계 동의어 포함) 재사용 → 일관 게이트.
 
         def _natural_title(d):   # provider 접두(주제명 스탬프) 제거한 *실제* 표/논문명
@@ -824,6 +1150,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         # (B) 병렬 추출 — LLM 호출이 느려 동시 실행.
         # ★ max_workers=2 (ERRORS [399] 동일 원인): 6→2 제한 — 동시 LLM 6개가 TPM 초과 → 스로틀 직격.
         #   2개 동시 실행으로 분당 토큰 소비 안정화. 추출 지연 < 후속 plan_research 스로틀 피해.
+        log.info(f"[chart_data] step3 후보 {len(_cands)}개 → LLM 추출 시작")
         if _cands:
             from concurrent.futures import ThreadPoolExecutor as _TPE2
 
@@ -831,10 +1158,11 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                 nat, d = c
                 return _extract_series_from_docs({"name": nat, "unit": "", "chart": "bar"}, [d])
 
-            with _TPE2(max_workers=1) as _ex2:
+            with _TPE2(max_workers=2) as _ex2:   # 1→2: 순차 병목 완화 (스로틀 시 _nonessential 즉시 폴백)
                 for ds in _ex2.map(_extract_cand, _cands):
                     if ds:
                         datasets.append(ds)
+        _elapsed(f"3) 멀티소스 (datasets={len(datasets)})")
 
     # dedup (fingerprint) + exclude_titles 필터
     _excl = {str(t).strip() for t in (exclude_titles or [])}

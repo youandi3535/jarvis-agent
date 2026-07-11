@@ -430,7 +430,9 @@ if __name__ == "__main__":
         print(f"⚠️ preflight 호출 실패: {_ee}")
 
     today_only = "--today" in sys.argv
-    from JARVIS00_INFRA.watchdog import guard_main
-    with guard_main("성과 수집", deadline_sec=1800):
+    # ★ deadline_sec=1800(30분)은 성격이 다른 블로그 발행 액션 값의 복붙 미스매치였음
+    #   (ERRORS [403]). N건 순차 스크래핑 배치는 SSOT DEFAULT_ACTION_DEADLINE_SEC(60분) 사용.
+    from JARVIS00_INFRA.watchdog import guard_main, DEFAULT_ACTION_DEADLINE_SEC
+    with guard_main("성과 수집", deadline_sec=DEFAULT_ACTION_DEADLINE_SEC):
         result = collect_all(today_only=today_only)
     print(f"\n✅ 최종: {result['updated']}개 글 조회수 업데이트 완료")

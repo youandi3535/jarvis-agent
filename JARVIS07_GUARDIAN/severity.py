@@ -189,6 +189,11 @@ _TRANSIENT_PATTERNS = [
     # 재시작 "완료" 보고에는 코드 결함 정보(파일·라인·traceback) 자체가 없어 Tier1/2 가
     # 고칠 대상이 없음 — Sonnet 5 낭비 호출 방지. hang 의 근본원인은 daemon_faulthandler.log 로 별도 추적.
     re.compile(r"데몬 HANG 감지|데몬 강제 재시작 완료|hang 복구", re.I),
+    # ★ ERRORS [413] 박제 2026-07-11 — [213]/[396]과 동일 클래스: watchdog 이 killable
+    # subprocess(트렌드·성과 수집 등)를 freeze/deadline 감지로 os._exit(75) 강제 종료한
+    # "정상 자가치유" 보고(jobs.py _run_script_checked). traceback 은 NoneType — 코드 결함
+    # 위치 정보 자체가 없어 Tier1/2 가 고칠 대상이 없고, 다음 예약 실행이 깨끗하게 재시도한다.
+    re.compile(r"워치독 정지\(freeze/deadline\) 감지로 강제 종료", re.I),
 ]
 
 

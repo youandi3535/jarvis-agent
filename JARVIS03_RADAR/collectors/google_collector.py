@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 import requests
 import pandas as pd
 from pytrends.request import TrendReq
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 
 # 글자수 정책 — length_manager 단일 진입점이 빌드된 패턴 제공
 from JARVIS02_WRITER import length_manager as _LM
@@ -23,6 +24,26 @@ _KW_PATTERN = _LM.RADAR_KW_PATTERN_FULL
 _PYTRENDS_BLOCKED_UNTIL: float = 0.0       # epoch seconds
 _PYTRENDS_BLOCK_LOGGED: bool   = False     # 같은 차단 구간 동안 로그 1회만
 _BLOCK_COOLDOWN_SEC: int       = 3600      # 1 hour
+
+
+# ── ★ 외부 SDK wall-clock 상한 헬퍼 (ERRORS [401]/[213] 동일 패턴 — pytrends
+#   TrendReq 는 생성자 안에서 쿠키 조회 호출을 추가로 수행하고 자체 timeout=(10,30)+
+#   retries=3 조합도 네트워크 상태에 따라 누적 지연될 수 있어, 지정한 timeout= 파라미터
+#   만으론 단일 호출이 harness freeze 창(300초)을 넘겨 정지로 오판되는 것을 못 막는다.
+#   ThreadPoolExecutor + fut.result(timeout=N) 으로 호출 자체에 강한 벽시계 상한을 건다.
+#   내부 스레드는 leak 될 수 있으나 shutdown(wait=False)로 메인 루프를 블로킹하지 않음.
+def _bounded(fn, *args, timeout: float = 90.0, default=None, **kwargs):
+    exe = ThreadPoolExecutor(max_workers=1)
+    try:
+        fut = exe.submit(fn, *args, **kwargs)
+        try:
+            return fut.result(timeout=timeout)
+        except _FutureTimeoutError:
+            name = getattr(fn, "__name__", str(fn))
+            print(f"[Google] {name} 응답 없음 {timeout:.0f}s 초과 — 스킵")
+            return default
+    finally:
+        exe.shutdown(wait=False)
 
 
 def _is_rate_limited_error(err: Exception) -> bool:
@@ -168,17 +189,20 @@ def _fetch_pytrends_trending(limit: int) -> list[str]:
     _reset_pytrends_block_log()
     if _pytrends_blocked():
         return []
-    try:
+
+    def _do():
         pt = TrendReq(
             hl="ko", tz=540,
             timeout=(10, 30), retries=3,
             requests_args={"verify": True},
         )
         _disable_pytrends_proxy(pt)
-
         df = pt.trending_searches(pn="south_korea")
-        if df is not None and not df.empty:
-            keywords = df[0].tolist()
+        return df[0].tolist() if df is not None and not df.empty else []
+
+    try:
+        keywords = _bounded(_do, timeout=90.0, default=[])
+        if keywords:
             print(f"[Google] pytrends trending_searches 성공: {len(keywords)}개")
             return keywords[:limit]
     except Exception as e:
@@ -196,18 +220,23 @@ def _fetch_pytrends_realtime(limit: int) -> list[str]:
     _reset_pytrends_block_log()
     if _pytrends_blocked():
         return []
-    try:
+
+    def _do():
         pt = TrendReq(
             hl="ko", tz=540,
             timeout=(10, 30), retries=3,
             requests_args={"verify": True},
         )
         _disable_pytrends_proxy(pt)
-
         df = pt.realtime_trending_searches(pn="KR")
-        if df is not None and not df.empty:
-            col = "title" if "title" in df.columns else df.columns[0]
-            keywords = df[col].tolist()
+        if df is None or df.empty:
+            return []
+        col = "title" if "title" in df.columns else df.columns[0]
+        return df[col].tolist()
+
+    try:
+        keywords = _bounded(_do, timeout=90.0, default=[])
+        if keywords:
             print(f"[Google] pytrends realtime 성공: {len(keywords)}개")
             return keywords[:limit]
     except Exception as e:
@@ -372,11 +401,15 @@ def get_interest_over_time(keywords: list[str], days: int = 30) -> dict[str, lis
     timeframe = _safe_timeframe(days)
     for batch in batches:
         _wd_beat()   # ★ 배치 단위 진행 신호 — freeze 오탐 방지 (pytrends 재시도로 장시간 소요 가능)
-        try:
+
+        def _do(_batch=batch):
             pt = TrendReq(hl="ko", tz=540, timeout=(10, 30), retries=3)
             _disable_pytrends_proxy(pt)
-            _build_payload_with_fallback(pt, batch, timeframe, geo="KR", cat=0)
-            df = pt.interest_over_time()
+            _build_payload_with_fallback(pt, _batch, timeframe, geo="KR", cat=0)
+            return pt.interest_over_time()
+
+        try:
+            df = _bounded(_do, timeout=90.0, default=None)
             if df is None or df.empty:
                 continue
             for kw in batch:

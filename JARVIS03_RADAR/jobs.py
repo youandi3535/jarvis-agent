@@ -23,9 +23,16 @@ except ImportError:
 # ─────────────────────────────────────────────────────
 
 try:
-    from JARVIS00_INFRA.watchdog import WATCHDOG_KILL_RC
+    from JARVIS00_INFRA.watchdog import WATCHDOG_KILL_RC, DEFAULT_ACTION_DEADLINE_SEC
 except ImportError:
     WATCHDOG_KILL_RC = 75
+    DEFAULT_ACTION_DEADLINE_SEC = 3600
+
+# ★ subprocess 외곽 timeout — 내부 guard_main(deadline_sec=DEFAULT_ACTION_DEADLINE_SEC) 보다
+#   짧으면 내부 워치독이 판단하기 전에 subprocess.run 이 먼저 TimeoutExpired 로 강제킬해
+#   "정지 감지" 대신 "타임아웃" 오진단이 나고, 정상 장시간 작업도 무조건 실패 처리된다
+#   (radar_main.py/performance_collector.py 둘 다 이 값으로 감싸이므로 여기서 한 번만 정합).
+_SUBPROCESS_TIMEOUT_SEC = DEFAULT_ACTION_DEADLINE_SEC + 300  # 내부 데드라인 + 5분 여유
 
 _log = logging.getLogger("radar.jobs")
 _RADAR_DIR = Path(__file__).parent
@@ -47,7 +54,7 @@ def _run_script_checked(script: Path, args: list = None, label: str = "") -> Non
     try:
         result = subprocess.run(
             cmd, cwd=str(script.parent),
-            capture_output=True, text=True, timeout=600,
+            capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_SEC,
         )
         for line in (result.stdout or "").strip().splitlines()[-15:]:
             _log.info(f"  {line}")
@@ -67,7 +74,7 @@ def _run_script_checked(script: Path, args: list = None, label: str = "") -> Non
             raise RuntimeError(f"{lbl} 실패 (rc={result.returncode}): {err_tail[:200]}")
         _log.info(f"✅ {lbl} 완료")
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"{lbl} 타임아웃 (600s)")
+        raise RuntimeError(f"{lbl} 타임아웃 ({_SUBPROCESS_TIMEOUT_SEC:.0f}s)")
 
 
 def _run_with_harness(

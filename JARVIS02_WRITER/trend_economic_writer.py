@@ -1336,7 +1336,8 @@ def ts_collect(nv_keyword: str = '', supreme_block=None) -> dict:
             except Exception:
                 pass
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
-            _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
+            _chart = collect_chart_data(keyword, sector=sector, description=reason,
+                                        synonyms=_cand.get("synonyms")) or {}
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
@@ -1596,7 +1597,8 @@ def nv_collect(ts_keyword: str = '', supreme_block=None) -> dict:
             except Exception:
                 pass
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
-            _chart = collect_chart_data(keyword, sector=sector, description=reason) or {}
+            _chart = collect_chart_data(keyword, sector=sector, description=reason,
+                                        synonyms=_cand.get("synonyms")) or {}
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])

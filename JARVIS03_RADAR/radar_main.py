@@ -432,6 +432,9 @@ if __name__ == "__main__":
     else:
         # ★ 정지 방어 — 일회성 레이더 수집 작업 (freeze 300초 + deadline 900초 초과 시
         #   GUARDIAN 보고 후 os._exit → 다음 예약 재시도). --date 조회는 감싸지 않음.
+        #   ★ deadline_sec=900 상향은 헛다리(ERRORS [414]) — 실측 실제 작업시간은 ~60s 뿐이며
+        #   "데드라인 초과 3860s" 는 절전(~3800s)이 원인. 근본 수정은 watchdog.py Watchdog._monitor()
+        #   의 절전 gap 보정(self._start += gap)에서 완료 — 여기 값은 그대로 유지.
         from JARVIS00_INFRA.watchdog import guard_main
         with guard_main("레이더 수집", deadline_sec=900):
             data     = collect_today()

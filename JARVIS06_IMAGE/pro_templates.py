@@ -72,6 +72,43 @@ def _fmt(v):
     return f"{f:,.1f}" if abs(f) < 1000 else f"{f:,.0f}"
 
 
+def _auto_scale(val, unit):
+    """단위 자동 스케일: 백만원→조원/억원, 억원→조원, 원→조원/억원/만원."""
+    if val is None:
+        return val, unit
+    u = (unit or "").strip()
+    av = abs(val)
+    if "백만" in u:                             # 백만원 / 백만
+        if av >= 1_000_000:
+            return round(val / 1_000_000, 1), "조원"
+        if av >= 10_000:
+            return round(val / 10_000, 1), "억원"
+    elif "억" in u:                             # ★ 억원 단위 (신규) — 10,000억 = 1조
+        if av >= 10_000:
+            return round(val / 10_000, 1), "조원"
+    elif u in ("원", "KRW"):
+        if av >= 1_000_000_000_000:
+            return round(val / 1_000_000_000_000, 1), "조원"
+        if av >= 100_000_000:
+            return round(val / 100_000_000, 1), "억원"
+        if av >= 10_000:
+            return round(val / 10_000, 1), "만원"
+    return val, unit
+
+
+def _scale_rows_uniform(rows, unit):
+    """rows 전체에 동일 스케일 적용 (차트 내 단위 통일)."""
+    if not rows:
+        return rows, unit
+    max_abs = max(abs(v) for _, v in rows)
+    scaled_max, new_unit = _auto_scale(max_abs, unit)
+    if new_unit == unit or max_abs == 0:
+        return rows, unit
+    ratio = scaled_max / max_abs
+    new_rows = [(lb, round(v * ratio, 1)) for lb, v in rows]
+    return new_rows, new_unit
+
+
 def _pairs(ds):
     """dataset → [(label, value)] (숫자 행만)."""
     out = []
@@ -119,9 +156,9 @@ def _sparkline(pts, color, W=120, H=36):
 
 
 # ── SVG 차트 빌더 ──────────────────────────────────────────────────────────
-def _line_chart(series, pal, W=980, H=340):
+def _line_chart(series, pal, W=980, H=340, unit=""):
     """series: [{'name','pts','c','cs'}] 1~2개. 스케일 차이 크면 1지점=100 지수화 비교."""
-    xL, xR, yT, yB = 84, W - 130, 46, H - 54
+    xL, xR, yT, yB = 120, W - 140, 46, H - 54  # xL 84→120: Y축 레이블 여백 확보
     n = max(len(s["pts"]) for s in series)
     if n < 2:
         return ""
@@ -133,6 +170,17 @@ def _line_chart(series, pal, W=980, H=340):
         m1 = max(abs(v) for _, v in series[1]["pts"]) or 1
         if max(m0, m1) / max(min(m0, m1), 1e-9) > 3:
             indexed = True
+
+    # 단위 자동 스케일 (indexed 아닐 때 — indexed면 지수화로 이미 스케일됨)
+    disp_unit = unit
+    if not indexed and unit:
+        _all_raw = [(lb, v) for s in series for lb, v in s["pts"]]
+        _, disp_unit = _scale_rows_uniform(_all_raw, unit)
+        if disp_unit != unit:
+            _max_abs = max(abs(v) for _, v in _all_raw) or 1
+            _smax, _ = _auto_scale(_max_abs, unit)
+            _ratio = _smax / _max_abs
+            series = [dict(s, pts=[(lb, round(v * _ratio, 1)) for lb, v in s["pts"]]) for s in series]
 
     def _series_vals(s):
         vals = [v for _, v in s["pts"]]
@@ -159,10 +207,11 @@ def _line_chart(series, pal, W=980, H=340):
     # gridlines (3)
     for gy in (yT + (yB - yT) * k / 3 for k in range(4)):
         parts.append(f"<line x1='{xL}' y1='{gy:.0f}' x2='{xR}' y2='{gy:.0f}' stroke='{pal['grid']}' stroke-width='1.4'/>")
-    # y labels (min/mid/max)
+    # y labels (min/mid/max) — 스케일된 값 + 단위 표시
+    _y_unit_sfx = "" if indexed else (f" {disp_unit}" if disp_unit else "")
     for val in (hi - pad * 0.4, (hi + lo) / 2, lo + pad * 0.4):
-        parts.append(f"<text x='{xL - 14}' y='{_y(val) + 5:.0f}' text-anchor='end' fill='{pal['muted']}' "
-                     f"font-size='14' font-weight='600'>{_fmt(val)}</text>")
+        parts.append(f"<text x='{xL - 10}' y='{_y(val) + 5:.0f}' text-anchor='end' fill='{pal['muted']}' "
+                     f"font-size='13' font-weight='600'>{_fmt(val)}{_y_unit_sfx}</text>")
 
     for i, s in enumerate(series):
         vals = _series_vals(s)
@@ -174,11 +223,13 @@ def _line_chart(series, pal, W=980, H=340):
                      f"stroke-linecap='round' stroke-linejoin='round'/>")
         ex, ey = pts[-1]
         parts.append(f"<circle cx='{ex:.1f}' cy='{ey:.1f}' r='6.5' fill='{s['c']}' stroke='#fff' stroke-width='3'/>")
-        # 끝점 값 배지
+        # 끝점 값 배지 — 스케일된 값 표시
         raw_end = s["pts"][-1][1]
-        parts.append(f"<rect x='{xR + 12}' y='{ey - 15:.0f}' width='100' height='30' rx='8' fill='{pal['ink']}'/>"
-                     f"<text x='{xR + 62}' y='{ey + 5:.0f}' text-anchor='middle' fill='{s['cs']}' "
-                     f"font-size='15' font-weight='800'>{_fmt(raw_end)}</text>")
+        _badge_txt = _fmt(raw_end) + (f" {disp_unit}" if disp_unit and not indexed else "")
+        _badge_w = max(100, len(_badge_txt) * 10 + 20)
+        parts.append(f"<rect x='{xR + 12}' y='{ey - 15:.0f}' width='{_badge_w}' height='30' rx='8' fill='{pal['ink']}'/>"
+                     f"<text x='{xR + 12 + _badge_w / 2:.0f}' y='{ey + 5:.0f}' text-anchor='middle' fill='{s['cs']}' "
+                     f"font-size='14' font-weight='800'>{_badge_txt}</text>")
 
     # x labels
     labs = series[0]["pts"]
@@ -200,6 +251,7 @@ def _bar_chart(rows, pal, W=980, unit=""):
     rows = rows[:7]
     if not rows:
         return ""
+    rows, unit = _scale_rows_uniform(rows, unit)
     vals = [v for _, v in rows]
     vmax, vmin = max(vals), min(vals)
     _defs = ("<defs>"
@@ -239,8 +291,8 @@ def _bar_chart(rows, pal, W=980, unit=""):
         return "".join(parts)
 
     # ── 전부 동일 부호: 좌측 라벨 + 좌정렬 막대 + 우측 값 컬럼 ──
-    labelX, trackX = 150, 168
-    barMax = W - 300
+    labelX, trackX = 210, 228  # ★ 긴 한글 라벨(최대 ~12자) 뷰박스 클리핑 방지 (150→210)
+    barMax = W - 470  # 우측 값 라벨 여백 (단위 자동 스케일 후 짧은 숫자 기준)
     rowH, gap = 46, 20
     H = len(rows) * (rowH + gap) + 20
     valX = trackX + barMax + 12
@@ -261,7 +313,7 @@ def _bar_chart(rows, pal, W=980, unit=""):
     return "".join(parts)
 
 
-def _donut(rows, pal, size=240):
+def _donut(rows, pal, size=240, unit=""):
     rows = rows[:6]
     tot = sum(abs(v) for _, v in rows) or 1
     cx = cy = size / 2
@@ -280,14 +332,22 @@ def _donut(rows, pal, size=240):
                     f"stroke='{cols[i % len(cols)]}' stroke-width='30' fill='none' stroke-linecap='butt'/>")
         ang = a2
     top_lb, top_v = max(rows, key=lambda kv: abs(kv[1]))
+    # ★ 도넛 중앙값·범례값도 단위 자동 스케일 (ERRORS [424] 교훈)
+    top_sv, top_su = _auto_scale(top_v, unit)
+    _u_sfx = f" {top_su}" if top_su and top_su != unit else (f" {unit}" if unit else "")
     donut = (f"<svg width='{size}' height='{size}' viewBox='0 0 {size} {size}'>{''.join(segs)}"
-             f"<text x='{cx}' y='{cy - 4}' text-anchor='middle' fill='{pal['ink']}' font-size='40' font-weight='900'>{_fmt(top_v)}</text>"
-             f"<text x='{cx}' y='{cy + 26}' text-anchor='middle' fill='{pal['muted']}' font-size='16' font-weight='700'>{top_lb}</text></svg>")
+             f"<text x='{cx}' y='{cy - 4}' text-anchor='middle' fill='{pal['ink']}' font-size='34' font-weight='900'>{_fmt(top_sv)}{_u_sfx}</text>"
+             f"<text x='{cx}' y='{cy + 24}' text-anchor='middle' fill='{pal['muted']}' font-size='15' font-weight='700'>{top_lb}</text></svg>")
+    # 범례값도 스케일된 값 표시
+    def _leg_val(v):
+        sv, su = _auto_scale(v, unit)
+        sfx = f" {su}" if su and su != unit else (f" {unit}" if unit else "")
+        return f"{_fmt(sv)}{sfx}"
     legend = "".join(
         f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:12px'>"
         f"<span style='width:14px;height:14px;border-radius:4px;background:{cols[i % len(cols)]}'></span>"
         f"<span style='font-size:16px;color:{pal['ink']};font-weight:700'>{lb}</span>"
-        f"<span style='font-size:16px;color:{pal['muted']};margin-left:auto;font-weight:700'>{_fmt(v)}</span></div>"
+        f"<span style='font-size:16px;color:{pal['muted']};margin-left:auto;font-weight:700'>{_leg_val(v)}</span></div>"
         for i, (lb, v) in enumerate(rows))
     return donut, legend
 
@@ -358,12 +418,10 @@ def _hero_texture(tex, pal):
 def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
     pal = recipe or _pick_palette(seed)
     # ★ 학습된 레이아웃 템플릿 우선 — 임의 레이아웃 재현 (ERRORS [360]). 실패 시 기본 레이아웃 폴백.
-    # ★ 단, 다중 슬롯 템플릿은 데이터셋 2개+ 일 때만 (사용자 박제 2026-07-05, ERRORS [365]):
-    #   데이터 1개로 다중 슬롯 레이아웃을 채우면 빈 카드·우측 여백이 생김. 단일 데이터셋은
-    #   기본 풀레이아웃(히어로+차트)이 프레임을 꽉 채운다 ("양쪽 공백 없이").
+    # 데이터셋 1개+ 이면 템플릿 시도 — 빈 슬롯은 Playwright CSS card:empty{display:none} 으로 자동 숨김.
     _n_ds = len([d for d in (datasets or []) if d.get("data")])
     tmpl = pal.get("template")
-    if tmpl and _n_ds >= 2:
+    if tmpl and _n_ds >= 1:
         try:
             from JARVIS06_IMAGE.template_engine import render_layout, has_all_slots_resolved
             _h = render_layout(tmpl, title, subtitle, datasets, pal, src=src)
@@ -387,9 +445,13 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
             if not pts:
                 continue
             chg = _pct_change(pts)
+            _ts_unit = d.get("unit", "")
+            _last_v, _last_u = _auto_scale(pts[-1][1], _ts_unit)
+            _first_v, _first_u = _auto_scale(pts[0][1], _ts_unit)
             big = (f"{'+' if chg >= 0 else ''}{chg:.1f}<span style='font-size:34px'>%</span>"
-                   f"<span style='font-size:30px'> {'▲' if chg >= 0 else '▼'}</span>") if chg is not None else _fmt(pts[-1][1])
-            sub = f"{pts[-1][0]} {_fmt(pts[-1][1])}{d.get('unit','')} · {pts[0][0]} {_fmt(pts[0][1])} 대비"
+                   f"<span style='font-size:30px'> {'▲' if chg >= 0 else '▼'}</span>") if chg is not None else (
+                       f"{_fmt(_last_v)}<span style='font-size:30px'> {_last_u}</span>" if _ts_unit else _fmt(pts[-1][1]))
+            sub = f"{pts[-1][0]} {_fmt(_last_v)}{_last_u} · {pts[0][0]} {_fmt(_first_v)}{_first_u} 대비"
             c, cs = cols2[i % 2]
             hero_blocks.append(_hero_stat(pal, d.get("title", f"지표{i+1}"), big, sub, c, cs, _sparkline(pts, cs)))
         icon_key = "trend"
@@ -399,13 +461,15 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
         pts = sorted(_pairs(d), key=lambda kv: -kv[1])   # ★ 실제값 desc (절댓값 아님 — ROE 음수=꼴찌)
         if pts:
             top = pts[0]                                  # 최고 = 실제 최댓값
+            _top_v, _top_u = _auto_scale(top[1], _unit)
             hero_blocks.append(_hero_stat(pal, f"최고 · {d.get('title','')}",
-                                          f"{_fmt(top[1])}<span style='font-size:30px'> {_unit}</span>",
+                                          f"{_fmt(_top_v)}<span style='font-size:30px'> {_top_u}</span>",
                                           f"{top[0]}", pal['a1'], pal['a1s']))
             if len(pts) > 1:
                 low = pts[-1]                             # ★ 최저 = 실제 최솟값 (꼴찌 명시 — 무의미한 합계 폐기)
+                _low_v, _low_u = _auto_scale(low[1], _unit)
                 hero_blocks.append(_hero_stat(pal, f"최저 · {d.get('title','')}",
-                                              f"{_fmt(low[1])}<span style='font-size:30px'> {_unit}</span>",
+                                              f"{_fmt(_low_v)}<span style='font-size:30px'> {_low_u}</span>",
                                               f"{low[0]}", pal['a2'], pal['a2s']))
         icon_key = "bar"
 
@@ -418,13 +482,14 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
     if ts:
         cols2 = [(pal['a1'], pal['a1s']), (pal['a2'], pal['a2s'])]
         series = []
+        _ts_chart_unit = ts[0].get("unit", "") if ts else ""
         for i, d in enumerate(ts[:2]):
             pts = _pairs(d)
             if pts:
                 c, cs = cols2[i % 2]
                 series.append({"name": d.get("title", ""), "pts": pts, "c": c, "cs": cs})
         if series:
-            chart, note = _line_chart(series, pal)
+            chart, note = _line_chart(series, pal, unit=_ts_chart_unit)
             legend = "".join(
                 f"<span style='display:inline-flex;align-items:center;gap:8px;margin-left:18px;font-size:15px;"
                 f"font-weight:700;color:{pal['ink']}'><i style='width:22px;height:6px;border-radius:3px;"
@@ -443,13 +508,17 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
             continue
         vh = (d.get("viz_hint") or "").lower()
         unit = d.get("unit", "")
+        _display_unit = unit
         if "pie" in vh or "donut" in vh or (unit == "%" and 2 <= len(pts) <= 6 and abs(sum(v for _, v in pts) - 100) < 15):
-            donut, legend = _donut(pts, pal)
+            donut, legend = _donut(pts, pal, unit=unit)
             inner = (f"<div style='display:flex;align-items:center;gap:36px'>{donut}"
                      f"<div style='flex:1'>{legend}</div></div>")
         else:
-            inner = _bar_chart(sorted(pts, key=lambda kv: -kv[1]), pal, unit=unit)   # ★ 실제값 desc
-        body_cards.append(_card(pal, f"{n:02d}", d.get("title", ""), unit or "", inner, rad=rad))
+            sorted_pts = sorted(pts, key=lambda kv: -kv[1])
+            inner = _bar_chart(sorted_pts, pal, unit=unit)   # ★ 실제값 desc; _bar_chart 내부서 단위 스케일
+            # 카드 헤더 단위도 스케일된 단위로 표시
+            _display_unit = _scale_rows_uniform(sorted_pts, unit)[1] if sorted_pts else unit
+        body_cards.append(_card(pal, f"{n:02d}", d.get("title", ""), _display_unit or "", inner, rad=rad))
         n += 1
 
     # ── 보조 미니카드 (히어로가 비었을 때 통계 요약) ──
@@ -461,8 +530,9 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
             if not pts:
                 continue
             top = max(pts, key=lambda kv: abs(kv[1]))
+            _mv, _mu = _auto_scale(top[1], d.get("unit", ""))
             cards.append(_mini_card(pal, "chart", pal['soft'], pal['ink'],
-                                    d.get("title", ""), _fmt(top[1]), d.get("unit", ""), rad=max(14, rad - 6)))
+                                    d.get("title", ""), _fmt(_mv), _mu, rad=max(14, rad - 6)))
         if cards:
             mini = f"<div style='display:flex;gap:20px;margin-top:22px'>{''.join(cards)}</div>"
 

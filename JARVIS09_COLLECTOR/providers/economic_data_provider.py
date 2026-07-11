@@ -107,7 +107,15 @@ def get_economic_calendar() -> list:
             },
             timeout=15,
         )
-        html = res.json().get("data", "")
+        if not res.ok or not res.content.strip():
+            log.debug(f"[EconData] 경제 캘린더 응답 없음 (status={res.status_code}) — 건너뜀")
+            return []
+        try:
+            payload = res.json()
+        except Exception:
+            log.debug("[EconData] 경제 캘린더 응답이 JSON이 아님 (Cloudflare 차단 추정) — 건너뜀")
+            return []
+        html = payload.get("data", "")
         soup = BeautifulSoup(html, "html.parser")
         events = []
         for row in soup.select("tr[id^='eventRowId']"):
@@ -131,7 +139,7 @@ def get_economic_calendar() -> list:
         log.info(f"[EconData] 경제 캘린더 수집 완료: {len(events[:8])}건")
         return events[:8]
     except Exception as e:
-        log.warning(f"[EconData] 경제 캘린더 수집 실패: {e}")
+        log.info(f"[EconData] 경제 캘린더 수집 실패 (네트워크/차단): {type(e).__name__}")
         return []
 
 

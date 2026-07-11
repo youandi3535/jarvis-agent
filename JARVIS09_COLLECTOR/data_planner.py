@@ -28,7 +28,7 @@ _SOURCE_CATALOG = {
     "kosis":      "통계청 국가통계포털 — 인구·산업·고용·물가·소비·지역경제 등 공식 통계표(시계열)",
     "ecos":       "한국은행 ECOS — 거시경제(기준금리·환율·통화량·물가·국제수지·실업률) 시계열",
     "dart":       "금융감독원 전자공시 — 상장기업 재무제표·사업보고서·직원수·매출·영업이익",
-    "krx":        "한국거래소 — 상장 종목 주가·등락률·거래량·시가총액",
+    "krx":        "한국거래소 — 상장 종목 주가·등락률·거래량·시가총액·코스닥/코스피 업종별 시가총액 비중·코스닥 150 섹터 지수(8개 전체)",
     "finance":    "글로벌 시장지표(yfinance) — 해외 지수(S&P·나스닥)·환율·금·유가·미국채",
     "academic":   "arXiv 학술 논문 — 기술·과학·AI·경제 연구의 수치·통계(영어 논문 출처)",
     "kci":        "KCI 국내 학술논문(한국연구재단)+Crossref/Semantic Scholar — 국내 연구의 수치·통계(한국어 논문 우선, 거짓 없음)",
@@ -43,6 +43,29 @@ _SOURCE_CATALOG = {
                   "*반드시* 이것을 넣어라. 어떤 주제든 동작. query 를 구체적으로.",
 }
 _VALID_SOURCES = set(_SOURCE_CATALOG)
+
+# ★ 시장 지표 키워드 — 이 키워드가 series name/query 에 있으면 공식 API 소스만 허용.
+# web/blog/news 에서 가져온 시장 지표 수치는 틀릴 확률이 높음 (ERRORS [416][418]).
+_MARKET_INDICATOR_KWS = frozenset([
+    # 시장 전체 지표
+    "시가총액", "코스닥", "코스피", "주가지수", "증시", "지수",
+    "기준금리", "환율", "달러", "나스닥", "s&p", "다우",
+    "kosdaq", "kospi", "nasdaq",
+    # ★ 업종별 시장 구성 — 섹터 비중은 KRX 실데이터로만 (ERRORS [418])
+    # "코스닥 업종별 비중", "바이오 반도체 IT 비중" 같은 쿼리 포함
+    "업종별", "업종비중", "섹터비중", "업종구성", "업종 시가총액",
+    "바이오 반도체", "반도체 바이오",  # 코스닥 섹터 조합 쿼리 (web 폴백 차단)
+    # ★ 코스닥 150 섹터 지수 — 8개 하위 지수는 KRX로만 (ERRORS [420])
+    # KOSIS/web 수집 시 8개 중 일부만 반환 → 최고/최저 KPI 오표시 사례
+    "코스닥 150", "kosdaq 150", "kosdaq150",
+    "150 소재", "150 헬스케어", "150 정보기술", "150 산업재", "섹터 지수",
+    # ★ 주간 등락률 — web 크롤링 수치 완전히 틀림 (ERRORS [424])
+    # 코스피 -7.57% 실제 vs 이미지 +1.9% 표시 — 9.5p 오차 사례
+    "주간 등락률", "주간등락률", "등락률", "등락", "수익률",
+    "주간 수익률", "주간수익률", "주간 변동", "주간변동", "이번주", "금주",
+])
+# 시장 지표에 허용되는 공식 소스 — web/blog 은 틀린 수치 다수
+_MARKET_OFFICIAL_SOURCES = frozenset(["finance", "krx", "ecos", "kor_econ", "kosis"])
 
 _PLAN_SYSTEM = """당신은 데이터 저널리스트의 '데이터 소싱 설계자'다. 글 주제가 주어지면,
 그 주제를 가장 잘 설명할 *차트용 데이터 series* 들을 정하고, 각 series 를 *어느 출처에서 어떤
@@ -108,6 +131,15 @@ def _sanitize(plan: dict) -> list[dict]:
             continue
         if not srcs:                       # 출처 미지정 → 안전 기본(뉴스·논문 + 웹발견 폴백)
             srcs = ["naver_news", "academic", "discover"]
+        # ★ 시장 지표 키워드 → 공식 API 소스만 허용, web/blog 제거 (ERRORS [416])
+        # web/blog 소스의 시장 수치는 틀린 사례 다수 — 공식 소스가 없으면 finance/ecos 기본값
+        _combined = (name + " " + query).lower()
+        if any(kw in _combined for kw in _MARKET_INDICATOR_KWS):
+            official = [x for x in srcs if x in _MARKET_OFFICIAL_SOURCES]
+            if not official:
+                official = ["finance", "ecos"]
+            srcs = official
+            log.debug(f"[planner] 시장지표 감지 '{name}' → 소스 강제: {srcs}")
         out.append({"name": name, "unit": unit, "chart": chart,
                     "sources": srcs[:4], "query": query})
     return out[:6]
@@ -156,7 +188,7 @@ def plan_data_sources(topic: str, sector: str = "", description: str = "") -> li
             #   회로 차단 중에도 1회 실시도 보장 (즉시 폴백 금지).
             raw = invoke_text("analyzer", prompt, system=_PLAN_SYSTEM,
                               max_tokens=1100, temperature=0.2 if _attempt == 0 else 0.5,
-                              _essential=True)
+                              _essential=True, timeout=90)
         except Exception as e:
             log.warning(f"[planner] 설계 시도{_attempt + 1} 예외: {e}")
             _g_report("collector", e, module=__name__, func_name="plan_data_sources")

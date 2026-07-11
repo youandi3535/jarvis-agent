@@ -69,16 +69,6 @@ def _extract_chart_context(html: str, chart_idx: int) -> str:
 # 썸네일 하단 카테고리 라벨 (category → 라벨). 미매칭 시 섹터/키워드 폴백.
 _TAG_BY_CATEGORY = {"economic": "경제 브리핑", "theme": "테마 분석"}
 
-def _slot_ref_datasets(collected) -> list:
-    """CollectedData → slot_renderer 검증 ref (datasets + 단위별 all_numbers 그룹).
-    entities 수치까지 포함해 슬롯 진실성 게이트가 굶지 않게 함."""
-    ref = list(collected.datasets or [])
-    by_unit: dict = {}
-    for v, u in collected.all_numbers():
-        by_unit.setdefault(u, []).append({"value": v})
-    for u, rows in by_unit.items():
-        ref.append({"unit": u, "data": rows})
-    return ref
 
 
 
@@ -228,17 +218,22 @@ def _generate_charts(html: str, theme: str, sector: str, collected,
     구형식 [CHART_N: 설명] 잔존 슬롯 = 데이터 없음 → 실데이터 인포그래픽 (없으면 빈 슬롯).
     본문 이미지는 인포그래픽 디자인만 (AI 사진 폐기 2026-07-06). 검증 ref = CollectedData.
     """
-    # ── 0단계: ★ 데이터 내장 슬롯 렌더 (자비스06 = 렌더러) ──
-    #   신형식 [CHART_N]...[/CHART_N] → slot_renderer → infographic_engine
+    # ── 0단계: ★ 차트 슬롯 렌더 — 실데이터 직접 주입 (LLM 수치 완전 무시) ──
+    #   신형식 [CHART_N]...[/CHART_N] → 슬롯 제목으로 collected.datasets 매칭 → 실데이터 렌더
+    #   ★ 사용자 박제 2026-07-11: LLM이 슬롯에 뭘 써도 무시. 항상 collected.datasets 사용.
     try:
-        from JARVIS06_IMAGE.slot_renderer import render_slots_in_text
-        _ref_ds = _slot_ref_datasets(collected)
-        html, _s_ok, _s_total = render_slots_in_text(
-            html, _ref_ds, out_dir, run_id=uuid.uuid4().hex[:8], theme=theme)
+        from JARVIS06_IMAGE.slot_renderer import render_slots_from_collected
+        import os as _os_dp
+        # ★ 카탈로그와 동일 슬라이스 전달 — D1이 index 0, D2가 index 1 ... 정확히 일치
+        _cat_max = int(_os_dp.getenv("DATA_CATALOG_MAX", "16") or "16")
+        _catalog_datasets = list(collected.datasets or [])[:_cat_max]
+        _run_id = uuid.uuid4().hex[:8]
+        html, _s_ok, _s_total = render_slots_from_collected(
+            html, _catalog_datasets, out_dir, run_id=_run_id, theme=theme)
         if _s_total:
-            print(f"  🎨 [{platform}] 데이터 내장 슬롯 {_s_ok}/{_s_total}개 렌더 (infographic_engine)")
+            print(f"  🎨 [{platform}] 차트 슬롯 {_s_ok}/{_s_total}개 실데이터 렌더 (LLM 수치 무시)")
     except Exception as _sre:
-        print(f"  ⚠️ [{platform}] 내장 슬롯 처리 스킵: {_sre}")
+        print(f"  ⚠️ [{platform}] 슬롯 처리 스킵: {_sre}")
 
     # ── 1단계: 구형식 [CHART_N: text] 잔존 슬롯 → 실데이터 인포그래픽 (없으면 빈 슬롯) ──
     # 구형식 = 구조화 데이터 없음. 거짓 차트 금지(규정 12) + 본문 AI 사진 폐기(2026-07-06).

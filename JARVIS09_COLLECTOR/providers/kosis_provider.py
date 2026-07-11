@@ -22,6 +22,22 @@ _PRD_TRY = ("A", "M", "F")
 _MAX_OBJ_CODES = 30   # 분류값 코드 과다 요청 방지
 
 
+class _SilentApi:
+    """PublicDataReader get_data() 래퍼 — 내부 print 억제, log.debug 로 전환."""
+    def __init__(self, inner):
+        self._inner = inner
+
+    def get_data(self, *args, **kwargs):
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            result = self._inner.get_data(*args, **kwargs)
+        msg = buf.getvalue().strip()
+        if msg:
+            log.debug(f"[KOSIS] {msg[:120]}")
+        return result
+
+
 class KosisProvider(BaseProvider):
     """통계청 KOSIS — 국가 공식 통계의 *실제 값*."""
     source_type = "kosis"
@@ -34,14 +50,14 @@ class KosisProvider(BaseProvider):
         return bool(self._api_key)
 
     def _api(self):
-        """PublicDataReader Kosis 인스턴스 (없으면 자동 설치)."""
+        """PublicDataReader Kosis 인스턴스 (없으면 자동 설치). _SilentApi 래퍼로 감싸 print 억제."""
         try:
             from JARVIS09_COLLECTOR.lib_bootstrap import ensure_lib
             ensure_lib("PublicDataReader", "PublicDataReader")
         except Exception as e:
             log.warning(f"[KOSIS] PublicDataReader 자동설치 스킵: {e}")
         from PublicDataReader import Kosis
-        return Kosis(self._api_key)
+        return _SilentApi(Kosis(self._api_key))
 
     # ── 표별 코드 동적 해석 (메타) ────────────────────────────────────────
     def _resolve_codes(self, api, org_id: str, tbl_id: str):

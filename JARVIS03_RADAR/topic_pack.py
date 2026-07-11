@@ -201,6 +201,18 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
         log.warning("[topic_pack] 적합 후보 0개 — 팩 생성 실패")
         return None
 
+    # ★ 동의어 선행 확장 (방향 2 — 위상 분리): topic_pack 생성 시점(LLM 부하 낮음)에
+    #   chart_data 동의어를 미리 확장·캐시. collect_chart_data 진입 시 캐시 히트 → LLM 0회.
+    #   실패해도 chart_data 가 런타임에 재시도하므로 예외 무시.
+    try:
+        from JARVIS09_COLLECTOR.chart_data import warm_synonyms as _warm_syns
+        _syn_map = _warm_syns([c["keyword"] for c in final])
+        for c in final:
+            c["synonyms"] = _syn_map.get(c["keyword"]) or []
+        log.info(f"[topic_pack] 동의어 선행 확장: { {k: v for k, v in _syn_map.items() if v} }")
+    except Exception as _e:
+        log.warning(f"[topic_pack] 동의어 선행 확장 실패 (무시): {_e}")
+
     pack = {
         "date": date.today().isoformat(),
         "generated_at": datetime.now().isoformat(),

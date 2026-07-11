@@ -399,7 +399,7 @@ def _generate_recipe_deterministic(existing: list, seed: int) -> dict:
             best_gap, best_h = gap, h
     h = best_h
     a2h = (h + 0.5) % 1.0          # 보색 강조
-    return {
+    rec = {
         "hero": [_hls_hex(h, 0.13, 0.42), _hls_hex(h, 0.22, 0.38)],
         "ink": _hls_hex(h, 0.17, 0.30),
         "a1": _hls_hex(h, 0.55, 0.80),
@@ -411,8 +411,18 @@ def _generate_recipe_deterministic(existing: list, seed: int) -> dict:
         "eyebrow": _hls_hex(h, 0.76, 0.72),
         "grid": _hls_hex(h, 0.925, 0.18),
         "hero_texture": ("grid", "dots", "glow", "diagonal")[seed % 4],
-        "card_radius": 18 + (seed % 7) * 2,       # 18~30
+        "card_radius": 18 + (seed % 7) * 2,
     }
+    # 색상(팔레트) × 레이아웃(template) 독립 조합 — 기존 template HTML 순환 배정
+    try:
+        import json as _json
+        _all = _json.loads(_REGISTRY.read_text(encoding="utf-8")).get("recipes", [])
+        _tmpls = [r["template"] for r in _all if isinstance(r.get("template"), str)]
+        if _tmpls:
+            rec["template"] = _tmpls[seed % len(_tmpls)]
+    except Exception:
+        pass
+    return rec
 
 
 # ── 나이틀리 잡 ─────────────────────────────────────────────────────────────

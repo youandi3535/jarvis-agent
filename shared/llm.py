@@ -453,16 +453,19 @@ def _run_sdk_sync(
         except (MessageParseError, ProcessError):
             pass  # rate_limit_event 또는 프로세스 종료 — 응답은 이미 수집됨
         except TimeoutError:
-            print(f"  ⚠️ SDK timeout {timeout}s — 수집된 응답: {len(parts)}개")
+            import logging as _logging
+            _logging.getLogger("jarvis.llm").warning(f"SDK timeout {timeout}s — 수집된 응답: {len(parts)}개")
         except Exception as e:
             if not parts:
-                print(f"  ❌ SDK 오류: {e}")
+                import logging as _logging
+                _logging.getLogger("jarvis.llm").warning(f"SDK 오류: {e}")
     finally:
         _LLM_SPAWN_SEM.release()
     _was_throttled = bool(throttled["v"] and not parts)
     _LAST_CALL.throttled = _was_throttled   # ★ 호출자(invoke_text)가 진짜 스로틀만 카운트
     if _was_throttled:
-        print("  ⏳ [LLM] rate-limit 스로틀 (num_turns=0, 모델 미호출) — 재시도/폴백")
+        import logging as _logging
+        _logging.getLogger("jarvis.llm").debug("rate-limit 스로틀 (num_turns=0) — 재시도/폴백")
     return "".join(parts)
 
 
@@ -609,7 +612,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
         if _gate in ("open", "probe"):
             return ""                      # 스로틀 중 — SDK 미호출·즉시 폴백 (발행 안 막음)
         retries, backoff = 1, False        # 정상일 때도 1샷
-        timeout = min(timeout, 45)         # 시간 상자 — 최악 45초
+        timeout = min(timeout, 90)         # 시간 상자 — 최악 90초 (max_tokens≤700 안에 완료)
     elif _gate == "open":
         if _essential or alias in _CIRCUIT_EXEMPT_ALIASES:
             retries, backoff = 1, False   # 필수 호출 — open 중에도 1회 실시도
