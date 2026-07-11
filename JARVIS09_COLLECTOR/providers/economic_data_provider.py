@@ -5,31 +5,21 @@
    호출자는 이 모듈만 import.
 """
 from __future__ import annotations
+import concurrent.futures as _cf
 import logging
-import requests as _req
-from requests.adapters import HTTPAdapter as _HTTPAdapter
 from . import BaseProvider
 from ..models import RawDocument
 
-
-# ★ yfinance 타임아웃 세션 (ERRORS [401] — hang 방지)
-class _YfTimeoutAdapter(_HTTPAdapter):
-    def __init__(self, timeout: int = 10, **kw):
-        self._timeout = timeout
-        super().__init__(**kw)
-    def send(self, request, *args, **kwargs):
-        kwargs.setdefault("timeout", self._timeout)
-        return super().send(request, *args, **kwargs)
-
-
-def _make_yf_session(timeout: int = 10) -> _req.Session:
-    sess = _req.Session()
-    a = _YfTimeoutAdapter(timeout=timeout)
-    sess.mount("https://", a)
-    sess.mount("http://", a)
-    return sess
-
 log = logging.getLogger("jarvis.collector.economic")
+
+
+# ★ yfinance 1.x 는 curl_cffi 세션만 지원 — requests.Session 주입 금지 (ERRORS [407])
+# 타임아웃은 ThreadPoolExecutor + future.result(timeout=N) 로 대체.
+def _yf_with_timeout(fn, timeout: int = 15):
+    """yfinance 호출을 별도 스레드로 실행, timeout 초 내 완료 보장."""
+    with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(fn)
+        return fut.result(timeout=timeout)
 
 
 # ── 시장 데이터 (yfinance) ─────────────────────────────────────────
@@ -55,11 +45,14 @@ def get_market_data() -> dict:
       지수는 전일 종가인데 '오늘'처럼 서술되던 시점 오류를 사실성 게이트가 검증 가능하게.
     """
     import yfinance as yf
-    _sess = _make_yf_session(timeout=10)  # ★ 10초 타임아웃 (ERRORS [401])
     result = {}
     for name, ticker in _MARKET_TICKERS.items():
         try:
-            hist = yf.Ticker(ticker, session=_sess).history(period="2d")
+            # ★ session= 제거 (ERRORS [407]): yfinance 1.x는 curl_cffi 세션만 허용
+            #   타임아웃은 futures로 대체 (ERRORS [401] hang 방지 유지)
+            def _fetch(t=ticker):
+                return yf.Ticker(t).history(period="2d")
+            hist = _yf_with_timeout(_fetch, timeout=15)
             if len(hist) >= 2:
                 prev = hist["Close"].iloc[-2]
                 curr = hist["Close"].iloc[-1]
@@ -136,7 +129,9 @@ def get_ticker_history(ticker: str, period: str = "2d", interval: str = "1d"):
     """
     import yfinance as yf
     try:
-        return yf.Ticker(ticker, session=_make_yf_session(10)).history(period=period, interval=interval)
+        def _fetch():
+            return yf.Ticker(ticker).history(period=period, interval=interval)
+        return _yf_with_timeout(_fetch, timeout=15)
     except Exception as e:
         log.warning(f"[EconData] 티커 히스토리 실패 ({ticker}): {e}")
         return None
@@ -146,10 +141,12 @@ def download_ticker(ticker: str, start: str, end: str = None, interval: str = "1
     """yfinance.download 래퍼 — JARVIS06_IMAGE 차트 생성 시 호출."""
     import yfinance as yf
     try:
-        kwargs = {"start": start, "interval": interval, "session": _make_yf_session(10)}
-        if end:
-            kwargs["end"] = end
-        return yf.download(ticker, **kwargs)
+        def _fetch():
+            kwargs = {"start": start, "interval": interval}
+            if end:
+                kwargs["end"] = end
+            return yf.download(ticker, **kwargs)
+        return _yf_with_timeout(_fetch, timeout=15)
     except Exception as e:
         log.warning(f"[EconData] download 실패 ({ticker}): {e}")
         return None

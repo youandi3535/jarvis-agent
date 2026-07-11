@@ -71,28 +71,15 @@ import pandas as pd
 # 옛: matplotlib·plt·fm·mpatches·FancyBboxPatch·Circle 직접 import
 #     → 차트 함수들이 모두 JARVIS06_IMAGE.theme_charts 에 이관됨 (이미 _mpl_setup 으로 Agg 백엔드 설정).
 # 새: JARVIS06_IMAGE.theme_charts 만 import — collect_theme.py 안에서 matplotlib 직접 사용 0.
+import concurrent.futures as _cf
 import yfinance as yf
-import requests as _requests
-from requests.adapters import HTTPAdapter as _HTTPAdapter
 from dotenv import load_dotenv
 
 
-# ★ yfinance 타임아웃 세션 (ERRORS [401] — hang 방지)
-class _YfTimeoutAdapter(_HTTPAdapter):
-    def __init__(self, timeout: int = 10, **kw):
-        self._timeout = timeout
-        super().__init__(**kw)
-    def send(self, request, *args, **kwargs):
-        kwargs.setdefault("timeout", self._timeout)
-        return super().send(request, *args, **kwargs)
-
-
-def _make_yf_session(timeout: int = 10) -> _requests.Session:
-    sess = _requests.Session()
-    a = _YfTimeoutAdapter(timeout=timeout)
-    sess.mount("https://", a)
-    sess.mount("http://", a)
-    return sess
+# ★ yfinance 1.x 는 curl_cffi 세션만 지원 — requests.Session 주입 금지 (ERRORS [407])
+def _yf_with_timeout(fn, timeout: int = 15):
+    with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(fn).result(timeout=timeout)
 
 load_dotenv()
 
@@ -569,10 +556,11 @@ def stocks_to_datasets(stocks_data: dict, max_stocks: int = 8) -> list[dict]:
             alt_tickers.append(ticker.replace(".KQ", ".KS"))
 
         hist_df = pd.DataFrame()
-        _yf_sess = _make_yf_session(timeout=10)  # ★ 10초 타임아웃 (ERRORS [401])
         for tk in alt_tickers:
             try:
-                h = yf.Ticker(tk, session=_yf_sess).history(period="5y")
+                def _fetch(t=tk):
+                    return yf.Ticker(t).history(period="5y")
+                h = _yf_with_timeout(_fetch, timeout=15)
                 if not h.empty and len(h) >= 6:
                     hist_df = h
                     break

@@ -2,6 +2,18 @@
 
 ---
 
+## [407] yfinance 1.x — requests.Session 주입 불가 → 전체 시장 지표 수집 0개 (2026-07-11)
+
+- **증상**: `economic_poster.py` 기동 시 코스피·코스닥·S&P500·NASDAQ 등 9개 지표 전부 `수집 실패: Yahoo API requires curl_cffi session not <class 'requests.sessions.Session'>`.
+- **환경**: yfinance 1.2.0, `JARVIS09_COLLECTOR/providers/economic_data_provider.py` `get_market_data()` + `finance_provider.py` `FinanceProvider.collect()` + `collect_theme.py` `_stocks_to_datasets()`.
+- **원인**: yfinance 1.x 업그레이드로 Cloudflare 우회를 위해 `curl_cffi` 세션만 허용. 기존 코드는 ERRORS [401] hang 방지를 위해 `requests.Session + HTTPAdapter(timeout)` 를 세션으로 주입 → yfinance가 타입 체크 실패 → 즉시 에러.
+- **헛다리**: 없음 — 에러 메시지가 원인과 해결책을 직접 명시 ("stop setting session, let YF handle").
+- **해결**: 3개 파일에서 `_make_yf_session()` / `_make_session()` / `_YfTimeoutAdapter` 전부 제거. `yf.Ticker(ticker, session=...)` → `yf.Ticker(ticker)`. ERRORS [401] hang 방지는 `concurrent.futures.ThreadPoolExecutor` + `future.result(timeout=15)` 패턴으로 대체.
+- **파일**: `JARVIS09_COLLECTOR/providers/economic_data_provider.py`, `JARVIS09_COLLECTOR/providers/finance_provider.py`, `JARVIS09_COLLECTOR/collect_theme.py`.
+- **교훈**: 라이브러리 버전 업그레이드 시 세션 주입 패턴이 깨지는 경우 있음. hang 방지 timeout은 라이브러리 세션 파라미터가 아닌 스레드 래핑으로 구현해야 라이브러리 내부 구현 변경에 독립적.
+
+---
+
 ## [406] job_collect_trends 말미 topic_pack 사전 생성 누락 — 06:30 포스터에서 LLM 경합 → throttle 재발 구조 (2026-07-11)
 
 - **증상**: 06:30 경제 브리핑이 매번 "자비스03 주제 패키지 없음"으로 실패. [404][405] 수정 후에도 재발.
