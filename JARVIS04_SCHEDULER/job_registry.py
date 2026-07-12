@@ -90,7 +90,10 @@ DEFAULT_JOBS: list[dict] = [
     # ★ 발행 전 자체수리 + 테마글 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 16:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 테마글 발행.
     # 비싼 LLM 심층 감사는 새벽 04:30 j07_deep_audit 로 분리.
-    # {"id":"j01_theme_post_21", ...}  ← 사용자 명령으로 일시 비활성화 (2026-07-11)
+    {"id":"j01_theme_post_21",      "name":"자가진단+테마 발행 21:00 ★", "trigger":"cron",
+     "kwargs":{"hour":21, "minute":0},
+     "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_theme",
+     "misfire_grace_time":3600, "owner":"jarvis02_writer"},
 
     {"id":"j01_radar_check_09",     "name":"RADAR 자동실행 체크 09:00", "trigger":"cron",
      "kwargs":{"hour":9, "minute":0},
