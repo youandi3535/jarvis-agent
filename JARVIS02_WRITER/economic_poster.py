@@ -419,7 +419,10 @@ def run(post_naver=True, post_tistory=True):
     #   이쪽 발행을 차단하지 않도록 (실패 격리 목표를 Layer 1 까지 관철).
     def _precondition_for(platform: str):
         _plat_keys = (("NV_USERNAME", "NV_PASSWORD") if platform == "naver"
-                      else ("TS_URL", "TS_USERNAME", "TS_PASSWORD", "TS_COOKIE"))
+                      else ("TS_URL", "TS_USERNAME", "TS_PASSWORD"))
+        # TS_COOKIE 는 precondition 에서 확인하지 않음 — _step_ts_cookie 가 티스토리 액션
+        # 시작 시 force=True 로 신선 로그인 후 직접 갱신. 미리 .env 값으로 복원하면
+        # 네이버 단계에서 불필요하게 TS_COOKIE를 메모리에 올려두게 됨.
 
         def _pc(state):
             pc_issues = []

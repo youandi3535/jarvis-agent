@@ -896,12 +896,8 @@ def run_self_repair_then_economic():
 
     # ─── Step 2: 쿠키 체크 — ★ 네이버만 (사용자 박제 2026-07-05, ERRORS [363]) ─────
     # 네이버가 첫 액션 → 네이버 쿠키만 지금 갱신. 티스토리 쿠키는 *티스토리 발행 직전*
-    # (`economic_poster.post_to_tistory_economic`, force=True)에 강제 갱신 → 신선 세션.
-    # 여기서 티스토리를 미리 로그인하면 네이버 발행 내내 카카오 세션이 방치·만료된다.
-    # ★ TS_COOKIE 는 _clear_all_cookies 가 os.environ 에서 pop 했으므로, 티스토리 액션
-    #   precondition(TS_COOKIE 존재 확인) 통과용으로 .env 값만 복원(로그인 없음).
-    from dotenv import load_dotenv as _load_dotenv
-    _load_dotenv(override=True)
+    # (_step_ts_cookie, force=True)에 강제 갱신 → 신선 세션.
+    # TS_COOKIE 는 _precondition_for("tistory") 체크 대상에서 제외됨 — load_dotenv 불필요.
     _cookie_failed = []
     try:
         from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import job_pre_naver_check as _nv_ck
