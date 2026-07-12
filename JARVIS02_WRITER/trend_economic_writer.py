@@ -1378,8 +1378,18 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
             # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
-            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
+            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep, facts_to_datasets as _f2d
             _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}
+            # ★ facts → datasets 변환 후 _pool에 병합 (text 수치도 차트化 — 이미지 개수 확대)
+            try:
+                _fact_ds = _f2d(_ev_pack)
+                if _fact_ds:
+                    _existing_titles = {d.get("title", "") for d in _pool}
+                    _new_ds = [d for d in _fact_ds if d.get("title", "") not in _existing_titles]
+                    _pool = _pool + _new_ds
+                    print(f"  📊 [facts→datasets] {len(_new_ds)}개 수치 데이터셋 추가 (총 {len(_pool)}개)")
+            except Exception as _f2d_e:
+                print(f"  ⚠️ [facts→datasets] 변환 스킵: {_f2d_e}")
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
                   f"데이터셋 {len(_pool)}개")
         except Exception as _je:
@@ -1645,8 +1655,18 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
             # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
-            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
+            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep, facts_to_datasets as _f2d
             _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}
+            # ★ facts → datasets 변환 후 _pool에 병합 (text 수치도 차트化 — 이미지 개수 확대)
+            try:
+                _fact_ds = _f2d(_ev_pack)
+                if _fact_ds:
+                    _existing_titles = {d.get("title", "") for d in _pool}
+                    _new_ds = [d for d in _fact_ds if d.get("title", "") not in _existing_titles]
+                    _pool = _pool + _new_ds
+                    print(f"  📊 [facts→datasets] {len(_new_ds)}개 수치 데이터셋 추가 (총 {len(_pool)}개)")
+            except Exception as _f2d_e:
+                print(f"  ⚠️ [facts→datasets] 변환 스킵: {_f2d_e}")
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
                   f"데이터셋 {len(_pool)}개")
         except Exception as _je:
