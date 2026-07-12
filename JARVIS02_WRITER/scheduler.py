@@ -1023,10 +1023,9 @@ def _trigger_economic_incident(
                             importlib.reload(_sys.modules[_k])
                         except Exception:
                             pass
-                # 재로드 후 fresh import
+                # 재로드 후 fresh import — ★ 반환값 실제 성공 여부 반영 (ERRORS [427])
                 from JARVIS02_WRITER.economic_poster import run as _fresh_run
-                _fresh_run(post_naver=_pn, post_tistory=_pt)
-                return True
+                return bool(_fresh_run(post_naver=_pn, post_tistory=_pt))
             return _retry
 
         _retry_fns = {}

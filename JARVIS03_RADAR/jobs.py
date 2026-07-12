@@ -218,17 +218,27 @@ def job_collect_trends() -> None:
     # 목적: 06:30 경제 포스터가 _tp_pick() 즉시 성공 → pack 재생성 LLM 호출 불필요.
     #       LLM 경합(트렌드수집↔대본생성↔pack생성 동시) → rate-limit throttle 연쇄를 원천 차단.
     # 실패해도 06:30 포스터가 _tp_build() 즉석 폴백(기존 동작) → 발행 안 막음.
-    try:
-        from JARVIS03_RADAR.topic_pack import build_topic_pack as _btp
-        _pack = _btp()
-        if _pack:
-            cands = len((_pack.get("candidates") or []))
-            _log.info(f"✅ [topic_pack] 사전 생성 완료: {cands}개 후보")
-        else:
-            _log.warning("[topic_pack] 사전 생성 실패 — 06:30 포스터에서 즉석 재시도")
-    except Exception as _e:
-        _log.warning(f"[topic_pack] 사전 생성 예외 (발행은 폴백으로 계속): {_e}")
-        _g_report("radar", _e, module=__name__)
+    # ★ 1회 재시도 — 06:00 auto_repair 경합 등 일시 LLM throttle 시 90초 후 재시도 (ERRORS [427])
+    import time as _time_tp
+    _MAX_TP_TRIES = 2
+    for _tp_try in range(_MAX_TP_TRIES):
+        try:
+            from JARVIS03_RADAR.topic_pack import build_topic_pack as _btp
+            _pack = _btp()
+            if _pack:
+                cands = len((_pack.get("candidates") or []))
+                _log.info(f"✅ [topic_pack] 사전 생성 완료: {cands}개 후보 (시도 {_tp_try+1})")
+                break
+            elif _tp_try < _MAX_TP_TRIES - 1:
+                _log.warning(f"[topic_pack] 사전 생성 실패 (시도 {_tp_try+1}/{_MAX_TP_TRIES}) — 90초 후 재시도")
+                _time_tp.sleep(90)
+            else:
+                _log.warning("[topic_pack] 사전 생성 최종 실패 — 06:30 포스터에서 즉석 재시도")
+        except Exception as _e:
+            _log.warning(f"[topic_pack] 사전 생성 예외 (시도 {_tp_try+1}/{_MAX_TP_TRIES}): {_e}")
+            _g_report("radar", _e, module=__name__)
+            if _tp_try < _MAX_TP_TRIES - 1:
+                _time_tp.sleep(90)
 
 
 def job_collect_performance() -> None:

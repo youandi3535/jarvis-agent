@@ -2,6 +2,30 @@
 
 ---
 
+## [428] incident_responder `_make_retry()` 항상 True 반환 — 발행 실패를 성공으로 허위 보고 (2026-07-12)
+
+- **증상**: 경제 브리핑 발행 실패 후 GUARDIAN이 "✅ 복구 성공: naver, tistory"라고 텔레그램 보고. 실제로는 두 플랫폼 모두 재발행 실패.
+- **환경**: `JARVIS02_WRITER/scheduler.py` `_make_retry()`, `JARVIS07_GUARDIAN/incident_responder.py` `_call_retry_fn()`
+- **원인**: `_make_retry()` 내부 `_retry()` 클로저가 `_fresh_run(post_naver=_pn, post_tistory=_pt)` 호출 후 반환값을 무시하고 항상 `return True` 실행. `incident_responder._call_retry_fn()`은 `fn()`의 반환값을 그대로 bool로 사용하는데, `True`가 항상 반환되니 실제 발행 성공 여부와 무관하게 "성공"으로 기록.
+- **헛다리**: 없음.
+- **해결**: `return True` → `return bool(_fresh_run(post_naver=_pn, post_tistory=_pt))`. `economic_poster.run()`은 `naver_ok or tistory_ok` bool을 반환하므로 실제 성공 여부가 정확히 전달됨.
+- **파일**: `JARVIS02_WRITER/scheduler.py` line 1029
+- **교훈**: 발행 함수를 re-raise 없이 감싸는 래퍼는 반드시 반환값을 forward해야 한다. `void처럼 쓰인 non-void 함수` 패턴은 성공 여부 추적을 무력화한다. 재발 방지: `_make_retry`류 래퍼 작성 시 반환 타입을 명시하고 테스트.
+
+---
+
+## [427] `build_topic_pack()` 단발 실패 시 재시도 없음 — 06:30 경제 브리핑 주제 패키지 부재 (2026-07-12)
+
+- **증상**: 06:00 `job_collect_trends` 완료 직후 `build_topic_pack()` 호출이 LLM rate-limit/경합으로 실패(return None). 06:30 경제 포스터에서 `_tp_pick()` → None → `_tp_build(max_candidates=8)` 즉석 재시도도 동일 throttle 상태라 실패 → "자비스03 주제 패키지 없음" 에러 → 발행 차단.
+- **환경**: `JARVIS03_RADAR/jobs.py` `job_collect_trends()` 말미 `build_topic_pack()` 호출, `JARVIS03_RADAR/topic_pack.py` `_profile_batch()` → `invoke_text("analyzer", ..., _essential=True)`.
+- **원인**: 트리거 — [426] harness freeze가 `job_deep_audit` GUARDIAN auto_repair를 기동, SDK Claude 세션이 `_profile_batch()` LLM 호출과 동시에 경합해 throttle. 구조적 결함 — `job_collect_trends()` 말미의 `build_topic_pack()` 실패 시 재시도 로직이 없어 단 1회 실패로 종료. 06:30 포스터의 `_tp_build()` 폴백도 throttle 지속 중이면 동일 실패.
+- **헛다리**: 없음.
+- **해결**: `job_collect_trends()` 말미 `build_topic_pack()` 호출을 최대 2회 시도 루프로 교체. 첫 시도 실패(return None 또는 예외) 시 90초 대기 후 1회 재시도. 06:00 run 기준 재시도는 ~06:06-07에 완료 → 06:30 포스터가 `_tp_pick()` 즉시 성공 가능.
+- **파일**: `JARVIS03_RADAR/jobs.py` `job_collect_trends()` (line ~216)
+- **교훈**: LLM throttle/rate-limit 경합은 일시적(transient). 1회 실패로 체인 전체를 끊는 설계 대신, 동일 함수 내에서 N회 재시도(간격 포함)가 필요한 경우 명시적 재시도 루프를 작성할 것. 특히 후행 파이프라인(경제 브리핑)이 의존하는 사전 준비 단계는 더욱 중요.
+
+---
+
 ## [426] harness "트렌드 수집" freeze(300s>300s) 오탐 — 외곽 watchdog이 자식 subprocess 진행을 못 봄 (2026-07-12)
 
 - **증상**: `JARVIS00_INFRA.harness.트렌드 수집`이 `RuntimeError: [harness:트렌드 수집] attempt=1 step=전체: 멈춤(freeze) 300s > 300s 무진전` 보고. traceback은 `NoneType: None`(watchdog이 직접 report로 생성한 인공 RuntimeError).
