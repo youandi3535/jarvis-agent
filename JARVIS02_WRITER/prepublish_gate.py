@@ -78,7 +78,7 @@ def prepublish_quality_issues(draft, post_type: str = "",
         try:
             from JARVIS02_WRITER.law_enforcer import (
                 _build_source_corpus, _collect_gt_floats,
-                _collected_gt, _claim_all_grounded,
+                _collected_gt, _claim_all_grounded, _market_point_deltas,
             )
             corpus = _build_source_corpus(source_docs, market_data)
         except Exception as e:
@@ -89,7 +89,8 @@ def prepublish_quality_issues(draft, post_type: str = "",
         if _fact_on:
             gt: list = []
             try:
-                gt = _collect_gt_floats(market_data, stocks_data, corpus) + _collected_gt(collected)
+                gt = (_collect_gt_floats(market_data, stocks_data, corpus)
+                      + _collected_gt(collected) + _market_point_deltas(market_data))
             except Exception:
                 pass
             blocked_n = 0

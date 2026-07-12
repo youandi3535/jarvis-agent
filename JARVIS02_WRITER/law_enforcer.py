@@ -1372,7 +1372,10 @@ def _web_confirms(claim: str, evidence: list[dict]) -> bool:
 # factuality_issues 의 검증 대상으로 승격 → 환각/거짓 수치가 무검증 통과하는 갭 차단.
 _NUMERIC_UNIT_RE = re.compile(
     r'\d[\d,]*(?:\.\d+)?'   # 콤마 유무 무관 (2650·2,650·12·3.2 모두) — 4자리+ 오절단 방지
-    r'(?:\s*%|\s*억|\s*조|\s*배|\s*원|\s*달러|\s*엔|\s*위안|\s*p\b|\s*bp\b)',
+    # ★ '포인트' (ERRORS harness 2026-07-12): 지수 등락 서술("나스닥 300포인트 상승")에
+    #   쓰이는 관용 단위. 미인식 시 토큰 자체가 안 잡혀 _claim_all_grounded 가 즉시
+    #   False(미확인) 반환 — 실제 데이터 grounding 여부와 무관하게 항상 차단되는 버그.
+    r'(?:\s*%|\s*억|\s*조|\s*배|\s*원|\s*달러|\s*엔|\s*위안|\s*포인트|\s*p\b|\s*bp\b)',
     re.IGNORECASE,
 )
 
@@ -1563,6 +1566,28 @@ def _collected_gt(collected) -> list:
     return out
 
 
+def _market_point_deltas(market_data) -> list:
+    """지수 dict({value,change%}) → 절대 포인트 변동 파생 (grounding 정답 확장).
+
+    ★ ERRORS harness 2026-07-12: get_market_data() 는 등락률(%)만 원시 보유하고
+      절대 포인트변동은 안 갖고 있다. 본문이 관용적으로 쓰는 'N포인트 상승/하락'
+      서술은 value*change/100 으로 파생해야 grounding 가능 — 안 그러면 실제 데이터에서
+      정상 계산된 서술까지 창작 수치로 오차단된다("300포인트 넘게 뛰어올랐어요" 사고).
+      부호는 버리고 절대값만 등록 — 토큰 추출(_NUMERIC_UNIT_RE)이 부호 없는 숫자만 잡음.
+    """
+    out: list = []
+    if not isinstance(market_data, dict):
+        return out
+    for info in market_data.values():
+        if not isinstance(info, dict):
+            continue
+        v, chg = info.get("value"), info.get("change")
+        if (isinstance(v, (int, float)) and not isinstance(v, bool)
+                and isinstance(chg, (int, float)) and not isinstance(chg, bool)):
+            out.append(abs(v * chg / 100.0))
+    return out
+
+
 def factuality_issues(
     html: str,
     source_docs=None,
@@ -1662,7 +1687,7 @@ def factuality_issues(
     #     분명하다" — ERRORS [350] 원칙의 결정론 안전망을 corpus 로 확장). 수치가 데이터·
     #     문서 어디에도 *없는* 주장(창작)만 웹 검증으로 넘어간다.
     gt_floats = (_collect_gt_floats(market_data, stocks_data, corpus)
-                 + _collected_gt(collected))
+                 + _collected_gt(collected) + _market_point_deltas(market_data))
     pending, _rescued = [], 0
     for c in claims:
         if c["text"] not in unsupported:

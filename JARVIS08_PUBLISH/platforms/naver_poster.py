@@ -878,8 +878,12 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
         for _attempt in range(3):
             try:
                 if _title_el:
-                    # ① move_to_element().click() — 제목칸으로 커서 이동 (본문 포커스 해제)
-                    _AC2(driver).move_to_element(_title_el).click().perform()
+                    # ① JS click + focus — move_to_element().click()은 element not interactable 발생
+                    driver.execute_script(
+                        "arguments[0].click(); arguments[0].focus();"
+                        "arguments[0].dispatchEvent(new Event('focus',{bubbles:true}));",
+                        _title_el,
+                    )
                     time.sleep(0.3)
                     # ② 기존 내용 전체 선택 후 삭제 — 재시도 시 제목 누적 방지
                     _title_el.send_keys((_K2.COMMAND if IS_MAC else _K2.CONTROL) + 'a')

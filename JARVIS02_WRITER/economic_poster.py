@@ -461,6 +461,7 @@ def run(post_naver=True, post_tistory=True):
             result = nv_collect(
                 ts_keyword=state.get("ts_keyword_final", ""),
                 supreme_block=state.get("supreme_block"),
+                market_data=state.get("market_data"),
             )
         except Exception as _e:
             print(f"  ❌ [②] 네이버 수집 오류: {_e}")
@@ -533,6 +534,7 @@ def run(post_naver=True, post_tistory=True):
             result = ts_collect(
                 nv_keyword=state.get("nv_keyword_final", ""),
                 supreme_block=state.get("supreme_block"),
+                market_data=state.get("market_data"),
             )
         except Exception as _e:
             print(f"  ❌ [⑤] 티스토리 수집 오류: {_e}")
