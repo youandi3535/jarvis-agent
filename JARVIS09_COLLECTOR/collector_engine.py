@@ -379,9 +379,8 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
 
     Returns:
         {"docs": list[CollectionResult],  # 신뢰순 최대 15개 원시 문서
-         "plan": dict}                    # research_planner 설계도
+         "plan": dict}                    # 빈 dict (설계 LLM 제거 — _collect_tier가 plan 미사용)
     """
-    from .research_planner import plan_research
     from .models import (quota_group,
                          COLLECT_QUOTA_BUDGET, COLLECT_PAPER_CAP, COLLECT_API_CAP)
 
@@ -391,13 +390,6 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
 
     log.info(f"[research] 티어순 수집 시작: theme='{theme}' "
              f"쿼터=논문{paper_cap}·API{api_cap}·총{budget}")
-
-    plan = plan_research(theme, sector=sector, angle=angle)
-    try:
-        from .source_onboarding import check_and_notify
-        check_and_notify(plan)
-    except Exception:
-        pass
 
     # 티어별 프로바이더 분류
     paper_provs = [p for p in _PROVIDERS if quota_group(p.source_type) == "paper"]
@@ -429,7 +421,7 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
     total = len(all_docs)
     log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
              f"+나머지{len(rest_docs)}={total}건 → JARVIS02 fact·수치 추출")
-    return {"docs": all_docs, "plan": plan}
+    return {"docs": all_docs, "plan": {}}
 
 
 # ── ★ 통합 수집 컴포저 — CollectedData 방출 (Step 3, UNIFIED_PIPELINE_SPEC) ──
