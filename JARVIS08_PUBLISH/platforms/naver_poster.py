@@ -878,14 +878,18 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
         for _attempt in range(3):
             try:
                 if _title_el:
-                    # ① JS execCommand — send_keys는 contenteditable에서 "element not interactable"
-                    #   Selenium 상호작용 검사를 우회해 DOM에 직접 텍스트 주입
-                    driver.execute_script(
-                        "arguments[0].focus();"
-                        "document.execCommand('selectAll', false, null);"
-                        "document.execCommand('delete', false, null);"
-                        "document.execCommand('insertText', false, arguments[1]);",
-                        _title_el, _want,
+                    # ① ActionChains 클릭으로 SmartEditor 커서 활성화 후 키 이벤트 직접 전달
+                    #   execCommand('insertText')는 SmartEditor ONE 이벤트 시스템을 통과 못 함
+                    #   ActionChains는 CDP 레벨 키 이벤트라 SmartEditor 내부까지 전달됨
+                    _AC2(driver).move_to_element(_title_el).click().perform()
+                    time.sleep(0.3)
+                    _mod = _K2.COMMAND if IS_MAC else _K2.CONTROL
+                    (
+                        _AC2(driver)
+                        .key_down(_mod).send_keys('a').key_up(_mod)
+                        .send_keys(_K2.DELETE)
+                        .send_keys(_want)
+                        .perform()
                     )
                     time.sleep(0.5)
                 else:
