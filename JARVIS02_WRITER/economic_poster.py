@@ -377,7 +377,7 @@ def run(post_naver=True, post_tistory=True):
     os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_dl.time() + 2700)
 
     tg(f"📰 경제 브리핑 포스팅 시작 ({TODAY_STR})\n"
-       f"2개 플랫폼 각기 다른 트렌드 주제로 발행")
+       f"1주제 공동수집 → 네이버·티스토리 각각 다른 대본으로 발행")
 
     # ── 발행 전 사실성 게이트용 시장 수치 ground truth (★ 2026-06-28) ──────
     # 작성에 쓰인 시장 지표·경제 일정을 verify 시점 state 로 전달 → 본문 수치를
@@ -517,7 +517,15 @@ def run(post_naver=True, post_tistory=True):
         if not state.get("post_tistory"):
             print("  ─ [⑤] 티스토리 수집 건너뜀")
             return {"ts_collect_result": {"success": False, "keyword": ""}}
-        # ★ 플랫폼 직렬 (2026-07-03): 네이버 액션 종결 후 확정 키워드를 input_data 로 수령
+        # ★ 수집 공유 (2026-07-12): 네이버 수집 성공 시 동일 주제·데이터 재사용.
+        #   테마주와 동일 구조 — 수집 1회, 플랫폼별 대본만 따로.
+        #   네이버 미실행·실패 시에만 ts_collect 독립 수집(폴백).
+        shared = state.get("nv_collect_result") or {}
+        if shared.get("success"):
+            kw = shared.get("keyword", "")
+            print(f"  🔗 [⑤] 수집 공유: 네이버 '{kw}' 데이터 재사용 (LLM 0회)")
+            return {"ts_collect_result": shared}
+        # 폴백: 네이버 수집 없음·실패 → 독립 수집
         try:
             result = ts_collect(
                 nv_keyword=state.get("nv_keyword_final", ""),
@@ -787,7 +795,10 @@ def run(post_naver=True, post_tistory=True):
             _ts_action,
             input_data={"post_naver": False, "post_tistory": True,
                         "market_data": _j09_market_data,
-                        "nv_keyword_final": nv_keyword},
+                        "nv_keyword_final": nv_keyword,
+                        # ★ 수집 공유 (2026-07-12): 네이버 수집 성공 결과를 ts 액션에 전달.
+                        #   _step_ts_collect 가 이 값 확인 → 동일 주제·데이터 재사용.
+                        "nv_collect_result": _nv_state.get("nv_collect_result")},
         )
         _results["tistory"] = _ts_res
         _ts_state = _ts_res.state
