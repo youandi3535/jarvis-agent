@@ -377,7 +377,7 @@ def run(post_naver=True, post_tistory=True):
     os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_dl.time() + 2700)
 
     tg(f"📰 경제 브리핑 포스팅 시작 ({TODAY_STR})\n"
-       f"2개 플랫폼 각기 다른 트렌드 주제로 발행")
+       f"1주제 공동수집 → 네이버·티스토리 각각 다른 대본으로 발행")
 
     # ── 발행 전 사실성 게이트용 시장 수치 ground truth (★ 2026-06-28) ──────
     # 작성에 쓰인 시장 지표·경제 일정을 verify 시점 state 로 전달 → 본문 수치를
@@ -419,7 +419,10 @@ def run(post_naver=True, post_tistory=True):
     #   이쪽 발행을 차단하지 않도록 (실패 격리 목표를 Layer 1 까지 관철).
     def _precondition_for(platform: str):
         _plat_keys = (("NV_USERNAME", "NV_PASSWORD") if platform == "naver"
-                      else ("TS_URL", "TS_USERNAME", "TS_PASSWORD", "TS_COOKIE"))
+                      else ("TS_URL", "TS_USERNAME", "TS_PASSWORD"))
+        # TS_COOKIE 는 precondition 에서 확인하지 않음 — _step_ts_cookie 가 티스토리 액션
+        # 시작 시 force=True 로 신선 로그인 후 직접 갱신. 미리 .env 값으로 복원하면
+        # 네이버 단계에서 불필요하게 TS_COOKIE를 메모리에 올려두게 됨.
 
         def _pc(state):
             pc_issues = []
@@ -517,7 +520,15 @@ def run(post_naver=True, post_tistory=True):
         if not state.get("post_tistory"):
             print("  ─ [⑤] 티스토리 수집 건너뜀")
             return {"ts_collect_result": {"success": False, "keyword": ""}}
-        # ★ 플랫폼 직렬 (2026-07-03): 네이버 액션 종결 후 확정 키워드를 input_data 로 수령
+        # ★ 수집 공유 (2026-07-12): 네이버 수집 성공 시 동일 주제·데이터 재사용.
+        #   테마주와 동일 구조 — 수집 1회, 플랫폼별 대본만 따로.
+        #   네이버 미실행·실패 시에만 ts_collect 독립 수집(폴백).
+        shared = state.get("nv_collect_result") or {}
+        if shared.get("success"):
+            kw = shared.get("keyword", "")
+            print(f"  🔗 [⑤] 수집 공유: 네이버 '{kw}' 데이터 재사용 (LLM 0회)")
+            return {"ts_collect_result": shared}
+        # 폴백: 네이버 수집 없음·실패 → 독립 수집
         try:
             result = ts_collect(
                 nv_keyword=state.get("nv_keyword_final", ""),
@@ -574,8 +585,8 @@ def run(post_naver=True, post_tistory=True):
                 auto_refresh_if_needed as _auto_refresh,
                 verify_all_logins as _verify_logins,
             )
-            _auto_refresh()           # 만료 임박 쿠키 선제 갱신
-            _login_res = _verify_logins() or {}
+            _auto_refresh(platforms=(platform,))   # 현재 플랫폼만 갱신
+            _login_res = _verify_logins(platforms=(platform,)) or {}  # 현재 플랫폼만 확인 (Naver 검증 중 Tistory 건드리지 않음)
             _pl = _login_res.get(platform) or {}
             if not _pl.get("ok", True):   # 구조 변경 시 fail-open
                 _why = "; ".join(_pl.get("issues") or ["재로그인 필요"])[:150]
@@ -780,14 +791,30 @@ def run(post_naver=True, post_tistory=True):
     else:
         print("  ─ 네이버 건너뜀 (플래그 OFF)")
 
+    # ★ 네이버 수집 자체가 실패하면(키워드 없음 = topic_pack 빌드 실패) 티스토리도 건너뜀.
+    # 동일 수집 경로(topic_pack)를 사용하므로 티스토리도 같은 이유로 실패 예상.
+    # post_naver=False 이면 _nv_state 비어있으니 False 로 처리 (건너뜀 안 함).
+    _nv_collect_failed = bool(
+        post_naver
+        and not (_nv_state.get("nv_collect_result") or {}).get("success")
+        and not nv_keyword
+    )
+    if _nv_collect_failed:
+        msg = "⏭ [티스토리] 네이버 수집 실패(topic_pack 없음) — 티스토리도 수집 실패 예상, 건너뜀"
+        print(f"\n  {msg}")
+        tg(msg)
+
     # ★ 티스토리는 네이버 *종결 후* 에만 시작 — 네이버 성패와 무관하게 독립 진행
-    if post_tistory and not _concurrent_blocked:
+    if post_tistory and not _concurrent_blocked and not _nv_collect_failed:
         os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + 2400)
         _ts_res = run_action(
             _ts_action,
             input_data={"post_naver": False, "post_tistory": True,
                         "market_data": _j09_market_data,
-                        "nv_keyword_final": nv_keyword},
+                        "nv_keyword_final": nv_keyword,
+                        # ★ 수집 공유 (2026-07-12): 네이버 수집 성공 결과를 ts 액션에 전달.
+                        #   _step_ts_collect 가 이 값 확인 → 동일 주제·데이터 재사용.
+                        "nv_collect_result": _nv_state.get("nv_collect_result")},
         )
         _results["tistory"] = _ts_res
         _ts_state = _ts_res.state

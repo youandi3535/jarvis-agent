@@ -685,7 +685,6 @@ def _gen_section_call1(
 ) -> str:
     """Call-1: 오프닝 + 섹션1 생성."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
-    hook = _gen_hook(keyword, platform)
     system_msg = _build_section_system_msg(supreme_block, platform)
     _catalog = _build_data_catalog(datasets)
     _call1_min = max(2, _L.MIN_CHART_COUNT // 2)  # 전체 최솟값의 절반 (call-1은 절반 담당)
@@ -918,57 +917,6 @@ def _structure_signature(content: str) -> tuple:
     h2s = len(re.findall(r"<h2", content, re.IGNORECASE))
     return (tuple(charts), tuple(photos), tables, h2s)
 
-
-def critique_and_refine(content: str, platform: str, evidence_block: str = "",
-                        post_type: str = "theme") -> str:
-    """자기비평 1패스 — 초안을 루브릭으로 점검하고 *문장만* 다듬은 전체본 반환.
-
-    안전 가드: 플레이스홀더·표·소제목 구조가 1개라도 달라지거나 분량이 크게
-    변하면 원본 유지 (구조 훼손 < 문장 미세 개선). 킬스위치 WRITER_CRITIQUE=0.
-    """
-    if not content or _os.getenv("WRITER_CRITIQUE", "1") == "0":
-        return content
-    spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
-    sig_before = _structure_signature(content)
-    prompt = f"""아래는 {spec['name']} 블로그 초안이다. 루브릭으로 점검하고 *문장 수준만* 고쳐라.
-
-[루브릭]
-1) 도입부가 독자 상황에서 시작하는가 (일반론·AI투 시작 금지)
-2) 근거·수치가 문장에 자연스럽게 녹았는가 (나열식 금지)
-3) 같은 어미·같은 문장 구조 3회 이상 반복 없는가
-4) 각 소제목 아래 첫 문장이 그 섹션의 핵심을 즉시 말하는가
-5) 마무리가 요약 반복이 아니라 독자 행동·통찰로 끝나는가
-{('6) 본문 수치가 아래 근거 팩과 일치하는가 (불일치 시 근거 팩 값으로 교체)' + chr(10) + evidence_block) if evidence_block else ''}
-
-[절대 규칙]
-- [CHART_N: ...] / [PHOTO_N: ...] 플레이스홀더는 글자 하나도 바꾸지 말고 그 자리 유지
-- <table>...</table>, <h2>...</h2> 태그·구조·개수 유지 (내용 텍스트 오탈자만 수정 가능)
-- <p> 당 문장 수·전체 분량 유지 (문장 추가·삭제 최소화 — 다듬기만)
-- 문체 유지: {spec['tone']}
-- 수정한 *전체 본문 HTML만* 출력. 설명·주석·코드블록 금지.
-
-[초안]
-{content}"""
-    try:
-        # ★ 비필수 (ERRORS [368]): 자기비평은 폴백(원본 유지)이 있으므로 스로틀 시 즉시 폴백
-        #   — 임계경로(발행)를 자기비평 LLM 대기로 막지 않는다.
-        raw = invoke_text("writer", prompt, timeout=60, _nonessential=True,
-                          system="당신은 냉정한 블로그 편집장이다. 구조는 건드리지 않고 문장만 다듬는다.")
-        refined = strip_html_wrapper(raw or "").strip()
-        if not refined:
-            return content
-        if _structure_signature(refined) != sig_before:
-            print("  ⚠️ [비평] 구조 변형 감지 — 원본 유지")
-            return content
-        ratio = len(refined) / max(1, len(content))
-        if not (0.7 <= ratio <= 1.3):
-            print(f"  ⚠️ [비평] 분량 변동 과다({ratio:.2f}) — 원본 유지")
-            return content
-        print("  ✨ [비평] 자기비평 패스 적용 완료")
-        return refined
-    except Exception as e:
-        _g_report("writer", e, module=__name__, func_name="critique_and_refine")
-        return content
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

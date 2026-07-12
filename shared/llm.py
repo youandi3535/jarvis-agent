@@ -412,8 +412,17 @@ def _run_sdk_sync(
     system: str = "",
     timeout: int = 300,
 ) -> str:
-    """claude-code-sdk 동기 래퍼 — 응답 수집 후 ProcessError/MessageParseError 무시."""
+    """claude-code-sdk 동기 래퍼 — 응답 수집 후 ProcessError/MessageParseError 무시.
+
+    ★ anyio.fail_after(timeout) 는 SDK subprocess 전송이 블로킹(비-yield) I/O로 멈추면
+    인터럽트를 못 걸 수 있다 — google_collector._bounded() 가 pytrends 에 대해 이미 고친
+    것과 동일한 클래스의 버그(레이더 수집이 메시지 0건인 채 300초+를 통째로 블로킹해
+    watchdog freeze 880s 로 감지된 사고). ThreadPoolExecutor + fut.result(timeout=) 로
+    호출 자체에 강한 벽시계 상한을 걸고, 대기 중에도 주기적으로 beat() 해 오탐/무한
+    블로킹을 동시에 방지한다.
+    """
     import anyio
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
     from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
     from claude_code_sdk._errors import MessageParseError, ProcessError
 
@@ -444,10 +453,7 @@ def _run_sdk_sync(
                 elif type(msg).__name__ == "ResultMessage" and getattr(msg, "num_turns", 1) == 0:
                     throttled["v"] = True
 
-    # ★ 프로세스 전역 세마포어 — claude CLI 동시 spawn 직렬화 (Max burst 초과 방지)
-    _pace_spawn()
-    _acquire_llm_sem()
-    try:
+    def _run_blocking() -> None:
         try:
             anyio.run(_collect)
         except (MessageParseError, ProcessError):
@@ -459,6 +465,32 @@ def _run_sdk_sync(
             if not parts:
                 import logging as _logging
                 _logging.getLogger("jarvis.llm").warning(f"SDK 오류: {e}")
+
+    # ★ 프로세스 전역 세마포어 — claude CLI 동시 spawn 직렬화 (Max burst 초과 방지)
+    _pace_spawn()
+    _acquire_llm_sem()
+    try:
+        exe = ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = exe.submit(_run_blocking)
+            wall_deadline = timeout + 30.0   # anyio 내부 타임아웃 위 안전 마진
+            waited = 0.0
+            poll = 15.0                      # watchdog freeze_sec(300s) 보다 충분히 작게
+            while True:
+                try:
+                    fut.result(timeout=min(poll, max(0.1, wall_deadline - waited)))
+                    break
+                except _FutTimeout:
+                    waited += poll
+                    _wd_beat()   # ★ 벽시계 대기 중에도 진행 신호 — freeze 오탐 방지
+                    if waited >= wall_deadline:
+                        import logging as _logging
+                        _logging.getLogger("jarvis.llm").warning(
+                            f"SDK 벽시계 상한 {wall_deadline:.0f}s 초과 — 강제 포기(수집 {len(parts)}개)"
+                        )
+                        break
+        finally:
+            exe.shutdown(wait=False)   # 내부 스레드 leak 가능 — 메인 흐름 비블로킹 우선(_bounded() 와 동일 정책)
     finally:
         _LLM_SPAWN_SEM.release()
     _was_throttled = bool(throttled["v"] and not parts)

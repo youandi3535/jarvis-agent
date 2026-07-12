@@ -54,20 +54,63 @@ def prepublish_quality_issues(draft, post_type: str = "",
       수치를 실측값과 *결정론적으로* 대조 — LLM 전사 오류·조작(예: PER 463.9)을 차단한다.
     ★ Step 10 (2026-07-05): collected(CollectedData) 넘기면 사실성 grounding 정답을
       단일 소스에서 보강(경제 topic_pack datasets·facts 포함). 종목밴드는 stocks_data 로 유지.
+    ★ LLM 1회 (2026-07-12): 사실성·매력도 통합 단일 호출(_combined_quality_call).
     """
     body = _draft_body(draft)
     if not body or len(body) < _MIN_BODY:
         return []
     out: list[dict] = []
+
+    # ── 결정론 검사 (LLM 0회) ──────────────────────────────────────────
     if not _disabled("PREPUBLISH_FACT_GATE"):
-        out.extend(_factuality_leg(body, post_type, source_docs, market_data, stocks_data, collected))
-        out.extend(_stock_facts_leg(body, stocks_data))   # ★ 1-c 실측 재무 결정론 대조 (±10% 밴드 유지)
-    if not _disabled("PREPUBLISH_ENGAGEMENT_GATE"):
-        out.extend(_engagement_leg(draft, body, post_type))
+        out.extend(_stock_facts_leg(body, stocks_data))
     if not _disabled("PREPUBLISH_IMAGE_GATE"):
         out.extend(_image_factuality_leg(draft, body))
     if not _disabled("PREPUBLISH_CROSSCHECK_GATE"):
-        out.extend(_crosscheck_leg(draft, body))   # ★ 2-4 본문↔차트 수치 교차대조
+        out.extend(_crosscheck_leg(draft, body))
+
+    # ── 통합 LLM 1회: 사실성 + 매력도 ────────────────────────────────
+    _fact_on = not _disabled("PREPUBLISH_FACT_GATE")
+    _eng_on = not _disabled("PREPUBLISH_ENGAGEMENT_GATE")
+    if _fact_on or _eng_on:
+        title = (draft.get("title") or draft.get("keyword") or "").strip()
+        corpus = ""
+        try:
+            from JARVIS02_WRITER.law_enforcer import (
+                _build_source_corpus, _collect_gt_floats,
+                _collected_gt, _claim_all_grounded,
+            )
+            corpus = _build_source_corpus(source_docs, market_data)
+        except Exception as e:
+            log.warning(f"[prepublish_gate] law_enforcer import 실패: {e}")
+
+        cqr = _combined_quality_call(body, title, corpus, post_type)
+
+        if _fact_on:
+            gt: list = []
+            try:
+                gt = _collect_gt_floats(market_data, stocks_data, corpus) + _collected_gt(collected)
+            except Exception:
+                pass
+            blocked_n = 0
+            for claim in (cqr.get("blocked_claims") or []):
+                try:
+                    grounded = _claim_all_grounded(claim, gt) if gt else False
+                except Exception:
+                    grounded = False
+                if not grounded:
+                    out.append({"kind": "factuality",
+                                "detail": f"[사실성] 출처·데이터 미확인: {claim[:120]}"})
+                    blocked_n += 1
+            if blocked_n:
+                log.warning(f"[prepublish_gate] 사실성 차단 {blocked_n}건 → 재작성 순환")
+
+        if _eng_on and not cqr.get("engagement_passed", True):
+            dims = cqr.get("failed_dims") or []
+            tag = ",".join(sorted(dims)) if dims else "전반"
+            log.warning(f"[prepublish_gate] 매력도 미달 차원={tag} → 재작성 순환")
+            out.append({"kind": "engagement", "detail": f"[매력도/유익성] 임계 미달 차원: {tag}"})
+
     return out
 
 
@@ -124,63 +167,54 @@ def _stock_facts_leg(body: str, stocks_data) -> list[dict]:
     return out
 
 
-def _factuality_leg(body, post_type, source_docs, market_data, stocks_data=None, collected=None) -> list[dict]:
-    """출처 대조 + 웹 재검증. 게이트 자체 크래시는 발행을 막지 않음(GUARDIAN 박제 후 통과).
+def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -> dict:
+    """사실성 + 매력도 통합 LLM 1회 판정 (★ 사용자 박제 2026-07-12).
 
-    ★ stocks_data(실측 종목 재무)를 넘기면 결정론 수치 grounding 으로 진실 수치를
-      웹-차단 없이 통과시킨다 (ERRORS [350] 근본 수정)."""
-    try:
-        from JARVIS02_WRITER.law_enforcer import factuality_issues
-    except Exception as e:
-        log.warning(f"[prepublish_gate] factuality import 실패: {e}")
-        return []
-    try:
-        from JARVIS09_COLLECTOR import web_verify as _wv
-    except Exception:
-        _wv = None
-    try:
-        res = factuality_issues(body, source_docs=source_docs, post_type=post_type,
-                                web_verify_fn=_wv, market_data=market_data,
-                                stocks_data=stocks_data, collected=collected)
-    except Exception as e:
-        log.error(f"[prepublish_gate] 사실성 게이트 예외 → 통과(보고): {e}")
-        _report_safe("writer", e, "_factuality_leg")
-        return []
-    for note in (res.get("policy_notes") or []):
-        log.info(f"[prepublish_gate] 정책: {note}")
-    out: list[dict] = []
-    for b in (res.get("blocked") or []):
-        claim = str(b.get("claim", ""))[:120]
-        reason = str(b.get("reason", ""))[:80]
-        out.append({"kind": "factuality", "detail": f"[사실성] {reason}: {claim}"})
-    if out:
-        log.warning(f"[prepublish_gate] 사실성 차단 {len(out)}건 → 재작성 순환")
-        for o in out:
-            log.warning(f"  ↳ {o['detail']}")
-    return out
+    fail-open: LLM 실패·스로틀 시 모두 통과.
+    Returns: {"blocked_claims": [str], "engagement_passed": bool, "failed_dims": [str]}
+    """
+    import json as _json
+    from shared.llm import invoke_text as _inv
 
+    stripped = re.sub(r"<[^>]+>", " ", body or "")[:4000].strip()
+    if not stripped:
+        return {"blocked_claims": [], "engagement_passed": True, "failed_dims": []}
 
-def _engagement_leg(draft, body, post_type) -> list[dict]:
-    """유익성·매력도 LLM judge. LLM 실패는 judge 내부에서 fail-open(통과) 처리."""
+    corpus_snippet = (corpus or "").strip()[:2000] or "(없음)"
+    prompt = (
+        f"제목: {title}\n\n[본문]\n{stripped}\n\n[출처]\n{corpus_snippet}\n\n"
+        "아래 두 가지를 동시에 판정하라.\n\n"
+        "## A. 사실성 — 발행 차단 주장\n"
+        "본문에서 *구체적 수치가 포함된 주장* 중 발행하면 안 되는 것만 골라라.\n"
+        "차단 기준: (a) 출처 수치와 모순 (b) 구체 수치인데 출처에 근거 전혀 없음\n"
+        "★ 차단 제외: 숫자 없는 서술·전망·해석, 상식 수치, 출처에서 추론 가능한 수치\n\n"
+        "## B. 매력도·유익성 (임계 engagement≥70, usefulness≥70, title_hook≥60)\n\n"
+        "JSON 하나만 반환(다른 말 금지):\n"
+        '{"blocked_claims":["차단 주장 원문 최대5개, 없으면 []"],'
+        '"engagement_score":85,"usefulness_score":80,"title_hook_score":70,'
+        '"failed_dims":["임계 미달 차원 목록, 없으면 []"]}'
+    )
     try:
-        from JARVIS03_RADAR.post_quality_analyzer import judge_engagement
+        raw = _inv("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
+        if not (raw or "").strip():
+            return {"blocked_claims": [], "engagement_passed": True, "failed_dims": []}
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
+            return {"blocked_claims": [], "engagement_passed": True, "failed_dims": []}
+        obj = _json.loads(m.group())
+        blocked = [str(x).strip() for x in (obj.get("blocked_claims") or []) if str(x).strip()]
+        raw_dims = list(obj.get("failed_dims") or [])
+        if not raw_dims:
+            if int(obj.get("engagement_score", 100) or 100) < 70:
+                raw_dims.append("engagement")
+            if int(obj.get("usefulness_score", 100) or 100) < 70:
+                raw_dims.append("usefulness")
+            if int(obj.get("title_hook_score", 100) or 100) < 60:
+                raw_dims.append("title_hook")
+        return {"blocked_claims": blocked, "engagement_passed": not raw_dims, "failed_dims": raw_dims}
     except Exception as e:
-        log.warning(f"[prepublish_gate] engagement import 실패: {e}")
-        return []
-    title = (draft.get("title") or draft.get("keyword") or "").strip()
-    try:
-        res = judge_engagement(title=title, content=body, post_type=post_type)
-    except Exception as e:
-        log.error(f"[prepublish_gate] 매력도 게이트 예외 → 통과(보고): {e}")
-        _report_safe("radar", e, "_engagement_leg")
-        return []
-    if res.get("passed", True):
-        return []
-    dims = res.get("failed_dims") or []
-    tag = ",".join(sorted(dims)) if dims else "전반"
-    # detail 에 점수 raw 금지 — 실패 차원 태그만 (fingerprint 안정)
-    log.warning(f"[prepublish_gate] 매력도 미달 차원={tag} → 재작성 순환")
-    return [{"kind": "engagement", "detail": f"[매력도/유익성] 임계 미달 차원: {tag}"}]
+        log.warning(f"[prepublish_gate] 통합 품질 판정 실패 → 통과(fail-open): {e}")
+        return {"blocked_claims": [], "engagement_passed": True, "failed_dims": []}
 
 
 _IMG_EXT = re.compile(r"\.(?:jpg|jpeg|png|webp)$", re.I)
@@ -310,9 +344,3 @@ def _crosscheck_leg(draft, body) -> list[dict]:
     return out
 
 
-def _report_safe(source: str, exc: Exception, func_name: str) -> None:
-    try:
-        from JARVIS07_GUARDIAN.error_collector import report as _r
-        _r(source, exc, module=__name__, func_name=func_name)
-    except Exception:
-        pass

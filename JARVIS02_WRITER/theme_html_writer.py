@@ -152,18 +152,6 @@ def generate_theme_html(
             print(f"  ⚠️ 재생성 실패: {e}")
             _g_report("writer", e, module=__name__)
 
-    # ── ★ 자기비평 1패스 (ADR 012) — 구조 보존 가드 내장, 실패 시 원본 유지 ──
-    try:
-        from JARVIS02_WRITER.draft_writer import critique_and_refine, _build_evidence_block
-        content = critique_and_refine(
-            content, platform,
-            evidence_block=_build_evidence_block(evidence_pack),
-            post_type="theme",
-        )
-    except Exception as e:
-        print(f"  ⚠️ [Theme/{platform}] 비평 패스 스킵: {e}")
-        _g_report("writer", e, module=__name__)
-
     # ── ★ 최종 구조 게이트 (ERRORS [381] 보강) — 스로틀 절단 응답 차단 ──
     #   비어있지 않아도 <p>/<h*> 구조·본문 길이가 없으면 하류에서 '텍스트 블록 없음/본문 0자'
     #   3중 오류(#2120-2122)를 낸다. 여기서 생성 실패로 판정 → 호출자 draft_failed 로 재생성.

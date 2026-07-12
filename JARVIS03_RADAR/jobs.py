@@ -47,34 +47,67 @@ def _run_script_checked(script: Path, args: list = None, label: str = "") -> Non
 
     returncode != 0 또는 timeout 발생 시 Exception 을 raise 하여
     _run_with_harness() 의 execution_error 검출 → GUARDIAN 기록 → 재실행 흐름 트리거.
+
+    ★ subprocess.run() 을 폴링 스레드로 감싸 대기 중 주기적으로 beat() 한다 (ERRORS [404][413]과
+    동일 클래스 수정). 이 호출은 harness 외곽 Watchdog(freeze_sec=300 고정, run_action 이 감싼
+    단일 step) 안에서 블로킹되는데, 자식 프로세스(radar_main.py 등) 내부의 자체 beat() 는 별도
+    OS 프로세스라 부모 harness 의 _GLOBAL_BEAT 에 보이지 않는다 — 정상적으로 5분 넘게 걸리는
+    실행도 그대로 freeze 오탐(300s 무진전)으로 잡혔다. 자식이 살아있는 동안 poll 간격마다
+    beat() 로 하네스에 진행 신호를 전달해 오탐을 막는다.
     """
     cmd = [_PYTHON, str(script)] + (args or [])
     lbl = label or script.name
     _log.info(f"▶ {lbl} 시작")
     try:
-        result = subprocess.run(
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except ImportError:
+        def _wd_beat() -> None: pass  # watchdog 부재 시 no-op (실행 지속)
+
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
+
+    def _run_blocking():
+        return subprocess.run(
             cmd, cwd=str(script.parent),
             capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_SEC,
         )
-        for line in (result.stdout or "").strip().splitlines()[-15:]:
-            _log.info(f"  {line}")
-        if result.returncode != 0:
-            err_tail = (result.stderr or "").strip()[-300:]
-            if err_tail:
-                _log.warning(f"  STDERR: {err_tail}")
-            if result.returncode == WATCHDOG_KILL_RC:
-                # ★ 워치독 강제킬(os._exit)은 자체 stderr를 남기지 않음 — err_tail은
-                #   킬 이전에 우연히 남아있던 무관한 내용(import 경고 등)이라 오진단 유발.
-                #   (2026-07-10 — RequestsDependencyWarning 잔재를 실패 원인으로 오인할 뻔한 사고)
-                raise RuntimeError(
-                    f"{lbl} 실패 (rc={result.returncode} EX_TEMPFAIL): "
-                    f"워치독 정지(freeze/deadline) 감지로 강제 종료 — 네트워크·외부 API 응답 지연 의심 "
-                    f"(stderr 꼬리는 킬 이전 무관 내용일 수 있음: {err_tail[:120]!r})"
-                )
-            raise RuntimeError(f"{lbl} 실패 (rc={result.returncode}): {err_tail[:200]}")
-        _log.info(f"✅ {lbl} 완료")
+
+    exe = ThreadPoolExecutor(max_workers=1)
+    try:
+        fut = exe.submit(_run_blocking)
+        poll = 15.0                       # harness freeze_sec(300s) 보다 충분히 작게
+        wall_cap = _SUBPROCESS_TIMEOUT_SEC + 30.0   # subprocess 자체 timeout 위 안전 마진
+        waited = 0.0
+        result = None
+        while result is None:
+            try:
+                result = fut.result(timeout=min(poll, max(0.1, wall_cap - waited)))
+            except _FutTimeout:
+                waited += poll
+                _wd_beat()   # ★ 자식 subprocess 진행 중 — 하네스 외곽 watchdog freeze 오탐 방지
+                if waited >= wall_cap:
+                    raise RuntimeError(f"{lbl} 타임아웃 ({wall_cap:.0f}s, 강제 포기)")
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"{lbl} 타임아웃 ({_SUBPROCESS_TIMEOUT_SEC:.0f}s)")
+    finally:
+        exe.shutdown(wait=False)   # 내부 스레드 leak 가능 — 메인 흐름 비블로킹 우선(_bounded()·llm.py 와 동일 정책)
+
+    for line in (result.stdout or "").strip().splitlines()[-15:]:
+        _log.info(f"  {line}")
+    if result.returncode != 0:
+        err_tail = (result.stderr or "").strip()[-300:]
+        if err_tail:
+            _log.warning(f"  STDERR: {err_tail}")
+        if result.returncode == WATCHDOG_KILL_RC:
+            # ★ 워치독 강제킬(os._exit)은 자체 stderr를 남기지 않음 — err_tail은
+            #   킬 이전에 우연히 남아있던 무관한 내용(import 경고 등)이라 오진단 유발.
+            #   (2026-07-10 — RequestsDependencyWarning 잔재를 실패 원인으로 오인할 뻔한 사고)
+            raise RuntimeError(
+                f"{lbl} 실패 (rc={result.returncode} EX_TEMPFAIL): "
+                f"워치독 정지(freeze/deadline) 감지로 강제 종료 — 네트워크·외부 API 응답 지연 의심 "
+                f"(stderr 꼬리는 킬 이전 무관 내용일 수 있음: {err_tail[:120]!r})"
+            )
+        raise RuntimeError(f"{lbl} 실패 (rc={result.returncode}): {err_tail[:200]}")
+    _log.info(f"✅ {lbl} 완료")
 
 
 def _run_with_harness(
@@ -185,17 +218,27 @@ def job_collect_trends() -> None:
     # 목적: 06:30 경제 포스터가 _tp_pick() 즉시 성공 → pack 재생성 LLM 호출 불필요.
     #       LLM 경합(트렌드수집↔대본생성↔pack생성 동시) → rate-limit throttle 연쇄를 원천 차단.
     # 실패해도 06:30 포스터가 _tp_build() 즉석 폴백(기존 동작) → 발행 안 막음.
-    try:
-        from JARVIS03_RADAR.topic_pack import build_topic_pack as _btp
-        _pack = _btp()
-        if _pack:
-            cands = len((_pack.get("candidates") or []))
-            _log.info(f"✅ [topic_pack] 사전 생성 완료: {cands}개 후보")
-        else:
-            _log.warning("[topic_pack] 사전 생성 실패 — 06:30 포스터에서 즉석 재시도")
-    except Exception as _e:
-        _log.warning(f"[topic_pack] 사전 생성 예외 (발행은 폴백으로 계속): {_e}")
-        _g_report("radar", _e, module=__name__)
+    # ★ 1회 재시도 — 06:00 auto_repair 경합 등 일시 LLM throttle 시 90초 후 재시도 (ERRORS [427])
+    import time as _time_tp
+    _MAX_TP_TRIES = 2
+    for _tp_try in range(_MAX_TP_TRIES):
+        try:
+            from JARVIS03_RADAR.topic_pack import build_topic_pack as _btp
+            _pack = _btp()
+            if _pack:
+                cands = len((_pack.get("candidates") or []))
+                _log.info(f"✅ [topic_pack] 사전 생성 완료: {cands}개 후보 (시도 {_tp_try+1})")
+                break
+            elif _tp_try < _MAX_TP_TRIES - 1:
+                _log.warning(f"[topic_pack] 사전 생성 실패 (시도 {_tp_try+1}/{_MAX_TP_TRIES}) — 90초 후 재시도")
+                _time_tp.sleep(90)
+            else:
+                _log.warning("[topic_pack] 사전 생성 최종 실패 — 06:30 포스터에서 즉석 재시도")
+        except Exception as _e:
+            _log.warning(f"[topic_pack] 사전 생성 예외 (시도 {_tp_try+1}/{_MAX_TP_TRIES}): {_e}")
+            _g_report("radar", _e, module=__name__)
+            if _tp_try < _MAX_TP_TRIES - 1:
+                _time_tp.sleep(90)
 
 
 def job_collect_performance() -> None:

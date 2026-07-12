@@ -156,9 +156,13 @@ def refresh_tistory_cookies(force: bool = False) -> bool:
 # 4) 일괄 검증 — Layer 1 precondition 위임 진입점
 # ══════════════════════════════════════════════════════════
 
-def verify_all_logins() -> dict[str, dict[str, Any]]:
-    """2 플랫폼 인증 상태 일괄 점검.
+def verify_all_logins(
+    platforms: tuple = ("naver", "tistory"),
+) -> dict[str, dict[str, Any]]:
+    """플랫폼 인증 상태 점검.
 
+    Args:
+        platforms: 점검할 플랫폼 튜플. 기본 전체. ("naver",) 전달 시 네이버만 점검.
     Returns:
         {
           "naver":   {"ok": bool, "issues": list[str], "cookie_age_h": float},
@@ -168,24 +172,26 @@ def verify_all_logins() -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
 
     # 네이버
-    nv_issues: list[str] = []
-    for k in _REQUIRED_ENV["naver"]:
-        if not os.environ.get(k, "").strip():
-            nv_issues.append(f"env {k} 누락")
-    cookies = get_naver_cookies()
-    if not cookies:
-        nv_issues.append("쿠키 파일 없음 또는 빈 list")
-    cookie_age = naver_cookie_age_hours()
-    if cookie_age > 10:
-        nv_issues.append(f"쿠키 만료 임박 ({cookie_age:.1f}h > 10h)")
-    result["naver"] = {"ok": not nv_issues, "issues": nv_issues, "cookie_age_h": cookie_age}
+    if "naver" in platforms:
+        nv_issues: list[str] = []
+        for k in _REQUIRED_ENV["naver"]:
+            if not os.environ.get(k, "").strip():
+                nv_issues.append(f"env {k} 누락")
+        cookies = get_naver_cookies()
+        if not cookies:
+            nv_issues.append("쿠키 파일 없음 또는 빈 list")
+        cookie_age = naver_cookie_age_hours()
+        if cookie_age > 10:
+            nv_issues.append(f"쿠키 만료 임박 ({cookie_age:.1f}h > 10h)")
+        result["naver"] = {"ok": not nv_issues, "issues": nv_issues, "cookie_age_h": cookie_age}
 
     # 티스토리
-    ts_issues: list[str] = []
-    for k in _REQUIRED_ENV["tistory"]:
-        if not os.environ.get(k, "").strip():
-            ts_issues.append(f"env {k} 누락")
-    result["tistory"] = {"ok": not ts_issues, "issues": ts_issues}
+    if "tistory" in platforms:
+        ts_issues: list[str] = []
+        for k in _REQUIRED_ENV["tistory"]:
+            if not os.environ.get(k, "").strip():
+                ts_issues.append(f"env {k} 누락")
+        result["tistory"] = {"ok": not ts_issues, "issues": ts_issues}
 
     return result
 
@@ -194,22 +200,27 @@ def verify_all_logins() -> dict[str, dict[str, Any]]:
 # 5) 자동 갱신 — 만료 임박 시
 # ══════════════════════════════════════════════════════════
 
-def auto_refresh_if_needed(naver_threshold_h: float = 10.0) -> dict[str, bool]:
+def auto_refresh_if_needed(
+    naver_threshold_h: float = 10.0,
+    platforms: tuple = ("naver", "tistory"),
+) -> dict[str, bool]:
     """만료 임박 플랫폼만 자동 갱신.
 
+    Args:
+        platforms: 갱신 대상 플랫폼 튜플. 기본 전체. ("naver",) 전달 시 네이버만.
     Returns:
         {"naver": refreshed?, "tistory": refreshed?}
     """
     result: dict[str, bool] = {"naver": False, "tistory": False}
-    # 네이버
-    age = naver_cookie_age_hours()
-    if age > naver_threshold_h:
-        log.info(f"[login_manager] 네이버 쿠키 {age:.1f}h — 갱신 시도")
-        result["naver"] = refresh_naver_cookies(force=False)
-    # 티스토리 — TS_COOKIE env 없으면 갱신
-    if not get_tistory_cookie():
-        log.info("[login_manager] 티스토리 TS_COOKIE 없음 — 갱신 시도")
-        result["tistory"] = refresh_tistory_cookies(force=False)
+    if "naver" in platforms:
+        age = naver_cookie_age_hours()
+        if age > naver_threshold_h:
+            log.info(f"[login_manager] 네이버 쿠키 {age:.1f}h — 갱신 시도")
+            result["naver"] = refresh_naver_cookies(force=False)
+    if "tistory" in platforms:
+        if not get_tistory_cookie():
+            log.info("[login_manager] 티스토리 TS_COOKIE 없음 — 갱신 시도")
+            result["tistory"] = refresh_tistory_cookies(force=False)
     return result
 
 

@@ -86,6 +86,10 @@ _COLOR_THEMES = [
          pastel=(230,235,238)),
 ]
 
+# ★ LLM 호출 절감: 같은 title+keyword는 1회 생성 후 공유 (네이버/티스토리 각각 AI 이미지 생성)
+_PARAM_CACHE: dict[tuple, dict] = {}
+
+
 def _llm_thumbnail_params(title: str, keyword: str) -> dict:
     """LLM이 글 내용 보고 *주제를 대표하는* 사진 프롬프트 + 색상 테마 결정.
 
@@ -94,7 +98,14 @@ def _llm_thumbnail_params(title: str, keyword: str) -> dict:
     ★ 핵심(사용자 박제 2026-07-05): 썸네일 사진은 독자가 한눈에 주제를 알아보는
       *가장 대표적인 실사* 여야 한다 (지역화폐→동전더미, 반도체→웨이퍼). 추상·은유로
       빠지지 말 것. 동시에 고품질(영화적 조명·구도)이어야 클릭을 유도한다.
+    ★ LLM 1회 절감: 같은 title+keyword 재호출 시 캐시 반환 (네이버/티스토리 공유).
+       AI 이미지 생성(Pollinations)은 플랫폼별 각각 독립 실행.
     """
+    cache_key = (title, keyword)
+    if cache_key in _PARAM_CACHE and _PARAM_CACHE[cache_key]:
+        log.info(f"[thumbnail] LLM 파라미터 캐시 히트: {keyword}")
+        return _PARAM_CACHE[cache_key]
+
     import json, re
     theme_names = [t["name"] for t in _COLOR_THEMES]
     try:
@@ -130,7 +141,13 @@ def _llm_thumbnail_params(title: str, keyword: str) -> dict:
             theme = data.get("color_theme", "").strip()
             if len(photo) > 20 and theme in theme_names:
                 log.info(f"[thumbnail] LLM → theme={theme}, prompt={photo[:80]}")
-                return {"photo_prompt": photo, "color_theme": theme}
+                result = {"photo_prompt": photo, "color_theme": theme}
+                _PARAM_CACHE[cache_key] = result
+                # 캐시 크기 제한 (32개 초과 시 가장 오래된 항목 제거)
+                if len(_PARAM_CACHE) > 32:
+                    oldest = next(iter(_PARAM_CACHE))
+                    del _PARAM_CACHE[oldest]
+                return result
     except Exception as e:
         log.warning(f"[thumbnail] LLM 파라미터 실패 ({e})")
     return {}

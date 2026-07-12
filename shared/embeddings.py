@@ -24,6 +24,10 @@ import numpy as np
 
 log = logging.getLogger("jarvis.embeddings")
 
+# sentence-transformers 내부 httpcore/httpx DEBUG 노이즈 억제
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 # ★ 임베딩 모델 단일 진입점 상수 — 업그레이드 시 이 두 줄만 교체 (예: "BAAI/bge-m3", 1024)
 EMBED_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"  # 무료·로컬·CPU·118MB
 EMBED_DIM = 384
