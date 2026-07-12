@@ -80,7 +80,8 @@ def _candidates(trends: dict, max_candidates: int = 8) -> list[dict]:
 
 
 def _profile_batch(cands: list[dict]) -> list[dict]:
-    """LLM 배치 1회 — 후보별 프로필+적합성. 실패 시 [] (호출자가 팩 생성 포기 → 02 폴백)."""
+    """LLM 배치 1회 — 후보별 프로필+적합성.
+    LLM 미가용(빈 응답) 시 섹터 기반 기본 프로필로 폴백 — 발행 차단 방지."""
     if not cands:
         return []
     from shared.llm import invoke_text
@@ -102,7 +103,20 @@ def _profile_batch(cands: list[dict]) -> list[dict]:
         _essential=True,
     )
     if not (raw or "").strip():
-        return []
+        # LLM 빈 응답 — 섹터 기반 기본 프로필로 폴백 (발행 차단 방지)
+        # RADAR가 이미 경제 섹터로 분류한 후보이므로 fit=True 간주
+        log.warning("[topic_pack] 프로필 LLM 빈 응답 → 섹터 기본 프로필 폴백")
+        return [
+            {
+                "keyword": c.get("keyword", ""),
+                "fit": True,
+                "sector": c.get("sector", ""),
+                "summary": f"{c.get('keyword', '')} 관련 경제·금융 트렌드",
+                "related_terms": [],
+                "entity_type": "기타",
+            }
+            for c in cands if c.get("keyword")
+        ]
     try:
         import re
         m = re.search(r"\[.*\]", raw, re.DOTALL)
