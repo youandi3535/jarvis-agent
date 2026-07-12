@@ -314,11 +314,12 @@ def generate_article_html(
         supreme_block = (supreme_block or "") + _gfb(gate_feedback)
         print(f"  🔁 [Pass-1/{platform}] 직전 차단 사유 {len(gate_feedback)}건 주입 — 재작성")
 
-    # Pass-1 선택: 기존(느림) vs 섹션별 병렬(빠름)
-    # 기본: 섹션별 병렬로 생성하고, 오류 시 기존 방식 폴백
-    raw = _generate_text_pass1_parallel(keyword, sector, reason, supreme_block, platform, ref_datasets)
+    # Pass-1: 1회 단일 호출(설계-우선) 기본, 실패 시 3섹션 순차 폴백
+    raw = _generate_text_pass1(keyword, sector, reason, supreme_block, platform, ref_datasets)
     if not raw:
-        print("  ⚠️ [Pass-1 병렬] 실패 → 기존 방식 재시도...")
+        print("  ⚠️ [Pass-1 단일] 실패 → 3섹션 순차 재시도...")
+        raw = _generate_text_pass1_parallel(keyword, sector, reason, supreme_block, platform, ref_datasets)
+    if not raw:
         raw = _generate_complete_article_cli(keyword, sector, reason, supreme_block, platform, pass2=pass2)
     if not raw:
         print("  ❌ [2-pass] 원고 생성 실패")
