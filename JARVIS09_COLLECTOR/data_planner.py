@@ -69,7 +69,9 @@ _MARKET_OFFICIAL_SOURCES = frozenset(["finance", "krx", "ecos", "kor_econ", "kos
 
 _PLAN_SYSTEM = """당신은 데이터 저널리스트의 '데이터 소싱 설계자'다. 글 주제가 주어지면,
 그 주제를 가장 잘 설명할 *차트용 데이터 series* 들을 정하고, 각 series 를 *어느 출처에서 어떤
-검색어로* 받을지 설계한다. 절대 수치를 지어내지 않는다 — 설계만 한다(실제 수집은 다른 단계)."""
+검색어로* 받을지 설계한다. 절대 수치를 지어내지 않는다 — 설계만 한다(실제 수집은 다른 단계).
+주제의 한국 정부통계·공식자료 검색용 정식 명칭·동의어가 있으면 synonyms 에 최대 3개.
+예: '지역화폐' → '지역사랑상품권'. 없으면 빈 배열."""
 
 _PLAN_PROMPT = """글 주제: {topic}
 섹터: {sector}
@@ -102,7 +104,7 @@ _PLAN_PROMPT = """글 주제: {topic}
 - 데이터로 만들 수 없는 추상 주장은 series 로 넣지 마라(수치 series 만). series 는 4~6개로 풍부하게.
 
 JSON만 출력:
-{{"series":[{{"name":"...","unit":"...","chart":"line","sources":["kosis","news"],"query":"..."}}]}}"""
+{{"synonyms":["공식명1"],"series":[{{"name":"...","unit":"...","chart":"line","sources":["kosis","news"],"query":"..."}}]}}"""
 
 
 def _extract_json(raw):
@@ -117,7 +119,7 @@ def _extract_json(raw):
         return None
 
 
-def _sanitize(plan: dict) -> list[dict]:
+def _sanitize(plan: dict) -> tuple[list[dict], list[str]]:
     out = []
     for s in (plan or {}).get("series") or []:
         name = str(s.get("name", "")).strip()
@@ -142,7 +144,9 @@ def _sanitize(plan: dict) -> list[dict]:
             log.debug(f"[planner] 시장지표 감지 '{name}' → 소스 강제: {srcs}")
         out.append({"name": name, "unit": unit, "chart": chart,
                     "sources": srcs[:4], "query": query})
-    return out[:6]
+    syns = [str(t).strip() for t in (plan or {}).get("synonyms") or []
+            if str(t).strip()][:3]
+    return out[:6], syns
 
 
 def _fallback_plan(topic: str, syns: list) -> list[dict]:
@@ -164,54 +168,44 @@ def _fallback_plan(topic: str, syns: list) -> list[dict]:
     ]
 
 
-def plan_data_sources(topic: str, sector: str = "", description: str = "") -> list[dict]:
-    """주제 → 데이터 소싱 설계도(series 목록). LLM 동적 설계. 실패 시 결정론 aspect 폴백.
+def plan_data_sources(topic: str, sector: str = "", description: str = "") -> dict:
+    """주제 → 데이터 소싱 설계도. LLM 동적 설계. 실패 시 결정론 aspect 폴백.
 
-    반환: [{"name","unit","chart","sources":[provider...],"query"}, ...]
+    반환: {"series": [...], "synonyms": [...]}
+      series:   [{"name","unit","chart","sources":[provider...],"query"}, ...]
+      synonyms: 주제의 공식명칭·동의어 (없으면 [])
     """
     topic = (topic or "").strip()
     if not topic:
-        return []
+        return {"series": [], "synonyms": []}
     catalog = "\n".join(f"- {k}: {v}" for k, v in _SOURCE_CATALOG.items())
     prompt = _PLAN_PROMPT.format(topic=topic, sector=sector or "-",
                                  desc=(description or topic)[:400], catalog=catalog)
     # ★ 외부 재시도 = JSON 파싱 실패 시만 (ERRORS [399] — 스로틀 근본 차단).
-    # 이전: 3 outer × 3 inner = 9 스폰 → 스로틀 시 _circuit_record_throttle 3회 누적 →
-    #   회로 차단기 개방 → 후속 대본·품질 게이트 LLM 전체 차단.
-    # 수정: 빈 응답(=Max 스로틀)이면 외부 루프 즉시 종료 → 폴백.
-    #   JSON 파싱 실패(응답은 있지만 형식 오류)인 경우만 온도 0.5 로 1회 재시도.
-    # 효과: 스로틀 시 스폰 9→3, throttle 레코드 3→1 (회로 차단 임계 3회에 도달 방지).
     from shared.llm import invoke_text
     for _attempt in range(2):
         try:
             # ★ _essential=True (ERRORS [300]): 설계는 수집 품질의 조타수 —
             #   회로 차단 중에도 1회 실시도 보장 (즉시 폴백 금지).
             raw = invoke_text("analyzer", prompt, system=_PLAN_SYSTEM,
-                              max_tokens=1100, temperature=0.2 if _attempt == 0 else 0.5,
+                              max_tokens=1200, temperature=0.2 if _attempt == 0 else 0.5,
                               _essential=True, timeout=90)
         except Exception as e:
             log.warning(f"[planner] 설계 시도{_attempt + 1} 예외: {e}")
             _g_report("collector", e, module=__name__, func_name="plan_data_sources")
             break  # 예외 → 폴백
         if not raw.strip():
-            # ★ 빈 응답 = Max 스로틀 → 외부 루프 즉시 종료 (추가 스폰 금지)
             log.warning(f"[planner] '{topic}' 빈 응답(스로틀) → 즉시 폴백 (회로차단기 보호)")
             break
-        plan = _sanitize(_extract_json(raw))
-        if plan:
-            log.info(f"[planner] '{topic}' → {len(plan)}개 series 설계 (시도 {_attempt + 1})")
-            return plan
-        # 응답은 있지만 JSON 파싱 실패 → 온도 0.5 로 1회 재시도 (탈출 아님)
+        series, syns = _sanitize(_extract_json(raw))
+        if series:
+            log.info(f"[planner] '{topic}' → {len(series)}개 series 설계, 동의어 {syns} (시도 {_attempt + 1})")
+            return {"series": series, "synonyms": syns}
         log.debug(f"[planner] 시도{_attempt + 1} JSON 파싱 실패 — 온도 상향 재시도")
-    # ★ LLM 2회 전패(스로틀·파싱실패) → 결정론 aspect 폴백 (빈 설계로 만족도 쏠리지 않게 다차원 보장)
-    try:
-        from JARVIS09_COLLECTOR.chart_data import _expand_theme
-        _syns = _expand_theme(topic)
-    except Exception:
-        _syns = []
-    fb = _fallback_plan(topic, _syns)
-    log.warning(f"[planner] '{topic}' LLM 설계 실패(rate-limit/파싱) → discover 기반 폴백 {len(fb)}개")
-    return fb
+    # ★ LLM 2회 전패 → 결정론 aspect 폴백
+    fb = _fallback_plan(topic, [])
+    log.warning(f"[planner] '{topic}' LLM 설계 실패 → discover 기반 폴백 {len(fb)}개")
+    return {"series": fb, "synonyms": []}
 
 
-__all__ = ["plan_data_sources", "_SOURCE_CATALOG"]
+__all__ = ["plan_data_sources", "_SOURCE_CATALOG", "_fallback_plan"]

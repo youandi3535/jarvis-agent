@@ -940,6 +940,189 @@ _NO_WEB_FALLBACK_KWS = frozenset([
 ])
 
 
+def _collect_docs_for_series(series: dict, sector: str, theme: str = "", ref_tokens: set = None):
+    """한 series 를 신뢰도 순으로 조준 수집 — LLM 없이 문서만 반환.
+
+    KOSIS 정형 fast-path 성공 시 {"fast_dataset": ds} 반환 (배치 불필요).
+    그 외 {"series": series, "docs": docs, "source": src} → 배치 추출 큐에 투입.
+    수집 실패 시 None.
+    """
+    queries = _query_candidates(series, theme)
+    _ser_tokens = set(ref_tokens or set()) | _specific_tokens(
+        f"{series.get('name', '')} {series.get('query', '')}")
+
+    raw_sources = series.get("sources", [])
+    sources_sorted = sorted(raw_sources, key=lambda s: _SOURCE_TRUST_RANK.get(s, 99))
+
+    for source in sources_sorted:
+        _ensure_source_ready(source)
+        prov = _get_provider(source)
+        if not prov:
+            continue
+        docs = []
+        for q in queries:
+            docs = _cached_collect(prov, source, q, sector, 10)
+            if docs:
+                break
+        if source in _TEXT_SOURCES and docs and _ser_tokens:
+            rel = [d for d in docs if _doc_title_relevant(getattr(d, "title", ""), _ser_tokens)]
+            if not rel:
+                log.info(f"[chart_data] '{series['name']}' ← {source}: 관련 표 0 (엉뚱한 표만) → 스킵")
+                continue
+            docs = rel
+        if not docs:
+            continue
+        # ★ KOSIS 단일 문서 fast-path — LLM 없이 파싱 가능하면 배치 불필요
+        if len(docs) == 1:
+            fast = _parse_clean_doc(docs[0])
+            if fast:
+                log.info(f"[chart_data] '{series['name']}' ← KOSIS fast-path ({len(fast['data'])}점)")
+                return {"fast_dataset": fast}
+        return {"series": series, "docs": docs[:8], "source": source}
+
+    # ★ discover 웹 폴백 — 시장 지표 series는 차단
+    _combined = (series.get("name", "") + " " + series.get("query", "")).lower()
+    if any(kw in _combined for kw in _NO_WEB_FALLBACK_KWS):
+        log.info(f"[chart_data] '{series['name']}' 시장지표 — discover 웹 폴백 차단.")
+        return None
+    if "discover" not in series.get("sources", []):
+        _ensure_source_ready("discover")
+        prov = _get_provider("discover")
+        if prov:
+            for q in queries[:2]:
+                docs = _cached_collect(prov, "discover", q, sector, 6)
+                if docs:
+                    return {"series": series, "docs": docs[:8], "source": "discover"}
+    return None
+
+
+_BATCH_SYSTEM = """당신은 수집 자료에서 *실제로 등장한 수치*만 뽑아 차트 데이터로 구조화하는 분석가다.
+수치는 반드시 자료 원문에 있어야 하며, 주제와의 관련성도 함께 판정한다.
+같은 단위·같은 종류 수치만 한 차트에 묶는다."""
+
+
+def _batch_extract_all(pending_items: list, theme: str) -> list[dict]:
+    """여러 수집 항목을 단일 LLM 호출로 일괄 추출 + 관련성 판정.
+
+    pending_items: [{"series": dict, "docs": list, "source": str}, ...]
+    Returns: 관련 있고 grounding 통과한 dataset 목록.
+    """
+    if not pending_items:
+        return []
+
+    item_blocks: list[str] = []
+    docs_lookup: dict[int, list] = {}
+
+    for i, item in enumerate(pending_items):
+        series = item["series"]
+        docs = item.get("docs", [])[:4]   # 항목당 최대 4개 문서
+        docs_lookup[i] = []
+        excerpts: list[str] = []
+        for j, d in enumerate(docs):
+            dtext = getattr(d, "raw_text", "") or getattr(d, "cleaned_text", "") or ""
+            dtitle = getattr(d, "title", "") or ""
+            src_type = getattr(d, "source_type", "") or ""
+            docs_lookup[i].append((d, dtext))
+            excerpts.append(f"[{i}-{j}] ({src_type}) {dtitle}\n{dtext[:500]}")
+        item_blocks.append(
+            f"[ITEM {i}] 지표: {series['name']}  (단위힌트: {series.get('unit', '') or '?'})\n"
+            + "\n".join(excerpts)
+        )
+
+    prompt = (
+        f'블로그 주제: "{theme}"\n'
+        f"아래 {len(pending_items)}개 항목 각각에서 차트 데이터를 추출하고, 이 주제와의 관련성을 판정하라.\n\n"
+        + "\n\n".join(item_blocks)
+        + "\n\n★ 추출 규칙:\n"
+        "1. 자료에 실제로 적힌 수치만. 추정·창작 금지.\n"
+        "2. 같은 단위·같은 종류 수치만 한 차트에 (혼합 금지).\n"
+        f'3. 이 주제("{theme}")를 *직접* 다루면 relevant=true. 스쳐 언급하면 false.\n'
+        "4. 비교 가능한 수치 2개 미만이면 data=[] 처리.\n\n"
+        'JSON만:\n{"results":[\n'
+        '  {"idx":0,"relevant":true,"unit":"억원","data":[{"label":"2023년","value":1500,"src":"0-0"}]},\n'
+        '  {"idx":1,"relevant":false},\n'
+        '  ...\n'
+        ']}'
+    )
+    try:
+        from shared.llm import invoke_text
+        raw = invoke_text("analyzer", prompt, system=_BATCH_SYSTEM,
+                          max_tokens=4000, temperature=0.1, _nonessential=True)
+    except Exception as e:
+        log.warning(f"[chart_data] batch 추출 LLM 실패: {e}")
+        return []
+
+    m = re.search(r"\{[\s\S]*\}", raw or "")
+    if not m:
+        return []
+    try:
+        parsed = json.loads(m.group(0))
+    except Exception:
+        return []
+
+    results: list[dict] = []
+    for r in parsed.get("results") or []:
+        idx = r.get("idx")
+        if not isinstance(idx, int) or idx >= len(pending_items):
+            continue
+        if not r.get("relevant", False):
+            continue
+        data_raw = r.get("data") or []
+        if not data_raw:
+            continue
+
+        item = pending_items[idx]
+        series = item["series"]
+        item_docs = docs_lookup.get(idx, [])
+        _all_dtext = " ".join(dtext for _, dtext in item_docs)
+
+        rows: list[dict] = []
+        src_url, src_name = "", ""
+        for d_row in data_raw:
+            val = d_row.get("value")
+            label = str(d_row.get("label", "")).strip()
+            src_ref = str(d_row.get("src", "")).strip()   # "0-0", "0-1" 등
+
+            if not _value_grounded(val, _all_dtext):
+                log.warning(f"[chart_data] batch 환각 드롭: [{idx}] {label}={val}")
+                continue
+
+            if not src_url:
+                if src_ref and "-" in src_ref:
+                    try:
+                        _j = int(src_ref.split("-")[1])
+                        doc, _ = item_docs[_j]
+                        src_url = getattr(doc, "url", "") or ""
+                        src_name = getattr(doc, "source_type", "") or item.get("source", "web")
+                    except (IndexError, ValueError):
+                        pass
+                if not src_url and item_docs:
+                    doc, _ = item_docs[0]
+                    src_url = getattr(doc, "url", "") or ""
+                    src_name = getattr(doc, "source_type", "") or item.get("source", "web")
+
+            rows.append({"label": label, "value": val})
+
+        rows = _reduce_crosstab(rows, max_rows=8)
+        _unit = str(r.get("unit", "") or "").strip() or str(series.get("unit", "") or "")
+        if len(rows) < 2 or not src_url or not _unit:
+            continue
+
+        _ref_text = item_docs[0][1] if item_docs else ""
+        _dc = re.findall(r'\b(20\d{2})([01]\d)\b', _ref_text)
+        _as_of = f"{max(_dc)[0]}년 {int(max(_dc)[1])}월" if _dc else _now_as_of()
+
+        src = {"provider": src_name or "web", "name": src_name or "web",
+               "url": src_url, "as_of": _as_of}
+        viz = {"line": "line_chart", "bar": "bar_chart", "stat": "kpi",
+               "donut": "pie_chart"}.get(series.get("chart"), "bar_chart")
+        ds = _mk_dataset(series["name"], viz, _unit, rows, src)
+        results.append(ds)
+        log.info(f"[chart_data] batch [ITEM {idx}] '{series['name']}' ({len(rows)}점)")
+
+    return results
+
+
 def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: set = None):
     """한 series 를 신뢰도 순으로 조준 수집. 첫 성공 소스 사용.
 
@@ -1034,37 +1217,42 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     def _elapsed(label: str):
         log.info(f"[chart_data] ⏱ {label}: {_time.monotonic() - _t0:.1f}s")
 
-    # ── 0) 동의어 확장 (사용자 박제 2026-07-01): KOSIS 는 정식명('지역사랑상품권')으로 인덱싱돼
-    #    주제명('지역화폐')만으론 0건. 정식 명칭을 검색어·관련성 토큰에 포함 → 수율 안정화.
-    #    ★ synonyms 제공 시(topic_pack 선행 확장): 캐시 주입 후 _expand_theme 캐시 히트 → LLM 0회.
-    if synonyms is not None and theme not in _SYNONYM_CACHE:
-        _SYNONYM_CACHE[theme] = list(synonyms)
-    _syns = _expand_theme(theme)
-    _elapsed("0) 동의어 확장")
+    # ── 0) topic_pack 선행 동의어 (LLM 0) — plan 에 없으면 _plan_desc 에 힌트로 전달
+    _syns_param = list(synonyms) if synonyms else []
 
-    # ── 1) 설계 우선 (data_planner): 주제별 series·출처·쿼리 설계 → 조준 수집(병렬) ──────
-    #    ★ 사용자 박제 2026-06-30: 무작정 수집이 아니라 "설계 → 조준 수집". 라이브러리 자동설치.
-    #    동의어를 설명에 합쳐 전달 → planner 가 정식명으로 series·쿼리 설계.
-    _plan_desc = (description or "") + ((" / " + " ".join(_syns)) if _syns else "")
+    # ── 1) 설계 + 조준 수집 ──────────────────────────────────────────────────
+    #    plan_data_sources 가 synonyms 도 함께 반환 (LLM 1회로 설계+동의어 통합)
+    _plan_desc = (description or "") + ((" / " + " ".join(_syns_param)) if _syns_param else "")
     try:
         from JARVIS09_COLLECTOR.data_planner import plan_data_sources
-        plan = plan_data_sources(theme, sector, _plan_desc)
+        _plan_result = plan_data_sources(theme, sector, _plan_desc)
     except Exception as e:
         log.warning(f"[chart_data] 설계 실패: {e}")
-        plan = []
-    # ★ 관련성 기준 토큰 — 주제 + 동의어 + 설명 + 설계(series명·쿼리, 공식 동의어 포함) 고유명사 집합.
-    #   설계가 '지역사랑상품권' 같은 공식명을 쿼리로 내면 토큰에 포함 → 동의어 표도 관련 인정.
+        _plan_result = {"series": [], "synonyms": []}
+
+    plan = _plan_result.get("series") or []
+    # 동의어: topic_pack 선행 확장이 있으면 그것 우선, 없으면 plan 이 반환한 것 사용
+    _syns = _syns_param or _plan_result.get("synonyms") or []
+
+    # ★ 관련성 기준 토큰 — 주제 + 동의어 + 설명 + 설계(series명·쿼리) 고유명사 집합
     _ref_tokens = _specific_tokens(f"{theme} {' '.join(_syns)} {description}")
-    for _s in (plan or []):
+    for _s in plan:
         _ref_tokens |= _specific_tokens(f"{_s.get('name', '')} {_s.get('query', '')}")
+
+    pending_items: list[dict] = []   # 배치 추출 큐
     if plan:
-        log.info(f"[chart_data] '{theme}' 설계 {len(plan)}개 series → 조준 수집")
+        log.info(f"[chart_data] '{theme}' 설계 {len(plan)}개 series → 조준 수집(문서만)")
         from concurrent.futures import ThreadPoolExecutor as _TPE
         with _TPE(max_workers=4) as _ex:
-            for ds in _ex.map(lambda s: _collect_one_series(s, sector, theme, _ref_tokens), plan):
-                if ds:
-                    datasets.append(ds)
-    _elapsed(f"1) 설계+조준수집 (datasets={len(datasets)})")
+            for result in _ex.map(
+                    lambda s: _collect_docs_for_series(s, sector, theme, _ref_tokens), plan):
+                if result is None:
+                    continue
+                if "fast_dataset" in result:
+                    datasets.append(result["fast_dataset"])   # KOSIS fast-path: LLM 불필요
+                else:
+                    pending_items.append(result)              # 배치 추출 큐
+    _elapsed(f"1) 설계+조준수집 (fast={len(datasets)}, pending={len(pending_items)})")
 
     # ── 2) 종목(기업) 테마 보강 — 설계 수집이 0일 때만, *명백한 종목 테마* 에 한해 ──────
     #    (글로벌 시장 dump(_market_datasets)·ecos dump 는 제거: 비관련 주제에 새어들어 불일치=거짓.
@@ -1087,16 +1275,15 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     datasets.extend(_kosdaq150_sector_datasets(theme))   # ★ 코스닥 150 섹터 지수 전체 보장 (ERRORS [420])
     _elapsed(f"2.5) 시장 dataset (datasets={len(datasets)})")
 
-    # ── 3) 적응형 *멀티소스* 포착 — ★ '받을 수 있는 곳을 전부' (사용자 박제 2026-07-01):
-    #    KOSIS 만이 아니라 뉴스·정부보도(kor_econ)·논문(academic)·웹에서도 *주제 관련 실데이터* 를
-    #    출처별로 수집. ★ 풀이 차도 멈추지 않음(출처당 캡) → 최종 라운드로빈이 다양성 보장.
-    #    관련성 필터로 무관 데이터(농촌관광·식품소비 등) 차단. 모든 출처 URL 박제. 데이터 많을수록 좋다.
-    _cand_cap = max(max_datasets * 2, max_datasets + 6)   # 후보 상한(비용 가드)
-    if len(datasets) < _cand_cap:
-        # 검색어: 주제 + 동의어(정식명) + 설명 + 설계 쿼리. ★ 동의어 우선 → KOSIS 정식명 검색.
-        _raw_terms = [theme] + _syns + [description] + [s.get("query", "") for s in (plan or [])]
-        # 검색어 확장: 긴 쿼리는 정부통계·논문 검색에서 0건 → 앞2토큰·핵심명사로 넓힘
-        _terms = []
+    # ── 3) 적응형 *멀티소스* 포착 — 문서 수집만 (LLM 없음, 배치 추출 큐에 투입) ──────
+    #    ★ 배치 LLM 한 번에 처리: 개별 LLM N회 → 배치 1회로 통합.
+    #    ★ 배치 크기 가드: step1 pending + step3 합쳐서 최대 14개만 (batch max_tokens 초과 방지).
+    _BATCH_CAP = 14
+    _cand_cap = max(max_datasets * 2, max_datasets + 6)   # 전체 후보 상한
+    _step3_budget = max(0, _BATCH_CAP - len(pending_items))   # step3 에 줄 배치 슬롯
+    if len(datasets) < _cand_cap and _step3_budget > 0:
+        _raw_terms = [theme] + _syns + [description] + [s.get("query", "") for s in plan]
+        _terms: list[str] = []
         for t in _raw_terms:
             if not t:
                 continue
@@ -1105,26 +1292,18 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
             if len(tk) > 2:
                 _terms.append(" ".join(tk[:2]))
             if len(tk) > 1:
-                _terms.append(tk[0])   # 핵심 명사 (예: 지역사랑상품권)
-        _terms = list(dict.fromkeys(_terms))[:4]   # 속도: 상위 4개 — step1이 설계쿼리 커버, 8출처×4=32요청
-        # 관련성 토큰: step1 과 동일한 _ref_tokens(주제+설명+설계 동의어 포함) 재사용 → 일관 게이트.
+                _terms.append(tk[0])
+        _terms = list(dict.fromkeys(_terms))[:4]
 
-        def _natural_title(d):   # provider 접두(주제명 스탬프) 제거한 *실제* 표/논문명
+        def _natural_title(d):
             t = getattr(d, "title", "") or ""
             for pre in ("KOSIS 통계청 — ", "한국은행 ECOS", "arXiv", "통계청 KOSIS"):
                 if t.startswith(pre):
                     t = t[len(pre):]
             return t
 
-        # ECOS 제외: 항상 '거시 일반(금리·환율·물가)'을 주제명만 찍어 반환 → 무관 혼입원.
-        # ★ 출처당 캡(_PER_SOURCE) — 한 출처가 후보를 독점하지 않게 (뉴스·정부보도·논문 슬롯 확보).
-        #   논문(academic)·뉴스(news)·정부보도(kor_econ) 를 KOSIS 와 동등하게 수집. 논문 우선.
-        # ★ 속도 (사용자 박제 2026-07-01): (A) 후보 문서 수집(빠름, 캐시) → (B) LLM 추출 *병렬*.
-        #   기존 순차 추출이 12분 병목이라 추출만 ThreadPool 로 동시 실행.
         _PER_SOURCE = max(3, (max_datasets + 3) // 3)
-        _cands = []   # (pseudo_name, doc)
-        # ★ discover(웹 발견) 추가 (사용자 박제 2026-07-01): 고정 출처가 못 채우면 웹에서 찾아
-        #   받는다. 비용 가드 — discover 는 검색어 상위 2개만(웹검색·fetch 비쌈).
+        _cands: list[tuple] = []   # (nat_title, doc, source)
         for source in ("kci", "academic", "news", "kor_econ", "kosis", "naver_news", "web", "discover"):
             if len(_cands) >= _cand_cap:
                 break
@@ -1137,32 +1316,28 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
             for term in _src_terms:
                 if _from_src >= _PER_SOURCE or len(_cands) >= _cand_cap:
                     break
-                docs = _cached_collect(prov, source, term, sector, 8)   # 풍부하게(캐시)
+                docs = _cached_collect(prov, source, term, sector, 8)
                 for d in docs[:5]:
                     nat = _natural_title(d)
-                    # 관련성 1차(결정론): 자연 제목이 주제 고유명사와 겹쳐야 채택 (동의어 포함)
                     if not _doc_title_relevant(nat, _ref_tokens):
                         continue
-                    _cands.append(((nat[:40] or term), d))
+                    _cands.append((nat[:40] or term, d, source))
                     _from_src += 1
                     if _from_src >= _PER_SOURCE or len(_cands) >= _cand_cap:
                         break
-        # (B) 병렬 추출 — LLM 호출이 느려 동시 실행.
-        # ★ max_workers=2 (ERRORS [399] 동일 원인): 6→2 제한 — 동시 LLM 6개가 TPM 초과 → 스로틀 직격.
-        #   2개 동시 실행으로 분당 토큰 소비 안정화. 추출 지연 < 후속 plan_research 스로틀 피해.
-        log.info(f"[chart_data] step3 후보 {len(_cands)}개 → LLM 추출 시작")
-        if _cands:
-            from concurrent.futures import ThreadPoolExecutor as _TPE2
 
-            def _extract_cand(c):
-                nat, d = c
-                return _extract_series_from_docs({"name": nat, "unit": "", "chart": "bar"}, [d])
+        # step3 후보를 배치 슬롯 한도 내에서 pending_items 에 추가
+        for nat, d, src in _cands[:_step3_budget]:
+            pending_items.append({"series": {"name": nat, "unit": "", "chart": "bar"},
+                                  "docs": [d], "source": src})
+        log.info(f"[chart_data] step3 후보 {len(_cands)}개 → 배치 큐 추가 {min(len(_cands), _step3_budget)}개")
+        _elapsed(f"3) 멀티소스 수집 (pending={len(pending_items)})")
 
-            with _TPE2(max_workers=2) as _ex2:   # 1→2: 순차 병목 완화 (스로틀 시 _nonessential 즉시 폴백)
-                for ds in _ex2.map(_extract_cand, _cands):
-                    if ds:
-                        datasets.append(ds)
-        _elapsed(f"3) 멀티소스 (datasets={len(datasets)})")
+    # ── BATCH) 단일 LLM 호출로 pending_items 전체 추출 + 관련성 판정 ──────
+    if pending_items:
+        batch_results = _batch_extract_all(pending_items, theme)
+        datasets.extend(batch_results)
+        _elapsed(f"BATCH) 일괄 추출 (datasets={len(datasets)})")
 
     # dedup (fingerprint) + exclude_titles 필터
     _excl = {str(t).strip() for t in (exclude_titles or [])}
@@ -1174,10 +1349,8 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
             continue
         seen.add(fp)
         deduped.append(ds)
-
-    # ── 4) ★ 의미 기반 관련성 게이트 (최종 관문) — '농촌관광·식품소비행태'처럼 다른 주제 표가
-    #    새어든 것을 LLM 의미 판단으로 제거 (선택 *전* 적용 → 깨끗한 후보에서만 선택). ──────
-    deduped = _relevance_filter(theme, description, deduped)
+    # ── 4) 관련성 게이트는 BATCH 추출 시 relevant=true/false 로 이미 처리됨.
+    #    KOSIS fast-path 데이터는 제목 필터(_doc_title_relevant)를 통과한 것만 들어오므로 별도 불필요.
 
     # ── 5) ★ 출처 다양성 선택 (사용자 박제 2026-07-01 '전부 받아와') — provider 별로 묶어
     #    우선순위 라운드로빈 → 한 출처(KOSIS) 독점 방지, 뉴스·정부보도·논문이 함께 섞임. ──────
