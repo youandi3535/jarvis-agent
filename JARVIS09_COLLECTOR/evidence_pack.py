@@ -238,21 +238,44 @@ def _measure_coverage(plan: dict, facts: list[dict]) -> dict:
     return cov
 
 
-def build_evidence_pack(theme: str, plan: dict, docs: list,
-                        max_docs: int = 16, per_doc_chars: int = 900) -> dict:
-    """수집 문서 → EvidencePack. ★ fact 추출 *1회 호출* (사용자 박제 2026-07-05, ERRORS [374]).
+_HIGH_TIER_SET = frozenset({1, 2})   # 논문(1) + 공식 API(2)
+_HIGH_TARGET   = 15                  # 고품질 소스 목표 fact 수
 
-    종전 3배치×7문서=3회 → 신뢰 티어 상위 max_docs 문서를 압축 excerpt(per_doc_chars)로
-    *단일 프롬프트*에 담아 한 번에 추출. 문서를 신뢰순 정렬해 상위가 프롬프트에 우선 담기므로
-    가치 손실 최소. "LLM 한 번에 다 처리" — 설계를 잘 해 입력을 압축·구조화한 결과.
+
+def build_evidence_pack(theme: str, plan: dict, docs: list,
+                        max_docs: int = 20, per_doc_chars: int = 900) -> dict:
+    """수집 문서 → EvidencePack.
+
+    ★ 2-패스 추출 (사용자 박제 2026-07-12):
+      Pass-1: 논문(T1)·공식API(T2) 에서만 최대 15개 추출.
+      Pass-2: 15개 미달 시에만 뉴스·기사·웹(T3+) 에서 부족분 보충.
+    → 고품질 소스가 충분하면 뉴스 LLM 호출 발생하지 않음.
     """
     docs = list(docs or [])
     docs.sort(key=lambda d: _TIER_BY_TYPE.get(str(_doc_attr(d, "source_type")), 5))
-    # ★ 상위 신뢰 문서만 단일 호출에 담는다 (배치 폐지 — LLM 호출 3→1)
-    top_docs = docs[:max_docs]
-    # ★ max_facts=36: 논문·API 티어 고품질 소스 증가분 수용 (2026-07-12)
-    facts = _extract_facts_batch(theme, plan, top_docs,
-                                 max_facts=36, per_doc_chars=per_doc_chars)
+
+    # 고품질(T1·T2) / 후순위(T3+) 분리
+    def _tier(d):
+        return _TIER_BY_TYPE.get(str(_doc_attr(d, "source_type")).strip().lower(), 5)
+
+    high_docs = [d for d in docs if _tier(d) in _HIGH_TIER_SET]
+    low_docs  = [d for d in docs if _tier(d) not in _HIGH_TIER_SET]
+
+    # Pass-1: 논문·API
+    facts: list[dict] = []
+    if high_docs:
+        facts = _extract_facts_batch(theme, plan, high_docs[:max_docs],
+                                     max_facts=_HIGH_TARGET, per_doc_chars=per_doc_chars)
+        log.info(f"[evidence] Pass-1(논문·API) 문서 {len(high_docs)}개 → fact {len(facts)}개")
+
+    # Pass-2: 부족 시에만 후순위 소스 보충
+    gap = _HIGH_TARGET - len(facts)
+    if gap > 0 and low_docs:
+        log.info(f"[evidence] Pass-2(뉴스·기타) 문서 {len(low_docs)}개 → 부족분 {gap}개 보충 시도")
+        extra = _extract_facts_batch(theme, plan, low_docs[:max_docs],
+                                     max_facts=gap, per_doc_chars=per_doc_chars)
+        facts = facts + extra
+        log.info(f"[evidence] Pass-2 결과: +{len(extra)}개 → 합계 {len(facts)}개")
     facts = _dedupe_facts(facts)
     for i, f in enumerate(facts, 1):
         f["id"] = f"F{i}"
