@@ -194,22 +194,27 @@ def verify_all_logins() -> dict[str, dict[str, Any]]:
 # 5) 자동 갱신 — 만료 임박 시
 # ══════════════════════════════════════════════════════════
 
-def auto_refresh_if_needed(naver_threshold_h: float = 10.0) -> dict[str, bool]:
+def auto_refresh_if_needed(
+    naver_threshold_h: float = 10.0,
+    platforms: tuple = ("naver", "tistory"),
+) -> dict[str, bool]:
     """만료 임박 플랫폼만 자동 갱신.
 
+    Args:
+        platforms: 갱신 대상 플랫폼 튜플. 기본 전체. ("naver",) 전달 시 네이버만.
     Returns:
         {"naver": refreshed?, "tistory": refreshed?}
     """
     result: dict[str, bool] = {"naver": False, "tistory": False}
-    # 네이버
-    age = naver_cookie_age_hours()
-    if age > naver_threshold_h:
-        log.info(f"[login_manager] 네이버 쿠키 {age:.1f}h — 갱신 시도")
-        result["naver"] = refresh_naver_cookies(force=False)
-    # 티스토리 — TS_COOKIE env 없으면 갱신
-    if not get_tistory_cookie():
-        log.info("[login_manager] 티스토리 TS_COOKIE 없음 — 갱신 시도")
-        result["tistory"] = refresh_tistory_cookies(force=False)
+    if "naver" in platforms:
+        age = naver_cookie_age_hours()
+        if age > naver_threshold_h:
+            log.info(f"[login_manager] 네이버 쿠키 {age:.1f}h — 갱신 시도")
+            result["naver"] = refresh_naver_cookies(force=False)
+    if "tistory" in platforms:
+        if not get_tistory_cookie():
+            log.info("[login_manager] 티스토리 TS_COOKIE 없음 — 갱신 시도")
+            result["tistory"] = refresh_tistory_cookies(force=False)
     return result
 
 

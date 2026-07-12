@@ -585,7 +585,7 @@ def run(post_naver=True, post_tistory=True):
                 auto_refresh_if_needed as _auto_refresh,
                 verify_all_logins as _verify_logins,
             )
-            _auto_refresh()           # 만료 임박 쿠키 선제 갱신
+            _auto_refresh(platforms=(platform,))   # 현재 플랫폼만 갱신 (Naver 단계에서 Tistory 쿠키 건드리지 않음)
             _login_res = _verify_logins() or {}
             _pl = _login_res.get(platform) or {}
             if not _pl.get("ok", True):   # 구조 변경 시 fail-open
