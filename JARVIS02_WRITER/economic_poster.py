@@ -585,8 +585,8 @@ def run(post_naver=True, post_tistory=True):
                 auto_refresh_if_needed as _auto_refresh,
                 verify_all_logins as _verify_logins,
             )
-            _auto_refresh(platforms=(platform,))   # 현재 플랫폼만 갱신 (Naver 단계에서 Tistory 쿠키 건드리지 않음)
-            _login_res = _verify_logins() or {}
+            _auto_refresh(platforms=(platform,))   # 현재 플랫폼만 갱신
+            _login_res = _verify_logins(platforms=(platform,)) or {}  # 현재 플랫폼만 확인 (Naver 검증 중 Tistory 건드리지 않음)
             _pl = _login_res.get(platform) or {}
             if not _pl.get("ok", True):   # 구조 변경 시 fail-open
                 _why = "; ".join(_pl.get("issues") or ["재로그인 필요"])[:150]
@@ -791,8 +791,21 @@ def run(post_naver=True, post_tistory=True):
     else:
         print("  ─ 네이버 건너뜀 (플래그 OFF)")
 
+    # ★ 네이버 수집 자체가 실패하면(키워드 없음 = topic_pack 빌드 실패) 티스토리도 건너뜀.
+    # 동일 수집 경로(topic_pack)를 사용하므로 티스토리도 같은 이유로 실패 예상.
+    # post_naver=False 이면 _nv_state 비어있으니 False 로 처리 (건너뜀 안 함).
+    _nv_collect_failed = bool(
+        post_naver
+        and not (_nv_state.get("nv_collect_result") or {}).get("success")
+        and not nv_keyword
+    )
+    if _nv_collect_failed:
+        msg = "⏭ [티스토리] 네이버 수집 실패(topic_pack 없음) — 티스토리도 수집 실패 예상, 건너뜀"
+        print(f"\n  {msg}")
+        tg(msg)
+
     # ★ 티스토리는 네이버 *종결 후* 에만 시작 — 네이버 성패와 무관하게 독립 진행
-    if post_tistory and not _concurrent_blocked:
+    if post_tistory and not _concurrent_blocked and not _nv_collect_failed:
         os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + 2400)
         _ts_res = run_action(
             _ts_action,

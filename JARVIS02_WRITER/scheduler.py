@@ -63,38 +63,6 @@ _posting_lock   = threading.Lock()
 #  포스팅 락 관리
 # ══════════════════════════════════════════
 
-def _harness_precondition_check(action_name: str) -> list[str]:
-    """★ ADR 009 v2 Layer 1 — 발행 시작 *전* 사전 검증 (ERRORS [136]).
-
-    검증 항목:
-      - 핵심 환경변수 (NV_/TS_) 존재
-      - 네이버 쿠키 파일 존재 (naver_cookies.pkl — _auto_refresh_cookies 후 재확인)
-      - TS_COOKIE 환경변수 (tistory — 위 env 루프에서 이미 체크)
-      - 핵심 모듈 import (collect_theme — 7시 사고 진원지)
-
-    Returns:
-        issues list — 빈 리스트면 통과. 비면 *발행 차단*.
-    """
-    issues: list[str] = []
-    # 환경변수 (TS_COOKIE 포함 — 티스토리는 파일이 아닌 env 변수 방식)
-    for _k in ("NV_USERNAME", "NV_PASSWORD",
-               "TS_URL", "TS_USERNAME", "TS_PASSWORD", "TS_COOKIE",
-               "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID"):
-        if not os.environ.get(_k, "").strip():
-            issues.append(f"환경변수 {_k} 누락")
-    # 핵심 모듈 import (7시 사고 type 차단)
-    try:
-        import importlib
-        importlib.import_module("JARVIS02_WRITER.collect_theme")
-    except Exception as _e:
-        issues.append(f"collect_theme import 실패: {type(_e).__name__}: {str(_e)[:80]}")
-    # 네이버 쿠키 파일 — 실제 경로: JARVIS02_WRITER/naver_cookies.pkl
-    _naver_cookie = BASE_DIR / "naver_cookies.pkl"
-    if not _naver_cookie.exists():
-        issues.append(f"네이버 쿠키 파일 누락: {_naver_cookie.name}")
-    return issues
-
-
 def _clear_all_cookies(label: str) -> None:
     """발행 전 기존 쿠키·캐시 전체 초기화 — 매번 새 로그인으로 신선한 쿠키 보장.
 
@@ -141,70 +109,6 @@ def _clear_all_cookies(label: str) -> None:
         log(f"🗑️ [{label}] 쿠키·캐시 초기화: {', '.join(cleared)}")
     else:
         log(f"ℹ️ [{label}] 삭제할 쿠키·캐시 없음")
-
-
-def _auto_refresh_cookies(naver_only: bool = False) -> dict:
-    """쿠키 누락·만료 시 자동 갱신 — _harness_precondition_check 직전 호출.
-
-    갱신 대상:
-      - 네이버: naver_cookies.pkl 없거나 10시간 이상 경과 → refresh_naver_cookies()
-      - 티스토리: TS_COOKIE env 없으면 → tistory_cookie_refresher.run()
-        (naver_only=True 이면 티스토리 갱신 생략 — 티스토리 액션 step ④ 에서 처리)
-
-    Returns:
-        {"naver": True/False, "tistory": True/False}  — 갱신 시도 결과
-    """
-    import time as _time
-    result = {"naver": True, "tistory": True}
-
-    # ── 네이버 쿠키 ─────────────────────────────────────────────────────
-    _naver_cookie = BASE_DIR / "naver_cookies.pkl"
-    _naver_needs_refresh = not _naver_cookie.exists()
-    if not _naver_needs_refresh and _naver_cookie.exists():
-        _age_h = (_time.time() - _naver_cookie.stat().st_mtime) / 3600
-        _naver_needs_refresh = _age_h >= 10
-
-    if _naver_needs_refresh:
-        log("🔄 네이버 쿠키 누락·만료 — 자동 갱신 시작")
-        send_telegram("🔄 네이버 쿠키 자동 갱신 중...")
-        try:
-            from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import refresh_naver_cookies
-            ok = refresh_naver_cookies(force=True)
-            result["naver"] = bool(ok)
-            if ok:
-                log("✅ 네이버 쿠키 갱신 완료")
-                send_telegram("✅ 네이버 쿠키 갱신 완료")
-            else:
-                log("❌ 네이버 쿠키 갱신 실패")
-                send_telegram("❌ 네이버 쿠키 갱신 실패 — 수동 갱신 필요")
-        except Exception as _e:
-            log(f"❌ 네이버 쿠키 갱신 예외: {_e}")
-            send_telegram(f"❌ 네이버 쿠키 갱신 예외: {type(_e).__name__}")
-            result["naver"] = False
-
-    # ── 티스토리 쿠키 (TS_COOKIE env 방식) ──────────────────────────────
-    # naver_only=True 이면 건너뜀 — 티스토리는 액션 step ④ 에서 직전 갱신
-    if not naver_only and not os.environ.get("TS_COOKIE", "").strip():
-        log("🔄 TS_COOKIE 누락 — 티스토리 쿠키 자동 갱신 시작")
-        send_telegram("🔄 티스토리 TS_COOKIE 자동 갱신 중...")
-        try:
-            from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _ts_run
-            ok = _ts_run(force=True, notify=True)
-            # run()은 (cookie_str, driver) 또는 bool 반환 — 문자열이면 성공
-            if isinstance(ok, tuple):
-                ok = bool(ok[0])
-            result["tistory"] = bool(ok)
-            if result["tistory"]:
-                log("✅ 티스토리 TS_COOKIE 갱신 완료")
-            else:
-                log("❌ 티스토리 TS_COOKIE 갱신 실패")
-                send_telegram("❌ 티스토리 TS_COOKIE 갱신 실패 — 수동 갱신 필요")
-        except Exception as _e:
-            log(f"❌ 티스토리 쿠키 갱신 예외: {_e}")
-            send_telegram(f"❌ 티스토리 TS_COOKIE 갱신 예외: {type(_e).__name__}")
-            result["tistory"] = False
-
-    return result
 
 
 def _lock_acquire(who: str) -> bool:
@@ -861,13 +765,11 @@ def _run_self_repair_phase(label: str) -> dict:
 def run_self_repair_then_economic():
     """★ 통합 callback (사용자 박제 2026-05-18 v2) — 07:00 진입점.
 
-    *하나의 세트*: 쿠키 점검 → 자가진단 → 자동수정 → 경제 브리핑 발행. 시퀀스 보장.
+    *하나의 세트*: 자가진단 → 쿠키 점검(네이버만) → 경제 브리핑 발행. 시퀀스 보장.
 
     흐름:
-      0) 쿠키 점검 (티스토리·네이버) — 만료 시 자동 갱신
-      1) 발행 전 Tier-1 자체수리 (LLM-0) — 학습 패턴·Bandit 로 미해결 오류 즉시 소급 수리
-         (비싼 LLM 심층 감사는 새벽 04:30 job_deep_audit 로 분리)
-      2) [코드 변경 발생 시] 텔레그램 "데몬 재시작 권장" 알림 (이번 발행엔 무효)
+      1) Tier-1 자체수리 (LLM-0) — 학습 패턴·Bandit 로 미해결 오류 소급 수리
+      2) 쿠키·캐시 초기화 → 네이버 쿠키 갱신 (티스토리는 티스토리 액션 시작 시 갱신)
       3) economic_poster.run() — harness 5-Layer 경유 발행
 
     쿠키 점검 실패 시 발행 건너뜀. 자가진단은 결과 무관 발행 진행.
@@ -891,28 +793,8 @@ def run_self_repair_then_economic():
         send_telegram(_msg)
         return
 
-    # ─── Step 1: 이전 쿠키·캐시 전체 삭제 ──────────────────────
-    _clear_all_cookies("경제 브리핑")
-
-    # ─── Step 2: 쿠키 체크 — ★ 네이버만 (사용자 박제 2026-07-05, ERRORS [363]) ─────
-    # 네이버가 첫 액션 → 네이버 쿠키만 지금 갱신. 티스토리 쿠키는 *티스토리 발행 직전*
-    # (_step_ts_cookie, force=True)에 강제 갱신 → 신선 세션.
-    # TS_COOKIE 는 _precondition_for("tistory") 체크 대상에서 제외됨 — load_dotenv 불필요.
-    _cookie_failed = []
-    try:
-        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import job_pre_naver_check as _nv_ck
-        if not _nv_ck():
-            _cookie_failed.append("네이버")
-    except Exception as _e:
-        log(f"⚠️ [경제 브리핑] 네이버 쿠키 점검 예외: {_e}")
-        _cookie_failed.append("네이버")
-    if _cookie_failed:
-        msg = f"🚨 네이버 쿠키 점검 실패 — 경제 브리핑 발행 건너뜀 (티스토리는 티스토리 차례에 갱신)"
-        log(msg)
-        send_telegram(msg)
-        return
-
-    # ─── Step 3: 전체 폴더 검증 (자가진단) ──────────────────────
+    # ─── Step 1: 자체수리 먼저 (사용자 박제 2026-07-12) ──────────────────────
+    # 쿠키 관련 코드가 수정될 수 있으므로 자가진단을 쿠키 확인보다 먼저.
     _phase = _run_self_repair_phase("경제 브리핑")
     try:
         if _phase["code_changed"] > 0:
@@ -923,6 +805,27 @@ def run_self_repair_then_economic():
             )
     except Exception:
         pass
+
+    # ─── Step 2: 이전 쿠키·캐시 전체 삭제 ──────────────────────
+    _clear_all_cookies("경제 브리핑")
+
+    # ─── Step 3: 쿠키 체크 — ★ 네이버만 (사용자 박제 2026-07-12) ─────
+    # 네이버가 첫 액션 → 네이버 쿠키만 지금 갱신. 티스토리 쿠키는 *티스토리 발행 직전*
+    # (_step_ts_cookie, force=True)에 강제 갱신 → 신선 세션.
+    _cookie_failed = []
+    try:
+        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import job_pre_naver_check as _nv_ck
+        if not _nv_ck():
+            _cookie_failed.append("네이버")
+    except Exception as _e:
+        log(f"⚠️ [경제 브리핑] 네이버 쿠키 점검 예외: {_e}")
+        _cookie_failed.append("네이버")
+    if _cookie_failed:
+        msg = "🚨 네이버 쿠키 점검 실패 — 경제 브리핑 발행 건너뜀 (티스토리는 티스토리 차례에 갱신)"
+        log(msg)
+        send_telegram(msg)
+        return
+
     log(f"📤 [경제 브리핑] 발행 페이즈 진입 (자가진단 {_phase['elapsed_sec']}s 종료)")
     return run_economic_poster()
 

@@ -269,7 +269,8 @@ def process_one(record: dict) -> bool:
         # 로그인 상태 점검 (쿠키 만료 선제 방지)
         try:
             from JARVIS08_PUBLISH.credentials.login_manager import auto_refresh_if_needed
-            auto_refresh_if_needed()
+            _plats = (platform,) if platform in ("naver", "tistory") else ("naver", "tistory")
+            auto_refresh_if_needed(platforms=_plats)
         except Exception as e:
             issues.append(_Issue(step="① 패치 적용", kind="login_check",
                                  detail=f"로그인 갱신 실패: {e}"))
