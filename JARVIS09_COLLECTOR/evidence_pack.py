@@ -50,6 +50,12 @@ _OUT_DIR = Path(__file__).parent / "output" / "evidence"
 #   중복 fact 충돌 시 낮은 티어(=높은 신뢰)가 이긴다 (_dedupe_facts).
 from .models import SOURCE_TRUST_TIER as _TIER_BY_TYPE
 
+# ★ 티어별 문자 예산 (사용자 박제 2026-07-12): 논문·API가 수치 밀집 → 더 많이 읽는다.
+#   뉴스·기사·웹은 맥락 참조용으로 짧게만.
+_TIER_CHARS: dict[int, int] = {1: 2500, 2: 1500, 3: 600, 4: 400, 5: 300, 6: 200}
+# ★ 티어별 문서당 fact 추출 상한
+_TIER_MAX_FACTS_PER_DOC: dict[int, int] = {1: 6, 2: 5, 3: 2, 4: 1, 5: 1, 6: 0}
+
 _EXTRACT_SYSTEM = """당신은 팩트체커 겸 리서처다. 수집 문서에서 *문서에 실제로 적힌*
 사실만 추출한다. 문서에 없는 내용을 추론·창작하면 절대 안 된다.
 각 사실은 주체·수치·시점이 살아있는 완결된 한 문장으로 정리한다."""
@@ -67,7 +73,8 @@ _EXTRACT_PROMPT = """주제: {theme}
 - as_of 는 문서에서 확인된 시점만 (없으면 빈 문자열).
 - question_id 는 위 질문 중 가장 맞는 것 (없으면 "").
 - doc 번호(doc_idx)를 정확히 — 출처 추적에 쓴다.
-- 각 문서에서 최대 3개, 전체 최대 {max_facts}개. 관련 없는 문서는 건너뛴다.
+- 문서 표시 [T1]=논문(최대 6개), [T2]=공식 API(최대 5개), [T3]=뉴스(최대 2개), [T4+]=기타(최대 1개).
+- 전체 최대 {max_facts}개. 관련 없는 문서는 건너뛴다.
 
 [수집 문서]
 {docs_block}
@@ -104,12 +111,16 @@ def _doc_attr(doc, name: str, default=""):
 
 
 def _docs_block(docs: list, per_doc_chars: int) -> str:
+    """티어별 문자 예산 적용: 논문·API는 풍부하게, 뉴스·웹은 짧게."""
     lines = []
     for i, d in enumerate(docs, 1):
         title = str(_doc_attr(d, "title"))[:80]
         src = _doc_attr(d, "source_type")
-        body = str(_doc_attr(d, "cleaned_text") or _doc_attr(d, "raw_text"))[:per_doc_chars]
-        lines.append(f"--- doc {i} [{src}] {title}\n{body}")
+        tier = _TIER_BY_TYPE.get(str(src).strip().lower(), 5)
+        chars = _TIER_CHARS.get(tier, per_doc_chars)
+        body = str(_doc_attr(d, "cleaned_text") or _doc_attr(d, "raw_text"))[:chars]
+        # 티어 표시 → LLM 이 추출 우선순위·상한을 구분하도록
+        lines.append(f"--- doc {i} [{src}/T{tier}] {title}\n{body}")
     return "\n".join(lines)
 
 
@@ -125,10 +136,11 @@ def _extract_facts_batch(theme: str, plan: dict, docs: list,
     raw = None
     try:
         from shared.llm import invoke_text
-        # ★ 단일 호출로 전 문서 처리 (ERRORS [374]) — max_tokens 상향(더 많은 fact 수용)
+        # ★ 단일 호출로 전 문서 처리 (ERRORS [374])
+        # max_tokens=4800: 논문·API 티어 고품질 fact 증가 수용 (2026-07-12)
         # timeout=150: 스로틀 시 5분 무한대기 방지 (빈 facts로 계속 진행)
         raw = invoke_text("analyzer", prompt, system=_EXTRACT_SYSTEM,
-                          max_tokens=3200, temperature=0.1, timeout=150)
+                          max_tokens=4800, temperature=0.1, timeout=150)
     except Exception as e:
         log.warning(f"[evidence] fact 추출 실패: {e}")
         _g_report("collector", e, module=__name__, func_name="_extract_facts_batch")
@@ -238,8 +250,9 @@ def build_evidence_pack(theme: str, plan: dict, docs: list,
     docs.sort(key=lambda d: _TIER_BY_TYPE.get(str(_doc_attr(d, "source_type")), 5))
     # ★ 상위 신뢰 문서만 단일 호출에 담는다 (배치 폐지 — LLM 호출 3→1)
     top_docs = docs[:max_docs]
+    # ★ max_facts=36: 논문·API 티어 고품질 소스 증가분 수용 (2026-07-12)
     facts = _extract_facts_batch(theme, plan, top_docs,
-                                 max_facts=20, per_doc_chars=per_doc_chars)
+                                 max_facts=36, per_doc_chars=per_doc_chars)
     facts = _dedupe_facts(facts)
     for i, f in enumerate(facts, 1):
         f["id"] = f"F{i}"
