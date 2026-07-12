@@ -846,19 +846,57 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             _pg2.hotkey('command', 'a') if IS_MAC else _pg2.hotkey('ctrl', 'a')
             time.sleep(0.3); _pg2.press('delete'); time.sleep(0.3)
 
-        # ★ 3-tier 제목 입력 — 클립보드 붙여넣기 ×2, 실패 시 Selenium 실 키입력(OS포커스 무관)
-        _fin = ""
-        for _attempt in range(3):
-            if _attempt < 2:
-                _paste_title()                       # 재포커스 + Cmd+V
-            else:
+        # ★ 제목 입력 — element.send_keys 직접 전달 (클립보드·OS포커스 무관)
+        #   move_to_element().click() → 제목칸 포커스 이동 확실화 (문제1: 본문 입력 방지)
+        #   Ctrl+A + Delete → 매 시도 전 초기화 (문제2: 제목 3회 반복 방지)
+        from selenium.webdriver.common.by import By as _By2
+        from selenium.webdriver.common.action_chains import ActionChains as _AC2
+        from selenium.webdriver.common.keys import Keys as _K2
+
+        def _find_title_el():
+            for _sel in [
+                '.se-documentTitle [contenteditable="true"]',
+                '.se-section-documentTitle [contenteditable="true"]',
+                '.se-title-text',
+                '.se-documentTitle .se-text-paragraph',
+            ]:
                 try:
-                    from selenium.webdriver.common.action_chains import ActionChains as _ACt
-                    _focus_title(); time.sleep(0.3)
-                    _ACt(driver).send_keys(title).perform()
-                    time.sleep(0.6)
-                except Exception as _te:
-                    print(f"  ⚠️ Selenium 제목 타이핑 실패: {_te}")
+                    _els = driver.find_elements(_By2.CSS_SELECTOR, _sel)
+                    if _els:
+                        return _els[0]
+                except Exception:
+                    pass
+            try:
+                _all = driver.find_elements(_By2.CSS_SELECTOR, '[contenteditable="true"]')
+                _vis = [e for e in _all if e.is_displayed() and e.size.get('width', 0) > 100]
+                return _vis[0] if _vis else None
+            except Exception:
+                return None
+
+        _fin = ""
+        _title_el = _find_title_el()
+        for _attempt in range(3):
+            try:
+                if _title_el:
+                    # ① move_to_element().click() — 제목칸으로 커서 이동 (본문 포커스 해제)
+                    _AC2(driver).move_to_element(_title_el).click().perform()
+                    time.sleep(0.3)
+                    # ② 기존 내용 전체 선택 후 삭제 — 재시도 시 제목 누적 방지
+                    _title_el.send_keys((_K2.COMMAND if IS_MAC else _K2.CONTROL) + 'a')
+                    time.sleep(0.1)
+                    _title_el.send_keys(_K2.DELETE)
+                    time.sleep(0.1)
+                    # ③ 제목 직접 입력 — DOM element 직접 전달, OS포커스 무관
+                    _title_el.send_keys(_want)
+                    time.sleep(0.5)
+                else:
+                    _paste_title()   # element 미발견 시 기존 클립보드 폴백
+            except Exception as _te:
+                print(f"  ⚠️ 제목 입력 시도 {_attempt + 1} 실패: {_te}")
+                try:
+                    _paste_title()   # 예외 시 클립보드 폴백
+                except Exception:
+                    pass
             try:
                 _fin = driver.execute_script(_TITLE_READ_JS) or ""
             except Exception:

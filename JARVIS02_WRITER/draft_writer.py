@@ -685,7 +685,6 @@ def _gen_section_call1(
 ) -> str:
     """Call-1: 오프닝 + 섹션1 생성."""
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
-    hook = _gen_hook(keyword, platform)
     system_msg = _build_section_system_msg(supreme_block, platform)
     _catalog = _build_data_catalog(datasets)
     _call1_min = max(2, _L.MIN_CHART_COUNT // 2)  # 전체 최솟값의 절반 (call-1은 절반 담당)
