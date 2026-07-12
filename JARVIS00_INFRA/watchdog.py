@@ -89,6 +89,7 @@ class Watchdog:
         self.poll_sec = max(1.0, float(poll_sec))
         self._start = 0.0
         self._last_beat = 0.0
+        self._last_tick = 0.0
         self._stop = threading.Event()
         self._thr: threading.Thread | None = None
         self.stuck_reason: str | None = None
@@ -99,43 +100,52 @@ class Watchdog:
         self._last_beat = time.time()
 
     def elapsed(self) -> float:
-        """실질 경과 시간. 절전 구간은 _monitor() 가 감지 시 self._start 를 함께
-        미뤄 자동 제외한다 (ERRORS [396] 후속 — freeze 오탐만 고치고 deadline 오탐은
-        self._start 미조정으로 남아있던 것을 여기 elapsed()/check() 공용 계산으로 정리)."""
+        """실질 경과 시간. 절전 구간은 _absorb_sleep_gap() 이 감지 시 self._start 를
+        함께 미뤄 자동 제외한다 (ERRORS [396][414] 후속)."""
         return time.time() - self._start if self._start else 0.0
+
+    # ── 절전(sleep) gap 흡수 — check()·_monitor() 양쪽이 공유 (★ ERRORS [414] 후속 레이스 수정) ──
+    def _absorb_sleep_gap(self) -> bool:
+        """직전 관측 시각 대비 비정상적으로 큰 시간차가 있으면 OS 절전(맥 Maintenance
+        Sleep 등)으로 보고 self._start/_last_beat 를 함께 밀어 elapsed() 를 실제 진행
+        시간 기준으로 복구한다. gap 흡수 시 True.
+
+        ★ 배경 — [414]는 이 보정을 _monitor() 백그라운드 스레드의 poll_sec(15s) 틱
+        안에서만 수행했다. 그런데 협조적 check() 는 메인 스레드에서 attempt 경계마다
+        *즉시* 호출된다 — subprocess.run() 등 장시간 블로킹 호출이 절전으로 함께
+        멈췄다가 깨어난 직후, monitor 스레드가 다음 틱을 돌기 *전에* check() 가 먼저
+        실행되면 아직 보정 안 된 self._start 로 elapsed() 를 계산해 "데드라인 초과"가
+        재발한다(트렌드 수집 harness가 check() 안에서 StuckError 를 던진 사고가 이 경로).
+        두 호출자가 동일한 절전 판정 로직을 공유해야 어느 쪽이 먼저 깨어나든 즉시 흡수된다.
+        """
+        now = time.time()
+        last = self._last_tick or self._start
+        gap = now - last
+        self._last_tick = now
+        if last and gap > self.poll_sec * 3:
+            log.info(f"[watchdog] 💤 '{self.name}' 관측 간격 {gap:.0f}s(기대 {self.poll_sec:.0f}s) "
+                     f"— 시스템 절전 감지, self._start 보정")
+            self._start += gap
+            self._last_beat = now
+            return True
+        return False
 
     # ── 협조적 데드라인 체크 (스텝/시도 사이) ──
     def check(self) -> None:
         """데드라인 초과면 StuckError. 스텝·시도 사이에서 호출 (안전한 중단점)."""
-        if self.deadline_sec and self._start and self.elapsed() > self.deadline_sec:
-            self.stuck_reason = (f"데드라인 초과 {self.elapsed():.0f}s > {self.deadline_sec:.0f}s "
-                                 f"({self.deadline_sec/60:.0f}분)")
-            raise StuckError(self.stuck_reason)
+        if self.deadline_sec and self._start:
+            self._absorb_sleep_gap()
+            if self.elapsed() > self.deadline_sec:
+                self.stuck_reason = (f"데드라인 초과 {self.elapsed():.0f}s > {self.deadline_sec:.0f}s "
+                                     f"({self.deadline_sec/60:.0f}분)")
+                raise StuckError(self.stuck_reason)
 
     # ── 백그라운드 감시 (freeze — 협조적 체크가 못 도는 진짜 얼어붙음) ──
     def _monitor(self) -> None:
-        last_tick = time.time()
         while not self._stop.wait(self.poll_sec):
+            if self._absorb_sleep_gap():
+                continue   # 이번 틱은 절전 보정만 — freeze/데드라인 판정은 다음 틱부터
             now = time.time()
-            # ★ 자기 루프 간격(gap) 절전 감지 (ERRORS [389] 동일 원리 — jarvis_keeper.py
-            #   의 "자기 루프 gap" 방식을 이 워치독에도 적용). 이 감시 스레드가 poll_sec
-            #   마다 깨어나야 하는데 그보다 훨씬 크게 벌어졌다면, 이 스레드 자신도 그 구간
-            #   동안 멈춰 있었다는 직접 증거 — OS 절전(맥 Maintenance Sleep 등)으로 프로세스
-            #   전체가 함께 정지된 것이지 스텝이 진짜로 얼어붙은 게 아니다. beat 를 지금
-            #   시점으로 리셋해 무고한 freeze 판정을 면제하고 이번 틱의 판정을 건너뛴다.
-            gap = now - last_tick
-            last_tick = now
-            if gap > self.poll_sec * 3:
-                log.info(f"[watchdog] 💤 '{self.name}' 감시 루프 간격 {gap:.0f}s(기대 {self.poll_sec:.0f}s) "
-                         f"— 시스템 절전 감지, 이번 틱 freeze/데드라인 판정 유예")
-                self._last_beat = now
-                # ★ ERRORS [396] 후속 — freeze 오탐만 면제하고 self._start 는 그대로 두면
-                #   절전 구간이 wall-clock elapsed 에 그대로 누적되어 다음 틱(들)에서
-                #   "데드라인 초과(블로킹)" 오탐으로 재발한다(elapsed()/check()/이 분기 모두
-                #   self._start 기준). 절전으로 흘러간 시간만큼 시작점을 함께 미뤄야
-                #   deadline_sec 이 "실제 진행 시간" 기준으로 유지된다.
-                self._start += gap
-                continue
             # freeze = 로컬 beat(스텝 사이) 와 전역 beat(LLM·수집 등 진행) 중 *최근* 것 기준
             #   → 오래 걸리는 정상 작업(LLM 반복 호출 등)은 전역 beat 로 살아있음 = 오탐 방지
             last = max(self._last_beat, _GLOBAL_BEAT[0])
@@ -164,6 +174,7 @@ class Watchdog:
     def __enter__(self) -> "Watchdog":
         self._start = time.time()
         self._last_beat = self._start
+        self._last_tick = self._start
         self._thr = threading.Thread(target=self._monitor, name=f"wd-{self.name[:20]}", daemon=True)
         self._thr.start()
         return self

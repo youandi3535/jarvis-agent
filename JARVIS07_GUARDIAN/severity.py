@@ -194,6 +194,19 @@ _TRANSIENT_PATTERNS = [
     # "정상 자가치유" 보고(jobs.py _run_script_checked). traceback 은 NoneType — 코드 결함
     # 위치 정보 자체가 없어 Tier1/2 가 고칠 대상이 없고, 다음 예약 실행이 깨끗하게 재시도한다.
     re.compile(r"워치독 정지\(freeze/deadline\) 감지로 강제 종료", re.I),
+    # ★ 2026-07-12 — [413]과 동일 클래스의 다른 stderr noise 꼬리(멀티프로세싱 세마포어
+    # 누수 경고). os._exit(75) 는 정상 인터프리터 종료 훅(atexit/multiprocessing cleanup)을
+    # 건너뛰므로 resource_tracker 가 "leaked semaphore" 를 보고하는 건 강제종료의 *부작용*이지
+    # 원인이 아니다. EX_TEMPFAIL 문구가 없는 구버전 in-memory 프로세스가 만든 보고(일반
+    # branch 텍스트)도 rc=75 + resource_tracker 조합만으로 동일하게 transient 판별.
+    re.compile(r"실패 \(rc=75\).*resource_tracker.*leaked", re.I | re.S),
+    # ★ 2026-07-12 — [403][413][415] 동일 클래스의 일반화. jobs.py 의 EX_TEMPFAIL
+    # 재분류(★[413])가 배포되기 *이전* 코드로 실행 중이던 프로세스(데몬 미재시작)가 만든
+    # 구버전 포맷 보고는 stderr 꼬리 노이즈가 매번 다를 수 있다(RequestsDependencyWarning·
+    # resource_tracker 등 이번까지 최소 2종 확인). 특정 노이즈 문자열을 하나씩 추가하는 대신
+    # "rc=75 + watchdog 자체 킬 로그 마커(🛑)가 함께 있음" 하나로 일반화 — 이 조합이 존재하면
+    # stderr 꼬리 내용과 무관하게 watchdog 강제종료가 원인임이 확정적이다.
+    re.compile(r"실패 \(rc=75\).*\[watchdog\] 🛑", re.I | re.S),
 ]
 
 

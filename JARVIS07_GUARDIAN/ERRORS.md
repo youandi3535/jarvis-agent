@@ -2,6 +2,18 @@
 
 ---
 
+## [426] harness "트렌드 수집" freeze(300s>300s) 오탐 — 외곽 watchdog이 자식 subprocess 진행을 못 봄 (2026-07-12)
+
+- **증상**: `JARVIS00_INFRA.harness.트렌드 수집`이 `RuntimeError: [harness:트렌드 수집] attempt=1 step=전체: 멈춤(freeze) 300s > 300s 무진전` 보고. traceback은 `NoneType: None`(watchdog이 직접 report로 생성한 인공 RuntimeError).
+- **환경**: `JARVIS03_RADAR/jobs.py` `_run_with_harness("트렌드 수집", ...)` → `JARVIS00_INFRA/harness.py` `run_action()`이 `Watchdog(action_def.name, freeze_sec=FREEZE_LIMIT_SEC=300)`로 액션 전체(단일 step "① 트렌드 수집")를 감싸고, 그 step은 `_run_script_checked()`가 `subprocess.run(radar_main.py, timeout=_SUBPROCESS_TIMEOUT_SEC)`로 블로킹 실행.
+- **원인 (근본)**: harness 외곽 Watchdog의 `wd.beat()`는 step *진입 시* 1회만 호출된다(`_execute_steps`). 이 액션은 step이 하나뿐이라 그 이후로는 어떤 beat도 없이 `subprocess.run()` 블로킹이 끝날 때까지 대기한다. `radar_main.py`는 [413]에서 이미 자체 내부 `_wd_beat()`를 여러 지점에 배선했지만, 그건 **별도 OS 프로세스**(subprocess) 안에서 호출되는 것이라 부모(데몬) 프로세스의 `_GLOBAL_BEAT`에는 전혀 반영되지 않는다. 그 결과 정상적으로 5분을 넘겨 걸리는 실행(배치 여러 개·네이버 rate-limit 딜레이 등)도 외곽 harness watchdog 기준으로는 "300초 무진전"으로 오판된다. [404](shared/llm.py SDK 호출)·[413](google_collector pytrends)와 동일 클래스 버그의 세 번째 발생 지점 — "블로킹 호출을 감싸는 자식 프로세스/스레드 경계마다 각각 beat 배선이 필요하다"는 교훈이 이번엔 subprocess 호출부에 누락돼 있었음.
+- **헛다리**: 없음 — [396]/[413]/[404] 세 선례를 먼저 대조해 "harness 외곽 watchdog vs 자식 프로세스 진행 신호 단절" 구조적 원인을 바로 특정.
+- **해결**: `_run_script_checked()`의 `subprocess.run()` 호출을 `ThreadPoolExecutor(max_workers=1)`로 감싸고, `fut.result(timeout=15)`를 벽시계 상한(`_SUBPROCESS_TIMEOUT_SEC + 30s`)까지 폴링 — 매 폴 타임아웃마다 `watchdog.beat()`(전역)를 호출해 자식 subprocess가 살아있는 동안 하네스 외곽 watchdog에 진행 신호를 전달. 기존 반환값(returncode·stdout·stderr) 처리·`WATCHDOG_KILL_RC` 판별·`subprocess.TimeoutExpired` 처리 로직은 그대로 유지.
+- **파일**: `JARVIS03_RADAR/jobs.py`
+- **교훈**: freeze 워치독이 감싸는 블로킹 호출이 **별도 OS 프로세스**(subprocess)를 기다리는 경우, 그 자식 프로세스 내부에 아무리 촘촘히 beat()를 배선해도 부모 프로세스의 전역 heartbeat에는 보이지 않는다 — 프로세스 경계를 넘는 모든 블로킹 대기(`subprocess.run`·향후 추가될 별도 프로세스 호출)는 반드시 폴링 스레드(`ThreadPoolExecutor` + `fut.result(timeout=)`) 패턴으로 감싸 대기 중에도 부모 쪽에서 beat()해야 한다. 같은 원인의 네 번째 재발 지점이 있는지(`JARVIS02_WRITER/scheduler.py:1128`·`JARVIS07_GUARDIAN/{auditor,guardian_agent}.py`의 `subprocess.run` — harness로 감싸져 있는지 확인 필요) 후속 점검 대상으로 남긴다.
+
+---
+
 ## [425] 인포그래픽 막대차트 — 큰 숫자 단위 미변환 + 긴 라벨 뷰박스 클리핑 (2026-07-11)
 
 - **증상**: "코스닥 상장사 재무구조" 인포그래픽에서 ① 자산총계 350,701,103(백만원)이 "350.7 조원" 대신 원시 숫자 그대로 표시 ② 막대차트 우측 값 라벨이 박스 밖으로 잘림 ③ 도넛 차트 중앙값 미스케일.
@@ -7519,6 +7531,15 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **해결**: `_paste_title()` 내 `_pg2.hotkey('command', 'v')` → `ActionChains(driver).key_down(Keys.COMMAND).send_keys('v').key_up(Keys.COMMAND).perform()`. ActionChains는 ChromeDriver CDP 프로토콜로 전달 → OS focus 무관하게 브라우저 DOM focus(제목 칸) 직접 전달.
 - **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` 816번 줄
 - **교훈**: SmartEditor ONE 같은 리치 에디터에서 JS focus + pyautogui HID 조합은 OS/DOM focus 불일치로 버그 발생. 에디터 내 입력은 반드시 Selenium ActionChains CDP 방식 사용.
+
+## [404] 레이더 수집 watchdog freeze(880s>300s) — SDK 호출이 anyio timeout 인터럽트 못 걸어 무진전 (2026-07-12)
+- **증상**: watchdog 이 "정지 감지 — 레이더 수집: 멈춤(freeze) 880s > 300s 무진전" RuntimeError 보고(source=watchdog, module=`JARVIS00_INFRA.watchdog`, func_name=`레이더 수집`). traceback 은 `NoneType: None`(watchdog 이 직접 report 로 생성한 인공 RuntimeError, freeze 판정 자체가 오류의 본체).
+- **환경**: `JARVIS03_RADAR/radar_main.py` `__main__` — `with guard_main("레이더 수집", deadline_sec=900):` 안의 `collect_today()` 마지막 단계 `generate_content_angles()` (`analyzer.py`) 가 `shared/llm.py` `invoke_text("writer_fast", ...)` 를 1회 호출.
+- **원인**: `shared/llm.py::_run_sdk_sync()` 가 `anyio.fail_after(timeout)` 하나에만 기대 벽시계 상한을 걸었는데, Claude Code SDK subprocess 가 블로킹(비-yield) I/O 로 멈추면 이 타임아웃이 인터럽트를 못 건다. 그 구간 동안 `_wd_beat()` 는 메시지를 실제로 수신했을 때만 호출되므로, SDK 가 메시지 0건인 채 멈추면 전역 heartbeat(`_GLOBAL_BEAT`) 가 전혀 갱신되지 않아 무진전 시간이 그대로 누적 — freeze 임계값(300s) 을 넘어 최종 880s 까지 커졌다. `JARVIS03_RADAR/collectors/google_collector.py::_bounded()` 가 pytrends 호출에 대해 이미 고친 것과 동일한 버그 클래스(라이브러리 자체 timeout= 파라미터가 블로킹 I/O 앞에서 무력).
+- **헛다리**: 없음 — `_bounded()` 의 기존 주석(동일 버그 클래스를 pytrends 에 대해 명시)이 정확한 선례였고 바로 동일 패턴 적용으로 진행.
+- **해결**: `_run_sdk_sync()` 내부 `anyio.run(_collect)` 호출을 `ThreadPoolExecutor(max_workers=1)` 로 감싸고, `fut.result(timeout=15)` 를 벽시계 상한(`timeout + 30s`) 까지 폴링 — 매 폴 타임아웃마다 `_wd_beat()` 를 호출해 대기 중에도 진행 신호를 유지하고, 벽시계 상한 도달 시에만 강제 포기(수집된 부분 응답 반환). `shared/llm.py` 는 전 시스템 LLM 호출 단일 진입점이라 이 수정으로 RADAR 뿐 아니라 모든 `invoke_text()` 호출자가 동일 보호를 받는다.
+- **파일**: `shared/llm.py`
+- **교훈**: 외부 라이브러리(pytrends·SDK subprocess 등)의 `timeout=` 파라미터는 내부에서 블로킹 I/O 를 쓰면 신뢰할 수 없다 — 진짜 벽시계 상한이 필요하면 `ThreadPoolExecutor` + `fut.result(timeout=)` 폴링 패턴(대기 중 주기적 beat 포함)으로 감싸야 한다. 이미 한 곳(`_bounded()`)에서 고친 버그 클래스라도 *같은 원인의 다른 호출부* (여기선 LLM SDK 호출)에 동일 결함이 잠복해 있을 수 있으니, freeze 류 오류를 진단할 때는 "이 함수가 heartbeat 없이 블로킹할 수 있는 구간이 있는가"를 항상 먼저 확인할 것.
 
 ## [403] 성과 수집 watchdog 데드라인 초과(블로킹) — deadline_sec 1800 하드코딩 미스매치 (2026-07-11)
 - **증상**: watchdog 이 "정지 감지 — 성과 수집: 데드라인 초과(블로킹) 1979s > 1800s" RuntimeError 보고(source=watchdog, module=`JARVIS00_INFRA.watchdog`, func_name=`성과 수집`). traceback 은 `NoneType: None`(watchdog 이 직접 report 로 생성한 인공 RuntimeError, freeze 오탐 아님).
