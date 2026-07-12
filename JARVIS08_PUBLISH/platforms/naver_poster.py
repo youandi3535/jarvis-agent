@@ -878,20 +878,15 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
         for _attempt in range(3):
             try:
                 if _title_el:
-                    # ① JS click + focus — move_to_element().click()은 element not interactable 발생
+                    # ① JS execCommand — send_keys는 contenteditable에서 "element not interactable"
+                    #   Selenium 상호작용 검사를 우회해 DOM에 직접 텍스트 주입
                     driver.execute_script(
-                        "arguments[0].click(); arguments[0].focus();"
-                        "arguments[0].dispatchEvent(new Event('focus',{bubbles:true}));",
-                        _title_el,
+                        "arguments[0].focus();"
+                        "document.execCommand('selectAll', false, null);"
+                        "document.execCommand('delete', false, null);"
+                        "document.execCommand('insertText', false, arguments[1]);",
+                        _title_el, _want,
                     )
-                    time.sleep(0.3)
-                    # ② 기존 내용 전체 선택 후 삭제 — 재시도 시 제목 누적 방지
-                    _title_el.send_keys((_K2.COMMAND if IS_MAC else _K2.CONTROL) + 'a')
-                    time.sleep(0.1)
-                    _title_el.send_keys(_K2.DELETE)
-                    time.sleep(0.1)
-                    # ③ 제목 직접 입력 — DOM element 직접 전달, OS포커스 무관
-                    _title_el.send_keys(_want)
                     time.sleep(0.5)
                 else:
                     _paste_title()   # element 미발견 시 기존 클립보드 폴백
