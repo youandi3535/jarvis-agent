@@ -6,6 +6,7 @@ from JARVIS09_COLLECTOR.providers.economic_data_provider import (
     download_ticker as _j09_dl,
 )
 import io, base64, os, logging
+from pathlib import Path
 import matplotlib
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
@@ -101,7 +102,7 @@ def wrap_img(b64: str, alt: str, caption: str = '') -> str:
     )
 
 
-def make_leader_price_chart_from_data(rows: list, name: str, period: str = "") -> str:
+def make_leader_price_chart_from_data(rows: list, name: str, period: str = "", out_path=None) -> str:
     """JARVIS09 분기별 주가 이력 rows → 주가 차트 HTML.
 
     rows: [{"label": "2021.Q1", "value": 80000}, ...] (stocks_to_datasets 출력)
@@ -161,7 +162,20 @@ def make_leader_price_chart_from_data(rows: list, name: str, period: str = "") -
                     facecolor='#0d1117', edgecolor='none')
         plt.close(fig)
         buf.seek(0)
-        b64 = base64.b64encode(buf.read()).decode('utf-8')
+        png_bytes = buf.read()
+
+        if out_path is not None:
+            _p = Path(out_path)
+            _p.parent.mkdir(parents=True, exist_ok=True)
+            _p.write_bytes(png_bytes)
+            return (
+                f'<figure><img src="{_p}" '
+                f'style="width:100%;max-width:760px;display:block;margin:0 auto;border-radius:8px;" '
+                f'alt="{name} 주가 흐름"/>'
+                f'<figcaption>{name} 주가 흐름</figcaption></figure>'
+            )
+
+        b64 = base64.b64encode(png_bytes).decode('utf-8')
         return (
             f'<div style="background:linear-gradient(135deg,#0d1117,#161b22);'
             f'padding:20px;border-radius:16px;border:1px solid #30363d;'
@@ -176,7 +190,7 @@ def make_leader_price_chart_from_data(rows: list, name: str, period: str = "") -
         return ''
 
 
-def make_leader_price_chart(yf_ticker: str, name: str) -> str:
+def make_leader_price_chart(yf_ticker: str, name: str, out_path=None) -> str:
     """대장주·부대장주 전용 주가 차트 HTML (최대 5년, 있는 만큼 사용).
 
     직접 HTML 반환 (CHART_STORE 미사용). 실데이터 없으면 '' (ADR 010).
@@ -262,8 +276,20 @@ def make_leader_price_chart(yf_ticker: str, name: str) -> str:
                     facecolor='#0d1117', edgecolor='none')
         plt.close(fig)
         buf.seek(0)
-        b64 = base64.b64encode(buf.read()).decode('utf-8')
+        png_bytes = buf.read()
 
+        if out_path is not None:
+            _p = Path(out_path)
+            _p.parent.mkdir(parents=True, exist_ok=True)
+            _p.write_bytes(png_bytes)
+            return (
+                f'<figure><img src="{_p}" '
+                f'style="width:100%;max-width:760px;display:block;margin:0 auto;border-radius:8px;" '
+                f'alt="{name} 주가차트 ({period_label})"/>'
+                f'<figcaption>{name} 주가차트 ({period_label})</figcaption></figure>'
+            )
+
+        b64 = base64.b64encode(png_bytes).decode('utf-8')
         return (
             f'<div style="background:linear-gradient(135deg,#0d1117,#161b22);'
             f'padding:20px;border-radius:16px;border:1px solid #30363d;'

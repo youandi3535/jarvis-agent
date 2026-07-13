@@ -2,7 +2,7 @@
 tistory_cookie_refresher.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 티스토리 TSSESSION 쿠키 자동 갱신
-- 매일 새벽 3시 + 발행 30분 전(06:30·15:30) scheduler 자동 호출
+- 티스토리 작성 직전 자동 호출 (force=False — 유효 시 스킵, 만료 시 갱신)
 - 현재 쿠키 유효성 체크
 - 만료 시 카카오 ID/PW 자동 입력으로 로그인 후 쿠키 갱신
 - .env 파일 자동 업데이트 (TS_COOKIE)
@@ -406,29 +406,41 @@ def refresh_cookie(driver) -> str | None:
 
         # 7. 로그인 후 티스토리로 리다이렉트 대기 (+ 2FA/CAPTCHA 감지)
         print(f"  🔍 현재 URL: {driver.current_url[:60]}")
+        _blocker_alerted = False
         for _ in range(15):
             url = driver.current_url
             if "tistory.com" in url and "accounts.kakao" not in url:
                 print("  ✅ 티스토리로 이동 완료")
                 break
-            # ★ 2FA·CAPTCHA·디바이스 인증 감지 — 즉시 텔레그램 SOS
+            # ★ 2FA·CAPTCHA·디바이스 인증 감지 — 텔레그램 SOS + 3분 대기
             blocker = _detect_human_intervention(driver)
-            if blocker:
-                print(f"  🚨 수동 개입 필요 — 감지 키워드: '{blocker}'")
+            if blocker and not _blocker_alerted:
+                _blocker_alerted = True
+                print(f"  🚨 수동 개입 필요 — 감지 키워드: '{blocker}'. Chrome 창에서 직접 완료 (최대 3분 대기).")
                 _tg_notify(
-                    f"🚨 *티스토리 쿠키 갱신 차단*\n"
-                    f"카카오가 *{blocker}* 요구 — 자동 로그인 불가.\n"
-                    f"수동으로 카카오 로그인 후 `.env` 의 `TS_COOKIE` 갱신 또는 "
-                    f"`/refresh_tistory` 명령 재시도."
+                    f"🚨 티스토리 쿠키 갱신 차단\n"
+                    f"카카오가 '{blocker}' 요구합니다.\n"
+                    f"Chrome 창에서 인증을 직접 완료하면 자동으로 이어집니다 (3분 대기).\n"
+                    f"또는 /refresh_tistory 명령으로 나중에 재시도 가능합니다."
                 )
-                return None
+                # 최대 3분(36 * 5초) 대기 — Chrome 창 열려 있으므로 사용자 직접 완료 가능
+                for _w in range(36):
+                    _s(5)
+                    _cur = driver.current_url
+                    if "tistory.com" in _cur and "accounts.kakao" not in _cur:
+                        print("  ✅ 사용자가 추가 인증 완료 — 티스토리로 이동 확인")
+                        break
+                else:
+                    print("  ❌ 3분 내 인증 완료 안 됨 — 포기")
+                    return None
+                break  # outer loop 탈출 (tistory 이동 확인됨)
             _s(2)
 
         if "accounts.kakao" in driver.current_url:
             print("  ❌ 로그인 실패 — 카카오 페이지에 머물러 있음")
             blocker = _detect_human_intervention(driver)
             if blocker:
-                _tg_notify(f"🚨 *티스토리 쿠키 갱신 실패* — {blocker} 요구")
+                _tg_notify(f"🚨 티스토리 쿠키 갱신 실패 — {blocker} 요구")
             return None
 
         print("  ✅ 로그인 완료!")
@@ -522,16 +534,19 @@ def _attempt_once(force: bool, return_driver: bool):
             print("\n🔍 현재 쿠키 유효성 확인 중...")
             if check_cookie_valid(driver):
                 print("  ✅ 쿠키 정상 — 갱신 불필요")
-                if not return_driver:
-                    driver.quit()
-                    return True, None
-                return True, None   # driver 불필요 (이미 quit 안 함 — 외부에서 안 씀)
+                try: driver.quit()
+                except Exception: pass
+                driver = None
+                return True, None   # 포스터가 TS_COOKIE 직접 사용
             print("  ⚠️ 쿠키 만료 — 자동 갱신 시작")
         else:
             print("  🔄 강제 갱신 모드")
 
         new_cookie = refresh_cookie(driver)
         if not new_cookie:
+            try: driver.quit()
+            except Exception: pass
+            driver = None
             return False, None
 
         if update_env_cookie(new_cookie):
@@ -647,9 +662,9 @@ def run(force: bool = False, return_driver: bool = False, notify: bool = True):
     print(f"\n❌ 쿠키 갱신 {_RETRY_MAX}회 모두 실패{err_str}")
     if notify:
         _tg_notify(
-            f"🚨 *티스토리 쿠키 갱신 실패* ({_RETRY_MAX}회 재시도 모두 실패)\n"
-            f"카카오 로그인·CAPTCHA·2FA 확인 필요. `/refresh_tistory` 수동 재시도 또는 "
-            f"`.env` 의 `TS_COOKIE` 수동 갱신 가능."
+            f"🚨 티스토리 쿠키 갱신 실패 ({_RETRY_MAX}회 재시도 모두 실패)\n"
+            f"카카오 로그인, CAPTCHA, 2FA 확인 필요합니다.\n"
+            f"/refresh_tistory 수동 재시도 또는 .env 의 TS_COOKIE 수동 갱신 가능합니다."
         )
     return (False, None) if return_driver else False
 

@@ -505,7 +505,7 @@ def run(post_naver=True, post_tistory=True):
         try:
             from dotenv import load_dotenv
             from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr
-            ok, drv = _tcr(force=True, return_driver=True)
+            ok, drv = _tcr(force=False, return_driver=True)
             if ok:
                 load_dotenv(override=True)
                 return {"ts_driver": drv}

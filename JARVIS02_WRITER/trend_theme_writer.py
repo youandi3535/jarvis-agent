@@ -582,7 +582,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             return {}
         try:
             from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr
-            ok, drv = _tcr(force=True, return_driver=True)
+            ok, drv = _tcr(force=False, return_driver=True)
             if ok:
                 load_dotenv(override=True)
                 print("  ✅ [④] 티스토리 쿠키 갱신 완료 (신선 세션)")
