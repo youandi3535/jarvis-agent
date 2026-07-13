@@ -378,41 +378,6 @@
       "aesthetic": "learned-auto"
     },
     {
-      "id": "cream-teal-coral-flat-infographic",
-      "name": "크림 틸 코랄 플랫 인포그래픽",
-      "aesthetic": "크림·딥틸·코랄·옐로우 플랫 컬러블록이 교차하며 사선 해치 장식과 원형 스탯이 리듬을 만드는 친근한 인포그래픽 템플릿",
-      "hero": [
-        "#1C6970",
-        "#2E848C"
-      ],
-      "ink": "#17565D",
-      "a1": "#F28B65",
-      "a1s": "#F7B79A",
-      "a2": "#F6D571",
-      "a2s": "#FBE9A8",
-      "soft": "#F4ECC8",
-      "muted": "#7FA2A4",
-      "eyebrow": "#FFFFFF",
-      "grid": "#E4DAB0",
-      "hero_texture": "diagonal",
-      "card_radius": 24,
-      "eyebrow_label": "OVERVIEW",
-      "notes": [
-        "히어로 최상단에 코랄/옐로우 대각선 스트라이프 밴드가 얇게 장식 테두리로 깔림",
-        "섹션 타이틀 앞에는 항상 사선 해치('/////') 아이콘이 붙어 구분자 역할을 함",
-        "핵심 스탯은 2x2 원형 그리드로 배치되며 아웃라인 링 원과 솔리드 필 원을 교대로 사용해 리듬감을 줌",
-        "보조 통계는 라운드 테두리(모서리 24px) 박스 안에 불릿 리스트로 배치되어 메인 스탯 오른쪽에 세로로 붙음",
-        "배경색이 섹션마다 크림→딥틸→옐로우→크림→코랄/틸 듀오톤→딥틸(푸터) 순으로 교대되어 스크롤 리듬을 형성",
-        "차트와 텍스트 칼럼은 섹션마다 좌우 위치가 교차(지그재그)되어 시각적 단조로움을 피함",
-        "대형 단일 스탯은 풀블리드 컬러 블록 안에 초대형 볼드 넘버로 배치되고 옆 컬럼은 동일 높이의 대비색 텍스트 블록이 붙음",
-        "푸터는 세로 얇은 구분선으로 3분할(설명/CTA/로고)되고 CTA 버튼은 필컬러 알약형 버튼",
-        "타이포는 굵은 산세리프 헤드라인 + lorem 스타일 본문이 반복되며 텍스트 정렬은 좌측 정렬 위주"
-      ],
-      "template": "<!DOCTYPE html>\n<html lang=\"ko\">\n<head>\n<meta charset=\"UTF-8\">\n<style>\n@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');\n\n:root{\n  --hero0:#1C6970;\n  --hero1:#2E848C;\n  --ink:#17565D;\n  --a1:#F28B65;\n  --a1s:#F7B79A;\n  --a2:#F6D571;\n  --a2s:#FBE9A8;\n  --soft:#F4ECC8;\n  --muted:#7FA2A4;\n  --eyebrow:#FFFFFF;\n  --grid:#E4DAB0;\n  --radius:24px;\n}\n\n*{ box-sizing:border-box; margin:0; padding:0; }\nbody{\n  width:1280px;\n  font-family:'Noto Sans KR', sans-serif;\n  background:var(--soft);\n  color:var(--ink);\n}\n\n.stripe-band{\n  height:16px;\n  width:100%;\n  background:repeating-linear-gradient(45deg, var(--a1) 0 24px, var(--a2) 24px 48px);\n}\n\n.hero{\n  background:var(--soft);\n  text-align:center;\n  padding:64px 140px 76px;\n}\n.hero .eyebrow{\n  display:inline-block;\n  font-size:13px;\n  font-weight:700;\n  letter-spacing:.18em;\n  color:var(--ink);\n  background:var(--a1s);\n  padding:6px 16px;\n  border-radius:999px;\n  margin-bottom:18px;\n}\n.hero h1{\n  font-size:44px;\n  font-weight:900;\n  color:var(--ink);\n  letter-spacing:.02em;\n  margin-bottom:20px;\n}\n.hero .subtitle{\n  max-width:780px;\n  margin:0 auto;\n  font-size:16px;\n  font-weight:500;\n  line-height:1.7;\n  color:var(--ink);\n  opacity:.9;\n}\n\n.section-header{\n  display:flex;\n  align-items:center;\n  gap:16px;\n  margin-bottom:36px;\n}\n.hash{\n  width:120px;\n  height:16px;\n  background:repeating-linear-gradient(65deg, currentColor 0 3px, transparent 3px 9px);\n  opacity:.85;\n  flex-shrink:0;\n}\n.section-header h2{\n  font-size:26px;\n  font-weight:700;\n}\n\n/* teal stats section */\n.section-teal{\n  background:var(--hero0);\n  color:#ffffff;\n  padding:64px 90px;\n}\n.section-teal .hash{ color:#ffffff; }\n.stats-row-wrap{\n  display:flex;\n  gap:44px;\n  align-items:stretch;\n}\n.hero-stats-slot{\n  flex:1.5;\n  display:flex;\n  align-items:center;\n}\n.mini-cards-slot{\n  flex:1;\n  border:2px solid var(--hero1);\n  border-radius:var(--radius);\n  padding:32px;\n  display:flex;\n  flex-direction:column;\n  justify-content:center;\n}\n\n/* yellow chart section: text left, chart right */\n.section-yellow{\n  background:var(--a2s);\n  padding:64px 90px;\n  display:flex;\n  gap:70px;\n  align-items:center;\n}\n.section-yellow .text-col{ flex:1; }\n.section-yellow .text-col p{\n  font-size:15px;\n  line-height:1.75;\n  color:var(--ink);\n  opacity:.9;\n  margin-top:18px;\n}\n.section-yellow .hash{ color:var(--a1); }\n.section-yellow .chart-col{\n  flex:1.1;\n}\n\n/* cream chart section: chart left, text right */\n.section-cream{\n  background:var(--soft);\n  padding:64px 90px;\n  display:flex;\n  gap:70px;\n  align-items:center;\n}\n.section-cream .chart-col{ flex:1.1; }\n.section-cream .text-col{ flex:1; }\n.section-cream .text-col p{\n  font-size:15px;\n  line-height:1.75;\n  color:var(--ink);\n  opacity:.9;\n  margin-top:18px;\n}\n.section-cream .hash{ color:var(--ink); }\n\n/* split big-stat section */\n.section-split{\n  display:flex;\n  min-height:320px;\n}\n.split-coral{\n  flex:1;\n  background:var(--a1);\n  color:var(--ink);\n  padding:64px 70px;\n  display:flex;\n  flex-direction:column;\n  justify-content:center;\n}\n.split-coral .hash{ color:var(--a2s); margin-bottom:26px; }\n.split-teal{\n  flex:1;\n  background:var(--hero0);\n  color:#ffffff;\n  padding:64px 70px;\n  display:flex;\n  flex-direction:column;\n  justify-content:center;\n}\n.split-teal .hash{ color:#ffffff; margin-bottom:26px; }\n.split-teal p{\n  font-size:15px;\n  line-height:1.75;\n  opacity:.92;\n  max-width:420px;\n}\n\n/* footer */\n.footer{\n  background:var(--hero0);\n  color:#ffffff;\n  display:flex;\n  padding:56px 90px;\n  gap:0;\n}\n.footer .col{\n  flex:1;\n  padding:0 40px;\n  border-right:1px solid rgba(255,255,255,.25);\n  display:flex;\n  flex-direction:column;\n  justify-content:center;\n}\n.footer .col:first-child{ padding-left:0; }\n.footer .col:last-child{ border-right:none; }\n.footer .desc{\n  font-size:14px;\n  line-height:1.75;\n  opacity:.9;\n}\n.footer .cta-text{\n  font-size:15px;\n  font-weight:700;\n  color:var(--a1);\n  line-height:1.6;\n  margin-bottom:20px;\n}\n.footer .cta-btn{\n  display:inline-block;\n  background:var(--a1);\n  color:var(--ink);\n  font-weight:700;\n  font-size:13px;\n  letter-spacing:.05em;\n  padding:14px 26px;\n  border-radius:999px;\n  width:fit-content;\n}\n.footer .brand{\n  text-align:center;\n  font-size:13px;\n  font-weight:700;\n  letter-spacing:.12em;\n}\n.footer .source{\n  margin-top:14px;\n  font-size:11px;\n  opacity:.7;\n  text-align:center;\n  letter-spacing:.03em;\n}\n</style>\n</head>\n<body>\n\n  <div class=\"stripe-band\"></div>\n\n  <section class=\"hero\">\n    <span class=\"eyebrow\">{{EYEBROW}}</span>\n    <h1>{{TITLE}}</h1>\n    <p class=\"subtitle\">{{SUBTITLE}}</p>\n  </section>\n\n  <section class=\"section-teal\">\n    <div class=\"section-header\">\n      <span class=\"hash\"></span>\n      <h2>핵심 지표</h2>\n    </div>\n    <div class=\"stats-row-wrap\">\n      <div class=\"hero-stats-slot\">{{HERO_STATS}}</div>\n      <div class=\"mini-cards-slot\">{{MINI_CARDS}}</div>\n    </div>\n  </section>\n\n  <section class=\"section-yellow\">\n    <div class=\"text-col\">\n      <div class=\"section-header\">\n        <span class=\"hash\"></span>\n        <h2>연간 업데이트</h2>\n      </div>\n      <p>주요 변화를 요약한 설명이 이 영역에 들어갑니다. 핵심 수치의 맥락과 해석을 짧은 문단으로 전달합니다.</p>\n    </div>\n    <div class=\"chart-col\">{{CHART_1}}</div>\n  </section>\n\n  <section class=\"section-cream\">\n    <div class=\"chart-col\">{{CHART_2}}</div>\n    <div class=\"text-col\">\n      <div class=\"section-header\">\n        <span class=\"hash\"></span>\n        <h2>추이 분석</h2>\n      </div>\n      <p>시계열 흐름에 대한 보충 설명이 이 영역에 들어갑니다. 데이터의 시사점을 간결하게 정리합니다.</p>\n    </div>\n  </section>\n\n  <section class=\"section-split\">\n    <div class=\"split-coral\">\n      <span class=\"hash\"></span>\n      {{CHART_3}}\n    </div>\n    <div class=\"split-teal\">\n      <span class=\"hash\"></span>\n      <h2 style=\"font-size:26px; font-weight:700; margin-bottom:16px;\">마무리 인사이트</h2>\n      <p>결론에 도움이 되는 보충 텍스트가 이 영역에 들어갑니다.</p>\n    </div>\n  </section>\n\n  <section class=\"footer\">\n    <div class=\"col\">\n      <p class=\"desc\">{{SOURCE}}</p>\n    </div>\n    <div class=\"col\">\n      <p class=\"cta-text\">더 알아보고 싶으신가요?</p>\n      <span class=\"cta-btn\">CALL TO ACTION</span>\n    </div>\n    <div class=\"col\" style=\"align-items:center;\">\n      <div class=\"brand\">{{BRAND}}</div>\n    </div>\n  </section>\n\n</body>\n</html>",
-      "source": "learned-vision",
-      "created": "2026-07-11"
-    },
-    {
       "id": "charcoal-neon-pulse",
       "name": "차콜 네온 펄스",
       "aesthetic": "다크 네온 대시보드(차콜+발광 1색)",
@@ -433,6 +398,39 @@
       "card_radius": 20,
       "source": "learned",
       "created": "2026-07-12"
+    },
+    {
+      "id": "tree-step-icons",
+      "name": "트리형 8단계 아이콘 인포그래픽",
+      "aesthetic": "크림 배경 위에 네이비 직각 트리선과 하늘색 원형 아이콘 노드가 좌우 대칭으로 뻗어나가는 미니멀 플랫 스텝 다이어그램",
+      "hero": [
+        "#16233F",
+        "#20406B"
+      ],
+      "ink": "#182842",
+      "a1": "#5EC5EA",
+      "a1s": "#AEE3F6",
+      "a2": "#F2A93C",
+      "a2s": "#FBDFA8",
+      "soft": "#F1ECE0",
+      "muted": "#8B8F93",
+      "eyebrow": "#F5C731",
+      "grid": "#E3DED0",
+      "hero_texture": "none",
+      "card_radius": 24,
+      "eyebrow_label": "STEP GUIDE",
+      "notes": [
+        "상단은 손글씨풍 이탤릭 소제목(\"How to Create\")과 그 아래 두꺼운 산세리프 대문자 메인 타이틀(\"INFOGRAPHICS\")이 2단으로 겹쳐 강한 대비를 이루는 타이포 위계",
+        "8개의 원형 아이콘 노드가 중앙 트렁크에서 좌우로 뻗는 직각(ㄱ자/T자) 네이비 선으로 연결된 조직도·마인드맵형 트리 구조",
+        "각 원은 하늘색(a1) 채움 + 굵은 네이비 테두리 링으로 통일되고, 내부에는 전구·그래프·다이얼·붓·톱니바퀴 등 2색 플랫 라인 아이콘이 배치됨",
+        "원 옆 라벨 텍스트는 가지의 뻗는 방향을 따라 15~30도 정도 회전되어 붙어있어 정적인 배치에 동적 리듬을 부여함",
+        "최하단에는 네이비 테두리의 둥근 사각 배지(라운드 24px) 안에 굵은 대문자로 핵심 문구(\"8 SIMPLE STEPS\")를 담아 시각적 마침표 역할을 함",
+        "배경은 그림자·텍스처 없는 완전 무광 크림 단색이며 전체 팔레트는 네이비·하늘색·크림 3톤 + 아이콘 내부의 옐로우/오렌지 소량 포인트로 절제됨",
+        "여백이 넓고 노드 간 간격이 일정하여 격자感보다는 유기적인 가지형 리듬을 형성"
+      ],
+      "template": "<!DOCTYPE html>\n<html lang=\"ko\">\n<head>\n<meta charset=\"UTF-8\">\n<style>\n@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');\n\n:root{\n  --hero0:#16233F;\n  --hero1:#20406B;\n  --ink:#182842;\n  --a1:#5EC5EA;\n  --a1s:#AEE3F6;\n  --a2:#F2A93C;\n  --a2s:#FBDFA8;\n  --soft:#F1ECE0;\n  --muted:#8B8F93;\n  --eyebrow:#F5C731;\n  --grid:#E3DED0;\n}\n\n*{margin:0;padding:0;box-sizing:border-box;font-family:'Noto Sans KR',sans-serif;}\n\nbody{width:1280px;background:var(--soft);color:var(--ink);}\n\n.page{width:1280px;display:flex;flex-direction:column;}\n\n/* top hero ribbon */\n.hero-bar{\n  width:100%;\n  height:64px;\n  background:linear-gradient(90deg,var(--hero0),var(--hero1));\n  display:flex;\n  align-items:center;\n  justify-content:space-between;\n  padding:0 56px;\n}\n.hero-bar .brand{\n  color:#fff;\n  font-weight:700;\n  font-size:16px;\n  letter-spacing:2px;\n  text-transform:uppercase;\n  opacity:.9;\n}\n.eyebrow-pill{\n  background:var(--eyebrow);\n  color:var(--hero0);\n  font-weight:900;\n  font-size:13px;\n  letter-spacing:1.5px;\n  text-transform:uppercase;\n  padding:6px 18px;\n  border-radius:999px;\n}\n\n/* title block */\n.title-block{\n  text-align:center;\n  padding:56px 40px 20px;\n}\n.subtitle{\n  font-style:italic;\n  font-weight:500;\n  font-size:26px;\n  color:var(--hero1);\n  margin-bottom:6px;\n}\n.title{\n  font-weight:900;\n  font-size:64px;\n  letter-spacing:1px;\n  color:var(--ink);\n  text-transform:uppercase;\n  line-height:1.05;\n}\n\n/* branch connector */\n.branch-wrap{\n  position:relative;\n  width:70%;\n  max-width:760px;\n  height:56px;\n  margin:8px auto 0;\n}\n.branch-wrap .trunk{\n  position:absolute;\n  left:50%;\n  top:0;\n  width:3px;\n  height:22px;\n  background:var(--ink);\n  transform:translateX(-50%);\n}\n.branch-wrap .bar{\n  position:absolute;\n  left:8%;\n  right:8%;\n  top:22px;\n  height:3px;\n  background:var(--ink);\n}\n.branch-wrap .stem{\n  position:absolute;\n  top:22px;\n  width:3px;\n  height:34px;\n  background:var(--ink);\n}\n.branch-wrap .stem.s1{left:8%;}\n.branch-wrap .stem.s2{left:50%;transform:translateX(-1.5px);}\n.branch-wrap .stem.s3{left:92%;transform:translateX(-3px);}\n\n/* hero stats row */\n.hero-stats-wrap{\n  width:100%;\n  padding:18px 56px 8px;\n  display:flex;\n  justify-content:center;\n}\n\n.divider{\n  width:calc(100% - 112px);\n  height:1px;\n  background:var(--grid);\n  margin:28px auto 0;\n}\n\n/* chart grid */\n.chart-grid{\n  width:100%;\n  padding:32px 56px 8px;\n  display:grid;\n  grid-template-columns:repeat(3,1fr);\n  gap:28px;\n}\n.chart-card{\n  position:relative;\n  background:#fff;\n  border:2.5px solid var(--ink);\n  border-radius:24px;\n  padding:36px 22px 22px;\n  min-height:220px;\n}\n.node-dot{\n  position:absolute;\n  top:-22px;\n  left:24px;\n  width:44px;\n  height:44px;\n  border-radius:50%;\n  background:var(--a1);\n  border:3px solid var(--ink);\n}\n.node-dot.alt{background:var(--a2);}\n\n/* mini cards row */\n.mini-cards-row{\n  width:100%;\n  padding:24px 56px 8px;\n  display:flex;\n  gap:20px;\n  justify-content:center;\n  flex-wrap:wrap;\n}\n\n/* footer */\n.footer{\n  width:100%;\n  padding:40px 56px 56px;\n  display:flex;\n  flex-direction:column;\n  align-items:center;\n  gap:14px;\n}\n.badge{\n  border:2.5px solid var(--ink);\n  border-radius:24px;\n  padding:14px 40px;\n  font-weight:900;\n  font-size:22px;\n  letter-spacing:1px;\n  text-transform:uppercase;\n  color:var(--ink);\n  background:#fff;\n}\n.source{\n  font-size:13px;\n  color:var(--muted);\n  letter-spacing:.5px;\n}\n</style>\n</head>\n<body>\n<div class=\"page\">\n\n  <div class=\"hero-bar\">\n    <span class=\"brand\">{{BRAND}}</span>\n    <span class=\"eyebrow-pill\">{{EYEBROW}}</span>\n  </div>\n\n  <header class=\"title-block\">\n    <p class=\"subtitle\">{{SUBTITLE}}</p>\n    <h1 class=\"title\">{{TITLE}}</h1>\n  </header>\n\n  <div class=\"branch-wrap\">\n    <div class=\"trunk\"></div>\n    <div class=\"bar\"></div>\n    <div class=\"stem s1\"></div>\n    <div class=\"stem s2\"></div>\n    <div class=\"stem s3\"></div>\n  </div>\n\n  <section class=\"hero-stats-wrap\">\n    {{HERO_STATS}}\n  </section>\n\n  <div class=\"divider\"></div>\n\n  <section class=\"chart-grid\">\n    <div class=\"chart-card\">\n      <span class=\"node-dot\"></span>\n      {{CHART_1}}\n    </div>\n    <div class=\"chart-card\">\n      <span class=\"node-dot alt\"></span>\n      {{CHART_2}}\n    </div>\n    <div class=\"chart-card\">\n      <span class=\"node-dot\"></span>\n      {{CHART_3}}\n    </div>\n  </section>\n\n  <section class=\"mini-cards-row\">\n    {{MINI_CARDS}}\n  </section>\n\n  <footer class=\"footer\">\n    <div class=\"badge\">{{BRAND}}</div>\n    <p class=\"source\">{{SOURCE}}</p>\n  </footer>\n\n</div>\n</body>\n</html>",
+      "source": "learned-vision",
+      "created": "2026-07-13"
     }
   ]
 }

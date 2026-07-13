@@ -80,7 +80,8 @@ def _candidates(trends: dict, max_candidates: int = 8) -> list[dict]:
 
 
 def _profile_batch(cands: list[dict]) -> list[dict]:
-    """LLM 배치 1회 — 후보별 프로필+적합성. 실패 시 [] (호출자가 팩 생성 포기 → 02 폴백)."""
+    """LLM 배치 1회 — 후보별 프로필+적합성.
+    LLM 미가용(빈 응답) 시 섹터 기반 기본 프로필로 폴백 — 발행 차단 방지."""
     if not cands:
         return []
     from shared.llm import invoke_text
@@ -91,19 +92,31 @@ def _profile_batch(cands: list[dict]) -> list[dict]:
         "analyzer",
         # (_essential — 프로필은 키워드 단독 전송 금지 규정의 심장: 회로 차단 중에도 1회 실시도)
         "다음 트렌드 키워드 각각에 대해 JSON 배열로만 답해라 (다른 말 금지).\n"
-        "각 항목: {\"keyword\": 원문 그대로, \"fit\": true|false, \"sector\": 교정 섹터,\n"
+        "각 항목: {\"keyword\": 원문 그대로, \"fit\": true 또는 false, \"sector\": 교정 섹터,\n"
         "  \"summary\": 키워드가 무엇인지 한 문장 (동음이의 구분 명확히),\n"
-        "  \"related_terms\": 관련어 5개 배열, \"entity_type\": 기업|산업|정책|지표|사건|제품|기타}\n\n"
-        "fit 판정: 한국 *경제·금융·산업·투자* 독자용 블로그 주제로 적합하면 true.\n"
-        "동식물·자연물·인물·연예·스포츠 등 경제 무관 대상은 false\n"
-        "(예: '은행나무'는 나무(활엽수·산림·은행열매)이므로 false — summary 에 그 실체를 쓸 것.\n"
-        " '기준금리'·'반도체 수출'은 true).\n\n"
+        "  \"related_terms\": 관련어 5개 배열, \"entity_type\": 기업 또는 산업 또는 정책 또는 지표 또는 사건 또는 제품 또는 기타}\n\n"
+        "fit 판정: 한국 경제 금융 산업 투자 독자용 블로그 주제로 적합하면 true.\n"
+        "동식물 자연물 인물 연예 스포츠 등 경제 무관 대상은 false\n"
+        "(예: 은행나무는 나무이므로 false. 기준금리 반도체수출은 true).\n\n"
         f"[키워드 목록]\n{lines}",
         max_tokens=2000,
         _essential=True,
     )
     if not (raw or "").strip():
-        return []
+        # LLM 빈 응답 — 섹터 기반 기본 프로필로 폴백 (발행 차단 방지)
+        # RADAR가 이미 경제 섹터로 분류한 후보이므로 fit=True 간주
+        log.warning("[topic_pack] 프로필 LLM 빈 응답 → 섹터 기본 프로필 폴백")
+        return [
+            {
+                "keyword": c.get("keyword", ""),
+                "fit": True,
+                "sector": c.get("sector", ""),
+                "summary": f"{c.get('keyword', '')} 관련 경제·금융 트렌드",
+                "related_terms": [],
+                "entity_type": "기타",
+            }
+            for c in cands if c.get("keyword")
+        ]
     try:
         import re
         m = re.search(r"\[.*\]", raw, re.DOTALL)

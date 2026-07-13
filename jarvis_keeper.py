@@ -24,6 +24,7 @@ launchd KeepAlive=true 로 macOS 부팅 시 자동 시작됨.
 """
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import signal
@@ -37,6 +38,8 @@ DAEMON_SCRIPT = JARVIS_DIR / "jarvis_daemon.py"
 PID_FILE = JARVIS_DIR / "logs" / "daemon.pid"
 HEARTBEAT_FILE = JARVIS_DIR / "logs" / "daemon.heartbeat"   # 데몬 스케줄러 생존 신호
 PYTHON = JARVIS_DIR / ".venv" / "bin" / "python"
+KEEPER_LOCK_FILE = JARVIS_DIR / "logs" / "keeper.lock"      # ★ keeper 자신의 중복 실행 방지
+_keeper_lock_fd = None   # 프로세스 생존 동안 열어 둬야 락 유지 (GC 방지)
 CHECK_INTERVAL = 30      # 초
 MAX_RESTART_DELAY = 300  # 연속 실패 시 최대 5분 대기
 HANG_THRESHOLD = 360     # heartbeat 이만큼(초) stale 이면 hang 판정 (6분 = 6 missed beats)
@@ -53,6 +56,29 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 log = logging.getLogger("jarvis.keeper")
+
+
+def _acquire_keeper_lock() -> None:
+    """keeper 자신의 중복 실행 차단 (fcntl 비블로킹 배타 락).
+
+    ★ (2026-07-12) launchd KeepAlive 경로 밖에서 keeper 가 우발적으로 두 번째
+    스폰되면(수동 실행·wake 레이스 등), 두 keeper 가 각자 독립적으로 데몬 다운을
+    감지해 거의 동시에 jarvis_daemon.py 를 중복 스폰 → crewai/langgraph 등 무거운
+    import 를 두 벌 동시 로딩 → 메모리 압박으로 OS 가 한쪽을 SIGKILL(-9) →
+    "데몬 즉시 종료 returncode=-9" 오탐 반복. jarvis_daemon.py 는 이미 동일 패턴의
+    자체 락(`_acquire_lock`)을 갖고 있으나 감시자인 keeper 자신에는 없어 발생한 사고.
+    """
+    global _keeper_lock_fd
+    _keeper_lock_fd = open(KEEPER_LOCK_FILE, "a")
+    try:
+        fcntl.flock(_keeper_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except IOError:
+        log.error("🚫 jarvis_keeper 이미 실행 중 — 중복 인스턴스 종료합니다.")
+        sys.exit(1)
+    _keeper_lock_fd.seek(0)
+    _keeper_lock_fd.truncate()
+    _keeper_lock_fd.write(str(os.getpid()))
+    _keeper_lock_fd.flush()
 
 
 def _read_pid() -> int | None:
@@ -265,4 +291,5 @@ def main() -> None:
 if __name__ == "__main__":
     # SIGTERM 수신 시 깔끔하게 종료
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    _acquire_keeper_lock()
     main()

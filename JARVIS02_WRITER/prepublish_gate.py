@@ -78,7 +78,8 @@ def prepublish_quality_issues(draft, post_type: str = "",
         try:
             from JARVIS02_WRITER.law_enforcer import (
                 _build_source_corpus, _collect_gt_floats,
-                _collected_gt, _claim_all_grounded,
+                _collected_gt, _claim_all_grounded, _market_point_deltas,
+                _NUMERIC_UNIT_RE,
             )
             corpus = _build_source_corpus(source_docs, market_data)
         except Exception as e:
@@ -89,11 +90,25 @@ def prepublish_quality_issues(draft, post_type: str = "",
         if _fact_on:
             gt: list = []
             try:
-                gt = _collect_gt_floats(market_data, stocks_data, corpus) + _collected_gt(collected)
+                gt = (_collect_gt_floats(market_data, stocks_data, corpus)
+                      + _collected_gt(collected) + _market_point_deltas(market_data))
             except Exception:
                 pass
             blocked_n = 0
             for claim in (cqr.get("blocked_claims") or []):
+                # ★ ERRORS harness 2026-07-12: _claim_all_grounded 는 단위-숫자 토큰이
+                #   전혀 없으면(_NUMERIC_UNIT_RE 미매치) 설계상 항상 False(미확인) 반환한다.
+                #   LLM 프롬프트는 "숫자 없는 서술 제외"를 지시하지만 흑자/적자 같은
+                #   종목 손익 분류 주장은 종종 숫자 없이 blocked_claims 에 섞여 들어온다 —
+                #   그러면 어떤 재작성에도 영원히 grounded=False 라 무한 재작성 순환에 빠진다.
+                #   숫자 토큰이 없는 주장은 stocks_data 실측(is_profit)으로만 결정론 대조하고,
+                #   대조 불가(매치 없음)면 정책대로 차단하지 않는다(★ 숫자 없는 서술 제외).
+                if not _NUMERIC_UNIT_RE.search(claim):
+                    issue = _profit_claim_issue(claim, stocks_data)
+                    if issue:
+                        out.append(issue)
+                        blocked_n += 1
+                    continue
                 try:
                     grounded = _claim_all_grounded(claim, gt) if gt else False
                 except Exception:
@@ -165,6 +180,44 @@ def _stock_facts_leg(body: str, stocks_data) -> list[dict]:
     if out:
         log.warning(f"[prepublish_gate] 실측 재무 불일치 {len(out)}건 → 재작성 순환")
     return out
+
+
+def _profit_claim_issue(claim: str, stocks_data) -> dict | None:
+    """숫자 없는 흑자/적자(손익 분류) 주장 → stocks_data 실측 is_profit 결정론 대조.
+
+    ★ ERRORS harness 2026-07-12: _claim_all_grounded 는 단위-숫자 토큰 매칭 전용이라
+      "OO은 흑자 종목, XX는 적자 종목" 처럼 숫자가 없는 손익 분류 주장은 검증 불가능
+      (설계상 항상 미확인=차단). 이런 주장은 stocks_data(collect_stocks_data 의
+      is_profit = net_income>0)로 직접 대조 가능하므로 여기서 결정론 판정한다.
+      종목명이 stocks_data 에 없거나 흑자/적자 단어가 같은 절에 없으면 대조 불가 →
+      정책대로(★ 숫자 없는 서술 제외) 차단하지 않고 None 반환.
+
+    ★ 절 단위 매칭(쉼표 분리) — 고정폭 문자 윈도우는 "A는 흑자 종목인 반면, B는
+      적자 종목" 처럼 대조 문장에서 쉼표 너머 *다른 종목의* 흑자/적자 단어를 잘못
+      끌어와 오탐(정상 주장을 차단)한다. 종목명과 흑자/적자 단어가 *같은 쉼표절*
+      안에 있을 때만 대조한다.
+    """
+    stocks = (stocks_data or {}).get("stocks") if isinstance(stocks_data, dict) else None
+    if not stocks:
+        return None
+    clauses = claim.split(",")
+    for s in stocks:
+        if not isinstance(s, dict):
+            continue
+        name = (s.get("name") or "").strip()
+        is_profit = s.get("is_profit")
+        if not name or is_profit is None:
+            continue
+        for clause in clauses:
+            if name not in clause:
+                continue
+            if "흑자" in clause and not is_profit:
+                return {"kind": "factuality",
+                        "detail": f"[사실성] {name} 흑자 분류 주장 — 실측 순이익 적자와 불일치"}
+            if "적자" in clause and is_profit:
+                return {"kind": "factuality",
+                        "detail": f"[사실성] {name} 적자 분류 주장 — 실측 순이익 흑자와 불일치"}
+    return None
 
 
 def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -> dict:

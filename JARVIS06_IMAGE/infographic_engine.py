@@ -948,6 +948,7 @@ def _render_single(ds, title, subtitle, out_path, seed, src, chip="", slot=""):
 
 
 _TRUSTED_PROVIDERS = {"krx", "yfinance", "ecos", "dart", "kosis", "bok", "web", "market", "draft_slot"}  # draft_slot = [CHART_N]...[/CHART_N] 대본 내장 데이터
+_TRUSTED_PROVIDER_PREFIXES = {"evidence"}  # evidence:news / evidence:api 등 — 실문서 추출 수치
 
 # provider → 사람이 읽는 출처 표기 (footer). 데이터셋마다 *진짜* 출처를 명시 (mislabel 방지).
 _PROVIDER_LABEL = {
@@ -979,7 +980,9 @@ def _verify_dataset(ds) -> bool:
     src = ds.get("source") or {}
     prov = str(src.get("provider", "")).lower().strip()
     url = str(src.get("url", "")).strip()
-    if not (prov in _TRUSTED_PROVIDERS or url.startswith("http")):
+    prov_prefix = prov.split(":")[0] if ":" in prov else prov
+    if not (prov in _TRUSTED_PROVIDERS or prov_prefix in _TRUSTED_PROVIDER_PREFIXES
+            or url.startswith("http")):
         return False
     # 값이 숫자인 행이 하나라도 있어야
     for r in data:

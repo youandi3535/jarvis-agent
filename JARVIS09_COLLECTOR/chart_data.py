@@ -160,6 +160,53 @@ def _kosdaq150_sector_datasets(theme: str) -> list[dict]:
         return []
 
 
+# ── 0.5. 글로벌 시장 지표 fast-path (_MACRO_KWS 주제 전용, plan 없어도 동작) ──
+def _global_market_datasets(theme: str) -> list[dict]:
+    """거시경제 주제(나스닥·환율·금리 등) 전용 fast-path.
+
+    get_market_data() 구조화 API → kpi_cards dataset. LLM 불필요.
+    plan_data_sources 가 timeout/실패해도 항상 실데이터 공급.
+    ADR 010: 출처(provenance) 박제, 합성 수치 절대 금지.
+    """
+    theme_lc = theme.lower()
+    if not any(k in theme_lc for k in _MACRO_KWS):
+        return []
+    try:
+        from JARVIS09_COLLECTOR.providers.economic_data_provider import get_market_data
+        market = get_market_data() or {}
+    except Exception as e:
+        log.warning(f"[chart_data] 글로벌 시장 fast-path 실패: {e}")
+        return []
+    if not market:
+        return []
+
+    _INDICES = ["코스피", "코스닥", "S&P500", "NASDAQ", "DOW"]
+    _FX_COMMO = ["달러/원", "금", "유가(WTI)"]
+    _RATES = ["미국채10년"]
+
+    def _make_ds(title, keys, unit):
+        rows = [(k, market[k]) for k in keys if k in market and market[k].get("value")]
+        if not rows:
+            return None
+        as_of = max((v.get("as_of") or "") for _, v in rows)
+        data = [{"label": k, "value": v.get("value", 0), "change_pct": v.get("change", 0)}
+                for k, v in rows]
+        fp = _fingerprint(title, unit)
+        return {"title": title, "viz_hint": "kpi_cards", "unit": unit, "data": data,
+                "source": {"provider": "yfinance", "name": "Yahoo Finance",
+                           "url": "https://finance.yahoo.com", "as_of": as_of},
+                "fingerprint": fp}
+
+    result = [ds for ds in [
+        _make_ds("주요 증시 지표", _INDICES, "pt"),
+        _make_ds("환율·원자재", _FX_COMMO, ""),
+        _make_ds("금리 지표", _RATES, "%"),
+    ] if ds]
+    if result:
+        log.info(f"[chart_data] '{theme}' 글로벌 시장 fast-path: {len(result)}개 dataset")
+    return result
+
+
 # ── 1. 시장 거래대금 dataset (코스피·코스닥 주제 전용) ─────────────────────
 def _market_trading_volume_datasets(theme: str) -> list[dict]:
     """코스피·코스닥 일평균 거래대금 비교 dataset.
@@ -1219,6 +1266,12 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
 
     # ── 0) topic_pack 선행 동의어 (LLM 0) — plan 에 없으면 _plan_desc 에 힌트로 전달
     _syns_param = list(synonyms) if synonyms else []
+
+    # ── 0.5) 거시경제 글로벌 시장 fast-path (LLM 0, plan 없어도 동작) ────────
+    #   나스닥·코스피·환율·금리 등 _MACRO_KWS 주제는 get_market_data() 직접 조회.
+    #   plan_data_sources 가 timeout/실패해도 항상 실데이터 공급 (ADR 010).
+    datasets.extend(_global_market_datasets(theme))
+    _elapsed(f"0.5) 글로벌 시장 fast-path (datasets={len(datasets)})")
 
     # ── 1) 설계 + 조준 수집 ──────────────────────────────────────────────────
     #    plan_data_sources 가 synonyms 도 함께 반환 (LLM 1회로 설계+동의어 통합)

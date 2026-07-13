@@ -67,8 +67,13 @@ def _fmt(v):
     f = _num(v)
     if f is None:
         return str(v)
+    if f == 0:
+        return "0"
     if f == int(f):
         return f"{int(f):,}"
+    # ★ 0.1 미만 소수: 소수2자리 (0.03 → "0.03", "0.0" 방지)
+    if 0 < abs(f) < 0.1:
+        return f"{f:.2f}"
     return f"{f:,.1f}" if abs(f) < 1000 else f"{f:,.0f}"
 
 
@@ -97,7 +102,10 @@ def _auto_scale(val, unit):
 
 
 def _scale_rows_uniform(rows, unit):
-    """rows 전체에 동일 스케일 적용 (차트 내 단위 통일)."""
+    """rows 전체에 동일 스케일 적용 (차트 내 단위 통일).
+
+    ★ 정밀도 적응형: 스케일 후 최솟값이 0.05 미만이면 소수2자리 — "0.03조" 를 "0" 으로 반올림하는 버그 방지.
+    """
     if not rows:
         return rows, unit
     max_abs = max(abs(v) for _, v in rows)
@@ -105,7 +113,9 @@ def _scale_rows_uniform(rows, unit):
     if new_unit == unit or max_abs == 0:
         return rows, unit
     ratio = scaled_max / max_abs
-    new_rows = [(lb, round(v * ratio, 1)) for lb, v in rows]
+    min_nz = min((abs(v) * ratio for _, v in rows if v != 0), default=scaled_max)
+    prec = 2 if min_nz < 0.05 else 1
+    new_rows = [(lb, round(v * ratio, prec)) for lb, v in rows]
     return new_rows, new_unit
 
 
@@ -241,63 +251,64 @@ def _line_chart(series, pal, W=980, H=340, unit=""):
     return "".join(parts), note
 
 
-def _bar_chart(rows, pal, W=980, unit=""):
-    """가로 막대 랭킹 — 값 *내림차순 정렬 가정* (호출자가 실제값 desc 정렬).
+_SKEW_SPLIT_RATIO = 10  # 1위/2위 비율 이상이면 분리형 레이아웃
 
-    ★ 음수 처리 (사용자 박제 2026-07-06): 값에 음수가 있으면 0 기준선 발산형 —
-    양수는 우측, 음수는 좌측으로. 순위·막대길이·1위 강조 모두 *절댓값 아닌 실제값* 기준
-    (예: ROE -72.4% 는 1등이 아니라 꼴찌 · 좌측 막대). 값 라벨은 우측 정렬 컬럼.
-    """
-    rows = rows[:7]
-    if not rows:
-        return ""
-    rows, unit = _scale_rows_uniform(rows, unit)
+
+def _bar_defs(pal, grad_id="bg"):
+    return (f"<defs><linearGradient id='{grad_id}' x1='0' y1='0' x2='1' y2='0'>"
+            f"<stop offset='0' stop-color='{pal['a1']}'/>"
+            f"<stop offset='1' stop-color='{pal['a2']}'/></linearGradient></defs>")
+
+
+def _bar_chart_diverging(rows, pal, W, unit):
+    """발산형(0 중앙): 음수 있을 때 양수 우측·음수 좌측."""
+    _u = unit if unit == "%" else (f" {unit}" if unit else "")
     vals = [v for _, v in rows]
     vmax, vmin = max(vals), min(vals)
-    _defs = ("<defs>"
-             f"<linearGradient id='bg' x1='0' y1='0' x2='1' y2='0'>"
-             f"<stop offset='0' stop-color='{pal['a1']}'/><stop offset='1' stop-color='{pal['a2']}'/></linearGradient></defs>")
-    # ★ 단위 접미사: % 는 값 바로 뒤, 나머지는 공백+단위
+    L, R = 40, W - 40
+    cx = (L + R) / 2.0
+    half = (R - L) / 2.0 - 55
+    span = max(abs(vmax), abs(vmin)) or 1.0
+    rowH, gap, barH = 62, 16, 26
+    H = len(rows) * (rowH + gap) + 16
+    parts = [f"<svg width='100%' viewBox='0 0 {W} {H}' fill='none' style='display:block'>",
+             _bar_defs(pal),
+             f"<line x1='{cx:.0f}' y1='6' x2='{cx:.0f}' y2='{H - 10}' stroke='{pal['muted']}' "
+             f"stroke-width='1.6' opacity='.45'/>"]
+    y = 12
+    for i, (lb, v) in enumerate(rows):
+        top = i == 0
+        bl = abs(v) / span * half
+        bx = cx if v >= 0 else cx - bl
+        fill = "url(#bg)" if top else (pal['a2'] if v >= 0 else pal['muted'])
+        parts.append(f"<text x='{cx:.0f}' y='{y + 15}' text-anchor='middle' fill='{pal['ink']}' "
+                     f"font-size='16' font-weight='{800 if top else 700}'>{lb}</text>")
+        parts.append(f"<rect x='{bx:.0f}' y='{y + 24}' width='{max(4, bl):.0f}' height='{barH}' rx='8' fill='{fill}'/>")
+        _val_txt = f"{_fmt(v)}{_u}"
+        if v >= 0:
+            parts.append(f"<text x='{cx + bl + 10:.0f}' y='{y + 43}' fill='{pal['ink']}' "
+                         f"font-size='17' font-weight='800'>{_val_txt}</text>")
+        else:
+            parts.append(f"<text x='{cx - bl - 10:.0f}' y='{y + 43}' text-anchor='end' fill='{pal['ink']}' "
+                         f"font-size='17' font-weight='800'>{_val_txt}</text>")
+        y += rowH + gap
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _bar_chart_linear(rows, pal, W, unit):
+    """일반 선형 막대: 좌측 라벨 + 좌정렬 막대 + 우측 값 컬럼."""
     _u = unit if unit == "%" else (f" {unit}" if unit else "")
-
-    if vmin < 0:
-        # ── 발산형(0 중앙): 항목명 중앙(0축) 위, 양수 우측 · 음수 좌측 ──
-        L, R = 40, W - 40
-        cx = (L + R) / 2.0                       # 0 기준선 = 중앙
-        half = (R - L) / 2.0 - 55                 # 값 라벨용 여백 확보
-        span = max(abs(vmax), abs(vmin)) or 1.0
-        rowH, gap, barH = 62, 16, 26
-        H = len(rows) * (rowH + gap) + 16
-        parts = [f"<svg width='100%' viewBox='0 0 {W} {H}' fill='none' style='display:block'>", _defs,
-                 f"<line x1='{cx:.0f}' y1='6' x2='{cx:.0f}' y2='{H - 10}' stroke='{pal['muted']}' stroke-width='1.6' opacity='.45'/>"]
-        y = 12
-        for i, (lb, v) in enumerate(rows):
-            top = i == 0
-            bl = abs(v) / span * half
-            bx = cx if v >= 0 else cx - bl
-            fill = "url(#bg)" if top else (pal['a2'] if v >= 0 else pal['muted'])
-            parts.append(f"<text x='{cx:.0f}' y='{y + 15}' text-anchor='middle' fill='{pal['ink']}' "
-                         f"font-size='16' font-weight='{800 if top else 700}'>{lb}</text>")
-            parts.append(f"<rect x='{bx:.0f}' y='{y + 24}' width='{max(4, bl):.0f}' height='{barH}' rx='8' fill='{fill}'/>")
-            _val_txt = f"{_fmt(v)}{_u}"
-            if v >= 0:
-                parts.append(f"<text x='{cx + bl + 10:.0f}' y='{y + 43}' fill='{pal['ink']}' "
-                             f"font-size='17' font-weight='800'>{_val_txt}</text>")
-            else:
-                parts.append(f"<text x='{cx - bl - 10:.0f}' y='{y + 43}' text-anchor='end' fill='{pal['ink']}' "
-                             f"font-size='17' font-weight='800'>{_val_txt}</text>")
-            y += rowH + gap
-        parts.append("</svg>")
-        return "".join(parts)
-
-    # ── 전부 동일 부호: 좌측 라벨 + 좌정렬 막대 + 우측 값 컬럼 ──
-    labelX, trackX = 210, 228  # ★ 긴 한글 라벨(최대 ~12자) 뷰박스 클리핑 방지 (150→210)
-    barMax = W - 470  # 우측 값 라벨 여백 (단위 자동 스케일 후 짧은 숫자 기준)
+    vals = [v for _, v in rows]
+    vmax = max(vals)
+    labelX, trackX = 210, 228
+    barMax = W - 470
     rowH, gap = 46, 20
     H = len(rows) * (rowH + gap) + 20
     valX = trackX + barMax + 12
     mx = vmax or 1.0
-    parts = [f"<svg width='100%' viewBox='0 0 {W} {H}' fill='none' style='display:block'>", _defs]
+    parts = [f"<svg width='100%' viewBox='0 0 {W} {H}' fill='none' style='display:block'>",
+             _bar_defs(pal)]
     y = 10
     for i, (lb, v) in enumerate(rows):
         top = i == 0
@@ -311,6 +322,76 @@ def _bar_chart(rows, pal, W=980, unit=""):
         y += rowH + gap
     parts.append("</svg>")
     return "".join(parts)
+
+
+def _bar_chart_outlier_split(rows, pal, W, unit):
+    """극단 skew 분리형: 1위 outlier 히어로 + 나머지 별도 스케일 서브차트.
+
+    1위/2위 비율 >= _SKEW_SPLIT_RATIO 일 때 호출 (rows는 이미 scale 완료, desc 정렬).
+    """
+    _u = unit if unit == "%" else (f" {unit}" if unit else "")
+    top_lb, top_v = rows[0]
+    rest = rows[1:]
+    rest_pos = [v for _, v in rest if v > 0]
+    ratio_txt = f"{top_v / rest_pos[0]:.0f}배" if rest_pos else ""
+
+    trackX, barMax = 228, W - 470
+    valX = trackX + barMax + 12
+    hero_h = 80
+
+    hero_parts = [
+        f"<svg width='100%' viewBox='0 0 {W} {hero_h}' fill='none' style='display:block'>",
+        _bar_defs(pal, "bg_hero"),
+        # 라벨
+        f"<text x='210' y='38' text-anchor='end' fill='{pal['ink']}' font-size='17' font-weight='800'>{top_lb}</text>",
+        # 배경 트랙 + 꽉 찬 그라디언트 막대
+        f"<rect x='{trackX}' y='20' width='{barMax}' height='26' rx='9' fill='{pal['grid']}'/>",
+        f"<rect x='{trackX}' y='20' width='{barMax}' height='26' rx='9' fill='url(#bg_hero)'/>",
+        # 값 라벨
+        f"<text x='{valX}' y='38' fill='{pal['ink']}' font-size='18' font-weight='800'>{_fmt(top_v)}{_u}</text>",
+    ]
+    if ratio_txt:
+        hero_parts.append(
+            f"<text x='{valX}' y='62' fill='{pal['muted']}' font-size='13' font-weight='600'>"
+            f"↑ 2위 대비 {ratio_txt}</text>"
+        )
+    hero_parts.append("</svg>")
+    hero_svg = "".join(hero_parts)
+
+    divider = (
+        f"<div style='display:flex;align-items:center;gap:10px;margin:10px 0 6px'>"
+        f"<span style='flex:1;height:1px;background:{pal['grid']}'></span>"
+        f"<span style='font-size:13px;color:{pal['muted']};white-space:nowrap'>나머지 종목 (별도 스케일)</span>"
+        f"<span style='flex:1;height:1px;background:{pal['grid']}'></span>"
+        f"</div>"
+    )
+
+    # 나머지: 자체 max 기준으로 막대 비율 재계산 (별도 스케일 적용)
+    sub_svg = _bar_chart_linear(rest, pal, W, unit) if rest else ""
+    return hero_svg + divider + sub_svg
+
+
+def _bar_chart(rows, pal, W=980, unit=""):
+    """가로 막대 랭킹 — 값 *내림차순 정렬 가정* (호출자가 실제값 desc 정렬).
+
+    ★ 음수 처리 (사용자 박제 2026-07-06): 음수 있으면 발산형.
+    ★ 극단 skew (2026-07-13): 1위/2위 비율 >= _SKEW_SPLIT_RATIO 이면 분리형.
+    """
+    rows = rows[:7]
+    if not rows:
+        return ""
+    rows, unit = _scale_rows_uniform(rows, unit)
+    vals = [v for _, v in rows]
+    vmin = min(vals)
+
+    if vmin < 0:
+        return _bar_chart_diverging(rows, pal, W, unit)
+
+    # ★ 극단 skew 감지 — 1위/2위 비율 >= threshold
+    if len(vals) >= 2 and vals[1] > 0 and vals[0] / vals[1] >= _SKEW_SPLIT_RATIO:
+        return _bar_chart_outlier_split(rows, pal, W, unit)
+
+    return _bar_chart_linear(rows, pal, W, unit)
 
 
 def _donut(rows, pal, size=240, unit=""):
@@ -417,6 +498,14 @@ def _hero_texture(tex, pal):
 # ── 메인 렌더 ──────────────────────────────────────────────────────────────
 def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
     pal = recipe or _pick_palette(seed)
+
+    # 제목·카드 제목 내 'N종목' LLM 추정치 → 실데이터 실제 개수로 교정 (전 경로 공통)
+    def _fix_n(t, n):
+        return re.sub(r'\d+종목', f'{n}종목', t) if n > 0 and t else t
+    datasets = [{**d, "title": _fix_n(d.get("title", ""), len(_pairs(d)))} for d in (datasets or [])]
+    if datasets:
+        title = _fix_n(title, len(_pairs(datasets[0])))
+
     # ★ 학습된 레이아웃 템플릿 우선 — 임의 레이아웃 재현 (ERRORS [360]). 실패 시 기본 레이아웃 폴백.
     # 데이터셋 1개+ 이면 템플릿 시도 — 빈 슬롯은 Playwright CSS card:empty{display:none} 으로 자동 숨김.
     _n_ds = len([d for d in (datasets or []) if d.get("data")])
@@ -424,7 +513,7 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
     if tmpl and _n_ds >= 1:
         try:
             from JARVIS06_IMAGE.template_engine import render_layout, has_all_slots_resolved
-            _h = render_layout(tmpl, title, subtitle, datasets, pal, src=src)
+            _h = render_layout(tmpl, title, subtitle, datasets, pal, src=src, chip=chip)
             if _h and has_all_slots_resolved(_h):
                 return _h
         except Exception:

@@ -245,8 +245,16 @@ def verify_slot(slot: dict, ref_pairs: list[tuple[float, str]]) -> dict | None:
     return {**slot, "data": kept}
 
 
+def _path_to_img_html(path: str, alt: str = "") -> str:
+    """인포그래픽 파일 경로 → <p><img> HTML 블록."""
+    return (f'<p><img src="{path}" alt="{alt}" '
+            f'style="width:100%;max-width:760px;border-radius:8px;'
+            f'margin:16px auto;display:block;"></p>')
+
+
 def render_slot(slot: dict, out_dir, run_id: str = "", theme: str = "") -> str:
-    """검증된 슬롯 → 인포그래픽 렌더 (infographic_engine 위임). 실패 시 ""."""
+    """검증된 슬롯 → 인포그래픽 렌더 (infographic_engine 위임). 실패 시 "".
+    ★ 반환값은 <p><img> HTML — 파일 경로 아님 (draft HTML에 직접 삽입 가능)."""
     try:
         from JARVIS06_IMAGE.infographic_engine import generate_infographic
         ds = {
@@ -258,12 +266,13 @@ def render_slot(slot: dict, out_dir, run_id: str = "", theme: str = "") -> str:
                        "name": slot.get("source_name") or "자비스09 수집(대본 내장)",
                        "url": ""},
         }
-        return generate_infographic(
+        _path = generate_infographic(
             ds["title"], "수집 실데이터 기반", [ds],
             run_id=run_id, slot_key=f"slot{slot['idx']}", out_dir=out_dir,
             context=f"{theme} — {ds['title']}",
             src=f"데이터 출처: {ds['source']['name']}",
         ) or ""
+        return _path_to_img_html(_path, ds["title"][:40]) if _path else ""
     except Exception as e:
         log.warning(f"[slot] CHART_{slot['idx']} 렌더 실패: {e}")
         _g_report("image", e, module=__name__, func_name="render_slot")
@@ -356,7 +365,7 @@ def render_slots_from_collected(text: str, collected_datasets: list, out_dir,
             continue
 
         try:
-            html = generate_infographic(
+            _img_path = generate_infographic(
                 render_ds["title"], "수집 실데이터 기반", [render_ds],
                 run_id=run_id, slot_key=f"slot{slot['idx']}", out_dir=out_dir,
                 context=f"{theme} — {render_ds['title']}",
@@ -365,10 +374,11 @@ def render_slots_from_collected(text: str, collected_datasets: list, out_dir,
         except Exception as e:
             log.warning(f"[slot] CHART_{slot['idx']} 렌더 실패: {e}")
             _g_report("image", e, module=__name__, func_name="render_slots_from_collected")
-            html = ""
+            _img_path = ""
 
-        if html:
-            text = text.replace(slot["raw"], html, 1)
+        if _img_path:
+            img_html = _path_to_img_html(_img_path, slot_title[:40])
+            text = text.replace(slot["raw"], img_html, 1)
             ok += 1
             print(f"  ✅ [slot] CHART_{slot['idx']} 실데이터 렌더 완료 [{best.get('title','')}]")
         else:

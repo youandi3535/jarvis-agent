@@ -878,16 +878,19 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
         for _attempt in range(3):
             try:
                 if _title_el:
-                    # ① move_to_element().click() — 제목칸으로 커서 이동 (본문 포커스 해제)
+                    # ① ActionChains 클릭으로 SmartEditor 커서 활성화 후 키 이벤트 직접 전달
+                    #   execCommand('insertText')는 SmartEditor ONE 이벤트 시스템을 통과 못 함
+                    #   ActionChains는 CDP 레벨 키 이벤트라 SmartEditor 내부까지 전달됨
                     _AC2(driver).move_to_element(_title_el).click().perform()
                     time.sleep(0.3)
-                    # ② 기존 내용 전체 선택 후 삭제 — 재시도 시 제목 누적 방지
-                    _title_el.send_keys((_K2.COMMAND if IS_MAC else _K2.CONTROL) + 'a')
-                    time.sleep(0.1)
-                    _title_el.send_keys(_K2.DELETE)
-                    time.sleep(0.1)
-                    # ③ 제목 직접 입력 — DOM element 직접 전달, OS포커스 무관
-                    _title_el.send_keys(_want)
+                    _mod = _K2.COMMAND if IS_MAC else _K2.CONTROL
+                    (
+                        _AC2(driver)
+                        .key_down(_mod).send_keys('a').key_up(_mod)
+                        .send_keys(_K2.DELETE)
+                        .send_keys(_want)
+                        .perform()
+                    )
                     time.sleep(0.5)
                 else:
                     _paste_title()   # element 미발견 시 기존 클립보드 폴백

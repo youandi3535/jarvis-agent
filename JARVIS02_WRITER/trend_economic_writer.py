@@ -1264,7 +1264,43 @@ def run_naver(ts_keyword: str = '') -> dict:
 #  분리 함수 — 대본 생성 + 발행 분리 (병렬화용)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def ts_collect(nv_keyword: str = '', supreme_block=None) -> dict:
+def _market_data_to_datasets(market_data: dict) -> list:
+    """경제 브리핑 전용: market_data → CollectedData datasets 변환.
+
+    collect_chart_data 가 빈 결과일 때 시장 지표를 이미지 파이프라인에 공급.
+    market_data 구조: {"market": {지표명: {value, change, as_of}}, "calendar": [...]}
+    """
+    import hashlib as _hl
+    market = (market_data or {}).get("market") or {}
+    if not market:
+        return []
+
+    _INDICES = ["코스피", "코스닥", "S&P500", "NASDAQ", "DOW"]
+    _FX_COMMO = ["달러/원", "금", "유가(WTI)"]
+    _RATES = ["미국채10년"]
+
+    def _make_ds(title, keys, unit, src_name, src_url):
+        rows = [(k, market[k]) for k in keys if k in market]
+        if not rows:
+            return None
+        as_of = max((v.get("as_of") or "") for _, v in rows)
+        data = [{"label": k, "value": v.get("value", 0), "change_pct": v.get("change", 0)}
+                for k, v in rows]
+        fp = _hl.md5(f"{title}{as_of}".encode()).hexdigest()[:12]
+        return {"title": title, "viz_hint": "kpi_cards", "unit": unit,
+                "data": data,
+                "source": {"provider": "yfinance", "name": src_name,
+                           "url": src_url, "as_of": as_of},
+                "fingerprint": fp}
+
+    return [ds for ds in [
+        _make_ds("주요 증시 지표", _INDICES, "pt", "Yahoo Finance", "https://finance.yahoo.com"),
+        _make_ds("환율·원자재", _FX_COMMO, "", "Yahoo Finance", "https://finance.yahoo.com"),
+        _make_ds("금리 지표", _RATES, "%", "Yahoo Finance", "https://finance.yahoo.com"),
+    ] if ds]
+
+
+def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | None = None) -> dict:
     """티스토리 주제선정 + JARVIS09 수집 + CollectedData 조립.
 
     Returns: success, keyword, sector, reason, collected (CollectedData),
@@ -1342,12 +1378,28 @@ def ts_collect(nv_keyword: str = '', supreme_block=None) -> dict:
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
             # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
-            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
+            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep, facts_to_datasets as _f2d
             _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}
+            # ★ facts → datasets 변환 후 _pool에 병합 (text 수치도 차트化 — 이미지 개수 확대)
+            try:
+                _fact_ds = _f2d(_ev_pack)
+                if _fact_ds:
+                    _existing_titles = {d.get("title", "") for d in _pool}
+                    _new_ds = [d for d in _fact_ds if d.get("title", "") not in _existing_titles]
+                    _pool = _pool + _new_ds
+                    print(f"  📊 [facts→datasets] {len(_new_ds)}개 수치 데이터셋 추가 (총 {len(_pool)}개)")
+            except Exception as _f2d_e:
+                print(f"  ⚠️ [facts→datasets] 변환 스킵: {_f2d_e}")
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
                   f"데이터셋 {len(_pool)}개")
         except Exception as _je:
             print(f"  ⚠️ [JARVIS09] 수집 실패: {_je}")
+
+        # ★ 경제 브리핑 전용: 차트 데이터 없으면 시장 지표로 폴백
+        if not _pool and market_data:
+            _pool = _market_data_to_datasets(market_data)
+            if _pool:
+                print(f"  🔄 [시장지표 폴백] 차트 데이터 없음 → 시장 지표 {len(_pool)}개 datasets 생성")
 
         # 데이터 카탈로그 주입
         try:
@@ -1529,7 +1581,7 @@ def ts_publish(draft: dict) -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
 
-def nv_collect(ts_keyword: str = '', supreme_block=None) -> dict:
+def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | None = None) -> dict:
     """네이버 주제선정 + JARVIS09 수집 + CollectedData 조립.
 
     Returns: success, keyword, sector, reason, collected (CollectedData),
@@ -1603,12 +1655,28 @@ def nv_collect(ts_keyword: str = '', supreme_block=None) -> dict:
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
             # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
-            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
+            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep, facts_to_datasets as _f2d
             _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}
+            # ★ facts → datasets 변환 후 _pool에 병합 (text 수치도 차트化 — 이미지 개수 확대)
+            try:
+                _fact_ds = _f2d(_ev_pack)
+                if _fact_ds:
+                    _existing_titles = {d.get("title", "") for d in _pool}
+                    _new_ds = [d for d in _fact_ds if d.get("title", "") not in _existing_titles]
+                    _pool = _pool + _new_ds
+                    print(f"  📊 [facts→datasets] {len(_new_ds)}개 수치 데이터셋 추가 (총 {len(_pool)}개)")
+            except Exception as _f2d_e:
+                print(f"  ⚠️ [facts→datasets] 변환 스킵: {_f2d_e}")
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
                   f"데이터셋 {len(_pool)}개")
         except Exception as _je:
             print(f"  ⚠️ [JARVIS09] 수집 실패: {_je}")
+
+        # ★ 경제 브리핑 전용: 차트 데이터 없으면 시장 지표로 폴백
+        if not _pool and market_data:
+            _pool = _market_data_to_datasets(market_data)
+            if _pool:
+                print(f"  🔄 [시장지표 폴백] 차트 데이터 없음 → 시장 지표 {len(_pool)}개 datasets 생성")
 
         # 데이터 카탈로그 주입
         try:

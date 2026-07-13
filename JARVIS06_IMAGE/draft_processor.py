@@ -301,12 +301,15 @@ def _render_photo_slots(html: str, collected, out_dir: Path, run_id: str,
 # 흐름에서도 호출 제거 (① 차트 / ② 사진 / 썸네일 / 캡처 / 조립).
 
 
-def _inject_leader_price_charts(html: str, collected) -> str:
+def _inject_leader_price_charts(html: str, collected, out_dir=None) -> str:
     """[PRICE_CHART_LEADER]...[/PRICE_CHART_LEADER] 슬롯 → 주가 차트 교체.
 
     주 경로: collected.datasets 의 viz_hint="stock_price" 데이터로 차트 생성
     폴백   : 데이터 없으면 collected.entities ticker 로 yfinance 직접 조회
     실데이터 없으면 슬롯 제거 (ADR 010 — 거짓 차트 금지).
+
+    out_dir 제공 시 PNG 파일로 저장 → <figure><img src="..."/> 반환 (발행자 업로드 가능).
+    out_dir 없으면 base64 data URI (backward compat).
 
     rank는 1-indexed (collect_theme.py enumerate(stocks, 1)):
       rank=1 → 대장주 (label_key="leader")
@@ -351,10 +354,16 @@ def _inject_leader_price_charts(html: str, collected) -> str:
         # 주 경로: collected.datasets 의 분기별 데이터
         ds = _price_ds.get(label_key)
         if ds and ds.get("data"):
+            _out_path = None
+            if out_dir:
+                import hashlib as _hlib
+                _h = _hlib.md5(f"{label_key}{ds.get('name','')}".encode()).hexdigest()[:8]
+                _out_path = Path(out_dir) / f"price_{label_key}_{_h}.png"
             chart_html = make_leader_price_chart_from_data(
                 rows=ds["data"],
                 name=ds.get("name", label_key),
                 period=ds.get("period", ""),
+                out_path=_out_path,
             )
 
         # 폴백: entities ticker 로 실시간 조회 (ticker 없으면 code 사용 — ERRORS [402] 연관)
@@ -362,8 +371,13 @@ def _inject_leader_price_charts(html: str, collected) -> str:
             stock = _by_rank.get(rank)
             _yf_ticker = stock.get("ticker") or stock.get("code") or "" if stock else ""
             if stock and _yf_ticker and stock.get("name"):
+                _out_path = None
+                if out_dir:
+                    import hashlib as _hlib
+                    _h = _hlib.md5(f"{label_key}{_yf_ticker}".encode()).hexdigest()[:8]
+                    _out_path = Path(out_dir) / f"price_{label_key}_{_h}.png"
                 chart_html = make_leader_price_chart(
-                    yf_ticker=_yf_ticker, name=stock["name"]
+                    yf_ticker=_yf_ticker, name=stock["name"], out_path=_out_path
                 )
 
         html = slot_pat.sub(chart_html, html)  # 차트 없으면 chart_html="" → 슬롯 제거
@@ -438,7 +452,7 @@ def process_draft(draft_html: str, collected, platform: str = "tistory",
     #   주 경로: collected.datasets 의 viz_hint="stock_price" 분기별 데이터
     #   폴백:   collected.entities 의 ticker 로 yfinance 실시간 조회
     if category == "theme":
-        html = _inject_leader_price_charts(html, collected)
+        html = _inject_leader_price_charts(html, collected, out_dir=out_dir)
 
     # ★ min-N top-up — 실데이터 인포그래픽만 (사용자 박제 2026-07-06: 본문 이미지 = 인포그래픽
     #   디자인만, 폴백 없음). datasets 로 결정론 인포그래픽을 채우고, *소진되면 그대로 둔다*

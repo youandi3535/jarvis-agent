@@ -63,7 +63,7 @@ def _slot_hero_stats(datasets, pal) -> str:
         pts = sorted(_pairs(d), key=lambda kv: -abs(kv[1]))
         if pts:
             top = pts[0]
-            blocks.append(_hero_stat(pal, f"최고 · {d.get('title','')}",
+            blocks.append(_hero_stat(pal, "최고가 종목",
                                      f"{_fmt(top[1])}<span style='font-size:30px'> {d.get('unit','')}</span>",
                                      f"{top[0]}", pal["a1"], pal["a1s"]))
             if len(pts) > 1:
@@ -101,9 +101,10 @@ def _slot_chart_block(ds, pal, num) -> str:
     return head + inner
 
 
-def _slot_mini_cards(datasets, pal) -> str:
+def _slot_mini_cards(datasets, pal, n_charts_used=0) -> str:
+    # n_charts_used: CHART_1~3 슬롯에서 이미 소비된 datasets 수 → 중복 표시 방지
     cards = []
-    for d in datasets[:3]:
+    for d in datasets[n_charts_used:n_charts_used + 3]:
         pts = _pairs(d)
         if not pts:
             continue
@@ -122,22 +123,38 @@ def _root_vars(pal) -> str:
 
 
 def render_layout(template: str, title: str, subtitle: str, datasets: list,
-                  recipe: dict, src: str = "") -> str:
+                  recipe: dict, src: str = "", chip: str = "") -> str:
     """레이아웃 템플릿 + 실데이터 → 완성 HTML (LLM 0). 색 변수 주입 + 슬롯 치환."""
+    # 제목·카드 제목 내 'N종목' LLM 추정치 → 실데이터 실제 개수로 교정
+    def _fix_n(t, n):
+        return re.sub(r'\d+종목', f'{n}종목', t) if n > 0 and t else t
+    datasets = [{**d, "title": _fix_n(d.get("title", ""), len(_pairs(d)))} for d in datasets]
+    if datasets:
+        title = _fix_n(title, len(_pairs(datasets[0])))
+
     ts = [d for d in datasets if _is_timeseries(d)]
     cats = [d for d in datasets if not _is_timeseries(d)]
     ordered = ts + cats
-    subs = {
-        "{{TITLE}}": str(title),
-        "{{SUBTITLE}}": str(subtitle),
-        "{{EYEBROW}}": (recipe.get("eyebrow_label") or "데이터 인사이트"),
-        "{{SOURCE}}": src or "데이터 출처 · JARVIS",
-        "{{BRAND}}": "JARVIS · 데이터 인사이트",
-        "{{HERO_STATS}}": _slot_hero_stats(datasets, recipe),
+    n_charts = min(len(ordered), 3)
+    # 빈 CHART 슬롯: 마커 삽입 → JS post-processing 이 해당 컨테이너 섹션 숨김
+    _EMPTY = '<span data-jarvis-empty="1" style="display:none"></span>'
+    chart_slots = {
         "{{CHART_1}}": _slot_chart_block(ordered[0] if len(ordered) > 0 else None, recipe, 1),
         "{{CHART_2}}": _slot_chart_block(ordered[1] if len(ordered) > 1 else None, recipe, 2),
         "{{CHART_3}}": _slot_chart_block(ordered[2] if len(ordered) > 2 else None, recipe, 3),
-        "{{MINI_CARDS}}": _slot_mini_cards(datasets, recipe),
+    }
+    for k in chart_slots:
+        if not chart_slots[k]:
+            chart_slots[k] = _EMPTY
+    subs = {
+        "{{TITLE}}": str(title),
+        "{{SUBTITLE}}": str(subtitle),
+        "{{EYEBROW}}": chip or "수집 실데이터 기반",
+        "{{SOURCE}}": src or "데이터 출처 · JARVIS",
+        "{{BRAND}}": "JARVIS · 데이터 인사이트",
+        "{{HERO_STATS}}": _slot_hero_stats(datasets, recipe),
+        "{{MINI_CARDS}}": _slot_mini_cards(datasets, recipe, n_charts_used=n_charts),
+        **chart_slots,
     }
     html = template
     for k, v in subs.items():
@@ -149,6 +166,23 @@ def render_layout(template: str, title: str, subtitle: str, datasets: list,
         html = re.sub(r"(<body[^>]*>)", r"\1" + root, html, count=1)
     else:
         html = root + html
+    # 빈 슬롯 마커 조상 섹션/카드 숨기기 — 어떤 레시피든 공통 적용
+    _hide_js = (
+        "<script>(function(){"
+        "document.querySelectorAll('[data-jarvis-empty]').forEach(function(el){"
+        "var p=el,d=0;"
+        "while(p&&d<10){p=p.parentElement;d++;"
+        "if(!p||p.tagName==='BODY')break;"
+        "if(p.tagName==='SECTION'||"
+        r"/\b(chart-card|slot-cc|slot-c3|sec|wide-card)\b/.test(p.className||'')"
+        "){p.style.display='none';break;}"
+        "}});"
+        "})();</script>"
+    )
+    if "</body>" in html:
+        html = html.replace("</body>", _hide_js + "</body>", 1)
+    else:
+        html += _hide_js
     return html
 
 

@@ -89,6 +89,8 @@ def get_recipes() -> list:
     try:
         data = json.loads(_REGISTRY.read_text(encoding="utf-8"))
         recs = data.get("recipes") or []
+        # id에 -DELETED 접미사가 붙은 레시피는 제외
+        recs = [r for r in recs if not str(r.get("id", "")).endswith("-DELETED")]
         if recs:
             return recs
     except Exception as e:
@@ -166,6 +168,16 @@ def _validate_recipe(rec: dict, existing: list) -> tuple[bool, str]:
                 return False, f"기존 '{ex.get('id')}' 과 너무 유사"
         except Exception:
             continue
+    # 템플릿 플레이스홀더 텍스트 차단 — 슬롯 외 고정 설명문 있으면 거부
+    tmpl = rec.get("template") or ""
+    if tmpl:
+        _BAD_PHRASES = [
+            "이 영역에 들어갑니다", "CALL TO ACTION", "lorem ipsum",
+            "placeholder", "설명이 이 영역", "보충 텍스트가 이 영역",
+        ]
+        for phrase in _BAD_PHRASES:
+            if phrase.lower() in tmpl.lower():
+                return False, f"템플릿에 고정 플레이스홀더 텍스트 있음: '{phrase}'"
     return True, "ok"
 
 
@@ -188,8 +200,8 @@ def _test_render(rec: dict) -> bool:
                                                         has_all_slots_resolved, verify_layout_output)
             html = render_layout(rec["template"], "레시피 검증 리포트", "샘플 렌더", sample, rec, "테스트")
             if not has_all_slots_resolved(html) or not verify_layout_output(html, sample):
-                log.info("[design_learner] 템플릿 슬롯/데이터안전 실패 → 팔레트만 사용")
-                rec.pop("template", None)     # 레이아웃 결함 → 색만 살리고 기본 레이아웃 폴백
+                log.info("[design_learner] 템플릿 슬롯/데이터안전 실패 → 레시피 거부(다음 후보 시도)")
+                return False  # ★ silent drop 금지 — 다음 이미지/라이브러리로 재시도
         html = build_html("디자인 레시피 검증", "샘플 렌더", sample, 0, "테스트", recipe=rec)
         if not html:
             return False
@@ -241,13 +253,12 @@ def _generate_recipe(existing: list, aesthetic: str) -> dict | None:
 # ── 실제 사이트 이미지 세밀 학습 (★ 사용자 박제 2026-07-05 — 진짜 이미지 학습) ────────
 def _fetch_reference(out_dir: Path, n: int = 5, exclude_urls: set | None = None,
                      name_prefix: str = "ref") -> list:
-    """Bing 이미지에서 인포그래픽 레퍼런스 후보 여러 장 다운로드 (best-effort).
+    """Bing 이미지에서 인포그래픽 레퍼런스 후보 다운로드 (best-effort).
 
-    Playwright 브라우저 컨텍스트로 검색+다운로드 (requests.get 수집 금지 규정 회피).
-    ★ 관련성은 비전 게이트(_analyze_reference)가 최종 판정 — 여기선 후보만 모은다
-    (검색 결과엔 무관 이미지 섞임: 여행사진·클립아트 등 → 비전이 reject). 실패 시 [].
-    ★ 반환: [(경로, 원본URL)] — exclude_urls 로 앞 배치와 *URL 중복* 회피(2차 10장용).
-    저작권: 학습(분석)용 임시 파일, 장기 저장 안 함 — 추출한 *디자인 원리* 만 남긴다.
+    ★ 사용자 박제 2026-07-13: 복수 검색어 순차 시도 → 인포그래픽 확보율 향상.
+    관련성은 비전 게이트(_extract_vision)가 판정 — 여기선 후보만 모은다.
+    반환: [(경로, 원본URL)] — exclude_urls 로 앞 배치와 URL 중복 회피.
+    저작권: 학습(분석)용 임시 파일, 장기 저장 안 함.
     """
     exclude_urls = exclude_urls or set()
     out: list = []
@@ -255,9 +266,6 @@ def _fetch_reference(out_dir: Path, n: int = 5, exclude_urls: set | None = None,
         from JARVIS06_IMAGE.html_renderer import _find_chromium
         from playwright.sync_api import sync_playwright
         import urllib.parse as _up
-        # 인포그래픽 특화 쿼리 (사진 필터 금지 — 인포그래픽은 '사진'이 아님)
-        q = _up.quote("infographic statistics chart data visualization report design")
-        url = f"https://www.bing.com/images/search?q={q}&setlang=en"
         UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
         with sync_playwright() as p:
@@ -265,38 +273,45 @@ def _fetch_reference(out_dir: Path, n: int = 5, exclude_urls: set | None = None,
                                   args=["--no-sandbox"])
             ctx = b.new_context(user_agent=UA, locale="en-US")
             pg = ctx.new_page()
-            pg.goto(url, wait_until="domcontentloaded", timeout=30000)
-            pg.wait_for_timeout(2500)
-            # 지연 로딩 — 스크롤로 더 많은 결과 확보 (상위 결과가 관련성 높음)
-            for _ in range(4):
-                pg.mouse.wheel(0, 2600)
-                pg.wait_for_timeout(1200)
-            metas = pg.eval_on_selector_all(
-                "a.iusc", "els => els.map(e => e.getAttribute('m'))") or []
             i = 0
-            for m in metas:
+            # ★ 복수 검색어 순차 시도 — 하나로 n장 못 채우면 다음 검색어로 보충
+            for query in _SEARCH_QUERIES:
                 if len(out) >= n:
                     break
                 try:
-                    murl = json.loads(m).get("murl", "")
-                except Exception:
-                    continue
-                if not murl or not murl.startswith("http"):
-                    continue
-                if murl in exclude_urls:      # ★ 앞 배치(1차 5장)와 겹치는 URL 은 건너뜀
-                    continue
-                try:
-                    resp = ctx.request.get(murl, timeout=30000)
-                    body = resp.body()
-                    ct = resp.headers.get("content-type", "")
-                    # 확장자 대신 content-type 으로 판정(Bing CDN URL 확장자 없는 경우 다수)
-                    if resp.ok and ct.startswith("image") and 20000 < len(body) < 8_000_000:
-                        ext = ".png" if "png" in ct else ".jpg"
-                        dst = out_dir / f"{name_prefix}{i}{ext}"
-                        dst.write_bytes(body)
-                        out.append((dst, murl))
-                        i += 1
-                except Exception:
+                    q = _up.quote(query)
+                    url = f"https://www.bing.com/images/search?q={q}&setlang=en"
+                    pg.goto(url, wait_until="domcontentloaded", timeout=25000)
+                    pg.wait_for_timeout(2000)
+                    # 스크롤로 추가 결과 확보
+                    for _ in range(3):
+                        pg.mouse.wheel(0, 2400)
+                        pg.wait_for_timeout(900)
+                    metas = pg.eval_on_selector_all(
+                        "a.iusc", "els => els.map(e => e.getAttribute('m'))") or []
+                    for m in metas:
+                        if len(out) >= n:
+                            break
+                        try:
+                            murl = json.loads(m).get("murl", "")
+                        except Exception:
+                            continue
+                        if not murl or not murl.startswith("http") or murl in exclude_urls:
+                            continue
+                        try:
+                            resp = ctx.request.get(murl, timeout=25000)
+                            body = resp.body()
+                            ct = resp.headers.get("content-type", "")
+                            if resp.ok and ct.startswith("image") and 20000 < len(body) < 8_000_000:
+                                ext = ".png" if "png" in ct else ".jpg"
+                                dst = out_dir / f"{name_prefix}{i}{ext}"
+                                dst.write_bytes(body)
+                                out.append((dst, murl))
+                                i += 1
+                        except Exception:
+                            continue
+                except Exception as qe:
+                    log.warning(f"[design_learner] 검색어 실패 '{query[:40]}': {qe}")
                     continue
             b.close()
         log.info(f"[design_learner] 레퍼런스 후보 {len(out)}장 수집")
@@ -305,70 +320,254 @@ def _fetch_reference(out_dir: Path, n: int = 5, exclude_urls: set | None = None,
     return out
 
 
-_VISION_PROMPT = (
-    "너는 세계적 인포그래픽 아트디렉터다.\n"
-    "★ 먼저 판정: 이 이미지가 *디자인된 정보 그래픽*인가? — 차트·그래프·대시보드·데이터 시각화·"
-    "통계 인포그래픽·지도 인포그래픽·다이어그램·타임라인·프로세스 도표 등 색 시스템과 레이아웃이 "
-    "설계된 정보 그래픽이면 모두 인정. 오직 *일반 사진(인물·풍경·음식·제품)·순수 회화·단순 밈/클립아트*"
-    '처럼 정보 디자인이 아닌 것만 다른 출력 없이 정확히 {"reject": true} 로 거절하라.\n\n'
-    "정보 그래픽이 맞으면, 이 이미지를 *아주 세밀하게* 분석하라 — "
-    "색상 시스템, 레이아웃 구조, 차트 종류·스타일, 타이포 위계, 장식 요소(아이콘·모티프·구분선), "
-    "여백 리듬, 배경 질감까지 작은 디테일도 놓치지 말 것.\n"
-    "그 디자인 언어를 우리 렌더러가 재현할 '레시피 JSON'으로 추출하라 (색은 이미지의 실제 주요 색을 뽑아 매핑):\n"
-    "- hero[0]=이미지의 어두운/딥 배경색(흰텍스트 대비), hero[1]=그 계열 약간 밝은 색.\n"
-    "- a1/a2=이미지의 주요 강조 2색(고채도, 서로 뚜렷이 구분), a1s/a2s=각 밝은 버전.\n"
-    "- soft=본문 배경(밝게), ink=본문 텍스트(짙게), muted=중간 회색, eyebrow=hero 위 밝은 강조, grid=옅은 라인.\n"
-    "- hero_texture=배경 질감에 가장 가까운 것 ∈ {grid,dots,glow,diagonal,none}. card_radius=카드 모서리(16~30 정수).\n"
-    "- notes=재현 시 놓치면 안 될 세부 관찰 5개 이상(차트 종류·주석 방식·아이콘 스타일·타이포 특징·구성).\n"
-    "- aesthetic=한 줄 스타일 요약(한국어).\n\n"
-    "★ 그리고 이 레퍼런스의 *레이아웃/구성/장식* 을 재현하는 **재사용 HTML 템플릿** 을 저작하라.\n"
-    "  - 전체 폭 1280px 완결 HTML(<!DOCTYPE html>~</html>). 레퍼런스의 배치·히어로 처리·그리드·"
-    "여백·장식(도형·구분선·배경)을 최대한 충실히 재현.\n"
-    "  - ★ 데이터(숫자·차트)는 절대 직접 쓰지 말고 아래 슬롯 토큰만 배치. 색은 CSS 변수만.\n"
-    "  - 폰트 @import Noto Sans KR. 슬롯/변수 외 임의 통계 숫자 금지.\n"
-    "__SLOT_SPEC__\n\n"
-    "[출력] 아래 마커 형식 정확히 (설명·코드펜스 없이):\n"
+def _fetch_from_curated_sites(out_dir: Path, n: int = 5,
+                               exclude_urls: set | None = None,
+                               name_prefix: str = "cur") -> list:
+    """★ Phase 0B — 큐레이션 인포그래픽 전문 사이트에서 이미지 수집.
+
+    Bing(0A) 탈락/봇차단 시 2차 경로. 전문 사이트는 100% 인포그래픽 소스라
+    비전 게이트 통과율이 Bing 대비 훨씬 높음.
+    반환: [(경로, 원본URL)] — exclude_urls 로 0A 와 URL 중복 회피.
+    """
+    exclude_urls = exclude_urls or set()
+    out: list = []
+    try:
+        from JARVIS06_IMAGE.html_renderer import _find_chromium
+        from playwright.sync_api import sync_playwright
+        UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+        with sync_playwright() as p:
+            b = p.chromium.launch(executable_path=_find_chromium(), headless=True,
+                                  args=["--no-sandbox"])
+            ctx = b.new_context(user_agent=UA, locale="en-US",
+                                viewport={"width": 1280, "height": 900})
+            pg = ctx.new_page()
+            i = 0
+            for src in _CURATED_INFOGRAPHIC_SOURCES:
+                if len(out) >= n:
+                    break
+                for page_url in src["urls"]:
+                    if len(out) >= n:
+                        break
+                    try:
+                        pg.goto(page_url, wait_until="domcontentloaded", timeout=25000)
+                        pg.wait_for_timeout(2000)
+                        # 지연 로딩 이미지 확보 — 스크롤
+                        for _ in range(3):
+                            pg.mouse.wheel(0, 2200)
+                            pg.wait_for_timeout(800)
+                        # 이미지 URL 수집 (여러 셀렉터 + 지연 로딩 속성 모두 시도)
+                        img_urls: list = []
+                        for sel in src["selectors"]:
+                            try:
+                                els = pg.query_selector_all(sel)
+                                for el in els:
+                                    for attr in src["img_attrs"]:
+                                        val = el.get_attribute(attr) or ""
+                                        if val.startswith("http") and val not in exclude_urls:
+                                            img_urls.append(val)
+                            except Exception:
+                                continue
+                        # 중복 제거하되 순서 보존
+                        seen_in_page: set = set()
+                        for img_url in img_urls:
+                            if len(out) >= n:
+                                break
+                            if img_url in seen_in_page or img_url in exclude_urls:
+                                continue
+                            seen_in_page.add(img_url)
+                            try:
+                                resp = ctx.request.get(img_url, timeout=20000)
+                                body = resp.body()
+                                ct = resp.headers.get("content-type", "")
+                                if (resp.ok and ct.startswith("image")
+                                        and src["min_bytes"] < len(body) < 10_000_000):
+                                    ext = ".png" if "png" in ct else ".jpg"
+                                    dst = out_dir / f"{name_prefix}{i}{ext}"
+                                    dst.write_bytes(body)
+                                    out.append((dst, img_url))
+                                    i += 1
+                            except Exception:
+                                continue
+                        log.info(f"[design_learner] {src['name']} {page_url.split('/')[-2] or 'home'}"
+                                 f" → {len([u for _, u in out])}장 수집 중")
+                    except Exception as pe:
+                        log.warning(f"[design_learner] 큐레이션 {src['name']} 접근 실패: {pe}")
+                        continue
+            b.close()
+        log.info(f"[design_learner] Phase 0B 큐레이션 후보 {len(out)}장 수집")
+    except Exception as e:
+        log.warning(f"[design_learner] Phase 0B 수집 실패: {e}")
+    return out
+
+
+# ── Phase 0 2단계 LLM 프롬프트 (★ 사용자 박제 2026-07-13) ───────────────────
+# Step 1: 비전 → 팔레트 JSON + 레이아웃 설명 텍스트 (색 추출 + 구조 서술만)
+_VISION_EXTRACT_PROMPT = (
+    "너는 인포그래픽 디자인 분석가다.\n"
+    "★ 먼저 판정: 이 이미지가 *디자인된 정보 그래픽*인가?\n"
+    "  - 차트·그래프·대시보드·통계·다이어그램·타임라인 등 = 인포그래픽\n"
+    '  - 일반 사진(인물·풍경·음식·제품)·회화·클립아트 = 정확히 {"reject": true} 만 출력 후 종료\n\n'
+    "인포그래픽이면 세밀하게 분석하라:\n"
+    "1. 색상 — 배경 딥컬러, 강조색 2종, 텍스트색, 카드배경, 라인색 (실제 hex)\n"
+    "2. 히어로 레이아웃 — 위치(상단 풀밴드/좌측패널/중앙집중), 비율\n"
+    "3. 차트 영역 — 배치(2열/3열/비대칭/사이드바), 카드 스타일\n"
+    "4. 장식 — 배경 질감(grid/dots/glow/diagonal/none), 카드모서리(16~30px)\n\n"
+    "[출력] 설명 없이 아래 마커 정확히:\n"
     "===PALETTE===\n"
-    '{"id":"영문소문자-하이픈","name":"한글 이름","aesthetic":"...","hero":["#000000","#000000"],'
-    '"ink":"#000000","a1":"#000000","a1s":"#000000","a2":"#000000","a2s":"#000000","soft":"#ffffff",'
-    '"muted":"#000000","eyebrow":"#000000","grid":"#eeeeee","hero_texture":"grid","card_radius":24,'
-    '"eyebrow_label":"짧은 라벨","notes":["..."]}\n'
-    "===TEMPLATE===\n"
-    "<!DOCTYPE html>...완결 HTML(슬롯·CSS변수만)...</html>\n"
+    '{"hero":["#000","#000"],"ink":"#000","a1":"#000","a1s":"#000","a2":"#000","a2s":"#000",'
+    '"soft":"#fff","muted":"#888","eyebrow":"#000","grid":"#eee","hero_texture":"grid","card_radius":22,'
+    '"aesthetic":"한 줄 스타일 요약(한국어)","notes":["관찰1","관찰2","관찰3"]}\n'
+    "===LAYOUT_DESC===\n"
+    "레이아웃 구조 상세 서술 5줄 이상 (히어로 위치·비율, 차트 그리드 형태, 카드 스타일, 장식 요소, 색 분위기)\n"
     "===END==="
 )
 
+# Step 2: 레이아웃 설명 → HTML 템플릿 (텍스트 LLM — 비전보다 안정적)
+_HTML_GEN_PROMPT = """\
+너는 HTML/CSS 전문가다. 아래 인포그래픽 레이아웃 설명으로 1280px 재사용 HTML 템플릿을 만들어라.
 
-def _analyze_reference(img_path: Path, existing: list) -> dict | None:
-    """비전 LLM 으로 실이미지 세밀 분석 → 팔레트 + *레이아웃 템플릿*. 실패 시 None."""
+[레이아웃 설명]
+{layout_desc}
+
+[필수 규칙]
+- 완결 HTML: <!DOCTYPE html> ~ </html>, 폭 1280px
+- 모든 색: CSS 변수만 → var(--hero0) var(--hero1) var(--ink) var(--a1) var(--a1s) var(--a2) var(--a2s) var(--soft) var(--muted) var(--eyebrow) var(--grid)
+- 슬롯만 배치 (절대 직접 한국어 쓰지 말 것): {{TITLE}} {{SUBTITLE}} {{EYEBROW}} {{SOURCE}} {{BRAND}} {{HERO_STATS}} {{CHART_1}} {{CHART_2}} {{CHART_3}} {{MINI_CARDS}}
+- CHART 슬롯: 반드시 <section> 태그 안에 배치. section:has([data-jarvis-empty]){{display:none}} CSS 필수
+- HERO_STATS/MINI_CARDS 컨테이너: :empty{{display:none}} CSS 필수
+- @import Noto Sans KR 포함
+
+[출력] 코드펜스 없이 완결 HTML만:
+"""
+
+# Phase 0A: Bing 검색어 — 복수 시도
+_SEARCH_QUERIES = [
+    "infographic data visualization statistics chart report design 2024",
+    "annual report infographic business statistics data chart design",
+    "financial data infographic statistics visualization 2024",
+    "data dashboard infographic report statistics chart professional",
+]
+
+# Phase 0B: 큐레이션 인포그래픽 전문 사이트 (Bing 실패/탈락 시 — 100% 인포그래픽 소스)
+_CURATED_INFOGRAPHIC_SOURCES = [
+    {
+        "name": "Visual Capitalist",
+        "urls": [
+            "https://www.visualcapitalist.com/category/charts/",
+            "https://www.visualcapitalist.com/category/infographics/",
+        ],
+        "selectors": [
+            "article .entry-thumbnail img",
+            "article img.wp-post-image",
+            ".post-thumbnail img",
+            "article figure img",
+        ],
+        "img_attrs": ["src", "data-src", "data-lazy-src"],
+        "min_bytes": 50000,
+    },
+    {
+        "name": "Our World in Data",
+        "urls": [
+            "https://ourworldindata.org/charts",
+            "https://ourworldindata.org/data",
+        ],
+        "selectors": [
+            "figure img",
+            ".article-thumbnail img",
+            "img[src*='ourworldindata']",
+        ],
+        "img_attrs": ["src", "data-src"],
+        "min_bytes": 20000,
+    },
+    {
+        "name": "Flowing Data",
+        "urls": ["https://flowingdata.com/"],
+        "selectors": [
+            "article img",
+            ".entry-thumbnail img",
+            ".post img",
+        ],
+        "img_attrs": ["src", "data-src", "data-lazy-src"],
+        "min_bytes": 30000,
+    },
+    {
+        "name": "Information is Beautiful",
+        "urls": ["https://informationisbeautiful.net/visualizations/"],
+        "selectors": [
+            "article img",
+            ".visualisation img",
+            "figure img",
+        ],
+        "img_attrs": ["src", "data-src"],
+        "min_bytes": 30000,
+    },
+]
+
+
+def _extract_vision(img_path: Path, existing: list) -> tuple[dict, str] | None:
+    """Step 1 — 비전 LLM: 이미지 → 팔레트 JSON + 레이아웃 설명 텍스트.
+    인포그래픽 아닌 이미지는 None 반환. 분리된 작은 task → 안정성 높음."""
     try:
         from shared.llm import invoke_vision
-        from JARVIS06_IMAGE.template_engine import SLOT_SPEC
-        prompt = _VISION_PROMPT.replace("__SLOT_SPEC__", SLOT_SPEC)
-        raw = invoke_vision("writer", prompt, [str(img_path)],
-                            timeout=220, cwd=str(img_path.parent))
+        raw = invoke_vision("writer", _VISION_EXTRACT_PROMPT, [str(img_path)],
+                            timeout=120, cwd=str(img_path.parent))
         if not raw:
             return None
         if re.search(r'"?reject"?\s*:\s*true', raw, re.I) and "===PALETTE===" not in raw:
-            log.info("[design_learner] 비전 관련성 게이트: 인포그래픽 아님 → 스킵")
+            log.info("[design_learner] 비전 게이트: 인포그래픽 아님 → 스킵")
             return None
-        # 마커 파싱: ===PALETTE=== {json} ===TEMPLATE=== <html> ===END===
-        pm = re.search(r"===PALETTE===\s*(\{.*?\})\s*===TEMPLATE===", raw, re.S)
-        tm = re.search(r"===TEMPLATE===\s*(.*?)\s*===END===", raw, re.S)
+        pm = re.search(r"===PALETTE===\s*(\{.*?\})\s*===LAYOUT_DESC===", raw, re.S)
+        dm = re.search(r"===LAYOUT_DESC===\s*(.*?)\s*===END===", raw, re.S)
         if not pm:
             return None
         rec = json.loads(pm.group(1))
         if rec.get("reject") or "a1" not in rec:
             return None
-        if tm:
-            tmpl = tm.group(1).strip()
-            tmpl = re.sub(r"^```[a-z]*\n?|\n?```$", "", tmpl.strip(), flags=re.M)
-            if "{{" in tmpl and "<" in tmpl:      # 슬롯·HTML 최소 형태 확인
-                rec["template"] = tmpl
-        return rec
+        layout_desc = dm.group(1).strip() if dm else ""
+        return rec, layout_desc
     except Exception as e:
-        log.warning(f"[design_learner] 비전 분석 실패: {e}")
+        log.warning(f"[design_learner] 비전 Step1 실패: {e}")
         return None
+
+
+def _generate_html_from_desc(layout_desc: str) -> str | None:
+    """Step 2 — 텍스트 LLM: 레이아웃 설명 → HTML 템플릿.
+    비전과 분리된 단순 task → LLM이 HTML 생성에만 집중 → 품질·안정성 상승."""
+    if not layout_desc:
+        return None
+    try:
+        from shared.llm import invoke_text
+        prompt = _HTML_GEN_PROMPT.format(layout_desc=layout_desc)
+        raw = invoke_text("writer", prompt, max_tokens=3500, timeout=180, _retries=2)
+        if not raw:
+            return None
+        # 코드펜스 제거
+        raw = re.sub(r"^```[a-z]*\n?|\n?```$", "", raw.strip(), flags=re.M).strip()
+        if "{{" in raw and "<!DOCTYPE" in raw:
+            return raw
+        return None
+    except Exception as e:
+        log.warning(f"[design_learner] HTML생성 Step2 실패: {e}")
+        return None
+
+
+def _analyze_reference(img_path: Path, existing: list) -> dict | None:
+    """비전 분석 2단계 — Step1(팔레트+설명) → Step2(HTML). 실패 시 None.
+    ★ 사용자 박제 2026-07-13: 1-shot 대비 각 step이 단순 → 성공률·품질 향상."""
+    result = _extract_vision(img_path, existing)
+    if not result:
+        return None
+    rec, layout_desc = result
+    # Step 2: 레이아웃 설명으로 HTML 생성
+    if layout_desc:
+        tmpl = _generate_html_from_desc(layout_desc)
+        if tmpl:
+            rec["template"] = tmpl
+            log.info("[design_learner] 비전 2단계 완료 — 팔레트+HTML 모두 확보")
+        else:
+            log.info("[design_learner] HTML 생성 실패 — 팔레트만 사용")
+    return rec
 
 
 # ── 결정론 색이론 생성 (LLM 실패 시 *매일 1개 보장* — 사용자 박제) ──────────────
@@ -414,14 +613,59 @@ def _generate_recipe_deterministic(existing: list, seed: int) -> dict:
         "card_radius": 18 + (seed % 7) * 2,
     }
     # 색상(팔레트) × 레이아웃(template) 독립 조합 — 기존 template HTML 순환 배정
+    # DELETED 및 플레이스홀더 텍스트 포함 템플릿은 제외
+    _BAD = ["이 영역에 들어갑니다", "CALL TO ACTION", "placeholder", "설명이 이 영역"]
     try:
         import json as _json
         _all = _json.loads(_REGISTRY.read_text(encoding="utf-8")).get("recipes", [])
-        _tmpls = [r["template"] for r in _all if isinstance(r.get("template"), str)]
+        _tmpls = [
+            r["template"] for r in _all
+            if isinstance(r.get("template"), str)
+            and not str(r.get("id", "")).endswith("-DELETED")
+            and not any(p.lower() in r["template"].lower() for p in _BAD)
+        ]
         if _tmpls:
             rec["template"] = _tmpls[seed % len(_tmpls)]
     except Exception:
         pass
+    return rec
+
+
+# ── 코드 내장 레이아웃 라이브러리 릴리즈 (Phase 2 — ★ 사용자 박제 2026-07-13) ─────
+def _release_next_library_layout(recs: list, today: str) -> dict | None:
+    """layout_library.py 의 미릴리즈 구조 1개를 신선 팔레트와 조합해 반환.
+
+    ★ 색만 바뀌는 결정론 폴백 대신 진짜 새 레이아웃 구조를 보장.
+    10개 lib-* 레이아웃이 모두 릴리즈되면 None → 결정론 폴백으로 fallthrough.
+    """
+    try:
+        from JARVIS06_IMAGE.layout_library import LAYOUTS
+    except ImportError:
+        log.warning("[design_learner] layout_library import 실패")
+        return None
+    if not LAYOUTS:
+        return None
+
+    released_lib_ids = {r.get("id") for r in recs if str(r.get("id", "")).startswith("lib-")}
+    target = next((lay for lay in LAYOUTS if lay["id"] not in released_lib_ids), None)
+    if target is None:
+        log.info("[design_learner] 모든 코드 레이아웃 릴리즈 완료 → 결정론 폴백")
+        return None
+
+    # 팔레트 — 결정론 HSL (template 필드는 library HTML 로 덮어씀)
+    seed = sum(ord(c) for c in today) + len(recs)
+    pal = _generate_recipe_deterministic(recs, seed)
+    # library layout 의 id/name/aesthetic/template 으로 덮어쓰기
+    rec = {
+        **{k: pal[k] for k in ("hero", "ink", "a1", "a1s", "a2", "a2s",
+                                "soft", "muted", "eyebrow", "grid",
+                                "hero_texture", "card_radius")},
+        "id": target["id"],
+        "name": target["name"],
+        "aesthetic": target["aesthetic"],
+        "template": target["html"],
+    }
+    log.info(f"[design_learner] 라이브러리 레이아웃 선택: {target['id']} ({target['name']})")
     return rec
 
 
@@ -472,40 +716,56 @@ def _learn_from_batch(refs: list, recs: list, today: str) -> str | None:
 def job_learn_design() -> str:
     """하루 1개 새 디자인 레시피 학습 (05:00). ★ 사용자 박제: 1회 학습은 *반드시* 성공.
 
-    Phase 1 = LLM 창작(다양·감성) → 게이트+실렌더. 스로틀/탈락 시
-    Phase 2 = 결정론 색이론 생성(코드, LLM 0) → 게이트+실렌더로 *보장*. 스킵 없음.
+    Phase 0 = 실제 사이트 이미지 세밀 학습 (복수 검색어, 5→10장).
+    Phase 1 = LLM 지식기반 창작 (3회 시도).
+    Phase 2 = 코드 내장 레이아웃 라이브러리 (진짜 새 HTML 구조, LLM 0).
+    Phase 2-B = 결정론 HSL 색이론 (라이브러리 소진 후 최후 보장).
     """
     today = datetime.now().strftime("%Y-%m-%d")
     recs = get_recipes()
     aesthetic = _AESTHETICS[len(recs) % len(_AESTHETICS)]
     log.info(f"[design_learner] 나이틀리 학습 시작 (기존 {len(recs)}개, 미감='{aesthetic}')")
 
-    # ── Phase 0: 실제 사이트 이미지 세밀 학습 (★ 사용자 박제 2026-07-06 — 5→10 단계 캡처) ──
-    #   1차: 사이트에서 5장 캡처 → 인포그래픽 있으면 그 중 1개 추출(즉시 종료).
-    #   없으면 2차: *새* 10장 캡처(1차와 URL 중복 금지) → 인포그래픽 있으면 1개 추출.
-    #   무관 이미지는 비전 게이트(_analyze_reference)가 reject. 전부 실패/사이트 차단 시
-    #   Phase 1(LLM)·Phase 2(결정론)로 *매일 1개 보장*.
+    # ── Phase 0A: Bing 이미지 학습 (복수 검색어, 5→10장) ──
+    #   무관 이미지는 비전 게이트가 reject. 0A 탈락 시 0B(전문 사이트)로 이어짐.
+    _tmp = Path(tempfile.mkdtemp())
+    seen_urls: set = set()
     try:
-        _tmp = Path(tempfile.mkdtemp())
-        seen_urls: set = set()
-        # 1차 — 5장
         batch1 = _fetch_reference(_tmp, n=5, exclude_urls=seen_urls, name_prefix="a")
         seen_urls |= {u for _, u in batch1}
         res = _learn_from_batch(batch1, recs, today)
         if res:
             return res
-        # 1차에 인포그래픽 없음 → 2차 *새* 10장 (1차 URL 제외 = 겹침 방지)
-        log.info(f"[design_learner] 1차 {len(batch1)}장에 인포그래픽 없음 → 2차 새 10장 캡처")
+        log.info(f"[design_learner] Phase 0A 1차 {len(batch1)}장 탈락 → 2차 10장")
         batch2 = _fetch_reference(_tmp, n=10, exclude_urls=seen_urls, name_prefix="b")
+        seen_urls |= {u for _, u in batch2}
         res = _learn_from_batch(batch2, recs, today)
         if res:
             return res
         if not batch1 and not batch2:
-            log.info("[design_learner] 레퍼런스 수집 실패(사이트 차단) → 지식기반 폴백")
+            log.info("[design_learner] Phase 0A 수집 실패(봇차단 추정) → 0B 전문 사이트")
         else:
-            log.info("[design_learner] 1·2차 모두 인포그래픽 미발견 → 지식기반 폴백")
+            log.info(f"[design_learner] Phase 0A {len(batch1)+len(batch2)}장 모두 탈락 → 0B 전문 사이트")
     except Exception as e:
-        log.warning(f"[design_learner] Phase0 비전 학습 예외 → 폴백: {e}")
+        log.warning(f"[design_learner] Phase 0A 예외: {e}")
+
+    # ── Phase 0B: 큐레이션 인포그래픽 전문 사이트 (★ 사용자 박제 2026-07-13) ──
+    #   Visual Capitalist / Our World in Data / Flowing Data / Information is Beautiful
+    #   100% 인포그래픽 소스 → 비전 게이트 통과율 Bing 대비 훨씬 높음.
+    #   Bing 봇차단·셀렉터 변경에 독립적인 2차 Phase 0 경로.
+    try:
+        log.info("[design_learner] Phase 0B — 큐레이션 전문 사이트 학습 시작")
+        cur_refs = _fetch_from_curated_sites(_tmp, n=5, exclude_urls=seen_urls, name_prefix="c")
+        seen_urls |= {u for _, u in cur_refs}
+        res = _learn_from_batch(cur_refs, recs, today)
+        if res:
+            return res
+        if not cur_refs:
+            log.info("[design_learner] Phase 0B 수집 실패 → LLM 폴백")
+        else:
+            log.info(f"[design_learner] Phase 0B {len(cur_refs)}장 모두 탈락 → LLM 폴백")
+    except Exception as e:
+        log.warning(f"[design_learner] Phase 0B 예외: {e}")
 
     # ── Phase 1: LLM 지식기반 창작 (best-effort, 3회 — 사용자 박제 2026-07-06) ──
     for attempt in range(3):
@@ -520,18 +780,28 @@ def job_learn_design() -> str:
         if _test_render(rec):
             return _commit(rec, recs, today, aesthetic, "LLM")
 
-    # ── Phase 2: 결정론 색이론 — 매일 1개 *보장* (LLM 0) ──
-    log.info("[design_learner] LLM 실패 → 결정론 색이론 폴백(보장)")
-    for s in range(len(recs) * 7, len(recs) * 7 + 3):  # ★ max 3회 (사용자 박제 — _test_render 포함)
+    # ── Phase 2: 코드 내장 레이아웃 라이브러리 — 새 레이아웃 구조 보장 ──
+    #   ★ 사용자 박제 2026-07-13: 색만 바뀌는 결정론 대신 진짜 새 HTML 구조 릴리즈.
+    #   10개 lib-* 소진 후엔 결정론 HSL 팔레트로 폴백.
+    log.info("[design_learner] LLM 실패 → 코드 레이아웃 라이브러리 릴리즈")
+    lib_rec = _release_next_library_layout(recs, today)
+    if lib_rec:
+        lib_rec = _assign_id(lib_rec, recs, today, "learned-library")
+        ok, why = _validate_recipe(lib_rec, recs)
+        if ok and _test_render(lib_rec):
+            return _commit(lib_rec, recs, today, lib_rec.get("aesthetic", "코드 레이아웃"), "라이브러리")
+        log.info(f"[design_learner] 라이브러리 게이트 탈락({why}) → 결정론 폴백")
+
+    # ── Phase 2-B: 결정론 색이론 — 라이브러리 소진/실패 후 최후 보장 (LLM 0) ──
+    log.info("[design_learner] 라이브러리 실패/소진 → 결정론 색이론 폴백")
+    for s in range(len(recs) * 7, len(recs) * 7 + 3):  # ★ max 3회
         rec = _generate_recipe_deterministic(recs, s)
         rec = _assign_id(rec, recs, today, "learned-auto")
         ok, _ = _validate_recipe(rec, recs)
         if ok and _test_render(rec):
             return _commit(rec, recs, today, "알고리즘 색이론", "결정론")
 
-    # ── 최후 보루: 독창성만 완화(구조·대비·실렌더는 여전히 통과) — 그래도 1개 보장 ──
-    #   ★ 재시도 최대 3회 (사용자 박제 2026-07-06): 게이트가 seed 무관 결정론이라
-    #   결과는 첫 반복에서 결정 — 40폭은 재시도 이득 0. 실패 시 GUARDIAN 에스컬레이션.
+    # ── 최후 보루: 독창성만 완화(구조·대비·실렌더는 여전히 통과) ──
     for s in range(9973, 9973 + 3):
         rec = _assign_id(_generate_recipe_deterministic(recs, s), recs, today, "learned-auto")
         try:
@@ -547,4 +817,4 @@ def job_learn_design() -> str:
     return "failed: render infra"
 
 
-__all__ = ["get_recipes", "pick_recipe", "job_learn_design"]
+__all__ = ["get_recipes", "pick_recipe", "job_learn_design", "_release_next_library_layout"]

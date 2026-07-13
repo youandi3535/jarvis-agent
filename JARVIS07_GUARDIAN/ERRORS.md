@@ -2,6 +2,78 @@
 
 ---
 
+## [434] 티스토리 쿠키 갱신 실패 — Kakao "추가 인증" 요구 + 알림 Markdown 파싱 오류 (2026-07-13)
+
+- **증상**: 티스토리 발행 전 `_step_ts_cookie` 가 3회 모두 실패. 로그: `🚨 수동 개입 필요 — 감지 키워드: '추가 인증'` × 3 → `❌ 쿠키 갱신 3회 모두 실패`. 발행은 기존 TS_COOKIE 유효해서 성공.
+- **환경**: `JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py`, 2026-07-13 07:44 로그.
+- **원인**: ① Kakao가 로그인 후 "추가 인증" (추가 인증 페이지) 요구 — 자동화 봇 감지 시 주기적으로 발생. ② 기존 코드는 blocker 감지 즉시 `return None` → Chrome 창 닫힘, 사용자 완료 기회 없음. ③ Telegram 알림 메시지에 Markdown(`*bold*`, `` `code` ``) 사용 → `sendMessage 실패: can't parse entities` → 사용자 미통보. 단, `send_tg` 내 plain text fallback 있어 실제 전달은 됨. ④ `return_driver=True` + `refresh_cookie` 실패 시 driver.quit() 누락 → Chrome 프로세스 3개 누수.
+- **헛다리**: 없음.
+- **해결**: ① blocker 감지 시 즉시 포기 대신 **3분 대기** (36 * 5초 polling) — Chrome 창이 맥에서 visible 이므로 사용자가 직접 완료 가능. 완료 확인 시 정상 진행. ② Telegram 알림 모든 Markdown(`*`, `` ` ``) 제거 → plain text 전송. ③ `_attempt_once` 에서 `new_cookie=None` 시 `driver.quit()` 명시 추가 (누수 방지).
+- **파일**: `JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py`.
+- **교훈**: "추가 인증"은 코드 버그 아닌 Kakao 보안 정책 — 자동화 로그인 반복 시 주기적으로 발생. 사용자에게 Chrome 창 열려 있음을 알리고 완료 대기가 핵심. Telegram 알림에 Markdown 특수문자 사용 시 파싱 오류 가능 → 중요 알림은 plain text 우선.
+
+---
+
+## [433] 나이틀리 디자인 학습 — Phase2가 색만 바뀌는 결정론 폴백이라 새 레이아웃 구조 없음 (2026-07-13)
+
+- **증상**: `job_learn_design` Phase 2(`_generate_recipe_deterministic`)가 기존 템플릿 HTML 을 seed % N 로 순환하고 팔레트만 HSL 교체 → 매일 색은 달라도 레이아웃 구조는 반복.
+- **환경**: `JARVIS06_IMAGE/design_learner.py`.
+- **원인**: ① Phase 2가 실제 새 HTML 구조 없이 색이론 팔레트 + 기존 template 순환 배정. ② `_test_render` 가 template 슬롯 실패 시 `rec.pop("template")` + 계속 진행 → template 결함 레시피가 palette-only 로 silently 통과.
+- **헛다리**: 없음.
+- **해결**: ① `layout_library.py` 신설 — 10종 구조적으로 다른 HTML 레이아웃 (`lib-split-hero` 등). ② `_release_next_library_layout(recs, today)` — 미릴리즈 lib-* 를 신선 HSL 팔레트와 조합 반환. ③ `job_learn_design` Phase 2를 라이브러리 릴리즈로 교체. 10개 소진 후 Phase 2-B 결정론 폴백. ④ `_test_render` template 실패 시 `return False`(silent drop 금지). ⑤ `_fetch_reference` 복수 검색어(`_SEARCH_QUERIES`) 순차 시도 → Phase 0A 인포그래픽 확보율 향상. ⑥ Phase 0 비전 1-shot → 2단계(Step1 팔레트+레이아웃설명, Step2 HTML 생성) 분리. ⑦ Phase 0B 신설 — Visual Capitalist·Our World in Data·Flowing Data·Information is Beautiful 4개 전문 사이트 큐레이션 크롤링(`_fetch_from_curated_sites`). Bing 봇차단·셀렉터 변경에 독립적인 2차 Phase 0 경로.
+- **파일**: `JARVIS06_IMAGE/design_learner.py`, `JARVIS06_IMAGE/layout_library.py`(신설).
+- **교훈**: "매일 새 디자인" 보장은 색 교체가 아닌 HTML 구조 자체가 달라야 한다. 결정론 폴백도 새 레이아웃 구조를 박제해야 진정한 다양성 복리.
+
+---
+
+## [432] 테마주 대장주·부대장주 주가 차트 소실 — assemble_blocks <div> 미인식 + base64 업로드 불가 (2026-07-13)
+
+- **증상**: 테마주 발행 글에 `[PRICE_CHART_LEADER]` / `[PRICE_CHART_SECOND]` 슬롯이 있으나 발행된 글에 주가 차트 이미지가 없음.
+- **환경**: `JARVIS06_IMAGE/theme_charts.py`, `draft_processor.py`, `injectors/block_assembler.py`.
+- **원인**: 3중 버그. ① `make_leader_price_chart_from_data` / `make_leader_price_chart` 가 `<div>` 래퍼 + base64 data URI 반환 → `assemble_blocks` 태그 추출 정규식이 `svg|figure|table|h[1-6]|p` 만 인식, `<div>` 완전 무시 → 차트 블록 소실. ② base64 data URI 는 네이버·티스토리 업로더가 파일 경로로 처리 불가 → 설령 블록에 들어가더라도 이미지 업로드 실패. ③ 일부 종목(대한조선 055000.KS) yfinance 404 → `label_key="leader"` 데이터셋 미생성 → 주 경로 미진입, 폴백도 같은 ticker 404.
+- **헛다리**: `assemble_blocks`를 수정해서 `<div>` 지원을 추가하려는 방향 — `<div>` 내부 base64 img 추출은 가능하지만 업로드 불가 문제(②)는 해결 안 됨.
+- **해결**: `theme_charts.py` 두 함수에 `out_path=None` 인자 추가. `out_path` 제공 시 PNG 파일 저장 후 `<figure><img src="PATH"/></figure>` 반환 (발행자 업로드 가능). `draft_processor._inject_leader_price_charts(html, collected, out_dir=None)` 에 `out_dir` 추가 — `out_dir` 있으면 content-hash 파일명으로 `out_path` 생성 후 차트 함수 전달. `process_draft` 호출 지점에서 `out_dir=out_dir` 전달.
+- **파일**: `JARVIS06_IMAGE/theme_charts.py`, `JARVIS06_IMAGE/draft_processor.py`.
+- **교훈**: 차트 HTML 을 `<div>` 에 base64 로 반환하면 블록 조립(`assemble_blocks`)과 플랫폼 업로더 양쪽에서 모두 소실된다. 이미지는 파일 경로(`<figure><img src="PATH"/>`) 단일 패턴으로만 반환해야 한다.
+
+---
+
+## [431] pro_templates 극단 skew — 막대 차트에서 소규모 종목 전부 "0 조원" + 빨간 점 (2026-07-13)
+
+- **증상**: 테마주 인포그래픽(infg_slot6_59829111.jpg) 에서 SK(36.8조)가 포함된 매출액 비교 차트가 (1) 나머지 6개 종목 막대가 모두 최소값 8px 에 붙어 구분 불가, (2) 동신건설·성창기업지주·효성오앤비 값이 "0 조원" 으로 표시되고 KPI 카드 최저도 "0 조원" 출력.
+- **환경**: `JARVIS06_IMAGE/pro_templates.py` `_bar_chart` → `_scale_rows_uniform` → `_fmt`.
+- **원인**: ① `_scale_rows_uniform`: `round(v * ratio, 1)` 고정 소수1자리 — 0.03조가 `round(0.03, 1) = 0.0` → `_fmt(0.0) = "0"` 출력. ② `_bar_chart`: skew 감지 로직 없음 — `bw = max(8, v / mx * barMax)` 에서 mx=36.8, v=0.2 → bw=8(최솟값 floor) → 나머지 전원 동일 길이 막대, 정보 없는 시각화.
+- **헛다리**: 없음.
+- **해결**: ① `_scale_rows_uniform` 정밀도 적응형: 스케일 후 최솟값 < 0.05 이면 `prec=2` (소수2자리). ② `_fmt` 개선: `0 < abs(f) < 0.1` 이면 소수2자리 강제. ③ `_bar_chart` 진입 시 scale 후 vals[0]/vals[1] >= `_SKEW_SPLIT_RATIO(=10)` 이면 `_bar_chart_outlier_split` 분리형 렌더 — 1위 히어로 바(꽉 참, "2위 대비 N배" 뱃지) + 구분선("나머지 종목(별도 스케일)") + 나머지 자체 max 기준 재비율 서브차트. 기존 로직을 `_bar_chart_diverging` / `_bar_chart_linear` / `_bar_chart_outlier_split` 3개로 분리, `_bar_chart`는 스케일+분기만.
+- **파일**: `JARVIS06_IMAGE/pro_templates.py` (`_fmt`, `_scale_rows_uniform`, `_bar_chart` 및 신규 함수 3개).
+- **교훈**: 데이터 분포 형태를 시각화 타입 결정에 반영해야 한다. 선형 막대는 max/2nd_max 비율이 극단적일 때 데이터를 숨기는 차트가 된다. "스케일 자동 조정"만으로 해결 안 됨 — 차트 타입/레이아웃 자체를 바꿔야 한다.
+
+---
+
+## [430] 테마 사실성 게이트 — 무관한 거시경제 지표(기준금리)를 "상식"으로 오인해 창작 금지 우회 (2026-07-12)
+
+- **증상**: 조림사업(산림·조림 사업) 테마 티스토리 대본이 `[사실성] 출처·데이터 미확인: 한국은행 기준금리는 최근 6개월째 2.5%로 유지되고 있어` 로 attempt=2 까지 차단. `JARVIS00_INFRA.harness.theme-publish-조림사업-tistory` 실패 보고.
+- **환경**: `JARVIS02_WRITER/draft_writer.py` `_gen_theme()` (네이버·티스토리 테마 대본 공용 시스템 프롬프트) → `JARVIS02_WRITER/prepublish_gate.py` → `law_enforcer._claim_all_grounded`.
+- **원인**: 조림사업 테마의 수집 자료·`stocks_data`에는 한국은행 기준금리 데이터가 전혀 없다(테마 grounding 코퍼스는 `market_data=None`으로 의도적으로 매크로 데이터 제외 — `trend_theme_writer.py` L731). 그런데 `_gen_theme()`의 "출처 없는 수치 창작 절대 금지" 지시(L1017~)는 *산업·업계 단위 수치*(생산능력·시장 규모 등)만 명시하고 *거시경제 지표*(기준금리·물가상승률·환율 등)는 별도로 언급하지 않았다. LLM이 기준금리 2.5%를 "누구나 아는 상식"으로 취급해 창작 금지 지시 밖이라고 오인, 조림사업과 무관한 배경 설명으로 삽입 → 이 테마 근거 자료에 없는 수치라 사실성 게이트가 정상적으로 차단(게이트 자체는 정상 동작 — [345]/[368]과 동일 클래스). harness 재작성 순환은 `_gate_feedback_block`(직전 차단 사유 피드백)로 결국 다른 문구로 회피해 자연 통과(네이버 id=193, 티스토리 id=194 실제 발행 성공 확인) — 근본 프롬프트 갭은 남아있어 다른 테마에서 재발 가능.
+- **헛다리**: 없음 — [345]("가계 연료비 창작")·[368]("산업 로드맵 수치 창작") 선례와 동일 클래스로 바로 특정. 게이트·grounding 로직 자체는 수정 대상이 아님.
+- **해결**: `_gen_theme()` 시스템 프롬프트에 "★ 거시경제 지표(기준금리·물가상승률·환율·GDP성장률 등)도 예외 아님 — 상식처럼 느껴져도 이 테마의 수집 자료·종목 데이터에 없으면 인용 금지" 문구 추가.
+- **파일**: `JARVIS02_WRITER/draft_writer.py` (`_gen_theme` 시스템 프롬프트, L1017 부근).
+- **교훈**: "출처 없는 수치 창작 금지" 같은 포괄 지시도 LLM은 *예시로 든 카테고리만* 좁게 해석한다. 산업 수치는 이미 금지 예시에 있었지만, "국민 상식"급 매크로 지표(기준금리 등)는 예시에 없어 LLM이 별개 취급했다. 창작 금지 카테고리를 넓힐 때는 "왜 이게 위험한지"(엉뚱한 주제에 진짜 통계를 갖다 붙여도 이 글의 근거 자료엔 없으므로 grounding 실패)를 명시해야 "사실이니 괜찮다"는 LLM의 자기 판단을 차단할 수 있다.
+
+---
+
+## [429] 사실성 게이트 — 숫자 없는 흑자/적자 주장이 영원히 미확인 차단(재작성 순환 무한) (2026-07-12)
+
+- **증상**: 조림사업 테마 티스토리 대본이 `[사실성] 출처·데이터 미확인: 제이씨케미칼은 저평가 매력이 있는 흑자 종목으로 분류되는 반면, 이건홀딩스는 소형주 특유의 수익성 변동을 보이며 적자 종목으로 구분됩니다.` 로 attempt=1 부터 차단.
+- **환경**: `JARVIS02_WRITER/prepublish_gate.py` `prepublish_quality_issues` → `_combined_quality_call`(fact_judge, blocked_claims) → `law_enforcer._claim_all_grounded(claim, gt)`.
+- **원인 (근본)**: `_claim_all_grounded`는 `_NUMERIC_UNIT_RE`(단위 붙은 숫자 토큰)로 주장을 스캔해 `toks`가 비어 있으면(즉 주장에 숫자가 전혀 없으면) `gt`와 무관하게 **설계상 항상 False(미확인)** 를 반환한다. `_combined_quality_call`의 프롬프트는 "숫자 없는 서술·전망·해석은 차단 제외"를 명시하지만, LLM이 흑자/적자 같은 *숫자 없는 손익 분류 주장*을 이 지시를 어기고 `blocked_claims`에 포함시키면 — 그 주장이 `stocks_data`(실측 `is_profit`)와 완전히 일치하는 **참인 주장이어도** 재작성을 몇 번을 해도 영원히 차단된다. harness는 이를 동일 fingerprint 반복으로 보고 max_attempts 소진 후 escalation.
+- **헛다리**: 없음 — ERRORS [402]/[382]/[372] 등 선례("사실성 게이트가 판정 인프라 결함으로 fail-closed 무한 재작성")와 동일 클래스 구조적 버그로 바로 특정.
+- **해결**: `prepublish_gate.py`에 `_profit_claim_issue(claim, stocks_data)` 신설 — 숫자 토큰이 없는 주장은 `_claim_all_grounded`를 건너뛰고 `stocks_data["stocks"][].is_profit`(=`net_income>0`, `JARVIS09_COLLECTOR/collect_theme.py`)로 결정론 대조. 실측과 일치하면 통과, 불일치하면 정확한 사유(`"{종목명} 흑자/적자 분류 주장 — 실측 순이익 X와 불일치"`)로 차단, 종목명 자체가 매칭 안 되면 정책대로(숫자 없는 서술 제외) 차단하지 않음. 쉼표(`,`) 절 단위로만 흑자/적자 단어를 대조해 "A는 흑자인 반면, B는 적자" 같은 대조 문장에서 고정폭 문자 윈도우가 인접 절의 단어를 잘못 끌어오는 오탐(초기 구현 자체 테스트로 발견·수정)도 방지.
+- **파일**: `JARVIS02_WRITER/prepublish_gate.py` (`_profit_claim_issue` 신설, `prepublish_quality_issues`의 `blocked_claims` 루프에 숫자 유무 분기 추가, `law_enforcer._NUMERIC_UNIT_RE` import 추가).
+- **교훈**: 사실성 grounding 함수가 "토큰 없음 → 항상 미확인"으로 설계되면, 그 함수의 *입력 정의역 밖*(숫자 없는 카테고리형 주장)의 데이터가 프롬프트 지시 위반으로 섞여 들어오는 순간 무조건 차단 트랩이 된다. 숫자 매칭 전용 grounding 함수를 호출하기 전에 *주장이 그 함수의 정의역에 속하는지*(숫자 토큰 존재 여부) 먼저 확인하고, 정의역 밖이면 있는 실측 데이터(여기서는 `is_profit`)로 별도 결정론 대조 경로를 만들 것 — LLM 프롬프트 지시만으로는 이런 경계 위반을 막을 수 없다(fail-open 방어선이 코드에도 있어야 함).
+
+---
+
 ## [428] incident_responder `_make_retry()` 항상 True 반환 — 발행 실패를 성공으로 허위 보고 (2026-07-12)
 
 - **증상**: 경제 브리핑 발행 실패 후 GUARDIAN이 "✅ 복구 성공: naver, tistory"라고 텔레그램 보고. 실제로는 두 플랫폼 모두 재발행 실패.
