@@ -404,15 +404,16 @@ def reject_post(post_id: int):
 
 
 # ── 성과 ────────────────────────────────────────────────────────
+# 기간 정의 순서 (표시 순서)
 _PERIOD_ORDER = ["today", "week", "month", "3month", "6month", "year", "all"]
 _PERIOD_META: dict[str, dict] = {
-    "today":  {"label": "당일",  "where": "date = date('now')"},
-    "week":   {"label": "1주일", "where": "date >= date('now','-7 days')"},
-    "month":  {"label": "한달",  "where": "date >= date('now','-30 days')"},
-    "3month": {"label": "3개월", "where": "date >= date('now','-90 days')"},
-    "6month": {"label": "6개월", "where": "date >= date('now','-180 days')"},
-    "year":   {"label": "1년",   "where": "date >= date('now','-365 days')"},
-    "all":    {"label": "전체",  "where": "1=1"},
+    "today":  {"label": "당일",  "where": "date = date('now')",           "min_days": 0},
+    "week":   {"label": "1주일", "where": "date >= date('now','-7 days')", "min_days": 6},
+    "month":  {"label": "한달",  "where": "date >= date('now','-30 days')","min_days": 29},
+    "3month": {"label": "3개월", "where": "date >= date('now','-90 days')","min_days": 89},
+    "6month": {"label": "6개월", "where": "date >= date('now','-180 days')","min_days": 179},
+    "year":   {"label": "1년",   "where": "date >= date('now','-365 days')","min_days": 364},
+    "all":    {"label": "전체",  "where": "1=1",                           "min_days": 0},
 }
 _PLAT_COLS   = [("naver", "naver_views"), ("tistory", "tistory_views"), ("wp", "wp_views")]
 _PLAT_LABELS = {"naver": "네이버", "tistory": "티스토리", "wp": "WordPress"}
@@ -423,7 +424,7 @@ def get_performance():
     _period_labels = {k: v["label"] for k, v in _PERIOD_META.items()}
     _empty = {
         "active_platforms": [], "platform_labels": {},
-        "period_order": _PERIOD_ORDER, "period_labels": _period_labels,
+        "period_order": ["today", "all"], "period_labels": _period_labels,
         "period_views": {}, "daily_trend": [], "top_posts": [],
         "data_range": {"from": None, "to": None, "days": 0},
     }
@@ -439,9 +440,21 @@ def get_performance():
             if n > 0:
                 active.append(plat)
 
-        # 기간 × 플랫폼 매트릭스
+        # 실제 데이터 스팬 계산 (MIN~MAX 날짜 차이, 일 단위)
+        span_days: int = _scalar(
+            con,
+            "SELECT CAST(julianday(MAX(date)) - julianday(MIN(date)) AS INTEGER) FROM performance"
+        ) or 0
+
+        # 스팬 기준으로 의미 있는 기간만 추출 (today·all은 항상 포함)
+        visible_periods = [
+            pid for pid in _PERIOD_ORDER
+            if span_days >= _PERIOD_META[pid]["min_days"]
+        ]
+
+        # 기간 × 플랫폼 매트릭스 (visible 기간만 계산)
         period_views: dict[str, dict] = {}
-        for pid in _PERIOD_ORDER:
+        for pid in visible_periods:
             where = _PERIOD_META[pid]["where"]
             row: dict[str, int] = {}
             total = 0
@@ -452,8 +465,9 @@ def get_performance():
             row["total"] = total
             period_views[pid] = row
 
-        # 일별 추이 (최신 30행 → 정순)
-        daily_rows = _rows(con, "SELECT date, naver_views, tistory_views, wp_views FROM performance ORDER BY date DESC LIMIT 30")
+        # 일별 추이 (스팬에 맞게 행 수 결정 — 최대 90행)
+        trend_limit = max(7, min(span_days + 1, 90)) if span_days > 0 else 30
+        daily_rows = _rows(con, f"SELECT date, naver_views, tistory_views, wp_views FROM performance ORDER BY date DESC LIMIT {trend_limit}")
         daily_trend: list[dict] = []
         for r in reversed(daily_rows):
             entry: dict = {"date": r["date"]}
@@ -475,7 +489,7 @@ def get_performance():
         return {
             "active_platforms": active,
             "platform_labels":  {p: _PLAT_LABELS[p] for p in active},
-            "period_order":     _PERIOD_ORDER,
+            "period_order":     visible_periods,
             "period_labels":    _period_labels,
             "period_views":     period_views,
             "daily_trend":      daily_trend,
