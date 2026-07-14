@@ -34,6 +34,7 @@ __all__ = [
     "build_insights_block",
     "attribute_pending_rewards",
     "job_quality_learn",
+    "job_quality_learn_daytime",
     "stats",
 ]
 
@@ -286,6 +287,28 @@ def job_quality_learn() -> None:
         try:
             from JARVIS07_GUARDIAN.error_collector import report
             report(e, "guardian", module=__name__, func_name="job_quality_learn")
+        except Exception:
+            pass
+
+
+def job_quality_learn_daytime() -> None:
+    """07:30·13:30·19:30 중간 실행 — 보상 귀속만. 저성과 감쇠는 23:45(job_quality_learn)만."""
+    try:
+        res = attribute_pending_rewards(days=3)
+        if res["matched"] == 0:
+            return
+        try:
+            from shared.notify import send_tg
+            send_tg(
+                f"🧠 글 품질 학습 중간 귀속 {res['matched']}건"
+                + (f" (평균 {res['avg_reward']:.2f})" if res.get("avg_reward") is not None else "")
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report
+            report(e, "guardian", module=__name__, func_name="job_quality_learn_daytime")
         except Exception:
             pass
 
