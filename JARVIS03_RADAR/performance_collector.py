@@ -237,10 +237,13 @@ _TS_BATCH_CACHE: dict[str, int] = {}
 
 def _collect_tistory_stats_batch() -> dict[str, int]:
     """
-    티스토리 통계 API(topEntry)로 인기글 조회수 일괄 수집.
+    티스토리 통계 API(topEntry) 4-window 합산으로 인기글 조회수 일괄 수집.
+    - 7일(day) + 30일(day) + 90일(week) + 180일(week) 각각 호출 → 중복 제거 후 최대값 보존
+    - 현재는 90일 이후 데이터가 없으나 서비스 성숙 시 자동으로 수집됨
     HTTP만으로 동작 — Selenium 불필요.
-    반환: {post_id_str: view_count}  (조회수 있는 글만, 최대 ~12개)
+    반환: {post_id_str: view_count}  (조회수 있는 글만)
     """
+    from datetime import timedelta
     from JARVIS08_PUBLISH.credentials.login_manager import (
         get_tistory_cookie, refresh_tistory_cookies,
     )
@@ -249,6 +252,15 @@ def _collect_tistory_stats_batch() -> dict[str, int]:
                .replace("https://", "").replace("http://", "").split(".")[0])
     if not ts_blog:
         return {}
+
+    # (days_back, granularity) — 4개 구간으로 최대 커버리지
+    # 180일: 지금은 0이지만 서비스 성숙 시 데이터 생김
+    _WINDOWS = [
+        (7,   "day"),
+        (30,  "day"),
+        (90,  "week"),
+        (180, "week"),
+    ]
 
     def _try(ts_raw: str) -> dict[str, int]:
         if not ts_raw:
@@ -259,23 +271,26 @@ def _collect_tistory_stats_batch() -> dict[str, int]:
             "Cookie": f"TSSESSION={ts_raw}",
             "Referer": f"https://{ts_blog}.tistory.com/manage/statistics/blog",
         }
-        # 최근 90일 데이터 (더 오래된 날짜는 API가 빈 결과 반환)
-        from datetime import timedelta
-        start = (date.today() - timedelta(days=90)).strftime("%Y-%m-%d")
-        url = (f"https://{ts_blog}.tistory.com/manage/v2/statistics/blog/topEntry"
-               f"?metric=pv&startDate={start}&granularity=week")
+        base = f"https://{ts_blog}.tistory.com/manage/v2/statistics/blog/topEntry"
         result: dict[str, int] = {}
-        try:
-            r = requests.get(url, headers=hdrs, timeout=15, allow_redirects=False)
-            if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
-                for p in r.json().get("data", {}).get("result", []):
-                    pid = str(p.get("entryId") or "")
-                    v   = int(p.get("count", 0) or 0)
-                    if pid and v > 0:
-                        result[pid] = v
-        except Exception as e:
-            print(f"  [티스토리 배치] topEntry API 오류: {e}")
-            _g_report("radar", e, module=__name__, func_name="_collect_tistory_stats_batch")
+        for days, gran in _WINDOWS:
+            start = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
+            try:
+                r = requests.get(
+                    f"{base}?metric=pv&startDate={start}&granularity={gran}",
+                    headers=hdrs, timeout=15,
+                )
+                if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
+                    for p in r.json().get("data", {}).get("result", []):
+                        pid = str(p.get("entryId") or "")
+                        v   = int(p.get("count", 0) or 0)
+                        if pid and v > 0:
+                            # 기간마다 counts가 달라도 최대값 보존
+                            result[pid] = max(result.get(pid, 0), v)
+            except Exception as e:
+                print(f"  [티스토리 배치] topEntry({days}d) 오류: {e}")
+                _g_report("radar", e, module=__name__, func_name="_collect_tistory_stats_batch")
+            time.sleep(0.3)
         return result
 
     # 1차: 현재 쿠키
