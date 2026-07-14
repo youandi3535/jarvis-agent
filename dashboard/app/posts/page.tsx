@@ -70,9 +70,9 @@ function cookieAgeLabel(hours?: number): string {
 // ── 메인 페이지 ─────────────────────────────────────────────────
 
 export default function PostsPage() {
-  const { data: posts }   = useSWR<PostStats>("/api/posts",   fetcher, { refreshInterval: 30000 });
-  const { data: publish } = useSWR<PublishStatus>("/api/publish", fetcher, { refreshInterval: 60000 });
-  const { data: themes }  = useSWR<OfficialThemes>("/api/themes/official", fetcher, { refreshInterval: 300000 });
+  const { data: posts }   = useSWR<PostStats>("/api/posts",   fetcher, { refreshInterval: 600000 });
+  const { data: publish } = useSWR<PublishStatus>("/api/publish", fetcher, { refreshInterval: 1800000 });
+  const { data: themes }  = useSWR<OfficialThemes>("/api/themes/official", fetcher, { refreshInterval: 3600000 });
 
   const naver   = publish?.naver;
   const tistory = publish?.tistory;
