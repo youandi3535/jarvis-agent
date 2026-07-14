@@ -279,6 +279,72 @@ def get_quality_stats():
         return {"by_status": {}, "status_labels": {}, "status_hints": {}, "recent": []}
 
 
+@app.get("/api/quality/trend")
+def get_quality_trend():
+    con = _db()
+    if not con:
+        return {}
+    try:
+        import json as _json
+        from collections import defaultdict
+        rows = _rows(con, """
+            SELECT strftime('%Y-W%W', created_at) as week,
+                   suggestions, post_type, platform
+            FROM post_analysis
+            WHERE created_at IS NOT NULL
+            ORDER BY created_at
+        """)
+        weekly   = defaultdict(lambda: {"posts": 0, "total_issues": 0})
+        by_type  = defaultdict(int)
+        by_plat  = defaultdict(lambda: {"posts": 0, "total_issues": 0})
+        by_ptype = defaultdict(lambda: {"posts": 0, "total_issues": 0})
+        for r in rows:
+            week = r["week"]
+            try:   sugs = _json.loads(r["suggestions"] or "[]")
+            except: sugs = []
+            n = len(sugs)
+            weekly[week]["posts"]        += 1
+            weekly[week]["total_issues"] += n
+            for s in sugs:
+                by_type[s.get("type", "other")] += 1
+            plat = r["platform"] or "unknown"
+            pt   = r["post_type"] or "unknown"
+            by_plat[plat]["posts"]        += 1
+            by_plat[plat]["total_issues"] += n
+            by_ptype[pt]["posts"]         += 1
+            by_ptype[pt]["total_issues"]  += n
+
+        weekly_trend = []
+        for week in sorted(weekly.keys()):
+            d    = weekly[week]
+            posts = d["posts"]
+            avg  = round(d["total_issues"] / posts, 1) if posts else 0
+            weekly_trend.append({"week": week.split("-")[1], "posts": posts, "avg_issues": avg})
+
+        def _stats(d):
+            return {k: {"posts": v["posts"],
+                        "avg_issues": round(v["total_issues"]/v["posts"], 1) if v["posts"] else 0}
+                    for k, v in d.items()}
+
+        top_insights = _rows(con, """
+            SELECT insight_type, description, occurrences, weight
+            FROM learning_insights
+            ORDER BY occurrences DESC, weight DESC
+            LIMIT 8
+        """)
+        con.close()
+        return {
+            "weekly":       weekly_trend,
+            "by_type":      dict(sorted(by_type.items(), key=lambda x: -x[1])),
+            "by_platform":  _stats(by_plat),
+            "by_post_type": _stats(by_ptype),
+            "top_insights": [dict(r) for r in top_insights],
+        }
+    except Exception as e:
+        con.close()
+        return {}
+
+
 @app.get("/api/quality/history")
 def get_quality_history(limit: int = 150):
     try:
