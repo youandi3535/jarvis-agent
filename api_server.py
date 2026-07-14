@@ -404,35 +404,92 @@ def reject_post(post_id: int):
 
 
 # ── 성과 ────────────────────────────────────────────────────────
+_PERIOD_ORDER = ["today", "week", "month", "3month", "6month", "year", "all"]
+_PERIOD_META: dict[str, dict] = {
+    "today":  {"label": "당일",  "where": "date = date('now')"},
+    "week":   {"label": "1주일", "where": "date >= date('now','-7 days')"},
+    "month":  {"label": "한달",  "where": "date >= date('now','-30 days')"},
+    "3month": {"label": "3개월", "where": "date >= date('now','-90 days')"},
+    "6month": {"label": "6개월", "where": "date >= date('now','-180 days')"},
+    "year":   {"label": "1년",   "where": "date >= date('now','-365 days')"},
+    "all":    {"label": "전체",  "where": "1=1"},
+}
+_PLAT_COLS   = [("naver", "naver_views"), ("tistory", "tistory_views"), ("wp", "wp_views")]
+_PLAT_LABELS = {"naver": "네이버", "tistory": "티스토리", "wp": "WordPress"}
+
 @app.get("/api/performance")
 def get_performance():
     con = _db()
+    _period_labels = {k: v["label"] for k, v in _PERIOD_META.items()}
+    _empty = {
+        "active_platforms": [], "platform_labels": {},
+        "period_order": _PERIOD_ORDER, "period_labels": _period_labels,
+        "period_views": {}, "daily_trend": [], "top_posts": [],
+        "data_range": {"from": None, "to": None, "days": 0},
+    }
     if not con:
-        return {"total_views": 0, "top_posts": [], "platform_views": {}, "naver_ranked": [], "history": []}
+        return _empty
     try:
-        total   = _scalar(con, "SELECT COALESCE(SUM(current_views),0) FROM post_analysis")
+        col_map = dict(_PLAT_COLS)
+
+        # 데이터 있는 플랫폼 탐지
+        active: list[str] = []
+        for plat, col in _PLAT_COLS:
+            n = _scalar(con, f"SELECT COUNT(*) FROM performance WHERE {col} IS NOT NULL AND {col} > 0")
+            if n > 0:
+                active.append(plat)
+
+        # 기간 × 플랫폼 매트릭스
+        period_views: dict[str, dict] = {}
+        for pid in _PERIOD_ORDER:
+            where = _PERIOD_META[pid]["where"]
+            row: dict[str, int] = {}
+            total = 0
+            for plat in active:
+                v = _scalar(con, f"SELECT COALESCE(SUM({col_map[plat]}),0) FROM performance WHERE {where}")
+                row[plat] = v
+                total += v
+            row["total"] = total
+            period_views[pid] = row
+
+        # 일별 추이 (최신 30행 → 정순)
+        daily_rows = _rows(con, "SELECT date, naver_views, tistory_views, wp_views FROM performance ORDER BY date DESC LIMIT 30")
+        daily_trend: list[dict] = []
+        for r in reversed(daily_rows):
+            entry: dict = {"date": r["date"]}
+            for plat in active:
+                entry[plat] = r.get(col_map[plat]) or 0
+            daily_trend.append(entry)
+
+        # 수집 기간 정보
+        rng = _rows(con, "SELECT MIN(date) as from_d, MAX(date) as to_d, COUNT(*) as days FROM performance")
+        dr = rng[0] if rng else {"from_d": None, "to_d": None, "days": 0}
+
+        # 개별 글 조회수 (post_analysis 크롤링 기반)
         try:
             top = _rows(con, "SELECT platform,title,current_views,naver_rank,created_at FROM post_analysis WHERE current_views>0 ORDER BY current_views DESC LIMIT 15")
         except Exception:
             top = _rows(con, "SELECT platform,title,current_views,NULL as naver_rank,created_at FROM post_analysis WHERE current_views>0 ORDER BY current_views DESC LIMIT 15")
-        by_plat = _rows(con, "SELECT platform,COALESCE(SUM(current_views),0) as views FROM post_analysis GROUP BY platform")
-        try:
-            naver_r = _rows(con, "SELECT title,naver_rank,current_views,created_at FROM post_analysis WHERE naver_rank IS NOT NULL ORDER BY naver_rank ASC LIMIT 10")
-        except Exception:
-            naver_r = []
-        hist = _rows(con, "SELECT date(created_at) as d, COALESCE(SUM(current_views),0) as v FROM post_analysis WHERE date(created_at) >= date('now','-7 days') GROUP BY d ORDER BY d")
+
         con.close()
         return {
-            "total_views":    total,
-            "top_posts":      top,
-            "platform_views": {r["platform"]: r["views"] for r in by_plat},
-            "naver_ranked":   naver_r,
-            "history":        hist,
+            "active_platforms": active,
+            "platform_labels":  {p: _PLAT_LABELS[p] for p in active},
+            "period_order":     _PERIOD_ORDER,
+            "period_labels":    _period_labels,
+            "period_views":     period_views,
+            "daily_trend":      daily_trend,
+            "top_posts":        top,
+            "data_range": {
+                "from": dr.get("from_d"),
+                "to":   dr.get("to_d"),
+                "days": dr.get("days", 0),
+            },
         }
     except Exception:
         try: con.close()
         except Exception: pass
-        return {"total_views": 0, "top_posts": [], "platform_views": {}, "naver_ranked": [], "history": []}
+        return _empty
 
 
 # ── 키워드 성과 ──────────────────────────────────────────────────
