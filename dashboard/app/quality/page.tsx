@@ -1,11 +1,10 @@
 "use client";
 import useSWR from "swr";
-import { apiFetch, fetcher, QualityHistory } from "@/lib/api";
+import { apiFetch, QualityHistory } from "@/lib/api";
 import { fmtNum, fmtTime, statusColor } from "@/lib/utils";
 import { useState } from "react";
 
 type QualityStats = {
-  total: number;
   by_status: Record<string, number>;
 };
 
@@ -49,16 +48,37 @@ const td: React.CSSProperties = {
   verticalAlign: "middle",
 };
 
+/* ── 상태 표시 매핑 ────────────────────────────────────────────────── */
+const STATUS_LABEL: Record<string, string> = {
+  approved:       "승인 완료",
+  analyzing:      "분석 중",
+  ignored:        "무시",
+  revise_skipped: "수정 건너뜀",
+  revised:        "수정 완료",
+  new:            "신규",
+  pending:        "대기 중",
+  rejected:       "반려",
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  approved:       "var(--c-success)",
+  revised:        "var(--c-success)",
+  analyzing:      "var(--c-primary)",
+  ignored:        "var(--c-warn)",
+  revise_skipped: "var(--c-warn)",
+  rejected:       "var(--c-danger)",
+  new:            "var(--c-primary)",
+  pending:        "var(--c-warn)",
+};
+
+function statusKpiColor(key: string): string {
+  return STATUS_COLOR[key] ?? "var(--c-text2)";
+}
+
 /* ── 상태 뱃지 ────────────────────────────────────────────────────── */
 function StatusBadge({ status }: { status: string }) {
   const color = statusColor(status);
-  const labelMap: Record<string, string> = {
-    approved: "승인완료",
-    rejected: "반려",
-    new: "신규",
-    pending: "대기중",
-    analyzing: "분석중",
-  };
+  const label = STATUS_LABEL[status] ?? status;
   return (
     <span style={{
       display: "inline-flex",
@@ -71,7 +91,7 @@ function StatusBadge({ status }: { status: string }) {
       color,
       border: `1px solid ${color}44`,
     }}>
-      {labelMap[status] ?? status}
+      {label}
     </span>
   );
 }
@@ -96,10 +116,8 @@ export default function QualityPage() {
   const [loadingId, setLoadingId] = useState<number | null>(null);
 
   const by = stats?.by_status ?? {};
-  const total     = stats?.total ?? 0;
-  const waiting   = (by["new"] ?? 0) + (by["pending"] ?? 0);
-  const approved  = by["approved"] ?? 0;
-  const rejected  = by["rejected"] ?? 0;
+  const total = Object.values(by).reduce((a, b) => a + b, 0);
+  const statusEntries = Object.entries(by).sort((a, b) => b[1] - a[1]);
 
   const history = (rawHistory ?? []).slice(0, 20);
 
@@ -121,15 +139,20 @@ export default function QualityPage() {
         <p style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 6 }}>발행 글 품질 검토 및 승인 관리</p>
       </div>
 
-      {/* KPI 4개 */}
+      {/* KPI — 전체 + by_status 동적 렌더링 */}
       {loadingStats ? (
         <div style={{ color: "var(--c-text2)", fontSize: 14 }}>로딩 중…</div>
       ) : (
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           <KpiCard label="전체" value={fmtNum(total)} color="var(--c-primary)" />
-          <KpiCard label="승인 대기" value={fmtNum(waiting)} color="var(--c-warn)" />
-          <KpiCard label="승인 완료" value={fmtNum(approved)} color="var(--c-success)" />
-          <KpiCard label="반려" value={fmtNum(rejected)} color="var(--c-danger)" />
+          {statusEntries.map(([key, count]) => (
+            <KpiCard
+              key={key}
+              label={STATUS_LABEL[key] ?? key}
+              value={fmtNum(count)}
+              color={statusKpiColor(key)}
+            />
+          ))}
         </div>
       )}
 
