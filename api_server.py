@@ -127,6 +127,61 @@ def get_posts():
 
 
 # ── 파이프라인 ───────────────────────────────────────────────────
+@app.get("/api/themes/official")
+def get_official_themes():
+    """네이버 공식 테마 전체 + 작성 현황 + 오늘의 픽."""
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(BASE_DIR))
+        from JARVIS09_COLLECTOR.collect_theme import _fetch_naver_theme_catalog
+        catalog: dict = _fetch_naver_theme_catalog()   # {테마명: 테마번호}
+    except Exception:
+        catalog = {}
+
+    con = _db()
+    written_set: set[str] = set()
+    today_pick: dict | None = None
+    try:
+        if con:
+            # 작성 완료 테마 (post_analysis, 경제지표·경제브리핑 제외)
+            rows = _rows(con, """
+                SELECT DISTINCT theme FROM post_analysis
+                WHERE theme IS NOT NULL
+                  AND theme NOT LIKE '경제지표%'
+                  AND theme NOT LIKE '경제 브리핑%'
+            """)
+            # 카탈로그에 있는 테마만 ✓ 처리 (비공식 주제 제외)
+            written_set = {r["theme"] for r in rows if r["theme"] in catalog}
+
+            # 오늘의 픽: pipeline에서 오늘 등록된 것 중 opportunity_score 최상위 1개
+            pick_rows = _rows(con, """
+                SELECT theme, sector, opportunity_score FROM pipeline
+                WHERE status = 'suggested'
+                  AND date(created_at) = date('now', 'localtime')
+                ORDER BY opportunity_score DESC, created_at DESC
+                LIMIT 1
+            """)
+            if pick_rows:
+                today_pick = dict(pick_rows[0])
+            con.close()
+    except Exception:
+        if con:
+            con.close()
+
+    themes = [
+        {"name": name, "no": no, "written": name in written_set}
+        for name, no in catalog.items()
+    ]
+    themes.sort(key=lambda x: (not x["written"], x["name"]))
+
+    return {
+        "total":         len(themes),
+        "written_count": len(written_set),
+        "themes":        themes,
+        "today_pick":    today_pick,
+    }
+
+
 @app.get("/api/pipeline")
 def get_pipeline():
     con = _db()
@@ -517,7 +572,23 @@ def get_publish():
         except Exception:
             pass
         con.close()
-    return {"naver_cookie_ok": nv_ok, "naver_cookie_age": nv_age_h, "ts_cookie_ok": ts_ok, "plat_7d": plat_counts}
+    return {
+        "naver": {
+            "cookie_ok":       nv_ok,
+            "cookie_age_hours": nv_age_h,
+            "posts_7d":        plat_counts.get("naver", 0),
+        },
+        "tistory": {
+            "cookie_ok":       ts_ok,
+            "cookie_age_hours": None,
+            "posts_7d":        plat_counts.get("tistory", 0),
+        },
+        # 구 필드 호환 (system/page.tsx)
+        "naver_cookie_ok":  nv_ok,
+        "naver_cookie_age": nv_age_h,
+        "ts_cookie_ok":     ts_ok,
+        "plat_7d":          plat_counts,
+    }
 
 
 # ── GUARDIAN 오류 ────────────────────────────────────────────────
