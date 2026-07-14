@@ -1,16 +1,68 @@
-"""JARVIS 파이프라인 연결 그래프 — 단일 진실 소스 (사용자 박제 2026-07-11).
+"""JARVIS 파이프라인 연결 그래프 — 단일 진실 소스.
 
-대시보드 dashboard/app/page.tsx 가 /api/graph 로 이 데이터를 수신해
-SVG 경로를 자동 계산한다. 파이프라인 연결이 바뀌면 이 파일만 수정하면
-대시보드가 자동으로 반영된다.
+★ 새 에이전트·연결 추가 시 이 파일만 수정하면
+  대시보드·현황 로그·잡 트리거 매핑이 자동 반영된다.
 
+─────────────────────────────────────────────
+AGENTS  : 에이전트 카드 정의 (ID·이름·색상·위치)
+           x/y = 대시보드 픽셀 좌표
+           big = True → 큰 카드 (BIG_W=210, BIG_H=215), 기본 158×170
+PIPELINE_EDGES : 연결선 topology + 애니메이션 파라미터
+LEGEND  : 대시보드 우하단 색상 범례 (PIPELINE_EDGES에서 자동 파생)
+─────────────────────────────────────────────
 route 값:
   (없음)      — 자동 판별: 같은 행→수평, 같은 열→수직
-  "via_lane"  — 중간 레인(lane_y)을 경유하는 우회 (M fx,fy V lane_y H tx V ty)
+  "via_lane"  — 중간 레인(lane_y) 경유 우회 (M fx,fy V lane_y H tx V ty)
 
 dx : 수직 연결선 x 오프셋 — 같은 열 왕복 선의 겹침 방지
 """
 from __future__ import annotations
+
+# ── 대시보드 레이아웃 상수 (page.tsx 와 동기화) ───────────────────
+# 이 값만 바꾸면 대시보드 전체 레이아웃이 한 번에 바뀐다.
+LAYOUT: dict = {
+    "W": 1130, "H": 660,
+    "CARD_W": 158, "CARD_H": 170,
+    "BIG_W": 210,  "BIG_H": 215,
+    "ROW0_Y": 16, "ROW1_Y": 252, "ROW2_Y": 462,
+    "PIP_GAP": 76,   # Row1 카드 간격
+}
+
+def _x(col: int, *, row: int = 1) -> int:
+    """열 인덱스 → 픽셀 x. row=0 특수 배치."""
+    L = LAYOUT
+    if row == 0:
+        # 0=좌단, 1=중앙(BIG), 2=우단
+        return [18, (L["W"] - L["BIG_W"]) // 2, L["W"] - 18 - L["CARD_W"]][col]
+    return 18 + col * (L["CARD_W"] + L["PIP_GAP"])
+
+# ── 에이전트 정의 — 이 목록이 대시보드 카드 렌더의 단일 진실 소스 ──
+# 새 에이전트 추가: 이 목록에 dict 추가 → 대시보드 자동 반영
+AGENTS: list[dict] = [
+    # ── 상단 관리층 (Row 0) ──────────────────────────────────────
+    {"id":"j00","num":"00","label":"J00 INFRA",   "sub":"인프라 관리자",   "color":"#4ade80",
+     "x":_x(0,row=0), "y":LAYOUT["ROW0_Y"]},
+    {"id":"j01","num":"01","label":"J01 MASTER",  "sub":"마스터 라우터",   "color":"#4f90d9",
+     "x":_x(1,row=0), "y":LAYOUT["ROW0_Y"], "big":True},
+    {"id":"j04","num":"04","label":"J04 SCHED",   "sub":"작업 스케줄러",   "color":"#fb923c",
+     "x":_x(2,row=0), "y":LAYOUT["ROW0_Y"]},
+    # ── 파이프라인 (Row 1) ────────────────────────────────────────
+    {"id":"j03","num":"03","label":"J03 RADAR",   "sub":"트렌드 레이더",   "color":"#fbbf24",
+     "x":_x(0), "y":LAYOUT["ROW1_Y"]},
+    {"id":"j09","num":"09","label":"J09 COLLECT", "sub":"데이터 수집기",   "color":"#38bdf8",
+     "x":_x(1), "y":LAYOUT["ROW1_Y"]},
+    {"id":"j02","num":"02","label":"J02 WRITER",  "sub":"블로그 라이터",   "color":"#a78bfa",
+     "x":_x(2), "y":LAYOUT["ROW1_Y"]},
+    {"id":"j06","num":"06","label":"J06 IMAGE",   "sub":"이미지 생성",     "color":"#e879f9",
+     "x":_x(3), "y":LAYOUT["ROW1_Y"]},
+    {"id":"j08","num":"08","label":"J08 PUBLISH", "sub":"발행 관리자",     "color":"#22d3ee",
+     "x":_x(4), "y":LAYOUT["ROW1_Y"]},
+    # ── 하단 감시층 (Row 2) ──────────────────────────────────────
+    {"id":"j05","num":"05","label":"J05 VISION",  "sub":"메트릭 모니터링", "color":"#34d399",
+     "x":_x(1), "y":LAYOUT["ROW2_Y"]},
+    {"id":"j07","num":"07","label":"J07 GUARD",   "sub":"오류 수호자",     "color":"#f43f5e",
+     "x":_x(2), "y":LAYOUT["ROW2_Y"]},
+]
 
 PIPELINE_EDGES: list[dict] = [
     # ══ Row1 수평 주 파이프라인 ══════════════════════════════════
@@ -37,15 +89,14 @@ PIPELINE_EDGES: list[dict] = [
      "route": "via_lane", "lane_y": 244},
 ]
 
-# 범례 — 대시보드 우하단 (색상 그룹 단위)
-LEGEND: list[dict] = [
-    {"col": "#fbbf24", "label": "J03 topic_pack / 선수집"},
-    {"col": "#38bdf8", "label": "J09 수집 데이터"},
-    {"col": "#e879f9", "label": "J02→J06 대본"},
-    {"col": "#22d3ee", "label": "J06→J08 발행"},
-    {"col": "#f43f5e", "label": "J07 오류·수정"},
-    {"col": "#34d399", "label": "J05 헬스 리포트"},
-    {"col": "#fb923c", "label": "J04 잡 트리거"},
-    {"col": "#4f90d9", "label": "J01 라우팅"},
-    {"col": "#4ade80", "label": "J00 인프라"},
-]
+# ── 범례 — AGENTS 색상에서 자동 파생 ────────────────────────────
+# 새 에이전트 추가 시 범례도 자동 갱신됨 (하드코딩 금지)
+def _build_legend() -> list[dict]:
+    seen: dict[str, str] = {}
+    for a in AGENTS:
+        col = a["color"]
+        if col not in seen:
+            seen[col] = a["label"]
+    return [{"col": col, "label": label} for col, label in seen.items()]
+
+LEGEND: list[dict] = _build_legend()

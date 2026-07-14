@@ -38,21 +38,23 @@ _DATA_FILE = Path(os.environ.get(
 _LOG_MAX = 60
 DEFAULT_TTL = 40  # 기본 40초
 
-_EDGE_LOG_MSGS: dict[str, str] = {
-    "e1":  "J03 RADAR → J09 COLLECT  선수집 시작",
-    "e2":  "J09 COLLECT → J02 WRITER  데이터 전달",
-    "e3":  "J02 WRITER → J06 IMAGE  대본 전달",
-    "e5":  "J03 RADAR → J02 WRITER  주제 패키지 전달",
-    "e6":  "J06 IMAGE → J08 PUBLISH  발행 시작",
-    "e7":  "J02 WRITER → J07 GUARD  오류 보고",
-    "e8":  "J07 GUARD → J02 WRITER  코드 수정 완료",
-    "e9":  "J09 COLLECT → J05 VISION  수집 완료",
-    "e10": "J05 VISION → J07 GUARD  헬스 리포트",
-    "e11": "J00 INFRA → J01 MASTER  인프라 상태 전달",
-    "e12": "J01 MASTER → J02 WRITER  라우팅",
-    "e13": "J04 SCHED → J03 RADAR  수집 트리거",
-    "e14": "J04 SCHED → J02 WRITER  발행 트리거",
-}
+# ── 엣지 로그 메시지 — pipeline_graph.py 에서 자동 파생 (하드코딩 금지) ──
+# pipeline_graph.py 에 엣지·에이전트를 추가하면 이 메시지도 자동 갱신됨.
+def _build_edge_log_msgs() -> dict[str, str]:
+    try:
+        from shared.pipeline_graph import PIPELINE_EDGES, AGENTS
+        _name = {a["id"]: a["label"] for a in AGENTS}
+        msgs: dict[str, str] = {}
+        for e in PIPELINE_EDGES:
+            f = _name.get(e["from"], e["from"].upper())
+            t = _name.get(e["to"],   e["to"].upper())
+            lbl = (e.get("label") or "").strip()
+            msgs[e["id"]] = f"{f} → {t}  {lbl}".rstrip() if lbl else f"{f} → {t}"
+        return msgs
+    except Exception:
+        return {}
+
+_EDGE_LOG_MSGS: dict[str, str] = _build_edge_log_msgs()
 
 
 # ── 내부 파일 I/O ────────────────────────────────────────────────

@@ -251,6 +251,13 @@ def call_jarvis01(intent: str, params: Optional[dict] = None) -> dict:
         }
     cmds: list[str] = cmd if isinstance(cmd, list) else [cmd]
 
+    # e12 (J01→J02 라우팅) 활성화
+    try:
+        from shared.pipeline_activity import mark_active
+        mark_active("e12")
+    except Exception:
+        pass
+
     # 실제 디스패치 — JARVIS02 의 handle_telegram_command 호출
     # (이는 내부적으로 별도 스레드에서 실행되므로 즉시 리턴)
     try:

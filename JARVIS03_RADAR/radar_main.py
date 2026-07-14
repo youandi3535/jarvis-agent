@@ -42,6 +42,14 @@ from JARVIS03_RADAR.analyzer import (
 # 글자수 정책은 length_manager 단일 진입점
 from JARVIS02_WRITER import length_manager as _LM
 
+# kiwipiepy — 명사 성분 검증 (없으면 패턴 폴백)
+try:
+    from kiwipiepy import Kiwi as _Kiwi
+    _kiwi_main = _Kiwi()
+except Exception:
+    _kiwi_main = None
+_NOUN_TAGS = {"NNG", "NNP", "SL", "SH"}  # 일반명사, 고유명사, 외국어, 한자
+
 # ── 의미없는 키워드 필터링 ──────────────────────────────────────
 # 조사·접속사·문장 파편·단순 동사 어미 등 블랙리스트
 _KW_BLACKLIST: set[str] = {
@@ -53,7 +61,12 @@ _KW_BLACKLIST: set[str] = {
 }
 # 이 패턴에 해당하면 제거 (문장 파편 — 조사/어미로 끝나는 length_manager.RADAR_KOR_NOISE_MAX 이상 단어)
 _FRAGMENT_RE = re.compile(
-    r"(에서|에게|으로|부터|까지|라서|이라|한다|이다|하는|하면|하여|하고|이고|이며|이지|에도|에만|에만|에서|본부장에|공사에|시장에|회장에)$"
+    r"(에서|에게|으로|부터|까지|라서|이라|한다|이다|하는|하면|하여|하고|이고|이며|이지|에도|에만|에서"
+    r"|본부장에|공사에|시장에|회장에"
+    r"|왔는데|했는데|겠는데|됐는데|는데"  # 연결어미 (3글자 이상 선행 + 는데)
+    r"|하게|하겠다|했다|했고|했으며"      # 동사 어미
+    r"|이뤄낸|이루어낸|해낸|만들어낸"    # 완성 서술형 (특정 패턴만)
+    r")$"
 )
 
 def _is_meaningful(kw: str) -> bool:
@@ -73,6 +86,15 @@ def _is_meaningful(kw: str) -> bool:
     # 공백 포함 긴 문장 파편 (단어 3개 이상)
     if len(kw.split()) >= 4:
         return False
+    # 순수 한글 단어 (공백 없음) — kiwipiepy 로 품사 검증
+    # "갑자기"(부사), "후라도가"(명사+조사) 등 비명사/조사 결합 제거
+    if _kiwi_main and " " not in kw and re.fullmatch(_LM.RADAR_KOR_ONLY_PATTERN, kw):
+        tokens = _kiwi_main.tokenize(kw, normalize_coda=True)
+        if tokens:
+            has_noun = any(t.tag in _NOUN_TAGS for t in tokens)
+            last_is_particle = tokens[-1].tag.startswith("J")  # JX/JKS/JKO 등 조사류
+            if not has_noun or last_is_particle:
+                return False
     return True
 
 def _filter_keywords(trending: list[str]) -> list[str]:
@@ -191,7 +213,11 @@ def collect_today() -> dict:
     print("[RADAR] Google Trends 수집 중...")
     raw_google = get_trending_searches(limit=40)
     google_filtered = _filter_keywords(raw_google)
-    google_top10 = [{"keyword": kw, "rank": i + 1} for i, kw in enumerate(google_filtered[:10])]
+    n_g = max(len(google_filtered), 1)
+    google_top10 = [
+        {"keyword": kw, "rank": i + 1, "score": round(1 - i / n_g, 3)}
+        for i, kw in enumerate(google_filtered[:10])
+    ]
     print(f"[RADAR] Google 유효 키워드: {len(google_filtered)}개")
 
     # ── 네이버 트렌딩 (독립 소스) ──────────────────────────────────
@@ -201,21 +227,21 @@ def collect_today() -> dict:
         from JARVIS03_RADAR.collectors.naver_collector import get_naver_trending
         raw_naver = get_naver_trending(limit=30)
         naver_items = [d for d in raw_naver if _is_meaningful(d["keyword"])]
-        naver_top10 = [{"keyword": d["keyword"], "rank": i + 1}
+        naver_top10 = [{"keyword": d["keyword"], "rank": i + 1, "score": d.get("score", 0)}
                        for i, d in enumerate(naver_items[:10])]
         print(f"[RADAR] Naver 유효 키워드: {len(naver_items)}개")
     except Exception as e:
         naver_top10 = []
         print(f"[RADAR] Naver 트렌딩 스킵: {e}")
 
-    # ── 혼합 TOP 50 ────────────────────────────────────────────────
-    combined_top50 = _build_combined(google_filtered, naver_items, top_n=50)
-    print(f"[RADAR] 혼합 TOP 50 구성: 구글 {sum(1 for c in combined_top50 if 'google' in c['sources'])}개 "
-          f"/ 네이버 {sum(1 for c in combined_top50 if 'naver' in c['sources'])}개 "
-          f"/ 양쪽 {sum(1 for c in combined_top50 if len(c['sources']) == 2)}개")
+    # ── 혼합 키워드 풀 (표시는 프론트에서 30개 슬라이스) ──────────────
+    combined_keywords = _build_combined(google_filtered, naver_items, top_n=50)
+    print(f"[RADAR] 혼합 키워드 구성: 구글 {sum(1 for c in combined_keywords if 'google' in c['sources'])}개 "
+          f"/ 네이버 {sum(1 for c in combined_keywords if 'naver' in c['sources'])}개 "
+          f"/ 양쪽 {sum(1 for c in combined_keywords if len(c['sources']) == 2)}개")
 
     # 기존 downstream 호환 — 혼합 키워드 목록을 trending 으로 사용
-    trending = [c["keyword"] for c in combined_top50][:30]
+    trending = [c["keyword"] for c in combined_keywords][:30]
     print(f"[RADAR] 필터링 후 유효 키워드: {len(trending)}개")
 
     # 경제 뉴스 헤드라인 + 주식 시드 키워드 병합 (중복 제거)
@@ -280,6 +306,8 @@ def collect_today() -> dict:
     scored     = enrich_with_opportunity(scored)
     sector_sum = build_sector_summary(scored)
     recs       = generate_recommendations(sector_sum, n=10)  # 5→10으로 확대
+    # 섹터 다양성 유지하되 최종 순서는 opportunity_score DESC (직관적 순위)
+    recs.sort(key=lambda r: r.get("opportunity_score", r.get("score", 0)), reverse=True)
 
     # ── 5. LLM 콘텐츠 각도 생성 — 추천 + 고점수 키워드 전체 ────────
     # recs에 없는 상위 scored 키워드도 각도 생성
@@ -299,9 +327,12 @@ def collect_today() -> dict:
     print(f"[RADAR] LLM 각도 생성 대상: {len(all_for_llm)}개 키워드")
     all_for_llm = generate_content_angles(all_for_llm, autocomplete=autocomplete)
 
-    # recs / extra 분리
-    recs_kws   = {r["keyword"] for r in recs}
-    recs       = [r for r in all_for_llm if r["keyword"] in recs_kws]
+    # recs / extra 분리 — opportunity_score DESC 순서 복원
+    recs_kws   = {r["keyword"]: r.get("opportunity_score", r.get("score", 0)) for r in recs}
+    recs       = sorted(
+        [r for r in all_for_llm if r["keyword"] in recs_kws],
+        key=lambda r: recs_kws.get(r["keyword"], 0), reverse=True,
+    )
     extra_recs = [r for r in all_for_llm if r["keyword"] not in recs_kws]
 
     # content_angles 통합 저장
@@ -319,7 +350,7 @@ def collect_today() -> dict:
         "google_trending": trending,          # 하위 호환
         "google_top10":    google_top10,      # 구글 독립 TOP 10
         "naver_top10":     naver_top10,       # 네이버 독립 TOP 10
-        "combined_top50":  combined_top50,    # 혼합 TOP 50
+        "combined_keywords": combined_keywords,  # 혼합 키워드 풀 (프론트 슬라이스로 표시 개수 결정)
         "scored_keywords": scored,
         "sector_summary":  dict(sector_sum),
         "recommendations": recs,

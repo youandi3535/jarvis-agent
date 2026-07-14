@@ -153,24 +153,25 @@ def get_pipeline():
 def get_trends():
     con = _db()
     if not con:
-        return {"today": 0, "top": [], "sectors": {}, "google_top10": [], "naver_top10": [], "combined_top50": []}
+        return {"today": 0, "top": [], "sectors": {}, "google_top10": [], "naver_top10": [], "combined_keywords": []}
     today = datetime.now().strftime("%Y-%m-%d")
     try:
         count   = _scalar(con, "SELECT COUNT(*) FROM trends WHERE date=?", (today,))
         top     = _rows(con, "SELECT keyword,sector,score,opportunity_score,source FROM trends WHERE date=? ORDER BY opportunity_score DESC LIMIT 15", (today,))
         sectors = _rows(con, "SELECT sector,COUNT(*) as n FROM trends WHERE date=? GROUP BY sector ORDER BY n DESC", (today,))
         con.close()
-        google_top10, naver_top10, combined_top50 = [], [], []
+        google_top10, naver_top10, combined_keywords = [], [], []
         recommendations, trend_delta = [], {}
         json_path = BASE_DIR / "JARVIS03_RADAR" / "data" / f"trends_{today}.json"
         if json_path.exists():
             try:
                 raw = json.loads(json_path.read_text(encoding="utf-8"))
-                google_top10    = raw.get("google_top10", [])
-                naver_top10     = raw.get("naver_top10", [])
-                combined_top50  = raw.get("combined_top50", [])
-                recommendations = raw.get("recommendations", [])
-                trend_delta     = raw.get("trend_delta", {})
+                google_top10     = raw.get("google_top10", [])
+                naver_top10      = raw.get("naver_top10", [])
+                # 구 필드명(combined_top50) 호환 fallback
+                combined_keywords = raw.get("combined_keywords", raw.get("combined_top50", []))
+                recommendations   = raw.get("recommendations", [])
+                trend_delta       = raw.get("trend_delta", {})
             except Exception:
                 pass
         topic_candidates = []
@@ -182,14 +183,14 @@ def get_trends():
             except Exception:
                 pass
         return {
-            "today":             count,
-            "sectors":           {r["sector"]: r["n"] for r in sectors},
-            "google_top10":      google_top10,
-            "naver_top10":       naver_top10,
-            "combined_top50":    combined_top50,
-            "recommendations":   recommendations,
-            "trend_delta":       trend_delta,
-            "topic_candidates":  topic_candidates,
+            "today":              count,
+            "sectors":            {r["sector"]: r["n"] for r in sectors},
+            "google_top10":       google_top10,
+            "naver_top10":        naver_top10,
+            "combined_keywords":  combined_keywords,
+            "recommendations":    recommendations,
+            "trend_delta":        trend_delta,
+            "topic_candidates":   topic_candidates,
         }
     except Exception:
         con.close()
@@ -451,7 +452,14 @@ def get_vision_summary():
         import requests as _req
         r = _req.get(f"http://127.0.0.1:{_VISION_PORT}/api/metrics/summary", timeout=3)
         if r.ok:
-            return r.json()
+            d = r.json()
+            return {
+                "total_agents": d.get("total", 0),
+                "healthy":      d.get("online", 0),
+                "degraded":     d.get("warn", 0),
+                "offline":      d.get("offline", 0),
+                "health_pct":   d.get("health_pct", 0.0),
+            }
     except Exception:
         pass
     return {}
@@ -750,16 +758,16 @@ def get_pipeline_log():
 
 @app.get("/api/graph")
 def get_pipeline_graph():
-    """파이프라인 연결 그래프 — 대시보드 동적 렌더용 (사용자 박제 2026-07-11).
+    """파이프라인 그래프 — 에이전트·연결·범례 전부 반환.
 
-    shared/pipeline_graph.py 를 단일 진실 소스로 사용.
-    파이프라인 연결 변경 시 pipeline_graph.py 만 수정하면 대시보드 자동 갱신.
+    단일 진실 소스: shared/pipeline_graph.py
+    새 에이전트·연결 추가 시 이 파일만 수정하면 대시보드·로그·잡매핑 자동 반영.
     """
     try:
-        from shared.pipeline_graph import PIPELINE_EDGES, LEGEND
-        return {"edges": PIPELINE_EDGES, "legend": LEGEND}
+        from shared.pipeline_graph import AGENTS, PIPELINE_EDGES, LEGEND, LAYOUT
+        return {"agents": AGENTS, "edges": PIPELINE_EDGES, "legend": LEGEND, "layout": LAYOUT}
     except ImportError:
-        return {"edges": [], "legend": []}
+        return {"agents": [], "edges": [], "legend": [], "layout": {}}
 
 
 # ══════════════════════════════════════════════════════════════════

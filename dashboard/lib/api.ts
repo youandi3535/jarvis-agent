@@ -16,13 +16,13 @@ export type TrendData  = {
   sectors: Record<string, number>;
   google_top10: Top10Item[];
   naver_top10: Top10Item[];
-  combined_top50: Combined50Item[];
+  combined_keywords: CombinedItem[];
   recommendations: RecommendItem[];
   trend_delta: TrendDelta;
   topic_candidates: TopicCandidate[];
 };
-export type Top10Item      = { rank: number; keyword: string };
-export type Combined50Item = { keyword: string; score: number; sources: string[] };
+export type Top10Item      = { rank: number; keyword: string; score?: number };
+export type CombinedItem = { keyword: string; score: number; sources: string[] };
 export type RecommendItem  = { keyword: string; sector: string; score: number; opportunity_score: number; velocity: string; competition: number; reason: string };
 export type TrendDelta     = { prev_date?: string; new_entry?: string[]; dropped?: string[]; risen?: { keyword: string; delta: number }[]; fallen?: { keyword: string; delta: number }[] };
 export type TopicCandidate = { keyword: string; sector: string; opportunity_score: number; reason: string; profile?: { summary?: string } };
@@ -47,11 +47,17 @@ export type DbTable    = { name: string; rows: number; last_write: string; today
 export type DbStats    = { size_mb: number; tables: DbTable[]; backup_files: BackupFile[]; total_rows: number; wal_exists: boolean };
 export type BackupFile = { name: string; size_mb: number; mtime: string };
 
-// 파이프라인 그래프 — /api/graph (사용자 박제 2026-07-11)
+// 파이프라인 그래프 — /api/graph
+// 새 에이전트·연결은 shared/pipeline_graph.py 만 수정하면 자동 반영됨
+export type AgentDef = {
+  id: string; num: string; label: string; sub: string; color: string;
+  x: number; y: number; big?: boolean;
+};
 export type PipelineEdge = {
   id: string; from: string; to: string;
   label?: string | null; col: string; dur: number; dots: number; wt?: number;
   route?: string; lane_y?: number; dx?: number;
 };
 export type LegendItem = { col: string; label: string };
-export type GraphData  = { edges: PipelineEdge[]; legend: LegendItem[] };
+export type LayoutConst = { W: number; H: number; CARD_W: number; CARD_H: number; BIG_W: number; BIG_H: number };
+export type GraphData  = { agents: AgentDef[]; edges: PipelineEdge[]; legend: LegendItem[]; layout: LayoutConst };

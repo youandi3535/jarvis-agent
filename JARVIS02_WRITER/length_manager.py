@@ -199,7 +199,7 @@ RADAR_KW_EN_UPPER_MAX: int = 6      # 영문 대문자 최대 (radar_main 패턴
 RADAR_KW_THEME_MIN:    int = 3      # theme_matcher: 테마 키워드 매칭 최소 글자수
 RADAR_NUM_CTX_MIN:     int = 3      # diagnose_naver_view: 컨텍스트 숫자 후보 최소 자리수
 RADAR_NUM_CTX_MAX:     int = 7      # 동 최대 자리수
-RADAR_KOR_NOISE_MAX:   int = 2      # radar_main: 1~2자 한글 노이즈 (접속사 등) 제거 임계
+RADAR_KOR_NOISE_MAX:   int = 1      # radar_main: 1자 한글만 노이즈 제거 (2자 명사는 kiwipiepy가 이미 검증)
 
 # RADAR 키워드 추출 정규식 (이미 빌드된 패턴 — 호출자는 단순 import 만)
 RADAR_KW_PATTERN_FULL: str = (
@@ -213,6 +213,7 @@ RADAR_KW_PATTERN_KOR_UPPER: str = (
 )
 RADAR_KOR_NOISE_PATTERN: str = rf"[가-힣]{{1,{RADAR_KOR_NOISE_MAX}}}"
 RADAR_NUM_CTX_PATTERN: str = rf"\b(\d{{1,{RADAR_NUM_CTX_MAX}}})\b"
+RADAR_KOR_ONLY_PATTERN: str = r"[가-힣]+"  # 순수 한글 문자열 전체 매치용 (kiwipiepy POS 검사 전처리)
 
 # ── 카테고리별 글쓰기 분량 가이드 (자비스02 WRITING_GUIDE) ───
 # 문장수 메인 (사용자 박제 2026-05-14) — 글자수 alias 는 자동 파생.
@@ -551,7 +552,7 @@ __all__ = [
     "RADAR_KW_THEME_MIN", "RADAR_NUM_CTX_MIN", "RADAR_NUM_CTX_MAX",
     "RADAR_KOR_NOISE_MAX",
     "RADAR_KW_PATTERN_FULL", "RADAR_KW_PATTERN_KOR_UPPER",
-    "RADAR_KOR_NOISE_PATTERN", "RADAR_NUM_CTX_PATTERN",
+    "RADAR_KOR_NOISE_PATTERN", "RADAR_NUM_CTX_PATTERN", "RADAR_KOR_ONLY_PATTERN",
     "BLOG_CATEGORY_SENTS", "BLOG_CATEGORY_LENGTH",
     "INTRO_TARGET_SENTS", "INTRO_TARGET",
     "INTRO_THEME_TARGET_SENTS", "INTRO_THEME_TARGET",

@@ -1,80 +1,21 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { fetcher, OverviewData, VisionAgent, PipelineEdge, GraphData } from "@/lib/api";
+import { fetcher, OverviewData, VisionAgent, PipelineEdge, GraphData, AgentDef } from "@/lib/api";
 import { C, fmtNum, fmtTime, severityColor } from "@/lib/utils";
 
 // ═══════════════════════════════════════════════════════
-// 레이아웃 상수 — 실제 JARVIS 파이프라인 기준 (10개 에이전트)
-// 상단: J00 INFRA | J01 MASTER(BIG) | J04 SCHED
-// 중단: J03 RADAR → J09 COLLECT → J02 WRITER → J06 IMAGE → J08 PUBLISH (J06→J08 직접)
-// 하단: J05 VISION (헬스 모니터링) | J07 GUARDIAN (오류·수정)
+// 카드 크기 상수 — pipeline_graph.py LAYOUT 과 동기화
+// 위치(x/y)는 /api/graph 에서 수신 → 하드코딩 금지
 // ═══════════════════════════════════════════════════════
-const W = 1130, H = 660;
 const CARD_W = 158, CARD_H = 170;
 const BIG_W  = 210, BIG_H  = 215;
 
-// ── Row 0 (상단 관리층) ──
-const ROW0_Y = 16;
-const J00_X  = 18;
-const J01_X  = (W - BIG_W) / 2;   // 460 — 정중앙
-const J04_X  = W - 18 - CARD_W;   // 954
-
-// ── Row 1 (파이프라인 5개) ──
-const ROW1_Y = 252;
-// 5카드 균등 배치: 간격=(1130-36-5×158)/4 = 76
-const PIP_GAP = 76;
-const J03_X  = 18;
-const J09_X  = J03_X + CARD_W + PIP_GAP;   // 252
-const J02_X  = J09_X + CARD_W + PIP_GAP;   // 486
-const J06_X  = J02_X + CARD_W + PIP_GAP;   // 720
-const J08_X  = J06_X + CARD_W + PIP_GAP;   // 954
-
-// ── Row 2 (감시·가디언 층) ──
-// J05 VISION: 전 에이전트 헬스 메트릭 수집·모니터링 (30초 주기, FastAPI :8505)
-// J07 GUARDIAN: 오류 수집·자동수정·품질 강화학습
-const ROW2_Y = 462;
-const J05_X  = J09_X;   // J09 아래 — 전 에이전트 감시
-const J07_X  = J02_X;   // J02 아래 — 오류·수정 주 담당
-
-// ── 중심 좌표 헬퍼 ──
-const cx = (x: number, w = CARD_W) => x + w / 2;
-const cy = (y: number, h = CARD_H) => y + h / 2;
-
-// 에이전트 경계 박스 — AGENTS 에서 자동 계산 (하드코딩 금지)
+// 에이전트 경계 박스 — API 에서 받은 AgentDef 로 자동 계산
 type AgentBounds = { cx:number; cy:number; top:number; bot:number; left:number; right:number };
 function mkBounds(x:number, y:number, w=CARD_W, h=CARD_H): AgentBounds {
   return { cx:x+w/2, cy:y+h/2, top:y, bot:y+h, left:x, right:x+w };
 }
-
-// ─────────────────────────────────────────────────────
-// 에이전트 카드 정의 (실제 존재하는 10개 전부)
-// ─────────────────────────────────────────────────────
-type AgentDef = {
-  id: string; num: string; label: string; sub: string; color: string;
-  x: number; y: number; big?: boolean;
-};
-const AGENTS: AgentDef[] = [
-  // 상단 관리층
-  { id:"j00", num:"00", label:"J00 INFRA",   sub:"인프라 관리자",   color:"#4ade80", x:J00_X, y:ROW0_Y },
-  { id:"j01", num:"01", label:"J01 MASTER",  sub:"마스터 라우터",   color:"#4f90d9", x:J01_X, y:ROW0_Y, big:true },
-  { id:"j04", num:"04", label:"J04 SCHED",   sub:"작업 스케줄러",   color:"#fb923c", x:J04_X, y:ROW0_Y },
-  // 파이프라인
-  { id:"j03", num:"03", label:"J03 RADAR",   sub:"트렌드 레이더",   color:"#fbbf24", x:J03_X, y:ROW1_Y },
-  { id:"j09", num:"09", label:"J09 COLLECT", sub:"데이터 수집기",   color:"#38bdf8", x:J09_X, y:ROW1_Y },
-  { id:"j02", num:"02", label:"J02 WRITER",  sub:"블로그 라이터",   color:"#a78bfa", x:J02_X, y:ROW1_Y },
-  { id:"j06", num:"06", label:"J06 IMAGE",   sub:"이미지 생성",     color:"#e879f9", x:J06_X, y:ROW1_Y },
-  { id:"j08", num:"08", label:"J08 PUBLISH", sub:"발행 관리자",     color:"#22d3ee", x:J08_X, y:ROW1_Y },
-  // 하단 감시층
-  { id:"j05", num:"05", label:"J05 VISION",  sub:"메트릭 모니터링", color:"#34d399", x:J05_X, y:ROW2_Y },
-  { id:"j07", num:"07", label:"J07 GUARD",   sub:"오류 수호자",     color:"#f43f5e", x:J07_X, y:ROW2_Y },
-];
-
-// ─────────────────────────────────────────────────────
-// 에이전트 경계 박스 — AGENTS 에서 자동 계산 (하드코딩 금지)
-// 파이프라인 연결은 shared/pipeline_graph.py 단일 진실 소스 → /api/graph
-// ─────────────────────────────────────────────────────
-// BOUNDS: AGENTS 배열에서 동적으로 계산됨 (OfficeView 내부에서 사용)
 
 // 렌더용 엣지 타입 (자동 라우팅 결과)
 type ComputedEdge = {
@@ -82,8 +23,7 @@ type ComputedEdge = {
   lbl?: { x: number; y: number; text: string };
 };
 // ─────────────────────────────────────────────────────
-// 자동 라우팅 — 파이프라인 엣지 (shared/pipeline_graph.py → /api/graph)
-// BOUNDS: OfficeView 내부에서 AGENTS 로 동적 계산
+// 자동 라우팅 — 에이전트 위치는 /api/graph 에서 수신
 // ─────────────────────────────────────────────────────
 function buildBounds(agents: AgentDef[]): Record<string, AgentBounds> {
   return Object.fromEntries(
@@ -463,10 +403,20 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
     return () => clearInterval(id);
   }, []);
 
-  // 파이프라인 엣지 — shared/pipeline_graph.py → /api/graph 동적 로드
-  const { data: graphData } = useSWR<GraphData>("/api/graph", fetcher, { refreshInterval: 300000 });
-  const bnd = useMemo(() => buildBounds(AGENTS), []);
+  // 파이프라인 그래프 — 에이전트·엣지·레이아웃 모두 /api/graph 에서 동적 수신
+  // 새 에이전트·연결은 shared/pipeline_graph.py 만 수정하면 자동 반영
+  const { data: graphData } = useSWR<GraphData>("/api/graph", fetcher, { refreshInterval: 60000 });
+  const agents = useMemo<AgentDef[]>(() => graphData?.agents ?? [], [graphData]);
+  const bnd = useMemo(() => buildBounds(agents), [agents]);
   const resolvedEdges = useMemo(() => resolveEdges(graphData?.edges ?? [], bnd), [graphData, bnd]);
+
+  // 캔버스 크기·파이프라인 위치 — agents 에서 자동 파생 (하드코딩 금지)
+  const W  = graphData?.layout?.W  ?? 1130;
+  const H  = graphData?.layout?.H  ?? 660;
+  const J03_X  = useMemo(() => agents.find(a => a.id === "j03")?.x ?? 18,  [agents]);
+  const J08_X  = useMemo(() => agents.find(a => a.id === "j08")?.x ?? 954, [agents]);
+  const ROW1_Y = useMemo(() => agents.find(a => a.id === "j03")?.y ?? 252, [agents]);
+  const ROW2_Y = useMemo(() => agents.find(a => a.id === "j05")?.y ?? 462, [agents]);
 
   // 실시간 파이프라인 활동 — 2초 폴링
   const { data: actData } = useSWR<{active: string[]}>("/api/pipeline/activity", fetcher, { refreshInterval: 2000 });
@@ -662,8 +612,8 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
             </div>
           </div>
 
-          {/* 에이전트 카드 렌더 */}
-          {AGENTS.map(a => (
+          {/* 에이전트 카드 렌더 — /api/graph 에서 동적 로드 */}
+          {agents.map(a => (
             <div key={a.id} style={{ position:"absolute", left:a.x, top:a.y, zIndex:2 }}>
               <AgentCard
                 num={a.num} label={a.label} sub={a.sub}

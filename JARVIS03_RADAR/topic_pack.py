@@ -62,19 +62,32 @@ def _used_keywords(days: int = 7) -> set[str]:
 
 
 def _candidates(trends: dict, max_candidates: int = 8) -> list[dict]:
-    """경제 섹터 후보 — 사용이력 제외 + 점수 내림차순 + 키워드 dedup."""
+    """혼합 트렌딩(combined_keywords) 기반 후보 — 사용이력 제외 + opportunity_score 내림차순."""
     used = _used_keywords()
+    # scored_keywords 인덱스 (keyword → 점수·섹터 조인용)
+    scored_idx: dict[str, dict] = {
+        (it.get("keyword") or "").lower(): it
+        for it in (trends.get("scored_keywords") or [])
+    }
     pool: list[dict] = []
     seen: set[str] = set()
-    items = list(trends.get("recommendations") or []) + list(trends.get("scored_keywords") or [])
-    for it in items:
+    # ★ 소스: 혼합 트렌딩 풀 (Google+Naver 교차 순위)
+    combined = list(trends.get("combined_keywords") or trends.get("combined_top50") or [])
+    for it in combined:
         kw = (it.get("keyword") or "").strip()
         if not kw or kw.lower() in used or kw.lower() in seen:
             continue
-        if it.get("sector", "") not in _ECON_SECTORS:
-            continue
         seen.add(kw.lower())
-        pool.append(it)
+        # scored_keywords에서 점수·섹터 조인
+        scored = scored_idx.get(kw.lower(), {})
+        pool.append({
+            **it,
+            "sector":            scored.get("sector", "기타"),
+            "opportunity_score": scored.get("opportunity_score", it.get("score", 0)),
+            "score":             scored.get("score", it.get("score", 0)),
+            "velocity":          scored.get("velocity", "—"),
+            "competition":       scored.get("competition", 50.0),
+        })
     pool.sort(key=lambda x: x.get("opportunity_score", x.get("score", 0)), reverse=True)
     return pool[:max_candidates]
 
@@ -143,7 +156,7 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
     except Exception:
         pass
     if max_candidates is None:
-        max_candidates = publish_slots + 2
+        max_candidates = publish_slots + 8  # 혼합 30개 중 경제 키워드 충분히 확보
     if trends is None:
         try:
             from JARVIS03_RADAR.radar_main import load as _load
