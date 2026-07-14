@@ -774,19 +774,6 @@ _section_img_paths: dict[int, str] = {}
 _para_img_paths:    dict[int, str] = {}
 
 
-def _load_learn_insights(scope: str, platform: str = "") -> str:
-    """학습 지침 블록 — ★ ADR 014 (2026-07-03): JARVIS07 quality_learner 위임.
-
-    UCB 랭킹 선택 + 사용 기록(보상 귀속 대기) 포함. 실패 시 "" (글 작성 절대 안 막음).
-    """
-    try:
-        from JARVIS07_GUARDIAN.quality_learner import build_insights_block
-        blk = build_insights_block(scope=scope, platform=platform, limit=6)
-        return (blk + "\n") if blk else ""
-    except Exception as e:
-        print(f"  ⚠️ 학습 지침 로드 실패(무시): {e}")
-        _g_report("writer", e, module=__name__)
-        return ""
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1368,7 +1355,7 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
             from JARVIS09_COLLECTOR import collect_research, collect_chart_data
             try:
                 from shared.pipeline_activity import mark_active
-                mark_active(["e1", "e2"])  # J03→J09 선수집 요청, J09→J02 데이터 전달
+                mark_active("e1")  # J03→J09 수집 요청 시작
             except Exception:
                 pass
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
@@ -1377,6 +1364,11 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
+            try:
+                from shared.pipeline_activity import mark_active
+                mark_active("e2")  # J09→J02 데이터 전달 완료
+            except Exception:
+                pass
             # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
             from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep, facts_to_datasets as _f2d
             _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}
@@ -1645,7 +1637,7 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
             from JARVIS09_COLLECTOR import collect_research, collect_chart_data
             try:
                 from shared.pipeline_activity import mark_active
-                mark_active(["e1", "e2"])  # J03→J09 선수집 요청, J09→J02 데이터 전달
+                mark_active("e1")  # J03→J09 수집 요청 시작
             except Exception:
                 pass
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
@@ -1654,6 +1646,11 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
+            try:
+                from shared.pipeline_activity import mark_active
+                mark_active("e2")  # J09→J02 데이터 전달 완료
+            except Exception:
+                pass
             # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
             from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep, facts_to_datasets as _f2d
             _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}

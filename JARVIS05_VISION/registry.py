@@ -36,12 +36,9 @@ class _Infra00Adapter(BaseAgent):
         try:
             import jarvis_daemon as _dm
             alive = _dm._streamlit_alive()
-            disabled = _dm._st_disabled
-            if disabled:
-                return {"status": "warn", "message": "Streamlit 자동재시작 중단 (5회 실패)"}
             if alive:
-                return {"status": "online", "message": f"데몬 정상 / 대시보드 port {_dm.ST_PORT}"}
-            return {"status": "warn", "message": "대시보드 다운 — 재시작 시도 중"}
+                return {"status": "online", "message": f"데몬 정상 · 허브 포트 {_dm.ST_PORT}"}
+            return {"status": "warn", "message": "허브 서버 다운 — 재시작 시도 중"}
         except Exception as e:
             return {"status": "warn", "message": f"상태 조회 오류: {e}"}
 
@@ -57,10 +54,8 @@ class _Infra00Adapter(BaseAgent):
                 "pid":            os.getpid(),
                 "uptime":         uptime,
                 "uptime_seconds": int(delta.total_seconds()),
-                "streamlit_alive": _dm._streamlit_alive(),
-                "st_port":        _dm.ST_PORT,
-                "st_fail_count":  _dm._st_fail_count,
-                "st_disabled":    _dm._st_disabled,
+                "hub_alive":      _dm._streamlit_alive(),
+                "hub_port":       _dm.ST_PORT,
             }
         except Exception as e:
             return {"error": str(e)}

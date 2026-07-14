@@ -34,19 +34,19 @@ DEFAULT_JOBS: list[dict] = [
     #   브리핑보다 늦어 아침 발행이 *항상* 전일 폴백 데이터(신선도·DataLab 無) 사용.
     {"id":"radar_trends_06", "name":"트렌드 수집(06시 — 경제 브리핑 前)", "trigger":"cron",
      "kwargs":{"hour":6,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
-     "misfire_grace_time":1200, "owner":"jarvis03_radar"},
+     "misfire_grace_time":1200, "owner":"jarvis03_radar", "edges":["e13"]},
     {"id":"radar_trends_09", "name":"트렌드 수집(09시)",  "trigger":"cron",
      "kwargs":{"hour":9,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
-     "misfire_grace_time":3600, "owner":"jarvis03_radar"},
+     "misfire_grace_time":3600, "owner":"jarvis03_radar", "edges":["e13"]},
     {"id":"radar_trends_12", "name":"트렌드 수집(12시)",  "trigger":"cron",
      "kwargs":{"hour":12, "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
-     "misfire_grace_time":3600, "owner":"jarvis03_radar"},
+     "misfire_grace_time":3600, "owner":"jarvis03_radar", "edges":["e13"]},
     {"id":"radar_trends_15", "name":"트렌드 수집(15시)",  "trigger":"cron",
      "kwargs":{"hour":15, "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
-     "misfire_grace_time":3600, "owner":"jarvis03_radar"},
+     "misfire_grace_time":3600, "owner":"jarvis03_radar", "edges":["e13"]},
     {"id":"radar_perf",      "name":"성과 수집",            "trigger":"cron",
      "kwargs":{"hour":23, "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_performance",
-     "misfire_grace_time":3600, "owner":"jarvis03_radar"},
+     "misfire_grace_time":3600, "owner":"jarvis03_radar", "edges":["e9","e10"]},
     {"id":"analyzer_fb",     "name":"분석 fallback",        "trigger":"interval",
      "kwargs":{"minutes":5}, "callback":"JARVIS03_RADAR.jobs.job_analyzer_fallback",
      "misfire_grace_time":600,  "owner":"jarvis03_radar"},
@@ -86,14 +86,14 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"j01_economic_post",      "name":"자가진단+경제 브리핑 발행 06:30", "trigger":"cron",
      "kwargs":{"hour":6, "minute":30},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_economic",
-     "misfire_grace_time":3600, "owner":"jarvis02_writer"},
+     "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e14"]},
     # ★ 발행 전 자체수리 + 테마글 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 16:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 테마글 발행.
     # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리.
     {"id":"j01_theme_post_21",      "name":"자가진단+테마 발행 21:00 ★", "trigger":"cron",
      "kwargs":{"hour":21, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_theme",
-     "misfire_grace_time":3600, "owner":"jarvis02_writer"},
+     "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e14"]},
 
     {"id":"j01_radar_check_09",     "name":"RADAR 자동실행 체크 09:00", "trigger":"cron",
      "kwargs":{"hour":9, "minute":0},
@@ -132,8 +132,8 @@ DEFAULT_JOBS: list[dict] = [
     #   jarvis_keeper.py 워치독이 강제 재시작. interval 잡이라 스케줄러 기아 시
     #   동반 정지 = 정확한 hang 신호.
     {"id":"infra_heartbeat", "name":"데몬 heartbeat (keeper 워치독)", "trigger":"interval",
-     "kwargs":{"seconds":60}, "callback":"JARVIS00_INFRA.infra_agent.job_heartbeat",
-     "misfire_grace_time":30, "owner":"jarvis00_infra"},
+     "kwargs":{"seconds":180}, "callback":"JARVIS00_INFRA.infra_agent.job_heartbeat",
+     "misfire_grace_time":60, "owner":"jarvis00_infra"},
     {"id":"db_backup",       "name":"DB 백업",              "trigger":"cron",
      "kwargs":{"hour":3, "minute":0}, "callback":"JARVIS00_INFRA.infra_agent.job_db_backup",
      "misfire_grace_time":3600, "owner":"jarvis00_infra"},
@@ -189,11 +189,11 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"j07_deep_audit",     "name":"GUARDIAN 심층 코드 감사 (매일 03:00)", "trigger":"cron",
      "kwargs":{"hour":3, "minute":0},
      "callback":"JARVIS07_GUARDIAN.guardian_agent.job_deep_audit",
-     "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
+     "misfire_grace_time":3600, "owner":"jarvis07_guardian", "edges":["e8"]},
     {"id":"j07_retry_pending",  "name":"GUARDIAN 잔류 오류 재처리 (10분)", "trigger":"interval",
      "kwargs":{"minutes":10},
      "callback":"JARVIS07_GUARDIAN.guardian_agent.job_retry_pending",
-     "misfire_grace_time":600, "owner":"jarvis07_guardian"},
+     "misfire_grace_time":600, "owner":"jarvis07_guardian", "edges":["e8"]},
     {"id":"j07_qa_ingest",      "name":"QA 지식베이스 세션 증분 학습 (매일 02:00)", "trigger":"cron",
      "kwargs":{"hour":2, "minute":0},
      "callback":"JARVIS07_GUARDIAN.qa_store.job_ingest_sessions",
@@ -213,8 +213,8 @@ DEFAULT_JOBS: list[dict] = [
      "callback":"JARVIS07_GUARDIAN.vector_store.job_build_vector_index",
      "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
     # ★ 글 품질 강화학습 보상 귀속 (ADR 014 — 2026-07-03) — 매일 23:45.
-    #   daily_review(22:00)·learn_log(23:30) 이후 실행: 주입 인사이트 ↔ 분석 결과
-    #   매칭 → 보상 계산 → weight EMA 갱신. LLM 호출 0 (순수 통계).
+    #   daily_review(22:00)·learn_log(23:30) 이후 실행. days=3 롤링 윈도우로
+    #   하루 중 어느 시각에 쓴 글이든 당일 미귀속 기록 전수 처리.
     {"id":"j07_quality_learn",  "name":"글 품질 강화학습 보상 귀속 (매일 23:45)", "trigger":"cron",
      "kwargs":{"hour":23, "minute":45},
      "callback":"JARVIS07_GUARDIAN.quality_learner.job_quality_learn",

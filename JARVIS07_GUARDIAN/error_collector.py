@@ -392,6 +392,17 @@ def catch(
         msg        = (message or "")[:500]
         tb         = tb_str
 
+    # e7 (J02→J07 오류 보고) — J02 소속 에이전트가 보고하는 경우
+    _J02_SRCS = ("writer", "economic", "theme", "draft", "law_enforcer", "seo",
+                 "poster", "revise", "scheduler", "trend_economic", "trend_theme")
+    _src_lower = str(source or "").lower()
+    if any(s in _src_lower for s in _J02_SRCS):
+        try:
+            from shared.pipeline_activity import mark_active
+            mark_active("e7")
+        except Exception:
+            pass
+
     return _collect_error(
         source=source,
         error_type=error_type,

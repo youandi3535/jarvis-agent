@@ -33,13 +33,16 @@ except ImportError:
 _job_start_ts: dict[str, float] = {}
 
 
-_JOB_EDGES: dict = {
-    "j03_collect_trends":       ["e13"],           # J04→J03 스케줄 트리거
-    "j03_performance_collect":  ["e9", "e10"],      # J09→J05, J05→J07 헬스
-    "j07_self_heal_economic":   ["e14"],            # J04→J02 트리거
-    "j07_self_heal_theme":      ["e14"],
-    "j07_deep_audit":           ["e8"],             # J07→J02 코드 수정
-}
+# ── 잡 → 파이프라인 엣지 매핑 — job_registry.DEFAULT_JOBS 에서 자동 파생 ──
+# 새 잡에 edges 필드를 추가하면 이 매핑도 자동 갱신됨 (하드코딩 금지).
+def _build_job_edges() -> dict:
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+        return {j["id"]: j["edges"] for j in DEFAULT_JOBS if j.get("edges")}
+    except Exception:
+        return {}
+
+_JOB_EDGES: dict = _build_job_edges()
 
 
 def _on_job_submitted(event):
@@ -50,9 +53,11 @@ def _on_job_submitted(event):
         pass
     try:
         from shared.pipeline_activity import mark_active
-        # 모든 잡은 J00 데몬이 실행 → e11(J00→J01) 항상 활성
-        edges = ["e11"] + (_JOB_EDGES.get(event.job_id) or [])
-        mark_active(edges)
+        # infra_heartbeat → e11(J00→J01): 데몬이 살아있음을 J01에 60초마다 알림
+        # 그 외 잡은 job_registry edges 필드에 정의된 엣지만 발화
+        edges = ["e11"] if event.job_id == "infra_heartbeat" else (_JOB_EDGES.get(event.job_id) or [])
+        if edges:
+            mark_active(edges)
     except Exception:
         pass
 

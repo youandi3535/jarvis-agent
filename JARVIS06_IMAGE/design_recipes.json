@@ -431,6 +431,28 @@
       "template": "<!DOCTYPE html>\n<html lang=\"ko\">\n<head>\n<meta charset=\"UTF-8\">\n<style>\n@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');\n\n:root{\n  --hero0:#16233F;\n  --hero1:#20406B;\n  --ink:#182842;\n  --a1:#5EC5EA;\n  --a1s:#AEE3F6;\n  --a2:#F2A93C;\n  --a2s:#FBDFA8;\n  --soft:#F1ECE0;\n  --muted:#8B8F93;\n  --eyebrow:#F5C731;\n  --grid:#E3DED0;\n}\n\n*{margin:0;padding:0;box-sizing:border-box;font-family:'Noto Sans KR',sans-serif;}\n\nbody{width:1280px;background:var(--soft);color:var(--ink);}\n\n.page{width:1280px;display:flex;flex-direction:column;}\n\n/* top hero ribbon */\n.hero-bar{\n  width:100%;\n  height:64px;\n  background:linear-gradient(90deg,var(--hero0),var(--hero1));\n  display:flex;\n  align-items:center;\n  justify-content:space-between;\n  padding:0 56px;\n}\n.hero-bar .brand{\n  color:#fff;\n  font-weight:700;\n  font-size:16px;\n  letter-spacing:2px;\n  text-transform:uppercase;\n  opacity:.9;\n}\n.eyebrow-pill{\n  background:var(--eyebrow);\n  color:var(--hero0);\n  font-weight:900;\n  font-size:13px;\n  letter-spacing:1.5px;\n  text-transform:uppercase;\n  padding:6px 18px;\n  border-radius:999px;\n}\n\n/* title block */\n.title-block{\n  text-align:center;\n  padding:56px 40px 20px;\n}\n.subtitle{\n  font-style:italic;\n  font-weight:500;\n  font-size:26px;\n  color:var(--hero1);\n  margin-bottom:6px;\n}\n.title{\n  font-weight:900;\n  font-size:64px;\n  letter-spacing:1px;\n  color:var(--ink);\n  text-transform:uppercase;\n  line-height:1.05;\n}\n\n/* branch connector */\n.branch-wrap{\n  position:relative;\n  width:70%;\n  max-width:760px;\n  height:56px;\n  margin:8px auto 0;\n}\n.branch-wrap .trunk{\n  position:absolute;\n  left:50%;\n  top:0;\n  width:3px;\n  height:22px;\n  background:var(--ink);\n  transform:translateX(-50%);\n}\n.branch-wrap .bar{\n  position:absolute;\n  left:8%;\n  right:8%;\n  top:22px;\n  height:3px;\n  background:var(--ink);\n}\n.branch-wrap .stem{\n  position:absolute;\n  top:22px;\n  width:3px;\n  height:34px;\n  background:var(--ink);\n}\n.branch-wrap .stem.s1{left:8%;}\n.branch-wrap .stem.s2{left:50%;transform:translateX(-1.5px);}\n.branch-wrap .stem.s3{left:92%;transform:translateX(-3px);}\n\n/* hero stats row */\n.hero-stats-wrap{\n  width:100%;\n  padding:18px 56px 8px;\n  display:flex;\n  justify-content:center;\n}\n\n.divider{\n  width:calc(100% - 112px);\n  height:1px;\n  background:var(--grid);\n  margin:28px auto 0;\n}\n\n/* chart grid */\n.chart-grid{\n  width:100%;\n  padding:32px 56px 8px;\n  display:grid;\n  grid-template-columns:repeat(3,1fr);\n  gap:28px;\n}\n.chart-card{\n  position:relative;\n  background:#fff;\n  border:2.5px solid var(--ink);\n  border-radius:24px;\n  padding:36px 22px 22px;\n  min-height:220px;\n}\n.node-dot{\n  position:absolute;\n  top:-22px;\n  left:24px;\n  width:44px;\n  height:44px;\n  border-radius:50%;\n  background:var(--a1);\n  border:3px solid var(--ink);\n}\n.node-dot.alt{background:var(--a2);}\n\n/* mini cards row */\n.mini-cards-row{\n  width:100%;\n  padding:24px 56px 8px;\n  display:flex;\n  gap:20px;\n  justify-content:center;\n  flex-wrap:wrap;\n}\n\n/* footer */\n.footer{\n  width:100%;\n  padding:40px 56px 56px;\n  display:flex;\n  flex-direction:column;\n  align-items:center;\n  gap:14px;\n}\n.badge{\n  border:2.5px solid var(--ink);\n  border-radius:24px;\n  padding:14px 40px;\n  font-weight:900;\n  font-size:22px;\n  letter-spacing:1px;\n  text-transform:uppercase;\n  color:var(--ink);\n  background:#fff;\n}\n.source{\n  font-size:13px;\n  color:var(--muted);\n  letter-spacing:.5px;\n}\n</style>\n</head>\n<body>\n<div class=\"page\">\n\n  <div class=\"hero-bar\">\n    <span class=\"brand\">{{BRAND}}</span>\n    <span class=\"eyebrow-pill\">{{EYEBROW}}</span>\n  </div>\n\n  <header class=\"title-block\">\n    <p class=\"subtitle\">{{SUBTITLE}}</p>\n    <h1 class=\"title\">{{TITLE}}</h1>\n  </header>\n\n  <div class=\"branch-wrap\">\n    <div class=\"trunk\"></div>\n    <div class=\"bar\"></div>\n    <div class=\"stem s1\"></div>\n    <div class=\"stem s2\"></div>\n    <div class=\"stem s3\"></div>\n  </div>\n\n  <section class=\"hero-stats-wrap\">\n    {{HERO_STATS}}\n  </section>\n\n  <div class=\"divider\"></div>\n\n  <section class=\"chart-grid\">\n    <div class=\"chart-card\">\n      <span class=\"node-dot\"></span>\n      {{CHART_1}}\n    </div>\n    <div class=\"chart-card\">\n      <span class=\"node-dot alt\"></span>\n      {{CHART_2}}\n    </div>\n    <div class=\"chart-card\">\n      <span class=\"node-dot\"></span>\n      {{CHART_3}}\n    </div>\n  </section>\n\n  <section class=\"mini-cards-row\">\n    {{MINI_CARDS}}\n  </section>\n\n  <footer class=\"footer\">\n    <div class=\"badge\">{{BRAND}}</div>\n    <p class=\"source\">{{SOURCE}}</p>\n  </footer>\n\n</div>\n</body>\n</html>",
       "source": "learned-vision",
       "created": "2026-07-13"
+    },
+    {
+      "id": "ivory-cocoa-bloom",
+      "name": "아이보리 코코아 블룸",
+      "aesthetic": "웜 파스텔 라이프스타일(아이보리·둥근 모티프)",
+      "hero": [
+        "#3b2419",
+        "#5c3826"
+      ],
+      "ink": "#3a2a22",
+      "a1": "#e0793f",
+      "a1s": "#f6c9a0",
+      "a2": "#5aa290",
+      "a2s": "#bfe3d6",
+      "soft": "#fdf7ee",
+      "muted": "#9c8a7a",
+      "eyebrow": "#f2c14e",
+      "grid": "#f1e7d9",
+      "hero_texture": "dots",
+      "card_radius": 28,
+      "source": "learned",
+      "created": "2026-07-14"
     }
   ]
 }

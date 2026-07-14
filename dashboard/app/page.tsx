@@ -1,80 +1,21 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { fetcher, OverviewData, VisionAgent, PipelineEdge, GraphData } from "@/lib/api";
+import { fetcher, OverviewData, VisionAgent, PipelineEdge, GraphData, AgentDef } from "@/lib/api";
 import { C, fmtNum, fmtTime, severityColor } from "@/lib/utils";
 
 // ═══════════════════════════════════════════════════════
-// 레이아웃 상수 — 실제 JARVIS 파이프라인 기준 (10개 에이전트)
-// 상단: J00 INFRA | J01 MASTER(BIG) | J04 SCHED
-// 중단: J03 RADAR → J09 COLLECT → J02 WRITER → J06 IMAGE → J08 PUBLISH (J06→J08 직접)
-// 하단: J05 VISION (헬스 모니터링) | J07 GUARDIAN (오류·수정)
+// 카드 크기 상수 — pipeline_graph.py LAYOUT 과 동기화
+// 위치(x/y)는 /api/graph 에서 수신 → 하드코딩 금지
 // ═══════════════════════════════════════════════════════
-const W = 1130, H = 660;
 const CARD_W = 158, CARD_H = 170;
 const BIG_W  = 210, BIG_H  = 215;
 
-// ── Row 0 (상단 관리층) ──
-const ROW0_Y = 16;
-const J00_X  = 18;
-const J01_X  = (W - BIG_W) / 2;   // 460 — 정중앙
-const J04_X  = W - 18 - CARD_W;   // 954
-
-// ── Row 1 (파이프라인 5개) ──
-const ROW1_Y = 252;
-// 5카드 균등 배치: 간격=(1130-36-5×158)/4 = 76
-const PIP_GAP = 76;
-const J03_X  = 18;
-const J09_X  = J03_X + CARD_W + PIP_GAP;   // 252
-const J02_X  = J09_X + CARD_W + PIP_GAP;   // 486
-const J06_X  = J02_X + CARD_W + PIP_GAP;   // 720
-const J08_X  = J06_X + CARD_W + PIP_GAP;   // 954
-
-// ── Row 2 (감시·가디언 층) ──
-// J05 VISION: 전 에이전트 헬스 메트릭 수집·모니터링 (30초 주기, FastAPI :8505)
-// J07 GUARDIAN: 오류 수집·자동수정·품질 강화학습
-const ROW2_Y = 462;
-const J05_X  = J09_X;   // J09 아래 — 전 에이전트 감시
-const J07_X  = J02_X;   // J02 아래 — 오류·수정 주 담당
-
-// ── 중심 좌표 헬퍼 ──
-const cx = (x: number, w = CARD_W) => x + w / 2;
-const cy = (y: number, h = CARD_H) => y + h / 2;
-
-// 에이전트 경계 박스 — AGENTS 에서 자동 계산 (하드코딩 금지)
+// 에이전트 경계 박스 — API 에서 받은 AgentDef 로 자동 계산
 type AgentBounds = { cx:number; cy:number; top:number; bot:number; left:number; right:number };
 function mkBounds(x:number, y:number, w=CARD_W, h=CARD_H): AgentBounds {
   return { cx:x+w/2, cy:y+h/2, top:y, bot:y+h, left:x, right:x+w };
 }
-
-// ─────────────────────────────────────────────────────
-// 에이전트 카드 정의 (실제 존재하는 10개 전부)
-// ─────────────────────────────────────────────────────
-type AgentDef = {
-  id: string; num: string; label: string; sub: string; color: string;
-  x: number; y: number; big?: boolean;
-};
-const AGENTS: AgentDef[] = [
-  // 상단 관리층
-  { id:"j00", num:"00", label:"J00 INFRA",   sub:"인프라 관리자",   color:"#4ade80", x:J00_X, y:ROW0_Y },
-  { id:"j01", num:"01", label:"J01 MASTER",  sub:"마스터 라우터",   color:"#4f90d9", x:J01_X, y:ROW0_Y, big:true },
-  { id:"j04", num:"04", label:"J04 SCHED",   sub:"작업 스케줄러",   color:"#fb923c", x:J04_X, y:ROW0_Y },
-  // 파이프라인
-  { id:"j03", num:"03", label:"J03 RADAR",   sub:"트렌드 레이더",   color:"#fbbf24", x:J03_X, y:ROW1_Y },
-  { id:"j09", num:"09", label:"J09 COLLECT", sub:"데이터 수집기",   color:"#38bdf8", x:J09_X, y:ROW1_Y },
-  { id:"j02", num:"02", label:"J02 WRITER",  sub:"블로그 라이터",   color:"#a78bfa", x:J02_X, y:ROW1_Y },
-  { id:"j06", num:"06", label:"J06 IMAGE",   sub:"이미지 생성",     color:"#e879f9", x:J06_X, y:ROW1_Y },
-  { id:"j08", num:"08", label:"J08 PUBLISH", sub:"발행 관리자",     color:"#22d3ee", x:J08_X, y:ROW1_Y },
-  // 하단 감시층
-  { id:"j05", num:"05", label:"J05 VISION",  sub:"메트릭 모니터링", color:"#34d399", x:J05_X, y:ROW2_Y },
-  { id:"j07", num:"07", label:"J07 GUARD",   sub:"오류 수호자",     color:"#f43f5e", x:J07_X, y:ROW2_Y },
-];
-
-// ─────────────────────────────────────────────────────
-// 에이전트 경계 박스 — AGENTS 에서 자동 계산 (하드코딩 금지)
-// 파이프라인 연결은 shared/pipeline_graph.py 단일 진실 소스 → /api/graph
-// ─────────────────────────────────────────────────────
-// BOUNDS: AGENTS 배열에서 동적으로 계산됨 (OfficeView 내부에서 사용)
 
 // 렌더용 엣지 타입 (자동 라우팅 결과)
 type ComputedEdge = {
@@ -82,8 +23,7 @@ type ComputedEdge = {
   lbl?: { x: number; y: number; text: string };
 };
 // ─────────────────────────────────────────────────────
-// 자동 라우팅 — 파이프라인 엣지 (shared/pipeline_graph.py → /api/graph)
-// BOUNDS: OfficeView 내부에서 AGENTS 로 동적 계산
+// 자동 라우팅 — 에이전트 위치는 /api/graph 에서 수신
 // ─────────────────────────────────────────────────────
 function buildBounds(agents: AgentDef[]): Record<string, AgentBounds> {
   return Object.fromEntries(
@@ -260,66 +200,98 @@ function AgentCard({
   const rSz = big ? 62 : 50;
 
   return (
-    <div
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      style={{
-        width:w, height:h, position:"relative", overflow:"hidden",
-        background: isActive
-          ? `linear-gradient(145deg,#1a1f35 0%,#0e1020 100%)`
-          : `linear-gradient(145deg,#131827 0%,#0b0d1a 100%)`,
-        border:`2px solid ${color}`,
-        borderRadius:12,
-        padding:"7px 9px",
-        transform: hov
-          ? `perspective(450px) rotateX(-7deg) rotateY(5deg) scale(1.05) translateZ(8px)`
-          : `perspective(450px) rotateX(0) rotateY(0) scale(1)`,
-        transition:"transform 0.26s cubic-bezier(0.23,1,0.32,1), box-shadow 0.3s ease",
-        boxShadow: hov
-          ? `0 0 36px ${color}66, 0 22px 55px rgba(0,0,0,0.65), inset 0 1px 0 ${color}55`
-          : isActive
-            ? `0 0 42px ${color}aa, 0 0 80px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}66`
-            : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
-        cursor:"default",
-      }}
-    >
-      {/* 스캔라인 */}
-      <div style={{
-        position:"absolute",inset:0,borderRadius:10,pointerEvents:"none",
-        background:"repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.06) 3px,rgba(0,0,0,0.06) 4px)",
-      }}/>
-      {/* 코너 브라켓 */}
-      {[
-        {top:0,left:0,borderTop:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"10px 0 0 0"},
-        {top:0,right:0,borderTop:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 10px 0 0"},
-        {bottom:0,left:0,borderBottom:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"0 0 0 10px"},
-        {bottom:0,right:0,borderBottom:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 0 10px 0"},
-      ].map((s,i) => (
-        <div key={i} style={{ position:"absolute",width:12,height:12,...s }}/>
+    <div style={{ position:"relative", width:w, height:h }}>
+      {/* 활성 맥동 링 — 카드 외부로 방사 */}
+      {isActive && [0, 0.55, 1.1].map((delay, i) => (
+        <div key={i} style={{
+          position:"absolute", inset:"-8px",
+          border:`2px solid ${color}`,
+          borderRadius:16,
+          animation:`agent-ring-expand 1.65s ease-out ${delay}s infinite`,
+          pointerEvents:"none",
+        }}/>
       ))}
-      {/* 번호 + 상태 LED */}
-      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2 }}>
-        <span style={{ fontSize:9,fontWeight:900,color,letterSpacing:1.5,opacity:0.7 }}>J{num}</span>
-        <span style={{ width:5,height:5,borderRadius:"50%",background:"#4ade80",
-          boxShadow:"0 0 6px #4ade80",display:"inline-block" }}/>
+
+      <div
+        onMouseEnter={() => setHov(true)}
+        onMouseLeave={() => setHov(false)}
+        style={{
+          width:w, height:h, position:"relative", overflow:"hidden",
+          background: isActive
+            ? `linear-gradient(145deg,#1c2140 0%,#0e1020 100%)`
+            : `linear-gradient(145deg,#131827 0%,#0b0d1a 100%)`,
+          border:`2px solid ${color}`,
+          borderRadius:12,
+          padding:"7px 9px",
+          transform: hov
+            ? `perspective(450px) rotateX(-7deg) rotateY(5deg) scale(1.05) translateZ(8px)`
+            : `perspective(450px) rotateX(0) rotateY(0) scale(1)`,
+          transition:"transform 0.26s cubic-bezier(0.23,1,0.32,1), box-shadow 0.3s ease",
+          boxShadow: hov
+            ? `0 0 36px ${color}66, 0 22px 55px rgba(0,0,0,0.65), inset 0 1px 0 ${color}55`
+            : isActive
+              ? `0 0 60px ${color}cc, 0 0 120px ${color}55, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}99`
+              : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
+          cursor:"default",
+        }}
+      >
+        {/* 스위핑 스캔라인 (active only) */}
+        {isActive && (
+          <div style={{
+            position:"absolute", left:0, right:0, height:2, top:0,
+            background:`linear-gradient(90deg,transparent,${color}aa,white,${color}aa,transparent)`,
+            animation:"card-scan-line 2.2s linear infinite",
+            pointerEvents:"none", zIndex:10,
+          }}/>
+        )}
+        {/* 배경 스캔라인 */}
+        <div style={{
+          position:"absolute",inset:0,borderRadius:10,pointerEvents:"none",
+          background:"repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.06) 3px,rgba(0,0,0,0.06) 4px)",
+        }}/>
+        {/* 코너 브라켓 */}
+        {[
+          {top:0,left:0,borderTop:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"10px 0 0 0"},
+          {top:0,right:0,borderTop:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 10px 0 0"},
+          {bottom:0,left:0,borderBottom:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"0 0 0 10px"},
+          {bottom:0,right:0,borderBottom:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 0 10px 0"},
+        ].map((s,i) => (
+          <div key={i} style={{ position:"absolute",width:12,height:12,...s }}/>
+        ))}
+        {/* 번호 + 상태 LED */}
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2 }}>
+          <span style={{ fontSize:9,fontWeight:900,color,letterSpacing:1.5,opacity:isActive ? 1 : 0.7 }}>J{num}</span>
+          <span style={{
+            width:isActive ? 8 : 5, height:isActive ? 8 : 5,
+            borderRadius:"50%",
+            background:isActive ? color : "#4ade80",
+            boxShadow:isActive ? `0 0 16px ${color}, 0 0 32px ${color}66` : "0 0 6px #4ade80",
+            display:"inline-block",
+            animation:isActive ? "led-blink 0.45s ease-in-out infinite" : "none",
+            transition:"width 0.3s, height 0.3s",
+          }}/>
+        </div>
+        {/* 로봇 */}
+        <div style={{ display:"flex",justifyContent:"center",marginBottom:3 }}
+          dangerouslySetInnerHTML={{ __html: mkRobot(color, `r${num}`, rSz) }}/>
+        {/* 이름 */}
+        <div style={{ textAlign:"center",fontSize:big?13:11,fontWeight:900,
+          letterSpacing:0.5,color,
+          textShadow:isActive ? `0 0 22px ${color}, 0 0 44px ${color}88` : `0 0 12px ${color}cc`,
+          marginBottom:1 }}>
+          {label}
+        </div>
+        {/* 역할 */}
+        <div style={{ textAlign:"center",fontSize:9.5,color:isActive ? "#7a8a9a" : "#56637a",marginBottom:4 }}>{sub}</div>
+        {/* 데이터 칩 */}
+        <div style={{
+          background:isActive ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.45)",
+          borderRadius:5,padding:"3px 6px",
+          fontSize:9.5,color:isActive ? "#8ba0b8" : "#6b7a94",textAlign:"center",
+          borderTop:`1px solid ${isActive ? color+"55" : color+"28"}`,
+          overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
+        }}>{stat ?? "—"}</div>
       </div>
-      {/* 로봇 */}
-      <div style={{ display:"flex",justifyContent:"center",marginBottom:3 }}
-        dangerouslySetInnerHTML={{ __html: mkRobot(color, `r${num}`, rSz) }}/>
-      {/* 이름 */}
-      <div style={{ textAlign:"center",fontSize:big?13:11,fontWeight:900,
-        letterSpacing:0.5,color,textShadow:`0 0 12px ${color}cc`,marginBottom:1 }}>
-        {label}
-      </div>
-      {/* 역할 */}
-      <div style={{ textAlign:"center",fontSize:9.5,color:"#56637a",marginBottom:4 }}>{sub}</div>
-      {/* 데이터 칩 */}
-      <div style={{
-        background:"rgba(0,0,0,0.45)",borderRadius:5,padding:"3px 6px",
-        fontSize:9.5,color:"#6b7a94",textAlign:"center",
-        borderTop:`1px solid ${color}28`,
-        overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
-      }}>{stat ?? "—"}</div>
     </div>
   );
 }
@@ -346,42 +318,66 @@ const EDGE_DESC: Record<string, string> = {
 };
 
 function buildEdgeSvg(edges: ComputedEdge[], activeEdgeIds: Set<string>): string {
-  const filters = edges.map(e =>
-    `<filter id="gd${e.id}" x="-50%" y="-50%" width="200%" height="200%">` +
-    `<feGaussianBlur stdDeviation="${activeEdgeIds.has(e.id) ? "2.5" : "1.4"}" result="b"/>` +
-    `<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
-  ).join("");
+  const filters = edges.flatMap(e => {
+    const on = activeEdgeIds.has(e.id);
+    const base =
+      `<filter id="gd${e.id}" x="-100%" y="-100%" width="300%" height="300%">` +
+      `<feGaussianBlur stdDeviation="${on ? "4" : "1.2"}" result="b"/>` +
+      `<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+    const halo = on
+      ? `<filter id="gd${e.id}x" x="-200%" y="-200%" width="500%" height="500%">` +
+        `<feGaussianBlur stdDeviation="8" result="b"/>` +
+        `<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
+      : "";
+    return [base, halo];
+  }).join("");
 
   const lines = edges.flatMap(e => {
-    const on = activeEdgeIds.has(e.id);
-    const wt   = (e.wt ?? 1.6) * (on ? 1.15 : 1.0);
-    const lineO = on ? 0.88 : 0.42;
-    const glowO = on ? 0.22 : 0.06;
-    const dotR  = on ? 5.5  : 3.2;
-    const dotO  = on ? 0.98 : 0.45;
-    const dur   = on ? e.dur * 0.5 : e.dur * 2.0;
+    const on    = activeEdgeIds.has(e.id);
+    const wt    = (e.wt ?? 1.6) * (on ? 2.5 : 1.0);
+    const lineO = on ? 0.96 : 0.38;
+    const glowO = on ? 0.55 : 0.05;
+    const dotR  = on ? 9.0  : 3.0;
+    const dotO  = on ? 1.0  : 0.40;
+    const dur   = on ? e.dur * 0.35 : e.dur * 2.5;
     const cnt   = on ? Math.max(e.dots * 2, 3) : 1;
 
     const segs: string[] = [];
     segs.push(`<path id="${e.id}" d="${e.path}" fill="none"/>`);
-    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + (on ? 5 : 2)}" opacity="${glowO}" stroke-linecap="round"/>`);
+    // 외부 앰비언트 글로우
+    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + (on ? 20 : 3)}" opacity="${on ? 0.14 : 0.04}" stroke-linecap="round"/>`);
+    // 이너 글로우
+    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + (on ? 7 : 2)}" opacity="${glowO}" stroke-linecap="round"/>`);
+    // 메인 선
     segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt}" opacity="${lineO}" stroke-linecap="round" stroke-linejoin="round"/>`);
 
     if (on) {
-      // 맥박(pulse) — 활성 엣지에만
-      segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + 2}" opacity="0" stroke-linecap="round"><animate attributeName="opacity" values="0;0.5;0" dur="0.75s" repeatCount="indefinite"/></path>`);
+      // 화이트 플래시 펄스
+      segs.push(`<path d="${e.path}" fill="none" stroke="white" stroke-width="${(wt * 0.55).toFixed(1)}" opacity="0" stroke-linecap="round"><animate attributeName="opacity" values="0;0.65;0" dur="0.5s" repeatCount="indefinite"/></path>`);
+      // 컬러 링 펄스
+      segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + 10}" opacity="0" stroke-linecap="round"><animate attributeName="opacity" values="0;0.38;0" dur="0.8s" repeatCount="indefinite"/></path>`);
     }
 
     for (let k = 0; k < cnt; k++) {
       const begin = (k * dur / cnt).toFixed(2);
+      if (on) {
+        // 혜성 헤일로
+        segs.push(
+          `<circle r="${(dotR * 2.1).toFixed(1)}" fill="${e.col}" opacity="0.25" filter="url(#gd${e.id}x)">` +
+          `<animateMotion dur="${dur}s" repeatCount="indefinite" begin="${begin}s">` +
+          `<mpath href="#${e.id}"/></animateMotion></circle>`
+        );
+      }
+      // 메인 닷
       segs.push(
         `<circle r="${dotR}" fill="${e.col}" opacity="${dotO}" filter="url(#gd${e.id})">` +
         `<animateMotion dur="${dur}s" repeatCount="indefinite" begin="${begin}s">` +
         `<mpath href="#${e.id}"/></animateMotion></circle>`
       );
       if (on) {
+        // 화이트 코어
         segs.push(
-          `<circle r="2.4" fill="white" opacity="0.82">` +
+          `<circle r="3.8" fill="white" opacity="0.95">` +
           `<animateMotion dur="${dur}s" repeatCount="indefinite" begin="${begin}s">` +
           `<mpath href="#${e.id}"/></animateMotion></circle>`
         );
@@ -407,10 +403,20 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
     return () => clearInterval(id);
   }, []);
 
-  // 파이프라인 엣지 — shared/pipeline_graph.py → /api/graph 동적 로드
-  const { data: graphData } = useSWR<GraphData>("/api/graph", fetcher, { refreshInterval: 300000 });
-  const bnd = useMemo(() => buildBounds(AGENTS), []);
+  // 파이프라인 그래프 — 에이전트·엣지·레이아웃 모두 /api/graph 에서 동적 수신
+  // 새 에이전트·연결은 shared/pipeline_graph.py 만 수정하면 자동 반영
+  const { data: graphData } = useSWR<GraphData>("/api/graph", fetcher, { refreshInterval: 60000 });
+  const agents = useMemo<AgentDef[]>(() => graphData?.agents ?? [], [graphData]);
+  const bnd = useMemo(() => buildBounds(agents), [agents]);
   const resolvedEdges = useMemo(() => resolveEdges(graphData?.edges ?? [], bnd), [graphData, bnd]);
+
+  // 캔버스 크기·파이프라인 위치 — agents 에서 자동 파생 (하드코딩 금지)
+  const W  = graphData?.layout?.W  ?? 1130;
+  const H  = graphData?.layout?.H  ?? 660;
+  const J03_X  = useMemo(() => agents.find(a => a.id === "j03")?.x ?? 18,  [agents]);
+  const J08_X  = useMemo(() => agents.find(a => a.id === "j08")?.x ?? 954, [agents]);
+  const ROW1_Y = useMemo(() => agents.find(a => a.id === "j03")?.y ?? 252, [agents]);
+  const ROW2_Y = useMemo(() => agents.find(a => a.id === "j05")?.y ?? 462, [agents]);
 
   // 실시간 파이프라인 활동 — 2초 폴링
   const { data: actData } = useSWR<{active: string[]}>("/api/pipeline/activity", fetcher, { refreshInterval: 2000 });
@@ -422,6 +428,16 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
     }
     return s;
   }, [activeEdgeSet, graphData]);
+  const pipelineActive = useMemo(
+    () => ["e1","e2","e3","e5","e6"].some(id => activeEdgeSet.has(id)),
+    [activeEdgeSet]
+  );
+
+  // 파이프라인 현황 로그 — 5초 폴링
+  const { data: logData } = useSWR<{log: {ts:string; msg:string}[]}>(
+    "/api/pipeline/log", fetcher, { refreshInterval: 5000 }
+  );
+  const activityLog = logData?.log ?? [];
 
   const stats: Record<string, string> = {
     j00: `PID ${ov?.daemon?.pid ?? "—"} · ${ov?.daemon?.uptime ?? "—"}`,
@@ -439,7 +455,23 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   const edgeSvg = buildEdgeSvg(resolvedEdges, activeEdgeSet);
   const edgeLabels = computeEdgeLabels(resolvedEdges);
 
-  return (
+  return (<>
+    <style>{`
+      @keyframes agent-ring-expand {
+        0%   { transform: scale(1.0); opacity: 0.85; }
+        100% { transform: scale(1.65); opacity: 0.0; }
+      }
+      @keyframes led-blink {
+        0%, 100% { opacity: 1.0; }
+        50%       { opacity: 0.07; }
+      }
+      @keyframes card-scan-line {
+        0%   { transform: translateY(-4px);  opacity: 0;  }
+        6%   { opacity: 0.9; }
+        94%  { opacity: 0.5; }
+        100% { transform: translateY(230px); opacity: 0;  }
+      }
+    `}</style>
     <div style={{
       background:"var(--c-card)", border:"1px solid var(--c-bdr)",
       borderTop:`3px solid ${C.primary}`, borderRadius:12,
@@ -510,9 +542,11 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
             position:"absolute",
             left:J03_X, top:ROW1_Y - 8,
             width:J08_X + CARD_W - J03_X, height:CARD_H + 16,
-            background:"rgba(255,255,255,0.015)",
-            border:"1px solid rgba(255,255,255,0.04)",
+            background:pipelineActive ? "rgba(74,222,128,0.04)" : "rgba(255,255,255,0.015)",
+            border:`1px solid ${pipelineActive ? "rgba(74,222,128,0.14)" : "rgba(255,255,255,0.04)"}`,
             borderRadius:16,
+            boxShadow:pipelineActive ? "0 0 50px rgba(74,222,128,0.07) inset" : "none",
+            transition:"background 0.8s ease, border 0.8s ease, box-shadow 0.8s ease",
           }}/>
           {/* 파이프라인 라벨 */}
           <div style={{
@@ -578,8 +612,8 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
             </div>
           </div>
 
-          {/* 에이전트 카드 렌더 */}
-          {AGENTS.map(a => (
+          {/* 에이전트 카드 렌더 — /api/graph 에서 동적 로드 */}
+          {agents.map(a => (
             <div key={a.id} style={{ position:"absolute", left:a.x, top:a.y, zIndex:2 }}>
               <AgentCard
                 num={a.num} label={a.label} sub={a.sub}
@@ -611,12 +645,64 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
           {/* 소품 */}
           <div style={{ position:"absolute",left:600,bottom:14,fontSize:22,opacity:0.35 }}>🌱</div>
           <div style={{ position:"absolute",left:640,bottom:12,fontSize:18,opacity:0.4 }}>☕</div>
-          <div style={{ position:"absolute",left:14, bottom:14,fontSize:20,opacity:0.35 }}>🖨️</div>
+          <div style={{ position:"absolute",left:60, bottom:8,fontSize:18,opacity:0.30 }}>🖨️</div>
           <div style={{ position:"absolute",right:12, top:12,fontSize:18,opacity:0.28 }}>📡</div>
+
+          {/* ── 파이프라인 현황판 (좌하단) ── */}
+          <div style={{
+            position:"absolute", left:14, top:ROW2_Y,
+            width:230, height:CARD_H,
+            background:"rgba(8,10,20,0.94)",
+            border:`1px solid ${activeEdgeSet.size > 0 ? "rgba(74,222,128,0.22)" : "rgba(255,255,255,0.07)"}`,
+            borderTop:`2px solid ${activeEdgeSet.size > 0 ? "#4ade80" : "#1e3252"}`,
+            borderRadius:12,
+            overflow:"hidden", zIndex:2,
+            transition:"border 0.6s ease, border-top 0.6s ease",
+          }}>
+            {/* 현황판 헤더 */}
+            <div style={{
+              display:"flex", alignItems:"center", justifyContent:"space-between",
+              padding:"6px 10px 5px",
+              borderBottom:"1px solid rgba(255,255,255,0.05)",
+              background:"rgba(0,0,0,0.3)",
+            }}>
+              <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+                <span style={{ width:6,height:6,borderRadius:"50%",background:"#4ade80",
+                  boxShadow:"0 0 6px #4ade80",display:"inline-block",
+                  opacity: activeEdgeSet.size > 0 ? 1 : 0.35 }}/>
+                <span style={{ fontSize:9,fontWeight:900,color:"#4ade80",letterSpacing:1.5 }}>실시간 현황</span>
+              </div>
+              <span style={{ fontSize:8,color:"#2d3d55" }}>LIVE LOG</span>
+            </div>
+            {/* 로그 목록 */}
+            <div style={{ overflowY:"auto", height:CARD_H - 32 }}>
+              {activityLog.length === 0 ? (
+                <div style={{
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                  height:"100%", fontSize:8, color:"#2d3d55", letterSpacing:0.5,
+                }}>대기 중...</div>
+              ) : activityLog.map((item, i) => (
+                <div key={i} style={{
+                  display:"flex", gap:7, padding:"4px 10px",
+                  borderBottom:"1px solid rgba(255,255,255,0.025)",
+                  background: i === 0 ? "rgba(74,222,128,0.06)" : "transparent",
+                }}>
+                  <span style={{
+                    fontSize:7.5, color:"#2d3d55", flexShrink:0,
+                    fontFamily:"monospace", paddingTop:1,
+                  }}>{item.ts}</span>
+                  <span style={{
+                    fontSize:8.5, lineHeight:1.45,
+                    color: i === 0 ? "#6ee7b7" : "#4a5a70",
+                  }}>{item.msg}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>
-  );
+  </>);
 }
 
 // ═══════════════════════════════════════════════

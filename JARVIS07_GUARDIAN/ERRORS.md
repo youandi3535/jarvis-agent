@@ -2,6 +2,30 @@
 
 ---
 
+## [436] 테마 발행 harness freeze — `_collect_tier()` 순차 3회 호출에 beat() 누락 (2026-07-13)
+
+- **증상**: `theme-publish-고령화 사회(노인복지)-naver` harness 가 `attempt=1 step=전체: 멈춤(freeze) 302s > 300s 무진전` 로 abort. RuntimeError, source=harness.
+- **환경**: `JARVIS09_COLLECTOR/collector_engine.py`, `trend_theme_writer.py` `_step_collect` → `_run_jarvis09()` → `collect_research()` 경로.
+- **원인**: ADR 012 기본 경로 `collect_research()` 가 신뢰 등급별로 `_collect_tier()`(paper→API→rest)를 **순차 3회** 호출. 각 호출은 `as_completed(futures, timeout=90)` 로 최대 90초 블로킹 가능하나 `beat()` 신호가 전혀 없었음(형제 함수 `collect_for_theme()`엔 이미 있었음 — [385][426]과 동일 클래스, 함수별 개별 배선 필요 원칙). 3틀× 최대 90초=270초 + `_deep_fetch_thin_docs()` 순차 딥페치(최대 8건, 이 역시 beat 누락) 누적이 신고된 302초와 거의 일치.
+- **헛다리**: 없음 — ERRORS.md [394][404][413][426] 선행 사례로 즉시 "블로킹 경계별 개별 beat 배선 누락" 패턴으로 특정, 다른 원인 시도 없이 바로 수정.
+- **해결**: `_collect_tier()` 의 `as_completed()` 루프 안에 `beat()` 호출 추가 (`collect_for_theme()` 과 동일 패턴, watchdog 부재 시 no-op 폴백). 동시에 별도 프로세스(동시 실행 중이던 GUARDIAN 자가수리로 추정)가 `_deep_fetch_thin_docs()` 에도 동일 패턴(`_wd_beat()`)을 배선 — 두 수정 모두 상호보완적으로 반영 확인.
+- **파일**: `JARVIS09_COLLECTOR/collector_engine.py` (`_collect_tier`, `_deep_fetch_thin_docs`).
+- **교훈**: `collect_research()` 처럼 여러 블로킹 함수를 *순차* 호출하는 경로는 그중 beat 배선이 있는 함수와 없는 함수가 섞여 있어도 freeze 는 전체 합산 시간으로 트립된다. 새 블로킹 경로(스레드풀·서브프로세스·순차 네트워크 호출) 추가·리팩터 시 형제 함수의 beat 배선 유무를 개별 확인할 것 — 하나 고쳐도 옆 함수는 그대로 남는다.
+
+---
+
+## [435] 테마 발행 재실패 — [432] 코드 fix는 이미 있었으나 데몬 미재시작으로 stale 프로세스가 재발 (2026-07-13)
+
+- **증상**: `theme-publish-수자원(양적/질적 개선)-naver` harness 가 `make_leader_price_chart_from_data() got an unexpected keyword argument 'out_path'` 로 21:08 재발. 동일 오류가 [432]에서 이미 fix된 것으로 기록됨.
+- **환경**: `JARVIS06_IMAGE/theme_charts.py`, `JARVIS02_WRITER/trend_theme_writer.py`, 데몬 PID 12305.
+- **원인**: [432] 코드 fix(commit 8f2d0a4, 2026-07-13 19:41)는 저장소엔 정상 반영됐으나, 당시 *실행 중이던 데몬 프로세스(PID 12305, 07:42 기동)* 는 fix 이전 코드를 이미 import 한 상태 — Python 모듈은 재기동 없이 갱신되지 않음. 19:41 이후 daemon 재시작이 누락된 채 21:00 테마 잡이 구 프로세스에서 실행되어 구 시그니처(`out_path` 파라미터 없음) 로 재발.
+- **헛다리**: 없음 — 코드 자체를 다시 고치려던 시도 없이 git log/blame 으로 이미 fix 존재 확인 후 바로 원인 특정.
+- **해결**: `kill <데몬PID>` (샌드박스 기본 bash 에선 타 프로세스 signal 이 no-op — `dangerouslyDisableSandbox: true` 로 실행해야 실제 종료됨) → keeper 가 새 PID 로 재기동 → 새 프로세스가 fix 반영된 `theme_charts.py` import 확인 (`inspect.signature` 로 `out_path=None` 존재 검증 + 실제 차트 생성 smoke test 통과). 중단됐던 21:00 테마 잡은 APScheduler 잡스토어가 메모리 기반이라 재기동 시 misfire 캐치업 없이 다음날 21:00 cron 으로만 재개됨 — 오늘 발행 필요 시 수동 run_now(APPROVAL) 필요.
+- **파일**: 코드 변경 없음 (이미 8f2d0a4 에 fix 존재) — 조치는 데몬 재시작.
+- **교훈**: "자가 학습/자가 수정으로 코드를 고쳤다"와 "그 fix 가 운영 중인 프로세스에 실제로 반영됐다"는 별개 사실이다. Python import 캐시 특성상 *코드 수정 완료 ≠ 배포 완료* — 데몬 재시작(memory 규칙 `daemon-restart-after-changes`)이 빠지면 동일 오류가 "이미 고친 버그"로 착각된 채 반복 재발한다. harness 오류 조사 시 ERRORS.md 매칭 항목이 있어도 *실행 중 프로세스의 기동 시각 vs fix 커밋/파일 mtime* 을 반드시 비교해 stale 프로세스 여부부터 확인할 것.
+
+---
+
 ## [434] 티스토리 쿠키 갱신 실패 — Kakao "추가 인증" 요구 + 알림 Markdown 파싱 오류 (2026-07-13)
 
 - **증상**: 티스토리 발행 전 `_step_ts_cookie` 가 3회 모두 실패. 로그: `🚨 수동 개입 필요 — 감지 키워드: '추가 인증'` × 3 → `❌ 쿠키 갱신 3회 모두 실패`. 발행은 기존 TS_COOKIE 유효해서 성공.
@@ -7645,6 +7669,20 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **해결**: `deadline_sec=1800` → `DEFAULT_ACTION_DEADLINE_SEC`(3600, "그 외 액션" 60분 안전망) 로 교체. `job_registry.py` 의 `radar_perf` misfire_grace_time(3600) 과도 정합.
 - **파일**: `JARVIS03_RADAR/performance_collector.py`
 - **교훈**: `guard_main(deadline_sec=...)` 호출 시 숫자를 다른 액션에서 복붙하지 말고 작업 성격(단발 selenium 발행 vs N건 순차 배치)에 맞는 워치독 SSOT 상수(`BLOG_ACTION_DEADLINE_SEC` vs `DEFAULT_ACTION_DEADLINE_SEC`)를 그대로 import 해서 쓸 것 — 값이 같은 파일(watchdog.py)에 이미 정의돼 있음에도 호출부마다 raw 숫자를 재입력하면 작업량 증가에 따라 재발.
+
+## [437] 테마 발행(네이버) harness freeze(302s>300s) — JARVIS09 리서치 수집 경로 beat() 배선 누락 3+2곳 (2026-07-13)
+- **증상**: harness 가 "[harness:theme-publish-고령화 사회(노인복지)-naver] attempt=1 step=전체: 멈춤(freeze) 302s > 300s 무진전" RuntimeError 보고(source=harness, module=`JARVIS00_INFRA.harness.theme-publish-고령화 사회(노인복지)-naver`, func_name=`전체`). traceback 은 `NoneType: None`(watchdog 이 직접 생성한 인공 RuntimeError, step="전체"는 실제 스텝명이 아니라 정지 escalation 라벨).
+- **환경**: `JARVIS02_WRITER/trend_theme_writer.py` `_step_collect` — 백그라운드 스레드로 `JARVIS09_COLLECTOR.collect_research()`(ADR 012 설계-우선 리서치, `RESEARCH_FIRST=1` 기본) 를 돌리며 메인 스레드는 동시에 `collect_stocks_data(theme)` 를 동기 실행 후 `_col_fut.result(timeout=600)` 로 대기.
+- **원인**: `run_action()` 이 attempt 전체를 단일 `Watchdog` 로 감싸고, 그 freeze 판정은 *전역* heartbeat(`_GLOBAL_BEAT`, 어느 스레드에서 호출해도 프로세스 전체 freeze 카운터 리셋) 기준이다. 그런데 `JARVIS09_COLLECTOR/collector_engine.py::_collect_tier()`(paper/API/rest 3티어 순차 호출, 자체 `ThreadPoolExecutor`+`as_completed(timeout=90)` 루프)와 `_deep_fetch_thin_docs()`(최대 8건 순차 `fetch_article()` HTTP 요청)가 sibling 함수 `collect_for_theme()` 와 달리 루프 안에서 전역 `beat()` 를 전혀 호출하지 않았다. 동시에 `JARVIS09_COLLECTOR/collect_theme.py::collect_stocks_data()` 경로의 `_fetch_naver_theme_catalog()`(순차 최대 10페이지 `requests.get`) · `_naver_fin_theme_search()` 상세페이지 3회 백오프 재시도 루프 · `_enrich_ex` ThreadPoolExecutor 재무데이터 취합 루프도 동일하게 beat() 미배선 — 여러 구간이 겹쳐 진행 신호 없는 공백이 300초를 넘겼다. 기존에 이미 4회(ERRORS [394][396][413][426]) 반복된 "새/누락 코드 경로에 표준 beat() 배선 누락" 버그 클래스의 재발.
+- **헛다리**: 없음 — ERRORS.md 선행 검색으로 즉시 동일 버그 클래스 확정, 표준 수정 패턴(로컬 try/except import + no-op 폴백 + 루프 내 beat() 호출) 그대로 적용.
+- **해결**: 아래 5개 루프에 표준 beat() 배선 추가 (모두 `try: from JARVIS00_INFRA.watchdog import beat ... except: no-op` 로컬 폴백 패턴, 기존 `collect_for_theme()` 패턴과 동일):
+  - `JARVIS09_COLLECTOR/collector_engine.py::_collect_tier()` — `as_completed` 루프 안
+  - `JARVIS09_COLLECTOR/collector_engine.py::_deep_fetch_thin_docs()` — 순차 딥페치 루프 안
+  - `JARVIS09_COLLECTOR/collect_theme.py::_fetch_naver_theme_catalog()` — 순차 페이지 루프 안
+  - `JARVIS09_COLLECTOR/collect_theme.py::_naver_fin_theme_search()` — 상세페이지 3회 재시도 루프 안
+  - `JARVIS09_COLLECTOR/collect_theme.py::collect_stocks_data()` 내부 `_enrich_ex` — `as_completed` 취합 루프 안
+- **파일**: `JARVIS09_COLLECTOR/collector_engine.py`, `JARVIS09_COLLECTOR/collect_theme.py`
+- **교훈**: ADR 012(설계-우선 리서치)로 신설된 `collect_research()` → `_collect_tier()`/`_deep_fetch_thin_docs()` 경로는 sibling 함수(`collect_for_theme()`)가 이미 beat() 배선을 갖췄다는 이유로 "당연히 배선됐겠지"라고 넘겨짚기 쉽다 — 새 함수·병렬 리팩터마다 *개별적으로* beat() 배선 여부를 확인할 것. 순차 `requests.get`/`ThreadPoolExecutor.as_completed` 루프를 새로 작성하면 항상 루프 반복마다 전역 `beat()` 호출을 기본 습관으로 넣을 것.
 
 ---
 ### [2026-07-11 05:01] ✅ 자동수정 — RuntimeError

@@ -52,8 +52,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 background: active ? "rgba(79,144,217,0.12)" : "transparent",
                 borderLeft: active ? "3px solid var(--c-primary)" : "3px solid transparent",
               }}>
-                <span style={{ fontSize: 16, color: active ? "var(--c-primary)" : "var(--c-text5)" }}>{n.icon}</span>
-                <span style={{ fontSize: 10, color: active ? "var(--c-primary)" : "var(--c-text5)", marginTop: 3, fontWeight: active ? 700 : 400 }}>{n.label}</span>
+                <span style={{ fontSize: 16, color: active ? "var(--c-primary)" : "var(--c-text2)" }}>{n.icon}</span>
+                <span style={{ fontSize: 10, color: active ? "var(--c-primary)" : "var(--c-text2)", marginTop: 3, fontWeight: active ? 700 : 400 }}>{n.label}</span>
               </Link>
             );
           })}
