@@ -738,6 +738,16 @@ def get_pipeline_activity():
         return {"active": [], "ts": _t.time()}
 
 
+@app.get("/api/pipeline/log")
+def get_pipeline_log():
+    """파이프라인 현황 로그 — 최신 60개 이벤트 반환 (5초 폴링용)."""
+    try:
+        from shared.pipeline_activity import get_activity_log
+        return {"log": get_activity_log()}
+    except Exception:
+        return {"log": []}
+
+
 @app.get("/api/graph")
 def get_pipeline_graph():
     """파이프라인 연결 그래프 — 대시보드 동적 렌더용 (사용자 박제 2026-07-11).

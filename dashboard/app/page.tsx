@@ -260,66 +260,98 @@ function AgentCard({
   const rSz = big ? 62 : 50;
 
   return (
-    <div
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      style={{
-        width:w, height:h, position:"relative", overflow:"hidden",
-        background: isActive
-          ? `linear-gradient(145deg,#1a1f35 0%,#0e1020 100%)`
-          : `linear-gradient(145deg,#131827 0%,#0b0d1a 100%)`,
-        border:`2px solid ${color}`,
-        borderRadius:12,
-        padding:"7px 9px",
-        transform: hov
-          ? `perspective(450px) rotateX(-7deg) rotateY(5deg) scale(1.05) translateZ(8px)`
-          : `perspective(450px) rotateX(0) rotateY(0) scale(1)`,
-        transition:"transform 0.26s cubic-bezier(0.23,1,0.32,1), box-shadow 0.3s ease",
-        boxShadow: hov
-          ? `0 0 36px ${color}66, 0 22px 55px rgba(0,0,0,0.65), inset 0 1px 0 ${color}55`
-          : isActive
-            ? `0 0 42px ${color}aa, 0 0 80px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}66`
-            : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
-        cursor:"default",
-      }}
-    >
-      {/* 스캔라인 */}
-      <div style={{
-        position:"absolute",inset:0,borderRadius:10,pointerEvents:"none",
-        background:"repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.06) 3px,rgba(0,0,0,0.06) 4px)",
-      }}/>
-      {/* 코너 브라켓 */}
-      {[
-        {top:0,left:0,borderTop:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"10px 0 0 0"},
-        {top:0,right:0,borderTop:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 10px 0 0"},
-        {bottom:0,left:0,borderBottom:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"0 0 0 10px"},
-        {bottom:0,right:0,borderBottom:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 0 10px 0"},
-      ].map((s,i) => (
-        <div key={i} style={{ position:"absolute",width:12,height:12,...s }}/>
+    <div style={{ position:"relative", width:w, height:h }}>
+      {/* 활성 맥동 링 — 카드 외부로 방사 */}
+      {isActive && [0, 0.55, 1.1].map((delay, i) => (
+        <div key={i} style={{
+          position:"absolute", inset:"-8px",
+          border:`2px solid ${color}`,
+          borderRadius:16,
+          animation:`agent-ring-expand 1.65s ease-out ${delay}s infinite`,
+          pointerEvents:"none",
+        }}/>
       ))}
-      {/* 번호 + 상태 LED */}
-      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2 }}>
-        <span style={{ fontSize:9,fontWeight:900,color,letterSpacing:1.5,opacity:0.7 }}>J{num}</span>
-        <span style={{ width:5,height:5,borderRadius:"50%",background:"#4ade80",
-          boxShadow:"0 0 6px #4ade80",display:"inline-block" }}/>
+
+      <div
+        onMouseEnter={() => setHov(true)}
+        onMouseLeave={() => setHov(false)}
+        style={{
+          width:w, height:h, position:"relative", overflow:"hidden",
+          background: isActive
+            ? `linear-gradient(145deg,#1c2140 0%,#0e1020 100%)`
+            : `linear-gradient(145deg,#131827 0%,#0b0d1a 100%)`,
+          border:`2px solid ${color}`,
+          borderRadius:12,
+          padding:"7px 9px",
+          transform: hov
+            ? `perspective(450px) rotateX(-7deg) rotateY(5deg) scale(1.05) translateZ(8px)`
+            : `perspective(450px) rotateX(0) rotateY(0) scale(1)`,
+          transition:"transform 0.26s cubic-bezier(0.23,1,0.32,1), box-shadow 0.3s ease",
+          boxShadow: hov
+            ? `0 0 36px ${color}66, 0 22px 55px rgba(0,0,0,0.65), inset 0 1px 0 ${color}55`
+            : isActive
+              ? `0 0 60px ${color}cc, 0 0 120px ${color}55, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}99`
+              : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
+          cursor:"default",
+        }}
+      >
+        {/* 스위핑 스캔라인 (active only) */}
+        {isActive && (
+          <div style={{
+            position:"absolute", left:0, right:0, height:2, top:0,
+            background:`linear-gradient(90deg,transparent,${color}aa,white,${color}aa,transparent)`,
+            animation:"card-scan-line 2.2s linear infinite",
+            pointerEvents:"none", zIndex:10,
+          }}/>
+        )}
+        {/* 배경 스캔라인 */}
+        <div style={{
+          position:"absolute",inset:0,borderRadius:10,pointerEvents:"none",
+          background:"repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.06) 3px,rgba(0,0,0,0.06) 4px)",
+        }}/>
+        {/* 코너 브라켓 */}
+        {[
+          {top:0,left:0,borderTop:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"10px 0 0 0"},
+          {top:0,right:0,borderTop:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 10px 0 0"},
+          {bottom:0,left:0,borderBottom:`2px solid ${color}`,borderLeft:`2px solid ${color}`,borderRadius:"0 0 0 10px"},
+          {bottom:0,right:0,borderBottom:`2px solid ${color}`,borderRight:`2px solid ${color}`,borderRadius:"0 0 10px 0"},
+        ].map((s,i) => (
+          <div key={i} style={{ position:"absolute",width:12,height:12,...s }}/>
+        ))}
+        {/* 번호 + 상태 LED */}
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2 }}>
+          <span style={{ fontSize:9,fontWeight:900,color,letterSpacing:1.5,opacity:isActive ? 1 : 0.7 }}>J{num}</span>
+          <span style={{
+            width:isActive ? 8 : 5, height:isActive ? 8 : 5,
+            borderRadius:"50%",
+            background:isActive ? color : "#4ade80",
+            boxShadow:isActive ? `0 0 16px ${color}, 0 0 32px ${color}66` : "0 0 6px #4ade80",
+            display:"inline-block",
+            animation:isActive ? "led-blink 0.45s ease-in-out infinite" : "none",
+            transition:"width 0.3s, height 0.3s",
+          }}/>
+        </div>
+        {/* 로봇 */}
+        <div style={{ display:"flex",justifyContent:"center",marginBottom:3 }}
+          dangerouslySetInnerHTML={{ __html: mkRobot(color, `r${num}`, rSz) }}/>
+        {/* 이름 */}
+        <div style={{ textAlign:"center",fontSize:big?13:11,fontWeight:900,
+          letterSpacing:0.5,color,
+          textShadow:isActive ? `0 0 22px ${color}, 0 0 44px ${color}88` : `0 0 12px ${color}cc`,
+          marginBottom:1 }}>
+          {label}
+        </div>
+        {/* 역할 */}
+        <div style={{ textAlign:"center",fontSize:9.5,color:isActive ? "#7a8a9a" : "#56637a",marginBottom:4 }}>{sub}</div>
+        {/* 데이터 칩 */}
+        <div style={{
+          background:isActive ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.45)",
+          borderRadius:5,padding:"3px 6px",
+          fontSize:9.5,color:isActive ? "#8ba0b8" : "#6b7a94",textAlign:"center",
+          borderTop:`1px solid ${isActive ? color+"55" : color+"28"}`,
+          overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
+        }}>{stat ?? "—"}</div>
       </div>
-      {/* 로봇 */}
-      <div style={{ display:"flex",justifyContent:"center",marginBottom:3 }}
-        dangerouslySetInnerHTML={{ __html: mkRobot(color, `r${num}`, rSz) }}/>
-      {/* 이름 */}
-      <div style={{ textAlign:"center",fontSize:big?13:11,fontWeight:900,
-        letterSpacing:0.5,color,textShadow:`0 0 12px ${color}cc`,marginBottom:1 }}>
-        {label}
-      </div>
-      {/* 역할 */}
-      <div style={{ textAlign:"center",fontSize:9.5,color:"#56637a",marginBottom:4 }}>{sub}</div>
-      {/* 데이터 칩 */}
-      <div style={{
-        background:"rgba(0,0,0,0.45)",borderRadius:5,padding:"3px 6px",
-        fontSize:9.5,color:"#6b7a94",textAlign:"center",
-        borderTop:`1px solid ${color}28`,
-        overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
-      }}>{stat ?? "—"}</div>
     </div>
   );
 }
@@ -346,42 +378,66 @@ const EDGE_DESC: Record<string, string> = {
 };
 
 function buildEdgeSvg(edges: ComputedEdge[], activeEdgeIds: Set<string>): string {
-  const filters = edges.map(e =>
-    `<filter id="gd${e.id}" x="-50%" y="-50%" width="200%" height="200%">` +
-    `<feGaussianBlur stdDeviation="${activeEdgeIds.has(e.id) ? "2.5" : "1.4"}" result="b"/>` +
-    `<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
-  ).join("");
+  const filters = edges.flatMap(e => {
+    const on = activeEdgeIds.has(e.id);
+    const base =
+      `<filter id="gd${e.id}" x="-100%" y="-100%" width="300%" height="300%">` +
+      `<feGaussianBlur stdDeviation="${on ? "4" : "1.2"}" result="b"/>` +
+      `<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+    const halo = on
+      ? `<filter id="gd${e.id}x" x="-200%" y="-200%" width="500%" height="500%">` +
+        `<feGaussianBlur stdDeviation="8" result="b"/>` +
+        `<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
+      : "";
+    return [base, halo];
+  }).join("");
 
   const lines = edges.flatMap(e => {
-    const on = activeEdgeIds.has(e.id);
-    const wt   = (e.wt ?? 1.6) * (on ? 1.15 : 1.0);
-    const lineO = on ? 0.88 : 0.42;
-    const glowO = on ? 0.22 : 0.06;
-    const dotR  = on ? 5.5  : 3.2;
-    const dotO  = on ? 0.98 : 0.45;
-    const dur   = on ? e.dur * 0.5 : e.dur * 2.0;
+    const on    = activeEdgeIds.has(e.id);
+    const wt    = (e.wt ?? 1.6) * (on ? 2.5 : 1.0);
+    const lineO = on ? 0.96 : 0.38;
+    const glowO = on ? 0.55 : 0.05;
+    const dotR  = on ? 9.0  : 3.0;
+    const dotO  = on ? 1.0  : 0.40;
+    const dur   = on ? e.dur * 0.35 : e.dur * 2.5;
     const cnt   = on ? Math.max(e.dots * 2, 3) : 1;
 
     const segs: string[] = [];
     segs.push(`<path id="${e.id}" d="${e.path}" fill="none"/>`);
-    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + (on ? 5 : 2)}" opacity="${glowO}" stroke-linecap="round"/>`);
+    // 외부 앰비언트 글로우
+    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + (on ? 20 : 3)}" opacity="${on ? 0.14 : 0.04}" stroke-linecap="round"/>`);
+    // 이너 글로우
+    segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + (on ? 7 : 2)}" opacity="${glowO}" stroke-linecap="round"/>`);
+    // 메인 선
     segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt}" opacity="${lineO}" stroke-linecap="round" stroke-linejoin="round"/>`);
 
     if (on) {
-      // 맥박(pulse) — 활성 엣지에만
-      segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + 2}" opacity="0" stroke-linecap="round"><animate attributeName="opacity" values="0;0.5;0" dur="0.75s" repeatCount="indefinite"/></path>`);
+      // 화이트 플래시 펄스
+      segs.push(`<path d="${e.path}" fill="none" stroke="white" stroke-width="${(wt * 0.55).toFixed(1)}" opacity="0" stroke-linecap="round"><animate attributeName="opacity" values="0;0.65;0" dur="0.5s" repeatCount="indefinite"/></path>`);
+      // 컬러 링 펄스
+      segs.push(`<path d="${e.path}" fill="none" stroke="${e.col}" stroke-width="${wt + 10}" opacity="0" stroke-linecap="round"><animate attributeName="opacity" values="0;0.38;0" dur="0.8s" repeatCount="indefinite"/></path>`);
     }
 
     for (let k = 0; k < cnt; k++) {
       const begin = (k * dur / cnt).toFixed(2);
+      if (on) {
+        // 혜성 헤일로
+        segs.push(
+          `<circle r="${(dotR * 2.1).toFixed(1)}" fill="${e.col}" opacity="0.25" filter="url(#gd${e.id}x)">` +
+          `<animateMotion dur="${dur}s" repeatCount="indefinite" begin="${begin}s">` +
+          `<mpath href="#${e.id}"/></animateMotion></circle>`
+        );
+      }
+      // 메인 닷
       segs.push(
         `<circle r="${dotR}" fill="${e.col}" opacity="${dotO}" filter="url(#gd${e.id})">` +
         `<animateMotion dur="${dur}s" repeatCount="indefinite" begin="${begin}s">` +
         `<mpath href="#${e.id}"/></animateMotion></circle>`
       );
       if (on) {
+        // 화이트 코어
         segs.push(
-          `<circle r="2.4" fill="white" opacity="0.82">` +
+          `<circle r="3.8" fill="white" opacity="0.95">` +
           `<animateMotion dur="${dur}s" repeatCount="indefinite" begin="${begin}s">` +
           `<mpath href="#${e.id}"/></animateMotion></circle>`
         );
@@ -422,6 +478,16 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
     }
     return s;
   }, [activeEdgeSet, graphData]);
+  const pipelineActive = useMemo(
+    () => ["e1","e2","e3","e5","e6"].some(id => activeEdgeSet.has(id)),
+    [activeEdgeSet]
+  );
+
+  // 파이프라인 현황 로그 — 5초 폴링
+  const { data: logData } = useSWR<{log: {ts:string; msg:string}[]}>(
+    "/api/pipeline/log", fetcher, { refreshInterval: 5000 }
+  );
+  const activityLog = logData?.log ?? [];
 
   const stats: Record<string, string> = {
     j00: `PID ${ov?.daemon?.pid ?? "—"} · ${ov?.daemon?.uptime ?? "—"}`,
@@ -439,7 +505,23 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   const edgeSvg = buildEdgeSvg(resolvedEdges, activeEdgeSet);
   const edgeLabels = computeEdgeLabels(resolvedEdges);
 
-  return (
+  return (<>
+    <style>{`
+      @keyframes agent-ring-expand {
+        0%   { transform: scale(1.0); opacity: 0.85; }
+        100% { transform: scale(1.65); opacity: 0.0; }
+      }
+      @keyframes led-blink {
+        0%, 100% { opacity: 1.0; }
+        50%       { opacity: 0.07; }
+      }
+      @keyframes card-scan-line {
+        0%   { transform: translateY(-4px);  opacity: 0;  }
+        6%   { opacity: 0.9; }
+        94%  { opacity: 0.5; }
+        100% { transform: translateY(230px); opacity: 0;  }
+      }
+    `}</style>
     <div style={{
       background:"var(--c-card)", border:"1px solid var(--c-bdr)",
       borderTop:`3px solid ${C.primary}`, borderRadius:12,
@@ -510,9 +592,11 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
             position:"absolute",
             left:J03_X, top:ROW1_Y - 8,
             width:J08_X + CARD_W - J03_X, height:CARD_H + 16,
-            background:"rgba(255,255,255,0.015)",
-            border:"1px solid rgba(255,255,255,0.04)",
+            background:pipelineActive ? "rgba(74,222,128,0.04)" : "rgba(255,255,255,0.015)",
+            border:`1px solid ${pipelineActive ? "rgba(74,222,128,0.14)" : "rgba(255,255,255,0.04)"}`,
             borderRadius:16,
+            boxShadow:pipelineActive ? "0 0 50px rgba(74,222,128,0.07) inset" : "none",
+            transition:"background 0.8s ease, border 0.8s ease, box-shadow 0.8s ease",
           }}/>
           {/* 파이프라인 라벨 */}
           <div style={{
@@ -611,12 +695,64 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
           {/* 소품 */}
           <div style={{ position:"absolute",left:600,bottom:14,fontSize:22,opacity:0.35 }}>🌱</div>
           <div style={{ position:"absolute",left:640,bottom:12,fontSize:18,opacity:0.4 }}>☕</div>
-          <div style={{ position:"absolute",left:14, bottom:14,fontSize:20,opacity:0.35 }}>🖨️</div>
+          <div style={{ position:"absolute",left:60, bottom:8,fontSize:18,opacity:0.30 }}>🖨️</div>
           <div style={{ position:"absolute",right:12, top:12,fontSize:18,opacity:0.28 }}>📡</div>
+
+          {/* ── 파이프라인 현황판 (좌하단) ── */}
+          <div style={{
+            position:"absolute", left:14, top:ROW2_Y,
+            width:230, height:CARD_H,
+            background:"rgba(8,10,20,0.94)",
+            border:`1px solid ${activeEdgeSet.size > 0 ? "rgba(74,222,128,0.22)" : "rgba(255,255,255,0.07)"}`,
+            borderTop:`2px solid ${activeEdgeSet.size > 0 ? "#4ade80" : "#1e3252"}`,
+            borderRadius:12,
+            overflow:"hidden", zIndex:2,
+            transition:"border 0.6s ease, border-top 0.6s ease",
+          }}>
+            {/* 현황판 헤더 */}
+            <div style={{
+              display:"flex", alignItems:"center", justifyContent:"space-between",
+              padding:"6px 10px 5px",
+              borderBottom:"1px solid rgba(255,255,255,0.05)",
+              background:"rgba(0,0,0,0.3)",
+            }}>
+              <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+                <span style={{ width:6,height:6,borderRadius:"50%",background:"#4ade80",
+                  boxShadow:"0 0 6px #4ade80",display:"inline-block",
+                  opacity: activeEdgeSet.size > 0 ? 1 : 0.35 }}/>
+                <span style={{ fontSize:9,fontWeight:900,color:"#4ade80",letterSpacing:1.5 }}>실시간 현황</span>
+              </div>
+              <span style={{ fontSize:8,color:"#2d3d55" }}>LIVE LOG</span>
+            </div>
+            {/* 로그 목록 */}
+            <div style={{ overflowY:"auto", height:CARD_H - 32 }}>
+              {activityLog.length === 0 ? (
+                <div style={{
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                  height:"100%", fontSize:8, color:"#2d3d55", letterSpacing:0.5,
+                }}>대기 중...</div>
+              ) : activityLog.map((item, i) => (
+                <div key={i} style={{
+                  display:"flex", gap:7, padding:"4px 10px",
+                  borderBottom:"1px solid rgba(255,255,255,0.025)",
+                  background: i === 0 ? "rgba(74,222,128,0.06)" : "transparent",
+                }}>
+                  <span style={{
+                    fontSize:7.5, color:"#2d3d55", flexShrink:0,
+                    fontFamily:"monospace", paddingTop:1,
+                  }}>{item.ts}</span>
+                  <span style={{
+                    fontSize:8.5, lineHeight:1.45,
+                    color: i === 0 ? "#6ee7b7" : "#4a5a70",
+                  }}>{item.msg}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>
-  );
+  </>);
 }
 
 // ═══════════════════════════════════════════════
