@@ -6,9 +6,20 @@ import { useState } from "react";
 
 type QualityStats = {
   by_status: Record<string, number>;
+  status_labels: Record<string, string>;
+  status_hints: Record<string, string>;
 };
 
 const BASE = "http://localhost:9198";
+
+// 색상 힌트(백엔드) → CSS 변수(프론트) 매핑 — 비즈니스 상태와 무관한 5가지 시각 범주
+const HINT_COLOR: Record<string, string> = {
+  success: "var(--c-success)",
+  primary: "var(--c-primary)",
+  warn:    "var(--c-warn)",
+  danger:  "var(--c-danger)",
+  muted:   "var(--c-text2)",
+};
 
 /* ── 공통 스타일 ─────────────────────────────────────────────────── */
 const card = (topColor: string): React.CSSProperties => ({
@@ -48,37 +59,9 @@ const td: React.CSSProperties = {
   verticalAlign: "middle",
 };
 
-/* ── 상태 표시 매핑 ────────────────────────────────────────────────── */
-const STATUS_LABEL: Record<string, string> = {
-  approved:       "승인 완료",
-  analyzing:      "분석 중",
-  ignored:        "무시",
-  revise_skipped: "수정 건너뜀",
-  revised:        "수정 완료",
-  new:            "신규",
-  pending:        "대기 중",
-  rejected:       "반려",
-};
-
-const STATUS_COLOR: Record<string, string> = {
-  approved:       "var(--c-success)",
-  revised:        "var(--c-success)",
-  analyzing:      "var(--c-primary)",
-  ignored:        "var(--c-warn)",
-  revise_skipped: "var(--c-warn)",
-  rejected:       "var(--c-danger)",
-  new:            "var(--c-primary)",
-  pending:        "var(--c-warn)",
-};
-
-function statusKpiColor(key: string): string {
-  return STATUS_COLOR[key] ?? "var(--c-text2)";
-}
-
-/* ── 상태 뱃지 ────────────────────────────────────────────────────── */
-function StatusBadge({ status }: { status: string }) {
+/* ── 상태 뱃지 — API 라벨 사용 ──────────────────────────────────── */
+function StatusBadge({ status, label }: { status: string; label: string }) {
   const color = statusColor(status);
-  const label = STATUS_LABEL[status] ?? status;
   return (
     <span style={{
       display: "inline-flex",
@@ -115,8 +98,10 @@ export default function QualityPage() {
 
   const [loadingId, setLoadingId] = useState<number | null>(null);
 
-  const by = stats?.by_status ?? {};
-  const total = Object.values(by).reduce((a, b) => a + b, 0);
+  const by     = stats?.by_status     ?? {};
+  const labels = stats?.status_labels ?? {};
+  const hints  = stats?.status_hints  ?? {};
+  const total  = Object.values(by).reduce((a, b) => a + b, 0);
   const statusEntries = Object.entries(by).sort((a, b) => b[1] - a[1]);
 
   const history = (rawHistory ?? []).slice(0, 20);
@@ -136,7 +121,7 @@ export default function QualityPage() {
       {/* 제목 */}
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 30, fontWeight: 800, color: "var(--c-text)", margin: 0 }}>품질 관리</h1>
-        <p style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 6 }}>발행 글 품질 검토 및 승인 관리</p>
+        <p style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 6 }}>발행 글 품질 분석 — 인사이트는 다음 글 작성에 자동 반영</p>
       </div>
 
       {/* KPI — 전체 + by_status 동적 렌더링 */}
@@ -148,9 +133,9 @@ export default function QualityPage() {
           {statusEntries.map(([key, count]) => (
             <KpiCard
               key={key}
-              label={STATUS_LABEL[key] ?? key}
+              label={labels[key] ?? key}
               value={fmtNum(count)}
-              color={statusKpiColor(key)}
+              color={HINT_COLOR[hints[key]] ?? "var(--c-text2)"}
             />
           ))}
         </div>
@@ -185,10 +170,9 @@ export default function QualityPage() {
                     ? row.title.slice(0, 200) + "…"
                     : row.title;
                   const isLast = history.indexOf(row) === history.length - 1;
-                  const rowTd = isLast
-                    ? { ...td, borderBottom: "none" }
-                    : td;
+                  const rowTd = isLast ? { ...td, borderBottom: "none" } : td;
                   const busy = loadingId === row.id;
+                  const rowLabel = labels[row.status] ?? row.status;
 
                   return (
                     <tr key={row.id} style={{ transition: "background 0.15s" }}
@@ -216,7 +200,7 @@ export default function QualityPage() {
                           </a>
                         ) : titleDisplay}
                       </td>
-                      <td style={rowTd}><StatusBadge status={row.status} /></td>
+                      <td style={rowTd}><StatusBadge status={row.status} label={rowLabel} /></td>
                       <td style={{ ...rowTd, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                         {fmtNum(row.current_views)}
                       </td>

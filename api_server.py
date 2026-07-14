@@ -253,19 +253,32 @@ def get_trends():
 
 
 # ── 품질 통계 ────────────────────────────────────────────────────
+# 상태 메타 — 단일 진실 소스. 새 상태 추가/삭제는 여기만 수정하면 UI 자동 반영.
+_STATUS_META: dict[str, dict] = {
+    "approved":       {"label": "승인 완료", "hint": "success"},
+    "analyzing":      {"label": "분석 중",   "hint": "primary"},
+    "ignored":        {"label": "무시",      "hint": "muted"},
+    "revised":        {"label": "수정 완료", "hint": "muted"},    # 구버전 레거시 데이터
+    "revise_skipped": {"label": "수정 건너뜀", "hint": "muted"},  # 구버전 레거시 데이터
+}
+
 @app.get("/api/quality/stats")
 def get_quality_stats():
     con = _db()
     if not con:
-        return {"by_status": {}, "recent": []}
+        return {"by_status": {}, "status_labels": {}, "status_hints": {}, "recent": []}
     try:
-        by_status = {r["status"]: r["n"] for r in _rows(con, "SELECT status,COUNT(*) as n FROM post_analysis GROUP BY status")}
-        recent    = _rows(con, "SELECT platform,title,status,created_at,current_views FROM post_analysis ORDER BY created_at DESC LIMIT 20")
+        rows      = _rows(con, "SELECT status, COUNT(*) as n FROM post_analysis GROUP BY status")
+        by_status = {r["status"]: r["n"] for r in rows}
+        # 실제 DB에 존재하는 상태에 대해서만 라벨/힌트 반환 — 프론트 하드코딩 불필요
+        status_labels = {k: _STATUS_META.get(k, {}).get("label", k) for k in by_status}
+        status_hints  = {k: _STATUS_META.get(k, {}).get("hint", "muted")  for k in by_status}
+        recent = _rows(con, "SELECT platform,title,status,created_at,current_views FROM post_analysis ORDER BY created_at DESC LIMIT 20")
         con.close()
-        return {"by_status": by_status, "recent": recent}
+        return {"by_status": by_status, "status_labels": status_labels, "status_hints": status_hints, "recent": recent}
     except Exception:
         con.close()
-        return {"by_status": {}, "recent": []}
+        return {"by_status": {}, "status_labels": {}, "status_hints": {}, "recent": []}
 
 
 @app.get("/api/quality/history")

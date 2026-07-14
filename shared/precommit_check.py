@@ -403,7 +403,6 @@ def check_autocode(report: Report) -> None:
         "approval_bot",
         "radar_main",
         "post_quality",
-        "revise_adapter",
         "auto_repair",
         # hub.py 삭제됨 (Streamlit → FastAPI+Next.js 전환)
         "JARVIS00_INFRA/",                    # 인프라 단일 진입점 (데몬·프로세스 제어)
