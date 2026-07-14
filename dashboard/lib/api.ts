@@ -30,10 +30,17 @@ export type GuardianStats = { total: number; new: number; fixed: number; critica
 export type ErrorRow   = { id: number; timestamp: string; severity: string; status: string; error_type: string; module: string; message: string };
 export type VisionSummary = { total_agents?: number; healthy?: number; degraded?: number; offline?: number };
 export type OverviewData  = { daemon: DaemonInfo; posts: PostStats; trends: TrendData; guardian: GuardianStats; vision: VisionSummary; ts: string };
-export type PerformanceData = { total_views: number; top_posts: PostRow[]; platform_views: Record<string, number>; naver_ranked: NaverRow[]; history: HistRow[] };
+export type PerformanceData = {
+  active_platforms: string[];
+  platform_labels:  Record<string, string>;
+  period_order:     string[];
+  period_labels:    Record<string, string>;
+  period_views:     Record<string, Record<string, number>>;
+  daily_trend:      Array<Record<string, number | string>>;
+  top_posts:        PostRow[];
+  data_range:       { from: string | null; to: string | null; days: number };
+};
 export type PostRow    = { platform: string; title: string; current_views: number; naver_rank: number | null; created_at: string };
-export type NaverRow   = { title: string; naver_rank: number; current_views: number; created_at: string };
-export type HistRow    = { d: string; v: number };
 export type LearningData = { weights: WeightRow[]; backtest: BacktestRow[]; insights: InsightRow[]; learn_log: { cnt: number; mae: number | null } };
 export type WeightRow  = { weight_type: string; weights_json: string; trained_at: string; backtest_score: number };
 export type BacktestRow = { tested_at: string; backtest_type: string; score: number; details: string };

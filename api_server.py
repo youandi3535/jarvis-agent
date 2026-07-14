@@ -127,6 +127,61 @@ def get_posts():
 
 
 # ── 파이프라인 ───────────────────────────────────────────────────
+@app.get("/api/themes/official")
+def get_official_themes():
+    """네이버 공식 테마 전체 + 작성 현황 + 오늘의 픽."""
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(BASE_DIR))
+        from JARVIS09_COLLECTOR.collect_theme import _fetch_naver_theme_catalog
+        catalog: dict = _fetch_naver_theme_catalog()   # {테마명: 테마번호}
+    except Exception:
+        catalog = {}
+
+    con = _db()
+    written_set: set[str] = set()
+    today_pick: dict | None = None
+    try:
+        if con:
+            # 작성 완료 테마 (post_analysis, 경제지표·경제브리핑 제외)
+            rows = _rows(con, """
+                SELECT DISTINCT theme FROM post_analysis
+                WHERE theme IS NOT NULL
+                  AND theme NOT LIKE '경제지표%'
+                  AND theme NOT LIKE '경제 브리핑%'
+            """)
+            # 카탈로그에 있는 테마만 ✓ 처리 (비공식 주제 제외)
+            written_set = {r["theme"] for r in rows if r["theme"] in catalog}
+
+            # 오늘의 픽: pipeline에서 오늘 등록된 것 중 opportunity_score 최상위 1개
+            pick_rows = _rows(con, """
+                SELECT theme, sector, opportunity_score FROM pipeline
+                WHERE status = 'suggested'
+                  AND date(created_at) = date('now', 'localtime')
+                ORDER BY opportunity_score DESC, created_at DESC
+                LIMIT 1
+            """)
+            if pick_rows:
+                today_pick = dict(pick_rows[0])
+            con.close()
+    except Exception:
+        if con:
+            con.close()
+
+    themes = [
+        {"name": name, "no": no, "written": name in written_set}
+        for name, no in catalog.items()
+    ]
+    themes.sort(key=lambda x: (not x["written"], x["name"]))
+
+    return {
+        "total":         len(themes),
+        "written_count": len(written_set),
+        "themes":        themes,
+        "today_pick":    today_pick,
+    }
+
+
 @app.get("/api/pipeline")
 def get_pipeline():
     con = _db()
@@ -198,19 +253,109 @@ def get_trends():
 
 
 # ── 품질 통계 ────────────────────────────────────────────────────
+# 현재 활성 상태 메타 — 여기 있는 것만 UI에 표시. 폐기된 상태는 이 목록에서 제거.
+_STATUS_META: dict[str, dict] = {
+    "approved":  {"label": "승인 완료", "hint": "success"},
+    "analyzing": {"label": "분석 중",   "hint": "primary"},
+    "ignored":   {"label": "무시",      "hint": "muted"},
+}
+
 @app.get("/api/quality/stats")
 def get_quality_stats():
     con = _db()
     if not con:
-        return {"by_status": {}, "recent": []}
+        return {"by_status": {}, "status_labels": {}, "status_hints": {}, "recent": []}
     try:
-        by_status = {r["status"]: r["n"] for r in _rows(con, "SELECT status,COUNT(*) as n FROM post_analysis GROUP BY status")}
-        recent    = _rows(con, "SELECT platform,title,status,created_at,current_views FROM post_analysis ORDER BY created_at DESC LIMIT 20")
+        rows = _rows(con, "SELECT status, COUNT(*) as n FROM post_analysis GROUP BY status")
+        # _STATUS_META 에 있는 활성 상태만 표시 — 폐기된 상태(revised 등)는 자동 제외
+        by_status     = {r["status"]: r["n"] for r in rows if r["status"] in _STATUS_META}
+        status_labels = {k: _STATUS_META[k]["label"] for k in by_status}
+        status_hints  = {k: _STATUS_META[k]["hint"]  for k in by_status}
+        recent = _rows(con, "SELECT platform,title,status,created_at,current_views FROM post_analysis ORDER BY created_at DESC LIMIT 20")
         con.close()
-        return {"by_status": by_status, "recent": recent}
+        return {"by_status": by_status, "status_labels": status_labels, "status_hints": status_hints, "recent": recent}
     except Exception:
         con.close()
-        return {"by_status": {}, "recent": []}
+        return {"by_status": {}, "status_labels": {}, "status_hints": {}, "recent": []}
+
+
+@app.get("/api/quality/trend")
+def get_quality_trend():
+    con = _db()
+    if not con:
+        return {}
+    try:
+        import json as _json
+        from collections import defaultdict
+        rows = _rows(con, """
+            SELECT strftime('%Y-W%W', created_at) as week,
+                   suggestions, post_type, platform
+            FROM post_analysis
+            WHERE created_at IS NOT NULL
+            ORDER BY created_at
+        """)
+        weekly   = defaultdict(lambda: {"posts": 0, "total_issues": 0})
+        by_type  = defaultdict(int)
+        by_plat  = defaultdict(lambda: {"posts": 0, "total_issues": 0})
+        by_ptype = defaultdict(lambda: {"posts": 0, "total_issues": 0})
+        for r in rows:
+            week = r["week"]
+            try:   sugs = _json.loads(r["suggestions"] or "[]")
+            except: sugs = []
+            n = len(sugs)
+            weekly[week]["posts"]        += 1
+            weekly[week]["total_issues"] += n
+            for s in sugs:
+                by_type[s.get("type", "other")] += 1
+            plat = r["platform"] or "unknown"
+            pt   = r["post_type"] or "unknown"
+            by_plat[plat]["posts"]        += 1
+            by_plat[plat]["total_issues"] += n
+            by_ptype[pt]["posts"]         += 1
+            by_ptype[pt]["total_issues"]  += n
+
+        def _week_label(week_str: str) -> str:
+            """'2026-W17' → '4월 셋째주'"""
+            try:
+                from datetime import date as _date
+                import math as _math
+                year, w = week_str.split("-")
+                monday = _date.fromisocalendar(int(year), int(w.lstrip("W")), 1)
+                nth = _math.ceil(monday.day / 7)
+                _ord = ["첫", "둘", "셋", "넷", "다섯"]
+                return f"{monday.month}월 {_ord[min(nth,5)-1]}째주"
+            except:
+                return week_str
+
+        weekly_trend = []
+        for week in sorted(weekly.keys()):
+            d    = weekly[week]
+            posts = d["posts"]
+            avg  = round(d["total_issues"] / posts, 1) if posts else 0
+            weekly_trend.append({"week": _week_label(week), "posts": posts, "avg_issues": avg})
+
+        def _stats(d):
+            return {k: {"posts": v["posts"],
+                        "avg_issues": round(v["total_issues"]/v["posts"], 1) if v["posts"] else 0}
+                    for k, v in d.items()}
+
+        top_insights = _rows(con, """
+            SELECT insight_type, description, occurrences, weight
+            FROM learning_insights
+            ORDER BY occurrences DESC, weight DESC
+            LIMIT 8
+        """)
+        con.close()
+        return {
+            "weekly":       weekly_trend,
+            "by_type":      dict(sorted(by_type.items(), key=lambda x: -x[1])),
+            "by_platform":  _stats(by_plat),
+            "by_post_type": _stats(by_ptype),
+            "top_insights": [dict(r) for r in top_insights],
+        }
+    except Exception as e:
+        con.close()
+        return {}
 
 
 @app.get("/api/quality/history")
@@ -259,35 +404,106 @@ def reject_post(post_id: int):
 
 
 # ── 성과 ────────────────────────────────────────────────────────
+# 기간 정의 순서 (표시 순서)
+_PERIOD_ORDER = ["today", "week", "month", "3month", "6month", "year", "all"]
+_PERIOD_META: dict[str, dict] = {
+    "today":  {"label": "당일",  "where": "date = date('now')",           "min_days": 0},
+    "week":   {"label": "1주일", "where": "date >= date('now','-7 days')", "min_days": 6},
+    "month":  {"label": "한달",  "where": "date >= date('now','-30 days')","min_days": 29},
+    "3month": {"label": "3개월", "where": "date >= date('now','-90 days')","min_days": 89},
+    "6month": {"label": "6개월", "where": "date >= date('now','-180 days')","min_days": 179},
+    "year":   {"label": "1년",   "where": "date >= date('now','-365 days')","min_days": 364},
+    "all":    {"label": "전체",  "where": "1=1",                           "min_days": 0},
+}
+_PLAT_COLS   = [("naver", "naver_views"), ("tistory", "tistory_views"), ("wp", "wp_views")]
+_PLAT_LABELS = {"naver": "네이버", "tistory": "티스토리", "wp": "WordPress"}
+
 @app.get("/api/performance")
 def get_performance():
     con = _db()
+    _period_labels = {k: v["label"] for k, v in _PERIOD_META.items()}
+    _empty = {
+        "active_platforms": [], "platform_labels": {},
+        "period_order": ["today", "all"], "period_labels": _period_labels,
+        "period_views": {}, "daily_trend": [], "top_posts": [],
+        "data_range": {"from": None, "to": None, "days": 0},
+    }
     if not con:
-        return {"total_views": 0, "top_posts": [], "platform_views": {}, "naver_ranked": [], "history": []}
+        return _empty
     try:
-        total   = _scalar(con, "SELECT COALESCE(SUM(current_views),0) FROM post_analysis")
+        col_map = dict(_PLAT_COLS)
+
+        # 데이터 있는 플랫폼 탐지
+        active: list[str] = []
+        for plat, col in _PLAT_COLS:
+            n = _scalar(con, f"SELECT COUNT(*) FROM performance WHERE {col} IS NOT NULL AND {col} > 0")
+            if n > 0:
+                active.append(plat)
+
+        # 실제 데이터 스팬 계산 (MIN~MAX 날짜 차이, 일 단위)
+        span_days: int = _scalar(
+            con,
+            "SELECT CAST(julianday(MAX(date)) - julianday(MIN(date)) AS INTEGER) FROM performance"
+        ) or 0
+
+        # 스팬 기준으로 의미 있는 기간만 추출 (today·all은 항상 포함)
+        visible_periods = [
+            pid for pid in _PERIOD_ORDER
+            if span_days >= _PERIOD_META[pid]["min_days"]
+        ]
+
+        # 기간 × 플랫폼 매트릭스 (visible 기간만 계산)
+        period_views: dict[str, dict] = {}
+        for pid in visible_periods:
+            where = _PERIOD_META[pid]["where"]
+            row: dict[str, int] = {}
+            total = 0
+            for plat in active:
+                v = _scalar(con, f"SELECT COALESCE(SUM({col_map[plat]}),0) FROM performance WHERE {where}")
+                row[plat] = v
+                total += v
+            row["total"] = total
+            period_views[pid] = row
+
+        # 일별 추이 (스팬에 맞게 행 수 결정 — 최대 90행)
+        trend_limit = max(7, min(span_days + 1, 90)) if span_days > 0 else 30
+        daily_rows = _rows(con, f"SELECT date, naver_views, tistory_views, wp_views FROM performance ORDER BY date DESC LIMIT {trend_limit}")
+        daily_trend: list[dict] = []
+        for r in reversed(daily_rows):
+            entry: dict = {"date": r["date"]}
+            for plat in active:
+                entry[plat] = r.get(col_map[plat]) or 0
+            daily_trend.append(entry)
+
+        # 수집 기간 정보
+        rng = _rows(con, "SELECT MIN(date) as from_d, MAX(date) as to_d, COUNT(*) as days FROM performance")
+        dr = rng[0] if rng else {"from_d": None, "to_d": None, "days": 0}
+
+        # 개별 글 조회수 (post_analysis 크롤링 기반)
         try:
             top = _rows(con, "SELECT platform,title,current_views,naver_rank,created_at FROM post_analysis WHERE current_views>0 ORDER BY current_views DESC LIMIT 15")
         except Exception:
             top = _rows(con, "SELECT platform,title,current_views,NULL as naver_rank,created_at FROM post_analysis WHERE current_views>0 ORDER BY current_views DESC LIMIT 15")
-        by_plat = _rows(con, "SELECT platform,COALESCE(SUM(current_views),0) as views FROM post_analysis GROUP BY platform")
-        try:
-            naver_r = _rows(con, "SELECT title,naver_rank,current_views,created_at FROM post_analysis WHERE naver_rank IS NOT NULL ORDER BY naver_rank ASC LIMIT 10")
-        except Exception:
-            naver_r = []
-        hist = _rows(con, "SELECT date(created_at) as d, COALESCE(SUM(current_views),0) as v FROM post_analysis WHERE date(created_at) >= date('now','-7 days') GROUP BY d ORDER BY d")
+
         con.close()
         return {
-            "total_views":    total,
-            "top_posts":      top,
-            "platform_views": {r["platform"]: r["views"] for r in by_plat},
-            "naver_ranked":   naver_r,
-            "history":        hist,
+            "active_platforms": active,
+            "platform_labels":  {p: _PLAT_LABELS[p] for p in active},
+            "period_order":     visible_periods,
+            "period_labels":    _period_labels,
+            "period_views":     period_views,
+            "daily_trend":      daily_trend,
+            "top_posts":        top,
+            "data_range": {
+                "from": dr.get("from_d"),
+                "to":   dr.get("to_d"),
+                "days": dr.get("days", 0),
+            },
         }
     except Exception:
         try: con.close()
         except Exception: pass
-        return {"total_views": 0, "top_posts": [], "platform_views": {}, "naver_ranked": [], "history": []}
+        return _empty
 
 
 # ── 키워드 성과 ──────────────────────────────────────────────────
@@ -517,7 +733,23 @@ def get_publish():
         except Exception:
             pass
         con.close()
-    return {"naver_cookie_ok": nv_ok, "naver_cookie_age": nv_age_h, "ts_cookie_ok": ts_ok, "plat_7d": plat_counts}
+    return {
+        "naver": {
+            "cookie_ok":       nv_ok,
+            "cookie_age_hours": nv_age_h,
+            "posts_7d":        plat_counts.get("naver", 0),
+        },
+        "tistory": {
+            "cookie_ok":       ts_ok,
+            "cookie_age_hours": None,
+            "posts_7d":        plat_counts.get("tistory", 0),
+        },
+        # 구 필드 호환 (system/page.tsx)
+        "naver_cookie_ok":  nv_ok,
+        "naver_cookie_age": nv_age_h,
+        "ts_cookie_ok":     ts_ok,
+        "plat_7d":          plat_counts,
+    }
 
 
 # ── GUARDIAN 오류 ────────────────────────────────────────────────

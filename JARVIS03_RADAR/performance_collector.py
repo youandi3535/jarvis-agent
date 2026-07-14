@@ -12,6 +12,7 @@ from __future__ import annotations
 import sys
 import os
 import re
+import json
 import time
 import requests
 from pathlib import Path
@@ -230,9 +231,136 @@ def _collect_naver_views(url: str) -> int:
 # 티스토리 조회수 수집
 # ─────────────────────────────────────────────────────────────
 
+# ── 티스토리 관리자 배치 수집 캐시 (collect_all() 1회 run 동안 유효) ──────
+_TS_BATCH_CACHE: dict[str, int] = {}
+
+
+def _collect_tistory_stats_batch() -> dict[str, int]:
+    """
+    티스토리 통계 API(topEntry) 4-window 합산으로 인기글 조회수 일괄 수집.
+    - 7일(day) + 30일(day) + 90일(week) + 180일(week) 각각 호출 → 중복 제거 후 최대값 보존
+    - 현재는 90일 이후 데이터가 없으나 서비스 성숙 시 자동으로 수집됨
+    HTTP만으로 동작 — Selenium 불필요.
+    반환: {post_id_str: view_count}  (조회수 있는 글만)
+    """
+    from datetime import timedelta
+    from JARVIS08_PUBLISH.credentials.login_manager import (
+        get_tistory_cookie, refresh_tistory_cookies,
+    )
+
+    ts_blog = (os.getenv("TS_URL", "")
+               .replace("https://", "").replace("http://", "").split(".")[0])
+    if not ts_blog:
+        return {}
+
+    # (days_back, granularity) — 4개 구간으로 최대 커버리지
+    # 180일: 지금은 0이지만 서비스 성숙 시 데이터 생김
+    _WINDOWS = [
+        (7,   "day"),
+        (30,  "day"),
+        (90,  "week"),
+        (180, "week"),
+    ]
+
+    def _try(ts_raw: str) -> dict[str, int]:
+        if not ts_raw:
+            return {}
+        hdrs = {
+            **_HEADERS,
+            "Accept": "application/json",
+            "Cookie": f"TSSESSION={ts_raw}",
+            "Referer": f"https://{ts_blog}.tistory.com/manage/statistics/blog",
+        }
+        base = f"https://{ts_blog}.tistory.com/manage/v2/statistics/blog/topEntry"
+        result: dict[str, int] = {}
+        for days, gran in _WINDOWS:
+            start = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
+            try:
+                r = requests.get(
+                    f"{base}?metric=pv&startDate={start}&granularity={gran}",
+                    headers=hdrs, timeout=15,
+                )
+                if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
+                    for p in r.json().get("data", {}).get("result", []):
+                        pid = str(p.get("entryId") or "")
+                        v   = int(p.get("count", 0) or 0)
+                        if pid and v > 0:
+                            # 기간마다 counts가 달라도 최대값 보존
+                            result[pid] = max(result.get(pid, 0), v)
+            except Exception as e:
+                print(f"  [티스토리 배치] topEntry({days}d) 오류: {e}")
+                _g_report("radar", e, module=__name__, func_name="_collect_tistory_stats_batch")
+            time.sleep(0.3)
+        return result
+
+    # 1차: 현재 쿠키
+    ts_raw = get_tistory_cookie().strip('"').strip("'")
+    result = _try(ts_raw)
+
+    # 실패 시 쿠키 갱신 후 재시도
+    if not result:
+        try:
+            print("  [티스토리 배치] 쿠키 갱신 후 재시도...")
+            refresh_tistory_cookies()
+            load_dotenv(JARVIS_ROOT / ".env", override=True)
+            ts_raw = get_tistory_cookie().strip('"').strip("'")
+            result = _try(ts_raw)
+        except Exception as e:
+            print(f"  [티스토리 배치] 쿠키 갱신 실패: {e}")
+
+    if result:
+        print(f"  [티스토리 배치] topEntry 수집 완료: {len(result)}개 글")
+    else:
+        print("  [티스토리 배치] topEntry 수집 실패 → per-URL 폴백")
+    return result
+
+
+def _collect_tistory_today_blog_views() -> int | None:
+    """
+    티스토리 통계 API(count)에서 오늘 블로그 전체 조회수 수집.
+    performance 테이블 일별 집계용.
+    """
+    from JARVIS08_PUBLISH.credentials.login_manager import get_tistory_cookie
+
+    ts_blog = (os.getenv("TS_URL", "")
+               .replace("https://", "").replace("http://", "").split(".")[0])
+    if not ts_blog:
+        return None
+
+    ts_raw = get_tistory_cookie().strip('"').strip("'")
+    if not ts_raw:
+        return None
+
+    hdrs = {
+        **_HEADERS,
+        "Accept": "application/json",
+        "Cookie": f"TSSESSION={ts_raw}",
+        "Referer": f"https://{ts_blog}.tistory.com/manage/statistics/blog",
+    }
+    try:
+        r = requests.get(
+            f"https://{ts_blog}.tistory.com/manage/v2/statistics/blog/count",
+            headers=hdrs, timeout=10,
+        )
+        if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
+            today_pv = (r.json()
+                        .get("data", {})
+                        .get("result", {})
+                        .get("pv", {})
+                        .get("today", None))
+            if today_pv is not None:
+                print(f"  [티스토리 블로그 통계] 오늘 조회수: {today_pv}회")
+                return int(today_pv)
+    except Exception as e:
+        print(f"  [티스토리 블로그 통계] 오류: {e}")
+        _g_report("radar", e, module=__name__, func_name="_collect_tistory_today_blog_views")
+    return None
+
+
 def _collect_tistory_views(url: str) -> int:
     """
-    티스토리 조회수 수집 (2단계):
+    티스토리 조회수 수집:
+    0) 관리자 배치 캐시 우선 (collect_all 시작 시 선행 수집)
     1) 쿠키 인증 → 관리자 포스트 목록 페이지에서 파싱
     2) 공개 포스트 페이지 스크래핑 폴백
     """
@@ -240,8 +368,14 @@ def _collect_tistory_views(url: str) -> int:
         return 0
 
     # post_id 추출
-    m_id = re.search(r'/(\d+)$', url.rstrip('/'))
+    m_id = re.search(r'/(\d+)(?:\?|$)', url.rstrip('/'))
     post_id = m_id.group(1) if m_id else None
+
+    # 0) 배치 캐시 조회 (우선)
+    if post_id and _TS_BATCH_CACHE and post_id in _TS_BATCH_CACHE:
+        v = _TS_BATCH_CACHE[post_id]
+        print(f"  [티스토리 캐시] post_id={post_id} 조회수={v:,}회")
+        return v
 
     # ★ ERRORS [145] LOGIN_SUPREME_LAW 위임
     from JARVIS08_PUBLISH.credentials.login_manager import get_tistory_cookie
@@ -338,10 +472,17 @@ def collect_all(today_only: bool = False) -> dict:
     모든 발행 글 조회수 수집 → DB 업데이트 → 키워드 학습 반영.
     반환: {"updated": N, "total": M, "by_platform": {...}}
     """
+    global _TS_BATCH_CACHE
+    _TS_BATCH_CACHE = {}  # 매 실행마다 캐시 초기화
+
     posts = db.get_posts_for_view_collection()
     if today_only:
         today = date.today().strftime("%Y-%m-%d")
         posts = [p for p in posts if (p.get("created_at") or "").startswith(today)]
+
+    # 티스토리 글이 있으면 관리자 배치 수집 선행 (N+1 HTTP 요청 방지)
+    if any(p.get("platform") == "tistory" for p in posts):
+        _TS_BATCH_CACHE = _collect_tistory_stats_batch()
 
     try:
         from JARVIS00_INFRA.watchdog import beat as _wd_beat
@@ -395,6 +536,12 @@ def collect_all(today_only: bool = False) -> dict:
     if updated > 0 or rank_updated > 0:
         db.update_keyword_views_from_posts()
         print(f"\n✅ 키워드 성과 학습 업데이트 완료 (views {updated}건 + rank {rank_updated}건)")
+
+    # 티스토리 performance: 블로그 전체 오늘 조회수 (per-post 평균보다 정확)
+    if any(p.get("platform") == "tistory" for p in posts):
+        ts_today = _collect_tistory_today_blog_views()
+        if ts_today is not None:
+            by_platform["tistory"] = [ts_today]  # 일별 블로그 총 PV
 
     # performance 테이블 일별 집계 업데이트
     _update_daily_performance(by_platform)
