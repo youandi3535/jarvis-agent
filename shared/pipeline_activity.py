@@ -1,8 +1,7 @@
-"""실시간 파이프라인 활동 트래커 (사용자 박제 2026-07-11).
+"""실시간 파이프라인 활동 트래커 (파일 기반 — 크로스 프로세스 공유).
 
-파이프라인 각 단계에서 mark_active(edge_id) 를 호출하면 해당 엣지가
-TTL 초 동안 'active' 상태로 유지된다. 대시보드가 /api/pipeline/activity 를
-2초마다 폴링해서 활성 엣지를 시각적으로 강조한다.
+파이프라인 각 단계에서 mark_active(edge_id) 를 호출하면
+~/.jarvis/pipeline_activity.json 에 기록되고 API 서버가 이 파일을 읽는다.
 
 엣지 ID → 파이프라인 단계 매핑:
   e1  J03→J09  선수집 요청
@@ -21,19 +20,23 @@ TTL 초 동안 'active' 상태로 유지된다. 대시보드가 /api/pipeline/ac
 """
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
-_lock = threading.Lock()
-_active: dict[str, float] = {}  # edge_id → expires_at (monotonic)
+_LOCK = threading.Lock()
 
-DEFAULT_TTL = 40  # 기본 40초 (장시간 스텝도 커버)
+# 공유 파일 — 데몬·API서버 모두 이 파일을 읽고 씀
+_DATA_FILE = Path(os.environ.get(
+    "JARVIS_PIPELINE_ACTIVITY",
+    str(Path.home() / ".jarvis" / "pipeline_activity.json"),
+))
 
-# ── 실시간 현황 로그 ──────────────────────────────────────
 _LOG_MAX = 60
-_activity_log: list[dict] = []   # [{ts, msg}] 최신이 앞
-_prev_active: set[str] = set()   # 직전 활성 엣지 (신규 감지용)
+DEFAULT_TTL = 40  # 기본 40초
 
 _EDGE_LOG_MSGS: dict[str, str] = {
     "e1":  "J03 RADAR → J09 COLLECT  선수집 시작",
@@ -52,47 +55,66 @@ _EDGE_LOG_MSGS: dict[str, str] = {
 }
 
 
-def log_activity(msg: str) -> None:
-    """파이프라인 현황 메시지를 수동으로 로그에 추가."""
-    ts = datetime.now().strftime("%H:%M:%S")
-    with _lock:
-        _activity_log.insert(0, {"ts": ts, "msg": msg})
-        if len(_activity_log) > _LOG_MAX:
-            _activity_log.pop()
+# ── 내부 파일 I/O ────────────────────────────────────────────────
+def _read() -> dict:
+    try:
+        return json.loads(_DATA_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"active": {}, "log": []}
 
 
-def get_activity_log() -> list[dict]:
-    """현황 로그 반환 (최신 먼저)."""
-    with _lock:
-        return list(_activity_log)
+def _write(data: dict) -> None:
+    _DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = str(_DATA_FILE) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(tmp, str(_DATA_FILE))  # atomic
 
 
+# ── 공개 API ─────────────────────────────────────────────────────
 def mark_active(edge_id: "str | list[str]", ttl: int = DEFAULT_TTL) -> None:
-    """엣지를 TTL 초 동안 active 상태로 표시. 신규 활성 시 로그 자동 기록."""
-    global _prev_active
+    """엣지를 TTL 초 동안 active 로 표시. 신규 활성 시 현황 로그 자동 기록."""
     ids = [edge_id] if isinstance(edge_id, str) else list(edge_id)
-    expires = time.monotonic() + ttl
+    expires = time.time() + ttl
     ts = datetime.now().strftime("%H:%M:%S")
-    with _lock:
+    with _LOCK:
+        data = _read()
+        active: dict = data.get("active", {})
+        log: list = data.get("log", [])
+        prev_keys = set(active.keys())
         for eid in ids:
-            _active[eid] = expires
-        # 새로 활성화된 엣지만 로그
-        new_ids = [eid for eid in ids if eid not in _prev_active]
-        for eid in new_ids:
-            msg = _EDGE_LOG_MSGS.get(eid, f"{eid} 활성화")
-            _activity_log.insert(0, {"ts": ts, "msg": msg})
-        if len(_activity_log) > _LOG_MAX:
-            _activity_log[:] = _activity_log[:_LOG_MAX]
-        _prev_active = set(_active.keys())
+            active[eid] = expires
+            if eid not in prev_keys:
+                msg = _EDGE_LOG_MSGS.get(eid, f"{eid} 활성화")
+                log.insert(0, {"ts": ts, "msg": msg})
+        _write({"active": active, "log": log[:_LOG_MAX]})
 
 
 def get_active() -> list[str]:
     """현재 active 인 엣지 ID 목록 반환 (만료 항목 자동 정리)."""
-    global _prev_active
-    now = time.monotonic()
-    with _lock:
-        stale = [k for k, v in _active.items() if v < now]
-        for k in stale:
-            del _active[k]
-        _prev_active = set(_active.keys())
-        return list(_active.keys())
+    now = time.time()
+    with _LOCK:
+        data = _read()
+        active: dict = data.get("active", {})
+        stale = [k for k, v in active.items() if v < now]
+        if stale:
+            for k in stale:
+                del active[k]
+            _write({"active": active, "log": data.get("log", [])})
+        return list(active.keys())
+
+
+def log_activity(msg: str) -> None:
+    """파이프라인 현황 메시지를 수동으로 로그에 추가."""
+    ts = datetime.now().strftime("%H:%M:%S")
+    with _LOCK:
+        data = _read()
+        log: list = data.get("log", [])
+        log.insert(0, {"ts": ts, "msg": msg})
+        _write({"active": data.get("active", {}), "log": log[:_LOG_MAX]})
+
+
+def get_activity_log() -> list[dict]:
+    """현황 로그 반환 (최신 먼저, 최대 60개)."""
+    with _LOCK:
+        return _read().get("log", [])
