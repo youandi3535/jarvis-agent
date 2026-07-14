@@ -314,12 +314,25 @@ def get_quality_trend():
             by_ptype[pt]["posts"]         += 1
             by_ptype[pt]["total_issues"]  += n
 
+        def _week_label(week_str: str) -> str:
+            """'2026-W17' → '4월 셋째주'"""
+            try:
+                from datetime import date as _date
+                import math as _math
+                year, w = week_str.split("-")
+                monday = _date.fromisocalendar(int(year), int(w.lstrip("W")), 1)
+                nth = _math.ceil(monday.day / 7)
+                _ord = ["첫", "둘", "셋", "넷", "다섯"]
+                return f"{monday.month}월 {_ord[min(nth,5)-1]}째주"
+            except:
+                return week_str
+
         weekly_trend = []
         for week in sorted(weekly.keys()):
             d    = weekly[week]
             posts = d["posts"]
             avg  = round(d["total_issues"] / posts, 1) if posts else 0
-            weekly_trend.append({"week": week.split("-")[1], "posts": posts, "avg_issues": avg})
+            weekly_trend.append({"week": _week_label(week), "posts": posts, "avg_issues": avg})
 
         def _stats(d):
             return {k: {"posts": v["posts"],
