@@ -237,87 +237,55 @@ _TS_BATCH_CACHE: dict[str, int] = {}
 
 def _collect_tistory_stats_batch() -> dict[str, int]:
     """
-    티스토리 관리자 포스트 목록에서 조회수 일괄 수집.
-    쿠키 만료 시 자동 갱신 후 1회 재시도.
-    반환: {post_id_str: view_count}
+    티스토리 통계 API(topEntry)로 인기글 조회수 일괄 수집.
+    HTTP만으로 동작 — Selenium 불필요.
+    반환: {post_id_str: view_count}  (조회수 있는 글만, 최대 ~12개)
     """
-    from JARVIS08_PUBLISH.credentials.login_manager import get_tistory_cookie
+    from JARVIS08_PUBLISH.credentials.login_manager import (
+        get_tistory_cookie, refresh_tistory_cookies,
+    )
 
     ts_blog = (os.getenv("TS_URL", "")
                .replace("https://", "").replace("http://", "").split(".")[0])
     if not ts_blog:
         return {}
 
-    def _try(cookie_val: str) -> dict[str, int]:
-        if not cookie_val:
+    def _try(ts_raw: str) -> dict[str, int]:
+        if not ts_raw:
             return {}
         hdrs = {
             **_HEADERS,
-            "Cookie": f"TSSESSION={cookie_val}",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": f"https://{ts_blog}.tistory.com/manage",
+            "Accept": "application/json",
+            "Cookie": f"TSSESSION={ts_raw}",
+            "Referer": f"https://{ts_blog}.tistory.com/manage/statistics/blog",
         }
+        # 최근 90일 데이터 (더 오래된 날짜는 API가 빈 결과 반환)
+        from datetime import timedelta
+        start = (date.today() - timedelta(days=90)).strftime("%Y-%m-%d")
+        url = (f"https://{ts_blog}.tistory.com/manage/v2/statistics/blog/topEntry"
+               f"?metric=pv&startDate={start}&granularity=week")
         result: dict[str, int] = {}
-
-        # 방법 1: manage/posts → __NEXT_DATA__ 파싱 (Next.js 기반 신규 관리자)
         try:
-            r = requests.get(
-                f"https://{ts_blog}.tistory.com/manage/posts",
-                headers=hdrs, timeout=20, allow_redirects=False,
-            )
-            if r.status_code == 200:
-                m = re.search(
-                    r'<script id="__NEXT_DATA__"[^>]*>(\{.+?\})</script>',
-                    r.text, re.DOTALL,
-                )
-                if m:
-                    data = json.loads(m.group(1))
-                    pp = data.get("props", {}).get("pageProps", {})
-                    posts = (pp.get("posts") or pp.get("postList")
-                             or (pp.get("data") or {}).get("posts") or [])
-                    for p in (posts if isinstance(posts, list) else []):
-                        pid = str(p.get("id") or p.get("postId") or "")
-                        v = int(p.get("views", 0) or p.get("visitCount", 0)
-                                or p.get("readCount", 0) or 0)
-                        if pid and v:
-                            result[pid] = v
-        except Exception:
-            pass
-
-        # 방법 2: 내부 JSON API 패턴 순차 시도
-        if not result:
-            for ep in [
-                f"https://{ts_blog}.tistory.com/manage/api/posts?page=1&size=100",
-                f"https://{ts_blog}.tistory.com/manage/api/post/list?type=post&page=1&size=100",
-                f"https://{ts_blog}.tistory.com/manage/api/v2/posts?page=1&size=100",
-            ]:
-                try:
-                    r = requests.get(ep, headers=hdrs, timeout=15)
-                    if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
-                        data = r.json()
-                        posts = (data.get("posts") or data.get("items")
-                                 or (data.get("data") or {}).get("posts") or [])
-                        for p in (posts if isinstance(posts, list) else []):
-                            pid = str(p.get("id") or p.get("postId") or "")
-                            v = int(p.get("views", 0) or p.get("visitCount", 0)
-                                    or p.get("readCount", 0) or 0)
-                            if pid and v:
-                                result[pid] = v
-                        if result:
-                            break
-                except Exception:
-                    continue
+            r = requests.get(url, headers=hdrs, timeout=15, allow_redirects=False)
+            if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
+                for p in r.json().get("data", {}).get("result", []):
+                    pid = str(p.get("entryId") or "")
+                    v   = int(p.get("count", 0) or 0)
+                    if pid and v > 0:
+                        result[pid] = v
+        except Exception as e:
+            print(f"  [티스토리 배치] topEntry API 오류: {e}")
+            _g_report("radar", e, module=__name__, func_name="_collect_tistory_stats_batch")
         return result
 
-    # 1차 시도 (현재 쿠키)
+    # 1차: 현재 쿠키
     ts_raw = get_tistory_cookie().strip('"').strip("'")
     result = _try(ts_raw)
 
     # 실패 시 쿠키 갱신 후 재시도
     if not result:
         try:
-            from JARVIS08_PUBLISH.credentials.login_manager import refresh_tistory_cookies
-            print("  [티스토리 배치] 쿠키 만료 감지 → 갱신 후 재시도")
+            print("  [티스토리 배치] 쿠키 갱신 후 재시도...")
             refresh_tistory_cookies()
             load_dotenv(JARVIS_ROOT / ".env", override=True)
             ts_raw = get_tistory_cookie().strip('"').strip("'")
@@ -326,10 +294,52 @@ def _collect_tistory_stats_batch() -> dict[str, int]:
             print(f"  [티스토리 배치] 쿠키 갱신 실패: {e}")
 
     if result:
-        print(f"  [티스토리 관리자] 배치 수집 완료: {len(result)}개 글")
+        print(f"  [티스토리 배치] topEntry 수집 완료: {len(result)}개 글")
     else:
-        print("  [티스토리 배치] 관리자 수집 실패 → per-URL 폴백")
+        print("  [티스토리 배치] topEntry 수집 실패 → per-URL 폴백")
     return result
+
+
+def _collect_tistory_today_blog_views() -> int | None:
+    """
+    티스토리 통계 API(count)에서 오늘 블로그 전체 조회수 수집.
+    performance 테이블 일별 집계용.
+    """
+    from JARVIS08_PUBLISH.credentials.login_manager import get_tistory_cookie
+
+    ts_blog = (os.getenv("TS_URL", "")
+               .replace("https://", "").replace("http://", "").split(".")[0])
+    if not ts_blog:
+        return None
+
+    ts_raw = get_tistory_cookie().strip('"').strip("'")
+    if not ts_raw:
+        return None
+
+    hdrs = {
+        **_HEADERS,
+        "Accept": "application/json",
+        "Cookie": f"TSSESSION={ts_raw}",
+        "Referer": f"https://{ts_blog}.tistory.com/manage/statistics/blog",
+    }
+    try:
+        r = requests.get(
+            f"https://{ts_blog}.tistory.com/manage/v2/statistics/blog/count",
+            headers=hdrs, timeout=10,
+        )
+        if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
+            today_pv = (r.json()
+                        .get("data", {})
+                        .get("result", {})
+                        .get("pv", {})
+                        .get("today", None))
+            if today_pv is not None:
+                print(f"  [티스토리 블로그 통계] 오늘 조회수: {today_pv}회")
+                return int(today_pv)
+    except Exception as e:
+        print(f"  [티스토리 블로그 통계] 오류: {e}")
+        _g_report("radar", e, module=__name__, func_name="_collect_tistory_today_blog_views")
+    return None
 
 
 def _collect_tistory_views(url: str) -> int:
@@ -511,6 +521,12 @@ def collect_all(today_only: bool = False) -> dict:
     if updated > 0 or rank_updated > 0:
         db.update_keyword_views_from_posts()
         print(f"\n✅ 키워드 성과 학습 업데이트 완료 (views {updated}건 + rank {rank_updated}건)")
+
+    # 티스토리 performance: 블로그 전체 오늘 조회수 (per-post 평균보다 정확)
+    if any(p.get("platform") == "tistory" for p in posts):
+        ts_today = _collect_tistory_today_blog_views()
+        if ts_today is not None:
+            by_platform["tistory"] = [ts_today]  # 일별 블로그 총 PV
 
     # performance 테이블 일별 집계 업데이트
     _update_daily_performance(by_platform)
