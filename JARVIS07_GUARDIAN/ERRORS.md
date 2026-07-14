@@ -2,6 +2,18 @@
 
 ---
 
+## [437] 테마 사실성 게이트 — '조+억' 복합 표기 본문 대조가 gt 채우기와 비대칭해 실제 통계 오차단 (2026-07-14)
+
+- **증상**: `JARVIS00_INFRA.harness.theme-publish-테마파크-naver` step ③ 네이버 대본 생성이 `[사실성] 출처·데이터 미확인: 국내 테마파크업 전체 매출액은 2024년 1조 3,863억원으로 2023년의 1조 3,750억원보다 늘었어요` 로 attempt=1 차단.
+- **환경**: `JARVIS02_WRITER/law_enforcer.py` `_claim_all_grounded()` (호출: `prepublish_gate.py` L113 통합 사실성 레그, `law_enforcer.factuality_issues` L1695 양쪽 공유).
+- **원인**: `_collect_gt_floats()`(ground-truth 채우기)는 소스 코퍼스의 'N조 M억' 복합 표기를 `_compound_magnitudes()`로 결합 magnitude(1조 3,863억→1.3863e12)까지 gt 에 등록하지만, `_claim_all_grounded()`(본문 claim 대조)는 이 결합 파서를 쓰지 않고 `_NUMERIC_UNIT_RE`가 쪼갠 "1조"(1e12)·"3,863억"(3.863e11)을 *개별* grounding 요구했다. 소스 문서가 같은 통계를 축약형("13,863억원")으로만 갖고 있으면 gt 에 결합값(1.3863e12)만 존재하고 "1조"·"3,863억" 개별 성분은 없어 진짜 사실도 영구 미확인 차단됨(gt 채우기와 본문 대조의 비대칭 버그).
+- **헛다리**: 없음 — ERRORS [382](경제 브리핑, 동일 compound 클래스)가 gt 채우기 쪽만 고쳤던 선례를 먼저 확인, 이번엔 본문 대조 쪽의 비대칭임을 바로 특정.
+- **해결**: `_claim_all_grounded()` 에 `_COMPOUND_JOEOK_RE` 스캔 추가 — 본문의 'N조 M억(천억)' 구간을 결합 magnitude 로 먼저 gt 대조(±5%/floor·ceil `grounds()`), 통과 시 그 span 내부의 개별 분리 토큰은 재검사 생략. 실패 시 즉시 차단(진짜 창작 수치는 여전히 차단 유지 — 회귀 테스트로 확인: 무관 코퍼스 대조 시 False 유지).
+- **파일**: `JARVIS02_WRITER/law_enforcer.py` (`_claim_all_grounded`).
+- **교훈**: grounding 정답(gt)을 만드는 파서와 claim 을 검사하는 파서가 *같은 복합 표기 인식 능력*을 가져야 한다 — 한쪽만 compound-aware 이면 소스·본문의 표기 스타일이 다를 때(축약형 vs 조+억 분리형) 대칭이 깨져 진짜 통계가 오차단된다. 새 숫자 포맷 파서 추가 시 gt 채우기 쪽뿐 아니라 claim 대조 쪽에도 동일하게 적용했는지 확인할 것.
+
+---
+
 ## [436] 테마 발행 harness freeze — `_collect_tier()` 순차 3회 호출에 beat() 누락 (2026-07-13)
 
 - **증상**: `theme-publish-고령화 사회(노인복지)-naver` harness 가 `attempt=1 step=전체: 멈춤(freeze) 302s > 300s 무진전` 로 abort. RuntimeError, source=harness.
