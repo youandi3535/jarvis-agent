@@ -12,6 +12,7 @@ from __future__ import annotations
 import sys
 import os
 import re
+import json
 import time
 import requests
 from pathlib import Path
@@ -230,9 +231,111 @@ def _collect_naver_views(url: str) -> int:
 # 티스토리 조회수 수집
 # ─────────────────────────────────────────────────────────────
 
+# ── 티스토리 관리자 배치 수집 캐시 (collect_all() 1회 run 동안 유효) ──────
+_TS_BATCH_CACHE: dict[str, int] = {}
+
+
+def _collect_tistory_stats_batch() -> dict[str, int]:
+    """
+    티스토리 관리자 포스트 목록에서 조회수 일괄 수집.
+    쿠키 만료 시 자동 갱신 후 1회 재시도.
+    반환: {post_id_str: view_count}
+    """
+    from JARVIS08_PUBLISH.credentials.login_manager import get_tistory_cookie
+
+    ts_blog = (os.getenv("TS_URL", "")
+               .replace("https://", "").replace("http://", "").split(".")[0])
+    if not ts_blog:
+        return {}
+
+    def _try(cookie_val: str) -> dict[str, int]:
+        if not cookie_val:
+            return {}
+        hdrs = {
+            **_HEADERS,
+            "Cookie": f"TSSESSION={cookie_val}",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"https://{ts_blog}.tistory.com/manage",
+        }
+        result: dict[str, int] = {}
+
+        # 방법 1: manage/posts → __NEXT_DATA__ 파싱 (Next.js 기반 신규 관리자)
+        try:
+            r = requests.get(
+                f"https://{ts_blog}.tistory.com/manage/posts",
+                headers=hdrs, timeout=20, allow_redirects=False,
+            )
+            if r.status_code == 200:
+                m = re.search(
+                    r'<script id="__NEXT_DATA__"[^>]*>(\{.+?\})</script>',
+                    r.text, re.DOTALL,
+                )
+                if m:
+                    data = json.loads(m.group(1))
+                    pp = data.get("props", {}).get("pageProps", {})
+                    posts = (pp.get("posts") or pp.get("postList")
+                             or (pp.get("data") or {}).get("posts") or [])
+                    for p in (posts if isinstance(posts, list) else []):
+                        pid = str(p.get("id") or p.get("postId") or "")
+                        v = int(p.get("views", 0) or p.get("visitCount", 0)
+                                or p.get("readCount", 0) or 0)
+                        if pid and v:
+                            result[pid] = v
+        except Exception:
+            pass
+
+        # 방법 2: 내부 JSON API 패턴 순차 시도
+        if not result:
+            for ep in [
+                f"https://{ts_blog}.tistory.com/manage/api/posts?page=1&size=100",
+                f"https://{ts_blog}.tistory.com/manage/api/post/list?type=post&page=1&size=100",
+                f"https://{ts_blog}.tistory.com/manage/api/v2/posts?page=1&size=100",
+            ]:
+                try:
+                    r = requests.get(ep, headers=hdrs, timeout=15)
+                    if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
+                        data = r.json()
+                        posts = (data.get("posts") or data.get("items")
+                                 or (data.get("data") or {}).get("posts") or [])
+                        for p in (posts if isinstance(posts, list) else []):
+                            pid = str(p.get("id") or p.get("postId") or "")
+                            v = int(p.get("views", 0) or p.get("visitCount", 0)
+                                    or p.get("readCount", 0) or 0)
+                            if pid and v:
+                                result[pid] = v
+                        if result:
+                            break
+                except Exception:
+                    continue
+        return result
+
+    # 1차 시도 (현재 쿠키)
+    ts_raw = get_tistory_cookie().strip('"').strip("'")
+    result = _try(ts_raw)
+
+    # 실패 시 쿠키 갱신 후 재시도
+    if not result:
+        try:
+            from JARVIS08_PUBLISH.credentials.login_manager import refresh_tistory_cookies
+            print("  [티스토리 배치] 쿠키 만료 감지 → 갱신 후 재시도")
+            refresh_tistory_cookies()
+            load_dotenv(JARVIS_ROOT / ".env", override=True)
+            ts_raw = get_tistory_cookie().strip('"').strip("'")
+            result = _try(ts_raw)
+        except Exception as e:
+            print(f"  [티스토리 배치] 쿠키 갱신 실패: {e}")
+
+    if result:
+        print(f"  [티스토리 관리자] 배치 수집 완료: {len(result)}개 글")
+    else:
+        print("  [티스토리 배치] 관리자 수집 실패 → per-URL 폴백")
+    return result
+
+
 def _collect_tistory_views(url: str) -> int:
     """
-    티스토리 조회수 수집 (2단계):
+    티스토리 조회수 수집:
+    0) 관리자 배치 캐시 우선 (collect_all 시작 시 선행 수집)
     1) 쿠키 인증 → 관리자 포스트 목록 페이지에서 파싱
     2) 공개 포스트 페이지 스크래핑 폴백
     """
@@ -240,8 +343,14 @@ def _collect_tistory_views(url: str) -> int:
         return 0
 
     # post_id 추출
-    m_id = re.search(r'/(\d+)$', url.rstrip('/'))
+    m_id = re.search(r'/(\d+)(?:\?|$)', url.rstrip('/'))
     post_id = m_id.group(1) if m_id else None
+
+    # 0) 배치 캐시 조회 (우선)
+    if post_id and _TS_BATCH_CACHE and post_id in _TS_BATCH_CACHE:
+        v = _TS_BATCH_CACHE[post_id]
+        print(f"  [티스토리 캐시] post_id={post_id} 조회수={v:,}회")
+        return v
 
     # ★ ERRORS [145] LOGIN_SUPREME_LAW 위임
     from JARVIS08_PUBLISH.credentials.login_manager import get_tistory_cookie
@@ -338,10 +447,17 @@ def collect_all(today_only: bool = False) -> dict:
     모든 발행 글 조회수 수집 → DB 업데이트 → 키워드 학습 반영.
     반환: {"updated": N, "total": M, "by_platform": {...}}
     """
+    global _TS_BATCH_CACHE
+    _TS_BATCH_CACHE = {}  # 매 실행마다 캐시 초기화
+
     posts = db.get_posts_for_view_collection()
     if today_only:
         today = date.today().strftime("%Y-%m-%d")
         posts = [p for p in posts if (p.get("created_at") or "").startswith(today)]
+
+    # 티스토리 글이 있으면 관리자 배치 수집 선행 (N+1 HTTP 요청 방지)
+    if any(p.get("platform") == "tistory" for p in posts):
+        _TS_BATCH_CACHE = _collect_tistory_stats_batch()
 
     try:
         from JARVIS00_INFRA.watchdog import beat as _wd_beat
