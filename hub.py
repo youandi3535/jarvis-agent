@@ -898,7 +898,7 @@ def load_pipeline():
 @st.cache_data(ttl=30)
 def load_trends():
     con = _db()
-    if not con: return {"today": 0, "top": [], "sectors": {}}
+    if not con: return {"today": 0, "top": [], "sectors": {}, "google_top10": [], "naver_top10": [], "combined_top50": []}
     today = datetime.now().strftime("%Y-%m-%d")
     count   = con.execute("SELECT COUNT(*) FROM trends WHERE date=?", (today,)).fetchone()[0]
     top     = con.execute(
@@ -909,10 +909,24 @@ def load_trends():
         "SELECT sector,COUNT(*) as n FROM trends WHERE date=? GROUP BY sector ORDER BY n DESC", (today,)
     ).fetchall()
     con.close()
+    # JSON 파일에서 google_top10 / naver_top10 / combined_top50 로드
+    google_top10, naver_top10, combined_top50 = [], [], []
+    json_path = BASE_DIR / "JARVIS03_RADAR" / "data" / f"trends_{today}.json"
+    if json_path.exists():
+        try:
+            raw = json.loads(json_path.read_text(encoding="utf-8"))
+            google_top10   = raw.get("google_top10", [])
+            naver_top10    = raw.get("naver_top10", [])
+            combined_top50 = raw.get("combined_top50", [])
+        except Exception:
+            pass
     return {
-        "today":   count,
-        "top":     [dict(r) for r in top],
-        "sectors": {r["sector"]: r["n"] for r in sectors},
+        "today":          count,
+        "top":            [dict(r) for r in top],
+        "sectors":        {r["sector"]: r["n"] for r in sectors},
+        "google_top10":   google_top10,
+        "naver_top10":    naver_top10,
+        "combined_top50": combined_top50,
     }
 
 @st.cache_data(ttl=30)
@@ -1847,6 +1861,61 @@ with t_radar:
     # 티커 테이프
     if trends["top"]:
         md(ticker_tape(trends["top"]))
+
+    # ── 구글 TOP 10 / 네이버 TOP 10 ──────────────────────────────────
+    g10 = trends.get("google_top10", [])
+    n10 = trends.get("naver_top10", [])
+    if g10 or n10:
+        st.markdown("<br>", unsafe_allow_html=True)
+        section("오늘의 트렌드 TOP 10")
+        col_g, col_n = st.columns(2)
+        def _top10_html(items, title, color):
+            rows_html = ""
+            for d in items:
+                rank = d.get("rank", "—")
+                kw   = esc(d.get("keyword", "—"))
+                rows_html += (
+                    f'<div style="display:flex;align-items:center;gap:10px;'
+                    f'padding:6px 0;border-bottom:1px solid {N["bdr"]}">'
+                    f'<span style="font-size:14px;font-weight:700;color:{color};'
+                    f'min-width:24px;text-align:right">{rank}</span>'
+                    f'<span style="font-size:16px;color:{N["text"]}">{kw}</span>'
+                    f'</div>'
+                )
+            return (
+                f'<div style="background:{N["card"]};border:1px solid {N["bdr"]};'
+                f'border-top:3px solid {color};border-radius:10px;padding:14px 16px">'
+                f'<div style="font-size:16px;font-weight:700;color:{color};margin-bottom:10px">{title}</div>'
+                f'{rows_html}'
+                f'</div>'
+            )
+        with col_g:
+            md(_top10_html(g10[:10], "🔍 Google TOP 10", C["primary"]))
+        with col_n:
+            md(_top10_html(n10[:10], "🟢 Naver TOP 10", C["success"]))
+
+    # ── 혼합 TOP 50 ──────────────────────────────────────────────────
+    c50 = trends.get("combined_top50", [])
+    if c50:
+        st.markdown("<br>", unsafe_allow_html=True)
+        section("혼합 트렌드 TOP 50 (Google + Naver)")
+        rows50 = []
+        for i, d in enumerate(c50[:50], 1):
+            kw      = d.get("keyword", "—")
+            score   = d.get("score", 0)
+            sources = d.get("sources", [])
+            _sb = []
+            if "google" in sources: _sb.append(badge("구글", "primary"))
+            if "naver"  in sources: _sb.append(badge("네이버", "success"))
+            src_badges = " ".join(_sb)
+            both = len(sources) == 2
+            rows50.append([
+                f'<span style="font-size:14px;font-weight:700;color:{N["text5"]}">{i}</span>',
+                f'<b style="color:{"#f59e0b" if both else N["text"]}">{esc(kw)}</b>',
+                src_badges,
+                f'<span style="font-size:14px;color:{N["text2"]}">{score:.3f}</span>',
+            ])
+        md(table(["#", "키워드", "소스", "점수"], rows50, max_rows=50))
 
     # 기회점수 TOP 키워드 테이블
     if trends["top"]:
