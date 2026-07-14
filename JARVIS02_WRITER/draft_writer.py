@@ -482,7 +482,7 @@ def _load_learn_insights(scope: str, platform: str = "") -> str:
     """ADR 014 — UCB 선택 인사이트 블록 로드 + 사용 기록. 실패 시 "" (글 작성 절대 안 막음)."""
     try:
         from JARVIS07_GUARDIAN.quality_learner import build_insights_block
-        blk = build_insights_block(scope=scope, platform=platform, limit=6)
+        blk = build_insights_block(scope=scope, platform=platform, limit=8)
         return (blk + "\n") if blk else ""
     except Exception as _e:
         print(f"  ⚠️ 학습 지침 로드 실패(무시): {_e}")
