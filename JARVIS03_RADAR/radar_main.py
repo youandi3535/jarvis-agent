@@ -160,11 +160,62 @@ def _collect_finance_headlines() -> list[str]:
     return keywords[:30]
 
 
+def _build_combined(google_kws: list[str], naver_items: list[dict], top_n: int = 50) -> list[dict]:
+    """구글·네이버 트렌딩 키워드 점수 결합 → 혼합 TOP N.
+
+    Google: 순위 위치 → 0~1 선형 역수 점수
+    Naver:  헤드라인 빈도 정규화 점수 (0~1)
+    양쪽 모두 등장 시 +0.15 보너스 (크로스 플랫폼 검증).
+    """
+    n_g = max(len(google_kws), 1)
+    google_scored = {kw: round(1 - i / n_g, 3) for i, kw in enumerate(google_kws)}
+    naver_scored  = {d["keyword"]: d["score"] for d in naver_items}
+
+    all_kws = list(dict.fromkeys(list(google_scored) + list(naver_scored)))
+    combined = []
+    for kw in all_kws:
+        g = google_scored.get(kw, 0.0)
+        n = naver_scored.get(kw, 0.0)
+        sources = (["google"] if g else []) + (["naver"] if n else [])
+        both_bonus = 0.15 if (g and n) else 0.0
+        score = round((g + n) / max(len(sources), 1) + both_bonus, 3)
+        combined.append({"keyword": kw, "score": score, "sources": sources})
+
+    combined.sort(key=lambda x: -x["score"])
+    return combined[:top_n]
+
+
 def collect_today() -> dict:
     """오늘 트렌드 수집 → DataLab·경쟁강도·LLM 각도 포함 dict 반환."""
+    # ── 구글 트렌딩 ────────────────────────────────────────────────
     print("[RADAR] Google Trends 수집 중...")
-    raw_trending = get_trending_searches(limit=40)  # 여유있게 수집 후 필터링
-    trending = _filter_keywords(raw_trending)[:30]
+    raw_google = get_trending_searches(limit=40)
+    google_filtered = _filter_keywords(raw_google)
+    google_top10 = [{"keyword": kw, "rank": i + 1} for i, kw in enumerate(google_filtered[:10])]
+    print(f"[RADAR] Google 유효 키워드: {len(google_filtered)}개")
+
+    # ── 네이버 트렌딩 (독립 소스) ──────────────────────────────────
+    print("[RADAR] Naver 트렌딩 수집 중...")
+    naver_items: list[dict] = []
+    try:
+        from JARVIS03_RADAR.collectors.naver_collector import get_naver_trending
+        raw_naver = get_naver_trending(limit=30)
+        naver_items = [d for d in raw_naver if _is_meaningful(d["keyword"])]
+        naver_top10 = [{"keyword": d["keyword"], "rank": i + 1}
+                       for i, d in enumerate(naver_items[:10])]
+        print(f"[RADAR] Naver 유효 키워드: {len(naver_items)}개")
+    except Exception as e:
+        naver_top10 = []
+        print(f"[RADAR] Naver 트렌딩 스킵: {e}")
+
+    # ── 혼합 TOP 50 ────────────────────────────────────────────────
+    combined_top50 = _build_combined(google_filtered, naver_items, top_n=50)
+    print(f"[RADAR] 혼합 TOP 50 구성: 구글 {sum(1 for c in combined_top50 if 'google' in c['sources'])}개 "
+          f"/ 네이버 {sum(1 for c in combined_top50 if 'naver' in c['sources'])}개 "
+          f"/ 양쪽 {sum(1 for c in combined_top50 if len(c['sources']) == 2)}개")
+
+    # 기존 downstream 호환 — 혼합 키워드 목록을 trending 으로 사용
+    trending = [c["keyword"] for c in combined_top50][:30]
     print(f"[RADAR] 필터링 후 유효 키워드: {len(trending)}개")
 
     # 경제 뉴스 헤드라인 + 주식 시드 키워드 병합 (중복 제거)
@@ -265,16 +316,19 @@ def collect_today() -> dict:
     return {
         "date":            date.today().strftime("%Y-%m-%d"),
         "collected_at":    datetime.now().strftime("%H:%M:%S"),
-        "google_trending": trending,
+        "google_trending": trending,          # 하위 호환
+        "google_top10":    google_top10,      # 구글 독립 TOP 10
+        "naver_top10":     naver_top10,       # 네이버 독립 TOP 10
+        "combined_top50":  combined_top50,    # 혼합 TOP 50
         "scored_keywords": scored,
         "sector_summary":  dict(sector_sum),
         "recommendations": recs,
-        "extra_angles":    extra_recs,    # 추가 키워드 각도
+        "extra_angles":    extra_recs,
         "content_angles":  content_angles,
         "autocomplete":    autocomplete,
         "datalab_used":    bool(datalab) and not iot_used,
         "iot_used":        iot_used,
-        "trend_delta":     trend_delta,   # 전일 대비 신규/이탈/순위변화
+        "trend_delta":     trend_delta,
     }
 
 
