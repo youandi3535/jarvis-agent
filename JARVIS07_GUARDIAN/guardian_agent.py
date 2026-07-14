@@ -922,4 +922,17 @@ def register(scheduler, bus):
     # 5) 스케줄 잡 등록 — JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 에서 관리 (이관 완료)
     # guardian_log_scan / guardian_archive / j07_git_audit / j07_retry_pending
 
+    # 6) 재시작 복구 — 부팅 완료 3분 후 오늘 테마 미발행 확인 → 자동 재시도
+    # 근거: 발행 도중 데몬이 재시작되면 in-flight harness 가 소멸되어 발행 누락 발생.
+    # threading.Timer 일회성 지연 실행 (주기 반복 아님 — CLAUDE.md OK)
+    def _startup_recovery():
+        try:
+            from JARVIS02_WRITER.scheduler import job_startup_recovery
+            job_startup_recovery()
+        except Exception as _e:
+            log.warning(f"[GUARDIAN] startup recovery 실패: {_e}")
+
+    threading.Timer(180, _startup_recovery).start()
+    log.info("[GUARDIAN] startup recovery 예약 (부팅 후 180초)")
+
     log.info("✅ [GUARDIAN] JARVIS07_GUARDIAN 등록 완료 — 자동 오류 수집·수정 활성화")
