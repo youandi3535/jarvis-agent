@@ -478,6 +478,17 @@ _DESIGN_FIRST_BLOCK = (
 )
 
 
+def _load_learn_insights(scope: str, platform: str = "") -> str:
+    """ADR 014 — UCB 선택 인사이트 블록 로드 + 사용 기록. 실패 시 "" (글 작성 절대 안 막음)."""
+    try:
+        from JARVIS07_GUARDIAN.quality_learner import build_insights_block
+        blk = build_insights_block(scope=scope, platform=platform, limit=6)
+        return (blk + "\n") if blk else ""
+    except Exception as _e:
+        print(f"  ⚠️ 학습 지침 로드 실패(무시): {_e}")
+        return ""
+
+
 def _strip_design(raw: str) -> str:
     """대본 응답에서 <design> 설계 블록 제거 (발행 본문 아님, ERRORS [376]).
 
@@ -571,10 +582,12 @@ def _gen_economic_ts_nv(
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     # ★ 대본 1회 호출 (ERRORS [373]): 도입부(hook) 별도 LLM 호출 폐지 — 아래 구조에 지시 내장.
     _catalog = _build_data_catalog(datasets)
+    _insights = _load_learn_insights("economic", platform)
 
     system_msg = f"""당신은 한국 경제 블로그의 전문 작가입니다.
 
 {supreme_block}
+{_insights}
 
 [절대 제약 — 출력 시 반드시 준수 (위 헌법 블록 전체 적용)]
 - <p> 태그 15개 이상 (한 <p>에 최대 2문장)
@@ -993,10 +1006,12 @@ def _gen_theme(
     _max_sents = _spec_theme.max_sentences if _spec_theme else 40
     _max_kor = _spec_theme.max_korean if _spec_theme else 2000
     _target_sents = _spec_theme.target_sentences if _spec_theme else 32
+    _insights = _load_learn_insights("theme", platform)
 
     system_msg = f"""당신은 한국 테마주 분석 블로그의 전문 작가입니다.
 
 {supreme_block}
+{_insights}
 
 [★ 분량 상한 — 절대 초과 금지 (위반 시 응답 자체 거부)]
 - 정확히 {_target_sents}문장 (약 {_target_sents * 50}자)

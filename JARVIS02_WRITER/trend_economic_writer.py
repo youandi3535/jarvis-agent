@@ -774,19 +774,6 @@ _section_img_paths: dict[int, str] = {}
 _para_img_paths:    dict[int, str] = {}
 
 
-def _load_learn_insights(scope: str, platform: str = "") -> str:
-    """학습 지침 블록 — ★ ADR 014 (2026-07-03): JARVIS07 quality_learner 위임.
-
-    UCB 랭킹 선택 + 사용 기록(보상 귀속 대기) 포함. 실패 시 "" (글 작성 절대 안 막음).
-    """
-    try:
-        from JARVIS07_GUARDIAN.quality_learner import build_insights_block
-        blk = build_insights_block(scope=scope, platform=platform, limit=6)
-        return (blk + "\n") if blk else ""
-    except Exception as e:
-        print(f"  ⚠️ 학습 지침 로드 실패(무시): {e}")
-        _g_report("writer", e, module=__name__)
-        return ""
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
