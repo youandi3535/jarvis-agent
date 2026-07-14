@@ -212,23 +212,10 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"day_of_week":"sun", "hour":2, "minute":30},
      "callback":"JARVIS07_GUARDIAN.vector_store.job_build_vector_index",
      "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
-    # ★ 글 품질 강화학습 보상 귀속 (ADR 014 — 2026-07-03) — 하루 4회.
-    #   LLM 호출 0 (순수 통계). (insight_id, analysis_id) 쌍당 weight 갱신 1회만
-    #   → 중복 실행 안전. 어느 시각에 글 써도 최대 6h 내 학습 반영 보장.
-    #   23:45: daily_review(22:00)·learn_log(23:30) 이후 — 당일 인사이트 최종 반영.
-    {"id":"j07_quality_learn_07", "name":"글 품질 강화학습 보상 귀속 (07:30)", "trigger":"cron",
-     "kwargs":{"hour":7, "minute":30},
-     "callback":"JARVIS07_GUARDIAN.quality_learner.job_quality_learn_daytime",
-     "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
-    {"id":"j07_quality_learn_13", "name":"글 품질 강화학습 보상 귀속 (13:30)", "trigger":"cron",
-     "kwargs":{"hour":13, "minute":30},
-     "callback":"JARVIS07_GUARDIAN.quality_learner.job_quality_learn_daytime",
-     "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
-    {"id":"j07_quality_learn_19", "name":"글 품질 강화학습 보상 귀속 (19:30)", "trigger":"cron",
-     "kwargs":{"hour":19, "minute":30},
-     "callback":"JARVIS07_GUARDIAN.quality_learner.job_quality_learn_daytime",
-     "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
-    {"id":"j07_quality_learn",    "name":"글 품질 강화학습 보상 귀속 (23:45)", "trigger":"cron",
+    # ★ 글 품질 강화학습 보상 귀속 (ADR 014 — 2026-07-03) — 매일 23:45.
+    #   daily_review(22:00)·learn_log(23:30) 이후 실행. days=3 롤링 윈도우로
+    #   하루 중 어느 시각에 쓴 글이든 당일 미귀속 기록 전수 처리.
+    {"id":"j07_quality_learn",  "name":"글 품질 강화학습 보상 귀속 (매일 23:45)", "trigger":"cron",
      "kwargs":{"hour":23, "minute":45},
      "callback":"JARVIS07_GUARDIAN.quality_learner.job_quality_learn",
      "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
