@@ -153,17 +153,43 @@ def get_pipeline():
 def get_trends():
     con = _db()
     if not con:
-        return {"today": 0, "top": [], "sectors": {}}
+        return {"today": 0, "top": [], "sectors": {}, "google_top10": [], "naver_top10": [], "combined_top50": []}
     today = datetime.now().strftime("%Y-%m-%d")
     try:
         count   = _scalar(con, "SELECT COUNT(*) FROM trends WHERE date=?", (today,))
         top     = _rows(con, "SELECT keyword,sector,score,opportunity_score,source FROM trends WHERE date=? ORDER BY opportunity_score DESC LIMIT 15", (today,))
         sectors = _rows(con, "SELECT sector,COUNT(*) as n FROM trends WHERE date=? GROUP BY sector ORDER BY n DESC", (today,))
         con.close()
+        google_top10, naver_top10, combined_top50 = [], [], []
+        recommendations, trend_delta = [], {}
+        json_path = BASE_DIR / "JARVIS03_RADAR" / "data" / f"trends_{today}.json"
+        if json_path.exists():
+            try:
+                raw = json.loads(json_path.read_text(encoding="utf-8"))
+                google_top10    = raw.get("google_top10", [])
+                naver_top10     = raw.get("naver_top10", [])
+                combined_top50  = raw.get("combined_top50", [])
+                recommendations = raw.get("recommendations", [])
+                trend_delta     = raw.get("trend_delta", {})
+            except Exception:
+                pass
+        topic_candidates = []
+        pack_path = BASE_DIR / "JARVIS03_RADAR" / "data" / f"topic_pack_{today}.json"
+        if pack_path.exists():
+            try:
+                pack = json.loads(pack_path.read_text(encoding="utf-8"))
+                topic_candidates = pack.get("candidates", [])
+            except Exception:
+                pass
         return {
-            "today":   count,
-            "top":     top,
-            "sectors": {r["sector"]: r["n"] for r in sectors},
+            "today":             count,
+            "sectors":           {r["sector"]: r["n"] for r in sectors},
+            "google_top10":      google_top10,
+            "naver_top10":       naver_top10,
+            "combined_top50":    combined_top50,
+            "recommendations":   recommendations,
+            "trend_delta":       trend_delta,
+            "topic_candidates":  topic_candidates,
         }
     except Exception:
         con.close()

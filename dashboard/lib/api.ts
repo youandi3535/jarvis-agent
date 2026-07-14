@@ -11,8 +11,21 @@ export const fetcher = <T = unknown>(url: string): Promise<T> => apiFetch<T>(url
 // 각 엔드포인트 타입
 export type DaemonInfo = { alive: boolean; pid: number | null; uptime: string };
 export type PostStats  = { today: number; week: number; month: number; by_platform: Record<string, number> };
-export type TrendData  = { today: number; top: TrendRow[]; sectors: Record<string, number> };
-export type TrendRow   = { keyword: string; sector: string; score: number; opportunity_score: number; source: string };
+export type TrendData  = {
+  today: number;
+  sectors: Record<string, number>;
+  google_top10: Top10Item[];
+  naver_top10: Top10Item[];
+  combined_top50: Combined50Item[];
+  recommendations: RecommendItem[];
+  trend_delta: TrendDelta;
+  topic_candidates: TopicCandidate[];
+};
+export type Top10Item      = { rank: number; keyword: string };
+export type Combined50Item = { keyword: string; score: number; sources: string[] };
+export type RecommendItem  = { keyword: string; sector: string; score: number; opportunity_score: number; velocity: string; competition: number; reason: string };
+export type TrendDelta     = { prev_date?: string; new_entry?: string[]; dropped?: string[]; risen?: { keyword: string; delta: number }[]; fallen?: { keyword: string; delta: number }[] };
+export type TopicCandidate = { keyword: string; sector: string; opportunity_score: number; reason: string; profile?: { summary?: string } };
 export type GuardianStats = { total: number; new: number; fixed: number; critical: number; high: number; medium: number; low: number; recent: ErrorRow[] };
 export type ErrorRow   = { id: number; timestamp: string; severity: string; status: string; error_type: string; module: string; message: string };
 export type VisionSummary = { total_agents?: number; healthy?: number; degraded?: number; offline?: number };

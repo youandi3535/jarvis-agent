@@ -405,7 +405,7 @@ def check_autocode(report: Report) -> None:
         "post_quality",
         "revise_adapter",
         "auto_repair",
-        "hub.py",                             # 대시보드 프로세스 제어
+        # hub.py 삭제됨 (Streamlit → FastAPI+Next.js 전환)
         "JARVIS00_INFRA/",                    # 인프라 단일 진입점 (데몬·프로세스 제어)
         "JARVIS01_MASTER/dispatchers.py",     # 디스패처 subprocess
         "JARVIS01_MASTER/proactive_monitor.py",
@@ -1057,7 +1057,7 @@ def check_ssot(report: Report) -> None:
     cat = "ssot"
     pat_label = re.compile(r"\b(?:Opus|Sonnet|Haiku|Fable)\s+[0-9]")        # 사람이 읽는 모델 라벨
     pat_sched = re.compile(r"(?:매일|매주|매월)[가-힣\s·]*[0-9]{1,2}:[0-9]{2}")  # 스케줄 구절(매일 06:30 등)
-    display_files = ("hub.py",)   # 웹 대시보드 (SSOT 파생 강제 대상 — job_registry.cron_phrase/cron_times, shared.llm.model_label 사용)
+    display_files = ()   # hub.py 삭제됨 — Next.js 프론트엔드는 Python SSOT 검사 대상 아님
     for p in _iter_py():
         rel_s = str(p.relative_to(ROOT))
         if not any(rel_s == f or rel_s.endswith("/" + f) for f in display_files):
