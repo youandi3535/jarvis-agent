@@ -230,6 +230,10 @@ def _fetch_naver_theme_catalog(timeout: int = 8) -> dict:
         return _THEME_CATALOG_CACHE["themes"]
     import requests
     from bs4 import BeautifulSoup
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        def _wd_beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
     _hdrs = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
         'Referer': 'https://finance.naver.com/',
@@ -237,6 +241,7 @@ def _fetch_naver_theme_catalog(timeout: int = 8) -> dict:
     themes: dict = {}
     try:
         for page in range(1, 11):   # 공식 테마 ~8페이지 — 여유 10
+            _wd_beat()   # ★ 순차 페이지 수집 진행 신호 — freeze 오탐 방지 (ERRORS [394]/[426] 동일 클래스)
             r = requests.get(f'https://finance.naver.com/sise/theme.naver?page={page}',
                              headers=_hdrs, timeout=timeout)
             if r.status_code != 200:
@@ -372,8 +377,13 @@ def _naver_fin_theme_search(theme_name: str, timeout: int = 8) -> list:
         #    폐기되던 사고 방지. "테마주명이 있으면 그 안에 종목도 있다" — 네트워크 순간
         #    장애로 그 종목을 못 가져오는 것뿐이므로 최대 3회 백오프 재시도.
         import time as _t2
+        try:
+            from JARVIS00_INFRA.watchdog import beat as _wd_beat2
+        except Exception:
+            def _wd_beat2() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
         stocks = []
         for _try in range(3):
+            _wd_beat2()   # ★ 상세페이지 재시도 진행 신호 — freeze 오탐 방지
             try:
                 r2 = requests.get(
                     f'https://finance.naver.com/sise/sise_group_detail.naver?type=theme&no={best_no}',
@@ -913,11 +923,16 @@ def collect_stocks_data(theme_name: str) -> dict:
         }
 
     # ★ shutdown(wait=False): 타임아웃된 스레드 버리고 즉시 진행 (ERRORS [401])
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat3
+    except Exception:
+        def _wd_beat3() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
     _enrich_ex = ThreadPoolExecutor(max_workers=4)
     try:
         futures = {_enrich_ex.submit(_enrich, p): p for p in pairs}
         try:
             for fut in as_completed(futures, timeout=60):
+                _wd_beat3()   # ★ 재무데이터 취합 진행 신호 — freeze 오탐 방지
                 try:
                     stocks.append(fut.result(timeout=15))
                 except Exception as e:

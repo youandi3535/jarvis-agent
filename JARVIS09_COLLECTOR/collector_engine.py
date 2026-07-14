@@ -211,6 +211,10 @@ def _collect_for_question(question: dict, theme: str, sector: str) -> list[RawDo
 def _deep_fetch_thin_docs(results: list[CollectionResult], theme: str) -> list[CollectionResult]:
     """스니펫 수준(짧은) 뉴스·웹 문서 → 기사 전문으로 확장 (근거 밀도↑)."""
     from .generic_fetch import fetch_article
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        def _wd_beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
     expanded = 0
     for r in results:
         if expanded >= _DEEPFETCH_MAX:
@@ -219,6 +223,7 @@ def _deep_fetch_thin_docs(results: list[CollectionResult], theme: str) -> list[C
             continue
         if not (r.url or "").startswith("http"):
             continue
+        _wd_beat()   # ★ 순차 전문 딥페치(최대 8건) 진행 신호 — freeze 오탐 방지
         try:
             raw = fetch_article(r.url, theme=theme, title=r.title, source_type=r.source_type)
             if raw is None:
@@ -325,6 +330,10 @@ def _collect_tier(provs: list, theme: str, sector: str, cap: int,
     if seen_urls is None:
         seen_urls = set()
     from .models import trust_rank as _trust
+    try:
+        from JARVIS00_INFRA.watchdog import beat  # 지역 import (순환 방지)
+    except Exception:
+        def beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
 
     raw_docs: list[RawDocument] = []
 
@@ -342,6 +351,7 @@ def _collect_tier(provs: list, theme: str, sector: str, cap: int,
     futures = {exe.submit(_run, p): p.source_type for p in provs}
     try:
         for fut in as_completed(futures, timeout=90):
+            beat()   # ★ 프로바이더 결과 취합마다 진행 신호 (ERRORS [394]/[426] 동일 클래스)
             try:
                 raw_docs.extend(fut.result(timeout=30) or [])
             except _FutureTimeout:
