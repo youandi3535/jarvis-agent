@@ -2,6 +2,20 @@
 
 ---
 
+## [439] LLM 포화 설계 근본 원인 — 크로스 프로세스 CLI 충돌 + guardian 세마포어 300s 선점 (2026-07-15)
+
+- **증상**: `SDK timeout 300s — 수집된 응답: 0개` 반복 발생. 수동 `economic_poster.py --tistory-only` 실행 시 특히 빈번.
+- **환경**: `python JARVIS02_WRITER/economic_poster.py --tistory-only` (수동) + `jarvis_daemon.py`(daemon) 동시 실행.
+- **원인A (크로스 프로세스 충돌)**: `_LLM_SPAWN_SEM = threading.BoundedSemaphore(1)` 은 *프로세스 내* 직렬화만 보장. daemon 과 수동 실행은 **별개 프로세스** — 각자 독립 세마포어를 보유해 동시에 `claude CLI`를 spawn 가능. 두 프로세스가 동시에 Claude Max 구독을 호출하면 포화 → SDK silent hang(0응답). 원래 코드에 크로스 프로세스 조율 수단이 전무했음.
+- **원인B (guardian 세마포어 300s 선점)**: daemon 내부에서 `j07_retry_pending`(10분 주기) · `j07_log_scan`(5분 주기)이 `invoke_text("guardian", timeout=300)` 으로 세마포어를 최대 300s 점유 — 발행 파이프라인이 그 뒤에 대기하면 다음 LLM 호출이 300s 지연됨. 발행 중 background alias 를 우선 낮추는 수단 없음.
+- **헛다리**: 이전 수정([322][323])은 "SDK 타임아웃 = 외부 요인" 으로 분류해 설계 문제를 간과. 실제로는 두 가지 구조적 결함이 SDK 타임아웃을 **고빈도·반복적**으로 유발.
+- **해결**: 3 계층 동시 적용
+  1. **크로스 프로세스 fcntl 잠금** (`shared/llm.py`): `_proc_lock_acquire`/`_proc_lock_release` — `fcntl.flock(LOCK_EX)` 로 `~/.jarvis/llm_exec.lock` 획득 후 SDK call. POSIX 보장: 프로세스 종료 시 자동 해제(교착 위험 0). `_run_sdk_sync` · `_invoke_sdk_vision` 양쪽에 삽입.
+  2. **발행 기간 LLM 우선권** (`shared/llm.py`): `_PUBLISHING_ACTIVE(threading.Event)` + `_BG_ALIASES={guardian,learn_eval,architect,diagnostic}` — `mark_publishing(True)` 설정 시 background alias 호출을 `timeout≤90s · retries=1` 로 자동 강등. `economic_poster.run()` · `trend_theme_writer.run_all_themes()` 양쪽에 `mark_publishing(True/False)` 삽입.
+  3. **guardian timeout 단축** (`JARVIS07_GUARDIAN/error_analyzer.py`): `analyze_llm_only` 의 `invoke_text("guardian", timeout=300)` → `timeout=120`. 발행 중이면 LLM 분석 자체를 패스(backlog 잔류 → `job_deep_audit` 04:30 처리).
+- **파일**: `shared/llm.py`, `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS07_GUARDIAN/error_analyzer.py`.
+- **교훈**: `threading.BoundedSemaphore` 는 단일 프로세스 직렬화만 보장. 별도 프로세스(수동 실행, 테스트 스크립트 등)가 같은 외부 리소스를 함께 쓰면 크로스 프로세스 잠금(`fcntl`, socket, 파일 락 등) 이 별도로 필요. 발행 파이프라인은 LLM 잠금을 *선점권*과 함께 써야 background 유지 잡이 발행 시간을 잡아먹지 않는다.
+
 ## [438] 경제 브리핑 티스토리 harness 데드라인 초과 — JARVIS_LLM_DEADLINE_TS(40분)가 하드 데드라인(30분)보다 커서 강등 미진입 (2026-07-15)
 
 - **증상**: `JARVIS00_INFRA.harness.경제 브리핑 발행 — 티스토리` 가 `attempt=2 step=전체: 데드라인 초과(블로킹) 1829s > 1800s` 로 watchdog 강제종료(os._exit 75). 로그(`economic_20260715_063027.log`) 확인 결과 티스토리 Pass-1 대본 생성(`invoke_text("writer", ...)`)에서 `SDK timeout 300s — 수집된 응답: 0개` 가 attempt 1 에서 2회, attempt 2 에서 2회(+3회째 도중 강제종료) 연속 발생 — 순수 SDK 무응답 대기만으로 예산 대부분 소모.

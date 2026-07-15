@@ -356,6 +356,70 @@ _LLM_LAST_SPAWN = [0.0]
 _LLM_SEM_POLL_SEC = 15.0  # 세마포어 대기 중 heartbeat 주기 (watchdog freeze_sec=300 보다 충분히 작게)
 
 
+# ── 크로스 프로세스 LLM 직렬화 잠금 ─────────────────────────────────────────
+# daemon 과 수동 실행(--tistory-only 등)은 별개 프로세스 → 각자 독립된 BoundedSemaphore.
+# 두 프로세스가 동시에 claude CLI 를 spawn 하면 Max 구독 포화 → SDK hang(0응답) 원인.
+# fcntl advisory lock: POSIX 보장 + 프로세스 종료 시 자동 해제(교착 위험 0).
+_LLM_PROC_LOCK_PATH = Path(
+    os.environ.get("JARVIS_DB_PATH", str(Path.home() / ".jarvis" / "jarvis.sqlite"))
+).parent / "llm_exec.lock"
+_llm_proc_fd: list = [None]
+_llm_proc_fd_lock = _threading.Lock()
+
+
+def _proc_lock_acquire() -> None:
+    """크로스 프로세스 배타 잠금 — 다른 JARVIS 프로세스가 CLI 사용 중이면 폴링 대기."""
+    import fcntl as _fcntl, time as _t
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd
+    except Exception:
+        def _wd(): pass
+    if _llm_proc_fd[0] is None:
+        with _llm_proc_fd_lock:
+            if _llm_proc_fd[0] is None:
+                _LLM_PROC_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+                _llm_proc_fd[0] = open(_LLM_PROC_LOCK_PATH, "w")
+    _fd = _llm_proc_fd[0]
+    _wd()
+    while True:
+        try:
+            _fcntl.flock(_fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            return
+        except OSError:
+            _wd()
+            _t.sleep(_LLM_SEM_POLL_SEC)
+
+
+def _proc_lock_release() -> None:
+    """크로스 프로세스 잠금 해제."""
+    import fcntl as _fcntl
+    if _llm_proc_fd[0] is not None:
+        try:
+            _fcntl.flock(_llm_proc_fd[0], _fcntl.LOCK_UN)
+        except Exception:
+            pass
+
+
+# ── 발행 기간 LLM 우선권 ──────────────────────────────────────────────────────
+# mark_publishing(True) 동안 background alias(guardian 등)의 timeout 을 90s 로 단축,
+# retries=1 → 세마포어 장기 점유로 발행 파이프라인을 최대 300s 블로킹하던 사고 방지.
+_PUBLISHING_ACTIVE = _threading.Event()
+_BG_ALIASES = frozenset({"guardian", "learn_eval", "architect", "diagnostic"})
+
+
+def mark_publishing(active: bool) -> None:
+    """발행 파이프라인 시작/종료 신호 — background alias LLM 호출 자동 강등."""
+    if active:
+        _PUBLISHING_ACTIVE.set()
+    else:
+        _PUBLISHING_ACTIVE.clear()
+
+
+def is_publishing() -> bool:
+    """현재 발행 파이프라인 실행 중인지 (in-process 한정)."""
+    return _PUBLISHING_ACTIVE.is_set()
+
+
 def _acquire_llm_sem() -> None:
     """★ 전역 LLM 세마포어 획득 — 대기 중에도 워치독 진행 신호 전송 (freeze 오탐 방지).
 
@@ -431,6 +495,7 @@ def _run_sdk_sync(
     options = ClaudeCodeOptions(model=model, env={"ANTHROPIC_API_KEY": ""})
     parts: list[str] = []
     throttled = {"v": False}
+    hung = {"v": False}
 
     try:
         from JARVIS00_INFRA.watchdog import beat as _wd_beat
@@ -461,6 +526,8 @@ def _run_sdk_sync(
         except TimeoutError:
             import logging as _logging
             _logging.getLogger("jarvis.llm").warning(f"SDK timeout {timeout}s — 수집된 응답: {len(parts)}개")
+            if not parts:
+                hung["v"] = True  # 0개 hang → 회로차단기 신호
         except Exception as e:
             if not parts:
                 import logging as _logging
@@ -470,31 +537,37 @@ def _run_sdk_sync(
     _pace_spawn()
     _acquire_llm_sem()
     try:
-        exe = ThreadPoolExecutor(max_workers=1)
+        _proc_lock_acquire()   # ★ 크로스 프로세스 직렬화 — daemon + 수동 실행 충돌 방지
         try:
-            fut = exe.submit(_run_blocking)
-            wall_deadline = timeout + 30.0   # anyio 내부 타임아웃 위 안전 마진
-            waited = 0.0
-            poll = 15.0                      # watchdog freeze_sec(300s) 보다 충분히 작게
-            while True:
-                try:
-                    fut.result(timeout=min(poll, max(0.1, wall_deadline - waited)))
-                    break
-                except _FutTimeout:
-                    waited += poll
-                    _wd_beat()   # ★ 벽시계 대기 중에도 진행 신호 — freeze 오탐 방지
-                    if waited >= wall_deadline:
-                        import logging as _logging
-                        _logging.getLogger("jarvis.llm").warning(
-                            f"SDK 벽시계 상한 {wall_deadline:.0f}s 초과 — 강제 포기(수집 {len(parts)}개)"
-                        )
+            exe = ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = exe.submit(_run_blocking)
+                wall_deadline = timeout + 30.0   # anyio 내부 타임아웃 위 안전 마진
+                waited = 0.0
+                poll = 15.0                      # watchdog freeze_sec(300s) 보다 충분히 작게
+                while True:
+                    try:
+                        fut.result(timeout=min(poll, max(0.1, wall_deadline - waited)))
                         break
+                    except _FutTimeout:
+                        waited += poll
+                        _wd_beat()   # ★ 벽시계 대기 중에도 진행 신호 — freeze 오탐 방지
+                        if waited >= wall_deadline:
+                            import logging as _logging
+                            _logging.getLogger("jarvis.llm").warning(
+                                f"SDK 벽시계 상한 {wall_deadline:.0f}s 초과 — 강제 포기(수집 {len(parts)}개)"
+                            )
+                            break
+            finally:
+                exe.shutdown(wait=False)   # 내부 스레드 leak 가능 — 메인 흐름 비블로킹 우선(_bounded() 와 동일 정책)
         finally:
-            exe.shutdown(wait=False)   # 내부 스레드 leak 가능 — 메인 흐름 비블로킹 우선(_bounded() 와 동일 정책)
+            _proc_lock_release()
     finally:
         _LLM_SPAWN_SEM.release()
     _was_throttled = bool(throttled["v"] and not parts)
-    _LAST_CALL.throttled = _was_throttled   # ★ 호출자(invoke_text)가 진짜 스로틀만 카운트
+    _was_hung = bool(hung["v"] and not parts)
+    _LAST_CALL.throttled = _was_throttled
+    _LAST_CALL.hung = _was_hung  # ★ hang(TimeoutError+0parts) 도 회로차단기 신호로 전달
     if _was_throttled:
         import logging as _logging
         _logging.getLogger("jarvis.llm").debug("rate-limit 스로틀 (num_turns=0) — 재시도/폴백")
@@ -538,15 +611,19 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
     _pace_spawn()
     _acquire_llm_sem()
     try:
+        _proc_lock_acquire()   # ★ 크로스 프로세스 직렬화
         try:
-            anyio.run(_collect)
-        except (MessageParseError, ProcessError):
-            pass
-        except TimeoutError:
-            print(f"  ⚠️ vision SDK timeout {timeout}s — 수집 {len(parts)}개")
-        except Exception as e:
-            if not parts:
-                print(f"  ❌ vision SDK 오류: {e}")
+            try:
+                anyio.run(_collect)
+            except (MessageParseError, ProcessError):
+                pass
+            except TimeoutError:
+                print(f"  ⚠️ vision SDK timeout {timeout}s — 수집 {len(parts)}개")
+            except Exception as e:
+                if not parts:
+                    print(f"  ❌ vision SDK 오류: {e}")
+        finally:
+            _proc_lock_release()
     finally:
         _LLM_SPAWN_SEM.release()
     return "".join(parts)
@@ -636,6 +713,15 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
     except Exception:
         pass
 
+    # ★ 발행 중 background alias 자동 강등 (2026-07-15):
+    #   동일 프로세스(daemon) 안에서 guardian 이 세마포어를 timeout=300s 로 점유해
+    #   발행 파이프라인을 최대 300s 차단하던 사고 방지.
+    #   mark_publishing(True) → 모든 BG alias 호출을 timeout ≤90s·retries=1 로 단축.
+    if alias in _BG_ALIASES and _PUBLISHING_ACTIVE.is_set():
+        retries = min(retries, 1)
+        backoff = False
+        timeout = min(timeout, 90)
+
     # ★ 회로 차단기 게이트 (_essential=True 는 호출 단위 필수 면제 —
     #   설계 planner 등 품질 조타수 호출이 스로틀 중에도 1회 실시도, ERRORS [300])
     _gate = _circuit_gate()
@@ -657,6 +743,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
     model = _ALIAS_MODEL.get(alias, _DEFAULT_MODEL_ID)
     result = ""
     throttled_seen = False
+    hung_seen = False
     for _attempt in range(retries):
         # ★ 전역 하트비트 (사용자 박제 2026-07-06): LLM 호출 = 진행 신호 → freeze 워치독
         #   이 오래 걸리는 정상 LLM 작업을 멈춤으로 오탐하지 않도록 매 시도마다 beat.
@@ -667,6 +754,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
             pass
         try:
             _LAST_CALL.throttled = False
+            _LAST_CALL.hung = False
             result = _run_sdk_sync(prompt, model=model, system=system, timeout=timeout) or ""
         except Exception:
             result = ""
@@ -675,10 +763,13 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
             return result
         if getattr(_LAST_CALL, "throttled", False):
             throttled_seen = True
+        if getattr(_LAST_CALL, "hung", False):
+            hung_seen = True
         if backoff and _attempt < retries - 1:
             _t.sleep(min(30.0, 4 * (2 ** _attempt)) + _r.uniform(0, 1.5))
-    # 모든 재시도 실패 — *진짜 스로틀* 관측 시에만 카운트 (CLI 부재·auth 오류 오탐 방지)
-    if throttled_seen:
+    # 모든 재시도 실패 — 진짜 스로틀(ResultMessage) OR SDK hang(TimeoutError+0parts) 모두
+    # 회로차단기 카운트. CLI 부재·auth 빠른 실패는 hung=False라 오탐 없음.
+    if throttled_seen or hung_seen:
         _circuit_record_throttle()
     return result
 

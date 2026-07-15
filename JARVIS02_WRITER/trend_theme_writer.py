@@ -888,6 +888,9 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     from JARVIS09_COLLECTOR.run_context import new_run as _new_run
     _new_run(theme)
 
+    # ★ 발행 기간 LLM 우선권 선언 — background alias 자동 강등
+    from shared.llm import mark_publishing as _mark_pub
+    _mark_pub(True)
     # ① 네이버 액션 (공유 수집 포함) — 완전 종결까지
     _nv_result = run_action(_nv_action_def, {"theme": theme, "sector": sector})
     _nv_st = _nv_result.state
@@ -902,6 +905,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         _reason = getattr(_nv_result, "escalation_reason", "최대 시도 초과 또는 abort")
         _tg(f"❌ [THEME] 네이버 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
     if _deferred:
+        _mark_pub(False)
         print("  ⏸ [THEME] 네이버 액션 연기(인터프리터 종료) — 티스토리·보고 스킵, 재시작 후 재시도")
         return {"theme": theme,
                 "tistory": {"success": False, "url": "", "keyword": theme},
@@ -927,6 +931,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             _reason = getattr(_ts_result, "escalation_reason", "최대 시도 초과 또는 abort")
             _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
 
+    _mark_pub(False)  # ★ 테마 발행 완료 — background alias 강등 해제
     return {"theme": theme, "tistory": _ts_res, "naver": _nv_res, "data_empty": _data_empty}
 
 

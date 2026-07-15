@@ -388,6 +388,7 @@ def _label_batch(statements: list[str]) -> list[str]:
             "비율(%)이면 '~률/비중', 개수면 '~수'. 문장 속 다른 지표명을 빌려오지 마라.\n"
             f'문장 수와 같은 길이의 JSON 문자열 배열만 출력:\n{joined}',
             max_tokens=800,
+            _nonessential=True, timeout=60,
         )
         m = re.search(r"\[[\s\S]*\]", raw or "")
         parsed = json.loads(m.group(0)) if m else None

@@ -773,6 +773,10 @@ def run(post_naver=True, post_tistory=True):
         except Exception:
             pass
 
+    # ★ 발행 기간 LLM 우선권 선언 — background alias(guardian 등) 자동 강등
+    #   + 크로스 프로세스 잠금(llm.py)이 함께 동작해 daemon 과 수동 실행 충돌 방지.
+    from shared.llm import mark_publishing as _mark_pub
+    _mark_pub(True)
     import time as _tm_act
     if post_naver:
         # ★ 액션별 LLM 데드라인 (리뷰 확정 수정): 직렬화로 티스토리 시작이 늦어져
@@ -862,6 +866,7 @@ def run(post_naver=True, post_tistory=True):
         print("  ⏭ 티스토리 스킵 — 동시 실행 중복 차단")
     else:
         print("  ─ 티스토리 건너뜀 (플래그 OFF)")
+    _mark_pub(False)  # ★ 발행 완료 — background alias 강등 해제
 
     _nv_r  = '✅' if naver_ok   else ('⏭' if not post_naver   else '❌')
     _ts_r  = '✅' if tistory_ok else ('⏭' if not post_tistory else '❌')
