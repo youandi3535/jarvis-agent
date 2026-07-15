@@ -216,8 +216,17 @@ class CollectedData:
 
         for ds in self.datasets or []:
             unit = (ds.get("unit") or "").strip()
+            row_vals: list[float] = []
             for row in ds.get("data") or []:
                 _add(row.get("value"), unit)
+                try:
+                    row_vals.append(float(row.get("value")))
+                except (TypeError, ValueError):
+                    pass
+            # KOSIS 세부 항목처럼 개별 row가 세부 분류일 때, 합계도 gt에 추가
+            # (LLM이 합산한 총계 수치 grounding 가능하도록)
+            if len(row_vals) >= 2:
+                _add(sum(row_vals), unit)
         for f in self.facts or []:
             _add(f.get("value"), f.get("unit"))
         for e in self.entities or []:

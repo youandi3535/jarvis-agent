@@ -1529,12 +1529,37 @@ def _claim_all_grounded(text: str, gt: list, rel: float = 0.02, ab: float = 0.5)
     한 수치라도 데이터에 없으면 False → LLM/웹 경로가 검증(임의삽입/변형 차단).
     ★ Step 8 (2026-07-05): 통일 grounds() — *표시 올림/버림 또는 ±5%*. rel/ab 은 무시
       (하위호환 시그니처 유지). gt(magnitude)를 토큰 표시 단위로 환산 후 표시 스케일 판정.
+    ★ ERRORS 하네스 2026-07-14: '1조 3,863억원' 같은 복합(조+억) 표기는 결합 magnitude
+      (1.3863e12) 로 먼저 대조 — gt 는 `_collect_gt_floats`가 소스 코퍼스에서 동일 복합
+      파서(`_compound_magnitudes`)로 결합값을 채워두는데, 이 함수가 여전히 "1조"·"3,863억"을
+      *개별* 분리 토큰으로만 검사하면 소스가 결합/축약 표기(예: '13,863억원')로만 존재할 때
+      개별 성분이 gt 에 없어 진짜 통계까지 오차단된다(gt 채우기와 본문 대조가 비대칭).
+      복합 span 안의 개별 토큰은 결합값 통과 시 재검사하지 않는다.
     """
     from JARVIS09_COLLECTOR.models import grounds
-    toks = list(_NUMERIC_UNIT_RE.finditer(text or ""))
-    if not toks or not gt:
+    text = text or ""
+    if not gt:
+        return False
+
+    compound_spans: list[tuple[int, int]] = []
+    for m in _COMPOUND_JOEOK_RE.finditer(text):
+        try:
+            jo = float(m.group(1).replace(",", ""))
+            rest = float(m.group(2).replace(",", ""))
+        except ValueError:
+            continue
+        rest_mag = rest * (1e11 if m.group(3) == "천억" else 1e8)
+        combined = jo * 1e12 + rest_mag
+        if not any(grounds(combined, g) for g in gt):
+            return False
+        compound_spans.append((m.start(), m.end()))
+
+    toks = list(_NUMERIC_UNIT_RE.finditer(text))
+    if not toks and not compound_spans:
         return False
     for m in toks:
+        if any(s <= m.start() and m.end() <= e for s, e in compound_spans):
+            continue  # 복합 표기 내부 성분 — 결합값으로 이미 검증됨
         parts = _num_parts(m.group(0))
         if parts is None:
             return False

@@ -2,6 +2,30 @@
 
 ---
 
+## [438] 경제 브리핑 티스토리 harness 데드라인 초과 — JARVIS_LLM_DEADLINE_TS(40분)가 하드 데드라인(30분)보다 커서 강등 미진입 (2026-07-15)
+
+- **증상**: `JARVIS00_INFRA.harness.경제 브리핑 발행 — 티스토리` 가 `attempt=2 step=전체: 데드라인 초과(블로킹) 1829s > 1800s` 로 watchdog 강제종료(os._exit 75). 로그(`economic_20260715_063027.log`) 확인 결과 티스토리 Pass-1 대본 생성(`invoke_text("writer", ...)`)에서 `SDK timeout 300s — 수집된 응답: 0개` 가 attempt 1 에서 2회, attempt 2 에서 2회(+3회째 도중 강제종료) 연속 발생 — 순수 SDK 무응답 대기만으로 예산 대부분 소모.
+- **환경**: `JARVIS02_WRITER/economic_poster.py` `run()` — `_ts_action = ActionDefinition(..., deadline_sec=1800)`(harness 하드 데드라인, ★ 사용자 박제 2026-07-06) 진입 직전 `os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + 2400)`. `shared/llm.py invoke_text()` 는 `JARVIS_LLM_DEADLINE_TS` 잔여 <600s 이면 재시도 1회·백오프 0 으로 강등(대본 생성 시간 보호, [301] 항목 6).
+- **원인**: 2400s(40분) 짜리 LLM 강등 예산은 [301](2026-07-03, harness 액션 데드라인이 아직 45분 단일 예산이던 시절) 리뷰 확정 수정의 잔재 — 이후 2026-07-06 사용자 박제로 harness 액션 자체의 하드 데드라인이 1800s(30분)로 조여졌으나, `JARVIS_LLM_DEADLINE_TS` 오프셋(2400)은 갱신되지 않고 그대로 남아 두 값이 어긋났다(SSOT 미동기화). "잔여 <600s 강등" 조건은 `(now+2400) - now < 600` ⇔ 경과 1800s 시점에야 성립 — 그런데 harness 하드킬도 정확히 경과 1800s 에 발동하므로, LLM 재시도 강등은 **하드킬과 동시(사실상 미진입)** 로만 트리거되고, 그 앞의 1200~1800s 구간(SDK 가 rate-limit/일시 지연으로 계속 300s 풀타임아웃을 반복하는 구간)에는 `retries=3`+지수 백오프가 그대로 유지되어 예산을 전부 소진했다. SDK 300s 타임아웃 자체는 [322][323]에서 이미 "일시적 API 불가용, 코드 수정 불필요"로 확인된 외부 요인 — 이번 사고의 실제 코드 결함은 그 타임아웃에 대한 *예산 보호 장치(강등)가 죽어있었다*는 점.
+- **헛다리**: 없음 — [322][323] 선례를 먼저 대조해 "SDK 타임아웃 자체는 정상 에스컬레이션 대상"임을 확인한 뒤, 이번엔 그 타임아웃이 예산 전부를 태워 하드킬까지 간 경위(강등 미작동)를 추적해 실제 코드 결함을 특정했다.
+- **해결**: `JARVIS00_INFRA/watchdog.py` 의 기존 SSOT 상수 `BLOG_ACTION_DEADLINE_SEC`(1800)를 `economic_poster.py` 최상단에서 import → ① `_nv_action`/`_ts_action` 의 `deadline_sec=1800` 리터럴 ② 네이버/티스토리 액션 진입 직전 `JARVIS_LLM_DEADLINE_TS` 오프셋(기존 2400/2700) 을 전부 이 상수로 교체. 이제 harness 하드 데드라인과 LLM 강등 기준이 항상 동일한 값을 참조 — 강등이 경과 1200s(잔여 600s) 시점에 확실히 진입해 마지막 10분은 재시도 1회·백오프 0 으로 빠르게 실패/성공 판정, 하드킬 전에 여유를 확보한다. `py_compile` + import 스모크 테스트 통과, `precommit_check --category harness` 0건.
+- **파일**: `JARVIS02_WRITER/economic_poster.py`.
+- **교훈**: "하드 데드라인"과 그 안에서 동작하는 "소프트 강등 임계값"은 서로 다른 파일·다른 시점에 도입되면 쉽게 어긋난다 — 이번처럼 소프트 쪽이 하드 쪽보다 크면 강등이 하드킬 직전에야(또는 아예) 진입해 보호장치가 무력화된다. 같은 액션을 감싸는 두 데드라인 값은 항상 하나의 SSOT 상수에서 파생시킬 것 ([403][415]가 지적한 "내부 워치독 vs 외곽 subprocess timeout" 대소관계 문제의 동일 계열 — 이번엔 방향이 반대: 안쪽 보호장치가 바깥쪽 하드킬보다 늦게 작동).
+
+---
+
+## [437] 테마 사실성 게이트 — '조+억' 복합 표기 본문 대조가 gt 채우기와 비대칭해 실제 통계 오차단 (2026-07-14)
+
+- **증상**: `JARVIS00_INFRA.harness.theme-publish-테마파크-naver` step ③ 네이버 대본 생성이 `[사실성] 출처·데이터 미확인: 국내 테마파크업 전체 매출액은 2024년 1조 3,863억원으로 2023년의 1조 3,750억원보다 늘었어요` 로 attempt=1 차단.
+- **환경**: `JARVIS02_WRITER/law_enforcer.py` `_claim_all_grounded()` (호출: `prepublish_gate.py` L113 통합 사실성 레그, `law_enforcer.factuality_issues` L1695 양쪽 공유).
+- **원인**: `_collect_gt_floats()`(ground-truth 채우기)는 소스 코퍼스의 'N조 M억' 복합 표기를 `_compound_magnitudes()`로 결합 magnitude(1조 3,863억→1.3863e12)까지 gt 에 등록하지만, `_claim_all_grounded()`(본문 claim 대조)는 이 결합 파서를 쓰지 않고 `_NUMERIC_UNIT_RE`가 쪼갠 "1조"(1e12)·"3,863억"(3.863e11)을 *개별* grounding 요구했다. 소스 문서가 같은 통계를 축약형("13,863억원")으로만 갖고 있으면 gt 에 결합값(1.3863e12)만 존재하고 "1조"·"3,863억" 개별 성분은 없어 진짜 사실도 영구 미확인 차단됨(gt 채우기와 본문 대조의 비대칭 버그).
+- **헛다리**: 없음 — ERRORS [382](경제 브리핑, 동일 compound 클래스)가 gt 채우기 쪽만 고쳤던 선례를 먼저 확인, 이번엔 본문 대조 쪽의 비대칭임을 바로 특정.
+- **해결**: `_claim_all_grounded()` 에 `_COMPOUND_JOEOK_RE` 스캔 추가 — 본문의 'N조 M억(천억)' 구간을 결합 magnitude 로 먼저 gt 대조(±5%/floor·ceil `grounds()`), 통과 시 그 span 내부의 개별 분리 토큰은 재검사 생략. 실패 시 즉시 차단(진짜 창작 수치는 여전히 차단 유지 — 회귀 테스트로 확인: 무관 코퍼스 대조 시 False 유지).
+- **파일**: `JARVIS02_WRITER/law_enforcer.py` (`_claim_all_grounded`).
+- **교훈**: grounding 정답(gt)을 만드는 파서와 claim 을 검사하는 파서가 *같은 복합 표기 인식 능력*을 가져야 한다 — 한쪽만 compound-aware 이면 소스·본문의 표기 스타일이 다를 때(축약형 vs 조+억 분리형) 대칭이 깨져 진짜 통계가 오차단된다. 새 숫자 포맷 파서 추가 시 gt 채우기 쪽뿐 아니라 claim 대조 쪽에도 동일하게 적용했는지 확인할 것.
+
+---
+
 ## [436] 테마 발행 harness freeze — `_collect_tier()` 순차 3회 호출에 beat() 누락 (2026-07-13)
 
 - **증상**: `theme-publish-고령화 사회(노인복지)-naver` harness 가 `attempt=1 step=전체: 멈춤(freeze) 302s > 300s 무진전` 로 abort. RuntimeError, source=harness.

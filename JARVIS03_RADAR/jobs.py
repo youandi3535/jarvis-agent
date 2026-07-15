@@ -42,7 +42,8 @@ _PYTHON = sys.executable
 
 
 
-def _run_script_checked(script: Path, args: list = None, label: str = "") -> None:
+def _run_script_checked(script: Path, args: list = None, label: str = "",
+                         timeout_sec: float | None = None) -> None:
     """★ 하네스용 스크립트 실행 — 실패 시 RuntimeError raise (harness 가 재시도).
 
     returncode != 0 또는 timeout 발생 시 Exception 을 raise 하여
@@ -54,10 +55,14 @@ def _run_script_checked(script: Path, args: list = None, label: str = "") -> Non
     OS 프로세스라 부모 harness 의 _GLOBAL_BEAT 에 보이지 않는다 — 정상적으로 5분 넘게 걸리는
     실행도 그대로 freeze 오탐(300s 무진전)으로 잡혔다. 자식이 살아있는 동안 poll 간격마다
     beat() 로 하네스에 진행 신호를 전달해 오탐을 막는다.
+
+    timeout_sec: 호출자가 harness deadline_sec 을 늘렸을 때 함께 늘려야 하는 subprocess 외곽
+    timeout (ERRORS 트렌드 수집 데드라인 초과 후속) — 미지정 시 기본 _SUBPROCESS_TIMEOUT_SEC.
     """
     cmd = [_PYTHON, str(script)] + (args or [])
     lbl = label or script.name
     _log.info(f"▶ {lbl} 시작")
+    _sub_timeout = float(timeout_sec) if timeout_sec else _SUBPROCESS_TIMEOUT_SEC
     try:
         from JARVIS00_INFRA.watchdog import beat as _wd_beat
     except ImportError:
@@ -68,14 +73,14 @@ def _run_script_checked(script: Path, args: list = None, label: str = "") -> Non
     def _run_blocking():
         return subprocess.run(
             cmd, cwd=str(script.parent),
-            capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_SEC,
+            capture_output=True, text=True, timeout=_sub_timeout,
         )
 
     exe = ThreadPoolExecutor(max_workers=1)
     try:
         fut = exe.submit(_run_blocking)
         poll = 15.0                       # harness freeze_sec(300s) 보다 충분히 작게
-        wall_cap = _SUBPROCESS_TIMEOUT_SEC + 30.0   # subprocess 자체 timeout 위 안전 마진
+        wall_cap = _sub_timeout + 30.0   # subprocess 자체 timeout 위 안전 마진
         waited = 0.0
         result = None
         while result is None:
@@ -87,7 +92,7 @@ def _run_script_checked(script: Path, args: list = None, label: str = "") -> Non
                 if waited >= wall_cap:
                     raise RuntimeError(f"{lbl} 타임아웃 ({wall_cap:.0f}s, 강제 포기)")
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"{lbl} 타임아웃 ({_SUBPROCESS_TIMEOUT_SEC:.0f}s)")
+        raise RuntimeError(f"{lbl} 타임아웃 ({_sub_timeout:.0f}s)")
     finally:
         exe.shutdown(wait=False)   # 내부 스레드 leak 가능 — 메인 흐름 비블로킹 우선(_bounded()·llm.py 와 동일 정책)
 
@@ -116,6 +121,7 @@ def _run_with_harness(
     verify_fn: Optional[Callable] = None,
     send_fn: Optional[Callable] = None,
     max_attempts: int = 3,
+    deadline_sec: Optional[float] = None,
 ) -> None:
     """★ 하네스 5-Layer 게이트 래퍼 — 전체 잡에 "수정→기록→누적→순환" 적용.
 
@@ -125,6 +131,11 @@ def _run_with_harness(
         verify_fn:   선택 — run_fn() 결과를 받아 추가 검증. 오류 문자열 list 반환.
         send_fn:     선택 — 검증 통과 후 notify/저장 등 송출. run_fn() 결과를 인자로 받음.
         max_attempts: 하네스 재시도 한도 (기본 3)
+        deadline_sec: 선택 — 액션 전체 데드라인(초). 미지정 시 harness 기본값
+                      (DEFAULT_ACTION_DEADLINE_SEC=3600, 60분 — auto_repair 심층감사용 안전망).
+                      run_fn 이 1회 실행에도 오래 걸리는 외부 API 배치 수집이면서 max_attempts>1
+                      인 경우, 재시도 누적 시간이 기본 60분을 넘을 수 있어 명시 지정 필요
+                      (트렌드 수집 데드라인 초과 사고 후속).
     """
     # ★ P1-③ 패치 (사용자 박제 2026-05-18 — ADR 009 v2): harness ImportError fallback 제거.
     # 이전: harness 미가용 시 직접 실행 (검증 0회 우회 송출 위험).
@@ -172,6 +183,8 @@ def _run_with_harness(
         if send_fn:
             send_fn(state.get("__result__"))
 
+    from JARVIS00_INFRA.watchdog import DEFAULT_ACTION_DEADLINE_SEC as _DFLT_DEADLINE
+
     run_action(ActionDefinition(
         name=name,
         steps=[_step],
@@ -179,6 +192,7 @@ def _run_with_harness(
         fix=_fix,    # ★ "수정→기록→누적→순환" 전체 에이전트 디폴트 (사용자 박제 2026-05-18)
         send=_send,
         max_attempts=max_attempts,
+        deadline_sec=float(deadline_sec) if deadline_sec else _DFLT_DEADLINE,
     ))
 
 
@@ -203,15 +217,25 @@ def _verify_trends(_result) -> list:
         return []
 
 
+# ★ 트렌드 수집 전용 데드라인 (사용자 박제 — StuckError "데드라인 초과 3867s>3600s" 후속).
+#   pytrends 배치(5개씩+1.5초 딜레이)+네이버 DataLab+LLM 각도 분석이 순차 실행되어 1회 소요가
+#   길고, harness max_attempts(기본 3) 재시도가 겹치면 DEFAULT_ACTION_DEADLINE_SEC(60분,
+#   auto_repair 심층감사용 안전망)를 쉽게 초과한다. 90분으로 별도 지정 + subprocess 외곽
+#   timeout 도 함께 늘려야 harness 데드라인보다 subprocess timeout 이 먼저 터지지 않는다.
+_TRENDS_DEADLINE_SEC = 5400  # 90분
+
+
 def job_collect_trends() -> None:
     """★ 하네스 래핑 — 실패 시 자동 재시도 + GUARDIAN 기록."""
     _log.info("=" * 50)
     _log.info("📡 [JARVIS03] 트렌드 수집 시작")
 
     def _run():
-        _run_script_checked(_RADAR_DIR / "radar_main.py", label="트렌드 수집")
+        _run_script_checked(_RADAR_DIR / "radar_main.py", label="트렌드 수집",
+                             timeout_sec=_TRENDS_DEADLINE_SEC + 300)
 
-    _run_with_harness("트렌드 수집", _run, verify_fn=_verify_trends)
+    _run_with_harness("트렌드 수집", _run, verify_fn=_verify_trends,
+                       deadline_sec=_TRENDS_DEADLINE_SEC)
 
     # ★ 트렌드 수집 완료 직후 topic_pack 즉석 생성 (사용자 박제 2026-07-11 — ERRORS [406])
     # CLAUDE_RADAR.md "job_collect_trends 말미 자동 생성" 규정 구현.

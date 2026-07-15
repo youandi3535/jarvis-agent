@@ -453,6 +453,28 @@
       "card_radius": 28,
       "source": "learned",
       "created": "2026-07-14"
+    },
+    {
+      "id": "warm-stone-clay",
+      "name": "웜스톤 테라코타",
+      "aesthetic": "미니멀 모노톤+강조 1색",
+      "hero": [
+        "#211d1a",
+        "#332c27"
+      ],
+      "ink": "#2b2622",
+      "a1": "#c1440e",
+      "a1s": "#f3b58c",
+      "a2": "#3f6b5c",
+      "a2s": "#b8d8cd",
+      "soft": "#faf7f3",
+      "muted": "#8a8078",
+      "eyebrow": "#f0b46a",
+      "grid": "#ece7e1",
+      "hero_texture": "dots",
+      "card_radius": 22,
+      "source": "learned",
+      "created": "2026-07-15"
     }
   ]
 }
