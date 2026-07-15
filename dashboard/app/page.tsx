@@ -321,13 +321,13 @@ function AgentCard({
           {label}
         </div>
         {/* 역할 */}
-        <div style={{ textAlign:"center",fontSize:9.5,color:isActive ? "#7a8a9a" : "#56637a",marginBottom:4 }}>{sub}</div>
+        <div style={{ textAlign:"center",fontSize:9.5,color:isActive ? "#b8c8d8" : "#8a9fb8",marginBottom:4 }}>{sub}</div>
         {/* 데이터 칩 */}
         <div style={{
           background:isActive ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.45)",
           borderRadius:5,padding:"3px 6px",
           fontSize:9.5,
-          color:isActive ? "#8ba0b8" : showBusy ? "#f59e0b" : "#6b7a94",
+          color:isActive ? "#b8cce0" : showBusy ? "#f59e0b" : "#9aafc8",
           textAlign:"center",
           borderTop:`1px solid ${isActive ? color+"55" : showBusy ? "#f59e0b44" : color+"28"}`,
           overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
@@ -684,7 +684,7 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
                 <div key={it.label} style={{ display:"flex",alignItems:"center",gap:6 }}>
                   <div style={{ width:20,height:2,background:it.col,borderRadius:1,
                     boxShadow:`0 0 4px ${it.col}88`,flexShrink:0 }}/>
-                  <span style={{ fontSize:9,color:"#7a8aaa" }}>{it.label}</span>
+                  <span style={{ fontSize:9,color:"#a8bcd0" }}>{it.label}</span>
                 </div>
               ))}
             </div>
@@ -741,7 +741,7 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
                   }}>{item.ts}</span>
                   <span style={{
                     fontSize:8.5, lineHeight:1.45,
-                    color: i === 0 ? "#6ee7b7" : "#4a5a70",
+                    color: i === 0 ? "#6ee7b7" : "#7a90a8",
                   }}>{item.msg}</span>
                 </div>
               ))}
