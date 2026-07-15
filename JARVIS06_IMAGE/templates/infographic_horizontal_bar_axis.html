@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0: #ffffff;
+    --hero1: #ffffff;
+    --ink: #1c2333;
+    --a1: #3f6ea8;
+    --a1s: #c05a30;
+    --a2: #2d7a4f;
+    --a2s: #8a5a9e;
+    --soft: #f6f6f3;
+    --muted: #767671;
+    --eyebrow: #6d7178;
+    --grid: #dcdad2;
+  }
+
+  *{ box-sizing:border-box; }
+
+  html,body{
+    margin:0;
+    padding:0;
+    width:1280px;
+    background:var(--hero0);
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* 히어로 밴드·카드 컨테이너·배경 질감 없음 — 순백 캔버스 전체가 하나의 통계 리포트형
+     수평 막대 차트. head/hero-stats/mini-cards/foot 는 전부 선택적(:empty 은폐) —
+     모두 비우면 좌측 라벨+검정 축선+막대만 남아 캔버스를 그대로 채운다. */
+  .canvas{
+    width:1280px;
+    min-height:480px;
+    margin:0 auto;
+    padding:56px 64px 48px;
+    background:var(--hero0);
+    display:flex;
+    flex-direction:column;
+  }
+
+  .head{ flex:0 0 auto; }
+
+  .eyebrow{
+    font-size:14px;
+    font-weight:600;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 8px;
+  }
+  .eyebrow:empty{ display:none; margin:0; }
+
+  .title{
+    font-size:32px;
+    font-weight:800;
+    line-height:1.26;
+    letter-spacing:-.01em;
+    color:var(--ink);
+    margin:0 0 8px;
+  }
+  .title:empty{ display:none; margin:0; }
+
+  .subtitle{
+    font-size:16px;
+    font-weight:400;
+    line-height:1.55;
+    color:var(--muted);
+    max-width:1000px;
+    margin:0 0 18px;
+  }
+  .subtitle:empty{ display:none; margin:0; }
+
+  /* ── 선택적 히어로 수치 — 미사용 시 자동 숨김 ── */
+  .hero-stats{
+    display:flex;
+    flex-wrap:wrap;
+    gap:28px;
+    margin:0 0 18px;
+  }
+  .hero-stats:empty{ display:none; margin:0; }
+  .hero-stats .stat{ display:flex; flex-direction:column; gap:4px; }
+  .hero-stats .stat .num{ font-size:28px; font-weight:800; color:var(--ink); line-height:1.1; }
+  .hero-stats .stat .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ── 막대 그룹 컨테이너 — 최대 3개(CHART_1~3). 빈 그룹은 자동 접힘(flex gap 특성)
+     → 1개만 채워도 나머지 간격 없이 차트가 캔버스 중앙에 자연스럽게 자리잡는다 ── */
+  .bars-groups{
+    flex:1 1 auto;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    gap:48px;
+  }
+
+  /* ── 차트 슬롯 공통 — 빈 슬롯 자동 은폐 ── */
+  section.chart-slot{ width:100%; }
+  section.chart-slot:empty{ display:none; }
+  section.chart-slot:has([data-jarvis-empty]){ display:none; }
+
+  /* 수평 막대 리스트 — CSS Grid 2열(라벨/막대)로 모든 행의 컬럼을 픽셀 단위로 정렬시킨 뒤,
+     ::before 로 그 경계선에 "하나의 연속된 검정 축선"을 그린다(행마다 끊어진 짧은 선 아님 —
+     이미지 전체에서 유일한 구조선). 카드·배경박스·둥근모서리·그림자 전혀 없음.
+     주입 마크업 예시(행 반복 — 라벨/트랙이 grid 자식으로 번갈아 옴):
+       <div class="bar-label">Europe</div>
+       <div class="bar-track">
+         <div class="bar-fill bar-c1" style="width:82%"></div>
+         <span class="bar-value">79.1 years</span>
+       </div>
+     값 내림차순(위→아래)으로 정렬해 주입. 색상 클래스는 행 순서대로
+     bar-c1→bar-c2→bar-c3→bar-c4 고정(임의 배정·재순환 금지). */
+  section.chart-slot--bars{
+    display:grid;
+    grid-template-columns:210px 1fr;
+    column-gap:0;
+    row-gap:40px;
+    align-items:center;
+    position:relative;
+  }
+
+  /* 유일한 구조선 — 좌측 라벨과 막대 사이, 차트 전체 높이를 관통하는 단일 검정 축선(y축) */
+  section.chart-slot--bars::before{
+    content:"";
+    position:absolute;
+    top:0;
+    bottom:0;
+    left:210px;
+    width:2px;
+    background:var(--ink);
+  }
+
+  .bar-label{
+    padding-right:20px;
+    text-align:right;
+    font-size:22px;
+    font-weight:800;
+    line-height:1.3;
+    color:var(--ink);
+  }
+
+  .bar-track{
+    display:flex;
+    align-items:center;
+    min-height:22px;
+    padding-left:22px;
+  }
+
+  .bar-fill{
+    height:22px;
+    min-width:6px;
+    border-radius:0 4px 4px 0; /* 데이터 끝(우측)만 라운드, 축선과 맞닿는 시작점은 각짐 */
+  }
+
+  .bar-c1{ background:var(--a1); }
+  .bar-c2{ background:var(--a1s); }
+  .bar-c3{ background:var(--a2); }
+  .bar-c4{ background:var(--a2s); }
+
+  .bar-value{
+    margin-left:12px;
+    font-size:18px;
+    font-weight:500;
+    color:var(--muted);
+    white-space:nowrap;
+  }
+
+  /* ── 선택적 미니 카드 — 미사용 시 자동 숨김 ── */
+  .mini-cards{
+    display:flex;
+    flex-wrap:wrap;
+    gap:18px;
+    margin:32px 0 0;
+  }
+  .mini-cards:empty{ display:none; margin:0; }
+  .mini-cards .mini-card{
+    flex:1 1 200px;
+    padding:16px 18px;
+    background:var(--soft);
+    border:1px solid var(--grid);
+  }
+  .mini-cards .mini-card .num{ font-size:24px; font-weight:800; color:var(--ink); }
+  .mini-cards .mini-card .lbl{ font-size:14px; color:var(--muted); margin-top:4px; }
+
+  /* ── 푸터 — 출처/브랜드 둘 다 비면 구분선까지 완전히 접힘(축선 1개 원칙 유지) ── */
+  .foot{
+    flex:0 0 auto;
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:24px;
+    margin:28px 0 0;
+    padding-top:14px;
+    border-top:1px solid var(--grid);
+  }
+  .foot:not(:has(.source:not(:empty))):not(:has(.brand:not(:empty))){ display:none; }
+  .source{ font-size:14px; color:var(--muted); }
+  .source:empty{ display:none; }
+  .brand{ font-size:14px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--eyebrow); }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <header class="head">
+      <p class="eyebrow">{EYEBROW}</p>
+      <h1 class="title">{TITLE}</h1>
+      <p class="subtitle">{SUBTITLE}</p>
+    </header>
+
+    <div class="hero-stats">{HERO_STATS}</div>
+
+    <div class="bars-groups">
+      <section class="chart-slot chart-slot--bars">{CHART_1}</section>
+      <section class="chart-slot chart-slot--bars">{CHART_2}</section>
+      <section class="chart-slot chart-slot--bars">{CHART_3}</section>
+    </div>
+
+    <div class="mini-cards">{MINI_CARDS}</div>
+
+    <footer class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0: #ffffff;
+    --hero1: #f5f6fa;
+    --ink: #1f2142;
+    --a1: #ef6f9c;
+    --a1s: #f2953f;
+    --a2: #3fae8f;
+    --a2s: #2255c0;
+    --soft: #f7f7f9;
+    --muted: #75757c;
+    --eyebrow: #6a6e78;
+    --grid: #e4e3ea;
+  }
+
+  *{ box-sizing:border-box; }
+
+  html,body{
+    margin:0;
+    padding:0;
+    width:1280px;
+    background:var(--hero0);
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* 히어로 밴드·좌측 패널 없음 — 순백 캔버스 위 수평 타임라인(아이콘→도넛→텍스트) 반복 그리드.
+     head/hero-stats, mini-cards/foot 는 전부 선택적 — 비어 있으면 완전히 접혀
+     캔버스가 곧바로 타임라인으로 시작/종료되도록(:empty 은폐) 설계됨. */
+  .canvas{
+    width:1280px;
+    min-height:480px;
+    margin:0 auto;
+    padding:56px 64px 48px;
+    background:var(--hero0);
+    display:flex;
+    flex-direction:column;
+  }
+
+  .head{ flex:0 0 auto; }
+
+  .eyebrow{
+    font-size:14px;
+    font-weight:600;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 8px;
+  }
+  .eyebrow:empty{ display:none; margin:0; }
+
+  .title{
+    font-size:32px;
+    font-weight:800;
+    line-height:1.26;
+    letter-spacing:-.01em;
+    color:var(--ink);
+    margin:0 0 8px;
+  }
+  .title:empty{ display:none; margin:0; }
+
+  .subtitle{
+    font-size:16px;
+    font-weight:400;
+    line-height:1.55;
+    color:var(--muted);
+    max-width:1000px;
+    margin:0 0 18px;
+  }
+  .subtitle:empty{ display:none; margin:0; }
+
+  /* ── 선택적 히어로 수치 — 미사용 시 자동 숨김 ── */
+  .hero-stats{
+    display:flex;
+    flex-wrap:wrap;
+    gap:28px;
+    margin:0 0 18px;
+  }
+  .hero-stats:empty{ display:none; margin:0; }
+  .hero-stats .stat{ display:flex; flex-direction:column; gap:4px; }
+  .hero-stats .stat .num{ font-size:28px; font-weight:800; color:var(--ink); line-height:1.1; }
+  .hero-stats .stat .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ── 타임라인 그룹 컨테이너 — 최대 3개(CHART_1~3), 각 그룹(section) 안에 caller 가
+     .timeline-row 1개(스텝 N개 자유)를 주입. 빈 그룹은 자동으로 접힘 ── */
+  .timeline-groups{
+    flex:1 1 auto;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    gap:48px;
+  }
+
+  /* ── 차트 슬롯 공통 — 빈 슬롯 자동 은폐 ── */
+  section.chart-slot{ width:100%; }
+  section.chart-slot:empty{ display:none; }
+  section:has([data-jarvis-empty]){ display:none; }
+
+  /* 수평 타임라인 — 아이콘 카드 → 도넛(링) 차트 → 제목·설명 3단 수직 구성을 N회 반복.
+     주입 마크업 예시(5스텝 기준 — 실제 스텝 수는 자유, 균등폭으로 자동 배치):
+
+       <div class="timeline-row">
+         <div class="step step-c1">
+           <div class="step-icon-frame">
+             <svg class="step-icon" viewBox="0 0 64 64" fill="none" stroke="var(--muted)" stroke-width="1.6">
+               <circle cx="32" cy="32" r="18"/><path d="M32 14 L32 32 L44 38"/>
+             </svg>
+             <span class="step-arrow" aria-hidden="true">&#8250;</span>
+           </div>
+           <div class="step-donut">
+             <svg class="ring" viewBox="0 0 120 120">
+               <circle class="ring-track" cx="60" cy="60" r="50"/>
+               <circle class="ring-arc" cx="60" cy="60" r="50" stroke-dasharray="94 314"/>
+             </svg>
+             <span class="ring-pct">30%</span>
+           </div>
+           <h3 class="step-title">단계 제목</h3>
+           <p class="step-desc">좌측 정렬 4줄 분량 설명 텍스트. 연회색으로 표시되며
+           단계의 핵심 내용을 간결하게 전달한다.</p>
+         </div>
+         <div class="step step-c2"> ... </div>
+         <div class="step step-c3"> ... </div>
+         <div class="step step-c4"> ... </div>
+         <div class="step step-c1"> ... </div>  <!-- 5번째부터 step-c1 색상으로 순환 반복 -->
+       </div>
+
+     색상 클래스는 스텝 순서대로 step-c1→step-c2→step-c3→step-c4→step-c1... 고정 반복
+     (핑크→오렌지→민트→블루→핑크 순환, CVD 안전성 검증 완료 — 임의 배정 금지).
+     ring-arc 의 stroke-dasharray 첫 값 = 원주(2πr≈314.16) × 퍼센트, 두 번째 값은 314 고정. */
+  .timeline-row{
+    position:relative;
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:28px;
+  }
+
+  /* 연속 리본 커넥터 — 도넛 수직 중심 높이에서 곡선(사인파)으로 전 스텝을 관통.
+     그라데이션(색상)은 background, 곡선 형태는 mask 로 분리 → CSS 변수만으로 색상 구현 */
+  .timeline-row::before{
+    content:"";
+    position:absolute;
+    left:0; right:0;
+    top:220px;
+    height:40px;
+    z-index:0;
+    pointer-events:none;
+    background:linear-gradient(90deg, var(--a1), var(--a1s), var(--a2), var(--a2s), var(--a1));
+    -webkit-mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1000 40' preserveAspectRatio='none'><path d='M0,20 C125,3 125,37 250,20 C375,3 375,37 500,20 C625,3 625,37 750,20 C875,3 875,37 1000,20' fill='none' stroke='black' stroke-width='5'/></svg>");
+    mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1000 40' preserveAspectRatio='none'><path d='M0,20 C125,3 125,37 250,20 C375,3 375,37 500,20 C625,3 625,37 750,20 C875,3 875,37 1000,20' fill='none' stroke='black' stroke-width='5'/></svg>");
+    -webkit-mask-size:100% 100%;
+    mask-size:100% 100%;
+    -webkit-mask-repeat:no-repeat;
+    mask-repeat:no-repeat;
+  }
+
+  .step{
+    position:relative;
+    z-index:1;
+    flex:1 1 0;
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:20px;
+  }
+
+  /* 아이콘 카드 — 약 200x160px, 모서리 반경 22px. 좌측·상단 점선 + 우측·하단 실선 테두리
+     (진행 방향 암시) + 우측 중앙 화살표. 배경은 연회색 플랫(#F7F7F9), 그림자 없음 */
+  .step-icon-frame{
+    position:relative;
+    width:200px;
+    height:160px;
+    margin:0 auto;
+    border-radius:22px;
+    background:var(--soft);
+    border-width:2px;
+    border-style:dotted solid solid dotted; /* 상 우 하 좌 순서 */
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .step-icon{ width:64px; height:64px; }
+
+  .step-arrow{
+    position:absolute;
+    right:-16px;
+    top:50%;
+    transform:translateY(-50%);
+    font-size:24px;
+    font-weight:700;
+    line-height:1;
+  }
+  .step:last-child .step-arrow{ display:none; }
+
+  /* 도넛(링) 차트 — 아이콘 카드 바로 아래. 배경 원(hero1)이 리본 커넥터를 가려
+     "리본이 도넛을 관통해 흐르는" 시각 효과. 진행률은 ring-arc stroke-dasharray 로 표현 */
+  .step-donut{
+    position:relative;
+    width:120px;
+    height:120px;
+    border-radius:50%;
+    background:var(--hero1);
+    z-index:2;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .step-donut .ring{ width:100%; height:100%; transform:rotate(-90deg); }
+  .ring-track{ fill:none; stroke:var(--grid); stroke-width:10; }
+  .ring-arc{ fill:none; stroke-width:10; stroke-linecap:round; }
+  .ring-pct{
+    position:absolute;
+    top:50%; left:50%;
+    transform:translate(-50%,-50%);
+    font-size:22px;
+    font-weight:800;
+    color:var(--ink);
+  }
+
+  .step-title{
+    width:100%;
+    text-align:left;
+    font-size:20px;
+    font-weight:800;
+    line-height:1.32;
+    color:var(--ink);
+    margin:0;
+  }
+
+  .step-desc{
+    width:100%;
+    text-align:left;
+    font-size:16px;
+    line-height:1.6;
+    color:var(--muted);
+    margin:0;
+    display:-webkit-box;
+    -webkit-line-clamp:4;
+    -webkit-box-orient:vertical;
+    overflow:hidden;
+  }
+
+  /* 스텝 강조색 순환 — step-c1~c4 4색 고정 반복(5번째 스텝부터 step-c1 재사용) */
+  .step-c1 .step-icon-frame{ border-color:var(--a1); }
+  .step-c1 .step-arrow{ color:var(--a1); }
+  .step-c1 .ring-arc{ stroke:var(--a1); }
+
+  .step-c2 .step-icon-frame{ border-color:var(--a1s); }
+  .step-c2 .step-arrow{ color:var(--a1s); }
+  .step-c2 .ring-arc{ stroke:var(--a1s); }
+
+  .step-c3 .step-icon-frame{ border-color:var(--a2); }
+  .step-c3 .step-arrow{ color:var(--a2); }
+  .step-c3 .ring-arc{ stroke:var(--a2); }
+
+  .step-c4 .step-icon-frame{ border-color:var(--a2s); }
+  .step-c4 .step-arrow{ color:var(--a2s); }
+  .step-c4 .ring-arc{ stroke:var(--a2s); }
+
+  /* ── 선택적 미니 카드 — 미사용 시 자동 숨김 ── */
+  .mini-cards{
+    display:flex;
+    flex-wrap:wrap;
+    gap:18px;
+    margin:32px 0 0;
+  }
+  .mini-cards:empty{ display:none; margin:0; }
+  .mini-cards .mini-card{
+    flex:1 1 200px;
+    padding:16px 18px;
+    background:var(--soft);
+    border:1px solid var(--grid);
+  }
+  .mini-cards .mini-card .num{ font-size:24px; font-weight:800; color:var(--ink); }
+  .mini-cards .mini-card .lbl{ font-size:14px; color:var(--muted); margin-top:4px; }
+
+  /* ── 푸터 — 출처/브랜드 둘 다 비면 구분선까지 완전히 접힘 ── */
+  .foot{
+    flex:0 0 auto;
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:24px;
+    margin:28px 0 0;
+    padding-top:14px;
+    border-top:1px solid var(--grid);
+  }
+  .foot:not(:has(.source:not(:empty))):not(:has(.brand:not(:empty))){ display:none; }
+  .source{ font-size:14px; color:var(--muted); }
+  .source:empty{ display:none; }
+  .brand{ font-size:14px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--eyebrow); }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <header class="head">
+      <p class="eyebrow">{EYEBROW}</p>
+      <h1 class="title">{TITLE}</h1>
+      <p class="subtitle">{SUBTITLE}</p>
+    </header>
+
+    <div class="hero-stats">{HERO_STATS}</div>
+
+    <div class="timeline-groups">
+      <section class="chart-slot chart-slot--timeline">{CHART_1}</section>
+      <section class="chart-slot chart-slot--timeline">{CHART_2}</section>
+      <section class="chart-slot chart-slot--timeline">{CHART_3}</section>
+    </div>
+
+    <div class="mini-cards">{MINI_CARDS}</div>
+
+    <footer class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </footer>
+  </div>
+</body>
+</html>

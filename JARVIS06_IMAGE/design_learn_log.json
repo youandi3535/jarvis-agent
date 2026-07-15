@@ -141,5 +141,14 @@
     "aesthetic": "웜 파스텔 라이프스타일(아이보리·둥근 모티프)",
     "via": "LLM",
     "total": 19
+  },
+  {
+    "date": "2026-07-15",
+    "action": "learned",
+    "id": "warm-stone-clay",
+    "name": "웜스톤 테라코타",
+    "aesthetic": "미니멀 모노톤+강조 1색",
+    "via": "LLM",
+    "total": 20
   }
 ]
