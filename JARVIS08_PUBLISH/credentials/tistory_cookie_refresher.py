@@ -255,16 +255,32 @@ def check_cookie_valid(driver) -> bool:
         #   쿠키가 유효 판정되는 오탐. manage 진입 시 /auth/login 리다이렉트 여부가 진실.
         try:
             from selenium.common.exceptions import UnexpectedAlertPresentException
+
+            def _dismiss_alert_if_any():
+                """열려 있는 alert (임시저장 팝업 등) 를 dismiss. 없으면 no-op."""
+                try:
+                    driver.switch_to.alert.dismiss()
+                    _s(1)
+                except Exception:
+                    pass
+
             try:
                 driver.get(f"https://{TS_BLOG}.tistory.com/manage/newpost/")
                 _s(3)
             except UnexpectedAlertPresentException:
+                _dismiss_alert_if_any()
+
+            # ★ current_url 접근 시에도 alert 잔류 가능 (편집기 임시저장 confirm dialog)
+            _cur = ""
+            try:
+                _cur = (driver.current_url or "").lower()
+            except UnexpectedAlertPresentException:
+                _dismiss_alert_if_any()
                 try:
-                    driver.switch_to.alert.dismiss()   # 임시저장 alert — 새 글 기준
-                    _s(1)
+                    _cur = (driver.current_url or "").lower()
                 except Exception:
-                    pass
-            _cur = (driver.current_url or "").lower()
+                    _cur = ""
+
             if "/auth/login" in _cur or "accounts.kakao.com" in _cur:
                 print("  ❌ 쿠키 만료 — manage 진입이 로그인으로 리다이렉트")
                 return False

@@ -220,6 +220,12 @@ for _d in (ECONOMIC_IMG_DIR, ECONOMIC_IMG_DIR_TISTORY):
 # 본체는 JARVIS06_IMAGE/cleaners/economic_image_cleaner.py.
 from JARVIS06_IMAGE.cleaners import cleanup_economic_images
 
+# ★ 블로그(플랫폼) 액션 하드 데드라인 SSOT (watchdog.py) — harness ActionDefinition.deadline_sec 와
+#   JARVIS_LLM_DEADLINE_TS(LLM 재시도 강등 기준) 양쪽이 반드시 같은 값을 봐야 한다. 두 값이
+#   어긋나면(LLM 쪽이 더 크면) "잔여 <10분 강등"이 하드 킬 전에 트리거되지 않아 watchdog 이
+#   재시도·백오프 도중 강제 종료한다 (ERRORS 참조 — 경제 브리핑 티스토리 데드라인 초과).
+from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC
+
 TG_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
@@ -370,11 +376,13 @@ def run(post_naver=True, post_tistory=True):
           f"티스토리:{' ON' if post_tistory else 'OFF'}")
     print(f"{'='*50}")
 
-    # ★ 발행 시간 보호 (ERRORS [288][289] — 2026-07-03): 대본 생성 LLM 데드라인 45분.
+    # ★ 발행 시간 보호 (ERRORS [288][289] — 2026-07-03): 대본 생성 LLM 데드라인.
     #   잔여 <10분이면 shared/llm.invoke_text 가 재시도 1회·백오프 0 으로 강등 —
     #   rate-limit 폭풍 날에도 발행(Layer 4)이 subprocess 타임아웃 전에 시작되도록 보장.
+    #   ★ 액션 시작 시 바로 아래에서 BLOG_ACTION_DEADLINE_SEC 기준으로 다시 리셋되므로
+    #   이 초기값은 (수집 등) 액션 진입 전 구간에만 의미 — 반드시 같은 SSOT 상수 사용.
     import time as _tm_dl
-    os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_dl.time() + 2700)
+    os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_dl.time() + BLOG_ACTION_DEADLINE_SEC)
 
     tg(f"📰 경제 브리핑 포스팅 시작 ({TODAY_STR})\n"
        f"1주제 공동수집 → 네이버·티스토리 각각 다른 대본으로 발행")
@@ -727,7 +735,7 @@ def run(post_naver=True, post_tistory=True):
         send=lambda st: _send_platform(st, "naver", "nv_draft", nv_publish,
                                        "naver_ok", "nv_pub_result", "__nv_send_attempted__"),
         max_attempts=3,
-        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
+        deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
     )
     _ts_action = ActionDefinition(
         name="경제 브리핑 발행 — 티스토리",
@@ -738,7 +746,7 @@ def run(post_naver=True, post_tistory=True):
         send=lambda st: _send_platform(st, "tistory", "ts_draft", ts_publish,
                                        "tistory_ok", "ts_pub_result", "__ts_send_attempted__"),
         max_attempts=3,
-        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
+        deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
     )
 
     _results: dict = {}          # platform → ActionResult (EP 결과 파일·incident 용)
@@ -768,8 +776,11 @@ def run(post_naver=True, post_tistory=True):
     import time as _tm_act
     if post_naver:
         # ★ 액션별 LLM 데드라인 (리뷰 확정 수정): 직렬화로 티스토리 시작이 늦어져
-        #   단일 45분 예산이면 티스토리 생성이 상시 강등됨 — 액션마다 40분 리셋.
-        os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + 2400)
+        #   단일 예산이면 티스토리 생성이 상시 강등됨 — 액션마다 리셋.
+        #   ★ 반드시 _nv_action.deadline_sec 와 동일한 SSOT 상수 — 더 큰 값을 쓰면
+        #   "잔여 <10분 강등"이 harness 하드 데드라인보다 늦게 트리거되어 watchdog 이
+        #   재시도·백오프 도중 강제 종료한다(경제 브리핑 티스토리 데드라인 초과 사고 원인).
+        os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
         _nv_res = run_action(
             _nv_action,
             input_data={"post_naver": True, "post_tistory": False,
@@ -792,6 +803,26 @@ def run(post_naver=True, post_tistory=True):
                 tg(f"🚫 경제 브리핑(네이버) harness max_attempts 도달 — 발행 차단\nattempts={_nv_res.attempts}")
     else:
         print("  ─ 네이버 건너뜀 (플래그 OFF)")
+        # ★ tistory-only 재발행: DB에서 오늘 네이버 경제 발행글의 키워드 복구
+        #   → ts_collect 폴백이 오늘 아침과 동일 주제(키워드)를 선택하도록.
+        if post_tistory and not nv_keyword:
+            try:
+                from shared.db import DB_PATH as _DB_PATH
+                import sqlite3 as _sq3b, datetime as _dtb
+                _today_s = _dtb.date.today().isoformat()
+                _con_b = _sq3b.connect(str(_DB_PATH))
+                _row_b = _con_b.execute(
+                    "SELECT source_keyword FROM post_analysis "
+                    "WHERE created_at LIKE ? AND platform='naver' AND post_type='economic' "
+                    "ORDER BY id DESC LIMIT 1",
+                    (f"{_today_s}%",),
+                ).fetchone()
+                _con_b.close()
+                if _row_b and _row_b[0]:
+                    nv_keyword = _row_b[0]
+                    print(f"  🔗 [tistory-only] 오늘 네이버 키워드 DB 복구: '{nv_keyword}'")
+            except Exception as _nv_ke:
+                print(f"  ⚠️ [tistory-only] 네이버 키워드 DB 조회 실패: {_nv_ke}")
 
     # ★ 네이버 수집 자체가 실패하면(키워드 없음 = topic_pack 빌드 실패) 티스토리도 건너뜀.
     # 동일 수집 경로(topic_pack)를 사용하므로 티스토리도 같은 이유로 실패 예상.
@@ -808,7 +839,8 @@ def run(post_naver=True, post_tistory=True):
 
     # ★ 티스토리는 네이버 *종결 후* 에만 시작 — 네이버 성패와 무관하게 독립 진행
     if post_tistory and not _concurrent_blocked and not _nv_collect_failed:
-        os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + 2400)
+        # ★ _ts_action.deadline_sec 과 동일한 SSOT 상수 (위 네이버 리셋과 동일 사유)
+        os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
         _ts_res = run_action(
             _ts_action,
             input_data={"post_naver": False, "post_tistory": True,
