@@ -65,6 +65,11 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
 
     수집 소스: 뉴스(Google+한국경제지) + 한국경제전문 + 블로그 + 웹(위키+지식백과) + 금융지표 + 논문
     """
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j09", f"{theme[:12]} 수집", ttl=1200)
+    except Exception:
+        pass
     log.info(f"[Engine] 수집 시작: theme='{theme}' sector='{sector}'")
     raw_docs: list[RawDocument] = []
 
@@ -391,6 +396,11 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
         {"docs": list[CollectionResult],  # 신뢰순 최대 15개 원시 문서
          "plan": dict}                    # 빈 dict (설계 LLM 제거 — _collect_tier가 plan 미사용)
     """
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j09", f"{theme[:12]} 리서치", ttl=1200)
+    except Exception:
+        pass
     from .models import (quota_group,
                          COLLECT_QUOTA_BUDGET, COLLECT_PAPER_CAP, COLLECT_API_CAP)
 

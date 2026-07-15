@@ -1255,6 +1255,11 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
     theme = (theme or "").strip()
     if not theme:
         return {"theme": theme, "datasets": []}
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j09", f"{theme[:12]} 차트수집", ttl=600)
+    except Exception:
+        pass
 
     _COLLECT_CACHE.clear()   # ★ per-run 수집 캐시 초기화 (이전 주제 잔재 제거 + 이번 run 내 재사용)
     datasets: list[dict] = []

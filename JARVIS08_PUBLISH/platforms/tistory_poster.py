@@ -159,8 +159,13 @@ def _make_driver():
     from selenium.webdriver.chrome.options import Options
     opts = Options()
     opts.add_argument("--start-maximized")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
+    opts.add_experimental_option("prefs", {
+        "credentials_enable_service": False,
+        "profile.password_manager_enabled": False,
+    })
     driver = webdriver.Chrome(options=opts)
     driver.implicitly_wait(3)
     return driver
