@@ -193,15 +193,17 @@ function mkRobot(color: string, uid: string, size = 50): string {
 // 에이전트 카드 (AGT 좌표는 레거시 참조용 — 엣지 라우팅은 path 문자열로 직접)
 // ═══════════════════════════════════════════════
 function AgentCard({
-  num, label, sub, color, stat, big = false, isActive = false,
-}: { num:string; label:string; sub:string; color:string; stat?:string; big?:boolean; isActive?:boolean }) {
+  num, label, sub, color, stat, big = false, isActive = false, isBusy = false, busyTask = "",
+}: { num:string; label:string; sub:string; color:string; stat?:string; big?:boolean; isActive?:boolean; isBusy?:boolean; busyTask?:string }) {
   const [hov, setHov] = useState(false);
   const w = big ? BIG_W : CARD_W, h = big ? BIG_H : CARD_H;
   const rSz = big ? 62 : 50;
+  // active(데이터 전달 중)가 busy(작업 중)보다 우선 — 동시엔 큰 모션만
+  const showBusy = isBusy && !isActive;
 
   return (
     <div style={{ position:"relative", width:w, height:h }}>
-      {/* 활성 맥동 링 — 카드 외부로 방사 */}
+      {/* 활성 맥동 링 — 카드 외부로 방사 (에이전트 간 데이터 전달) */}
       {isActive && [0, 0.55, 1.1].map((delay, i) => (
         <div key={i} style={{
           position:"absolute", inset:"-8px",
@@ -212,6 +214,19 @@ function AgentCard({
         }}/>
       ))}
 
+      {/* 행진 개미 테두리 — 에이전트 작업 진행 중 (데이터전달과 구분되는 별도 모션) */}
+      {showBusy && (
+        <div style={{ position:"absolute", inset:-1, pointerEvents:"none", zIndex:5 }}
+          dangerouslySetInnerHTML={{ __html:
+            `<svg width="${w+2}" height="${h+2}" viewBox="-1 -1 ${w+2} ${h+2}" xmlns="http://www.w3.org/2000/svg">` +
+            `<rect x="1" y="1" width="${w-2}" height="${h-2}" rx="12" ry="12"` +
+            ` fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="10 7" opacity="0.65">` +
+            `<animate attributeName="stroke-dashoffset" from="0" to="-68" dur="1.6s" repeatCount="indefinite"/>` +
+            `</rect></svg>`
+          }}
+        />
+      )}
+
       <div
         onMouseEnter={() => setHov(true)}
         onMouseLeave={() => setHov(false)}
@@ -219,7 +234,9 @@ function AgentCard({
           width:w, height:h, position:"relative", overflow:"hidden",
           background: isActive
             ? `linear-gradient(145deg,#1c2140 0%,#0e1020 100%)`
-            : `linear-gradient(145deg,#131827 0%,#0b0d1a 100%)`,
+            : showBusy
+              ? `linear-gradient(145deg,#1a1e2e 0%,#0c0f1c 100%)`
+              : `linear-gradient(145deg,#131827 0%,#0b0d1a 100%)`,
           border:`2px solid ${color}`,
           borderRadius:12,
           padding:"7px 9px",
@@ -231,7 +248,9 @@ function AgentCard({
             ? `0 0 36px ${color}66, 0 22px 55px rgba(0,0,0,0.65), inset 0 1px 0 ${color}55`
             : isActive
               ? `0 0 60px ${color}cc, 0 0 120px ${color}55, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}99`
-              : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
+              : showBusy
+                ? `0 0 22px ${color}55, 0 4px 18px rgba(0,0,0,0.5), inset 0 1px 0 ${color}44`
+                : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
           cursor:"default",
         }}
       >
@@ -261,15 +280,35 @@ function AgentCard({
         {/* 번호 + 상태 LED */}
         <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2 }}>
           <span style={{ fontSize:9,fontWeight:900,color,letterSpacing:1.5,opacity:isActive ? 1 : 0.7 }}>J{num}</span>
-          <span style={{
-            width:isActive ? 8 : 5, height:isActive ? 8 : 5,
-            borderRadius:"50%",
-            background:isActive ? color : "#4ade80",
-            boxShadow:isActive ? `0 0 16px ${color}, 0 0 32px ${color}66` : "0 0 6px #4ade80",
-            display:"inline-block",
-            animation:isActive ? "led-blink 0.45s ease-in-out infinite" : "none",
-            transition:"width 0.3s, height 0.3s",
-          }}/>
+          <div style={{ display:"flex",alignItems:"center",gap:3 }}>
+            {showBusy && (
+              <span dangerouslySetInnerHTML={{ __html:
+                `<svg width="10" height="10" viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">` +
+                `<circle cx="5" cy="5" r="3.6" fill="none" stroke="#f59e0b33" stroke-width="1.2"/>` +
+                `<path d="M5 1.4 A3.6 3.6 0 0 1 8.6 5" fill="none" stroke="#f59e0b" stroke-width="1.3" stroke-linecap="round">` +
+                `<animateTransform attributeName="transform" type="rotate" from="0 5 5" to="360 5 5" dur="1s" repeatCount="indefinite"/>` +
+                `</path></svg>`
+              }}/>
+            )}
+            <span style={{
+              width:isActive ? 8 : showBusy ? 6 : 5,
+              height:isActive ? 8 : showBusy ? 6 : 5,
+              borderRadius:"50%",
+              background:isActive ? color : showBusy ? "#f59e0b" : "#4ade80",
+              boxShadow:isActive
+                ? `0 0 16px ${color}, 0 0 32px ${color}66`
+                : showBusy
+                  ? "0 0 8px #f59e0b, 0 0 16px #f59e0b66"
+                  : "0 0 6px #4ade80",
+              display:"inline-block",
+              animation:isActive
+                ? "led-blink 0.45s ease-in-out infinite"
+                : showBusy
+                  ? "busy-led-pulse 1.8s ease-in-out infinite"
+                  : "none",
+              transition:"width 0.3s, height 0.3s",
+            }}/>
+          </div>
         </div>
         {/* 로봇 */}
         <div style={{ display:"flex",justifyContent:"center",marginBottom:3 }}
@@ -287,10 +326,12 @@ function AgentCard({
         <div style={{
           background:isActive ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.45)",
           borderRadius:5,padding:"3px 6px",
-          fontSize:9.5,color:isActive ? "#8ba0b8" : "#6b7a94",textAlign:"center",
-          borderTop:`1px solid ${isActive ? color+"55" : color+"28"}`,
+          fontSize:9.5,
+          color:isActive ? "#8ba0b8" : showBusy ? "#f59e0b" : "#6b7a94",
+          textAlign:"center",
+          borderTop:`1px solid ${isActive ? color+"55" : showBusy ? "#f59e0b44" : color+"28"}`,
           overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
-        }}>{stat ?? "—"}</div>
+        }}>{showBusy ? `⚙ ${busyTask || "작업 중"}` : (stat ?? "—")}</div>
       </div>
     </div>
   );
@@ -419,7 +460,7 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   const ROW2_Y = useMemo(() => agents.find(a => a.id === "j05")?.y ?? 462, [agents]);
 
   // 실시간 파이프라인 활동 — 2초 폴링
-  const { data: actData } = useSWR<{active: string[]}>("/api/pipeline/activity", fetcher, { refreshInterval: 2000 });
+  const { data: actData } = useSWR<{active: string[]; busy: Record<string, string>}>("/api/pipeline/activity", fetcher, { refreshInterval: 2000 });
   const activeEdgeSet = useMemo(() => new Set<string>(actData?.active ?? []), [actData]);
   const activeAgentSet = useMemo(() => {
     const s = new Set<string>();
@@ -432,6 +473,7 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
     () => ["e1","e2","e3","e5","e6"].some(id => activeEdgeSet.has(id)),
     [activeEdgeSet]
   );
+  const busyAgentMap = useMemo(() => actData?.busy ?? {}, [actData]);
 
   // 파이프라인 현황 로그 — 5초 폴링
   const { data: logData } = useSWR<{log: {ts:string; msg:string}[]}>(
@@ -470,6 +512,10 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
         6%   { opacity: 0.9; }
         94%  { opacity: 0.5; }
         100% { transform: translateY(230px); opacity: 0;  }
+      }
+      @keyframes busy-led-pulse {
+        0%, 100% { opacity: 1.0; }
+        50%       { opacity: 0.28; }
       }
     `}</style>
     <div style={{
@@ -619,6 +665,8 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
                 num={a.num} label={a.label} sub={a.sub}
                 color={a.color} stat={stats[a.id]} big={a.big}
                 isActive={activeAgentSet.has(a.id)}
+                isBusy={!activeAgentSet.has(a.id) && !!busyAgentMap[a.id]}
+                busyTask={busyAgentMap[a.id] ?? ""}
               />
             </div>
           ))}

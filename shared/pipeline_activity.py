@@ -120,3 +120,33 @@ def get_activity_log() -> list[dict]:
     """현황 로그 반환 (최신 먼저, 최대 60개)."""
     with _LOCK:
         return _read().get("log", [])
+
+
+def mark_busy(agent_id: str, task: str = "", ttl: int = 120) -> None:
+    """에이전트 작업 진행 표시 (TTL초 후 자동 해제).
+
+    대시보드 isBusy 애니메이션 전용 — mark_active(엣지 데이터전달)와 독립 신호.
+    에이전트가 실제 작업(수집·작성·이미지·발행)을 시작할 때 호출.
+    """
+    expires = time.time() + ttl
+    with _LOCK:
+        data = _read()
+        busy: dict = data.get("busy", {})
+        busy[agent_id] = {"expires": expires, "task": task}
+        _write({**data, "busy": busy})
+
+
+def get_busy_agents() -> dict[str, str]:
+    """현재 작업 중인 에이전트 {id: task} 반환 (만료 항목 자동 정리)."""
+    now = time.time()
+    with _LOCK:
+        data = _read()
+        busy: dict = data.get("busy", {})
+        stale = [k for k, v in busy.items()
+                 if (v.get("expires", 0) if isinstance(v, dict) else float(v)) < now]
+        if stale:
+            for k in stale:
+                del busy[k]
+            _write({**data, "busy": busy})
+        return {k: (v.get("task", "") if isinstance(v, dict) else "")
+                for k, v in busy.items()}

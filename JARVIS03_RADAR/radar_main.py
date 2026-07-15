@@ -209,6 +209,11 @@ def _build_combined(google_kws: list[str], naver_items: list[dict], top_n: int =
 
 def collect_today() -> dict:
     """오늘 트렌드 수집 → DataLab·경쟁강도·LLM 각도 포함 dict 반환."""
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j03", "트렌드 수집", ttl=600)   # 10분
+    except Exception:
+        pass
     # ── 구글 트렌딩 ────────────────────────────────────────────────
     print("[RADAR] Google Trends 수집 중...")
     raw_google = get_trending_searches(limit=40)

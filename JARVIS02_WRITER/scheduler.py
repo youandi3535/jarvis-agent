@@ -827,6 +827,14 @@ def run_self_repair_then_economic():
         return
 
     log(f"📤 [경제 브리핑] 발행 페이즈 진입 (자가진단 {_phase['elapsed_sec']}s 종료)")
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j02", "경제 브리핑 작성", ttl=2400)   # 40분 — 수집+작성+이미지+발행 커버
+        _mb("j09", "경제 데이터 수집", ttl=1200)   # 20분 — 수집 단계 커버
+        _mb("j06", "이미지 생성",      ttl=1800)   # 30분
+        _mb("j08", "플랫폼 발행",      ttl=2400)   # 40분
+    except Exception:
+        pass
     return run_economic_poster()
 
 
@@ -924,6 +932,14 @@ def run_self_repair_then_theme():
         return
 
     log(f"📤 [테마글] 발행 페이즈 진입 (자가진단 {_phase['elapsed_sec']}s 종료)")
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j02", "테마글 작성",    ttl=4200)   # 70분 — 테마글은 더 오래 걸림
+        _mb("j09", "테마 데이터 수집", ttl=2400)  # 40분
+        _mb("j06", "이미지 생성",    ttl=3000)   # 50분
+        _mb("j08", "플랫폼 발행",    ttl=4200)   # 70분
+    except Exception:
+        pass
     return run_radar_top_theme()
 
 

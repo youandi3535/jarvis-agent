@@ -969,13 +969,13 @@ def get_overview():
 
 @app.get("/api/pipeline/activity")
 def get_pipeline_activity():
-    """실시간 파이프라인 활동 상태 — 현재 active 엣지 ID 목록 반환 (2초 폴링용)."""
+    """실시간 파이프라인 활동 상태 — active 엣지 ID + busy 에이전트 반환 (2초 폴링용)."""
     import time as _t
     try:
-        from shared.pipeline_activity import get_active
-        return {"active": get_active(), "ts": _t.time()}
+        from shared.pipeline_activity import get_active, get_busy_agents
+        return {"active": get_active(), "busy": get_busy_agents(), "ts": _t.time()}
     except Exception:
-        return {"active": [], "ts": _t.time()}
+        return {"active": [], "busy": {}, "ts": _t.time()}
 
 
 @app.get("/api/pipeline/log")
