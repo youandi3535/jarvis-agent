@@ -25,6 +25,7 @@ def _hash_text(text: str) -> str:
 SOURCE_TRUST_TIER: dict[str, int] = {
     "academic": 1, "kci": 1,                                   # 논문
     "kosis": 2, "ecos": 2, "dart": 2, "krx": 2, "finance": 2, "bok_official": 2,  # 공식 데이터 API
+    "customs": 2, "kofia": 2, "fss": 2, "mlit": 2, "employment": 2,              # 국내 공공 경제 API
     "naver_news": 3, "news": 3,                                # 뉴스
     "kor_econ": 4, "web_data": 4,                              # 기사·전문지
     "web": 5,                                                  # 웹

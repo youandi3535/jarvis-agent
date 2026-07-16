@@ -21,6 +21,8 @@ from .providers import (
     FinanceProvider, WebProvider, KorEconProvider,
     NaverNewsProvider, DartProvider, EcosProvider,
     KosisProvider, KrxProvider, BokProvider,
+    CustomsProvider, KofiaProvider, FssProvider,
+    MlitProvider, EmploymentProvider,
 )
 
 log = logging.getLogger("jarvis.collector.engine")
@@ -39,6 +41,11 @@ _PROVIDER_LIMITS = {
     "kosis":        20,  # 통계청 산업 통계 (Tier 2 API)
     "finance":      15,  # yfinance 글로벌 지표 (Tier 2 API)
     "bok_official": 10,  # 한국은행 기준금리·환율·CPI (Tier 2 API)
+    "customs":     10,  # 관세청 수출입 통계 (Tier 2 API)
+    "kofia":        8,  # 금융투자협회 채권 수익률 (Tier 2 API)
+    "fss":          8,  # 금융감독원 금융통계 (Tier 2 API)
+    "mlit":         8,  # 국토교통부 부동산 통계 (Tier 2 API)
+    "employment":  10,  # 고용노동부 고용통계 (Tier 2 API)
     "blog":       10,  # 네이버 블로그
     "web":        10,  # 위키 + 지식백과 + 다음
 }
@@ -55,6 +62,11 @@ _PROVIDERS = [
     KosisProvider(),       # 통계청 KOSIS (키 필요)
     FinanceProvider(),     # yfinance 글로벌 지표
     BokProvider(),         # 한국은행 기준금리·달러/원·CPI 공식 지표
+    CustomsProvider(),     # 관세청 수출입 통계 (KOSIS 경유)
+    KofiaProvider(),       # 금융투자협회 채권·국고채 수익률 (ECOS 경유)
+    FssProvider(),         # 금융감독원 금융통계 (금융 주제 전용)
+    MlitProvider(),        # 국토교통부 부동산 통계 (부동산 주제 전용)
+    EmploymentProvider(),  # 고용노동부 고용통계 (KOSIS 경유)
 ]
 _MAX_WORKERS = 8   # 병렬 수집
 
