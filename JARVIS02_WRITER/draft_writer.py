@@ -65,7 +65,7 @@ PLATFORM_SPEC = {
         "name": "티스토리 블로그",
         "tone": "격식체(~습니다/~합니다)",
         "reader": "실용적 정보를 찾는 독자",
-        "title_style": f"궁금증 유발형 ({_L.TITLE_PROMPT_MAX}자 이내)",
+        "title_style": f"궁금증 유발형 ({_L.TITLE_TISTORY_PROMPT_MAX}자 이내)",
     },
     "naver": {
         "name": "네이버 블로그",
