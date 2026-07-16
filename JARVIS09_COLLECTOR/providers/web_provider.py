@@ -21,30 +21,77 @@ class WebProvider(BaseProvider):
         """허용된 공개 사이트에서 주제 관련 콘텐츠 수집."""
         results = []
 
-        # ── 1. 위키피디아 한국어 (공식 API) ─────────────────────────────
-        for query in [theme, f"{theme} {sector}".strip()]:
-            wiki_url = (f"https://ko.wikipedia.org/w/api.php?action=query&prop=extracts"
-                        f"&exintro=0&titles={quote_plus(query)}&format=json&exlimit=1")
+        # ── 1. 위키피디아 한국어 (opensearch → extract) ──────────────────
+        _wiki_api = "https://ko.wikipedia.org/w/api.php"
+
+        # 소스별 최적화 쿼리 생성 (query_expander 활용)
+        try:
+            from ..query_expander import expand as _expand, wiki_queries_for as _wiki_qs
+            _eq = _expand(theme, sector)
+            _search_qs = _wiki_qs(_eq)  # 단어 3개 이하 쿼리만
+        except Exception:
+            _words = theme.split()
+            _search_qs = list(dict.fromkeys(filter(None, [
+                theme,
+                " ".join(_words[:2]) if len(_words) > 2 else "",
+                sector,
+            ])))
+
+        # 관련성 필터: 검색어 단어 중 하나라도 타이틀에 포함되어야 함
+        _search_words = set()
+        for sq in _search_qs:
+            _search_words.update(sq.split())
+
+        def _is_relevant_title(title: str) -> bool:
+            t = title.lower()
+            return any(w in t for w in _search_words if len(w) >= 2)
+
+        _wiki_titles: list[str] = []
+        for sq in _search_qs[:4]:
+            if not sq or len(sq) < 2:
+                continue
             try:
-                wait_for(wiki_url)
-                resp = httpx.get(wiki_url, headers=_HEADERS, timeout=_TIMEOUT, follow_redirects=True)
-                if resp.status_code == 200:
-                    pages = resp.json().get("query", {}).get("pages", {})
-                    for pid, page in pages.items():
-                        if pid == "-1":
-                            continue
-                        extract = BeautifulSoup(page.get("extract", ""), "html.parser").get_text()
-                        if len(extract) > 100:
-                            results.append(RawDocument(
-                                url=f"https://ko.wikipedia.org/wiki/{quote_plus(query)}",
-                                source_type=self.source_type,
-                                raw_text=extract[:8000],
-                                title=page.get("title", query),
-                                extra={"theme": theme, "source": "wikipedia"},
-                            ))
-                            log.info(f"[Web] Wikipedia '{query}' {len(extract)}자 수집")
+                wait_for(_wiki_api)
+                r = httpx.get(_wiki_api, params={
+                    "action": "opensearch", "search": sq,
+                    "limit": 5, "format": "json",
+                }, headers=_HEADERS, timeout=_TIMEOUT, follow_redirects=True)
+                if r.status_code == 200:
+                    for t in (r.json()[1] if len(r.json()) > 1 else []):
+                        if t not in _wiki_titles and _is_relevant_title(t):
+                            _wiki_titles.append(t)
             except Exception as e:
-                log.debug(f"[Web] Wikipedia 실패 ({query}): {e}")
+                log.debug(f"[Web] Wikipedia opensearch 실패 ({sq}): {e}")
+
+        for _title in _wiki_titles[:3]:
+            try:
+                wait_for(_wiki_api)
+                r = httpx.get(_wiki_api, params={
+                    "action": "query", "prop": "extracts",
+                    "exintro": "1",    # intro만 — 안정적이고 충분한 분량
+                    "explaintext": "1",  # HTML 제거, 텍스트만
+                    "redirects": "1",    # 리다이렉트 자동 해결 (0자 방지)
+                    "titles": _title, "format": "json",
+                }, headers=_HEADERS, timeout=_TIMEOUT)
+                if r.status_code != 200:
+                    continue
+                for pid, page in r.json().get("query", {}).get("pages", {}).items():
+                    if pid == "-1":
+                        continue
+                    extract = page.get("extract", "")
+                    if len(extract) > 100:
+                        actual_title = page.get("title", _title)
+                        results.append(RawDocument(
+                            url=f"https://ko.wikipedia.org/wiki/{quote_plus(actual_title)}",
+                            source_type=self.source_type,
+                            raw_text=extract[:8000],
+                            title=actual_title,
+                            extra={"theme": theme, "source": "wikipedia"},
+                        ))
+                        log.info(f"[Web] Wikipedia '{actual_title}' {len(extract)}자 수집")
+                        break
+            except Exception as e:
+                log.debug(f"[Web] Wikipedia 추출 실패 ({_title}): {e}")
 
         # ── 2. 네이버 지식백과 (공개 검색 API) ──────────────────────────
         # 네이버 개발자 센터 지식백과 오픈 API (client_id 불필요한 공개 검색)
@@ -56,22 +103,33 @@ class WebProvider(BaseProvider):
             resp = httpx.get(terms_url, headers=_HEADERS, timeout=_TIMEOUT, follow_redirects=True)
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, "html.parser")
-                # 검색 결과 첫 번째 항목 요약
-                for item in soup.select(".info_area")[:3]:
-                    title_el = item.select_one(".subject")
-                    desc_el  = item.select_one(".txt_area")
-                    if title_el and desc_el:
-                        title = title_el.get_text(strip=True)
-                        desc  = desc_el.get_text(strip=True)
-                        if len(desc) > 50:
-                            results.append(RawDocument(
-                                url=terms_url,
-                                source_type=self.source_type,
-                                raw_text=f"{title}\n{desc}",
-                                title=title,
-                                extra={"theme": theme, "source": "naver_terms"},
-                            ))
-                log.info(f"[Web] 네이버 지식백과 {len([r for r in results if r.extra.get('source')=='naver_terms'])}건")
+                # 다중 셀렉터 시도 (네이버 지식백과 레이아웃 변경 대응)
+                _candidates: list[tuple[str, str]] = []
+                for sel_wrap, sel_title, sel_desc in [
+                    (".info_area", ".subject", ".txt_area"),
+                    (".word_list li", ".tit_area .subject", ".desc"),
+                    (".search_list .list_item", ".word_tit", ".txt"),
+                ]:
+                    for item in soup.select(sel_wrap)[:3]:
+                        t_el = item.select_one(sel_title)
+                        d_el = item.select_one(sel_desc)
+                        if t_el and d_el:
+                            t = t_el.get_text(strip=True)
+                            d = d_el.get_text(strip=True)
+                            if len(d) > 50:
+                                _candidates.append((t, d))
+                    if _candidates:
+                        break  # 첫 번째로 매칭된 셀렉터 세트 사용
+
+                for t, d in _candidates[:2]:
+                    results.append(RawDocument(
+                        url=terms_url,
+                        source_type=self.source_type,
+                        raw_text=f"{t}\n{d}",
+                        title=t,
+                        extra={"theme": theme, "source": "naver_terms"},
+                    ))
+                log.info(f"[Web] 네이버 지식백과 {len(_candidates)}건")
         except Exception as e:
             log.debug(f"[Web] 네이버 지식백과 실패: {e}")
 

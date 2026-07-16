@@ -56,6 +56,21 @@ class DartProvider(BaseProvider):
             log.debug(f"[DART] {corp_name} 공시 조회 실패: {e}")
         return []
 
+    def _fetch_company_info(self, corp_code: str) -> dict:
+        """기업 기본 정보 조회 — 대표자·상장구분·소재지·설립일 (DART company.json)."""
+        try:
+            wait_for(f"{_BASE}/company.json")
+            resp = httpx.get(f"{_BASE}/company.json", params={
+                "crtfc_key": self._api_key,
+                "corp_code": corp_code,
+            }, timeout=8)
+            data = resp.json()
+            if data.get("status") == "000":
+                return data
+        except Exception as e:
+            log.debug(f"[DART] company.json 실패 ({corp_code}): {e}")
+        return {}
+
     def collect(self, theme: str, sector: str = "", max_items: int = 10) -> list[RawDocument]:
         if not self._available:
             log.warning("[DART] DART_API_KEY 없음 — (https://opendart.fss.or.kr 무료 발급)")
@@ -99,16 +114,37 @@ class DartProvider(BaseProvider):
             corp = f.get("corp_name", "미상")
             corp_map.setdefault(corp, []).append(f)
 
+        _cls_label = {"Y": "코스피(유가증권)", "K": "코스닥", "N": "코넥스", "E": "기타"}
+
         for corp_name, filings in list(corp_map.items())[:max_items]:
-            lines = [f"[{corp_name} 전자공시 — {theme}]"]
+            lines = [f"[{corp_name} 전자공시 — {theme}]", "[최근 공시]"]
             for f in filings[:5]:
                 rdate = f.get("rcept_dt", "")
                 title = f.get("report_nm", "")
                 if rdate and title:
                     lines.append(f"• [{rdate}] {title}")
 
-            if len(lines) > 1:
-                corp_code = filings[0].get("corp_code", "")
+            corp_code = filings[0].get("corp_code", "")
+
+            # 기업 개요 추가 — company.json (대표자·상장구분·소재지·설립일)
+            if corp_code:
+                info = self._fetch_company_info(corp_code)
+                if info:
+                    lines.append("")
+                    lines.append("[기업 개요]")
+                    if info.get("ceo_nm"):
+                        lines.append(f"• 대표자: {info['ceo_nm']}")
+                    if info.get("corp_cls"):
+                        lines.append(f"• 시장: {_cls_label.get(info['corp_cls'], info['corp_cls'])}")
+                    if info.get("adres"):
+                        lines.append(f"• 소재지: {info['adres']}")
+                    est = info.get("est_dt", "")
+                    if est and len(est) == 8:
+                        lines.append(f"• 설립일: {est[:4]}년 {int(est[4:6])}월 {int(est[6:])}일")
+                    if info.get("hm_url"):
+                        lines.append(f"• 홈페이지: {info['hm_url']}")
+
+            if len(lines) > 2:
                 results.append(RawDocument(
                     url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={filings[0].get('rcept_no','')}",
                     source_type=self.source_type,
