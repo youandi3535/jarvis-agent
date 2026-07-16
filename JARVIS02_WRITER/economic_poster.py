@@ -175,24 +175,10 @@ try:
             from JARVIS02_WRITER import length_manager as _L
         except ImportError:
             import length_manager as _L  # 같은 폴더 직접 실행 시
-        # SEO 기준은 seo_standards 단일 진입점
-        try:
-            from JARVIS02_WRITER.seo_standards import build_seo_block as _build_seo_block
-        except ImportError:
-            try:
-                from seo_standards import build_seo_block as _build_seo_block
-            except ImportError:
-                def _build_seo_block(platform, theme=""):  # noqa: E306
-                    return ""
-        def _cap_eco_content(text, max_korean=_L.MAX_KOREAN, context="economic"):
-            """legacy alias → length_manager.compress."""
-            return _L.compress(text, context=context, max_korean=max_korean)
-        # prompt 안에 박을 [글자수 절대 규정] 블록 — length_manager 가 동적 생성
-        _L_LEN_BLOCK = _L.build_prompt_length_block()
+        # (죽은 코드 정리 2026-07-16 — 호출 0회: _build_seo_block import·_cap_eco_content·_L_LEN_BLOCK 삭제.
+        #  SEO·분량 기준 프롬프트 주입은 law_enforcer.build_gate_checklist_block 이 담당)
     except ImportError:
-        # length_manager 미가용 시 안전한 fallback (cap 안 함, prompt 블록 빈 문자열)
-        def _cap_eco_content(text, **_kw): return text or ""
-        _L_LEN_BLOCK = ""
+        pass  # length_manager 미가용 시에도 검증 로직의 lazy import 가 각자 방어
     from JARVIS03_RADAR.post_quality_analyzer import run_single as _run_analyzer
     _ANALYZER_SCRIPT = _JARVIS_ROOT / "JARVIS03_RADAR" / "post_quality_analyzer.py"
     _QUALITY_ENABLED = True
@@ -456,7 +442,7 @@ def run(post_naver=True, post_tistory=True):
     def _step_load_rules(state):
         from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
         sb = _law_blk()
-        print("  📜 [① 규정 로드] BLOG_SUPREME_LAW.md 숙지 완료")
+        print("  📜 [① 규정 로드] 헌법 숙지 완료 — 게이트 검증 기준(분량·SEO·매력도)은 수집 단계에서 플랫폼별 합류")
         return {"supreme_block": sb}
 
     # ★ 직렬 순서 — 네이버 먼저, 티스토리 나중 (사용자 박제 2026-07-03)
@@ -773,6 +759,10 @@ def run(post_naver=True, post_tistory=True):
         except Exception:
             pass
 
+    # ★ 발행 기간 LLM 우선권 선언 — background alias(guardian 등) 자동 강등
+    #   + 크로스 프로세스 잠금(llm.py)이 함께 동작해 daemon 과 수동 실행 충돌 방지.
+    from shared.llm import mark_publishing as _mark_pub
+    _mark_pub(True)
     import time as _tm_act
     if post_naver:
         # ★ 액션별 LLM 데드라인 (리뷰 확정 수정): 직렬화로 티스토리 시작이 늦어져
@@ -862,6 +852,7 @@ def run(post_naver=True, post_tistory=True):
         print("  ⏭ 티스토리 스킵 — 동시 실행 중복 차단")
     else:
         print("  ─ 티스토리 건너뜀 (플래그 OFF)")
+    _mark_pub(False)  # ★ 발행 완료 — background alias 강등 해제
 
     _nv_r  = '✅' if naver_ok   else ('⏭' if not post_naver   else '❌')
     _ts_r  = '✅' if tistory_ok else ('⏭' if not post_tistory else '❌')
@@ -1044,7 +1035,7 @@ if __name__ == "__main__":
         )
         try:
             from JARVIS00_INFRA.watchdog import guard_main
-            with guard_main("경제 발행", deadline_sec=3540):   # 부모 60분 backstop보다 먼저 곱게 종료
+            with guard_main("경제 발행", deadline_sec=3600):   # 부모 60분 backstop — 플랫폼당 30분×2
                 run(post_naver=post_naver, post_tistory=post_tistory)
         except Exception as _e:
             _g_report("writer", _e, module=__name__, func_name="run")
@@ -1053,5 +1044,5 @@ if __name__ == "__main__":
             LOCK_FILE.unlink(missing_ok=True)
     else:
         from JARVIS00_INFRA.watchdog import guard_main
-        with guard_main("경제 발행", deadline_sec=3540):   # 부모 60분 backstop보다 먼저 곱게 종료
+        with guard_main("경제 발행", deadline_sec=3600):   # 부모 60분 backstop — 플랫폼당 30분×2
             run(post_naver=post_naver, post_tistory=post_tistory)

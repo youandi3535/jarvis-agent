@@ -360,19 +360,41 @@ def _notify_escalation(action_name: str, attempts: int, last_issues: list[Issue]
 
 # ── 실행 엔진 ─────────────────────────────────────────
 
+# 산출물 재생성 없이 재검증만 수행하는 재개 신호 (검증·송출 단계 이슈 / 전부 즉시수정된 경우)
+VERIFY_ONLY = "__verify_only__"
+
+# 실제 수행 step 이 아닌 라벨 — 재생성 재개 지점 산정에서 제외
+_NON_STEP_LABELS = ("전체", "verify", "verify (Layer 3)", "송출 (Layer 4)")
+
+
+def _is_fixed_issue(iss: Issue) -> bool:
+    """이미 즉시수정 완료된 이슈인지 — 재생성 트리거 대상이 아님."""
+    return iss.kind == "draft_fixed" or str(iss.kind).startswith("fixed:")
+
+
 def _find_resume_step(action_def: ActionDefinition, last_issues: list[Issue]) -> Optional[str]:
     """이전 시도의 issues 에서 *재실행 시작 step* 식별.
 
     문제 step 들 중 *action_def.steps 순서에서 가장 앞* 인 step 부터 재실행.
+
+    ★ 근본 수정 (2026-07-16 — 즉시수정 완료 대본을 통째로 재생성하던 사고):
+      ① 즉시수정 완료(draft_fixed) 이슈는 재생성 트리거에서 제외 — 수정된 산출물을
+        버리고 처음부터 다시 만들 이유가 없다.
+      ② 남은 이슈가 검증(verify)·송출 단계 것뿐이면 VERIFY_ONLY 반환 — 산출물은
+        유효하므로 Layer 2 를 건너뛰고 재검증→재송출만 수행 (LLM 타임아웃 같은
+        인프라 실패가 5분+ 산출물을 폐기시키는 경로 원천 차단).
     """
     if not last_issues:
         return None
+    live = [iss for iss in last_issues if not _is_fixed_issue(iss)]
+    if not live:
+        return VERIFY_ONLY   # 전부 즉시수정 완료 — 수정된 산출물로 재검증만
     problem_step_names = {
-        iss.step for iss in last_issues
-        if iss.step not in ("전체", "verify", "송출 (Layer 4)")
+        iss.step for iss in live
+        if iss.step not in _NON_STEP_LABELS
     }
     if not problem_step_names:
-        return None
+        return VERIFY_ONLY   # 검증·송출 단계 이슈만 — 산출물 재생성 불필요
     for step in action_def.steps:
         if step.name in problem_step_names:
             return step.name
@@ -537,9 +559,16 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
         if result.issues_history:
             from_step = _find_resume_step(action_def, result.issues_history[-1])
 
-        # Layer 2: 수행 단계 실행
-        state = _execute_steps(action_def, state, from_step_name=from_step, wd=wd)
-        result.final_state = state
+        # ★ VERIFY_ONLY — 산출물은 유효 (즉시수정 완료 or 검증·송출 인프라 이슈만).
+        #   Layer 2 재실행 없이 기존 state 그대로 재검증→재송출만 수행.
+        #   (LLM 타임아웃 1회가 완성된 대본·차트를 폐기시키던 사고의 근본 차단)
+        if from_step == VERIFY_ONLY:
+            _log.info(f"[harness] ♻️ 산출물 유지 — 재검증만 진행 (attempt {attempt}): {action_def.name}")
+            print(f"  ♻️ [harness] 이전 산출물 유지 — 재검증만 진행 (시도 {attempt})")
+        else:
+            # Layer 2: 수행 단계 실행
+            state = _execute_steps(action_def, state, from_step_name=from_step, wd=wd)
+            result.final_state = state
 
         # Layer 2 자체 실패 → 즉시 issue 로 박제
         if "__step_error__" in state:
@@ -610,8 +639,11 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                 if fixed_issues and not unfixed_issues:
                     try:
                         _rev = action_def.verify(state) or []
-                    except Exception:
-                        _rev = []
+                    except Exception as _ve:
+                        # ★ 재검증 자체 폭발 = 무검증 송출 금지 (ADR 009) — 이슈로 박제
+                        #   (기존: _rev=[] 로 '통과' 처리 → 검증 안 된 산출물이 송출되는 구멍)
+                        _rev = [Issue(step="verify (Layer 3)", kind="verify_error",
+                                      detail=f"{type(_ve).__name__}: {str(_ve)[:200]}")]
                     if not _rev:
                         _log.info(f"[harness] ✅ 즉시수정 후 재검증 통과 — 재생성 없이 송출: {action_def.name}")
                         print(f"  ✅ [harness] 즉시수정 후 검증 통과 — 재생성 건너뜀")
@@ -626,6 +658,24 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                             result.issues_history.append([send_issue])
                             _report_issues_to_guardian(action_def.name, attempt, [send_issue])
                             # 송출 실패 → 정상 재시도 루프로 fall-through
+                    else:
+                        # ★ 근본 수정 (2026-07-16): 재검증 이슈(_rev) 폐기 금지.
+                        #   기존엔 _rev 를 버리고 fixed 이슈만 기록 → 다음 attempt 가
+                        #   '수정 완료된 대본'을 재생성 지점으로 오판, 차트·이미지까지
+                        #   전량 폐기(5분+ 낭비). 이제 _rev 에 fix 훅을 재실행해
+                        #   (gate_feedback 저장 겸함) 실제 미해결 이슈로 채택한다.
+                        print(f"  ⚠️ [harness] 즉시수정 후 재검증 신규 이슈 {len(_rev)}건 — 수정 시도")
+                        try:
+                            _fixed2, _unfixed2 = action_def.fix(state, _rev)
+                            result.final_state = state
+                        except Exception:
+                            _fixed2, _unfixed2 = [], list(_rev)
+                        if _fixed2:
+                            _record_fixed_to_guardian(action_def.name, attempt, _fixed2)
+                        fixed_issues = fixed_issues + list(_fixed2)
+                        unfixed_issues = list(_unfixed2)
+                        # unfixed2=0(전부 재수정)이면 아래 기록이 전부 fixed 이슈 →
+                        # 다음 attempt 가 VERIFY_ONLY 로 재검증만 수행 (전체 재실행 아님)
 
             except Exception as _fe:
                 _log.warning(f"[harness] fix 콜백 실패 (무시, 전체 unfixed 처리): {_fe}")
@@ -695,7 +745,9 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             return result
 
         # ── 검증 실패 — 모든 issues 기록 후 재시도 ──
-        # fixed + unfixed 모두 재생성 트리거 ("고쳤더라도 더 나은 결과 위해 재시도")
+        # ★ 정책 갱신 (2026-07-16): fixed 이슈는 기록용일 뿐 재생성 트리거가 아니다.
+        #   _find_resume_step 이 draft_fixed 를 제외하고 unfixed 기준으로만 재개 지점을
+        #   잡는다 (전부 fixed 면 VERIFY_ONLY — 수정된 산출물로 재검증만).
         all_issues = fixed_issues + unfixed_issues
         result.issues_history.append(all_issues)
 

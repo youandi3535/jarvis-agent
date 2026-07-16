@@ -259,11 +259,17 @@ IMG_FOLLOWUP_MIN_SENTS:    int = 2                                              
 IMG_FOLLOWUP_MIN:          int = IMG_FOLLOWUP_MIN_SENTS * KOREAN_PER_SENTENCE   # 약 100자 — 이미지 뒤 텍스트 보완
 
 # ── 단순 한도 (글자수 단독 — 본문 분량 아님 — 문장 표기 제외) ─
-META_DESC_MAX:         int = 150    # 구글 메타 디스크립션 한도 (1줄 메타 — 문장 표기 부적합)
+META_DESC_MAX:              int = 160   # 구글 메타 디스크립션 한도 (1줄 메타 — 문장 표기 부적합)
 
 # ── SEO 프롬프트 권장 한도 (생성 가이드 — validation 한도 아님) ──
-TITLE_PROMPT_MAX:      int = 35     # SEO 제목 프롬프트 권장 (validation: TITLE_MAX=40)
-META_DESC_PROMPT_MAX:  int = 140    # 메타 디스크립션 프롬프트 권장 (validation: META_DESC_MAX=150)
+TITLE_PROMPT_MAX:           int = 40    # 네이버 SEO 제목 한도 (=TITLE_MAX 확정 기준)
+TITLE_TISTORY_PROMPT_MAX:   int = 55    # 티스토리 SEO 제목 한도 (구글 타이틀 태그 600px 기준)
+META_DESC_PROMPT_MAX:       int = 140   # 메타 디스크립션 프롬프트 권장 (validation: META_DESC_MAX=160)
+
+# ── SEO 태그·링크 정책 (단순 개수 — 문장 표기 부적합) ─────────
+NAVER_HASHTAG_MIN:          int = 5     # 네이버 해시태그 최솟값
+NAVER_HASHTAG_MAX:          int = 10    # 네이버 해시태그 최댓값
+TISTORY_INTERNAL_LINKS:     int = 1     # 티스토리 내부 링크 목표 개수
 SCENARIO_LABEL_MAX:    int = 15     # 시나리오·비교 라벨 최대
 ECO_TITLE_PROMPT_MAX:  int = 15     # 경제 브리핑 긴급 폴백 제목 최대
 
@@ -560,7 +566,9 @@ __all__ = [
     "INTRO_KEYWORD_WINDOW_SENTS", "INTRO_KEYWORD_WINDOW",
     "PARAGRAPH_MIN_SENTS", "PARAGRAPH_MIN_KOREAN",
     "META_DESC_MAX",
-    "TITLE_PROMPT_MAX", "META_DESC_PROMPT_MAX", "SCENARIO_LABEL_MAX", "ECO_TITLE_PROMPT_MAX",
+    "TITLE_PROMPT_MAX", "TITLE_TISTORY_PROMPT_MAX", "META_DESC_PROMPT_MAX",
+    "NAVER_HASHTAG_MIN", "NAVER_HASHTAG_MAX", "TISTORY_INTERNAL_LINKS",
+    "SCENARIO_LABEL_MAX", "ECO_TITLE_PROMPT_MAX",
     "SECTION_COMMENTARY_SENTS", "SECTION_COMMENTARY",
     "WEEKLY_INSIGHT_SENTS", "WEEKLY_INSIGHT",
     "IMG_FOLLOWUP_MIN_SENTS", "IMG_FOLLOWUP_MIN",

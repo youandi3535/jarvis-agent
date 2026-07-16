@@ -73,6 +73,16 @@ def analyze_llm_only(error_record: dict) -> dict:
     _empty = {"fixable": False, "target_file": None, "patch": None,
               "explanation": "", "source": "llm"}
 
+    # ★ 발행 중 Tier2 LLM 분석 패스 — 세마포어 선점으로 발행 차단 방지.
+    #   error 는 backlog 에 남아 다음 job_deep_audit(04:30) 에서 처리됨.
+    try:
+        from shared.llm import is_publishing as _is_pub
+        if _is_pub():
+            log.info("[GUARDIAN] 발행 중 — Tier2 분석 패스, 다음 심층 감사로 위임")
+            return {**_empty, "explanation": "발행 중 패스 — 다음 심층 감사에서 처리"}
+    except Exception:
+        pass
+
     error_type = error_record.get("error_type", "")
     message    = error_record.get("message", "")
     module     = error_record.get("module", "")
@@ -118,8 +128,8 @@ PATCH:
 """
     try:
         from shared.llm import invoke_text
-        # Tier 2 — 항상 Sonnet 5 ("guardian" alias): 코드 수정 판단은 단일 모델 사용
-        raw = invoke_text("guardian", prompt, timeout=300).strip()
+        # Tier 2 — 항상 Sonnet 5 ("guardian" alias): timeout=120(300s→120s 단축 — 발행 차단 방지)
+        raw = invoke_text("guardian", prompt, timeout=120).strip()
     except Exception as e:
         log.error(f"[GUARDIAN] Claude LLM 분석 실패: {e}")
         return {**_empty, "explanation": f"LLM 분석 실패: {e}"}

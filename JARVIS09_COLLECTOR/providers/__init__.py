@@ -28,6 +28,11 @@ from .krx_provider import KrxProvider
 from .kci_provider import KciProvider
 from .discovery_provider import DiscoveryProvider
 from .bok_provider import BokProvider
+from .customs_provider import CustomsProvider
+from .kofia_provider import KofiaProvider
+from .fss_provider import FssProvider
+from .mlit_provider import MlitProvider
+from .employment_provider import EmploymentProvider
 
 __all__ = [
     "BaseProvider",
@@ -36,4 +41,6 @@ __all__ = [
     "NaverNewsProvider", "DartProvider", "EcosProvider",
     "KosisProvider", "KrxProvider", "KciProvider",
     "DiscoveryProvider", "BokProvider",
+    "CustomsProvider", "KofiaProvider", "FssProvider",
+    "MlitProvider", "EmploymentProvider",
 ]

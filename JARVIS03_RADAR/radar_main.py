@@ -214,158 +214,167 @@ def collect_today() -> dict:
         _mb("j03", "트렌드 수집", ttl=600)   # 10분
     except Exception:
         pass
-    # ── 구글 트렌딩 ────────────────────────────────────────────────
-    print("[RADAR] Google Trends 수집 중...")
-    raw_google = get_trending_searches(limit=40)
-    google_filtered = _filter_keywords(raw_google)
-    n_g = max(len(google_filtered), 1)
-    google_top10 = [
-        {"keyword": kw, "rank": i + 1, "score": round(1 - i / n_g, 3)}
-        for i, kw in enumerate(google_filtered[:10])
-    ]
-    print(f"[RADAR] Google 유효 키워드: {len(google_filtered)}개")
-
-    # ── 네이버 트렌딩 (독립 소스) ──────────────────────────────────
-    print("[RADAR] Naver 트렌딩 수집 중...")
-    naver_items: list[dict] = []
+    # busy 신호 수명 = 함수 수명 — 종료(성공·실패) 시 finally 에서 즉시 해제 (근본 수정 2026-07-16)
     try:
-        from JARVIS03_RADAR.collectors.naver_collector import get_naver_trending
-        raw_naver = get_naver_trending(limit=30)
-        naver_items = [d for d in raw_naver if _is_meaningful(d["keyword"])]
-        naver_top10 = [{"keyword": d["keyword"], "rank": i + 1, "score": d.get("score", 0)}
-                       for i, d in enumerate(naver_items[:10])]
-        print(f"[RADAR] Naver 유효 키워드: {len(naver_items)}개")
-    except Exception as e:
-        naver_top10 = []
-        print(f"[RADAR] Naver 트렌딩 스킵: {e}")
+        # ── 구글 트렌딩 ────────────────────────────────────────────────
+        print("[RADAR] Google Trends 수집 중...")
+        raw_google = get_trending_searches(limit=40)
+        google_filtered = _filter_keywords(raw_google)
+        n_g = max(len(google_filtered), 1)
+        google_top10 = [
+            {"keyword": kw, "rank": i + 1, "score": round(1 - i / n_g, 3)}
+            for i, kw in enumerate(google_filtered[:10])
+        ]
+        print(f"[RADAR] Google 유효 키워드: {len(google_filtered)}개")
 
-    # ── 혼합 키워드 풀 (표시는 프론트에서 30개 슬라이스) ──────────────
-    combined_keywords = _build_combined(google_filtered, naver_items, top_n=50)
-    print(f"[RADAR] 혼합 키워드 구성: 구글 {sum(1 for c in combined_keywords if 'google' in c['sources'])}개 "
-          f"/ 네이버 {sum(1 for c in combined_keywords if 'naver' in c['sources'])}개 "
-          f"/ 양쪽 {sum(1 for c in combined_keywords if len(c['sources']) == 2)}개")
-
-    # 기존 downstream 호환 — 혼합 키워드 목록을 trending 으로 사용
-    trending = [c["keyword"] for c in combined_keywords][:30]
-    print(f"[RADAR] 필터링 후 유효 키워드: {len(trending)}개")
-
-    # 경제 뉴스 헤드라인 + 주식 시드 키워드 병합 (중복 제거)
-    finance_kws = _collect_finance_headlines()
-    extra = [kw for kw in (finance_kws + _STOCK_SEEDS) if kw not in trending]
-    trending = list(dict.fromkeys(trending + extra))[:50]
-    print(f"[RADAR] 경제 보완 후 총 키워드: {len(trending)}개")
-
-    # ── 1. Naver DataLab: 30일 추세 곡선 ─────────────────────────
-    datalab: dict = {}
-    try:
-        from JARVIS03_RADAR.collectors.naver_collector import get_batch_datalab, has_api_key
-        if has_api_key():
-            print("[RADAR] Naver DataLab 트렌드 수집 중...")
-            datalab = get_batch_datalab(trending[:20], days=30)
-            print(f"[RADAR] DataLab 수집: {len(datalab)}개 키워드")
-    except Exception as e:
-        print(f"[RADAR] DataLab 스킵: {e}")
-
-    # ── 1-b. DataLab 없으면 Google interest_over_time fallback ───
-    iot_used = False
-    if not datalab:
+        # ── 네이버 트렌딩 (독립 소스) ──────────────────────────────────
+        print("[RADAR] Naver 트렌딩 수집 중...")
+        naver_items: list[dict] = []
         try:
-            from JARVIS03_RADAR.collectors.google_collector import get_interest_over_time
-            print("[RADAR] Google interest_over_time velocity fallback 수집 중...")
-            datalab = get_interest_over_time(trending[:20], days=30)
-            if datalab:
-                iot_used = True
-                print(f"[RADAR] IOT fallback 성공: {len(datalab)}개 키워드")
+            from JARVIS03_RADAR.collectors.naver_collector import get_naver_trending
+            raw_naver = get_naver_trending(limit=30)
+            naver_items = [d for d in raw_naver if _is_meaningful(d["keyword"])]
+            naver_top10 = [{"keyword": d["keyword"], "rank": i + 1, "score": d.get("score", 0)}
+                           for i, d in enumerate(naver_items[:10])]
+            print(f"[RADAR] Naver 유효 키워드: {len(naver_items)}개")
         except Exception as e:
-            print(f"[RADAR] IOT fallback 스킵: {e}")
+            naver_top10 = []
+            print(f"[RADAR] Naver 트렌딩 스킵: {e}")
 
-    # ── 2. 경쟁 강도 분석 (네이버 뉴스 검색량 기반) ───────────────
-    competition: dict = {}
-    try:
-        from JARVIS03_RADAR.collectors.naver_collector import get_competition_score, has_api_key
-        if has_api_key():
-            print("[RADAR] 경쟁 강도 분석 중...")
-            for kw in trending[:15]:
+        # ── 혼합 키워드 풀 (표시는 프론트에서 30개 슬라이스) ──────────────
+        combined_keywords = _build_combined(google_filtered, naver_items, top_n=50)
+        print(f"[RADAR] 혼합 키워드 구성: 구글 {sum(1 for c in combined_keywords if 'google' in c['sources'])}개 "
+              f"/ 네이버 {sum(1 for c in combined_keywords if 'naver' in c['sources'])}개 "
+              f"/ 양쪽 {sum(1 for c in combined_keywords if len(c['sources']) == 2)}개")
+
+        # 기존 downstream 호환 — 혼합 키워드 목록을 trending 으로 사용
+        trending = [c["keyword"] for c in combined_keywords][:30]
+        print(f"[RADAR] 필터링 후 유효 키워드: {len(trending)}개")
+
+        # 경제 뉴스 헤드라인 + 주식 시드 키워드 병합 (중복 제거)
+        finance_kws = _collect_finance_headlines()
+        extra = [kw for kw in (finance_kws + _STOCK_SEEDS) if kw not in trending]
+        trending = list(dict.fromkeys(trending + extra))[:50]
+        print(f"[RADAR] 경제 보완 후 총 키워드: {len(trending)}개")
+
+        # ── 1. Naver DataLab: 30일 추세 곡선 ─────────────────────────
+        datalab: dict = {}
+        try:
+            from JARVIS03_RADAR.collectors.naver_collector import get_batch_datalab, has_api_key
+            if has_api_key():
+                print("[RADAR] Naver DataLab 트렌드 수집 중...")
+                datalab = get_batch_datalab(trending[:20], days=30)
+                print(f"[RADAR] DataLab 수집: {len(datalab)}개 키워드")
+        except Exception as e:
+            print(f"[RADAR] DataLab 스킵: {e}")
+
+        # ── 1-b. DataLab 없으면 Google interest_over_time fallback ───
+        iot_used = False
+        if not datalab:
+            try:
+                from JARVIS03_RADAR.collectors.google_collector import get_interest_over_time
+                print("[RADAR] Google interest_over_time velocity fallback 수집 중...")
+                datalab = get_interest_over_time(trending[:20], days=30)
+                if datalab:
+                    iot_used = True
+                    print(f"[RADAR] IOT fallback 성공: {len(datalab)}개 키워드")
+            except Exception as e:
+                print(f"[RADAR] IOT fallback 스킵: {e}")
+
+        # ── 2. 경쟁 강도 분석 (네이버 뉴스 검색량 기반) ───────────────
+        competition: dict = {}
+        try:
+            from JARVIS03_RADAR.collectors.naver_collector import get_competition_score, has_api_key
+            if has_api_key():
+                print("[RADAR] 경쟁 강도 분석 중...")
+                for kw in trending[:15]:
+                    _wd_beat()   # ★ 키워드 단위 진행 신호 — 다건 순차 네트워크 루프 freeze 오탐 방지
+                    competition[kw] = get_competition_score(kw)
+                    time.sleep(0.2)
+                print(f"[RADAR] 경쟁 강도 분석 완료: {len(competition)}개")
+        except Exception as e:
+            print(f"[RADAR] 경쟁 분석 스킵: {e}")
+
+        # ── 3. 자동완성 연관 키워드 (전체 trending, 인증 불필요) ────────
+        autocomplete: dict = {}
+        try:
+            from JARVIS03_RADAR.collectors.naver_collector import get_autocomplete
+            for kw in trending[:20]:  # 10→20으로 확대
                 _wd_beat()   # ★ 키워드 단위 진행 신호 — 다건 순차 네트워크 루프 freeze 오탐 방지
-                competition[kw] = get_competition_score(kw)
-                time.sleep(0.2)
-            print(f"[RADAR] 경쟁 강도 분석 완료: {len(competition)}개")
-    except Exception as e:
-        print(f"[RADAR] 경쟁 분석 스킵: {e}")
+                ac = get_autocomplete(kw)
+                if ac:
+                    autocomplete[kw] = ac
+                time.sleep(0.1)
+        except Exception as e:
+            print(f"[RADAR] 자동완성 스킵: {e}")
 
-    # ── 3. 자동완성 연관 키워드 (전체 trending, 인증 불필요) ────────
-    autocomplete: dict = {}
-    try:
-        from JARVIS03_RADAR.collectors.naver_collector import get_autocomplete
-        for kw in trending[:20]:  # 10→20으로 확대
-            _wd_beat()   # ★ 키워드 단위 진행 신호 — 다건 순차 네트워크 루프 freeze 오탐 방지
-            ac = get_autocomplete(kw)
-            if ac:
-                autocomplete[kw] = ac
-            time.sleep(0.1)
-    except Exception as e:
-        print(f"[RADAR] 자동완성 스킵: {e}")
+        # ── 4. 점수 계산 ───────────────────────────────────────────────
+        scored     = score_keywords(trending, datalab=datalab, competition=competition)
+        scored     = enrich_with_opportunity(scored)
+        sector_sum = build_sector_summary(scored)
+        recs       = generate_recommendations(sector_sum, n=10)  # 5→10으로 확대
+        # 섹터 다양성 유지하되 최종 순서는 opportunity_score DESC (직관적 순위)
+        recs.sort(key=lambda r: r.get("opportunity_score", r.get("score", 0)), reverse=True)
 
-    # ── 4. 점수 계산 ───────────────────────────────────────────────
-    scored     = score_keywords(trending, datalab=datalab, competition=competition)
-    scored     = enrich_with_opportunity(scored)
-    sector_sum = build_sector_summary(scored)
-    recs       = generate_recommendations(sector_sum, n=10)  # 5→10으로 확대
-    # 섹터 다양성 유지하되 최종 순서는 opportunity_score DESC (직관적 순위)
-    recs.sort(key=lambda r: r.get("opportunity_score", r.get("score", 0)), reverse=True)
+        # ── 5. LLM 콘텐츠 각도 생성 — 추천 + 고점수 키워드 전체 ────────
+        # recs에 없는 상위 scored 키워드도 각도 생성
+        top_scored_kws = [k for k in scored[:15] if k["keyword"] not in {r["keyword"] for r in recs}]
+        extra_recs = []
+        for k in top_scored_kws:
+            extra_recs.append({
+                "theme": k["keyword"], "topic": k["keyword"],
+                "keyword": k["keyword"], "sector": k["sector"],
+                "score": k["score"], "opportunity_score": k.get("opportunity_score", k["score"]),
+                "velocity": k.get("velocity","—"), "competition": k.get("competition", 50.0),
+                "reason": f"점수 {k['score']} · {k.get('sector','기타')}",
+                "angle": "", "hook": "", "color": "#4a5568",
+            })
 
-    # ── 5. LLM 콘텐츠 각도 생성 — 추천 + 고점수 키워드 전체 ────────
-    # recs에 없는 상위 scored 키워드도 각도 생성
-    top_scored_kws = [k for k in scored[:15] if k["keyword"] not in {r["keyword"] for r in recs}]
-    extra_recs = []
-    for k in top_scored_kws:
-        extra_recs.append({
-            "theme": k["keyword"], "topic": k["keyword"],
-            "keyword": k["keyword"], "sector": k["sector"],
-            "score": k["score"], "opportunity_score": k.get("opportunity_score", k["score"]),
-            "velocity": k.get("velocity","—"), "competition": k.get("competition", 50.0),
-            "reason": f"점수 {k['score']} · {k.get('sector','기타')}",
-            "angle": "", "hook": "", "color": "#4a5568",
-        })
+        all_for_llm = recs + extra_recs
+        print(f"[RADAR] LLM 각도 생성 대상: {len(all_for_llm)}개 키워드")
+        all_for_llm = generate_content_angles(all_for_llm, autocomplete=autocomplete)
 
-    all_for_llm = recs + extra_recs
-    print(f"[RADAR] LLM 각도 생성 대상: {len(all_for_llm)}개 키워드")
-    all_for_llm = generate_content_angles(all_for_llm, autocomplete=autocomplete)
+        # recs / extra 분리 — opportunity_score DESC 순서 복원
+        recs_kws   = {r["keyword"]: r.get("opportunity_score", r.get("score", 0)) for r in recs}
+        recs       = sorted(
+            [r for r in all_for_llm if r["keyword"] in recs_kws],
+            key=lambda r: recs_kws.get(r["keyword"], 0), reverse=True,
+        )
+        extra_recs = [r for r in all_for_llm if r["keyword"] not in recs_kws]
 
-    # recs / extra 분리 — opportunity_score DESC 순서 복원
-    recs_kws   = {r["keyword"]: r.get("opportunity_score", r.get("score", 0)) for r in recs}
-    recs       = sorted(
-        [r for r in all_for_llm if r["keyword"] in recs_kws],
-        key=lambda r: recs_kws.get(r["keyword"], 0), reverse=True,
-    )
-    extra_recs = [r for r in all_for_llm if r["keyword"] not in recs_kws]
+        # content_angles 통합 저장
+        content_angles = {
+            r["keyword"]: {"topic": r["topic"], "angle": r.get("angle",""), "hook": r.get("hook","")}
+            for r in (recs + extra_recs)
+        }
 
-    # content_angles 통합 저장
-    content_angles = {
-        r["keyword"]: {"topic": r["topic"], "angle": r.get("angle",""), "hook": r.get("hook","")}
-        for r in (recs + extra_recs)
-    }
+        # ── 6. 전일 대비 변화 계산 ──────────────────────────────────────
+        trend_delta = _calc_trend_delta(trending)
 
-    # ── 6. 전일 대비 변화 계산 ──────────────────────────────────────
-    trend_delta = _calc_trend_delta(trending)
-
-    return {
-        "date":            date.today().strftime("%Y-%m-%d"),
-        "collected_at":    datetime.now().strftime("%H:%M:%S"),
-        "google_trending": trending,          # 하위 호환
-        "google_top10":    google_top10,      # 구글 독립 TOP 10
-        "naver_top10":     naver_top10,       # 네이버 독립 TOP 10
-        "combined_keywords": combined_keywords,  # 혼합 키워드 풀 (프론트 슬라이스로 표시 개수 결정)
-        "scored_keywords": scored,
-        "sector_summary":  dict(sector_sum),
-        "recommendations": recs,
-        "extra_angles":    extra_recs,
-        "content_angles":  content_angles,
-        "autocomplete":    autocomplete,
-        "datalab_used":    bool(datalab) and not iot_used,
-        "iot_used":        iot_used,
-        "trend_delta":     trend_delta,
-    }
+        return {
+            "date":            date.today().strftime("%Y-%m-%d"),
+            "collected_at":    datetime.now().strftime("%H:%M:%S"),
+            "google_trending": trending,          # 하위 호환
+            "google_top10":    google_top10,      # 구글 독립 TOP 10
+            "naver_top10":     naver_top10,       # 네이버 독립 TOP 10
+            "combined_keywords": combined_keywords,  # 혼합 키워드 풀 (프론트 슬라이스로 표시 개수 결정)
+            "scored_keywords": scored,
+            "sector_summary":  dict(sector_sum),
+            "recommendations": recs,
+            "extra_angles":    extra_recs,
+            "content_angles":  content_angles,
+            "autocomplete":    autocomplete,
+            "datalab_used":    bool(datalab) and not iot_used,
+            "iot_used":        iot_used,
+            "trend_delta":     trend_delta,
+        }
+    finally:
+        # 작업 종료 — busy 즉시 해제 (해제 실패는 조용히 무시, TTL 은 안전망으로 잔존)
+        try:
+            from shared.pipeline_activity import clear_busy as _cb
+            _cb("j03")
+        except Exception:
+            pass
 
 
 def _calc_trend_delta(today_kws: list[str]) -> dict:

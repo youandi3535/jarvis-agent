@@ -783,15 +783,25 @@ def run_self_repair_then_economic():
         log("⏸ [경제 브리핑] 인터프리터 종료 중(데몬 재시작) — 발행 세트 연기, 재시작 후 재시도")
         return
 
-    # ★ 중복 실행 차단 — 오늘 이미 경제 브리핑 발행 세트가 시작됐으면 스킵
-    from datetime import datetime as _dt
-    _today = _dt.now().strftime('%Y%m%d')
-    _today_logs = list((BASE_DIR / 'logs').glob(f'economic_{_today}*.log'))
-    if _today_logs:
-        _msg = f"⛔ [경제 브리핑] 오늘 이미 실행됨 ({_today_logs[0].name}) — 중복 실행 차단"
-        log(_msg)
-        send_telegram(_msg)
-        return
+    # ★ 중복 실행 차단 — 오늘 경제 브리핑이 실제로 발행 성공한 경우에만 스킵
+    # (로그 파일 존재 여부가 아닌 DB 발행 이벤트 기준 — 실패 시 재실행 허용)
+    try:
+        import sqlite3 as _sql, json as _json
+        from shared.db import DB_PATH as _dbp
+        _con = _sql.connect(str(_dbp))
+        _row = _con.execute(
+            "SELECT id FROM events WHERE event_type='post_published' AND source='WRITER'"
+            " AND json_extract(payload,'$.post_type')='economic'"
+            " AND date(created_at)=date('now','localtime') LIMIT 1"
+        ).fetchone()
+        _con.close()
+        if _row:
+            _msg = "⛔ [경제 브리핑] 오늘 발행 성공 기록 있음 — 중복 발행 차단"
+            log(_msg)
+            send_telegram(_msg)
+            return
+    except Exception as _e:
+        log(f"⚠️ [경제 브리핑] 중복 체크 실패 ({_e}) — 안전하게 진행")
 
     # ─── Step 1: 자체수리 먼저 (사용자 박제 2026-07-12) ──────────────────────
     # 쿠키 관련 코드가 수정될 수 있으므로 자가진단을 쿠키 확인보다 먼저.
@@ -827,14 +837,7 @@ def run_self_repair_then_economic():
         return
 
     log(f"📤 [경제 브리핑] 발행 페이즈 진입 (자가진단 {_phase['elapsed_sec']}s 종료)")
-    try:
-        from shared.pipeline_activity import mark_busy as _mb
-        _mb("j02", "경제 브리핑 작성", ttl=2400)   # 40분 — 수집+작성+이미지+발행 커버
-        _mb("j09", "경제 데이터 수집", ttl=1200)   # 20분 — 수집 단계 커버
-        _mb("j06", "이미지 생성",      ttl=1800)   # 30분
-        _mb("j08", "플랫폼 발행",      ttl=2400)   # 40분
-    except Exception:
-        pass
+    # busy 마킹은 실제 작업 진입점(J09 수집·J08 발행 등)에서 직접 수행 — 고정 TTL 일괄 사전 마킹 폐지 (2026-07-16)
     return run_economic_poster()
 
 
@@ -932,14 +935,7 @@ def run_self_repair_then_theme():
         return
 
     log(f"📤 [테마글] 발행 페이즈 진입 (자가진단 {_phase['elapsed_sec']}s 종료)")
-    try:
-        from shared.pipeline_activity import mark_busy as _mb
-        _mb("j02", "테마글 작성",    ttl=4200)   # 70분 — 테마글은 더 오래 걸림
-        _mb("j09", "테마 데이터 수집", ttl=2400)  # 40분
-        _mb("j06", "이미지 생성",    ttl=3000)   # 50분
-        _mb("j08", "플랫폼 발행",    ttl=4200)   # 70분
-    except Exception:
-        pass
+    # busy 마킹은 실제 작업 진입점(J09 수집·J08 발행 등)에서 직접 수행 — 고정 TTL 일괄 사전 마킹 폐지 (2026-07-16)
     return run_radar_top_theme()
 
 

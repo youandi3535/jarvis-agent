@@ -1098,6 +1098,82 @@ def build_writing_rules_block() -> str:
     return "\n".join(out)
 
 
+def build_gate_checklist_block(post_type: str, platform: str) -> str:
+    """발행 전 자동 검증(Layer 3 게이트) 기준을 작성 프롬프트에 *사전 고지* 하는 체크리스트.
+
+    ★ 사용자 박제 2026-07-16 — "대본 작성 전 검증 규칙 숙지":
+      "다 만들고 검증에서 걸려 재작성 순환" 이 아니라 "처음부터 게이트 기준대로" 쓴다.
+      keyword_frequency_rule 의 '생성-검증 임계 일치' 원칙을 전 게이트로 확장.
+
+    구성 (전부 동적 수집 — 캐시 0, 각 owner 단일 소스에서 파생. 숫자 하드코딩 금지):
+      ① 분량       — post_type_specs.get_spec + length_manager.build_length_phrase (제8-B조 병기)
+      ② SEO        — 제15조 parse_seo_block(platform) + post_scorer.gate_checklist_lines (채점 수치)
+      ③ 매력도 5축 — prepublish_gate.ENGAGEMENT_THRESHOLDS (발행 전 LLM 채점 임계)
+    호출 배선: 경제=nv/ts_collect supreme_block 합류, 테마=_build_blocks — 모든 Pass-1
+    변형(단일·병렬·CLI 폴백)이 supreme_block 경유로 자동 상속 (ERRORS [311] 선례).
+    """
+    lines: list[str] = [
+        "",
+        "[★ 발행 전 자동 검증 기준 — 아래 전 항목이 발행 직전 게이트에서 실제 채점되며, "
+        "미달 시 전체 재작성됨. 처음부터 이 기준대로 작성하라]",
+    ]
+
+    # ① 분량 (post_type_specs 단일 소스 — 제8-B조 문장+글자 병기)
+    try:
+        from JARVIS02_WRITER.post_type_specs import get_spec as _gs
+        try:
+            from JARVIS02_WRITER import length_manager as _lm
+        except ImportError:
+            import length_manager as _lm  # type: ignore
+        _sp = _gs(post_type)
+        lines.append(
+            f"• 분량: 목표 {_lm.build_length_phrase(_sp.target_sentences)} — "
+            f"하한 {_sp.min_sentences}문장 / 절대 상한 {_sp.max_sentences}문장"
+            f"(약 {_sp.max_korean}자). 초과·미달 모두 발행 차단."
+        )
+    except Exception as _e:
+        log.debug(f"[LawEnforcer] 체크리스트 분량 파생 실패: {_e}")
+
+    # ② SEO — 제15조 핵심 지침 (플랫폼별) + 자동 채점 수치 (post_scorer 가 owner)
+    try:
+        _seo = parse_seo_block(platform)
+        if _seo:
+            lines.append(f"• SEO 지침 ({platform} — 헌법 제15조):")
+            lines.extend(f"  - {s.strip().lstrip('-•▶ ').strip()}"
+                         for s in _seo.splitlines() if s.strip())
+    except Exception:
+        pass
+    try:
+        from JARVIS02_WRITER.post_scorer import gate_checklist_lines as _gcl
+        _score_lines = _gcl(post_type, platform)
+        if _score_lines:
+            lines.append("• 자동 채점 항목 (100점 루브릭 — 70점 미달 시 재작성):")
+            lines.extend(f"  - {s}" for s in _score_lines)
+    except Exception as _e:
+        log.debug(f"[LawEnforcer] 체크리스트 채점 항목 파생 실패: {_e}")
+
+    # ③ 매력도·유익성 5축 — prepublish_gate 상수 (발행 전 LLM 채점)
+    try:
+        from JARVIS02_WRITER.prepublish_gate import ENGAGEMENT_THRESHOLDS as _thr
+        _axes_desc = {
+            "engagement":  "첫 문단부터 독자 공감 훅·읽는 재미",
+            "usefulness":  "소제목마다 독자가 가져갈 실용 정보",
+            "title_hook":  "제목에 구체 수치·질문 등 클릭 훅",
+            "originality": "일반론 아닌 독창적 관점·해석",
+            "structure":   "도입→전개→마무리 구조 완결",
+        }
+        lines.append(
+            "• 매력도 5축 LLM 채점 (임계 미달 시 재작성): "
+            + ", ".join(f"{k}≥{v}" for k, v in _thr.items())
+        )
+        lines.extend(f"  - {k}: {_axes_desc.get(k, '')}" for k in _thr)
+    except Exception as _e:
+        log.debug(f"[LawEnforcer] 체크리스트 매력도 파생 실패: {_e}")
+
+    lines.append("• 구체 수치가 포함된 모든 주장은 수집 출처와 대조 검증됨 — 출처 없는 수치 창작 금지.")
+    return "\n".join(lines) if len(lines) > 2 else ""
+
+
 def audit_factuality(
     html: str,
     source_data: str = "",

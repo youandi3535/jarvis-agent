@@ -76,7 +76,8 @@ def _count_images(html: str) -> int:
     return len(re.findall(r"<img\b", html, re.I)) + len(re.findall(r"<svg\b", html, re.I))
 
 
-def _ai_photo_html(path, alt: str) -> str:
+def _infographic_img_html(path, alt: str) -> str:
+    """인포그래픽 이미지 <p><img> 래퍼 (본문 이미지=인포그래픽만 — AI 사진 폐기 2026-07-06)."""
     return (f'<p><img src="{path}" alt="{alt}" '
             f'style="width:100%;max-width:760px;border-radius:8px;'
             f'margin:16px auto;display:block;"></p>')
@@ -114,7 +115,7 @@ def _next_data_infographic(collected, out_dir: Path, run_id: str, used_titles: s
             )
             if _path:
                 print(f"  📊 [{platform}] 실데이터 인포그래픽: {_title[:30]}")
-                return _ai_photo_html(_path, _title[:40].replace('"', "'"))
+                return _infographic_img_html(_path, _title[:40].replace('"', "'"))
         except Exception as e:
             print(f"  ⚠️ [{platform}] 인포그래픽 실패({_title[:20]}): {e}")
     return ""   # 인포그래픽 못 만들면 빈 슬롯 — 폴백 없음
@@ -405,6 +406,27 @@ def process_draft(draft_html: str, collected, platform: str = "tistory",
     Returns:
         {"blocks": list[tuple], "thumbnail_path": str|None, "title": str, "html": str, "html_path": str}
     """
+    # ★ 파이프라인 활동 표시 — 조립 시작 시 바쁨 마킹, 종료 시(성공·실패 무관) 해제.
+    #   lazy import + no-op 폴백 — clear_busy 는 다른 작업자가 동시 신설 중이라
+    #   import 실패에도 안전해야 함 (표시 실패가 조립을 막으면 안 됨).
+    try:
+        from shared.pipeline_activity import mark_busy
+        mark_busy("j06", "인포그래픽·이미지 조립", ttl=900)
+    except Exception:
+        pass
+    try:
+        return _process_draft_impl(draft_html, collected, platform, out_dir)
+    finally:
+        try:
+            from shared.pipeline_activity import clear_busy
+            clear_busy("j06")
+        except Exception:
+            pass
+
+
+def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
+                        out_dir: Path = None) -> dict:
+    """process_draft 실제 본체 — 바쁨 마킹 try/finally 래퍼(process_draft)에서만 호출."""
     try:
         from shared.pipeline_activity import mark_active
         mark_active("e3")  # J02→J06 대본 전달 활성화
@@ -480,11 +502,20 @@ def process_draft(draft_html: str, collected, platform: str = "tistory",
     # ⑤ HTML 저장
     html_path, _ = save_article_html(html, theme, platform=platform)
 
-    # ⑥ SVG 캡처 → JPG
-    print(f"  📸 [{platform}] SVG 캡처...")
-    visual_paths = screenshot_article(html_path, str(out_dir))
-    if not visual_paths:
-        print(f"  ⚠️ [{platform}] 스크린샷 0개 — 텍스트 전용 진행")
+    # ⑥ SVG 캡처 → JPG — 인라인 <svg> 있을 때만 (슬롯 렌더 경로는 차트를 이미
+    #    JPG 파일 + <p><img> 로 본문에 내장 → inline SVG 0개가 *정상* — 오경보 방지)
+    if re.search(r"<svg\b", html, re.IGNORECASE):
+        print(f"  📸 [{platform}] SVG 캡처...")
+        visual_paths = screenshot_article(html_path, str(out_dir))
+        if not visual_paths:
+            print(f"  ⚠️ [{platform}] 스크린샷 0개 — 텍스트 전용 진행")
+    else:
+        visual_paths = []
+        _n_body_imgs = len(re.findall(r"<img\b", html, re.IGNORECASE))
+        if _n_body_imgs:
+            print(f"  ℹ️ [{platform}] 인라인 SVG 없음 — 슬롯 렌더 이미지 {_n_body_imgs}개 사용, 캡처 생략")
+        else:
+            print(f"  ⚠️ [{platform}] 스크린샷 0개 — 텍스트 전용 진행")
 
     # ⑦ 썸네일 필수 (body 3000, 재시도 + 로컬 폴백 → 누락 0)
     body_text = re.sub(r"<[^>]+>", "", html)[:thumb_chars]
@@ -512,6 +543,7 @@ def process_draft(draft_html: str, collected, platform: str = "tistory",
     except Exception as _ee:
         log.warning(f"[{platform}] enforce_text_between_images 오류(무시): {_ee}")
     try:
+        # 신 파이프라인은 이미지가 이미 blocks 에 내장 — image_pool 미전달이 정상 (본문 이미지=인포그래픽만, 폴백 없음 규정)
         from JARVIS02_WRITER.law_enforcer import (
             enforce_supreme_law as _esl, notify_violations as _nviol
         )

@@ -136,6 +136,7 @@ def _fix_sentence_overflow(draft: dict, issue_str: str) -> bool:
         return False
 
     new_html = html
+    removed_paragraphs: list = []   # 제거된 <p> 원본 html — blocks 동기화용
     # 뒤에서부터 <p> 블록 제거
     for match in reversed(p_positions):
         if current <= max_sents:
@@ -146,13 +147,53 @@ def _fix_sentence_overflow(draft: dict, issue_str: str) -> bool:
         if current - p_sents < 10:
             break
         new_html = new_html[:match.start()] + new_html[match.end():]
+        removed_paragraphs.append(match.group())
         current -= p_sents
 
     if new_html == html:
         return False
 
+    # ★ blocks 동기화 (2026-07-16 근본 수정) — 검증은 draft["html"] 기준이지만
+    #   실제 발행은 draft["blocks"] 기준. html 만 고치면 "검증 통과 → 위반 발행".
+    #   제거한 <p> 를 blocks 에서도 제거하고, 못 찾으면 수정 자체를 포기(재생성 위임)
+    #   — 검증-발행 불일치 상태를 절대 만들지 않는다.
+    blocks = draft.get("blocks")
+    if isinstance(blocks, list) and blocks and removed_paragraphs:
+        def _norm(s: str) -> str:
+            return re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', str(s))).strip()
+        new_blocks = list(blocks)
+        for removed_p in removed_paragraphs:
+            found = False
+            norm_p = _norm(removed_p)
+            for i in range(len(new_blocks) - 1, -1, -1):
+                try:
+                    btype, bdata = new_blocks[i][0], new_blocks[i][1]
+                except Exception:
+                    continue
+                if btype not in ("text", "html") or not isinstance(bdata, str):
+                    continue
+                if removed_p in bdata:
+                    rest = bdata.replace(removed_p, "", 1)
+                    if _norm(rest):
+                        new_blocks[i] = (btype, rest)
+                    else:
+                        del new_blocks[i]
+                    found = True
+                    break
+                if norm_p and _norm(bdata) == norm_p:
+                    del new_blocks[i]
+                    found = True
+                    break
+            if not found:
+                _log.warning(
+                    "[draft_fixer] blocks 동기화 실패 (제거 문단 미발견) — "
+                    "수정 포기, 재생성 위임 (검증-발행 불일치 방지)"
+                )
+                return False
+        draft["blocks"] = new_blocks
+
     draft["html"] = new_html
-    _log.info(f"[draft_fixer] 분량 상한 초과 수정: {_count_sents_in_html(html)}문장 → {current}문장 (상한 {max_sents})")
+    _log.info(f"[draft_fixer] 분량 상한 초과 수정: {_count_sents_in_html(html)}문장 → {current}문장 (상한 {max_sents}, blocks 동기화 포함)")
     return True
 
 

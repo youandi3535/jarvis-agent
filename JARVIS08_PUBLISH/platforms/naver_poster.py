@@ -24,6 +24,13 @@ except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────
 
+# ── JARVIS00 워치독 진행 신호 (freeze 오탐 방지 — ERRORS [439] 계열) ──
+try:
+    from JARVIS00_INFRA.watchdog import beat as _wd_beat
+except ImportError:
+    def _wd_beat() -> None: pass  # watchdog 부재 시 no-op
+# ─────────────────────────────────────────────────────
+
 load_dotenv()
 NV_ID  = os.getenv("NV_USERNAME", "")
 NV_PW  = os.getenv("NV_PASSWORD", "")
@@ -648,6 +655,13 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
     import pyautogui
     pyautogui.FAILSAFE = False
 
+    # ── 대시보드 busy 신호 — 발행 진행 표시 (마킹 실패는 발행을 절대 막지 않음) ──
+    try:
+        from shared.pipeline_activity import mark_busy as _mb_pa
+        _mb_pa("j08", "네이버 발행", ttl=900)   # 안전망 15분 — 종료 시 finally 에서 즉시 해제
+    except Exception:
+        pass
+
     # ── 쿠키 사전 확인 & 갱신 (브라우저 열기 전) ──────────────
     _pre_check_and_refresh_cookie()
 
@@ -670,6 +684,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
 
     driver = None
     try:
+        _wd_beat()   # ★ 발행 시작 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
         driver = _get_driver()
 
         if not _ensure_logged_in(driver):
@@ -1064,6 +1079,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 Finder 다이얼로그 후 Chrome 복귀 → Selenium CDP click으로 editor 포커스 재설정.
                 """
                 # 사진 아이콘 클릭 전 Chrome을 front로
+                _wd_beat()   # ★ 이미지 업로드 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
                 _activate_window()
                 time.sleep(0.8)
                 _upload_image(img_path, driver=driver)
@@ -1103,6 +1119,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
 
             # 나머지 블록: divider 블록에서 구분선 삽입
             for bi, (btype, bdata) in enumerate(remaining):
+                _wd_beat()   # ★ 블록 입력 루프 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
                 print(f"  [{bi+1}/{len(remaining)}] {btype}: {str(bdata)[:50]}")
                 if btype == 'divider':
                     pass  # 구분선 제거 — 소제목 이미지로 대체됨
@@ -1425,6 +1442,12 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             driver.save_screenshot(str(IMG_EDITOR / "error.png"))
         return False
     finally:
+        # 발행 종료(성공·실패) — busy 즉시 해제, 대시보드 평상시 복귀 (실패는 조용히 무시)
+        try:
+            from shared.pipeline_activity import clear_busy as _cb_pa
+            _cb_pa("j08")
+        except Exception:
+            pass
         if driver:
             time.sleep(2)
             driver.quit()

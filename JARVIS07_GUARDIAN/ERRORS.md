@@ -2,6 +2,86 @@
 
 ---
 
+## [445] ✅ 수동수정 — 하네스 검증 순환 로직 구멍 4종 — LLM 타임아웃 1회가 완성 대본·차트 8개를 통째로 폐기 (2026-07-16)
+
+- **증상**: 수동 경제 브리핑 실행에서 ① 41문장 생성 → draft_fixer 즉시수정 성공(fixed=1/unfixed=0) → 재검증 중 `SDK timeout 90s — 수집된 응답: 0개` → `검증 실패 (시도 1/3)` → 대본·차트 8개·썸네일 전량 폐기 후 처음부터 재생성(5분+ 낭비) ② 차트 8개가 본문에 실재하는데 "제4조 이미지 부재 6개 섹션" 오검출 ③ "SVG 블록 없음 — HTML 구조 확인 필요" 상시 오경보 ④ 텔레그램 `can't parse entities` 전송 실패.
+- **환경**: `harness.py` 검증 순환 + `prepublish_gate` 통합 LLM 판정 + `draft_writer` 경제 Pass-1 + `image_injectors`. 38-에이전트 워크플로 분석·전건 교차검증으로 인과 사슬 확정.
+- **원인 (사슬)**: ⑴ 경제 Pass-1 프롬프트에 분량 *상한* 부재('<p> 15개 이상' 하한만 — 테마에만 상한 블록 존재) → 41문장 생성이 방아쇠. ⑵ `harness.py` "unfixed=0 즉시 재검증" 분기가 재검증 실패 시 그 결과(_rev)를 통째로 폐기 + 기록엔 fixed 이슈만 남아 다음 시도가 대본 생성 step 부터 전체 재실행 → step 첫 줄 `_cleanup_naver_images()` 가 완성 이미지 전량 삭제. ⑶ 게이트 LLM 타임아웃 시 반환 dict 에 `llm_scores` 키 부재 → 100점 채점이 Section A 를 0/20 처리 → 총점 상한 80에서 70 커트라인 → *인프라 실패가 콘텐츠 결함으로 오분류*. ⑷ 재검증 예외 시 `_rev=[]` 로 '통과' 처리 → 무검증 송출 가능 구멍(ADR 009 위반 경로). ⑸ draft_fixer 가 html 만 고치고 blocks 미동기화 → "검증 통과·발행물 위반" 가능. ⑹ `_is_h2_header` 가 ('text','<h2>') 블록을 인식 못해 글 전체가 단일 섹션 취급 → 제4조 100% 오검출.
+- **헛다리**: 없음 — 각 결함을 반박 검증(3-5 에이전트) 후 수정.
+- **해결**: ① `harness.py` — `VERIFY_ONLY` 신호 신설: 남은 이슈가 전부 fixed/검증·송출 단계면 Layer 2 재실행 없이 재검증만 (산출물 보존). 재검증 실패 시 _rev 를 fix 훅 재실행 후 실제 이슈로 채택 (gate_feedback 전달 겸함). 재검증 예외 = verify_error 이슈 박제 (무검증 송출 봉쇄). ② `prepublish_gate` — 모든 fail-open 반환에 `llm_scores: None` 명시 + 점수 게이트가 None 이면 스킵(fail-open 정합) + 판정 LLM 빈 응답 1회 재시도 + `ENGAGEMENT_THRESHOLDS` 상수 승격. ③ `draft_writer` 경제 Pass-1 에 spec 파생 분량 상한 블록 이식 + 테마 검증에 분량 상한 추가 (생성-검증 대칭). ④ `draft_fixer` blocks 동기화 (불일치 시 수정 포기 → 재생성 위임). ⑤ `law_enforcer.build_gate_checklist_block(post_type, platform)` 신설 — 게이트가 실제 채점하는 기준(분량·SEO 제15조·Section C/D 수치·매력도 5축)을 Pass-1 프롬프트에 사전 고지, supreme_block 합류로 전 변형 자동 상속. ⑥ `_is_h2_header` text 타입 h2/h3 인식 + SVG 캡처 조건화 + 경고 문구 교정. ⑦ 죽은 코드 삭제(_TS_SECTIONS·_TS_Q1~4·_cap_eco_content·_L_LEN_BLOCK·_build_seo_block/_platform_seo_section import). 재현 테스트: 하네스 4종·draft_fixer 2종·이미지 오검출 재현 전수 통과.
+- **파일**: `JARVIS00_INFRA/harness.py`, `JARVIS02_WRITER/{prepublish_gate,draft_writer,draft_fixer,law_enforcer,post_scorer,economic_poster,trend_economic_writer,trend_theme_writer,jarvis_main}.py`, `JARVIS06_IMAGE/{draft_processor,html_screenshotter,slot_renderer}.py`, `JARVIS06_IMAGE/injectors/image_injectors.py`, `shared/notify.py`.
+- **교훈**: ★ 인프라 실패(타임아웃·예외)와 콘텐츠 결함을 절대 같은 경로로 처리하지 말 것 — 인프라 실패는 "산출물 유지 + 재검증만", 콘텐츠 결함만 재생성. ★ 검증이 보는 표현(html)과 발행이 쓰는 표현(blocks)을 고치는 fixer 는 반드시 양쪽 동기화 — 못 하면 수정 포기가 정답. ★ 게이트가 채점하는 기준은 작성 프롬프트에 사전 고지(생성-검증 임계 일치) — "다 만들고 걸러서 재작성" 은 구조적 낭비.
+
+## [444] ✅ 수동수정 — 대시보드 "에이전트 작동 중(busy)" 신호 전멸 — 부분 dict 쓰기가 busy 키 드랍 + 읽기 경로 쓰기 경합 (2026-07-16)
+
+- **증상**: 발행·수집이 실제로 돌고 있어도 대시보드 busy(작동 중) 애니메이션이 전혀 켜지지 않음.
+- **환경**: `shared/pipeline_activity.py` (파일 기반 크로스 프로세스 공유) — 데몬(3분 하트비트 잡)과 API 서버(2초 폴링)가 동시에 읽고 씀.
+- **원인**: ① `mark_active`/`get_active`/`log_activity` 가 `_write({"active":..., "log":...})` 부분 dict 재구성으로 저장 → `busy` 키 통째로 드랍 (mark_busy/get_busy_agents 만 `{**data,...}` 보존형). 하트비트·폴링이 수시로 mark_active 를 부르니 busy 가 기록되자마자 지워짐. ② `get_active()`/`get_busy_agents()` 가 만료 청소를 위해 *읽기 경로에서 파일을 씀* → API 서버(별도 프로세스)가 writer 가 되어 데몬과 read-modify-write 경합 (`_LOCK` 은 threading.Lock — 프로세스 간 무력). ③ `clear_busy()` 부재 — 작업이 일찍 끝나도 TTL 만료까지 busy 잔존. ④ `scheduler.py` 가 발행 시작 시 j02/j09/j06/j08 넷을 고정 TTL(20~70분)로 일괄 사전 마킹 — 실제 작업과 무관.
+- **헛다리**: 없음 — 사전 교차검증으로 dashboard/ 프론트엔드는 결함 없음 확정 (수정 금지).
+- **해결**: ① 모든 writer 를 "전체 dict 읽기 → 필요한 키만 갱신 → 전체 쓰기" 보존형으로 통일 (미래 키 추가에도 재발 불가 구조). ② 읽기 함수 읽기 전용화 — 만료는 메모리 필터만, 물리 삭제는 쓰기 시점 `_purge_expired()` 로 일원화. ③ `clear_busy(agent_id)` 신설 + read-modify-write 구간에 `fcntl.flock` 파일 락(`.lock` 파일, 실패 시 락 없이 진행 — 가용성 우선). ④ scheduler 사전 일괄 마킹 폐지 → 실제 작업 진입점에서 mark_busy + `finally` clear_busy (collector_engine `collect_for_theme`/`collect_research`·chart_data `collect_chart_data` = j09, naver/tistory_poster `post_to_*` = j08, radar_main `collect_today` = j03). TTL 은 안전망으로 축소 유지 (수집 10분·차트 5분·발행 15분).
+- **파일**: `shared/pipeline_activity.py`, `JARVIS02_WRITER/scheduler.py`, `JARVIS09_COLLECTOR/collector_engine.py`, `JARVIS09_COLLECTOR/chart_data.py`, `JARVIS08_PUBLISH/platforms/naver_poster.py`, `JARVIS08_PUBLISH/platforms/tistory_poster.py`, `JARVIS03_RADAR/radar_main.py`.
+- **교훈**: 공유 JSON 상태 파일의 writer 는 절대 부분 dict 를 재구성해 쓰지 말 것 — 항상 전체 읽기→키 갱신→전체 쓰기. 읽기 API 가 파일을 쓰게 하면 모든 폴링 프로세스가 writer 가 되어 경합한다 — 만료 청소는 쓰기 시점으로 모을 것. busy 류 "진행 중" 신호는 시작 마킹과 `finally` 해제가 한 쌍 — 고정 TTL 사전 마킹은 실상과 무관한 거짓 신호.
+
+## [443] ✅ 수동수정 — LLM SDK hang 근본 원인 — 이벤트 루프 오염 + 300s timeout (2026-07-16)
+
+- **증상**: `economic_20260716_063022.log` 에서 `SDK timeout 300s — 수집된 응답: 0개` 가 2회 연속, 그 직전에 `Loop <_UnixSelectorEventLoop running=False closed=True debug=False> that handles pid XXXXX is closed` 경고. 드래프트 LLM 에 600s(10분) 낭비 → prepublish gate 실패 후 재시도에서 또 300s hang → 총 1830s로 30분 초과 kill.
+- **환경**: `shared/llm.py _run_blocking()` 내 `anyio.run(_collect)`, `ThreadPoolExecutor(max_workers=1)`, Python 3.10 asyncio.
+- **원인 1 (이벤트 루프 오염)**: `anyio.run(_collect)` 완료 후 해당 스레드의 asyncio 이벤트 루프가 `closed` 상태로 남는다. `ThreadPoolExecutor` 는 스레드를 재사용하므로, 두 번째 호출이 동일 스레드에서 실행되면 닫힌 루프를 만나 "Loop is closed" → SDK가 스트리밍을 시작하지 못한 채 0개 응답 → 300s wall_deadline까지 블로킹. 즉 연속 두 번의 300s hang 중 **두 번째는 전적으로 이 버그의 결과**.
+- **원인 2 (timeout 300s)**: 기본 SDK timeout이 300s(5분)이라 첫 hang 시 5분을 날린 후에야 재시도. 이벤트 루프 오염이 없어도 첫 hang이 일어나면 5분 낭비.
+- **헛다리**: [442]에서 "3-pass 작성·인포그래픽 추가로 30분 초과"로 판단해 deadline을 45분으로 늘렸으나 이는 임시방편. 실제 pipeline은 이벤트 루프 오염 버그 없이는 20~25분에 완료 가능하며, 30분은 충분한 deadline.
+- **해결**:
+  1. `shared/llm.py _run_blocking()` 에 `asyncio.set_event_loop(asyncio.new_event_loop())` 추가 — 매 호출마다 새 이벤트 루프 강제 설정 → 재사용 오염 근본 제거.
+  2. `shared/llm.py invoke_text()` 기본 timeout 300s → 180s — 첫 hang 시 5분이 아닌 3분에 감지·재시도.
+  3. `JARVIS00_INFRA/watchdog.py BLOG_ACTION_DEADLINE_SEC` 2700(45분) → 1800(30분) 복원 — 임시방편 해제, 정상 pipeline은 20~25분에 완료.
+  4. `economic_poster.py guard_main` 6000 → 3540, `trend_theme_writer.py guard_main` 6000 → 3600 복원.
+  5. [442] 해결 내용(deadline 증설)도 함께 롤백.
+- **파일**: `shared/llm.py`, `JARVIS00_INFRA/watchdog.py`, `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/trend_theme_writer.py`.
+- **교훈**: ThreadPoolExecutor 재사용 스레드에서 anyio.run() 을 여러 번 호출하면 이벤트 루프 상태가 오염된다. `_run_blocking` 같은 반복 실행 함수는 반드시 `asyncio.set_event_loop(asyncio.new_event_loop())` 선행 필수. ★ 재발 방지: 새 비동기 SDK 래퍼 함수 추가 시 이 패턴 의무 적용.
+
+## [442] ✅ 수동수정 — 경제·테마 발행 harness 데드라인 구조적 부족 — 3-pass 작성·인포그래픽·품질 게이트 추가로 30분 초과 (2026-07-16)
+
+- **증상**: `[harness:경제 브리핑 발행 — 네이버] attempt=2 step=전체: 데드라인 초과(블로킹) 1830s > 1800s`. 시도 2회 모두 검증 실패. GUARDIAN 재발행 시도도 동일하게 실패. 이미지 4개 섹션 부재 경고도 동반.
+- **환경**: `JARVIS00_INFRA/watchdog.py BLOG_ACTION_DEADLINE_SEC=1800`, `JARVIS02_WRITER/economic_poster.py guard_main(deadline_sec=3540)`, `JARVIS02_WRITER/trend_theme_writer.py guard_main(deadline_sec=3600)`.
+- **원인**: `BLOG_ACTION_DEADLINE_SEC=1800`(30분)은 2026-07-06 사용자가 확정한 값이나, 이후 파이프라인에 ① 3-pass 작성(서사설계+작성+비평, +7~10분) ② 인포그래픽 pro_templates ③ prepublish 품질 게이트(Sonnet 5 LLM 2종)가 추가되어 총 소요 시간이 상시 30분을 초과. 30분 한계는 `attempt=1` 시도가 prepublish gate 실패로 재시도를 트리거하면 `attempt=2` 는 residual time이 0에 가까워 즉시 deadline hit. `guard_main(deadline_sec=3540)` = 59분 상한도 45분×2 플랫폼에 부족.
+- **헛다리**: 없음 — ERRORS.md [441]([440] 데몬 미재시작) 과 동시에 존재하는 별개 원인. [440] 재시작 수정만으로는 pipeline 자체 소요 시간이 30분을 넘는 한 재발함.
+- **해결**: ① `BLOG_ACTION_DEADLINE_SEC` 1800→2700 (30분→45분, `JARVIS00_INFRA/watchdog.py`) ② `economic_poster.py guard_main` 3540→6000 (59분→100분) ③ `trend_theme_writer.py guard_main` 3600→6000 (60분→100분). 3개 파일 동시 수정.
+- **파일**: `JARVIS00_INFRA/watchdog.py`, `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/trend_theme_writer.py`.
+- **교훈**: `BLOG_ACTION_DEADLINE_SEC` 상수는 파이프라인 실제 소요 시간을 반영해야 하며, 신규 LLM 패스·이미지 생성 단계가 추가될 때 함께 검토 필수. `guard_main` 부모 데드라인은 반드시 `BLOG_ACTION_DEADLINE_SEC × 플랫폼 수 + 여유` 로 설정. ★ 재발 방지: 파이프라인 새 단계 추가 시 `watchdog.py BLOG_ACTION_DEADLINE_SEC` 검토 체크리스트 추가.
+
+## [441] ✅ 수동수정 — 경제 브리핑 네이버 harness 데드라인 초과 — [440] 수정이 코드엔 있었으나 데몬 미재시작으로 미적용 (2026-07-16)
+
+- **증상**: `[harness:경제 브리핑 발행 — 네이버] attempt=2 step=전체: 데드라인 초과(블로킹) 1830s > 1800s` — [438][440]과 동일 문구·거의 동일 수치, 대상만 네이버. `economic_20260716_063022.log` 확인 결과 draft attempt 1·2 양쪽에서 `SDK timeout 300s — 수집된 응답: 0개` 가 반복되며 예산을 소진한 뒤 하드킬.
+- **환경**: `jarvis_daemon.py` 상시 프로세스(PID 28909, 기동 2026-07-15 20:15:00) + `shared/llm.py`.
+- **원인**: [440]의 `_proc_lock_acquire(timeout=...)` 수정은 2026-07-16 03:03:30 에 이미 파일에 반영되어 있었으나(작업트리 diff 확인), 이를 반영해야 할 daemon 프로세스가 03:03 훨씬 이전인 07-15 20:15 부터 떠 있던 채로 06:30 경제 브리핑을 실행 — Python 은 프로세스 기동 시점의 바이트코드를 메모리에 캐싱하므로 03:03 수정이 반영 안 된 **구코드**(무제한 락 대기)로 그대로 실행되어 [439]와 동일한 무제한 대기 hang 이 네이버 액션에서 재현됨. 즉 이번 사고는 *새 코드 결함이 아니라* "코드 수정 후 데몬 재시작 누락"이 원인 — CLAUDE.md 계층2 "즉시 반영 vs 데몬 재시작" 절이 정확히 경고하는 시나리오.
+- **헛다리**: 없음 — [438][439][440] 을 먼저 대조해 동일 클래스임을 확인했고, `shared/llm.py`/`naver_poster.py`/`tistory_poster.py` 의 uncommitted diff 가 이미 완전한 수정을 담고 있음을 코드 검토로 확인한 뒤, 데몬 프로세스 기동 시각(`ps -o lstart`)과 수정 파일 mtime 을 대조해 "코드는 고쳐졌지만 로드되지 않았다"는 진짜 원인을 특정했다. 코드를 또 고치는 헛수고 없이 바로 재시작으로 귀결.
+- **해결**: 코드 변경 없음(추가 수정 불필요 — [440] 수정이 이미 정답). `kill <daemon_pid>` 로 구프로세스 종료 → `jarvis_keeper.py` 가 30초 이내 자동 재기동(신규 PID) → 이제 03:03 수정본이 로드됨. `py_compile` 로 `shared/llm.py`/양쪽 poster 파일 구문 재확인 완료.
+- **파일**: 없음 (런타임 재시작만).
+- **교훈**: 코드 결함을 고쳤다고 사고가 끝나는 게 아니다 — **상시 실행 데몬은 재시작 전까지 구코드로 계속 돈다**. 특히 발행 파이프라인처럼 하루 1~2회만 도는 잡은 "고침 시각"과 "다음 실행 시각" 사이에 재시작이 끼지 않으면 이미 고친 버그가 다음 실행에서 *그대로 재현*된다. 코드 수정 직후에는 `ps -o lstart -p $(cat logs/daemon.pid)` 로 프로세스 기동 시각과 수정 파일 mtime 을 항상 대조하고, 기동 시각이 더 이르면 즉시 재시작할 것.
+
+## [440] ✅ 수동수정 — 경제 브리핑 티스토리 harness 데드라인 재초과 — 크로스 프로세스 락 자체가 무제한 대기 (2026-07-16)
+
+- **증상**: `[harness:경제 브리핑 발행 — 티스토리] attempt=2 step=전체: 데드라인 초과(블로킹) 1829s > 1800s` — [438]과 동일한 문구·수치. [438](`JARVIS_LLM_DEADLINE_TS` SSOT 불일치)·[439](크로스 프로세스 fcntl 잠금 도입)가 이미 2026-07-15에 적용된 뒤에도 동일 증상이 다시 보고됨.
+- **환경**: `shared/llm.py` `_run_sdk_sync`/`_invoke_sdk_vision` — [439]에서 신설한 `_proc_lock_acquire()`(fcntl.flock 크로스 프로세스 직렬화).
+- **원인**: [439]가 크로스 프로세스 락은 도입했지만 락 대기 자체를 **무제한 폴링**으로 구현 — `timeout` 인자가 없어 다른 JARVIS 프로세스(daemon·수동 실행 등)가 락을 오래 쥐고 있으면 `_proc_lock_acquire()` 내부 `while True` 루프에서 하네스 액션 데드라인(1800s)을 그대로 관통한다. 이 대기는 *스텝 내부*(한 번의 `invoke_text` 호출 안)에서 일어나므로 `_execute_steps`의 협조적 `wd.check()`가 스텝 사이에서만 도는 구조상 못 잡고, 오직 백그라운드 감시 스레드의 절대 시각 비교(`elapsed > deadline_sec + poll_sec`)로만 뒤늦게 "데드라인 초과(블로킹)"로 걸린다. [438]이 고친 `JARVIS_LLM_DEADLINE_TS`(재시도 강등 임계)와 [439]가 추가한 `_BG_ALIASES` 타임아웃 강등은 모두 `invoke_text`→`_run_sdk_sync` **내부**의 SDK 호출 자체만 보호할 뿐, 그 호출보다 먼저 실행되는 `_proc_lock_acquire()` 대기 구간은 두 보호장치 어느 쪽도 커버하지 못했다.
+- **헛다리**: 없음 — ERRORS.md 선행 검색으로 [438][439]가 동일 액션·동일 수치의 선행 사고임을 확인했으나, 둘 다 "SDK 호출 자체의 시간 예산"만 다뤘고 그 앞 단계인 "락 대기 시간 예산"은 다루지 않았음을 코드 대조로 특정.
+- **해결**: `_proc_lock_acquire(timeout=...)` 로 상한 인자 추가 — 초과 시 예외 없이 `False` 반환. `_run_sdk_sync`/`_invoke_sdk_vision` 양쪽이 이미 계산된(발행 중이면 [439]가 강등한 ≤90s 등) `timeout` 값을 그대로 락 대기 상한으로 전달 → 실패 시 SDK hang(`_LAST_CALL.hung=True`)과 동일하게 취급해 상위 `invoke_text`의 재시도·회로차단기 경로로 자연 위임. 이제 액션 전체 소요는 "락 대기 상한 + SDK 타임아웃"으로 유계.
+- **파일**: `shared/llm.py`.
+- **교훈**: 시간 예산 보호장치(강등·타임아웃)를 추가할 때는 그 함수의 *진입부터 반환까지* 모든 블로킹 지점을 나열해 전수 커버해야 한다 — 새로 추가한 락 자체가 새로운 무제한 블로킹 지점이 될 수 있음을 [439] 리뷰 시점에 놓쳤다. "SDK 호출에 타임아웃을 걸었다" ≠ "이 함수 호출 전체에 타임아웃을 걸었다".
+
+## [439] LLM 포화 설계 근본 원인 — 크로스 프로세스 CLI 충돌 + guardian 세마포어 300s 선점 (2026-07-15)
+
+- **증상**: `SDK timeout 300s — 수집된 응답: 0개` 반복 발생. 수동 `economic_poster.py --tistory-only` 실행 시 특히 빈번.
+- **환경**: `python JARVIS02_WRITER/economic_poster.py --tistory-only` (수동) + `jarvis_daemon.py`(daemon) 동시 실행.
+- **원인A (크로스 프로세스 충돌)**: `_LLM_SPAWN_SEM = threading.BoundedSemaphore(1)` 은 *프로세스 내* 직렬화만 보장. daemon 과 수동 실행은 **별개 프로세스** — 각자 독립 세마포어를 보유해 동시에 `claude CLI`를 spawn 가능. 두 프로세스가 동시에 Claude Max 구독을 호출하면 포화 → SDK silent hang(0응답). 원래 코드에 크로스 프로세스 조율 수단이 전무했음.
+- **원인B (guardian 세마포어 300s 선점)**: daemon 내부에서 `j07_retry_pending`(10분 주기) · `j07_log_scan`(5분 주기)이 `invoke_text("guardian", timeout=300)` 으로 세마포어를 최대 300s 점유 — 발행 파이프라인이 그 뒤에 대기하면 다음 LLM 호출이 300s 지연됨. 발행 중 background alias 를 우선 낮추는 수단 없음.
+- **헛다리**: 이전 수정([322][323])은 "SDK 타임아웃 = 외부 요인" 으로 분류해 설계 문제를 간과. 실제로는 두 가지 구조적 결함이 SDK 타임아웃을 **고빈도·반복적**으로 유발.
+- **해결**: 3 계층 동시 적용
+  1. **크로스 프로세스 fcntl 잠금** (`shared/llm.py`): `_proc_lock_acquire`/`_proc_lock_release` — `fcntl.flock(LOCK_EX)` 로 `~/.jarvis/llm_exec.lock` 획득 후 SDK call. POSIX 보장: 프로세스 종료 시 자동 해제(교착 위험 0). `_run_sdk_sync` · `_invoke_sdk_vision` 양쪽에 삽입.
+  2. **발행 기간 LLM 우선권** (`shared/llm.py`): `_PUBLISHING_ACTIVE(threading.Event)` + `_BG_ALIASES={guardian,learn_eval,architect,diagnostic}` — `mark_publishing(True)` 설정 시 background alias 호출을 `timeout≤90s · retries=1` 로 자동 강등. `economic_poster.run()` · `trend_theme_writer.run_all_themes()` 양쪽에 `mark_publishing(True/False)` 삽입.
+  3. **guardian timeout 단축** (`JARVIS07_GUARDIAN/error_analyzer.py`): `analyze_llm_only` 의 `invoke_text("guardian", timeout=300)` → `timeout=120`. 발행 중이면 LLM 분석 자체를 패스(backlog 잔류 → `job_deep_audit` 04:30 처리).
+- **파일**: `shared/llm.py`, `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS07_GUARDIAN/error_analyzer.py`.
+- **교훈**: `threading.BoundedSemaphore` 는 단일 프로세스 직렬화만 보장. 별도 프로세스(수동 실행, 테스트 스크립트 등)가 같은 외부 리소스를 함께 쓰면 크로스 프로세스 잠금(`fcntl`, socket, 파일 락 등) 이 별도로 필요. 발행 파이프라인은 LLM 잠금을 *선점권*과 함께 써야 background 유지 잡이 발행 시간을 잡아먹지 않는다.
+
 ## [438] 경제 브리핑 티스토리 harness 데드라인 초과 — JARVIS_LLM_DEADLINE_TS(40분)가 하드 데드라인(30분)보다 커서 강등 미진입 (2026-07-15)
 
 - **증상**: `JARVIS00_INFRA.harness.경제 브리핑 발행 — 티스토리` 가 `attempt=2 step=전체: 데드라인 초과(블로킹) 1829s > 1800s` 로 watchdog 강제종료(os._exit 75). 로그(`economic_20260715_063027.log`) 확인 결과 티스토리 Pass-1 대본 생성(`invoke_text("writer", ...)`)에서 `SDK timeout 300s — 수집된 응답: 0개` 가 attempt 1 에서 2회, attempt 2 에서 2회(+3회째 도중 강제종료) 연속 발생 — 순수 SDK 무응답 대기만으로 예산 대부분 소모.

@@ -18,7 +18,7 @@
 원칙:
   - 자비스06은 데이터를 수집·선택하지 않는다 — 슬롯에 적힌 값 그대로 렌더.
   - 진실성 검증: 슬롯 값은 대본 패키지에 동봉된 ref_datasets(자비스09 원본)와
-    대조 — 일치하는 행만 렌더(±0.5% 허용), 전부 불일치면 슬롯 무효(AI 사진 폴백).
+    대조 — 일치하는 행만 렌더(±0.5% 허용), 전부 불일치면 슬롯 무효(구형식 강등 → 인포그래픽, 없으면 빈 슬롯).
     "자비스09의 수집 정보로 검증 대조" — 검증 재료는 09→02→(대본 패키지)→06 으로 흐른다.
   - 렌더는 infographic_engine(85점 엔진) 위임 — 시간축 좌→우·스타일 다양성 그대로.
 """
@@ -190,7 +190,7 @@ def verify_slot(slot: dict, ref_pairs: list[tuple[float, str]]) -> dict | None:
     if not slot.get("data"):
         return None
     if not ref_pairs:
-        log.warning(f"[slot] CHART_{slot['idx']} 검증 재료 없음 — 슬롯 무효 (AI 사진 폴백)")
+        log.warning(f"[slot] CHART_{slot['idx']} 검증 재료 없음 — 슬롯 무효 (구형식 강등 → 인포그래픽, 없으면 빈 슬롯)")
         return None
     slot_unit = _norm_unit(slot.get("unit"))
     rows: list[tuple[dict, str]] = []   # (행, 해석 단위) — 행별 추적 (ERRORS [312])

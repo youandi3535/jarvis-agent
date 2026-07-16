@@ -62,15 +62,8 @@ try:
 except ImportError:
     import length_manager as _L  # 같은 폴더 직접 실행 시
 
-# ── SEO 기준: seo_standards 단일 진입점 ─────────────────────────────────────
-try:
-    from JARVIS02_WRITER.seo_standards import build_platform_seo_section
-except ImportError:
-    try:
-        from seo_standards import build_platform_seo_section
-    except ImportError:
-        def build_platform_seo_section(active_pfxs, theme=""):  # noqa: E306
-            return ""
+# (죽은 코드 정리 2026-07-16 — build_platform_seo_section import 호출 0회 삭제.
+#  SEO 프롬프트 주입은 law_enforcer.build_gate_checklist_block 단일 경로)
 
 
 # 발행 직후 품질 분석기 즉시 트리거

@@ -61,6 +61,27 @@ def _used_keywords(days: int = 7) -> set[str]:
         return set()
 
 
+# ★ 섹터 수준 단독 단어 — 너무 넓어서 수집·글 작성 둘 다 불가 (topic_pack 진입 자체 차단)
+_BLOCKED_GENERIC_KW: frozenset[str] = frozenset({
+    "경제", "금융", "무역", "부동산", "고용", "소비", "경기", "증시",
+    "주식", "투자", "산업", "기업", "환율", "금리", "물가", "수출",
+    "수입", "통상", "정책", "규제", "시장", "산업화", "글로벌",
+})
+
+
+def _is_too_generic(kw: str) -> bool:
+    """섹터 수준 단독 단어 또는 2자 이하 단어 → topic 불가."""
+    kw = kw.strip()
+    if len(kw) <= 2:
+        return True
+    if kw in _BLOCKED_GENERIC_KW:
+        return True
+    # 섹터 집합과 완전 일치 (e.g. "경제·경기" → 단독 "경제"는 이미 위에서 차단)
+    if kw in _ECON_SECTORS:
+        return True
+    return False
+
+
 def _candidates(trends: dict, max_candidates: int = 8) -> list[dict]:
     """혼합 트렌딩(combined_keywords) 기반 후보 — 사용이력 제외 + opportunity_score 내림차순."""
     used = _used_keywords()
@@ -76,6 +97,10 @@ def _candidates(trends: dict, max_candidates: int = 8) -> list[dict]:
     for it in combined:
         kw = (it.get("keyword") or "").strip()
         if not kw or kw.lower() in used or kw.lower() in seen:
+            continue
+        # ★ 섹터 이름 단독·너무 짧은 키워드 사전 차단 (수집·글쓰기 불가)
+        if _is_too_generic(kw):
+            log.debug(f"[topic_pack] '{kw}' 너무 넓은 키워드 — 후보 제외")
             continue
         seen.add(kw.lower())
         # scored_keywords에서 점수·섹터 조인

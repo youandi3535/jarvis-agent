@@ -54,12 +54,18 @@ def _is_section_header(btype: str, bdata: str) -> bool:
 
 
 def _is_h2_header(btype: str, bdata: str) -> bool:
-    """섹션 경계 헤더 (h2/h3) 여부 — 블록 타입 또는 HTML 안 h2/h3 태그."""
+    """섹션 경계 헤더 (h2/h3) 여부 — 블록 타입 또는 HTML 안 h2/h3 태그.
+
+    ★ 2026-07-16 오검출 근본 수정: 신 파이프라인 assemble_blocks 는 h2~h6 를
+    ('text', '<h2>...') 블록으로 방출 — 'html' 만 검사하면 글 전체가 단일 섹션
+    취급되어 제4조 "이미지 부재" 100% 오검출. 'text' 도 함께 검사.
+    re.match (시작-매치) 사용 — 본문 중간 '<h2' 문자열 오인 방지 (_is_section_header 선례).
+    """
     if btype in ('heading_h2', 'heading_h3', 'heading'):
         return True
     if btype == 'image' and _is_heading_img_path(bdata):
         return True
-    if btype == 'html' and isinstance(bdata, str) and re.search(r'<h[23]\b', bdata, re.IGNORECASE):
+    if btype in ('html', 'text') and isinstance(bdata, str) and re.match(r'\s*<h[23]\b', bdata, re.IGNORECASE):
         return True
     return False
 
@@ -213,7 +219,8 @@ def enforce_image_between_paragraphs(
         if inserted:
             insert_note = f"자동 삽입 {inserted}개 (외부 풀 {len(pool)}개 중)"
         else:
-            insert_note = f"삽입 불가 — image_pool 미제공 또는 소진 (위반 {violations}개 섹션)"
+            # 언더스코어 없는 한글 표기 — 텔레그램 Markdown 파싱 실패 근절
+            insert_note = f"삽입 불가 — 이미지 풀 미제공 또는 소진 (위반 {violations}개 섹션)"
         msg_parts = [
             f"⚠️ *제4조 금지 패턴 3* — 글 연속 + 이미지 부재",
             f"위치: {source or 'unknown'}",

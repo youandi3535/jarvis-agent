@@ -25,6 +25,19 @@ class NaverNewsProvider(BaseProvider):
     def _available(self) -> bool:
         return bool(self._client_id and self._client_secret)
 
+    @staticmethod
+    def _fetch_body(url: str) -> str:
+        """trafilatura로 기사 본문 추출 (실패 시 빈 문자열)."""
+        try:
+            import trafilatura
+            resp = httpx.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible)"},
+                             timeout=4, follow_redirects=True)
+            if resp.status_code == 200:
+                return trafilatura.extract(resp.text, include_comments=False) or ""
+        except Exception:
+            pass
+        return ""
+
     def collect(self, theme: str, sector: str = "", max_items: int = 20) -> list[RawDocument]:
         if not self._available:
             log.warning("[NaverNews] NAVER_CLIENT_ID/SECRET 없음 — 건너뜀")
@@ -38,13 +51,22 @@ class NaverNewsProvider(BaseProvider):
             "X-Naver-Client-Secret": self._client_secret,
         }
 
-        # 다중 쿼리: 기본 / 투자 / 산업 / 실적
-        _queries = [
-            f"{theme} {sector}".strip(),
-            f"{theme} 투자 주가",
-            f"{theme} 산업 동향",
-            f"{theme} 실적 전망",
-        ]
+        # 소스별 최적화 쿼리 생성 (query_expander 활용)
+        _core0 = theme.split()[0] if theme.split() else theme
+        try:
+            from ..query_expander import expand as _expand, news_queries_for as _nqs
+            _eq = _expand(theme, sector)
+            _core0 = _eq.core_keywords[0] if _eq.core_keywords else _core0
+            _nq_base = _nqs(_eq, max_n=4)
+        except Exception:
+            _nq_base = [f"{theme} {sector}".strip()]
+
+        # 뉴스 검색에 유리한 수식어 추가 (도메인별 커버리지 확장)
+        _queries = list(_nq_base)
+        for _sfx in ["동향 전망", "실적 영향"]:
+            _q = f"{_core0} {_sfx}"
+            if _q not in _queries:
+                _queries.append(_q)
         per_query = max(max_items // len(_queries), 5)
 
         for q in _queries:
@@ -82,5 +104,14 @@ class NaverNewsProvider(BaseProvider):
             except Exception as e:
                 log.warning(f"[NaverNews] 쿼리 실패 ({q}): {e}")
 
-        log.info(f"[NaverNews] 총 {len(results)}건 수집 완료")
+        # 상위 3건 본문 보강 (snippet만 있는 경우 trafilatura로 실제 기사 본문 추가)
+        enriched = 0
+        for doc in results[:3]:
+            if len(doc.raw_text) < 300:
+                body = self._fetch_body(doc.url)
+                if len(body) > 200:
+                    doc.raw_text = f"{doc.title}\n\n{body[:3000]}"
+                    enriched += 1
+
+        log.info(f"[NaverNews] 총 {len(results)}건 수집 완료 (본문 보강 {enriched}건)")
         return results

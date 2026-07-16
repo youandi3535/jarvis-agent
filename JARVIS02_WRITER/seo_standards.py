@@ -49,37 +49,43 @@ PLATFORM_STANDARDS: dict = {
 
     # ── 네이버 ──────────────────────────────────────────────────
     # ★ 모든 텍스트 값 = BLOG_SUPREME_LAW.md 제15조-A <!-- seo-meta:naver --> 파싱
+    # ★ 모든 수치 상수 = length_manager.py 단일 진입점 (직접 숫자 박지 말 것)
     "naver": {
         "algorithm":             _naver_meta.get("algorithm", "C-Rank + D.I.A.+"),
-        "char_min":              _LM.TARGET_KOREAN,
+        "char_min":              _LM.TARGET_KOREAN,       # 1,500자 — SEO 최소 본문 길이
         "char_ideal":            _LM.SEO_CHAR_IDEAL,
         "char_max":              3000,
-        "title_max_chars":       35,
-        "image_min":             3,
+        "title_max_chars":       _LM.TITLE_PROMPT_MAX,    # 40자 — 네이버 SEO 제목 한도
+        "image_min":             _LM.MIN_IMAGES,
         "heading_structure":     _naver_meta.get("heading_structure", ""),
         "keyword_density":       _naver_meta.get("keyword_density", ""),
         "keyword_in_title":      _naver_meta.get("keyword_in_title", ""),
         "keyword_in_body":       _naver_meta.get("keyword_in_body", ""),
-        "internal_links":        True,
-        "differentiation_angle": _parse_diff("naver"),   # <!-- diff:naver -->
-        "seo_prompt":            _parse_seo("naver"),    # <!-- seo:naver -->
+        "hashtag_min":           _LM.NAVER_HASHTAG_MIN,   # 5개
+        "hashtag_max":           _LM.NAVER_HASHTAG_MAX,   # 10개
+        "internal_links":        0,                        # 네이버 — 내부 링크 SEO 기준 없음
+        "differentiation_angle": _parse_diff("naver"),    # <!-- diff:naver -->
+        "seo_prompt":            _parse_seo("naver"),     # <!-- seo:naver -->
         "forbidden":             _naver_meta.get("forbidden", []),
     },
 
     # ── 티스토리 ────────────────────────────────────────────────
-    # ★ 모든 텍스트 값 = BLOG_SUPREME_LAW.md 제15조-C <!-- seo-meta:tistory --> 파싱
+    # ★ 모든 텍스트 값 = BLOG_SUPREME_LAW.md 제15조-B <!-- seo-meta:tistory --> 파싱
+    # ★ 모든 수치 상수 = length_manager.py 단일 진입점 (직접 숫자 박지 말 것)
     "tistory": {
         "algorithm":             _tist_meta.get("algorithm", "Google SEO"),
-        "char_min":              _LM.TARGET_KOREAN,
+        "char_min":              _LM.TARGET_KOREAN,            # 1,500자 — SEO 최소 본문 길이
         "char_ideal":            _LM.SEO_CHAR_IDEAL,
         "char_max":              3000,
-        "title_max_chars":       37,
-        "image_min":             3,
+        "title_max_chars":       _LM.TITLE_TISTORY_PROMPT_MAX, # 55자 — 티스토리 SEO 제목 한도
+        "image_min":             _LM.MIN_IMAGES,
         "heading_structure":     _tist_meta.get("heading_structure", ""),
         "keyword_density":       _tist_meta.get("keyword_density", ""),
-        "internal_links":        True,
-        "differentiation_angle": _parse_diff("tistory"),  # <!-- diff:tistory -->
-        "seo_prompt":            _parse_seo("tistory"),   # <!-- seo:tistory -->
+        "meta_desc_min_chars":   _LM.META_DESC_PROMPT_MAX,     # 140자 — 메타 설명 최솟값
+        "meta_desc_max_chars":   _LM.META_DESC_MAX,            # 160자 — 메타 설명 최댓값
+        "internal_links":        _LM.TISTORY_INTERNAL_LINKS,   # 1개
+        "differentiation_angle": _parse_diff("tistory"),       # <!-- diff:tistory -->
+        "seo_prompt":            _parse_seo("tistory"),        # <!-- seo:tistory -->
         "forbidden":             _tist_meta.get("forbidden", []),
     },
 }

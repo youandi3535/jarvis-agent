@@ -19,6 +19,13 @@ except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────
 
+# ── JARVIS00 워치독 진행 신호 (freeze 오탐 방지 — ERRORS [439] 계열) ──
+try:
+    from JARVIS00_INFRA.watchdog import beat as _wd_beat
+except ImportError:
+    def _wd_beat() -> None: pass  # watchdog 부재 시 no-op
+# ─────────────────────────────────────────────────────
+
 # ── ADR 008 Phase 2 (★ 사용자 박제 2026-05-17) — 경로 anchor ──
 # 본 모듈이 JARVIS02_WRITER → JARVIS08_PUBLISH/platforms 로 이관됨에 따라
 # 루트 .env 와 *JARVIS02_WRITER 의* chrome_profile/screenshots 등 자원 경로를 정확히 가리키도록 anchor 명시.
@@ -159,8 +166,13 @@ def _make_driver():
     from selenium.webdriver.chrome.options import Options
     opts = Options()
     opts.add_argument("--start-maximized")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
+    opts.add_experimental_option("prefs", {
+        "credentials_enable_service": False,
+        "profile.password_manager_enabled": False,
+    })
     driver = webdriver.Chrome(options=opts)
     driver.implicitly_wait(3)
     return driver
@@ -611,6 +623,15 @@ def post_to_tistory(
     edit_post_id: str = "",   # 수정 모드 — 기존 글 ID
 ) -> bool:
 
+    _wd_beat()   # ★ 발행 시작 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
+
+    # ── 대시보드 busy 신호 — 발행 진행 표시 (마킹 실패는 발행을 절대 막지 않음) ──
+    try:
+        from shared.pipeline_activity import mark_busy as _mb_pa
+        _mb_pa("j08", "티스토리 발행", ttl=900)   # 안전망 15분 — 종료 시 finally 에서 즉시 해제
+    except Exception:
+        pass
+
     print(f"  📝 티스토리: {TS_BLOG}.tistory.com")
     _external_driver = preloaded_driver is not None
     driver = preloaded_driver if _external_driver else _make_driver()
@@ -931,6 +952,7 @@ def post_to_tistory(
 
             # 나머지 블록: divider 블록에서 구분선 삽입
             for bi, (btype, bdata) in enumerate(_merged):
+                _wd_beat()   # ★ 블록 입력 루프 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
                 print(f"  [{bi+1}/{len(_merged)}] {btype}: {str(bdata)[:60]}")
                 _dismiss_any_popup(driver)  # 팝업이 있으면 먼저 제거
                 if btype == 'divider':
@@ -1148,5 +1170,11 @@ def post_to_tistory(
         return False
 
     finally:
+        # 발행 종료(성공·실패) — busy 즉시 해제, 대시보드 평상시 복귀 (실패는 조용히 무시)
+        try:
+            from shared.pipeline_activity import clear_busy as _cb_pa
+            _cb_pa("j08")
+        except Exception:
+            pass
         _s(2)
         driver.quit()  # 외부/내부 driver 모두 여기서 종료
