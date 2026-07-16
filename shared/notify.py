@@ -8,6 +8,7 @@
 from __future__ import annotations
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -50,6 +51,16 @@ def call_with_hard_timeout(fn, *args, hard_timeout: float = 15.0, **kwargs):
     return box.get("value")
 
 
+def md_escape(s: str) -> str:
+    """legacy Markdown 특수문자 4종(_ * ` [) 이스케이프.
+
+    동적 값(식별자·경로·오류메시지)을 Markdown 골격 메시지에 넣을 때 사용.
+    예: 스네이크케이스 잡 ID(`j07_deep_audit`)의 `_` 가 미닫힘 엔티티로
+    "can't parse entities" 를 유발하는 것을 사전 차단.
+    """
+    return re.sub(r'([_*`\[])', r'\\\1', s)
+
+
 def send_tg(text: str, parse_mode: str = "Markdown", chat_id: str = None) -> None:
     token = os.getenv("TELEGRAM_TOKEN", "")
     _chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID", "")
@@ -57,27 +68,40 @@ def send_tg(text: str, parse_mode: str = "Markdown", chat_id: str = None) -> Non
         _log.debug("send_tg 스킵: TOKEN/CHAT_ID 없음")
         return
     try:
+        # parse_mode 가 truthy 일 때만 키 포함 (None/"" 이면 plain 전송)
+        payload = {"chat_id": _chat_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         r = call_with_hard_timeout(
             requests.post,
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": _chat_id, "text": text, "parse_mode": parse_mode},
+            json=payload,
             timeout=10,
             hard_timeout=15,
         )
         data = r.json()
         if not data.get("ok"):
             desc = data.get("description", "")
-            _log.warning(f"sendMessage 실패: {desc}")
             if "parse" in desc.lower():
+                # Markdown 파싱 실패 — warning 없이 조용히 plain 재전송부터 시도
+                payload.pop("parse_mode", None)
                 r2 = call_with_hard_timeout(
                     requests.post,
                     f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={"chat_id": _chat_id, "text": text},
+                    json=payload,
                     timeout=10,
                     hard_timeout=15,
                 )
-                if not r2.json().get("ok"):
-                    _log.warning(f"plain text 재시도 실패: {r2.json().get('description')}")
+                if r2.json().get("ok"):
+                    _log.info(f"Markdown 파싱 실패 → plain 재전송 성공: {desc}")
+                else:
+                    _log.warning(
+                        f"sendMessage 실패: {desc} / plain 재전송도 실패: "
+                        f"{r2.json().get('description')}"
+                    )
+            else:
+                # parse 무관 오류 (chat not found 등) — 즉시 warning
+                _log.warning(f"sendMessage 실패: {desc}")
     except Exception as e:
         _log.warning(f"텔레그램 전송 오류: {e}")
 
@@ -91,9 +115,11 @@ def send_tg_with_buttons(text: str, buttons: list, chat_id: str = None,
         _log.debug("send_tg_with_buttons 스킵: TOKEN/CHAT_ID 없음")
         return
     try:
+        # parse_mode 가 truthy 일 때만 키 포함 (None/"" 이면 plain 전송)
         payload = {"chat_id": _chat_id, "text": text,
-                   "parse_mode": parse_mode,
                    "reply_markup": {"inline_keyboard": buttons}}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         r = call_with_hard_timeout(
             requests.post,
             f"https://api.telegram.org/bot{token}/sendMessage",
@@ -102,18 +128,26 @@ def send_tg_with_buttons(text: str, buttons: list, chat_id: str = None,
         data = r.json()
         if not data.get("ok"):
             desc = data.get("description", "")
-            _log.warning(f"send_tg_with_buttons 실패: {desc}")
             if "parse" in desc.lower():
+                # Markdown 파싱 실패 — warning 없이 조용히 plain 재전송부터 시도
                 payload.pop("parse_mode", None)
                 r2 = call_with_hard_timeout(
                     requests.post,
                     f"https://api.telegram.org/bot{token}/sendMessage",
                     json=payload, timeout=10, hard_timeout=15,
                 )
-                if not r2.json().get("ok"):
-                    _log.warning(f"plain text 재시도 실패: {r2.json().get('description')}")
+                if r2.json().get("ok"):
+                    _log.info(f"Markdown 파싱 실패 → plain 재전송 성공: {desc}")
+                else:
+                    _log.warning(
+                        f"send_tg_with_buttons 실패: {desc} / plain 재전송도 실패: "
+                        f"{r2.json().get('description')}"
+                    )
+            else:
+                # parse 무관 오류 (chat not found 등) — 즉시 warning
+                _log.warning(f"send_tg_with_buttons 실패: {desc}")
     except Exception as e:
         _log.warning(f"텔레그램 버튼 메시지 전송 오류: {e}")
 
 
-__all__ = ["send_tg", "send_tg_with_buttons", "call_with_hard_timeout"]
+__all__ = ["send_tg", "send_tg_with_buttons", "call_with_hard_timeout", "md_escape"]

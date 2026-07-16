@@ -1257,208 +1257,217 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         return {"theme": theme, "datasets": []}
     try:
         from shared.pipeline_activity import mark_busy as _mb
-        _mb("j09", f"{theme[:12]} 차트수집", ttl=600)
+        _mb("j09", f"{theme[:12]} 차트수집", ttl=300)   # 안전망 5분 — 실소요 기준 축소
     except Exception:
         pass
-
-    _COLLECT_CACHE.clear()   # ★ per-run 수집 캐시 초기화 (이전 주제 잔재 제거 + 이번 run 내 재사용)
-    datasets: list[dict] = []
-    import time as _time
-    _t0 = _time.monotonic()
-
-    def _elapsed(label: str):
-        log.info(f"[chart_data] ⏱ {label}: {_time.monotonic() - _t0:.1f}s")
-
-    # ── 0) topic_pack 선행 동의어 (LLM 0) — plan 에 없으면 _plan_desc 에 힌트로 전달
-    _syns_param = list(synonyms) if synonyms else []
-
-    # ── 0.5) 거시경제 글로벌 시장 fast-path (LLM 0, plan 없어도 동작) ────────
-    #   나스닥·코스피·환율·금리 등 _MACRO_KWS 주제는 get_market_data() 직접 조회.
-    #   plan_data_sources 가 timeout/실패해도 항상 실데이터 공급 (ADR 010).
-    datasets.extend(_global_market_datasets(theme))
-    _elapsed(f"0.5) 글로벌 시장 fast-path (datasets={len(datasets)})")
-
-    # ── 1) 설계 + 조준 수집 ──────────────────────────────────────────────────
-    #    plan_data_sources 가 synonyms 도 함께 반환 (LLM 1회로 설계+동의어 통합)
-    _plan_desc = (description or "") + ((" / " + " ".join(_syns_param)) if _syns_param else "")
+    # busy 신호 수명 = 함수 수명 — 종료(성공·실패) 시 finally 에서 즉시 해제 (근본 수정 2026-07-16)
     try:
-        from JARVIS09_COLLECTOR.data_planner import plan_data_sources
-        _plan_result = plan_data_sources(theme, sector, _plan_desc)
-    except Exception as e:
-        log.warning(f"[chart_data] 설계 실패: {e}")
-        _plan_result = {"series": [], "synonyms": []}
 
-    plan = _plan_result.get("series") or []
-    # 동의어: topic_pack 선행 확장이 있으면 그것 우선, 없으면 plan 이 반환한 것 사용
-    _syns = _syns_param or _plan_result.get("synonyms") or []
+        _COLLECT_CACHE.clear()   # ★ per-run 수집 캐시 초기화 (이전 주제 잔재 제거 + 이번 run 내 재사용)
+        datasets: list[dict] = []
+        import time as _time
+        _t0 = _time.monotonic()
 
-    # ★ 관련성 기준 토큰 — 주제 + 동의어 + 설명 + 설계(series명·쿼리) 고유명사 집합
-    _ref_tokens = _specific_tokens(f"{theme} {' '.join(_syns)} {description}")
-    for _s in plan:
-        _ref_tokens |= _specific_tokens(f"{_s.get('name', '')} {_s.get('query', '')}")
+        def _elapsed(label: str):
+            log.info(f"[chart_data] ⏱ {label}: {_time.monotonic() - _t0:.1f}s")
 
-    pending_items: list[dict] = []   # 배치 추출 큐
-    if plan:
-        log.info(f"[chart_data] '{theme}' 설계 {len(plan)}개 series → 조준 수집(문서만)")
-        from concurrent.futures import ThreadPoolExecutor as _TPE
-        with _TPE(max_workers=4) as _ex:
-            for result in _ex.map(
-                    lambda s: _collect_docs_for_series(s, sector, theme, _ref_tokens), plan):
-                if result is None:
-                    continue
-                if "fast_dataset" in result:
-                    datasets.append(result["fast_dataset"])   # KOSIS fast-path: LLM 불필요
-                else:
-                    pending_items.append(result)              # 배치 추출 큐
-    _elapsed(f"1) 설계+조준수집 (fast={len(datasets)}, pending={len(pending_items)})")
+        # ── 0) topic_pack 선행 동의어 (LLM 0) — plan 에 없으면 _plan_desc 에 힌트로 전달
+        _syns_param = list(synonyms) if synonyms else []
 
-    # ── 2) 종목(기업) 테마 보강 — 설계 수집이 0일 때만, *명백한 종목 테마* 에 한해 ──────
-    #    (글로벌 시장 dump(_market_datasets)·ecos dump 는 제거: 비관련 주제에 새어들어 불일치=거짓.
-    #     거시·시장 데이터는 planner 가 finance/ecos/kosis 출처로 *정확히* 조준할 때만 들어옴.)
-    combined = f"{theme} {sector} {description}"
-    _SPECIFIC_NON_VALUATION = [
-        "직원", "고용", "인원", "임직원", "매출", "인구", "발행", "가맹점", "점포", "지점",
-        "생산량", "판매량", "수출", "수입액", "점유율", "시장규모", "가입자", "이용자", "방문자",
-        "출하량", "등록", "건수", "보급", "만족도",
-    ]
-    is_stock = (any(k in combined for k in _STOCK_THEME_KWS)
-                and not any(k in combined for k in _SPECIFIC_NON_VALUATION))
-    if not datasets and is_stock:
-        datasets.extend(_stock_datasets(theme))
-    _elapsed(f"2) 종목보강 (datasets={len(datasets)})")
+        # ── 0.5) 거시경제 글로벌 시장 fast-path (LLM 0, plan 없어도 동작) ────────
+        #   나스닥·코스피·환율·금리 등 _MACRO_KWS 주제는 get_market_data() 직접 조회.
+        #   plan_data_sources 가 timeout/실패해도 항상 실데이터 공급 (ADR 010).
+        datasets.extend(_global_market_datasets(theme))
+        _elapsed(f"0.5) 글로벌 시장 fast-path (datasets={len(datasets)})")
 
-    # ── 2.5) 시장 전용 dataset (코스닥·코스피, 코스닥 150) ───────────────────
-    #   ADR 010: 실데이터 없으면 빈 리스트 반환 — 합성 수치 사용 금지.
-    datasets.extend(_market_trading_volume_datasets(theme))
-    datasets.extend(_kosdaq150_sector_datasets(theme))   # ★ 코스닥 150 섹터 지수 전체 보장 (ERRORS [420])
-    _elapsed(f"2.5) 시장 dataset (datasets={len(datasets)})")
+        # ── 1) 설계 + 조준 수집 ──────────────────────────────────────────────────
+        #    plan_data_sources 가 synonyms 도 함께 반환 (LLM 1회로 설계+동의어 통합)
+        _plan_desc = (description or "") + ((" / " + " ".join(_syns_param)) if _syns_param else "")
+        try:
+            from JARVIS09_COLLECTOR.data_planner import plan_data_sources
+            _plan_result = plan_data_sources(theme, sector, _plan_desc)
+        except Exception as e:
+            log.warning(f"[chart_data] 설계 실패: {e}")
+            _plan_result = {"series": [], "synonyms": []}
 
-    # ── 3) 적응형 *멀티소스* 포착 — 문서 수집만 (LLM 없음, 배치 추출 큐에 투입) ──────
-    #    ★ 배치 LLM 한 번에 처리: 개별 LLM N회 → 배치 1회로 통합.
-    #    ★ 배치 크기 가드: step1 pending + step3 합쳐서 최대 14개만 (batch max_tokens 초과 방지).
-    _BATCH_CAP = 14
-    _cand_cap = max(max_datasets * 2, max_datasets + 6)   # 전체 후보 상한
-    _step3_budget = max(0, _BATCH_CAP - len(pending_items))   # step3 에 줄 배치 슬롯
-    if len(datasets) < _cand_cap and _step3_budget > 0:
-        _raw_terms = [theme] + _syns + [description] + [s.get("query", "") for s in plan]
-        _terms: list[str] = []
-        for t in _raw_terms:
-            if not t:
-                continue
-            tk = t.split()
-            _terms.append(t)
-            if len(tk) > 2:
-                _terms.append(" ".join(tk[:2]))
-            if len(tk) > 1:
-                _terms.append(tk[0])
-        _terms = list(dict.fromkeys(_terms))[:4]
+        plan = _plan_result.get("series") or []
+        # 동의어: topic_pack 선행 확장이 있으면 그것 우선, 없으면 plan 이 반환한 것 사용
+        _syns = _syns_param or _plan_result.get("synonyms") or []
 
-        def _natural_title(d):
-            t = getattr(d, "title", "") or ""
-            for pre in ("KOSIS 통계청 — ", "한국은행 ECOS", "arXiv", "통계청 KOSIS"):
-                if t.startswith(pre):
-                    t = t[len(pre):]
-            return t
+        # ★ 관련성 기준 토큰 — 주제 + 동의어 + 설명 + 설계(series명·쿼리) 고유명사 집합
+        _ref_tokens = _specific_tokens(f"{theme} {' '.join(_syns)} {description}")
+        for _s in plan:
+            _ref_tokens |= _specific_tokens(f"{_s.get('name', '')} {_s.get('query', '')}")
 
-        _PER_SOURCE = max(3, (max_datasets + 3) // 3)
-        _cands: list[tuple] = []   # (nat_title, doc, source)
-        for source in ("kci", "academic", "news", "kor_econ", "kosis", "naver_news", "web", "discover"):
-            if len(_cands) >= _cand_cap:
-                break
-            _ensure_source_ready(source)
-            prov = _get_provider(source)
-            if not prov:
-                continue
-            _from_src = 0
-            _src_terms = _terms[:2] if source == "discover" else _terms
-            for term in _src_terms:
-                if _from_src >= _PER_SOURCE or len(_cands) >= _cand_cap:
-                    break
-                docs = _cached_collect(prov, source, term, sector, 8)
-                for d in docs[:5]:
-                    nat = _natural_title(d)
-                    if not _doc_title_relevant(nat, _ref_tokens):
+        pending_items: list[dict] = []   # 배치 추출 큐
+        if plan:
+            log.info(f"[chart_data] '{theme}' 설계 {len(plan)}개 series → 조준 수집(문서만)")
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            with _TPE(max_workers=4) as _ex:
+                for result in _ex.map(
+                        lambda s: _collect_docs_for_series(s, sector, theme, _ref_tokens), plan):
+                    if result is None:
                         continue
-                    _cands.append((nat[:40] or term, d, source))
-                    _from_src += 1
+                    if "fast_dataset" in result:
+                        datasets.append(result["fast_dataset"])   # KOSIS fast-path: LLM 불필요
+                    else:
+                        pending_items.append(result)              # 배치 추출 큐
+        _elapsed(f"1) 설계+조준수집 (fast={len(datasets)}, pending={len(pending_items)})")
+
+        # ── 2) 종목(기업) 테마 보강 — 설계 수집이 0일 때만, *명백한 종목 테마* 에 한해 ──────
+        #    (글로벌 시장 dump(_market_datasets)·ecos dump 는 제거: 비관련 주제에 새어들어 불일치=거짓.
+        #     거시·시장 데이터는 planner 가 finance/ecos/kosis 출처로 *정확히* 조준할 때만 들어옴.)
+        combined = f"{theme} {sector} {description}"
+        _SPECIFIC_NON_VALUATION = [
+            "직원", "고용", "인원", "임직원", "매출", "인구", "발행", "가맹점", "점포", "지점",
+            "생산량", "판매량", "수출", "수입액", "점유율", "시장규모", "가입자", "이용자", "방문자",
+            "출하량", "등록", "건수", "보급", "만족도",
+        ]
+        is_stock = (any(k in combined for k in _STOCK_THEME_KWS)
+                    and not any(k in combined for k in _SPECIFIC_NON_VALUATION))
+        if not datasets and is_stock:
+            datasets.extend(_stock_datasets(theme))
+        _elapsed(f"2) 종목보강 (datasets={len(datasets)})")
+
+        # ── 2.5) 시장 전용 dataset (코스닥·코스피, 코스닥 150) ───────────────────
+        #   ADR 010: 실데이터 없으면 빈 리스트 반환 — 합성 수치 사용 금지.
+        datasets.extend(_market_trading_volume_datasets(theme))
+        datasets.extend(_kosdaq150_sector_datasets(theme))   # ★ 코스닥 150 섹터 지수 전체 보장 (ERRORS [420])
+        _elapsed(f"2.5) 시장 dataset (datasets={len(datasets)})")
+
+        # ── 3) 적응형 *멀티소스* 포착 — 문서 수집만 (LLM 없음, 배치 추출 큐에 투입) ──────
+        #    ★ 배치 LLM 한 번에 처리: 개별 LLM N회 → 배치 1회로 통합.
+        #    ★ 배치 크기 가드: step1 pending + step3 합쳐서 최대 14개만 (batch max_tokens 초과 방지).
+        _BATCH_CAP = 14
+        _cand_cap = max(max_datasets * 2, max_datasets + 6)   # 전체 후보 상한
+        _step3_budget = max(0, _BATCH_CAP - len(pending_items))   # step3 에 줄 배치 슬롯
+        if len(datasets) < _cand_cap and _step3_budget > 0:
+            _raw_terms = [theme] + _syns + [description] + [s.get("query", "") for s in plan]
+            _terms: list[str] = []
+            for t in _raw_terms:
+                if not t:
+                    continue
+                tk = t.split()
+                _terms.append(t)
+                if len(tk) > 2:
+                    _terms.append(" ".join(tk[:2]))
+                if len(tk) > 1:
+                    _terms.append(tk[0])
+            _terms = list(dict.fromkeys(_terms))[:4]
+
+            def _natural_title(d):
+                t = getattr(d, "title", "") or ""
+                for pre in ("KOSIS 통계청 — ", "한국은행 ECOS", "arXiv", "통계청 KOSIS"):
+                    if t.startswith(pre):
+                        t = t[len(pre):]
+                return t
+
+            _PER_SOURCE = max(3, (max_datasets + 3) // 3)
+            _cands: list[tuple] = []   # (nat_title, doc, source)
+            for source in ("kci", "academic", "news", "kor_econ", "kosis", "naver_news", "web", "discover"):
+                if len(_cands) >= _cand_cap:
+                    break
+                _ensure_source_ready(source)
+                prov = _get_provider(source)
+                if not prov:
+                    continue
+                _from_src = 0
+                _src_terms = _terms[:2] if source == "discover" else _terms
+                for term in _src_terms:
                     if _from_src >= _PER_SOURCE or len(_cands) >= _cand_cap:
                         break
+                    docs = _cached_collect(prov, source, term, sector, 8)
+                    for d in docs[:5]:
+                        nat = _natural_title(d)
+                        if not _doc_title_relevant(nat, _ref_tokens):
+                            continue
+                        _cands.append((nat[:40] or term, d, source))
+                        _from_src += 1
+                        if _from_src >= _PER_SOURCE or len(_cands) >= _cand_cap:
+                            break
 
-        # step3 후보를 배치 슬롯 한도 내에서 pending_items 에 추가
-        for nat, d, src in _cands[:_step3_budget]:
-            pending_items.append({"series": {"name": nat, "unit": "", "chart": "bar"},
-                                  "docs": [d], "source": src})
-        log.info(f"[chart_data] step3 후보 {len(_cands)}개 → 배치 큐 추가 {min(len(_cands), _step3_budget)}개")
-        _elapsed(f"3) 멀티소스 수집 (pending={len(pending_items)})")
+            # step3 후보를 배치 슬롯 한도 내에서 pending_items 에 추가
+            for nat, d, src in _cands[:_step3_budget]:
+                pending_items.append({"series": {"name": nat, "unit": "", "chart": "bar"},
+                                      "docs": [d], "source": src})
+            log.info(f"[chart_data] step3 후보 {len(_cands)}개 → 배치 큐 추가 {min(len(_cands), _step3_budget)}개")
+            _elapsed(f"3) 멀티소스 수집 (pending={len(pending_items)})")
 
-    # ── BATCH) 단일 LLM 호출로 pending_items 전체 추출 + 관련성 판정 ──────
-    if pending_items:
-        batch_results = _batch_extract_all(pending_items, theme)
-        datasets.extend(batch_results)
-        _elapsed(f"BATCH) 일괄 추출 (datasets={len(datasets)})")
+        # ── BATCH) 단일 LLM 호출로 pending_items 전체 추출 + 관련성 판정 ──────
+        if pending_items:
+            batch_results = _batch_extract_all(pending_items, theme)
+            datasets.extend(batch_results)
+            _elapsed(f"BATCH) 일괄 추출 (datasets={len(datasets)})")
 
-    # dedup (fingerprint) + exclude_titles 필터
-    _excl = {str(t).strip() for t in (exclude_titles or [])}
-    seen: set[str] = set()
-    deduped: list[dict] = []
-    for ds in datasets:
-        fp = ds["fingerprint"]
-        if fp in seen or ds["title"] in _excl:
-            continue
-        seen.add(fp)
-        deduped.append(ds)
-    # ── 4) 관련성 게이트는 BATCH 추출 시 relevant=true/false 로 이미 처리됨.
-    #    KOSIS fast-path 데이터는 제목 필터(_doc_title_relevant)를 통과한 것만 들어오므로 별도 불필요.
-
-    # ── 5) ★ 출처 다양성 선택 (사용자 박제 2026-07-01 '전부 받아와') — provider 별로 묶어
-    #    우선순위 라운드로빈 → 한 출처(KOSIS) 독점 방지, 뉴스·정부보도·논문이 함께 섞임. ──────
-    _PROV_RANK = {"kosis": 0, "ecos": 1, "dart": 1, "academic": 1, "kci": 1, "krx": 2,
-                  "finance": 2, "news": 2, "kor_econ": 2, "naver_news": 3, "web": 4, "market": 3}
-    from collections import OrderedDict as _OD
-    _groups: "_OD[str, list]" = _OD()
-    for ds in sorted(deduped, key=lambda d: _PROV_RANK.get((d.get("source") or {}).get("provider", ""), 5)):
-        p = (ds.get("source") or {}).get("provider", "?")
-        _groups.setdefault(p, []).append(ds)
-    # ★ aspect 다양성 (사용자 박제 2026-07-01): 같은 지표어(예 '만족도')가 여러 개 선택돼 단조로운
-    #   차트가 되지 않게, 주제·동의어를 뺀 *구별 지표 토큰* 이 이미 2개 선택되면 그 데이터셋은 후순위로.
-    _theme_syn_tokens = _specific_tokens(f"{theme} {' '.join(_syns)}")
-    _aspect_used: dict = {}
-
-    def _aspect_saturated(ds) -> bool:
-        toks = _specific_tokens(ds.get("title", "")) - _theme_syn_tokens
-        return bool(toks) and any(_aspect_used.get(t, 0) >= 2 for t in toks)
-
-    def _mark_aspect(ds):
-        for t in (_specific_tokens(ds.get("title", "")) - _theme_syn_tokens):
-            _aspect_used[t] = _aspect_used.get(t, 0) + 1
-
-    final: list[dict] = []
-    _deferred: list[dict] = []   # aspect 포화로 미룬 것 — 자리 남으면 채움(빈 풀 방지)
-    while len(final) < max_datasets and any(_groups.values()):
-        for p in list(_groups):
-            if not _groups[p]:
+        # dedup (fingerprint) + exclude_titles 필터
+        _excl = {str(t).strip() for t in (exclude_titles or [])}
+        seen: set[str] = set()
+        deduped: list[dict] = []
+        for ds in datasets:
+            fp = ds["fingerprint"]
+            if fp in seen or ds["title"] in _excl:
                 continue
-            ds = _groups[p].pop(0)
-            if _aspect_saturated(ds):
-                _deferred.append(ds)
-                continue
-            _mark_aspect(ds)
-            final.append(ds)
+            seen.add(fp)
+            deduped.append(ds)
+        # ── 4) 관련성 게이트는 BATCH 추출 시 relevant=true/false 로 이미 처리됨.
+        #    KOSIS fast-path 데이터는 제목 필터(_doc_title_relevant)를 통과한 것만 들어오므로 별도 불필요.
+
+        # ── 5) ★ 출처 다양성 선택 (사용자 박제 2026-07-01 '전부 받아와') — provider 별로 묶어
+        #    우선순위 라운드로빈 → 한 출처(KOSIS) 독점 방지, 뉴스·정부보도·논문이 함께 섞임. ──────
+        _PROV_RANK = {"kosis": 0, "ecos": 1, "dart": 1, "academic": 1, "kci": 1, "krx": 2,
+                      "finance": 2, "news": 2, "kor_econ": 2, "naver_news": 3, "web": 4, "market": 3}
+        from collections import OrderedDict as _OD
+        _groups: "_OD[str, list]" = _OD()
+        for ds in sorted(deduped, key=lambda d: _PROV_RANK.get((d.get("source") or {}).get("provider", ""), 5)):
+            p = (ds.get("source") or {}).get("provider", "?")
+            _groups.setdefault(p, []).append(ds)
+        # ★ aspect 다양성 (사용자 박제 2026-07-01): 같은 지표어(예 '만족도')가 여러 개 선택돼 단조로운
+        #   차트가 되지 않게, 주제·동의어를 뺀 *구별 지표 토큰* 이 이미 2개 선택되면 그 데이터셋은 후순위로.
+        _theme_syn_tokens = _specific_tokens(f"{theme} {' '.join(_syns)}")
+        _aspect_used: dict = {}
+
+        def _aspect_saturated(ds) -> bool:
+            toks = _specific_tokens(ds.get("title", "")) - _theme_syn_tokens
+            return bool(toks) and any(_aspect_used.get(t, 0) >= 2 for t in toks)
+
+        def _mark_aspect(ds):
+            for t in (_specific_tokens(ds.get("title", "")) - _theme_syn_tokens):
+                _aspect_used[t] = _aspect_used.get(t, 0) + 1
+
+        final: list[dict] = []
+        _deferred: list[dict] = []   # aspect 포화로 미룬 것 — 자리 남으면 채움(빈 풀 방지)
+        while len(final) < max_datasets and any(_groups.values()):
+            for p in list(_groups):
+                if not _groups[p]:
+                    continue
+                ds = _groups[p].pop(0)
+                if _aspect_saturated(ds):
+                    _deferred.append(ds)
+                    continue
+                _mark_aspect(ds)
+                final.append(ds)
+                if len(final) >= max_datasets:
+                    break
+        # 다양성 우선 선택 후 자리가 남으면 미룬 것으로 보충 (차트 수 확보)
+        for ds in _deferred:
             if len(final) >= max_datasets:
                 break
-    # 다양성 우선 선택 후 자리가 남으면 미룬 것으로 보충 (차트 수 확보)
-    for ds in _deferred:
-        if len(final) >= max_datasets:
-            break
-        final.append(ds)
+            final.append(ds)
 
-    _prov_mix = {}
-    for d in final:
-        _p = (d.get("source") or {}).get("provider", "?")
-        _prov_mix[_p] = _prov_mix.get(_p, 0) + 1
-    log.info(f"[chart_data] '{theme}' → {len(final)}개 dataset (설계 {len(plan) if plan else 0} series) "
-             f"출처분포 {_prov_mix}")
-    return {"theme": theme, "datasets": final}
+        _prov_mix = {}
+        for d in final:
+            _p = (d.get("source") or {}).get("provider", "?")
+            _prov_mix[_p] = _prov_mix.get(_p, 0) + 1
+        log.info(f"[chart_data] '{theme}' → {len(final)}개 dataset (설계 {len(plan) if plan else 0} series) "
+                 f"출처분포 {_prov_mix}")
+        return {"theme": theme, "datasets": final}
+    finally:
+        # 작업 종료 — busy 즉시 해제 (해제 실패는 조용히 무시, TTL 은 안전망으로 잔존)
+        try:
+            from shared.pipeline_activity import clear_busy as _cb
+            _cb("j09")
+        except Exception:
+            pass
 
 
 # ── 원시 수집 공개 래퍼 (JARVIS06 차트용 — provider 단일 진입점) ────────────

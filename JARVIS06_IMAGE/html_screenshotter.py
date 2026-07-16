@@ -329,7 +329,7 @@ def screenshot_svg_blocks(html_content: str, out_dir: str) -> list:
     )
 
     if not svg_blocks:
-        print("  ⚠️ [JARVIS06] SVG 블록 없음 — HTML 구조 확인 필요")
+        print("  ℹ️ [JARVIS06] 인라인 SVG 0개 — 캡처 대상 없음 (슬롯 렌더 경로에선 정상)")
         return []
 
     print(f"  🖼️  [JARVIS06] inline SVG {len(svg_blocks)}개 캡처 시작...")

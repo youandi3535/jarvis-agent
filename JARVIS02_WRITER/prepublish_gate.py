@@ -129,34 +129,41 @@ def prepublish_quality_issues(draft, post_type: str = "",
 
     # ── 100점 루브릭 종합 점수 게이트 (PREPUBLISH_SCORE_GATE) ──────────────
     if not _disabled("PREPUBLISH_SCORE_GATE"):
-        try:
-            from JARVIS02_WRITER.post_scorer import score_post as _score_fn
-            _llm_sc = cqr.get("llm_scores", {}) if "cqr" in dir() else {}
-            _fi = [x for x in out if x.get("kind") == "factuality"]
-            _sr = _score_fn(
-                draft,
-                post_type=post_type,
-                llm_scores=_llm_sc,
-                factuality_issues=_fi,
-            )
-            log.info(
-                "[prepublish_gate] 종합 점수 %.1f/100 → %s",
-                _sr["total"], "통과" if _sr["passed"] else "재작성"
-            )
-            if not _sr["passed"]:
-                sec = _sr.get("sections", {})
-                detail_parts = [
-                    f"A={sec.get('A',{}).get('total',0):.1f}/20",
-                    f"B={sec.get('B',{}).get('total',0):.1f}/50",
-                    f"C={sec.get('C',{}).get('total',0):.1f}/20",
-                    f"D={sec.get('D',{}).get('total',0):.1f}/10",
-                ]
-                out.append({
-                    "kind": "engagement",
-                    "detail": f"[품질점수] 종합 {_sr['total']:.1f}/100 (70미달) — {' '.join(detail_parts)}"
-                })
-        except Exception as _e:
-            log.warning(f"[prepublish_gate] score_post 실패 → 통과(fail-open): {_e}")
+        _llm_sc = cqr.get("llm_scores") if "cqr" in dir() else None
+        if _llm_sc is None:
+            # ★ 수동수정 2026-07-16: 통합 LLM 호출(_combined_quality_call)이 실패/스킵되면
+            #   llm_scores 가 없다 — 이때 Section A 를 0점 처리하면 실제 콘텐츠 품질과
+            #   무관하게 총점이 20점 깎여 재작성 순환에 빠진다(A=0.0/20 반복 사고).
+            #   모듈 전체 fail-open 철학과 일치하도록 점수 게이트 자체를 통과시킨다.
+            log.warning("[prepublish_gate] 통합 LLM 점수 없음(호출 실패/스킵) → 점수 게이트 통과(fail-open)")
+        else:
+            try:
+                from JARVIS02_WRITER.post_scorer import score_post as _score_fn
+                _fi = [x for x in out if x.get("kind") == "factuality"]
+                _sr = _score_fn(
+                    draft,
+                    post_type=post_type,
+                    llm_scores=_llm_sc,
+                    factuality_issues=_fi,
+                )
+                log.info(
+                    "[prepublish_gate] 종합 점수 %.1f/100 → %s",
+                    _sr["total"], "통과" if _sr["passed"] else "재작성"
+                )
+                if not _sr["passed"]:
+                    sec = _sr.get("sections", {})
+                    detail_parts = [
+                        f"A={sec.get('A',{}).get('total',0):.1f}/20",
+                        f"B={sec.get('B',{}).get('total',0):.1f}/50",
+                        f"C={sec.get('C',{}).get('total',0):.1f}/20",
+                        f"D={sec.get('D',{}).get('total',0):.1f}/10",
+                    ]
+                    out.append({
+                        "kind": "engagement",
+                        "detail": f"[품질점수] 종합 {_sr['total']:.1f}/100 (70미달) — {' '.join(detail_parts)}"
+                    })
+            except Exception as _e:
+                log.warning(f"[prepublish_gate] score_post 실패 → 통과(fail-open): {_e}")
 
     return out
 
@@ -252,18 +259,34 @@ def _profit_claim_issue(claim: str, stocks_data) -> dict | None:
     return None
 
 
+# ── 매력도·유익성 5축 임계 — 단일 진실 소스 (★ 2026-07-16 상수 승격) ─────────
+#   판정 프롬프트·임계 판정·작성 체크리스트(law_enforcer.build_gate_checklist_block)가
+#   모두 이 상수에서 파생 — "생성-검증 임계 일치" 원칙 (keyword_frequency_rule 선례).
+ENGAGEMENT_THRESHOLDS: dict = {
+    "engagement": 70,    # 첫 문단 공감 훅·읽는 재미
+    "usefulness": 70,    # 소제목마다 실용 정보
+    "title_hook": 60,    # 제목의 구체 수치·질문 훅
+    "originality": 60,   # 독창적 관점
+    "structure": 65,     # 구조 완결성
+}
+
+
 def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -> dict:
     """사실성 + 매력도 통합 LLM 1회 판정 (★ 사용자 박제 2026-07-12).
 
     fail-open: LLM 실패·스로틀 시 모두 통과.
-    Returns: {"blocked_claims": [str], "engagement_passed": bool, "failed_dims": [str]}
+    Returns: {"blocked_claims": [str], "engagement_passed": bool, "failed_dims": [str],
+              "llm_scores": dict|None}
+    ★ llm_scores=None 은 통합 호출 실패/스킵을 의미 — 호출자(SCORE_GATE)는 이 경우
+      Section A 를 0점 처리하지 말고 점수 게이트 자체를 fail-open 해야 한다
+      (harness RuntimeError [품질점수] A=0.0/20 반복 사고 — prepublish_gate.py 수동수정 2026-07-16).
     """
     import json as _json
     from shared.llm import invoke_text as _inv
 
     stripped = re.sub(r"<[^>]+>", " ", body or "")[:4000].strip()
     if not stripped:
-        return {"blocked_claims": [], "engagement_passed": True, "failed_dims": []}
+        return {"blocked_claims": [], "engagement_passed": True, "failed_dims": [], "llm_scores": None}
 
     corpus_snippet = (corpus or "").strip()[:2000] or "(없음)"
     prompt = (
@@ -273,7 +296,8 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -
         "본문에서 *구체적 수치가 포함된 주장* 중 발행하면 안 되는 것만 골라라.\n"
         "차단 기준: (a) 출처 수치와 모순 (b) 구체 수치인데 출처에 근거 전혀 없음\n"
         "★ 차단 제외: 숫자 없는 서술·전망·해석, 상식 수치, 출처에서 추론 가능한 수치\n\n"
-        "## B. 매력도·유익성 5축 (0~100 점수 — 임계: engagement≥70, usefulness≥70, title_hook≥60, originality≥60, structure≥65)\n\n"
+        "## B. 매력도·유익성 5축 (0~100 점수 — 임계: "
+        + ", ".join(f"{k}≥{v}" for k, v in ENGAGEMENT_THRESHOLDS.items()) + ")\n\n"
         "JSON 하나만 반환(다른 말 금지):\n"
         '{"blocked_claims":["차단 주장 원문 최대5개, 없으면 []"],'
         '"engagement_score":85,"usefulness_score":80,"title_hook_score":70,'
@@ -283,20 +307,23 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -
     try:
         raw = _inv("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
         if not (raw or "").strip():
-            return {"blocked_claims": [], "engagement_passed": True, "failed_dims": []}
+            # ★ 인프라 1회 재시도 (2026-07-16) — _nonessential 은 재시도 0회라
+            #   타임아웃 1번 = 판정 기회 소멸이었다. 한 번 더 시도 후에만 fail-open.
+            log.info("[prepublish_gate] 통합 판정 응답 없음 — 1회 재시도")
+            raw = _inv("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
+        if not (raw or "").strip():
+            return {"blocked_claims": [], "engagement_passed": True, "failed_dims": [], "llm_scores": None}
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if not m:
-            return {"blocked_claims": [], "engagement_passed": True, "failed_dims": []}
+            return {"blocked_claims": [], "engagement_passed": True, "failed_dims": [], "llm_scores": None}
         obj = _json.loads(m.group())
         blocked = [str(x).strip() for x in (obj.get("blocked_claims") or []) if str(x).strip()]
         raw_dims = list(obj.get("failed_dims") or [])
         _int = lambda k, d: int(obj.get(k) or d)
         if not raw_dims:
-            if _int("engagement_score",  100) < 70: raw_dims.append("engagement")
-            if _int("usefulness_score",  100) < 70: raw_dims.append("usefulness")
-            if _int("title_hook_score",  100) < 60: raw_dims.append("title_hook")
-            if _int("originality_score", 100) < 60: raw_dims.append("originality")
-            if _int("structure_score",   100) < 65: raw_dims.append("structure")
+            for _dim, _thr in ENGAGEMENT_THRESHOLDS.items():
+                if _int(f"{_dim}_score", 100) < _thr:
+                    raw_dims.append(_dim)
         llm_scores = {
             "engagement_score":  _int("engagement_score",  0),
             "usefulness_score":  _int("usefulness_score",  0),
@@ -312,7 +339,7 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -
         }
     except Exception as e:
         log.warning(f"[prepublish_gate] 통합 품질 판정 실패 → 통과(fail-open): {e}")
-        return {"blocked_claims": [], "engagement_passed": True, "failed_dims": []}
+        return {"blocked_claims": [], "engagement_passed": True, "failed_dims": [], "llm_scores": None}
 
 
 _IMG_EXT = re.compile(r"\.(?:jpg|jpeg|png|webp)$", re.I)

@@ -121,6 +121,13 @@ def _build_blocks(collected, platform: str, img_dir: Path,
         except Exception as e:
             print(f"  ⚠️ 헌법 로드 실패: {e}")
             supreme_block = ""
+    # ★ 규정 숙지 (2026-07-16): 발행 전 게이트가 실제 채점하는 기준(분량·SEO·매력도 5축)
+    #   을 Pass-1 프롬프트에 사전 고지 — supreme_block 합류로 모든 Pass-1 변형 자동 상속.
+    try:
+        from JARVIS02_WRITER.law_enforcer import build_gate_checklist_block as _gate_chk
+        supreme_block = (supreme_block or "") + "\n" + _gate_chk("theme", platform)
+    except Exception:
+        pass
 
     # 이미지 초기화 — 폴더는 유지, 파일만 삭제
     import shutil
@@ -378,6 +385,29 @@ def _layer3_verify_draft(draft: dict, platform: str) -> list[str]:
     if empty_hdrs:
         issues.append(f"[{platform}] 빈 헤더 {len(empty_hdrs)}개 (제3조 위반)")
 
+    # ★ 분량 상한·하한 검증 (2026-07-16 — 경제와 대칭화, 생성-검증 임계 일치)
+    #   메시지 형식은 economic_poster 와 동일 유지 — draft_fixer 가 "> N문장" 패턴을
+    #   파싱해 인라인 수정하므로 형식이 다르면 수정 루프가 작동하지 않음.
+    try:
+        from JARVIS02_WRITER.post_type_specs import get_spec as _gs_theme
+        _sp = _gs_theme("theme")
+        _body_v = html or content
+        _p_tags = _re.findall(r"<p[^>]*>.*?</p>", _body_v, _re.DOTALL | _re.IGNORECASE)
+        if _p_tags:
+            _sent_cnt = sum(
+                len(_re.findall(r'[.!?。]\s*(?=[^<]|$)', _re.sub(r"<[^>]+>", "", p)))
+                for p in _p_tags
+            )
+        else:
+            _sent_cnt = _L.count_sentences(_re.sub(r"<[^>]+>", " ", _body_v))
+        if _sent_cnt > _sp.max_sentences:
+            issues.append(f"분량 상한 초과: {_sent_cnt}문장 > {_sp.max_sentences}문장 (post_type=theme)")
+        _kor_total = _L.count(_re.sub(r"<[^>]+>", " ", _body_v))
+        if _kor_total > _sp.max_korean:
+            issues.append(f"한국어 글자수 상한 초과: {_kor_total}자 > {_sp.max_korean}자 (theme)")
+    except Exception:
+        pass
+
     return issues
 
 
@@ -415,7 +445,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     def _step_load_rules(state):
         from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
         sb = _law_blk()
-        print("  📜 [① 규정 로드] BLOG_SUPREME_LAW.md 숙지 완료")
+        print("  📜 [① 규정 로드] 헌법 숙지 완료 — 게이트 검증 기준(분량·SEO·매력도)은 대본 단계에서 플랫폼별 합류")
         return {"supreme_block": sb}
 
     @action_step(name="② 종목·근거 수집")

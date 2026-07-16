@@ -178,6 +178,12 @@ def plan_data_sources(topic: str, sector: str = "", description: str = "") -> di
     topic = (topic or "").strip()
     if not topic:
         return {"series": [], "synonyms": []}
+    # ★ 2자 이하·섹터 수준 단독 단어는 LLM 설계 불가 — 폴백 즉시 반환 (90s hang 방지)
+    _GENERIC_SKIP = {"경제", "금융", "무역", "부동산", "고용", "소비", "경기", "증시",
+                     "주식", "투자", "환율", "금리", "물가", "수출", "수입", "통상"}
+    if len(topic) <= 2 or topic in _GENERIC_SKIP:
+        log.info(f"[planner] '{topic}' 너무 짧거나 섹터 단어 — LLM 설계 스킵 (결정론 폴백)")
+        return {"series": _fallback_plan(topic, []), "synonyms": []}
     catalog = "\n".join(f"- {k}: {v}" for k, v in _SOURCE_CATALOG.items())
     prompt = _PLAN_PROMPT.format(topic=topic, sector=sector or "-",
                                  desc=(description or topic)[:400], catalog=catalog)

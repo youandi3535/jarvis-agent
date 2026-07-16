@@ -655,6 +655,13 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
     import pyautogui
     pyautogui.FAILSAFE = False
 
+    # ── 대시보드 busy 신호 — 발행 진행 표시 (마킹 실패는 발행을 절대 막지 않음) ──
+    try:
+        from shared.pipeline_activity import mark_busy as _mb_pa
+        _mb_pa("j08", "네이버 발행", ttl=900)   # 안전망 15분 — 종료 시 finally 에서 즉시 해제
+    except Exception:
+        pass
+
     # ── 쿠키 사전 확인 & 갱신 (브라우저 열기 전) ──────────────
     _pre_check_and_refresh_cookie()
 
@@ -1435,6 +1442,12 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             driver.save_screenshot(str(IMG_EDITOR / "error.png"))
         return False
     finally:
+        # 발행 종료(성공·실패) — busy 즉시 해제, 대시보드 평상시 복귀 (실패는 조용히 무시)
+        try:
+            from shared.pipeline_activity import clear_busy as _cb_pa
+            _cb_pa("j08")
+        except Exception:
+            pass
         if driver:
             time.sleep(2)
             driver.quit()

@@ -584,13 +584,32 @@ def _gen_economic_ts_nv(
     _catalog = _build_data_catalog(datasets)
     _insights = _load_learn_insights("economic", platform)
 
+    # ★ 분량 상한 블록 (2026-07-16 근본 수정 — 41문장 초과 사고): 테마 Pass-1 과 동일 패턴.
+    #   숫자는 post_type_specs 단일 소스 파생 (하드코딩 금지, 제8-B조 문장+글자 병기).
+    _spec_eco = None
+    try:
+        from JARVIS02_WRITER.post_type_specs import get_spec as _gs_eco
+        _spec_eco = _gs_eco("economic")
+    except Exception:
+        pass
+    _max_sents = _spec_eco.max_sentences if _spec_eco else 40
+    _max_kor = _spec_eco.max_korean if _spec_eco else 2000
+    _target_sents = _spec_eco.target_sentences if _spec_eco else 30
+    _min_sents = _spec_eco.min_sentences if _spec_eco else 20
+    _p_cap = max(15, _max_sents // 2)   # 한 <p> 최대 2문장 → <p> 상한 = 문장 상한/2
+
     system_msg = f"""당신은 한국 경제 블로그의 전문 작가입니다.
 
 {supreme_block}
 {_insights}
 
+[★ 분량 상한 — 절대 초과 금지 (위반 시 응답 자체 거부)]
+- 목표 {_L.build_length_phrase(_target_sents)} / 하한 {_L.build_length_phrase(_min_sents)}
+- **★ 절대 상한: {_max_sents}문장 / {_max_kor}자** — 응답 자체 한계. 초과분은 발행 전 검증에서 잘려나간다.
+- {_max_kor}자 가까워지면 즉시 면책 마무리 후 출력 종료. 길게 풀어쓰지 말 것.
+
 [절대 제약 — 출력 시 반드시 준수 (위 헌법 블록 전체 적용)]
-- <p> 태그 15개 이상 (한 <p>에 최대 2문장)
+- <p> 태그 15~{_p_cap}개 (한 <p>에 최대 2문장 — 상한 초과 금지)
 - [CHART_N]...[/CHART_N] 데이터 내장 슬롯 {_L.MIN_CHART_COUNT}개 이상 (★ 위 카탈로그 데이터 직접 박기)
   ★ 반드시 [CHART_N] 오프닝 태그로 시작하고 [/CHART_N] 클로징 태그로 닫는다. 오프닝 생략 절대 금지.
   ★ 슬롯 안 필드: 제목 / 단위 / 데이터 / 출처 — 이 4개만. 종류: 필드 쓰지 말 것.

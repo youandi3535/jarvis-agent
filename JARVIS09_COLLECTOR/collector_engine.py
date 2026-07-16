@@ -79,94 +79,103 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
     """
     try:
         from shared.pipeline_activity import mark_busy as _mb
-        _mb("j09", f"{theme[:12]} 수집", ttl=1200)
+        _mb("j09", f"{theme[:12]} 수집", ttl=600)   # 안전망 10분 — 실소요 기준 축소
     except Exception:
         pass
-    log.info(f"[Engine] 수집 시작: theme='{theme}' sector='{sector}'")
-    raw_docs: list[RawDocument] = []
-
-    def _run_provider(prov):
-        # ★ 수집 폭 배율 (사용자 박제 2026-07-03 — ADR 013): "제한을 두지 말고 최대한
-        #   많은 진실성 있는 데이터를 전부" — 프로바이더별 상한에 배율. env 튜닝.
-        limit = int(_PROVIDER_LIMITS.get(prov.source_type, 8)
-                    * max(1.0, float(_os.getenv("J09_BREADTH", "3.0") or "3.0")))
-        try:
-            docs = prov.collect(theme, sector, max_items=limit)
-            log.info(f"[Engine] {prov.source_type} → {len(docs)}건 수집")
-            return docs
-        except Exception as e:
-            log.warning(f"[Engine] {prov.source_type} 실패: {e}")
-            return []
-
+    # busy 신호 수명 = 함수 수명 — 종료(성공·실패) 시 finally 에서 즉시 해제 (근본 수정 2026-07-16)
     try:
-        from JARVIS00_INFRA.watchdog import beat  # 지역 import (순환 방지)
-    except Exception:
-        def beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
-    # ★ shutdown(wait=False): 타임아웃된 프로바이더 스레드를 버리고 즉시 진행
-    #   (yfinance 등 무한 hang 방지 — ERRORS [401])
-    exe = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
-    futures = {exe.submit(_run_provider, p): p.source_type for p in _PROVIDERS}
-    try:
-        for fut in as_completed(futures, timeout=90):  # 전체 90초 상한
-            beat()
+        log.info(f"[Engine] 수집 시작: theme='{theme}' sector='{sector}'")
+        raw_docs: list[RawDocument] = []
+
+        def _run_provider(prov):
+            # ★ 수집 폭 배율 (사용자 박제 2026-07-03 — ADR 013): "제한을 두지 말고 최대한
+            #   많은 진실성 있는 데이터를 전부" — 프로바이더별 상한에 배율. env 튜닝.
+            limit = int(_PROVIDER_LIMITS.get(prov.source_type, 8)
+                        * max(1.0, float(_os.getenv("J09_BREADTH", "3.0") or "3.0")))
             try:
-                docs = fut.result(timeout=30)  # 개별 프로바이더 30초 상한
-            except _FutureTimeout:
-                ptype = futures.get(fut, "unknown")
-                log.warning(f"[Engine] {ptype} 30초 타임아웃 — 스킵")
-                docs = []
+                docs = prov.collect(theme, sector, max_items=limit)
+                log.info(f"[Engine] {prov.source_type} → {len(docs)}건 수집")
+                return docs
             except Exception as e:
-                log.warning(f"[Engine] 프로바이더 결과 취합 실패: {e}")
-                docs = []
-            raw_docs.extend(docs)
-    except _FutureTimeout:
-        log.warning("[Engine] 전체 수집 90초 초과 — 수집된 데이터만 사용")
-    finally:
-        exe.shutdown(wait=False)  # 잔여 스레드 백그라운드로 버림
+                log.warning(f"[Engine] {prov.source_type} 실패: {e}")
+                return []
 
-    # 정제 + 중복 URL 제거
-    seen_urls: set[str] = set()
-    results = []
-    for raw in raw_docs:
-        if raw.url in seen_urls:
-            continue
-        seen_urls.add(raw.url)
         try:
-            raw.extra["theme"] = raw.extra.get("theme") or theme
-            cleaned = clean_document(raw)
-            if cleaned.word_count >= 20:  # 20단어 이상만 (짧은 타이틀 제외)
-                results.append(cleaned)
-        except Exception as e:
-            log.warning(f"[Engine] 정제 실패 ({raw.url}): {e}")
+            from JARVIS00_INFRA.watchdog import beat  # 지역 import (순환 방지)
+        except Exception:
+            def beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
+        # ★ shutdown(wait=False): 타임아웃된 프로바이더 스레드를 버리고 즉시 진행
+        #   (yfinance 등 무한 hang 방지 — ERRORS [401])
+        exe = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
+        futures = {exe.submit(_run_provider, p): p.source_type for p in _PROVIDERS}
+        try:
+            for fut in as_completed(futures, timeout=90):  # 전체 90초 상한
+                beat()
+                try:
+                    docs = fut.result(timeout=30)  # 개별 프로바이더 30초 상한
+                except _FutureTimeout:
+                    ptype = futures.get(fut, "unknown")
+                    log.warning(f"[Engine] {ptype} 30초 타임아웃 — 스킵")
+                    docs = []
+                except Exception as e:
+                    log.warning(f"[Engine] 프로바이더 결과 취합 실패: {e}")
+                    docs = []
+                raw_docs.extend(docs)
+        except _FutureTimeout:
+            log.warning("[Engine] 전체 수집 90초 초과 — 수집된 데이터만 사용")
+        finally:
+            exe.shutdown(wait=False)  # 잔여 스레드 백그라운드로 버림
 
-    # ★ 신뢰 우선 정렬 + 동일 내용 중복 시 고신뢰 소스 유지 (사용자 박제 2026-07-03 — ADR 013)
-    #   "논문 > API > 뉴스 > 기사 > 웹 — 겹치면 이 순서로 선택. 수집 자체는 전부."
-    from .models import trust_rank as _trust
-    results.sort(key=lambda r: _trust(r.source_type))   # stable — 티어 내 원래 순서 보존
-    _seen_hash: set[str] = set()
-    _uniq: list = []
-    for r in results:
-        h = getattr(r, "content_hash", "") or ""
-        if h and h in _seen_hash:
-            continue    # 동일 내용 — 앞선(더 신뢰 높은) 소스가 이미 보존됨
-        if h:
-            _seen_hash.add(h)
-        _uniq.append(r)
-    results = _uniq
+        # 정제 + 중복 URL 제거
+        seen_urls: set[str] = set()
+        results = []
+        for raw in raw_docs:
+            if raw.url in seen_urls:
+                continue
+            seen_urls.add(raw.url)
+            try:
+                raw.extra["theme"] = raw.extra.get("theme") or theme
+                cleaned = clean_document(raw)
+                if cleaned.word_count >= 20:  # 20단어 이상만 (짧은 타이틀 제외)
+                    results.append(cleaned)
+            except Exception as e:
+                log.warning(f"[Engine] 정제 실패 ({raw.url}): {e}")
 
-    # 소스 다양성 확보: 같은 source_type에서 너무 많이 몰리지 않도록 배분
-    _per_source: dict[str, int] = {}
-    # ★ 30 → 100 상향 (풍부 원칙 [314] — 이미 받은 데이터 절삭 금지, 사실상 무제한)
-    _MAX_PER_SOURCE = int(_os.getenv("J09_MAX_PER_SOURCE", "100") or "100")
-    balanced = []
-    for r in results:
-        src = r.source_type
-        if _per_source.get(src, 0) < _MAX_PER_SOURCE:
-            balanced.append(r)
-            _per_source[src] = _per_source.get(src, 0) + 1
+        # ★ 신뢰 우선 정렬 + 동일 내용 중복 시 고신뢰 소스 유지 (사용자 박제 2026-07-03 — ADR 013)
+        #   "논문 > API > 뉴스 > 기사 > 웹 — 겹치면 이 순서로 선택. 수집 자체는 전부."
+        from .models import trust_rank as _trust
+        results.sort(key=lambda r: _trust(r.source_type))   # stable — 티어 내 원래 순서 보존
+        _seen_hash: set[str] = set()
+        _uniq: list = []
+        for r in results:
+            h = getattr(r, "content_hash", "") or ""
+            if h and h in _seen_hash:
+                continue    # 동일 내용 — 앞선(더 신뢰 높은) 소스가 이미 보존됨
+            if h:
+                _seen_hash.add(h)
+            _uniq.append(r)
+        results = _uniq
 
-    log.info(f"[Engine] 수집 완료: 원본 {len(raw_docs)}건 → 정제 {len(results)}건 → 배분 {len(balanced)}건")
-    return balanced
+        # 소스 다양성 확보: 같은 source_type에서 너무 많이 몰리지 않도록 배분
+        _per_source: dict[str, int] = {}
+        # ★ 30 → 100 상향 (풍부 원칙 [314] — 이미 받은 데이터 절삭 금지, 사실상 무제한)
+        _MAX_PER_SOURCE = int(_os.getenv("J09_MAX_PER_SOURCE", "100") or "100")
+        balanced = []
+        for r in results:
+            src = r.source_type
+            if _per_source.get(src, 0) < _MAX_PER_SOURCE:
+                balanced.append(r)
+                _per_source[src] = _per_source.get(src, 0) + 1
+
+        log.info(f"[Engine] 수집 완료: 원본 {len(raw_docs)}건 → 정제 {len(results)}건 → 배분 {len(balanced)}건")
+        return balanced
+    finally:
+        # 작업 종료 — busy 즉시 해제 (해제 실패는 조용히 무시, TTL 은 안전망으로 잔존)
+        try:
+            from shared.pipeline_activity import clear_busy as _cb
+            _cb("j09")
+        except Exception:
+            pass
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -410,50 +419,59 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
     """
     try:
         from shared.pipeline_activity import mark_busy as _mb
-        _mb("j09", f"{theme[:12]} 리서치", ttl=1200)
+        _mb("j09", f"{theme[:12]} 리서치", ttl=600)   # 안전망 10분 — 실소요 기준 축소
     except Exception:
         pass
-    from .models import (quota_group,
-                         COLLECT_QUOTA_BUDGET, COLLECT_PAPER_CAP, COLLECT_API_CAP)
+    # busy 신호 수명 = 함수 수명 — 종료(성공·실패) 시 finally 에서 즉시 해제 (근본 수정 2026-07-16)
+    try:
+        from .models import (quota_group,
+                             COLLECT_QUOTA_BUDGET, COLLECT_PAPER_CAP, COLLECT_API_CAP)
 
-    paper_cap = int(_os.getenv("J09_PAPER_CAP",    str(COLLECT_PAPER_CAP))    or COLLECT_PAPER_CAP)
-    api_cap   = int(_os.getenv("J09_API_CAP",      str(COLLECT_API_CAP))      or COLLECT_API_CAP)
-    budget    = int(_os.getenv("J09_QUOTA_BUDGET", str(COLLECT_QUOTA_BUDGET)) or COLLECT_QUOTA_BUDGET)
+        paper_cap = int(_os.getenv("J09_PAPER_CAP",    str(COLLECT_PAPER_CAP))    or COLLECT_PAPER_CAP)
+        api_cap   = int(_os.getenv("J09_API_CAP",      str(COLLECT_API_CAP))      or COLLECT_API_CAP)
+        budget    = int(_os.getenv("J09_QUOTA_BUDGET", str(COLLECT_QUOTA_BUDGET)) or COLLECT_QUOTA_BUDGET)
 
-    log.info(f"[research] 티어순 수집 시작: theme='{theme}' "
-             f"쿼터=논문{paper_cap}·API{api_cap}·총{budget}")
+        log.info(f"[research] 티어순 수집 시작: theme='{theme}' "
+                 f"쿼터=논문{paper_cap}·API{api_cap}·총{budget}")
 
-    # 티어별 프로바이더 분류
-    paper_provs = [p for p in _PROVIDERS if quota_group(p.source_type) == "paper"]
-    api_provs   = [p for p in _PROVIDERS if quota_group(p.source_type) == "api"]
-    rest_provs  = [p for p in _PROVIDERS if quota_group(p.source_type) == "rest"]
+        # 티어별 프로바이더 분류
+        paper_provs = [p for p in _PROVIDERS if quota_group(p.source_type) == "paper"]
+        api_provs   = [p for p in _PROVIDERS if quota_group(p.source_type) == "api"]
+        rest_provs  = [p for p in _PROVIDERS if quota_group(p.source_type) == "rest"]
 
-    seen_urls: set[str] = set()
+        seen_urls: set[str] = set()
 
-    # ① 논문: 최대 paper_cap
-    paper_docs = _collect_tier(paper_provs, theme, sector, paper_cap, seen_urls)
-    log.info(f"[research] 논문 {len(paper_docs)}/{paper_cap}건 확보")
+        # ① 논문: 최대 paper_cap
+        paper_docs = _collect_tier(paper_provs, theme, sector, paper_cap, seen_urls)
+        log.info(f"[research] 논문 {len(paper_docs)}/{paper_cap}건 확보")
 
-    # ② API: 최대 api_cap + 논문 이월
-    api_allow = api_cap + (paper_cap - len(paper_docs))
-    api_docs  = _collect_tier(api_provs, theme, sector, api_allow, seen_urls)
-    log.info(f"[research] API {len(api_docs)}/{api_allow}건 확보")
+        # ② API: 최대 api_cap + 논문 이월
+        api_allow = api_cap + (paper_cap - len(paper_docs))
+        api_docs  = _collect_tier(api_provs, theme, sector, api_allow, seen_urls)
+        log.info(f"[research] API {len(api_docs)}/{api_allow}건 확보")
 
-    # ③ 나머지: 남은 예산 전부 (cascade 자동)
-    rest_allow = budget - len(paper_docs) - len(api_docs)
-    rest_docs  = (_collect_tier(rest_provs, theme, sector, rest_allow, seen_urls)
-                  if rest_allow > 0 else [])
-    log.info(f"[research] 나머지 {len(rest_docs)}/{rest_allow}건 확보")
+        # ③ 나머지: 남은 예산 전부 (cascade 자동)
+        rest_allow = budget - len(paper_docs) - len(api_docs)
+        rest_docs  = (_collect_tier(rest_provs, theme, sector, rest_allow, seen_urls)
+                      if rest_allow > 0 else [])
+        log.info(f"[research] 나머지 {len(rest_docs)}/{rest_allow}건 확보")
 
-    all_docs = paper_docs + api_docs + rest_docs
+        all_docs = paper_docs + api_docs + rest_docs
 
-    # 얇은 문서 전문 딥페치
-    all_docs = _deep_fetch_thin_docs(all_docs, theme)
+        # 얇은 문서 전문 딥페치
+        all_docs = _deep_fetch_thin_docs(all_docs, theme)
 
-    total = len(all_docs)
-    log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
-             f"+나머지{len(rest_docs)}={total}건 → JARVIS02 fact·수치 추출")
-    return {"docs": all_docs, "plan": {}}
+        total = len(all_docs)
+        log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
+                 f"+나머지{len(rest_docs)}={total}건 → JARVIS02 fact·수치 추출")
+        return {"docs": all_docs, "plan": {}}
+    finally:
+        # 작업 종료 — busy 즉시 해제 (해제 실패는 조용히 무시, TTL 은 안전망으로 잔존)
+        try:
+            from shared.pipeline_activity import clear_busy as _cb
+            _cb("j09")
+        except Exception:
+            pass
 
 
 # ── ★ 통합 수집 컴포저 — CollectedData 방출 (Step 3, UNIFIED_PIPELINE_SPEC) ──

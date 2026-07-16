@@ -24,6 +24,10 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 # SDK subprocess 에는 별도로 "" 오버라이드해서 OAuth 모드 강제 (아래 _run_sdk_sync 참조)
 os.environ.setdefault("ANTHROPIC_API_KEY", "max-subscription-no-api-cost")
 
+# crewai telemetry 종료 노이즈('Loop is closed') + 외부 전송 차단
+os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
+os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+
 # ★ 사용자 박제 2026-06-07 — Claude CLI 잔존 흔적 일소.
 # 모듈 import 시 단 1회 message_parser monkey-patch (rate_limit_event 등 미지 type 흡수)
 # + PATH 보장 (/opt/homebrew/bin 자동 prepend). 데몬·cron 환경에서도 안전.

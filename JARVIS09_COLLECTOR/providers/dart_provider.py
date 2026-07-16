@@ -9,6 +9,7 @@ API: https://opendart.fss.or.kr/api/
 from __future__ import annotations
 import os
 import httpx
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from ..models import RawDocument
 from ..rate_limiter import wait_for
@@ -116,7 +117,31 @@ class DartProvider(BaseProvider):
 
         _cls_label = {"Y": "코스피(유가증권)", "K": "코스닥", "N": "코넥스", "E": "기타"}
 
-        for corp_name, filings in list(corp_map.items())[:max_items]:
+        # 기업 개요 병렬 prefetch (company.json — LLM 호출 0, 순수 HTTP)
+        target_corps = list(corp_map.items())[:max_items]
+        corp_codes = {
+            filings[0].get("corp_code", ""): corp_name
+            for corp_name, filings in target_corps
+            if filings[0].get("corp_code", "")
+        }
+        company_info_cache: dict[str, dict] = {}
+        if corp_codes:
+            with ThreadPoolExecutor(max_workers=min(len(corp_codes), 8)) as pool:
+                future_to_code = {
+                    pool.submit(self._fetch_company_info, code): code
+                    for code in corp_codes
+                }
+                for future in as_completed(future_to_code):
+                    code = future_to_code[future]
+                    try:
+                        info = future.result()
+                        if info:
+                            company_info_cache[code] = info
+                    except Exception as e:
+                        log.debug(f"[DART] company.json 병렬 실패 ({code}): {e}")
+            log.info(f"[DART] company.json 병렬 fetch 완료 — {len(company_info_cache)}/{len(corp_codes)}건")
+
+        for corp_name, filings in target_corps:
             lines = [f"[{corp_name} 전자공시 — {theme}]", "[최근 공시]"]
             for f in filings[:5]:
                 rdate = f.get("rcept_dt", "")
@@ -126,23 +151,22 @@ class DartProvider(BaseProvider):
 
             corp_code = filings[0].get("corp_code", "")
 
-            # 기업 개요 추가 — company.json (대표자·상장구분·소재지·설립일)
-            if corp_code:
-                info = self._fetch_company_info(corp_code)
-                if info:
-                    lines.append("")
-                    lines.append("[기업 개요]")
-                    if info.get("ceo_nm"):
-                        lines.append(f"• 대표자: {info['ceo_nm']}")
-                    if info.get("corp_cls"):
-                        lines.append(f"• 시장: {_cls_label.get(info['corp_cls'], info['corp_cls'])}")
-                    if info.get("adres"):
-                        lines.append(f"• 소재지: {info['adres']}")
-                    est = info.get("est_dt", "")
-                    if est and len(est) == 8:
-                        lines.append(f"• 설립일: {est[:4]}년 {int(est[4:6])}월 {int(est[6:])}일")
-                    if info.get("hm_url"):
-                        lines.append(f"• 홈페이지: {info['hm_url']}")
+            # 기업 개요 — 병렬 prefetch 결과 사용
+            info = company_info_cache.get(corp_code, {})
+            if info:
+                lines.append("")
+                lines.append("[기업 개요]")
+                if info.get("ceo_nm"):
+                    lines.append(f"• 대표자: {info['ceo_nm']}")
+                if info.get("corp_cls"):
+                    lines.append(f"• 시장: {_cls_label.get(info['corp_cls'], info['corp_cls'])}")
+                if info.get("adres"):
+                    lines.append(f"• 소재지: {info['adres']}")
+                est = info.get("est_dt", "")
+                if est and len(est) == 8:
+                    lines.append(f"• 설립일: {est[:4]}년 {int(est[4:6])}월 {int(est[6:])}일")
+                if info.get("hm_url"):
+                    lines.append(f"• 홈페이지: {info['hm_url']}")
 
             if len(lines) > 2:
                 results.append(RawDocument(

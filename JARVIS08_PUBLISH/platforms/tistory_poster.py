@@ -624,6 +624,14 @@ def post_to_tistory(
 ) -> bool:
 
     _wd_beat()   # ★ 발행 시작 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
+
+    # ── 대시보드 busy 신호 — 발행 진행 표시 (마킹 실패는 발행을 절대 막지 않음) ──
+    try:
+        from shared.pipeline_activity import mark_busy as _mb_pa
+        _mb_pa("j08", "티스토리 발행", ttl=900)   # 안전망 15분 — 종료 시 finally 에서 즉시 해제
+    except Exception:
+        pass
+
     print(f"  📝 티스토리: {TS_BLOG}.tistory.com")
     _external_driver = preloaded_driver is not None
     driver = preloaded_driver if _external_driver else _make_driver()
@@ -1162,5 +1170,11 @@ def post_to_tistory(
         return False
 
     finally:
+        # 발행 종료(성공·실패) — busy 즉시 해제, 대시보드 평상시 복귀 (실패는 조용히 무시)
+        try:
+            from shared.pipeline_activity import clear_busy as _cb_pa
+            _cb_pa("j08")
+        except Exception:
+            pass
         _s(2)
         driver.quit()  # 외부/내부 driver 모두 여기서 종료

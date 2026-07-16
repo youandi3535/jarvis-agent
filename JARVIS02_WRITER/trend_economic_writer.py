@@ -482,46 +482,8 @@ def _img_dir(platform: str):
 #  7. 원고 생성 — 티스토리 생활 밀착 Q&A형
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# 네이버·티스토리 표준 구조 — ★ 사용자 박제 2026-05-15
-# 경제 브리핑 = 모든 블로그 통일 구조 (Q&A형 폐기, 심층 해설형 4섹션)
-# 플랫폼별 차이 = 문체만 (네이버=해요체, 티스토리=합니다체)
-_TS_SECTIONS = """\
-아래 6개 파트를 순서대로 작성해. 각 소제목 아래 반드시 1문장 이상 (빈 소제목 절대 금지).
-(헌법 제0-B조 적용 — 한 <p> 태그 = 최대 2문장)
-
-[도입부] — {INTRO_SENTS_PHRASE} ★ 헌법 제0조
-(첫 문장 감성 오프닝 — 일상 관찰·공감 질문·계절 분위기. 숫자·지표 시작 절대 금지)
-왜 지금 이 키워드가 급상승하는지, 독자가 왜 알아야 하는지 자연스럽게 연결.
-→ <p>(2문장)</p>  [섹션이미지 ①]  <p>(2문장)</p>
-
-[섹션 ①] <h2>'{KEYWORD}'란 무엇인가?</h2> — {SEC_SENTS_PHRASE}
-처음 듣는 독자도 이해할 수 있도록 개념과 배경을 쉽게 설명. 전문 용어는 반드시 풀어서.
-→ <p>(2문장)</p>  [단락 차트]  <p>(2문장)</p>  [섹션이미지 ②]  <p>(2문장)</p>
-
-[섹션 ②] <h2>지금 무슨 일이 일어나고 있나?</h2> — {SEC_SENTS_PHRASE}
-현재 상황·트렌드 배경·시장 데이터. 구체적 수치 포함.
-→ <p>(2문장)</p>  [단락 차트]  <p>(2문장)</p>  [섹션이미지 ③]  <p>(2문장)</p>
-
-[섹션 ③] <h2>국내 증시·실생활에 미치는 영향</h2> — {SEC_SENTS_PHRASE}
-주식·환율·금리·부동산·소비 중 관련 항목을 연결하여 실생활 영향 설명.
-→ <p>(2문장)</p>  [단락 차트]  <p>(2문장)</p>  [섹션이미지 ④]  <p>(2문장)</p>
-
-[섹션 ④] <h2>투자자 체크포인트와 향후 전망</h2> — {SEC_SENTS_PHRASE}
-개인 투자자 시각 주목 포인트 2가지+ + 낙관/중립/비관 시나리오 or 단기·중기 전망.
-→ <p>(2문장)</p>  [단락 차트]  <p>(2문장)</p>  [섹션이미지 ⑤]  <p>(2문장)</p>
-
-[마무리] — {OUTRO_SENTS_PHRASE} + 면책 {OUTRO_SENTS_PHRASE} ★ 헌법 제5조
-핵심 요약 {OUTRO_SENTS_PHRASE} + [섹션이미지 ⑥] + 면책 {OUTRO_SENTS_PHRASE} (매번 다른 표현 — 정보 제공·투자 권유 아님·판단 책임은 독자).
-→ <p>(2문장)</p>  [섹션이미지 ⑥]  <p>(면책 2문장)</p>
-
-[총합] {TOTAL_SENTS_PHRASE} + 섹션이미지 6 + 단락 차트 4+ + 썸네일 1
-"""
-
-# 옛 Q&A 분량 상수 — 호환 alias (deprecated, 신규 사용 금지)
-_TS_Q1 = (4, 5)
-_TS_Q2 = (5, 6)
-_TS_Q3 = (5, 6)
-_TS_Q4 = (4, 5)
+# (죽은 코드 정리 2026-07-16 — _TS_SECTIONS 템플릿·_TS_Q1~Q4 상수 참조 0회 삭제.
+#  현행 대본 구조는 draft_writer._gen_economic_ts_nv 의 출력 형식 블록이 단일 소스)
 
 
 
@@ -1341,6 +1303,13 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
             supreme_block = (supreme_block or "") + _kw_rule(keyword)
         except Exception:
             pass
+        # ★ 규정 숙지 (2026-07-16): 발행 전 게이트가 실제 채점하는 기준(분량·SEO·매력도 5축)
+        #   을 Pass-1 프롬프트에 사전 고지 — supreme_block 합류로 모든 Pass-1 변형 자동 상속.
+        try:
+            from JARVIS02_WRITER.law_enforcer import build_gate_checklist_block as _gate_chk
+            supreme_block = (supreme_block or "") + "\n" + _gate_chk("economic", "tistory")
+        except Exception:
+            pass
         _rel_terms = ", ".join(_profile.get('related_terms') or [])
         if reason:
             supreme_block = (supreme_block or "") + (
@@ -1474,7 +1443,16 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
     print(f"\n  🔴 [TISTORY-DRAFT] 대본 생성 중... [{_dt_ts.now().strftime('%H:%M:%S')}]")
     _section_img_paths.clear()
     _para_img_paths.clear()
+    # ★ 재실행 시 이미지 삭제는 정당 — 하네스 VERIFY_ONLY 수정(2026-07-16) 이후
+    #   이 스텝 재실행 = 진짜 재생성 필요 시점뿐 (인프라 실패는 재검증만 수행).
     _cleanup_tistory_images()
+
+    # 대시보드 작동 신호 — 대본 작성 시작/종료 (finally 에서 해제)
+    try:
+        from shared.pipeline_activity import mark_busy as _mb_j02
+        _mb_j02("j02", "티스토리 대본 작성", ttl=900)
+    except Exception:
+        pass
 
     try:
         from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
@@ -1519,6 +1497,12 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
         _g_report("writer", e, module=__name__)
         traceback.print_exc()
         return {"success": False, "keyword": keyword, "error": str(e)[:100]}
+    finally:
+        try:
+            from shared.pipeline_activity import clear_busy as _cb_j02
+            _cb_j02("j02")
+        except Exception:
+            pass
 
 
 def ts_publish(draft: dict) -> dict:
@@ -1621,6 +1605,13 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
         try:
             from JARVIS02_WRITER.law_enforcer import keyword_frequency_rule as _kw_rule
             supreme_block = (supreme_block or "") + _kw_rule(keyword)
+        except Exception:
+            pass
+        # ★ 규정 숙지 (2026-07-16): 발행 전 게이트가 실제 채점하는 기준(분량·SEO·매력도 5축)
+        #   을 Pass-1 프롬프트에 사전 고지 — supreme_block 합류로 모든 Pass-1 변형 자동 상속.
+        try:
+            from JARVIS02_WRITER.law_enforcer import build_gate_checklist_block as _gate_chk
+            supreme_block = (supreme_block or "") + "\n" + _gate_chk("economic", "naver")
         except Exception:
             pass
         _rel_terms = ", ".join(_profile.get('related_terms') or [])
@@ -1756,7 +1747,16 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
     print(f"\n  🟢 [NAVER-DRAFT] 대본 생성 중... [{_dt_nv.now().strftime('%H:%M:%S')}]")
     _section_img_paths.clear()
     _para_img_paths.clear()
+    # ★ 재실행 시 이미지 삭제는 정당 — 하네스 VERIFY_ONLY 수정(2026-07-16) 이후
+    #   이 스텝 재실행 = 진짜 재생성 필요 시점뿐 (인프라 실패는 재검증만 수행).
     _cleanup_naver_images()
+
+    # 대시보드 작동 신호 — 대본 작성 시작/종료 (finally 에서 해제)
+    try:
+        from shared.pipeline_activity import mark_busy as _mb_j02
+        _mb_j02("j02", "네이버 대본 작성", ttl=900)
+    except Exception:
+        pass
 
     try:
         from JARVIS02_WRITER.tistory_html_writer import generate_article_html, extract_text_content
@@ -1797,6 +1797,12 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
         _g_report("writer", e, module=__name__)
         traceback.print_exc()
         return {"success": False, "keyword": keyword, "error": str(e)[:100]}
+    finally:
+        try:
+            from shared.pipeline_activity import clear_busy as _cb_j02
+            _cb_j02("j02")
+        except Exception:
+            pass
 
 
 def nv_publish(draft: dict, ts_keyword: str = '') -> dict:
