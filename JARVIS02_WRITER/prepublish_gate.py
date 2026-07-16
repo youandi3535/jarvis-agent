@@ -20,6 +20,7 @@ economic_poster._verify_all / trend_theme_writer._verify_all 양쪽이 호출한
   PREPUBLISH_ENGAGEMENT_GATE=0 매력도 게이트 끔
   PREPUBLISH_IMAGE_GATE=0      이미지(차트) 사실성 게이트 끔
   PREPUBLISH_CROSSCHECK_GATE=0 본문↔차트 수치 교차대조 게이트 끔
+  PREPUBLISH_SCORE_GATE=0      100점 루브릭 종합 점수 게이트 끔 (70점 미달 재작성 순환)
 
 ★ 이미지 사실성 (사용자 박제 2026-06-29): 본문 수치는 사실성 게이트가, *차트 안의 수치*
   는 이미지 게이트가 막는다. JARVIS06 render_from_spec 가 검증 우회(실데이터 미확인)
@@ -125,6 +126,37 @@ def prepublish_quality_issues(draft, post_type: str = "",
             tag = ",".join(sorted(dims)) if dims else "전반"
             log.warning(f"[prepublish_gate] 매력도 미달 차원={tag} → 재작성 순환")
             out.append({"kind": "engagement", "detail": f"[매력도/유익성] 임계 미달 차원: {tag}"})
+
+    # ── 100점 루브릭 종합 점수 게이트 (PREPUBLISH_SCORE_GATE) ──────────────
+    if not _disabled("PREPUBLISH_SCORE_GATE"):
+        try:
+            from JARVIS02_WRITER.post_scorer import score_post as _score_fn
+            _llm_sc = cqr.get("llm_scores", {}) if "cqr" in dir() else {}
+            _fi = [x for x in out if x.get("kind") == "factuality"]
+            _sr = _score_fn(
+                draft,
+                post_type=post_type,
+                llm_scores=_llm_sc,
+                factuality_issues=_fi,
+            )
+            log.info(
+                "[prepublish_gate] 종합 점수 %.1f/100 → %s",
+                _sr["total"], "통과" if _sr["passed"] else "재작성"
+            )
+            if not _sr["passed"]:
+                sec = _sr.get("sections", {})
+                detail_parts = [
+                    f"A={sec.get('A',{}).get('total',0):.1f}/20",
+                    f"B={sec.get('B',{}).get('total',0):.1f}/50",
+                    f"C={sec.get('C',{}).get('total',0):.1f}/20",
+                    f"D={sec.get('D',{}).get('total',0):.1f}/10",
+                ]
+                out.append({
+                    "kind": "engagement",
+                    "detail": f"[품질점수] 종합 {_sr['total']:.1f}/100 (70미달) — {' '.join(detail_parts)}"
+                })
+        except Exception as _e:
+            log.warning(f"[prepublish_gate] score_post 실패 → 통과(fail-open): {_e}")
 
     return out
 
@@ -241,10 +273,11 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -
         "본문에서 *구체적 수치가 포함된 주장* 중 발행하면 안 되는 것만 골라라.\n"
         "차단 기준: (a) 출처 수치와 모순 (b) 구체 수치인데 출처에 근거 전혀 없음\n"
         "★ 차단 제외: 숫자 없는 서술·전망·해석, 상식 수치, 출처에서 추론 가능한 수치\n\n"
-        "## B. 매력도·유익성 (임계 engagement≥70, usefulness≥70, title_hook≥60)\n\n"
+        "## B. 매력도·유익성 5축 (0~100 점수 — 임계: engagement≥70, usefulness≥70, title_hook≥60, originality≥60, structure≥65)\n\n"
         "JSON 하나만 반환(다른 말 금지):\n"
         '{"blocked_claims":["차단 주장 원문 최대5개, 없으면 []"],'
         '"engagement_score":85,"usefulness_score":80,"title_hook_score":70,'
+        '"originality_score":75,"structure_score":70,'
         '"failed_dims":["임계 미달 차원 목록, 없으면 []"]}'
     )
     try:
@@ -257,14 +290,26 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -
         obj = _json.loads(m.group())
         blocked = [str(x).strip() for x in (obj.get("blocked_claims") or []) if str(x).strip()]
         raw_dims = list(obj.get("failed_dims") or [])
+        _int = lambda k, d: int(obj.get(k) or d)
         if not raw_dims:
-            if int(obj.get("engagement_score", 100) or 100) < 70:
-                raw_dims.append("engagement")
-            if int(obj.get("usefulness_score", 100) or 100) < 70:
-                raw_dims.append("usefulness")
-            if int(obj.get("title_hook_score", 100) or 100) < 60:
-                raw_dims.append("title_hook")
-        return {"blocked_claims": blocked, "engagement_passed": not raw_dims, "failed_dims": raw_dims}
+            if _int("engagement_score",  100) < 70: raw_dims.append("engagement")
+            if _int("usefulness_score",  100) < 70: raw_dims.append("usefulness")
+            if _int("title_hook_score",  100) < 60: raw_dims.append("title_hook")
+            if _int("originality_score", 100) < 60: raw_dims.append("originality")
+            if _int("structure_score",   100) < 65: raw_dims.append("structure")
+        llm_scores = {
+            "engagement_score":  _int("engagement_score",  0),
+            "usefulness_score":  _int("usefulness_score",  0),
+            "title_hook_score":  _int("title_hook_score",  0),
+            "originality_score": _int("originality_score", 0),
+            "structure_score":   _int("structure_score",   0),
+        }
+        return {
+            "blocked_claims": blocked,
+            "engagement_passed": not raw_dims,
+            "failed_dims": raw_dims,
+            "llm_scores": llm_scores,
+        }
     except Exception as e:
         log.warning(f"[prepublish_gate] 통합 품질 판정 실패 → 통과(fail-open): {e}")
         return {"blocked_claims": [], "engagement_passed": True, "failed_dims": []}
