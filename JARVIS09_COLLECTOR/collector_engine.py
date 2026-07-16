@@ -17,7 +17,7 @@ except ImportError:
         def __enter__(self): return self
         def __exit__(self, *a): return False
 from .providers import (
-    BlogProvider, NewsProvider,
+    BlogProvider, NewsProvider, AcademicProvider,
     FinanceProvider, WebProvider, KorEconProvider,
     NaverNewsProvider, DartProvider, EcosProvider,
     KosisProvider, KrxProvider,
@@ -33,14 +33,14 @@ _PROVIDER_LIMITS = {
     "naver_news": 30,  # 네이버 뉴스 API: 가장 정확한 한국어 뉴스
     "news":       25,  # Google News + 경제지 RSS
     "kor_econ":   15,  # 네이버 금융 + 전문 경제지
-    "krx":        12,  # KRX 시장 통계 (키 불필요)
+    "krx":        20,  # KRX 시장 통계 (Tier 2 API — 상향)
+    "dart":       20,  # DART 전자공시 (Tier 2 API — 상향)
+    "ecos":       20,  # 한국은행 거시경제 지표 (Tier 2 API — 상향)
+    "kosis":      20,  # 통계청 산업 통계 (Tier 2 API — 상향)
+    "finance":    15,  # yfinance 글로벌 지표 (Tier 2 API — 상향)
     "blog":       10,  # 네이버 블로그
     "web":        10,  # 위키 + 지식백과 + 다음
-    "dart":       10,  # DART 전자공시
-    "ecos":        8,  # 한국은행 거시경제 지표
-    "kosis":       8,  # 통계청 산업 통계
-    "finance":     8,  # yfinance 글로벌 지표
-    # "academic" 제거 — arXiv는 한국 경제·방산·금융 주제와 무관한 논문을 반환 (노이즈)
+    "academic":    1,  # arXiv 논문 — 최대 3건(×J09_BREADTH 3.0)으로 제한
 }
 
 _PROVIDERS = [
@@ -54,7 +54,7 @@ _PROVIDERS = [
     EcosProvider(),        # 한국은행 ECOS (키 필요)
     KosisProvider(),       # 통계청 KOSIS (키 필요)
     FinanceProvider(),     # yfinance 글로벌 지표
-    # AcademicProvider() 제거 — arXiv 논문은 한국 경제 주제와 무관한 노이즈
+    AcademicProvider(),    # arXiv 논문 — 최대 3건 제한 (limit=1 × J09_BREADTH 3.0)
 ]
 _MAX_WORKERS = 8   # 병렬 수집
 
