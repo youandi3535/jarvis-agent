@@ -19,6 +19,13 @@ except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────
 
+# ── JARVIS00 워치독 진행 신호 (freeze 오탐 방지 — ERRORS [439] 계열) ──
+try:
+    from JARVIS00_INFRA.watchdog import beat as _wd_beat
+except ImportError:
+    def _wd_beat() -> None: pass  # watchdog 부재 시 no-op
+# ─────────────────────────────────────────────────────
+
 # ── ADR 008 Phase 2 (★ 사용자 박제 2026-05-17) — 경로 anchor ──
 # 본 모듈이 JARVIS02_WRITER → JARVIS08_PUBLISH/platforms 로 이관됨에 따라
 # 루트 .env 와 *JARVIS02_WRITER 의* chrome_profile/screenshots 등 자원 경로를 정확히 가리키도록 anchor 명시.
@@ -616,6 +623,7 @@ def post_to_tistory(
     edit_post_id: str = "",   # 수정 모드 — 기존 글 ID
 ) -> bool:
 
+    _wd_beat()   # ★ 발행 시작 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
     print(f"  📝 티스토리: {TS_BLOG}.tistory.com")
     _external_driver = preloaded_driver is not None
     driver = preloaded_driver if _external_driver else _make_driver()
@@ -936,6 +944,7 @@ def post_to_tistory(
 
             # 나머지 블록: divider 블록에서 구분선 삽입
             for bi, (btype, bdata) in enumerate(_merged):
+                _wd_beat()   # ★ 블록 입력 루프 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
                 print(f"  [{bi+1}/{len(_merged)}] {btype}: {str(bdata)[:60]}")
                 _dismiss_any_popup(driver)  # 팝업이 있으면 먼저 제거
                 if btype == 'divider':

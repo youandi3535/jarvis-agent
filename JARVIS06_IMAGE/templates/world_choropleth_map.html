@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
+
+  :root{
+    --hero0: #eef4d8;   /* 시퀀셜 스케일 최명색 — 파스텔 옐로우그린 */
+    --hero1: #16324f;   /* 시퀀셜 스케일 최암색 — 짙은 네이비 블루 */
+    --ink:   #182430;   /* 본문 텍스트 */
+    --a1:    #9fcf9a;   /* 보조 색 1 — 연그린 */
+    --a1s:   #6fae83;   /* 보조 색 1 shade — 짙은 그린 */
+    --a2:    #3f7fa6;   /* 보조 색 2 — 미드블루 */
+    --a2s:   #245577;   /* 보조 색 2 shade — 짙은 블루 */
+    --soft:  #ffffff;   /* 순수 흰색 캔버스 */
+    --muted: #6b7684;   /* 저강조 텍스트 */
+    --eyebrow: #4f8a72; /* 오버라인 라벨 색 */
+    --grid:  #cdd3d8;   /* 국가 경계 · 구분선 (유일한 라인) */
+  }
+
+  *{box-sizing:border-box; margin:0; padding:0;}
+
+  body{
+    width:1280px;
+    background:var(--soft);
+    font-family:'Noto Sans KR', sans-serif;
+    color:var(--ink);
+  }
+
+  .stage{
+    width:1280px;
+    background:var(--soft);
+    padding:64px 72px 56px;
+    display:flex;
+    flex-direction:column;
+  }
+
+  /* ---------- 헤더 ---------- */
+  header{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    margin-bottom:28px;
+  }
+  .eyebrow-row{
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  .eyebrow-bar{
+    width:22px;
+    height:4px;
+    background:var(--eyebrow);
+  }
+  .eyebrow{
+    font-size:20px;
+    font-weight:700;
+    letter-spacing:3px;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+  }
+  h1.title{
+    font-size:54px;
+    font-weight:900;
+    line-height:1.18;
+    color:var(--ink);
+    letter-spacing:-0.5px;
+  }
+  .subtitle{
+    font-size:24px;
+    font-weight:500;
+    color:var(--muted);
+    line-height:1.5;
+    max-width:980px;
+  }
+
+  /* ---------- HERO_STATS ---------- */
+  .hero-stats{
+    display:flex;
+    gap:56px;
+    margin:8px 0 32px;
+  }
+  .hero-stats:empty{display:none;}
+  .hero-stats .stat{
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+  }
+  .hero-stats .stat-value{
+    font-size:34px;
+    font-weight:900;
+    color:var(--a2s);
+  }
+  .hero-stats .stat-label{
+    font-size:16px;
+    font-weight:500;
+    color:var(--muted);
+  }
+
+  /* ---------- 차트 스테이지 (지도 75% + 범례 25%) ---------- */
+  section:has([data-jarvis-empty]){display:none;}
+
+  .visual-stage{
+    display:flex;
+    flex-direction:column;
+  }
+
+  .chart-1{
+    width:100%;
+    min-height:560px;
+    display:flex;
+  }
+  .map-canvas{
+    width:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .map-canvas > *{
+    width:100%;
+    height:100%;
+    max-height:560px;
+    object-fit:contain;
+  }
+  /* 지도 슬롯 내부 SVG가 이 클래스를 공유하면 동일 시퀀셜 스케일 자동 적용 */
+  .map-canvas .lvl-0{ fill:var(--soft); }
+  .map-canvas .lvl-1{ fill:color-mix(in srgb, var(--hero0), var(--hero1) 0%); }
+  .map-canvas .lvl-2{ fill:color-mix(in srgb, var(--hero0), var(--hero1) 14%); }
+  .map-canvas .lvl-3{ fill:color-mix(in srgb, var(--hero0), var(--hero1) 29%); }
+  .map-canvas .lvl-4{ fill:color-mix(in srgb, var(--hero0), var(--hero1) 43%); }
+  .map-canvas .lvl-5{ fill:color-mix(in srgb, var(--hero0), var(--hero1) 57%); }
+  .map-canvas .lvl-6{ fill:color-mix(in srgb, var(--hero0), var(--hero1) 71%); }
+  .map-canvas .lvl-7{ fill:color-mix(in srgb, var(--hero0), var(--hero1) 86%); }
+  .map-canvas .lvl-8{ fill:color-mix(in srgb, var(--hero0), var(--hero1) 100%); }
+  .map-canvas [class^="lvl-"]{ stroke:var(--grid); stroke-width:1; }
+
+  /* ---------- 하단 범례 바 (비대칭 2블록) ---------- */
+  .legend-bar{
+    height:190px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:64px;
+    border-top:1px solid var(--grid);
+    margin-top:8px;
+  }
+
+  .legend-nodata{
+    display:flex;
+    align-items:center;
+    gap:14px;
+  }
+  .swatch-nodata{
+    width:56px;
+    height:30px;
+    border:1px solid var(--grid);
+    background-image:repeating-linear-gradient(
+      45deg,
+      var(--soft) 0px,
+      var(--soft) 4px,
+      var(--grid) 4px,
+      var(--grid) 6px
+    );
+  }
+  .legend-nodata .legend-text{
+    font-size:18px;
+    font-weight:500;
+    color:var(--muted);
+  }
+
+  .legend-scale{
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    align-items:center;
+  }
+  .scale-row{
+    display:flex;
+    align-items:center;
+  }
+  .scale-arrow{
+    width:0;
+    height:0;
+    border-top:14px solid transparent;
+    border-bottom:14px solid transparent;
+  }
+  .scale-arrow.start{
+    border-right:16px solid var(--hero0);
+  }
+  .scale-arrow.end{
+    border-left:16px solid var(--hero1);
+  }
+  .scale-steps{
+    display:flex;
+    width:420px;
+    height:28px;
+  }
+  .scale-steps .step{
+    flex:1 1 0;
+    height:100%;
+    border-right:1px solid var(--soft);
+  }
+  .scale-steps .step:last-child{border-right:none;}
+  .step.lvl-1{ background:color-mix(in srgb, var(--hero0), var(--hero1) 0%); }
+  .step.lvl-2{ background:color-mix(in srgb, var(--hero0), var(--hero1) 14%); }
+  .step.lvl-3{ background:color-mix(in srgb, var(--hero0), var(--hero1) 29%); }
+  .step.lvl-4{ background:color-mix(in srgb, var(--hero0), var(--hero1) 43%); }
+  .step.lvl-5{ background:color-mix(in srgb, var(--hero0), var(--hero1) 57%); }
+  .step.lvl-6{ background:color-mix(in srgb, var(--hero0), var(--hero1) 71%); }
+  .step.lvl-7{ background:color-mix(in srgb, var(--hero0), var(--hero1) 86%); }
+  .step.lvl-8{ background:color-mix(in srgb, var(--hero0), var(--hero1) 100%); }
+
+  .scale-labels{
+    display:flex;
+    width:420px;
+    justify-content:space-between;
+    padding:0 16px;
+  }
+  .scale-labels span{
+    font-size:15px;
+    font-weight:500;
+    color:var(--muted);
+  }
+
+  /* ---------- MINI_CARDS ---------- */
+  .mini-cards{
+    display:flex;
+    gap:24px;
+    margin-top:36px;
+  }
+  .mini-cards:empty{display:none;}
+  .mini-cards .mini-card{
+    flex:1;
+    border-top:3px solid var(--a2);
+    padding:16px 4px 0;
+  }
+  .mini-cards .mini-card-title{
+    font-size:16px;
+    font-weight:700;
+    color:var(--ink);
+    margin-bottom:6px;
+  }
+  .mini-cards .mini-card-desc{
+    font-size:15px;
+    font-weight:400;
+    color:var(--muted);
+    line-height:1.5;
+  }
+
+  /* ---------- 푸터 ---------- */
+  footer{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-top:40px;
+  }
+  .brand{
+    font-size:16px;
+    font-weight:700;
+    color:var(--ink);
+  }
+  .source{
+    font-size:15px;
+    font-weight:400;
+    color:var(--muted);
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+
+    <header>
+      <div class="eyebrow-row">
+        <span class="eyebrow-bar"></span>
+        <p class="eyebrow">{EYEBROW}</p>
+      </div>
+      <h1 class="title">{TITLE}</h1>
+      <p class="subtitle">{SUBTITLE}</p>
+    </header>
+
+    <div class="hero-stats" data-slot="hero-stats">{HERO_STATS}</div>
+
+    <div class="visual-stage">
+      <section class="chart-1">
+        <div class="map-canvas">{CHART_1}</div>
+      </section>
+
+      <div class="legend-bar">
+        <div class="legend-nodata">
+          <div class="swatch-nodata"></div>
+          <span class="legend-text">No data</span>
+        </div>
+
+        <div class="legend-scale">
+          <div class="scale-row">
+            <div class="scale-arrow start"></div>
+            <div class="scale-steps">
+              <span class="step lvl-1"></span>
+              <span class="step lvl-2"></span>
+              <span class="step lvl-3"></span>
+              <span class="step lvl-4"></span>
+              <span class="step lvl-5"></span>
+              <span class="step lvl-6"></span>
+              <span class="step lvl-7"></span>
+              <span class="step lvl-8"></span>
+            </div>
+            <div class="scale-arrow end"></div>
+          </div>
+          <div class="scale-labels">
+            <span>50</span>
+            <span>80</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mini-cards" data-slot="mini-cards">{MINI_CARDS}</div>
+
+    <footer>
+      <span class="brand">{BRAND}</span>
+      <span class="source">{SOURCE}</span>
+    </footer>
+
+  </div>
+</body>
+</html>

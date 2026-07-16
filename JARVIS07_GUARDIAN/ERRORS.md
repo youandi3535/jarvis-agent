@@ -2,6 +2,36 @@
 
 ---
 
+## [442] ✅ 수동수정 — 경제·테마 발행 harness 데드라인 구조적 부족 — 3-pass 작성·인포그래픽·품질 게이트 추가로 30분 초과 (2026-07-16)
+
+- **증상**: `[harness:경제 브리핑 발행 — 네이버] attempt=2 step=전체: 데드라인 초과(블로킹) 1830s > 1800s`. 시도 2회 모두 검증 실패. GUARDIAN 재발행 시도도 동일하게 실패. 이미지 4개 섹션 부재 경고도 동반.
+- **환경**: `JARVIS00_INFRA/watchdog.py BLOG_ACTION_DEADLINE_SEC=1800`, `JARVIS02_WRITER/economic_poster.py guard_main(deadline_sec=3540)`, `JARVIS02_WRITER/trend_theme_writer.py guard_main(deadline_sec=3600)`.
+- **원인**: `BLOG_ACTION_DEADLINE_SEC=1800`(30분)은 2026-07-06 사용자가 확정한 값이나, 이후 파이프라인에 ① 3-pass 작성(서사설계+작성+비평, +7~10분) ② 인포그래픽 pro_templates ③ prepublish 품질 게이트(Sonnet 5 LLM 2종)가 추가되어 총 소요 시간이 상시 30분을 초과. 30분 한계는 `attempt=1` 시도가 prepublish gate 실패로 재시도를 트리거하면 `attempt=2` 는 residual time이 0에 가까워 즉시 deadline hit. `guard_main(deadline_sec=3540)` = 59분 상한도 45분×2 플랫폼에 부족.
+- **헛다리**: 없음 — ERRORS.md [441]([440] 데몬 미재시작) 과 동시에 존재하는 별개 원인. [440] 재시작 수정만으로는 pipeline 자체 소요 시간이 30분을 넘는 한 재발함.
+- **해결**: ① `BLOG_ACTION_DEADLINE_SEC` 1800→2700 (30분→45분, `JARVIS00_INFRA/watchdog.py`) ② `economic_poster.py guard_main` 3540→6000 (59분→100분) ③ `trend_theme_writer.py guard_main` 3600→6000 (60분→100분). 3개 파일 동시 수정.
+- **파일**: `JARVIS00_INFRA/watchdog.py`, `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/trend_theme_writer.py`.
+- **교훈**: `BLOG_ACTION_DEADLINE_SEC` 상수는 파이프라인 실제 소요 시간을 반영해야 하며, 신규 LLM 패스·이미지 생성 단계가 추가될 때 함께 검토 필수. `guard_main` 부모 데드라인은 반드시 `BLOG_ACTION_DEADLINE_SEC × 플랫폼 수 + 여유` 로 설정. ★ 재발 방지: 파이프라인 새 단계 추가 시 `watchdog.py BLOG_ACTION_DEADLINE_SEC` 검토 체크리스트 추가.
+
+## [441] ✅ 수동수정 — 경제 브리핑 네이버 harness 데드라인 초과 — [440] 수정이 코드엔 있었으나 데몬 미재시작으로 미적용 (2026-07-16)
+
+- **증상**: `[harness:경제 브리핑 발행 — 네이버] attempt=2 step=전체: 데드라인 초과(블로킹) 1830s > 1800s` — [438][440]과 동일 문구·거의 동일 수치, 대상만 네이버. `economic_20260716_063022.log` 확인 결과 draft attempt 1·2 양쪽에서 `SDK timeout 300s — 수집된 응답: 0개` 가 반복되며 예산을 소진한 뒤 하드킬.
+- **환경**: `jarvis_daemon.py` 상시 프로세스(PID 28909, 기동 2026-07-15 20:15:00) + `shared/llm.py`.
+- **원인**: [440]의 `_proc_lock_acquire(timeout=...)` 수정은 2026-07-16 03:03:30 에 이미 파일에 반영되어 있었으나(작업트리 diff 확인), 이를 반영해야 할 daemon 프로세스가 03:03 훨씬 이전인 07-15 20:15 부터 떠 있던 채로 06:30 경제 브리핑을 실행 — Python 은 프로세스 기동 시점의 바이트코드를 메모리에 캐싱하므로 03:03 수정이 반영 안 된 **구코드**(무제한 락 대기)로 그대로 실행되어 [439]와 동일한 무제한 대기 hang 이 네이버 액션에서 재현됨. 즉 이번 사고는 *새 코드 결함이 아니라* "코드 수정 후 데몬 재시작 누락"이 원인 — CLAUDE.md 계층2 "즉시 반영 vs 데몬 재시작" 절이 정확히 경고하는 시나리오.
+- **헛다리**: 없음 — [438][439][440] 을 먼저 대조해 동일 클래스임을 확인했고, `shared/llm.py`/`naver_poster.py`/`tistory_poster.py` 의 uncommitted diff 가 이미 완전한 수정을 담고 있음을 코드 검토로 확인한 뒤, 데몬 프로세스 기동 시각(`ps -o lstart`)과 수정 파일 mtime 을 대조해 "코드는 고쳐졌지만 로드되지 않았다"는 진짜 원인을 특정했다. 코드를 또 고치는 헛수고 없이 바로 재시작으로 귀결.
+- **해결**: 코드 변경 없음(추가 수정 불필요 — [440] 수정이 이미 정답). `kill <daemon_pid>` 로 구프로세스 종료 → `jarvis_keeper.py` 가 30초 이내 자동 재기동(신규 PID) → 이제 03:03 수정본이 로드됨. `py_compile` 로 `shared/llm.py`/양쪽 poster 파일 구문 재확인 완료.
+- **파일**: 없음 (런타임 재시작만).
+- **교훈**: 코드 결함을 고쳤다고 사고가 끝나는 게 아니다 — **상시 실행 데몬은 재시작 전까지 구코드로 계속 돈다**. 특히 발행 파이프라인처럼 하루 1~2회만 도는 잡은 "고침 시각"과 "다음 실행 시각" 사이에 재시작이 끼지 않으면 이미 고친 버그가 다음 실행에서 *그대로 재현*된다. 코드 수정 직후에는 `ps -o lstart -p $(cat logs/daemon.pid)` 로 프로세스 기동 시각과 수정 파일 mtime 을 항상 대조하고, 기동 시각이 더 이르면 즉시 재시작할 것.
+
+## [440] ✅ 수동수정 — 경제 브리핑 티스토리 harness 데드라인 재초과 — 크로스 프로세스 락 자체가 무제한 대기 (2026-07-16)
+
+- **증상**: `[harness:경제 브리핑 발행 — 티스토리] attempt=2 step=전체: 데드라인 초과(블로킹) 1829s > 1800s` — [438]과 동일한 문구·수치. [438](`JARVIS_LLM_DEADLINE_TS` SSOT 불일치)·[439](크로스 프로세스 fcntl 잠금 도입)가 이미 2026-07-15에 적용된 뒤에도 동일 증상이 다시 보고됨.
+- **환경**: `shared/llm.py` `_run_sdk_sync`/`_invoke_sdk_vision` — [439]에서 신설한 `_proc_lock_acquire()`(fcntl.flock 크로스 프로세스 직렬화).
+- **원인**: [439]가 크로스 프로세스 락은 도입했지만 락 대기 자체를 **무제한 폴링**으로 구현 — `timeout` 인자가 없어 다른 JARVIS 프로세스(daemon·수동 실행 등)가 락을 오래 쥐고 있으면 `_proc_lock_acquire()` 내부 `while True` 루프에서 하네스 액션 데드라인(1800s)을 그대로 관통한다. 이 대기는 *스텝 내부*(한 번의 `invoke_text` 호출 안)에서 일어나므로 `_execute_steps`의 협조적 `wd.check()`가 스텝 사이에서만 도는 구조상 못 잡고, 오직 백그라운드 감시 스레드의 절대 시각 비교(`elapsed > deadline_sec + poll_sec`)로만 뒤늦게 "데드라인 초과(블로킹)"로 걸린다. [438]이 고친 `JARVIS_LLM_DEADLINE_TS`(재시도 강등 임계)와 [439]가 추가한 `_BG_ALIASES` 타임아웃 강등은 모두 `invoke_text`→`_run_sdk_sync` **내부**의 SDK 호출 자체만 보호할 뿐, 그 호출보다 먼저 실행되는 `_proc_lock_acquire()` 대기 구간은 두 보호장치 어느 쪽도 커버하지 못했다.
+- **헛다리**: 없음 — ERRORS.md 선행 검색으로 [438][439]가 동일 액션·동일 수치의 선행 사고임을 확인했으나, 둘 다 "SDK 호출 자체의 시간 예산"만 다뤘고 그 앞 단계인 "락 대기 시간 예산"은 다루지 않았음을 코드 대조로 특정.
+- **해결**: `_proc_lock_acquire(timeout=...)` 로 상한 인자 추가 — 초과 시 예외 없이 `False` 반환. `_run_sdk_sync`/`_invoke_sdk_vision` 양쪽이 이미 계산된(발행 중이면 [439]가 강등한 ≤90s 등) `timeout` 값을 그대로 락 대기 상한으로 전달 → 실패 시 SDK hang(`_LAST_CALL.hung=True`)과 동일하게 취급해 상위 `invoke_text`의 재시도·회로차단기 경로로 자연 위임. 이제 액션 전체 소요는 "락 대기 상한 + SDK 타임아웃"으로 유계.
+- **파일**: `shared/llm.py`.
+- **교훈**: 시간 예산 보호장치(강등·타임아웃)를 추가할 때는 그 함수의 *진입부터 반환까지* 모든 블로킹 지점을 나열해 전수 커버해야 한다 — 새로 추가한 락 자체가 새로운 무제한 블로킹 지점이 될 수 있음을 [439] 리뷰 시점에 놓쳤다. "SDK 호출에 타임아웃을 걸었다" ≠ "이 함수 호출 전체에 타임아웃을 걸었다".
+
 ## [439] LLM 포화 설계 근본 원인 — 크로스 프로세스 CLI 충돌 + guardian 세마포어 300s 선점 (2026-07-15)
 
 - **증상**: `SDK timeout 300s — 수집된 응답: 0개` 반복 발생. 수동 `economic_poster.py --tistory-only` 실행 시 특히 빈번.

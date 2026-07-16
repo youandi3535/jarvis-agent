@@ -150,5 +150,14 @@
     "aesthetic": "미니멀 모노톤+강조 1색",
     "via": "LLM",
     "total": 20
+  },
+  {
+    "date": "2026-07-16",
+    "action": "learned",
+    "id": "lib-split-hero",
+    "name": "좌우 분할 잡지형",
+    "aesthetic": "editorial magazine split",
+    "via": "라이브러리",
+    "total": 21
   }
 ]

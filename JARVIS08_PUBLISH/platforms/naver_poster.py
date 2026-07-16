@@ -24,6 +24,13 @@ except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────
 
+# ── JARVIS00 워치독 진행 신호 (freeze 오탐 방지 — ERRORS [439] 계열) ──
+try:
+    from JARVIS00_INFRA.watchdog import beat as _wd_beat
+except ImportError:
+    def _wd_beat() -> None: pass  # watchdog 부재 시 no-op
+# ─────────────────────────────────────────────────────
+
 load_dotenv()
 NV_ID  = os.getenv("NV_USERNAME", "")
 NV_PW  = os.getenv("NV_PASSWORD", "")
@@ -670,6 +677,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
 
     driver = None
     try:
+        _wd_beat()   # ★ 발행 시작 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
         driver = _get_driver()
 
         if not _ensure_logged_in(driver):
@@ -1064,6 +1072,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 Finder 다이얼로그 후 Chrome 복귀 → Selenium CDP click으로 editor 포커스 재설정.
                 """
                 # 사진 아이콘 클릭 전 Chrome을 front로
+                _wd_beat()   # ★ 이미지 업로드 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
                 _activate_window()
                 time.sleep(0.8)
                 _upload_image(img_path, driver=driver)
@@ -1103,6 +1112,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
 
             # 나머지 블록: divider 블록에서 구분선 삽입
             for bi, (btype, bdata) in enumerate(remaining):
+                _wd_beat()   # ★ 블록 입력 루프 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
                 print(f"  [{bi+1}/{len(remaining)}] {btype}: {str(bdata)[:50]}")
                 if btype == 'divider':
                     pass  # 구분선 제거 — 소제목 이미지로 대체됨

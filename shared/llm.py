@@ -367,8 +367,15 @@ _llm_proc_fd: list = [None]
 _llm_proc_fd_lock = _threading.Lock()
 
 
-def _proc_lock_acquire() -> None:
-    """크로스 프로세스 배타 잠금 — 다른 JARVIS 프로세스가 CLI 사용 중이면 폴링 대기."""
+def _proc_lock_acquire(timeout: float | None = None) -> bool:
+    """크로스 프로세스 배타 잠금 — 다른 JARVIS 프로세스가 CLI 사용 중이면 폴링 대기.
+
+    ★ timeout 상한 (ERRORS [439] 후속 — 사용자 박제 2026-07-16): 무제한 폴링은
+    다른 프로세스가 잠금을 오래 점유할 때 harness 액션 데드라인(블로그 발행=30분)을
+    조용히 관통한다 — 스텝 *내부* 블로킹이라 협조적 wd.check() 가 못 잡고, 백그라운드
+    감시 스레드의 '데드라인 초과(블로킹)' 로만 뒤늦게 걸린다. timeout 지정 시 그 안에서
+    포기하고 False 반환 → 호출자가 SDK hang 과 동일하게 취급(재시도/회로차단기 경유).
+    """
     import fcntl as _fcntl, time as _t
     try:
         from JARVIS00_INFRA.watchdog import beat as _wd
@@ -381,13 +388,17 @@ def _proc_lock_acquire() -> None:
                 _llm_proc_fd[0] = open(_LLM_PROC_LOCK_PATH, "w")
     _fd = _llm_proc_fd[0]
     _wd()
+    _waited = 0.0
     while True:
         try:
             _fcntl.flock(_fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-            return
+            return True
         except OSError:
             _wd()
+            if timeout is not None and _waited >= timeout:
+                return False
             _t.sleep(_LLM_SEM_POLL_SEC)
+            _waited += _LLM_SEM_POLL_SEC
 
 
 def _proc_lock_release() -> None:
@@ -537,7 +548,15 @@ def _run_sdk_sync(
     _pace_spawn()
     _acquire_llm_sem()
     try:
-        _proc_lock_acquire()   # ★ 크로스 프로세스 직렬화 — daemon + 수동 실행 충돌 방지
+        # ★ timeout 예산 안에서만 대기 — 무제한 대기는 harness 데드라인을 관통(ERRORS [439] 후속)
+        if not _proc_lock_acquire(timeout=timeout):
+            import logging as _logging
+            _logging.getLogger("jarvis.llm").warning(
+                f"크로스 프로세스 잠금 {timeout:.0f}s 대기 초과 — 포기(hang 취급, 재시도/회로차단기로 위임)"
+            )
+            _LAST_CALL.throttled = False
+            _LAST_CALL.hung = True
+            return ""
         try:
             exe = ThreadPoolExecutor(max_workers=1)
             try:
@@ -611,7 +630,10 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
     _pace_spawn()
     _acquire_llm_sem()
     try:
-        _proc_lock_acquire()   # ★ 크로스 프로세스 직렬화
+        # ★ timeout 예산 안에서만 대기 — 무제한 대기는 harness 데드라인을 관통(ERRORS [439] 후속)
+        if not _proc_lock_acquire(timeout=timeout):
+            print(f"  ⚠️ vision 크로스 프로세스 잠금 {timeout:.0f}s 대기 초과 — 포기")
+            return ""
         try:
             try:
                 anyio.run(_collect)
