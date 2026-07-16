@@ -17,7 +17,7 @@ except ImportError:
         def __enter__(self): return self
         def __exit__(self, *a): return False
 from .providers import (
-    BlogProvider, NewsProvider, AcademicProvider,
+    BlogProvider, NewsProvider,
     FinanceProvider, WebProvider, KorEconProvider,
     NaverNewsProvider, DartProvider, EcosProvider,
     KosisProvider, KrxProvider,
@@ -40,7 +40,7 @@ _PROVIDER_LIMITS = {
     "ecos":        8,  # 한국은행 거시경제 지표
     "kosis":       8,  # 통계청 산업 통계
     "finance":     8,  # yfinance 글로벌 지표
-    "academic":   10,  # arxiv 논문 (신뢰서열 1위 — 적게 받을 이유 없음)
+    # "academic" 제거 — arXiv는 한국 경제·방산·금융 주제와 무관한 논문을 반환 (노이즈)
 }
 
 _PROVIDERS = [
@@ -54,7 +54,7 @@ _PROVIDERS = [
     EcosProvider(),        # 한국은행 ECOS (키 필요)
     KosisProvider(),       # 통계청 KOSIS (키 필요)
     FinanceProvider(),     # yfinance 글로벌 지표
-    AcademicProvider(),    # arxiv 논문
+    # AcademicProvider() 제거 — arXiv 논문은 한국 경제 주제와 무관한 노이즈
 ]
 _MAX_WORKERS = 8   # 병렬 수집
 
