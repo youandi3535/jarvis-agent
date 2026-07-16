@@ -2,6 +2,22 @@
 
 ---
 
+## [443] ✅ 수동수정 — LLM SDK hang 근본 원인 — 이벤트 루프 오염 + 300s timeout (2026-07-16)
+
+- **증상**: `economic_20260716_063022.log` 에서 `SDK timeout 300s — 수집된 응답: 0개` 가 2회 연속, 그 직전에 `Loop <_UnixSelectorEventLoop running=False closed=True debug=False> that handles pid XXXXX is closed` 경고. 드래프트 LLM 에 600s(10분) 낭비 → prepublish gate 실패 후 재시도에서 또 300s hang → 총 1830s로 30분 초과 kill.
+- **환경**: `shared/llm.py _run_blocking()` 내 `anyio.run(_collect)`, `ThreadPoolExecutor(max_workers=1)`, Python 3.10 asyncio.
+- **원인 1 (이벤트 루프 오염)**: `anyio.run(_collect)` 완료 후 해당 스레드의 asyncio 이벤트 루프가 `closed` 상태로 남는다. `ThreadPoolExecutor` 는 스레드를 재사용하므로, 두 번째 호출이 동일 스레드에서 실행되면 닫힌 루프를 만나 "Loop is closed" → SDK가 스트리밍을 시작하지 못한 채 0개 응답 → 300s wall_deadline까지 블로킹. 즉 연속 두 번의 300s hang 중 **두 번째는 전적으로 이 버그의 결과**.
+- **원인 2 (timeout 300s)**: 기본 SDK timeout이 300s(5분)이라 첫 hang 시 5분을 날린 후에야 재시도. 이벤트 루프 오염이 없어도 첫 hang이 일어나면 5분 낭비.
+- **헛다리**: [442]에서 "3-pass 작성·인포그래픽 추가로 30분 초과"로 판단해 deadline을 45분으로 늘렸으나 이는 임시방편. 실제 pipeline은 이벤트 루프 오염 버그 없이는 20~25분에 완료 가능하며, 30분은 충분한 deadline.
+- **해결**:
+  1. `shared/llm.py _run_blocking()` 에 `asyncio.set_event_loop(asyncio.new_event_loop())` 추가 — 매 호출마다 새 이벤트 루프 강제 설정 → 재사용 오염 근본 제거.
+  2. `shared/llm.py invoke_text()` 기본 timeout 300s → 180s — 첫 hang 시 5분이 아닌 3분에 감지·재시도.
+  3. `JARVIS00_INFRA/watchdog.py BLOG_ACTION_DEADLINE_SEC` 2700(45분) → 1800(30분) 복원 — 임시방편 해제, 정상 pipeline은 20~25분에 완료.
+  4. `economic_poster.py guard_main` 6000 → 3540, `trend_theme_writer.py guard_main` 6000 → 3600 복원.
+  5. [442] 해결 내용(deadline 증설)도 함께 롤백.
+- **파일**: `shared/llm.py`, `JARVIS00_INFRA/watchdog.py`, `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/trend_theme_writer.py`.
+- **교훈**: ThreadPoolExecutor 재사용 스레드에서 anyio.run() 을 여러 번 호출하면 이벤트 루프 상태가 오염된다. `_run_blocking` 같은 반복 실행 함수는 반드시 `asyncio.set_event_loop(asyncio.new_event_loop())` 선행 필수. ★ 재발 방지: 새 비동기 SDK 래퍼 함수 추가 시 이 패턴 의무 적용.
+
 ## [442] ✅ 수동수정 — 경제·테마 발행 harness 데드라인 구조적 부족 — 3-pass 작성·인포그래픽·품질 게이트 추가로 30분 초과 (2026-07-16)
 
 - **증상**: `[harness:경제 브리핑 발행 — 네이버] attempt=2 step=전체: 데드라인 초과(블로킹) 1830s > 1800s`. 시도 2회 모두 검증 실패. GUARDIAN 재발행 시도도 동일하게 실패. 이미지 4개 섹션 부재 경고도 동반.

@@ -1049,7 +1049,7 @@ if __name__ == "__main__":
         )
         try:
             from JARVIS00_INFRA.watchdog import guard_main
-            with guard_main("경제 발행", deadline_sec=6000):   # 부모 100분 backstop — 플랫폼당 45분×2 + 여유
+            with guard_main("경제 발행", deadline_sec=3540):   # 부모 59분 backstop — 플랫폼당 30분×2 − 1분
                 run(post_naver=post_naver, post_tistory=post_tistory)
         except Exception as _e:
             _g_report("writer", _e, module=__name__, func_name="run")
@@ -1058,5 +1058,5 @@ if __name__ == "__main__":
             LOCK_FILE.unlink(missing_ok=True)
     else:
         from JARVIS00_INFRA.watchdog import guard_main
-        with guard_main("경제 발행", deadline_sec=6000):   # 부모 100분 backstop — 플랫폼당 45분×2 + 여유
+        with guard_main("경제 발행", deadline_sec=3540):   # 부모 59분 backstop — 플랫폼당 30분×2 − 1분
             run(post_naver=post_naver, post_tistory=post_tistory)

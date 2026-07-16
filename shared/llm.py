@@ -530,6 +530,13 @@ def _run_sdk_sync(
                     throttled["v"] = True
 
     def _run_blocking() -> None:
+        # ★ 이벤트 루프 오염 방지 (ERRORS [443] — 사용자 박제 2026-07-16):
+        #   anyio.run() 완료 후 스레드의 이벤트 루프가 closed 상태로 남는다.
+        #   ThreadPoolExecutor 가 스레드를 재사용하면 다음 anyio.run() 이 닫힌 루프를 만나
+        #   "Loop is closed" 경고 → SDK 0 응답 → 또 300s 낭비(경제 발행 hang 연쇄 사고 근본 원인).
+        #   매 호출마다 새 이벤트 루프 강제 설정 → 재사용 오염 제거.
+        import asyncio as _aio
+        _aio.set_event_loop(_aio.new_event_loop())
         try:
             anyio.run(_collect)
         except (MessageParseError, ProcessError):
@@ -702,7 +709,7 @@ def _circuit_gate() -> str:
         return "open"
 
 
-def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 300,
+def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
                 _retries: int = 4, _essential: bool = False,
                 _nonessential: bool = False, **overrides) -> str:
     """Claude Code SDK 호출 단일 진입점.

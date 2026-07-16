@@ -966,7 +966,7 @@ if __name__ == "__main__":
 
     # ★ 정지 방어 (사용자 박제 2026-07-06): 일회성 발행 작업 freeze/deadline 가드.
     from JARVIS00_INFRA.watchdog import guard_main
-    with guard_main("테마 발행", deadline_sec=6000):   # 전체 2블로그×45분 + 여유 (★ 2026-07-16 — 3-pass 작성·인포그래픽으로 30분→45분)
+    with guard_main("테마 발행", deadline_sec=3600):   # 전체 2블로그×30분
         if args.naver_only:
             r = run_naver_theme(args.theme, args.sector)
             sys.exit(0 if r.get("success") else 1)
