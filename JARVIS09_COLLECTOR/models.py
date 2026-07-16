@@ -24,7 +24,7 @@ def _hash_text(text: str) -> str:
 #   이 티어는 *중복·충돌 해소 전용* — 수집 범위 제한에 사용 금지.
 SOURCE_TRUST_TIER: dict[str, int] = {
     "academic": 1, "kci": 1,                                   # 논문
-    "kosis": 2, "ecos": 2, "dart": 2, "krx": 2, "finance": 2,  # 공식 데이터 API
+    "kosis": 2, "ecos": 2, "dart": 2, "krx": 2, "finance": 2, "bok_official": 2,  # 공식 데이터 API
     "naver_news": 3, "news": 3,                                # 뉴스
     "kor_econ": 4, "web_data": 4,                              # 기사·전문지
     "web": 5,                                                  # 웹

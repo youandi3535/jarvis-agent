@@ -20,7 +20,7 @@ from .providers import (
     BlogProvider, NewsProvider,
     FinanceProvider, WebProvider, KorEconProvider,
     NaverNewsProvider, DartProvider, EcosProvider,
-    KosisProvider, KrxProvider,
+    KosisProvider, KrxProvider, BokProvider,
 )
 
 log = logging.getLogger("jarvis.collector.engine")
@@ -33,11 +33,12 @@ _PROVIDER_LIMITS = {
     "naver_news": 30,  # 네이버 뉴스 API: 가장 정확한 한국어 뉴스
     "news":       25,  # Google News + 경제지 RSS
     "kor_econ":   15,  # 네이버 금융 + 전문 경제지
-    "krx":        20,  # KRX 시장 통계 (Tier 2 API — 상향)
-    "dart":       20,  # DART 전자공시 (Tier 2 API — 상향)
-    "ecos":       20,  # 한국은행 거시경제 지표 (Tier 2 API — 상향)
-    "kosis":      20,  # 통계청 산업 통계 (Tier 2 API — 상향)
-    "finance":    15,  # yfinance 글로벌 지표 (Tier 2 API — 상향)
+    "krx":          20,  # KRX 시장 통계 (Tier 2 API)
+    "dart":         20,  # DART 전자공시 (Tier 2 API)
+    "ecos":         20,  # 한국은행 거시경제 지표 (Tier 2 API)
+    "kosis":        20,  # 통계청 산업 통계 (Tier 2 API)
+    "finance":      15,  # yfinance 글로벌 지표 (Tier 2 API)
+    "bok_official": 10,  # 한국은행 기준금리·환율·CPI (Tier 2 API)
     "blog":       10,  # 네이버 블로그
     "web":        10,  # 위키 + 지식백과 + 다음
 }
@@ -53,6 +54,7 @@ _PROVIDERS = [
     EcosProvider(),        # 한국은행 ECOS (키 필요)
     KosisProvider(),       # 통계청 KOSIS (키 필요)
     FinanceProvider(),     # yfinance 글로벌 지표
+    BokProvider(),         # 한국은행 기준금리·달러/원·CPI 공식 지표
 ]
 _MAX_WORKERS = 8   # 병렬 수집
 
