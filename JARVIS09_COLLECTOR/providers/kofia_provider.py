@@ -24,14 +24,12 @@ log = logging.getLogger("jarvis.collector.kofia")
 
 _BASE = "https://ecos.bok.or.kr/api/StatisticSearch"
 
-# (이름, 통계코드, 주기, 아이템코드, 단위)
+# 817Y002 = 시장금리(일별) — 주기 "D", 아이템코드는 ECOS 실검증값
 _BOND_SERIES = [
-    ("국고채 1년",    "817Y002", "M", "010101000", "%"),
-    ("국고채 3년",    "817Y002", "M", "010102000", "%"),
-    ("국고채 5년",    "817Y002", "M", "010103000", "%"),
-    ("국고채 10년",   "817Y002", "M", "010104000", "%"),
-    ("회사채(AA-) 3년", "817Y002", "M", "010301000", "%"),
-    ("CD 91일",      "817Y002", "M", "010501000", "%"),
+    ("콜금리(1일)",     "817Y002", "D", "010102000", "연%"),
+    ("국고채(3년)",     "817Y002", "D", "010200000", "연%"),
+    ("회사채(AA-, 3년)", "817Y002", "D", "010300000", "연%"),
+    ("통안증권(91일)",  "817Y002", "D", "010400000", "연%"),
 ]
 
 
@@ -49,23 +47,24 @@ class KofiaProvider(BaseProvider):
 
         import requests
         today = date.today()
-        start_ym = (today.replace(day=1) - timedelta(days=180)).strftime("%Y%m")
-        end_ym   = today.strftime("%Y%m")
+        start_d = (today - timedelta(days=10)).strftime("%Y%m%d")
+        end_d   = today.strftime("%Y%m%d")
 
         lines = ["[채권 수익률 — 한국은행 ECOS 공식 데이터]", ""]
         fetched = 0
         for name, stat, period, item, unit in _BOND_SERIES:
             try:
-                url = (f"{_BASE}/{self._key}/json/kr/1/12/"
-                       f"{stat}/{period}/{start_ym}/{end_ym}/{item}")
+                url = (f"{_BASE}/{self._key}/json/kr/1/5/"
+                       f"{stat}/{period}/{start_d}/{end_d}/{item}")
                 resp = requests.get(url, timeout=10)
                 rows = resp.json().get("StatisticSearch", {}).get("row", [])
                 if not rows:
                     continue
                 latest = rows[-1]
-                val     = latest.get("DATA_VALUE", "")
-                time_s  = latest.get("TIME", "")
-                as_of   = f"{time_s[:4]}-{time_s[4:]}" if len(time_s) == 6 else time_s
+                val    = latest.get("DATA_VALUE", "")
+                time_s = latest.get("TIME", "")
+                # 일별: YYYYMMDD → YYYY-MM-DD
+                as_of  = f"{time_s[:4]}-{time_s[4:6]}-{time_s[6:]}" if len(time_s) == 8 else time_s
                 lines.append(f"• {name}: {val}{unit} ({as_of})")
                 fetched += 1
             except Exception as e:
