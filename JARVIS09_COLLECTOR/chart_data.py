@@ -353,6 +353,7 @@ def _stock_datasets(theme: str, related_terms: list | None = None,
                 rows.append({"label": s.get("name", "?"), "value": round(v, 2)})
         ds = _mk_dataset(title, "bar_chart", unit, rows, dict(src))
         if ds:
+            ds["kind"] = "stock_financial"   # ★ 종목 재무 태그 — 경제 브리핑 배제 근거 (2026-07-18)
             out.append(ds)
     return out
 
@@ -1371,7 +1372,8 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                        exclude_titles=None, max_datasets: int = 30,
                        synonyms: list | None = None,
                        related_terms: list | None = None,
-                       profile: dict | None = None) -> dict:
+                       profile: dict | None = None,
+                       category: str = "theme") -> dict:
     """주제 연관 차트용 실데이터를 출처(provenance)와 함께 수집.
 
     Args:
@@ -1462,7 +1464,10 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
             "생산량", "판매량", "수출", "수입액", "점유율", "시장규모", "가입자", "이용자", "방문자",
             "출하량", "등록", "건수", "보급", "만족도",
         ]
-        is_stock = (any(k in combined for k in _STOCK_THEME_KWS)
+        # ★ 경제 브리핑(category="economic")은 종목 재무(PER/ROE/영업이익률/현재가) 편입 금지 —
+        #   경제=거시지표·개념 글, 종목재무는 테마 전용 (사용자 박제 2026-07-18).
+        is_stock = (category != "economic"
+                    and any(k in combined for k in _STOCK_THEME_KWS)
                     and not any(k in combined for k in _SPECIFIC_NON_VALUATION))
         if not datasets and is_stock:
             datasets.extend(_stock_datasets(theme, related_terms=related_terms, profile=profile))

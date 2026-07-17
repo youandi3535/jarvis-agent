@@ -432,7 +432,7 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
         mark_active("e3")  # J02→J06 대본 전달 활성화
     except Exception:
         pass
-    from JARVIS09_COLLECTOR.models import policy_for
+    from JARVIS09_COLLECTOR.models import policy_for, dataset_is_stock_financial
     if collected is None or not hasattr(collected, "all_numbers"):
         raise TypeError("process_draft: collected(CollectedData) 필수 — "
                         "호출자는 compose_collected/cand_collected 로 조립해 전달")
@@ -446,6 +446,17 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
     policy = policy_for(category)
     min_images = int(policy.get("min_images", 5))
     thumb_chars = int(policy.get("thumbnail_body_chars", 3000))
+
+    # ★ 경제 브리핑은 개별 종목 재무 차트(PER/ROE/영업이익률/현재가) 배제 (사용자 박제 2026-07-18).
+    #   방어심층 — 수집 게이트(collect_chart_data category)가 1차 차단하지만, 어떤 경로로
+    #   섞여 들어와도 이미지 렌더 전 제거. 테마(allow_stock_financial=True)는 필터 미발동.
+    if not policy.get("allow_stock_financial", True):
+        import dataclasses as _dc
+        _all_ds = list(collected.datasets or [])
+        _kept = [d for d in _all_ds if not dataset_is_stock_financial(d)]
+        if len(_kept) != len(_all_ds):
+            print(f"  🚫 [{platform}] 경제 브리핑 — 종목 재무 차트 {len(_all_ds) - len(_kept)}개 제외 (거시·개념 인포그래픽만)")
+            collected = _dc.replace(collected, datasets=_kept)
 
     # 이미지 컨텍스트 = 근거 fact(어댑터) + 수집 문서 (fact-grounding 보존).
     #   facts_for_chart/facts_for_photo 가 그대로 소비 → 차트 수치·사진 장면 접지.

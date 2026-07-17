@@ -123,16 +123,44 @@ ATTR_UNITS: dict[str, str] = {
 
 # ★ 카테고리 정책 레지스트리 (단일 소스). process_draft v2 가 collected.meta.category
 #   로 조회. 새 카테고리 = dict 한 줄. min_images 는 BLOG_SUPREME_LAW 제8조(5+α) 준수.
+# ★ allow_stock_financial (사용자 박제 2026-07-18): 테마주=개별 종목 재무(PER·ROE·영업이익률·
+#   현재가) 차트 허용. 경제 브리핑=트렌드 경제·금융 상식/배경 글이므로 종목 재무 *배제*
+#   (거시지표·개념 인포그래픽만). 두 글은 성격이 완전히 다름 → 데이터·이미지도 분리.
 CATEGORY_POLICY: dict[str, dict] = {
-    "theme":    {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000},
-    "economic": {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000},
+    "theme":    {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000,
+                 "allow_stock_financial": True},
+    "economic": {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000,
+                 "allow_stock_financial": False},
 }
-_DEFAULT_POLICY = {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000}
+_DEFAULT_POLICY = {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000,
+                   "allow_stock_financial": True}
 
 
 def policy_for(category: str) -> dict:
     """카테고리 정책 조회 (미등록 카테고리는 기본값 — 미래 카테고리 안전 상속)."""
     return CATEGORY_POLICY.get((category or "").strip().lower(), _DEFAULT_POLICY)
+
+
+# ★ 종목 재무 dataset 판별 — 경제 브리핑 배제용 단일 근거 (사용자 박제 2026-07-18).
+#   fact 필터(trend_economic_writer)·이미지 필터(draft_processor) 공통 소스.
+_STOCK_FIN_MARKERS = ("PER", "ROE", "영업이익률", "현재가", "시가총액", "EPS", "BPS", "PBR", "PSR")
+
+
+def dataset_is_stock_financial(ds: dict) -> bool:
+    """dataset 이 '개별 종목 재무' 차트인가 (경제 브리핑에서 배제 대상).
+
+    판별: ① kind=='stock_financial' 태그(chart_data._stock_datasets 가 박제) 1순위
+          ② 태그 없어도 provider(krx/dart/finance)+제목의 종목재무 마커 휴리스틱
+             (collect_research fact 유래 승격 dataset 포착).
+    테마는 이 판정과 무관하게 종목재무 허용(policy allow_stock_financial=True).
+    """
+    if not isinstance(ds, dict):
+        return False
+    if ds.get("kind") == "stock_financial":
+        return True
+    prov = ((ds.get("source") or {}).get("provider") or "").lower()
+    title = ds.get("title") or ""
+    return any(p in prov for p in ("krx", "dart", "finance")) and any(m in title for m in _STOCK_FIN_MARKERS)
 
 
 def dataset_fingerprint(title: str, unit: str) -> str:

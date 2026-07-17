@@ -1330,7 +1330,8 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
             _chart = collect_chart_data(keyword, sector=sector, description=reason,
                                         synonyms=_cand.get("synonyms"),
-                                        related_terms=_profile.get('related_terms')) or {}
+                                        related_terms=_profile.get('related_terms'),
+                                        category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
@@ -1346,8 +1347,11 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
             try:
                 _fact_ds = _f2d(_ev_pack)
                 if _fact_ds:
+                    from JARVIS09_COLLECTOR.models import dataset_is_stock_financial as _is_sf
                     _existing_titles = {d.get("title", "") for d in _pool}
-                    _new_ds = [d for d in _fact_ds if d.get("title", "") not in _existing_titles]
+                    # ★ 경제 브리핑: fact 유래 dataset 중 개별 종목 재무(PER/ROE/영업이익 등)는 배제 (2026-07-18)
+                    _new_ds = [d for d in _fact_ds
+                               if d.get("title", "") not in _existing_titles and not _is_sf(d)]
                     _pool = _pool + _new_ds
                     print(f"  📊 [facts→datasets] {len(_new_ds)}개 수치 데이터셋 추가 (총 {len(_pool)}개)")
             except Exception as _f2d_e:
@@ -1640,7 +1644,8 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
             _chart = collect_chart_data(keyword, sector=sector, description=reason,
                                         synonyms=_cand.get("synonyms"),
-                                        related_terms=_profile.get('related_terms')) or {}
+                                        related_terms=_profile.get('related_terms'),
+                                        category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
@@ -1656,8 +1661,11 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
             try:
                 _fact_ds = _f2d(_ev_pack)
                 if _fact_ds:
+                    from JARVIS09_COLLECTOR.models import dataset_is_stock_financial as _is_sf
                     _existing_titles = {d.get("title", "") for d in _pool}
-                    _new_ds = [d for d in _fact_ds if d.get("title", "") not in _existing_titles]
+                    # ★ 경제 브리핑: fact 유래 dataset 중 개별 종목 재무(PER/ROE/영업이익 등)는 배제 (2026-07-18)
+                    _new_ds = [d for d in _fact_ds
+                               if d.get("title", "") not in _existing_titles and not _is_sf(d)]
                     _pool = _pool + _new_ds
                     print(f"  📊 [facts→datasets] {len(_new_ds)}개 수치 데이터셋 추가 (총 {len(_pool)}개)")
             except Exception as _f2d_e:
