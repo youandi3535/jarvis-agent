@@ -82,7 +82,8 @@ _TODAY_DOW = ["월", "화", "수", "목", "금", "토", "일"][_TODAY.weekday()]
 #  ① 데이터 수집 — collect_stocks_data 위임
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _collect(theme: str, sector: str = "", related_terms: list | None = None) -> dict:
+def _collect(theme: str, sector: str = "", related_terms: list | None = None,
+             profile: dict | None = None) -> dict:
     """테마 키워드 → 종목 데이터. collect_theme.collect_stocks_data 위임.
 
     ★ related_terms 미제공 시 자비스03 keyword_profile() 로 자체 조회 (사용자 박제
@@ -92,19 +93,28 @@ def _collect(theme: str, sector: str = "", related_terms: list | None = None) ->
     고르는 방식이라 위치편향으로 무관한 테마를 잘못 고르는 사고가 반복됐다. 관련어
     (예: "반도체 위탁생산")를 함께 매칭하면 결정론적 부분문자열 일치로 해결되는 경우가
     대부분이라 여기서 항상 확보해 내려보낸다.
+
+    ★ profile 관통 (사용자 박제 2026-07-17 — '라면'→종목 0개 사고 근본수정): 프로필
+    전체(summary·entity_type 포함)를 collect_stocks_data 까지 내려보내 LLM 상위
+    카테고리 매핑('라면'→'음식료업종')이 가능하도록 한다. profile 미제공 시 여기서
+    keyword_profile() 로 1회 조회하고, 그 결과에서 related_terms 도 함께 파생한다.
     """
     # ★ 단일 진입점 — 새 테마 = 전체 상태 초기화
     from JARVIS09_COLLECTOR.run_context import new_run as _new_run
     _new_run(theme)
-    if related_terms is None:
+    if profile is None or related_terms is None:
         try:
             from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
-            related_terms = (_kw_prof(theme, sector) or {}).get("related_terms")
+            _p = _kw_prof(theme, sector) or {}
+            if profile is None:
+                profile = _p
+            if related_terms is None:
+                related_terms = _p.get("related_terms")
         except Exception:
-            related_terms = None
+            pass
     try:
         from JARVIS02_WRITER.collect_theme import collect_stocks_data
-        return collect_stocks_data(theme, related_terms=related_terms)
+        return collect_stocks_data(theme, related_terms=related_terms, profile=profile)
     except Exception as e:
         print(f"  ❌ [theme] collect_stocks_data 실패: {e}")
         _g_report("writer", e, module=__name__)
@@ -535,7 +545,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
 
         # 종목 데이터 수집 (주식 시세·재무)
         data = _collect(state["theme"], sector=state.get("sector", ""),
-                        related_terms=_prof.get("related_terms"))
+                        related_terms=_prof.get("related_terms"), profile=_prof)
 
         # ★ 다소스 결손 분리 (사용자 박제 2026-07-04 — 경제 파이프라인과 동렬화, ERRORS [351]):
         #   종목(stocks)이 0개여도 JARVIS09 다소스 리서치(논문·뉴스·DART·ECOS·웹 등)를

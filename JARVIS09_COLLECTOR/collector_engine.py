@@ -446,7 +446,12 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
         log.info(f"[research] 논문 {len(paper_docs)}/{paper_cap}건 확보")
 
         # ② API: 최대 api_cap + 논문 이월
+        # ★ 뉴스·웹 최소보장 (2026-07-17): cascade(논문 미달분 이월)가 API 예산을 부풀려
+        #   '나머지'(뉴스·웹) 슬롯을 굶기지 않도록 상한 — budget 에서 rest_floor 는 남긴다.
+        #   기본 rest_floor=5 는 현행 '나머지5' 와 정합(숫자 변화 0, 순수 회귀 방지 안전망).
+        _rest_floor = int(_os.getenv("J09_REST_FLOOR", "5") or "5")
         api_allow = api_cap + (paper_cap - len(paper_docs))
+        api_allow = min(api_allow, max(0, budget - len(paper_docs) - _rest_floor))
         api_docs  = _collect_tier(api_provs, theme, sector, api_allow, seen_urls)
         log.info(f"[research] API {len(api_docs)}/{api_allow}건 확보")
 
@@ -575,7 +580,7 @@ def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
     stocks_data: dict = {}
     if (category or "").strip().lower() == "theme":
         try:
-            stocks_data = collect_stocks_data(keyword, related_terms=(profile or {}).get('related_terms')) or {}
+            stocks_data = collect_stocks_data(keyword, related_terms=(profile or {}).get('related_terms'), profile=profile) or {}
         except Exception as e:
             log.warning(f"[collect_all] 종목 수집 실패: {e}")
     rs = collect_research(keyword, sector=sector, angle=angle) or {}

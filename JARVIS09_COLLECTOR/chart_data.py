@@ -308,10 +308,11 @@ def _market_trading_volume_datasets(theme: str) -> list[dict]:
 
 
 # ── 2. 종목 재무 dataset (collect_stocks_data) ───────────────────────────
-def _stock_datasets(theme: str, related_terms: list | None = None) -> list[dict]:
+def _stock_datasets(theme: str, related_terms: list | None = None,
+                    profile: dict | None = None) -> list[dict]:
     try:
         from JARVIS09_COLLECTOR import collect_stocks_data
-        data = collect_stocks_data(theme, related_terms=related_terms) or {}
+        data = collect_stocks_data(theme, related_terms=related_terms, profile=profile) or {}
     except Exception as e:
         log.warning(f"[chart_data] collect_stocks_data 실패: {e}")
         return []
@@ -1359,7 +1360,8 @@ def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: 
 def collect_chart_data(theme: str, sector: str = "", description: str = "",
                        exclude_titles=None, max_datasets: int = 12,
                        synonyms: list | None = None,
-                       related_terms: list | None = None) -> dict:
+                       related_terms: list | None = None,
+                       profile: dict | None = None) -> dict:
     """주제 연관 차트용 실데이터를 출처(provenance)와 함께 수집.
 
     Args:
@@ -1372,6 +1374,8 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         related_terms:  자비스03 keyword_profile() 관련어 — 종목 dataset 수집 시
                         네이버 금융 공식 테마 매칭에 사용(★ 파운드리→리모델링/인테리어
                         오매칭 재발 방지, ERRORS 재발 — collect_stocks_data 참조).
+        profile:        자비스03 keyword_profile() 결과 전체 — 종목 dataset 수집 시
+                        LLM 상위 카테고리 매핑에 사용('라면'→'음식료업종', 2026-07-17).
 
     Returns:
         {"theme": theme, "datasets": [dataset, ...]}.
@@ -1451,7 +1455,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         is_stock = (any(k in combined for k in _STOCK_THEME_KWS)
                     and not any(k in combined for k in _SPECIFIC_NON_VALUATION))
         if not datasets and is_stock:
-            datasets.extend(_stock_datasets(theme, related_terms=related_terms))
+            datasets.extend(_stock_datasets(theme, related_terms=related_terms, profile=profile))
         _elapsed(f"2) 종목보강 (datasets={len(datasets)})")
 
         # ── 2.5) 시장 전용 dataset (코스닥·코스피, 코스닥 150) ───────────────────
