@@ -168,5 +168,14 @@
     "aesthetic": "핀테크 프리미엄(신뢰·딥네이비·골드)",
     "via": "LLM",
     "total": 22
+  },
+  {
+    "date": "2026-07-18",
+    "action": "learned",
+    "id": "lib-kpi-band",
+    "name": "KPI 밴드형",
+    "aesthetic": "dashboard kpi band",
+    "via": "라이브러리",
+    "total": 23
   }
 ]

@@ -7829,6 +7829,27 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS09_COLLECTOR/collector_engine.py`, `JARVIS09_COLLECTOR/collect_theme.py`
 - **교훈**: ADR 012(설계-우선 리서치)로 신설된 `collect_research()` → `_collect_tier()`/`_deep_fetch_thin_docs()` 경로는 sibling 함수(`collect_for_theme()`)가 이미 beat() 배선을 갖췄다는 이유로 "당연히 배선됐겠지"라고 넘겨짚기 쉽다 — 새 함수·병렬 리팩터마다 *개별적으로* beat() 배선 여부를 확인할 것. 순차 `requests.get`/`ThreadPoolExecutor.as_completed` 루프를 새로 작성하면 항상 루프 반복마다 전역 `beat()` 호출을 기본 습관으로 넣을 것.
 
+## [450] 경제 브리핑(티스토리) 분량 상한 초과 — draft_fixer 트림이 매번 "blocks 동기화 실패"로 무산, 전체 재생성만 반복 (2026-07-18)
+- **증상**: harness 가 "[harness:경제 브리핑 발행 — 티스토리] attempt=1 step=⑥ TS 대본 생성: 분량 상한 초과: 62문장 > 40문장 (post_type=economic)" RuntimeError 보고(source=harness, severity=medium). attempt=2 도 45문장으로 재발 — `max_attempts=3` 중 2회를 전부 값비싼 LLM 재생성(각 6~12분)으로 소진.
+- **환경**: `JARVIS02_WRITER/economic_poster.py` `_ts_action`(티스토리 경제 브리핑) — Layer 3 검증→수정 순환. `draft_fixer._fix_sentence_overflow` 가 `_route_fix` 로 호출됨.
+- **원인**: `_layer3_verify_draft` 는 `draft["html"]`(= `JARVIS06_IMAGE.draft_processor._process_draft_impl` 이 `assemble_blocks`/`enforce_text_between_images`/`enforce_supreme_law` 호출 *이전*에 캡처해둔 원본 문자열)로 문장수를 셌지만, 실제 발행은 `draft["blocks"]`(law_enforcer 통과 *이후* — 실제 발행되는 콘텐츠)를 사용한다. [445](2026-07-16)에서 추가한 `_fix_sentence_overflow`의 안전장치는 html 말미 `<p>` 를 자른 뒤 그 원문을 blocks 에서 찾아 동일하게 지우려 시도하고, 못 찾으면 "검증-발행 불일치 방지"를 이유로 수정 자체를 포기(재생성 위임)하도록 설계됐다. 그런데 `enforce_supreme_law` 내부 `_clean_text()`(law_enforcer.py:164)가 *모든* text 블록에 대해 금칙어·LLM/프롬프트 누설·이미지 위치 지칭 문구·이모지·마크다운 강조(`**text**`)·연속 공백을 항상 정리하기 때문에, blocks 의 문단 텍스트는 html 캡처 시점의 원문과 사실상 항상 달라져 있다 — 특히 LLM 출력은 이모지·강조 마크다운을 흔히 포함해 말미 문단일수록 매치 실패 확률이 높다. 결과적으로 [445]의 안전장치가 "가끔 발동"이 아니라 "거의 항상 발동"하는 상태가 되어, 결정론적 트림이 있어야 할 자리에 매번 전체 재생성이 대신 실행됐다(과거 41→40·63→40 등 다수의 성공 사례는 마침 말미 문단이 정리 대상 문구를 포함하지 않은 우연이었을 뿐, 근본적으로는 상시 회귀 상태였다).
+- **헛다리**: 없음 — ERRORS [445] 항목을 먼저 대조해 "동일 안전장치가 왜 발동하는지"부터 추적. html→blocks 동기화 로직 자체를 땜질(퍼지 매칭 등)하는 대신, `assemble_blocks`(`JARVIS06_IMAGE/injectors/block_assembler.py`)와 `enforce_text_between_images`(`JARVIS02_WRITER/jarvis_main.py`)를 먼저 열람해 "blocks 재배치만 하고 텍스트 내용은 안 건드린다"를 확인한 뒤, `law_enforcer.enforce_supreme_law`→`_clean_text` 에서 실제 divergence 지점을 특정했다.
+- **해결**: "검증 대상 == 발행물"을 *동기화*가 아니라 *동일 소스*로 강제 — draft["blocks"](발행 콘텐츠)를 카운트·트림 양쪽의 유일한 소스로 통일.
+  - `JARVIS02_WRITER/draft_fixer.py::_fix_sentence_overflow` — html 기반 트림 + blocks 사후매칭 전량 삭제. blocks 의 text/html 타입 블록을 뒤에서부터 문장수 기준으로 통째 제거(10문장 하한 보존)하도록 재작성. draft["html"]은 더 이상 안전장치가 아니라 prepublish_gate 참고용 best-effort 정리 대상으로 격하(같은 개수만큼 말미 `<p>`/`<h>` 제거 시도, 실패해도 트림 자체는 유효).
+  - `JARVIS02_WRITER/economic_poster.py::_layer3_verify_draft` — body(문장수·글자수·키워드 카운트 대상)를 draft["html"] 대신 draft["blocks"](text/html 블록 연결)에서 우선 계산하도록 변경(blocks 없으면 기존 html/content 폴백 유지).
+  - `JARVIS02_WRITER/trend_theme_writer.py::_layer3_verify_draft` — 동일 대칭 수정(`_body_v`).
+- **파일**: `JARVIS02_WRITER/draft_fixer.py`, `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/trend_theme_writer.py`
+- **교훈**: `process_draft`가 반환하는 `draft["html"]`과 `draft["blocks"]`는 서로 다른 파이프라인 시점의 스냅샷(html=법 집행 전, blocks=법 집행 후)이라 *절대 텍스트가 같다고 가정하면 안 된다* — 검증(verify)과 실제 발행(send)이 서로 다른 필드를 본다면 그 자체가 버그의 씨앗. 앞으로 draft 검증 로직을 추가할 때는 "실제로 발행되는 필드(blocks)"를 기준으로 삼고, html은 레거시 호환·보조 참고용으로만 취급할 것. [445]처럼 "불일치 시 수정 포기"라는 안전장치를 넣는 것은 증상 완화일 뿐 — 애초에 두 필드가 왜 어긋나는지(라이프사이클상 다른 시점의 스냅샷인지)를 먼저 확인해야 근본 수정이 된다.
+
+## [451] b84ddf6(수집 입력 절단 폐지) 이후 경제/테마 발행 watchdog 데드라인(1800s) 재초과 — BLOG_ACTION_DEADLINE_SEC 2400s 상향 (2026-07-18)
+- **증상**: 경제 브리핑 발행 attempt=2 에서 watchdog 이 "정지 감지 — 경제 발행: 데드라인 초과(블로킹) 1830s > 1800s" 로 강제 종료. [450] 수정(분량 상한 트림 근본 수정) 이후에도 별도로 재현 — 이번엔 문장수 초과가 아니라 순수 소요시간 초과.
+- **환경**: `JARVIS00_INFRA/watchdog.py BLOG_ACTION_DEADLINE_SEC=1800`(2026-07-16 [437]류 수정 당시 30분으로 복원된 값), `JARVIS02_WRITER/trend_theme_writer.py` 의 `deadline_sec=1800` 리터럴(경제와 별도로 하드코딩), `economic_poster.py`/`trend_theme_writer.py` `__main__` 의 `guard_main(deadline_sec=3600)` 부모 backstop.
+- **원인**: 커밋 `b84ddf6`(수집 입력 절단 로직 전면 폐지 — per_doc/evidence/fact 코퍼스/chart 추출 컷 제거)로 작성기·사실성·차트 LLM 호출이 수집 원본 전문을 그대로 입력받게 되어 프롬프트 토큰 수와 처리 시간이 늘어났다. `BLOG_ACTION_DEADLINE_SEC=1800`(30분)은 절단이 있던 시절의 소요시간을 기준으로 정해진 값이라 절단 폐지 후에는 여유가 사라져 attempt=2에서 상시 초과 위험 상태가 됐다.
+- **헛다리**: 없음.
+- **해결**: `JARVIS00_INFRA/watchdog.py` `BLOG_ACTION_DEADLINE_SEC` 1800→2400(40분) 상향. `trend_theme_writer.py` 의 하드코딩 리터럴 `deadline_sec=1800` 을 `from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC` 로 교체해 SSOT 참조로 정정(값이 어긋나 있던 것 정합화). `economic_poster.py`/`trend_theme_writer.py` `__main__` 의 부모 `guard_main` 데드라인을 `3600` 고정값 대신 `2 * BLOG_ACTION_DEADLINE_SEC + 600`(플랫폼 2개 × 액션 데드라인 + 여유)으로 파생시켜 상수 변경 시 자동 정합.
+- **파일**: `JARVIS00_INFRA/watchdog.py`, `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS02_WRITER/economic_poster.py`
+- **교훈**: 수집·작성 파이프라인의 입력 크기를 바꾸는 변경(이번엔 절단 폐지로 입력 증가)은 하류 LLM 호출 시간에 직접 영향 — watchdog 데드라인 같은 "소요시간 기반" SSOT 상수는 파이프라인 변경 때마다 함께 재검토해야 한다([300] 교훈과 동형). 부모 backstop(`guard_main`)은 자식 액션 데드라인의 리터럴 배수(`3600` 등)로 고정하지 말고 `N × BLOG_ACTION_DEADLINE_SEC + 여유` 형태로 파생시켜야 SSOT 변경이 한 곳 수정으로 전파된다.
+
 ---
 ### [2026-07-11 05:01] ✅ 자동수정 — RuntimeError
 - **증상**: 트렌드 수집 실패 (rc=75): it__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!

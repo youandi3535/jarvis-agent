@@ -30,6 +30,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 
+# ★ 블로그(플랫폼) 액션 하드 데드라인 SSOT (watchdog.py) — economic_poster.py 와 동일 상수 참조
+#   (2026-07-18: 1800 리터럴 하드코딩이 SSOT 상향과 어긋나던 것을 상수 참조로 정정)
+from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC
+
 # ── sys.path 보정 (subprocess 직접 실행과 데몬 모듈 로드 양쪽 호환) ──
 _JARVIS_ROOT = Path(__file__).parent.parent
 if str(_JARVIS_ROOT) not in sys.path:
@@ -421,7 +425,16 @@ def _layer3_verify_draft(draft: dict, platform: str) -> list[str]:
     try:
         from JARVIS02_WRITER.post_type_specs import get_spec as _gs_theme
         _sp = _gs_theme("theme")
-        _body_v = html or content
+        # ★ 2026-07-18: blocks(law_enforcer 정제 후 = 실제 발행 콘텐츠) 우선.
+        #   html 은 enforce_supreme_law 이전 원본이라 draft_fixer 의 분량 트림
+        #   대상(blocks)과 어긋나 재검증이 stale 상태를 다시 위반으로 보는 문제 방지.
+        if isinstance(blocks, list) and blocks:
+            _body_v = "".join(
+                bd for bt, bd in blocks
+                if bt in ("text", "html") and isinstance(bd, str)
+            )
+        else:
+            _body_v = html or content
         _p_tags = _re.findall(r"<p[^>]*>.*?</p>", _body_v, _re.DOTALL | _re.IGNORECASE)
         if _p_tags:
             _sent_cnt = sum(
@@ -430,11 +443,12 @@ def _layer3_verify_draft(draft: dict, platform: str) -> list[str]:
             )
         else:
             _sent_cnt = _L.count_sentences(_re.sub(r"<[^>]+>", " ", _body_v))
-        if _sent_cnt > _sp.max_sentences:
-            issues.append(f"분량 상한 초과: {_sent_cnt}문장 > {_sp.max_sentences}문장 (post_type=theme)")
         _kor_total = _L.count(_re.sub(r"<[^>]+>", " ", _body_v))
-        if _kor_total > _sp.max_korean:
-            issues.append(f"한국어 글자수 상한 초과: {_kor_total}자 > {_sp.max_korean}자 (theme)")
+        # ★ 분량 상한 = OR 기준 (사용자 박제 2026-07-18): 45문장 이하 '또는' 2500자 이하면 통과.
+        #   둘 다 초과할 때만 차단 (한쪽만 넉넉해도 발행 허용).
+        if _sent_cnt > _sp.max_sentences and _kor_total > _sp.max_korean:
+            issues.append(f"분량 상한 초과: {_sent_cnt}문장 > {_sp.max_sentences} '그리고' {_kor_total}자 > {_sp.max_korean}자 "
+                          f"(OR 기준 — 둘 다 초과 시에만 차단, theme)")
     except Exception:
         pass
 
@@ -944,7 +958,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                                              "nv_pub_result", "__nv_send_attempted__"),
         precondition=_precondition,
         max_attempts=3,  # ★ 외부 발행은 비멱등 → 원래 최대 2회였으나 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__nv_send_attempted__)이 중복 발행 방지
-        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
+        deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 SSOT (watchdog.py) — 사용자 박제 2026-07-06
     )
     _ts_action_def = ActionDefinition(
         name=f"theme-publish-{theme}-tistory",
@@ -957,7 +971,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                                              "ts_pub_result", "__ts_send_attempted__"),
         precondition=_precondition,
         max_attempts=3,  # ★ 원래 최대 2회(비멱등 발행) — 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__ts_send_attempted__)이 중복 발행 방지
-        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
+        deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 SSOT (watchdog.py) — 사용자 박제 2026-07-06
     )
 
     # ★ 단일 진입점 — 새 테마 = 전체 상태 초기화
@@ -1047,7 +1061,7 @@ if __name__ == "__main__":
 
     # ★ 정지 방어 (사용자 박제 2026-07-06): 일회성 발행 작업 freeze/deadline 가드.
     from JARVIS00_INFRA.watchdog import guard_main
-    with guard_main("테마 발행", deadline_sec=3600):   # 전체 2블로그×30분
+    with guard_main("테마 발행", deadline_sec=2 * BLOG_ACTION_DEADLINE_SEC + 600):   # 부모 backstop — 플랫폼당 데드라인×2 + 여유
         if args.naver_only:
             r = run_naver_theme(args.theme, args.sector)
             sys.exit(0 if r.get("success") else 1)

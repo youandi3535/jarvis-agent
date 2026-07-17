@@ -158,10 +158,10 @@ POST_TYPE_SPECS: dict[str, PostTypeSpec] = {
         min_sections=4,
         max_sections=7,
         sentences_per_section=(3, 7),
-        # 절대 한계 — target=(20+40)//2=30문장·약1500자 사용자 박제
-        max_sentences=40,
+        # ★ 분량 상한 (사용자 박제 2026-07-18): 45문장 '또는' 2500자 — OR 기준(둘 다 초과 시에만 차단).
+        max_sentences=45,
         min_sentences=20,
-        max_korean=2000,
+        max_korean=2500,
         max_images=12,
         # 필수
         required_sections=["면책"],
@@ -178,9 +178,10 @@ POST_TYPE_SPECS: dict[str, PostTypeSpec] = {
         min_sections=5,
         max_sections=8,
         sentences_per_section=(3, 7),
-        max_sentences=40,
-        min_sentences=20,   # target=(20+40)//2=30문장·약1500자 사용자 박제
-        max_korean=2000,
+        # ★ 분량 상한 (사용자 박제 2026-07-18): 45문장 '또는' 2500자 — OR 기준(둘 다 초과 시에만 차단).
+        max_sentences=45,
+        min_sentences=20,
+        max_korean=2500,
         max_images=10,
         required_sections=["면책"],
         style_hints=[

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0: #eef6df;
+    --hero1: #0d2c52;
+    --ink: #202b3c;
+    --a1: #c3e2a0;
+    --a1s: #7fbf83;
+    --a2: #2f8f9e;
+    --a2s: #1c5f86;
+    --soft: #ffffff;
+    --muted: #7c8592;
+    --eyebrow: #8a8f99;
+    --grid: #d7dbe0;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    width:1280px;
+    background:var(--soft);
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+    color:var(--ink);
+  }
+
+  /* 카드·다단 그리드·히어로 밴드 없음 — 세계지도 단일 요소가 캔버스 상단 약 65~70% 차지,
+     하단 약 30%는 색상 스케일 범례 + 데이터 상태 범례에 할당되는 풀밴드형 단일 포커스 구조 */
+  .canvas{
+    width:1280px;
+    min-height:1080px;
+    margin:0 auto;
+    padding:40px 64px 36px;
+    background:var(--soft);
+    display:flex;
+    flex-direction:column;
+  }
+
+  /* ── 헤더 — 별도 타이틀 장식·아이콘 없이 최소한의 텍스트만, 지도에 시선을 넘겨줌 ── */
+  .head{ flex:0 0 auto; margin-bottom:18px; }
+
+  .eyebrow{
+    font-size:14px;
+    font-weight:600;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 8px;
+  }
+  .eyebrow:empty{ display:none; margin:0; }
+
+  .title{
+    font-size:28px;
+    font-weight:800;
+    line-height:1.3;
+    letter-spacing:-.01em;
+    color:var(--ink);
+    margin:0 0 6px;
+  }
+  .title:empty{ display:none; margin:0; }
+
+  .subtitle{
+    font-size:15px;
+    font-weight:400;
+    line-height:1.6;
+    color:var(--muted);
+    max-width:860px;
+    margin:0;
+  }
+  .subtitle:empty{ display:none; margin:0; }
+
+  /* ── 선택적 히어로 수치 — 미사용 시 자동 숨김 ── */
+  .hero-stats{
+    display:flex;
+    flex-wrap:wrap;
+    gap:26px;
+    margin-top:14px;
+  }
+  .hero-stats:empty{ display:none; margin:0; }
+  .hero-stats .stat{ display:flex; flex-direction:column; gap:4px; }
+  .hero-stats .stat .num{ font-size:24px; font-weight:800; color:var(--ink); line-height:1.1; }
+  .hero-stats .stat .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ── 차트 슬롯 공통 — 빈 슬롯 자동 은폐 (필수 규칙) ── */
+  section:has([data-jarvis-empty]){ display:none; }
+  section.chart-slot:empty{ display:none; }
+
+  /* ============ 세계지도 — 캔버스의 약 65~70%, 카드·프레임·배경 질감 없이
+     순백 배경과 완전히 통합. 국가 경계는 얇은 흰색/연회색 선으로만 구분 (CHART_1) ============ */
+  section.chart-slot--map{
+    flex:1 1 auto;
+    min-height:660px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:4px 0;
+  }
+  section.chart-slot--map > *{ width:100%; height:100%; }
+
+  /* 국가 경계선 — 지도 안에서 허용되는 유일한 라인 장식 */
+  .map-country{ stroke:var(--grid); stroke-width:.6; fill:var(--soft); }
+  .map-country.no-data{ fill:var(--soft); stroke:var(--grid); }
+
+  /* 시퀀셜 스케일(저값→고값) — 지도 fill과 하단 그라디언트 범례가 공유하는 단일 컬러맵.
+     저값 구간은 채도 낮은 파스텔, 고값 구간에서만 채도·명도 대비가 커지도록 설계 */
+  .seq-0{ fill:var(--hero0); background:var(--hero0); }
+  .seq-1{ fill:var(--a1); background:var(--a1); }
+  .seq-2{ fill:var(--a1s); background:var(--a1s); }
+  .seq-3{ fill:var(--a2); background:var(--a2); }
+  .seq-4{ fill:var(--a2s); background:var(--a2s); }
+  .seq-5{ fill:var(--hero1); background:var(--hero1); }
+
+  /* ============ 하단 범례 존 — 캔버스의 약 30%, 좌측에 데이터 상태 범례(No data / Projected data),
+     우측에 비선형 구간 색상 스케일 범례. 장식 없는 순백 위에 요소만 존재 ============ */
+  .legend-zone{
+    flex:0 0 auto;
+    display:flex;
+    align-items:center;
+    gap:56px;
+    min-height:280px;
+    padding-top:24px;
+    border-top:1px solid var(--grid);
+  }
+  .legend-zone:not(:has(section.chart-slot:not(:empty))){ display:none; }
+
+  section.chart-slot--status{ flex:0 0 auto; }
+  section.chart-slot--scale{ flex:1 1 auto; }
+
+  /* ── 좌측: 데이터 상태 범례 (CHART_2) — No data(해치)·Projected data(도트) 두 상태 ── */
+  .legend-status{
+    display:flex;
+    flex-direction:column;
+    gap:16px;
+  }
+  .legend-status .status-item{ display:flex; align-items:center; gap:14px; }
+  .legend-status .swatch{
+    width:52px;
+    height:34px;
+    flex:0 0 auto;
+    background-color:var(--soft);
+    border:1px solid var(--muted);
+  }
+  /* No data — 대각선 해치 패턴 */
+  .legend-status .swatch.hatch{
+    background-image:repeating-linear-gradient(45deg, var(--muted) 0 2px, transparent 2px 9px);
+  }
+  /* Projected data — 균일 도트 패턴 (해치와 구분되는 유일한 보조 텍스처) */
+  .legend-status .swatch.dot{
+    background-image:radial-gradient(var(--muted) 1.4px, transparent 1.6px);
+    background-size:8px 8px;
+  }
+  .legend-status .lbl{ font-size:14px; font-weight:500; color:var(--muted); }
+
+  /* ── 우측: 비선형(로그형) 구간 색상 스케일 — 연속 그라디언트 + 화살표 마감 + 지그재그 눈금 (CHART_3) ── */
+  .legend-scale{ display:flex; flex-direction:column; width:100%; }
+
+  .legend-scale-ticks{
+    position:relative;
+    height:38px;
+    margin-bottom:4px;
+  }
+  .legend-scale-ticks .tick{
+    position:absolute;
+    transform:translateX(-50%);
+    font-size:14px;
+    font-weight:500;
+    color:var(--muted);
+    white-space:nowrap;
+    padding-bottom:8px;
+  }
+  .legend-scale-ticks .tick::after{
+    content:"";
+    position:absolute;
+    left:50%;
+    top:100%;
+    width:1px;
+    height:8px;
+    background:var(--grid);
+  }
+  /* 구간 경계 레이블을 위/아래로 교차 배치해 좁은 간격에서도 겹치지 않게 함 */
+  .legend-scale-ticks .tick:nth-child(odd){ top:0; }
+  .legend-scale-ticks .tick:nth-child(even){ top:18px; }
+  .legend-scale-ticks .tick:nth-child(even)::after{ height:26px; }
+
+  .legend-scale-bar{
+    height:34px;
+    width:100%;
+    background:linear-gradient(to right,
+      var(--hero0) 0%,
+      var(--a1) 20%,
+      var(--a1s) 40%,
+      var(--a2) 60%,
+      var(--a2s) 80%,
+      var(--hero1) 100%);
+    clip-path:polygon(0 0, calc(100% - 22px) 0, 100% 50%, calc(100% - 22px) 100%, 0 100%);
+  }
+
+  /* ── 선택적 미니 카드 — 미사용 시 자동 숨김 ── */
+  .mini-cards{
+    display:flex;
+    flex-wrap:wrap;
+    gap:18px;
+    margin-top:22px;
+  }
+  .mini-cards:empty{ display:none; margin:0; }
+  .mini-cards .mini-card{
+    flex:1 1 200px;
+    padding:14px 16px;
+    background:var(--soft);
+    border:1px solid var(--grid);
+  }
+
+  /* ── 푸터 — 얇은 회색 구분선 + 출처·브랜드만 ── */
+  .foot{
+    flex:0 0 auto;
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:24px;
+    margin-top:22px;
+    padding-top:14px;
+    border-top:1px solid var(--grid);
+  }
+  .source{ font-size:13px; color:var(--muted); }
+  .source:empty{ display:none; }
+  .brand{ font-size:13px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--eyebrow); }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <header class="head">
+      <p class="eyebrow">{EYEBROW}</p>
+      <h1 class="title">{TITLE}</h1>
+      <p class="subtitle">{SUBTITLE}</p>
+      <div class="hero-stats">{HERO_STATS}</div>
+    </header>
+
+    <section class="chart-slot chart-slot--map">{CHART_1}</section>
+
+    <div class="legend-zone">
+      <section class="chart-slot chart-slot--status">{CHART_2}</section>
+      <section class="chart-slot chart-slot--scale">{CHART_3}</section>
+    </div>
+
+    <div class="mini-cards">{MINI_CARDS}</div>
+
+    <footer class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </footer>
+  </div>
+</body>
+</html>

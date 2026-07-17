@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&family=Playfair+Display:ital,wght@1,700&family=Noto+Serif+KR:wght@700&display=swap');
+
+  :root{
+    --hero0: #ff7a45;
+    --hero1: #2451b0;
+    --ink: #1a1d29;
+    --a1: #2fae7a;
+    --a1s: #1f7a57;
+    --a2: #d6336c;
+    --a2s: #7a1f4b;
+    --soft: #fff4ec;
+    --muted: #8a8f98;
+    --eyebrow: #c97b2e;
+    --grid: #e7e3dd;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{ width:1280px; background:#ffffff; }
+
+  body{
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* 순백 캔버스(텍스처·그리드 패턴 없음) 위에 완전히 동일한 방사형 팬 다이어그램 4개를
+     2x2 대칭 배치. 각 사분면 = 좌측 글로시 허브(지름 약 240px≈캔버스폭 20%) + 우측으로
+     작아지며 지그재그로 흐르는 5개 번호 원(01~05, 점선 스포크로 허브와 연결) + 원 오른쪽
+     라벨-텍스트 조합. 카드형 박스 없음. 중앙 교차점에 이탤릭 스크립트 타이틀이 4개
+     서브 다이어그램을 하나의 세트로 묶는 시각 앵커 역할. */
+  .canvas{
+    width:1280px;
+    margin:0 auto;
+    padding:56px 60px 48px;
+    background:#ffffff;
+  }
+
+  /* ── 2x2 다이어그램 그리드 — 4사분면 모두 폭 560 x 높이 460, 동일 구조 ── */
+  .quad-grid{
+    position:relative;
+    display:grid;
+    grid-template-columns:560px 560px;
+    grid-template-rows:460px 460px;
+    gap:40px;
+    justify-content:center;
+  }
+
+  .quad{ position:relative; }
+
+  /* ── 차트 슬롯 공통 — CHART_1~3 전용. 빈 슬롯 자동 은폐 ── */
+  section.chart-slot{ width:100%; height:100%; }
+  section.chart-slot:empty{ display:none; }
+  section:has([data-jarvis-empty]){ display:none; }
+
+  /*
+    CHART_1~3 주입 마크업 계약 — 아래 방사형 팬 구조를 그대로 생성해 슬롯 안에 삽입.
+    좌표·치수는 .step-1~5 / .copy-1~5 클래스에 고정되어 있으므로 호출자는 번호 텍스트와
+    STEPS 라벨 옆 설명 문구(1~2줄)만 실데이터 기반으로 채우면 됨. 색상은 상위 .quad-N
+    클래스에서 자동 상속 — 개별 hex 지정 금지.
+
+    <div class="hub"></div>
+    <svg class="spokes" viewBox="0 0 560 460" preserveAspectRatio="none">
+      <line x1="120" y1="230" x2="280" y2="50"/>
+      <line x1="120" y1="230" x2="240" y2="140"/>
+      <line x1="120" y1="230" x2="300" y2="230"/>
+      <line x1="120" y1="230" x2="250" y2="320"/>
+      <line x1="120" y1="230" x2="290" y2="410"/>
+    </svg>
+    <div class="step step-1">01</div>
+    <div class="step step-2">02</div>
+    <div class="step step-3">03</div>
+    <div class="step step-4">04</div>
+    <div class="step step-5">05</div>
+    <div class="step-copy copy-1"><span class="steps-label">STEPS</span><p>한 줄 설명 텍스트.</p></div>
+    <div class="step-copy copy-2"><span class="steps-label">STEPS</span><p>한 줄 설명 텍스트.</p></div>
+    <div class="step-copy copy-3"><span class="steps-label">STEPS</span><p>한 줄 설명 텍스트.</p></div>
+    <div class="step-copy copy-4"><span class="steps-label">STEPS</span><p>한 줄 설명 텍스트.</p></div>
+    <div class="step-copy copy-5"><span class="steps-label">STEPS</span><p>한 줄 설명 텍스트.</p></div>
+
+    스텝 개수는 5 고정(좌표 세트 고정) — 개수를 바꿔야 하면 이 템플릿 재사용 불가.
+  */
+
+  /* ── 글로시 허브 원 (좌측, 지름 240px ≈ 캔버스 폭 20%) ── */
+  .quad .hub{
+    position:absolute;
+    left:0; top:50%;
+    transform:translateY(-50%);
+    width:240px; height:240px;
+    border-radius:50%;
+  }
+  .quad .hub::before{
+    content:"";
+    position:absolute; inset:16px;
+    border-radius:50%;
+    background:radial-gradient(circle at 32% 26%, color-mix(in srgb, var(--soft) 90%, transparent), transparent 60%);
+  }
+  .quad .hub::after{
+    content:"";
+    position:absolute; left:50%; bottom:-18px;
+    transform:translateX(-50%);
+    width:58%; height:26px;
+    border-radius:50%;
+    background:color-mix(in srgb, var(--ink) 70%, transparent);
+    filter:blur(11px);
+    opacity:.32;
+    z-index:-1;
+  }
+
+  /* ── 허브→번호원 점선 스포크 ── */
+  .quad .spokes{ position:absolute; inset:0; width:100%; height:100%; }
+  .quad .spokes line{ stroke-width:2; stroke-dasharray:5 7; stroke-linecap:round; fill:none; }
+
+  /* ── 지그재그 번호 원(01~05, 우측으로 갈수록 축소) ── */
+  .quad .step{
+    position:absolute;
+    border-radius:50%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-weight:800;
+    color:var(--soft);
+    line-height:1;
+  }
+  .quad .step::before{
+    content:"";
+    position:absolute; inset:3px;
+    border-radius:50%;
+    background:radial-gradient(circle at 30% 24%, color-mix(in srgb, var(--soft) 85%, transparent), transparent 58%);
+  }
+  .quad .step::after{
+    content:"";
+    position:absolute; left:50%; bottom:-9px;
+    transform:translateX(-50%);
+    width:66%; height:12px;
+    border-radius:50%;
+    background:color-mix(in srgb, var(--ink) 70%, transparent);
+    filter:blur(6px);
+    opacity:.28;
+    z-index:-1;
+  }
+  .quad .step-1{ left:248px; top:18px;  width:64px; height:64px; font-size:18px; }
+  .quad .step-2{ left:212px; top:112px; width:56px; height:56px; font-size:16px; }
+  .quad .step-3{ left:276px; top:206px; width:48px; height:48px; font-size:16px; }
+  .quad .step-4{ left:230px; top:300px; width:42px; height:42px; font-size:14px; }
+  .quad .step-5{ left:272px; top:392px; width:36px; height:36px; font-size:14px; }
+
+  /* ── STEPS 라벨 + 더미 본문 (번호 원 오른쪽) ── */
+  .quad .step-copy{ position:absolute; width:210px; }
+  .quad .step-copy .steps-label{
+    display:block;
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 4px;
+  }
+  .quad .step-copy p{ font-size:14px; line-height:1.5; color:var(--muted); }
+  .quad .copy-1{ left:328px; top:22px;  }
+  .quad .copy-2{ left:284px; top:116px; }
+  .quad .copy-3{ left:340px; top:210px; }
+  .quad .copy-4{ left:287px; top:300px; }
+  .quad .copy-5{ left:324px; top:390px; }
+
+  /* ── 사분면별 팀 컬러 (완전히 다른 조합, 허용된 CSS 변수만 조합) ── */
+  .quad-1 .hub,  .quad-1 .step{ background:linear-gradient(155deg, var(--hero0), var(--hero1)); }
+  .quad-1 .spokes line{ stroke:var(--hero1); }
+
+  .quad-2 .hub,  .quad-2 .step{ background:linear-gradient(155deg, var(--ink), var(--eyebrow)); }
+  .quad-2 .spokes line{ stroke:var(--eyebrow); }
+
+  .quad-3 .hub,  .quad-3 .step{ background:linear-gradient(155deg, var(--a2), var(--a2s)); }
+  .quad-3 .spokes line{ stroke:var(--a2s); }
+
+  .quad-4 .hub,  .quad-4 .step{ background:linear-gradient(155deg, var(--a1), var(--muted)); }
+  .quad-4 .spokes line{ stroke:var(--a1); }
+
+  /* ── 4번째 사분면 — 슬롯 3개(CHART_1~3) 소진 후 남는 자리, 항상 표시되는 고정 장식 패널 ── */
+  .panel-fixed{ position:relative; width:100%; height:100%; }
+
+  /* ── 중앙 교차 앵커 — 4개 서브 다이어그램을 하나의 세트로 묶는 타이틀 ── */
+  .center-anchor{
+    position:absolute;
+    left:50%; top:50%;
+    transform:translate(-50%,-50%);
+    z-index:5;
+    width:420px;
+    text-align:center;
+  }
+  .center-anchor::before{
+    content:"";
+    position:absolute;
+    inset:-38px -58px;
+    background:var(--soft);
+    border-radius:50%;
+    box-shadow:0 24px 54px -22px color-mix(in srgb, var(--ink) 35%, transparent);
+    z-index:-1;
+  }
+  .center-eyebrow{
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 10px;
+  }
+  .center-eyebrow:empty{ display:none; margin:0; }
+  .center-title{
+    font-family:'Playfair Display','Noto Serif KR', serif;
+    font-style:italic;
+    font-weight:700;
+    font-size:44px;
+    line-height:1.18;
+    background:linear-gradient(120deg, var(--hero0), var(--hero1));
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+    margin:0 0 10px;
+  }
+  .center-title:empty{ display:none; margin:0; }
+  .center-subtitle{
+    font-size:16px;
+    font-weight:500;
+    letter-spacing:.04em;
+    color:var(--muted);
+  }
+  .center-subtitle:empty{ display:none; }
+
+  /* ── 선택적 히어로 수치 — 미사용 시 자동 숨김 ── */
+  .hero-stats{
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    gap:48px;
+    margin:40px 0 0;
+  }
+  .hero-stats:empty{ display:none; margin:0; }
+  .hero-stats .stat{ display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .hero-stats .stat .num{ font-size:28px; font-weight:800; color:var(--ink); }
+  .hero-stats .stat .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ── 선택적 미니 카드 — 미사용 시 자동 숨김 ── */
+  .mini-cards{
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    gap:14px;
+    margin:28px 0 0;
+  }
+  .mini-cards:empty{ display:none; margin:0; }
+  .mini-cards .mini-card{
+    display:inline-flex;
+    align-items:center;
+    gap:10px;
+    padding:10px 18px;
+    border-radius:999px;
+    background:var(--soft);
+    border:1px solid var(--grid);
+    font-size:14px;
+    font-weight:600;
+    color:var(--ink);
+  }
+
+  /* ── 푸터 — 출처/브랜드 둘 다 비면 구분선까지 완전히 접힘 ── */
+  .foot{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:24px;
+    margin:40px 0 0;
+    padding-top:16px;
+    border-top:1px solid var(--grid);
+  }
+  .foot:not(:has(.source:not(:empty))):not(:has(.brand:not(:empty))){ display:none; }
+  .source{ font-size:14px; color:var(--muted); }
+  .source:empty{ display:none; }
+  .brand{ font-size:14px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--eyebrow); }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+  <div class="canvas">
+
+    <div class="quad-grid">
+      <section class="quad quad-1 chart-slot">{CHART_1}</section>
+      <section class="quad quad-2 chart-slot">{CHART_2}</section>
+      <section class="quad quad-3 chart-slot">{CHART_3}</section>
+
+      <!-- 4사분면: 슬롯 3개(CHART_1~3) 소진 후 남는 고정 장식 패널 — 항상 동일 구조 표시 -->
+      <div class="quad quad-4 panel-fixed">
+        <div class="hub"></div>
+        <svg class="spokes" viewBox="0 0 560 460" preserveAspectRatio="none">
+          <line x1="120" y1="230" x2="280" y2="50"/>
+          <line x1="120" y1="230" x2="240" y2="140"/>
+          <line x1="120" y1="230" x2="300" y2="230"/>
+          <line x1="120" y1="230" x2="250" y2="320"/>
+          <line x1="120" y1="230" x2="290" y2="410"/>
+        </svg>
+        <div class="step step-1">01</div>
+        <div class="step step-2">02</div>
+        <div class="step step-3">03</div>
+        <div class="step step-4">04</div>
+        <div class="step step-5">05</div>
+        <div class="step-copy copy-1"><span class="steps-label">Steps</span><p>Lorem ipsum dolor sit amet, consectetur adipiscing elit sed do eiusmod.</p></div>
+        <div class="step-copy copy-2"><span class="steps-label">Steps</span><p>Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.</p></div>
+        <div class="step-copy copy-3"><span class="steps-label">Steps</span><p>Duis aute irure dolor in reprehenderit in voluptate velit esse cillum.</p></div>
+        <div class="step-copy copy-4"><span class="steps-label">Steps</span><p>Excepteur sint occaecat cupidatat non proident sunt in culpa qui.</p></div>
+        <div class="step-copy copy-5"><span class="steps-label">Steps</span><p>Sed ut perspiciatis unde omnis iste natus error sit voluptatem.</p></div>
+      </div>
+
+      <div class="center-anchor">
+        <p class="center-eyebrow">{EYEBROW}</p>
+        <p class="center-title">{TITLE}</p>
+        <p class="center-subtitle">{SUBTITLE}</p>
+      </div>
+    </div>
+
+    <div class="hero-stats">{HERO_STATS}</div>
+    <div class="mini-cards">{MINI_CARDS}</div>
+
+    <div class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </div>
+
+  </div>
+</body>
+</html>

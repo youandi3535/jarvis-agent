@@ -194,6 +194,12 @@
 
 **분량은 *결과*, 섹션 *자체*도 *결과*. spec 박제 = 추상 범위만.**
 
+**★ 분량 상한 — OR 기준 (사용자 박제 2026-07-18)**:
+- 모든 블로그 글(경제·테마 공통)의 상한은 **`max_sentences=45문장` 또는 `max_korean=2500자`** — **OR 기준**.
+- **통과 조건**: 문장 45 이하 *또는* 글자 2500 이하 중 *하나라도* 만족하면 발행 가능.
+- **차단 조건**: 문장 45 초과 *그리고* 글자 2500 초과 — *둘 다* 넘을 때만 재작성.
+- 단일 진실 소스: `post_type_specs.py` (`max_sentences=45`·`max_korean=2500`). 집행: `economic_poster._layer3_verify_draft` + `trend_theme_writer` 의 `sent > max AND kor > max` 결합 검사. 하한(`min_sentences=20`)은 종전대로 유지.
+
 **★ 이미지 최솟값 (사용자 박제 2026-06-01 → 2026-07-05 정정 8→5)**:
 - 모든 블로그 글은 **썸네일 제외 이미지 최소 5장(5+α)** 보장. 5장은 디폴트가 아닌 *절대 최솟값*.
 - 기술 단일 진입점: `JARVIS02_WRITER/post_type_specs.py` 의 `PostTypeSpec.min_images = 5`.

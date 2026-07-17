@@ -520,6 +520,29 @@
       "card_radius": 24,
       "source": "learned",
       "created": "2026-07-17"
+    },
+    {
+      "hero": [
+        "#2f1323",
+        "#4d233b"
+      ],
+      "ink": "#381e2d",
+      "a1": "#e83098",
+      "a1s": "#f174ba",
+      "a2": "#37e181",
+      "a2s": "#75f0ab",
+      "soft": "#f9f4f6",
+      "muted": "#7f6c76",
+      "eyebrow": "#ee96c7",
+      "grid": "#efe8ec",
+      "hero_texture": "glow",
+      "card_radius": 26,
+      "id": "lib-kpi-band",
+      "name": "KPI 밴드형",
+      "aesthetic": "dashboard kpi band",
+      "template": "<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"UTF-8\"><style>\n@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800;900&display=swap');\n*{margin:0;padding:0;box-sizing:border-box;font-family:'Noto Sans KR',sans-serif}\n.pg{width:1280px;background:var(--soft)}\n.hd{background:linear-gradient(135deg,var(--hero0),var(--hero1));padding:36px 60px;display:flex;align-items:center;gap:36px;position:relative;overflow:hidden}\n.hd::after{content:\"\";position:absolute;right:-60px;bottom:-60px;width:260px;height:260px;border-radius:50%;background:var(--a2);opacity:.1}\n.eb{display:inline-flex;align-items:center;gap:8px;padding:7px 14px;border:1px solid var(--eyebrow);border-radius:100px;color:var(--eyebrow);font-size:13px;font-weight:700;white-space:nowrap;flex-shrink:0}\n.eb::before{content:\"\";width:6px;height:6px;border-radius:50%;background:var(--eyebrow)}\n.vd{width:1px;height:36px;background:rgba(255,255,255,.2);flex-shrink:0}\n.htx{flex:1}\nh1{color:#fff;font-size:34px;font-weight:900;letter-spacing:-.02em}\n.sub{color:rgba(255,255,255,.6);font-size:15px;margin-top:6px}\n.brand-r{color:var(--a1s);font-size:12px;font-weight:800;white-space:nowrap;position:relative;z-index:1}\n.kb{background:linear-gradient(90deg,var(--a1),var(--a1s) 40%,var(--a2));padding:24px 60px}\n.kb:empty{display:none}\n.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:22px;padding:28px 60px 0}\nsection{background:#fff;border-radius:20px;padding:26px 28px;border:1px solid var(--grid);box-shadow:0 4px 22px rgba(0,0,0,.06)}\nsection:has([data-jarvis-empty]){display:none}\n.mc{padding:20px 60px;display:flex;gap:14px}.mc:empty{display:none}\nfooter{padding:18px 60px 28px;border-top:1px solid var(--grid);display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:14px;margin-top:16px}\n.br{font-weight:800;color:var(--ink)}\n</style></head><body><div class=\"pg\">\n  <header class=\"hd\">\n    <span class=\"eb\">{{EYEBROW}}</span>\n    <div class=\"vd\"></div>\n    <div class=\"htx\"><h1>{{TITLE}}</h1><p class=\"sub\">{{SUBTITLE}}</p></div>\n    <span class=\"brand-r\">{{BRAND}}</span>\n  </header>\n  <div class=\"kb\">{{HERO_STATS}}</div>\n  <div class=\"grid\">\n    <section>{{CHART_1}}</section>\n    <section>{{CHART_2}}</section>\n    <section>{{CHART_3}}</section>\n  </div>\n  <div class=\"mc\">{{MINI_CARDS}}</div>\n  <footer><span>{{SOURCE}}</span><span class=\"br\">{{BRAND}}</span></footer>\n</div></body></html>",
+      "source": "learned-library",
+      "created": "2026-07-18"
     }
   ]
 }
