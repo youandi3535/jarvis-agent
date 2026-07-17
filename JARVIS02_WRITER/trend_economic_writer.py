@@ -1465,7 +1465,12 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
                                            ref_datasets=_ref_ds_ts,
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
-            return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
+            # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함을 구분해 태깅(rank4). circuit_is_open()은
+            #   프로세스 전역(워커 스레드 안전), last_call_infra_incomplete()는 동일 스레드 직전 호출.
+            #   둘 중 하나면 infra_throttle → harness 가 재작성 대신 defer/backoff.
+            from shared.llm import last_call_infra_incomplete as _infra, circuit_is_open as _copen
+            _err = "infra_throttle" if (_infra() or _copen()) else "HTML 생성 실패"
+            return {"success": False, "keyword": keyword, "error": _err}
 
         result = process_draft(draft_html, collected=collected, platform="tistory",
                                out_dir=TISTORY_IMG_DIR)
@@ -1770,7 +1775,10 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
                                            ref_datasets=_ref_ds,
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
-            return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
+            # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함 구분 태깅(rank4) — 경제 네이버.
+            from shared.llm import last_call_infra_incomplete as _infra, circuit_is_open as _copen
+            _err = "infra_throttle" if (_infra() or _copen()) else "HTML 생성 실패"
+            return {"success": False, "keyword": keyword, "error": _err}
 
         result = process_draft(draft_html, collected=collected, platform="naver",
                                out_dir=NAVER_IMG_DIR)

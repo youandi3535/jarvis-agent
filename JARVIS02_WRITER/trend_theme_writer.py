@@ -174,7 +174,12 @@ def _build_blocks(collected, platform: str, img_dir: Path,
     draft_html = generate_theme_html(collected, supreme_block, platform=platform,
                                      gate_feedback=gate_feedback)
     if not draft_html:
-        return {"success": False, "error": "Pass-1 대본 생성 실패", "blocks": [],
+        # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함 구분 태깅(rank4) — 테마.
+        #   circuit_is_open()은 프로세스 전역(워커 스레드 안전), last_call_infra_incomplete()는
+        #   동일 스레드 직전 호출. 둘 중 하나면 infra_throttle → harness 가 defer/backoff.
+        from shared.llm import last_call_infra_incomplete as _infra, circuit_is_open as _copen
+        _err = "infra_throttle" if (_infra() or _copen()) else "Pass-1 대본 생성 실패"
+        return {"success": False, "error": _err, "blocks": [],
                 "title": "", "content": "", "html": ""}
 
     # ── JARVIS06: 이미지 생성 + 블록 조립 (process_draft v2 — collected) ──────
@@ -693,8 +698,15 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         # [L3] 단일 플랫폼 대본 규정 준수 검증 (순수 "발견"만)
         draft = state.get(draft_key) or {}
         if not draft.get("success"):
-            issues.append(Issue(step=step_name, kind="draft_failed",
-                detail=f"대본 생성 실패: {draft.get('error', 'unknown')}"))
+            # ★ 인프라 스로틀(일시적)과 콘텐츠 결함 분리(rank5). detail 은 fingerprint 안정성 위해
+            #   고정 문자열(attempt 변동값 금지) — harness 가 fingerprint 제외·backoff·defer 처리.
+            _derr = str(draft.get("error", "unknown"))
+            _is_infra = (_derr == "infra_throttle")
+            issues.append(Issue(
+                step=step_name,
+                kind="infra_throttle" if _is_infra else "draft_failed",
+                detail=("인프라 스로틀 — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"
+                        if _is_infra else f"대본 생성 실패: {_derr}")))
             return issues
         di_list = _layer3_verify_draft(draft, platform)
         for di in di_list:
@@ -993,7 +1005,12 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         _ts_res = _ts_st.get("ts_pub_result", {"success": False, "url": "", "keyword": theme})
         if not _ts_result.delivered:
             _reason = getattr(_ts_result, "escalation_reason", "최대 시도 초과 또는 abort")
-            _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
+            if getattr(_ts_result, "deferred", False):
+                # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도.
+                print(f"  ⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
+                _tg(f"⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n테마: {theme}")
+            else:
+                _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
 
     _mark_pub(False)  # ★ 테마 발행 완료 — background alias 강등 해제
     return {"theme": theme, "tistory": _ts_res, "naver": _nv_res, "data_empty": _data_empty}

@@ -511,6 +511,7 @@ def _run_sdk_sync(
     parts: list[str] = []
     throttled = {"v": False}
     hung = {"v": False}
+    truncated = {"v": False}   # ★ 우리 데드라인이 스트림을 끊었는데 부분출력 존재 = 인프라 절단
 
     try:
         from JARVIS00_INFRA.watchdog import beat as _wd_beat
@@ -549,7 +550,9 @@ def _run_sdk_sync(
             import logging as _logging
             _logging.getLogger("jarvis.llm").warning(f"SDK timeout {timeout}s — 수집된 응답: {len(parts)}개")
             if not parts:
-                hung["v"] = True  # 0개 hang → 회로차단기 신호
+                hung["v"] = True       # 0개 hang → 회로차단기 신호
+            else:
+                truncated["v"] = True  # ★ 부분출력 + 우리 데드라인 절단 = 인프라 스로틀(콘텐츠 결함 아님)
         except Exception as e:
             if not parts:
                 import logging as _logging
@@ -567,6 +570,7 @@ def _run_sdk_sync(
             )
             _LAST_CALL.throttled = False
             _LAST_CALL.hung = True
+            _LAST_CALL.truncated = False
             return ""
         try:
             exe = ThreadPoolExecutor(max_workers=1)
@@ -587,6 +591,10 @@ def _run_sdk_sync(
                             _logging.getLogger("jarvis.llm").warning(
                                 f"SDK 벽시계 상한 {wall_deadline:.0f}s 초과 — 강제 포기(수집 {len(parts)}개)"
                             )
+                            if parts:
+                                truncated["v"] = True  # ★ 부분출력 + 벽시계 절단 = 인프라 스로틀
+                            else:
+                                hung["v"] = True       # ★ 0개 = hang (기존 무신호 구멍 보강)
                             break
             finally:
                 exe.shutdown(wait=False)   # 내부 스레드 leak 가능 — 메인 흐름 비블로킹 우선(_bounded() 와 동일 정책)
@@ -596,8 +604,10 @@ def _run_sdk_sync(
         _LLM_SPAWN_SEM.release()
     _was_throttled = bool(throttled["v"] and not parts)
     _was_hung = bool(hung["v"] and not parts)
+    _was_truncated = bool(truncated["v"] and parts)  # ★ parts>0 일 때만 (정의상 데드라인 절단)
     _LAST_CALL.throttled = _was_throttled
     _LAST_CALL.hung = _was_hung  # ★ hang(TimeoutError+0parts) 도 회로차단기 신호로 전달
+    _LAST_CALL.truncated = _was_truncated  # ★ 절단(부분출력+데드라인) — 인프라 스로틀 신호
     if _was_throttled:
         import logging as _logging
         _logging.getLogger("jarvis.llm").debug("rate-limit 스로틀 (num_turns=0) — 재시도/폴백")
@@ -713,6 +723,30 @@ def _circuit_gate() -> str:
         return "open"
 
 
+def last_call_infra_incomplete() -> bool:
+    """직전 invoke_text 호출이 *인프라 사유*(스로틀 빈응답/hang/데드라인 절단)로 미완결이었는지.
+
+    ★ _LAST_CALL 은 thread-local — invoke_text 를 호출한 *동일 스레드* 에서 *반환 직후* 읽어야
+      유효. 다른(워커) 스레드에서 관측하려면 circuit_is_open() 사용.
+    콘텐츠 결함(정상 완료인데 짧음·빈약)과 인프라 스로틀을 호출자가 구분하는 유일한 신호원.
+    """
+    return bool(
+        getattr(_LAST_CALL, "throttled", False)
+        or getattr(_LAST_CALL, "hung", False)
+        or getattr(_LAST_CALL, "truncated", False)
+    )
+
+
+def circuit_is_open() -> bool:
+    """rate-limit 회로차단기 open 여부 — 순수 read-only peek (probe 전이·상태변이 없음).
+
+    ★ 프로세스 전역 상태 — parallel 워커 스레드에서도 관측 가능(thread-local 아님).
+      probe 를 소비하는 _circuit_gate() 와 달리 회로 계정을 오염시키지 않는다.
+    """
+    with _circuit_lock:
+        return _circuit_open_since[0] != 0.0
+
+
 def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
                 _retries: int = 4, _essential: bool = False,
                 _nonessential: bool = False, **overrides) -> str:
@@ -732,6 +766,12 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
       회로 정상일 때도 1회·시간상자(≤45초). 필수 alias 면제(writer 등)보다 *우선* 적용.
     """
     import time as _t, random as _r
+
+    # ★ 스레드로컬 위생 (truncated 신호 도입): 진입 시 1회 리셋해 early-return
+    #   (회로 open 폴백 등) 경로에서 이전 호출의 인프라 플래그가 새는 것을 방지.
+    _LAST_CALL.throttled = False
+    _LAST_CALL.hung = False
+    _LAST_CALL.truncated = False
 
     # ★ 재시도 최대 3회 상한 (사용자 박제 2026-07-06): 어떤 재시도도 3회 초과 금지.
     #   기본 _retries=4 → 실효 3으로 캡. deadline/_nonessential/probe/open 강등은 더 낮춤.
@@ -777,6 +817,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
     result = ""
     throttled_seen = False
     hung_seen = False
+    truncated_seen = False
     for _attempt in range(retries):
         # ★ 전역 하트비트 (사용자 박제 2026-07-06): LLM 호출 = 진행 신호 → freeze 워치독
         #   이 오래 걸리는 정상 LLM 작업을 멈춤으로 오탐하지 않도록 매 시도마다 beat.
@@ -788,12 +829,18 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
         try:
             _LAST_CALL.throttled = False
             _LAST_CALL.hung = False
+            _LAST_CALL.truncated = False
             result = _run_sdk_sync(prompt, model=model, system=system, timeout=timeout) or ""
         except Exception:
             result = ""
-        if result.strip():
+        _truncated = getattr(_LAST_CALL, "truncated", False)
+        if result.strip() and not _truncated:
             _circuit_record_success()
             return result
+        # ★ 절단(우리 데드라인이 스트림을 끊음 + 부분출력) = 인프라 스로틀 — 성공 처리·회로 리셋
+        #   금지. 빈 응답과 동급으로 재시도 루프에 흘리고, 소진 후 best-effort 로 절단본 반환.
+        if _truncated:
+            truncated_seen = True
         if getattr(_LAST_CALL, "throttled", False):
             throttled_seen = True
         if getattr(_LAST_CALL, "hung", False):
@@ -802,7 +849,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
             _t.sleep(min(30.0, 4 * (2 ** _attempt)) + _r.uniform(0, 1.5))
     # 모든 재시도 실패 — 진짜 스로틀(ResultMessage) OR SDK hang(TimeoutError+0parts) 모두
     # 회로차단기 카운트. CLI 부재·auth 빠른 실패는 hung=False라 오탐 없음.
-    if throttled_seen or hung_seen:
+    if throttled_seen or hung_seen or truncated_seen:
         _circuit_record_throttle()
     return result
 
@@ -886,6 +933,7 @@ ClaudeCLILLM = ClaudeSDKLLM
 __all__ = [
     "ModelSpec", "MODELS", "get_spec",
     "chat", "invoke_text", "invoke_vision",
+    "last_call_infra_incomplete", "circuit_is_open",
     "is_langchain_available",
     "ClaudeSDKLLM", "ClaudeCLILLM",
 ]

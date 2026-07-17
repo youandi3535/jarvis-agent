@@ -202,7 +202,19 @@ function AgentCard({
   const showBusy = isBusy && !isActive;
 
   return (
-    <div style={{ position:"relative", width:w, height:h }}>
+    <div style={{
+      position:"relative", width:w, height:h,
+      animation: showBusy ? "busy-breathe 2.2s ease-in-out infinite" : undefined,
+    }}>
+      {/* 작업 중 — 앰버 후광 맥동 (busy only, 마우스 없이도 강하게 부각) */}
+      {showBusy && (
+        <div style={{
+          position:"absolute", inset:-7, borderRadius:18,
+          background:"radial-gradient(ellipse at center,#f59e0b66 0%,#f59e0b22 45%,transparent 72%)",
+          animation:"busy-halo 1.8s ease-in-out infinite",
+          pointerEvents:"none", zIndex:0,
+        }}/>
+      )}
       {/* 활성 맥동 링 — 카드 외부로 방사 (에이전트 간 데이터 전달) */}
       {isActive && [0, 0.55, 1.1].map((delay, i) => (
         <div key={i} style={{
@@ -214,14 +226,14 @@ function AgentCard({
         }}/>
       ))}
 
-      {/* 행진 개미 테두리 — 에이전트 작업 진행 중 (데이터전달과 구분되는 별도 모션) */}
+      {/* 행진 개미 테두리 — 에이전트 작업 진행 중 (앰버·굵고 빠르게, 데이터전달과 구분) */}
       {showBusy && (
-        <div style={{ position:"absolute", inset:-1, pointerEvents:"none", zIndex:5 }}
+        <div style={{ position:"absolute", inset:-1, pointerEvents:"none", zIndex:6 }}
           dangerouslySetInnerHTML={{ __html:
             `<svg width="${w+2}" height="${h+2}" viewBox="-1 -1 ${w+2} ${h+2}" xmlns="http://www.w3.org/2000/svg">` +
             `<rect x="1" y="1" width="${w-2}" height="${h-2}" rx="12" ry="12"` +
-            ` fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="10 7" opacity="0.65">` +
-            `<animate attributeName="stroke-dashoffset" from="0" to="-68" dur="1.6s" repeatCount="indefinite"/>` +
+            ` fill="none" stroke="#f59e0b" stroke-width="2.6" stroke-dasharray="14 8" opacity="0.95">` +
+            `<animate attributeName="stroke-dashoffset" from="0" to="-88" dur="0.9s" repeatCount="indefinite"/>` +
             `</rect></svg>`
           }}
         />
@@ -235,9 +247,9 @@ function AgentCard({
           background: isActive
             ? `linear-gradient(145deg,#1c2140 0%,#0e1020 100%)`
             : showBusy
-              ? `linear-gradient(145deg,#1a1e2e 0%,#0c0f1c 100%)`
+              ? `linear-gradient(145deg,#2a2113 0%,#0f0c06 100%)`
               : `linear-gradient(145deg,#131827 0%,#0b0d1a 100%)`,
-          border:`2px solid ${color}`,
+          border:`2px solid ${showBusy ? "#f59e0b" : color}`,
           borderRadius:12,
           padding:"7px 9px",
           transform: hov
@@ -249,7 +261,7 @@ function AgentCard({
             : isActive
               ? `0 0 60px ${color}cc, 0 0 120px ${color}55, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}99`
               : showBusy
-                ? `0 0 22px ${color}55, 0 4px 18px rgba(0,0,0,0.5), inset 0 1px 0 ${color}44`
+                ? `0 0 34px #f59e0baa, 0 0 68px #f59e0b40, 0 6px 22px rgba(0,0,0,0.55), inset 0 1px 0 #f59e0b66`
                 : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
           cursor:"default",
         }}
@@ -261,6 +273,16 @@ function AgentCard({
             background:`linear-gradient(90deg,transparent,${color}aa,white,${color}aa,transparent)`,
             animation:"card-scan-line 2.2s linear infinite",
             pointerEvents:"none", zIndex:10,
+          }}/>
+        )}
+        {/* 작업 중 — 가로 스캔라인 한 줄이 위→아래로 (busy only) */}
+        {showBusy && (
+          <div style={{
+            position:"absolute", left:6, right:6, height:2, borderRadius:2,
+            background:"linear-gradient(90deg,transparent,#f59e0b,#fbbf24,#f59e0b,transparent)",
+            boxShadow:"0 0 8px #f59e0b",
+            animation:"busy-scan-down 1.9s ease-in-out infinite",
+            pointerEvents:"none", zIndex:9,
           }}/>
         )}
         {/* 배경 스캔라인 */}
@@ -282,23 +304,23 @@ function AgentCard({
           <span style={{ fontSize:9,fontWeight:900,color,letterSpacing:1.5,opacity:isActive ? 1 : 0.7 }}>J{num}</span>
           <div style={{ display:"flex",alignItems:"center",gap:3 }}>
             {showBusy && (
-              <span dangerouslySetInnerHTML={{ __html:
-                `<svg width="10" height="10" viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">` +
-                `<circle cx="5" cy="5" r="3.6" fill="none" stroke="#f59e0b33" stroke-width="1.2"/>` +
-                `<path d="M5 1.4 A3.6 3.6 0 0 1 8.6 5" fill="none" stroke="#f59e0b" stroke-width="1.3" stroke-linecap="round">` +
-                `<animateTransform attributeName="transform" type="rotate" from="0 5 5" to="360 5 5" dur="1s" repeatCount="indefinite"/>` +
+              <span style={{ display:"inline-flex" }} dangerouslySetInnerHTML={{ __html:
+                `<svg width="14" height="14" viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">` +
+                `<circle cx="5" cy="5" r="3.6" fill="none" stroke="#f59e0b44" stroke-width="1.3"/>` +
+                `<path d="M5 1.4 A3.6 3.6 0 0 1 8.6 5" fill="none" stroke="#f59e0b" stroke-width="1.6" stroke-linecap="round">` +
+                `<animateTransform attributeName="transform" type="rotate" from="0 5 5" to="360 5 5" dur="0.75s" repeatCount="indefinite"/>` +
                 `</path></svg>`
               }}/>
             )}
             <span style={{
-              width:isActive ? 8 : showBusy ? 6 : 5,
-              height:isActive ? 8 : showBusy ? 6 : 5,
+              width:isActive ? 8 : showBusy ? 7 : 5,
+              height:isActive ? 8 : showBusy ? 7 : 5,
               borderRadius:"50%",
               background:isActive ? color : showBusy ? "#f59e0b" : "#4ade80",
               boxShadow:isActive
                 ? `0 0 16px ${color}, 0 0 32px ${color}66`
                 : showBusy
-                  ? "0 0 8px #f59e0b, 0 0 16px #f59e0b66"
+                  ? "0 0 10px #f59e0b, 0 0 22px #f59e0b99"
                   : "0 0 6px #4ade80",
               display:"inline-block",
               animation:isActive
@@ -324,13 +346,14 @@ function AgentCard({
         <div style={{ textAlign:"center",fontSize:9.5,color:isActive ? "#b8c8d8" : "#8a9fb8",marginBottom:4 }}>{sub}</div>
         {/* 데이터 칩 */}
         <div style={{
-          background:isActive ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.45)",
+          background:isActive ? "rgba(0,0,0,0.55)" : showBusy ? "rgba(245,158,11,0.12)" : "rgba(0,0,0,0.45)",
           borderRadius:5,padding:"3px 6px",
-          fontSize:9.5,
-          color:isActive ? "#b8cce0" : showBusy ? "#f59e0b" : "#9aafc8",
+          fontSize:9.5, fontWeight: showBusy ? 800 : 400,
+          color:isActive ? "#b8cce0" : showBusy ? "#fbbf24" : "#9aafc8",
           textAlign:"center",
-          borderTop:`1px solid ${isActive ? color+"55" : showBusy ? "#f59e0b44" : color+"28"}`,
+          borderTop:`1px solid ${isActive ? color+"55" : showBusy ? "#f59e0b77" : color+"28"}`,
           overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
+          animation: showBusy ? "busy-chip-blink 1.6s ease-in-out infinite" : undefined,
         }}>{showBusy ? `⚙ ${busyTask || "작업 중"}` : (stat ?? "—")}</div>
       </div>
     </div>
@@ -516,6 +539,24 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
       @keyframes busy-led-pulse {
         0%, 100% { opacity: 1.0; }
         50%       { opacity: 0.28; }
+      }
+      @keyframes busy-breathe {
+        0%, 100% { transform: scale(1); }
+        50%      { transform: scale(1.045); }
+      }
+      @keyframes busy-halo {
+        0%, 100% { opacity: 0.28; transform: scale(0.97); }
+        50%      { opacity: 0.9;  transform: scale(1.07); }
+      }
+      @keyframes busy-scan-down {
+        0%   { top: 2%;  opacity: 0; }
+        12%  { opacity: 1; }
+        88%  { opacity: 1; }
+        100% { top: 96%; opacity: 0; }
+      }
+      @keyframes busy-chip-blink {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.5; }
       }
     `}</style>
     <div style={{
