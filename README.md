@@ -10,7 +10,8 @@
 [![Selenium](https://img.shields.io/badge/Selenium-4.x-43B02A?style=flat-square&logo=selenium&logoColor=white)](https://selenium.dev)
 [![APScheduler](https://img.shields.io/badge/APScheduler-3.x-4DABF7?style=flat-square)](https://apscheduler.readthedocs.io)
 [![Contextual Bandit](https://img.shields.io/badge/Contextual%20Bandit-Linear%20UCB-F7931E?style=flat-square)](https://en.wikipedia.org/wiki/Multi-armed_bandit)
-[![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io)
+[![Next.js](https://img.shields.io/badge/Next.js%2016-Dashboard-000000?style=flat-square&logo=nextdotjs&logoColor=white)](https://nextjs.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Data%20API-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![SQLite](https://img.shields.io/badge/SQLite-WAL%20Mode-003B57?style=flat-square&logo=sqlite&logoColor=white)](https://sqlite.org)
 [![Team](https://img.shields.io/badge/Team-2인%20공동개발-00C851?style=flat-square)](#-팀--역할)
 [![Platform](https://img.shields.io/badge/Platform-macOS-000000?style=flat-square&logo=apple&logoColor=white)](https://apple.com/macos)
@@ -33,7 +34,7 @@
 
 | 🗂️ 에이전트 모듈 | 📝 Python 코드 | 📄 파일 수 | 🔧 등록 도구 | 🛡️ 정책 검증 항목 | 🧠 누적 오류 자동처리 |
 |:-:|:-:|:-:|:-:|:-:|:-:|
-| **10개** | **79,200+ LOC** | **190개** | **24개** | **46종** | **1,960+건 · 해결률 88%**<br><sub>(2026-07-05 기준)</sub> |
+| **10개** | **73,500+ LOC**<br><sub>(+ Next.js 대시보드 3,700 LOC)</sub> | **197개** | **29개** | **46종** | **3,280+건 · 해결률 89%**<br><sub>(2026-07-17 기준)</sub> |
 
 </div>
 
@@ -41,15 +42,15 @@
 
 ## 🖥️ 웹 대시보드 — 실시간 시연
 
-**▶ 로컬 실행 주소: [`http://localhost:9199`](http://localhost:9199)**
+**▶ 로컬 실행 주소: [`http://localhost:9199`](http://localhost:9199)** (Next.js) · 데이터 API [`:9198`](http://localhost:9198) (FastAPI)
 
-`python jarvis_daemon.py` 한 줄이면 데몬과 함께 Streamlit 통합 현황판(`hub.py` — 대시보드 단일 진입점)이 자동으로 떠오릅니다. 발행·트렌드·품질·성과·AI 학습·오류·스케줄·시스템을 **9개 탭** 한 화면에서 실시간 모니터링합니다.
+`python jarvis_daemon.py` 한 줄이면 데몬이 **FastAPI 데이터 API(`api_server.py` · 포트 9198)** 와 **Next.js 16 대시보드(포트 9199)** 를 자식 프로세스로 자동 기동합니다. 홈 + **발행·트렌드·품질·성과·AI 학습·오류·스케줄·시스템·DB 9개 상세 페이지**를 실시간(SWR 폴링·Recharts 시각화)으로 모니터링합니다.
 
 <table>
   <tr>
     <td width="50%" align="center" valign="top">
       <img src="docs/dashboard/07-guardian.png" alt="오류 자동 캐치·수정"/><br>
-      <sub><b>🛡️ 오류 자동 캐치·수정</b><br>catch() 단일 진입점 → 2-Tier 자동 복구 · 누적 1,960건 · 자동+수동 해결률 88% (2026-07-04 기준)</sub>
+      <sub><b>🛡️ 오류 자동 캐치·수정</b><br>catch() 단일 진입점 → 2-Tier 자동 복구 · 누적 3,280건 · 자동+수동 해결률 89% (2026-07-17 기준)</sub>
     </td>
     <td width="50%" align="center" valign="top">
       <img src="docs/dashboard/02-radar.png" alt="트렌드 레이더"/><br>
@@ -63,7 +64,7 @@
     </td>
     <td align="center" valign="top">
       <img src="docs/dashboard/08-scheduler.png" alt="스케줄러"/><br>
-      <sub><b>🗓️ 스케줄러</b><br>cron/interval 39개 잡 단일 진입점 · 오늘 50건 실행 · 성공률 100%</sub>
+      <sub><b>🗓️ 스케줄러</b><br>cron/interval 41개 잡 단일 진입점 · 오늘 50건 실행 · 성공률 100%</sub>
     </td>
   </tr>
   <tr>
@@ -73,6 +74,8 @@
     </td>
   </tr>
 </table>
+
+<sub>※ 위 스크린샷은 정보 구조를 보여주는 예시입니다. 현재 대시보드는 <b>Next.js 16 + Recharts</b>로 구현되어 있으며(이전 Streamlit `hub.py` 대체), 동일한 페이지 구성을 실시간으로 렌더링합니다.</sub>
 
 ---
 
@@ -87,16 +90,21 @@
 | 📡 **트렌드 레이더** | Google Trends + 네이버 DataLab 실시간 수집 → 핫 키워드 자동 탐지 |
 | 🛡️ **자동 캐치·수정 시스템** | `catch()` 단일 진입점 → Tier 1(패턴·Contextual Bandit) → Tier 2(LLM Sonnet 5) — LOW/MED/HIGH 자동 복구 (CRITICAL은 패턴만 + 수동 검토) |
 | 🔒 **보안 전문가급 안전장치** | Circuit breaker · 빈도 기반 severity 자동 상향(3회) · 보안 파일 수정 절대 금지 |
-| 🏛️ **헌법형 거버넌스** | `precommit_check.py` 1,123줄 — 45종 정책을 pre-commit 훅·주간 감사로 강제 (+ 데몬 부팅은 `preflight.py` 검증) |
-| 📊 **통합 대시보드** | hub.py 단일 진입점(port 9199) — 발행 이력·오류 현황·학습 곡선 한눈에 |
+| 🏛️ **헌법형 거버넌스** | `precommit_check.py` 1,125줄 — 46종 정책을 pre-commit 훅·주간 감사로 강제 (+ 데몬 부팅은 `preflight.py` 검증) |
+| 📊 **통합 대시보드 (★ Next.js 이전)** | **Next.js 16 대시보드(9199) + FastAPI 백엔드(`api_server.py` :9198, 37 엔드포인트)** — 발행 이력·오류 현황·학습 곡선을 Recharts로 실시간 |
 | 💬 **텔레그램 인터페이스** | 자유 문장 → ReAct 라우터 → 에이전트 디스패치 + 인라인 버튼 HITL 승인 |
 
 ---
 
-## 🆕 최근 주요 업데이트 (2026-06-29 ~ 07-11)
+## 🆕 최근 주요 업데이트 (2026-06-29 ~ 07-17)
 
 | 영역 | 변경 | 근거 |
 |------|------|------|
+| **★ 대시보드 Next.js 이전 (2026-07)** | Streamlit `hub.py` 단일 파일 대시보드를 **Next.js 16 + React 19 + Recharts + Tailwind(SWR)** SPA로 전면 재작성. 데이터는 **FastAPI 백엔드 `api_server.py`(포트 9198, 37 엔드포인트)** 가 공용 DB에서 서빙 → 대시보드(9199)는 순수 프런트. 데몬이 두 프로세스를 자식으로 자동 기동·워치독 | `dashboard/` · `api_server.py` |
+| **★ 발행 상시 재시도 — 스로틀 절단 인프라 분기 (2026-07-17)** | Max 구독 rate-limit로 LLM 응답이 중간 절단되면 *결함 대본*이 검증 순환에 갇히던 문제 해결. `truncated` 신호를 harness가 `kind="infra_throttle"`로 분기 → fingerprint 제외 + backoff + deferred(외부 스로틀은 재작성 아닌 대기). `_strip_design`·`_draft_invoke` 자가증폭 차단, GUARDIAN severity에 인프라스로틀=transient 등록 | ERRORS · 커밋 3f36fc7 |
+| **★ 라면 수집 3구멍 근본 수정 (2026-07-17)** | 일반명사 주제에서 ① DART가 회사명 검색을 무시하고 쓰레기 공시 10건 반환 → **corp_code 리졸버**(corpCode.xml, 7일 캐시)로 회사만 매칭·비회사는 fail-closed ② 경제 API 6종이 쿼터 오분류로 뉴스를 밀어냄 → api 그룹 재분류 + 뉴스·웹 최소 5건 보장(평균 문서 424→1,349자) ③ 종목 0건 → 프로필 관통 + 섹터 적극 매핑 + 약한부분일치 오매칭 게이트(라면→음식료업종 7종목) | 커밋 be90611 |
+| **★ 10개 에이전트 실시간 busy 모션 (2026-07-16)** | 홈 대시보드가 에이전트 간 *신호*가 오갈 때만 반짝이던 문제 → 각 에이전트가 **자기 작업 중에도** 상시 유지되는 별도 모션. J00·J01·J04·J05·J07 busy 신호 추가로 10개 전부 **3상태(평상시·데이터전달·작업중)** 실시간 표시 | 커밋 1c54dde·3f36fc7 |
+| **★ 경제 브리핑 로직 구멍 근본 수정 (2026-07-16)** | 하네스 **VERIFY_ONLY**(인프라 실패 시 산출물 보존) · 게이트 타임아웃 오분류 차단 · 대본 작성 전 **검증 규칙 사전 숙지 체크리스트**(분량 상한·헌법·SEO) · 제4조 이미지 연속 오검출 수정 | 커밋 ac62c01 |
 | **★ 차트 실데이터 강제 — D-번호 슬롯 (2026-07-11)** | LLM이 차트 슬롯에 직접 수치를 쓰던 구조를 **완전 폐기**. LLM은 `D1 · 제목`만 작성하고, JARVIS가 `collected.datasets`에서 D-번호 인덱스로 실데이터를 주입(`slot_renderer.py`). Jaccard 제목 매칭은 보조 폴백. LLM이 수치를 쓸 수 있는 경로 구조적 차단 → **수치 날조 근본 원인 제거** (ERRORS [421]) | ERRORS [421] |
 | **★ 인포그래픽 단위 자동 스케일 (2026-07-11)** | 차트에 9자리 숫자(예: `23,491,406백만원`)가 그대로 나타나던 문제 해결. `_auto_scale(val, unit)` — 백만원 ≥ 1조 → 조원, ≥ 100억 → 억원; 원 → 조/억/만원 자동 변환. `_scale_rows_uniform()` 으로 데이터셋 전체를 균일 단위로 일괄 변환 (막대·꺾은선·히어로 통계·미니카드 동일 단위) | pro_templates.py |
 | **★ 인포그래픽 레이아웃 다양성 복원 (2026-07-11)** | `design_recipes.json` 에 구조 레이아웃 템플릿 8개가 있었지만 실제로 하나도 안 쓰이던 버그 수정. 원인: `build_html()` 의 `_n_ds >= 2` 조건이 슬롯이 항상 1개 전달로 절대 True가 안 됨 → `>= 1` 로 수정해 **8가지 HTML 구조 레이아웃** 즉시 활성화. Playwright CSS `card:empty{display:none}` 으로 빈 카드 슬롯 자동 숨김 | pro_templates.py |
@@ -345,9 +353,9 @@ flowchart LR
 | 누적 학습 패턴 | **7개** <sub>(ADR 016 정직 리셋)</sub> | `learned_patterns.json` — **재적용 가능한** fingerprint만. ADR 016 에서 stored_patch 없는 죽은 패턴 119개를 프루닝(68→7) → 신호 정직화, 실학습으로 재성장 |
 | 밴딧 상태 크기 | **402MB → 45B** <sub>(ADR 016)</sub> | arm을 오류지문이 아닌 소수 fixer 전략으로 고정 + 오염 게이트 → 파일 비대·죽은 신호 제거 |
 | SDK→밴딧 학습 | **폐쇄 루프** | Tier 2 LLM 자동수정도 Contextual Bandit arm 자산화 → 재발 시 Tier 1 LLM-0 처리 (`record_sdk_fix`) |
-| 누적 오류 처리 | **1,960건 / 88%** <sub>(2026-07-04 기준)</sub> | `error_log` 누적 수집 · 자동+수동 해결률 (대시보드는 라이브 계산) |
-| 오류 기록 | **339건 / 6,507줄** | `JARVIS07_GUARDIAN/ERRORS.md` 구조화 회고 |
-| 체크포인트 | **50MB** | `react_checkpoints.sqlite` (ReAct 실가동 증거) |
+| 누적 오류 처리 | **3,280건 / 89%** <sub>(2026-07-17 기준)</sub> | `error_log` 누적 수집 · 자동+수동 해결률 (대시보드는 라이브 계산) |
+| 오류 기록 | **439건 / 7,827줄** | `JARVIS07_GUARDIAN/ERRORS.md` 구조화 회고 |
+| 체크포인트 | **52MB** | `react_checkpoints.sqlite` (ReAct 실가동 증거) |
 
 ---
 
@@ -374,7 +382,7 @@ flowchart LR
 | 보호 레이어 | 구현 | 역할 |
 |------------|------|------|
 | HITL 승인 게이트 | `approved_context` / `PermissionError` | 외부 영향 도구 100% 차단 |
-| 정책 정적 강제 | `precommit_check.py` 1,123줄 | 45종 위반 자동 감지 |
+| 정책 정적 강제 | `precommit_check.py` 1,125줄 | 46종 위반 자동 감지 |
 | 파일 안전 박스 | `_safe_path()` | 경로 탈출·심볼릭·deny dir 차단 |
 | 셸 안전 박스 | `_BASH_WHITELIST` | 화이트리스트 외 명령 차단 |
 | 변경 안전망 | `.bak` 백업 + AST 검증 | 코드 수정 실패 시 자동 롤백 |
@@ -405,6 +413,7 @@ flowchart LR
 ### 사전 요구사항
 
 - Python 3.10+ (개발·운영 환경 3.10.19)
+- Node.js 20+ (Next.js 16 대시보드 — 대시보드를 볼 때만 필요)
 - Chrome + ChromeDriver (Selenium 발행용)
 - 텔레그램 봇 토큰 ([BotFather](https://t.me/BotFather))
 - 네이버 블로그 계정 / 티스토리 블로그 계정
@@ -422,7 +431,10 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 # 의존성 설치
 pip install -r JARVIS02_WRITER/requirements.txt
-pip install claude-code-sdk python-dotenv apscheduler streamlit scikit-learn numpy chromadb
+pip install claude-code-sdk python-dotenv apscheduler fastapi uvicorn scikit-learn numpy chromadb
+
+# (선택) 대시보드를 볼 경우 — Next.js 의존성 설치
+cd dashboard && npm install && cd ..
 
 # Claude 인증 (OAuth)
 claude auth login
@@ -462,9 +474,14 @@ pkill -f jarvis_daemon.py
 
 ### 통합 대시보드
 
+데몬(`jarvis_daemon.py`)이 아래 두 프로세스를 **자동 기동·워치독**하므로 별도 실행이 필요 없습니다. 수동 기동 시:
+
 ```bash
-streamlit run hub.py --server.port 9199
-# http://localhost:9199 접속
+# ① FastAPI 데이터 백엔드 (포트 9198)
+uvicorn api_server:app --host 127.0.0.1 --port 9198
+
+# ② Next.js 대시보드 (포트 9199)
+cd dashboard && npm install && npm run dev   # → http://localhost:9199 접속
 ```
 
 ---
@@ -485,7 +502,8 @@ streamlit run hub.py --server.port 9199
 | **금융 데이터** | pykrx · yfinance · KRX 거래대금 | 주가·지표·시장 거래량 수집 |
 | **인포그래픽 엔진** | **결정론 코드 템플릿**(8레이아웃·단위자동스케일) + Playwright 렌더 + 매일 팔레트 학습(`design_learner`) | D-번호 실데이터 주입 · LLM 수치 날조 차단 |
 | **AI 사진** | Pollinations.ai | 썸네일·본문 이미지 (키 불필요) |
-| **대시보드** | Streamlit | 통합 현황 모니터링 |
+| **대시보드** | Next.js 16 + React 19 + Recharts + Tailwind (SWR) | 실시간 통합 현황 SPA (포트 9199) |
+| **대시보드 백엔드** | FastAPI (`api_server.py`, 37 엔드포인트) | 공용 DB → 대시보드 데이터 API (포트 9198) |
 | **알림** | Telegram Bot API | 실시간 승인·보고 |
 
 ---
@@ -541,7 +559,7 @@ git 커밋은 단일 계정(`youandi3535`)으로 기록되지만, 설계·구현
 
 - **커밋 컨벤션** — `hj : <요약>` / `ny : <요약>`, 버그 수정은 `[이슈번호]` 접두사
 - **머지 전 필수** — `python shared/precommit_check.py` 0건 + `py_compile` 전수 통과
-- **운영 자산 보호** — `learned_patterns.json`·`ERRORS.md`·`react_checkpoints.sqlite`(50MB) 는 `.gitignore` 처리. 실 DB 는 `JARVIS_DB_PATH`(`~/.jarvis/jarvis.sqlite`, repo 밖 — `.fuse_hidden*` 차단). 데몬만 갱신하며 (`ERRORS.md` 는 `report_manual_fix()` 자동 박제), PR 에 포함되면 머지 거부.
+- **운영 자산 보호** — `learned_patterns.json`·`ERRORS.md`·`react_checkpoints.sqlite`(52MB) 는 `.gitignore` 처리. 실 DB 는 `JARVIS_DB_PATH`(`~/.jarvis/jarvis.sqlite`, repo 밖 — `.fuse_hidden*` 차단). 데몬만 갱신하며 (`ERRORS.md` 는 `report_manual_fix()` 자동 박제), PR 에 포함되면 머지 거부.
 
 ---
 
@@ -577,7 +595,7 @@ python shared/agent_registration_check.py
 | **단일 진입점** | 도메인별 책임 폴더 고정 (이미지→J06·발행→J08·스케줄→J04·LLM→shared/llm.py) |
 | **HITL 승인** | 외부 영향 도구는 텔레그램 인라인 버튼 ✅ 후에만 실행 |
 | **오류 기록 의무** | 모든 오류·수정 이력 `JARVIS07_GUARDIAN/ERRORS.md` 단일 저장소 |
-| **정적 강제** | `precommit_check.py` 45종 — pre-commit 훅 + 주간 감사(Auditor) / 데몬 부팅 검증은 `preflight.py`(Layer 0) 별도 |
+| **정적 강제** | `precommit_check.py` 46종 — pre-commit 훅 + 주간 감사(Auditor) / 데몬 부팅 검증은 `preflight.py`(Layer 0) 별도 |
 | **학습 루프** | 오류 수정 사례 자동 자산화 → 다음 오류는 LLM 0 즉시 처리 |
 
 자세한 규정은 [CLAUDE.md](CLAUDE.md) 참조.
@@ -588,8 +606,8 @@ python shared/agent_registration_check.py
 
 | 증거 | 값 / 위치 | 의미 |
 |------|----------|------|
-| `react_checkpoints.sqlite` | **50 MB** | ReAct 라우터 실제 누적 가동 증거 |
-| `JARVIS07_GUARDIAN/ERRORS.md` | **339건 / 6,507줄** | 운영 사고 구조화 회고 → 코드 환류 |
+| `react_checkpoints.sqlite` | **52 MB** | ReAct 라우터 실제 누적 가동 증거 |
+| `JARVIS07_GUARDIAN/ERRORS.md` | **439건 / 7,827줄** | 운영 사고 구조화 회고 → 코드 환류 |
 | RADAR 폐쇄 학습 루프 | 발행 → 성과 수집 → Ridge 회귀 → opportunity_score | 자율 학습 실증 |
 | 자가 학습 LLM 절감 | **패턴 적중 누적** | 동일 오류 LLM 0 즉시 처리 (실시간 증가) |
 | SDK→밴딧 폐쇄 루프 | `record_sdk_fix` + `bandit_arm_name` | Tier 2 자동수정 → 밴딧 arm 학습 → 다음 발행 전 sweep 자동수리율↑ (2026-06-28) |
@@ -605,7 +623,6 @@ python shared/agent_registration_check.py
 | 🟡 테스트 커버리지 | 핵심 경로(ReAct·harness·발행) 테스트 2개 | 보강 예정 |
 | 🟡 발행 멱등성 | 영구 "오늘 이미 발행" 가드 미완 | 발행 검증 강화 예정 |
 | 🟡 단일 macOS 의존 | GUI 자동화(Selenium) → 서버 환경 미지원 | 발행 워커 분리·컨테이너화 예정 |
-| 🟡 레거시 import 잔존 | `shared/tracing.py`·`schemas.py`를 일부 경로가 참조하나 파일 부재 (대부분 try/except 가드 — 데몬 가동엔 영향 없음) | import 정리 예정 |
 | 🟡 품질 게이트 실발행 미검증 | 배선·정책·killswitch·재작성 트리거는 결정론 테스트 완료. 단 `fact_judge`/`engagement_judge` 프롬프트의 실제 판정 정확도·임계값(70)·오탐율은 실발행으로 미검증 | 첫 며칠 발행 모니터링 후 임계·프롬프트 튜닝 (오탐 잦으면 killswitch) |
 | 🟡 통합 파이프라인 실발행 미검증 | 경제·테마 통합(`CollectedData`+`process_draft`)은 구조 검증(precommit 46종·전수 py_compile·단위테스트) + 테마 dry-run(블록 조립·이미지≥5·썸네일·grounding) 통과. 단 실제 스케줄 발행 E2E(경제 06:30·테마)는 첫 라이브에서 검증 | 첫 발행 모니터링 후 필요 시 튜닝 |
 | 🟡 Max 구독 rate 천장 | 발행은 LLM 호출을 몰아서 함 → 인터랙티브 세션·데몬과 같은 Max 계정 공유 시 rate-limit 스로틀 가능. C1 배치(차트 설계 7→1회)로 완화, 발행은 무경쟁 시각(예약 06:30/16:00) 권장 | 발행 전용 API 키 분리 검토 |
