@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0: #ffffff;
+    --hero1: #ffffff;
+    --ink: #14324a;
+    --a1: #2cacc6;
+    --a1s: #ea6c82;
+    --a2: #8ca646;
+    --a2s: #f0932b;
+    --soft: #eaf5f6;
+    --muted: #7c8b97;
+    --eyebrow: #1b8fa6;
+    --grid: #e3e9ec;
+  }
+
+  *{ box-sizing:border-box; }
+
+  html,body{
+    margin:0;
+    padding:0;
+    width:1280px;
+    background:var(--hero0);
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* 비대칭 그리드형 '요소 카탈로그' — 단일 히어로 밴드 대신 중앙 지구본+게이지 아치가
+     시각 중심. 카드 프레임·그라디언트·글로우·배경 그리드 전부 없음. 순수 흰 배경 위에
+     장식은 핀·다이아몬드 드롭섀도우로만. */
+  .canvas{
+    width:1280px;
+    margin:0 auto;
+    padding:56px 64px 48px;
+    background:linear-gradient(180deg, var(--hero0), var(--hero1));
+    display:flex;
+    flex-direction:column;
+  }
+
+  .head{ flex:0 0 auto; }
+
+  .eyebrow{
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 8px;
+  }
+  .eyebrow:empty{ display:none; margin:0; }
+
+  .title{
+    font-size:32px;
+    font-weight:800;
+    line-height:1.26;
+    letter-spacing:-.01em;
+    color:var(--ink);
+    margin:0 0 8px;
+  }
+  .title:empty{ display:none; margin:0; }
+
+  .subtitle{
+    font-size:16px;
+    font-weight:400;
+    line-height:1.55;
+    color:var(--muted);
+    max-width:980px;
+    margin:0;
+  }
+  .subtitle:empty{ display:none; margin:0; }
+
+  /* ── 히어로 수치 — 퍼센트 칩(6px 라운드), 미사용 시 자동 숨김 ── */
+  .hero-stats{
+    display:flex;
+    flex-wrap:wrap;
+    gap:16px;
+    margin:22px 0 4px;
+  }
+  .hero-stats:empty{ display:none; margin:0; }
+  .hero-stats .stat{ display:flex; align-items:center; gap:10px; }
+  .hero-stats .stat .num{
+    font-size:20px;
+    font-weight:800;
+    line-height:1.2;
+    color:var(--hero0);
+    background:var(--a1);
+    padding:6px 14px;
+    border-radius:6px;
+  }
+  .hero-stats .stat:nth-child(4n+2) .num{ background:var(--a1s); }
+  .hero-stats .stat:nth-child(4n+3) .num{ background:var(--a2); }
+  .hero-stats .stat:nth-child(4n+4) .num{ background:var(--a2s); }
+  .hero-stats .stat .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ============ 상단 가로 밴드 — 영역/라인/스택 차트 3종 (도입부, 실데이터 슬롯) ============ */
+  .band-top{
+    flex:0 0 auto;
+    display:grid;
+    grid-template-columns:repeat(3, 1fr);
+    column-gap:28px;
+    margin-top:32px;
+  }
+  .band-tile{
+    display:flex;
+    flex-direction:column;
+    padding:20px 4px 0;
+    border-top:1px solid var(--grid);
+    min-height:172px;
+  }
+  .band-tile:has([data-jarvis-empty]){ display:none; }
+
+  /* ============ 중단 3분할 비대칭 본문 ============ */
+  .body-grid{
+    flex:1 1 auto;
+    display:grid;
+    grid-template-columns:296px 1fr 296px;
+    column-gap:32px;
+    margin-top:40px;
+    align-items:stretch;
+  }
+
+  .col-left, .col-right{
+    display:flex;
+    flex-direction:column;
+    gap:26px;
+  }
+
+  .tile{
+    padding-top:20px;
+    border-top:1px solid var(--grid);
+  }
+  .tile-cap{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    margin-top:14px;
+  }
+  .tile-cap .swatch{ width:9px; height:9px; border-radius:2px; flex-shrink:0; }
+
+  /* ---- 1. 사람 아이콘 행렬 (픽토그램 비율) ---- */
+  .people-grid{
+    display:grid;
+    grid-template-columns:repeat(6, 1fr);
+    gap:10px 8px;
+    justify-items:center;
+  }
+  .person{ position:relative; width:18px; height:26px; }
+  .person::before{
+    content:"";
+    position:absolute; top:0; left:50%; transform:translateX(-50%);
+    width:9px; height:9px; border-radius:50%;
+    background:var(--soft);
+  }
+  .person::after{
+    content:"";
+    position:absolute; bottom:0; left:50%; transform:translateX(-50%);
+    width:18px; height:14px; border-radius:8px 8px 3px 3px;
+    background:var(--soft);
+  }
+  .person.on-a1::before, .person.on-a1::after{ background:var(--a1); }
+  .person.on-a1s::before, .person.on-a1s::after{ background:var(--a1s); }
+  .person.on-a2::before, .person.on-a2::after{ background:var(--a2); }
+
+  /* ---- 2. 반원 비율 게이지 ---- */
+  .semi-gauge{
+    --pct: 64;
+    position:relative;
+    width:168px; height:84px;
+    margin:0 auto;
+  }
+  .semi-gauge::before{
+    content:"";
+    position:absolute; inset:0 0 auto 0;
+    width:168px; height:168px;
+    border-radius:50%;
+    background:conic-gradient(from -90deg,
+      var(--a1s) 0deg, var(--a1s) calc(var(--pct) * 1.8deg),
+      var(--soft) calc(var(--pct) * 1.8deg) 180deg,
+      var(--soft) 180deg 360deg);
+  }
+  .semi-gauge::after{
+    content:"";
+    position:absolute; left:24px; top:24px;
+    width:120px; height:120px;
+    border-radius:50%;
+    background:var(--hero0);
+  }
+  .semi-gauge .semi-num{
+    position:absolute; left:0; right:0; bottom:2px;
+    text-align:center;
+    font-size:22px; font-weight:800; color:var(--ink);
+  }
+
+  /* ---- 3. 다이아몬드형 A/B/C 벤다이어그램 ---- */
+  .diamond-venn{ position:relative; width:180px; height:150px; margin:0 auto; }
+  .diamond{
+    position:absolute;
+    width:96px; height:96px;
+    border-radius:16px;
+    transform:rotate(45deg);
+    display:flex; align-items:center; justify-content:center;
+    opacity:.82;
+    filter:drop-shadow(0 6px 10px color-mix(in srgb, var(--ink), transparent 84%));
+  }
+  .diamond span{
+    transform:rotate(-45deg);
+    font-size:16px; font-weight:800; color:var(--hero0);
+  }
+  .diamond.d-a{ background:var(--a1); left:6px; top:8px; }
+  .diamond.d-b{ background:var(--a1s); left:78px; top:8px; }
+  .diamond.d-c{ background:var(--a2); left:42px; top:54px; }
+
+  /* ---- 4. 파이차트 ---- */
+  .pie-chart{
+    --p1: 32%; --p2: 58%; --p3: 82%;
+    width:132px; height:132px;
+    border-radius:50%;
+    margin:0 auto;
+    background:conic-gradient(var(--a1) 0 var(--p1), var(--a1s) var(--p1) var(--p2), var(--a2) var(--p2) var(--p3), var(--a2s) var(--p3) 100%);
+    filter:drop-shadow(0 4px 8px color-mix(in srgb, var(--ink), transparent 90%));
+  }
+
+  /* ============ 중앙 — 지구본 히어로 + 게이지 아치 + 핀 9종 + 타이틀 ============ */
+  .col-center{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:24px;
+  }
+  .hero-globe-wrap{ position:relative; width:320px; height:320px; flex:0 0 auto; }
+
+  .gauge-arch{
+    --pct: 68;
+    position:absolute; left:50%; top:18px; transform:translateX(-50%);
+    width:300px; height:150px;
+    overflow:hidden;
+  }
+  .gauge-arch::before{
+    content:"";
+    position:absolute; inset:0 0 auto 0;
+    width:300px; height:300px;
+    border-radius:50%;
+    background:conic-gradient(from -90deg,
+      var(--a1) 0deg, var(--a1) calc(var(--pct) * 1.8deg),
+      var(--soft) calc(var(--pct) * 1.8deg) 180deg,
+      var(--soft) 180deg 360deg);
+  }
+  .gauge-arch::after{
+    content:"";
+    position:absolute; left:40px; top:40px;
+    width:220px; height:220px;
+    border-radius:50%;
+    background:var(--hero0);
+  }
+
+  .globe{
+    position:absolute; left:50%; top:50%;
+    transform:translate(-50%, -50%);
+    width:200px; height:200px;
+  }
+  .globe-svg{ display:block; width:100%; height:100%; }
+  .globe-fill{ fill:var(--soft); }
+  .globe-line{ fill:none; stroke:var(--a1); stroke-width:2; opacity:.4; }
+  .globe-line--thin{ stroke-width:1.4; opacity:.28; }
+  .globe-outline{ fill:none; stroke:var(--a1); stroke-width:3; }
+
+  .pin-field{ position:absolute; inset:0; }
+  .pin{
+    position:absolute;
+    width:16px; height:16px;
+    border-radius:50% 50% 50% 0;
+    transform:rotate(-45deg);
+    box-shadow:0 0 0 3px var(--hero0);
+    filter:drop-shadow(0 4px 6px color-mix(in srgb, var(--ink), transparent 78%));
+  }
+  .pin.p1{ left:152px; top:48px; background:var(--a1); }
+  .pin.p2{ left:219px; top:72px; background:var(--a1s); }
+  .pin.p3{ left:254px; top:134px; background:var(--a2); }
+  .pin.p4{ left:242px; top:204px; background:var(--a2s); }
+  .pin.p5{ left:188px; top:250px; background:var(--a1); }
+  .pin.p6{ left:116px; top:250px; background:var(--a1s); }
+  .pin.p7{ left:62px; top:204px; background:var(--a2); }
+  .pin.p8{ left:50px; top:134px; background:var(--a2s); }
+  .pin.p9{ left:85px; top:72px; background:var(--a1); }
+
+  .hero-title{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:2px;
+  }
+  .hero-title span{
+    font-size:16px;
+    font-weight:800;
+    letter-spacing:.32em;
+    text-transform:uppercase;
+    color:var(--ink);
+  }
+  .hero-title span:last-child{
+    font-weight:600;
+    letter-spacing:.28em;
+    color:var(--muted);
+  }
+
+  /* ============ 우측 — 미니 도넛 매트릭스 4x3 / 물방울 배지 / 막대 / 꺾은선 ============ */
+  .donut-matrix{
+    display:grid;
+    grid-template-columns:repeat(4, 1fr);
+    gap:14px 10px;
+  }
+  .mini-donut{
+    --pct: 50%;
+    position:relative;
+    width:44px; height:44px;
+    border-radius:50%;
+    background:conic-gradient(var(--a1) 0 var(--pct), var(--soft) var(--pct) 100%);
+  }
+  .mini-donut::after{
+    content:"";
+    position:absolute; inset:8px;
+    border-radius:50%;
+    background:var(--hero0);
+  }
+  .mini-donut:nth-child(4n+2){ background:conic-gradient(var(--a1s) 0 var(--pct), var(--soft) var(--pct) 100%); }
+  .mini-donut:nth-child(4n+3){ background:conic-gradient(var(--a2) 0 var(--pct), var(--soft) var(--pct) 100%); }
+  .mini-donut:nth-child(4n+4){ background:conic-gradient(var(--a2s) 0 var(--pct), var(--soft) var(--pct) 100%); }
+
+  .droplet-wrap{ display:flex; justify-content:center; padding-top:10px; }
+  .droplet{
+    position:relative;
+    width:108px; height:108px;
+    border-radius:50%;
+    background:var(--a1s);
+    display:flex; align-items:center; justify-content:center;
+    filter:drop-shadow(0 8px 14px color-mix(in srgb, var(--ink), transparent 78%));
+  }
+  .droplet::before{
+    content:"";
+    position:absolute; top:-24px; left:50%; transform:translateX(-50%);
+    width:0; height:0;
+    border-left:19px solid transparent;
+    border-right:19px solid transparent;
+    border-bottom:32px solid var(--a1s);
+  }
+  .droplet-num{ font-size:24px; font-weight:800; color:var(--hero0); }
+
+  .bar-graph{
+    display:flex;
+    align-items:flex-end;
+    gap:10px;
+    height:120px;
+    border-bottom:1px solid var(--grid);
+    padding-bottom:1px;
+  }
+  .bar-graph span{ flex:1; min-width:6px; border-radius:3px 3px 0 0; }
+  .bar-graph span:nth-child(4n+1){ background:var(--a1); }
+  .bar-graph span:nth-child(4n+2){ background:var(--a1s); }
+  .bar-graph span:nth-child(4n+3){ background:var(--a2); }
+  .bar-graph span:nth-child(4n+4){ background:var(--a2s); }
+
+  .line-graph-svg{ display:block; width:100%; height:120px; overflow:visible; }
+  .lg-axis{ stroke:var(--grid); stroke-width:1.5; }
+  .lg-path{ fill:none; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+  .lg-c1{ stroke:var(--a1); }
+  .lg-c2{ stroke:var(--a2s); }
+  .lg-dot{ stroke:var(--hero0); stroke-width:2; }
+  circle.lg-dot.lg-c1{ fill:var(--a1); }
+  circle.lg-dot.lg-c2{ fill:var(--a2s); }
+
+  /* ============ 하단 — 아이콘 범례 리스트 (MINI_CARDS 슬롯) ============ */
+  .catalog-list{
+    flex:0 0 auto;
+    margin-top:40px;
+    padding-top:22px;
+    border-top:1px solid var(--grid);
+  }
+  .catalog-list:has(.mini-cards:empty){ display:none; }
+  .mini-cards{
+    display:flex;
+    flex-wrap:wrap;
+    align-content:center;
+    row-gap:16px;
+    column-gap:40px;
+  }
+  .mini-cards:empty{ display:none; }
+  .mini-cards .icon-item{ flex:0 0 auto; display:flex; align-items:center; gap:12px; }
+  .mini-cards .icon-item .ico{
+    width:34px; height:34px;
+    border-radius:50%;
+    flex-shrink:0;
+    background:var(--soft);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .mini-cards .icon-item .ico::after{
+    content:"";
+    width:12px; height:12px;
+    border-radius:3px;
+    background:var(--a1);
+  }
+  .mini-cards .icon-item:nth-child(4n+2) .ico::after{ background:var(--a1s); }
+  .mini-cards .icon-item:nth-child(4n+3) .ico::after{ background:var(--a2); }
+  .mini-cards .icon-item:nth-child(4n+4) .ico::after{ background:var(--a2s); }
+  .mini-cards .icon-item .txt{ display:flex; flex-direction:column; gap:2px; }
+  .mini-cards .icon-item .num{ font-size:20px; font-weight:800; color:var(--ink); line-height:1.1; }
+  .mini-cards .icon-item .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ── 차트 슬롯 공통 — 빈 슬롯 자동 은폐 (필수) ── */
+  section.chart-slot{ display:flex; flex-direction:column; }
+  section:has([data-jarvis-empty]){ display:none; }
+
+  /* ── 푸터 ── */
+  .foot{
+    flex:0 0 auto;
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:24px;
+    margin:32px 0 0;
+    padding-top:16px;
+    border-top:1px solid var(--grid);
+  }
+  .foot:not(:has(.source:not(:empty))):not(:has(.brand:not(:empty))){ display:none; }
+  .source{ font-size:14px; color:var(--muted); }
+  .source:empty{ display:none; }
+  .brand{ font-size:14px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--eyebrow); }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <header class="head">
+      <p class="eyebrow">{EYEBROW}</p>
+      <h1 class="title">{TITLE}</h1>
+      <p class="subtitle">{SUBTITLE}</p>
+    </header>
+
+    <div class="hero-stats">{HERO_STATS}</div>
+
+    <!-- ============ 상단 밴드 — 영역/라인/스택 차트 3종 (실데이터 슬롯) ============ -->
+    <div class="band-top">
+      <section class="tile band-tile chart-slot">{CHART_1}</section>
+      <section class="tile band-tile chart-slot">{CHART_2}</section>
+      <section class="tile band-tile chart-slot">{CHART_3}</section>
+    </div>
+
+    <!-- ============ 중단 3분할 — 좌: 픽토/게이지/벤/파이, 중: 지구본 히어로, 우: 도넛/물방울/막대/선 ============ -->
+    <div class="body-grid">
+
+      <div class="col-left">
+        <div class="tile tile--people">
+          <div class="people-grid">
+            <span class="person on-a1"></span><span class="person on-a1"></span><span class="person on-a1"></span>
+            <span class="person"></span><span class="person"></span><span class="person"></span>
+            <span class="person on-a1s"></span><span class="person on-a1s"></span><span class="person"></span>
+            <span class="person"></span><span class="person"></span><span class="person"></span>
+            <span class="person on-a2"></span><span class="person"></span><span class="person"></span>
+            <span class="person"></span><span class="person"></span><span class="person"></span>
+            <span class="person"></span><span class="person"></span><span class="person"></span>
+            <span class="person"></span><span class="person"></span><span class="person"></span>
+          </div>
+        </div>
+
+        <div class="tile tile--semi">
+          <div class="semi-gauge" style="--pct:64;">
+            <span class="semi-num">64%</span>
+          </div>
+        </div>
+
+        <div class="tile tile--diamond">
+          <div class="diamond-venn">
+            <div class="diamond d-a"><span>A</span></div>
+            <div class="diamond d-b"><span>B</span></div>
+            <div class="diamond d-c"><span>C</span></div>
+          </div>
+        </div>
+
+        <div class="tile tile--pie">
+          <div class="pie-chart" style="--p1:32%;--p2:58%;--p3:82%;"></div>
+        </div>
+      </div>
+
+      <div class="col-center">
+        <div class="hero-globe-wrap">
+          <div class="gauge-arch" style="--pct:68;"></div>
+          <div class="globe">
+            <svg class="globe-svg" viewBox="0 0 200 200">
+              <circle class="globe-fill" cx="100" cy="100" r="90"/>
+              <ellipse class="globe-line" cx="100" cy="100" rx="38" ry="90"/>
+              <ellipse class="globe-line" cx="100" cy="100" rx="66" ry="90"/>
+              <line class="globe-line" x1="10" y1="100" x2="190" y2="100"/>
+              <line class="globe-line globe-line--thin" x1="20" y1="62" x2="180" y2="62"/>
+              <line class="globe-line globe-line--thin" x1="20" y1="138" x2="180" y2="138"/>
+              <circle class="globe-outline" cx="100" cy="100" r="90"/>
+            </svg>
+          </div>
+          <div class="pin-field">
+            <span class="pin p1"></span>
+            <span class="pin p2"></span>
+            <span class="pin p3"></span>
+            <span class="pin p4"></span>
+            <span class="pin p5"></span>
+            <span class="pin p6"></span>
+            <span class="pin p7"></span>
+            <span class="pin p8"></span>
+            <span class="pin p9"></span>
+          </div>
+        </div>
+        <div class="hero-title">
+          <span>Infographic</span>
+          <span>Elements</span>
+        </div>
+      </div>
+
+      <div class="col-right">
+        <div class="tile tile--donutmatrix">
+          <div class="donut-matrix">
+            <span class="mini-donut" style="--pct:42%"></span>
+            <span class="mini-donut" style="--pct:68%"></span>
+            <span class="mini-donut" style="--pct:30%"></span>
+            <span class="mini-donut" style="--pct:75%"></span>
+            <span class="mini-donut" style="--pct:56%"></span>
+            <span class="mini-donut" style="--pct:24%"></span>
+            <span class="mini-donut" style="--pct:82%"></span>
+            <span class="mini-donut" style="--pct:47%"></span>
+            <span class="mini-donut" style="--pct:63%"></span>
+            <span class="mini-donut" style="--pct:38%"></span>
+            <span class="mini-donut" style="--pct:71%"></span>
+            <span class="mini-donut" style="--pct:52%"></span>
+          </div>
+        </div>
+
+        <div class="tile tile--droplet">
+          <div class="droplet-wrap">
+            <div class="droplet">
+              <span class="droplet-num">49%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="tile tile--bar">
+          <div class="bar-graph">
+            <span style="height:42%"></span>
+            <span style="height:66%"></span>
+            <span style="height:50%"></span>
+            <span style="height:84%"></span>
+            <span style="height:58%"></span>
+            <span style="height:70%"></span>
+          </div>
+        </div>
+
+        <div class="tile tile--linegraph">
+          <svg class="line-graph-svg" viewBox="0 0 260 120" preserveAspectRatio="none">
+            <line class="lg-axis" x1="0" y1="112" x2="260" y2="112"/>
+            <path class="lg-path lg-c1" d="M0,86 C50,80 90,40 140,34 C180,30 220,50 260,20"/>
+            <path class="lg-path lg-c2" d="M0,100 C50,98 90,80 140,76 C180,72 220,60 260,54"/>
+            <circle class="lg-dot lg-c1" cx="260" cy="20" r="4.5"/>
+            <circle class="lg-dot lg-c2" cx="260" cy="54" r="4.5"/>
+          </svg>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 하단 아이콘 범례 리스트 (MINI_CARDS) ============ -->
+    <div class="catalog-list">
+      <div class="mini-cards">{MINI_CARDS}</div>
+    </div>
+
+    <footer class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </footer>
+  </div>
+</body>
+</html>

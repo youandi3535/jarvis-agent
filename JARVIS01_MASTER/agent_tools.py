@@ -214,7 +214,7 @@ def query_post_analysis(
     rollback=None,
     cost_class="medium",
     requires_approval=True,
-    description="JARVIS02 WRITER 위임 — 블로그 발행/수정. intent: blog.theme_post.create | blog.economic_post.create | blog.post.revise. params.platforms 로 플랫폼 분리.",
+    description="JARVIS02 WRITER 위임 — 블로그 발행. intent: blog.theme_post.create | blog.economic_post.create. params.platforms 로 플랫폼 분리. (발행글 수정 blog.post.revise 는 인라인 승인 버튼 전용 — 여기로 라우팅 금지)",
 )
 def call_jarvis01(intent: str, params: Optional[dict] = None) -> dict:
     """JARVIS02 WRITER 호출.

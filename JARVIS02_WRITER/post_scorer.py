@@ -33,7 +33,8 @@ def _sentences(text: str) -> int:
     return len(re.findall(r'[가-힣a-zA-Z0-9][^.!?。]*[.!?。]', _strip(text)))
 
 def _korean(html: str) -> int:
-    return len(re.findall(r'[가-힣]', _strip(html)))
+    from JARVIS02_WRITER.length_manager import count as _klen
+    return _klen(_strip(html))
 
 def _body(draft: Any) -> str:
     if isinstance(draft, dict):

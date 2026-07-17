@@ -769,8 +769,8 @@ def _legacy_publish_guard(name: str) -> None:
     # 비합법 — GUARDIAN 박제 후 raise
     try:
         from JARVIS07_GUARDIAN.error_collector import report as _gr
-        _gr(source="writer",
-            exc=RuntimeError(f"레거시 {name}() 가 harness 외부에서 호출됨 — 우회 차단"),
+        _gr(RuntimeError(f"레거시 {name}() 가 harness 외부에서 호출됨 — 우회 차단"),  # ★ FIX[5]: exc 첫 위치인자
+            source="writer",
             module=__name__, func_name=name,
             context={"caller_chain": caller_names[:5]})
     except Exception:
@@ -1329,7 +1329,8 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
                 pass
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
             _chart = collect_chart_data(keyword, sector=sector, description=reason,
-                                        synonyms=_cand.get("synonyms")) or {}
+                                        synonyms=_cand.get("synonyms"),
+                                        related_terms=_profile.get('related_terms')) or {}
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
@@ -1464,7 +1465,12 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
                                            ref_datasets=_ref_ds_ts,
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
-            return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
+            # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함을 구분해 태깅(rank4). circuit_is_open()은
+            #   프로세스 전역(워커 스레드 안전), last_call_infra_incomplete()는 동일 스레드 직전 호출.
+            #   둘 중 하나면 infra_throttle → harness 가 재작성 대신 defer/backoff.
+            from shared.llm import last_call_infra_incomplete as _infra, circuit_is_open as _copen
+            _err = "infra_throttle" if (_infra() or _copen()) else "HTML 생성 실패"
+            return {"success": False, "keyword": keyword, "error": _err}
 
         result = process_draft(draft_html, collected=collected, platform="tistory",
                                out_dir=TISTORY_IMG_DIR)
@@ -1633,7 +1639,8 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
                 pass
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
             _chart = collect_chart_data(keyword, sector=sector, description=reason,
-                                        synonyms=_cand.get("synonyms")) or {}
+                                        synonyms=_cand.get("synonyms"),
+                                        related_terms=_profile.get('related_terms')) or {}
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
@@ -1768,7 +1775,10 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
                                            ref_datasets=_ref_ds,
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
-            return {"success": False, "keyword": keyword, "error": "HTML 생성 실패"}
+            # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함 구분 태깅(rank4) — 경제 네이버.
+            from shared.llm import last_call_infra_incomplete as _infra, circuit_is_open as _copen
+            _err = "infra_throttle" if (_infra() or _copen()) else "HTML 생성 실패"
+            return {"success": False, "keyword": keyword, "error": _err}
 
         result = process_draft(draft_html, collected=collected, platform="naver",
                                out_dir=NAVER_IMG_DIR)

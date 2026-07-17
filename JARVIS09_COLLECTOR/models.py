@@ -49,6 +49,11 @@ COLLECT_API_CAP      = 7    # 공식 데이터 API(kosis·ecos·dart·krx·finan
 _QUOTA_GROUP: dict[str, str] = {
     "academic": "paper", "kci": "paper",
     "kosis": "api", "ecos": "api", "dart": "api", "krx": "api", "finance": "api",
+    # ★ 국내 공공 경제 API 6종 (2026-07-17): SOURCE_TRUST_TIER 에선 tier 2(공식 API)인데
+    #   여기 누락돼 default "rest" 로 오분류 → tier2 라 뉴스(3)·웹(5)을 '나머지5' 슬롯에서
+    #   밀어내 뉴스 0건 사고. 반드시 tier 분류와 동치 유지 (라이브 재현: 뉴스 0→5).
+    "bok_official": "api", "customs": "api", "kofia": "api",
+    "fss": "api", "mlit": "api", "employment": "api",
     # 나머지(naver_news·news·kor_econ·web·web_data·blog·discover 등) → "rest"
 }
 

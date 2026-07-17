@@ -372,6 +372,57 @@ def _is_fixed_issue(iss: Issue) -> bool:
     return iss.kind == "draft_fixed" or str(iss.kind).startswith("fixed:")
 
 
+# ★ 인프라 사유(일시적 — 재작성 대상 아님, fingerprint 제외·backoff·defer 로 처리) kind 집합.
+#   콘텐츠 결함(draft_failed·draft_quality·factuality·engagement)은 *포함하지 않는다* —
+#   그건 재작성으로 고칠 수 있는 것. 여기엔 '아직 인프라가 안 풀렸다' 신호만.
+#   보수적으로 명시 kind 만(과대분류 시 진짜 코드버그가 abort 없이 max_attempts 소진).
+_INFRA_ISSUE_KINDS = frozenset({"infra_throttle"})
+
+
+def _is_infra_issue(iss: Issue) -> bool:
+    """일시적 인프라 사유 이슈인지 — fingerprint 제외·backoff·defer 대상.
+
+    인프라 실패의 지문 반복은 '재생성해도 동일'이 아니라 '아직 인프라가 안 풀렸다'의 신호이므로
+    abort 근거가 될 수 없다. 콘텐츠 결함(재작성으로 고칠 수 있는 것)은 여기 포함되지 않는다.
+    """
+    return iss.kind in _INFRA_ISSUE_KINDS
+
+
+def _backoff_infra_wait(action_def: "ActionDefinition", wd: Optional[Watchdog]) -> None:
+    """인프라-only 실패 후 다음 attempt 전 backoff — 스로틀 창이 지나가길 대기(rank7).
+
+    회로 쿨다운(LLM_CIRCUIT_COOLDOWN_SEC, 기본 90s)에 맞추되 action deadline 잔여 예산으로
+    캡(송출 여유 60s 남김), 잘게 쪼개 wd.beat() 해 워치독 freeze 오탐을 방지한다. 콘텐츠
+    결함엔 호출되지 않는다(즉시 재시도 유지 — 빠른 재작성).
+    """
+    import os as _os
+    try:
+        want = float(_os.getenv("LLM_CIRCUIT_COOLDOWN_SEC", "90") or "90")
+    except Exception:
+        want = 90.0
+    # deadline 잔여 예산으로 캡 — 무제한 대기·데드라인 초과 방지 (송출 여유 60s 남김)
+    if wd is not None and getattr(wd, "deadline_sec", None):
+        try:
+            _remain = wd.deadline_sec - wd.elapsed()
+            want = min(want, max(0.0, _remain - 60.0))
+        except Exception:
+            pass
+    if want <= 0:
+        return
+    _log.info(f"[harness] ⏳ 인프라 스로틀 backoff {want:.0f}s — 스로틀 창 회피 후 재시도")
+    print(f"  ⏳ [harness] 인프라 스로틀 — {want:.0f}s 대기 후 재시도(창 회피)")
+    _slept = 0.0
+    while _slept < want:
+        _chunk = min(10.0, want - _slept)
+        time.sleep(_chunk)
+        _slept += _chunk
+        if wd is not None:
+            try:
+                wd.beat()
+            except Exception:
+                pass
+
+
 def _find_resume_step(action_def: ActionDefinition, last_issues: list[Issue]) -> Optional[str]:
     """이전 시도의 issues 에서 *재실행 시작 step* 식별.
 
@@ -690,6 +741,8 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
         _curr_fp = frozenset(
             (iss.step, iss.kind, iss.detail[:80])
             for iss in unfixed_issues
+            if not _is_infra_issue(iss)   # ★ rank6: 인프라 이슈는 지문 제외 — 반복=미해결 인프라(스로틀),
+                                          #   재생성해도 동일이 아니라 '아직 안 풀림'. abort 근거 아님.
         )
         _prev_fp = state.get("__harness_fp__")
         state["__harness_fp__"] = _curr_fp
@@ -769,9 +822,31 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             )
             return result
 
-    # ── max_attempts 도달 — escalation (송출 절대 안 함) ──
-    result.escalation_reason = f"max_attempts({action_def.max_attempts}) 도달 — 검증 통과 실패"
+        # ── ★ rank7: 인프라-only 실패 → 다음 attempt 전 backoff (스로틀 창 회피) ──
+        #   스로틀은 '조금 기다리면 풀리는' 일시 장애. 즉시 재시도는 같은 창에 재진입해 또
+        #   절단당한다. 이번 시도의 미해결이 *전부* 인프라면 회로 쿨다운만큼(예산 내) 대기.
+        #   콘텐츠 결함이 하나라도 섞이면 즉시 재시도 유지(빠른 재작성).
+        if (attempt < action_def.max_attempts and unfixed_issues
+                and all(_is_infra_issue(i) for i in unfixed_issues)):
+            _backoff_infra_wait(action_def, wd)
+
+    # ── max_attempts 도달 ──
     last = result.issues_history[-1] if result.issues_history else []
+    # ★ rank8: 마지막 시도의 미해결이 *전부* 인프라(스로틀 등)면 하드 escalation 대신 deferred —
+    #   다음 cron/keeper 가 자연 재시도(스로틀 해소 후 1패스 가능). 콘텐츠 결함은 기존 escalation
+    #   유지(사용자 검토 필요). 발행(Layer4)은 어차피 안 함 — defer 는 '송출 안 함' 원칙과 정합.
+    _live_last = [i for i in last if not _is_fixed_issue(i)]
+    if _live_last and all(_is_infra_issue(i) for i in _live_last):
+        result.deferred = True
+        result.escalation_reason = (
+            f"인프라 스로틀 {action_def.max_attempts}회 지속 — 발행 연기(deferred), 다음 회차 재시도"
+        )
+        _log.warning(f"[harness] ⏸ 인프라 스로틀 지속 — deferred: {action_def.name}")
+        print(f"  ⏸ [harness] 인프라 스로틀 {action_def.max_attempts}회 지속 — 발행 연기(다음 회차 재시도)")
+        return result
+
+    # ── 콘텐츠 결함 등 — escalation (송출 절대 안 함) ──
+    result.escalation_reason = f"max_attempts({action_def.max_attempts}) 도달 — 검증 통과 실패"
     _log.error(f"[harness] ❌ escalation — {action_def.name}: {result.escalation_reason}")
     _notify_escalation(action_def.name, action_def.max_attempts, last, reason=result.escalation_reason)
     return result

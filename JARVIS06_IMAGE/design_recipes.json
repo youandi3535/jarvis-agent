@@ -498,6 +498,28 @@
       "template": "<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"UTF-8\"><style>\n@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800;900&display=swap');\n*{margin:0;padding:0;box-sizing:border-box;font-family:'Noto Sans KR',sans-serif}\n.pg{width:1280px;background:var(--soft);display:flex;flex-direction:column}\n.sp{display:flex;min-height:480px}\n.sl{flex:0 0 460px;background:linear-gradient(160deg,var(--hero0),var(--hero1));padding:52px 48px;position:relative;overflow:hidden}\n.sl::before{content:\"\";position:absolute;right:-90px;top:-90px;width:300px;height:300px;border-radius:50%;background:var(--a1);opacity:.12}\n.sl::after{content:\"\";position:absolute;left:-60px;bottom:-60px;width:200px;height:200px;border-radius:50%;background:var(--a2);opacity:.1}\n.eb{display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border:1px solid var(--eyebrow);border-radius:100px;color:var(--eyebrow);font-size:14px;font-weight:700;position:relative;z-index:1}\n.eb::before{content:\"\";width:7px;height:7px;border-radius:50%;background:var(--eyebrow)}\nh1{color:#fff;font-size:44px;font-weight:900;line-height:1.1;margin:20px 0 12px;letter-spacing:-.022em;position:relative;z-index:1}\n.sub{color:rgba(255,255,255,.62);font-size:17px;line-height:1.55;position:relative;z-index:1}\n.hs{margin-top:36px;position:relative;z-index:1}.hs:empty{display:none}\n.sr{flex:1;padding:28px 32px;background:#fff;display:flex;flex-direction:column;gap:20px}\nsection{background:var(--soft);border-radius:18px;padding:24px 26px;border:1px solid var(--grid)}\nsection:has([data-jarvis-empty]){display:none}\nsection.fl{flex:1}\n.bot{padding:20px 32px;background:var(--soft);display:flex;flex-direction:column;gap:18px}\n.mc{display:flex;gap:14px}.mc:empty{display:none}\nsection.wd{background:#fff;border-radius:18px;padding:24px 26px;border:1px solid var(--grid)}\nfooter{padding:16px 32px;border-top:1px solid var(--grid);display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:14px}\n.br{font-weight:800;color:var(--ink)}\n</style></head><body><div class=\"pg\">\n  <div class=\"sp\">\n    <div class=\"sl\">\n      <span class=\"eb\">{{EYEBROW}}</span>\n      <h1>{{TITLE}}</h1><p class=\"sub\">{{SUBTITLE}}</p>\n      <div class=\"hs\">{{HERO_STATS}}</div>\n    </div>\n    <div class=\"sr\">\n      <section class=\"fl\">{{CHART_1}}</section>\n      <section class=\"fl\">{{CHART_2}}</section>\n    </div>\n  </div>\n  <div class=\"bot\">\n    <div class=\"mc\">{{MINI_CARDS}}</div>\n    <section class=\"wd\">{{CHART_3}}</section>\n  </div>\n  <footer><span>{{SOURCE}}</span><span class=\"br\">{{BRAND}}</span></footer>\n</div></body></html>",
       "source": "learned-library",
       "created": "2026-07-16"
+    },
+    {
+      "id": "midnight-vault-gold",
+      "name": "미드나이트 볼트 골드",
+      "aesthetic": "핀테크 프리미엄(신뢰·딥네이비·골드)",
+      "hero": [
+        "#0A1330",
+        "#152848"
+      ],
+      "ink": "#10131F",
+      "a1": "#C9A227",
+      "a1s": "#E9D9A8",
+      "a2": "#B01E44",
+      "a2s": "#F0A8B8",
+      "soft": "#FAF8F3",
+      "muted": "#6B7280",
+      "eyebrow": "#E9C46A",
+      "grid": "#EFE9DA",
+      "hero_texture": "glow",
+      "card_radius": 24,
+      "source": "learned",
+      "created": "2026-07-17"
     }
   ]
 }

@@ -32,6 +32,13 @@ except ImportError:
 
 _job_start_ts: dict[str, float] = {}
 
+# ★ EventListener 이중 부착 방어 (전수감사 2026-07-17): attach_listeners 가 정상 부팅에서
+#   jarvis_daemon.py(직접) + scheduler_agent.register()(autoregister) 두 경로로 호출돼
+#   리스너가 100% 이중 부착 → job_runs 2행 적재·GUARDIAN 2중 보고로 통계·자가학습 지문 오염.
+#   같은 scheduler 인스턴스면 1회만 부착(단일 데몬이라 id() 키 안정). 데몬 재시작 시 모듈
+#   재로드로 자동 리셋. CLAUDE_SCHEDULER.md '단일 부착·중복 금지' 준수.
+_ATTACHED: set[int] = set()
+
 
 # ── 잡 → 파이프라인 엣지 매핑 — job_registry.DEFAULT_JOBS 에서 자동 파생 ──
 # 새 잡에 edges 필드를 추가하면 이 매핑도 자동 갱신됨 (하드코딩 금지).
@@ -52,23 +59,36 @@ def _on_job_submitted(event):
     except Exception:
         pass
     try:
-        from shared.pipeline_activity import mark_active
+        from shared.pipeline_activity import mark_active, mark_busy
         # infra_heartbeat → e11(J00→J01): 데몬이 살아있음을 J01에 60초마다 알림
         # 그 외 잡은 job_registry edges 필드에 정의된 엣지만 발화
         edges = ["e11"] if event.job_id == "infra_heartbeat" else (_JOB_EDGES.get(event.job_id) or [])
         if edges:
             mark_active(edges)
+        # J04 busy 신호 — infra_heartbeat 제외 (너무 잦음)
+        if event.job_id != "infra_heartbeat":
+            mark_busy("j04", f"잡 실행: {event.job_id}", ttl=3600)
     except Exception:
         pass
 
 
 def _on_job_executed(event):
     """EVENT_JOB_EXECUTED — 잡 성공 완료."""
+    try:
+        from shared.pipeline_activity import clear_busy
+        clear_busy("j04")
+    except Exception:
+        pass
     _record(event, success=True, error=None)
 
 
 def _on_job_error(event):
     """EVENT_JOB_ERROR — 잡 예외."""
+    try:
+        from shared.pipeline_activity import clear_busy
+        clear_busy("j04")
+    except Exception:
+        pass
     err = ""
     try:
         if getattr(event, "exception", None) is not None:
@@ -132,7 +152,11 @@ def attach_listeners(scheduler: Any) -> bool:
 
     - job_history 3종 (submitted/executed/error)
     - GUARDIAN error collector (EVENT_JOB_ERROR 공유, apscheduler import 단일 진입점 유지)
+
+    ★ idempotent: 같은 scheduler 에 이미 부착됐으면 즉시 True (이중 부착 방지).
     """
+    if id(scheduler) in _ATTACHED:
+        return True
     try:
         from apscheduler.events import (
             EVENT_JOB_SUBMITTED, EVENT_JOB_EXECUTED, EVENT_JOB_ERROR,
@@ -149,6 +173,7 @@ def attach_listeners(scheduler: Any) -> bool:
         except ImportError:
             pass
 
+        _ATTACHED.add(id(scheduler))
         return True
     except Exception as e:
         print(f"  ⚠️ JARVIS04 listener attach 실패: {e}")

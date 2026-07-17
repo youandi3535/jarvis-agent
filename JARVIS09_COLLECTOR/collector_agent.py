@@ -48,7 +48,9 @@ def _on_theme_queued(payload: dict, source: str) -> None:
                       module=__name__, func_name="_on_theme_queued")
             return
 
-        # COLLECTION_READY 발행 — JARVIS02가 구독
+        # ★ COLLECTION_READY 발행 (전수감사 FIX[8]): 현재 리포 전역 구독자 0 — 무소비 발행
+        #   (종전 'JARVIS02가 구독' 주석은 문서 드리프트). 테마주 수집 결과 재연결/제거는
+        #   JARVIS09 owner 판단 (감사 deferred[20] — topic_pack/collect_research 대체 여부 확인 후).
         publish(
             EventType.COLLECTION_READY,
             "COLLECTOR",
@@ -141,6 +143,11 @@ except Exception:
 
 
 def register(scheduler, bus) -> None:
-    """데몬 부팅 시 자동 호출 — THEME_QUEUED 구독."""
-    bus.subscribe(bus.EventType.THEME_QUEUED, _on_theme_queued)
-    log.info("[Collector] THEME_QUEUED 구독 완료")
+    """데몬 부팅 시 자동 호출.
+
+    ★ THEME_QUEUED 구독 제거 (전수감사 2026-07-17 — 무소비 난비): THEME_QUEUED→_on_theme_queued
+      →collect_for_theme 결과가 COLLECTION_READY 구독자 0으로 통째 폐기되던 상시 낭비. radar_main
+      이 트리거를 더 이상 발행하지 않고, 실제 테마 발행은 trend_theme_writer 가 collect_for_theme 를
+      직접 호출(자급자족)한다. _on_theme_queued 핸들러는 재연결 대비 보존(현재 미배선 — 감사 deferral).
+    """
+    log.info("[Collector] 등록 완료 (THEME_QUEUED 투기적 사전수집 폐지 — 무소비 난비 제거)")

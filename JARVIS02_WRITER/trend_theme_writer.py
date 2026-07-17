@@ -82,14 +82,39 @@ _TODAY_DOW = ["월", "화", "수", "목", "금", "토", "일"][_TODAY.weekday()]
 #  ① 데이터 수집 — collect_stocks_data 위임
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _collect(theme: str) -> dict:
-    """테마 키워드 → 종목 데이터. collect_theme.collect_stocks_data 위임."""
+def _collect(theme: str, sector: str = "", related_terms: list | None = None,
+             profile: dict | None = None) -> dict:
+    """테마 키워드 → 종목 데이터. collect_theme.collect_stocks_data 위임.
+
+    ★ related_terms 미제공 시 자비스03 keyword_profile() 로 자체 조회 (사용자 박제
+    2026-07-17 — "파운드리"→가구주 오매칭 사고 근본수정). 종목 검색은 테마명 단독
+    fuzzy-match 로는 "파운드리"처럼 네이버 공식 카탈로그와 겹치는 부분문자열이 없는
+    키워드에서 LLM 폴백에 의존하게 되고, 그 LLM 폴백은 266개 평문 목록에서 번호 하나를
+    고르는 방식이라 위치편향으로 무관한 테마를 잘못 고르는 사고가 반복됐다. 관련어
+    (예: "반도체 위탁생산")를 함께 매칭하면 결정론적 부분문자열 일치로 해결되는 경우가
+    대부분이라 여기서 항상 확보해 내려보낸다.
+
+    ★ profile 관통 (사용자 박제 2026-07-17 — '라면'→종목 0개 사고 근본수정): 프로필
+    전체(summary·entity_type 포함)를 collect_stocks_data 까지 내려보내 LLM 상위
+    카테고리 매핑('라면'→'음식료업종')이 가능하도록 한다. profile 미제공 시 여기서
+    keyword_profile() 로 1회 조회하고, 그 결과에서 related_terms 도 함께 파생한다.
+    """
     # ★ 단일 진입점 — 새 테마 = 전체 상태 초기화
     from JARVIS09_COLLECTOR.run_context import new_run as _new_run
     _new_run(theme)
+    if profile is None or related_terms is None:
+        try:
+            from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
+            _p = _kw_prof(theme, sector) or {}
+            if profile is None:
+                profile = _p
+            if related_terms is None:
+                related_terms = _p.get("related_terms")
+        except Exception:
+            pass
     try:
         from JARVIS02_WRITER.collect_theme import collect_stocks_data
-        return collect_stocks_data(theme)
+        return collect_stocks_data(theme, related_terms=related_terms, profile=profile)
     except Exception as e:
         print(f"  ❌ [theme] collect_stocks_data 실패: {e}")
         _g_report("writer", e, module=__name__)
@@ -149,7 +174,12 @@ def _build_blocks(collected, platform: str, img_dir: Path,
     draft_html = generate_theme_html(collected, supreme_block, platform=platform,
                                      gate_feedback=gate_feedback)
     if not draft_html:
-        return {"success": False, "error": "Pass-1 대본 생성 실패", "blocks": [],
+        # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함 구분 태깅(rank4) — 테마.
+        #   circuit_is_open()은 프로세스 전역(워커 스레드 안전), last_call_infra_incomplete()는
+        #   동일 스레드 직전 호출. 둘 중 하나면 infra_throttle → harness 가 defer/backoff.
+        from shared.llm import last_call_infra_incomplete as _infra, circuit_is_open as _copen
+        _err = "infra_throttle" if (_infra() or _copen()) else "Pass-1 대본 생성 실패"
+        return {"success": False, "error": _err, "blocks": [],
                 "title": "", "content": "", "html": ""}
 
     # ── JARVIS06: 이미지 생성 + 블록 조립 (process_draft v2 — collected) ──────
@@ -316,7 +346,7 @@ def run_tistory_theme(theme: str, sector: str = "",
 
     # ── ① 데이터 수집 ───────────────────────────────────────────
     if stocks_data is None:
-        stocks_data = _collect(theme)
+        stocks_data = _collect(theme, sector=sector)
     if not stocks_data.get("stocks"):
         _tg(f"⚠️ [THEME-TISTORY] 종목 데이터 없음 — 발행 건너뜀: {theme}")
         if _preloaded_driver:
@@ -343,7 +373,7 @@ def run_naver_theme(theme: str, sector: str = "",
     _gd("run_naver_theme")
     print(f"\n  🟢 [THEME-NAVER] 테마 발행 시작: {theme}")
     if stocks_data is None:
-        stocks_data = _collect(theme)
+        stocks_data = _collect(theme, sector=sector)
     if not stocks_data.get("stocks"):
         _tg(f"⚠️ [THEME-NAVER] 종목 데이터 없음 — 발행 건너뜀: {theme}")
         return {"success": False, "url": "", "keyword": theme, "error": "종목 데이터 없음"}
@@ -460,6 +490,22 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             print("  ⏭️ [② 수집] 이전 시도 종목 0개 — collect 재실행 스킵 (결과 동일 예상)")
             return {}
 
+        # ★ 키워드 단독 전송 금지 (사용자 박제 2026-07-03 — ADR 013 강제):
+        #   테마 키워드도 자비스03 프로필(정의·관련어)을 동봉해 JARVIS09 에 전달.
+        #   ★ 종목 검색 관련어 근본수정 (사용자 박제 2026-07-17 — "파운드리"→가구주 오매칭
+        #   사고): 리서치 스레드가 시작하기 *전* 동기로 1회만 조회해 리서치·종목 수집
+        #   양쪽이 재사용 — 중복 LLM 호출 방지 + related_terms 를 _collect 에도 공급.
+        _prof, _angle = {}, ""
+        try:
+            from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
+            _prof = _kw_prof(state["theme"], state.get("sector", "")) or {}
+            _angle = (_prof.get("summary") or "").strip()
+            if _angle:
+                state["theme_profile"] = _prof
+                print(f"  🏷️ [THEME] 자비스03 프로필: {_angle[:60]}")
+        except Exception:
+            pass
+
         _col_exec = _TExec(max_workers=1)
 
         def _run_jarvis09():
@@ -467,18 +513,6 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
 
             반환: {"docs": [...], "pack": dict|None}
             """
-            # ★ 키워드 단독 전송 금지 (사용자 박제 2026-07-03 — ADR 013 강제):
-            #   테마 키워드도 자비스03 프로필(정의·관련어)을 동봉해 JARVIS09 에 전달.
-            _angle = ""
-            try:
-                from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
-                _prof = _kw_prof(state["theme"], state.get("sector", ""))
-                _angle = (_prof.get("summary") or "").strip()
-                if _angle:
-                    state["theme_profile"] = _prof
-                    print(f"  🏷️ [THEME] 자비스03 프로필: {_angle[:60]}")
-            except Exception:
-                pass
             try:
                 if os.getenv("RESEARCH_FIRST", "1") != "0":
                     from JARVIS09_COLLECTOR import collect_research
@@ -515,7 +549,8 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             _col_fut = None
 
         # 종목 데이터 수집 (주식 시세·재무)
-        data = _collect(state["theme"])
+        data = _collect(state["theme"], sector=state.get("sector", ""),
+                        related_terms=_prof.get("related_terms"), profile=_prof)
 
         # ★ 다소스 결손 분리 (사용자 박제 2026-07-04 — 경제 파이프라인과 동렬화, ERRORS [351]):
         #   종목(stocks)이 0개여도 JARVIS09 다소스 리서치(논문·뉴스·DART·ECOS·웹 등)를
@@ -663,8 +698,15 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         # [L3] 단일 플랫폼 대본 규정 준수 검증 (순수 "발견"만)
         draft = state.get(draft_key) or {}
         if not draft.get("success"):
-            issues.append(Issue(step=step_name, kind="draft_failed",
-                detail=f"대본 생성 실패: {draft.get('error', 'unknown')}"))
+            # ★ 인프라 스로틀(일시적)과 콘텐츠 결함 분리(rank5). detail 은 fingerprint 안정성 위해
+            #   고정 문자열(attempt 변동값 금지) — harness 가 fingerprint 제외·backoff·defer 처리.
+            _derr = str(draft.get("error", "unknown"))
+            _is_infra = (_derr == "infra_throttle")
+            issues.append(Issue(
+                step=step_name,
+                kind="infra_throttle" if _is_infra else "draft_failed",
+                detail=("인프라 스로틀 — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"
+                        if _is_infra else f"대본 생성 실패: {_derr}")))
             return issues
         di_list = _layer3_verify_draft(draft, platform)
         for di in di_list:
@@ -794,17 +836,21 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         # 재생성 필요성 표시 (재시도 시 이미지 폴더 불필요 리셋 방지)
         # ★ 리뷰 확정 수정 (2026-07-03): 해당 step 의 *어떤* 이슈든(draft_failed 뿐 아니라
         #   prepublish 게이트 factuality/engagement 포함) 있으면 skip 금지 — 재작성 순환 보존.
-        _has_step_issue = any(i.step == step_name for i in non_draft)
-        if not raw_strs and not _has_step_issue:
-            state[f"_{draft_key}_skip_regen"] = True   # 대본 이슈 없음 → 재생성 불필요
         if raw_strs:
             fixed_strs, unfixed_strs = _fx(state, draft_key, platform, raw_strs, "theme")
             for s in fixed_strs:
                 fixed_all.append(Issue(step=step_name, kind="draft_fixed", detail=s))
             for s in unfixed_strs:
                 unfixed_all.append(Issue(step=step_name, kind="draft_invalid", detail=s))
-            # 수정 불가 이슈가 있으면 재생성 필요, 없으면 인라인 패치로 해결
-            state[f"_{draft_key}_skip_regen"] = not bool(unfixed_strs)
+        # ★ 진짜결함 수정 (재현테스트로 발견): skip_regen 을 raw_strs(구조 이슈) 인라인
+        #   패치 성공 여부만으로 판단하면, 같은 step 의 factuality/engagement 이슈가
+        #   non_draft 에 남아있어도 skip_regen=True 로 덮어써져 대본이 영원히 재생성
+        #   되지 않는 무한 루프 발생(매력도 미달이 재검증마다 재발해도 대본 불변 —
+        #   "attempt=1 step=③ 대본: 매력도 미달" 이 재시도에서도 그대로 반복되는 원인).
+        #   unfixed_all(구조+게이트 통틀어) 에 이 step 이슈가 하나라도 남아있는지로
+        #   단일 판단 — 이 step 이 완전히 깨끗할 때만 재생성 스킵.
+        _remaining_step_issue = any(i.step == step_name for i in unfixed_all)
+        state[f"_{draft_key}_skip_regen"] = not _remaining_step_issue
 
         # ★ 회복 불가 조건 → abort (harness 즉시 차단, 2차 시도 낭비 없음)
         _has_data_empty = any(i.kind == "data_empty" for i in non_draft)
@@ -959,7 +1005,12 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         _ts_res = _ts_st.get("ts_pub_result", {"success": False, "url": "", "keyword": theme})
         if not _ts_result.delivered:
             _reason = getattr(_ts_result, "escalation_reason", "최대 시도 초과 또는 abort")
-            _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
+            if getattr(_ts_result, "deferred", False):
+                # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도.
+                print(f"  ⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
+                _tg(f"⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n테마: {theme}")
+            else:
+                _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
 
     _mark_pub(False)  # ★ 테마 발행 완료 — background alias 강등 해제
     return {"theme": theme, "tistory": _ts_res, "naver": _nv_res, "data_empty": _data_empty}

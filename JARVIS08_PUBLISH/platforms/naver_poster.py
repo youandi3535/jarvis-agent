@@ -258,9 +258,6 @@ def _paste(text: str):
     time.sleep(0.8)
 
 
-# 첫 번째 이미지 업로드 여부 추적
-_first_image_uploaded = False
-
 def _cgevent_paste():
     """
     CGEvent kCGHIDEventTap으로 Cmd+V 전송.
@@ -282,7 +279,6 @@ def _upload_image(img_path: str, driver=None):
     """사진 아이콘 → Cmd+Shift+G → 전체 경로 직접 입력 → 파일 업로드
     (파일명 Spotlight 검색 방식 폐기 — 검색 결과 없을 때 무한 대기 버그 수정)
     """
-    global _first_image_uploaded
     import pyautogui as _pg, pyperclip
     abs_path = str(Path(img_path).resolve())
     fname = Path(abs_path).name
@@ -322,8 +318,6 @@ def _upload_image(img_path: str, driver=None):
     # 6) Enter 한 번 더 → 열기(업로드) 확인
     _pg.press('return')
     time.sleep(5.0)
-
-    _first_image_uploaded = True
 
     # ★ 이미지 업로드 후 "사진 첨부 방식" 팝업 자동 닫기
     # 네이버 에디터가 이미지 붙여넣기 후 팝업을 자동 표시할 수 있음.
@@ -1004,8 +998,6 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             time.sleep(0.5)
 
         # blocks가 있으면 순서대로, 없으면 텍스트 전체
-        DIVIDER = "　" * 15 + "─" * 20 + "　" * 15  # 구분선 (가운데 정렬)
-
         def _paste_text(t):
             """텍스트 삽입 — pyperclip(OS 클립보드) + Selenium ActionChains Cmd+V (CDP 기반).
             Chrome find bar 열림 여부·OS 포커스 무관 (ERRORS [183])."""

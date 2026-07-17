@@ -48,14 +48,13 @@ def _register_capability() -> None:
         declare(
             agent_id   = "jarvis08_publish",
             domain     = "publish",
-            intents    = [
-                "publish.naver", "publish.tistory",
-                "publish.cookie.refresh.naver", "publish.cookie.refresh.tistory",
-            ],
+            # ★ FIX[8] (전수감사 2026-07-17): publish.* 인텐트는 dispatchers SAFE/APPROVAL·router
+            #   어디에도 미배선(vestigial)이라 자유문장이 매핑되면 DEFERRED→사용자 에러. 실제 발행은
+            #   writer harness send 콜백(JARVIS08 platforms)으로 동작하므로 라우터 인텐트 불필요 → 제거.
+            #   (향후 publish.* 를 직접 라우팅 타깃으로 둘지는 배선 시 재선언)
+            intents    = [],
             tools      = [],
-            requires_approval = [
-                "publish.naver", "publish.tistory",
-            ],
+            requires_approval = [],
             cost_class = "high",   # 외부 발행 = high impact
             description= (
                 "발행 도메인 단일 진입점 — 네이버·티스토리 Selenium. "

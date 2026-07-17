@@ -152,28 +152,41 @@ def handle_command(cmd: str, reply_fn=None) -> bool:
     import jarvis_daemon as _dm
     _send = reply_fn or _dm._send_tg
 
-    if cmd == "/status":
-        _send(build_status())
-        return True
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j00", f"명령 처리 {cmd}", ttl=60)
+    except Exception:
+        pass
 
-    if cmd in ("/restart", "/restart_daemon"):
-        _send("🔄 JARVIS 재시작 중... 5초 후 자동 재기동됩니다.")
-        log.info("🔄 텔레그램 /restart 명령 — 데몬 재시작")
-        _spawn_restart(delay=5)
-        if _dm._sched:
-            _dm._sched._shutdown = True
-        _dm._daemon_shutdown.set()
-        return True
+    try:
+        if cmd == "/status":
+            _send(build_status())
+            return True
 
-    if cmd == "/quit":
-        _send("🛑 JARVIS 데몬 종료 중... (10초 내 종료)\n다시 시작: /start")
-        log.info("🛑 텔레그램 /quit 명령 — 데몬 종료")
-        if _dm._sched:
-            _dm._sched._shutdown = True
-        _dm._daemon_shutdown.set()
-        return True
+        if cmd in ("/restart", "/restart_daemon"):
+            _send("🔄 JARVIS 재시작 중... 5초 후 자동 재기동됩니다.")
+            log.info("🔄 텔레그램 /restart 명령 — 데몬 재시작")
+            _spawn_restart(delay=5)
+            if _dm._sched:
+                _dm._sched._shutdown = True
+            _dm._daemon_shutdown.set()
+            return True
 
-    return False
+        if cmd == "/quit":
+            _send("🛑 JARVIS 데몬 종료 중... (10초 내 종료)\n다시 시작: /start")
+            log.info("🛑 텔레그램 /quit 명령 — 데몬 종료")
+            if _dm._sched:
+                _dm._sched._shutdown = True
+            _dm._daemon_shutdown.set()
+            return True
+
+        return False
+    finally:
+        try:
+            from shared.pipeline_activity import clear_busy as _cb
+            _cb("j00")
+        except Exception:
+            pass
 
 
 # ── 자유문장 라우터 (JARVIS01) 연동 ────────────────────────────
@@ -205,6 +218,11 @@ def handle_safe_intent(intent: str, params: dict | None = None) -> bool:
 
 def _handle_architect_design(params: dict) -> bool:
     """architect.design SAFE 인텐트 — 기획서 산출 + exec_plan 버튼 송출."""
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j00", "시스템 설계", ttl=600)
+    except Exception:
+        pass
     import jarvis_daemon as _dm
     user_intent = (params.get("user_intent") or params.get("intent_text") or "").strip()
     if not user_intent:
@@ -297,6 +315,11 @@ def _handle_architect_design(params: dict) -> bool:
                 _dm._send_tg(f"  ❌ 예외: {str(e)[:200]}\n⛔ 구현 중단 ({i-1}/{n})")
                 return
         _dm._send_tg(f"🎉 구현 완료 — {ok_n}/{n}단계 성공")
+        try:
+            from shared.pipeline_activity import clear_busy as _cb
+            _cb("j00")
+        except Exception:
+            pass
 
     _threading.Thread(target=_auto_exec, daemon=True, name="arch_auto_exec").start()
     return True

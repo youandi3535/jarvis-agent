@@ -745,7 +745,7 @@ def _run_self_repair_phase(label: str) -> dict:
         log(f"⚠️ [{label}] 자가진단 페이즈 예외 (발행은 진행): {_e}")
         try:
             from JARVIS07_GUARDIAN.error_collector import report as _gr
-            _gr(source="scheduler", exc=_e,
+            _gr(_e, source="scheduler",   # ★ FIX[5]: exc 첫 위치인자 (exc= 키워드 미존재)
                 module="JARVIS02_WRITER.scheduler._run_self_repair_phase",
                 func_name="_run_self_repair_phase",
                 context={"label": label, "elapsed": elapsed})

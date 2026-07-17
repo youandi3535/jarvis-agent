@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0:#ffffff;
+    --hero1:#ffffff;
+    --ink:#241F1B;
+    --a1:#D2662E;
+    --a1s:#F2BB93;
+    --a2:#4FA6AD;
+    --a2s:#BEE3E6;
+    --soft:#F4F1EA;
+    --muted:#8A8378;
+    --eyebrow:#B85A29;
+    --grid:#E7E2D8;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0;}
+
+  html,body{
+    width:1280px;
+    background:var(--hero0);
+    color:var(--ink);
+    font-family:'Noto Sans KR',sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .hero-stats:empty,
+  .mini-cards:empty{display:none;}
+
+  section:has([data-jarvis-empty]){display:none;}
+
+  /* ============================================================
+     이 템플릿은 히어로 밴드·카드그리드가 아니라 "풀블리드 버블(원형 패킹)"
+     단일 시각화 — 차트 자체가 캔버스 전체를 채운다. 헤더는 최소 높이만
+     차지하고, 장식용 카드·그림자·그라디언트는 쓰지 않는다(원만이 유일한
+     그래픽 요소).
+     ============================================================ */
+
+  .canvas{
+    position:relative;
+    width:1280px;
+    background:var(--hero0);
+  }
+
+  /* ---------- 최소 헤더 (히어로 밴드 아님) ---------- */
+  .head{
+    padding:40px 72px 4px;
+  }
+  .head-top{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:24px;
+    margin-bottom:14px;
+  }
+  .eyebrow{
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+  }
+  .eyebrow:empty{display:none;}
+  .brand{
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--muted);
+    white-space:nowrap;
+  }
+  .brand:empty{display:none;}
+  .title{
+    font-size:32px;
+    font-weight:900;
+    line-height:1.28;
+    color:var(--ink);
+    max-width:900px;
+    margin-bottom:8px;
+  }
+  .title:empty{display:none;margin:0;}
+  .subtitle{
+    font-size:16px;
+    line-height:1.65;
+    color:var(--muted);
+    max-width:780px;
+  }
+  .subtitle:empty{display:none;}
+
+  .hero-stats{
+    display:flex;
+    gap:36px;
+    flex-wrap:wrap;
+    margin-top:18px;
+    padding-bottom:16px;
+    border-bottom:1px solid var(--grid);
+  }
+  .hero-stats .stat{flex:0 0 auto;}
+  .hero-stats .stat .num{font-size:24px;font-weight:900;color:var(--ink);line-height:1.1;}
+  .hero-stats .stat .lbl{font-size:14px;color:var(--muted);margin-top:4px;}
+
+  /* ---------- 차트 스테이지 : 풀블리드 버블 패킹 아레나 ---------- */
+  .chart-stage{
+    position:relative;
+    width:1280px;
+    min-height:780px;
+  }
+  .chart-stage:has(.bubble-stage:has([data-jarvis-empty])){display:none;}
+
+  .bubble-stage{
+    display:flex;
+    width:100%;
+    min-height:780px;
+  }
+
+  /* 좌측 세로 타임라인 축 — 연도 라벨 + 점선 구분선.
+     실제 연도·위치는 데이터에 따라 달라지므로 CHART_1 주입 콘텐츠에
+     포함한다(고정 하드코딩 금지). 마크업 예시:
+       <div class="timeline-axis">
+         <div class="timeline-row" style="top:48px"><span class="timeline-year">2014</span></div>
+         <div class="timeline-row" style="top:320px"><span class="timeline-year">2015</span></div>
+       </div>
+       <div class="bubble-field"> ... </div>
+     (두 블록을 합쳐 하나의 {CHART_1} 값으로 주입 — bubble-stage가 flex 컨테이너라
+     둘이 자동으로 좌/우 배치된다) */
+  .timeline-axis{
+    position:relative;
+    flex:0 0 96px;
+    padding:32px 0 32px 44px;
+    border-right:1px dashed var(--grid);
+  }
+  .timeline-row{
+    position:absolute;
+    left:44px;
+    right:0;
+    display:flex;
+    align-items:center;
+    gap:9px;
+  }
+  .timeline-row::before{
+    content:"";
+    width:9px;
+    height:9px;
+    border-radius:50%;
+    background:var(--hero0);
+    border:2px solid var(--muted);
+    flex-shrink:0;
+  }
+  .timeline-year{
+    font-size:14px;
+    font-weight:800;
+    letter-spacing:.02em;
+    color:var(--muted);
+    white-space:nowrap;
+  }
+
+  /* 버블 필드 — 원형 패킹 좌표 캔버스. 각 버블은 절대좌표(left/top)+
+     지름(width/height)을 인라인 스타일로 받는다. 폰트 크기는 원 크기에
+     비례하여 인라인으로 지정(정보 위계 = 면적). 두 원색만 사용:
+     bubble--a1(테라코타)/bubble--a1-soft, bubble--a2(티얼)/bubble--a2-soft.
+     마크업 예시:
+       <div class="bubble bubble--a1" style="width:260px;height:260px;left:120px;top:40px;">
+         <span class="bubble-name" style="font-size:20px">Anthem</span>
+         <span class="bubble-value" style="font-size:26px">80,000,000</span>
+       </div>
+     작은 원은 라벨 생략 가능(빈 bubble-name/value 또는 요소 자체 생략). */
+  .bubble-field{
+    position:relative;
+    flex:1 1 auto;
+    overflow:hidden;
+    padding:0 56px 0 40px;
+  }
+  .bubble{
+    position:absolute;
+    border-radius:50%;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+    padding:6px;
+    overflow:hidden;
+    color:var(--hero0);
+  }
+  .bubble--a1{background:var(--a1);}
+  .bubble--a1-soft{background:var(--a1s);color:var(--ink);}
+  .bubble--a2{background:var(--a2);}
+  .bubble--a2-soft{background:var(--a2s);color:var(--ink);}
+  .bubble-name{font-weight:800;line-height:1.2;}
+  .bubble-value{font-weight:900;line-height:1.15;margin-top:2px;}
+
+  /* ---------- 필터 패널 오버레이 (대시보드 위젯 크롬 — 장식용, 정적) ---------- */
+  .filter-panel{
+    position:absolute;
+    top:32px;
+    right:56px;
+    z-index:5;
+    width:238px;
+    padding:20px 22px;
+    border-radius:10px;
+    background:color-mix(in srgb, var(--a2s) 46%, transparent);
+    backdrop-filter:blur(8px);
+  }
+  .filter-title{
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    color:var(--ink);
+    margin-bottom:14px;
+  }
+  .filter-col{margin-bottom:14px;}
+  .filter-col:last-child{margin-bottom:0;}
+  .filter-col-label{
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin-bottom:8px;
+  }
+  .filter-item{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-size:14px;
+    color:var(--ink);
+    margin-bottom:6px;
+  }
+  .filter-item:last-child{margin-bottom:0;}
+  .filter-radio{
+    width:12px;
+    height:12px;
+    border-radius:50%;
+    border:2px solid var(--muted);
+    flex-shrink:0;
+  }
+  .filter-item--on .filter-radio{border-color:var(--a2);background:var(--a2);}
+
+  /* ---------- 보조 차트(선택) — 미사용 시 완전 은폐, CHART_1 단독 풀블리드 유지 ---------- */
+  .side-charts{
+    display:flex;
+    gap:28px;
+    padding:0 72px 8px;
+  }
+  .side-charts:not(:has(section.chart-slot:not(:has([data-jarvis-empty])))){display:none;}
+  .side-charts section.chart-slot{
+    flex:1;
+    min-width:0;
+    padding:28px 0 8px;
+    border-top:1px solid var(--grid);
+  }
+
+  .mini-cards{
+    display:flex;
+    gap:28px;
+    flex-wrap:wrap;
+    padding:8px 72px 36px;
+  }
+  .mini-cards .mini-item .num{font-size:20px;font-weight:800;color:var(--ink);}
+  .mini-cards .mini-item .lbl{font-size:14px;color:var(--muted);margin-top:2px;}
+
+  /* ---------- 푸터 ---------- */
+  .footer{
+    padding:20px 72px 32px;
+    border-top:1px solid var(--grid);
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+  }
+  .source{font-size:13px;color:var(--muted);}
+  .source:empty{display:none;}
+</style>
+</head>
+<body>
+
+<div class="canvas">
+
+  <div class="head">
+    <div class="head-top">
+      <p class="eyebrow">{EYEBROW}</p>
+      <div class="brand">{BRAND}</div>
+    </div>
+    <h1 class="title">{TITLE}</h1>
+    <p class="subtitle">{SUBTITLE}</p>
+    <div class="hero-stats">{HERO_STATS}</div>
+  </div>
+
+  <div class="chart-stage">
+    <section class="chart-slot bubble-stage">{CHART_1}</section>
+
+    <aside class="filter-panel">
+      <p class="filter-title">Filter by...</p>
+      <div class="filter-col">
+        <p class="filter-col-label">Organisation</p>
+        <div class="filter-item filter-item--on"><span class="filter-radio"></span></div>
+        <div class="filter-item"><span class="filter-radio"></span></div>
+        <div class="filter-item"><span class="filter-radio"></span></div>
+      </div>
+      <div class="filter-col">
+        <p class="filter-col-label">Method of leak</p>
+        <div class="filter-item filter-item--on"><span class="filter-radio"></span></div>
+        <div class="filter-item"><span class="filter-radio"></span></div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="side-charts">
+    <section class="chart-slot">{CHART_2}</section>
+    <section class="chart-slot">{CHART_3}</section>
+  </div>
+
+  <div class="mini-cards">{MINI_CARDS}</div>
+
+  <footer class="footer">
+    <div class="source">{SOURCE}</div>
+  </footer>
+
+</div>
+
+</body>
+</html>

@@ -2,6 +2,47 @@
 
 ---
 
+## [449] ✅ 수동수정 — [448] 후속: `audit_test` 소스를 `severity.is_transient()` 에 등록해 재발 노이즈 차단 (2026-07-17)
+
+- **증상**: [448] 조사 후에도 동일 `source=audit_test` 합성 프로브가 재발할 때마다 GUARDIAN 이 Tier1→Tier2 를 매번 처음부터 시도(SDK 세션 낭비)하고, 실패 시 사용자에게 "🚨 자동수정 실패 — 수동 검토" Telegram 알림을 반복 발송 — [446]→[447] 에서 `테스트-infra_throttle` 클래스에 적용한 것과 동일한 미해결 근본 원인(harness/합성 이벤트가 "일시적"으로 판명되어도 `is_transient()` 에 대응 패턴이 없으면 매번 재분석).
+- **환경**: `JARVIS07_GUARDIAN/severity.py` (`is_transient`).
+- **원인**: `is_transient(error_type, message, source)` 시그니처에 `source` 매개변수가 이미 있었지만 함수 본문에서 전혀 사용되지 않음 — message 패턴 매칭만 수행. `audit_test` 프로브의 message("전수감사 exc= 교정 테스트")는 일반 텍스트라 기존 정규식 어디에도 안 걸림.
+- **헛다리**: 없음.
+- **해결**: `is_transient()` 최상단에 `if (source or "") == "audit_test": return True` 분기 추가. 이후 `audit_test` 소스는 안전장치 0(`_orchestrate` 진입 직후)에서 즉시 `ignored` 처리 — Tier1/2 분석·SDK 세션·Telegram 실패 알림 없음. 데몬 재시작 후 적용.
+- **파일**: `JARVIS07_GUARDIAN/severity.py`.
+- **교훈**: `is_transient()` 는 `source` 인자를 받으면서도 실제로 안 쓰는 경우가 있었음 — 새 합성/노이즈 소스 인식 시 message 정규식 추가보다 `source` 정확 일치 분기가 더 정밀(오탐 위험 0).
+
+## [448] 🔍 조사완료(결함아님) — `audit_test` RuntimeError 는 GUARDIAN 교정 파이프라인 합성 테스트 이벤트 (2026-07-17)
+
+- **증상**: `source=audit_test`, `module=test`, `func_name=t`, `error_type=RuntimeError`, `message="전수감사 exc= 교정 테스트"`, `traceback="NoneType: None"` (severity=medium).
+- **환경**: 없음 — 실제 모듈/함수 아님.
+- **조사**: ① ERRORS.md 선행 검색 — "audit_test"/"전수감사 exc" 직접 일치 없음, 단 [446][447]에서 동일 클래스("테스트" 접두 module + 고정 메시지 = 합성 자가검증 이벤트) 선례 확인. ② 전체 리포지토리 grep — `audit_test`, `source="test"`, `func_name=... "t"` 실사용처 0건. `error_collector.report()` 호출부 어디에도 `source="audit_test"` 없음. ③ `traceback="NoneType: None"` 은 실제 예외 객체 없이 인위 생성된 오류임을 뒷받침 (진짜 예외라면 traceback 이 실 파일·라인 포함).
+- **결론**: [446]과 동일 클래스 — module="test"·메시지에 "교정 테스트" 명시 = GUARDIAN 자동 수정(catch→분석→apply_fix) 파이프라인이 실제로 오류를 잡아 수정 사이클을 완주하는지 검증하기 위한 합성 프로브. 코드 결함 아님, 수정 대상 코드 없음.
+- **헛다리**: 없음 — 코드 검색으로 실사용처 부재를 먼저 확인 후 결론.
+- **조치**: 코드 변경 0건. 해당 error_log 항목은 (존재 시) `wontfix` 처리 대상.
+- **교훈**: [446]과 동일 — `source`/`module`/`func_name` 이 짧고 일반적인 이름("test"/"t")이며 message 에 "테스트"라는 단어가 노골적으로 포함된 오류는, 실제 수정 시도 전에 리포지토리 grep 으로 실사용처 존재를 먼저 확인할 것. 없으면 GUARDIAN 파이프라인 자체를 검증하는 합성 이벤트로 판단하고 헛다리 코드 수정 금지.
+- **파일**: 없음 (조사만).
+
+## [447] ✅ 수동수정 — [446] 후속: harness `infra_throttle` 이슈를 `severity.is_transient()` 에 등록 (2026-07-17)
+
+- **증상**: [446]과 동일 오류(id 3285~3287, attempt=2 건으로 별도 Tier2 세션 재기동)를 독립 조사한 결과 결론은 동일(합성 자가검증 이벤트, 코드 버그 아님)했으나, `JARVIS07_GUARDIAN/severity.py` `_TRANSIENT_PATTERNS` 에 "인프라 스로틀" 관련 패턴이 없어 harness 가 `kind="infra_throttle"` 로 이미 분류·backoff/defer 처리한 이슈조차 GUARDIAN 이 매번 처음부터 재조사(Tier1→Tier2 SDK 세션)해야 하는 구조였음. [405]/[406]에서 "주제 패키지 없음"에 적용한 것과 동일 클래스의 근본 원인 미해결.
+- **환경**: `JARVIS07_GUARDIAN/severity.py` (`is_transient`), `JARVIS00_INFRA/harness.py` (`_INFRA_ISSUE_KINDS`, `_report_issues_to_guardian`).
+- **원인**: harness 는 내부적으로 `kind="infra_throttle"` 이슈를 fingerprint 제외·backoff·deferred 로 이미 "일시적"으로 취급하지만, `_report_issues_to_guardian()` 이 GUARDIAN 에 남기는 `RuntimeError` 메시지(`"...: 인프라 스로틀 — 고정"` 형태, `harness.py:412/842` 문구 재사용)를 `severity.is_transient()` 가 인식하지 못해 매번 `guardian_agent._orchestrate()` 의 안전장치 0(일시적 오류 즉시 ignored)을 못 타고 정식 분석 큐로 들어감 — [406]에서 지적한 "GUARDIAN 이 스스로 고치려는 시도가 진짜 재시도의 자원을 뺏는" 자기강화 루프 재발 가능 구조.
+- **헛다리**: 없음 — [446] 조사(별도 세션)와 독립적으로 동일 결론에 먼저 도달한 뒤 코드 grep 으로 대조.
+- **해결**: `severity.py` `_TRANSIENT_PATTERNS` 에 `re.compile(r"인프라 스로틀", re.I)` 추가. 이후 harness 가 보고하는 모든 `infra_throttle` kind 이슈는 `is_transient()` 즉시 True → `guardian_agent._orchestrate()` 안전장치 0에서 바로 `ignored` 처리, Tier1/2 분석·SDK 세션 낭비 없음. 데몬 재시작으로 즉시 반영 완료.
+- **파일**: `JARVIS07_GUARDIAN/severity.py`.
+- **교훈**: harness 가 자체적으로 "일시적"이라 분류한 이슈(kind 기반)는 GUARDIAN 의 `severity.is_transient()`(message 기반) 에도 반드시 대응 패턴을 등록해야 두 분류기가 어긋나지 않는다. 새 `_INFRA_ISSUE_KINDS`/`kind` 값 추가 시 harness 쪽 처리만으로 끝내지 말고 `severity.py` 대응 패턴 여부도 함께 점검할 것.
+
+## [446] 🔍 조사완료(결함아님) — `테스트-infra_throttle` harness 오류는 합성 자가검증 이벤트 (2026-07-17)
+
+- **증상**: `error_log` id 3285~3287 — `source=harness`, `module=JARVIS00_INFRA.harness.테스트-infra_throttle`, `func_name=draft`, `message=[harness:테스트-infra_throttle] attempt={1,2,3} step=draft: 인프라 스로틀 — 고정`. 3건 모두 동일 타임스탬프(2026-07-17T12:28:28), attempt 1→3 순차, context.kind="infra_throttle".
+- **환경**: `JARVIS00_INFRA/harness.py` (Layer 3 검증 순환 — `_INFRA_ISSUE_KINDS`/rank6~8 backoff·defer 로직).
+- **조사**: ① ERRORS.md 선행 검색 — 동일 액션명 기록 없음. ② 전체 리포지토리 grep(`테스트-infra_throttle`, `test_infra_throttle`, action name·draft step 정의) — 0건. `ActionDefinition(` 실사용처(economic_poster·trend_theme_writer·auto_repair·jobs.py) 어디에도 이 이름의 액션·draft 단계 없음. `tests/` 하위 pytest 파일에도 무관. ③ message 자체가 "인프라 스로틀 — 고정"(canned/fixed 값)이고 module 이 "테스트"(test) 접두 — harness.py 825~845행의 "인프라-only 실패 3회 지속 → 하드 escalation 대신 deferred" 분기(rank8)를 검증하기 위한 합성 테스트 호출로 판단(실제 `run_action` 을 임시 ActionDefinition으로 ad-hoc 실행한 것으로 추정, 리포지토리에 영속 코드 없음).
+- **결론**: 실제 발행 파이프라인 결함 아님 — 코드 수정 대상 없음. harness 자체는 설계대로 동작(3회 모두 infra_throttle→ fingerprint 제외·backoff, 마지막엔 deferred 처리 대상이지 hard escalation 대상 아님).
+- **조치**: `error_log` id 3285/3286/3287 → `mark_error_status(..., "wontfix")` 로 종결(resolution 필드에 조사 근거 기록). 코드 변경 0건.
+- **교훈**: harness 오류 리포트의 `module`/`action` 이름에 "테스트" 접두나 고정("고정") 메시지가 보이면 실제 프로덕션 액션 카탈로그(`ActionDefinition` 정의처)에 존재하는지 먼저 grep 대조 — 합성 자가검증 이벤트를 실제 버그로 오인해 존재하지 않는 코드를 찾아 헤매지 않도록 함.
+- **파일**: 없음 (DB 상태 변경만).
+
 ## [445] ✅ 수동수정 — 하네스 검증 순환 로직 구멍 4종 — LLM 타임아웃 1회가 완성 대본·차트 8개를 통째로 폐기 (2026-07-16)
 
 - **증상**: 수동 경제 브리핑 실행에서 ① 41문장 생성 → draft_fixer 즉시수정 성공(fixed=1/unfixed=0) → 재검증 중 `SDK timeout 90s — 수집된 응답: 0개` → `검증 실패 (시도 1/3)` → 대본·차트 8개·썸네일 전량 폐기 후 처음부터 재생성(5분+ 낭비) ② 차트 8개가 본문에 실재하는데 "제4조 이미지 부재 6개 섹션" 오검출 ③ "SVG 블록 없음 — HTML 구조 확인 필요" 상시 오경보 ④ 텔레그램 `can't parse entities` 전송 실패.

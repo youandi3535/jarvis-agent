@@ -423,7 +423,7 @@ def push_to_shared(data: dict):
     """수집 결과를 shared DB에 저장하고 WRITER 파이프라인에 추천 주제 등록."""
     try:
         from shared.db import save_trends, push_pipeline
-        from shared.bus import on_trend_detected, on_theme_queued
+        from shared.bus import on_trend_detected
         from theme_matcher import match_themes
         from analyzer import classify_keyword
 
@@ -485,8 +485,11 @@ def push_to_shared(data: dict):
 
         recs = data.get("recommendations", [])
         on_trend_detected(data["date"], data["google_trending"], recs)
-        for item in pipeline_items:
-            on_theme_queued(item["theme"], item["sector"], item["opportunity_score"])
+        # ★ on_theme_queued 투기적 트리거 제거 (전수감사 2026-07-17 — 무소비 난비):
+        #   THEME_QUEUED→collector_agent→collect_for_theme(실수집) 결과가 COLLECTION_READY
+        #   구독자 0으로 통째 폐기되던 상시 낭비(트렌드 수집 4회/일마다 항목당 실수집). 실제 테마
+        #   발행은 push_pipeline(위) 큐잉 + trend_theme_writer 가 collect_for_theme 직접 호출
+        #   (자급자족)하므로 이 사전수집은 순수 낭비 → 트리거 제거.
 
     except Exception as e:
         print(f"[RADAR] shared push 오류 (무시하고 계속): {e}")
@@ -529,13 +532,16 @@ if __name__ == "__main__":
         else:
             print(f"[RADAR] {d} 데이터 없음")
     else:
-        # ★ 정지 방어 — 일회성 레이더 수집 작업 (freeze 300초 + deadline 900초 초과 시
+        # ★ 정지 방어 — 일회성 레이더 수집 작업 (freeze 300초 + deadline 초과 시
         #   GUARDIAN 보고 후 os._exit → 다음 예약 재시도). --date 조회는 감싸지 않음.
-        #   ★ deadline_sec=900 상향은 헛다리(ERRORS [414]) — 실측 실제 작업시간은 ~60s 뿐이며
-        #   "데드라인 초과 3860s" 는 절전(~3800s)이 원인. 근본 수정은 watchdog.py Watchdog._monitor()
-        #   의 절전 gap 보정(self._start += gap)에서 완료 — 여기 값은 그대로 유지.
+        #   ★ deadline_sec=900 상향이 [414]("실측 ~60s, 절전이 원인") 당시엔 헛다리였으나,
+        #   이후 네이버 트렌딩·TOP10/TOP50 혼합·경쟁강도(15)·자동완성(20)·LLM 각도생성이
+        #   추가되며 파이프라인 자체가 무거워짐 — 정상 성공 실행도 ~300s대, 네트워크 지연 시
+        #   900s를 실측으로 초과(절전 gap 로그 없음, 순수 작업시간 초과 — 2026-07-17 재발).
+        #   90분(5400s) 외곽 harness deadline·max_attempts=3 구조(JARVIS03_RADAR/jobs.py
+        #   _TRENDS_DEADLINE_SEC)와 정합하도록 1800초로 상향(3회 재시도 시 5400s 이내).
         from JARVIS00_INFRA.watchdog import guard_main
-        with guard_main("레이더 수집", deadline_sec=900):
+        with guard_main("레이더 수집", deadline_sec=1800):
             data     = collect_today()
             save(data)
             no_push  = "--no-push" in args

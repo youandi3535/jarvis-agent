@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0: #4E5D68;
+    --hero1: #0E2A33;
+    --ink: #24160F;
+    --a1: #2F8F8A;
+    --a1s: #E4572E;
+    --a2: #F2994A;
+    --a2s: #F6E7C9;
+    --soft: #FBF3E4;
+    --muted: #8B7E70;
+    --eyebrow: #E4572E;
+    --grid: #EFE2CC;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    width:1280px;
+    background:var(--hero1);
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* 파노라마 히어로 — 상단 밴드·좌측 패널 없이 배경 전체가 하나의 지형.
+     블루그레이(좌상) → 크림 → 테라코타/오렌지(중앙) → 틸/네이비(하단)로 이어지는
+     연속 그라디언트 위에 모든 요소가 카드 없이 직접 오버레이된다. */
+  .canvas{
+    position:relative;
+    width:1280px;
+    height:960px;
+    overflow:hidden;
+    background:
+      radial-gradient(1000px 640px at 10% 6%, color-mix(in srgb, var(--hero0), var(--soft) 18%) 0%, transparent 58%),
+      radial-gradient(860px 600px at 50% 40%, var(--a2s) 0%, transparent 60%),
+      radial-gradient(980px 660px at 60% 58%, var(--a2) 0%, transparent 58%),
+      radial-gradient(1100px 620px at 80% 24%, var(--a1s) 0%, transparent 64%),
+      linear-gradient(165deg, var(--hero0) 0%, var(--soft) 32%, var(--a2s) 46%, var(--a2) 63%, var(--hero1) 100%);
+  }
+
+  /* ============ 장식 글로우 레이어 ============ */
+  .scene{ position:absolute; inset:0; z-index:1; }
+  .glow{ position:absolute; border-radius:50%; filter:blur(70px); pointer-events:none; }
+  .glow-a{ width:420px; height:420px; left:-90px; top:-80px; background:color-mix(in srgb, var(--hero0), var(--soft) 25%); opacity:.55; }
+  .glow-b{ width:480px; height:480px; left:760px; top:10px; background:var(--a1s); opacity:.32; }
+  .glow-c{ width:560px; height:420px; left:470px; top:560px; background:var(--hero1); opacity:.5; }
+
+  /* ============ 헤더 — 좌상단 오버레이, 배경 텍스처 위 직접 표기 ============ */
+  .head{ position:absolute; left:64px; top:56px; width:560px; z-index:5; }
+  .eyebrow{
+    font-size:14px; font-weight:700; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--soft); margin:0 0 10px;
+    text-shadow:0 2px 10px color-mix(in srgb, var(--ink), transparent 55%);
+  }
+  .eyebrow:empty{ display:none; margin:0; }
+  .title{
+    font-size:36px; font-weight:800; line-height:1.28; letter-spacing:-.01em;
+    color:var(--soft); margin:0 0 10px;
+    text-shadow:0 3px 14px color-mix(in srgb, var(--ink), transparent 42%);
+  }
+  .title:empty{ display:none; margin:0; }
+  .subtitle{
+    font-size:16px; font-weight:500; line-height:1.6; color:var(--soft); max-width:520px; margin:0;
+    opacity:.92;
+    text-shadow:0 2px 10px color-mix(in srgb, var(--ink), transparent 55%);
+  }
+  .subtitle:empty{ display:none; margin:0; }
+
+  /* ============ 좌상단 — 구체 3개: 지구본 + 도넛 + 파이 ============ */
+  .orb-cluster{ position:absolute; left:56px; top:190px; width:420px; height:340px; z-index:2; }
+
+  .globe-sphere{
+    position:absolute; left:0; top:0; width:224px; height:224px; border-radius:50%;
+    background:radial-gradient(circle at 34% 28%, color-mix(in srgb, var(--a1), var(--soft) 45%) 0%, var(--a1) 42%, var(--hero0) 100%);
+    box-shadow:0 24px 40px color-mix(in srgb, var(--ink), transparent 70%);
+  }
+  .globe-sphere svg{ position:absolute; inset:0; width:100%; height:100%; }
+  .g-line{ fill:none; stroke:color-mix(in srgb, var(--soft), transparent 35%); stroke-width:1.6; opacity:.55; }
+  .g-outline{ fill:none; stroke:color-mix(in srgb, var(--soft), transparent 15%); stroke-width:2.4; }
+
+  .donut-orb{
+    position:absolute; left:250px; top:6px; width:132px; height:132px; border-radius:50%;
+    background:conic-gradient(var(--a1s) 0 38%, var(--a2) 38% 70%, var(--a2s) 70% 100%);
+    box-shadow:0 16px 30px color-mix(in srgb, var(--ink), transparent 74%);
+  }
+  .donut-orb::after{
+    content:""; position:absolute; inset:24px; border-radius:50%;
+    background:color-mix(in srgb, var(--hero0), var(--soft) 30%);
+  }
+
+  .pie-orb{
+    position:absolute; left:296px; top:180px; width:108px; height:108px; border-radius:50%;
+    background:conic-gradient(var(--a2) 0 30%, var(--a1s) 30% 55%, var(--a2s) 55% 80%, var(--a1) 80% 100%);
+    box-shadow:0 14px 26px color-mix(in srgb, var(--ink), transparent 76%);
+  }
+
+  /* ============ 중앙 — 막대그래프가 산맥으로 융합된 3D 바 차트 + 능선 라인차트 ============ */
+  .terrain{ position:absolute; left:460px; top:520px; width:440px; height:300px; z-index:2; }
+  .terrain-bars{
+    position:absolute; left:0; bottom:0; width:100%; height:100%;
+    display:flex; align-items:flex-end; gap:10px;
+  }
+  .iso-bar{ position:relative; width:34px; height:var(--h); flex:0 0 auto; }
+  .iso-bar .face-front{ position:absolute; left:0; bottom:0; width:100%; height:100%; background:var(--c); }
+  .iso-bar .face-top{
+    position:absolute; left:0; top:-11px; width:100%; height:11px;
+    background:color-mix(in srgb, var(--c), var(--soft) 40%);
+    transform:skewX(-45deg); transform-origin:bottom left;
+  }
+  .iso-bar .face-side{
+    position:absolute; right:-11px; bottom:0; width:11px; height:100%;
+    background:color-mix(in srgb, var(--c), var(--hero1) 32%);
+    transform:skewY(-45deg); transform-origin:top left;
+  }
+  .iso-bar:nth-child(odd){ --c: var(--a1s); }
+  .iso-bar:nth-child(even){ --c: var(--a2); }
+
+  .ridge-line{ position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+  .ridge-path{ fill:none; stroke:var(--soft); stroke-width:3; stroke-linecap:round; stroke-linejoin:round; opacity:.92; }
+  .ridge-dot{ fill:var(--a1); stroke:var(--soft); stroke-width:2; }
+
+  /* ============ 하단 — 유기적 리본 웨이브 (수면) ============ */
+  .ribbon-wave{ position:absolute; left:0; right:0; bottom:0; width:100%; height:240px; z-index:2; }
+  .ribbon-wave svg{ display:block; width:100%; height:100%; }
+  .wave-back{ fill:var(--hero1); opacity:.92; }
+  .wave-front{ fill:var(--a1); opacity:.3; }
+
+  /* ============ 전경 — 로우폴리 나무·바위 (데이터 지형의 자연 은유) ============ */
+  .lowpoly{ position:absolute; z-index:3; }
+  .tree{ width:64px; height:96px; }
+  .tree .trunk{
+    position:absolute; left:26px; bottom:0; width:12px; height:22px;
+    background:color-mix(in srgb, var(--ink), var(--muted) 40%);
+  }
+  .tree .leaf{ position:absolute; left:0; bottom:16px; width:64px; height:64px; }
+  .tree .leaf.l1{ background:var(--a1); clip-path:polygon(50% 0%, 100% 100%, 0% 100%); opacity:.94; }
+  .tree .leaf.l2{ background:color-mix(in srgb, var(--a1), var(--ink) 22%); clip-path:polygon(50% 0%, 100% 100%, 50% 58%); opacity:.92; }
+
+  .rock{ width:76px; height:50px; }
+  .rock .face-a{
+    position:absolute; inset:0; background:var(--muted);
+    clip-path:polygon(10% 100%, 0% 55%, 35% 15%, 70% 0%, 100% 40%, 90% 100%);
+  }
+  .rock .face-b{
+    position:absolute; inset:0; background:color-mix(in srgb, var(--muted), var(--ink) 30%);
+    clip-path:polygon(55% 100%, 35% 15%, 70% 0%, 100% 40%, 90% 100%);
+  }
+
+  /* ============ 하단 — 흰색 숫자 범례 밴드 (MINI_CARDS, 통계 대시보드 보강) ============ */
+  .stat-band{
+    position:absolute; left:0; right:0; top:838px; z-index:4;
+    padding:18px 64px;
+    background:linear-gradient(90deg, transparent, color-mix(in srgb, var(--ink), transparent 35%) 16%, color-mix(in srgb, var(--ink), transparent 35%) 84%, transparent);
+  }
+  .stat-band:has(.mini-cards:empty){ display:none; }
+  .mini-cards{ display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:40px; }
+  .mini-cards:empty{ display:none; }
+  .mini-cards .icon-item{ display:flex; align-items:center; gap:10px; }
+  .mini-cards .icon-item .ico{ width:10px; height:10px; border-radius:50%; flex-shrink:0; background:var(--a1s); }
+  .mini-cards .icon-item:nth-child(3n+2) .ico{ background:var(--a2); }
+  .mini-cards .icon-item:nth-child(3n+3) .ico{ background:var(--a2s); }
+  .mini-cards .icon-item .txt{ display:flex; align-items:baseline; gap:6px; }
+  .mini-cards .icon-item .num{ font-size:24px; font-weight:800; color:var(--soft); line-height:1; }
+  .mini-cards .icon-item .lbl{ font-size:14px; font-weight:500; color:color-mix(in srgb, var(--soft), transparent 12%); }
+
+  /* ============ 우상단 — 대시보드 사이드 패널: 표 형태 데이터(CHART_1) + 원형 범례 점 리스트(HERO_STATS) ============ */
+  .panel-table{ position:absolute; right:60px; top:70px; width:300px; z-index:5; color:var(--soft); }
+  .panel-table:empty{ display:none; }
+
+  .legend-dock{ position:absolute; right:60px; top:420px; width:300px; z-index:5; }
+  .hero-stats{ display:flex; flex-direction:column; gap:14px; }
+  .hero-stats:empty{ display:none; }
+  .hero-stats .stat{ display:flex; align-items:center; gap:12px; }
+  .hero-stats .stat .num{
+    width:34px; height:34px; border-radius:50%; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    font-size:13px; font-weight:800; color:var(--hero1);
+    background:var(--a1s);
+    box-shadow:0 6px 14px color-mix(in srgb, var(--ink), transparent 78%);
+  }
+  .hero-stats .stat:nth-child(3n+2) .num{ background:var(--a2); }
+  .hero-stats .stat:nth-child(3n+3) .num{ background:var(--a2s); color:var(--ink); }
+  .hero-stats .stat .lbl{
+    font-size:14px; font-weight:600; color:var(--soft);
+    text-shadow:0 2px 8px color-mix(in srgb, var(--ink), transparent 55%);
+  }
+
+  /* ============ 산개 배치된 실데이터 차트 슬롯 (CHART_2·CHART_3) ============ */
+  .slot-ridge{ position:absolute; left:520px; top:392px; width:320px; z-index:5; color:var(--soft); }
+  .slot-orb{ position:absolute; left:56px; top:560px; width:360px; z-index:5; color:var(--soft); }
+
+  /* ── 차트 슬롯 공통 — 빈 슬롯 자동 은폐 (필수) ── */
+  section.chart-slot{ display:flex; flex-direction:column; }
+  section:has([data-jarvis-empty]){ display:none; }
+
+  /* ============ 푸터 ============ */
+  .foot{
+    position:absolute; left:0; right:0; bottom:18px; z-index:5;
+    display:flex; justify-content:space-between; align-items:baseline;
+    padding:0 64px; gap:24px;
+  }
+  .foot:not(:has(.source:not(:empty))):not(:has(.brand:not(:empty))){ display:none; }
+  .source{ font-size:14px; color:color-mix(in srgb, var(--soft), transparent 20%); }
+  .source:empty{ display:none; }
+  .brand{
+    font-size:14px; font-weight:600; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--soft);
+  }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+  <div class="canvas">
+
+    <div class="scene">
+      <span class="glow glow-a"></span>
+      <span class="glow glow-b"></span>
+      <span class="glow glow-c"></span>
+    </div>
+
+    <header class="head">
+      <p class="eyebrow">{EYEBROW}</p>
+      <h1 class="title">{TITLE}</h1>
+      <p class="subtitle">{SUBTITLE}</p>
+    </header>
+
+    <!-- ============ 좌상단 구체 3개 — 지구본 + 도넛 + 파이 ============ -->
+    <div class="orb-cluster">
+      <div class="globe-sphere">
+        <svg viewBox="0 0 224 224">
+          <ellipse class="g-line" cx="112" cy="112" rx="44" ry="100"/>
+          <ellipse class="g-line" cx="112" cy="112" rx="78" ry="100"/>
+          <line class="g-line" x1="8" y1="112" x2="216" y2="112"/>
+          <line class="g-line" x1="20" y1="72" x2="204" y2="72"/>
+          <line class="g-line" x1="20" y1="152" x2="204" y2="152"/>
+          <circle class="g-outline" cx="112" cy="112" r="100"/>
+        </svg>
+      </div>
+      <div class="donut-orb"></div>
+      <div class="pie-orb"></div>
+    </div>
+
+    <!-- ============ CHART_3 — 구체 클러스터 옆 실데이터 슬롯 ============ -->
+    <section class="chart-slot slot-orb">{CHART_3}</section>
+
+    <!-- ============ 중앙 — 3D 바 산맥 + 능선 라인차트 ============ -->
+    <div class="terrain">
+      <div class="terrain-bars">
+        <span class="iso-bar" style="--h:60px"><span class="face-top"></span><span class="face-front"></span><span class="face-side"></span></span>
+        <span class="iso-bar" style="--h:95px"><span class="face-top"></span><span class="face-front"></span><span class="face-side"></span></span>
+        <span class="iso-bar" style="--h:140px"><span class="face-top"></span><span class="face-front"></span><span class="face-side"></span></span>
+        <span class="iso-bar" style="--h:190px"><span class="face-top"></span><span class="face-front"></span><span class="face-side"></span></span>
+        <span class="iso-bar" style="--h:250px"><span class="face-top"></span><span class="face-front"></span><span class="face-side"></span></span>
+        <span class="iso-bar" style="--h:270px"><span class="face-top"></span><span class="face-front"></span><span class="face-side"></span></span>
+        <span class="iso-bar" style="--h:225px"><span class="face-top"></span><span class="face-front"></span><span class="face-side"></span></span>
+        <span class="iso-bar" style="--h:165px"><span class="face-top"></span><span class="face-front"></span><span class="face-side"></span></span>
+        <span class="iso-bar" style="--h:115px"><span class="face-top"></span><span class="face-front"></span><span class="face-side"></span></span>
+        <span class="iso-bar" style="--h:75px"><span class="face-top"></span><span class="face-front"></span><span class="face-side"></span></span>
+      </div>
+      <svg class="ridge-line" viewBox="0 0 440 300" preserveAspectRatio="none">
+        <polyline class="ridge-path" points="20,230 64,195 108,150 152,100 196,40 240,20 284,65 328,125 372,175 416,215"/>
+        <circle class="ridge-dot" cx="240" cy="20" r="4.5"/>
+        <circle class="ridge-dot" cx="196" cy="40" r="4.5"/>
+      </svg>
+    </div>
+
+    <!-- ============ CHART_2 — 능선 위 실데이터 인사이트 슬롯 ============ -->
+    <section class="chart-slot slot-ridge">{CHART_2}</section>
+
+    <!-- ============ 우상단 대시보드 패널 — 표 형태 데이터(CHART_1) + 원형 범례 점 리스트(HERO_STATS) ============ -->
+    <section class="chart-slot panel-table">{CHART_1}</section>
+    <div class="legend-dock">
+      <div class="hero-stats">{HERO_STATS}</div>
+    </div>
+
+    <!-- ============ 전경 로우폴리 나무·바위 ============ -->
+    <div class="lowpoly tree" style="left:150px; top:756px;">
+      <span class="trunk"></span><span class="leaf l1"></span><span class="leaf l2"></span>
+    </div>
+    <div class="lowpoly tree" style="left:986px; top:736px;">
+      <span class="trunk"></span><span class="leaf l1"></span><span class="leaf l2"></span>
+    </div>
+    <div class="lowpoly tree" style="left:636px; top:798px;">
+      <span class="trunk"></span><span class="leaf l1"></span><span class="leaf l2"></span>
+    </div>
+    <div class="lowpoly rock" style="left:346px; top:822px;">
+      <span class="face-a"></span><span class="face-b"></span>
+    </div>
+    <div class="lowpoly rock" style="left:1120px; top:832px;">
+      <span class="face-a"></span><span class="face-b"></span>
+    </div>
+
+    <!-- ============ 하단 리본 웨이브 (수면) ============ -->
+    <div class="ribbon-wave">
+      <svg viewBox="0 0 1280 240" preserveAspectRatio="none">
+        <path class="wave-back" d="M0,120 C220,60 420,180 680,110 C900,55 1080,150 1280,90 L1280,240 L0,240 Z"/>
+        <path class="wave-front" d="M0,160 C240,110 460,210 700,150 C920,100 1100,190 1280,140 L1280,240 L0,240 Z"/>
+      </svg>
+    </div>
+
+    <!-- ============ 흰색 숫자 범례 밴드 (MINI_CARDS) ============ -->
+    <div class="stat-band">
+      <div class="mini-cards">{MINI_CARDS}</div>
+    </div>
+
+    <footer class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </footer>
+
+  </div>
+</body>
+</html>

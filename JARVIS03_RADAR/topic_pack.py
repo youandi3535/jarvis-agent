@@ -141,20 +141,14 @@ def _profile_batch(cands: list[dict]) -> list[dict]:
         _essential=True,
     )
     if not (raw or "").strip():
-        # LLM 빈 응답 — 섹터 기반 기본 프로필로 폴백 (발행 차단 방지)
-        # RADAR가 이미 경제 섹터로 분류한 후보이므로 fit=True 간주
-        log.warning("[topic_pack] 프로필 LLM 빈 응답 → 섹터 기본 프로필 폴백")
-        return [
-            {
-                "keyword": c.get("keyword", ""),
-                "fit": True,
-                "sector": c.get("sector", ""),
-                "summary": f"{c.get('keyword', '')} 관련 경제·금융 트렌드",
-                "related_terms": [],
-                "entity_type": "기타",
-            }
-            for c in cands if c.get("keyword")
-        ]
+        # ★ fail-closed (전수감사 FIX[4]): LLM 빈 응답 = *일시적 인프라 실패*(스로틀/회로차단).
+        #   종전엔 모든 후보를 fit=True + related_terms=[] + 템플릿 summary 로 위조해 반환 →
+        #   '은행나무'·연예인 등 비경제 키워드가 *프로필 없이* fit 필터를 통과, '키워드 단독
+        #   전송 금지' 안전규정(ERRORS[290])을 인프라 실패가 뚫었다. docstring('LLM 미가용 시
+        #   발행 차단')과도 정반대. → 빈 리스트 반환 → build_topic_pack 이 None(발행 차단) →
+        #   경제 파이프라인이 defer/스킵(다음 회차 재시도). 거짓 프로필 발행 < 발행 안 함.
+        log.warning("[topic_pack] 프로필 LLM 빈 응답(인프라) → fail-closed(팩 None, 다음 회차 재시도)")
+        return []
     try:
         import re
         m = re.search(r"\[.*\]", raw, re.DOTALL)

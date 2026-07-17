@@ -515,7 +515,16 @@ def _strip_design(raw: str) -> str:
     out = _re_d.sub(r"</?design[^>]*>", "", out, flags=_re_d.I).strip()
     # 3) 본문 마커가 있으면 그 지점부터 = 발행 본문 (선행 설계 텍스트 잔존 차단)
     m = _re_d.search(r"TITLE\s*:|CONTENT\s*:", out, flags=_re_d.I)
-    return out[m.start():].strip() if m else out
+    if m:
+        return out[m.start():].strip()
+    # ★ 마커 없음 (ERRORS [381] 후속 — 결정적 결함): 스로틀로 </design>·TITLE 전에 절단된
+    #   *설계 산문* 이 유효 본문인 척 흘러 has_publishable_body 를 '텍스트 블록 0/본문 0자'
+    #   3중오류로 실패시키고, _draft_invoke 의 '설계 빼고 재시도(②)' 가드까지 (body 가 비어있지
+    #   않아) 무력화됐다. <p>/<h*> 구조가 있으면 마커 없어도 본문 보존, 없으면(=구조 없는 설계
+    #   산문) 빈 문자열 → _draft_invoke 가 비인프라면 설계 없이 재시도 / 인프라면 호출자가 분기.
+    if _re_d.search(r"<(?:p|h[1-6])\b", out, flags=_re_d.I):
+        return out
+    return ""
 
 
 def has_publishable_body(content: str, min_korean: int | None = None) -> bool:
@@ -556,14 +565,26 @@ def _draft_invoke(system_msg: str, user_msg: str) -> str:
       ② <design>만 오고 본문 없음 → 설계 지시 제거한 프롬프트로 1회 재시도 (설계 없이라도 본문 확보).
     → 대본은 *절대 0자로 넘어가지 않는다* (LLM 이 응답만 하면 본문 확보).
     """
+    # ★ 스로틀 인지형 (rank3): invoke_text 는 이미 내부에서 백오프 재시도(최대 3)를 한다.
+    #   그 위에 여기서 폴백을 *또* 연쇄하면 같은 스로틀 창에 SDK spawn 을 몰아 rate-limit 을
+    #   자가 증폭한다. 인프라 사유(스로틀 빈응답/hang/절단)면 폴백을 멈추고 best-effort 만
+    #   반환 → 상류(harness)가 defer/backoff 로 처리. *진짜 비인프라 빈응답/설계-only* 일 때만
+    #   기존 콘텐츠 폴백(①②) 유지.
+    from shared.llm import last_call_infra_incomplete as _infra
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
-    if not (raw or "").strip():                       # ① 빈 응답(스로틀) → 재시도
+    if _infra():
+        return _strip_design(raw)                     # 인프라 스로틀 — 같은 창 재발사 금지
+    if not (raw or "").strip():                       # ① 진짜 빈 응답(비인프라) → 1회 재시도
         raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
+        if _infra():
+            return _strip_design(raw)
     body = _strip_design(raw)
     if not body and (raw or "").strip():              # ② <design>만·본문 없음 → 설계 빼고 재시도
         _plain = (user_msg.replace(_DESIGN_FIRST_BLOCK, "")
                   if _DESIGN_FIRST_BLOCK in (user_msg or "") else user_msg)
         raw2 = invoke_text("writer", _plain, timeout=300, system=system_msg)
+        if _infra():
+            return _strip_design(raw2)
         body = _strip_design(raw2) or (raw2 or "").strip()
     return body
 
@@ -603,10 +624,10 @@ def _gen_economic_ts_nv(
 {supreme_block}
 {_insights}
 
-[★ 분량 상한 — 절대 초과 금지 (위반 시 응답 자체 거부)]
-- 목표 {_L.build_length_phrase(_target_sents)} / 하한 {_L.build_length_phrase(_min_sents)}
+[★ 분량 — 하한·상한 둘 다 엄수 (하한 미달·상한 초과 모두 응답 거부)]
+- **★ 하한 미달 절대 금지: 최소 {_L.build_length_phrase(_min_sents)} 이상 반드시 채운다 — 미달 시 발행 차단·전체 재작성.** 목표 {_L.build_length_phrase(_target_sents)}.
 - **★ 절대 상한: {_max_sents}문장 / {_max_kor}자** — 응답 자체 한계. 초과분은 발행 전 검증에서 잘려나간다.
-- {_max_kor}자 가까워지면 즉시 면책 마무리 후 출력 종료. 길게 풀어쓰지 말 것.
+- {_max_kor}자 가까워지면 면책 마무리 후 종료. 단, 목표 분량은 반드시 채운다(성의 없이 짧게 끝내지 말 것).
 
 [절대 제약 — 출력 시 반드시 준수 (위 헌법 블록 전체 적용)]
 - <p> 태그 15~{_p_cap}개 (한 <p>에 최대 2문장 — 상한 초과 금지)

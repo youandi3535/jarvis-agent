@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import statistics
 from datetime import datetime
 from pathlib import Path
 
@@ -69,6 +70,8 @@ _EXTRACT_PROMPT = """주제: {theme}
 규칙:
 - 반드시 문서에 명시된 내용만. 문서에 없는 수치·주장 창작 금지.
 - 수치가 있는 사실을 최우선 (kind=stat, value·unit 채움).
+- category: 지표의 큰 분류 하나 (금리/물가/환율/증시/성장/고용/무역/재정/부동산/에너지/기타 중 하나). 차트 그룹핑에 쓴다.
+- label: 차트 축에 쓸 짧은 지표명 6~14자 (예: '기준금리', 'CPI 상승률', '코스피'). 날짜·문장 금지, 지표 이름만.
 - 발언 인용은 kind=quote, 사례·후기는 kind=case, 그 외 kind=fact.
 - as_of 는 문서에서 확인된 시점만 (없으면 빈 문자열).
 - question_id 는 위 질문 중 가장 맞는 것 (없으면 "").
@@ -88,7 +91,7 @@ _EXTRACT_PROMPT = """주제: {theme}
 그 다음 그 전략대로 아래 JSON 을 출력하라. <design> 다음 첫 '{{' 부터가 결과 JSON.
 
 JSON만 출력:
-{{"facts":[{{"statement":"...","kind":"stat","value":"12.3","unit":"%","as_of":"2026-05","question_id":"Q1","doc_idx":1,"confidence":0.9}}]}}"""
+{{"facts":[{{"statement":"...","kind":"stat","value":"12.3","unit":"%","category":"물가","label":"CPI 상승률","as_of":"2026-05","question_id":"Q1","doc_idx":1,"confidence":0.9}}]}}"""
 
 
 def _extract_json(raw):
@@ -168,6 +171,8 @@ def _extract_facts_batch(theme: str, plan: dict, docs: list,
             "kind": str(f.get("kind", "fact")).strip() or "fact",
             "value": str(f.get("value", "")).strip(),
             "unit": str(f.get("unit", "")).strip(),
+            "category": str(f.get("category", "")).strip(),
+            "label": str(f.get("label", "")).strip()[:14],
             "as_of": str(f.get("as_of", "")).strip(),
             "question_id": str(f.get("question_id", "")).strip(),
             "source": {
@@ -399,6 +404,72 @@ def _label_batch(statements: list[str]) -> list[str]:
     return fallback
 
 
+def _noun_phrase(statement: str) -> str:
+    """문장에서 축 라벨용 짧은 명사구 추출 — 주격/주제 조사(는/은/이/가) 앞부분 우선,
+    최후에만 문장 앞 14자. (LLM 호출 없음 — 결정론)"""
+    s = (statement or "").strip()
+    if not s:
+        return ""
+    # 명사구 + 주격/주제 조사 패턴 (첫 매치)
+    m = re.search(r"([가-힣A-Za-z][\w가-힣·]{1,13})(?:는|은|이|가)(?=\s|\d|$)", s)
+    if m and m.group(1).strip():
+        return m.group(1).strip()[:14]
+    return s[:14]
+
+
+def _axis_label(f: dict, fallback: str | None = None) -> str:
+    """차트 축 라벨 우선순위: 추출 label → (구버전 폴백 LLM 라벨) → category → 문장 명사구.
+    fact["label"] 가 추출 단계에서 이미 오므로 대개 LLM 없이 결정된다."""
+    lb = (f.get("label") or "").strip()
+    if lb:
+        return lb[:14]
+    if fallback and str(fallback).strip():
+        return str(fallback).strip()[:14]
+    cat = (f.get("category") or "").strip()
+    if cat and cat != "기타":
+        return cat[:14]
+    return _noun_phrase(f.get("statement", ""))
+
+
+def _scale_filter(items: list) -> list:
+    """스케일 가드 — 한 그룹 내 값 편차가 20배 초과면 무관 지표가 섞인 것으로 보고
+    중앙값 기준 0.1~10배 군집만 남긴다 (나머지 드롭). 무관 지표를 스케일로도 분리."""
+    if len(items) < 2:
+        return items
+    absvals = [abs(v) for _, v, _ in items if v]
+    if not absvals:
+        return items
+    lo, hi = min(absvals), max(absvals)
+    if lo <= 0 or hi / lo <= 20:
+        return items
+    med = statistics.median([abs(v) for _, v, _ in items])
+    if med <= 0:
+        return items
+    kept = [it for it in items if med * 0.1 <= abs(it[1]) <= med * 10]
+    return kept or items
+
+
+def _dedup_labels(data: list[dict]) -> list[dict]:
+    """같은 dataset 내 라벨 중복 병합 — 값이 같으면 하나로 병합, 다르면 ' (2)', ' (3)' 접미.
+    중복 라벨이 축에 그대로 반복되지 않게 한다."""
+    values_seen: dict = {}
+    counts: dict = {}
+    out: list[dict] = []
+    for d in data:
+        lb, val = d["label"], d["value"]
+        if lb in values_seen:
+            if val in values_seen[lb]:
+                continue                       # 값 동일 → 병합(스킵)
+            values_seen[lb].add(val)
+            counts[lb] += 1
+            out.append({"label": f"{lb} ({counts[lb]})", "value": val})
+        else:
+            values_seen[lb] = {val}
+            counts[lb] = 1
+            out.append({"label": lb, "value": val})
+    return out
+
+
 def facts_to_datasets(pack: dict, max_datasets: int = 24) -> list[dict]:
     """★ 수치 fact → 인포그래픽 데이터셋 승격 (사용자 박제 2026-07-03 — ADR 013 보강).
 
@@ -407,8 +478,15 @@ def facts_to_datasets(pack: dict, max_datasets: int = 24) -> list[dict]:
     공급을 확대한다. 진실성 불변 조건:
       - 값·단위·기준일·출처 = fact 그대로 (LLM 은 라벨 작명만)
       - 범위값('1708~1733')·비수치 값은 스킵 (단일 수치만 — 거짓 차트 < 차트 없음)
-    그룹핑: (question_id, unit) — 같은 질문·같은 단위 fact 들이 한 차트의 행.
-    1행 그룹도 유효 (KPI 카드형 렌더).
+
+    ★ 그룹핑: (category, unit) — 지표 분류(금리/물가/증시…)와 단위가 같은 fact 들이 한
+      차트의 행. plan.questions 부재로 question_id 가 비어도 category 로 갈라지므로
+      "단위 단독 잡탕 차트"(기준금리+미국채+심리지수 혼합)가 생기지 않는다. category 가
+      비면 "기타"로 폴백. 1행 그룹도 유효 (KPI 카드형 렌더).
+    ★ 축 라벨: 추출 단계 label(지표명) 우선 → category → 문장 명사구. LLM 호출 제거
+      (라벨이 전부 빈 구버전 fact 만 있을 때 1회 폴백 배치 방어만 유지).
+    ★ 스케일 가드: 한 그룹 값 편차 20배 초과면 중앙값 군집만 남겨 무관 지표를 재분리.
+    ★ 중복 라벨: 같은 dataset 내 동일 라벨은 값 병합 또는 접미 번호로 축 중복 방지.
     """
     stats = [f for f in (pack.get("facts") or []) if f.get("kind") == "stat"]
     rows: list[tuple[dict, float]] = []
@@ -423,25 +501,40 @@ def facts_to_datasets(pack: dict, max_datasets: int = 24) -> list[dict]:
     if not rows:
         return []
 
-    labels = _label_batch([f["statement"] for f, _ in rows])
+    # 축 라벨: 추출 label 이 이미 오므로 LLM 없이 결정. 단, 라벨이 *전부* 빈
+    # 구버전 fact 만 있을 때만 1회 폴백 배치 호출(방어).
+    if all(not (f.get("label") or "").strip() for f, _ in rows):
+        _fb = _label_batch([f["statement"] for f, _ in rows])
+    else:
+        _fb = [None] * len(rows)
+    labels = [_axis_label(f, fb) for (f, _v), fb in zip(rows, _fb)]
 
-    q_text_map = {q.get("id"): q.get("q", "")
-                  for q in (pack.get("plan") or {}).get("questions", [])}
     theme = pack.get("theme", "")
     groups: dict = {}
     for (f, v), lb in zip(rows, labels):
-        key = (f.get("question_id") or "", (f.get("unit") or "").strip())
-        groups.setdefault(key, []).append((f, v, lb))
+        cat = (f.get("category") or "기타").strip() or "기타"
+        unit = (f.get("unit") or "").strip()
+        groups.setdefault((cat, unit), []).append((f, v, lb))
 
     from JARVIS09_COLLECTOR.models import dataset_fingerprint as _dfp
     out: list[dict] = []
-    for (qid, unit), items in groups.items():
+    for (cat, unit), items in groups.items():
+        items = _scale_filter(items)
+        if not items:
+            continue
         # 대표 출처 = 신뢰 티어 최상 fact (논문>API>뉴스>기사>웹 — ADR 013)
         best = min(items, key=lambda x: x[0].get("source", {}).get("tier", 5))[0]
-        _q = (q_text_map.get(qid) or "").strip()
-        title = (_q[:26] if _q else f"{theme} 핵심 수치") + (f" ({unit})" if unit else "")
-        data = [{"label": (lb or f["statement"][:14]), "value": v}
-                for f, v, lb in items[:8]]
+        # 제목 작명: category 우선 → 없으면 라벨 상위 2개 → 최후 폴백
+        if cat and cat != "기타":
+            title = f"{cat} 지표" + (f" ({unit})" if unit else "")
+        else:
+            top_labels = [lb for _, _, lb in items if lb][:2]
+            if top_labels:
+                title = "·".join(top_labels) + " 등"
+            else:
+                title = f"{theme} 핵심 수치" + (f" ({unit})" if unit else "")
+        data = _dedup_labels([{"label": (lb or f["statement"][:14]), "value": v}
+                              for f, v, lb in items[:8]])
         src = best.get("source") or {}
         out.append({
             "title": title,

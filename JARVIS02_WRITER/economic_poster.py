@@ -601,9 +601,16 @@ def run(post_naver=True, post_tistory=True):
         # ── [L3] 단일 플랫폼 대본 규정 준수 검증 (순수 "발견"만) ─────────────
         draft = state.get(draft_key) or {}
         if not draft.get("success"):
+            # ★ 인프라 스로틀(일시적)과 콘텐츠 결함 분리(rank5). infra_throttle 은 재작성 대상이
+            #   아니라 harness 가 fingerprint 제외·backoff·defer 로 처리. detail 은 fingerprint
+            #   안정성 위해 고정 문자열(attempt 변동값 금지).
+            _derr = str(draft.get("error", "unknown"))
+            _is_infra = (_derr == "infra_throttle")
             issues.append(Issue(
-                step=step_name, kind="draft_failed",
-                detail=f"대본 생성 실패: {draft.get('error', 'unknown')}",
+                step=step_name,
+                kind="infra_throttle" if _is_infra else "draft_failed",
+                detail=("인프라 스로틀 — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"
+                        if _is_infra else f"대본 생성 실패: {_derr}"),
             ))
             return issues
         di_list = _layer3_verify_draft(draft, platform)
@@ -784,7 +791,11 @@ def run(post_naver=True, post_tistory=True):
         _write_ep_partial()
         if not _nv_res.delivered:
             _esc = getattr(_nv_res, "escalation_reason", "") or ""
-            if "동시 실행 중복 차단" in _esc:
+            if getattr(_nv_res, "deferred", False):
+                # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도(발행 0건 확정 아님).
+                print(f"\n  ⏸ [네이버] 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
+                tg(f"⏸ 경제 브리핑(네이버) 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n{_esc}")
+            elif "동시 실행 중복 차단" in _esc:
                 # ★ 리뷰 확정 수정: 다른 실행이 진행 중 — 티스토리도 중단 (인터리브 방지)
                 _concurrent_blocked = True
                 print("  🚫 동시 실행 중복 차단 — 티스토리 액션도 중단 (인터리브 이중 발행 방지)")
@@ -846,8 +857,13 @@ def run(post_naver=True, post_tistory=True):
         ts_keyword = (_ts_state.get("ts_draft") or {}).get("keyword", "")
         _write_ep_partial()
         if not _ts_res.delivered:
-            print(f"\n  🚫 [티스토리] harness max_attempts 도달 — 발행 차단 (attempts={_ts_res.attempts})")
-            tg(f"🚫 경제 브리핑(티스토리) harness max_attempts 도달 — 발행 차단\nattempts={_ts_res.attempts}")
+            if getattr(_ts_res, "deferred", False):
+                # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도.
+                print(f"\n  ⏸ [티스토리] 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
+                tg(f"⏸ 경제 브리핑(티스토리) 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도")
+            else:
+                print(f"\n  🚫 [티스토리] harness max_attempts 도달 — 발행 차단 (attempts={_ts_res.attempts})")
+                tg(f"🚫 경제 브리핑(티스토리) harness max_attempts 도달 — 발행 차단\nattempts={_ts_res.attempts}")
     elif _concurrent_blocked:
         print("  ⏭ 티스토리 스킵 — 동시 실행 중복 차단")
     else:

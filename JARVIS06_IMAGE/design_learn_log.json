@@ -159,5 +159,14 @@
     "aesthetic": "editorial magazine split",
     "via": "라이브러리",
     "total": 21
+  },
+  {
+    "date": "2026-07-17",
+    "action": "learned",
+    "id": "midnight-vault-gold",
+    "name": "미드나이트 볼트 골드",
+    "aesthetic": "핀테크 프리미엄(신뢰·딥네이비·골드)",
+    "via": "LLM",
+    "total": 22
   }
 ]

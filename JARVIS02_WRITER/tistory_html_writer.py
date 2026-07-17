@@ -316,6 +316,15 @@ def generate_article_html(
 
     # Pass-1: 1회 단일 호출(설계-우선) 기본, 실패 시 3섹션 순차 폴백
     raw = _generate_text_pass1(keyword, sector, reason, supreme_block, platform, ref_datasets)
+    # ★ 스로틀 인지 (전수감사 FIX[3]): pass1 이 인프라 사유(스로틀 절단/hang/회로 open)로 빈
+    #   문자열이면 폴백 체인(parallel 최대 6콜 + CLI, writer 는 회로 면제라 open 중에도 spawn)이
+    #   같은 스로틀 창에 rate-limit 을 자가증폭한다. 인프라면 즉시 '' 반환 → 상류가 *신선한* 신호로
+    #   infra_throttle 태깅 → harness defer/backoff. 콘텐츠 결함(신호 없음)일 때만 폴백 유지.
+    if not raw:
+        from shared.llm import last_call_infra_incomplete as _infra, circuit_is_open as _copen
+        if _infra() or _copen():
+            print("  ⏸ [Pass-1 단일] 인프라 스로틀 감지 → 폴백 체인 스킵(자가증폭 차단), 상류 defer 위임")
+            return ""
     if not raw:
         print("  ⚠️ [Pass-1 단일] 실패 → 3섹션 순차 재시도...")
         raw = _generate_text_pass1_parallel(keyword, sector, reason, supreme_block, platform, ref_datasets)

@@ -207,6 +207,12 @@ _TRANSIENT_PATTERNS = [
     # "rc=75 + watchdog 자체 킬 로그 마커(🛑)가 함께 있음" 하나로 일반화 — 이 조합이 존재하면
     # stderr 꼬리 내용과 무관하게 watchdog 강제종료가 원인임이 확정적이다.
     re.compile(r"실패 \(rc=75\).*\[watchdog\] 🛑", re.I | re.S),
+    # ★ 2026-07-17 — harness `kind="infra_throttle"` 이슈(JARVIS00_INFRA/harness.py
+    # `_INFRA_ISSUE_KINDS`)는 harness 자체가 이미 backoff·deferred(다음 회차 재시도)로
+    # 처리하는 일시적 인프라 신호다(코드 버그 아님). 메시지 패턴을 여기서도 인식하지 않으면
+    # [405]/[406]과 동일하게 GUARDIAN 이 Tier2 SDK 세션을 낭비해 harness.py 를 잘못 "수정"할
+    # 위험이 있다.
+    re.compile(r"인프라 스로틀", re.I),
 ]
 
 
@@ -221,6 +227,12 @@ def is_transient(error_type: str, message: str = "", source: str = "") -> bool:
     """
     et = error_type or ""
     msg = message or ""
+    # ★ ERRORS [446][447][448] 박제 2026-07-17 — source="audit_test" 는 GUARDIAN
+    # Tier1→Tier2→apply_fix 파이프라인이 실제로 완주하는지 검증하는 합성 자가진단 프로브
+    # (traceback 없는 인위 생성 이벤트, 리포지토리 내 실사용처 0건 확인됨). 코드 버그가 아니므로
+    # Tier1/2 낭비 분석·Telegram "자동수정 실패" 알림 없이 즉시 ignored 처리.
+    if (source or "") == "audit_test":
+        return True
     if et in _TRANSIENT_TYPES:
         return True
     return any(pat.search(msg) for pat in _TRANSIENT_PATTERNS)

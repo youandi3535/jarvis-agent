@@ -183,9 +183,10 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
 #
 #  "항상 설계를 먼저 하고 그 설계대로 수집한다. 부족하면 더 받아온다."
 #
-#  흐름: ① plan_research(설계) → ② 광역 스윕 ∥ 질문별 조준 수집(프로바이더+웹발견)
-#        → ③ 얇은 문서 전문 딥페치 → ④ EvidencePack 추출·커버리지 측정
-#        → ⑤ 미충족 질문만 2라운드 재수집(변형 쿼리+discover) → ⑥ 박제·반환
+#  흐름: ① 티어순 광역 수집(_collect_tier — 논문>API>뉴스>기사>웹, 신뢰순위) + discover 웹발견
+#        → ② 얇은 문서 전문 딥페치 → ③ EvidencePack 추출·커버리지 측정
+#        → ④ 미충족 시 2라운드 재수집(변형 쿼리+discover) → ⑤ 박제·반환
+#  (구 plan_research 설계-LLM·질문별 조준수집은 2026-07-11 _collect_tier 재작성으로 폐지)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 _PROVIDER_BY_TYPE = {p.source_type: p for p in _PROVIDERS}
@@ -203,35 +204,13 @@ def list_provider_names() -> list[str]:
     return [p.source_type for p in _PROVIDERS]
 
 
-_TARGET_LIMIT_PER_Q = 4          # 질문·출처당 조준 수집 상한
 _DEEPFETCH_MAX = 8               # 전문 딥페치 상한 (시간 가드)
 _DEEPFETCH_MIN_WORDS = 90        # 이보다 짧으면 스니펫 수준 → 전문 시도
 _DEEPFETCH_TYPES = {"news", "naver_news", "web", "kor_econ", "blog"}
 
 
-def _collect_for_question(question: dict, theme: str, sector: str) -> list[RawDocument]:
-    """설계된 질문 1개 → 지정 출처 조준 수집 (+discover 는 웹 발견·범용 fetch)."""
-    docs: list[RawDocument] = []
-    queries = question.get("queries") or [theme]
-    q_main = queries[0]
-    for src in (question.get("sources") or [])[:3]:
-        try:
-            if src == "discover":
-                from .discovery import web_search
-                from .generic_fetch import fetch_documents
-                hits = web_search(q_main, max_results=12)   # 질문당 6→12 (풍부 원칙 [314])
-                docs.extend(fetch_documents(hits, theme=theme, max_docs=3))
-                continue
-            prov = _PROVIDER_BY_TYPE.get(src)
-            if prov is None:
-                continue
-            got = prov.collect(q_main, sector, max_items=_TARGET_LIMIT_PER_Q)
-            for d in got:
-                d.extra.setdefault("question_id", question.get("id", ""))
-            docs.extend(got)
-        except Exception as e:
-            log.debug(f"[research] 질문 {question.get('id')} 소스 {src} 실패: {e}")
-    return docs
+# (_collect_for_question·_TARGET_LIMIT_PER_Q 제거 — collect_research 가 _collect_tier 방식으로
+#  재작성되며 질문별 조준수집 경로 폐지, 호출 0: 전수감사 DELETE[18])
 
 
 def _deep_fetch_thin_docs(results: list[CollectionResult], theme: str) -> list[CollectionResult]:
@@ -446,7 +425,12 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
         log.info(f"[research] 논문 {len(paper_docs)}/{paper_cap}건 확보")
 
         # ② API: 최대 api_cap + 논문 이월
+        # ★ 뉴스·웹 최소보장 (2026-07-17): cascade(논문 미달분 이월)가 API 예산을 부풀려
+        #   '나머지'(뉴스·웹) 슬롯을 굶기지 않도록 상한 — budget 에서 rest_floor 는 남긴다.
+        #   기본 rest_floor=5 는 현행 '나머지5' 와 정합(숫자 변화 0, 순수 회귀 방지 안전망).
+        _rest_floor = int(_os.getenv("J09_REST_FLOOR", "5") or "5")
         api_allow = api_cap + (paper_cap - len(paper_docs))
+        api_allow = min(api_allow, max(0, budget - len(paper_docs) - _rest_floor))
         api_docs  = _collect_tier(api_provs, theme, sector, api_allow, seen_urls)
         log.info(f"[research] API {len(api_docs)}/{api_allow}건 확보")
 
@@ -575,7 +559,7 @@ def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
     stocks_data: dict = {}
     if (category or "").strip().lower() == "theme":
         try:
-            stocks_data = collect_stocks_data(keyword) or {}
+            stocks_data = collect_stocks_data(keyword, related_terms=(profile or {}).get('related_terms'), profile=profile) or {}
         except Exception as e:
             log.warning(f"[collect_all] 종목 수집 실패: {e}")
     rs = collect_research(keyword, sector=sector, angle=angle) or {}

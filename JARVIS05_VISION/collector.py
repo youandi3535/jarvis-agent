@@ -15,8 +15,6 @@ import threading
 import time
 from datetime import datetime
 
-import requests as _req
-
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
@@ -35,9 +33,7 @@ COLLECT_INTERVAL = 30  # 초
 _prev_status: dict[str, str] = {}
 
 # ── 텔레그램 알림 ──────────────────────────────────────────────────
-
-_TG_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
-_TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# (실제 전송은 shared.notify.send_tg 단일 진입점 — raw TELEGRAM_* 상수 직접참조 제거: 전수감사 DELETE[13])
 
 
 def _tg(msg: str) -> None:
@@ -65,6 +61,12 @@ def _alert_status_change(agent_name: str, prev: str, curr: str, message: str) ->
 def _collect_once() -> dict:
     """전체 에이전트 1회 수집. 결과 요약 반환."""
     global _prev_status
+
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j05", "에이전트 헬스 수집", ttl=120)
+    except Exception:
+        pass
 
     from JARVIS05_VISION.registry import get_registry
     from shared.db import get_db
@@ -141,6 +143,11 @@ def _collect_once() -> dict:
     online  = sum(1 for v in results.values() if v["status"] == "online")
     offline = sum(1 for v in results.values() if v["status"] == "offline")
     log.debug(f"[VISION] 수집 완료 — online:{online} offline:{offline} total:{len(agents)}")
+    try:
+        from shared.pipeline_activity import clear_busy as _cb
+        _cb("j05")
+    except Exception:
+        pass
     return results
 
 

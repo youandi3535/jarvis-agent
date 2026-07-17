@@ -123,7 +123,6 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"day":1, "hour":4, "minute":0},
      "callback":"JARVIS02_WRITER.post_type_specs_job.run_monthly_analysis",
      "misfire_grace_time":7200, "owner":"jarvis02_writer"},
-    # j05_sla_monitor 비활성화 — SLA 경고 불필요 (2026-05-09 사용자 요청)
     # ── JARVIS00_INFRA ───────────────────────────────────────────
     # ★ 데몬 hang 워치독 신호 (ERRORS [318] — 2026-07-04): 스케줄러 스레드풀이
     #   *실제로 잡을 실행 중* 임을 60초마다 heartbeat 파일 mtime 으로 각인.
