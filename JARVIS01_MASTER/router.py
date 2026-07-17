@@ -277,25 +277,38 @@ def handle(user_msg: str, correlation_id: Optional[str] = None) -> dict:
     """
     from shared import tracing
 
-    with tracing.trace_scope(correlation_id, source="jarvis00.router") as cid:
-        state: RouterState = {
-            "user_msg": user_msg,
-            "correlation_id": cid,
-        }
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j01", "메시지 라우팅", ttl=120)
+    except Exception:
+        pass
 
-        graph = get_graph()
-        if graph is not None:
-            try:
-                final = graph.invoke(state)
-                return dict(final)
-            except Exception as e:
-                state["error"] = f"graph invoke 실패: {e}"
+    try:
+        with tracing.trace_scope(correlation_id, source="jarvis00.router") as cid:
+            state: RouterState = {
+                "user_msg": user_msg,
+                "correlation_id": cid,
+            }
 
-        # LangGraph 미설치 — 단순 순차 호출
-        state = _node_classify(state)
-        state = _node_match_capability(state)
-        state = _node_dispatch(state)
-        return dict(state)
+            graph = get_graph()
+            if graph is not None:
+                try:
+                    final = graph.invoke(state)
+                    return dict(final)
+                except Exception as e:
+                    state["error"] = f"graph invoke 실패: {e}"
+
+            # LangGraph 미설치 — 단순 순차 호출
+            state = _node_classify(state)
+            state = _node_match_capability(state)
+            state = _node_dispatch(state)
+            return dict(state)
+    finally:
+        try:
+            from shared.pipeline_activity import clear_busy as _cb
+            _cb("j01")
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════
@@ -749,43 +762,56 @@ def react_handle(
     from langchain_core.messages import SystemMessage, HumanMessage
     from langgraph.errors import GraphInterrupt
 
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j01", "ReAct 도구 실행", ttl=300)
+    except Exception:
+        pass
+
     out: dict = {"ok": False, "text": "", "tool_calls": [], "pending_approvals": [], "steps": 0, "error": None}
 
-    # agent_tools 등록 보장
     try:
-        from JARVIS01_MASTER import agent_tools as _at
-        _at.ensure_loaded()
-    except Exception as e:
-        out["error"] = f"agent_tools 로드 실패: {e}"
-        return out
-
-    graph = _get_react_graph()
-    if graph is None:
-        out["error"] = "LangGraph 미가용 — pip install langgraph"
-        return out
-
-    with tracing.trace_scope(correlation_id, source="jarvis00.react") as cid:
-        tid    = thread_id or cid
-        config = {"configurable": {"thread_id": tid}, "recursion_limit": max_steps * 3 + 2}
-        init_state: ReactAgentState = {
-            "messages":     [SystemMessage(content=REACT_SYSTEM_PROMPT), HumanMessage(content=user_msg)],
-            "steps":        0,
-            "max_steps":    max_steps,
-            "auto_approve": auto_approve,
-            "tool_calls_log": [],
-            "retry_count":  0,
-        }
+        # agent_tools 등록 보장
         try:
-            final = graph.invoke(init_state, config=config)
-            # LangGraph 1.1.10+: interrupt()는 예외 대신 __interrupt__ key로 반환
-            if final.get("__interrupt__"):
-                return _handle_state_interrupt(final["__interrupt__"], tid)
-            return _extract_react_result(final)
-        except GraphInterrupt as gi:
-            return _handle_graph_interrupt(gi, tid)
+            from JARVIS01_MASTER import agent_tools as _at
+            _at.ensure_loaded()
         except Exception as e:
-            out["error"] = f"graph invoke 실패: {type(e).__name__}: {e}"
+            out["error"] = f"agent_tools 로드 실패: {e}"
             return out
+
+        graph = _get_react_graph()
+        if graph is None:
+            out["error"] = "LangGraph 미가용 — pip install langgraph"
+            return out
+
+        with tracing.trace_scope(correlation_id, source="jarvis00.react") as cid:
+            tid    = thread_id or cid
+            config = {"configurable": {"thread_id": tid}, "recursion_limit": max_steps * 3 + 2}
+            init_state: ReactAgentState = {
+                "messages":     [SystemMessage(content=REACT_SYSTEM_PROMPT), HumanMessage(content=user_msg)],
+                "steps":        0,
+                "max_steps":    max_steps,
+                "auto_approve": auto_approve,
+                "tool_calls_log": [],
+                "retry_count":  0,
+            }
+            try:
+                final = graph.invoke(init_state, config=config)
+                # LangGraph 1.1.10+: interrupt()는 예외 대신 __interrupt__ key로 반환
+                if final.get("__interrupt__"):
+                    return _handle_state_interrupt(final["__interrupt__"], tid)
+                return _extract_react_result(final)
+            except GraphInterrupt as gi:
+                return _handle_graph_interrupt(gi, tid)
+            except Exception as e:
+                out["error"] = f"graph invoke 실패: {type(e).__name__}: {e}"
+                return out
+    finally:
+        try:
+            from shared.pipeline_activity import clear_busy as _cb
+            _cb("j01")
+        except Exception:
+            pass
 
 
 def _handle_state_interrupt(interrupts: list, thread_id: str) -> dict:

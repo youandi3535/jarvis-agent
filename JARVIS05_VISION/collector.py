@@ -66,6 +66,12 @@ def _collect_once() -> dict:
     """전체 에이전트 1회 수집. 결과 요약 반환."""
     global _prev_status
 
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j05", "에이전트 헬스 수집", ttl=120)
+    except Exception:
+        pass
+
     from JARVIS05_VISION.registry import get_registry
     from shared.db import get_db
 
@@ -141,6 +147,11 @@ def _collect_once() -> dict:
     online  = sum(1 for v in results.values() if v["status"] == "online")
     offline = sum(1 for v in results.values() if v["status"] == "offline")
     log.debug(f"[VISION] 수집 완료 — online:{online} offline:{offline} total:{len(agents)}")
+    try:
+        from shared.pipeline_activity import clear_busy as _cb
+        _cb("j05")
+    except Exception:
+        pass
     return results
 
 

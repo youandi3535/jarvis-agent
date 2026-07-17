@@ -52,23 +52,36 @@ def _on_job_submitted(event):
     except Exception:
         pass
     try:
-        from shared.pipeline_activity import mark_active
+        from shared.pipeline_activity import mark_active, mark_busy
         # infra_heartbeat → e11(J00→J01): 데몬이 살아있음을 J01에 60초마다 알림
         # 그 외 잡은 job_registry edges 필드에 정의된 엣지만 발화
         edges = ["e11"] if event.job_id == "infra_heartbeat" else (_JOB_EDGES.get(event.job_id) or [])
         if edges:
             mark_active(edges)
+        # J04 busy 신호 — infra_heartbeat 제외 (너무 잦음)
+        if event.job_id != "infra_heartbeat":
+            mark_busy("j04", f"잡 실행: {event.job_id}", ttl=3600)
     except Exception:
         pass
 
 
 def _on_job_executed(event):
     """EVENT_JOB_EXECUTED — 잡 성공 완료."""
+    try:
+        from shared.pipeline_activity import clear_busy
+        clear_busy("j04")
+    except Exception:
+        pass
     _record(event, success=True, error=None)
 
 
 def _on_job_error(event):
     """EVENT_JOB_ERROR — 잡 예외."""
+    try:
+        from shared.pipeline_activity import clear_busy
+        clear_busy("j04")
+    except Exception:
+        pass
     err = ""
     try:
         if getattr(event, "exception", None) is not None:

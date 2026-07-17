@@ -559,6 +559,11 @@ def self_heal_known_errors(limit: int = 40) -> dict:
 
     Returns: {"fixed", "skipped", "ignored", "scanned"}
     """
+    try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j07", "Tier-1 자체수리", ttl=300)
+    except Exception:
+        pass
     fixed = skipped = ignored = 0
     try:
         from shared import db as _db
@@ -588,6 +593,11 @@ def self_heal_known_errors(limit: int = 40) -> dict:
             skipped += 1
 
     log.info(f"[GUARDIAN/selfheal] 발행 전 Tier-1 sweep — 수리 {fixed} / 보류 {skipped} / 무시 {ignored} (스캔 {len(rows)})")
+    try:
+        from shared.pipeline_activity import clear_busy as _cb
+        _cb("j07")
+    except Exception:
+        pass
     return {"fixed": fixed, "skipped": skipped, "ignored": ignored, "scanned": len(rows)}
 
 
@@ -654,6 +664,11 @@ def job_deep_audit() -> None:
     """
     log.info("[GUARDIAN/deepaudit] 새벽 심층 감사 시작")
     try:
+        from shared.pipeline_activity import mark_busy as _mb
+        _mb("j07", "심층 코드 감사", ttl=3600)
+    except Exception:
+        pass
+    try:
         b = deep_audit_backlog()
         log.info(f"[GUARDIAN/deepaudit] backlog 완료: {b}")
     except Exception as e:
@@ -663,6 +678,12 @@ def job_deep_audit() -> None:
         run_auto_repair()
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] 광범위 감사 예외: {e}")
+    finally:
+        try:
+            from shared.pipeline_activity import clear_busy as _cb
+            _cb("j07")
+        except Exception:
+            pass
 
 
 # ── 스케줄 잡 ─────────────────────────────────────────────────────
