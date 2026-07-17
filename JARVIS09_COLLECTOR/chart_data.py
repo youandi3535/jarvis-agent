@@ -91,7 +91,8 @@ def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
     _min = 1 if viz_hint == "kpi_cards" else 2
     if len(rows) < _min:
         return None
-    rows = rows[:10]   # ★ 가독성 — 한 차트 최대 10개 (30셀 막대벽 방지)
+    # ★ 가독성 — 막대는 최대 10개(30셀 막대벽 방지), 라인(시계열)은 12점까지 보존(추이 유지)
+    rows = rows[:12] if viz_hint == "line_chart" else rows[:10]
     _title = str(title).split("(")[0].split("（")[0].strip() or str(title).strip()   # 제목 괄호 설명 제거
     return {
         "title": _title[:30],
@@ -202,9 +203,71 @@ def _global_market_datasets(theme: str) -> list[dict]:
         _make_ds("환율·원자재", _FX_COMMO, ""),
         _make_ds("금리 지표", _RATES, "%"),
     ] if ds]
+
+    # ── ★ 시계열 라인차트 (사용자 박제 2026-07-17): 당일 스냅샷(kpi)만으로는 추이·맥락이 0.
+    #    코스피·S&P500·달러/원 각각 최근 3개월 시계열을 *지표별 개별* 라인차트로 kpi 와 함께 방출.
+    #    _FX_COMMO 처럼 스케일 혼재(1400원 vs 4000달러)를 한 차트에 합치지 않도록 지표당 1 dataset. ──
+    result.extend(_market_timeseries_datasets())
+
     if result:
         log.info(f"[chart_data] '{theme}' 글로벌 시장 fast-path: {len(result)}개 dataset")
     return result
+
+
+def _market_timeseries_datasets() -> list[dict]:
+    """코스피·S&P500·달러/원 최근 3개월 주간 시계열 라인차트 (지표별 개별 dataset).
+
+    시계열 조회 단일 진입점 = economic_data_provider.get_ticker_history (yfinance 직접 접근 금지).
+    시계열 소스가 없거나 조회 실패 시 빈 리스트 — 합성 수치 절대 금지 (ADR 010).
+    스케일 혼재 방지: 지표를 한 차트에 합치지 않고 각각 별도 dataset 으로 방출."""
+    try:
+        from JARVIS09_COLLECTOR.providers.economic_data_provider import (
+            get_ticker_history, _MARKET_TICKERS,
+        )
+    except Exception as e:
+        log.warning(f"[chart_data] 시계열 헬퍼 로드 실패 — 시계열 스킵: {e}")
+        return []
+    _TS_SPEC = [("코스피", "pt"), ("S&P500", "pt"), ("달러/원", "원")]   # (지표명, 단위)
+    out: list[dict] = []
+    for name, unit in _TS_SPEC:
+        ticker = _MARKET_TICKERS.get(name)
+        if not ticker:
+            continue
+        try:
+            hist = get_ticker_history(ticker, period="3mo", interval="1wk")   # 3개월 주간 ≈ 13점
+        except Exception as e:
+            log.warning(f"[chart_data] '{name}' 시계열 조회 실패: {e}")
+            continue
+        if hist is None or len(hist) < 3:
+            continue
+        rows: list[dict] = []
+        try:
+            for idx, close in zip(hist.index, hist["Close"]):
+                try:
+                    v = float(close)
+                except (TypeError, ValueError):
+                    continue
+                if v != v or v <= 0:   # NaN·0 제외
+                    continue
+                rows.append({"label": idx.strftime("%m.%d"), "value": round(v, 2)})
+        except Exception as e:
+            log.warning(f"[chart_data] '{name}' 시계열 파싱 실패: {e}")
+            continue
+        rows = rows[-12:]   # 최근 12점
+        if len(rows) < 3:
+            continue
+        try:
+            _as_of = hist.index[-1].strftime("%Y-%m-%d")
+        except Exception:
+            _as_of = _now_as_of()
+        src = {"provider": "yfinance", "name": "Yahoo Finance",
+               "url": "https://finance.yahoo.com", "as_of": _as_of}
+        ds = _mk_dataset(f"{name} 최근 추이", "line_chart", unit, rows, src)
+        if ds:
+            out.append(ds)
+    if out:
+        log.info(f"[chart_data] 글로벌 시장 시계열 {len(out)}개 라인차트 생성")
+    return out
 
 
 # ── 1. 시장 거래대금 dataset (코스피·코스닥 주제 전용) ─────────────────────
@@ -245,10 +308,10 @@ def _market_trading_volume_datasets(theme: str) -> list[dict]:
 
 
 # ── 2. 종목 재무 dataset (collect_stocks_data) ───────────────────────────
-def _stock_datasets(theme: str) -> list[dict]:
+def _stock_datasets(theme: str, related_terms: list | None = None) -> list[dict]:
     try:
         from JARVIS09_COLLECTOR import collect_stocks_data
-        data = collect_stocks_data(theme) or {}
+        data = collect_stocks_data(theme, related_terms=related_terms) or {}
     except Exception as e:
         log.warning(f"[chart_data] collect_stocks_data 실패: {e}")
         return []
@@ -486,11 +549,30 @@ def _is_period(s: str) -> bool:
     return bool(re.match(r"^(19|20)\d{2}", s) or re.match(r"^\d{6}$", s))
 
 
-def _reduce_crosstab(rows: list, max_rows: int = 7) -> list:
-    """KOSIS 교차표(성별·지역·업종 × 응답 × 연도 등 다차원 셀)를 *읽을 수 있는 단일 분포* 로 축약.
-    ★ 사용자 박제 2026-07-01: 30셀 덤프 금지. 핵심 = '전체/계' 값을 가진 *모든* 차원을 전체로
-    collapse → 순수 응답 분포만 남김 (성별·지역·업종 무엇이든 일반 처리). 최신 연도만. 라벨은
-    응답명만(괄호 설명 제거), 최대 max_rows개. 전체 차원이 없으면 원본 정리 후 반환."""
+def _fmt_period(p: str) -> str:
+    """period 코드를 읽기 쉬운 라벨로 정규화 (202505→'2025.5', 2025→'2025').
+    이미 읽기 쉬운 형태('2025년 5월' 등)는 그대로 둔다."""
+    p = str(p or "").strip()
+    m = re.match(r"^(20\d{2})([01]\d)$", p)       # YYYYMM 6자리 코드
+    if m:
+        return f"{m.group(1)}.{int(m.group(2))}"
+    if re.fullmatch(r"(19|20)\d{2}", p):          # 순수 연도 4자리
+        return p
+    return p
+
+
+def _reduce_crosstab(rows: list, max_rows: int = 7) -> tuple[list, bool]:
+    """KOSIS 교차표(성별·지역·업종 × 응답 × 연도 등 다차원 셀)를 *읽을 수 있는 형태* 로 축약.
+
+    반환: (rows, is_temporal).
+      - is_temporal=True  → rows 는 *시점(period) 축 시계열* (label=정규화 period, 오름차순, 최근 12점).
+        호출부는 이 경우 viz_hint="line_chart" 로 렌더해 추이·맥락을 살린다.
+      - is_temporal=False → rows 는 기존 *단일 분포* (막대차트용, 최대 max_rows개).
+
+    ★ 사용자 박제 2026-07-01: 30셀 덤프 금지. '전체/계' 값을 가진 *모든* 차원을 전체로 collapse.
+    ★ 사용자 박제 2026-07-17: 시계열 보존. 최신 1점 스냅샷으로 붕괴시키던 결함 수정 — 서로 다른
+      시점이 3개 이상이고 비-period 차원(rest)이 '전체/계'로 collapse 가능하거나 rest 가 단일
+      계열이면, period 를 라벨 축으로 유지해 시계열 라인차트로 만든다."""
     parsed = []
     for r in rows:
         segs = [s.strip() for s in re.split(r"·", str(r.get("label", ""))) if s.strip()]
@@ -504,10 +586,36 @@ def _reduce_crosstab(rows: list, max_rows: int = 7) -> list:
             continue
         parsed.append({"rest": rest, "period": period, "value": r.get("value")})
     if not parsed:
-        return [{"label": _clean_label(r.get("label", "")), "value": r.get("value")} for r in rows[:max_rows]]
+        return ([{"label": _clean_label(r.get("label", "")), "value": r.get("value")}
+                 for r in rows[:max_rows]], False)
 
-    # 1) 최신 시점만 (연도 혼재 방지)
     periods = sorted({p["period"] for p in parsed if p["period"]})
+
+    # ── ★ 시계열 분기 (사용자 박제 2026-07-17): 서로 다른 시점 3개 이상 + rest 가 '전체/계'로
+    #    collapse 가능하거나 단일 계열이면 → period 를 라벨 축으로 유지하는 시계열 행 생성. ──────
+    if len(periods) >= 3:
+        # (a) rest 전부 '전체/계' 인 행 (성별·지역 등 세부 차원 없이 전체 집계만인 시점들)
+        total_rows = [p for p in parsed
+                      if p["period"] and p["rest"] and all(s in _DEMO_TOTAL for s in p["rest"])]
+        # (b) 비-period rest 조합이 단일 계열인지 (시점마다 값 하나로 대응)
+        rest_keys = {tuple(p["rest"]) for p in parsed if p["period"]}
+        temporal_src = None
+        if len({p["period"] for p in total_rows}) >= 3:
+            temporal_src = total_rows                       # '전체/계' 로 collapse
+        elif len(rest_keys) == 1:
+            temporal_src = [p for p in parsed if p["period"]]  # rest 단일 계열
+        if temporal_src:
+            by_period: dict = {}
+            for p in temporal_src:
+                by_period[p["period"]] = p["value"]         # 같은 period 중복 시 마지막 값
+            ordered = sorted(by_period.items(), key=lambda kv: str(kv[0]))[-12:]  # 오름차순·최근 12점
+            ts_rows = [{"label": _fmt_period(pr), "value": v}
+                       for pr, v in ordered if v is not None]
+            if len(ts_rows) >= 3:
+                return (ts_rows, True)
+
+    # ── 이하 비시계열: 최신 시점만 남기고 단일 분포로 축약 (기존 로직) ──────────────────────
+    # 1) 최신 시점만 (연도 혼재 방지)
     if periods:
         latest = periods[-1]
         kept = [p for p in parsed if p["period"] in (latest, None)]
@@ -538,7 +646,7 @@ def _reduce_crosstab(rows: list, max_rows: int = 7) -> list:
                 seen.add(lab)
                 out.append({"label": lab, "value": p["value"]})
             if len(out) >= 2:
-                return out[:max_rows]
+                return (out[:max_rows], False)
 
     # 4) 폴백(전체 차원 없음): 응답명만 라벨로 dedup
     out, seen = [], set()
@@ -555,7 +663,7 @@ def _reduce_crosstab(rows: list, max_rows: int = 7) -> list:
         non_total = [r for r in out if r["label"] not in _DEMO_TOTAL]
         if len(non_total) >= 2:
             out = non_total
-    return out[:max_rows]
+    return (out[:max_rows], False)
 
 
 def _parse_clean_doc(doc):
@@ -613,16 +721,18 @@ def _parse_clean_doc(doc):
 
     if len(rows) < 2:
         return None
-    # ★ 교차표(30셀 덤프) → 읽을 수 있는 단일 분포(전체×최신연도 응답별 ≤7개)로 축약
-    rows = _reduce_crosstab(rows, max_rows=7)
+    # ★ 교차표(30셀 덤프) → 시계열(라인) 또는 읽을 수 있는 단일 분포(≤7개 막대)로 축약
+    rows, _is_temporal = _reduce_crosstab(rows, max_rows=7)
     if len(rows) < 2:
         return None
     # ★ 다질문 표 감지 (사용자 박제 2026-07-01): 한 KOSIS 표에 여러 질문(인지도+구매한도 등)이
     #   섞이면 비율 합이 100%를 크게 초과(합계 200% 도넛 사고). 이 경우 fast-path 포기 → LLM 추출이
     #   *하나의 일관된 질문* 만 골라내게 위임 (None 반환 시 _extract_series_from_docs LLM 경로로 진행).
-    _vals = [r["value"] for r in rows]
-    if _vals and all(0 <= v <= 100 for v in _vals) and sum(_vals) > 140:
-        return None
+    #   ★ 시계열은 시점 나열이라 '비율 합계' 개념이 없으므로 이 게이트 미적용 (지수 12시점 합≫140 오탐 방지).
+    if not _is_temporal:
+        _vals = [r["value"] for r in rows]
+        if _vals and all(0 <= v <= 100 for v in _vals) and sum(_vals) > 140:
+            return None
     # ★ as_of: 오늘 날짜가 아닌 수집된 데이터의 실제 최신 날짜 박제 (사용자 박제 2026-07-11)
     # "202605", "202509" 형태 날짜 코드에서 최신값 추출 → "2026년 5월" 같은 형태로 표시
     _date_codes = re.findall(r'\b(20\d{2})([01]\d)\b', text)   # (년, 월) 튜플 리스트
@@ -633,7 +743,8 @@ def _parse_clean_doc(doc):
         _as_of = _now_as_of()
     src = {"provider": "kosis", "name": "통계청 KOSIS",
            "url": getattr(doc, "url", "") or "https://kosis.kr/", "as_of": _as_of}
-    return _mk_dataset(title[:40], "bar_chart", unit, rows, src)
+    _viz = "line_chart" if _is_temporal else "bar_chart"   # ★ 시계열이면 라인차트로 추이 표현
+    return _mk_dataset(title[:40], _viz, unit, rows, src)
 
 
 def _korean_num_variants(fv: float) -> list[str]:
@@ -833,7 +944,7 @@ def _extract_series_from_docs(series: dict, docs: list):
     # ★ LLM 추출 라벨도 교차표 축약 (사용자 박제 2026-07-01): LLM이 '합계·신용카드' / '읍소재시장·
     #   신용카드' 처럼 전체+특정 차원을 섞어 반환하면 _reduce_crosstab 으로 전체 차원 collapse →
     #   '신용카드' 만 남김 (KOSIS fast-path 와 동일 정리). 단일 차원이면 그대로 보존.
-    rows = _reduce_crosstab(rows, max_rows=8)
+    rows, _is_temporal = _reduce_crosstab(rows, max_rows=8)
     # ★ 단위 일관성 (사용자 박제 2026-07-01): LLM이 공통 단위를 못 정하면(=비교 불가 수치 짬뽕)
     #   그 차트는 버린다. 단위 없는 무의미 막대(부가가치 1.9 + 비용 1.88 …) 원천 차단.
     _llm_unit = str(parsed.get("unit", "") or "").strip()
@@ -847,6 +958,8 @@ def _extract_series_from_docs(series: dict, docs: list):
     _as_of_s = f"{max(_dc)[0]}년 {int(max(_dc)[1])}월" if _dc else _now_as_of()
     src = {"provider": src_name or "web", "name": src_name or "web", "url": src_url, "as_of": _as_of_s}
     viz = {"line": "line_chart", "bar": "bar_chart", "stat": "kpi", "donut": "pie_chart"}.get(series.get("chart"), "bar_chart")
+    if _is_temporal:   # ★ 교차표가 시계열로 축약됐으면 라인차트 강제 (설계 chart 무관)
+        viz = "line_chart"
     return _mk_dataset(series["name"], viz, _unit, rows, src)
 
 
@@ -867,12 +980,18 @@ def _specific_tokens(text: str) -> set:
 
 
 def _doc_title_relevant(title: str, ref_tokens: set) -> bool:
-    """표/문서 제목이 주제 고유명사와 겹치면 관련. 겹침 0 → 무관(농촌관광·식품소비 차단)."""
+    """표/문서 제목이 주제 고유명사와 겹치면 관련. 겹침 0 → 무관(농촌관광·식품소비 차단).
+
+    ★ 부분문자열 낚임 방지 (2026-07-17): 2글자 짧은 토큰은 *완전 토큰 일치* 만 인정.
+      '경제' 프로필 정의문에서 새어나온 '생산'·'활동' 같은 2글자 일반어가 '농업생산활동'
+      제목에 부분문자열로 걸려 무관 표가 통과하던 사고 근절. 3글자+ 고유명사(반도체 등)는
+      '반도체산업' 같은 복합어 매칭을 위해 부분문자열 매칭 유지.
+    """
     if not ref_tokens:
         return True
     title = str(title or "")
     toks = _specific_tokens(title)
-    return any((rt in title) or (rt in toks) for rt in ref_tokens)
+    return any((len(rt) >= 3 and rt in title) or (rt in toks) for rt in ref_tokens)
 
 
 def _relevance_filter(theme: str, description: str, datasets: list) -> list:
@@ -1150,7 +1269,7 @@ def _batch_extract_all(pending_items: list, theme: str) -> list[dict]:
 
             rows.append({"label": label, "value": val})
 
-        rows = _reduce_crosstab(rows, max_rows=8)
+        rows, _is_temporal = _reduce_crosstab(rows, max_rows=8)
         _unit = str(r.get("unit", "") or "").strip() or str(series.get("unit", "") or "")
         if len(rows) < 2 or not src_url or not _unit:
             continue
@@ -1163,6 +1282,8 @@ def _batch_extract_all(pending_items: list, theme: str) -> list[dict]:
                "url": src_url, "as_of": _as_of}
         viz = {"line": "line_chart", "bar": "bar_chart", "stat": "kpi",
                "donut": "pie_chart"}.get(series.get("chart"), "bar_chart")
+        if _is_temporal:   # ★ 교차표가 시계열로 축약됐으면 라인차트 강제
+            viz = "line_chart"
         ds = _mk_dataset(series["name"], viz, _unit, rows, src)
         results.append(ds)
         log.info(f"[chart_data] batch [ITEM {idx}] '{series['name']}' ({len(rows)}점)")
@@ -1237,7 +1358,8 @@ def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: 
 # ── 공개 API ──────────────────────────────────────────────────────────────
 def collect_chart_data(theme: str, sector: str = "", description: str = "",
                        exclude_titles=None, max_datasets: int = 12,
-                       synonyms: list | None = None) -> dict:
+                       synonyms: list | None = None,
+                       related_terms: list | None = None) -> dict:
     """주제 연관 차트용 실데이터를 출처(provenance)와 함께 수집.
 
     Args:
@@ -1247,6 +1369,9 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         exclude_titles: 이미 사용한 dataset title 집합 (같은 글 내 중복 방지).
         max_datasets:   반환 최대 dataset 수.
         synonyms:       topic_pack 선행 확장 결과 (있으면 _expand_theme LLM 호출 스킵).
+        related_terms:  자비스03 keyword_profile() 관련어 — 종목 dataset 수집 시
+                        네이버 금융 공식 테마 매칭에 사용(★ 파운드리→리모델링/인테리어
+                        오매칭 재발 방지, ERRORS 재발 — collect_stocks_data 참조).
 
     Returns:
         {"theme": theme, "datasets": [dataset, ...]}.
@@ -1326,7 +1451,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         is_stock = (any(k in combined for k in _STOCK_THEME_KWS)
                     and not any(k in combined for k in _SPECIFIC_NON_VALUATION))
         if not datasets and is_stock:
-            datasets.extend(_stock_datasets(theme))
+            datasets.extend(_stock_datasets(theme, related_terms=related_terms))
         _elapsed(f"2) 종목보강 (datasets={len(datasets)})")
 
         # ── 2.5) 시장 전용 dataset (코스닥·코스피, 코스닥 150) ───────────────────

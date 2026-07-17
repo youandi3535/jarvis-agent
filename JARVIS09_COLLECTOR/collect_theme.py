@@ -294,13 +294,21 @@ def is_official_theme(theme_name: str) -> bool:
                for t in catalog)
 
 
-def _naver_fin_theme_search(theme_name: str, timeout: int = 8) -> list:
+def _naver_fin_theme_search(theme_name: str, related_terms: list | None = None,
+                            timeout: int = 8) -> list:
     """네이버 금융 테마 목록에서 유사 테마를 찾아 종목 코드 목록 반환.
 
     흐름:
       1. finance.naver.com/sise/theme.naver 에서 40개 테마 수집
-      2. theme_name 키워드 fuzzy match (공통 2글자+ 단어 수 최대화)
+      2. theme_name + related_terms 키워드 fuzzy match (공통 2글자+ 단어 수 최대화)
       3. 매칭 테마 detail 페이지에서 종목명+코드 추출
+
+    ★ related_terms 필수 활용 (사용자 박제 2026-07-06 — 파운드리→리모델링/인테리어
+      오매칭 사고): theme_name 단독으론 카탈로그 어떤 테마와도 부분문자열이 안 겹치는
+      경우가 흔함(예: '파운드리'). 이때 관련어('반도체 위탁생산' 등)를 함께 스캔하면
+      '반도체' 부분문자열로 정확한 공식 테마(시스템반도체 등)를 결정론적으로 찾는다.
+      LLM 의미매칭은 그래도 실패했을 때만 쓰는 최후 폴백 — 266개 테마 통짜 리스트에서
+      한 번에 번호를 고르게 하면 위치 편향으로 엉뚱한 항목을 집는 사고가 재현됨.
 
     Returns list[{"name", "code", "ticker"}] — 빈 리스트 = 미매칭 or 오류
     """
@@ -333,13 +341,20 @@ def _naver_fin_theme_search(theme_name: str, timeout: int = 8) -> list:
                         best = max(best, L)
             return best
 
-        best_no, best_name, best_score = None, None, 0
+        # ★ theme_name 단독이 아니라 related_terms 도 함께 스캔 (사용자 박제 2026-07-06) —
+        #   '파운드리'는 카탈로그와 부분문자열이 안 겹쳐도 관련어 '반도체 위탁생산'은
+        #   '반도체' 3자가 '시스템반도체' 등과 겹쳐 결정론적으로 정확히 매칭된다.
+        _search_terms = [theme_name] + [t for t in (related_terms or []) if t and t != theme_name]
+
+        best_no, best_name, best_score, best_term = None, None, 0, theme_name
         for tname, tno in naver_themes.items():
-            score = _ko_score(theme_name, tname)
-            if score > best_score:
-                best_score = score
-                best_no = tno
-                best_name = tname
+            for _term in _search_terms:
+                score = _ko_score(_term, tname)
+                if score > best_score:
+                    best_score = score
+                    best_no = tno
+                    best_name = tname
+                    best_term = _term
 
         # 한국어 3자 미만 매칭은 너무 느슨함 (2자 = "상장"·"항공" 등 단독 단어는 오매칭 위험)
         # → ★ LLM 의미 매칭 폴백 (사용자 박제 2026-07-04, ERRORS [352]): 부분문자열이
@@ -347,30 +362,48 @@ def _naver_fin_theme_search(theme_name: str, timeout: int = 8) -> list:
         #   직접 고른다. "테마주명이 있으면 그 안에 종목도 있다" — 종목 작문이 아니라 공식
         #   테마의 *실제 구성종목* 을 가져오는 것. (예: '백신/진단시약/방역(신종플루, AI 등)'
         #   처럼 표기가 조금 달라 부분문자열 매칭이 어긋나도 공식 테마로 정확히 매핑.)
+        # ★ 자기모순 검증 (사용자 박제 2026-07-06 — 파운드리→리모델링/인테리어 오매칭
+        #   사고 재발 방지): 266개 테마 통짜 리스트에서 번호만 뽑게 하면 위치 편향으로
+        #   엉뚱한 항목을 집는 사고가 재현된다. 번호와 테마명을 *함께* 출력시켜, LLM 이
+        #   실제로 가리킨 테마명이 그 번호의 카탈로그 항목과 일치하는지 검증 — 불일치
+        #   시(자기모순) 매칭 자체를 거부한다(신뢰 불가 < 매칭 없음).
         if best_score < 3 or not best_no:
             try:
                 from shared.llm import invoke_text as _llm
                 _names = list(naver_themes.keys())
                 _numbered = "\n".join(f"{i+1}. {nm}" for i, nm in enumerate(_names))
+                _ctx = f"'{theme_name}'"
+                if related_terms:
+                    _ctx += f" (관련어: {', '.join(related_terms[:6])})"
                 _resp = (_llm(
                     "router",
-                    f"아래 [네이버 금융 공식 테마 목록] 중 '{theme_name}' 과 가장 부합하는 테마 "
-                    f"하나의 *번호만* 출력하라(예: 12). 의미상 부합하는 테마가 전혀 없으면 0. "
-                    f"숫자만, 다른 말 금지.\n\n[목록]\n{_numbered}",
+                    f"아래 [네이버 금융 공식 테마 목록] 중 {_ctx} 과 의미상 명확히 부합하는 "
+                    f"테마를 찾아라. 목록에 있는 번호와 테마명을 *그대로 정확히 복사*해 "
+                    f"'번호. 테마명' 형식으로만 출력하라(예: '13. 반도체 장비'). 부합하는 "
+                    f"테마가 전혀 없으면 '0' 하나만 출력. 다른 설명 금지.\n\n[목록]\n{_numbered}",
                 ) or "").strip()
-                _mm = re.search(r'\d+', _resp)
-                _idx = (int(_mm.group()) - 1) if _mm else -1
-                if 0 <= _idx < len(_names):
+                _mm = re.match(r'\s*(\d+)\s*\.?\s*(.*)', _resp)
+                _idx = (int(_mm.group(1)) - 1) if _mm else -1
+                _echo = (_mm.group(2).strip() if _mm else "")
+                if 0 <= _idx < len(_names) and (
+                    _echo == _names[_idx] or (_echo and _names[_idx].startswith(_echo))
+                    or (_echo and _echo.startswith(_names[_idx]))
+                ):
                     best_name = _names[_idx]
                     best_no = naver_themes[best_name]
+                    best_term = theme_name
                     print(f"  🔍 [naver_theme] LLM 의미매칭 '{theme_name}' → '{best_name}' (no={best_no})")
+                elif _idx >= 0:
+                    print(f"  ⚠️ [naver_theme] LLM 응답 자기모순(번호↔테마명 불일치) — 매칭 거부: "
+                          f"응답='{_resp[:60]}'")
             except Exception as _e:
                 print(f"  ⚠️ [naver_theme] LLM 의미매칭 실패: {_e}")
             if not best_no:
                 print(f"  ℹ️ [naver_theme] '{theme_name}' — 부합 공식 테마 없음 (부분문자열 best={best_score})")
                 return []
 
-        print(f"  🔍 [naver_theme] '{theme_name}' → 네이버 금융 '{best_name}' (no={best_no}, score={best_score})")
+        print(f"  🔍 [naver_theme] '{theme_name}'(매칭어='{best_term}') → 네이버 금융 "
+              f"'{best_name}' (no={best_no}, score={best_score})")
 
         # 3) 종목 추출 — ★ 재시도 (사용자 박제 2026-07-04, ERRORS [352]): 공식 테마로
         #    매칭됐는데도 상세페이지 fetch 가 *일시* 실패/빈응답이면 종목 0개로 테마가 통째로
@@ -626,8 +659,12 @@ def stocks_to_datasets(stocks_data: dict, max_stocks: int = 8) -> list[dict]:
     return datasets
 
 
-def collect_stocks_data(theme_name: str) -> dict:
+def collect_stocks_data(theme_name: str, related_terms: list | None = None) -> dict:
     """테마 키워드 → 종목 {STOCK_COUNT_PER_POST}개 + 시세 + 재무 데이터 수집.
+
+    related_terms: 자비스03 keyword_profile() 관련어 — 네이버 금융 공식 테마 매칭에
+    필수 (사용자 박제 2026-07-06). theme_name 단독으론 카탈로그와 안 겹치는 경우가
+    흔해 오매칭 위험이 큼(★ 상세: _naver_fin_theme_search docstring).
 
     흐름 (LLM 호출 1회 + Naver 금융 병렬 N회):
       1. Claude Sonnet 호출 — 테마 관련 KRX 상장 종목 7개 추출 ('종목명:티커' CSV)
@@ -663,7 +700,7 @@ def collect_stocks_data(theme_name: str) -> dict:
     #       exit-0-empty / timeout 300s 으로 20+분 낭비 → Naver Finance 먼저 시도.
     # 전략: Naver Finance 40개 테마 fuzzy match → 3자+ 공통 부분 있으면 즉시 사용,
     #        매칭 없으면 LLM 폴백으로 fall-through.
-    _naver_pre_pairs = _naver_fin_theme_search(theme_name)
+    _naver_pre_pairs = _naver_fin_theme_search(theme_name, related_terms=related_terms)
 
     # ── ★ 공식 테마 게이트 (사용자 박제 2026-07-03 — ERRORS [306]) ──────────────
     # "KRX/네이버 금융 공식 테마를 먼저 확인하고, 미작성 공식 테마로 주제를 선정한다.
@@ -880,7 +917,7 @@ def collect_stocks_data(theme_name: str) -> dict:
     # 사전 매칭(_naver_pre_pairs)에서 이미 시드를 얻었어도, n 미달이면 여기서 재확인.
     if not pairs and not _naver_pre_pairs:
         print(f"  ⚠️ [stocks_data] 6차 Naver Finance 테마 폴백 시도")
-        _nav_pairs = _naver_fin_theme_search(theme_name)
+        _nav_pairs = _naver_fin_theme_search(theme_name, related_terms=related_terms)
         for p in _nav_pairs:
             if len(pairs) >= n:
                 break

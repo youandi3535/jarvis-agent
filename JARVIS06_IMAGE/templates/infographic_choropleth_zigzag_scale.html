@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0: #ffffd9;
+    --hero1: #0c2c6b;
+    --ink: #16223f;
+    --a1: #edf8b1;
+    --a1s: #7fcdbb;
+    --a2: #41b6c4;
+    --a2s: #225ea8;
+    --soft: #ffffff;
+    --muted: #7a8290;
+    --eyebrow: #8a8f99;
+    --grid: #b3b3b3;
+  }
+
+  *{ box-sizing:border-box; }
+
+  html,body{
+    margin:0;
+    padding:0;
+    width:1280px;
+    background:var(--soft);
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* 히어로 밴드·카드형 대시보드 없음 — 세계지도 단일 패널이 캔버스 상단 약 75% 차지 */
+  .canvas{
+    width:1280px;
+    min-height:1020px;
+    margin:0 auto;
+    padding:38px 30px 26px;
+    background:var(--soft);
+    display:flex;
+    flex-direction:column;
+  }
+
+  .head{ flex:0 0 auto; padding:0 16px; }
+
+  .eyebrow{
+    font-size:14px;
+    font-weight:600;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 8px;
+  }
+  .eyebrow:empty{ display:none; margin:0; }
+
+  .title{
+    font-size:32px;
+    font-weight:800;
+    line-height:1.26;
+    letter-spacing:-.01em;
+    color:var(--ink);
+    margin:0 0 8px;
+  }
+  .title:empty{ display:none; margin:0; }
+
+  .subtitle{
+    font-size:16px;
+    font-weight:400;
+    line-height:1.55;
+    color:var(--muted);
+    max-width:920px;
+    margin:0 0 12px;
+  }
+  .subtitle:empty{ display:none; margin:0; }
+
+  /* ── 선택적 히어로 수치 — 미사용 시 자동 숨김 ── */
+  .hero-stats{
+    display:flex;
+    flex-wrap:wrap;
+    gap:28px;
+    margin:0 16px 12px;
+  }
+  .hero-stats:empty{ display:none; margin:0; }
+  .hero-stats .stat{ display:flex; flex-direction:column; gap:4px; }
+  .hero-stats .stat .num{ font-size:28px; font-weight:800; color:var(--ink); line-height:1.1; }
+  .hero-stats .stat .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ── 차트 슬롯 공통 — 빈 슬롯 자동 은폐 ── */
+  section.chart-slot{ width:100%; }
+  section.chart-slot:empty{ display:none; }
+  section.chart-slot:has([data-jarvis-empty]){ display:none; }
+
+  /* 세계지도(코로플레스) — 캔버스 상단 약 75%, 프레임·카드 배경 없이 흰 배경 위 국가 도형만 풀블리드 */
+  section.chart-slot--map{
+    flex:1 1 auto;
+    min-height:700px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:0 10px;
+  }
+  section.chart-slot--map > *{ width:100%; height:100%; }
+
+  /* 국가 경계선 — 범례 해칭을 제외한 유일한 라인 장식, 연회색 얇은 선 */
+  .map-country{ stroke:var(--grid); stroke-width:.6; fill:var(--a1); }
+
+  /* 순차형(sequential) 7단 — 지도 fill + 범례 그라디언트 앵커 공용 (연노랑 → 진남색, 단일 컬러맵) */
+  .seq-1{ fill:var(--hero0); background:var(--hero0); }
+  .seq-2{ fill:var(--a1); background:var(--a1); }
+  .seq-3{ fill:var(--a1s); background:var(--a1s); }
+  .seq-4{ fill:var(--a2); background:var(--a2); }
+  .seq-5{ fill:var(--a2s); background:var(--a2s); }
+  .seq-6{ fill:color-mix(in srgb, var(--a2s), var(--hero1)); background:color-mix(in srgb, var(--a2s), var(--hero1)); }
+  .seq-7{ fill:var(--hero1); background:var(--hero1); }
+
+  /* ── 하단 약 25% — 범례 존, 단일 가로 행(좌: No data 해칭 카드 / 우: 지그재그 눈금 + 그라디언트 화살표 바) ── */
+  .legend-zone{
+    flex:0 0 auto;
+    display:flex;
+    align-items:flex-end;
+    gap:32px;
+    min-height:200px;
+    padding:22px 16px 0;
+  }
+  .legend-zone:not(:has(section.chart-slot:not(:empty))){ display:none; }
+
+  section.chart-slot--legend-nodata{ flex:0 0 auto; }
+  section.chart-slot--legend-scale{ flex:1 1 auto; }
+
+  /* ── 범례 유틸리티 — 주입 마크업이 참조하는 공용 클래스 ── */
+
+  /* 좌측 — No data 사각 해칭 카드 (범례 내 유일한 패턴 장식, 회색 사선) */
+  .legend-nodata{ display:flex; align-items:center; gap:12px; }
+  .legend-nodata .swatch{
+    width:56px;
+    height:38px;
+    flex:0 0 auto;
+    background-color:var(--soft);
+    background-image:repeating-linear-gradient(45deg, var(--muted) 0 2px, transparent 2px 9px);
+    border:1px solid var(--muted);
+  }
+  .legend-nodata .lbl{ font-size:14px; font-weight:500; color:var(--muted); }
+
+  /* 우측 — 지그재그(위/아래 교차) 눈금 레이블 + 7단 연속 그라디언트 화살표 바 */
+  .legend-scale{ display:flex; flex-direction:column; }
+
+  .legend-scale-ticks{
+    display:flex;
+    justify-content:space-between;
+    margin-bottom:6px;
+    padding:0 6px;
+  }
+  .legend-scale-ticks .tick{
+    font-size:14px;
+    font-weight:600;
+    color:var(--muted);
+    line-height:1;
+    margin-top:0;
+  }
+  /* 짝수 번째 눈금만 아래로 내려 위/아래 교차 배치 — 좁은 간격에서도 겹치지 않게 함 */
+  .legend-scale-ticks .tick:nth-child(even){ margin-top:18px; }
+
+  .legend-scale-bar{
+    height:36px;
+    width:100%;
+    background:linear-gradient(to right,
+      var(--hero0) 0%,
+      var(--a1) 16.6%,
+      var(--a1s) 33.3%,
+      var(--a2) 50%,
+      var(--a2s) 66.6%,
+      color-mix(in srgb, var(--a2s), var(--hero1)) 83.3%,
+      var(--hero1) 100%);
+    clip-path:polygon(0 0, calc(100% - 20px) 0, 100% 50%, calc(100% - 20px) 100%, 0 100%);
+  }
+
+  /* ── 선택적 미니 카드 — 미사용 시 자동 숨김 ── */
+  .mini-cards{
+    display:flex;
+    flex-wrap:wrap;
+    gap:18px;
+    margin:20px 16px 0;
+  }
+  .mini-cards:empty{ display:none; margin:0; }
+  .mini-cards .mini-card{
+    flex:1 1 200px;
+    padding:16px 18px;
+    background:var(--soft);
+    border:1px solid var(--grid);
+  }
+
+  /* ── 푸터 — 얇은 회색 구분선 + 출처/브랜드만 ── */
+  .foot{
+    flex:0 0 auto;
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:24px;
+    margin:18px 16px 0;
+    padding-top:14px;
+    border-top:1px solid var(--grid);
+  }
+  .source{ font-size:13px; color:var(--muted); }
+  .source:empty{ display:none; }
+  .brand{ font-size:13px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--eyebrow); }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <header class="head">
+      <p class="eyebrow">{EYEBROW}</p>
+      <h1 class="title">{TITLE}</h1>
+      <p class="subtitle">{SUBTITLE}</p>
+    </header>
+
+    <div class="hero-stats">{HERO_STATS}</div>
+
+    <section class="chart-slot chart-slot--map">{CHART_1}</section>
+
+    <div class="legend-zone">
+      <section class="chart-slot chart-slot--legend-nodata">{CHART_2}</section>
+      <section class="chart-slot chart-slot--legend-scale">{CHART_3}</section>
+    </div>
+
+    <div class="mini-cards">{MINI_CARDS}</div>
+
+    <footer class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </footer>
+  </div>
+</body>
+</html>

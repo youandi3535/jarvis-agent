@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>{TITLE}</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
+
+:root{
+  --hero0:#4A4139;
+  --hero1:#332C26;
+  --ink:#2A241D;
+  --a1:#2E8C82;
+  --a1s:#E4F3F1;
+  --a2:#C9A24B;
+  --a2s:#F7EFD9;
+  --soft:#F5F5F4;
+  --muted:#8A8378;
+  --eyebrow:#C9A24B;
+  --grid:#E6E3DD;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+
+body{
+  width:1280px;
+  background:#fff;
+  color:var(--ink);
+  font-family:'Noto Sans KR',sans-serif;
+}
+
+.hero-stats:empty,
+.mini-cards:empty{display:none;}
+
+section:has([data-jarvis-empty]){display:none;}
+
+.block{border-bottom:1px solid var(--grid);}
+
+/* ---------- hero ---------- */
+.hero{
+  background:linear-gradient(180deg,var(--hero0),var(--hero1));
+  padding:76px 96px 44px;
+}
+.eyebrow{
+  font-size:15px;
+  font-weight:700;
+  letter-spacing:4px;
+  text-transform:uppercase;
+  color:var(--eyebrow);
+  margin-bottom:20px;
+}
+.hero h1{
+  font-size:50px;
+  font-weight:900;
+  line-height:1.32;
+  color:#F7F5F0;
+  max-width:940px;
+}
+.ribbon{
+  background:var(--a1);
+  margin-top:-16px;
+  padding:22px 96px;
+  position:relative;
+  z-index:2;
+}
+.ribbon p{
+  color:#fff;
+  font-size:19px;
+  font-weight:500;
+  letter-spacing:.2px;
+}
+
+/* ---------- hero stats ---------- */
+.hero-stats{
+  display:flex;
+  gap:20px;
+  flex-wrap:wrap;
+  padding:40px 96px;
+}
+.hero-stat-card{
+  flex:1;
+  min-width:190px;
+  background:var(--soft);
+  border-radius:10px;
+  padding:24px 26px;
+}
+.hero-stat-card .num{font-size:34px;font-weight:900;color:var(--a1);}
+.hero-stat-card .label{font-size:14px;font-weight:500;color:var(--muted);margin-top:8px;}
+
+/* ---------- split3 : illustration + donut/list chart ---------- */
+.split3{
+  display:flex;
+  align-items:center;
+  gap:52px;
+  padding:64px 96px;
+}
+.illustration{flex:0 0 280px;}
+.illustration svg{width:100%;height:auto;}
+
+.chart-slot{display:block;}
+
+.donut-wrap{display:flex;align-items:center;gap:40px;}
+.donut{
+  --seg1:40%;
+  --seg2:72%;
+  width:216px;
+  height:216px;
+  border-radius:50%;
+  flex-shrink:0;
+  position:relative;
+  background:conic-gradient(var(--a1) 0 var(--seg1),var(--a2) var(--seg1) var(--seg2),var(--soft) var(--seg2) 100%);
+}
+.donut::after{
+  content:"";
+  position:absolute;
+  inset:26px;
+  border-radius:50%;
+  background:#fff;
+}
+.donut--sm{width:150px;height:150px;}
+.donut--sm::after{inset:20px;}
+.donut-center{
+  position:absolute;
+  inset:0;
+  z-index:1;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  font-weight:800;
+  color:var(--ink);
+}
+.donut-center .num{font-size:24px;}
+.donut-center .label{font-size:13px;color:var(--muted);font-weight:500;}
+
+.activity-list{list-style:none;display:flex;flex-direction:column;gap:14px;flex:1;}
+.activity-item{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  background:var(--soft);
+  border-radius:8px;
+  padding:14px 20px;
+  font-size:16px;
+  color:var(--ink);
+}
+.activity-item .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;background:var(--a1);}
+.activity-item .hours{margin-left:auto;font-weight:800;color:var(--a1);}
+
+/* ---------- badge row (mini cards) ---------- */
+.mini-cards{
+  display:flex;
+  gap:28px;
+  flex-wrap:wrap;
+  padding:56px 96px;
+}
+.badge-circle{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:14px;
+  width:170px;
+}
+.badge-circle .ring{
+  width:104px;
+  height:104px;
+  border-radius:50%;
+  background:var(--soft);
+  border:3px solid var(--a1s);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:26px;
+  font-weight:800;
+  color:var(--a1);
+}
+.badge-circle .ring.gold{border-color:var(--a2s);color:var(--a2);}
+.badge-circle .label{font-size:15px;font-weight:500;color:var(--muted);text-align:center;}
+
+/* ---------- segmented bar ---------- */
+.section-bar{padding:56px 96px;}
+.segment-track{
+  display:flex;
+  width:100%;
+  height:72px;
+  border-radius:10px;
+  overflow:hidden;
+}
+.segment{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  color:#fff;
+  font-weight:700;
+  font-size:16px;
+}
+
+/* ---------- office productivity ---------- */
+.section-office{
+  display:flex;
+  align-items:center;
+  gap:56px;
+  padding:64px 96px;
+}
+.office-text{flex:1;}
+.office-text h3{font-size:28px;font-weight:800;color:var(--ink);margin-bottom:14px;}
+.office-text p{font-size:16px;line-height:1.75;color:var(--muted);}
+.office-hack{
+  flex:0 0 320px;
+  background:var(--a1s);
+  border-radius:10px;
+  padding:26px 28px;
+}
+.office-hack .tag{
+  display:inline-block;
+  background:#fff;
+  color:var(--a1);
+  font-size:13px;
+  font-weight:800;
+  letter-spacing:1px;
+  padding:4px 12px;
+  border-radius:20px;
+  margin-bottom:12px;
+}
+.office-hack p{font-size:15px;line-height:1.65;color:var(--ink);}
+
+/* ---------- footer ---------- */
+.footer{
+  background:linear-gradient(180deg,var(--hero1),var(--hero0));
+  padding:48px 96px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+}
+.footer .brand{font-size:20px;font-weight:800;letter-spacing:1px;color:#F7F5F0;}
+.footer .source{font-size:14px;color:rgba(255,255,255,.65);}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <p class="eyebrow">{EYEBROW}</p>
+  <h1>{TITLE}</h1>
+</header>
+<div class="ribbon"><p>{SUBTITLE}</p></div>
+
+<div class="hero-stats">{HERO_STATS}</div>
+
+<div class="block split3">
+  <div class="illustration">
+    <svg viewBox="0 0 300 260" xmlns="http://www.w3.org/2000/svg">
+      <rect x="30" y="210" width="220" height="18" rx="9" fill="var(--soft)"/>
+      <rect x="70" y="120" width="120" height="90" rx="20" fill="var(--a1)"/>
+      <circle cx="130" cy="90" r="34" fill="var(--a2)"/>
+      <rect x="96" y="60" width="68" height="26" rx="13" fill="var(--a2)"/>
+      <rect x="150" y="160" width="80" height="52" rx="6" fill="var(--muted)"/>
+      <rect x="150" y="152" width="80" height="10" rx="4" fill="var(--ink)"/>
+      <rect x="60" y="205" width="26" height="30" rx="6" fill="var(--ink)"/>
+      <rect x="180" y="205" width="26" height="30" rx="6" fill="var(--ink)"/>
+    </svg>
+  </div>
+  <section class="chart-slot">{CHART_1}</section>
+</div>
+
+<div class="mini-cards">{MINI_CARDS}</div>
+
+<div class="block section-bar">
+  <section class="chart-slot">{CHART_2}</section>
+</div>
+
+<div class="block section-office">
+  <section class="chart-slot">{CHART_3}</section>
+</div>
+
+<footer class="footer">
+  <div class="brand">{BRAND}</div>
+  <div class="source">{SOURCE}</div>
+</footer>
+
+</body>
+</html>

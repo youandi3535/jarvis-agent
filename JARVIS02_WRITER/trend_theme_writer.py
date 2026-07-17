@@ -82,14 +82,29 @@ _TODAY_DOW = ["월", "화", "수", "목", "금", "토", "일"][_TODAY.weekday()]
 #  ① 데이터 수집 — collect_stocks_data 위임
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _collect(theme: str) -> dict:
-    """테마 키워드 → 종목 데이터. collect_theme.collect_stocks_data 위임."""
+def _collect(theme: str, sector: str = "", related_terms: list | None = None) -> dict:
+    """테마 키워드 → 종목 데이터. collect_theme.collect_stocks_data 위임.
+
+    ★ related_terms 미제공 시 자비스03 keyword_profile() 로 자체 조회 (사용자 박제
+    2026-07-17 — "파운드리"→가구주 오매칭 사고 근본수정). 종목 검색은 테마명 단독
+    fuzzy-match 로는 "파운드리"처럼 네이버 공식 카탈로그와 겹치는 부분문자열이 없는
+    키워드에서 LLM 폴백에 의존하게 되고, 그 LLM 폴백은 266개 평문 목록에서 번호 하나를
+    고르는 방식이라 위치편향으로 무관한 테마를 잘못 고르는 사고가 반복됐다. 관련어
+    (예: "반도체 위탁생산")를 함께 매칭하면 결정론적 부분문자열 일치로 해결되는 경우가
+    대부분이라 여기서 항상 확보해 내려보낸다.
+    """
     # ★ 단일 진입점 — 새 테마 = 전체 상태 초기화
     from JARVIS09_COLLECTOR.run_context import new_run as _new_run
     _new_run(theme)
+    if related_terms is None:
+        try:
+            from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
+            related_terms = (_kw_prof(theme, sector) or {}).get("related_terms")
+        except Exception:
+            related_terms = None
     try:
         from JARVIS02_WRITER.collect_theme import collect_stocks_data
-        return collect_stocks_data(theme)
+        return collect_stocks_data(theme, related_terms=related_terms)
     except Exception as e:
         print(f"  ❌ [theme] collect_stocks_data 실패: {e}")
         _g_report("writer", e, module=__name__)
@@ -316,7 +331,7 @@ def run_tistory_theme(theme: str, sector: str = "",
 
     # ── ① 데이터 수집 ───────────────────────────────────────────
     if stocks_data is None:
-        stocks_data = _collect(theme)
+        stocks_data = _collect(theme, sector=sector)
     if not stocks_data.get("stocks"):
         _tg(f"⚠️ [THEME-TISTORY] 종목 데이터 없음 — 발행 건너뜀: {theme}")
         if _preloaded_driver:
@@ -343,7 +358,7 @@ def run_naver_theme(theme: str, sector: str = "",
     _gd("run_naver_theme")
     print(f"\n  🟢 [THEME-NAVER] 테마 발행 시작: {theme}")
     if stocks_data is None:
-        stocks_data = _collect(theme)
+        stocks_data = _collect(theme, sector=sector)
     if not stocks_data.get("stocks"):
         _tg(f"⚠️ [THEME-NAVER] 종목 데이터 없음 — 발행 건너뜀: {theme}")
         return {"success": False, "url": "", "keyword": theme, "error": "종목 데이터 없음"}
@@ -460,6 +475,22 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             print("  ⏭️ [② 수집] 이전 시도 종목 0개 — collect 재실행 스킵 (결과 동일 예상)")
             return {}
 
+        # ★ 키워드 단독 전송 금지 (사용자 박제 2026-07-03 — ADR 013 강제):
+        #   테마 키워드도 자비스03 프로필(정의·관련어)을 동봉해 JARVIS09 에 전달.
+        #   ★ 종목 검색 관련어 근본수정 (사용자 박제 2026-07-17 — "파운드리"→가구주 오매칭
+        #   사고): 리서치 스레드가 시작하기 *전* 동기로 1회만 조회해 리서치·종목 수집
+        #   양쪽이 재사용 — 중복 LLM 호출 방지 + related_terms 를 _collect 에도 공급.
+        _prof, _angle = {}, ""
+        try:
+            from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
+            _prof = _kw_prof(state["theme"], state.get("sector", "")) or {}
+            _angle = (_prof.get("summary") or "").strip()
+            if _angle:
+                state["theme_profile"] = _prof
+                print(f"  🏷️ [THEME] 자비스03 프로필: {_angle[:60]}")
+        except Exception:
+            pass
+
         _col_exec = _TExec(max_workers=1)
 
         def _run_jarvis09():
@@ -467,18 +498,6 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
 
             반환: {"docs": [...], "pack": dict|None}
             """
-            # ★ 키워드 단독 전송 금지 (사용자 박제 2026-07-03 — ADR 013 강제):
-            #   테마 키워드도 자비스03 프로필(정의·관련어)을 동봉해 JARVIS09 에 전달.
-            _angle = ""
-            try:
-                from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
-                _prof = _kw_prof(state["theme"], state.get("sector", ""))
-                _angle = (_prof.get("summary") or "").strip()
-                if _angle:
-                    state["theme_profile"] = _prof
-                    print(f"  🏷️ [THEME] 자비스03 프로필: {_angle[:60]}")
-            except Exception:
-                pass
             try:
                 if os.getenv("RESEARCH_FIRST", "1") != "0":
                     from JARVIS09_COLLECTOR import collect_research
@@ -515,7 +534,8 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             _col_fut = None
 
         # 종목 데이터 수집 (주식 시세·재무)
-        data = _collect(state["theme"])
+        data = _collect(state["theme"], sector=state.get("sector", ""),
+                        related_terms=_prof.get("related_terms"))
 
         # ★ 다소스 결손 분리 (사용자 박제 2026-07-04 — 경제 파이프라인과 동렬화, ERRORS [351]):
         #   종목(stocks)이 0개여도 JARVIS09 다소스 리서치(논문·뉴스·DART·ECOS·웹 등)를
@@ -794,17 +814,21 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         # 재생성 필요성 표시 (재시도 시 이미지 폴더 불필요 리셋 방지)
         # ★ 리뷰 확정 수정 (2026-07-03): 해당 step 의 *어떤* 이슈든(draft_failed 뿐 아니라
         #   prepublish 게이트 factuality/engagement 포함) 있으면 skip 금지 — 재작성 순환 보존.
-        _has_step_issue = any(i.step == step_name for i in non_draft)
-        if not raw_strs and not _has_step_issue:
-            state[f"_{draft_key}_skip_regen"] = True   # 대본 이슈 없음 → 재생성 불필요
         if raw_strs:
             fixed_strs, unfixed_strs = _fx(state, draft_key, platform, raw_strs, "theme")
             for s in fixed_strs:
                 fixed_all.append(Issue(step=step_name, kind="draft_fixed", detail=s))
             for s in unfixed_strs:
                 unfixed_all.append(Issue(step=step_name, kind="draft_invalid", detail=s))
-            # 수정 불가 이슈가 있으면 재생성 필요, 없으면 인라인 패치로 해결
-            state[f"_{draft_key}_skip_regen"] = not bool(unfixed_strs)
+        # ★ 진짜결함 수정 (재현테스트로 발견): skip_regen 을 raw_strs(구조 이슈) 인라인
+        #   패치 성공 여부만으로 판단하면, 같은 step 의 factuality/engagement 이슈가
+        #   non_draft 에 남아있어도 skip_regen=True 로 덮어써져 대본이 영원히 재생성
+        #   되지 않는 무한 루프 발생(매력도 미달이 재검증마다 재발해도 대본 불변 —
+        #   "attempt=1 step=③ 대본: 매력도 미달" 이 재시도에서도 그대로 반복되는 원인).
+        #   unfixed_all(구조+게이트 통틀어) 에 이 step 이슈가 하나라도 남아있는지로
+        #   단일 판단 — 이 step 이 완전히 깨끗할 때만 재생성 스킵.
+        _remaining_step_issue = any(i.step == step_name for i in unfixed_all)
+        state[f"_{draft_key}_skip_regen"] = not _remaining_step_issue
 
         # ★ 회복 불가 조건 → abort (harness 즉시 차단, 2차 시도 낭비 없음)
         _has_data_empty = any(i.kind == "data_empty" for i in non_draft)

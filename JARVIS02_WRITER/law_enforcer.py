@@ -1379,7 +1379,7 @@ def _extract_claims(html: str) -> list[dict]:
         'key 는 글의 핵심 정보면 true. 없으면 []. JSON 외 다른 말 금지.\n\n'
         "[본문]\n" + body
     )
-    resp = invoke_text("fact_judge", prompt, timeout=90)  # ★ ERRORS [368] hang 방지
+    resp = invoke_text("fact_judge", prompt, timeout=90, _nonessential=True)  # ★ ERRORS [368] hang 방지
     out: list[dict] = []
     for it in _fact_parse_json_list(resp)[:_FACT_MAX_CLAIMS]:
         if isinstance(it, dict) and str(it.get("text", "")).strip():
@@ -1408,7 +1408,7 @@ def _ground_unsupported(claims: list[dict], corpus: str) -> list[str]:
         "차단 대상 주장의 원문을 [주장 목록] 그대로 JSON 배열로 반환. 없으면 []. JSON 외 다른 말 금지.\n\n"
         "[출처]\n" + (corpus or "(없음)") + "\n\n[주장 목록]\n" + claim_lines
     )
-    resp = invoke_text("fact_judge", prompt, timeout=90)  # ★ ERRORS [368] hang 방지
+    resp = invoke_text("fact_judge", prompt, timeout=90, _nonessential=True)  # ★ ERRORS [368] hang 방지
     return [str(x).strip() for x in _fact_parse_json_list(resp) if str(x).strip()]
 
 
@@ -1431,7 +1431,7 @@ def _web_confirms(claim: str, evidence: list[dict]) -> bool:
         "근거가 주장과 무관하거나 모순되면 false.\n\n"
         "[주장]\n" + claim + "\n\n[웹 근거]\n" + ev
     )
-    resp = invoke_text("fact_judge", prompt, timeout=90)  # ★ ERRORS [368] hang 방지
+    resp = invoke_text("fact_judge", prompt, timeout=90, _nonessential=True)  # ★ ERRORS [368] hang 방지
     if not (resp or "").strip():
         raise FactJudgeUnavailable("웹 근거 판정 응답 없음 — 호출 실패(rate-limit 스로틀 추정)")
     m = re.search(r"\{.*\}", resp, re.DOTALL)

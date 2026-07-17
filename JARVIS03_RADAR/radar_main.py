@@ -529,13 +529,16 @@ if __name__ == "__main__":
         else:
             print(f"[RADAR] {d} 데이터 없음")
     else:
-        # ★ 정지 방어 — 일회성 레이더 수집 작업 (freeze 300초 + deadline 900초 초과 시
+        # ★ 정지 방어 — 일회성 레이더 수집 작업 (freeze 300초 + deadline 초과 시
         #   GUARDIAN 보고 후 os._exit → 다음 예약 재시도). --date 조회는 감싸지 않음.
-        #   ★ deadline_sec=900 상향은 헛다리(ERRORS [414]) — 실측 실제 작업시간은 ~60s 뿐이며
-        #   "데드라인 초과 3860s" 는 절전(~3800s)이 원인. 근본 수정은 watchdog.py Watchdog._monitor()
-        #   의 절전 gap 보정(self._start += gap)에서 완료 — 여기 값은 그대로 유지.
+        #   ★ deadline_sec=900 상향이 [414]("실측 ~60s, 절전이 원인") 당시엔 헛다리였으나,
+        #   이후 네이버 트렌딩·TOP10/TOP50 혼합·경쟁강도(15)·자동완성(20)·LLM 각도생성이
+        #   추가되며 파이프라인 자체가 무거워짐 — 정상 성공 실행도 ~300s대, 네트워크 지연 시
+        #   900s를 실측으로 초과(절전 gap 로그 없음, 순수 작업시간 초과 — 2026-07-17 재발).
+        #   90분(5400s) 외곽 harness deadline·max_attempts=3 구조(JARVIS03_RADAR/jobs.py
+        #   _TRENDS_DEADLINE_SEC)와 정합하도록 1800초로 상향(3회 재시도 시 5400s 이내).
         from JARVIS00_INFRA.watchdog import guard_main
-        with guard_main("레이더 수집", deadline_sec=900):
+        with guard_main("레이더 수집", deadline_sec=1800):
             data     = collect_today()
             save(data)
             no_push  = "--no-push" in args

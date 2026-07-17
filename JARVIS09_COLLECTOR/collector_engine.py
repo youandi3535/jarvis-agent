@@ -575,7 +575,7 @@ def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
     stocks_data: dict = {}
     if (category or "").strip().lower() == "theme":
         try:
-            stocks_data = collect_stocks_data(keyword) or {}
+            stocks_data = collect_stocks_data(keyword, related_terms=(profile or {}).get('related_terms')) or {}
         except Exception as e:
             log.warning(f"[collect_all] 종목 수집 실패: {e}")
     rs = collect_research(keyword, sector=sector, angle=angle) or {}

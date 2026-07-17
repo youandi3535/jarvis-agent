@@ -20,6 +20,30 @@ log = logging.getLogger("jarvis.collector.dart")
 
 _BASE = "https://opendart.fss.or.kr/api"
 
+# ── 거시·일반 경제 키워드 차단 리스트 (기업명 검색 오염 방지) ──────────────────
+#   '경제'·'금리' 같은 거시/산업 키워드를 corp_name(기업명) 검색어로 쓰면
+#   전혀 무관한 기업공시(포스코DX·일성건설·와이즈에이아이 등)가 유입돼 API 티어
+#   캡을 잠식하고 ECOS 거시지표·KRX 시세를 밀어낸다. theme 이 이 목록에 걸리면
+#   공시 수집을 즉시 스킵한다. (확장 가능 — 이 상단 상수만 추가)
+_NON_CORP_KEYWORDS = frozenset({
+    "경제", "금리", "기준금리", "물가", "소비자물가", "환율", "증시",
+    "코스피", "코스닥", "부동산", "고용", "실업", "실업률", "무역",
+    "수출", "수입", "성장률", "gdp", "인플레이션", "디플레이션", "경기",
+    "경상수지", "무역수지",
+})
+
+
+def _is_macro_keyword(theme: str) -> bool:
+    """거시·일반 경제 키워드면 True — 기업명(corp_name) 검색 대상이 아님.
+
+    빈 문자열도 True(검색 무의미). 소문자·공백 정규화 후 부분일치로 판정.
+    'HD현대일렉트릭' 같은 실제 종목명은 걸리지 않아 정상 수집된다.
+    """
+    t = (theme or "").strip().lower()
+    if not t:
+        return True
+    return any(kw in t for kw in _NON_CORP_KEYWORDS)
+
 
 class DartProvider(BaseProvider):
     """DART 전자공시 — OpenDART REST API."""
@@ -73,6 +97,10 @@ class DartProvider(BaseProvider):
         return {}
 
     def collect(self, theme: str, sector: str = "", max_items: int = 10) -> list[RawDocument]:
+        # ★ 거시·일반 키워드는 기업명 검색 오염원 — 조기 스킵 (네트워크 진입 전)
+        if _is_macro_keyword(theme):
+            log.info(f"[dart] 거시/일반 키워드 '{theme}' — 기업공시 수집 스킵")
+            return []
         if not self._available:
             log.warning("[DART] DART_API_KEY 없음 — (https://opendart.fss.or.kr 무료 발급)")
             return []
