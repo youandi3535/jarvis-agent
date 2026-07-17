@@ -107,7 +107,7 @@ class MlitProvider(BaseProvider):
                     if not items:
                         continue
                     all_lines.append(f"[{area_name}]")
-                    for item in items[:3]:
+                    for item in items:   # ★ 3건컷 폐지 2026-07-17 (실거래 API 반환분 전량 기록)
                         name  = (item.findtext("아파트") or "").strip()
                         area  = (item.findtext("전용면적") or "").strip()
                         price = (item.findtext("거래금액") or "").strip().replace(",", "")

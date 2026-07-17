@@ -64,7 +64,7 @@ def _monthly_series(rows: list[dict]) -> list[dict]:
         if ym not in by_month or t >= by_month[ym][0]:
             by_month[ym] = (t, val)
     series = [{"label": ym, "value": v} for ym, (_t, v) in sorted(by_month.items())]
-    return series[-12:]
+    return series[-36:]   # ★ 12→36 상향 2026-07-17 (월별 시계열 더 길게 보존)
 
 
 def fetch_indicators(key: str) -> dict[str, dict]:

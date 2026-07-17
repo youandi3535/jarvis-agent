@@ -143,7 +143,7 @@ def _inject_missing_charts(html: str, target_count: int, start_idx: int = 1,
         ds = ds_list[ds_idx]
         data_str = " | ".join(
             f"{str(r.get('label', '')).strip()}={r.get('value', '')}"
-            for r in (ds.get("data") or [])[:8]
+            for r in (ds.get("data") or [])   # ★ 데이터포인트 전량 (8개 상한 폐지 2026-07-17)
             if r.get("label") and r.get("value") is not None
         )
         src = ds.get("source") or {}
@@ -362,18 +362,22 @@ def _stocks_text(stocks_data: dict) -> str:
 #  경제 브리핑 텍스트 대본 — 티스토리·네이버 (Pass-1)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def build_corpus_block(docs, max_total: int | None = None, per_doc: int = 2500) -> str:
+def build_corpus_block(docs, max_total: int | None = None, per_doc: int | None = None) -> str:
     """★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다").
 
     자비스09 수집 문서 전부를 대본 프롬프트에 전달 — LLM 이 모든 자료를 보고
     주제·서사·통찰을 구성한다. evidence_brief(수치 규율)와 *병행* 주입.
-    신뢰 서열(논문>API>뉴스>기사>웹) 정렬 — 상한 초과 시 저신뢰부터 생략(건수 명시).
+    신뢰 서열(논문>API>뉴스>기사>웹) 정렬.
+
+    ★ 입력 절단 폐지 (사용자 박제 2026-07-17): per_doc(문서당 자수컷) 기본 None = 전문 그대로.
+      max_total 은 *컨텍스트 오버플로 방지용 최후 안전판* 일 뿐 — 초과 시에만 저신뢰부터 통째
+      생략(건수 명시). 15건 신뢰 쿼터 규모에선 사실상 발동 안 함.
     """
     if not docs:
         return ""
     import os as _os_c
     if max_total is None:
-        max_total = int(_os_c.getenv("DRAFT_CORPUS_MAX_CHARS", "120000") or "120000")
+        max_total = int(_os_c.getenv("DRAFT_CORPUS_MAX_CHARS", "200000") or "200000")
 
     def _a(d, k, default=""):
         return d.get(k, default) if isinstance(d, dict) else getattr(d, k, default)
@@ -389,7 +393,8 @@ def build_corpus_block(docs, max_total: int | None = None, per_doc: int = 2500) 
     used = 0
     included = 0
     for i, d in enumerate(docs, 1):
-        body = str(_a(d, "cleaned_text") or "").strip()[:per_doc]
+        _ct = str(_a(d, "cleaned_text") or "").strip()
+        body = _ct[:per_doc] if per_doc else _ct   # ★ 수집 원본 전문 (per_doc 절단 폐지 2026-07-17)
         if not body:
             continue
         entry = f"--- 자료 {i} [{_a(d, 'source_type')}] {str(_a(d, 'title'))[:70]}\n{body}"
@@ -417,8 +422,11 @@ def _build_data_catalog(datasets) -> str:
     if not datasets:
         return ""
     import os as _os_cat
-    _cat_max = int(_os_cat.getenv("DATA_CATALOG_MAX", "16") or "16")
-    datasets = list(datasets)[:_cat_max]
+    # ★ 수집 데이터셋 전량 주입 (사용자 박제 2026-07-17 — 16개 상한 폐지). env 지정 시만 상한 적용.
+    _cat_max = int(_os_cat.getenv("DATA_CATALOG_MAX", "0") or "0")
+    datasets = list(datasets)
+    if _cat_max > 0:
+        datasets = datasets[:_cat_max]
     lines = ["[★ 사용 가능한 실데이터 — 차트도 본문 수치도 *이 값만* 인용할 것]"]
     for i, d in enumerate(datasets, 1):
         u = d.get("unit", "")
@@ -431,7 +439,7 @@ def _build_data_catalog(datasets) -> str:
         if src_name:
             head += f" [출처 {src_name[:40]}]"
         lines.append(head)
-        for r in (d.get("data") or [])[:8]:
+        for r in (d.get("data") or []):   # ★ 데이터포인트 전량 주입 (8개 상한 폐지 2026-07-17)
             lbl = str(r.get("label", "")).strip()
             val = r.get("value", "")
             if lbl != "" and val != "":

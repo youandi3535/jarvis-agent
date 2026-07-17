@@ -30,7 +30,7 @@ _STAT_ITEMS = [
     ("403Y001", "X",       "수출금액(달러)",   "M"),
     ("901Y028", "1813000", "실업률",           "M"),
 ]
-_PERIOD = 6   # 최근 N개월
+_PERIOD = 36   # ★ 6→36 상향 2026-07-17 (거시지표 최근 N개월 — 더 긴 시계열 수집)
 
 
 class EcosProvider(BaseProvider):

@@ -19,7 +19,7 @@ log = logging.getLogger("jarvis.collector.kosis")
 
 # 조회 시점 타입 우선순위 (A=연간, M=월간, F=부정기/조사 — 가장 흔한 3종만; 속도) — 표마다 다름
 _PRD_TRY = ("A", "M", "F")
-_MAX_OBJ_CODES = 30   # 분류값 코드 과다 요청 방지
+_MAX_OBJ_CODES = 100   # ★ 30→100 상향 2026-07-17 (분류값 조회 폭 확대 — 통계표 셀 전량 활용)
 
 
 class _SilentApi:
@@ -85,7 +85,7 @@ class KosisProvider(BaseProvider):
                 items = codes
             else:
                 obj_levels[str(cid)] = codes[:_MAX_OBJ_CODES]
-        itm_id = "+".join(items[:15]) if items else "ALL"
+        itm_id = "+".join(items[:50]) if items else "ALL"   # ★ 15→50 상향 (항목 조회 폭 확대)
         obj_params = {}
         for i, cid in enumerate(sorted(obj_levels.keys()), 1):
             obj_params[f"objL{i}"] = "+".join(obj_levels[cid])
@@ -132,7 +132,7 @@ class KosisProvider(BaseProvider):
         except Exception:
             _header_unit = ""
         lines = [f"[KOSIS 통계표: {tbl_nm}{(' (단위: ' + _header_unit + ')') if _header_unit else ''}]"]
-        for _, row in df.head(40).iterrows():
+        for _, row in df.head(300).iterrows():   # ★ 40→300 상향 2026-07-17 (통계 행 raw_text 전량화)
             lab_parts = []
             if c_v1 and str(row.get(c_v1, "")).strip():
                 lab_parts.append(str(row.get(c_v1)).strip())
@@ -178,7 +178,7 @@ class KosisProvider(BaseProvider):
         col_url = "통계표조회URL" if "통계표조회URL" in tbls.columns else ("TBL_VIEW_URL" if "TBL_VIEW_URL" in tbls.columns else None)
 
         results: list[RawDocument] = []
-        for _, t in tbls.head(10).iterrows():           # 표 후보 (풍부 vs 속도 균형)
+        for _, t in tbls.head(20).iterrows():           # ★ 10→20 상향 (표 후보 확대)
             if len(results) >= max(4, min(max_items, 8)):
                 break
             org_id = str(t.get(col_org, "") or "").strip()
