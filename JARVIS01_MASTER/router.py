@@ -405,7 +405,7 @@ REACT_SYSTEM_PROMPT = """\
 - intent 결정:
   • "발행"·"써줘"·"올려" + 테마명 → "blog.theme_post.create"
   • "경제 브리핑"·"경제글" → "blog.economic_post.create"
-  • "수정"·"고쳐" + 발행글 → "blog.post.revise"
+  (발행글 수정은 자유문장 경로 없음 — 해당 글 인라인 승인 버튼으로만 동작. blog.post.revise 매핑 금지)
 
 답변 톤: 간결한 한국어. 이모지 적절히. 사용자가 묻지 않은 정보 추가 금지.
 """

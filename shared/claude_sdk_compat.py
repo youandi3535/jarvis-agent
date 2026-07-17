@@ -193,8 +193,19 @@ def run_sdk_query(
         except Exception:
             _wd_beat = lambda: None
 
-        async def _collect() -> str:
-            parts: list[str] = []
+        # ★ FIX[2] (전수감사 2026-07-17): bare anyio.run 을 shared/llm._run_sdk_sync 와 동일하게
+        #   하드닝. ① ThreadPoolExecutor + fut.result(timeout) 벽시계 상한 — blocking-I/O 가
+        #   anyio.fail_after 를 관통해도 강제 포기 ② 매 호출 새 이벤트루프 — 'Loop is closed'
+        #   재사용 오염 차단 ③ shared.llm 스폰 직렬화(세마포어+크로스프로세스 fcntl 락)에 합류 —
+        #   auto_repair 심층감사 CLI spawn 과 writer invoke_text 가 같은 Max burst 를 직렬화(무력화
+        #   방지). shared.llm 은 지연 import(llm.py 가 compat 을 import 하므로 순환 회피).
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
+        import asyncio as _aio
+
+        _parts: list[str] = []
+        _err_box = {"exc": None}
+
+        async def _collect() -> None:
             _wd_beat()
             with anyio.fail_after(timeout):
                 options = ClaudeCodeOptions(**opts_kw)
@@ -203,15 +214,71 @@ def run_sdk_query(
                     if isinstance(msg, AssistantMessage):
                         for block in msg.content:
                             if isinstance(block, TextBlock):
-                                parts.append(block.text)
-            return "\n".join(parts)
+                                _parts.append(block.text)
 
+        def _run_blocking() -> None:
+            _aio.set_event_loop(_aio.new_event_loop())   # 재사용 오염 차단
+            try:
+                anyio.run(_collect)
+            except (MessageParseError, ProcessError) as e:
+                log.warning(f"[sdk_compat] SDK 응답 파싱 경고: {e}")   # 부분 응답 사용
+            except BaseException as e:   # CLINotFound·Timeout·auth 등 — 상위서 error_kind 분류
+                _err_box["exc"] = e
+
+        # spawn 직렬화 합류 (shared.llm 과 동일 세마포어·크로스프로세스 락)
         try:
-            stdout = anyio.run(_collect)
-        except (MessageParseError, ProcessError) as e:
-            # 응답은 이미 수집됐을 수 있음 — 빈 문자열로 처리
-            log.warning(f"[sdk_compat] SDK 응답 파싱 경고: {e}")
-            stdout = ""
+            from shared import llm as _sl
+        except Exception:
+            _sl = None
+        if _sl is not None:
+            try:
+                _sl._pace_spawn()
+                _sl._acquire_llm_sem()
+            except Exception:
+                _sl = None
+        _proc_locked = False
+        try:
+            if _sl is not None:
+                try:
+                    _proc_locked = bool(_sl._proc_lock_acquire(timeout=timeout))
+                except Exception:
+                    _proc_locked = False
+                if not _proc_locked:
+                    log.warning(f"[sdk_compat] 크로스프로세스 잠금 {timeout}s 초과 — 포기(hang 취급)")
+                    return {
+                        "returncode": -2, "stdout": "", "stderr": "proc_lock timeout",
+                        "elapsed": int(_time.time() - t0), "error_kind": "timeout",
+                    }
+            exe = ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = exe.submit(_run_blocking)
+                wall_deadline = timeout + 30.0
+                waited = 0.0
+                poll = 15.0
+                while True:
+                    try:
+                        fut.result(timeout=min(poll, max(0.1, wall_deadline - waited)))
+                        break
+                    except _FutTimeout:
+                        waited += poll
+                        _wd_beat()
+                        if waited >= wall_deadline:
+                            log.warning(f"[sdk_compat] SDK 벽시계 상한 {wall_deadline:.0f}s 초과 — 강제 포기(수집 {len(_parts)}개)")
+                            break
+            finally:
+                exe.shutdown(wait=False)   # 내부 스레드 leak 가능 — 비블로킹 우선
+        finally:
+            if _sl is not None:
+                if _proc_locked:
+                    try: _sl._proc_lock_release()
+                    except Exception: pass
+                try: _sl._LLM_SPAWN_SEM.release()
+                except Exception: pass
+
+        stdout = "\n".join(_parts)
+        _exc = _err_box["exc"]
+        if _exc is not None and not stdout:
+            raise _exc   # 상위 except 로 error_kind 분류 (cli_not_found/timeout/auth/sdk_error)
 
         return {
             "returncode": 0,

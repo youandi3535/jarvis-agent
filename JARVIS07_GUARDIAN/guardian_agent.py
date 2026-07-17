@@ -323,9 +323,13 @@ def _retry_original_job(error_record: dict) -> None:
             log.debug(f"[GUARDIAN] 모듈 reload 실패 (무시): {e}")
 
     # source → APScheduler job_id 매핑
+    # ★ FIX[6] (전수감사 2026-07-17): 코드 수정은 데몬 재시작 후에만 발효(Python import 캐시)라
+    #   같은 프로세스에서 *발행* 잡을 즉시 재트리거하면 구 코드로 재실행 + 중복 발행 위험 →
+    #   writer 는 재트리거 안 함(None; 다음 스케줄이 새 코드로 실행). 수집(radar) 잡만 즉시
+    #   재실행 안전. 'j02_radar_collect' 는 DEFAULT_JOBS 미존재 stale id → 실제 radar_trends_06 교정.
     _SOURCE_JOB_MAP = {
-        "writer": "j01_economic_post",
-        "radar":  "j02_radar_collect",
+        "writer": None,
+        "radar":  "radar_trends_06",
         "infra":  None,
         "master": None,
     }
@@ -334,16 +338,19 @@ def _retry_original_job(error_record: dict) -> None:
         return
 
     try:
-        from JARVIS04_SCHEDULER.job_catalog import get_apscheduler
-        sched = get_apscheduler()
-        if sched:
-            sched.run_job(job_id)
+        # ★ FIX[6]: raw BackgroundScheduler 엔 run_job 메서드 없음(AttributeError→broad except
+        #   삼킴, 재트리거 항상 no-op) → job_controller.run_job_now 단일 진입점 사용.
+        from JARVIS04_SCHEDULER.job_controller import run_job_now
+        _res = run_job_now(job_id)
+        if _res.get("ok"):
             log.info(f"[GUARDIAN] 원래 잡 재시도 트리거: {job_id}")
             try:
                 from shared.notify import send_tg
                 send_tg(f"🔄 *[GUARDIAN] 작업 재시도*\n수정 완료 후 {job_id} 재시작했습니다.")
             except Exception:
                 pass
+        else:
+            log.debug(f"[GUARDIAN] 잡 재시도 스킵: {job_id} — {_res.get('error','?')}")
     except Exception as e:
         log.debug(f"[GUARDIAN] 잡 재시도 실패: {e} — 다음 스케줄에 자동 실행됩니다.")
 

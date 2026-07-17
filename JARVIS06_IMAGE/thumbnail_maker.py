@@ -653,13 +653,6 @@ def _simple_fallback(theme: str, output_path: str, today_str: str) -> str:
     return output_path
 
 
-# 하위 호환
-def _pick_style_hints():
-    return ("local", "local", "local", "local", "local")
-
-def _unique_token() -> str:
-    return f"{random.randint(0x1000,0xFFFF):04x}{int(time.time()*1000)&0xFFFF:04x}"
-
 # economic_charts.py 에서 import 하는 심볼
 _COLOR_THEMES = _COLOR_THEMES  # re-export
 _FONT = _FONT_TTC
@@ -684,5 +677,4 @@ def _rgba(hex_c, alpha):
         r, g, b = 128, 128, 128  # fallback gray
     return f"rgba({r},{g},{b},{alpha})"
 
-__all__ = ["create_thumbnail", "_pick_style_hints", "_unique_token",
-           "_COLOR_THEMES", "_FONT", "_rgba"]
+__all__ = ["create_thumbnail", "_COLOR_THEMES", "_FONT", "_rgba"]

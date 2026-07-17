@@ -284,8 +284,8 @@ def _report_to_guardian(failures: list[tuple[str, str, str]]) -> None:
                 ensure_ascii=False,
             )
             g_report(
+                exc,                       # ★ FIX[5]: exc 는 첫 위치인자 (catch 시그니처엔 exc= 없음 → 종전 TypeError→빈 except 삼킴)
                 source="preflight",
-                exc=exc,
                 module=f"JARVIS00_INFRA.preflight.{category}",
                 func_name="_check_" + category,
                 context=ctx,

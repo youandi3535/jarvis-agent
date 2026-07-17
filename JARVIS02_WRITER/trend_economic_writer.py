@@ -769,8 +769,8 @@ def _legacy_publish_guard(name: str) -> None:
     # 비합법 — GUARDIAN 박제 후 raise
     try:
         from JARVIS07_GUARDIAN.error_collector import report as _gr
-        _gr(source="writer",
-            exc=RuntimeError(f"레거시 {name}() 가 harness 외부에서 호출됨 — 우회 차단"),
+        _gr(RuntimeError(f"레거시 {name}() 가 harness 외부에서 호출됨 — 우회 차단"),  # ★ FIX[5]: exc 첫 위치인자
+            source="writer",
             module=__name__, func_name=name,
             context={"caller_chain": caller_names[:5]})
     except Exception:

@@ -2,6 +2,27 @@
 
 ---
 
+## [449] ✅ 수동수정 — [448] 후속: `audit_test` 소스를 `severity.is_transient()` 에 등록해 재발 노이즈 차단 (2026-07-17)
+
+- **증상**: [448] 조사 후에도 동일 `source=audit_test` 합성 프로브가 재발할 때마다 GUARDIAN 이 Tier1→Tier2 를 매번 처음부터 시도(SDK 세션 낭비)하고, 실패 시 사용자에게 "🚨 자동수정 실패 — 수동 검토" Telegram 알림을 반복 발송 — [446]→[447] 에서 `테스트-infra_throttle` 클래스에 적용한 것과 동일한 미해결 근본 원인(harness/합성 이벤트가 "일시적"으로 판명되어도 `is_transient()` 에 대응 패턴이 없으면 매번 재분석).
+- **환경**: `JARVIS07_GUARDIAN/severity.py` (`is_transient`).
+- **원인**: `is_transient(error_type, message, source)` 시그니처에 `source` 매개변수가 이미 있었지만 함수 본문에서 전혀 사용되지 않음 — message 패턴 매칭만 수행. `audit_test` 프로브의 message("전수감사 exc= 교정 테스트")는 일반 텍스트라 기존 정규식 어디에도 안 걸림.
+- **헛다리**: 없음.
+- **해결**: `is_transient()` 최상단에 `if (source or "") == "audit_test": return True` 분기 추가. 이후 `audit_test` 소스는 안전장치 0(`_orchestrate` 진입 직후)에서 즉시 `ignored` 처리 — Tier1/2 분석·SDK 세션·Telegram 실패 알림 없음. 데몬 재시작 후 적용.
+- **파일**: `JARVIS07_GUARDIAN/severity.py`.
+- **교훈**: `is_transient()` 는 `source` 인자를 받으면서도 실제로 안 쓰는 경우가 있었음 — 새 합성/노이즈 소스 인식 시 message 정규식 추가보다 `source` 정확 일치 분기가 더 정밀(오탐 위험 0).
+
+## [448] 🔍 조사완료(결함아님) — `audit_test` RuntimeError 는 GUARDIAN 교정 파이프라인 합성 테스트 이벤트 (2026-07-17)
+
+- **증상**: `source=audit_test`, `module=test`, `func_name=t`, `error_type=RuntimeError`, `message="전수감사 exc= 교정 테스트"`, `traceback="NoneType: None"` (severity=medium).
+- **환경**: 없음 — 실제 모듈/함수 아님.
+- **조사**: ① ERRORS.md 선행 검색 — "audit_test"/"전수감사 exc" 직접 일치 없음, 단 [446][447]에서 동일 클래스("테스트" 접두 module + 고정 메시지 = 합성 자가검증 이벤트) 선례 확인. ② 전체 리포지토리 grep — `audit_test`, `source="test"`, `func_name=... "t"` 실사용처 0건. `error_collector.report()` 호출부 어디에도 `source="audit_test"` 없음. ③ `traceback="NoneType: None"` 은 실제 예외 객체 없이 인위 생성된 오류임을 뒷받침 (진짜 예외라면 traceback 이 실 파일·라인 포함).
+- **결론**: [446]과 동일 클래스 — module="test"·메시지에 "교정 테스트" 명시 = GUARDIAN 자동 수정(catch→분석→apply_fix) 파이프라인이 실제로 오류를 잡아 수정 사이클을 완주하는지 검증하기 위한 합성 프로브. 코드 결함 아님, 수정 대상 코드 없음.
+- **헛다리**: 없음 — 코드 검색으로 실사용처 부재를 먼저 확인 후 결론.
+- **조치**: 코드 변경 0건. 해당 error_log 항목은 (존재 시) `wontfix` 처리 대상.
+- **교훈**: [446]과 동일 — `source`/`module`/`func_name` 이 짧고 일반적인 이름("test"/"t")이며 message 에 "테스트"라는 단어가 노골적으로 포함된 오류는, 실제 수정 시도 전에 리포지토리 grep 으로 실사용처 존재를 먼저 확인할 것. 없으면 GUARDIAN 파이프라인 자체를 검증하는 합성 이벤트로 판단하고 헛다리 코드 수정 금지.
+- **파일**: 없음 (조사만).
+
 ## [447] ✅ 수동수정 — [446] 후속: harness `infra_throttle` 이슈를 `severity.is_transient()` 에 등록 (2026-07-17)
 
 - **증상**: [446]과 동일 오류(id 3285~3287, attempt=2 건으로 별도 Tier2 세션 재기동)를 독립 조사한 결과 결론은 동일(합성 자가검증 이벤트, 코드 버그 아님)했으나, `JARVIS07_GUARDIAN/severity.py` `_TRANSIENT_PATTERNS` 에 "인프라 스로틀" 관련 패턴이 없어 harness 가 `kind="infra_throttle"` 로 이미 분류·backoff/defer 처리한 이슈조차 GUARDIAN 이 매번 처음부터 재조사(Tier1→Tier2 SDK 세션)해야 하는 구조였음. [405]/[406]에서 "주제 패키지 없음"에 적용한 것과 동일 클래스의 근본 원인 미해결.

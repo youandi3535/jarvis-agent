@@ -304,61 +304,8 @@ def _chart_for(ds, pal, gid, w):
     return vbar_chart(L, V, gid, pal["c1"], pal["acc"], W=w, H=240, unit=unit)
 
 
-def select_design(seed, datasets, orientation=None, used=None):
-    used = used or {}
-    pal_n = len(PALETTES)
-    pi = seed % pal_n
-    # run 내 팔레트 중복 회피
-    tries = 0
-    while pi in (used.get("pal") or set()) and tries < pal_n:
-        pi = (pi + 1) % pal_n; tries += 1
-    if orientation is None:
-        orientation = "portrait" if len(datasets) >= 4 and (seed >> 3) % 3 == 0 else "landscape"
-    used.setdefault("pal", set()).add(pi)
-    return {"palette": PALETTES[pi], "orientation": orientation}
-
-
-def render_infographic(spec, datasets, title, subtitle, out_path, src="데이터 출처: 한국거래소 · Yahoo Finance", chip="", illustration_b64=None):
-    pal = spec["palette"]; orient = spec["orientation"]
-    valid = [ds for ds in (datasets[:6]) if ds.get("data")]
-    if not valid:
-        return ""
-    n = len(valid)
-    two_col = (orient == "landscape" and n >= 2)   # 가로=2열, 세로=1열 스택 (폭은 동일)
-    W = 1280   # ★ 모든 인포그래픽 가로폭 통일 — 세로폭만 가변 (사용자 박제 2026-06-30)
-    chart_w = 560 if two_col else 1180
-    cards = []
-    for i, ds in enumerate(valid):
-        gid = f"g{i}"
-        chart = _chart_for(ds, pal, gid, chart_w)
-        if not chart:
-            continue
-        _cw = "flex:1 1 calc(50% - 8px);max-width:calc(50% - 8px)" if two_col else "flex:1 1 100%"
-        # 단일 카드는 헤더가 제목을 담당 → 카드 제목 생략(중복 방지). 다중 카드만 번호 배지+제목.
-        _title_html = _card_title(i + 1, pal, ds.get('title', ''), ds.get('unit', '')) if n > 1 else ""
-        cards.append(f"<div style='{_cw};min-width:300px;background:#fff;border-radius:20px;box-shadow:0 8px 28px rgba(20,40,80,.08);border:1px solid #eef1f7;padding:20px'>"
-                     f"{_title_html}"
-                     f"<div style='display:flex;align-items:center;justify-content:center'>{chart}</div></div>")
-    if not cards:
-        return ""
-    illus = ""
-    if illustration_b64:
-        illus = (f"<div style='flex:1 1 38%;min-width:300px;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 8px 28px rgba(20,40,80,.08);border:1px solid #eef1f7'>"
-                 f"<img src='data:image/png;base64,{illustration_b64}' style='width:100%;display:block'/></div>")
-    body = (f"<div style='background:{pal['soft']};background-image:radial-gradient({pal['dot']} 1.2px,transparent 1.2px);background-size:22px 22px;padding:22px'>"
-            f"<div style='display:flex;flex-wrap:wrap;gap:16px'>{illus}{''.join(cards)}</div></div>")
-    html = (f"<!DOCTYPE html><html lang=ko><head><meta charset=UTF-8><style>"
-            f"@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;700;800;900&display=swap');"
-            f"*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:{FONT};width:{W}px;background:#fff}}"
-            f"</style></head><body><div style='width:{W}px;background:#fff'>"
-            f"{_header(pal, title, subtitle, chip)}{body}{_foot(src)}</div></body></html>")
-    try:
-        from JARVIS06_IMAGE.html_infographic import _html_to_jpg
-        ok = _html_to_jpg(html, Path(out_path), width=W)
-        return str(out_path) if ok else ""
-    except Exception as e:
-        _g_report("image", e, module=__name__, func_name="render_infographic")
-        return ""
+# (select_design·render_infographic 제거 — 라이브 경로 generate_infographic 이 render_pro/
+#  render_spec 만 사용, 호출 0: 전수감사 DELETE[19])
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1277,134 +1224,8 @@ _VH_MAP = {
 }
 
 
-def generate_chart_infographic(labels, values, chart_type, title, *, out_dir,
-                               run_id="", slot_key="", unit="",
-                               source_name="한국거래소 · Yahoo Finance"):
-    """[CHART_N] 단일 데이터 차트를 85점 인포그래픽으로 렌더 (chart_generator 진입점).
-
-    실데이터(labels/values)는 호출자가 수집. scatter/빈데이터/오류 시 "" 반환 →
-    호출자가 기존 Plotly 폴백. 폭 1280 고정·팔레트/차트종류 seed 다양.
-    """
-    try:
-        if chart_type == "scatter":
-            return ""  # 산점도는 엔진 미지원 → Plotly 폴백
-        data = []
-        for l, v in zip(labels or [], values or []):
-            try:
-                data.append({"label": str(l), "value": float(str(v).replace(",", ""))})
-            except (TypeError, ValueError):
-                continue
-        if len(data) < 1:
-            return ""
-        # 출처 박제 — chart_generator 가 넘기는 단일 시리즈는 yfinance/KRX 실데이터 (검증 통과)
-        ds = {"title": title, "viz_hint": _VH_MAP.get(chart_type, "bar_chart"),
-              "unit": unit, "data": data,
-              "source": {"provider": "market", "name": source_name,
-                         "url": "https://finance.yahoo.com"}}
-        return generate_infographic(title, "실시간 데이터 기반", [ds],
-                                    run_id=run_id, slot_key=slot_key, out_dir=out_dir,
-                                    context=f"{title} — 단일 지표 시각화",
-                                    src=f"데이터 출처: {source_name}")
-    except Exception as e:
-        _g_report("image", e, module=__name__, func_name="generate_chart_infographic")
-        return ""
-
-
-# ── 경제 브리핑 통합 — 실데이터 인포그래픽 N개 병렬 생성·본문 삽입 ──────
-def _economic_datasets():
-    """JARVIS09 실데이터로 경제 인포그래픽 데이터셋 풀 구성. 2개 묶음 반환(증시 / 환율·금리·원자재)."""
-    from JARVIS09_COLLECTOR import get_market_data, get_ticker_history
-    M = get_market_data() or {}
-
-    def hist(t, n=7):
-        try:
-            h = get_ticker_history(t, period="1y", interval="1mo")
-            if h is None or getattr(h, "empty", True):
-                return []
-            c = h["Close"].dropna()
-            return [{"label": i.strftime("%y.%m"), "value": round(float(v), 2)} for i, v in list(c.items())[-n:]]
-        except Exception:
-            return []
-
-    def chg(*names):
-        rows = []
-        for n in names:
-            d = M.get(n)
-            if d and isinstance(d, dict) and "change" in d:
-                rows.append({"label": n, "value": round(float(d["change"]), 2)})
-        return rows
-
-    def val(name):
-        d = M.get(name)
-        return float(d["value"]) if d and isinstance(d, dict) and "value" in d else 0.0
-
-    src = {"name": "한국거래소 · Yahoo Finance"}
-    A = [d for d in [
-        {"title": "코스피 6개월 추이", "viz_hint": "line_chart", "unit": "", "data": hist("^KS11"), "source": src},
-        {"title": "글로벌 증시 등락률", "viz_hint": "bar_chart", "unit": "%", "data": chg("NASDAQ", "S&P500", "DOW", "달러/원", "미국채10년"), "source": src},
-        {"title": "나스닥 6개월 추이", "viz_hint": "line_chart", "unit": "", "data": hist("^IXIC"), "source": src},
-        {"title": "S&P500 6개월 추이", "viz_hint": "line_chart", "unit": "", "data": hist("^GSPC"), "source": src},
-    ] if d["data"]]
-    B = [d for d in [
-        {"title": "원/달러 환율 추이", "viz_hint": "line_chart", "unit": "", "data": hist("KRW=X"), "source": src},
-        {"title": "미국채 10년 금리", "viz_hint": "kpi", "unit": "%", "data": [{"label": "10년물 국채금리", "value": val("미국채10년")}], "source": src},
-        {"title": "국제 금값 추이", "viz_hint": "line_chart", "unit": "", "data": hist("GC=F"), "source": src},
-        {"title": "WTI 유가 추이", "viz_hint": "line_chart", "unit": "", "data": hist("CL=F"), "source": src},
-    ] if d["data"]]
-    return [b for b in [A, B] if b]
-
-
-def inject_economic_infographics(blocks, keyword="", out_dir=None, *, run_id="", n=2):
-    """경제 브리핑 blocks 에 85점 실데이터 인포그래픽 N개를 병렬 생성·본문 분산 삽입.
-
-    ★ 안전 계약: 어떤 오류·데이터 없음이든 *원본 blocks 그대로 반환* (발행 절대 안 깨짐).
-    호출자(writer)는 try/except 1줄로 감싸면 됨.
-    """
-    try:
-        bundles = _economic_datasets()
-        if not bundles:
-            return blocks
-        out_dir = Path(out_dir) if out_dir else Path(".")
-        titles = ["오늘의 증시 한눈에", "환율·금리·원자재 한눈에", "글로벌 마켓 종합"]
-        subs = ["국내·글로벌 지수와 등락률", "원/달러·미국채·금·유가 핵심 지표", "주요 자산 시계열 비교"]
-        used = {}
-        jobs = [(i, b) for i, b in enumerate(bundles[:n])]
-        results = [None] * len(jobs)
-        from concurrent.futures import ThreadPoolExecutor
-
-        def _one(idx, bundle):
-            return generate_infographic(
-                titles[idx % len(titles)], subs[idx % len(subs)], bundle,
-                run_id=str(run_id) + keyword, slot_key=f"eco{idx}", out_dir=out_dir,
-                used=used, chip="실시간 시장 데이터",
-                orientation=("landscape" if idx % 2 == 0 else "portrait"),
-            )
-        with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as ex:
-            futs = {ex.submit(_one, i, b): i for i, b in jobs}
-            for f in futs:
-                i = futs[f]
-                try:
-                    results[i] = f.result(timeout=120)
-                except Exception:
-                    results[i] = ""
-        imgs = [("image", p) for p in results if p and Path(p).exists()]
-        if not imgs:
-            return blocks
-        text_idx = [j for j, b in enumerate(blocks) if b and b[0] == "text"]
-        if not text_idx:
-            return blocks + imgs
-        out = list(blocks)
-        n_img = len(imgs)
-        spots = []
-        for k in range(n_img):
-            ti = text_idx[min(len(text_idx) - 1, int((k + 1) * len(text_idx) / (n_img + 1)))]
-            spots.append(ti + 1)
-        for img, pos in sorted(zip(imgs, spots), key=lambda z: z[1], reverse=True):
-            out.insert(min(pos, len(out)), img)
-        return out
-    except Exception as e:
-        _g_report("image", e, module=__name__, func_name="inject_economic_infographics")
-        return blocks
+# (generate_chart_infographic·_economic_datasets·inject_economic_infographics 제거 — 리포 전역
+#  호출 0(경제 인포그래픽은 process_draft/pro_templates 경로로 대체): 전수감사 DELETE[19])
 
 
 def render_table_infographic(table_html, idx=0, out_dir=None, *, title="", run_id=""):
@@ -1492,6 +1313,5 @@ def render_table_infographic(table_html, idx=0, out_dir=None, *, title="", run_i
         return ""
 
 
-__all__ = ["generate_infographic", "render_infographic", "select_design",
-           "generate_chart_infographic", "inject_economic_infographics",
-           "render_table_infographic", "prime_batch_designs", "PALETTES"]
+__all__ = ["generate_infographic", "render_table_infographic",
+           "prime_batch_designs", "PALETTES"]

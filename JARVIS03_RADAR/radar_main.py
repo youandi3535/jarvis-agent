@@ -423,7 +423,7 @@ def push_to_shared(data: dict):
     """수집 결과를 shared DB에 저장하고 WRITER 파이프라인에 추천 주제 등록."""
     try:
         from shared.db import save_trends, push_pipeline
-        from shared.bus import on_trend_detected, on_theme_queued
+        from shared.bus import on_trend_detected
         from theme_matcher import match_themes
         from analyzer import classify_keyword
 
@@ -485,8 +485,11 @@ def push_to_shared(data: dict):
 
         recs = data.get("recommendations", [])
         on_trend_detected(data["date"], data["google_trending"], recs)
-        for item in pipeline_items:
-            on_theme_queued(item["theme"], item["sector"], item["opportunity_score"])
+        # ★ on_theme_queued 투기적 트리거 제거 (전수감사 2026-07-17 — 무소비 난비):
+        #   THEME_QUEUED→collector_agent→collect_for_theme(실수집) 결과가 COLLECTION_READY
+        #   구독자 0으로 통째 폐기되던 상시 낭비(트렌드 수집 4회/일마다 항목당 실수집). 실제 테마
+        #   발행은 push_pipeline(위) 큐잉 + trend_theme_writer 가 collect_for_theme 직접 호출
+        #   (자급자족)하므로 이 사전수집은 순수 낭비 → 트리거 제거.
 
     except Exception as e:
         print(f"[RADAR] shared push 오류 (무시하고 계속): {e}")

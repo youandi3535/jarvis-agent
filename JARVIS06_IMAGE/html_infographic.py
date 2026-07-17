@@ -146,49 +146,8 @@ _PROMPT_TEMPLATE = """\
 """
 
 
-# ══════════════════════════════════════════════════════════════════
-#  4. 안전 exec
-# ══════════════════════════════════════════════════════════════════
-
-_FORBIDDEN = [
-    r'\bos\s*\.\s*(system|popen|exec|remove|unlink|rename|mkdir)',
-    r'\bsubprocess\b', r'__import__\s*\(',
-    r'\bopen\s*\([^)]*["\']w["\']',  # write-mode
-    r'import\s+os\b', r'import\s+sys\b', r'import\s+shutil\b',
-    r'import\s+socket\b', r'import\s+urllib\b', r'import\s+requests\b',
-]
-
-_SAFE_BUILTINS = {
-    "print": print, "range": range, "len": len, "int": int, "float": float,
-    "str": str, "list": list, "dict": dict, "tuple": tuple, "set": set,
-    "min": min, "max": max, "sum": sum, "abs": abs, "round": round,
-    "enumerate": enumerate, "zip": zip, "map": map, "filter": filter,
-    "sorted": sorted, "any": any, "all": all, "type": type,
-    "True": True, "False": False, "None": None,
-    "repr": repr, "isinstance": isinstance, "hasattr": hasattr,
-}
-
-
-def _is_safe(code: str) -> bool:
-    for pat in _FORBIDDEN:
-        if re.search(pat, code):
-            return False
-    return True
-
-
-def _strip_imports(code: str) -> str:
-    """함수 내 import 구문 제거 (안전 모듈은 ns에 주입돼 있음)."""
-    safe_mods = {"math", "colorsys", "random"}
-    lines = []
-    for line in code.splitlines():
-        stripped = line.strip()
-        # import math / from math import ... 형태 제거
-        if re.match(r'^\s*import\s+(' + '|'.join(safe_mods) + r')\b', line):
-            continue
-        if re.match(r'^\s*from\s+(' + '|'.join(safe_mods) + r')\s+import\b', line):
-            continue
-        lines.append(line)
-    return "\n".join(lines)
+# (4. 안전 exec 게이트 제거 — LLM 이 HTML 을 직접 반환하도록 변경되며 exec 경로 폐지,
+#  _FORBIDDEN·_SAFE_BUILTINS·_is_safe·_strip_imports 호출 0: 전수감사 DELETE[16])
 
 
 # ══════════════════════════════════════════════════════════════════

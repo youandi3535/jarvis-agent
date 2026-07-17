@@ -36,7 +36,6 @@ from JARVIS09_COLLECTOR.evidence_pack import (
     evidence_brief,            # ★ 대본 프롬프트용 근거 브리프 (ADR 012)
     as_source_docs,            # ★ prepublish 사실성 게이트용 어댑터 (ADR 012)
 )
-from JARVIS09_COLLECTOR.research_planner import plan_research
 from JARVIS09_COLLECTOR.source_onboarding import (
     check_and_notify as check_source_onboarding,
     register_key as register_source_key,
@@ -71,7 +70,6 @@ __all__ = [
     "select_by_trust_quota",
     "evidence_brief",
     "as_source_docs",
-    "plan_research",
     "check_source_onboarding",
     "register_source_key",
     "onboarding_status",

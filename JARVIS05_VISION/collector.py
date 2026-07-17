@@ -15,8 +15,6 @@ import threading
 import time
 from datetime import datetime
 
-import requests as _req
-
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
@@ -35,9 +33,7 @@ COLLECT_INTERVAL = 30  # 초
 _prev_status: dict[str, str] = {}
 
 # ── 텔레그램 알림 ──────────────────────────────────────────────────
-
-_TG_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
-_TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# (실제 전송은 shared.notify.send_tg 단일 진입점 — raw TELEGRAM_* 상수 직접참조 제거: 전수감사 DELETE[13])
 
 
 def _tg(msg: str) -> None:

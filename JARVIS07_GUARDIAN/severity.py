@@ -227,6 +227,12 @@ def is_transient(error_type: str, message: str = "", source: str = "") -> bool:
     """
     et = error_type or ""
     msg = message or ""
+    # ★ ERRORS [446][447][448] 박제 2026-07-17 — source="audit_test" 는 GUARDIAN
+    # Tier1→Tier2→apply_fix 파이프라인이 실제로 완주하는지 검증하는 합성 자가진단 프로브
+    # (traceback 없는 인위 생성 이벤트, 리포지토리 내 실사용처 0건 확인됨). 코드 버그가 아니므로
+    # Tier1/2 낭비 분석·Telegram "자동수정 실패" 알림 없이 즉시 ignored 처리.
+    if (source or "") == "audit_test":
+        return True
     if et in _TRANSIENT_TYPES:
         return True
     return any(pat.search(msg) for pat in _TRANSIENT_PATTERNS)
