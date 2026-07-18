@@ -567,30 +567,28 @@ def run_next():
         _lock_release()
 
 
-def _theme_available() -> list:
-    """미발행 네이버 금융 카탈로그 테마 목록 (run_radar_top_theme·select_top_theme 공용)."""
-    try:
-        from JARVIS09_COLLECTOR.collect_theme import _fetch_naver_theme_catalog
-        catalog = _fetch_naver_theme_catalog()
-    except Exception:
-        return []
-    if not catalog:
-        return []
+def _theme_exclude() -> set:
+    """테마 선정 제외 집합 = JARVIS02 발행 상태(발행완료 365일 + progress done).
+
+    ★ 선정 자체는 JARVIS03(RADAR) theme_picker 가 하고(역할 이관 2026-07-18), 발행 상태는
+    JARVIS02 의 것이므로 여기서 만들어 03 에 넘긴다(03→02 역참조 회피).
+    """
     from shared.db import get_recent_published_themes
     published = {r["theme"] for r in get_recent_published_themes(days=365)}
-    p = load_progress()
-    done_set = set(p.get("done", []))
-    return [t for t in catalog if t not in published and t not in done_set]
+    return published | set(load_progress().get("done", []))
+
+
+def _theme_available() -> list:
+    """미발행 테마 목록 — 선정은 JARVIS03 theme_picker 위임, 발행상태(exclude)만 JARVIS02 제공."""
+    from JARVIS03_RADAR.theme_picker import available_themes
+    return available_themes(exclude=_theme_exclude())
 
 
 def select_top_theme() -> str | None:
-    """★ 테마 선정 (사용자 박제 2026-07-18) — 선계산 잡(20:00)용. 미발행 카탈로그에서 1개 반환.
+    """★ 테마 선정 — JARVIS03(RADAR) theme_picker 위임(역할 이관 2026-07-18). 선계산 잡(20:00)용.
     선계산이 이 결과를 pin → 21:00 발행(run_radar_top_theme)이 그 pin 을 우선 사용(캐시 히트)."""
-    import random
-    avail = _theme_available()
-    if not avail:
-        return None
-    return random.choice(avail)
+    from JARVIS03_RADAR.theme_picker import select_theme
+    return select_theme(exclude=_theme_exclude())
 
 
 def run_precollect_theme():
@@ -629,7 +627,6 @@ def run_radar_top_theme():
     목록을 전부 로드한 뒤, 지금껏 발행하지 않은 테마를 임의로 하나 골라 발행한다.
     실패 시 최대 3개 후보까지 재선정.
     """
-    import random
     from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
     if _isd():
         log("⏸ [CATALOG] 인터프리터 종료 중(데몬 재시작) — 발행 연기, 재시작 후 재시도")
@@ -641,29 +638,23 @@ def run_radar_top_theme():
         log("⚠️ 외부 포스팅 작업 진행 중 — 스케줄 실행 건너뜀")
         return
 
-    # ── 1. 네이버 금융 공식 테마 카탈로그 로드 ────────────────────────────
-    try:
-        from JARVIS09_COLLECTOR.collect_theme import _fetch_naver_theme_catalog
-        catalog = _fetch_naver_theme_catalog()
-    except Exception as _ce:
-        log(f"⚠️ 네이버 금융 테마 카탈로그 로드 실패: {_ce} — 순차 실행 폴백")
-        run_next()
-        return
-
+    # ── 1. 테마 카탈로그 로드 — JARVIS03(RADAR) theme_picker (선정 역할 이관 2026-07-18) ──
+    from JARVIS03_RADAR.theme_picker import theme_catalog, available_themes, pick_theme
+    catalog = theme_catalog()
     if not catalog:
-        log("⚠️ 네이버 금융 테마 카탈로그 비어있음 — 순차 실행 폴백")
+        log("⚠️ 네이버 금융 테마 카탈로그 비어있음/로드 실패 — 순차 실행 폴백")
         run_next()
         return
 
-    # ── 2. 기발행 테마 조회 (DB 전체 이력 기준, 365일) ───────────────────
+    # ── 2. 기발행 테마 조회 (DB 전체 이력 기준, 365일) — JARVIS02 발행 상태 ──
     from shared.db import get_recent_published_themes
     published = {r["theme"] for r in get_recent_published_themes(days=365)}
 
     p        = load_progress()
     done_set = set(p.get("done", []))
 
-    # ── 3. 미발행 공식 테마 필터링 ───────────────────────────────────────
-    available = [t for t in catalog if t not in published and t not in done_set]
+    # ── 3. 미발행 공식 테마 필터링 — 선정(필터)은 JARVIS03, 제외집합만 JARVIS02 제공 ──
+    available = available_themes(exclude=published | done_set, catalog=catalog)
 
     if not available:
         # ★ 전체 소진 → done/failed 리셋 후 그 시점 카탈로그 전체로 재시작 (동적 — 하드코딩 없음)
@@ -698,10 +689,10 @@ def run_radar_top_theme():
         remaining = [t for t in available if t not in tried]
         if not remaining:
             break
-        if attempt == 0 and _pinned and _pinned in remaining:
-            theme = _pinned              # 선계산 고정 테마 우선(캐시 히트)
-        else:
-            theme = random.choice(remaining)
+        # ★ 선정(고정 우선 → random)은 JARVIS03 theme_picker 위임. 고정 테마는 첫 시도만.
+        theme = pick_theme(remaining, pinned=(_pinned if attempt == 0 else None))
+        if not theme:
+            break
         tried.append(theme)
 
         log(f"📋 카탈로그 선정 (시도 {attempt + 1}/3): {theme}")
