@@ -147,10 +147,10 @@ def _theme_collect_bundle(theme: str, sector: str = "") -> dict:
     try:
         if os.getenv("RESEARCH_FIRST", "1") != "0":
             from JARVIS09_COLLECTOR import collect_research
-            _res = collect_research(theme, sector, angle=_angle) or {}
+            # ★ fact 추출 09 통일 (사용자 박제 2026-07-18) — 09가 수집+추출, pack 동봉.
+            _res = collect_research(theme, sector, angle=_angle, with_facts=True) or {}
             collection_docs = _res.get("docs") or []
-            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
-            evidence_pack = _bep(theme, _res.get("plan") or {}, collection_docs) or None
+            evidence_pack = _res.get("pack") or None
         else:
             raise RuntimeError("RESEARCH_FIRST=0")
     except Exception as e:
@@ -176,7 +176,7 @@ def _theme_collect_bundle(theme: str, sector: str = "") -> dict:
 
 
 def precollect_theme() -> dict:
-    """★ 테마 선계산 잡 (20:30 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
+    """★ 테마 선계산 잡 (20:00 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
 
     테마는 네이버 금융 카탈로그에서 random 선정되므로, 여기서 테마를 *고정(pin)* 하고 미리
     수집·추출해 캐시한다. 21:00 발행은 고정 테마를 우선 사용(→ 캐시 히트, 추출 LLM 0회) →
@@ -591,7 +591,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             print("  ⏭️ [② 수집] 이전 시도 종목 0개 — collect 재실행 스킵 (결과 동일 예상)")
             return {}
 
-        # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18): precollect 잡(20:30)이 고정·선수집한
+        # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18): precollect 잡(20:00)이 고정·선수집한
         #   테마면 발행창(21:00) 추출 LLM 0회로 재사용 → writer 회복된 풀에서 실행.
         #   순수 최적화 — 미스·오류 시 아래 기존 수집 경로로 폴백(현행 동작 보존).
         try:
@@ -634,15 +634,14 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             try:
                 if os.getenv("RESEARCH_FIRST", "1") != "0":
                     from JARVIS09_COLLECTOR import collect_research
+                    # ★ fact 추출 09 통일 (사용자 박제 2026-07-18) — 09가 수집+추출, pack 동봉.
                     res = collect_research(state["theme"], state.get("sector", ""),
-                                           angle=_angle)
+                                           angle=_angle, with_facts=True)
                     docs = res.get("docs") or []
-                    # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
-                    from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
-                    pack = _bep(state["theme"], res.get("plan") or {}, docs) or None
+                    pack = res.get("pack") or None
                     n_facts = len((pack or {}).get("facts", []))
-                    print(f"  ✅ [THEME] JARVIS09 원시 수집 완료: 문서 {len(docs)}건 "
-                          f"→ 02 fact 추출 {n_facts}개")
+                    print(f"  ✅ [THEME] JARVIS09 수집+fact 추출 완료: 문서 {len(docs)}건 "
+                          f"→ fact {n_facts}개")
                     return {"docs": docs, "pack": pack}
             except Exception as e:
                 print(f"  ⚠️ [THEME] 리서치 수집 실패 — 종전 스윕 폴백: {e}")

@@ -1349,16 +1349,17 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
                                         plan_cache=_cand.get("data_plan"),   # ★ warm plan 캐시 공유(발행창 LLM 0)
                                         category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
             _pool = list(_chart.get("datasets") or [])
-            _res = collect_research(keyword, sector=sector, angle=reason) or {}
+            _res = collect_research(keyword, sector=sector, angle=reason, with_facts=True) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
             try:
                 from shared.pipeline_activity import mark_active
                 mark_active("e2")  # J09→J02 데이터 전달 완료
             except Exception:
                 pass
-            # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
-            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep, facts_to_datasets as _f2d
-            _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}
+            # ★ fact 추출 09 통일 (사용자 박제 2026-07-18) — collect_research(with_facts=True) 가 pack 동봉.
+            #   facts→datasets 변환만 여기서(차트 풀 구성·종목재무 필터는 02 몫).
+            from JARVIS09_COLLECTOR.evidence_pack import facts_to_datasets as _f2d
+            _ev_pack = _res.get("pack") or {}
             # ★ facts → datasets 변환 후 _pool에 병합 (text 수치도 차트化 — 이미지 개수 확대)
             try:
                 _fact_ds = _f2d(_ev_pack)
@@ -1685,16 +1686,17 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
                                         plan_cache=_cand.get("data_plan"),   # ★ warm plan 캐시 공유(발행창 LLM 0)
                                         category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
             _pool = list(_chart.get("datasets") or [])
-            _res = collect_research(keyword, sector=sector, angle=reason) or {}
+            _res = collect_research(keyword, sector=sector, angle=reason, with_facts=True) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
             try:
                 from shared.pipeline_activity import mark_active
                 mark_active("e2")  # J09→J02 데이터 전달 완료
             except Exception:
                 pass
-            # ★ 02가 fact 추출 (09는 원시 수집만 — 단순 수집기 재설계 2026-07-06)
-            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep, facts_to_datasets as _f2d
-            _ev_pack = _bep(keyword, _res.get("plan") or {}, _kw_collection_docs) or {}
+            # ★ fact 추출 09 통일 (사용자 박제 2026-07-18) — collect_research(with_facts=True) 가 pack 동봉.
+            #   facts→datasets 변환만 여기서(차트 풀 구성·종목재무 필터는 02 몫).
+            from JARVIS09_COLLECTOR.evidence_pack import facts_to_datasets as _f2d
+            _ev_pack = _res.get("pack") or {}
             # ★ facts → datasets 변환 후 _pool에 병합 (text 수치도 차트化 — 이미지 개수 확대)
             try:
                 _fact_ds = _f2d(_ev_pack)

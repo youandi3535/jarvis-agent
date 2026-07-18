@@ -13,6 +13,7 @@
 | `radar_main.py` | 데이터 수집 + 저장 오케스트레이터 (메인 로직) |
 | `analyzer.py` | 섹터 분류 + 점수 계산 + 추천 생성 |
 | `topic_pack.py` | **★ 주제 패키지 파이프라인 (사용자 박제 2026-07-03)** — 경제 주제+프로필 생성 → JARVIS09 직접 선수집 → 자비스02·09 동시 제공. 경제 브리핑 주제의 *유일한* 공급 경로 (02 자체 선정·수집 폐지, 폴백 없음) |
+| `theme_picker.py` | **★ 테마 주제 선정 (사용자 박제 2026-07-18 — 역할 02→03 이관)** — 네이버 금융 공식 테마 카탈로그(JARVIS09 경유)에서 미사용 테마 고정우선→random 선정. `theme_catalog`/`available_themes(exclude)`/`pick_theme(candidates,pinned)`/`select_theme`. 발행 상태(published/done)는 호출자(02)가 `exclude` 로 넘김(03→02 역참조 회피). 경제(topic_pack)와 동렬 — 주제 선정은 RADAR 영역 |
 | `collectors/google_collector.py` | Google Trends (pytrends) 수집 |
 | `collectors/naver_collector.py` | 네이버 DataLab + 자동완성 수집 |
 | `data/trends_YYYY-MM-DD.json` | 날짜별 수집 데이터 캐시 |
