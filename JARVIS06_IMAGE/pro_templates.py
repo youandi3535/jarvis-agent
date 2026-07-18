@@ -495,6 +495,42 @@ def _hero_texture(tex, pal):
             f"linear-gradient(90deg,#ffffff08 1px,transparent 1px);background-size:44px 44px'></div>")
 
 
+def _pick_layout_template(datasets, seed) -> str | None:
+    """★ 데이터 형태로 레이아웃 골격 선택 (사용자 박제 2026-07-18) — '색만 바뀐 같은 골격' 해소.
+
+    layout_library.LAYOUTS(render_layout 호환 {{...}} 골격 10종)에서 데이터 형태 시그니처로
+    어울리는 후보군을 파생하고 seed 로 회전 선택. 하드코딩 매핑이 아니라 실데이터(_is_timeseries·
+    개수)에서 파생(동적 설계 원칙). LLM 0회. template=None 레시피가 기본 스켈레톤 대신 이 골격 사용.
+    학습된 recipe.template 은 build_html 에서 우선하므로 보존(이 함수는 폴백).
+    """
+    try:
+        from JARVIS06_IMAGE.layout_library import LAYOUTS
+    except Exception:
+        return None
+    ds = [d for d in (datasets or []) if d.get("data")]
+    if not LAYOUTS or not ds:
+        return None
+    n = len(ds)
+    ts = [d for d in ds if _is_timeseries(d)]
+    # 데이터 형태 → 어울리는 골격 후보(aesthetic id 부분일치). 없으면 전체.
+    if n == 1 and ts:
+        prefer = ("panoramic", "center", "split")     # 단일 시계열 → 넓은 메인차트
+    elif n == 1:
+        prefer = ("center", "minimal", "report")      # 단일값 → 중앙집중·미니멀
+    elif n >= 4:
+        prefer = ("mosaic", "kpi", "sidebar")         # 다수 → 모자이크·대시보드
+    else:
+        prefer = ()                                   # 2~3개 → 전체
+    cands = [l for l in LAYOUTS if any(p in l.get("id", "") for p in prefer)] if prefer else list(LAYOUTS)
+    if not cands:
+        cands = list(LAYOUTS)
+    try:
+        pick = cands[(int(seed) // 7) % len(cands)]   # //7 로 색 seed 회전과 위상 분리
+    except Exception:
+        pick = cands[0]
+    return pick.get("html")
+
+
 # ── 메인 렌더 ──────────────────────────────────────────────────────────────
 def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
     pal = recipe or _pick_palette(seed)
@@ -509,7 +545,9 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
     # ★ 학습된 레이아웃 템플릿 우선 — 임의 레이아웃 재현 (ERRORS [360]). 실패 시 기본 레이아웃 폴백.
     # 데이터셋 1개+ 이면 템플릿 시도 — 빈 슬롯은 Playwright CSS card:empty{display:none} 으로 자동 숨김.
     _n_ds = len([d for d in (datasets or []) if d.get("data")])
-    tmpl = pal.get("template")
+    # ★ 학습된 recipe.template 우선(보존), 없으면 데이터 형태로 라이브러리 골격 선택 (2026-07-18).
+    #   → template=None 레시피도 기본 스켈레톤 대신 다양한 골격 사용. has_all_slots_resolved 안전게이트 유지.
+    tmpl = pal.get("template") or _pick_layout_template(datasets, seed)
     if tmpl and _n_ds >= 1:
         try:
             from JARVIS06_IMAGE.template_engine import render_layout, has_all_slots_resolved
