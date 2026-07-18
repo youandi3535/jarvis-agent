@@ -265,6 +265,22 @@ def job_collect_trends() -> None:
                 _time_tp.sleep(90)
 
 
+def job_collect_trends_morning() -> None:
+    """★ 06:00 아침 전용 — 트렌드 수집+topic_pack 빌드 후 *이어서* 경제 선계산 (사용자 박제 2026-07-18).
+
+    고정 지연(06:10 등) 대신 *이벤트 체이닝*: 트렌드 분석이 6분 걸리든 12분 걸리든 topic_pack 빌드가
+    끝나는 즉시 경제 선계산으로 이어진다(팩 미완 재빌드 낭비·불필요 대기 0). 무거운 fact·chart 추출을
+    06:30 발행 전 이 저부하 창에서 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 회복된 풀 실행.
+    (radar_trends_09/12/15 는 기존 job_collect_trends 유지 — 경제 선계산은 아침 1회만.)
+    """
+    job_collect_trends()   # 트렌드 수집 + topic_pack 빌드 (소요시간 가변)
+    try:
+        from JARVIS02_WRITER.scheduler import run_precollect_economic
+        run_precollect_economic()   # 팩 준비 완료 → 이어서 선계산 (자체 동적 데드라인으로 06:28 前 종료)
+    except Exception as _e:
+        _log.warning(f"[아침 체인] 경제 선계산 스킵 — 06:30 발행이 기존 수집 폴백: {_e}")
+
+
 def job_collect_performance() -> None:
     """매일 23:00 — 발행글 조회수 수집 + 결과 텔레그램 보고. ★ 하네스 래핑."""
     _log.info("=" * 50)

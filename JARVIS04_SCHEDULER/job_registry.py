@@ -33,7 +33,7 @@ DEFAULT_JOBS: list[dict] = [
     # ★ 06:00 조기 수집 (ERRORS [290] — 2026-07-03): 종전 최조기 09:00 은 06:30 경제
     #   브리핑보다 늦어 아침 발행이 *항상* 전일 폴백 데이터(신선도·DataLab 無) 사용.
     {"id":"radar_trends_06", "name":"트렌드 수집(06시 — 경제 브리핑 前)", "trigger":"cron",
-     "kwargs":{"hour":6,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
+     "kwargs":{"hour":6,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends_morning",
      "misfire_grace_time":1200, "owner":"jarvis03_radar", "edges":["e13"]},
     {"id":"radar_trends_09", "name":"트렌드 수집(09시)",  "trigger":"cron",
      "kwargs":{"hour":9,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
@@ -80,14 +80,9 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"day_of_week":"sun", "hour":2, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.cleanup_screenshots",
      "misfire_grace_time":3600, "owner":"jarvis02_writer"},
-    # ★ 경제 선계산 (06:05 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18): 무거운 fact·chart 추출을
-    # 06:30 발행 전에 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 가 회복된 Max 풀에서 실행
-    # (300s 스톨 조건 제거). 전문 추출은 그대로·시점만 앞당김(절단폐지 박제 무위반). 순수 최적화 —
-    # 실패해도 06:30 발행이 기존 수집으로 폴백.
-    {"id":"j02_economic_precollect", "name":"경제 브리핑 선계산 06:05", "trigger":"cron",
-     "kwargs":{"hour":6, "minute":5},
-     "callback":"JARVIS02_WRITER.scheduler.run_precollect_economic",
-     "misfire_grace_time":1200, "owner":"jarvis02_writer"},
+    # ★ 경제 선계산은 별도 고정 잡이 아니라 06:00 트렌드 잡(radar_trends_06 → job_collect_trends_morning)
+    # 말미에 *이벤트 체이닝*: 트렌드 분석(topic_pack 빌드)이 끝나는 즉시 이어서 실행(고정 지연 없음 —
+    # 사용자 박제 2026-07-18). run_precollect_economic 이 06:28 前 종료 동적 데드라인으로 발행창 미침범.
     # ★ 발행 전 자체수리 + 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 06:30 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 경제 브리핑 발행.
     # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리 (발행 지연 0).
