@@ -27,12 +27,11 @@ _RADAR_DIR = Path(__file__).resolve().parent
 _DATA_DIR = _RADAR_DIR / "data"
 _USED_KW_FILE = _DATA_DIR / "used_economic_keywords.json"
 
-# 경제 섹터 집합 — JARVIS02_WRITER/trend_economic_writer._ECON_SECTORS 와 동치 유지.
-# (03→02 import 는 순환 금지라 로컬 보유. 섹터 추가 시 양쪽 동시 갱신.)
+# 경제 브리핑 대상 섹터 (★ 사용자 박제 2026-07-18) — analyzer 실제 분류 라벨과 일치.
+# JARVIS02_WRITER/trend_economic_writer._ECON_SECTORS 와 동치 유지(03→02 import 순환 금지라 로컬).
+# 실제 적합성 판정은 fit LLM(동적)이 하고, 이 집합은 '대상 섹터 스코프' + 섹터명 단독 키워드 거부용.
 _ECON_SECTORS = {
-    '경제·경기', '금융·투자', '에너지·환경', 'IT·테크',
-    '금융·은행', '주식·투자', '부동산', '산업·기업',
-    '기술·IT', '에너지·자원', '무역·통상', '정책·규제', '글로벌·해외',
+    '사회·이슈', '금융·투자', '경제·경기', 'IT·테크', '에너지·환경',
 }
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
@@ -133,9 +132,11 @@ def _profile_batch(cands: list[dict]) -> list[dict]:
         "각 항목: {\"keyword\": 원문 그대로, \"fit\": true 또는 false, \"sector\": 교정 섹터,\n"
         "  \"summary\": 키워드가 무엇인지 한 문장 (동음이의 구분 명확히),\n"
         "  \"related_terms\": 관련어 5개 배열, \"entity_type\": 기업 또는 산업 또는 정책 또는 지표 또는 사건 또는 제품 또는 기타}\n\n"
-        "fit 판정: 한국 경제 금융 산업 투자 독자용 블로그 주제로 적합하면 true.\n"
-        "동식물 자연물 인물 연예 스포츠 등 경제 무관 대상은 false\n"
-        "(예: 은행나무는 나무이므로 false. 기준금리 반도체수출은 true).\n\n"
+        "fit 판정: 경제 브리핑(오늘의 경제·금융 상식·배경 설명) 주제로 적합하면 true.\n"
+        "대상 섹터 — 사회·이슈 / 금융·투자 / 경제·경기 / IT·테크 / 에너지·환경 — 의 주제 중\n"
+        "*경제·금융적 배경이나 파급이 있는 것*은 true (정책·제도·사건의 경제 영향, 금융·투자·산업·\n"
+        "기술·에너지 이슈 등). 순수 비경제(동식물·자연물·인물·연예·스포츠·가십)만 false.\n"
+        "(예: 은행나무는 나무이므로 false. 기준금리·반도체수출·전세사기·탄소배출권·핀테크는 true).\n\n"
         f"[키워드 목록]\n{lines}",
         max_tokens=2000,
         _essential=True,
@@ -257,6 +258,24 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
         log.info(f"[topic_pack] 동의어 선행 확장: { {k: v for k, v in _syn_map.items() if v} }")
     except Exception as _e:
         log.warning(f"[topic_pack] 동의어 선행 확장 실패 (무시): {_e}")
+
+    # ★ 데이터 소싱 *설계(plan)* 선계산 (사용자 박제 2026-07-18) — 동의어와 동형 위상분리.
+    #   저부하 창(topic_pack)에 plan_data_sources 를 돌려 각 후보에 data_plan 박제 → 발행창
+    #   (스로틀 포화)에서 네이버·티스토리가 이 plan 을 공유해 planner LLM 을 아예 안 부른다.
+    #   이게 '매번 제네릭 폴백 → 같은 타입 데이터' 문제의 근본 완화. 실패해도 런타임 재설계가 받침.
+    try:
+        from JARVIS09_COLLECTOR.chart_data import warm_plan as _warm_plan
+        _plan_map = _warm_plan([
+            {"keyword": c["keyword"], "sector": c.get("sector", ""),
+             "profile": c.get("profile") or {}, "synonyms": c.get("synonyms")}
+            for c in final
+        ])
+        for c in final:
+            c["data_plan"] = _plan_map.get(c["keyword"])
+        _n_ok = sum(1 for c in final if (c.get("data_plan") or {}).get("series"))
+        log.info(f"[topic_pack] 데이터 설계 선계산: {_n_ok}/{len(final)}개 plan 박제")
+    except Exception as _e:
+        log.warning(f"[topic_pack] 데이터 설계 선계산 실패 (무시): {_e}")
 
     pack = {
         "date": date.today().isoformat(),

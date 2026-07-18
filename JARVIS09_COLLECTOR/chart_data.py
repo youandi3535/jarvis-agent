@@ -166,15 +166,27 @@ def _kosdaq150_sector_datasets(theme: str) -> list[dict]:
 
 
 # ── 0.5. 글로벌 시장 지표 fast-path (_MACRO_KWS 주제 전용, plan 없어도 동작) ──
-def _global_market_datasets(theme: str) -> list[dict]:
+def _global_market_datasets(theme: str, sector: str = "", profile: dict | None = None,
+                            category: str = "theme") -> list[dict]:
     """거시경제 주제(나스닥·환율·금리 등) 전용 fast-path.
 
     get_market_data() 구조화 API → kpi_cards dataset. LLM 불필요.
     plan_data_sources 가 timeout/실패해도 항상 실데이터 공급.
     ADR 010: 출처(provenance) 박제, 합성 수치 절대 금지.
+
+    ★ category 스코프 게이트 (사용자 박제 2026-07-18): 경제 브리핑에서 주제 무관하게 매번
+      같은 글로벌 시장블록(코스피·환율·금리)이 붙어 '같은 타입 데이터'가 되던 문제 해소.
+      - theme: 기존 동작 그대로(_MACRO_KWS substring) — 테마 경로 완전 무영향.
+      - economic: entity_type='지표'(금리·환율·지수 등 진짜 거시)일 때만. 기업·산업·제품·사건·
+        정책 유형은 주제 맞춤 데이터를 쓰고 글로벌 시장블록은 강등(억지 거시 반복 차단).
     """
     theme_lc = theme.lower()
-    if not any(k in theme_lc for k in _MACRO_KWS):
+    _et = str((profile or {}).get("entity_type", "")).strip()
+    if category == "theme":
+        _is_macro = any(k in theme_lc for k in _MACRO_KWS)
+    else:  # economic
+        _is_macro = (_et == "지표") or (not _et and any(k in theme_lc for k in _MACRO_KWS))
+    if not _is_macro:
         return []
     try:
         from JARVIS09_COLLECTOR.providers.economic_data_provider import get_market_data
@@ -529,6 +541,34 @@ def warm_synonyms(themes: list) -> dict:
         if t:
             result[t] = _expand_theme(t)
     return result
+
+
+def warm_plan(candidates: list) -> dict:
+    """★ 데이터 소싱 *설계(plan)* 를 저부하 창(topic_pack 빌드)에 선계산·캐시 (사용자 박제 2026-07-18).
+
+    warm_synonyms 와 동형 위상분리 — plan_data_sources 를 발행 burst(스로틀 포화) 창이 아니라
+    topic_pack 생성 시점에 돌려, 네이버·티스토리가 동일 plan 을 공유하고 발행창에서 planner LLM 을
+    아예 안 부르게 한다. 이게 '매번 제네릭 폴백 → 같은 타입 데이터' 문제의 근본 완화.
+    실패해도 런타임 재설계(collect_chart_data 내부)가 받쳐주므로 무손실.
+
+    candidates: [{"keyword","sector","profile","synonyms"}, ...]
+    반환: {keyword: {"series":[...],"synonyms":[...]} 또는 None}
+    """
+    from JARVIS09_COLLECTOR.data_planner import plan_data_sources
+    out: dict = {}
+    for c in (candidates or []):
+        kw = (c.get("keyword") or "").strip()
+        if not kw:
+            continue
+        try:
+            prof = c.get("profile") or {}
+            out[kw] = plan_data_sources(
+                kw, c.get("sector", ""), (prof.get("summary") or ""),
+                profile=prof, synonyms=c.get("synonyms"))
+        except Exception as _e:
+            log.warning(f"[warm_plan] '{kw}' 선계산 실패(무시): {_e}")
+            out[kw] = None
+    return out
 
 
 _DEMO_TOTAL = {"전체", "계", "합계", "소계", "총계", "전국", "평균"}
@@ -1373,6 +1413,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                        synonyms: list | None = None,
                        related_terms: list | None = None,
                        profile: dict | None = None,
+                       plan_cache: dict | None = None,
                        category: str = "theme") -> dict:
     """주제 연관 차트용 실데이터를 출처(provenance)와 함께 수집.
 
@@ -1418,18 +1459,26 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         # ── 0.5) 거시경제 글로벌 시장 fast-path (LLM 0, plan 없어도 동작) ────────
         #   나스닥·코스피·환율·금리 등 _MACRO_KWS 주제는 get_market_data() 직접 조회.
         #   plan_data_sources 가 timeout/실패해도 항상 실데이터 공급 (ADR 010).
-        datasets.extend(_global_market_datasets(theme))
+        datasets.extend(_global_market_datasets(theme, sector, profile, category))
         _elapsed(f"0.5) 글로벌 시장 fast-path (datasets={len(datasets)})")
 
         # ── 1) 설계 + 조준 수집 ──────────────────────────────────────────────────
         #    plan_data_sources 가 synonyms 도 함께 반환 (LLM 1회로 설계+동의어 통합)
         _plan_desc = (description or "") + ((" / " + " ".join(_syns_param)) if _syns_param else "")
-        try:
-            from JARVIS09_COLLECTOR.data_planner import plan_data_sources
-            _plan_result = plan_data_sources(theme, sector, _plan_desc)
-        except Exception as e:
-            log.warning(f"[chart_data] 설계 실패: {e}")
-            _plan_result = {"series": [], "synonyms": []}
+        if plan_cache and plan_cache.get("series"):
+            # ★ warm 캐시 히트 (topic_pack 저부하 창 선계산) → 발행창 LLM 0회 (사용자 박제 2026-07-18).
+            #   네이버·티스토리가 동일 plan 공유 → 스로틀 창에서 planner 안 부름.
+            _plan_result = plan_cache
+            log.info(f"[chart_data] '{theme}' warm plan 캐시 사용 ({len(plan_cache.get('series') or [])} series, LLM 0회)")
+        else:
+            try:
+                from JARVIS09_COLLECTOR.data_planner import plan_data_sources
+                # ★ profile(entity_type)·synonyms 관통 → 설계·폴백이 주제 성격을 안다
+                _plan_result = plan_data_sources(theme, sector, _plan_desc,
+                                                 profile=profile, synonyms=_syns_param)
+            except Exception as e:
+                log.warning(f"[chart_data] 설계 실패: {e}")
+                _plan_result = {"series": [], "synonyms": []}
 
         plan = _plan_result.get("series") or []
         # 동의어: topic_pack 선행 확장이 있으면 그것 우선, 없으면 plan 이 반환한 것 사용

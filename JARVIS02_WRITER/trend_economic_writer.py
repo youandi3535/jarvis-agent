@@ -1331,6 +1331,8 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
             _chart = collect_chart_data(keyword, sector=sector, description=reason,
                                         synonyms=_cand.get("synonyms"),
                                         related_terms=_profile.get('related_terms'),
+                                        profile=_profile,                    # ★ entity_type 관통 (2026-07-18)
+                                        plan_cache=_cand.get("data_plan"),   # ★ warm plan 캐시 공유(발행창 LLM 0)
                                         category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
@@ -1645,6 +1647,8 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
             _chart = collect_chart_data(keyword, sector=sector, description=reason,
                                         synonyms=_cand.get("synonyms"),
                                         related_terms=_profile.get('related_terms'),
+                                        profile=_profile,                    # ★ entity_type 관통 (2026-07-18)
+                                        plan_cache=_cand.get("data_plan"),   # ★ warm plan 캐시 공유(발행창 LLM 0)
                                         category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
