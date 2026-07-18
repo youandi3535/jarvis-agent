@@ -383,15 +383,40 @@ _COLLECT_CACHE: dict = {}
 
 
 def _cached_collect(prov, source: str, term: str, sector: str, max_items: int) -> list:
-    """provider.collect 결과를 (source,term,sector) 키로 run 내 캐시. 느린 출처 반복 호출 방지."""
+    """provider.collect 결과를 (source,term,sector) 키로 run 내 캐시. 느린 출처 반복 호출 방지.
+
+    ★ ERRORS [413]/[426]/[436] 동일 클래스 (2026-07-19 경제 선계산 freeze 사고) — 프로바이더
+    내부 재시도(예: arXiv 429 백오프)가 timeout= 파라미터와 무관하게 수십~백여 초 블로킹 가능.
+    이 함수가 chart_data.py 의 모든 수집 호출(step1 스레드풀·step3 순차 루프) 단일 통로이므로
+    여기 한 곳에서 ThreadPoolExecutor 폴링 + watchdog.beat() 로 진행 신호를 유지한다.
+    """
     key = (source, str(term), str(sector))
     if key in _COLLECT_CACHE:
         return _COLLECT_CACHE[key]
     try:
-        docs = prov.collect(term, sector, max_items=max_items) or []
+        from JARVIS00_INFRA.watchdog import beat
+    except Exception:
+        def beat() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
+
+    from concurrent.futures import ThreadPoolExecutor as _CcTPE, TimeoutError as _CcTimeout
+    docs: list = []
+    exe = _CcTPE(max_workers=1)
+    try:
+        fut = exe.submit(prov.collect, term, sector, max_items=max_items)
+        for _ in range(6):   # 15s × 6 = 90s 상한 (freeze 300s 대비 여유) — 폴링마다 beat()
+            try:
+                docs = fut.result(timeout=15) or []
+                break
+            except _CcTimeout:
+                beat()   # ★ 프로바이더 블로킹 중 진행 신호
+        else:
+            log.warning(f"[chart_data] {source} 수집 90초 초과('{term}') — 스킵(백그라운드 지속)")
+            docs = []
     except Exception as e:
         log.warning(f"[chart_data] {source} 수집 실패('{term}'): {e}")
         docs = []
+    finally:
+        exe.shutdown(wait=False)
     _COLLECT_CACHE[key] = docs
     return docs
 

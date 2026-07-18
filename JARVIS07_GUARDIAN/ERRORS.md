@@ -2,6 +2,18 @@
 
 ---
 
+## [456] ✅ 해결 — 경제 선계산 watchdog freeze(301s>300s) 강제종료 — chart_data.py `_cached_collect`에 beat() 배선 누락 (2026-07-19)
+
+- **증상**: `error_log` #3499 — `source=watchdog`, `module=JARVIS00_INFRA.watchdog`, `func_name=경제 선계산`, `message="정지 감지 — 경제 선계산: 멈춤(freeze) 301s > 300s 무진전"`, severity=medium, `traceback=NoneType: None`(watchdog 자체 합성 RuntimeError). `logs/daemon_stdout.log` 타임라인 대조 결과 06:05:06(KOSIS/KCI 등 fast 소스 전량 완료, "⏱ 2.5) 시장 dataset" 로그까지 28.2s 만에 도달) 직후 `[chart_data]` step3 멀티소스 루프가 "academic"(arXiv) 소스로 진입 — 06:05:07~06:07:10(약 123s, 쿼리 "현대 넥쏘 에너지·환경")·06:07:10~06:09:34+(쿼리 "현대 에너지·환경", 킬 시점까지 미완료) 두 차례 arXiv HTTP 429 재시도/백오프 구간 동안 watchdog 진행 신호가 단 한 번도 발생하지 않아 06:09:34 301s 시점에 freeze 강제종료(`os._exit 75`).
+- **환경**: `JARVIS02_WRITER/scheduler.py` `run_precollect_economic()`(`guard_main("경제 선계산", ...)`, freeze_sec 기본 300) → `JARVIS02_WRITER/trend_economic_writer.py` `precollect_economic()` → `nv_collect()` → `JARVIS09_COLLECTOR/chart_data.py` `collect_chart_data()` step3(멀티소스 문서 포착, "kci"·"academic"·"news"·... 순회) → `_cached_collect()` → `JARVIS09_COLLECTOR/providers/academic_provider.py` `AcademicProvider.collect()`(`arxiv.Client().results(search)` — 내부 HTTP 재시도/백오프, 자체 벽시계 상한 없음).
+- **원인**: `collect_chart_data()` 의 모든 프로바이더 호출은 `_cached_collect(prov, source, term, sector, max_items)` 단일 통로를 거치는데, 이 함수가 `prov.collect(...)` 를 아무 보호 없이 동기 호출 — ThreadPoolExecutor 폴링도 `watchdog.beat()` 호출도 없었다. `JARVIS09_COLLECTOR/collector_engine.py` 의 `_collect_tier()`(ERRORS [394][426][436]에서 이미 수정됨)만 beat() 가 배선돼 있었고, `collect_chart_data()` 의 step1(스레드풀 map)·step3(순차 `for source: for term` 이중 루프) 은 별도 함수(`_collect_docs_for_series`/직접 `_cached_collect` 호출)라 그 수정이 전파되지 않았다. 특히 step3 는 스레드풀조차 없는 순차 루프라, arXiv 처럼 단일 호출 자체가 timeout= 파라미터와 무관하게 수십~백여 초 블로킹되는 프로바이더(ERRORS [401][413]과 동일 클래스)를 만나면 진행 신호 없이 그대로 300s 를 넘겼다.
+- **헛다리**: 없음 — `shared/llm.py`(LLM 호출 경로, 이미 beat() 배선 확인됨) 와 오늘 커밋(`ef955aa`)에서 신설된 `evidence_pack.py` `build_corpus_digest()`(내부적으로 `invoke_text` 경유, beat() 보호됨)를 먼저 조사해 배제한 뒤, `daemon_stdout.log` 실제 타임라인 대조로 `chart_data.py` step3 의 arXiv 호출을 정확히 특정.
+- **해결**: `JARVIS09_COLLECTOR/chart_data.py` `_cached_collect()` 를 `_collect_tier()` 와 동일 클래스 패턴으로 수정 — `ThreadPoolExecutor(max_workers=1)` 로 `prov.collect(...)` 를 제출하고 `fut.result(timeout=15)` 를 최대 6회(90s) 폴링, 타임아웃마다 `watchdog.beat()` 호출로 진행 신호 유지. 90s 초과 시 경고 로그 후 빈 리스트 반환(백그라운드 스레드는 `exe.shutdown(wait=False)` 로 방치 — 결과 폐기, 어차피 데몬 스레드 아니므로 자연 종료). 단일 통로 수정이라 step1·step3·(미사용) `_collect_one_series` 세 호출부 모두 자동 보호됨. 20s 지연 프로바이더로 단위 테스트 — 15s 지점에서 beat() 1회 발화 후 20s 시점 정상 반환 확인.
+- **파일**: `JARVIS09_COLLECTOR/chart_data.py`.
+- **교훈**: ERRORS [436] 이 이미 "새 블로킹 경로 추가·리팩터 시 형제 함수의 beat 배선 유무를 개별 확인할 것"이라 명시했음에도, `collector_engine.py::_collect_tier()` 수정 당시 같은 패키지 안의 또 다른 순차/블로킹 수집 경로(`chart_data.py`)는 점검되지 않았다 — *같은 프로바이더*(academic_provider)를 호출하는 *여러 진입 경로*가 있을 때, 프로바이더 자체가 아니라 "그 프로바이더를 호출하는 각 choke point" 마다 보호를 확인해야 한다. 다만 이번엔 choke point 가 이미 단일 함수(`_cached_collect`)로 수렴돼 있어 한 곳 수정으로 3개 호출부(step1·step3·미사용 함수)가 동시에 보호됨 — 향후 유사 수집 함수 설계 시 프로바이더 호출을 흩어놓지 말고 이런 단일 wrapper 로 모으는 것이 재발 방지에 유리.
+
+---
+
 ## [455] ✅ 해결 — 테마 발행 harness 데드라인 초과(2428s>2400s) — trend_theme_writer.py 에 JARVIS_LLM_DEADLINE_TS 강등 배선 누락 (2026-07-18)
 
 - **증상**: `error_log` id=3439 — `source=harness`, `module=JARVIS00_INFRA.harness.theme-publish-음원/음반-naver`, `func_name=전체`, `message="[harness:theme-publish-음원/음반-naver] attempt=2 step=전체: 데드라인 초과(블로킹) 2428s > 2400s"`. sibling(id=3435/3436, [454]에서 해결)과 같은 테마·같은 네이버 액션의 attempt=2 — 1차 시도가 사실성 게이트로 차단된 후 재작성 순환(attempt 2)이 진행되다 하드 데드라인을 28초 초과해 watchdog 강제종료.
