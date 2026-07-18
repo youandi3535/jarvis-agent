@@ -127,12 +127,12 @@ ATTR_UNITS: dict[str, str] = {
 #   현재가) 차트 허용. 경제 브리핑=트렌드 경제·금융 상식/배경 글이므로 종목 재무 *배제*
 #   (거시지표·개념 인포그래픽만). 두 글은 성격이 완전히 다름 → 데이터·이미지도 분리.
 CATEGORY_POLICY: dict[str, dict] = {
-    "theme":    {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000,
+    "theme":    {"min_images": 5, "thumbnail_body_chars": 3000,
                  "allow_stock_financial": True},
-    "economic": {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000,
+    "economic": {"min_images": 5, "thumbnail_body_chars": 3000,
                  "allow_stock_financial": False},
 }
-_DEFAULT_POLICY = {"min_images": 5, "chart_ai_fallback": True, "thumbnail_body_chars": 3000,
+_DEFAULT_POLICY = {"min_images": 5, "thumbnail_body_chars": 3000,
                    "allow_stock_financial": True}
 
 
