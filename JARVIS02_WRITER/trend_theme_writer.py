@@ -447,7 +447,8 @@ def _layer3_verify_draft(draft: dict, platform: str) -> list[str]:
         # ★ 분량 상한 = OR 기준 (사용자 박제 2026-07-18): 45문장 이하 '또는' 2500자 이하면 통과.
         #   둘 다 초과할 때만 차단 (한쪽만 넉넉해도 발행 허용).
         if _sent_cnt > _sp.max_sentences and _kor_total > _sp.max_korean:
-            issues.append(f"분량 상한 초과: {_sent_cnt}문장 > {_sp.max_sentences} '그리고' {_kor_total}자 > {_sp.max_korean}자 "
+            # ★ '{max}문장' 토큰 유지 필수 (draft_fixer 정규식 계약 — 빠지면 전체 재작성 강등, 2026-07-18 회귀 복구).
+            issues.append(f"분량 상한 초과: {_sent_cnt}문장 > {_sp.max_sentences}문장 '그리고' {_kor_total}자 > {_sp.max_korean}자 "
                           f"(OR 기준 — 둘 다 초과 시에만 차단, theme)")
     except Exception:
         pass

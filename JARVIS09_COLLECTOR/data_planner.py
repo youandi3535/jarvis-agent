@@ -220,6 +220,14 @@ def plan_data_sources(topic: str, sector: str = "", description: str = "",
         log.info(f"[planner] '{topic}' 너무 짧거나 섹터 단어 — LLM 설계 스킵 (결정론 폴백)")
         return {"series": _fallback_plan(topic, _syns_in, sector, entity_type),
                 "synonyms": _syns_in}
+    # ★ 발행창 감지 시 LLM 설계 스킵 (사용자 박제 2026-07-18) — 발행창(JARVIS_LLM_DEADLINE_TS 활성)은
+    #   Max 스로틀 포화라 planner LLM 이 사실상 매번 빈응답→90s 낭비→폴백. warm(저부하창) 이 이미
+    #   선확정했어야 하며, warm 미스 시엔 성공 못 할 호출을 임계경로에 태우지 말고 곧장 결정론 스캐폴드.
+    #   warm_plan(발행창 밖)에선 이 env 가 없어 정상적으로 LLM 설계 수행.
+    if os.environ.get("JARVIS_LLM_DEADLINE_TS"):
+        log.info(f"[planner] '{topic}'(유형:{entity_type or '?'}) 발행창 — LLM 설계 스킵, 결정론 스캐폴드 (warm 미스 안전 분기)")
+        return {"series": _fallback_plan(topic, _syns_in, sector, entity_type),
+                "synonyms": _syns_in}
     catalog = "\n".join(f"- {k}: {v}" for k, v in _SOURCE_CATALOG.items())
     prompt = _PLAN_PROMPT.format(topic=topic, sector=sector or "-",
                                  entity_type=entity_type or "-",

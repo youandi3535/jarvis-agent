@@ -120,7 +120,9 @@ try:
         # ★ 분량 상한 = OR 기준 (사용자 박제 2026-07-18): {max_sentences}문장 이하 '또는'
         #   {max_korean}자 이하면 통과. 둘 다 초과할 때만 차단 (한쪽만 넉넉해도 발행 허용).
         if sent_count > spec.max_sentences and kor_count > spec.max_korean:
-            issues.append(f"분량 상한 초과: {sent_count}문장 > {spec.max_sentences} '그리고' {kor_count}자 > {spec.max_korean}자 "
+            # ★ '{max}문장' 토큰 유지 필수 (draft_fixer._fix_sentence_overflow 정규식 r'>\s*(\d+)문장' 계약).
+            #   빠지면 인라인 트림이 파싱 실패 → 값비싼 전체 재작성으로 강등됨 (2026-07-18 회귀 복구).
+            issues.append(f"분량 상한 초과: {sent_count}문장 > {spec.max_sentences}문장 '그리고' {kor_count}자 > {spec.max_korean}자 "
                           f"(OR 기준 — 둘 다 초과 시에만 차단, post_type={post_type})")
         if sent_count < spec.min_sentences:
             issues.append(f"분량 하한 미달: {sent_count}문장 < {spec.min_sentences}문장 ({post_type})")
