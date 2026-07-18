@@ -387,14 +387,20 @@ def _collect_tier(provs: list, theme: str, sector: str, cap: int,
 
 @_auto_catch("collector", reraise=True)
 def collect_research(theme: str, sector: str = "", angle: str = "",
-                     max_rounds: int = 3) -> dict:
+                     max_rounds: int = 3, with_facts: bool = False) -> dict:
     """★ 티어순 상한 수집 (사용자 박제 2026-07-11 — ERRORS [423]):
     처음부터 논문 최대 3·API 최대 7·나머지 최대 5, cascade 이월.
     광역수집 후 절삭 방식 완전 폐지 — 각 티어가 수집 시점에 상한 적용.
 
+    ★ fact 추출 09 통일 (사용자 박제 2026-07-18): with_facts=True 면 수집 직후 09 내부에서
+      build_evidence_pack 실행 → 반환에 "pack"(facts) 동봉. 호출자(JARVIS02)는 res["pack"] 만
+      쓰고 09 내부 모듈(evidence_pack)을 직접 import 하지 않는다("09는 수집·추출 단일 진입점").
+      기본 False — collect_all 등 원시 수집만 원하는 호출자는 무변경.
+
     Returns:
         {"docs": list[CollectionResult],  # 신뢰순 최대 15개 원시 문서
-         "plan": dict}                    # 빈 dict (설계 LLM 제거 — _collect_tier가 plan 미사용)
+         "plan": dict,                    # 빈 dict (설계 LLM 제거 — _collect_tier가 plan 미사용)
+         "pack": dict}                    # with_facts=True 일 때만 — evidence_pack(facts·coverage)
     """
     try:
         from shared.pipeline_activity import mark_busy as _mb
@@ -446,9 +452,22 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
         all_docs = _deep_fetch_thin_docs(all_docs, theme)
 
         total = len(all_docs)
-        log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
-                 f"+나머지{len(rest_docs)}={total}건 → JARVIS02 fact·수치 추출")
-        return {"docs": all_docs, "plan": {}}
+        # ★ fact 추출 09 통일 (2026-07-18): with_facts=True 면 여기서 추출 — 호출자는 pack 만 받음.
+        out = {"docs": all_docs, "plan": {}}
+        if with_facts:
+            try:
+                from .evidence_pack import build_evidence_pack
+                _pack = build_evidence_pack(theme, {}, all_docs) or {}
+                out["pack"] = _pack
+                log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
+                         f"+나머지{len(rest_docs)}={total}건 → fact {len(_pack.get('facts', []))}개 추출(09)")
+            except Exception as _fe:
+                out["pack"] = {}
+                log.warning(f"[research] fact 추출 실패: {_fe} — 문서만 반환")
+        else:
+            log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
+                     f"+나머지{len(rest_docs)}={total}건 (원시 문서만)")
+        return out
     finally:
         # 작업 종료 — busy 즉시 해제 (해제 실패는 조용히 무시, TTL 은 안전망으로 잔존)
         try:
@@ -562,9 +581,9 @@ def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
             stocks_data = collect_stocks_data(keyword, related_terms=(profile or {}).get('related_terms'), profile=profile) or {}
         except Exception as e:
             log.warning(f"[collect_all] 종목 수집 실패: {e}")
+    # ★ collect_all 은 원시 컴포저 — facts 미포함(evidence_pack=None, docs+entities 만).
+    #   fact 가 필요한 호출자는 collect_research(with_facts=True) 로 pack 을 받는다(추출 09 통일 2026-07-18).
     rs = collect_research(keyword, sector=sector, angle=angle) or {}
-    # ★ 09는 원시 수집만 (단순 수집기 재설계 2026-07-06) — fact 추출은 02 몫.
-    #   compose_collected 는 evidence_pack=None → facts 없이 docs+entities 만.
     return compose_collected(
         keyword, stocks_data=stocks_data, docs=rs.get("docs"),
         evidence_pack=None, sector=sector,
