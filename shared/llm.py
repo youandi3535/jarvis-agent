@@ -370,6 +370,11 @@ _LLM_PROC_LOCK_PATH = Path(
 _llm_proc_fd: list = [None]
 _llm_proc_fd_lock = _threading.Lock()
 
+# ★ 락 획득 대기 상한 (P2-a 사용자 박제 2026-07-18) — LLM timeout(최대 300s)만큼 기다리다
+#   사망하지 말고, 짧게(45s) 시도 후 실패하면 lock_contention 으로 defer. 락 경합은 rate-limit
+#   스로틀이 아니므로 회로차단기를 오염시키지 않는다(hung 오분류 차단).
+_LOCK_ACQUIRE_MAX_WAIT = float(os.getenv("LLM_LOCK_ACQUIRE_MAX_WAIT", "45") or "45")
+
 
 def _proc_lock_acquire(timeout: float | None = None) -> bool:
     """크로스 프로세스 배타 잠금 — 다른 JARVIS 프로세스가 CLI 사용 중이면 폴링 대기.
@@ -420,6 +425,14 @@ def _proc_lock_release() -> None:
 # retries=1 → 세마포어 장기 점유로 발행 파이프라인을 최대 300s 블로킹하던 사고 방지.
 _PUBLISHING_ACTIVE = _threading.Event()
 _BG_ALIASES = frozenset({"guardian", "learn_eval", "architect", "diagnostic"})
+
+# ★ 발행창 essential 재시도 캡 대상 (P-C 사용자 박제 2026-07-18) — 본문 생성·발행전 검증 호출.
+#   스로틀/SDK 스톨 시 재시도 증폭(913s) 차단용 retries=1. analyzer(추출)는 제외(선계산으로 이전).
+_PUBLISH_ESSENTIAL_CAP = frozenset(
+    a.strip() for a in
+    (os.getenv("LLM_PUBLISH_ESSENTIAL_CAP", "writer,fact_judge,engagement_judge") or "").split(",")
+    if a.strip()
+)
 
 
 def mark_publishing(active: bool) -> None:
@@ -562,15 +575,19 @@ def _run_sdk_sync(
     _pace_spawn()
     _acquire_llm_sem()
     try:
-        # ★ timeout 예산 안에서만 대기 — 무제한 대기는 harness 데드라인을 관통(ERRORS [439] 후속)
-        if not _proc_lock_acquire(timeout=timeout):
+        # ★ P2-a (사용자 박제 2026-07-18): 락 대기를 짧게(45s) 캡 — LLM timeout(300s)만큼 기다리다
+        #   사망하지 말 것. 락 획득 실패는 rate-limit 스로틀이 아니라 *경합* 이므로 hung(회로차단기
+        #   신호)로 오분류하지 말고 lock_contention 으로 분리 → 회로 무오염 + harness defer.
+        _lock_wait = min(timeout, _LOCK_ACQUIRE_MAX_WAIT)
+        if not _proc_lock_acquire(timeout=_lock_wait):
             import logging as _logging
             _logging.getLogger("jarvis.llm").warning(
-                f"크로스 프로세스 잠금 {timeout:.0f}s 대기 초과 — 포기(hang 취급, 재시도/회로차단기로 위임)"
+                f"크로스 프로세스 잠금 {_lock_wait:.0f}s 대기 초과 — lock_contention (회로 무오염, defer 위임)"
             )
             _LAST_CALL.throttled = False
-            _LAST_CALL.hung = True
+            _LAST_CALL.hung = False           # ★ hung 아님 — 회로차단기 카운트 제외 (락 경합≠스로틀)
             _LAST_CALL.truncated = False
+            _LAST_CALL.lock_contention = True
             return ""
         try:
             exe = ThreadPoolExecutor(max_workers=1)
@@ -651,9 +668,10 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
     _pace_spawn()
     _acquire_llm_sem()
     try:
-        # ★ timeout 예산 안에서만 대기 — 무제한 대기는 harness 데드라인을 관통(ERRORS [439] 후속)
-        if not _proc_lock_acquire(timeout=timeout):
-            print(f"  ⚠️ vision 크로스 프로세스 잠금 {timeout:.0f}s 대기 초과 — 포기")
+        # ★ P2-a: 락 대기 짧게 캡 — vision 은 회로 미참여라 신호 불필요, 대기 낭비만 제거
+        _lock_wait = min(timeout, _LOCK_ACQUIRE_MAX_WAIT)
+        if not _proc_lock_acquire(timeout=_lock_wait):
+            print(f"  ⚠️ vision 크로스 프로세스 잠금 {_lock_wait:.0f}s 대기 초과 — 포기")
             return ""
         try:
             try:
@@ -734,6 +752,7 @@ def last_call_infra_incomplete() -> bool:
         getattr(_LAST_CALL, "throttled", False)
         or getattr(_LAST_CALL, "hung", False)
         or getattr(_LAST_CALL, "truncated", False)
+        or getattr(_LAST_CALL, "lock_contention", False)   # ★ P2-a: 락 경합도 미완결(defer 대상, 회로 무오염)
     )
 
 
@@ -772,6 +791,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
     _LAST_CALL.throttled = False
     _LAST_CALL.hung = False
     _LAST_CALL.truncated = False
+    _LAST_CALL.lock_contention = False   # ★ P2-a: 락 경합 신호도 진입 리셋
 
     # ★ 재시도 최대 3회 상한 (사용자 박제 2026-07-06): 어떤 재시도도 3회 초과 금지.
     #   기본 _retries=4 → 실효 3으로 캡. deadline/_nonessential/probe/open 강등은 더 낮춤.
@@ -781,7 +801,12 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
     # ★ 글로벌 데드라인 강등 — 발행 파이프라인(economic_poster 등)이 설정
     try:
         _dl = float(os.environ.get("JARVIS_LLM_DEADLINE_TS", "0") or "0")
-        if _dl and (_dl - _t.time()) < 600:
+        _rem = _dl - _t.time()
+        # ★ stale carryover 차단 (사용자 박제 2026-07-18): 발행 액션 데드라인 임박(잔여<600s) 시에만
+        #   강등하되, 이미 1시간 이상 지난 데드라인은 이전 발행의 잔재(예: 06:30 경제 값이 pop 안 돼
+        #   21:00 테마에서 관측 → 모든 테마 호출 상시 강등)이므로 무시. 활성 액션의 정상 overrun
+        #   (잔여 0~-3600s)은 여전히 강등해 발행창 밖 호출만 부당 강등에서 제외한다.
+        if _dl and -3600 < _rem < 600:
             retries, backoff = 1, False
     except Exception:
         pass
@@ -794,6 +819,14 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
         retries = min(retries, 1)
         backoff = False
         timeout = min(timeout, 90)
+    # ★ P-C 발행창 essential 재시도 캡 (사용자 박제 2026-07-18): writer(본문 생성)·fact_judge·
+    #   engagement_judge(발행 전 검증)는 필수라 timeout 은 유지하되, 스로틀/SDK 스톨 시 재시도로
+    #   913s(최대 3×300+백오프)로 증폭되는 것을 차단 — retries=1. 스로틀·스톨 창에서 같은 창
+    #   재발사는 무의미하므로 1회 후 defer 가 정상경로다. analyzer(fact·chart 추출)는 품질 보존 위해
+    #   강등 제외 — 추출은 선계산(06:00/20:30 저부하 창)으로 발행창 밖 이전됨.
+    elif alias in _PUBLISH_ESSENTIAL_CAP and _PUBLISHING_ACTIVE.is_set():
+        retries = min(retries, 1)
+        backoff = False
 
     # ★ 회로 차단기 게이트 (_essential=True 는 호출 단위 필수 면제 —
     #   설계 planner 등 품질 조타수 호출이 스로틀 중에도 1회 실시도, ERRORS [300])
@@ -830,6 +863,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
             _LAST_CALL.throttled = False
             _LAST_CALL.hung = False
             _LAST_CALL.truncated = False
+            _LAST_CALL.lock_contention = False
             result = _run_sdk_sync(prompt, model=model, system=system, timeout=timeout) or ""
         except Exception:
             result = ""

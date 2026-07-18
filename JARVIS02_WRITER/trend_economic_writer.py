@@ -1249,11 +1249,14 @@ def _market_data_to_datasets(market_data: dict) -> list:
     ] if ds]
 
 
-def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | None = None) -> dict:
+def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | None = None,
+               use_cache: bool = True) -> dict:
     """티스토리 주제선정 + JARVIS09 수집 + CollectedData 조립.
 
     Returns: success, keyword, sector, reason, collected (CollectedData),
              supreme_block (enriched), source_docs
+
+    ★ use_cache (사용자 박제 2026-07-18): precollect 잡(06:05) 선계산 캐시 재사용 — nv_collect 참조.
     """
     from datetime import datetime as _dt_ts
     print(f"\n  🔴 [TISTORY-COLLECT] 주제 선정 + 수집 중... [{_dt_ts.now().strftime('%H:%M:%S')}]")
@@ -1295,6 +1298,17 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
         print(f"  📌 [티스토리 주제 — 자비스03 팩] [{sector}] {keyword}"
               + (f" — {reason[:60]}" if reason else ""))
 
+        # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18) — nv_collect 참조. 미스·오류 시 기존 수집 폴백.
+        if use_cache and supreme_block is None:
+            try:
+                from JARVIS02_WRITER.precollect_cache import load_precollect
+                _cached = load_precollect("economic", keyword)
+                if _cached:
+                    print(f"  ⚡ [TISTORY-COLLECT] 선계산 캐시 재사용: {keyword} (발행창 추출 LLM 0회)")
+                    return _cached
+            except Exception as _pce:
+                print(f"  ⚠️ [선계산] 캐시 조회 스킵: {_pce}")
+
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
             supreme_block = _law_blk()
@@ -1330,7 +1344,10 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
             _chart = collect_chart_data(keyword, sector=sector, description=reason,
                                         synonyms=_cand.get("synonyms"),
-                                        related_terms=_profile.get('related_terms')) or {}
+                                        related_terms=_profile.get('related_terms'),
+                                        profile=_profile,                    # ★ entity_type 관통 (2026-07-18)
+                                        plan_cache=_cand.get("data_plan"),   # ★ warm plan 캐시 공유(발행창 LLM 0)
+                                        category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
@@ -1346,8 +1363,11 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
             try:
                 _fact_ds = _f2d(_ev_pack)
                 if _fact_ds:
+                    from JARVIS09_COLLECTOR.models import dataset_is_stock_financial as _is_sf
                     _existing_titles = {d.get("title", "") for d in _pool}
-                    _new_ds = [d for d in _fact_ds if d.get("title", "") not in _existing_titles]
+                    # ★ 경제 브리핑: fact 유래 dataset 중 개별 종목 재무(PER/ROE/영업이익 등)는 배제 (2026-07-18)
+                    _new_ds = [d for d in _fact_ds
+                               if d.get("title", "") not in _existing_titles and not _is_sf(d)]
                     _pool = _pool + _new_ds
                     print(f"  📊 [facts→datasets] {len(_new_ds)}개 수치 데이터셋 추가 (총 {len(_pool)}개)")
             except Exception as _f2d_e:
@@ -1406,7 +1426,8 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
             _docs_ser = []
         collected = CollectedData.from_dict({
             "meta": {"keyword": keyword, "sector": sector, "category": "economic",
-                     "profile": _cand.get("profile") or {}},
+                     "profile": _cand.get("profile") or {},
+                     "section_plan": _cand.get("section_plan")},   # ★ 주제별 대본 골격 (2026-07-18)
             "datasets": _pool,
             "docs": _docs_ser,
             "facts": list(_ev_pack.get("facts") or []),
@@ -1463,6 +1484,7 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
         _ref_ds_ts = getattr(collected, "datasets", None) or []
         draft_html = generate_article_html(keyword, sector, reason, supreme_block,
                                            ref_datasets=_ref_ds_ts,
+                                           section_plan=(getattr(collected, "meta", None) or {}).get("section_plan"),
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함을 구분해 태깅(rank4). circuit_is_open()은
@@ -1563,11 +1585,16 @@ def ts_publish(draft: dict) -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
 
-def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | None = None) -> dict:
+def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | None = None,
+               use_cache: bool = True) -> dict:
     """네이버 주제선정 + JARVIS09 수집 + CollectedData 조립.
 
     Returns: success, keyword, sector, reason, collected (CollectedData),
              supreme_block (enriched), source_docs
+
+    ★ use_cache (사용자 박제 2026-07-18): True 면 precollect 잡(06:05)이 저부하 창에서 미리
+      수집·추출해 캐시한 결과를 재사용(발행창 추출 LLM 0회 → writer 회복된 풀). precollect
+      잡 자신은 use_cache=False 로 호출해 실제 수집을 수행한다.
     """
     from datetime import datetime as _dt_nv
     print(f"\n  🟢 [NAVER-COLLECT] 주제 선정 + 수집 중... [{_dt_nv.now().strftime('%H:%M:%S')}]")
@@ -1605,6 +1632,19 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
         print(f"  📌 [네이버 주제 — 자비스03 팩] [{sector}] {keyword}"
               + (f" — {reason[:60]}" if reason else ""))
 
+        # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18): precollect 잡(06:05)이 미리 수집·추출한
+        #   결과가 있으면 발행창(07:00) 추출 LLM 0회로 재사용 → writer 회복된 풀에서 실행.
+        #   순수 최적화 — 미스·오류 시 아래 기존 수집 경로로 폴백(현행 동작 보존).
+        if use_cache and supreme_block is None:
+            try:
+                from JARVIS02_WRITER.precollect_cache import load_precollect
+                _cached = load_precollect("economic", keyword)
+                if _cached:
+                    print(f"  ⚡ [NAVER-COLLECT] 선계산 캐시 재사용: {keyword} (발행창 추출 LLM 0회)")
+                    return _cached
+            except Exception as _pce:
+                print(f"  ⚠️ [선계산] 캐시 조회 스킵: {_pce}")
+
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
             supreme_block = _law_blk()
@@ -1640,7 +1680,10 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
             print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
             _chart = collect_chart_data(keyword, sector=sector, description=reason,
                                         synonyms=_cand.get("synonyms"),
-                                        related_terms=_profile.get('related_terms')) or {}
+                                        related_terms=_profile.get('related_terms'),
+                                        profile=_profile,                    # ★ entity_type 관통 (2026-07-18)
+                                        plan_cache=_cand.get("data_plan"),   # ★ warm plan 캐시 공유(발행창 LLM 0)
+                                        category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
             _pool = list(_chart.get("datasets") or [])
             _res = collect_research(keyword, sector=sector, angle=reason) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
@@ -1656,8 +1699,11 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
             try:
                 _fact_ds = _f2d(_ev_pack)
                 if _fact_ds:
+                    from JARVIS09_COLLECTOR.models import dataset_is_stock_financial as _is_sf
                     _existing_titles = {d.get("title", "") for d in _pool}
-                    _new_ds = [d for d in _fact_ds if d.get("title", "") not in _existing_titles]
+                    # ★ 경제 브리핑: fact 유래 dataset 중 개별 종목 재무(PER/ROE/영업이익 등)는 배제 (2026-07-18)
+                    _new_ds = [d for d in _fact_ds
+                               if d.get("title", "") not in _existing_titles and not _is_sf(d)]
                     _pool = _pool + _new_ds
                     print(f"  📊 [facts→datasets] {len(_new_ds)}개 수치 데이터셋 추가 (총 {len(_pool)}개)")
             except Exception as _f2d_e:
@@ -1716,7 +1762,8 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
             _docs_ser = []
         collected = CollectedData.from_dict({
             "meta": {"keyword": keyword, "sector": sector, "category": "economic",
-                     "profile": _cand.get("profile") or {}},
+                     "profile": _cand.get("profile") or {},
+                     "section_plan": _cand.get("section_plan")},   # ★ 주제별 대본 골격 (2026-07-18)
             "datasets": _pool,
             "docs": _docs_ser,
             "facts": list(_ev_pack.get("facts") or []),
@@ -1740,6 +1787,41 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
         _g_report("writer", e, module=__name__)
         traceback.print_exc()
         return {"success": False, "keyword": keyword, "error": str(e)[:100]}
+
+
+def precollect_economic() -> dict:
+    """★ 경제 브리핑 선계산 잡 (06:05 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
+
+    발행 슬롯(네이버·티스토리) 후보를 미리 수집·추출(무거운 fact·chart LLM 버스트)해 캐시한다.
+    07:00 발행은 이 캐시를 재사용(추출 LLM 0회) → 직후 writer 가 버스트로 열화되지 않은 Max 풀에서
+    실행되어 300s 스톨 조건이 제거된다. 전문 추출은 그대로 유지하고 *시점만* 앞당기므로 "수집
+    데이터 전부 활용" 박제 무위반. 순수 최적화 — 캐시가 없으면 발행창이 기존 수집으로 폴백한다.
+    """
+    from datetime import datetime as _dt
+    from JARVIS02_WRITER.precollect_cache import save_precollect
+    print(f"\n{'='*50}\n⚡ 경제 선계산 시작 [{_dt.now().strftime('%H:%M:%S')}] — 발행창 밖 추출\n{'='*50}")
+
+    # 발행창과 동일한 market_data(빈 pool 폴백용) 구성
+    _md: dict = {}
+    try:
+        from JARVIS09_COLLECTOR import get_market_data as _gmd, get_economic_calendar as _gec
+        _md = {"market": _gmd() or {}, "calendar": _gec() or {}}
+    except Exception as _mde:
+        print(f"  ⚠️ [경제 선계산] 시장 수치 스킵: {_mde}")
+
+    saved = 0
+    try:
+        nv = nv_collect(market_data=_md, use_cache=False)
+        if nv.get("success") and nv.get("keyword") and save_precollect("economic", nv["keyword"], nv):
+            saved += 1
+        ts = ts_collect(nv_keyword=nv.get("keyword", ""), market_data=_md, use_cache=False)
+        if ts.get("success") and ts.get("keyword") and save_precollect("economic", ts["keyword"], ts):
+            saved += 1
+    except Exception as e:
+        _g_report("writer", e, module=__name__, func_name="precollect_economic")
+        print(f"  ⚠️ [경제 선계산] 예외: {e} — 발행창이 기존 수집으로 폴백")
+    print(f"⚡ 경제 선계산 완료 — {saved}개 캐시 (07:00 발행 재사용 대기)")
+    return {"success": True, "cached": saved}
 
 
 def nv_generate_draft(keyword: str, sector: str, reason: str,
@@ -1773,6 +1855,7 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
         _ref_ds = getattr(collected, "datasets", None) or []
         draft_html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
                                            ref_datasets=_ref_ds,
+                                           section_plan=(getattr(collected, "meta", None) or {}).get("section_plan"),
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함 구분 태깅(rank4) — 경제 네이버.

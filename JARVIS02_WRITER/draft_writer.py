@@ -143,7 +143,7 @@ def _inject_missing_charts(html: str, target_count: int, start_idx: int = 1,
         ds = ds_list[ds_idx]
         data_str = " | ".join(
             f"{str(r.get('label', '')).strip()}={r.get('value', '')}"
-            for r in (ds.get("data") or [])[:8]
+            for r in (ds.get("data") or [])   # ★ 데이터포인트 전량 (8개 상한 폐지 2026-07-17)
             if r.get("label") and r.get("value") is not None
         )
         src = ds.get("source") or {}
@@ -362,18 +362,22 @@ def _stocks_text(stocks_data: dict) -> str:
 #  경제 브리핑 텍스트 대본 — 티스토리·네이버 (Pass-1)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def build_corpus_block(docs, max_total: int | None = None, per_doc: int = 2500) -> str:
+def build_corpus_block(docs, max_total: int | None = None, per_doc: int | None = None) -> str:
     """★ 수집 자료 *전문* 주입 (사용자 박제 2026-07-03 — "내용이 풍부해야 퀄리티도 높다").
 
     자비스09 수집 문서 전부를 대본 프롬프트에 전달 — LLM 이 모든 자료를 보고
     주제·서사·통찰을 구성한다. evidence_brief(수치 규율)와 *병행* 주입.
-    신뢰 서열(논문>API>뉴스>기사>웹) 정렬 — 상한 초과 시 저신뢰부터 생략(건수 명시).
+    신뢰 서열(논문>API>뉴스>기사>웹) 정렬.
+
+    ★ 입력 절단 폐지 (사용자 박제 2026-07-17): per_doc(문서당 자수컷) 기본 None = 전문 그대로.
+      max_total 은 *컨텍스트 오버플로 방지용 최후 안전판* 일 뿐 — 초과 시에만 저신뢰부터 통째
+      생략(건수 명시). 15건 신뢰 쿼터 규모에선 사실상 발동 안 함.
     """
     if not docs:
         return ""
     import os as _os_c
     if max_total is None:
-        max_total = int(_os_c.getenv("DRAFT_CORPUS_MAX_CHARS", "120000") or "120000")
+        max_total = int(_os_c.getenv("DRAFT_CORPUS_MAX_CHARS", "200000") or "200000")
 
     def _a(d, k, default=""):
         return d.get(k, default) if isinstance(d, dict) else getattr(d, k, default)
@@ -389,7 +393,8 @@ def build_corpus_block(docs, max_total: int | None = None, per_doc: int = 2500) 
     used = 0
     included = 0
     for i, d in enumerate(docs, 1):
-        body = str(_a(d, "cleaned_text") or "").strip()[:per_doc]
+        _ct = str(_a(d, "cleaned_text") or "").strip()
+        body = _ct[:per_doc] if per_doc else _ct   # ★ 수집 원본 전문 (per_doc 절단 폐지 2026-07-17)
         if not body:
             continue
         entry = f"--- 자료 {i} [{_a(d, 'source_type')}] {str(_a(d, 'title'))[:70]}\n{body}"
@@ -417,8 +422,11 @@ def _build_data_catalog(datasets) -> str:
     if not datasets:
         return ""
     import os as _os_cat
-    _cat_max = int(_os_cat.getenv("DATA_CATALOG_MAX", "16") or "16")
-    datasets = list(datasets)[:_cat_max]
+    # ★ 수집 데이터셋 전량 주입 (사용자 박제 2026-07-17 — 16개 상한 폐지). env 지정 시만 상한 적용.
+    _cat_max = int(_os_cat.getenv("DATA_CATALOG_MAX", "0") or "0")
+    datasets = list(datasets)
+    if _cat_max > 0:
+        datasets = datasets[:_cat_max]
     lines = ["[★ 사용 가능한 실데이터 — 차트도 본문 수치도 *이 값만* 인용할 것]"]
     for i, d in enumerate(datasets, 1):
         u = d.get("unit", "")
@@ -431,7 +439,7 @@ def _build_data_catalog(datasets) -> str:
         if src_name:
             head += f" [출처 {src_name[:40]}]"
         lines.append(head)
-        for r in (d.get("data") or [])[:8]:
+        for r in (d.get("data") or []):   # ★ 데이터포인트 전량 주입 (8개 상한 폐지 2026-07-17)
             lbl = str(r.get("label", "")).strip()
             val = r.get("value", "")
             if lbl != "" and val != "":
@@ -589,11 +597,44 @@ def _draft_invoke(system_msg: str, user_msg: str) -> str:
     return body
 
 
+def _build_economic_sections(section_plan, mid_emo_phrase: str, chart_start: int = 3) -> str | None:
+    """★ 주제별 섹션 스켈레톤 동적 조립 (사용자 박제 2026-07-18) — 고정 '소제목1..N' 탈피.
+
+    topic_pack warm 단계가 선계산한 section_plan(주제 맞춤 섹션명·개수)을 받아 경제 대본
+    CONTENT 의 섹션 골격을 매 주제마다 다르게 만든다. 삼중감성 중간 문단(제0-C조)을 섹션
+    중앙에 재삽입하고, 차트 슬롯([CHART_n])·데이터 카탈로그 힌트(Dn) 형식을 보존한다.
+    면책·generic('섹션 N') 섹션은 제외. 실섹션 2개 미만이면 None → 호출자가 기존 리터럴 폴백.
+    """
+    secs = []
+    for s in (section_plan or []):
+        if not isinstance(s, dict):
+            continue
+        nm = str(s.get("name", "")).strip()
+        if not nm or "면책" in nm or re.match(r"^섹션\s*\d+$", nm):
+            continue
+        secs.append(nm)
+    if len(secs) < 2:
+        return None
+    out, _cn, _mid = [], chart_start, len(secs) // 2
+    for i, nm in enumerate(secs):
+        out.append(f"<h2>{nm}</h2>")
+        out.append(f"<p>{nm} 핵심 2문장.</p>")
+        out.append(f"[CHART_{_cn}]\n제목: {nm} 관련 시각화\n단위: (D{_cn} 단위)\n"
+                   f"데이터: (D{_cn} 라벨=값)\n출처: (D{_cn} 출처)\n[/CHART_{_cn}]")
+        out.append(f"<p>{nm} 부연 2문장.</p>")
+        _cn += 1
+        if i == _mid:   # ★ 감성 중간 문단 재삽입 (헌법 제0-C조 — 절대 누락 금지)
+            out.append(f"<p>(★ 감성 중간 문단 — 본문 중간에 글쓴이의 개인적 소회·공감을 "
+                       f"{mid_emo_phrase}. 수치·데이터 없이 감성 서술만. 헌법 제0-C조)</p>")
+    return "\n".join(out)
+
+
 def _gen_economic_ts_nv(
     keyword: str, sector: str, reason: str,
     supreme_block: str,
     platform: str = "tistory",
     datasets=None,
+    section_plan=None,
 ) -> str:
     """티스토리·네이버 경제 브리핑 Pass-1: 텍스트 + [CHART_N] 플레이스홀더.
 
@@ -617,9 +658,14 @@ def _gen_economic_ts_nv(
     _max_kor = _spec_eco.max_korean if _spec_eco else 2000
     _target_sents = _spec_eco.target_sentences if _spec_eco else 30
     _min_sents = _spec_eco.min_sentences if _spec_eco else 20
-    _p_cap = max(15, _max_sents // 2)   # 한 <p> 최대 2문장 → <p> 상한 = 문장 상한/2
+    # ★ <p> 상한을 *목표(32) 앵커* 로 (사용자 박제 2026-07-18 — 오버슈트→재작성 순환 방지).
+    #   종전 max_sents//2=22(×2문장=44, 상한 45까지 여유 0)라 조금만 넘겨도 즉시 초과 → 전체 재작성.
+    #   목표 앵커(target//2+2≈18, ×2=36)로 상한(45)까지 ~9문장 여유 → 첫 패스가 트림조차 불필요.
+    _p_cap = max(16, _target_sents // 2 + 2)
 
     system_msg = f"""당신은 한국 경제 블로그의 전문 작가입니다.
+이 글은 오늘 트렌드에서 화제인 *경제·금융 상식과 배경 지식*(거시지표·경제 개념·정책·산업 배경)을 쉽게 풀어 설명하는 글입니다.
+★ 개별 종목의 재무표(PER·ROE·영업이익률·매출액·시가총액)·대장주/부대장주 선정·특정 종목 매수 추천은 절대 쓰지 마십시오 — 그것은 '테마주 분석' 글의 영역이며, 이 글과는 성격이 완전히 다릅니다. 오늘의 경제/금융 이슈가 *무엇인지·왜 중요한지·배경과 파급 효과*를 독자 눈높이로 풀어 설명하십시오.
 
 {supreme_block}
 {_insights}
@@ -630,11 +676,12 @@ def _gen_economic_ts_nv(
 - {_max_kor}자 가까워지면 면책 마무리 후 종료. 단, 목표 분량은 반드시 채운다(성의 없이 짧게 끝내지 말 것).
 
 [절대 제약 — 출력 시 반드시 준수 (위 헌법 블록 전체 적용)]
-- <p> 태그 15~{_p_cap}개 (한 <p>에 최대 2문장 — 상한 초과 금지)
+- <p> 태그 12~{_p_cap}개 (한 <p>에 최대 2문장 — 목표 {_target_sents}문장, 상한 {_max_sents}문장 절대 초과 금지)
 - [CHART_N]...[/CHART_N] 데이터 내장 슬롯 {_L.MIN_CHART_COUNT}개 이상 (★ 위 카탈로그 데이터 직접 박기)
   ★ 반드시 [CHART_N] 오프닝 태그로 시작하고 [/CHART_N] 클로징 태그로 닫는다. 오프닝 생략 절대 금지.
   ★ 슬롯 안 필드: 제목 / 단위 / 데이터 / 출처 — 이 4개만. 종류: 필드 쓰지 말 것.
 - <svg>·<img> 태그 직접 쓰지 말 것
+- ★★ 본문 산문(<p> — 감성 오프닝·배경·섹션 설명·중간감성·마무리)은 *수치 0존*: 숫자·통계·%·금액·비율·연도별 값을 산문에 쓰지 마십시오. *모든 수치는 오직 [CHART_N] 슬롯 안*(카탈로그 D번호 값)에만 등장. 산문은 개념·맥락·배경·흐름을 서술한다. 근거 없는 산문 수치는 사실성 게이트에서 차단→재작성을 유발한다.
 - 연속 <p>↔<p> 사이마다 슬롯 삽입 (h2 직전·면책 직전 제외)
 - 문체: {spec['tone']}
 - 위 지시문(괄호 안 설명·헌법 조항 번호·"정확히 N문장" 등) 본문에 그대로 출력 금지 — *완성된 HTML만* 출력"""
@@ -644,12 +691,19 @@ def _gen_economic_ts_nv(
 날짜: {_TODAY_KR} ({_TODAY_DOW}요일)
 키워드: {keyword} | 섹터: {sector} | 급상승 이유: {reason}
 
+[★ 이 글의 정체성 — 경제·금융 상식/배경 설명 (테마주 분석 아님)]
+'{keyword}'가 지금 왜 화제인지, 그 뒤에 있는 *경제·금융의 배경지식·개념·원리*를 일반 독자가 "아하" 하고 이해하도록 쉽게 풀어 설명하는 글이다.
+- 소제목은 이 주제와 연결된 *경제 개념·배경·파급 효과*로 구성한다 (예: 관련 정책·제도가 작동하는 원리, 시장·산업 메커니즘, 거시지표와의 연결, 알아두면 유용한 경제 상식).
+- 개별 기업의 재무(PER·ROE·영업이익·매출액)·대장주 선정·매수 추천은 절대 다루지 않는다 — 그건 '테마주 분석' 글의 영역이다.
+- 수치·차트는 주제를 이해시키는 *근거*로만 쓴다. 데이터가 얕으면 억지 수치 대신 개념·맥락·비유로 설득력 있게 설명한다.
+
 {_catalog}
 
 [출력 형식 — 아래 구조 패턴을 따르되, 차트 개수는 글 분량에 맞게 자유 결정]
 
 ★ 총 차트: {_L.MIN_CHART_COUNT}~{_L.MAX_CHART_COUNT}개 (소제목 수·단락 수에 따라 자유롭게 배치. 번호는 [CHART_1]부터 순서대로).
 ★ 문단-이미지 배치 (제4조 허용 패턴): 문단+이미지+문단 / 문단+이미지+문단+이미지+문단 / 문단+문단+이미지+문단 / 문단+이미지+문단+문단. 이미지 연속·문단 3개+ 연속만 금지.
+★ 삼중 감성 배치 (헌법 제0조·제0-C조): ① 도입부 감성 오프닝 ② *본문 중간* 감성 문단 1개({_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 글쓴이의 개인적 소회·공감) ③ 감성 마무리 — 글 처음·중간·끝 세 곳에 사람이 직접 쓴 온기(수치 없는 감성 서술).
 
 TITLE: {spec['title_style']}
 
@@ -670,36 +724,30 @@ CONTENT:
 출처: (D2 출처 그대로)
 [/CHART_2]
 <p>전환.</p>
-<h2>소제목1</h2>
-<p>섹션1 단락.</p>
-[CHART_3]
-제목: 섹션1 관련 시각화
-단위: (D3 단위)
-데이터: (D3 라벨=값)
-출처: (D3 출처)
-[/CHART_3]
-<p>섹션1 단락.</p>
-[CHART_4]
-제목: 섹션1 추가 분석
-단위: (D4 단위)
-데이터: (D4 라벨=값)
-출처: (D4 출처)
-[/CHART_4]   ← 섹션 분량이 길면 차트 더 추가 가능
-...
-<h2>소제목N</h2>
-<p>마지막 섹션 단락.</p>
-[CHART_M]
-제목: 마무리 차트
-단위: (Dm 단위)
-데이터: (Dm 라벨=값)
-출처: (Dm 출처)
-[/CHART_M]
-<p>마무리.</p>
+__SECTIONS__
+<p>감성 마무리1. 감성 마무리2. — 단순 요약·행동 지시가 아니라 개인적 소회·독자에게 건네는 따뜻한 인사로 마무리 (헌법 제0-C조 감성 마무리).</p>
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 *맞춤형 표현*으로 작성)</p>
 
 {_DESIGN_FIRST_BLOCK}
 먼저 <design>설계</design> 블록을 쓰고, *그 다음* 위 형식대로 TITLE: 부터 작성. <design> 외에는 위 출력 형식만 — 설명·주석·코드블록 금지.
 """
+    # ★ 동적 섹션 골격 주입 (사용자 박제 2026-07-18): section_plan(warm 선계산 — 주제별 섹션)
+    #   있으면 __SECTIONS__ 를 주제 맞춤 구조로, 없으면 기존 고정 스켈레톤으로 안전 폴백.
+    _mid_emo = _L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)
+    _literal_sections = (
+        "<h2>소제목1</h2>\n<p>섹션1 단락.</p>\n"
+        "[CHART_3]\n제목: 섹션1 관련 시각화\n단위: (D3 단위)\n데이터: (D3 라벨=값)\n출처: (D3 출처)\n[/CHART_3]\n"
+        "<p>섹션1 단락.</p>\n"
+        "[CHART_4]\n제목: 섹션1 추가 분석\n단위: (D4 단위)\n데이터: (D4 라벨=값)\n출처: (D4 출처)\n[/CHART_4]   ← 섹션 분량이 길면 차트 더 추가 가능\n"
+        f"<p>(★ 감성 중간 문단 — 본문 중간에 글쓴이의 개인적 소회·공감을 {_mid_emo}. 사람이 직접 쓴 듯한 온기 — 수치·데이터 없이 감성 서술만. 헌법 제0-C조)</p>\n"
+        "...\n<h2>소제목N</h2>\n<p>마지막 섹션 단락.</p>\n"
+        "[CHART_M]\n제목: 마무리 차트\n단위: (Dm 단위)\n데이터: (Dm 라벨=값)\n출처: (Dm 출처)\n[/CHART_M]"
+    )
+    _dyn_sections = _build_economic_sections(section_plan, _mid_emo) if section_plan else None
+    user_msg = user_msg.replace("__SECTIONS__", _dyn_sections or _literal_sections)
+    if _dyn_sections:
+        print(f"  🧩 [Pass-1/{platform}] 주제별 동적 섹션 {_dyn_sections.count('<h2>')}개 적용")
+
     _chart_floor = max(8, _L.MAX_CHART_COUNT * 2 // 3)  # 경제: 8~12 범위 하한선
     user_msg = user_msg.replace(
         f"{_L.MIN_CHART_COUNT}~{_L.MAX_CHART_COUNT}",
@@ -718,6 +766,8 @@ CONTENT:
 def _build_section_system_msg(supreme_block: str, platform: str) -> str:
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     return f"""당신은 한국 경제 블로그의 전문 작가입니다.
+이 글은 오늘 트렌드에서 화제인 *경제·금융 상식과 배경 지식*(거시지표·경제 개념·정책·산업 배경)을 쉽게 풀어 설명하는 글입니다.
+★ 개별 종목의 재무표(PER·ROE·영업이익률·매출액·시가총액)·대장주/부대장주 선정·특정 종목 매수 추천은 절대 쓰지 마십시오 — 그것은 '테마주 분석' 글의 영역이며, 이 글과는 성격이 완전히 다릅니다. 오늘의 경제/금융 이슈가 *무엇인지·왜 중요한지·배경과 파급 효과*를 독자 눈높이로 풀어 설명하십시오.
 
 {supreme_block}
 
@@ -839,6 +889,7 @@ def _gen_section_call2(
 데이터: (카탈로그 D7 라벨=값)
 출처: (카탈로그 D7 출처)
 [/CHART_7]   ← (분량이 길면 차트 추가 가능)
+<p>(★ 감성 중간 문단 — 본문 중간에 글쓴이의 개인적 소회·공감 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 수치 없이 감성 서술만. 헌법 제0-C조)</p>
 """
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
@@ -886,7 +937,7 @@ def _gen_section_call3(
 데이터: (카탈로그 D9 라벨=값)
 출처: (카탈로그 D9 출처)
 [/CHART_9]   ← (분량이 길면 차트 추가 가능)
-<p>마무리.</p>
+<p>감성 마무리1. 감성 마무리2. — 단순 요약이 아니라 개인적 소회·독자에게 건네는 따뜻한 인사 (헌법 제0-C조 감성 마무리).</p>
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 맞춤형 표현으로 작성)</p>
 """
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
@@ -1116,6 +1167,7 @@ def _gen_theme(
 [★ 본문 구조 — 반드시 이 순서 준수 (★ 분량은 헌법 제8조·length_manager.THEME_TOTAL_SENTS 위임. 배치는 제4조 허용 패턴 4가지)]
 ★ 차트 총 개수: {_L.THEME_TOTAL_CHART_COUNT}~{_L.MAX_CHART_COUNT}개 (각 섹션 분량에 따라 자유 결정). 번호는 [CHART_1]부터 순서대로.
 ★ 배치 허용: 문단+이미지+문단 / 문단+이미지+문단+이미지+문단 / 문단+문단+이미지+문단 / 문단+이미지+문단+문단. 이미지 연속·문단 3개+ 연속만 금지.
+★ 삼중 감성 배치 (헌법 제0조·제0-C조): ① 도입부 감성 오프닝 ② *본문 중간*(종목 분석 사이) 감성 문단 1개({_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 글쓴이의 개인적 소회·공감) ③ 감성 마무리 — 글 처음·중간·끝 세 곳에 사람이 직접 쓴 온기(수치 없는 감성 서술).
 
 1. 도입부 {_intro_phrase} — <p>2문</p> [CHART_1] <p>2문</p>
 2. <h2>대장주 — {leader}</h2> — {_leader_phrase} · 단락-이미지 교대 배치 (표 + 차트 최소 1개, 분량에 따라 추가)
@@ -1124,11 +1176,13 @@ def _gen_theme(
    <p>사업성·주력 2문</p> → <table> → <p>핵심기술·실적 2문</p> → [CHART_3] → <p>투자 포인트</p> → [PRICE_CHART_SECOND](카탈로그 주가이력 데이터)[/PRICE_CHART_SECOND]
 4. <h2>그 외 주목 종목 5개</h2> — {_multi_phrase} · 단락-이미지 교대 배치 (차트 최소 2개, 분량에 따라 추가)
    <p>종목 1·2 톺아보기 2문</p> → [CHART_4] → <p>종목 3·4 분석 2문</p> → [CHART_5] → <p>종목 5 + 종합 평가</p>
+   → <p>(★ 감성 중간 문단 — 글쓴이의 개인적 소회·공감 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 수치·데이터 없이 감성 서술만. 헌법 제0-C조)</p>
 5. <h2>섹터 & 시장 분석</h2> — {_sector_phrase} · 단락-이미지 교대 배치 (차트 최소 1개, 분량에 따라 추가)
    <p>관련 섹터 흐름·업계 동향 2문</p> → [CHART_6] → <p>시장 환경 + 자금 흐름 2문</p>
 6. <h2>투자 전략 & 위험 요인</h2> — {_strategy_phrase} · 단락-이미지 교대 배치 (차트 최소 1개, 분량에 따라 추가)
    <p>진입 시점·매매 시그널 2문</p> → [CHART_7] → <p>리스크 관리·손절선 2문</p>
-7. <p>면책 {_disc_phrase}</p>  ← (헌법 제5조 적용 — 정보 제공·투자 권유 아님·판단 책임은 독자)
+7. <p>감성 마무리 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)} — 단순 요약·투자 지시가 아니라 개인적 소회·독자에게 건네는 따뜻한 인사 (헌법 제0-C조 감성 마무리)</p>
+8. <p>면책 {_disc_phrase}</p>  ← (헌법 제5조 적용 — 정보 제공·투자 권유 아님·판단 책임은 독자)
 
 [출력 형식 — 아래 구조를 따르되, 차트는 {_L.THEME_TOTAL_CHART_COUNT}~{_L.MAX_CHART_COUNT}개 범위 내 자유 결정]
 
@@ -1213,6 +1267,7 @@ CONTENT:
 [/CHART_5]
 <p>종목 5 + 5종목 종합 평가 2문장.</p>
 ← (종목 섹션이 길면 차트 추가 가능)
+<p>(★ 감성 중간 문단 — 글쓴이의 개인적 소회·공감 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 수치 없이 감성 서술만. 헌법 제0-C조)</p>
 
 <h2>섹터 & 시장 분석</h2>
 <p>관련 섹터 흐름·업계 동향 2문장.</p>
@@ -1236,6 +1291,7 @@ CONTENT:
 <p>리스크 관리·손절선·위험 요인 2문장.</p>
 ← (전략 섹션이 길면 차트 추가 가능)
 
+<p>감성 마무리 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)} — 단순 요약·투자 지시가 아니라 개인적 소회·독자에게 건네는 따뜻한 인사 (헌법 제0-C조 감성 마무리)</p>
 <p>(여기에 면책 2문장 — 본문에 맞춤형 표현. 헌법 제5조 적용 — 정보 제공·투자 권유 아님·판단 책임은 독자)</p>
 
 {_DESIGN_FIRST_BLOCK}

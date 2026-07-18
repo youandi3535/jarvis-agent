@@ -75,7 +75,17 @@ try:
         spec = _get_spec(post_type)
 
         # ── (1) body 검증 — 본문 길이·키워드·★ 분량 ────────────────
-        body = (draft.get("html") or draft.get("content") or "")
+        # ★ 2026-07-18: blocks(law_enforcer 정제 후 = 실제 발행 콘텐츠) 우선.
+        #   draft["html"] 은 enforce_supreme_law 이전 원본이라 draft_fixer 의 분량
+        #   트림 대상(blocks)과 어긋나 재검증이 stale 상태를 다시 위반으로 보는 문제 방지.
+        _blocks_for_body = draft.get("blocks") or []
+        if isinstance(_blocks_for_body, list) and _blocks_for_body:
+            body = "".join(
+                bd for bt, bd in _blocks_for_body
+                if bt in ("text", "html") and isinstance(bd, str)
+            )
+        else:
+            body = (draft.get("html") or draft.get("content") or "")
         if isinstance(body, dict):
             body = body.get("html") or body.get("content") or ""
         if not body or len(body) < 200:
@@ -107,10 +117,13 @@ try:
         else:
             # <p> 태그 없는 경우 — 한국어 포함 문장만 카운트
             sent_count = _LM.count_sentences(body_text)
-        if sent_count > spec.max_sentences:
-            issues.append(f"분량 상한 초과: {sent_count}문장 > {spec.max_sentences}문장 (post_type={post_type})")
-        if kor_count > spec.max_korean:
-            issues.append(f"한국어 글자수 상한 초과: {kor_count}자 > {spec.max_korean}자 ({post_type})")
+        # ★ 분량 상한 = OR 기준 (사용자 박제 2026-07-18): {max_sentences}문장 이하 '또는'
+        #   {max_korean}자 이하면 통과. 둘 다 초과할 때만 차단 (한쪽만 넉넉해도 발행 허용).
+        if sent_count > spec.max_sentences and kor_count > spec.max_korean:
+            # ★ '{max}문장' 토큰 유지 필수 (draft_fixer._fix_sentence_overflow 정규식 r'>\s*(\d+)문장' 계약).
+            #   빠지면 인라인 트림이 파싱 실패 → 값비싼 전체 재작성으로 강등됨 (2026-07-18 회귀 복구).
+            issues.append(f"분량 상한 초과: {sent_count}문장 > {spec.max_sentences}문장 '그리고' {kor_count}자 > {spec.max_korean}자 "
+                          f"(OR 기준 — 둘 다 초과 시에만 차단, post_type={post_type})")
         if sent_count < spec.min_sentences:
             issues.append(f"분량 하한 미달: {sent_count}문장 < {spec.min_sentences}문장 ({post_type})")
 
@@ -1051,7 +1064,7 @@ if __name__ == "__main__":
         )
         try:
             from JARVIS00_INFRA.watchdog import guard_main
-            with guard_main("경제 발행", deadline_sec=3600):   # 부모 60분 backstop — 플랫폼당 30분×2
+            with guard_main("경제 발행", deadline_sec=2 * BLOG_ACTION_DEADLINE_SEC + 600):  # 부모 backstop — 플랫폼당 데드라인×2 + 여유
                 run(post_naver=post_naver, post_tistory=post_tistory)
         except Exception as _e:
             _g_report("writer", _e, module=__name__, func_name="run")
@@ -1060,5 +1073,5 @@ if __name__ == "__main__":
             LOCK_FILE.unlink(missing_ok=True)
     else:
         from JARVIS00_INFRA.watchdog import guard_main
-        with guard_main("경제 발행", deadline_sec=3600):   # 부모 60분 backstop — 플랫폼당 30분×2
+        with guard_main("경제 발행", deadline_sec=2 * BLOG_ACTION_DEADLINE_SEC + 600):  # 부모 backstop — 플랫폼당 데드라인×2 + 여유
             run(post_naver=post_naver, post_tistory=post_tistory)

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0: #ffffff;
+    --hero1: #ffffff;
+    --ink: #2b2f36;
+    --a1: #6b83a8;
+    --a1s: #c17b5c;
+    --a2: #8a9a5b;
+    --a2s: #9b7ca3;
+    --soft: #ffffff;
+    --muted: #7b8089;
+    --eyebrow: #6d7178;
+    --grid: #dcdde0;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    width:1280px;
+    background:var(--hero0);
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ============================================================
+     캔버스 — 히어로 밴드·상단 타이틀 풀밴드 개념 자체가 없음.
+     헤더(.head)가 완전히 비면 여백째로 사라져 캔버스가 곧바로
+     막대 리스트로 시작되도록 설계(:has 전체 은폐). 배경 텍스처
+     (grid/dots/diagonal/glow) 전혀 없는 순백 캔버스.
+     ============================================================ */
+  .canvas{
+    width:1280px;
+    min-height:480px;
+    margin:0 auto;
+    padding:64px 88px;
+    background:var(--soft);
+    display:flex;
+    flex-direction:column;
+  }
+
+  .head{ flex:0 0 auto; margin-bottom:44px; }
+  .head:not(:has(.eyebrow:not(:empty)))
+        :not(:has(.title:not(:empty)))
+        :not(:has(.subtitle:not(:empty)))
+        :not(:has(.hero-stats:not(:empty))){ display:none; margin:0; }
+
+  .eyebrow{
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 12px;
+  }
+  .eyebrow:empty{ display:none; margin:0; }
+
+  .title{
+    font-size:28px;
+    font-weight:800;
+    line-height:1.3;
+    letter-spacing:-.005em;
+    color:var(--ink);
+    max-width:1000px;
+    margin:0 0 8px;
+  }
+  .title:empty{ display:none; margin:0; }
+
+  .subtitle{
+    font-size:16px;
+    font-weight:400;
+    line-height:1.6;
+    color:var(--muted);
+    max-width:920px;
+    margin:0;
+  }
+  .subtitle:empty{ display:none; }
+
+  /* ── 선택적 히어로 수치 — 미사용 시 자동 숨김 ── */
+  .hero-stats{
+    display:flex;
+    flex-wrap:wrap;
+    gap:32px;
+    margin-top:20px;
+  }
+  .hero-stats:empty{ display:none; margin:0; }
+  .hero-stats .stat{ display:flex; flex-direction:column; gap:4px; }
+  .hero-stats .stat .num{ font-size:24px; font-weight:800; color:var(--ink); line-height:1.1; }
+  .hero-stats .stat .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ============================================================
+     막대 그룹 컨테이너 — 최대 3개(CHART_1~3). 빈 그룹은 자동
+     은폐되어 flex gap 특성상 채워진 그룹만 균등 간격으로 이어짐.
+     ============================================================ */
+  .bars-groups{
+    flex:1 1 auto;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    gap:48px;
+  }
+
+  section.chart-slot{ width:100%; }
+  section.chart-slot:empty{ display:none; }
+  section:has([data-jarvis-empty]){ display:none; }
+
+  /* ============================================================
+     수평 막대 리스트 — 단일 컬럼(라벨 열 + 플롯 열), 2열/3열
+     그리드·사이드바 분할 없음. 카드·배경패널·테두리·그림자·라운드
+     모서리 전부 없는 완전 플랫(각진) 막대. 유일한 구조선은 플롯
+     열 좌측의 얇은 연회색 수직 기준선(border-left) 하나뿐 —
+     행마다 반복되지 않고 그룹 전체에 단 하나만 존재.
+
+     주입 마크업 예시(라벨/플롯 두 열이 동일 gap·행 순서로 1:1
+     대응, 4행 균등 간격 기본):
+       <div class="chart-grid">
+         <div class="bar-labels">
+           <span class="bar-label">Europe</span>
+           <span class="bar-label">Americas</span>
+           <span class="bar-label">World</span>
+           <span class="bar-label">Africa</span>
+         </div>
+         <div class="bar-plots">
+           <div class="bar-plot">
+             <div class="bar-fill bar-c1" style="width:84%"></div>
+             <span class="bar-value">78.2</span>
+           </div>
+           <div class="bar-plot">
+             <div class="bar-fill bar-c2" style="width:80%"></div>
+             <span class="bar-value">75.1</span>
+           </div>
+           <!-- 나머지 행 동일 패턴 반복 -->
+         </div>
+       </div>
+     색상 클래스는 행 순서대로 bar-c1→bar-c2→bar-c3→bar-c4→bar-c1...
+     고정 반복(임의 배정 금지).
+     ------------------------------------------------------------- */
+  .chart-grid{
+    display:grid;
+    grid-template-columns:200px 1fr;
+    column-gap:24px;
+  }
+
+  .bar-labels{ display:flex; flex-direction:column; gap:36px; }
+  .bar-label{
+    height:26px;
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+    text-align:right;
+    font-size:18px;
+    font-weight:600;
+    color:var(--ink);
+  }
+
+  .bar-plots{
+    display:flex;
+    flex-direction:column;
+    gap:36px;
+    border-left:1px solid var(--grid);
+  }
+  .bar-plot{
+    height:26px;
+    display:flex;
+    align-items:center;
+    padding-left:0;
+  }
+  .bar-fill{
+    height:26px;
+    min-width:4px;
+    border-radius:0;
+  }
+  .bar-c1{ background:var(--a1); }
+  .bar-c2{ background:var(--a1s); }
+  .bar-c3{ background:var(--a2); }
+  .bar-c4{ background:var(--a2s); }
+
+  .bar-value{
+    margin-left:14px;
+    font-size:16px;
+    font-weight:600;
+    color:var(--ink);
+    white-space:nowrap;
+  }
+
+  /* ── 선택적 미니 카드 — 미사용 시 자동 숨김 ── */
+  .mini-cards{
+    display:flex;
+    flex-wrap:wrap;
+    gap:18px;
+    margin:40px 0 0;
+  }
+  .mini-cards:empty{ display:none; margin:0; }
+  .mini-cards .mini-card{
+    flex:1 1 200px;
+    padding:14px 16px;
+    background:var(--soft);
+    border:1px solid var(--grid);
+  }
+  .mini-cards .mini-card .num{ font-size:22px; font-weight:800; color:var(--ink); }
+  .mini-cards .mini-card .lbl{ font-size:14px; color:var(--muted); margin-top:4px; }
+
+  /* ── 푸터 — 출처/브랜드 둘 다 비면 구분선까지 완전히 접힘(구조선 1개 원칙 유지) ── */
+  .foot{
+    flex:0 0 auto;
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:24px;
+    margin-top:40px;
+    padding-top:16px;
+    border-top:1px solid var(--grid);
+  }
+  .foot:not(:has(.source:not(:empty))):not(:has(.brand:not(:empty))){ display:none; }
+  .source{ font-size:13px; color:var(--muted); }
+  .source:empty{ display:none; }
+  .brand{ font-size:13px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--eyebrow); }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <header class="head">
+      <p class="eyebrow">{EYEBROW}</p>
+      <h1 class="title">{TITLE}</h1>
+      <p class="subtitle">{SUBTITLE}</p>
+      <div class="hero-stats">{HERO_STATS}</div>
+    </header>
+
+    <div class="bars-groups">
+      <section class="chart-slot">{CHART_1}</section>
+      <section class="chart-slot">{CHART_2}</section>
+      <section class="chart-slot">{CHART_3}</section>
+    </div>
+
+    <div class="mini-cards">{MINI_CARDS}</div>
+
+    <footer class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </footer>
+  </div>
+</body>
+</html>

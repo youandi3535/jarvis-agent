@@ -94,13 +94,21 @@ def _fix_law_violations(draft: dict, platform: str) -> bool:
 
 
 def _fix_sentence_overflow(draft: dict, issue_str: str) -> bool:
-    """분량 상한 초과 — 말미 <p> 블록 순차 제거 (문장수 상한까지).
+    """분량 상한 초과 — draft["blocks"] 말미 text/html 블록 순차 제거 (문장수 상한까지).
 
     이슈 문자열 예: "분량 상한 초과: 50문장 > 30문장 (post_type=economic)"
-    전략: <p> 태그를 뒤에서부터 제거 → 재검증 통과까지.
+
+    ★ 2026-07-18 근본 수정 (blocks 를 단일 진실로): 검증(economic_poster/
+    trend_theme_writer 의 _layer3_verify_draft)이 draft["blocks"](실제 발행 콘텐츠)
+    기준으로 문장수를 세도록 대칭화했으므로, 수정도 동일하게 draft["blocks"] 를
+    직접 카운트·제거한다. 예전에는 draft["html"](law_enforcer 정제 *이전* 원본)에서
+    말미 <p> 를 제거한 뒤 draft["blocks"](enforce_supreme_law._clean_text 정제
+    *이후*)에서 같은 텍스트를 찾아 동기화했는데, 금칙어·이모지·마크다운·공백 정리로
+    텍스트가 달라져 "제거 문단 미발견"으로 매번 수정이 무산되고 값비싼 전체 재생성만
+    반복되는 문제가 있었다(ERRORS [445] 안전장치가 상시 발동). blocks 를 카운트·제거
+    양쪽의 유일한 소스로 삼으면 애초에 동기화 대상이 사라진다.
     보수 원칙: 최소 10문장 이하로는 절대 내려가지 않음 (내용 훼손 방지).
     """
-    # 상한 파싱: "> N문장"
     m = re.search(r'>\s*(\d+)문장', issue_str)
     if not m:
         return False
@@ -108,92 +116,56 @@ def _fix_sentence_overflow(draft: dict, issue_str: str) -> bool:
     if max_sents < 10:
         return False  # 너무 낮으면 안전 거부
 
-    html = draft.get("html", "")
-    if not html:
+    blocks = draft.get("blocks")
+    if not isinstance(blocks, list) or not blocks:
         return False
 
-    # 문장종결 카운트 함수 (economic_poster 와 동일 로직)
-    def _count_sents_in_html(h: str) -> int:
-        p_tags = re.findall(r'<p[^>]*>.*?</p>', h, re.DOTALL | re.IGNORECASE)
-        if p_tags:
-            return sum(
-                len(re.findall(r'[.!?。]\s*(?=[^<]|$)', re.sub(r'<[^>]+>', '', p)))
-                for p in p_tags
-            )
-        try:
-            from JARVIS02_WRITER.length_manager import count_sentences
-            return count_sentences(re.sub(r'<[^>]+>', ' ', h))
-        except Exception:
+    def _block_sents(bdata) -> int:
+        if not isinstance(bdata, str):
             return 0
+        text = re.sub(r'<[^>]+>', '', bdata)
+        return len(re.findall(r'[.!?。]\s*(?=[^<]|$)', text))
 
-    current = _count_sents_in_html(html)
-    if current <= max_sents:
+    total = sum(_block_sents(bd) for bt, bd in blocks if bt in ("text", "html"))
+    if total <= max_sents:
         return False  # 이미 정상
 
-    # 말미 <p> 순차 제거
-    p_positions = list(re.finditer(r'<p[^>]*>.*?</p>', html, re.DOTALL | re.IGNORECASE))
-    if not p_positions:
+    # 뒤에서부터 text/html 블록 통째로 제거 (최소 10문장 보장)
+    new_blocks = list(blocks)
+    removed_n = 0
+    for i in range(len(new_blocks) - 1, -1, -1):
+        if total <= max_sents:
+            break
+        btype, bdata = new_blocks[i][0], new_blocks[i][1]
+        if btype not in ("text", "html"):
+            continue
+        b_sents = _block_sents(bdata)
+        if b_sents == 0:
+            continue
+        if total - b_sents < 10:
+            break
+        del new_blocks[i]
+        total -= b_sents
+        removed_n += 1
+
+    if not removed_n:
         return False
 
-    new_html = html
-    removed_paragraphs: list = []   # 제거된 <p> 원본 html — blocks 동기화용
-    # 뒤에서부터 <p> 블록 제거
-    for match in reversed(p_positions):
-        if current <= max_sents:
-            break
-        p_text = re.sub(r'<[^>]+>', '', match.group())
-        p_sents = len(re.findall(r'[.!?。]\s*(?=[^<]|$)', p_text))
-        # 제거 후 최소 10문장 보장
-        if current - p_sents < 10:
-            break
-        new_html = new_html[:match.start()] + new_html[match.end():]
-        removed_paragraphs.append(match.group())
-        current -= p_sents
+    before = sum(_block_sents(bd) for bt, bd in blocks if bt in ("text", "html"))
+    draft["blocks"] = new_blocks
 
-    if new_html == html:
-        return False
+    # draft["html"] 는 검증에 더 이상 쓰이지 않지만(prepublish_gate 사실성 검사 등이
+    # 참고 텍스트로 읽을 수 있어) 말미 <p>/<h> 를 같은 개수만큼 best-effort 로 제거해
+    # 실제 발행 blocks 와 크게 어긋나지 않도록만 정리 — 실패해도 수정 자체는 유효.
+    html = draft.get("html", "")
+    if html:
+        elems = list(re.finditer(r'<p[^>]*>.*?</p>|<h[1-6][^>]*>.*?</h[1-6]>', html, re.DOTALL | re.IGNORECASE))
+        new_html = html
+        for match in list(reversed(elems))[:removed_n]:
+            new_html = new_html[:match.start()] + new_html[match.end():]
+        draft["html"] = new_html
 
-    # ★ blocks 동기화 (2026-07-16 근본 수정) — 검증은 draft["html"] 기준이지만
-    #   실제 발행은 draft["blocks"] 기준. html 만 고치면 "검증 통과 → 위반 발행".
-    #   제거한 <p> 를 blocks 에서도 제거하고, 못 찾으면 수정 자체를 포기(재생성 위임)
-    #   — 검증-발행 불일치 상태를 절대 만들지 않는다.
-    blocks = draft.get("blocks")
-    if isinstance(blocks, list) and blocks and removed_paragraphs:
-        def _norm(s: str) -> str:
-            return re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', str(s))).strip()
-        new_blocks = list(blocks)
-        for removed_p in removed_paragraphs:
-            found = False
-            norm_p = _norm(removed_p)
-            for i in range(len(new_blocks) - 1, -1, -1):
-                try:
-                    btype, bdata = new_blocks[i][0], new_blocks[i][1]
-                except Exception:
-                    continue
-                if btype not in ("text", "html") or not isinstance(bdata, str):
-                    continue
-                if removed_p in bdata:
-                    rest = bdata.replace(removed_p, "", 1)
-                    if _norm(rest):
-                        new_blocks[i] = (btype, rest)
-                    else:
-                        del new_blocks[i]
-                    found = True
-                    break
-                if norm_p and _norm(bdata) == norm_p:
-                    del new_blocks[i]
-                    found = True
-                    break
-            if not found:
-                _log.warning(
-                    "[draft_fixer] blocks 동기화 실패 (제거 문단 미발견) — "
-                    "수정 포기, 재생성 위임 (검증-발행 불일치 방지)"
-                )
-                return False
-        draft["blocks"] = new_blocks
-
-    draft["html"] = new_html
-    _log.info(f"[draft_fixer] 분량 상한 초과 수정: {_count_sents_in_html(html)}문장 → {current}문장 (상한 {max_sents}, blocks 동기화 포함)")
+    _log.info(f"[draft_fixer] 분량 상한 초과 수정: blocks {before}문장 → {total}문장 (상한 {max_sents}, 블록 {removed_n}개 제거)")
     return True
 
 

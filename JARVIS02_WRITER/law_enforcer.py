@@ -1225,7 +1225,7 @@ def audit_factuality(
             prompt = f"""아래 [출처 데이터]에 존재하지 않는 수치를 [본문 수치 목록]에서 찾아라.
 
 [출처 데이터]
-{source_data[:2000]}
+{source_data}
 
 [본문 수치 목록]
 {nums_sample}
@@ -1304,7 +1304,10 @@ class FactJudgeUnavailable(FactJudgeError):
 _FACT_MIN_SOURCE_CHARS = 200    # 이 미만이면 출처 약함 → 웹 1차 근거 (테마글 완화)
 _FACT_MAX_CLAIMS = 25           # 검사 주장 상한 (latency 가드)
 _FACT_MAX_WEB_CHECKS = 8        # 웹 재검증 호출 상한 (발행 임계경로 stall 방지)
-_FACT_SOURCE_CORPUS_CAP = 12000  # 출처 코퍼스 길이 상한 (도메인 무관 — 블로그 분량 아님)
+# ★ 0 = 무제한 (사용자 박제 2026-07-17 — 수집 원본 전량을 grounding 코퍼스로).
+#   옛 12000자컷은 12000자 이후 문서에만 있는 실제 수치를 '출처 미확인'으로 오차단했다.
+#   env FACT_SOURCE_CORPUS_CAP 로 비상 상한 지정 가능.
+_FACT_SOURCE_CORPUS_CAP = 0
 
 
 def _build_source_corpus(source_docs, market_data=None) -> str:
@@ -1330,7 +1333,9 @@ def _build_source_corpus(source_docs, market_data=None) -> str:
               else _json.dumps(market_data, ensure_ascii=False, default=str))
         parts.append("[시장 데이터]\n" + md)
     corpus = "\n\n".join(p for p in parts if p and p.strip())
-    return corpus[:_FACT_SOURCE_CORPUS_CAP]
+    import os as _os_fc
+    _cap = int(_os_fc.getenv("FACT_SOURCE_CORPUS_CAP", str(_FACT_SOURCE_CORPUS_CAP)) or "0")
+    return corpus[:_cap] if _cap > 0 else corpus   # ★ 기본 전량 grounding (2026-07-17)
 
 
 def _fact_strip_html(html: str) -> str:

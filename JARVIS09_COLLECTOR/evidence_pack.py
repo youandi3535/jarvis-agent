@@ -51,8 +51,9 @@ _OUT_DIR = Path(__file__).parent / "output" / "evidence"
 #   중복 fact 충돌 시 낮은 티어(=높은 신뢰)가 이긴다 (_dedupe_facts).
 from .models import SOURCE_TRUST_TIER as _TIER_BY_TYPE
 
-# ★ 티어별 문자 예산 (사용자 박제 2026-07-12): 논문·API가 수치 밀집 → 더 많이 읽는다.
-#   뉴스·기사·웹은 맥락 참조용으로 짧게만.
+# ★ 입력 절단 폐지 (사용자 박제 2026-07-17): fact 추출은 수집 문서 *전문* 을 읽는다.
+#   옛 티어별 자수컷(_TIER_CHARS)은 뉴스 600·웹 300자 등으로 뒷부분 수치·사실을 통째
+#   버렸다 → 폐지. 상수는 하위호환·env 재활성화용으로만 잔존(기본 미적용).
 _TIER_CHARS: dict[int, int] = {1: 2500, 2: 1500, 3: 600, 4: 400, 5: 300, 6: 200}
 # ★ 티어별 문서당 fact 추출 상한
 _TIER_MAX_FACTS_PER_DOC: dict[int, int] = {1: 6, 2: 5, 3: 2, 4: 1, 5: 1, 6: 0}
@@ -113,16 +114,24 @@ def _doc_attr(doc, name: str, default=""):
     return getattr(doc, name, default)
 
 
-def _docs_block(docs: list, per_doc_chars: int) -> str:
-    """티어별 문자 예산 적용: 논문·API는 풍부하게, 뉴스·웹은 짧게."""
+def _docs_block(docs: list, per_doc_chars: int = 0) -> str:
+    """★ 수집 원본 전문 주입 (사용자 박제 2026-07-17 — 티어별 자수컷 폐지).
+
+    옛 _TIER_CHARS 절단(뉴스 600·웹 300자 등)을 폐지 — 문서 전문을 그대로 넣어
+    뒷부분에만 있는 수치·사실도 fact 추출 대상이 되게 한다.
+    env JARVIS_EVIDENCE_PER_DOC_CHARS 를 양수로 주면 그 값으로만 절단(비상 축소용).
+    """
+    import os as _os_e
+    _cap = int(_os_e.getenv("JARVIS_EVIDENCE_PER_DOC_CHARS", "0") or "0") or per_doc_chars
     lines = []
     for i, d in enumerate(docs, 1):
         title = str(_doc_attr(d, "title"))[:80]
         src = _doc_attr(d, "source_type")
         tier = _TIER_BY_TYPE.get(str(src).strip().lower(), 5)
-        chars = _TIER_CHARS.get(tier, per_doc_chars)
-        body = str(_doc_attr(d, "cleaned_text") or _doc_attr(d, "raw_text"))[:chars]
-        # 티어 표시 → LLM 이 추출 우선순위·상한을 구분하도록
+        body = str(_doc_attr(d, "cleaned_text") or _doc_attr(d, "raw_text"))
+        if _cap > 0:
+            body = body[:_cap]
+        # 티어 표시 → LLM 이 추출 우선순위를 구분하도록
         lines.append(f"--- doc {i} [{src}/T{tier}] {title}\n{body}")
     return "\n".join(lines)
 
@@ -244,7 +253,7 @@ def _measure_coverage(plan: dict, facts: list[dict]) -> dict:
 
 
 _HIGH_TIER_SET = frozenset({1, 2})   # 논문(1) + 공식 API(2)
-_HIGH_TARGET   = 15                  # 고품질 소스 목표 fact 수
+_HIGH_TARGET   = 30                  # 고품질 소스 목표 fact 수 (★ 15→30 상향 2026-07-17 — 전문 추출로 사실 밀도 증가분 수용)
 
 
 def build_evidence_pack(theme: str, plan: dict, docs: list,
@@ -299,7 +308,7 @@ def build_evidence_pack(theme: str, plan: dict, docs: list,
     return pack
 
 
-def evidence_brief(pack, max_facts: int = 24) -> str:
+def evidence_brief(pack, max_facts: int = 60) -> str:   # ★ 24→60 상향 2026-07-17 — 근거 전량 작성기 주입
     """대본 프롬프트 주입용 근거 브리프 — 질문별 그룹 + 출처 표기.
 
     JARVIS02 draft_writer 가 그대로 프롬프트에 삽입한다. 사실 번호(F#)로
@@ -470,7 +479,7 @@ def _dedup_labels(data: list[dict]) -> list[dict]:
     return out
 
 
-def facts_to_datasets(pack: dict, max_datasets: int = 24) -> list[dict]:
+def facts_to_datasets(pack: dict, max_datasets: int = 60) -> list[dict]:   # ★ 24→60 상향 2026-07-17
     """★ 수치 fact → 인포그래픽 데이터셋 승격 (사용자 박제 2026-07-03 — ADR 013 보강).
 
     "수치는 텍스트 안에도 많다" — 근거팩의 kind=stat fact(값·단위·기준일·출처 박제)를
@@ -534,7 +543,7 @@ def facts_to_datasets(pack: dict, max_datasets: int = 24) -> list[dict]:
             else:
                 title = f"{theme} 핵심 수치" + (f" ({unit})" if unit else "")
         data = _dedup_labels([{"label": (lb or f["statement"][:14]), "value": v}
-                              for f, v, lb in items[:8]])
+                              for f, v, lb in items[:20]])   # ★ 8→20 상향 2026-07-17 (fact 유래 차트 행 확대)
         src = best.get("source") or {}
         out.append({
             "title": title,

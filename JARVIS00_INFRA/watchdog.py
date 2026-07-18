@@ -42,7 +42,10 @@ def last_global_beat() -> float:
     return _GLOBAL_BEAT[0]
 
 # 작업별 전체 데드라인 (★ 2026-07-16: 이벤트 루프 오염 버그 수정으로 LLM hang 근본 원인 제거 → 30분 복원)
-BLOG_ACTION_DEADLINE_SEC = 1800     # 30분 — 경제/테마 발행 액션(네이버·티스토리 각각)
+# ★ 2026-07-18: b84ddf6 이 수집 입력 절단(per_doc·evidence·fact 코퍼스·chart 등)을 전면 폐지 —
+#   작성기·사실성·차트 LLM 호출이 원본 전문을 그대로 받아 처리 시간이 늘어나 attempt=2에서
+#   1830s > 1800s 로 초과(watchdog 블로킹 감지). 40분으로 상향 + 여유 확보.
+BLOG_ACTION_DEADLINE_SEC = 2400     # 40분 — 경제/테마 발행 액션(네이버·티스토리 각각)
 DEFAULT_ACTION_DEADLINE_SEC = 3600  # 60분 — 그 외 액션(auto_repair 심층감사 등) 넉넉한 안전망
 
 

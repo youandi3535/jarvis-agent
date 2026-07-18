@@ -158,10 +158,10 @@ POST_TYPE_SPECS: dict[str, PostTypeSpec] = {
         min_sections=4,
         max_sections=7,
         sentences_per_section=(3, 7),
-        # 절대 한계 — target=(20+40)//2=30문장·약1500자 사용자 박제
-        max_sentences=40,
+        # ★ 분량 상한 (사용자 박제 2026-07-18): 45문장 '또는' 2500자 — OR 기준(둘 다 초과 시에만 차단).
+        max_sentences=45,
         min_sentences=20,
-        max_korean=2000,
+        max_korean=2500,
         max_images=12,
         # 필수
         required_sections=["면책"],
@@ -178,9 +178,10 @@ POST_TYPE_SPECS: dict[str, PostTypeSpec] = {
         min_sections=5,
         max_sections=8,
         sentences_per_section=(3, 7),
-        max_sentences=40,
-        min_sentences=20,   # target=(20+40)//2=30문장·약1500자 사용자 박제
-        max_korean=2000,
+        # ★ 분량 상한 (사용자 박제 2026-07-18): 45문장 '또는' 2500자 — OR 기준(둘 다 초과 시에만 차단).
+        max_sentences=45,
+        min_sentences=20,
+        max_korean=2500,
         max_images=10,
         required_sections=["면책"],
         style_hints=[
@@ -260,6 +261,44 @@ def generate_section_plan(
     # 모든 시도 실패 — 최소 fallback 구조
     log.warning(f"[section_plan] {max_retries}회 모두 실패 → fallback 구조 사용")
     return _fallback_section_plan(spec)
+
+
+def warm_section_plan(candidates: list) -> dict:
+    """★ 경제 대본 섹션 구조를 저부하 창(topic_pack)에 선계산 (사용자 박제 2026-07-18).
+
+    warm_plan/warm_synonyms 와 동형 위상분리 — generate_section_plan(LLM)을 발행 burst(스로틀
+    포화)가 아니라 topic_pack 생성 시점에 돌려 주제별 섹션명·개수를 candidate 에 박제. draft
+    경로(collected.meta)가 소비해 대본 골격을 주제마다 다르게 만든다. generic 폴백('섹션 N')으로
+    퇴화하면 None → draft 가 기존 고정 스켈레톤으로 폴백(generic 이름 주입보다 나음). 무손실.
+
+    candidates: [{"keyword","sector","profile"}, ...]
+    반환: {keyword: [{name,sentences,images,tables}, ...] 또는 None}
+    """
+    import dataclasses as _dc
+    spec = get_spec("economic")
+    out: dict = {}
+    for c in (candidates or []):
+        kw = (c.get("keyword") or "").strip()
+        if not kw:
+            continue
+        try:
+            prof = c.get("profile") or {}
+            _ctx = (prof.get("summary") or "")
+            _rt = prof.get("related_terms") or []
+            if _rt:
+                _ctx = (_ctx + " / " + " ".join(str(x) for x in _rt)).strip()
+            plan = generate_section_plan(spec, topic=kw, context=_ctx)
+            _names = [s.name for s in plan]
+            # generic 퇴화(면책 제외 전 섹션이 '섹션 N') → None (리터럴 폴백이 나음)
+            if not plan or all(re.match(r"^섹션\s*\d+$", n)
+                               for n in _names if "면책" not in n):
+                out[kw] = None
+            else:
+                out[kw] = [_dc.asdict(s) for s in plan]
+        except Exception as _e:
+            log.warning(f"[warm_section_plan] '{kw}' 실패(무시): {_e}")
+            out[kw] = None
+    return out
 
 
 def _validate_section_plan(plan: list, spec: PostTypeSpec) -> list[str]:
@@ -390,6 +429,7 @@ __all__ = [
     "get_spec",
     "list_post_types",
     "generate_section_plan",
+    "warm_section_plan",
     "save_learned_adjustment",
     "analyze_post_type_history",
 ]

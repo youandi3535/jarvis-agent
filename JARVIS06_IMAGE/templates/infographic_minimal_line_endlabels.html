@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0:#2f6fed;
+    --hero1:#e0503c;
+    --ink:#1a1d29;
+    --a1:#1f7a4c;
+    --a1s:#145c38;
+    --a2:#d6338c;
+    --a2s:#8f1c5c;
+    --soft:#f7f8fa;
+    --muted:#9aa0ab;
+    --eyebrow:#6b7280;
+    --grid:#d8dbe0;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    width:1280px;
+    background:#ffffff;
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ============ 단일 중앙집중형 캔버스 — 카드·열분할·사이드바 없음 ============
+     흰 배경 위에 차트 하나만 존재. 상단 텍스트 블록은 기본적으로 비워두는 것을
+     전제로 설계(값이 채워지면 조용히 나타나고, 비우면 완전히 접혀 순수 데이터
+     라인만 남는 미니멀 차트 이미지가 된다). */
+  .canvas{
+    width:1280px;
+    margin:0 auto;
+    background:#ffffff;
+    padding:60px 32px 120px;
+  }
+
+  /* ── 선택적 상단 텍스트 — 전부 비면 블록 자체가 완전히 접힘(이 레이아웃 기본값) ── */
+  .hero{
+    text-align:center;
+    margin-bottom:36px;
+  }
+  .hero:not(:has(.eyebrow:not(:empty))):not(:has(.title:not(:empty))):not(:has(.subtitle:not(:empty))):not(:has(.hero-stats:not(:empty))){
+    display:none;
+    margin:0;
+  }
+  .eyebrow{
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 10px;
+  }
+  .eyebrow:empty{ display:none; margin:0; }
+  .title{
+    font-size:32px;
+    font-weight:800;
+    line-height:1.25;
+    color:var(--ink);
+    margin:0 0 8px;
+  }
+  .title:empty{ display:none; margin:0; }
+  .subtitle{
+    font-size:16px;
+    font-weight:400;
+    line-height:1.6;
+    color:var(--muted);
+    margin:0;
+  }
+  .subtitle:empty{ display:none; margin:0; }
+
+  /* ── 선택적 히어로 수치 — 미사용 시 자동 숨김 ── */
+  .hero-stats{
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    gap:40px;
+    margin-top:20px;
+  }
+  .hero-stats:empty{ display:none; margin:0; }
+  .hero-stats .stat{ display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .hero-stats .stat .num{ font-size:26px; font-weight:800; color:var(--ink); line-height:1; }
+  .hero-stats .stat .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ── 차트 슬롯 공통 — 빈 슬롯 자동 은폐 (필수 규칙) ── */
+  section:has([data-jarvis-empty]){ display:none; }
+  section.chart-slot:empty{ display:none; }
+
+  /* ============ 메인 차트 — 캔버스 폭 약 95%, 상단~중단 약 70% 높이를 차지하는
+     단일 중앙집중형 플롯 (CHART_1) ============
+     카드·테두리·패널·그리드·범례·축눈금 전부 없음. 4개 라인이 왼쪽(과거)에서
+     오른쪽(최근)으로 흐르고, 각 라인 끝에 색상이 일치하는 원형 도트 + 굵은 숫자가
+     붙어 값을 직접 라벨링한다. 하단의 얇은 회색 기준선과 좌우 끝 연도 텍스트만
+     유일한 구조 요소 — 그 외 장식 일체 없음.
+
+     주입 마크업 예시 (viewBox 는 실제 .chart-body 렌더 폭 1216 x 500 과 1:1 px 매핑
+     — 좌표·연도·값은 실데이터로 교체, 시간축은 좌(과거)→우(최근) 고정):
+
+       <div class="chart-body">
+         <svg class="lineplot" viewBox="0 0 1216 500" preserveAspectRatio="none">
+           <line class="lp-axis" x1="0" y1="452" x2="1216" y2="452"/>
+
+           <path class="lp-line lp-c1" d="M0,300 C260,250 520,180 780,90 C900,60 980,44 1040,36"/>
+           <circle class="lp-dot lp-c1" cx="1040" cy="36" r="7"/>
+           <text class="lp-label lp-c1" x="1058" y="44">73.2</text>
+
+           <path class="lp-line lp-c2" d="M0,340 C260,310 520,250 780,150 C900,120 980,100 1040,92"/>
+           <circle class="lp-dot lp-c2" cx="1040" cy="92" r="7"/>
+           <text class="lp-label lp-c2" x="1058" y="100">63.8</text>
+
+           <path class="lp-line lp-c3" d="M0,420 C260,410 520,390 780,340 C900,320 980,300 1040,290"/>
+           <circle class="lp-dot lp-c3" cx="1040" cy="290" r="7"/>
+           <text class="lp-label lp-c3" x="1058" y="298">28.5</text>
+
+           <path class="lp-line lp-c4" d="M0,438 C260,432 520,418 780,378 C900,362 980,346 1040,338"/>
+           <circle class="lp-dot lp-c4" cx="1040" cy="338" r="7"/>
+           <text class="lp-label lp-c4" x="1058" y="346">21.4</text>
+
+           <text class="lp-year lp-year-start" x="2" y="486">1770</text>
+           <text class="lp-year lp-year-end" x="1214" y="486" text-anchor="end">2023</text>
+         </svg>
+       </div>
+
+     라인/도트/라벨 색상은 lp-c1~lp-c4 클래스 고정(각각 --hero0/--hero1/--a1/--a2) —
+     경로 좌표·연도·값 숫자만 실데이터로 교체. 4개보다 적으면 사용하는 개수만큼만
+     lp-c1 부터 순서대로 사용. 데이터가 전혀 없으면 이 section 안을
+     <div data-jarvis-empty></div> 하나로만 채워 통째로 숨김.
+  */
+  .chart-main{ width:100%; }
+  .chart-body{ width:100%; height:500px; }
+  .lineplot{ display:block; width:100%; height:100%; overflow:visible; }
+  .lp-axis{ stroke:var(--grid); stroke-width:1.5; }
+  .lp-line{ fill:none; stroke-width:4; stroke-linecap:round; stroke-linejoin:round; }
+  .lp-line.lp-c1{ stroke:var(--hero0); }
+  .lp-line.lp-c2{ stroke:var(--hero1); }
+  .lp-line.lp-c3{ stroke:var(--a1); }
+  .lp-line.lp-c4{ stroke:var(--a2); }
+  .lp-dot.lp-c1{ fill:var(--hero0); }
+  .lp-dot.lp-c2{ fill:var(--hero1); }
+  .lp-dot.lp-c3{ fill:var(--a1); }
+  .lp-dot.lp-c4{ fill:var(--a2); }
+  .lp-label{ font-family:'Noto Sans KR', sans-serif; font-weight:800; font-size:32px; }
+  .lp-label.lp-c1{ fill:var(--hero0); }
+  .lp-label.lp-c2{ fill:var(--hero1); }
+  .lp-label.lp-c3{ fill:var(--a1); }
+  .lp-label.lp-c4{ fill:var(--a2); }
+  .lp-year{ font-family:'Noto Sans KR', sans-serif; font-weight:500; font-size:18px; fill:var(--muted); }
+
+  /* ============ 보조 차트 슬롯 (CHART_2 / CHART_3) ============
+     이 레이아웃은 기본적으로 단일 플롯 — 데이터 미제공 시 항상
+     <div data-jarvis-empty></div> 로 채워 완전히 숨긴다(기본 동작).
+     부득이 두 번째 비교 플롯이 필요할 때만 메인 차트와 동일한 lp-* 클래스
+     계약을 그대로 재사용해 동일 톤을 유지한다. */
+  .chart-aux{ width:100%; margin-top:48px; }
+  .chart-aux .chart-body{ height:260px; }
+
+  /* ── 선택적 미니 카드 — 미사용 시 자동 숨김 ── */
+  .mini-cards{
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    gap:14px;
+    margin-top:40px;
+  }
+  .mini-cards:empty{ display:none; margin:0; }
+  .mini-cards .mini-card{
+    display:inline-flex;
+    align-items:center;
+    gap:10px;
+    padding:10px 18px;
+    border-radius:999px;
+    background:var(--soft);
+    border:1px solid var(--grid);
+    font-size:14px;
+    font-weight:600;
+    color:var(--ink);
+  }
+
+  /* ── 푸터 — 출처/브랜드 둘 다 비면 구분선까지 완전히 접힘 ── */
+  .foot{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:24px;
+    margin-top:40px;
+    padding-top:16px;
+    border-top:1px solid var(--grid);
+  }
+  .foot:not(:has(.source:not(:empty))):not(:has(.brand:not(:empty))){ display:none; }
+  .source{ font-size:14px; color:var(--muted); }
+  .source:empty{ display:none; }
+  .brand{ font-size:14px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--eyebrow); }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <header class="hero">
+      <p class="eyebrow">{EYEBROW}</p>
+      <h1 class="title">{TITLE}</h1>
+      <p class="subtitle">{SUBTITLE}</p>
+      <div class="hero-stats">{HERO_STATS}</div>
+    </header>
+
+    <section class="chart-main chart-slot">
+      {CHART_1}
+    </section>
+
+    <section class="chart-aux chart-slot">
+      {CHART_2}
+    </section>
+
+    <section class="chart-aux chart-slot">
+      {CHART_3}
+    </section>
+
+    <div class="mini-cards">{MINI_CARDS}</div>
+
+    <footer class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </footer>
+  </div>
+</body>
+</html>

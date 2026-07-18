@@ -71,7 +71,7 @@ class FssProvider(BaseProvider):
             if not items:
                 return []
             lines = ["[금융감독원 FISIS 금융통계]", ""]
-            for item in items[:10]:
+            for item in items:   # ★ 10건컷 폐지 2026-07-17 (FISIS 통계 항목 전량 기록)
                 nm  = item.get("name") or item.get("item_nm") or item.get("nm", "")
                 val = item.get("value") or item.get("data") or item.get("val", "")
                 unit = item.get("unit", "")

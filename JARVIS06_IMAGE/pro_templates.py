@@ -495,6 +495,69 @@ def _hero_texture(tex, pal):
             f"linear-gradient(90deg,#ffffff08 1px,transparent 1px);background-size:44px 44px'></div>")
 
 
+def _style_pool() -> list[dict]:
+    """★ 스타일(골격) 풀 = 정적 큐레이션 라이브러리 + 나이틀리 학습된 새 스타일 (사용자 박제 2026-07-18).
+
+    layout_library.LAYOUTS(정적 10종) + design_recipes.json 의 나이틀리 학습 recipe.template
+    (비전/LLM 이 실제 인포그래픽에서 창작한 *새 스타일* — dashboard-grid·magazine-feature 등)을
+    합쳐 render_layout 호환({{...}}) 골격만 dedup. → 나이틀리 학습이 스타일 풀을 매일 키운다.
+    """
+    pool: list[dict] = []
+    seen: set = set()
+    try:
+        from JARVIS06_IMAGE.layout_library import LAYOUTS
+        for l in (LAYOUTS or []):
+            h = l.get("html", "")
+            if h and h not in seen:
+                seen.add(h)
+                pool.append({"id": l.get("id", "lib"), "html": h})
+    except Exception:
+        pass
+    try:  # 함수-로컬 lazy import (design_learner → pro_templates 역참조 순환 회피)
+        from JARVIS06_IMAGE.design_learner import get_recipes
+        for r in (get_recipes() or []):
+            t = r.get("template")
+            if (isinstance(t, str) and t.strip() and t not in seen
+                    and ("{{CHART_1}}" in t or "{{TITLE}}" in t)):
+                seen.add(t)
+                pool.append({"id": str(r.get("id", "learned")), "html": t})
+    except Exception:
+        pass
+    return pool
+
+
+def _pick_layout_template(datasets, seed) -> str | None:
+    """★ 데이터 형태로 레이아웃 골격 선택 (사용자 박제 2026-07-18) — '색만 바뀐 같은 골격' 해소.
+
+    스타일 풀(_style_pool: 라이브러리 10 + 나이틀리 학습본, 매일 성장)에서 데이터 형태 시그니처로
+    어울리는 후보군을 파생하고 seed 로 회전 선택. 하드코딩 매핑이 아니라 실데이터(_is_timeseries·
+    개수)에서 파생(동적 설계 원칙). LLM 0회. 색(팔레트)은 recipe, 스타일(골격)은 이 풀이 담당.
+    """
+    pool = _style_pool()
+    ds = [d for d in (datasets or []) if d.get("data")]
+    if not pool or not ds:
+        return None
+    n = len(ds)
+    ts = [d for d in ds if _is_timeseries(d)]
+    # 데이터 형태 → 어울리는 골격 후보(id 부분일치, 라이브러리·학습 스타일 공통). 없으면 전체.
+    if n == 1 and ts:
+        prefer = ("panoramic", "center", "split", "big-number", "magazine")   # 단일 시계열 → 넓은 메인차트
+    elif n == 1:
+        prefer = ("center", "minimal", "report", "big-number")                # 단일값 → 중앙집중·미니멀
+    elif n >= 4:
+        prefer = ("mosaic", "kpi", "sidebar", "dashboard", "grid")            # 다수 → 모자이크·대시보드
+    else:
+        prefer = ()                                                           # 2~3개 → 전체
+    cands = [p for p in pool if any(k in p["id"] for k in prefer)] if prefer else list(pool)
+    if len(cands) < 3:   # 후보 부족 → 전체 풀 (다양성 보장)
+        cands = list(pool)
+    try:
+        pick = cands[(int(seed) // 7) % len(cands)]   # //7 로 색 seed 회전과 위상 분리
+    except Exception:
+        pick = cands[0]
+    return pick.get("html")
+
+
 # ── 메인 렌더 ──────────────────────────────────────────────────────────────
 def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
     pal = recipe or _pick_palette(seed)
@@ -509,7 +572,11 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
     # ★ 학습된 레이아웃 템플릿 우선 — 임의 레이아웃 재현 (ERRORS [360]). 실패 시 기본 레이아웃 폴백.
     # 데이터셋 1개+ 이면 템플릿 시도 — 빈 슬롯은 Playwright CSS card:empty{display:none} 으로 자동 숨김.
     _n_ds = len([d for d in (datasets or []) if d.get("data")])
-    tmpl = pal.get("template")
+    # ★ 스타일(골격)=layout_library 10개 큐레이션 우선, 색(팔레트)=recipe (사용자 박제 2026-07-18).
+    #   레시피는 '색만 다른' 팔레트 풀이고, 스타일은 데이터 형태로 선택하는 검증된 골격 10종이 담당.
+    #   → 어떤 레시피가 뽑히든 이미지는 '데이터 형태에 맞는 10개 중 하나의 뚜렷한 스타일 + 다양한 색'.
+    #   학습 recipe.template 은 폴백(데이터 0일 때). has_all_slots_resolved 실패 시 기본 스켈레톤.
+    tmpl = _pick_layout_template(datasets, seed) or pal.get("template")
     if tmpl and _n_ds >= 1:
         try:
             from JARVIS06_IMAGE.template_engine import render_layout, has_all_slots_resolved

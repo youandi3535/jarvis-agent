@@ -312,7 +312,7 @@ class DartProvider(BaseProvider):
 
         for corp_name, filings in target_corps:
             lines = [f"[{corp_name} 전자공시 — {theme}]", "[최근 공시]"]
-            for f in filings[:5]:
+            for f in filings[:15]:   # ★ 5→15 상향 2026-07-17 (기업별 공시 이력 더 많이 기록)
                 rdate = f.get("rcept_dt", "")
                 title = f.get("report_nm", "")
                 if rdate and title:

@@ -104,13 +104,14 @@ class NaverNewsProvider(BaseProvider):
             except Exception as e:
                 log.warning(f"[NaverNews] 쿼리 실패 ({q}): {e}")
 
-        # 상위 3건 본문 보강 (snippet만 있는 경우 trafilatura로 실제 기사 본문 추가)
+        # 본문 보강 (snippet만 있는 경우 trafilatura로 실제 기사 본문 추가)
+        # ★ 상위 3→10건으로 확대 + 본문 전문 저장 (3000자컷 폐지 2026-07-17)
         enriched = 0
-        for doc in results[:3]:
+        for doc in results[:10]:
             if len(doc.raw_text) < 300:
                 body = self._fetch_body(doc.url)
                 if len(body) > 200:
-                    doc.raw_text = f"{doc.title}\n\n{body[:3000]}"
+                    doc.raw_text = f"{doc.title}\n\n{body}"
                     enriched += 1
 
         log.info(f"[NaverNews] 총 {len(results)}건 수집 완료 (본문 보강 {enriched}건)")

@@ -285,7 +285,7 @@ class KrxProvider(BaseProvider):
             lines = [f"['{theme}' 관련 종목 최근 시세]",
                      "종목명(티커)|최신종가|등락률|거래량"]
             ok = 0
-            for ticker, name in list(matched_tickers.items())[:8]:
+            for ticker, name in list(matched_tickers.items())[:20]:   # ★ 8→20 상향 2026-07-17 (관련 종목 시세 더 많이)
                 try:
                     df = krx_stock.get_market_ohlcv_by_date(start_dt, end_dt, ticker)
                     if df is not None and not df.empty and "종가" in df.columns:

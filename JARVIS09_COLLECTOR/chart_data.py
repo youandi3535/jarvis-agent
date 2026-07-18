@@ -91,8 +91,12 @@ def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
     _min = 1 if viz_hint == "kpi_cards" else 2
     if len(rows) < _min:
         return None
-    # ★ 가독성 — 막대는 최대 10개(30셀 막대벽 방지), 라인(시계열)은 12점까지 보존(추이 유지)
-    rows = rows[:12] if viz_hint == "line_chart" else rows[:10]
+    # ★ 데이터포인트 상향 (사용자 박제 2026-07-17 — 수집값 최대 활용): 라인 36점·막대 20개까지.
+    #   가독성 최소 방어만 유지(무제한 시 막대벽). env CHART_MAX_POINTS_LINE/BAR 로 조정.
+    import os as _os_pt
+    _pt_line = int(_os_pt.getenv("CHART_MAX_POINTS_LINE", "36") or "36")
+    _pt_bar = int(_os_pt.getenv("CHART_MAX_POINTS_BAR", "20") or "20")
+    rows = rows[:_pt_line] if viz_hint == "line_chart" else rows[:_pt_bar]
     _title = str(title).split("(")[0].split("（")[0].strip() or str(title).strip()   # 제목 괄호 설명 제거
     return {
         "title": _title[:30],
@@ -162,15 +166,27 @@ def _kosdaq150_sector_datasets(theme: str) -> list[dict]:
 
 
 # ── 0.5. 글로벌 시장 지표 fast-path (_MACRO_KWS 주제 전용, plan 없어도 동작) ──
-def _global_market_datasets(theme: str) -> list[dict]:
+def _global_market_datasets(theme: str, sector: str = "", profile: dict | None = None,
+                            category: str = "theme") -> list[dict]:
     """거시경제 주제(나스닥·환율·금리 등) 전용 fast-path.
 
     get_market_data() 구조화 API → kpi_cards dataset. LLM 불필요.
     plan_data_sources 가 timeout/실패해도 항상 실데이터 공급.
     ADR 010: 출처(provenance) 박제, 합성 수치 절대 금지.
+
+    ★ category 스코프 게이트 (사용자 박제 2026-07-18): 경제 브리핑에서 주제 무관하게 매번
+      같은 글로벌 시장블록(코스피·환율·금리)이 붙어 '같은 타입 데이터'가 되던 문제 해소.
+      - theme: 기존 동작 그대로(_MACRO_KWS substring) — 테마 경로 완전 무영향.
+      - economic: entity_type='지표'(금리·환율·지수 등 진짜 거시)일 때만. 기업·산업·제품·사건·
+        정책 유형은 주제 맞춤 데이터를 쓰고 글로벌 시장블록은 강등(억지 거시 반복 차단).
     """
     theme_lc = theme.lower()
-    if not any(k in theme_lc for k in _MACRO_KWS):
+    _et = str((profile or {}).get("entity_type", "")).strip()
+    if category == "theme":
+        _is_macro = any(k in theme_lc for k in _MACRO_KWS)
+    else:  # economic
+        _is_macro = (_et == "지표") or (not _et and any(k in theme_lc for k in _MACRO_KWS))
+    if not _is_macro:
         return []
     try:
         from JARVIS09_COLLECTOR.providers.economic_data_provider import get_market_data
@@ -253,7 +269,7 @@ def _market_timeseries_datasets() -> list[dict]:
         except Exception as e:
             log.warning(f"[chart_data] '{name}' 시계열 파싱 실패: {e}")
             continue
-        rows = rows[-12:]   # 최근 12점
+        rows = rows[-36:]   # ★ 최근 36점 (12→36 상향 2026-07-17 — 더 긴 추세 보존)
         if len(rows) < 3:
             continue
         try:
@@ -335,7 +351,7 @@ def _stock_datasets(theme: str, related_terms: list | None = None,
     out = []
     for field, title, unit in _metrics:
         rows = []
-        for s in stocks[:8]:
+        for s in stocks[:20]:   # ★ 8→20 상향 2026-07-17 (종목 재무 차트 — 통상 7종목이라 비구속)
             v = s.get(field)
             try:
                 v = float(v)
@@ -349,6 +365,7 @@ def _stock_datasets(theme: str, related_terms: list | None = None,
                 rows.append({"label": s.get("name", "?"), "value": round(v, 2)})
         ds = _mk_dataset(title, "bar_chart", unit, rows, dict(src))
         if ds:
+            ds["kind"] = "stock_financial"   # ★ 종목 재무 태그 — 경제 브리핑 배제 근거 (2026-07-18)
             out.append(ds)
     return out
 
@@ -526,6 +543,34 @@ def warm_synonyms(themes: list) -> dict:
     return result
 
 
+def warm_plan(candidates: list) -> dict:
+    """★ 데이터 소싱 *설계(plan)* 를 저부하 창(topic_pack 빌드)에 선계산·캐시 (사용자 박제 2026-07-18).
+
+    warm_synonyms 와 동형 위상분리 — plan_data_sources 를 발행 burst(스로틀 포화) 창이 아니라
+    topic_pack 생성 시점에 돌려, 네이버·티스토리가 동일 plan 을 공유하고 발행창에서 planner LLM 을
+    아예 안 부르게 한다. 이게 '매번 제네릭 폴백 → 같은 타입 데이터' 문제의 근본 완화.
+    실패해도 런타임 재설계(collect_chart_data 내부)가 받쳐주므로 무손실.
+
+    candidates: [{"keyword","sector","profile","synonyms"}, ...]
+    반환: {keyword: {"series":[...],"synonyms":[...]} 또는 None}
+    """
+    from JARVIS09_COLLECTOR.data_planner import plan_data_sources
+    out: dict = {}
+    for c in (candidates or []):
+        kw = (c.get("keyword") or "").strip()
+        if not kw:
+            continue
+        try:
+            prof = c.get("profile") or {}
+            out[kw] = plan_data_sources(
+                kw, c.get("sector", ""), (prof.get("summary") or ""),
+                profile=prof, synonyms=c.get("synonyms"))
+        except Exception as _e:
+            log.warning(f"[warm_plan] '{kw}' 선계산 실패(무시): {_e}")
+            out[kw] = None
+    return out
+
+
 _DEMO_TOTAL = {"전체", "계", "합계", "소계", "총계", "전국", "평균"}
 
 
@@ -562,7 +607,7 @@ def _fmt_period(p: str) -> str:
     return p
 
 
-def _reduce_crosstab(rows: list, max_rows: int = 7) -> tuple[list, bool]:
+def _reduce_crosstab(rows: list, max_rows: int = 16) -> tuple[list, bool]:   # ★ 7→16 상향 2026-07-17
     """KOSIS 교차표(성별·지역·업종 × 응답 × 연도 등 다차원 셀)를 *읽을 수 있는 형태* 로 축약.
 
     반환: (rows, is_temporal).
@@ -609,7 +654,7 @@ def _reduce_crosstab(rows: list, max_rows: int = 7) -> tuple[list, bool]:
             by_period: dict = {}
             for p in temporal_src:
                 by_period[p["period"]] = p["value"]         # 같은 period 중복 시 마지막 값
-            ordered = sorted(by_period.items(), key=lambda kv: str(kv[0]))[-12:]  # 오름차순·최근 12점
+            ordered = sorted(by_period.items(), key=lambda kv: str(kv[0]))[-36:]  # ★ 오름차순·최근 36점 (12→36)
             ts_rows = [{"label": _fmt_period(pr), "value": v}
                        for pr, v in ordered if v is not None]
             if len(ts_rows) >= 3:
@@ -723,7 +768,7 @@ def _parse_clean_doc(doc):
     if len(rows) < 2:
         return None
     # ★ 교차표(30셀 덤프) → 시계열(라인) 또는 읽을 수 있는 단일 분포(≤7개 막대)로 축약
-    rows, _is_temporal = _reduce_crosstab(rows, max_rows=7)
+    rows, _is_temporal = _reduce_crosstab(rows, max_rows=16)
     if len(rows) < 2:
         return None
     # ★ 다질문 표 감지 (사용자 박제 2026-07-01): 한 KOSIS 표에 여러 질문(인지도+구매한도 등)이
@@ -899,10 +944,10 @@ def _extract_series_from_docs(series: dict, docs: list):
         fast = _parse_clean_doc(docs[0])
         if fast:
             return fast
-    sel = docs[:8]
+    sel = docs   # ★ 수집 문서 전량 사용 (8개 상한 폐지 2026-07-17)
     excerpts = "\n\n".join(
         f"[{i}] ({getattr(d, 'source_type', '')}) {getattr(d, 'title', '')}\n"
-        f"{(getattr(d, 'raw_text', '') or getattr(d, 'cleaned_text', '') or '')[:1500]}"
+        f"{(getattr(d, 'raw_text', '') or getattr(d, 'cleaned_text', '') or '')}"   # ★ 전문 (1500자컷 폐지)
         for i, d in enumerate(sel))
     try:
         from shared.llm import invoke_text
@@ -945,7 +990,7 @@ def _extract_series_from_docs(series: dict, docs: list):
     # ★ LLM 추출 라벨도 교차표 축약 (사용자 박제 2026-07-01): LLM이 '합계·신용카드' / '읍소재시장·
     #   신용카드' 처럼 전체+특정 차원을 섞어 반환하면 _reduce_crosstab 으로 전체 차원 collapse →
     #   '신용카드' 만 남김 (KOSIS fast-path 와 동일 정리). 단일 차원이면 그대로 보존.
-    rows, _is_temporal = _reduce_crosstab(rows, max_rows=8)
+    rows, _is_temporal = _reduce_crosstab(rows, max_rows=16)
     # ★ 단위 일관성 (사용자 박제 2026-07-01): LLM이 공통 단위를 못 정하면(=비교 불가 수치 짬뽕)
     #   그 차트는 버린다. 단위 없는 무의미 막대(부가가치 1.9 + 비용 1.88 …) 원천 차단.
     _llm_unit = str(parsed.get("unit", "") or "").strip()
@@ -1145,7 +1190,7 @@ def _collect_docs_for_series(series: dict, sector: str, theme: str = "", ref_tok
             if fast:
                 log.info(f"[chart_data] '{series['name']}' ← KOSIS fast-path ({len(fast['data'])}점)")
                 return {"fast_dataset": fast}
-        return {"series": series, "docs": docs[:8], "source": source}
+        return {"series": series, "docs": docs, "source": source}   # ★ 수집 문서 전량 큐 투입 (8컷 폐지)
 
     # ★ discover 웹 폴백 — 시장 지표 series는 차단
     _combined = (series.get("name", "") + " " + series.get("query", "")).lower()
@@ -1159,7 +1204,7 @@ def _collect_docs_for_series(series: dict, sector: str, theme: str = "", ref_tok
             for q in queries[:2]:
                 docs = _cached_collect(prov, "discover", q, sector, 6)
                 if docs:
-                    return {"series": series, "docs": docs[:8], "source": "discover"}
+                    return {"series": series, "docs": docs, "source": "discover"}   # ★ 전량 (8컷 폐지)
     return None
 
 
@@ -1180,9 +1225,15 @@ def _batch_extract_all(pending_items: list, theme: str) -> list[dict]:
     item_blocks: list[str] = []
     docs_lookup: dict[int, list] = {}
 
+    # ★ 배치 추출은 여러 series 를 한 LLM 호출에 묶어 프롬프트가 커지므로, 항목당 문서수·
+    #   발췌 길이에 *넉넉한* 상한만 유지(전량 무제한 시 컨텍스트 폭증). env 로 상향 가능.
+    #   (단일 series 추출 _extract_series_from_docs 는 전문 사용 — 절단 없음.)
+    import os as _os_bx
+    _bx_docs = int(_os_bx.getenv("CHART_BATCH_DOCS", "8") or "8")
+    _bx_chars = int(_os_bx.getenv("CHART_BATCH_EXCERPT_CHARS", "4000") or "4000")
     for i, item in enumerate(pending_items):
         series = item["series"]
-        docs = item.get("docs", [])[:4]   # 항목당 최대 4개 문서
+        docs = item.get("docs", [])[:_bx_docs]   # 항목당 문서 (4→8 상향 2026-07-17)
         docs_lookup[i] = []
         excerpts: list[str] = []
         for j, d in enumerate(docs):
@@ -1190,7 +1241,7 @@ def _batch_extract_all(pending_items: list, theme: str) -> list[dict]:
             dtitle = getattr(d, "title", "") or ""
             src_type = getattr(d, "source_type", "") or ""
             docs_lookup[i].append((d, dtext))
-            excerpts.append(f"[{i}-{j}] ({src_type}) {dtitle}\n{dtext[:500]}")
+            excerpts.append(f"[{i}-{j}] ({src_type}) {dtitle}\n{dtext[:_bx_chars]}")   # 500→4000 상향
         item_blocks.append(
             f"[ITEM {i}] 지표: {series['name']}  (단위힌트: {series.get('unit', '') or '?'})\n"
             + "\n".join(excerpts)
@@ -1270,7 +1321,7 @@ def _batch_extract_all(pending_items: list, theme: str) -> list[dict]:
 
             rows.append({"label": label, "value": val})
 
-        rows, _is_temporal = _reduce_crosstab(rows, max_rows=8)
+        rows, _is_temporal = _reduce_crosstab(rows, max_rows=16)
         _unit = str(r.get("unit", "") or "").strip() or str(series.get("unit", "") or "")
         if len(rows) < 2 or not src_url or not _unit:
             continue
@@ -1358,10 +1409,12 @@ def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: 
 
 # ── 공개 API ──────────────────────────────────────────────────────────────
 def collect_chart_data(theme: str, sector: str = "", description: str = "",
-                       exclude_titles=None, max_datasets: int = 12,
+                       exclude_titles=None, max_datasets: int = 30,
                        synonyms: list | None = None,
                        related_terms: list | None = None,
-                       profile: dict | None = None) -> dict:
+                       profile: dict | None = None,
+                       plan_cache: dict | None = None,
+                       category: str = "theme") -> dict:
     """주제 연관 차트용 실데이터를 출처(provenance)와 함께 수집.
 
     Args:
@@ -1406,18 +1459,26 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         # ── 0.5) 거시경제 글로벌 시장 fast-path (LLM 0, plan 없어도 동작) ────────
         #   나스닥·코스피·환율·금리 등 _MACRO_KWS 주제는 get_market_data() 직접 조회.
         #   plan_data_sources 가 timeout/실패해도 항상 실데이터 공급 (ADR 010).
-        datasets.extend(_global_market_datasets(theme))
+        datasets.extend(_global_market_datasets(theme, sector, profile, category))
         _elapsed(f"0.5) 글로벌 시장 fast-path (datasets={len(datasets)})")
 
         # ── 1) 설계 + 조준 수집 ──────────────────────────────────────────────────
         #    plan_data_sources 가 synonyms 도 함께 반환 (LLM 1회로 설계+동의어 통합)
         _plan_desc = (description or "") + ((" / " + " ".join(_syns_param)) if _syns_param else "")
-        try:
-            from JARVIS09_COLLECTOR.data_planner import plan_data_sources
-            _plan_result = plan_data_sources(theme, sector, _plan_desc)
-        except Exception as e:
-            log.warning(f"[chart_data] 설계 실패: {e}")
-            _plan_result = {"series": [], "synonyms": []}
+        if plan_cache and plan_cache.get("series"):
+            # ★ warm 캐시 히트 (topic_pack 저부하 창 선계산) → 발행창 LLM 0회 (사용자 박제 2026-07-18).
+            #   네이버·티스토리가 동일 plan 공유 → 스로틀 창에서 planner 안 부름.
+            _plan_result = plan_cache
+            log.info(f"[chart_data] '{theme}' warm plan 캐시 사용 ({len(plan_cache.get('series') or [])} series, LLM 0회)")
+        else:
+            try:
+                from JARVIS09_COLLECTOR.data_planner import plan_data_sources
+                # ★ profile(entity_type)·synonyms 관통 → 설계·폴백이 주제 성격을 안다
+                _plan_result = plan_data_sources(theme, sector, _plan_desc,
+                                                 profile=profile, synonyms=_syns_param)
+            except Exception as e:
+                log.warning(f"[chart_data] 설계 실패: {e}")
+                _plan_result = {"series": [], "synonyms": []}
 
         plan = _plan_result.get("series") or []
         # 동의어: topic_pack 선행 확장이 있으면 그것 우선, 없으면 plan 이 반환한 것 사용
@@ -1452,7 +1513,10 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
             "생산량", "판매량", "수출", "수입액", "점유율", "시장규모", "가입자", "이용자", "방문자",
             "출하량", "등록", "건수", "보급", "만족도",
         ]
-        is_stock = (any(k in combined for k in _STOCK_THEME_KWS)
+        # ★ 경제 브리핑(category="economic")은 종목 재무(PER/ROE/영업이익률/현재가) 편입 금지 —
+        #   경제=거시지표·개념 글, 종목재무는 테마 전용 (사용자 박제 2026-07-18).
+        is_stock = (category != "economic"
+                    and any(k in combined for k in _STOCK_THEME_KWS)
                     and not any(k in combined for k in _SPECIFIC_NON_VALUATION))
         if not datasets and is_stock:
             datasets.extend(_stock_datasets(theme, related_terms=related_terms, profile=profile))
@@ -1467,7 +1531,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         # ── 3) 적응형 *멀티소스* 포착 — 문서 수집만 (LLM 없음, 배치 추출 큐에 투입) ──────
         #    ★ 배치 LLM 한 번에 처리: 개별 LLM N회 → 배치 1회로 통합.
         #    ★ 배치 크기 가드: step1 pending + step3 합쳐서 최대 14개만 (batch max_tokens 초과 방지).
-        _BATCH_CAP = 14
+        _BATCH_CAP = 24   # ★ 14→24 상향 2026-07-17 — 더 많은 series 배치 추출
         _cand_cap = max(max_datasets * 2, max_datasets + 6)   # 전체 후보 상한
         _step3_budget = max(0, _BATCH_CAP - len(pending_items))   # step3 에 줄 배치 슬롯
         if len(datasets) < _cand_cap and _step3_budget > 0:
@@ -1506,7 +1570,7 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
                     if _from_src >= _PER_SOURCE or len(_cands) >= _cand_cap:
                         break
                     docs = _cached_collect(prov, source, term, sector, 8)
-                    for d in docs[:5]:
+                    for d in docs:   # ★ 관련성 판정에 수집 문서 전량 검토 (5컷 폐지)
                         nat = _natural_title(d)
                         if not _doc_title_relevant(nat, _ref_tokens):
                             continue

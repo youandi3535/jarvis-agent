@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0:#0a1330;
+    --hero1:#132a56;
+    --ink:#f4f7ff;
+    --a1:#ffd53d;
+    --a1s:#ff6f5e;
+    --a2:#2fd8d4;
+    --a2s:#39e0a4;
+    --soft:#1d3a68;
+    --muted:#8fa1c7;
+    --eyebrow:#ffd53d;
+    --grid:rgba(255,255,255,.1);
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    width:1280px;
+    background:var(--hero0);
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .canvas{ width:1280px; margin:0 auto; background:var(--hero0); }
+
+  /* ============ 히어로 풀밴드 — 전체 폭, 중앙 정렬, 캔버스 대비 약 15% 높이 ============ */
+  .hero{
+    width:100%;
+    background:linear-gradient(135deg, var(--hero0), var(--hero1));
+    padding:56px 96px 44px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    text-align:center;
+  }
+
+  .eyebrow{
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 14px;
+  }
+  .eyebrow:empty{ display:none; margin:0; }
+
+  .title{
+    font-size:42px;
+    font-weight:900;
+    line-height:1.16;
+    letter-spacing:-.01em;
+    color:var(--ink);
+    max-width:920px;
+    margin:0 0 12px;
+  }
+  .title:empty{ display:none; margin:0; }
+
+  .subtitle{
+    font-size:17px;
+    font-weight:400;
+    line-height:1.6;
+    color:var(--muted);
+    max-width:700px;
+    margin:0;
+  }
+  .subtitle:empty{ display:none; margin:0; }
+
+  /* ── 선택적 히어로 수치 — 미사용 시 자동 숨김 ── */
+  .hero-stats{
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    gap:44px;
+    margin-top:26px;
+  }
+  .hero-stats:empty{ display:none; margin:0; }
+  .hero-stats .stat{ display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .hero-stats .stat .num{ font-size:28px; font-weight:800; color:var(--a1); line-height:1; }
+  .hero-stats .stat .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ============ 본문 — 카드·테두리·라운딩 없는 통짜 네이비 캔버스 ============
+     좌우 비대칭 3~4열 혼합 그리드. 모든 요소는 배경에 직접 떠 있으며
+     시각적 장식은 각 차트 자체의 그라디언트·3D 음영만 담당한다. */
+  .mesh{
+    padding:52px 64px 48px;
+    display:grid;
+    grid-template-columns:repeat(4, 1fr);
+    grid-template-rows:210px 190px 172px 152px 128px;
+    column-gap:32px;
+    row-gap:30px;
+    grid-template-areas:
+      "wave wave donutbig donutsm"
+      "wave wave arrow stepped"
+      "cyl mini target venn"
+      "legend legend pie wavywave"
+      "list list list list";
+  }
+
+  .tile{ display:flex; flex-direction:column; min-width:0; }
+  .tile-body{ flex:1 1 auto; display:flex; align-items:center; justify-content:center; }
+  .tile-cap{ display:flex; align-items:center; justify-content:center; gap:10px; margin-top:12px; }
+  .tile-cap .swatch{ width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+
+  /* ── 차트 슬롯 공통 — 빈 슬롯 자동 은폐 (필수 규칙) ── */
+  section:has([data-jarvis-empty]){ display:none; }
+
+  /* ============ 1. 좌측 상단 대형 스택형 웨이브 면적차트 (CHART_1) ============
+     주입 마크업 예시:
+       <svg class="wave-plot" viewBox="0 0 640 320" preserveAspectRatio="none">
+         <line class="wave-axis" x1="0" y1="300" x2="640" y2="300"/>
+         <path class="wave-fill wc1" d="M0,190 C120,150 260,205 380,168 C480,138 560,178 640,150 L640,300 L0,300 Z"/>
+         <path class="wave-line wc1" d="M0,190 C120,150 260,205 380,168 C480,138 560,178 640,150"/>
+         <path class="wave-fill wc2" d="M0,232 C120,205 260,248 380,214 C480,190 560,222 640,200 L640,300 L0,300 Z"/>
+         <path class="wave-line wc2" d="M0,232 C120,205 260,248 380,214 C480,190 560,222 640,200"/>
+         <path class="wave-fill wc3" d="M0,262 C120,246 260,272 380,250 C480,232 560,254 640,240 L640,300 L0,300 Z"/>
+         <path class="wave-line wc3" d="M0,262 C120,246 260,272 380,250 C480,232 560,254 640,240"/>
+       </svg>
+  */
+  .tile--wave{ grid-area:wave; }
+  .wave-chart{ width:100%; height:100%; }
+  .wave-plot{ display:block; width:100%; height:100%; overflow:visible; }
+  .wave-axis{ stroke:var(--grid); stroke-width:1.5; }
+  .wave-fill{ opacity:.55; }
+  .wave-fill.wc1{ fill:var(--a2); opacity:.32; }
+  .wave-fill.wc2{ fill:var(--a1); opacity:.5; }
+  .wave-fill.wc3{ fill:var(--a1s); opacity:.85; }
+  .wave-line{ fill:none; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+  .wave-line.wc1{ stroke:var(--a2); }
+  .wave-line.wc2{ stroke:var(--a1); }
+  .wave-line.wc3{ stroke:var(--a1s); }
+
+  /* ============ 2. 우측 상단 대형 도넛/링 게이지 (CHART_2) ============
+     주입 마크업 예시:
+       <div class="donut-ring" style="--seg1:42%;--seg2:78%;">
+         <div class="donut-center"><span class="num">78%</span><span class="lbl">항목</span></div>
+       </div>
+  */
+  .tile--donutbig{ grid-area:donutbig; }
+  .donut-ring{
+    --seg1:42%;
+    --seg2:78%;
+    position:relative;
+    width:172px;
+    height:172px;
+    border-radius:50%;
+    background:conic-gradient(var(--a1) 0 var(--seg1), var(--a1s) var(--seg1) var(--seg2), var(--soft) var(--seg2) 100%);
+  }
+  .donut-ring::before{
+    content:"";
+    position:absolute;
+    inset:0;
+    border-radius:50%;
+    background:radial-gradient(circle at 30% 26%, color-mix(in srgb, var(--ink) 16%, transparent), transparent 62%);
+  }
+  .donut-ring::after{
+    content:"";
+    position:absolute;
+    inset:26px;
+    border-radius:50%;
+    background:var(--hero0);
+  }
+  .donut-center{
+    position:absolute;
+    inset:0;
+    z-index:1;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+  }
+  .donut-center .num{ font-size:26px; font-weight:900; color:var(--ink); line-height:1; }
+  .donut-center .lbl{ font-size:13px; font-weight:500; color:var(--muted); margin-top:6px; }
+
+  /* ============ 3. 우측 상단 보조 링 게이지 — 카탈로그 장식 ============ */
+  .tile--donutsm{ grid-area:donutsm; }
+  .donut-ring-sm{
+    position:relative;
+    width:104px;
+    height:104px;
+    border-radius:50%;
+    background:conic-gradient(var(--a2) 0 64%, var(--soft) 64% 100%);
+  }
+  .donut-ring-sm::after{
+    content:"";
+    position:absolute;
+    inset:16px;
+    border-radius:50%;
+    background:var(--hero0);
+  }
+
+  /* ============ 4. 화살표형 퍼센트 강조 — 카탈로그 장식 ============ */
+  .tile--arrow{ grid-area:arrow; }
+  .arrow-shape{
+    width:128px;
+    height:66px;
+    background:linear-gradient(135deg, var(--a1s), var(--a2s));
+    clip-path:polygon(0 32%, 58% 32%, 58% 4%, 100% 50%, 58% 96%, 58% 68%, 0 68%);
+  }
+
+  /* ============ 5. 계단형 백분율 영역차트 — 카탈로그 장식 ============ */
+  .tile--stepped{ grid-area:stepped; }
+  .stepped-plot{ display:block; width:100%; height:100%; overflow:visible; }
+  .stepped-fill{ fill:var(--a2); opacity:.42; }
+  .stepped-line{ fill:none; stroke:var(--a2); stroke-width:2.5; stroke-linejoin:miter; }
+
+  /* ============ 6. 좌측 하단 3D 실린더 막대 — 카탈로그 장식 ============ */
+  .tile--cyl{ grid-area:cyl; }
+  .cyl-row{ width:100%; height:100%; display:flex; align-items:flex-end; justify-content:center; gap:20px; }
+  .cyl-bar{ position:relative; width:32px; border-radius:16px 16px 5px 5px; }
+  .cyl-bar::before{ content:""; position:absolute; top:-9px; left:0; right:0; height:18px; border-radius:50%; }
+  .cyl-bar:nth-child(1){ height:62%; background:linear-gradient(180deg, var(--a1), var(--a1s)); }
+  .cyl-bar:nth-child(1)::before{ background:var(--a1); }
+  .cyl-bar:nth-child(2){ height:94%; background:linear-gradient(180deg, var(--a2), var(--a2s)); }
+  .cyl-bar:nth-child(2)::before{ background:var(--a2); }
+  .cyl-bar:nth-child(3){ height:48%; background:linear-gradient(180deg, var(--a1s), var(--a1)); }
+  .cyl-bar:nth-child(3)::before{ background:var(--a1s); }
+
+  /* ============ 7. 좌측 하단 미니 바 차트 — 카탈로그 장식 ============ */
+  .tile--mini{ grid-area:mini; }
+  .mini-row{ width:100%; height:100%; display:flex; align-items:flex-end; justify-content:center; gap:9px; }
+  .mini-row span{ width:13px; border-radius:3px 3px 0 0; }
+  .mini-row span:nth-child(1){ height:36%; background:var(--a2); }
+  .mini-row span:nth-child(2){ height:58%; background:var(--a2s); }
+  .mini-row span:nth-child(3){ height:44%; background:var(--a1); }
+  .mini-row span:nth-child(4){ height:72%; background:var(--a1s); }
+  .mini-row span:nth-child(5){ height:30%; background:var(--a2); }
+
+  /* ============ 8. 하단 과녁형 타겟 차트 (CHART_3) ============
+     주입 마크업 예시:
+       <div class="target-rings"><span class="target-mark" style="top:38%;left:62%;"></span></div>
+  */
+  .tile--target{ grid-area:target; }
+  .target-rings{
+    position:relative;
+    width:150px;
+    height:150px;
+    border-radius:50%;
+    background:radial-gradient(circle,
+      var(--a1s) 0 12%, var(--soft) 12% 24%,
+      var(--a2) 24% 37%, var(--soft) 37% 50%,
+      var(--a1) 50% 63%, var(--soft) 63% 100%);
+  }
+  .target-mark{
+    position:absolute;
+    width:11px;
+    height:11px;
+    border-radius:50%;
+    background:var(--ink);
+    transform:translate(-50%,-50%);
+  }
+
+  /* ============ 9. 하단 벤다이어그램 — 카탈로그 장식 ============ */
+  .tile--venn{ grid-area:venn; }
+  .venn{ position:relative; width:148px; height:98px; }
+  .venn-circle{ position:absolute; top:0; width:98px; height:98px; border-radius:50%; mix-blend-mode:screen; }
+  .venn-circle.c1{ left:0; background:var(--a2); }
+  .venn-circle.c2{ left:50px; background:var(--a1s); }
+
+  /* ============ 10. 라인형 범례 막대 — 카탈로그 장식 ============ */
+  .tile--legend{ grid-area:legend; }
+  .line-legend{ width:100%; display:flex; flex-direction:column; justify-content:center; gap:16px; }
+  .line-row{ display:flex; align-items:center; gap:14px; }
+  .line-row .swatch{ width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+  .line-row .bar{ height:8px; border-radius:4px; background:var(--grid); flex:1; position:relative; overflow:hidden; }
+  .line-row .bar::after{ content:""; position:absolute; inset:0; border-radius:4px; }
+  .line-row:nth-child(1) .swatch{ background:var(--a1); }
+  .line-row:nth-child(1) .bar::after{ width:72%; background:var(--a1); }
+  .line-row:nth-child(2) .swatch{ background:var(--a2); }
+  .line-row:nth-child(2) .bar::after{ width:54%; background:var(--a2); }
+  .line-row:nth-child(3) .swatch{ background:var(--a1s); }
+  .line-row:nth-child(3) .bar::after{ width:88%; background:var(--a1s); }
+
+  /* ============ 11. 하단 파이차트 — 카탈로그 장식 ============ */
+  .tile--pie{ grid-area:pie; }
+  .pie-chart{
+    position:relative;
+    width:118px;
+    height:118px;
+    border-radius:50%;
+    background:conic-gradient(var(--a1) 0 25%, var(--a2) 25% 55%, var(--a1s) 55% 80%, var(--a2s) 80% 100%);
+  }
+  .pie-chart::before{
+    content:"";
+    position:absolute;
+    inset:0;
+    border-radius:50%;
+    background:radial-gradient(circle at 32% 28%, color-mix(in srgb, var(--ink) 18%, transparent), transparent 60%);
+  }
+
+  /* ============ 12. 하단 물결형 이중 면적차트 — 카탈로그 장식 ============ */
+  .tile--wavywave{ grid-area:wavywave; }
+  .wavywave-plot{ display:block; width:100%; height:100%; overflow:visible; }
+  .wavywave-fill.ww1{ fill:var(--a2); opacity:.45; }
+  .wavywave-fill.ww2{ fill:var(--a2s); opacity:.65; }
+  .wavywave-line{ fill:none; stroke-width:2.5; stroke-linecap:round; stroke-linejoin:round; }
+  .wavywave-line.ww1{ stroke:var(--a2); }
+  .wavywave-line.ww2{ stroke:var(--a2s); }
+
+  /* ============ 13. 최하단 사람 아이콘형 퍼센트 바 (MINI_CARDS) ============
+     주입 마크업 예시(반복):
+       <div class="icon-item"><span class="person"></span>
+         <div class="txt"><span class="num">72%</span><span class="lbl">라벨</span></div>
+       </div>
+  */
+  .tile--list{ grid-area:list; }
+  .tile--list:has(.mini-cards:empty){ display:none; }
+  .mini-cards{
+    width:100%;
+    display:flex;
+    flex-wrap:wrap;
+    align-content:center;
+    row-gap:18px;
+    column-gap:44px;
+  }
+  .mini-cards:empty{ display:none; }
+  .mini-cards .icon-item{ flex:0 0 auto; display:flex; align-items:center; gap:12px; }
+  .mini-cards .icon-item .person{ position:relative; width:28px; height:34px; flex-shrink:0; }
+  .mini-cards .icon-item .person::before{
+    content:"";
+    position:absolute;
+    top:0; left:6px;
+    width:16px; height:16px;
+    border-radius:50%;
+    background:var(--a1);
+  }
+  .mini-cards .icon-item .person::after{
+    content:"";
+    position:absolute;
+    bottom:0; left:1px;
+    width:26px; height:17px;
+    border-radius:13px 13px 3px 3px;
+    background:var(--a1);
+  }
+  .mini-cards .icon-item:nth-child(4n+2) .person::before,
+  .mini-cards .icon-item:nth-child(4n+2) .person::after{ background:var(--a1s); }
+  .mini-cards .icon-item:nth-child(4n+3) .person::before,
+  .mini-cards .icon-item:nth-child(4n+3) .person::after{ background:var(--a2); }
+  .mini-cards .icon-item:nth-child(4n+4) .person::before,
+  .mini-cards .icon-item:nth-child(4n+4) .person::after{ background:var(--a2s); }
+  .mini-cards .icon-item .txt{ display:flex; flex-direction:column; gap:2px; }
+  .mini-cards .icon-item .num{ font-size:20px; font-weight:800; color:var(--ink); line-height:1.1; }
+  .mini-cards .icon-item .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ── 푸터 ── */
+  .foot{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:24px;
+    margin:0 64px 40px;
+    padding-top:16px;
+    border-top:1px solid var(--grid);
+  }
+  .foot:not(:has(.source:not(:empty))):not(:has(.brand:not(:empty))){ display:none; }
+  .source{ font-size:14px; color:var(--muted); }
+  .source:empty{ display:none; }
+  .brand{ font-size:14px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--eyebrow); }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <header class="hero">
+      <p class="eyebrow">{EYEBROW}</p>
+      <h1 class="title">{TITLE}</h1>
+      <p class="subtitle">{SUBTITLE}</p>
+      <div class="hero-stats">{HERO_STATS}</div>
+    </header>
+
+    <div class="mesh">
+      <section class="tile tile--wave chart-slot">
+        <div class="tile-body wave-chart">{CHART_1}</div>
+      </section>
+
+      <section class="tile tile--donutbig chart-slot">
+        <div class="tile-body">{CHART_2}</div>
+        <div class="tile-cap">
+          <span class="swatch" style="background:var(--a1)"></span>
+          <span class="swatch" style="background:var(--a1s)"></span>
+          <span class="swatch" style="background:var(--soft)"></span>
+        </div>
+      </section>
+
+      <div class="tile tile--donutsm">
+        <div class="tile-body"><div class="donut-ring-sm"></div></div>
+      </div>
+
+      <div class="tile tile--arrow">
+        <div class="tile-body"><div class="arrow-shape"></div></div>
+      </div>
+
+      <div class="tile tile--stepped">
+        <div class="tile-body">
+          <svg class="stepped-plot" viewBox="0 0 200 100" preserveAspectRatio="none">
+            <path class="stepped-fill" d="M0,82 L0,64 L36,64 L36,50 L72,50 L72,34 L108,34 L108,20 L144,20 L144,8 L200,8 L200,100 L0,100 Z"/>
+            <path class="stepped-line" d="M0,64 L36,64 L36,50 L72,50 L72,34 L108,34 L108,20 L144,20 L144,8 L200,8"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="tile tile--cyl">
+        <div class="tile-body">
+          <div class="cyl-row">
+            <div class="cyl-bar"></div>
+            <div class="cyl-bar"></div>
+            <div class="cyl-bar"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tile tile--mini">
+        <div class="tile-body">
+          <div class="mini-row">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+        </div>
+      </div>
+
+      <section class="tile tile--target chart-slot">
+        <div class="tile-body">{CHART_3}</div>
+      </section>
+
+      <div class="tile tile--venn">
+        <div class="tile-body">
+          <div class="venn">
+            <div class="venn-circle c1"></div>
+            <div class="venn-circle c2"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tile tile--legend">
+        <div class="tile-body">
+          <div class="line-legend">
+            <div class="line-row"><span class="swatch"></span><span class="bar"></span></div>
+            <div class="line-row"><span class="swatch"></span><span class="bar"></span></div>
+            <div class="line-row"><span class="swatch"></span><span class="bar"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tile tile--pie">
+        <div class="tile-body"><div class="pie-chart"></div></div>
+      </div>
+
+      <div class="tile tile--wavywave">
+        <div class="tile-body">
+          <svg class="wavywave-plot" viewBox="0 0 260 110" preserveAspectRatio="none">
+            <path class="wavywave-fill ww1" d="M0,58 C40,40 80,72 120,54 C160,36 200,62 260,44 L260,110 L0,110 Z"/>
+            <path class="wavywave-line ww1" d="M0,58 C40,40 80,72 120,54 C160,36 200,62 260,44"/>
+            <path class="wavywave-fill ww2" d="M0,78 C40,64 80,92 120,76 C160,60 200,82 260,68 L260,110 L0,110 Z"/>
+            <path class="wavywave-line ww2" d="M0,78 C40,64 80,92 120,76 C160,60 200,82 260,68"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="tile tile--list">
+        <div class="mini-cards">{MINI_CARDS}</div>
+      </div>
+    </div>
+
+    <footer class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </footer>
+  </div>
+</body>
+</html>

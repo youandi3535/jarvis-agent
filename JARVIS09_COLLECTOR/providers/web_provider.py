@@ -84,7 +84,7 @@ class WebProvider(BaseProvider):
                         results.append(RawDocument(
                             url=f"https://ko.wikipedia.org/wiki/{quote_plus(actual_title)}",
                             source_type=self.source_type,
-                            raw_text=extract[:8000],
+                            raw_text=extract,   # ★ 위키 개요 전문 (8000자컷 폐지 2026-07-17)
                             title=actual_title,
                             extra={"theme": theme, "source": "wikipedia"},
                         ))
@@ -147,11 +147,11 @@ class WebProvider(BaseProvider):
                         if len(t) > 30:
                             text_parts.append(t)
                 if text_parts:
-                    combined = "\n".join(text_parts[:10])
+                    combined = "\n".join(text_parts)   # ★ 텍스트 조각 전량 (10개컷 폐지)
                     results.append(RawDocument(
                         url=daum_url,
                         source_type=self.source_type,
-                        raw_text=combined[:3000],
+                        raw_text=combined,   # ★ 전문 (3000자컷 폐지 2026-07-17)
                         title=f"{theme} 금융 정보",
                         extra={"theme": theme, "source": "daum_finance"},
                     ))

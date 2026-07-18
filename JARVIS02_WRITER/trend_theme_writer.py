@@ -30,6 +30,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 
+# ★ 블로그(플랫폼) 액션 하드 데드라인 SSOT (watchdog.py) — economic_poster.py 와 동일 상수 참조
+#   (2026-07-18: 1800 리터럴 하드코딩이 SSOT 상향과 어긋나던 것을 상수 참조로 정정)
+from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC
+
 # ── sys.path 보정 (subprocess 직접 실행과 데몬 모듈 로드 양쪽 호환) ──
 _JARVIS_ROOT = Path(__file__).parent.parent
 if str(_JARVIS_ROOT) not in sys.path:
@@ -119,6 +123,92 @@ def _collect(theme: str, sector: str = "", related_terms: list | None = None,
         print(f"  ❌ [theme] collect_stocks_data 실패: {e}")
         _g_report("writer", e, module=__name__)
         return {"theme": theme, "stocks": [], "summary": {}}
+
+
+def _theme_collect_bundle(theme: str, sector: str = "") -> dict:
+    """★ 테마 수집 번들 (사용자 박제 2026-07-18) — 프로필 + 리서치(fact 추출) + 종목 →
+    CollectedData 조립. _step_collect 본체와 precollect_theme 가 공유하는 단일 수집 로직.
+
+    반환: {collected, stocks_data, collection_docs, evidence_pack, data_empty}
+    (선계산 잡이 저부하 창에서 이 무거운 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회.)
+    """
+    _prof, _angle = {}, ""
+    try:
+        from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
+        _prof = _kw_prof(theme, sector) or {}
+        _angle = (_prof.get("summary") or "").strip()
+        if _angle:
+            print(f"  🏷️ [THEME 선계산] 자비스03 프로필: {_angle[:60]}")
+    except Exception:
+        pass
+
+    # 리서치(설계-우선) + 02 fact 추출 — 동기(선계산은 병렬 이득 불필요)
+    collection_docs, evidence_pack = [], None
+    try:
+        if os.getenv("RESEARCH_FIRST", "1") != "0":
+            from JARVIS09_COLLECTOR import collect_research
+            _res = collect_research(theme, sector, angle=_angle) or {}
+            collection_docs = _res.get("docs") or []
+            from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack as _bep
+            evidence_pack = _bep(theme, _res.get("plan") or {}, collection_docs) or None
+        else:
+            raise RuntimeError("RESEARCH_FIRST=0")
+    except Exception as e:
+        _g_report("writer", e, module=__name__, func_name="_theme_collect_bundle")
+        try:
+            from JARVIS09_COLLECTOR.collector_engine import collect_for_theme
+            collection_docs = collect_for_theme(theme, sector)
+        except Exception:
+            collection_docs, evidence_pack = [], None
+
+    # 종목 데이터
+    data = _collect(theme, sector=sector, related_terms=_prof.get("related_terms"), profile=_prof)
+
+    from JARVIS09_COLLECTOR import compose_collected
+    collected = compose_collected(theme, stocks_data=data, docs=collection_docs,
+                                  evidence_pack=evidence_pack, sector=sector,
+                                  category="theme", profile=_prof)
+    _n_stocks = len(data.get("stocks") or [])
+    _n_facts = len((evidence_pack or {}).get("facts") or [])
+    return {"collected": collected, "stocks_data": data,
+            "collection_docs": collection_docs, "evidence_pack": evidence_pack,
+            "data_empty": (_n_stocks == 0 and not collection_docs and _n_facts == 0)}
+
+
+def precollect_theme() -> dict:
+    """★ 테마 선계산 잡 (20:30 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
+
+    테마는 네이버 금융 카탈로그에서 random 선정되므로, 여기서 테마를 *고정(pin)* 하고 미리
+    수집·추출해 캐시한다. 21:00 발행은 고정 테마를 우선 사용(→ 캐시 히트, 추출 LLM 0회) →
+    writer 가 버스트로 열화되지 않은 Max 풀에서 실행(스톨 조건 제거). 순수 최적화 — 고정·캐시가
+    없으면 발행은 기존 random 선정 + 기존 수집으로 폴백.
+    """
+    from datetime import datetime as _dt
+    from JARVIS02_WRITER.precollect_cache import save_precollect, pin_theme
+    print(f"\n{'='*50}\n⚡ 테마 선계산 시작 [{_dt.now().strftime('%H:%M:%S')}] — 발행창 밖 추출\n{'='*50}")
+    try:
+        from JARVIS02_WRITER.scheduler import select_top_theme as _sel
+        theme = _sel()
+    except Exception as e:
+        print(f"  ⚠️ [테마 선계산] 테마 선정 실패: {e}")
+        return {"success": False, "cached": 0}
+    if not theme:
+        print("  ⚠️ [테마 선계산] 선정 가능한 미발행 테마 없음")
+        return {"success": False, "cached": 0}
+    saved = 0
+    try:
+        bundle = _theme_collect_bundle(theme, sector="")
+        if bundle and not bundle.get("data_empty"):
+            if save_precollect("theme", theme, bundle):
+                pin_theme(theme)
+                saved = 1
+        else:
+            print(f"  ⏭️ [테마 선계산] '{theme}' 데이터 0 — 고정 안 함(발행 시 재선정)")
+    except Exception as e:
+        _g_report("writer", e, module=__name__, func_name="precollect_theme")
+        print(f"  ⚠️ [테마 선계산] 예외: {e} — 발행이 기존 수집 폴백")
+    print(f"⚡ 테마 선계산 완료 — 고정·캐시 {saved}개 (21:00 발행 재사용 대기)")
+    return {"success": bool(saved), "cached": saved, "theme": theme}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -421,7 +511,16 @@ def _layer3_verify_draft(draft: dict, platform: str) -> list[str]:
     try:
         from JARVIS02_WRITER.post_type_specs import get_spec as _gs_theme
         _sp = _gs_theme("theme")
-        _body_v = html or content
+        # ★ 2026-07-18: blocks(law_enforcer 정제 후 = 실제 발행 콘텐츠) 우선.
+        #   html 은 enforce_supreme_law 이전 원본이라 draft_fixer 의 분량 트림
+        #   대상(blocks)과 어긋나 재검증이 stale 상태를 다시 위반으로 보는 문제 방지.
+        if isinstance(blocks, list) and blocks:
+            _body_v = "".join(
+                bd for bt, bd in blocks
+                if bt in ("text", "html") and isinstance(bd, str)
+            )
+        else:
+            _body_v = html or content
         _p_tags = _re.findall(r"<p[^>]*>.*?</p>", _body_v, _re.DOTALL | _re.IGNORECASE)
         if _p_tags:
             _sent_cnt = sum(
@@ -430,11 +529,13 @@ def _layer3_verify_draft(draft: dict, platform: str) -> list[str]:
             )
         else:
             _sent_cnt = _L.count_sentences(_re.sub(r"<[^>]+>", " ", _body_v))
-        if _sent_cnt > _sp.max_sentences:
-            issues.append(f"분량 상한 초과: {_sent_cnt}문장 > {_sp.max_sentences}문장 (post_type=theme)")
         _kor_total = _L.count(_re.sub(r"<[^>]+>", " ", _body_v))
-        if _kor_total > _sp.max_korean:
-            issues.append(f"한국어 글자수 상한 초과: {_kor_total}자 > {_sp.max_korean}자 (theme)")
+        # ★ 분량 상한 = OR 기준 (사용자 박제 2026-07-18): 45문장 이하 '또는' 2500자 이하면 통과.
+        #   둘 다 초과할 때만 차단 (한쪽만 넉넉해도 발행 허용).
+        if _sent_cnt > _sp.max_sentences and _kor_total > _sp.max_korean:
+            # ★ '{max}문장' 토큰 유지 필수 (draft_fixer 정규식 계약 — 빠지면 전체 재작성 강등, 2026-07-18 회귀 복구).
+            issues.append(f"분량 상한 초과: {_sent_cnt}문장 > {_sp.max_sentences}문장 '그리고' {_kor_total}자 > {_sp.max_korean}자 "
+                          f"(OR 기준 — 둘 다 초과 시에만 차단, theme)")
     except Exception:
         pass
 
@@ -489,6 +590,23 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         if state.get("_collect_data_empty"):
             print("  ⏭️ [② 수집] 이전 시도 종목 0개 — collect 재실행 스킵 (결과 동일 예상)")
             return {}
+
+        # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18): precollect 잡(20:30)이 고정·선수집한
+        #   테마면 발행창(21:00) 추출 LLM 0회로 재사용 → writer 회복된 풀에서 실행.
+        #   순수 최적화 — 미스·오류 시 아래 기존 수집 경로로 폴백(현행 동작 보존).
+        try:
+            from JARVIS02_WRITER.precollect_cache import load_precollect
+            _cached = load_precollect("theme", state["theme"])
+            if _cached and _cached.get("collected") is not None:
+                print(f"  ⚡ [② 수집] 선계산 캐시 재사용: {state['theme']} (발행창 추출 LLM 0회)")
+                _out = {k: _cached[k] for k in
+                        ("collected", "stocks_data", "collection_docs", "evidence_pack")
+                        if k in _cached}
+                if _cached.get("data_empty"):
+                    _out["_collect_data_empty"] = True
+                return _out
+        except Exception as _pce:
+            print(f"  ⚠️ [선계산] 캐시 조회 스킵: {_pce}")
 
         # ★ 키워드 단독 전송 금지 (사용자 박제 2026-07-03 — ADR 013 강제):
         #   테마 키워드도 자비스03 프로필(정의·관련어)을 동봉해 JARVIS09 에 전달.
@@ -944,7 +1062,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                                              "nv_pub_result", "__nv_send_attempted__"),
         precondition=_precondition,
         max_attempts=3,  # ★ 외부 발행은 비멱등 → 원래 최대 2회였으나 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__nv_send_attempted__)이 중복 발행 방지
-        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
+        deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 SSOT (watchdog.py) — 사용자 박제 2026-07-06
     )
     _ts_action_def = ActionDefinition(
         name=f"theme-publish-{theme}-tistory",
@@ -957,7 +1075,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                                              "ts_pub_result", "__ts_send_attempted__"),
         precondition=_precondition,
         max_attempts=3,  # ★ 원래 최대 2회(비멱등 발행) — 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__ts_send_attempted__)이 중복 발행 방지
-        deadline_sec=1800,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
+        deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 SSOT (watchdog.py) — 사용자 박제 2026-07-06
     )
 
     # ★ 단일 진입점 — 새 테마 = 전체 상태 초기화
@@ -1047,7 +1165,7 @@ if __name__ == "__main__":
 
     # ★ 정지 방어 (사용자 박제 2026-07-06): 일회성 발행 작업 freeze/deadline 가드.
     from JARVIS00_INFRA.watchdog import guard_main
-    with guard_main("테마 발행", deadline_sec=3600):   # 전체 2블로그×30분
+    with guard_main("테마 발행", deadline_sec=2 * BLOG_ACTION_DEADLINE_SEC + 600):   # 부모 backstop — 플랫폼당 데드라인×2 + 여유
         if args.naver_only:
             r = run_naver_theme(args.theme, args.sector)
             sys.exit(0 if r.get("success") else 1)

@@ -86,6 +86,11 @@ _OUTRO_SENTS = OUTRO_SENTS
 HUMAN_INTRO_SENTS:  int = 4                                          # 4문장
 HUMAN_INTRO_CHARS:  int = HUMAN_INTRO_SENTS * KOREAN_PER_SENTENCE    # 약 200자 (파생)
 
+# ── 제0-C조 감성 중간 문단 (★ 사용자 박제 2026-07-18) — 본문 중간 사람 온기 ───
+# 도입부·마무리와 별개로 본문 중반에 개인적 소회·공감 감성 문단 1개 (100~200자).
+MID_EMOTION_SENTS_MIN: int = 2   # 중간 감성 문단 최소 (약 100자)
+MID_EMOTION_SENTS_MAX: int = 4   # 중간 감성 문단 최대 (약 200자)
+
 # ── 제5조 면책·주의 수칙 (★ 사용자 박제) ─────────────────────
 DISCLAIMER_SENTS:        int = 2                                          # 2문장
 DISCLAIMER_KOREAN:       int = DISCLAIMER_SENTS * KOREAN_PER_SENTENCE     # 약 100자 (파생)
@@ -537,6 +542,7 @@ __all__ = [
     "TITLE_MAX", "TAG_MAX", "SHORT_BLOCK_THRESHOLD", "MIN_TOKEN_LEN",
     "BLOCK_SPLIT_THRESHOLD",
     "HUMAN_INTRO_CHARS", "HUMAN_INTRO_SENTS",
+    "MID_EMOTION_SENTS_MIN", "MID_EMOTION_SENTS_MAX",
     "DISCLAIMER_SENTS", "DISCLAIMER_KOREAN",
     "STOCK_COUNT_PER_POST",
     "STOCK_CARD_LEADER_MIN", "STOCK_CARD_LEADER_MAX",

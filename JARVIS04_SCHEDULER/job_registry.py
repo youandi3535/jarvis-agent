@@ -33,7 +33,7 @@ DEFAULT_JOBS: list[dict] = [
     # ★ 06:00 조기 수집 (ERRORS [290] — 2026-07-03): 종전 최조기 09:00 은 06:30 경제
     #   브리핑보다 늦어 아침 발행이 *항상* 전일 폴백 데이터(신선도·DataLab 無) 사용.
     {"id":"radar_trends_06", "name":"트렌드 수집(06시 — 경제 브리핑 前)", "trigger":"cron",
-     "kwargs":{"hour":6,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
+     "kwargs":{"hour":6,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends_morning",
      "misfire_grace_time":1200, "owner":"jarvis03_radar", "edges":["e13"]},
     {"id":"radar_trends_09", "name":"트렌드 수집(09시)",  "trigger":"cron",
      "kwargs":{"hour":9,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends",
@@ -80,13 +80,26 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"day_of_week":"sun", "hour":2, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.cleanup_screenshots",
      "misfire_grace_time":3600, "owner":"jarvis02_writer"},
+    # ★ 경제 선계산은 별도 고정 잡이 아니라 06:00 트렌드 잡(radar_trends_06 → job_collect_trends_morning)
+    # 말미에 *이벤트 체이닝*: 트렌드 분석(topic_pack 빌드)이 끝나는 즉시 이어서 실행(고정 지연 없음 —
+    # 사용자 박제 2026-07-18). run_precollect_economic 이 06:58 前 종료 동적 데드라인으로 발행창 미침범.
+    # ★ 발행 시각 07:00 (사용자 박제 2026-07-18): 06:00 트렌드+선계산(~06:20 완료) → 07:00 발행 사이
+    # ~40분 Max 풀 회복 갭 확보 → writer 스톨 방지 강화. (종전 06:30 은 회복 갭 ~5분으로 빡빡)
     # ★ 발행 전 자체수리 + 발행 *하나의 세트* (사용자 박제 2026-06-28):
-    # 06:30 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 경제 브리핑 발행.
+    # 07:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 경제 브리핑 발행.
     # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리 (발행 지연 0).
-    {"id":"j01_economic_post",      "name":"자가진단+경제 브리핑 발행 06:30", "trigger":"cron",
-     "kwargs":{"hour":6, "minute":30},
+    {"id":"j01_economic_post",      "name":"자가진단+경제 브리핑 발행 07:00", "trigger":"cron",
+     "kwargs":{"hour":7, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_economic",
      "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e14"]},
+    # ★ 테마 선계산 (20:30 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18): 테마를 고정(pin)하고
+    # 무거운 fact·chart 추출을 21:00 발행 전에 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 가
+    # 회복된 Max 풀에서 실행(300s 스톨 조건 제거). 순수 최적화 — 실패해도 21:00 발행이 기존
+    # random 선정 + 기존 수집으로 폴백.
+    {"id":"j02_theme_precollect",   "name":"테마 선계산 20:30", "trigger":"cron",
+     "kwargs":{"hour":20, "minute":30},
+     "callback":"JARVIS02_WRITER.scheduler.run_precollect_theme",
+     "misfire_grace_time":1200, "owner":"jarvis02_writer"},
     # ★ 발행 전 자체수리 + 테마글 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 16:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 테마글 발행.
     # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리.
@@ -153,8 +166,8 @@ DEFAULT_JOBS: list[dict] = [
      "callback":"shared.file_cleanup.cleanup_fuse_hidden",
      "misfire_grace_time":300, "owner":"jarvis00_infra"},
     # ── JARVIS02 로그 모니터링 ──────────────────────────────────────
-    {"id":"log_monitor_economic", "name":"경제 브리핑 로그 확인 (07:00)", "trigger":"cron",
-     "kwargs":{"hour":7, "minute":0},
+    {"id":"log_monitor_economic", "name":"경제 브리핑 로그 확인 (07:45)", "trigger":"cron",
+     "kwargs":{"hour":7, "minute":45},
      "callback":"JARVIS02_WRITER.log_monitor.job_check_economic_result",
      "misfire_grace_time":1800, "owner":"jarvis02_writer"},
     {"id":"log_monitor_theme",     "name":"테마주 로그 확인 (16:30)", "trigger":"cron",
