@@ -666,6 +666,7 @@ def _gen_economic_ts_nv(
 
 ★ 총 차트: {_L.MIN_CHART_COUNT}~{_L.MAX_CHART_COUNT}개 (소제목 수·단락 수에 따라 자유롭게 배치. 번호는 [CHART_1]부터 순서대로).
 ★ 문단-이미지 배치 (제4조 허용 패턴): 문단+이미지+문단 / 문단+이미지+문단+이미지+문단 / 문단+문단+이미지+문단 / 문단+이미지+문단+문단. 이미지 연속·문단 3개+ 연속만 금지.
+★ 삼중 감성 배치 (헌법 제0조·제0-C조): ① 도입부 감성 오프닝 ② *본문 중간* 감성 문단 1개({_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 글쓴이의 개인적 소회·공감) ③ 감성 마무리 — 글 처음·중간·끝 세 곳에 사람이 직접 쓴 온기(수치 없는 감성 서술).
 
 TITLE: {spec['title_style']}
 
@@ -701,6 +702,7 @@ CONTENT:
 데이터: (D4 라벨=값)
 출처: (D4 출처)
 [/CHART_4]   ← 섹션 분량이 길면 차트 더 추가 가능
+<p>(★ 감성 중간 문단 — 본문 중간에 글쓴이의 개인적 소회·공감을 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}. 사람이 직접 쓴 듯한 온기 — 수치·데이터 없이 감성 서술만. 헌법 제0-C조)</p>
 ...
 <h2>소제목N</h2>
 <p>마지막 섹션 단락.</p>
@@ -710,7 +712,7 @@ CONTENT:
 데이터: (Dm 라벨=값)
 출처: (Dm 출처)
 [/CHART_M]
-<p>마무리.</p>
+<p>감성 마무리1. 감성 마무리2. — 단순 요약·행동 지시가 아니라 개인적 소회·독자에게 건네는 따뜻한 인사로 마무리 (헌법 제0-C조 감성 마무리).</p>
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 *맞춤형 표현*으로 작성)</p>
 
 {_DESIGN_FIRST_BLOCK}
@@ -857,6 +859,7 @@ def _gen_section_call2(
 데이터: (카탈로그 D7 라벨=값)
 출처: (카탈로그 D7 출처)
 [/CHART_7]   ← (분량이 길면 차트 추가 가능)
+<p>(★ 감성 중간 문단 — 본문 중간에 글쓴이의 개인적 소회·공감 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 수치 없이 감성 서술만. 헌법 제0-C조)</p>
 """
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
@@ -904,7 +907,7 @@ def _gen_section_call3(
 데이터: (카탈로그 D9 라벨=값)
 출처: (카탈로그 D9 출처)
 [/CHART_9]   ← (분량이 길면 차트 추가 가능)
-<p>마무리.</p>
+<p>감성 마무리1. 감성 마무리2. — 단순 요약이 아니라 개인적 소회·독자에게 건네는 따뜻한 인사 (헌법 제0-C조 감성 마무리).</p>
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 맞춤형 표현으로 작성)</p>
 """
     raw = invoke_text("writer", user_msg, timeout=300, system=system_msg)
@@ -1134,6 +1137,7 @@ def _gen_theme(
 [★ 본문 구조 — 반드시 이 순서 준수 (★ 분량은 헌법 제8조·length_manager.THEME_TOTAL_SENTS 위임. 배치는 제4조 허용 패턴 4가지)]
 ★ 차트 총 개수: {_L.THEME_TOTAL_CHART_COUNT}~{_L.MAX_CHART_COUNT}개 (각 섹션 분량에 따라 자유 결정). 번호는 [CHART_1]부터 순서대로.
 ★ 배치 허용: 문단+이미지+문단 / 문단+이미지+문단+이미지+문단 / 문단+문단+이미지+문단 / 문단+이미지+문단+문단. 이미지 연속·문단 3개+ 연속만 금지.
+★ 삼중 감성 배치 (헌법 제0조·제0-C조): ① 도입부 감성 오프닝 ② *본문 중간*(종목 분석 사이) 감성 문단 1개({_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 글쓴이의 개인적 소회·공감) ③ 감성 마무리 — 글 처음·중간·끝 세 곳에 사람이 직접 쓴 온기(수치 없는 감성 서술).
 
 1. 도입부 {_intro_phrase} — <p>2문</p> [CHART_1] <p>2문</p>
 2. <h2>대장주 — {leader}</h2> — {_leader_phrase} · 단락-이미지 교대 배치 (표 + 차트 최소 1개, 분량에 따라 추가)
@@ -1142,11 +1146,13 @@ def _gen_theme(
    <p>사업성·주력 2문</p> → <table> → <p>핵심기술·실적 2문</p> → [CHART_3] → <p>투자 포인트</p> → [PRICE_CHART_SECOND](카탈로그 주가이력 데이터)[/PRICE_CHART_SECOND]
 4. <h2>그 외 주목 종목 5개</h2> — {_multi_phrase} · 단락-이미지 교대 배치 (차트 최소 2개, 분량에 따라 추가)
    <p>종목 1·2 톺아보기 2문</p> → [CHART_4] → <p>종목 3·4 분석 2문</p> → [CHART_5] → <p>종목 5 + 종합 평가</p>
+   → <p>(★ 감성 중간 문단 — 글쓴이의 개인적 소회·공감 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 수치·데이터 없이 감성 서술만. 헌법 제0-C조)</p>
 5. <h2>섹터 & 시장 분석</h2> — {_sector_phrase} · 단락-이미지 교대 배치 (차트 최소 1개, 분량에 따라 추가)
    <p>관련 섹터 흐름·업계 동향 2문</p> → [CHART_6] → <p>시장 환경 + 자금 흐름 2문</p>
 6. <h2>투자 전략 & 위험 요인</h2> — {_strategy_phrase} · 단락-이미지 교대 배치 (차트 최소 1개, 분량에 따라 추가)
    <p>진입 시점·매매 시그널 2문</p> → [CHART_7] → <p>리스크 관리·손절선 2문</p>
-7. <p>면책 {_disc_phrase}</p>  ← (헌법 제5조 적용 — 정보 제공·투자 권유 아님·판단 책임은 독자)
+7. <p>감성 마무리 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)} — 단순 요약·투자 지시가 아니라 개인적 소회·독자에게 건네는 따뜻한 인사 (헌법 제0-C조 감성 마무리)</p>
+8. <p>면책 {_disc_phrase}</p>  ← (헌법 제5조 적용 — 정보 제공·투자 권유 아님·판단 책임은 독자)
 
 [출력 형식 — 아래 구조를 따르되, 차트는 {_L.THEME_TOTAL_CHART_COUNT}~{_L.MAX_CHART_COUNT}개 범위 내 자유 결정]
 
@@ -1231,6 +1237,7 @@ CONTENT:
 [/CHART_5]
 <p>종목 5 + 5종목 종합 평가 2문장.</p>
 ← (종목 섹션이 길면 차트 추가 가능)
+<p>(★ 감성 중간 문단 — 글쓴이의 개인적 소회·공감 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 수치 없이 감성 서술만. 헌법 제0-C조)</p>
 
 <h2>섹터 & 시장 분석</h2>
 <p>관련 섹터 흐름·업계 동향 2문장.</p>
@@ -1254,6 +1261,7 @@ CONTENT:
 <p>리스크 관리·손절선·위험 요인 2문장.</p>
 ← (전략 섹션이 길면 차트 추가 가능)
 
+<p>감성 마무리 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)} — 단순 요약·투자 지시가 아니라 개인적 소회·독자에게 건네는 따뜻한 인사 (헌법 제0-C조 감성 마무리)</p>
 <p>(여기에 면책 2문장 — 본문에 맞춤형 표현. 헌법 제5조 적용 — 정보 제공·투자 권유 아님·판단 책임은 독자)</p>
 
 {_DESIGN_FIRST_BLOCK}
