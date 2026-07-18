@@ -136,6 +136,55 @@ def _docs_block(docs: list, per_doc_chars: int = 0) -> str:
     return "\n".join(lines)
 
 
+def build_corpus_digest(docs: list, per_source_chars: int = 700) -> str:
+    """★ 코퍼스 dense digest (사용자 박제 2026-07-19 — distill 압축).
+
+    원시 문서(≈16만자)를 *소스별 정보밀도 높은 요약* 으로 압축(수치·고유명사·핵심 주장·인과·서사
+    맥락 보존, 중복 verbatim·보일러플레이트·광고·네비 제거)해 writer 프롬프트의 corpus 전문을
+    대체 → 콜당 입력·prefill·TPM 스로틀 감소. 수치 정보는 facts(evidence_brief)가 별도 전량
+    보존하므로 digest 는 서사·맥락 담당. 사실성 게이트는 원문(collection_docs) 그대로 사용(별개).
+
+    ★ 선계산(저부하 창)에서만 실행 — 발행창(is_publishing)이면 "" 반환 → 호출자는 원문
+      build_corpus_block 폴백(21시 추가 LLM 0). distill LLM 비용은 20:00/06:00 창에 흡수.
+    """
+    docs = list(docs or [])
+    if not docs:
+        return ""
+    try:
+        from shared.llm import is_publishing, invoke_text
+    except Exception:
+        return ""
+    if is_publishing():
+        return ""   # 발행창 — 즉석 digest 금지, 호출자 원문 폴백
+    blocks = []
+    for i, d in enumerate(docs, 1):
+        body = str(_doc_attr(d, "cleaned_text") or _doc_attr(d, "raw_text") or "").strip()
+        if not body:
+            continue
+        title = str(_doc_attr(d, "title"))[:70]
+        src = str(_doc_attr(d, "source_type") or "web")
+        blocks.append(f"[자료 {i} | {src} | {title}]\n{body[:8000]}")  # 요약 입력 상한(요약이라 OK)
+    if not blocks:
+        return ""
+    prompt = (
+        "아래 수집 자료들을 *소스별로* 정보밀도 높게 요약하라.\n"
+        "보존: 수치·고유명사·핵심 주장·인과관계·서사 맥락. 제거: 중복 문장·보일러플레이트·광고·네비게이션.\n"
+        f"각 자료를 {per_source_chars}자 내외로. 원문을 그대로 베끼지 말고 밀도 있게 재서술.\n\n"
+        + "\n\n".join(blocks)
+        + "\n\n출력: 자료마다 `[자료 N | 소스 | 제목]` 헤더 + 요약."
+    )
+    try:
+        raw = invoke_text("analyzer", prompt, max_tokens=6000, temperature=0.2, _nonessential=True)
+    except Exception as e:
+        log.warning(f"[digest] corpus 요약 실패: {e}")
+        return ""
+    if not (raw or "").strip():
+        return ""
+    log.info(f"[digest] corpus {len(blocks)}건 → 요약 {len(raw)}자(원문 대비 압축)")
+    return ("[★ 수집 자료 요약 — 글의 서사·맥락·통찰의 근거. 수치 인용은 실데이터 카탈로그·근거 팩 참조]\n"
+            + raw.strip())
+
+
 def _extract_facts_batch(theme: str, plan: dict, docs: list,
                          max_facts: int = 14, per_doc_chars: int = 1200) -> list[dict]:
     """문서 묶음 1회 LLM 호출 → fact 목록 (doc_idx → 출처 연결)."""

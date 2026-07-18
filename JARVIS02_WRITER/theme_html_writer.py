@@ -57,7 +57,6 @@ from JARVIS02_WRITER.draft_writer import (
     _fmt_price,
     _fmt_pct,
     _stocks_text,
-    _gen_hook_theme,
     generate_theme_draft as _generate_text_pass1_theme,
     _extract_chart_context,
 )
@@ -73,7 +72,7 @@ _DATE_KEY  = _TODAY.strftime("%Y-%m-%d")
 # _fmt_marcap, _fmt_price, _fmt_pct, _stocks_text → draft_writer.py 단일 진입점으로 이관됨
 
 
-# _gen_hook_theme, _generate_text_pass1_theme → draft_writer.py 단일 진입점으로 이관됨
+# _generate_text_pass1_theme → draft_writer.py 단일 진입점으로 이관됨
 # generate_theme_draft as _generate_text_pass1_theme 으로 import (파일 상단 참조)
 
 
@@ -101,13 +100,16 @@ def generate_theme_html(
     sector = collected.meta.get("sector", "")
     stocks_data = collected.meta.get("raw_stocks") or {}
     collection_docs = list(collected.docs or [])
+    # ★ corpus digest(선계산 요약) — 있으면 writer 가 원문 대신 사용(프롬프트 축소, distill 2026-07-19).
+    _corpus_digest = (collected.meta.get("corpus_digest") if hasattr(collected, "meta") else "") or ""
     evidence_pack = ({"facts": collected.facts, "plan": {},
                       "created_at": collected.meta.get("as_of", ""), "theme": theme}
                      if collected.facts else None)
     raw = _generate_text_pass1_theme(platform, theme, sector, stocks_data, supreme_block,
                                      collection_docs=collection_docs or [],
                                      evidence_pack=evidence_pack,
-                                     gate_feedback=gate_feedback)
+                                     gate_feedback=gate_feedback,
+                                     corpus_digest=_corpus_digest)
     if not raw:
         print(f"  ❌ [Theme/{platform}] Pass-1 텍스트 생성 실패")
         return ""
@@ -139,7 +141,8 @@ def generate_theme_html(
             raw2 = _generate_text_pass1_theme(platform, theme, sector, stocks_data, supreme_block,
                                               collection_docs=collection_docs or [],
                                               evidence_pack=evidence_pack,
-                                              gate_feedback=gate_feedback)
+                                              gate_feedback=gate_feedback,
+                                              corpus_digest=_corpus_digest)
             if raw2:
                 parts2 = raw2.split("CONTENT:", 1)
                 content2 = parts2[1].strip() if len(parts2) > 1 else raw2

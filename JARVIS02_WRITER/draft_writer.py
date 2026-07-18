@@ -248,29 +248,6 @@ def _gen_hook(keyword: str, platform: str = "tistory") -> str:
         return "요즘 이 주제가 부쩍 화제가 되고 있더라고요."
 
 
-def _gen_hook_theme(theme: str, platform: str = "tistory") -> str:
-    """테마주 감성 도입부 1문장 동적 생성."""
-    from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
-    supreme_block = _law_blk()
-    spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
-    try:
-        result = invoke_text(
-            "writer",
-            f"{supreme_block}\n\n{spec['name']} 블로그 첫 문장. 테마: '{theme}'.\n"
-            f"독자({spec['reader']})가 공감할 수 있는 일상 관찰·궁금증·감성 표현 {_L.build_length_phrase(1)}.\n"
-            "★ 이 문장은 근거 데이터 없이 생성되므로 특정 수치·통계 창작 절대 금지 — "
-            "연도·분기+금액('2023년 1분기 16만원' 류)·비율(%)·'~배 증가/폭등' 비교·지수·명명된 통계는 물론 "
-            "산업·업계 단위 수치(생산능력·감축/증설 톤수·시장 규모·점유율·'○○% 감축/증설 로드맵' 류)까지 "
-            "넣지 말 것(날짜가 안 붙어도, 현재 추진 중·업계 전체·로드맵이어도 동일). "
-            "근거 없는 수치는 사실성 게이트에서 차단된다. 정성적 관찰·궁금증·감성 서술만.\n"
-            "마침표로 끝낼 것. 이모지 금지. 문장만 출력.",
-            timeout=30,
-        ).strip().split("\n")[0].strip()
-        return result if result else f"요즘 '{theme}' 얘기가 부쩍 자주 들리더라고요."
-    except Exception:
-        return f"요즘 '{theme}' 얘기가 부쩍 자주 들리더라고요."
-
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  테마 종목 데이터 포매터
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1050,6 +1027,7 @@ def _gen_theme(
     collection_docs: list | None = None,
     evidence_pack: dict | None = None,
     gate_feedback: list | None = None,
+    corpus_digest: str = "",
 ) -> str:
     """테마글 Pass-1: 텍스트 + 데이터 내장 [CHART_N] 블록 (+구형식 폴백).
 
@@ -1122,6 +1100,10 @@ def _gen_theme(
 - 종목 데이터의 수치는 *그대로 인용* (가공·임의 변경 금지). 없으면 "N/A" 표기.
 - ★ 출처 없는 수치 창작 절대 금지 — 특정 연도·분기·기간의 가격·비용·규모·비율·지수뿐 아니라
   *산업·업계 단위 수치*(생산능력·감축/증설 톤수·시장 규모·점유율·"○○% 감축/증설 로드맵" 류)도 포함.
+  ★ *산업 개요성 총계 수치*(전국 사업체 수·산업 전체 매출액 총합·종사자 수 총계 등 "○○산업은
+  사업체 N개·매출 N조원" 류 도입부 단골 통계)도 동일하게 금지 — 수집 자료가 지역별·연령별 등
+  *세부 분류로 쪼개진 통계*(예: 지역별 사업체 수 현황)만 갖고 있다면, 그걸 임의로 합산·추정한
+  "전국 총계"를 지어내지 말 것. 세부 분류 그대로의 수치만 인용하거나, 총계가 필요하면 정성 서술로 대체.
   ★ *거시경제 지표*(기준금리·물가상승률·환율·GDP성장률 등)도 예외 아님 — "누구나 아는 상식"처럼
   느껴져도 이 테마의 수집 자료·종목 데이터에 그 수치가 없으면 절대 인용 금지 (엉뚱한 주제에 갖다 붙인
   거시 통계는 사실성 게이트에서 반드시 차단됨). 날짜가 안 붙어도(현재 추진 중·업계 전체·로드맵 등)
@@ -1147,7 +1129,8 @@ def _gen_theme(
     _evidence_block = _build_evidence_block(evidence_pack)
     if _evidence_block:
         _ref_block += f"\n\n{_evidence_block}"
-    _corpus_block = build_corpus_block(collection_docs)
+    # ★ corpus: 선계산 digest(요약) 우선, 없으면 원문 전문 (distill 압축 2026-07-19 — 프롬프트 축소).
+    _corpus_block = corpus_digest or build_corpus_block(collection_docs)
     if _corpus_block:
         _ref_block += f"\n\n{_corpus_block}"
 
@@ -1355,6 +1338,7 @@ def generate_theme_draft(
     collection_docs: list | None = None,
     evidence_pack: dict | None = None,
     gate_feedback: list | None = None,
+    corpus_digest: str = "",
 ) -> str:
     """테마글 텍스트 대본 생성 (Pass-1).
 
@@ -1373,5 +1357,6 @@ def generate_theme_draft(
     return _gen_theme(theme, sector, stocks_data, supreme_block, platform,
                       collection_docs=collection_docs or [],
                       evidence_pack=evidence_pack,
-                      gate_feedback=gate_feedback)
+                      gate_feedback=gate_feedback,
+                      corpus_digest=corpus_digest)
 

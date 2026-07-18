@@ -2,6 +2,41 @@
 
 ---
 
+## [455] ✅ 해결 — 테마 발행 harness 데드라인 초과(2428s>2400s) — trend_theme_writer.py 에 JARVIS_LLM_DEADLINE_TS 강등 배선 누락 (2026-07-18)
+
+- **증상**: `error_log` id=3439 — `source=harness`, `module=JARVIS00_INFRA.harness.theme-publish-음원/음반-naver`, `func_name=전체`, `message="[harness:theme-publish-음원/음반-naver] attempt=2 step=전체: 데드라인 초과(블로킹) 2428s > 2400s"`. sibling(id=3435/3436, [454]에서 해결)과 같은 테마·같은 네이버 액션의 attempt=2 — 1차 시도가 사실성 게이트로 차단된 후 재작성 순환(attempt 2)이 진행되다 하드 데드라인을 28초 초과해 watchdog 강제종료.
+- **환경**: `JARVIS02_WRITER/trend_theme_writer.py` `run_all_themes()`, `JARVIS02_WRITER/economic_poster.py`(대조군 — 이미 올바르게 배선됨), `shared/llm.py` `invoke_text()`(`JARVIS_LLM_DEADLINE_TS` 강등 로직 + `_PUBLISH_ESSENTIAL_CAP`), `JARVIS00_INFRA/watchdog.py`(`BLOG_ACTION_DEADLINE_SEC=2400`).
+- **원인**: `economic_poster.py` 는 네이버·티스토리 액션(`run_action`) 진입 직전마다 `os.environ["JARVIS_LLM_DEADLINE_TS"] = now + BLOG_ACTION_DEADLINE_SEC` 를 설정해, `shared/llm.py invoke_text()` 가 데드라인 잔여 <600s 이면 모든 LLM 호출을 `retries=1·backoff=0` 으로 강등시키는 안전장치를 갖고 있다(ERRORS [438][440][441]에서 확립된 패턴). 그러나 **`trend_theme_writer.py` 의 `run_all_themes()` 는 이 env var 를 어디에서도 설정하지 않았다** — `mark_publishing(True)` 만 호출해 `_PUBLISH_ESSENTIAL_CAP`(writer/fact_judge/engagement_judge) 3종만 강등되고, 그 외 LLM 호출(예: draft_fixer·번역·기타 보조 alias)은 데드라인이 임박해도 기존 `retries=3`+지수 백오프를 그대로 유지 — attempt=2 재작성 순환에서 잔여 예산을 넘겨 소진, 하드킬 직전까지 재시도가 계속되다 2428s 시점에 watchdog 이 강제종료.
+- **헛다리**: 없음 — ERRORS [438][440][441]에서 이미 economic_poster.py 에 확립된 동일 클래스 수정을 먼저 확인한 뒤, `grep -rn "JARVIS_LLM_DEADLINE_TS"` 로 trend_theme_writer.py 에만 이 배선이 없음을 코드 대조로 직접 확인 후 수정.
+- **해결**: `trend_theme_writer.py` `run_all_themes()` 에 `economic_poster.py` 와 동일한 SSOT 패턴 적용 — 네이버 액션(`_nv_action_def`) 진입 직전과 티스토리 액션(`_ts_action_def`) 진입 직전 각각 `os.environ["JARVIS_LLM_DEADLINE_TS"] = time.time() + BLOG_ACTION_DEADLINE_SEC` 설정(반드시 `deadline_sec=BLOG_ACTION_DEADLINE_SEC` 와 동일한 SSOT 상수 사용 — 값이 어긋나면 강등이 하드킬보다 늦게 트리거되는 [438] 재발). `py_compile` + import 스모크 테스트 통과, `precommit_check` 전체(46종) 0건.
+- **파일**: `JARVIS02_WRITER/trend_theme_writer.py`.
+- **교훈**: 같은 클래스의 발행 파이프라인(경제/테마)이라도 보호 장치는 파일마다 개별 배선해야 한다 — `economic_poster.py` 에 적용된 수정([438][440][441])이 "발행 파이프라인 공통 안전장치"처럼 보여도, 실제로는 그 파일 안에서만 유효하고 형제 파일(`trend_theme_writer.py`)엔 자동 전파되지 않는다. `mark_publishing()`/`_PUBLISH_ESSENTIAL_CAP` 처럼 *일부* 보호 장치가 이미 걸려 있다고 해서 전체 보호 체계가 동등하다고 가정하면 안 되며, 새 발행 파이프라인·형제 함수 추가/복제 시 원본에 걸린 모든 안전장치(env var 배선 포함)를 전수 대조할 것.
+
+---
+
+## [454] ✅ 해결 — 테마 "음원/음반" 네이버 대본 사실성 게이트 차단: 산업 개요성 총계 수치 창작 (2026-07-18)
+
+- **증상**: `error_log` id=3435 — `source=harness`, `module=JARVIS00_INFRA.harness.theme-publish-음원/음반-naver`, `func_name=③ 네이버 대본 생성`, `message="[harness:theme-publish-음원/음반-naver] attempt=1 step=③ 네이버 대본 생성: [사실성] 출처·데이터 미확인: 국내 음악산업 사업체 수는 3만 7천 개를 넘어섰고, 매출액도 13조원대로 늘어나며 산업 저변이 꾸준히 넓어지고 있어요."`. [453]의 sibling(id=3436, 품질점수 미달)과 동시각 발생 — 453은 조사 결과 결함 아님(정상 검증 순환)으로 결론, 본 건(3435)은 별도 Tier-2 세션으로 조사·수정.
+- **환경**: `JARVIS02_WRITER/draft_writer.py` `_gen_theme()` (테마 대본 단일 생성 진입점, ERRORS [373] 통합) · `JARVIS02_WRITER/law_enforcer.py` `factuality_issues()` (사실성 게이트) · `JARVIS09_COLLECTOR` KOSIS collector(음악산업 지역별 사업체 수·사업체당 평균매출액 — 300행 규모, 지역별/세부분류 통계).
+- **원인**: `_gen_theme`의 system prompt `[절대 제약]` 블록이 "특정 연도·분기·기간의" 수치 창작만 명시적으로 금지하고 있었고([368]에서 "산업·업계 단위 수치"까지 확장했으나 예시가 생산능력·감축톤수·시장점유율류에 한정), "○○산업은 사업체 N개·매출 N조원" 형태의 *산업 개요성 총계*(도입부 단골 클리셰 통계)는 금지 대상으로 명확히 커버되지 않음. 실제 수집된 KOSIS 데이터는 지역별 사업체 수 현황·사업체당(종사자당) **평균매출액** 뿐이었고 전국 총계·총 매출액 수치는 어디에도 없었는데, LLM이 배경지식으로 "3만 7천 개/13조원대"라는 전국 총계를 창작해 삽입 → 사실성 게이트가 정확히 근거 없음으로 차단(게이트는 정상 작동, 근본 원인은 writer 프롬프트 제약 범위 미비).
+- **헛다리**: 없음 — 로그 추적으로 evidence_pack(사실 25개, 문서 15건 정상 완성)·`trend_theme_writer.py`의 grounding corpus 배선(`collection_docs`+`as_source_docs(evidence_pack)`)이 이미 올바르게 연결돼 있음을 먼저 확인, 배선 버그 가능성을 배제한 뒤 writer 프롬프트 제약 미비로 범위를 좁힘.
+- **해결**: `draft_writer.py` `_gen_theme` system_msg `[절대 제약]`에 "산업 개요성 총계 수치(전국 사업체 수·산업 전체 매출액 총합·종사자 수 총계 등 도입부 단골 통계)도 동일 금지 — 수집 자료가 지역별·연령별 등 세부 분류로만 쪼개져 있다면 임의 합산·추정한 '전국 총계'를 지어내지 말고, 세부 분류 그대로 인용하거나 정성 서술로 대체" 문단 추가. 부수적으로 호출부 0곳인 죽은 함수 `_gen_hook_theme` 삭제([373] 단일 호출 통합 후 잔존 — `theme_html_writer.py` import·주석도 함께 정리).
+- **파일**: `JARVIS02_WRITER/draft_writer.py`(`_gen_theme` 제약 확장 + `_gen_hook_theme` 삭제), `JARVIS02_WRITER/theme_html_writer.py`(미사용 import·주석 정리).
+- **교훈**: [368]에서 "산업·업계 단위 수치"로 제약을 넓혔지만 예시 목록이 좁아 "산업 개요 총계(사업체 수·매출 총액)" 클리셰 통계가 빠져나갔다 — LLM 절대 제약은 *구체적 클리셰 문구까지* 예시로 박아야 새는 구멍이 없다. 또한 "평균매출액"과 "총 매출액"은 통계적으로 전혀 다른 값이므로, 세부분류(지역별·연령별 등) 데이터만 있을 때 LLM이 이를 전국 총계로 임의 재구성하지 않도록 프롬프트에서 명시적으로 차단해야 한다.
+
+---
+
+## [453] 🔍 조사완료(결함아님) — 테마 "음원/음반" 네이버 대본 1차 시도 품질점수 69.3/100 미달은 검증 순환 정상 작동 (2026-07-18)
+
+- **증상**: `error_log` id=3436 — `source=harness`, `module=JARVIS00_INFRA.harness.theme-publish-음원/음반-naver`, `func_name=③ 네이버 대본 생성`, `message="[harness:theme-publish-음원/음반-naver] attempt=1 step=③ 네이버 대본 생성: [품질점수] 종합 69.3/100 (70미달) — A=11.8/20 B=39.5/50 C=13.0/20 D=5.0/10"`. 동시각 sibling id=3435(사실성 미확인 claim 1건)도 별도 GUARDIAN Tier-2 세션으로 escalate.
+- **환경**: `JARVIS02_WRITER/prepublish_gate.py`(점수 게이트 통합) · `JARVIS02_WRITER/post_scorer.py`(100점 루브릭) · `JARVIS02_WRITER/trend_theme_writer.py`(harness verify/fix 훅) · `JARVIS06_IMAGE/draft_processor.py`(본문 이미지 min-5 top-up).
+- **조사**: ① ERRORS.md 선행 검색 — [445](2026-07-16, A=0.0/20 — LLM 타임아웃 시 통합 점수 호출 실패를 0점으로 오채점하던 버그, 이미 fail-open 수정 완료) 유사 사례 확인. 그러나 본 건은 A=11.8/20(0 아님) — `llm_scores` 정상 반환, 진짜 LLM 판정값. [445] 재발 아님. ② DB 조회 — evidence pack `fact 25개(수치 20)/문서 15건` 확인(`daemon_stdout.log:194668`), 종목·리서치·근거 전부 0인 `data_empty` 케이스 아님 → CLAUDE_WRITER.md "테마 발행 실패 대응 원칙"(data_empty→테마교체) 미해당. ③ `prepublish_gate.py:130-166` 코드 대조 — `llm_scores is None` 시 fail-open(통과) 경로 정상 존재, 예외 발생 시도 fail-open. ④ `post_scorer.py` 루브릭 대조 — B16(이미지 최소 5장, 3점)·제4조 패턴3(글 연속+이미지부재, `image-injector` 로그 21:13:15 "삽입 불가 — 이미지 풀 미제공 또는 소진") 이 B 섹션 감점 원인. `draft_processor.py:494-505` 확인 — 본문 이미지 부족 시 실데이터 인포그래픽 top-up 시도 후에도 데이터 소진이면 *빈 슬롯(폴백 없음)* 이 설계대로 동작 — AI사진 등 가짜 이미지로 채우지 않는 것은 사용자 박제 원칙("본문 이미지는 실데이터 인포그래픽만") 그대로. ⑤ `gate_feedback` 재시도 피드백 스레딩 전수 추적 — `_fix_theme_platform`(trend_theme_writer.py:942-951)이 non_draft(factuality/engagement) issue detail 을 `state["_nv_draft_gate_feedback"]` 에 누적(`_fb[-8:]`) → `_step_nv_draft`(729행)가 다음 attempt 에 `_build_blocks(..., gate_feedback=...)` 로 전달 → `theme_html_writer.generate_theme_html`(88/110/142행) → `draft_writer.build_theme_pass1_prompt`(1307/1310행) 가 `build_gate_feedback_block()` 으로 프롬프트에 직전 차단 사유 주입 — 결함 없이 end-to-end 정상 배선 확인. ⑥ harness 로그(`daemon_stdout.log:194701`) — "검증 실패 (시도 1/3) — fixed=0, unfixed=2" = 3회 중 1회차만 소진, 정상적으로 attempt 2 재시도 진행 중(조사 시점 기준 `scheduler.log` 에 "1차 결과" 미기록 = 진행 중, 다른 error_log 신규 항목 없음 = attempt 2 아직 실패 없음).
+- **결론**: 코드 결함 아님. ADR 009 "결함 있는 결과물은 영원히 송출되지 않는다" 원칙대로 Layer 3 검증 순환이 정상 작동 — 1차 시도가 (a) 사실성 미확인 claim 1건 (b) 종합점수 70 미달(이미지 부족에 따른 B섹션 감점 포함)을 정확히 검출·차단했고, 각 차단 사유가 `gate_feedback` 로 다음 시도 프롬프트에 그대로 주입되어 재작성 순환이 진행 중. 이미지 부족은 "가짜 이미지보다 빈 슬롯" 진실성 정책의 의도된 트레이드오프이며 별도 코드 수정 대상 아님.
+- **헛다리**: 없음 — 코드 수정 전 [445] 재발 여부·data_empty 해당 여부·fail-open 경로·gate_feedback 배선을 순차 배제 후 결론.
+- **조치**: 코드 변경 0건. `error_log` id=3436 은 `wontfix`(정상 검증 순환) 처리 대상 — sibling id=3435(사실성)는 별도 세션 소관이라 손대지 않음.
+- **교훈**: harness 품질점수 미달 오류는 A섹션이 0.0이 아니라면(=llm_scores 정상 수신) 대부분 "설계대로 작동한 재작성 트리거"다. attempt 번호가 max_attempts(3) 미만이고 사후 로그에 신규 실패가 없으면 실제 결함보다 진행 중인 정상 재시도일 가능성을 먼저 배제할 것 — 라이브 로그(`scheduler.log`/`daemon_stdout.log`)와 `error_log` 최신 상태를 대조해 "아직 실패하지 않은 재시도"를 버그로 오인하지 말 것.
+- **파일**: 없음 (조사만).
+
 ## [449] ✅ 수동수정 — [448] 후속: `audit_test` 소스를 `severity.is_transient()` 에 등록해 재발 노이즈 차단 (2026-07-17)
 
 - **증상**: [448] 조사 후에도 동일 `source=audit_test` 합성 프로브가 재발할 때마다 GUARDIAN 이 Tier1→Tier2 를 매번 처음부터 시도(SDK 세션 낭비)하고, 실패 시 사용자에게 "🚨 자동수정 실패 — 수동 검토" Telegram 알림을 반복 발송 — [446]→[447] 에서 `테스트-infra_throttle` 클래스에 적용한 것과 동일한 미해결 근본 원인(harness/합성 이벤트가 "일시적"으로 판명되어도 `is_transient()` 에 대응 패턴이 없으면 매번 재분석).
@@ -7849,6 +7884,14 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **해결**: `JARVIS00_INFRA/watchdog.py` `BLOG_ACTION_DEADLINE_SEC` 1800→2400(40분) 상향. `trend_theme_writer.py` 의 하드코딩 리터럴 `deadline_sec=1800` 을 `from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC` 로 교체해 SSOT 참조로 정정(값이 어긋나 있던 것 정합화). `economic_poster.py`/`trend_theme_writer.py` `__main__` 의 부모 `guard_main` 데드라인을 `3600` 고정값 대신 `2 * BLOG_ACTION_DEADLINE_SEC + 600`(플랫폼 2개 × 액션 데드라인 + 여유)으로 파생시켜 상수 변경 시 자동 정합.
 - **파일**: `JARVIS00_INFRA/watchdog.py`, `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS02_WRITER/economic_poster.py`
 - **교훈**: 수집·작성 파이프라인의 입력 크기를 바꾸는 변경(이번엔 절단 폐지로 입력 증가)은 하류 LLM 호출 시간에 직접 영향 — watchdog 데드라인 같은 "소요시간 기반" SSOT 상수는 파이프라인 변경 때마다 함께 재검토해야 한다([300] 교훈과 동형). 부모 backstop(`guard_main`)은 자식 액션 데드라인의 리터럴 배수(`3600` 등)로 고정하지 말고 `N × BLOG_ACTION_DEADLINE_SEC + 여유` 형태로 파생시켜야 SSOT 변경이 한 곳 수정으로 전파된다.
+
+## [453] 테마 21시 발행 과다 지연 — writer 프롬프트가 원시 corpus 전문(≈16만자)으로 비대(facts와 중복). distill 압축(선계산 요약)으로 프롬프트 축소 (2026-07-19)
+- **증상**: 수집을 20:00 선계산으로 앞당겼는데도 21:00 테마 발행이 오래 걸림. "재시도·병목·누수" 의심.
+- **원인**(8에이전트 적대검증 워크플로): 선계산은 "수집·fact추출" 1다리(전체의 5~15%)만 앞당길 뿐, 21시 벽시계는 캐시 밖 작성기·이미지·검증·발행 × 플랫폼2회(직렬) × 검증→재작성 루프가 지배. 지연 1위 = **writer 프롬프트 비대**: `_gen_theme`(테마)·nv/ts_collect supreme_block(경제) 둘 다 `build_corpus_block`(per_doc=None 원시 전문)을 주입 → corpus가 프롬프트의 83%(콜당 6~13만 토큰, 경제 카탈로그의 10~20배). 이 corpus는 이미 뽑은 facts(evidence_brief)의 수치 부분집합 재표현이라 **순수 중복**. 비대한 prefill + 저녁 창 다콜 몰림 → TPM 스로틀 트리거. (★ 1차 진단의 "경제=카탈로그 단독"은 오진 — 경제도 supreme_block 경유 corpus 전문 주입. 공통 병목.)
+- **헛다리(적대검증 REJECT)**: ① 게이트 fingerprint 안정화로 재작성 루프 조기 abort — fingerprint가 이슈 *전체 집합*이라 점수만 고정해도 효과 0 + 조기 abort는 개선 중 대본 폐기(해로움) + 경제와 공유 게이트라 회귀. ② Selenium/이미지 바닥 단축 — 전부 경제 공유 함수라 발행 실패·회귀 위험 최상, 레버리지 낮음(재시도 안 곱함).
+- **해결(사용자 결정: distill 압축)**: 원시 corpus를 **소스별 dense 요약(digest)**으로 압축해 writer 프롬프트의 corpus 전문을 대체. 수치는 facts가 전량 보존, 사실성 게이트는 원문(collection_docs) 그대로 사용(별개), digest는 서사·맥락 담당. ★ distill LLM은 **선계산(저부하 창)에서만** 실행 — 발행창(`is_publishing()`)이면 `build_corpus_digest` 가 "" 반환 → 호출자 원문 폴백(21시 추가 LLM 0). 신규 `JARVIS09_COLLECTOR.evidence_pack.build_corpus_digest`, `collect_research(with_digest=True)`가 `corpus_digest` 동봉. 경제=supreme_block 에 digest 우선 주입(nv/ts_collect), 테마=CollectedData.meta['corpus_digest']→generate_theme_html→generate_theme_draft→_gen_theme 로 전달해 `corpus_digest or build_corpus_block` 사용. 경제·테마 공통 적용.
+- **파일**: `JARVIS09_COLLECTOR/evidence_pack.py`(build_corpus_digest), `JARVIS09_COLLECTOR/collector_engine.py`(collect_research with_digest), `JARVIS02_WRITER/trend_economic_writer.py`, `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/theme_html_writer.py`
+- **교훈**: ① "선계산으로 수집을 앞당김"이 "발행이 빨라짐"을 뜻하지 않는다 — 캐시 밖(작성기·이미지·검증·발행)이 벽시계를 지배. 무엇을 캐시했는지 정확히 구분할 것. ② "입력 절단 폐지·전부 활용" 박제와 "재시도·병목 0"이 충돌할 때, 해답은 원시 전문을 자르는 것도(박제 위반) 그대로 두는 것도(스로틀) 아닌 **정보 보존형 압축(distill) + 저부하 창 이전**. ③ 남은 것: 게이트 재작성 루프·Selenium 고정 바닥은 이번에 손대지 않음(적대검증이 위험/무효로 판정) — distill 은 최대 단일 병목·스로틀 트리거를 제거하나 21시가 즉시 끝나진 않음(이미지·검증·발행·직렬 잔존).
 
 ## [452] 발행창 writer 대본 호출 300s 완전 행(0출력) — 수집 추출 버스트가 Max 풀 열화 → 직후 writer 스톨. 추출 선계산(발행창 밖 이전) + 안전망으로 근본 수정 (2026-07-18)
 - **증상**: 발행창 시뮬 dry-run(경제 '원달러 환율 상승')에서 수집 완료 직후 `invoke_text("writer", timeout=300)` 첫 호출이 300초간 `수집된 응답: 0개`로 완전 행 → 재시도 유발(writer 는 발행중 강등 미대상이라 최대 3×300s+백오프≈913s 로 증폭). 사용자 목표("정상경로 재시도·폴백 0")를 정면 위반.

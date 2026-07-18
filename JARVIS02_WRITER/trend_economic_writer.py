@@ -1349,7 +1349,7 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
                                         plan_cache=_cand.get("data_plan"),   # ★ warm plan 캐시 공유(발행창 LLM 0)
                                         category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
             _pool = list(_chart.get("datasets") or [])
-            _res = collect_research(keyword, sector=sector, angle=reason, with_facts=True) or {}
+            _res = collect_research(keyword, sector=sector, angle=reason, with_facts=True, with_digest=True) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
             try:
                 from shared.pipeline_activity import mark_active
@@ -1406,14 +1406,19 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
         except Exception as _ebe:
             print(f"  ⚠️ [근거 브리프] 주입 스킵: {_ebe}")
 
-        # 수집 자료 전문 주입
+        # 수집 자료 주입 — 선계산 digest(요약) 우선, 없으면 원문 전문 (distill 압축 2026-07-19)
         try:
-            from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
-            _corpus = _bcb(_kw_collection_docs)
+            _corpus = _res.get("corpus_digest") or ""
             if _corpus:
                 supreme_block = (supreme_block or "") + "\n\n" + _corpus
-                print(f"  📖 [수집 전문] 문서 {len(_kw_collection_docs)}건 "
-                      f"→ 대본 프롬프트 전문 주입 (~{len(_corpus) // 1000}K자)")
+                print(f"  📖 [수집 요약] digest ~{len(_corpus) // 1000}K자 주입 (원문 대비 압축 — writer 프롬프트 축소)")
+            else:
+                from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
+                _corpus = _bcb(_kw_collection_docs)
+                if _corpus:
+                    supreme_block = (supreme_block or "") + "\n\n" + _corpus
+                    print(f"  📖 [수집 전문] 문서 {len(_kw_collection_docs)}건 "
+                          f"→ 원문 주입 (~{len(_corpus) // 1000}K자, digest 미가용 폴백)")
         except Exception as _cbe:
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
@@ -1686,7 +1691,7 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
                                         plan_cache=_cand.get("data_plan"),   # ★ warm plan 캐시 공유(발행창 LLM 0)
                                         category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
             _pool = list(_chart.get("datasets") or [])
-            _res = collect_research(keyword, sector=sector, angle=reason, with_facts=True) or {}
+            _res = collect_research(keyword, sector=sector, angle=reason, with_facts=True, with_digest=True) or {}
             _kw_collection_docs = list(_res.get("docs") or [])
             try:
                 from shared.pipeline_activity import mark_active
@@ -1743,14 +1748,19 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
         except Exception as _ebe:
             print(f"  ⚠️ [근거 브리프] 주입 스킵: {_ebe}")
 
-        # 수집 자료 전문 주입
+        # 수집 자료 주입 — 선계산 digest(요약) 우선, 없으면 원문 전문 (distill 압축 2026-07-19)
         try:
-            from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
-            _corpus = _bcb(_kw_collection_docs)
+            _corpus = _res.get("corpus_digest") or ""
             if _corpus:
                 supreme_block = (supreme_block or "") + "\n\n" + _corpus
-                print(f"  📖 [수집 전문] 문서 {len(_kw_collection_docs)}건 "
-                      f"→ 대본 프롬프트 전문 주입 (~{len(_corpus) // 1000}K자)")
+                print(f"  📖 [수집 요약] digest ~{len(_corpus) // 1000}K자 주입 (원문 대비 압축 — writer 프롬프트 축소)")
+            else:
+                from JARVIS02_WRITER.draft_writer import build_corpus_block as _bcb
+                _corpus = _bcb(_kw_collection_docs)
+                if _corpus:
+                    supreme_block = (supreme_block or "") + "\n\n" + _corpus
+                    print(f"  📖 [수집 전문] 문서 {len(_kw_collection_docs)}건 "
+                          f"→ 원문 주입 (~{len(_corpus) // 1000}K자, digest 미가용 폴백)")
         except Exception as _cbe:
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 

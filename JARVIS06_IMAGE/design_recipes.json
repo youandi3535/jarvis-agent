@@ -543,6 +543,29 @@
       "template": "<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"UTF-8\"><style>\n@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800;900&display=swap');\n*{margin:0;padding:0;box-sizing:border-box;font-family:'Noto Sans KR',sans-serif}\n.pg{width:1280px;background:var(--soft)}\n.hd{background:linear-gradient(135deg,var(--hero0),var(--hero1));padding:36px 60px;display:flex;align-items:center;gap:36px;position:relative;overflow:hidden}\n.hd::after{content:\"\";position:absolute;right:-60px;bottom:-60px;width:260px;height:260px;border-radius:50%;background:var(--a2);opacity:.1}\n.eb{display:inline-flex;align-items:center;gap:8px;padding:7px 14px;border:1px solid var(--eyebrow);border-radius:100px;color:var(--eyebrow);font-size:13px;font-weight:700;white-space:nowrap;flex-shrink:0}\n.eb::before{content:\"\";width:6px;height:6px;border-radius:50%;background:var(--eyebrow)}\n.vd{width:1px;height:36px;background:rgba(255,255,255,.2);flex-shrink:0}\n.htx{flex:1}\nh1{color:#fff;font-size:34px;font-weight:900;letter-spacing:-.02em}\n.sub{color:rgba(255,255,255,.6);font-size:15px;margin-top:6px}\n.brand-r{color:var(--a1s);font-size:12px;font-weight:800;white-space:nowrap;position:relative;z-index:1}\n.kb{background:linear-gradient(90deg,var(--a1),var(--a1s) 40%,var(--a2));padding:24px 60px}\n.kb:empty{display:none}\n.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:22px;padding:28px 60px 0}\nsection{background:#fff;border-radius:20px;padding:26px 28px;border:1px solid var(--grid);box-shadow:0 4px 22px rgba(0,0,0,.06)}\nsection:has([data-jarvis-empty]){display:none}\n.mc{padding:20px 60px;display:flex;gap:14px}.mc:empty{display:none}\nfooter{padding:18px 60px 28px;border-top:1px solid var(--grid);display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:14px;margin-top:16px}\n.br{font-weight:800;color:var(--ink)}\n</style></head><body><div class=\"pg\">\n  <header class=\"hd\">\n    <span class=\"eb\">{{EYEBROW}}</span>\n    <div class=\"vd\"></div>\n    <div class=\"htx\"><h1>{{TITLE}}</h1><p class=\"sub\">{{SUBTITLE}}</p></div>\n    <span class=\"brand-r\">{{BRAND}}</span>\n  </header>\n  <div class=\"kb\">{{HERO_STATS}}</div>\n  <div class=\"grid\">\n    <section>{{CHART_1}}</section>\n    <section>{{CHART_2}}</section>\n    <section>{{CHART_3}}</section>\n  </div>\n  <div class=\"mc\">{{MINI_CARDS}}</div>\n  <footer><span>{{SOURCE}}</span><span class=\"br\">{{BRAND}}</span></footer>\n</div></body></html>",
       "source": "learned-library",
       "created": "2026-07-18"
+    },
+    {
+      "hero": [
+        "#27132f",
+        "#41234d"
+      ],
+      "ink": "#311e38",
+      "a1": "#b330e8",
+      "a1s": "#cd74f1",
+      "a2": "#68e137",
+      "a2s": "#99f075",
+      "soft": "#f7f4f9",
+      "muted": "#796c7f",
+      "eyebrow": "#d496ee",
+      "grid": "#ede8ef",
+      "hero_texture": "grid",
+      "card_radius": 30,
+      "id": "lib-sidebar-left",
+      "name": "좌측 사이드바형",
+      "aesthetic": "sidebar stats panel",
+      "template": "<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"UTF-8\"><style>\n@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800;900&display=swap');\n*{margin:0;padding:0;box-sizing:border-box;font-family:'Noto Sans KR',sans-serif}\n.pg{width:1280px;display:flex;background:var(--soft);min-height:700px}\n.sb{width:290px;flex-shrink:0;background:linear-gradient(170deg,var(--hero0),var(--hero1));padding:44px 32px;display:flex;flex-direction:column;position:relative;overflow:hidden}\n.sb::before{content:\"\";position:absolute;bottom:-70px;right:-70px;width:220px;height:220px;border-radius:50%;background:var(--a1);opacity:.15}\n.sb-tag{display:inline-block;padding:6px 12px;background:var(--a1);border-radius:7px;color:#fff;font-size:12px;font-weight:800;letter-spacing:.06em;margin-bottom:28px}\nh1{color:#fff;font-size:28px;font-weight:900;line-height:1.18;letter-spacing:-.01em}\n.sub{color:rgba(255,255,255,.55);font-size:14px;line-height:1.6;margin:14px 0 32px}\n.hs{flex:1;position:relative;z-index:1}.hs:empty{display:none}\n.sb-ft{margin-top:auto;padding-top:20px;border-top:1px solid rgba(255,255,255,.14);color:rgba(255,255,255,.38);font-size:11px;line-height:1.6}\n.main{flex:1;padding:32px 36px;display:flex;flex-direction:column;gap:22px;overflow:hidden}\nsection.top{background:#fff;border-radius:20px;padding:28px 30px;border:1px solid var(--grid);box-shadow:0 4px 20px rgba(0,0,0,.05)}\nsection.top:has([data-jarvis-empty]){display:none}\n.row{display:flex;gap:20px}\nsection.sm{background:#fff;border-radius:18px;padding:24px 26px;border:1px solid var(--grid);flex:1;box-shadow:0 3px 14px rgba(0,0,0,.04)}\nsection.sm:has([data-jarvis-empty]){display:none}\n.mc{display:flex;gap:14px}.mc:empty{display:none}\nfooter{padding:14px 0;border-top:1px solid var(--grid);display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:13px;margin-top:auto}\n.br{font-weight:800;color:var(--ink)}\n</style></head><body><div class=\"pg\">\n  <aside class=\"sb\">\n    <span class=\"sb-tag\">{{EYEBROW}}</span>\n    <h1>{{TITLE}}</h1><p class=\"sub\">{{SUBTITLE}}</p>\n    <div class=\"hs\">{{HERO_STATS}}</div>\n    <div class=\"sb-ft\">{{SOURCE}}</div>\n  </aside>\n  <main class=\"main\">\n    <section class=\"top\">{{CHART_1}}</section>\n    <div class=\"row\">\n      <section class=\"sm\">{{CHART_2}}</section>\n      <section class=\"sm\">{{CHART_3}}</section>\n    </div>\n    <div class=\"mc\">{{MINI_CARDS}}</div>\n    <footer><span>{{SOURCE}}</span><span class=\"br\">{{BRAND}}</span></footer>\n  </main>\n</div></body></html>",
+      "source": "learned-library",
+      "created": "2026-07-19"
     }
   ]
 }
