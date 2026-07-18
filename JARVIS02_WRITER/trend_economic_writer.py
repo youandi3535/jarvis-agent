@@ -1633,7 +1633,7 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
               + (f" — {reason[:60]}" if reason else ""))
 
         # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18): precollect 잡(06:05)이 미리 수집·추출한
-        #   결과가 있으면 발행창(06:30) 추출 LLM 0회로 재사용 → writer 회복된 풀에서 실행.
+        #   결과가 있으면 발행창(07:00) 추출 LLM 0회로 재사용 → writer 회복된 풀에서 실행.
         #   순수 최적화 — 미스·오류 시 아래 기존 수집 경로로 폴백(현행 동작 보존).
         if use_cache and supreme_block is None:
             try:
@@ -1793,7 +1793,7 @@ def precollect_economic() -> dict:
     """★ 경제 브리핑 선계산 잡 (06:05 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
 
     발행 슬롯(네이버·티스토리) 후보를 미리 수집·추출(무거운 fact·chart LLM 버스트)해 캐시한다.
-    06:30 발행은 이 캐시를 재사용(추출 LLM 0회) → 직후 writer 가 버스트로 열화되지 않은 Max 풀에서
+    07:00 발행은 이 캐시를 재사용(추출 LLM 0회) → 직후 writer 가 버스트로 열화되지 않은 Max 풀에서
     실행되어 300s 스톨 조건이 제거된다. 전문 추출은 그대로 유지하고 *시점만* 앞당기므로 "수집
     데이터 전부 활용" 박제 무위반. 순수 최적화 — 캐시가 없으면 발행창이 기존 수집으로 폴백한다.
     """
@@ -1820,7 +1820,7 @@ def precollect_economic() -> dict:
     except Exception as e:
         _g_report("writer", e, module=__name__, func_name="precollect_economic")
         print(f"  ⚠️ [경제 선계산] 예외: {e} — 발행창이 기존 수집으로 폴백")
-    print(f"⚡ 경제 선계산 완료 — {saved}개 캐시 (06:30 발행 재사용 대기)")
+    print(f"⚡ 경제 선계산 완료 — {saved}개 캐시 (07:00 발행 재사용 대기)")
     return {"success": True, "cached": saved}
 
 

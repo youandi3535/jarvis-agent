@@ -827,10 +827,10 @@ def run_precollect_economic():
     """★ 경제 선계산 (06:00 트렌드 잡 말미 체이닝 — 사용자 박제 2026-07-18).
 
     고정 시각 잡이 아니라 job_collect_trends_morning 이 트렌드 분석(topic_pack 빌드)을 끝낸 *직후*
-    이어서 호출한다(트렌드 소요시간 가변 — 재빌드 낭비·헛대기 0). 무거운 fact·chart 추출을 06:30
+    이어서 호출한다(트렌드 소요시간 가변 — 재빌드 낭비·헛대기 0). 무거운 fact·chart 추출을 07:00
     발행 전에 미리 수행·캐시 → 발행창 추출 LLM 0회 → 직후 writer 가 버스트로 열화되지 않은 Max
     풀에서 실행(300s 스톨 조건 제거). 전문 추출 그대로·시점만 앞당김(박제 무위반). 순수 최적화 —
-    실패해도 06:30 발행이 기존 수집 폴백.
+    실패해도 07:00 발행이 기존 수집 폴백.
     """
     from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
     if _isd():
@@ -839,20 +839,19 @@ def run_precollect_economic():
     try:
         from JARVIS00_INFRA.watchdog import guard_main
         from JARVIS02_WRITER.trend_economic_writer import precollect_economic
-        # ★ 동적 데드라인 — 트렌드 완료 후 이어서 실행되므로 시작 시각이 가변. 06:30 발행 2분 전
-        #   (06:28)까지만 수행해 발행창을 침범하지 않는다. 목표 지났거나(수동 실행 등) 여유<2분이면
-        #   기본 17분. 네이버 후보를 먼저 수집·캐시하므로 시간초과로 티스토리가 잘려도 시간임계인
-        #   네이버(첫 발행)는 확보됨.
+        # ★ 동적 데드라인 — 트렌드 완료 후 이어서 실행되므로 시작 시각이 가변. 07:00 발행 2분 전
+        #   (06:58)까지만 수행해 발행창을 침범하지 않는다. 목표 지났거나(수동 실행 등) 여유<2분이면
+        #   기본 17분. 06:00 시작이라 실제로는 ~06:20 완료 → 07:00 발행까지 ~40분 회복 갭(넉넉).
         from datetime import datetime as _dt
         _now = _dt.now()
-        _target = _now.replace(hour=6, minute=28, second=0, microsecond=0)
+        _target = _now.replace(hour=6, minute=58, second=0, microsecond=0)
         _remaining = (_target - _now).total_seconds()
         _dl = int(_remaining) if _remaining >= 120 else 1020
         with guard_main("경제 선계산", deadline_sec=_dl):
             res = precollect_economic()
-        log(f"⚡ [경제 선계산] 완료 — 캐시 {res.get('cached', 0)}개 (06:30 발행 재사용 대기)")
+        log(f"⚡ [경제 선계산] 완료 — 캐시 {res.get('cached', 0)}개 (07:00 발행 재사용 대기)")
     except Exception as _e:
-        log(f"⚠️ [경제 선계산] 실패 ({_e}) — 06:30 발행이 기존 수집으로 폴백")
+        log(f"⚠️ [경제 선계산] 실패 ({_e}) — 07:00 발행이 기존 수집으로 폴백")
 
 
 def run_self_repair_then_economic():
