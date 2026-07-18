@@ -277,6 +277,23 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
     except Exception as _e:
         log.warning(f"[topic_pack] 데이터 설계 선계산 실패 (무시): {_e}")
 
+    # ★ 대본 섹션 구조(section_plan) 선계산 (사용자 박제 2026-07-18) — 주제별 대본 골격.
+    #   generate_section_plan(LLM)을 저부하창에서 돌려 candidate 에 박제 → draft 경로(collected.meta)
+    #   소비. 03→02 는 함수-로컬 lazy import + try/except (post_type_specs 는 topic_pack 역참조 0 → 순환 없음).
+    try:
+        from JARVIS02_WRITER.post_type_specs import warm_section_plan as _warm_sec
+        _sec_map = _warm_sec([
+            {"keyword": c["keyword"], "sector": c.get("sector", ""),
+             "profile": c.get("profile") or {}}
+            for c in final
+        ])
+        for c in final:
+            c["section_plan"] = _sec_map.get(c["keyword"])
+        _n_sec = sum(1 for c in final if c.get("section_plan"))
+        log.info(f"[topic_pack] 대본 섹션 구조 선계산: {_n_sec}/{len(final)}개 박제")
+    except Exception as _e:
+        log.warning(f"[topic_pack] 대본 섹션 구조 선계산 실패 (무시): {_e}")
+
     pack = {
         "date": date.today().isoformat(),
         "generated_at": datetime.now().isoformat(),

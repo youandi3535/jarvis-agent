@@ -294,6 +294,7 @@ def generate_article_html(
     ref_datasets: list | None = None,
     gate_feedback: list | None = None,
     pass2: bool = True,
+    section_plan: list | None = None,   # ★ 주제별 대본 골격 (2026-07-18) — 기본 None=고정 스켈레톤
 ) -> str:
     """2-pass Claude Code SDK → 텍스트 + inline SVG 완성 원고 HTML.
 
@@ -315,7 +316,8 @@ def generate_article_html(
         print(f"  🔁 [Pass-1/{platform}] 직전 차단 사유 {len(gate_feedback)}건 주입 — 재작성")
 
     # Pass-1: 1회 단일 호출(설계-우선) 기본, 실패 시 3섹션 순차 폴백
-    raw = _generate_text_pass1(keyword, sector, reason, supreme_block, platform, ref_datasets)
+    raw = _generate_text_pass1(keyword, sector, reason, supreme_block, platform, ref_datasets,
+                               section_plan=section_plan)
     # ★ 스로틀 인지 (전수감사 FIX[3]): pass1 이 인프라 사유(스로틀 절단/hang/회로 open)로 빈
     #   문자열이면 폴백 체인(parallel 최대 6콜 + CLI, writer 는 회로 면제라 open 중에도 spawn)이
     #   같은 스로틀 창에 rate-limit 을 자가증폭한다. 인프라면 즉시 '' 반환 → 상류가 *신선한* 신호로

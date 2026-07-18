@@ -597,11 +597,44 @@ def _draft_invoke(system_msg: str, user_msg: str) -> str:
     return body
 
 
+def _build_economic_sections(section_plan, mid_emo_phrase: str, chart_start: int = 3) -> str | None:
+    """★ 주제별 섹션 스켈레톤 동적 조립 (사용자 박제 2026-07-18) — 고정 '소제목1..N' 탈피.
+
+    topic_pack warm 단계가 선계산한 section_plan(주제 맞춤 섹션명·개수)을 받아 경제 대본
+    CONTENT 의 섹션 골격을 매 주제마다 다르게 만든다. 삼중감성 중간 문단(제0-C조)을 섹션
+    중앙에 재삽입하고, 차트 슬롯([CHART_n])·데이터 카탈로그 힌트(Dn) 형식을 보존한다.
+    면책·generic('섹션 N') 섹션은 제외. 실섹션 2개 미만이면 None → 호출자가 기존 리터럴 폴백.
+    """
+    secs = []
+    for s in (section_plan or []):
+        if not isinstance(s, dict):
+            continue
+        nm = str(s.get("name", "")).strip()
+        if not nm or "면책" in nm or re.match(r"^섹션\s*\d+$", nm):
+            continue
+        secs.append(nm)
+    if len(secs) < 2:
+        return None
+    out, _cn, _mid = [], chart_start, len(secs) // 2
+    for i, nm in enumerate(secs):
+        out.append(f"<h2>{nm}</h2>")
+        out.append(f"<p>{nm} 핵심 2문장.</p>")
+        out.append(f"[CHART_{_cn}]\n제목: {nm} 관련 시각화\n단위: (D{_cn} 단위)\n"
+                   f"데이터: (D{_cn} 라벨=값)\n출처: (D{_cn} 출처)\n[/CHART_{_cn}]")
+        out.append(f"<p>{nm} 부연 2문장.</p>")
+        _cn += 1
+        if i == _mid:   # ★ 감성 중간 문단 재삽입 (헌법 제0-C조 — 절대 누락 금지)
+            out.append(f"<p>(★ 감성 중간 문단 — 본문 중간에 글쓴이의 개인적 소회·공감을 "
+                       f"{mid_emo_phrase}. 수치·데이터 없이 감성 서술만. 헌법 제0-C조)</p>")
+    return "\n".join(out)
+
+
 def _gen_economic_ts_nv(
     keyword: str, sector: str, reason: str,
     supreme_block: str,
     platform: str = "tistory",
     datasets=None,
+    section_plan=None,
 ) -> str:
     """티스토리·네이버 경제 브리핑 Pass-1: 텍스트 + [CHART_N] 플레이스홀더.
 
@@ -687,37 +720,30 @@ CONTENT:
 출처: (D2 출처 그대로)
 [/CHART_2]
 <p>전환.</p>
-<h2>소제목1</h2>
-<p>섹션1 단락.</p>
-[CHART_3]
-제목: 섹션1 관련 시각화
-단위: (D3 단위)
-데이터: (D3 라벨=값)
-출처: (D3 출처)
-[/CHART_3]
-<p>섹션1 단락.</p>
-[CHART_4]
-제목: 섹션1 추가 분석
-단위: (D4 단위)
-데이터: (D4 라벨=값)
-출처: (D4 출처)
-[/CHART_4]   ← 섹션 분량이 길면 차트 더 추가 가능
-<p>(★ 감성 중간 문단 — 본문 중간에 글쓴이의 개인적 소회·공감을 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}. 사람이 직접 쓴 듯한 온기 — 수치·데이터 없이 감성 서술만. 헌법 제0-C조)</p>
-...
-<h2>소제목N</h2>
-<p>마지막 섹션 단락.</p>
-[CHART_M]
-제목: 마무리 차트
-단위: (Dm 단위)
-데이터: (Dm 라벨=값)
-출처: (Dm 출처)
-[/CHART_M]
+__SECTIONS__
 <p>감성 마무리1. 감성 마무리2. — 단순 요약·행동 지시가 아니라 개인적 소회·독자에게 건네는 따뜻한 인사로 마무리 (헌법 제0-C조 감성 마무리).</p>
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 *맞춤형 표현*으로 작성)</p>
 
 {_DESIGN_FIRST_BLOCK}
 먼저 <design>설계</design> 블록을 쓰고, *그 다음* 위 형식대로 TITLE: 부터 작성. <design> 외에는 위 출력 형식만 — 설명·주석·코드블록 금지.
 """
+    # ★ 동적 섹션 골격 주입 (사용자 박제 2026-07-18): section_plan(warm 선계산 — 주제별 섹션)
+    #   있으면 __SECTIONS__ 를 주제 맞춤 구조로, 없으면 기존 고정 스켈레톤으로 안전 폴백.
+    _mid_emo = _L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)
+    _literal_sections = (
+        "<h2>소제목1</h2>\n<p>섹션1 단락.</p>\n"
+        "[CHART_3]\n제목: 섹션1 관련 시각화\n단위: (D3 단위)\n데이터: (D3 라벨=값)\n출처: (D3 출처)\n[/CHART_3]\n"
+        "<p>섹션1 단락.</p>\n"
+        "[CHART_4]\n제목: 섹션1 추가 분석\n단위: (D4 단위)\n데이터: (D4 라벨=값)\n출처: (D4 출처)\n[/CHART_4]   ← 섹션 분량이 길면 차트 더 추가 가능\n"
+        f"<p>(★ 감성 중간 문단 — 본문 중간에 글쓴이의 개인적 소회·공감을 {_mid_emo}. 사람이 직접 쓴 듯한 온기 — 수치·데이터 없이 감성 서술만. 헌법 제0-C조)</p>\n"
+        "...\n<h2>소제목N</h2>\n<p>마지막 섹션 단락.</p>\n"
+        "[CHART_M]\n제목: 마무리 차트\n단위: (Dm 단위)\n데이터: (Dm 라벨=값)\n출처: (Dm 출처)\n[/CHART_M]"
+    )
+    _dyn_sections = _build_economic_sections(section_plan, _mid_emo) if section_plan else None
+    user_msg = user_msg.replace("__SECTIONS__", _dyn_sections or _literal_sections)
+    if _dyn_sections:
+        print(f"  🧩 [Pass-1/{platform}] 주제별 동적 섹션 {_dyn_sections.count('<h2>')}개 적용")
+
     _chart_floor = max(8, _L.MAX_CHART_COUNT * 2 // 3)  # 경제: 8~12 범위 하한선
     user_msg = user_msg.replace(
         f"{_L.MIN_CHART_COUNT}~{_L.MAX_CHART_COUNT}",

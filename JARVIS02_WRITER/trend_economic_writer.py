@@ -1412,7 +1412,8 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
             _docs_ser = []
         collected = CollectedData.from_dict({
             "meta": {"keyword": keyword, "sector": sector, "category": "economic",
-                     "profile": _cand.get("profile") or {}},
+                     "profile": _cand.get("profile") or {},
+                     "section_plan": _cand.get("section_plan")},   # ★ 주제별 대본 골격 (2026-07-18)
             "datasets": _pool,
             "docs": _docs_ser,
             "facts": list(_ev_pack.get("facts") or []),
@@ -1469,6 +1470,7 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
         _ref_ds_ts = getattr(collected, "datasets", None) or []
         draft_html = generate_article_html(keyword, sector, reason, supreme_block,
                                            ref_datasets=_ref_ds_ts,
+                                           section_plan=(getattr(collected, "meta", None) or {}).get("section_plan"),
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함을 구분해 태깅(rank4). circuit_is_open()은
@@ -1728,7 +1730,8 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
             _docs_ser = []
         collected = CollectedData.from_dict({
             "meta": {"keyword": keyword, "sector": sector, "category": "economic",
-                     "profile": _cand.get("profile") or {}},
+                     "profile": _cand.get("profile") or {},
+                     "section_plan": _cand.get("section_plan")},   # ★ 주제별 대본 골격 (2026-07-18)
             "datasets": _pool,
             "docs": _docs_ser,
             "facts": list(_ev_pack.get("facts") or []),
@@ -1785,6 +1788,7 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
         _ref_ds = getattr(collected, "datasets", None) or []
         draft_html = generate_article_html(keyword, sector, reason, supreme_block, platform="naver",
                                            ref_datasets=_ref_ds,
+                                           section_plan=(getattr(collected, "meta", None) or {}).get("section_plan"),
                                            gate_feedback=gate_feedback, pass2=False)
         if not draft_html:
             # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함 구분 태깅(rank4) — 경제 네이버.
