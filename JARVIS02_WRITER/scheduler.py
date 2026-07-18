@@ -567,6 +567,53 @@ def run_next():
         _lock_release()
 
 
+def _theme_available() -> list:
+    """미발행 네이버 금융 카탈로그 테마 목록 (run_radar_top_theme·select_top_theme 공용)."""
+    try:
+        from JARVIS09_COLLECTOR.collect_theme import _fetch_naver_theme_catalog
+        catalog = _fetch_naver_theme_catalog()
+    except Exception:
+        return []
+    if not catalog:
+        return []
+    from shared.db import get_recent_published_themes
+    published = {r["theme"] for r in get_recent_published_themes(days=365)}
+    p = load_progress()
+    done_set = set(p.get("done", []))
+    return [t for t in catalog if t not in published and t not in done_set]
+
+
+def select_top_theme() -> str | None:
+    """★ 테마 선정 (사용자 박제 2026-07-18) — 선계산 잡(20:30)용. 미발행 카탈로그에서 1개 반환.
+    선계산이 이 결과를 pin → 21:00 발행(run_radar_top_theme)이 그 pin 을 우선 사용(캐시 히트)."""
+    import random
+    avail = _theme_available()
+    if not avail:
+        return None
+    return random.choice(avail)
+
+
+def run_precollect_theme():
+    """★ 테마 선계산 잡 (20:30 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
+
+    테마를 고정(pin)하고 무거운 fact·chart 추출을 21:00 발행 전에 미리 수행·캐시 → 발행창
+    추출 LLM 0회 → writer 회복된 Max 풀에서 실행(스톨 조건 제거). 순수 최적화 — 실패해도
+    21:00 발행이 기존 random 선정 + 기존 수집으로 폴백.
+    """
+    from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
+    if _isd():
+        log("⏸ [테마 선계산] 인터프리터 종료 중(데몬 재시작) — 연기")
+        return
+    try:
+        from JARVIS00_INFRA.watchdog import guard_main
+        from JARVIS02_WRITER.trend_theme_writer import precollect_theme
+        with guard_main("테마 선계산", deadline_sec=1500):  # 25분 상한(20:30→20:55) — 21:00 전 완료+회복
+            res = precollect_theme()
+        log(f"⚡ [테마 선계산] 완료 — 고정·캐시 {res.get('cached', 0)}개 (21:00 발행 재사용 대기)")
+    except Exception as _e:
+        log(f"⚠️ [테마 선계산] 실패 ({_e}) — 21:00 발행이 기존 수집으로 폴백")
+
+
 def run_radar_top_theme():
     """★ 네이버 금융 공식 테마 카탈로그 → 미발행 테마 임의 선정 → 발행.
 
@@ -625,6 +672,17 @@ def run_radar_top_theme():
     log(f"📊 카탈로그 현황: 전체 {len(catalog)}개 · 미발행 {len(available)}개")
 
     # ── 4. 임의 선정 → 최대 3회 폴백 ────────────────────────────────────
+    # ★ 선계산 고정 테마 우선 (사용자 박제 2026-07-18): 20:30 선계산 잡이 고정·선수집한 테마가
+    #   있으면 첫 시도에 그 테마를 써서 캐시 히트(발행창 추출 LLM 0회). 없으면 기존 random 선정.
+    _pinned = None
+    try:
+        from JARVIS02_WRITER.precollect_cache import load_pinned_theme
+        _pinned = load_pinned_theme()
+        if _pinned and _pinned in available:
+            log(f"⚡ [선계산] 고정 테마 우선 사용: {_pinned}")
+    except Exception:
+        pass
+
     tried: list[str] = []
     result_any_ok   = False
 
@@ -632,7 +690,10 @@ def run_radar_top_theme():
         remaining = [t for t in available if t not in tried]
         if not remaining:
             break
-        theme = random.choice(remaining)
+        if attempt == 0 and _pinned and _pinned in remaining:
+            theme = _pinned              # 선계산 고정 테마 우선(캐시 히트)
+        else:
+            theme = random.choice(remaining)
         tried.append(theme)
 
         log(f"📋 카탈로그 선정 (시도 {attempt + 1}/3): {theme}")
@@ -760,6 +821,28 @@ def _run_self_repair_phase(label: str) -> dict:
             pass
         return {"ok": True, "elapsed_sec": elapsed, "code_changed": 0,
                 "skip_reason": f"{type(_e).__name__}: {str(_e)[:80]}"}
+
+
+def run_precollect_economic():
+    """★ 경제 선계산 잡 (06:05 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
+
+    무거운 fact·chart 추출을 06:30 발행 전에 미리 수행·캐시 → 발행창 추출 LLM 0회 →
+    직후 writer 가 버스트로 열화되지 않은 Max 풀에서 실행(300s 스톨 조건 제거). 전문 추출은
+    그대로 유지·시점만 앞당김(박제 무위반). 순수 최적화 — 실패해도 06:30 발행이 기존 수집 폴백.
+    """
+    from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
+    if _isd():
+        log("⏸ [경제 선계산] 인터프리터 종료 중(데몬 재시작) — 연기")
+        return
+    try:
+        from JARVIS00_INFRA.watchdog import guard_main
+        from JARVIS02_WRITER.trend_economic_writer import precollect_economic
+        # 20분 상한(06:05→06:25) — 06:30 발행 전 완료 + Max 풀 회복 여유 확보
+        with guard_main("경제 선계산", deadline_sec=1200):
+            res = precollect_economic()
+        log(f"⚡ [경제 선계산] 완료 — 캐시 {res.get('cached', 0)}개 (06:30 발행 재사용 대기)")
+    except Exception as _e:
+        log(f"⚠️ [경제 선계산] 실패 ({_e}) — 06:30 발행이 기존 수집으로 폴백")
 
 
 def run_self_repair_then_economic():

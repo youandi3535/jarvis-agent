@@ -1249,11 +1249,14 @@ def _market_data_to_datasets(market_data: dict) -> list:
     ] if ds]
 
 
-def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | None = None) -> dict:
+def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | None = None,
+               use_cache: bool = True) -> dict:
     """티스토리 주제선정 + JARVIS09 수집 + CollectedData 조립.
 
     Returns: success, keyword, sector, reason, collected (CollectedData),
              supreme_block (enriched), source_docs
+
+    ★ use_cache (사용자 박제 2026-07-18): precollect 잡(06:05) 선계산 캐시 재사용 — nv_collect 참조.
     """
     from datetime import datetime as _dt_ts
     print(f"\n  🔴 [TISTORY-COLLECT] 주제 선정 + 수집 중... [{_dt_ts.now().strftime('%H:%M:%S')}]")
@@ -1294,6 +1297,17 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
         reason = _profile.get('summary') or _cand.get('reason', '')
         print(f"  📌 [티스토리 주제 — 자비스03 팩] [{sector}] {keyword}"
               + (f" — {reason[:60]}" if reason else ""))
+
+        # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18) — nv_collect 참조. 미스·오류 시 기존 수집 폴백.
+        if use_cache and supreme_block is None:
+            try:
+                from JARVIS02_WRITER.precollect_cache import load_precollect
+                _cached = load_precollect("economic", keyword)
+                if _cached:
+                    print(f"  ⚡ [TISTORY-COLLECT] 선계산 캐시 재사용: {keyword} (발행창 추출 LLM 0회)")
+                    return _cached
+            except Exception as _pce:
+                print(f"  ⚠️ [선계산] 캐시 조회 스킵: {_pce}")
 
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
@@ -1571,11 +1585,16 @@ def ts_publish(draft: dict) -> dict:
         return {"success": False, "url": "", "keyword": draft.get('keyword', '')}
 
 
-def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | None = None) -> dict:
+def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | None = None,
+               use_cache: bool = True) -> dict:
     """네이버 주제선정 + JARVIS09 수집 + CollectedData 조립.
 
     Returns: success, keyword, sector, reason, collected (CollectedData),
              supreme_block (enriched), source_docs
+
+    ★ use_cache (사용자 박제 2026-07-18): True 면 precollect 잡(06:05)이 저부하 창에서 미리
+      수집·추출해 캐시한 결과를 재사용(발행창 추출 LLM 0회 → writer 회복된 풀). precollect
+      잡 자신은 use_cache=False 로 호출해 실제 수집을 수행한다.
     """
     from datetime import datetime as _dt_nv
     print(f"\n  🟢 [NAVER-COLLECT] 주제 선정 + 수집 중... [{_dt_nv.now().strftime('%H:%M:%S')}]")
@@ -1612,6 +1631,19 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
         reason = _profile.get('summary') or _cand.get('reason', '')
         print(f"  📌 [네이버 주제 — 자비스03 팩] [{sector}] {keyword}"
               + (f" — {reason[:60]}" if reason else ""))
+
+        # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18): precollect 잡(06:05)이 미리 수집·추출한
+        #   결과가 있으면 발행창(06:30) 추출 LLM 0회로 재사용 → writer 회복된 풀에서 실행.
+        #   순수 최적화 — 미스·오류 시 아래 기존 수집 경로로 폴백(현행 동작 보존).
+        if use_cache and supreme_block is None:
+            try:
+                from JARVIS02_WRITER.precollect_cache import load_precollect
+                _cached = load_precollect("economic", keyword)
+                if _cached:
+                    print(f"  ⚡ [NAVER-COLLECT] 선계산 캐시 재사용: {keyword} (발행창 추출 LLM 0회)")
+                    return _cached
+            except Exception as _pce:
+                print(f"  ⚠️ [선계산] 캐시 조회 스킵: {_pce}")
 
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
@@ -1755,6 +1787,41 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
         _g_report("writer", e, module=__name__)
         traceback.print_exc()
         return {"success": False, "keyword": keyword, "error": str(e)[:100]}
+
+
+def precollect_economic() -> dict:
+    """★ 경제 브리핑 선계산 잡 (06:05 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
+
+    발행 슬롯(네이버·티스토리) 후보를 미리 수집·추출(무거운 fact·chart LLM 버스트)해 캐시한다.
+    06:30 발행은 이 캐시를 재사용(추출 LLM 0회) → 직후 writer 가 버스트로 열화되지 않은 Max 풀에서
+    실행되어 300s 스톨 조건이 제거된다. 전문 추출은 그대로 유지하고 *시점만* 앞당기므로 "수집
+    데이터 전부 활용" 박제 무위반. 순수 최적화 — 캐시가 없으면 발행창이 기존 수집으로 폴백한다.
+    """
+    from datetime import datetime as _dt
+    from JARVIS02_WRITER.precollect_cache import save_precollect
+    print(f"\n{'='*50}\n⚡ 경제 선계산 시작 [{_dt.now().strftime('%H:%M:%S')}] — 발행창 밖 추출\n{'='*50}")
+
+    # 발행창과 동일한 market_data(빈 pool 폴백용) 구성
+    _md: dict = {}
+    try:
+        from JARVIS09_COLLECTOR import get_market_data as _gmd, get_economic_calendar as _gec
+        _md = {"market": _gmd() or {}, "calendar": _gec() or {}}
+    except Exception as _mde:
+        print(f"  ⚠️ [경제 선계산] 시장 수치 스킵: {_mde}")
+
+    saved = 0
+    try:
+        nv = nv_collect(market_data=_md, use_cache=False)
+        if nv.get("success") and nv.get("keyword") and save_precollect("economic", nv["keyword"], nv):
+            saved += 1
+        ts = ts_collect(nv_keyword=nv.get("keyword", ""), market_data=_md, use_cache=False)
+        if ts.get("success") and ts.get("keyword") and save_precollect("economic", ts["keyword"], ts):
+            saved += 1
+    except Exception as e:
+        _g_report("writer", e, module=__name__, func_name="precollect_economic")
+        print(f"  ⚠️ [경제 선계산] 예외: {e} — 발행창이 기존 수집으로 폴백")
+    print(f"⚡ 경제 선계산 완료 — {saved}개 캐시 (06:30 발행 재사용 대기)")
+    return {"success": True, "cached": saved}
 
 
 def nv_generate_draft(keyword: str, sector: str, reason: str,

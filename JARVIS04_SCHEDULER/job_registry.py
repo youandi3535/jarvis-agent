@@ -80,6 +80,14 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"day_of_week":"sun", "hour":2, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.cleanup_screenshots",
      "misfire_grace_time":3600, "owner":"jarvis02_writer"},
+    # ★ 경제 선계산 (06:05 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18): 무거운 fact·chart 추출을
+    # 06:30 발행 전에 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 가 회복된 Max 풀에서 실행
+    # (300s 스톨 조건 제거). 전문 추출은 그대로·시점만 앞당김(절단폐지 박제 무위반). 순수 최적화 —
+    # 실패해도 06:30 발행이 기존 수집으로 폴백.
+    {"id":"j02_economic_precollect", "name":"경제 브리핑 선계산 06:05", "trigger":"cron",
+     "kwargs":{"hour":6, "minute":5},
+     "callback":"JARVIS02_WRITER.scheduler.run_precollect_economic",
+     "misfire_grace_time":1200, "owner":"jarvis02_writer"},
     # ★ 발행 전 자체수리 + 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 06:30 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 경제 브리핑 발행.
     # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리 (발행 지연 0).
@@ -87,6 +95,14 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"hour":6, "minute":30},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_economic",
      "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e14"]},
+    # ★ 테마 선계산 (20:30 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18): 테마를 고정(pin)하고
+    # 무거운 fact·chart 추출을 21:00 발행 전에 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 가
+    # 회복된 Max 풀에서 실행(300s 스톨 조건 제거). 순수 최적화 — 실패해도 21:00 발행이 기존
+    # random 선정 + 기존 수집으로 폴백.
+    {"id":"j02_theme_precollect",   "name":"테마 선계산 20:30", "trigger":"cron",
+     "kwargs":{"hour":20, "minute":30},
+     "callback":"JARVIS02_WRITER.scheduler.run_precollect_theme",
+     "misfire_grace_time":1200, "owner":"jarvis02_writer"},
     # ★ 발행 전 자체수리 + 테마글 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 16:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 테마글 발행.
     # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리.
