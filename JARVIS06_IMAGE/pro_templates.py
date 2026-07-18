@@ -545,9 +545,11 @@ def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
     # ★ 학습된 레이아웃 템플릿 우선 — 임의 레이아웃 재현 (ERRORS [360]). 실패 시 기본 레이아웃 폴백.
     # 데이터셋 1개+ 이면 템플릿 시도 — 빈 슬롯은 Playwright CSS card:empty{display:none} 으로 자동 숨김.
     _n_ds = len([d for d in (datasets or []) if d.get("data")])
-    # ★ 학습된 recipe.template 우선(보존), 없으면 데이터 형태로 라이브러리 골격 선택 (2026-07-18).
-    #   → template=None 레시피도 기본 스켈레톤 대신 다양한 골격 사용. has_all_slots_resolved 안전게이트 유지.
-    tmpl = pal.get("template") or _pick_layout_template(datasets, seed)
+    # ★ 스타일(골격)=layout_library 10개 큐레이션 우선, 색(팔레트)=recipe (사용자 박제 2026-07-18).
+    #   레시피는 '색만 다른' 팔레트 풀이고, 스타일은 데이터 형태로 선택하는 검증된 골격 10종이 담당.
+    #   → 어떤 레시피가 뽑히든 이미지는 '데이터 형태에 맞는 10개 중 하나의 뚜렷한 스타일 + 다양한 색'.
+    #   학습 recipe.template 은 폴백(데이터 0일 때). has_all_slots_resolved 실패 시 기본 스켈레톤.
+    tmpl = _pick_layout_template(datasets, seed) or pal.get("template")
     if tmpl and _n_ds >= 1:
         try:
             from JARVIS06_IMAGE.template_engine import render_layout, has_all_slots_resolved
