@@ -845,6 +845,23 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
         print(f"  ⏸ [harness] 인프라 스로틀 {action_def.max_attempts}회 지속 — 발행 연기(다음 회차 재시도)")
         return result
 
+    # ── ★ best-so-far 발행 (사용자 박제 2026-07-19): 남은 미해결이 *품질 점수(engagement)뿐* 이면
+    #   escalation(미발행) 대신 최선(마지막 개선분) 대본을 발행한다 — 좋아지던 글을 버리지 않는다.
+    #   사실성·구조·분량 등 correctness 실패가 하나라도 섞이면 기존 escalation 유지(거짓·결함 발행 금지). ──
+    _live_content = [i for i in last if not _is_fixed_issue(i) and not _is_infra_issue(i)]
+    if _live_content and all(i.kind == "engagement" for i in _live_content):
+        try:
+            action_def.send(state)
+            result.delivered = True
+            result.escalation_reason = ""
+            _log.warning(
+                f"[harness] ✅ best-so-far 발행 — 품질점수(100점)만 미달({action_def.max_attempts}회), "
+                f"사실성·구조 결함 없어 최선 대본 송출: {action_def.name}")
+            print("  ✅ [harness] best-so-far 발행 — 100점 미달이나 correctness 결함 0 → 최선 대본 발행(미발행 방지)")
+            return result
+        except Exception as _bse:
+            _log.warning(f"[harness] best-so-far 송출 실패 → escalation: {_bse}")
+
     # ── 콘텐츠 결함 등 — escalation (송출 절대 안 함) ──
     result.escalation_reason = f"max_attempts({action_def.max_attempts}) 도달 — 검증 통과 실패"
     _log.error(f"[harness] ❌ escalation — {action_def.name}: {result.escalation_reason}")
