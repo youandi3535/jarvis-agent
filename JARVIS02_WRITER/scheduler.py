@@ -584,7 +584,7 @@ def _theme_available() -> list:
 
 
 def select_top_theme() -> str | None:
-    """★ 테마 선정 (사용자 박제 2026-07-18) — 선계산 잡(20:30)용. 미발행 카탈로그에서 1개 반환.
+    """★ 테마 선정 (사용자 박제 2026-07-18) — 선계산 잡(20:00)용. 미발행 카탈로그에서 1개 반환.
     선계산이 이 결과를 pin → 21:00 발행(run_radar_top_theme)이 그 pin 을 우선 사용(캐시 히트)."""
     import random
     avail = _theme_available()
@@ -594,11 +594,11 @@ def select_top_theme() -> str | None:
 
 
 def run_precollect_theme():
-    """★ 테마 선계산 잡 (20:30 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
+    """★ 테마 선계산 잡 (20:00 = 21:00 발행 1시간 전 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
 
-    테마를 고정(pin)하고 무거운 fact·chart 추출을 21:00 발행 전에 미리 수행·캐시 → 발행창
-    추출 LLM 0회 → writer 회복된 Max 풀에서 실행(스톨 조건 제거). 순수 최적화 — 실패해도
-    21:00 발행이 기존 random 선정 + 기존 수집으로 폴백.
+    테마를 고정(pin)하고 무거운 fact·chart 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer
+    회복된 Max 풀에서 실행(스톨 조건 제거). 선계산(~20:20)과 발행(21:00) 사이 ~40분 회복 갭(경제와
+    대칭). 순수 최적화 — 실패해도 21:00 발행이 기존 random 선정 + 기존 수집으로 폴백.
     """
     from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
     if _isd():
@@ -607,7 +607,15 @@ def run_precollect_theme():
     try:
         from JARVIS00_INFRA.watchdog import guard_main
         from JARVIS02_WRITER.trend_theme_writer import precollect_theme
-        with guard_main("테마 선계산", deadline_sec=1500):  # 25분 상한(20:30→20:55) — 21:00 전 완료+회복
+        # ★ 동적 데드라인 (동적 설계): 고정 상한이 아니라 21:00 발행 2분 전(20:58)까지만 수행하도록
+        #   현재 시각에서 파생 → 미스파이어로 늦게 떠도 발행창을 침범하지 않는다. 목표 지났거나
+        #   여유<2분이면 기본 25분. 20:00 시작이라 실제로는 ~20:20 완료 → 21:00까지 ~40분 회복 갭.
+        from datetime import datetime as _dt
+        _now = _dt.now()
+        _target = _now.replace(hour=20, minute=58, second=0, microsecond=0)
+        _remaining = (_target - _now).total_seconds()
+        _dl = int(_remaining) if _remaining >= 120 else 1500
+        with guard_main("테마 선계산", deadline_sec=_dl):
             res = precollect_theme()
         log(f"⚡ [테마 선계산] 완료 — 고정·캐시 {res.get('cached', 0)}개 (21:00 발행 재사용 대기)")
     except Exception as _e:
@@ -672,7 +680,7 @@ def run_radar_top_theme():
     log(f"📊 카탈로그 현황: 전체 {len(catalog)}개 · 미발행 {len(available)}개")
 
     # ── 4. 임의 선정 → 최대 3회 폴백 ────────────────────────────────────
-    # ★ 선계산 고정 테마 우선 (사용자 박제 2026-07-18): 20:30 선계산 잡이 고정·선수집한 테마가
+    # ★ 선계산 고정 테마 우선 (사용자 박제 2026-07-18): 20:00 선계산 잡이 고정·선수집한 테마가
     #   있으면 첫 시도에 그 테마를 써서 캐시 히트(발행창 추출 LLM 0회). 없으면 기존 random 선정.
     _pinned = None
     try:

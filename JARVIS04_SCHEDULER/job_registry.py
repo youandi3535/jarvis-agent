@@ -30,7 +30,7 @@ except ImportError:
 
 DEFAULT_JOBS: list[dict] = [
     # ── JARVIS03 RADAR ─────────────────────────────────────────
-    # ★ 06:00 조기 수집 (ERRORS [290] — 2026-07-03): 종전 최조기 09:00 은 06:30 경제
+    # ★ 06:00 조기 수집 (ERRORS [290] — 2026-07-03): 종전 최조기 09:00 은 07:00 경제
     #   브리핑보다 늦어 아침 발행이 *항상* 전일 폴백 데이터(신선도·DataLab 無) 사용.
     {"id":"radar_trends_06", "name":"트렌드 수집(06시 — 경제 브리핑 前)", "trigger":"cron",
      "kwargs":{"hour":6,  "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_collect_trends_morning",
@@ -92,12 +92,12 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"hour":7, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_economic",
      "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e14"]},
-    # ★ 테마 선계산 (20:30 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18): 테마를 고정(pin)하고
-    # 무거운 fact·chart 추출을 21:00 발행 전에 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 가
-    # 회복된 Max 풀에서 실행(300s 스톨 조건 제거). 순수 최적화 — 실패해도 21:00 발행이 기존
-    # random 선정 + 기존 수집으로 폴백.
-    {"id":"j02_theme_precollect",   "name":"테마 선계산 20:30", "trigger":"cron",
-     "kwargs":{"hour":20, "minute":30},
+    # ★ 테마 선계산 (20:00 = 21:00 발행 1시간 전 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18):
+    # 테마를 고정(pin)하고 무거운 fact·chart 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 가
+    # 회복된 Max 풀에서 실행(300s 스톨 조건 제거). 선계산(~20:20 완료)과 발행(21:00) 사이 ~40분 회복
+    # 갭(경제와 대칭). 순수 최적화 — 실패해도 21:00 발행이 기존 random 선정 + 기존 수집으로 폴백.
+    {"id":"j02_theme_precollect",   "name":"테마 선계산 20:00", "trigger":"cron",
+     "kwargs":{"hour":20, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_precollect_theme",
      "misfire_grace_time":1200, "owner":"jarvis02_writer"},
     # ★ 발행 전 자체수리 + 테마글 발행 *하나의 세트* (사용자 박제 2026-06-28):
@@ -122,7 +122,7 @@ DEFAULT_JOBS: list[dict] = [
      "callback":"JARVIS01_MASTER.core_agent._job_router_health",
      "misfire_grace_time":600, "owner":"jarvis01_master"},
     # ── JARVIS07 자가 진단·수정 (★ 사용자 박제 2026-06-28 — 2단 분리) ──
-    # 발행 직전(06:30 / 16:00 callback): Tier-1 LLM-0 자체수리 sweep 만 (수초, 발행 지연 0).
+    # 발행 직전(07:00 / 21:00 callback): Tier-1 LLM-0 자체수리 sweep 만 (수초, 발행 지연 0).
     #   callback: `run_self_repair_then_economic` / `run_self_repair_then_theme`.
     # 심층 LLM 감사(backlog Tier1→2 + 광범위 코드 감사): 새벽 03:00 `j07_deep_audit` 별도 cron.
     # → 학습 자산이 쌓일수록 다음 발행 전 sweep 자동수리율↑ (복리 학습 루프).
