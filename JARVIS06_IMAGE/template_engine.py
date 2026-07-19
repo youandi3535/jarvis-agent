@@ -40,6 +40,58 @@ SLOT_SPEC = (
 _SLOTS = ("{{TITLE}}", "{{SUBTITLE}}", "{{EYEBROW}}", "{{SOURCE}}", "{{BRAND}}",
           "{{HERO_STATS}}", "{{CHART_1}}", "{{CHART_2}}", "{{CHART_3}}", "{{MINI_CARDS}}")
 
+# ── 크롬 파생 단일 진입점 (사용자 박제 2026-07-19): 라벨·출처·브랜드는 전부 데이터에서 파생 ──
+#   하드코딩 라벨·거짓 출처·헤드라인 출처 차단. J09 datasets[].source(provider) 만 신뢰.
+BRAND = "JARVIS · 데이터 인사이트"
+
+_PROVIDER_LABEL = {
+    "kosis": "통계청 KOSIS", "ecos": "한국은행 ECOS", "krx": "한국거래소",
+    "yfinance": "Yahoo Finance", "fdr": "FinanceDataReader", "dart": "금융감독원 DART",
+    "fred": "FRED", "worldbank": "World Bank", "oecd": "OECD", "imf": "IMF",
+    "academic": "학술 논문", "web": "웹 공개자료", "market": "시장 데이터", "news": "언론 보도",
+}
+
+
+def source_label(datasets: list, fallback: str = "") -> str:
+    """datasets[].source(provider 우선) → '데이터 출처: …'. 뉴스 헤드라인(장문 name) 배제·dedupe.
+    ★ 하드코딩/헤드라인 출처 원천 차단 — 이 함수가 출처 문자열의 *유일한* 생산자."""
+    seen: list[str] = []
+    for ds in datasets or []:
+        src = ds.get("source") or {}
+        prov = str(src.get("provider", "")).strip()
+        prov_l = prov.lower()
+        key = prov_l.split(":")[0] if ":" in prov_l else prov_l
+        disp = _PROVIDER_LABEL.get(prov_l) or _PROVIDER_LABEL.get(key)
+        if not disp and ":" in prov:          # 'news:매일경제' → '매일경제'
+            disp = prov.split(":", 1)[1].strip()
+        if not disp:                           # provider 미상: name 은 짧을 때만(헤드라인 배제)
+            nm = str(src.get("name", "")).strip()
+            disp = nm if (nm and len(nm) <= 20) else ""
+        if disp and disp not in seen:
+            seen.append(disp)
+    if not seen:
+        return fallback or "데이터 출처: 공개 통계"
+    return "데이터 출처: " + " · ".join(seen[:3])
+
+
+def _eyebrow_from_data(datasets: list) -> str:
+    """아이브로우 배지 = 데이터 기준시점(as_of)에서 파생. 없으면 '실데이터'. (고정 문구 반복 금지)"""
+    for ds in datasets or []:
+        ao = str((ds.get("source") or {}).get("as_of", "")).strip()
+        if ao:
+            return f"{ao[:7].replace('-', '.')} 기준"
+    return "실데이터"
+
+
+def _keep_last_slot(tmpl: str, slot: str) -> str:
+    """★ 크롬 중복 차단 (사용자 박제 2026-07-19): 템플릿에 {{BRAND}}/{{SOURCE}} 가 2회+ 있으면
+    마지막(footer) 1개만 남기고 앞의 것은 제거. 라이브러리·나이틀리 학습·미래 템플릿 *전부* 에
+    렌더 시점 강제 → 어떤 템플릿이 와도 브랜딩·출처는 1회. (개별 템플릿 수정 불필요)"""
+    parts = tmpl.split(slot)
+    if len(parts) <= 2:                      # 0~1회 → 그대로
+        return tmpl
+    return "".join(parts[:-1]) + slot + parts[-1]
+
 
 # ── 슬롯 콘텐츠 생성 (실데이터 → HTML, pro_templates 빌더 재사용) ─────────────
 def _slot_hero_stats(datasets, pal) -> str:
@@ -63,13 +115,17 @@ def _slot_hero_stats(datasets, pal) -> str:
         pts = sorted(_pairs(d), key=lambda kv: -abs(kv[1]))
         if pts:
             top = pts[0]
-            blocks.append(_hero_stat(pal, "최고가 종목",
+            _ttl = str(d.get("title", "")).strip()
+            # ★ 라벨 = 실제 최고 항목명(예: 다우지수). 하드코딩 "최고가 종목"(주식용) 금지 — 동적 설계.
+            blocks.append(_hero_stat(pal, top[0],
                                      f"{_fmt(top[1])}<span style='font-size:30px'> {d.get('unit','')}</span>",
-                                     f"{top[0]}", pal["a1"], pal["a1s"]))
+                                     f"{_ttl} 최고" if _ttl else "최고값", pal["a1"], pal["a1s"]))
             if len(pts) > 1:
                 blocks.append(_hero_stat(pal, "항목 수", f"{len(pts)}<span style='font-size:30px'>개</span>",
                                          f"합계 {_fmt(sum(v for _, v in pts))}{d.get('unit','')}", pal["a2"], pal["a2s"]))
-    return f"<div style='display:flex;gap:24px'>{''.join(blocks)}</div>" if blocks else ""
+    # 각 히어로 블록 flex:1 → 폭을 균등 분배해 밴드 우측 여백 제거 (공간 채움·동적 설계)
+    inner = "".join(f"<div style='flex:1;min-width:0'>{b}</div>" for b in blocks)
+    return f"<div style='display:flex;gap:24px'>{inner}</div>" if blocks else ""
 
 
 def _slot_chart_block(ds, pal, num) -> str:
@@ -149,13 +205,16 @@ def render_layout(template: str, title: str, subtitle: str, datasets: list,
     subs = {
         "{{TITLE}}": str(title),
         "{{SUBTITLE}}": str(subtitle),
-        "{{EYEBROW}}": chip or "수집 실데이터 기반",
-        "{{SOURCE}}": src or "데이터 출처 · JARVIS",
-        "{{BRAND}}": "JARVIS · 데이터 인사이트",
+        "{{EYEBROW}}": chip or _eyebrow_from_data(datasets),   # 데이터 기준시점 파생(고정 문구 금지)
+        "{{SOURCE}}": src or source_label(datasets),            # provider 파생(헤드라인·거짓 출처 금지)
+        "{{BRAND}}": BRAND,                                     # 단일 상수(레이아웃 footer 1회만)
         "{{HERO_STATS}}": _slot_hero_stats(datasets, recipe),
         "{{MINI_CARDS}}": _slot_mini_cards(datasets, recipe, n_charts_used=n_charts),
         **chart_slots,
     }
+    # ★ 크롬 중복 정규화 (전 템플릿 공통): BRAND/SOURCE 는 footer 1회만 남김
+    template = _keep_last_slot(template, "{{BRAND}}")
+    template = _keep_last_slot(template, "{{SOURCE}}")
     html = template
     for k, v in subs.items():
         html = html.replace(k, v)
@@ -166,17 +225,19 @@ def render_layout(template: str, title: str, subtitle: str, datasets: list,
         html = re.sub(r"(<body[^>]*>)", r"\1" + root, html, count=1)
     else:
         html = root + html
-    # 빈 슬롯 마커 조상 섹션/카드 숨기기 — 어떤 레시피든 공통 적용
+    # 빈 슬롯 마커의 조상 '레이아웃 셀'(grid/flex 자식·SECTION) 숨기기 — 구조 무관 범용
+    # (라이브러리·학습·미래 템플릿 전부: 부모가 grid/flex 인 첫 조상을 셀로 보고 숨김 → 빈 카드 잔존 0)
     _hide_js = (
         "<script>(function(){"
         "document.querySelectorAll('[data-jarvis-empty]').forEach(function(el){"
-        "var p=el,d=0;"
-        "while(p&&d<10){p=p.parentElement;d++;"
-        "if(!p||p.tagName==='BODY')break;"
-        "if(p.tagName==='SECTION'||"
-        r"/\b(chart-card|slot-cc|slot-c3|sec|wide-card)\b/.test(p.className||'')"
-        "){p.style.display='none';break;}"
-        "}});"
+        "var p=el.parentElement,d=0;"
+        "while(p&&d<12&&p.tagName!=='BODY'){"
+        "var cs=getComputedStyle(p),par=p.parentElement,pd=par?getComputedStyle(par).display:'';"
+        "var bg=cs.backgroundColor;"
+        "var card=(bg&&bg!=='rgba(0, 0, 0, 0)'&&bg!=='transparent')||parseFloat(cs.borderTopWidth)>0||cs.boxShadow!=='none'||parseFloat(cs.borderRadius)>0;"
+        "if(p.offsetHeight<420&&(p.tagName==='SECTION'||pd==='grid'||pd==='flex'||card)){p.style.display='none';return;}"
+        "p=par;d++;}"
+        "});"
         "})();</script>"
     )
     if "</body>" in html:

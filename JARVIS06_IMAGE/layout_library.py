@@ -80,7 +80,7 @@ h1{color:#fff;font-size:34px;font-weight:900;letter-spacing:-.02em}
 .brand-r{color:var(--a1s);font-size:12px;font-weight:800;white-space:nowrap;position:relative;z-index:1}
 .kb{background:linear-gradient(90deg,var(--a1),var(--a1s) 40%,var(--a2));padding:24px 60px}
 .kb:empty{display:none}
-.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:22px;padding:28px 60px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px;padding:28px 60px 0}
 section{background:#fff;border-radius:20px;padding:26px 28px;border:1px solid var(--grid);box-shadow:0 4px 22px rgba(0,0,0,.06)}
 section:has([data-jarvis-empty]){display:none}
 .mc{padding:20px 60px;display:flex;gap:14px}.mc:empty{display:none}
@@ -91,7 +91,6 @@ footer{padding:18px 60px 28px;border-top:1px solid var(--grid);display:flex;just
     <span class="eb">{{EYEBROW}}</span>
     <div class="vd"></div>
     <div class="htx"><h1>{{TITLE}}</h1><p class="sub">{{SUBTITLE}}</p></div>
-    <span class="brand-r">{{BRAND}}</span>
   </header>
   <div class="kb">{{HERO_STATS}}</div>
   <div class="grid">
@@ -131,7 +130,6 @@ footer{padding:14px 0;border-top:1px solid var(--grid);display:flex;justify-cont
     <span class="sb-tag">{{EYEBROW}}</span>
     <h1>{{TITLE}}</h1><p class="sub">{{SUBTITLE}}</p>
     <div class="hs">{{HERO_STATS}}</div>
-    <div class="sb-ft">{{SOURCE}}</div>
   </aside>
   <main class="main">
     <section class="top">{{CHART_1}}</section>
@@ -159,7 +157,7 @@ _add("lib-overlay-cards", "오버레이 카드형", "dark hero floating cards", 
 h1{color:#fff;font-size:50px;font-weight:900;line-height:1.08;letter-spacing:-.025em;max-width:720px;position:relative;z-index:1}
 .sub{color:rgba(255,255,255,.6);font-size:18px;margin:14px 0 0;max-width:580px;position:relative;z-index:1}
 .hs{margin-top:30px;position:relative;z-index:1}.hs:empty{display:none}
-.float{margin-top:-56px;padding:0 60px;display:grid;grid-template-columns:1fr 1fr;gap:22px;position:relative;z-index:10}
+.float{margin-top:-56px;padding:0 60px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px;position:relative;z-index:10}
 section.fc{background:#fff;border-radius:22px;padding:28px 30px;box-shadow:0 12px 40px rgba(0,0,0,.15);border:1px solid var(--grid)}
 section.fc:has([data-jarvis-empty]){display:none}
 .body{padding:22px 60px}
@@ -202,7 +200,7 @@ h1{color:#fff;font-size:30px;font-weight:900;letter-spacing:-.02em;flex:1}
 .pan{padding:26px 60px 18px}
 section.pano{background:#fff;border-radius:20px;padding:28px 30px;border:1px solid var(--grid);box-shadow:0 4px 22px rgba(0,0,0,.06)}
 section.pano:has([data-jarvis-empty]){display:none}
-.row{display:grid;grid-template-columns:1fr 1fr;gap:22px;padding:0 60px 18px}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px;padding:0 60px 18px}
 section.cc{background:#fff;border-radius:20px;padding:24px 26px;border:1px solid var(--grid);box-shadow:0 3px 16px rgba(0,0,0,.04)}
 section.cc:has([data-jarvis-empty]){display:none}
 .mc{padding:0 60px 18px;display:flex;gap:14px}.mc:empty{display:none}
@@ -239,7 +237,7 @@ _add("lib-minimal-light", "미니멀 라이트형", "minimal clean whitespace", 
 h1{color:var(--ink);font-size:48px;font-weight:900;letter-spacing:-.025em;margin:18px 0 10px}
 .sub{color:var(--muted);font-size:18px;line-height:1.5}
 .hs{padding:26px 60px;background:var(--soft);border-bottom:1px solid var(--grid)}.hs:empty{display:none}
-.row2{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--grid)}
+.row2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));border-top:1px solid var(--grid)}
 section.cc{background:#fff;padding:34px 40px;border-right:1px solid var(--grid)}
 section.cc:last-child{border-right:none}
 section.cc:has([data-jarvis-empty]){display:none}
@@ -281,7 +279,7 @@ h1{color:#fff;font-size:50px;font-weight:900;line-height:1.08;letter-spacing:-.0
 .body{padding:36px 60px 18px}
 section.wc{background:#fff;border-radius:20px;padding:28px 30px;border:1px solid var(--grid);box-shadow:0 4px 22px rgba(0,0,0,.06);margin-bottom:22px}
 section.wc:has([data-jarvis-empty]){display:none}
-.row{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px}
 section.cc{background:#fff;border-radius:20px;padding:24px 26px;border:1px solid var(--grid);box-shadow:0 3px 16px rgba(0,0,0,.04)}
 section.cc:has([data-jarvis-empty]){display:none}
 .mc{display:flex;gap:14px;padding:0 60px 18px}.mc:empty{display:none}
@@ -321,17 +319,13 @@ h1{color:#fff;font-size:40px;font-weight:900;letter-spacing:-.02em}
 .sec-hs{padding:28px 60px;border-left:4px solid var(--a1);margin:24px 60px 0}.sec-hs:empty{display:none}
 .sec-c{background:#fff;border-radius:16px;padding:24px 28px;box-shadow:0 4px 18px rgba(0,0,0,.06);border:1px solid var(--grid);margin:20px 60px 0}
 .sec-c:has([data-jarvis-empty]){display:none}
-.row{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:0 60px;margin-top:20px}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;padding:0 60px;margin-top:20px}
 section.cc{background:#fff;border-radius:16px;padding:22px 26px;box-shadow:0 3px 14px rgba(0,0,0,.05);border:1px solid var(--grid)}
 section.cc:has([data-jarvis-empty]){display:none}
 .mc{padding:16px 60px 0;display:flex;gap:14px}.mc:empty{display:none}
 footer{padding:18px 60px 26px;border-top:1px solid var(--grid);display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:13px;margin-top:22px}
 .br{font-weight:800;color:var(--ink)}
 </style></head><body><div class="pg">
-  <div class="bbar">
-    <span class="bname">{{BRAND}}</span>
-    <span class="bsrc">{{SOURCE}}</span>
-  </div>
   <div class="tsec">
     <div class="eb">{{EYEBROW}}</div>
     <h1>{{TITLE}}</h1><p class="sub">{{SUBTITLE}}</p>
@@ -414,14 +408,13 @@ h1{color:#fff;font-size:52px;font-weight:900;line-height:1.08;letter-spacing:-.0
 /* 히어로 스탯 */
 .hs{padding:24px 60px;background:var(--ink)}.hs:empty{display:none}
 /* 3열 + 미니 */
-.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:22px;padding:28px 60px 18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px;padding:28px 60px 18px}
 section.cc{background:#fff;border-radius:20px;padding:24px 26px;border:1px solid var(--grid);box-shadow:0 4px 18px rgba(0,0,0,.05)}
 section.cc:has([data-jarvis-empty]){display:none}
 .mc{padding:0 60px 18px;display:flex;gap:14px}.mc:empty{display:none}
 footer{padding:16px 60px 24px;border-top:1px solid var(--grid);display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:14px}
 .br{font-weight:800;color:var(--ink)}
 </style></head><body><div class="pg">
-  <div class="tbar"><span class="logo">{{BRAND}}</span><span class="src">{{SOURCE}}</span></div>
   <div class="hero">
     <div class="eb">{{EYEBROW}}</div>
     <h1>{{TITLE}}</h1><p class="sub">{{SUBTITLE}}</p>
