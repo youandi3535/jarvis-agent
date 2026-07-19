@@ -40,11 +40,12 @@ def _x(col: int, *, row: int = 1) -> int:
 # 새 에이전트 추가: 이 목록에 dict 추가 → 대시보드 자동 반영
 AGENTS: list[dict] = [
     # ── 상단 관리층 (Row 0) ──────────────────────────────────────
-    {"id":"j00","num":"00","label":"J00 INFRA",   "sub":"인프라 관리자",   "color":"#4ade80",
+    # J04(좌) → J03(파이프라인 시작) 바로 위 = 트리거선 수직 정렬. J00(우).
+    {"id":"j04","num":"04","label":"J04 SCHED",   "sub":"작업 스케줄러",   "color":"#fb923c",
      "x":_x(0,row=0), "y":LAYOUT["ROW0_Y"]},
     {"id":"j01","num":"01","label":"J01 MASTER",  "sub":"마스터 라우터",   "color":"#4f90d9",
      "x":_x(1,row=0), "y":LAYOUT["ROW0_Y"], "big":True},
-    {"id":"j04","num":"04","label":"J04 SCHED",   "sub":"작업 스케줄러",   "color":"#fb923c",
+    {"id":"j00","num":"00","label":"J00 INFRA",   "sub":"인프라 관리자",   "color":"#4ade80",
      "x":_x(2,row=0), "y":LAYOUT["ROW0_Y"]},
     # ── 파이프라인 (Row 1) ────────────────────────────────────────
     {"id":"j03","num":"03","label":"J03 RADAR",   "sub":"트렌드 레이더",   "color":"#fbbf24",
@@ -64,29 +65,43 @@ AGENTS: list[dict] = [
      "x":_x(2), "y":LAYOUT["ROW2_Y"]},
 ]
 
+# ── 모든 연결은 양방향 2줄 (정방향=라벨+오프셋, 역방향=무라벨 반대 오프셋) ──
+#    수평선: dy 오프셋 / 수직선: dx 오프셋 / 레인선: lane_y 차이 로 두 줄 분리.
 PIPELINE_EDGES: list[dict] = [
-    # ══ Row1 수평 주 파이프라인 ══════════════════════════════════
-    {"id": "e1",  "from": "j03", "to": "j09", "label": "선수집",     "col": "#fbbf24", "dur": 2.0, "dots": 2, "wt": 2.0},
-    {"id": "e2",  "from": "j09", "to": "j02", "label": "데이터",     "col": "#38bdf8", "dur": 2.2, "dots": 2, "wt": 2.0},
-    {"id": "e3",  "from": "j02", "to": "j06", "label": "대본",       "col": "#e879f9", "dur": 1.5, "dots": 2, "wt": 2.0},
-    {"id": "e6",  "from": "j06", "to": "j08", "label": "발행",       "col": "#22d3ee", "dur": 1.6, "dots": 2, "wt": 2.0},
-    # ══ topic_pack: Row1 상단 레인 경유 (J03→J02 skip) ══════════
+    # ══ Row1 수평 주 파이프라인 — 양방향 ══════════════════════════
+    {"id": "e1",  "from": "j03", "to": "j09", "label": "선수집",     "col": "#fbbf24", "dur": 2.0, "dots": 2, "wt": 2.0, "dy": -5},
+    {"id": "e1r", "from": "j09", "to": "j03", "label": None,         "col": "#fbbf24", "dur": 2.4, "dots": 1, "wt": 1.2, "dy": 5},
+    {"id": "e2",  "from": "j09", "to": "j02", "label": "데이터",     "col": "#38bdf8", "dur": 2.2, "dots": 2, "wt": 2.0, "dy": -5},
+    {"id": "e2r", "from": "j02", "to": "j09", "label": None,         "col": "#38bdf8", "dur": 2.6, "dots": 1, "wt": 1.2, "dy": 5},
+    {"id": "e3",  "from": "j02", "to": "j06", "label": "대본",       "col": "#e879f9", "dur": 1.5, "dots": 2, "wt": 2.0, "dy": -5},
+    {"id": "e3r", "from": "j06", "to": "j02", "label": None,         "col": "#e879f9", "dur": 1.9, "dots": 1, "wt": 1.2, "dy": 5},
+    {"id": "e6",  "from": "j06", "to": "j08", "label": "발행",       "col": "#22d3ee", "dur": 1.6, "dots": 2, "wt": 2.0, "dy": -5},
+    {"id": "e6r", "from": "j08", "to": "j06", "label": None,         "col": "#22d3ee", "dur": 2.0, "dots": 1, "wt": 1.2, "dy": 5},
+    # ══ topic_pack: 상단 레인 경유 — 양방향 ══════════════════════
     {"id": "e5",  "from": "j03", "to": "j02", "label": "topic_pack", "col": "#fbbf24", "dur": 2.8, "dots": 1, "wt": 1.2,
      "route": "via_lane", "lane_y": 238},
-    # ══ 수직: Row1↔Row2 ══════════════════════════════════════════
-    {"id": "e7",  "from": "j02", "to": "j07", "label": None,         "col": "#f43f5e", "dur": 3.0, "dots": 1, "wt": 1.4, "dx": -3},
-    {"id": "e8",  "from": "j07", "to": "j02", "label": "수정",       "col": "#f43f5e", "dur": 3.5, "dots": 1, "wt": 1.4, "dx": 3},
-    {"id": "e9",  "from": "j09", "to": "j05", "label": None,         "col": "#38bdf8", "dur": 3.2, "dots": 1, "wt": 1.0},
-    # ══ J05 헬스 리포트 ═══════════════════════════════════════════
-    {"id": "e10", "from": "j05", "to": "j07", "label": "헬스",       "col": "#34d399", "dur": 5.5, "dots": 1, "wt": 1.2},
-    # ══ Row0 인프라·라우팅 ════════════════════════════════════════
-    {"id": "e11", "from": "j00", "to": "j01", "label": "인프라",     "col": "#4ade80", "dur": 5.0, "dots": 1, "wt": 1.0},
-    {"id": "e12", "from": "j01", "to": "j02", "label": "라우팅",     "col": "#4f90d9", "dur": 2.5, "dots": 1, "wt": 1.0},
-    # ══ J04 스케줄 트리거 (Row0 하단→Row1 상단 레인 경유) ════════
-    {"id": "e13", "from": "j04", "to": "j03", "label": "트리거",     "col": "#fb923c", "dur": 4.5, "dots": 1, "wt": 1.0,
-     "route": "via_lane", "lane_y": 234},
+    {"id": "e5r", "from": "j02", "to": "j03", "label": None,         "col": "#fbbf24", "dur": 3.2, "dots": 1, "wt": 1.0,
+     "route": "via_lane", "lane_y": 230},
+    # ══ 수직: Row1↔Row2 — 양방향 ═════════════════════════════════
+    {"id": "e7",  "from": "j02", "to": "j07", "label": None,         "col": "#f43f5e", "dur": 3.0, "dots": 1, "wt": 1.4, "dx": -4},
+    {"id": "e8",  "from": "j07", "to": "j02", "label": "수정",       "col": "#f43f5e", "dur": 3.5, "dots": 1, "wt": 1.4, "dx": 4},
+    {"id": "e9",  "from": "j09", "to": "j05", "label": None,         "col": "#38bdf8", "dur": 3.2, "dots": 1, "wt": 1.0, "dx": -4},
+    {"id": "e9r", "from": "j05", "to": "j09", "label": None,         "col": "#38bdf8", "dur": 3.6, "dots": 1, "wt": 1.0, "dx": 4},
+    # ══ J05 헬스 리포트 — 양방향 ══════════════════════════════════
+    {"id": "e10", "from": "j05", "to": "j07", "label": "헬스",       "col": "#34d399", "dur": 5.5, "dots": 1, "wt": 1.2, "dy": -5},
+    {"id": "e10r","from": "j07", "to": "j05", "label": None,         "col": "#34d399", "dur": 5.9, "dots": 1, "wt": 1.0, "dy": 5},
+    # ══ Row0 인프라·라우팅 — 양방향 ══════════════════════════════
+    {"id": "e11", "from": "j00", "to": "j01", "label": "인프라",     "col": "#4ade80", "dur": 5.0, "dots": 1, "wt": 1.0, "dy": -5},
+    {"id": "e11r","from": "j01", "to": "j00", "label": None,         "col": "#4ade80", "dur": 5.4, "dots": 1, "wt": 1.0, "dy": 5},
+    {"id": "e12", "from": "j01", "to": "j02", "label": "라우팅",     "col": "#4f90d9", "dur": 2.5, "dots": 1, "wt": 1.0, "dx": -4},
+    {"id": "e12r","from": "j02", "to": "j01", "label": None,         "col": "#4f90d9", "dur": 2.9, "dots": 1, "wt": 1.0, "dx": 4},
+    # ══ J04 스케줄 트리거 (J03 바로 위 = 수직) — 양방향 ══════════
+    {"id": "e13", "from": "j04", "to": "j03", "label": "트리거",     "col": "#fb923c", "dur": 4.5, "dots": 1, "wt": 1.0, "dx": -4},
+    {"id": "e13r","from": "j03", "to": "j04", "label": None,         "col": "#fb923c", "dur": 4.9, "dots": 1, "wt": 1.0, "dx": 4},
     {"id": "e14", "from": "j04", "to": "j02", "label": None,         "col": "#fb923c", "dur": 5.0, "dots": 1, "wt": 1.0,
      "route": "via_lane", "lane_y": 244},
+    {"id": "e14r","from": "j02", "to": "j04", "label": None,         "col": "#fb923c", "dur": 5.4, "dots": 1, "wt": 1.0,
+     "route": "via_lane", "lane_y": 250},
 ]
 
 # ── 범례 — AGENTS 색상에서 자동 파생 ────────────────────────────

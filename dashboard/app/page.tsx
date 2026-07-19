@@ -38,21 +38,21 @@ const SAME_COL_THR = 20;
 function routeEdge(e: PipelineEdge, bnd: Record<string, AgentBounds>): string {
   const f = bnd[e.from], t = bnd[e.to];
   if (!f || !t) return "";
-  const dx = e.dx ?? 0;
+  const dx = e.dx ?? 0, dy = e.dy ?? 0;
   if (e.route === "via_lane" && e.lane_y != null) {
     const ly = e.lane_y;
     return `M${f.cx},${ly < f.cy ? f.top : f.bot} V${ly} H${t.cx} V${ly < t.cy ? t.top : t.bot}`;
   }
-  if (Math.abs(f.cy - t.cy) < SAME_ROW_THR) {  // 같은 행 → 수평
+  if (Math.abs(f.cy - t.cy) < SAME_ROW_THR) {  // 같은 행 → 수평 (dy: 양방향 2줄 분리)
     const [fx, tx] = f.cx < t.cx ? [f.right, t.left] : [f.left, t.right];
-    return `M${fx},${(f.cy + t.cy) / 2} H${tx}`;
+    return `M${fx},${(f.cy + t.cy) / 2 + dy} H${tx}`;
   }
-  if (Math.abs(f.cx - t.cx) < SAME_COL_THR) {  // 같은 열 → 수직
+  if (Math.abs(f.cx - t.cx) < SAME_COL_THR) {  // 같은 열 → 수직 (dx: 양방향 2줄 분리)
     const [fy, ty] = f.cy < t.cy ? [f.bot, t.top] : [f.top, t.bot];
     return `M${f.cx + dx},${fy} V${ty}`;
   }
   const fy = f.cy < t.cy ? f.bot : f.top;       // L-shape fallback
-  return `M${f.cx},${fy} V${f.cy < t.cy ? t.top : t.bot}`;
+  return `M${f.cx + dx},${fy} V${f.cy < t.cy ? t.top : t.bot}`;
 }
 
 function lblPos(e: PipelineEdge, bnd: Record<string, AgentBounds>): { x:number; y:number } | null {
@@ -63,7 +63,7 @@ function lblPos(e: PipelineEdge, bnd: Record<string, AgentBounds>): { x:number; 
     return { x: (f.cx + t.cx) / 2, y: e.lane_y - 11 };
   if (Math.abs(f.cy - t.cy) < SAME_ROW_THR) {
     const [fx, tx] = f.cx < t.cx ? [f.right, t.left] : [f.left, t.right];
-    return { x: (fx + tx) / 2, y: (f.cy + t.cy) / 2 - 11 };
+    return { x: (fx + tx) / 2, y: (f.cy + t.cy) / 2 + (e.dy ?? 0) - 11 };
   }
   if (Math.abs(f.cx - t.cx) < SAME_COL_THR)
     return { x: f.cx + (e.dx ?? 0) + 5, y: (f.cy + t.cy) / 2 - 5 };
@@ -484,47 +484,31 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
 
   // 실시간 파이프라인 활동 — 2초 폴링
   const { data: actData } = useSWR<{active: string[]; flows?: {from:string; to:string; label:string}[]; busy: Record<string, string>}>("/api/pipeline/activity", fetcher, { refreshInterval: 2000 });
-  // ★ 동적 flow (사용자 박제 2026-07-19): 실제 상호작용 쌍(from→to)을 정확히 활성화.
-  //   기존 엣지와 겹치면 그 엣지를 켜고, 미정의 쌍(예: J07→J06)은 노드 사이 선을 동적으로 그린다.
+  // ★ 상호작용 flow (사용자 박제 2026-07-19): 실제 쌍(from→to)의 두 노드를 정확히 활성화.
+  //   연결선이 있는 쌍이면 그 선도 점등. 동적 선은 그리지 않음(선 클러터 방지) — 노드만 정확 점등.
   const activeFlows = useMemo(() => (actData?.flows ?? []).filter(f => f.from && f.to), [actData]);
   const definedPair = useMemo(() => {
     const m = new Map<string, string>();
     for (const e of graphData?.edges ?? []) m.set(`${e.from}>${e.to}`, e.id);
     return m;
   }, [graphData]);
-  const flowEdges = useMemo<PipelineEdge[]>(() =>
-    activeFlows.filter(f => !definedPair.has(`${f.from}>${f.to}`))
-      .map(f => ({ id:`flow:${f.from}>${f.to}`, from:f.from, to:f.to, label:f.label || null, col:"#f43f5e", dur:3.5, dots:1, wt:1.4 })),
-    [activeFlows, definedPair]);
-  const resolvedEdges = useMemo(() => [...baseEdges, ...resolveEdges(flowEdges, bnd)], [baseEdges, flowEdges, bnd]);
+  const resolvedEdges = baseEdges;
   const activeEdgeSet = useMemo(() => {
     const s = new Set<string>(actData?.active ?? []);
     for (const f of activeFlows) {
       const id = definedPair.get(`${f.from}>${f.to}`);
-      s.add(id ?? `flow:${f.from}>${f.to}`);   // 겹치면 기존 엣지, 아니면 동적 선
+      if (id) s.add(id);   // 연결선 있는 쌍만 선 점등
     }
     return s;
   }, [actData, activeFlows, definedPair]);
   const activeAgentSet = useMemo(() => {
     const s = new Set<string>();
-    for (const e of [...(graphData?.edges ?? []), ...flowEdges]) {
-      if (activeEdgeSet.has(e.id)) { s.add(e.from); s.add(e.to); }   // 실제 두 노드 활성화
+    for (const e of graphData?.edges ?? []) {
+      if (activeEdgeSet.has(e.id)) { s.add(e.from); s.add(e.to); }
     }
+    for (const f of activeFlows) { s.add(f.from); s.add(f.to); }   // 미연결 쌍도 두 노드는 활성화
     return s;
-  }, [activeEdgeSet, graphData, flowEdges]);
-  // 동적 flow 배너/로그 표시명 (예: 'flow:j07>j06' → 'J07 GUARD → J06 IMAGE  수정')
-  const flowDesc = useMemo(() => {
-    const names: Record<string, string> = {};
-    for (const a of graphData?.agents ?? []) names[a.id] = a.label;
-    const m: Record<string, string> = {};
-    for (const f of activeFlows) {
-      if (definedPair.has(`${f.from}>${f.to}`)) continue;
-      const fn = names[f.from] ?? f.from.toUpperCase();
-      const tn = names[f.to] ?? f.to.toUpperCase();
-      m[`flow:${f.from}>${f.to}`] = `${fn} → ${tn}${f.label ? "  " + f.label : ""}`;
-    }
-    return m;
-  }, [activeFlows, definedPair, graphData]);
+  }, [activeEdgeSet, graphData, activeFlows]);
   const pipelineActive = useMemo(
     () => ["e1","e2","e3","e5","e6"].some(id => activeEdgeSet.has(id)),
     [activeEdgeSet]
@@ -636,7 +620,7 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
             <span style={{ fontSize:9,fontWeight:800,color:"#4ade80",letterSpacing:1.5 }}>ACTIVE</span>
           </span>
           <span style={{ fontSize:11, color:"#6ee7b7", letterSpacing:0.3 }}>
-            {Array.from(activeEdgeSet).map(id => EDGE_DESC[id] ?? flowDesc[id] ?? id).join("  →  ")}
+            {Array.from(activeEdgeSet).map(id => EDGE_DESC[id] ?? EDGE_DESC[id.replace(/r$/, "")] ?? id).join("  →  ")}
           </span>
         </div>
       )}
