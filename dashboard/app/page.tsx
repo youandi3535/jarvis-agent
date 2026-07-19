@@ -527,19 +527,32 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   //   최단 경로(예: J07→J02→J06)를 통째로 켠다. 새 선·동적 선 없이 "거쳐서 연결된 선".
   const adj = useMemo(() => buildAdj(graphData?.edges ?? []), [graphData]);
   const flowPaths = useMemo(() => activeFlows.map(f => shortestPathEdges(f.from, f.to, adj)), [activeFlows, adj]);
+  // ★ 경로 선 색 = 작업 주체(from) 색 (사용자 박제 2026-07-19): J07 이 J04 수정 → 경로 전체가 J07(빨강).
+  const flowEdgeColor = useMemo(() => {
+    const m = new Map<string, string>();
+    activeFlows.forEach((f, i) => {
+      const col = agents.find(a => a.id === f.from)?.color ?? "#f43f5e";
+      for (const id of flowPaths[i] ?? []) m.set(id, col);
+    });
+    return m;
+  }, [activeFlows, flowPaths, agents]);
   const activeEdgeSet = useMemo(() => {
     const s = new Set<string>(actData?.active ?? []);
-    for (const path of flowPaths) for (const id of path) s.add(id);   // 경유 경로 전체 점등
+    for (const path of flowPaths) for (const id of path) s.add(id);   // 경유 경로 전체 점등(선만)
     return s;
   }, [actData, flowPaths]);
+  // ★ 노드 점등 규칙 (사용자 박제 2026-07-19): 실제 작업 노드만 점등.
+  //   ① 직접 활성 엣지(actData.active=실제 파이프라인 작업)의 양끝 ② flow 는 끝점(from·to)만.
+  //   중간 경유 노드(예: J07→J04 경로의 J02·J01)는 작동 아님 → 점등 안 함(선만 활성).
   const activeAgentSet = useMemo(() => {
     const s = new Set<string>();
+    const direct = new Set(actData?.active ?? []);
     for (const e of graphData?.edges ?? []) {
-      if (activeEdgeSet.has(e.id)) { s.add(e.from); s.add(e.to); }   // 경로 위 노드 전부 점등
+      if (direct.has(e.id)) { s.add(e.from); s.add(e.to); }   // 실제 파이프라인 작업 노드만
     }
-    for (const f of activeFlows) { s.add(f.from); s.add(f.to); }      // 끝점(경로 없을 때도) 보장
+    for (const f of activeFlows) { s.add(f.from); s.add(f.to); }   // flow 끝점만 (중간 경유 제외)
     return s;
-  }, [activeEdgeSet, graphData, activeFlows]);
+  }, [actData, graphData, activeFlows]);
   // ★ 실제 발행 활동(직접 마크된 actData.active)만으로 판정 — 경로점등(가디언 수정 등)이
   //   e3/e6 을 경유해 켜져도 '발행 파이프라인' 박스가 오점등되지 않도록 (검증 2026-07-19).
   const pipelineActive = useMemo(
@@ -567,9 +580,13 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
     j07: `신규 ${fmtNum(ov?.guardian?.new)} · CRIT ${fmtNum(ov?.guardian?.critical)}`,
   };
 
+  // 경로 선을 작업 주체 색으로 덮어씀 (flow edge → from 에이전트 색). 나머지는 원래 색 유지.
+  const styledEdges = useMemo(
+    () => resolvedEdges.map(e => flowEdgeColor.has(e.id) ? { ...e, col: flowEdgeColor.get(e.id)! } : e),
+    [resolvedEdges, flowEdgeColor]);
   // 메모 — 1초 시계/blink 리렌더가 그래프 SVG·라벨을 매초 재빌드하지 않도록 (검증 2026-07-19)
-  const edgeSvg = useMemo(() => buildEdgeSvg(resolvedEdges, activeEdgeSet), [resolvedEdges, activeEdgeSet]);
-  const edgeLabels = useMemo(() => computeEdgeLabels(resolvedEdges), [resolvedEdges]);
+  const edgeSvg = useMemo(() => buildEdgeSvg(styledEdges, activeEdgeSet), [styledEdges, activeEdgeSet]);
+  const edgeLabels = useMemo(() => computeEdgeLabels(styledEdges), [styledEdges]);
 
   return (<>
     <style>{`
