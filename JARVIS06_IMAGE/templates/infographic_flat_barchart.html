@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0:#EDEDED;
+    --hero1:#DCDCDC;
+    --ink:#262626;
+    --a1:#7B9EB3;
+    --a1s:#C08A6E;
+    --a2:#8C9E72;
+    --a2s:#B08CB0;
+    --soft:#ffffff;
+    --muted:#8A8A8A;
+    --eyebrow:#6B6B6B;
+    --grid:#DDDDDD;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    width:1280px;
+    background:var(--soft);
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .canvas{ width:1280px; margin:0 auto; background:var(--soft); padding:56px 96px 64px; }
+
+  .hero-stats:empty,
+  .mini-cards:empty{ display:none; }
+
+  /* ── 차트 슬롯 공통 — 빈 슬롯 자동 은폐 (필수 규칙) ── */
+  section:has([data-jarvis-empty]){ display:none; }
+
+  /* ============================================================
+     0. 히어로 밴드 — 순수 통계 차트 톤 유지를 위해 매우 옅은 중립
+        회색(--hero0) 띠. 제목이 비어있으면 밴드째로 사라져 캔버스가
+        곧바로 차트로 시작(원본처럼 배너 없는 플레인 차트 룩 유지).
+     ============================================================ */
+  .hero-band{
+    width:100%;
+    background:var(--hero0);
+    border-bottom:1px solid var(--hero1);
+    padding:28px 96px 24px;
+  }
+  .hero-band:not(:has(.title:not(:empty))){ display:none; }
+
+  .eyebrow{
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 8px;
+  }
+  .eyebrow:empty{ display:none; margin:0; }
+
+  .title{
+    font-size:34px;
+    font-weight:900;
+    line-height:1.25;
+    letter-spacing:.005em;
+    color:var(--ink);
+  }
+  .title:empty{ display:none; }
+
+  .head{ margin-bottom:44px; }
+  .head:not(:has(.subtitle:not(:empty))):not(:has(.hero-stats:not(:empty))){ display:none; margin:0; }
+
+  .subtitle{
+    font-size:16px;
+    font-weight:400;
+    line-height:1.6;
+    color:var(--muted);
+    max-width:920px;
+    margin-top:14px;
+  }
+  .subtitle:empty{ display:none; margin:0; }
+
+  .hero-stats{
+    display:flex;
+    flex-wrap:wrap;
+    gap:36px;
+    margin-top:20px;
+  }
+  .hero-stats:empty{ display:none; margin:0; }
+  .hero-stats .stat{ display:flex; flex-direction:column; gap:4px; }
+  .hero-stats .stat .num{ font-size:24px; font-weight:800; color:var(--ink); line-height:1; }
+  .hero-stats .stat .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ============================================================
+     1. 막대 차트 그룹 (CHART_1~3) — 카드·배경박스·그림자·모서리라운드
+        전혀 없는 완전 플랫 스타일. 좌측 카테고리 라벨(고정폭) +
+        얇은 검은 축선(--ink) + 우측으로 뻗는 단색 막대 + 막대 끝
+        회색(--muted) 수치 라벨의 단일 열 구조. 그리드·점무늬 등
+        배경 텍스처 절대 미사용.
+
+     주입 마크업 예시 (막대 행 개수만큼 반복):
+       <div class="bar-chart">
+         <div class="bar-row">
+           <span class="bar-label">Europe</span>
+           <div class="bar-visual">
+             <span class="bar-fill bar-fill--1" style="width:62%"></span>
+             <span class="bar-value">79.1 years</span>
+           </div>
+         </div>
+         <div class="bar-row">
+           <span class="bar-label">Americas</span>
+           <div class="bar-visual">
+             <span class="bar-fill bar-fill--2" style="width:54%"></span>
+             <span class="bar-value">77.3 years</span>
+           </div>
+         </div>
+         <!-- bar-fill--3 / bar-fill--4 로 나머지 카테고리 반복,
+              width % 은 최댓값 기준 상대 비율로 계산해 주입 -->
+       </div>
+     ------------------------------------------------------------- */
+  .bar-chart{ position:relative; padding-left:168px; }
+  .bar-chart::before{
+    content:'';
+    position:absolute;
+    left:168px;
+    top:0;
+    bottom:0;
+    width:1px;
+    background:var(--ink);
+  }
+
+  .bar-row{ display:flex; align-items:center; min-height:44px; margin-bottom:30px; }
+  .bar-row:last-child{ margin-bottom:0; }
+
+  .bar-label{
+    position:absolute;
+    left:0;
+    width:152px;
+    text-align:right;
+    font-size:16px;
+    font-weight:700;
+    color:var(--ink);
+    white-space:nowrap;
+  }
+
+  .bar-visual{
+    display:flex;
+    align-items:center;
+    width:100%;
+    padding-left:20px;
+  }
+
+  .bar-fill{
+    display:block;
+    height:26px;
+    flex-shrink:0;
+    border-radius:0;
+  }
+  .bar-fill--1{ background:var(--a1); }
+  .bar-fill--2{ background:var(--a1s); }
+  .bar-fill--3{ background:var(--a2); }
+  .bar-fill--4{ background:var(--a2s); }
+
+  .bar-value{
+    margin-left:14px;
+    font-size:16px;
+    font-weight:500;
+    color:var(--muted);
+    white-space:nowrap;
+  }
+
+  .chart-slot + .chart-slot{ margin-top:48px; }
+
+  /* ============================================================
+     2. 하단 범례/메모 리스트 (MINI_CARDS) — 카드 없는 텍스트 행.
+        미사용 시 자동 은폐.
+
+     주입 마크업 예시(반복):
+       <div class="row">
+         <span class="dot dot--a1"></span>
+         <span class="txt">범례 설명</span>
+       </div>
+     ------------------------------------------------------------- */
+  .mini-cards{ display:flex; flex-wrap:wrap; gap:12px 32px; margin-top:44px; }
+  .mini-cards:empty{ display:none; margin:0; }
+  .mini-cards .row{ display:flex; align-items:center; gap:10px; }
+  .mini-cards .row .dot{ width:9px; height:9px; flex-shrink:0; }
+  .mini-cards .row .dot--a1{ background:var(--a1); }
+  .mini-cards .row .dot--a1s{ background:var(--a1s); }
+  .mini-cards .row .dot--a2{ background:var(--a2); }
+  .mini-cards .row .dot--a2s{ background:var(--a2s); }
+  .mini-cards .row .txt{ font-size:14px; color:var(--muted); }
+
+  .foot{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:24px;
+    margin-top:44px;
+    padding-top:18px;
+    border-top:1px solid var(--grid);
+  }
+  .foot:not(:has(.source:not(:empty))):not(:has(.brand:not(:empty))){ display:none; }
+  .source{ font-size:13px; color:var(--muted); }
+  .source:empty{ display:none; }
+  .brand{ font-size:13px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--eyebrow); }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+
+  <div class="hero-band">
+    <p class="eyebrow">{EYEBROW}</p>
+    <h1 class="title">{TITLE}</h1>
+  </div>
+
+  <div class="canvas">
+
+    <header class="head">
+      <p class="subtitle">{SUBTITLE}</p>
+      <div class="hero-stats">{HERO_STATS}</div>
+    </header>
+
+    <section class="chart-slot">{CHART_1}</section>
+    <section class="chart-slot">{CHART_2}</section>
+    <section class="chart-slot">{CHART_3}</section>
+
+    <div class="mini-cards">{MINI_CARDS}</div>
+
+    <footer class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </footer>
+
+  </div>
+
+</body>
+</html>

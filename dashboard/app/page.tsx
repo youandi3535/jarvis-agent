@@ -38,21 +38,21 @@ const SAME_COL_THR = 20;
 function routeEdge(e: PipelineEdge, bnd: Record<string, AgentBounds>): string {
   const f = bnd[e.from], t = bnd[e.to];
   if (!f || !t) return "";
-  const dx = e.dx ?? 0;
+  const dx = e.dx ?? 0, dy = e.dy ?? 0;
   if (e.route === "via_lane" && e.lane_y != null) {
     const ly = e.lane_y;
     return `M${f.cx},${ly < f.cy ? f.top : f.bot} V${ly} H${t.cx} V${ly < t.cy ? t.top : t.bot}`;
   }
-  if (Math.abs(f.cy - t.cy) < SAME_ROW_THR) {  // 같은 행 → 수평
+  if (Math.abs(f.cy - t.cy) < SAME_ROW_THR) {  // 같은 행 → 수평 (dy: 양방향 2줄 분리)
     const [fx, tx] = f.cx < t.cx ? [f.right, t.left] : [f.left, t.right];
-    return `M${fx},${(f.cy + t.cy) / 2} H${tx}`;
+    return `M${fx},${(f.cy + t.cy) / 2 + dy} H${tx}`;
   }
-  if (Math.abs(f.cx - t.cx) < SAME_COL_THR) {  // 같은 열 → 수직
+  if (Math.abs(f.cx - t.cx) < SAME_COL_THR) {  // 같은 열 → 수직 (dx: 양방향 2줄 분리)
     const [fy, ty] = f.cy < t.cy ? [f.bot, t.top] : [f.top, t.bot];
     return `M${f.cx + dx},${fy} V${ty}`;
   }
   const fy = f.cy < t.cy ? f.bot : f.top;       // L-shape fallback
-  return `M${f.cx},${fy} V${f.cy < t.cy ? t.top : t.bot}`;
+  return `M${f.cx + dx},${fy} V${f.cy < t.cy ? t.top : t.bot}`;
 }
 
 function lblPos(e: PipelineEdge, bnd: Record<string, AgentBounds>): { x:number; y:number } | null {
@@ -63,7 +63,7 @@ function lblPos(e: PipelineEdge, bnd: Record<string, AgentBounds>): { x:number; 
     return { x: (f.cx + t.cx) / 2, y: e.lane_y - 11 };
   if (Math.abs(f.cy - t.cy) < SAME_ROW_THR) {
     const [fx, tx] = f.cx < t.cx ? [f.right, t.left] : [f.left, t.right];
-    return { x: (fx + tx) / 2, y: (f.cy + t.cy) / 2 - 11 };
+    return { x: (fx + tx) / 2, y: (f.cy + t.cy) / 2 + (e.dy ?? 0) - 11 };
   }
   if (Math.abs(f.cx - t.cx) < SAME_COL_THR)
     return { x: f.cx + (e.dx ?? 0) + 5, y: (f.cy + t.cy) / 2 - 5 };
@@ -79,6 +79,35 @@ function resolveEdges(raw: PipelineEdge[], bnd: Record<string, AgentBounds>): Co
       lbl: (e.label && pos) ? { ...pos, text: e.label } : undefined,
     };
   });
+}
+
+// ── 경로(path) 탐색 — "거쳐서 연결된 게 선이다" ────────────────────
+// 상호작용 쌍(예: J07→J06)은 기존 양방향 선을 따라 최단 경로를 통째로 켠다.
+type AdjMap = Map<string, { to: string; edge: string }[]>;
+function buildAdj(edges: PipelineEdge[]): AdjMap {
+  const m: AdjMap = new Map();
+  for (const e of edges) {
+    if (!m.has(e.from)) m.set(e.from, []);
+    m.get(e.from)!.push({ to: e.to, edge: e.id });
+  }
+  return m;
+}
+// from→to 최단 경로의 엣지 id 배열 (BFS). 직결(1홉)·다홉 모두 처리. 경로 없으면 []
+function shortestPathEdges(from: string, to: string, adj: AdjMap): string[] {
+  if (from === to) return [];
+  const q: [string, string[]][] = [[from, []]];
+  const seen = new Set<string>([from]);
+  while (q.length) {
+    const [node, edges] = q.shift()!;
+    for (const { to: nxt, edge } of adj.get(node) ?? []) {
+      if (seen.has(nxt)) continue;
+      const path = [...edges, edge];
+      if (nxt === to) return path;
+      seen.add(nxt);
+      q.push([nxt, path]);
+    }
+  }
+  return [];
 }
 
 // ═══════════════════════════════════════════════
@@ -373,13 +402,19 @@ function computeEdgeLabels(edges: ComputedEdge[]): EdgeLabel[] {
 // ═══════════════════════════════════════════════
 // SVG 연결선 + 흐름 점 — 직선(orthogonal) 전용
 // ═══════════════════════════════════════════════
-// 엣지 설명 — 실시간 활동 배너용
-const EDGE_DESC: Record<string, string> = {
-  e1:"J03→J09 선수집", e2:"J09→J02 데이터 전달", e3:"J02→J06 대본 전달",
-  e5:"J03→J02 topic_pack", e6:"J06→J08 발행 중", e7:"J02→J07 오류 보고",
-  e8:"J07→J02 코드 수정", e9:"J09→J05 수집 완료", e10:"J05→J07 헬스 리포트",
-  e11:"J00→J01 인프라", e12:"J01→J02 라우팅", e13:"J04→J03 트리거", e14:"J04→J02 트리거",
+// 엣지 행위 라벨 — base id(방향 무관) 기준. 방향(J0X→J0Y)은 라이브 그래프 from/to 에서 파생.
+const EDGE_ACTION: Record<string, string> = {
+  e1:"선수집", e2:"데이터 전달", e3:"대본 전달", e6:"발행 중",
+  e7:"오류 보고", e8:"코드 수정", e9:"수집 완료", e10:"헬스 리포트",
+  e11:"인프라", e12:"라우팅", e13:"트리거", e15:"스케줄",
 };
+// 엣지 id → "J07→J06 코드 수정" (라이브 그래프의 실제 from/to 사용 → 방향·토폴로지 항상 정합)
+function edgeDescFrom(id: string, edges: PipelineEdge[]): string {
+  const e = edges.find(x => x.id === id);
+  if (!e) return id;
+  const act = EDGE_ACTION[id.replace(/r$/, "")] ?? "";
+  return `${e.from.toUpperCase()}→${e.to.toUpperCase()}${act ? " " + act : ""}`;
+}
 
 function buildEdgeSvg(edges: ComputedEdge[], activeEdgeIds: Set<string>): string {
   const filters = edges.flatMap(e => {
@@ -472,7 +507,7 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   const { data: graphData } = useSWR<GraphData>("/api/graph", fetcher, { refreshInterval: 60000 });
   const agents = useMemo<AgentDef[]>(() => graphData?.agents ?? [], [graphData]);
   const bnd = useMemo(() => buildBounds(agents), [agents]);
-  const resolvedEdges = useMemo(() => resolveEdges(graphData?.edges ?? [], bnd), [graphData, bnd]);
+  const baseEdges = useMemo(() => resolveEdges(graphData?.edges ?? [], bnd), [graphData, bnd]);
 
   // 캔버스 크기·파이프라인 위치 — agents 에서 자동 파생 (하드코딩 금지)
   const W  = graphData?.layout?.W  ?? 1130;
@@ -483,18 +518,46 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   const ROW2_Y = useMemo(() => agents.find(a => a.id === "j05")?.y ?? 462, [agents]);
 
   // 실시간 파이프라인 활동 — 2초 폴링
-  const { data: actData } = useSWR<{active: string[]; busy: Record<string, string>}>("/api/pipeline/activity", fetcher, { refreshInterval: 2000 });
-  const activeEdgeSet = useMemo(() => new Set<string>(actData?.active ?? []), [actData]);
+  const { data: actData } = useSWR<{active: string[]; flows?: {from:string; to:string; label:string}[]; busy: Record<string, string>}>("/api/pipeline/activity", fetcher, { refreshInterval: 2000 });
+  // ★ 상호작용 flow (사용자 박제 2026-07-19): 실제 쌍(from→to)의 두 노드를 정확히 활성화.
+  //   연결선이 있는 쌍이면 그 선도 점등. 동적 선은 그리지 않음(선 클러터 방지) — 노드만 정확 점등.
+  const activeFlows = useMemo(() => (actData?.flows ?? []).filter(f => f.from && f.to), [actData]);
+  const resolvedEdges = baseEdges;
+  // ★ 경로 점등 (사용자 박제 2026-07-19): 상호작용 쌍은 기존 양방향 선을 따라
+  //   최단 경로(예: J07→J02→J06)를 통째로 켠다. 새 선·동적 선 없이 "거쳐서 연결된 선".
+  const adj = useMemo(() => buildAdj(graphData?.edges ?? []), [graphData]);
+  const flowPaths = useMemo(() => activeFlows.map(f => shortestPathEdges(f.from, f.to, adj)), [activeFlows, adj]);
+  // ★ 경로 선 색 = 작업 주체(from) 색 (사용자 박제 2026-07-19): J07 이 J04 수정 → 경로 전체가 J07(빨강).
+  const flowEdgeColor = useMemo(() => {
+    const m = new Map<string, string>();
+    activeFlows.forEach((f, i) => {
+      const col = agents.find(a => a.id === f.from)?.color ?? "#f43f5e";
+      for (const id of flowPaths[i] ?? []) m.set(id, col);
+    });
+    return m;
+  }, [activeFlows, flowPaths, agents]);
+  const activeEdgeSet = useMemo(() => {
+    const s = new Set<string>(actData?.active ?? []);
+    for (const path of flowPaths) for (const id of path) s.add(id);   // 경유 경로 전체 점등(선만)
+    return s;
+  }, [actData, flowPaths]);
+  // ★ 노드 점등 규칙 (사용자 박제 2026-07-19): 실제 작업 노드만 점등.
+  //   ① 직접 활성 엣지(actData.active=실제 파이프라인 작업)의 양끝 ② flow 는 끝점(from·to)만.
+  //   중간 경유 노드(예: J07→J04 경로의 J02·J01)는 작동 아님 → 점등 안 함(선만 활성).
   const activeAgentSet = useMemo(() => {
     const s = new Set<string>();
+    const direct = new Set(actData?.active ?? []);
     for (const e of graphData?.edges ?? []) {
-      if (activeEdgeSet.has(e.id)) { s.add(e.from); s.add(e.to); }
+      if (direct.has(e.id)) { s.add(e.from); s.add(e.to); }   // 실제 파이프라인 작업 노드만
     }
+    for (const f of activeFlows) { s.add(f.from); s.add(f.to); }   // flow 끝점만 (중간 경유 제외)
     return s;
-  }, [activeEdgeSet, graphData]);
+  }, [actData, graphData, activeFlows]);
+  // ★ 실제 발행 활동(직접 마크된 actData.active)만으로 판정 — 경로점등(가디언 수정 등)이
+  //   e3/e6 을 경유해 켜져도 '발행 파이프라인' 박스가 오점등되지 않도록 (검증 2026-07-19).
   const pipelineActive = useMemo(
-    () => ["e1","e2","e3","e5","e6"].some(id => activeEdgeSet.has(id)),
-    [activeEdgeSet]
+    () => ["e1","e2","e3","e6"].some(id => (actData?.active ?? []).includes(id)),
+    [actData]
   );
   const busyAgentMap = useMemo(() => actData?.busy ?? {}, [actData]);
 
@@ -517,8 +580,13 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
     j07: `신규 ${fmtNum(ov?.guardian?.new)} · CRIT ${fmtNum(ov?.guardian?.critical)}`,
   };
 
-  const edgeSvg = buildEdgeSvg(resolvedEdges, activeEdgeSet);
-  const edgeLabels = computeEdgeLabels(resolvedEdges);
+  // 경로 선을 작업 주체 색으로 덮어씀 (flow edge → from 에이전트 색). 나머지는 원래 색 유지.
+  const styledEdges = useMemo(
+    () => resolvedEdges.map(e => flowEdgeColor.has(e.id) ? { ...e, col: flowEdgeColor.get(e.id)! } : e),
+    [resolvedEdges, flowEdgeColor]);
+  // 메모 — 1초 시계/blink 리렌더가 그래프 SVG·라벨을 매초 재빌드하지 않도록 (검증 2026-07-19)
+  const edgeSvg = useMemo(() => buildEdgeSvg(styledEdges, activeEdgeSet), [styledEdges, activeEdgeSet]);
+  const edgeLabels = useMemo(() => computeEdgeLabels(styledEdges), [styledEdges]);
 
   return (<>
     <style>{`
@@ -598,12 +666,12 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
             <span style={{
               width:7, height:7, borderRadius:"50%", background:"#4ade80",
               boxShadow:"0 0 8px #4ade80", display:"inline-block",
-              animation:"pulse 0.8s ease-in-out infinite",
+              animation:"busy-led-pulse 0.8s ease-in-out infinite",
             }}/>
             <span style={{ fontSize:9,fontWeight:800,color:"#4ade80",letterSpacing:1.5 }}>ACTIVE</span>
           </span>
           <span style={{ fontSize:11, color:"#6ee7b7", letterSpacing:0.3 }}>
-            {Array.from(activeEdgeSet).map(id => EDGE_DESC[id] ?? id).join("  →  ")}
+            {Array.from(activeEdgeSet).map(id => edgeDescFrom(id, graphData?.edges ?? [])).join("  →  ")}
           </span>
         </div>
       )}
@@ -629,17 +697,19 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
             position:"absolute",
             left:J03_X, top:ROW1_Y - 8,
             width:J08_X + CARD_W - J03_X, height:CARD_H + 16,
-            background:pipelineActive ? "rgba(74,222,128,0.04)" : "rgba(255,255,255,0.015)",
-            border:`1px solid ${pipelineActive ? "rgba(74,222,128,0.14)" : "rgba(255,255,255,0.04)"}`,
+            background:pipelineActive ? "rgba(255,255,255,0.13)" : "rgba(255,255,255,0.085)",
+            border:`1px solid ${pipelineActive ? "rgba(74,222,128,0.36)" : "rgba(255,255,255,0.20)"}`,
             borderRadius:16,
-            boxShadow:pipelineActive ? "0 0 50px rgba(74,222,128,0.07) inset" : "none",
+            boxShadow:pipelineActive ? "0 0 50px rgba(255,255,255,0.12) inset" : "0 0 28px rgba(255,255,255,0.07) inset",
             transition:"background 0.8s ease, border 0.8s ease, box-shadow 0.8s ease",
           }}/>
-          {/* 파이프라인 라벨 */}
+          {/* 파이프라인 라벨 — 점선 제거, 박스 위 빈 공간(트리거선 오른쪽)으로 이동해 겹침 방지 */}
           <div style={{
-            position:"absolute", left:J03_X, top:ROW1_Y - 22,
-            fontSize:9, fontWeight:700, color:"#2d3d55", letterSpacing:1.5,
-          }}>— 발행 파이프라인 ——————————————————————————————————————————————</div>
+            position:"absolute", left:J03_X + 210, top:ROW1_Y - 34,
+            fontSize:10, fontWeight:800, color:"#4ade80", letterSpacing:1.5,
+            background:"rgba(74,222,128,0.12)", padding:"3px 12px", borderRadius:7,
+            border:"1px solid rgba(74,222,128,0.32)",
+          }}>발행 파이프라인</div>
 
           {/* 연결선 SVG */}
           <svg

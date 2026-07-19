@@ -67,37 +67,34 @@ def _keyword(draft: Any, override: str = "") -> str:
 # ═══════════════════════════════════════════════════════
 
 def _a1(s: int) -> float:  # engagement 7점
-    if s >= 85: return 7.0
-    if s >= 75: return 5.0
-    if s >= 65: return 3.0
-    if s >= 55: return 1.0
-    return 0.0
+    # 0~100 LLM 점수 → 0.5 단위 graded (50→0, 85+→7). 기존 계단 앵커(55/65/75/85) 재현 + 사이 세분. max 7 보존.
+    frac = (s - 50) / 35.0
+    frac = 0.0 if frac < 0.0 else (1.0 if frac > 1.0 else frac)
+    return round(frac * 7.0 * 2) / 2
 
 def _a2(s: int) -> float:  # usefulness 5점
-    if s >= 85: return 5.0
-    if s >= 75: return 4.0
-    if s >= 65: return 2.5
-    if s >= 55: return 1.0
-    return 0.0
+    # 0~100 LLM 점수 → 0.5 단위 graded (45→0, 85+→5). 기존 계단 앵커(55/65/75/85) 재현 + 사이 세분. max 5 보존.
+    frac = (s - 45) / 40.0
+    frac = 0.0 if frac < 0.0 else (1.0 if frac > 1.0 else frac)
+    return round(frac * 5.0 * 2) / 2
 
 def _a3(s: int) -> float:  # originality 4점
-    if s >= 80: return 4.0
-    if s >= 70: return 3.0
-    if s >= 60: return 2.0
-    if s >= 50: return 1.0
-    return 0.0
+    # 0~100 LLM 점수 → 0.5 단위 graded (40→0, 80+→4). 기존 계단 앵커(50/60/70/80) 재현 + 사이 세분. max 4 보존.
+    frac = (s - 40) / 40.0
+    frac = 0.0 if frac < 0.0 else (1.0 if frac > 1.0 else frac)
+    return round(frac * 4.0 * 2) / 2
 
 def _a4(s: int) -> float:  # structure 3점
-    if s >= 80: return 3.0
-    if s >= 70: return 2.0
-    if s >= 60: return 1.0
-    return 0.0
+    # 0~100 LLM 점수 → 0.5 단위 graded (50→0, 80+→3). 기존 계단 앵커(60/70/80) 재현 + 사이 세분. max 3 보존.
+    frac = (s - 50) / 30.0
+    frac = 0.0 if frac < 0.0 else (1.0 if frac > 1.0 else frac)
+    return round(frac * 3.0 * 2) / 2
 
 def _a5(s: int) -> float:  # title_hook 1점
-    if s >= 80: return 1.0
-    if s >= 65: return 0.7
-    if s >= 50: return 0.3
-    return 0.0
+    # 0~100 LLM 점수 → 0.5 단위 graded (50→0, 80+→1). max 1 이므로 achievable set = {0, 0.5, 1.0}. max 1 보존.
+    frac = (s - 50) / 30.0
+    frac = 0.0 if frac < 0.0 else (1.0 if frac > 1.0 else frac)
+    return round(frac * 1.0 * 2) / 2
 
 def score_section_a(llm: dict) -> dict:
     llm = llm or {}
@@ -138,31 +135,35 @@ def _b1_intro(html: str) -> float:
     ai_open = bool(_AI_OPEN.search(first_text))
     has_img = bool(re.search(r'<img|<figure', html[:len("".join(paras[:4])) * 10], re.I))
 
-    if ai_open: return max(0.0, (sents - 1) * 0.5)
-    if sents >= 4: return 5.0 if has_img else 4.0
-    if sents >= 3: return 2.0
-    if sents >= 2: return 1.0
-    return 0.0
+    # AI 자동생성형 도입 위반 시: 문장수 기반 부분점수만 (구조 보너스 몰수)
+    if ai_open:
+        return round(max(0.0, (min(sents, 4) - 1) * 0.5) * 2) / 2
+    # 정상: 4문장 목표 근접도(문장당 1점, 상한 4.0) + 도입부 이미지 구조 1점
+    score = min(4.0, sents * 1.0) + (1.0 if has_img else 0.0)
+    return round(score * 2) / 2
 
 
 def _b2_paragraphs(html: str) -> float:
     """B2: 문단 최대 2문장 (3점)"""
     paras = re.findall(r'<p[^>]*>(.*?)</p>', html, re.DOTALL)
     v = sum(1 for p in paras if _sentences(_strip(p)) > 2)
-    return 3.0 if v == 0 else (1.5 if v <= 2 else 0.0)
+    # 2문장 초과 문단 위반 카운트: 위반당 0.5 감점 (하한 0)
+    return round(max(0.0, 3.0 - v * 0.5) * 2) / 2
 
 
 def _b5_factuality(issues: list) -> float:
     """B5: 수치 진실성 (5점) — 사실성 이슈 수로 역산"""
     n = sum(1 for i in (issues or []) if i.get("kind") == "factuality")
-    return 5.0 if n == 0 else (2.5 if n == 1 else 0.0)
+    # 사실성 이슈 위반 카운트: 위반당 1.5 감점 (하한 0)
+    return round(max(0.0, 5.0 - n * 1.5) * 2) / 2
 
 
 def _b7_empty_headers(html: str) -> float:
     """B7: 빈 헤더 없음 (2점)"""
     headers = re.findall(r'<h[1-6][^>]*>(.*?)</h[1-6]>', html, re.DOTALL)
     empty = sum(1 for h in headers if not _strip(h).strip())
-    return 2.0 if empty == 0 else (1.0 if empty == 1 else 0.0)
+    # 빈 헤더 위반 카운트: 위반당 0.5 감점 (하한 0)
+    return round(max(0.0, 2.0 - empty * 0.5) * 2) / 2
 
 
 def _b8_img_consecutive(html: str) -> float:
@@ -171,14 +172,16 @@ def _b8_img_consecutive(html: str) -> float:
         r'</(?:figure|img)>\s*(?:<[^/ph][^>]*>\s*)*<(?:figure|img)',
         html, re.DOTALL
     ))
-    return 2.0 if n == 0 else (1.0 if n == 1 else 0.0)
+    # 이미지 연속 위반 카운트: 위반당 0.5 감점 (하한 0)
+    return round(max(0.0, 2.0 - n * 0.5) * 2) / 2
 
 
 def _b9_para_consecutive(html: str) -> float:
     """B9: 문단 3개 이상 연속 없음 (2점)"""
     segs = re.split(r'<(?:figure|img|table)[^>]*(?:/>|>.*?</(?:figure|table)>)', html, flags=re.DOTALL)
     v = sum(1 for seg in segs if len(re.findall(r'<p[^>]*>.*?</p>', seg, re.DOTALL)) >= 3)
-    return 2.0 if v == 0 else (1.0 if v == 1 else 0.0)
+    # 문단 3개+ 연속 위반 카운트: 위반당 0.5 감점 (하한 0)
+    return round(max(0.0, 2.0 - v * 0.5) * 2) / 2
 
 
 def _b10_disclaimer(html: str) -> float:
@@ -186,15 +189,15 @@ def _b10_disclaimer(html: str) -> float:
     tail = _strip(html)[-600:]
     if not _DISCLAIM.search(tail): return 0.0
     sents = _sentences(tail)
-    has3 = all([
+    elems = sum([
         bool(re.search(r'참고|정보', tail)),
         bool(re.search(r'권유.*아님|매수.*매도.*아님|아닙니다', tail)),
         bool(re.search(r'책임.*본인|본인.*책임|본인.*판단', tail)),
     ])
-    if sents >= 2 and has3: return 3.0
-    if sents >= 2: return 2.0
-    if sents >= 1: return 1.0
-    return 0.5
+    # 면책 완비도: 기본 0.5(문구 존재) + 3요소 각 0.5 + 문장충분도(2문장+ 1.0 / 1문장 0.5)
+    sent_score = 1.0 if sents >= 2 else (0.5 if sents >= 1 else 0.0)
+    score = 0.5 + elems * 0.5 + sent_score
+    return round(min(3.0, score) * 2) / 2
 
 
 def _b11_tone(html: str, plat: str) -> float:
@@ -203,29 +206,43 @@ def _b11_tone(html: str, plat: str) -> float:
     if plat == "naver":
         hayeo = len(re.findall(r'해요|이에요|였어요|하네요|겠어요|드려요|거에요|인데요', text))
         hamnida = len(re.findall(r'습니다[^만]|었습니다|겠습니다', text))
-        return 2.0 if hayeo > hamnida and hayeo >= 5 else (1.0 if hayeo >= 3 else 0.0)
+        # 해요체 우세도(우세 1.0/동률 0.5) + 빈도 충분도(5개+ 1.0/3개+ 0.5)
+        dom = 1.0 if hayeo > hamnida else (0.5 if hayeo == hamnida else 0.0)
+        cnt = 1.0 if hayeo >= 5 else (0.5 if hayeo >= 3 else 0.0)
+        return round(min(2.0, dom + cnt) * 2) / 2
     if plat == "tistory":
         total = len(re.findall(r'습니다|이에요|해요|됩니다|합니다', text))
-        return 2.0 if total >= 5 else 1.0
+        # 어미 빈도 근접도: 5개+ 2.0, 하한 1.0 (문구 존재 보장)
+        return round(min(2.0, max(1.0, total * 0.4)) * 2) / 2
     return 1.0
 
 
 def _b16_image_count(html: str) -> float:
     """B16: 이미지 최소 5장(썸네일 제외) (3점)"""
     n = max(0, len(re.findall(r'<(?:img|figure)[^>]*>', html, re.I)) - 1)
-    return 3.0 if n >= 5 else (2.0 if n == 4 else (1.0 if n == 3 else 0.0))
+    # 이미지 장수 목표(5장) 근접도: 5+=3.0 4=2.5 3=2.0 2=1.0 1=0.5 0=0.0
+    if n >= 5: return 3.0
+    return {4: 2.5, 3: 2.0, 2: 1.0, 1: 0.5}.get(n, 0.0)
 
 
 def _b17_body_length(html: str) -> float:
     """B17: 본문 분량 1,500자+ (3점)"""
     n = _korean(html)
-    return 3.0 if n >= 2000 else (2.0 if n >= 1500 else (1.0 if n >= 1200 else 0.0))
+    # 본문 분량 목표(2000자) 근접도 0.5 단위
+    if n >= 2000: return 3.0
+    if n >= 1750: return 2.5
+    if n >= 1500: return 2.0
+    if n >= 1350: return 1.5
+    if n >= 1200: return 1.0
+    if n >= 1000: return 0.5
+    return 0.0
 
 
 def _b18_spacing(html: str) -> float:
     """B18: 여백 규정 준수 (2점)"""
     excess = len(re.findall(r'<p[^>]*>&nbsp;</p>\s*<p[^>]*>&nbsp;</p>', html))
-    return 2.0 if excess == 0 else (1.0 if excess <= 2 else 0.0)
+    # 연속 빈문단(여백 초과) 위반 카운트: 위반당 0.5 감점 (하한 0)
+    return round(max(0.0, 2.0 - excess * 0.5) * 2) / 2
 
 
 def _b19_chart(draft: Any) -> float:
@@ -240,7 +257,8 @@ def _b19_chart(draft: Any) -> float:
                     prov = lookup_provenance(p)
                     if prov and prov.get("verified") is False:
                         unverified += 1
-        return 2.0 if unverified == 0 else (1.0 if unverified == 1 else 0.0)
+        # 미검증(verified=False) 차트 위반 카운트: 위반당 0.5 감점 (하한 0)
+        return round(max(0.0, 2.0 - unverified * 0.5) * 2) / 2
     except Exception:
         return 2.0
 
@@ -248,9 +266,10 @@ def _b19_chart(draft: Any) -> float:
 def _b21_consistency(html: str) -> float:
     """B21: 데이터 일관성 (2점)"""
     text = _strip(html)
-    v1 = bool(_UNIT_MIX.search(text))
-    v2 = bool(re.search(r'약\s*\d+[%원배]|대략\s*\d+', text))
-    return 2.0 if not (v1 or v2) else (1.0 if not (v1 and v2) else 0.0)
+    v1 = len(_UNIT_MIX.findall(text))
+    v2 = len(re.findall(r'약\s*\d+[%원배]|대략\s*\d+', text))
+    # 단위혼용·근사표현 위반 카운트 합: 위반당 0.5 감점 (하한 0)
+    return round(max(0.0, 2.0 - (v1 + v2) * 0.5) * 2) / 2
 
 
 def _b22_tags(draft: Any) -> float:
@@ -259,7 +278,8 @@ def _b22_tags(draft: Any) -> float:
     if not ts: return 2.0
     bad = re.compile(r'[^가-힣a-zA-Z0-9]')
     v = sum(1 for t in ts if bad.search(str(t)))
-    return 2.0 if v == 0 else (1.0 if v <= 2 else 0.0)
+    # 특수기호 포함 태그 위반 카운트: 위반당 0.5 감점 (하한 0)
+    return round(max(0.0, 2.0 - v * 0.5) * 2) / 2
 
 
 def score_section_b(draft: Any, platform: str = "", factuality_issues: list = None) -> dict:
@@ -271,27 +291,27 @@ def score_section_b(draft: Any, platform: str = "", factuality_issues: list = No
     items = {
         "B1_intro":         {"score": _b1_intro(html),              "max": 5, "name": "도입부 4문장+구조+AI금지"},
         "B2_paragraphs":    {"score": _b2_paragraphs(html),         "max": 3, "name": "문단 최대 2문장"},
-        "B3_differentiate": {"score": 2.0,                          "max": 2, "name": "플랫폼 차별화(프로세스)"},
-        "B4_dynamic":       {"score": 2.0,                          "max": 2, "name": "동적 생성(프로세스)"},
+        "B3_differentiate": {"score": 2.0,                          "max": 2, "name": "플랫폼 차별화(프로세스)"},  # 근거: 단일 draft로 플랫폼 간 차별화 관측 불가(양쪽 대본 비교 필요) → 프로세스 보장, max 유지(rule 3)
+        "B4_dynamic":       {"score": 2.0,                          "max": 2, "name": "동적 생성(프로세스)"},  # 근거: LLM 매 호출 동적생성 여부는 결정론 HTML 분석으로 관측 불가 → 프로세스 보장, max 유지(rule 3)
         "B5_factuality":    {"score": _b5_factuality(fi),           "max": 5, "name": "수치 진실성"},
-        "B6_incomplete":    {"score": 0.0 if _INCOMPLETE.search(_strip(html)) else 1.0, "max": 1, "name": "미완성 표현 없음"},
+        "B6_incomplete":    {"score": round(max(0.0, 1.0 - len(_INCOMPLETE.findall(_strip(html))) * 0.5) * 2) / 2, "max": 1, "name": "미완성 표현 없음"},
         "B7_empty_hdr":     {"score": _b7_empty_headers(html),      "max": 2, "name": "빈 헤더 없음"},
         "B8_img_consec":    {"score": _b8_img_consecutive(html),    "max": 2, "name": "이미지 연속 없음"},
         "B9_para_consec":   {"score": _b9_para_consecutive(html),   "max": 2, "name": "문단 3개 연속 없음"},
         "B10_disclaimer":   {"score": _b10_disclaimer(html),        "max": 3, "name": "면책 문구 완비"},
         "B11_tone":         {"score": _b11_tone(html, plat),        "max": 2, "name": "플랫폼 어조"},
-        "B12_forbidden":    {"score": 0.0 if (_FORBIDDEN.search(_strip(html)) or _EMOJI.search(_strip(html))) else 1.0, "max": 1, "name": "금지어·이모지 없음"},
-        "B13_llm_dir":      {"score": 0.0 if _LLM_DIR.search(_strip(html)) else 1.0,  "max": 1, "name": "LLM 지시문 노출 없음"},
-        "B14_incomplete2":  {"score": 0.0 if _INCOMPLETE.search(_strip(html)) else 1.0,"max": 1, "name": "미완성 표현 없음(제7조)"},
-        "B15_img_pos":      {"score": 0.0 if _IMG_POS.search(_strip(html)) else 1.0,   "max": 1, "name": "이미지 위치 지칭 없음"},
+        "B12_forbidden":    {"score": round(max(0.0, 1.0 - (len(_FORBIDDEN.findall(_strip(html))) + len(_EMOJI.findall(_strip(html)))) * 0.5) * 2) / 2, "max": 1, "name": "금지어·이모지 없음"},
+        "B13_llm_dir":      {"score": round(max(0.0, 1.0 - len(_LLM_DIR.findall(_strip(html))) * 0.5) * 2) / 2,  "max": 1, "name": "LLM 지시문 노출 없음"},
+        "B14_incomplete2":  {"score": round(max(0.0, 1.0 - len(_INCOMPLETE.findall(_strip(html))) * 0.5) * 2) / 2,"max": 1, "name": "미완성 표현 없음(제7조)"},
+        "B15_img_pos":      {"score": round(max(0.0, 1.0 - len(_IMG_POS.findall(_strip(html))) * 0.5) * 2) / 2,   "max": 1, "name": "이미지 위치 지칭 없음"},
         "B16_img_count":    {"score": _b16_image_count(html),       "max": 3, "name": "이미지 최소 5장"},
         "B17_body_len":     {"score": _b17_body_length(html),       "max": 3, "name": "본문 분량 1500자+"},
         "B18_spacing":      {"score": _b18_spacing(html),           "max": 2, "name": "여백 규정 준수"},
         "B19_chart":        {"score": _b19_chart(draft),            "max": 2, "name": "차트 실데이터"},
-        "B20_visual_div":   {"score": 2.0,                          "max": 2, "name": "시각화 스타일 중복 없음(프로세스)"},
+        "B20_visual_div":   {"score": 2.0,                          "max": 2, "name": "시각화 스타일 중복 없음(프로세스)"},  # 근거: 차트 스타일 메타데이터 부재로 draft 단독 중복 관측 불가 → 프로세스 보장, max 유지(rule 3)
         "B21_consistency":  {"score": _b21_consistency(html),       "max": 2, "name": "데이터 일관성"},
         "B22_tags":         {"score": _b22_tags(draft),             "max": 2, "name": "태그 특수기호 없음"},
-        "B23_process":      {"score": 1.0,                          "max": 1, "name": "헌법 프로세스 준수"},
+        "B23_process":      {"score": 1.0,                          "max": 1, "name": "헌법 프로세스 준수"},  # 근거: 헌법 집행은 law_enforcer 프로세스가 보장(draft 관측 대상 아님) → max 유지(rule 3)
     }
     return {"total": round(sum(v["score"] for v in items.values()), 2), "max": 50.0, "items": items}
 
@@ -309,23 +329,28 @@ def score_section_c_naver(draft: Any, kw: str = "") -> dict:
 
     # N1 제목 40자 이내 (3점)
     tl = len(title.replace(" ", ""))
-    n1 = 3.0 if tl <= 35 else (2.0 if tl <= 40 else (1.0 if tl <= 44 else 0.0))
+    n1 = (3.0 if tl <= 35 else 2.5 if tl <= 37 else 2.0 if tl <= 40
+          else 1.5 if tl <= 42 else 1.0 if tl <= 44 else 0.5 if tl <= 47 else 0.0)
 
     # N2 제목 키워드 앞부분 (3점)
     if kw and kw in title:
-        n2 = 3.0 if title.find(kw) < len(title) // 2 else 2.0
+        rel = title.find(kw) / max(len(title), 1)
+        n2 = (3.0 if rel <= 0.1 else 2.5 if rel <= 0.25 else 2.0 if rel <= 0.5
+              else 1.5 if rel <= 0.7 else 1.0)
     else:
         n2 = 0.0 if kw else 3.0
 
     # N3 H3 3~4개 (3점)
     h3 = len(re.findall(r'<h3[^>]*>', html, re.I))
-    n3 = 3.0 if 3 <= h3 <= 4 else (2.0 if h3 == 2 else (1.0 if h3 == 1 else 0.0))
+    _d = 0 if 3 <= h3 <= 4 else (3 - h3 if h3 < 3 else h3 - 4)
+    n3 = 0.0 if h3 == 0 else max(0.0, 3.0 - 0.5 * _d)  # 완전부재=0(관대화 차단)
 
     # N4 소제목 아래 2~3문장 (2점)
     sections = re.split(r'<h3[^>]*>.*?</h3>', html, flags=re.DOTALL | re.I)
     if len(sections) > 1:
+        total = len(sections) - 1
         ok = sum(1 for s in sections[1:] if _sentences(_strip(s.split('<h')[0])) >= 2)
-        n4 = 2.0 if ok >= len(sections) - 1 else (1.0 if ok > 0 else 0.0)
+        n4 = round((ok / total) * 2.0 * 2) / 2
     else:
         n4 = 0.0
 
@@ -333,25 +358,33 @@ def score_section_c_naver(draft: Any, kw: str = "") -> dict:
     if kw:
         words = max(len(re.findall(r'[가-힣a-zA-Z]+', text)), 1)
         d = (text.count(kw) / words) * 100
-        n5 = 3.0 if 1.0 <= d <= 2.0 else (1.5 if 0.5 <= d <= 3.0 else 0.0)
+        _dev = 0.0 if 1.0 <= d <= 2.0 else (1.0 - d if d < 1.0 else d - 2.0)
+        n5 = (3.0 if _dev == 0.0 else 2.5 if _dev <= 0.25 else 2.0 if _dev <= 0.5
+              else 1.5 if _dev <= 1.0 else 1.0 if _dev <= 1.5 else 0.5 if _dev <= 2.0 else 0.0)
     else:
         n5 = 3.0
 
     # N6 본문 키워드 3~5회 (2점)
     if kw:
         c = text.count(kw)
-        n6 = 2.0 if 3 <= c <= 5 else (1.0 if c in (2, 6) else 0.0)
+        _d = 0 if 3 <= c <= 5 else (3 - c if c < 3 else c - 5)
+        n6 = 0.0 if c == 0 else max(0.0, 2.0 - 0.5 * _d)  # 완전부재=0
     else:
         n6 = 2.0
 
     # N7 해시태그 5~10개 (2점)
     nt = len(_tags(draft))
-    n7 = 2.0 if 5 <= nt <= 10 else (1.0 if 3 <= nt <= 13 else 0.0)
+    _d = 0 if 5 <= nt <= 10 else (5 - nt if nt < 5 else nt - 10)
+    n7 = max(0.0, 2.0 - 0.5 * _d)
 
     # N8 해요체 일관 (2점)
     hayeo = len(re.findall(r'해요|이에요|였어요|하네요|겠어요|드려요|거에요|인데요', text))
     hamnida = len(re.findall(r'습니다[^만]|었습니다|겠습니다', text))
-    n8 = 2.0 if hayeo > hamnida and hayeo >= 5 else (1.0 if hayeo >= 3 else 0.0)
+    if hayeo > hamnida:
+        n8 = (2.0 if hayeo >= 5 else 1.5 if hayeo >= 4 else 1.0 if hayeo >= 3
+              else 0.5 if hayeo >= 1 else 0.0)
+    else:
+        n8 = 1.0 if hayeo >= 5 else (0.5 if hayeo >= 3 else 0.0)
 
     items = {
         "N1_title_len":     {"score": n1, "max": 3, "name": "제목 길이(≤40)"},
@@ -375,30 +408,34 @@ def score_section_c_tistory(draft: Any, kw: str = "") -> dict:
 
     # T1 제목 55자 이내 (2점)
     tl = len(title.replace(" ", ""))
-    t1 = 2.0 if tl <= 45 else (1.5 if tl <= 55 else (0.5 if tl <= 60 else 0.0))
+    t1 = (2.0 if tl <= 45 else 1.5 if tl <= 50 else 1.0 if tl <= 55
+          else 0.5 if tl <= 60 else 0.0)
 
     # T2 제목 키워드 (2점)
     if kw and kw in title:
-        t2 = 2.0 if title.find(kw) < len(title) // 2 else 1.0
+        rel = title.find(kw) / max(len(title), 1)
+        t2 = 2.0 if rel <= 0.15 else (1.5 if rel <= 0.35 else 1.0)
     else:
         t2 = 0.0 if kw else 2.0
 
     # T3 H1 1개 (2점)
-    t3 = 2.0 if len(re.findall(r'<h1[^>]*>', html, re.I)) == 1 else 0.0
+    h1 = len(re.findall(r'<h1[^>]*>', html, re.I))
+    t3 = 0.0 if h1 == 0 else max(0.0, 2.0 - 0.5 * abs(h1 - 1))  # 완전부재=0
 
     # T4 H2 3~5개 (3점)
     h2 = len(re.findall(r'<h2[^>]*>', html, re.I))
-    t4 = 3.0 if 3 <= h2 <= 5 else (1.5 if h2 in (2, 6) else 0.0)
+    _d = 0 if 3 <= h2 <= 5 else (3 - h2 if h2 < 3 else h2 - 5)
+    t4 = 0.0 if h2 == 0 else max(0.0, 3.0 - 0.5 * _d)  # 완전부재=0
 
     # T5 H3 범위 내 (2점)
     h3 = len(re.findall(r'<h3[^>]*>', html, re.I))
-    t5 = 2.0 if h3 <= h2 * 3 else (1.0 if h3 <= h2 * 3 + 2 else 0.0)
+    t5 = 2.0 if h3 <= h2 * 3 else max(0.0, 2.0 - 0.5 * (h3 - h2 * 3))
 
     # T6 롱테일 키워드 헤더 (3점)
     if kw:
         hdrs = re.findall(r'<h[23][^>]*>(.*?)</h[23]>', html, re.DOTALL | re.I)
         hits = sum(1 for h in hdrs if kw in _strip(h))
-        t6 = 3.0 if hits >= 3 else (2.0 if hits >= 2 else (1.0 if hits >= 1 else 0.0))
+        t6 = 3.0 if hits >= 3 else (2.5 if hits == 2 else (1.5 if hits == 1 else 0.0))
     else:
         t6 = 3.0
 
@@ -406,13 +443,15 @@ def score_section_c_tistory(draft: Any, kw: str = "") -> dict:
     meta = (draft.get("meta_description") or draft.get("meta_desc") or "" if isinstance(draft, dict) else "")
     if meta:
         ml = len(meta)
-        t7 = 2.0 if 140 <= ml <= 160 else (1.0 if 120 <= ml <= 180 else 0.0)
+        _dev = 0 if 140 <= ml <= 160 else (140 - ml if ml < 140 else ml - 160)
+        t7 = (2.0 if _dev == 0 else 1.5 if _dev <= 10 else 1.0 if _dev <= 20
+              else 0.5 if _dev <= 35 else 0.0)
     else:
         t7 = 0.0
 
     # T8 내부 링크 1개 (2점)
     int_links = len(re.findall(r'<a[^>]+href=["\'][^"\'#][^"\']*["\']', html, re.I))
-    t8 = 2.0 if int_links == 1 else (1.0 if int_links >= 2 else 0.0)
+    t8 = (2.0 if int_links == 1 else 1.5 if int_links == 2 else 1.0 if int_links >= 3 else 0.0)
 
     # T9 네이버 중복 없음 (2점) — 프로세스 보장
     t9 = 2.0
@@ -452,14 +491,16 @@ def score_section_d_theme(draft: Any) -> dict:
         r'(?:1개월|한달|6개월|6month|1년|연간|YTD|YOY|월간)\s*(?:수익률|상승|하락|수익|성과)',
         text
     ))
-    th1 = 5.0 if bad_period == 0 else (2.5 if bad_period == 1 else 0.0)
+    # 0.5 단위 graded — 위반 카운트형(max 5): 잘못된 기간 표기 1건당 -0.5, 0 하한
+    th1 = round(max(0.0, 5.0 - 0.5 * bad_period) * 2) / 2
 
     # TH2: 재무수치 본문 기재 없음 (5점)
     fin_text = len(re.findall(
         r'PER\s*\d|ROE\s*\d|영업이익률\s*\d|현재가\s*\d|시가총액\s*\d|매출액\s*\d|순이익\s*\d|부채비율\s*\d',
         text
     ))
-    th2 = 5.0 if fin_text == 0 else (2.5 if fin_text == 1 else 0.0)
+    # 0.5 단위 graded — 위반 카운트형(max 5): 본문 재무수치 1건당 -0.5, 0 하한
+    th2 = round(max(0.0, 5.0 - 0.5 * fin_text) * 2) / 2
 
     items = {
         "TH1_3m_return":    {"score": th1, "max": 5, "name": "수익률 3개월만 표기"},
@@ -474,18 +515,22 @@ def score_section_d_economic(draft: Any) -> dict:
 
     # EC1: 실데이터 사용 (4점) — 의심 수치 패턴 역산
     suspicious = len(re.findall(r'약\s*\d+\.?\d*\s*[%포인트p]|대략\s*\d+|추정\s*\d+', text))
-    ec1 = 4.0 if suspicious == 0 else (2.0 if suspicious == 1 else 0.0)
+    # 0.5 단위 graded — 위반 카운트형(max 4): 의심(약/대략/추정) 수치 1건당 -0.5, 0 하한
+    ec1 = round(max(0.0, 4.0 - 0.5 * suspicious) * 2) / 2
 
     # EC2: 시장 영향 인과 서술 (4점)
     causal = len(re.findall(
         r'→|따라서|그로\s*인해|로\s*인해|때문에|영향을\s*미|이어질|파급\s*효과|로\s*이어',
         text
     ))
-    ec2 = 4.0 if causal >= 4 else (3.0 if causal >= 3 else (2.0 if causal >= 2 else (1.0 if causal >= 1 else 0.0)))
+    # 0.5 단위 graded — 인과 마커 다다익선(max 4): 5+ 만점, 4는 3.5, 이하 부분점수(0 하한)
+    ec2 = (4.0 if causal >= 5 else 3.5 if causal == 4 else 3.0 if causal == 3
+           else 2.0 if causal == 2 else 1.0 if causal == 1 else 0.0)
 
     # EC3: 경제 용어 설명 (2점)
     explain = len(re.findall(r'이란|란\s*무엇|을?\s*의미|쉽게\s*말해|다시\s*말해|풀어\s*말하면|뜻하는', text))
-    ec3 = 2.0 if explain >= 1 else 0.0
+    # 0.5 단위 graded — 용어 설명 다다익선(max 2): 3+ 만점, 2는 1.5, 1은 1.0, 0은 0.0 (이진 폐지)
+    ec3 = (2.0 if explain >= 3 else 1.5 if explain == 2 else 1.0 if explain == 1 else 0.0)
 
     items = {
         "EC1_real_data":    {"score": ec1, "max": 4, "name": "경제지표 실데이터"},

@@ -63,7 +63,7 @@ export type AgentDef = {
 export type PipelineEdge = {
   id: string; from: string; to: string;
   label?: string | null; col: string; dur: number; dots: number; wt?: number;
-  route?: string; lane_y?: number; dx?: number;
+  route?: string; lane_y?: number; dx?: number; dy?: number;
 };
 export type LegendItem = { col: string; label: string };
 export type LayoutConst = { W: number; H: number; CARD_W: number; CARD_H: number; BIG_W: number; BIG_H: number };

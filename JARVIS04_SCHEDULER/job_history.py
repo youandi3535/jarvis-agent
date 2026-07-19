@@ -52,6 +52,17 @@ def _build_job_edges() -> dict:
 _JOB_EDGES: dict = _build_job_edges()
 
 
+def _owner_agent(job_id: str) -> "str | None":
+    """잡 owner(예: 'jarvis07_guardian') → 에이전트 id('j07'). 작업 주체 노드 busy 표시용."""
+    try:
+        from JARVIS04_SCHEDULER.job_registry import get_owner
+        import re as _re
+        m = _re.search(r'jarvis(\d\d)', str(get_owner(job_id) or ""), _re.I)
+        return f"j{m.group(1)}" if m else None
+    except Exception:
+        return None
+
+
 def _on_job_submitted(event):
     """EVENT_JOB_SUBMITTED — 잡 시작 직전. start ts 기록 + 파이프라인 활동 표시."""
     try:
@@ -65,30 +76,28 @@ def _on_job_submitted(event):
         edges = ["e11"] if event.job_id == "infra_heartbeat" else (_JOB_EDGES.get(event.job_id) or [])
         if edges:
             mark_active(edges)
-        # J04 busy 신호 — infra_heartbeat 제외 (너무 잦음)
+        # ★ 작업 주체(owner) 에이전트 busy 모션 (사용자 박제 2026-07-19): 잡을 실제 수행하는
+        #   에이전트가 '작업 중' 표시 (예: j07_retry_pending 10분 → J07 자체 작동 모션).
+        #   owner 불명 시 J04(스케줄러). 완료 시 clear 하지 않고 ttl 로 최소 표시 보장 →
+        #   짧은 잡(수초)도 대시보드 2초 폴링에 반드시 포착됨.
         if event.job_id != "infra_heartbeat":
-            mark_busy("j04", f"잡 실행: {event.job_id}", ttl=3600)
+            _worker = _owner_agent(event.job_id) or "j04"
+            mark_busy(_worker, f"잡 실행: {event.job_id}", ttl=40)   # 작업 주체 '작업 중'
+            # ★ J04(스케줄러) 자체 디스패치 펄스 (사용자 박제 2026-07-19): 잡을 발사하는 순간
+            #   짧게 표시 → 스케줄러 자신의 작업(디스패치)도 모션으로 보임. 주체가 j04면 위에서 이미 표시.
+            if _worker != "j04":
+                mark_busy("j04", "잡 디스패치", ttl=10)
     except Exception:
         pass
 
 
 def _on_job_executed(event):
-    """EVENT_JOB_EXECUTED — 잡 성공 완료."""
-    try:
-        from shared.pipeline_activity import clear_busy
-        clear_busy("j04")
-    except Exception:
-        pass
+    """EVENT_JOB_EXECUTED — 잡 성공 완료. busy 는 ttl 로 자연 만료 (짧은 잡 표시 보장)."""
     _record(event, success=True, error=None)
 
 
 def _on_job_error(event):
     """EVENT_JOB_ERROR — 잡 예외."""
-    try:
-        from shared.pipeline_activity import clear_busy
-        clear_busy("j04")
-    except Exception:
-        pass
     err = ""
     try:
         if getattr(event, "exception", None) is not None:

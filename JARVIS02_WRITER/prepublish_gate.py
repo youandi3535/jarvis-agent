@@ -121,13 +121,13 @@ def prepublish_quality_issues(draft, post_type: str = "",
             if blocked_n:
                 log.warning(f"[prepublish_gate] 사실성 차단 {blocked_n}건 → 재작성 순환")
 
-        if _eng_on and not cqr.get("engagement_passed", True):
-            dims = cqr.get("failed_dims") or []
-            tag = ",".join(sorted(dims)) if dims else "전반"
-            log.warning(f"[prepublish_gate] 매력도 미달 차원={tag} → 재작성 순환")
-            out.append({"kind": "engagement", "detail": f"[매력도/유익성] 임계 미달 차원: {tag}"})
+        # ★ 100점 통일 (사용자 박제 2026-07-19): 매력도 5축 *개별 임계(각 70)* veto 폐지 —
+        #   이 개별 게이트가 LLM 채점 ±5점 노이즈에 매번 흔들려 괜찮은 글도 재작성시켰다.
+        #   품질 판정은 아래 100점 종합(A20+B50+C50+D10) *하나로 통일*. 매력도는 Section A(20점)로
+        #   합류해 80점 결정론(헌법·SEO·글종류)에 노이즈가 희석 → 좋은 글이 일관되게 통과한다.
+        #   (매력도 점수 자체는 _combined_quality_call 이 계속 산출 → Section A 로 반영.)
 
-    # ── 100점 루브릭 종합 점수 게이트 (PREPUBLISH_SCORE_GATE) ──────────────
+    # ── 100점 루브릭 종합 점수 게이트 (PREPUBLISH_SCORE_GATE) — 유일 품질 게이트 ──────
     if not _disabled("PREPUBLISH_SCORE_GATE"):
         _llm_sc = cqr.get("llm_scores") if "cqr" in dir() else None
         if _llm_sc is None:

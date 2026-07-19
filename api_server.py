@@ -969,13 +969,18 @@ def get_overview():
 
 @app.get("/api/pipeline/activity")
 def get_pipeline_activity():
-    """실시간 파이프라인 활동 상태 — active 엣지 ID + busy 에이전트 반환 (2초 폴링용)."""
+    """실시간 파이프라인 활동 상태 — active 엣지 ID + 동적 flow(실제 쌍) + busy 에이전트 (2초 폴링용).
+
+    ★ flows (사용자 박제 2026-07-19): [{from,to,label}] — 고정 엣지로 표현 못 하는 실제 상호작용
+    쌍(예: J07→J06 수정). 프론트가 두 끝점 노드 활성화 + 기존 양방향 엣지 경로를 통째로 점등한다.
+    """
     import time as _t
     try:
-        from shared.pipeline_activity import get_active, get_busy_agents
-        return {"active": get_active(), "busy": get_busy_agents(), "ts": _t.time()}
+        from shared.pipeline_activity import get_active, get_busy_agents, get_active_flows
+        return {"active": get_active(), "flows": get_active_flows(),
+                "busy": get_busy_agents(), "ts": _t.time()}
     except Exception:
-        return {"active": [], "busy": {}, "ts": _t.time()}
+        return {"active": [], "flows": [], "busy": {}, "ts": _t.time()}
 
 
 @app.get("/api/pipeline/log")

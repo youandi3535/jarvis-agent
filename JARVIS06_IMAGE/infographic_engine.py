@@ -1152,7 +1152,7 @@ def _designgen(title, subtitle, datasets, out_path, context, seed) -> str:
 
 def generate_infographic(title, subtitle, datasets, *, run_id="", slot_key="",
                          out_dir=None, context="", orientation=None, illustration_b64=None,
-                         used=None, chip="", src="데이터 출처: 한국거래소 · Yahoo Finance"):
+                         used=None, chip="", src=""):   # src="" → 렌더러가 datasets.source 에서 파생(거짓 기본 출처 폐지)
     """LLM 디자인 디렉터 → 스펙 렌더러로 85점+ 인포그래픽 1장 생성 (단일 진입점).
 
     LLM 이 글 맥락(context)+실데이터 보고 *매번 다른* 설계(JSON) 결정 → 코드가 렌더.

@@ -107,11 +107,12 @@ def _next_data_infographic(collected, out_dir: Path, run_id: str, used_titles: s
             continue
         used_titles.add(_title)   # 성공·실패 무관 1회만 시도 (중복·무한 방지)
         try:
-            _src = (ds.get("source") or {}).get("name") or "자비스09 수집"
+            # subtitle="" (eyebrow 와 이중 금지) · src 미전달 → 렌더러가 ds.source(provider)에서
+            # 출처 파생(헤드라인 source.name 사용 금지 — 사용자 박제 2026-07-19, 동적 설계).
             _path = generate_infographic(
-                _title, "수집 실데이터 기반", [ds],
+                _title, "", [ds],
                 run_id=run_id or theme, slot_key=f"dg{len(used_titles)}", out_dir=out_dir,
-                context=f"{theme} — {_title}", src=f"데이터 출처: {_src}",
+                context=f"{theme} — {_title}",
             )
             if _path:
                 print(f"  📊 [{platform}] 실데이터 인포그래픽: {_title[:30]}")

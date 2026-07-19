@@ -143,14 +143,15 @@ def _theme_collect_bundle(theme: str, sector: str = "") -> dict:
         pass
 
     # 리서치(설계-우선) + 02 fact 추출 — 동기(선계산은 병렬 이득 불필요)
-    collection_docs, evidence_pack = [], None
+    collection_docs, evidence_pack, _corpus_digest = [], None, ""
     try:
         if os.getenv("RESEARCH_FIRST", "1") != "0":
             from JARVIS09_COLLECTOR import collect_research
-            # ★ fact 추출 09 통일 (사용자 박제 2026-07-18) — 09가 수집+추출, pack 동봉.
-            _res = collect_research(theme, sector, angle=_angle, with_facts=True) or {}
+            # ★ fact 추출 09 통일 + corpus digest(distill 압축 2026-07-19) — 09가 수집+추출+요약.
+            _res = collect_research(theme, sector, angle=_angle, with_facts=True, with_digest=True) or {}
             collection_docs = _res.get("docs") or []
             evidence_pack = _res.get("pack") or None
+            _corpus_digest = _res.get("corpus_digest") or ""
         else:
             raise RuntimeError("RESEARCH_FIRST=0")
     except Exception as e:
@@ -165,9 +166,11 @@ def _theme_collect_bundle(theme: str, sector: str = "") -> dict:
     data = _collect(theme, sector=sector, related_terms=_prof.get("related_terms"), profile=_prof)
 
     from JARVIS09_COLLECTOR import compose_collected
+    # ★ corpus digest(요약)를 meta 에 실어 writer(_gen_theme)가 원문 대신 사용 → 프롬프트 축소.
     collected = compose_collected(theme, stocks_data=data, docs=collection_docs,
                                   evidence_pack=evidence_pack, sector=sector,
-                                  category="theme", profile=_prof)
+                                  category="theme", profile=_prof,
+                                  extra_meta=({"corpus_digest": _corpus_digest} if _corpus_digest else None))
     _n_stocks = len(data.get("stocks") or [])
     _n_facts = len((evidence_pack or {}).get("facts") or [])
     return {"collected": collected, "stocks_data": data,
@@ -636,7 +639,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                     from JARVIS09_COLLECTOR import collect_research
                     # ★ fact 추출 09 통일 (사용자 박제 2026-07-18) — 09가 수집+추출, pack 동봉.
                     res = collect_research(state["theme"], state.get("sector", ""),
-                                           angle=_angle, with_facts=True)
+                                           angle=_angle, with_facts=True, with_digest=True)
                     docs = res.get("docs") or []
                     pack = res.get("pack") or None
                     n_facts = len((pack or {}).get("facts", []))
@@ -1084,6 +1087,12 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     # ★ 발행 기간 LLM 우선권 선언 — background alias 자동 강등
     from shared.llm import mark_publishing as _mark_pub
     _mark_pub(True)
+    import time as _tm_act
+    # ★ 액션별 LLM 데드라인 (economic_poster.py 와 동일 SSOT 패턴 — ERRORS [438][440][441]류
+    #   재발 방지): 반드시 _nv_action_def.deadline_sec 과 동일한 BLOG_ACTION_DEADLINE_SEC 사용.
+    #   더 큰/다른 값을 쓰면 "잔여 <10분 강등"이 harness 하드 데드라인보다 늦게 트리거되어
+    #   watchdog 이 재시도·백오프 도중 강제 종료한다.
+    os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
     # ① 네이버 액션 (공유 수집 포함) — 완전 종결까지
     _nv_result = run_action(_nv_action_def, {"theme": theme, "sector": sector})
     _nv_st = _nv_result.state
@@ -1110,6 +1119,9 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     if not _stocks_ok:
         print(f"  ⏭️ [티스토리] 종목 데이터 {'0개' if _data_empty else '미수집(네이버 액션 조기 종결)'} — 발행 스킵")
     else:
+        # ★ _ts_action_def.deadline_sec 과 동일한 SSOT 상수 (위 네이버 리셋과 동일 사유) —
+        #   네이버 액션 소요로 흘러간 시간만큼 티스토리 액션에도 신선한 예산을 부여.
+        os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
         _ts_result = run_action(_ts_action_def, {
             "theme": theme, "sector": sector,
             "collected": _nv_st.get("collected"),          # ★ Step 7: 액션1 → 액션2 전달

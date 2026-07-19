@@ -74,6 +74,26 @@ def _build_edge_log_msgs() -> dict[str, str]:
 _EDGE_LOG_MSGS: dict[str, str] = _build_edge_log_msgs()
 
 
+def _agent_name(aid: str) -> str:
+    """에이전트 id → 표시 라벨 (예: 'j07' → 'J07 GUARD')."""
+    try:
+        from shared.pipeline_graph import AGENTS
+        return {a["id"]: a["label"] for a in AGENTS}.get(aid, str(aid).upper())
+    except Exception:
+        return str(aid).upper()
+
+
+def module_to_agent(module: str) -> str:
+    """모듈 경로/소스 → 에이전트 id (예: 'JARVIS06_IMAGE/draft_processor.py' → 'j06').
+
+    ★ 동적 flow (사용자 박제 2026-07-19): GUARDIAN 자동수정 등 *대상이 가변* 인 상호작용에서
+    실제 대상 에이전트를 판별해 정확한 노드·선을 활성화하기 위한 매핑.
+    """
+    import re as _re
+    m = _re.search(r'JARVIS(\d\d)', str(module or ""))
+    return f"j{m.group(1)}" if m else ""
+
+
 # ── 내부 파일 I/O ────────────────────────────────────────────────
 def _read() -> dict:
     try:
@@ -140,7 +160,7 @@ def _purge_expired(data: dict, now: float | None = None) -> None:
     읽기 함수는 파일에 쓰지 않으므로 물리적 삭제는 전부 여기(쓰기 시점)로 모은다.
     """
     now = time.time() if now is None else now
-    for key in ("active", "busy"):
+    for key in ("active", "busy", "flows"):   # ★ flows(동적 쌍) 만료 정리 포함
         items = data.get(key) or {}
         for k in [k for k, v in items.items() if _expires_of(v) < now]:
             del items[k]
@@ -177,6 +197,47 @@ def get_active() -> list[str]:
     return [k for k, v in active.items() if _expires_of(v) >= now]
 
 
+def mark_flow(from_id: str, to_id: str, label: str = "", ttl: int = DEFAULT_TTL) -> None:
+    """★ flow (사용자 박제 2026-07-19): *실제로 상호작용하는 에이전트 쌍*(from→to)과 라벨을
+    정확히 활성화·로그. 고정 엣지(mark_active) 로는 표현 못 하는 가변 대상(예: GUARDIAN 이 J06 을
+    고치면 J07→J06)을 표시한다.
+
+    프론트는 get_active_flows() 로 활성 flow 를 받아 ① 끝점 두 노드(from·to)를 active 모션으로,
+    ② 기존 양방향 엣지를 따라 최단 *경로*(예: J07→J02→J06)를 통째로 점등한다(동적 선은 안 그림).
+    실시간 로그에는 정확한 'J{from} → J{to} {label}' 를 남긴다.
+    """
+    if not from_id or not to_id:
+        return
+    key = f"{from_id}>{to_id}"
+    expires = time.time() + ttl
+    ts = datetime.now().strftime("%H:%M:%S")
+    lbl = (label or "").strip()
+    fn, tn = _agent_name(from_id), _agent_name(to_id)
+    msg = f"{fn} → {tn}  {lbl}".rstrip() if lbl else f"{fn} → {tn}"
+    with _LOCK, _file_lock():
+        # ★ 전체 dict 보존형 쓰기 — flows·log 외 키(active·busy 등) 절대 드랍 금지
+        data = _read()
+        _purge_expired(data)
+        flows: dict = data.setdefault("flows", {})
+        new = key not in flows
+        flows[key] = {"from": from_id, "to": to_id, "label": lbl, "expires": expires}
+        if new:
+            log: list = data.get("log") or []
+            log.insert(0, {"ts": ts, "msg": msg})
+            data["log"] = log[:_LOG_MAX]
+        _write(data)
+
+
+def get_active_flows() -> list[dict]:
+    """현재 active 인 동적 flow 목록 [{from,to,label}] 반환 (읽기 전용)."""
+    now = time.time()
+    with _LOCK:
+        data = _read()
+    flows: dict = data.get("flows") or {}
+    return [{"from": v.get("from"), "to": v.get("to"), "label": v.get("label", "")}
+            for v in flows.values() if _expires_of(v) >= now and v.get("from") and v.get("to")]
+
+
 def log_activity(msg: str) -> None:
     """파이프라인 현황 메시지를 수동으로 로그에 추가."""
     ts = datetime.now().strftime("%H:%M:%S")
@@ -196,20 +257,38 @@ def get_activity_log() -> list[dict]:
         return _read().get("log", [])
 
 
-def mark_busy(agent_id: str, task: str = "", ttl: int = 120) -> None:
+# 에이전트별 자체작업(busy) 현황 로그 최소 간격(초) — J05 헬스30초·J04 디스패치 등 잦은 작업 스팸 방지.
+_BUSY_LOG_MIN_INTERVAL = 120
+
+
+def mark_busy(agent_id: str, task: str = "", ttl: int = 120, log: bool = True) -> None:
     """에이전트 작업 진행 표시 (TTL초 후 자동 해제 — TTL 은 안전망).
 
     대시보드 isBusy 애니메이션 전용 — mark_active(엣지 데이터전달)와 독립 신호.
     에이전트가 실제 작업(수집·작성·이미지·발행)을 시작할 때 호출하고,
     작업 종료(성공·실패) 시 clear_busy() 로 즉시 해제한다.
+
+    ★ 자체작업 현황 로그 (사용자 박제 2026-07-19): 실시간 현황에 'J07 GUARD ⚙ 작업내용' 형태로
+    남긴다(엣지/flow 의 'A → B' 와 구분). 같은 에이전트는 _BUSY_LOG_MIN_INTERVAL 초당 1회만
+    기록해 잦은 작업(헬스30초·디스패치) 스팸을 막는다. log=False 로 로깅 생략 가능.
     """
-    expires = time.time() + ttl
+    now = time.time()
+    expires = now + ttl
+    ts = datetime.now().strftime("%H:%M:%S")
     with _LOCK, _file_lock():
         # ★ 전체 dict 보존형 쓰기 — busy 만 갱신, 나머지 키 그대로 유지
         data = _read()
         _purge_expired(data)
         busy: dict = data.setdefault("busy", {})
         busy[agent_id] = {"expires": expires, "task": task}
+        # 자체작업 현황 로그 — 에이전트별 최소 간격 통과 시에만 (스팸 방지)
+        if log and task:
+            blog: dict = data.setdefault("busy_log_ts", {})
+            if (now - float(blog.get(agent_id, 0))) >= _BUSY_LOG_MIN_INTERVAL:
+                lg: list = data.get("log") or []
+                lg.insert(0, {"ts": ts, "msg": f"{_agent_name(agent_id)} ⚙ {task}"})
+                data["log"] = lg[:_LOG_MAX]
+                blog[agent_id] = now
         _write(data)
 
 

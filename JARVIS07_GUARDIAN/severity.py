@@ -194,6 +194,15 @@ _TRANSIENT_PATTERNS = [
     # "정상 자가치유" 보고(jobs.py _run_script_checked). traceback 은 NoneType — 코드 결함
     # 위치 정보 자체가 없어 Tier1/2 가 고칠 대상이 없고, 다음 예약 실행이 깨끗하게 재시도한다.
     re.compile(r"워치독 정지\(freeze/deadline\) 감지로 강제 종료", re.I),
+    # ★ ERRORS [414] 박제 2026-07-19 — [413]의 killable-subprocess 짝인 non-killable
+    # 컨텍스트(harness 가 데몬 본체 안에서 도는 경우, is_killable_subprocess()=False) 보고.
+    # Watchdog 이 os._exit 대신 StuckError 를 던져 harness 가 "[harness:이름] attempt=N
+    # step=전체: 데드라인 초과(블로킹)/데드라인 초과 Xs > Ys" 형태로 escalation 한다. traceback 은
+    # 항상 NoneType(Watchdog 이 직접 생성) — 코드 결함 위치가 없어 Tier1/2 가 고칠 대상이 없다.
+    # 근본 원인(macOS 절전으로 인한 elapsed 오산)은 watchdog.py `_absorb_sleep_gap()` 이 이미
+    # 흡수하며, 잔여 재발은 데드라인 자체 상향([414] 트렌드 수집 5400s)으로 대응 — 둘 다 코드가
+    # 아니라 운영 튜닝 영역이라 Tier2 낭비 호출 방지 목적으로 여기서 일반화.
+    re.compile(r"데드라인 초과\(블로킹\)|step=전체:\s*데드라인 초과", re.I),
     # ★ 2026-07-12 — [413]과 동일 클래스의 다른 stderr noise 꼬리(멀티프로세싱 세마포어
     # 누수 경고). os._exit(75) 는 정상 인터프리터 종료 훅(atexit/multiprocessing cleanup)을
     # 건너뛰므로 resource_tracker 가 "leaked semaphore" 를 보고하는 건 강제종료의 *부작용*이지

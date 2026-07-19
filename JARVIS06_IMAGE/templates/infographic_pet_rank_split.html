@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<title>{TITLE}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --hero0:#AEE0EA;
+    --hero1:#8FCEDD;
+    --ink:#2B2B2B;
+    --a1:#2B2B2B;
+    --a1s:#D9D9D9;
+    --a2:#595959;
+    --a2s:#E6E6E6;
+    --soft:#ffffff;
+    --muted:#8A8A8A;
+    --eyebrow:#6B6B6B;
+    --grid:#CCCCCC;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    width:1280px;
+    background:var(--soft);
+    font-family:'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .canvas{ width:1280px; margin:0 auto; background:var(--soft); padding:32px 96px 64px; }
+
+  .hero-stats:empty,
+  .mini-cards:empty{ display:none; }
+
+  /* ── 차트 슬롯 공통 — 빈 슬롯 자동 은폐 (필수 규칙) ── */
+  section:has([data-jarvis-empty]){ display:none; }
+
+  /* ============================================================
+     0. 히어로 밴드 — 전체 폭 풀밴드, 얇은 파스텔 시안(--hero0) 띠
+        하나로만 구성되며 전체 높이의 약 10% 비중. 띠 안에는 제목만
+        중앙 정렬(+ 선택적 소형 아이브로우). 카드·그라디언트 텍스처
+        없이 단색 블록 + 하단 1px 경계선(--hero1)만 존재. 제목이
+        비어있으면 밴드 자체가 완전히 사라짐(캔버스가 즉시 이어짐).
+     ============================================================ */
+  .hero-band{
+    width:100%;
+    background:var(--hero0);
+    border-bottom:1px solid var(--hero1);
+    padding:32px 96px 28px;
+    text-align:center;
+  }
+  .hero-band:not(:has(.title:not(:empty))){ display:none; }
+
+  .eyebrow{
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--eyebrow);
+    margin:0 0 10px;
+  }
+  .eyebrow:empty{ display:none; margin:0; }
+
+  .title{
+    font-size:40px;
+    font-weight:900;
+    line-height:1.2;
+    letter-spacing:.005em;
+    color:var(--ink);
+  }
+  .title:empty{ display:none; }
+
+  .head{ margin-bottom:40px; }
+  .head:not(:has(.subtitle:not(:empty))):not(:has(.hero-stats:not(:empty))){ display:none; margin:0; }
+
+  .subtitle{
+    font-size:16px;
+    font-weight:400;
+    line-height:1.6;
+    color:var(--muted);
+    text-align:center;
+    max-width:920px;
+    margin:28px auto 0;
+  }
+  .subtitle:empty{ display:none; margin:0; }
+
+  .hero-stats{
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    gap:40px;
+    margin-top:24px;
+  }
+  .hero-stats:empty{ display:none; margin:0; }
+  .hero-stats .stat{ display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .hero-stats .stat .num{ font-size:24px; font-weight:800; color:var(--a1); line-height:1; }
+  .hero-stats .stat .lbl{ font-size:14px; color:var(--muted); }
+
+  /* ============================================================
+     1. FEMALE / MALE 열 헤더 — 두 번째 행(CAT) 앞에서는 반복되지
+        않고 전체 리스트 상단에서 단 한 번만 제시. 좌측 사진 폭
+        (260px)+간격(32px)=292px 만큼 들여써서 우측 2열 리스트의
+        시작 위치와 정확히 정렬. 바로 아래 얇은 회색(--grid) 구분선.
+     ============================================================ */
+  .col-headers{
+    display:flex;
+    gap:32px;
+    margin-left:292px;
+    padding-bottom:12px;
+  }
+  .col-headers span{
+    flex:1;
+    font-size:14px;
+    font-weight:700;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--muted);
+  }
+  .col-rule{ border-top:1px solid var(--grid); margin-bottom:30px; }
+
+  /* ============================================================
+     2. DOG 행 (CHART_1) — 카드·배경박스·그림자·테두리·모서리라운드
+        전혀 없는 완전 플랫 스타일. 좌측 정사각형에 가까운 동물 사진
+        + 우측 FEMALE/MALE 2열 순위 리스트로 이루어진 비대칭 좌-우
+        분할 구조. 사진은 object-fit:cover 로 정사각 크롭, 모서리·
+        그림자 없음.
+
+     주입 마크업 예시 (순위 행 개수만큼 반복, 두 열 모두 1~N위 순):
+       <div class="pet-row">
+         <img class="pet-photo" src="dog.jpg" alt="강아지">
+         <div class="pet-lists">
+           <ol class="pet-col female">
+             <li class="pet-item"><span class="pet-rank">1</span><span class="pet-name">Bella</span></li>
+             <li class="pet-item"><span class="pet-rank">2</span><span class="pet-name">Luna</span></li>
+             <!-- 나머지 행 동일 패턴 반복 -->
+           </ol>
+           <ol class="pet-col male">
+             <li class="pet-item"><span class="pet-rank">1</span><span class="pet-name">Max</span></li>
+             <li class="pet-item"><span class="pet-rank">2</span><span class="pet-name">Charlie</span></li>
+             <!-- 나머지 행 동일 패턴 반복 -->
+           </ol>
+         </div>
+       </div>
+     ------------------------------------------------------------- */
+  .chart-slot--main{ display:block; }
+
+  /* ============================================================
+     3. CAT 행 (CHART_2) — DOG 와 동일한 .pet-row 구조 재사용, 별도
+        헤더 없이 이어받음. 두 행 사이는 얇은 회색 구분선(위쪽
+        border-top)만으로 분리(카드 경계 아님).
+     ============================================================ */
+  .chart-slot + .chart-slot{
+    border-top:1px solid var(--grid);
+    margin-top:34px;
+    padding-top:34px;
+  }
+
+  .pet-row{ display:flex; gap:32px; align-items:flex-start; }
+  .pet-photo{ width:260px; height:260px; object-fit:cover; flex-shrink:0; display:block; }
+  .pet-lists{ display:flex; flex:1; gap:32px; }
+  .pet-col{ flex:1; list-style:none; }
+  .pet-item{
+    display:flex;
+    align-items:baseline;
+    gap:14px;
+    padding:11px 0;
+    border-bottom:1px solid var(--grid);
+    font-size:16px;
+  }
+  .pet-item:last-child{ border-bottom:none; }
+  .pet-rank{ width:22px; font-size:14px; font-weight:700; color:var(--muted); }
+  .pet-name{ font-weight:500; color:var(--ink); }
+  .pet-col.female .pet-rank,
+  .pet-col.female .pet-name{ color:var(--a1); }
+  .pet-col.female .pet-item{ border-bottom-color:var(--a1s); }
+  .pet-col.male .pet-rank,
+  .pet-col.male .pet-name{ color:var(--a2); }
+  .pet-col.male .pet-item{ border-bottom-color:var(--a2s); }
+
+  /* ============================================================
+     4. 세 번째 행 (CHART_3) — 기본 미사용(숨김). 필요 시 동일
+        .pet-row 구조 재사용 가능. 미주입 시 자동 은폐.
+     ============================================================ */
+  .chart-slot--aux{ display:block; }
+
+  /* ============================================================
+     5. 하단 범례/메모 리스트 (MINI_CARDS) — 카드 없는 텍스트 행.
+        미사용 시 자동 은폐.
+
+     주입 마크업 예시(반복):
+       <div class="row">
+         <span class="dot dot--a1"></span>
+         <span class="txt">라벨 설명</span>
+       </div>
+     ------------------------------------------------------------- */
+  .mini-cards{ display:flex; flex-direction:column; gap:12px; margin-top:8px; }
+  .mini-cards:empty{ display:none; margin:0; }
+  .mini-cards .row{ display:flex; align-items:center; gap:10px; }
+  .mini-cards .row .dot{ width:9px; height:9px; flex-shrink:0; }
+  .mini-cards .row .dot--a1{ background:var(--a1); }
+  .mini-cards .row .dot--a1s{ background:var(--a1s); }
+  .mini-cards .row .dot--a2{ background:var(--a2); }
+  .mini-cards .row .dot--a2s{ background:var(--a2s); }
+  .mini-cards .row .txt{ font-size:14px; color:var(--muted); }
+
+  .foot{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:24px;
+    margin-top:40px;
+    padding-top:18px;
+    border-top:1px solid var(--grid);
+  }
+  .foot:not(:has(.source:not(:empty))):not(:has(.brand:not(:empty))){ display:none; }
+  .source{ font-size:13px; color:var(--muted); }
+  .source:empty{ display:none; }
+  .brand{ font-size:13px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--eyebrow); }
+  .brand:empty{ display:none; }
+</style>
+</head>
+<body>
+
+  <div class="hero-band">
+    <p class="eyebrow">{EYEBROW}</p>
+    <h1 class="title">{TITLE}</h1>
+  </div>
+
+  <div class="canvas">
+
+    <header class="head">
+      <p class="subtitle">{SUBTITLE}</p>
+      <div class="hero-stats">{HERO_STATS}</div>
+    </header>
+
+    <div class="col-headers">
+      <span>FEMALE</span>
+      <span>MALE</span>
+    </div>
+    <div class="col-rule"></div>
+
+    <section class="chart-slot chart-slot--main">{CHART_1}</section>
+    <section class="chart-slot chart-slot--main">{CHART_2}</section>
+    <section class="chart-slot chart-slot--aux">{CHART_3}</section>
+
+    <div class="mini-cards">{MINI_CARDS}</div>
+
+    <footer class="foot">
+      <span class="source">{SOURCE}</span>
+      <span class="brand">{BRAND}</span>
+    </footer>
+
+  </div>
+
+</body>
+</html>

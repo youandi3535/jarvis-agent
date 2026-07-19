@@ -387,7 +387,8 @@ def _collect_tier(provs: list, theme: str, sector: str, cap: int,
 
 @_auto_catch("collector", reraise=True)
 def collect_research(theme: str, sector: str = "", angle: str = "",
-                     max_rounds: int = 3, with_facts: bool = False) -> dict:
+                     max_rounds: int = 3, with_facts: bool = False,
+                     with_digest: bool = False) -> dict:
     """★ 티어순 상한 수집 (사용자 박제 2026-07-11 — ERRORS [423]):
     처음부터 논문 최대 3·API 최대 7·나머지 최대 5, cascade 이월.
     광역수집 후 절삭 방식 완전 폐지 — 각 티어가 수집 시점에 상한 적용.
@@ -467,6 +468,16 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
         else:
             log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
                      f"+나머지{len(rest_docs)}={total}건 (원시 문서만)")
+        # ★ corpus digest (distill 압축 2026-07-19) — 선계산 창에서만 생성(발행창이면 build_corpus_digest
+        #   가 "" 반환 → 호출자 원문 폴백). writer 프롬프트 축소용. docs(원문)는 그대로 유지(사실성용).
+        if with_digest:
+            try:
+                from .evidence_pack import build_corpus_digest
+                _dig = build_corpus_digest(all_docs)
+                if _dig:
+                    out["corpus_digest"] = _dig
+            except Exception as _de:
+                log.warning(f"[research] corpus digest 실패: {_de}")
         return out
     finally:
         # 작업 종료 — busy 즉시 해제 (해제 실패는 조용히 무시, TTL 은 안전망으로 잔존)
