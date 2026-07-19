@@ -82,7 +82,11 @@ def _on_job_submitted(event):
         #   짧은 잡(수초)도 대시보드 2초 폴링에 반드시 포착됨.
         if event.job_id != "infra_heartbeat":
             _worker = _owner_agent(event.job_id) or "j04"
-            mark_busy(_worker, f"잡 실행: {event.job_id}", ttl=40)
+            mark_busy(_worker, f"잡 실행: {event.job_id}", ttl=40)   # 작업 주체 '작업 중'
+            # ★ J04(스케줄러) 자체 디스패치 펄스 (사용자 박제 2026-07-19): 잡을 발사하는 순간
+            #   짧게 표시 → 스케줄러 자신의 작업(디스패치)도 모션으로 보임. 주체가 j04면 위에서 이미 표시.
+            if _worker != "j04":
+                mark_busy("j04", "잡 디스패치", ttl=10)
     except Exception:
         pass
 
