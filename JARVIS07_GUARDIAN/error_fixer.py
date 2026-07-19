@@ -222,7 +222,8 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
         # ★ 동적 flow (사용자 박제 2026-07-19): 고정 e8(J07→J02) 대신 *실제 수정 대상* 에이전트로.
         #   오류 module/source 로 대상 판별(예: JARVIS06 → j06) → J07→해당에이전트 정확히 활성화·로그.
         from shared.pipeline_activity import mark_flow, module_to_agent
-        _tgt = module_to_agent(str(analysis.get("target") or ""))
+        # error_analyzer 는 실제 패치 대상을 target_file 로 방출 → 이걸 우선 사용(끝점 정확).
+        _tgt = module_to_agent(str(analysis.get("target_file") or analysis.get("target") or ""))
         if not _tgt:
             try:
                 import sqlite3 as _sq

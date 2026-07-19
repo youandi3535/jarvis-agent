@@ -77,11 +77,7 @@ PIPELINE_EDGES: list[dict] = [
     {"id": "e3r", "from": "j06", "to": "j02", "label": None,         "col": "#e879f9", "dur": 1.9, "dots": 1, "wt": 1.2, "dy": 5},
     {"id": "e6",  "from": "j06", "to": "j08", "label": "발행",       "col": "#22d3ee", "dur": 1.6, "dots": 2, "wt": 2.0, "dy": -5},
     {"id": "e6r", "from": "j08", "to": "j06", "label": None,         "col": "#22d3ee", "dur": 2.0, "dots": 1, "wt": 1.2, "dy": 5},
-    # ══ topic_pack: 상단 레인 경유 — 양방향 ══════════════════════
-    {"id": "e5",  "from": "j03", "to": "j02", "label": "topic_pack", "col": "#fbbf24", "dur": 2.8, "dots": 1, "wt": 1.2,
-     "route": "via_lane", "lane_y": 238},
-    {"id": "e5r", "from": "j02", "to": "j03", "label": None,         "col": "#fbbf24", "dur": 3.2, "dots": 1, "wt": 1.0,
-     "route": "via_lane", "lane_y": 230},
+    # (topic_pack J03→J02 직결선 제거 — 사용자 박제 2026-07-19: J09 경유 경로로만 표시)
     # ══ 수직: Row1↔Row2 — 양방향 ═════════════════════════════════
     {"id": "e7",  "from": "j02", "to": "j07", "label": None,         "col": "#f43f5e", "dur": 3.0, "dots": 1, "wt": 1.4, "dx": -4},
     {"id": "e8",  "from": "j07", "to": "j02", "label": "수정",       "col": "#f43f5e", "dur": 3.5, "dots": 1, "wt": 1.4, "dx": 4},
@@ -98,10 +94,9 @@ PIPELINE_EDGES: list[dict] = [
     # ══ J04 스케줄 트리거 (J03 바로 위 = 수직) — 양방향 ══════════
     {"id": "e13", "from": "j04", "to": "j03", "label": "트리거",     "col": "#fb923c", "dur": 4.5, "dots": 1, "wt": 1.0, "dx": -4},
     {"id": "e13r","from": "j03", "to": "j04", "label": None,         "col": "#fb923c", "dur": 4.9, "dots": 1, "wt": 1.0, "dx": 4},
-    {"id": "e14", "from": "j04", "to": "j02", "label": None,         "col": "#fb923c", "dur": 5.0, "dots": 1, "wt": 1.0,
-     "route": "via_lane", "lane_y": 244},
-    {"id": "e14r","from": "j02", "to": "j04", "label": None,         "col": "#fb923c", "dur": 5.4, "dots": 1, "wt": 1.0,
-     "route": "via_lane", "lane_y": 250},
+    # ══ J04 ↔ J01 (스케줄러 ↔ 마스터, Row0 수평) — 양방향 ════════
+    {"id": "e15", "from": "j04", "to": "j01", "label": "스케줄",     "col": "#fb923c", "dur": 4.2, "dots": 1, "wt": 1.0, "dy": -5},
+    {"id": "e15r","from": "j01", "to": "j04", "label": None,         "col": "#fb923c", "dur": 4.6, "dots": 1, "wt": 1.0, "dy": 5},
 ]
 
 # ── 범례 — AGENTS 색상에서 자동 파생 ────────────────────────────

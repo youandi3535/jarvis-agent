@@ -91,7 +91,7 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"j01_economic_post",      "name":"자가진단+경제 브리핑 발행 07:00", "trigger":"cron",
      "kwargs":{"hour":7, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_economic",
-     "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e14"]},
+     "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e13"]},
     # ★ 테마 선계산 (20:00 = 21:00 발행 1시간 전 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18):
     # 테마를 고정(pin)하고 무거운 fact·chart 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 가
     # 회복된 Max 풀에서 실행(300s 스톨 조건 제거). 선계산(~20:20 완료)과 발행(21:00) 사이 ~40분 회복
@@ -106,7 +106,7 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"j01_theme_post_21",      "name":"자가진단+테마 발행 21:00 ★", "trigger":"cron",
      "kwargs":{"hour":21, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_theme",
-     "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e14"]},
+     "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e13"]},
 
     {"id":"j01_radar_check_09",     "name":"RADAR 자동실행 체크 09:00", "trigger":"cron",
      "kwargs":{"hour":9, "minute":0},

@@ -198,12 +198,13 @@ def get_active() -> list[str]:
 
 
 def mark_flow(from_id: str, to_id: str, label: str = "", ttl: int = DEFAULT_TTL) -> None:
-    """★ 동적 flow (사용자 박제 2026-07-19): *실제로 상호작용하는 에이전트 쌍*(from→to)과 라벨을
+    """★ flow (사용자 박제 2026-07-19): *실제로 상호작용하는 에이전트 쌍*(from→to)과 라벨을
     정확히 활성화·로그. 고정 엣지(mark_active) 로는 표현 못 하는 가변 대상(예: GUARDIAN 이 J06 을
-    고치면 J07→J06)을 추가 엣지 없이 노드 위치 사이 선을 동적으로 그려 표시한다.
+    고치면 J07→J06)을 표시한다.
 
-    프론트는 get_active_flows() 로 활성 flow 를 받아 ① 두 노드(from·to)를 active 모션으로 ②
-    그 사이 선을 전달 모션으로 그린다. 실시간 로그에는 정확한 'J{from} → J{to} {label}' 를 남긴다.
+    프론트는 get_active_flows() 로 활성 flow 를 받아 ① 끝점 두 노드(from·to)를 active 모션으로,
+    ② 기존 양방향 엣지를 따라 최단 *경로*(예: J07→J02→J06)를 통째로 점등한다(동적 선은 안 그림).
+    실시간 로그에는 정확한 'J{from} → J{to} {label}' 를 남긴다.
     """
     if not from_id or not to_id:
         return

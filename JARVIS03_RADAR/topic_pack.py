@@ -341,8 +341,9 @@ def pick_candidate(exclude_keyword: str = "") -> dict | None:
         if ex and (kw == ex or kw in ex or ex in kw):
             continue
         try:
-            from shared.pipeline_activity import mark_active
-            mark_active("e5")  # J03→J02 topic_pack 전달 활성화
+            # topic_pack J03→J02 전달 — 직결선 제거(2026-07-19), J09 경유 경로로 점등
+            from shared.pipeline_activity import mark_flow
+            mark_flow("j03", "j02", "topic_pack")
         except Exception:
             pass
         return cand
