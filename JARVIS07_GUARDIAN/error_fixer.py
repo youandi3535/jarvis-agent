@@ -222,10 +222,12 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
         # ★ 동적 flow (사용자 박제 2026-07-19): 고정 e8(J07→J02) 대신 *실제 수정 대상* 에이전트로.
         #   오류 module/source 로 대상 판별(예: JARVIS06 → j06) → J07→해당에이전트 정확히 활성화·로그.
         from shared.pipeline_activity import mark_flow, module_to_agent
-        # error_analyzer 는 실제 패치 대상을 target_file 로 방출 → 이걸 우선 사용(끝점 정확).
-        _tgt = module_to_agent(str(analysis.get("target_file") or analysis.get("target") or ""))
-        if not _tgt:
-            try:
+        # error_analyzer 는 실제 패치 대상을 target_file 로 방출 → 우선 사용. module/target 도 보조.
+        _tgt = (module_to_agent(str(analysis.get("target_file") or ""))
+                or module_to_agent(str(analysis.get("module") or ""))
+                or module_to_agent(str(analysis.get("target") or "")))
+        if not _tgt and isinstance(error_id, int) and error_id >= 0:
+            try:  # 실제 error_id 만 DB 조회 (합성 -1 제외 — 매칭 0행 → 거짓 폴백 원인이었음)
                 import sqlite3 as _sq
                 from shared.db import DB_PATH as _dbp
                 _c = _sq.connect(str(_dbp))
@@ -235,7 +237,10 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
                     _tgt = module_to_agent(_row[0] or "") or module_to_agent(_row[1] or "")
             except Exception:
                 pass
-        mark_flow("j07", _tgt or "j02", "수정")  # 대상 불명 시에만 j02 폴백
+        # ★ 대상이 정확히 판별될 때만 신호 (사용자 박제 2026-07-19): 거짓 j02 폴백 제거.
+        #   판별 불가면 대시보드에 가짜 J07→J02 를 그리지 않는다(잘못된 연결 금지).
+        if _tgt:
+            mark_flow("j07", _tgt, "수정")
     except Exception:
         pass
 
