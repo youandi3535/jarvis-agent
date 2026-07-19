@@ -9,7 +9,7 @@ JARVIS02 (Market Signal) + JARVIS03 (RADAR) 전체를 단일 프로세스로 관
   3. 파일 락      — fcntl LOCK_EX + PID 파일 이중 방어 (어떤 경우에도 단일 인스턴스 강제)
 
 실행:
-  cd ~/portfolio/jarvis-agent
+  cd <저장소 루트>          # 경로 하드코딩 금지 — ./restart_daemon.sh 가 자기 위치에서 도출
   python jarvis_daemon.py
 
 백그라운드 실행:

@@ -177,5 +177,7 @@ def _clear_webhook():
 # polling 루프는 jarvis_daemon.py 의 통합 텔레그램 봇이 담당합니다.
 # 이 모듈은 _handle_callback() 만 외부에서 호출됩니다.
 if __name__ == "__main__":
+    from pathlib import Path
+    _daemon = Path(__file__).resolve().parent.parent / "jarvis_daemon.py"
     print("⚠️  approval_bot.py 는 라이브러리 모듈입니다. 직접 실행하지 마세요.")
-    print("   통합 데몬 실행:  python ~/portfolio/jarvis-agent/jarvis_daemon.py")
+    print(f"   통합 데몬 실행:  python {_daemon}")

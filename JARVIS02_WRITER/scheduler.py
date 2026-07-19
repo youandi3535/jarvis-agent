@@ -963,7 +963,8 @@ def job_startup_recovery():
         log(f"[recovery] DB 확인 실패: {e}")
         return
 
-    from shared.telegram_helper import send_telegram
+    # send_telegram 은 이 모듈 상단(L218)에 이미 정의됨 — 존재하지 않는
+    # shared.telegram_helper 를 로컬 import 하던 줄 제거 (ERRORS [454])
     send_telegram(
         "🔄 *데몬 재시작 후 복구 감지*\n"
         f"오늘({today}) 테마글 발행 없음 → 자동 재시도 시작"
@@ -1316,6 +1317,9 @@ def job_radar_pipeline_check():
 # 이 모듈은 jarvis_daemon.py 가 importlib 으로 로드해 사용합니다.
 # 직접 실행 시:  python jarvis_daemon.py  (루트 디렉토리)
 if __name__ == '__main__':
+    import sys
+    from pathlib import Path
+    _daemon = Path(__file__).resolve().parent.parent / "jarvis_daemon.py"
     print("⚠️  scheduler.py 는 라이브러리 모듈입니다. 직접 실행하지 마세요.")
-    print("   통합 데몬 실행:  python ~/portfolio/jarvis-agent/jarvis_daemon.py")
-    import sys; sys.exit(0)
+    print(f"   통합 데몬 실행:  python {_daemon}")
+    sys.exit(0)

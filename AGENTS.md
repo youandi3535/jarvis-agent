@@ -9,7 +9,7 @@
 | jarvis00_infra | `JARVIS00_INFRA/` | 인프라 — 데몬 라이프사이클·/status·/restart |
 | jarvis01_master | `JARVIS01_MASTER/` | 마스터 라우터 — 자유 문장 → ReAct 디스패치 |
 | jarvis02_writer | `JARVIS02_WRITER/` | 블로그 자동화 — 네이버·티스토리 발행 |
-| jarvis03_radar | `JARVIS03_RADAR/` | 트렌드·분석 대시보드 (Streamlit :8502) |
+| jarvis03_radar | `JARVIS03_RADAR/` | 트렌드·키워드 수집·분석 (대시보드는 `dashboard/` :9199) |
 | jarvis04_scheduler | `JARVIS04_SCHEDULER/` | 단일 스케줄 진입점 — 모든 APScheduler 잡 관리 |
 | jarvis05_vision | `JARVIS05_VISION/` | 비전 — 이미지 인식·캡션 (옵션) |
 | jarvis06_image | `JARVIS06_IMAGE/` | 이미지 도메인 단일 진입점 — 생성·검증·dedupe·삽입·정리 |

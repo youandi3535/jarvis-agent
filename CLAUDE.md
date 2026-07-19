@@ -101,7 +101,7 @@ export JARVIS_STRICT=1                       # 위반 발견 시 commit 차단 (
 |------|------|------|
 | `JARVIS01_MASTER/`   | JARVIS01 CORE   | 마스터 라우터 (LangGraph) — 자유 문장 → 인텐트 분류 → 에이전트 디스패치 |
 | `JARVIS02_WRITER/` | JARVIS02 WRITER | 블로그 자동화 (네이버·티스토리) |
-| `JARVIS03_RADAR/`  | JARVIS03 RADAR  | 트렌드·키워드 분석 대시보드 (Streamlit :8502) |
+| `JARVIS03_RADAR/`  | JARVIS03 RADAR  | 트렌드·키워드 수집·분석 (대시보드는 `dashboard/` Next.js :9199) |
 
 ## 통합 데몬 (유일한 진입점)
 
@@ -205,7 +205,7 @@ pkill -f jarvis_daemon.py        # 전체 종료
 ## 인프라 관리 규정 (강제 — 절대 — 모든 인프라 책임 단일 진입점)
 - **단일 진입점**: `JARVIS00_INFRA/infra_agent.py`. 데몬 프로세스 라이프사이클·시스템 상태 종합 빌드(`build_status`)·텔레그램 시스템 관리 명령(/status·/restart·/quit) 핸들러·infra.* 인텐트 처리 모두 여기.
 - **다른 파일 금지**: `jarvis_daemon.py` 는 *프로세스 부트스트랩 + APScheduler/봇 polling 루프* 만. *시스템 상태 빌드·시스템 관리 명령 분기·infra capability 선언* 박지 말 것. 모두 `JARVIS00_INFRA.infra_agent` 위임.
-- **다른 폴더 금지**: `JARVIS01_MASTER`·`JARVIS02_WRITER`·`JARVIS03_RADAR`·`shared/` 어디에도 인프라 코드 (데몬 제어·시스템 상태·프로세스 관리·Streamlit 자식 프로세스 관리·Keeper 통신) 박지 말 것.
+- **다른 폴더 금지**: `JARVIS01_MASTER`·`JARVIS02_WRITER`·`JARVIS03_RADAR`·`shared/` 어디에도 인프라 코드 (데몬 제어·시스템 상태·프로세스 관리·대시보드 자식 프로세스 관리(FastAPI :9198 · Next.js :9199)·Keeper 통신) 박지 말 것.
 - **발견 즉시 이관**: 인프라 관련 신규 코드를 다른 파일에서 발견하면 *즉시* `JARVIS00_INFRA/infra_agent.py` 로 이관. 미루지 말 것.
 - **이관 절차**: ① `JARVIS00_INFRA/infra_agent.py` 에 함수/핸들러 추가 → `__all__` 업데이트 → ② 호출자 (jarvis_daemon 등) 는 `from JARVIS00_INFRA.infra_agent import ...` 로 위임 → ③ 호출자에 fallback 인프라 로직 두지 말 것.
 - **★ 이관 완전성 (헌법 박제 2026-05-15 — 3회 반복 교훈)**: `import` 추가만으로는 불충분 — *반드시 구 함수 본체를 삭제*. Python last-def override 로 인해 구 정의가 새 정의를 덮어쓸 위험. 이관 완료 후 `grep -rn "^def <함수명>" --include="*.py" .` 으로 중복 정의 잔존 여부 반드시 확인.
@@ -593,7 +593,8 @@ grep -rnE 'requests\.get\(' --include='*.py' . \
 **공용 자원** (다른 에이전트와 공유):
 - `shared/db.py` — `self_repair_runs` / `error_log` 테이블 (공용 DB)
 - `JARVIS04_SCHEDULER/job_registry.py` — 잡 등록 (callback 경로: `JARVIS07_GUARDIAN.auto_repair.job_auto_repair`)
-- `hub.py` — 대시보드 카드 (오류 관리 탭)
+- `api_server.py` (:9198) — `/api/errors`·`/api/guardian/*`·`/api/learning`·`/api/repairs` 라우트
+- `dashboard/app/{errors,learning}/` (:9199) — 오류·학습 페이지 (Next.js)
 
 **역사적 위치 (이관 완료)**:
 - 옛: `JARVIS01_MASTER/auto_repair.py` → **삭제** (2026-05-15)
@@ -638,8 +639,8 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
   - 학습 누적 (patterns_count / hits_total / llm_saved)
   - 시계열 추적 → 학습 곡선 정량 지표
 
-#### 계층 3 — 학습 가시화 (hub.py 대시보드)
-- **오류 관리 탭 → 현황 서브탭** 에 2개 카드:
+#### 계층 3 — 학습 가시화 (`dashboard/` Next.js :9199)
+- **`/errors`·`/learning` 페이지** 에 2개 카드:
   1. **🤖 자가 진단 학습 곡선** (최근 10회) — 회차/시각/수정/패턴/절약/점수/다음 회차 테이블 + KPI 4종 (총 회차 / LLM 절약 추세 / 패턴 증가 / 평균 수정)
   2. **🧠 학습 시스템 — LLM 호출 절약 효과** — 학습 패턴 / LLM 호출 절약 / 정적·LLM 분포 + Top 5 패턴
 
@@ -658,7 +659,7 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
                                               ↓
                           [self_repair_runs 메트릭 누적]
                                               ↓
-                          [hub.py 대시보드 학습 곡선 표시]
+                     [대시보드(:9199) /learning 학습 곡선 표시]
                                               ↓
                           [사용자가 학습 효과 *눈으로* 확인]
 ```
@@ -667,7 +668,7 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
 
 - **자가 진단 prompt 변경**: `auto_repair._BASE_PROMPT` 의 3단계 구조 유지. 검토 범위 추가 시 3단계 안에서 확장.
 - **learned_patterns 신규 등록 경로**: 반드시 `record_pattern_hit(error_record, fixer_name=...)` 사용. *fixer_name 없는 등록 절대 금지* (3종 노이즈 게이트 차단됨).
-- **메트릭 신규 컬럼**: `self_repair_runs` 테이블 변경 시 `_save_run_to_db` 의 INSERT + `hub.py` 의 SELECT 동시 갱신.
+- **메트릭 신규 컬럼**: `self_repair_runs` 테이블 변경 시 `_save_run_to_db` 의 INSERT + `api_server.py` `/api/repairs` 의 SELECT 동시 갱신.
 - **검증 명령**: 자가 진단 회차 후 텔레그램에 *학습 추세* 자동 표시 (`_learning_trend_brief`) — 점수 하락 시 사용자 즉시 인지.
 
 ### 위반 시

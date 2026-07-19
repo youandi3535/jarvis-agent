@@ -26,7 +26,7 @@
 
 | 항목 | 규칙 |
 |------|------|
-| 포트 | **8505** (VISION API) — 8500(hub.py)·8502(폐기) 와 충돌 없음 |
+| 포트 | **8505** (VISION API) — 9199(Next.js 대시보드)·9198(FastAPI) 와 충돌 없음 |
 | 테이블 | `vision_agent_status` — VISION 전용. `shared/db._init_vision_tables()` 초기화 |
 | 어댑터 추가 | `registry.py` 에 `BaseAgent` 상속 클래스 추가 → `bootstrap_builtin_adapters()` 에 등록 |
 | 새 에이전트 | `shared/agent_base.BaseAgent` 상속 + `get_health()·get_metrics()` 구현 → `registry.register(인스턴스)` |
@@ -68,5 +68,5 @@ class MyNewAgent(BaseAgent):
 # 2) registry 에 등록
 from JARVIS05_VISION.registry import get_registry
 get_registry().register(MyNewAgent())
-# → hub.py / API 에 자동 반영, 코드 수정 0
+# → 대시보드(/system) / API 에 자동 반영, 코드 수정 0
 ```

@@ -7917,6 +7917,20 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `shared/llm.py`, `JARVIS02_WRITER/precollect_cache.py`(신규), `JARVIS02_WRITER/trend_economic_writer.py`, `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS02_WRITER/scheduler.py`, `JARVIS04_SCHEDULER/job_registry.py`
 - **교훈**: ① "300s·0parts hung" 과 "num_turns=0 빠른 빈응답 throttle" 은 코드가 명시 구분하는 서로 다른 서명 — 발행 hang 을 진단할 땐 반드시 로그의 이 둘을 구별할 것(rate-limit 가설을 성급히 세우지 말 것). ② "수집 데이터 전부 활용(절단 폐지)" 과 "재시도·스톨 0" 은 전문 추출=무거운 버스트라 *동시 성립이 어려운 긴장* — 해법은 입력 축소(박제 위반)가 아니라 **무거운 LLM 을 발행창 밖 저부하 창으로 시간 분리**(사용자 제안 "분리"). ③ 이런 캐시성 최적화는 반드시 *순수 최적화(미스·오류 시 기존 경로 폴백)* 로 설계해 회귀 위험 0. ④ 테마처럼 주제가 random 선정되는 파이프라인은 선계산이 성립하려면 *주제 고정(pin)* 이 선행돼야 함.
 
+## [454] 저장소 폴더 이동 후 전 서비스 중단 — launchd plist·restart 스크립트의 옛 경로 하드코딩이 삭제된 코드의 좀비 데몬을 KeepAlive 로 유지 (2026-07-19)
+- **증상**: 저장소를 `~/portfolio/jarvis-agent` → `~/AI/personal/team_02p_202512_jarvis_agent` 로 이동하고 venv 를 새로 만든 뒤 ① 웹 대시보드(9199)가 안 열림 ② 텔레그램 무반응. 사용자 최초 가설은 "requirements.txt 재설치 누락".
+- **환경**: macOS launchd(`com.jarvis.keeper.plist`), `jarvis_daemon.py`(FastAPI 9198·Next.js 9199 를 *자식 프로세스* 로 스폰), `.venv` 신규 생성(Python 3.10.19·317패키지).
+- **원인**: 의존성과 무관. **경로 하드코딩 2곳**이 근본 원인. ① `~/Library/LaunchAgents/com.jarvis.keeper.plist` 가 ProgramArguments·WorkingDirectory·로그경로 전부 옛 절대경로 + `KeepAlive=true` → 옛 경로 keeper 가 계속 살아나 옛 데몬(PID 33511)을 유지. 그 데몬은 *이미 삭제된* 폴더의 코드를 메모리에 올린 채 실행 중이라 새 폴더 코드가 반영될 수 없고, 자식으로 띄우려는 `dashboard/` 가 옛 경로에 없어 Next.js(9199)만 조용히 실패 → 대시보드 미기동. ② `restart_daemon.sh` 가 `cd ~/portfolio/jarvis-agent` 등 5줄 하드코딩 → 새 폴더에서 실행해도 옛 경로를 기동 시도. 텔레그램은 토큰·봇 정상이었고, 좀비가 `getUpdates` 를 점유(동시 폴링 불가)해 무반응으로 보였을 뿐.
+- **헛다리**: ① "requirements.txt 재설치 필요" — 반증됨(신규 venv 317패키지, 핵심 모듈 전부 import 성공). ② "`telegram` 모듈 누락이 원인" — 반증됨(코드베이스는 python-telegram-bot 을 *아예 안 씀*, 전부 `requests` 로 `api.telegram.org` 직접 호출. requirements.txt 에도 없는 게 정상). ③ "대시보드는 `hub.py`(Streamlit)" — CLAUDE.md 문서 드리프트. 실제로는 `dashboard/` Next.js(9199) + `api_server.py`(9198) 이며 `hub.py` 는 존재하지 않음.
+- **해결**(사용자 방향: "모든 옛폴더 연결을 새폴더로, 가능하면 동적설계"):
+  - **① 셸 스크립트 자기위치 도출**: `restart_daemon.sh` 를 `ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` 기반으로 전면 재작성 → 폴더를 어디로 옮겨도 수정 불필요. venv 부재 검증·좀비 uvicorn 정리(텔레그램 409 방지)·keeper 선(先) unload 순서 보강.
+  - **② plist 생성기 신설**: launchd 는 절대경로만 받아 하드코딩 회피 불가 → *plist 자체를 자기 위치에서 생성* 하는 `install_keeper.sh` 신설(`--uninstall` 지원). 기존 plist 의 WorkingDirectory 를 읽어 옛 경로면 자동 감지·교체 후 load. 이동 시 이 스크립트 1회 실행이 전부.
+  - **③ Python 안내문구 동적화**: `scheduler.py`·`approval_bot.py` 의 `print("... ~/portfolio/...")` 를 `Path(__file__).resolve().parent.parent / "jarvis_daemon.py"` 로, `jarvis_daemon.py` docstring·`infra_agent.py` 주석의 옛 경로 제거. (`jarvis_keeper.py` 는 이미 `Path(__file__).parent` 기반이라 무수정.)
+  - **④ 복구 순서**(순서 자체가 핵심): launchd unload → 좀비 SIGTERM→SIGKILL → 포트(8505·9198·9199) 해제 확인 → 스테일 `logs/daemon.pid` 제거(옛 데몬 PID 가 폴더와 함께 딸려옴) → `install_keeper.sh` → keeper 가 데몬을, 데몬이 API·대시보드를 순차 기동.
+- **검증**: 저장소 옛 경로 참조 0건 / plist·전 프로세스 새 경로 / 9199 HTTP 200 · `/api/health` 200 · 8505 LISTEN / 텔레그램 `getMe` ok + 실제 발송 성공 / 부팅 후 ERROR 0.
+- **파일**: `restart_daemon.sh`, `install_keeper.sh`(신규), `jarvis_daemon.py`, `JARVIS00_INFRA/infra_agent.py`, `JARVIS02_WRITER/scheduler.py`, `JARVIS03_RADAR/approval_bot.py`
+- **교훈**: ① **KeepAlive=true 인 launchd plist 는 폴더 이동 시 "좀비 부활기"** — 데몬만 kill 하면 계속 되살아나므로 *반드시 launchctl unload 를 먼저* 할 것. ② 삭제된 경로의 프로세스는 코드가 메모리에 남아 *정상 동작처럼 보이지만* 파일 의존 기능(자식 프로세스 스폰 등)만 조용히 실패 → 증상이 "일부만 안 됨"으로 나타나 오진을 부름. ③ 이동 후 진단은 `ps` 의 *실행 경로* 를 최우선 확인할 것(포트·로그보다 빠름). ④ grep 으로 옛 경로를 훑을 땐 `.venv`·`logs` 제외 필터를 *경로* 에만 적용할 것 — 내용까지 걸면 `~/portfolio/.../.venv/bin/python` 같은 진짜 히트를 놓침(실제로 초기 조사에서 5건 중 4건 누락). ⑤ 저장소 밖(`~/Library/LaunchAgents`·crontab·shell rc)까지 조사 범위에 포함할 것 — 이번 근본 원인이 저장소 밖에 있었음.
+
 ---
 ### [2026-07-11 05:01] ✅ 자동수정 — RuntimeError
 - **증상**: 트렌드 수집 실패 (rc=75): it__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
