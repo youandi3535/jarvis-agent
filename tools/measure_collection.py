@@ -9,8 +9,9 @@ import json
 import io
 import contextlib
 from collections import Counter
+from pathlib import Path
 
-sys.path.insert(0, "/Users/kimhyojung/portfolio/jarvis-agent")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _provider_of_doc(d) -> str:
