@@ -472,7 +472,7 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   const { data: graphData } = useSWR<GraphData>("/api/graph", fetcher, { refreshInterval: 60000 });
   const agents = useMemo<AgentDef[]>(() => graphData?.agents ?? [], [graphData]);
   const bnd = useMemo(() => buildBounds(agents), [agents]);
-  const resolvedEdges = useMemo(() => resolveEdges(graphData?.edges ?? [], bnd), [graphData, bnd]);
+  const baseEdges = useMemo(() => resolveEdges(graphData?.edges ?? [], bnd), [graphData, bnd]);
 
   // 캔버스 크기·파이프라인 위치 — agents 에서 자동 파생 (하드코딩 금지)
   const W  = graphData?.layout?.W  ?? 1130;
@@ -483,15 +483,48 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   const ROW2_Y = useMemo(() => agents.find(a => a.id === "j05")?.y ?? 462, [agents]);
 
   // 실시간 파이프라인 활동 — 2초 폴링
-  const { data: actData } = useSWR<{active: string[]; busy: Record<string, string>}>("/api/pipeline/activity", fetcher, { refreshInterval: 2000 });
-  const activeEdgeSet = useMemo(() => new Set<string>(actData?.active ?? []), [actData]);
-  const activeAgentSet = useMemo(() => {
-    const s = new Set<string>();
-    for (const e of graphData?.edges ?? []) {
-      if (activeEdgeSet.has(e.id)) { s.add(e.from); s.add(e.to); }
+  const { data: actData } = useSWR<{active: string[]; flows?: {from:string; to:string; label:string}[]; busy: Record<string, string>}>("/api/pipeline/activity", fetcher, { refreshInterval: 2000 });
+  // ★ 동적 flow (사용자 박제 2026-07-19): 실제 상호작용 쌍(from→to)을 정확히 활성화.
+  //   기존 엣지와 겹치면 그 엣지를 켜고, 미정의 쌍(예: J07→J06)은 노드 사이 선을 동적으로 그린다.
+  const activeFlows = useMemo(() => (actData?.flows ?? []).filter(f => f.from && f.to), [actData]);
+  const definedPair = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const e of graphData?.edges ?? []) m.set(`${e.from}>${e.to}`, e.id);
+    return m;
+  }, [graphData]);
+  const flowEdges = useMemo<PipelineEdge[]>(() =>
+    activeFlows.filter(f => !definedPair.has(`${f.from}>${f.to}`))
+      .map(f => ({ id:`flow:${f.from}>${f.to}`, from:f.from, to:f.to, label:f.label || null, col:"#f43f5e", dur:3.5, dots:1, wt:1.4 })),
+    [activeFlows, definedPair]);
+  const resolvedEdges = useMemo(() => [...baseEdges, ...resolveEdges(flowEdges, bnd)], [baseEdges, flowEdges, bnd]);
+  const activeEdgeSet = useMemo(() => {
+    const s = new Set<string>(actData?.active ?? []);
+    for (const f of activeFlows) {
+      const id = definedPair.get(`${f.from}>${f.to}`);
+      s.add(id ?? `flow:${f.from}>${f.to}`);   // 겹치면 기존 엣지, 아니면 동적 선
     }
     return s;
-  }, [activeEdgeSet, graphData]);
+  }, [actData, activeFlows, definedPair]);
+  const activeAgentSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of [...(graphData?.edges ?? []), ...flowEdges]) {
+      if (activeEdgeSet.has(e.id)) { s.add(e.from); s.add(e.to); }   // 실제 두 노드 활성화
+    }
+    return s;
+  }, [activeEdgeSet, graphData, flowEdges]);
+  // 동적 flow 배너/로그 표시명 (예: 'flow:j07>j06' → 'J07 GUARD → J06 IMAGE  수정')
+  const flowDesc = useMemo(() => {
+    const names: Record<string, string> = {};
+    for (const a of graphData?.agents ?? []) names[a.id] = a.label;
+    const m: Record<string, string> = {};
+    for (const f of activeFlows) {
+      if (definedPair.has(`${f.from}>${f.to}`)) continue;
+      const fn = names[f.from] ?? f.from.toUpperCase();
+      const tn = names[f.to] ?? f.to.toUpperCase();
+      m[`flow:${f.from}>${f.to}`] = `${fn} → ${tn}${f.label ? "  " + f.label : ""}`;
+    }
+    return m;
+  }, [activeFlows, definedPair, graphData]);
   const pipelineActive = useMemo(
     () => ["e1","e2","e3","e5","e6"].some(id => activeEdgeSet.has(id)),
     [activeEdgeSet]
@@ -603,7 +636,7 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
             <span style={{ fontSize:9,fontWeight:800,color:"#4ade80",letterSpacing:1.5 }}>ACTIVE</span>
           </span>
           <span style={{ fontSize:11, color:"#6ee7b7", letterSpacing:0.3 }}>
-            {Array.from(activeEdgeSet).map(id => EDGE_DESC[id] ?? id).join("  →  ")}
+            {Array.from(activeEdgeSet).map(id => EDGE_DESC[id] ?? flowDesc[id] ?? id).join("  →  ")}
           </span>
         </div>
       )}

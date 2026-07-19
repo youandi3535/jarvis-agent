@@ -219,8 +219,22 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
         bool: 수정 성공 여부
     """
     try:
-        from shared.pipeline_activity import mark_active
-        mark_active("e8")  # J07→J02 코드 수정 활성화
+        # ★ 동적 flow (사용자 박제 2026-07-19): 고정 e8(J07→J02) 대신 *실제 수정 대상* 에이전트로.
+        #   오류 module/source 로 대상 판별(예: JARVIS06 → j06) → J07→해당에이전트 정확히 활성화·로그.
+        from shared.pipeline_activity import mark_flow, module_to_agent
+        _tgt = module_to_agent(str(analysis.get("target") or ""))
+        if not _tgt:
+            try:
+                import sqlite3 as _sq
+                from shared.db import DB_PATH as _dbp
+                _c = _sq.connect(str(_dbp))
+                _row = _c.execute("SELECT module, source FROM error_log WHERE id=?", (error_id,)).fetchone()
+                _c.close()
+                if _row:
+                    _tgt = module_to_agent(_row[0] or "") or module_to_agent(_row[1] or "")
+            except Exception:
+                pass
+        mark_flow("j07", _tgt or "j02", "수정")  # 대상 불명 시에만 j02 폴백
     except Exception:
         pass
 

@@ -74,6 +74,26 @@ def _build_edge_log_msgs() -> dict[str, str]:
 _EDGE_LOG_MSGS: dict[str, str] = _build_edge_log_msgs()
 
 
+def _agent_name(aid: str) -> str:
+    """에이전트 id → 표시 라벨 (예: 'j07' → 'J07 GUARD')."""
+    try:
+        from shared.pipeline_graph import AGENTS
+        return {a["id"]: a["label"] for a in AGENTS}.get(aid, str(aid).upper())
+    except Exception:
+        return str(aid).upper()
+
+
+def module_to_agent(module: str) -> str:
+    """모듈 경로/소스 → 에이전트 id (예: 'JARVIS06_IMAGE/draft_processor.py' → 'j06').
+
+    ★ 동적 flow (사용자 박제 2026-07-19): GUARDIAN 자동수정 등 *대상이 가변* 인 상호작용에서
+    실제 대상 에이전트를 판별해 정확한 노드·선을 활성화하기 위한 매핑.
+    """
+    import re as _re
+    m = _re.search(r'JARVIS(\d\d)', str(module or ""))
+    return f"j{m.group(1)}" if m else ""
+
+
 # ── 내부 파일 I/O ────────────────────────────────────────────────
 def _read() -> dict:
     try:
@@ -140,7 +160,7 @@ def _purge_expired(data: dict, now: float | None = None) -> None:
     읽기 함수는 파일에 쓰지 않으므로 물리적 삭제는 전부 여기(쓰기 시점)로 모은다.
     """
     now = time.time() if now is None else now
-    for key in ("active", "busy"):
+    for key in ("active", "busy", "flows"):   # ★ flows(동적 쌍) 만료 정리 포함
         items = data.get(key) or {}
         for k in [k for k, v in items.items() if _expires_of(v) < now]:
             del items[k]
@@ -175,6 +195,46 @@ def get_active() -> list[str]:
         data = _read()
     active: dict = data.get("active") or {}
     return [k for k, v in active.items() if _expires_of(v) >= now]
+
+
+def mark_flow(from_id: str, to_id: str, label: str = "", ttl: int = DEFAULT_TTL) -> None:
+    """★ 동적 flow (사용자 박제 2026-07-19): *실제로 상호작용하는 에이전트 쌍*(from→to)과 라벨을
+    정확히 활성화·로그. 고정 엣지(mark_active) 로는 표현 못 하는 가변 대상(예: GUARDIAN 이 J06 을
+    고치면 J07→J06)을 추가 엣지 없이 노드 위치 사이 선을 동적으로 그려 표시한다.
+
+    프론트는 get_active_flows() 로 활성 flow 를 받아 ① 두 노드(from·to)를 active 모션으로 ②
+    그 사이 선을 전달 모션으로 그린다. 실시간 로그에는 정확한 'J{from} → J{to} {label}' 를 남긴다.
+    """
+    if not from_id or not to_id:
+        return
+    key = f"{from_id}>{to_id}"
+    expires = time.time() + ttl
+    ts = datetime.now().strftime("%H:%M:%S")
+    lbl = (label or "").strip()
+    fn, tn = _agent_name(from_id), _agent_name(to_id)
+    msg = f"{fn} → {tn}  {lbl}".rstrip() if lbl else f"{fn} → {tn}"
+    with _LOCK, _file_lock():
+        # ★ 전체 dict 보존형 쓰기 — flows·log 외 키(active·busy 등) 절대 드랍 금지
+        data = _read()
+        _purge_expired(data)
+        flows: dict = data.setdefault("flows", {})
+        new = key not in flows
+        flows[key] = {"from": from_id, "to": to_id, "label": lbl, "expires": expires}
+        if new:
+            log: list = data.get("log") or []
+            log.insert(0, {"ts": ts, "msg": msg})
+            data["log"] = log[:_LOG_MAX]
+        _write(data)
+
+
+def get_active_flows() -> list[dict]:
+    """현재 active 인 동적 flow 목록 [{from,to,label}] 반환 (읽기 전용)."""
+    now = time.time()
+    with _LOCK:
+        data = _read()
+    flows: dict = data.get("flows") or {}
+    return [{"from": v.get("from"), "to": v.get("to"), "label": v.get("label", "")}
+            for v in flows.values() if _expires_of(v) >= now and v.get("from") and v.get("to")]
 
 
 def log_activity(msg: str) -> None:
