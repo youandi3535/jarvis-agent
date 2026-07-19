@@ -257,20 +257,38 @@ def get_activity_log() -> list[dict]:
         return _read().get("log", [])
 
 
-def mark_busy(agent_id: str, task: str = "", ttl: int = 120) -> None:
+# 에이전트별 자체작업(busy) 현황 로그 최소 간격(초) — J05 헬스30초·J04 디스패치 등 잦은 작업 스팸 방지.
+_BUSY_LOG_MIN_INTERVAL = 120
+
+
+def mark_busy(agent_id: str, task: str = "", ttl: int = 120, log: bool = True) -> None:
     """에이전트 작업 진행 표시 (TTL초 후 자동 해제 — TTL 은 안전망).
 
     대시보드 isBusy 애니메이션 전용 — mark_active(엣지 데이터전달)와 독립 신호.
     에이전트가 실제 작업(수집·작성·이미지·발행)을 시작할 때 호출하고,
     작업 종료(성공·실패) 시 clear_busy() 로 즉시 해제한다.
+
+    ★ 자체작업 현황 로그 (사용자 박제 2026-07-19): 실시간 현황에 'J07 GUARD ⚙ 작업내용' 형태로
+    남긴다(엣지/flow 의 'A → B' 와 구분). 같은 에이전트는 _BUSY_LOG_MIN_INTERVAL 초당 1회만
+    기록해 잦은 작업(헬스30초·디스패치) 스팸을 막는다. log=False 로 로깅 생략 가능.
     """
-    expires = time.time() + ttl
+    now = time.time()
+    expires = now + ttl
+    ts = datetime.now().strftime("%H:%M:%S")
     with _LOCK, _file_lock():
         # ★ 전체 dict 보존형 쓰기 — busy 만 갱신, 나머지 키 그대로 유지
         data = _read()
         _purge_expired(data)
         busy: dict = data.setdefault("busy", {})
         busy[agent_id] = {"expires": expires, "task": task}
+        # 자체작업 현황 로그 — 에이전트별 최소 간격 통과 시에만 (스팸 방지)
+        if log and task:
+            blog: dict = data.setdefault("busy_log_ts", {})
+            if (now - float(blog.get(agent_id, 0))) >= _BUSY_LOG_MIN_INTERVAL:
+                lg: list = data.get("log") or []
+                lg.insert(0, {"ts": ts, "msg": f"{_agent_name(agent_id)} ⚙ {task}"})
+                data["log"] = lg[:_LOG_MAX]
+                blog[agent_id] = now
         _write(data)
 
 
