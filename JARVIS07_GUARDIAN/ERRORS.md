@@ -2,6 +2,18 @@
 
 ---
 
+## [463] ✅ 해결 — preflight internal_import 가 pyobjc(Quartz) 콜드임포트 레이스로 일시 폭발 — 최대 3회 재시도로 흡수 (2026-07-21)
+
+- **증상**: `error_log` — `source=preflight`, `module=JARVIS00_INFRA.preflight.internal_import`, `func_name=_check_internal_import`, `message="[preflight] internal_import/JARVIS08_PUBLISH.platforms.naver_poster: AssertionError: You must first install pyobjc-core and pyobjc: https://pyautogui.readthedocs.io/en/latest/install.html"`, severity=medium. `logs/daemon.log` 타임라인 대조 결과 2026-07-20 23:56:34 와 23:57:04 두 차례 발생했고, 그 직전(23:56:24)·직후(23:56:40, 23:56:45, 23:57:10, 23:57:14) 모두 동일 검증이 정상 통과 — 같은 프로세스군에서 6초 안에 자연 회복되는 전형적 레이스였다.
+- **환경**: `JARVIS00_INFRA/preflight.py::_check_internal_imports()`(Layer 0), `JARVIS08_PUBLISH/platforms/naver_poster.py`(대상 모듈, 실제 코드 결함 아님).
+- **원인**: `naver_poster.py`는 `pyautogui`를 **모든 호출을 함수 내부에서 지연(lazy) import** 한다(AST 파싱으로 모듈 top-level import 3건 — stdlib·pathlib·dotenv — 뿐임을 확인, `import pyautogui` 7곳 전부 `def` 안). 즉 `importlib.import_module("JARVIS08_PUBLISH.platforms.naver_poster")` 자체는 pyobjc(Quartz/AppKit)를 건드릴 수 없는 구조 — 이 모듈의 코드 버그가 아니다. 실제로는 `ensure_preflight()`가 `naver_cookie_refresher.py`·`economic_poster.py`·`radar_main.py` 등 **다수의 독립 subprocess 진입점**에서 각각 콜드 프로세스로 호출되는데, 그중 여러 개가 거의 동시에 뜨면 macOS pyobjc 브릿지(Quartz/AppKit objc 클래스 등록·메타데이터 캐시)가 프로세스 간 레이스를 일으켜 `import Quartz`가 드물게 스스로 폭발한다(`_pyautogui_osx.py`의 `try: import Quartz except: assert False, "..."`) — 이 예외가 *그 순간 import 루프가 마침 처리 중이던 모듈명*(naver_poster)에 귀속되어 보고된 것일 뿐, 근본 원인은 동시성 레이스지 naver_poster 자체가 아니다.
+- **헛다리**: 처음엔 naver_poster.py 상단에 숨은 `import pyautogui`가 있을 것으로 의심 → grep + `ast.parse()`로 전체 top-level import 노드를 전수 확인해 배제. `.venv` 의 pyobjc 설치 상태도 의심 → `pip show`로 pyobjc-core/pyobjc-framework-Quartz/Cocoa 12.1 정상 설치 확인 + 수동 `import Quartz` 성공 확인으로 배제.
+- **해결**: `_check_internal_imports()`를 모듈당 **최대 3회 재시도**(실패 시 0.5초 대기 후 재시도, 프로젝트 전역 "재시도 최대 3회" 원칙 준수)로 변경. Python은 모듈 실행 중 예외 발생 시 해당 모듈을 `sys.modules`에서 자동 제거하므로 재시도가 항상 깨끗한 재-import를 수행. 진짜 코드 결함(ImportError/AttributeError 등 결정론적 오류)은 3회 모두 동일하게 실패하므로 은폐되지 않고 그대로 보고됨 — 오직 레이스성 일시 실패만 흡수.
+- **파일**: `JARVIS00_INFRA/preflight.py`.
+- **교훈**: 보고된 오류의 `module` 필드는 *예외가 귀속된 위치*일 뿐 *예외의 발생 위치*가 아닐 수 있다 — 특히 여러 독립 프로세스가 동시에 같은 검증 루틴을 도는 구조에서는, 대상 모듈의 실제 코드(AST)를 먼저 확인해 "이 모듈이 그 예외를 낼 수 있는 구조인가"부터 검증할 것. pyobjc/Quartz 같은 OS 프레임워크 바인딩은 콜드 임포트 시 프로세스 간 레이스로 드물게 실패할 수 있는 범주로 알려져 있으므로, 이런 외부 프레임워크 import 검증에는 짧은 재시도가 정당한 방어책(코드 버그를 가리는 게 아니라 환경 레이스만 흡수).
+
+---
+
 ## [462] ✅ 수동수정 — `delegate_to_claude_code` ReAct 도구가 Claude CLI spawn 직렬화(세마포어·크로스프로세스 락)를 우회 — writer 파이프라인과 경합 가능 (2026-07-20)
 
 - **증상**: 사용자가 [459]/[461]/[460] 사고 설명 도중 "짧은 시간에 요청이 몰리면 직렬로 나눠서 작업하도록 짰다면서 왜 그러냐"고 질문 → 코드 확인 결과 `shared/llm.py`의 실제 spawn 직렬화(in-process `BoundedSemaphore` + 크로스프로세스 fcntl 락, `LLM_MAX_CONCURRENCY` 기본 1)는 `invoke_text()`(writer 파이프라인) 호출부에만 걸려 있고, 같은 Claude Max 구독 CLI를 spawn하는 다른 두 경로 중 하나가 이를 우회하고 있었음. `shared/claude_sdk_compat.run_sdk_query()`(GUARDIAN Tier-2 자가수정·새벽 심층감사가 사용)는 [ERRORS 전수감사 커밋 6fb9e57, 2026-07-19 이전]에서 이미 `shared.llm._pace_spawn()`/`_acquire_llm_sem()`/`_proc_lock_acquire()`에 합류되어 있어 문제 없음(사용자에게 "GUARDIAN도 우회한다"고 설명한 것은 이 커밋을 못 보고 한 부정확한 설명 — 본 항목에서 정정). 반면 `JARVIS01_MASTER/agent_tools.py`의 `delegate_to_claude_code`(사용자 자유 문장 ReAct 위임 도구, Telegram 승인 게이트 통과 후 실행)는 `claude_code_sdk.query()`를 직접 호출하며 이 직렬화를 전혀 타지 않았음 — 동시에 PATH 수동 prepend(`/opt/homebrew/bin`만, `_EXTRA_PATHS` 5종 중 일부 누락)·`ANTHROPIC_API_KEY=""` OAuth 강제 누락(가짜 키 누수 가능)·MessageParseError 패치 보장 없음까지 `run_sdk_query()`가 이미 해결한 문제들을 전부 재노출하고 있었음.
