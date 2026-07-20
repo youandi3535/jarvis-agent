@@ -351,6 +351,11 @@ def _sanitize_prompt(s: str) -> str:
 
 
 # 동시 claude CLI spawn 상한 (기본 1 = 완전 직렬 — Max burst 안전). env 로 튜닝.
+# ★ 토큰 계측용 alias 전파 (ERRORS [456]) — _run_sdk_sync 는 model 만 받으므로
+#   "어느 용도(alias)가 얼마나 썼는지" 를 귀속하려면 호출 문맥이 필요하다.
+import contextvars as _contextvars
+_CURRENT_ALIAS: "_contextvars.ContextVar[str]" = _contextvars.ContextVar("llm_alias", default="")
+
 _LLM_MAX_CONCURRENCY = max(1, int(os.getenv("LLM_MAX_CONCURRENCY", "1") or "1"))
 _LLM_SPAWN_SEM = _threading.BoundedSemaphore(_LLM_MAX_CONCURRENCY)
 # spawn 간 최소 간격(초) — 기본 0(off). rate-limit 잦으면 0.5~1 로 상향.
@@ -525,6 +530,9 @@ def _run_sdk_sync(
     throttled = {"v": False}
     hung = {"v": False}
     truncated = {"v": False}   # ★ 우리 데드라인이 스트림을 끊었는데 부분출력 존재 = 인프라 절단
+    # ★ 토큰 계측 (ERRORS [456]): ResultMessage 의 usage/cost 를 박제해 사용량 가시화.
+    #   종전엔 num_turns 만 보고 나머지를 버려 "언제 얼마나 썼는지" 를 알 수 없었다.
+    _meter = {"usage": None, "cost": 0.0, "dur": 0, "turns": 0}
 
     try:
         from JARVIS00_INFRA.watchdog import beat as _wd_beat
@@ -544,8 +552,22 @@ def _run_sdk_sync(
                 # ★ Max 구독 burst 스로틀 감지 (사용자 박제 2026-07-01): rate-limit 시 CLI 는
                 #   모델을 호출하지 않고 ResultMessage(num_turns=0, duration_api_ms=0, success)만
                 #   흘려 *빈 응답* 을 낸다(예외 아님). 조용한 degrade 방지 위해 플래그로 표식.
-                elif type(msg).__name__ == "ResultMessage" and getattr(msg, "num_turns", 1) == 0:
-                    throttled["v"] = True
+                elif type(msg).__name__ == "ResultMessage":
+                    if getattr(msg, "num_turns", 1) == 0:
+                        throttled["v"] = True
+                    # 계측 — 성공·스로틀 무관하게 항상 수집 (스로틀도 데이터)
+                    _meter["usage"] = getattr(msg, "usage", None)
+                    _meter["cost"]  = getattr(msg, "total_cost_usd", 0.0) or 0.0
+                    _meter["dur"]   = getattr(msg, "duration_ms", 0) or 0
+                    _meter["turns"] = getattr(msg, "num_turns", 0) or 0
+                elif type(msg).__name__ == "SystemMessage" and \
+                        getattr(msg, "subtype", "") == "rate_limit_event":
+                    # ★ Anthropic 이 주는 한도 정보 — 종전엔 통째로 버려졌다
+                    try:
+                        from shared.token_usage import record_rate_limit
+                        record_rate_limit(getattr(msg, "data", None), source="llm")
+                    except Exception:
+                        pass
 
     def _run_blocking() -> None:
         # ★ 이벤트 루프 오염 방지 (ERRORS [443] — 사용자 박제 2026-07-16):
@@ -628,6 +650,17 @@ def _run_sdk_sync(
     if _was_throttled:
         import logging as _logging
         _logging.getLogger("jarvis.llm").debug("rate-limit 스로틀 (num_turns=0) — 재시도/폴백")
+    # ★ 토큰 계측 박제 (ERRORS [456]) — 실패해도 본류를 막지 않는다.
+    try:
+        from shared.token_usage import record_call
+        record_call(
+            alias=_CURRENT_ALIAS.get() or "", model=model,
+            usage=_meter["usage"], cost_usd=_meter["cost"],
+            duration_ms=_meter["dur"], num_turns=_meter["turns"],
+            ok=bool(parts), source="daemon",
+        )
+    except Exception:
+        pass
     return "".join(parts)
 
 
@@ -797,6 +830,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
     #   기본 _retries=4 → 실효 3으로 캡. deadline/_nonessential/probe/open 강등은 더 낮춤.
     retries = max(1, min(3, _retries))
     backoff = True
+    _CURRENT_ALIAS.set(alias or "")   # ★ 토큰 계측 귀속 (ERRORS [456])
 
     # ★ 글로벌 데드라인 강등 — 발행 파이프라인(economic_poster 등)이 설정
     try:

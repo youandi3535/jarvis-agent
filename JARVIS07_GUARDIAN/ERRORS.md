@@ -7941,6 +7941,21 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `shared/pytrends_utils.py`, `JARVIS02_WRITER/CLAUDE_WRITER.md`
 - **교훈**: ① **venv 안 site-packages 손수정은 규정으로 삼지 말 것** — venv 재생성 한 번에 소실되고, 폴백이 있는 코드에서는 *무증상* 으로 열화한다. 외부 라이브러리 비호환은 반드시 *저장소 코드* 에서 흡수. ② 라이브러리 패치 필요 여부를 검증할 땐 **실제 호출 시그니처 그대로** 재현할 것 — 기본 인자로 테스트하면 조건부 코드 경로를 건너뛰어 거짓 음성이 난다. ③ `except Exception: return []` 폴백은 견고성을 주지만 *열화를 은폐* 한다 — 폴백 발동 시 최소 1회는 경보를 남길 것. ④ 호환 셤의 *가드 조건* 자체를 반드시 실측 시그니처로 검증할 것(내가 한 번 틀렸다).
 
+## [456] LLM 토큰 사용량 관측 공백 — rate_limit_event 페이로드 폐기 + 집계 0줄 → 한도 문제를 매번 추측 (2026-07-20)
+- **증상**: 아침 경제 브리핑이 `topic_pack 프로필 LLM 빈 응답` 으로 차단됐는데, "언제 얼마나 썼는지·한도가 얼마인지" 를 확인할 방법이 전무해 원인 규명이 추측에 의존. 최초 진단에서 *워크플로 과다 사용이 원인* 이라 단정했다가, 트랜스크립트를 직접 집계한 뒤 해당 워크플로는 주간 총량의 0.6%(출력 154,795 토큰)에 불과함이 드러나 정정.
+- **환경**: `shared/llm.py`(Claude Code SDK·Max 구독 OAuth), `shared/claude_sdk_compat.py`, 대시보드 `dashboard/` + `api_server.py`.
+- **원인**: 관측 지점 3곳이 모두 비어 있었다. ① `shared/llm.py` 에 토큰 집계 코드 **0줄** — `ResultMessage` 를 받으면서도 `num_turns` 만 보고 `usage`·`total_cost_usd` 를 버림. ② `claude_sdk_compat._patched()` 가 `rate_limit_event` 를 `SystemMessage` 로 흡수하면서 **타입명만 로깅하고 페이로드를 폐기** — Anthropic 이 내려주는 한도·리셋 정보가 여기 들어오는데 통째로 유실. ③ `claude` CLI 에 사용량 조회 서브커맨드 없음. 결과적으로 유일한 사실 소스는 `~/.claude/projects/**/*.jsonl` 트랜스크립트뿐인데 아무도 읽지 않았다.
+- **헛다리**: ① "워크플로 284만 토큰이 한도를 태웠다" — 284만은 워크플로의 `subagent_tokens` 집계(캐시 읽기 포함)이지 *출력 토큰이 아니다*. 실제 출력은 154,795(주간 26.6M 의 0.6%). ② "5시간 롤링 윈도우 소진" — 실패 시각(06:02·07:02·12:02) 직전 5시간 출력이 모두 0 으로 반증. ③ "제안 패널을 만들면 끝" — 초기 구현이 "재시도 3회"·"잡 42개"·"면제 alias 4종" 을 *문자열로 박아* 관리자가 노브를 바꿔도 옛 값을 말하는 문서 드리프트를 그대로 재현(자체감사에서 발견·수정).
+- **해결**: `shared/token_usage.py` 신설 — 계측·집계 단일 진입점.
+  - **수집 2경로(상호 보완, 합산 금지)**: ① *라이브 계기* — `_run_sdk_sync` 와 `run_sdk_query` 가 `ResultMessage.usage/cost/duration` 을 `record_call()` 로 박제. alias 귀속을 위해 `_CURRENT_ALIAS` ContextVar 도입(`invoke_text` 진입 시 set). ② *트랜스크립트 스캔* — Claude Code 대화·서브에이전트까지 포함하는 총량. 두 경로는 겹치므로 UI 가 총량/내역으로 분리 표기.
+  - **rate_limit_event 보존**: `record_rate_limit()` 이 원문 JSON 을 `llm_rate_limit_events` 에 박제(스키마 미상이라 통째 보존). llm.py·sdk_compat 양쪽 경로 모두 연결.
+  - **증분 캐시**: 전체 이력 스캔이 8943 파일 ≈ 6.7초라 `llm_usage_daily` 테이블에 일별 집계를 캐시하고 최근 2일만 재스캔 → **0.5초**.
+  - **제안 엔진**: `suggestions()` 가 *실시간 설정값* (`_live_config()` — 회로 임계·면제 alias·BG alias·재시도 상한·harness max_attempts·DEFAULT_JOBS interval 수)을 읽어 근거·조치·예상효과·트레이드오프·조절지점을 생성. 노브를 바꾸면 문구·심각도가 즉시 따라 변한다(면제 2종으로 축소 시 medium→good 자동 재평가로 실증).
+  - **노출**: `/api/tokens` → 홈탭 `TokenPanel`(사무실 뷰 아래) — KPI 4·시간대별·일별 추세·전체 이력 선차트(recharts)·용도별 내역·한도 이벤트·제안.
+- **검증**: 계기 왕복(record→summary) 성공 / 증분 캐시 6.7s→0.5s / 이력 33일(2026-06-07~) 88M 출력 / `npx tsc --noEmit` 통과 / 데몬 재시작 후 `/api/tokens` 200·대시보드 9199 렌더 확인 / precommit46 통과.
+- **파일**: `shared/token_usage.py`(신규), `shared/llm.py`, `shared/claude_sdk_compat.py`, `api_server.py`, `dashboard/app/page.tsx`, `dashboard/lib/api.ts`
+- **교훈**: ① **관측 없는 계정은 사후 추측만 남는다** — 외부 서비스가 보내주는 진단 신호(`rate_limit_event`)를 "미지 타입" 이라며 버리는 흡수 로직은 *호환성은 지키고 정보는 잃는* 최악의 조합. 흡수할 때는 반드시 원문을 남길 것. ② 사용량 지표는 **출력 토큰·캐시 읽기·집계 카운터를 명확히 구분** 할 것 — 혼동하면 원인 귀속을 완전히 틀린다(0.6% 를 주범으로 지목했다). ③ **대시보드에 인용하는 설정값은 반드시 런타임 조회** — 문자열로 박으면 CLAUDE.md 드리프트와 동일한 사고가 UI 에서 재발한다. ④ 무거운 전수 스캔은 *불변 구간을 DB 에 캐시 + 최근분만 증분* 이 정석.
+
 ---
 ### [2026-07-11 05:01] ✅ 자동수정 — RuntimeError
 - **증상**: 트렌드 수집 실패 (rc=75): it__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!

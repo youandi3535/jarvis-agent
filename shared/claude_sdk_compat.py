@@ -123,6 +123,15 @@ def _install_message_parser_patch() -> None:
                 mtype = data.get("type", "unknown") if isinstance(data, dict) else "unknown"
                 payload = data if isinstance(data, dict) else {}
                 log.info(f"[sdk_compat] 미지 message type 흡수: {mtype}")
+                # ★ rate_limit_event 는 Anthropic 이 주는 *한도·리셋 정보* 를 담는다.
+                #   종전엔 타입명만 찍고 페이로드를 통째로 버려 사용량 관측이 불가능했다
+                #   (ERRORS [456]). 원문을 DB 에 박제해 대시보드에서 확인 가능하게 한다.
+                if mtype == "rate_limit_event":
+                    try:
+                        from shared.token_usage import record_rate_limit
+                        record_rate_limit(payload, source="sdk_compat")
+                    except Exception:
+                        pass
                 return SystemMessage(subtype=mtype, data=payload)
             except Exception:
                 raise  # 흡수 자체 실패 시 원본 예외 전파

@@ -68,3 +68,24 @@ export type PipelineEdge = {
 export type LegendItem = { col: string; label: string };
 export type LayoutConst = { W: number; H: number; CARD_W: number; CARD_H: number; BIG_W: number; BIG_H: number };
 export type GraphData  = { agents: AgentDef[]; edges: PipelineEdge[]; legend: LegendItem[]; layout: LayoutConst };
+
+// ── 토큰 사용량 현황판 (ERRORS [456]) ──────────────────────────────
+export type TokenDaily   = { date: string; output: number; input: number; cache_create: number; cache_read: number; calls: number };
+export type TokenHour    = { hour: string; output: number };
+export type TokenProject = { project: string; output: number; calls: number };
+export type TokenAlias   = { alias: string; model: string; calls: number; output: number; input: number; cache_create: number; cache_read: number; cost: number; failed: number };
+export type TokenCall    = { ts: string; alias: string; model: string; output_tokens: number; input_tokens: number; cache_read: number; duration_ms: number; num_turns: number; ok: number };
+export type RateLimitRow = { ts: string; source: string; payload: string };
+export type TokenSuggestion = { id: string; title: string; severity: string; finding: string; action: string; effect: string; tradeoff: string; knob: string };
+export type TokenData = {
+  generated_at?: string;
+  history?: TokenDaily[];
+  suggestions?: TokenSuggestion[];
+  totals?: { available: boolean; reason?: string; scanned_files?: number;
+             daily?: TokenDaily[]; hourly_today?: TokenHour[]; by_project_today?: TokenProject[] };
+  by_alias?: TokenAlias[];
+  recent_calls?: TokenCall[];
+  rate_limits?: RateLimitRow[];
+  health?: { calls_1h?: number; empty_1h?: number; empty_rate?: number | null; state?: string };
+  error?: string;
+};

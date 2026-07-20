@@ -1,8 +1,11 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { fetcher, OverviewData, VisionAgent, PipelineEdge, GraphData, AgentDef } from "@/lib/api";
+import { fetcher, OverviewData, VisionAgent, PipelineEdge, GraphData, AgentDef, TokenData } from "@/lib/api";
 import { C, fmtNum, fmtTime, severityColor } from "@/lib/utils";
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
 
 // ═══════════════════════════════════════════════════════
 // 카드 크기 상수 — pipeline_graph.py LAYOUT 과 동기화
@@ -894,6 +897,263 @@ function Badge({ text, color }: { text:string; color:string }) {
 // ═══════════════════════════════════════════════
 // 홈 페이지
 // ═══════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+// 토큰 사용량 현황판 (ERRORS [456])
+//  - totals : 트랜스크립트 총량 (대화·서브에이전트 포함)
+//  - by_alias : 라이브 계기 (용도별 귀속) — 두 경로는 겹치므로 합산 금지
+// ═══════════════════════════════════════════════════════
+function fmtTok(n?: number): string {
+  if (n == null) return "—";
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
+  if (n >= 1_000)     return (n / 1_000).toFixed(1) + "K";
+  return String(n);
+}
+
+function TokenPanel() {
+  const { data } = useSWR<TokenData>("/api/tokens", fetcher, { refreshInterval: 60000 });
+
+  const hist    = data?.history ?? [];
+  const sugs    = data?.suggestions ?? [];
+  const daily   = data?.totals?.daily ?? [];
+  const today   = daily.length ? daily[daily.length - 1] : undefined;
+  const hourly  = data?.totals?.hourly_today ?? [];
+  const aliases = data?.by_alias ?? [];
+  const rls     = data?.rate_limits ?? [];
+  const health  = data?.health;
+
+  const week = daily.slice(-7).reduce((s, d) => s + (d.output || 0), 0);
+  const maxHour = Math.max(1, ...hourly.map(h => h.output));
+  const maxDay  = Math.max(1, ...daily.map(d => d.output));
+
+  const stateColor = health?.state === "정상" ? C.success
+                   : health?.state === "스로틀 의심" ? C.warn
+                   : health?.state === "스로틀/한도" ? C.danger : C.muted;
+
+  const box = {
+    background: "var(--c-card)", border: "1px solid var(--c-bdr)",
+    borderRadius: 12, padding: 20,
+  } as const;
+
+  return (
+    <div style={{ ...box, borderTop: `3px solid ${C.primary}`, marginBottom: 18 }}>
+      <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}>
+        <span style={{ fontSize:17, fontWeight:700, color:"var(--c-text)" }}>🪙 토큰 사용량 현황판</span>
+        <span style={{ fontSize:14, color:"var(--c-text5)" }}>
+          {data?.totals?.scanned_files != null ? `세션 ${data.totals.scanned_files}건 집계` : "로딩 중…"}
+        </span>
+      </div>
+
+      {/* KPI 4 */}
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20 }}>
+        {[
+          { label:"오늘 출력 토큰", value:fmtTok(today?.output), sub:`호출 ${fmtNum(today?.calls ?? 0)}건`, color:C.primary },
+          { label:"7일 누적 출력",  value:fmtTok(week),          sub:`일평균 ${fmtTok(Math.round(week/7))}`, color:C.warn },
+          { label:"오늘 캐시 읽기", value:fmtTok(today?.cache_read), sub:"저비용 입력", color:C.muted },
+          { label:"LLM 상태",       value:health?.state ?? "—",
+            sub: health?.calls_1h ? `1시간 ${health.calls_1h}회 중 빈응답 ${health.empty_1h}` : "최근 호출 없음",
+            color: stateColor },
+        ].map(k => (
+          <div key={k.label} style={{ ...box, borderTop:`3px solid ${k.color}`, padding:16 }}>
+            <div style={{ fontSize:14,color:"var(--c-text5)",marginBottom:6 }}>{k.label}</div>
+            <div style={{ fontSize:26,fontWeight:800,color:k.color }}>{k.value}</div>
+            <div style={{ fontSize:14,color:"var(--c-text5)",marginTop:4 }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:18 }}>
+        {/* 오늘 시간대별 */}
+        <div>
+          <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>오늘 시간대별 출력</div>
+          {hourly.length === 0 ? (
+            <div style={{ fontSize:14,color:"var(--c-text5)" }}>아직 사용 없음</div>
+          ) : (
+            <div style={{ display:"flex",alignItems:"flex-end",gap:4,height:120 }}>
+              {hourly.map(h => (
+                <div key={h.hour} style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4 }}>
+                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{fmtTok(h.output)}</div>
+                  <div title={`${h.hour}시 ${h.output.toLocaleString()}`}
+                       style={{ width:"100%",background:C.primary,borderRadius:"4px 4px 0 0",
+                                height:Math.max(4, (h.output/maxHour)*80) }}/>
+                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{h.hour}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 일별 추세 */}
+        <div>
+          <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>일별 출력 추세</div>
+          {daily.length === 0 ? (
+            <div style={{ fontSize:14,color:"var(--c-text5)" }}>데이터 없음</div>
+          ) : (
+            <div style={{ display:"flex",alignItems:"flex-end",gap:6,height:120 }}>
+              {daily.map(d => (
+                <div key={d.date} style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4 }}>
+                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{fmtTok(d.output)}</div>
+                  <div title={`${d.date} ${d.output.toLocaleString()}`}
+                       style={{ width:"100%",borderRadius:"4px 4px 0 0",
+                                background:d===today?C.success:C.muted,
+                                height:Math.max(4,(d.output/maxDay)*80) }}/>
+                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{d.date.slice(5)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 전체 이력 선 차트 */}
+      <div style={{ marginTop:20 }}>
+        <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>
+          일별 사용량 추이
+          <span style={{ fontSize:14,fontWeight:400,color:"var(--c-text5)",marginLeft:8 }}>
+            {hist.length ? `${hist[0].date} ~ ${hist[hist.length-1].date} (${hist.length}일)` : "기록 있는 날짜 전체"}
+          </span>
+        </div>
+        {hist.length === 0 ? (
+          <div style={{ fontSize:14,color:"var(--c-text5)" }}>데이터 없음</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={hist} margin={{ top:4,right:16,left:-8,bottom:0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--c-bdr)" />
+              <XAxis dataKey="date" tickFormatter={(d:string)=>d.slice(5)}
+                     tick={{ fontSize:14, fill:"var(--c-text5)" }} minTickGap={16}/>
+              <YAxis tickFormatter={(v:number)=>fmtTok(v)}
+                     tick={{ fontSize:14, fill:"var(--c-text5)" }}/>
+              <Tooltip
+                formatter={(v)=>Number(v ?? 0).toLocaleString()}
+                contentStyle={{ background:"var(--c-card)",border:"1px solid var(--c-bdr)",
+                                borderRadius:8,fontSize:14,color:"var(--c-text)" }}/>
+              <Line type="monotone" dataKey="output" name="출력 토큰"
+                    stroke={C.primary} strokeWidth={2.5}
+                    dot={{ r:3, fill:C.primary }} activeDot={{ r:6 }}/>
+              <Line type="monotone" dataKey="calls" name="호출 수"
+                    stroke={C.warn} strokeWidth={2} dot={false}/>
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      {/* 용도(alias)별 — 라이브 계기 */}
+      <div style={{ marginTop:20 }}>
+        <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>
+          용도별 내역 <span style={{ fontSize:14,fontWeight:400,color:"var(--c-text5)" }}>— 데몬 내부 호출 귀속</span>
+        </div>
+        {aliases.length === 0 ? (
+          <div style={{ fontSize:14,color:"var(--c-text5)" }}>
+            아직 기록 없음 — 데몬 재시작 후 다음 LLM 호출부터 집계됩니다.
+          </div>
+        ) : (
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%",borderCollapse:"collapse",fontSize:14 }}>
+              <thead>
+                <tr style={{ color:"var(--c-text5)",textAlign:"left" }}>
+                  {["용도","모델","호출","출력","입력","캐시읽기","실패"].map(h=>(
+                    <th key={h} style={{ paddingBottom:8,fontWeight:600,whiteSpace:"nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {aliases.map((a,i)=>(
+                  <tr key={i} style={{ borderTop:"1px solid var(--c-bdr)" }}>
+                    <td style={{ padding:"8px 0",color:"var(--c-text)",fontWeight:600 }}>{a.alias || "—"}</td>
+                    <td style={{ color:"var(--c-text5)" }}>{a.model || "—"}</td>
+                    <td style={{ color:"var(--c-text)" }}>{fmtNum(a.calls)}</td>
+                    <td style={{ color:C.primary,fontWeight:600 }}>{fmtTok(a.output)}</td>
+                    <td style={{ color:"var(--c-text5)" }}>{fmtTok(a.input)}</td>
+                    <td style={{ color:"var(--c-text5)" }}>{fmtTok(a.cache_read)}</td>
+                    <td style={{ color:a.failed>0?C.danger:"var(--c-text5)" }}>{a.failed}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* 한도 이벤트 */}
+      <div style={{ marginTop:20 }}>
+        <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>
+          한도 이벤트 <span style={{ fontSize:14,fontWeight:400,color:"var(--c-text5)" }}>— Anthropic rate_limit_event 원문</span>
+        </div>
+        {rls.length === 0 ? (
+          <div style={{ fontSize:14,color:"var(--c-text5)" }}>수신 이력 없음 ✓</div>
+        ) : (
+          <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:160,overflowY:"auto" }}>
+            {rls.map((r,i)=>(
+              <div key={i} style={{ fontSize:14,padding:"8px 10px",borderRadius:8,
+                                    background:"var(--c-bg)",border:`1px solid ${C.warn}` }}>
+                <span style={{ color:C.warn,fontWeight:600 }}>{r.ts}</span>
+                <span style={{ color:"var(--c-text5)",marginLeft:8 }}>{r.source}</span>
+                <div style={{ color:"var(--c-text)",marginTop:4,wordBreak:"break-all" }}>{r.payload}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 제안 — 관리자 판단용 */}
+      <div style={{ marginTop:24,paddingTop:20,borderTop:"1px solid var(--c-bdr)" }}>
+        <div style={{ fontSize:16,fontWeight:700,marginBottom:4,color:"var(--c-text)" }}>
+          💡 제안 <span style={{ fontSize:14,fontWeight:400,color:"var(--c-text5)" }}>
+            — 품질 유지하며 토큰 절감 · 한도 초과 회피
+          </span>
+        </div>
+        <div style={{ fontSize:14,color:"var(--c-text5)",marginBottom:14 }}>
+          실측 데이터 + 현재 설정값 기준 자동 분석. 적용 여부는 관리자가 판단하세요.
+        </div>
+        <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+          {sugs.length === 0 ? (
+            <div style={{ fontSize:14,color:"var(--c-text5)" }}>분석 중…</div>
+          ) : sugs.map(s => {
+            const sc = s.severity === "high" ? C.danger
+                     : s.severity === "medium" ? C.warn
+                     : s.severity === "good" ? C.success : C.muted;
+            const label = s.severity === "high" ? "즉시 검토"
+                        : s.severity === "medium" ? "권장"
+                        : s.severity === "good" ? "양호 · 유지" : "선택";
+            return (
+              <details key={s.id} style={{
+                background:"var(--c-bg)",border:"1px solid var(--c-bdr)",
+                borderLeft:`3px solid ${sc}`,borderRadius:8,padding:"12px 14px",
+              }}>
+                <summary style={{ cursor:"pointer",fontSize:14,color:"var(--c-text)",
+                                  display:"flex",alignItems:"center",gap:10 }}>
+                  <span style={{ fontSize:14,fontWeight:700,color:sc,
+                                 border:`1px solid ${sc}`,borderRadius:6,
+                                 padding:"2px 8px",whiteSpace:"nowrap" }}>{label}</span>
+                  <span style={{ fontWeight:600 }}>{s.title}</span>
+                </summary>
+                <div style={{ marginTop:12,display:"flex",flexDirection:"column",gap:8,fontSize:14,lineHeight:1.7 }}>
+                  <div><b style={{ color:"var(--c-text5)" }}>실측 근거</b><br/>
+                       <span style={{ color:"var(--c-text)" }}>{s.finding}</span></div>
+                  <div><b style={{ color:"var(--c-text5)" }}>조치</b><br/>
+                       <span style={{ color:"var(--c-text)" }}>{s.action}</span></div>
+                  <div><b style={{ color:"var(--c-text5)" }}>예상 효과</b><br/>
+                       <span style={{ color:C.success }}>{s.effect}</span></div>
+                  <div><b style={{ color:"var(--c-text5)" }}>트레이드오프</b><br/>
+                       <span style={{ color:C.warn }}>{s.tradeoff}</span></div>
+                  <div><b style={{ color:"var(--c-text5)" }}>조절 지점</b><br/>
+                       <code style={{ color:"var(--c-text)",background:"var(--c-card)",
+                                      padding:"2px 6px",borderRadius:4,wordBreak:"break-all" }}>{s.knob}</code></div>
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ fontSize:14,color:"var(--c-text5)",marginTop:16,lineHeight:1.6 }}>
+        ※ <b>잔여 토큰</b>은 Anthropic 이 한도·리셋 값을 내려줄 때만 알 수 있습니다. 위 <b>한도 이벤트</b>에
+        원문이 쌓이면 여기에 잔여량을 표시합니다. 정확한 구독 한도는 Claude Code 에서 <code>/usage</code> 로 확인하세요.
+        <br/>※ 상단 KPI(총량)와 용도별 내역은 <b>수집 경로가 달라 겹칩니다</b> — 합산하지 마세요.
+      </div>
+    </div>
+  );
+}
+
 export default function HomePage() {
   const { data: ov }     = useSWR<OverviewData>("/api/overview",       fetcher, { refreshInterval:30000 });
   const { data: agents } = useSWR<VisionAgent[]>("/api/vision/agents", fetcher, { refreshInterval:30000 });
@@ -945,6 +1205,9 @@ export default function HomePage() {
 
       {/* 에이전트 사무실 뷰 */}
       <OfficeView ov={ov} />
+
+      {/* 토큰 사용량 현황판 */}
+      <TokenPanel />
 
       {/* 최근 오류 + 심각도 분포 */}
       <div style={{ display:"grid",gridTemplateColumns:"3fr 1fr",gap:18 }}>
