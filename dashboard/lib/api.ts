@@ -89,6 +89,8 @@ export type TokenData = {
   by_alias?: TokenAlias[];
   recent_calls?: TokenCall[];
   rate_limits?: RateLimitRow[];
+  rate_limit_summary?: { total:number; normal:number; abnormal:number;
+                         last_ts?:string|null; last_abnormal_ts?:string|null; windows?:string[] };
   health?: { calls_1h?: number; empty_1h?: number; empty_rate?: number | null; state?: string };
   error?: string;
 };

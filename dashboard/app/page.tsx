@@ -910,7 +910,7 @@ function fmtTok(n?: number): string {
 }
 
 function TokenPanel() {
-  const { data } = useSWR<TokenData>("/api/tokens", fetcher, { refreshInterval: 60000 });
+  const { data } = useSWR<TokenData>("/api/tokens", fetcher, { refreshInterval: 20000 });
 
   const hist    = data?.history ?? [];
   const sugs    = data?.suggestions ?? [];
@@ -919,6 +919,8 @@ function TokenPanel() {
   const hourly  = data?.totals?.hourly_today ?? [];
   const aliases = data?.by_alias ?? [];
   const rls     = data?.rate_limits ?? [];
+  const rlSum   = data?.rate_limit_summary;
+  const calls   = data?.recent_calls ?? [];
   const health  = data?.health;
 
   const week = daily.slice(-7).reduce((s, d) => s + (d.output || 0), 0);
@@ -1117,6 +1119,70 @@ function TokenPanel() {
         )}
       </div>
 
+      {/* 실시간 호출 내역 — 언제·어떤 용도로·얼마나 썼는지 한 건씩 */}
+      <div style={{ marginTop:20 }}>
+        <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:10 }}>
+          <span style={{ fontSize:16,fontWeight:700,color:"var(--c-text)" }}>실시간 호출 내역</span>
+          <span style={{ fontSize:14,color:"var(--c-text5)" }}>
+            — 최근 {calls.length}건 · 20초마다 갱신
+          </span>
+          {calls.length > 0 && (
+            <span style={{ fontSize:14,color:"var(--c-text5)",marginLeft:"auto" }}>
+              합계 출력 {fmtTok(calls.reduce((s,c)=>s+(c.output_tokens||0),0))}
+            </span>
+          )}
+        </div>
+        {calls.length === 0 ? (
+          <div style={{ fontSize:14,color:"var(--c-text5)" }}>
+            아직 기록 없음 — 데몬이 LLM 을 호출하면 여기에 한 건씩 쌓입니다.
+          </div>
+        ) : (
+          <div style={{ overflowX:"auto",maxHeight:340,overflowY:"auto",
+                        border:"1px solid var(--c-bdr)",borderRadius:8 }}>
+            <table style={{ width:"100%",borderCollapse:"collapse",fontSize:14 }}>
+              <thead style={{ position:"sticky",top:0,background:"var(--c-card)",zIndex:1 }}>
+                <tr style={{ color:"var(--c-text5)",textAlign:"left" }}>
+                  {["시각","용도","출력","입력","캐시읽기","소요","상태"].map(h=>(
+                    <th key={h} style={{ padding:"10px 12px",fontWeight:600,whiteSpace:"nowrap",
+                                         borderBottom:"1px solid var(--c-bdr)" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {calls.map((c,i)=>{
+                  const empty = !c.output_tokens;
+                  return (
+                    <tr key={i} style={{ borderTop:"1px solid var(--c-bdr)" }}>
+                      <td style={{ padding:"8px 12px",color:"var(--c-text5)",whiteSpace:"nowrap" }}>
+                        {String(c.ts).slice(11,19)}
+                      </td>
+                      <td style={{ padding:"8px 12px",color:"var(--c-text)",fontWeight:600,
+                                   whiteSpace:"nowrap" }}>{c.alias || "—"}</td>
+                      <td style={{ padding:"8px 12px",color:empty?C.danger:C.primary,fontWeight:700 }}>
+                        {fmtNum(c.output_tokens)}
+                      </td>
+                      <td style={{ padding:"8px 12px",color:"var(--c-text5)" }}>{fmtNum(c.input_tokens)}</td>
+                      <td style={{ padding:"8px 12px",color:"var(--c-text5)" }}>{fmtTok(c.cache_read)}</td>
+                      <td style={{ padding:"8px 12px",color:"var(--c-text5)",whiteSpace:"nowrap" }}>
+                        {c.duration_ms ? `${(c.duration_ms/1000).toFixed(1)}s` : "—"}
+                      </td>
+                      <td style={{ padding:"8px 12px",whiteSpace:"nowrap",
+                                   color:empty?C.danger:C.success }}>
+                        {empty ? "빈 응답" : "정상"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div style={{ fontSize:14,color:"var(--c-text5)",marginTop:8,lineHeight:1.6 }}>
+          ※ <b>용도</b>는 어떤 기능이 호출했는지입니다 (writer=대본 작성, analyzer=수집 분석,
+          fact_judge=사실성 검증, guardian=자가수리 등). <b>빈 응답</b>이 연속으로 뜨면 스로틀·장애 신호입니다.
+        </div>
+      </div>
+
       {/* 한도 이벤트 */}
       <div style={{ marginTop:20 }}>
         <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>
@@ -1165,9 +1231,35 @@ function TokenPanel() {
                           maxHeight:160,overflowY:"auto" }}>{JSON.stringify(qraw)}</div>
           </details>
         )}
+        {rlSum && (
+          <div style={{ fontSize:14,padding:"12px 14px",borderRadius:8,marginBottom:10,
+                        background:"var(--c-bg)",border:"1px solid var(--c-bdr)",
+                        borderLeft:`3px solid ${rlSum.abnormal ? C.danger : C.success}` }}>
+            <div style={{ display:"flex",gap:18,flexWrap:"wrap",alignItems:"center" }}>
+              <span style={{ fontWeight:700,
+                             color:rlSum.abnormal ? C.danger : C.success }}>
+                {rlSum.abnormal ? `⚠ 제한 ${rlSum.abnormal}건` : "제한 걸린 적 없음 ✓"}
+              </span>
+              <span style={{ color:"var(--c-text5)" }}>
+                최근 {fmtNum(rlSum.total)}건 수신 · 정상 {fmtNum(rlSum.normal)}
+              </span>
+              {rlSum.last_ts && <span style={{ color:"var(--c-text5)" }}>
+                마지막 수신 {String(rlSum.last_ts).slice(5,16)}
+              </span>}
+              {rlSum.windows?.length ? <span style={{ color:"var(--c-text5)" }}>
+                대상 {rlSum.windows.join(" · ")}
+              </span> : null}
+            </div>
+            <div style={{ color:"var(--c-text5)",marginTop:8,lineHeight:1.6 }}>
+              Anthropic 이 <b>LLM 호출마다</b> 보내는 한도 통지입니다. 정상 건은 세기만 하고
+              숨깁니다 — <b>여기 목록이 비어 있으면 한 번도 제한에 걸리지 않았다는 뜻</b>입니다.
+              제한이 발생하면 그 건만 아래에 시각·대상 창·리셋 시각과 함께 표시됩니다.
+            </div>
+          </div>
+        )}
         {rls.length === 0 ? (
           <div style={{ fontSize:14,color:"var(--c-text5)" }}>
-            {qraw ? "rate_limit_event 수신 이력 없음 ✓" : "수신 이력 없음 ✓"}
+            {rlSum ? "" : "수신 이력 없음 ✓"}
           </div>
         ) : (
           <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:220,overflowY:"auto" }}>

@@ -129,6 +129,10 @@ def record_rate_limit(payload: dict | None, source: str = "daemon") -> None:
     스키마를 모르므로 *원문 JSON 통째로* 보존한다.
     """
     try:
+        # ★ 스모크 테스트가 주입한 합성 이벤트는 박제하지 않는다 (관측 도구가
+        #   관측 대상을 오염시키면 안 됨 — 2026-07-20 사용자 발견).
+        if isinstance(payload, dict) and payload.get("__smoke__"):
+            return
         _init()
         from shared.db import get_db
         body = json.dumps(payload or {}, ensure_ascii=False)[:8000]
@@ -396,7 +400,7 @@ _RL_OVERAGE_REASON = {
 }
 
 
-def _humanize_rate_limits(rows: list[dict]) -> list[dict]:
+def _humanize_rate_limits(rows: list[dict], limit: int = 20) -> list[dict]:
     """rate_limit_event 원문 → 화면용 구조. uuid 기준 중복 제거."""
     seen: set = set()
     out: list[dict] = []
@@ -447,7 +451,7 @@ def _humanize_rate_limits(rows: list[dict]) -> list[dict]:
             "overage": overage,              # 초과사용 가능 여부
             "raw": r.get("payload"),         # 접어둔 원문 (디버깅용)
         })
-    return out[:20]
+    return out[:limit]
 
 
 # ── 집계 API ───────────────────────────────────────────────────────────
@@ -515,9 +519,21 @@ def summary(days: int = 8) -> dict:
 
             rl = conn.execute(
                 "SELECT ts, source, payload FROM llm_rate_limit_events "
-                "ORDER BY id DESC LIMIT 60"
+                "ORDER BY id DESC LIMIT 400"
             ).fetchall()
-            out["rate_limits"] = _humanize_rate_limits([dict(r) for r in rl])
+            ev = _humanize_rate_limits([dict(r) for r in rl], limit=400)
+            abnormal = [e for e in ev if not e["ok"]]
+            # ★ 이 이벤트는 *매 호출마다* 온다 — 정상 건을 나열하면 소음만 쌓인다.
+            #   요약(총/정상/이상) + 이상 건만 노출한다 (사용자 지적 2026-07-20).
+            out["rate_limits"] = abnormal[:20]
+            out["rate_limit_summary"] = {
+                "total": len(ev),
+                "normal": len(ev) - len(abnormal),
+                "abnormal": len(abnormal),
+                "last_ts": ev[0]["ts"] if ev else None,
+                "last_abnormal_ts": abnormal[0]["ts"] if abnormal else None,
+                "windows": sorted({e["window"] for e in ev if e["window"] and e["window"] != "—"}),
+            }
 
             # 최근 1시간 빈 응답률 = 스로틀 체감 지표
             h = conn.execute(

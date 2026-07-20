@@ -185,7 +185,12 @@ def patch_effective() -> bool | None:
     if fn is None:
         return None
     try:
-        fn({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}})
+        # ★ `__smoke__` 표식 — record_rate_limit 이 이 합성 입력을 *박제하지 않도록*.
+        #   (표식 없이 던지면 검사용 가짜 이벤트가 진짜처럼 DB 에 쌓여 한도 이력을
+        #    오염시킨다 — 실제로 그렇게 되어 사용자가 발견. 관측 도구가 관측 대상을
+        #    더럽히면 안 된다.)
+        fn({"type": "rate_limit_event",
+            "rate_limit_info": {"status": "allowed"}, "__smoke__": True})
         return True
     except Exception:
         return False
