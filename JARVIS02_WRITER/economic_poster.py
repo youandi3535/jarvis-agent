@@ -761,6 +761,7 @@ def run(post_naver=True, post_tistory=True):
     naver_ok = tistory_ok = False
     nv_keyword = ts_keyword = ""
     _concurrent_blocked = False
+    _nv_res = _ts_res = None  # ★ ActionResult — deferred(인프라 스로틀) 판정 전달용
 
     def _write_ep_partial():
         """★ 리뷰 확정 수정 (2026-07-03): 각 액션 종결 직후 플랫폼 결과를 즉시 기록.
@@ -768,6 +769,10 @@ def run(post_naver=True, post_tistory=True):
         플랫폼 직렬화로 '네이버 완료 ~ 프로세스 종료' 구간이 티스토리 액션 시간만큼
         길어짐 — 그 사이 subprocess timeout 시 결과 파일이 없으면 incident responder 가
         *이미 발행된 네이버까지* 재발행 (이중 발행). 부분 기록으로 차단.
+
+        ★ ERRORS [459] 동일 클래스 — naver_deferred/tistory_deferred 도 함께 기록해야
+        scheduler.py 가 harness 의 "인프라 스로틀 지속(코드 결함 아님)" 판정을 GUARDIAN
+        트리거 이전에 걸러낼 수 있다. 테마 경로(run_all_themes)에 이미 적용된 패턴.
         """
         _f = os.environ.get("JARVIS_EP_RESULT_FILE", "")
         if not _f:
@@ -775,7 +780,11 @@ def run(post_naver=True, post_tistory=True):
         try:
             import json as _jp
             with open(_f, "w", encoding="utf-8") as _rf:
-                _jp.dump({"naver": bool(naver_ok), "tistory": bool(tistory_ok)}, _rf)
+                _jp.dump({
+                    "naver": bool(naver_ok), "tistory": bool(tistory_ok),
+                    "naver_deferred": bool(getattr(_nv_res, "deferred", False)),
+                    "tistory_deferred": bool(getattr(_ts_res, "deferred", False)),
+                }, _rf)
         except Exception:
             pass
 
@@ -1017,6 +1026,8 @@ def run(post_naver=True, post_tistory=True):
                 _jsr.dump({
                     "naver": bool(naver_ok),
                     "tistory": bool(tistory_ok),
+                    "naver_deferred": bool(getattr(_nv_res, "deferred", False)),
+                    "tistory_deferred": bool(getattr(_ts_res, "deferred", False)),
                     "harness_issues": _harness_issues,
                     "escalation_reason": _escalation_reason,
                 }, _rf)

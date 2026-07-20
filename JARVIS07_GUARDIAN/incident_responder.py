@@ -64,6 +64,16 @@ def _classify(error_text: str) -> str:
     for kw in _CODE_BUG_TYPES:
         if kw in error_text:
             return "code_bug"
+    # ★ severity.is_transient() 를 단일 진실 소스로 우선 조회 — "인프라 스로틀"·
+    #   "데드라인 초과"·"종목 데이터 0개" 등 harness/GUARDIAN 전역에서 이미 검증된
+    #   transient 패턴이 여기 없어 매번 code_bug/unknown 으로 새 Tier-2 SDK 세션을
+    #   낭비하는 사고를 방지한다(복사본 드리프트 — CLAUDE.md 최우선 설계 원칙).
+    try:
+        from JARVIS07_GUARDIAN.severity import is_transient
+        if is_transient("", error_text):
+            return "transient"
+    except Exception:
+        pass
     for kw in _TRANSIENT_KEYWORDS:
         if kw.lower() in error_text.lower():
             return "transient"

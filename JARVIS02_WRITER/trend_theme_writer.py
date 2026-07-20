@@ -1116,6 +1116,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     # ② 티스토리 액션 — 네이버 *종결 후* 시작. 종목 데이터 없으면 스킵
     #    (진짜 data_empty → 상위 테마 교체 / 수집 미실행 → 교체 아닌 단순 실패)
     _ts_res = {"success": False, "url": "", "keyword": theme}
+    _ts_deferred = False
     if not _stocks_ok:
         print(f"  ⏭️ [티스토리] 종목 데이터 {'0개' if _data_empty else '미수집(네이버 액션 조기 종결)'} — 발행 스킵")
     else:
@@ -1136,13 +1137,15 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             _reason = getattr(_ts_result, "escalation_reason", "최대 시도 초과 또는 abort")
             if getattr(_ts_result, "deferred", False):
                 # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도.
+                _ts_deferred = True
                 print(f"  ⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
                 _tg(f"⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n테마: {theme}")
             else:
                 _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
 
     _mark_pub(False)  # ★ 테마 발행 완료 — background alias 강등 해제
-    return {"theme": theme, "tistory": _ts_res, "naver": _nv_res, "data_empty": _data_empty}
+    return {"theme": theme, "tistory": _ts_res, "naver": _nv_res, "data_empty": _data_empty,
+            "tistory_deferred": _ts_deferred}
 
 
 __all__ = [

@@ -2,6 +2,30 @@
 
 ---
 
+## [460] ✅ 해결 — [459]와 동일 클래스: 경제 브리핑 경로도 `deferred` 미전파로 GUARDIAN 오발동 가능 + 재발 방지(daemon 미재시작) (2026-07-20)
+
+- **증상**: [459]의 실사고는 테마(mRNA 21:33:47, 항공기부품 22:25:44) 티스토리에서만 관측됐지만, 같은 날 사용자 요청("완벽하게 해결··· 근본적인 원인")으로 인접 코드를 감사한 결과 `JARVIS02_WRITER/economic_poster.py::run()` → `JARVIS02_WRITER/scheduler.py::run_economic_poster()` 경로가 **[459]의 수정 대상에 전혀 포함되지 않은 채** 동일한 유실 패턴(`ActionResult.deferred` → subprocess 결과 파일에 미기록 → `failed` 리스트가 boolean 만으로 구성 → `_trigger_economic_incident()`가 deferred 플랫폼까지 그대로 GUARDIAN에 전달)을 그대로 가지고 있음을 코드 대조로 확인. 경제 경로는 subprocess 기반(`economic_poster.py --scheduled`)이라 결과가 `JARVIS_EP_RESULT_FILE` JSON을 통해서만 부모(scheduler.py)로 전달되는데, 이 JSON에 `naver_deferred`/`tistory_deferred` 필드 자체가 없었음(테마는 in-process 호출이라 반환 dict 하나로 해결되지만 경제는 프로세스 경계를 넘어야 해서 문제가 한 겹 더 깊었음).
+  - 추가로 [459]의 테마 쪽 수정 자체가 **커밋되지 않은 상태로 파일에만 존재**했고(`git diff HEAD` 확인), 데몬 프로세스는 그 수정이 파일에 쓰인 시각(21:38, mtime)보다 훨씬 이전인 18:07:43에 기동된 채였다 — Python import 캐시로 인해 22:25:44의 두 번째 테마 사고(항공기부품)는 이미 디스크에 존재하던 [459] 수정이 **로드되지 않은 옛 프로세스**에서 재발했을 가능성이 높음(CLAUDE.md "복사본을 진실로 믿지 말 것" / "재시작 전 검증 금지" 두 원칙과 정확히 일치하는 사례).
+- **환경**: `JARVIS02_WRITER/economic_poster.py::run()`(`_write_ep_partial()` 및 최종 `JARVIS_EP_RESULT_FILE` JSON 덤프), `JARVIS02_WRITER/scheduler.py::run_economic_poster()`(`failed` 산출부·`_trigger_economic_incident()` 호출부).
+- **헛다리**: 없음 — [459] 수정 커밋 전 `git diff HEAD -- JARVIS02_WRITER/scheduler.py`로 실제 변경 범위를 라인 단위로 확인한 뒤 경제 경로에 동일 패턴이 없음을 grep(`naver_deferred|tistory_deferred|economic`)으로 실증하고 착수.
+- **해결**: ① `economic_poster.py::run()` — `_nv_res`/`_ts_res`(ActionResult, `.deferred` 보유) 사전 선언 후 `_write_ep_partial()`과 최종 결과 JSON 양쪽에 `naver_deferred`/`tistory_deferred` 키 추가([459]와 동일한 필드명으로 하류 소비자 일관성 유지). ② `scheduler.py::run_economic_poster()` — 결과 파일에서 읽은 `_deferred` dict로 `_guardian_failed = [k for k in failed if not _deferred.get(k, False)]`를 산출해 GUARDIAN 트리거 조건과 `_trigger_economic_incident()` 호출 인자를 `failed`→`_guardian_failed`로 교체(로그용 `failed`는 그대로 유지). ③ [459]의 테마 쪽 미커밋 수정과 본 수정을 함께 커밋 + `./restart_daemon.sh`로 재기동해 재시작-전-검증 금지 원칙 준수.
+- **파일**: `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/scheduler.py`.
+- **교훈**: 같은 버그가 플랫폼 직렬 파이프라인의 "동렬" 경로(테마/경제)에 반복 존재할 수 있다 — 한쪽을 고칠 때 반드시 자매 경로를 grep으로 대조할 것. 또한 GUARDIAN 자신(Tier-2 SDK)이 스스로 진단해 작성한 수정이라 해도 커밋·재시작 전까지는 "적용된 수정"이 아니라 "디스크 위의 초안"에 불과 — 수정 완료 보고와 배포 완료는 별개다.
+
+---
+
+## [459] ✅ 해결 — 테마 티스토리 인프라 스로틀 `deferred` 판정이 harness→scheduler 경계에서 유실되어 GUARDIAN Tier-2 SDK 낭비 (2026-07-20)
+
+- **증상**: `theme=mRNA(메신저 리보핵산)` 테마의 티스토리 액션(`⑤ 티스토리 대본 생성`)이 3회 연속(21:20:43·21:27:14·21:33:46) `SDK timeout 300s — 수집된 응답: 0개`(인프라 스로틀)로 `harness max_attempts`(3) 소진 → harness 자체는 이를 정확히 `deferred=True`(인프라 스로틀 지속, 다음 회차 자연 재시도)로 판정했음에도 `scheduler.py`가 이 구분 없이 GUARDIAN `incident_responder.respond_in_background()`를 그대로 트리거 → 저정보 텍스트(`"harness max_attempts 소진"`)만으로 `_classify()`가 unknown 판정 → 불필요한 Tier-2 Claude Code SDK 세션(최대 10분) 낭비. (본 세션 자체가 그 낭비된 Tier-2 세션.)
+- **환경**: `JARVIS02_WRITER/trend_theme_writer.py::run_all_themes()`, `JARVIS02_WRITER/scheduler.py::run_theme()`, `JARVIS07_GUARDIAN/incident_responder.py::_classify()`, `JARVIS07_GUARDIAN/severity.py::is_transient()`, `JARVIS00_INFRA/harness.py`(rank7/rank8 백오프·deferred 로직, ERRORS [446][447]에서 이미 검증).
+- **원인**: `run_all_themes()` 내부에서 `_ts_result.deferred`(harness가 계산)를 텔레그램 알림에는 반영했지만 함수 반환 dict 에는 담지 않아 유실 → `scheduler.py::run_theme()`가 `result.get("tistory", {}).get("success")` 만으로 `False`/`True` 이진 판정 → `data_empty`(동일 함수에 이미 존재하는 선례적 skip 패턴)와 달리 `deferred`는 대응하는 skip 로직이 없어 fail 리스트에 그대로 포함 → `incident_responder._classify()`의 로컬 `_TRANSIENT_KEYWORDS` 목록에 "인프라 스로틀"이 없어(반면 `severity.py`의 `_TRANSIENT_PATTERNS`엔 ERRORS [447]에서 이미 추가됨) 두 분류기가 드리프트된 상태였음 — CLAUDE.md "복사본을 진실로 믿지 말 것" 위반의 전형(계산된 판정을 경계에서 버림 + 판정 로직 중복·드리프트).
+- **헛다리**: 없음 — ERRORS.md [446][447][453] 선행 검색으로 harness deferred 설계가 의도된 것임을 먼저 확인한 뒤 `logs/scheduler.log`·`logs/daemon.log` 타임라인 대조(SDK timeout 3회 정확히 이 인시던트에만 귀속, 동시간대 다른 LLM 잡은 정상 성공)로 "harness 오판정" 가능성을 배제하고 유실 지점을 코드로 특정.
+- **해결**: ① `run_all_themes()` 반환 dict에 `tistory_deferred` 키 추가(harness `deferred` 값 그대로 전달). ② `scheduler.py::run_theme()`에 `_result_deferred` dict 추출 + `_guardian_fail = [k for k in fail if not _result_deferred.get(k, False)]`로 GUARDIAN 트리거 대상에서 deferred 플랫폼 제외(기존 `data_empty` skip과 동일한 패턴으로 통일). ③ `incident_responder._classify()`가 로컬 키워드 목록 검사 전에 `severity.is_transient()`(단일 진실 소스)를 우선 조회하도록 수정 — 향후 어떤 호출자든 "인프라 스로틀"·"데드라인 초과(블로킹)"·"종목 데이터 0개" 등 이미 검증된 transient 패턴을 담은 텍스트를 넘기면 자동으로 정확히 분류됨.
+- **파일**: `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS02_WRITER/scheduler.py`, `JARVIS07_GUARDIAN/incident_responder.py`.
+- **교훈**: 하위 레이어(harness)가 이미 정확히 계산한 판정을 상위 레이어(scheduler)로 넘길 때 유실하면, 상위 레이어는 저정보 텍스트에서 그 판정을 재추론해야 하고 이는 실패하기 쉽다 — 계산된 진실은 원본 그대로 전달할 것. 또한 "transient 여부" 같은 분류 로직이 `severity.is_transient()`와 `incident_responder._classify()` 두 곳에 중복 존재하면 한쪽만 갱신되어 드리프트가 발생 — 새 transient 패턴 추가 시 반드시 `severity.py`(단일 진실 소스) 갱신 + 그 소스를 우선 조회하는 구조로 재발 방지.
+
+---
+
 ## [456] ✅ 해결 — 경제 선계산 watchdog freeze(301s>300s) 강제종료 — chart_data.py `_cached_collect`에 beat() 배선 누락 (2026-07-19)
 
 - **증상**: `error_log` #3499 — `source=watchdog`, `module=JARVIS00_INFRA.watchdog`, `func_name=경제 선계산`, `message="정지 감지 — 경제 선계산: 멈춤(freeze) 301s > 300s 무진전"`, severity=medium, `traceback=NoneType: None`(watchdog 자체 합성 RuntimeError). `logs/daemon_stdout.log` 타임라인 대조 결과 06:05:06(KOSIS/KCI 등 fast 소스 전량 완료, "⏱ 2.5) 시장 dataset" 로그까지 28.2s 만에 도달) 직후 `[chart_data]` step3 멀티소스 루프가 "academic"(arXiv) 소스로 진입 — 06:05:07~06:07:10(약 123s, 쿼리 "현대 넥쏘 에너지·환경")·06:07:10~06:09:34+(쿼리 "현대 에너지·환경", 킬 시점까지 미완료) 두 차례 arXiv HTTP 429 재시도/백오프 구간 동안 watchdog 진행 신호가 단 한 번도 발생하지 않아 06:09:34 301s 시점에 freeze 강제종료(`os._exit 75`).
