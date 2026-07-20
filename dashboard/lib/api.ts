@@ -75,7 +75,9 @@ export type TokenHour    = { hour: string; output: number };
 export type TokenProject = { project: string; output: number; calls: number };
 export type TokenAlias   = { alias: string; model: string; calls: number; output: number; input: number; cache_create: number; cache_read: number; cost: number; failed: number };
 export type TokenCall    = { ts: string; alias: string; model: string; output_tokens: number; input_tokens: number; cache_read: number; duration_ms: number; num_turns: number; ok: number };
-export type RateLimitRow = { ts: string; source: string; payload: string };
+export type RateLimitRow = { ts: string; status: string; status_desc: string; ok: boolean;
+                             window: string; reset: string | null; overage: string | null;
+                             raw?: string };
 export type TokenSuggestion = { id: string; title: string; severity: string; finding: string; action: string; effect: string; tradeoff: string; knob: string };
 export type TokenData = {
   generated_at?: string;

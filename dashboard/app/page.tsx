@@ -1170,15 +1170,30 @@ function TokenPanel() {
             {qraw ? "rate_limit_event 수신 이력 없음 ✓" : "수신 이력 없음 ✓"}
           </div>
         ) : (
-          <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:160,overflowY:"auto" }}>
-            {rls.map((r,i)=>(
-              <div key={i} style={{ fontSize:14,padding:"8px 10px",borderRadius:8,
-                                    background:"var(--c-bg)",border:`1px solid ${C.warn}` }}>
-                <span style={{ color:C.warn,fontWeight:600 }}>{r.ts}</span>
-                <span style={{ color:"var(--c-text5)",marginLeft:8 }}>{r.source}</span>
-                <div style={{ color:"var(--c-text)",marginTop:4,wordBreak:"break-all" }}>{r.payload}</div>
-              </div>
-            ))}
+          <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:220,overflowY:"auto" }}>
+            {rls.map((r,i)=>{
+              const col = r.ok ? C.success : C.danger;
+              return (
+                <div key={i} style={{ fontSize:14,padding:"10px 12px",borderRadius:8,
+                                      background:"var(--c-bg)",borderLeft:`3px solid ${col}`,
+                                      border:"1px solid var(--c-bdr)",borderLeftWidth:3 }}>
+                  <div style={{ display:"flex",alignItems:"center",gap:10,flexWrap:"wrap" }}>
+                    <span style={{ fontSize:14,fontWeight:700,color:col,
+                                   border:`1px solid ${col}`,borderRadius:6,padding:"1px 8px" }}>
+                      {r.status}
+                    </span>
+                    <span style={{ color:"var(--c-text)" }}>{r.status_desc}</span>
+                    <span style={{ color:"var(--c-text5)",marginLeft:"auto" }}>{r.ts}</span>
+                  </div>
+                  <div style={{ marginTop:6,display:"flex",gap:16,flexWrap:"wrap",
+                                color:"var(--c-text5)" }}>
+                    <span>대상 <b style={{ color:"var(--c-text)" }}>{r.window}</b></span>
+                    {r.reset   && <span>리셋 <b style={{ color:"var(--c-text)" }}>{r.reset}</b></span>}
+                    {r.overage && <span>초과사용 <b style={{ color:"var(--c-text)" }}>{r.overage}</b></span>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

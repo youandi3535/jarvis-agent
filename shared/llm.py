@@ -560,14 +560,9 @@ def _run_sdk_sync(
                     _meter["cost"]  = getattr(msg, "total_cost_usd", 0.0) or 0.0
                     _meter["dur"]   = getattr(msg, "duration_ms", 0) or 0
                     _meter["turns"] = getattr(msg, "num_turns", 0) or 0
-                elif type(msg).__name__ == "SystemMessage" and \
-                        getattr(msg, "subtype", "") == "rate_limit_event":
-                    # ★ Anthropic 이 주는 한도 정보 — 종전엔 통째로 버려졌다
-                    try:
-                        from shared.token_usage import record_rate_limit
-                        record_rate_limit(getattr(msg, "data", None), source="llm")
-                    except Exception:
-                        pass
+                # ※ rate_limit_event 박제는 claude_sdk_compat._patched 가 *모든 경로*
+                #   공통으로 수행한다. 여기서 또 기록하면 같은 이벤트가 2건으로
+                #   중복 적재되므로(화면에 2줄) 의도적으로 하지 않는다.
 
     def _run_blocking() -> None:
         # ★ 이벤트 루프 오염 방지 (ERRORS [443] — 사용자 박제 2026-07-16):

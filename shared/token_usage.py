@@ -371,6 +371,85 @@ def quota() -> dict | None:
     return result
 
 
+# ── 한도 이벤트 사람이 읽는 형태로 변환 ────────────────────────────────
+#
+# 화면에 원문 JSON 을 그대로 뿌리면 사람이 해석할 수 없다(사용자 지적 2026-07-20).
+# 코드값 → 한국어 라벨, epoch → 로컬 시각, 중복(uuid) 제거까지 여기서 처리한다.
+
+_RL_STATUS = {
+    "allowed":        ("정상", "제한 없이 통과"),
+    "allowed_warning": ("주의", "한도 임박 경고"),
+    "rejected":       ("차단", "한도 초과로 거부됨"),
+    "blocked":        ("차단", "한도 초과로 거부됨"),
+}
+_RL_WINDOW = {
+    "five_hour":     "5시간 창",
+    "seven_day":     "7일 창",
+    "weekly_all":    "7일 창",
+    "session":       "5시간 창",
+    "weekly_scoped": "모델별 주간",
+}
+_RL_OVERAGE_REASON = {
+    "org_level_disabled": "조직 정책으로 비활성",
+    "user_disabled":      "사용자가 비활성",
+    "not_eligible":       "대상 아님",
+}
+
+
+def _humanize_rate_limits(rows: list[dict]) -> list[dict]:
+    """rate_limit_event 원문 → 화면용 구조. uuid 기준 중복 제거."""
+    seen: set = set()
+    out: list[dict] = []
+    for r in rows:
+        try:
+            p = json.loads(r.get("payload") or "{}")
+        except Exception:
+            p = {}
+        info = p.get("rate_limit_info") or {}
+        uid = p.get("uuid")
+        if uid and uid in seen:
+            continue        # llm·sdk_compat 양쪽이 같은 이벤트를 기록하던 잔존분 흡수
+        if uid:
+            seen.add(uid)
+
+        status = str(info.get("status") or "")
+        label, desc = _RL_STATUS.get(status, (status or "알 수 없음", ""))
+        window = _RL_WINDOW.get(str(info.get("rateLimitType") or ""),
+                                info.get("rateLimitType") or "—")
+
+        resets = info.get("resetsAt")
+        reset_txt = None
+        if isinstance(resets, (int, float)) and resets > 0:
+            try:
+                reset_txt = datetime.fromtimestamp(resets, KST).strftime("%m/%d %H:%M")
+            except Exception:
+                reset_txt = None
+
+        ov_status = str(info.get("overageStatus") or "")
+        if info.get("isUsingOverage"):
+            overage = "초과분 사용 중"
+        elif ov_status in ("rejected", "disabled"):
+            reason = _RL_OVERAGE_REASON.get(
+                str(info.get("overageDisabledReason") or ""), None)
+            overage = f"불가 ({reason})" if reason else "불가"
+        elif ov_status:
+            overage = ov_status
+        else:
+            overage = None
+
+        out.append({
+            "ts": r.get("ts"),
+            "status": label,                 # 정상 / 주의 / 차단
+            "status_desc": desc,
+            "ok": status in ("allowed", "allowed_warning"),
+            "window": window,                # 5시간 창 / 7일 창 …
+            "reset": reset_txt,              # 07/20 17:00
+            "overage": overage,              # 초과사용 가능 여부
+            "raw": r.get("payload"),         # 접어둔 원문 (디버깅용)
+        })
+    return out[:20]
+
+
 # ── 집계 API ───────────────────────────────────────────────────────────
 
 def summary(days: int = 8) -> dict:
@@ -436,9 +515,9 @@ def summary(days: int = 8) -> dict:
 
             rl = conn.execute(
                 "SELECT ts, source, payload FROM llm_rate_limit_events "
-                "ORDER BY id DESC LIMIT 20"
+                "ORDER BY id DESC LIMIT 60"
             ).fetchall()
-            out["rate_limits"] = [dict(r) for r in rl]
+            out["rate_limits"] = _humanize_rate_limits([dict(r) for r in rl])
 
             # 최근 1시간 빈 응답률 = 스로틀 체감 지표
             h = conn.execute(
