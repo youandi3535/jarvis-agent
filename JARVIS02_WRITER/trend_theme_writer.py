@@ -270,8 +270,10 @@ def _build_blocks(collected, platform: str, img_dir: Path,
         # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함 구분 태깅(rank4) — 테마.
         #   circuit_is_open()은 프로세스 전역(워커 스레드 안전), last_call_infra_incomplete()는
         #   동일 스레드 직전 호출. 둘 중 하나면 infra_throttle → harness 가 defer/backoff.
-        from shared.llm import last_call_infra_incomplete as _infra, circuit_is_open as _copen
-        _err = "infra_throttle" if (_infra() or _copen()) else "Pass-1 대본 생성 실패"
+        from shared.llm import (last_call_infra_incomplete as _infra,
+                                circuit_is_open as _copen,
+                                make_infra_error as _mk_infra)
+        _err = _mk_infra() if (_infra() or _copen()) else "Pass-1 대본 생성 실패"
         return {"success": False, "error": _err, "blocks": [],
                 "title": "", "content": "", "html": ""}
 
@@ -820,12 +822,15 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         if not draft.get("success"):
             # ★ 인프라 스로틀(일시적)과 콘텐츠 결함 분리(rank5). detail 은 fingerprint 안정성 위해
             #   고정 문자열(attempt 변동값 금지) — harness 가 fingerprint 제외·backoff·defer 처리.
+            from shared.llm import (is_infra_error as _is_infra_err,
+                                    describe_infra_error as _desc_infra)
             _derr = str(draft.get("error", "unknown"))
-            _is_infra = (_derr == "infra_throttle")
+            _is_infra = _is_infra_err(_derr)
             issues.append(Issue(
                 step=step_name,
                 kind="infra_throttle" if _is_infra else "draft_failed",
-                detail=("인프라 스로틀 — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"
+                detail=(_desc_infra(_derr)
+                        + " — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"
                         if _is_infra else f"대본 생성 실패: {_derr}")))
             return issues
         di_list = _layer3_verify_draft(draft, platform)

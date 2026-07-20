@@ -864,43 +864,37 @@ def delegate_to_claude_code(prompt: str,
     except (TypeError, ValueError):
         timeout, max_turns = 600, 20
 
-    import anyio, time as _time
-    from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
-    from claude_code_sdk._errors import CLINotFoundError
+    # ★ shared/claude_sdk_compat.run_sdk_query() 단일 진입점 경유 (사용자 박제 2026-07-20).
+    #   기존엔 이 도구가 claude_code_sdk.query() 를 직접 호출해 ① PATH 보장 ②
+    #   ANTHROPIC_API_KEY="" OAuth 강제(가짜 키 누수 방지) ③ MessageParseError 패치
+    #   ④ shared.llm 세마포어·크로스프로세스 fcntl 락 spawn 직렬화 — 네 가지를 모두
+    #   우회했다. writer 대본(경제·테마) 생성이 진행 중일 때 이 도구가 별도 Claude CLI
+    #   를 동시 spawn하면 같은 Max 구독 버스트 한도를 두 프로세스가 나눠 쓰게 되어
+    #   경합 사고로 이어진다 — run_sdk_query() 는 이미 이 네 가지를 전부 갖춘 canonical
+    #   wrapper이므로 직접 호출 대신 이것에 위임한다(ADR 001 단일 진입점).
+    from shared.claude_sdk_compat import run_sdk_query
 
-    run_env = dict(_os.environ)
-    run_env["PATH"] = ":".join(["/opt/homebrew/bin", "/usr/local/bin"]) + ":" + run_env.get("PATH", "")
+    result = run_sdk_query(
+        prompt,
+        model="claude-sonnet-5",   # ★ 수정 가능 위임 도구 — Sonnet 5 단일 통일 (사용자 박제 2026-07-06, ADR 017)
+        cwd=str(_JARVIS_ROOT_ABS),
+        max_turns=max_turns,
+        timeout=timeout,
+        allowed_tools=tools_list,
+    )
 
-    t0 = _time.time()
-
-    async def _run_sdk() -> dict:
-        try:
-            with anyio.fail_after(timeout):
-                options = ClaudeCodeOptions(
-                    model="claude-sonnet-5",   # ★ 수정 가능 위임 도구 — Sonnet 5 단일 통일 (사용자 박제 2026-07-06, ADR 017)
-                    max_turns=max_turns,
-                    allowed_tools=tools_list,
-                    cwd=str(_JARVIS_ROOT_ABS),
-                    env=run_env,
-                )
-                parts: list[str] = []
-                async for msg in query(prompt=prompt, options=options):
-                    if isinstance(msg, AssistantMessage):
-                        for block in msg.content:
-                            if isinstance(block, TextBlock):
-                                parts.append(block.text)
-                out = "".join(parts)[:30000]
-                return {"ok": True, "returncode": 0, "stdout": out, "stderr": "",
-                        "duration": round(_time.time() - t0, 1), "allowed_tools": " ".join(tools_list)}
-        except TimeoutError:
-            return {"ok": False, "error": f"timeout after {timeout}s"}
-
-    try:
-        return anyio.run(_run_sdk)
-    except CLINotFoundError as e:
-        return {"ok": False, "error": f"Claude Code SDK 런타임 없음: {e}"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    if result.get("returncode") == 0:
+        return {
+            "ok": True, "returncode": 0,
+            "stdout": (result.get("stdout") or "")[:30000], "stderr": "",
+            "duration": result.get("elapsed", 0), "allowed_tools": " ".join(tools_list),
+        }
+    kind = result.get("error_kind")
+    if kind == "cli_not_found":
+        return {"ok": False, "error": f"Claude Code SDK 런타임 없음: {result.get('stderr', '')}"}
+    if kind == "timeout":
+        return {"ok": False, "error": f"timeout after {timeout}s"}
+    return {"ok": False, "error": result.get("stderr") or "sdk_error"}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1003,7 +997,8 @@ def ask_claude(prompt: str, system: str = "",
         try:
             from shared.llm import invoke_text as _inv_cli
             _full = f"{system}\n\n{prompt}".strip() if system else prompt
-            text2 = _inv_cli("writer", _full, timeout=300)
+            from shared.llm import writer_timeout as _wt
+            text2 = _inv_cli("writer", _full, timeout=_wt())
             return {"ok": True, "text": text2 or "", "model": "claude-sonnet-5"}
         except Exception as e2:
             return {"ok": False, "error": f"{e}; fallback: {e2}"}

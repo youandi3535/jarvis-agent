@@ -195,7 +195,8 @@ def _claude_compress(plain: str, max_korean: int, original_kor: int,
             "- 결과만 출력. 메타 설명('재작성한 결과:', '압축한 결과:' 등) 절대 금지.\n\n"
             f"원문:\n{plain}"
         )
-        out = (_inv_cli("writer", prompt, timeout=300) or "").strip()
+        from shared.llm import writer_timeout as _wt
+        out = (_inv_cli("writer", prompt, timeout=_wt()) or "").strip()
         # 메타 prefix 제거 (혹시 들어왔다면)
         out = re.sub(r"^(?:(?:압축|재작성|수정)[ ㄱ-ㅎ가-힣]*결과[:\s]*\n?)", "", out)
         return out

@@ -965,6 +965,29 @@ def infra_reason_label(reason: str = "") -> str:
         "인프라 미완결 — 일시적(다음 시도/회차 재개)")
 
 
+# ── infra_throttle 오류코드 단일 진입점 (ERRORS [460]) ─────────────────
+#   판정 4곳·소비 2곳이 각자 문자열을 만들고 파싱하면 또 갈라진다.
+#   생성·판별·라벨링을 여기 3함수로 고정한다.
+_INFRA_ERR_PREFIX = "infra_throttle"
+
+
+def make_infra_error(reason: str = "") -> str:
+    """미완결 오류코드 생성 — `infra_throttle:<사유>`. 호출자는 문자열 조립 금지."""
+    return f"{_INFRA_ERR_PREFIX}:{reason or last_call_infra_reason() or 'unknown'}"
+
+
+def is_infra_error(err: str | None) -> bool:
+    """오류코드가 인프라 미완결인가 (사유 유무 무관)."""
+    return bool(err) and str(err).startswith(_INFRA_ERR_PREFIX)
+
+
+def describe_infra_error(err: str | None) -> str:
+    """오류코드 → 사람이 읽는 사유 설명. 사유가 없으면 일반 표기."""
+    s = str(err or "")
+    reason = s.split(":", 1)[1] if ":" in s else ""
+    return infra_reason_label(reason)
+
+
 def circuit_is_open() -> bool:
     """rate-limit 회로차단기 open 여부 — 순수 read-only peek (probe 전이·상태변이 없음).
 

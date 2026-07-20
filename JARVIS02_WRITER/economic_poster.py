@@ -617,12 +617,15 @@ def run(post_naver=True, post_tistory=True):
             # ★ 인프라 스로틀(일시적)과 콘텐츠 결함 분리(rank5). infra_throttle 은 재작성 대상이
             #   아니라 harness 가 fingerprint 제외·backoff·defer 로 처리. detail 은 fingerprint
             #   안정성 위해 고정 문자열(attempt 변동값 금지).
+            from shared.llm import (is_infra_error as _is_infra_err,
+                                    describe_infra_error as _desc_infra)
             _derr = str(draft.get("error", "unknown"))
-            _is_infra = (_derr == "infra_throttle")
+            _is_infra = _is_infra_err(_derr)
             issues.append(Issue(
                 step=step_name,
                 kind="infra_throttle" if _is_infra else "draft_failed",
-                detail=("인프라 스로틀 — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"
+                detail=(_desc_infra(_derr)
+                        + " — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"
                         if _is_infra else f"대본 생성 실패: {_derr}"),
             ))
             return issues

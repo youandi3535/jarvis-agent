@@ -2,7 +2,18 @@
 
 ---
 
-## [460] ✅ 해결 — [459]와 동일 클래스: 경제 브리핑 경로도 `deferred` 미전파로 GUARDIAN 오발동 가능 + 재발 방지(daemon 미재시작) (2026-07-20)
+## [462] ✅ 수동수정 — `delegate_to_claude_code` ReAct 도구가 Claude CLI spawn 직렬화(세마포어·크로스프로세스 락)를 우회 — writer 파이프라인과 경합 가능 (2026-07-20)
+
+- **증상**: 사용자가 [459]/[461]/[460] 사고 설명 도중 "짧은 시간에 요청이 몰리면 직렬로 나눠서 작업하도록 짰다면서 왜 그러냐"고 질문 → 코드 확인 결과 `shared/llm.py`의 실제 spawn 직렬화(in-process `BoundedSemaphore` + 크로스프로세스 fcntl 락, `LLM_MAX_CONCURRENCY` 기본 1)는 `invoke_text()`(writer 파이프라인) 호출부에만 걸려 있고, 같은 Claude Max 구독 CLI를 spawn하는 다른 두 경로 중 하나가 이를 우회하고 있었음. `shared/claude_sdk_compat.run_sdk_query()`(GUARDIAN Tier-2 자가수정·새벽 심층감사가 사용)는 [ERRORS 전수감사 커밋 6fb9e57, 2026-07-19 이전]에서 이미 `shared.llm._pace_spawn()`/`_acquire_llm_sem()`/`_proc_lock_acquire()`에 합류되어 있어 문제 없음(사용자에게 "GUARDIAN도 우회한다"고 설명한 것은 이 커밋을 못 보고 한 부정확한 설명 — 본 항목에서 정정). 반면 `JARVIS01_MASTER/agent_tools.py`의 `delegate_to_claude_code`(사용자 자유 문장 ReAct 위임 도구, Telegram 승인 게이트 통과 후 실행)는 `claude_code_sdk.query()`를 직접 호출하며 이 직렬화를 전혀 타지 않았음 — 동시에 PATH 수동 prepend(`/opt/homebrew/bin`만, `_EXTRA_PATHS` 5종 중 일부 누락)·`ANTHROPIC_API_KEY=""` OAuth 강제 누락(가짜 키 누수 가능)·MessageParseError 패치 보장 없음까지 `run_sdk_query()`가 이미 해결한 문제들을 전부 재노출하고 있었음.
+- **환경**: `JARVIS01_MASTER/agent_tools.py::delegate_to_claude_code()`, `shared/claude_sdk_compat.py::run_sdk_query()`.
+- **헛다리**: 없음 — grep으로 `claude_code_sdk` 직접 import 3곳(`shared/llm.py`·`claude_sdk_compat.py`·`agent_tools.py`)을 전수 확인 후 각각의 직렬화 여부를 코드로 검증.
+- **해결**: ① `run_sdk_query()`에 `allowed_tools: list[str] | None` 파라미터 추가(기존 호출자 2곳은 옵션 미사용이라 무영향). ② `delegate_to_claude_code()`를 `claude_code_sdk.query()` 직접 호출에서 `run_sdk_query()` 위임으로 전면 교체 — PATH·API 키·MessageParseError 패치·spawn 직렬화 4가지를 canonical wrapper 하나로 흡수(ADR 001 단일 진입점). 반환 계약(`{ok, returncode, stdout, stderr, duration}`)은 유지하되 내부적으로 `run_sdk_query()`의 `{returncode, stdout, stderr, elapsed, error_kind}`를 매핑.
+- **파일**: `shared/claude_sdk_compat.py`, `JARVIS01_MASTER/agent_tools.py`.
+- **교훈**: "직렬로 작업하도록 짰다"는 문서상의 설계 원칙(플랫폼 단위 직렬 — 실패 격리 목적)과 "실제로 동시 spawn을 막는 코드"(세마포어·락)는 서로 다른 메커니즘이다 — 후자가 존재해도 *새 진입점*(여기서는 ReAct 위임 도구)이 추가될 때마다 합류 여부를 확인하지 않으면 조용히 우회된다. Claude CLI를 spawn하는 모든 신규 코드는 직접 `claude_code_sdk.query()`를 부르지 말고 `run_sdk_query()` 경유를 기본값으로 삼을 것.
+
+---
+
+## [461] ✅ 해결 — [459]와 동일 클래스: 경제 브리핑 경로도 `deferred` 미전파로 GUARDIAN 오발동 가능 + 재발 방지(daemon 미재시작) (2026-07-20)
 
 - **증상**: [459]의 실사고는 테마(mRNA 21:33:47, 항공기부품 22:25:44) 티스토리에서만 관측됐지만, 같은 날 사용자 요청("완벽하게 해결··· 근본적인 원인")으로 인접 코드를 감사한 결과 `JARVIS02_WRITER/economic_poster.py::run()` → `JARVIS02_WRITER/scheduler.py::run_economic_poster()` 경로가 **[459]의 수정 대상에 전혀 포함되지 않은 채** 동일한 유실 패턴(`ActionResult.deferred` → subprocess 결과 파일에 미기록 → `failed` 리스트가 boolean 만으로 구성 → `_trigger_economic_incident()`가 deferred 플랫폼까지 그대로 GUARDIAN에 전달)을 그대로 가지고 있음을 코드 대조로 확인. 경제 경로는 subprocess 기반(`economic_poster.py --scheduled`)이라 결과가 `JARVIS_EP_RESULT_FILE` JSON을 통해서만 부모(scheduler.py)로 전달되는데, 이 JSON에 `naver_deferred`/`tistory_deferred` 필드 자체가 없었음(테마는 in-process 호출이라 반환 dict 하나로 해결되지만 경제는 프로세스 경계를 넘어야 해서 문제가 한 겹 더 깊었음).
   - 추가로 [459]의 테마 쪽 수정 자체가 **커밋되지 않은 상태로 파일에만 존재**했고(`git diff HEAD` 확인), 데몬 프로세스는 그 수정이 파일에 쓰인 시각(21:38, mtime)보다 훨씬 이전인 18:07:43에 기동된 채였다 — Python import 캐시로 인해 22:25:44의 두 번째 테마 사고(항공기부품)는 이미 디스크에 존재하던 [459] 수정이 **로드되지 않은 옛 프로세스**에서 재발했을 가능성이 높음(CLAUDE.md "복사본을 진실로 믿지 말 것" / "재시작 전 검증 금지" 두 원칙과 정확히 일치하는 사례).
@@ -11,6 +22,18 @@
 - **해결**: ① `economic_poster.py::run()` — `_nv_res`/`_ts_res`(ActionResult, `.deferred` 보유) 사전 선언 후 `_write_ep_partial()`과 최종 결과 JSON 양쪽에 `naver_deferred`/`tistory_deferred` 키 추가([459]와 동일한 필드명으로 하류 소비자 일관성 유지). ② `scheduler.py::run_economic_poster()` — 결과 파일에서 읽은 `_deferred` dict로 `_guardian_failed = [k for k in failed if not _deferred.get(k, False)]`를 산출해 GUARDIAN 트리거 조건과 `_trigger_economic_incident()` 호출 인자를 `failed`→`_guardian_failed`로 교체(로그용 `failed`는 그대로 유지). ③ [459]의 테마 쪽 미커밋 수정과 본 수정을 함께 커밋 + `./restart_daemon.sh`로 재기동해 재시작-전-검증 금지 원칙 준수.
 - **파일**: `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/scheduler.py`.
 - **교훈**: 같은 버그가 플랫폼 직렬 파이프라인의 "동렬" 경로(테마/경제)에 반복 존재할 수 있다 — 한쪽을 고칠 때 반드시 자매 경로를 grep으로 대조할 것. 또한 GUARDIAN 자신(Tier-2 SDK)이 스스로 진단해 작성한 수정이라 해도 커밋·재시작 전까지는 "적용된 수정"이 아니라 "디스크 위의 초안"에 불과 — 수정 완료 보고와 배포 완료는 별개다.
+
+---
+
+## [460] ✅ 해결 — [459]의 "인프라 스로틀" 표시가 실제로는 하드코딩 timeout=300 부족이었음 — `writer_timeout()` 동적 산출로 교체 (2026-07-20)
+
+- **증상**: [459]는 `SDK timeout 300s — 수집된 응답: 0개`를 "인프라 스로틀"(Anthropic 쪽 rate-limit/회로차단)로 분류해 대응했지만, 같은 21시 사고의 실측 로그를 다시 보면 네이버 27,657토큰 대본이 292.1초 만에 완성되어 300초 한도를 가까스로 통과했고, 티스토리는 유사 분량에서 300초를 넘겨 잘렸다 — 즉 진짜 서버측 스로틀이 아니라 *생성 속도(≈88토큰/초) 대비 시간 예산이 애초에 부족*했던 사례가 섞여 있었다. `draft_writer.py` 8개 호출부에 `timeout=300`이 문자 그대로 박혀 있어 분량 정책(`length_manager.py`)이 늘어나도 시간 예산은 따라오지 않는 구조였다 — CLAUDE.md "복사본을 진실로 믿지 말 것" 표 1행("값을 코드에 복사")과 정확히 일치.
+  - 부수적으로 "인프라 스로틀" 한 라벨이 서로 다른 3가지 원인(①진짜 timeout ②일부 출력 후 절단(truncated) ③크로스프로세스 락 대기(lock_contention))을 뭉뚱그려 원인 파악을 어렵게 하고 있었음.
+- **환경**: `shared/llm.py`(`_collect()`의 throttled/hung/truncated 판정부), `JARVIS02_WRITER/draft_writer.py`(`_draft_invoke()` ×2·`_gen_section_call1/2/3()`·`_gen_economic_ts_nv_parallel()`), `JARVIS02_WRITER/tistory_html_writer.py`(`generate_article_html()` 로그부).
+- **헛다리**: 없음.
+- **해결**: ① `shared/llm.py`에 `writer_timeout()` 신설 — `LLM_WRITER_TIMEOUT_SEC` 환경변수(최소 60초) 우선, 없으면 `JARVIS00_INFRA.watchdog.BLOG_ACTION_DEADLINE_SEC`(harness 액션 전체 데드라인, 폴백 2400초)에서 `max(300, min(900, deadline/4))`로 역산 — 분량 정책이 바뀌어도 데드라인 예산과 같이 늘어남. ② `last_call_infra_reason()`/`infra_reason_label()` 신설 — timeout/truncated/lock_contention 3종을 각각 다른 문자열로 분리 노출. ③ `draft_writer.py` 8곳의 `timeout=300` → `timeout=writer_timeout()` 치환. ④ `tistory_html_writer.py`의 "인프라 스로틀 감지" 로그 한 줄을 `infra_reason_label()` 호출로 교체해 다음 사고 시 로그만 보고도 원인 종류를 바로 구분 가능.
+- **파일**: `shared/llm.py`, `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/tistory_html_writer.py`.
+- **교훈**: "인프라 스로틀"이라는 한 라벨 아래 서로 다른 근본원인(진짜 rate-limit vs 시간 예산 부족 vs 락 경합)을 뭉치면 재발 시마다 잘못된 처방(예: [459]처럼 GUARDIAN Tier-2 SDK를 호출해 "코드 버그"를 찾으려는 헛수고)이 반복된다. 원인 라벨은 판정 즉시 세분화해서 로그에 남길 것. 본 항목은 [461]과 같은 사고(mRNA·항공기부품)를 다른 레이어(LLM 호출 timeout budget vs GUARDIAN 응답 분류)에서 진단한 것으로, 두 수정 모두 필요.
 
 ---
 
