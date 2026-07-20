@@ -163,6 +163,34 @@ def _install_message_parser_patch() -> None:
              f"(바인딩 참조 {_rebound}곳 동시 교체)")
 
 
+def patch_effective() -> bool | None:
+    """패치가 *실제로 먹는지* 동작으로 확인 (설치 플래그가 아니라).
+
+    ★ 왜 필요한가 (ERRORS [457]):
+      `_PATCH_INSTALLED = True` 는 "설치를 시도했다" 는 뜻일 뿐 "모두가 새 함수를
+      쓴다" 는 보장이 아니다. `client.py` 가 `from .message_parser import parse_message`
+      로 원본을 *미리 복사* 해뒀다면 패치는 설치돼도 무력하다. 실제로 그 상태로
+      수일간 모든 LLM 호출이 빈 응답을 냈고, 플래그는 내내 True 였다.
+
+    그래서 여기서는 *실제 소비자가 쓰는 경로* 로 가짜 rate_limit_event 를 한 번
+    통과시켜 본다. 예외가 안 나면 유효, 나면 무력.
+
+    반환: True(유효) / False(무력 — 즉시 수리 필요) / None(판정 불가)
+    """
+    try:
+        from claude_code_sdk._internal import client as _cl
+    except Exception:
+        return None
+    fn = getattr(_cl, "parse_message", None)   # ★ 소비자가 실제로 부르는 그 참조
+    if fn is None:
+        return None
+    try:
+        fn({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}})
+        return True
+    except Exception:
+        return False
+
+
 # ── 동기 query wrapper — 모든 호출자 단일 진입점 ────────────────────────
 
 

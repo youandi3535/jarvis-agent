@@ -53,6 +53,28 @@ def ensure_retry_compat() -> None:
     _RETRY_COMPAT_DONE = True
 
 
+def retry_compat_effective() -> bool | None:
+    """호환 패치가 *실제로 먹는지* 동작으로 확인 (플래그가 아니라).
+
+    `_RETRY_COMPAT_DONE = True` 는 "시도했다" 는 뜻일 뿐이다. 실제로 pytrends 가
+    쓰는 형태(`Retry(method_whitelist=...)`)를 한 번 만들어 봐서 예외가 없어야
+    유효. (ERRORS [455][457] — 같은 병이 하루에 두 번 났다.)
+
+    반환: True(유효) / False(무력) / None(판정 불가)
+    """
+    try:
+        from urllib3.util.retry import Retry
+    except Exception:
+        return None
+    try:
+        Retry(total=1, method_whitelist=frozenset(["GET", "POST"]))
+        return True
+    except TypeError:
+        return False
+    except Exception:
+        return None
+
+
 # import 시점 자동 적용 — 호출자가 잊어도 보호된다.
 # (google_collector 는 TrendReq 생성 직후 disable_proxy 를 호출하므로
 #  실제 HTTP 요청이 나가기 *전* 에 이 모듈이 로드되어 패치가 선다.)

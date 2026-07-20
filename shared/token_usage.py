@@ -757,6 +757,44 @@ def suggestions() -> list[dict]:
         "knob": "shared/token_usage.record_rate_limit (이미 수집 중)",
     })
 
+    # ── 8. 호환 패치 실효성 (설치 플래그가 아니라 *동작* 으로 확인) ─────
+    #   ★ 2026-07-20: 같은 monkey-patch 무력화 사고가 하루에 두 번 났다.
+    #     플래그는 내내 True 였고 아무도 몰랐다 → 상시 감시 항목으로 승격.
+    probes: list[tuple[str, Any]] = []
+    try:
+        from shared.claude_sdk_compat import patch_effective
+        probes.append(("SDK 메시지 파서(rate_limit_event 흡수)", patch_effective()))
+    except Exception:
+        probes.append(("SDK 메시지 파서(rate_limit_event 흡수)", None))
+    try:
+        from shared.pytrends_utils import retry_compat_effective
+        probes.append(("pytrends urllib3 호환", retry_compat_effective()))
+    except Exception:
+        probes.append(("pytrends urllib3 호환", None))
+
+    dead = [n for n, v in probes if v is False]
+    unknown = [n for n, v in probes if v is None]
+    out.append({
+        "id": "patch_health",
+        "title": (f"호환 패치 {len(dead)}개 무력화 — 즉시 수리" if dead
+                  else "호환 패치 실효성 — 정상" if not unknown
+                  else "호환 패치 일부 판정 불가"),
+        "severity": "high" if dead else ("low" if unknown else "good"),
+        "finding": " / ".join(
+            f"{n}: {'✅ 유효' if v else '❌ 무력' if v is False else '판정 불가'}"
+            for n, v in probes),
+        "action": ("무력 판정된 패치를 즉시 수리할 것. monkey-patch 는 `sys.modules` 순회로 "
+                   "*모든 바인딩* 을 교체해야 한다 — `from X import f` 로 미리 복사된 참조는 "
+                   "모듈 속성만 바꿔서는 안 바뀐다."
+                   if dead else
+                   "현재 정상. 새 패치·훅을 추가할 때는 반드시 효과 확인 함수를 함께 둘 것 "
+                   "(precommit `copytruth` 카테고리가 커밋 단계에서 강제한다)."),
+        "effect": ("무력화를 몇 초 만에 발견 — 종전엔 수일간 빈 응답으로만 드러났다"
+                   if dead else "회귀 즉시 감지"),
+        "tradeoff": "없음 (검사 자체가 수 밀리초)",
+        "knob": "shared/claude_sdk_compat.patch_effective / shared/pytrends_utils.retry_compat_effective",
+    })
+
     order = {"high": 0, "medium": 1, "low": 2, "good": 3}
     out.sort(key=lambda x: order.get(x["severity"], 9))
     return out
