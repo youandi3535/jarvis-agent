@@ -29,7 +29,7 @@
 | **★ 통합 이미지 파이프라인 (사용자 공동설계 2026-07-05)** | 경제·테마 **둘 다** `JARVIS06.draft_processor.process_draft(draft_html, collected, platform, out_dir)` 단일 이미지 경로. 대본은 **Pass-1-only(placeholder)** — 경제는 `generate_article_html(..., pass2=False)`, 테마는 `generate_theme_html(collected, ...)`. 데이터 계약 = **`CollectedData`(4-part: datasets·docs·facts·entities, `JARVIS09_COLLECTOR/models.py`)** 단일 상자. 카테고리 노브(min_images=5·thumbnail_body_chars=3000·allow_stock_financial)는 `CATEGORY_POLICY[category]` 레지스트리. 검증 tolerance = **`models.grounds()`**(표시 올림/버림 or ±5%) — slot·law_enforcer·image_data_verifier 공통. 단, prepublish 종목 재무밴드(PER/ROE ±10%·주가 ±5%)는 `_stock_facts_leg`에 유지. **★ 본문 이미지 = 실데이터 인포그래픽만 (사용자 박제 2026-07-06): 못 만들거나 datasets 소진 시 폴백 없이 빈 슬롯 — AI사진·matplotlib 폴백 전부 폐기. 썸네일만 예외(대표 AI실사+로컬 타이틀카드 폴백, 누락0).** process_draft는 본문 인포그래픽 min-5 top-up(인포그래픽으로만) + 썸네일 필수 담당 |
 | max_tokens | **8192 고정** — 더 높이면 API 중간 절단 |
 | 섹션 문장수 임계값 | `length_manager.py` 단일 진입점 (`SEC_SENTS` 등). 다른 파일에 박지 말 것 |
-| pytrends 패치 | `.venv/.../pytrends/request.py`: `method_whitelist` → `allowed_methods` |
+| **★ pytrends 패치 — venv 직접 수정 금지 (2026-07-20 정정, ERRORS [455])** | pytrends 4.9.2 는 `Retry(method_whitelist=...)` 를 쓰는데 urllib3 2.0 에서 `allowed_methods` 로 개명돼 `TrendReq(..., retries>0)` 첫 요청이 TypeError. 종전 규정은 `.venv/.../pytrends/request.py` 손수정이었으나 **venv 재생성 시 소실 + google_collector 가 예외를 삼켜(`except Exception: return []`) pytrends 경로만 죽은 채 RSS 폴백으로 연명하는 무증상 열화** 발생. → `shared/pytrends_utils.ensure_retry_compat()` 가 런타임 흡수(import 시 자동). **venv 안 파일을 고치지 말 것.** 검증: `TrendReq(hl="ko",tz=540,timeout=(10,30),retries=3)` 로 `interest_over_time()` 성공해야 함 |
 | Finder Cmd+V | `CGEventPost(kCGHIDEventTap)` HID 레벨. 클립보드는 클릭 전 선복사 |
 
 버그 이력 → `BUGS.md`

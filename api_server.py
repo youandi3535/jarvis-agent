@@ -887,6 +887,21 @@ def get_repairs(limit: int = 30):
         return []
 
 
+@app.get("/api/tokens")
+def get_tokens(days: int = 8):
+    """LLM 토큰 사용량 현황 — 집계는 shared/token_usage 단일 진입점 위임.
+
+    totals(트랜스크립트 총량) + by_alias(라이브 계기 내역) + rate_limits + health.
+    """
+    try:
+        from shared.token_usage import summary
+        return summary(days=days)
+    except Exception as e:
+        return {"error": str(e)[:300], "totals": {"available": False},
+                "by_alias": [], "recent_calls": [], "rate_limits": [],
+                "health": {"state": "집계 실패"}}
+
+
 @app.get("/api/patterns")
 def get_patterns():
     try:

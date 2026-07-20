@@ -186,5 +186,14 @@
     "aesthetic": "sidebar stats panel",
     "via": "라이브러리",
     "total": 24
+  },
+  {
+    "date": "2026-07-20",
+    "action": "learned",
+    "id": "lib-overlay-cards",
+    "name": "오버레이 카드형",
+    "aesthetic": "dark hero floating cards",
+    "via": "라이브러리",
+    "total": 25
   }
 ]

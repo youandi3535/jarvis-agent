@@ -101,7 +101,7 @@ export JARVIS_STRICT=1                       # 위반 발견 시 commit 차단 (
 |------|------|------|
 | `JARVIS01_MASTER/`   | JARVIS01 CORE   | 마스터 라우터 (LangGraph) — 자유 문장 → 인텐트 분류 → 에이전트 디스패치 |
 | `JARVIS02_WRITER/` | JARVIS02 WRITER | 블로그 자동화 (네이버·티스토리) |
-| `JARVIS03_RADAR/`  | JARVIS03 RADAR  | 트렌드·키워드 분석 대시보드 (Streamlit :8502) |
+| `JARVIS03_RADAR/`  | JARVIS03 RADAR  | 트렌드·키워드 수집·분석 (대시보드는 `dashboard/` Next.js :9199) |
 
 ## 통합 데몬 (유일한 진입점)
 
@@ -172,6 +172,50 @@ pkill -f jarvis_daemon.py        # 전체 종료
 - 사용자가 별도로 요청하지 않아도 자동 실행. 기록 안 하면 규정 위반.
 - 양식: 증상 / 환경 / 원인 / 헛다리 / 해결 / 파일 / 교훈.
 
+## ★★ 최우선 설계 원칙 — 복사본을 진실로 믿지 말 것 (사용자 박제 2026-07-20)
+
+**진실은 한 곳에서 *읽어라*. 어딘가에 복사해두고 그 복사본을 믿지 마라.**
+
+2026-07-20 하루에 같은 병이 5번 났다. 전부 *복사본을 진실로 착각* 한 사고:
+
+| 무엇을 복사했나 | 원본이 바뀌자 | 사례 |
+|---|---|---|
+| **값** 을 코드에 | 노브 바꿔도 옛 값 표시 | 제안 엔진 "재시도 3회"·"잡 42개" |
+| **스키마** 를 코드에 | 필드 추가되면 미표시 | 대시보드 `five_hour`/`seven_day` 키 |
+| **사실** 을 문서에 | 코드 바뀌어도 문서 그대로 | `hub.py` 현행 기술 (ERRORS [456]) |
+| **수정** 을 라이브러리에 | venv 재생성에 소멸 | pytrends venv 패치 (ERRORS [455]) |
+| **함수** 를 미리 (`from X import f`) | 패치해도 옛 함수 호출 | sdk_compat 무력화 (ERRORS [457]) |
+| **상태** 를 플래그에 | 실제로 안 먹어도 True | `_PATCH_INSTALLED = True` |
+
+**실행 규칙**
+- 표시·판단에 쓰는 수치·목록·스키마는 *런타임 조회* 로 파생한다. 문자열로 박지 말 것.
+- 외부 라이브러리 비호환은 *저장소 코드에서 흡수* 한다. `.venv` 안을 고치는 규정을 만들지 말 것.
+- monkey-patch 는 `sys.modules` 순회로 *모든 바인딩* 을 교체하고, **교체 개수를 로그로 남긴다**.
+- **설치 플래그는 '시도' 의 기록이지 '적용' 의 증거가 아니다.** 패치·훅·등록에는 반드시
+  *효과를 동작으로 확인하는* 스모크 테스트를 함께 둘 것 —
+  `claude_sdk_compat.patch_effective()` / `pytrends_utils.retry_compat_effective()` 가 표준 형태.
+  (가짜 입력을 *실제 소비자가 쓰는 참조* 로 한 번 통과시켜 예외 유무로 판정.)
+- 외부 응답을 화면에 붙일 때 *구조화된 배열/목록 필드가 있으면 그것을 렌더* 한다.
+
+**자동 강제**: `python3 shared/precommit_check.py --category copytruth`
+— git 훅·데몬 부팅·GUARDIAN 잡 3곳에서 자동 실행. ① venv 내부 수정 *지시*
+② 효과 검증 없는 monkey-patch ③ 효과 검증 없는 설치 플래그 를 커밋 단계에서 차단.
+
+## ★ 작업 종료 절차 — 재시작·검증·커밋 (강제 — 사용자 박제 2026-07-20)
+
+**순서 고정: ① 수정 → ② 데몬 재시작 → ③ *재시작된 프로세스로* 검증 → ④ 전부 커밋.**
+
+- **② 재시작 의무**: 실행 중 데몬은 *수정 전 코드를 메모리에 보유* 한다 (Python import 캐시 — 상세 근거는 아래 자가학습 섹션). 따라서 코드를 고쳤으면 `./restart_daemon.sh` 로 반드시 재기동. 재시작 없이 "고쳤다" 고 보고하지 말 것.
+- **③ 검증은 재시작 *후* 프로세스로**: `ps -o lstart= -p $(pgrep -f jarvis_daemon.py)` 시각이 수정 파일 mtime 보다 **나중** 인지 확인한 뒤 검증할 것. (2026-07-20 실제 사고: compat 패치를 고치고 12/12 성공까지 확인했으나 데몬은 4분 전에 뜬 *옛 코드* 였다 — 사용자 지적으로 발견.) 가능하면 패치 적용 여부를 로그로 남겨 확인 (예: `monkey-patch 설치 완료 (바인딩 참조 N곳 교체)`).
+- **재시작은 `./restart_daemon.sh` 만**: keeper 를 먼저 unload → 좀비 정리 → 기동 → keeper 재등록 순서가 스크립트에 박혀 있다. 수동 `pkill` + `nohup` 조합은 중복 인스턴스·keeper 영구 정지를 유발.
+
+## ★ 커밋 규정 (강제 — 사용자 박제 2026-07-20)
+- **작업 종료 시 워킹트리를 깨끗이 비운다**: `git status` 잔여 0. *내가 수정하지 않은 파일* (데몬이 런타임에 갱신한 학습 산출물 — `design_learn_log.json`·`design_recipes.json`·`synonym_cache.json`·`learned_patterns.json` 등) 도 **함께 커밋**한다.
+- **사유**: 이들은 에이전트가 누적한 *학습 자산* 이다. 미커밋으로 방치하면 ① `git checkout`·브랜치 이동 시 소실 ② 다음 작업자가 "누가 왜 바꿨나" 를 추적 불가 ③ 회고·롤백 불가. 내 변경분만 골라 커밋하는 것은 규정 위반.
+- **절차**: 커밋 직전 `git status --short` 로 잔여 확인 → 전부 스테이징 (`git add -A`) → 커밋 메시지 본문에 *내 변경분* 을 쓰고, 말미에 *동반 커밋된 런타임 산출물* 을 한 줄로 명시.
+- **예외**: `.gitignore` 대상·비밀정보·대용량 바이너리는 제외 (해당 시 `.gitignore` 에 추가하고 그 사실을 메시지에 남길 것).
+- **검증**: 커밋 후 `git status --short` 결과가 비어 있어야 함.
+
 ## Claude Code 작업 효율 규정 (강제)
 - **파일 읽기**: 이미 읽은 파일 재읽기 금지. 필요한 범위만 Read(offset+limit).
 - **탐색**: 심볼 찾기는 Grep 직접. 파일 3개 이하는 직접 Read. Explore agent는 광범위 탐색만.
@@ -205,7 +249,7 @@ pkill -f jarvis_daemon.py        # 전체 종료
 ## 인프라 관리 규정 (강제 — 절대 — 모든 인프라 책임 단일 진입점)
 - **단일 진입점**: `JARVIS00_INFRA/infra_agent.py`. 데몬 프로세스 라이프사이클·시스템 상태 종합 빌드(`build_status`)·텔레그램 시스템 관리 명령(/status·/restart·/quit) 핸들러·infra.* 인텐트 처리 모두 여기.
 - **다른 파일 금지**: `jarvis_daemon.py` 는 *프로세스 부트스트랩 + APScheduler/봇 polling 루프* 만. *시스템 상태 빌드·시스템 관리 명령 분기·infra capability 선언* 박지 말 것. 모두 `JARVIS00_INFRA.infra_agent` 위임.
-- **다른 폴더 금지**: `JARVIS01_MASTER`·`JARVIS02_WRITER`·`JARVIS03_RADAR`·`shared/` 어디에도 인프라 코드 (데몬 제어·시스템 상태·프로세스 관리·Streamlit 자식 프로세스 관리·Keeper 통신) 박지 말 것.
+- **다른 폴더 금지**: `JARVIS01_MASTER`·`JARVIS02_WRITER`·`JARVIS03_RADAR`·`shared/` 어디에도 인프라 코드 (데몬 제어·시스템 상태·프로세스 관리·대시보드 자식 프로세스 관리(FastAPI :9198 · Next.js :9199)·Keeper 통신) 박지 말 것.
 - **발견 즉시 이관**: 인프라 관련 신규 코드를 다른 파일에서 발견하면 *즉시* `JARVIS00_INFRA/infra_agent.py` 로 이관. 미루지 말 것.
 - **이관 절차**: ① `JARVIS00_INFRA/infra_agent.py` 에 함수/핸들러 추가 → `__all__` 업데이트 → ② 호출자 (jarvis_daemon 등) 는 `from JARVIS00_INFRA.infra_agent import ...` 로 위임 → ③ 호출자에 fallback 인프라 로직 두지 말 것.
 - **★ 이관 완전성 (헌법 박제 2026-05-15 — 3회 반복 교훈)**: `import` 추가만으로는 불충분 — *반드시 구 함수 본체를 삭제*. Python last-def override 로 인해 구 정의가 새 정의를 덮어쓸 위험. 이관 완료 후 `grep -rn "^def <함수명>" --include="*.py" .` 으로 중복 정의 잔존 여부 반드시 확인.
@@ -593,7 +637,8 @@ grep -rnE 'requests\.get\(' --include='*.py' . \
 **공용 자원** (다른 에이전트와 공유):
 - `shared/db.py` — `self_repair_runs` / `error_log` 테이블 (공용 DB)
 - `JARVIS04_SCHEDULER/job_registry.py` — 잡 등록 (callback 경로: `JARVIS07_GUARDIAN.auto_repair.job_auto_repair`)
-- `hub.py` — 대시보드 카드 (오류 관리 탭)
+- `api_server.py` (:9198) — `/api/errors`·`/api/guardian/*`·`/api/learning`·`/api/repairs` 라우트
+- `dashboard/app/{errors,learning}/` (:9199) — 오류·학습 페이지 (Next.js)
 
 **역사적 위치 (이관 완료)**:
 - 옛: `JARVIS01_MASTER/auto_repair.py` → **삭제** (2026-05-15)
@@ -638,8 +683,8 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
   - 학습 누적 (patterns_count / hits_total / llm_saved)
   - 시계열 추적 → 학습 곡선 정량 지표
 
-#### 계층 3 — 학습 가시화 (hub.py 대시보드)
-- **오류 관리 탭 → 현황 서브탭** 에 2개 카드:
+#### 계층 3 — 학습 가시화 (`dashboard/` Next.js :9199)
+- **`/errors`·`/learning` 페이지** 에 2개 카드:
   1. **🤖 자가 진단 학습 곡선** (최근 10회) — 회차/시각/수정/패턴/절약/점수/다음 회차 테이블 + KPI 4종 (총 회차 / LLM 절약 추세 / 패턴 증가 / 평균 수정)
   2. **🧠 학습 시스템 — LLM 호출 절약 효과** — 학습 패턴 / LLM 호출 절약 / 정적·LLM 분포 + Top 5 패턴
 
@@ -658,7 +703,7 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
                                               ↓
                           [self_repair_runs 메트릭 누적]
                                               ↓
-                          [hub.py 대시보드 학습 곡선 표시]
+                     [대시보드(:9199) /learning 학습 곡선 표시]
                                               ↓
                           [사용자가 학습 효과 *눈으로* 확인]
 ```
@@ -667,7 +712,7 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
 
 - **자가 진단 prompt 변경**: `auto_repair._BASE_PROMPT` 의 3단계 구조 유지. 검토 범위 추가 시 3단계 안에서 확장.
 - **learned_patterns 신규 등록 경로**: 반드시 `record_pattern_hit(error_record, fixer_name=...)` 사용. *fixer_name 없는 등록 절대 금지* (3종 노이즈 게이트 차단됨).
-- **메트릭 신규 컬럼**: `self_repair_runs` 테이블 변경 시 `_save_run_to_db` 의 INSERT + `hub.py` 의 SELECT 동시 갱신.
+- **메트릭 신규 컬럼**: `self_repair_runs` 테이블 변경 시 `_save_run_to_db` 의 INSERT + `api_server.py` `/api/repairs` 의 SELECT 동시 갱신.
 - **검증 명령**: 자가 진단 회차 후 텔레그램에 *학습 추세* 자동 표시 (`_learning_trend_brief`) — 점수 하락 시 사용자 즉시 인지.
 
 ### 위반 시

@@ -427,6 +427,12 @@ def check_autocode(report: Report) -> None:
         # ★ 무료 데이터 라이브러리 자동설치 화이트리스트 (사용자 박제 2026-06-29 — ADR 010)
         "JARVIS09_COLLECTOR/lib_bootstrap.py",
         "api_server.py",               # FastAPI REST 백엔드 — PID/프로세스 조회 목적
+        # ★ 구독 잔여량 조회 (사용자 승인 2026-07-20 — ERRORS [456])
+        #   macOS Keychain 에서 본인 OAuth 토큰을 읽어 /api/oauth/usage 조회.
+        #   `security` CLI 외 다른 수단이 없어 subprocess 불가피. 토큰은 메모리에서만
+        #   다루고 로깅·DB박제·반환값 포함 금지. 실패는 전부 흡수(None → UI 폴백).
+        #   킬스위치: TOKEN_QUOTA_LOOKUP=0
+        "shared/token_usage.py",
     )
 
     for p in _iter_py():
@@ -1073,6 +1079,91 @@ def check_ssot(report: Report) -> None:
 
 
 CATEGORIES["ssot"] = check_ssot
+
+
+def check_copytruth(report: Report) -> None:
+    """★ '복사본을 진실로 믿는' 패턴 자동 검출 (사용자 박제 2026-07-20).
+
+    사용자 요구: "동적 설계를 매번 말하지 않아도 자동으로 인식되게 하라."
+
+    ssot 카테고리가 *모델명 표시* 에 한정된 것을 일반화한다. 2026-07-20 하루에
+    같은 병이 5번 나왔다 — 전부 *진실을 한 곳에서 읽지 않고 어딘가에 복사해두고
+    그 복사본을 믿은* 사고:
+      · 제안 엔진이 "재시도 3회"·"잡 42개" 를 문자열로 박음 → 노브 변경 미반영
+      · 대시보드가 five_hour/seven_day 키를 박음 → 버킷 추가 시 미표시
+      · 문서가 hub.py 를 현행이라 기술 → 코드에선 이미 삭제 (ERRORS [456])
+      · 패치를 .venv 안에 복사 → venv 재생성에 소멸 (ERRORS [455])
+      · `_PATCH_INSTALLED=True` 플래그를 효과의 증거로 사용 → 무력해도 True (ERRORS [457])
+
+    검출 3종 (오탐을 피하려 *지시·선언* 형태만 잡는다):
+      ① venv/site-packages 내부 파일을 고치라는 *지시* 가 문서·주석에 있음
+      ② monkey-patch(모듈 속성 대입)를 하면서 효과 검증 함수가 저장소에 없음
+      ③ 설치/적용 플래그를 정의하면서 같은 파일에 효과 검증이 없음
+    """
+    cat = "copytruth"
+
+    # ① venv 내부 수정 지시 — ERRORS [455] 재발 방지
+    pat_venv_edit = re.compile(
+        r"\.venv/[^\s]*\.py[^\n]*(?:수정|고치|패치|변경|바꾸)|"
+        r"(?:수정|고치|패치|변경|바꾸)[^\n]*\.venv/[^\s]*\.py"
+    )
+    for p in list(_iter_py()) + list(ROOT.glob("**/*.md")):
+        rel_s = str(p.relative_to(ROOT))
+        if any(seg in rel_s for seg in (".venv/", "__pycache__", "node_modules",
+                                        ".claude/", "JARVIS07_GUARDIAN/ERRORS.md")):
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        lines = text.splitlines()
+        for i, line in enumerate(lines, 1):
+            if not pat_venv_edit.search(line):
+                continue
+            # ★ 오탐 차단: *지시* 만 잡고 *금지 규정·역사 서술* 은 통과시킨다.
+            #   금지어가 같은 줄에 없어도 주변 문맥(±3줄)에 있으면 정당한 서술.
+            ctx = "\n".join(lines[max(0, i - 4): i + 3])
+            if any(w in ctx for w in ("금지", "말 것", "하지 마", "종전", "폐기", "대신")):
+                continue
+            report.add(Violation(cat, "copytruth/venv-edit", rel_s, i, line.strip()[:160]))
+
+    # ②③ monkey-patch·설치플래그가 있는 파일에 효과 검증이 있는가
+    pat_patch_assign = re.compile(
+        r"^\s*[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\s*=\s*_?[A-Za-z_][A-Za-z0-9_]*patch",
+        re.MULTILINE)
+    pat_setattr = re.compile(r"setattr\(\s*_?[A-Za-z_][A-Za-z0-9_]*\s*,\s*[\"'][A-Za-z_]")
+    pat_flag = re.compile(r"^\s*_?[A-Z][A-Z0-9_]*(?:INSTALLED|PATCHED|APPLIED|DONE)\s*=\s*(?:True|False)",
+                          re.MULTILINE)
+    # 효과 검증 신호 — 이 중 하나라도 있으면 통과
+    pat_verify = re.compile(r"def\s+\w*(?:effective|verify|smoke|selfcheck|self_check)\w*\s*\(|"
+                            r"_effective\(|patch_effective")
+
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        if rel_s == "shared/precommit_check.py":
+            continue          # 이 검사기 자신의 정규식 리터럴 제외
+        text = _read_py(p)
+        if text is None:
+            continue
+        has_patch = bool(pat_patch_assign.search(text) or pat_setattr.search(text))
+        has_flag  = bool(pat_flag.search(text))
+        if not (has_patch or has_flag):
+            continue
+        if pat_verify.search(text):
+            continue          # 효과 검증 존재 → 정당
+        kind = "copytruth/patch-unverified" if has_patch else "copytruth/flag-unverified"
+        first = next((i for i, l in enumerate(text.splitlines(), 1)
+                      if (pat_patch_assign.match(l) or pat_setattr.search(l)
+                          or pat_flag.match(l))), 1)
+        report.add(Violation(
+            cat, kind, rel_s, first,
+            "패치·설치플래그가 있으나 효과 검증(patch_effective/verify/smoke)이 없음 "
+            "— 플래그는 '시도' 지 '적용' 의 증거가 아님 (ERRORS [457])"))
+
+    report.checks_run += 3
+
+
+CATEGORIES["copytruth"] = check_copytruth
 
 
 def run(categories: list[str] | None = None) -> Report:

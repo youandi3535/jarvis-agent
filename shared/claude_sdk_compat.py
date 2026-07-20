@@ -123,13 +123,72 @@ def _install_message_parser_patch() -> None:
                 mtype = data.get("type", "unknown") if isinstance(data, dict) else "unknown"
                 payload = data if isinstance(data, dict) else {}
                 log.info(f"[sdk_compat] 미지 message type 흡수: {mtype}")
+                # ★ rate_limit_event 는 Anthropic 이 주는 *한도·리셋 정보* 를 담는다.
+                #   종전엔 타입명만 찍고 페이로드를 통째로 버려 사용량 관측이 불가능했다
+                #   (ERRORS [456]). 원문을 DB 에 박제해 대시보드에서 확인 가능하게 한다.
+                if mtype == "rate_limit_event":
+                    try:
+                        from shared.token_usage import record_rate_limit
+                        record_rate_limit(payload, source="sdk_compat")
+                    except Exception:
+                        pass
                 return SystemMessage(subtype=mtype, data=payload)
             except Exception:
                 raise  # 흡수 자체 실패 시 원본 예외 전파
 
     _mp.parse_message = _patched
+
+    # ★★ 바인딩된 참조까지 교체 (ERRORS [457] — 2026-07-20)
+    #   `_internal/client.py` 는 `from .message_parser import parse_message` 로
+    #   함수를 *모듈 로드 시점에 직접 바인딩* 한다. 따라서 message_parser 모듈의
+    #   속성만 바꾸면 client 는 여전히 *원본* 을 호출 → 패치가 무력화된다.
+    #   (오늘 아침 경제 브리핑 실패의 근본 원인: rate_limit_event 가 ResultMessage
+    #    직전에 도착 → MessageParseError 로 스트림 중단 → 빈 응답 → topic_pack
+    #    fail-closed. 한도는 46% 밖에 안 찼는데 '한도 소진' 으로 오진되었다.)
+    #   pytrends 사례(ERRORS [455])와 동일한 monkey-patch 실패 클래스.
+    import sys as _sys
+    _rebound = 0
+    for _name, _mod in list(_sys.modules.items()):
+        if not _name.startswith("claude_code_sdk"):
+            continue
+        try:
+            if getattr(_mod, "parse_message", None) is _original:
+                setattr(_mod, "parse_message", _patched)
+                _rebound += 1
+        except Exception:
+            continue
+
     _PATCH_INSTALLED = True
-    log.info("[sdk_compat] message_parser monkey-patch 설치 완료")
+    log.info(f"[sdk_compat] message_parser monkey-patch 설치 완료 "
+             f"(바인딩 참조 {_rebound}곳 동시 교체)")
+
+
+def patch_effective() -> bool | None:
+    """패치가 *실제로 먹는지* 동작으로 확인 (설치 플래그가 아니라).
+
+    ★ 왜 필요한가 (ERRORS [457]):
+      `_PATCH_INSTALLED = True` 는 "설치를 시도했다" 는 뜻일 뿐 "모두가 새 함수를
+      쓴다" 는 보장이 아니다. `client.py` 가 `from .message_parser import parse_message`
+      로 원본을 *미리 복사* 해뒀다면 패치는 설치돼도 무력하다. 실제로 그 상태로
+      수일간 모든 LLM 호출이 빈 응답을 냈고, 플래그는 내내 True 였다.
+
+    그래서 여기서는 *실제 소비자가 쓰는 경로* 로 가짜 rate_limit_event 를 한 번
+    통과시켜 본다. 예외가 안 나면 유효, 나면 무력.
+
+    반환: True(유효) / False(무력 — 즉시 수리 필요) / None(판정 불가)
+    """
+    try:
+        from claude_code_sdk._internal import client as _cl
+    except Exception:
+        return None
+    fn = getattr(_cl, "parse_message", None)   # ★ 소비자가 실제로 부르는 그 참조
+    if fn is None:
+        return None
+    try:
+        fn({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}})
+        return True
+    except Exception:
+        return False
 
 
 # ── 동기 query wrapper — 모든 호출자 단일 진입점 ────────────────────────
