@@ -325,7 +325,11 @@ def generate_article_html(
     if not raw:
         from shared.llm import last_call_infra_incomplete as _infra, circuit_is_open as _copen
         if _infra() or _copen():
-            print("  ⏸ [Pass-1 단일] 인프라 스로틀 감지 → 폴백 체인 스킵(자가증폭 차단), 상류 defer 위임")
+            from shared.llm import (last_call_infra_reason as _ireason,
+                                     infra_reason_label as _ilabel)
+            # ★ 사유 분리 표기 (ERRORS [460]) — "스로틀" 로 뭉뚱그리면 timeout 을 한도 문제로
+            #   오진한다. 2026-07-20 티스토리 6/6 실패가 그 사례(실제 원인은 timeout 300s).
+            print(f"  ⏸ [Pass-1 단일] {_ilabel(_ireason())} → 폴백 체인 스킵(자가증폭 차단), 상류 defer 위임")
             return ""
     if not raw:
         print("  ⚠️ [Pass-1 단일] 실패 → 3섹션 순차 재시도...")

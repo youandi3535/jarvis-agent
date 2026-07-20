@@ -497,6 +497,34 @@ def _llm_scratch_dir() -> str | None:
 # 저장소를 벗어나면 프로젝트 .claude/settings.json 도 함께 잃는다.
 # 거기서 설정하던 값은 env 로 직접 전달해 유지한다.
 _SDK_BASE_ENV = {"ANTHROPIC_API_KEY": "", "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"}
+
+
+# ── 본문 생성 timeout 단일 진입점 (ERRORS [460] — 2026-07-20) ──────────
+#
+# 사고: 테마 티스토리 발행이 6/6 실패. 로그의 "인프라 스로틀" 은 *오분류* 였고
+#   실제 원인은 `SDK timeout 300s — 수집된 응답: 0개`. 네이버는 27,657 토큰을
+#   292.1초에 생성해 300초를 *간신히* 통과했고, 대등한 분량의 티스토리는 벽을 넘었다.
+#   실측 생성 속도 ≈ 88 토큰/초 → 27.6K 토큰에 약 314초가 필요한데 상한이 300초였다.
+#
+# 왜 하드코딩이 문제였나: draft_writer.py 6곳에 `timeout=300` 이 박혀 있어
+#   분량 정책이 늘어도 시간 예산이 따라오지 않았다. 값을 코드에 복사해둔 전형.
+#
+# ★ 동적: 플랫폼 액션 데드라인(watchdog SSOT)에서 도출한다. 재시도 상한(3회)이
+#   데드라인을 넘지 않도록 1/4 로 제한 → 데드라인이 바뀌면 자동 추종.
+def writer_timeout() -> int:
+    """본문 생성 LLM 호출 상한(초). 액션 데드라인에서 도출 — 하드코딩 금지."""
+    env = os.getenv("LLM_WRITER_TIMEOUT_SEC")
+    if env:
+        try:
+            return max(60, int(env))
+        except ValueError:
+            pass
+    try:
+        from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC as _d
+    except Exception:
+        _d = 2400
+    # 3회 재시도 + 수집·이미지·발행 단계 몫을 남기고 1/4 배정
+    return max(300, min(900, int(_d / 4)))
 _protect_cache: list = [0.0, ()]     # (계산시각, ((hour,minute), ...))
 _PROTECT_TTL = 600.0
 
@@ -901,6 +929,40 @@ def last_call_infra_incomplete() -> bool:
         or getattr(_LAST_CALL, "truncated", False)
         or getattr(_LAST_CALL, "lock_contention", False)   # ★ P2-a: 락 경합도 미완결(defer 대상, 회로 무오염)
     )
+
+
+def last_call_infra_reason() -> str:
+    """직전 미완결의 *구체적 사유*. 오진 방지용 (ERRORS [460]).
+
+    ★ 왜 필요한가: 종전엔 스로틀·타임아웃·절단·락경합을 전부 "인프라 스로틀" 한 덩어리로
+      표기했다. 2026-07-20 테마 티스토리 6/6 실패의 실제 원인은 *timeout 300s 초과*
+      (생성 88토큰/초 × 27.6K 토큰 ≈ 314초)였는데 로그·텔레그램이 "스로틀" 이라고만
+      말해 한도·rate-limit 쪽으로 진단이 한참 헤맸다. 사유를 분리해 표기한다.
+    """
+    if getattr(_LAST_CALL, "hung", False):
+        return "timeout"            # 상한 내 완료 실패, 부분출력 0 — 시간 예산 부족 신호
+    if getattr(_LAST_CALL, "truncated", False):
+        return "truncated"          # 부분출력 + 데드라인 절단
+    if getattr(_LAST_CALL, "throttled", False):
+        return "throttle"           # num_turns=0 — 서버가 모델 호출 자체를 거절
+    if getattr(_LAST_CALL, "lock_contention", False):
+        return "lock_contention"    # 크로스 프로세스 락 경합
+    return ""
+
+
+_INFRA_REASON_LABEL = {
+    "timeout":         "생성 시간 초과 — 분량 대비 timeout 부족(시간 예산 재검토)",
+    "truncated":       "생성 절단 — 데드라인이 스트림을 끊음",
+    "throttle":        "인프라 스로틀 — 서버가 호출 거절(한도/rate-limit)",
+    "lock_contention": "락 경합 — 다른 호출이 점유 중",
+}
+
+
+def infra_reason_label(reason: str = "") -> str:
+    """사유 코드 → 사람이 읽는 설명. 미상이면 종전 표기 유지."""
+    return _INFRA_REASON_LABEL.get(
+        reason or last_call_infra_reason(),
+        "인프라 미완결 — 일시적(다음 시도/회차 재개)")
 
 
 def circuit_is_open() -> bool:
