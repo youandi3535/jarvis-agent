@@ -448,6 +448,68 @@ def mark_publishing(active: bool) -> None:
         _PUBLISHING_ACTIVE.clear()
 
 
+# ── 발행창 보호 구간 (사용자 승인 2026-07-20 — 제안 ③) ─────────────────
+#
+# 배경: 새벽 심층감사·상시 잡이 한도를 쓴 뒤 발행창에서 LLM 이 스로틀되면 발행이
+#   차단된다. 발행 *직전* 일정 시간 동안 background alias 를 아예 막아 한도를
+#   발행에 몰아준다.
+#
+# ★ 동적 설계: 발행 시각을 하드코딩하지 않는다. JARVIS04 DEFAULT_JOBS 의 실제
+#   cron(hour/minute)에서 도출 → 사용자가 발행 시각을 바꾸면 보호 구간이 자동으로
+#   따라 이동한다. (2026-07-20 '복사본을 진실로 믿지 말 것' 원칙)
+_PROTECT_MIN = int(os.getenv("LLM_PUBLISH_PROTECT_MIN", "90") or "90")   # 발행 前 보호 분
+# 스로틀 시 재시도 생략 (제안 ① — 킬스위치 0 으로 종전 동작 복귀)
+_THROTTLE_NO_RETRY = (os.getenv("LLM_THROTTLE_NO_RETRY", "1") or "1") != "0"
+_protect_cache: list = [0.0, ()]     # (계산시각, ((hour,minute), ...))
+_PROTECT_TTL = 600.0
+
+
+def _publish_times() -> tuple:
+    """발행 잡의 (시,분) 목록 — DEFAULT_JOBS 에서 실시간 도출. 실패 시 빈 튜플."""
+    import time as _t
+    now = _t.time()
+    if _protect_cache[1] and now - _protect_cache[0] < _PROTECT_TTL:
+        return _protect_cache[1]
+    times = []
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+        for j in DEFAULT_JOBS:
+            cb = str(j.get("callback", ""))
+            # 실제 *발행* 콜백만 (선계산·로그점검 제외)
+            if j.get("trigger") != "cron" or "run_self_repair_then_" not in cb:
+                continue
+            kw = j.get("kwargs") or {}
+            h, m = kw.get("hour"), kw.get("minute", 0)
+            if isinstance(h, int):
+                times.append((h, int(m or 0)))
+    except Exception:
+        pass
+    _protect_cache[0], _protect_cache[1] = now, tuple(sorted(set(times)))
+    return _protect_cache[1]
+
+
+def in_publish_protection() -> bool:
+    """지금이 발행 직전 보호 구간인가 (발행 시각 前 _PROTECT_MIN 분)."""
+    if _PROTECT_MIN <= 0:
+        return False
+    times = _publish_times()
+    if not times:
+        return False
+    from datetime import datetime as _dt
+    now = _dt.now()
+    cur = now.hour * 60 + now.minute
+    for h, m in times:
+        start = (h * 60 + m - _PROTECT_MIN) % (24 * 60)
+        end = h * 60 + m
+        if start <= end:
+            if start <= cur < end:
+                return True
+        else:                      # 자정 넘김
+            if cur >= start or cur < end:
+                return True
+    return False
+
+
 def is_publishing() -> bool:
     """현재 발행 파이프라인 실행 중인지 (in-process 한정)."""
     return _PUBLISHING_ACTIVE.is_set()
@@ -844,6 +906,23 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
     #   동일 프로세스(daemon) 안에서 guardian 이 세마포어를 timeout=300s 로 점유해
     #   발행 파이프라인을 최대 300s 차단하던 사고 방지.
     #   mark_publishing(True) → 모든 BG alias 호출을 timeout ≤90s·retries=1 로 단축.
+    # ★ 발행창 보호 구간 (사용자 승인 2026-07-20 — 제안 ③): 발행 시각 前
+    #   _PROTECT_MIN 분 동안 background alias 를 *아예 차단* 해 한도를 발행에 몰아준다.
+    #   종전엔 발행이 *시작된 뒤*(mark_publishing) 강등만 했으므로, 발행 직전에
+    #   심층감사·학습이 한도를 태워버리는 것을 막지 못했다.
+    #   보호 시각은 DEFAULT_JOBS cron 에서 도출 — 하드코딩 없음.
+    if alias in _BG_ALIASES and not _PUBLISHING_ACTIVE.is_set():
+        try:
+            if in_publish_protection():
+                import logging as _lg
+                _lg.getLogger("jarvis.llm").info(
+                    f"🛡 발행창 보호 구간 — background alias '{alias}' 차단 "
+                    f"(발행 前 {_PROTECT_MIN}분). 한도를 발행에 우선 배정."
+                )
+                return ""
+        except Exception:
+            pass
+
     if alias in _BG_ALIASES and _PUBLISHING_ACTIVE.is_set():
         retries = min(retries, 1)
         backoff = False
@@ -906,6 +985,19 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
             truncated_seen = True
         if getattr(_LAST_CALL, "throttled", False):
             throttled_seen = True
+            # ★ 스로틀 = 재시도 금지 (사용자 승인 2026-07-20 — 제안 ①)
+            #   num_turns=0 은 *모델을 아예 호출하지 않았다* 는 신호(한도/스로틀).
+            #   같은 창에서 즉시 재발사해도 같은 결과이고, 한도가 없을 때 한도를 더
+            #   태운다. LLM 재시도(최대 3) × harness max_attempts(3) = 최악 9배 증폭의
+            #   진원지. 여기서 끊고 상위(harness)의 defer 에 위임한다.
+            #   킬스위치: LLM_THROTTLE_NO_RETRY=0
+            if _THROTTLE_NO_RETRY and _attempt < retries - 1:
+                import logging as _lg
+                _lg.getLogger("jarvis.llm").info(
+                    f"⏭ 스로틀 감지 — 재시도 생략 후 defer (alias={alias}, "
+                    f"시도 {_attempt + 1}/{retries}). 같은 창 재발사는 한도만 소모."
+                )
+                break
         if getattr(_LAST_CALL, "hung", False):
             hung_seen = True
         if backoff and _attempt < retries - 1:
