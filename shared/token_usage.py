@@ -730,9 +730,14 @@ def suggestions() -> list[dict]:
         import sqlite3 as _sq3
         with get_db() as _c:
             _c.row_factory = _sq3.Row
+            # ★ 최근 호출 기준 (2026-07-20): 누적으로 재면 설정을 고친 뒤에도
+            #   과거 데이터에 묻혀 며칠간 개선이 안 보인다. *현재 구성* 을 반영하려면
+            #   최근 창으로 판정해야 한다.
             _t = _c.execute(
                 "SELECT SUM(cache_create) cc, SUM(cache_read) cr, SUM(output_tokens) o, "
-                "  SUM(cost_usd) cost, COUNT(*) n FROM llm_token_usage WHERE output_tokens>0"
+                "  SUM(cost_usd) cost, COUNT(*) n FROM ("
+                "  SELECT * FROM llm_token_usage WHERE output_tokens>0 "
+                "  ORDER BY id DESC LIMIT 30)"
             ).fetchone()
     except Exception:
         _t = None
@@ -745,7 +750,7 @@ def suggestions() -> list[dict]:
             "title": (f"프롬프트 캐시 비효율 — 쓴 것보다 적게 읽음 (재사용 {ratio:.2f}배)"
                       if ratio < 1 else f"프롬프트 캐시 효율 — 재사용 {ratio:.2f}배"),
             "severity": "high" if ratio < 0.8 else "medium" if ratio < 1.5 else "good",
-            "finding": (f"데몬 호출 {n}건 누적: 캐시생성 {_fmt(cc)} vs 캐시읽기 {_fmt(cr)} "
+            "finding": (f"최근 데몬 호출 {n}건: 캐시생성 {_fmt(cc)} vs 캐시읽기 {_fmt(cr)} "
                         f"→ 재사용 {ratio:.2f}배, 출력 {_fmt(o)}, 환산비용 ${cost:.2f}. "
                         + ("캐시는 *한 번 비싸게 쓰고 여러 번 싸게 읽어야* 이득인데, "
                            "지금은 쓰기 프리미엄만 내고 회수하지 못하고 있다."

@@ -460,6 +460,43 @@ def mark_publishing(active: bool) -> None:
 _PROTECT_MIN = int(os.getenv("LLM_PUBLISH_PROTECT_MIN", "90") or "90")   # 발행 前 보호 분
 # 스로틀 시 재시도 생략 (제안 ① — 킬스위치 0 으로 종전 동작 복귀)
 _THROTTLE_NO_RETRY = (os.getenv("LLM_THROTTLE_NO_RETRY", "1") or "1") != "0"
+
+# ── SDK cwd 격리 (제안 ② — 2026-07-20, 전수감사 확정) ──────────────────
+#
+# 문제: ClaudeCodeOptions 에 cwd 를 주지 않으면 spawn 된 claude CLI 가 데몬의
+#   cwd(= 저장소 루트)를 물려받아 **CLAUDE.md + @import 5개(≈96KB / 약 48,940 토큰)**
+#   를 프로젝트 메모리로 자동 로드한다. 내용은 매 호출 동일한데, CLI 가
+#   [CLAUDE.md + 우리 프롬프트] 를 *하나의 트레일링 캐시 블록* 에 넣기 때문에
+#   프롬프트가 바뀔 때마다 블록 전체가 무효화 → 48,940 토큰이 매번 *재기록*
+#   (쓰기 프리미엄 1.25x)된다. 읽기(0.1x)로 재사용되지 못한다.
+#
+# 실측(자연실험): cwd=저장소 → cache_create ≈ 49,000 / cwd=빈 임시폴더 → ≈ 890.
+#   회귀 cache_create = 48,940 + 0.80×프롬프트글자수. 고정 낭비가 캐시쓰기의 85~98%.
+#
+# 해결: 전용 빈 작업 디렉터리를 cwd 로 준다. 이 호출들은 프로젝트 헌법이 필요 없다
+#   — 작성 규칙은 law_enforcer.build_writing_rules_block() 으로 *프롬프트에 명시 주입*
+#   되는 것이 이 저장소의 설계다(자동 로드에 의존하지 않는다).
+#
+# ★ 동적: 경로를 박지 않고 DB 경로에서 도출. 킬스위치 LLM_ISOLATE_CWD=0.
+_ISOLATE_CWD = (os.getenv("LLM_ISOLATE_CWD", "1") or "1") != "0"
+
+
+def _llm_scratch_dir() -> str | None:
+    """CLAUDE.md 가 없는 전용 cwd. 실패하면 None(종전 동작)."""
+    if not _ISOLATE_CWD:
+        return None
+    try:
+        from shared.db import DB_PATH
+        d = Path(DB_PATH).parent / "llm_cwd"
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d)
+    except Exception:
+        return None
+
+
+# 저장소를 벗어나면 프로젝트 .claude/settings.json 도 함께 잃는다.
+# 거기서 설정하던 값은 env 로 직접 전달해 유지한다.
+_SDK_BASE_ENV = {"ANTHROPIC_API_KEY": "", "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"}
 _protect_cache: list = [0.0, ()]     # (계산시각, ((hour,minute), ...))
 _PROTECT_TTL = 600.0
 
@@ -587,7 +624,12 @@ def _run_sdk_sync(
 
     full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
     full_prompt = _sanitize_prompt(full_prompt)   # ★ embedded null byte 크래시 차단
-    options = ClaudeCodeOptions(model=model, env={"ANTHROPIC_API_KEY": ""})
+    # ★ cwd 격리 — 저장소 밖 전용 폴더. CLAUDE.md 자동 로드(48,940 토큰/호출) 차단.
+    _opts_kw: dict = {"model": model, "env": dict(_SDK_BASE_ENV)}
+    _scratch = _llm_scratch_dir()
+    if _scratch:
+        _opts_kw["cwd"] = _scratch
+    options = ClaudeCodeOptions(**_opts_kw)
     parts: list[str] = []
     throttled = {"v": False}
     hung = {"v": False}
@@ -735,9 +777,24 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
 
     imgs = "\n".join(f"- {p}" for p in image_paths)
     full = _sanitize_prompt(f"다음 이미지 파일들을 Read 도구로 열어서 직접 보고 분석하라:\n{imgs}\n\n{prompt}")
-    options = ClaudeCodeOptions(model=model, allowed_tools=["Read"],
-                                permission_mode="bypassPermissions", max_turns=6,
-                                cwd=cwd, env={"ANTHROPIC_API_KEY": ""})
+    # ★ cwd 격리 + 이미지 접근 유지 (제안 ②): 호출자(design_learner)가 넘긴 cwd 는
+    #   Read 도구가 이미지 파일에 닿게 하려는 것이다 — 그냥 교체하면 이미지를 못 읽는다.
+    #   cwd 는 저장소 밖 전용 폴더로 두고(CLAUDE.md 자동 로드 차단), 원래 경로는
+    #   add_dirs 로 작업 범위에 추가해 접근을 보존한다.
+    #   (이미지 폴더도 저장소 안이라 종전엔 vision 호출도 매번 ~49k 를 재기록했다.)
+    _v_kw: dict = {
+        "model": model, "allowed_tools": ["Read"],
+        "permission_mode": "bypassPermissions", "max_turns": 6,
+        "env": dict(_SDK_BASE_ENV),
+    }
+    _v_scratch = _llm_scratch_dir()
+    if _v_scratch:
+        _v_kw["cwd"] = _v_scratch
+        if cwd:
+            _v_kw["add_dirs"] = [cwd]
+    else:
+        _v_kw["cwd"] = cwd
+    options = ClaudeCodeOptions(**_v_kw)
     parts: list[str] = []
 
     try:
