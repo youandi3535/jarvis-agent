@@ -7956,6 +7956,24 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `shared/token_usage.py`(신규), `shared/llm.py`, `shared/claude_sdk_compat.py`, `api_server.py`, `dashboard/app/page.tsx`, `dashboard/lib/api.ts`
 - **교훈**: ① **관측 없는 계정은 사후 추측만 남는다** — 외부 서비스가 보내주는 진단 신호(`rate_limit_event`)를 "미지 타입" 이라며 버리는 흡수 로직은 *호환성은 지키고 정보는 잃는* 최악의 조합. 흡수할 때는 반드시 원문을 남길 것. ② 사용량 지표는 **출력 토큰·캐시 읽기·집계 카운터를 명확히 구분** 할 것 — 혼동하면 원인 귀속을 완전히 틀린다(0.6% 를 주범으로 지목했다). ③ **대시보드에 인용하는 설정값은 반드시 런타임 조회** — 문자열로 박으면 CLAUDE.md 드리프트와 동일한 사고가 UI 에서 재발한다. ④ 무거운 전수 스캔은 *불변 구간을 DB 에 캐시 + 최근분만 증분* 이 정석.
 
+## [457] ★ 빈 응답 사태의 진짜 원인 — compat monkey-patch 가 *바인딩된 참조* 를 못 바꿔 무력화. rate_limit_event(status=allowed)가 SDK 스트림을 죽여 빈 응답 → 경제 브리핑 차단 (2026-07-20)
+- **증상**: 수일간 `topic_pack 프로필 LLM 빈 응답(인프라)` 이 반복되며 아침 경제 브리핑이 발행 차단. 빈 응답 발생 건수가 07-15 이후 1→7→9→4→10→15 로 증가. 재현 테스트에서 `invoke_text` 성공률 1/3, 실패는 일관되게 ~22초 후 빈 문자열.
+- **환경**: `claude_code_sdk` 0.0.25, `shared/claude_sdk_compat.py`(monkey-patch), `shared/llm.py::_run_sdk_sync`, Max 구독 OAuth.
+- **원인**(정확한 인과 사슬):
+  1. Anthropic 이 **모든 호출에** `rate_limit_event` system message 를 보낸다. 실제 페이로드는 `{"status":"allowed","rateLimitType":"five_hour","resetsAt":...}` — *한도 초과가 아니라 정보성 통지*.
+  2. SDK 의 `parse_message` 는 타입 화이트리스트 방식이라 미지 타입에 `MessageParseError`.
+  3. `claude_sdk_compat._install_message_parser_patch()` 가 이를 흡수하도록 `message_parser.parse_message` 를 교체하지만, **`_internal/client.py:13` 이 `from .message_parser import parse_message` 로 함수를 모듈 로드 시점에 *직접 바인딩*** 한다. 모듈 속성만 바꿔서는 client 의 바인딩된 원본 참조가 그대로 → **패치 무력화**(`_PATCH_INSTALLED=True` 인데도 실제로는 미적용).
+  4. 스트림이 `MessageParseError` 로 중단. `_run_sdk_sync` 는 이를 `except (MessageParseError, ProcessError): pass` 로 삼키고 그때까지 모은 `parts` 를 반환 → **rate_limit_event 가 AssistantMessage 보다 먼저 오면 빈 문자열**. 도착 순서가 매번 달라 성공/실패가 무작위처럼 보였다.
+  5. 빈 응답 → `topic_pack` fail-closed(정상 설계) → 경제 브리핑 차단. `ResultMessage` 에도 도달 못 해 usage 계측도 전부 0.
+- **헛다리**(중대 오진 3건):
+  ① **"Max 구독 한도 소진"** — 완전한 오진. `/api/oauth/usage` 실측 결과 five_hour 9%·seven_day 46% 로 *여유 충분*. 심지어 rate_limit_event 자체가 `status:"allowed"` 였다. 파싱 버그를 한도 문제로 읽었다.
+  ② **"Claude Code 워크플로가 한도를 태웠다"** — 실측 154,795 출력 토큰(주간 26.6M 의 0.6%). 무관.
+  ③ **"폴더 이동 때문"** — 무관. 이동 전(07-15)부터 발생 중이었고, 증가 시점은 Anthropic 이 rate_limit_event 를 도입한 시점과 일치.
+- **해결**: `_install_message_parser_patch()` 가 모듈 속성 교체 후 **`sys.modules` 를 순회하며 `claude_code_sdk*` 모듈 중 `parse_message` 가 *원본을 가리키는 모든 바인딩* 을 `_patched` 로 동시 교체**. 교체 개수를 로그에 남겨 회귀 감시.
+- **검증**: 수정 전 스트림 = `init → AssistantMessage → ✗MessageParseError`(ResultMessage 미도달) / 수정 후 = `init → rate_limit_event → AssistantMessage → ResultMessage(usage 완전 수신)`. `invoke_text` 성공률 **1/3 → 5/5**. 계기가 usage 정상 수집(out=3, in=2947, cache=30339, turns=1). rate_limit_event 11건 박제.
+- **파일**: `shared/claude_sdk_compat.py`
+- **교훈**: ① **`from X import f` 로 바인딩된 참조는 모듈 속성 패치로 못 바꾼다** — monkey-patch 시 반드시 `sys.modules` 순회로 *모든 바인딩* 을 교체하고, 교체 개수를 로그로 남겨 무력화를 감지할 것. 오늘 pytrends(ERRORS [455])와 **같은 실패 클래스가 하루에 두 번** 나왔다. ② **패치 설치 플래그(`_PATCH_INSTALLED=True`)는 '설치 시도' 지 '실제 적용' 이 아니다** — 효과를 검증하는 스모크 테스트가 없으면 무력화를 영원히 모른다. ③ 외부 서비스가 보내는 *정보성* 메시지가 파이프라인 전체를 죽일 수 있다 — 미지 메시지 흡수는 방어적으로 설계하되 **실제로 흡수되는지 검증** 할 것. ④ "한도 소진" 처럼 그럴듯한 가설은 *반드시 실측 수치로 반증* 할 것 — 한도 API 를 붙이고 나서야 46% 라는 사실이 드러나 오진 사슬이 끊겼다.
+
 ---
 ### [2026-07-11 05:01] ✅ 자동수정 — RuntimeError
 - **증상**: 트렌드 수집 실패 (rc=75): it__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!

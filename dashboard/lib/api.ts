@@ -80,6 +80,7 @@ export type TokenSuggestion = { id: string; title: string; severity: string; fin
 export type TokenData = {
   generated_at?: string;
   history?: TokenDaily[];
+  quota?: { available: boolean; raw?: unknown; fetched_at?: string } | null;
   suggestions?: TokenSuggestion[];
   totals?: { available: boolean; reason?: string; scanned_files?: number;
              daily?: TokenDaily[]; hourly_today?: TokenHour[]; by_project_today?: TokenProject[] };

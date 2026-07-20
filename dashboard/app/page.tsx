@@ -925,6 +925,31 @@ function TokenPanel() {
   const maxHour = Math.max(1, ...hourly.map(h => h.output));
   const maxDay  = Math.max(1, ...daily.map(d => d.output));
 
+  // 구독 잔여량 — 스키마가 비공개라 여러 후보 키를 탐색해 백분율을 뽑는다.
+  // 못 찾으면 null → 기존 LLM 상태 카드로 폴백.
+  const qraw = (data?.quota?.available ? data.quota.raw : null) as Record<string, unknown> | null;
+  // 실측 스키마: { five_hour:{utilization, resets_at}, seven_day:{...}, ... }
+  // utilization = 사용률(%) → 잔여 = 100 - utilization.
+  type QWin = { utilization?: number; resets_at?: string };
+  const qwin = (k: string): { pct: number; reset: string | null } | null => {
+    const w = qraw?.[k] as QWin | null | undefined;
+    if (!w || typeof w.utilization !== "number") return null;
+    return {
+      pct: Math.max(0, Math.round(100 - w.utilization)),
+      reset: w.resets_at
+        ? new Date(w.resets_at).toLocaleString("ko-KR",
+            { month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" })
+        : null,
+    };
+  };
+  const q5 = qwin("five_hour");
+  const q7 = qwin("seven_day");
+  // 더 빡빡한(잔여 적은) 창을 대표값으로 — 실제 병목이 그쪽이므로
+  const tight = (q5 && q7) ? (q5.pct <= q7.pct ? q5 : q7) : (q5 ?? q7);
+  const quotaPct   = tight?.pct ?? null;
+  const quotaReset = tight?.reset ?? null;
+  const lastRl = (data?.rate_limits ?? [])[0]?.ts?.slice(5, 16) ?? null;
+
   const stateColor = health?.state === "정상" ? C.success
                    : health?.state === "스로틀 의심" ? C.warn
                    : health?.state === "스로틀/한도" ? C.danger : C.muted;
@@ -949,9 +974,15 @@ function TokenPanel() {
           { label:"오늘 출력 토큰", value:fmtTok(today?.output), sub:`호출 ${fmtNum(today?.calls ?? 0)}건`, color:C.primary },
           { label:"7일 누적 출력",  value:fmtTok(week),          sub:`일평균 ${fmtTok(Math.round(week/7))}`, color:C.warn },
           { label:"오늘 캐시 읽기", value:fmtTok(today?.cache_read), sub:"저비용 입력", color:C.muted },
-          { label:"LLM 상태",       value:health?.state ?? "—",
-            sub: health?.calls_1h ? `1시간 ${health.calls_1h}회 중 빈응답 ${health.empty_1h}` : "최근 호출 없음",
-            color: stateColor },
+          quotaPct != null
+            ? { label:"구독 잔여량", value:`${quotaPct}%`,
+                sub: quotaReset ? `리셋 ${quotaReset}` : "Anthropic 조회",
+                color: quotaPct > 40 ? C.success : quotaPct > 15 ? C.warn : C.danger }
+            : { label:"LLM 상태", value:health?.state ?? "—",
+                sub: health?.calls_1h
+                       ? `1시간 ${health.calls_1h}회 중 빈응답 ${health.empty_1h}`
+                       : lastRl ? `최근 한도 이벤트 ${lastRl}` : "잔여량 조회 불가 · 호출 대기",
+                color: stateColor },
         ].map(k => (
           <div key={k.label} style={{ ...box, borderTop:`3px solid ${k.color}`, padding:16 }}>
             <div style={{ fontSize:14,color:"var(--c-text5)",marginBottom:6 }}>{k.label}</div>
@@ -1078,8 +1109,39 @@ function TokenPanel() {
         <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>
           한도 이벤트 <span style={{ fontSize:14,fontWeight:400,color:"var(--c-text5)" }}>— Anthropic rate_limit_event 원문</span>
         </div>
+        {(q5 || q7) && (
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10 }}>
+            {[{ k:"5시간 창", v:q5 }, { k:"7일 창", v:q7 }].map(({k,v}) => v && (
+              <div key={k} style={{ background:"var(--c-bg)",borderRadius:8,padding:"10px 12px",
+                                    border:`1px solid ${v.pct>40?C.success:v.pct>15?C.warn:C.danger}` }}>
+                <div style={{ fontSize:14,color:"var(--c-text5)" }}>{k} 잔여</div>
+                <div style={{ fontSize:24,fontWeight:800,
+                              color:v.pct>40?C.success:v.pct>15?C.warn:C.danger }}>{v.pct}%</div>
+                <div style={{ fontSize:14,color:"var(--c-text5)",marginTop:2 }}>
+                  {v.reset ? `리셋 ${v.reset}` : "리셋 시각 미상"}
+                </div>
+                <div style={{ height:6,borderRadius:3,background:"var(--c-bdr)",marginTop:8 }}>
+                  <div style={{ height:"100%",borderRadius:3,width:`${v.pct}%`,
+                                background:v.pct>40?C.success:v.pct>15?C.warn:C.danger }}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {qraw && (
+          <details style={{ fontSize:14,padding:"8px 12px",borderRadius:8,marginBottom:8,
+                            background:"var(--c-bg)",border:"1px solid var(--c-bdr)" }}>
+            <summary style={{ cursor:"pointer",color:"var(--c-text5)" }}>
+              구독 사용량 원문 {data?.quota?.fetched_at ? `(${data.quota.fetched_at})` : ""}
+            </summary>
+            <div style={{ color:"var(--c-text)",marginTop:6,wordBreak:"break-all",
+                          maxHeight:160,overflowY:"auto" }}>{JSON.stringify(qraw)}</div>
+          </details>
+        )}
         {rls.length === 0 ? (
-          <div style={{ fontSize:14,color:"var(--c-text5)" }}>수신 이력 없음 ✓</div>
+          <div style={{ fontSize:14,color:"var(--c-text5)" }}>
+            {qraw ? "rate_limit_event 수신 이력 없음 ✓" : "수신 이력 없음 ✓"}
+          </div>
         ) : (
           <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:160,overflowY:"auto" }}>
             {rls.map((r,i)=>(

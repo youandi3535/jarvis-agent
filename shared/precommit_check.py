@@ -427,6 +427,12 @@ def check_autocode(report: Report) -> None:
         # ★ 무료 데이터 라이브러리 자동설치 화이트리스트 (사용자 박제 2026-06-29 — ADR 010)
         "JARVIS09_COLLECTOR/lib_bootstrap.py",
         "api_server.py",               # FastAPI REST 백엔드 — PID/프로세스 조회 목적
+        # ★ 구독 잔여량 조회 (사용자 승인 2026-07-20 — ERRORS [456])
+        #   macOS Keychain 에서 본인 OAuth 토큰을 읽어 /api/oauth/usage 조회.
+        #   `security` CLI 외 다른 수단이 없어 subprocess 불가피. 토큰은 메모리에서만
+        #   다루고 로깅·DB박제·반환값 포함 금지. 실패는 전부 흡수(None → UI 폴백).
+        #   킬스위치: TOKEN_QUOTA_LOOKUP=0
+        "shared/token_usage.py",
     )
 
     for p in _iter_py():

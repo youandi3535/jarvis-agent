@@ -285,6 +285,92 @@ def _scan_cached(days: int = 8) -> dict:
     return data
 
 
+# ── 구독 잔여량 조회 (Anthropic /api/oauth/usage) ──────────────────────
+#
+# ★ 사용자 승인 2026-07-20: 잔여 토큰을 대시보드에 표시하기 위해 본인 머신의 본인
+#   OAuth 토큰으로 본인 사용량을 조회한다.
+#
+# 주의 3가지 (관리자 인지 필요):
+#   ① `/api/oauth/usage` 는 *비공개 내부 엔드포인트* — Anthropic 이 바꾸면 조용히 깨진다.
+#      그래서 실패는 전부 흡수하고 None 을 반환, UI 는 기존 표시로 폴백한다.
+#   ② 데몬은 launchd 아래에서 돌아 Keychain 접근이 거부될 수 있다(세션 분리).
+#      거부 시에도 예외를 올리지 않는다.
+#   ③ 토큰은 *메모리에서만* 다루고 로깅·DB 박제·반환값 포함 일체 금지.
+
+_quota_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+_QUOTA_TTL_SEC = float(os.getenv("TOKEN_QUOTA_TTL_SEC", "300") or "300")
+_QUOTA_ENABLED = (os.getenv("TOKEN_QUOTA_LOOKUP", "1") or "1") != "0"
+
+
+def _read_oauth_token() -> str | None:
+    """macOS Keychain 에서 Claude Code OAuth 액세스 토큰 조회.
+
+    반환값은 *절대 로깅하지 않는다*. 실패 시 None.
+    """
+    import subprocess, re as _re
+    try:
+        dump = subprocess.run(["security", "dump-keychain"],
+                              capture_output=True, text=True, timeout=20)
+        names = sorted(set(_re.findall(
+            r'"svce"<blob>="(Claude Code-credentials[^"]*)"', dump.stdout or "")))
+    except Exception:
+        names = []
+    names = names or ["Claude Code-credentials"]
+    for n in names:
+        try:
+            r = subprocess.run(["security", "find-generic-password", "-s", n, "-w"],
+                               capture_output=True, text=True, timeout=20)
+            if r.returncode != 0 or not (r.stdout or "").strip():
+                continue
+            d = json.loads(r.stdout)
+            o = d.get("claudeAiOauth") or d
+            t = o.get("accessToken") or o.get("access_token")
+            if t:
+                return t
+        except Exception:
+            continue
+    return None
+
+
+def quota() -> dict | None:
+    """구독 잔여량·리셋 시각. 조회 불가 시 None (UI 는 폴백).
+
+    응답 스키마가 비공개라 *원문을 그대로* raw 에 담아 반환한다 —
+    구조가 바뀌어도 화면에서 확인은 가능하게.
+    """
+    if not _QUOTA_ENABLED:
+        return None
+    import time
+    with _scan_lock:
+        if (_quota_cache["data"] is not None
+                and time.time() - _quota_cache["ts"] < _QUOTA_TTL_SEC):
+            return _quota_cache["data"]
+
+    result: dict | None = None
+    try:
+        tok = _read_oauth_token()
+        if tok:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://api.anthropic.com/api/oauth/usage",
+                headers={"Authorization": f"Bearer {tok}",
+                         "anthropic-beta": "oauth-2025-04-20",
+                         "User-Agent": "claude-cli/2.0.0 (external)"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                raw = json.loads(r.read().decode())
+            result = {"available": True, "raw": raw,
+                      "fetched_at": datetime.now(KST).isoformat(timespec="seconds")}
+            del tok      # 메모리 참조 조기 해제
+    except Exception as e:      # noqa: BLE001 — 조회 실패는 기능 저하일 뿐
+        log.debug(f"[token_usage] quota 조회 실패(무시): {type(e).__name__}")
+        result = None
+
+    with _scan_lock:
+        _quota_cache["ts"] = time.time()
+        _quota_cache["data"] = result
+    return result
+
+
 # ── 집계 API ───────────────────────────────────────────────────────────
 
 def summary(days: int = 8) -> dict:
@@ -310,6 +396,12 @@ def summary(days: int = 8) -> dict:
         out["history"] = history()
     except Exception:           # noqa: BLE001
         out["history"] = []
+
+    # ①-d 구독 잔여량 (조회 가능할 때만 — 실패 시 None, UI 폴백)
+    try:
+        out["quota"] = quota()
+    except Exception:           # noqa: BLE001
+        out["quota"] = None
 
     # ①-c 절감·한도 회피 제안 (관리자 판단용)
     try:
@@ -591,4 +683,5 @@ def suggestions() -> list[dict]:
     return out
 
 
-__all__ = ["record_call", "record_rate_limit", "summary", "history", "suggestions"]
+__all__ = ["record_call", "record_rate_limit", "summary", "history",
+           "suggestions", "quota"]
