@@ -512,10 +512,27 @@ def summary(days: int = 8) -> dict:
 
             rec = conn.execute(
                 "SELECT ts, alias, model, output_tokens, input_tokens, "
-                "  cache_read, duration_ms, num_turns, ok "
+                "  cache_create, cache_read, cost_usd, duration_ms, num_turns, ok "
                 "FROM llm_token_usage ORDER BY id DESC LIMIT 50"
             ).fetchall()
             out["recent_calls"] = [dict(r) for r in rec]
+
+            # 오늘 데몬 호출 누적 — 비용·캐시 효율 (트랜스크립트 총량과 별개)
+            tot = conn.execute(
+                "SELECT COUNT(*) n, SUM(output_tokens) o, SUM(input_tokens) i, "
+                "  SUM(cache_create) cc, SUM(cache_read) cr, SUM(cost_usd) cost "
+                "FROM llm_token_usage WHERE substr(ts,1,10)=?", (today,)
+            ).fetchone()
+            cc_, cr_ = (tot["cc"] or 0), (tot["cr"] or 0)
+            out["daemon_today"] = {
+                "calls": tot["n"] or 0,
+                "output": tot["o"] or 0, "input": tot["i"] or 0,
+                "cache_create": cc_, "cache_read": cr_,
+                "cost_usd": round(tot["cost"] or 0, 4),
+                # ★ 캐시는 '한 번 비싸게 쓰고 여러 번 싸게 읽어야' 이득.
+                #   1 미만이면 쓴 것보다 덜 읽는 중 = 프리미엄만 내고 회수 못 함.
+                "cache_reuse_ratio": round(cr_ / cc_, 2) if cc_ else None,
+            }
 
             rl = conn.execute(
                 "SELECT ts, source, payload FROM llm_rate_limit_events "
@@ -693,22 +710,42 @@ def suggestions() -> list[dict]:
             "knob": f"LLM_CIRCUIT_EXEMPT (현재 {','.join(ex)})",
         })
 
-    # ── 4. 캐시 효율 (실측) ────────────────────────────────────────
-    if hist:
-        today = hist[-1]
-        cr, cc, o = today["cache_read"], today["cache_create"], today["output"]
-        ratio = (cr / (cr + cc)) if (cr + cc) else 0
+    # ── 4. 캐시 효율 — ★ *데몬 실측* 기준 (2026-07-20 교정) ──────────
+    #   종전엔 트랜스크립트 총량(= Claude Code 대화 포함)으로 계산해 97% 재사용
+    #   → "good" 오판정. 대화는 캐시 재사용이 극단적으로 높아 데몬의 비효율을
+    #   가려버린다. 절감 대상은 *데몬 파이프라인* 이므로 데몬 계기로만 판정한다.
+    try:
+        _init()
+        from shared.db import get_db
+        import sqlite3 as _sq3
+        with get_db() as _c:
+            _c.row_factory = _sq3.Row
+            _t = _c.execute(
+                "SELECT SUM(cache_create) cc, SUM(cache_read) cr, SUM(output_tokens) o, "
+                "  SUM(cost_usd) cost, COUNT(*) n FROM llm_token_usage WHERE output_tokens>0"
+            ).fetchone()
+    except Exception:
+        _t = None
+    if _t and (_t["cc"] or 0) > 0:
+        cc, cr, o = _t["cc"] or 0, _t["cr"] or 0, _t["o"] or 0
+        cost, n = _t["cost"] or 0, _t["n"] or 0
+        ratio = cr / cc
         out.append({
             "id": "cache",
-            "title": "프롬프트 캐시 효율",
-            "severity": "good" if ratio >= 0.85 else "medium",
-            "finding": (f"오늘 캐시읽기 {_fmt(cr)} / 캐시생성 {_fmt(cc)} → 재사용률 {ratio*100:.0f}%. "
-                        f"출력 {_fmt(o)}."),
-            "action": ("재사용률이 높으면 캐시는 잘 동작 중 — 건드리지 말 것. "
-                       "낮다면 프롬프트 앞부분(헌법·규칙 블록)이 매번 바뀌고 있다는 뜻이므로 "
-                       "가변 부분을 프롬프트 *뒤쪽* 으로 몰아야 한다."),
-            "effect": "캐시 읽기는 신규 입력 대비 훨씬 저렴 — 재사용률 유지가 최대 절감 수단",
-            "tradeoff": "없음 (순수 최적화)",
+            "title": (f"프롬프트 캐시 비효율 — 쓴 것보다 적게 읽음 (재사용 {ratio:.2f}배)"
+                      if ratio < 1 else f"프롬프트 캐시 효율 — 재사용 {ratio:.2f}배"),
+            "severity": "high" if ratio < 0.8 else "medium" if ratio < 1.5 else "good",
+            "finding": (f"데몬 호출 {n}건 누적: 캐시생성 {_fmt(cc)} vs 캐시읽기 {_fmt(cr)} "
+                        f"→ 재사용 {ratio:.2f}배, 출력 {_fmt(o)}, 환산비용 ${cost:.2f}. "
+                        + ("캐시는 *한 번 비싸게 쓰고 여러 번 싸게 읽어야* 이득인데, "
+                           "지금은 쓰기 프리미엄만 내고 회수하지 못하고 있다."
+                           if ratio < 1 else "쓰기 대비 재사용이 이루어지고 있다.")),
+            "action": ("프롬프트 *앞부분* 이 호출마다 미세하게 달라지면 캐시가 매번 무효화된다. "
+                       "헌법·작성규칙 같은 고정 블록을 맨 앞에 두고, 날짜·키워드·수집데이터 등 "
+                       "가변 부분을 *뒤쪽* 으로 몰 것. 조립 순서만 바꾸면 되는 순수 최적화다."
+                       if ratio < 1.5 else "현 구성 유지."),
+            "effect": "캐시 읽기는 신규 입력 대비 약 1/10 단가 — 재사용률이 최대 절감 지렛대",
+            "tradeoff": "없음 (출력 품질과 무관한 조립 순서 문제)",
             "knob": "law_enforcer.build_writing_rules_block() 등 프롬프트 조립 순서",
         })
 

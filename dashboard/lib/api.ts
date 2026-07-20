@@ -74,7 +74,9 @@ export type TokenDaily   = { date: string; output: number; input: number; cache_
 export type TokenHour    = { hour: string; output: number };
 export type TokenProject = { project: string; output: number; calls: number };
 export type TokenAlias   = { alias: string; model: string; calls: number; output: number; input: number; cache_create: number; cache_read: number; cost: number; failed: number };
-export type TokenCall    = { ts: string; alias: string; model: string; output_tokens: number; input_tokens: number; cache_read: number; duration_ms: number; num_turns: number; ok: number };
+export type TokenCall    = { ts: string; alias: string; model: string; output_tokens: number;
+                             input_tokens: number; cache_create: number; cache_read: number;
+                             cost_usd: number | null; duration_ms: number; num_turns: number; ok: number };
 export type RateLimitRow = { ts: string; status: string; status_desc: string; ok: boolean;
                              window: string; reset: string | null; overage: string | null;
                              raw?: string };
@@ -88,6 +90,8 @@ export type TokenData = {
              daily?: TokenDaily[]; hourly_today?: TokenHour[]; by_project_today?: TokenProject[] };
   by_alias?: TokenAlias[];
   recent_calls?: TokenCall[];
+  daemon_today?: { calls:number; output:number; input:number; cache_create:number;
+                   cache_read:number; cost_usd:number; cache_reuse_ratio:number|null };
   rate_limits?: RateLimitRow[];
   rate_limit_summary?: { total:number; normal:number; abnormal:number;
                          last_ts?:string|null; last_abnormal_ts?:string|null; windows?:string[] };
