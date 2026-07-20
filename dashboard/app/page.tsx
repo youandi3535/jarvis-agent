@@ -928,24 +928,37 @@ function TokenPanel() {
   // 구독 잔여량 — 스키마가 비공개라 여러 후보 키를 탐색해 백분율을 뽑는다.
   // 못 찾으면 null → 기존 LLM 상태 카드로 폴백.
   const qraw = (data?.quota?.available ? data.quota.raw : null) as Record<string, unknown> | null;
-  // 실측 스키마: { five_hour:{utilization, resets_at}, seven_day:{...}, ... }
-  // utilization = 사용률(%) → 잔여 = 100 - utilization.
-  type QWin = { utilization?: number; resets_at?: string };
-  const qwin = (k: string): { pct: number; reset: string | null } | null => {
-    const w = qraw?.[k] as QWin | null | undefined;
-    if (!w || typeof w.utilization !== "number") return null;
-    return {
-      pct: Math.max(0, Math.round(100 - w.utilization)),
-      reset: w.resets_at
-        ? new Date(w.resets_at).toLocaleString("ko-KR",
-            { month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" })
-        : null,
-    };
+  // 한도 창 — `limits` 배열이 Anthropic 이 주는 *구조화된 정식 소스*.
+  // 창 종류를 하드코딩하지 않고 배열을 그대로 렌더 → 버킷이 추가돼도 자동 노출.
+  // (실측: kind=session 10% / weekly_all 46%(is_active) / weekly_scoped 0%.
+  //  seven_day_oauth_apps 등 나머지 버킷은 전부 null — *별도 SDK 한도는 없다*.)
+  type QLimit = { kind?: string; group?: string; percent?: number; severity?: string;
+                  resets_at?: string | null; is_active?: boolean;
+                  scope?: { model?: { display_name?: string } } | null };
+  const fmtReset = (s?: string | null) => s
+    ? new Date(s).toLocaleString("ko-KR",
+        { month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" })
+    : null;
+  const KIND_LABEL: Record<string, string> = {
+    session: "5시간 창", weekly_all: "7일 창", weekly_scoped: "모델별 주간",
   };
-  const q5 = qwin("five_hour");
-  const q7 = qwin("seven_day");
-  // 더 빡빡한(잔여 적은) 창을 대표값으로 — 실제 병목이 그쪽이므로
-  const tight = (q5 && q7) ? (q5.pct <= q7.pct ? q5 : q7) : (q5 ?? q7);
+  const qlimits: { key:string; label:string; pct:number; reset:string|null;
+                   active:boolean; severity:string }[] =
+    (Array.isArray(qraw?.limits) ? (qraw!.limits as QLimit[]) : [])
+      .filter(l => typeof l.percent === "number")
+      .map((l, i) => ({
+        key: `${l.kind ?? "limit"}-${i}`,
+        label: (KIND_LABEL[l.kind ?? ""] ?? l.kind ?? "한도")
+               + (l.scope?.model?.display_name ? ` (${l.scope.model.display_name})` : ""),
+        pct: Math.max(0, Math.round(100 - (l.percent as number))),   // 잔여 %
+        reset: fmtReset(l.resets_at),
+        active: !!l.is_active,
+        severity: l.severity ?? "normal",
+      }));
+  // 대표값 = 실제로 걸려 있는(active) 창 중 잔여가 가장 적은 것.
+  // active 가 없으면 전체 중 최소 잔여.
+  const pool = qlimits.filter(l => l.active).length ? qlimits.filter(l => l.active) : qlimits;
+  const tight = pool.length ? pool.reduce((a,b)=> a.pct <= b.pct ? a : b) : null;
   const quotaPct   = tight?.pct ?? null;
   const quotaReset = tight?.reset ?? null;
   const lastRl = (data?.rate_limits ?? [])[0]?.ts?.slice(5, 16) ?? null;
@@ -1109,24 +1122,38 @@ function TokenPanel() {
         <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>
           한도 이벤트 <span style={{ fontSize:14,fontWeight:400,color:"var(--c-text5)" }}>— Anthropic rate_limit_event 원문</span>
         </div>
-        {(q5 || q7) && (
-          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10 }}>
-            {[{ k:"5시간 창", v:q5 }, { k:"7일 창", v:q7 }].map(({k,v}) => v && (
-              <div key={k} style={{ background:"var(--c-bg)",borderRadius:8,padding:"10px 12px",
-                                    border:`1px solid ${v.pct>40?C.success:v.pct>15?C.warn:C.danger}` }}>
-                <div style={{ fontSize:14,color:"var(--c-text5)" }}>{k} 잔여</div>
-                <div style={{ fontSize:24,fontWeight:800,
-                              color:v.pct>40?C.success:v.pct>15?C.warn:C.danger }}>{v.pct}%</div>
-                <div style={{ fontSize:14,color:"var(--c-text5)",marginTop:2 }}>
-                  {v.reset ? `리셋 ${v.reset}` : "리셋 시각 미상"}
-                </div>
-                <div style={{ height:6,borderRadius:3,background:"var(--c-bdr)",marginTop:8 }}>
-                  <div style={{ height:"100%",borderRadius:3,width:`${v.pct}%`,
-                                background:v.pct>40?C.success:v.pct>15?C.warn:C.danger }}/>
-                </div>
-              </div>
-            ))}
-          </div>
+        {qlimits.length > 0 && (
+          <>
+            <div style={{ display:"grid",
+                          gridTemplateColumns:`repeat(${Math.min(3,qlimits.length)},1fr)`,
+                          gap:10,marginBottom:8 }}>
+              {qlimits.map(l => {
+                const col = l.pct>40?C.success:l.pct>15?C.warn:C.danger;
+                return (
+                  <div key={l.key} style={{ background:"var(--c-bg)",borderRadius:8,padding:"10px 12px",
+                                            border:`1px solid ${l.active?col:"var(--c-bdr)"}`,
+                                            opacity:l.active?1:0.62 }}>
+                    <div style={{ fontSize:14,color:"var(--c-text5)",
+                                  display:"flex",alignItems:"center",gap:6 }}>
+                      {l.label} 잔여
+                      {l.active && <span style={{ fontSize:14,color:col,fontWeight:700 }}>● 적용중</span>}
+                    </div>
+                    <div style={{ fontSize:24,fontWeight:800,color:col }}>{l.pct}%</div>
+                    <div style={{ fontSize:14,color:"var(--c-text5)",marginTop:2 }}>
+                      {l.reset ? `리셋 ${l.reset}` : "리셋 시각 없음"}
+                    </div>
+                    <div style={{ height:6,borderRadius:3,background:"var(--c-bdr)",marginTop:8 }}>
+                      <div style={{ height:"100%",borderRadius:3,width:`${l.pct}%`,background:col }}/>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ fontSize:14,color:"var(--c-text5)",marginBottom:10,lineHeight:1.6 }}>
+              ※ SDK·CLI·대화가 <b>같은 구독 한도</b>를 공유합니다 — 별도 SDK 한도는 없습니다
+              (<code>seven_day_oauth_apps</code> 등 전용 버킷은 미사용). ‘적용중’ 표시가 실제로 걸리는 창입니다.
+            </div>
+          </>
         )}
         {qraw && (
           <details style={{ fontSize:14,padding:"8px 12px",borderRadius:8,marginBottom:8,

@@ -7974,6 +7974,16 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `shared/claude_sdk_compat.py`
 - **교훈**: ① **`from X import f` 로 바인딩된 참조는 모듈 속성 패치로 못 바꾼다** — monkey-patch 시 반드시 `sys.modules` 순회로 *모든 바인딩* 을 교체하고, 교체 개수를 로그로 남겨 무력화를 감지할 것. 오늘 pytrends(ERRORS [455])와 **같은 실패 클래스가 하루에 두 번** 나왔다. ② **패치 설치 플래그(`_PATCH_INSTALLED=True`)는 '설치 시도' 지 '실제 적용' 이 아니다** — 효과를 검증하는 스모크 테스트가 없으면 무력화를 영원히 모른다. ③ 외부 서비스가 보내는 *정보성* 메시지가 파이프라인 전체를 죽일 수 있다 — 미지 메시지 흡수는 방어적으로 설계하되 **실제로 흡수되는지 검증** 할 것. ④ "한도 소진" 처럼 그럴듯한 가설은 *반드시 실측 수치로 반증* 할 것 — 한도 API 를 붙이고 나서야 46% 라는 사실이 드러나 오진 사슬이 끊겼다.
 
+## [458] "SDK 사용량 한도는 Max 구독과 별개" 주장 반증 — 별도 버킷 없음. 한도 창은 `limits` 배열로 동적 렌더 (2026-07-20)
+- **증상**: 사용자가 "Claude 토큰이 아직 많이 남았는데 왜 사용량 한도에 걸리냐" 고 물었을 때, 어시스턴트가 *근거 없이* "SDK 사용량 한도는 Max 구독과 별도로 존재한다" 고 답한 이력이 있음. 사용자가 그 한도를 대시보드에 표시해달라고 요구 → 실존 여부부터 검증 필요.
+- **환경**: `/api/oauth/usage` (Anthropic 비공개 엔드포인트), claude-code-sdk 0.0.25, Max 구독 OAuth.
+- **원인**(주장의 근거 부재): SDK 는 `claude` CLI 를 spawn 하고 **동일한 OAuth 토큰** 을 사용한다. 따라서 대화·CLI·SDK 가 *같은 구독 한도* 를 소비한다. 실측 응답에서 SDK/OAuth 앱 전용 버킷으로 보이는 `seven_day_oauth_apps` 는 **null**, `seven_day_opus`·`seven_day_sonnet`·`seven_day_cowork` 등도 전부 **null**. 활성 한도는 `limits` 배열의 3개뿐 — `session`(5시간, 잔여 90%, is_active=false) / `weekly_all`(7일, 잔여 54%, **is_active=true**) / `weekly_scoped`(Fable, 잔여 100%, is_active=false). **별도 SDK 한도는 존재하지 않는다.**
+- **헛다리**: ① "SDK 한도가 따로 있다" — 반증됨(전용 버킷 전부 null). 이 잘못된 설명이 ERRORS [457] 의 "한도 소진" 오진을 강화하는 데 일조했다. ② 초기 UI 가 `five_hour`·`seven_day` 두 키를 *하드코딩* — Anthropic 이 버킷을 추가/개명하면 화면이 조용히 낡는다(ERRORS [456] 에서 지적한 것과 동일한 실수를 UI 에서 반복할 뻔).
+- **해결**: 응답의 **`limits` 배열이 구조화된 정식 소스**(kind·group·percent·severity·resets_at·scope·is_active)임을 확인하고, UI 가 이 배열을 *그대로 순회 렌더* 하도록 변경. 창 종류·개수를 하드코딩하지 않으므로 버킷이 추가돼도 자동 노출된다. 대표 KPI 는 `is_active=true` 인 창 중 잔여 최소값(없으면 전체 최소). 각 카드에 '● 적용중' 배지로 실제 구속 창을 명시하고, "SDK·CLI·대화가 같은 구독 한도를 공유 — 별도 SDK 한도 없음" 을 화면에 못박음.
+- **검증**: 렌더 데이터 = 5시간 창 90%(대기) / 7일 창 54%(● 적용중) / 모델별 주간 Fable 100%(대기). `npx tsc --noEmit` 통과.
+- **파일**: `dashboard/app/page.tsx`
+- **교훈**: ① **모르는 것을 그럴듯하게 답하면 다음 진단까지 오염된다** — "SDK 한도 별도" 라는 근거 없는 한 문장이 이후 "한도 소진" 오진의 방증으로 재활용됐다. 확인 안 된 메커니즘은 *모른다고* 말할 것. ② 외부 API 응답을 UI 에 붙일 때 **구조화된 배열/목록 필드가 있으면 그것을 렌더** 할 것 — 개별 키를 골라 하드코딩하면 스키마 변화에 조용히 낡는다. ③ 사용자가 "네가 전에 이렇게 말했잖아" 라고 할 때, *기억을 방어하지 말고 데이터로 재검증* 할 것.
+
 ---
 ### [2026-07-11 05:01] ✅ 자동수정 — RuntimeError
 - **증상**: 트렌드 수집 실패 (rc=75): it__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
