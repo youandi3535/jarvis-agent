@@ -222,6 +222,11 @@ _TRANSIENT_PATTERNS = [
     # [405]/[406]과 동일하게 GUARDIAN 이 Tier2 SDK 세션을 낭비해 harness.py 를 잘못 "수정"할
     # 위험이 있다.
     re.compile(r"인프라 스로틀", re.I),
+    # ★ ERRORS [455] 박제 2026-07-20 — pytrends trending_searches 가 code 404 를 반환하는
+    # 것은 Google 이 해당 엔드포인트 자체를 폐기해서 발생 (본 저장소 코드 문제 아님, 코드로
+    # 고칠 수 없음). google_collector 는 이미 RSS 를 1순위 폴백으로 두고 있어 실제 수집에는
+    # 무관 — is_transient 미분류로 매 발생마다 GUARDIAN 이 헛다리 수정 세션을 반복하는 것 방지.
+    re.compile(r"Google returned a response with code 404", re.I),
 ]
 
 
