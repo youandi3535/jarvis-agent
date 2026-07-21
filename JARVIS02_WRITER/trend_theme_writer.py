@@ -923,7 +923,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             except Exception:
                 pass
             for q in prepublish_quality_issues(
-                    draft, post_type="theme",
+                    draft, post_type="theme", platform=platform,
                     source_docs=_src_docs,
                     market_data=None,
                     stocks_data=state.get("stocks_data"),   # ★ 1-c 실측 재무 ±10% 밴드

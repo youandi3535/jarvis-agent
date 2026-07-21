@@ -2,6 +2,32 @@
 
 ---
 
+## [468] ★ 티스토리 글이 *네이버 SEO 기준* 으로 채점됨 — C-T 20점 전체가 죽은 코드 (2026-07-21)
+
+- **증상**: 티스토리 발행이 품질점수 70 문턱에서 상습 미달 ([464] 69.5 · [465] 65.0 · [466] 69.5 —
+  **전부 티스토리**). 종전엔 "글이 못 써서" 로 판단하고 재작성 순환으로 넘겼다.
+- **환경**: `prepublish_gate.prepublish_quality_issues` → `post_scorer.score_post`
+- **원인**: `score_post(draft, post_type=..., llm_scores=..., factuality_issues=...)` 로 호출하며
+  **`platform` 을 넘기지 않았다**. `prepublish_quality_issues` 시그니처에 `platform` 파라미터
+  자체가 없었다. draft dict 에도 `"platform"` 키가 없어 `_platform()` 이 `""` 반환 →
+  `score_section_c()` 의 `if plat == "tistory"` 가 거짓 → **항상 네이버(C-N)로 폴백**.
+  즉 C-T(티스토리 SEO 20점)는 한 번도 실행된 적이 없다.
+  티스토리 글이 네이버 잣대로 채점됨 — H3 개수(티스토리는 H2), 해시태그 5~10개(티스토리 미사용),
+  해요체(티스토리는 합니다체), 제목 40자(티스토리 기준 55자).
+- **실측**: 동일 티스토리 대본 → platform 미전달 C 4.5/20 총점 53.0 /
+  `platform="tistory"` C 13.0/20 총점 61.5 — **8.5점 차**. 70 문턱에서 결정적.
+- **헛다리**: [464][465][466] 을 "결함 아님(글 품질 문제)" 으로 3회 연속 종결한 것.
+  세 건 모두 티스토리라는 *공통점* 을 봤어야 했다.
+- **해결**: `prepublish_quality_issues(..., platform: str = "")` 파라미터 추가 →
+  `score_post(draft, platform=platform, ...)` 전달. 호출부 2곳(`_verify_platform`,
+  `_verify_theme_platform`)은 **이미 `platform` 을 인자로 갖고 있었다** — 넘기기만 하면 됐다.
+- **파일**: `JARVIS02_WRITER/prepublish_gate.py` · `economic_poster.py` · `trend_theme_writer.py`
+- **교훈**: **폴백 기본값은 버그를 침묵시킨다.** `score_section_c` 가 플랫폼 미상일 때
+  에러 대신 네이버로 조용히 폴백해서 몇 주간 아무도 몰랐다. 분기 기본값이 *정상 경로 중 하나*
+  라면 그 분기는 영원히 검출되지 않는다. 필수 인자는 기본값을 주지 말 것.
+
+---
+
 ## [467] 채점 세분화 전수 감사 — "개수 0 = 절벽 0점" 4곳 + *지시와 채점이 어긋난* 3곳 (2026-07-21)
 
 - **증상**: 사용자 지시("모든 항목 0.5 단위 세분화, A~D 전부")에 미달하는 항목이 남아 있었고,

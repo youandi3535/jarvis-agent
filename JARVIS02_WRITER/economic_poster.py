@@ -645,7 +645,7 @@ def run(post_naver=True, post_tistory=True):
             _seen_ids = {id(d) for d in _used_docs}
             _src_docs = _used_docs + [d for d in _gen_docs if id(d) not in _seen_ids]
             for q in prepublish_quality_issues(
-                    draft, post_type=_pt,
+                    draft, post_type=_pt, platform=platform,
                     source_docs=_src_docs,
                     market_data=state.get("market_data"),
                     collected=draft.get("collected")):   # ★ Step 10: 통일 grounding (topic_pack)

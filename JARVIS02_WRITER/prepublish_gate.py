@@ -46,7 +46,7 @@ def _draft_body(draft: dict) -> str:
     return body or ""
 
 
-def prepublish_quality_issues(draft, post_type: str = "",
+def prepublish_quality_issues(draft, post_type: str = "", platform: str = "",
                               source_docs=None, market_data=None,
                               stocks_data=None, collected=None) -> list[dict]:
     """발행 전 품질 게이트 — 사실성 + 매력도. [{"kind","detail"}] 반환 (빈=통과).
@@ -142,6 +142,7 @@ def prepublish_quality_issues(draft, post_type: str = "",
                 _fi = [x for x in out if x.get("kind") == "factuality"]
                 _sr = _score_fn(
                     draft,
+                    platform=platform,      # ★ [468] 미전달 시 C 축이 항상 네이버로 폴백
                     post_type=post_type,
                     llm_scores=_llm_sc,
                     factuality_issues=_fi,
