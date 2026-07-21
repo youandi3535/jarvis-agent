@@ -2,6 +2,18 @@
 
 ---
 
+## [464] 🔍 조사완료(결함아님) — 경제 브리핑 티스토리 1차 시도 품질점수 69.5/100 미달, [453]과 동일 클래스 확인 (2026-07-21)
+
+- **증상**: `error_log` id=3697 — `source=harness`, `module=JARVIS00_INFRA.harness.경제 브리핑 발행 — 티스토리`, `func_name=⑥ TS 대본 생성`, `message="[harness:경제 브리핑 발행 — 티스토리] attempt=1 step=⑥ TS 대본 생성: [품질점수] 종합 69.5/100 (70미달) — A=6.0/20 B=46.0/50 C=10.5/20 D=7.0/10"`, severity=medium.
+- **환경**: `JARVIS02_WRITER/prepublish_gate.py`(점수 게이트 호출) → `JARVIS02_WRITER/post_scorer.py::score_post()`(70점 임계 판정), `JARVIS00_INFRA/harness.py`(verify_loop, max_attempts=3).
+- **조사**: ERRORS.md [453] 선행 검색 — "A섹션이 0.0이 아니면(=llm_scores 정상 수신) 대부분 설계대로 작동한 재작성 트리거" 원칙에 따라, 실제 발행 프로세스(`economic_poster.py --scheduled`, PID 79607, 07:00:20 시작)가 아직 진행 중임을 `ps aux`로 확인 후 자연 종료를 기다리며 로그(`JARVIS02_WRITER/logs/economic_20260721_070020.log`, `scheduler.log`)를 재대조. attempt=1 실패 직후 이미지풀 소진(J06-tistory 제4조 패턴3, AI사진 폴백 폐기 정책상 정당한 빈슬롯) + 크로스 프로세스 락 경합(다른 프로세스가 `llm_exec.lock` 점유, 회로 무오염 분류) 이 반복 관측됐고, attempt 재시도 중 `[prepublish_gate] 통합 LLM 점수 없음(호출 실패/스킵) → 점수 게이트 통과(fail-open)`으로 자연 통과. 07:36:16 `scheduler.log`에 `✅ 경제 브리핑 포스터 완료` 기록 — 이는 `run_economic_poster()`의 `result.returncode == 0 and not failed` 분기(양쪽 플랫폼 모두 성공)에서만 찍히는 라인으로, 실제 네이버·티스토리 모두 발행 성공 확인. GUARDIAN incident 트리거(`_trigger_economic_incident`)도 호출되지 않음.
+- **헛다리**: 없음 — attempt=1 스냅샷만 보고 코드 결함으로 속단하지 않고, 라이브 프로세스 종료까지 관찰 후 결론.
+- **해결**: 코드 수정 없음. [453]과 동일 클래스 — harness verify_loop 가 설계대로 attempt 1 실패 → attempt 2(이상)에서 자연 통과 → 정상 발행까지 완주.
+- **파일**: 없음(조사만, 수정 없음).
+- **교훈**: [453]의 원칙이 경제 브리핑·티스토리 경로에도 동일하게 적용됨을 재확인 — harness 품질점수 미달은 A섹션 non-zero + attempt < max_attempts 조건에서 "결함 의심"보다 "진행 중인 정상 재시도"를 먼저 배제해야 하며, 가능하면 (본 건처럼) 프로세스 종료 후 최종 발행 성공 여부까지 확인해 결론의 확실성을 높일 것. 반복되는 이미지풀 소진(J06-tistory 제4조-3)과 락 경합(45s)은 각각 별도 분류(정책상 정당한 빈슬롯 / 회로 무오염 defer)로 이미 처리되고 있어 재조사 불필요.
+
+---
+
 ## [463] ✅ 해결 — preflight internal_import 가 pyobjc(Quartz) 콜드임포트 레이스로 일시 폭발 — 최대 3회 재시도로 흡수 (2026-07-21)
 
 - **증상**: `error_log` — `source=preflight`, `module=JARVIS00_INFRA.preflight.internal_import`, `func_name=_check_internal_import`, `message="[preflight] internal_import/JARVIS08_PUBLISH.platforms.naver_poster: AssertionError: You must first install pyobjc-core and pyobjc: https://pyautogui.readthedocs.io/en/latest/install.html"`, severity=medium. `logs/daemon.log` 타임라인 대조 결과 2026-07-20 23:56:34 와 23:57:04 두 차례 발생했고, 그 직전(23:56:24)·직후(23:56:40, 23:56:45, 23:57:10, 23:57:14) 모두 동일 검증이 정상 통과 — 같은 프로세스군에서 6초 안에 자연 회복되는 전형적 레이스였다.

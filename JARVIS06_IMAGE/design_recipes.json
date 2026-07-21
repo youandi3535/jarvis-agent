@@ -589,6 +589,28 @@
       "template": "<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"UTF-8\"><style>\n@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800;900&display=swap');\n*{margin:0;padding:0;box-sizing:border-box;font-family:'Noto Sans KR',sans-serif}\n.pg{width:1280px;background:var(--soft)}\n.hero{background:linear-gradient(145deg,var(--hero0),var(--hero1));padding:56px 60px 90px;position:relative;overflow:hidden}\n.hero::before{content:\"\";position:absolute;left:-100px;bottom:-120px;width:380px;height:380px;border-radius:50%;background:var(--a2);opacity:.12}\n.hero::after{content:\"\";position:absolute;right:40px;top:30px;width:220px;height:220px;border-radius:50%;background:var(--a1);opacity:.09}\n.eb{display:inline-flex;align-items:center;gap:8px;padding:8px 18px;border:1px solid var(--eyebrow);border-radius:100px;color:var(--eyebrow);font-size:14px;font-weight:700;margin-bottom:22px}\n.eb::before{content:\"\";width:7px;height:7px;border-radius:50%;background:var(--eyebrow)}\nh1{color:#fff;font-size:50px;font-weight:900;line-height:1.08;letter-spacing:-.025em;max-width:720px;position:relative;z-index:1}\n.sub{color:rgba(255,255,255,.6);font-size:18px;margin:14px 0 0;max-width:580px;position:relative;z-index:1}\n.hs{margin-top:30px;position:relative;z-index:1}.hs:empty{display:none}\n.float{margin-top:-56px;padding:0 60px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px;position:relative;z-index:10}\nsection.fc{background:#fff;border-radius:22px;padding:28px 30px;box-shadow:0 12px 40px rgba(0,0,0,.15);border:1px solid var(--grid)}\nsection.fc:has([data-jarvis-empty]){display:none}\n.body{padding:22px 60px}\nsection.wc{background:#fff;border-radius:20px;padding:26px 28px;border:1px solid var(--grid);box-shadow:0 4px 16px rgba(0,0,0,.05)}\nsection.wc:has([data-jarvis-empty]){display:none}\n.mc{display:flex;gap:14px;margin-top:18px}.mc:empty{display:none}\nfooter{padding:18px 60px 26px;border-top:1px solid var(--grid);display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:14px;margin-top:18px}\n.br{font-weight:800;color:var(--ink)}\n</style></head><body><div class=\"pg\">\n  <div class=\"hero\">\n    <div class=\"eb\">{{EYEBROW}}</div>\n    <h1>{{TITLE}}</h1><p class=\"sub\">{{SUBTITLE}}</p>\n    <div class=\"hs\">{{HERO_STATS}}</div>\n  </div>\n  <div class=\"float\">\n    <section class=\"fc\">{{CHART_1}}</section>\n    <section class=\"fc\">{{CHART_2}}</section>\n  </div>\n  <div class=\"body\">\n    <section class=\"wc\">{{CHART_3}}</section>\n    <div class=\"mc\">{{MINI_CARDS}}</div>\n  </div>\n  <footer><span>{{SOURCE}}</span><span class=\"br\">{{BRAND}}</span></footer>\n</div></body></html>",
       "source": "learned-library",
       "created": "2026-07-20"
+    },
+    {
+      "id": "velvet-aurora-glass",
+      "name": "벨벳 오로라 글래스",
+      "aesthetic": "글래스모피즘(반투명·블러·발광)",
+      "hero": [
+        "#2b0f1a",
+        "#3d1626"
+      ],
+      "ink": "#241016",
+      "a1": "#4dd8ff",
+      "a1s": "#9aeeff",
+      "a2": "#ffcf5c",
+      "a2s": "#ffe6a3",
+      "soft": "#fdf6f4",
+      "muted": "#8a7680",
+      "eyebrow": "#ff9ecb",
+      "grid": "#f0e4e8",
+      "hero_texture": "glow",
+      "card_radius": 26,
+      "source": "learned",
+      "created": "2026-07-21"
     }
   ]
 }

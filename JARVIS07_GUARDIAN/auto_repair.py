@@ -442,7 +442,9 @@ def run_auto_repair() -> None:
     Layer 2: ① 준비(컨텍스트 수집) → ② Claude Code SDK 실행
     Layer 3: returncode + summary 유효성 검증 + 즉시수정훅(auth 알림)
     Layer 4: GUARDIAN 박제 + DB 저장 + TG 완료 알림
-    max_attempts=3 — 재시도 상한 전역 통일(사용자 박제 2026-07-06). 원래 2(SDK 비용 고려)였으나
+    max_attempts — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 상속. 2026-07-21 사용자 박제로 2회.
+    (2026-07-06 '3회 통일' 은 폐지 — 상한은 harness 한 곳에서만 정의)
+    원래 2(SDK 비용 고려)였으나
     "재시도는 무조건 3회" 지시로 상향. heartbeat는 run_action() 전체 기간 유지.
     """
     import threading as _th
@@ -649,7 +651,7 @@ def run_auto_repair() -> None:
             verify=_verify,
             fix=_fix,    # ★ "수정→기록→누적→순환" 전체 에이전트 디폴트 (사용자 박제 2026-05-18)
             send=_send,
-            max_attempts=3,  # 재시도 상한 전역 통일(2026-07-06) — 원래 2(CLI 비용 고려 1회 재시도)
+            # ★ max_attempts 미지정 = harness.DEFAULT_MAX_ATTEMPTS 상속 (SSOT, 현재 2회)
         )
         result = run_action(action_def)
 

@@ -607,10 +607,10 @@ def _live_config() -> dict:
         cfg["bg_aliases"]        = sorted(_L._BG_ALIASES)
         cfg["max_concurrency"]   = _L._LLM_MAX_CONCURRENCY
         cfg["alias_count"]       = len(_L.MODELS)
-        import inspect as _insp, re as _re
-        m = _re.search(r"retries\s*=\s*max\(\s*1\s*,\s*min\(\s*(\d+)",
-                       _insp.getsource(_L.invoke_text))
-        cfg["llm_retry_cap"] = int(m.group(1)) if m else None
+        # ★ 소스 텍스트 정규식 금지 (2026-07-21 자체교정): 종전엔 invoke_text 소스에서
+        #   `min(3, ...)` 의 숫자를 긁었는데, 상한이 SSOT 파생 함수로 바뀌자 즉시 None 이
+        #   됐다. *실행 중인 값* 을 직접 호출해 읽는다.
+        cfg["llm_retry_cap"] = _L._max_retries()
     except Exception:
         pass
     try:
@@ -622,10 +622,11 @@ def _live_config() -> dict:
     except Exception:
         pass
     try:
-        import inspect as _insp2, re as _re2
-        import JARVIS00_INFRA.harness as _H
-        m = _re2.search(r"max_attempts[^=]*=\s*(\d+)", _insp2.getsource(_H))
-        cfg["harness_max_attempts"] = int(m.group(1)) if m else None
+        # ★ 소스 정규식 → 런타임 상수 직접 조회 (2026-07-21 자체교정).
+        #   종전 정규식은 주석·docstring 의 숫자까지 잡아 SSOT 를 2 로 낮춘 뒤에도
+        #   3 을 반환했다 — 화면에 *실제와 다른 값* 이 뜨는 전형적 오염.
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS as _DMA
+        cfg["harness_max_attempts"] = int(_DMA)
     except Exception:
         pass
     return cfg

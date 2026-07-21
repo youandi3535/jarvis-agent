@@ -1068,7 +1068,8 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         send=lambda st: _send_theme_platform(st, "naver", "nv_draft",
                                              "nv_pub_result", "__nv_send_attempted__"),
         precondition=_precondition,
-        max_attempts=3,  # ★ 외부 발행은 비멱등 → 원래 최대 2회였으나 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__nv_send_attempted__)이 중복 발행 방지
+        # ★ max_attempts 미지정 = harness.DEFAULT_MAX_ATTEMPTS 상속 (SSOT, 현재 2회).
+        #   하드코딩하면 상한 변경 시 여기가 누락된다. sentinel(__nv_send_attempted__)이 중복 발행 방지
         deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 SSOT (watchdog.py) — 사용자 박제 2026-07-06
     )
     _ts_action_def = ActionDefinition(
@@ -1081,7 +1082,8 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         send=lambda st: _send_theme_platform(st, "tistory", "ts_draft",
                                              "ts_pub_result", "__ts_send_attempted__"),
         precondition=_precondition,
-        max_attempts=3,  # ★ 원래 최대 2회(비멱등 발행) — 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__ts_send_attempted__)이 중복 발행 방지
+        # ★ max_attempts 미지정 = harness.DEFAULT_MAX_ATTEMPTS 상속 (SSOT, 현재 2회).
+        #   sentinel(__ts_send_attempted__)이 중복 발행 방지
         deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 SSOT (watchdog.py) — 사용자 박제 2026-07-06
     )
 

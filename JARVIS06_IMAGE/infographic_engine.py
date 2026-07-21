@@ -482,6 +482,15 @@ def _llm_design(context, datasets, seed):
 #   차트마다 LLM 호출(N회) → 1회로 급감 (Max 구독 rate-limit 절감). 각 이미지는 여전히 LLM 이
 #   *개별* 설계(배치 안에서 서로 다른 N개). 실패 시 generate_infographic 이 개별 _llm_design 폴백.
 import threading as _ig_threading
+
+def _max_attempts() -> int:
+    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
 _BATCH_DESIGN_CACHE: dict = {}          # run_id -> {ds_key: spec}
 _BATCH_LOCK = _ig_threading.Lock()
 
@@ -1121,12 +1130,11 @@ def _designgen(title, subtitle, datasets, out_path, context, seed) -> str:
               .replace("__DATA__", _dg_data_block(datasets))
               .replace("__FEWSHOT__", _DG_FEWSHOT))
     # ★ 하드 예산(fast-fail) — SDK 스로틀 시 재시도 지옥(4×200s) 대신 즉시 폴백.
-    #   짧은 timeout + _retries=3(재시도 상한 통일 — 사용자 박제 2026-07-06, 원래는
-    #   단일 시도(_retries=1)로 낮춰 latency 를 아꼈으나 재시도 상한 3회 통일 원칙 적용).
+    #   짧은 timeout + _retries=harness SSOT 파생(사용자 박제 2026-07-21: 2회).
     #   invoke_text 회로차단기가 연속 스로틀 시 "" 즉시 반환 → 발행 지연 0.
     #   실패는 곧 render_spec(안전 폴백)이라 손해 없음.
     try:
-        raw = invoke_text("writer", prompt, max_tokens=7000, timeout=110, _retries=3)
+        raw = invoke_text("writer", prompt, max_tokens=7000, timeout=110, _retries=_max_attempts())
         if not raw:
             log.info("[designgen] LLM 저작 미수신(스로틀/타임아웃) → render_spec 폴백")
             return ""

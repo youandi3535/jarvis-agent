@@ -21,6 +21,15 @@ import time
 from datetime import date
 from pathlib import Path
 
+def _max_attempts() -> int:
+    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
+
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
 except ImportError:
@@ -234,10 +243,10 @@ def _generate_photo(keyword: str, title: str, seed: int, tmp_dir: Path,
 
 
 def _generate_photo_pollinations(full_prompt: str, seed: int, tmp_dir: Path) -> Path | None:
-    """Pollinations.ai 생성 — 큐 제한 시 8초 후 최대 3회 재시도 (사용자 박제 2026-07-06: 재시도 상한 통일 3회)."""
+    """Pollinations.ai 생성 — 큐 제한 시 8초 후 재시도 (상한 = harness SSOT 파생, 2026-07-21: 2회)."""
     from JARVIS06_IMAGE.providers.pollinations_provider import PollinationsProvider
     log.info(f"[thumbnail] Pollinations 요청: {full_prompt[:70]}")
-    for attempt in range(3):
+    for attempt in range(_max_attempts()):
         try:
             path = PollinationsProvider().generate(
                 full_prompt, tmp_dir, width=W, height=H, seed=seed + attempt
