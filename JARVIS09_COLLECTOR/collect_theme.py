@@ -83,6 +83,15 @@ def _yf_with_timeout(fn, timeout: int = 15):
 
 load_dotenv()
 
+
+def _max_attempts() -> int:
+    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
 # ── 차트·인포그래픽 함수 전체를 JARVIS06_IMAGE.theme_charts 에서 임포트 ──
 # (JARVIS06_IMAGE 가 matplotlib Agg 백엔드 + 폰트 설정 자동 수행)
 from JARVIS06_IMAGE.theme_charts import (
@@ -446,7 +455,7 @@ def _naver_fin_theme_search(theme_name: str, related_terms: list | None = None,
         except Exception:
             def _wd_beat2() -> None: pass  # watchdog 부재 시 no-op (수집 지속)
         stocks = []
-        for _try in range(3):
+        for _try in range(_max_attempts()):
             _wd_beat2()   # ★ 상세페이지 재시도 진행 신호 — freeze 오탐 방지
             try:
                 r2 = requests.get(

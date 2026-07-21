@@ -910,7 +910,7 @@ function fmtTok(n?: number): string {
 }
 
 function TokenPanel() {
-  const { data } = useSWR<TokenData>("/api/tokens", fetcher, { refreshInterval: 60000 });
+  const { data } = useSWR<TokenData>("/api/tokens", fetcher, { refreshInterval: 20000 });
 
   const hist    = data?.history ?? [];
   const sugs    = data?.suggestions ?? [];
@@ -919,6 +919,9 @@ function TokenPanel() {
   const hourly  = data?.totals?.hourly_today ?? [];
   const aliases = data?.by_alias ?? [];
   const rls     = data?.rate_limits ?? [];
+  const rlSum   = data?.rate_limit_summary;
+  const calls   = data?.recent_calls ?? [];
+  const dt      = data?.daemon_today;
   const health  = data?.health;
 
   const week = daily.slice(-7).reduce((s, d) => s + (d.output || 0), 0);
@@ -1117,6 +1120,98 @@ function TokenPanel() {
         )}
       </div>
 
+      {/* 실시간 호출 내역 — 언제·어떤 용도로·얼마나 썼는지 한 건씩 */}
+      <div style={{ marginTop:20 }}>
+        <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:10 }}>
+          <span style={{ fontSize:16,fontWeight:700,color:"var(--c-text)" }}>실시간 호출 내역</span>
+          <span style={{ fontSize:14,color:"var(--c-text5)" }}>
+            — 최근 {calls.length}건 · 20초마다 갱신
+          </span>
+          {dt && (
+            <span style={{ fontSize:14,marginLeft:"auto",display:"flex",gap:14,alignItems:"center" }}>
+              <span style={{ color:"var(--c-text5)" }}>오늘 {fmtNum(dt.calls)}회</span>
+              <span style={{ color:"var(--c-text5)" }}>출력 {fmtTok(dt.output)}</span>
+              <span style={{ color:"var(--c-text)",fontWeight:700 }}>${Number(dt.cost_usd).toFixed(2)}</span>
+              {dt.cache_reuse_ratio != null && (
+                <span style={{ fontWeight:700,
+                               color:dt.cache_reuse_ratio < 1 ? C.danger : C.success }}>
+                  캐시 재사용 {dt.cache_reuse_ratio}배
+                </span>
+              )}
+            </span>
+          )}
+        </div>
+        {calls.length === 0 ? (
+          <div style={{ fontSize:14,color:"var(--c-text5)" }}>
+            아직 기록 없음 — 데몬이 LLM 을 호출하면 여기에 한 건씩 쌓입니다.
+          </div>
+        ) : (
+          <div style={{ overflowX:"auto",maxHeight:340,overflowY:"auto",
+                        border:"1px solid var(--c-bdr)",borderRadius:8 }}>
+            <table style={{ width:"100%",borderCollapse:"collapse",fontSize:14 }}>
+              <thead style={{ position:"sticky",top:0,background:"var(--c-card)",zIndex:1 }}>
+                <tr style={{ color:"var(--c-text5)",textAlign:"left" }}>
+                  {["시각","용도","출력","입력","캐시생성","캐시읽기","비용","소요","상태"].map(h=>(
+                    <th key={h} style={{ padding:"10px 12px",fontWeight:600,whiteSpace:"nowrap",
+                                         borderBottom:"1px solid var(--c-bdr)" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {calls.map((c,i)=>{
+                  const empty = !c.output_tokens;
+                  return (
+                    <tr key={i} style={{ borderTop:"1px solid var(--c-bdr)" }}>
+                      <td style={{ padding:"8px 12px",color:"var(--c-text5)",whiteSpace:"nowrap" }}>
+                        {String(c.ts).slice(11,19)}
+                      </td>
+                      <td style={{ padding:"8px 12px",color:"var(--c-text)",fontWeight:600,
+                                   whiteSpace:"nowrap" }}>{c.alias || "—"}</td>
+                      <td style={{ padding:"8px 12px",color:empty?C.danger:C.primary,fontWeight:700 }}>
+                        {fmtNum(c.output_tokens)}
+                      </td>
+                      <td style={{ padding:"8px 12px",color:"var(--c-text5)" }}>{fmtNum(c.input_tokens)}</td>
+                      <td style={{ padding:"8px 12px",color:C.warn }} title="캐시에 쓴 양 — 정가보다 비쌈">
+                        {fmtTok(c.cache_create)}
+                      </td>
+                      <td style={{ padding:"8px 12px",color:C.success }} title="캐시에서 재사용 — 약 1/10 단가">
+                        {fmtTok(c.cache_read)}
+                      </td>
+                      <td style={{ padding:"8px 12px",color:"var(--c-text)",fontWeight:600,
+                                   whiteSpace:"nowrap" }}>
+                        {c.cost_usd != null ? `$${Number(c.cost_usd).toFixed(4)}` : "—"}
+                      </td>
+                      <td style={{ padding:"8px 12px",color:"var(--c-text5)",whiteSpace:"nowrap" }}>
+                        {c.duration_ms ? `${(c.duration_ms/1000).toFixed(1)}s` : "—"}
+                      </td>
+                      <td style={{ padding:"8px 12px",whiteSpace:"nowrap",
+                                   color:empty?C.danger:C.success }}>
+                        {empty ? "빈 응답" : "정상"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div style={{ fontSize:14,color:"var(--c-text5)",marginTop:10,lineHeight:1.8 }}>
+          <b style={{ color:"var(--c-text)" }}>컬럼 뜻</b><br/>
+          · <b>용도</b> — 어떤 기능이 불렀는지 (writer=대본 작성, analyzer=수집 분석,
+            fact_judge=사실성 검증, engagement_judge=매력도 검증, guardian=자가수리)<br/>
+          · <b>출력</b> — 모델이 <b>생성한</b> 토큰. <b style={{ color:C.primary }}>가장 비쌈</b> (약 $15/100만)<br/>
+          · <b>입력</b> — 이번에 <b>새로</b> 보낸 프롬프트 토큰 (기준 단가)<br/>
+          · <b style={{ color:C.warn }}>캐시생성</b> — 캐시에 <b>쓴</b> 양. 정가보다 <b>비쌈</b>(쓰기 프리미엄)<br/>
+          · <b style={{ color:C.success }}>캐시읽기</b> — 캐시에서 <b>재사용</b>한 양. 약 <b>1/10 단가</b> — 클수록 좋음<br/>
+          · <b>비용</b> — API 정가 환산액. 구독제라 실제 청구는 아니지만 <b>소비량 비교 지표</b>로 유효<br/>
+          <br/>
+          ※ 캐시는 <b>한 번 비싸게 쓰고 여러 번 싸게 읽어야</b> 이득입니다.
+          위 <b>캐시 재사용</b> 배수가 <b style={{ color:C.danger }}>1 미만이면</b> 쓰기 프리미엄만 내고
+          회수하지 못하는 상태로, 프롬프트 앞부분이 매 호출 달라져 캐시가 무효화된다는 뜻입니다.<br/>
+          ※ <b style={{ color:C.danger }}>빈 응답</b>이 연속으로 뜨면 스로틀·장애 신호입니다.
+        </div>
+      </div>
+
       {/* 한도 이벤트 */}
       <div style={{ marginTop:20 }}>
         <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>
@@ -1165,9 +1260,35 @@ function TokenPanel() {
                           maxHeight:160,overflowY:"auto" }}>{JSON.stringify(qraw)}</div>
           </details>
         )}
+        {rlSum && (
+          <div style={{ fontSize:14,padding:"12px 14px",borderRadius:8,marginBottom:10,
+                        background:"var(--c-bg)",border:"1px solid var(--c-bdr)",
+                        borderLeft:`3px solid ${rlSum.abnormal ? C.danger : C.success}` }}>
+            <div style={{ display:"flex",gap:18,flexWrap:"wrap",alignItems:"center" }}>
+              <span style={{ fontWeight:700,
+                             color:rlSum.abnormal ? C.danger : C.success }}>
+                {rlSum.abnormal ? `⚠ 제한 ${rlSum.abnormal}건` : "제한 걸린 적 없음 ✓"}
+              </span>
+              <span style={{ color:"var(--c-text5)" }}>
+                최근 {fmtNum(rlSum.total)}건 수신 · 정상 {fmtNum(rlSum.normal)}
+              </span>
+              {rlSum.last_ts && <span style={{ color:"var(--c-text5)" }}>
+                마지막 수신 {String(rlSum.last_ts).slice(5,16)}
+              </span>}
+              {rlSum.windows?.length ? <span style={{ color:"var(--c-text5)" }}>
+                대상 {rlSum.windows.join(" · ")}
+              </span> : null}
+            </div>
+            <div style={{ color:"var(--c-text5)",marginTop:8,lineHeight:1.6 }}>
+              Anthropic 이 <b>LLM 호출마다</b> 보내는 한도 통지입니다. 정상 건은 세기만 하고
+              숨깁니다 — <b>여기 목록이 비어 있으면 한 번도 제한에 걸리지 않았다는 뜻</b>입니다.
+              제한이 발생하면 그 건만 아래에 시각·대상 창·리셋 시각과 함께 표시됩니다.
+            </div>
+          </div>
+        )}
         {rls.length === 0 ? (
           <div style={{ fontSize:14,color:"var(--c-text5)" }}>
-            {qraw ? "rate_limit_event 수신 이력 없음 ✓" : "수신 이력 없음 ✓"}
+            {rlSum ? "" : "수신 이력 없음 ✓"}
           </div>
         ) : (
           <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:220,overflowY:"auto" }}>

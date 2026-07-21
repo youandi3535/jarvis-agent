@@ -295,8 +295,8 @@ def _classify_with_llm(keywords: list[str], context: list[str] | None = None) ->
     parsed: dict[str, str] = {}
     last_err: Exception | None = None
 
-    # 실패 시 temperature 변경 후 재시도 (총 3회 시도 — 재시도 상한 통일)
-    for attempt in range(3):
+    # 실패 시 temperature 변경 후 재시도 (상한 = harness SSOT 파생, 2026-07-21: 2회)
+    for attempt in range(_max_attempts()):
         try:
             temp = 0.0 if attempt == 0 else 0.3
             raw = _inv(
@@ -503,6 +503,15 @@ def get_freshness_bonus(keyword: str) -> float:
 # ── 학습 모듈 통합 (가중치·페널티·cold-start) ─────────────────
 # learning.py 가 매번 DB hit 하지 않도록 5분 캐싱 — 학습은 주간 cron 이라 충분.
 import time as _time
+
+def _max_attempts() -> int:
+    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
 
 _WEIGHTS_CACHE = {"data": None, "ts": 0.0}
 _WEIGHTS_TTL_SEC = 300.0

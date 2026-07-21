@@ -185,7 +185,12 @@ def patch_effective() -> bool | None:
     if fn is None:
         return None
     try:
-        fn({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}})
+        # ★ `__smoke__` 표식 — record_rate_limit 이 이 합성 입력을 *박제하지 않도록*.
+        #   (표식 없이 던지면 검사용 가짜 이벤트가 진짜처럼 DB 에 쌓여 한도 이력을
+        #    오염시킨다 — 실제로 그렇게 되어 사용자가 발견. 관측 도구가 관측 대상을
+        #    더럽히면 안 된다.)
+        fn({"type": "rate_limit_event",
+            "rate_limit_info": {"status": "allowed"}, "__smoke__": True})
         return True
     except Exception:
         return False
@@ -203,6 +208,7 @@ def run_sdk_query(
     permission_mode: str = "default",
     timeout: int = 300,
     extra_env: dict[str, str] | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> dict[str, Any]:
     """claude_code_sdk.query 동기 래퍼 — 모든 오류 통합 처리.
 
@@ -244,6 +250,8 @@ def run_sdk_query(
             opts_kw["cwd"] = cwd
         if max_turns is not None:
             opts_kw["max_turns"] = max_turns
+        if allowed_tools:
+            opts_kw["allowed_tools"] = allowed_tools
 
         # ★ 전역 하트비트 (사용자 박제 2026-07-06): 장시간 SDK 호출(auto_repair 심층감사 등)이
         #   메시지를 흘리는 동안 beat() → freeze 워치독이 정상 장시간 작업을 오탐 안 함.

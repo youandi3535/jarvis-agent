@@ -411,6 +411,12 @@ def run_theme(theme: str) -> dict:
             "tistory": result.get("tistory", {}).get("success", False),
         }
         _result_data_empty = result.get("data_empty", False)
+        # ★ 인프라 스로틀 지속(rank8 deferred) — 코드 결함 아님, 다음 회차 자연 재시도.
+        #   harness 가 이미 판정을 내려 텔레그램까지 보냈는데(run_all_themes 내부) 여기서
+        #   "success=False" 로만 뭉개면 GUARDIAN 이 이 구분을 잃고 불필요한 Tier-2 SDK
+        #   세션(최대 10분)을 낭비한다 — 아래 GUARDIAN 트리거 조건에서 제외 대상으로 사용.
+        _result_deferred = {"naver": result.get("naver_deferred", False),
+                             "tistory": result.get("tistory_deferred", False)}
         # ★ 인터프리터 종료 레이스 (ERRORS [362]) — 발행이 시작조차 못 함(연기).
         #   "글자수 실패" 텔레그램·GUARDIAN·실패 오기록 전부 스킵하고 즉시 반환 → 재시작 후 재시도.
         if result.get("shutdown_deferred"):
@@ -421,6 +427,7 @@ def run_theme(theme: str) -> dict:
         import traceback; traceback.print_exc()
         results = {"naver": False, "tistory": False}
         _result_data_empty = False
+        _result_deferred = {"naver": False, "tistory": False}
 
     log(f"  📋 1차 결과: 네이버={'✅' if results.get('naver') else '❌'} | "
         f"티스토리={'✅' if results.get('tistory') else '❌'}")
@@ -451,18 +458,27 @@ def run_theme(theme: str) -> dict:
     # ── GUARDIAN 자동 대응 — harness 소진 후 코드 수정 + 재발행 ──────
     # ★ data_empty 시 GUARDIAN 스킵 (ERRORS [168][174] 반복 박제 — 동일 테마 재시도 = 동일 실패 반복)
     # 종목 데이터 0개는 코드 버그가 아닌 데이터 부재 → 테마 교체가 정답, 코드 수정 불필요
-    if fail and not _result_data_empty:
+    # ★ 인프라 스로틀 지속(deferred) 플랫폼도 GUARDIAN 트리거에서 제외 — harness 가 이미
+    #   "코드 결함 아님, 다음 회차 자연 재시도"로 판정한 건이다. 여기서 걸러내지 않으면
+    #   incident_responder._classify() 가 일반 텍스트("harness max_attempts 소진")만 보고
+    #   transient 로 인식 못 해(로컬 _TRANSIENT_KEYWORDS 에 "인프라 스로틀" 없음) code_bug/
+    #   unknown 경로로 빠져 불필요한 Tier-2 SDK 세션(최대 10분)을 매번 낭비한다.
+    _guardian_fail = [k for k in fail if not _result_deferred.get(k, False)]
+    if _result_deferred.get("naver") or _result_deferred.get("tistory"):
+        _deferred_list = [k for k in fail if _result_deferred.get(k, False)]
+        log(f"⏸ [THEME] 인프라 스로틀 지속 플랫폼 GUARDIAN 스킵(다음 회차 자연 재시도): {_deferred_list}")
+    if _guardian_fail and not _result_data_empty:
         try:
             from JARVIS07_GUARDIAN.incident_responder import respond_in_background
             _err_ctx = (
-                f"테마 포스팅 실패: theme={theme}, failed_platforms={fail} (harness max_attempts 소진)"
+                f"테마 포스팅 실패: theme={theme}, failed_platforms={_guardian_fail} (harness max_attempts 소진)"
             )
 
             # ★ 재발행 retry_fn — 코드 수정 후 즉시 재발행 (harness 통과 보장)
             # theme runner 는 run_radar_top_theme() 를 reload 후 재호출 (harness 내장 함수)
             def _make_theme_retry():
                 """수정된 코드로 즉시 재발행. importlib.reload → harness 5-Layer 통과."""
-                _fail_platforms = list(fail)
+                _fail_platforms = list(_guardian_fail)
                 def _retry():
                     import importlib, sys as _sys
                     # ★ 의존성 순서 정렬 (ERRORS [222][224] 박제)
@@ -489,9 +505,9 @@ def run_theme(theme: str) -> dict:
                 return _retry
 
             # 실패 플랫폼 수만큼 retry_fn 등록 (incident_responder 가 플랫폼별 호출)
-            _retry_fns = {p: _make_theme_retry() for p in fail}
-            respond_in_background("theme", fail, _err_ctx, _retry_fns, theme=theme)
-            log(f"🛡️ GUARDIAN incident_responder 트리거됨: theme={theme}, fail={fail}")
+            _retry_fns = {p: _make_theme_retry() for p in _guardian_fail}
+            respond_in_background("theme", _guardian_fail, _err_ctx, _retry_fns, theme=theme)
+            log(f"🛡️ GUARDIAN incident_responder 트리거됨: theme={theme}, fail={_guardian_fail}")
         except Exception as _ire:
             log(f"⚠️ GUARDIAN 트리거 실패: {_ire}")
     elif fail and _result_data_empty:
@@ -1180,6 +1196,17 @@ def run_economic_poster(*extra_flags):
 
         _PLATFORM_KEYS = {"naver", "tistory"}
         failed = [k for k, v in _platform_results.items() if k in _PLATFORM_KEYS and not v]
+        # ★ ERRORS [459] 동일 클래스(경제 경로) — 인프라 스로틀 지속(deferred) 플랫폼은
+        #   harness 가 이미 "코드 결함 아님, 다음 회차 자연 재시도"로 판정한 건이다.
+        #   여기서 걸러내지 않으면 incident_responder 가 불필요한 Tier-2 SDK 세션을 낭비한다.
+        _deferred = {
+            "naver": bool(_platform_results.get("naver_deferred")),
+            "tistory": bool(_platform_results.get("tistory_deferred")),
+        }
+        _guardian_failed = [k for k in failed if not _deferred.get(k, False)]
+        if any(_deferred.get(k) for k in failed):
+            log(f"⏸ [ECONOMIC] 인프라 스로틀 지속 플랫폼 GUARDIAN 스킵(다음 회차 자연 재시도): "
+                f"{[k for k in failed if _deferred.get(k)]}")
 
         if result.returncode == 0 and not failed:
             log(f"✅ {label} 완료 (로그: {_logpath.name})")
@@ -1189,11 +1216,11 @@ def run_economic_poster(*extra_flags):
             log(f"❌ {label} 실패 (returncode={result.returncode}, 로그: {_logpath.name})")
 
         # GUARDIAN 자동 대응 — extra_flags 있으면 이미 재시도 모드이므로 비활성
-        if failed and not extra_flags:
+        if _guardian_failed and not extra_flags:
             try:
                 _err_txt = Path(_logpath).read_text(encoding="utf-8", errors="ignore")[-3000:]
             except Exception:
-                _err_txt = f"returncode={result.returncode}, failed_platforms={failed}"
+                _err_txt = f"returncode={result.returncode}, failed_platforms={_guardian_failed}"
             # ★ EP_RESULT_FILE 에서 하네스 이슈 구조화 데이터 추출
             _harness_issues: list[str] = []
             try:
@@ -1201,7 +1228,7 @@ def run_economic_poster(*extra_flags):
                 _harness_issues = _full_result.get("harness_issues") or []
             except Exception:
                 pass
-            _trigger_economic_incident(failed, _err_txt, harness_issues=_harness_issues)
+            _trigger_economic_incident(_guardian_failed, _err_txt, harness_issues=_harness_issues)
 
     except Exception as e:
         log(f"❌ {label} 예외: {e}")

@@ -448,6 +448,146 @@ def mark_publishing(active: bool) -> None:
         _PUBLISHING_ACTIVE.clear()
 
 
+# ── 발행창 보호 구간 (사용자 승인 2026-07-20 — 제안 ③) ─────────────────
+#
+# 배경: 새벽 심층감사·상시 잡이 한도를 쓴 뒤 발행창에서 LLM 이 스로틀되면 발행이
+#   차단된다. 발행 *직전* 일정 시간 동안 background alias 를 아예 막아 한도를
+#   발행에 몰아준다.
+#
+# ★ 동적 설계: 발행 시각을 하드코딩하지 않는다. JARVIS04 DEFAULT_JOBS 의 실제
+#   cron(hour/minute)에서 도출 → 사용자가 발행 시각을 바꾸면 보호 구간이 자동으로
+#   따라 이동한다. (2026-07-20 '복사본을 진실로 믿지 말 것' 원칙)
+_PROTECT_MIN = int(os.getenv("LLM_PUBLISH_PROTECT_MIN", "90") or "90")   # 발행 前 보호 분
+# 스로틀 시 재시도 생략 (제안 ① — 킬스위치 0 으로 종전 동작 복귀)
+_THROTTLE_NO_RETRY = (os.getenv("LLM_THROTTLE_NO_RETRY", "1") or "1") != "0"
+
+
+def _max_retries() -> int:
+    """LLM 계층 재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT)에서 파생.
+
+    ★ 하드코딩 금지: 상한은 한 곳(harness)에서만 정의한다. import 실패 시에만
+      보수적으로 2 로 폴백(종전 3 이 아니라 2 — 사용자 박제 2026-07-21).
+    """
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
+# ── SDK cwd 격리 (제안 ② — 2026-07-20, 전수감사 확정) ──────────────────
+#
+# 문제: ClaudeCodeOptions 에 cwd 를 주지 않으면 spawn 된 claude CLI 가 데몬의
+#   cwd(= 저장소 루트)를 물려받아 **CLAUDE.md + @import 5개(≈96KB / 약 48,940 토큰)**
+#   를 프로젝트 메모리로 자동 로드한다. 내용은 매 호출 동일한데, CLI 가
+#   [CLAUDE.md + 우리 프롬프트] 를 *하나의 트레일링 캐시 블록* 에 넣기 때문에
+#   프롬프트가 바뀔 때마다 블록 전체가 무효화 → 48,940 토큰이 매번 *재기록*
+#   (쓰기 프리미엄 1.25x)된다. 읽기(0.1x)로 재사용되지 못한다.
+#
+# 실측(자연실험): cwd=저장소 → cache_create ≈ 49,000 / cwd=빈 임시폴더 → ≈ 890.
+#   회귀 cache_create = 48,940 + 0.80×프롬프트글자수. 고정 낭비가 캐시쓰기의 85~98%.
+#
+# 해결: 전용 빈 작업 디렉터리를 cwd 로 준다. 이 호출들은 프로젝트 헌법이 필요 없다
+#   — 작성 규칙은 law_enforcer.build_writing_rules_block() 으로 *프롬프트에 명시 주입*
+#   되는 것이 이 저장소의 설계다(자동 로드에 의존하지 않는다).
+#
+# ★ 동적: 경로를 박지 않고 DB 경로에서 도출. 킬스위치 LLM_ISOLATE_CWD=0.
+_ISOLATE_CWD = (os.getenv("LLM_ISOLATE_CWD", "1") or "1") != "0"
+
+
+def _llm_scratch_dir() -> str | None:
+    """CLAUDE.md 가 없는 전용 cwd. 실패하면 None(종전 동작)."""
+    if not _ISOLATE_CWD:
+        return None
+    try:
+        from shared.db import DB_PATH
+        d = Path(DB_PATH).parent / "llm_cwd"
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d)
+    except Exception:
+        return None
+
+
+# 저장소를 벗어나면 프로젝트 .claude/settings.json 도 함께 잃는다.
+# 거기서 설정하던 값은 env 로 직접 전달해 유지한다.
+_SDK_BASE_ENV = {"ANTHROPIC_API_KEY": "", "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"}
+
+
+# ── 본문 생성 timeout 단일 진입점 (ERRORS [460] — 2026-07-20) ──────────
+#
+# 사고: 테마 티스토리 발행이 6/6 실패. 로그의 "인프라 스로틀" 은 *오분류* 였고
+#   실제 원인은 `SDK timeout 300s — 수집된 응답: 0개`. 네이버는 27,657 토큰을
+#   292.1초에 생성해 300초를 *간신히* 통과했고, 대등한 분량의 티스토리는 벽을 넘었다.
+#   실측 생성 속도 ≈ 88 토큰/초 → 27.6K 토큰에 약 314초가 필요한데 상한이 300초였다.
+#
+# 왜 하드코딩이 문제였나: draft_writer.py 6곳에 `timeout=300` 이 박혀 있어
+#   분량 정책이 늘어도 시간 예산이 따라오지 않았다. 값을 코드에 복사해둔 전형.
+#
+# ★ 동적: 플랫폼 액션 데드라인(watchdog SSOT)에서 도출한다. 재시도 상한(3회)이
+#   데드라인을 넘지 않도록 1/4 로 제한 → 데드라인이 바뀌면 자동 추종.
+def writer_timeout() -> int:
+    """본문 생성 LLM 호출 상한(초). 액션 데드라인에서 도출 — 하드코딩 금지."""
+    env = os.getenv("LLM_WRITER_TIMEOUT_SEC")
+    if env:
+        try:
+            return max(60, int(env))
+        except ValueError:
+            pass
+    try:
+        from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC as _d
+    except Exception:
+        _d = 2400
+    # 3회 재시도 + 수집·이미지·발행 단계 몫을 남기고 1/4 배정
+    return max(300, min(900, int(_d / 4)))
+_protect_cache: list = [0.0, ()]     # (계산시각, ((hour,minute), ...))
+_PROTECT_TTL = 600.0
+
+
+def _publish_times() -> tuple:
+    """발행 잡의 (시,분) 목록 — DEFAULT_JOBS 에서 실시간 도출. 실패 시 빈 튜플."""
+    import time as _t
+    now = _t.time()
+    if _protect_cache[1] and now - _protect_cache[0] < _PROTECT_TTL:
+        return _protect_cache[1]
+    times = []
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+        for j in DEFAULT_JOBS:
+            cb = str(j.get("callback", ""))
+            # 실제 *발행* 콜백만 (선계산·로그점검 제외)
+            if j.get("trigger") != "cron" or "run_self_repair_then_" not in cb:
+                continue
+            kw = j.get("kwargs") or {}
+            h, m = kw.get("hour"), kw.get("minute", 0)
+            if isinstance(h, int):
+                times.append((h, int(m or 0)))
+    except Exception:
+        pass
+    _protect_cache[0], _protect_cache[1] = now, tuple(sorted(set(times)))
+    return _protect_cache[1]
+
+
+def in_publish_protection() -> bool:
+    """지금이 발행 직전 보호 구간인가 (발행 시각 前 _PROTECT_MIN 분)."""
+    if _PROTECT_MIN <= 0:
+        return False
+    times = _publish_times()
+    if not times:
+        return False
+    from datetime import datetime as _dt
+    now = _dt.now()
+    cur = now.hour * 60 + now.minute
+    for h, m in times:
+        start = (h * 60 + m - _PROTECT_MIN) % (24 * 60)
+        end = h * 60 + m
+        if start <= end:
+            if start <= cur < end:
+                return True
+        else:                      # 자정 넘김
+            if cur >= start or cur < end:
+                return True
+    return False
+
+
 def is_publishing() -> bool:
     """현재 발행 파이프라인 실행 중인지 (in-process 한정)."""
     return _PUBLISHING_ACTIVE.is_set()
@@ -525,7 +665,12 @@ def _run_sdk_sync(
 
     full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
     full_prompt = _sanitize_prompt(full_prompt)   # ★ embedded null byte 크래시 차단
-    options = ClaudeCodeOptions(model=model, env={"ANTHROPIC_API_KEY": ""})
+    # ★ cwd 격리 — 저장소 밖 전용 폴더. CLAUDE.md 자동 로드(48,940 토큰/호출) 차단.
+    _opts_kw: dict = {"model": model, "env": dict(_SDK_BASE_ENV)}
+    _scratch = _llm_scratch_dir()
+    if _scratch:
+        _opts_kw["cwd"] = _scratch
+    options = ClaudeCodeOptions(**_opts_kw)
     parts: list[str] = []
     throttled = {"v": False}
     hung = {"v": False}
@@ -673,9 +818,24 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
 
     imgs = "\n".join(f"- {p}" for p in image_paths)
     full = _sanitize_prompt(f"다음 이미지 파일들을 Read 도구로 열어서 직접 보고 분석하라:\n{imgs}\n\n{prompt}")
-    options = ClaudeCodeOptions(model=model, allowed_tools=["Read"],
-                                permission_mode="bypassPermissions", max_turns=6,
-                                cwd=cwd, env={"ANTHROPIC_API_KEY": ""})
+    # ★ cwd 격리 + 이미지 접근 유지 (제안 ②): 호출자(design_learner)가 넘긴 cwd 는
+    #   Read 도구가 이미지 파일에 닿게 하려는 것이다 — 그냥 교체하면 이미지를 못 읽는다.
+    #   cwd 는 저장소 밖 전용 폴더로 두고(CLAUDE.md 자동 로드 차단), 원래 경로는
+    #   add_dirs 로 작업 범위에 추가해 접근을 보존한다.
+    #   (이미지 폴더도 저장소 안이라 종전엔 vision 호출도 매번 ~49k 를 재기록했다.)
+    _v_kw: dict = {
+        "model": model, "allowed_tools": ["Read"],
+        "permission_mode": "bypassPermissions", "max_turns": 6,
+        "env": dict(_SDK_BASE_ENV),
+    }
+    _v_scratch = _llm_scratch_dir()
+    if _v_scratch:
+        _v_kw["cwd"] = _v_scratch
+        if cwd:
+            _v_kw["add_dirs"] = [cwd]
+    else:
+        _v_kw["cwd"] = cwd
+    options = ClaudeCodeOptions(**_v_kw)
     parts: list[str] = []
 
     try:
@@ -784,6 +944,63 @@ def last_call_infra_incomplete() -> bool:
     )
 
 
+def last_call_infra_reason() -> str:
+    """직전 미완결의 *구체적 사유*. 오진 방지용 (ERRORS [460]).
+
+    ★ 왜 필요한가: 종전엔 스로틀·타임아웃·절단·락경합을 전부 "인프라 스로틀" 한 덩어리로
+      표기했다. 2026-07-20 테마 티스토리 6/6 실패의 실제 원인은 *timeout 300s 초과*
+      (생성 88토큰/초 × 27.6K 토큰 ≈ 314초)였는데 로그·텔레그램이 "스로틀" 이라고만
+      말해 한도·rate-limit 쪽으로 진단이 한참 헤맸다. 사유를 분리해 표기한다.
+    """
+    if getattr(_LAST_CALL, "hung", False):
+        return "timeout"            # 상한 내 완료 실패, 부분출력 0 — 시간 예산 부족 신호
+    if getattr(_LAST_CALL, "truncated", False):
+        return "truncated"          # 부분출력 + 데드라인 절단
+    if getattr(_LAST_CALL, "throttled", False):
+        return "throttle"           # num_turns=0 — 서버가 모델 호출 자체를 거절
+    if getattr(_LAST_CALL, "lock_contention", False):
+        return "lock_contention"    # 크로스 프로세스 락 경합
+    return ""
+
+
+_INFRA_REASON_LABEL = {
+    "timeout":         "생성 시간 초과 — 분량 대비 timeout 부족(시간 예산 재검토)",
+    "truncated":       "생성 절단 — 데드라인이 스트림을 끊음",
+    "throttle":        "인프라 스로틀 — 서버가 호출 거절(한도/rate-limit)",
+    "lock_contention": "락 경합 — 다른 호출이 점유 중",
+}
+
+
+def infra_reason_label(reason: str = "") -> str:
+    """사유 코드 → 사람이 읽는 설명. 미상이면 종전 표기 유지."""
+    return _INFRA_REASON_LABEL.get(
+        reason or last_call_infra_reason(),
+        "인프라 미완결 — 일시적(다음 시도/회차 재개)")
+
+
+# ── infra_throttle 오류코드 단일 진입점 (ERRORS [460]) ─────────────────
+#   판정 4곳·소비 2곳이 각자 문자열을 만들고 파싱하면 또 갈라진다.
+#   생성·판별·라벨링을 여기 3함수로 고정한다.
+_INFRA_ERR_PREFIX = "infra_throttle"
+
+
+def make_infra_error(reason: str = "") -> str:
+    """미완결 오류코드 생성 — `infra_throttle:<사유>`. 호출자는 문자열 조립 금지."""
+    return f"{_INFRA_ERR_PREFIX}:{reason or last_call_infra_reason() or 'unknown'}"
+
+
+def is_infra_error(err: str | None) -> bool:
+    """오류코드가 인프라 미완결인가 (사유 유무 무관)."""
+    return bool(err) and str(err).startswith(_INFRA_ERR_PREFIX)
+
+
+def describe_infra_error(err: str | None) -> str:
+    """오류코드 → 사람이 읽는 사유 설명. 사유가 없으면 일반 표기."""
+    s = str(err or "")
+    reason = s.split(":", 1)[1] if ":" in s else ""
+    return infra_reason_label(reason)
+
+
 def circuit_is_open() -> bool:
     """rate-limit 회로차단기 open 여부 — 순수 read-only peek (probe 전이·상태변이 없음).
 
@@ -823,7 +1040,10 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
 
     # ★ 재시도 최대 3회 상한 (사용자 박제 2026-07-06): 어떤 재시도도 3회 초과 금지.
     #   기본 _retries=4 → 실효 3으로 캡. deadline/_nonessential/probe/open 강등은 더 낮춤.
-    retries = max(1, min(3, _retries))
+    # ★ 재시도 상한 SSOT 파생 (사용자 박제 2026-07-21): harness.DEFAULT_MAX_ATTEMPTS
+    #   하나로 LLM 계층·harness 계층을 동시에 통제한다. 종전엔 여기 `3` 이 박혀 있어
+    #   상한을 바꾸려면 두 곳을 따로 고쳐야 했고, 두 층의 곱(최악 증폭)이 통제 불능이었다.
+    retries = max(1, min(_max_retries(), _retries))
     backoff = True
     _CURRENT_ALIAS.set(alias or "")   # ★ 토큰 계측 귀속 (ERRORS [456])
 
@@ -844,6 +1064,23 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
     #   동일 프로세스(daemon) 안에서 guardian 이 세마포어를 timeout=300s 로 점유해
     #   발행 파이프라인을 최대 300s 차단하던 사고 방지.
     #   mark_publishing(True) → 모든 BG alias 호출을 timeout ≤90s·retries=1 로 단축.
+    # ★ 발행창 보호 구간 (사용자 승인 2026-07-20 — 제안 ③): 발행 시각 前
+    #   _PROTECT_MIN 분 동안 background alias 를 *아예 차단* 해 한도를 발행에 몰아준다.
+    #   종전엔 발행이 *시작된 뒤*(mark_publishing) 강등만 했으므로, 발행 직전에
+    #   심층감사·학습이 한도를 태워버리는 것을 막지 못했다.
+    #   보호 시각은 DEFAULT_JOBS cron 에서 도출 — 하드코딩 없음.
+    if alias in _BG_ALIASES and not _PUBLISHING_ACTIVE.is_set():
+        try:
+            if in_publish_protection():
+                import logging as _lg
+                _lg.getLogger("jarvis.llm").info(
+                    f"🛡 발행창 보호 구간 — background alias '{alias}' 차단 "
+                    f"(발행 前 {_PROTECT_MIN}분). 한도를 발행에 우선 배정."
+                )
+                return ""
+        except Exception:
+            pass
+
     if alias in _BG_ALIASES and _PUBLISHING_ACTIVE.is_set():
         retries = min(retries, 1)
         backoff = False
@@ -906,6 +1143,19 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
             truncated_seen = True
         if getattr(_LAST_CALL, "throttled", False):
             throttled_seen = True
+            # ★ 스로틀 = 재시도 금지 (사용자 승인 2026-07-20 — 제안 ①)
+            #   num_turns=0 은 *모델을 아예 호출하지 않았다* 는 신호(한도/스로틀).
+            #   같은 창에서 즉시 재발사해도 같은 결과이고, 한도가 없을 때 한도를 더
+            #   태운다. LLM 재시도(최대 3) × harness max_attempts(3) = 최악 9배 증폭의
+            #   진원지. 여기서 끊고 상위(harness)의 defer 에 위임한다.
+            #   킬스위치: LLM_THROTTLE_NO_RETRY=0
+            if _THROTTLE_NO_RETRY and _attempt < retries - 1:
+                import logging as _lg
+                _lg.getLogger("jarvis.llm").info(
+                    f"⏭ 스로틀 감지 — 재시도 생략 후 defer (alias={alias}, "
+                    f"시도 {_attempt + 1}/{retries}). 같은 창 재발사는 한도만 소모."
+                )
+                break
         if getattr(_LAST_CALL, "hung", False):
             hung_seen = True
         if backoff and _attempt < retries - 1:

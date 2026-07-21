@@ -28,6 +28,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+def _max_attempts() -> int:
+    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
+
 # jarvis_daemon 과 동일한 logger — 데몬 모드에서 daemon.log 에 박힘.
 # CLI 모드 (직접 실행) 에서는 logger 가 핸들러 미설정이면 stderr 로 가지만,
 # print() 도 같이 호출하므로 콘솔 가시성 유지.
@@ -133,17 +142,37 @@ class PreflightReport:
 # ── 개별 검증기 ────────────────────────────────────────────────────
 
 def _check_internal_imports(report: PreflightReport) -> None:
-    """핵심 내부 모듈 import 검증 (★ 7시 사고 type 차단)."""
+    """핵심 내부 모듈 import 검증 (★ 7시 사고 type 차단).
+
+    ★ 최대 3회 재시도(사용자 박제 "어떤 재시도도 최대 3회" 원칙, ERRORS [463]) — naver_poster
+       등은 pyobjc(Quartz/AppKit) 를 함수 내부에서만 지연 import 하므로 자체 코드로는
+       "pyobjc-core and pyobjc" AssertionError 를 낼 수 없다(AST 확인 완료). 실제 사고는
+       *여러 subprocess 진입점(economic_poster/naver_cookie_refresher 등)이 동시에
+       ensure_preflight() 를 콜드 프로세스로 호출*할 때 macOS objc 브릿지가 드물게
+       레이스를 일으켜 일시적으로 폭발한 것 — 6초 뒤 같은 프로세스군에서 즉시 재통과.
+       진짜 코드 결함(ImportError/AttributeError 등)은 재시도해도 동일하게 실패하므로
+       은폐되지 않는다.
+    """
+    import time as _time
+
     # 프로젝트 루트가 sys.path 에 있어야 import 가능 — jarvis_daemon 이 보장하지만
     # preflight 가 *먼저* 호출되므로 자체적으로도 보장.
     if str(_ROOT) not in sys.path:
         sys.path.insert(0, str(_ROOT))
 
     for mod_name in _REQUIRED_INTERNAL_MODULES:
-        try:
-            importlib.import_module(mod_name)
-        except Exception as e:
-            report.fail("internal_import", mod_name, f"{type(e).__name__}: {e}")
+        last_exc: Exception | None = None
+        for attempt in range(_max_attempts()):
+            try:
+                importlib.import_module(mod_name)
+                last_exc = None
+                break
+            except Exception as e:
+                last_exc = e
+                if attempt < 2:
+                    _time.sleep(0.5)
+        if last_exc is not None:
+            report.fail("internal_import", mod_name, f"{type(last_exc).__name__}: {last_exc}")
 
 
 def _check_external_imports(report: PreflightReport) -> None:

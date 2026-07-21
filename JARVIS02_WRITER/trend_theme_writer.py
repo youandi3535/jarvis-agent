@@ -270,8 +270,10 @@ def _build_blocks(collected, platform: str, img_dir: Path,
         # ★ 인프라 스로틀/절단(일시적)과 콘텐츠 결함 구분 태깅(rank4) — 테마.
         #   circuit_is_open()은 프로세스 전역(워커 스레드 안전), last_call_infra_incomplete()는
         #   동일 스레드 직전 호출. 둘 중 하나면 infra_throttle → harness 가 defer/backoff.
-        from shared.llm import last_call_infra_incomplete as _infra, circuit_is_open as _copen
-        _err = "infra_throttle" if (_infra() or _copen()) else "Pass-1 대본 생성 실패"
+        from shared.llm import (last_call_infra_incomplete as _infra,
+                                circuit_is_open as _copen,
+                                make_infra_error as _mk_infra)
+        _err = _mk_infra() if (_infra() or _copen()) else "Pass-1 대본 생성 실패"
         return {"success": False, "error": _err, "blocks": [],
                 "title": "", "content": "", "html": ""}
 
@@ -820,12 +822,15 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         if not draft.get("success"):
             # ★ 인프라 스로틀(일시적)과 콘텐츠 결함 분리(rank5). detail 은 fingerprint 안정성 위해
             #   고정 문자열(attempt 변동값 금지) — harness 가 fingerprint 제외·backoff·defer 처리.
+            from shared.llm import (is_infra_error as _is_infra_err,
+                                    describe_infra_error as _desc_infra)
             _derr = str(draft.get("error", "unknown"))
-            _is_infra = (_derr == "infra_throttle")
+            _is_infra = _is_infra_err(_derr)
             issues.append(Issue(
                 step=step_name,
                 kind="infra_throttle" if _is_infra else "draft_failed",
-                detail=("인프라 스로틀 — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"
+                detail=(_desc_infra(_derr)
+                        + " — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"
                         if _is_infra else f"대본 생성 실패: {_derr}")))
             return issues
         di_list = _layer3_verify_draft(draft, platform)
@@ -1063,7 +1068,8 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         send=lambda st: _send_theme_platform(st, "naver", "nv_draft",
                                              "nv_pub_result", "__nv_send_attempted__"),
         precondition=_precondition,
-        max_attempts=3,  # ★ 외부 발행은 비멱등 → 원래 최대 2회였으나 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__nv_send_attempted__)이 중복 발행 방지
+        # ★ max_attempts 미지정 = harness.DEFAULT_MAX_ATTEMPTS 상속 (SSOT, 현재 2회).
+        #   하드코딩하면 상한 변경 시 여기가 누락된다. sentinel(__nv_send_attempted__)이 중복 발행 방지
         deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 SSOT (watchdog.py) — 사용자 박제 2026-07-06
     )
     _ts_action_def = ActionDefinition(
@@ -1076,7 +1082,8 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         send=lambda st: _send_theme_platform(st, "tistory", "ts_draft",
                                              "ts_pub_result", "__ts_send_attempted__"),
         precondition=_precondition,
-        max_attempts=3,  # ★ 원래 최대 2회(비멱등 발행) — 사용자 지시(재시도는 무조건 3회)로 3회 통일. sentinel(__ts_send_attempted__)이 중복 발행 방지
+        # ★ max_attempts 미지정 = harness.DEFAULT_MAX_ATTEMPTS 상속 (SSOT, 현재 2회).
+        #   sentinel(__ts_send_attempted__)이 중복 발행 방지
         deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 SSOT (watchdog.py) — 사용자 박제 2026-07-06
     )
 
@@ -1116,6 +1123,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     # ② 티스토리 액션 — 네이버 *종결 후* 시작. 종목 데이터 없으면 스킵
     #    (진짜 data_empty → 상위 테마 교체 / 수집 미실행 → 교체 아닌 단순 실패)
     _ts_res = {"success": False, "url": "", "keyword": theme}
+    _ts_deferred = False
     if not _stocks_ok:
         print(f"  ⏭️ [티스토리] 종목 데이터 {'0개' if _data_empty else '미수집(네이버 액션 조기 종결)'} — 발행 스킵")
     else:
@@ -1136,13 +1144,15 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             _reason = getattr(_ts_result, "escalation_reason", "최대 시도 초과 또는 abort")
             if getattr(_ts_result, "deferred", False):
                 # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도.
+                _ts_deferred = True
                 print(f"  ⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
                 _tg(f"⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n테마: {theme}")
             else:
                 _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
 
     _mark_pub(False)  # ★ 테마 발행 완료 — background alias 강등 해제
-    return {"theme": theme, "tistory": _ts_res, "naver": _nv_res, "data_empty": _data_empty}
+    return {"theme": theme, "tistory": _ts_res, "naver": _nv_res, "data_empty": _data_empty,
+            "tistory_deferred": _ts_deferred}
 
 
 __all__ = [

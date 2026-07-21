@@ -62,7 +62,7 @@ ESCALATE_WINDOW_SECS = 3600   # severity 상향 관찰 창 (초)
 DOMAIN_SKEW_THRESHOLD   = 25   # 한 도메인 학습 패턴 N+ 누적 시 근본 리팩터 검토 (ADR 008) — 표시 SSOT
 ERROR_STATS_WINDOW_DAYS = 7    # 오류 통계 집계 기본 윈도우(일) — get_error_stats·표시 공용 SSOT
 # ★ 사용자 박제 2026-07-06 — job_retry_pending 무한 재시도로 인한 조용한 토큰 소모 사고 재발 방지.
-# 어떤 재시도도 최대 3회 (하네스 max_attempts 원칙과 동일 상수). 같은 error_id 가
+# 어떤 재시도도 harness.DEFAULT_MAX_ATTEMPTS(SSOT, 현재 2회). 같은 error_id 가
 # Tier 2(LLM) 를 이 횟수만큼 이미 시도했으면 재시도 없이 wontfix + 텔레그램 알림.
 MAX_LLM_ATTEMPTS = 3
 DENY_FIX_PATHS = {            # 자동수정 절대 금지 파일 (보안·코어)

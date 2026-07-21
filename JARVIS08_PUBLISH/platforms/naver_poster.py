@@ -17,6 +17,15 @@ import os, re, time, random, sys, pickle, subprocess
 from pathlib import Path
 from dotenv import load_dotenv
 
+def _max_attempts() -> int:
+    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
+
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
@@ -389,11 +398,11 @@ def _verify_naver_published(driver) -> bool:
     import re as _re
 
     # ★ ERRORS [278][279] — 3회 × 4초 = 최대 ~12초 추가 대기 (SPA 전환 충분 보장)
-    # ★ 사용자 박제 2026-07-06 — 재시도 상한 전역 3회 통일 (기존 4회 × 4초)
-    for _attempt in range(3):
+    # ★ 재시도 상한 = harness SSOT 파생 (사용자 박제 2026-07-21: 2회. 2026-07-06 '3회 통일' 폐지)
+    for _attempt in range(_max_attempts()):
         try:
             current_url = driver.current_url
-            print(f"  [verify] attempt {_attempt+1}/3 — URL: {current_url[:120]}")
+            print(f"  [verify] attempt {_attempt+1}/{_max_attempts()} — URL: {current_url[:120]}")
 
             # ── URL 기반 체크 ──────────────────────────────────────
             # ★ ERRORS [278] 핵심 수정: blog.naver.com 에 logNo= 있으면 발행 성공
@@ -510,8 +519,8 @@ def _click_publish_btn(driver, label: str = "최종발행") -> bool:
     from selenium.common.exceptions import ElementClickInterceptedException
     _dim_js = ("document.querySelectorAll('.se-popup-dim:not(.se-popup-dim-transparent)')"
                ".forEach(function(d) { d.remove(); });")
-    # ★ 사용자 박제 2026-07-06 — 재시도 상한 전역 3회 통일 (기존 2회)
-    for _try in range(3):
+    # ★ 재시도 상한 = harness SSOT 파생 (사용자 박제 2026-07-21: 2회)
+    for _try in range(_max_attempts()):
         try:
             driver.execute_script(_dim_js)   # dim 오버레이 선제 제거 (ERRORS [247])
         except Exception:

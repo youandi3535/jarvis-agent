@@ -86,9 +86,21 @@ _log = logging.getLogger("jarvis")
 
 # ── 상수 ─────────────────────────────────────────────
 
-DEFAULT_MAX_ATTEMPTS = 3
-"""검증 순환 무한 루프 방지 — 기본 3회 (★ 사용자 박제 2026-07-06: 어떤 재시도도 최대 3회).
-동작별 ActionDefinition.max_attempts 로 재정의 가능(현 호출자 economic=3·theme=2·revise=3 등)."""
+import os as _os_mx
+
+DEFAULT_MAX_ATTEMPTS = max(1, int(_os_mx.getenv("HARNESS_MAX_ATTEMPTS", "2") or "2"))
+"""검증 순환 무한 루프 방지 — **어떤 재시도도 최대 2회** (★ 사용자 박제 2026-07-21).
+
+★ 재시도 상한의 *단일 진실 소스*. 호출자는 `max_attempts=` 를 하드코딩하지 말고
+  이 기본값을 상속할 것 — 종전엔 economic·theme·auto_repair 가 각자 `max_attempts=3`
+  으로 덮어써 이 상수를 무력화했고, 값을 바꾸려면 6곳을 찾아 고쳐야 했다
+  ('복사본을 진실로 믿는' 병, CLAUDE.md 최우선 설계 원칙 참조).
+
+  LLM 계층 재시도(`shared/llm.invoke_text`)도 이 상수에서 파생한다 →
+  두 층의 곱(최악 증폭 배수)이 상수 하나로 통제된다.
+
+  무배포 조정: 환경변수 `HARNESS_MAX_ATTEMPTS`.
+  (2026-07-06 '3회 통일' → 2026-07-21 '2회' 로 사용자 재박제)"""
 
 HARNESS_VERSION = "v3"
 """Self-Evolving Harness 진화 단계 표기 (표시 SSOT — 대시보드·문서가 이 상수에서 파생)."""

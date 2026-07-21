@@ -129,6 +129,10 @@ def record_rate_limit(payload: dict | None, source: str = "daemon") -> None:
     스키마를 모르므로 *원문 JSON 통째로* 보존한다.
     """
     try:
+        # ★ 스모크 테스트가 주입한 합성 이벤트는 박제하지 않는다 (관측 도구가
+        #   관측 대상을 오염시키면 안 됨 — 2026-07-20 사용자 발견).
+        if isinstance(payload, dict) and payload.get("__smoke__"):
+            return
         _init()
         from shared.db import get_db
         body = json.dumps(payload or {}, ensure_ascii=False)[:8000]
@@ -396,7 +400,7 @@ _RL_OVERAGE_REASON = {
 }
 
 
-def _humanize_rate_limits(rows: list[dict]) -> list[dict]:
+def _humanize_rate_limits(rows: list[dict], limit: int = 20) -> list[dict]:
     """rate_limit_event 원문 → 화면용 구조. uuid 기준 중복 제거."""
     seen: set = set()
     out: list[dict] = []
@@ -447,7 +451,7 @@ def _humanize_rate_limits(rows: list[dict]) -> list[dict]:
             "overage": overage,              # 초과사용 가능 여부
             "raw": r.get("payload"),         # 접어둔 원문 (디버깅용)
         })
-    return out[:20]
+    return out[:limit]
 
 
 # ── 집계 API ───────────────────────────────────────────────────────────
@@ -508,16 +512,45 @@ def summary(days: int = 8) -> dict:
 
             rec = conn.execute(
                 "SELECT ts, alias, model, output_tokens, input_tokens, "
-                "  cache_read, duration_ms, num_turns, ok "
+                "  cache_create, cache_read, cost_usd, duration_ms, num_turns, ok "
                 "FROM llm_token_usage ORDER BY id DESC LIMIT 50"
             ).fetchall()
             out["recent_calls"] = [dict(r) for r in rec]
 
+            # 오늘 데몬 호출 누적 — 비용·캐시 효율 (트랜스크립트 총량과 별개)
+            tot = conn.execute(
+                "SELECT COUNT(*) n, SUM(output_tokens) o, SUM(input_tokens) i, "
+                "  SUM(cache_create) cc, SUM(cache_read) cr, SUM(cost_usd) cost "
+                "FROM llm_token_usage WHERE substr(ts,1,10)=?", (today,)
+            ).fetchone()
+            cc_, cr_ = (tot["cc"] or 0), (tot["cr"] or 0)
+            out["daemon_today"] = {
+                "calls": tot["n"] or 0,
+                "output": tot["o"] or 0, "input": tot["i"] or 0,
+                "cache_create": cc_, "cache_read": cr_,
+                "cost_usd": round(tot["cost"] or 0, 4),
+                # ★ 캐시는 '한 번 비싸게 쓰고 여러 번 싸게 읽어야' 이득.
+                #   1 미만이면 쓴 것보다 덜 읽는 중 = 프리미엄만 내고 회수 못 함.
+                "cache_reuse_ratio": round(cr_ / cc_, 2) if cc_ else None,
+            }
+
             rl = conn.execute(
                 "SELECT ts, source, payload FROM llm_rate_limit_events "
-                "ORDER BY id DESC LIMIT 60"
+                "ORDER BY id DESC LIMIT 400"
             ).fetchall()
-            out["rate_limits"] = _humanize_rate_limits([dict(r) for r in rl])
+            ev = _humanize_rate_limits([dict(r) for r in rl], limit=400)
+            abnormal = [e for e in ev if not e["ok"]]
+            # ★ 이 이벤트는 *매 호출마다* 온다 — 정상 건을 나열하면 소음만 쌓인다.
+            #   요약(총/정상/이상) + 이상 건만 노출한다 (사용자 지적 2026-07-20).
+            out["rate_limits"] = abnormal[:20]
+            out["rate_limit_summary"] = {
+                "total": len(ev),
+                "normal": len(ev) - len(abnormal),
+                "abnormal": len(abnormal),
+                "last_ts": ev[0]["ts"] if ev else None,
+                "last_abnormal_ts": abnormal[0]["ts"] if abnormal else None,
+                "windows": sorted({e["window"] for e in ev if e["window"] and e["window"] != "—"}),
+            }
 
             # 최근 1시간 빈 응답률 = 스로틀 체감 지표
             h = conn.execute(
@@ -574,10 +607,10 @@ def _live_config() -> dict:
         cfg["bg_aliases"]        = sorted(_L._BG_ALIASES)
         cfg["max_concurrency"]   = _L._LLM_MAX_CONCURRENCY
         cfg["alias_count"]       = len(_L.MODELS)
-        import inspect as _insp, re as _re
-        m = _re.search(r"retries\s*=\s*max\(\s*1\s*,\s*min\(\s*(\d+)",
-                       _insp.getsource(_L.invoke_text))
-        cfg["llm_retry_cap"] = int(m.group(1)) if m else None
+        # ★ 소스 텍스트 정규식 금지 (2026-07-21 자체교정): 종전엔 invoke_text 소스에서
+        #   `min(3, ...)` 의 숫자를 긁었는데, 상한이 SSOT 파생 함수로 바뀌자 즉시 None 이
+        #   됐다. *실행 중인 값* 을 직접 호출해 읽는다.
+        cfg["llm_retry_cap"] = _L._max_retries()
     except Exception:
         pass
     try:
@@ -589,10 +622,11 @@ def _live_config() -> dict:
     except Exception:
         pass
     try:
-        import inspect as _insp2, re as _re2
-        import JARVIS00_INFRA.harness as _H
-        m = _re2.search(r"max_attempts[^=]*=\s*(\d+)", _insp2.getsource(_H))
-        cfg["harness_max_attempts"] = int(m.group(1)) if m else None
+        # ★ 소스 정규식 → 런타임 상수 직접 조회 (2026-07-21 자체교정).
+        #   종전 정규식은 주석·docstring 의 숫자까지 잡아 SSOT 를 2 로 낮춘 뒤에도
+        #   3 을 반환했다 — 화면에 *실제와 다른 값* 이 뜨는 전형적 오염.
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS as _DMA
+        cfg["harness_max_attempts"] = int(_DMA)
     except Exception:
         pass
     return cfg
@@ -636,6 +670,11 @@ def suggestions() -> list[dict]:
     hmax = cfg.get("harness_max_attempts")
     amp = (rcap * hmax) if (rcap and hmax) else None
     cth = cfg.get("circuit_threshold")
+    try:
+        import shared.llm as _L3
+        _tnr = bool(_L3._THROTTLE_NO_RETRY)
+    except Exception:
+        _tnr = False
     out.append({
         "id": "retry_amp",
         "title": (f"재시도 증폭 — 실패 1건이 최대 {amp}배로 불어난다" if amp
@@ -647,12 +686,17 @@ def suggestions() -> list[dict]:
                     "*한도가 없을 때 한도를 더 태운다*."
                     if amp else
                     "LLM 재시도와 harness 검증 순환이 곱해져 호출이 증폭된다 (설정값 조회 실패)."),
-        "action": (f"① 스로틀(num_turns=0) 실패는 재시도 대신 *즉시 defer* 로 분리 "
-                   f"(`_LAST_CALL.throttled` 신호가 이미 있어 분기만 추가하면 된다). "
-                   f"② 회로 임계값을 현재 {cth} 에서 한 단계 낮춰 더 빨리 차단."),
-        "effect": "스로틀 구간의 낭비 호출 감소 (효과 크기는 실측 필요 — 추정치 제시 안 함)",
+        "action": (("✅ 스로틀 시 재시도 생략은 *적용됨* — num_turns=0 감지 즉시 루프를 끊고 "
+                    "상위 harness 의 defer 에 위임한다. 남은 선택지: 회로 임계값을 현재 "
+                    f"{cth} 에서 한 단계 낮춰 더 빨리 차단."
+                    if _tnr else
+                    "① 스로틀(num_turns=0) 실패는 재시도 대신 *즉시 defer* 로 분리 "
+                    "(현재 LLM_THROTTLE_NO_RETRY=0 으로 꺼져 있음). "
+                    f"② 회로 임계값을 현재 {cth} 에서 한 단계 낮춰 더 빨리 차단.")),
+        "effect": "스로틀 구간의 낭비 호출 감소 — 증폭 배수가 실질적으로 축소됨",
         "tradeoff": "일시적 스로틀이었다면 발행이 다음 회차로 밀린다. 품질 저하는 없음.",
-        "knob": f"LLM_CIRCUIT_THRESHOLD (현재 {cth}) / shared/llm.py invoke_text 재시도 분기",
+        "knob": (f"LLM_THROTTLE_NO_RETRY (현재 {'1·적용' if _tnr else '0·미적용'}) / "
+                 f"LLM_CIRCUIT_THRESHOLD (현재 {cth})"),
     })
 
     # ── 3. 회로차단기 면제 alias ───────────────────────────────────
@@ -677,22 +721,47 @@ def suggestions() -> list[dict]:
             "knob": f"LLM_CIRCUIT_EXEMPT (현재 {','.join(ex)})",
         })
 
-    # ── 4. 캐시 효율 (실측) ────────────────────────────────────────
-    if hist:
-        today = hist[-1]
-        cr, cc, o = today["cache_read"], today["cache_create"], today["output"]
-        ratio = (cr / (cr + cc)) if (cr + cc) else 0
+    # ── 4. 캐시 효율 — ★ *데몬 실측* 기준 (2026-07-20 교정) ──────────
+    #   종전엔 트랜스크립트 총량(= Claude Code 대화 포함)으로 계산해 97% 재사용
+    #   → "good" 오판정. 대화는 캐시 재사용이 극단적으로 높아 데몬의 비효율을
+    #   가려버린다. 절감 대상은 *데몬 파이프라인* 이므로 데몬 계기로만 판정한다.
+    try:
+        _init()
+        from shared.db import get_db
+        import sqlite3 as _sq3
+        with get_db() as _c:
+            _c.row_factory = _sq3.Row
+            # ★ 최근 호출 기준 (2026-07-20): 누적으로 재면 설정을 고친 뒤에도
+            #   과거 데이터에 묻혀 며칠간 개선이 안 보인다. *현재 구성* 을 반영하려면
+            #   최근 창으로 판정해야 한다.
+            _t = _c.execute(
+                "SELECT SUM(cache_create) cc, SUM(cache_read) cr, SUM(output_tokens) o, "
+                "  SUM(cost_usd) cost, COUNT(*) n FROM ("
+                "  SELECT * FROM llm_token_usage WHERE output_tokens>0 "
+                "  ORDER BY id DESC LIMIT 30)"
+            ).fetchone()
+    except Exception:
+        _t = None
+    if _t and (_t["cc"] or 0) > 0:
+        cc, cr, o = _t["cc"] or 0, _t["cr"] or 0, _t["o"] or 0
+        cost, n = _t["cost"] or 0, _t["n"] or 0
+        ratio = cr / cc
         out.append({
             "id": "cache",
-            "title": "프롬프트 캐시 효율",
-            "severity": "good" if ratio >= 0.85 else "medium",
-            "finding": (f"오늘 캐시읽기 {_fmt(cr)} / 캐시생성 {_fmt(cc)} → 재사용률 {ratio*100:.0f}%. "
-                        f"출력 {_fmt(o)}."),
-            "action": ("재사용률이 높으면 캐시는 잘 동작 중 — 건드리지 말 것. "
-                       "낮다면 프롬프트 앞부분(헌법·규칙 블록)이 매번 바뀌고 있다는 뜻이므로 "
-                       "가변 부분을 프롬프트 *뒤쪽* 으로 몰아야 한다."),
-            "effect": "캐시 읽기는 신규 입력 대비 훨씬 저렴 — 재사용률 유지가 최대 절감 수단",
-            "tradeoff": "없음 (순수 최적화)",
+            "title": (f"프롬프트 캐시 비효율 — 쓴 것보다 적게 읽음 (재사용 {ratio:.2f}배)"
+                      if ratio < 1 else f"프롬프트 캐시 효율 — 재사용 {ratio:.2f}배"),
+            "severity": "high" if ratio < 0.8 else "medium" if ratio < 1.5 else "good",
+            "finding": (f"최근 데몬 호출 {n}건: 캐시생성 {_fmt(cc)} vs 캐시읽기 {_fmt(cr)} "
+                        f"→ 재사용 {ratio:.2f}배, 출력 {_fmt(o)}, 환산비용 ${cost:.2f}. "
+                        + ("캐시는 *한 번 비싸게 쓰고 여러 번 싸게 읽어야* 이득인데, "
+                           "지금은 쓰기 프리미엄만 내고 회수하지 못하고 있다."
+                           if ratio < 1 else "쓰기 대비 재사용이 이루어지고 있다.")),
+            "action": ("프롬프트 *앞부분* 이 호출마다 미세하게 달라지면 캐시가 매번 무효화된다. "
+                       "헌법·작성규칙 같은 고정 블록을 맨 앞에 두고, 날짜·키워드·수집데이터 등 "
+                       "가변 부분을 *뒤쪽* 으로 몰 것. 조립 순서만 바꾸면 되는 순수 최적화다."
+                       if ratio < 1.5 else "현 구성 유지."),
+            "effect": "캐시 읽기는 신규 입력 대비 약 1/10 단가 — 재사용률이 최대 절감 지렛대",
+            "tradeoff": "없음 (출력 품질과 무관한 조립 순서 문제)",
             "knob": "law_enforcer.build_writing_rules_block() 등 프롬프트 조립 순서",
         })
 
@@ -715,22 +784,37 @@ def suggestions() -> list[dict]:
             "knob": "JARVIS04_SCHEDULER/job_registry.py DEFAULT_JOBS 의 interval",
         })
 
-    # ── 6. 발행창 보호 ─────────────────────────────────────────────
+    # ── 6. 발행창 보호 (2026-07-20 적용 완료 — 상태를 실시간 조회) ────
+    _pt, _pmin, _pon = (), 0, False
+    try:
+        import shared.llm as _L2
+        _pt = _L2._publish_times()
+        _pmin = _L2._PROTECT_MIN
+        _pon = _L2.in_publish_protection()
+    except Exception:
+        pass
+    _win = ", ".join(f"{h:02d}:{m:02d}" for h, m in _pt) or "도출 실패"
     out.append({
         "id": "publish_window",
-        "title": "발행창 우선 예약 — 한도를 발행에 몰아주기",
-        "severity": "high",
-        "finding": ("오늘 실패의 실제 형태가 이것이다. 새벽 GUARDIAN 심층감사(04:30)와 상시 잡이 "
-                    "한도를 쓴 뒤 06:00~07:00 발행창에서 topic_pack 프로필 LLM 이 빈 응답을 받아 "
-                    "fail-closed 로 발행이 차단됐다."),
-        "action": (f"① 발행 전 일정 시간을 *보호 구간* 으로 지정해 background alias"
-                   f"({'·'.join(cfg.get('bg_aliases') or [])})를 아예 차단. "
-                   f"이미 `mark_publishing()` + `_BG_ALIASES` 강등 로직이 있으므로 "
-                   f"*시간 기반 확장* 만 하면 된다. "
-                   f"② GUARDIAN 심층감사 잡을 발행 이후 시간대로 이동."),
-        "effect": "발행 성공률 직접 개선 — 한도 부족 시에도 발행이 우선 확보됨",
-        "tradeoff": "자가수리·학습이 뒤로 밀림. 발행이 더 중요하다면 명백한 이득.",
-        "knob": "shared/llm.py mark_publishing / JARVIS04 j07_deep_audit cron",
+        "title": (f"발행창 보호 — 적용 중{' · 지금 보호 구간' if _pon else ''}"
+                  if _pmin > 0 and _pt else "발행창 보호 — 비활성"),
+        "severity": "good" if (_pmin > 0 and _pt) else "medium",
+        "finding": (f"발행 시각 {_win} 기준, 각 발행 前 {_pmin}분 동안 background alias"
+                    f"({'·'.join(cfg.get('bg_aliases') or [])}) 호출을 차단해 한도를 발행에 "
+                    f"우선 배정한다. 발행 시각은 DEFAULT_JOBS cron 에서 *실시간 도출* 하므로 "
+                    f"cron 을 바꾸면 보호 구간도 자동으로 따라 이동한다. "
+                    f"현재 {'보호 구간 안' if _pon else '보호 구간 밖'}."
+                    if (_pmin > 0 and _pt) else
+                    "보호가 꺼져 있다(LLM_PUBLISH_PROTECT_MIN=0 또는 발행 잡 도출 실패). "
+                    "새벽 심층감사·상시 잡이 발행 직전 한도를 소모하면 발행이 밀릴 수 있다."),
+        "action": ("추가로 GUARDIAN 심층감사 잡을 발행 이후 시간대로 옮기면 여유가 더 커진다. "
+                   "보호 시간을 늘리려면 LLM_PUBLISH_PROTECT_MIN 을 조정."
+                   if (_pmin > 0 and _pt) else
+                   "LLM_PUBLISH_PROTECT_MIN 을 90 등으로 설정해 보호를 켤 것."),
+        "effect": "발행 성공률 직접 개선 — 한도가 빠듯해도 발행이 우선 확보됨",
+        "tradeoff": "보호 구간 동안 자가수리·학습이 밀림(차단된 호출은 빈 문자열 폴백). "
+                    "발행이 더 중요하다면 명백한 이득.",
+        "knob": f"LLM_PUBLISH_PROTECT_MIN (현재 {_pmin}분) / JARVIS04 발행 cron",
     })
 
     # ── 7. 관측 공백 ───────────────────────────────────────────────
@@ -742,20 +826,53 @@ def suggestions() -> list[dict]:
             nrl = conn.execute("SELECT COUNT(*) FROM llm_rate_limit_events").fetchone()[0]
     except Exception:
         n = nrl = 0
-    out.append({
-        "id": "observability",
-        "title": "한도 값 자체는 아직 미관측",
-        "severity": "low" if nrl else "medium",
-        "finding": (f"라이브 계기 {n}건, rate_limit_event {nrl}건 수집됨. "
-                    "Anthropic 이 내려주는 한도·리셋 값은 rate_limit_event 페이로드에만 들어있어, "
-                    "이벤트가 쌓이기 전에는 '잔여 토큰'을 정확히 알 수 없다."),
-        "action": ("이벤트가 쌓이면 이 현황판 '한도 이벤트' 카드에 원문이 표시된다. "
-                   "그때 페이로드 구조를 보고 잔여량·리셋시각을 파싱해 KPI 로 승격할 것. "
-                   "정확한 현재 한도는 Claude Code 에서 `/usage` 로 확인."),
-        "effect": "추측 대신 실측 기반 운영 가능",
-        "tradeoff": "없음",
-        "knob": "shared/token_usage.record_rate_limit (이미 수집 중)",
-    })
+    # ★ 정적 문구 금지 — 실제 조회 결과로 판정 (2026-07-20 교정: 종전 문구는
+    #   /api/oauth/usage 연동 후에도 "아직 미관측" 을 계속 주장하는 낡은 상태였다).
+    _q = None
+    try:
+        _q = quota()
+    except Exception:
+        pass
+    _lims = []
+    if _q and _q.get("available"):
+        raw = _q.get("raw") or {}
+        for l in (raw.get("limits") or []):
+            if isinstance(l, dict) and isinstance(l.get("percent"), (int, float)):
+                _lims.append((str(l.get("kind") or "?"), 100 - int(l["percent"]),
+                              bool(l.get("is_active"))))
+    if _lims:
+        act = [x for x in _lims if x[2]] or _lims
+        tight = min(act, key=lambda x: x[1])
+        out.append({
+            "id": "observability",
+            "title": f"한도 관측 정상 — 가장 빡빡한 창 잔여 {tight[1]}%",
+            "severity": "good" if tight[1] >= 30 else "medium" if tight[1] >= 10 else "high",
+            "finding": ("구독 한도를 실시간 조회 중: "
+                        + " / ".join(f"{k} 잔여 {p}%{' ●적용중' if a else ''}"
+                                     for k, p, a in _lims)
+                        + f". 라이브 계기 {n}건, rate_limit_event {nrl}건 누적."),
+            "action": ("추측이 아니라 실측으로 판단할 수 있는 상태다. "
+                       "가장 빡빡한 창의 잔여가 10% 밑으로 내려가면 발행창 보호(위 항목)를 "
+                       "먼저 적용할 것. 조회가 끊기면 이 항목이 자동으로 '미관측' 으로 되돌아간다."),
+            "effect": "추측 대신 실측 기반 운영",
+            "tradeoff": "없음",
+            "knob": "TOKEN_QUOTA_LOOKUP=0 으로 조회 비활성 가능 / shared/token_usage.quota()",
+        })
+    else:
+        out.append({
+            "id": "observability",
+            "title": "한도 값 미관측 — 조회 실패",
+            "severity": "medium",
+            "finding": (f"구독 한도 조회(/api/oauth/usage)가 현재 실패 중. "
+                        f"라이브 계기 {n}건, rate_limit_event {nrl}건은 수집되고 있다. "
+                        "잔여량 없이는 한도 문제를 추측으로만 판단하게 된다."),
+            "action": ("① Keychain 접근 가능 여부 확인(데몬이 launchd 아래면 세션 분리로 거부될 수 있음) "
+                       "② TOKEN_QUOTA_LOOKUP 이 0 으로 꺼져 있지 않은지 확인 "
+                       "③ 그동안은 Claude Code 에서 `/usage` 로 직접 확인."),
+            "effect": "복구 시 추측 제거",
+            "tradeoff": "없음",
+            "knob": "TOKEN_QUOTA_LOOKUP / shared/token_usage.quota()",
+        })
 
     # ── 8. 호환 패치 실효성 (설치 플래그가 아니라 *동작* 으로 확인) ─────
     #   ★ 2026-07-20: 같은 monkey-patch 무력화 사고가 하루에 두 번 났다.

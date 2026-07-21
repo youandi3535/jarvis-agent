@@ -538,7 +538,7 @@ if __name__ == "__main__":
         #   이후 네이버 트렌딩·TOP10/TOP50 혼합·경쟁강도(15)·자동완성(20)·LLM 각도생성이
         #   추가되며 파이프라인 자체가 무거워짐 — 정상 성공 실행도 ~300s대, 네트워크 지연 시
         #   900s를 실측으로 초과(절전 gap 로그 없음, 순수 작업시간 초과 — 2026-07-17 재발).
-        #   90분(5400s) 외곽 harness deadline·max_attempts=3 구조(JARVIS03_RADAR/jobs.py
+        #   90분(5400s) 외곽 harness deadline·max_attempts(SSOT) 구조(JARVIS03_RADAR/jobs.py
         #   _TRENDS_DEADLINE_SEC)와 정합하도록 1800초로 상향(3회 재시도 시 5400s 이내).
         from JARVIS00_INFRA.watchdog import guard_main
         with guard_main("레이더 수집", deadline_sec=1800):

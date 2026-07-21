@@ -195,5 +195,14 @@
     "aesthetic": "dark hero floating cards",
     "via": "라이브러리",
     "total": 25
+  },
+  {
+    "date": "2026-07-21",
+    "action": "learned",
+    "id": "velvet-aurora-glass",
+    "name": "벨벳 오로라 글래스",
+    "aesthetic": "글래스모피즘(반투명·블러·발광)",
+    "via": "LLM",
+    "total": 26
   }
 ]

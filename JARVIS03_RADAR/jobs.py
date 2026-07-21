@@ -5,7 +5,7 @@ JARVIS04_SCHEDULER DEFAULT_JOBS callback 대상.
 
 ★ 하네스 5-Layer 게이트 (사용자 박제 2026-05-18):
    모든 잡은 _run_with_harness() 를 통해 실행.
-   실행 오류 감지 → GUARDIAN 자동 기록 → 재시도 (max_attempts=3) → 검증 순환.
+   실행 오류 감지 → GUARDIAN 자동 기록 → 재시도 (max_attempts — harness SSOT 상속) → 검증 순환.
 """
 from __future__ import annotations
 import logging
@@ -120,7 +120,7 @@ def _run_with_harness(
     run_fn: Callable,
     verify_fn: Optional[Callable] = None,
     send_fn: Optional[Callable] = None,
-    max_attempts: int = 3,
+    max_attempts: int | None = None,   # None = harness SSOT 상속
     deadline_sec: Optional[float] = None,
 ) -> None:
     """★ 하네스 5-Layer 게이트 래퍼 — 전체 잡에 "수정→기록→누적→순환" 적용.
@@ -130,7 +130,7 @@ def _run_with_harness(
         run_fn:      실행할 함수 (예외 발생 시 execution_error 검출)
         verify_fn:   선택 — run_fn() 결과를 받아 추가 검증. 오류 문자열 list 반환.
         send_fn:     선택 — 검증 통과 후 notify/저장 등 송출. run_fn() 결과를 인자로 받음.
-        max_attempts: 하네스 재시도 한도 (기본 3)
+        max_attempts: 하네스 재시도 한도 (None=harness.DEFAULT_MAX_ATTEMPTS 상속)
         deadline_sec: 선택 — 액션 전체 데드라인(초). 미지정 시 harness 기본값
                       (DEFAULT_ACTION_DEADLINE_SEC=3600, 60분 — auto_repair 심층감사용 안전망).
                       run_fn 이 1회 실행에도 오래 걸리는 외부 API 배치 수집이면서 max_attempts>1
@@ -191,7 +191,7 @@ def _run_with_harness(
         verify=_verify,
         fix=_fix,    # ★ "수정→기록→누적→순환" 전체 에이전트 디폴트 (사용자 박제 2026-05-18)
         send=_send,
-        max_attempts=max_attempts,
+        **({} if max_attempts is None else {'max_attempts': max_attempts}),
         deadline_sec=float(deadline_sec) if deadline_sec else _DFLT_DEADLINE,
     ))
 
@@ -219,7 +219,7 @@ def _verify_trends(_result) -> list:
 
 # ★ 트렌드 수집 전용 데드라인 (사용자 박제 — StuckError "데드라인 초과 3867s>3600s" 후속).
 #   pytrends 배치(5개씩+1.5초 딜레이)+네이버 DataLab+LLM 각도 분석이 순차 실행되어 1회 소요가
-#   길고, harness max_attempts(기본 3) 재시도가 겹치면 DEFAULT_ACTION_DEADLINE_SEC(60분,
+#   길고, harness max_attempts(SSOT 상속) 재시도가 겹치면 DEFAULT_ACTION_DEADLINE_SEC(60분,
 #   auto_repair 심층감사용 안전망)를 쉽게 초과한다. 90분으로 별도 지정 + subprocess 외곽
 #   timeout 도 함께 늘려야 harness 데드라인보다 subprocess timeout 이 먼저 터지지 않는다.
 _TRENDS_DEADLINE_SEC = 5400  # 90분

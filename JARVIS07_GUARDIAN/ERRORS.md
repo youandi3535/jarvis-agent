@@ -2,6 +2,77 @@
 
 ---
 
+## [464] 🔍 조사완료(결함아님) — 경제 브리핑 티스토리 1차 시도 품질점수 69.5/100 미달, [453]과 동일 클래스 확인 (2026-07-21)
+
+- **증상**: `error_log` id=3697 — `source=harness`, `module=JARVIS00_INFRA.harness.경제 브리핑 발행 — 티스토리`, `func_name=⑥ TS 대본 생성`, `message="[harness:경제 브리핑 발행 — 티스토리] attempt=1 step=⑥ TS 대본 생성: [품질점수] 종합 69.5/100 (70미달) — A=6.0/20 B=46.0/50 C=10.5/20 D=7.0/10"`, severity=medium.
+- **환경**: `JARVIS02_WRITER/prepublish_gate.py`(점수 게이트 호출) → `JARVIS02_WRITER/post_scorer.py::score_post()`(70점 임계 판정), `JARVIS00_INFRA/harness.py`(verify_loop, max_attempts=3).
+- **조사**: ERRORS.md [453] 선행 검색 — "A섹션이 0.0이 아니면(=llm_scores 정상 수신) 대부분 설계대로 작동한 재작성 트리거" 원칙에 따라, 실제 발행 프로세스(`economic_poster.py --scheduled`, PID 79607, 07:00:20 시작)가 아직 진행 중임을 `ps aux`로 확인 후 자연 종료를 기다리며 로그(`JARVIS02_WRITER/logs/economic_20260721_070020.log`, `scheduler.log`)를 재대조. attempt=1 실패 직후 이미지풀 소진(J06-tistory 제4조 패턴3, AI사진 폴백 폐기 정책상 정당한 빈슬롯) + 크로스 프로세스 락 경합(다른 프로세스가 `llm_exec.lock` 점유, 회로 무오염 분류) 이 반복 관측됐고, attempt 재시도 중 `[prepublish_gate] 통합 LLM 점수 없음(호출 실패/스킵) → 점수 게이트 통과(fail-open)`으로 자연 통과. 07:36:16 `scheduler.log`에 `✅ 경제 브리핑 포스터 완료` 기록 — 이는 `run_economic_poster()`의 `result.returncode == 0 and not failed` 분기(양쪽 플랫폼 모두 성공)에서만 찍히는 라인으로, 실제 네이버·티스토리 모두 발행 성공 확인. GUARDIAN incident 트리거(`_trigger_economic_incident`)도 호출되지 않음.
+- **헛다리**: 없음 — attempt=1 스냅샷만 보고 코드 결함으로 속단하지 않고, 라이브 프로세스 종료까지 관찰 후 결론.
+- **해결**: 코드 수정 없음. [453]과 동일 클래스 — harness verify_loop 가 설계대로 attempt 1 실패 → attempt 2(이상)에서 자연 통과 → 정상 발행까지 완주.
+- **파일**: 없음(조사만, 수정 없음).
+- **교훈**: [453]의 원칙이 경제 브리핑·티스토리 경로에도 동일하게 적용됨을 재확인 — harness 품질점수 미달은 A섹션 non-zero + attempt < max_attempts 조건에서 "결함 의심"보다 "진행 중인 정상 재시도"를 먼저 배제해야 하며, 가능하면 (본 건처럼) 프로세스 종료 후 최종 발행 성공 여부까지 확인해 결론의 확실성을 높일 것. 반복되는 이미지풀 소진(J06-tistory 제4조-3)과 락 경합(45s)은 각각 별도 분류(정책상 정당한 빈슬롯 / 회로 무오염 defer)로 이미 처리되고 있어 재조사 불필요.
+
+---
+
+## [463] ✅ 해결 — preflight internal_import 가 pyobjc(Quartz) 콜드임포트 레이스로 일시 폭발 — 최대 3회 재시도로 흡수 (2026-07-21)
+
+- **증상**: `error_log` — `source=preflight`, `module=JARVIS00_INFRA.preflight.internal_import`, `func_name=_check_internal_import`, `message="[preflight] internal_import/JARVIS08_PUBLISH.platforms.naver_poster: AssertionError: You must first install pyobjc-core and pyobjc: https://pyautogui.readthedocs.io/en/latest/install.html"`, severity=medium. `logs/daemon.log` 타임라인 대조 결과 2026-07-20 23:56:34 와 23:57:04 두 차례 발생했고, 그 직전(23:56:24)·직후(23:56:40, 23:56:45, 23:57:10, 23:57:14) 모두 동일 검증이 정상 통과 — 같은 프로세스군에서 6초 안에 자연 회복되는 전형적 레이스였다.
+- **환경**: `JARVIS00_INFRA/preflight.py::_check_internal_imports()`(Layer 0), `JARVIS08_PUBLISH/platforms/naver_poster.py`(대상 모듈, 실제 코드 결함 아님).
+- **원인**: `naver_poster.py`는 `pyautogui`를 **모든 호출을 함수 내부에서 지연(lazy) import** 한다(AST 파싱으로 모듈 top-level import 3건 — stdlib·pathlib·dotenv — 뿐임을 확인, `import pyautogui` 7곳 전부 `def` 안). 즉 `importlib.import_module("JARVIS08_PUBLISH.platforms.naver_poster")` 자체는 pyobjc(Quartz/AppKit)를 건드릴 수 없는 구조 — 이 모듈의 코드 버그가 아니다. 실제로는 `ensure_preflight()`가 `naver_cookie_refresher.py`·`economic_poster.py`·`radar_main.py` 등 **다수의 독립 subprocess 진입점**에서 각각 콜드 프로세스로 호출되는데, 그중 여러 개가 거의 동시에 뜨면 macOS pyobjc 브릿지(Quartz/AppKit objc 클래스 등록·메타데이터 캐시)가 프로세스 간 레이스를 일으켜 `import Quartz`가 드물게 스스로 폭발한다(`_pyautogui_osx.py`의 `try: import Quartz except: assert False, "..."`) — 이 예외가 *그 순간 import 루프가 마침 처리 중이던 모듈명*(naver_poster)에 귀속되어 보고된 것일 뿐, 근본 원인은 동시성 레이스지 naver_poster 자체가 아니다.
+- **헛다리**: 처음엔 naver_poster.py 상단에 숨은 `import pyautogui`가 있을 것으로 의심 → grep + `ast.parse()`로 전체 top-level import 노드를 전수 확인해 배제. `.venv` 의 pyobjc 설치 상태도 의심 → `pip show`로 pyobjc-core/pyobjc-framework-Quartz/Cocoa 12.1 정상 설치 확인 + 수동 `import Quartz` 성공 확인으로 배제.
+- **해결**: `_check_internal_imports()`를 모듈당 **최대 3회 재시도**(실패 시 0.5초 대기 후 재시도, 프로젝트 전역 "재시도 최대 3회" 원칙 준수)로 변경. Python은 모듈 실행 중 예외 발생 시 해당 모듈을 `sys.modules`에서 자동 제거하므로 재시도가 항상 깨끗한 재-import를 수행. 진짜 코드 결함(ImportError/AttributeError 등 결정론적 오류)은 3회 모두 동일하게 실패하므로 은폐되지 않고 그대로 보고됨 — 오직 레이스성 일시 실패만 흡수.
+- **파일**: `JARVIS00_INFRA/preflight.py`.
+- **교훈**: 보고된 오류의 `module` 필드는 *예외가 귀속된 위치*일 뿐 *예외의 발생 위치*가 아닐 수 있다 — 특히 여러 독립 프로세스가 동시에 같은 검증 루틴을 도는 구조에서는, 대상 모듈의 실제 코드(AST)를 먼저 확인해 "이 모듈이 그 예외를 낼 수 있는 구조인가"부터 검증할 것. pyobjc/Quartz 같은 OS 프레임워크 바인딩은 콜드 임포트 시 프로세스 간 레이스로 드물게 실패할 수 있는 범주로 알려져 있으므로, 이런 외부 프레임워크 import 검증에는 짧은 재시도가 정당한 방어책(코드 버그를 가리는 게 아니라 환경 레이스만 흡수).
+
+---
+
+## [462] ✅ 수동수정 — `delegate_to_claude_code` ReAct 도구가 Claude CLI spawn 직렬화(세마포어·크로스프로세스 락)를 우회 — writer 파이프라인과 경합 가능 (2026-07-20)
+
+- **증상**: 사용자가 [459]/[461]/[460] 사고 설명 도중 "짧은 시간에 요청이 몰리면 직렬로 나눠서 작업하도록 짰다면서 왜 그러냐"고 질문 → 코드 확인 결과 `shared/llm.py`의 실제 spawn 직렬화(in-process `BoundedSemaphore` + 크로스프로세스 fcntl 락, `LLM_MAX_CONCURRENCY` 기본 1)는 `invoke_text()`(writer 파이프라인) 호출부에만 걸려 있고, 같은 Claude Max 구독 CLI를 spawn하는 다른 두 경로 중 하나가 이를 우회하고 있었음. `shared/claude_sdk_compat.run_sdk_query()`(GUARDIAN Tier-2 자가수정·새벽 심층감사가 사용)는 [ERRORS 전수감사 커밋 6fb9e57, 2026-07-19 이전]에서 이미 `shared.llm._pace_spawn()`/`_acquire_llm_sem()`/`_proc_lock_acquire()`에 합류되어 있어 문제 없음(사용자에게 "GUARDIAN도 우회한다"고 설명한 것은 이 커밋을 못 보고 한 부정확한 설명 — 본 항목에서 정정). 반면 `JARVIS01_MASTER/agent_tools.py`의 `delegate_to_claude_code`(사용자 자유 문장 ReAct 위임 도구, Telegram 승인 게이트 통과 후 실행)는 `claude_code_sdk.query()`를 직접 호출하며 이 직렬화를 전혀 타지 않았음 — 동시에 PATH 수동 prepend(`/opt/homebrew/bin`만, `_EXTRA_PATHS` 5종 중 일부 누락)·`ANTHROPIC_API_KEY=""` OAuth 강제 누락(가짜 키 누수 가능)·MessageParseError 패치 보장 없음까지 `run_sdk_query()`가 이미 해결한 문제들을 전부 재노출하고 있었음.
+- **환경**: `JARVIS01_MASTER/agent_tools.py::delegate_to_claude_code()`, `shared/claude_sdk_compat.py::run_sdk_query()`.
+- **헛다리**: 없음 — grep으로 `claude_code_sdk` 직접 import 3곳(`shared/llm.py`·`claude_sdk_compat.py`·`agent_tools.py`)을 전수 확인 후 각각의 직렬화 여부를 코드로 검증.
+- **해결**: ① `run_sdk_query()`에 `allowed_tools: list[str] | None` 파라미터 추가(기존 호출자 2곳은 옵션 미사용이라 무영향). ② `delegate_to_claude_code()`를 `claude_code_sdk.query()` 직접 호출에서 `run_sdk_query()` 위임으로 전면 교체 — PATH·API 키·MessageParseError 패치·spawn 직렬화 4가지를 canonical wrapper 하나로 흡수(ADR 001 단일 진입점). 반환 계약(`{ok, returncode, stdout, stderr, duration}`)은 유지하되 내부적으로 `run_sdk_query()`의 `{returncode, stdout, stderr, elapsed, error_kind}`를 매핑.
+- **파일**: `shared/claude_sdk_compat.py`, `JARVIS01_MASTER/agent_tools.py`.
+- **교훈**: "직렬로 작업하도록 짰다"는 문서상의 설계 원칙(플랫폼 단위 직렬 — 실패 격리 목적)과 "실제로 동시 spawn을 막는 코드"(세마포어·락)는 서로 다른 메커니즘이다 — 후자가 존재해도 *새 진입점*(여기서는 ReAct 위임 도구)이 추가될 때마다 합류 여부를 확인하지 않으면 조용히 우회된다. Claude CLI를 spawn하는 모든 신규 코드는 직접 `claude_code_sdk.query()`를 부르지 말고 `run_sdk_query()` 경유를 기본값으로 삼을 것.
+
+---
+
+## [461] ✅ 해결 — [459]와 동일 클래스: 경제 브리핑 경로도 `deferred` 미전파로 GUARDIAN 오발동 가능 + 재발 방지(daemon 미재시작) (2026-07-20)
+
+- **증상**: [459]의 실사고는 테마(mRNA 21:33:47, 항공기부품 22:25:44) 티스토리에서만 관측됐지만, 같은 날 사용자 요청("완벽하게 해결··· 근본적인 원인")으로 인접 코드를 감사한 결과 `JARVIS02_WRITER/economic_poster.py::run()` → `JARVIS02_WRITER/scheduler.py::run_economic_poster()` 경로가 **[459]의 수정 대상에 전혀 포함되지 않은 채** 동일한 유실 패턴(`ActionResult.deferred` → subprocess 결과 파일에 미기록 → `failed` 리스트가 boolean 만으로 구성 → `_trigger_economic_incident()`가 deferred 플랫폼까지 그대로 GUARDIAN에 전달)을 그대로 가지고 있음을 코드 대조로 확인. 경제 경로는 subprocess 기반(`economic_poster.py --scheduled`)이라 결과가 `JARVIS_EP_RESULT_FILE` JSON을 통해서만 부모(scheduler.py)로 전달되는데, 이 JSON에 `naver_deferred`/`tistory_deferred` 필드 자체가 없었음(테마는 in-process 호출이라 반환 dict 하나로 해결되지만 경제는 프로세스 경계를 넘어야 해서 문제가 한 겹 더 깊었음).
+  - 추가로 [459]의 테마 쪽 수정 자체가 **커밋되지 않은 상태로 파일에만 존재**했고(`git diff HEAD` 확인), 데몬 프로세스는 그 수정이 파일에 쓰인 시각(21:38, mtime)보다 훨씬 이전인 18:07:43에 기동된 채였다 — Python import 캐시로 인해 22:25:44의 두 번째 테마 사고(항공기부품)는 이미 디스크에 존재하던 [459] 수정이 **로드되지 않은 옛 프로세스**에서 재발했을 가능성이 높음(CLAUDE.md "복사본을 진실로 믿지 말 것" / "재시작 전 검증 금지" 두 원칙과 정확히 일치하는 사례).
+- **환경**: `JARVIS02_WRITER/economic_poster.py::run()`(`_write_ep_partial()` 및 최종 `JARVIS_EP_RESULT_FILE` JSON 덤프), `JARVIS02_WRITER/scheduler.py::run_economic_poster()`(`failed` 산출부·`_trigger_economic_incident()` 호출부).
+- **헛다리**: 없음 — [459] 수정 커밋 전 `git diff HEAD -- JARVIS02_WRITER/scheduler.py`로 실제 변경 범위를 라인 단위로 확인한 뒤 경제 경로에 동일 패턴이 없음을 grep(`naver_deferred|tistory_deferred|economic`)으로 실증하고 착수.
+- **해결**: ① `economic_poster.py::run()` — `_nv_res`/`_ts_res`(ActionResult, `.deferred` 보유) 사전 선언 후 `_write_ep_partial()`과 최종 결과 JSON 양쪽에 `naver_deferred`/`tistory_deferred` 키 추가([459]와 동일한 필드명으로 하류 소비자 일관성 유지). ② `scheduler.py::run_economic_poster()` — 결과 파일에서 읽은 `_deferred` dict로 `_guardian_failed = [k for k in failed if not _deferred.get(k, False)]`를 산출해 GUARDIAN 트리거 조건과 `_trigger_economic_incident()` 호출 인자를 `failed`→`_guardian_failed`로 교체(로그용 `failed`는 그대로 유지). ③ [459]의 테마 쪽 미커밋 수정과 본 수정을 함께 커밋 + `./restart_daemon.sh`로 재기동해 재시작-전-검증 금지 원칙 준수.
+- **파일**: `JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/scheduler.py`.
+- **교훈**: 같은 버그가 플랫폼 직렬 파이프라인의 "동렬" 경로(테마/경제)에 반복 존재할 수 있다 — 한쪽을 고칠 때 반드시 자매 경로를 grep으로 대조할 것. 또한 GUARDIAN 자신(Tier-2 SDK)이 스스로 진단해 작성한 수정이라 해도 커밋·재시작 전까지는 "적용된 수정"이 아니라 "디스크 위의 초안"에 불과 — 수정 완료 보고와 배포 완료는 별개다.
+
+---
+
+## [460] ✅ 해결 — [459]의 "인프라 스로틀" 표시가 실제로는 하드코딩 timeout=300 부족이었음 — `writer_timeout()` 동적 산출로 교체 (2026-07-20)
+
+- **증상**: [459]는 `SDK timeout 300s — 수집된 응답: 0개`를 "인프라 스로틀"(Anthropic 쪽 rate-limit/회로차단)로 분류해 대응했지만, 같은 21시 사고의 실측 로그를 다시 보면 네이버 27,657토큰 대본이 292.1초 만에 완성되어 300초 한도를 가까스로 통과했고, 티스토리는 유사 분량에서 300초를 넘겨 잘렸다 — 즉 진짜 서버측 스로틀이 아니라 *생성 속도(≈88토큰/초) 대비 시간 예산이 애초에 부족*했던 사례가 섞여 있었다. `draft_writer.py` 8개 호출부에 `timeout=300`이 문자 그대로 박혀 있어 분량 정책(`length_manager.py`)이 늘어나도 시간 예산은 따라오지 않는 구조였다 — CLAUDE.md "복사본을 진실로 믿지 말 것" 표 1행("값을 코드에 복사")과 정확히 일치.
+  - 부수적으로 "인프라 스로틀" 한 라벨이 서로 다른 3가지 원인(①진짜 timeout ②일부 출력 후 절단(truncated) ③크로스프로세스 락 대기(lock_contention))을 뭉뚱그려 원인 파악을 어렵게 하고 있었음.
+- **환경**: `shared/llm.py`(`_collect()`의 throttled/hung/truncated 판정부), `JARVIS02_WRITER/draft_writer.py`(`_draft_invoke()` ×2·`_gen_section_call1/2/3()`·`_gen_economic_ts_nv_parallel()`), `JARVIS02_WRITER/tistory_html_writer.py`(`generate_article_html()` 로그부).
+- **헛다리**: 없음.
+- **해결**: ① `shared/llm.py`에 `writer_timeout()` 신설 — `LLM_WRITER_TIMEOUT_SEC` 환경변수(최소 60초) 우선, 없으면 `JARVIS00_INFRA.watchdog.BLOG_ACTION_DEADLINE_SEC`(harness 액션 전체 데드라인, 폴백 2400초)에서 `max(300, min(900, deadline/4))`로 역산 — 분량 정책이 바뀌어도 데드라인 예산과 같이 늘어남. ② `last_call_infra_reason()`/`infra_reason_label()` 신설 — timeout/truncated/lock_contention 3종을 각각 다른 문자열로 분리 노출. ③ `draft_writer.py` 8곳의 `timeout=300` → `timeout=writer_timeout()` 치환. ④ `tistory_html_writer.py`의 "인프라 스로틀 감지" 로그 한 줄을 `infra_reason_label()` 호출로 교체해 다음 사고 시 로그만 보고도 원인 종류를 바로 구분 가능.
+- **파일**: `shared/llm.py`, `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/tistory_html_writer.py`.
+- **교훈**: "인프라 스로틀"이라는 한 라벨 아래 서로 다른 근본원인(진짜 rate-limit vs 시간 예산 부족 vs 락 경합)을 뭉치면 재발 시마다 잘못된 처방(예: [459]처럼 GUARDIAN Tier-2 SDK를 호출해 "코드 버그"를 찾으려는 헛수고)이 반복된다. 원인 라벨은 판정 즉시 세분화해서 로그에 남길 것. 본 항목은 [461]과 같은 사고(mRNA·항공기부품)를 다른 레이어(LLM 호출 timeout budget vs GUARDIAN 응답 분류)에서 진단한 것으로, 두 수정 모두 필요.
+
+---
+
+## [459] ✅ 해결 — 테마 티스토리 인프라 스로틀 `deferred` 판정이 harness→scheduler 경계에서 유실되어 GUARDIAN Tier-2 SDK 낭비 (2026-07-20)
+
+- **증상**: `theme=mRNA(메신저 리보핵산)` 테마의 티스토리 액션(`⑤ 티스토리 대본 생성`)이 3회 연속(21:20:43·21:27:14·21:33:46) `SDK timeout 300s — 수집된 응답: 0개`(인프라 스로틀)로 `harness max_attempts`(3) 소진 → harness 자체는 이를 정확히 `deferred=True`(인프라 스로틀 지속, 다음 회차 자연 재시도)로 판정했음에도 `scheduler.py`가 이 구분 없이 GUARDIAN `incident_responder.respond_in_background()`를 그대로 트리거 → 저정보 텍스트(`"harness max_attempts 소진"`)만으로 `_classify()`가 unknown 판정 → 불필요한 Tier-2 Claude Code SDK 세션(최대 10분) 낭비. (본 세션 자체가 그 낭비된 Tier-2 세션.)
+- **환경**: `JARVIS02_WRITER/trend_theme_writer.py::run_all_themes()`, `JARVIS02_WRITER/scheduler.py::run_theme()`, `JARVIS07_GUARDIAN/incident_responder.py::_classify()`, `JARVIS07_GUARDIAN/severity.py::is_transient()`, `JARVIS00_INFRA/harness.py`(rank7/rank8 백오프·deferred 로직, ERRORS [446][447]에서 이미 검증).
+- **원인**: `run_all_themes()` 내부에서 `_ts_result.deferred`(harness가 계산)를 텔레그램 알림에는 반영했지만 함수 반환 dict 에는 담지 않아 유실 → `scheduler.py::run_theme()`가 `result.get("tistory", {}).get("success")` 만으로 `False`/`True` 이진 판정 → `data_empty`(동일 함수에 이미 존재하는 선례적 skip 패턴)와 달리 `deferred`는 대응하는 skip 로직이 없어 fail 리스트에 그대로 포함 → `incident_responder._classify()`의 로컬 `_TRANSIENT_KEYWORDS` 목록에 "인프라 스로틀"이 없어(반면 `severity.py`의 `_TRANSIENT_PATTERNS`엔 ERRORS [447]에서 이미 추가됨) 두 분류기가 드리프트된 상태였음 — CLAUDE.md "복사본을 진실로 믿지 말 것" 위반의 전형(계산된 판정을 경계에서 버림 + 판정 로직 중복·드리프트).
+- **헛다리**: 없음 — ERRORS.md [446][447][453] 선행 검색으로 harness deferred 설계가 의도된 것임을 먼저 확인한 뒤 `logs/scheduler.log`·`logs/daemon.log` 타임라인 대조(SDK timeout 3회 정확히 이 인시던트에만 귀속, 동시간대 다른 LLM 잡은 정상 성공)로 "harness 오판정" 가능성을 배제하고 유실 지점을 코드로 특정.
+- **해결**: ① `run_all_themes()` 반환 dict에 `tistory_deferred` 키 추가(harness `deferred` 값 그대로 전달). ② `scheduler.py::run_theme()`에 `_result_deferred` dict 추출 + `_guardian_fail = [k for k in fail if not _result_deferred.get(k, False)]`로 GUARDIAN 트리거 대상에서 deferred 플랫폼 제외(기존 `data_empty` skip과 동일한 패턴으로 통일). ③ `incident_responder._classify()`가 로컬 키워드 목록 검사 전에 `severity.is_transient()`(단일 진실 소스)를 우선 조회하도록 수정 — 향후 어떤 호출자든 "인프라 스로틀"·"데드라인 초과(블로킹)"·"종목 데이터 0개" 등 이미 검증된 transient 패턴을 담은 텍스트를 넘기면 자동으로 정확히 분류됨.
+- **파일**: `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS02_WRITER/scheduler.py`, `JARVIS07_GUARDIAN/incident_responder.py`.
+- **교훈**: 하위 레이어(harness)가 이미 정확히 계산한 판정을 상위 레이어(scheduler)로 넘길 때 유실하면, 상위 레이어는 저정보 텍스트에서 그 판정을 재추론해야 하고 이는 실패하기 쉽다 — 계산된 진실은 원본 그대로 전달할 것. 또한 "transient 여부" 같은 분류 로직이 `severity.is_transient()`와 `incident_responder._classify()` 두 곳에 중복 존재하면 한쪽만 갱신되어 드리프트가 발생 — 새 transient 패턴 추가 시 반드시 `severity.py`(단일 진실 소스) 갱신 + 그 소스를 우선 조회하는 구조로 재발 방지.
+
+---
+
 ## [456] ✅ 해결 — 경제 선계산 watchdog freeze(301s>300s) 강제종료 — chart_data.py `_cached_collect`에 beat() 배선 누락 (2026-07-19)
 
 - **증상**: `error_log` #3499 — `source=watchdog`, `module=JARVIS00_INFRA.watchdog`, `func_name=경제 선계산`, `message="정지 감지 — 경제 선계산: 멈춤(freeze) 301s > 300s 무진전"`, severity=medium, `traceback=NoneType: None`(watchdog 자체 합성 RuntimeError). `logs/daemon_stdout.log` 타임라인 대조 결과 06:05:06(KOSIS/KCI 등 fast 소스 전량 완료, "⏱ 2.5) 시장 dataset" 로그까지 28.2s 만에 도달) 직후 `[chart_data]` step3 멀티소스 루프가 "academic"(arXiv) 소스로 진입 — 06:05:07~06:07:10(약 123s, 쿼리 "현대 넥쏘 에너지·환경")·06:07:10~06:09:34+(쿼리 "현대 에너지·환경", 킬 시점까지 미완료) 두 차례 arXiv HTTP 429 재시도/백오프 구간 동안 watchdog 진행 신호가 단 한 번도 발생하지 않아 06:09:34 301s 시점에 freeze 강제종료(`os._exit 75`).
@@ -7983,6 +8054,18 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **검증**: 렌더 데이터 = 5시간 창 90%(대기) / 7일 창 54%(● 적용중) / 모델별 주간 Fable 100%(대기). `npx tsc --noEmit` 통과.
 - **파일**: `dashboard/app/page.tsx`
 - **교훈**: ① **모르는 것을 그럴듯하게 답하면 다음 진단까지 오염된다** — "SDK 한도 별도" 라는 근거 없는 한 문장이 이후 "한도 소진" 오진의 방증으로 재활용됐다. 확인 안 된 메커니즘은 *모른다고* 말할 것. ② 외부 API 응답을 UI 에 붙일 때 **구조화된 배열/목록 필드가 있으면 그것을 렌더** 할 것 — 개별 키를 골라 하드코딩하면 스키마 변화에 조용히 낡는다. ③ 사용자가 "네가 전에 이렇게 말했잖아" 라고 할 때, *기억을 방어하지 말고 데이터로 재검증* 할 것.
+
+## [460] 테마 티스토리 6/6 발행 실패 — "인프라 스로틀" 은 오분류, 실제 원인은 writer timeout 300s 부족 (2026-07-20)
+- **증상**: 21:00 테마 발행에서 네이버만 성공, 티스토리는 두 테마(mRNA·항공기부품) 모두 3시도 전부 실패 → `⏸ 인프라 스로틀 지속 — 발행 연기`. GUARDIAN 재발행도 실패. 7/16~19 는 매일 티스토리 1건 정상 발행되던 것이 7/20 에 0건.
+- **환경**: `JARVIS02_WRITER/draft_writer.py`(본문 생성), `shared/llm.py::_run_sdk_sync`, harness `theme-publish-*-tistory`(max_attempts=3, deadline 2400s).
+- **원인**: `SDK timeout 300s — 수집된 응답: 0개` 가 8건 전부의 실제 로그. 실측 생성 속도 **≈88 토큰/초** 인데 본문 분량이 커져 네이버가 **27,657 토큰을 292.1초** 에 생성 — 상한 300초를 *간신히* 통과했다. 대등한 분량의 티스토리는 314초가 필요해 벽을 넘었고, 부분 출력조차 없이(0 parts) 죽었다. `timeout=300` 이 `draft_writer.py` **12곳에 하드코딩** 되어 분량 정책이 늘어도 시간 예산이 따라오지 않은 것이 근본. 액션 데드라인은 2400초로 1500초 여유가 있었는데 쓰지 못했다.
+- **헛다리**(진단이 크게 헤맴): ① "Max 한도 소진" — 실측 5시간 창 잔여 97%·주간 45%. 무관. ② "오늘 넣은 `LLM_THROTTLE_NO_RETRY` 가 재시도를 없애 실패" — 해당 분기 로그 **0건**, 발동한 적 없음. ③ "cwd 격리로 컨텍스트가 바뀌어 실패" — 동일 프롬프트로 격리 ON/OFF 양쪽 성공(13,098/9,678 토큰). ④ "네이버 대량 생성 버스트가 티스토리를 스로틀" — 실패 직전 호출은 출력 37~6,809 토큰이고 간격도 6~11분. 버스트 인접성 없음. **이 헛다리들의 공통 원인은 로그·텔레그램이 timeout 을 "인프라 스로틀" 로 표기한 것** — 라벨이 한도/rate-limit 쪽으로 진단을 몰았다.
+- **해결**:
+  1. **timeout 단일 진입점화 + 동적 도출** — `shared/llm.writer_timeout()` 신설. `watchdog.BLOG_ACTION_DEADLINE_SEC`(SSOT)의 1/4 로 도출(하한 300·상한 900) → 현재 **600초**. 데드라인이 바뀌면 자동 추종. `draft_writer.py` 의 하드코딩 12곳 전부 치환(잔존 0). 환경변수 `LLM_WRITER_TIMEOUT_SEC` 로 무배포 조정 가능. 3회 재시도 최악 1800초 < 데드라인 2400초 확인.
+  2. **미완결 사유 분리 표기** — `last_call_infra_reason()` + `infra_reason_label()` 신설. 종전엔 `last_call_infra_incomplete()` 가 스로틀·timeout·절단·락경합을 *한 덩어리* 로 True 반환해 전부 "인프라 스로틀" 로 표기됐다. 이제 `timeout`(생성 시간 초과 — 분량 대비 timeout 부족) / `throttle`(서버가 호출 거절) / `truncated` / `lock_contention` 을 구분해 로그·화면에 표기.
+- **검증**: 발행급 대량 프롬프트로 재현 → **14,436 토큰 / 173초 성공**(83 토큰/초, 종전 300초 상한이면 실패 구간). `writer_timeout()`=600 확인, 하드코딩 잔존 0.
+- **파일**: `shared/llm.py`, `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/tistory_html_writer.py`
+- **교훈**: ① **오분류 라벨 하나가 진단 전체를 오염시킨다** — timeout 을 "스로틀" 로 표기해 한도·rate-limit 을 4번 의심하게 만들었다. 미완결 사유는 반드시 원인별로 분리해 표기할 것. ② **시간 예산도 '복사본을 진실로 믿는' 대상** — `timeout=300` 을 12곳에 복사해둔 탓에 분량 정책이 커져도 따라오지 못했다. 상한은 상위 SSOT(액션 데드라인)에서 *도출* 할 것. ③ 두 플랫폼이 직렬 실행될 때 **뒤에 오는 쪽이 항상 먼저 한계에 걸린다** — 앞 단계가 임계값을 아슬아슬하게 통과하면(292/300초) 뒤 단계 실패는 시간문제다. 임계 근접(90% 이상)은 그 자체로 경보 대상.
 
 ---
 ### [2026-07-11 05:01] ✅ 자동수정 — RuntimeError
