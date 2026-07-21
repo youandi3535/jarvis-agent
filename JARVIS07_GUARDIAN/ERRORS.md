@@ -2,6 +2,32 @@
 
 ---
 
+## [466] 🔍 조사완료(결함아님) — [465] 후속: 테마 "편의점" 티스토리 2차(최종) 시도도 69.5/100 미달했으나 harness `best-so-far 발행`이 3분 뒤 정상 발행 완료 확인 (2026-07-21)
+
+- **증상**: `error_log` id=3708 — `source=harness`, `module=JARVIS00_INFRA.harness.theme-publish-편의점-tistory`, `func_name=⑤ 티스토리 대본 생성`, `message="[harness:theme-publish-편의점-tistory] attempt=2 step=⑤ 티스토리 대본 생성: [품질점수] 종합 69.5/100 (70미달) — A=10.5/20 B=42.0/50 C=11.0/20 D=6.0/10"`, severity=medium. [465]는 attempt=1(65.0점)을 "정상 검증 순환, 진행 중"으로 결론지었는데, 이번엔 `DEFAULT_MAX_ATTEMPTS=2`(2026-07-21 축소)의 **마지막 시도**까지 소진된 뒤라 [465]와 달리 "재시도가 남아있다"는 배제 논리를 그대로 쓸 수 없어 별도 확인 필요했음.
+- **환경**: `JARVIS00_INFRA/harness.py`(`run_action` — max_attempts 도달 후 처리부, L845-881), `JARVIS02_WRITER/prepublish_gate.py`(L161-164, 점수게이트 Issue `kind="engagement"` 부여), `JARVIS02_WRITER/trend_theme_writer.py`(L931, prepublish 이슈 kind 보존 배선).
+- **조사**: ① ERRORS.md 선행 검색 — [465]가 동일 module·동일 테마의 attempt=1 선례. attempt=2로 재발한 것 확인. ② `daemon.log` 타임라인 대조 — 21:36:42 attempt=1 실패(65.0) → GUARDIAN #3707 Tier-2 세션(이전 세션) → 21:49:00 attempt=2도 실패(69.5, unfixed=1) → GUARDIAN #3708 Tier-2 세션(본 세션) 즉시 재기동. ③ `harness.py` L860-873 "best-so-far 발행" 로직 코드 대조 — max_attempts 소진 후 마지막 미해결 이슈가 *전부* `kind="engagement"`(사실성·구조 결함 0, 순수 품질점수 미달)이면 escalation(미발행) 대신 최선 대본을 그대로 송출하도록 설계돼 있음을 확인. `prepublish_gate.py` L161-164에서 이 이슈가 정확히 `kind="engagement"`로 태깅되고, `trend_theme_writer.py` L931이 이 kind를 그대로 보존해 harness Issue로 전달함을 배선 추적으로 확인(kind 오염 없음 — CLAUDE_WRITER.md "게이트 Issue는 factuality/engagement, draft_quality 아님" 원칙 준수). ④ 로그 실측 — 21:52:23 `"✅ best-so-far 발행 — 품질점수(100점)만 미달(2회), 사실성·구조 결함 없어 최선 대본 송출: theme-publish-편의점-tistory"` 확인, 즉 GUARDIAN #3708 세션(본 세션) 착수 약 3분 뒤 harness 자체가 정상 발행을 완주. ⑤ DB 실측(`post_analysis`) — id=222 `platform='tistory', title='편의점 관련주 대장주는 롯데지주, 7종목 실적은?', created_at='2026-07-21 21:52:23'` 존재 확인(naver id=221도 21:28:55 정상 발행) — 네이버·티스토리 양쪽 모두 실제 발행 완료.
+- **결론**: 코드 결함 아님. `max_attempts` 소진은 "미발행"을 뜻하지 않는다 — 사용자 박제(2026-07-19) "best-so-far 발행" 안전망이 정확히 설계된 조건(엔게이지먼트 점수만 미달, 사실성·구조 결함 0)에서 발동해 좋아지던 글을 버리지 않고 발행을 완주했다. [465]가 남긴 관찰(GUARDIAN Tier-2 escalation이 harness 재시도와 `LLM_MAX_CONCURRENCY=1` 세마포어를 공유해 상호 지연 가능)이 본 건에서도 재현됐지만, best-so-far 경로는 LLM 호출이 없는 `action_def.send(state)`(Selenium 발행)라 세마포어 경합의 영향을 받지 않고 예정대로 완주함.
+- **헛다리**: 없음 — 발행 완료 여부를 로그 문자열 검색으로 속단하지 않고 `post_analysis` DB 실측까지 대조 후 결론.
+- **조치**: 코드 변경 0건. `error_log` id=3708 은 `wontfix`(정상 검증 순환 + best-so-far 안전망 정상 작동) 처리 대상.
+- **교훈**: harness 품질점수 미달 오류가 *마지막 attempt*에서 발생했다고 해서 "미발행 확정"으로 속단하지 말 것 — `kind` 가 전부 `engagement`(순수 점수 미달, correctness 결함 0)이면 `best-so-far 발행` 안전망이 자동으로 최선 대본을 송출한다. 이 경로는 GUARDIAN Tier-2 세션이 투입한 SDK 세마포어와 무관하게 진행되므로, [465]의 "빠른 종료로 세마포어 반납" 원칙에 더해 "발행 완료 여부는 DB(`post_analysis`)로 최종 확인" 절차를 표준 조사 순서에 포함할 것.
+- **파일**: 없음 (조사만).
+
+---
+
+## [465] 🔍 조사완료(결함아님) — 테마 "편의점" 티스토리 1차 시도 품질점수 65.0/100 미달, [453][464]와 동일 클래스 + GUARDIAN Tier-2 세션이 LLM 세마포어로 harness 재시도를 지연시킬 수 있음 확인 (2026-07-21)
+
+- **증상**: `error_log` id=3707 — `source=harness`, `module=JARVIS00_INFRA.harness.theme-publish-편의점-tistory`, `func_name=⑤ 티스토리 대본 생성`, `message="[harness:theme-publish-편의점-tistory] attempt=1 step=⑤ 티스토리 대본 생성: [품질점수] 종합 65.0/100 (70미달) — A=9.0/20 B=39.0/50 C=11.0/20 D=6.0/10"`, severity=medium.
+- **환경**: `JARVIS02_WRITER/prepublish_gate.py`(점수 게이트) → `JARVIS02_WRITER/post_scorer.py::score_post()`(70점 임계) → `JARVIS00_INFRA/harness.py`(verify_loop, `DEFAULT_MAX_ATTEMPTS=2` — 2026-07-21 3→2 변경 후 최초 관측 사례) · `JARVIS06_IMAGE/injectors/image_injectors.py`(제4조-3 이미지 부재 검출).
+- **조사**: ① ERRORS.md 선행 검색 — [453]/[464] 동일 클래스("A섹션 non-zero=llm_scores 정상 수신 → 대부분 설계대로 작동한 재작성 트리거") 확인. 본 건 A=9.0/20 (0 아님) — 정상 LLM 판정값, [445]류(호출 실패→0점 오채점) 재발 아님. ② `daemon.log` 대조 — 같은 harness 액션의 네이버 leg(`theme-publish-편의점-naver`)는 21:00:36 수집 시작 → evidence pack `fact 16개(수치 14)/문서 15건` 확보 → 21:22:52 검증 통과 → 21:28:55 송출 완료로 *정상 발행 완료*. 티스토리 leg 는 21:28:55 시작 → 21:35:43 `[image-injector/제4조-3] 글 연속+이미지 부재, 9개 섹션, 삽입 불가 — 이미지 풀 미제공 또는 소진` → 21:36:41 `65.0점(A=9.0 B=39.0 C=11.0 D=6.0) → 재작성`. B섹션(50점 만점 중 39.0) 감점 원인이 이미지 부족과 일치 — CLAUDE_WRITER.md 박제 정책("본문 이미지=실데이터 인포그래픽만, 데이터 소진 시 폴백 없이 빈 슬롯")대로 동작한 *의도된 트레이드오프*이며 [453]에서 이미 동일 원인·결론 확인됨. ③ attempt=1 < max_attempts=2 — harness 는 설계상 attempt=2 를 자동 재시도해야 함. 그런데 21:36:42 GUARDIAN 이 error_log #3707 을 Tier1(패턴·Bandit, 전부 실패)→Tier2(LLM, `AutoRepair/Targeted` = 본 세션) 로 즉시 escalate. `guardian_agent.py:521-528` 의 `_on_error_detected` 는 `threading.Thread(target=_orchestrate, daemon=True)` 로 별도 스레드 처리(이벤트루프 블로킹 방지 의도)라 harness 메인 루프 자체를 직접 막지는 않지만, `shared/llm.py:359-360` 의 `_LLM_SPAWN_SEM = BoundedSemaphore(LLM_MAX_CONCURRENCY=1)` 은 *프로세스 전역* 이고 [462] 수정으로 GUARDIAN Tier-2 의 `run_sdk_query()` 도 이 세마포어에 합류되어 있음 — 즉 본 Targeted AutoRepair 세션(나 자신)이 세마포어를 쥐고 있는 동안 harness attempt=2 의 TS 대본 생성(`invoke_text()`)도 같은 세마포어를 기다려야 해 *간접적으로* 재시도가 지연될 수 있음. 조사 시점(21:36:43~21:44:49, 약 8분) 까지 attempt=2 로그 미관측은 이 경합과 정합.
+- **결론**: 코드 결함 아님. [453]/[464]와 동일 클래스 — Layer 3 검증 순환이 정상 작동해 품질 미달 초안을 정확히 차단했고, harness 는 attempt=2 로 자동 재시도할 설계. 다만 GUARDIAN Tier-2 escalation 이 attempt 소진 여부(`attempt < max_attempts`)를 확인하지 않고 매 attempt 실패마다 무조건 Tier-2 SDK 세션을 띄우는 현재 정책은, `LLM_MAX_CONCURRENCY=1` 환경에서 harness 자체 재시도와 자원(세마포어) 경합을 일으켜 *재시도를 오히려 늦출 수 있는 부작용*이 있음 — 다음 유사 재발 시 개선 후보(예: 재시도 여지가 남은 harness 품질점수 미달은 Tier-2 즉시 escalate 대신 학습 기록만 남기고 최종 attempt 실패 시에만 Tier-2 호출)로 남김. 본 세션은 코드 수정 없이 신속 종료해 세마포어를 즉시 반납.
+- **헛다리**: 없음 — [445](0점 오채점 버그) 재발 여부·data_empty 해당 여부·attempt 잔여 여부를 순차 배제 후 결론.
+- **조치**: 코드 변경 0건. `error_log` id=3707 은 `wontfix`(정상 검증 순환) 처리 대상.
+- **교훈**: [453]/[464]의 원칙이 `DEFAULT_MAX_ATTEMPTS=2`(2026-07-21 축소) 환경에서도 동일 적용됨. 추가로, GUARDIAN Tier-2 escalation 자체가 harness 재시도와 `LLM_MAX_CONCURRENCY=1` 세마포어를 공유해 상호 지연을 유발할 수 있다는 새 관찰 — "결함 아님" 판정이 났다면 분석 세션을 신속히 종료하는 것 자체가 시스템에 대한 실질적 기여(세마포어 반납)임을 인지할 것.
+- **파일**: 없음 (조사만).
+
+---
+
 ## [464] 🔍 조사완료(결함아님) — 경제 브리핑 티스토리 1차 시도 품질점수 69.5/100 미달, [453]과 동일 클래스 확인 (2026-07-21)
 
 - **증상**: `error_log` id=3697 — `source=harness`, `module=JARVIS00_INFRA.harness.경제 브리핑 발행 — 티스토리`, `func_name=⑥ TS 대본 생성`, `message="[harness:경제 브리핑 발행 — 티스토리] attempt=1 step=⑥ TS 대본 생성: [품질점수] 종합 69.5/100 (70미달) — A=6.0/20 B=46.0/50 C=10.5/20 D=7.0/10"`, severity=medium.
@@ -8066,6 +8092,24 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **검증**: 발행급 대량 프롬프트로 재현 → **14,436 토큰 / 173초 성공**(83 토큰/초, 종전 300초 상한이면 실패 구간). `writer_timeout()`=600 확인, 하드코딩 잔존 0.
 - **파일**: `shared/llm.py`, `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/tistory_html_writer.py`
 - **교훈**: ① **오분류 라벨 하나가 진단 전체를 오염시킨다** — timeout 을 "스로틀" 로 표기해 한도·rate-limit 을 4번 의심하게 만들었다. 미완결 사유는 반드시 원인별로 분리해 표기할 것. ② **시간 예산도 '복사본을 진실로 믿는' 대상** — `timeout=300` 을 12곳에 복사해둔 탓에 분량 정책이 커져도 따라오지 못했다. 상한은 상위 SSOT(액션 데드라인)에서 *도출* 할 것. ③ 두 플랫폼이 직렬 실행될 때 **뒤에 오는 쪽이 항상 먼저 한계에 걸린다** — 앞 단계가 임계값을 아슬아슬하게 통과하면(292/300초) 뒤 단계 실패는 시간문제다. 임계 근접(90% 이상)은 그 자체로 경보 대상.
+
+## [461] 티스토리 본문 이미지 0개 — 데이터셋 제목이 *산문에 언급되기만 해도* 차트를 스킵 (2026-07-21)
+- **증상**: 티스토리 발행 초기에 `⚠️ 제4조 금지 패턴 3 — 글 연속 + 이미지 부재 / 검출: 9개 섹션 / 삽입 불가 — 이미지 풀 미제공 또는 소진` 텔레그램 경고. **티스토리만**, 경제 브리핑·테마주 **양쪽 모두** 동일 발생. 네이버는 정상.
+- **환경**: `JARVIS06_IMAGE/draft_processor.py::_next_data_infographic`(본문 인포그래픽 단일 경로 — 경제·테마 공통), 커밋 `d948acb`(2026-07-05, ERRORS [362]-[364]) 도입분.
+- **원인**: 중복 방지 조건이 **본문 HTML 전체를 부분문자열 검색** 했다.
+  ```python
+  if _title in used_titles or (html_so_far and _title and _title in html_so_far): continue
+  ```
+  `used_titles`(실행 내 중복 방지)는 정상이나, 뒤쪽 `_title in html_so_far` 가 **산문 언급까지 중복으로 오판**한다. 티스토리 대본은 수치를 문장으로 풀어 쓰는 성향이라("통계청 자료를 보면 **편의점 품목별 매출 증감률 추이**가…") 데이터셋 제목과 그대로 겹쳤고, 겹친 데이터셋이 전부 스킵돼 **본문 이미지 0개** → 헌법 제4조(글 연속+이미지 부재) 위반 경고. 실제 발행글에서 제목형 표현 7종이 본문에 등장함을 확인. **데이터를 성실히 설명한 글일수록 차트가 사라지는** 역설 — 잘 쓸수록 벌받는 구조.
+- **헛다리**: ① "네이버가 먼저 datasets 를 소비해 티스토리에 빈 풀이 간다" — `_used_titles` 는 `_process_draft_impl` 안에서 매 호출 새로 생성되므로 플랫폼 간 공유 아님(반증). ② "티스토리 본문이 더 길어서" — 실측 네이버 5,147자 / 티스토리 5,225자로 **길이 차 거의 없음**. 원인은 길이가 아니라 *서술 방식*(수치를 문장으로 풀어 쓰는 성향). ③ "`본문 이미지 N < 최소 5` 로그가 없으니 top-up 에 도달 못 했다" — 해당 출력이 `print()` 라 데몬이 stdout 을 `/dev/null` 로 버려 로그에 안 남았을 뿐. **로그 부재를 근거로 삼은 오판**.
+- **해결**:
+  1. **개념 교정** — 산문에서 제목을 언급하는 것은 *중복이 아니라 이상적인 짝* 이다(헌법 제4조 "글↔이미지 교차 배치"가 바로 그 형태를 요구). 진짜 중복은 **이미 시각 요소로 그려진** 경우뿐.
+  2. **단일 진입점** `already_visualized(title, html)` 신설 — `<figure>`·`<table>`·`<figcaption>`·`<img>` 블록 **안** 에 제목이 있을 때만 중복 판정. 산문은 통과. 판정 규칙 복사 금지.
+  3. **진단 가시성** — `본문 이미지 N < 최소 M` / `데이터 소진` 을 `print()` → `log.warning()` 으로 승격하고 `datasets` 개수를 함께 남겨, 다음엔 "수집 실패인지 중복 판정 과잉인지" 를 로그만으로 가른다.
+  4. **재발 차단** — precommit `visualdup` 카테고리 신설(총 50종). 본문 전체 대상 raw 제목 검색(`_title in html_so_far`) 을 커밋 단계에서 차단.
+- **검증**: 단위 — 산문 언급 `False` / `figure`·`img alt` `True` / `table` 헤더 `True`. 실동작 — 사고 재현 시나리오(산문에 제목 있는 본문)에서 수정 전 생성 실패 → **수정 후 인포그래픽 생성 성공**, 이미 `figure` 로 그려진 본문은 의도대로 스킵. 검사기 — 옛 코드 복원 시 `visualdup/prose-match` 검출, 복구 시 해소.
+- **파일**: `JARVIS06_IMAGE/draft_processor.py`, `shared/precommit_check.py`
+- **교훈**: ① **중복 판정의 대상을 정확히 좁힐 것** — "본문에 있으면 중복" 은 직관적이지만, 글과 그림이 *같은 것을 다루는 것* 은 중복이 아니라 좋은 편집이다. 판정 대상은 *의미* 가 아니라 *매체*(시각 요소)여야 한다. ② **`print()` 는 데몬에서 사라진다** — 진단에 필요한 정보는 반드시 `log` 로. 이번에도 로그 부재를 "코드가 거기 도달 못 함" 으로 오독해 조사가 한 바퀴 돌았다. ③ 플랫폼 한쪽만 증상이 나면 *플랫폼 고유 코드* 보다 **입력 데이터의 성향 차이** 를 먼저 의심할 것 — 여기서는 공통 코드에 티스토리 대본의 서술 습관이 얹혀 발현됐다.
 
 ---
 ### [2026-07-11 05:01] ✅ 자동수정 — RuntimeError

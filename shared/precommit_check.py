@@ -1165,6 +1165,37 @@ def check_copytruth(report: Report) -> None:
 
 CATEGORIES["copytruth"] = check_copytruth
 
+def check_visual_dup(report: Report) -> None:
+    """★ 시각 중복 판정이 *산문* 을 잡지 못하게 강제 (ERRORS [461], 2026-07-21).
+
+    사고: `_title in html_so_far` 로 본문 전체를 부분문자열 검색해, 데이터셋 제목이
+      산문에 언급되기만 해도 차트를 스킵했다 → 데이터를 성실히 설명한 글일수록
+      이미지 0개 → 헌법 제4조 위반. 티스토리 경제·테마 양쪽에서 재현.
+    규칙: 중복 판정은 `already_visualized()` 단일 진입점만 사용한다.
+      본문 HTML 전체를 대상으로 한 raw `in html` 제목 검색은 금지.
+    """
+    cat = "visualdup"
+    pat = re.compile(r"_title\s+in\s+html_so_far|title\s+in\s+html_so_far")
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        if rel_s == "shared/precommit_check.py":
+            continue
+        text = _read_py(p)
+        if text is None:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if pat.search(line):
+                report.add(Violation(
+                    cat, "visualdup/prose-match", rel_s, i,
+                    "산문 포함 본문 전체를 제목 부분문자열로 검색 — already_visualized() 사용 필수 (ERRORS [461])"))
+    report.checks_run += 1
+
+
+CATEGORIES["visualdup"] = check_visual_dup
+
+
 
 def run(categories: list[str] | None = None) -> Report:
     """검증 실행. categories=None 이면 전체."""
