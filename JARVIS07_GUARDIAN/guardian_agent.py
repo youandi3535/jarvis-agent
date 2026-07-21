@@ -468,8 +468,17 @@ def _orchestrate(error_id: int):
         severity = _escalate_severity(error_record)
         error_record = {**error_record, "severity": severity}  # 상향된 값으로 갱신
 
+        # ── 안전장치 2.5: DB 레벨 원자적 선점 (★ 프로세스 간·중복 디스패치 경쟁 차단) ──
+        #    in-memory _processing 은 같은 프로세스 내 스레드만 방어한다. bus 재전달
+        #    (dispatch_pending 폴백)과 job_retry_pending 스윕이 겹치면 서로 다른 스레드가
+        #    거의 동시에 이 지점까지 통과할 수 있다 (관찰: #3773 동일 오류에 Tier-2 세션
+        #    2개가 2.5초 간격으로 중복 기동 — LLM_MAX_CONCURRENCY=1 락 경합을 스스로 악화).
+        #    UPDATE...WHERE 조건부 갱신은 SQLite 가 직렬화하므로 두 번째 호출은 반드시 실패.
+        if not _db.try_claim_error(error_id, claim_status="analyzing"):
+            log.info(f"[GUARDIAN] #{error_id} 이미 처리 착수됨(DB 선점 실패) — 중복 오케스트레이션 skip")
+            return
+
         log.info(f"[GUARDIAN] 오케스트레이터 시작 — #{error_id} [{severity}] {error_type}")
-        _db.mark_error_status(error_id, "analyzing")
 
         # ── Tier 1: 패턴 수정 — 모든 심각도 시도 (Bandit, LLM 없음, 안전) ─
         #    (Bandit 보상은 pattern_fixer/error_fixer 내부에서 자동 기록)

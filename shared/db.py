@@ -1733,6 +1733,24 @@ def mark_error_status(error_id: int, status: str):
         conn.execute("UPDATE error_log SET status=? WHERE id=?", (status, error_id))
 
 
+def try_claim_error(error_id: int, claim_status: str = "analyzing",
+                     from_statuses: tuple = ("new", "ignored")) -> bool:
+    """오류 처리 착수를 DB 레벨에서 원자적으로 선점.
+
+    in-memory 집합(guardian_agent._processing)은 같은 프로세스 내 스레드만 방어 —
+    bus 재전달(dispatch_pending 폴백)·job_retry_pending 스윕이 겹치면 서로 다른
+    스레드가 동시에 오케스트레이터 진입점을 통과할 수 있다. UPDATE...WHERE 조건부
+    갱신은 SQLite 자체가 직렬화하므로 두 번째 호출은 반드시 rowcount=0 을 받는다.
+    """
+    placeholders = ",".join("?" for _ in from_statuses)
+    with get_db() as conn:
+        cur = conn.execute(
+            f"UPDATE error_log SET status=? WHERE id=? AND status IN ({placeholders})",
+            (claim_status, error_id, *from_statuses),
+        )
+        return cur.rowcount > 0
+
+
 def bump_llm_attempts(error_id: int) -> int:
     """Tier 2(LLM) 시도 횟수 +1 하고 갱신된 값 반환 (job_retry_pending 무한 재시도 캡 판정용)."""
     with get_db() as conn:

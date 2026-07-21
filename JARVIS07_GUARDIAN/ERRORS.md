@@ -2,6 +2,30 @@
 
 ---
 
+## [471] ★ GUARDIAN `_orchestrate()` 중복 동시 실행 — DB 레벨 원자적 선점 부재로 Tier-2 세션 2개 중복 기동, 스스로 lock_contention 악화 (2026-07-22)
+
+- **증상**: [470] 조사 중 `daemon.log`에서 동일 `error_id=#3773`에 대해 `[GUARDIAN] 오케스트레이터 시작` 로그가 2.5초 간격으로 **2회** 찍히고, 각각 독립된 `AutoRepair/Targeted 시작` (Claude Code SDK Tier-2) 세션이 병렬로 기동 — 765초·917초 뒤 각각 `SDK 수정 실패 → status=wontfix` 로 종료.
+- **원인**: `guardian_agent.py::_orchestrate()`의 중복 방지 가드가 `_fix_lock`(`threading.Lock`) + `_processing`(in-memory `set`) 뿐이었음 — 이는 *같은 프로세스 내 스레드*만 방어한다. 그런데 오류 발견 경로가 두 갈래다: ① `bus` 이벤트 구독(`_on_error_detected`, `ERROR_DETECTED`) — 프로세스 간 전달은 `dispatch_pending()` DB-poll 폴백 경유. ② `job_retry_pending()`의 10분 주기 DB 스윕(`status="new"` 재조회). 두 경로가 거의 동시에 같은 error_id에 도달하면 각각 다른 스레드가 in-memory 가드를 모두 통과 → `_db.mark_error_status(error_id, "analyzing")` 가 단순 UPDATE라 원자적 선점이 아니었음(둘 다 그냥 덮어씀). 결과적으로 `LLM_MAX_CONCURRENCY=1` 락을 두 세션이 서로 경합 → 조사 대상이던 `lock_contention` 증상을 GUARDIAN 자신이 악화시키는 자기 강화 루프.
+- **헛다리**: 없음 — [470]의 정상 케이스 조사 도중 로그 대조로 우연히 발견, 코드 재현 없이 실제 daemon.log 타임스탬프로 확정.
+- **조치**: `shared/db.py`에 `try_claim_error(error_id, claim_status="analyzing", from_statuses=("new","ignored"))` 신설 — `UPDATE error_log SET status=? WHERE id=? AND status IN (...)` 조건부 UPDATE(SQLite가 자체 직렬화, `rowcount>0`이면 선점 성공). `guardian_agent.py::_orchestrate()`의 무조건 `mark_error_status(error_id,"analyzing")` 호출을 이 함수로 교체 — 실패 시(이미 다른 스레드/프로세스가 선점) 즉시 `return`. `python -m py_compile` 통과 + 라이브 스모크 테스트(같은 error_id 2연속 claim → 1번째 True·2번째 False) 확인.
+- **파일**: `shared/db.py`(+18줄, `try_claim_error` 신설), `JARVIS07_GUARDIAN/guardian_agent.py`(+11줄, `_orchestrate()` 게이트 교체).
+- **교훈**: in-memory 락/집합은 *같은 프로세스 내*에서만 유효 — 오류 발견 경로가 bus 구독과 주기 DB 스윕처럼 서로 다른 스레드/프로세스에서 동시에 진입 가능하면 반드시 DB 레벨 compare-and-swap(조건부 UPDATE)으로 선점해야 한다. GUARDIAN 자신의 중복 실행이 조사 중이던 lock_contention 심각도를 부풀릴 수 있다는 점도 향후 유사 조사 시 고려할 것 (락 경합 원인 후보에 "GUARDIAN 자기 자신의 중복 세션"도 포함).
+
+---
+
+## [470] 🔍 조사완료(결함아님) — 경제 브리핑 티스토리 1차 시도 크로스 프로세스 락 경합, [439][440][464]와 동일 클래스 재확인 (2026-07-22)
+
+- **증상**: `source=harness`, `module=JARVIS00_INFRA.harness.경제 브리핑 발행 — 티스토리`, `func_name=⑥ TS 대본 생성`, `message="[harness:경제 브리핑 발행 — 티스토리] attempt=1 step=⑥ TS 대본 생성: 락 경합 — 다른 호출이 점유 중 — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"`, severity=medium.
+- **환경**: `shared/llm.py` `_proc_lock_acquire()`(크로스 프로세스 `fcntl.flock`, `~/.jarvis/llm_exec.lock`) → `_run_sdk_sync`/`_invoke_sdk_vision` → `invoke_text()` → `JARVIS00_INFRA/harness.py` verify_loop(`DEFAULT_MAX_ATTEMPTS=2`).
+- **조사**: ① ERRORS.md 선행 검색 — [464](동일 module·동일 func_name, "락 경합 반복 관측 후 재시도로 자연 통과·양쪽 플랫폼 발행 성공")·[439][440](크로스 프로세스 락 자체의 설계 근거) 확인. ② `JARVIS02_WRITER/logs/economic_20260722_070017.log` 실측 — attempt=1 도중 `크로스 프로세스 잠금 45s 대기 초과 — lock_contention (회로 무오염, defer 위임)` 5회 반복 후 `[harness] ⚠️ 검증 실패 (시도 1/2)` → `[prepublish_gate] 통합 LLM 점수 없음(호출 실패/스킵) → 점수 게이트 통과(fail-open)`으로 자연 진행. ③ `scheduler.log` — `07:00:17 ⏰ 경제 브리핑 포스터 실행 시작` → `07:33:56 ✅ 경제 브리핑 포스터 완료`. ④ `post_analysis` DB 실측 — `id=223 platform=naver, created_at=2026-07-22 07:19:33` / `id=224 platform=tistory, created_at=2026-07-22 07:33:50` 양쪽 모두 정상 발행 확인.
+- **결론**: 코드 결함 아님. `lock_contention`은 `shared/llm.py`가 설계상 의도한 "일시적 자원 경합 → hung 아님(회로차단기 미카운트) → defer → 다음 attempt/자연 진행"이며, 메시지 자체에 "(일시적, 다음 시도/회차 재개)"가 명시돼 있다. 오늘도 attempt=1 실패 직후 정확히 그 설계대로 자연 통과해 네이버·티스토리 양쪽 모두 발행 완료.
+- **헛다리**: 없음 — [464]와 동일 클래스임을 로그 문자열만으로 속단하지 않고 scheduler.log 완료 라인 + `post_analysis` DB 실측까지 대조 후 결론.
+- **조치**: 코드 변경 0건. 해당 error_log는 `wontfix`(정상 설계 동작) 처리 대상.
+- **파일**: 없음 (조사만).
+- **교훈**: [464]의 원칙이 재확인됨 — `lock_contention`이 다른 프로세스(예: GUARDIAN 자신의 Tier-2 세션)와의 일시적 자원 경합으로 attempt=1에서 발생해도, harness는 attempt=2 또는 fail-open 경로로 자연 진행하도록 이미 설계돼 있다. 이 패턴이 재발할 때마다 코드를 다시 조사하지 말고 scheduler.log 완료 라인 + DB 발행 기록으로 최종 결과만 빠르게 확인할 것.
+
+---
+
 ## [469] ★★ 데몬 재시작이 테마글을 *중복 발행* — 부팅 자동 재발행 폐지 (2026-07-22)
 
 - **증상**: 자정 직후 데몬을 재시작하자 **테마글 발행이 시작됨**(00:05 비철금속, 00:09 페인트).
