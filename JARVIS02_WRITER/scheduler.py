@@ -948,46 +948,8 @@ def run_self_repair_then_economic():
     return run_economic_poster()
 
 
-def job_startup_recovery():
-    """데몬 재시작 후 오늘 테마 발행 미완료 복구 — 부팅 3분 뒤 자동 호출.
-
-    조건: 오늘 테마글 발행 없음 + 현재 시각 21:00~02:59 사이.
-    이 조건이 맞으면 re-trigger — 발행 도중 데몬 재시작으로 소멸된 harness 복구.
-    """
-    import datetime as _dt
-    now = _dt.datetime.now()
-    # 발행 시간대(21시~다음날 02:59)만 체크
-    if not (now.hour >= 21 or now.hour < 3):
-        return
-
-    try:
-        from shared.db import DB_PATH
-        import sqlite3
-        today = _dt.date.today().isoformat()
-        con = sqlite3.connect(str(DB_PATH))
-        con.row_factory = sqlite3.Row
-        rows = con.execute(
-            "SELECT COUNT(*) as cnt FROM post_analysis "
-            "WHERE created_at LIKE ? AND platform IN ('naver','tistory') "
-            "AND (theme IS NULL OR theme NOT LIKE '%econ%')",
-            (f"{today}%",),
-        ).fetchone()
-        con.close()
-        if rows and rows["cnt"] > 0:
-            return  # 이미 발행됨
-    except Exception as e:
-        log(f"[recovery] DB 확인 실패: {e}")
-        return
-
-    # send_telegram 은 이 모듈 상단(L218)에 이미 정의됨 — 존재하지 않는
-    # shared.telegram_helper 를 로컬 import 하던 줄 제거 (ERRORS [454])
-    send_telegram(
-        "🔄 *데몬 재시작 후 복구 감지*\n"
-        f"오늘({today}) 테마글 발행 없음 → 자동 재시도 시작"
-    )
-    log(f"[recovery] 오늘({today}) 테마글 미발행 → run_self_repair_then_theme 재시도")
-    run_self_repair_then_theme()
-
+# ★ job_startup_recovery / _theme_publish_hour 삭제 (사용자 박제 2026-07-22 — ERRORS [469])
+#   부팅 시 자동 재발행 폐지. 발행은 DEFAULT_JOBS cron 정각에만.
 
 def run_self_repair_then_theme():
     """★ 통합 callback (사용자 박제 2026-05-18 v2) — 16:00 진입점.
