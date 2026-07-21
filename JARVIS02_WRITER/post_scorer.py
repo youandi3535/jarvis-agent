@@ -23,6 +23,65 @@ PASS_THRESHOLD: float = 70.0
 
 
 # ═══════════════════════════════════════════════════════
+# ★ 개수 기반 항목의 목표 구간 — 채점·프롬프트 지시 공통 단일 진입점
+#   (사용자 박제 2026-07-21)
+#
+#   종전엔 목표 개수가 ① 채점 함수 ② gate_checklist_lines 문자열
+#   두 곳에 각각 하드코딩돼 드리프트가 실제로 발생했다:
+#     - EC2: 지시 "4회 이상" ↔ 채점 "5회 만점" → 지시대로 써도 3.5/4점
+#     - EC3: 지시 "1개 이상" ↔ 채점 "3개 만점" → 지시대로 써도 1.0/2점
+#     - T8 : 지시 "1개 이상" ↔ 채점 "정확히 1개만 만점" → 2개 쓰면 감점
+#   ERRORS [463] ("채점은 하는데 알려주지 않는 항목") 과 동일 유형.
+#   이제 값 하나를 바꾸면 채점과 작성 지시가 *함께* 따라온다.
+# ═══════════════════════════════════════════════════════
+
+try:
+    from JARVIS02_WRITER.length_manager import (
+        MIN_IMAGES as _MIN_IMAGES,
+        NAVER_HASHTAG_MIN as _HT_MIN,
+        NAVER_HASHTAG_MAX as _HT_MAX,
+    )
+except Exception:  # 단독 실행·import 실패 시 헌법 기본값
+    _MIN_IMAGES, _HT_MIN, _HT_MAX = 5, 5, 10
+
+_NOCAP = 10 ** 6   # 상한 없음 — 많을수록 좋은 항목 (초과 감점 안 함)
+
+#  key: (목표 하한, 목표 상한, 배점)
+RUBRIC_COUNT: dict[str, tuple[int, int, float]] = {
+    # Section B
+    "B16_image":    (_MIN_IMAGES, _NOCAP, 3.0),   # 이미지 5장+ (헌법 제8조 "5+α" → 초과 무감점)
+    # Section C — 네이버
+    "N3_h3":        (3, 4, 3.0),
+    "N6_kw_body":   (3, 5, 2.0),
+    "N7_hashtag":   (_HT_MIN, _HT_MAX, 2.0),
+    # Section C — 티스토리
+    "T3_h1":        (1, 1, 2.0),
+    "T4_h2":        (3, 5, 3.0),
+    "T6_longtail":  (3, 5, 3.0),                  # 헤더 키워드 — 전 헤더 도배는 스터핑이라 상한 존재
+    "T8_link":      (1, 3, 2.0),                  # SEO 기준이 "1개 이상"이므로 2~3개도 만점
+    # Section D — 경제브리핑
+    "EC2_causal":   (5, _NOCAP, 4.0),
+    "EC3_term":     (3, _NOCAP, 2.0),
+}
+
+
+def graded(key: str, n: int) -> float:
+    """RUBRIC_COUNT 항목 채점 — 개수 기반 항목의 *유일한* 채점 경로."""
+    lo, hi, mx = RUBRIC_COUNT[key]
+    return graded_count(n, lo, hi, mx)
+
+
+def target_phrase(key: str, unit: str = "개") -> str:
+    """작성 프롬프트용 목표 문구 — 채점 기준에서 자동 파생 (하드코딩 금지)."""
+    lo, hi, _ = RUBRIC_COUNT[key]
+    if hi >= _NOCAP:
+        return f"{lo}{unit} 이상"
+    if lo == hi:
+        return f"{lo}{unit}"
+    return f"{lo}~{hi}{unit}"
+
+
+# ═══════════════════════════════════════════════════════
 # 내부 HTML 분석 헬퍼
 # ═══════════════════════════════════════════════════════
 
@@ -148,14 +207,14 @@ def _b2_paragraphs(html: str) -> float:
     paras = re.findall(r'<p[^>]*>(.*?)</p>', html, re.DOTALL)
     v = sum(1 for p in paras if _sentences(_strip(p)) > 2)
     # 2문장 초과 문단 위반 카운트: 위반당 0.5 감점 (하한 0)
-    return round(max(0.0, 3.0 - v * 0.5) * 2) / 2
+    return graded_violation(v, 3.0)
 
 
 def _b5_factuality(issues: list) -> float:
     """B5: 수치 진실성 (5점) — 사실성 이슈 수로 역산"""
     n = sum(1 for i in (issues or []) if i.get("kind") == "factuality")
     # 사실성 이슈 위반 카운트: 위반당 1.5 감점 (하한 0)
-    return round(max(0.0, 5.0 - n * 1.5) * 2) / 2
+    return graded_violation(n, 5.0, penalty=1.5)   # 사실성은 중대 → 1.5
 
 
 def _b7_empty_headers(html: str) -> float:
@@ -163,7 +222,7 @@ def _b7_empty_headers(html: str) -> float:
     headers = re.findall(r'<h[1-6][^>]*>(.*?)</h[1-6]>', html, re.DOTALL)
     empty = sum(1 for h in headers if not _strip(h).strip())
     # 빈 헤더 위반 카운트: 위반당 0.5 감점 (하한 0)
-    return round(max(0.0, 2.0 - empty * 0.5) * 2) / 2
+    return graded_violation(empty, 2.0)
 
 
 def _b8_img_consecutive(html: str) -> float:
@@ -173,7 +232,7 @@ def _b8_img_consecutive(html: str) -> float:
         html, re.DOTALL
     ))
     # 이미지 연속 위반 카운트: 위반당 0.5 감점 (하한 0)
-    return round(max(0.0, 2.0 - n * 0.5) * 2) / 2
+    return graded_violation(n, 2.0)
 
 
 def _b9_para_consecutive(html: str) -> float:
@@ -181,7 +240,7 @@ def _b9_para_consecutive(html: str) -> float:
     segs = re.split(r'<(?:figure|img|table)[^>]*(?:/>|>.*?</(?:figure|table)>)', html, flags=re.DOTALL)
     v = sum(1 for seg in segs if len(re.findall(r'<p[^>]*>.*?</p>', seg, re.DOTALL)) >= 3)
     # 문단 3개+ 연속 위반 카운트: 위반당 0.5 감점 (하한 0)
-    return round(max(0.0, 2.0 - v * 0.5) * 2) / 2
+    return graded_violation(v, 2.0)
 
 
 def _b10_disclaimer(html: str) -> float:
@@ -217,12 +276,43 @@ def _b11_tone(html: str, plat: str) -> float:
     return 1.0
 
 
+def graded_count(n: int, lo: int, hi: int, mx: float) -> float:
+    """개수 기반 항목의 0.5 단위 채점 — **단일 진입점** (사용자 박제 2026-07-21).
+
+    ★ 모든 항목은 0.5 단위로 세분화한다(전부 아니면 0 금지). 종전엔 개수 항목에
+      `0.0 if n == 0 else ...` 절벽이 박혀, 소제목이 0개면 부분점수 없이 즉시 0 이었다.
+      반대로 절벽을 그냥 없애면 0개인데도 공식상 1.5점이 나와 '관대화' 가 된다
+      (그래서 원래 절벽이 있었다). → 0 에서 목표까지 *선형 상승* 시켜 둘 다 해결.
+
+    구간:
+      n <= 0        → 0.0            (아예 없으면 0 — 관대화 차단)
+      0 < n < lo    → 0 → mx 선형    (있는 만큼 부분점수)
+      lo <= n <= hi → mx             (목표 구간 만점)
+      n > hi        → 초과 1개당 -0.5 (하한 0)
+    """
+    if n <= 0:
+        return 0.0
+    if n < lo:
+        return round(mx * n / lo * 2) / 2
+    if n <= hi:
+        return float(mx)
+    return max(0.0, round((mx - 0.5 * (n - hi)) * 2) / 2)
+
+
+def graded_violation(n: int, mx: float, penalty: float = 0.5) -> float:
+    """위반 카운트형 항목의 0.5 단위 채점 — **단일 진입점** (사용자 박제 2026-07-21).
+
+    "없어야 정상"인 항목(금지어·빈 헤더·이미지 연속 등)은 만점에서 위반 1건당 감점.
+    penalty 기본 0.5, 중대 항목(B5 사실성)만 상향.
+    """
+    return max(0.0, round((mx - penalty * max(0, n)) * 2) / 2)
+
+
 def _b16_image_count(html: str) -> float:
     """B16: 이미지 최소 5장(썸네일 제외) (3점)"""
     n = max(0, len(re.findall(r'<(?:img|figure)[^>]*>', html, re.I)) - 1)
-    # 이미지 장수 목표(5장) 근접도: 5+=3.0 4=2.5 3=2.0 2=1.0 1=0.5 0=0.0
-    if n >= 5: return 3.0
-    return {4: 2.5, 3: 2.0, 2: 1.0, 1: 0.5}.get(n, 0.0)
+    # 목표(MIN_IMAGES) 근접도 0.5 단위 — 초과는 헌법 "5+α" 라 무감점
+    return graded("B16_image", n)
 
 
 def _b17_body_length(html: str) -> float:
@@ -242,7 +332,7 @@ def _b18_spacing(html: str) -> float:
     """B18: 여백 규정 준수 (2점)"""
     excess = len(re.findall(r'<p[^>]*>&nbsp;</p>\s*<p[^>]*>&nbsp;</p>', html))
     # 연속 빈문단(여백 초과) 위반 카운트: 위반당 0.5 감점 (하한 0)
-    return round(max(0.0, 2.0 - excess * 0.5) * 2) / 2
+    return graded_violation(excess, 2.0)
 
 
 def _b19_chart(draft: Any) -> float:
@@ -258,7 +348,7 @@ def _b19_chart(draft: Any) -> float:
                     if prov and prov.get("verified") is False:
                         unverified += 1
         # 미검증(verified=False) 차트 위반 카운트: 위반당 0.5 감점 (하한 0)
-        return round(max(0.0, 2.0 - unverified * 0.5) * 2) / 2
+        return graded_violation(unverified, 2.0)
     except Exception:
         return 2.0
 
@@ -269,7 +359,7 @@ def _b21_consistency(html: str) -> float:
     v1 = len(_UNIT_MIX.findall(text))
     v2 = len(re.findall(r'약\s*\d+[%원배]|대략\s*\d+', text))
     # 단위혼용·근사표현 위반 카운트 합: 위반당 0.5 감점 (하한 0)
-    return round(max(0.0, 2.0 - (v1 + v2) * 0.5) * 2) / 2
+    return graded_violation(v1 + v2, 2.0)
 
 
 def _b22_tags(draft: Any) -> float:
@@ -279,7 +369,7 @@ def _b22_tags(draft: Any) -> float:
     bad = re.compile(r'[^가-힣a-zA-Z0-9]')
     v = sum(1 for t in ts if bad.search(str(t)))
     # 특수기호 포함 태그 위반 카운트: 위반당 0.5 감점 (하한 0)
-    return round(max(0.0, 2.0 - v * 0.5) * 2) / 2
+    return graded_violation(v, 2.0)
 
 
 def score_section_b(draft: Any, platform: str = "", factuality_issues: list = None) -> dict:
@@ -294,16 +384,16 @@ def score_section_b(draft: Any, platform: str = "", factuality_issues: list = No
         "B3_differentiate": {"score": 2.0,                          "max": 2, "name": "플랫폼 차별화(프로세스)"},  # 근거: 단일 draft로 플랫폼 간 차별화 관측 불가(양쪽 대본 비교 필요) → 프로세스 보장, max 유지(rule 3)
         "B4_dynamic":       {"score": 2.0,                          "max": 2, "name": "동적 생성(프로세스)"},  # 근거: LLM 매 호출 동적생성 여부는 결정론 HTML 분석으로 관측 불가 → 프로세스 보장, max 유지(rule 3)
         "B5_factuality":    {"score": _b5_factuality(fi),           "max": 5, "name": "수치 진실성"},
-        "B6_incomplete":    {"score": round(max(0.0, 1.0 - len(_INCOMPLETE.findall(_strip(html))) * 0.5) * 2) / 2, "max": 1, "name": "미완성 표현 없음"},
+        "B6_incomplete":    {"score": graded_violation(len(_INCOMPLETE.findall(_strip(html))), 1.0), "max": 1, "name": "미완성 표현 없음"},
         "B7_empty_hdr":     {"score": _b7_empty_headers(html),      "max": 2, "name": "빈 헤더 없음"},
         "B8_img_consec":    {"score": _b8_img_consecutive(html),    "max": 2, "name": "이미지 연속 없음"},
         "B9_para_consec":   {"score": _b9_para_consecutive(html),   "max": 2, "name": "문단 3개 연속 없음"},
         "B10_disclaimer":   {"score": _b10_disclaimer(html),        "max": 3, "name": "면책 문구 완비"},
         "B11_tone":         {"score": _b11_tone(html, plat),        "max": 2, "name": "플랫폼 어조"},
-        "B12_forbidden":    {"score": round(max(0.0, 1.0 - (len(_FORBIDDEN.findall(_strip(html))) + len(_EMOJI.findall(_strip(html)))) * 0.5) * 2) / 2, "max": 1, "name": "금지어·이모지 없음"},
-        "B13_llm_dir":      {"score": round(max(0.0, 1.0 - len(_LLM_DIR.findall(_strip(html))) * 0.5) * 2) / 2,  "max": 1, "name": "LLM 지시문 노출 없음"},
-        "B14_incomplete2":  {"score": round(max(0.0, 1.0 - len(_INCOMPLETE.findall(_strip(html))) * 0.5) * 2) / 2,"max": 1, "name": "미완성 표현 없음(제7조)"},
-        "B15_img_pos":      {"score": round(max(0.0, 1.0 - len(_IMG_POS.findall(_strip(html))) * 0.5) * 2) / 2,   "max": 1, "name": "이미지 위치 지칭 없음"},
+        "B12_forbidden":    {"score": graded_violation(len(_FORBIDDEN.findall(_strip(html))) + len(_EMOJI.findall(_strip(html))), 1.0), "max": 1, "name": "금지어·이모지 없음"},
+        "B13_llm_dir":      {"score": graded_violation(len(_LLM_DIR.findall(_strip(html))), 1.0),  "max": 1, "name": "LLM 지시문 노출 없음"},
+        "B14_incomplete2":  {"score": graded_violation(len(_INCOMPLETE.findall(_strip(html))), 1.0),"max": 1, "name": "미완성 표현 없음(제7조)"},
+        "B15_img_pos":      {"score": graded_violation(len(_IMG_POS.findall(_strip(html))), 1.0),   "max": 1, "name": "이미지 위치 지칭 없음"},
         "B16_img_count":    {"score": _b16_image_count(html),       "max": 3, "name": "이미지 최소 5장"},
         "B17_body_len":     {"score": _b17_body_length(html),       "max": 3, "name": "본문 분량 1500자+"},
         "B18_spacing":      {"score": _b18_spacing(html),           "max": 2, "name": "여백 규정 준수"},
@@ -342,8 +432,7 @@ def score_section_c_naver(draft: Any, kw: str = "") -> dict:
 
     # N3 H3 3~4개 (3점)
     h3 = len(re.findall(r'<h3[^>]*>', html, re.I))
-    _d = 0 if 3 <= h3 <= 4 else (3 - h3 if h3 < 3 else h3 - 4)
-    n3 = 0.0 if h3 == 0 else max(0.0, 3.0 - 0.5 * _d)  # 완전부재=0(관대화 차단)
+    n3 = graded("N3_h3", h3)
 
     # N4 소제목 아래 2~3문장 (2점)
     sections = re.split(r'<h3[^>]*>.*?</h3>', html, flags=re.DOTALL | re.I)
@@ -367,15 +456,13 @@ def score_section_c_naver(draft: Any, kw: str = "") -> dict:
     # N6 본문 키워드 3~5회 (2점)
     if kw:
         c = text.count(kw)
-        _d = 0 if 3 <= c <= 5 else (3 - c if c < 3 else c - 5)
-        n6 = 0.0 if c == 0 else max(0.0, 2.0 - 0.5 * _d)  # 완전부재=0
+        n6 = graded("N6_kw_body", c)
     else:
         n6 = 2.0
 
     # N7 해시태그 5~10개 (2점)
     nt = len(_tags(draft))
-    _d = 0 if 5 <= nt <= 10 else (5 - nt if nt < 5 else nt - 10)
-    n7 = max(0.0, 2.0 - 0.5 * _d)
+    n7 = graded("N7_hashtag", nt)
 
     # N8 해요체 일관 (2점)
     hayeo = len(re.findall(r'해요|이에요|였어요|하네요|겠어요|드려요|거에요|인데요', text))
@@ -414,18 +501,18 @@ def score_section_c_tistory(draft: Any, kw: str = "") -> dict:
     # T2 제목 키워드 (2점)
     if kw and kw in title:
         rel = title.find(kw) / max(len(title), 1)
-        t2 = 2.0 if rel <= 0.15 else (1.5 if rel <= 0.35 else 1.0)
+        t2 = (2.0 if rel <= 0.15 else 1.5 if rel <= 0.35
+              else 1.0 if rel <= 0.6 else 0.5)
     else:
         t2 = 0.0 if kw else 2.0
 
     # T3 H1 1개 (2점)
     h1 = len(re.findall(r'<h1[^>]*>', html, re.I))
-    t3 = 0.0 if h1 == 0 else max(0.0, 2.0 - 0.5 * abs(h1 - 1))  # 완전부재=0
+    t3 = graded("T3_h1", h1)
 
     # T4 H2 3~5개 (3점)
     h2 = len(re.findall(r'<h2[^>]*>', html, re.I))
-    _d = 0 if 3 <= h2 <= 5 else (3 - h2 if h2 < 3 else h2 - 5)
-    t4 = 0.0 if h2 == 0 else max(0.0, 3.0 - 0.5 * _d)  # 완전부재=0
+    t4 = graded("T4_h2", h2)
 
     # T5 H3 범위 내 (2점)
     h3 = len(re.findall(r'<h3[^>]*>', html, re.I))
@@ -435,7 +522,7 @@ def score_section_c_tistory(draft: Any, kw: str = "") -> dict:
     if kw:
         hdrs = re.findall(r'<h[23][^>]*>(.*?)</h[23]>', html, re.DOTALL | re.I)
         hits = sum(1 for h in hdrs if kw in _strip(h))
-        t6 = 3.0 if hits >= 3 else (2.5 if hits == 2 else (1.5 if hits == 1 else 0.0))
+        t6 = graded("T6_longtail", hits)
     else:
         t6 = 3.0
 
@@ -451,7 +538,7 @@ def score_section_c_tistory(draft: Any, kw: str = "") -> dict:
 
     # T8 내부 링크 1개 (2점)
     int_links = len(re.findall(r'<a[^>]+href=["\'][^"\'#][^"\']*["\']', html, re.I))
-    t8 = (2.0 if int_links == 1 else 1.5 if int_links == 2 else 1.0 if int_links >= 3 else 0.0)
+    t8 = graded("T8_link", int_links)
 
     # T9 네이버 중복 없음 (2점) — 프로세스 보장
     t9 = 2.0
@@ -492,7 +579,7 @@ def score_section_d_theme(draft: Any) -> dict:
         text
     ))
     # 0.5 단위 graded — 위반 카운트형(max 5): 잘못된 기간 표기 1건당 -0.5, 0 하한
-    th1 = round(max(0.0, 5.0 - 0.5 * bad_period) * 2) / 2
+    th1 = graded_violation(bad_period, 5.0)
 
     # TH2: 재무수치 본문 기재 없음 (5점)
     fin_text = len(re.findall(
@@ -500,7 +587,7 @@ def score_section_d_theme(draft: Any) -> dict:
         text
     ))
     # 0.5 단위 graded — 위반 카운트형(max 5): 본문 재무수치 1건당 -0.5, 0 하한
-    th2 = round(max(0.0, 5.0 - 0.5 * fin_text) * 2) / 2
+    th2 = graded_violation(fin_text, 5.0)
 
     items = {
         "TH1_3m_return":    {"score": th1, "max": 5, "name": "수익률 3개월만 표기"},
@@ -516,21 +603,18 @@ def score_section_d_economic(draft: Any) -> dict:
     # EC1: 실데이터 사용 (4점) — 의심 수치 패턴 역산
     suspicious = len(re.findall(r'약\s*\d+\.?\d*\s*[%포인트p]|대략\s*\d+|추정\s*\d+', text))
     # 0.5 단위 graded — 위반 카운트형(max 4): 의심(약/대략/추정) 수치 1건당 -0.5, 0 하한
-    ec1 = round(max(0.0, 4.0 - 0.5 * suspicious) * 2) / 2
+    ec1 = graded_violation(suspicious, 4.0)
 
     # EC2: 시장 영향 인과 서술 (4점)
     causal = len(re.findall(
         r'→|따라서|그로\s*인해|로\s*인해|때문에|영향을\s*미|이어질|파급\s*효과|로\s*이어',
         text
     ))
-    # 0.5 단위 graded — 인과 마커 다다익선(max 4): 5+ 만점, 4는 3.5, 이하 부분점수(0 하한)
-    ec2 = (4.0 if causal >= 5 else 3.5 if causal == 4 else 3.0 if causal == 3
-           else 2.0 if causal == 2 else 1.0 if causal == 1 else 0.0)
+    ec2 = graded("EC2_causal", causal)
 
     # EC3: 경제 용어 설명 (2점)
     explain = len(re.findall(r'이란|란\s*무엇|을?\s*의미|쉽게\s*말해|다시\s*말해|풀어\s*말하면|뜻하는', text))
-    # 0.5 단위 graded — 용어 설명 다다익선(max 2): 3+ 만점, 2는 1.5, 1은 1.0, 0은 0.0 (이진 폐지)
-    ec3 = (2.0 if explain >= 3 else 1.5 if explain == 2 else 1.0 if explain == 1 else 0.0)
+    ec3 = graded("EC3_term", explain)
 
     items = {
         "EC1_real_data":    {"score": ec1, "max": 4, "name": "경제지표 실데이터"},
@@ -555,26 +639,28 @@ def gate_checklist_lines(post_type: str = "", platform: str = "") -> list[str]:
     ★ 채점 함수(Section C/D)와 같은 파일에 두어 드리프트 국소화 —
       위 채점 함수의 숫자를 바꾸면 이 요약도 *반드시 동시에* 수정할 것.
     """
-    lines: list[str] = []
+    lines: list[str] = [f"본문 이미지 {target_phrase('B16_image', '장')} (썸네일 제외)"]
     plat = (platform or "").lower()
     if plat == "tistory":
         lines += [
             "제목 ≤55자 + 핵심 키워드를 제목 앞쪽에 배치",
-            "H1 1개 · H2 소제목 3~5개 · 키워드 포함 헤더(롱테일) 3개 이상",
-            "본문 키워드 3~5회 (밀도 1~2%)",
+            f"H1 {target_phrase('T3_h1')} · H2 소제목 {target_phrase('T4_h2')}"
+            f" · 키워드 포함 헤더(롱테일) {target_phrase('T6_longtail')}",
+            f"본문 키워드 {target_phrase('N6_kw_body', '회')} (밀도 1~2%)",
         ]
     else:  # naver
         lines += [
             "제목 ≤40자 + 핵심 키워드를 제목 앞쪽에 배치",
-            "H3 소제목 3~4개, 각 소제목 아래 2~3문장 이상",
-            "본문 키워드 3~5회 (밀도 1~2%) · 해요체 우세 문체 (~해요/~이에요)",
+            f"H3 소제목 {target_phrase('N3_h3')}, 각 소제목 아래 2~3문장 이상",
+            f"본문 키워드 {target_phrase('N6_kw_body', '회')} (밀도 1~2%)"
+            f" · 해시태그 {target_phrase('N7_hashtag')} · 해요체 우세 문체 (~해요/~이에요)",
         ]
     pt = (post_type or "").lower()
     if pt == "economic":
         lines += [
             "숫자에 '약·대략·추정' 붙이지 말 것 — 수집 실데이터 수치만 그대로 인용",
-            "시장 영향은 인과 연결어(따라서·때문에·→ 등)로 4회 이상 서술",
-            "경제 용어 1개 이상을 쉬운 말로 풀이 ('~이란', '쉽게 말해' 등)",
+            f"시장 영향은 인과 연결어(따라서·때문에·→ 등)로 {target_phrase('EC2_causal', '회')} 서술",
+            f"경제 용어 {target_phrase('EC3_term')} — 쉬운 말로 풀이 ('~이란', '쉽게 말해' 등)",
         ]
     elif pt == "theme":
         lines += [
