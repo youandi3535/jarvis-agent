@@ -8111,6 +8111,28 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS06_IMAGE/draft_processor.py`, `shared/precommit_check.py`
 - **교훈**: ① **중복 판정의 대상을 정확히 좁힐 것** — "본문에 있으면 중복" 은 직관적이지만, 글과 그림이 *같은 것을 다루는 것* 은 중복이 아니라 좋은 편집이다. 판정 대상은 *의미* 가 아니라 *매체*(시각 요소)여야 한다. ② **`print()` 는 데몬에서 사라진다** — 진단에 필요한 정보는 반드시 `log` 로. 이번에도 로그 부재를 "코드가 거기 도달 못 함" 으로 오독해 조사가 한 바퀴 돌았다. ③ 플랫폼 한쪽만 증상이 나면 *플랫폼 고유 코드* 보다 **입력 데이터의 성향 차이** 를 먼저 의심할 것 — 여기서는 공통 코드에 티스토리 대본의 서술 습관이 얹혀 발현됐다.
 
+## [463] 품질점수 70 문턱 상습 미달 — "채점은 하는데 알려주지 않는" 항목이 16점 (2026-07-21)
+- **증상**: 테마·경제 모두 종합 65~69.5/100 으로 70 문턱을 반복 미달 → 재작성 순환 → best-so-far 발행. 사용자 지적: "규정을 먼저 숙지하고 그에 맞게 쓰는데 왜 점수가 안 나오나".
+- **환경**: `post_scorer.py`(A20+B50+C20+D10), `prepublish_gate`(70 임계), 작성 프롬프트 조립(`law_enforcer.build_writing_rules_block` + `seo_standards.build_seo_block` + `quality_learner.build_insights_block`).
+- **원인**: **지시(프롬프트)와 채점(스코어러)의 항목이 어긋나 있었다.** 실측 대조 결과 채점하면서 작성자에게 *전혀 알려주지 않는* 항목이 4개, 배점 합계 **16점**:
+  | 미지시 항목 | 배점 |
+  |---|---|
+  | A1 engagement(매력도) | 7 |
+  | A2 usefulness(유익성) | 5 |
+  | C-T1 제목 55자 | 2 |
+  | C-T7 메타설명 140~160자 | 2 |
+  실제 점수와 정합: `A=10.5/20`(engagement+usefulness 12점이 미지시) · `C=11.0/20`(T1+T7 4점 미지시). 70 문턱을 못 넘는 구조적 이유.
+  - A축: 심사관 `ENGAGEMENT_SYSTEM_PROMPT` 가 5개 차원으로 채점하는데 그 기준이 작성 프롬프트에 **한 줄도 없었다**.
+  - C축: `PLATFORM_STANDARDS` 가 `title_max_chars=55`·`meta_desc_min/max=140/160` 을 **이미 보유** 하는데 `build_seo_block()` 이 서술형 `seo_prompt` 문자열만 내보내 수치가 전달되지 않았다(데이터는 있는데 전달만 안 된 상태).
+- **헛다리**: "규정을 안 지키고 쓴다" — 반증됨. 헌법(3,752자)·SEO·학습지침(845자)은 정상 주입되고 있었다. 문제는 주입 여부가 아니라 *주입 내용과 채점 항목의 불일치*.
+- **해결** (둘 다 *파생* — 문구 복사 금지):
+  1. `post_quality_analyzer.build_scoring_criteria_block()` 신설 — 심사관 `ENGAGEMENT_SYSTEM_PROMPT` 에서 5개 차원을 **정규식으로 추출** 해 작성 프롬프트에 주입. 기준을 바꾸면 심사·작성이 동시에 따라온다.
+  2. `seo_standards.build_seo_block()` 이 `PLATFORM_STANDARDS` 의 수치(제목 한도·메타 범위·내부링크·최소 이미지)를 **자동 파생** 해 "채점되는 정량 기준" 절로 명시.
+  3. `draft_writer._load_learn_insights()` 가 채점 기준 블록 + 학습 지침을 함께 반환 — 작성 경로 단일 진입점.
+- **검증**: 수정 전 미지시 4개 → **수정 후 0개**(A1~A5·T1·T7 전부 지시됨). 주입 총량 4,890 → 5,454자. 동적성 실증 — 심사 기준 문구 변경 시 작성 블록 즉시 반영 / `title_max_chars` 55→99 변경 시 프롬프트가 "99자 이내" 로 추종.
+- **파일**: `JARVIS03_RADAR/post_quality_analyzer.py`, `JARVIS02_WRITER/seo_standards.py`, `JARVIS02_WRITER/draft_writer.py`
+- **교훈**: ① **채점표를 응시자에게 주지 않으면 점수가 안 나온다** — 평가 기준은 반드시 작성 시점에 전달할 것. 자동화 파이프라인에서 "심사 기준"과 "작성 지시"가 다른 파일에 살면 조용히 어긋난다. ② 기준값을 *보유* 하는 것과 *전달* 하는 것은 다르다 — `PLATFORM_STANDARDS` 는 정답을 다 갖고도 프롬프트로 내보내지 않았다. ③ 점수 미달을 볼 때 "글을 못 썼다" 보다 **"무엇으로 채점하는지 알려줬나"** 를 먼저 확인할 것.
+
 ---
 ### [2026-07-11 05:01] ✅ 자동수정 — RuntimeError
 - **증상**: 트렌드 수집 실패 (rc=75): it__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!

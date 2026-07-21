@@ -465,14 +465,29 @@ _DESIGN_FIRST_BLOCK = (
 
 
 def _load_learn_insights(scope: str, platform: str = "") -> str:
-    """ADR 014 — UCB 선택 인사이트 블록 로드 + 사용 기록. 실패 시 "" (글 작성 절대 안 막음)."""
+    """ADR 014 — UCB 선택 인사이트 블록 로드 + 사용 기록. 실패 시 "" (글 작성 절대 안 막음).
+
+    ★ 채점 기준 동봉 (ERRORS [463] — 2026-07-21): 심사관이 실제로 채점하는 5개 차원을
+      *작성 시점에* 알려준다. 종전엔 헌법·SEO·학습지침만 주입되고 배점 최대인 A축
+      (engagement 7 + usefulness 5 = 12점)이 미지시라 구조적으로 점수가 깎였다.
+      기준은 ENGAGEMENT_SYSTEM_PROMPT 에서 파생 — 문구 복사 아님.
+    """
+    parts: list[str] = []
+    try:
+        from JARVIS03_RADAR.post_quality_analyzer import build_scoring_criteria_block
+        crit = build_scoring_criteria_block()
+        if crit:
+            parts.append(crit)
+    except Exception as _e:
+        print(f"  ⚠️ 채점 기준 로드 실패(무시): {_e}")
     try:
         from JARVIS07_GUARDIAN.quality_learner import build_insights_block
         blk = build_insights_block(scope=scope, platform=platform, limit=8)
-        return (blk + "\n") if blk else ""
+        if blk:
+            parts.append(blk)
     except Exception as _e:
         print(f"  ⚠️ 학습 지침 로드 실패(무시): {_e}")
-        return ""
+    return ("\n".join(parts) + "\n") if parts else ""
 
 
 def _strip_design(raw: str) -> str:
