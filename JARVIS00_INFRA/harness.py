@@ -258,6 +258,40 @@ def action_step(name: str) -> Callable:
 
 # ── GUARDIAN 연동 ─────────────────────────────────────
 
+# ── 시도 오류 ↔ 최종 결과 정합 (ERRORS [462] — 2026-07-21) ─────────────
+#
+# ★ 문제: harness 는 *시도마다* 실패를 GUARDIAN 에 즉시 보고하는데, 그 액션이
+#   최종적으로 **성공(best-so-far 발행 등)** 해도 앞서 보고한 오류를 거두지 않았다.
+#   → GUARDIAN 이 이미 해소된 문제를 붙잡고 자동수정을 돌린 뒤
+#     "자동수정 실패 — 수동 검토" 오알림을 보냈다. 사용자는 *발행이 끝난 글* 에 대해
+#     실패 알림을 받는다(경제·테마·네이버·티스토리 공통). 알림 신뢰가 무너지는 유형.
+#
+# ★ 해결: 액션 단위로 발급된 오류 ID 를 모아, 최종 delivered=True 면 일괄 해소한다.
+#   단일 진입점 — 다른 곳에서 개별 해소 로직을 만들지 말 것.
+_ATTEMPT_ERROR_IDS: dict[str, list[int]] = {}
+
+
+def _resolve_attempt_errors(action_name: str, resolution: str) -> int:
+    """액션이 최종 성공했을 때, 그 과정에서 보고된 시도 오류를 해소 처리."""
+    ids = _ATTEMPT_ERROR_IDS.pop(action_name, [])
+    if not ids:
+        return 0
+    try:
+        from shared.db import mark_error_fixed
+    except Exception:
+        return 0
+    done = 0
+    for eid in ids:
+        try:
+            mark_error_fixed(eid, resolution, fixed_file=None)
+            done += 1
+        except Exception:
+            continue
+    if done:
+        _log.info(f"[harness] 시도 오류 {done}건 해소 — 최종 성공으로 무효화: {action_name}")
+    return done
+
+
 def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issue]) -> None:
     """검증 실패 → error_collector.report() 박제. learned_patterns 자동 등록.
 
@@ -274,7 +308,7 @@ def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issu
             exc = RuntimeError(
                 f"[harness:{action_name}] attempt={attempt} step={issue.step}: {issue.detail}"
             )
-            g_report(
+            _eid = g_report(
                 exc,                       # ★ catch(exc_or_type, ...) 첫 위치 인자 (exc= 키워드 없음)
                 source="harness",
                 module=f"JARVIS00_INFRA.harness.{action_name}",
@@ -288,6 +322,9 @@ def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issu
                     "detail": issue.detail,
                 },
             )
+            # ★ 최종 성공 시 되돌리기 위해 액션별로 보관 (ERRORS [462])
+            if _eid:
+                _ATTEMPT_ERROR_IDS.setdefault(action_name, []).append(int(_eid))
         except Exception as e:
             _log.warning(f"[harness] GUARDIAN report 실패 (계속 진행): {e}")
 
@@ -662,6 +699,11 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                 result.delivered = True
                 result.issues_history.append([])   # 통과 기록
                 _log.info(f"[harness] 📤 송출 완료: {action_def.name}")
+                # ★ 송출 성공 → 앞선 시도에서 보고한 오류 무효화 (ERRORS [462]).
+                #   시도1 실패 → 시도2 통과 인 경우에도 GUARDIAN 오알림이 나갔다.
+                _resolve_attempt_errors(
+                    action_def.name,
+                    f"harness 검증 통과·송출 완료(시도 {attempt}) — 시도 실패는 최종 결과로 무효")
                 return result
             except Exception as e:
                 # 송출 실패 = 송출 미완료 — 검증 순환 재진입
@@ -866,6 +908,10 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             action_def.send(state)
             result.delivered = True
             result.escalation_reason = ""
+            # ★ 발행 성공 → 시도 오류 무효화 (GUARDIAN 오알림 차단, ERRORS [462])
+            _resolve_attempt_errors(
+                action_def.name,
+                "harness best-so-far 발행 성공 — 시도 실패는 최종 결과로 무효")
             _log.warning(
                 f"[harness] ✅ best-so-far 발행 — 품질점수(100점)만 미달({action_def.max_attempts}회), "
                 f"사실성·구조 결함 없어 최선 대본 송출: {action_def.name}")
