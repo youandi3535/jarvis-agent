@@ -28,6 +28,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+
+def _max_attempts() -> int:
+    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
 log = logging.getLogger("jarvis")
 
 _HERE = Path(__file__).resolve().parent
@@ -216,7 +225,7 @@ def generate_section_plan(
     spec: PostTypeSpec,
     topic: str,
     context: str = "",
-    max_retries: int = 3,
+    max_retries: int | None = None,   # None = harness SSOT 상속 (2026-07-21: 2회)
 ) -> list[SectionDef]:
     """주제·맥락 보고 *섹션 list 동적 생성* (LLM 호출).
 
@@ -228,6 +237,8 @@ def generate_section_plan(
     """
     from shared.llm import invoke_text
 
+    # ★ None = harness SSOT 상속 (호출자가 명시하면 그 값 사용)
+    max_retries = _max_attempts() if max_retries is None else max_retries
     for attempt in range(1, max_retries + 1):
         prompt = spec.section_plan_prompt(topic, context)
         try:

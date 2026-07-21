@@ -9,6 +9,15 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeou
 
 # 글자수 정책 — length_manager 단일 진입점이 빌드된 패턴 제공
 from JARVIS02_WRITER import length_manager as _LM
+
+def _max_attempts() -> int:
+    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
@@ -193,7 +202,7 @@ def _fetch_pytrends_trending(limit: int) -> list[str]:
     def _do():
         pt = TrendReq(
             hl="ko", tz=540,
-            timeout=(10, 30), retries=3,
+            timeout=(10, 30), retries=_max_attempts(),
             requests_args={"verify": True},
         )
         _disable_pytrends_proxy(pt)
@@ -224,7 +233,7 @@ def _fetch_pytrends_realtime(limit: int) -> list[str]:
     def _do():
         pt = TrendReq(
             hl="ko", tz=540,
-            timeout=(10, 30), retries=3,
+            timeout=(10, 30), retries=_max_attempts(),
             requests_args={"verify": True},
         )
         _disable_pytrends_proxy(pt)
@@ -403,7 +412,7 @@ def get_interest_over_time(keywords: list[str], days: int = 30) -> dict[str, lis
         _wd_beat()   # ★ 배치 단위 진행 신호 — freeze 오탐 방지 (pytrends 재시도로 장시간 소요 가능)
 
         def _do(_batch=batch):
-            pt = TrendReq(hl="ko", tz=540, timeout=(10, 30), retries=3)
+            pt = TrendReq(hl="ko", tz=540, timeout=(10, 30), retries=_max_attempts())
             _disable_pytrends_proxy(pt)
             _build_payload_with_fallback(pt, _batch, timeframe, geo="KR", cat=0)
             return pt.interest_over_time()

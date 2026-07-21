@@ -24,6 +24,15 @@ import tempfile
 import time
 from pathlib import Path
 
+
+def _max_attempts() -> int:
+    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
 log = logging.getLogger("jarvis")
 
 try:
@@ -236,7 +245,7 @@ def generate_html_infographic(
     data: dict | None = None,
     run_id: str = "",
     slot_key: str = "",
-    max_retries: int = 3,
+    max_retries: int | None = None,   # None = harness SSOT 상속 (2026-07-21: 2회)
     out_dir: str | Path | None = None,
 ) -> str:
     """
@@ -269,6 +278,8 @@ def generate_html_infographic(
     _out_dir.mkdir(parents=True, exist_ok=True)
     _out = _out_dir / f"html_infog_{_rid[:12]}_{_slot[:6]}.jpg"
 
+    # ★ None = harness SSOT 상속 (호출자가 명시하면 그 값 사용)
+    max_retries = _max_attempts() if max_retries is None else max_retries
     for attempt in range(max_retries):
         try:
             _prompt_a = prompt if attempt == 0 else (

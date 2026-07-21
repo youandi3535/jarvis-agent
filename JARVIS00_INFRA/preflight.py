@@ -28,6 +28,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+def _max_attempts() -> int:
+    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
+
 # jarvis_daemon 과 동일한 logger — 데몬 모드에서 daemon.log 에 박힘.
 # CLI 모드 (직접 실행) 에서는 logger 가 핸들러 미설정이면 stderr 로 가지만,
 # print() 도 같이 호출하므로 콘솔 가시성 유지.
@@ -153,7 +162,7 @@ def _check_internal_imports(report: PreflightReport) -> None:
 
     for mod_name in _REQUIRED_INTERNAL_MODULES:
         last_exc: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(_max_attempts()):
             try:
                 importlib.import_module(mod_name)
                 last_exc = None
