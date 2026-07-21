@@ -14,7 +14,7 @@ interface TrendDay     { day: string; total: number; crit: number; high: number;
 interface SourceRow    { source: string; total: number; crit: number; fixed: number; new: number }
 interface ErrorRow     {
   id: number; timestamp: string; severity: string; status: string;
-  error_type: string; module: string; message: string; source?: string;
+  error_type: string; error_category?: string; module: string; message: string; source?: string;
 }
 
 /* ─── KPI 카드 ─────────────────────────────────────── */
@@ -179,7 +179,12 @@ export default function ErrorsPage() {
                   <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", whiteSpace: "nowrap" }}>{fmtTime(e.timestamp)}</td>
                   <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)" }}>{e.source ?? "—"}</td>
                   <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.module ?? "—"}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.error_type}</td>
+                  <td
+                    title={e.error_category ? `${e.error_category}(${e.error_type})` : e.error_type}
+                    style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text)", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  >
+                    {e.error_category ? `${e.error_category}(${e.error_type})` : e.error_type}
+                  </td>
                   <td style={{ padding: "8px 12px" }}>
                     <Badge label={e.severity} color={severityColor(e.severity)} />
                   </td>

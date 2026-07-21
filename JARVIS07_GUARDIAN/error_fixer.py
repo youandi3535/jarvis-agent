@@ -189,11 +189,12 @@ def _update_errors_md(error_record: dict, analysis: dict, success: bool):
         if not errors_md.exists():
             return
         from datetime import datetime
+        from JARVIS07_GUARDIAN.severity import format_error_label
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         status_icon = "✅ 자동수정" if success else "❌ 자동수정실패"
         entry = (
             f"\n---\n"
-            f"### [{now_str}] {status_icon} — {error_record.get('error_type','?')}\n"
+            f"### [{now_str}] {status_icon} — {format_error_label(error_record.get('error_type',''))}\n"
             f"- **증상**: {error_record.get('message','')[:200]}\n"
             f"- **모듈**: {error_record.get('module','')}\n"
             f"- **원인**: {analysis.get('explanation','')}\n"

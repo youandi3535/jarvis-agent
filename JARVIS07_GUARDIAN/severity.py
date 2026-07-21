@@ -252,6 +252,72 @@ def is_transient(error_type: str, message: str = "", source: str = "") -> bool:
     return any(pat.search(msg) for pat in _TRANSIENT_PATTERNS)
 
 
+# ── 표시용 한글 분류 라벨 (사용자 박제 2026-07-21) ─────────────────
+# error_type(예: "ValueError")만으로는 어떤 종류의 오류인지 한눈에 안 들어옴 →
+# ERRORS.md·대시보드 표시 시 "값 불일치(ValueError)" 형태로 보여주기 위한 매핑.
+# ★ DB에 별도 컬럼으로 저장하지 않음 — error_type 원본에서 표시 시점에 항상 파생
+#   (루트 CLAUDE.md "복사본을 진실로 믿지 말 것" — 분류 기준이 바뀌면 과거 기록도 자동 갱신).
+_CATEGORY_LABELS: dict[str, str] = {
+    "AttributeError": "참조 오류",
+    "KeyError": "조회 오류",
+    "IndexError": "조회 오류",
+    "LookupError": "조회 오류",
+    "TypeError": "타입 불일치",
+    "ValueError": "값 불일치",
+    "UnicodeDecodeError": "값 불일치",
+    "UnicodeEncodeError": "값 불일치",
+    "JSONDecodeError": "값 불일치",
+    "ZeroDivisionError": "연산 오류",
+    "OverflowError": "연산 오류",
+    "ArithmeticError": "연산 오류",
+    "FileNotFoundError": "I/O 오류",
+    "IsADirectoryError": "I/O 오류",
+    "NotADirectoryError": "I/O 오류",
+    "PermissionError": "I/O 오류",
+    "OSError": "I/O 오류",
+    "IOError": "I/O 오류",
+    "ConnectionError": "I/O 오류",
+    "ConnectionResetError": "I/O 오류",
+    "ConnectionAbortedError": "I/O 오류",
+    "TimeoutError": "I/O 오류",
+    "HTTPError": "I/O 오류",
+    "SSLError": "I/O 오류",
+    "MemoryError": "자원 오류",
+    "RecursionError": "자원 오류",
+    "ImportError": "임포트 오류",
+    "ModuleNotFoundError": "임포트 오류",
+    "NameError": "이름 오류",
+    "UnboundLocalError": "이름 오류",
+    "StopIteration": "제어흐름",
+    "GeneratorExit": "제어흐름",
+    "SystemExit": "시스템 종료",
+    "KeyboardInterrupt": "시스템 종료",
+    "WebDriverException": "환경 오류",
+    "SessionNotCreatedException": "환경 오류",
+    "InvalidSessionIdException": "환경 오류",
+    "StaleElementReferenceException": "환경 오류",
+    "ElementClickInterceptedException": "환경 오류",
+    "NoSuchWindowException": "환경 오류",
+}
+
+_DEFAULT_CATEGORY = "기타"
+
+
+def describe_category(error_type: str) -> str:
+    """error_type → 한글 분류 라벨. 미등록 타입은 '기타' (판단 실패가 아니라 미분류 표시)."""
+    et = (error_type or "").strip()
+    if et in _CATEGORY_LABELS:
+        return _CATEGORY_LABELS[et]
+    short = et.rsplit(".", 1)[-1]  # "selenium.common.exceptions.WebDriverException" 대응
+    return _CATEGORY_LABELS.get(short, _DEFAULT_CATEGORY)
+
+
+def format_error_label(error_type: str) -> str:
+    """표시용 조합 라벨: '값 불일치(ValueError)'. ERRORS.md·대시보드 공통 사용."""
+    et = (error_type or "?").strip() or "?"
+    return f"{describe_category(et)}({et})"
+
+
 def is_auto_fixable(severity: str, error_type: str) -> bool:
     """자동 수정 시도 가능 여부.
 
