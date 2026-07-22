@@ -2,6 +2,9 @@
 import useSWR from "swr";
 import { apiFetch, LearningData, WeightRow, BacktestRow, InsightRow } from "@/lib/api";
 import { fmtNum, fmtTime } from "@/lib/utils";
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
 
 /* ── 공통 스타일 ─────────────────────────────────────────────────── */
 const card = (topColor: string): React.CSSProperties => ({
@@ -111,6 +114,44 @@ function WeightCard({ row }: { row: WeightRow }) {
   );
 }
 
+/* ── KPI 추세 차트 (★ ERRORS [479]) ───────────────────────────────
+   홈탭과 동일한 recharts 패턴 사용 — 새 라이브러리·새 API 도입 없음. */
+function TrendChart({ title, hint, data, xKey, yKey, color, unit = "" }: {
+  title: string; hint: string;
+  data: Array<Record<string, unknown>>; xKey: string; yKey: string;
+  color: string; unit?: string;
+}) {
+  const pts = data ?? [];
+  return (
+    <div style={card(color)}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: "var(--c-text)" }}>{title}</div>
+      <div style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 4, marginBottom: 12 }}>{hint}</div>
+      {pts.length < 2 ? (
+        <div style={{ fontSize: 14, color: "var(--c-text2)", padding: "28px 0", textAlign: "center" }}>
+          추세를 그릴 만큼 기록이 쌓이지 않았습니다 ({pts.length}개)
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={180}>
+          <LineChart data={pts} margin={{ top: 4, right: 12, left: -12, bottom: 0 }}>
+            <CartesianGrid stroke="var(--c-bdr)" strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey={xKey} tick={{ fontSize: 14, fill: "var(--c-text2)" }}
+                   tickFormatter={(v: string) => String(v ?? "").slice(5, 10)}
+                   minTickGap={28} stroke="var(--c-bdr)" />
+            <YAxis tick={{ fontSize: 14, fill: "var(--c-text2)" }} stroke="var(--c-bdr)" width={44} />
+            <Tooltip
+              contentStyle={{ background: "var(--c-card)", border: "1px solid var(--c-bdr)",
+                              borderRadius: 8, fontSize: 14 }}
+              labelFormatter={(v) => String(v ?? "").slice(0, 16)}
+              formatter={(v) => [`${v ?? ""}${unit}`, title] as [string, string]} />
+            <Line type="monotone" dataKey={yKey} stroke={color} strokeWidth={2} dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+}
+
+
 /* ── 백테스트 점수 색상 ───────────────────────────────────────────── */
 function scoreColor(score: number): string {
   if (score >= 80) return "var(--c-success)";
@@ -130,18 +171,27 @@ export default function LearningPage() {
   const { data, isLoading } =
     useSWR<LearningData>("/api/learning", (url) => apiFetch<LearningData>(url), { refreshInterval: 300000 });
 
-  /* KPI 파싱 */
-  const firstWeight   = data?.weights?.[0];
-  const firstWeightW  = firstWeight ? parseWeights(firstWeight.weights_json) : {};
-  const nSamples: number = (firstWeightW["n_samples"] as number) ?? 0;
+  /* ── KPI (★ ERRORS [479] 교체) ─────────────────────────────────────
+     종전 4개는 전부 RADAR 키워드 회귀(learned_weights) 지표였는데 그 학습기는
+     0행이라 아예 안 돌고 있었고, 백테스트는 정답값이 상수라 항상 r2=1.0(=100%)
+     이 나오는 가짜 만점이었다. '학습 인사이트'는 API 의 LIMIT 20 배열 길이를
+     실제 개수(309)로 착각한 값이었다.
+     → 이 시스템 자기학습의 본체인 GUARDIAN 오류학습 지표로 교체하고,
+       *넷 다 시계열이 있는 것* 만 골라 아래에 추세 차트를 붙인다. */
+  const timeline    = data?.timeline ?? [];
+  const resolveRate = data?.resolve_rate ?? [];
+  const patNow      = data?.patterns_now ?? { count: 0, hits: 0 };
+  const last        = timeline.length ? timeline[timeline.length - 1] : null;
 
-  const firstBacktest = data?.backtest?.[0];
-  const btScore       = firstBacktest?.score ?? null;
+  const kpiPatterns = patNow.count || last?.patterns || 0;
+  const kpiHits     = patNow.hits  || last?.hits     || 0;
+  const kpiSaved    = last?.llm_saved ?? 0;
+  const kpiRate     = resolveRate.length ? resolveRate[resolveRate.length - 1].rate : null;
 
   const insights      = (data?.insights ?? []).slice(0, 20);
+  const insightsTotal = data?.insights_total ?? insights.length;
   const backtests     = (data?.backtest ?? []).slice(0, 14);
   const weights       = (data?.weights ?? []).slice(0, 3);
-  const mae           = data?.learn_log?.mae ?? null;
 
   return (
     <div>
@@ -156,26 +206,28 @@ export default function LearningPage() {
         <div style={{ color: "var(--c-text2)", fontSize: 14 }}>로딩 중…</div>
       ) : (
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-          <KpiCard
-            label="학습 샘플 수"
-            value={fmtNum(nSamples)}
-            color="var(--c-primary)"
-          />
-          <KpiCard
-            label="백테스트 정확도"
-            value={btScore != null ? `${(btScore * 100).toFixed(1)}%` : "—"}
-            color="var(--c-success)"
-          />
-          <KpiCard
-            label="학습 인사이트"
-            value={fmtNum(data?.insights?.length ?? 0)}
-            color="var(--c-warn)"
-          />
-          <KpiCard
-            label="예측 오차 MAE"
-            value={mae != null ? mae.toFixed(1) : "—"}
-            color="var(--c-muted, #94a3b8)"
-          />
+          <KpiCard label="학습 패턴"       value={fmtNum(kpiPatterns)} color="var(--c-primary)" />
+          <KpiCard label="패턴 적중"       value={fmtNum(kpiHits)}     color="var(--c-success)" />
+          <KpiCard label="LLM 없이 해결"   value={fmtNum(kpiSaved)}    color="var(--c-warn)" />
+          <KpiCard label="오류 자동해소율"  value={kpiRate != null ? `${kpiRate.toFixed(1)}%` : "—"}
+                   color="var(--c-muted, #94a3b8)" />
+        </div>
+      )}
+
+      {/* ── KPI 추세 차트 4종 (★ ERRORS [479]) ────────────────────────
+          숫자 하나는 '지금 몇 개' 만 알려주고 *늘고 있는지 꺾였는지* 는 못 알려준다.
+          같은 지표를 시간축으로 펼쳐 과거→현재 흐름을 함께 보인다. */}
+      {!isLoading && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))",
+                      gap: 16, marginTop: 20 }}>
+          <TrendChart title="학습 패턴 누적" hint="자산이 늘고 있나 — 평평해지면 학습 정체"
+                      data={timeline} xKey="at" yKey="patterns" color="#3b82f6" />
+          <TrendChart title="패턴 적중 누적" hint="학습한 것이 실제로 재사용되고 있나"
+                      data={timeline} xKey="at" yKey="hits" color="#22c55e" />
+          <TrendChart title="LLM 없이 해결" hint="학습의 목적 — 높을수록 LLM 호출 절약"
+                      data={timeline} xKey="at" yKey="llm_saved" color="#f59e0b" />
+          <TrendChart title="오류 자동해소율 (일별)" hint="학습이 결과를 바꾸고 있나" unit="%"
+                      data={resolveRate} xKey="at" yKey="rate" color="#94a3b8" />
         </div>
       )}
 

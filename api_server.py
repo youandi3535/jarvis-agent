@@ -560,8 +560,54 @@ def get_learning():
         r["backtest"] = []
     try:
         r["insights"] = _rows(con, "SELECT insight_key,insight_type,description,directive,weight,scope,occurrences,last_seen FROM learning_insights ORDER BY occurrences DESC LIMIT 20")
+        # ★ 총 개수는 *별도 조회* — 화면이 LIMIT 20 배열 길이를 실제 개수로 착각하던 버그 (ERRORS [479])
+        _ic = con.execute("SELECT COUNT(*) c FROM learning_insights").fetchone()
+        r["insights_total"] = _ic["c"] if _ic else 0
     except Exception:
         r["insights"] = []
+        r["insights_total"] = 0
+
+    # ★ KPI 시계열 (ERRORS [479]) — 과거→현재 추세를 화면에서 바로 보이게.
+    #   원천은 self_repair_runs(자가진단 회차별 스냅샷). 오래된 것부터 정렬해 그대로 차트에 사용.
+    try:
+        _tl = _rows(con,
+            "SELECT ran_at, patterns_count, hits_total, llm_saved "
+            "FROM self_repair_runs ORDER BY id DESC LIMIT 60")
+        r["timeline"] = [
+            {"at": x["ran_at"], "patterns": x["patterns_count"] or 0,
+             "hits": x["hits_total"] or 0, "llm_saved": x["llm_saved"] or 0}
+            for x in reversed(_tl)
+        ]
+    except Exception:
+        r["timeline"] = []
+
+    # 일별 오류 자동해소율 — '학습이 결과를 바꾸고 있나' 의 최종 지표
+    try:
+        _dr = _rows(con,
+            "SELECT substr(timestamp,1,10) d, COUNT(*) tot, "
+            "SUM(CASE WHEN status IN ('fixed','resolved') THEN 1 ELSE 0 END) fx "
+            "FROM error_log WHERE timestamp >= date('now','-30 days') "
+            "GROUP BY d ORDER BY d")
+        r["resolve_rate"] = [
+            {"at": x["d"], "total": x["tot"], "resolved": x["fx"],
+             "rate": round((x["fx"] * 100.0) / max(x["tot"], 1), 1)}
+            for x in _dr
+        ]
+    except Exception:
+        r["resolve_rate"] = []
+
+    # 현재 학습 자산 요약 (learned_patterns.json 실시간 조회 — 복사본 금지)
+    try:
+        import json as _js
+        from pathlib import Path as _P
+        _lp = _js.loads((_P(__file__).parent / "JARVIS07_GUARDIAN" / "learned_patterns.json").read_text(encoding="utf-8"))
+        _pats = _lp.get("patterns", []) if isinstance(_lp, dict) else []
+        r["patterns_now"] = {
+            "count": len(_pats),
+            "hits":  sum(int(x.get("hit_count", 0) or 0) for x in _pats),
+        }
+    except Exception:
+        r["patterns_now"] = {"count": 0, "hits": 0}
     try:
         ll = con.execute("SELECT COUNT(*) as cnt, AVG(ABS(actual_views - predicted_opp)) as mae FROM learn_log").fetchone()
         r["learn_log"] = {"cnt": ll["cnt"] if ll else 0, "mae": ll["mae"] if ll else None}

@@ -41,7 +41,11 @@ export type PerformanceData = {
   data_range:       { from: string | null; to: string | null; days: number };
 };
 export type PostRow    = { platform: string; title: string; current_views: number; naver_rank: number | null; created_at: string };
-export type LearningData = { weights: WeightRow[]; backtest: BacktestRow[]; insights: InsightRow[]; learn_log: { cnt: number; mae: number | null } };
+export type LearningPoint  = { at: string; patterns: number; hits: number; llm_saved: number };
+export type ResolvePoint   = { at: string; total: number; resolved: number; rate: number };
+export type LearningData = { weights: WeightRow[]; backtest: BacktestRow[]; insights: InsightRow[]; learn_log: { cnt: number; mae: number | null };
+  insights_total?: number; timeline?: LearningPoint[]; resolve_rate?: ResolvePoint[];
+  patterns_now?: { count: number; hits: number } };
 export type WeightRow  = { weight_type: string; weights_json: string; trained_at: string; backtest_score: number };
 export type BacktestRow = { tested_at: string; backtest_type: string; score: number; details: string };
 export type InsightRow = { insight_key: string; insight_type: string; description: string; directive: string; weight: number; scope: string; occurrences: number; last_seen: string };
