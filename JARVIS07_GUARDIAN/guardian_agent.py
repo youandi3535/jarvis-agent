@@ -474,7 +474,8 @@ def _orchestrate(error_id: int):
         #    ★ ERRORS [286] — 네트워크·Selenium 환경·외부 API 할당량·정상 제어흐름(테마 교체)·
         #    외부 발행(Layer 4)·Claude CLI 운영 오류는 wontfix 가 아니라 ignored.
         #    수동검토 큐 오염·알림 폭주 방지. 자동수정 파이프라인 진입 안 함.
-        from JARVIS07_GUARDIAN.severity import is_transient, kind_of
+        from JARVIS07_GUARDIAN.severity import (is_transient, kind_of,
+                                                is_deterministic_code_error)
         if is_transient(error_type, error_record.get("message", ""),
                         error_record.get("source", ""), kind=kind_of(error_record)):
             log.info(f"[GUARDIAN] #{error_id} 일시적/외부/제어흐름 오류 — ignored (자동수정 비대상): {error_type}")
@@ -518,6 +519,20 @@ def _orchestrate(error_id: int):
         _hb_stop = _start_heartbeat(error_id)
 
         log.info(f"[GUARDIAN] 오케스트레이터 시작 — #{error_id} [{severity}] {error_type}")
+
+        # ── 안전장치 2.6: 잠정 실패는 Tier 1 도 보류 — 단, 결정론적 타입은 예외 ──
+        #    (★ ERRORS [478] — 사용자 판단 2026-07-22, 안(다))
+        #    "1회 실패는 오류가 아니다" 는 Tier 1 에도 적용된다. Tier 1 은 LLM 을 안 쓰지만
+        #    **파일을 수정한다**(.bak 백업 후 패치). 일시적 실패에 코드를 건드리면
+        #    멀쩡한 코드를 고치는 것이다.
+        #    다만 `SyntaxError`·`ImportError`·`NameError` 처럼 **재시도해도 100% 같게
+        #    실패하는** 타입은 기다릴 이유가 없다 — 지금 고쳐야 다음 시도가 산다.
+        #    → 결정론적 타입만 즉시 Tier 1 허용. (Tier 2 는 비싸므로 이 타입도 뒤에서 보류)
+        if error_record.get("provisional") and not is_deterministic_code_error(error_type):
+            log.info(f"[GUARDIAN] #{error_id} 잠정 실패(재시도 남음) + 비결정론적({error_type}) "
+                     f"— Tier 1·2 모두 보류. 재시도 끝난 뒤 판정")
+            _db.mark_error_status(error_id, "new")
+            return
 
         # ── Tier 1: 패턴 수정 — 모든 심각도 시도 (Bandit, LLM 없음, 안전) ─
         #    (Bandit 보상은 pattern_fixer/error_fixer 내부에서 자동 기록)

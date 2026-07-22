@@ -133,6 +133,33 @@ _PATTERN_FIXABLE_TYPES = frozenset({
 })
 
 
+# ── 재시도해도 절대 낫지 않는 '결정론적' 오류 타입 (ERRORS [478]) ──────────
+#
+# ★ `_PATTERN_FIXABLE_TYPES` 와 **다른 질문** 이다. 혼동 금지:
+#     · `_PATTERN_FIXABLE_TYPES` = "패턴으로 고칠 수 있나?"   (fixer 선택)
+#     · 이 집합                  = "재시도해도 안 낫나?"      (수리 착수 시점)
+#   그래서 TypeError·AttributeError·ValueError 는 전자에는 있지만 **여기엔 없다** —
+#   `None` 이 와서 나는 경우가 많고, 그건 데이터가 아직 안 온 것이라 재시도하면 낫는다.
+#   반대로 여기 있는 것들은 *환경·코드가 바뀌지 않는 한 100% 같게 실패* 한다.
+#
+# 용도: 재시도가 남은 '잠정' 실패라도 이 타입이면 Tier-1(패턴 수정, LLM 0회)을 *즉시* 허용.
+#   기다려봐야 똑같이 실패하므로, 다음 시도가 살아나려면 지금 고쳐야 한다.
+#   (Tier-2(LLM)는 이 타입이어도 여전히 재시도 종료까지 보류 — 비싸기 때문.)
+DETERMINISTIC_CODE_ERROR_TYPES = frozenset({
+    "SyntaxError",          # 문법 오류 — 코드를 고치지 않는 한 영원히 동일
+    "IndentationError",     # 들여쓰기 오류 — 동일
+    "TabError",
+    "ImportError",          # 심볼 부재 — 재시도로 생기지 않음
+    "ModuleNotFoundError",  # 모듈 부재 — 동일
+    "NameError",            # 정의되지 않은 이름(오타) — 동일
+})
+
+
+def is_deterministic_code_error(error_type: str) -> bool:
+    """재시도해도 100% 같게 실패하는 코드 오류인가 — 즉시 수리 착수 대상."""
+    return (error_type or "") in DETERMINISTIC_CODE_ERROR_TYPES
+
+
 # ── 일시적·외부·제어흐름 오류 (코드 버그 아님 — 자동수정 비대상 → ignored) ──
 # ★ ERRORS [286] 박제 2026-06-28 — 이 부류는 wontfix(코드 결함 미해결)가 아니라 ignored.
 #   네트워크·Selenium 환경·외부 API 할당량·정상 제어흐름(테마 교체)·외부 발행(Layer 4)·
