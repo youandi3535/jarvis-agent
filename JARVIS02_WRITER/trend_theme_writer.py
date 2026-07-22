@@ -342,8 +342,10 @@ def _publish_tistory(draft: dict, theme: str, sector: str,
             _tg(f"✅ [THEME-TISTORY] 발행 완료\n제목: {draft['title']}\n테마: {theme}")
             try:
                 from shared.bus import on_post_published_detail as _emit
+                from JARVIS08_PUBLISH.platforms import last_post_url as _last_url
                 _imgs = [str(b[1]) for b in draft["blocks"] if b[0] == "image"]
                 _emit(theme=theme, platform="tistory", title=draft["title"],
+                      url=_last_url("tistory"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=draft["content"], html=draft["html"],
                       source_keyword=theme, post_type="theme",
                       image_paths=_imgs)
@@ -385,8 +387,10 @@ def _publish_naver(draft: dict, theme: str, sector: str) -> dict:
             _tg(f"✅ [THEME-NAVER] 발행 완료\n제목: {draft['title']}\n테마: {theme}")
             try:
                 from shared.bus import on_post_published_detail as _emit
+                from JARVIS08_PUBLISH.platforms import last_post_url as _last_url
                 _imgs = [str(b[1]) for b in draft["blocks"] if b[0] == "image"]
                 _emit(theme=theme, platform="naver", title=draft["title"],
+                      url=_last_url("naver"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=draft["content"], html=draft["html"],
                       source_keyword=theme, post_type="theme",
                       image_paths=_imgs)

@@ -1244,11 +1244,14 @@ def learn_log_fetch(min_samples: int = 20, max_age_days: int = 365) -> list[dict
     """학습용 row 가져오기 — 최근 max_age_days 이내, 최소 min_samples 이상이어야 함."""
     with get_db() as conn:
         rows = conn.execute(
+            # ★ naver_rank 포함 (ERRORS [483]) — 조회수는 플랫폼이 안 주므로 순위가 실질 학습
+            #   신호다. 종전엔 이 SELECT 에서 빠져 있어 build_target 이 순위를 못 봤다.
             f"""SELECT keyword, sector, platform, trend_score, perf_boost, freshness,
-                       velocity, competition, predicted_opp, actual_views, days_after, logged_at
+                       velocity, competition, predicted_opp, actual_views, days_after,
+                       logged_at, naver_rank
                 FROM learn_log
                 WHERE logged_at >= datetime('now', '-{int(max_age_days)} days', 'localtime')
-                  AND actual_views IS NOT NULL""",
+                  AND (actual_views IS NOT NULL OR naver_rank IS NOT NULL)""",
         ).fetchall()
     return [dict(r) for r in rows] if len(rows) >= min_samples else []
 

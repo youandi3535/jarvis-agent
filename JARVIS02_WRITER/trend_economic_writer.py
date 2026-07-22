@@ -979,8 +979,10 @@ def run_tistory() -> dict:
             # DB 저장 (텍스트 + HTML + 이미지 경로 포함)
             try:
                 from shared.bus import on_post_published_detail as _emit
+                from JARVIS08_PUBLISH.platforms import last_post_url as _last_url
                 _all_imgs = [str(b[1]) for b in blocks if b[0] == "image"]
                 _emit(theme=keyword, platform="tistory", title=title,
+                      url=_last_url("tistory"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=content, html=html,
                       source_keyword=keyword, post_type="economic",
                       image_paths=_all_imgs)
@@ -1183,8 +1185,10 @@ def run_naver(ts_keyword: str = '') -> dict:
             # DB 저장 (텍스트 + HTML + 이미지 경로 포함)
             try:
                 from shared.bus import on_post_published_detail as _emit
+                from JARVIS08_PUBLISH.platforms import last_post_url as _last_url
                 _all_imgs = [str(b[1]) for b in blocks if b[0] == "image"]
                 _emit(theme=keyword, platform="naver", title=title,
+                      url=_last_url("naver"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=content, html=html,
                       source_keyword=keyword, post_type="economic",
                       image_paths=_all_imgs)
@@ -1569,8 +1573,10 @@ def ts_publish(draft: dict) -> dict:
             #   이 함수를 send 콜백으로 쓰는데 emit 이 누락돼 07-01 이후 발행이 기록 0 이었음.
             try:
                 from shared.bus import on_post_published_detail as _emit
+                from JARVIS08_PUBLISH.platforms import last_post_url as _last_url
                 _imgs = [str(b[1]) for b in (blocks or []) if b and b[0] == "image"]
                 _emit(theme=keyword, platform="tistory", title=draft['title'],
+                      url=_last_url("tistory"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=draft.get('content', ''), html=html,
                       source_keyword=keyword, post_type="economic", image_paths=_imgs)
                 print(f"  ✅ [DB] post_analysis·posts 저장 완료 (이미지 {len(_imgs)}개)")
@@ -1938,8 +1944,10 @@ def nv_publish(draft: dict, ts_keyword: str = '') -> dict:
             # ★ DB 기록 (ERRORS [370]): 성공 발행 → posts·post_analysis 둘 다 기록 → 대시보드 동기화
             try:
                 from shared.bus import on_post_published_detail as _emit
+                from JARVIS08_PUBLISH.platforms import last_post_url as _last_url
                 _imgs = [str(b[1]) for b in (blocks or []) if b and b[0] == "image"]
                 _emit(theme=keyword, platform="naver", title=draft['title'],
+                      url=_last_url("naver"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=draft.get('content', ''), html=draft.get('html', ''),
                       source_keyword=keyword, post_type="economic", image_paths=_imgs)
                 print(f"  ✅ [DB] post_analysis·posts 저장 완료 (이미지 {len(_imgs)}개)")
