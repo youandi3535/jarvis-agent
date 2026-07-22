@@ -365,6 +365,12 @@ def init_db():
             conn.execute("ALTER TABLE error_log ADD COLUMN claimed_at TEXT")
         except Exception:
             pass
+        # provisional: 아직 재시도가 남은 '잠정' 실패 — Tier-2(LLM) 판정 보류 (ERRORS [476])
+        #   액션이 끝나야 '일시적' 인지 '결정론적' 인지 알 수 있다.
+        try:
+            conn.execute("ALTER TABLE error_log ADD COLUMN provisional INTEGER DEFAULT 0")
+        except Exception:
+            pass
         # NOTE: retry_count / retry_at / last_error 컬럼은 사후 retry 잡 폐기로 더 이상
         # 사용하지 않음. 기존 DB 에 남아 있어도 무시됨 (drop 하지 않음 — 데이터 보존).
         # source_keyword: RADAR pipeline 에서 발행 트리거 시 채워지는 trends.keyword 와
@@ -1781,6 +1787,33 @@ def heartbeat_error(error_id: int) -> bool:
             (_now, error_id),
         )
         return cur.rowcount > 0
+
+
+def mark_error_provisional(error_id: int, provisional: bool = True) -> bool:
+    """오류를 '잠정 실패' 로 표시/해제 — Tier-2(LLM) 판정 보류 여부 (ERRORS [476]).
+
+    ★ 왜 필요한가: harness 는 실패하면 재시도한다. attempt=1 실패 시점엔 그것이
+      *일시적* 인지(재시도로 해결) *결정론적* 인지(진짜 코드 버그) **알 수 없다**.
+      그런데 종전엔 그 즉시 GUARDIAN 이 Tier-2(LLM 수십 분)를 시작했다.
+      실측 2026-07-22: Tier-2 를 태운 harness 오류 74건 중 **57건(77%)이 attempt=1** —
+      결과를 알기도 전에 태운 것. 그중 일부는 나중에 액션이 성공해 소급 무효화됐다.
+    ★ 기록 자체는 즉시 남긴다(대시보드 관측성 유지). *판정만* 미룬다.
+    """
+    with get_db() as conn:
+        cur = conn.execute("UPDATE error_log SET provisional=? WHERE id=?",
+                           (1 if provisional else 0, error_id))
+        return cur.rowcount > 0
+
+
+def finalize_provisional_errors(error_ids: list) -> int:
+    """액션이 최종 실패로 끝났을 때 — 잠정 표시를 풀어 Tier-2 판정 대상으로 승격."""
+    ids = [int(i) for i in (error_ids or [])]
+    if not ids:
+        return 0
+    ph = ",".join("?" for _ in ids)
+    with get_db() as conn:
+        cur = conn.execute(f"UPDATE error_log SET provisional=0 WHERE id IN ({ph})", ids)
+        return cur.rowcount
 
 
 def bump_llm_attempts(error_id: int) -> int:

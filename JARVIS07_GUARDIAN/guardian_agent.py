@@ -537,6 +537,20 @@ def _orchestrate(error_id: int):
             _db.mark_error_status(error_id, "wontfix")
             return
 
+        # ── 안전장치 2.65: 잠정 실패는 Tier 2 보류 (★ ERRORS [476]) ────────────
+        #    harness 는 실패하면 재시도한다. attempt=1 실패 시점엔 그것이 *일시적* 인지
+        #    (재시도로 해결) *결정론적* 인지(진짜 코드 버그) 알 수 없다. 결과가 나오기 전에
+        #    LLM 수십 분을 태우는 것은 도박이다.
+        #    실측 2026-07-22: Tier-2 를 태운 harness 오류 74건 중 **57건(77%)이 attempt=1**.
+        #    액션이 최종 성공하면 `_resolve_attempt_errors` 가 해소 처리하므로 영영 안 온다
+        #    (= 애초에 문제가 아니었던 것). 최종 실패해야 `_finalize_attempt_errors` 가
+        #    잠정 표시를 풀어 여기로 돌아온다 (= 비로소 볼 만한 것).
+        if error_record.get("provisional"):
+            log.info(f"[GUARDIAN] #{error_id} 잠정 실패(재시도 남음) — Tier 2 보류. "
+                     f"액션 종료 후 재판정 (성공하면 자동 해소)")
+            _db.mark_error_status(error_id, "new")
+            return
+
         # ── 안전장치 2.7: 발행 우선 — 발행 중·직전이면 Tier 2 를 미룬다 (★ ERRORS [474]) ──
         #    Tier 2 는 한 세션이 10분 이상 LLM 차선을 점유한다. 발행이 도는 중에 이걸
         #    시작하면 발행이 LLM 을 못 잡아 lock_contention 으로 밀리고, 품질 게이트가
