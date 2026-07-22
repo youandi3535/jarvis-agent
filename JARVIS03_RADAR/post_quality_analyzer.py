@@ -288,7 +288,8 @@ def judge_engagement(title: str, content: str, post_type: str = "",
             break
         except Exception as e:
             last_err = str(e)
-            _g_report("radar", e, module=__name__)
+            _g_report("radar", e, module=__name__,
+                      attempt=_attempt + 1, max_attempts=2)
             break
 
     if obj is None:

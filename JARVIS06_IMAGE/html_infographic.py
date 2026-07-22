@@ -317,7 +317,8 @@ def generate_html_infographic(
 
         except Exception as e:
             log.debug(f"[html_infographic] 시도 {attempt+1} 예외: {e}")
-            _g_report("image", e, module=__name__, func_name="generate_html_infographic")
+            _g_report("image", e, module=__name__, func_name="generate_html_infographic",
+                      attempt=attempt + 1, max_attempts=max_retries)
 
     log.warning(f"[html_infographic] {max_retries}회 실패: {theme}/{_slot}")
     return ""

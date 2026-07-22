@@ -240,7 +240,8 @@ def _mandatory_thumbnail(title: str, keyword: str, sector: str, platform: str,
                 return p
         except Exception as e:
             log.warning(f"썸네일 시도 {attempt+1} 실패: {e}")
-            _g_report("image", e, module=__name__)
+            _g_report("image", e, module=__name__,
+                      attempt=attempt + 1, max_attempts=3)
     return _local_text_thumbnail(title, keyword, out_dir)   # 최후 로컬 카드
 
 

@@ -2,6 +2,46 @@
 
 ---
 
+## [477] ★ [476] 이 harness 에만 적용돼 있었다 — 모든 재시도 루프로 확대 (2026-07-22)
+
+- **발단**: 사용자 지적 — *"재시도가 있는 건 당연히 모든 재시도가 다 끝났을 때 오류 판별을
+  해야지. 2번 재시도면 2번 다 시도하고도 안 됐을 때 판별해야지. 모든 사항에 다 적용된 거지?"*
+  → **적용 안 돼 있었다.** [476] 은 harness 경로만 고쳤다. CLAUDE.md 3원칙 ③ 위반.
+- **전수 조사**: 재시도 루프 *안에서* 오류를 보고하는 지점을 전 코드베이스에서 탐색 →
+  실코드 9곳 발견. 맥락 확인 결과 **진짜 중간 보고는 7곳**:
+  ```
+  JARVIS03_RADAR/jobs.py                     topic_pack 사전생성 재시도마다 보고
+  JARVIS06_IMAGE/draft_processor.py          썸네일 3회 시도 → 3번 보고 (로컬 폴백 성공해도 이미 보고됨)
+  JARVIS06_IMAGE/html_infographic.py         인포그래픽 캡처 재시도마다 보고
+  JARVIS03_RADAR/post_quality_analyzer.py    품질 분석 재시도마다 보고
+  JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py  (2개 루프) 쿠키 갱신 재시도마다
+  JARVIS09_COLLECTOR/collect_theme.py        테마 수집 재시도마다 보고
+  ```
+  나머지 3곳(`trend_economic_writer`·`api_server`·`data_planner`)은 `break` 직전이거나
+  `if days_back == 0` 가드가 있어 **실제로는 최종 시점에만 보고** — 손대지 않았다.
+- **해결 — 단일 진입점에 흡수 (곳곳을 고치면 새 코드에서 재발)**:
+  · `error_collector.catch()` (= `report`, 모든 오류의 단일 진입점)에
+    `attempt` / `max_attempts` 파라미터 추가. `attempt < max_attempts` 면 잠정 표시
+    → GUARDIAN 이 Tier-2 를 보류. [476] 의 `provisional` 메커니즘을 그대로 재사용.
+  · 문제된 7곳에 `attempt=` / `max_attempts=` 전달.
+  · `job_retry_pending` 에 **오래된 잠정 정리** 추가 — harness 는 최종 실패 시
+    `_finalize_attempt_errors` 로 잠정을 풀지만, 일반 루프엔 그런 종결자가 없다.
+    재시도가 결국 성공했으면 앞선 실패는 애초에 문제가 아니었으므로, 일정 시간 후
+    `ignored` 처리해 스윕 재투입을 끊는다.
+- **파일**: `JARVIS07_GUARDIAN/error_collector.py` · `guardian_agent.py` ·
+  `JARVIS03_RADAR/{jobs,post_quality_analyzer}.py` ·
+  `JARVIS06_IMAGE/{draft_processor,html_infographic}.py` ·
+  `JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py` ·
+  `JARVIS09_COLLECTOR/collect_theme.py`
+- **검증**: ① 3회 중 1·2회 실패 후 3회 성공 → 앞선 2건 모두 잠정(LLM 0회)
+  ② 3회 모두 실패 → 1·2회 잠정, **3회차만 확정 → Tier-2 판정** ③ 루프 내부 미배선 재검사 0곳
+  (`trend_economic_writer:106` 은 가드 있는 정상 케이스로 확인).
+- **교훈**: **한 곳을 고치고 '됐다' 하지 말 것.** 같은 병은 대개 여러 곳에 있다.
+  그리고 **곳곳을 개별로 고치면 새 코드가 다시 앓는다** — 단일 진입점(`catch`)에
+  기능을 넣어야 앞으로 작성될 재시도 루프도 인자 하나로 보호받는다.
+
+---
+
 ## [476] ★ 판정 시점이 너무 일렀다 — 결과를 알기 전에 Tier-2 를 태움 (2026-07-22)
 
 - **발단**: 사용자 질문 — *"코드 버그인지 아닌지 확실하게 구분하는 판별기를 만들 수는 없나?"*

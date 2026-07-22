@@ -917,6 +917,32 @@ def job_retry_pending(*, max_per_run: int = 20, stuck_minutes: int = 30):
     except Exception as e:
         log.debug(f"[GUARDIAN/retry_pending] analyzing 리셋 예외: {e}")
 
+    # 1-B) 오래된 '잠정' 실패 정리 → ignored (★ ERRORS [477])
+    #      harness 는 최종 실패 시 `_finalize_attempt_errors` 로 잠정을 풀지만,
+    #      일반 재시도 루프(썸네일·수집 등)에는 그런 종결자가 없다. 재시도가 결국
+    #      성공했으면 앞선 시도 실패는 *애초에 문제가 아니었던 것* 이라 영영 잠정으로 남는다.
+    #      → 일정 시간이 지나도 잠정이면 '지나간 일' 로 보고 ignored 처리(스윕 재투입 중단).
+    prov_n = 0
+    try:
+        from datetime import datetime, timedelta
+        _thr = datetime.now() - timedelta(minutes=stuck_minutes)
+        for r in _db.list_errors(status="new", limit=max_per_run):
+            if not r.get("provisional"):
+                continue
+            _ts = r.get("claimed_at") or r.get("timestamp") or ""
+            try:
+                _dt2 = datetime.fromisoformat(str(_ts).replace("Z", "+00:00").split("+")[0])
+            except Exception:
+                continue
+            if _dt2 < _thr:
+                _db.mark_error_status(int(r["id"]), "ignored")
+                prov_n += 1
+    except Exception as e:
+        log.debug(f"[GUARDIAN/retry_pending] 잠정 정리 예외: {e}")
+    if prov_n:
+        log.info(f"[GUARDIAN/retry_pending] 오래된 잠정 실패 {prov_n}건 정리 → ignored "
+                 f"(재시도가 지나갔거나 종결자 없음)")
+
     # 2) new → _orchestrate 재투입
     retry_n = 0
     try:

@@ -376,7 +376,8 @@ def refresh_cookie(driver) -> str | None:
             print("  ✅ 이메일 입력 완료")
         except Exception as e:
             print(f"  ❌ 이메일 입력란 못 찾음: {e}")
-            _g_report("writer", e, module=__name__)
+            _g_report("writer", e, module=__name__,
+                      attempt=attempt, max_attempts=_RETRY_MAX)
             return None
 
         # 비밀번호 입력란 찾기
@@ -671,7 +672,8 @@ def run(force: bool = False, return_driver: bool = False, notify: bool = True):
         except Exception as e:
             last_error = e
             print(f"  ⚠️ 시도 {attempt} 예외: {e}")
-            _g_report("writer", e, module=__name__)
+            _g_report("writer", e, module=__name__,
+                      attempt=attempt, max_attempts=_RETRY_MAX)
 
     # ── 모든 재시도 실패 ─────────────────────────────────────────
     err_str = f": {last_error}" if last_error else ""
