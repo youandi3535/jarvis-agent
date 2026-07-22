@@ -189,7 +189,8 @@ export default function LearningPage() {
   const kpiRate     = resolveRate.length ? resolveRate[resolveRate.length - 1].rate : null;
 
   /* 글 품질 학습(ADR 014) — 오류 학습과 다른 시스템 (★ ERRORS [480]) */
-  const q        = data?.quality_now ?? { insights: 0, usage: 0, rewards: 0, avg_weight: 0, used: 0 };
+  const q = data?.quality_now ?? { insights: 0, usage: 0, rewards: 0,
+                                   avg_reward: 0, avg_weight: 0, rediscovered: 0, rewarded: 0 };
   const qTimeline = data?.quality_timeline ?? [];
 
   const insights      = (data?.insights ?? []).slice(0, 20);
@@ -248,11 +249,25 @@ export default function LearningPage() {
             블로그 글을 더 잘 쓰게 만드는 학습 — 위 오류 학습과 별개 시스템입니다
           </p>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
-            <KpiCard label="품질 지침"      value={fmtNum(q.insights)} color="var(--c-primary)" />
-            <KpiCard label="지침 주입"      value={fmtNum(q.usage)}    color="var(--c-success)" />
-            <KpiCard label="보상 검증"      value={fmtNum(q.rewards)}  color="var(--c-warn)" />
-            <KpiCard label="평균 지침 가중치" value={q.avg_weight.toFixed(3)}
+            <KpiCard label="① 쌓인 지침"   value={fmtNum(q.insights)} color="var(--c-primary)" />
+            <KpiCard label="② 실제 주입"   value={fmtNum(q.usage)}    color="var(--c-success)" />
+            <KpiCard label="③ 성과 채점"   value={fmtNum(q.rewards)}  color="var(--c-warn)" />
+            <KpiCard label="④ 평균 보상"   value={q.avg_reward ? q.avg_reward.toFixed(3) : "—"}
                      color="var(--c-muted, #94a3b8)" />
+          </div>
+          {/* 루프 병목 경고 — 숫자 4개를 나란히 봐야 '어디서 막혔나' 가 보인다 (ERRORS [481]) */}
+          <div style={{ fontSize: 14, color: "var(--c-text2)", marginBottom: 16, lineHeight: 1.7 }}>
+            학습 순환: <b>①</b> 발행글 분석에서 글쓰기 요령을 뽑아 쌓고 →
+            <b> ②</b> 다음 글 프롬프트에 주입 → <b>③</b> 그 글의 성과로 채점 →
+            <b> ④</b> 점수 좋은 지침만 살아남음.
+            {q.insights > 0 && (
+              <> {" "}현재 <b>{fmtNum(q.insights)}</b>개 중 주입 <b>{fmtNum(q.usage)}</b>회 ·
+                채점 <b>{fmtNum(q.rewards)}</b>회 · 보상받은 지침 <b>{fmtNum(q.rewarded)}</b>개
+                {q.rewards < q.insights / 10 && (
+                  <span style={{ color: "var(--c-warn)" }}> — ②③ 단계가 ① 대비 크게 뒤쳐져 있습니다</span>
+                )}
+              </>
+            )}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: 16 }}>
             <TrendChart title="품질 지침 누적" hint="글쓰기 지침 자산이 늘고 있나"

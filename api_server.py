@@ -612,20 +612,31 @@ def get_learning():
     # ★ 글 품질 학습 (ADR 014) — 오류 학습과 *다른 시스템* 이므로 별도 섹션 (ERRORS [480])
     #   라벨만 "학습 패턴" 이라고 쓰면 어느 학습인지 알 수 없다는 지적에 따라 분리.
     try:
+        # ★ 학습 루프 4단계를 그대로 보여준다 (ERRORS [481])
+        #   ① 지침 축적 → ② 프롬프트 주입 → ③ 성과 채점 → ④ 실제 보상
+        #   ★ '주입' 은 반드시 insight_usage(실제 주입 기록)에서 센다.
+        #     종전엔 SUM(occurrences)=661 을 '주입' 이라 표시했는데, occurrences 는
+        #     "이 지침이 글 분석에서 *재발견* 된 횟수"(①단계)라 완전히 다른 값이다.
+        #     실제 주입은 92회였다 — 7배 부풀려 보고 있었다.
         _q = con.execute(
             "SELECT COUNT(*) c, SUM(COALESCE(occurrences,0)) occ, "
             "SUM(COALESCE(reward_count,0)) rc, AVG(weight) w, "
-            "SUM(CASE WHEN last_used_at IS NOT NULL THEN 1 ELSE 0 END) used "
+            "AVG(CASE WHEN reward_count > 0 THEN reward_sum / reward_count END) ar, "
+            "SUM(CASE WHEN COALESCE(reward_count,0) > 0 THEN 1 ELSE 0 END) rewarded "
             "FROM learning_insights").fetchone()
+        _used = con.execute("SELECT COUNT(*) FROM insight_usage").fetchone()
         r["quality_now"] = {
-            "insights": _q["c"] or 0,
-            "usage":    _q["occ"] or 0,
-            "rewards":  _q["rc"] or 0,
-            "avg_weight": round(_q["w"] or 0, 3),
-            "used":     _q["used"] or 0,
+            "insights":   _q["c"] or 0,            # ① 쌓인 지침
+            "usage":      (_used[0] if _used else 0),  # ② 실제 주입 (insight_usage)
+            "rewards":    _q["rc"] or 0,           # ③ 채점 횟수
+            "avg_reward": round(_q["ar"] or 0, 3),  # ④ 평균 보상 = 실제 성과
+            "avg_weight": round(_q["w"] or 0, 3),   # (참고) 내부 신뢰도
+            "rediscovered": _q["occ"] or 0,        # (참고) 재발견 누계 — '주입' 아님
+            "rewarded":   _q["rewarded"] or 0,     # 보상 받은 지침 수
         }
     except Exception:
-        r["quality_now"] = {"insights": 0, "usage": 0, "rewards": 0, "avg_weight": 0, "used": 0}
+        r["quality_now"] = {"insights": 0, "usage": 0, "rewards": 0,
+                            "avg_reward": 0, "avg_weight": 0, "rediscovered": 0, "rewarded": 0}
 
     # 품질 지침 누적 추이 (first_seen 일별 → 누적 합산)
     try:
