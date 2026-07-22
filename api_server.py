@@ -542,15 +542,45 @@ def get_learning():
     r: dict = {}
     try:
         w = _rows(con, "SELECT id,w_trend,w_perf,w_fresh,w_velocity,w_competition,intercept,n_samples,r2,mse,learned_at FROM learned_weights ORDER BY id DESC LIMIT 3")
+        # ★ learned_weights.r2 는 *학습에 쓴 데이터로 자기 자신을 채점한* 값이다 (ERRORS [484]).
+        #   종전엔 이것을 '백테스트' 라는 이름으로 화면에 내보냈다 — 시험 문제를 미리 보고 푼
+        #   점수를 모의고사 점수라 부른 셈. 학습 점수는 언제나 후하므로 실력을 과대평가한다.
+        #   (실측: 학습 0.489 vs 진짜 백테스트 0.330)
+        #   → `train_r2`(학습 정확도)와 `backtest_r2`(안 써본 데이터 검증)를 *분리해서* 내보낸다.
+        _bt_all = _rows(con, "SELECT tested_at, r2 FROM backtest_history ORDER BY tested_at DESC")
+
+        def _nearest_backtest(when: str):
+            """같은 회차의 백테스트를 시각으로 매칭 — 학습·백테스트는 같은 잡에서 연이어 돈다."""
+            if not when or not _bt_all:
+                return None
+            _d = str(when)[:10]
+            for b in _bt_all:
+                if str(b["tested_at"])[:10] == _d:
+                    return b["r2"]
+            return None
+
         r["weights"] = [
             {
                 "weight_type":    "ridge",
                 "weights_json":   json.dumps({"w_trend": x["w_trend"], "w_perf": x["w_perf"], "w_fresh": x["w_fresh"], "w_velocity": x["w_velocity"], "w_competition": x["w_competition"], "intercept": x["intercept"]}, ensure_ascii=False),
                 "trained_at":     x["learned_at"],
-                "backtest_score": x["r2"],
+                "train_r2":       x["r2"],                       # 자기 채점 (낙관적)
+                "backtest_r2":    _nearest_backtest(x["learned_at"]),  # 안 써본 데이터 검증
+                "n_samples":      x["n_samples"],
             }
             for x in w
         ]
+
+        # ★ 학습 입력별 변별력 — '영향 없음(0%)' 과 '판단 불가(데이터 없음)' 은 다르다 (ERRORS [484])
+        #   velocity·competition 은 learn_log 에 상수로만 적재돼(0.0 / 50.0) 학습이 원리적으로 불가능.
+        try:
+            _fv = {}
+            for _c in ("trend_score", "perf_boost", "freshness", "velocity", "competition"):
+                _row = con.execute(f"SELECT COUNT(DISTINCT {_c}) c FROM learn_log").fetchone()
+                _fv[_c] = int(_row["c"] or 0)
+            r["feature_variance"] = _fv
+        except Exception:
+            r["feature_variance"] = {}
     except Exception:
         r["weights"] = []
     try:

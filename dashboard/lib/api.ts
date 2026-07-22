@@ -47,8 +47,10 @@ export type LearningData = { weights: WeightRow[]; backtest: BacktestRow[]; insi
   insights_total?: number; timeline?: LearningPoint[]; resolve_rate?: ResolvePoint[];
   patterns_now?: { count: number; hits: number };
   quality_now?: { insights: number; usage: number; rewards: number; avg_reward: number; avg_weight: number; rediscovered: number; rewarded: number };
-  quality_timeline?: Array<{ at: string; insights: number; added: number }> };
-export type WeightRow  = { weight_type: string; weights_json: string; trained_at: string; backtest_score: number };
+  quality_timeline?: Array<{ at: string; insights: number; added: number }>;
+  feature_variance?: Record<string, number> };
+export type WeightRow  = { weight_type: string; weights_json: string; trained_at: string;
+  train_r2: number | null; backtest_r2: number | null; n_samples?: number };
 export type BacktestRow = { tested_at: string; backtest_type: string; score: number; details: string };
 export type InsightRow = { insight_key: string; insight_type: string; description: string; directive: string; weight: number; scope: string; occurrences: number; last_seen: string };
 export type JobRun     = { job_id: string; job_name: string; started_at: string; success: number; error: string; owner_agent: string };

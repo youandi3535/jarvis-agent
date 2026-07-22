@@ -45,12 +45,12 @@ const td: React.CSSProperties = {
 };
 
 /* ── 가중치 필드 목록 ─────────────────────────────────────────────── */
-const WEIGHT_KEYS: { key: string; label: string }[] = [
-  { key: "w_trend",       label: "트렌드" },
-  { key: "w_perf",        label: "성과" },
-  { key: "w_fresh",       label: "신선도" },
-  { key: "w_velocity",    label: "속도" },
-  { key: "w_competition", label: "경쟁도" },
+const WEIGHT_KEYS: { key: string; label: string; col: string }[] = [
+  { key: "w_trend",       label: "트렌드",  col: "trend_score" },
+  { key: "w_perf",        label: "성과",    col: "perf_boost" },
+  { key: "w_fresh",       label: "신선도",  col: "freshness" },
+  { key: "w_velocity",    label: "속도",    col: "velocity" },
+  { key: "w_competition", label: "경쟁도",  col: "competition" },
 ];
 
 /* ── 가중치 파싱 ──────────────────────────────────────────────────── */
@@ -85,7 +85,7 @@ function MiniBar({ value, max = 1, color = "var(--c-primary)" }: { value: number
 }
 
 /* ── 가중치 카드 ──────────────────────────────────────────────────── */
-function WeightCard({ row }: { row: WeightRow }) {
+function WeightCard({ row, featVar }: { row: WeightRow; featVar?: Record<string, number> }) {
   const w = parseWeights(row.weights_json);
   return (
     <div style={{
@@ -96,19 +96,39 @@ function WeightCard({ row }: { row: WeightRow }) {
       flex: 1,
       minWidth: 200,
     }}>
-      <div style={{ fontSize: 12, color: "var(--c-text5)", marginBottom: 12 }}>
-        {fmtTime(row.trained_at)} &nbsp;·&nbsp; 백테스트 {row.backtest_score != null ? `${(row.backtest_score * 100).toFixed(1)}%` : "—"}
-      </div>
+        <div style={{ fontSize: 14, color: "var(--c-text5)", marginBottom: 4 }}>
+          {fmtTime(row.trained_at)}{row.n_samples ? ` · 표본 ${row.n_samples}` : ""}
+        </div>
+        {/* ★ ERRORS [484] — 학습 점수(자기 채점)와 백테스트(안 써본 데이터)는 다른 값이다.
+            종전엔 학습 점수를 '백테스트' 라 표시해 실력을 과대평가하게 만들었다. */}
+        <div style={{ fontSize: 14, color: "var(--c-text2)", marginBottom: 12 }}>
+          학습 정확도 <b>{row.train_r2 != null ? `${(row.train_r2 * 100).toFixed(1)}%` : "—"}</b>
+          {" · "}백테스트{" "}
+          <b style={{ color: row.backtest_r2 != null ? "var(--c-success)" : "var(--c-text5)" }}>
+            {row.backtest_r2 != null ? `${(row.backtest_r2 * 100).toFixed(1)}%` : "—"}
+          </b>
+          <span style={{ color: "var(--c-text5)" }}> (안 써본 데이터 검증 — 이쪽이 실력)</span>
+        </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {WEIGHT_KEYS.map(({ key, label }) => {
-          const val = typeof w[key] === "number" ? w[key] : 0;
-          return (
-            <div key={key}>
-              <div style={{ fontSize: 12, color: "var(--c-text2)", marginBottom: 4 }}>{label}</div>
-              <MiniBar value={val} max={1} color="var(--c-primary)" />
-            </div>
-          );
-        })}
+          {WEIGHT_KEYS.map(({ key, label, col }) => {
+            const val = typeof w[key] === "number" ? w[key] : 0;
+            /* ★ '영향 없음(0%)' 과 '판단 불가(입력이 상수)' 는 다르다 (ERRORS [484]).
+               learn_log 에 고유값이 1종뿐이면 학습이 원리적으로 불가능하다. */
+            const nUniq = featVar?.[col];
+            const dead  = nUniq != null && nUniq <= 1;
+            return (
+              <div key={key}>
+                <div style={{ fontSize: 14, color: "var(--c-text2)", marginBottom: 4 }}>{label}</div>
+                {dead ? (
+                  <div style={{ fontSize: 14, color: "var(--c-warn)" }}>
+                    데이터 없음 — 입력이 항상 같은 값이라 학습 불가
+                  </div>
+                ) : (
+                  <MiniBar value={val} max={1} color="var(--c-primary)" />
+                )}
+              </div>
+            );
+          })}
       </div>
     </div>
   );
@@ -192,6 +212,7 @@ export default function LearningPage() {
   const q = data?.quality_now ?? { insights: 0, usage: 0, rewards: 0,
                                    avg_reward: 0, avg_weight: 0, rediscovered: 0, rewarded: 0 };
   const qTimeline = data?.quality_timeline ?? [];
+  const featVar   = data?.feature_variance;   // 입력별 고유값 수 — 학습 가능 여부 판정 (ERRORS [484])
 
   const insights      = (data?.insights ?? []).slice(0, 20);
   const insightsTotal = data?.insights_total ?? insights.length;
@@ -289,7 +310,7 @@ export default function LearningPage() {
           <div style={{ color: "var(--c-text2)", fontSize: 14, padding: "16px 0" }}>가중치 데이터가 없습니다.</div>
         ) : (
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-            {weights.map((row, i) => <WeightCard key={i} row={row} />)}
+            {weights.map((row, i) => <WeightCard key={i} row={row} featVar={featVar} />)}
           </div>
         )}
       </div>
