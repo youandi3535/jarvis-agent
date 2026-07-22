@@ -15,6 +15,28 @@ Selenium은 브라우저 열기/로그인/페이지이동만 담당
 """
 import os, re, time, random, sys, pickle, subprocess
 from pathlib import Path
+
+# ── ★ 출력 단일 진입점 — print + logging 동시 (ERRORS [472], 2026-07-22) ──────
+#   종전엔 발행 진행 상황을 print() 로만 남겨, stdout 배관(subprocess 리다이렉트)이
+#   어긋나면 *발행 단계 로그가 통째로 유실* 됐다 (2026-07-22 경제: 65줄 vs 정상 355줄).
+#   그 탓에 "썸네일이 왜 안 올라갔나" 를 스크린샷·DB 로 우회 추적해야 했다.
+#   → 배관에 의존하지 말고 로깅으로도 남긴다. 새 출력은 print 말고 _p() 를 쓸 것.
+import logging as _logging
+log = _logging.getLogger(__name__)
+
+
+def _p(*args, **kwargs):
+    """진행 출력 — 터미널(print)과 로그(logging) 양쪽에 남긴다."""
+    try:
+        print(*args, **kwargs)
+    except Exception:
+        pass
+    try:
+        log.info(" ".join(str(a) for a in args))
+    except Exception:
+        pass
+
+
 from dotenv import load_dotenv
 
 def _max_attempts() -> int:
@@ -193,7 +215,7 @@ def _kill_naver_chrome():
     )
     pids = [p.strip() for p in result.stdout.splitlines() if p.strip()]
     if pids:
-        print(f"  🔪 기존 Chrome(naver 프로필) 프로세스 {len(pids)}개 종료...")
+        _p(f"  🔪 기존 Chrome(naver 프로필) 프로세스 {len(pids)}개 종료...")
         _sp.run(["kill"] + pids, capture_output=True)
         time.sleep(2)
 
@@ -249,7 +271,7 @@ def _click(x: int, y: int, label: str = ""):
     pyautogui.click()
     time.sleep(0.5)
     if label:
-        print(f"  🖱️  {label} ({x},{y})")
+        _p(f"  🖱️  {label} ({x},{y})")
 
 
 def _paste(text: str):
@@ -284,14 +306,110 @@ def _cgevent_paste():
         time.sleep(0.05)
 
 
-def _upload_image(img_path: str, driver=None):
-    """사진 아이콘 → Cmd+Shift+G → 전체 경로 직접 입력 → 파일 업로드
+def _count_editor_images(driver) -> int:
+    """에디터 본문의 이미지 수 — 업로드 성공 판정용 (★ ERRORS [472], 2026-07-22).
+
+    ★ 절대 개수가 아니라 *증분* 으로 판정한다. 그래서 셀렉터가 네이버 DOM 과 정확히
+      일치하지 않아도 '일관되게만' 세면 판정이 성립한다.
+    ★ 조회 불가 시 -1 → 호출자가 검증을 *건너뛴다*(fail-open). 셀렉터가 바뀌었을 때
+      매 업로드가 실패 판정되어 발행이 통째로 막히는 사고를 막기 위함.
+    """
+    if not driver:
+        return -1
+    try:
+        n = driver.execute_script("""
+            var sels = ['.se-component.se-image', '.se-image-resource',
+                        '.se-module-image img', '.se-section-image'];
+            for (var i = 0; i < sels.length; i++) {
+                var c = document.querySelectorAll(sels[i]).length;
+                if (c > 0) return c;
+            }
+            var body = document.querySelector('.se-content')
+                    || document.querySelector('.se-container');
+            return body ? body.querySelectorAll('img').length : -1;
+        """)
+        return int(n) if n is not None else -1
+    except Exception:
+        return -1
+
+
+def _close_library_panel(driver) -> bool:
+    """업로드 후 열리는 라이브러리 패널 닫기 — 열려 있으면 이미지 카운트가 오염된다."""
+    if not driver:
+        return False
+    try:
+        r = driver.execute_script("""
+            var btns = Array.from(document.querySelectorAll('button'));
+            // 우측 상단 소형 버튼(닫기 X) 탐색: x>700, y<90, 너비<35
+            var closeBtn = btns.find(function(btn) {
+                var r = btn.getBoundingClientRect();
+                return r.right > 700 && r.top < 90 && r.top > 30 && r.width < 35;
+            });
+            if (closeBtn) { closeBtn.click(); return 'closed'; }
+            return 'no-panel';
+        """)
+        if r == 'closed':
+            time.sleep(0.3)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _upload_image(img_path: str, driver=None) -> bool:
+    """이미지 업로드 **+ 성공 검증 + 재시도** — 업로드의 단일 진입점 (ERRORS [472]).
+
+    ★ 종전엔 좌표 클릭과 고정 sleep 을 늘어놓고 *성공 여부를 확인하지 않았다*.
+      Finder 가 제때 안 뜨거나 창 포커스가 어긋나면 뒤따르는 키 입력이 허공으로 가고,
+      예외도 로그도 재시도도 없이 조용히 넘어갔다.
+      2026-07-22 경제 브리핑 네이버에서 **썸네일 1장만 누락** 된 사고가 그 결과다
+      (생성·블록 조립은 정상, 에디터 업로드만 실패 → 네이버가 인포그래픽을 대표로 자동 지정).
+    ★ 이제 업로드 전후 이미지 수를 비교해 *실제 반영* 을 확인하고, 미반영이면 재시도한다.
+      재시도 상한은 harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생.
+    ★ 최종 실패해도 발행을 중단하지 *않는다* — 이 시점엔 이미 에디터에 본문이 절반쯤
+      들어가 있어, 중단하면 네이버에 미완성 임시저장만 남아 더 나쁘다. 대신 GUARDIAN 에
+      보고해 조용한 실패를 없앤다.
+
+    Returns: True = 반영 확인(또는 계측 불가로 검증 생략) / False = 최종 미반영
+    """
+    fname = Path(str(img_path)).name
+    before = _count_editor_images(driver)
+    attempts = _max_attempts()
+
+    for i in range(1, attempts + 1):
+        _upload_image_once(img_path, driver=driver)
+        _close_library_panel(driver)
+        after = _count_editor_images(driver)
+
+        if before < 0 or after < 0:
+            _p(f"    ℹ️ 이미지 수 계측 불가 → 업로드 검증 생략: {fname}")
+            return True
+        if after > before:
+            if i > 1:
+                _p(f"    ✅ 재시도 {i}회차에 반영 확인: {fname}")
+            return True
+        _p(f"    ⚠️ 업로드 미반영 (이미지 {before}→{after}) — 재시도 {i}/{attempts}: {fname}")
+
+    _p(f"    ❌ 이미지 업로드 최종 실패 ({attempts}회 시도, 미반영): {fname}")
+    try:
+        _g_report("publish",
+                  RuntimeError(f"네이버 이미지 업로드 미반영: {fname}"),
+                  module=__name__, func_name="_upload_image")
+    except Exception:
+        pass
+    return False
+
+
+def _upload_image_once(img_path: str, driver=None):
+    """사진 아이콘 → Cmd+Shift+G → 전체 경로 직접 입력 → 파일 업로드 (검증 없는 1회 시도).
+
+    ★ 직접 호출 금지 — 반드시 검증·재시도를 하는 `_upload_image()` 를 쓸 것.
     (파일명 Spotlight 검색 방식 폐기 — 검색 결과 없을 때 무한 대기 버그 수정)
     """
     import pyautogui as _pg, pyperclip
     abs_path = str(Path(img_path).resolve())
     fname = Path(abs_path).name
-    print(f"    📁 업로드: {fname}")
+    _p(f"    📁 업로드: {fname}")
 
     # 1) 전체 경로를 클립보드에 복사 (다이얼로그 열기 전에 미리)
     pyperclip.copy(abs_path)
@@ -303,19 +421,19 @@ def _upload_image(img_path: str, driver=None):
 
     # 3) Cmd+Shift+G → "폴더로 이동" 입력 시트 열기
     #    파일 경로를 붙여넣으면 해당 파일로 직접 이동 (Spotlight 검색 불필요)
-    print(f"    📂 Cmd+Shift+G (폴더로 이동)...")
+    _p(f"    📂 Cmd+Shift+G (폴더로 이동)...")
     _pg.hotkey('command', 'shift', 'g')
     time.sleep(1.0)
 
     # 4) 기존 내용 삭제 후 전체 경로 붙여넣기
     _pg.hotkey('command', 'a')
     time.sleep(0.2)
-    print(f"    📋 전체 경로 붙여넣기 (CGEvent kCGHIDEventTap)...")
+    _p(f"    📋 전체 경로 붙여넣기 (CGEvent kCGHIDEventTap)...")
     try:
         _cgevent_paste()
-        print(f"    ✅ 경로 붙여넣기 완료")
+        _p(f"    ✅ 경로 붙여넣기 완료")
     except Exception as _e:
-        print(f"    ⚠️ CGEvent 실패({_e}), pyautogui fallback")
+        _p(f"    ⚠️ CGEvent 실패({_e}), pyautogui fallback")
         _g_report("writer", _e, module=__name__)
         _pg.hotkey('command', 'v')
     time.sleep(0.8)
@@ -361,7 +479,7 @@ def _dismiss_naver_popup(driver) -> bool:
             return null;
         """)
         if popup_open:
-            print(f"  ⚠️ [Naver] 팝업 감지({popup_open}) → ESC로 닫기")
+            _p(f"  ⚠️ [Naver] 팝업 감지({popup_open}) → ESC로 닫기")
             import pyautogui as _pg2
             _pg2.press('escape')
             time.sleep(0.8)
@@ -402,34 +520,34 @@ def _verify_naver_published(driver) -> bool:
     for _attempt in range(_max_attempts()):
         try:
             current_url = driver.current_url
-            print(f"  [verify] attempt {_attempt+1}/{_max_attempts()} — URL: {current_url[:120]}")
+            _p(f"  [verify] attempt {_attempt+1}/{_max_attempts()} — URL: {current_url[:120]}")
 
             # ── URL 기반 체크 ──────────────────────────────────────
             # ★ ERRORS [278] 핵심 수정: blog.naver.com 에 logNo= 있으면 발행 성공
             if "blog.naver.com" in current_url and "logNo=" in current_url:
-                print(f"  [verify] URL logNo 패턴 확인 → 발행 성공")
+                _p(f"  [verify] URL logNo 패턴 확인 → 발행 성공")
                 return True
 
             # blog.naver.com/ID/숫자 — 직접 경로 형태
             if _re.search(r'blog\.naver\.com/\w+/\d+', current_url):
-                print(f"  [verify] URL path 패턴 확인 → 발행 성공")
+                _p(f"  [verify] URL path 패턴 확인 → 발행 성공")
                 return True
 
             # ★ ERRORS [279] — 에디터 이탈 자체가 발행 성공 시그널
             # blog.naver.com 에 있고 에디터(/postwrite) 가 아니면 발행 완료 페이지
             if "blog.naver.com" in current_url and "/postwrite" not in current_url and "/login" not in current_url:
-                print(f"  [verify] 에디터 이탈 확인 ({current_url[:80]}) → 발행 성공")
+                _p(f"  [verify] 에디터 이탈 확인 ({current_url[:80]}) → 발행 성공")
                 return True
 
             # 에디터 URL (write/postwrite 에 logNo 없음) — 아직 전환 안 됨
             if "/postwrite" in current_url and "logNo=" not in current_url:
-                print(f"  [verify] 에디터 URL 유지 (logNo 없음) → 재확인 대기")
+                _p(f"  [verify] 에디터 URL 유지 (logNo 없음) → 재확인 대기")
                 if _attempt < 2:
                     _time.sleep(4)
                 continue
 
         except Exception as _url_err:
-            print(f"  [verify] URL 체크 예외: {_url_err}")
+            _p(f"  [verify] URL 체크 예외: {_url_err}")
 
         # ── DOM 기반 체크 ──────────────────────────────────────
         try:
@@ -454,18 +572,18 @@ def _verify_naver_published(driver) -> bool:
                 return null;
             """)
             if published_signal:
-                print(f"  [verify] DOM 기반 발행 확인 (attempt {_attempt+1}): {published_signal}")
+                _p(f"  [verify] DOM 기반 발행 확인 (attempt {_attempt+1}): {published_signal}")
                 return True
             else:
-                print(f"  [verify] DOM 시그널 없음 (attempt {_attempt+1})")
+                _p(f"  [verify] DOM 시그널 없음 (attempt {_attempt+1})")
         except Exception as _dom_err:
-            print(f"  [verify] DOM 체크 예외 (attempt {_attempt+1}): {_dom_err}")
+            _p(f"  [verify] DOM 체크 예외 (attempt {_attempt+1}): {_dom_err}")
 
         # 아직 전환 안 됨 → 4초 대기 후 재확인
         if _attempt < 2:
             _time.sleep(4)
 
-    print("  [verify] 3회 시도 모두 실패 → 발행 미완료 판정")
+    _p("  [verify] 3회 시도 모두 실패 → 발행 미완료 판정")
     return False
 
 
@@ -531,13 +649,13 @@ def _click_publish_btn(driver, label: str = "최종발행") -> bool:
         txt = (btn.text or "").strip()
         try:
             ActionChains(driver).move_to_element(btn).pause(0.3).click(btn).perform()
-            print(f"  🖱️ {label}({txt}) ActionChains 클릭 완료")
+            _p(f"  🖱️ {label}({txt}) ActionChains 클릭 완료")
             return True
         except ElementClickInterceptedException:
-            print(f"  ⚠️ {label} 클릭 가로챔 — dim 재제거 후 재시도")
+            _p(f"  ⚠️ {label} 클릭 가로챔 — dim 재제거 후 재시도")
             continue
         except Exception as _ce:
-            print(f"  ⚠️ {label} ActionChains 실패({_ce}) — 물리 클릭 폴백")
+            _p(f"  ⚠️ {label} ActionChains 실패({_ce}) — 물리 클릭 폴백")
             try:
                 r = btn.rect or {}
                 _click_in_browser(driver,
@@ -588,12 +706,12 @@ def _load_cookies_to_browser(driver):
     # 실제로 브라우저에 로드된 쿠키 확인
     loaded = {c["name"] for c in driver.get_cookies()}
     has_auth = "NID_AUT" in loaded and "NID_SES" in loaded
-    print(f"  🍪 쿠키 로드: {added}개 추가 / {skipped_expired}개 만료 스킵 / {failed}개 실패")
-    print(f"  🍪 브라우저 확인: {loaded}")
+    _p(f"  🍪 쿠키 로드: {added}개 추가 / {skipped_expired}개 만료 스킵 / {failed}개 실패")
+    _p(f"  🍪 브라우저 확인: {loaded}")
     if has_auth:
-        print(f"  ✅ NID_AUT/NID_SES 정상 로드됨")
+        _p(f"  ✅ NID_AUT/NID_SES 정상 로드됨")
     else:
-        print(f"  ❌ NID_AUT/NID_SES 로드 실패 — pkl 쿠키가 불완전하거나 세션 만료됨")
+        _p(f"  ❌ NID_AUT/NID_SES 로드 실패 — pkl 쿠키가 불완전하거나 세션 만료됨")
     return True
 
 
@@ -609,21 +727,21 @@ def _ensure_logged_in(driver) -> bool:
     # 0) 프로필 기존 세션 먼저 확인 (쿠키 덮어쓰기 없이)
     #    → 수동 로그인 후 생성된 유효 세션이 있으면 그대로 사용
     if _check_blog_login(driver):
-        print("  ✅ 프로필 세션 유효 → 쿠키 덮어쓰기 생략")
+        _p("  ✅ 프로필 세션 유효 → 쿠키 덮어쓰기 생략")
         return True
 
     # 1) 프로필 세션 만료 → pkl 쿠키 적용 후 재확인
     if _load_cookies_to_browser(driver):
         if _check_blog_login(driver):
-            print("  ✅ pkl 쿠키 로그인 유지")
+            _p("  ✅ pkl 쿠키 로그인 유지")
             return True
-        print("  ⚠️ 쿠키 브라우저 적용 실패 → 강제 갱신...")
+        _p("  ⚠️ 쿠키 브라우저 적용 실패 → 강제 갱신...")
     else:
-        print("  ⚠️ 쿠키 파일 없음 → 강제 갱신...")
+        _p("  ⚠️ 쿠키 파일 없음 → 강제 갱신...")
 
     # 2) pkl 쿠키도 실패 → 상위 함수(post_to_naver)에서 driver를 닫고 naver 프로필로 재로그인 처리
     # (이 시점에 refresh_naver_cookies를 호출하면 poster Chrome과 naver 프로필 충돌 발생)
-    print("  ❌ 로그인 실패 — post_to_naver에서 드라이버 재시작 후 재시도 예정")
+    _p("  ❌ 로그인 실패 — post_to_naver에서 드라이버 재시작 후 재시도 예정")
     return False
 
 
@@ -635,18 +753,18 @@ def _pre_check_and_refresh_cookie():
     """
     try:
         from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import check_cookie_valid, refresh_naver_cookies
-        print("  🔍 네이버 쿠키 사전 확인 중...")
+        _p("  🔍 네이버 쿠키 사전 확인 중...")
         if not check_cookie_valid():
-            print("  🔄 쿠키 만료 확인 → 갱신 시작...")
+            _p("  🔄 쿠키 만료 확인 → 갱신 시작...")
             ok = refresh_naver_cookies(force=True)
             if ok:
-                print("  ✅ 쿠키 갱신 완료 → 포스팅 진행")
+                _p("  ✅ 쿠키 갱신 완료 → 포스팅 진행")
             else:
-                print("  ❌ 쿠키 갱신 실패 — 포스팅 시도는 계속합니다")
+                _p("  ❌ 쿠키 갱신 실패 — 포스팅 시도는 계속합니다")
         else:
-            print("  ✅ 쿠키 유효 → 포스팅 진행")
+            _p("  ✅ 쿠키 유효 → 포스팅 진행")
     except Exception as e:
-        print(f"  ⚠️ 쿠키 사전 확인 오류: {e}")
+        _p(f"  ⚠️ 쿠키 사전 확인 오류: {e}")
         _g_report("writer", e, module=__name__)
 
 
@@ -668,7 +786,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
     # ── 쿠키 사전 확인 & 갱신 (브라우저 열기 전) ──────────────
     _pre_check_and_refresh_cookie()
 
-    print("  🔄 HTML → 텍스트 변환 중...")
+    _p("  🔄 HTML → 텍스트 변환 중...")
     naver_text = html_to_naver_text(html_content)
 
     # blocks 가 있으면 blocks 텍스트 기준 글자수 측정 (length_manager 위임)
@@ -679,10 +797,10 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
     if blocks:
         _blocks_text = '\n\n'.join(str(d) for t, d in blocks if t == 'text')
         kor_count = _L_np.count(_blocks_text)
-        print(f"  ✅ 블록 기준 한글 {kor_count:,}자")
+        _p(f"  ✅ 블록 기준 한글 {kor_count:,}자")
     else:
         kor_count = _L_np.count(naver_text)
-        print(f"  ✅ 변환 완료 ({len(naver_text):,}자 / 한글 {kor_count:,}자)")
+        _p(f"  ✅ 변환 완료 ({len(naver_text):,}자 / 한글 {kor_count:,}자)")
 
 
     driver = None
@@ -693,7 +811,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
         if not _ensure_logged_in(driver):
             # 1차 실패: driver를 닫고 refresher가 naver 프로필(신뢰 기기)로 재로그인
             # naver 프로필은 네이버가 "등록된 기기"로 인식 → CAPTCHA 없이 로그인 가능
-            print("  🔄 드라이버 재시작 & 프로필 재로그인 시도...")
+            _p("  🔄 드라이버 재시작 & 프로필 재로그인 시도...")
             try: driver.quit()
             except Exception: pass
             driver = None
@@ -701,27 +819,27 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import refresh_naver_cookies
                 refreshed = refresh_naver_cookies(force=True)  # naver 프로필 사용 (driver 닫은 후)
             except Exception as _re:
-                print(f"  ⚠️ 쿠키 갱신 오류: {_re}")
+                _p(f"  ⚠️ 쿠키 갱신 오류: {_re}")
                 _g_report("writer", _re, module=__name__)
                 refreshed = False
             if refreshed:
                 driver = _get_driver()
                 if _check_blog_login(driver):
-                    print("  ✅ 프로필 재로그인 후 로그인 성공")
+                    _p("  ✅ 프로필 재로그인 후 로그인 성공")
                     # _check_blog_login이 이미 글쓰기 URL로 이동해둠 — 아래 5초 대기로 이어짐
                 else:
-                    print("  ❌ 재로그인 후에도 블로그 접근 실패"); return False
+                    _p("  ❌ 재로그인 후에도 블로그 접근 실패"); return False
             else:
-                print("  ❌ 로그인 실패"); return False
+                _p("  ❌ 로그인 실패"); return False
 
         # _ensure_logged_in() / _check_blog_login()이 이미 글쓰기 URL로 이동해둠
         # 수정 모드면 그 위에 logNo 파라미터로 다시 이동 → SmartEditor 가 기존 본문 채워서 열림
         if edit_log_no:
             edit_url = f"https://blog.naver.com/{NV_ID}/postwrite?logNo={edit_log_no}&redirect=Update"
-            print(f"  ✏️  수정 모드 진입: logNo={edit_log_no}")
+            _p(f"  ✏️  수정 모드 진입: logNo={edit_log_no}")
             driver.get(edit_url)
             time.sleep(8)
-        print("  📝 글쓰기 페이지 로드 대기...")
+        _p("  📝 글쓰기 페이지 로드 대기...")
         time.sleep(5)
 
         from selenium.webdriver.common.by import By
@@ -730,7 +848,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
 
         if 'nidlogin' in driver.current_url:
             # JS 인젝션 로그인 사용 금지 (CAPTCHA 유발) — 쿠키 갱신 후 재시도
-            print("  ⚠️ 글쓰기 페이지 접근 시 로그인 필요 → 쿠키 갱신 재시도")
+            _p("  ⚠️ 글쓰기 페이지 접근 시 로그인 필요 → 쿠키 갱신 재시도")
             try:
                 from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import refresh_naver_cookies
                 if refresh_naver_cookies(force=True):
@@ -743,27 +861,27 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                     driver.get(f"https://blog.naver.com/{NV_ID}/postwrite")
                     time.sleep(8)
                     if 'nidlogin' in driver.current_url:
-                        print("  ❌ 쿠키 갱신 후에도 로그인 실패")
+                        _p("  ❌ 쿠키 갱신 후에도 로그인 실패")
                         return False
                 else:
-                    print("  ❌ 쿠키 갱신 실패")
+                    _p("  ❌ 쿠키 갱신 실패")
                     return False
             except Exception as _le:
-                print(f"  ❌ 쿠키 갱신 오류: {_le}")
+                _p(f"  ❌ 쿠키 갱신 오류: {_le}")
                 _g_report("writer", _le, module=__name__)
                 return False
 
         # ── 임시저장 팝업 → 취소 ──────────────────────
-        print("  🔔 임시저장 팝업 확인...")
+        _p("  🔔 임시저장 팝업 확인...")
         try:
             btn = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(.)='취소']"))
             )
             driver.execute_script("arguments[0].click()", btn)
-            print("  ✅ 취소 클릭 (새 글)")
+            _p("  ✅ 취소 클릭 (새 글)")
             time.sleep(2)
         except:
-            print("  ℹ️  팝업 없음")
+            _p("  ℹ️  팝업 없음")
 
         # ── 도움말 닫기 ────────────────────────────────
         for _ in range(10):
@@ -777,16 +895,16 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
 
         win_w = driver.execute_script("return window.innerWidth")
         win_h = driver.execute_script("return window.innerHeight")
-        print(f"  📐 브라우저 내부 크기: {win_w}x{win_h}")
+        _p(f"  📐 브라우저 내부 크기: {win_w}x{win_h}")
 
         driver.save_screenshot(str(IMG_EDITOR / "before_input.png"))
-        print("  ✅ 에디터 준비 완료")
+        _p("  ✅ 에디터 준비 완료")
 
         # ── 제목 입력 ── (★ 선택자 기반 포커스 — 고정좌표·OS포커스 취약성 근본수정, ERRORS [365])
         #   좌표(283,336) 클릭이 창 위치·툴바 높이 변화로 제목칸을 빗나가면 제목 미입력→발행 실패
         #   (에디터 URL 유지·logNo 없음). SmartEditor ONE 제목 = *최상단* contenteditable.
         #   본문 포커스(_focus_editor_body)와 동일한 CDP 방식으로 안정 포커스.
-        print("  ✏️  제목 입력...")
+        _p("  ✏️  제목 입력...")
         driver.execute_script("window.scrollTo(0,0)")
         time.sleep(0.5)
         import pyautogui as _pg2
@@ -853,7 +971,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
 
         # 초기 포커스 + 팝업 정리 (이후 _paste_title 가 매번 재포커스)
         if not _focus_title():
-            print("  ⚠️ 제목 선택자 미발견 → 좌표 폴백")
+            _p("  ⚠️ 제목 선택자 미발견 → 좌표 폴백")
             _click(283, 336, "제목 클릭")
         time.sleep(0.4)
         _activate_window()
@@ -913,7 +1031,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 else:
                     _paste_title()   # element 미발견 시 기존 클립보드 폴백
             except Exception as _te:
-                print(f"  ⚠️ 제목 입력 시도 {_attempt + 1} 실패: {_te}")
+                _p(f"  ⚠️ 제목 입력 시도 {_attempt + 1} 실패: {_te}")
                 try:
                     _paste_title()   # 예외 시 클립보드 폴백
                 except Exception:
@@ -924,16 +1042,16 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 _fin = ""
             if _title_ok(_fin):
                 break
-            print(f"  ⚠️ 제목 미확인(읽음='{_fin[:20]}') → 재시도 {_attempt + 1}/3")
+            _p(f"  ⚠️ 제목 미확인(읽음='{_fin[:20]}') → 재시도 {_attempt + 1}/3")
 
         if _title_ok(_fin):
-            print(f"  ✅ 제목 입력 완료 — {_fin[:30]}")
+            _p(f"  ✅ 제목 입력 완료 — {_fin[:30]}")
         else:
-            print(f"  ❌ 제목 입력 실패 — 읽음='{_fin[:30]}' (발행 블로커)")
+            _p(f"  ❌ 제목 입력 실패 — 읽음='{_fin[:30]}' (발행 블로커)")
         time.sleep(1)
 
         # ── 본문 입력 (텍스트 + 이미지 블록 순서대로) ──
-        print("  ✏️  본문 입력...")
+        _p("  ✏️  본문 입력...")
         import pyautogui as _pg
         from selenium.webdriver.common.action_chains import ActionChains as _AC
         from selenium.webdriver.common.keys import Keys as _Keys
@@ -1070,7 +1188,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
 
         if blocks:
             heading_cnt = sum(1 for b in blocks if b[0] == 'heading')
-            print(f"  📦 {len(blocks)}개 블록 입력 (이미지 포함 소제목 반영)...")
+            _p(f"  📦 {len(blocks)}개 블록 입력 (이미지 포함 소제목 반영)...")
 
             def _insert_image_with_gap(img_path):
                 """이미지 업로드 후 행 처리.
@@ -1083,45 +1201,37 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 _wd_beat()   # ★ 이미지 업로드 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
                 _activate_window()
                 time.sleep(0.8)
-                _upload_image(img_path, driver=driver)
+                # ★ 업로드·라이브러리패널 닫기·성공검증·재시도 = _upload_image() 단독 책임
+                #   (ERRORS [472] — 종전엔 검증 없이 통과해 썸네일 누락이 조용히 발생)
+                _ok = _upload_image(img_path, driver=driver)
                 time.sleep(0.8)
-                # ★ 이미지 업로드 후 열리는 라이브러리 패널 닫기 (우측 상단 X 버튼 — JS 위치 탐색)
-                _lib_result = driver.execute_script("""
-                    var btns = Array.from(document.querySelectorAll('button'));
-                    // 우측 상단 소형 버튼(닫기 X) 탐색: x>700, y<90, 너비<35
-                    var closeBtn = btns.find(function(btn) {
-                        var r = btn.getBoundingClientRect();
-                        return r.right > 700 && r.top < 90 && r.top > 30 && r.width < 35;
-                    });
-                    if (closeBtn) { closeBtn.click(); return 'closed'; }
-                    return 'no-panel';
-                """)
-                if _lib_result == 'closed':
-                    time.sleep(0.3)
                 # ★ Finder 다이얼로그 후 에디터 포커스 복구 (Selenium CDP click — OS focus 불필요)
                 _focus_editor_body()
                 fname = str(Path(img_path).name)
                 is_heading_img = 'heading_' in fname or 'economic_h2_' in fname
-                if not is_heading_img:
+                if not is_heading_img and _ok:
+                    # 업로드 미반영 시 Enter 를 치면 빈 줄만 쌓여 여백 규정(제9조)이 깨진다
                     _enter()  # ActionChains Enter (CDP 기반)
+                return _ok
 
             # 썸네일(첫 번째 이미지) 먼저 입력
             if blocks[0][0] == 'image':
-                print(f"  [썸네일] {str(blocks[0][1])[:50]}")
-                _insert_image_with_gap(blocks[0][1])
+                _p(f"  [썸네일] {str(blocks[0][1])[:50]}")
+                if not _insert_image_with_gap(blocks[0][1]):
+                    _p(f"  ⚠️ [썸네일] 업로드 실패 — 네이버가 본문 첫 이미지를 대표로 자동 지정하게 됨")
                 remaining = blocks[1:]
             else:
                 remaining = blocks
 
             # 썸네일만 있고 본문 블록이 없으면 텍스트 폴백
             if not remaining:
-                print("  ⚠️ 본문 블록 없음 → 텍스트 붙여넣기 모드로 전환")
+                _p("  ⚠️ 본문 블록 없음 → 텍스트 붙여넣기 모드로 전환")
                 _paste(naver_text)
 
             # 나머지 블록: divider 블록에서 구분선 삽입
             for bi, (btype, bdata) in enumerate(remaining):
                 _wd_beat()   # ★ 블록 입력 루프 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
-                print(f"  [{bi+1}/{len(remaining)}] {btype}: {str(bdata)[:50]}")
+                _p(f"  [{bi+1}/{len(remaining)}] {btype}: {str(bdata)[:50]}")
                 if btype == 'divider':
                     pass  # 구분선 제거 — 소제목 이미지로 대체됨
                 elif btype == 'heading2':
@@ -1178,7 +1288,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 else:
                     # ★ 미지 블록 타입 무음 유실 방지 (ADR 012 — 2026-07-02, ERRORS [171] 계열)
                     #   새 블록 타입 추가 시 양 발행자 동시 갱신 규정 위반을 즉시 가시화.
-                    print(f"  ⚠️ 미지 블록 타입 '{btype}' — 텍스트 폴백 렌더 (양 발행자 핸들러 추가 필요)")
+                    _p(f"  ⚠️ 미지 블록 타입 '{btype}' — 텍스트 폴백 렌더 (양 발행자 핸들러 추가 필요)")
                     try:
                         from JARVIS07_GUARDIAN.error_collector import report as _g_rep
                         _g_rep("publish", RuntimeError(f"naver 미지 블록 타입: {btype}"),
@@ -1207,15 +1317,15 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 _enter()
                 _paste_text(rp['url'])
                 _enter()
-            print("  ✅ 연관 글 삽입 완료")
+            _p("  ✅ 연관 글 삽입 완료")
 
-        print("  ✅ 본문 입력 완료")
+        _p("  ✅ 본문 입력 완료")
         time.sleep(2)
 
         driver.save_screenshot(str(IMG_EDITOR / "after_input.png"))
 
         # ── 발행 버튼 (JS) ────────────────────────────
-        print("  🔍 발행 버튼 클릭...")
+        _p("  🔍 발행 버튼 클릭...")
         driver.execute_script("window.scrollTo(0,0)")
         time.sleep(0.5)
         clicked = driver.execute_script("""
@@ -1228,16 +1338,16 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             }
             return '발행버튼 없음';
         """)
-        print(f"  ✅ {clicked}")
+        _p(f"  ✅ {clicked}")
         time.sleep(3)
 
         driver.save_screenshot(str(IMG_PUBLISH / "popup.png"))
-        print("  📸 발행 팝업 스크린샷")
+        _p("  📸 발행 팝업 스크린샷")
 
         # ── 카테고리 (★ 2026-06-01 v6 — React 커스텀 드롭다운 — native <select> 없음)
         # 구조: button[aria-label="카테고리 목록 버튼"] 클릭 → div[role="menu"] 내 label 클릭
         # 진단: ERRORS [214] <select> 방식 → 완전 실패 (select 요소 자체 없음) → v6 교체
-        print(f"  📂 카테고리 선택: {category}")
+        _p(f"  📂 카테고리 선택: {category}")
         time.sleep(4.0)  # 발행 팝업 + React 렌더링 안정화
 
         from selenium.webdriver.support.ui import WebDriverWait
@@ -1251,7 +1361,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             btn.click();
             return 'opened:' + btn.getAttribute('aria-expanded');
         """)
-        print(f"  🔍 드롭다운 열기: {_open_r}")
+        _p(f"  🔍 드롭다운 열기: {_open_r}")
 
         if _open_r and 'btn_not_found' not in str(_open_r):
             # aria-expanded=true 대기 (최대 5초)
@@ -1274,29 +1384,29 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 if (match) {{ match.click(); return 'selected:' + match.textContent.trim(); }}
                 return 'no_match:' + labels.map(l => l.textContent.trim()).join('|');
             """)
-            print(f"  🔍 옵션 선택: {str(_sel_r)[:100]}")
+            _p(f"  🔍 옵션 선택: {str(_sel_r)[:100]}")
             if _sel_r and str(_sel_r).startswith('selected:'):
                 category_clicked = True
-                print(f"  ✅ 카테고리 선택: {category}")
+                _p(f"  ✅ 카테고리 선택: {category}")
                 time.sleep(0.5)
 
         if not category_clicked:
-            print(f"  ❌ '{category}' 카테고리 선택 실패")
+            _p(f"  ❌ '{category}' 카테고리 선택 실패")
             _g_report("writer", RuntimeError(f"네이버 카테고리 선택 실패: {category}"),
                       module=__name__, func_name="post_to_naver",
                       context={"category": category, "open_result": str(_open_r)})
-            print(f"  ⚠️ 카테고리 미설정으로 발행 진행")
+            _p(f"  ⚠️ 카테고리 미설정으로 발행 진행")
 
         driver.save_screenshot(str(IMG_PUBLISH / "category_selected.png"))
-        print(f"  ✅ 카테고리 완료 — '{category}' 선택")
+        _p(f"  ✅ 카테고리 완료 — '{category}' 선택")
 
         # ── 태그 ──────────────────────────────────────
-        print("  🏷️  태그 입력...")
+        _p("  🏷️  태그 입력...")
 
         if tags is None:
             # 본문 전체 텍스트 추출
             body_text = ' '.join(str(bdata) for btype, bdata in (blocks or []) if btype == 'text')
-            print("  🔍 태그 생성 중 (제목 2개 + 본문 2개)...")
+            _p("  🔍 태그 생성 중 (제목 2개 + 본문 2개)...")
             tags = _generate_smart_tags(title, body_text)
 
         # ★ 태그 입력 — Selenium element.click() + ActionChains Cmd+V (CDP 기반, OS focus 불필요)
@@ -1315,7 +1425,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 _vis = [e for e in _els if e.is_displayed()]
                 if _vis:
                     _tag_input = _vis[0]
-                    print(f"  ✅ 태그 입력란 발견: {_sel}")
+                    _p(f"  ✅ 태그 입력란 발견: {_sel}")
                     break
             except Exception:
                 pass
@@ -1332,10 +1442,10 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                     _AC(driver).send_keys(_Keys.RETURN).perform()
                     time.sleep(0.4)
                 except Exception as _te:
-                    print(f"  ⚠️ 태그 입력 실패: {tag} — {_te}")
+                    _p(f"  ⚠️ 태그 입력 실패: {tag} — {_te}")
         else:
             # Fallback: 좌표 기반 (태그 입력란을 못 찾은 경우)
-            print("  ⚠️ 태그 입력란 미발견 — 좌표 fallback")
+            _p("  ⚠️ 태그 입력란 미발견 — 좌표 fallback")
             _activate_window()
             time.sleep(0.5)
             _pg.click(1150, 500)
@@ -1348,19 +1458,19 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 _pg.press('return')
                 time.sleep(0.4)
 
-        print(f"  ✅ 태그 완료: {tags}")
+        _p(f"  ✅ 태그 완료: {tags}")
 
         # ── 발행 전 팝업 해제 (사진 첨부 방식 팝업 등) ──────────────
         _dismiss_naver_popup(driver)
         time.sleep(0.5)
 
         # ── 최종 발행 ─────────────────────────────────
-        print("  ✅ 최종 발행 클릭...")
+        _p("  ✅ 최종 발행 클릭...")
         driver.save_screenshot(str(IMG_PUBLISH / "before_publish.png"))
         # ★ ActionChains 신뢰 이벤트 클릭 (ERRORS [293]) — OS 물리 클릭은 주간/in-daemon
         #   실행에서 버튼 빗맞음 → 팝업만 닫힘. 물리 클릭은 헬퍼 내부 폴백 전용.
         if not _click_publish_btn(driver, "최종발행"):
-            print("  ⚠️ 최종발행 버튼 미발견 — 검증 단계에서 재시도")
+            _p("  ⚠️ 최종발행 버튼 미발견 — 검증 단계에서 재시도")
         # ★ ERRORS [273] — 4초 부족 (네이버 리다이렉트 > 4초 소요 사례). 8초로 확대.
         time.sleep(8)
 
@@ -1369,7 +1479,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
         # ★ 발행 성공 검증 — 에디터 이탈 여부 확인
         if not _verify_naver_published(driver):
             # 팝업이 남아있어 발행이 안 된 경우 → 재발행 시도
-            print("  ⚠️ [Naver] 발행 후 에디터 상태 유지 → 재발행 시도")
+            _p("  ⚠️ [Naver] 발행 후 에디터 상태 유지 → 재발행 시도")
             # ★ ESC 금지 (발행 팝업 닫힘 방지) — dim 레이어만 JS로 제거
             driver.execute_script("""
                 document.querySelectorAll('.se-popup-dim:not(.se-popup-dim-transparent)').forEach(function(d) { d.remove(); });
@@ -1379,7 +1489,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             # ★ 재발행 — ActionChains 신뢰 이벤트 (ERRORS [293])
             if not _click_publish_btn(driver, "재발행"):
                 # 발행 팝업이 닫힌 경우 — 툴바 '발행' 버튼으로 재오픈 후 카테고리 재선택
-                print("  ⚠️ 재발행 버튼 미발견 → 발행 팝업 재오픈")
+                _p("  ⚠️ 재발행 버튼 미발견 → 발행 팝업 재오픈")
                 driver.execute_script("""
                     var btns = document.querySelectorAll('button');
                     for (var b of btns) {
@@ -1408,17 +1518,17 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                 # ★ 재오픈 후 최종 발행 — ActionChains (ERRORS [293]).
                 #   구 좌표 폴백 (1452, 604) 는 viewport(1440px) 밖 — 제거.
                 if not _click_publish_btn(driver, "재발행2"):
-                    print("  ⚠️ 재오픈 후에도 발행 버튼 미발견")
+                    _p("  ⚠️ 재오픈 후에도 발행 버튼 미발견")
 
             # ★ ERRORS [274] 재발 — 재발행 경로도 8초 대기 필수 (SPA 전환 지연)
             time.sleep(8)
             driver.save_screenshot(str(IMG_RESULT / "done_retry.png"))
 
             if not _verify_naver_published(driver):
-                print("  ❌ [Naver] 재시도 후에도 발행 미완료 — 발행 실패 처리")
+                _p("  ❌ [Naver] 재시도 후에도 발행 미완료 — 발행 실패 처리")
                 return False
 
-        print("  🎉 네이버 블로그 포스팅 완료!")
+        _p("  🎉 네이버 블로그 포스팅 완료!")
 
         # ── 발행 URL 캡처 (RSS 기반) ──────────────────────────
         global _last_post_url
@@ -1427,16 +1537,16 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             posts = _fetch_recent_naver_posts(1)
             _last_post_url = posts[0]["url"] if posts else ""
             if _last_post_url:
-                print(f"  📎 발행 URL: {_last_post_url}")
+                _p(f"  📎 발행 URL: {_last_post_url}")
         except Exception as _e:
             _last_post_url = ""
-            print(f"  ⚠️ URL 캡처 실패: {_e}")
+            _p(f"  ⚠️ URL 캡처 실패: {_e}")
             _g_report("writer", _e, module=__name__)
 
         return True
 
     except Exception as e:
-        print(f"  ❌ 오류: {e}")
+        _p(f"  ❌ 오류: {e}")
         _g_report("writer", e, module=__name__)
         import traceback; traceback.print_exc()
         if driver:
@@ -1460,7 +1570,7 @@ if __name__ == "__main__":
         from JARVIS00_INFRA.preflight import ensure_preflight as _ep
         _ep(strict=True)
     except Exception as _ee:
-        print(f"⚠️ preflight 호출 실패: {_ee}")
+        _p(f"⚠️ preflight 호출 실패: {_ee}")
 
     from JARVIS00_INFRA.watchdog import guard_main
     with guard_main("네이버 발행 테스트", deadline_sec=1800):
@@ -1468,4 +1578,4 @@ if __name__ == "__main__":
             "[마켓시그널] 테스트 테마 완전 정복 리포트",
             "<h1>테스트</h1><p>pyautogui 좌표 기반 테스트입니다.</p>",
         )
-    print("결과:", "✅ 성공" if ok else "❌ 실패")
+    _p("결과:", "✅ 성공" if ok else "❌ 실패")

@@ -10,6 +10,28 @@ tistory_poster.py v5
 
 import os, time, sys, subprocess
 from pathlib import Path
+
+# ── ★ 출력 단일 진입점 — print + logging 동시 (ERRORS [472], 2026-07-22) ──────
+#   종전엔 발행 진행 상황을 print() 로만 남겨, stdout 배관(subprocess 리다이렉트)이
+#   어긋나면 *발행 단계 로그가 통째로 유실* 됐다 (2026-07-22 경제: 65줄 vs 정상 355줄).
+#   그 탓에 "썸네일이 왜 안 올라갔나" 를 스크린샷·DB 로 우회 추적해야 했다.
+#   → 배관에 의존하지 말고 로깅으로도 남긴다. 새 출력은 print 말고 _p() 를 쓸 것.
+import logging as _logging
+log = _logging.getLogger(__name__)
+
+
+def _p(*args, **kwargs):
+    """진행 출력 — 터미널(print)과 로그(logging) 양쪽에 남긴다."""
+    try:
+        print(*args, **kwargs)
+    except Exception:
+        pass
+    try:
+        log.info(" ".join(str(a) for a in args))
+    except Exception:
+        pass
+
+
 from dotenv import load_dotenv
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
@@ -211,7 +233,7 @@ def _login(driver) -> bool:
             _logged_in = ("/auth/login" not in _mng_url
                           and "accounts.kakao.com" not in _mng_url)
         except Exception as _le:
-            print(f"  ⚠️ manage 판정 오류({_le}) — 만료로 간주")
+            _p(f"  ⚠️ manage 판정 오류({_le}) — 만료로 간주")
             _logged_in = False
     if _logged_in:
         # ★ 강제 이동 (검증 retry + 멈춤 차단 + SOS) — 사용자 박제 2026-05-14
@@ -220,7 +242,7 @@ def _login(driver) -> bool:
             from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import force_my_blog as _force
             _force(driver)
         except Exception as _e:
-            print(f"  ⚠️ force_my_blog 위임 실패 (무시): {_e}")
+            _p(f"  ⚠️ force_my_blog 위임 실패 (무시): {_e}")
             # fallback — 직접 navigate
             if TS_BLOG and f"{TS_BLOG}.tistory.com" not in _cur_url:
                 try:
@@ -228,11 +250,11 @@ def _login(driver) -> bool:
                     _s(2)
                 except Exception:
                     pass
-        print("  ✅ 쿠키 로그인 성공 (manage 접근 확인)")
+        _p("  ✅ 쿠키 로그인 성공 (manage 접근 확인)")
         return True
     # ★ 선제 갱신 (ERRORS [292]): 만료 확인 즉시 refresher 호출 — 에디터 진입 후
     #   튕김→재로그인 지연 폴백 체인을 단축 (기존 폴백은 안전망으로 잔존).
-    print("  ❌ TSSESSION 만료 — 쿠키 즉시 갱신 시도")
+    _p("  ❌ TSSESSION 만료 — 쿠키 즉시 갱신 시도")
     try:
         from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import refresh_cookie as _rc
         _new_cookie = _rc(driver)
@@ -246,11 +268,11 @@ def _login(driver) -> bool:
             })
             driver.refresh()
             _s(2)
-            print("  ✅ 쿠키 갱신 후 로그인 성공")
+            _p("  ✅ 쿠키 갱신 후 로그인 성공")
             return True
     except Exception as _re:
-        print(f"  ⚠️ 선제 쿠키 갱신 실패: {_re}")
-    print("  ❌ TSSESSION 만료 — .env의 TS_COOKIE 갱신 필요")
+        _p(f"  ⚠️ 선제 쿠키 갱신 실패: {_re}")
+    _p("  ❌ TSSESSION 만료 — .env의 TS_COOKIE 갱신 필요")
     return False
 
 
@@ -267,16 +289,89 @@ def _focus_editor(driver):
         driver.switch_to.default_content()
         _s(0.5)
     except Exception as e:
-        print(f"  ⚠️ 에디터 포커스 실패: {e}")
+        _p(f"  ⚠️ 에디터 포커스 실패: {e}")
         _g_report("writer", e, module=__name__)
         driver.switch_to.default_content()
         _s(0.3)
 
 
-def _upload_image(img_path: str, driver=None, after_newline: bool = True):
+def _max_attempts() -> int:
+    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
+
+def _count_editor_images(driver) -> int:
+    """에디터(iframe) 본문 이미지 수 — 업로드 성공 판정용 (★ ERRORS [472], 2026-07-22).
+
+    ★ 절대 개수가 아니라 *증분* 으로 판정한다. 종전 `if imgs:` 검사는 절대 개수라
+      1장이라도 들어 있으면 통과 → 2장째 이후 실패를 전혀 못 잡았다.
+    ★ 조회 불가 시 -1 → 호출자가 검증을 건너뛴다(fail-open).
+    """
+    if not driver:
+        return -1
+    try:
+        frame = driver.find_element(By.ID, 'editor-tistory_ifr')
+        driver.switch_to.frame(frame)
+        try:
+            return len(driver.find_elements(By.TAG_NAME, 'img'))
+        finally:
+            driver.switch_to.default_content()
+    except Exception:
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+        return -1
+
+
+def _upload_image(img_path: str, driver=None, after_newline: bool = True) -> bool:
+    """이미지 업로드 **+ 성공 검증 + 재시도** — 업로드의 단일 진입점 (ERRORS [472]).
+
+    ★ 종전엔 삽입 여부를 `if imgs:` *절대 개수* 로만 봐서, 이미 1장이 있으면 그 뒤
+      실패가 전부 '성공' 으로 통과했다. 재시도도 GUARDIAN 보고도 없어 조용히 누락됐다.
+      (네이버는 아예 검증이 없어 2026-07-22 경제 썸네일 1장이 통째로 빠졌다.)
+    ★ 이제 업로드 전후 *증분* 으로 실제 반영을 확인하고, 미반영이면 재시도한다.
+    ★ 최종 실패해도 발행은 계속한다 — 이 시점엔 본문이 이미 절반쯤 들어가 있어
+      중단하면 미완성 임시저장만 남아 더 나쁘다. 대신 GUARDIAN 에 보고한다.
+
+    Returns: True = 반영 확인(또는 계측 불가로 검증 생략) / False = 최종 미반영
+    """
+    fname = Path(str(img_path)).name
+    before = _count_editor_images(driver)
+    attempts = _max_attempts()
+
+    for i in range(1, attempts + 1):
+        _upload_image_once(img_path, driver=driver, after_newline=after_newline)
+        after = _count_editor_images(driver)
+
+        if before < 0 or after < 0:
+            _p(f"    ℹ️ 이미지 수 계측 불가 → 업로드 검증 생략: {fname}")
+            return True
+        if after > before:
+            if i > 1:
+                _p(f"    ✅ 재시도 {i}회차에 반영 확인: {fname}")
+            return True
+        _p(f"    ⚠️ 업로드 미반영 (이미지 {before}→{after}) — 재시도 {i}/{attempts}: {fname}")
+
+    _p(f"    ❌ 이미지 업로드 최종 실패 ({attempts}회 시도, 미반영): {fname}")
+    try:
+        _g_report("publish",
+                  RuntimeError(f"티스토리 이미지 업로드 미반영: {fname}"),
+                  module=__name__, func_name="_upload_image")
+    except Exception:
+        pass
+    return False
+
+
+def _upload_image_once(img_path: str, driver=None, after_newline: bool = True):
+    """업로드 1회 시도 (검증 없음). ★ 직접 호출 금지 — `_upload_image()` 를 쓸 것."""
     img_path = str(Path(img_path).resolve())
     filename = Path(img_path).name
-    print(f"    🖼️  이미지: {filename}")
+    _p(f"    🖼️  이미지: {filename}")
 
     _chrome_focus()
 
@@ -328,9 +423,9 @@ def _upload_image(img_path: str, driver=None, after_newline: bool = True):
         return null;
     """)
     if clicked_menu:
-        print(f"    ✅ 사진 메뉴: {clicked_menu}")
+        _p(f"    ✅ 사진 메뉴: {clicked_menu}")
     else:
-        print("    ⚠️ 사진 메뉴 못찾음")
+        _p("    ⚠️ 사진 메뉴 못찾음")
     _s(1.0)
 
     # 3) input[type="file"]에 직접 경로 주입 (screen lock 무관, native 다이얼로그 불필요)
@@ -354,14 +449,14 @@ def _upload_image(img_path: str, driver=None, after_newline: bool = True):
             file_input.send_keys(img_path)
             _s(4)  # 업로드 완료 대기
             file_sent = True
-            print(f"    ✅ 파일 직접 주입 성공")
+            _p(f"    ✅ 파일 직접 주입 성공")
     except Exception as e:
-        print(f"    ⚠️ 파일 주입 실패: {e}")
+        _p(f"    ⚠️ 파일 주입 실패: {e}")
         _g_report("writer", e, module=__name__)
 
     if not file_sent:
         # 4) Fallback: 기존 Cmd+Shift+G (스크린 활성 상태 전용)
-        print("    ⚠️ Cmd+Shift+G fallback 시도")
+        _p("    ⚠️ Cmd+Shift+G fallback 시도")
         pyperclip.copy(img_path)
         _s(0.3)
         _chrome_focus()
@@ -389,12 +484,12 @@ def _upload_image(img_path: str, driver=None, after_newline: bool = True):
         # 마지막으로 삽입된 img 태그를 Selenium으로 직접 클릭 (좌표 의존 없음)
         imgs = driver.find_elements(By.TAG_NAME, 'img')
         if imgs:
-            print(f"    ✅ 이미지 삽입 확인 ({len(imgs)}개)")
+            _p(f"    ✅ 이미지 삽입 확인 ({len(imgs)}개)")
             # JS 클릭 — 뷰포트 위치 무관하게 TinyMCE에서 이미지 선택
             driver.execute_script("arguments[0].click();", imgs[-1])
             _s(0.5)
         else:
-            print("    ⚠️ 이미지 삽입 미확인 — 업로드 실패 가능성")
+            _p("    ⚠️ 이미지 삽입 미확인 — 업로드 실패 가능성")
         # 이미지 선택 상태에서 아래 화살표 5번 → 이미지 아래 단락으로 커서 이동
         for _ in range(5):
             ActionChains(driver).send_keys(Keys.ARROW_DOWN).perform()
@@ -403,10 +498,10 @@ def _upload_image(img_path: str, driver=None, after_newline: bool = True):
         if after_newline:
             ActionChains(driver).send_keys(Keys.RETURN).perform()
             _s(0.3)
-        print("    ✅ 본문 커서 활성화")
+        _p("    ✅ 본문 커서 활성화")
         driver.switch_to.default_content()
     except Exception as e:
-        print(f"    ⚠️ 커서 이동 실패: {e}")
+        _p(f"    ⚠️ 커서 이동 실패: {e}")
         _g_report("writer", e, module=__name__)
         driver.switch_to.default_content()
     _s(0.3)
@@ -428,7 +523,7 @@ def _tinymce_insert(html: str, driver) -> bool:
         _s(0.3)
         return True
     except Exception as e:
-        print(f"    ⚠️ JS 삽입 실패: {e}")
+        _p(f"    ⚠️ JS 삽입 실패: {e}")
         _g_report("writer", e, module=__name__)
         return False
 
@@ -487,7 +582,7 @@ def _inject_html_block(html_str: str, driver):
         if text:
             _input_text(text, driver=driver)
         return
-    print("    ✅ HTML 블록 삽입")
+    _p("    ✅ HTML 블록 삽입")
 
 
 # ── 팝업 자동 제거 ──────────────────────────────────────────────
@@ -548,7 +643,7 @@ def _dismiss_any_popup(driver) -> bool:
     # ① 브라우저 Alert/Confirm/Prompt
     try:
         alert = driver.switch_to.alert
-        print(f"  🚨 Alert 감지 → dismiss: {alert.text[:40]}")
+        _p(f"  🚨 Alert 감지 → dismiss: {alert.text[:40]}")
         alert.dismiss()
         _s(0.5)
         dismissed = True
@@ -559,7 +654,7 @@ def _dismiss_any_popup(driver) -> bool:
     if not _has_visible_overlay(driver):
         return dismissed
 
-    print("  🚨 팝업 감지 → 자동 제거 시도")
+    _p("  🚨 팝업 감지 → 자동 제거 시도")
 
     # ③ ESC 키 (대부분의 모달은 ESC로 닫힘)
     try:
@@ -567,7 +662,7 @@ def _dismiss_any_popup(driver) -> bool:
         ActionChains(driver).send_keys(Keys.ESCAPE).perform()
         _s(0.4)
         if not _has_visible_overlay(driver):
-            print("  ✅ ESC로 팝업 제거")
+            _p("  ✅ ESC로 팝업 제거")
             return True
     except Exception:
         pass
@@ -578,7 +673,7 @@ def _dismiss_any_popup(driver) -> bool:
             for btn in driver.find_elements(By.CSS_SELECTOR, sel):
                 if btn.is_displayed():
                     driver.execute_script("arguments[0].click();", btn)
-                    print(f"  ✅ 팝업 닫기 버튼 클릭: {sel}")
+                    _p(f"  ✅ 팝업 닫기 버튼 클릭: {sel}")
                     _s(0.4)
                     dismissed = True
                     if not _has_visible_overlay(driver):
@@ -602,7 +697,7 @@ def _dismiss_any_popup(driver) -> bool:
             return removed;
         """)
         if removed:
-            print(f"  ✅ 오버레이 {removed}개 JS 강제 제거")
+            _p(f"  ✅ 오버레이 {removed}개 JS 강제 제거")
             _s(0.3)
             dismissed = True
     except Exception:
@@ -632,14 +727,14 @@ def post_to_tistory(
     except Exception:
         pass
 
-    print(f"  📝 티스토리: {TS_BLOG}.tistory.com")
+    _p(f"  📝 티스토리: {TS_BLOG}.tistory.com")
     _external_driver = preloaded_driver is not None
     driver = preloaded_driver if _external_driver else _make_driver()
 
     try:
         if _external_driver:
             # 이미 로그인된 driver — 로그인 생략, 바로 에디터로
-            print("  ✅ 쿠키 로그인 성공 (갱신 driver 재사용)")
+            _p("  ✅ 쿠키 로그인 성공 (갱신 driver 재사용)")
         else:
             # 1. 로그인
             if not _login(driver):
@@ -648,11 +743,11 @@ def post_to_tistory(
         # 2. 글쓰기 페이지 (수정 모드면 해당 글 편집 URL)
         if edit_post_id:
             edit_url = f"https://{TS_BLOG}.tistory.com/manage/post/{edit_post_id}/edit"
-            print(f"  ✏️  수정 모드 진입: post_id={edit_post_id}")
+            _p(f"  ✏️  수정 모드 진입: post_id={edit_post_id}")
             driver.get(edit_url)
             _s(12)  # 기존 본문 로딩 더 대기
         else:
-            print("  🌐 글쓰기 페이지...")
+            _p("  🌐 글쓰기 페이지...")
             driver.get(f"https://{TS_BLOG}.tistory.com/manage/newpost")
             _s(10)  # 로딩 충분히 대기
 
@@ -664,7 +759,7 @@ def post_to_tistory(
         for _ in range(3):
             try:
                 alert = driver.switch_to.alert
-                print(f"  ✅ Alert 닫기: {alert.text[:30]}")
+                _p(f"  ✅ Alert 닫기: {alert.text[:30]}")
                 alert.dismiss()  # 취소 (새 글 작성)
                 _s(1)
             except:
@@ -684,7 +779,7 @@ def post_to_tistory(
                 current = driver.current_url
             except Exception as _e_session:
                 # ★ 세션 자체가 무효 (Chrome 크래시 등) — 새 driver 로 복구
-                print(f"  ⚠️ 세션 무효 — 새 driver 생성: {_e_session}")
+                _p(f"  ⚠️ 세션 무효 — 새 driver 생성: {_e_session}")
                 try:
                     driver.quit()
                 except:
@@ -699,9 +794,9 @@ def post_to_tistory(
                 _s(12)
                 current = driver.current_url
 
-        print(f"  🔍 현재 URL: {current[:60]}")
+        _p(f"  🔍 현재 URL: {current[:60]}")
         if 'login' in current or 'tistory.com' not in current:
-            print("  ⚠️ 로그인 페이지로 튕김 — 재로그인 시도")
+            _p("  ⚠️ 로그인 페이지로 튕김 — 재로그인 시도")
             if not _login(driver):
                 return False
             if edit_post_id:
@@ -720,20 +815,20 @@ def post_to_tistory(
                     break
             # ★ 재로그인 후에도 URL 재확인 — 2차 실패 시 즉시 종료
             _relogin_url = driver.current_url
-            print(f"  🔍 재로그인 후 URL: {_relogin_url[:60]}")
+            _p(f"  🔍 재로그인 후 URL: {_relogin_url[:60]}")
             if 'login' in _relogin_url or 'tistory.com' not in _relogin_url:
-                print("  ❌ 재로그인 후에도 로그인 페이지 — 쿠키 갱신 시도...")
+                _p("  ❌ 재로그인 후에도 로그인 페이지 — 쿠키 갱신 시도...")
                 try:
                     from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _refresh_cookie
                     _ok_refresh = _refresh_cookie(force=True, notify=False)
                     if _ok_refresh:
-                        print("  ✅ 쿠키 갱신 완료! 재발행 시도...")
+                        _p("  ✅ 쿠키 갱신 완료! 재발행 시도...")
                         driver.quit()
-                        print("  🔄 새 드라이버로 재시도 중...")
+                        _p("  🔄 새 드라이버로 재시도 중...")
                         driver = _make_driver()
                         # ★ 쿠키 갱신 후 새 드라이버에 반드시 _login() 호출 — 미호출 시 쿠키 없이 manage/newpost 진입 → 로그인 페이지 튕김
                         if not _login(driver):
-                            print("  ❌ 새 드라이버 로그인 실패")
+                            _p("  ❌ 새 드라이버 로그인 실패")
                             return False
                         driver.get(f"https://{TS_BLOG}.tistory.com/manage/newpost")
                         _s(12)  # 재로그인 후 로딩 충분히 대기 (3→12초)
@@ -745,16 +840,16 @@ def post_to_tistory(
                                 _s(1)
                             except:
                                 break
-                        print("  ✅ 재시도 준비 완료 — 계속 진행")
+                        _p("  ✅ 재시도 준비 완료 — 계속 진행")
                     else:
-                        print("  ❌ 쿠키 갱신 실패")
+                        _p("  ❌ 쿠키 갱신 실패")
                         return False
                 except Exception as _e_refresh:
-                    print(f"  ⚠️ 쿠키 갱신 중 오류: {_e_refresh}")
+                    _p(f"  ⚠️ 쿠키 갱신 중 오류: {_e_refresh}")
                     return False
 
         # 3.5 카테고리 선택 — 3-tier 매칭 + 선택 검증
-        print(f"  📂 카테고리 선택: {category}")
+        _p(f"  📂 카테고리 선택: {category}")
         _s(3)
         try:
             from selenium.webdriver.support.ui import WebDriverWait
@@ -808,7 +903,7 @@ def post_to_tistory(
                 });
                 return '목록: ' + all.join(', ');
             """, category)
-            print(f"  ✅ 카테고리 클릭: {cat_clicked}")
+            _p(f"  ✅ 카테고리 클릭: {cat_clicked}")
             _s(0.5)
 
             # ★ 검증: category-btn 텍스트가 원하는 카테고리로 변경됐는지 확인
@@ -818,9 +913,9 @@ def post_to_tistory(
                     "return b?(b.innerText||b.textContent||'').trim():'';"
                 )
                 if category in actual_cat:
-                    print(f"  ✅ 카테고리 확인: {actual_cat}")
+                    _p(f"  ✅ 카테고리 확인: {actual_cat}")
                 else:
-                    print(f"  ⚠️ 카테고리 불일치 (버튼: '{actual_cat}') — 재시도")
+                    _p(f"  ⚠️ 카테고리 불일치 (버튼: '{actual_cat}') — 재시도")
                     driver.execute_script(
                         "arguments[0].click()",
                         driver.find_element(By.ID, 'category-btn')
@@ -837,19 +932,19 @@ def post_to_tistory(
                     """, category)
                     _s(0.5)
             except Exception as ve:
-                print(f"  ⚠️ 카테고리 검증 생략: {ve}")
+                _p(f"  ⚠️ 카테고리 검증 생략: {ve}")
 
         except Exception as e:
-            print(f"  ⚠️ 카테고리 선택 오류: {e}")
+            _p(f"  ⚠️ 카테고리 선택 오류: {e}")
             _g_report("writer", e, module=__name__)
         _s(0.5)
 
         # 4. 제목 입력 (JavaScript 직접 입력 — 화면 밝기 무관)
-        print("  📌 제목 입력...")
+        _p("  📌 제목 입력...")
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
 
-        print(f"  🔍 제목 입력 전 URL: {driver.current_url[:60]}")
+        _p(f"  🔍 제목 입력 전 URL: {driver.current_url[:60]}")
 
         # post-title-inp 찾기 (★ ERRORS [136] — 30→45초 + visibility, 사용자 박제 2026-05-17)
         try:
@@ -857,7 +952,7 @@ def post_to_tistory(
                 EC.visibility_of_element_located((By.ID, 'post-title-inp'))
             )
         except:
-            print("  ⚠️ 제목 요소 못찾음 — 페이지 새로고침 후 재시도")
+            _p("  ⚠️ 제목 요소 못찾음 — 페이지 새로고침 후 재시도")
             driver.refresh()
             _s(8)
             try:
@@ -884,7 +979,7 @@ def post_to_tistory(
         _s(0.5)
         # 확인
         val = driver.execute_script("return arguments[0].value;", title_el)
-        print(f"  ✅ 제목 완료: {val[:30]}...")
+        _p(f"  ✅ 제목 완료: {val[:30]}...")
 
         # 5. 에디터 포커스 (JavaScript로)
         try:
@@ -897,11 +992,11 @@ def post_to_tistory(
                     "document.body.innerHTML = '<p><br></p>';"
                     "document.body.focus();"
                 )
-                print("  🗑️  기존 본문 삭제 완료 (수정 모드)")
+                _p("  🗑️  기존 본문 삭제 완료 (수정 모드)")
             driver.switch_to.default_content()
             _s(0.5)
         except Exception as e:
-            print(f"  ⚠️ 에디터 포커스: {e}")
+            _p(f"  ⚠️ 에디터 포커스: {e}")
             _g_report("writer", e, module=__name__)
             driver.switch_to.default_content()
 
@@ -912,18 +1007,18 @@ def post_to_tistory(
             _input_text(DIVIDER, driver=driver)
 
         if blocks:
-            print(f"  📦 {len(blocks)}개 블록 입력...")
+            _p(f"  📦 {len(blocks)}개 블록 입력...")
 
             # 썸네일(첫 번째 이미지) 먼저 입력
             if blocks[0][0] == 'image':
-                print(f"  [썸네일] {str(blocks[0][1])[:50]}")
+                _p(f"  [썸네일] {str(blocks[0][1])[:50]}")
                 _upload_image(str(blocks[0][1]), driver=driver)
                 # 썸네일 업로드 후 TinyMCE iframe에 OS 레벨 키보드 포커스 복구
                 # JS ed.focus()는 TinyMCE 내부 포커스만 설정하고 OS 레벨 포커스는 iframe에 미전달
                 # → ActionChains.click(body)로 실제 클릭 이벤트 전송해야 OS 레벨 포커스 획득
                 _focus_editor(driver)
                 _s(0.5)
-                print("  ✅ 에디터 포커스 복구 (body.click)")
+                _p("  ✅ 에디터 포커스 복구 (body.click)")
                 remaining = blocks[1:]
             else:
                 remaining = blocks
@@ -953,7 +1048,7 @@ def post_to_tistory(
             # 나머지 블록: divider 블록에서 구분선 삽입
             for bi, (btype, bdata) in enumerate(_merged):
                 _wd_beat()   # ★ 블록 입력 루프 진행 신호 — freeze 오탐 방지 (ERRORS [439] 계열)
-                print(f"  [{bi+1}/{len(_merged)}] {btype}: {str(bdata)[:60]}")
+                _p(f"  [{bi+1}/{len(_merged)}] {btype}: {str(bdata)[:60]}")
                 _dismiss_any_popup(driver)  # 팝업이 있으면 먼저 제거
                 if btype == 'divider':
                     input_divider()
@@ -988,7 +1083,7 @@ def post_to_tistory(
                 else:
                     # ★ 미지 블록 타입 무음 유실 방지 (ADR 012 — 2026-07-02, ERRORS [171] 계열)
                     #   새 블록 타입 추가 시 양 발행자 동시 갱신 규정 위반을 즉시 가시화.
-                    print(f"  ⚠️ 미지 블록 타입 '{btype}' — 텍스트 폴백 렌더 (양 발행자 핸들러 추가 필요)")
+                    _p(f"  ⚠️ 미지 블록 타입 '{btype}' — 텍스트 폴백 렌더 (양 발행자 핸들러 추가 필요)")
                     try:
                         from JARVIS07_GUARDIAN.error_collector import report as _g_rep
                         _g_rep("publish", RuntimeError(f"tistory 미지 블록 타입: {btype}"),
@@ -999,15 +1094,15 @@ def post_to_tistory(
                         _inject_html_block(f"<p>{str(bdata)[:500]}</p>", driver=driver)
         elif html_content:
             # HTML 직접 주입 (경제 브리핑 등 이미지 없는 HTML 포스트)
-            print("  📄 HTML 본문 직접 주입...")
+            _p("  📄 HTML 본문 직접 주입...")
             try:
                 frame = driver.find_element(By.ID, 'editor-tistory_ifr')
                 driver.switch_to.frame(frame)
                 driver.execute_script("document.body.innerHTML = arguments[0];", html_content)
                 driver.switch_to.default_content()
-                print("  ✅ HTML 주입 완료")
+                _p("  ✅ HTML 주입 완료")
             except Exception as e:
-                print(f"  ⚠️ HTML 주입 실패, 텍스트로 대체: {e}")
+                _p(f"  ⚠️ HTML 주입 실패, 텍스트로 대체: {e}")
                 _g_report("writer", e, module=__name__)
                 driver.switch_to.default_content()
                 import re, html as html_module
@@ -1033,15 +1128,15 @@ def post_to_tistory(
                 related_html += f'<li><a href="{rp["url"]}" style="color:#2563eb;">{rp["title"]}</a></li>'
             related_html += '</ul></div>'
             _inject_html_block(related_html, driver=driver)
-            print("  ✅ 연관 글 삽입 완료")
+            _p("  ✅ 연관 글 삽입 완료")
 
         # 7. 태그 입력 (완료 버튼 전에)
-        print("  🏷️  태그 입력...")
+        _p("  🏷️  태그 입력...")
 
         if tags is None:
             # 본문 전체 텍스트 추출
             body_text = ' '.join(str(bdata) for btype, bdata in (blocks or []) if btype == 'text')
-            print("  🔍 태그 생성 중 (제목 2개 + 본문 2개)...")
+            _p("  🔍 태그 생성 중 (제목 2개 + 본문 2개)...")
             tags = _generate_smart_tags(title, body_text)
 
         # 화면 50% 스크롤 다운 후 태그란 클릭
@@ -1062,10 +1157,10 @@ def post_to_tistory(
             # ActionChains로 태그 입력 + Enter
             ActionChains(driver).click(tag_el).send_keys(tag).send_keys(Keys.RETURN).perform()
             _s(0.5)
-        print(f"  ✅ 태그: {tags}")
+        _p(f"  ✅ 태그: {tags}")
 
         # 8. 완료 버튼 (태그 입력 후 발행 팝업 열기)
-        print("  🚀 완료 버튼...")
+        _p("  🚀 완료 버튼...")
         _chrome_focus()
         done_btn = driver.execute_script("""
             var btns = Array.from(document.querySelectorAll('button'));
@@ -1077,13 +1172,13 @@ def post_to_tistory(
             return null;
         """)
         if done_btn:
-            print(f"  ✅ {done_btn}")
+            _p(f"  ✅ {done_btn}")
         else:
             _pg.click(1294, 597)
         _s(2)
 
         # 9. 최종 발행 - 공개 전환 후 공개발행
-        print("  ✅ 최종 발행...")
+        _p("  ✅ 최종 발행...")
 
         # 비공개 → 공개 전환 (라디오버튼 또는 버튼)
         pub_set = driver.execute_script("""
@@ -1105,7 +1200,7 @@ def post_to_tistory(
             return null;
         """)
         if pub_set:
-            print(f"  ✅ {pub_set}")
+            _p(f"  ✅ {pub_set}")
         _s(0.5)
 
         # 공개발행 버튼 클릭
@@ -1129,12 +1224,12 @@ def post_to_tistory(
             return null;
         """)
         if published:
-            print(f"  ✅ {published}")
+            _p(f"  ✅ {published}")
         else:
-            print("  ⚠️ 발행 버튼 못찾음 - 로그 확인 필요")
+            _p("  ⚠️ 발행 버튼 못찾음 - 로그 확인 필요")
         _s(4)
 
-        print("  🎉 티스토리 포스팅 완료!")
+        _p("  🎉 티스토리 포스팅 완료!")
 
         # ── 발행 URL 캡처 (RSS 기반) ──────────────────────────
         global _last_post_url
@@ -1143,28 +1238,28 @@ def post_to_tistory(
             posts = _fetch_recent_tistory_posts(1)
             _last_post_url = posts[0]["url"] if posts else ""
             if _last_post_url:
-                print(f"  📎 발행 URL: {_last_post_url}")
+                _p(f"  📎 발행 URL: {_last_post_url}")
                 # 발행된 글 페이지로 자동 이동
                 driver.get(_last_post_url)
                 _s(2)
-                print(f"  ✅ 발행된 글 페이지로 이동")
+                _p(f"  ✅ 발행된 글 페이지로 이동")
         except Exception as _e:
             _last_post_url = ""
-            print(f"  ⚠️ URL 캡처 실패: {_e}")
+            _p(f"  ⚠️ URL 캡처 실패: {_e}")
             _g_report("writer", _e, module=__name__)
 
         # ★ 발행 성공 확인 (2026-07-02): 클릭=성공으로 간주하던 갭 수정.
         #   버튼도 못 찾고(published=None) RSS URL 도 못 잡으면 실제 발행 실패.
         #   버튼 미발견 = 클릭 안 됨 = 발행 안 됨 → False 여도 이중발행 위험 없음.
         if not published and not _last_post_url:
-            print("  ❌ 티스토리 발행 미확인 — 발행 버튼 미발견 + RSS URL 미포착 → 실패 처리")
+            _p("  ❌ 티스토리 발행 미확인 — 발행 버튼 미발견 + RSS URL 미포착 → 실패 처리")
             _g_report("writer", RuntimeError("티스토리 발행 미확인(버튼·URL 모두 없음)"),
                       module=__name__)
             return False
         return True
 
     except Exception as e:
-        print(f"  ❌ 오류: {e}")
+        _p(f"  ❌ 오류: {e}")
         _g_report("writer", e, module=__name__)
         import traceback; traceback.print_exc()
         return False
