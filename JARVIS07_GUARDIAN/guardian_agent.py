@@ -406,6 +406,34 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
         return False
 
 
+#  하트비트 주기 — 수확기 판정(stuck_minutes)보다 훨씬 촘촘해야 오탐이 없다.
+HEARTBEAT_SEC: int = 60
+
+
+def _start_heartbeat(error_id: int) -> threading.Event:
+    """처리 중인 오류에 주기적으로 '살아있음' 신호를 보낸다 (★ ERRORS [473]).
+
+    ★ 왜 스레드인가: Tier-2 는 `run_sdk_query()` 한 번에 수십 분을 블로킹한다.
+      그 안에는 신호를 심을 지점이 없다. 별도 스레드가 밖에서 찍으면
+      *무엇이 얼마나 오래 걸리든* 상관없이 살아있음이 보장된다.
+    Returns: stop 이벤트 — set() 하면 즉시 종료 (daemon 스레드라 누수 없음)
+    """
+    stop = threading.Event()
+
+    def _beat():
+        from shared import db as _db
+        while not stop.wait(HEARTBEAT_SEC):
+            try:
+                if not _db.heartbeat_error(error_id):
+                    return   # 이미 analyzing 이 아님 (완료·회수됨) → 신호 중단
+            except Exception:
+                pass         # 신호 실패는 치명적이지 않다 — 다음 주기에 재시도
+
+    threading.Thread(target=_beat, daemon=True,
+                     name=f"guardian-hb-{error_id}").start()
+    return stop
+
+
 def _orchestrate(error_id: int):
     """오류 분석 → 자동 수정 오케스트레이터 (별도 스레드에서 실행).
 
@@ -427,6 +455,8 @@ def _orchestrate(error_id: int):
         if error_id in _processing:
             return
         _processing.add(error_id)
+
+    _hb_stop = None   # 하트비트 핸들 — 선점 성공 후에만 설정됨 (finally 가 참조)
 
     try:
         from shared import db as _db
@@ -478,6 +508,14 @@ def _orchestrate(error_id: int):
             log.info(f"[GUARDIAN] #{error_id} 이미 처리 착수됨(DB 선점 실패) — 중복 오케스트레이션 skip")
             return
 
+        # ── 안전장치 2.6: 살아있음 신호(하트비트) 시작 (★ ERRORS [473]) ──────────
+        #    선점만으로는 부족하다. 수확기(job_retry_pending)가 오래 묶인 analyzing 을
+        #    죽은 세션으로 보고 new 로 되돌리는데, 그 판정이 '오류 기록 시각' 기준이라
+        #    *살아 있는 세션* 도 리셋됐다 (2026-07-18 #3435: 82분 세션이 75분에 리셋되어
+        #    두 번째 Tier-2 세션 중복 기동). 이제 처리 중에는 주기적으로 신호를 보내고,
+        #    수확기는 '마지막 신호 이후 경과' 로 판정한다 → 작업이 아무리 길어도 안전.
+        _hb_stop = _start_heartbeat(error_id)
+
         log.info(f"[GUARDIAN] 오케스트레이터 시작 — #{error_id} [{severity}] {error_type}")
 
         # ── Tier 1: 패턴 수정 — 모든 심각도 시도 (Bandit, LLM 없음, 안전) ─
@@ -522,6 +560,8 @@ def _orchestrate(error_id: int):
     except Exception as e:
         log.error(f"[GUARDIAN] 오케스트레이터 오류: {e}")
     finally:
+        if _hb_stop is not None:
+            _hb_stop.set()   # ★ 하트비트 종료 — 이후 신호 끊기면 수확기가 정상 회수
         with _fix_lock:
             _processing.discard(error_id)
 
@@ -828,10 +868,14 @@ def job_retry_pending(*, max_per_run: int = 20, stuck_minutes: int = 30):
         stuck_rows = _db.list_errors(status="analyzing", limit=max_per_run)
         threshold = datetime.now() - timedelta(minutes=stuck_minutes)
         for r in stuck_rows:
-            # ★ error_log 실제 컬럼명은 'timestamp' 단독 (created_at/detected_at 없음 —
-            #   과거엔 존재하지 않는 키만 읽어 매번 except 로 빠지며 리셋이 영구 no-op 이었음.
-            #   사용자 박제 2026-07-06 — job_retry_pending 근본원인 수정)
-            ts = r.get("timestamp") or ""
+            # ★ 판정 기준 = `claimed_at`(마지막 살아있음 신호) — ERRORS [473] (2026-07-22)
+            #   종전엔 `timestamp`(오류가 *기록된* 시각)로 판정했다. 그 값은 작업 진행과
+            #   아무 상관이 없어 **살아 있는 세션도 리셋**했다 (2026-07-18 실측: #3435 의
+            #   82분 Tier-2 세션이 75분 시점에 리셋 → 같은 오류에 두 번째 세션 중복 기동
+            #   → LLM 단일 차선 경합). 이제 작업자가 60초마다 claimed_at 을 갱신하므로
+            #   '마지막 신호 이후 N분 무응답' = 진짜 죽음. 작업이 아무리 길어도 안전하다.
+            #   claimed_at 이 없는 과거 행은 종전대로 timestamp 로 폴백.
+            ts = r.get("claimed_at") or r.get("timestamp") or ""
             try:
                 dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00").split("+")[0])
             except Exception:

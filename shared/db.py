@@ -358,6 +358,13 @@ def init_db():
             conn.execute("ALTER TABLE error_log ADD COLUMN llm_attempts INTEGER DEFAULT 0")
         except Exception:
             pass
+        # claimed_at: 처리 착수(선점) 시각 + 살아있음 신호(하트비트) — ERRORS [473]
+        #   종전 수확기는 '오류가 *기록된* 시각(timestamp)' 으로 stuck 을 판정했는데,
+        #   그 값은 작업 진행과 아무 상관이 없어 *살아 있는 세션* 을 죽은 걸로 오인했다.
+        try:
+            conn.execute("ALTER TABLE error_log ADD COLUMN claimed_at TEXT")
+        except Exception:
+            pass
         # NOTE: retry_count / retry_at / last_error 컬럼은 사후 retry 잡 폐기로 더 이상
         # 사용하지 않음. 기존 DB 에 남아 있어도 무시됨 (drop 하지 않음 — 데이터 보존).
         # source_keyword: RADAR pipeline 에서 발행 트리거 시 채워지는 trends.keyword 와
@@ -1743,10 +1750,35 @@ def try_claim_error(error_id: int, claim_status: str = "analyzing",
     갱신은 SQLite 자체가 직렬화하므로 두 번째 호출은 반드시 rowcount=0 을 받는다.
     """
     placeholders = ",".join("?" for _ in from_statuses)
+    _now = datetime.now().isoformat(timespec="seconds")
     with get_db() as conn:
         cur = conn.execute(
-            f"UPDATE error_log SET status=? WHERE id=? AND status IN ({placeholders})",
-            (claim_status, error_id, *from_statuses),
+            f"UPDATE error_log SET status=?, claimed_at=? "
+            f"WHERE id=? AND status IN ({placeholders})",
+            (claim_status, _now, error_id, *from_statuses),
+        )
+        return cur.rowcount > 0
+
+
+def heartbeat_error(error_id: int) -> bool:
+    """처리 중인 오류에 '아직 살아있음' 신호 갱신 — ERRORS [473] (2026-07-22).
+
+    ★ 왜 필요한가: 수확기(job_retry_pending)는 오래 묶인 'analyzing' 을 죽은 세션으로 보고
+      'new' 로 되돌린다. 그런데 판정 기준이 `timestamp`(오류가 *기록된* 시각)였다 —
+      작업이 얼마나 진행됐는지와 무관한 값이라, **실제로 살아 있는 세션도 리셋**됐다.
+      (2026-07-18 실측: #3435 의 82분짜리 Tier-2 세션이 75분 시점에 리셋되어
+       같은 오류에 두 번째 세션이 중복 기동 → LLM 단일 차선을 서로 경합)
+    ★ 이제 작업자가 살아있는 동안 주기적으로 이 함수를 불러 `claimed_at` 을 갱신한다.
+      수확기는 '마지막 신호로부터 얼마나 지났나' 를 보므로 작업 길이와 무관하게 정확하다.
+      죽으면 신호가 끊기니 정상적으로 회수된다.
+
+    status='analyzing' 인 행만 갱신 — 이미 끝난 오류를 되살리지 않는다.
+    """
+    _now = datetime.now().isoformat(timespec="seconds")
+    with get_db() as conn:
+        cur = conn.execute(
+            "UPDATE error_log SET claimed_at=? WHERE id=? AND status='analyzing'",
+            (_now, error_id),
         )
         return cur.rowcount > 0
 
