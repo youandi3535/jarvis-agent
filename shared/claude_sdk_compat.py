@@ -207,6 +207,7 @@ def run_sdk_query(
     max_turns: int | None = None,
     permission_mode: str = "default",
     timeout: int = 300,
+    background: bool = False,
     extra_env: dict[str, str] | None = None,
     allowed_tools: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -297,10 +298,20 @@ def run_sdk_query(
             from shared import llm as _sl
         except Exception:
             _sl = None
+        _sem_held = False
         if _sl is not None:
             try:
                 _sl._pace_spawn()
-                _sl._acquire_llm_sem()
+                # ★ 배경 작업은 순번 대기에 상한 (ERRORS [474]) — 줄이 길면 포기하고 defer.
+                #   긴급 경로(background=False)는 종전대로 끝까지 대기.
+                _sem_wait = _sl.bg_sem_wait_max() if background else None
+                _sem_held = _sl._acquire_llm_sem(timeout=_sem_wait)
+                if not _sem_held:
+                    return {
+                        "returncode": -2, "stdout": "",
+                        "stderr": f"llm_sem timeout ({_sem_wait:.0f}s 순번 대기 초과)",
+                        "elapsed": int(_time.time() - t0), "error_kind": "deferred",
+                    }
             except Exception:
                 _sl = None
         _proc_locked = False
@@ -339,8 +350,9 @@ def run_sdk_query(
                 if _proc_locked:
                     try: _sl._proc_lock_release()
                     except Exception: pass
-                try: _sl._LLM_SPAWN_SEM.release()
-                except Exception: pass
+                if _sem_held:   # ★ 획득 못 했으면 반납 금지 (BoundedSemaphore 는 초과 release 시 예외)
+                    try: _sl._LLM_SPAWN_SEM.release()
+                    except Exception: pass
 
         stdout = "\n".join(_parts)
         _exc = _err_box["exc"]

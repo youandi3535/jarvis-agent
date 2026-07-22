@@ -517,9 +517,10 @@ def run_auto_repair() -> None:
             # cli_not_found / MessageParseError / API 가짜 키 누수 반복.
             # 새 동작: shared.claude_sdk_compat.run_sdk_query 단일 진입점 — 모든 환경 보장.
             from shared.claude_sdk_compat import run_sdk_query
-            result = run_sdk_query(
+            result = run_sdk_query(   # ★ 배경 작업 — 순번 대기 상한 적용 (ERRORS [474])
                 prompt=state["prompt"], model=_MODEL,
                 cwd=str(ROOT),
+                background=True,   # ★ 심층감사도 배경 — 발행 우선 (ERRORS [474])
                 max_turns=60,  # ★ 2026-06-06 박제 — Bash-first 방식: Bash 5턴 + 히트파일 처리 40턴 내외.
                 permission_mode="bypassPermissions",
                 timeout=_TIMEOUT,
@@ -796,12 +797,19 @@ def run_auto_repair_targeted(
         cwd=str(ROOT),
         permission_mode="bypassPermissions",
         timeout=_TARGETED_TIMEOUT,
+        background=True,   # ★ 순번 대기 상한 — 줄이 길면 포기하고 defer (ERRORS [474])
     )
     elapsed = result["elapsed"]
     rc      = result["returncode"]
 
     if rc != 0:
         kind = result.get("error_kind") or "sdk_error"
+        if kind == "deferred":
+            # ★ ERRORS [474] — LLM 순번을 못 잡아 *시작도 못 한* 것. 실패가 아니다.
+            #   알림 없이 조용히 물러나고 다음 retry_pending 이 재시도한다.
+            log.info("[AutoRepair/Targeted] 순번 대기 초과로 보류(defer) — %s",
+                     result.get("stderr", ""))
+            return False
         if kind == "cli_not_found":
             _send_tg("❌ *targeted 수정 실패*: claude 바이너리 PATH 미등록.")
         elif kind == "timeout":

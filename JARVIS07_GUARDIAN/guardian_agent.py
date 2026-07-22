@@ -536,6 +536,22 @@ def _orchestrate(error_id: int):
             _db.mark_error_status(error_id, "wontfix")
             return
 
+        # ── 안전장치 2.7: 발행 우선 — 발행 중·직전이면 Tier 2 를 미룬다 (★ ERRORS [474]) ──
+        #    Tier 2 는 한 세션이 10분 이상 LLM 차선을 점유한다. 발행이 도는 중에 이걸
+        #    시작하면 발행이 LLM 을 못 잡아 lock_contention 으로 밀리고, 품질 게이트가
+        #    통째로 스킵되는 사고로 이어진다 (2026-07-22 07:24 실제 발생).
+        #    자가수리는 급하지 않다 — 발행이 끝난 뒤 retry_pending 이 다시 집어간다.
+        try:
+            from shared.llm import bg_defer_reason as _bg_defer
+            _defer_why = _bg_defer()
+        except Exception:
+            _defer_why = ""
+        if _defer_why:
+            log.info(f"[GUARDIAN] #{error_id} Tier 2 보류 — {_defer_why} (발행 우선). "
+                     f"status=new 로 되돌려 다음 기회에 재처리")
+            _db.mark_error_status(error_id, "new")
+            return
+
         # ── 안전장치 3: Tier 2(LLM) 재시도 횟수 상한 (★ 사용자 박제 2026-07-06) ──
         #    'analyzing' 상태로 멈춘 오류가 job_retry_pending 에 의해 재투입될 때마다
         #    Tier 2(LLM) 를 무제한 재호출하는 사고(조용한 토큰 소모) 재발 방지.
