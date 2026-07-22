@@ -440,12 +440,64 @@ _PUBLISH_ESSENTIAL_CAP = frozenset(
 )
 
 
+# ★ 발행 중 표시 — **프로세스 경계를 넘는다** (ERRORS [474] — 2026-07-22)
+#   `_PUBLISHING_ACTIVE` 는 threading.Event 라 *같은 프로세스 안에서만* 유효하다.
+#   그런데 경제 브리핑은 `economic_poster.py` **별도 subprocess** 로 돌고(테마는 데몬
+#   in-process), GUARDIAN 은 데몬 프로세스에 있다 → 경제 발행 중에는 데몬이
+#   `is_publishing()=False` 로 보고 자가수리를 시작해 버렸다.
+#   (2026-07-22 07:24 실사고가 정확히 이 경우 — '모든 글에 적용' 이 안 된 상태였다.)
+#   → 파일 표식으로 프로세스 간 공유. 크래시로 표식이 남아도 stale 판정으로 자동 무효화.
+_PUBLISHING_MARK_PATH = _LLM_PROC_LOCK_PATH.parent / "publishing.active"
+
+
+def _publishing_stale_sec(default: float = 4800.0) -> float:
+    """발행 표식의 유효 시간 — 블로그 액션 데드라인에서 파생 (하드코딩 금지).
+
+    발행은 플랫폼별로 액션 데드라인(기본 40분)을 갖고 2개 플랫폼이 직렬로 돈다.
+    그 2배를 넘겨도 표식이 살아 있으면 정리 실패로 보고 무시한다(영구 차단 방지).
+    """
+    try:
+        from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC as _D
+        return float(_D) * 2
+    except Exception:
+        return default
+
+
 def mark_publishing(active: bool) -> None:
-    """발행 파이프라인 시작/종료 신호 — background alias LLM 호출 자동 강등."""
+    """발행 파이프라인 시작/종료 신호 — background alias LLM 호출 자동 강등.
+
+    ★ in-process Event + 파일 표식을 *함께* 갱신 → 다른 프로세스(데몬 GUARDIAN)도 인지.
+    """
     if active:
         _PUBLISHING_ACTIVE.set()
     else:
         _PUBLISHING_ACTIVE.clear()
+    try:
+        if active:
+            from datetime import datetime as _dt_p
+            _PUBLISHING_MARK_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _PUBLISHING_MARK_PATH.write_text(
+                _dt_p.now().isoformat(timespec="seconds"), encoding="utf-8")
+        else:
+            _PUBLISHING_MARK_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass   # 표식 실패는 치명적이지 않다 — in-process Event 는 그대로 동작
+
+
+def _publishing_mark_active() -> bool:
+    """다른 프로세스가 발행 중인지 — 파일 표식 확인 (stale 자동 무시)."""
+    try:
+        if not _PUBLISHING_MARK_PATH.exists():
+            return False
+        from datetime import datetime as _dt_p
+        _raw = _PUBLISHING_MARK_PATH.read_text(encoding="utf-8").strip()
+        _started = _dt_p.fromisoformat(_raw)
+        _age = (_dt_p.now() - _started).total_seconds()
+        if _age > _publishing_stale_sec():
+            return False   # 정리 실패로 남은 표식 — 무시(영구 차단 방지)
+        return True
+    except Exception:
+        return False
 
 
 # ── 발행창 보호 구간 (사용자 승인 2026-07-20 — 제안 ③) ─────────────────
@@ -589,25 +641,101 @@ def in_publish_protection() -> bool:
 
 
 def is_publishing() -> bool:
-    """현재 발행 파이프라인 실행 중인지 (in-process 한정)."""
-    return _PUBLISHING_ACTIVE.is_set()
+    """현재 발행 파이프라인 실행 중인지 — **프로세스 경계 넘어서** 판정 (ERRORS [474]).
+
+    in-process Event(테마=데몬 내부) + 파일 표식(경제=별도 subprocess) 둘 다 확인.
+    한쪽만 보면 '모든 글에 적용' 이 안 된다.
+    """
+    return _PUBLISHING_ACTIVE.is_set() or _publishing_mark_active()
 
 
-def _acquire_llm_sem() -> None:
+def bg_defer_reason() -> str:
+    """배경(비긴급) LLM 작업을 지금 *미뤄야* 하는 사유 — 빈 문자열이면 진행해도 됨.
+
+    ★ ERRORS [474] (사용자 지시 2026-07-22) — 발행 우선.
+      `invoke_text` 는 이미 발행 前 보호(차단) + 발행 中 강등(timeout 90s)을 하지만,
+      GUARDIAN 자가수리는 `run_sdk_query` 라는 *다른 통로* 로 나가 셋 다 적용받지 않았다.
+      게다가 Tier-2 는 한 세션이 10분 이상이라 '90초로 단축' 은 의미가 없다 —
+      발행 중에는 *아예 하지 않는* 것이 맞다.
+      실제 사고: 2026-07-22 07:24, 티스토리 발행(07:33 종료)이 도는 중에 GUARDIAN 이
+      LLM 을 점유해 발행 파이프라인이 lock_contention 으로 밀리고 품질 게이트가 스킵됐다.
+    """
+    try:
+        if is_publishing():
+            return "발행 진행 중"
+        if in_publish_protection():
+            return f"발행 前 {_PROTECT_MIN}분 보호 구간"
+    except Exception:
+        pass
+    return ""
+
+
+def _retry_sweep_sec(default: float = 600.0) -> float:
+    """배경 작업이 '다음 기회' 를 얻기까지의 간격 — DEFAULT_JOBS 에서 파생 (하드코딩 금지)."""
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+        for j in DEFAULT_JOBS:
+            if j.get("id") == "j07_retry_pending":
+                kw = j.get("kwargs") or {}
+                return float(kw.get("minutes", 10)) * 60 + float(kw.get("seconds", 0))
+    except Exception:
+        pass
+    return default
+
+
+def bg_sem_wait_max() -> float:
+    """배경(비긴급) 작업의 LLM 순번 대기 상한 — **동적 파생** (ERRORS [474]).
+
+    ★ 왜 이 값인가: 배경 작업은 포기해도 `j07_retry_pending` 이 곧 다시 집어간다.
+      즉 *다음 기회가 오는 간격* 보다 오래 줄 서는 것은 무의미하다 —
+      기다리느니 양보하고 다음 차례에 하는 편이 발행에도 좋고 자기 자신에게도 낫다.
+      스윕 주기의 1/4 을 상한으로 둔다(10분 주기 → 150초).
+      하드코딩 금지 — 스윕 주기를 바꾸면 이 값이 따라온다.
+    무배포 조정: `LLM_BG_SEM_WAIT_MAX`(초).
+    """
+    _env = os.getenv("LLM_BG_SEM_WAIT_MAX")
+    if _env:
+        try:
+            return max(1.0, float(_env))
+        except Exception:
+            pass
+    return max(30.0, _retry_sweep_sec() / 4.0)
+
+
+def _acquire_llm_sem(timeout: float | None = None) -> bool:
     """★ 전역 LLM 세마포어 획득 — 대기 중에도 워치독 진행 신호 전송 (freeze 오탐 방지).
 
     다른 에이전트(GUARDIAN 심층감사·WRITER 장문 생성 등)가 슬롯을 오래 점유해도
     대기 자체는 정상 흐름이다. plain `with _LLM_SPAWN_SEM:` 은 대기 구간에 beat가
     없어 워치독이 300초 무진전으로 오판해 강제 종료(os._exit 75)하는 사고 원인이었다.
-    호출 후 반드시 `try/finally: _LLM_SPAWN_SEM.release()` 로 짝을 맞출 것.
+    호출 후 (True 반환 시) 반드시 `try/finally: _LLM_SPAWN_SEM.release()` 로 짝 맞출 것.
+
+    ★ timeout (ERRORS [474] — 2026-07-22):
+      None = 무한 대기(기존 동작 — 발행 등 긴급 경로).
+      값 지정 시 초과하면 **False 반환** 하고 포기 → 호출자가 defer.
+      종전엔 상한이 없어, 대기 중에도 beat 를 보내니 워치독도 정상으로 판단했다.
+      실측: GUARDIAN Tier-2 세션 4966초(82.8분) 중 실작업은 630초 상한이고
+      나머지 70분+ 가 *줄 서 있던 시간* 이었다.
+
+    Returns: True = 획득(release 의무) / False = timeout 포기(release 하지 말 것)
     """
     try:
         from JARVIS00_INFRA.watchdog import beat as _beat
     except Exception:
         def _beat() -> None: pass
     _beat()
+    _waited = 0.0
     while not _LLM_SPAWN_SEM.acquire(timeout=_LLM_SEM_POLL_SEC):
         _beat()   # ★ 세마포어 대기 중에도 진행 신호 — freeze-kill 오탐 방지
+        _waited += _LLM_SEM_POLL_SEC
+        if timeout is not None and _waited >= timeout:
+            import logging as _lg_sem
+            _lg_sem.getLogger("jarvis.llm").info(
+                f"⏭ LLM 순번 대기 {_waited:.0f}s 초과 — 배경 작업 포기(defer). "
+                f"긴급 경로에 차선을 양보한다."
+            )
+            return False
+    return True
 
 
 # ★ Rate-limit 회로 차단기 (ERRORS [288] — 2026-07-03)

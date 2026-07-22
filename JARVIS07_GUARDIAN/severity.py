@@ -133,6 +133,33 @@ _PATTERN_FIXABLE_TYPES = frozenset({
 })
 
 
+# ── 재시도해도 절대 낫지 않는 '결정론적' 오류 타입 (ERRORS [478]) ──────────
+#
+# ★ `_PATTERN_FIXABLE_TYPES` 와 **다른 질문** 이다. 혼동 금지:
+#     · `_PATTERN_FIXABLE_TYPES` = "패턴으로 고칠 수 있나?"   (fixer 선택)
+#     · 이 집합                  = "재시도해도 안 낫나?"      (수리 착수 시점)
+#   그래서 TypeError·AttributeError·ValueError 는 전자에는 있지만 **여기엔 없다** —
+#   `None` 이 와서 나는 경우가 많고, 그건 데이터가 아직 안 온 것이라 재시도하면 낫는다.
+#   반대로 여기 있는 것들은 *환경·코드가 바뀌지 않는 한 100% 같게 실패* 한다.
+#
+# 용도: 재시도가 남은 '잠정' 실패라도 이 타입이면 Tier-1(패턴 수정, LLM 0회)을 *즉시* 허용.
+#   기다려봐야 똑같이 실패하므로, 다음 시도가 살아나려면 지금 고쳐야 한다.
+#   (Tier-2(LLM)는 이 타입이어도 여전히 재시도 종료까지 보류 — 비싸기 때문.)
+DETERMINISTIC_CODE_ERROR_TYPES = frozenset({
+    "SyntaxError",          # 문법 오류 — 코드를 고치지 않는 한 영원히 동일
+    "IndentationError",     # 들여쓰기 오류 — 동일
+    "TabError",
+    "ImportError",          # 심볼 부재 — 재시도로 생기지 않음
+    "ModuleNotFoundError",  # 모듈 부재 — 동일
+    "NameError",            # 정의되지 않은 이름(오타) — 동일
+})
+
+
+def is_deterministic_code_error(error_type: str) -> bool:
+    """재시도해도 100% 같게 실패하는 코드 오류인가 — 즉시 수리 착수 대상."""
+    return (error_type or "") in DETERMINISTIC_CODE_ERROR_TYPES
+
+
 # ── 일시적·외부·제어흐름 오류 (코드 버그 아님 — 자동수정 비대상 → ignored) ──
 # ★ ERRORS [286] 박제 2026-06-28 — 이 부류는 wontfix(코드 결함 미해결)가 아니라 ignored.
 #   네트워크·Selenium 환경·외부 API 할당량·정상 제어흐름(테마 교체)·외부 발행(Layer 4)·
@@ -230,8 +257,61 @@ _TRANSIENT_PATTERNS = [
 ]
 
 
-def is_transient(error_type: str, message: str = "", source: str = "") -> bool:
+# ★ 코드 수정으로 해결 *불가* 한 harness 이슈 kind — Tier-2(LLM) 비대상 (ERRORS [475])
+#
+#   ★ `harness._INFRA_ISSUE_KINDS` 와 **직교하는 다른 질문** 이다. 혼동 금지:
+#     · `_INFRA_ISSUE_KINDS` = "재작성으로 고칠 수 있나?"  (harness 재시도·backoff 정책)
+#     · 이 집합              = "코드 수정으로 고칠 수 있나?" (GUARDIAN 학습 정책)
+#     예) engagement(품질점수 미달)는 *재작성으론* 고쳐지므로 전자에 넣으면 안 되지만,
+#         *코드 수정으론* 안 고쳐지므로 후자에는 들어간다.
+#     (실제로 harness 주석이 "engagement 를 _INFRA_ISSUE_KINDS 에 넣지 말라" 고 못박고 있다 —
+#      그래서 그 목록을 넓히는 방식은 틀렸고, 이렇게 별도 개념으로 둔다.)
+#
+#   ★ 왜 message 정규식이 아니라 kind 인가 (CLAUDE.md 3원칙 ③ '모든 글에 적용'):
+#     kind 는 구조화된 필드라 네이버·티스토리 / 경제·테마 4조합에 자동으로 동일 적용된다.
+#     메시지 문자열로 걸면 한 플랫폼 문구만 걸러지고 다른 쪽에서 재발한다.
+#
+#   실측 근거 (2026-07-22): Tier-2 가 시도한 131건 중 74건(56%)이 harness 래퍼 오류였고,
+#   전부 files_fixed=0. 누적 3.8시간 낭비 + 그 시간 동안 발행이 LLM 을 못 씀.
+#
+#   ★ 의도적 *비*포함 (사용자 판단 2026-07-22 — 안(다)):
+#     · stuck / abort (데드라인·freeze) — 반복되면 진짜 성능 결함일 수 있다.
+#       게다가 2026-07-18 이후 발생 0건이라 지금 막을 실익이 없다. 늘어나면 그때 재검토.
+#     · execution_error — 코드에서 실제로 난 예외. 반드시 Tier-2 유지.
+#     · draft_invalid / data_empty / send_failure / login_invalid / factuality — 미승인.
+NON_CODE_ISSUE_KINDS = frozenset({
+    "engagement",     # 품질 점수 미달 — 글이 안 좋은 것이지 코드가 틀린 게 아니다
+    "infra_throttle", # 스로틀·락 경합 — 순번이 밀린 것
+    "draft_failed",   # 대본 생성 실패 (LLM 무응답·HTML 생성 실패)
+    "empty_output",   # LLM 응답 빈값
+    "sdk_error",      # SDK 실행 오류 (CLI 미발견·인증 등 운영 사유)
+    "cli_error",      # CLI 오류 (한도 초과 등)
+    "timeout",        # LLM/CLI 타임아웃 — 응답이 안 온 것
+})
+
+
+def kind_of(record: dict) -> str:
+    """오류 레코드에서 harness 이슈 kind 추출 — context(JSON) 단일 경로."""
+    if not isinstance(record, dict):
+        return ""
+    ctx = record.get("context")
+    if isinstance(ctx, str):
+        try:
+            import json as _json
+            ctx = _json.loads(ctx)
+        except Exception:
+            return ""
+    if isinstance(ctx, dict):
+        return str(ctx.get("kind") or "")
+    return ""
+
+
+def is_transient(error_type: str, message: str = "", source: str = "",
+                 kind: str = "") -> bool:
     """일시적·외부·제어흐름 오류 여부 — True 면 자동수정 비대상(ignored 처리).
+
+    ★ kind (ERRORS [475]): harness 이슈 kind 가 `NON_CODE_ISSUE_KINDS` 면 즉시 True.
+      메시지 정규식보다 정확하고, 구조화 필드라 4조합(플랫폼×글종류)에 자동 적용된다.
 
     코드 패치로 해결 불가능한 부류만 True:
       네트워크·Selenium 환경·외부 API 할당량·포트 충돌·Claude CLI 운영 오류·
@@ -239,6 +319,8 @@ def is_transient(error_type: str, message: str = "", source: str = "") -> bool:
     ImportError/NameError/KeyError/AttributeError/TypeError 같은 *코드 버그 타입은
     절대 transient 로 분류하지 않음* (오탐 방지).
     """
+    if kind and kind in NON_CODE_ISSUE_KINDS:
+        return True   # ★ 코드 수정으로 해결 불가한 harness 이슈 — Tier-2 낭비 차단
     et = error_type or ""
     msg = message or ""
     # ★ ERRORS [446][447][448] 박제 2026-07-17 — source="audit_test" 는 GUARDIAN
@@ -250,6 +332,72 @@ def is_transient(error_type: str, message: str = "", source: str = "") -> bool:
     if et in _TRANSIENT_TYPES:
         return True
     return any(pat.search(msg) for pat in _TRANSIENT_PATTERNS)
+
+
+# ── 표시용 한글 분류 라벨 (사용자 박제 2026-07-21) ─────────────────
+# error_type(예: "ValueError")만으로는 어떤 종류의 오류인지 한눈에 안 들어옴 →
+# ERRORS.md·대시보드 표시 시 "값 불일치(ValueError)" 형태로 보여주기 위한 매핑.
+# ★ DB에 별도 컬럼으로 저장하지 않음 — error_type 원본에서 표시 시점에 항상 파생
+#   (루트 CLAUDE.md "복사본을 진실로 믿지 말 것" — 분류 기준이 바뀌면 과거 기록도 자동 갱신).
+_CATEGORY_LABELS: dict[str, str] = {
+    "AttributeError": "참조 오류",
+    "KeyError": "조회 오류",
+    "IndexError": "조회 오류",
+    "LookupError": "조회 오류",
+    "TypeError": "타입 불일치",
+    "ValueError": "값 불일치",
+    "UnicodeDecodeError": "값 불일치",
+    "UnicodeEncodeError": "값 불일치",
+    "JSONDecodeError": "값 불일치",
+    "ZeroDivisionError": "연산 오류",
+    "OverflowError": "연산 오류",
+    "ArithmeticError": "연산 오류",
+    "FileNotFoundError": "I/O 오류",
+    "IsADirectoryError": "I/O 오류",
+    "NotADirectoryError": "I/O 오류",
+    "PermissionError": "I/O 오류",
+    "OSError": "I/O 오류",
+    "IOError": "I/O 오류",
+    "ConnectionError": "I/O 오류",
+    "ConnectionResetError": "I/O 오류",
+    "ConnectionAbortedError": "I/O 오류",
+    "TimeoutError": "I/O 오류",
+    "HTTPError": "I/O 오류",
+    "SSLError": "I/O 오류",
+    "MemoryError": "자원 오류",
+    "RecursionError": "자원 오류",
+    "ImportError": "임포트 오류",
+    "ModuleNotFoundError": "임포트 오류",
+    "NameError": "이름 오류",
+    "UnboundLocalError": "이름 오류",
+    "StopIteration": "제어흐름",
+    "GeneratorExit": "제어흐름",
+    "SystemExit": "시스템 종료",
+    "KeyboardInterrupt": "시스템 종료",
+    "WebDriverException": "환경 오류",
+    "SessionNotCreatedException": "환경 오류",
+    "InvalidSessionIdException": "환경 오류",
+    "StaleElementReferenceException": "환경 오류",
+    "ElementClickInterceptedException": "환경 오류",
+    "NoSuchWindowException": "환경 오류",
+}
+
+_DEFAULT_CATEGORY = "기타"
+
+
+def describe_category(error_type: str) -> str:
+    """error_type → 한글 분류 라벨. 미등록 타입은 '기타' (판단 실패가 아니라 미분류 표시)."""
+    et = (error_type or "").strip()
+    if et in _CATEGORY_LABELS:
+        return _CATEGORY_LABELS[et]
+    short = et.rsplit(".", 1)[-1]  # "selenium.common.exceptions.WebDriverException" 대응
+    return _CATEGORY_LABELS.get(short, _DEFAULT_CATEGORY)
+
+
+def format_error_label(error_type: str) -> str:
+    """표시용 조합 라벨: '값 불일치(ValueError)'. ERRORS.md·대시보드 공통 사용."""
+    et = (error_type or "?").strip() or "?"
+    return f"{describe_category(et)}({et})"
 
 
 def is_auto_fixable(severity: str, error_type: str) -> bool:

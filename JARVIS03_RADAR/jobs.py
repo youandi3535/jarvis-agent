@@ -260,7 +260,8 @@ def job_collect_trends() -> None:
                 _log.warning("[topic_pack] 사전 생성 최종 실패 — 06:30 포스터에서 즉석 재시도")
         except Exception as _e:
             _log.warning(f"[topic_pack] 사전 생성 예외 (시도 {_tp_try+1}/{_MAX_TP_TRIES}): {_e}")
-            _g_report("radar", _e, module=__name__)
+            _g_report("radar", _e, module=__name__,
+                          attempt=_tp_try + 1, max_attempts=_MAX_TP_TRIES)
             if _tp_try < _MAX_TP_TRIES - 1:
                 _time_tp.sleep(90)
 

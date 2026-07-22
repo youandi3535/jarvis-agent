@@ -258,7 +258,63 @@ def action_step(name: str) -> Callable:
 
 # ── GUARDIAN 연동 ─────────────────────────────────────
 
-def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issue]) -> None:
+# ── 시도 오류 ↔ 최종 결과 정합 (ERRORS [462] — 2026-07-21) ─────────────
+#
+# ★ 문제: harness 는 *시도마다* 실패를 GUARDIAN 에 즉시 보고하는데, 그 액션이
+#   최종적으로 **성공(best-so-far 발행 등)** 해도 앞서 보고한 오류를 거두지 않았다.
+#   → GUARDIAN 이 이미 해소된 문제를 붙잡고 자동수정을 돌린 뒤
+#     "자동수정 실패 — 수동 검토" 오알림을 보냈다. 사용자는 *발행이 끝난 글* 에 대해
+#     실패 알림을 받는다(경제·테마·네이버·티스토리 공통). 알림 신뢰가 무너지는 유형.
+#
+# ★ 해결: 액션 단위로 발급된 오류 ID 를 모아, 최종 delivered=True 면 일괄 해소한다.
+#   단일 진입점 — 다른 곳에서 개별 해소 로직을 만들지 말 것.
+_ATTEMPT_ERROR_IDS: dict[str, list[int]] = {}
+
+
+def _resolve_attempt_errors(action_name: str, resolution: str) -> int:
+    """액션이 최종 성공했을 때, 그 과정에서 보고된 시도 오류를 해소 처리."""
+    ids = _ATTEMPT_ERROR_IDS.pop(action_name, [])
+    if not ids:
+        return 0
+    try:
+        from shared.db import mark_error_fixed
+    except Exception:
+        return 0
+    done = 0
+    for eid in ids:
+        try:
+            mark_error_fixed(eid, resolution, fixed_file=None)
+            done += 1
+        except Exception:
+            continue
+    if done:
+        _log.info(f"[harness] 시도 오류 {done}건 해소 — 최종 성공으로 무효화: {action_name}")
+    return done
+
+
+def _finalize_attempt_errors(action_name: str) -> int:
+    """액션이 최종 실패로 끝났을 때 — 잠정 표시를 풀어 Tier-2 판정 대상으로 승격.
+
+    ★ `_resolve_attempt_errors`(최종 *성공* 시 무효화)와 대칭 (ERRORS [476]).
+      성공하면 '문제가 아니었던 것' 이고, 최종 실패해야 비로소 '진짜 볼 만한 것' 이다.
+      _ATTEMPT_ERROR_IDS 는 여기서 pop 하지 않는다 — escalation 후에도 소급 성공
+      (best-so-far 발행)이 있을 수 있어 `_resolve_attempt_errors` 가 여전히 필요하다.
+    """
+    ids = list(_ATTEMPT_ERROR_IDS.get(action_name) or [])
+    if not ids:
+        return 0
+    try:
+        from shared.db import finalize_provisional_errors
+        n = finalize_provisional_errors(ids)
+    except Exception:
+        return 0
+    if n:
+        _log.info(f"[harness] 잠정 오류 {n}건 확정 — 최종 실패로 Tier-2 판정 대상 승격: {action_name}")
+    return n
+
+
+def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issue],
+                               max_attempts: int = 0) -> None:
     """검증 실패 → error_collector.report() 박제. learned_patterns 자동 등록.
 
     실패해도 (예: GUARDIAN 미가용) 검증 순환은 계속 진행 — try/except 격리.
@@ -274,7 +330,7 @@ def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issu
             exc = RuntimeError(
                 f"[harness:{action_name}] attempt={attempt} step={issue.step}: {issue.detail}"
             )
-            g_report(
+            _eid = g_report(
                 exc,                       # ★ catch(exc_or_type, ...) 첫 위치 인자 (exc= 키워드 없음)
                 source="harness",
                 module=f"JARVIS00_INFRA.harness.{action_name}",
@@ -288,6 +344,18 @@ def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issu
                     "detail": issue.detail,
                 },
             )
+            # ★ 최종 성공 시 되돌리기 위해 액션별로 보관 (ERRORS [462])
+            if _eid:
+                _ATTEMPT_ERROR_IDS.setdefault(action_name, []).append(int(_eid))
+                # ★ 아직 재시도가 남았으면 '잠정' 표시 → Tier-2 판정 보류 (ERRORS [476]).
+                #   이 시점엔 일시적인지 결정론적인지 알 수 없다. 기록은 즉시 남기되
+                #   (대시보드 관측성 유지) *판정만* 액션 종료까지 미룬다.
+                if max_attempts and attempt and attempt < max_attempts:
+                    try:
+                        from shared.db import mark_error_provisional
+                        mark_error_provisional(int(_eid), True)
+                    except Exception:
+                        pass
         except Exception as e:
             _log.warning(f"[harness] GUARDIAN report 실패 (계속 진행): {e}")
 
@@ -662,6 +730,11 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                 result.delivered = True
                 result.issues_history.append([])   # 통과 기록
                 _log.info(f"[harness] 📤 송출 완료: {action_def.name}")
+                # ★ 송출 성공 → 앞선 시도에서 보고한 오류 무효화 (ERRORS [462]).
+                #   시도1 실패 → 시도2 통과 인 경우에도 GUARDIAN 오알림이 나갔다.
+                _resolve_attempt_errors(
+                    action_def.name,
+                    f"harness 검증 통과·송출 완료(시도 {attempt}) — 시도 실패는 최종 결과로 무효")
                 return result
             except Exception as e:
                 # 송출 실패 = 송출 미완료 — 검증 순환 재진입
@@ -674,7 +747,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                     detail=f"{type(e).__name__}: {str(e)[:200]}",
                 )
                 result.issues_history.append([send_issue])
-                _report_issues_to_guardian(action_def.name, attempt, [send_issue])
+                _report_issues_to_guardian(action_def.name, attempt, [send_issue], action_def.max_attempts)
                 continue
 
         # ── ★ 즉시 수정 훅 — "수정→기록→누적→순환" 전체 에이전트 디폴트 ──
@@ -719,7 +792,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                             send_issue = Issue(step="송출 (Layer 4)", kind="send_failure",
                                                detail=f"{type(_se).__name__}: {str(_se)[:200]}")
                             result.issues_history.append([send_issue])
-                            _report_issues_to_guardian(action_def.name, attempt, [send_issue])
+                            _report_issues_to_guardian(action_def.name, attempt, [send_issue], action_def.max_attempts)
                             # 송출 실패 → 정상 재시도 루프로 fall-through
                     else:
                         # ★ 근본 수정 (2026-07-16): 재검증 이슈(_rev) 폐기 금지.
@@ -781,7 +854,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                 f"{action_def.name}"
             )
             _log.warning(f"[harness] 🚫 fingerprint abort: {action_def.name}")
-            _report_issues_to_guardian(action_def.name, attempt, [_abort])
+            _report_issues_to_guardian(action_def.name, attempt, [_abort], action_def.max_attempts)
             _notify_escalation(
                 action_def.name, attempt, all_issues,
                 reason=result.escalation_reason,
@@ -802,7 +875,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             result.escalation_reason = "누적 issue 임계 초과 — abort"
             print(f"  🚫 [harness] 누적 abort: {action_def.name} (총 {_cumulative}건)")
             _log.warning(f"[harness] 🚫 누적 abort: {action_def.name}")
-            _report_issues_to_guardian(action_def.name, attempt, [_abort])
+            _report_issues_to_guardian(action_def.name, attempt, [_abort], action_def.max_attempts)
             _notify_escalation(
                 action_def.name, attempt, all_issues,
                 reason=result.escalation_reason,
@@ -822,7 +895,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
         )
         # unfixed만 GUARDIAN 보고 (fixed는 이미 _record_fixed_to_guardian에서 처리됨)
         if unfixed_issues:
-            _report_issues_to_guardian(action_def.name, attempt, unfixed_issues)
+            _report_issues_to_guardian(action_def.name, attempt, unfixed_issues, action_def.max_attempts)
 
         # ── backward-compat abort 신호 (fix 훅 없는 경우 — verify 내부에서 abort 반환) ──
         if any(iss.kind == "abort" for iss in all_issues):
@@ -866,6 +939,10 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             action_def.send(state)
             result.delivered = True
             result.escalation_reason = ""
+            # ★ 발행 성공 → 시도 오류 무효화 (GUARDIAN 오알림 차단, ERRORS [462])
+            _resolve_attempt_errors(
+                action_def.name,
+                "harness best-so-far 발행 성공 — 시도 실패는 최종 결과로 무효")
             _log.warning(
                 f"[harness] ✅ best-so-far 발행 — 품질점수(100점)만 미달({action_def.max_attempts}회), "
                 f"사실성·구조 결함 없어 최선 대본 송출: {action_def.name}")
@@ -877,6 +954,8 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
     # ── 콘텐츠 결함 등 — escalation (송출 절대 안 함) ──
     result.escalation_reason = f"max_attempts({action_def.max_attempts}) 도달 — 검증 통과 실패"
     _log.error(f"[harness] ❌ escalation — {action_def.name}: {result.escalation_reason}")
+    # ★ 최종 실패 확정 — 잠정 표시 해제로 Tier-2 판정 대상 승격 (ERRORS [476])
+    _finalize_attempt_errors(action_def.name)
     _notify_escalation(action_def.name, action_def.max_attempts, last, reason=result.escalation_reason)
     return result
 

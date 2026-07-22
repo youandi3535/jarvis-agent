@@ -406,6 +406,34 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
         return False
 
 
+#  하트비트 주기 — 수확기 판정(stuck_minutes)보다 훨씬 촘촘해야 오탐이 없다.
+HEARTBEAT_SEC: int = 60
+
+
+def _start_heartbeat(error_id: int) -> threading.Event:
+    """처리 중인 오류에 주기적으로 '살아있음' 신호를 보낸다 (★ ERRORS [473]).
+
+    ★ 왜 스레드인가: Tier-2 는 `run_sdk_query()` 한 번에 수십 분을 블로킹한다.
+      그 안에는 신호를 심을 지점이 없다. 별도 스레드가 밖에서 찍으면
+      *무엇이 얼마나 오래 걸리든* 상관없이 살아있음이 보장된다.
+    Returns: stop 이벤트 — set() 하면 즉시 종료 (daemon 스레드라 누수 없음)
+    """
+    stop = threading.Event()
+
+    def _beat():
+        from shared import db as _db
+        while not stop.wait(HEARTBEAT_SEC):
+            try:
+                if not _db.heartbeat_error(error_id):
+                    return   # 이미 analyzing 이 아님 (완료·회수됨) → 신호 중단
+            except Exception:
+                pass         # 신호 실패는 치명적이지 않다 — 다음 주기에 재시도
+
+    threading.Thread(target=_beat, daemon=True,
+                     name=f"guardian-hb-{error_id}").start()
+    return stop
+
+
 def _orchestrate(error_id: int):
     """오류 분석 → 자동 수정 오케스트레이터 (별도 스레드에서 실행).
 
@@ -428,6 +456,8 @@ def _orchestrate(error_id: int):
             return
         _processing.add(error_id)
 
+    _hb_stop = None   # 하트비트 핸들 — 선점 성공 후에만 설정됨 (finally 가 참조)
+
     try:
         from shared import db as _db
         from JARVIS07_GUARDIAN.error_analyzer import analyze
@@ -444,8 +474,10 @@ def _orchestrate(error_id: int):
         #    ★ ERRORS [286] — 네트워크·Selenium 환경·외부 API 할당량·정상 제어흐름(테마 교체)·
         #    외부 발행(Layer 4)·Claude CLI 운영 오류는 wontfix 가 아니라 ignored.
         #    수동검토 큐 오염·알림 폭주 방지. 자동수정 파이프라인 진입 안 함.
-        from JARVIS07_GUARDIAN.severity import is_transient
-        if is_transient(error_type, error_record.get("message", ""), error_record.get("source", "")):
+        from JARVIS07_GUARDIAN.severity import (is_transient, kind_of,
+                                                is_deterministic_code_error)
+        if is_transient(error_type, error_record.get("message", ""),
+                        error_record.get("source", ""), kind=kind_of(error_record)):
             log.info(f"[GUARDIAN] #{error_id} 일시적/외부/제어흐름 오류 — ignored (자동수정 비대상): {error_type}")
             _db.mark_error_status(error_id, "ignored")
             return
@@ -468,8 +500,39 @@ def _orchestrate(error_id: int):
         severity = _escalate_severity(error_record)
         error_record = {**error_record, "severity": severity}  # 상향된 값으로 갱신
 
+        # ── 안전장치 2.5: DB 레벨 원자적 선점 (★ 프로세스 간·중복 디스패치 경쟁 차단) ──
+        #    in-memory _processing 은 같은 프로세스 내 스레드만 방어한다. bus 재전달
+        #    (dispatch_pending 폴백)과 job_retry_pending 스윕이 겹치면 서로 다른 스레드가
+        #    거의 동시에 이 지점까지 통과할 수 있다 (관찰: #3773 동일 오류에 Tier-2 세션
+        #    2개가 2.5초 간격으로 중복 기동 — LLM_MAX_CONCURRENCY=1 락 경합을 스스로 악화).
+        #    UPDATE...WHERE 조건부 갱신은 SQLite 가 직렬화하므로 두 번째 호출은 반드시 실패.
+        if not _db.try_claim_error(error_id, claim_status="analyzing"):
+            log.info(f"[GUARDIAN] #{error_id} 이미 처리 착수됨(DB 선점 실패) — 중복 오케스트레이션 skip")
+            return
+
+        # ── 안전장치 2.6: 살아있음 신호(하트비트) 시작 (★ ERRORS [473]) ──────────
+        #    선점만으로는 부족하다. 수확기(job_retry_pending)가 오래 묶인 analyzing 을
+        #    죽은 세션으로 보고 new 로 되돌리는데, 그 판정이 '오류 기록 시각' 기준이라
+        #    *살아 있는 세션* 도 리셋됐다 (2026-07-18 #3435: 82분 세션이 75분에 리셋되어
+        #    두 번째 Tier-2 세션 중복 기동). 이제 처리 중에는 주기적으로 신호를 보내고,
+        #    수확기는 '마지막 신호 이후 경과' 로 판정한다 → 작업이 아무리 길어도 안전.
+        _hb_stop = _start_heartbeat(error_id)
+
         log.info(f"[GUARDIAN] 오케스트레이터 시작 — #{error_id} [{severity}] {error_type}")
-        _db.mark_error_status(error_id, "analyzing")
+
+        # ── 안전장치 2.6: 잠정 실패는 Tier 1 도 보류 — 단, 결정론적 타입은 예외 ──
+        #    (★ ERRORS [478] — 사용자 판단 2026-07-22, 안(다))
+        #    "1회 실패는 오류가 아니다" 는 Tier 1 에도 적용된다. Tier 1 은 LLM 을 안 쓰지만
+        #    **파일을 수정한다**(.bak 백업 후 패치). 일시적 실패에 코드를 건드리면
+        #    멀쩡한 코드를 고치는 것이다.
+        #    다만 `SyntaxError`·`ImportError`·`NameError` 처럼 **재시도해도 100% 같게
+        #    실패하는** 타입은 기다릴 이유가 없다 — 지금 고쳐야 다음 시도가 산다.
+        #    → 결정론적 타입만 즉시 Tier 1 허용. (Tier 2 는 비싸므로 이 타입도 뒤에서 보류)
+        if error_record.get("provisional") and not is_deterministic_code_error(error_type):
+            log.info(f"[GUARDIAN] #{error_id} 잠정 실패(재시도 남음) + 비결정론적({error_type}) "
+                     f"— Tier 1·2 모두 보류. 재시도 끝난 뒤 판정")
+            _db.mark_error_status(error_id, "new")
+            return
 
         # ── Tier 1: 패턴 수정 — 모든 심각도 시도 (Bandit, LLM 없음, 안전) ─
         #    (Bandit 보상은 pattern_fixer/error_fixer 내부에서 자동 기록)
@@ -487,6 +550,36 @@ def _orchestrate(error_id: int):
             log.warning(f"[GUARDIAN] #{error_id} critical + Tier 1 실패 → 수동 검토")
             _notify_all(error_record, "critical_manual", severity=severity)
             _db.mark_error_status(error_id, "wontfix")
+            return
+
+        # ── 안전장치 2.65: 잠정 실패는 Tier 2 보류 (★ ERRORS [476]) ────────────
+        #    harness 는 실패하면 재시도한다. attempt=1 실패 시점엔 그것이 *일시적* 인지
+        #    (재시도로 해결) *결정론적* 인지(진짜 코드 버그) 알 수 없다. 결과가 나오기 전에
+        #    LLM 수십 분을 태우는 것은 도박이다.
+        #    실측 2026-07-22: Tier-2 를 태운 harness 오류 74건 중 **57건(77%)이 attempt=1**.
+        #    액션이 최종 성공하면 `_resolve_attempt_errors` 가 해소 처리하므로 영영 안 온다
+        #    (= 애초에 문제가 아니었던 것). 최종 실패해야 `_finalize_attempt_errors` 가
+        #    잠정 표시를 풀어 여기로 돌아온다 (= 비로소 볼 만한 것).
+        if error_record.get("provisional"):
+            log.info(f"[GUARDIAN] #{error_id} 잠정 실패(재시도 남음) — Tier 2 보류. "
+                     f"액션 종료 후 재판정 (성공하면 자동 해소)")
+            _db.mark_error_status(error_id, "new")
+            return
+
+        # ── 안전장치 2.7: 발행 우선 — 발행 중·직전이면 Tier 2 를 미룬다 (★ ERRORS [474]) ──
+        #    Tier 2 는 한 세션이 10분 이상 LLM 차선을 점유한다. 발행이 도는 중에 이걸
+        #    시작하면 발행이 LLM 을 못 잡아 lock_contention 으로 밀리고, 품질 게이트가
+        #    통째로 스킵되는 사고로 이어진다 (2026-07-22 07:24 실제 발생).
+        #    자가수리는 급하지 않다 — 발행이 끝난 뒤 retry_pending 이 다시 집어간다.
+        try:
+            from shared.llm import bg_defer_reason as _bg_defer
+            _defer_why = _bg_defer()
+        except Exception:
+            _defer_why = ""
+        if _defer_why:
+            log.info(f"[GUARDIAN] #{error_id} Tier 2 보류 — {_defer_why} (발행 우선). "
+                     f"status=new 로 되돌려 다음 기회에 재처리")
+            _db.mark_error_status(error_id, "new")
             return
 
         # ── 안전장치 3: Tier 2(LLM) 재시도 횟수 상한 (★ 사용자 박제 2026-07-06) ──
@@ -513,6 +606,8 @@ def _orchestrate(error_id: int):
     except Exception as e:
         log.error(f"[GUARDIAN] 오케스트레이터 오류: {e}")
     finally:
+        if _hb_stop is not None:
+            _hb_stop.set()   # ★ 하트비트 종료 — 이후 신호 끊기면 수확기가 정상 회수
         with _fix_lock:
             _processing.discard(error_id)
 
@@ -576,7 +671,7 @@ def self_heal_known_errors(limit: int = 40) -> dict:
         from shared import db as _db
         from JARVIS07_GUARDIAN.error_analyzer import analyze
         from JARVIS07_GUARDIAN.error_fixer import apply_fix
-        from JARVIS07_GUARDIAN.severity import is_transient
+        from JARVIS07_GUARDIAN.severity import is_transient, kind_of as _kind_of
     except Exception as e:
         log.warning(f"[GUARDIAN/selfheal] import 실패: {e}")
         return {"fixed": 0, "skipped": 0, "ignored": 0, "scanned": 0}
@@ -586,7 +681,7 @@ def self_heal_known_errors(limit: int = 40) -> dict:
         eid = er.get("id")
         et  = er.get("error_type", "")
         try:
-            if is_transient(et, er.get("message", ""), er.get("source", "")):
+            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er)):
                 _db.mark_error_status(eid, "ignored")
                 ignored += 1
                 continue
@@ -623,7 +718,7 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
         from shared import db as _db
         from JARVIS07_GUARDIAN.error_analyzer import analyze, analyze_llm_only
         from JARVIS07_GUARDIAN.error_fixer import apply_fix
-        from JARVIS07_GUARDIAN.severity import is_transient
+        from JARVIS07_GUARDIAN.severity import is_transient, kind_of as _kind_of
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] import 실패: {e}")
         return {"fixed_t1": 0, "fixed_t2": 0, "failed": 0, "ignored": 0, "scanned": 0, "llm_used": 0}
@@ -633,7 +728,7 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
         eid = er.get("id")
         et  = er.get("error_type", "")
         try:
-            if is_transient(et, er.get("message", ""), er.get("source", "")):
+            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er)):
                 _db.mark_error_status(eid, "ignored")
                 ignored += 1
                 continue
@@ -819,10 +914,14 @@ def job_retry_pending(*, max_per_run: int = 20, stuck_minutes: int = 30):
         stuck_rows = _db.list_errors(status="analyzing", limit=max_per_run)
         threshold = datetime.now() - timedelta(minutes=stuck_minutes)
         for r in stuck_rows:
-            # ★ error_log 실제 컬럼명은 'timestamp' 단독 (created_at/detected_at 없음 —
-            #   과거엔 존재하지 않는 키만 읽어 매번 except 로 빠지며 리셋이 영구 no-op 이었음.
-            #   사용자 박제 2026-07-06 — job_retry_pending 근본원인 수정)
-            ts = r.get("timestamp") or ""
+            # ★ 판정 기준 = `claimed_at`(마지막 살아있음 신호) — ERRORS [473] (2026-07-22)
+            #   종전엔 `timestamp`(오류가 *기록된* 시각)로 판정했다. 그 값은 작업 진행과
+            #   아무 상관이 없어 **살아 있는 세션도 리셋**했다 (2026-07-18 실측: #3435 의
+            #   82분 Tier-2 세션이 75분 시점에 리셋 → 같은 오류에 두 번째 세션 중복 기동
+            #   → LLM 단일 차선 경합). 이제 작업자가 60초마다 claimed_at 을 갱신하므로
+            #   '마지막 신호 이후 N분 무응답' = 진짜 죽음. 작업이 아무리 길어도 안전하다.
+            #   claimed_at 이 없는 과거 행은 종전대로 timestamp 로 폴백.
+            ts = r.get("claimed_at") or r.get("timestamp") or ""
             try:
                 dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00").split("+")[0])
             except Exception:
@@ -832,6 +931,32 @@ def job_retry_pending(*, max_per_run: int = 20, stuck_minutes: int = 30):
                 reset_n += 1
     except Exception as e:
         log.debug(f"[GUARDIAN/retry_pending] analyzing 리셋 예외: {e}")
+
+    # 1-B) 오래된 '잠정' 실패 정리 → ignored (★ ERRORS [477])
+    #      harness 는 최종 실패 시 `_finalize_attempt_errors` 로 잠정을 풀지만,
+    #      일반 재시도 루프(썸네일·수집 등)에는 그런 종결자가 없다. 재시도가 결국
+    #      성공했으면 앞선 시도 실패는 *애초에 문제가 아니었던 것* 이라 영영 잠정으로 남는다.
+    #      → 일정 시간이 지나도 잠정이면 '지나간 일' 로 보고 ignored 처리(스윕 재투입 중단).
+    prov_n = 0
+    try:
+        from datetime import datetime, timedelta
+        _thr = datetime.now() - timedelta(minutes=stuck_minutes)
+        for r in _db.list_errors(status="new", limit=max_per_run):
+            if not r.get("provisional"):
+                continue
+            _ts = r.get("claimed_at") or r.get("timestamp") or ""
+            try:
+                _dt2 = datetime.fromisoformat(str(_ts).replace("Z", "+00:00").split("+")[0])
+            except Exception:
+                continue
+            if _dt2 < _thr:
+                _db.mark_error_status(int(r["id"]), "ignored")
+                prov_n += 1
+    except Exception as e:
+        log.debug(f"[GUARDIAN/retry_pending] 잠정 정리 예외: {e}")
+    if prov_n:
+        log.info(f"[GUARDIAN/retry_pending] 오래된 잠정 실패 {prov_n}건 정리 → ignored "
+                 f"(재시도가 지나갔거나 종결자 없음)")
 
     # 2) new → _orchestrate 재투입
     retry_n = 0
@@ -950,17 +1075,12 @@ def register(scheduler, bus):
     # 5) 스케줄 잡 등록 — JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 에서 관리 (이관 완료)
     # guardian_log_scan / guardian_archive / j07_git_audit / j07_retry_pending
 
-    # 6) 재시작 복구 — 부팅 완료 3분 후 오늘 테마 미발행 확인 → 자동 재시도
-    # 근거: 발행 도중 데몬이 재시작되면 in-flight harness 가 소멸되어 발행 누락 발생.
-    # threading.Timer 일회성 지연 실행 (주기 반복 아님 — CLAUDE.md OK)
-    def _startup_recovery():
-        try:
-            from JARVIS02_WRITER.scheduler import job_startup_recovery
-            job_startup_recovery()
-        except Exception as _e:
-            log.warning(f"[GUARDIAN] startup recovery 실패: {_e}")
-
-    threading.Timer(180, _startup_recovery).start()
-    log.info("[GUARDIAN] startup recovery 예약 (부팅 후 180초)")
+    # 6) ★ 부팅 시 자동 재발행 없음 (사용자 박제 2026-07-22 — ERRORS [469])
+    #    종전엔 부팅 180초 뒤 job_startup_recovery 가 "오늘 테마글 0건" 이면 자동 발행했다.
+    #    그러나 ① 복구 창(21:00~02:59)이 자정을 걸치는데 기준일은 자정에 바뀌어
+    #    새벽 재시작마다 *정상 발행된 글을 중복 발행* 했고 ② 애초에 "결과물 0건" 을
+    #    "중단됨" 으로 판단해 데몬이 꺼져 있던 경우와 구분하지 못했다.
+    #    → **발행은 정해진 시각(DEFAULT_JOBS cron)에만.** 부팅이 발행을 유발하지 않는다.
+    #    재발행이 필요하면 사용자가 텔레그램으로 명시 지시한다.
 
     log.info("✅ [GUARDIAN] JARVIS07_GUARDIAN 등록 완료 — 자동 오류 수집·수정 활성화")

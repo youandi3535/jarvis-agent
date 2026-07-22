@@ -358,6 +358,19 @@ def init_db():
             conn.execute("ALTER TABLE error_log ADD COLUMN llm_attempts INTEGER DEFAULT 0")
         except Exception:
             pass
+        # claimed_at: 처리 착수(선점) 시각 + 살아있음 신호(하트비트) — ERRORS [473]
+        #   종전 수확기는 '오류가 *기록된* 시각(timestamp)' 으로 stuck 을 판정했는데,
+        #   그 값은 작업 진행과 아무 상관이 없어 *살아 있는 세션* 을 죽은 걸로 오인했다.
+        try:
+            conn.execute("ALTER TABLE error_log ADD COLUMN claimed_at TEXT")
+        except Exception:
+            pass
+        # provisional: 아직 재시도가 남은 '잠정' 실패 — Tier-2(LLM) 판정 보류 (ERRORS [476])
+        #   액션이 끝나야 '일시적' 인지 '결정론적' 인지 알 수 있다.
+        try:
+            conn.execute("ALTER TABLE error_log ADD COLUMN provisional INTEGER DEFAULT 0")
+        except Exception:
+            pass
         # NOTE: retry_count / retry_at / last_error 컬럼은 사후 retry 잡 폐기로 더 이상
         # 사용하지 않음. 기존 DB 에 남아 있어도 무시됨 (drop 하지 않음 — 데이터 보존).
         # source_keyword: RADAR pipeline 에서 발행 트리거 시 채워지는 trends.keyword 와
@@ -1731,6 +1744,76 @@ def mark_error_status(error_id: int, status: str):
     """오류 상태 변경 (analyzing / wontfix / ignored)."""
     with get_db() as conn:
         conn.execute("UPDATE error_log SET status=? WHERE id=?", (status, error_id))
+
+
+def try_claim_error(error_id: int, claim_status: str = "analyzing",
+                     from_statuses: tuple = ("new", "ignored")) -> bool:
+    """오류 처리 착수를 DB 레벨에서 원자적으로 선점.
+
+    in-memory 집합(guardian_agent._processing)은 같은 프로세스 내 스레드만 방어 —
+    bus 재전달(dispatch_pending 폴백)·job_retry_pending 스윕이 겹치면 서로 다른
+    스레드가 동시에 오케스트레이터 진입점을 통과할 수 있다. UPDATE...WHERE 조건부
+    갱신은 SQLite 자체가 직렬화하므로 두 번째 호출은 반드시 rowcount=0 을 받는다.
+    """
+    placeholders = ",".join("?" for _ in from_statuses)
+    _now = datetime.now().isoformat(timespec="seconds")
+    with get_db() as conn:
+        cur = conn.execute(
+            f"UPDATE error_log SET status=?, claimed_at=? "
+            f"WHERE id=? AND status IN ({placeholders})",
+            (claim_status, _now, error_id, *from_statuses),
+        )
+        return cur.rowcount > 0
+
+
+def heartbeat_error(error_id: int) -> bool:
+    """처리 중인 오류에 '아직 살아있음' 신호 갱신 — ERRORS [473] (2026-07-22).
+
+    ★ 왜 필요한가: 수확기(job_retry_pending)는 오래 묶인 'analyzing' 을 죽은 세션으로 보고
+      'new' 로 되돌린다. 그런데 판정 기준이 `timestamp`(오류가 *기록된* 시각)였다 —
+      작업이 얼마나 진행됐는지와 무관한 값이라, **실제로 살아 있는 세션도 리셋**됐다.
+      (2026-07-18 실측: #3435 의 82분짜리 Tier-2 세션이 75분 시점에 리셋되어
+       같은 오류에 두 번째 세션이 중복 기동 → LLM 단일 차선을 서로 경합)
+    ★ 이제 작업자가 살아있는 동안 주기적으로 이 함수를 불러 `claimed_at` 을 갱신한다.
+      수확기는 '마지막 신호로부터 얼마나 지났나' 를 보므로 작업 길이와 무관하게 정확하다.
+      죽으면 신호가 끊기니 정상적으로 회수된다.
+
+    status='analyzing' 인 행만 갱신 — 이미 끝난 오류를 되살리지 않는다.
+    """
+    _now = datetime.now().isoformat(timespec="seconds")
+    with get_db() as conn:
+        cur = conn.execute(
+            "UPDATE error_log SET claimed_at=? WHERE id=? AND status='analyzing'",
+            (_now, error_id),
+        )
+        return cur.rowcount > 0
+
+
+def mark_error_provisional(error_id: int, provisional: bool = True) -> bool:
+    """오류를 '잠정 실패' 로 표시/해제 — Tier-2(LLM) 판정 보류 여부 (ERRORS [476]).
+
+    ★ 왜 필요한가: harness 는 실패하면 재시도한다. attempt=1 실패 시점엔 그것이
+      *일시적* 인지(재시도로 해결) *결정론적* 인지(진짜 코드 버그) **알 수 없다**.
+      그런데 종전엔 그 즉시 GUARDIAN 이 Tier-2(LLM 수십 분)를 시작했다.
+      실측 2026-07-22: Tier-2 를 태운 harness 오류 74건 중 **57건(77%)이 attempt=1** —
+      결과를 알기도 전에 태운 것. 그중 일부는 나중에 액션이 성공해 소급 무효화됐다.
+    ★ 기록 자체는 즉시 남긴다(대시보드 관측성 유지). *판정만* 미룬다.
+    """
+    with get_db() as conn:
+        cur = conn.execute("UPDATE error_log SET provisional=? WHERE id=?",
+                           (1 if provisional else 0, error_id))
+        return cur.rowcount > 0
+
+
+def finalize_provisional_errors(error_ids: list) -> int:
+    """액션이 최종 실패로 끝났을 때 — 잠정 표시를 풀어 Tier-2 판정 대상으로 승격."""
+    ids = [int(i) for i in (error_ids or [])]
+    if not ids:
+        return 0
+    ph = ",".join("?" for _ in ids)
+    with get_db() as conn:
+        cur = conn.execute(f"UPDATE error_log SET provisional=0 WHERE id IN ({ph})", ids)
+        return cur.rowcount
 
 
 def bump_llm_attempts(error_id: int) -> int:

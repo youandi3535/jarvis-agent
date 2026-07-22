@@ -611,6 +611,28 @@
       "card_radius": 26,
       "source": "learned",
       "created": "2026-07-21"
+    },
+    {
+      "id": "acid-volt-brutal",
+      "name": "산성볼트 브루탈",
+      "aesthetic": "네오브루탈리즘(굵은 보더·비비드·하드섀도)",
+      "hero": [
+        "#0a1f1c",
+        "#123b33"
+      ],
+      "ink": "#12201d",
+      "a1": "#ffde00",
+      "a1s": "#fff08a",
+      "a2": "#ff3b30",
+      "a2s": "#ff9a8c",
+      "soft": "#fbf7ec",
+      "muted": "#5e6b67",
+      "eyebrow": "#7cf5d4",
+      "grid": "#e9e3d2",
+      "hero_texture": "diagonal",
+      "card_radius": 16,
+      "source": "learned",
+      "created": "2026-07-22"
     }
   ]
 }

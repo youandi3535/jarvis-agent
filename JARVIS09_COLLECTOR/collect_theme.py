@@ -847,7 +847,8 @@ def collect_stocks_data(theme_name: str, related_terms: list | None = None,
             ) or ""
         except Exception as e:
             print(f"  ❌ [stocks_data] LLM 호출 실패 (시도 {attempt+1}): {e}")
-            _g_report("writer", e, module=__name__)
+            _g_report("writer", e, module=__name__,
+                      attempt=attempt + 1, max_attempts=3)
             break
         new_pairs = _parse_pairs(raw, exclude_codes=seen_codes)
         for p in new_pairs:

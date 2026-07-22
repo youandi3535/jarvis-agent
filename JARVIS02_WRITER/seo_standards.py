@@ -96,11 +96,39 @@ PLATFORM_STANDARDS: dict = {
 # ═══════════════════════════════════════════════════════════════
 
 def build_seo_block(platform: str, theme: str = "") -> str:
-    """플랫폼별 SEO 핵심 지침 문자열 반환 — LLM 프롬프트 직접 주입."""
+    """플랫폼별 SEO 핵심 지침 문자열 반환 — LLM 프롬프트 직접 주입.
+
+    ★ 채점 기준 자동 파생 (ERRORS [463] — 2026-07-21):
+      종전엔 서술형 `seo_prompt` 만 내보내, `PLATFORM_STANDARDS` 가 이미 보유한
+      *수치 기준*(제목 55자·메타 140~160자 등)이 작성자에게 전달되지 않았다.
+      그런데 `post_scorer` 는 바로 그 수치로 채점한다 →
+      **"채점은 하는데 알려주지는 않는" 항목이 생겨** 점수가 구조적으로 깎였다
+      (실측: A축 engagement 7점·usefulness 5점, C축 T1 2점·T7 2점 = 16점 미지시).
+
+      이제 기준 dict 에서 *자동 파생* 한다 — 값을 바꾸면 프롬프트가 따라온다.
+      하드코딩 금지(CLAUDE.md '복사본을 진실로 믿지 말 것').
+    """
     std = PLATFORM_STANDARDS.get(platform.lower(), {})
     block = std.get("seo_prompt", "")
     if theme and "{theme}" in block:
         block = block.replace("{theme}", theme)
+
+    # ── 채점되는 수치 기준을 기준 dict 에서 파생해 명시 ──
+    lines: list[str] = []
+    _t_max = std.get("title_max_chars")
+    if _t_max:
+        lines.append(f"- 제목: {_t_max}자 이내 (초과 시 감점) + 핵심 키워드를 앞부분에 배치")
+    _m_min, _m_max = std.get("meta_desc_min_chars"), std.get("meta_desc_max_chars")
+    if _m_min and _m_max:
+        lines.append(f"- 메타 설명: {_m_min}~{_m_max}자 (이 범위를 벗어나면 감점)")
+    _links = std.get("internal_links")
+    if _links:
+        lines.append(f"- 내부 링크 {_links}개 이상 (맥락에 맞게)")
+    _img = std.get("image_min")
+    if _img:
+        lines.append(f"- 본문 이미지 최소 {_img}장")
+    if lines:
+        block += "\n\n▶ 채점되는 정량 기준 (반드시 충족):\n" + "\n".join(lines)
     return block
 
 

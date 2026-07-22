@@ -30,6 +30,7 @@ import re
 import uuid
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re as _re_vis
 from pathlib import Path
 
 log = logging.getLogger("jarvis.image.draft_processor")
@@ -83,6 +84,38 @@ def _infographic_img_html(path, alt: str) -> str:
             f'margin:16px auto;display:block;"></p>')
 
 
+# ── 시각 중복 판정 단일 진입점 (ERRORS [461] — 2026-07-21) ─────────────
+#
+# ★ 종전 결함: `_title in html_so_far` 로 *본문 전체* 를 부분문자열 검색해
+#   **산문에 데이터셋 제목이 언급되기만 해도** 그 데이터셋을 스킵했다.
+#   결과: "편의점 품목별 매출 증감률 추이를 보면…" 처럼 데이터를 성실히 설명한
+#   글일수록 차트가 사라지고, 이미지 0개 → 헌법 제4조(글 연속+이미지 부재) 위반
+#   경고가 떴다. *잘 쓸수록 벌받는* 구조. 티스토리 대본이 수치를 문장으로 풀어
+#   쓰는 성향이라 티스토리에서만 재현됐다(경제·테마 공통).
+#
+# ★ 개념 교정: 산문에서 제목을 언급하는 것은 *중복이 아니라 이상적인 짝* 이다
+#   (헌법 제4조 "글↔이미지 교차 배치"). 진짜 중복은 **이미 시각 요소로 그려진**
+#   경우뿐 — <figure>/<table>/<img alt>/<figcaption> 안에 제목이 있을 때만 스킵.
+_VISUAL_BLOCK_RE = _re_vis.compile(
+    r"<figure\b[^>]*>.*?</figure>|<table\b[^>]*>.*?</table>|"
+    r"<figcaption\b[^>]*>.*?</figcaption>|<img\b[^>]*>",
+    _re_vis.IGNORECASE | _re_vis.DOTALL,
+)
+
+
+def already_visualized(title: str, html: str) -> bool:
+    """제목이 *시각 요소* 안에 이미 등장하는가 (산문 언급은 중복 아님).
+
+    단일 진입점 — 중복 판정 규칙을 다른 곳에 복사하지 말 것.
+    """
+    if not title or not html:
+        return False
+    for m in _VISUAL_BLOCK_RE.finditer(html):
+        if title in m.group(0):
+            return True
+    return False
+
+
 def _next_data_infographic(collected, out_dir: Path, run_id: str, used_titles: set,
                            platform: str = "", html_so_far: str = "") -> str:
     """수집 실데이터에서 *아직 안 쓴* dataset 1개 → 결정론(LLM 0회) 인포그래픽 <p><img></p>.
@@ -103,7 +136,7 @@ def _next_data_infographic(collected, out_dir: Path, run_id: str, used_titles: s
         if not ds.get("data"):
             continue
         _title = (ds.get("title") or f"{theme} 핵심 수치").strip()
-        if _title in used_titles or (html_so_far and _title and _title in html_so_far):
+        if _title in used_titles or already_visualized(_title, html_so_far):
             continue
         used_titles.add(_title)   # 성공·실패 무관 1회만 시도 (중복·무한 방지)
         try:
@@ -207,7 +240,8 @@ def _mandatory_thumbnail(title: str, keyword: str, sector: str, platform: str,
                 return p
         except Exception as e:
             log.warning(f"썸네일 시도 {attempt+1} 실패: {e}")
-            _g_report("image", e, module=__name__)
+            _g_report("image", e, module=__name__,
+                      attempt=attempt + 1, max_attempts=3)
     return _local_text_thumbnail(title, keyword, out_dir)   # 최후 로컬 카드
 
 
@@ -494,7 +528,8 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
     n_img = _count_images(html)
     if n_img < min_images:
         need = min_images - n_img
-        print(f"  🖼️ [{platform}] 본문 이미지 {n_img} < 최소 {min_images} → 실데이터 인포그래픽 {need}개 보충 시도")
+        log.warning(f"[{platform}] 본문 이미지 {n_img} < 최소 {min_images} → 인포그래픽 {need}개 보충 시도 "
+                    f"(datasets={len(getattr(collected, 'datasets', None) or [])}개)")
         infos = _extra_infographics(collected, out_dir, need, run_id=_run_id,
                                     platform=platform, html_so_far=html,
                                     used_titles=_used_titles)
@@ -503,7 +538,9 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
             n_img = _count_images(html)
             print(f"  📊 [{platform}] 인포그래픽 {len(infos)}개 보충 → 본문 이미지 {n_img}/{min_images}")
         if n_img < min_images:
-            print(f"  ℹ️ [{platform}] 데이터 소진 — 이미지 {n_img}/{min_images} 로 진행 (빈 슬롯, 폴백 없음)")
+            log.warning(f"[{platform}] 데이터 소진 — 이미지 {n_img}/{min_images} (빈 슬롯, 폴백 없음). "
+                        f"datasets={len(getattr(collected, 'datasets', None) or [])}개 — 0이면 수집 실패, "
+                        f"0이 아닌데 이미지가 없으면 중복 판정 과잉 의심")
 
     # ③ (옛 h2→이미지 교체 폐기) — 본문 이미지는 [CHART_N]/[PHOTO_N] 단일 경로만.
 

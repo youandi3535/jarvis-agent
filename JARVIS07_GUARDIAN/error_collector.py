@@ -356,8 +356,17 @@ def catch(
     func_name: str = None,
     context=None,
     tb_str: str = None,
+    attempt: int = 0,
+    max_attempts: int = 0,
 ) -> Optional[int]:
     """★ 단일 오류 캐치 진입점 — sys.excepthook·threading·APScheduler·log_scanner·외부 모두 여기로.
+
+    ★ attempt / max_attempts (ERRORS [477] — 사용자 지시 2026-07-22):
+      **재시도 루프 안에서 부르는 경우 반드시 전달할 것.**
+      `attempt < max_attempts` 면 *잠정 실패* 로 기록해 Tier-2(LLM 수십 분) 판정을 보류한다.
+      1회 실패는 오류가 아니다 — 재시도가 다 끝나야 '진짜 실패' 인지 알 수 있다.
+      기록 자체는 즉시 남으므로 대시보드 관측성은 그대로다. 미루는 것은 LLM 착수뿐.
+      (harness 는 자체 경로로 동일 처리 — ERRORS [476])
 
     두 가지 호출 형태:
         # Exception 객체 (외부 에이전트, auto_catch, 각종 훅)
@@ -403,7 +412,7 @@ def catch(
         except Exception:
             pass
 
-    return _collect_error(
+    _eid = _collect_error(
         source=source,
         error_type=error_type,
         message=msg,
@@ -412,6 +421,17 @@ def catch(
         tb_str=tb,
         context=context,
     )
+
+    # ★ 재시도가 아직 남은 '잠정' 실패 → Tier-2 판정 보류 (ERRORS [477])
+    #   1회 실패는 오류가 아니다. 재시도가 다 끝나야 진짜 실패인지 알 수 있다.
+    #   기록은 이미 남았으므로 대시보드에는 그대로 보인다 — 미루는 건 LLM 착수뿐.
+    if _eid and max_attempts and attempt and attempt < max_attempts:
+        try:
+            from shared.db import mark_error_provisional
+            mark_error_provisional(int(_eid), True)
+        except Exception:
+            pass
+    return _eid
 
 
 # 하위 호환 alias — 기존 report() 호출 코드 즉시 수정 불필요

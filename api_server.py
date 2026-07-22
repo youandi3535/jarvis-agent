@@ -830,6 +830,9 @@ def get_errors(
             params,
         ).fetchall()]
         con.close()
+        from JARVIS07_GUARDIAN.severity import describe_category
+        for r in rows:
+            r["error_category"] = describe_category(r.get("error_type", ""))
         return rows
     except Exception:
         return []
