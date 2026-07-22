@@ -230,8 +230,61 @@ _TRANSIENT_PATTERNS = [
 ]
 
 
-def is_transient(error_type: str, message: str = "", source: str = "") -> bool:
+# ★ 코드 수정으로 해결 *불가* 한 harness 이슈 kind — Tier-2(LLM) 비대상 (ERRORS [475])
+#
+#   ★ `harness._INFRA_ISSUE_KINDS` 와 **직교하는 다른 질문** 이다. 혼동 금지:
+#     · `_INFRA_ISSUE_KINDS` = "재작성으로 고칠 수 있나?"  (harness 재시도·backoff 정책)
+#     · 이 집합              = "코드 수정으로 고칠 수 있나?" (GUARDIAN 학습 정책)
+#     예) engagement(품질점수 미달)는 *재작성으론* 고쳐지므로 전자에 넣으면 안 되지만,
+#         *코드 수정으론* 안 고쳐지므로 후자에는 들어간다.
+#     (실제로 harness 주석이 "engagement 를 _INFRA_ISSUE_KINDS 에 넣지 말라" 고 못박고 있다 —
+#      그래서 그 목록을 넓히는 방식은 틀렸고, 이렇게 별도 개념으로 둔다.)
+#
+#   ★ 왜 message 정규식이 아니라 kind 인가 (CLAUDE.md 3원칙 ③ '모든 글에 적용'):
+#     kind 는 구조화된 필드라 네이버·티스토리 / 경제·테마 4조합에 자동으로 동일 적용된다.
+#     메시지 문자열로 걸면 한 플랫폼 문구만 걸러지고 다른 쪽에서 재발한다.
+#
+#   실측 근거 (2026-07-22): Tier-2 가 시도한 131건 중 74건(56%)이 harness 래퍼 오류였고,
+#   전부 files_fixed=0. 누적 3.8시간 낭비 + 그 시간 동안 발행이 LLM 을 못 씀.
+#
+#   ★ 의도적 *비*포함 (사용자 판단 2026-07-22 — 안(다)):
+#     · stuck / abort (데드라인·freeze) — 반복되면 진짜 성능 결함일 수 있다.
+#       게다가 2026-07-18 이후 발생 0건이라 지금 막을 실익이 없다. 늘어나면 그때 재검토.
+#     · execution_error — 코드에서 실제로 난 예외. 반드시 Tier-2 유지.
+#     · draft_invalid / data_empty / send_failure / login_invalid / factuality — 미승인.
+NON_CODE_ISSUE_KINDS = frozenset({
+    "engagement",     # 품질 점수 미달 — 글이 안 좋은 것이지 코드가 틀린 게 아니다
+    "infra_throttle", # 스로틀·락 경합 — 순번이 밀린 것
+    "draft_failed",   # 대본 생성 실패 (LLM 무응답·HTML 생성 실패)
+    "empty_output",   # LLM 응답 빈값
+    "sdk_error",      # SDK 실행 오류 (CLI 미발견·인증 등 운영 사유)
+    "cli_error",      # CLI 오류 (한도 초과 등)
+    "timeout",        # LLM/CLI 타임아웃 — 응답이 안 온 것
+})
+
+
+def kind_of(record: dict) -> str:
+    """오류 레코드에서 harness 이슈 kind 추출 — context(JSON) 단일 경로."""
+    if not isinstance(record, dict):
+        return ""
+    ctx = record.get("context")
+    if isinstance(ctx, str):
+        try:
+            import json as _json
+            ctx = _json.loads(ctx)
+        except Exception:
+            return ""
+    if isinstance(ctx, dict):
+        return str(ctx.get("kind") or "")
+    return ""
+
+
+def is_transient(error_type: str, message: str = "", source: str = "",
+                 kind: str = "") -> bool:
     """일시적·외부·제어흐름 오류 여부 — True 면 자동수정 비대상(ignored 처리).
+
+    ★ kind (ERRORS [475]): harness 이슈 kind 가 `NON_CODE_ISSUE_KINDS` 면 즉시 True.
+      메시지 정규식보다 정확하고, 구조화 필드라 4조합(플랫폼×글종류)에 자동 적용된다.
 
     코드 패치로 해결 불가능한 부류만 True:
       네트워크·Selenium 환경·외부 API 할당량·포트 충돌·Claude CLI 운영 오류·
@@ -239,6 +292,8 @@ def is_transient(error_type: str, message: str = "", source: str = "") -> bool:
     ImportError/NameError/KeyError/AttributeError/TypeError 같은 *코드 버그 타입은
     절대 transient 로 분류하지 않음* (오탐 방지).
     """
+    if kind and kind in NON_CODE_ISSUE_KINDS:
+        return True   # ★ 코드 수정으로 해결 불가한 harness 이슈 — Tier-2 낭비 차단
     et = error_type or ""
     msg = message or ""
     # ★ ERRORS [446][447][448] 박제 2026-07-17 — source="audit_test" 는 GUARDIAN
