@@ -608,6 +608,37 @@ def get_learning():
         }
     except Exception:
         r["patterns_now"] = {"count": 0, "hits": 0}
+
+    # ★ 글 품질 학습 (ADR 014) — 오류 학습과 *다른 시스템* 이므로 별도 섹션 (ERRORS [480])
+    #   라벨만 "학습 패턴" 이라고 쓰면 어느 학습인지 알 수 없다는 지적에 따라 분리.
+    try:
+        _q = con.execute(
+            "SELECT COUNT(*) c, SUM(COALESCE(occurrences,0)) occ, "
+            "SUM(COALESCE(reward_count,0)) rc, AVG(weight) w, "
+            "SUM(CASE WHEN last_used_at IS NOT NULL THEN 1 ELSE 0 END) used "
+            "FROM learning_insights").fetchone()
+        r["quality_now"] = {
+            "insights": _q["c"] or 0,
+            "usage":    _q["occ"] or 0,
+            "rewards":  _q["rc"] or 0,
+            "avg_weight": round(_q["w"] or 0, 3),
+            "used":     _q["used"] or 0,
+        }
+    except Exception:
+        r["quality_now"] = {"insights": 0, "usage": 0, "rewards": 0, "avg_weight": 0, "used": 0}
+
+    # 품질 지침 누적 추이 (first_seen 일별 → 누적 합산)
+    try:
+        _qd = _rows(con,
+            "SELECT substr(first_seen,1,10) d, COUNT(*) n FROM learning_insights "
+            "WHERE first_seen IS NOT NULL GROUP BY d ORDER BY d")
+        _acc, _out = 0, []
+        for x in _qd:
+            _acc += x["n"]
+            _out.append({"at": x["d"], "insights": _acc, "added": x["n"]})
+        r["quality_timeline"] = _out[-60:]
+    except Exception:
+        r["quality_timeline"] = []
     try:
         ll = con.execute("SELECT COUNT(*) as cnt, AVG(ABS(actual_views - predicted_opp)) as mae FROM learn_log").fetchone()
         r["learn_log"] = {"cnt": ll["cnt"] if ll else 0, "mae": ll["mae"] if ll else None}

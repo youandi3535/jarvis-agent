@@ -188,6 +188,10 @@ export default function LearningPage() {
   const kpiSaved    = last?.llm_saved ?? 0;
   const kpiRate     = resolveRate.length ? resolveRate[resolveRate.length - 1].rate : null;
 
+  /* 글 품질 학습(ADR 014) — 오류 학습과 다른 시스템 (★ ERRORS [480]) */
+  const q        = data?.quality_now ?? { insights: 0, usage: 0, rewards: 0, avg_weight: 0, used: 0 };
+  const qTimeline = data?.quality_timeline ?? [];
+
   const insights      = (data?.insights ?? []).slice(0, 20);
   const insightsTotal = data?.insights_total ?? insights.length;
   const backtests     = (data?.backtest ?? []).slice(0, 14);
@@ -198,7 +202,9 @@ export default function LearningPage() {
       {/* 제목 */}
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 30, fontWeight: 800, color: "var(--c-text)", margin: 0 }}>AI 자기학습</h1>
-        <p style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 6 }}>품질 강화학습 가중치·인사이트·백테스트 현황</p>
+        <p style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 6 }}>
+            서로 다른 두 학습 시스템 — ① 오류 자가수리(GUARDIAN) ② 글 품질(ADR 014)
+          </p>
       </div>
 
       {/* KPI 4개 */}
@@ -206,29 +212,55 @@ export default function LearningPage() {
         <div style={{ color: "var(--c-text2)", fontSize: 14 }}>로딩 중…</div>
       ) : (
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-          <KpiCard label="학습 패턴"       value={fmtNum(kpiPatterns)} color="var(--c-primary)" />
-          <KpiCard label="패턴 적중"       value={fmtNum(kpiHits)}     color="var(--c-success)" />
-          <KpiCard label="LLM 없이 해결"   value={fmtNum(kpiSaved)}    color="var(--c-warn)" />
-          <KpiCard label="오류 자동해소율"  value={kpiRate != null ? `${kpiRate.toFixed(1)}%` : "—"}
+          <KpiCard label="오류 학습 패턴"    value={fmtNum(kpiPatterns)} color="var(--c-primary)" />
+          <KpiCard label="오류 패턴 적중"    value={fmtNum(kpiHits)}     color="var(--c-success)" />
+          <KpiCard label="오류 — LLM 없이 해결" value={fmtNum(kpiSaved)}  color="var(--c-warn)" />
+          <KpiCard label="오류 자동해소율"    value={kpiRate != null ? `${kpiRate.toFixed(1)}%` : "—"}
                    color="var(--c-muted, #94a3b8)" />
         </div>
       )}
 
-      {/* ── KPI 추세 차트 4종 (★ ERRORS [479]) ────────────────────────
-          숫자 하나는 '지금 몇 개' 만 알려주고 *늘고 있는지 꺾였는지* 는 못 알려준다.
-          같은 지표를 시간축으로 펼쳐 과거→현재 흐름을 함께 보인다. */}
+      {/* ── ① 오류 자가수리 학습 (GUARDIAN) — 추세 ─────────────────── */}
       {!isLoading && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))",
-                      gap: 16, marginTop: 20 }}>
-          <TrendChart title="학습 패턴 누적" hint="자산이 늘고 있나 — 평평해지면 학습 정체"
-                      data={timeline} xKey="at" yKey="patterns" color="#3b82f6" />
-          <TrendChart title="패턴 적중 누적" hint="학습한 것이 실제로 재사용되고 있나"
-                      data={timeline} xKey="at" yKey="hits" color="#22c55e" />
-          <TrendChart title="LLM 없이 해결" hint="학습의 목적 — 높을수록 LLM 호출 절약"
-                      data={timeline} xKey="at" yKey="llm_saved" color="#f59e0b" />
-          <TrendChart title="오류 자동해소율 (일별)" hint="학습이 결과를 바꾸고 있나" unit="%"
-                      data={resolveRate} xKey="at" yKey="rate" color="#94a3b8" />
-        </div>
+        <>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: "var(--c-text)", margin: "28px 0 4px" }}>
+            🛡 오류 자가수리 학습 (GUARDIAN)
+          </h2>
+          <p style={{ fontSize: 14, color: "var(--c-text2)", margin: "0 0 12px" }}>
+            런타임 오류를 스스로 고치는 학습 — 위 KPI 4개가 이 시스템의 지표입니다
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: 16 }}>
+            <TrendChart title="오류 학습 패턴 누적" hint="자산이 늘고 있나 — 평평해지면 학습 정체"
+                        data={timeline} xKey="at" yKey="patterns" color="#3b82f6" />
+            <TrendChart title="오류 패턴 적중 누적" hint="학습한 패턴이 실제로 재사용되고 있나"
+                        data={timeline} xKey="at" yKey="hits" color="#22c55e" />
+            <TrendChart title="오류 — LLM 없이 해결" hint="학습의 목적 — 높을수록 LLM 호출 절약"
+                        data={timeline} xKey="at" yKey="llm_saved" color="#f59e0b" />
+            <TrendChart title="오류 자동해소율 (일별)" hint="학습이 결과를 바꾸고 있나" unit="%"
+                        data={resolveRate} xKey="at" yKey="rate" color="#94a3b8" />
+          </div>
+
+          {/* ── ② 글 품질 학습 (ADR 014) — 오류 학습과 다른 시스템 ────── */}
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: "var(--c-text)", margin: "32px 0 4px" }}>
+            ✍ 글 품질 학습 (ADR 014)
+          </h2>
+          <p style={{ fontSize: 14, color: "var(--c-text2)", margin: "0 0 12px" }}>
+            블로그 글을 더 잘 쓰게 만드는 학습 — 위 오류 학습과 별개 시스템입니다
+          </p>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
+            <KpiCard label="품질 지침"      value={fmtNum(q.insights)} color="var(--c-primary)" />
+            <KpiCard label="지침 주입"      value={fmtNum(q.usage)}    color="var(--c-success)" />
+            <KpiCard label="보상 검증"      value={fmtNum(q.rewards)}  color="var(--c-warn)" />
+            <KpiCard label="평균 지침 가중치" value={q.avg_weight.toFixed(3)}
+                     color="var(--c-muted, #94a3b8)" />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: 16 }}>
+            <TrendChart title="품질 지침 누적" hint="글쓰기 지침 자산이 늘고 있나"
+                        data={qTimeline} xKey="at" yKey="insights" color="#3b82f6" />
+            <TrendChart title="신규 지침 (일별)" hint="새 지침이 계속 발굴되고 있나"
+                        data={qTimeline} xKey="at" yKey="added" color="#22c55e" />
+          </div>
+        </>
       )}
 
       {/* 가중치 변화 — 최신 3개 */}
