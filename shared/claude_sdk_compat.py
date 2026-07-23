@@ -25,9 +25,8 @@
 
 사용:
     from shared.claude_sdk_compat import run_sdk_query
-    text = run_sdk_query(
-        prompt="...", model="claude-sonnet-5",
-        max_turns=60, cwd=str(ROOT), timeout=1200,
+    text = run_sdk_query(              # model 생략 = shared/llm.MODELS 기본값 파생
+        prompt="...", max_turns=60, cwd=str(ROOT), timeout=1200,
     )
 
 CLAUDE.md `자율 코드 자가수정 규정` 의 *side_effect="internal"* 영역 —
@@ -201,7 +200,7 @@ def patch_effective() -> bool | None:
 
 def run_sdk_query(
     prompt: str,
-    model: str = "claude-sonnet-5",
+    model: str | None = None,   # None = shared/llm.MODELS 에서 파생 (ID 리터럴 금지)
     *,
     cwd: str | None = None,
     max_turns: int | None = None,
@@ -226,6 +225,11 @@ def run_sdk_query(
     CLINotFoundError / TimeoutError 같은 라이브러리 내부 예외는 여기서 다 흡수.
     """
     import time as _time
+
+    if not model:
+        # 지연 import — shared.llm 이 이 모듈을 import 하므로 모듈 최상단은 순환.
+        from shared.llm import model_id as _model_id
+        model = _model_id()
 
     _ensure_runtime_env()
     env = build_oauth_env()

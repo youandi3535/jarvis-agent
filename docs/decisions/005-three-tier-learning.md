@@ -13,7 +13,7 @@
 JARVIS07 GUARDIAN 의 자동 수정 시스템 도입 초기에는 *모든 오류 → LLM 진단* 단일 경로였다. 운영 후:
 - 동일 오류 (예: `NameError: name 'naver_post' is not defined` 같은 오타) 가 *매번 재발* → 매번 LLM 호출 → 비용 누적
 - 패턴이 명확한 오류 (상대 import / NoneType slicing 등) 도 LLM 추론 거침 → 시간 낭비
-- LLM 응답 시간 (Sonnet 4.6 ~10초) 가 데몬 실시간 처리에 부적합
+- LLM 응답 시간 (당시 세대 ~10초) 가 데몬 실시간 처리에 부적합
 
 *같은 오류를 반복 학습하지 못한다* — 이게 자가 학습 시스템의 근본 결함이었다.
 
@@ -35,7 +35,8 @@ JARVIS07 GUARDIAN 의 자동 수정 시스템 도입 초기에는 *모든 오류
 - 성공 시 *learned_patterns 에 자동 등록* → 다음 회차부터 Tier 1 에서 처리
 
 ### Tier 3 — LLM 폴백 (error_analyzer.py)
-- Tier 1·2 모두 실패 시 Opus 4.6 진단 (★ 사용자 박제 — 수정은 무엇이든 Opus 4.6)
+- Tier 1·2 모두 실패 시 LLM 진단 (★ 사용자 박제 — 수정은 무엇이든 LLM 계층까지 간다)
+  ※ 당시엔 상위 계층 모델을 따로 썼다. 지금은 전역 단일 모델 — ADR 017.
 - 성공 시 *learned_patterns 에 자동 등록* → 다음 회차부터 Tier 1 처리
 
 ## 이유

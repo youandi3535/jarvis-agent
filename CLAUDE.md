@@ -51,7 +51,6 @@ CLAUDE.md 는 *현재 적용 규칙* 만 박제한다. *왜 이 규칙인지* �
 | 영역 | ADR |
 |------|-----|
 | 단일 진입점 원칙 | [ADR 001](docs/decisions/001-single-entry-point.md) |
-| 모델 다층 분리 (Haiku / Sonnet 4.6 / Opus 4.6) | [ADR 002](docs/decisions/002-model-layering.md) |
 | BLOG_SUPREME_LAW.md 14조 헌법화 | [ADR 003](docs/decisions/003-blog-supreme-law.md) |
 | 텔레그램 승인 게이트 (외부 영향 단일 차단점) | [ADR 004](docs/decisions/004-telegram-approval-gate.md) |
 | 자가 학습 — catch() 단일 진입점 + 2-Tier (패턴·Bandit → LLM) ★ 단일 진실 소스 `architecture.py` | [ADR 005](docs/decisions/005-three-tier-learning.md) |
@@ -65,7 +64,7 @@ CLAUDE.md 는 *현재 적용 규칙* 만 박제한다. *왜 이 규칙인지* �
 | **★ 설계-우선 리서치 파이프라인 — 리서치 설계→근거팩(fact·출처·커버리지)→갭 재수집 + 3-패스 작성 (사용자 박제 2026-07-02)** | [ADR 012](docs/decisions/012-research-first-pipeline.md) |
 | **★ 에이전트 파이프라인 정본 흐름 — 03(주제+프로필, 키워드 단독 전송 금지)→02·09 동시 제공→09 무제한 수집(신뢰순위 논문>API>뉴스>기사>웹)→02 매력 대본(수치만 하드 게이트)→06 이미지→08 발행 (사용자 박제 2026-07-03)** | [ADR 013](docs/decisions/013-agent-pipeline-flow.md) |
 | **★ 글 품질 강화학습 폐쇄 루프 — 주입(UCB 선택+사용기록)→분석 보상 귀속→weight EMA 갱신→검증된 지침만 생존. 엔진 `JARVIS07_GUARDIAN/quality_learner.py` 단독 (사용자 박제 2026-07-03)** | [ADR 014](docs/decisions/014-writing-quality-reinforcement.md) |
-| **★ 모델 단일 계층 통일 — Sonnet 5 하나로, Opus 4.8 폐지 (ADR 015 대체, 사용자 박제 2026-07-06)** | [ADR 017](docs/decisions/017-model-single-tier-sonnet5.md) |
+| **★ 모델 단일 계층 통일 — 시스템 전역 한 모델 + 모델 ID 는 `shared/llm.py` MODELS 단독 소유 (ADR 002·015 대체, 사용자 박제 2026-07-06 · 2026-07-24 개정)** | [ADR 017](docs/decisions/017-model-single-tier-sonnet5.md) |
 | **★ 로그인·인증 단일 진입점 (사용자 박제 2026-05-17)** | `JARVIS08_PUBLISH/credentials/LOGIN_SUPREME_LAW.md` + `login_manager.py` |
 
 신규 결정·번복은 [`docs/decisions/README.md`](docs/decisions/README.md) 의 형식·정책 따름.
@@ -765,7 +764,7 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
   - ① `deep_audit_backlog()` — 미해결 오류 Tier 1 → Tier 2(LLM). ★ Tier 2 도 `apply_fix` 경유 *실제 오류 지문* 으로 학습 (AutoRepairFix 합성 지문 아님) → 다음 sweep 이 재사용 → 밴딧 학습 (복리 루프).
   - ② `auto_repair.run_auto_repair()` — 광범위 코드 감사 (새 잠재 버그 발굴·수정).
 - **즉시 반영 vs 데몬 재시작**: 코드 수정은 Python import 캐시 때문에 *현재 데몬 프로세스 무효* → 다음 데몬 재시작 후 발효.
-- **심층 감사 모델**: Sonnet 5 (`auto_repair._MODEL = "claude-sonnet-5"` — ★ 사용자 박제 2026-07-06 (ADR 017): 모든 LLM 호출 Sonnet 5 단일 통일, ADR 015(Opus 4.8 2계층) 폐지. ERRORS [184]: 정확한 모델 ID 명시, alias 금지 원칙은 모델 무관 유지)
+- **심층 감사 모델**: 전역 단일 모델 (`auto_repair._MODEL = model_id("guardian")` — ★ ADR 017: 모든 LLM 호출이 같은 모델. **모델 ID 리터럴을 박지 말고 `shared.llm.model_id()` 로 파생**할 것 — 사본을 두면 모델 교체 시 거기만 옛 모델을 가리킨다 (ERRORS [491]). SDK 에 full model ID 를 넘기는 관행은 유지 — bare alias 는 1M context 자동 승격 위험 (ERRORS [184]))
 - **전체 코드 검토 3단계** (auto_repair.py `_BASE_PROMPT` — ★ 2026-05-30 8 Layer 폐지 → 단순화):
   1. **Syntax 전수 검사** — `find . -name "*.py" | xargs python -m py_compile` 전체 파일
   2. **핵심 규정 위반 grep** — APScheduler 외부 사용 / schedule 라이브러리 / 글자수 하드코딩 / 폐기 model ID

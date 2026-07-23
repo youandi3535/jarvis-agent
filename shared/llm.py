@@ -163,9 +163,24 @@ def model_label(alias: str) -> str:
     """alias(writer/guardian/…) → 사람이 읽는 모델명. MODELS 에서 파생.
 
     코드가 모델을 바꾸면 이 라벨을 쓰는 모든 표시(웹·텔레그램)가 자동 갱신된다.
-    표시 코드에 'Opus 4.x' 같은 리터럴을 직접 쓰지 말고 이 함수를 호출할 것.
+    표시 코드에 모델명 리터럴을 직접 쓰지 말고 이 함수를 호출할 것.
     """
     return pretty_model_id(_ALIAS_MODEL.get(alias, _DEFAULT_MODEL_ID))
+
+
+def model_id(alias: str = "writer") -> str:
+    """alias → 실제 모델 ID. **모델 ID 리터럴의 유일한 소유자는 이 모듈**.
+
+    다른 파일에서 모델 ID 문자열을 직접 쓰면 모델 교체 시 그 사본이 그대로 남아
+    폐기된 모델을 계속 가리킨다(② 동적 설계 / '복사본을 진실로 믿지 말 것').
+    반드시 이 함수로 파생할 것 — precommit `model` 카테고리가 강제한다.
+    """
+    return _ALIAS_MODEL.get(alias, _DEFAULT_MODEL_ID)
+
+
+def live_model_ids() -> set[str]:
+    """현재 살아있는 모델 ID 전부 — 검사·표시가 목록을 박지 않도록 런타임 파생."""
+    return set(_ALIAS_MODEL.values())
 
 
 def get_spec(alias: str) -> ModelSpec:
@@ -1373,6 +1388,7 @@ ClaudeCLILLM = ClaudeSDKLLM
 
 __all__ = [
     "ModelSpec", "MODELS", "get_spec",
+    "model_id", "model_label", "pretty_model_id", "live_model_ids",
     "chat", "invoke_text", "invoke_vision",
     "last_call_infra_incomplete", "circuit_is_open",
     "is_langchain_available",

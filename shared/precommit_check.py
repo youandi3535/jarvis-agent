@@ -991,57 +991,130 @@ def check_verification(report: Report) -> None:
 CATEGORIES["verification"] = check_verification
 
 
+# ── 모델 위생 (검사기가 모델명을 '박지 않는다') ──────────────────────
+# 버전 세그먼트는 숫자로 시작 — 문장 끝 마침표("...4-6.") 오탐 방지
+_PAT_MODEL_ID = re.compile(r"claude-([a-z]+)-([0-9][0-9a-z\-]*)")
+# 버전이 생략·말줄임된 형태 — `claude-<family>-...` 처럼. 뒤가 숫자/점일 때만 family 로 인정해
+# `claude-code-sdk` 같은 *모델 아닌* 이름을 오탐하지 않는다.
+_PAT_MODEL_ID_LOOSE = re.compile(r"claude-([a-z]+)-(?=[0-9.])")
+# 사람이 읽는 라벨 + 접두 없는 축약형 — "<Family> 5" / "<family>-4-5" / "<family> 4.6"
+# 대소문자 무시·구분자(공백/하이픈) 허용·버전 구분자(점/하이픈) 허용:
+# `claude-` 접두가 떨어져 나간 흔적(예: `writer_fast=<family>-4-6`)까지 잡기 위함.
+_PAT_MODEL_LABEL = re.compile(
+    r"\b([A-Za-z]{3,9})[\s\-]([0-9](?:[.\-][0-9]){0,3})\b")
+# family 단독 등장 — "<Family> 전체 파일 분석" 처럼 버전 없이 이름만 남은 흔적
+_PAT_MODEL_FAMILY = re.compile(r"\b([A-Za-z]{4,9})\b")
+# 모델 ID 리터럴의 유일한 소유자 + 이 검사기 자신(패턴 보유)
+_MODEL_ID_OWNERS = ("shared/llm.py", "shared/precommit_check.py")
+
+
+def _live_model_ids() -> set[str]:
+    """살아있는 모델 ID 를 shared/llm.py 원문에서 *매번* 파싱.
+
+    ② 동적 설계 — 검사기에 유효 ID 를 박아두면 그 목록이 또 하나의 사본이 되어
+    모델 교체 시 검사기만 옛 값을 가리킨다. import 대신 원문 파싱인 이유:
+    precommit 은 의존성 없이 단독 실행돼야 하고, llm.py import 는 무겁다.
+    """
+    try:
+        src = (ROOT / "shared" / "llm.py").read_text(encoding="utf-8")
+    except Exception:
+        return set()
+    return set(re.findall(r'model_id\s*=\s*"([^"]+)"', src))
+
+
+def _label_of(model_id: str) -> tuple[str, str]:
+    """모델 ID → (family 소문자, 버전 점표기). 'claude-sonnet-5' → ('sonnet','5')"""
+    m = _PAT_MODEL_ID.search(model_id)
+    if not m:
+        return ("", "")
+    ver = ".".join(x for x in m.group(2).split("-") if x.isdigit() and len(x) <= 2)
+    return (m.group(1), ver)
+
+
 def check_model(report: Report) -> None:
-    """모델 위생 — 폐기·저급 모델 흔적 잔재 차단 (사용자 박제 2026-07-02).
+    """모델 위생 — 폐기 모델 흔적 0 + 모델 ID 단일 소유 (사용자 박제 2026-07-24).
 
-    리팩터로 모델을 바꿨는데 주석·로그·docstring 에 옛 모델 이름을 남기면
-    (예: 실제론 Sonnet 5 인데 주석은 "Haiku") 사람이 로그·grep 에서
-    보고 오해한다. 실행 코드만 검사하는 다른 카테고리와 달리 *모든 라인*
-    (주석·문자열 포함)을 훑어 리팩터 잔재를 커밋 단계에서 원천 차단한다.
+    두 가지를 동시에 막는다. 둘 다 실제로 사고를 냈다(ERRORS [491]).
 
-    ① haiku 흔적 일체 — Haiku 완전 폐지 원칙 (사용자 박제 2026-07-04, ADR 015 — haiku 사용 금지)
-    ② 표준 외 모델 ID — 유효 ID 는 shared/llm.py MODELS 의 1종만
-       (claude-sonnet-5 — Sonnet 5 단일 통일, 사용자 박제 2026-07-06 ADR 017. Opus 4.8 폐지).
-       그 외 claude-*-* 는 폐기·미래 잔재.
+    ① `model/hardcoded-id` — 모델 ID 리터럴은 `shared/llm.py` 의 MODELS 만 소유.
+       다른 파일이 ID 를 박으면 모델을 갈아끼울 때 그 사본만 옛 모델에 남는다.
+       파생 방법: `from shared.llm import model_id` → `model_id("guardian")`.
+    ② `model/dead-name` — 지금 살아있지 않은 모델 ID·라벨은 코드·문서 어디에도
+       남기지 않는다. 주석·docstring 의 옛 이름은 사람이 grep 에서 보고 오해한다.
 
-    예외(allowlist): 모델 이름을 *탐지* 하는 정규식·grep 패턴을 보유한 파일.
-    유효 ID 변경 시 아래 valid_ids 를 shared/llm.py MODELS 와 동시 갱신.
+    유효 목록을 검사기에 박지 않는다 — `shared/llm.py` 를 매 실행 파싱해 파생하고,
+    못 읽으면 통과가 아니라 `model/self-check` 위반(fail-closed).
+    폐기 family 어휘도 저장소에서 실제 발견된 ID 로부터 파생 — 이름 목록 박제 없음.
+
+    ★ 흔적은 온전한 ID 형태로만 남지 않는다 (2026-07-24 보강). 실제로 세 변형이
+    1차 검사를 빠져나갔다 — `claude-<family>-...`(버전 생략) · `<family>-4-6`(접두 탈락) ·
+    `<Family>`(이름만). 그래서 family 어휘를 알면 *버전 없이 이름만* 있어도 잡는다.
+    한계는 정직하게 적는다: family 어휘는 저장소에 남은 ID 에서 파생하므로, 저장소가
+    완전히 깨끗해진 뒤 새로 유입되는 *처음 보는* 폐기 family 는 ID 형태로 들어와야
+    걸린다. 그 경우도 ID 레그가 잡으므로 실질 구멍은 없다.
     """
     cat = "model"
-    valid_ids = {"claude-sonnet-5"}
-    # haiku 를 '탐지' 하는 정규식·grep 패턴 보유 (모델 ID 파서 / 감사 grep) — 정당
-    #   shared/llm.py = 모델 SSOT + 라벨 파서(pretty_model_id) — 모델명 언급이 본질.
-    haiku_allow = (
-        "JARVIS01_MASTER/proactive_monitor.py",
-        "JARVIS07_GUARDIAN/auto_repair.py",
-        "shared/llm.py",
-    )
-    # 폐기 모델 ID 를 '탐지' 하는 grep 패턴 + 교체 이력 주석 보유 — 정당
-    modelid_allow = (
-        "JARVIS07_GUARDIAN/auto_repair.py",
-        "JARVIS01_MASTER/proactive_monitor.py",
-        "shared/llm.py",
-    )
+    live_ids = _live_model_ids()
+    if not live_ids:
+        report.add(Violation(cat, "model/self-check", "shared/llm.py", 0,
+                             "MODELS 에서 유효 모델 ID 를 파싱하지 못함 — 검사 불능(fail-closed)"))
+        report.checks_run += 1
+        return
+    live_labels = {_label_of(m) for m in live_ids}
+    live_families = {f for f, _ in live_labels}
 
-    pat_haiku = re.compile(r"haiku", re.IGNORECASE)
-    # 버전 세그먼트는 숫자로 시작 — 문장 끝 마침표("...4-6.") 오탐 방지
-    pat_modelid = re.compile(r"claude-(?:sonnet|opus|haiku|fable)-[0-9][0-9a-z\-]*")
+    # 검사 대상 = 코드(.py) + 문서(.md) — 흔적은 주석·문서에 더 오래 남는다
+    targets: list[Path] = list(_iter_py())
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRS]
+        for fn in filenames:
+            if fn.endswith(".md"):
+                p = Path(dirpath) / fn
+                if not _is_excluded(p):
+                    targets.append(p)
 
-    for p in _iter_py():
-        rel_s = str(p.relative_to(ROOT))
+    # 폐기 family 어휘: 저장소에 실제로 등장한 ID 들에서 파생 (목록 하드코딩 회피)
+    seen_families: set[str] = set()
+    file_lines: list[tuple[str, list[str]]] = []
+    for p in targets:
         text = _read_py(p)
         if text is None:
             continue
-        is_haiku_allow = any(a in rel_s for a in haiku_allow)
-        is_modelid_allow = any(a in rel_s for a in modelid_allow)
-        for i, line in enumerate(text.splitlines(), 1):
-            if not is_haiku_allow and pat_haiku.search(line):
-                report.add(Violation(cat, "model/haiku", rel_s, i, line))
-            if not is_modelid_allow:
-                for mid in pat_modelid.findall(line):
-                    if mid not in valid_ids:
-                        report.add(Violation(cat, "model/stale-id", rel_s, i, line))
-    report.checks_run += 2
+        lines = text.splitlines()
+        file_lines.append((str(p.relative_to(ROOT)), lines))
+        for f, _v in _PAT_MODEL_ID.findall(text):
+            seen_families.add(f)
+        seen_families.update(_PAT_MODEL_ID_LOOSE.findall(text))
+    known_families = seen_families | live_families
+
+    for rel_s, lines in file_lines:
+        is_owner = any(rel_s == o or rel_s.endswith("/" + o) for o in _MODEL_ID_OWNERS)
+        for i, line in enumerate(lines, 1):
+            for f, v in _PAT_MODEL_ID.findall(line):
+                mid = f"claude-{f}-{v}"
+                if mid not in live_ids:
+                    report.add(Violation(cat, "model/dead-name", rel_s, i, line))
+                elif not is_owner and rel_s.endswith(".py"):
+                    report.add(Violation(cat, "model/hardcoded-id", rel_s, i, line))
+            if is_owner:
+                continue
+            flagged = False
+            for word, ver in _PAT_MODEL_LABEL.findall(line):
+                fam = word.lower()
+                ver_dot = ver.replace("-", ".")
+                if fam in known_families and (fam, ver_dot) not in live_labels:
+                    report.add(Violation(cat, "model/dead-name", rel_s, i, line))
+                    flagged = True
+                    break
+            if flagged:
+                continue
+            # 버전 없이 이름만 남은 흔적 — 폐기 family 는 단독 등장도 흔적이다
+            for word in _PAT_MODEL_FAMILY.findall(line):
+                fam = word.lower()
+                if fam in known_families and fam not in live_families:
+                    report.add(Violation(cat, "model/dead-name", rel_s, i, line))
+                    break
+    report.checks_run += 3
 
 
 # model 카테고리 등록
@@ -1052,7 +1125,7 @@ def check_ssot(report: Report) -> None:
     """표시 계층 SSOT — 웹 대시보드가 모델명을 *하드코딩* 하지 못하게 강제.
 
     사용자 박제 2026-07-04: "코드만 바꾸면 웹·텔레그램이 자동으로 따라와야 한다."
-    hub.py 는 모델명을 'Opus 4.8' 처럼 직접 쓰지 말고 shared.llm.model_label()
+    hub.py 는 모델명을 '<Family> 4.8' 처럼 직접 쓰지 말고 shared.llm.model_label()
     로 파생해야 한다 → 코드(shared/llm.py MODELS)가 모델을 바꾸면 대시보드가
     자동 갱신, 2중·3중 수정 제거. 하드코딩 리터럴 발견 시 커밋·부팅 단계에서 차단.
 
@@ -1060,7 +1133,11 @@ def check_ssot(report: Report) -> None:
     telegram_summary 등이 이미 model_label 로 파생 — 함수 파생이라 리터럴 없음.)
     """
     cat = "ssot"
-    pat_label = re.compile(r"\b(?:Opus|Sonnet|Haiku|Fable)\s+[0-9]")        # 사람이 읽는 모델 라벨
+    # 모델 family 이름을 검사기에 박지 않는다 — 살아있는 ID 에서 파생 (② 동적 설계)
+    _fams = sorted({f for f, _ in (_label_of(m) for m in _live_model_ids()) if f})
+    pat_label = re.compile(
+        r"\b(?:" + "|".join(f.capitalize() for f in _fams) + r")\s+[0-9]"
+    ) if _fams else re.compile(r"(?!x)x")                                    # 사람이 읽는 모델 라벨
     pat_sched = re.compile(r"(?:매일|매주|매월)[가-힣\s·]*[0-9]{1,2}:[0-9]{2}")  # 스케줄 구절(매일 06:30 등)
     display_files = ()   # hub.py 삭제됨 — Next.js 프론트엔드는 Python SSOT 검사 대상 아님
     for p in _iter_py():

@@ -116,7 +116,7 @@
 | **★ 통합 콘텐츠 파이프라인** | 경제·테마가 **하나의 공통 파이프라인**을 탄다 — J09 단일 `CollectedData`(datasets·docs·facts·**entities**) → J02 대본(데이터 내장 슬롯) → **J06 `process_draft` 단일 이미지 진입점**(실패차트→AI사진 폴백·최소 5장 top-up·썸네일 필수) → J08. 경제 embed-first→placeholder-first 컷오버, 검증 tolerance 통일(`grounds()` — 표시 올림/버림 or ±5%, 종목 재무밴드 ±10% 유지). 미래 카테고리는 `CATEGORY_POLICY` dict 한 줄로 상속 | 사용자 공동설계 2026-07-05 |
 | **표시 SSOT — 코드가 진실** | 웹 대시보드·텔레그램이 모델명·스케줄·개수 등 사실을 *하드코딩하지 않고 코드 정본에서 자동 파생*. 코드만 고치면 두 표시가 알아서 따라옴(2중·3중 수정 제거). `precommit ssot` 가드가 표시 파일 하드코딩을 커밋·부팅 시 차단 | 사용자 박제 |
 | **데몬 hang 자동 복구** | keeper 워치독이 프로세스 생존뿐 아니라 *스케줄러 heartbeat 신선도*까지 감시 → hang 시 SIGUSR1(faulthandler 스택 덤프)→SIGKILL→재시작. 얼어붙은 채 방치되던 사각지대 제거 | [ERRORS 319](JARVIS07_GUARDIAN/ERRORS.md) |
-| **★ 모델 단일 계층 통일** | Sonnet 5 / Opus 4.8 2계층 → **Sonnet 5 단일 모델**로 재통일 (Opus 4.8 폐지) — 고비용 모델 오호출 구조적 차단 | [ADR 017](docs/decisions/017-model-single-tier-sonnet5.md) |
+| **★ 모델 단일 계층 통일** | 모델 계층 폐지 → **시스템 전역 한 모델** + 모델 ID 는 `shared/llm.py` MODELS 단독 소유(다른 파일은 `model_id()` 파생) — 고비용 모델 오호출·옛 모델 잔재 구조적 차단 | [ADR 017](docs/decisions/017-model-single-tier-sonnet5.md) |
 | **밴딧 = 유한 전략** | Tier 1 Contextual Bandit 정밀보완 — arm을 오류지문이 아닌 *소수 fixer 전략*으로 고정(오염 게이트+차원 상한) → 상태 **402MB→45B**, 죽은 신호 제거 | [ADR 016](docs/decisions/016-bandit-finite-strategy-arms.md) |
 | **설계-우선 리서치 + 3-패스 작성** | 리서치 설계→근거팩(fact·출처·커버리지)→갭 재수집 순환 + 서사 설계·자기비평 다층 패스로 대본 품질 강화 | [ADR 012](docs/decisions/012-research-first-pipeline.md) |
 | **인포그래픽 엔진** | 고정 템플릿 → **결정론 코드 박제** — 데이터마다 레이아웃·차트·색이 다른 85점 인포그래픽. `<table>`도 인포그래픽화(내용 보존). LLM 실시간 HTML 저작 폐기(latency 분 단위) → 코드 템플릿 + 매일 새 팔레트 학습 | ERRORS [288][357][358] |
