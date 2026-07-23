@@ -530,8 +530,8 @@ def _get_learned_weights() -> dict:
                 "w_trend":       0.45,
                 "w_perf":        1.0,
                 "w_fresh":       0.85,
-                "w_velocity":    0.5,
-                "w_competition": -0.2,
+                "w_velocity":    0.0,   # 유령 피처 — 미사용 (ERRORS [485])
+                "w_competition": 0.0,
                 "intercept":     0.0,
             }
         _WEIGHTS_CACHE["ts"] = now
@@ -559,11 +559,14 @@ def opportunity_score(
     sector: str = "",
 ) -> float:
     """
-    RADAR(트렌드) + ANALYST(성과) + SEO(신선도) + velocity + 경쟁 강도 통합 점수.
+    RADAR(트렌드) + ANALYST(성과) + SEO(신선도) 통합 점수.
+
+    ★ velocity_score·competition 인자는 호환 위해 남기되 *점수엔 반영 안 함* (ERRORS [485]) —
+      수집 경로가 없어 학습 불가한 유령 피처였다. 화면 표시(속도 라벨)용으로만 계산된다.
 
     학습 통합:
-      - 가중치 (w_trend / w_perf / w_fresh / w_velocity / w_competition):
-        learning.get_current_weights() — 매주 일요일 train_weights() 갱신, 데이터 부족 시 DEFAULT
+      - 가중치 (w_trend / w_perf / w_fresh): learning.get_current_weights()
+        — 매주 일요일 train_weights() 갱신, 데이터 부족 시 DEFAULT
       - negative_signal_penalty: 평균 미달 키워드 -15 ~ 0
       - feedback_penalty: 누적 거부 시 -30 ~ 0 (sector + keyword 합산)
       - cold_start_boost: 신규 키워드 임베딩 cosine top-3 perf 가중평균 × 0.5
@@ -572,27 +575,18 @@ def opportunity_score(
       trend:  ~45  (10–100 × 0.45)
       perf:   ~35  (0–35   × 1.00)
       fresh:  ~17  (0–20   × 0.85)
-      vel:    ±15
-      comp:   -8 ~ +12
       페널티/부스트: -45 ~ +12
     """
     perf  = get_performance_boost(keyword)   # 0~35 (avg + 재현성)
     fresh = get_freshness_bonus(keyword)      # 0~20
 
-    # velocity 기여: -20~+30 → -10~+15 (절반 반영) — w_velocity 와 별도 캡
-    vel_capped = max(-20.0, min(30.0, velocity_score))
-
-    # 경쟁 기여: w_competition 음수 가중치라 raw 부호 반대 — 0=블루오션 / 100=레드오션
-    # 정규화: 50 기준점, deviation을 학습 가중치에 곱함
-    comp_dev = competition - 50.0  # -50 ~ +50
-
+    # ★ velocity·competition 제거 (ERRORS [485]) — 수집 경로가 없어 학습 불가한 유령 피처였다.
+    #   점수 공식에서도 빼 실제 학습된 3개 입력(trend·perf·fresh)만 반영한다.
     weights = _get_learned_weights()
     raw = (
         trend_score * float(weights.get("w_trend",       0.45))
         + perf      * float(weights.get("w_perf",        1.0))
         + fresh     * float(weights.get("w_fresh",       0.85))
-        + vel_capped * float(weights.get("w_velocity",    0.5))
-        + comp_dev   * float(weights.get("w_competition", -0.2))
     )
 
     # 학습 통합 — 양방향 (부정 / 피드백 / cold-start)

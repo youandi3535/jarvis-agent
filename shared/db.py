@@ -1266,7 +1266,7 @@ def learn_log_count() -> int:
 # 기본(하드코딩) 가중치 — 학습 데이터 부족 시 fallback. analyzer.opportunity_score 의 기존 값과 일치.
 DEFAULT_WEIGHTS = {
     "w_trend": 0.45, "w_perf": 1.0, "w_fresh": 0.85,
-    "w_velocity": 0.5, "w_competition": -0.2,
+    "w_velocity": 0.0, "w_competition": 0.0,   # 유령 피처 — 미사용 (ERRORS [485])
     "intercept": 0.0, "n_samples": 0, "r2": None, "mse": None,
     "learned_at": "default",
 }

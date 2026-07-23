@@ -2,6 +2,31 @@
 
 ---
 
+## [485] ★ 유령 피처(velocity·competition)를 학습 입력에서 제거 (2026-07-23)
+
+- **발단**: [484] 에서 "velocity·competition 은 수집 경로가 없는 유령 피처" 라고 화면에
+  "데이터 없음" 으로 노출했더니, 사용자가 *"속도 경쟁력은 빼"* 로 정리 결정.
+- **근거**: 두 입력은 `learn_log` 에 상수(0.0/50.0)로만 적재됐고 `trends` 테이블에 컬럼
+  자체가 없어(고유값 1종) 학습이 원리적으로 불가능. 예측 기여 0. 남겨두면 화면에
+  "데이터 없음" 만 채우고 실익이 없다.
+- **변경**:
+  · `learning.FEATURES` 5→3(`trend_score·perf_boost·freshness`). 학습·백테스트가 이 상수를
+    공유하므로 **한 곳만 바꾸면 양쪽 반영** (단일 진입점).
+  · 저장부의 인덱스 하드코딩(`w_scaled[0..4]`) 제거 → `dict(zip(FEATURES, w_scaled))` 파생.
+    제거된 `w_velocity/w_competition` 은 **스키마 호환 위해 컬럼은 유지하되 0 으로 저장.**
+  · `analyzer.opportunity_score` 점수 공식에서 vel/comp 두 항 제거. 인자는 호출부 호환 위해
+    남기되 *점수엔 반영 안 함* — docstring 에 명시. 하드코딩 DEFAULT_WEIGHTS(analyzer·db)도 0 으로.
+  · 화면 `WEIGHT_KEYS` 5→3.
+- **파일**: `JARVIS03_RADAR/learning.py` · `analyzer.py` · `shared/db.py` ·
+  `dashboard/app/learning/page.tsx`
+- **검증**: 학습 3입력으로 정상(r2=0.448, freshness 가중치 0.058 로 살아남) · 백테스트 r2=0.258 ·
+  `opportunity_score` 에 velocity/competition 극단값(99 vs 0, 10 vs 90) 넣어도 **점수 동일(5.5)**
+  → 완전 무영향 확인 · tsc 통과 · :9199 HTTP 200 · 데몬 재시작 후 확인.
+- **교훈**: **입력이 상수인 피처는 모델에 이름만 있고 실체가 없다.** 예측엔 무해(가중치 0)해도
+  화면·해석을 흐린다. 데이터 출처가 없으면 피처가 아니다 — 넣기 전에 *변별이 있는지* 볼 것.
+
+---
+
 ## [484] ★ 학습 점수를 '백테스트' 로 표시 + 데이터 없는 입력을 '영향 0%' 로 표시 (2026-07-22)
 
 - **발단**: 사용자 질문 — *"각 항목에 대해 자세히 설명해줘."* 설명하려고 출처를 따라가다

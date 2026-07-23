@@ -46,11 +46,10 @@ const td: React.CSSProperties = {
 
 /* ── 가중치 필드 목록 ─────────────────────────────────────────────── */
 const WEIGHT_KEYS: { key: string; label: string; col: string }[] = [
-  { key: "w_trend",       label: "트렌드",  col: "trend_score" },
-  { key: "w_perf",        label: "성과",    col: "perf_boost" },
-  { key: "w_fresh",       label: "신선도",  col: "freshness" },
-  { key: "w_velocity",    label: "속도",    col: "velocity" },
-  { key: "w_competition", label: "경쟁도",  col: "competition" },
+  { key: "w_trend", label: "트렌드", col: "trend_score" },
+  { key: "w_perf",  label: "성과",   col: "perf_boost" },
+  { key: "w_fresh", label: "신선도", col: "freshness" },
+  // velocity·competition 제거 (ERRORS [485]) — 수집 경로 없는 유령 피처
 ];
 
 /* ── 가중치 파싱 ──────────────────────────────────────────────────── */

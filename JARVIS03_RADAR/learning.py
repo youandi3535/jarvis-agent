@@ -209,7 +209,12 @@ def log_predictions_vs_actual(verbose: bool = False) -> dict:
 # 2. 가중치 회귀학습 — 일요일 04:00
 # ─────────────────────────────────────────────────────────────
 
-FEATURES = ["trend_score", "perf_boost", "freshness", "velocity", "competition"]
+# ★ 학습 입력 (ERRORS [485], 사용자 지시 2026-07-23) — velocity·competition 제거.
+#   두 입력은 learn_log 에 상수(0.0/50.0)로만 적재됐고 trends 테이블에 컬럼 자체가 없어
+#   *데이터 출처가 없는 유령 피처* 였다(고유값 1종 → 학습 원리적 불가). 남기면 화면에
+#   "데이터 없음" 만 채우고 예측엔 기여 0. → 학습 대상에서 제외.
+#   (DB 스키마 learned_weights.w_velocity/w_competition 컬럼은 호환 위해 유지, 0 으로 저장)
+FEATURES = ["trend_score", "perf_boost", "freshness"]
 
 
 _RANK_UNRANKED = 100.0   # 검색 100위 밖 = 미노출 취급 (순위 상한)
@@ -296,28 +301,28 @@ def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
     SCALE = 6.0  # 경험적 — 학습 가중치를 0.1~5 범위로 끌어올림
     w_scaled = [v * SCALE for v in w]
 
-    # 음수 방지(단, competition 은 음수 허용)
-    w_scaled[0] = max(0.0, w_scaled[0])  # trend
-    w_scaled[1] = max(0.0, w_scaled[1])  # perf
-    w_scaled[2] = max(0.0, w_scaled[2])  # fresh
-    # velocity, competition 은 부호 유지
+    # FEATURES 는 전부 클수록 좋음 → 음수 방지 (인덱스 하드코딩 제거 — FEATURES 파생)
+    w_scaled = [max(0.0, v) for v in w_scaled]
+    _wmap = dict(zip(FEATURES, w_scaled))   # {trend_score: w, perf_boost: w, freshness: w}
 
     new_id = _db.learned_weights_save(
-        w_trend=round(w_scaled[0], 4), w_perf=round(w_scaled[1], 4),
-        w_fresh=round(w_scaled[2], 4), w_velocity=round(w_scaled[3], 4),
-        w_competition=round(w_scaled[4], 4),
+        w_trend=round(_wmap.get("trend_score", 0.0), 4),
+        w_perf=round(_wmap.get("perf_boost", 0.0), 4),
+        w_fresh=round(_wmap.get("freshness", 0.0), 4),
+        w_velocity=0.0,      # ★ 제거된 유령 피처 — 0 저장 (스키마 호환, ERRORS [485])
+        w_competition=0.0,
         intercept=round(intercept, 4),
         n_samples=X.shape[0], r2=round(r2, 4), mse=round(mse, 4),
     )
 
     if verbose:
         print(f"  🧠 가중치 학습 완료 (id={new_id}, n={X.shape[0]}, r2={r2:.3f})")
-        print(f"     trend={w_scaled[0]:.3f} perf={w_scaled[1]:.3f} "
-              f"fresh={w_scaled[2]:.3f} vel={w_scaled[3]:.3f} comp={w_scaled[4]:.3f}")
+        print("     " + " ".join(f"{f.split('_')[0]}={_wmap[f]:.3f}" for f in FEATURES))
 
     return {"trained": True, "n_samples": X.shape[0], "r2": r2, "mse": mse,
-            "weights": dict(zip([f"w_{f.split('_')[0] if f != 'competition' else 'competition'}"
-                                 for f in FEATURES], w_scaled))}
+            "weights": {"w_trend": _wmap.get("trend_score", 0.0),
+                        "w_perf": _wmap.get("perf_boost", 0.0),
+                        "w_freshness": _wmap.get("freshness", 0.0)}}
 
 
 def get_current_weights() -> dict:
