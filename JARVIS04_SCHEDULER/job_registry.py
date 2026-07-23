@@ -91,6 +91,10 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"j01_economic_post",      "name":"자가진단+경제 브리핑 발행 07:00", "trigger":"cron",
      "kwargs":{"hour":7, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_economic",
+     # ★ requires — 선행 없으면 발행하지 않는다 (사용자 박제 2026-07-23, job_prereq.py 참조).
+     #   06:00 트렌드 수집이 주제팩·데이터를 만든다. 잠들었다 깨면 유예 차이로 선행만 폐기되고
+     #   발행만 살아남던 결함 차단. 미충족 시 선행 즉시 실행 → 회복 갭(07:00-06:00) 뒤 발행.
+     "requires":["radar_trends_06"],
      "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e13"]},
     # ★ 테마 선계산 (20:00 = 21:00 발행 1시간 전 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18):
     # 테마를 고정(pin)하고 무거운 fact·chart 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 가
@@ -106,6 +110,9 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"j01_theme_post_21",      "name":"자가진단+테마 발행 21:00 ★", "trigger":"cron",
      "kwargs":{"hour":21, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_theme",
+     # ★ requires — 20:00 선계산(테마 고정 + fact·chart 선수집)이 *필수 선행*
+     #   (사용자 박제 2026-07-23 — 종전 "순수 최적화·폴백 허용" 폐지).
+     "requires":["j02_theme_precollect"],
      "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e13"]},
 
     {"id":"j01_radar_check_09",     "name":"RADAR 자동실행 체크 09:00", "trigger":"cron",
@@ -251,10 +258,33 @@ def _resolve_callback(path: str) -> Callable:
 
 # 잡 ID → owner agent 매핑 (job_history listener 가 사용)
 def get_owner(job_id: str) -> Optional[str]:
+    # 연기분(`<id>__deferred`)도 같은 잡이다 — owner 가 비면 job_runs 통계·브리핑이 어긋난다.
+    from JARVIS04_SCHEDULER.job_prereq import DEFERRED_SUFFIX
+    base = str(job_id).split(DEFERRED_SUFFIX)[0]
     for j in DEFAULT_JOBS:
-        if j["id"] == job_id:
+        if j["id"] == base:
             return j.get("owner")
     return None
+
+
+def job_specs() -> list[dict]:
+    """실제로 등록되는 잡 명세 — DEFAULT_JOBS 의 *선언* 이 아니라 *유효값*.
+
+    ★ 선행 잡의 misfire 유예는 자신을 요구하는 후행에서 파생된다
+      (job_prereq.effective_grace — 사용자 박제 2026-07-23). 등록은 파생값을 쓰는데
+      화면은 선언값을 보여주면 "복사본을 진실로 믿는" 그 병이다. 등록·표시가 같은
+      함수를 읽게 한다. 표시 계층(api_server /api/jobs)도 이것을 호출할 것.
+    """
+    from JARVIS04_SCHEDULER.job_prereq import effective_grace
+    out = []
+    for j in DEFAULT_JOBS:
+        spec = dict(j)
+        try:
+            spec["misfire_grace_time"] = effective_grace(j["id"])
+        except Exception:
+            pass
+        out.append(spec)
+    return out
 
 
 def register_default_jobs(scheduler: Any) -> int:
@@ -265,16 +295,20 @@ def register_default_jobs(scheduler: Any) -> int:
     Returns: 등록한 잡 수.
     """
     n = 0
-    for j in DEFAULT_JOBS:
+    for j in job_specs():
         try:
             fn = _resolve_callback(j["callback"])
+            # ★ 선행조건 집행 단일 지점 (사용자 박제 2026-07-23) — `requires` 가 선언된 잡만
+            #   래핑된다. 각 콜백에 if 문을 흩지 않는다. 상세 사유: job_prereq.py 모듈 docstring.
+            from JARVIS04_SCHEDULER.job_prereq import gate as _prereq_gate
+            fn = _prereq_gate(j["id"], fn)
             exec_kwargs = {}
             if j.get("executor"):
                 exec_kwargs["executor"] = j["executor"]
             scheduler.add_job(
                 fn, j["trigger"], **j["kwargs"],
                 id=j["id"], name=j["name"],
-                misfire_grace_time=j.get("misfire_grace_time", 600),
+                misfire_grace_time=j["misfire_grace_time"],
                 replace_existing=True,
                 **exec_kwargs,
             )

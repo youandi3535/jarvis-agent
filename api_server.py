@@ -707,8 +707,9 @@ def get_feedback(limit: int = 20):
 @app.get("/api/jobs")
 def get_jobs():
     try:
-        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
-        return DEFAULT_JOBS
+        # 선언(DEFAULT_JOBS)이 아니라 *실제 등록되는* 명세. 유예는 선행 관계에서 파생된다.
+        from JARVIS04_SCHEDULER.job_registry import job_specs
+        return job_specs()
     except Exception:
         return []
 
