@@ -1075,6 +1075,11 @@ def calibrate_semantic_threshold() -> dict:
     }
 
 
+# ★ 합성 지문 타입 — 재발 불가라 학습 자산이 될 수 없다 (ERRORS [479])
+#   "무엇을 고쳤다" 는 작업 기록일 뿐, "무엇이 실패했다" 는 오류 지문이 아니다.
+_SYNTHETIC_TYPES = frozenset({"AutoRepairFix"})
+
+
 def record_pattern_hit(
     error_record: dict,
     fixer_name: str,
@@ -1111,6 +1116,18 @@ def record_pattern_hit(
     norm = _normalize_message(msg)
     if not et and not norm:
         log.info(f"[GUARDIAN/learned] skip — error_type/message 둘 다 빈 채로 학습 시도")
+        return 0
+
+    # ★ 노이즈 게이트 4: *합성 지문* — 재발할 수 없으므로 학습 자산이 아니다 (ERRORS [479])
+    #   `AutoRepairFix::<파일경로>` 는 "auto_repair 가 이 파일을 고쳤다" 는 *작업 기록* 이지
+    #   런타임에 *다시 발생할 수 있는 오류의 지문* 이 아니다. 파일 경로는 매번 달라지고,
+    #   같은 경로가 또 온다 해도 그때의 오류는 전혀 다른 것이다.
+    #   → 등록해봐야 영원히 재사용되지 않고, "학습 패턴 N개·LLM 절약 N회" 만 부풀린다.
+    #   실측 2026-07-22: 51개 중 8개(15%)가 이것이었고, 적중 상위 5개 중 4개를 차지했다.
+    #   CLAUDE.md/ADR 005 가 "Tier 2 도 *실제 오류 지문* 으로 학습(AutoRepairFix 합성 지문 아님)"
+    #   이라고 못박은 그대로다. 정본 경로(primary_rel)는 실제 오류 지문으로 이미 등록된다.
+    if et in _SYNTHETIC_TYPES:
+        log.info(f"[GUARDIAN/learned] skip — 합성 지문(재발 불가) et={et} src={source}")
         return 0
 
     # ★ 노이즈 게이트 3: *프로젝트 정책 작업 박제* (메시지 없는 사용자 박제)

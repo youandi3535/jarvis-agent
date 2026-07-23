@@ -2,6 +2,9 @@
 import useSWR from "swr";
 import { apiFetch, LearningData, WeightRow, BacktestRow, InsightRow } from "@/lib/api";
 import { fmtNum, fmtTime } from "@/lib/utils";
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
 
 /* ── 공통 스타일 ─────────────────────────────────────────────────── */
 const card = (topColor: string): React.CSSProperties => ({
@@ -42,12 +45,11 @@ const td: React.CSSProperties = {
 };
 
 /* ── 가중치 필드 목록 ─────────────────────────────────────────────── */
-const WEIGHT_KEYS: { key: string; label: string }[] = [
-  { key: "w_trend",       label: "트렌드" },
-  { key: "w_perf",        label: "성과" },
-  { key: "w_fresh",       label: "신선도" },
-  { key: "w_velocity",    label: "속도" },
-  { key: "w_competition", label: "경쟁도" },
+const WEIGHT_KEYS: { key: string; label: string; col: string }[] = [
+  { key: "w_trend", label: "트렌드", col: "trend_score" },
+  { key: "w_perf",  label: "성과",   col: "perf_boost" },
+  { key: "w_fresh", label: "신선도", col: "freshness" },
+  // velocity·competition 제거 (ERRORS [485]) — 수집 경로 없는 유령 피처
 ];
 
 /* ── 가중치 파싱 ──────────────────────────────────────────────────── */
@@ -82,7 +84,7 @@ function MiniBar({ value, max = 1, color = "var(--c-primary)" }: { value: number
 }
 
 /* ── 가중치 카드 ──────────────────────────────────────────────────── */
-function WeightCard({ row }: { row: WeightRow }) {
+function WeightCard({ row, featVar }: { row: WeightRow; featVar?: Record<string, number> }) {
   const w = parseWeights(row.weights_json);
   return (
     <div style={{
@@ -93,23 +95,81 @@ function WeightCard({ row }: { row: WeightRow }) {
       flex: 1,
       minWidth: 200,
     }}>
-      <div style={{ fontSize: 12, color: "var(--c-text5)", marginBottom: 12 }}>
-        {fmtTime(row.trained_at)} &nbsp;·&nbsp; 백테스트 {row.backtest_score != null ? `${(row.backtest_score * 100).toFixed(1)}%` : "—"}
-      </div>
+        <div style={{ fontSize: 14, color: "var(--c-text5)", marginBottom: 4 }}>
+          {fmtTime(row.trained_at)}{row.n_samples ? ` · 표본 ${row.n_samples}` : ""}
+        </div>
+        {/* ★ ERRORS [484] — 학습 점수(자기 채점)와 백테스트(안 써본 데이터)는 다른 값이다.
+            종전엔 학습 점수를 '백테스트' 라 표시해 실력을 과대평가하게 만들었다. */}
+        <div style={{ fontSize: 14, color: "var(--c-text2)", marginBottom: 12 }}>
+          학습 정확도 <b>{row.train_r2 != null ? `${(row.train_r2 * 100).toFixed(1)}%` : "—"}</b>
+          {" · "}백테스트{" "}
+          <b style={{ color: row.backtest_r2 != null ? "var(--c-success)" : "var(--c-text5)" }}>
+            {row.backtest_r2 != null ? `${(row.backtest_r2 * 100).toFixed(1)}%` : "—"}
+          </b>
+          <span style={{ color: "var(--c-text5)" }}> (안 써본 데이터 검증 — 이쪽이 실력)</span>
+        </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {WEIGHT_KEYS.map(({ key, label }) => {
-          const val = typeof w[key] === "number" ? w[key] : 0;
-          return (
-            <div key={key}>
-              <div style={{ fontSize: 12, color: "var(--c-text2)", marginBottom: 4 }}>{label}</div>
-              <MiniBar value={val} max={1} color="var(--c-primary)" />
-            </div>
-          );
-        })}
+          {WEIGHT_KEYS.map(({ key, label, col }) => {
+            const val = typeof w[key] === "number" ? w[key] : 0;
+            /* ★ '영향 없음(0%)' 과 '판단 불가(입력이 상수)' 는 다르다 (ERRORS [484]).
+               learn_log 에 고유값이 1종뿐이면 학습이 원리적으로 불가능하다. */
+            const nUniq = featVar?.[col];
+            const dead  = nUniq != null && nUniq <= 1;
+            return (
+              <div key={key}>
+                <div style={{ fontSize: 14, color: "var(--c-text2)", marginBottom: 4 }}>{label}</div>
+                {dead ? (
+                  <div style={{ fontSize: 14, color: "var(--c-warn)" }}>
+                    데이터 없음 — 입력이 항상 같은 값이라 학습 불가
+                  </div>
+                ) : (
+                  <MiniBar value={val} max={1} color="var(--c-primary)" />
+                )}
+              </div>
+            );
+          })}
       </div>
     </div>
   );
 }
+
+/* ── KPI 추세 차트 (★ ERRORS [479]) ───────────────────────────────
+   홈탭과 동일한 recharts 패턴 사용 — 새 라이브러리·새 API 도입 없음. */
+function TrendChart({ title, hint, data, xKey, yKey, color, unit = "" }: {
+  title: string; hint: string;
+  data: Array<Record<string, unknown>>; xKey: string; yKey: string;
+  color: string; unit?: string;
+}) {
+  const pts = data ?? [];
+  return (
+    <div style={card(color)}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: "var(--c-text)" }}>{title}</div>
+      <div style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 4, marginBottom: 12 }}>{hint}</div>
+      {pts.length < 2 ? (
+        <div style={{ fontSize: 14, color: "var(--c-text2)", padding: "28px 0", textAlign: "center" }}>
+          추세를 그릴 만큼 기록이 쌓이지 않았습니다 ({pts.length}개)
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={180}>
+          <LineChart data={pts} margin={{ top: 4, right: 12, left: -12, bottom: 0 }}>
+            <CartesianGrid stroke="var(--c-bdr)" strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey={xKey} tick={{ fontSize: 14, fill: "var(--c-text2)" }}
+                   tickFormatter={(v: string) => String(v ?? "").slice(5, 10)}
+                   minTickGap={28} stroke="var(--c-bdr)" />
+            <YAxis tick={{ fontSize: 14, fill: "var(--c-text2)" }} stroke="var(--c-bdr)" width={44} />
+            <Tooltip
+              contentStyle={{ background: "var(--c-card)", border: "1px solid var(--c-bdr)",
+                              borderRadius: 8, fontSize: 14 }}
+              labelFormatter={(v) => String(v ?? "").slice(0, 16)}
+              formatter={(v) => [`${v ?? ""}${unit}`, title] as [string, string]} />
+            <Line type="monotone" dataKey={yKey} stroke={color} strokeWidth={2} dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+}
+
 
 /* ── 백테스트 점수 색상 ───────────────────────────────────────────── */
 function scoreColor(score: number): string {
@@ -130,25 +190,42 @@ export default function LearningPage() {
   const { data, isLoading } =
     useSWR<LearningData>("/api/learning", (url) => apiFetch<LearningData>(url), { refreshInterval: 300000 });
 
-  /* KPI 파싱 */
-  const firstWeight   = data?.weights?.[0];
-  const firstWeightW  = firstWeight ? parseWeights(firstWeight.weights_json) : {};
-  const nSamples: number = (firstWeightW["n_samples"] as number) ?? 0;
+  /* ── KPI (★ ERRORS [479] 교체) ─────────────────────────────────────
+     종전 4개는 전부 RADAR 키워드 회귀(learned_weights) 지표였는데 그 학습기는
+     0행이라 아예 안 돌고 있었고, 백테스트는 정답값이 상수라 항상 r2=1.0(=100%)
+     이 나오는 가짜 만점이었다. '학습 인사이트'는 API 의 LIMIT 20 배열 길이를
+     실제 개수(309)로 착각한 값이었다.
+     → 이 시스템 자기학습의 본체인 GUARDIAN 오류학습 지표로 교체하고,
+       *넷 다 시계열이 있는 것* 만 골라 아래에 추세 차트를 붙인다. */
+  const timeline    = data?.timeline ?? [];
+  const resolveRate = data?.resolve_rate ?? [];
+  const patNow      = data?.patterns_now ?? { count: 0, hits: 0 };
+  const last        = timeline.length ? timeline[timeline.length - 1] : null;
 
-  const firstBacktest = data?.backtest?.[0];
-  const btScore       = firstBacktest?.score ?? null;
+  const kpiPatterns = patNow.count || last?.patterns || 0;
+  const kpiHits     = patNow.hits  || last?.hits     || 0;
+  const kpiSaved    = last?.llm_saved ?? 0;
+  const kpiRate     = resolveRate.length ? resolveRate[resolveRate.length - 1].rate : null;
+
+  /* 글 품질 학습(ADR 014) — 오류 학습과 다른 시스템 (★ ERRORS [480]) */
+  const q = data?.quality_now ?? { insights: 0, usage: 0, rewards: 0,
+                                   avg_reward: 0, avg_weight: 0, rediscovered: 0, rewarded: 0 };
+  const qTimeline = data?.quality_timeline ?? [];
+  const featVar   = data?.feature_variance;   // 입력별 고유값 수 — 학습 가능 여부 판정 (ERRORS [484])
 
   const insights      = (data?.insights ?? []).slice(0, 20);
+  const insightsTotal = data?.insights_total ?? insights.length;
   const backtests     = (data?.backtest ?? []).slice(0, 14);
   const weights       = (data?.weights ?? []).slice(0, 3);
-  const mae           = data?.learn_log?.mae ?? null;
 
   return (
     <div>
       {/* 제목 */}
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 30, fontWeight: 800, color: "var(--c-text)", margin: 0 }}>AI 자기학습</h1>
-        <p style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 6 }}>품질 강화학습 가중치·인사이트·백테스트 현황</p>
+        <p style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 6 }}>
+            서로 다른 두 학습 시스템 — ① 오류 자가수리(GUARDIAN) ② 글 품질(ADR 014)
+          </p>
       </div>
 
       {/* KPI 4개 */}
@@ -156,27 +233,69 @@ export default function LearningPage() {
         <div style={{ color: "var(--c-text2)", fontSize: 14 }}>로딩 중…</div>
       ) : (
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-          <KpiCard
-            label="학습 샘플 수"
-            value={fmtNum(nSamples)}
-            color="var(--c-primary)"
-          />
-          <KpiCard
-            label="백테스트 정확도"
-            value={btScore != null ? `${(btScore * 100).toFixed(1)}%` : "—"}
-            color="var(--c-success)"
-          />
-          <KpiCard
-            label="학습 인사이트"
-            value={fmtNum(data?.insights?.length ?? 0)}
-            color="var(--c-warn)"
-          />
-          <KpiCard
-            label="예측 오차 MAE"
-            value={mae != null ? mae.toFixed(1) : "—"}
-            color="var(--c-muted, #94a3b8)"
-          />
+          <KpiCard label="오류 학습 패턴"    value={fmtNum(kpiPatterns)} color="var(--c-primary)" />
+          <KpiCard label="오류 패턴 적중"    value={fmtNum(kpiHits)}     color="var(--c-success)" />
+          <KpiCard label="오류 — LLM 없이 해결" value={fmtNum(kpiSaved)}  color="var(--c-warn)" />
+          <KpiCard label="오류 자동해소율"    value={kpiRate != null ? `${kpiRate.toFixed(1)}%` : "—"}
+                   color="var(--c-muted, #94a3b8)" />
         </div>
+      )}
+
+      {/* ── ① 오류 자가수리 학습 (GUARDIAN) — 추세 ─────────────────── */}
+      {!isLoading && (
+        <>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: "var(--c-text)", margin: "28px 0 4px" }}>
+            🛡 오류 자가수리 학습 (GUARDIAN)
+          </h2>
+          <p style={{ fontSize: 14, color: "var(--c-text2)", margin: "0 0 12px" }}>
+            런타임 오류를 스스로 고치는 학습 — 위 KPI 4개가 이 시스템의 지표입니다
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: 16 }}>
+            <TrendChart title="오류 학습 패턴 누적" hint="자산이 늘고 있나 — 평평해지면 학습 정체"
+                        data={timeline} xKey="at" yKey="patterns" color="#3b82f6" />
+            <TrendChart title="오류 패턴 적중 누적" hint="학습한 패턴이 실제로 재사용되고 있나"
+                        data={timeline} xKey="at" yKey="hits" color="#22c55e" />
+            <TrendChart title="오류 — LLM 없이 해결" hint="학습의 목적 — 높을수록 LLM 호출 절약"
+                        data={timeline} xKey="at" yKey="llm_saved" color="#f59e0b" />
+            <TrendChart title="오류 자동해소율 (일별)" hint="학습이 결과를 바꾸고 있나" unit="%"
+                        data={resolveRate} xKey="at" yKey="rate" color="#94a3b8" />
+          </div>
+
+          {/* ── ② 글 품질 학습 (ADR 014) — 오류 학습과 다른 시스템 ────── */}
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: "var(--c-text)", margin: "32px 0 4px" }}>
+            ✍ 글 품질 학습 (ADR 014)
+          </h2>
+          <p style={{ fontSize: 14, color: "var(--c-text2)", margin: "0 0 12px" }}>
+            블로그 글을 더 잘 쓰게 만드는 학습 — 위 오류 학습과 별개 시스템입니다
+          </p>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
+            <KpiCard label="① 쌓인 지침"   value={fmtNum(q.insights)} color="var(--c-primary)" />
+            <KpiCard label="② 실제 주입"   value={fmtNum(q.usage)}    color="var(--c-success)" />
+            <KpiCard label="③ 성과 채점"   value={fmtNum(q.rewards)}  color="var(--c-warn)" />
+            <KpiCard label="④ 평균 보상"   value={q.avg_reward ? q.avg_reward.toFixed(3) : "—"}
+                     color="var(--c-muted, #94a3b8)" />
+          </div>
+          {/* 루프 병목 경고 — 숫자 4개를 나란히 봐야 '어디서 막혔나' 가 보인다 (ERRORS [481]) */}
+          <div style={{ fontSize: 14, color: "var(--c-text2)", marginBottom: 16, lineHeight: 1.7 }}>
+            학습 순환: <b>①</b> 발행글 분석에서 글쓰기 요령을 뽑아 쌓고 →
+            <b> ②</b> 다음 글 프롬프트에 주입 → <b>③</b> 그 글의 성과로 채점 →
+            <b> ④</b> 점수 좋은 지침만 살아남음.
+            {q.insights > 0 && (
+              <> {" "}현재 <b>{fmtNum(q.insights)}</b>개 중 주입 <b>{fmtNum(q.usage)}</b>회 ·
+                채점 <b>{fmtNum(q.rewards)}</b>회 · 보상받은 지침 <b>{fmtNum(q.rewarded)}</b>개
+                {q.rewards < q.insights / 10 && (
+                  <span style={{ color: "var(--c-warn)" }}> — ②③ 단계가 ① 대비 크게 뒤쳐져 있습니다</span>
+                )}
+              </>
+            )}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: 16 }}>
+            <TrendChart title="품질 지침 누적" hint="글쓰기 지침 자산이 늘고 있나"
+                        data={qTimeline} xKey="at" yKey="insights" color="#3b82f6" />
+            <TrendChart title="신규 지침 (일별)" hint="새 지침이 계속 발굴되고 있나"
+                        data={qTimeline} xKey="at" yKey="added" color="#22c55e" />
+          </div>
+        </>
       )}
 
       {/* 가중치 변화 — 최신 3개 */}
@@ -190,7 +309,7 @@ export default function LearningPage() {
           <div style={{ color: "var(--c-text2)", fontSize: 14, padding: "16px 0" }}>가중치 데이터가 없습니다.</div>
         ) : (
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-            {weights.map((row, i) => <WeightCard key={i} row={row} />)}
+            {weights.map((row, i) => <WeightCard key={i} row={row} featVar={featVar} />)}
           </div>
         )}
       </div>

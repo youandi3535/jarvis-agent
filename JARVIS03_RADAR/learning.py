@@ -209,7 +209,49 @@ def log_predictions_vs_actual(verbose: bool = False) -> dict:
 # 2. 가중치 회귀학습 — 일요일 04:00
 # ─────────────────────────────────────────────────────────────
 
-FEATURES = ["trend_score", "perf_boost", "freshness", "velocity", "competition"]
+# ★ 학습 입력 (ERRORS [485], 사용자 지시 2026-07-23) — velocity·competition 제거.
+#   두 입력은 learn_log 에 상수(0.0/50.0)로만 적재됐고 trends 테이블에 컬럼 자체가 없어
+#   *데이터 출처가 없는 유령 피처* 였다(고유값 1종 → 학습 원리적 불가). 남기면 화면에
+#   "데이터 없음" 만 채우고 예측엔 기여 0. → 학습 대상에서 제외.
+#   (DB 스키마 learned_weights.w_velocity/w_competition 컬럼은 호환 위해 유지, 0 으로 저장)
+FEATURES = ["trend_score", "perf_boost", "freshness"]
+
+
+_RANK_UNRANKED = 100.0   # 검색 100위 밖 = 미노출 취급 (순위 상한)
+
+
+def build_target(rows: list, min_signal: int = 20) -> "tuple[np.ndarray, str]":
+    """학습 정답값(y) 생성 — **단일 진입점** (★ ERRORS [483], 사용자 판단 2026-07-22).
+
+    ★ 왜 조회수가 아닌가: 네이버·티스토리는 **공개 페이지에 조회수를 노출하지 않는다.**
+      실측 2026-07-22 — 네이버 "패턴 8개 모두 매칭 실패(응답 2819자)",
+      티스토리 "조회수 미수집(정책 한계)". 그 결과 `actual_views` 가 366행 중 365행이 0 이 됐고,
+      · 학습기는 `len(unique(y)) < 2` 로 조용히 포기 → `learned_weights` **영구 0행**
+      · 백테스트는 정답값이 상수라 `r2=1.0` → **가짜 100%** (변별력 0)
+      즉 *플랫폼이 안 주는 값* 을 정답으로 삼아 학습 3단이 통째로 죽어 있었다.
+
+    ★ 대신 `naver_rank`(검색 노출 순위)를 쓴다 — 로그인 없이 수집되고 실제로 살아 있다
+      (learn_log 366행 중 365행 보유, 1~82위, 고유값 63종).
+      순위는 *작을수록 좋으므로* 부호를 뒤집어 "높을수록 좋음" 으로 통일한다.
+      미노출(None)은 최하위권으로 간주(_RANK_UNRANKED).
+
+    조회수 신호가 되살아나면(로그인 수집 등) `actual_views` 를 우선 쓰도록 자동 전환된다 —
+    지표 교체를 코드 수정 없이 흡수하기 위해 *데이터를 보고 고른다*.
+
+    Returns: (y, 사용한 신호 이름)
+    """
+    views = np.array([float(r["actual_views"] or 0) for r in rows], dtype=np.float64)
+    # ★ "고유값 2종 이상" 만으로는 부족하다 — 실측에서 366행 중 365행이 0, 1행이 1 이라
+    #   조건을 통과해버렸다(그런 신호로 학습하면 잡음만 배운다).
+    #   *0 이 아닌 표본이 학습 최소 표본 수 이상* 일 때만 조회수를 신뢰한다.
+    if int((views > 0).sum()) >= min_signal:
+        return np.log1p(views), "actual_views"
+
+    ranks = np.array(
+        [float(r["naver_rank"]) if r.get("naver_rank") is not None else _RANK_UNRANKED
+         for r in rows], dtype=np.float64)
+    # 순위 → 점수: 1위가 가장 높고 미노출이 0 (log 로 상위권 차이를 키움)
+    return np.log1p(np.maximum(0.0, _RANK_UNRANKED - ranks)), "naver_rank"
 
 
 def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
@@ -233,10 +275,17 @@ def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
         return {"trained": False, "error": "sklearn missing"}
 
     X = np.array([[r[f] or 0.0 for f in FEATURES] for r in rows], dtype=np.float64)
-    y = np.log1p(np.array([r["actual_views"] or 0 for r in rows], dtype=np.float64))
+    y, _signal = build_target(rows, min_signal=min_samples)   # ★ ERRORS [483] (단일 진입점)
 
     if X.shape[0] < min_samples or len(np.unique(y)) < 2:
-        return {"trained": False, "n_samples": X.shape[0]}
+        # ★ 조용한 포기 금지 — 왜 학습이 안 됐는지 남긴다 (종전엔 이유 없이 return 만 했고,
+        #   잡은 success=1 로 보고돼 "성공했는데 결과가 없는" 상태가 몇 달 지속됐다)
+        _reason = ("정답값 변별 없음(전부 동일)" if len(np.unique(y)) < 2
+                   else f"샘플 부족 {X.shape[0]}<{min_samples}")
+        if verbose:
+            print(f"  ⏸  학습 보류 — {_reason} (신호={_signal})")
+        return {"trained": False, "n_samples": X.shape[0],
+                "reason": _reason, "signal": _signal}
 
     model = Ridge(alpha=1.0)
     model.fit(X, y)
@@ -252,28 +301,28 @@ def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
     SCALE = 6.0  # 경험적 — 학습 가중치를 0.1~5 범위로 끌어올림
     w_scaled = [v * SCALE for v in w]
 
-    # 음수 방지(단, competition 은 음수 허용)
-    w_scaled[0] = max(0.0, w_scaled[0])  # trend
-    w_scaled[1] = max(0.0, w_scaled[1])  # perf
-    w_scaled[2] = max(0.0, w_scaled[2])  # fresh
-    # velocity, competition 은 부호 유지
+    # FEATURES 는 전부 클수록 좋음 → 음수 방지 (인덱스 하드코딩 제거 — FEATURES 파생)
+    w_scaled = [max(0.0, v) for v in w_scaled]
+    _wmap = dict(zip(FEATURES, w_scaled))   # {trend_score: w, perf_boost: w, freshness: w}
 
     new_id = _db.learned_weights_save(
-        w_trend=round(w_scaled[0], 4), w_perf=round(w_scaled[1], 4),
-        w_fresh=round(w_scaled[2], 4), w_velocity=round(w_scaled[3], 4),
-        w_competition=round(w_scaled[4], 4),
+        w_trend=round(_wmap.get("trend_score", 0.0), 4),
+        w_perf=round(_wmap.get("perf_boost", 0.0), 4),
+        w_fresh=round(_wmap.get("freshness", 0.0), 4),
+        w_velocity=0.0,      # ★ 제거된 유령 피처 — 0 저장 (스키마 호환, ERRORS [485])
+        w_competition=0.0,
         intercept=round(intercept, 4),
         n_samples=X.shape[0], r2=round(r2, 4), mse=round(mse, 4),
     )
 
     if verbose:
         print(f"  🧠 가중치 학습 완료 (id={new_id}, n={X.shape[0]}, r2={r2:.3f})")
-        print(f"     trend={w_scaled[0]:.3f} perf={w_scaled[1]:.3f} "
-              f"fresh={w_scaled[2]:.3f} vel={w_scaled[3]:.3f} comp={w_scaled[4]:.3f}")
+        print("     " + " ".join(f"{f.split('_')[0]}={_wmap[f]:.3f}" for f in FEATURES))
 
     return {"trained": True, "n_samples": X.shape[0], "r2": r2, "mse": mse,
-            "weights": dict(zip([f"w_{f.split('_')[0] if f != 'competition' else 'competition'}"
-                                 for f in FEATURES], w_scaled))}
+            "weights": {"w_trend": _wmap.get("trend_score", 0.0),
+                        "w_perf": _wmap.get("perf_boost", 0.0),
+                        "w_freshness": _wmap.get("freshness", 0.0)}}
 
 
 def get_current_weights() -> dict:
@@ -544,13 +593,21 @@ def run_backtest(test_ratio: float = 0.2, verbose: bool = True) -> dict:
 
     def _xy(rs):
         X = np.array([[r[f] or 0.0 for f in FEATURES] for r in rs], dtype=np.float64)
-        y = np.log1p(np.array([r["actual_views"] or 0 for r in rs], dtype=np.float64))
+        y, _ = build_target(rs)   # ★ ERRORS [483] — 학습과 *같은* 정답 정의 사용
         return X, y
 
     X_tr, y_tr = _xy(rows[:split])
     X_te, y_te = _xy(rows[split:])
     m = Ridge(alpha=1.0).fit(X_tr, y_tr)
     pred = m.predict(X_te)
+
+    # ★ 정답값이 상수면 sklearn r2_score 는 1.0 을 돌려준다 — "완벽 예측" 이 아니라
+    #   *평가 불가* 다. 종전엔 이 값을 그대로 저장해 화면에 백테스트 100% 로 표시됐다
+    #   (전 회차 r2=1.0/mse=0.0/mape=0.0). 변별 없는 구간은 저장하지 않는다. (ERRORS [483])
+    if len(np.unique(y_te)) < 2:
+        if verbose:
+            print("  ⏸  백테스트 보류 — 검증 구간 정답값 변별 없음 (r2=1.0 가짜 만점 방지)")
+        return {"ok": False, "reason": "test target constant"}
 
     r2 = float(r2_score(y_te, pred))
     mse = float(mean_squared_error(y_te, pred))

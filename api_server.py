@@ -542,15 +542,45 @@ def get_learning():
     r: dict = {}
     try:
         w = _rows(con, "SELECT id,w_trend,w_perf,w_fresh,w_velocity,w_competition,intercept,n_samples,r2,mse,learned_at FROM learned_weights ORDER BY id DESC LIMIT 3")
+        # ★ learned_weights.r2 는 *학습에 쓴 데이터로 자기 자신을 채점한* 값이다 (ERRORS [484]).
+        #   종전엔 이것을 '백테스트' 라는 이름으로 화면에 내보냈다 — 시험 문제를 미리 보고 푼
+        #   점수를 모의고사 점수라 부른 셈. 학습 점수는 언제나 후하므로 실력을 과대평가한다.
+        #   (실측: 학습 0.489 vs 진짜 백테스트 0.330)
+        #   → `train_r2`(학습 정확도)와 `backtest_r2`(안 써본 데이터 검증)를 *분리해서* 내보낸다.
+        _bt_all = _rows(con, "SELECT tested_at, r2 FROM backtest_history ORDER BY tested_at DESC")
+
+        def _nearest_backtest(when: str):
+            """같은 회차의 백테스트를 시각으로 매칭 — 학습·백테스트는 같은 잡에서 연이어 돈다."""
+            if not when or not _bt_all:
+                return None
+            _d = str(when)[:10]
+            for b in _bt_all:
+                if str(b["tested_at"])[:10] == _d:
+                    return b["r2"]
+            return None
+
         r["weights"] = [
             {
                 "weight_type":    "ridge",
                 "weights_json":   json.dumps({"w_trend": x["w_trend"], "w_perf": x["w_perf"], "w_fresh": x["w_fresh"], "w_velocity": x["w_velocity"], "w_competition": x["w_competition"], "intercept": x["intercept"]}, ensure_ascii=False),
                 "trained_at":     x["learned_at"],
-                "backtest_score": x["r2"],
+                "train_r2":       x["r2"],                       # 자기 채점 (낙관적)
+                "backtest_r2":    _nearest_backtest(x["learned_at"]),  # 안 써본 데이터 검증
+                "n_samples":      x["n_samples"],
             }
             for x in w
         ]
+
+        # ★ 학습 입력별 변별력 — '영향 없음(0%)' 과 '판단 불가(데이터 없음)' 은 다르다 (ERRORS [484])
+        #   velocity·competition 은 learn_log 에 상수로만 적재돼(0.0 / 50.0) 학습이 원리적으로 불가능.
+        try:
+            _fv = {}
+            for _c in ("trend_score", "perf_boost", "freshness", "velocity", "competition"):
+                _row = con.execute(f"SELECT COUNT(DISTINCT {_c}) c FROM learn_log").fetchone()
+                _fv[_c] = int(_row["c"] or 0)
+            r["feature_variance"] = _fv
+        except Exception:
+            r["feature_variance"] = {}
     except Exception:
         r["weights"] = []
     try:
@@ -560,8 +590,96 @@ def get_learning():
         r["backtest"] = []
     try:
         r["insights"] = _rows(con, "SELECT insight_key,insight_type,description,directive,weight,scope,occurrences,last_seen FROM learning_insights ORDER BY occurrences DESC LIMIT 20")
+        # ★ 총 개수는 *별도 조회* — 화면이 LIMIT 20 배열 길이를 실제 개수로 착각하던 버그 (ERRORS [479])
+        _ic = con.execute("SELECT COUNT(*) c FROM learning_insights").fetchone()
+        r["insights_total"] = _ic["c"] if _ic else 0
     except Exception:
         r["insights"] = []
+        r["insights_total"] = 0
+
+    # ★ KPI 시계열 (ERRORS [479]) — 과거→현재 추세를 화면에서 바로 보이게.
+    #   원천은 self_repair_runs(자가진단 회차별 스냅샷). 오래된 것부터 정렬해 그대로 차트에 사용.
+    try:
+        _tl = _rows(con,
+            "SELECT ran_at, patterns_count, hits_total, llm_saved "
+            "FROM self_repair_runs ORDER BY id DESC LIMIT 60")
+        r["timeline"] = [
+            {"at": x["ran_at"], "patterns": x["patterns_count"] or 0,
+             "hits": x["hits_total"] or 0, "llm_saved": x["llm_saved"] or 0}
+            for x in reversed(_tl)
+        ]
+    except Exception:
+        r["timeline"] = []
+
+    # 일별 오류 자동해소율 — '학습이 결과를 바꾸고 있나' 의 최종 지표
+    try:
+        _dr = _rows(con,
+            "SELECT substr(timestamp,1,10) d, COUNT(*) tot, "
+            "SUM(CASE WHEN status IN ('fixed','resolved') THEN 1 ELSE 0 END) fx "
+            "FROM error_log WHERE timestamp >= date('now','-30 days') "
+            "GROUP BY d ORDER BY d")
+        r["resolve_rate"] = [
+            {"at": x["d"], "total": x["tot"], "resolved": x["fx"],
+             "rate": round((x["fx"] * 100.0) / max(x["tot"], 1), 1)}
+            for x in _dr
+        ]
+    except Exception:
+        r["resolve_rate"] = []
+
+    # 현재 학습 자산 요약 (learned_patterns.json 실시간 조회 — 복사본 금지)
+    try:
+        import json as _js
+        from pathlib import Path as _P
+        _lp = _js.loads((_P(__file__).parent / "JARVIS07_GUARDIAN" / "learned_patterns.json").read_text(encoding="utf-8"))
+        _pats = _lp.get("patterns", []) if isinstance(_lp, dict) else []
+        r["patterns_now"] = {
+            "count": len(_pats),
+            "hits":  sum(int(x.get("hit_count", 0) or 0) for x in _pats),
+        }
+    except Exception:
+        r["patterns_now"] = {"count": 0, "hits": 0}
+
+    # ★ 글 품질 학습 (ADR 014) — 오류 학습과 *다른 시스템* 이므로 별도 섹션 (ERRORS [480])
+    #   라벨만 "학습 패턴" 이라고 쓰면 어느 학습인지 알 수 없다는 지적에 따라 분리.
+    try:
+        # ★ 학습 루프 4단계를 그대로 보여준다 (ERRORS [481])
+        #   ① 지침 축적 → ② 프롬프트 주입 → ③ 성과 채점 → ④ 실제 보상
+        #   ★ '주입' 은 반드시 insight_usage(실제 주입 기록)에서 센다.
+        #     종전엔 SUM(occurrences)=661 을 '주입' 이라 표시했는데, occurrences 는
+        #     "이 지침이 글 분석에서 *재발견* 된 횟수"(①단계)라 완전히 다른 값이다.
+        #     실제 주입은 92회였다 — 7배 부풀려 보고 있었다.
+        _q = con.execute(
+            "SELECT COUNT(*) c, SUM(COALESCE(occurrences,0)) occ, "
+            "SUM(COALESCE(reward_count,0)) rc, AVG(weight) w, "
+            "AVG(CASE WHEN reward_count > 0 THEN reward_sum / reward_count END) ar, "
+            "SUM(CASE WHEN COALESCE(reward_count,0) > 0 THEN 1 ELSE 0 END) rewarded "
+            "FROM learning_insights").fetchone()
+        _used = con.execute("SELECT COUNT(*) FROM insight_usage").fetchone()
+        r["quality_now"] = {
+            "insights":   _q["c"] or 0,            # ① 쌓인 지침
+            "usage":      (_used[0] if _used else 0),  # ② 실제 주입 (insight_usage)
+            "rewards":    _q["rc"] or 0,           # ③ 채점 횟수
+            "avg_reward": round(_q["ar"] or 0, 3),  # ④ 평균 보상 = 실제 성과
+            "avg_weight": round(_q["w"] or 0, 3),   # (참고) 내부 신뢰도
+            "rediscovered": _q["occ"] or 0,        # (참고) 재발견 누계 — '주입' 아님
+            "rewarded":   _q["rewarded"] or 0,     # 보상 받은 지침 수
+        }
+    except Exception:
+        r["quality_now"] = {"insights": 0, "usage": 0, "rewards": 0,
+                            "avg_reward": 0, "avg_weight": 0, "rediscovered": 0, "rewarded": 0}
+
+    # 품질 지침 누적 추이 (first_seen 일별 → 누적 합산)
+    try:
+        _qd = _rows(con,
+            "SELECT substr(first_seen,1,10) d, COUNT(*) n FROM learning_insights "
+            "WHERE first_seen IS NOT NULL GROUP BY d ORDER BY d")
+        _acc, _out = 0, []
+        for x in _qd:
+            _acc += x["n"]
+            _out.append({"at": x["d"], "insights": _acc, "added": x["n"]})
+        r["quality_timeline"] = _out[-60:]
+    except Exception:
+        r["quality_timeline"] = []
     try:
         ll = con.execute("SELECT COUNT(*) as cnt, AVG(ABS(actual_views - predicted_opp)) as mae FROM learn_log").fetchone()
         r["learn_log"] = {"cnt": ll["cnt"] if ll else 0, "mae": ll["mae"] if ll else None}
