@@ -28,8 +28,10 @@ from JARVIS09_COLLECTOR.collector_engine import (
     collect_for_theme,
     collect_for_theme_delta,   # ★ delta-aware 교류 (사용자 박제 2026-06-07)
     collect_research,          # ★ 설계-우선 리서치 수집 (ADR 012 — 2026-07-02)
-    collect_all,               # ★ 통합 수집 컴포저 → CollectedData (Step 3 — 2026-07-05)
+    collect_all,               # ★★ 수집 단일 진입점 — 주제 → CollectedData (사용자 박제 2026-07-23)
     compose_collected,         # ★ 조각 → CollectedData 조립 (재수집 없음)
+    market_data_to_datasets,   # ★ 시장지표 → datasets (02 에서 이관 2026-07-23)
+    market_snapshot,           # ★ 시장 스냅샷(지표+일정) 수집·조립 (02 에서 이관 2026-07-23)
     select_by_trust_quota,     # ★ 신뢰 서열 쿼터 선별 (사용자 박제 2026-07-06)
 )
 from JARVIS09_COLLECTOR.evidence_pack import (
@@ -67,6 +69,8 @@ __all__ = [
     "collect_research",
     "collect_all",
     "compose_collected",
+    "market_data_to_datasets",
+    "market_snapshot",
     "select_by_trust_quota",
     "evidence_brief",
     "as_source_docs",

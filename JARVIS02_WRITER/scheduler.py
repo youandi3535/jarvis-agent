@@ -611,8 +611,11 @@ def run_precollect_theme():
     """★ 테마 선계산 잡 (20:00 = 21:00 발행 1시간 전 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
 
     테마를 고정(pin)하고 무거운 fact·chart 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer
-    회복된 Max 풀에서 실행(스톨 조건 제거). 선계산(~20:20)과 발행(21:00) 사이 ~40분 회복 갭(경제와
-    대칭). 순수 최적화 — 실패해도 21:00 발행이 기존 random 선정 + 기존 수집으로 폴백.
+    회복된 Max 풀에서 실행(스톨 조건 제거).
+
+    ★ 2026-07-23 부터 21:00 발행의 *필수 선행* (사용자 박제) — 종전 "순수 최적화·실패해도
+      random 선정 폴백" 은 폐지. 이게 성공하지 않으면 발행은 시작되지 않고, 미충족이면
+      JARVIS04 게이트가 이 잡을 즉시 돌린 뒤 회복 갭(1시간) 뒤로 발행을 미룬다.
     """
     from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
     if _isd():
@@ -621,14 +624,12 @@ def run_precollect_theme():
     try:
         from JARVIS00_INFRA.watchdog import guard_main
         from JARVIS02_WRITER.trend_theme_writer import precollect_theme
-        # ★ 동적 데드라인 (동적 설계): 고정 상한이 아니라 21:00 발행 2분 전(20:58)까지만 수행하도록
-        #   현재 시각에서 파생 → 미스파이어로 늦게 떠도 발행창을 침범하지 않는다. 목표 지났거나
-        #   여유<2분이면 기본 25분. 20:00 시작이라 실제로는 ~20:20 완료 → 21:00까지 ~40분 회복 갭.
-        from datetime import datetime as _dt
-        _now = _dt.now()
-        _target = _now.replace(hour=20, minute=58, second=0, microsecond=0)
-        _remaining = (_target - _now).total_seconds()
-        _dl = int(_remaining) if _remaining >= 120 else 1500
+        # ★ 동적 데드라인 — 발행 시각을 여기서 박지 않는다(종전 20:58 하드코딩). 후행 발행
+        #   잡의 *실제 다음 실행* 2분 전까지를 JARVIS04 가 파생해준다 → 정규 20:00 실행이면
+        #   21:00 기준, 선행 회복 실행(예: 21:30)이면 그때의 발행 시각(22:30) 기준으로
+        #   저절로 맞는다. 발행창을 침범하지 않으면서 쓸 수 있는 시간을 다 쓴다.
+        from JARVIS04_SCHEDULER.job_prereq import deadline_sec as _deadline
+        _dl = _deadline("j02_theme_precollect") or 1500
         with guard_main("테마 선계산", deadline_sec=_dl):
             res = precollect_theme()
         log(f"⚡ [테마 선계산] 완료 — 고정·캐시 {res.get('cached', 0)}개 (21:00 발행 재사용 대기)")
@@ -844,8 +845,10 @@ def run_precollect_economic():
     고정 시각 잡이 아니라 job_collect_trends_morning 이 트렌드 분석(topic_pack 빌드)을 끝낸 *직후*
     이어서 호출한다(트렌드 소요시간 가변 — 재빌드 낭비·헛대기 0). 무거운 fact·chart 추출을 07:00
     발행 전에 미리 수행·캐시 → 발행창 추출 LLM 0회 → 직후 writer 가 버스트로 열화되지 않은 Max
-    풀에서 실행(300s 스톨 조건 제거). 전문 추출 그대로·시점만 앞당김(박제 무위반). 순수 최적화 —
-    실패해도 07:00 발행이 기존 수집 폴백.
+    풀에서 실행(300s 스톨 조건 제거). 전문 추출 그대로·시점만 앞당김(박제 무위반).
+
+    ★ 2026-07-23 부터 이 체인의 주체인 `radar_trends_06` 이 07:00 발행의 *필수 선행*
+      (사용자 박제) — 종전 "순수 최적화·실패해도 기존 수집 폴백" 은 폐지. 테마와 같은 규칙.
     """
     from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
     if _isd():
@@ -854,14 +857,12 @@ def run_precollect_economic():
     try:
         from JARVIS00_INFRA.watchdog import guard_main
         from JARVIS02_WRITER.trend_economic_writer import precollect_economic
-        # ★ 동적 데드라인 — 트렌드 완료 후 이어서 실행되므로 시작 시각이 가변. 07:00 발행 2분 전
-        #   (06:58)까지만 수행해 발행창을 침범하지 않는다. 목표 지났거나(수동 실행 등) 여유<2분이면
-        #   기본 17분. 06:00 시작이라 실제로는 ~06:20 완료 → 07:00 발행까지 ~40분 회복 갭(넉넉).
-        from datetime import datetime as _dt
-        _now = _dt.now()
-        _target = _now.replace(hour=6, minute=58, second=0, microsecond=0)
-        _remaining = (_target - _now).total_seconds()
-        _dl = int(_remaining) if _remaining >= 120 else 1020
+        # ★ 동적 데드라인 — 발행 시각을 여기서 박지 않는다(종전 06:58 하드코딩). 이 선계산은
+        #   radar_trends_06 말미에 체이닝되므로, 그 잡을 요구하는 후행(j01_economic_post)의
+        #   *실제 다음 실행* 2분 전까지를 JARVIS04 가 파생해준다 → 정규든 선행 회복 실행이든
+        #   저절로 맞는다 (테마 선계산과 같은 규칙).
+        from JARVIS04_SCHEDULER.job_prereq import deadline_sec as _deadline
+        _dl = _deadline("radar_trends_06") or 1020
         with guard_main("경제 선계산", deadline_sec=_dl):
             res = precollect_economic()
         log(f"⚡ [경제 선계산] 완료 — 캐시 {res.get('cached', 0)}개 (07:00 발행 재사용 대기)")

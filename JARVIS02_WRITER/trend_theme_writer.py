@@ -83,99 +83,38 @@ _TODAY_DOW = ["월", "화", "수", "목", "금", "토", "일"][_TODAY.weekday()]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ① 데이터 수집 — collect_stocks_data 위임
+#  ① 데이터 수집 — ★ 전량 JARVIS09 위임 (사용자 박제 2026-07-23)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  종전 이 자리에 `_collect`(종목) + `_theme_collect_bundle`(프로필·리서치·종목·조립)
+#  두 함수가 있었다. 09 API 를 *호출* 하긴 했지만 수집의 순서·조합·폴백 판단을 02 가
+#  했으므로 사실상 02 가 수집을 오케스트레이션한 것 — 수집 단일 진입점(JARVIS09) 위반.
+#  이제 주제·프로필은 자비스03(theme_picker.theme_topic), 수집은 자비스09(collect_all),
+#  02 는 받아서 대본만 쓴다. 같은 병이 경제 브리핑에도 있었으므로 함께 이관(③ 4조합).
 
-def _collect(theme: str, sector: str = "", related_terms: list | None = None,
-             profile: dict | None = None) -> dict:
-    """테마 키워드 → 종목 데이터. collect_theme.collect_stocks_data 위임.
 
-    ★ related_terms 미제공 시 자비스03 keyword_profile() 로 자체 조회 (사용자 박제
-    2026-07-17 — "파운드리"→가구주 오매칭 사고 근본수정). 종목 검색은 테마명 단독
-    fuzzy-match 로는 "파운드리"처럼 네이버 공식 카탈로그와 겹치는 부분문자열이 없는
-    키워드에서 LLM 폴백에 의존하게 되고, 그 LLM 폴백은 266개 평문 목록에서 번호 하나를
-    고르는 방식이라 위치편향으로 무관한 테마를 잘못 고르는 사고가 반복됐다. 관련어
-    (예: "반도체 위탁생산")를 함께 매칭하면 결정론적 부분문자열 일치로 해결되는 경우가
-    대부분이라 여기서 항상 확보해 내려보낸다.
+def _theme_collect(theme: str, sector: str = "", profile: dict | None = None) -> dict:
+    """테마 주제 → 자비스09 수집 위임. 02 에는 *호출 한 줄* 만 남긴다.
 
-    ★ profile 관통 (사용자 박제 2026-07-17 — '라면'→종목 0개 사고 근본수정): 프로필
-    전체(summary·entity_type 포함)를 collect_stocks_data 까지 내려보내 LLM 상위
-    카테고리 매핑('라면'→'음식료업종')이 가능하도록 한다. profile 미제공 시 여기서
-    keyword_profile() 로 1회 조회하고, 그 결과에서 related_terms 도 함께 파생한다.
+    profile 미제공 시 자비스03 에서 주제 패키지(키워드+프로필)를 받아온다 —
+    키워드 단독 전송 금지(ADR 013). 반환 계약은 09 collect_all 과 동일.
     """
-    # ★ 단일 진입점 — 새 테마 = 전체 상태 초기화
+    # ★ 새 테마 = 수집 런 컨텍스트 초기화 (09 소유 상태)
     from JARVIS09_COLLECTOR.run_context import new_run as _new_run
     _new_run(theme)
-    if profile is None or related_terms is None:
+    if profile is None:
         try:
-            from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
-            _p = _kw_prof(theme, sector) or {}
-            if profile is None:
-                profile = _p
-            if related_terms is None:
-                related_terms = _p.get("related_terms")
-        except Exception:
-            pass
-    try:
-        from JARVIS02_WRITER.collect_theme import collect_stocks_data
-        return collect_stocks_data(theme, related_terms=related_terms, profile=profile)
-    except Exception as e:
-        print(f"  ❌ [theme] collect_stocks_data 실패: {e}")
-        _g_report("writer", e, module=__name__)
-        return {"theme": theme, "stocks": [], "summary": {}}
-
-
-def _theme_collect_bundle(theme: str, sector: str = "") -> dict:
-    """★ 테마 수집 번들 (사용자 박제 2026-07-18) — 프로필 + 리서치(fact 추출) + 종목 →
-    CollectedData 조립. _step_collect 본체와 precollect_theme 가 공유하는 단일 수집 로직.
-
-    반환: {collected, stocks_data, collection_docs, evidence_pack, data_empty}
-    (선계산 잡이 저부하 창에서 이 무거운 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회.)
-    """
-    _prof, _angle = {}, ""
-    try:
-        from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
-        _prof = _kw_prof(theme, sector) or {}
-        _angle = (_prof.get("summary") or "").strip()
-        if _angle:
-            print(f"  🏷️ [THEME 선계산] 자비스03 프로필: {_angle[:60]}")
-    except Exception:
-        pass
-
-    # 리서치(설계-우선) + 02 fact 추출 — 동기(선계산은 병렬 이득 불필요)
-    collection_docs, evidence_pack, _corpus_digest = [], None, ""
-    try:
-        if os.getenv("RESEARCH_FIRST", "1") != "0":
-            from JARVIS09_COLLECTOR import collect_research
-            # ★ fact 추출 09 통일 + corpus digest(distill 압축 2026-07-19) — 09가 수집+추출+요약.
-            _res = collect_research(theme, sector, angle=_angle, with_facts=True, with_digest=True) or {}
-            collection_docs = _res.get("docs") or []
-            evidence_pack = _res.get("pack") or None
-            _corpus_digest = _res.get("corpus_digest") or ""
-        else:
-            raise RuntimeError("RESEARCH_FIRST=0")
-    except Exception as e:
-        _g_report("writer", e, module=__name__, func_name="_theme_collect_bundle")
-        try:
-            from JARVIS09_COLLECTOR.collector_engine import collect_for_theme
-            collection_docs = collect_for_theme(theme, sector)
-        except Exception:
-            collection_docs, evidence_pack = [], None
-
-    # 종목 데이터
-    data = _collect(theme, sector=sector, related_terms=_prof.get("related_terms"), profile=_prof)
-
-    from JARVIS09_COLLECTOR import compose_collected
-    # ★ corpus digest(요약)를 meta 에 실어 writer(_gen_theme)가 원문 대신 사용 → 프롬프트 축소.
-    collected = compose_collected(theme, stocks_data=data, docs=collection_docs,
-                                  evidence_pack=evidence_pack, sector=sector,
-                                  category="theme", profile=_prof,
-                                  extra_meta=({"corpus_digest": _corpus_digest} if _corpus_digest else None))
-    _n_stocks = len(data.get("stocks") or [])
-    _n_facts = len((evidence_pack or {}).get("facts") or [])
-    return {"collected": collected, "stocks_data": data,
-            "collection_docs": collection_docs, "evidence_pack": evidence_pack,
-            "data_empty": (_n_stocks == 0 and not collection_docs and _n_facts == 0)}
+            from JARVIS03_RADAR.theme_picker import theme_topic as _topic
+            _t = _topic(theme=theme, sector=sector) or {}
+            profile = _t.get("profile") or {}
+            sector = _t.get("sector") or sector
+        except Exception as e:
+            print(f"  ⚠️ [THEME] 자비스03 프로필 조회 실패: {e}")
+            profile = {}
+    _angle = (profile or {}).get("summary") or ""
+    if _angle:
+        print(f"  🏷️ [THEME] 자비스03 프로필: {_angle[:60]}")
+    from JARVIS09_COLLECTOR import collect_all
+    return collect_all(theme, profile=profile, sector=sector, category="theme")
 
 
 def precollect_theme() -> dict:
@@ -183,8 +122,10 @@ def precollect_theme() -> dict:
 
     테마는 네이버 금융 카탈로그에서 random 선정되므로, 여기서 테마를 *고정(pin)* 하고 미리
     수집·추출해 캐시한다. 21:00 발행은 고정 테마를 우선 사용(→ 캐시 히트, 추출 LLM 0회) →
-    writer 가 버스트로 열화되지 않은 Max 풀에서 실행(스톨 조건 제거). 순수 최적화 — 고정·캐시가
-    없으면 발행은 기존 random 선정 + 기존 수집으로 폴백.
+    writer 가 버스트로 열화되지 않은 Max 풀에서 실행(스톨 조건 제거).
+
+    ★ 2026-07-23 부터 21:00 발행의 *필수 선행* (사용자 박제) — 종전 "고정·캐시가 없으면
+      random 선정 폴백" 은 폐지. 이게 없으면 발행 자체가 시작되지 않는다.
     """
     from datetime import datetime as _dt
     from JARVIS02_WRITER.precollect_cache import save_precollect, pin_theme
@@ -200,7 +141,11 @@ def precollect_theme() -> dict:
         return {"success": False, "cached": 0}
     saved = 0
     try:
-        bundle = _theme_collect_bundle(theme, sector="")
+        _b = _theme_collect(theme, sector="")
+        # 02 상태 키 이름으로 캐시 (발행 스텝 state 와 동일 계약)
+        bundle = {"collected": _b.get("collected"), "stocks_data": _b.get("stocks_data"),
+                  "collection_docs": _b.get("docs"), "evidence_pack": _b.get("evidence_pack"),
+                  "data_empty": _b.get("data_empty")}
         if bundle and not bundle.get("data_empty"):
             if save_precollect("theme", theme, bundle):
                 pin_theme(theme)
@@ -443,9 +388,9 @@ def run_tistory_theme(theme: str, sector: str = "",
             except Exception: pass
         return {"success": False, "url": "", "keyword": theme, "error": str(e)[:100]}
 
-    # ── ① 데이터 수집 ───────────────────────────────────────────
-    if stocks_data is None:
-        stocks_data = _collect(theme, sector=sector)
+    # ── ① 데이터 수집 — 자비스09 위임 ─────────────────────────
+    _bundle = _theme_collect(theme, sector=sector)
+    stocks_data = _bundle.get("stocks_data") or {}
     if not stocks_data.get("stocks"):
         _tg(f"⚠️ [THEME-TISTORY] 종목 데이터 없음 — 발행 건너뜀: {theme}")
         if _preloaded_driver:
@@ -454,9 +399,7 @@ def run_tistory_theme(theme: str, sector: str = "",
         return {"success": False, "url": "", "keyword": theme, "error": "종목 데이터 없음"}
 
     # ── ②~⑦ HTML 생성 + 블록 조립 + 검증 ─────────────────────
-    from JARVIS09_COLLECTOR import compose_collected
-    collected = compose_collected(theme, stocks_data=stocks_data, sector=sector, category="theme")
-    draft = _build_blocks(collected, "tistory", TISTORY_IMG_DIR)
+    draft = _build_blocks(_bundle["collected"], "tistory", TISTORY_IMG_DIR)
     # ── ⑧ 발행 (⓪에서 받은 driver 재사용) ─────────────────────
     return _publish_tistory(draft, theme, sector, preloaded_driver=_preloaded_driver)
 
@@ -471,14 +414,12 @@ def run_naver_theme(theme: str, sector: str = "",
     from JARVIS02_WRITER.trend_economic_writer import _legacy_publish_guard as _gd
     _gd("run_naver_theme")
     print(f"\n  🟢 [THEME-NAVER] 테마 발행 시작: {theme}")
-    if stocks_data is None:
-        stocks_data = _collect(theme, sector=sector)
+    _bundle = _theme_collect(theme, sector=sector)
+    stocks_data = _bundle.get("stocks_data") or {}
     if not stocks_data.get("stocks"):
         _tg(f"⚠️ [THEME-NAVER] 종목 데이터 없음 — 발행 건너뜀: {theme}")
         return {"success": False, "url": "", "keyword": theme, "error": "종목 데이터 없음"}
-    from JARVIS09_COLLECTOR import compose_collected
-    collected = compose_collected(theme, stocks_data=stocks_data, sector=sector, category="theme")
-    draft = _build_blocks(collected, "naver", NAVER_IMG_DIR)
+    draft = _build_blocks(_bundle["collected"], "naver", NAVER_IMG_DIR)
     return _publish_naver(draft, theme, sector)
 
 
@@ -565,7 +506,6 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     """
     # chart_generator 경로 폐기 — infographic_engine 경로로 통합 (ERRORS [355])
 
-    from concurrent.futures import ThreadPoolExecutor as _TExec
     from JARVIS00_INFRA.harness import (
         action_step, ActionDefinition, run_action, Issue, interpreter_shutting_down,
     )
@@ -617,99 +557,22 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         except Exception as _pce:
             print(f"  ⚠️ [선계산] 캐시 조회 스킵: {_pce}")
 
-        # ★ 키워드 단독 전송 금지 (사용자 박제 2026-07-03 — ADR 013 강제):
-        #   테마 키워드도 자비스03 프로필(정의·관련어)을 동봉해 JARVIS09 에 전달.
-        #   ★ 종목 검색 관련어 근본수정 (사용자 박제 2026-07-17 — "파운드리"→가구주 오매칭
-        #   사고): 리서치 스레드가 시작하기 *전* 동기로 1회만 조회해 리서치·종목 수집
-        #   양쪽이 재사용 — 중복 LLM 호출 방지 + related_terms 를 _collect 에도 공급.
-        _prof, _angle = {}, ""
-        try:
-            from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
-            _prof = _kw_prof(state["theme"], state.get("sector", "")) or {}
-            _angle = (_prof.get("summary") or "").strip()
-            if _angle:
-                state["theme_profile"] = _prof
-                print(f"  🏷️ [THEME] 자비스03 프로필: {_angle[:60]}")
-        except Exception:
-            pass
-
-        _col_exec = _TExec(max_workers=1)
-
-        def _run_jarvis09():
-            """★ ADR 012 — 설계-우선 리서치 수집 (킬스위치 RESEARCH_FIRST=0 → 종전 스윕).
-
-            반환: {"docs": [...], "pack": dict|None}
-            """
-            try:
-                if os.getenv("RESEARCH_FIRST", "1") != "0":
-                    from JARVIS09_COLLECTOR import collect_research
-                    # ★ fact 추출 09 통일 (사용자 박제 2026-07-18) — 09가 수집+추출, pack 동봉.
-                    res = collect_research(state["theme"], state.get("sector", ""),
-                                           angle=_angle, with_facts=True, with_digest=True)
-                    docs = res.get("docs") or []
-                    pack = res.get("pack") or None
-                    n_facts = len((pack or {}).get("facts", []))
-                    print(f"  ✅ [THEME] JARVIS09 수집+fact 추출 완료: 문서 {len(docs)}건 "
-                          f"→ fact {n_facts}개")
-                    return {"docs": docs, "pack": pack}
-            except Exception as e:
-                print(f"  ⚠️ [THEME] 리서치 수집 실패 — 종전 스윕 폴백: {e}")
-                _g_report("writer", e, module=__name__, func_name="_run_jarvis09")
-            try:
-                from JARVIS09_COLLECTOR.collector_engine import collect_for_theme
-                docs = collect_for_theme(state["theme"], state.get("sector", ""))
-                print(f"  ✅ [THEME] JARVIS09 수집 완료(폴백): {len(docs)}건")
-                return {"docs": docs, "pack": None}
-            except Exception as e:
-                print(f"  ⚠️ [THEME] JARVIS09 수집 실패: {e}")
-                return {"docs": [], "pack": None}
-
-        # ★ 인터프리터 종료 레이스 (ERRORS [361]): 데몬 재시작 등으로 인터프리터가
-        #   종료 단계에 들어가면 ThreadPoolExecutor.submit 이
-        #   'cannot schedule new futures after interpreter shutdown' RuntimeError 를 던진다.
-        #   병렬 이득만 포기하고 리서치 수집은 동기 폴백으로 이어간다 — 종료 레이스로 발행 크래시 금지.
-        try:
-            _col_fut = _col_exec.submit(_run_jarvis09)
-        except RuntimeError as _sub_e:
-            print(f"  ⚠️ [② 수집] 스레드 스케줄 불가(인터프리터 종료 중?) — 동기 폴백: {_sub_e}")
-            _col_fut = None
-
-        # 종목 데이터 수집 (주식 시세·재무)
-        data = _collect(state["theme"], sector=state.get("sector", ""),
-                        related_terms=_prof.get("related_terms"), profile=_prof)
-
-        # ★ 다소스 결손 분리 (사용자 박제 2026-07-04 — 경제 파이프라인과 동렬화, ERRORS [351]):
-        #   종목(stocks)이 0개여도 JARVIS09 다소스 리서치(논문·뉴스·DART·ECOS·웹 등)를
-        #   *취소하지 않고 항상 수령*. 경제글이 구조데이터 0개여도 collection_docs·
-        #   evidence_pack 을 보존하고 계속 쓰는 것과 동일. 리서치만으로도 글은 성립하며,
-        #   차트는 실데이터 폴백/AI 사진으로 대체(_generate_charts). 진짜 폐기·테마 교체는
-        #   종목·리서치·근거가 *전부* 비었을 때만 (KRX 종속 결합 해제).
-        if _col_fut is not None:
-            try:
-                _col_res = _col_fut.result(timeout=600) or {}
-            except Exception:
-                _col_res = {}
-            finally:
-                _col_exec.shutdown(wait=False)
-        else:
-            # submit 실패(인터프리터 종료 레이스) → 리서치를 동기 실행(스레드 미사용)
-            _col_exec.shutdown(wait=False)
-            try:
-                _col_res = _run_jarvis09() or {}
-            except Exception:
-                _col_res = {}
-        collection_docs = _col_res.get("docs") or []
-        evidence_pack   = _col_res.get("pack") or None
-
+        # ★ 수집은 자비스09 단독 (사용자 박제 2026-07-23): 02 는 "이 주제로 수집해줘" 한 줄만.
+        #   무엇을·어떤 순서로·어떻게 병렬로·실패 시 무엇으로 폴백할지는 전부 09 소관.
+        #   프로필은 자비스03 에서 주제 패키지로 받는다 (키워드 단독 전송 금지 — ADR 013).
+        _bundle = _theme_collect(state["theme"], sector=state.get("sector", ""),
+                                 profile=state.get("theme_profile"))
+        collected       = _bundle.get("collected")
+        data            = _bundle.get("stocks_data") or {}
+        collection_docs = _bundle.get("docs") or []
+        evidence_pack   = _bundle.get("evidence_pack") or None
         _n_stocks = len(data.get("stocks") or [])
         _n_facts  = len((evidence_pack or {}).get("facts") or [])
-        # ★ Step 7: 조각 → CollectedData 단일 상자 (재수집 없음). 옛 state 키는 back-compat 유지.
-        from JARVIS09_COLLECTOR import compose_collected
-        collected = compose_collected(
-            state["theme"], stocks_data=data, docs=collection_docs,
-            evidence_pack=evidence_pack, sector=state.get("sector", ""),
-            category="theme", profile=state.get("theme_profile"))
-        if _n_stocks == 0 and not collection_docs and _n_facts == 0:
+
+        # ★ 다소스 결손 분리 (사용자 박제 2026-07-04 — 경제 파이프라인과 동렬화, ERRORS [351]):
+        #   종목(stocks)이 0개여도 리서치(논문·뉴스·DART·ECOS·웹)만으로 글은 성립한다.
+        #   진짜 폐기·테마 교체는 종목·리서치·근거가 *전부* 비었을 때만 (KRX 종속 결합 해제).
+        if _bundle.get("data_empty"):
             print("  ⏭️ [② 수집] 종목·리서치·근거 전부 0 — 데이터 없음(테마 교체 대상)")
             return {"collected": collected, "_collect_data_empty": True,
                     "stocks_data": data, "collection_docs": [], "evidence_pack": None}
@@ -859,7 +722,10 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             try:
                 _sd = state.get("stocks_data") or {}
                 if _sd.get("stocks"):
-                    from JARVIS09_COLLECTOR.collect_theme import stocks_to_datasets
+                    # ★ 2026-07-23: 09 가 조립해준 collected.datasets 를 *읽기만* 한다.
+                    #   종전엔 여기서 stocks_to_datasets 를 다시 돌려 09 의 조립을 재현했고,
+                    #   그 사이 09 가 정책으로 걸러낸 항목이 코퍼스에서 되살아날 수 있었다.
+                    _all_ds = list(getattr(state.get("collected"), "datasets", None) or [])
 
                     def _fmt_val(v):
                         # ★ ERRORS [346] — 코퍼스 수치를 본문 표기와 정합.
@@ -874,14 +740,14 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                         return f"{v}"
 
                     _stock_docs = []
-                    for _ds in stocks_to_datasets(_sd):
+                    for _ds in _all_ds:
                         _unit = _ds.get("unit", "")
                         _rows = ", ".join(
                             f"{_r['label']} {_fmt_val(_r['value'])}{_unit}"
-                            for _r in _ds.get("data", []))
+                            for _r in _ds.get("data", []) if isinstance(_r, dict) and "label" in _r)
                         if _rows:
                             _stock_docs.append(
-                                f"[종목 실측] {_ds.get('title', '')}: {_rows} "
+                                f"[수집 실측] {_ds.get('title', '')}: {_rows} "
                                 f"(출처: {(_ds.get('source') or {}).get('name', 'KRX 시세')})")
                     # ★ ERRORS [347] — 조원 필드(marcap·revenue)를 본문 표기와 정합.
                     #   본문(_stocks_text→프로즈)은 `_fmt_marcap` 으로 규모별 조원(대형주

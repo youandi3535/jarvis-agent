@@ -555,7 +555,7 @@ def compose_collected(keyword: str, stocks_data: dict | None = None,
     meta['raw_stocks'] 로 원본 종목 dict 를 side-channel 보존 (프롬프트 빌더용).
     """
     from datetime import datetime as _dt
-    from .models import CollectedData
+    from .models import CollectedData, policy_for, dataset_is_stock_financial
     from .collect_theme import stocks_to_datasets
     from .evidence_pack import facts_to_datasets
     stocks_data = stocks_data or {}
@@ -564,6 +564,14 @@ def compose_collected(keyword: str, stocks_data: dict | None = None,
     stock_ds = stocks_to_datasets(stocks_data) if stocks_data.get("stocks") else []
     fact_ds = facts_to_datasets(pack) if pack else []
     datasets = _dedupe_datasets(list(extra_datasets or []) + list(stock_ds) + list(fact_ds))
+    # ★ 종목재무 배제는 *조립 지점 한 곳* 에서 (사용자 박제 2026-07-23 — 수집 09 이관).
+    #   종전엔 경제 파이프라인(02)만 fact 유래 dataset 을 걸러서, 같은 조립 함수를 쓰는
+    #   다른 경로는 정책이 새어나갔다. 판정 근거는 models.dataset_is_stock_financial 단일 소스.
+    if not policy_for(category).get("allow_stock_financial", True):
+        _before = len(datasets)
+        datasets = [d for d in datasets if not dataset_is_stock_financial(d)]
+        if _before != len(datasets):
+            log.info(f"[compose] '{category}' 종목재무 dataset {_before - len(datasets)}개 배제")
     facts = list(pack.get("facts") or [])
     meta = {
         "keyword": keyword, "profile": profile or {}, "sector": sector,
@@ -578,27 +586,205 @@ def compose_collected(keyword: str, stocks_data: dict | None = None,
                          facts=facts, entities=entities)
 
 
-def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
-                category: str = "theme", angle: str = "") -> "CollectedData":
-    """★ 통합 수집 — J09-측 컴포저 (수집 + compose_collected).
-
-    theme 카테고리는 종목(entities)+research(docs+facts)+datasets 를,
-    그 외 카테고리는 research 만 수집(종목 없으면 entities 빈 리스트).
-    """
+def _collect_stocks_leg(keyword: str, profile: dict | None) -> dict:
+    """종목 시세·재무 수집 (실패해도 빈 dict — 리서치만으로 글은 성립)."""
     from .collect_theme import collect_stocks_data
-    stocks_data: dict = {}
-    if (category or "").strip().lower() == "theme":
+    try:
+        return collect_stocks_data(
+            keyword, related_terms=(profile or {}).get("related_terms"),
+            profile=profile) or {}
+    except Exception as e:
+        log.warning(f"[collect_all] 종목 수집 실패: {e}")
+        return {}
+
+
+def _collect_charts_leg(keyword: str, sector: str, angle: str,
+                        profile: dict | None, synonyms: list | None,
+                        plan_cache: dict | None, category: str) -> list:
+    """주제 연관 차트 실데이터 수집 (ADR 010/011). 실패해도 빈 리스트."""
+    try:
+        from .chart_data import collect_chart_data
+        chart = collect_chart_data(
+            keyword, sector=sector, description=angle,
+            synonyms=synonyms, related_terms=(profile or {}).get("related_terms"),
+            profile=profile, plan_cache=plan_cache, category=category) or {}
+        return list(chart.get("datasets") or [])
+    except Exception as e:
+        log.warning(f"[collect_all] 차트 실데이터 수집 실패: {e}")
+        return []
+
+
+def _collect_research_leg(keyword: str, sector: str, angle: str) -> dict:
+    """설계-우선 리서치 (ADR 012) + fact 추출 + digest. 킬스위치 RESEARCH_FIRST=0 → 종전 스윕."""
+    import os as _os
+    if _os.getenv("RESEARCH_FIRST", "1") != "0":
         try:
-            stocks_data = collect_stocks_data(keyword, related_terms=(profile or {}).get('related_terms'), profile=profile) or {}
+            res = collect_research(keyword, sector=sector, angle=angle,
+                                   with_facts=True, with_digest=True) or {}
+            return {"docs": list(res.get("docs") or []),
+                    "pack": res.get("pack") or None,
+                    "corpus_digest": res.get("corpus_digest") or ""}
         except Exception as e:
-            log.warning(f"[collect_all] 종목 수집 실패: {e}")
-    # ★ collect_all 은 원시 컴포저 — facts 미포함(evidence_pack=None, docs+entities 만).
-    #   fact 가 필요한 호출자는 collect_research(with_facts=True) 로 pack 을 받는다(추출 09 통일 2026-07-18).
-    rs = collect_research(keyword, sector=sector, angle=angle) or {}
-    return compose_collected(
-        keyword, stocks_data=stocks_data, docs=rs.get("docs"),
-        evidence_pack=None, sector=sector,
-        category=category, profile=profile)
+            log.warning(f"[collect_all] 리서치 실패 — 종전 스윕 폴백: {e}")
+    try:
+        return {"docs": collect_for_theme(keyword, sector), "pack": None, "corpus_digest": ""}
+    except Exception as e:
+        log.warning(f"[collect_all] 스윕 폴백도 실패: {e}")
+        return {"docs": [], "pack": None, "corpus_digest": ""}
+
+
+def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
+                category: str = "theme", angle: str = "",
+                synonyms: list | None = None, plan_cache: dict | None = None,
+                market_data: dict | None = None,
+                extra_meta: dict | None = None,
+                parallel: bool = True) -> dict:
+    """★★ 수집 단일 진입점 — 주제 하나 → 완성된 CollectedData 상자 (사용자 박제 2026-07-23).
+
+    종전에는 이 함수가 죽은 코드였고, 실제 수집 오케스트레이션이 JARVIS02 안에 *5벌*
+    흩어져 있었다 (테마 선계산·테마 발행·경제 네이버·경제 티스토리·시장지표 변환).
+    "수집은 09, 02는 대본" 이라는 도메인 경계가 호출 한 줄 단위로만 지켜지고 *순서·조합·
+    폴백 판단* 은 02 가 하고 있었던 것 — 그래서 테마만 고치면 경제에서 재발했다.
+    이제 4조합(경제·테마 × 네이버·티스토리)이 전부 이 함수 하나를 부른다.
+
+    카테고리별 차이(종목·차트·시장지표 폴백·종목재무 배제)는 `if category ==` 로 박지
+    않고 `CATEGORY_POLICY` 에서 파생한다 — 새 카테고리는 레지스트리 한 줄.
+
+    Args:
+        keyword:    주제 (자비스03 이 프로필과 함께 준 것 — 키워드 단독 전송 금지)
+        profile:    자비스03 keyword_profile (summary·related_terms·entity_type)
+        angle:      리서치 조준 각도. 미지정 시 profile.summary 에서 파생
+        synonyms/plan_cache: 자비스03 저부하창 선계산 산출물 (있으면 발행창 LLM 0회)
+        market_data: 시장지표 (경제 브리핑에서 차트 0개일 때 폴백 소스)
+        parallel:   리서치를 별도 스레드로 (종목·차트와 동시). 인터프리터 종료 중이면 자동 동기.
+
+    Returns:
+        {"collected": CollectedData, "stocks_data": dict, "docs": list,
+         "evidence_pack": dict|None, "datasets": list, "corpus_digest": str,
+         "data_empty": bool}
+        data_empty = 종목·문서·근거가 *전부* 0 (테마 교체 판단용 — 부분 결손은 진행).
+    """
+    from .models import policy_for
+    pol = policy_for(category)
+    angle = (angle or (profile or {}).get("summary") or "").strip()
+
+    # ── 리서치 레그 (느림) — 가능하면 병렬 ────────────────────────────
+    _fut = None
+    if parallel:
+        try:
+            from concurrent.futures import ThreadPoolExecutor as _TExec
+            _exec = _TExec(max_workers=1)
+            _fut = _exec.submit(_collect_research_leg, keyword, sector, angle)
+        except RuntimeError as e:
+            # 인터프리터 종료 레이스 (ERRORS [361]) — 병렬 이득만 포기, 수집은 계속
+            log.warning(f"[collect_all] 스레드 스케줄 불가 — 동기 폴백: {e}")
+            _fut = None
+
+    # ── 구조데이터 레그 (정책 파생) ───────────────────────────────────
+    stocks_data = _collect_stocks_leg(keyword, profile) if pol.get("collect_stocks") else {}
+    chart_ds = (_collect_charts_leg(keyword, sector, angle, profile, synonyms,
+                                    plan_cache, category)
+                if pol.get("collect_charts") else [])
+
+    if _fut is not None:
+        try:
+            rs = _fut.result(timeout=600) or {}
+        except Exception as e:
+            log.warning(f"[collect_all] 리서치 수령 실패: {e}")
+            rs = {"docs": [], "pack": None, "corpus_digest": ""}
+        finally:
+            try:
+                _exec.shutdown(wait=False)
+            except Exception:
+                pass
+    else:
+        rs = _collect_research_leg(keyword, sector, angle)
+
+    docs = rs.get("docs") or []
+    pack = rs.get("pack") or None
+    digest = rs.get("corpus_digest") or ""
+
+    # ── 시장지표 폴백 (차트 0개일 때만 — 경제 브리핑) ──────────────────
+    if not chart_ds and market_data and pol.get("market_fallback"):
+        chart_ds = market_data_to_datasets(market_data)
+        if chart_ds:
+            log.info(f"[collect_all] 차트 0 → 시장지표 {len(chart_ds)}개로 폴백")
+
+    meta_extra = dict(extra_meta or {})
+    if digest:
+        meta_extra["corpus_digest"] = digest
+    collected = compose_collected(
+        keyword, stocks_data=stocks_data, docs=docs, evidence_pack=pack,
+        sector=sector, category=category, profile=profile,
+        extra_datasets=chart_ds, extra_meta=meta_extra or None)
+
+    n_stocks = len((stocks_data or {}).get("stocks") or [])
+    n_facts = len((pack or {}).get("facts") or [])
+    log.info(f"[collect_all] '{keyword}'({category}) 종목 {n_stocks} · 문서 {len(docs)} · "
+             f"근거 {n_facts} · 데이터셋 {len(collected.datasets)}")
+    return {"collected": collected, "stocks_data": stocks_data, "docs": docs,
+            "evidence_pack": pack, "datasets": list(collected.datasets),
+            "corpus_digest": digest,
+            "data_empty": (n_stocks == 0 and not docs and n_facts == 0)}
+
+
+def market_snapshot() -> dict:
+    """★ 시장 스냅샷 수집 — 지표 + 일정 (사용자 박제 2026-07-23).
+
+    종전엔 02 의 두 곳(economic_poster·precollect_economic)이 각자
+    get_market_data()+get_economic_calendar() 를 불러 dict 를 조립했다. 두 번 조립하는
+    순간 키 이름이 어긋날 수 있고, 그 조립 규칙이 02 에 있으면 수집 산출물의 *형태* 를
+    02 가 정하는 셈이다. 형태도 09 가 정한다.
+    """
+    from .providers.economic_data_provider import get_market_data, get_economic_calendar
+    out = {"market": {}, "calendar": {}}
+    try:
+        out["market"] = get_market_data() or {}
+    except Exception as e:
+        log.warning(f"[market_snapshot] 지표 수집 실패: {e}")
+    try:
+        out["calendar"] = get_economic_calendar() or {}
+    except Exception as e:
+        log.warning(f"[market_snapshot] 일정 수집 실패: {e}")
+    return out
+
+
+# ── 시장지표 → datasets (JARVIS02 에서 이관 2026-07-23) ──────────────────
+_MD_INDICES  = ["코스피", "코스닥", "S&P500", "NASDAQ", "DOW"]
+_MD_FX_COMMO = ["달러/원", "금", "유가(WTI)"]
+_MD_RATES    = ["미국채10년"]
+_MD_GROUPS = [
+    ("주요 증시 지표", _MD_INDICES,  "pt"),
+    ("환율·원자재",    _MD_FX_COMMO, ""),
+    ("금리 지표",      _MD_RATES,    "%"),
+]
+
+
+def market_data_to_datasets(market_data: dict) -> list:
+    """시장지표(get_market_data) → CollectedData datasets.
+
+    수집 산출물의 형태 변환은 수집 도메인의 일 — 종전 JARVIS02 `_market_data_to_datasets`
+    에 있던 것을 09 로 이관 (사용자 박제 2026-07-23). collect_all 이 차트 0개일 때 호출.
+    """
+    import hashlib as _hl
+    market = (market_data or {}).get("market") or {}
+    if not market:
+        return []
+    out: list[dict] = []
+    for title, keys, unit in _MD_GROUPS:
+        rows = [(k, market[k]) for k in keys if k in market]
+        if not rows:
+            continue
+        as_of = max((v.get("as_of") or "") for _, v in rows)
+        out.append({
+            "title": title, "viz_hint": "kpi_cards", "unit": unit,
+            "data": [{"label": k, "value": v.get("value", 0),
+                      "change_pct": v.get("change", 0)} for k, v in rows],
+            "source": {"provider": "yfinance", "name": "Yahoo Finance",
+                       "url": "https://finance.yahoo.com", "as_of": as_of},
+            "fingerprint": _hl.md5(f"{title}{as_of}".encode()).hexdigest()[:12],
+        })
+    return out
 
 
 # ── delta-aware 교류 프로토콜 (★ 사용자 박제 2026-06-07) ────────────────

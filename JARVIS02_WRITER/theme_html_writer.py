@@ -109,7 +109,9 @@ def generate_theme_html(
                                      collection_docs=collection_docs or [],
                                      evidence_pack=evidence_pack,
                                      gate_feedback=gate_feedback,
-                                     corpus_digest=_corpus_digest)
+                                     corpus_digest=_corpus_digest,
+                                     # ★ 09 가 조립한 datasets 를 그대로 — 02 재조립 금지 (2026-07-23)
+                                     datasets=list(getattr(collected, "datasets", None) or []))
     if not raw:
         print(f"  ❌ [Theme/{platform}] Pass-1 텍스트 생성 실패")
         return ""
@@ -142,7 +144,8 @@ def generate_theme_html(
                                               collection_docs=collection_docs or [],
                                               evidence_pack=evidence_pack,
                                               gate_feedback=gate_feedback,
-                                              corpus_digest=_corpus_digest)
+                                              corpus_digest=_corpus_digest,
+                                              datasets=list(getattr(collected, "datasets", None) or []))
             if raw2:
                 parts2 = raw2.split("CONTENT:", 1)
                 content2 = parts2[1].strip() if len(parts2) > 1 else raw2

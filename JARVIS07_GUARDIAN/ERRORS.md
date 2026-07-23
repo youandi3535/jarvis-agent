@@ -2,6 +2,62 @@
 
 ---
 
+## [488] ★ 수집을 자비스02가 하고 있었다 — 도메인 경계가 *호출* 단위로만 지켜지고 *조합* 이 새어나감 (2026-07-23)
+
+- **증상**: 사용자 지적 — *"수집을 왜 자비스02가 하는데? 수집은 자비스09만 할 수 있는 역할인데
+  왜 대본 쓰는 자비스02가 수집을 하냐고? 당장 고쳐!"* 이어서 *"이런 막되먹은 수정이 절대
+  안 되도록 강제해!"*
+- **환경**: `JARVIS02_WRITER/{trend_theme_writer,trend_economic_writer,economic_poster,
+  draft_writer,theme_html_writer}.py` · `JARVIS09_COLLECTOR/{collector_engine,__init__,models}.py`
+- **원인 (★ 핵심 — 겉으로는 규정을 지키고 있었다)**: 02 는 09 의 *API 를 호출* 하고 있었다.
+  CLAUDE.md 의 기존 검증 grep 3종(`import yfinance` / `import pykrx` / `requests.get`)은
+  **전부 0행 통과**였다. 어긴 것은 *호출* 이 아니라 **조합** 이다 —
+  ① 무엇을 먼저 부를지(순서) ② 실패하면 무엇으로 대체할지(폴백)
+  ③ 결과를 어떤 상자로 조립할지(`CollectedData` 조립) ④ 데이터 없음 판정(`data_empty`)
+  이 넷이 전부 02 안에 있었다. 그 결과 수집 오케스트레이션이 02 에 **5벌** 흩어졌고
+  (테마 선수집 · 테마 발행 `_step_collect` · 경제 네이버 · 경제 티스토리 · 시장데이터 조립),
+  정작 그 목적으로 만든 `JARVIS09.collect_all()` 은 **호출자 0 = 죽은 코드** 였다.
+  경제 네이버·티스토리 두 블록은 **바이트 단위로 동일** 했다(Edit 이 "2 matches" 로 검출) —
+  원칙 ③ 위반의 물증.
+- **헛다리**: "경제 브리핑처럼 고치면 된다" 는 최초 판단이 틀렸다. 경제도 02 안에서
+  조합하고 있었다. 테마만 고쳤으면 경제에서 그대로 재발했다.
+- **해결**:
+  · **09**: `collect_all()` 을 실사용 진입점으로 승격 (주제 하나 → 완성된 `CollectedData` 상자
+    반환: `collected/stocks_data/docs/evidence_pack/datasets/corpus_digest/data_empty`).
+    카테고리 차이는 `CATEGORY_POLICY`(`models.py`) 노브로 파생 — `if category ==` 분기 0.
+    시장 스냅샷 조립도 09 로 이관 (`market_snapshot()`).
+  · **02**: 5곳 전부 *호출 한 줄* 로 축소. `_collect()`·`_theme_collect_bundle()`·
+    `_market_data_to_datasets()`·`CollectedData.from_dict` 조립 블록 **삭제**.
+  · **중복 조립 3곳 제거** — 09 가 이미 조립·중복제거·출처박제한 결과를 02 가 *다시* 파생하던
+    구멍 (draft_writer 데이터 카탈로그 / 테마 grounding 코퍼스 / 경제 CollectedData).
+    09 가 걸러낸 항목(예: 테마=종목재무 배제)이 02 에서 되살아나던 경로였다.
+  · **강제**: `shared/precommit_check.py --category collect` 신설 — 3레그
+    `orchestration-outside`(09 밖에서 09 수집 API 2종 이상 = 조합) /
+    `assembler-outside`(`compose_collected`·`*_to_datasets` 등 조립 함수 09 밖 호출) /
+    `raw-lib`(원시 수집 라이브러리로 데이터 취득).
+    금지 API 목록은 `JARVIS09_COLLECTOR/__init__.py` 의 `__all__` 을 매 실행 파싱해 파생
+    (② 동적 설계 — 09 에 새 API 가 생기면 자동 편입).
+- **★ 검사 자체가 조용히 무력화됐던 사고 (같은 턴에 발생·수정)**: 초판은 `importlib` 로
+  09 를 로드해 `__all__` 을 읽었는데, `python3 shared/precommit_check.py` 실행에서는
+  `sys.path[0]=shared/` 라 import 가 실패 → API 집합이 **빈 채로** 통과했다. 즉
+  *검사가 있는데 아무것도 안 잡는 상태* 로 ✅ 를 출력했다. 소스 파싱으로 교체 +
+  집합이 비면 `collect/self-check` 위반을 내는 **fail-closed** 로 전환.
+  회귀 프로브(옛 형태 코드 주입)와 `git show HEAD:` 로 되살린 수정 전 파일로
+  **실제로 잡히는지 동작 확인** — HEAD 판에서 7건 검출(02 테마 6 · 02 경제 1).
+- **파일**: `shared/precommit_check.py`(+`check_collect`) · `CLAUDE.md`(수집 섹션 —
+  grep 3종 → `--category collect` 로 교체, 파사드 단일 호출 패턴 명문화) ·
+  `JARVIS09_COLLECTOR/{collector_engine,__init__,models}.py` ·
+  `JARVIS02_WRITER/{trend_theme_writer,trend_economic_writer,economic_poster,draft_writer,theme_html_writer}.py` ·
+  `JARVIS03_RADAR/theme_picker.py`(`theme_topic()` — 키워드+프로필 동봉 공급)
+- **교훈**: **도메인 경계는 "누가 API 를 부르느냐" 가 아니라 "누가 판단을 하느냐" 로 그어진다.**
+  순서·폴백·조립·판정이 남의 폴더에 있으면, API 를 아무리 owner 것으로 불러도 그 도메인은
+  이미 분산된 것이다. 그리고 이런 위반은 *호출 grep* 으로 절대 안 잡힌다 — 실제로 규정이
+  박제된 뒤에도 5벌이 조용히 자라 있었다. 검사는 *조합* 을 잡아야 한다.
+  덧붙여 — **검사를 새로 만들면 반드시 옛 코드로 한 번 걸어 봐야 한다.** 이번에도
+  "검사 통과 ✅" 가 사실은 "검사 불능" 이었다 (CLAUDE.md 복사본-진실 원칙의 재확인).
+
+---
+
 ## [487] ★ 선행 없이 발행이 돌았다 — 잠들었다 깨자 "선행만 골라 버려진" 유예 비대칭 (2026-07-23)
 
 - **증상**: 21시가 지나 컴퓨터를 켰는데 21시 테마주 발행이 시작됐다. 그런데 그 발행의
@@ -43,7 +99,21 @@
 - **검증**: 데몬 재시작(21:32:17 > 전 파일 mtime) 후 `/api/jobs` 가 네 잡 모두 3600s +
   `requires` 응답. 게이트는 `requires` 선언 잡 2개에만 부착, 잡 등록 실패 0건.
   게이트 5분기(선행없음/충족/누락/갭미경과/상한) 스텁 테스트 전수 통과. precommit 50종 0건.
+- **보강 (같은 날, 게이트 도입이 *만들어낸* 2차 결함 2건)**:
+  · **선행의 시간 예산이 회복 실행에서 눈이 멀었다.** 선계산 쪽이 `20:58`·`06:58` 을 각자
+    박아두고 "발행 2분 전까지" 를 계산했는데, 회복 실행(21:30 선행 → 22:30 발행)에서는
+    목표가 이미 지나 있어 눈먼 기본값(25분)으로 떨어진다. **58분 쓸 수 있는데 25분 만에
+    잘려 실패** → 상한 도달로 발행 취소까지 갈 수 있었다. → `job_prereq.deadline_sec()`
+    신설, 후행의 *실제 다음 실행*(연기분 우선) 에서 파생. 정규·회복 어느 쪽이든 저절로 맞음.
+    부수 효과로 `20:58`/`06:58` 하드코딩 2곳 제거 (②동적 설계).
+  · **순서 함정** — `_defer` 를 선행 실행보다 *먼저* 해야 한다. 선행이 `deadline_sec()` 로
+    읽는 "발행 시각" 이 바로 그 연기분이기 때문. 선행을 먼저 띄우면 아직 없는 연기분을
+    읽는다. 겸사겸사 `_defer` 가 bool 을 반환 — 연기 불가면 선행도 헛돌리지 않는다.
+  · **정책을 바꾸고 주석을 안 고쳤다.** 선계산 4곳이 여전히 "순수 최적화 — 실패해도
+    random 선정 폴백" 이라고 *정반대* 를 말하고 있었다. 정책이 바뀐 순간 그 문장은
+    거짓이 된다 → 4곳 전부 "필수 선행" 으로 정정.
 - **파일**: `JARVIS04_SCHEDULER/job_prereq.py`(신설) / `job_registry.py` / `api_server.py`
+  / `JARVIS02_WRITER/scheduler.py` / `JARVIS02_WRITER/trend_theme_writer.py`
 - **교훈**: **의존관계는 주석이나 시각 배치로 존재하지 않는다 — 코드가 묻지 않으면 없는 것이다.**
   그리고 *선행의 안전 여유는 후행보다 넓어야 한다*. 반대면, 시스템이 흔들릴 때 정확히
   가장 필요한 것부터 버린다.

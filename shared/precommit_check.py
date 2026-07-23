@@ -1196,6 +1196,145 @@ def check_visual_dup(report: Report) -> None:
 CATEGORIES["visualdup"] = check_visual_dup
 
 
+# ── 수집 단일 진입점 강제 (★ 사용자 박제 2026-07-23) ────────────────────────────
+#   "자비스09가 데이터 수집 에이전트다. 모든 수집은 09 단일 진입점이다.
+#    수집을 엉뚱한 놈이 하는 막되먹은 수정이 절대 안 되도록 강제하라."
+#
+#   왜 grep 하나로 안 되나: 지금까지도 02 는 09 의 *API 를 호출* 했다. 규정을 어긴 건
+#   호출이 아니라 **조합** 이었다 — 무엇을 먼저 부르고, 실패하면 무엇으로 대체하고,
+#   결과를 어떤 상자로 조립할지를 02 가 정했다. 그래서 "requests.get 금지" 류 검사는
+#   전부 통과하는데도 수집 오케스트레이션이 5벌 흩어져 있었다.
+#   → 이 검사는 *조합* 을 잡는다: 09 의 수집 API 를 2종 이상 쓰거나, 수집 산출물 조립
+#     함수를 09 밖에서 부르면 위반.
+#
+#   ② 동적 설계: 금지 대상 API 목록을 여기에 박지 않는다. `JARVIS09_COLLECTOR.__all__`
+#     을 런타임에 읽어 파생 — 09 에 새 수집 API 가 생기면 자동으로 이 검사에 편입된다.
+
+# 조합을 대신해 주는 *정문* — 이것만은 몇 개를 쓰든 정상 (09 가 조합한 결과를 받는 것)
+_COLLECT_FACADES = {"collect_all", "market_snapshot", "CollectedData", "CATEGORY_POLICY",
+                    "policy_for", "grounds", "ATTR_UNITS", "evidence_brief", "as_source_docs",
+                    "check_source_onboarding", "register_source_key", "onboarding_status"}
+# 수집 산출물 *조립* 함수 — 09 밖 호출 자체가 위반 (조립 규칙은 09 소유)
+_COLLECT_ASSEMBLERS = {"compose_collected", "market_data_to_datasets",
+                       "facts_to_datasets", "stocks_to_datasets", "select_by_trust_quota"}
+# 수집 도메인 owner + 정당한 예외
+_COLLECT_OWNER = "JARVIS09_COLLECTOR/"
+_COLLECT_EXEMPT_DIRS = (
+    "JARVIS03_RADAR/",   # 주제·트렌드 owner — 선수집 요청은 ADR 013 정본 경로
+    "tools/",            # 계측 스크립트 (발행 경로 아님)
+)
+# 원시 수집 라이브러리 — 09 밖에서 *데이터를 받아오면* 위반 (pytrends 는 03 트렌드 예외)
+_COLLECT_RAW_LIB_NAMES = ("yfinance", "pykrx", "FinanceDataReader", "pytrends", "feedparser")
+_COLLECT_RAW_FROM = re.compile(
+    rf"^\s*from\s+({'|'.join(_COLLECT_RAW_LIB_NAMES)})\b.*\bimport\b")
+_COLLECT_RAW_IMPORT = re.compile(
+    rf"^\s*import\s+({'|'.join(_COLLECT_RAW_LIB_NAMES)})\b(?:\s+as\s+(\w+))?")
+# 패키지 *메타* 만 쓰는 건 수집이 아니다 (예: 번들 폰트 경로 탐색 `pykrx.__file__`)
+_COLLECT_LIB_META_ATTRS = {"__file__", "__path__", "__version__", "__name__", "__doc__"}
+
+
+def _collect_api_names() -> set[str]:
+    """09 가 공개한 수집 API 이름 — 런타임 파생 (하드코딩 금지, ② 동적 설계).
+
+    ★ 무거운 import 없이 `__init__.py` 의 `__all__` 을 *소스에서* 읽는다.
+      importlib 로 실제 로드하면 `python3 shared/precommit_check.py` 처럼
+      sys.path[0]=shared/ 인 실행에서 조용히 실패해 **검사가 통째로 무력화**된다
+      (실제로 그렇게 통과했다 — '검사 존재'는 '적용'의 증거가 아니다).
+    빈 집합이면 호출자가 검사 무력화로 간주하고 위반을 낸다 (fail-closed).
+    """
+    src = ROOT / "JARVIS09_COLLECTOR" / "__init__.py"
+    try:
+        text = src.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return set()
+    m = re.search(r"__all__\s*=\s*\[(.*?)\]", text, re.S)
+    if not m:
+        return set()
+    names = set(re.findall(r"[\"'](\w+)[\"']", m.group(1)))
+    return {n for n in names if n not in _COLLECT_FACADES}
+
+
+def check_collect(report: Report) -> None:
+    """★ 수집 단일 진입점 = JARVIS09 (사용자 박제 2026-07-23).
+
+    ① 09 밖에서 수집 API 2종 이상 사용 → *조합* = 수집 오케스트레이션 (위반)
+    ② 09 밖에서 수집 산출물 조립 함수 호출 → 조립 규칙 유출 (위반)
+    ③ 09 밖에서 원시 수집 라이브러리 import → 수집 신설 (위반)
+    """
+    cat = "collect"
+    api = _collect_api_names()
+    assemblers = _COLLECT_ASSEMBLERS & (api | _COLLECT_ASSEMBLERS)
+    if not api:
+        # fail-closed — 목록을 못 읽으면 검사가 *조용히 무력화*된다. 통과시키지 않는다.
+        report.add(Violation(
+            cat, "collect/self-check", "JARVIS09_COLLECTOR/__init__.py", 0,
+            "09 의 __all__ 을 읽지 못해 수집 검사가 무력화됨 — 검사 자체를 고칠 것"))
+        report.checks_run += 1
+        return
+
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        if rel_s == "shared/precommit_check.py" or rel_s.startswith(_COLLECT_OWNER):
+            continue
+        text = _read_py(p)
+        if text is None:
+            continue
+        lines = text.splitlines()
+        code = [(i, l) for i, l in enumerate(lines, 1) if not l.lstrip().startswith("#")]
+
+        # ③ 원시 수집 라이브러리 — *데이터 API 를 실제로 쓰는지* 로 판정
+        if not rel_s.startswith("JARVIS03_RADAR/"):     # 03 트렌드 수집만 예외 (CLAUDE.md)
+            for i, l in code:
+                m = _COLLECT_RAW_FROM.match(l)
+                if m:
+                    report.add(Violation(
+                        cat, "collect/raw-lib", rel_s, i,
+                        f"`{m.group(1)}` API 직접 import — 수집은 JARVIS09 단독"))
+                    continue
+                m = _COLLECT_RAW_IMPORT.match(l)
+                if not m:
+                    continue
+                alias = m.group(2) or m.group(1)
+                # 모듈 메타(`__file__` 등) 외의 속성을 쓰면 = 데이터 API 사용 = 위반
+                hits = re.findall(rf"\b{re.escape(alias)}\.(\w+)", text)
+                if any(h not in _COLLECT_LIB_META_ATTRS for h in hits):
+                    report.add(Violation(
+                        cat, "collect/raw-lib", rel_s, i,
+                        f"`{m.group(1)}` 로 직접 데이터 취득 — 수집은 JARVIS09 단독"))
+
+        if any(rel_s.startswith(d) for d in _COLLECT_EXEMPT_DIRS):
+            continue
+
+        # ② 조립 함수 유출
+        for i, l in code:
+            for name in assemblers:
+                if re.search(rf"\b{name}\s*\(", l):
+                    report.add(Violation(
+                        cat, "collect/assembler-outside", rel_s, i,
+                        f"수집 산출물 조립 `{name}()` 을 09 밖에서 호출 — "
+                        f"조립은 compose_collected(09) 안에서만"))
+
+        # ① 수집 API 조합
+        used: dict[str, int] = {}
+        for i, l in code:
+            for name in api:
+                if name in used:
+                    continue
+                if re.search(rf"\b{name}\s*\(", l):
+                    used[name] = i
+        if len(used) >= 2:
+            first_line = min(used.values())
+            report.add(Violation(
+                cat, "collect/orchestration-outside", rel_s, first_line,
+                f"09 수집 API {len(used)}종({', '.join(sorted(used))})을 한 파일에서 조합 "
+                f"— 순서·폴백·조립 판단이 09 밖에 생김. `collect_all()` 한 번으로 받을 것"))
+
+    report.checks_run += 3
+
+
+CATEGORIES["collect"] = check_collect
+
+
 
 def run(categories: list[str] | None = None) -> Report:
     """검증 실행. categories=None 이면 전체."""

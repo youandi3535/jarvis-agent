@@ -98,8 +98,9 @@ DEFAULT_JOBS: list[dict] = [
      "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e13"]},
     # ★ 테마 선계산 (20:00 = 21:00 발행 1시간 전 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18):
     # 테마를 고정(pin)하고 무거운 fact·chart 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 가
-    # 회복된 Max 풀에서 실행(300s 스톨 조건 제거). 선계산(~20:20 완료)과 발행(21:00) 사이 ~40분 회복
-    # 갭(경제와 대칭). 순수 최적화 — 실패해도 21:00 발행이 기존 random 선정 + 기존 수집으로 폴백.
+    # 회복된 Max 풀에서 실행(300s 스톨 조건 제거). 회복 갭 = 21:00-20:00 = 1시간(cron 차이에서 파생).
+    # ★ 2026-07-23 부터 *필수 선행* — 종전 "순수 최적화·실패해도 random 폴백" 은 폐지됐다.
+    #   이게 안 돌면 21:00 발행은 시작되지 않는다 (job_prereq.gate 가 requires 로 강제).
     {"id":"j02_theme_precollect",   "name":"테마 선계산 20:00", "trigger":"cron",
      "kwargs":{"hour":20, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_precollect_theme",

@@ -530,19 +530,28 @@ pkill -f jarvis_daemon.py        # 전체 종료
 
 예외: JARVIS03 RADAR 자체 트렌드 수집 (pytrends·네이버 DataLab — RADAR 고유 영역).
 
-**허용 호출 패턴 (다른 에이전트에서 수집이 필요한 경우):**
+**★ 허용 호출 패턴 — 파사드 단 하나 (사용자 박제 2026-07-23)**
+
+다른 에이전트는 **"이 주제로 수집해줘" 한 줄** 만 부른다. *무엇을 먼저 부를지 · 실패하면
+무엇으로 대체할지 · 결과를 어떻게 조립할지* 는 전부 09 안에서 끝난다.
+
 ```python
-from JARVIS09_COLLECTOR import (
-    collect_research,       # ★ 설계-우선 리서치 수집 (ADR 012) — 근거팩+문서 반환. 발행 파이프라인 기본
-    collect_for_theme,      # 주제 관련 텍스트 자료 (뉴스·블로그·학술·금융기사) — 광역 스윕
-    collect_stocks_data,    # 테마 종목 데이터 (시세·재무)
-    collect_chart_data,     # 차트용 실데이터 (ADR 010/011)
-    evidence_brief,         # 근거팩 → 대본 프롬프트 브리프 (ADR 012)
-    as_source_docs,         # 근거팩 → 사실성 게이트 대조군 어댑터 (ADR 012)
-    get_market_data,        # 글로벌 시장 지표 (yfinance)
-    get_economic_calendar,  # 경제 일정 (investing.com)
-)
+from JARVIS09_COLLECTOR import collect_all, market_snapshot
+
+# 주제 하나 → 완성된 CollectedData 상자 (4조합 공통 — 경제·테마 × 네이버·티스토리)
+bundle = collect_all(keyword, profile=profile, sector=sector, category="theme")
+#   → {"collected", "stocks_data", "docs", "evidence_pack", "datasets",
+#      "corpus_digest", "data_empty"}
+snap = market_snapshot()          # 시장 지표 + 경제 일정 (조립까지 09)
 ```
+
+- **카테고리 차이는 노브로** — `CATEGORY_POLICY[category]`(`models.py`) 가 종목/차트/폴백
+  수집 여부를 결정. 호출자에 `if category == "economic"` 분기 박지 말 것 (② 동적 설계).
+- **저수준 API**(`collect_research`·`collect_for_theme`·`collect_stocks_data`·
+  `collect_chart_data`·`get_market_data`·`get_economic_calendar`·`stocks_to_datasets` 등)
+  **를 09 밖에서 조합하는 것이 곧 위반** — 2종 이상 쓰면 precommit 이 차단한다.
+  09 내부(`collector_engine.collect_all`)에서만 조합한다.
+- `evidence_brief` / `as_source_docs` 는 *수집이 아니라 프롬프트 변환* 어댑터 — 02 사용 정상.
 **★ 리서치 설계-우선 (ADR 012 — 사용자 박제 2026-07-02)**: 발행용 텍스트 수집은
 `collect_research` 가 기본 — 설계(research_planner)→조준 수집→근거팩(evidence_pack)→
 커버리지 갭 재수집 순환. 키 필요 소스 누락은 `source_onboarding` 이 감지·텔레그램 안내.
@@ -559,20 +568,35 @@ from JARVIS09_COLLECTOR import (
 ② `JARVIS09_COLLECTOR/__init__.py` `__all__` 갱신
 ③ 호출자는 위 허용 패턴으로 import
 
-**검증 명령** (모두 0행이어야 함):
+### ★ 자동 강제 — `--category collect` (사용자 박제 2026-07-23)
+
+**"수집을 엉뚱한 놈이 하는 막되먹은 수정이 절대 안 되도록 강제하라."**
+
 ```bash
-# ① yfinance 직접 import (JARVIS09 외)
-grep -rnE '^import yfinance|^from yfinance' --include='*.py' . \
-  | grep -v 'JARVIS09_COLLECTOR/' | grep -v __pycache__ | grep -v .venv
-# ② pykrx / FinanceDataReader 직접 import (JARVIS09 외)
-grep -rnE 'import pykrx|import FinanceDataReader' --include='*.py' . \
-  | grep -v 'JARVIS09_COLLECTOR/' | grep -v __pycache__ | grep -v .venv
-# ③ requests.get 수집 목적 직접 호출 (이미지 다운로드·발행·쿠키 제외)
-grep -rnE 'requests\.get\(' --include='*.py' . \
-  | grep -v 'JARVIS09_COLLECTOR/' | grep -v 'JARVIS06_IMAGE/providers/' \
-  | grep -v 'JARVIS08_PUBLISH/' | grep -v 'JARVIS00_INFRA/' \
-  | grep -v 'tools/' | grep -v __pycache__ | grep -v .venv
+python3 shared/precommit_check.py --category collect    # git 훅·데몬 부팅·GUARDIAN 잡 3곳 자동
 ```
+
+**왜 grep 으로는 못 막았나 (★ 비직관 — 이게 핵심)**: 2026-07-23 이전에도 02 는 09 의
+*API 를 호출* 하고 있었다. 위 grep 3종은 **전부 0행 통과**였다. 그런데도 수집 오케스트레이션이
+02 안에 5벌 흩어져 있었다 — 어긴 것은 *호출* 이 아니라 **조합**이었기 때문이다.
+무엇을 먼저 부르고 · 실패하면 무엇으로 대체하고 · 결과를 어떤 상자로 조립할지를 02 가 정했다.
+그래서 검사는 *조합* 을 잡는다. 3레그:
+
+| 레그 | 위반 조건 | 뜻 |
+|------|----------|-----|
+| `collect/orchestration-outside` | 09 밖 한 파일에서 09 수집 API **2종 이상** 호출 | 순서·폴백 판단이 09 밖에 생김 → `collect_all()` 한 번으로 받을 것 |
+| `collect/assembler-outside` | `compose_collected`·`*_to_datasets`·`select_by_trust_quota` 를 09 밖에서 호출 | 조립 규칙 유출 (09 가 걸러낸 항목이 되살아나는 구멍) |
+| `collect/raw-lib` | yfinance·pykrx·FinanceDataReader·pytrends·feedparser 로 09 밖에서 데이터 취득 | 수집 신설 |
+
+- **② 동적 설계**: 금지 API 목록을 검사에 박지 않는다 — `JARVIS09_COLLECTOR/__init__.py` 의
+  `__all__` 을 매 실행 파싱해 파생. **09 에 새 수집 API 를 추가하면 자동으로 검사 대상**이 된다.
+- **fail-closed**: `__all__` 을 못 읽으면 통과가 아니라 `collect/self-check` 위반.
+  (실제로 초판이 `importlib` 로 09 를 로드하다 `python3 shared/precommit_check.py` 실행에서
+  조용히 실패 → **검사가 있는데 무력화된 채 통과**했다. 검사 존재는 적용의 증거가 아니다.)
+- **정당한 예외**: JARVIS03(트렌드 수집 owner) · `tools/`(계측 스크립트) · 패키지 메타만 쓰는
+  import(예: `pykrx.__file__` 로 번들 폰트 경로 탐색 — 데이터 취득 아님).
+- **면제 정문**: `collect_all` · `market_snapshot` · `CollectedData` 등 *09 가 조합해 준 결과를
+  받는* 파사드는 몇 개를 쓰든 정상. 이게 유일한 정상 소비 형태.
 
 ### ★ 차트용 실데이터 + 무료 라이브러리 자동설치 (사용자 박제 2026-06-29 — ADR 010)
 

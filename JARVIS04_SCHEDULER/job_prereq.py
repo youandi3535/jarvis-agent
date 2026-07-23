@@ -34,7 +34,7 @@ from typing import Any, Callable, Optional
 
 __all__ = [
     "requirements", "recovery_gap_sec", "last_success_at", "readiness",
-    "gate", "effective_grace", "DEFERRED_SUFFIX",
+    "gate", "effective_grace", "deadline_sec", "DEFERRED_SUFFIX",
 ]
 
 DEFERRED_SUFFIX = "__deferred"
@@ -175,17 +175,47 @@ def effective_grace(job_id: str) -> int:
     return max([own] + deps)
 
 
-# ── ④ 집행 — 콜백 래퍼 (등록 시 1회 씌운다) ────────────────────────────
-def _next_cron_fire(job_id: str) -> Optional[datetime]:
-    """이 잡의 *다음* 정규 실행 시각 — 연기분이 다음 회차를 침범하는지 판정용."""
+# ── ⑤ 선행이 쓸 수 있는 시간 — 후행 실행 시각에서 파생 ──────────────────
+def _job_next_run(sched_id: str) -> Optional[datetime]:
+    """스케줄러에 등록된 잡의 다음 실행 시각 (tz 제거). 없으면 None."""
     try:
         from JARVIS04_SCHEDULER.job_catalog import get_apscheduler
         sch = get_apscheduler()
-        j = sch.get_job(job_id.split(DEFERRED_SUFFIX)[0]) if sch else None
+        j = sch.get_job(sched_id) if sch else None
         nrt = getattr(j, "next_run_time", None)
         return nrt.replace(tzinfo=None) if nrt else None
     except Exception:
         return None
+
+
+def _next_cron_fire(job_id: str) -> Optional[datetime]:
+    """이 잡의 *다음* 정규 실행 시각 — 연기분이 다음 회차를 침범하는지 판정용."""
+    return _job_next_run(job_id.split(DEFERRED_SUFFIX)[0])
+
+
+def deadline_sec(prereq_id: str, *, margin_sec: int = 120) -> Optional[int]:
+    """이 선행이 *지금부터* 쓸 수 있는 시간(초) — 후행 발행 `margin_sec` 전까지.
+
+    ★ 종전엔 선행 쪽이 "20:58 까지" / "06:58 까지" 를 각자 박아뒀다. 그러면 회복 실행
+      (예: 21:30 에 선행 → 22:30 발행) 때 목표 시각이 이미 지나 있어 눈먼 기본값(25분)
+      으로 떨어진다 — 실제로는 58분을 쓸 수 있는데 25분 만에 잘려 실패할 수 있다.
+      후행의 *실제 다음 실행 시각* 에서 파생하면 정규·회복 어느 쪽이든 저절로 맞는다.
+      연기분(`__deferred`)이 있으면 그것이 이번 회차의 발행 시각이다.
+    None 이면 후행이 없거나 시각을 못 읽은 것 — 호출자가 자기 기본값을 쓴다.
+    """
+    from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+    best: Optional[datetime] = None
+    for d in DEFAULT_JOBS:
+        if prereq_id not in (d.get("requires") or []):
+            continue
+        # 연기분이 있으면 그것이 이번 회차의 발행 시각 — 정규 cron 보다 우선.
+        t = _job_next_run(d["id"] + DEFERRED_SUFFIX) or _job_next_run(d["id"])
+        if t and (best is None or t < best):
+            best = t
+    if best is None:
+        return None
+    left = int((best - datetime.now()).total_seconds()) - margin_sec
+    return left if left > 0 else None
 
 
 def _run_prereq_now(prereq_id: str) -> None:
@@ -217,24 +247,25 @@ def _run_prereq_now(prereq_id: str) -> None:
 
 
 def _defer(job_id: str, fn: Callable, next_attempt: int, when: datetime,
-           missing: list[str]) -> None:
+           missing: list[str]) -> bool:
     """지정 시각으로 1회 재예약. add_job 은 JARVIS04 안에서만 — 여기가 그 안이다.
 
     `next_attempt` 는 *연기분이 달고 갈* 시도 번호. 선행을 새로 돌렸을 때만 올라간다
     (단순 대기는 아무것도 재실행하지 않으므로 시도를 소모시키지 않는다).
+    Returns: 재예약했으면 True. False 면 이번 회차는 건너뛴 것 — 선행을 돌릴 이유도 없다.
     """
     from JARVIS04_SCHEDULER.job_catalog import get_apscheduler
     sch = get_apscheduler()
     if sch is None:
         _log("APScheduler 미초기화 — 연기 불가")
-        return
+        return False
     nxt = _next_cron_fire(job_id)
     if nxt and when >= nxt:
         msg = (f"⛔ *{job_id}* 연기 취소\n선행 {', '.join(missing) or '(회복 갭)'} 때문에 뒤로 미루면 "
                f"다음 정규 실행({nxt:%m-%d %H:%M})을 넘어섭니다. 이번 회차는 건너뜁니다.")
         _log(msg.replace("*", ""))
         _tg(msg)
-        return
+        return False
     base = job_id.split(DEFERRED_SUFFIX)[0]
     sch.add_job(
         gate(base, fn, attempt=next_attempt), "date", run_date=when,
@@ -242,6 +273,7 @@ def _defer(job_id: str, fn: Callable, next_attempt: int, when: datetime,
         misfire_grace_time=600, replace_existing=True,
     )
     _log(f"{base} → {when:%H:%M} 재예약 (시도 {next_attempt}/{_MAX_ATTEMPTS})")
+    return True
 
 
 def gate(job_id: str, fn: Callable, *, attempt: int = 1) -> Callable:
@@ -281,6 +313,14 @@ def gate(job_id: str, fn: Callable, *, attempt: int = 1) -> Callable:
         # 회복 갭은 *선행 시작 시각* 부터 센다 (사용자 지정: 21:30 선행 → 22:30 발행)
         gap = max(recovery_gap_sec(job_id, m) for m in missing)
         when = datetime.now() + timedelta(seconds=gap)
+
+        # ★ 순서 주의 — *재예약을 먼저* 한다. 선행은 `deadline_sec()` 로 "발행 몇 분 전까지"
+        #   를 읽어 자기 예산을 정하는데, 그 발행 시각이 바로 이 연기분이다. 선행을 먼저
+        #   띄우면 아직 없는 연기분을 읽어 눈먼 기본값으로 떨어진다.
+        #   연기 자체가 불가능하면(다음 정규 실행 침범) 선행을 돌릴 이유도 없다.
+        if not _defer(job_id, fn, attempt + 1, when, missing):
+            return None
+
         _tg(f"⏸ *{job_id}* 보류 — 선행 미완료\n"
             f"선행: {names}\n"
             f"지금 선행을 실행하고 *{when:%H:%M}* 에 발행합니다 (회복 갭 {gap // 60}분).")
@@ -296,8 +336,6 @@ def gate(job_id: str, fn: Callable, *, attempt: int = 1) -> Callable:
                     report("scheduler", e, module=__name__, func_name=f"prereq:{m}")
                 except Exception:
                     pass
-
-        _defer(job_id, fn, attempt + 1, when, missing)
         return None
 
     _wrapped.__name__ = getattr(fn, "__name__", job_id)

@@ -29,11 +29,8 @@ if str(_JARVIS_ROOT) not in sys.path:
 #   (데몬 jarvis_daemon.py 의 load_dotenv(JARVIS_ROOT/'.env') 와 동일 패턴.)
 load_dotenv(_JARVIS_ROOT / ".env")
 
-# ★ 수집 단일 진입점 (2026-05-31): get_market_data / get_economic_calendar 본체 → JARVIS09
-from JARVIS09_COLLECTOR.providers.economic_data_provider import (
-    get_market_data as _j09_get_market_data,
-    get_economic_calendar as _j09_get_economic_calendar,
-)
+# ★ 수집 단일 진입점 (2026-07-23): 시장 스냅샷은 09 의 market_snapshot() 한 번으로.
+#   종전 provider 2개 직접 import 는 02 가 스냅샷 *형태* 를 정하는 것이라 폐기.
 
 # JARVIS03 품질 분석 연동
 # ── JARVIS07 오류 보고 API ───────────────────────────
@@ -391,10 +388,9 @@ def run(post_naver=True, post_tistory=True):
     # *신뢰 가능한 구조화 데이터* 와 직접 대조 (웹 재검증 전 1차 근거).
     _j09_market_data: dict = {}
     try:
-        _j09_market_data = {
-            "market": _j09_get_market_data() or {},
-            "calendar": _j09_get_economic_calendar() or {},
-        }
+        # ★ 조립도 09 (사용자 박제 2026-07-23) — 02 는 스냅샷을 *받기만* 한다.
+        from JARVIS09_COLLECTOR import market_snapshot as _j09_market_snapshot
+        _j09_market_data = _j09_market_snapshot()
     except Exception as _md_e:
         print(f"  ⚠️ 시장 수치 수집 스킵(게이트 ground truth): {_md_e}")
 

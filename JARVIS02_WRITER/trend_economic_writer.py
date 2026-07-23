@@ -1217,40 +1217,10 @@ def run_naver(ts_keyword: str = '') -> dict:
 #  분리 함수 — 대본 생성 + 발행 분리 (병렬화용)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _market_data_to_datasets(market_data: dict) -> list:
-    """경제 브리핑 전용: market_data → CollectedData datasets 변환.
-
-    collect_chart_data 가 빈 결과일 때 시장 지표를 이미지 파이프라인에 공급.
-    market_data 구조: {"market": {지표명: {value, change, as_of}}, "calendar": [...]}
-    """
-    import hashlib as _hl
-    market = (market_data or {}).get("market") or {}
-    if not market:
-        return []
-
-    _INDICES = ["코스피", "코스닥", "S&P500", "NASDAQ", "DOW"]
-    _FX_COMMO = ["달러/원", "금", "유가(WTI)"]
-    _RATES = ["미국채10년"]
-
-    def _make_ds(title, keys, unit, src_name, src_url):
-        rows = [(k, market[k]) for k in keys if k in market]
-        if not rows:
-            return None
-        as_of = max((v.get("as_of") or "") for _, v in rows)
-        data = [{"label": k, "value": v.get("value", 0), "change_pct": v.get("change", 0)}
-                for k, v in rows]
-        fp = _hl.md5(f"{title}{as_of}".encode()).hexdigest()[:12]
-        return {"title": title, "viz_hint": "kpi_cards", "unit": unit,
-                "data": data,
-                "source": {"provider": "yfinance", "name": src_name,
-                           "url": src_url, "as_of": as_of},
-                "fingerprint": fp}
-
-    return [ds for ds in [
-        _make_ds("주요 증시 지표", _INDICES, "pt", "Yahoo Finance", "https://finance.yahoo.com"),
-        _make_ds("환율·원자재", _FX_COMMO, "", "Yahoo Finance", "https://finance.yahoo.com"),
-        _make_ds("금리 지표", _RATES, "%", "Yahoo Finance", "https://finance.yahoo.com"),
-    ] if ds]
+# ★ _market_data_to_datasets 는 JARVIS09 로 이관 (사용자 박제 2026-07-23).
+#   시장지표 → datasets 변환도 *수집 산출물의 형태 결정* 이므로 09 소관 —
+#   `JARVIS09_COLLECTOR.market_data_to_datasets`. 02 는 호출조차 하지 않는다
+#   (collect_all 이 차트 0개일 때 정책(market_fallback)에 따라 자동 사용).
 
 
 def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | None = None,
@@ -1334,59 +1304,31 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
                 f"\n\n[주제 프로필 — 자비스03]\n- 주제: {keyword} ({sector})\n- 정의: {reason}"
                 + (f"\n- 관련어: {_rel_terms}" if _rel_terms else ""))
 
-        # ★ JARVIS09 직접 수집 (topic_pack = 키워드+프로필만 — 선수집 없음)
-        _pool: list = []
-        _ev_pack: dict = {}
-        _kw_collection_docs: list = []
+        # ★ 수집은 자비스09 단독 (사용자 박제 2026-07-23) — 02 는 "이 주제로 수집해줘" 한 줄.
+        #   차트·리서치·fact 변환·종목재무 배제·시장지표 폴백은 전부 09 소관(테마와 동일 함수).
         try:
-            from JARVIS09_COLLECTOR import collect_research, collect_chart_data
-            try:
-                from shared.pipeline_activity import mark_active
-                mark_active("e1")  # J03→J09 수집 요청 시작
-            except Exception:
-                pass
-            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
-            _chart = collect_chart_data(keyword, sector=sector, description=reason,
-                                        synonyms=_cand.get("synonyms"),
-                                        related_terms=_profile.get('related_terms'),
-                                        profile=_profile,                    # ★ entity_type 관통 (2026-07-18)
-                                        plan_cache=_cand.get("data_plan"),   # ★ warm plan 캐시 공유(발행창 LLM 0)
-                                        category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
-            _pool = list(_chart.get("datasets") or [])
-            _res = collect_research(keyword, sector=sector, angle=reason, with_facts=True, with_digest=True) or {}
-            _kw_collection_docs = list(_res.get("docs") or [])
-            try:
-                from shared.pipeline_activity import mark_active
-                mark_active("e2")  # J09→J02 데이터 전달 완료
-            except Exception:
-                pass
-            # ★ fact 추출 09 통일 (사용자 박제 2026-07-18) — collect_research(with_facts=True) 가 pack 동봉.
-            #   facts→datasets 변환만 여기서(차트 풀 구성·종목재무 필터는 02 몫).
-            from JARVIS09_COLLECTOR.evidence_pack import facts_to_datasets as _f2d
-            _ev_pack = _res.get("pack") or {}
-            # ★ facts → datasets 변환 후 _pool에 병합 (text 수치도 차트化 — 이미지 개수 확대)
-            try:
-                _fact_ds = _f2d(_ev_pack)
-                if _fact_ds:
-                    from JARVIS09_COLLECTOR.models import dataset_is_stock_financial as _is_sf
-                    _existing_titles = {d.get("title", "") for d in _pool}
-                    # ★ 경제 브리핑: fact 유래 dataset 중 개별 종목 재무(PER/ROE/영업이익 등)는 배제 (2026-07-18)
-                    _new_ds = [d for d in _fact_ds
-                               if d.get("title", "") not in _existing_titles and not _is_sf(d)]
-                    _pool = _pool + _new_ds
-                    print(f"  📊 [facts→datasets] {len(_new_ds)}개 수치 데이터셋 추가 (총 {len(_pool)}개)")
-            except Exception as _f2d_e:
-                print(f"  ⚠️ [facts→datasets] 변환 스킵: {_f2d_e}")
-            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
-                  f"데이터셋 {len(_pool)}개")
-        except Exception as _je:
-            print(f"  ⚠️ [JARVIS09] 수집 실패: {_je}")
-
-        # ★ 경제 브리핑 전용: 차트 데이터 없으면 시장 지표로 폴백
-        if not _pool and market_data:
-            _pool = _market_data_to_datasets(market_data)
-            if _pool:
-                print(f"  🔄 [시장지표 폴백] 차트 데이터 없음 → 시장 지표 {len(_pool)}개 datasets 생성")
+            from shared.pipeline_activity import mark_active
+            mark_active("e1")  # J03→J09 수집 요청 시작
+        except Exception:
+            pass
+        print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
+        from JARVIS09_COLLECTOR import collect_all
+        _bundle = collect_all(keyword, profile=_profile, sector=sector, category="economic",
+                              angle=reason, synonyms=_cand.get("synonyms"),
+                              plan_cache=_cand.get("data_plan"), market_data=market_data,
+                              extra_meta={"section_plan": _cand.get("section_plan")})
+        try:
+            from shared.pipeline_activity import mark_active
+            mark_active("e2")  # J09→J02 데이터 전달 완료
+        except Exception:
+            pass
+        collected           = _bundle["collected"]
+        _pool               = _bundle.get("datasets") or []
+        _kw_collection_docs = _bundle.get("docs") or []
+        _ev_pack            = _bundle.get("evidence_pack") or {}
+        _corpus_digest      = _bundle.get("corpus_digest") or ""
+        print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
+              f"데이터셋 {len(_pool)}개")
 
         # 데이터 카탈로그 주입
         try:
@@ -1412,7 +1354,7 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
 
         # 수집 자료 주입 — 선계산 digest(요약) 우선, 없으면 원문 전문 (distill 압축 2026-07-19)
         try:
-            _corpus = _res.get("corpus_digest") or ""
+            _corpus = _corpus_digest
             if _corpus:
                 supreme_block = (supreme_block or "") + "\n\n" + _corpus
                 print(f"  📖 [수집 요약] digest ~{len(_corpus) // 1000}K자 주입 (원문 대비 압축 — writer 프롬프트 축소)")
@@ -1426,23 +1368,7 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
         except Exception as _cbe:
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
-        # CollectedData 조립
-        from JARVIS09_COLLECTOR.models import CollectedData
-        try:
-            from dataclasses import asdict as _asdict
-            _docs_ser = [_asdict(d) if hasattr(d, '__dataclass_fields__') else d
-                         for d in _kw_collection_docs]
-        except Exception:
-            _docs_ser = []
-        collected = CollectedData.from_dict({
-            "meta": {"keyword": keyword, "sector": sector, "category": "economic",
-                     "profile": _cand.get("profile") or {},
-                     "section_plan": _cand.get("section_plan")},   # ★ 주제별 대본 골격 (2026-07-18)
-            "datasets": _pool,
-            "docs": _docs_ser,
-            "facts": list(_ev_pack.get("facts") or []),
-            "entities": [],
-        })
+        # CollectedData 조립은 09(collect_all→compose_collected)가 이미 완료 — 여기선 조립 0.
 
         print(f"  ✅ [TISTORY-COLLECT] 완료: {keyword}")
         return {
@@ -1679,59 +1605,31 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
                 f"\n\n[주제 프로필 — 자비스03]\n- 주제: {keyword} ({sector})\n- 정의: {reason}"
                 + (f"\n- 관련어: {_rel_terms}" if _rel_terms else ""))
 
-        # ★ JARVIS09 직접 수집 (topic_pack = 키워드+프로필만 — 선수집 없음)
-        _pool: list = []
-        _ev_pack: dict = {}
-        _kw_collection_docs: list = []
+        # ★ 수집은 자비스09 단독 (사용자 박제 2026-07-23) — 02 는 "이 주제로 수집해줘" 한 줄.
+        #   차트·리서치·fact 변환·종목재무 배제·시장지표 폴백은 전부 09 소관(테마와 동일 함수).
         try:
-            from JARVIS09_COLLECTOR import collect_research, collect_chart_data
-            try:
-                from shared.pipeline_activity import mark_active
-                mark_active("e1")  # J03→J09 수집 요청 시작
-            except Exception:
-                pass
-            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
-            _chart = collect_chart_data(keyword, sector=sector, description=reason,
-                                        synonyms=_cand.get("synonyms"),
-                                        related_terms=_profile.get('related_terms'),
-                                        profile=_profile,                    # ★ entity_type 관통 (2026-07-18)
-                                        plan_cache=_cand.get("data_plan"),   # ★ warm plan 캐시 공유(발행창 LLM 0)
-                                        category="economic") or {}   # ★ 종목재무 봉인 (2026-07-18)
-            _pool = list(_chart.get("datasets") or [])
-            _res = collect_research(keyword, sector=sector, angle=reason, with_facts=True, with_digest=True) or {}
-            _kw_collection_docs = list(_res.get("docs") or [])
-            try:
-                from shared.pipeline_activity import mark_active
-                mark_active("e2")  # J09→J02 데이터 전달 완료
-            except Exception:
-                pass
-            # ★ fact 추출 09 통일 (사용자 박제 2026-07-18) — collect_research(with_facts=True) 가 pack 동봉.
-            #   facts→datasets 변환만 여기서(차트 풀 구성·종목재무 필터는 02 몫).
-            from JARVIS09_COLLECTOR.evidence_pack import facts_to_datasets as _f2d
-            _ev_pack = _res.get("pack") or {}
-            # ★ facts → datasets 변환 후 _pool에 병합 (text 수치도 차트化 — 이미지 개수 확대)
-            try:
-                _fact_ds = _f2d(_ev_pack)
-                if _fact_ds:
-                    from JARVIS09_COLLECTOR.models import dataset_is_stock_financial as _is_sf
-                    _existing_titles = {d.get("title", "") for d in _pool}
-                    # ★ 경제 브리핑: fact 유래 dataset 중 개별 종목 재무(PER/ROE/영업이익 등)는 배제 (2026-07-18)
-                    _new_ds = [d for d in _fact_ds
-                               if d.get("title", "") not in _existing_titles and not _is_sf(d)]
-                    _pool = _pool + _new_ds
-                    print(f"  📊 [facts→datasets] {len(_new_ds)}개 수치 데이터셋 추가 (총 {len(_pool)}개)")
-            except Exception as _f2d_e:
-                print(f"  ⚠️ [facts→datasets] 변환 스킵: {_f2d_e}")
-            print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
-                  f"데이터셋 {len(_pool)}개")
-        except Exception as _je:
-            print(f"  ⚠️ [JARVIS09] 수집 실패: {_je}")
-
-        # ★ 경제 브리핑 전용: 차트 데이터 없으면 시장 지표로 폴백
-        if not _pool and market_data:
-            _pool = _market_data_to_datasets(market_data)
-            if _pool:
-                print(f"  🔄 [시장지표 폴백] 차트 데이터 없음 → 시장 지표 {len(_pool)}개 datasets 생성")
+            from shared.pipeline_activity import mark_active
+            mark_active("e1")  # J03→J09 수집 요청 시작
+        except Exception:
+            pass
+        print(f"  🕸️ [JARVIS09] '{keyword}' 수집 시작...")
+        from JARVIS09_COLLECTOR import collect_all
+        _bundle = collect_all(keyword, profile=_profile, sector=sector, category="economic",
+                              angle=reason, synonyms=_cand.get("synonyms"),
+                              plan_cache=_cand.get("data_plan"), market_data=market_data,
+                              extra_meta={"section_plan": _cand.get("section_plan")})
+        try:
+            from shared.pipeline_activity import mark_active
+            mark_active("e2")  # J09→J02 데이터 전달 완료
+        except Exception:
+            pass
+        collected           = _bundle["collected"]
+        _pool               = _bundle.get("datasets") or []
+        _kw_collection_docs = _bundle.get("docs") or []
+        _ev_pack            = _bundle.get("evidence_pack") or {}
+        _corpus_digest      = _bundle.get("corpus_digest") or ""
+        print(f"  🕸️ [JARVIS09] '{keyword}' 수집 완료: 문서 {len(_kw_collection_docs)}건, "
+              f"데이터셋 {len(_pool)}개")
 
         # 데이터 카탈로그 주입
         try:
@@ -1757,7 +1655,7 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
 
         # 수집 자료 주입 — 선계산 digest(요약) 우선, 없으면 원문 전문 (distill 압축 2026-07-19)
         try:
-            _corpus = _res.get("corpus_digest") or ""
+            _corpus = _corpus_digest
             if _corpus:
                 supreme_block = (supreme_block or "") + "\n\n" + _corpus
                 print(f"  📖 [수집 요약] digest ~{len(_corpus) // 1000}K자 주입 (원문 대비 압축 — writer 프롬프트 축소)")
@@ -1771,23 +1669,7 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
         except Exception as _cbe:
             print(f"  ⚠️ [수집 전문] 주입 스킵: {_cbe}")
 
-        # CollectedData 조립
-        from JARVIS09_COLLECTOR.models import CollectedData
-        try:
-            from dataclasses import asdict as _asdict
-            _docs_ser = [_asdict(d) if hasattr(d, '__dataclass_fields__') else d
-                         for d in _kw_collection_docs]
-        except Exception:
-            _docs_ser = []
-        collected = CollectedData.from_dict({
-            "meta": {"keyword": keyword, "sector": sector, "category": "economic",
-                     "profile": _cand.get("profile") or {},
-                     "section_plan": _cand.get("section_plan")},   # ★ 주제별 대본 골격 (2026-07-18)
-            "datasets": _pool,
-            "docs": _docs_ser,
-            "facts": list(_ev_pack.get("facts") or []),
-            "entities": [],
-        })
+        # CollectedData 조립은 09(collect_all→compose_collected)가 이미 완료 — 여기선 조립 0.
 
         print(f"  ✅ [NAVER-COLLECT] 완료: {keyword}")
         return {
@@ -1823,8 +1705,9 @@ def precollect_economic() -> dict:
     # 발행창과 동일한 market_data(빈 pool 폴백용) 구성
     _md: dict = {}
     try:
-        from JARVIS09_COLLECTOR import get_market_data as _gmd, get_economic_calendar as _gec
-        _md = {"market": _gmd() or {}, "calendar": _gec() or {}}
+        # ★ 조립도 09 (사용자 박제 2026-07-23) — 발행창과 동일 스냅샷을 09 에서 받는다.
+        from JARVIS09_COLLECTOR import market_snapshot as _msnap
+        _md = _msnap()
     except Exception as _mde:
         print(f"  ⚠️ [경제 선계산] 시장 수치 스킵: {_mde}")
 

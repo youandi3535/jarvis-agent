@@ -1044,6 +1044,7 @@ def _gen_theme(
     evidence_pack: dict | None = None,
     gate_feedback: list | None = None,
     corpus_digest: str = "",
+    datasets: list | None = None,
 ) -> str:
     """테마글 Pass-1: 텍스트 + 데이터 내장 [CHART_N] 블록 (+구형식 폴백).
 
@@ -1057,10 +1058,13 @@ def _gen_theme(
     # ★ 데이터 내장 슬롯 카탈로그 (ADR 013 테마 이행 — ERRORS [316]): 경제와 동일 로직.
     #   종목 시세 승격 + 텍스트 수치 승격 → 카탈로그 주입, 슬롯 안에 차트 데이터까지 내장.
     #   카탈로그에 맞는 데이터 없는 슬롯만 구형식 유지 → 자비스06 Pass-2 실데이터 폴백.
+    #   ★ 2026-07-23: datasets 는 09(compose_collected)가 이미 조립·중복제거·출처박제한
+    #   결과를 그대로 받는다. 종전엔 여기서 stocks_to_datasets+facts_to_datasets 를 *다시*
+    #   돌려 같은 것을 두 번 조립했다 — 09 가 걸러낸 항목(예: 종목재무 배제)이 여기서
+    #   되살아나는 새는 구멍이었다.
     _theme_catalog = ""
     try:
-        from JARVIS09_COLLECTOR import stocks_to_datasets as _s2d_t, facts_to_datasets as _f2d_t
-        _cat_ds = _s2d_t(stocks_data) + _f2d_t(evidence_pack or {})
+        _cat_ds = list(datasets or [])
         _theme_catalog = _build_data_catalog(_cat_ds)
     except Exception as _ce:
         print(f"  ⚠️ [Theme/Pass-1] 카탈로그 구성 실패 (구형식 슬롯으로 진행): {_ce}")
@@ -1355,6 +1359,7 @@ def generate_theme_draft(
     evidence_pack: dict | None = None,
     gate_feedback: list | None = None,
     corpus_digest: str = "",
+    datasets: list | None = None,
 ) -> str:
     """테마글 텍스트 대본 생성 (Pass-1).
 
@@ -1374,5 +1379,6 @@ def generate_theme_draft(
                       collection_docs=collection_docs or [],
                       evidence_pack=evidence_pack,
                       gate_feedback=gate_feedback,
-                      corpus_digest=corpus_digest)
+                      corpus_digest=corpus_digest,
+                      datasets=datasets)
 

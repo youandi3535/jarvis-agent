@@ -56,4 +56,32 @@ def select_theme(exclude: set | None = None, pinned: str | None = None) -> str |
     return pick_theme(available_themes(exclude), pinned)
 
 
-__all__ = ["theme_catalog", "available_themes", "pick_theme", "select_theme"]
+def theme_topic(theme: str | None = None, exclude: set | None = None,
+                pinned: str | None = None, sector: str = "") -> dict | None:
+    """★ 테마 주제 *패키지* — 키워드 + 프로필 동봉 (사용자 박제 2026-07-23).
+
+    경제(topic_pack.pick_candidate) 가 키워드+섹터+프로필을 한 상자로 주는 것과 동렬.
+    종전에는 03 이 테마 *문자열만* 주고 02 가 keyword_profile 을 세 군데서 각자 다시
+    조회했다 — '키워드 단독 전송 금지'(ADR 013) 위반이자 ①단일 진입점 위반.
+
+    Args:
+        theme: 이미 정해진 테마(발행 경로). None 이면 여기서 선정(선계산 경로).
+    Returns:
+        {"keyword", "theme", "sector", "profile", "reason"} — 없으면 None.
+    """
+    kw = theme or select_theme(exclude, pinned)
+    if not kw:
+        return None
+    profile: dict = {}
+    try:
+        from JARVIS03_RADAR.topic_pack import keyword_profile
+        profile = keyword_profile(kw, sector) or {}
+    except Exception as e:
+        log.warning(f"[theme_picker] '{kw}' 프로필 조회 실패: {e}")
+    return {"keyword": kw, "theme": kw,
+            "sector": profile.get("sector") or sector,
+            "profile": profile,
+            "reason": (profile.get("summary") or "").strip()}
+
+
+__all__ = ["theme_catalog", "available_themes", "pick_theme", "select_theme", "theme_topic"]

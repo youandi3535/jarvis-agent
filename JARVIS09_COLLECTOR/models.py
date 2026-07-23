@@ -126,14 +126,24 @@ ATTR_UNITS: dict[str, str] = {
 # ★ allow_stock_financial (사용자 박제 2026-07-18): 테마주=개별 종목 재무(PER·ROE·영업이익률·
 #   현재가) 차트 허용. 경제 브리핑=트렌드 경제·금융 상식/배경 글이므로 종목 재무 *배제*
 #   (거시지표·개념 인포그래픽만). 두 글은 성격이 완전히 다름 → 데이터·이미지도 분리.
+# ★ 수집 노브 (사용자 박제 2026-07-23 — 수집 오케스트레이션 09 이관): 카테고리별로 무엇을
+#   수집하느냐의 차이를 `if category == "theme"` 분기로 박지 않고 여기서 파생한다.
+#   collect_stocks = 개별 종목 시세·재무 수집 여부 / collect_charts = 주제 연관 차트 실데이터
+#   수집 여부 / market_fallback = 차트 0개일 때 시장지표(yfinance)로 datasets 를 채울지.
 CATEGORY_POLICY: dict[str, dict] = {
     "theme":    {"min_images": 5, "thumbnail_body_chars": 3000,
-                 "allow_stock_financial": True},
+                 "allow_stock_financial": True,
+                 "collect_stocks": True,  "collect_charts": False,
+                 "market_fallback": False},
     "economic": {"min_images": 5, "thumbnail_body_chars": 3000,
-                 "allow_stock_financial": False},
+                 "allow_stock_financial": False,
+                 "collect_stocks": False, "collect_charts": True,
+                 "market_fallback": True},
 }
 _DEFAULT_POLICY = {"min_images": 5, "thumbnail_body_chars": 3000,
-                   "allow_stock_financial": True}
+                   "allow_stock_financial": True,
+                   "collect_stocks": True,  "collect_charts": False,
+                   "market_fallback": False}
 
 
 def policy_for(category: str) -> dict:
