@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 import { severityColor, statusColor, fmtNum, fmtTime, C } from "@/lib/utils";
@@ -16,6 +17,18 @@ interface ErrorRow     {
   id: number; timestamp: string; severity: string; status: string;
   error_type: string; error_category?: string; module: string; message: string; source?: string;
 }
+interface Narrative    {
+  no: number; title: string; date: string; slots: Record<string, string[]>;
+}
+interface RepairRow    {
+  key: string; ids: number[]; at: string; fixed_at: string; elapsed: string;
+  severity: string; error_type: string; status: string; count: number;
+  detected: string; who: string; method: string;
+  symptom: string; action: string; files: string[];
+  outcome: { state: string; text: string; recur?: number };
+  auto: boolean; kind: string; narrative?: Narrative;
+}
+interface HistoryResp  { items: RepairRow[]; slots: Record<string, string> }
 
 /* ─── KPI 카드 ─────────────────────────────────────── */
 function KpiCard({
@@ -107,6 +120,175 @@ function SourceChart({ sources }: { sources: SourceRow[] }) {
   );
 }
 
+/* ─── 수리 이력 ─────────────────────────────────────── */
+const OUTCOME_STYLE: Record<string, { color: string; icon: string }> = {
+  ok:    { color: C.success, icon: "✅" },
+  watch: { color: C.warn,    icon: "👀" },
+  recur: { color: C.danger,  icon: "🔁" },
+  fail:  { color: C.danger,  icon: "↩️" },
+  open:  { color: C.warn,    icon: "⏳" },
+  "n/a": { color: C.muted,   icon: "—" },
+};
+
+/** 6하 한 줄 — 라벨 폭을 맞춰 눈이 세로로 흐르게 한다 */
+function Line({ n, label, children, color }: {
+  n: string; label: string; children: React.ReactNode; color?: string;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "baseline", marginTop: 6 }}>
+      <span style={{ fontSize: 14, color: "var(--c-text5)", flexShrink: 0 }}>{n}</span>
+      <span style={{ fontSize: 14, color: "var(--c-text5)", width: 92, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontSize: 14, color: color ?? "var(--c-text)", flex: 1, minWidth: 0, wordBreak: "break-word" }}>
+        {children}
+      </span>
+    </div>
+  );
+}
+
+function RepairCard({ r, slots }: { r: RepairRow; slots: Record<string, string> }) {
+  const [open, setOpen] = useState(false);
+  const oc = OUTCOME_STYLE[r.outcome?.state] ?? OUTCOME_STYLE["n/a"];
+  const nar = r.narrative;
+  return (
+    <div style={{
+      border: "1px solid var(--c-bdr)", borderLeft: `3px solid ${oc.color}`,
+      borderRadius: 10, padding: "16px 18px", marginBottom: 12, background: "var(--c-card)",
+    }}>
+      {/* 머리 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <Badge label={r.severity} color={severityColor(r.severity)} />
+        <span style={{ fontSize: 16, fontWeight: 600, color: "var(--c-text)" }}>{r.error_type}</span>
+        {r.kind === "change" && (
+          <span style={{ fontSize: 14, color: "var(--c-text5)" }}>변경 기록</span>
+        )}
+        {r.count > 1 && (
+          <span style={{ fontSize: 14, color: "var(--c-text5)" }}>파일 {r.count}개</span>
+        )}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 14, color: "var(--c-text5)", whiteSpace: "nowrap" }}>
+          {fmtTime(r.at)} 발생{r.elapsed ? ` → ${r.elapsed} 만에 수리` : ""}
+        </span>
+      </div>
+
+      {/* 6하 */}
+      <Line n="①" label="어떻게 잡았나">{r.detected}</Line>
+      <Line n="②" label="무슨 증상">{r.symptom || "—"}</Line>
+      <Line n="③" label="누가 고쳤나">
+        <strong style={{ fontWeight: 600 }}>{r.who}</strong>
+        {r.method ? <span style={{ color: "var(--c-text2)" }}> · {r.method}</span> : null}
+      </Line>
+      <Line n="④" label="어떻게 조치">{r.action || "—"}</Line>
+      <Line n="⑤" label="지금 어떤가" color={oc.color}>{oc.icon} {r.outcome?.text}</Line>
+
+      {/* 꼬리 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+        {r.files.slice(0, 4).map(f => (
+          <code key={f} style={{
+            fontSize: 14, color: "var(--c-text2)", background: "var(--c-bdr)",
+            padding: "2px 8px", borderRadius: 6,
+          }}>{f}</code>
+        ))}
+        <span style={{ flex: 1 }} />
+        {nar && (
+          <button
+            onClick={() => setOpen(o => !o)}
+            style={{
+              fontSize: 14, color: C.primary, background: "transparent",
+              border: "1px solid var(--c-bdr)", borderRadius: 6,
+              padding: "4px 12px", cursor: "pointer",
+            }}
+          >
+            {open ? "접기" : `자세히 — 기록 [${nar.no}]`}
+          </button>
+        )}
+      </div>
+
+      {/* 서술 (ERRORS.md 원문) */}
+      {open && nar && (
+        <div style={{
+          marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--c-bdr)",
+        }}>
+          <div style={{ fontSize: 14, color: "var(--c-text5)", marginBottom: 10 }}>
+            ERRORS.md [{nar.no}] · {nar.date} — 사람이 남긴 기록
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: "var(--c-text)", marginBottom: 12 }}>
+            {nar.title}
+          </div>
+          {Object.entries(slots).map(([k, label]) => {
+            const vals = nar.slots?.[k];
+            if (!vals || vals.length === 0) return null;
+            return (
+              <div key={k} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 14, color: C.primary, marginBottom: 4 }}>{label}</div>
+                {vals.map((v, i) => (
+                  <div key={i} style={{ fontSize: 14, color: "var(--c-text2)", lineHeight: 1.7, marginBottom: 2 }}>
+                    {v}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const HISTORY_TABS: { key: string; label: string }[] = [
+  { key: "",       label: "전체" },
+  { key: "auto",   label: "자동 수리" },
+  { key: "manual", label: "사람 수리" },
+];
+
+function RepairHistory() {
+  const [actor, setActor] = useState("");
+  const [repairOnly, setRepairOnly] = useState(true);
+  const { data } = useSWR<HistoryResp>(
+    `/api/guardian/history?days=30&limit=60&actor=${actor}`,
+    fetcher, { refreshInterval: 60000 },
+  );
+  const slots = data?.slots ?? {};
+  const all = data?.items ?? [];
+  const items = repairOnly ? all.filter(r => r.kind === "repair") : all;
+
+  return (
+    <div style={{
+      background: "var(--c-card)", border: "1px solid var(--c-bdr)",
+      borderRadius: 12, padding: "20px 24px", marginBottom: 28,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 4 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: "var(--c-text)" }}>수리 이력</div>
+        <span style={{ fontSize: 14, color: "var(--c-text5)" }}>최근 30일 · {items.length}건</span>
+        <span style={{ flex: 1 }} />
+        {HISTORY_TABS.map(t => (
+          <button key={t.key} onClick={() => setActor(t.key)} style={{
+            fontSize: 14, padding: "4px 12px", borderRadius: 6, cursor: "pointer",
+            border: `1px solid ${actor === t.key ? C.primary : "var(--c-bdr)"}`,
+            background: actor === t.key ? C.primary + "22" : "transparent",
+            color: actor === t.key ? C.primary : "var(--c-text2)",
+          }}>{t.label}</button>
+        ))}
+        <button onClick={() => setRepairOnly(v => !v)} style={{
+          fontSize: 14, padding: "4px 12px", borderRadius: 6, cursor: "pointer",
+          border: `1px solid ${repairOnly ? "var(--c-bdr)" : C.primary}`,
+          background: repairOnly ? "transparent" : C.primary + "22",
+          color: repairOnly ? "var(--c-text2)" : C.primary,
+        }}>{repairOnly ? "변경 기록 보기" : "변경 기록 숨기기"}</button>
+      </div>
+      <div style={{ fontSize: 14, color: "var(--c-text5)", marginBottom: 16 }}>
+        어떤 오류를 누가 어떻게 잡아 고쳤고, 그 뒤 무엇이 정상으로 바뀌었나 —
+        ⑤는 저장값이 아니라 <b>수정 후 같은 증상이 다시 났는지</b>로 판정합니다.
+      </div>
+      {items.length === 0
+        ? <div style={{ color: "var(--c-text5)", fontSize: 14, padding: "24px 0" }}>
+            {data ? "해당 조건의 이력 없음" : "불러오는 중…"}
+          </div>
+        : items.map(r => <RepairCard key={r.key} r={r} slots={slots} />)
+      }
+    </div>
+  );
+}
+
 /* ─── 메인 페이지 ───────────────────────────────────── */
 export default function ErrorsPage() {
   const { data: stats }   = useSWR<GuardianStats>("/api/guardian/stats",   fetcher, { refreshInterval: 30000 });
@@ -153,6 +335,9 @@ export default function ErrorsPage() {
           }
         </div>
       </div>
+
+      {/* 수리 이력 — 무엇이 어떻게 고쳐져 어떻게 바뀌었나 */}
+      <RepairHistory />
 
       {/* 오류 목록 테이블 */}
       <div style={{ background: "var(--c-card)", border: "1px solid var(--c-bdr)", borderRadius: 12, padding: "20px 24px" }}>

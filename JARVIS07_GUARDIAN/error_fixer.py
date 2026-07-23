@@ -182,8 +182,14 @@ def _import_check(file_path: Path) -> bool:
         return False
 
 
-def _update_errors_md(error_record: dict, analysis: dict, success: bool):
-    """ERRORS.md에 오류 기록 추가 (기존 규정 준수)."""
+def _update_errors_md(error_record: dict, analysis: dict, success: bool,
+                      verified: list | None = None):
+    """ERRORS.md에 오류 기록 추가 (기존 규정 준수).
+
+    ★ 검증·결과 필수 (사용자 박제 2026-07-23): "무엇을 고쳤나" 만 적으면
+      *고친 뒤 무엇이 정상으로 바뀌었는지* 를 아무도 답할 수 없다. 자동 수리도
+      수동 수리와 **같은 서식** 을 남긴다 (③ 모든 경로 동일 적용).
+    """
     try:
         errors_md = Path(__file__).parent / "ERRORS.md"
         if not errors_md.exists():
@@ -192,6 +198,12 @@ def _update_errors_md(error_record: dict, analysis: dict, success: bool):
         from JARVIS07_GUARDIAN.severity import format_error_label
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         status_icon = "✅ 자동수정" if success else "❌ 자동수정실패"
+        checks = ", ".join(verified or []) or ("검증 기록 없음" if success else "적용 전 검증에서 차단")
+        outcome = (
+            f"수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정"
+            if success else
+            "원본으로 되돌림 — 시스템은 수정 전 상태 그대로 동작 (수동 검토 필요)"
+        )
         entry = (
             f"\n---\n"
             f"### [{now_str}] {status_icon} — {format_error_label(error_record.get('error_type',''))}\n"
@@ -200,6 +212,8 @@ def _update_errors_md(error_record: dict, analysis: dict, success: bool):
             f"- **원인**: {analysis.get('explanation','')}\n"
             f"- **파일**: {analysis.get('target_file','')}\n"
             f"- **해결**: {'자동 수정 적용' if success else '자동 수정 실패 — 수동 검토 필요'}\n"
+            f"- **검증**: {checks}\n"
+            f"- **결과**: {outcome}\n"
         )
         with open(errors_md, "a", encoding="utf-8") as f:
             f.write(entry)
@@ -312,7 +326,8 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
                 error_record = _db.get_error(error_id)
             except Exception:
                 pass
-            _update_errors_md(error_record, analysis, success=False)
+            _update_errors_md(error_record, analysis, success=False,
+                              verified=["문법 검사 통과", "import 검증 실패 → 자동 롤백"])
         return False
 
     # ── 성공 처리 ────────────────────────────────────────────────
@@ -369,7 +384,8 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
     except Exception as _be:
         log.debug(f"[BANDIT] 양의 보상 기록 실패: {_be}")
 
-    _update_errors_md(error_record, analysis, success=True)
+    _update_errors_md(error_record, analysis, success=True,
+                      verified=["문법 검사(ast.parse) 통과", "import 검증 통과", "원본 .bak 보관"])
     _notify_success(error_id, file_path.name, analysis.get("explanation", ""))
     log.info(f"[GUARDIAN] #{error_id} 자동 수정 성공 ✅ — {file_path.name}")
     return True

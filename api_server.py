@@ -956,6 +956,18 @@ def get_errors(
         return []
 
 
+@app.get("/api/guardian/history")
+def get_guardian_history(days: int = 30, limit: int = 40, actor: str = ""):
+    """수리 이력 — 조립은 JARVIS07 `repair_history` 단독. 여기는 위임만."""
+    try:
+        from JARVIS07_GUARDIAN.repair_history import history, SLOT_LABELS
+        # slots 를 함께 내려 화면이 라벨을 하드코딩하지 않게 한다 (② 동적 설계).
+        return {"items": history(days=days, limit=limit, actor=actor),
+                "slots": SLOT_LABELS}
+    except Exception as e:
+        return {"error": str(e)[:300], "items": [], "slots": {}}
+
+
 @app.get("/api/guardian/trend")
 def get_guardian_trend(days: int = 14):
     try:

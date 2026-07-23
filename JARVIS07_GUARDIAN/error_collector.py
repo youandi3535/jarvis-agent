@@ -572,6 +572,7 @@ def report_manual_fix(
     target_file: str = "",
     error_message: str = "",
     recurrable: Optional[bool] = None,
+    symptom: str = "",
 ) -> Optional[int]:
     """Claude 또는 사용자가 *발견·수정한* 결함을 회고적으로 박제하는 API.
 
@@ -588,6 +589,9 @@ def report_manual_fix(
         error_type:  분류 (예: "RelativeImport", "NoneSlicing", "PromptLeak")
         severity:    "low" | "medium" | "high"
         actor:       "claude" | "user" — 수정 주체
+        symptom:     ★ *고치기 전에 무엇이 잘못 보였는지* (증상). 생략하면 description 이
+            증상 자리에도 들어가 수리 이력의 "②증상" 과 "④조치" 가 같은 문장이 된다
+            (사용자 박제 2026-07-23). 재현 가능한 현상을 한 문장으로 적을 것.
 
     Returns:
         int | None: error_log.id
@@ -610,7 +614,7 @@ def report_manual_fix(
         error_id = _db.save_error(
             source=source,
             error_type=error_type,
-            message=description[:500],
+            message=(symptom or description)[:500],
             module=fixed_file,
             func_name=None,
             traceback=None,
