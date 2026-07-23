@@ -1230,58 +1230,26 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
     Returns: success, keyword, sector, reason, collected (CollectedData),
              supreme_block (enriched), source_docs
 
-    ★ use_cache (사용자 박제 2026-07-18): precollect 잡(06:05) 선계산 캐시 재사용 — nv_collect 참조.
+    ★ use_cache: 09 로 그대로 전달만 — 재사용 여부는 09 판단 (nv_collect 참조).
     """
     from datetime import datetime as _dt_ts
     print(f"\n  🔴 [TISTORY-COLLECT] 주제 선정 + 수집 중... [{_dt_ts.now().strftime('%H:%M:%S')}]")
 
     keyword = ""
     try:
-        import os as _os
-        # ★ 주제+데이터 단일 공급원 = 자비스03 topic_pack (사용자 박제 2026-07-03)
-        from JARVIS03_RADAR.topic_pack import (
-            pick_candidate as _tp_pick, build_topic_pack as _tp_build,
-            build_for_keyword as _tp_for_kw,
-        )
-        _force = _os.environ.get("JARVIS_FORCE_TOPIC", "").strip()
-        if _force:
-            _cand = _tp_for_kw(
-                _force,
-                sector=_os.environ.get("JARVIS_FORCE_SECTOR", "").strip() or "강제 지정",
-                reason=_os.environ.get("JARVIS_FORCE_REASON", "").strip() or "사용자 강제 주제",
-            )
-            print(f"  📌 [강제 주제 — 티스토리] {_force}")
-        else:
-            _cand = _tp_pick(exclude_keyword=nv_keyword)
-            if _cand is None:
-                # ★ ERRORS [404]: 팩이 publish_slots(=2)개만 박제(ERRORS [384])되므로
-                #   fit 후보가 1개뿐이면 네이버가 선점한 뒤 재빌드해도 동일 1개만
-                #   재생산돼 티스토리가 영구 소진. 소진 복구 재빌드만 max_candidates
-                #   를 넓혀 더 깊은 후보 풀에서 fit 대안을 찾는다(평시 프로파일링
-                #   비용은 그대로 — ERRORS [384] 원칙 유지, 소진 시에만 예외).
-                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행(확장 재탐색)")
-                _tp_build(max_candidates=8)
-                _cand = _tp_pick(exclude_keyword=nv_keyword)
-            if _cand is None:
-                return {"success": False, "keyword": "",
-                        "error": "자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)"}
+        # ★ 주제 선정은 자비스03 단독 (사용자 박제 2026-07-03) — 강제주제·소진복구 재빌드까지
+        #   `pick_slot_candidate()` 한 곳. 02 는 "앞 슬롯이 뭘 가져갔는지" 만 알려준다.
+        from JARVIS03_RADAR.topic_pack import pick_slot_candidate as _pick_slot
+        _cand = _pick_slot(exclude_keyword=nv_keyword, force_env="JARVIS_FORCE")
+        if _cand is None:
+            return {"success": False, "keyword": "",
+                    "error": "자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)"}
         keyword = _cand.get('keyword', '')
         sector = _cand.get('sector', '')
         _profile = _cand.get('profile') or {}
         reason = _profile.get('summary') or _cand.get('reason', '')
         print(f"  📌 [티스토리 주제 — 자비스03 팩] [{sector}] {keyword}"
               + (f" — {reason[:60]}" if reason else ""))
-
-        # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18) — nv_collect 참조. 미스·오류 시 기존 수집 폴백.
-        if use_cache and supreme_block is None:
-            try:
-                from JARVIS02_WRITER.precollect_cache import load_precollect
-                _cached = load_precollect("economic", keyword)
-                if _cached:
-                    print(f"  ⚡ [TISTORY-COLLECT] 선계산 캐시 재사용: {keyword} (발행창 추출 LLM 0회)")
-                    return _cached
-            except Exception as _pce:
-                print(f"  ⚠️ [선계산] 캐시 조회 스킵: {_pce}")
 
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
@@ -1316,7 +1284,8 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
         _bundle = collect_all(keyword, profile=_profile, sector=sector, category="economic",
                               angle=reason, synonyms=_cand.get("synonyms"),
                               plan_cache=_cand.get("data_plan"), market_data=market_data,
-                              extra_meta={"section_plan": _cand.get("section_plan")})
+                              extra_meta={"section_plan": _cand.get("section_plan")},
+                              use_cache=use_cache)
         try:
             from shared.pipeline_activity import mark_active
             mark_active("e2")  # J09→J02 데이터 전달 완료
@@ -1531,58 +1500,26 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
     Returns: success, keyword, sector, reason, collected (CollectedData),
              supreme_block (enriched), source_docs
 
-    ★ use_cache (사용자 박제 2026-07-18): True 면 precollect 잡(06:05)이 저부하 창에서 미리
-      수집·추출해 캐시한 결과를 재사용(발행창 추출 LLM 0회 → writer 회복된 풀). precollect
-      잡 자신은 use_cache=False 로 호출해 실제 수집을 수행한다.
+    ★ use_cache: 09 로 그대로 전달만 한다 — *재사용 여부 판단은 09 안* (`collect_all`).
+      02 는 캐시를 열어보지 않는다 (사용자 박제 2026-07-23 — 수집 단일 진입점).
     """
     from datetime import datetime as _dt_nv
     print(f"\n  🟢 [NAVER-COLLECT] 주제 선정 + 수집 중... [{_dt_nv.now().strftime('%H:%M:%S')}]")
 
     keyword = ""
     try:
-        import os as _os
-        # ★ 주제+데이터 단일 공급원 = 자비스03 topic_pack (사용자 박제 2026-07-03)
-        from JARVIS03_RADAR.topic_pack import (
-            pick_candidate as _tp_pick, build_topic_pack as _tp_build,
-            build_for_keyword as _tp_for_kw,
-        )
-        _force_nv = _os.environ.get("JARVIS_FORCE_NV_TOPIC", "").strip()
-        if _force_nv:
-            _cand = _tp_for_kw(
-                _force_nv,
-                sector=_os.environ.get("JARVIS_FORCE_NV_SECTOR", "").strip() or "강제 지정",
-                reason=_os.environ.get("JARVIS_FORCE_NV_REASON", "").strip() or "사용자 강제 주제",
-            )
-            print(f"  📌 [강제 주제 — 네이버] {_force_nv}")
-        else:
-            _cand = _tp_pick(exclude_keyword=ts_keyword)
-            if _cand is None:
-                # ★ ERRORS [404] — ts_collect 와 동일 사유로 소진 복구 재빌드만 확장 재탐색.
-                print("  🎁 [topic_pack] 당일 팩 없음/소진 — 자비스03 파이프라인 즉석 실행(확장 재탐색)")
-                _tp_build(max_candidates=8)
-                _cand = _tp_pick(exclude_keyword=ts_keyword)
-            if _cand is None:
-                return {"success": False, "keyword": "",
-                        "error": "자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)"}
+        # ★ 주제 선정은 자비스03 단독 (사용자 박제 2026-07-03) — ts_collect 와 동일 단일 진입점.
+        from JARVIS03_RADAR.topic_pack import pick_slot_candidate as _pick_slot
+        _cand = _pick_slot(exclude_keyword=ts_keyword, force_env="JARVIS_FORCE_NV")
+        if _cand is None:
+            return {"success": False, "keyword": "",
+                    "error": "자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)"}
         keyword = _cand.get('keyword', '')
         sector = _cand.get('sector', '')
         _profile = _cand.get('profile') or {}
         reason = _profile.get('summary') or _cand.get('reason', '')
         print(f"  📌 [네이버 주제 — 자비스03 팩] [{sector}] {keyword}"
               + (f" — {reason[:60]}" if reason else ""))
-
-        # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18): precollect 잡(06:05)이 미리 수집·추출한
-        #   결과가 있으면 발행창(07:00) 추출 LLM 0회로 재사용 → writer 회복된 풀에서 실행.
-        #   순수 최적화 — 미스·오류 시 아래 기존 수집 경로로 폴백(현행 동작 보존).
-        if use_cache and supreme_block is None:
-            try:
-                from JARVIS02_WRITER.precollect_cache import load_precollect
-                _cached = load_precollect("economic", keyword)
-                if _cached:
-                    print(f"  ⚡ [NAVER-COLLECT] 선계산 캐시 재사용: {keyword} (발행창 추출 LLM 0회)")
-                    return _cached
-            except Exception as _pce:
-                print(f"  ⚠️ [선계산] 캐시 조회 스킵: {_pce}")
 
         if supreme_block is None:
             from JARVIS02_WRITER.law_enforcer import build_writing_rules_block as _law_blk
@@ -1617,7 +1554,8 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
         _bundle = collect_all(keyword, profile=_profile, sector=sector, category="economic",
                               angle=reason, synonyms=_cand.get("synonyms"),
                               plan_cache=_cand.get("data_plan"), market_data=market_data,
-                              extra_meta={"section_plan": _cand.get("section_plan")})
+                              extra_meta={"section_plan": _cand.get("section_plan")},
+                              use_cache=use_cache)
         try:
             from shared.pipeline_activity import mark_active
             mark_active("e2")  # J09→J02 데이터 전달 완료
@@ -1690,40 +1628,9 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
         return {"success": False, "keyword": keyword, "error": str(e)[:100]}
 
 
-def precollect_economic() -> dict:
-    """★ 경제 브리핑 선계산 잡 (06:05 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
-
-    발행 슬롯(네이버·티스토리) 후보를 미리 수집·추출(무거운 fact·chart LLM 버스트)해 캐시한다.
-    07:00 발행은 이 캐시를 재사용(추출 LLM 0회) → 직후 writer 가 버스트로 열화되지 않은 Max 풀에서
-    실행되어 300s 스톨 조건이 제거된다. 전문 추출은 그대로 유지하고 *시점만* 앞당기므로 "수집
-    데이터 전부 활용" 박제 무위반. 순수 최적화 — 캐시가 없으면 발행창이 기존 수집으로 폴백한다.
-    """
-    from datetime import datetime as _dt
-    from JARVIS02_WRITER.precollect_cache import save_precollect
-    print(f"\n{'='*50}\n⚡ 경제 선계산 시작 [{_dt.now().strftime('%H:%M:%S')}] — 발행창 밖 추출\n{'='*50}")
-
-    # 발행창과 동일한 market_data(빈 pool 폴백용) 구성
-    _md: dict = {}
-    try:
-        # ★ 조립도 09 (사용자 박제 2026-07-23) — 발행창과 동일 스냅샷을 09 에서 받는다.
-        from JARVIS09_COLLECTOR import market_snapshot as _msnap
-        _md = _msnap()
-    except Exception as _mde:
-        print(f"  ⚠️ [경제 선계산] 시장 수치 스킵: {_mde}")
-
-    saved = 0
-    try:
-        nv = nv_collect(market_data=_md, use_cache=False)
-        if nv.get("success") and nv.get("keyword") and save_precollect("economic", nv["keyword"], nv):
-            saved += 1
-        ts = ts_collect(nv_keyword=nv.get("keyword", ""), market_data=_md, use_cache=False)
-        if ts.get("success") and ts.get("keyword") and save_precollect("economic", ts["keyword"], ts):
-            saved += 1
-    except Exception as e:
-        _g_report("writer", e, module=__name__, func_name="precollect_economic")
-        print(f"  ⚠️ [경제 선계산] 예외: {e} — 발행창이 기존 수집으로 폴백")
-    print(f"⚡ 경제 선계산 완료 — {saved}개 캐시 (07:00 발행 재사용 대기)")
-    return {"success": True, "cached": saved}
+# ★ 02 에는 선계산(precollect) 코드가 없다 (사용자 박제 2026-07-23).
+#   "언제 미리 수집해 둘지" 는 수집 시점 판단 = 수집 도메인의 일 →
+#   `JARVIS09_COLLECTOR/precollect.py:precollect_economic()` 단독.
 
 
 def nv_generate_draft(keyword: str, sector: str, reason: str,

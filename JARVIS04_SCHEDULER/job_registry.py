@@ -82,7 +82,7 @@ DEFAULT_JOBS: list[dict] = [
      "misfire_grace_time":3600, "owner":"jarvis02_writer"},
     # ★ 경제 선계산은 별도 고정 잡이 아니라 06:00 트렌드 잡(radar_trends_06 → job_collect_trends_morning)
     # 말미에 *이벤트 체이닝*: 트렌드 분석(topic_pack 빌드)이 끝나는 즉시 이어서 실행(고정 지연 없음 —
-    # 사용자 박제 2026-07-18). run_precollect_economic 이 06:58 前 종료 동적 데드라인으로 발행창 미침범.
+    # 사용자 박제 2026-07-18). 09 의 job_precollect_economic 이 동적 데드라인으로 발행창 미침범.
     # ★ 발행 시각 07:00 (사용자 박제 2026-07-18): 06:00 트렌드+선계산(~06:20 완료) → 07:00 발행 사이
     # ~40분 Max 풀 회복 갭 확보 → writer 스톨 방지 강화. (종전 06:30 은 회복 갭 ~5분으로 빡빡)
     # ★ 발행 전 자체수리 + 발행 *하나의 세트* (사용자 박제 2026-06-28):
@@ -103,8 +103,8 @@ DEFAULT_JOBS: list[dict] = [
     #   이게 안 돌면 21:00 발행은 시작되지 않는다 (job_prereq.gate 가 requires 로 강제).
     {"id":"j02_theme_precollect",   "name":"테마 선계산 20:00", "trigger":"cron",
      "kwargs":{"hour":20, "minute":0},
-     "callback":"JARVIS02_WRITER.scheduler.run_precollect_theme",
-     "misfire_grace_time":1200, "owner":"jarvis02_writer"},
+     "callback":"JARVIS09_COLLECTOR.precollect.job_precollect_theme",
+     "misfire_grace_time":1200, "owner":"jarvis09_collector"},
     # ★ 발행 전 자체수리 + 테마글 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 16:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 테마글 발행.
     # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리.

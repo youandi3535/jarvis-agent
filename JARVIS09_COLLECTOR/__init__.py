@@ -57,6 +57,19 @@ from JARVIS09_COLLECTOR.providers.economic_data_provider import (
     download_ticker,     # ★ JARVIS06 차트용 yfinance 단일 진입점
 )
 from JARVIS09_COLLECTOR.providers.verify_provider import web_verify
+from JARVIS09_COLLECTOR.providers.economic_data_provider import (
+    fetch_seo_docs as seo_reference_docs,   # ★ SEO 참고 문서 수집 (02 에서 이관 2026-07-23)
+)
+from JARVIS09_COLLECTOR.providers.published_provider import (
+    published_post_kor_counts,              # ★ 발행 글 글자수 크롤링 (02 에서 이관 2026-07-23)
+)
+from JARVIS09_COLLECTOR.precollect_cache import (
+    load_pinned_theme,         # ★ 선계산이 고정한 테마 조회 (02 에서 이관 2026-07-23)
+)
+from JARVIS09_COLLECTOR.precollect import (
+    precollect_theme,          # ★ 선계산 = "언제 미리 수집할지" — 수집 도메인 (이관 2026-07-23)
+    precollect_economic,
+)
 
 __all__ = [
     "CollectedData",
@@ -88,4 +101,9 @@ __all__ = [
     "get_ticker_history",
     "download_ticker",
     "web_verify",
+    "seo_reference_docs",
+    "published_post_kor_counts",
+    "load_pinned_theme",
+    "precollect_theme",
+    "precollect_economic",
 ]

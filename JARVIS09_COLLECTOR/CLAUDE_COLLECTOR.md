@@ -18,6 +18,9 @@ JARVIS03 RADAR가 결정한 주제를 받아 인터넷 공개 데이터(블로�
 
 | 항목 | 규칙 |
 |------|------|
+| ★ 선계산(precollect) 소유 (2026-07-23) | `precollect.py` — *언제 미리 수집할지* 는 수집 시점 판단 = 09 의 일. 잡 진입점 `job_precollect_{theme,economic}`. 캐시엔 **09 상자만** 담는다 (02 의 supreme_block 담으면 굳은 헌법 블록이 발행까지 재사용되는 복사본 사고) |
+| ★ 캐시 재사용 판단도 09 | `collect_all(use_cache=True)` 안에서 `load_precollect` 조회. 호출자가 캐시를 직접 열면 09 API 2종 사용 = precommit `collect/orchestration-outside` 위반 |
+| ★ run_context platform 보존 | `collect_all` 이 런을 새로 열 때 **platform 을 덮어쓰지 않는다** — 발행 액션이 세팅한 naver/tistory 가 이미지 출력 폴더를 가른다. `run_context.active_run()` 로 직전 값을 읽어 승계, post_type 만 category 에서 파생 |
 | 수집 결과 0건 | COLLECTION_READY 발행 안 함 (JARVIS02 빈 데이터 처리 불필요) |
 | 단어 30개 미만 문서 | 제외 (너무 짧은 조각 → 노이즈) |
 | 병렬 수집 workers | max 3 (과도한 동시 요청 방지) |

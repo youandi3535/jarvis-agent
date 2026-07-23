@@ -2,6 +2,54 @@
 
 ---
 
+## [489] ★ 02 에 수집 코드가 *물리적으로* 남아 있었다 — [488] 은 조합만 걷어냈고 파일은 그대로였다 (2026-07-23)
+
+- **증상**: 사용자 지적 — *"02의 수집하는 모든 기능과 코드 폴더 등 모든것을 다 09로 옮겨.
+  02는 수집 관련한건 아무것도 없도록 만들어! 수집은 09에 다 넣으라고!!"*
+- **환경**: `JARVIS02_WRITER/{scheduler,trend_economic_writer,seo_learner,collect_theme}.py` ·
+  `JARVIS09_COLLECTOR/{precollect,providers/published_provider,collector_engine,run_context}.py`
+- **원인**: [488] 은 *판단(순서·폴백·조립)* 을 09 로 옮겼지만, **수집을 실제로 수행하는 파일·잡** 은
+  02 에 남겨뒀다. 남아 있던 것 —
+  ① `precollect_theme` / `precollect_economic`(선계산 잡 본체) ②`precollect_cache` 를 02 가
+  직접 열어 재사용 여부를 판정 ③ `fetch_kor_counts`(발행글 HTML 크롤링) ④ SEO 참고 페이지
+  페치(`_SEO_SOURCES`·`_fetch_page` — 09 원본의 **드리프트된 복사본**) ⑤ `collect_theme.py`
+  파일 자체 ⑥ 죽은 `import requests`/`BeautifulSoup` 4곳.
+  **"언제 미리 수집할지" 도 수집 판단이고, "발행된 우리 글을 긁는 것" 도 밖에 나가 받아오는
+  이상 수집이다** — 대상이 남의 글이냐 우리 글이냐는 도메인 경계와 무관하다.
+- **헛다리**: 파사드(`collect_all`)만 쓰면 됐다고 본 것. 파사드를 지켜도 *수집 파일이 02 에
+  있으면* 다음 작업자는 그 옆에 새 수집을 짠다. 경계는 코드 위치로도 보여야 한다.
+- **해결** (물리 이관 — 옮긴 것 7종):
+  · `precollect_theme`/`precollect_economic` → `JARVIS09_COLLECTOR/precollect.py`
+    (잡 콜백도 `job_registry` 에서 09 경로로 재지정 · owner=`jarvis09_collector`)
+  · 캐시 재사용 판정 → `collect_all(use_cache=)` **안** 으로. 02 는 플래그만 넘긴다.
+  · `fetch_kor_counts` → `JARVIS09_COLLECTOR/providers/published_provider.py`
+    `published_post_kor_counts()` (플랫폼별 추출 규칙을 `_PLATFORMS` 표로 — ② 동적 설계.
+    URL 은 `post_analysis` 의 *실제 발행 URL* 에서 파생, 블로그 주소 하드코딩 0)
+  · SEO 페이지 페치 → 09 원본 단독(`seo_reference_docs`), 02 복사본 삭제
+  · `JARVIS02_WRITER/collect_theme.py` **파일 삭제**(`git rm`), 참조 2곳 09 로 재지정
+  · 주제 슬롯 선정 중복 2벌(nv/ts) → `JARVIS03_RADAR.topic_pack.pick_slot_candidate()` 한 곳
+  · 죽은 import 정리 (`economic_poster`·`jarvis_main`·`length_manager`·`scheduler`)
+- **★ 같은 턴에 자초하고 자가검출한 회귀 2건**:
+  ① `collect_all` 이 새 run 을 열 때 `new_run(keyword)` 를 기본값으로 불러 발행 액션이 세팅해 둔
+  `platform` 을 **naver 로 되돌렸다** → 경제 티스토리 글 이미지가 엉뚱한 폴더로 샐 뻔.
+  `run_context.active_run()` 신설 + platform 보존, post_type 은 category 에서 파생으로 수정.
+  ② precommit 이 통과했는데 사실은 `published_post_kor_counts as _kor_counts` **별칭 때문에
+  정규식(`\bname\s*\(`)에 안 걸린** 것이었다 — 통과 사유가 가짜. 별칭 제거로 정직하게 노출시키고,
+  *마커 조회* 인 `load_pinned_theme` 만 `_COLLECT_FACADES` 에 면제 등재.
+- **파일**: `JARVIS09_COLLECTOR/{precollect.py(신설),providers/published_provider.py(신설),
+  collector_engine.py,run_context.py,__init__.py}` · `JARVIS02_WRITER/{scheduler,
+  trend_economic_writer,seo_learner,economic_poster,jarvis_main,length_manager}.py` ·
+  `JARVIS02_WRITER/collect_theme.py`(삭제) · `JARVIS03_RADAR/{jobs,topic_pack}.py` ·
+  `JARVIS04_SCHEDULER/job_registry.py` · `JARVIS00_INFRA/preflight.py` ·
+  `shared/precommit_check.py` · `CLAUDE.md` · `JARVIS02_WRITER/CLAUDE_WRITER.md` ·
+  `JARVIS09_COLLECTOR/CLAUDE_COLLECTOR.md`
+- **교훈**: ① **판단을 옮기는 것과 코드를 옮기는 것은 다른 일이다.** 조합만 걷어내면 규정은
+  지켜지지만 *다음 사람의 손이 가는 자리* 는 그대로다 — 파일이 있는 곳에 새 코드가 붙는다.
+  ② "수집" 의 범위는 *밖에 나가 받아오는 모든 것* — 선계산 타이밍도, 우리가 방금 올린 글의
+  HTML 도 포함. ③ **검사 통과의 *사유* 를 확인하라** — 별칭 하나로 통과한 ✅ 는 통과가 아니다.
+
+---
+
 ## [488] ★ 수집을 자비스02가 하고 있었다 — 도메인 경계가 *호출* 단위로만 지켜지고 *조합* 이 새어나감 (2026-07-23)
 
 - **증상**: 사용자 지적 — *"수집을 왜 자비스02가 하는데? 수집은 자비스09만 할 수 있는 역할인데

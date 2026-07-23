@@ -276,8 +276,9 @@ def job_collect_trends_morning() -> None:
     """
     job_collect_trends()   # 트렌드 수집 + topic_pack 빌드 (소요시간 가변)
     try:
-        from JARVIS02_WRITER.scheduler import run_precollect_economic
-        run_precollect_economic()   # 팩 준비 완료 → 이어서 선계산 (자체 동적 데드라인으로 06:28 前 종료)
+        # ★ 선계산 = 수집 도메인(09) 단독 (사용자 박제 2026-07-23)
+        from JARVIS09_COLLECTOR.precollect import job_precollect_economic
+        job_precollect_economic()   # 팩 준비 완료 → 이어서 선계산 (자체 동적 데드라인으로 발행창 前 종료)
     except Exception as _e:
         _log.warning(f"[아침 체인] 경제 선계산 스킵 — 06:30 발행이 기존 수집 폴백: {_e}")
 

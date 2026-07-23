@@ -350,6 +350,43 @@ def pick_candidate(exclude_keyword: str = "") -> dict | None:
     return None
 
 
+def pick_slot_candidate(exclude_keyword: str = "", force_env: str = "") -> dict | None:
+    """★ 발행 슬롯 1개용 주제 후보 — 강제 주제 > 당일 팩 > 소진 복구 재빌드 (박제 2026-07-23).
+
+    종전 이 로직(강제 주제 env 3종 → pick → 소진 시 build_topic_pack(8) → 재pick)이
+    JARVIS02 의 `nv_collect`·`ts_collect` 두 곳에 *복제* 돼 있었고, 선계산 경로까지 더하면
+    세 번째 복사본이 생길 참이었다. 주제 선정은 자비스03 의 일이므로 여기 한 곳에 둔다
+    (① 단일 진입점).
+
+    Args:
+        exclude_keyword: 같은 회차 다른 슬롯이 선점한 키워드 (중복 회피)
+        force_env:       강제 주제 환경변수 접두사. 예 "JARVIS_FORCE_NV" →
+                         `JARVIS_FORCE_NV_TOPIC` / `_SECTOR` / `_REASON`
+    Returns:
+        후보 dict (keyword/sector/profile/…) — 없으면 None
+    """
+    import os as _os
+    if force_env:
+        forced = _os.environ.get(f"{force_env}_TOPIC", "").strip()
+        if forced:
+            log.info(f"[topic_pack] 강제 주제({force_env}): {forced}")
+            return build_for_keyword(
+                forced,
+                sector=_os.environ.get(f"{force_env}_SECTOR", "").strip() or "강제 지정",
+                reason=_os.environ.get(f"{force_env}_REASON", "").strip() or "사용자 강제 주제",
+            )
+    cand = pick_candidate(exclude_keyword=exclude_keyword)
+    if cand is not None:
+        return cand
+    # ★ ERRORS [404]: 팩이 publish_slots(=2)개만 박제(ERRORS [384])되므로 fit 후보가 1개뿐이면
+    #   한 슬롯이 선점한 뒤 재빌드해도 동일 1개만 재생산돼 다른 슬롯이 영구 소진. *소진 복구
+    #   재빌드만* max_candidates 를 넓혀 더 깊은 후보 풀에서 대안을 찾는다 (평시 프로파일링
+    #   비용은 그대로 — ERRORS [384] 원칙 유지, 소진 시에만 예외).
+    log.info("[topic_pack] 당일 팩 없음/소진 — 파이프라인 즉석 실행(확장 재탐색)")
+    build_topic_pack(max_candidates=8)
+    return pick_candidate(exclude_keyword=exclude_keyword)
+
+
 def keyword_profile(keyword: str, sector: str = "") -> dict:
     """★ 키워드 단독 전송 금지 규정용 공용 헬퍼 (사용자 박제 2026-07-03 — 강제).
 
@@ -392,4 +429,4 @@ def build_for_keyword(keyword: str, sector: str = "", reason: str = "") -> dict:
 
 
 __all__ = ["build_topic_pack", "load_topic_pack", "pick_candidate",
-           "build_for_keyword", "keyword_profile"]
+           "pick_slot_candidate", "build_for_keyword", "keyword_profile"]

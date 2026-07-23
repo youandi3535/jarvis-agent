@@ -638,7 +638,7 @@ def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
                 synonyms: list | None = None, plan_cache: dict | None = None,
                 market_data: dict | None = None,
                 extra_meta: dict | None = None,
-                parallel: bool = True) -> dict:
+                parallel: bool = True, use_cache: bool = True) -> dict:
     """★★ 수집 단일 진입점 — 주제 하나 → 완성된 CollectedData 상자 (사용자 박제 2026-07-23).
 
     종전에는 이 함수가 죽은 코드였고, 실제 수집 오케스트레이션이 JARVIS02 안에 *5벌*
@@ -657,6 +657,11 @@ def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
         synonyms/plan_cache: 자비스03 저부하창 선계산 산출물 (있으면 발행창 LLM 0회)
         market_data: 시장지표 (경제 브리핑에서 차트 0개일 때 폴백 소스)
         parallel:   리서치를 별도 스레드로 (종목·차트와 동시). 인터프리터 종료 중이면 자동 동기.
+        use_cache:  선계산 잡(발행창 밖)이 미리 수집해 둔 상자가 있으면 재사용
+                    (사용자 박제 2026-07-18 / 소유 이관 2026-07-23 — 종전엔 02 가 캐시를
+                    먼저 뒤지고 없으면 수집을 불렀다. '캐시냐 수집이냐' 는 수집 시점 판단이므로
+                    09 안으로 들어온다. 선계산 잡 자신은 use_cache=False 로 실제 수집.)
+                    킬스위치: 환경변수 `PRECOLLECT_CACHE=0`.
 
     Returns:
         {"collected": CollectedData, "stocks_data": dict, "docs": list,
@@ -664,8 +669,51 @@ def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
          "data_empty": bool}
         data_empty = 종목·문서·근거가 *전부* 0 (테마 교체 판단용 — 부분 결손은 진행).
     """
+    import os as _os
     from .models import policy_for
     pol = policy_for(category)
+
+    # ── 선계산 캐시 재사용 (수집 *시점* 판단 — 09 소유) ────────────────
+    if use_cache and _os.environ.get("PRECOLLECT_CACHE", "1") != "0":
+        try:
+            from .precollect_cache import load_precollect
+            _hit = load_precollect(category, keyword)
+            if _hit is not None:
+                log.info(f"[collect_all] 선계산 캐시 재사용: {category}/{keyword} — 발행창 추출 LLM 0회")
+                return _hit
+        except Exception as e:
+            log.warning(f"[collect_all] 캐시 조회 스킵({category}/{keyword}): {e} — 실제 수집 진행")
+
+    # ── 새 수집 런 = 09 메모리 상태 초기화 (09 소유 상태) ───────────────
+    #   ★ 플랫폼은 *덮어쓰지 않는다* — 발행 액션(02)이 이미 naver/tistory 를 세팅해 두고,
+    #     그 값이 이미지 출력 폴더(economic_naver 등)를 가른다. 여기서 기본값으로 되돌리면
+    #     경제 네이버 글의 이미지가 theme 폴더로 새는 회귀가 난다. post_type 은 category 에서 파생.
+    try:
+        from .run_context import new_run as _new_run, active_run as _active
+        _prev = _active()
+        _new_run(keyword,
+                 platform=(_prev.platform if _prev else "naver"),
+                 post_type=(pol.get("run_post_type") or category))
+    except Exception as e:
+        log.warning(f"[collect_all] run_context 초기화 스킵: {e}")
+
+    # ── 프로필 보강 — 키워드 단독 수집 금지 (ADR 013) ──────────────────
+    #   ② 동적 설계: `if category ==` 이 아니라 정책 노브(profile_provider)에서 파생.
+    if profile is None:
+        _pp = (pol.get("profile_provider") or "").strip()
+        if _pp:
+            try:
+                import importlib as _il
+                _mod, _fn = _pp.split(":", 1)
+                _topic = getattr(_il.import_module(_mod), _fn)(keyword, sector=sector) or {}
+                profile = _topic.get("profile") or {}
+                sector = _topic.get("sector") or sector
+                if profile:
+                    log.info(f"[collect_all] 자비스03 프로필 수령: {str(profile.get('summary'))[:60]}")
+            except Exception as e:
+                log.warning(f"[collect_all] 프로필 조회 실패({_pp}): {e}")
+                profile = {}
+
     angle = (angle or (profile or {}).get("summary") or "").strip()
 
     # ── 리서치 레그 (느림) — 가능하면 병렬 ────────────────────────────

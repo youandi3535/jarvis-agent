@@ -130,20 +130,28 @@ ATTR_UNITS: dict[str, str] = {
 #   수집하느냐의 차이를 `if category == "theme"` 분기로 박지 않고 여기서 파생한다.
 #   collect_stocks = 개별 종목 시세·재무 수집 여부 / collect_charts = 주제 연관 차트 실데이터
 #   수집 여부 / market_fallback = 차트 0개일 때 시장지표(yfinance)로 datasets 를 채울지.
+#   profile_provider — 프로필 없이 키워드만 들어왔을 때 프로필을 받아올 자비스03 진입점
+#     ("모듈경로:함수명", `fn(keyword, sector=...)` → {"profile","sector"}). ADR 013 의
+#     '키워드 단독 전송 금지' 를 *수집 경계에서* 강제한다 — 02 에 프로필 재조회 코드를
+#     두지 않기 위한 노브 (사용자 박제 2026-07-23).
 CATEGORY_POLICY: dict[str, dict] = {
     "theme":    {"min_images": 5, "thumbnail_body_chars": 3000,
                  "allow_stock_financial": True,
                  "collect_stocks": True,  "collect_charts": False,
-                 "market_fallback": False},
+                 "market_fallback": False,
+                 "profile_provider": "JARVIS03_RADAR.theme_picker:theme_topic"},
     "economic": {"min_images": 5, "thumbnail_body_chars": 3000,
                  "allow_stock_financial": False,
                  "collect_stocks": False, "collect_charts": True,
-                 "market_fallback": True},
+                 "market_fallback": True,
+                 # 경제는 자비스03 topic_pack 이 후보와 함께 프로필을 항상 동봉한다.
+                 "profile_provider": ""},
 }
 _DEFAULT_POLICY = {"min_images": 5, "thumbnail_body_chars": 3000,
                    "allow_stock_financial": True,
                    "collect_stocks": True,  "collect_charts": False,
-                   "market_fallback": False}
+                   "market_fallback": False,
+                   "profile_provider": ""}
 
 
 def policy_for(category: str) -> dict:

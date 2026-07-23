@@ -1213,7 +1213,10 @@ CATEGORIES["visualdup"] = check_visual_dup
 # 조합을 대신해 주는 *정문* — 이것만은 몇 개를 쓰든 정상 (09 가 조합한 결과를 받는 것)
 _COLLECT_FACADES = {"collect_all", "market_snapshot", "CollectedData", "CATEGORY_POLICY",
                     "policy_for", "grounds", "ATTR_UNITS", "evidence_brief", "as_source_docs",
-                    "check_source_onboarding", "register_source_key", "onboarding_status"}
+                    "check_source_onboarding", "register_source_key", "onboarding_status",
+                    # ★ 선계산이 남긴 *마커 조회* — 밖에 나가 받아오는 게 없으니 수집이 아니다.
+                    #   (02 가 21:00 발행에서 "어떤 테마가 고정됐나" 를 묻는 한 줄)
+                    "load_pinned_theme"}
 # 수집 산출물 *조립* 함수 — 09 밖 호출 자체가 위반 (조립 규칙은 09 소유)
 _COLLECT_ASSEMBLERS = {"compose_collected", "market_data_to_datasets",
                        "facts_to_datasets", "stocks_to_datasets", "select_by_trust_quota"}

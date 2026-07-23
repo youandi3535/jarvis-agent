@@ -3,8 +3,9 @@ economic_poster.py
 경제 브리핑 해설 — 자동 생성 & 블로그 포스팅
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 매일 오전 7시 실행
-1. investing.com 에서 오늘 주요 지표 수집
-2. yfinance 로 시장 데이터 수집
+1. 주제 수령 — JARVIS03 `topic_pack.pick_slot_candidate()` (키워드+프로필 동봉)
+2. 데이터 수령 — JARVIS09 `collect_all()` / `market_snapshot()` 파사드 한 줄
+   (★ 02 는 수집하지 않는다 — 지표·시세를 어디서 어떻게 받아올지는 09 단독)
 3. Claude API 로 해설 기사 생성
 4. 네이버·티스토리 '경제 브리핑' 카테고리에 발행
 
@@ -12,11 +13,10 @@ economic_poster.py
   python economic_poster.py
 """
 
-import os, re, json, base64, requests, sys
+import os, re, json, base64, sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
-from bs4 import BeautifulSoup
 
 # ── sys.path 보정 (subprocess 직접 실행 호환) ──
 _JARVIS_ROOT = Path(__file__).parent.parent
@@ -435,7 +435,7 @@ def run(post_naver=True, post_tistory=True):
                                            detail=f"환경변수 {_k} 누락"))
             try:
                 import importlib as _il
-                _il.import_module("JARVIS02_WRITER.collect_theme")
+                _il.import_module("JARVIS09_COLLECTOR.collect_theme")
             except Exception as _e:
                 pc_issues.append(Issue(step="① 전제조건", kind="import_error",
                                        detail=f"collect_theme import 실패: {type(_e).__name__}: {str(_e)[:80]}"))

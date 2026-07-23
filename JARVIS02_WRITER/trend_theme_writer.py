@@ -83,80 +83,18 @@ _TODAY_DOW = ["월", "화", "수", "목", "금", "토", "일"][_TODAY.weekday()]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ① 데이터 수집 — ★ 전량 JARVIS09 위임 (사용자 박제 2026-07-23)
+#  ① 데이터 수집 — ★ 02 에는 코드가 없다 (사용자 박제 2026-07-23)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  종전 이 자리에 `_collect`(종목) + `_theme_collect_bundle`(프로필·리서치·종목·조립)
-#  두 함수가 있었다. 09 API 를 *호출* 하긴 했지만 수집의 순서·조합·폴백 판단을 02 가
-#  했으므로 사실상 02 가 수집을 오케스트레이션한 것 — 수집 단일 진입점(JARVIS09) 위반.
-#  이제 주제·프로필은 자비스03(theme_picker.theme_topic), 수집은 자비스09(collect_all),
-#  02 는 받아서 대본만 쓴다. 같은 병이 경제 브리핑에도 있었으므로 함께 이관(③ 4조합).
-
-
-def _theme_collect(theme: str, sector: str = "", profile: dict | None = None) -> dict:
-    """테마 주제 → 자비스09 수집 위임. 02 에는 *호출 한 줄* 만 남긴다.
-
-    profile 미제공 시 자비스03 에서 주제 패키지(키워드+프로필)를 받아온다 —
-    키워드 단독 전송 금지(ADR 013). 반환 계약은 09 collect_all 과 동일.
-    """
-    # ★ 새 테마 = 수집 런 컨텍스트 초기화 (09 소유 상태)
-    from JARVIS09_COLLECTOR.run_context import new_run as _new_run
-    _new_run(theme)
-    if profile is None:
-        try:
-            from JARVIS03_RADAR.theme_picker import theme_topic as _topic
-            _t = _topic(theme=theme, sector=sector) or {}
-            profile = _t.get("profile") or {}
-            sector = _t.get("sector") or sector
-        except Exception as e:
-            print(f"  ⚠️ [THEME] 자비스03 프로필 조회 실패: {e}")
-            profile = {}
-    _angle = (profile or {}).get("summary") or ""
-    if _angle:
-        print(f"  🏷️ [THEME] 자비스03 프로필: {_angle[:60]}")
-    from JARVIS09_COLLECTOR import collect_all
-    return collect_all(theme, profile=profile, sector=sector, category="theme")
-
-
-def precollect_theme() -> dict:
-    """★ 테마 선계산 잡 (20:00 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
-
-    테마는 네이버 금융 카탈로그에서 random 선정되므로, 여기서 테마를 *고정(pin)* 하고 미리
-    수집·추출해 캐시한다. 21:00 발행은 고정 테마를 우선 사용(→ 캐시 히트, 추출 LLM 0회) →
-    writer 가 버스트로 열화되지 않은 Max 풀에서 실행(스톨 조건 제거).
-
-    ★ 2026-07-23 부터 21:00 발행의 *필수 선행* (사용자 박제) — 종전 "고정·캐시가 없으면
-      random 선정 폴백" 은 폐지. 이게 없으면 발행 자체가 시작되지 않는다.
-    """
-    from datetime import datetime as _dt
-    from JARVIS02_WRITER.precollect_cache import save_precollect, pin_theme
-    print(f"\n{'='*50}\n⚡ 테마 선계산 시작 [{_dt.now().strftime('%H:%M:%S')}] — 발행창 밖 추출\n{'='*50}")
-    try:
-        from JARVIS02_WRITER.scheduler import select_top_theme as _sel
-        theme = _sel()
-    except Exception as e:
-        print(f"  ⚠️ [테마 선계산] 테마 선정 실패: {e}")
-        return {"success": False, "cached": 0}
-    if not theme:
-        print("  ⚠️ [테마 선계산] 선정 가능한 미발행 테마 없음")
-        return {"success": False, "cached": 0}
-    saved = 0
-    try:
-        _b = _theme_collect(theme, sector="")
-        # 02 상태 키 이름으로 캐시 (발행 스텝 state 와 동일 계약)
-        bundle = {"collected": _b.get("collected"), "stocks_data": _b.get("stocks_data"),
-                  "collection_docs": _b.get("docs"), "evidence_pack": _b.get("evidence_pack"),
-                  "data_empty": _b.get("data_empty")}
-        if bundle and not bundle.get("data_empty"):
-            if save_precollect("theme", theme, bundle):
-                pin_theme(theme)
-                saved = 1
-        else:
-            print(f"  ⏭️ [테마 선계산] '{theme}' 데이터 0 — 고정 안 함(발행 시 재선정)")
-    except Exception as e:
-        _g_report("writer", e, module=__name__, func_name="precollect_theme")
-        print(f"  ⚠️ [테마 선계산] 예외: {e} — 발행이 기존 수집 폴백")
-    print(f"⚡ 테마 선계산 완료 — 고정·캐시 {saved}개 (21:00 발행 재사용 대기)")
-    return {"success": bool(saved), "cached": saved, "theme": theme}
+#  종전 이 자리에 `_collect`(종목)·`_theme_collect_bundle`(프로필·리서치·종목·조립)·
+#  `_theme_collect`(런컨텍스트·프로필 조회·수집 호출)·`precollect_theme`(선계산 잡) 이
+#  있었다. 09 API 를 *호출* 하긴 했지만 수집의 순서·조합·재사용·폴백 판단을 02 가 했으므로
+#  사실상 02 가 수집을 오케스트레이션한 것 — 수집 단일 진입점(JARVIS09) 위반.
+#
+#  지금 02 에 남은 수집 관련 코드는 `_step_collect` 의 `collect_all()` *호출 한 줄* 뿐이다.
+#  프로필 조회(자비스03)·런컨텍스트 초기화·선계산 캐시 재사용은 전부 09 안에서 끝난다.
+#    - 선계산 잡    → `JARVIS09_COLLECTOR.precollect.precollect_theme`
+#    - 캐시 재사용  → `JARVIS09_COLLECTOR.collector_engine.collect_all(use_cache=True)`
+#  같은 병이 경제 브리핑에도 있었으므로 함께 이관(③ 4조합).
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -388,8 +326,9 @@ def run_tistory_theme(theme: str, sector: str = "",
             except Exception: pass
         return {"success": False, "url": "", "keyword": theme, "error": str(e)[:100]}
 
-    # ── ① 데이터 수집 — 자비스09 위임 ─────────────────────────
-    _bundle = _theme_collect(theme, sector=sector)
+    # ── ① 데이터 수집 — 자비스09 위임 (02 는 호출 한 줄) ──────
+    from JARVIS09_COLLECTOR import collect_all
+    _bundle = collect_all(theme, sector=sector, category="theme")
     stocks_data = _bundle.get("stocks_data") or {}
     if not stocks_data.get("stocks"):
         _tg(f"⚠️ [THEME-TISTORY] 종목 데이터 없음 — 발행 건너뜀: {theme}")
@@ -414,7 +353,8 @@ def run_naver_theme(theme: str, sector: str = "",
     from JARVIS02_WRITER.trend_economic_writer import _legacy_publish_guard as _gd
     _gd("run_naver_theme")
     print(f"\n  🟢 [THEME-NAVER] 테마 발행 시작: {theme}")
-    _bundle = _theme_collect(theme, sector=sector)
+    from JARVIS09_COLLECTOR import collect_all
+    _bundle = collect_all(theme, sector=sector, category="theme")
     stocks_data = _bundle.get("stocks_data") or {}
     if not stocks_data.get("stocks"):
         _tg(f"⚠️ [THEME-NAVER] 종목 데이터 없음 — 발행 건너뜀: {theme}")
@@ -540,28 +480,12 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             print("  ⏭️ [② 수집] 이전 시도 종목 0개 — collect 재실행 스킵 (결과 동일 예상)")
             return {}
 
-        # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18): precollect 잡(20:00)이 고정·선수집한
-        #   테마면 발행창(21:00) 추출 LLM 0회로 재사용 → writer 회복된 풀에서 실행.
-        #   순수 최적화 — 미스·오류 시 아래 기존 수집 경로로 폴백(현행 동작 보존).
-        try:
-            from JARVIS02_WRITER.precollect_cache import load_precollect
-            _cached = load_precollect("theme", state["theme"])
-            if _cached and _cached.get("collected") is not None:
-                print(f"  ⚡ [② 수집] 선계산 캐시 재사용: {state['theme']} (발행창 추출 LLM 0회)")
-                _out = {k: _cached[k] for k in
-                        ("collected", "stocks_data", "collection_docs", "evidence_pack")
-                        if k in _cached}
-                if _cached.get("data_empty"):
-                    _out["_collect_data_empty"] = True
-                return _out
-        except Exception as _pce:
-            print(f"  ⚠️ [선계산] 캐시 조회 스킵: {_pce}")
-
         # ★ 수집은 자비스09 단독 (사용자 박제 2026-07-23): 02 는 "이 주제로 수집해줘" 한 줄만.
-        #   무엇을·어떤 순서로·어떻게 병렬로·실패 시 무엇으로 폴백할지는 전부 09 소관.
-        #   프로필은 자비스03 에서 주제 패키지로 받는다 (키워드 단독 전송 금지 — ADR 013).
-        _bundle = _theme_collect(state["theme"], sector=state.get("sector", ""),
-                                 profile=state.get("theme_profile"))
+        #   무엇을·어떤 순서로·어떻게 병렬로·실패 시 무엇으로 폴백할지, 선계산(20:00) 캐시를
+        #   재사용할지, 프로필을 자비스03 에서 받아올지 — 전부 09 소관. 02 에는 판단 0.
+        from JARVIS09_COLLECTOR import collect_all
+        _bundle = collect_all(state["theme"], profile=state.get("theme_profile"),
+                              sector=state.get("sector", ""), category="theme")
         collected       = _bundle.get("collected")
         data            = _bundle.get("stocks_data") or {}
         collection_docs = _bundle.get("docs") or []

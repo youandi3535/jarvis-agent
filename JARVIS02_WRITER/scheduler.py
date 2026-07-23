@@ -29,7 +29,7 @@ Market Signal 자동 스케줄러 v4
   python scheduler.py --run 반도체  # 특정 테마 실행
   python scheduler.py --reset       # 진행 상황 초기화
 """
-import os, sys, time, json, subprocess, requests, threading
+import os, sys, time, json, subprocess, threading
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -55,7 +55,6 @@ TG_CHAT_ID      = os.getenv("TELEGRAM_CHAT_ID", "")
 _paused         = False
 _shutdown       = False
 _radar_auto     = False   # True: RADAR 추천 테마 자동 실행
-_last_update_id = 0
 _posting_lock   = threading.Lock()
 
 
@@ -220,22 +219,8 @@ def send_telegram(msg: str):
     send_tg(msg)
 
 
-def get_telegram_updates():
-    global _last_update_id
-    try:
-        res = requests.get(
-            f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
-            params={"offset": _last_update_id + 1, "timeout": 5},
-            timeout=10,
-        )
-        if res.status_code != 200:
-            return []
-        updates = res.json().get("result", [])
-        if updates:
-            _last_update_id = updates[-1]["update_id"]
-        return updates
-    except Exception:
-        return []
+# ★ 텔레그램 폴링(get_telegram_updates)은 폐지 — 호출자 0인 죽은 코드였고, 02 안의 마지막
+#   `requests` 사용처였다. 봇 폴링은 데몬 단일 루프(jarvis_daemon)가 단독 수행한다.
 
 
 # ══════════════════════════════════════════
@@ -264,58 +249,8 @@ def get_result_path(theme: str) -> Path:
     return LOGS_DIR / f"result_{safe}.json"
 
 
-def fetch_kor_counts(theme: str) -> dict:
-    """각 플랫폼 실제 발행 URL 크롤링 → 한글 글자수 반환. {naver: N, tistory: N}"""
-    import re as _re, requests as _req
-
-    _headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-
-    def _kor(text: str) -> int:
-        return sum(1 for ch in text if "가" <= ch <= "힣")
-
-    # DB에서 URL 조회
-    from shared.db import get_db as _get_db
-    con = _get_db()
-    rows = con.execute(
-        "SELECT platform, url FROM post_analysis "
-        "WHERE theme=? ORDER BY created_at DESC LIMIT 6",
-        (theme,)
-    ).fetchall()
-    con.close()
-
-    url_map = {}
-    for platform, url in rows:
-        if platform not in url_map:
-            url_map[platform] = url or ""
-
-    counts = {}
-
-    # 네이버 — 모바일 크롤링
-    try:
-        nv_url = url_map.get("naver", "").replace("blog.naver.com", "m.blog.naver.com").split("?")[0]
-        if nv_url:
-            r = _req.get(nv_url, headers=_headers, timeout=15)
-            raw = _re.sub(r"<script.*?</script>", "", r.text, flags=_re.DOTALL)
-            raw = _re.sub(r"<style.*?</style>", "", raw, flags=_re.DOTALL)
-            raw = _re.sub(r"<[^>]+>", " ", raw)
-            raw = _re.sub(r"\s+", " ", raw).strip()
-            s = raw.find("이웃추가"); e = raw.find("댓글", s + 5 if s > 0 else 0)
-            counts["naver"] = _kor(raw[s + 5:e] if s > 0 and e > 0 else raw)
-    except Exception:
-        pass
-
-    # 티스토리 — tt_article_useless_p_margin
-    try:
-        ts_url = url_map.get("tistory", "")
-        if ts_url:
-            r = _req.get(ts_url, headers=_headers, timeout=15)
-            m = _re.search(r'class="tt_article_useless_p_margin[^"]*"[^>]*>(.*?)</div>', r.text, _re.DOTALL)
-            if m:
-                counts["tistory"] = _kor(_re.sub(r"<[^>]+>", "", m.group(1)))
-    except Exception:
-        pass
-
-    return counts
+# ★ 발행 글 글자수 크롤링은 09 (사용자 박제 2026-07-23) — 밖에 나가 HTML 을 받아오면
+#   그건 수집이다. `JARVIS09_COLLECTOR.published_post_kor_counts(theme)` 단독.
 
 
 def load_platform_result(theme: str) -> dict:
@@ -441,7 +376,8 @@ def run_theme(theme: str) -> dict:
     log("=" * 50)
 
     all_ok = all(results.values())
-    kor_map = fetch_kor_counts(theme)
+    from JARVIS09_COLLECTOR import published_post_kor_counts
+    kor_map = published_post_kor_counts(theme)
     def _fmt(key):
         n = kor_map.get(key, 0)
         return f"{n:,}자" if (results.get(key) and n > 0) else ("-" if results.get(key) else "실패")
@@ -607,34 +543,9 @@ def select_top_theme() -> str | None:
     return select_theme(exclude=_theme_exclude())
 
 
-def run_precollect_theme():
-    """★ 테마 선계산 잡 (20:00 = 21:00 발행 1시간 전 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
-
-    테마를 고정(pin)하고 무거운 fact·chart 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer
-    회복된 Max 풀에서 실행(스톨 조건 제거).
-
-    ★ 2026-07-23 부터 21:00 발행의 *필수 선행* (사용자 박제) — 종전 "순수 최적화·실패해도
-      random 선정 폴백" 은 폐지. 이게 성공하지 않으면 발행은 시작되지 않고, 미충족이면
-      JARVIS04 게이트가 이 잡을 즉시 돌린 뒤 회복 갭(1시간) 뒤로 발행을 미룬다.
-    """
-    from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
-    if _isd():
-        log("⏸ [테마 선계산] 인터프리터 종료 중(데몬 재시작) — 연기")
-        return
-    try:
-        from JARVIS00_INFRA.watchdog import guard_main
-        from JARVIS02_WRITER.trend_theme_writer import precollect_theme
-        # ★ 동적 데드라인 — 발행 시각을 여기서 박지 않는다(종전 20:58 하드코딩). 후행 발행
-        #   잡의 *실제 다음 실행* 2분 전까지를 JARVIS04 가 파생해준다 → 정규 20:00 실행이면
-        #   21:00 기준, 선행 회복 실행(예: 21:30)이면 그때의 발행 시각(22:30) 기준으로
-        #   저절로 맞는다. 발행창을 침범하지 않으면서 쓸 수 있는 시간을 다 쓴다.
-        from JARVIS04_SCHEDULER.job_prereq import deadline_sec as _deadline
-        _dl = _deadline("j02_theme_precollect") or 1500
-        with guard_main("테마 선계산", deadline_sec=_dl):
-            res = precollect_theme()
-        log(f"⚡ [테마 선계산] 완료 — 고정·캐시 {res.get('cached', 0)}개 (21:00 발행 재사용 대기)")
-    except Exception as _e:
-        log(f"⚠️ [테마 선계산] 실패 ({_e}) — 21:00 발행이 기존 수집으로 폴백")
+# ★ 선계산(precollect) 잡은 02 에 없다 (사용자 박제 2026-07-23) —
+#   `JARVIS09_COLLECTOR.precollect.job_precollect_{theme,economic}` 이 잡 진입점.
+#   02 는 `select_top_theme()` 로 *어떤 테마가 미발행인지* 만 알려준다 (발행 상태 = 02 소유).
 
 
 def run_radar_top_theme():
@@ -692,7 +603,7 @@ def run_radar_top_theme():
     #   있으면 첫 시도에 그 테마를 써서 캐시 히트(발행창 추출 LLM 0회). 없으면 기존 random 선정.
     _pinned = None
     try:
-        from JARVIS02_WRITER.precollect_cache import load_pinned_theme
+        from JARVIS09_COLLECTOR import load_pinned_theme
         _pinned = load_pinned_theme()
         if _pinned and _pinned in available:
             log(f"⚡ [선계산] 고정 테마 우선 사용: {_pinned}")
@@ -837,37 +748,6 @@ def _run_self_repair_phase(label: str) -> dict:
             pass
         return {"ok": True, "elapsed_sec": elapsed, "code_changed": 0,
                 "skip_reason": f"{type(_e).__name__}: {str(_e)[:80]}"}
-
-
-def run_precollect_economic():
-    """★ 경제 선계산 (06:00 트렌드 잡 말미 체이닝 — 사용자 박제 2026-07-18).
-
-    고정 시각 잡이 아니라 job_collect_trends_morning 이 트렌드 분석(topic_pack 빌드)을 끝낸 *직후*
-    이어서 호출한다(트렌드 소요시간 가변 — 재빌드 낭비·헛대기 0). 무거운 fact·chart 추출을 07:00
-    발행 전에 미리 수행·캐시 → 발행창 추출 LLM 0회 → 직후 writer 가 버스트로 열화되지 않은 Max
-    풀에서 실행(300s 스톨 조건 제거). 전문 추출 그대로·시점만 앞당김(박제 무위반).
-
-    ★ 2026-07-23 부터 이 체인의 주체인 `radar_trends_06` 이 07:00 발행의 *필수 선행*
-      (사용자 박제) — 종전 "순수 최적화·실패해도 기존 수집 폴백" 은 폐지. 테마와 같은 규칙.
-    """
-    from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
-    if _isd():
-        log("⏸ [경제 선계산] 인터프리터 종료 중(데몬 재시작) — 연기")
-        return
-    try:
-        from JARVIS00_INFRA.watchdog import guard_main
-        from JARVIS02_WRITER.trend_economic_writer import precollect_economic
-        # ★ 동적 데드라인 — 발행 시각을 여기서 박지 않는다(종전 06:58 하드코딩). 이 선계산은
-        #   radar_trends_06 말미에 체이닝되므로, 그 잡을 요구하는 후행(j01_economic_post)의
-        #   *실제 다음 실행* 2분 전까지를 JARVIS04 가 파생해준다 → 정규든 선행 회복 실행이든
-        #   저절로 맞는다 (테마 선계산과 같은 규칙).
-        from JARVIS04_SCHEDULER.job_prereq import deadline_sec as _deadline
-        _dl = _deadline("radar_trends_06") or 1020
-        with guard_main("경제 선계산", deadline_sec=_dl):
-            res = precollect_economic()
-        log(f"⚡ [경제 선계산] 완료 — 캐시 {res.get('cached', 0)}개 (07:00 발행 재사용 대기)")
-    except Exception as _e:
-        log(f"⚠️ [경제 선계산] 실패 ({_e}) — 07:00 발행이 기존 수집으로 폴백")
 
 
 def run_self_repair_then_economic():

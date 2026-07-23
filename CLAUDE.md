@@ -552,6 +552,27 @@ snap = market_snapshot()          # 시장 지표 + 경제 일정 (조립까지 
   **를 09 밖에서 조합하는 것이 곧 위반** — 2종 이상 쓰면 precommit 이 차단한다.
   09 내부(`collector_engine.collect_all`)에서만 조합한다.
 - `evidence_brief` / `as_source_docs` 는 *수집이 아니라 프롬프트 변환* 어댑터 — 02 사용 정상.
+
+**★ 02 에는 수집이 한 줄도 없다 (물리 이관 완료 — 사용자 박제 2026-07-23)**
+
+"02는 수집 관련한건 아무것도 없도록 만들어" — 파사드 호출만 남기고 *파일·함수·잡을 전부* 09 로 옮겼다.
+
+| 옮긴 것 | 종전 (02) | 현재 (09) |
+|---|---|---|
+| 선계산 캐시 | `JARVIS02_WRITER/precollect_cache.py` | `JARVIS09_COLLECTOR/precollect_cache.py` |
+| 선계산 잡 본체·래퍼 | `trend_theme_writer.precollect_theme` · `trend_economic_writer.precollect_economic` · `scheduler.run_precollect_*` | `JARVIS09_COLLECTOR/precollect.py` (`job_precollect_{theme,economic}`) |
+| 수집 호출 조립 | `trend_theme_writer._theme_collect` | `collect_all()` 안 (프로필 보강까지) |
+| 캐시 재사용 판단 | 02 가 `load_precollect` 를 직접 열어봄 | `collect_all(use_cache=)` — **02 는 캐시를 열지 않는다** |
+| 발행 글 글자수 크롤링 | `scheduler.fetch_kor_counts` | `providers/published_provider.published_post_kor_counts` |
+| SEO 참고 문서 수집 | `seo_learner._SEO_SOURCES`/`_build_fetched_block` | `seo_reference_docs()` (09 원본 단일) |
+| 주제 슬롯 선정 중복 | `nv_collect`/`ts_collect` 각자 강제주제·재빌드 분기 | `JARVIS03_RADAR.topic_pack.pick_slot_candidate()` 단일 |
+
+- **왜 "선계산"이 09 인가**: *언제 미리 수집해 둘지* 는 수집 시점 판단 = 수집 도메인의 일.
+  02 안에 있는 동안 02 가 수집 순서·재사용 여부를 정했고 그게 곧 단일 진입점 위반이었다.
+- **캐시에 담는 것은 09 의 상자뿐** — 02 의 `supreme_block` 은 담지 않는다. 담으면 06:05 에
+  굳은 헌법 블록이 07:00 발행까지 그대로 쓰여 *복사본을 진실로 믿는* 사고가 된다.
+- `load_pinned_theme` 는 마커 *조회* (밖에 나가 받아오는 게 없음) → 파사드 면제 목록.
+
 **★ 리서치 설계-우선 (ADR 012 — 사용자 박제 2026-07-02)**: 발행용 텍스트 수집은
 `collect_research` 가 기본 — 설계(research_planner)→조준 수집→근거팩(evidence_pack)→
 커버리지 갭 재수집 순환. 키 필요 소스 누락은 `source_onboarding` 이 감지·텔레그램 안내.
