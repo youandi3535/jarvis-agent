@@ -19,8 +19,8 @@ log = logging.getLogger("jarvis.radar.theme")
 def theme_catalog() -> dict:
     """네이버 금융 공식 테마 카탈로그 (JARVIS09 수집 단일 진입점 경유). 실패 시 빈 dict."""
     try:
-        from JARVIS09_COLLECTOR.collect_theme import _fetch_naver_theme_catalog
-        return _fetch_naver_theme_catalog() or {}
+        from JARVIS09_COLLECTOR import naver_theme_catalog   # ★ 09 공개 정문 (private 직수입 폐기 2026-07-23)
+        return naver_theme_catalog() or {}
     except Exception as e:
         log.warning(f"[theme_picker] 카탈로그 로드 실패: {e}")
         return {}

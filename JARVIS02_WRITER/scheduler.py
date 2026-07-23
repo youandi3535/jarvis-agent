@@ -367,8 +367,8 @@ def run_theme(theme: str) -> dict:
     log(f"  📋 1차 결과: 네이버={'✅' if results.get('naver') else '❌'} | "
         f"티스토리={'✅' if results.get('tistory') else '❌'}")
 
-    # ── 2차 재시도 제거 (ERRORS [160] — harness 가 max_attempts 내부 재시도를 이미 소진;
-    #   legacy run_naver/tistory_theme() 는 _legacy_publish_guard() 차단 대상) ──
+    # ── 2차 재시도 제거 (ERRORS [160] — harness 가 max_attempts 내부 재시도를 이미 소진.
+    #   그때 재시도가 호출하던 legacy run_naver/tistory_theme() 는 2026-07-23 **삭제됨**) ──
 
     # ── 최종 결과 ────────────────────────────────────────────
     ok   = [k for k, v in results.items() if v]

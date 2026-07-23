@@ -2,6 +2,71 @@
 
 ---
 
+## [490] ★ 경계가 *갯수* 로만 지켜지고 있었다 — 09 API 를 한 종만 쓰며 내부를 붙잡던 4곳 + 그 여파로 죽어 있던 경제 중복회피 (2026-07-23)
+
+- **증상**: 사용자 확인 요청 — *"이제 자비스02는 수집 기능이 전혀 없는거지? 자비스09가 수집은
+  전담하는 거지?(자비스03 일부 예외) 다시한번 꼼꼼하게 체크해봐"* → 전수 감사에서 **경계 누수 5곳**
+  과 **죽은 채 돌던 중복회피 1건** 이 나옴. precommit `--category collect` 는 **0건 통과** 상태였다.
+- **환경**: `JARVIS06_IMAGE/{image_spec,economic_charts,theme_charts}.py` ·
+  `JARVIS03_RADAR/{theme_picker,topic_pack}.py` · `api_server.py` ·
+  `JARVIS02_WRITER/trend_economic_writer.py` · `shared/precommit_check.py`
+- **원인** — 세 갈래가 한 뿌리:
+  ① **정문 우회**: [488] 의 검사 3레그는 "09 API 를 **2종 이상** 조합했나" 를 본다. 그래서 09 API 를
+  *한 종만* 쓰면서 09 **내부** 를 붙잡으면 전부 통과했다. 실제로 그 길로 4곳이 새 있었다 —
+  06 이 `providers.economic_data_provider`/`providers.krx_provider` 를 **지목**(= provider 선택·폴백
+  판단을 밖으로 끌어감), 03·api_server 가 private `_fetch_naver_theme_catalog` 를 **직수입**
+  (= `_` 로 시작하는 내부 함수가 공개 계약이 되어 09 가 자기 내부를 못 고침).
+  ② **캐시가 곧 판단**: 06 `image_spec` 이 자체 `_DS_CACHE`(TTL 30분)로 *언제 다시 수집할지* 를
+  정하고 있었다. 재수집 시점은 수집 판단이다. 게다가 키가 (키워드,섹터) 뿐이라 **다음 글이 이전 글
+  데이터를 물려받을** 여지가 있었다.
+  ③ **[489] 의 잔해**: 02 `trend_economic_writer` 에 호출자 0 인 죽은 서브트리 **816줄** 이 남아
+  있었다 — 그중 `_build_emergency_trends` 는 **LLM 으로 트렌드를 지어내 `JARVIS03_RADAR/data/`
+  에 써 넣던** 코드였다(수집 owner 침범 + 사실성 위반). 그리고 `_mark_keyword_used` 가 죽으면서
+  **`used_economic_keywords.json` 이 아무도 쓰지 않아 파일 자체가 존재하지 않게 됐고**,
+  03 `topic_pack._used_keywords()` 는 매번 빈 집합을 반환 → **경제 7일 중복회피가 조용히 무력화**.
+- **헛다리**: "precommit collect 0건 = 경계 지켜짐" 으로 읽은 것. 검사가 보는 축(갯수)과 실제 경계
+  (어느 *층* 을 붙잡았나)가 달랐다. 또 "죽은 코드는 해롭지 않다" 는 판단 — 죽은 원장 기록 코드가
+  살아있는 중복회피를 데리고 죽었다.
+- **해결**:
+  · 09 **공개 정문 2종 신설** — `naver_theme_catalog()`(카탈로그 수집·1h 캐시·폴백을 09 안에서 종결) ·
+    `chart_datasets(theme, sector, description)`(**재수집 시점 판단·캐시를 09 가 소유**, 캐시 키에
+    `run_context.active_run().run_id` 포함 → 글이 바뀌면 데이터도 새로 받는다)
+  · 06 3파일 → 정문 경유. `theme_charts` 는 **지연 import**(09 `collect_theme` 이 06 을 모듈 레벨로
+    import 하므로 되받으면 순환). `economic_charts` 의 provider import 는 *사용처 0* 이라 삭제.
+  · 03 `theme_picker` · `api_server` → `from JARVIS09_COLLECTOR import naver_theme_catalog`
+  · 02 죽은 서브트리 **816줄 삭제**(`load_today_trends`·`_build_emergency_trends`·`select_*_topic`·
+    `_topic_econ_fit`·`_is_same_topic`·`_mark_keyword_used`·`_legacy_publish_guard`·
+    `run_naver`/`run_tistory`) + 미사용 import 5종 정리. 1759 → 906줄.
+  · **③ 모든 글에 적용 — 테마 쪽 같은 병도 함께 제거**: 경제에서 `run_naver`/`run_tistory` 를
+    지우자 `trend_theme_writer.run_naver_theme`/`run_tistory_theme` 가 삭제된 `_legacy_publish_guard`
+    를 import 하며 *호출 시점에 깨지는* 상태가 됐다. 가드를 되살리는 대신 **두 함수를 삭제** —
+    수집→대본→발행을 하네스 밖에서 한 벌 더 구현한 복사본이라 prepublish 사실성·매력도 게이트도,
+    Layer 3 검증 순환도 안 타고 곧장 블로그로 나갔다. 유일한 호출자였던 CLI 는 스스로
+    `JARVIS_ALLOW_LEGACY_PUBLISH=1` 을 켜 차단을 풀고 있었다 → 그 환경변수와 `--naver-only`/
+    `--tistory-only` 플래그도 폐기. **테마 발행 경로 = `run_all_themes()` 하나.**
+  · 03 `_used_keywords()` → **DB 파생**(`post_analysis` 의 `post_type='economic'` 최근 N일
+    `source_keyword`). JSON 사본 폐기. 복구 확인: 7일 5건·30일 10건 반환(종전 0건).
+  · precommit **④`collect/private-api` ⑤`collect/internal-module` 2레그 증설**. ②동적 설계 —
+    '내부 계층' 목록도 박지 않고 09 폴더의 하위 *패키지* 를 실물로 훑어 파생, 읽기 실패는 fail-closed.
+    **④⑤ 에는 03·tools 예외 없음** (정문은 누구에게나 정문).
+- **★ 효과를 동작으로 확인**: 규칙을 만든 뒤 위반 4종을 담은 임시 파일로 **실제 검출 4건**
+  (internal-module 2 · private-api 2) 을 확인하고 삭제 → 재실행 0건. *검사 존재는 적용의 증거가 아니다.*
+- **파일**: `JARVIS09_COLLECTOR/{collect_theme,chart_data,__init__}.py` ·
+  `JARVIS06_IMAGE/{image_spec,economic_charts,theme_charts}.py` ·
+  `JARVIS03_RADAR/{theme_picker,topic_pack}.py` · `api_server.py` ·
+  `JARVIS02_WRITER/{trend_economic_writer,trend_theme_writer,scheduler}.py` ·
+  `shared/precommit_check.py` ·
+  `CLAUDE.md` · `JARVIS02_WRITER/CLAUDE_WRITER.md` · `JARVIS03_RADAR/CLAUDE_RADAR.md`
+- **교훈**: ① **경계는 갯수가 아니라 층이다** — API 를 몇 개 썼느냐가 아니라 *공개 정문을 통했느냐,
+  내부(private 심볼·하위 패키지)를 붙잡았느냐*. ② **캐시는 판단이다** — TTL 을 가진 쪽이 재수집
+  시점을 정한다. 소비자에 캐시를 두면 수집 판단이 그만큼 새어나간 것. ③ **죽은 코드는 중립이 아니다**
+  — 죽은 기록 코드가 살아있는 정책(7일 중복회피)을 데리고 죽었고, 아무 오류도 내지 않았다.
+  ④ 새 규칙을 만들면 *반드시 위반 샘플로 검출을 확인* 하라. ⑤ **한쪽에서 지운 것은 반대쪽에도
+  있다** — 경제에서 지운 레거시 발행 함수의 쌍둥이가 테마에 그대로 있었다(③ 모든 글에 적용).
+  삭제 후에는 *지운 심볼을 저장소 전체에서 grep* 해 매달린 참조를 반드시 확인할 것.
+
+---
+
 ## [489] ★ 02 에 수집 코드가 *물리적으로* 남아 있었다 — [488] 은 조합만 걷어냈고 파일은 그대로였다 (2026-07-23)
 
 - **증상**: 사용자 지적 — *"02의 수집하는 모든 기능과 코드 폴더 등 모든것을 다 09로 옮겨.

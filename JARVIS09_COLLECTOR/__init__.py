@@ -8,6 +8,8 @@
         collect_for_theme,       # 주제 관련 텍스트 자료 (뉴스·블로그·학술 등)
         collect_stocks_data,     # 테마 종목 데이터 (시세·재무)
         collect_chart_data,      # ★ 주제 연관 차트용 실데이터 (출처 박제 — 2026-06-29)
+        chart_datasets,          # ★ 차트 datasets 파사드 (재수집 시점 판단 포함 — 2026-07-23)
+        naver_theme_catalog,     # ★ 네이버 공식 테마 카탈로그 (공개 정문 — 2026-07-23)
         get_market_data,         # 글로벌 시장 지표 (yfinance)
         get_economic_calendar,   # 경제 일정 (investing.com)
         web_verify,              # 발행 전 사실성 게이트용 웹 재검증
@@ -43,10 +45,15 @@ from JARVIS09_COLLECTOR.source_onboarding import (
     register_key as register_source_key,
     onboarding_status,
 )
-from JARVIS09_COLLECTOR.collect_theme import collect_stocks_data, stocks_to_datasets
+from JARVIS09_COLLECTOR.collect_theme import (
+    collect_stocks_data,
+    stocks_to_datasets,
+    naver_theme_catalog,       # ★ 네이버 공식 테마 카탈로그 — 공개 정문 (private 직수입 폐기 2026-07-23)
+)
 from JARVIS09_COLLECTOR.evidence_pack import facts_to_datasets   # 텍스트 수치 → 차트 승격 (ERRORS [302][315])
 from JARVIS09_COLLECTOR.chart_data import (
     collect_chart_data,
+    chart_datasets,      # ★ 차트 데이터 파사드 — 재수집 시점 판단까지 09 (2026-07-23)
     get_ecos_raw,        # ★ JARVIS06 차트용 ECOS 원시 수집 (provider 단일 진입점)
     get_krx_raw,         # ★ JARVIS06 차트용 KRX 원시 수집 (provider 단일 진입점)
 )
@@ -92,8 +99,10 @@ __all__ = [
     "onboarding_status",
     "collect_stocks_data",
     "stocks_to_datasets",
+    "naver_theme_catalog",
     "facts_to_datasets",
     "collect_chart_data",
+    "chart_datasets",
     "get_ecos_raw",
     "get_krx_raw",
     "get_market_data",

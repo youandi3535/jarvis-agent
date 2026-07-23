@@ -133,8 +133,8 @@ def get_official_themes():
     try:
         import sys as _sys
         _sys.path.insert(0, str(BASE_DIR))
-        from JARVIS09_COLLECTOR.collect_theme import _fetch_naver_theme_catalog
-        catalog: dict = _fetch_naver_theme_catalog()   # {테마명: 테마번호}
+        from JARVIS09_COLLECTOR import naver_theme_catalog   # ★ 09 공개 정문 (private 직수입 폐기 2026-07-23)
+        catalog: dict = naver_theme_catalog()   # {테마명: 테마번호}
     except Exception:
         catalog = {}
 

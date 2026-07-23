@@ -1,10 +1,5 @@
 """JARVIS06_IMAGE/theme_charts.py — 테마주 차트·인포그래픽 생성 (collect_theme에서 이관)."""
 from __future__ import annotations
-# ★ yfinance 단일 진입점 → JARVIS09 (2026-05-31 이관)
-from JARVIS09_COLLECTOR.providers.economic_data_provider import (
-    get_ticker_history as _j09_hist,
-    download_ticker as _j09_dl,
-)
 import io, base64, os, logging
 from pathlib import Path
 import matplotlib
@@ -20,6 +15,20 @@ import matplotlib.pyplot as plt
 from JARVIS06_IMAGE.style_engine import setup_chart_defaults, CHART_STYLE
 
 log = logging.getLogger("jarvis")
+
+
+def _j09_hist(ticker: str, period: str = "2d", interval: str = "1d"):
+    """시세 시계열 — JARVIS09 **정문** 경유 (2026-07-23).
+
+    ★ 지연 import 인 이유: 09 `collect_theme` 이 이 모듈을 *모듈 레벨* 로 import 한다
+      (09→06). 여기서 09 패키지를 모듈 레벨로 되받으면 부분 초기화 상태의 09 를
+      건드려 순환 import 로 죽는다. 호출 시점엔 09 초기화가 끝나 있으므로 안전.
+      (종전엔 `providers.economic_data_provider` 를 직수입해 이 문제를 피했는데,
+       그건 09 의 *내부 구현 계층* 을 밖에서 붙잡는 형태였다.)
+    """
+    from JARVIS09_COLLECTOR import get_ticker_history
+    return get_ticker_history(ticker, period=period, interval=interval)
+
 
 CHART_STORE: dict = {}
 

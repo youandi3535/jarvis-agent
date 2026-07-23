@@ -16,10 +16,9 @@
   Phase 1: ts/nv 대본 *순차* 생성 (서로 다른 키워드 보장 위해 — ts_keyword 전달)
   Phase 2: Tistory/Naver Selenium 순차 (충돌 방지)
 
-진입점:
-  run_all_themes(theme)  — 데몬·scheduler 가 호출. 2개 플랫폼 통합 발행.
-  run_naver_theme(theme, sector="", ts_keyword="") -> dict
-  run_tistory_theme(theme, sector="") -> dict
+진입점 (하나뿐 — 레거시 직접발행은 2026-07-23 삭제):
+  run_all_themes(theme, sector="")  — 데몬·scheduler·CLI 공통. 하네스 액션 2개
+    (네이버 완결 → 티스토리) 로 발행. 검증 순환을 거치지 않는 발행 경로는 없다.
 """
 from __future__ import annotations
 
@@ -291,77 +290,14 @@ def _publish_naver(draft: dict, theme: str, sector: str) -> dict:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  진입점 — 플랫폼별 단일 함수 (외부에서 직접 호출 가능)
+#  레거시 직접발행 진입점 — ★ 삭제됨 (사용자 박제 2026-07-23)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def run_tistory_theme(theme: str, sector: str = "",
-                      stocks_data: dict | None = None) -> dict:
-    """테마주 티스토리 발행 — ⓪ 쿠키 갱신 → ①~⑦ → ⑧ 발행 (driver 재사용).
-
-    ★ P0-② 테마 버전 (사용자 박제 2026-05-18) — harness 외부 호출 차단.
-    """
-    from JARVIS02_WRITER.trend_economic_writer import _legacy_publish_guard as _gd
-    _gd("run_tistory_theme")
-    print(f"\n  🔴 [THEME-TISTORY] 테마 발행 시작: {theme}")
-
-    # ── ⓪ 쿠키 사전 갱신 (★ 글 작성 전 항상 — 사용자 직접 박제 2026-05-14) ──
-    print(f"  🍪 [THEME-TISTORY] ⓪ 글 작성 전 쿠키 강제 갱신")
-    _preloaded_driver = None
-    try:
-        from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr_run
-        ok, _preloaded_driver = _tcr_run(force=True, return_driver=True)
-        if not ok:
-            _tg(f"❌ [THEME-TISTORY] 쿠키 갱신 실패 — 글 작성 중단: {theme}")
-            if _preloaded_driver:
-                try: _preloaded_driver.quit()
-                except Exception: pass
-            return {"success": False, "url": "", "keyword": theme, "error": "쿠키 갱신 실패"}
-        load_dotenv(override=True)
-        print(f"  ✅ [THEME-TISTORY] ⓪ 쿠키 갱신 완료 — driver 재사용")
-    except Exception as e:
-        print(f"  ❌ [THEME-TISTORY] ⓪ 쿠키 갱신 예외: {e}")
-        _g_report("writer", e, module=__name__)
-        if _preloaded_driver:
-            try: _preloaded_driver.quit()
-            except Exception: pass
-        return {"success": False, "url": "", "keyword": theme, "error": str(e)[:100]}
-
-    # ── ① 데이터 수집 — 자비스09 위임 (02 는 호출 한 줄) ──────
-    from JARVIS09_COLLECTOR import collect_all
-    _bundle = collect_all(theme, sector=sector, category="theme")
-    stocks_data = _bundle.get("stocks_data") or {}
-    if not stocks_data.get("stocks"):
-        _tg(f"⚠️ [THEME-TISTORY] 종목 데이터 없음 — 발행 건너뜀: {theme}")
-        if _preloaded_driver:
-            try: _preloaded_driver.quit()
-            except Exception: pass
-        return {"success": False, "url": "", "keyword": theme, "error": "종목 데이터 없음"}
-
-    # ── ②~⑦ HTML 생성 + 블록 조립 + 검증 ─────────────────────
-    draft = _build_blocks(_bundle["collected"], "tistory", TISTORY_IMG_DIR)
-    # ── ⑧ 발행 (⓪에서 받은 driver 재사용) ─────────────────────
-    return _publish_tistory(draft, theme, sector, preloaded_driver=_preloaded_driver)
-
-
-def run_naver_theme(theme: str, sector: str = "",
-                    stocks_data: dict | None = None,
-                    ts_keyword: str = "") -> dict:
-    """테마주 네이버 발행.
-
-    ★ P0-② 테마 버전 (사용자 박제 2026-05-18) — harness 외부 호출 차단.
-    """
-    from JARVIS02_WRITER.trend_economic_writer import _legacy_publish_guard as _gd
-    _gd("run_naver_theme")
-    print(f"\n  🟢 [THEME-NAVER] 테마 발행 시작: {theme}")
-    from JARVIS09_COLLECTOR import collect_all
-    _bundle = collect_all(theme, sector=sector, category="theme")
-    stocks_data = _bundle.get("stocks_data") or {}
-    if not stocks_data.get("stocks"):
-        _tg(f"⚠️ [THEME-NAVER] 종목 데이터 없음 — 발행 건너뜀: {theme}")
-        return {"success": False, "url": "", "keyword": theme, "error": "종목 데이터 없음"}
-    draft = _build_blocks(_bundle["collected"], "naver", NAVER_IMG_DIR)
-    return _publish_naver(draft, theme, sector)
-
+#   `run_tistory_theme` / `run_naver_theme` 는 수집→대본→발행을 **하네스 밖에서**
+#   한 벌 더 구현한 복사본이었다 — prepublish 게이트(사실성·매력도)도, Layer 3 검증
+#   순환도 타지 않고 곧장 실제 블로그로 나갔다. `JARVIS_ALLOW_LEGACY_PUBLISH=1` 로
+#   차단을 스스로 풀던 CLI 가 유일한 호출자.
+#   경제(`trend_economic_writer.run_naver/run_tistory`)를 지운 것과 같은 이유·같은 조치
+#   (③ 모든 글에 적용). 발행 경로는 `run_all_themes()` 하네스 액션 **하나**.
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  통합 진입점 — run_all_themes (scheduler 가 호출) — 하네스 5-Layer 적용
@@ -951,7 +887,6 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
 
 __all__ = [
     "run_all_themes",
-    "run_tistory_theme", "run_naver_theme",
 ]
 
 
@@ -964,30 +899,20 @@ if __name__ == "__main__":
     except Exception as _ee:
         print(f"⚠️ preflight 호출 실패: {_ee}")
 
-    # ★ P0-② 테마 버전 우회 허용 (사용자 박제 2026-05-18) — CLI 직접 실행 디버그 모드.
-    # run_tistory_theme/run_naver_theme 의 _legacy_publish_guard 차단을
-    # 명시적으로 우회. 데몬 흐름에서는 환경변수 미설정 — 자동 차단.
-    import os as _osg
-    _osg.environ["JARVIS_ALLOW_LEGACY_PUBLISH"] = "1"
-
+    # ★ 우회 환경변수(JARVIS_ALLOW_LEGACY_PUBLISH) 폐기 (2026-07-23):
+    #   그 변수는 *하네스 검증 순환을 건너뛰는 발행* 을 CLI 가 스스로 허용하던 스위치였다.
+    #   레거시 직접발행 함수를 지운 지금 우회할 대상 자체가 없다. CLI 도 하네스로만 나간다.
+    #   플랫폼 단독(--naver-only/--tistory-only) 도 폐기 — run_all_themes 가 플랫폼별
+    #   독립 액션으로 실행하며 한쪽 실패가 다른 쪽을 막지 않는다.
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("theme", help="테마명 (예: '반도체')")
     p.add_argument("--sector", default="", help="섹터 (선택)")
-    p.add_argument("--naver-only", action="store_true")
-    p.add_argument("--tistory-only", action="store_true")
     args = p.parse_args()
 
     # ★ 정지 방어 (사용자 박제 2026-07-06): 일회성 발행 작업 freeze/deadline 가드.
     from JARVIS00_INFRA.watchdog import guard_main
     with guard_main("테마 발행", deadline_sec=2 * BLOG_ACTION_DEADLINE_SEC + 600):   # 부모 backstop — 플랫폼당 데드라인×2 + 여유
-        if args.naver_only:
-            r = run_naver_theme(args.theme, args.sector)
-            sys.exit(0 if r.get("success") else 1)
-        if args.tistory_only:
-            r = run_tistory_theme(args.theme, args.sector)
-            sys.exit(0 if r.get("success") else 1)
-        # 기본 — 2개 통합
         r = run_all_themes(args.theme, args.sector)
         ok = any(r.get(p, {}).get("success") for p in ("tistory", "naver"))
         sys.exit(0 if ok else 1)

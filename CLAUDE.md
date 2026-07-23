@@ -552,6 +552,13 @@ snap = market_snapshot()          # 시장 지표 + 경제 일정 (조립까지 
   **를 09 밖에서 조합하는 것이 곧 위반** — 2종 이상 쓰면 precommit 이 차단한다.
   09 내부(`collector_engine.collect_all`)에서만 조합한다.
 - `evidence_brief` / `as_source_docs` 는 *수집이 아니라 프롬프트 변환* 어댑터 — 02 사용 정상.
+- **★ 정문만 잡는다 — private 심볼·내부 계층 직수입 금지 (사용자 박제 2026-07-23)**
+  `_` 로 시작하는 09 함수(`_fetch_naver_theme_catalog` 등)와 09 하위 패키지
+  (`JARVIS09_COLLECTOR.providers.*`) 를 밖에서 import 하지 말 것. 밖이 붙잡는 순간 그 이름이
+  공개 계약이 되어 **09 가 자기 내부를 못 고친다**. 필요하면 09 에 *공개 정문* 을 신설한다
+  (예: `naver_theme_catalog()` — 카탈로그 수집·1h 캐시·폴백을 09 안에서 끝내고 결과만 준다).
+  필요한 데이터가 캐시·재수집 시점 판단을 동반하면 그 판단도 09 것 —
+  `chart_datasets(theme, sector, description)` 처럼 09 가 캐시(run 단위)까지 소유한다.
 
 **★ 02 에는 수집이 한 줄도 없다 (물리 이관 완료 — 사용자 박제 2026-07-23)**
 
@@ -601,21 +608,30 @@ python3 shared/precommit_check.py --category collect    # git 훅·데몬 부팅
 *API 를 호출* 하고 있었다. 위 grep 3종은 **전부 0행 통과**였다. 그런데도 수집 오케스트레이션이
 02 안에 5벌 흩어져 있었다 — 어긴 것은 *호출* 이 아니라 **조합**이었기 때문이다.
 무엇을 먼저 부르고 · 실패하면 무엇으로 대체하고 · 결과를 어떤 상자로 조립할지를 02 가 정했다.
-그래서 검사는 *조합* 을 잡는다. 3레그:
+그래서 검사는 *조합* 을 잡는다. 5레그 (④⑤ 는 2026-07-23 증설 — 아래 '왜 5레그인가' 참조):
 
 | 레그 | 위반 조건 | 뜻 |
 |------|----------|-----|
 | `collect/orchestration-outside` | 09 밖 한 파일에서 09 수집 API **2종 이상** 호출 | 순서·폴백 판단이 09 밖에 생김 → `collect_all()` 한 번으로 받을 것 |
 | `collect/assembler-outside` | `compose_collected`·`*_to_datasets`·`select_by_trust_quota` 를 09 밖에서 호출 | 조립 규칙 유출 (09 가 걸러낸 항목이 되살아나는 구멍) |
 | `collect/raw-lib` | yfinance·pykrx·FinanceDataReader·pytrends·feedparser 로 09 밖에서 데이터 취득 | 수집 신설 |
+| **`collect/private-api`** | 09 의 `_` 접두 심볼을 09 밖에서 import | 내부 구현이 공개 계약이 됨 → 09 가 자기 내부를 못 고침 |
+| **`collect/internal-module`** | `JARVIS09_COLLECTOR.<하위패키지>.*` 를 09 밖에서 import | provider *지목* = 폴백 우회. 정문으로 받을 것 |
 
-- **② 동적 설계**: 금지 API 목록을 검사에 박지 않는다 — `JARVIS09_COLLECTOR/__init__.py` 의
-  `__all__` 을 매 실행 파싱해 파생. **09 에 새 수집 API 를 추가하면 자동으로 검사 대상**이 된다.
-- **fail-closed**: `__all__` 을 못 읽으면 통과가 아니라 `collect/self-check` 위반.
+**왜 5레그인가 (★ 비직관 — 같은 병의 2차 발현)**: ①②③ 만 있던 동안 **09 API 를 한 종만 쓰면서**
+경계가 새는 길이 남아 있었다. 실제로 4곳이 그 길로 새 있었고 ①②③ 은 전부 통과했다 —
+06 이 `providers.economic_data_provider` 를 지목(⑤), 03·api_server 가 `_fetch_naver_theme_catalog`
+를 직수입(④). *갯수* 가 아니라 **어느 층을 붙잡았는가** 가 경계다.
+
+- **② 동적 설계**: 금지 API 목록도, '내부 계층' 목록도 검사에 박지 않는다 —
+  `JARVIS09_COLLECTOR/__init__.py` 의 `__all__` 을 매 실행 파싱(①②) + 09 폴더의 하위 *패키지*
+  를 실물로 훑어 파생(⑤). **09 에 새 수집 API·새 계층을 추가하면 자동으로 검사 대상**이 된다.
+- **fail-closed**: `__all__` 이나 하위 패키지 목록을 못 읽으면 통과가 아니라 `collect/self-check` 위반.
   (실제로 초판이 `importlib` 로 09 를 로드하다 `python3 shared/precommit_check.py` 실행에서
   조용히 실패 → **검사가 있는데 무력화된 채 통과**했다. 검사 존재는 적용의 증거가 아니다.)
 - **정당한 예외**: JARVIS03(트렌드 수집 owner) · `tools/`(계측 스크립트) · 패키지 메타만 쓰는
   import(예: `pykrx.__file__` 로 번들 폰트 경로 탐색 — 데이터 취득 아님).
+  단 **④⑤ 에는 예외가 없다** — 03·tools 도 정문으로만 받는다. 정문은 누구에게나 정문이다.
 - **면제 정문**: `collect_all` · `market_snapshot` · `CollectedData` 등 *09 가 조합해 준 결과를
   받는* 파사드는 몇 개를 쓰든 정상. 이게 유일한 정상 소비 형태.
 

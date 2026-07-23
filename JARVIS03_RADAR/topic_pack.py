@@ -25,7 +25,6 @@ log = logging.getLogger("jarvis")
 
 _RADAR_DIR = Path(__file__).resolve().parent
 _DATA_DIR = _RADAR_DIR / "data"
-_USED_KW_FILE = _DATA_DIR / "used_economic_keywords.json"
 
 # 경제 브리핑 대상 섹터 (★ 사용자 박제 2026-07-18) — analyzer 실제 분류 라벨과 일치.
 # JARVIS02_WRITER/trend_economic_writer._ECON_SECTORS 와 동치 유지(03→02 import 순환 금지라 로컬).
@@ -49,14 +48,32 @@ def _pack_path(day: str | None = None) -> Path:
 
 
 def _used_keywords(days: int = 7) -> set[str]:
-    """최근 N일 발행 사용 키워드 (JARVIS02 _mark_keyword_used 가 적재하는 파일)."""
-    if not _USED_KW_FILE.exists():
-        return set()
+    """최근 N일 경제 브리핑에 *실제로 발행된* 키워드 — 발행 원장(post_analysis)에서 파생.
+
+    ★ 2026-07-23 정정 — 종전엔 `data/used_economic_keywords.json` 사본을 읽었다.
+      그 파일을 적재하던 유일한 코드가 JARVIS02 의 레거시 `run_naver/run_tistory` 였고,
+      harness 경로로 갈아탄 뒤로는 *아무도 쓰지 않아 파일 자체가 존재하지 않았다* →
+      중복 제외가 조용히 죽은 채(항상 빈 집합) 돌고 있었다. 원장은 DB 한 곳뿐이므로
+      사본을 두지 않고 매번 조회한다 (②동적 설계 / 복사본을 진실로 믿지 말 것).
+    """
     try:
-        data = json.loads(_USED_KW_FILE.read_text(encoding="utf-8"))
-        cutoff = (date.today() - timedelta(days=days)).isoformat()
-        return {e["keyword"].strip().lower() for e in data if e.get("date", "") >= cutoff}
-    except Exception:
+        import sqlite3
+        from shared.db import DB_PATH
+        con = sqlite3.connect(str(DB_PATH))
+        try:
+            rows = con.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(TRIM(source_keyword), ''), TRIM(theme)) "
+                "FROM post_analysis "
+                "WHERE post_type = 'economic' "
+                "  AND created_at >= datetime('now', 'localtime', ?)",
+                (f"-{int(days)} day",),
+            ).fetchall()
+        finally:
+            con.close()
+        return {r[0].strip().lower() for r in rows if r and r[0] and r[0].strip()}
+    except Exception as e:
+        log.warning(f"[topic_pack] 최근 발행 키워드 조회 실패: {e}")
+        _g_report("radar", e, module=__name__, func_name="_used_keywords")
         return set()
 
 

@@ -12,10 +12,9 @@ import textwrap
 from datetime import datetime
 from pathlib import Path
 
-# ★ yfinance 단일 진입점 → JARVIS09
-from JARVIS09_COLLECTOR.providers.economic_data_provider import (
-    get_ticker_history as _j09_hist,
-)
+# ★ 09 저수준 provider 직수입 폐기 (2026-07-23) — 이 파일은 시세를 받아오지 않는다.
+#   (종전 `_j09_hist` 는 *사용처 0* 인 죽은 import 였다. 필요해지면 09 **정문**
+#    `from JARVIS09_COLLECTOR import get_ticker_history` 를 함수 안에서 지연 호출할 것.)
 
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report

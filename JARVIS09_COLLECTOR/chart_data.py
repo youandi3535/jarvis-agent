@@ -1717,4 +1717,50 @@ def get_krx_raw(keyword: str, max_items: int | None = None) -> str:
         return ""
 
 
-__all__ = ["collect_chart_data", "get_ecos_raw", "get_krx_raw"]
+# ── 차트 데이터 파사드 (이미지 도메인 전용 한 줄 창구) ──────────────────────────
+# ★ 사용자 박제 2026-07-23 — "언제 다시 수집할지" 는 수집 도메인의 판단.
+#   종전엔 JARVIS06 image_spec 이 자기 모듈에 TTL 캐시(_DS_CACHE/30분)를 두고
+#   collect_chart_data 를 직접 불렀다. 그러면 *재수집 시점* 이라는 수집 판단이 06 에
+#   생기고, 09 가 런(run_id)을 새로 열어도 06 캐시는 그대로 남아 이전 글 데이터가
+#   새 글에 새어든다(= 복사본을 진실로 믿는 형태). 캐시를 09 안으로 들인다.
+_AUTO_DS_CACHE: dict[tuple, tuple[float, list]] = {}
+_AUTO_DS_TTL = 1800.0   # 30분 — 같은 글 안 반복 호출 비용만 흡수
+
+
+def chart_datasets(theme: str, sector: str = "", description: str = "") -> list:
+    """주제 → 차트용 실데이터 datasets (없으면 []). 재수집 시점 판단 포함.
+
+    호출자(JARVIS06)는 "이 주제 차트 데이터 줘" 한 줄만 부른다. 캐시 키에 run_id 를
+    넣어 *새 글이 시작되면 자동으로 새로 수집* 한다 — 글 사이 데이터 누수 차단.
+    """
+    theme = (theme or "").strip()
+    if not theme:
+        return []
+    import time as _t
+    try:
+        from JARVIS09_COLLECTOR.run_context import active_run as _ar
+        _ctx = _ar()
+        run_id = _ctx.run_id if _ctx else ""
+    except Exception:
+        run_id = ""
+    key = (run_id, theme, sector or "")
+    now = _t.time()
+    hit = _AUTO_DS_CACHE.get(key)
+    if hit and now - hit[0] < _AUTO_DS_TTL:
+        return hit[1]
+    try:
+        res = collect_chart_data(theme, sector=sector, description=(description or "")[:500])
+        ds = res.get("datasets") or []
+    except Exception as e:
+        log.warning(f"[chart_data] chart_datasets 수집 실패: {e}")
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report as _rep
+            _rep("collector", e, module=__name__, func_name="chart_datasets")
+        except Exception:
+            pass
+        ds = []
+    _AUTO_DS_CACHE[key] = (now, ds)
+    return ds
+
+
+__all__ = ["collect_chart_data", "chart_datasets", "get_ecos_raw", "get_krx_raw"]

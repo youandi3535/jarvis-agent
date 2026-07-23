@@ -1235,6 +1235,48 @@ _COLLECT_RAW_IMPORT = re.compile(
 # 패키지 *메타* 만 쓰는 건 수집이 아니다 (예: 번들 폰트 경로 탐색 `pykrx.__file__`)
 _COLLECT_LIB_META_ATTRS = {"__file__", "__path__", "__version__", "__name__", "__doc__"}
 
+# ── ④⑤ 정문 우회 — 09 의 *내부* 를 밖에서 붙잡는 형태 (사용자 박제 2026-07-23) ──
+#   ①②③ 은 "몇 종을 조합했나" 를 본다. 그런데 09 API 를 *한 종만* 쓰면서도 경계가 새는
+#   길이 두 개 남아 있었다 (실제로 4곳이 이 길로 새 있었고 ①②③ 은 전부 통과했다):
+#     ④ private 심볼 직수입 — `_fetch_naver_theme_catalog` 처럼 `_` 로 시작하는 내부 함수.
+#        밖이 붙잡는 순간 09 는 자기 내부를 못 고친다 (이름 하나가 곧 공개 계약이 된다).
+#     ⑤ 내부 계층(하위 패키지) 직수입 — `JARVIS09_COLLECTOR.providers.*`.
+#        provider 선택은 09 가 하는 판단이다. 밖에서 특정 provider 를 지목하면 폴백이 죽는다.
+#   ② 동적 설계: '내부 계층' 목록도 박지 않는다 — 09 폴더의 하위 *패키지* 를 실물로 훑어 파생.
+_COLLECT_FROM_09 = re.compile(r"^\s*from\s+JARVIS09_COLLECTOR(?:\.([\w.]+))?\s+import\s+(.+)$")
+_COLLECT_IMPORT_09 = re.compile(r"^\s*import\s+JARVIS09_COLLECTOR\.([\w.]+)")
+
+
+def _collect_internal_packages() -> set[str] | None:
+    """09 의 내부 계층(하위 패키지) 이름 — 파일시스템에서 파생. 09 가 계층을 늘리면 자동 편입.
+
+    읽기 실패는 `None` (= 검사 무력화, fail-closed). 빈 집합은 '하위 패키지가 없다' 는 사실.
+    """
+    root = ROOT / "JARVIS09_COLLECTOR"
+    try:
+        return {d.name for d in root.iterdir()
+                if d.is_dir() and not d.name.startswith((".", "__")) and (d / "__init__.py").exists()}
+    except Exception:
+        return None
+
+
+def _collect_imported_names(names_s: str, lineno: int, lines: list[str]) -> list[str]:
+    """`from ... import` 의 *원본* 이름들 (alias 는 무시 — `as _x` 는 밖의 사정)."""
+    if "(" in names_s and ")" not in names_s:          # 괄호 여러 줄
+        buf, j = [names_s], lineno
+        while j < len(lines) and ")" not in lines[j]:
+            buf.append(lines[j]); j += 1
+        if j < len(lines):
+            buf.append(lines[j])
+        names_s = " ".join(buf)
+    raw = names_s.replace("(", " ").replace(")", " ").replace("\\", " ")
+    out = []
+    for tok in raw.split(","):
+        nm = tok.split("#")[0].split(" as ")[0].strip()
+        if nm:
+            out.append(nm)
+    return out
+
 
 def _collect_api_names() -> set[str]:
     """09 가 공개한 수집 API 이름 — 런타임 파생 (하드코딩 금지, ② 동적 설계).
@@ -1263,15 +1305,19 @@ def check_collect(report: Report) -> None:
     ① 09 밖에서 수집 API 2종 이상 사용 → *조합* = 수집 오케스트레이션 (위반)
     ② 09 밖에서 수집 산출물 조립 함수 호출 → 조립 규칙 유출 (위반)
     ③ 09 밖에서 원시 수집 라이브러리 import → 수집 신설 (위반)
+    ④ 09 의 private(`_`) 심볼 직수입 → 내부 구현을 밖이 붙잡음 (위반)
+    ⑤ 09 의 내부 계층(하위 패키지) 직수입 → provider 선택 판단 유출 (위반)
     """
     cat = "collect"
     api = _collect_api_names()
+    internal_pkgs = _collect_internal_packages()
     assemblers = _COLLECT_ASSEMBLERS & (api | _COLLECT_ASSEMBLERS)
-    if not api:
+    if not api or internal_pkgs is None:
         # fail-closed — 목록을 못 읽으면 검사가 *조용히 무력화*된다. 통과시키지 않는다.
+        what = "__all__" if not api else "하위 패키지 목록"
         report.add(Violation(
             cat, "collect/self-check", "JARVIS09_COLLECTOR/__init__.py", 0,
-            "09 의 __all__ 을 읽지 못해 수집 검사가 무력화됨 — 검사 자체를 고칠 것"))
+            f"09 의 {what} 을 읽지 못해 수집 검사가 무력화됨 — 검사 자체를 고칠 것"))
         report.checks_run += 1
         return
 
@@ -1284,6 +1330,32 @@ def check_collect(report: Report) -> None:
             continue
         lines = text.splitlines()
         code = [(i, l) for i, l in enumerate(lines, 1) if not l.lstrip().startswith("#")]
+
+        # ④⑤ 정문 우회 — 예외 폴더(03·tools)도 대상. 정문은 *누구에게나* 정문이다.
+        for i, l in code:
+            m = _COLLECT_IMPORT_09.match(l)
+            if m:
+                if m.group(1).split(".")[0] in internal_pkgs:
+                    report.add(Violation(
+                        cat, "collect/internal-module", rel_s, i,
+                        f"09 내부 계층 `{m.group(1)}` 직수입 — 09 **정문**"
+                        f"(`from JARVIS09_COLLECTOR import ...`) 으로 받을 것"))
+                continue
+            m = _COLLECT_FROM_09.match(l)
+            if not m:
+                continue
+            sub = m.group(1) or ""
+            if sub.split(".")[0] in internal_pkgs:
+                report.add(Violation(
+                    cat, "collect/internal-module", rel_s, i,
+                    f"09 내부 계층 `{sub}` 직수입 — provider 선택·폴백은 09 의 판단. "
+                    f"09 **정문** 으로 받을 것"))
+            for nm in _collect_imported_names(m.group(2), i, lines):
+                if nm.startswith("_") and not nm.startswith("__"):
+                    report.add(Violation(
+                        cat, "collect/private-api", rel_s, i,
+                        f"09 private 심볼 `{nm}` 직수입 — 내부 구현을 밖이 붙잡으면 "
+                        f"09 가 자기 내부를 못 고친다. 09 에 **공개 정문** 을 만들어 쓸 것"))
 
         # ③ 원시 수집 라이브러리 — *데이터 API 를 실제로 쓰는지* 로 판정
         if not rel_s.startswith("JARVIS03_RADAR/"):     # 03 트렌드 수집만 예외 (CLAUDE.md)
@@ -1332,7 +1404,7 @@ def check_collect(report: Report) -> None:
                 f"09 수집 API {len(used)}종({', '.join(sorted(used))})을 한 파일에서 조합 "
                 f"— 순서·폴백·조립 판단이 09 밖에 생김. `collect_all()` 한 번으로 받을 것"))
 
-    report.checks_run += 3
+    report.checks_run += 5
 
 
 CATEGORIES["collect"] = check_collect
