@@ -472,7 +472,7 @@ def _collect_status() -> str:
             f"📦 *JARVIS09 COLLECTOR 현황*\n"
             f"• 누적 수집 레코드: {stats['total']}건\n"
             f"• 오늘 수집: {stats['today']}건\n"
-            f"• 프로바이더: blog·news·academic·finance·web"
+            f"• 프로바이더: blog·news·finance·web"
         )
     except Exception as e:
         return f"⚠️ COLLECTOR 현황 조회 실패: {e}"

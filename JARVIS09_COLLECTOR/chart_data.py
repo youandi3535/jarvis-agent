@@ -386,7 +386,7 @@ def _cached_collect(prov, source: str, term: str, sector: str, max_items: int) -
     """provider.collect 결과를 (source,term,sector) 키로 run 내 캐시. 느린 출처 반복 호출 방지.
 
     ★ ERRORS [413]/[426]/[436] 동일 클래스 (2026-07-19 경제 선계산 freeze 사고) — 프로바이더
-    내부 재시도(예: arXiv 429 백오프)가 timeout= 파라미터와 무관하게 수십~백여 초 블로킹 가능.
+    내부 재시도(예: 외부 API 429 백오프)가 timeout= 파라미터와 무관하게 수십~백여 초 블로킹 가능.
     이 함수가 chart_data.py 의 모든 수집 호출(step1 스레드풀·step3 순차 루프) 단일 통로이므로
     여기 한 곳에서 ThreadPoolExecutor 폴링 + watchdog.beat() 로 진행 신호를 유지한다.
     """
@@ -447,17 +447,9 @@ def _get_provider(source: str):
         return _PROVIDER_REGISTRY[source]
     inst = None
     try:
-        from JARVIS09_COLLECTOR.providers import (
-            BlogProvider, NewsProvider, AcademicProvider, FinanceProvider, WebProvider,
-            KorEconProvider, NaverNewsProvider, DartProvider, EcosProvider,
-            KosisProvider, KrxProvider, KciProvider, DiscoveryProvider,
-        )
-        _m = {"blog": BlogProvider, "news": NewsProvider, "academic": AcademicProvider,
-              "finance": FinanceProvider, "web": WebProvider, "kor_econ": KorEconProvider,
-              "naver_news": NaverNewsProvider, "dart": DartProvider, "ecos": EcosProvider,
-              "kosis": KosisProvider, "krx": KrxProvider, "kci": KciProvider,
-              "discover": DiscoveryProvider}
-        cls = _m.get(source)
+        # ★ provider 조회 = source_registry(SSOT) 파생 (사용자 박제 2026-07-24) — 종전 로컬 _m 사본 폐지.
+        from JARVIS09_COLLECTOR.source_registry import provider_class
+        cls = provider_class(source)
         inst = cls() if cls else None
     except Exception as e:
         log.warning(f"[chart_data] provider 로드 실패({source}): {e}")
@@ -1142,10 +1134,10 @@ def _query_candidates(series: dict, theme: str) -> list[str]:
 
 
 # 텍스트 출처 — 제목 관련성 1차 필터 적용 대상 (finance 류는 제목이 종목/지수명이라 면제)
-_TEXT_SOURCES = {"kosis", "academic", "kci", "kor_econ", "naver_news", "news", "web"}
+from JARVIS09_COLLECTOR.source_registry import TEXT_SOURCES as _TEXT_SOURCES   # ★ SSOT 파생 (사용자 박제 2026-07-24)
 
 # ★ 소스 신뢰도 순위 — LLM 설계 순서 무관, 항상 이 순위로 재정렬 (ERRORS [421])
-# 근거: ADR 013 "신뢰순위 논문>API>뉴스>기사>웹". LLM이 ["web","kosis"] 설계해도
+# 근거: ADR 013 "신뢰순위 API>뉴스>기사>웹". LLM이 ["web","kosis"] 설계해도
 # 실행은 항상 kosis → web 순서. web/blog가 먼저 실행되어 틀린 수치 채택 사고 원천 차단.
 _SOURCE_TRUST_RANK: dict[str, int] = {
     "finance": 1,     # yfinance — 공식 금융 API
@@ -1154,8 +1146,6 @@ _SOURCE_TRUST_RANK: dict[str, int] = {
     "dart":    2,     # 금감원 전자공시 API
     "kosis":   2,     # 통계청 공식 통계 DB
     "kor_econ":3,     # 정부 보도자료
-    "academic":3,     # 학술 논문 (arXiv 등)
-    "kci":     3,     # 국내 학술논문
     "naver_news":4,   # 네이버 뉴스
     "news":    4,     # 언론사 뉴스
     "discover":5,     # 웹 발견 (구글·네이버 검색)
@@ -1372,7 +1362,7 @@ def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: 
     """한 series 를 신뢰도 순으로 조준 수집. 첫 성공 소스 사용.
 
     ★ 소스 신뢰도 강제 재정렬 (ERRORS [421]): LLM 설계 순서 무관, _SOURCE_TRUST_RANK 순으로
-      항상 재정렬. API(1) → 공식통계(2) → 논문/정부(3) → 뉴스(4) → discover(5) → web(6) → blog(7).
+      항상 재정렬. API(1) → 공식통계(2) → 정부(3) → 뉴스(4) → discover(5) → web(6) → blog(7).
       LLM이 ["web","kosis"] 설계해도 실행은 kosis → web 순서.
     ★ 텍스트 출처: 제목 관련성 필터 — KOSIS 가 엉뚱한 표 반환해도 주제·series 겹치는 것만 채택.
     ★ 시장 지표 discover 폴백 차단 (ERRORS [421]): _NO_WEB_FALLBACK_KWS 키워드 있는 series 는
@@ -1575,14 +1565,14 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
 
             def _natural_title(d):
                 t = getattr(d, "title", "") or ""
-                for pre in ("KOSIS 통계청 — ", "한국은행 ECOS", "arXiv", "통계청 KOSIS"):
+                for pre in ("KOSIS 통계청 — ", "한국은행 ECOS", "통계청 KOSIS"):
                     if t.startswith(pre):
                         t = t[len(pre):]
                 return t
 
             _PER_SOURCE = max(3, (max_datasets + 3) // 3)
             _cands: list[tuple] = []   # (nat_title, doc, source)
-            for source in ("kci", "academic", "news", "kor_econ", "kosis", "naver_news", "web", "discover"):
+            for source in ("news", "kor_econ", "kosis", "naver_news", "web", "discover"):
                 if len(_cands) >= _cand_cap:
                     break
                 _ensure_source_ready(source)
@@ -1631,8 +1621,8 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         #    KOSIS fast-path 데이터는 제목 필터(_doc_title_relevant)를 통과한 것만 들어오므로 별도 불필요.
 
         # ── 5) ★ 출처 다양성 선택 (사용자 박제 2026-07-01 '전부 받아와') — provider 별로 묶어
-        #    우선순위 라운드로빈 → 한 출처(KOSIS) 독점 방지, 뉴스·정부보도·논문이 함께 섞임. ──────
-        _PROV_RANK = {"kosis": 0, "ecos": 1, "dart": 1, "academic": 1, "kci": 1, "krx": 2,
+        #    우선순위 라운드로빈 → 한 출처(KOSIS) 독점 방지, 뉴스·정부보도가 함께 섞임. ──────
+        _PROV_RANK = {"kosis": 0, "ecos": 1, "dart": 1, "krx": 2,
                       "finance": 2, "news": 2, "kor_econ": 2, "naver_news": 3, "web": 4, "market": 3}
         from collections import OrderedDict as _OD
         _groups: "_OD[str, list]" = _OD()

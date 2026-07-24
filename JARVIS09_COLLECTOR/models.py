@@ -18,56 +18,42 @@ def _hash_text(text: str) -> str:
     return hashlib.sha1((text or "").encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
-# ★ 출처 신뢰 우선순위 — 단일 진입점 (사용자 박제 2026-07-03 — ADR 013)
-#   "논문 > API > 뉴스 > 기사 > 웹. 데이터가 겹치면 이 순서로 하나를 선택.
-#    단, 수집은 받을 수 있는 곳 전부에서 다 받는다 — 논문만 받으면 안 된다."
+# ★ 출처 신뢰 우선순위 — source_registry(SSOT) 에서 파생 (사용자 박제 2026-07-24)
+#   "API > 뉴스 > 기사 > 웹. 데이터가 겹치면 이 순서로 하나를 선택. 수집 자체는 전부에서."
 #   이 티어는 *중복·충돌 해소 전용* — 수집 범위 제한에 사용 금지.
-SOURCE_TRUST_TIER: dict[str, int] = {
-    "academic": 1, "kci": 1,                                   # 논문
-    "kosis": 2, "ecos": 2, "dart": 2, "krx": 2, "finance": 2, "bok_official": 2,  # 공식 데이터 API
-    "customs": 2, "kofia": 2, "fss": 2, "mlit": 2, "employment": 2,              # 국내 공공 경제 API
-    "naver_news": 3, "news": 3,                                # 뉴스
-    "kor_econ": 4, "web_data": 4,                              # 기사·전문지
-    "web": 5,                                                  # 웹
-    "blog": 6,                                                 # 블로그
-}
+#   ★ 종전엔 여기 dict 를 손수 유지했으나 같은 정보(티어·provider·카탈로그)가 5~10곳에 흩어져
+#     소스 하나 바꾸면 전체를 훑어야 했다(논문 제거 시 17파일). 이제 source_registry.SOURCES 파생.
+from .source_registry import SOURCE_TRUST_TIER   # noqa: F401 — SSOT 파생 재노출(evidence_pack 등 소비)
 
 
 def trust_rank(source_type: str) -> int:
-    """출처 신뢰 순위 (낮을수록 신뢰 높음). 미지 소스는 웹 수준(5)."""
+    """출처 신뢰 순위 (낮을수록 신뢰 높음). 미지 소스는 최하위(5)."""
     return SOURCE_TRUST_TIER.get((source_type or "").strip().lower(), 5)
 
 
 # ★ 수집 쿼터 (사용자 박제 2026-07-06, v2 정정): "인포그래픽을 만들 수 있을 만큼"의 자료를
-#   신뢰 서열대로 총 15개 확보 — 논문 최대 3, API 최대 7, 나머지 5(소스별 1개씩 라운드로빈).
-#   상위 티어가 슬롯을 못 채우면 미달분을 다음 티어로 이월(cascade). 예: 논문 2개면
-#   API 는 7+1=8개, 논문 0개면 API 10개, 논문·API 모두 0이면 나머지에서 15개 전부.
+#   신뢰 서열대로 총 15개 확보 — API 최대 10, 나머지 5(소스별 1개씩 라운드로빈).
+#   상위 티어가 슬롯을 못 채우면 미달분을 다음 티어로 이월(cascade). 예: API 8개면
+#   나머지 7개, API 0개면 나머지에서 15개 전부.
 COLLECT_QUOTA_BUDGET = 15   # 총 수집 상한
-COLLECT_PAPER_CAP    = 3    # 논문(academic·kci) 기본 상한
-COLLECT_API_CAP      = 7    # 공식 데이터 API(kosis·ecos·dart·krx·finance) 기본 상한
-
-_QUOTA_GROUP: dict[str, str] = {
-    "academic": "paper", "kci": "paper",
-    "kosis": "api", "ecos": "api", "dart": "api", "krx": "api", "finance": "api",
-    # ★ 국내 공공 경제 API 6종 (2026-07-17): SOURCE_TRUST_TIER 에선 tier 2(공식 API)인데
-    #   여기 누락돼 default "rest" 로 오분류 → tier2 라 뉴스(3)·웹(5)을 '나머지5' 슬롯에서
-    #   밀어내 뉴스 0건 사고. 반드시 tier 분류와 동치 유지 (라이브 재현: 뉴스 0→5).
-    "bok_official": "api", "customs": "api", "kofia": "api",
-    "fss": "api", "mlit": "api", "employment": "api",
-    # 나머지(naver_news·news·kor_econ·web·web_data·blog·discover 등) → "rest"
-}
-
+COLLECT_API_CAP      = 10   # 공식 데이터 API(kosis·ecos·dart·krx·finance) 기본 상한
 
 def quota_group(source_type: str) -> str:
-    """수집 쿼터 그룹: paper(논문) | api(공식데이터) | rest(뉴스·기사·웹·블로그)."""
-    return _QUOTA_GROUP.get((source_type or "").strip().lower(), "rest")
+    """수집 쿼터 그룹: api(공식 데이터 — 신뢰 tier 1) | rest(그 외: 뉴스·기사·웹·블로그).
+
+    ★ 2026-07-24 (② 동적설계): SOURCE_TRUST_TIER(trust_rank) *단일 소스* 에서 파생.
+      종전엔 별도 _QUOTA_GROUP 사본을 두고 "반드시 tier 분류와 동치 유지" 라고 주석까지
+      달았는데, 그 사본이 tier 와 어긋나 '뉴스 0건 사고'(2026-07-17)를 냈다 — 사본을
+      진실로 믿던 전형. 이제 API 그룹 = 공식 데이터 API(tier 1) 로 파생해 드리프트 원천 차단.
+    """
+    return "api" if trust_rank(source_type) == 1 else "rest"
 
 
 @dataclass
 class RawDocument:
     """수집 직후 원본 문서."""
     url: str
-    source_type: str          # blog | news | academic | finance | web
+    source_type: str          # blog | news | finance | web
     raw_html: str = ""
     raw_text: str = ""
     title: str = ""
@@ -234,7 +220,7 @@ class CollectedData:
     대본 작성기·process_draft·prepublish_gate·law_enforcer 검증이 *모두* 이 상자를 소비.
       meta     : {keyword, profile, sector, category, as_of, + 사이드채널(coverage_ratio…)}
       datasets : 차트-준비 수치 [{title, viz_hint, unit, data:[{label,value}], source, fingerprint}]
-      docs     : 텍스트 코퍼스 [CollectionResult]  (논문>API>뉴스>기사>웹)
+      docs     : 텍스트 코퍼스 [CollectionResult]  (API>뉴스>기사>웹)
       facts    : 원자적 검증 수치 [{claim/statement, value, unit, source, as_of}]
       entities : 다속성 도메인 객체 [{name, type, attrs, source}] (종목·매물·코인…)
     """

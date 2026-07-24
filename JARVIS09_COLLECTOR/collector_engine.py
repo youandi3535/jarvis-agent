@@ -16,14 +16,7 @@ except ImportError:
         def __call__(self, fn): return fn
         def __enter__(self): return self
         def __exit__(self, *a): return False
-from .providers import (
-    BlogProvider, NewsProvider,
-    FinanceProvider, WebProvider, KorEconProvider,
-    NaverNewsProvider, DartProvider, EcosProvider,
-    KosisProvider, KrxProvider, BokProvider,
-    CustomsProvider, KofiaProvider, FssProvider,
-    MlitProvider, EmploymentProvider,
-)
+from .source_registry import main_providers   # ★ 메인 수집 provider 목록 SSOT 파생
 
 log = logging.getLogger("jarvis.collector.engine")
 
@@ -50,24 +43,10 @@ _PROVIDER_LIMITS = {
     "web":        10,  # 위키 + 지식백과 + 다음
 }
 
-_PROVIDERS = [
-    NaverNewsProvider(),   # 네이버 뉴스 API (키 있으면 최우선)
-    NewsProvider(),        # Google News + 경제지 RSS
-    KorEconProvider(),     # 네이버 금융 + 전문 경제지
-    KrxProvider(),         # KRX 시장 통계 (키 불필요)
-    BlogProvider(),        # 네이버 블로그
-    WebProvider(),         # 위키 + 지식백과 + 다음
-    DartProvider(),        # DART 전자공시 (키 필요)
-    EcosProvider(),        # 한국은행 ECOS (키 필요)
-    KosisProvider(),       # 통계청 KOSIS (키 필요)
-    FinanceProvider(),     # yfinance 글로벌 지표
-    BokProvider(),         # 한국은행 기준금리·달러/원·CPI 공식 지표
-    CustomsProvider(),     # 관세청 수출입 통계 (KOSIS 경유)
-    KofiaProvider(),       # 금융투자협회 채권·국고채 수익률 (ECOS 경유)
-    FssProvider(),         # 금융감독원 금융통계 (금융 주제 전용)
-    MlitProvider(),        # 국토교통부 부동산 통계 (부동산 주제 전용)
-    EmploymentProvider(),  # 고용노동부 고용통계 (KOSIS 경유)
-]
+# ★ 메인 수집 provider — source_registry.SOURCES(SSOT) 에서 파생 (사용자 박제 2026-07-24).
+#   종전엔 여기 16줄을 손수 유지했고 provider 목록이 chart_data._m·providers/__init__ 과 3벌
+#   흩어져 소스 하나 넣고 뺄 때마다 3곳을 고쳐야 했다. 이제 SOURCES 한 줄이면 전부 자동 반영.
+_PROVIDERS = main_providers()
 _MAX_WORKERS = 8   # 병렬 수집
 
 
@@ -75,7 +54,7 @@ _MAX_WORKERS = 8   # 병렬 수집
 def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
     """주제·섹터에 맞는 전 소스 병렬 수집 → 정제 결과 반환.
 
-    수집 소스: 뉴스(Google+한국경제지) + 한국경제전문 + 블로그 + 웹(위키+지식백과) + 금융지표 + 논문
+    수집 소스: 뉴스(Google+한국경제지) + 한국경제전문 + 블로그 + 웹(위키+지식백과) + 금융지표
     """
     try:
         from shared.pipeline_activity import mark_busy as _mb
@@ -142,7 +121,7 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
                 log.warning(f"[Engine] 정제 실패 ({raw.url}): {e}")
 
         # ★ 신뢰 우선 정렬 + 동일 내용 중복 시 고신뢰 소스 유지 (사용자 박제 2026-07-03 — ADR 013)
-        #   "논문 > API > 뉴스 > 기사 > 웹 — 겹치면 이 순서로 선택. 수집 자체는 전부."
+        #   "API > 뉴스 > 기사 > 웹 — 겹치면 이 순서로 선택. 수집 자체는 전부."
         from .models import trust_rank as _trust
         results.sort(key=lambda r: _trust(r.source_type))   # stable — 티어 내 원래 순서 보존
         _seen_hash: set[str] = set()
@@ -183,7 +162,7 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
 #
 #  "항상 설계를 먼저 하고 그 설계대로 수집한다. 부족하면 더 받아온다."
 #
-#  흐름: ① 티어순 광역 수집(_collect_tier — 논문>API>뉴스>기사>웹, 신뢰순위) + discover 웹발견
+#  흐름: ① 티어순 광역 수집(_collect_tier — API>뉴스>기사>웹, 신뢰순위) + discover 웹발견
 #        → ② 얇은 문서 전문 딥페치 → ③ EvidencePack 추출·커버리지 측정
 #        → ④ 미충족 시 2라운드 재수집(변형 쿼리+discover) → ⑤ 박제·반환
 #  (구 plan_research 설계-LLM·질문별 조준수집은 2026-07-11 _collect_tier 재작성으로 폐지)
@@ -192,7 +171,7 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
 _PROVIDER_BY_TYPE = {p.source_type: p for p in _PROVIDERS}
 
 
-SOURCE_CATEGORIES = ["blog", "news", "academic", "finance", "web"]
+SOURCE_CATEGORIES = ["blog", "news", "finance", "web"]
 """수집 소스 카테고리 (표시 SSOT — 대시보드가 이 목록·개수에서 파생)."""
 
 
@@ -269,21 +248,19 @@ def select_by_trust_quota(docs: list[CollectionResult],
                           budget: int | None = None) -> list[CollectionResult]:
     """★ 신뢰 서열 쿼터 선별 (사용자 박제 2026-07-06 v2 — "인포그래픽 만들 만큼 총 15개").
 
-    논문 최대 3 · API 최대 7 · 나머지 5(소스별 1개씩), 총 `budget`(기본 15)개.
+    API 최대 10 · 나머지 5(소스별 1개씩), 총 `budget`(기본 15)개.
     상위 티어 미달분은 다음 티어로 이월(cascade):
-      논문 2개 → API 8개까지 / 논문 0개 → API 10개까지 /
-      논문·API 모두 0 → 나머지에서 budget 전부.
+      API 8개 → 나머지 7개까지 / API 0개 → 나머지에서 budget 전부.
     나머지는 source_type 라운드로빈(각 1개씩 우선)으로 다양성 확보.
-    env: J09_QUOTA_BUDGET(총량)·J09_PAPER_CAP·J09_API_CAP 로 튜닝.
+    env: J09_QUOTA_BUDGET(총량)·J09_API_CAP 로 튜닝.
     """
     from .models import (quota_group, trust_rank,
-                         COLLECT_QUOTA_BUDGET, COLLECT_PAPER_CAP, COLLECT_API_CAP)
+                         COLLECT_QUOTA_BUDGET, COLLECT_API_CAP)
     budget = int(_os.getenv("J09_QUOTA_BUDGET", str(budget or COLLECT_QUOTA_BUDGET))
                  or COLLECT_QUOTA_BUDGET)
-    paper_cap = int(_os.getenv("J09_PAPER_CAP", str(COLLECT_PAPER_CAP)) or COLLECT_PAPER_CAP)
     api_cap = int(_os.getenv("J09_API_CAP", str(COLLECT_API_CAP)) or COLLECT_API_CAP)
 
-    groups: dict[str, list] = {"paper": [], "api": [], "rest": []}
+    groups: dict[str, list] = {"api": [], "rest": []}
     for d in docs:
         groups[quota_group(d.source_type)].append(d)
     # 각 그룹 내부: 신뢰 높은 소스 우선 (stable — 티어 내 원래 관련도 순서 보존)
@@ -293,18 +270,12 @@ def select_by_trust_quota(docs: list[CollectionResult],
     selected: list[CollectionResult] = []
     remaining = budget
 
-    # 논문: 최대 paper_cap
-    take = groups["paper"][:min(paper_cap, remaining)]
-    selected += take
-    remaining -= len(take)
-
-    # API: 최대 api_cap + 논문 미달분 이월
-    api_allow = api_cap + (paper_cap - len(take))
-    take_api = groups["api"][:min(api_allow, remaining)]
+    # API: 최대 api_cap
+    take_api = groups["api"][:min(api_cap, remaining)]
     selected += take_api
     remaining -= len(take_api)
 
-    # 나머지: 라운드로빈(각 source_type 1개씩) — 남은 예산 전부 (논문·API 미달분 자동 이월)
+    # 나머지: 라운드로빈(각 source_type 1개씩) — 남은 예산 전부 (API 미달분 자동 이월)
     if remaining > 0 and groups["rest"]:
         by_src: dict[str, list] = {}
         for d in groups["rest"]:   # 이미 trust 정렬됨 → 삽입 순서가 신뢰 순
@@ -317,8 +288,8 @@ def select_by_trust_quota(docs: list[CollectionResult],
                     selected.append(lst.pop(0))
                     remaining -= 1
 
-    log.info(f"[quota] 신뢰 쿼터 선별: 논문 {len(take)} · API {len(take_api)} · "
-             f"나머지 {len(selected) - len(take) - len(take_api)} = 총 {len(selected)}건 "
+    log.info(f"[quota] 신뢰 쿼터 선별: API {len(take_api)} · "
+             f"나머지 {len(selected) - len(take_api)} = 총 {len(selected)}건 "
              f"(후보 {len(docs)}건 중, 예산 {budget})")
     return selected
 
@@ -390,7 +361,7 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
                      max_rounds: int = 3, with_facts: bool = False,
                      with_digest: bool = False) -> dict:
     """★ 티어순 상한 수집 (사용자 박제 2026-07-11 — ERRORS [423]):
-    처음부터 논문 최대 3·API 최대 7·나머지 최대 5, cascade 이월.
+    처음부터 API 최대 10·나머지 최대 5, cascade 이월.
     광역수집 후 절삭 방식 완전 폐지 — 각 티어가 수집 시점에 상한 적용.
 
     ★ fact 추출 09 통일 (사용자 박제 2026-07-18): with_facts=True 면 수집 직후 09 내부에서
@@ -411,43 +382,35 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
     # busy 신호 수명 = 함수 수명 — 종료(성공·실패) 시 finally 에서 즉시 해제 (근본 수정 2026-07-16)
     try:
         from .models import (quota_group,
-                             COLLECT_QUOTA_BUDGET, COLLECT_PAPER_CAP, COLLECT_API_CAP)
+                             COLLECT_QUOTA_BUDGET, COLLECT_API_CAP)
 
-        paper_cap = int(_os.getenv("J09_PAPER_CAP",    str(COLLECT_PAPER_CAP))    or COLLECT_PAPER_CAP)
         api_cap   = int(_os.getenv("J09_API_CAP",      str(COLLECT_API_CAP))      or COLLECT_API_CAP)
         budget    = int(_os.getenv("J09_QUOTA_BUDGET", str(COLLECT_QUOTA_BUDGET)) or COLLECT_QUOTA_BUDGET)
 
         log.info(f"[research] 티어순 수집 시작: theme='{theme}' "
-                 f"쿼터=논문{paper_cap}·API{api_cap}·총{budget}")
+                 f"쿼터=API{api_cap}·총{budget}")
 
         # 티어별 프로바이더 분류
-        paper_provs = [p for p in _PROVIDERS if quota_group(p.source_type) == "paper"]
         api_provs   = [p for p in _PROVIDERS if quota_group(p.source_type) == "api"]
         rest_provs  = [p for p in _PROVIDERS if quota_group(p.source_type) == "rest"]
 
         seen_urls: set[str] = set()
 
-        # ① 논문: 최대 paper_cap
-        paper_docs = _collect_tier(paper_provs, theme, sector, paper_cap, seen_urls)
-        log.info(f"[research] 논문 {len(paper_docs)}/{paper_cap}건 확보")
-
-        # ② API: 최대 api_cap + 논문 이월
-        # ★ 뉴스·웹 최소보장 (2026-07-17): cascade(논문 미달분 이월)가 API 예산을 부풀려
-        #   '나머지'(뉴스·웹) 슬롯을 굶기지 않도록 상한 — budget 에서 rest_floor 는 남긴다.
-        #   기본 rest_floor=5 는 현행 '나머지5' 와 정합(숫자 변화 0, 순수 회귀 방지 안전망).
+        # ① API: 최대 api_cap
+        # ★ 뉴스·웹 최소보장 (2026-07-17): API 예산이 '나머지'(뉴스·웹) 슬롯을 굶기지 않도록
+        #   budget 에서 rest_floor 는 남긴다. 기본 rest_floor=5 는 현행 '나머지5' 와 정합.
         _rest_floor = int(_os.getenv("J09_REST_FLOOR", "5") or "5")
-        api_allow = api_cap + (paper_cap - len(paper_docs))
-        api_allow = min(api_allow, max(0, budget - len(paper_docs) - _rest_floor))
+        api_allow = min(api_cap, max(0, budget - _rest_floor))
         api_docs  = _collect_tier(api_provs, theme, sector, api_allow, seen_urls)
         log.info(f"[research] API {len(api_docs)}/{api_allow}건 확보")
 
-        # ③ 나머지: 남은 예산 전부 (cascade 자동)
-        rest_allow = budget - len(paper_docs) - len(api_docs)
+        # ② 나머지: 남은 예산 전부 (cascade 자동)
+        rest_allow = budget - len(api_docs)
         rest_docs  = (_collect_tier(rest_provs, theme, sector, rest_allow, seen_urls)
                       if rest_allow > 0 else [])
         log.info(f"[research] 나머지 {len(rest_docs)}/{rest_allow}건 확보")
 
-        all_docs = paper_docs + api_docs + rest_docs
+        all_docs = api_docs + rest_docs
 
         # 얇은 문서 전문 딥페치
         all_docs = _deep_fetch_thin_docs(all_docs, theme)
@@ -460,13 +423,13 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
                 from .evidence_pack import build_evidence_pack
                 _pack = build_evidence_pack(theme, {}, all_docs) or {}
                 out["pack"] = _pack
-                log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
+                log.info(f"[research] 완료: API{len(api_docs)}"
                          f"+나머지{len(rest_docs)}={total}건 → fact {len(_pack.get('facts', []))}개 추출(09)")
             except Exception as _fe:
                 out["pack"] = {}
                 log.warning(f"[research] fact 추출 실패: {_fe} — 문서만 반환")
         else:
-            log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
+            log.info(f"[research] 완료: API{len(api_docs)}"
                      f"+나머지{len(rest_docs)}={total}건 (원시 문서만)")
         # ★ corpus digest (distill 압축 2026-07-19) — 선계산 창에서만 생성(발행창이면 build_corpus_digest
         #   가 "" 반환 → 호출자 원문 폴백). writer 프롬프트 축소용. docs(원문)는 그대로 유지(사실성용).

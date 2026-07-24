@@ -16,7 +16,6 @@ class BaseProvider(ABC):
 
 from .blog_provider import BlogProvider
 from .news_provider import NewsProvider
-from .academic_provider import AcademicProvider
 from .finance_provider import FinanceProvider
 from .web_provider import WebProvider
 from .kor_econ_provider import KorEconProvider
@@ -25,7 +24,6 @@ from .dart_provider import DartProvider
 from .ecos_provider import EcosProvider
 from .kosis_provider import KosisProvider
 from .krx_provider import KrxProvider
-from .kci_provider import KciProvider
 from .discovery_provider import DiscoveryProvider
 from .bok_provider import BokProvider
 from .customs_provider import CustomsProvider
@@ -36,10 +34,10 @@ from .employment_provider import EmploymentProvider
 
 __all__ = [
     "BaseProvider",
-    "BlogProvider", "NewsProvider", "AcademicProvider",
+    "BlogProvider", "NewsProvider",
     "FinanceProvider", "WebProvider", "KorEconProvider",
     "NaverNewsProvider", "DartProvider", "EcosProvider",
-    "KosisProvider", "KrxProvider", "KciProvider",
+    "KosisProvider", "KrxProvider",
     "DiscoveryProvider", "BokProvider",
     "CustomsProvider", "KofiaProvider", "FssProvider",
     "MlitProvider", "EmploymentProvider",

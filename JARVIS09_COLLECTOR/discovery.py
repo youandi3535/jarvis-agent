@@ -8,10 +8,10 @@
 
 3 백엔드 병행 (되는 것만 합침 — 하나 실패해도 나머지로 진행, fail-open):
   1. DuckDuckGo (duckduckgo_search/ddgs 자동설치, 키 불필요) — 글로벌·범용 웹검색
-  2. Naver 검색 API (NAVER_CLIENT_ID/SECRET 보유) — 한국 웹문서·백과·전문자료(논문)·뉴스
+  2. Naver 검색 API (NAVER_CLIENT_ID/SECRET 보유) — 한국 웹문서·백과·전문자료·뉴스
   3. data.go.kr 공공데이터포털 — 정부 데이터셋 페이지
 
-반환: list[dict] = {"url","title","snippet","domain","backend"} — 정부·통계·논문 도메인 우선 랭킹.
+반환: list[dict] = {"url","title","snippet","domain","backend"} — 정부·통계·학술 도메인 우선 랭킹.
 주제별 if-else 하드코딩 0 — 어떤 주제가 와도 동일 경로.
 """
 from __future__ import annotations
@@ -42,10 +42,8 @@ _TIER1_GOV = (          # 공식 통계·정부 (가장 신뢰) — 100
     ".go.kr", "korea.kr", "molit.go.kr", "motie.go.kr", "moef.go.kr",
     "index.mois.go.kr", "narastat", "e-nara",
 )
-_TIER2_PUBLIC = (       # 공공기관·학술·논문 — 80
-    ".or.kr", ".re.kr", ".ac.kr", "arxiv.org", "doi.org", "ncbi.nlm.nih.gov",
-    "sciencedirect", "springer", "researchgate", "semanticscholar", "kci.go.kr",
-    "riss.kr", ".edu", "worldbank.org", "oecd.org", "imf.org", "who.int",
+_TIER2_PUBLIC = (       # 공공기관·국제기구·대학 — 80
+    ".or.kr", ".re.kr", ".ac.kr", ".edu", "worldbank.org", "oecd.org", "imf.org", "who.int",
     "statista.com", "tradingeconomics.com", "fred.stlouisfed.org",
 )
 _TIER3_REF = (          # 백과·참고 — 60
@@ -151,7 +149,7 @@ def _ddg_search(query: str, n: int) -> list[dict]:
 
 
 # ── 백엔드 2: Naver 검색 API (보유 키 — 웹문서·백과·전문자료·뉴스) ───────────────────
-_NAVER_TYPES = ("webkr", "encyc", "doc", "news")   # 웹문서·백과·전문자료(논문)·뉴스
+_NAVER_TYPES = ("webkr", "encyc", "doc", "news")   # 웹문서·백과·전문자료·뉴스
 _NAVER_URL = "https://openapi.naver.com/v1/search/{t}.json"
 
 
@@ -237,7 +235,7 @@ def _datago_search(query: str, n: int) -> list[dict]:
 
 # ── 공개 API ─────────────────────────────────────────────────────────────────────
 def web_search(query: str, max_results: int = 10) -> list[dict]:
-    """주제 검색어 → 데이터가 있을 법한 URL 목록(정부·통계·논문 우선 랭킹).
+    """주제 검색어 → 데이터가 있을 법한 URL 목록(정부·통계·학술 우선 랭킹).
 
     3 백엔드 병행 수집 → URL 중복 제거 → 도메인 신뢰도·수치 스니펫 기준 랭킹.
     되는 백엔드만 사용(fail-open) — 하나가 죽어도 나머지로 발견 지속.

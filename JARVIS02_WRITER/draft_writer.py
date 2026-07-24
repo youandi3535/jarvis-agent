@@ -345,7 +345,7 @@ def build_corpus_block(docs, max_total: int | None = None, per_doc: int | None =
 
     자비스09 수집 문서 전부를 대본 프롬프트에 전달 — LLM 이 모든 자료를 보고
     주제·서사·통찰을 구성한다. evidence_brief(수치 규율)와 *병행* 주입.
-    신뢰 서열(논문>API>뉴스>기사>웹) 정렬.
+    신뢰 서열(API>뉴스>기사>웹) 정렬.
 
     ★ 입력 절단 폐지 (사용자 박제 2026-07-17): per_doc(문서당 자수컷) 기본 None = 전문 그대로.
       max_total 은 *컨텍스트 오버플로 방지용 최후 안전판* — 초과 시에만 저신뢰부터 통째 생략(건수 명시).

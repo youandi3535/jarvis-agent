@@ -430,7 +430,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         _n_facts  = len((evidence_pack or {}).get("facts") or [])
 
         # ★ 다소스 결손 분리 (사용자 박제 2026-07-04 — 경제 파이프라인과 동렬화, ERRORS [351]):
-        #   종목(stocks)이 0개여도 리서치(논문·뉴스·DART·ECOS·웹)만으로 글은 성립한다.
+        #   종목(stocks)이 0개여도 리서치(뉴스·DART·ECOS·웹)만으로 글은 성립한다.
         #   진짜 폐기·테마 교체는 종목·리서치·근거가 *전부* 비었을 때만 (KRX 종속 결합 해제).
         if _bundle.get("data_empty"):
             print("  ⏭️ [② 수집] 종목·리서치·근거 전부 0 — 데이터 없음(테마 교체 대상)")

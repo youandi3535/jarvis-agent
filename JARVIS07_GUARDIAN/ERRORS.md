@@ -2,6 +2,43 @@
 
 ---
 
+## [494] ✅ 해결 — 논문(paper/academic/kci) 완전 제거 + 출처 단일 레지스트리 신설 (source_type 사본이 10곳 흩어져 개념 하나 지우는데 17파일) (2026-07-24)
+
+> ★ **맥락**: 사용자가 논문 소스를 폐지(academic·kci provider 미등록)했는데, `COLLECT_PAPER_CAP`·
+> quota_group "paper"·"논문>API>뉴스" 신뢰서열·provider 파일 등 *옛 흔적*이 코드에 남아 혼동을
+> 유발("paper tier empty = bug" 오진단). 사용자 지시: "수정하면 옛 건 완전히 흔적도 없이 없애라."
+> 제거 도중 사용자 지적: "논문 하나 지우는데 이렇게 많은 파일? 단일 진입점·동적 설계를 진작 했다면
+> 하나 고칠 때마다 전체를 훑을 필요가 없다. 유지관리가 구현보다 중요하다."
+
+- **증상**: source_type 하나("academic")의 정보가 **10곳에 사본**으로 하드코딩 — 신뢰티어(models)·
+  쿼터그룹(models)·provider 클래스(providers/__init__ + collector_engine._PROVIDERS + chart_data._m
+  **3벌**)·카탈로그(data_planner)·라벨(06 ×2)·텍스트소스여부(chart_data)·차트랭크(chart_data ×2)·
+  discovery 도메인. 논문 제거에 **17파일** 순회 필요.
+- **원인**: ① 단일 진입점·② 동적 설계 위반. 같은 사실을 파생하지 않고 여러 파일에 *복사*해 둠.
+  실제 사고까지 유발: `_QUOTA_GROUP` 사본이 `SOURCE_TRUST_TIER` 와 드리프트해 '뉴스 0건'(2026-07-17).
+- **해결 (2단)**:
+  - **(A) 논문 완전 제거**: `academic_provider.py`·`kci_provider.py` 파일 삭제 + 16파일에서 paper/
+    academic/kci/COLLECT_PAPER/논문 흔적 전소. 쿼터 재설계: paper 티어 폐지·`COLLECT_API_CAP` 7→10
+    (논문 3자리 흡수)·신뢰서열 1칸 승격(API=1). `select_by_trust_quota`·`collect_research` paper 레그
+    제거. discovery 논문저장소 도메인(arxiv·kci.go.kr·sciencedirect 등) 제거. 검증: grep 흔적 0·
+    쿼터(kosis 10+news 5=15)·precommit 56종 0.
+  - **(B) 출처 단일 레지스트리 신설** `JARVIS09_COLLECTOR/source_registry.py` — `SourceSpec`(key·tier·
+    provider·catalog·is_text) 목록 `SOURCES` 가 유일한 정의처. 파생: `SOURCE_TRUST_TIER`(models 재노출)·
+    `main_providers()`(collector_engine._PROVIDERS)·`provider_class()`(chart_data 조회)·`CATALOG`
+    (data_planner)·`TEXT_SOURCES`(chart_data) 전부 자동 생성. provider 는 "module:Class" 지연 import로
+    순환 차단(레지스트리는 leaf, models 가 이걸 import). `_QUOTA_GROUP` 사본도 `trust_rank` 파생으로 폐지.
+- **효과**: **소스 추가/삭제 = `SOURCES` 한 줄.** 17파일 순회 → 0 (payoff 실증). 동작 동등성 확인
+  (_PROVIDERS 순서·카탈로그·텍스트소스·티어 100% 일치).
+- **파일**: source_registry.py(신설) + models·collector_engine·chart_data·data_planner·evidence_pack·
+  discovery·collector_agent·providers/__init__(09) + dispatchers(01)·draft_writer·trend_theme_writer(02)·
+  template_engine·infographic_engine(06)·measure_collection(tools). provider 2개 삭제.
+- **교훈**: 구현보다 **유지관리**. 같은 사실은 한 곳에서 *읽어라*(파생) — 복사하면 개념 하나 바꿀 때
+  전체를 훑고, 사본끼리 드리프트해 사고 난다. 새 메타데이터를 여러 파일에 박으려는 순간이 곧 레지스트리
+  신설 신호. (JARVIS06 라벨은 *데이터셋 provenance* 라는 다른 네임스페이스라 이 레지스트리와 별개 — 무리
+  통합 금지.)
+
+---
+
 ## [493] ✅ 해결 — 경제/테마 2블로그가 30분을 넘던 근본원인 = 60% 런의 *무의미 재시도*(데이터부족→재작성해도 동일실패) + 코퍼스 비대 + 데드라인 계층 역전 (2026-07-24)
 
 > ★ **맥락**: [492] freeze 수정 검토 중 사용자가 "3600초(60분) 넘는 것 자체가 문제 — 타임아웃을

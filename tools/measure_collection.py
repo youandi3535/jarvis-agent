@@ -54,7 +54,7 @@ def measure(topic: str) -> dict:
     except Exception as e:
         out["errors"].append(f"keyword_profile: {type(e).__name__}: {str(e)[:60]}")
 
-    # ── 1) 리서치 텍스트 수집 (뉴스·논문·금융·웹) ──
+    # ── 1) 리서치 텍스트 수집 (뉴스·금융·웹) ──
     try:
         from JARVIS09_COLLECTOR import collect_research
         from JARVIS09_COLLECTOR.evidence_pack import build_evidence_pack, facts_to_datasets
