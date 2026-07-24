@@ -416,36 +416,6 @@ def _persist_insights(insights: list[dict], scope: str = "all") -> int:
     return n
 
 
-def _build_telegram_report(date_str: str, agg: dict, insights: list[dict]) -> str:
-    lines = [
-        f"📊 *일일 분석 리포트* ({date_str})",
-        "━━━━━━━━━━━━━━━━━━",
-        f"발행: {agg['posts_count']}건  |  품질: {agg['quality_score']}/100",
-        f"평균 조회수: {agg['avg_views']}  (최고 {agg['top_views']})",
-        f"사전 수정 적용률: {agg['pre_applied_ratio']*100:.0f}%",
-    ]
-    if agg["posts_count"] == 0:
-        lines.append("\n_오늘 발행된 글이 없어 분석을 건너뜁니다._")
-        return "\n".join(lines)
-
-    if agg.get("issue_types"):
-        top_issues = ", ".join(f"{k}({v})" for k, v in agg["issue_types"].most_common(3))
-        lines.append(f"잦은 이슈: {top_issues}")
-
-    if insights:
-        lines.append("\n💡 *내일 적용할 학습 지침*")
-        for i, ins in enumerate(insights[:5], 1):
-            d = (ins.get("directive") or ins.get("description") or "")[:100]
-            lines.append(f"{i}. {d}")
-    else:
-        lines.append("\n_오늘은 새로 도출된 학습 지침이 없습니다._")
-
-    if agg["avg_views"] == 0:
-        lines.append("\n⚠️ 조회수 0 — performance_collector 점검 필요 "
-                     "(TS_COOKIE 점검).")
-    return "\n".join(lines)
-
-
 def _send_tg(text: str):
     try:
         from shared.notify import send_tg
@@ -577,24 +547,25 @@ def run_daily_review(date_str: str | None = None) -> dict:
 
 
 def _build_grouped_telegram_report(date_str: str, groups: dict, total: int) -> str:
-    """그룹별 섹션을 분리한 일일 리포트."""
-    lines = [
-        f"📊 *일일 분석 리포트* ({date_str})",
-        "━━━━━━━━━━━━━━━━━━",
-        f"총 발행: {total}건  ({len(groups)}개 종류)",
-    ]
-    pt_label = {"economic":"📰 경제 브리핑", "theme":"📈 테마글",
-                "manual":"✍️ 수동", "unknown":"❓ 미분류"}
+    """★ 2026-07-24 (사용자 박제): 집계·조회수·품질 블록 폐지 → *학습된 사항만 한 줄씩, 전부* 남긴다.
+    품질은 per-post 100점 점수가, 성과는 대시보드(9199)가 이미 커버 — 여기선 '오늘 배운 것' 전량."""
+    pt_label = {"economic": "📰 경제 브리핑", "theme": "📈 테마글",
+                "manual": "✍️ 수동", "unknown": "❓ 미분류"}
+    total_ins = sum(len(r.get("insights") or []) for r in groups.values())
+    lines = [f"🧠 *오늘의 학습* ({date_str}) — 총 {total_ins}건", "━━━━━━━━━━━━━━━━━━"]
+    if total_ins == 0:
+        lines.append("_오늘은 새로 도출된 학습 지침이 없습니다._")
+        return "\n".join(lines)
     for pt, r in groups.items():
-        label = pt_label.get(pt, f"🔖 {pt}")
+        ins_list = r.get("insights") or []
+        if not ins_list:
+            continue
         lines.append("")
-        lines.append(f"{label} — {r['posts']}건  품질 {r['quality']:.0f}/100")
-        if r["insights"]:
-            for i, ins in enumerate(r["insights"][:3], 1):
-                d = (ins.get("directive") or ins.get("description") or "")[:90]
+        lines.append(f"{pt_label.get(pt, f'🔖 {pt}')} ({len(ins_list)}건)")
+        for i, ins in enumerate(ins_list, 1):   # ★ 전부 (종전 [:3] 제한 폐지 — 사용자: 전부 남겨줘)
+            d = (ins.get("directive") or ins.get("description") or "").strip().replace("\n", " ")
+            if d:
                 lines.append(f"  {i}. {d}")
-        else:
-            lines.append("  _(새 인사이트 없음)_")
     return "\n".join(lines)
 
 
