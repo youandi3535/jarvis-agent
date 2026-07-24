@@ -687,6 +687,33 @@
       "source": "learned-vision",
       "created": "2026-07-24",
       "name": "rec28"
+    },
+    {
+      "hero": [
+        "#1B5A7D",
+        "#1B5A7D"
+      ],
+      "ink": "#1B5A7D",
+      "a1": "#1B5A7D",
+      "a1s": "#A9DDE0",
+      "a2": "#F07E26",
+      "a2s": "#F5A85C",
+      "soft": "#F2F6F5",
+      "muted": "#5A6B72",
+      "eyebrow": "#F07E26",
+      "grid": "#EFF3F2",
+      "hero_texture": "none",
+      "card_radius": 28,
+      "aesthetic": "틸/네이비와 오렌지 포인트의 미니멀 스텝형 프로세스 인포그래픽",
+      "notes": [
+        "상단 라운디드 딥틸 헤더밴드에 화이트+오렌지 2톤 타이틀",
+        "좌우 지그재그로 교차 배치된 8단계 스텝, 각 스텝마다 연한 민트색 필박스 안에 아이콘 배치",
+        "연결부는 곡선 화살표(curved connector)로 스텝 간 흐름을 시각적으로 안내"
+      ],
+      "id": "rec29",
+      "source": "learned-vision",
+      "created": "2026-07-25",
+      "name": "rec29"
     }
   ]
 }

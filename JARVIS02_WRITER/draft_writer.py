@@ -649,8 +649,8 @@ def _gen_economic_ts_nv(
         _spec_eco = _gs_eco("economic")
     except Exception:
         pass
-    _max_sents = _spec_eco.max_sentences if _spec_eco else 40
-    _max_kor = _spec_eco.max_korean if _spec_eco else 2000
+    _max_sents = _spec_eco.max_sentences if _spec_eco else 45
+    _max_kor = _spec_eco.max_korean if _spec_eco else 2500
     _target_sents = _spec_eco.target_sentences if _spec_eco else 30
     _min_sents = _spec_eco.min_sentences if _spec_eco else 20
     # ★ <p> 상한을 *목표(32) 앵커* 로 (사용자 박제 2026-07-18 — 오버슈트→재작성 순환 방지).
@@ -677,6 +677,7 @@ def _gen_economic_ts_nv(
   ★ 슬롯 안 필드: 제목 / 단위 / 데이터 / 출처 — 이 4개만. 종류: 필드 쓰지 말 것.
 - <svg>·<img> 태그 직접 쓰지 말 것
 - ★★ 본문 산문(<p> — 감성 오프닝·배경·섹션 설명·중간감성·마무리)은 *수치 0존*: 숫자·통계·%·금액·비율·연도별 값을 산문에 쓰지 마십시오. *모든 수치는 오직 [CHART_N] 슬롯 안*(카탈로그 D번호 값)에만 등장. 산문은 개념·맥락·배경·흐름을 서술한다. 근거 없는 산문 수치는 사실성 게이트에서 차단→재작성을 유발한다.
+- ★★ TITLE 도 예외 아님 — 수치 0존 규칙은 <p> 산문뿐 아니라 TITLE 한 줄에도 동일 적용. "-9.5%"·"OO% 급락/출렁" 같은 카탈로그에 없는 수치를 궁금증 유발 목적으로 제목에 지어내지 말 것 — 근거 없는 제목 수치도 사실성 게이트가 차단한다. 숫자 없이 궁금증을 유발하거나, 굳이 수치를 쓰려면 위 카탈로그(D번호) 값 그대로만 사용.
 - 연속 <p>↔<p> 사이마다 슬롯 삽입 (h2 직전·면책 직전 제외)
 - 문체: {spec['tone']}
 - 위 지시문(괄호 안 설명·헌법 조항 번호·"정확히 N문장" 등) 본문에 그대로 출력 금지 — *완성된 HTML만* 출력"""
@@ -771,6 +772,7 @@ def _build_section_system_msg(supreme_block: str, platform: str) -> str:
 - [CHART_N]...[/CHART_N] 슬롯은 *그대로 유지* (내용 채우지 말 것)
   ★ 반드시 [CHART_N] 오프닝 태그로 시작하고 [/CHART_N] 클로징 태그로 닫는다.
   ★ 슬롯 안 필드: 제목 / 단위 / 데이터 / 출처 — 이 4개만. 종류: 필드 절대 금지.
+- ★★ 본문 산문(<p>)과 TITLE 모두 *수치 0존*: 숫자·통계·%·금액·비율·연도별 값을 산문·제목에 쓰지 마십시오. 모든 수치는 오직 [CHART_N] 슬롯 안(카탈로그 값)에만 등장. "-9.5%" 같은 궁금증 유발용 수치를 제목에 지어내면 사실성 게이트가 차단한다 — 숫자 없이 궁금증을 유발할 것.
 - 문체: {spec['tone']}
 - *위 지시문(헌법 조항 번호·"정확히 N문장"·"플레이스홀더 포함" 등) 본문에 그대로 출력 금지* — *완성된 HTML 만* 출력
 - 출력 형식 외 설명·주석·코드블록 절대 금지"""
@@ -1094,8 +1096,8 @@ def _gen_theme(
         _spec_theme = _gs("theme")
     except Exception:
         pass
-    _max_sents = _spec_theme.max_sentences if _spec_theme else 40
-    _max_kor = _spec_theme.max_korean if _spec_theme else 2000
+    _max_sents = _spec_theme.max_sentences if _spec_theme else 45
+    _max_kor = _spec_theme.max_korean if _spec_theme else 2500
     _target_sents = _spec_theme.target_sentences if _spec_theme else 32
     _insights = _load_learn_insights("theme", platform)
 
