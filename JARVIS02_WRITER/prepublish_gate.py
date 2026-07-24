@@ -46,6 +46,42 @@ def _draft_body(draft: dict) -> str:
     return body or ""
 
 
+def send_score_report(sr: dict, post_type: str = "", platform: str = "", title: str = "") -> None:
+    """★ 발행 전 100점 검증 점수 → 텔레그램 (사용자 박제 2026-07-24: 모든 글·항상).
+
+    ① 단일 진입점 — 점수가 계산되는 유일 지점(prepublish_quality_issues 의 score_post 직후)에서만 호출.
+    ② 동적 설계 — sr["sections"]/items dict 를 *순회* 해 렌더. 루브릭(항목·만점·이름)이 바뀌어도
+       코드 수정 없이 자동 반영(post_scorer 가 유일한 진실). 항목명·만점을 하드코딩하지 않는다.
+    ③ 모든 글 — 경제·테마 × 네이버·티스토리 4조합 모두 이 함수를 부른다(통과·미통과 무관).
+    """
+    try:
+        from shared.notify import send_tg
+        from JARVIS02_WRITER.post_scorer import PASS_THRESHOLD as _PASS
+        secs = sr.get("sections") or {}
+        head = f"📊 *발행 전 품질검증* [{post_type or '?'}·{platform or '?'}]"
+        if title:
+            head += f" {title}"
+        _ok = sr.get("passed")
+        lines = [head, "━━━━━━━━━━━━━━━━━━",
+                 f"*종합 {sr.get('total', 0):.1f}/100*  "
+                 f"{'✅ 통과' if _ok else '❌ 재작성'} (기준 {_PASS:.0f})"]
+        # 섹션·항목 동적 순회 (A/B/C/D 순서 보존, dict 순서 그대로)
+        for skey, sec in secs.items():
+            if not isinstance(sec, dict):
+                continue
+            lines.append(f"\n*{skey}* {sec.get('total', 0):.1f}/{sec.get('max', 0):.0f}")
+            for iv in (sec.get("items") or {}).values():
+                if not isinstance(iv, dict):
+                    continue
+                _sc = float(iv.get("score", 0)); _mx = float(iv.get("max", 0))
+                _nm = iv.get("name", "")
+                _mk = "✓" if _sc >= _mx else "⚠"
+                lines.append(f"  {_mk} {_nm} {_sc:.1f}/{_mx:.0f}")
+        send_tg("\n".join(lines))
+    except Exception as _e:
+        log.warning(f"[prepublish_gate] 점수 리포트 전송 실패(무시): {_e}")
+
+
 def prepublish_quality_issues(draft, post_type: str = "", platform: str = "",
                               source_docs=None, market_data=None,
                               stocks_data=None, collected=None) -> list[dict]:
@@ -151,6 +187,9 @@ def prepublish_quality_issues(draft, post_type: str = "", platform: str = "",
                     "[prepublish_gate] 종합 점수 %.1f/100 → %s",
                     _sr["total"], "통과" if _sr["passed"] else "재작성"
                 )
+                # ★ 모든 글·항상 점수 텔레그램 (사용자 박제 2026-07-24) — 통과·미통과 무관.
+                send_score_report(_sr, post_type, platform,
+                                  (draft.get("title") or draft.get("keyword") or "").strip())
                 if not _sr["passed"]:
                     sec = _sr.get("sections", {})
                     detail_parts = [
