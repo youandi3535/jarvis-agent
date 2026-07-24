@@ -22,26 +22,9 @@ log = logging.getLogger("jarvis.collector.engine")
 
 # ★ 수집 풍부 원칙 (사용자 박제 2026-07-03 ×2 — ADR 013 / ERRORS [314]):
 #   "주제가 설정되면 그 주제에 맞는 정보는 싹다 받아버려, 제한 두지 말고."
-#   "데이터가 부족해서 이미지를 생성 못하는 상황을 만들지 마라. 데이터는 충분해야 해."
-#   아래 상한은 무한루프 방지용 안전망일 뿐 — 신뢰순 *선별* 은 사용 시점(주입·검증)에.
-_PROVIDER_LIMITS = {
-    "naver_news": 30,  # 네이버 뉴스 API: 가장 정확한 한국어 뉴스
-    "news":       25,  # Google News + 경제지 RSS
-    "kor_econ":   15,  # 네이버 금융 + 전문 경제지
-    "krx":          20,  # KRX 시장 통계 (Tier 2 API)
-    "dart":         20,  # DART 전자공시 (Tier 2 API)
-    "ecos":         20,  # 한국은행 거시경제 지표 (Tier 2 API)
-    "kosis":        20,  # 통계청 산업 통계 (Tier 2 API)
-    "finance":      15,  # yfinance 글로벌 지표 (Tier 2 API)
-    "bok_official": 10,  # 한국은행 기준금리·환율·CPI (Tier 2 API)
-    "customs":     10,  # 관세청 수출입 통계 (Tier 2 API)
-    "kofia":        8,  # 금융투자협회 채권 수익률 (Tier 2 API)
-    "fss":          8,  # 금융감독원 금융통계 (Tier 2 API)
-    "mlit":         8,  # 국토교통부 부동산 통계 (Tier 2 API)
-    "employment":  10,  # 고용노동부 고용통계 (Tier 2 API)
-    "blog":       10,  # 네이버 블로그
-    "web":        10,  # 위키 + 지식백과 + 다음
-}
+#   소스별 상한은 무한루프 방지용 안전망일 뿐 — 신뢰순 *선별* 은 사용 시점(주입·검증)에.
+#   ★ source_registry.SOURCES 의 max_items 에서 파생 (사용자 박제 2026-07-24) — 사본 폐지. default 8.
+from .source_registry import MAX_PER_SOURCE as _PROVIDER_LIMITS
 
 # ★ 메인 수집 provider — source_registry.SOURCES(SSOT) 에서 파생 (사용자 박제 2026-07-24).
 #   종전엔 여기 16줄을 손수 유지했고 provider 목록이 chart_data._m·providers/__init__ 과 3벌

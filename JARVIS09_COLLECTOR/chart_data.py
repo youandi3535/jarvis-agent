@@ -1139,19 +1139,8 @@ from JARVIS09_COLLECTOR.source_registry import TEXT_SOURCES as _TEXT_SOURCES   #
 # ★ 소스 신뢰도 순위 — LLM 설계 순서 무관, 항상 이 순위로 재정렬 (ERRORS [421])
 # 근거: ADR 013 "신뢰순위 API>뉴스>기사>웹". LLM이 ["web","kosis"] 설계해도
 # 실행은 항상 kosis → web 순서. web/blog가 먼저 실행되어 틀린 수치 채택 사고 원천 차단.
-_SOURCE_TRUST_RANK: dict[str, int] = {
-    "finance": 1,     # yfinance — 공식 금융 API
-    "krx":     1,     # 한국거래소 공식 API
-    "ecos":    1,     # 한국은행 ECOS 공식 API
-    "dart":    2,     # 금감원 전자공시 API
-    "kosis":   2,     # 통계청 공식 통계 DB
-    "kor_econ":3,     # 정부 보도자료
-    "naver_news":4,   # 네이버 뉴스
-    "news":    4,     # 언론사 뉴스
-    "discover":5,     # 웹 발견 (구글·네이버 검색)
-    "web":     6,     # 웹 (낮은 신뢰도)
-    "blog":    7,     # 블로그 (최저 신뢰도)
-}
+# ★ source_registry.SOURCES 의 chart_rank 에서 파생 (사용자 박제 2026-07-24) — 사본 폐지. default 99.
+from JARVIS09_COLLECTOR.source_registry import CHART_TRUST_RANK as _SOURCE_TRUST_RANK
 
 # 시장 지표 키워드 — discover 웹 폴백 차단 대상 (ERRORS [421])
 # 이 키워드가 series name/query에 있으면 API/kosis 실패해도 웹 검색 폴백 금지.
@@ -1622,8 +1611,9 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
 
         # ── 5) ★ 출처 다양성 선택 (사용자 박제 2026-07-01 '전부 받아와') — provider 별로 묶어
         #    우선순위 라운드로빈 → 한 출처(KOSIS) 독점 방지, 뉴스·정부보도가 함께 섞임. ──────
-        _PROV_RANK = {"kosis": 0, "ecos": 1, "dart": 1, "krx": 2,
-                      "finance": 2, "news": 2, "kor_econ": 2, "naver_news": 3, "web": 4, "market": 3}
+        # ★ source_registry.SOURCES 의 prov_rank 파생 + market(데이터셋 provenance, 비-수집소스) 특례.
+        from JARVIS09_COLLECTOR.source_registry import PROV_RANK as _PR
+        _PROV_RANK = {**_PR, "market": 3}
         from collections import OrderedDict as _OD
         _groups: "_OD[str, list]" = _OD()
         for ds in sorted(deduped, key=lambda d: _PROV_RANK.get((d.get("source") or {}).get("provider", ""), 5)):

@@ -1,16 +1,19 @@
 """JARVIS09_COLLECTOR/source_registry.py — 출처(source_type) 단일 진실 소스 (SSOT).
 
 ★ 사용자 박제 2026-07-24: "논문 하나 지우는데 17파일을 훑어야 했다 — 유지관리가 안 되는 설계."
-  종전엔 한 source_type 의 정보(신뢰 티어·provider 클래스·카탈로그 설명·텍스트여부)가
-  models·collector_engine·chart_data·data_planner·providers 5~10곳에 *사본* 으로 흩어져,
-  소스 하나를 넣거나 빼려면 전체를 훑어야 했다. 이제 여기 `SOURCES` 에 **한 줄** 이면 끝.
+  종전엔 한 source_type 의 정보(신뢰 티어·provider 클래스·카탈로그 설명·텍스트여부·수집상한·
+  차트랭크·dedup우선순위)가 models·collector_engine·chart_data·data_planner·providers 등에
+  *사본* 으로 흩어져, 소스 하나를 넣거나 빼려면 전체를 훑어야 했다. 이제 여기 `SOURCES` 에 **한 줄**.
 
   아래 파생 뷰가 전부 SOURCES 에서 자동 생성된다 (② 동적설계 — 사본 0):
-    · SOURCE_TRUST_TIER  ← models 가 re-export (신뢰 티어)
+    · SOURCE_TRUST_TIER  ← models 가 re-export (신뢰 티어, 중복·충돌 해소)
     · main_providers()   ← collector_engine._PROVIDERS (메인 수집 팬아웃, 순서 보존)
     · provider_class()   ← chart_data 의 source_type→provider 조회
     · CATALOG            ← data_planner._SOURCE_CATALOG (LLM 출처 선택 카탈로그)
     · TEXT_SOURCES       ← chart_data._TEXT_SOURCES (제목 관련성 필터 대상)
+    · MAX_PER_SOURCE     ← collector_engine._PROVIDER_LIMITS (소스별 수집 상한)
+    · CHART_TRUST_RANK   ← chart_data._SOURCE_TRUST_RANK (차트 신뢰 재정렬 순위)
+    · PROV_RANK          ← chart_data._PROV_RANK (차트 dedup 라운드로빈 우선순위)
 
   ★ 새 소스 추가/삭제 = SOURCES 에 SourceSpec 한 줄 넣거나 빼기. 다른 파일 손 댈 필요 없음.
   provider 는 "module:Class" 문자열로 두고 *지연 import* — 이 모듈은 09 내부를 import 하지
@@ -24,48 +27,56 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class SourceSpec:
-    """한 수집 출처의 *모든* 정체성 — 신뢰 티어·수집기·설명·성격. 여기가 유일한 정의처."""
+    """한 수집 출처의 *모든* 정체성 — 여기가 유일한 정의처. int|None 필드는 None=미설정(소비처 default)."""
     key: str                    # source_type ("kosis")
     tier: int                   # 신뢰 티어 (1=공식 데이터 API … 5=블로그). 겹치는 데이터 충돌 해소용.
     provider: str = ""          # "module:Class" (providers/ 패키지) — 수집기 있으면. 없으면 문서에만 등장.
     main: bool = True           # 메인 수집 팬아웃(_PROVIDERS) 포함 여부. discover 는 차트/발견 전용이라 False.
     catalog: str = ""           # data_planner LLM 카탈로그 설명 (있으면 출처 선택지로 노출).
     is_text: bool = False       # 차트 제목 관련성 1차 필터 대상 (뉴스·통계 등 텍스트 출처).
+    max_items: int | None = None    # 소스별 수집 상한 (None=default 8). 무한루프 방지 안전망, 선별은 별도.
+    chart_rank: int | None = None   # 차트 신뢰 재정렬 순위 (None=default 99, 낮을수록 우선). ERRORS [421].
+    prov_rank: int | None = None    # 차트 dedup 라운드로빈 우선순위 (None=default 5, 0 유효). KOSIS 독점 방지.
 
 
 # ★★★ 출처 단일 목록 — 소스 하나 = 한 줄. 순서 = _PROVIDERS 메인 팬아웃 순서(신뢰 정렬은 별도) ★★★
 SOURCES: list[SourceSpec] = [
     # ── 뉴스(tier 2) ──
     SourceSpec("naver_news", 2, "naver_news_provider:NaverNewsProvider", is_text=True,
+               max_items=30, chart_rank=4, prov_rank=3,
                catalog="네이버 뉴스 — 한국어 시사·정책·기업 뉴스에 인용된 수치(가장 정확한 한국어 뉴스)"),
     SourceSpec("news", 2, "news_provider:NewsProvider", is_text=True,
+               max_items=25, chart_rank=4, prov_rank=2,
                catalog="Google News + 경제지(한국경제·매경·연합) — 뉴스 인용 수치"),
     # ── 기사·전문지(tier 3) ──
     SourceSpec("kor_econ", 3, "kor_econ_provider:KorEconProvider", is_text=True,
+               max_items=15, chart_rank=3, prov_rank=2,
                catalog="산업부·중소벤처부 보도자료 + 네이버금융 — 정부 정책·산업 공식 발표 수치"),
     # ── 공식 데이터 API(tier 1) ──
-    SourceSpec("krx", 1, "krx_provider:KrxProvider",
+    SourceSpec("krx", 1, "krx_provider:KrxProvider", max_items=20, chart_rank=1, prov_rank=2,
                catalog="한국거래소 — 상장 종목 주가·등락률·거래량·시가총액·코스닥/코스피 업종별 시가총액 비중·코스닥 150 섹터 지수(8개 전체)"),
-    SourceSpec("blog", 5, "blog_provider:BlogProvider",
+    SourceSpec("blog", 5, "blog_provider:BlogProvider", max_items=10, chart_rank=7,
                catalog="네이버 블로그 — 체감·후기(보조, 신뢰도 낮음)"),
     SourceSpec("web", 4, "web_provider:WebProvider", is_text=True,
+               max_items=10, chart_rank=6, prov_rank=4,
                catalog="위키백과·지식백과 — 개념·배경·정의(수치보다 설명 위주)"),
-    SourceSpec("dart", 1, "dart_provider:DartProvider",
+    SourceSpec("dart", 1, "dart_provider:DartProvider", max_items=20, chart_rank=2, prov_rank=1,
                catalog="금융감독원 전자공시 — 상장기업 재무제표·사업보고서·직원수·매출·영업이익"),
-    SourceSpec("ecos", 1, "ecos_provider:EcosProvider",
+    SourceSpec("ecos", 1, "ecos_provider:EcosProvider", max_items=20, chart_rank=1, prov_rank=1,
                catalog="한국은행 ECOS — 거시경제(기준금리·환율·통화량·물가·국제수지·실업률) 시계열"),
     SourceSpec("kosis", 1, "kosis_provider:KosisProvider", is_text=True,
+               max_items=20, chart_rank=2, prov_rank=0,
                catalog="통계청 국가통계포털 — 인구·산업·고용·물가·소비·지역경제 등 공식 통계표(시계열)"),
-    SourceSpec("finance", 1, "finance_provider:FinanceProvider",
+    SourceSpec("finance", 1, "finance_provider:FinanceProvider", max_items=15, chart_rank=1, prov_rank=2,
                catalog="글로벌 시장지표(yfinance) — 해외 지수(S&P·나스닥)·환율·금·유가·미국채"),
-    SourceSpec("bok_official", 1, "bok_provider:BokProvider"),
-    SourceSpec("customs", 1, "customs_provider:CustomsProvider"),
-    SourceSpec("kofia", 1, "kofia_provider:KofiaProvider"),
-    SourceSpec("fss", 1, "fss_provider:FssProvider"),
-    SourceSpec("mlit", 1, "mlit_provider:MlitProvider"),
-    SourceSpec("employment", 1, "employment_provider:EmploymentProvider"),
+    SourceSpec("bok_official", 1, "bok_provider:BokProvider", max_items=10),
+    SourceSpec("customs", 1, "customs_provider:CustomsProvider", max_items=10),
+    SourceSpec("kofia", 1, "kofia_provider:KofiaProvider", max_items=8),
+    SourceSpec("fss", 1, "fss_provider:FssProvider", max_items=8),
+    SourceSpec("mlit", 1, "mlit_provider:MlitProvider", max_items=8),
+    SourceSpec("employment", 1, "employment_provider:EmploymentProvider", max_items=10),
     # ── 웹 발견 — 메인 팬아웃 제외(차트·discover 레그 전용) ──
-    SourceSpec("discover", 5, "discovery_provider:DiscoveryProvider", main=False,
+    SourceSpec("discover", 5, "discovery_provider:DiscoveryProvider", main=False, chart_rank=5,
                catalog="웹 발견 — 구글(DuckDuckGo)·네이버검색·공공데이터포털로 *실제 데이터 페이지*를 "
                        "찾아 받음. 위 카탈로그에 딱 맞는 출처가 없는 주제(지역·교통·특정기업·신기술·해외 등)는 "
                        "*반드시* 이것을 넣어라. 어떤 주제든 동작. query 를 구체적으로."),
@@ -79,6 +90,9 @@ _BY_KEY: dict[str, SourceSpec] = {s.key: s for s in SOURCES}
 SOURCE_TRUST_TIER: dict[str, int] = {s.key: s.tier for s in SOURCES}
 CATALOG: dict[str, str] = {s.key: s.catalog for s in SOURCES if s.catalog}
 TEXT_SOURCES: frozenset = frozenset(s.key for s in SOURCES if s.is_text)
+MAX_PER_SOURCE: dict[str, int] = {s.key: s.max_items for s in SOURCES if s.max_items is not None}
+CHART_TRUST_RANK: dict[str, int] = {s.key: s.chart_rank for s in SOURCES if s.chart_rank is not None}
+PROV_RANK: dict[str, int] = {s.key: s.prov_rank for s in SOURCES if s.prov_rank is not None}
 
 
 def _load(provider_ref: str):
@@ -105,4 +119,5 @@ def all_provider_classes() -> dict:
 
 
 __all__ = ["SourceSpec", "SOURCES", "SOURCE_TRUST_TIER", "CATALOG", "TEXT_SOURCES",
+           "MAX_PER_SOURCE", "CHART_TRUST_RANK", "PROV_RANK",
            "provider_class", "main_providers", "all_provider_classes"]
