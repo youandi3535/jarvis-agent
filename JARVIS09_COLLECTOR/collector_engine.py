@@ -627,7 +627,11 @@ def _collect_research_leg(keyword: str, sector: str, angle: str) -> dict:
         except Exception as e:
             log.warning(f"[collect_all] 리서치 실패 — 종전 스윕 폴백: {e}")
     try:
-        return {"docs": collect_for_theme(keyword, sector), "pack": None, "corpus_digest": ""}
+        # ★ 2026-07-24 P2: 스윕 폴백도 신뢰 쿼터(기본 COLLECT_QUOTA_BUDGET=15) 적용.
+        #   RESEARCH_FIRST 정상경로는 이미 쿼터를 타지만 이 예외 폴백은 무쿼터라
+        #   205~226문서(119K자) 프롬프트 폭주의 진원이었다(발행 지연·overage). SSOT=models 쿼터.
+        return {"docs": select_by_trust_quota(collect_for_theme(keyword, sector)),
+                "pack": None, "corpus_digest": ""}
     except Exception as e:
         log.warning(f"[collect_all] 스윕 폴백도 실패: {e}")
         return {"docs": [], "pack": None, "corpus_digest": ""}

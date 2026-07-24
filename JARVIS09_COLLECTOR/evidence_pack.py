@@ -145,7 +145,11 @@ def build_corpus_digest(docs: list, per_source_chars: int = 700) -> str:
     보존하므로 digest 는 서사·맥락 담당. 사실성 게이트는 원문(collection_docs) 그대로 사용(별개).
 
     ★ 선계산(저부하 창)에서만 실행 — 발행창(is_publishing)이면 "" 반환 → 호출자는 원문
-      build_corpus_block 폴백(21시 추가 LLM 0). distill LLM 비용은 20:00/06:00 창에 흡수.
+      build_corpus_block 폴백. distill LLM 비용은 20:00/06:00 창에 흡수. analyzer alias 는
+      발행창 LLM 경합을 피하려 선계산으로 이전된 것이라(shared/llm.py:448) 이 게이트 유지가 정석.
+    ★ 2026-07-24 P2: 종전엔 이 게이트로 캐시미스 시 원문 폴백이 205문서·119K자로 폭주했는데,
+      그 폭주는 *원문 폴백 자체를 유계로 캡*(P2-b: DRAFT_CORPUS_MAX_CHARS 40000 + P2-c: 스윕
+      쿼터)해서 잡는다 — 발행창에 LLM(analyzer)을 새로 들이지 않고(P3 와 정합) 코퍼스만 유계화.
     """
     docs = list(docs or [])
     if not docs:
@@ -155,7 +159,7 @@ def build_corpus_digest(docs: list, per_source_chars: int = 700) -> str:
     except Exception:
         return ""
     if is_publishing():
-        return ""   # 발행창 — 즉석 digest 금지, 호출자 원문 폴백
+        return ""   # 발행창 — 즉석 digest 금지(analyzer 경합 회피), 호출자 원문 폴백(P2-b 로 캡됨)
     blocks = []
     for i, d in enumerate(docs, 1):
         body = str(_doc_attr(d, "cleaned_text") or _doc_attr(d, "raw_text") or "").strip()

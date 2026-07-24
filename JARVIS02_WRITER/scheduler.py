@@ -46,6 +46,20 @@ PYTHON        = sys.executable
 
 sys.path.insert(0, str(BASE_DIR.parent))  # shared/ 접근
 
+
+def _parent_subproc_timeout() -> int:
+    """경제 발행 subprocess 부모 백스톱 — 자식 guard_main(2*BLOG+600) 보다 *크게* 파생.
+
+    ★ 2026-07-24 P4: 종전 하드코딩 3600(60분) 은 자식 guard_main 백스톱(5400) 보다 작아
+      ① 자식의 협조종료(guard_main→os._exit·chrome 정리·GUARDIAN 보고) 전에 부모가 먼저 SIGKILL
+      ② 2 플랫폼×BLOG(4800) > 3600 이라 2번째 플랫폼을 발행 도중 강제종료 — 계층 역전 버그였다.
+      부모>자식 으로 복원하되 파생(하드코딩 금지, ② 동적설계) — BLOG 를 낮추면(P5) 자동 동반 하락.
+      ★ 이 값은 정상 완료 시간을 늘리지 않는다 — 자식 자체 가드(freeze 300s·플랫폼 BLOG·guard_main
+      2*BLOG+600)가 먼저 발화하는 '절대 안 터지는 최후 안전판'일 뿐. 정상 30분 수렴은 P1·P2 담당.
+    """
+    from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC as _b
+    return 2 * _b + 900   # 자식 guard_main(2*BLOG+600) + 300 여유
+
 SCHEDULE_HOURS      = [21]   # ★ 테마 발행 시간 (표시용 — 실제 트리거는 DEFAULT_JOBS j01_theme_post_21). 16→21 (2026-07-05)
 RADAR_CHECK_HOURS   = [9, 15]   # RADAR 파이프라인 확인: 오전 09:00 · 오후 15:00
 MAX_RETRY           = 3
@@ -1003,10 +1017,11 @@ def run_economic_poster(*extra_flags):
         _ts = _dt.now().strftime('%Y%m%d_%H%M%S')
         _logpath = BASE_DIR / 'logs' / f'economic_{_ts}.log'
         cmd = [PYTHON, str(BASE_DIR / 'economic_poster.py'), '--scheduled'] + list(extra_flags)
-        # ★ 부모 벽시계 backstop = 60분 (사용자 박제 2026-07-06: 5400→3600). 자식(harness)이
-        #   블로그(네이버·티스토리) 액션당 30분 데드라인 + 300초 freeze 워치독으로 스스로 중단
-        #   → 부모 timeout 은 그마저 안 될 때의 OS 최종 안전망(2블로그×30). 자식이 killable
-        #   subprocess(--scheduled)라 freeze 시 os._exit → 부모는 대개 이 값에 안 닿음.
+        # ★ 부모 벽시계 backstop = _parent_subproc_timeout()(자식 guard_main 보다 크게 파생, P4).
+        #   자식(harness)이 블로그(네이버·티스토리) 액션당 BLOG 데드라인 + 300초 freeze 워치독으로
+        #   스스로 중단 → 부모 timeout 은 그마저 안 될 때의 OS 최종 안전망. 자식이 killable
+        #   subprocess(--scheduled)라 freeze 시 os._exit → 부모는 정상 시 이 값에 닿지 않는다.
+        #   (종전 하드코딩 3600 은 자식 backstop 5400 보다 작아 계층 역전이었다 — 2026-07-24 수정.)
         import sys as _sys
         _is_tty = _sys.stdout.isatty() or bool(os.environ.get("JARVIS_VERBOSE"))
         with open(_logpath, 'w', encoding='utf-8') as _lf:
@@ -1020,7 +1035,7 @@ def run_economic_poster(*extra_flags):
                         _sys.stdout.write(_decoded)
                         _sys.stdout.flush()
                         _lf.write(_decoded)
-                    proc.wait(timeout=3600)
+                    proc.wait(timeout=_parent_subproc_timeout())
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
@@ -1029,7 +1044,7 @@ def run_economic_poster(*extra_flags):
                     returncode = proc.returncode
                 result = _R()
             else:
-                result = subprocess.run(cmd, timeout=3600, stdout=_lf,
+                result = subprocess.run(cmd, timeout=_parent_subproc_timeout(), stdout=_lf,
                                         stderr=subprocess.STDOUT, env=_env)
 
         # 플랫폼별 결과 읽기 (economic_poster.py 가 JARVIS_EP_RESULT_FILE 에 기록)

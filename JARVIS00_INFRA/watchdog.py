@@ -2,7 +2,7 @@
 
 두 불변식 — 어떤 경우라도:
   · 멈춤(freeze): 최대 300초(5분) 무진전 → 정지.
-  · 재시도/재시작: 최대 3회 (shared/llm.py·harness DEFAULT_MAX_ATTEMPTS·재시작 카운터에서 강제).
+  · 재시도/재시작: harness.DEFAULT_MAX_ATTEMPTS(기본 2회, 재시도 상한 SSOT — shared/llm.py·재시작 카운터가 상속).
 작업 전체 데드라인(예: 블로그 발행 액션당 30분)은 호출자가 deadline_sec 로 지정.
 
 정지 감지 시: on_stuck 콜백(GUARDIAN 보고) 후,
@@ -23,7 +23,9 @@ log = logging.getLogger("jarvis.watchdog")
 
 # ── 불변식 상수 (SSOT) ──
 FREEZE_LIMIT_SEC = 300      # 멈춤 상한 — 어떤 경우라도 5분 무진전이면 정지
-MAX_RETRIES = 3             # 재시도·재시작 상한 — 어떤 경우라도 3회
+# ★ 2026-07-24 P4: MAX_RETRIES 는 아래 __getattr__ 로 harness.DEFAULT_MAX_ATTEMPTS(재시도 상한
+#   SSOT)에서 지연 파생 — 종전 하드코딩 3 은 실제 상한 2 와 드리프트했다(사본을 진실로 믿는 병,
+#   소비자 0). watchdog 은 harness 에 의해 import 되므로 모듈레벨 import 는 순환 → 접근 시 lazy.
 WATCHDOG_KILL_RC = 75       # EX_TEMPFAIL — 이 코드로 종료된 subprocess는 워치독 강제킬(원인은 GUARDIAN 진단, stderr 무관)
 
 # ── ★ 전역 하트비트 (진행 신호 단일 진입점) ──
@@ -215,6 +217,18 @@ def guard_main(name: str, deadline_sec: float | None = None,
     with Watchdog(name, deadline_sec=deadline_sec, freeze_sec=freeze_sec,
                   on_stuck=_default_on_stuck, kill_on_freeze=kill_on_freeze):
         yield
+
+
+def __getattr__(name: str):
+    # ★ 2026-07-24 P4: MAX_RETRIES 는 harness.DEFAULT_MAX_ATTEMPTS(재시도 상한 SSOT)에서 지연 파생.
+    #   watchdog 은 harness 에 의해 import 되므로 모듈레벨 import 는 순환 — 접근 시점에만 lazy 조회.
+    if name == "MAX_RETRIES":
+        try:
+            from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+            return DEFAULT_MAX_ATTEMPTS
+        except Exception:
+            return 2
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = ["Watchdog", "StuckError", "guard_main", "beat", "last_global_beat",

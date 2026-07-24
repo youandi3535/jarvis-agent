@@ -681,6 +681,17 @@ def run(post_naver=True, post_tistory=True):
                 fixed_all.append(Issue(step=step_name, kind="draft_fixed", detail=s))
             for s in unfixed_strs:
                 unfixed_all.append(Issue(step=step_name, kind="draft_invalid", detail=s))
+
+        # ★ 회복 불가 조건 → abort (harness 즉시 차단, 2차 시도 낭비 없음 — 테마 data_empty 와 동형)
+        #   재시도는 collect step(②)을 건너뛰어 collected.datasets 불변 → 검증 데이터 부족(이미지
+        #   사실성)은 재작성으로 충족 불가. 무의미한 2차 시도(플랫폼당 ~15분)를 즉시 종결한다.
+        #   login 문제는 refresh 로 풀릴 수 있어 abort 제외(테마 규칙과 동일).
+        _has_data_insuff = any(i.kind == "data_insufficient" for i in non_draft)
+        _has_login_issue = any(i.kind in ("login_invalid", "login_error") for i in non_draft)
+        if _has_data_insuff and not _has_login_issue:
+            print("  ⚡ [fix] 회복 불가 확정 → abort: 검증 데이터 부족(이미지 사실성) — 재작성으로 충족 불가")
+            return fixed_all, [Issue(step="전체", kind="abort",
+                                     detail="검증 데이터 부족(이미지 사실성) — 재작성으로 충족 불가")]
         return fixed_all, unfixed_all
 
     def _send_platform(state, platform: str, draft_key: str, publish_fn,

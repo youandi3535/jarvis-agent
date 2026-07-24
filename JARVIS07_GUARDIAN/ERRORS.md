@@ -2,6 +2,47 @@
 
 ---
 
+## [493] ✅ 해결 — 경제/테마 2블로그가 30분을 넘던 근본원인 = 60% 런의 *무의미 재시도*(데이터부족→재작성해도 동일실패) + 코퍼스 비대 + 데드라인 계층 역전 (2026-07-24)
+
+> ★ **맥락**: [492] freeze 수정 검토 중 사용자가 "3600초(60분) 넘는 것 자체가 문제 — 타임아웃을
+> 늘리는 건 근본해결 아님. 2블로그 정상 작성은 30분 이내" 라고 박제. 데드라인은 *문제 탐지기*여야지
+> *수용 장치*가 아니다. 실측 로그로 진짜 병목을 규명해 "정상을 30분에 넣는" 수정을 했다(P1~P4, 타임아웃 상향 0).
+
+- **증상**: 경제 브리핑 정상 완료본조차 ~33분(0723 로그). 전체 경제 로그 35개 중 **21개(60%)에서 attempt=2
+  재시도**. `크로스 프로세스 잠금 45s 대기 초과` ×2~5회, `수집 전문 문서 205건→119K자` 병적 코퍼스,
+  seven_day 0.81·five_hour overage rejected.
+- **원인 (4겹, 지배항=①)**:
+  ① **무의미 재시도**: harness 재시도는 `_find_resume_step` 이 대본 step 부터 재개 → *수집 step 건너뜀*
+     → `collected.datasets` 불변 → 이미지/차트 부족(제4조·이미지사실성) 결정론적 재발. 유일 방어막인
+     fingerprint-abort(`harness.py:860`)는 `detail[:80]` 의 변동값(law_enforcer 카운트·prepublish seed
+     파일명) 때문에 매 attempt 지문이 달라져 **절대 발화 못 함** → attempt=2 전량 재실행(~15분 낭비).
+     경제엔 테마의 `data_empty→abort` 같은 "데이터부족=terminal" 분류가 아예 없었다.
+  ② **코퍼스 비대**: `collect_for_theme` 예외폴백이 무쿼터(205~226문서) + `DRAFT_CORPUS_MAX_CHARS`
+     기본 200000(사실상 무제한) → writer 프롬프트 119K자 → attempt-1 지연 + overage 진원.
+  ③ **데드라인 계층 역전**: 부모 `subprocess.run(timeout=3600)` < 자식 guard_main `2*BLOG+600=5400`
+     → 부모가 자식 협조종료 전에 SIGKILL. 2액션×2400=4800>3600 → 2번째 플랫폼 발행 중 강제종료.
+  ④ **락 경합**: 발행창 5분 주기 analyzer subprocess 가 `bg_defer_reason` 게이트 없이 전역 llm_exec.lock
+     경합(GUARDIAN 만 게이트돼 있었다).
+- **헛다리**: **"부모 백스톱을 4800으로 올린다"(1차 제안) — 반증됨.** 타임아웃 상향은 문제를 곪게 하는
+  안티패턴(사용자 지적). 또 "evidence_pack digest 자기억제(is_publishing) 제거"도 초안에 넣었다 반증 —
+  analyzer alias 는 발행창 경합을 피하려 선계산으로 이전된 것(`_BG_ALIASES` 비포함·`shared/llm.py:448`)이라
+  제거하면 P3 가 줄이려는 발행창 LLM 경합을 오히려 재도입. 되돌리고 코퍼스는 캡으로만 잡았다.
+- **해결 (P1~P4)**:
+  - **P1** 무의미 재시도 제거: prepublish 이미지사실성 leg → `kind="data_insufficient"` + seed 파일명
+    제거(불변 detail). 경제 `_fix_platform`·테마 fix 에 `data_insufficient→abort`(테마 data_empty 동형)
+    → attempt=1 후 즉시 종결. (`prepublish_gate.py`·`economic_poster.py`·`trend_theme_writer.py`)
+  - **P2** 코퍼스 캡: `DRAFT_CORPUS_MAX_CHARS` 200000→40000, 스윕 폴백에 `select_by_trust_quota`(15건 SSOT).
+    (`draft_writer.py`·`collector_engine.py`)
+  - **P3** 발행창 LLM 게이트: analyzer fallback `_run` 최상단 `bg_defer_reason()` 게이트(GUARDIAN 동형). (`jobs.py`)
+  - **P4** 계층 역전 원복: 부모 백스톱 = `2*BLOG+900`(부모>자식 파생, 하드코딩 3600 제거), MAX_RETRIES 를
+    harness.DEFAULT_MAX_ATTEMPTS 에서 `__getattr__` 지연 파생(3→2 드리프트 제거). (`scheduler.py`·`watchdog.py`)
+  - **미적용(사용자 결정)**: P5(액션 데드라인 2400→900)는 P1~P4 검증·정상런 ≤12분 확인 후로 보류.
+- **파일**: 위 8개. **교훈**: 데드라인이 30분을 넘으면 그건 정상이 아니라 *신호*다 — 늘리지 말고 *왜 넘는지*
+  (무의미 재시도·입력 비대)를 고쳐 정상을 30분에 넣어라. 재시도는 *입력이 바뀔 때만* 의미가 있다(수집을
+  건너뛰는 재시도는 데이터부족 실패를 결정론적으로 재현). fingerprint 는 `detail` 에 변동값이 있으면 무력화된다.
+
+---
+
 ## [492] ✅ 해결 — 경제 브리핑 네이버 발행 watchdog freeze(304s>300s) 강제종료 — 진짜 원인은 차트 인포그래픽 Chromium 렌더(`_html_to_jpg`)의 beat 누락 + networkidle 원격폰트 대기 (2026-07-24, 진단 정정)
 
 > ★ **정정 이력**: 이 항목의 1차 진단(제목·원인이 "Pollinations GET beat 누락")은 **오귀속**이었다.

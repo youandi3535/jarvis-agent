@@ -348,14 +348,16 @@ def build_corpus_block(docs, max_total: int | None = None, per_doc: int | None =
     신뢰 서열(논문>API>뉴스>기사>웹) 정렬.
 
     ★ 입력 절단 폐지 (사용자 박제 2026-07-17): per_doc(문서당 자수컷) 기본 None = 전문 그대로.
-      max_total 은 *컨텍스트 오버플로 방지용 최후 안전판* 일 뿐 — 초과 시에만 저신뢰부터 통째
-      생략(건수 명시). 15건 신뢰 쿼터 규모에선 사실상 발동 안 함.
+      max_total 은 *컨텍스트 오버플로 방지용 최후 안전판* — 초과 시에만 저신뢰부터 통째 생략(건수 명시).
+    ★ 2026-07-24 P2: 기본 상한 200000→40000. 수집 쿼터(15건)가 정상 동작하면 발동 안 하나,
+      쿼터 우회 폴백(collect_for_theme 무쿼터, 205문서·119K자)이 프롬프트를 폭증시켜 발행 지연·
+      overage 를 유발했다 — 총량을 유계로 캡해 병적 사례를 정상대로 되돌린다. 근본은 P2-c(쿼터).
     """
     if not docs:
         return ""
     import os as _os_c
     if max_total is None:
-        max_total = int(_os_c.getenv("DRAFT_CORPUS_MAX_CHARS", "200000") or "200000")
+        max_total = int(_os_c.getenv("DRAFT_CORPUS_MAX_CHARS", "40000") or "40000")
 
     def _a(d, k, default=""):
         return d.get(k, default) if isinstance(d, dict) else getattr(d, k, default)

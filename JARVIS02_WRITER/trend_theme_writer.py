@@ -733,12 +733,16 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         state[f"_{draft_key}_skip_regen"] = not _remaining_step_issue
 
         # ★ 회복 불가 조건 → abort (harness 즉시 차단, 2차 시도 낭비 없음)
+        #   ★ 2026-07-24 P1: data_insufficient(이미지 사실성 — 수집 datasets 부족) 도 동일 —
+        #   재시도는 collect step 을 건너뛰어 datasets 불변이라 재작성으로 충족 불가.
         _has_data_empty = any(i.kind == "data_empty" for i in non_draft)
+        _has_data_insuff = any(i.kind == "data_insufficient" for i in non_draft)
         _has_login_issue = any(i.kind in ("login_invalid", "login_error") for i in non_draft)
-        if _has_data_empty and not _has_login_issue:
-            print("  ⚡ [fix] 회복 불가 확정 → abort: 종목 데이터 0개 — 다른 테마로 전환 필요")
-            return fixed_all, [Issue(step="전체", kind="abort",
-                                     detail="종목 데이터 0개 — 다른 테마로 전환 필요")]
+        if (_has_data_empty or _has_data_insuff) and not _has_login_issue:
+            _reason = ("종목 데이터 0개 — 다른 테마로 전환 필요" if _has_data_empty
+                       else "검증 데이터 부족(이미지 사실성) — 재작성으로 충족 불가")
+            print(f"  ⚡ [fix] 회복 불가 확정 → abort: {_reason}")
+            return fixed_all, [Issue(step="전체", kind="abort", detail=_reason)]
         return fixed_all, unfixed_all
 
     # ── Layer 4 발행 — ★ 플랫폼 단위 (사용자 박제 2026-07-03: 끝까지 직렬) ──────

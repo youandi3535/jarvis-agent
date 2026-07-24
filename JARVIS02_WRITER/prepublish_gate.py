@@ -390,10 +390,16 @@ def _image_factuality_leg(draft, body) -> list[dict]:
         except Exception:
             prov = None
         if prov and prov.get("verified") is False:
-            out.append({"kind": "factuality",
-                        "detail": f"[이미지사실성] 출처 미검증 수치 차트: {os.path.basename(p)}"})
+            # ★ 2026-07-24 P1: kind="data_insufficient" — 이미지 수치 미검증은 *수집 datasets 부족*이
+            #   근본이라 재작성으로 못 고친다(harness 재시도는 collect step 을 건너뛰어 datasets 불변).
+            #   fix 훅이 이 kind 를 abort 로 즉시 종결 → 무의미한 2차 시도(플랫폼당 ~15분) 차단.
+            #   detail 은 fingerprint 안정 위해 run별 파일명(seed) 금지 — 불변 식별자(출처명, 대개 고정).
+            _src = (prov.get("source") or {}) if isinstance(prov, dict) else {}
+            _ident = _src.get("name") or _src.get("provider") or "수치차트"
+            out.append({"kind": "data_insufficient",
+                        "detail": f"[이미지사실성] 출처 미검증 수치 차트 ({_ident})"})
     if out:
-        log.warning(f"[prepublish_gate] 이미지 사실성 차단 {len(out)}건 → 재작성 순환")
+        log.warning(f"[prepublish_gate] 이미지 사실성 차단 {len(out)}건 → 데이터부족 abort")
         for o in out:
             log.warning(f"  ↳ {o['detail']}")
     return out

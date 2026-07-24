@@ -361,6 +361,18 @@ def job_analyzer_fallback() -> None:
     _ANALYZER = _RADAR_DIR / "post_quality_analyzer.py"
 
     def _run():
+        # ★ 2026-07-24 P3: 발행 우선 — 발행 중·직전이면 분석 subprocess 를 미룬다 (ERRORS [474]).
+        #   post_quality_analyzer 는 글마다 LLM(매력도·사실성 채점)을 점유 → 발행 파이프라인의
+        #   필수 LLM 호출과 전역 llm_exec.lock 을 경합(관측: lock_contention 45s 대기·플랫폼 defer).
+        #   pending 분석은 급하지 않다 — 5분 뒤 이 잡이 다시 집어간다 (GUARDIAN Tier-2 와 동일 게이트).
+        try:
+            from shared.llm import bg_defer_reason as _bg_defer
+            _defer_why = _bg_defer()
+        except Exception:
+            _defer_why = ""
+        if _defer_why:
+            _log.info(f"⏸ [Fallback] 분석 보류 — {_defer_why} (발행 우선, 다음 회차 재개)")
+            return {"launched": 0, "deferred": _defer_why}
         from shared import db
         pending = db.get_pending_analysis(limit=5)
         if pending:
