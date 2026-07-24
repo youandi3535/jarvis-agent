@@ -214,25 +214,30 @@ def enforce_image_between_paragraphs(
     else:
         result_blocks = blocks
 
-    # 4단계: 텔레그램 경고 — *위반 검출* 알림 (자동 삽입 여부와 무관)
+    # 4단계: ★ 2026-07-24 (사용자 박제): "이미지가 없으면 글로 채워야지." 억지 이미지(AI사진·배너)나
+    #   거짓 데이터는 절대 안 만든다. 그래서 알림을 pool 유무로 가른다:
+    #     · pool 있음인데 다 못 채움 → *배치 결함* → 텔레그램 알림.
+    #     · pool 없음(넣을 실데이터 인포그래픽이 없음) → 텍스트로 유지가 정상 → 로그만, 알림 없음.
+    #   벽(문단 연속) 품질은 100점 루브릭 B9 가 별도로 채점·전송(발행 전 점수 리포트)한다.
     if violations:
-        if inserted:
-            insert_note = f"자동 삽입 {inserted}개 (외부 풀 {len(pool)}개 중)"
+        if pool:
+            insert_note = (f"자동 삽입 {inserted}개 (외부 풀 {len(pool)}개 중)" if inserted
+                           else f"삽입 불가 — 풀({len(pool)}개) 소진/부적합 (위반 {violations}개 섹션)")
+            msg = "\n".join([
+                f"⚠️ *제4조 금지 패턴 3* — 글 연속 + 이미지 부재",
+                f"위치: {source or 'unknown'}",
+                f"검출: {violations}개 섹션 (임계값 {threshold}단락 이상)",
+                insert_note,
+            ])
+            log.warning(f"[image-injector/제4조-3] {msg}")
+            try:
+                from shared.notify import send_tg
+                send_tg(msg)
+            except Exception:
+                pass
         else:
-            # 언더스코어 없는 한글 표기 — 텔레그램 Markdown 파싱 실패 근절
-            insert_note = f"삽입 불가 — 이미지 풀 미제공 또는 소진 (위반 {violations}개 섹션)"
-        msg_parts = [
-            f"⚠️ *제4조 금지 패턴 3* — 글 연속 + 이미지 부재",
-            f"위치: {source or 'unknown'}",
-            f"검출: {violations}개 섹션 (임계값 {threshold}단락 이상)",
-            insert_note,
-        ]
-        msg = "\n".join(msg_parts)
-        log.warning(f"[image-injector/제4조-3] {msg}")
-        try:
-            from shared.notify import send_tg
-            send_tg(msg)
-        except Exception:
-            pass
+            # 넣을 실데이터 인포그래픽이 없음 → 텍스트로 유지(허용). 로그만, 텔레그램 없음.
+            log.info(f"[image-injector/제4조-3] 이미지 없는 섹션 {violations}개 — 텍스트로 유지"
+                     f"(허용, 알림 없음): {source or 'unknown'}")
 
     return result_blocks, violations, inserted

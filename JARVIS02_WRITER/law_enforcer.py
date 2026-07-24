@@ -439,17 +439,26 @@ def enforce_supreme_law(
     # enforce_paragraph_pair_image 호출 제거 — 제4조 2026-05-19 개정으로 패턴3·4 허용
     # (문단+문단+이미지 및 이미지+문단+문단 패턴이 허용 패턴이 됨)
 
-    # ── 제4조 금지: 글 3+ 연속 + 이미지 부재 검출 (★ 사용자 박제 2026-05-16) ──
+    # ── 제4조: 글 3+ 연속 + 이미지 부재 검출 (★ 사용자 박제 2026-05-16 / 2026-07-24 개정) ──
+    #   ★ 2026-07-24 (사용자 박제): "이미지가 없으면 글로 채워야지." 억지 이미지(AI사진·배너)나
+    #   거짓 데이터는 절대 안 만든다. 그래서 판정을 image_pool 유무로 가른다:
+    #     · image_pool 있음인데 다 못 채움 → *배치 결함* → 위반·텔레그램 알림.
+    #     · image_pool 없음(넣을 실데이터 인포그래픽이 없음) → 텍스트로 유지가 정상 → 위반 아님,
+    #       로그만(알림 없음). 벽(문단 연속) 품질은 100점 루브릭 B9 가 별도 채점·전송한다.
     cleaned, run_cnt, ins_cnt = enforce_image_between_paragraphs(
         cleaned, image_pool=image_pool, source=f"{source}|{platform}",
     )
     if run_cnt:
-        msg = (
-            f"제4조 패턴3 — 글 연속+이미지부재 {run_cnt}개 섹션 검출 "
-            f"(자동 삽입 {ins_cnt}개)"
-        )
-        violations.append(msg)
-        log.warning(f"{tag} {msg}")
+        if image_pool:
+            msg = (
+                f"제4조 패턴3 — 글 연속+이미지부재 {run_cnt}개 섹션 (풀 제공됐으나 "
+                f"삽입 {ins_cnt}개) — 배치 확인 필요"
+            )
+            violations.append(msg)
+            log.warning(f"{tag} {msg}")
+        else:
+            # 넣을 실데이터 인포그래픽이 없음 → 텍스트로 유지(허용). 알림 안 함, 로그만.
+            log.info(f"{tag} 제4조 — 이미지 없는 섹션 {run_cnt}개, 텍스트로 유지(허용, 알림 없음)")
 
     # ── 제9조: 요소 간 여백 적용 ─────────────────────────────────
     cleaned, spacing_cnt = enforce_spacing(cleaned, platform=platform)
