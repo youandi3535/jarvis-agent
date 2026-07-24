@@ -1,7 +1,8 @@
 """
 JARVIS03 — 텔레그램 승인 봇
-인라인 버튼 콜백을 처리해 post_analysis 상태를 업데이트하고
-승인 시 revise_adapter.py를 트리거.
+인라인 버튼 콜백을 처리해 post_analysis 상태를 업데이트하고,
+승인(✅) 시 개선 제안을 learning_insights 로 학습 → *다음 글* 에 반영.
+(★ '이 글 재발행'(revise_adapter)은 fd87275 에서 폐지 — 사용자 결정 2026-07-24. 개선은 학습만.)
 
 실행: python approval_bot.py   (long-polling 데몬)
 """
@@ -11,7 +12,6 @@ import sys
 import json
 import time
 import os
-import subprocess
 import requests
 from pathlib import Path
 
@@ -27,8 +27,6 @@ from shared.bus import on_post_revise_approved
 
 TG_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-
-REVISE_SCRIPT = JARVIS_ROOT / "JARVIS02_WRITER" / "revise_adapter.py"
 
 
 def _answer_callback(callback_id: str, text: str = "처리 완료"):
@@ -129,14 +127,19 @@ def _handle_callback(cq: dict):
             return
 
         db.approve_analysis(analysis_id, {"suggestions": applied, "mode": mode})
+        # ★ 2026-07-24 (사용자 결정): '이 글 재발행'(revise_adapter) 폐지 → 승인 = *학습*(다음 글 반영).
+        #   수동 ✅ 도 1시간 자동승인과 *동일* learn_from_suggestions 단일 함수로 학습(종전엔 수동 ✅ 가
+        #   죽은 revise 만 불러 학습조차 안 됐다). scope=post_type 이어야 실제 재사용됨.
+        from JARVIS03_RADAR.post_quality_analyzer import learn_from_suggestions
+        _scope = (record.get("post_type") or "").strip() or "all"
+        _learned = learn_from_suggestions(applied, scope=_scope)
         on_post_revise_approved(analysis_id, record["platform"], record["theme"])
-        _answer_callback(cq_id, f"✅ {len(applied)}개 적용 시작")
+        _answer_callback(cq_id, f"✅ {_learned}개 학습 반영")
         _send_tg(
             f"✅ *[{record['platform'].upper()}] {record['theme']}*\n"
-            f"{len(applied)}/{len(suggestions)}개 제안 적용 중... ({mode})",
+            f"{_learned}/{len(suggestions)}개 제안 학습 완료 — 다음 글에 반영 ({mode})",
             str(chat_id),
         )
-        _trigger_revise(analysis_id)
 
     elif action == "reject":
         db.reject_analysis(analysis_id)
@@ -148,17 +151,6 @@ def _handle_callback(cq: dict):
 
     else:
         _answer_callback(cq_id, "알 수 없는 액션")
-
-
-def _trigger_revise(analysis_id: int):
-    """revise_adapter.py를 백그라운드로 실행."""
-    if REVISE_SCRIPT.exists():
-        subprocess.Popen(
-            [sys.executable, str(REVISE_SCRIPT), str(analysis_id)],
-            cwd=str(REVISE_SCRIPT.parent),
-        )
-    else:
-        print(f"  ⚠️ revise_adapter.py 없음: {REVISE_SCRIPT}")
 
 
 def _clear_webhook():

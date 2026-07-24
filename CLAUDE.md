@@ -163,8 +163,7 @@ pkill -f jarvis_daemon.py        # 전체 종료
 |------|------|-----------------|
 | `JARVIS02_WRITER/scheduler.py` | JARVIS02 작업 로직 전체 | importlib 로드 → schedule_mode() 스레드 |
 | `JARVIS03_RADAR/approval_bot.py` | 인라인 버튼 콜백 처리 | _handle_callback() 만 import |
-| `JARVIS03_RADAR/post_quality_analyzer.py` | 발행 글 품질 분석 | subprocess Popen |
-| `JARVIS02_WRITER/revise_adapter.py` | 승인 후 자동 재발행 | subprocess Popen |
+| `JARVIS03_RADAR/post_quality_analyzer.py` | 발행 글 품질 분석 → 개선 제안 → 승인 시 학습(다음 글 반영). ★ '이 글 재발행'은 폐지(fd87275) — 학습만 | subprocess Popen |
 | `JARVIS07_GUARDIAN/auto_repair.py` | 전체 코드 검토·수정 (새벽 04:30 `job_deep_audit`, Sonnet 5) | claude-code-sdk query |
 
 ## 공유 자원 (신경계)
@@ -427,7 +426,7 @@ pkill -f jarvis_daemon.py        # 전체 종료
   # ③ subprocess.run 외부 (raw shell — 위험)
   grep -rnE 'subprocess\.(run|Popen|call)' --include='*.py' . \
     | grep -v 'JARVIS01_MASTER/agent_tools.py' | grep -v 'jarvis_daemon.py' \
-    | grep -v 'performance_collector\|approval_bot\|radar_main\|post_quality\|revise_adapter\|auto_repair' \
+    | grep -v 'performance_collector\|radar_main\|post_quality\|auto_repair' \
     | grep -v __pycache__ | grep -v '\.venv/'
   # ④ create_plan 우회 — write_file/edit_file/run_bash 가 LLM 응답에 *직접* 등장
   # (REACT_SYSTEM_PROMPT 검증 — 위 도구는 plan steps 안에서만 호출되어야 함)

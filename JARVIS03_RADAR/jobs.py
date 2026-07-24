@@ -429,30 +429,11 @@ def job_auto_approve() -> None:
                     continue
 
                 db.approve_analysis(aid, {"suggestions": applied, "mode": mode, "auto": True})
-                platform = r.get("platform", "all")
-                learned = 0
-                for s in applied:
-                    if not isinstance(s, dict):
-                        continue
-                    field = s.get("field", "content")
-                    stype = s.get("type", "revision")
-                    issue = s.get("issue", "")
-                    after = s.get("after", "")
-                    if not issue:
-                        continue
-                    try:
-                        db.upsert_learning_insight(
-                            insight_key  = f"{stype}_{field}",
-                            insight_type = stype,
-                            description  = issue,
-                            directive    = after,
-                            weight       = 1.0,
-                            scope        = platform,
-                        )
-                        learned += 1
-                    except Exception as le:
-                        _log.warning(f"[auto_approve] insight 저장 실패: {le}")
-                        _g_report("radar", le, module=__name__)
+                # ★ 학습 단일 진입점 (사용자 박제 2026-07-24) — 수동 ✅ 와 동일 함수.
+                #   scope=post_type 이어야 소비자(_build_learning_block)가 실제 재사용(종전 platform=死).
+                from JARVIS03_RADAR.post_quality_analyzer import learn_from_suggestions
+                _scope = (r.get("post_type") or "").strip() or "all"
+                learned = learn_from_suggestions(applied, scope=_scope)
 
                 send_tg(
                     f"⏰ *자동 학습* [{r['platform'].upper()}] {r['theme']}\n"

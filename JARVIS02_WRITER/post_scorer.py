@@ -815,3 +815,28 @@ def score_post(
         "platform": plat,
         "post_type": ptype,
     }
+
+
+def deducted_items(sr: dict) -> list:
+    """★ 100점 루브릭에서 *감점된 항목만* 추출 — 발행 후 개선 제안의 단일 기준 (사용자 박제 2026-07-24).
+
+    score_post(...) 결과 sr 을 받아 각 섹션·항목 중 score < max 인 것을 감점 큰 순으로 반환한다.
+    이 리스트가 "부족한 점" 의 유일한 출처 — 발행 후 품질 분석은 여기 항목만 개선안으로 만든다
+    (발행 전 채점 기준과 100% 동일). 항목명·만점은 하드코딩하지 않고 sr 에서 파생(② 동적 설계).
+
+    Returns: [{"section","key","name","score","max","gap"}]  (gap=max-score, 내림차순)
+    """
+    out: list = []
+    for skey, sec in (sr.get("sections") or {}).items():
+        if not isinstance(sec, dict):
+            continue
+        for ikey, iv in (sec.get("items") or {}).items():
+            if not isinstance(iv, dict):
+                continue
+            _sc = float(iv.get("score", 0))
+            _mx = float(iv.get("max", 0))
+            if _sc < _mx:
+                out.append({"section": skey, "key": ikey, "name": iv.get("name", ikey),
+                            "score": _sc, "max": _mx, "gap": round(_mx - _sc, 2)})
+    out.sort(key=lambda x: -x["gap"])
+    return out
