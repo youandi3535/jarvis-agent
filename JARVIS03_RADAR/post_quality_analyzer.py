@@ -128,24 +128,31 @@ def _build_learning_block(post_type: str = "") -> str:
 
 
 def analyze_post_quality(platform: str, title: str, content: str,
-                          post_type: str = "") -> list:
-    """발행 후 품질 분석 → 개선 제안 (공개 인터페이스). pre_revise.py 등이 사용.
+                          post_type: str = "") -> tuple:
+    """발행 후 품질 분석 → (개선 제안, 루브릭 총점) (공개 인터페이스). pre_revise.py 등이 사용.
 
     ★ 발행 전 100점 루브릭(post_scorer)과 *동일 기준* (사용자 박제 2026-07-24):
       발행글을 같은 채점표로 채점 → *감점된 항목만* 골라 before→after 개선안 생성.
       반복하면 100점에 수렴. 감점 0(사실상 만점)이면 제안 없음([]).
       채점·LLM 실패 시 규칙 기반 폴백. post_type 매칭 학습 지침도 동적 주입.
+
+    반환: (suggestions, quality_score). quality_score = 100점 루브릭 총점(강화학습 보상 신호,
+      ADR 014). 채점 불가/규칙폴백은 None → 보상 스킵. 저장은 save_analysis_result 단일 진입점.
     """
     try:
         return _analyze_by_rubric(platform, title, content, post_type)
     except Exception as e:
         print(f"  ⚠️ 루브릭 분석 오류: {e} — 규칙 기반 분석으로 대체")
         _g_report("radar", e, module=__name__)
-        return _rule_based_analysis(title, content)
+        return _rule_based_analysis(title, content), None
 
 
-def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str) -> list:
-    """발행글을 100점 루브릭으로 채점 → *감점 항목만* 겨냥해 before→after 개선안 생성."""
+def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str) -> tuple:
+    """발행글을 100점 루브릭으로 채점 → (감점 항목만 겨냥한 before→after 개선안, 루브릭 총점).
+
+    총점은 강화학습 보상 신호(reward=총점/100). 단 매력도 심사(Section A) 불가 시 총점이
+    A=0 으로 눌려 부당 저평가 → 그 경우 score=None(보상 스킵, fail-open).
+    """
     from JARVIS02_WRITER.post_scorer import score_post, deducted_items
     # Section A(매력·유익)는 발행 전과 *동일한* 매력도 심사관(judge_engagement)으로 LLM 채점.
     eng = judge_engagement(title, content, post_type, platform)
@@ -154,6 +161,7 @@ def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str) 
              "keyword": title, "post_type": post_type}
     sr = score_post(draft, platform=platform, post_type=post_type,
                     llm_scores=(eng if _a_ok else {}), factuality_issues=[])
+    _score = float(sr.get("total", 0)) if _a_ok else None   # A 채점 불가면 보상 신호 없음
     ded = deducted_items(sr)
     if not _a_ok:
         ded = [d for d in ded if d.get("section") != "A"]   # 매력도 심사 불가 → A 감점 제외(fail-open)
@@ -161,7 +169,7 @@ def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str) 
     _log.info("[post_analyzer] 루브릭 %.1f/100 · 감점 %d개 (%s/%s)",
               sr.get("total", 0), len(ded), platform, post_type)
     if not ded:
-        return []   # 감점 없음(사실상 만점) — 개선 제안 없음
+        return [], _score   # 감점 없음(사실상 만점) — 개선 제안 없음
     _ded_block = "\n".join(
         f"- [{d['section']}] {d['name']} ({d['score']:.1f}/{d['max']:.0f}, 감점 {d['gap']:.1f})"
         for d in ded[:12]
@@ -177,7 +185,7 @@ def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str) 
     m = re.search(r'\[.*\]', raw or "", re.DOTALL) if raw else None
     if not m:
         raise RuntimeError("루브릭 개선안 LLM 응답 파싱 실패")
-    return json.loads(m.group())
+    return json.loads(m.group()), _score
 
 
 # 내부 호환 alias — 직접 호출은 analyze_post_quality 사용 권장
@@ -550,11 +558,11 @@ def run_once():
             continue
 
         # 분석 — post_type 으로 학습 인사이트 scope 매칭
-        suggestions = analyze_post_quality(platform, title, content, post_type=post_type)
-        print(f"  → 제안 {len(suggestions)}개 생성")
+        suggestions, quality_score = analyze_post_quality(platform, title, content, post_type=post_type)
+        print(f"  → 제안 {len(suggestions)}개 생성 (루브릭 {quality_score if quality_score is not None else '—'}/100)")
 
-        # DB 저장
-        db.save_analysis_result(aid, suggestions)
+        # DB 저장 (quality_score = 강화학습 보상 신호)
+        db.save_analysis_result(aid, suggestions, quality_score=quality_score)
 
         # 텔레그램 전송
         _send_telegram_analysis(record, suggestions)
@@ -622,10 +630,10 @@ def run_single(analysis_id: int) -> bool:
     post_type = record.get("post_type") or ""  # P1 패치 (2026-05-04): scope 매칭
 
     print(f"\n🔍 즉시 분석: [{platform}] {title} (id={analysis_id})")
-    suggestions = _analyze_with_claude(platform, title, content, post_type=post_type)
-    print(f"  → 제안 {len(suggestions)}개 생성")
+    suggestions, quality_score = _analyze_with_claude(platform, title, content, post_type=post_type)
+    print(f"  → 제안 {len(suggestions)}개 생성 (루브릭 {quality_score if quality_score is not None else '—'}/100)")
 
-    db.save_analysis_result(analysis_id, suggestions)
+    db.save_analysis_result(analysis_id, suggestions, quality_score=quality_score)
     _send_telegram_analysis(record, suggestions)
     db.set_analysis_pending_approval(analysis_id)
     on_post_analyzed(analysis_id, platform, theme, len(suggestions))

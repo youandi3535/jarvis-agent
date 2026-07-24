@@ -394,6 +394,12 @@ def init_db():
             conn.execute("ALTER TABLE post_analysis ADD COLUMN image_paths TEXT DEFAULT '[]'")
         except Exception:
             pass
+        # post_analysis.quality_score: 발행글 100점 루브릭 총점 (ADR 014 보상 신호 — 2026-07-24).
+        #   글품질 강화학습 보상 = quality_score/100. NULL = 미채점(옛 행·채점불가) → 보상 스킵.
+        try:
+            conn.execute("ALTER TABLE post_analysis ADD COLUMN quality_score REAL")
+        except Exception:
+            pass
         # learning_insights.scope: 어떤 글 종류에 적용할 인사이트인지.
         # 'economic' / 'theme' / 'all'. pre_revise 가 호출 시 scope IN (post_type,'all') 만 주입.
         try:
@@ -727,13 +733,18 @@ def try_claim_analysis(analysis_id: int) -> bool:
         return cur.rowcount > 0
 
 
-def save_analysis_result(analysis_id: int, suggestions: list):
-    """분석 결과 저장 → status: analyzed."""
+def save_analysis_result(analysis_id: int, suggestions: list,
+                         quality_score: "float | None" = None):
+    """분석 결과 저장 → status: analyzed.
+
+    quality_score = 발행글 100점 루브릭 총점(post_scorer). ADR 014 강화학습 보상 신호로
+    23:45 job_quality_learn 이 읽는다 (reward = score/100). None = 미채점(보상 스킵).
+    """
     with get_db() as conn:
         conn.execute(
-            "UPDATE post_analysis SET suggestions=?, status='analyzed', "
+            "UPDATE post_analysis SET suggestions=?, quality_score=?, status='analyzed', "
             "analyzed_at=datetime('now','localtime') WHERE id=?",
-            (json.dumps(suggestions, ensure_ascii=False), analysis_id),
+            (json.dumps(suggestions, ensure_ascii=False), quality_score, analysis_id),
         )
 
 
@@ -1619,7 +1630,7 @@ def apply_insight_reward(usage_id: int, insight_id: int, analysis_id: int,
     """보상 귀속 — usage 행 마감 + learning_insights 가중치 EMA 갱신.
 
     weight ← clamp(0.05, 3.0, weight + alpha*(reward - 0.5))
-    reward 0.5 중립 기준: 좋은 글(제안 적음) → weight ↑, 나쁜 글 → ↓.
+    reward 0.5 중립 기준: 좋은 글(루브릭 점수 높음) → weight ↑, 나쁜 글 → ↓.
     update_weight=False: usage 마감(부기)만 — 같은 (insight, analysis) 쌍
     중복 보상 방지용 (quality_learner 가 판단).
     """

@@ -3,8 +3,8 @@
 오류 강화학습(bandit.py)과 대칭 구조의 *글 품질* 폐쇄 루프:
 
     [작성] build_insights_block() — UCB 랭킹으로 인사이트 선택 + 주입 + 사용 기록
-       ↓ (발행 → post_quality_analyzer 분석 → post_analysis.suggestions)
-    [보상] job_quality_learn() — 사용 기록 ↔ 분석 결과 매칭 → 보상 계산
+       ↓ (발행 → post_quality_analyzer 100점 루브릭 채점 → post_analysis.quality_score)
+    [보상] job_quality_learn() — 사용 기록 ↔ 채점 결과 매칭 → reward = 루브릭점수/100
        ↓
     [갱신] apply_insight_reward() — weight EMA 갱신 (좋은 인사이트 ↑ / 무효 인사이트 ↓)
        ↓
@@ -25,7 +25,6 @@
 """
 from __future__ import annotations
 
-import json
 import math
 import uuid
 from typing import Optional
@@ -43,9 +42,6 @@ REWARD_ALPHA: float = 0.3     # weight EMA 학습률
 ATTRIBUTION_WINDOW_H: int = 18   # 사용→분석 매칭 최대 시간 (h) — 06:30/16:00 발행 리듬 커버
 UNDERPERFORM_MIN_N: int = 5   # 저성과 판정 최소 보상 횟수
 UNDERPERFORM_AVG: float = 0.35   # 평균 보상이 이 미만이면 가속 감쇠
-
-# suggestion priority → 페널티 (post_quality_analyzer 의 high/medium/low)
-_PRIORITY_PENALTY = {"high": 0.25, "medium": 0.12, "low": 0.05}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -131,21 +127,22 @@ def build_insights_block(scope: str = "all", theme: str = "",
 #  2. 보상 계산 + 귀속 (분석 이후)
 # ═══════════════════════════════════════════════════════════════
 
-def _reward_from_analysis(row: dict) -> float:
-    """분석 결과 → 보상 [0, 1]. 개선 제안이 적고 가벼울수록 좋은 글.
+def _reward_from_analysis(row: dict) -> Optional[float]:
+    """분석 결과 → 보상 [0, 1]. **발행글의 실제 100점 루브릭 총점을 그대로 쓴다.**
 
-    reward = 1 - min(1, Σ priority_penalty)
-    (v2 후보: judge_engagement 점수·조회수 percentile 합성 — 현재는 결정론만)
+    reward = quality_score / 100
+    (발행 전 차단 게이트와 *같은 채점표*(post_scorer) — 100점=1.0, 감점 클수록 낮음.
+     비례·무포화. score_post 가 4조합을 단일 진입점으로 커버.)
+
+    None 반환 = 점수 미기록(옛 행·채점 불가) → 보상 신호 없음 → 귀속 스킵(weight 불변).
     """
+    sc = row.get("quality_score")
+    if sc is None:
+        return None
     try:
-        sugs = json.loads(row.get("suggestions") or "[]")
-    except Exception:
-        sugs = []
-    penalty = 0.0
-    for s in sugs:
-        if isinstance(s, dict):
-            penalty += _PRIORITY_PENALTY.get(str(s.get("priority", "low")).lower(), 0.05)
-    return round(max(0.0, 1.0 - min(1.0, penalty)), 4)
+        return round(max(0.0, min(1.0, float(sc) / 100.0)), 4)
+    except (TypeError, ValueError):
+        return None
 
 
 def _match_analysis(usage: dict, analyses: list[dict]) -> Optional[dict]:
@@ -193,10 +190,10 @@ def attribute_pending_rewards(days: int = 3) -> dict:
     if not usages:
         return {"matched": 0, "pending": 0, "avg_reward": None}
 
-    # 분석 완료된 글 (suggestions 채워진 것) — 최근 days+1일
+    # 분석 완료된 글 (채점된 것) — 최근 days+1일. quality_score = 보상 신호(루브릭 총점).
     with _db.get_db() as conn:
         analyses = [dict(r) for r in conn.execute(
-            """SELECT id, platform, theme, post_type, suggestions, created_at, analyzed_at
+            """SELECT id, platform, theme, post_type, quality_score, created_at, analyzed_at
                FROM post_analysis
                WHERE analyzed_at IS NOT NULL
                  AND created_at >= datetime('now','localtime',?)""",
@@ -219,6 +216,8 @@ def attribute_pending_rewards(days: int = 3) -> dict:
         if a is None:
             continue
         r = _reward_from_analysis(a)
+        if r is None:
+            continue   # 점수 미기록(옛 행·채점 불가) → 보상 신호 없음, 귀속 스킵
         pair = (u["insight_id"], a["id"])
         try:
             _db.apply_insight_reward(
