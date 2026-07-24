@@ -37,6 +37,15 @@ except ImportError:
         pass
 # ─────────────────────────────────────────────────────
 
+# ── watchdog 진행신호 (★ 2026-07-24 freeze 방어) ──
+#   차트가 여러 개면 슬롯 렌더 루프가 누적으로 freeze 임계(300s)를 넘길 수 있다.
+#   슬롯마다 beat() 로 진행 중임을 알려 무진전 오탐을 차단(innermost 렌더는 #1 이 커버).
+try:
+    from JARVIS00_INFRA.watchdog import beat as _wd_beat
+except Exception:
+    def _wd_beat() -> None: pass
+# ─────────────────────────────────────────────────────
+
 _SLOT_OPEN_RE = re.compile(r"\[CHART_(\d+)\]")
 _SLOT_CLOSE_RE = re.compile(r"^\[/CHART_(\d+)\]\s*$")
 _FIELD_LINE_RE = re.compile(r"^(제목|단위|데이터|출처|종류|데이터셋)\s*:\s*(.*)$")
@@ -293,6 +302,7 @@ def render_slots_in_text(text: str, ref_datasets: list | None, out_dir,
         return text, 0, 0
     ok = 0
     for slot in slots:
+        _wd_beat()   # ★ 슬롯 렌더 진입마다 진행 신호 — 누적 freeze 오탐 방지
         slot_title = slot.get("title") or theme
         # ★ 핵심: 슬롯 제목과 연관된 dataset만 ref로 사용
         slot_ds = _filter_datasets_by_title(slot_title, ref_datasets or [])
@@ -330,6 +340,7 @@ def render_slots_from_collected(text: str, collected_datasets: list, out_dir,
 
     ok = 0
     for slot in slots:
+        _wd_beat()   # ★ 슬롯 렌더 진입마다 진행 신호 — 누적 freeze 오탐 방지
         slot_title = slot.get("title") or theme
         dataset_key = slot.get("dataset_key", "").upper()  # "D2" 형태
 

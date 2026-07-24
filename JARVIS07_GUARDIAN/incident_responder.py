@@ -59,8 +59,23 @@ def _tg(msg: str) -> None:
         pass
 
 
-def _classify(error_text: str) -> str:
-    """오류 유형 분류: 'code_bug' | 'transient' | 'unknown'"""
+def _classify(error_text: str, returncode: int | None = None) -> str:
+    """오류 유형 분류: 'code_bug' | 'transient' | 'unknown'
+
+    ★ 2026-07-24 구조적 신호 최우선: 발행 subprocess 가 watchdog freeze 로 강제종료된
+      경우(returncode == WATCHDOG_KILL_RC) 는 *일시적 정지* 이지 코드버그가 아니다.
+      오류 텍스트의 자연어 패턴에 의존하지 않고 종료코드로 확정 → Tier-2 SDK 낭비 차단.
+      (severity.NON_CODE_ISSUE_KINDS 는 건드리지 않는다 — 사용자 박제 2026-07-22:
+       freeze/stuck 은 반복 시 진짜 성능결함일 수 있어 *가시성* 은 유지. 여기서는
+       incident 자동수리 경로의 분류만 교정.)
+    """
+    if returncode is not None:
+        try:
+            from JARVIS00_INFRA.watchdog import WATCHDOG_KILL_RC
+            if int(returncode) == int(WATCHDOG_KILL_RC):
+                return "transient"
+        except Exception:
+            pass
     for kw in _CODE_BUG_TYPES:
         if kw in error_text:
             return "code_bug"
@@ -166,6 +181,7 @@ def respond(
     error_text: str,
     retry_fns: dict[str, Callable],
     theme: str = "",
+    returncode: int | None = None,
 ) -> dict:
     """포스팅 실패 즉각 대응 메인 로직 (블로킹).
 
@@ -175,6 +191,7 @@ def respond(
         error_text: 로그·예외 텍스트 (원인 파악용)
         retry_fns: {platform: callable} — 재시도 함수 (실패 플랫폼만)
         theme: 테마주 이름 (theme job 시)
+        returncode: 발행 subprocess 종료코드 (있으면 분류 최우선 신호 — freeze 강제종료 판별)
 
     Returns:
         {"fixed": bool, "retried": list, "succeeded": list}
@@ -187,7 +204,7 @@ def respond(
         f"자동 수정·재발행 시작 중..."
     )
 
-    error_class = _classify(error_text)
+    error_class = _classify(error_text, returncode)
     log.info(f"[Incident] 오류 분류: {error_class}")
     fix_applied = False
 
@@ -264,10 +281,12 @@ def respond_in_background(
     error_text: str,
     retry_fns: dict[str, Callable],
     theme: str = "",
+    returncode: int | None = None,
 ) -> None:
     """백그라운드 스레드에서 respond() 실행 (호출 즉시 반환).
 
     이미 대응 중이면 스킵 (중복 실행 방지).
+    returncode: 발행 subprocess 종료코드 (freeze 강제종료 판별용 — respond 로 전달).
     """
     if not _active.acquire(blocking=False):
         log.warning("[Incident] 이미 다른 incident 처리 중 — 스킵")
@@ -279,7 +298,7 @@ def respond_in_background(
 
     def _worker():
         try:
-            respond(job_id, failed_platforms, error_text, retry_fns, theme)
+            respond(job_id, failed_platforms, error_text, retry_fns, theme, returncode)
         except Exception as e:
             log.error(f"[Incident] 대응 워커 예외: {e}")
         finally:

@@ -688,6 +688,31 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                     _fb.append(d)
             state[f"_{draft_key}_gate_feedback"] = _fb[-8:]
 
+        # ★ 사실성 차단 → 영구 학습 인사이트 (ERRORS [454] 재발 대응 — 2026-07-24)
+        #   위 gate_feedback 은 state 딕셔너리(이번 harness 실행 한정)라 프로세스가
+        #   끝나면 사라진다. 같은 테마가 며칠 뒤 새 harness 실행으로 다시 돌면
+        #   LLM 이 동일한(또는 숫자만 바뀐) 산업 총계 수치를 파라메트릭 지식에서
+        #   그대로 재생성 — draft_writer 의 절대제약 문구만으론 확률적으로 못 막는다.
+        #   차단된 주장을 learning_insights(scope='theme')에 영구 기록해
+        #   _load_learn_insights 가 이후 *모든* 테마 실행에서 프롬프트에 재주입하게 한다.
+        _fact_details = [i.detail for i in non_draft if i.kind == "factuality" and i.detail]
+        if _fact_details:
+            try:
+                from shared.db import upsert_learning_insight
+                _theme = str(state.get("theme") or "").strip()
+                for d in _fact_details:
+                    _key = f"factuality_block:{_theme}:{d[:60]}"
+                    upsert_learning_insight(
+                        insight_key=_key,
+                        insight_type="avoid",
+                        description=f"[{_theme}] 사실성 게이트 차단 이력: {d[:120]}",
+                        directive=f"다음 주장·수치(또는 비슷한 변형)는 출처가 확인되지 않아 "
+                                  f"과거 발행이 차단됐다 — 다시 쓰지 말 것: {d[:200]}",
+                        weight=1.0, scope="theme",
+                    )
+            except Exception as _e:
+                print(f"  ⚠️ 사실성 차단 인사이트 영구화 실패(무시): {_e}")
+
         # 재생성 필요성 표시 (재시도 시 이미지 폴더 불필요 리셋 방지)
         # ★ 리뷰 확정 수정 (2026-07-03): 해당 step 의 *어떤* 이슈든(draft_failed 뿐 아니라
         #   prepublish 게이트 factuality/engagement 포함) 있으면 skip 금지 — 재작성 순환 보존.

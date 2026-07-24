@@ -25,6 +25,18 @@ import time
 from pathlib import Path
 
 
+# ── 렌더 정지 방어 상수 (★ 2026-07-24 freeze 근본수정 — CHART 누적 렌더 300s freeze) ──
+#   Chromium 렌더 subprocess 대기 중 watchdog.beat() 주기를 freeze 임계(FREEZE_LIMIT_SEC)
+#   에서 *파생* — 하드코딩 대신 SSOT 파생(CLAUDE.md ② 동적 설계). 300s → 10s 마다 beat.
+try:
+    from JARVIS00_INFRA.watchdog import FREEZE_LIMIT_SEC as _FREEZE_LIMIT_SEC
+except Exception:
+    _FREEZE_LIMIT_SEC = 300.0
+_RENDER_BEAT_POLL_SEC = max(2.0, float(_FREEZE_LIMIT_SEC) / 30.0)   # 렌더 대기 중 beat 주기(~10s)
+_RENDER_HARD_TIMEOUT_SEC = 120.0    # 단일 차트 렌더 하드 상한(종전 subprocess.run timeout=120 계승)
+_RENDER_GOTO_TIMEOUT_MS = 15000     # goto/폰트 대기 바운드 — 원격폰트 네트워크 열화 시 무한 블로킹 차단
+
+
 def _max_attempts() -> int:
     """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
     try:
@@ -169,7 +181,7 @@ def _html_to_jpg(html_str: str, out_path: Path, width: int = 980) -> bool:
     ★ 2026-06-29: Selenium(chromedriver 미설치로 실패) → Playwright 로 교체.
        html_renderer._find_chromium() 의 작동하는 Chromium 경로 재사용 + full_page.
     """
-    import subprocess, sys as _sys
+    import subprocess, sys as _sys, signal
     try:
         from JARVIS06_IMAGE.html_renderer import _find_chromium
         chromium = _find_chromium()
@@ -193,7 +205,15 @@ def _html_to_jpg(html_str: str, out_path: Path, width: int = 980) -> bool:
             # ★ 뷰포트 폭 = 내용 폭(width 파라미터) — body 가 뷰포트까지 늘어나 우측 여백이
             #   생기던 버그 수정(사용자 박제 2026-07-06). 1560 고정 → 캡처가 내용보다 넓어 우측 공백.
             f"    pg = b.new_page(viewport={{'width':{max(int(width), 320)},'height':1100}}, device_scale_factor=2)\n"
-            f"    pg.goto({('file://'+html_file)!r}, wait_until='networkidle')\n"
+            # ★ 2026-07-24 freeze 근본수정: wait_until 'networkidle'→'load'.
+            #   'networkidle' 은 원격 웹폰트(Google Fonts) 요청이 네트워크 열화로 trickle 될 때
+            #   페이지당 최대 goto-timeout 까지 블로킹 → 8차트 누적이 freeze 임계(300s)를 넘겼다.
+            #   'load' + 바운드 goto-timeout 으로 무한 대기 차단(로컬 file:// 는 DOM load 로 충분).
+            f"    pg.set_default_timeout({_RENDER_GOTO_TIMEOUT_MS})\n"
+            "    try:\n"
+            f"        pg.goto({('file://'+html_file)!r}, wait_until='load', timeout={_RENDER_GOTO_TIMEOUT_MS})\n"
+            "    except Exception:\n"
+            "        pass\n"
             "    try:\n"
             "        pg.evaluate('document.fonts && document.fonts.ready')\n"
             "    except Exception:\n"
@@ -204,13 +224,42 @@ def _html_to_jpg(html_str: str, out_path: Path, width: int = 980) -> bool:
             f"    el.screenshot(path={str(png_tmp)!r}) if el else pg.screenshot(path={str(png_tmp)!r}, full_page=True)\n"
             "    b.close()\n"
         )
+        # ★ 2026-07-24 freeze 근본수정: subprocess.run(총소요 상한 없이 블로킹) →
+        #   Popen + 짧은 주기 communicate 폴링. 대기 중 watchdog.beat() 를 주기적으로
+        #   찍어 렌더가 진행 중임을 알린다(무진전 freeze 오탐 차단). 하드 상한 도달 시
+        #   프로세스 그룹째 SIGKILL(start_new_session 으로 별도 그룹) — 좀비 자식 방지.
         try:
-            proc = subprocess.run(
+            from JARVIS00_INFRA.watchdog import beat as _wd_beat
+        except Exception:
+            def _wd_beat() -> None: pass  # watchdog 부재 시 no-op
+        try:
+            proc = subprocess.Popen(
                 [_sys.executable, "-c", render_code],
-                capture_output=True, text=True, timeout=120,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                start_new_session=True,
             )
-            if proc.returncode != 0:
-                log.warning(f"[html_infographic] subprocess 렌더 실패: {(proc.stderr or '')[:300]}")
+            _stderr = ""
+            _elapsed = 0.0
+            while True:
+                try:
+                    _, _stderr = proc.communicate(timeout=_RENDER_BEAT_POLL_SEC)
+                    break
+                except subprocess.TimeoutExpired:
+                    _wd_beat()   # ★ 렌더 대기 중 진행 신호 — freeze 오탐 방지
+                    _elapsed += _RENDER_BEAT_POLL_SEC
+                    if _elapsed >= _RENDER_HARD_TIMEOUT_SEC:
+                        try:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        except Exception:
+                            proc.kill()
+                        try:
+                            _, _stderr = proc.communicate(timeout=5)
+                        except Exception:
+                            pass
+                        log.warning(f"[html_infographic] 렌더 하드타임아웃 {_RENDER_HARD_TIMEOUT_SEC:.0f}s 초과 — 강제 종료")
+                        break
+            if proc.returncode not in (0, None):
+                log.warning(f"[html_infographic] subprocess 렌더 실패: {(_stderr or '')[:300]}")
         finally:
             try:
                 Path(html_file).unlink(missing_ok=True)

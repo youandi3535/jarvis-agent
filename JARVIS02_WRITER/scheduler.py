@@ -891,7 +891,8 @@ def run_self_repair_then_theme():
 
 
 def _trigger_economic_incident(
-    failed: list, error_text: str, harness_issues: list | None = None
+    failed: list, error_text: str, harness_issues: list | None = None,
+    returncode: int | None = None,
 ) -> None:
     """경제 브리핑 실패 플랫폼 → GUARDIAN incident_responder 백그라운드 트리거.
 
@@ -904,6 +905,8 @@ def _trigger_economic_incident(
        retry 시 구버전 코드가 실행됨. → 항상 importlib.reload 후 fresh import 사용.
 
     harness_issues: 하네스 abort 시 구조화된 이슈 목록 (경제글 EP_RESULT_FILE 에서 읽음).
+    returncode: 발행 subprocess 종료코드. WATCHDOG_KILL_RC(freeze 강제종료)면
+      incident_responder 가 transient 로 확정 → Tier-2 SDK 낭비 없이 in-process 재시도.
     """
     try:
         from JARVIS07_GUARDIAN.incident_responder import respond_in_background
@@ -935,7 +938,7 @@ def _trigger_economic_incident(
             _retry_fns["naver"] = _make_retry(post_naver=True)
         if "tistory" in failed:
             _retry_fns["tistory"] = _make_retry(post_tistory=True)
-        respond_in_background("economic", failed, error_text, _retry_fns)
+        respond_in_background("economic", failed, error_text, _retry_fns, returncode=returncode)
         log(f"🛡️ GUARDIAN incident_responder 트리거됨 (harness 경로): {failed}")
     except Exception as _ie:
         log(f"⚠️ GUARDIAN 트리거 실패: {_ie}")
@@ -1071,7 +1074,8 @@ def run_economic_poster(*extra_flags):
                 _harness_issues = _full_result.get("harness_issues") or []
             except Exception:
                 pass
-            _trigger_economic_incident(_guardian_failed, _err_txt, harness_issues=_harness_issues)
+            _trigger_economic_incident(_guardian_failed, _err_txt, harness_issues=_harness_issues,
+                                       returncode=result.returncode)
 
     except Exception as e:
         log(f"❌ {label} 예외: {e}")

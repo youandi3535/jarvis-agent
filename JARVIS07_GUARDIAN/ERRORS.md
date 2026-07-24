@@ -2,6 +2,92 @@
 
 ---
 
+## [492] ✅ 해결 — 경제 브리핑 네이버 발행 watchdog freeze(304s>300s) 강제종료 — 진짜 원인은 차트 인포그래픽 Chromium 렌더(`_html_to_jpg`)의 beat 누락 + networkidle 원격폰트 대기 (2026-07-24, 진단 정정)
+
+> ★ **정정 이력**: 이 항목의 1차 진단(제목·원인이 "Pollinations GET beat 누락")은 **오귀속**이었다.
+> 재확인(사용자 "한번 더 체크") 결과 오늘 freeze 는 Pollinations(사진·썸네일 전용)가 아니라
+> **차트 인포그래픽을 래스터화하는 Chromium 렌더(`html_infographic._html_to_jpg`)** 에서 났다.
+> 아래는 정정된 진단과 5종 근본 수정이다. Pollinations 의 `_get_with_beat` 는 *유효한 일반 예방
+> 방어* 로 유지하되, 오늘 사건의 원인은 아니다.
+
+- **증상**: 경제 브리핑 네이버 발행 harness 액션이 차트 슬롯(`✅ [slot] CHART_N 실데이터 렌더 완료`)을
+  진행하다 마지막 로그줄(CHART_7 완료) 직후 아무 로그 없이 멈추다가
+  `[watchdog] 🛑 '경제 브리핑 발행 — 네이버': 멈춤(freeze) 304s > 300s 무진전` →
+  `강제 종료(os._exit 75) — killable subprocess`. naver·tistory 둘 다 "실패" 로 보고됐다.
+  **그런데 실제로는 두 글 다 발행됐다** — in-process 재시도가 성공했기 때문(아래 부수사건 참조).
+- **환경**: `JARVIS06_IMAGE/html_infographic.py:_html_to_jpg` — 모든 인포그래픽 래스터화의
+  *단일 깔때기*(경제·테마×네이버·티스토리 4조합 공용). 어제 차트 0개 → freeze 없음 /
+  오늘 차트 8개 → freeze. **차트 수와 상관.**
+- **원인 (정정)**: 두 겹.
+  1. **beat 누락**: `_html_to_jpg` 가 `subprocess.run([...], timeout=120)` 으로 Chromium 렌더를
+     블로킹 대기하는데, 이 대기 구간에 `watchdog.beat()` 가 전혀 없었다. harness step 은 차트 여러 장을
+     한 스텝에서 직렬 렌더하므로 누적 무신호 시간이 300s 를 넘겼다.
+  2. **networkidle 원격폰트 대기**: render_code 가 `pg.goto(..., wait_until='networkidle')` 를 썼는데,
+     인포그래픽 HTML 이 참조하는 원격 웹폰트(Google Fonts)가 네트워크 열화로 trickle 될 때
+     `networkidle`(네트워크 유휴)이 페이지당 오래(최대 goto 타임아웃) 블로킹된다. 차트 8장 누적이
+     freeze 임계를 넘긴 결정타. **ERRORS [456][457][9163][9171]** 와 같은 버그 클래스(“timeout= 은
+     총 소요 상한이 아니다 / 블로킹 구간 안에 beat 가 있어야 한다”)이지만, 이번 choke point 는
+     *네트워크 호출이 아니라 로컬 Chromium 렌더 subprocess* 였다는 점이 핵심.
+  - Pollinations 는 차트 렌더에 관여하지 않는다 — 차트=matplotlib/HTML 인포그래픽(Chromium),
+    Pollinations=본문 AI 사진·대표 썸네일 전용. 1차 진단이 "남은 유일한 네트워크 호출" 이라는
+    *추정* 으로 Pollinations 를 지목한 것이 오귀속의 원인.
+- **부수사건 (같은 로그의 두 모순)**:
+  - **오경보 escalation**: harness `_on_stuck` 이 killable subprocess(다음 예약에 자연 재시도됨)인데도
+    "🚨 하네스 검증 순환 한계 — 송출 차단" 을 보냈다. killable freeze 는 정상 복구 흐름이라 수동
+    조치가 불필요한데 사용자에겐 치명 실패처럼 보였다.
+  - **Tier-2 SDK 낭비**: `incident_responder._classify` 가 rc=75 강제종료를 자연어 텍스트 기준으로
+    `unknown` 으로 분류 → Tier-2 SDK(Sonnet 5) 600s 세션을 헛돌렸다(traceback 없어 files_fixed=0 확정).
+    그 사이 in-process 재시도가 성공해 실제 발행됨 → "실패 알림 왔는데 발행됨" 모순.
+- **헛다리**: **"Pollinations GET beat 누락이 원인"(1차 진단) — 반증됨.** Pollinations 는 차트 경로에
+  없다. `pollinations_provider._get_with_beat` 는 일반 예방 방어로 남기되(다른 네트워크 사진 호출엔
+  유효), 오늘 freeze 의 원인으로 기록하지 말 것. (docstring 의 2026-07-24 귀속 문구도 함께 정정함.)
+- **해결 (5종)**:
+  1. **#1 `_html_to_jpg` beat 배선**: `subprocess.run` → `subprocess.Popen(..., start_new_session=True)`
+     + `communicate(timeout=_RENDER_BEAT_POLL_SEC)` 폴링 루프. 매 `TimeoutExpired` 마다 `watchdog.beat()`
+     호출(렌더 대기 중 진행 신호). 하드 상한(`_RENDER_HARD_TIMEOUT_SEC=120s`) 초과 시
+     `os.killpg(os.getpgid(pid), SIGKILL)` 로 프로세스 그룹째 종료(좀비 방지). poll 주기 =
+     `FREEZE_LIMIT_SEC/30 ≈ 10s` **파생**(하드코딩 금지 — CLAUDE.md ② 동적 설계).
+  2. **#3 networkidle→load + 바운드 goto**: `wait_until='networkidle'` → `'load'`, `pg.set_default_timeout`
+     + `goto(timeout=_RENDER_GOTO_TIMEOUT_MS=15000)` try/except 로 원격폰트 무한대기 차단
+     (로컬 file:// 은 DOM load 로 충분). 로컬 폰트 @font-face 치환은 *발행 차트 시각을 바꿀 위험* 이라
+     채택하지 않음 — macOS 시스템 CJK 폴백으로 tofu 없이 기존 Noto 시각 유지.
+  3. **#2 슬롯 루프 beat(벨트-앤-서스펜더)**: `slot_renderer.render_slots_in_text /
+     render_slots_from_collected`, `draft_processor._generate_charts / _render_photo_slots` 의 슬롯
+     루프 진입마다 beat()(innermost 렌더는 #1 이 이미 커버).
+  4. **#4 rc=75 → transient 구조적 분류**: `incident_responder._classify(error_text, returncode)` 최우선
+     분기 — `returncode == WATCHDOG_KILL_RC(75)` 면 자연어 무관하게 `transient` 확정 → Tier-2 SDK 낭비
+     차단. 배선: scheduler `_trigger_economic_incident(returncode=result.returncode)` →
+     `respond_in_background` → `respond` → `_classify`. **경제 subprocess 경로만** 배선(테마는 in-process
+     /non-killable 이라 os._exit rc 신호 자체가 없음 — 정당한 비대칭). `severity.NON_CODE_ISSUE_KINDS`
+     는 **불변** — 사용자 박제 2026-07-22(freeze/stuck 은 반복 시 진짜 성능결함일 수 있어 *가시성* 유지).
+  5. **#5 harness `_on_stuck` killable 정보성 분기**: killable subprocess 면 "🚨 송출 차단" 대신
+     "⏱ 정지 감지 — 자동 재시도 예정(수동 조치 불필요)" 정보성 알림. non-killable in-process 동작은
+     종전대로 escalation(자연 재시도 없음). 원인 진단(`_report_issues_to_guardian`)은 양쪽 다 유지.
+  - **정정**: `pollinations_provider._get_with_beat` docstring 의 "2026-07-24 CHART_7 직후 freeze" 귀속
+    문구를 "일반 예방 방어 + 실제 원인은 차트 Chromium 렌더" 로 교체.
+- **파일**: `JARVIS06_IMAGE/html_infographic.py`, `JARVIS06_IMAGE/slot_renderer.py`,
+  `JARVIS06_IMAGE/draft_processor.py`, `JARVIS06_IMAGE/providers/pollinations_provider.py`,
+  `JARVIS07_GUARDIAN/incident_responder.py`, `JARVIS02_WRITER/scheduler.py`, `JARVIS00_INFRA/harness.py`.
+- **★ 4조합 커버리지**: `_html_to_jpg` 는 모든 인포그래픽 래스터화 단일 깔때기 → #1·#3 한 곳
+  수정으로 4조합(경제·테마×네이버·티스토리) 동시 보호. #4 의 경제-only 배선은 테마가 non-killable
+  in-process 라 애초에 os._exit(75)로 죽지 않아 rc 신호가 없기 때문(구조적 비대칭이지 누락 아님).
+- **검증**: `_classify('...', 75)=='transient'` / `_classify('...', 0)=='unknown'` ·
+  `_html_to_jpg` 스모크(8.6s 렌더 성공, 27KB JPG) · poll=1s 강제 시 렌더 대기 중 beat 3회 발화 확인 ·
+  precommit 56종 0건 · 데몬 재시작 후 mtime 검증(start 11:41:01 > newest_mtime).
+- **교훈**:
+  1. **"네트워크만 감쌌다" 는 착각** — 300s watchdog 앞의 진짜 choke point 는 네트워크가 아니라
+     *로컬 렌더(Chromium subprocess)* 였다. 블로킹 구간은 네트워크뿐 아니라 렌더·subprocess·세마포어
+     대기 전부 — 각 구간에 beat 가 있는지 확인할 것.
+  2. **1차 진단을 로그로 재확인하라** — 마지막 로그줄(CHART_N 완료)이 freeze 직전이라는 사실이
+     "차트 렌더가 범인" 을 가리켰는데, "남은 유일한 네트워크 호출" 이라는 추정으로 Pollinations 를
+     지목한 게 오귀속이었다. 코드 존재·추정이 아니라 *로그의 마지막 진행 지점* 이 증거다.
+  3. **killable subprocess 의 freeze 는 정상 복구** — os._exit(75) → 다음 예약 자연 재시도. "송출 차단"
+     escalation 은 오경보였다. 분류는 자연어 로그가 아니라 *종료코드(구조적 신호)* 로 하라.
+  4. **"실패 알림 왔는데 발행됨" = 분류 오류의 신호.** rc=75 를 코드버그로 오분류해 Tier-2 를
+     600s 헛돌리는 동안 in-process 재시도가 성공했다. 모순되는 두 신호가 보이면 분류부터 의심할 것.
+
+---
+
 ## [491] ★ 폐기 모델 이름이 저장소 전역에 살아 있었다 — *검사기 자신이 사본* 이라 못 잡았다 (2026-07-24)
 
 - **증상**: 사용자 지시 — *폐기된 모델 이름 3종을 "흔적도 없이 전부 삭제" 하라*.

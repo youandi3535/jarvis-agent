@@ -79,6 +79,7 @@ from typing import Callable, Optional
 
 from JARVIS00_INFRA.watchdog import (
     Watchdog, StuckError, DEFAULT_ACTION_DEADLINE_SEC, FREEZE_LIMIT_SEC,
+    is_killable_subprocess,
 )
 
 _log = logging.getLogger("jarvis")
@@ -629,8 +630,26 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
     def _on_stuck(name: str, reason: str) -> None:
         try:
             iss = [Issue(step="전체", kind="stuck", detail=reason)]
+            # 원인 진단은 killable 여부와 무관하게 항상 GUARDIAN 에 박제(가시성 유지 —
+            # 반복 freeze 는 진짜 성능결함일 수 있음, 사용자 박제 2026-07-22).
             _report_issues_to_guardian(name, result.attempts, iss)
-            _notify_escalation(name, result.attempts, iss, reason=reason)
+            # ★ 2026-07-24: killable subprocess 는 freeze 직후 os._exit(WATCHDOG_KILL_RC)
+            #   → 다음 예약 회차에 자동 재시도된다. "🚨 송출 차단" escalation 은
+            #   *오경보* — 수동 조치 불필요를 알리는 정보성 메시지로 대체.
+            #   (non-killable in-process 동작은 종전대로 escalation — 자연 재시도 없음.)
+            if is_killable_subprocess():
+                try:
+                    from shared.notify import send_tg
+                    send_tg(
+                        f"⏱ *정지 감지 — 자동 재시도 예정*\n\n"
+                        f"동작: `{name}`\n사유: {reason}\n\n"
+                        f"_killable 프로세스 강제 재기동 — 수동 조치 불필요 "
+                        f"(다음 예약 회차 자동 재시도)_"
+                    )
+                except Exception:
+                    pass
+            else:
+                _notify_escalation(name, result.attempts, iss, reason=reason)
         except Exception:
             pass
 
