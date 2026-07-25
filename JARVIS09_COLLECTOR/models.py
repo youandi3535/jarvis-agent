@@ -177,6 +177,47 @@ def dataset_fingerprint(title: str, unit: str) -> str:
 _GROUND_ABS_FLOOR = 1e-9   # g 가 0 근처일 때 절대 바닥 tolerance
 
 
+def is_finite_num(v) -> bool:
+    """유한 실수인가 (NaN·Inf·비수치 = False). ★ 결측 판정 단일 소스.
+
+    yfinance·BOK 등 외부 소스는 휴장·미집계 구간을 **NaN** 으로 돌려준다. NaN 은
+    '값이 없다'는 뜻이지 0 이 아니다 — 0 으로 채우면 거짓 데이터가 된다(제4조·ADR 010).
+    grounds()·sanitize_datasets()·시장데이터 생산자가 모두 이 함수로 판정한다.
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(f)
+
+
+def sanitize_datasets(datasets: list | None) -> list:
+    """dataset 의 결측(NaN/Inf) 포인트 제거 + 전량 결측 dataset 배제.
+
+    ★ 왜 조립 지점에서 한 번에 (사용자 박제 2026-07-25 — ERRORS 사실성 오차단):
+      NaN 이 상자에 남으면 *두 갈래로* 터진다 —
+        ① 검증: gt 에 섞여 grounds() 가 math.floor(NaN) 로 ValueError →
+           게이트가 except 로 삼켜 **진짜 사실을 '출처 미확인'으로 차단** (2026-07-25 경제 티스토리)
+        ② 이미지: pro_templates int(NaN) 크래시 (같은 날 GUARDIAN 보고)
+      결측은 채우지 않고 *버린다*. 포인트가 0 개가 되면 dataset 자체를 뺀다(빈 차트 방지).
+    """
+    out: list = []
+    for ds in datasets or []:
+        if not isinstance(ds, dict):
+            out.append(ds)
+            continue
+        pts = ds.get("data")
+        if not isinstance(pts, list):
+            out.append(ds)
+            continue
+        keep = [p for p in pts
+                if not isinstance(p, dict) or is_finite_num(p.get("value"))]
+        if not keep:
+            continue                      # 전량 결측 → dataset 배제
+        out.append(ds if len(keep) == len(pts) else {**ds, "data": keep})
+    return out
+
+
 def _decimals_of(x: float) -> int:
     """부동소수 표시 소수 자릿수 추정 (display_precision 폴백)."""
     s = repr(float(x))
@@ -197,11 +238,13 @@ def grounds(n, g, display_precision: int | None = None) -> bool:
     display_precision: 대본 원토큰의 소수 자릿수. None 이면 n 에서 추정
                        (★ _canon_num 이 정밀도를 버리므로 호출측이 원토큰 자릿수 전달 권장).
     """
-    try:
-        n = float(n)
-        g = float(g)
-    except (TypeError, ValueError):
+    # ★ 결측(NaN/Inf)은 근거가 될 수 없다 — *크래시 대신 미근거* (사용자 박제 2026-07-25).
+    #   종전엔 NaN 이 ②의 math.floor(NaN) 에서 ValueError 로 터졌고, 호출측 게이트가
+    #   그 예외를 except 로 삼켜 **진짜 사실을 '출처 미확인' 으로 차단**했다 (경제 티스토리 발행 실패).
+    if not (is_finite_num(n) and is_finite_num(g)):
         return False
+    n = float(n)
+    g = float(g)
     # ① ±5% (절대 바닥 포함)
     if abs(n - g) <= max(abs(g) * 0.05, _GROUND_ABS_FLOOR):
         return True

@@ -501,7 +501,8 @@ def compose_collected(keyword: str, stocks_data: dict | None = None,
     meta['raw_stocks'] 로 원본 종목 dict 를 side-channel 보존 (프롬프트 빌더용).
     """
     from datetime import datetime as _dt
-    from .models import CollectedData, policy_for, dataset_is_stock_financial
+    from .models import (CollectedData, policy_for, dataset_is_stock_financial,
+                         sanitize_datasets)
     from .collect_theme import stocks_to_datasets
     from .evidence_pack import facts_to_datasets
     stocks_data = stocks_data or {}
@@ -510,6 +511,13 @@ def compose_collected(keyword: str, stocks_data: dict | None = None,
     stock_ds = stocks_to_datasets(stocks_data) if stocks_data.get("stocks") else []
     fact_ds = facts_to_datasets(pack) if pack else []
     datasets = _dedupe_datasets(list(extra_datasets or []) + list(stock_ds) + list(fact_ds))
+    # ★ 결측(NaN) 위생 — *조립 지점 한 곳* (사용자 박제 2026-07-25). 상자를 나가기 전에 턴다:
+    #   남으면 검증(gt→grounds 크래시→사실 오차단)·이미지(int(NaN) 크래시) 양쪽에서 터진다.
+    _pre_n = sum(len(d.get("data") or []) for d in datasets if isinstance(d, dict))
+    datasets = sanitize_datasets(datasets)
+    _post_n = sum(len(d.get("data") or []) for d in datasets if isinstance(d, dict))
+    if _pre_n != _post_n:
+        log.info(f"[compose] 결측(NaN) 포인트 {_pre_n - _post_n}개 제거 (0 으로 채우지 않음)")
     # ★ 종목재무 배제는 *조립 지점 한 곳* 에서 (사용자 박제 2026-07-23 — 수집 09 이관).
     #   종전엔 경제 파이프라인(02)만 fact 유래 dataset 을 걸러서, 같은 조립 함수를 쓰는
     #   다른 경로는 정책이 새어나갔다. 판정 근거는 models.dataset_is_stock_financial 단일 소스.

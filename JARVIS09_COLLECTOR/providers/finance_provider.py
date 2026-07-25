@@ -252,13 +252,17 @@ class FinanceProvider(BaseProvider):
         lines = [f"[시장 데이터 — {theme} / {datetime.now().strftime('%Y-%m-%d')}]", ""]
         for name, ticker in _TICKERS.items():
             try:
+                # ★ NaN 발생원 차단 (2026-07-25 — economic_data_provider 와 동일 결함):
+                #   야후가 비거래일·미체결 행을 NaN 으로 붙여 주므로 `iloc[-1]` 직취는
+                #   'nan' 이 그대로 문서에 실린다. 결측 행을 버리고 마지막 유효 종가 사용.
                 def _fetch(t=ticker):
-                    return yf.Ticker(t).history(period="2d")
+                    return yf.Ticker(t).history(period="5d")
                 hist = _yf_with_timeout(_fetch, timeout=15)
-                if len(hist) >= 2:
-                    prev = float(hist["Close"].iloc[-2])
-                    curr = float(hist["Close"].iloc[-1])
-                    chg = (curr - prev) / prev * 100
+                closes = hist["Close"].dropna() if len(hist) else hist
+                if len(closes) >= 2:
+                    prev = float(closes.iloc[-2])
+                    curr = float(closes.iloc[-1])
+                    chg = ((curr - prev) / prev * 100) if prev else 0.0
                     direction = "상승" if chg > 0 else ("하락" if chg < 0 else "보합")
                     lines.append(f"• {name}: 현재 {curr:.2f}, 전일 대비 {chg:+.2f}% {direction}")
             except Exception:
