@@ -2,19 +2,40 @@
 
 흐름:
   1. 안전 검증 (경로 탈출 방지 / 줄 수 / ast.parse)
+  1-B. ★ code-removal 가드 — "지워서 통과시키는" 패치 거부
   2. .bak 백업
   3. 파일 적용
   4. import 검증
-  5. 실패 시 .bak 롤백
-  6. DB 상태 업데이트 + ERRORS.md 기록
+  5. ★ 원 오류 재현 검증 (reproduced_gone / unverifiable / still_reproduces)
+  6. 실패·재현 시 .bak 롤백
+  7. DB 상태 업데이트 + ERRORS.md 기록 + 밴딧 *양방향* 보상
 
 ★ 자동 승인 — Telegram 버튼 없음. 검증 통과 시 즉시 적용.
+
+★★ 재현 검증 (사용자 박제 2026-07-25) — "ast.parse + import 성공 = fixed" 폐기
+  종전 판정은 *패치가 파일을 깨뜨리지 않았다* 는 사실만 확인했지 *원래 오류가 사라졌는지*
+  는 한 번도 묻지 않았다. 그래서 `x[:N]` → `(x or "")[:N]` 처럼 **증상만 덮는 패치**가
+  "fixed" 로 기록되고 밴딧에 *양의 보상* 까지 받아, 시스템이 **증상 은폐를 강화학습**했다.
+  (APR 문헌: patch overfitting 92~98%, 최악 실패 모드가 code-removal patch.
+   GitHub agentic autofix 는 CodeQL 재실행으로 경보가 닫혀야 PR 을 연다 / Meta SapFix 는
+   Sapienz 를 재실행해 검증한다.) → **원 실패를 재현해보지 않은 fixed 는 fixed 가 아니라
+  plausible 이다.**
+
+  계약 (eval_agent·bandit 이 소비하는 문자열 — 변경 금지):
+    "reproduced_gone"  = 원 오류 재현을 시도했고 더는 재현되지 않음 → 양의 보상
+    "unverifiable"     = 재현 시도 자체가 불가능한 유형            → **보상 호출 안 함(0)**
+    "still_reproduces" = 여전히 재현됨 = 수정 실패                → 롤백 + 음의 보상
+
+  킬스위치: `GUARDIAN_FIX_VERIFY=0` → 종전 동작(구문·import 만으로 fixed + 양의 보상).
 """
 from __future__ import annotations
 
 import ast
+import json
 import logging
+import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path

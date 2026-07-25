@@ -1157,7 +1157,35 @@ def circuit_is_open() -> bool:
 def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
                 _retries: int = 4, _essential: bool = False,
                 _nonessential: bool = False, **overrides) -> str:
-    """Claude Code SDK 호출 단일 진입점.
+    """Claude Code SDK 호출 단일 진입점 — 본문(text)만 반환 (하위호환 유지).
+
+    ★ 2026-07-25 ①단일 진입점: 구현 본체는 `invoke_text_result` 하나뿐이고 이 함수는
+      그 위에 얹힌 얇은 어댑터다. 시그니처·반환·동작은 종전과 **완전히 동일** —
+      호출자(수백 곳) 무영향. "모델이 판정을 못 했다"를 구분해야 하는 *판정형* 호출만
+      `invoke_text_result` 를 쓴다 (빈 문자열과 판정불가가 구분되지 않는 게 결함이었다).
+    """
+    text, _ok = invoke_text_result(
+        alias, prompt, system=system, timeout=timeout, _retries=_retries,
+        _essential=_essential, _nonessential=_nonessential, **overrides)
+    return text
+
+
+def invoke_text_result(alias: str, prompt: str, system: str = "", timeout: int = 180,
+                       _retries: int = 4, _essential: bool = False,
+                       _nonessential: bool = False, **overrides) -> tuple[str, bool]:
+    """Claude Code SDK 호출 단일 진입점 — `(text, ok)` 반환.
+
+    ★ ok 의 의미 (에이전트 간 계약 — 2026-07-25):
+        ok=True  : 모델이 실제로 답했다. text 는 그 답(비어있지 않음).
+        ok=False : **모델이 판정을 못 했다.** 회로 open·발행창 보호·SDK 실패·빈 응답·
+                   절단(truncated) 전부 여기. text 는 "" 이거나 절단된 부분출력이다.
+
+      종전 `invoke_text` 는 이 셋(정상 빈 답변 / 회로 open 즉시 폴백 / SDK 실패)을
+      **모두 ""** 로 뭉개서 반환했다. 예외도 없어 GUARDIAN 기록도 로그도 남지 않았고,
+      품질 게이트들이 *판정을 한 번도 안 하고* "통과" 시키는 implicit error 의 진원지였다.
+      판정형 호출(사실성·매력도·진실성 감사)은 반드시 이 함수로 ok 를 확인할 것.
+
+    모든 alias — Sonnet 5 단일 모델 (ADR 017, 사용자 박제 2026-07-06 — ADR 015 폐지).
 
     모든 alias — Sonnet 5 단일 모델 (ADR 017, 사용자 박제 2026-07-06 — ADR 015 폐지).
 
@@ -1220,7 +1248,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
                     f"🛡 발행창 보호 구간 — background alias '{alias}' 차단 "
                     f"(발행 前 {_PROTECT_MIN}분). 한도를 발행에 우선 배정."
                 )
-                return ""
+                return "", False      # ★ 모델 미호출 — 판정 불가
         except Exception:
             pass
 
@@ -1243,7 +1271,8 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
     # ★ 비필수 호출 — 스로틀 시 임계경로 블로킹 절대 금지 (ERRORS [368]). 필수 면제보다 우선.
     if _nonessential:
         if _gate in ("open", "probe"):
-            return ""                      # 스로틀 중 — SDK 미호출·즉시 폴백 (발행 안 막음)
+            # 스로틀 중 — SDK 미호출·즉시 폴백. ok=False 로 *판정 불가* 를 명시한다.
+            return "", False
         retries, backoff = 1, False        # 정상일 때도 1샷
         timeout = min(timeout, 90)         # 시간 상자 — 최악 90초 (max_tokens≤700 안에 완료)
     elif _gate == "open":
@@ -1251,7 +1280,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
             retries, backoff = 1, False   # 필수 호출 — open 중에도 1회 실시도
         else:
             print("  ⏳ [LLM] 회로 차단 중 — 즉시 폴백 (재시도 생략)")
-            return ""
+            return "", False           # ★ 모델 미호출 — 판정 불가
     elif _gate == "probe":
         retries, backoff = 1, False       # probe 는 1샷 — 최악 1 spawn 만 소모
 

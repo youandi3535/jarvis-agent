@@ -500,6 +500,29 @@ def _orchestrate(error_id: int):
         severity = _escalate_severity(error_record)
         error_record = {**error_record, "severity": severity}  # 상향된 값으로 갱신
 
+        # ── ★★ 발행 중에는 *기록만* — 자동수정 전면 보류 (사용자 박제 2026-07-25) ──────
+        #    왜 (셋 다 실측 근거):
+        #      ① 효과 0 — 파이썬 import 캐시 탓에 지금 고친 코드는 *현재 데몬 프로세스에
+        #         반영되지 않는다*(CLAUDE.md 박제). 즉 발행 중 수리는 그 발행을 못 구한다.
+        #         비용만 내고 효과는 다음 재시작 이후 = 새벽에 고쳐도 결과가 같다.
+        #      ② 자원 경합 — Tier-2 는 Claude Code SDK 세션(최대 10분)을 잡는다. 발행 대본·
+        #         게이트·이미지가 같은 LLM 한도를 쓰므로 발행이 자기 오류 수리에 한도를 빼앗긴다.
+        #      ③ 오진단 위험 — 2026-07-25 실증: 발행 중 급히 돈 Tier-2 가 사실성 *오탐* 을
+        #         'LLM 이 제목 수치를 날조' 로 오진단하고 프롬프트까지 잘못 고쳤다(363f5c2).
+        #    보류해도 유실 없음: status='new' 를 *그대로 둔 채* 반환하므로(선점 전에 빠진다)
+        #    발행 종료 후 `j07_retry_pending`(10분 간격)이 자동 회수한다 — 새 잡·새 큐 신설 0.
+        #    critical 만 예외: 매트릭스상 Tier-1(LLM-0)+알림 뿐이라 한도를 뺏지 않고,
+        #    retry_pending 은 critical 을 건너뛰므로 여기서 막으면 영영 안 알려진다.
+        if severity != "critical":
+            try:
+                from shared.llm import is_publishing as _is_pub
+                if _is_pub():
+                    log.info(f"[GUARDIAN] #{error_id} [{severity}] 발행 중 — 자동수정 보류"
+                             f"(기록만 유지, 발행 종료 후 retry_pending 이 회수)")
+                    return
+            except ImportError:
+                pass   # is_publishing 미가용 — 종전대로 진행(보류는 최적화이지 필수 아님)
+
         # ── 안전장치 2.5: DB 레벨 원자적 선점 (★ 프로세스 간·중복 디스패치 경쟁 차단) ──
         #    in-memory _processing 은 같은 프로세스 내 스레드만 방어한다. bus 재전달
         #    (dispatch_pending 폴백)과 job_retry_pending 스윕이 겹치면 서로 다른 스레드가
