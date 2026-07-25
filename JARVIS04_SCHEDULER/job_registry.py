@@ -330,6 +330,38 @@ def job_specs() -> list[dict]:
     return out
 
 
+def job_func_for(spec: dict) -> tuple[Any, tuple]:
+    """잡 하나가 스케줄러에 등록할 `(func, args)` — **등록·자가검사 공통 단일 결정 지점**.
+
+    ★ 왜 함수로 뽑았나 (ERRORS [499]): 종전엔 이 결정이 `register_default_jobs` 몸통 안에만
+      있어서, 자가검사(`job_llm_priority.selfcheck`)가 *등록이 실제로 무엇을 넘기는지* 를
+      볼 방법이 없었다. 그래서 검사는 상수 하나만 확인하며 통과했고(거짓 보증) 회귀가 그대로
+      운영에 나갔다. 이제 검사와 등록이 **같은 함수에 묻는다** — 둘이 갈라질 수 없다.
+    """
+    jid, cb = spec["id"], spec["callback"]
+
+    if spec.get("executor") == "processpool":
+        # ★ 워커가 별도 *프로세스* 라 func 는 pickle 이 아니라 참조(module:qualname)로 왕복한다.
+        #   콜러블 인스턴스(`_JobGate`)를 넘기면 그 이름이 인스턴스가 아니라 *클래스* 를 가리켜
+        #   워커에서 인자 없이 재구성돼 `_JobGate.__init__() missing 3 ...` TypeError 가 난다.
+        #   문자열은 참조가 아니라 *값* 이므로 job_id·callback 을 args 로 넘기고, 콜백 해석·
+        #   선행조건·발행창 판정은 워커 안에서 `run_gated` 가 그때그때 재수행한다(② 동적 설계).
+        _resolve_callback(cb)                        # 등록 시점 존재 검증 (fail-fast)
+        from JARVIS04_SCHEDULER.job_llm_priority import run_gated
+        return run_gated, (jid, cb)
+
+    fn = _resolve_callback(cb)
+    # ★ 선행조건 집행 단일 지점 (사용자 박제 2026-07-23) — `requires` 가 선언된 잡만
+    #   래핑된다. 각 콜백에 if 문을 흩지 않는다. 상세 사유: job_prereq.py 모듈 docstring.
+    from JARVIS04_SCHEDULER.job_prereq import gate as _prereq_gate
+    fn = _prereq_gate(jid, fn)
+    # ★ 발행창 LLM 우선권 (사용자 박제 2026-07-25) — 파이프라인 잡(03 트렌드·09 선계산·
+    #   02 발행) 실행 구간을 '발행중' 으로 표시해 배경 LLM 을 보류시킨다. 선례와 같은 자리.
+    #   (processpool 이 아닌 잡은 in-process 실행이라 클로저·인스턴스 래핑이 안전하다.)
+    from JARVIS04_SCHEDULER.job_llm_priority import gate as _llm_gate
+    return _llm_gate(jid, fn), ()
+
+
 def register_default_jobs(scheduler: Any) -> int:
     """DEFAULT_JOBS 의 모든 잡을 APScheduler 에 등록.
 
@@ -340,20 +372,20 @@ def register_default_jobs(scheduler: Any) -> int:
     n = 0
     for j in job_specs():
         try:
-            fn = _resolve_callback(j["callback"])
-            # ★ 선행조건 집행 단일 지점 (사용자 박제 2026-07-23) — `requires` 가 선언된 잡만
-            #   래핑된다. 각 콜백에 if 문을 흩지 않는다. 상세 사유: job_prereq.py 모듈 docstring.
-            from JARVIS04_SCHEDULER.job_prereq import gate as _prereq_gate
-            fn = _prereq_gate(j["id"], fn)
-            # ★ 발행창 LLM 우선권 (사용자 박제 2026-07-25) — 파이프라인 잡(03 트렌드·09 선계산·
-            #   02 발행) 실행 구간을 '발행중' 으로 표시해 배경 LLM 을 보류시킨다. 선례와 같은 자리.
-            from JARVIS04_SCHEDULER.job_llm_priority import gate as _llm_gate
-            fn = _llm_gate(j["id"], fn)
+            fn, args = job_func_for(j)
             exec_kwargs = {}
             if j.get("executor"):
                 exec_kwargs["executor"] = j["executor"]
+            if j.get("executor") == "processpool":
+                # ★ 효과를 동작으로 확인 (CLAUDE.md `patch_effective()` 표준, ERRORS [499]).
+                #   워커가 실제로 겪는 참조 왕복을 등록 *전* 에 재현한다. 어긋나면 그 잡이
+                #   처음 발화하는 밤 22:00 이 아니라 **부팅 즉시** 드러난다.
+                from JARVIS04_SCHEDULER.job_llm_priority import assert_ref_serializable
+                why = assert_ref_serializable(j["id"], fn, args)
+                if why:
+                    raise TypeError(why)
             scheduler.add_job(
-                fn, j["trigger"], **j["kwargs"],
+                fn, j["trigger"], args=args, **j["kwargs"],
                 id=j["id"], name=j["name"],
                 misfire_grace_time=j["misfire_grace_time"],
                 replace_existing=True,

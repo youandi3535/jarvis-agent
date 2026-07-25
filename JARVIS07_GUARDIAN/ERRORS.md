@@ -2,6 +2,83 @@
 
 ---
 
+## [499] ✅ 해결 — processpool 잡 6개 전부 실행 시 TypeError (job_llm_priority `_JobGate`) (2026-07-25)
+
+- **증상**: `job:daily_review` 실행 시 `TypeError: _JobGate.__init__() missing 3 required
+  positional arguments: 'job_id', 'pipeline', and 'fn'`. 같은 결함이 processpool executor 를
+  쓰는 6개 잡(voice_index·keyword_embed_backfill·daily_review·learn_log·feedback_upd·
+  train_weights) 전부에 동일하게 존재 — 발견은 daily_review 하나였지만 나머지 5개도 첫 실행 시
+  동일하게 죽는다.
+- **환경**: `JARVIS04_SCHEDULER/job_llm_priority.py` `_JobGate`/`gate()` · `job_registry.py
+  register_default_jobs()`.
+- **원인**: `_JobGate` 는 콜러블 *인스턴스* (`job_id`·`pipeline`·`fn` 슬롯 보유). APScheduler 는
+  processpool 잡을 워커 **프로세스** 로 넘길 때 콜러블을 직접 pickle 하지 않고
+  `obj_to_ref()`(`module:qualname` 문자열)로 바꿔 `Job.__getstate__` 에 저장했다가, 워커 안에서
+  `ref_to_obj()` 로 *그 이름을 다시 조회* 해 복원한다(`Job.__setstate__`). 그런데 콜러블
+  **인스턴스**에 대해 `get_callable_name()` 은 인스턴스가 아니라 **클래스**의 `__qualname__`
+  을 돌려준다(`apscheduler/util.py` `get_callable_name`) — 그래서 ref 는
+  `"JARVIS04_SCHEDULER.job_llm_priority:_JobGate"` 가 되고, 복원 결과는 원래 인스턴스가 아니라
+  **클래스 `_JobGate` 자체**. 워커가 `job.func(*job.args, **job.kwargs)` 를 호출하면
+  `job.args` 가 보통 빈 튜플이라 `_JobGate()` 를 인자 없이 호출한 꼴이 되어 바로 TypeError.
+- **헛다리 아님 — 종전 회귀 테스트가 이미 있었는데 왜 못 잡았나**: `job_llm_priority.selfcheck()`
+  는 `pickle.dumps(gate(...))` 로 raw pickle 성공만 확인했다. 표준 `pickle` 모듈은 인스턴스
+  상태(job_id·pipeline·fn)를 통째로 보존해 성공하므로 통과했지만, APScheduler 는 그 경로를 전혀
+  쓰지 않는다(이름 참조로만 왕복). "pickle 가능" 과 "APScheduler 참조로 왕복 가능"은 다른
+  요구사항인데 하나로 착각했다 — 루트 헌법 "복사본을 진실로 믿지 말 것"의 변주(스모크 테스트가
+  *실제 소비자의 경로* 를 타지 않으면 검증이 아니다).
+- **해결**: `job_llm_priority.py` 에 모듈 레벨 함수 `run_gated(job_id, callback, *a, **kw)` 신설.
+  job_id·callback 은 **문자열 값**으로 `add_job(..., args=(job_id, callback))` 을 통해 넘기고
+  (문자열은 참조가 아니라 값으로 pickle 되므로 프로세스 경계 안전), 워커 안에서 콜백 재조회·
+  선행조건(job_prereq) 판정·`mark_job_context`/`mark_publishing` 을 그때그때 수행한다.
+  `job_registry.register_default_jobs()` 는 `executor=="processpool"` 인 잡만 이 경로로 등록,
+  나머지는 종전 `_JobGate`(in-process 전용이라 원래 안전) 그대로 유지. `selfcheck()` 도
+  `apscheduler.util.obj_to_ref`/`ref_to_obj` 왕복 후 **동일 객체로 돌아오는지**로 판정하도록 교체
+  — 이번 버그 패턴을 재현하면 실제로 잡아냄을 직접 확인(과거 `_JobGate` 인스턴스로 재현 시
+  `ref_to_obj(obj_to_ref(x)) is x` → `False`).
+- **검증**: ① `apscheduler.job.Job.__getstate__`/`__setstate__` 실제 왕복 재현 — daily_review
+  잡의 `func_ref` 가 `run_gated` 를 가리키고 복원 후 `job2.func is job.func` = True.
+  ② 실제 `concurrent.futures.ProcessPoolExecutor(mp_context=spawn)` + `apscheduler.executors.
+  base.run_job` 로 end-to-end 실행 — 새 설계는 `retval="ok-from-worker"`, `exception=None`;
+  구 `_JobGate` 인스턴스로 동일 재현 시 정확히 동일한 문구의 TypeError 재현 확인.
+  ③ processpool 6개 잡 전부 `run_gated` 로 등록됨 확인. ④ `precommit_check.py` 58종 0건.
+- **★ 2차 보강 — 고친 뒤에도 검사는 여전히 거짓 보증이었다 (같은 날, 사용자 지시로 재점검)**:
+  위 해결로 *증상* 은 사라졌지만 `selfcheck()` 는 여전히 **상수 하나**(`run_gated` 자체)만
+  왕복시켜 보고 있었다. 등록 경로가 무엇을 넘기는지는 보지 않으므로, 등록을 옛 `_JobGate`
+  방식으로 되돌려도 검사는 **그대로 통과**한다 — 실제로 되돌려 확인했다(통과). 즉 같은 사고가
+  다시 나도 못 막는 상태였다. 진짜 결함은 *검사가 등록과 다른 것을 보고 있었다* 는 점.
+  - ① **단일 결정 지점 신설** — `job_registry.job_func_for(spec) -> (func, args)`. 어떤 잡을
+    어떤 func 로 등록할지는 이제 한 함수가 정한다. `register_default_jobs` 도, `selfcheck()` 도,
+    `job_prereq._run_prereq_now()`(선행 회복 재예약)도 **같은 함수에 묻는다** — 갈라질 수 없다.
+    (부수 효과: 선행 회복 재예약이 종전엔 콜백을 직접 해석해 *발행창 LLM 게이트가 빠져* 있었다.
+     맥이 잠들었다 깨어 선행+발행이 몰리는, 가장 경합이 심한 경로였다. 함께 닫혔다.)
+  - ② **등록 직전 실동작 검증** — `assert_ref_serializable(job_id, fn, args)` 가 워커가 겪는
+    일을 그대로 재현한다: 이름 왕복이 **같은 객체**로 돌아오는가 + 돌아온 객체를 **job.args 로
+    호출할 수 있는가**(인자 개수 불일치가 곧 이번 TypeError). 어긋나면 그 잡이 처음 발화하는
+    밤 22:00 이 아니라 **부팅 즉시** 등록이 거부되고 GUARDIAN 에 보고된다.
+  - ③ **회귀 재현으로 검증** — 등록 경로를 옛 방식으로 되돌린 상태에서 `selfcheck()` 가 6개 잡
+    전부를 지목하고, `register_default_jobs` 가 processpool 6개를 **등록 자체 거부**(36/42)함을
+    확인. 정상 상태에서는 42개 전원 등록·위반 0.
+- **피해 범위 (실측)**: 회귀는 `ae53644`(17:03) 커밋으로 들어왔고 데몬은 18:16 에 그 코드로 떴다.
+  processpool 6개 중 그 사이 발화한 것은 `daily_review`(22:00) 하나뿐 — 나머지 5개는 실행 시각이
+  02:30·02:45·04:00 이라 **아직 오지 않았을 뿐**이었다. 실제로 22:10:40(맥이 깨어나 misfire 유예로
+  지연 실행)에 `daily_review` 가 죽어 **그날의 학습 리포트가 통째로 누락**됐다. 수정 후 워커 경로를
+  그대로 재현해 수동 회수(글 1건 → 인사이트 3건). 남은 5개는 다음 발화 전에 고쳐져 피해 0.
+- **파일**: `JARVIS04_SCHEDULER/job_llm_priority.py`, `JARVIS04_SCHEDULER/job_registry.py`,
+  `JARVIS04_SCHEDULER/job_prereq.py`.
+- **교훈**: 콜러블을 *상태를 가진 인스턴스* 로 감싸 스케줄러에 등록하면 "직접 pickle 가능"과
+  "이름-참조 기반 프레임워크에서 왕복 가능"을 혼동하기 쉽다. processpool·영구 jobstore 등
+  프로세스/저장 경계를 넘는 콜러블은 **상태 없는 모듈 레벨 함수 + 인자로 전달되는 값**으로
+  설계해야 한다. 회귀 테스트는 반드시 *실제 소비자가 쓰는 왕복 경로* 를 그대로 재현해야
+  의미가 있다 — 다른 매커니즘(raw pickle)으로 대체 검증하면 통과해도 실제로는 뚫려 있을 수
+  있다(`patch_effective()` 표준의 또 다른 사례).
+  ★ 그리고 한 겹 더: **검사가 등록과 다른 것을 보고 있으면 검사는 없는 것과 같다.** 회귀 테스트는
+  "결과물이 옳은가" 가 아니라 **"운영이 실제로 만들어내는 그 물건이 옳은가"** 를 물어야 한다.
+  그러려면 *만드는 곳* 과 *검사하는 곳* 이 같은 함수를 호출해야 한다(① 단일 진입점의 검사판).
+  검사를 새로 짤 때 스스로 물을 것 — **"이 검사는 옛 버그를 재현하면 실패하는가?"** 재현해서
+  실패하는 것을 눈으로 보기 전까지 그 검사는 통과한 적이 없는 것이다.
+
+---
+
 ## [498] ✅ 해결 — 밴딧이 3,062회 동안 학습을 멈춘 채 돌았다 — "영향 0인 결정"에 벌점을 준 귀속 오류 (2026-07-25)
 
 > ★ **맥락**: ERRORS [496] 감사 마무리 중 발견. 사용자 지시 *"이거 너무 심각한데, 무조건 고쳐야해.
