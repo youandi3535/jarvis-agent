@@ -38,6 +38,76 @@ except ImportError:
     def _g_report(*a, **kw): pass
 
 
+def network_up(timeout: float = 3.0) -> bool:
+    """인터넷 도달 가능한가 — 로그인 시도 *전* 판정의 단일 진입점.
+
+    ★ 왜 여기인가: 종전 이 함수는 `naver_cookie_refresher` 와 `tistory_cookie_refresher`
+      **양쪽에 글자까지 똑같이 복사**돼 있었다(2벌). 한쪽만 고치면 다른 쪽이 옛 동작을
+      유지하는 전형적 사본 사고 자리다. 로그인 진입점이 하나이므로 그 전제 판정도 하나다.
+
+    ★ 무엇에 쓰나: 쿠키 점검 실패의 원인을 가른다.
+        네트워크 down → *일시적* (조금 뒤 다시 하면 된다)
+        네트워크 up   → *영구적* (CAPTCHA·계정 문제 — 사람이 필요하다. 재시도는 낭비)
+      이 구분이 없으면 둘 다 "오늘 발행 없음" 으로 끝난다 (2026-07-25 실제 사고).
+    """
+    import socket
+    try:
+        with socket.create_connection(("8.8.8.8", 53), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+# 로그인 재시도 간격 — 무배포 조정 `COOKIE_RETRY_WAIT_SEC`.
+# ★ 짧게 잡지 않는 이유: 쿠키 갱신은 Selenium 으로 *실제 로그인* 을 다시 하는 동작이다.
+#   촘촘히 두드리면 네이버가 비정상 접근으로 볼 수 있다. 우리가 기다리는 대상(네트워크
+#   회복)은 초 단위로 바뀌지 않으므로 넉넉한 간격이 맞다.
+COOKIE_RETRY_WAIT_SEC = float(os.getenv("COOKIE_RETRY_WAIT_SEC", "180") or 180)
+
+
+def ensure_naver_ready(deadline=None) -> tuple:
+    """네이버 쿠키를 발행 가능 상태로 만든다 — **일시적 실패에 한해** 창 안에서 기다린다.
+
+    ★ 사용자 승인 2026-07-25. 2026-07-25 21:05 실제 사고: 네트워크가 끊긴 그 순간 쿠키 점검이
+      한 번 실패했고, 그걸로 그날 테마글이 통째로 사라졌다. 실패 원인이 *네트워크* 인지
+      *CAPTCHA·계정* 인지 구분이 없어 둘 다 "오늘 발행 없음" 으로 끝났기 때문이다.
+
+    ★ 창을 넘겨 기다리지 않는다 (사용자 박제 "발행은 07시와 21시뿐"): `deadline` 은 호출자가
+      **잡 자신의 misfire 유예시간에서 파생** 해 넘긴다. 여기서 "몇 분 더" 를 만들지 않는다.
+      deadline 이 없으면(창을 모르면) 기다리지 않고 즉시 실패 — 모르는 채로 미루는 것이
+      곧 시간외 발행이다.
+
+    Returns: `(준비됨?, 사유)`
+      · `(True,  "")`             바로 통과
+      · `(True,  "recovered:N")`  N회차에 회복
+      · `(False, "permanent")`    네트워크는 정상인데 실패 → 사람이 필요 (CAPTCHA·계정)
+      · `(False, "deadline")`     네트워크 단절이 창 안에 회복되지 않음
+    """
+    import time
+    from datetime import datetime, timedelta
+
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import job_pre_naver_check
+            if job_pre_naver_check():
+                return (True, f"recovered:{attempt - 1}" if attempt > 1 else "")
+        except Exception as e:
+            log.warning(f"[login] 네이버 쿠키 점검 예외: {e}")
+            _g_report("publish", e, module=__name__, func_name="ensure_naver_ready")
+
+        # ★ 원인 판정 — 네트워크가 죽어 있으면 *일시적*, 살아 있으면 *사람이 필요*.
+        if network_up():
+            return (False, "permanent")
+        # 다음 시도가 창을 넘어서면 기다릴 이유가 없다 — 지금 포기하고 알린다.
+        if deadline is None or datetime.now() + timedelta(seconds=COOKIE_RETRY_WAIT_SEC) >= deadline:
+            return (False, "deadline")
+        log.info(f"[login] 네트워크 단절 — {COOKIE_RETRY_WAIT_SEC:.0f}초 뒤 재시도 "
+                 f"(창 마감 {deadline:%H:%M}, 시도 {attempt})")
+        time.sleep(COOKIE_RETRY_WAIT_SEC)
+
+
 # ── 경로·환경변수 단일 진실 소스 (LOGIN_SUPREME_LAW.md 제3조) ──
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -307,6 +377,8 @@ __all__ = [
     "verify_all_logins",
     "auto_refresh_if_needed",
     "job_pre_publish_check",
+    "network_up",
+    "ensure_naver_ready",
 ]
 
 

@@ -490,6 +490,16 @@ def current_job_is_background() -> bool:
     return bool(getattr(_JOB_CTX, "job_id", "")) and not getattr(_JOB_CTX, "pipeline", False)
 
 
+def current_job_id() -> str:
+    """지금 실행 중인 스케줄 잡 ID (잡 밖이면 "").
+
+    ★ 왜 필요한가: 발행 콜백이 *자기 잡 ID 를 코드에 박지 않고* 알아내기 위해서다.
+      박아두면 잡 ID 사본이 생겨, JARVIS04 에서 ID 를 바꿔도 여기만 옛 값을 가리킨다(② 동적 설계).
+      문맥은 `job_llm_priority` 의 게이트가 잡 진입 시 심어 둔다.
+    """
+    return getattr(_JOB_CTX, "job_id", "") or ""
+
+
 def defer_reason(alias: str = "", background: bool | None = None) -> str:
     """★ LLM 착수 보류 사유 — **모든 통로의 단일 판정 함수** (2026-07-25).
 

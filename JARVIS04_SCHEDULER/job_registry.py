@@ -165,6 +165,14 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"minutes":15},
      "callback":"shared.file_cleanup.cleanup_fuse_hidden",
      "misfire_grace_time":300, "owner":"jarvis00_infra"},
+    # ★ 알림 아웃박스 재전송 (사용자 승인 2026-07-25) — 네트워크 단절 중 전송 실패한
+    #   텔레그램 메시지를 되살린다. 평소엔 표가 비어 있어 즉시 반환(비용 ~0).
+    #   복구 순간의 즉시 전달은 `notify._on_send_success` 가 담당하고, 이 잡은 *바닥* 이다
+    #   (아무 메시지도 안 나가는 조용한 시간대에도 밀린 것이 5분 안에 흘러가도록).
+    {"id":"notify_outbox_flush", "name":"밀린 알림 재전송 (5분)", "trigger":"interval",
+     "kwargs":{"minutes":5},
+     "callback":"shared.notify.job_flush_outbox",
+     "misfire_grace_time":300, "owner":"jarvis00_infra"},
     # ── JARVIS02 로그 모니터링 ──────────────────────────────────────
     {"id":"log_monitor_economic", "name":"경제 브리핑 로그 확인 (07:45)", "trigger":"cron",
      "kwargs":{"hour":7, "minute":45},
@@ -428,6 +436,34 @@ def cron_times(*, job_id_prefix: str = "", callback_contains: str = "") -> list[
         if "hour" in kw:
             out.add(f"{int(kw['hour']):02d}:{int(kw.get('minute', 0)):02d}")
     return sorted(out)
+
+
+def job_window_deadline(job_id: str):
+    """이 잡의 **오늘치 실행 창 마감시각** (datetime) — 없으면 None.
+
+    창 = `예정 발화 시각 + misfire_grace_time`. APScheduler 가 "늦어도 여기까지는 실행한다"
+    고 이미 정해 둔 경계를 *그대로* 쓴다 — 새 숫자를 만들지 않는다(② 동적 설계).
+
+    ★ 왜 이 함수가 필요한가 (사용자 박제 "발행은 07시와 21시뿐"):
+      전제조건이 일시적 이유(네트워크)로 실패했을 때 재시도하려면 **언제까지** 를 정해야
+      하는데, 여기에 "30분" 같은 숫자를 새로 박으면 그게 곧 시간외 발행의 씨앗이 된다.
+      잡 자신의 유예시간을 경계로 삼으면 발행 시각을 옮겨도 창이 자동으로 따라온다.
+    """
+    from datetime import datetime, timedelta
+    from JARVIS04_SCHEDULER.job_prereq import effective_grace
+    spec = next((j for j in DEFAULT_JOBS if j.get("id") == job_id), None)
+    if not spec or spec.get("trigger") != "cron":
+        return None
+    kw = spec.get("kwargs") or {}
+    if "hour" not in kw:
+        return None
+    fire = datetime.now().replace(hour=int(kw["hour"]), minute=int(kw.get("minute", 0)),
+                                  second=0, microsecond=0)
+    try:
+        grace = float(effective_grace(job_id) or spec.get("misfire_grace_time") or 0)
+    except Exception:
+        grace = float(spec.get("misfire_grace_time") or 0)
+    return fire + timedelta(seconds=grace)
 
 
 _DOW_KO = {"mon": "월", "tue": "화", "wed": "수", "thu": "목",
