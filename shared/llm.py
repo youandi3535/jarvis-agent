@@ -455,6 +455,24 @@ def _proc_lock_release() -> None:
 _PUBLISHING_ACTIVE = _threading.Event()
 _PUBLISHING_DEPTH = 0                        # 중첩 표시 참조수 (잡 래퍼 + 내부 run())
 _PUBLISHING_DEPTH_LOCK = _threading.Lock()
+
+# ★ 현재 스레드의 스케줄 잡 문맥 (2026-07-25) — JARVIS04 잡 래퍼가 설정.
+#   왜 필요한가: 배경 잡 중 *글 작성 alias* 를 쓰는 것이 있다(daily_review=analyzer,
+#   design_learn=writer). alias 만 보면 이들을 못 거르고, 그렇다고 analyzer/writer 를 막으면
+#   09 수집·06 이미지가 죽는다. "누가 부르는가"(잡 문맥)로 갈라야 정확하다.
+_JOB_CTX = _threading.local()
+
+
+def mark_job_context(job_id: str = "", pipeline: bool = False) -> None:
+    """현재 스레드가 실행 중인 스케줄 잡 표시 — JARVIS04 `job_llm_priority.gate()` 전용.
+    job_id="" 로 호출하면 해제(스레드풀 재사용 대비 반드시 finally 에서 해제)."""
+    _JOB_CTX.job_id = job_id or ""
+    _JOB_CTX.pipeline = bool(pipeline)
+
+
+def current_job_is_background() -> bool:
+    """지금이 *파이프라인이 아닌* 스케줄 잡 안인가 (발행창에서 양보 대상)."""
+    return bool(getattr(_JOB_CTX, "job_id", "")) and not getattr(_JOB_CTX, "pipeline", False)
 # ★ MODELS 선언에서 파생 (사본 금지 — 2026-07-25). 종전엔 여기 손으로 4개를 적어둬서
 #   `coder`(architect 코드생성)가 누락돼 발행창에도 그대로 나갔다.
 _BG_ALIASES = frozenset(a for a, s in MODELS.items() if getattr(s, "background", False))
@@ -1271,15 +1289,20 @@ def invoke_text_result(alias: str, prompt: str, system: str = "", timeout: int =
     #      경제 발행 내내 데몬 쪽 배경 LLM 이 차단도 강등도 안 된 채 한도를 먹었다.
     #      `bg_defer_reason()` 은 파일 표식까지 보므로 프로세스 경계를 넘는다.
     #   ③ '90초로 강등' 은 의미가 없었다 — Tier-2 한 세션이 10분 이상이라 강등해도 차선을 문다.
-    if alias in _BG_ALIASES:
+    #   ④ alias 로는 못 거르는 배경 잡이 있다 — daily_review 는 `analyzer`, design_learn 은
+    #      `writer` 를 쓴다(둘 다 글 작성 alias). 그렇다고 그 alias 를 막으면 09 수집·06 이미지가
+    #      죽는다. 그래서 *잡 문맥* 으로 함께 판정한다: 파이프라인이 아닌 스케줄 잡이면 보류.
+    #      잡이 아닌 문맥(텔레그램 사용자 명령·수동 실행)은 job_id 가 없어 여기 안 걸린다.
+    if alias in _BG_ALIASES or current_job_is_background():
         try:
             _bg_why = bg_defer_reason()
         except Exception:
             _bg_why = ""
         if _bg_why:
             import logging as _lg
+            _who = getattr(_JOB_CTX, "job_id", "") or f"alias:{alias}"
             _lg.getLogger("jarvis.llm").info(
-                f"🛡 {_bg_why} — background alias '{alias}' 보류 (한도를 글 작성에 우선 배정)"
+                f"🛡 {_bg_why} — 배경 작업 '{_who}'({alias}) 보류 (한도를 글 작성에 우선 배정)"
             )
             return "", False      # ★ 모델 미호출 — 호출자는 다음 기회에 재시도
     # ★ P-C 발행창 essential 재시도 캡 (사용자 박제 2026-07-18): writer(본문 생성)·fact_judge·

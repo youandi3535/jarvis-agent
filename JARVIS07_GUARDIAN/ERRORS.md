@@ -9340,3 +9340,63 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **해결**: 재시도 = **같은 주제 이어받기 + 직전 차단사유 물려주기**. 주제 고정은 기존 장치 재사용(경제 `pick_slot_candidate(force_env=)` / 테마 `pick_theme(pinned=)`) — 새 선정 경로 신설 0. 차단사유는 하네스 내부 재작성과 같은 경로(`_{nv,ts}_draft_gate_feedback`)로 주입. 테마는 차단사유가 밖으로 안 나와 `run_all_themes` 반환에 `issues` 신설(경제 `EP_RESULT_FILE.harness_issues` 와 동일 규약). 슬롯→강제주제 env 접두사 사본 3곳은 `topic_pack.FORCE_ENV_PREFIX` 단일 소스로 통일.
 - **파일**: JARVIS02_WRITER/scheduler.py · economic_poster.py · trend_theme_writer.py · trend_economic_writer.py · JARVIS03_RADAR/topic_pack.py · JARVIS09_COLLECTOR/precollect.py
 - **교훈**: 재시도의 값어치는 *무엇을 물려주느냐* 에 있다. 주제와 실패 사유를 안 물려주면 그건 재시도가 아니라 **처음부터 다시**다.
+
+---
+### [2026-07-25 16:35] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/lib.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: reproduced_gone — import_symbol(_vt_demo.lib) OK
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
+
+---
+### [2026-07-25 16:35] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/user.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: reproduced_gone — import_symbol(_vt_demo.lib) OK
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
+
+---
+### [2026-07-25 16:35] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/lib.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: reproduced_gone — import_symbol(_vt_demo.lib) OK
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
+
+---
+### [2026-07-25 16:36] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/lib.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: reproduced_gone — import_symbol(_vt_demo.lib) OK
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
+
+---
+### [2026-07-25 16:36] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/lib.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: unverifiable — TypeError 는 런타임 데이터 의존 — 재현 불가 유형
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
+
+---
+### [2026-07-25 16:36] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/user.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정

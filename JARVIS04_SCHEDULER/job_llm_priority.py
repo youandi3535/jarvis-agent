@@ -58,32 +58,38 @@ def pipeline_job_ids() -> frozenset[str]:
 
 
 def gate(job_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
-    """파이프라인 잡이면 실행 구간 전체를 '발행창' 으로 표시한다.
+    """모든 잡에 *잡 문맥* 을 심고, 파이프라인 잡이면 실행 구간을 '발행창' 으로 표시한다.
 
-    파이프라인 잡이 아니면 fn 을 *그대로* 반환 — 래핑 비용 0.
+    · 파이프라인 잡  → 문맥(pipeline=True) + `mark_publishing` 창 ON
+    · 그 외 잡        → 문맥(pipeline=False) 만. 발행창이면 그 잡의 LLM 호출이 보류된다.
+      (alias 로는 못 거르는 배경 잡 때문 — daily_review=analyzer, design_learn=writer)
+    · 잡이 아닌 문맥(텔레그램 사용자 명령·수동 실행)은 문맥이 없어 보류 대상이 아니다.
     """
     try:
-        if job_id not in pipeline_job_ids():
-            return fn
+        _pipeline = job_id in pipeline_job_ids()
     except Exception:
-        return fn
+        _pipeline = False
 
     def _wrapped(*args, **kwargs):
-        _mark = None
         try:
-            from shared.llm import mark_publishing as _mark
+            from shared.llm import mark_publishing as _mark, mark_job_context as _ctx
         except Exception:
-            _mark = None
-        if _mark:
+            return fn(*args, **kwargs)      # LLM 계층 미가용 — 원본 그대로
+        _ctx(job_id, _pipeline)
+        if _pipeline:
             _mark(True)
         try:
             return fn(*args, **kwargs)
         finally:
-            if _mark:
+            if _pipeline:
                 try:
                     _mark(False)
                 except Exception:
                     pass
+            try:
+                _ctx("", False)             # ★ 스레드풀 재사용 대비 반드시 해제
+            except Exception:
+                pass
 
     _wrapped.__name__ = getattr(fn, "__name__", "job")
     _wrapped.__doc__ = getattr(fn, "__doc__", None)
