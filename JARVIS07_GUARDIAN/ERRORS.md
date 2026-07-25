@@ -9322,3 +9322,21 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **원인**: `_collect_naver_views`/`_collect_tistory_views`/`_collect_naver_rank` 내부의 `requests.get(..., timeout=N)`은 TCP 연결·응답 타임아웃만 보장할 뿐, DNS 조회(getaddrinfo)가 멈추거나 소켓 레벨에서 무응답이 발생하면 지정한 timeout을 넘겨 무한정 블로킹될 수 있다(이전 ERRORS [401] yfinance hang과 동일 근본 원인 클래스). 이 파일은 게시글 1건당 한 번만 `_wd_beat()`를 호출하므로, 특정 게시글 처리 중 위와 같은 소켓 레벨 hang이 발생하면 300초 무진전 기준을 넘겨 watchdog이 freeze로 판단해 `os._exit(75)`로 강제 종료시킨다. `RequestsDependencyWarning`은 종료 시점에 버퍼에 남아있던 무해한 경고 텍스트일 뿐 실제 원인이 아니다.
 - **파일**: JARVIS03_RADAR/performance_collector.py
 - **해결**: 자동 수정 적용
+
+## [500] 사실성 게이트가 *진짜 사실* 을 오차단 — NaN 이 grounds() 를 크래시시켜 '미확인'으로 둔갑 (2026-07-25)
+
+- **증상**: 경제 브리핑 티스토리 2회 연속 `[사실성] 출처·데이터 미확인: 반도체 -9.5% 출렁인 한 주` → max_attempts(2) 소진 → 미발행. 같은 날 이미지에서 `ValueError: cannot convert float NaN to integer`.
+- **환경**: 2026-07-25 07:00 경제 브리핑. 네이버는 2차 시도(제목 `EBSI 144`)로 발행 성공 — 단위 토큰(%·원)이 없어 수치 검사를 *건너뛴* 것이지 잘 써서가 아니었다.
+- **원인**: ① yfinance 는 비거래일·미체결 구간에도 행을 붙이고 그 Close 는 NaN. `get_market_data` 가 `period="2d"` 의 `iloc[-1]` 을 무조건 집어 코스피·코스닥이 NaN 으로 수집됨(로그는 "12개 지표 수집 완료" — 실패로도 안 잡히는 무증상 오염). ② 그 NaN 이 gt 로 흘러 `grounds()` 의 `math.floor(NaN)` 에서 ValueError → `prepublish_gate` 의 `except Exception: grounded=False` 가 크래시를 삼켜 **진짜 사실을 '출처 미확인'으로 차단**. `any()` 단축평가라 NaN 이 매치보다 앞설 때만 터져 비결정적이었다. ③ 같은 NaN 이 `pro_templates` 의 `int(NaN)` 도 터뜨림 — 한 병의 두 증상.
+- **헛다리**: GUARDIAN 이 이를 'LLM 이 카탈로그에 없는 수치를 제목에 지어냄'으로 오진단(error_log 4144 `FactualityGateTitleFabrication`) → TITLE 수치 전면금지 규칙을 심음(커밋 363f5c2). **-9.5% 는 etoday 기사 원문·KRX datasets·evidence fact(신뢰 0.9) 3중 근거가 있는 실제 수치**였다. Tier-2 도 2회 태웠으나 고친 것 0(id=4142, fixed_file=None).
+- **해결**: ★발생원 — `Close.dropna()` 후 마지막 유효 종가 사용(창 2d→5d, economic·finance provider 양쪽). 지표를 잃지 않고 NaN 이 안 생김(라이브 12지표 NaN 0). ★방어1 — `grounds()` 가 NaN/Inf 를 크래시 대신 '미근거'(False) 처리(공유 비교기 단일 진입점). ★방어2 — `compose_collected` 조립 지점에서 결측 포인트 제거(0 으로 채우지 않음). ★분류 — `NON_CODE_ISSUE_KINDS` 에 `factuality` 추가(사실성 차단은 글 내용 문제, 코드버그 아님 — 2026-07-22 미승인 → 2026-07-25 승인 번복). ★규칙 — TITLE 은 '창작 금지'(근거 있으면 허용)로 교정.
+- **파일**: JARVIS09_COLLECTOR/models.py · collector_engine.py · providers/economic_data_provider.py · providers/finance_provider.py · JARVIS02_WRITER/draft_writer.py · JARVIS07_GUARDIAN/severity.py
+- **교훈**: **결측(NaN)을 값으로 착각하면 검증기가 거짓말을 한다.** 크래시를 삼키는 `except` 는 "판정 불가"를 "판정 실패(차단)"로 둔갑시킨다 — 비교기는 결측에서 *터지지 말고 False* 여야 한다. 그리고 게이트가 막았다고 해서 LLM 이 틀린 게 아니다. 오진단은 코드보다 **학습 원장을 더 오래 오염**시킨다.
+
+## [501] GUARDIAN 재시도가 '새 주제로 갈아엎기' 였다 — 수집·차단사유를 통째로 버림 (2026-07-25)
+
+- **증상**: 티스토리가 품질 게이트로 막히자 GUARDIAN 재시도가 *다른 주제*(반도체→액화천연가스)로 처음부터 다시 수집·작성.
+- **원인**: 재시도가 플랫폼 단독(`run(post_tistory=True)`)으로 재진입하면서 네이버 문맥을 잃고, 방금 네이버가 발행한 `반도체` 가 중복회피 원장(`post_analysis`)에 '사용됨'으로 잡혀 후보에서 밀려났다. 테마는 더 심해서 카탈로그 random 재선정(같은 테마 확률 ≈0). *주제를 물려줄 통로 자체가 없었다* — 의도가 아니라 사고.
+- **해결**: 재시도 = **같은 주제 이어받기 + 직전 차단사유 물려주기**. 주제 고정은 기존 장치 재사용(경제 `pick_slot_candidate(force_env=)` / 테마 `pick_theme(pinned=)`) — 새 선정 경로 신설 0. 차단사유는 하네스 내부 재작성과 같은 경로(`_{nv,ts}_draft_gate_feedback`)로 주입. 테마는 차단사유가 밖으로 안 나와 `run_all_themes` 반환에 `issues` 신설(경제 `EP_RESULT_FILE.harness_issues` 와 동일 규약). 슬롯→강제주제 env 접두사 사본 3곳은 `topic_pack.FORCE_ENV_PREFIX` 단일 소스로 통일.
+- **파일**: JARVIS02_WRITER/scheduler.py · economic_poster.py · trend_theme_writer.py · trend_economic_writer.py · JARVIS03_RADAR/topic_pack.py · JARVIS09_COLLECTOR/precollect.py
+- **교훈**: 재시도의 값어치는 *무엇을 물려주느냐* 에 있다. 주제와 실패 사유를 안 물려주면 그건 재시도가 아니라 **처음부터 다시**다.

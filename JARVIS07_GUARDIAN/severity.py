@@ -278,9 +278,22 @@ _TRANSIENT_PATTERNS = [
 #     · stuck / abort (데드라인·freeze) — 반복되면 진짜 성능 결함일 수 있다.
 #       게다가 2026-07-18 이후 발생 0건이라 지금 막을 실익이 없다. 늘어나면 그때 재검토.
 #     · execution_error — 코드에서 실제로 난 예외. 반드시 Tier-2 유지.
-#     · draft_invalid / data_empty / send_failure / login_invalid / factuality — 미승인.
+#     · draft_invalid / data_empty / send_failure / login_invalid — 미승인(유지).
+#
+#   ★★ factuality 는 2026-07-22 '미승인' → 2026-07-25 **승인으로 번복** (사용자 판단).
+#      번복 사유 — 2026-07-25 경제 티스토리 사고의 실측:
+#        · 게이트가 *진짜 사실*(KRX·기사 원문 근거의 반도체 -9.5%)을 오차단했다.
+#          진짜 원인은 NaN 이 grounds() 를 크래시시켜 게이트가 '미확인'으로 삼킨 것.
+#        · 그런데 GUARDIAN 은 이 차단을 *코드 버그* 로 보고 Tier-2 를 2회 태웠고
+#          (error_log id=4142: llm_attempts=2, fixed_file=None → 고친 것 0),
+#          더 나쁘게는 'FactualityGateTitleFabrication'(=LLM 이 제목 수치를 날조) 이라는
+#          **틀린 교훈을 학습 원장에 박제**하고 프롬프트까지 고쳤다(커밋 363f5c2).
+#        · 즉 사실성 차단은 *글 내용* 의 문제이지 코드의 문제가 아니다 — engagement 와 같은 부류.
+#          진짜 코드 결함이 뒤에 숨어 있어도 Tier-2 의 눈먼 추측이 아니라 근본원인 분석이 답이다.
+#      가시성은 유지된다(오류 기록 자체는 남음) — 반복되면 사람이 본다.
 NON_CODE_ISSUE_KINDS = frozenset({
     "engagement",     # 품질 점수 미달 — 글이 안 좋은 것이지 코드가 틀린 게 아니다
+    "factuality",     # 사실성 차단 — 근거 미확인은 *글 내용* 문제 (2026-07-25 승인, 위 주석)
     "infra_throttle", # 스로틀·락 경합 — 순번이 밀린 것
     "draft_failed",   # 대본 생성 실패 (LLM 무응답·HTML 생성 실패)
     "empty_output",   # LLM 응답 빈값
