@@ -2,6 +2,683 @@
 
 ---
 
+## [498] ✅ 해결 — 밴딧이 3,062회 동안 학습을 멈춘 채 돌았다 — "영향 0인 결정"에 벌점을 준 귀속 오류 (2026-07-25)
+
+> ★ **맥락**: ERRORS [496] 감사 마무리 중 발견. 사용자 지시 *"이거 너무 심각한데, 무조건 고쳐야해.
+> 현업에서는 어떤 방식을 쓰지?"* → 진단·업계표준·선택지를 제시하고 사용자가 1~4단계 전부 승인
+> (5단계 비컨텍스추얼 강등은 **미승인** — 28D 컨텍스추얼 유지).
+
+- **증상**: `bandit_state.json` 8 arm 중 **7개가 `n=3062 / rsum=-3062.0`(평균 정확히 -1.000)**.
+  소수점 한 자리도 안 틀리게 동일. `learned_new` 만 `n=24 / rsum=+24`(평균 +1.000, 무패).
+  3062×7 + 24 = 21,458 = `obs_count` 정확히 일치 — 우연이 아니라 구조.
+  → θ 가 arm 을 구분하지 못해 **순위가 사실상 불확실성 항으로만 결정**. 학습이 죽어 있었다.
+- **환경**: `JARVIS07_GUARDIAN/pattern_fixer.py:_try_fixer_group` · `bandit.py:reward/_arm_key`
+- **원인 ① — 귀속 오류(치명)**: `_try_fixer_group` 이 **그룹 전체 실패 시 후보 전원에게 -1** 을 줬다.
+  그런데 밴딧이 정하는 것은 *시도 순서* 뿐이고, 아무도 매칭 안 되면 어차피 7개를 **전부** 시도한다.
+  즉 **순서를 어떻게 정했든 결과가 같았다** — 영향이 0이었던 결정에 보상을 매긴 것.
+  이건 학습 신호가 아니라 **잡음 주입**이다. 잡음:신호 = **3062:24 = 127:1** 로 진짜 신호가 묻혔다.
+- **원인 ② — arm 정체성 오염(교묘)**: 같은 '학습 캐시 조회' 전략인데 경로마다 다른 이름을 넘겼다.
+  · 실패 경로 → 그룹명 `"learned"` → `_arm_key` → **`learned_verified`**
+  · 성공 경로 → `bandit_arm_name()` → `"new:<지문>"` → **`learned_new`**
+  즉 **이기면 A 이름으로 상을 받고 지면 B 이름으로 벌을 받았다.** A 는 전승·B 는 전패가 되는
+  자기충족 예언 — `learned_new` 의 "무패 +1.000" 은 실력이 아니라 **집계 착시**였다.
+- **헛다리**: *"보상 스케일·α(탐색강도)를 조정하면 된다"* → **틀림**. 스케일 문제가 아니라
+  **관측의 귀속(attribution)** 문제다. 전 arm 이 같은 값을 받으면 어떤 스케일이든 구분이 0이다.
+- **업계 표준 대조**: ① 귀속 가능한 관측만 기록 ② 선택되지 않은 arm 에 결과를 귀속시키지 않음
+  (off-policy / IPS) ③ arm 키는 *전략* 으로만 결정 — 성과가 이름에 섞이면 자기충족 예언
+  ④ 비정상성 대응은 discounted / sliding-window UCB ⑤ 보상 분산 붕괴 모니터링.
+  **5개 전부 위반**하고 있었다.
+- **해결 (사용자 승인 4단계)**:
+  1. **귀속 불가 보상 제거** — 그룹 전체 실패 시 기록 안 함. *누가 성공했을 때 그 앞에서 실패한
+     arm* 의 -1 은 유지(그건 "이 맥락에서 A 는 안 먹었는데 B 는 먹었다" = arm 간 **직접 비교**).
+     킬스위치 `GUARDIAN_BANDIT_ATTRIBUTED_ONLY=0`.
+  2. **arm 키 단일 규칙** — `learned_arm_name()` 신설(① 단일 진입점). 양쪽 경로가 같은
+     fingerprint·같은 hit_count 로 같은 arm 을 지목. hit_count 는 학습 원장에서 *조회*(② 동적).
+     **랭킹 경로도 같은 arm 을 보도록** 수정(③ — 종전엔 랭킹은 그룹명, 보상은 지문 기반이라 어긋남).
+  3. **감쇠 + 초기화** — Russac et al. 형태 discounted linear UCB: `V ← γ(V-λI) + λI + xxᵀ`.
+     ★ ridge `λI` 는 감쇠 대상이 아니다 — 같이 곱하면 A→0 수축 → `A⁻¹` 폭발 → 탐색항 발산.
+     γ=0.995(기억창 ≈200 관측), `GUARDIAN_BANDIT_GAMMA` 로 무배포 조정.
+     `n` 을 int→**float** 로 (γ 를 곱하면 1→0.995 라 정수로는 감쇠가 조용히 소실된다 — 읽는 4곳 전부).
+     오염된 과거는 1회 초기화(arm 이름·feature_version 보존, ADR 016 선례).
+  4. **퇴화 감지 `bandit.selfcheck()`** — D1 평균보상 분산≈0(학습 정지) / D2 pull 횟수 전부 동일
+     (일괄 보상 = 귀속 버그 재발) / D3 최저 보상 고착 / D4 레지스트리와 arm 공간 어긋남.
+- **검증** (전부 실행 재현): 옛 오염 상태 투입 → selfcheck **4건 감지** · 현재 OK /
+  그룹 전체 실패 → 보상 호출 **0건**(종전 4건) / 귀속 가능한 실패만 기록 확인 /
+  실패·성공 경로 arm 일치(`learned_new`) / 감쇠 실측 30회 후 `n=27.92<30` ·
+  평균 `-0.075<0.000`(최근 반응) / **arm 간 평균보상 +1.000 vs -1.000 으로 벌어짐**(종전 spread 0.000) /
+  precommit 58종 0건.
+- **교훈**:
+  - **보상을 주기 전에 "이 결정이 결과를 바꿨는가"를 물어라.** 안 바꿨으면 기록하지 마라 —
+    그건 학습이 아니라 잡음이다. 강화학습에서 가장 흔한 침묵의 실패가 잘못된 credit assignment 다.
+  - **arm 이름에 성과를 섞지 마라.** 이기면 A·지면 B 로 기록되면 A 는 영원히 무패다(자기충족 예언).
+  - **감쇠 없는 누적은 회복 불가다.** 3062:24 는 로깅만 고쳐서는 못 씻긴다.
+  - **학습에도 스모크가 필요하다.** 밴딧은 3,062회 동안 *돌고 있었고* 아무도 몰랐다 —
+    `patch_effective()` / `store_effective()` 와 같은 병. **코드가 도는 것 ≠ 학습이 되는 것.**
+
+---
+
+## [497] ✅ 해결 — 학습 원장 비원자 쓰기 + 프로세스 경계 미방어 (2026-07-25)
+
+> ★ **맥락**: ERRORS [496] 2차 적대적 검증이 발견한 CRITICAL. 커밋 `c9c7c2b`(테마도 subprocess)로
+> 교차 프로세스 writer 가 1개(경제) → 2개(경제+테마)가 되면서 위험이 실재화됐다.
+
+- **증상**: `pattern_fixer._save_learned` 와 `bandit._save` 가 각자 `Path.write_text()` 사용.
+  이건 *truncate-in-place* 라 파일을 0바이트로 자른 뒤 다시 쓴다. 그 사이(실측 7.7ms) 다른
+  프로세스가 읽으면 **잘린 JSON**(실측 82.9%). 두 로더가 파싱 실패를 **빈 구조로 삼켜**
+  다음 저장이 그걸 덮어쓴다:
+  `learned_patterns.json` 48패턴(409KB) → 1패턴(7.8KB) /
+  `bandit_state.json` 8arm·obs 21,451·fv3 → 1arm·obs 1·fv1(28D→14D 퇴행). 로그는 WARNING 한 줄.
+- **원인**: 락이 둘 다 `threading.Lock` — **같은 프로세스만** 방어. ERRORS [474] 와 동일한 병.
+  정황 증거: `learned_patterns.json.bak`(443,445B) > 현재 원본(409,417B) — 이미 한 번 줄었을 가능성.
+- **해결**: `JARVIS07_GUARDIAN/json_store.py` 신설 — 저장 로직 단일 진입점(①. 종전엔 두 파일이
+  `write_text` 를 각자 복사해 보유). ① 원자 교체(임시파일→`fsync`→`os.replace`) ② 교차 프로세스
+  `fcntl.flock` ③ **재진입 가능**(flock 은 open file description 단위라 같은 프로세스가 또 열면
+  자기 락에 막힌다 — RMW 를 감싸고 안에서 `write_json` 을 부르면 정확히 그 상황) ④ 손상 시
+  `.corrupt-<ts>` 격리 + `.bak` 승격 ⑤ `store_effective()` 스모크.
+  `eval_agent` RMW 2곳도 `locked()` 로 감쌈(종전엔 `got=False` 여도 강행 → lost update).
+- **검증**: 40회 동시쓰기 중 독자가 본 깨진 파일 **0건** · 재진입 데드락 없음 · 손상 시 `.bak`
+  복구 2패턴 · 실자산 무손상(48패턴/8arm/fv3) · precommit 58종 0건.
+- **교훈**: **`write_text` 는 원자적이지 않다.** 여러 프로세스가 읽고 쓰는 파일에는
+  `os.replace` + 파일락이 필수. 그리고 **로더가 손상을 빈 구조로 삼키면 그 순간 전멸의 방아쇠**가 된다.
+
+---
+
+## [496] ✅ 해결 — 오류 판별 체계 전면 감사·수정 — "코드버그를 transient 로 삼켜 폐기" 외 9종 (2026-07-25)
+
+> ★ **맥락**: 사용자 질문 *"오류를 어떤 기준으로 오류라고 판별하지? 이게 현업 방식과 맞나,
+> 우리만의 허술한 자체 방법인가?"* → 코드 4렌즈 + 현업표준(Sentry·SRE·OTel·APR) 3각도 +
+> 적대적 검증 감사. 이어 *"결함과 부족함을 전부 채우고 보완해줘"* 로 2차에 걸쳐 수정.
+
+- **증상**: 판별 체계에 *"이게 오류인가"* 판정이 없고 실질 기준은 **"코드로 고칠 수 있나"** 하나인데,
+  그 판단 재료의 29.1%(216/742)가 **자사 한국어 로그 문구 정규식**이었다. 결과:
+  ① **코드버그 8/8 이 transient 로 오분류** — docstring 이 *"코드 버그 타입은 절대 transient 로
+     분류하지 않음(오탐 방지)"* 이라 단언하는데 **그 분기가 본문에 없었다**.
+     라이브 물증 #582: `ImportError: cannot import name 'HuggingFaceProvider'` 가
+     "HuggingFace 네트워크 오류"를 거르려 넣은 클래스명에 걸려 `ignored` 폐기.
+  ② `log_scanner` **70일간 0건** — 로그 포맷 `[ERROR   ]`(패딩) vs 정규식 `\[ERROR\]`.
+     55파일 전수 0매치, DB `source='log_file'` 은 2026-05-15 이후 전무. **아무도 몰랐다.**
+  ③ 빈도 severity 자동 상향이 **없는 컬럼**(`created_at`) 조회 → `except: pass` 로 **상시 무력**.
+  ④ `is_auto_fixable()` **호출자 0** — CLAUDE.md 가 "단일 진입점"이라 박제한 게이트가 부재.
+  ⑤ `eval_agent.STATIC_FIXERS ∩ pattern_fixer._FIXER_REGISTRY = ∅` — 정적 fixer 7종 전부
+     "unknown→보수적 통과 70점". 드리프트가 아니라 **처음부터 구조적 rubber-stamp**.
+  ⑥ `invoke_text` 가 예외 대신 `""` 반환 → 진실성 감사가 **수치 검사 0회로 통과**(fail-open).
+  ⑦ harness 가 원인 타입을 `RuntimeError` 로 합성(**342건 100%**) → 타입 게이트 전부 무효.
+  ⑧ `incident_responder` 가 로그꼬리 3000자에 **경계 없는 부분문자열** — 세션 UUID 안
+     `...a0a10a4403cb` 의 `403` 이 발행실패 대응 경로를 결정(재현 성공). 게다가 로컬 목록 2개가
+     단일 진입점 위임을 **앞뒤로 포위**해 무력화. (부수 발견: 중복 `_classify` 정의 중
+     살아있는 쪽이 미정의 심볼 참조로 **실제 NameError 를 던지고 있었다**.)
+  ⑨ 자동수정 "성공" 판정이 `ast.parse`+import 통과뿐 → 원 오류를 재확인하지 않고
+     **밴딧에 단방향 양의 보상** → *증상 은폐를 강화학습*.
+  ⑩ 격리 버킷 관측 부재 — `ignored` 440건 중 **221건이 `resolution` NULL**.
+- **환경**: `severity.py` / `error_collector.py` / `error_fixer.py` / `eval_agent.py` /
+  `pattern_fixer.py` / `guardian_agent.py` / `incident_responder.py` / `bandit.py` /
+  `harness.py` / `shared/{llm,db}.py` / `prepublish_gate.py` / `law_enforcer.py`
+- **원인**: 판별 재료가 *우리가 직접 찍은 자연어 로그 문구* 였다. 업계 표준은 스택트레이스·
+  예외 객체·구조화 메트릭으로 판별하고 메시지는 **지문 우선순위 최하위**로 둔다(Sentry).
+  게다가 harness 가 타입을 지워(81%) **메시지 말고 볼 게 없는 구조를 시스템이 스스로 만들었다.**
+  → 로그 문구를 바꾸면 필터가 *소리 없이 죽고*, 우연히 겹치면 *진짜 버그가 버려진다*.
+- **헛다리** (전부 실측으로 기각 — 다시 시도 금지):
+  - *"log_scanner 정규식 패딩을 맞추면 된다"* → **틀림**. 맞추는 순간 `[WARNING ]` 4,697줄 +
+    `[ERROR   ]` 809줄이 깨어나고 그중엔 **재시도로 이미 회복된 건이 대량**. 표준은 애초에
+    로그 텍스트로 판별하지 않는다 → **traceback 블록(구조적 신호)만 취하도록 전환**(파싱 98%).
+  - *"`ignored` 440 > `fixed` 67 = 6.5배가 이상 징후"* → **표준과 정반대**. Ewaschuk:
+    *"over-monitoring is a harder problem than under-monitoring."* 높은 필터율 자체는 정상.
+    오작동의 증거는 **8/8 오탐 재현** 하나로 충분하다.
+  - *"수집 시점에 '진짜 오류인가' 판정이 없는 게 결함"* → **표준을 거꾸로 읽은 것**.
+    Sentry·Rollbar·BugSnag 모두 수집 시 판정하지 않는다. 진짜 결함은 **판정 시점과 되돌림**이다.
+  - 1차 수정 보고서 주장 7건이 검증에서 기각(근거 쿼리 모집단 오류·과장·전제 오류).
+- **해결 (2차)**:
+  - **(1차)** 코드버그 가드 신설(`CODE_BUG_TYPES` = 기존 두 집합 **합집합 파생**) /
+    등급 강등 대상 축소 / 죽은 정규식·중복 24토큰·벤더 하드코딩 제거 /
+    `created_at`→PRAGMA 파생 / `is_auto_fixable` Tier-2 게이트 배선 /
+    `STATIC_FIXERS` 를 레지스트리에서 파생 / **원 오류 재현 검증**(`verification` 3상태) +
+    **양방향 밴딧 보상** / `invoke_text_result(text, ok)` 신설(기존 `invoke_text` 는 그 위에 얹음) /
+    사실성 fail-closed / 로그스캐너 traceback 전환 / dedup·쿨다운 정규화 / 스모크 테스트 /
+    harness 원인타입 보존 + kind 부여 2벌→1벌 + 되돌림 id 를 메모리→DB.
+  - **(2차 — 검증이 잡아낸 신규 결함)** `report()` 인자순서 역전(신규 2줄, 컬럼 뒤바뀜) /
+    **발행창 refcount 누수**(try/finally 부재 — 커밋 `d0af298` 이후 누수 1회 = GUARDIAN
+    영구 정지) / 외생검증 관통 배선(`pattern_fixer:1164` 이 `verification` 미전달로 **라이브에서
+    한 번도 발동 안 함**) / `record_fix_failure` 호출부 / 발행창 학습 폐기 완화 /
+    code-removal 가드가 **정당한 삭제**(중복 def·dead code)를 거부하고 음의 보상까지 주던 것 완화 /
+    킬스위치 4종 로드시점→**호출시점** 조회 / 오탐 경보 전 버킷 확대 / `infra_throttle` 리터럴
+    4곳→`harness.INFRA_KIND` 파생 / bandit arm 을 `pattern_fixer` 에서 파생.
+  - **(정책 — 사용자 판단 2026-07-25)** `data_insufficient` 를 `NON_CODE_ISSUE_KINDS` 에 **추가**
+    (넣을지 뺄지 *결정한 적 없는* 누락 상태였음) / `guardian_error_hook.py` 배선 **안 함**
+    (Layer A·B 가 이미 커버) / `GATE_FAIL_CLOSED` **기본 1 유지**(미검증 글 발행보다 회차 거르기).
+- **검증**: 전수 컴파일 통과 · 모듈 12개 import(순환 0) · 코드버그 8/8 `False` ·
+  `engagement`·환경오류 회귀 0 · `MemoryError`+retry `low`→`critical` · `severity.selfcheck()` OK ·
+  **precommit 58종 위반 0건**.
+- **교훈**:
+  - **판별 재료가 곧 판별의 수명이다.** 자연어 로그 문구로 거르면, 문구를 바꾸는 순간 필터가
+    *조용히* 죽는다(70일). 구조화 필드(kind·예외 타입·traceback)로 걸러야 한다.
+  - **타입을 지우지 마라.** 예외를 래핑해 원인 타입을 잃으면 하류의 모든 타입 게이트가 무효가 된다.
+  - **"고쳤다" 는 원 오류를 재현해봐야 안다.** 파싱·import 통과는 *그럴듯함*이지 *고쳐짐*이 아니다.
+    검증 없이 양의 보상을 주면 시스템은 **증상 은폐를 학습**한다(APR overfitting 92~98%).
+  - **자기 채점 게이트는 도장 찍기로 퇴화한다**(arXiv 2606.28438). 외생 신호를 반드시 섞어라.
+  - **①단일 진입점의 payoff 는 위임한 쪽이 자동으로 방어를 물려받는 것**이다 —
+    `incident_responder` 가 로컬 목록을 지우고 위임하자 severity 의 새 가드를 공짜로 얻었다.
+  - **docstring 은 코드가 아니다.** "절대 ~하지 않음" 이라 적어두고 그 분기가 없으면
+    다음 사람은 방어가 있는 줄 안다. 그래서 `selfcheck()` 를 함께 둔다.
+
+---
+
+## [495] ✅ 해결 — 경제 브리핑 TITLE 수치 창작 — '수치 0존' 프롬프트가 <p> 산문에만 스코프, TITLE 은 감시망 밖 + 테마 미적용 (2026-07-25)
+
+> ★ **맥락**: harness RuntimeError(`JARVIS00_INFRA.harness.경제 브리핑 발행 — 티스토리`, `⑥ TS 대본 생성`,
+> attempt=2) — `[사실성] 출처·데이터 미확인: 반도체 -9.5% 출렁인 한 주`. 같은 실행에서 이미 한 차례
+> (`반도체 -9.5% 급락, 산업은 정말 끝났을까?`) 차단됐는데 재작성에서도 같은 수치를 표현만 바꿔 재사용 →
+> 3회 연속 차단 → max_attempts(2) 소진 escalation → GUARDIAN Tier-2 재시도(#4142, 시도 2/3)로 재유입.
+
+- **증상**: `article.html` 대조 결과 본문 `<p>` 산문에는 해당 수치가 전혀 없고 `<title>`(제목) 한 줄에만
+  존재 — LLM 이 궁금증 유발 목적으로 카탈로그에 없는 "-9.5%"를 제목에 지어냄.
+- **원인**: `draft_writer.py` 의 '수치 0존' 규칙이 "본문 산문(`<p>`...)은 *수치 0존*" 으로 스코프되어
+  TITLE 한 줄은 문언상 감시망 밖이었다 (사실성 게이트(`prepublish_gate._combined_quality_call`)는
+  title 을 이미 함께 검사하고 있었고 정상 차단했다 — 검증 로직은 정상, 생성 프롬프트만 허점).
+- **헛다리 아님·선행 조치 있었으나 미완결**: 같은 사고로 커밋 `363f5c2`(2026-07-25 07:50)가 이미
+  `_gen_economic_ts_nv`·`_build_section_system_msg`(경제 단일호출+섹션폴백, 네이버·티스토리 공용) 양쪽에
+  "TITLE 도 예외 아님" 문구를 추가했다. 그러나 ① 본 ERRORS.md 항목 박제가 누락됐고(강제 규정 위반)
+  ② ③원칙(모든 글에 적용) 점검 없이 **테마(`_gen_theme`)는 손대지 않아** 동일 문언 허점(수치 규칙이
+  일반 문단 톤으로 서술돼 있으나 TITLE 명시 부재)이 테마 네이버·티스토리 양쪽에 잔존.
+- **해결**: `_gen_theme`(`JARVIS02_WRITER/draft_writer.py`, 테마 네이버·티스토리 공용 단일 함수) 의
+  수치창작금지 블록에도 "★★ TITLE 도 예외 아님" 문구 동일 추가 → 경제·테마 4조합 전부 커버.
+  daemon 은 이미 07:50:26 재기동(363f5c2 의 07:44:24 파일 수정 *이후*)이라 경제쪽 수정은 이미 반영된
+  프로세스로 운영 중이었음을 확인.
+- **한계(프롬프트 기반 — 완전 결정론 아님)**: 본 수정은 *지시 강화* 이며 LLM 이 매 회 반드시 순응한다는
+  보장은 아니다. 사실성 게이트(검증)가 최종 안전망으로 계속 작동 — 재발 시 대본 재작성 순환으로
+  흡수되나, 반복 재발 시 TITLE 만 별도로 결정론 사전 스캔(예: 카탈로그 미근거 수치 정규식 감지 후
+  즉시 재작성 트리거)하는 전용 결정론 백스톱을 검토할 것.
+- **파일**: `JARVIS02_WRITER/draft_writer.py`(`_gen_theme` 1개 함수, 이번 세션 추가분).
+- **교훈**: 프롬프트 규칙을 "특정 태그(`<p>`) 안에서만" 으로 좁게 서술하면 그 태그 밖(TITLE·EXCERPT 등)은
+  자동으로 예외가 된다 — 규칙 서술 시 *출력 전체* 대상임을 명시할 것. 그리고 사고를 고칠 때는 ERRORS.md
+  박제와 ③원칙(4조합 전수 확인)을 코드 수정과 *같은 커밋 세션 안에서* 끝낼 것 — 다음 세션(GUARDIAN
+  자동 재시도)으로 미루면 같은 사고를 두 번 진단하는 낭비가 생긴다.
+
+---
+
+## [494] ✅ 해결 — 논문(paper/academic/kci) 완전 제거 + 출처 단일 레지스트리 신설 (source_type 사본이 10곳 흩어져 개념 하나 지우는데 17파일) (2026-07-24)
+
+> ★ **맥락**: 사용자가 논문 소스를 폐지(academic·kci provider 미등록)했는데, `COLLECT_PAPER_CAP`·
+> quota_group "paper"·"논문>API>뉴스" 신뢰서열·provider 파일 등 *옛 흔적*이 코드에 남아 혼동을
+> 유발("paper tier empty = bug" 오진단). 사용자 지시: "수정하면 옛 건 완전히 흔적도 없이 없애라."
+> 제거 도중 사용자 지적: "논문 하나 지우는데 이렇게 많은 파일? 단일 진입점·동적 설계를 진작 했다면
+> 하나 고칠 때마다 전체를 훑을 필요가 없다. 유지관리가 구현보다 중요하다."
+
+- **증상**: source_type 하나("academic")의 정보가 **10곳에 사본**으로 하드코딩 — 신뢰티어(models)·
+  쿼터그룹(models)·provider 클래스(providers/__init__ + collector_engine._PROVIDERS + chart_data._m
+  **3벌**)·카탈로그(data_planner)·라벨(06 ×2)·텍스트소스여부(chart_data)·차트랭크(chart_data ×2)·
+  discovery 도메인. 논문 제거에 **17파일** 순회 필요.
+- **원인**: ① 단일 진입점·② 동적 설계 위반. 같은 사실을 파생하지 않고 여러 파일에 *복사*해 둠.
+  실제 사고까지 유발: `_QUOTA_GROUP` 사본이 `SOURCE_TRUST_TIER` 와 드리프트해 '뉴스 0건'(2026-07-17).
+- **해결 (2단)**:
+  - **(A) 논문 완전 제거**: `academic_provider.py`·`kci_provider.py` 파일 삭제 + 16파일에서 paper/
+    academic/kci/COLLECT_PAPER/논문 흔적 전소. 쿼터 재설계: paper 티어 폐지·`COLLECT_API_CAP` 7→10
+    (논문 3자리 흡수)·신뢰서열 1칸 승격(API=1). `select_by_trust_quota`·`collect_research` paper 레그
+    제거. discovery 논문저장소 도메인(arxiv·kci.go.kr·sciencedirect 등) 제거. 검증: grep 흔적 0·
+    쿼터(kosis 10+news 5=15)·precommit 56종 0.
+  - **(B) 출처 단일 레지스트리 신설** `JARVIS09_COLLECTOR/source_registry.py` — `SourceSpec`(key·tier·
+    provider·catalog·is_text) 목록 `SOURCES` 가 유일한 정의처. 파생: `SOURCE_TRUST_TIER`(models 재노출)·
+    `main_providers()`(collector_engine._PROVIDERS)·`provider_class()`(chart_data 조회)·`CATALOG`
+    (data_planner)·`TEXT_SOURCES`(chart_data) 전부 자동 생성. provider 는 "module:Class" 지연 import로
+    순환 차단(레지스트리는 leaf, models 가 이걸 import). `_QUOTA_GROUP` 사본도 `trust_rank` 파생으로 폐지.
+- **효과**: **소스 추가/삭제 = `SOURCES` 한 줄.** 17파일 순회 → 0 (payoff 실증). 동작 동등성 확인
+  (_PROVIDERS 순서·카탈로그·텍스트소스·티어 100% 일치).
+- **파일**: source_registry.py(신설) + models·collector_engine·chart_data·data_planner·evidence_pack·
+  discovery·collector_agent·providers/__init__(09) + dispatchers(01)·draft_writer·trend_theme_writer(02)·
+  template_engine·infographic_engine(06)·measure_collection(tools). provider 2개 삭제.
+- **교훈**: 구현보다 **유지관리**. 같은 사실은 한 곳에서 *읽어라*(파생) — 복사하면 개념 하나 바꿀 때
+  전체를 훑고, 사본끼리 드리프트해 사고 난다. 새 메타데이터를 여러 파일에 박으려는 순간이 곧 레지스트리
+  신설 신호. (JARVIS06 라벨은 *데이터셋 provenance* 라는 다른 네임스페이스라 이 레지스트리와 별개 — 무리
+  통합 금지.)
+
+---
+
+## [493] ✅ 해결 — 경제/테마 2블로그가 30분을 넘던 근본원인 = 60% 런의 *무의미 재시도*(데이터부족→재작성해도 동일실패) + 코퍼스 비대 + 데드라인 계층 역전 (2026-07-24)
+
+> ★ **맥락**: [492] freeze 수정 검토 중 사용자가 "3600초(60분) 넘는 것 자체가 문제 — 타임아웃을
+> 늘리는 건 근본해결 아님. 2블로그 정상 작성은 30분 이내" 라고 박제. 데드라인은 *문제 탐지기*여야지
+> *수용 장치*가 아니다. 실측 로그로 진짜 병목을 규명해 "정상을 30분에 넣는" 수정을 했다(P1~P4, 타임아웃 상향 0).
+
+- **증상**: 경제 브리핑 정상 완료본조차 ~33분(0723 로그). 전체 경제 로그 35개 중 **21개(60%)에서 attempt=2
+  재시도**. `크로스 프로세스 잠금 45s 대기 초과` ×2~5회, `수집 전문 문서 205건→119K자` 병적 코퍼스,
+  seven_day 0.81·five_hour overage rejected.
+- **원인 (4겹, 지배항=①)**:
+  ① **무의미 재시도**: harness 재시도는 `_find_resume_step` 이 대본 step 부터 재개 → *수집 step 건너뜀*
+     → `collected.datasets` 불변 → 이미지/차트 부족(제4조·이미지사실성) 결정론적 재발. 유일 방어막인
+     fingerprint-abort(`harness.py:860`)는 `detail[:80]` 의 변동값(law_enforcer 카운트·prepublish seed
+     파일명) 때문에 매 attempt 지문이 달라져 **절대 발화 못 함** → attempt=2 전량 재실행(~15분 낭비).
+     경제엔 테마의 `data_empty→abort` 같은 "데이터부족=terminal" 분류가 아예 없었다.
+  ② **코퍼스 비대**: `collect_for_theme` 예외폴백이 무쿼터(205~226문서) + `DRAFT_CORPUS_MAX_CHARS`
+     기본 200000(사실상 무제한) → writer 프롬프트 119K자 → attempt-1 지연 + overage 진원.
+  ③ **데드라인 계층 역전**: 부모 `subprocess.run(timeout=3600)` < 자식 guard_main `2*BLOG+600=5400`
+     → 부모가 자식 협조종료 전에 SIGKILL. 2액션×2400=4800>3600 → 2번째 플랫폼 발행 중 강제종료.
+  ④ **락 경합**: 발행창 5분 주기 analyzer subprocess 가 `bg_defer_reason` 게이트 없이 전역 llm_exec.lock
+     경합(GUARDIAN 만 게이트돼 있었다).
+- **헛다리**: **"부모 백스톱을 4800으로 올린다"(1차 제안) — 반증됨.** 타임아웃 상향은 문제를 곪게 하는
+  안티패턴(사용자 지적). 또 "evidence_pack digest 자기억제(is_publishing) 제거"도 초안에 넣었다 반증 —
+  analyzer alias 는 발행창 경합을 피하려 선계산으로 이전된 것(`_BG_ALIASES` 비포함·`shared/llm.py:448`)이라
+  제거하면 P3 가 줄이려는 발행창 LLM 경합을 오히려 재도입. 되돌리고 코퍼스는 캡으로만 잡았다.
+- **해결 (P1~P4)**:
+  - **P1** 무의미 재시도 제거: prepublish 이미지사실성 leg → `kind="data_insufficient"` + seed 파일명
+    제거(불변 detail). 경제 `_fix_platform`·테마 fix 에 `data_insufficient→abort`(테마 data_empty 동형)
+    → attempt=1 후 즉시 종결. (`prepublish_gate.py`·`economic_poster.py`·`trend_theme_writer.py`)
+  - **P2** 코퍼스 캡: `DRAFT_CORPUS_MAX_CHARS` 200000→40000, 스윕 폴백에 `select_by_trust_quota`(15건 SSOT).
+    (`draft_writer.py`·`collector_engine.py`)
+  - **P3** 발행창 LLM 게이트: analyzer fallback `_run` 최상단 `bg_defer_reason()` 게이트(GUARDIAN 동형). (`jobs.py`)
+  - **P4** 계층 역전 원복: 부모 백스톱 = `2*BLOG+900`(부모>자식 파생, 하드코딩 3600 제거), MAX_RETRIES 를
+    harness.DEFAULT_MAX_ATTEMPTS 에서 `__getattr__` 지연 파생(3→2 드리프트 제거). (`scheduler.py`·`watchdog.py`)
+  - **미적용(사용자 결정)**: P5(액션 데드라인 2400→900)는 P1~P4 검증·정상런 ≤12분 확인 후로 보류.
+- **파일**: 위 8개. **교훈**: 데드라인이 30분을 넘으면 그건 정상이 아니라 *신호*다 — 늘리지 말고 *왜 넘는지*
+  (무의미 재시도·입력 비대)를 고쳐 정상을 30분에 넣어라. 재시도는 *입력이 바뀔 때만* 의미가 있다(수집을
+  건너뛰는 재시도는 데이터부족 실패를 결정론적으로 재현). fingerprint 는 `detail` 에 변동값이 있으면 무력화된다.
+
+---
+
+## [492] ✅ 해결 — 경제 브리핑 네이버 발행 watchdog freeze(304s>300s) 강제종료 — 진짜 원인은 차트 인포그래픽 Chromium 렌더(`_html_to_jpg`)의 beat 누락 + networkidle 원격폰트 대기 (2026-07-24, 진단 정정)
+
+> ★ **정정 이력**: 이 항목의 1차 진단(제목·원인이 "Pollinations GET beat 누락")은 **오귀속**이었다.
+> 재확인(사용자 "한번 더 체크") 결과 오늘 freeze 는 Pollinations(사진·썸네일 전용)가 아니라
+> **차트 인포그래픽을 래스터화하는 Chromium 렌더(`html_infographic._html_to_jpg`)** 에서 났다.
+> 아래는 정정된 진단과 5종 근본 수정이다. Pollinations 의 `_get_with_beat` 는 *유효한 일반 예방
+> 방어* 로 유지하되, 오늘 사건의 원인은 아니다.
+
+- **증상**: 경제 브리핑 네이버 발행 harness 액션이 차트 슬롯(`✅ [slot] CHART_N 실데이터 렌더 완료`)을
+  진행하다 마지막 로그줄(CHART_7 완료) 직후 아무 로그 없이 멈추다가
+  `[watchdog] 🛑 '경제 브리핑 발행 — 네이버': 멈춤(freeze) 304s > 300s 무진전` →
+  `강제 종료(os._exit 75) — killable subprocess`. naver·tistory 둘 다 "실패" 로 보고됐다.
+  **그런데 실제로는 두 글 다 발행됐다** — in-process 재시도가 성공했기 때문(아래 부수사건 참조).
+- **환경**: `JARVIS06_IMAGE/html_infographic.py:_html_to_jpg` — 모든 인포그래픽 래스터화의
+  *단일 깔때기*(경제·테마×네이버·티스토리 4조합 공용). 어제 차트 0개 → freeze 없음 /
+  오늘 차트 8개 → freeze. **차트 수와 상관.**
+- **원인 (정정)**: 두 겹.
+  1. **beat 누락**: `_html_to_jpg` 가 `subprocess.run([...], timeout=120)` 으로 Chromium 렌더를
+     블로킹 대기하는데, 이 대기 구간에 `watchdog.beat()` 가 전혀 없었다. harness step 은 차트 여러 장을
+     한 스텝에서 직렬 렌더하므로 누적 무신호 시간이 300s 를 넘겼다.
+  2. **networkidle 원격폰트 대기**: render_code 가 `pg.goto(..., wait_until='networkidle')` 를 썼는데,
+     인포그래픽 HTML 이 참조하는 원격 웹폰트(Google Fonts)가 네트워크 열화로 trickle 될 때
+     `networkidle`(네트워크 유휴)이 페이지당 오래(최대 goto 타임아웃) 블로킹된다. 차트 8장 누적이
+     freeze 임계를 넘긴 결정타. **ERRORS [456][457][9163][9171]** 와 같은 버그 클래스(“timeout= 은
+     총 소요 상한이 아니다 / 블로킹 구간 안에 beat 가 있어야 한다”)이지만, 이번 choke point 는
+     *네트워크 호출이 아니라 로컬 Chromium 렌더 subprocess* 였다는 점이 핵심.
+  - Pollinations 는 차트 렌더에 관여하지 않는다 — 차트=matplotlib/HTML 인포그래픽(Chromium),
+    Pollinations=본문 AI 사진·대표 썸네일 전용. 1차 진단이 "남은 유일한 네트워크 호출" 이라는
+    *추정* 으로 Pollinations 를 지목한 것이 오귀속의 원인.
+- **부수사건 (같은 로그의 두 모순)**:
+  - **오경보 escalation**: harness `_on_stuck` 이 killable subprocess(다음 예약에 자연 재시도됨)인데도
+    "🚨 하네스 검증 순환 한계 — 송출 차단" 을 보냈다. killable freeze 는 정상 복구 흐름이라 수동
+    조치가 불필요한데 사용자에겐 치명 실패처럼 보였다.
+  - **Tier-2 SDK 낭비**: `incident_responder._classify` 가 rc=75 강제종료를 자연어 텍스트 기준으로
+    `unknown` 으로 분류 → Tier-2 SDK(Sonnet 5) 600s 세션을 헛돌렸다(traceback 없어 files_fixed=0 확정).
+    그 사이 in-process 재시도가 성공해 실제 발행됨 → "실패 알림 왔는데 발행됨" 모순.
+- **헛다리**: **"Pollinations GET beat 누락이 원인"(1차 진단) — 반증됨.** Pollinations 는 차트 경로에
+  없다. `pollinations_provider._get_with_beat` 는 일반 예방 방어로 남기되(다른 네트워크 사진 호출엔
+  유효), 오늘 freeze 의 원인으로 기록하지 말 것. (docstring 의 2026-07-24 귀속 문구도 함께 정정함.)
+- **해결 (5종)**:
+  1. **#1 `_html_to_jpg` beat 배선**: `subprocess.run` → `subprocess.Popen(..., start_new_session=True)`
+     + `communicate(timeout=_RENDER_BEAT_POLL_SEC)` 폴링 루프. 매 `TimeoutExpired` 마다 `watchdog.beat()`
+     호출(렌더 대기 중 진행 신호). 하드 상한(`_RENDER_HARD_TIMEOUT_SEC=120s`) 초과 시
+     `os.killpg(os.getpgid(pid), SIGKILL)` 로 프로세스 그룹째 종료(좀비 방지). poll 주기 =
+     `FREEZE_LIMIT_SEC/30 ≈ 10s` **파생**(하드코딩 금지 — CLAUDE.md ② 동적 설계).
+  2. **#3 networkidle→load + 바운드 goto**: `wait_until='networkidle'` → `'load'`, `pg.set_default_timeout`
+     + `goto(timeout=_RENDER_GOTO_TIMEOUT_MS=15000)` try/except 로 원격폰트 무한대기 차단
+     (로컬 file:// 은 DOM load 로 충분). 로컬 폰트 @font-face 치환은 *발행 차트 시각을 바꿀 위험* 이라
+     채택하지 않음 — macOS 시스템 CJK 폴백으로 tofu 없이 기존 Noto 시각 유지.
+  3. **#2 슬롯 루프 beat(벨트-앤-서스펜더)**: `slot_renderer.render_slots_in_text /
+     render_slots_from_collected`, `draft_processor._generate_charts / _render_photo_slots` 의 슬롯
+     루프 진입마다 beat()(innermost 렌더는 #1 이 이미 커버).
+  4. **#4 rc=75 → transient 구조적 분류**: `incident_responder._classify(error_text, returncode)` 최우선
+     분기 — `returncode == WATCHDOG_KILL_RC(75)` 면 자연어 무관하게 `transient` 확정 → Tier-2 SDK 낭비
+     차단. 배선: scheduler `_trigger_economic_incident(returncode=result.returncode)` →
+     `respond_in_background` → `respond` → `_classify`. **경제 subprocess 경로만** 배선(테마는 in-process
+     /non-killable 이라 os._exit rc 신호 자체가 없음 — 정당한 비대칭). `severity.NON_CODE_ISSUE_KINDS`
+     는 **불변** — 사용자 박제 2026-07-22(freeze/stuck 은 반복 시 진짜 성능결함일 수 있어 *가시성* 유지).
+  5. **#5 harness `_on_stuck` killable 정보성 분기**: killable subprocess 면 "🚨 송출 차단" 대신
+     "⏱ 정지 감지 — 자동 재시도 예정(수동 조치 불필요)" 정보성 알림. non-killable in-process 동작은
+     종전대로 escalation(자연 재시도 없음). 원인 진단(`_report_issues_to_guardian`)은 양쪽 다 유지.
+  - **정정**: `pollinations_provider._get_with_beat` docstring 의 "2026-07-24 CHART_7 직후 freeze" 귀속
+    문구를 "일반 예방 방어 + 실제 원인은 차트 Chromium 렌더" 로 교체.
+- **파일**: `JARVIS06_IMAGE/html_infographic.py`, `JARVIS06_IMAGE/slot_renderer.py`,
+  `JARVIS06_IMAGE/draft_processor.py`, `JARVIS06_IMAGE/providers/pollinations_provider.py`,
+  `JARVIS07_GUARDIAN/incident_responder.py`, `JARVIS02_WRITER/scheduler.py`, `JARVIS00_INFRA/harness.py`.
+- **★ 4조합 커버리지**: `_html_to_jpg` 는 모든 인포그래픽 래스터화 단일 깔때기 → #1·#3 한 곳
+  수정으로 4조합(경제·테마×네이버·티스토리) 동시 보호. #4 의 경제-only 배선은 테마가 non-killable
+  in-process 라 애초에 os._exit(75)로 죽지 않아 rc 신호가 없기 때문(구조적 비대칭이지 누락 아님).
+- **검증**: `_classify('...', 75)=='transient'` / `_classify('...', 0)=='unknown'` ·
+  `_html_to_jpg` 스모크(8.6s 렌더 성공, 27KB JPG) · poll=1s 강제 시 렌더 대기 중 beat 3회 발화 확인 ·
+  precommit 56종 0건 · 데몬 재시작 후 mtime 검증(start 11:41:01 > newest_mtime).
+- **교훈**:
+  1. **"네트워크만 감쌌다" 는 착각** — 300s watchdog 앞의 진짜 choke point 는 네트워크가 아니라
+     *로컬 렌더(Chromium subprocess)* 였다. 블로킹 구간은 네트워크뿐 아니라 렌더·subprocess·세마포어
+     대기 전부 — 각 구간에 beat 가 있는지 확인할 것.
+  2. **1차 진단을 로그로 재확인하라** — 마지막 로그줄(CHART_N 완료)이 freeze 직전이라는 사실이
+     "차트 렌더가 범인" 을 가리켰는데, "남은 유일한 네트워크 호출" 이라는 추정으로 Pollinations 를
+     지목한 게 오귀속이었다. 코드 존재·추정이 아니라 *로그의 마지막 진행 지점* 이 증거다.
+  3. **killable subprocess 의 freeze 는 정상 복구** — os._exit(75) → 다음 예약 자연 재시도. "송출 차단"
+     escalation 은 오경보였다. 분류는 자연어 로그가 아니라 *종료코드(구조적 신호)* 로 하라.
+  4. **"실패 알림 왔는데 발행됨" = 분류 오류의 신호.** rc=75 를 코드버그로 오분류해 Tier-2 를
+     600s 헛돌리는 동안 in-process 재시도가 성공했다. 모순되는 두 신호가 보이면 분류부터 의심할 것.
+
+---
+
+## [491] ★ 폐기 모델 이름이 저장소 전역에 살아 있었다 — *검사기 자신이 사본* 이라 못 잡았다 (2026-07-24)
+
+- **증상**: 사용자 지시 — *폐기된 모델 이름 3종을 "흔적도 없이 전부 삭제" 하라*.
+  (지시문에 있던 실제 모델명은 여기에도 옮기지 않는다 — 옮기는 순간 그게 또 하나의 흔적이다.)
+  ADR 017(모델 단일 계층)은 2026-07-06 에 확정됐는데, 폐기된 모델 이름이 **코드 6곳·문서 다수·
+  ERRORS 수십 줄·프로젝트 설정 핀** 에 그대로 남아 있었다. 특히 `.claude/settings.json` 의
+  `"model"` 핀은 *실제로 죽은 모델을 지정* 하고 있었다.
+- **환경**: `shared/llm.py` · `shared/precommit_check.py` · `shared/claude_sdk_compat.py` ·
+  `JARVIS07_GUARDIAN/auto_repair.py` · `JARVIS01_MASTER/agent_tools.py` ·
+  `JARVIS03_RADAR/daily_review.py` · `docs/decisions/*` · `CLAUDE.md` · `README.md` ·
+  `.claude/settings.json` · `~/.claude/settings.json`
+- **원인** — 한 뿌리, 두 갈래:
+  ① **모델 ID 리터럴이 복사돼 있었다.** `shared/llm.py` `MODELS` 가 진실인데, 6개 파일이 같은
+  문자열을 자기 안에 **박아** 뒀다(`_MODEL = "claude-..."`, `model="claude-..."`). 진실이 바뀌어도
+  사본은 안 바뀐다 — 루트 CLAUDE.md "복사본을 진실로 믿지 말 것" 의 교과서적 사례.
+  ② **검사기 자신이 사본이었다.** 종전 `precommit_check.check_model()` 은 *유효 모델 ID 목록을
+  코드에 박아* 두고 대조했다. 그래서 모델이 바뀌면 검사기도 같이 낡았고, `.md` 문서는 아예
+  스캔 대상이 아니었다. **검사가 있는데 무력한** 상태 — [488] 과 같은 병.
+- **헛다리**: "ADR 을 갱신했으니 정리됐다" 는 판단. 문서 1개를 고쳐도 *이름은 코드·주석·설정에
+  더 오래 남는다*. 그리고 이름이 남아 있으면 다음 작업자와 자가수정 LLM 의 손이 그리로 간다.
+- **해결**:
+  1. **파생 API 신설** — `shared/llm.py` 에 `model_id(alias)` / `live_model_ids()` 공개 함수 추가,
+     `__all__` 등재. 모델 ID 리터럴의 소유자는 이 모듈 하나뿐임을 코드로 못 박음.
+  2. **사본 6곳 제거** — `auto_repair._MODEL` · `agent_tools` 3곳 · `claude_sdk_compat.run_sdk_query`
+     (`model=None` 기본값 + 함수 안 지연 파생 — `shared.llm` 이 이 모듈을 import 하므로 최상단
+     import 는 순환).
+  3. **검사기 전면 재작성** — 유효 ID 를 박지 않고 `shared/llm.py` **원문을 매 실행 파싱** 해 파생.
+     못 읽으면 통과가 아니라 `model/self-check` 위반(fail-closed). 3레그:
+     `model/self-check` · `model/hardcoded-id`(소유자 밖 .py 의 ID 리터럴) ·
+     `model/dead-name`(살아있지 않은 ID·라벨 — **`.md` 문서 포함**).
+  4. **문서 일소** — 폐기 모델만 다루던 ADR 002·015 **파일 삭제**, README 색인 정리, ADR 017 재작성,
+     CLAUDE.md·README.md·ERRORS.md 전 구간에서 이름을 *성격*(당시 상위 계층 / 저비용 계층 등)으로 치환.
+  5. **설정 핀 제거** — `.claude/settings.json` 의 죽은 `"model"` 키, `~/.claude/settings.json` 의
+     죽은 모델 permission 항목 제거.
+- **파일**: 위 환경 목록 전부 + `docs/decisions/{002,015}-*.md` 삭제
+- **교훈**:
+  1. **"이름을 역사로 보존" 은 흔적을 남기는 것과 같다.** 역사는 *성격* 으로 쓴다 — "당시 상위 계층
+     모델" 이라고 쓰면 의미는 남고 손이 갈 이름은 사라진다.
+  2. **검사기가 목록을 박고 있으면 그 검사는 시한부다.** 검사는 *진실을 매번 읽어* 판단해야 하고,
+     읽기에 실패하면 통과가 아니라 위반이어야 한다(fail-closed).
+  3. **흔적 제거는 코드보다 주석·문서·설정에서 더 오래 걸린다.** 스캔 대상에 `.md` 와 설정 파일을
+     반드시 포함할 것.
+  4. 남은 것: DB `error_log` 의 과거 21행에 폐기 이름이 *런타임 이력* 으로 남아 있다(코드 아님).
+     지우면 그 시기 오류 이력이 함께 사라지므로 **사용자 요청 시에만** 정리.
+
+---
+
+## [490] ★ 경계가 *갯수* 로만 지켜지고 있었다 — 09 API 를 한 종만 쓰며 내부를 붙잡던 4곳 + 그 여파로 죽어 있던 경제 중복회피 (2026-07-23)
+
+- **증상**: 사용자 확인 요청 — *"이제 자비스02는 수집 기능이 전혀 없는거지? 자비스09가 수집은
+  전담하는 거지?(자비스03 일부 예외) 다시한번 꼼꼼하게 체크해봐"* → 전수 감사에서 **경계 누수 5곳**
+  과 **죽은 채 돌던 중복회피 1건** 이 나옴. precommit `--category collect` 는 **0건 통과** 상태였다.
+- **환경**: `JARVIS06_IMAGE/{image_spec,economic_charts,theme_charts}.py` ·
+  `JARVIS03_RADAR/{theme_picker,topic_pack}.py` · `api_server.py` ·
+  `JARVIS02_WRITER/trend_economic_writer.py` · `shared/precommit_check.py`
+- **원인** — 세 갈래가 한 뿌리:
+  ① **정문 우회**: [488] 의 검사 3레그는 "09 API 를 **2종 이상** 조합했나" 를 본다. 그래서 09 API 를
+  *한 종만* 쓰면서 09 **내부** 를 붙잡으면 전부 통과했다. 실제로 그 길로 4곳이 새 있었다 —
+  06 이 `providers.economic_data_provider`/`providers.krx_provider` 를 **지목**(= provider 선택·폴백
+  판단을 밖으로 끌어감), 03·api_server 가 private `_fetch_naver_theme_catalog` 를 **직수입**
+  (= `_` 로 시작하는 내부 함수가 공개 계약이 되어 09 가 자기 내부를 못 고침).
+  ② **캐시가 곧 판단**: 06 `image_spec` 이 자체 `_DS_CACHE`(TTL 30분)로 *언제 다시 수집할지* 를
+  정하고 있었다. 재수집 시점은 수집 판단이다. 게다가 키가 (키워드,섹터) 뿐이라 **다음 글이 이전 글
+  데이터를 물려받을** 여지가 있었다.
+  ③ **[489] 의 잔해**: 02 `trend_economic_writer` 에 호출자 0 인 죽은 서브트리 **816줄** 이 남아
+  있었다 — 그중 `_build_emergency_trends` 는 **LLM 으로 트렌드를 지어내 `JARVIS03_RADAR/data/`
+  에 써 넣던** 코드였다(수집 owner 침범 + 사실성 위반). 그리고 `_mark_keyword_used` 가 죽으면서
+  **`used_economic_keywords.json` 이 아무도 쓰지 않아 파일 자체가 존재하지 않게 됐고**,
+  03 `topic_pack._used_keywords()` 는 매번 빈 집합을 반환 → **경제 7일 중복회피가 조용히 무력화**.
+- **헛다리**: "precommit collect 0건 = 경계 지켜짐" 으로 읽은 것. 검사가 보는 축(갯수)과 실제 경계
+  (어느 *층* 을 붙잡았나)가 달랐다. 또 "죽은 코드는 해롭지 않다" 는 판단 — 죽은 원장 기록 코드가
+  살아있는 중복회피를 데리고 죽었다.
+- **해결**:
+  · 09 **공개 정문 2종 신설** — `naver_theme_catalog()`(카탈로그 수집·1h 캐시·폴백을 09 안에서 종결) ·
+    `chart_datasets(theme, sector, description)`(**재수집 시점 판단·캐시를 09 가 소유**, 캐시 키에
+    `run_context.active_run().run_id` 포함 → 글이 바뀌면 데이터도 새로 받는다)
+  · 06 3파일 → 정문 경유. `theme_charts` 는 **지연 import**(09 `collect_theme` 이 06 을 모듈 레벨로
+    import 하므로 되받으면 순환). `economic_charts` 의 provider import 는 *사용처 0* 이라 삭제.
+  · 03 `theme_picker` · `api_server` → `from JARVIS09_COLLECTOR import naver_theme_catalog`
+  · 02 죽은 서브트리 **816줄 삭제**(`load_today_trends`·`_build_emergency_trends`·`select_*_topic`·
+    `_topic_econ_fit`·`_is_same_topic`·`_mark_keyword_used`·`_legacy_publish_guard`·
+    `run_naver`/`run_tistory`) + 미사용 import 5종 정리. 1759 → 906줄.
+  · **③ 모든 글에 적용 — 테마 쪽 같은 병도 함께 제거**: 경제에서 `run_naver`/`run_tistory` 를
+    지우자 `trend_theme_writer.run_naver_theme`/`run_tistory_theme` 가 삭제된 `_legacy_publish_guard`
+    를 import 하며 *호출 시점에 깨지는* 상태가 됐다. 가드를 되살리는 대신 **두 함수를 삭제** —
+    수집→대본→발행을 하네스 밖에서 한 벌 더 구현한 복사본이라 prepublish 사실성·매력도 게이트도,
+    Layer 3 검증 순환도 안 타고 곧장 블로그로 나갔다. 유일한 호출자였던 CLI 는 스스로
+    `JARVIS_ALLOW_LEGACY_PUBLISH=1` 을 켜 차단을 풀고 있었다 → 그 환경변수와 `--naver-only`/
+    `--tistory-only` 플래그도 폐기. **테마 발행 경로 = `run_all_themes()` 하나.**
+  · 03 `_used_keywords()` → **DB 파생**(`post_analysis` 의 `post_type='economic'` 최근 N일
+    `source_keyword`). JSON 사본 폐기. 복구 확인: 7일 5건·30일 10건 반환(종전 0건).
+  · precommit **④`collect/private-api` ⑤`collect/internal-module` 2레그 증설**. ②동적 설계 —
+    '내부 계층' 목록도 박지 않고 09 폴더의 하위 *패키지* 를 실물로 훑어 파생, 읽기 실패는 fail-closed.
+    **④⑤ 에는 03·tools 예외 없음** (정문은 누구에게나 정문).
+- **★ 효과를 동작으로 확인**: 규칙을 만든 뒤 위반 4종을 담은 임시 파일로 **실제 검출 4건**
+  (internal-module 2 · private-api 2) 을 확인하고 삭제 → 재실행 0건. *검사 존재는 적용의 증거가 아니다.*
+- **파일**: `JARVIS09_COLLECTOR/{collect_theme,chart_data,__init__}.py` ·
+  `JARVIS06_IMAGE/{image_spec,economic_charts,theme_charts}.py` ·
+  `JARVIS03_RADAR/{theme_picker,topic_pack}.py` · `api_server.py` ·
+  `JARVIS02_WRITER/{trend_economic_writer,trend_theme_writer,scheduler}.py` ·
+  `shared/precommit_check.py` ·
+  `CLAUDE.md` · `JARVIS02_WRITER/CLAUDE_WRITER.md` · `JARVIS03_RADAR/CLAUDE_RADAR.md`
+- **교훈**: ① **경계는 갯수가 아니라 층이다** — API 를 몇 개 썼느냐가 아니라 *공개 정문을 통했느냐,
+  내부(private 심볼·하위 패키지)를 붙잡았느냐*. ② **캐시는 판단이다** — TTL 을 가진 쪽이 재수집
+  시점을 정한다. 소비자에 캐시를 두면 수집 판단이 그만큼 새어나간 것. ③ **죽은 코드는 중립이 아니다**
+  — 죽은 기록 코드가 살아있는 정책(7일 중복회피)을 데리고 죽었고, 아무 오류도 내지 않았다.
+  ④ 새 규칙을 만들면 *반드시 위반 샘플로 검출을 확인* 하라. ⑤ **한쪽에서 지운 것은 반대쪽에도
+  있다** — 경제에서 지운 레거시 발행 함수의 쌍둥이가 테마에 그대로 있었다(③ 모든 글에 적용).
+  삭제 후에는 *지운 심볼을 저장소 전체에서 grep* 해 매달린 참조를 반드시 확인할 것.
+
+---
+
+## [489] ★ 02 에 수집 코드가 *물리적으로* 남아 있었다 — [488] 은 조합만 걷어냈고 파일은 그대로였다 (2026-07-23)
+
+- **증상**: 사용자 지적 — *"02의 수집하는 모든 기능과 코드 폴더 등 모든것을 다 09로 옮겨.
+  02는 수집 관련한건 아무것도 없도록 만들어! 수집은 09에 다 넣으라고!!"*
+- **환경**: `JARVIS02_WRITER/{scheduler,trend_economic_writer,seo_learner,collect_theme}.py` ·
+  `JARVIS09_COLLECTOR/{precollect,providers/published_provider,collector_engine,run_context}.py`
+- **원인**: [488] 은 *판단(순서·폴백·조립)* 을 09 로 옮겼지만, **수집을 실제로 수행하는 파일·잡** 은
+  02 에 남겨뒀다. 남아 있던 것 —
+  ① `precollect_theme` / `precollect_economic`(선계산 잡 본체) ②`precollect_cache` 를 02 가
+  직접 열어 재사용 여부를 판정 ③ `fetch_kor_counts`(발행글 HTML 크롤링) ④ SEO 참고 페이지
+  페치(`_SEO_SOURCES`·`_fetch_page` — 09 원본의 **드리프트된 복사본**) ⑤ `collect_theme.py`
+  파일 자체 ⑥ 죽은 `import requests`/`BeautifulSoup` 4곳.
+  **"언제 미리 수집할지" 도 수집 판단이고, "발행된 우리 글을 긁는 것" 도 밖에 나가 받아오는
+  이상 수집이다** — 대상이 남의 글이냐 우리 글이냐는 도메인 경계와 무관하다.
+- **헛다리**: 파사드(`collect_all`)만 쓰면 됐다고 본 것. 파사드를 지켜도 *수집 파일이 02 에
+  있으면* 다음 작업자는 그 옆에 새 수집을 짠다. 경계는 코드 위치로도 보여야 한다.
+- **해결** (물리 이관 — 옮긴 것 7종):
+  · `precollect_theme`/`precollect_economic` → `JARVIS09_COLLECTOR/precollect.py`
+    (잡 콜백도 `job_registry` 에서 09 경로로 재지정 · owner=`jarvis09_collector`)
+  · 캐시 재사용 판정 → `collect_all(use_cache=)` **안** 으로. 02 는 플래그만 넘긴다.
+  · `fetch_kor_counts` → `JARVIS09_COLLECTOR/providers/published_provider.py`
+    `published_post_kor_counts()` (플랫폼별 추출 규칙을 `_PLATFORMS` 표로 — ② 동적 설계.
+    URL 은 `post_analysis` 의 *실제 발행 URL* 에서 파생, 블로그 주소 하드코딩 0)
+  · SEO 페이지 페치 → 09 원본 단독(`seo_reference_docs`), 02 복사본 삭제
+  · `JARVIS02_WRITER/collect_theme.py` **파일 삭제**(`git rm`), 참조 2곳 09 로 재지정
+  · 주제 슬롯 선정 중복 2벌(nv/ts) → `JARVIS03_RADAR.topic_pack.pick_slot_candidate()` 한 곳
+  · 죽은 import 정리 (`economic_poster`·`jarvis_main`·`length_manager`·`scheduler`)
+- **★ 같은 턴에 자초하고 자가검출한 회귀 2건**:
+  ① `collect_all` 이 새 run 을 열 때 `new_run(keyword)` 를 기본값으로 불러 발행 액션이 세팅해 둔
+  `platform` 을 **naver 로 되돌렸다** → 경제 티스토리 글 이미지가 엉뚱한 폴더로 샐 뻔.
+  `run_context.active_run()` 신설 + platform 보존, post_type 은 category 에서 파생으로 수정.
+  ② precommit 이 통과했는데 사실은 `published_post_kor_counts as _kor_counts` **별칭 때문에
+  정규식(`\bname\s*\(`)에 안 걸린** 것이었다 — 통과 사유가 가짜. 별칭 제거로 정직하게 노출시키고,
+  *마커 조회* 인 `load_pinned_theme` 만 `_COLLECT_FACADES` 에 면제 등재.
+- **파일**: `JARVIS09_COLLECTOR/{precollect.py(신설),providers/published_provider.py(신설),
+  collector_engine.py,run_context.py,__init__.py}` · `JARVIS02_WRITER/{scheduler,
+  trend_economic_writer,seo_learner,economic_poster,jarvis_main,length_manager}.py` ·
+  `JARVIS02_WRITER/collect_theme.py`(삭제) · `JARVIS03_RADAR/{jobs,topic_pack}.py` ·
+  `JARVIS04_SCHEDULER/job_registry.py` · `JARVIS00_INFRA/preflight.py` ·
+  `shared/precommit_check.py` · `CLAUDE.md` · `JARVIS02_WRITER/CLAUDE_WRITER.md` ·
+  `JARVIS09_COLLECTOR/CLAUDE_COLLECTOR.md`
+- **교훈**: ① **판단을 옮기는 것과 코드를 옮기는 것은 다른 일이다.** 조합만 걷어내면 규정은
+  지켜지지만 *다음 사람의 손이 가는 자리* 는 그대로다 — 파일이 있는 곳에 새 코드가 붙는다.
+  ② "수집" 의 범위는 *밖에 나가 받아오는 모든 것* — 선계산 타이밍도, 우리가 방금 올린 글의
+  HTML 도 포함. ③ **검사 통과의 *사유* 를 확인하라** — 별칭 하나로 통과한 ✅ 는 통과가 아니다.
+
+---
+
+## [488] ★ 수집을 자비스02가 하고 있었다 — 도메인 경계가 *호출* 단위로만 지켜지고 *조합* 이 새어나감 (2026-07-23)
+
+- **증상**: 사용자 지적 — *"수집을 왜 자비스02가 하는데? 수집은 자비스09만 할 수 있는 역할인데
+  왜 대본 쓰는 자비스02가 수집을 하냐고? 당장 고쳐!"* 이어서 *"이런 막되먹은 수정이 절대
+  안 되도록 강제해!"*
+- **환경**: `JARVIS02_WRITER/{trend_theme_writer,trend_economic_writer,economic_poster,
+  draft_writer,theme_html_writer}.py` · `JARVIS09_COLLECTOR/{collector_engine,__init__,models}.py`
+- **원인 (★ 핵심 — 겉으로는 규정을 지키고 있었다)**: 02 는 09 의 *API 를 호출* 하고 있었다.
+  CLAUDE.md 의 기존 검증 grep 3종(`import yfinance` / `import pykrx` / `requests.get`)은
+  **전부 0행 통과**였다. 어긴 것은 *호출* 이 아니라 **조합** 이다 —
+  ① 무엇을 먼저 부를지(순서) ② 실패하면 무엇으로 대체할지(폴백)
+  ③ 결과를 어떤 상자로 조립할지(`CollectedData` 조립) ④ 데이터 없음 판정(`data_empty`)
+  이 넷이 전부 02 안에 있었다. 그 결과 수집 오케스트레이션이 02 에 **5벌** 흩어졌고
+  (테마 선수집 · 테마 발행 `_step_collect` · 경제 네이버 · 경제 티스토리 · 시장데이터 조립),
+  정작 그 목적으로 만든 `JARVIS09.collect_all()` 은 **호출자 0 = 죽은 코드** 였다.
+  경제 네이버·티스토리 두 블록은 **바이트 단위로 동일** 했다(Edit 이 "2 matches" 로 검출) —
+  원칙 ③ 위반의 물증.
+- **헛다리**: "경제 브리핑처럼 고치면 된다" 는 최초 판단이 틀렸다. 경제도 02 안에서
+  조합하고 있었다. 테마만 고쳤으면 경제에서 그대로 재발했다.
+- **해결**:
+  · **09**: `collect_all()` 을 실사용 진입점으로 승격 (주제 하나 → 완성된 `CollectedData` 상자
+    반환: `collected/stocks_data/docs/evidence_pack/datasets/corpus_digest/data_empty`).
+    카테고리 차이는 `CATEGORY_POLICY`(`models.py`) 노브로 파생 — `if category ==` 분기 0.
+    시장 스냅샷 조립도 09 로 이관 (`market_snapshot()`).
+  · **02**: 5곳 전부 *호출 한 줄* 로 축소. `_collect()`·`_theme_collect_bundle()`·
+    `_market_data_to_datasets()`·`CollectedData.from_dict` 조립 블록 **삭제**.
+  · **중복 조립 3곳 제거** — 09 가 이미 조립·중복제거·출처박제한 결과를 02 가 *다시* 파생하던
+    구멍 (draft_writer 데이터 카탈로그 / 테마 grounding 코퍼스 / 경제 CollectedData).
+    09 가 걸러낸 항목(예: 테마=종목재무 배제)이 02 에서 되살아나던 경로였다.
+  · **강제**: `shared/precommit_check.py --category collect` 신설 — 3레그
+    `orchestration-outside`(09 밖에서 09 수집 API 2종 이상 = 조합) /
+    `assembler-outside`(`compose_collected`·`*_to_datasets` 등 조립 함수 09 밖 호출) /
+    `raw-lib`(원시 수집 라이브러리로 데이터 취득).
+    금지 API 목록은 `JARVIS09_COLLECTOR/__init__.py` 의 `__all__` 을 매 실행 파싱해 파생
+    (② 동적 설계 — 09 에 새 API 가 생기면 자동 편입).
+- **★ 검사 자체가 조용히 무력화됐던 사고 (같은 턴에 발생·수정)**: 초판은 `importlib` 로
+  09 를 로드해 `__all__` 을 읽었는데, `python3 shared/precommit_check.py` 실행에서는
+  `sys.path[0]=shared/` 라 import 가 실패 → API 집합이 **빈 채로** 통과했다. 즉
+  *검사가 있는데 아무것도 안 잡는 상태* 로 ✅ 를 출력했다. 소스 파싱으로 교체 +
+  집합이 비면 `collect/self-check` 위반을 내는 **fail-closed** 로 전환.
+  회귀 프로브(옛 형태 코드 주입)와 `git show HEAD:` 로 되살린 수정 전 파일로
+  **실제로 잡히는지 동작 확인** — HEAD 판에서 7건 검출(02 테마 6 · 02 경제 1).
+- **파일**: `shared/precommit_check.py`(+`check_collect`) · `CLAUDE.md`(수집 섹션 —
+  grep 3종 → `--category collect` 로 교체, 파사드 단일 호출 패턴 명문화) ·
+  `JARVIS09_COLLECTOR/{collector_engine,__init__,models}.py` ·
+  `JARVIS02_WRITER/{trend_theme_writer,trend_economic_writer,economic_poster,draft_writer,theme_html_writer}.py` ·
+  `JARVIS03_RADAR/theme_picker.py`(`theme_topic()` — 키워드+프로필 동봉 공급)
+- **교훈**: **도메인 경계는 "누가 API 를 부르느냐" 가 아니라 "누가 판단을 하느냐" 로 그어진다.**
+  순서·폴백·조립·판정이 남의 폴더에 있으면, API 를 아무리 owner 것으로 불러도 그 도메인은
+  이미 분산된 것이다. 그리고 이런 위반은 *호출 grep* 으로 절대 안 잡힌다 — 실제로 규정이
+  박제된 뒤에도 5벌이 조용히 자라 있었다. 검사는 *조합* 을 잡아야 한다.
+  덧붙여 — **검사를 새로 만들면 반드시 옛 코드로 한 번 걸어 봐야 한다.** 이번에도
+  "검사 통과 ✅" 가 사실은 "검사 불능" 이었다 (CLAUDE.md 복사본-진실 원칙의 재확인).
+
+---
+
+## [487] ★ 선행 없이 발행이 돌았다 — 잠들었다 깨자 "선행만 골라 버려진" 유예 비대칭 (2026-07-23)
+
+- **증상**: 21시가 지나 컴퓨터를 켰는데 21시 테마주 발행이 시작됐다. 그런데 그 발행의
+  *필수 선행* 인 20시 테마 주제 패키지·데이터 수집은 돌지 않은 상태였다.
+  사용자 지적: *"선행이 안 됐는데 왜 21시 발행 로직이 돌아가? 로직이 잘못된 거지."*
+- **환경**: 맥이 19:16:50 → 20:44:40 → 21:06:48 로 *두 번 절전*. 데몬은 11:36:32 부터
+  계속 살아 있었다 (전원이 꺼진 게 아니라 잠들었다 — PID 유지).
+- **원인**: APScheduler `misfire_grace_time` 이 두 잡의 운명을 갈랐다.
+  · `j02_theme_precollect`(20:00, 유예 **1200s**) — 44분 지각 → **폐기**
+  · `j01_theme_post_21` (21:00, 유예 **3600s**) — 6분 지각 → **실행**
+  선행의 유예가 후행보다 *짧아서*, 늦게 깨면 **선행만 골라 버려지고 후행만 살아남는다**.
+  더 근본적으로는 **의존관계가 코드에 존재하지 않았다** — 주석과 "20시 다음이 21시" 라는
+  *시간 우연* 으로만 있었고, 코드가 "선행이 됐는가" 를 단 한 번도 묻지 않았다.
+  (`DEFAULT_JOBS` 의 `edges` 는 대시보드 배선도일 뿐 집행력이 0이다.)
+- **결과 피해**: 고정 테마 파일이 없어 `전력설비` 가 random 재선정 → 수집이 발행창 *안* 에서
+  일어나 `[planner] 발행창 — LLM 설계 스킵, 결정론 스캐폴드 (warm 미스 안전 분기)` 로 열화.
+  ③ 확인 결과 경제도 같은 비대칭(`radar_trends_06` 1200 → `j01_economic_post` 3600)이었고
+  7/22 에도 선수집 없이 발행된 이력이 있었다.
+- **헛다리**: "유예 숫자를 1200→3600 으로 맞추자" → **기각**. 손으로 맞춘 숫자는 다음 잡이
+  추가되면 또 어긋난다. 그리고 유예를 맞춰도 *선행이 실패했을 때* 는 여전히 발행된다.
+- **해결** (사용자 지정: 선행 즉시 실행 → 회복 갭 뒤 발행):
+  · `JARVIS04_SCHEDULER/job_prereq.py` **신설 — 선행조건 집행 단일 진입점**.
+    선언은 `DEFAULT_JOBS` 의 `requires` 한 줄, 집행은 `register_default_jobs` 가 씌우는
+    `gate()` 래퍼 한 곳. **JARVIS02 콜백은 한 줄도 손대지 않는다** (①단일 진입점).
+  · **"1시간" 을 박지 않는다** — 회복 갭은 선행·후행 *cron 시각의 차이* 로 파생
+    (20:00→21:00=1h, 06:00→07:00=1h). 선행을 19:30 으로 옮기면 자동으로 90분 (②동적).
+  · 판정도 파일·플래그가 아니라 `job_runs` 오늘자 성공 기록의 **런타임 조회**.
+    불변식 하나로 덮는다 — **발행은 선행 *시작* 후 회복 갭이 지난 뒤에만**.
+    ("선행이 돌았나" 만 물으면 20:44 선행 + 21:06 발행이 갭 22분으로 쪼그라든 채 통과한다.)
+  · **유예 비대칭 자체를 제거** — `effective_grace()` 가 *자신을 요구하는 후행들의 유예 중
+    최대* 를 파생. `radar_trends_06`·`j02_theme_precollect` 가 1200→3600 으로 자동 승격.
+  · 선행 재실행은 **인라인 호출이 아니라 APScheduler 잡으로** (`_run_prereq_now`).
+    인라인은 `job_runs` 에 안 남아 → 갭 뒤 재실행 때 "선행 없음" 으로 읽혀 발행이 취소된다.
+    *판정 근거를 남기는 경로로만 실행* 해야 한다.
+  · 재시도 상한은 `harness.DEFAULT_MAX_ATTEMPTS` 파생. 단, **단순 대기는 시도를 소모하지
+    않는다** — 아무것도 재실행하지 않기 때문. (초 단위 오차로 발행이 취소되던 함정)
+  · 표시도 파생 — `job_registry.job_specs()` 신설, `/api/jobs` 가 선언값 1200 대신 유효값
+    3600 을 응답. 등록과 화면이 같은 함수를 읽는다 (복사본 금지).
+- **검증**: 데몬 재시작(21:32:17 > 전 파일 mtime) 후 `/api/jobs` 가 네 잡 모두 3600s +
+  `requires` 응답. 게이트는 `requires` 선언 잡 2개에만 부착, 잡 등록 실패 0건.
+  게이트 5분기(선행없음/충족/누락/갭미경과/상한) 스텁 테스트 전수 통과. precommit 50종 0건.
+- **보강 (같은 날, 게이트 도입이 *만들어낸* 2차 결함 2건)**:
+  · **선행의 시간 예산이 회복 실행에서 눈이 멀었다.** 선계산 쪽이 `20:58`·`06:58` 을 각자
+    박아두고 "발행 2분 전까지" 를 계산했는데, 회복 실행(21:30 선행 → 22:30 발행)에서는
+    목표가 이미 지나 있어 눈먼 기본값(25분)으로 떨어진다. **58분 쓸 수 있는데 25분 만에
+    잘려 실패** → 상한 도달로 발행 취소까지 갈 수 있었다. → `job_prereq.deadline_sec()`
+    신설, 후행의 *실제 다음 실행*(연기분 우선) 에서 파생. 정규·회복 어느 쪽이든 저절로 맞음.
+    부수 효과로 `20:58`/`06:58` 하드코딩 2곳 제거 (②동적 설계).
+  · **순서 함정** — `_defer` 를 선행 실행보다 *먼저* 해야 한다. 선행이 `deadline_sec()` 로
+    읽는 "발행 시각" 이 바로 그 연기분이기 때문. 선행을 먼저 띄우면 아직 없는 연기분을
+    읽는다. 겸사겸사 `_defer` 가 bool 을 반환 — 연기 불가면 선행도 헛돌리지 않는다.
+  · **정책을 바꾸고 주석을 안 고쳤다.** 선계산 4곳이 여전히 "순수 최적화 — 실패해도
+    random 선정 폴백" 이라고 *정반대* 를 말하고 있었다. 정책이 바뀐 순간 그 문장은
+    거짓이 된다 → 4곳 전부 "필수 선행" 으로 정정.
+- **파일**: `JARVIS04_SCHEDULER/job_prereq.py`(신설) / `job_registry.py` / `api_server.py`
+  / `JARVIS02_WRITER/scheduler.py` / `JARVIS02_WRITER/trend_theme_writer.py`
+- **교훈**: **의존관계는 주석이나 시각 배치로 존재하지 않는다 — 코드가 묻지 않으면 없는 것이다.**
+  그리고 *선행의 안전 여유는 후행보다 넓어야 한다*. 반대면, 시스템이 흔들릴 때 정확히
+  가장 필요한 것부터 버린다.
+
+---
+
+## [486] ★ 수리 이력 부재 — "가디언이 고쳤어요" 밖에 답할 수 없던 오류 관리 탭 (2026-07-23)
+
+- **증상**: `/errors` 탭이 *발생 통계* 만 보여줬다. "누가 어떤 오류를 어떻게 잡아서 어떻게
+  고쳤고, 고친 뒤 어떤 현상이 어떤 정상 상태로 바뀌었나" 를 물으면 답할 근거가 화면에 없다.
+  사용자 지적: *"그냥 가디언이 오류 캐치해서 수정했어요 라고 답할 수 없잖아?"*
+- **원인**: 데이터가 없어서가 아니라 **조립·표시가 없어서**였다. `error_log.resolution`
+  ·`fixed_file`·`fixed_at`·`context` 와 `ERRORS.md` 503건·`learned_patterns.json` 이
+  이미 있었으나 *서로 이어붙이는 곳이 어디에도 없었다*. 각 소스는 조각만 답한다 —
+  기계기록=무엇을/언제, 서술기록=왜/어떻게, 패턴파일=무슨 수단으로.
+- **헛다리 (하마터면)**: "수리 이력 테이블을 새로 만들자" → **기각**. 복사본을 진실로 믿지
+  말 것(루트 헌법). 특히 *결과(정상 상태)* 는 저장하면 그 순간부터 거짓이 된다 —
+  "고쳤다" 고 적어둔 뒤 재발하면 화면은 계속 ✅ 를 표시한다.
+- **해결**:
+  · `JARVIS07_GUARDIAN/repair_history.py` **신설 — 조립 단일 진입점**. 3소스를 *런타임 조인*.
+    api_server·텔레그램·CLI 는 `history()` / `history_text()` 만 호출 (①단일 진입점).
+  · **⑤결과는 저장하지 않고 파생**: `fixed_at` *이후* 같은 `(error_type, module)` 발생 수를
+    세어 `ok`(N일 무재발) / `watch`(6h 미만, 관측 중) / `recur`(N회 재발 — 근본원인 미해결)
+    / `fail`(롤백) / `open` / `n/a` 로 판정. 재발하면 화면이 *스스로* 🔁 로 바뀐다 (②동적).
+  · **①탐지 경로도 파생**: `source` 로 harness/git_audit/auto_repair/log_scan/manual 을 구분해
+    "발행 검증 순환이 송출 전에 잡음" / "매일 03:30 git 회고" 처럼 한국어로 서술.
+  · `ERRORS.md` 파서는 **라벨을 하드코딩하지 않는다** — `- **아무라벨**:` 을 전부 파싱하고
+    동의어표(증상/원인/조치/검증/교훈)로 슬롯 매핑, 미매핑 라벨도 `other` 로 보존(무손실).
+  · **서술로 사실을 덮어쓰지 않는다**: 초기 구현이 ERRORS.md 본문을 증상 칸에 승격시켰다가
+    엉뚱한 기록이 붙어 *잘못된 서술이 사실로 둔갑*. → 기계기록·서술기록을 각자 칸에 유지,
+    연결은 제목 토큰 비율 기반 점수(`ratio*12 + 파일*3 + basename*2 + 같은날*1 ≥ 8`)로만.
+  · **자동 수리도 검증·결과를 남기도록** `error_fixer._update_errors_md` 에 `검증`/`결과`
+    필드 추가 (종전엔 수동 수리에만 있었다 — ③모든 경로 동일 형식).
+  · `report_manual_fix(symptom=...)` 신설. 없으면 description 이 증상 칸에도 들어가
+    "②증상 == ④조치" 가 된다. 과거 기록은 `_same_text()` 로 감지해 증상 칸을 비우고
+    출처를 `symptom_from` 으로 명시(추정으로 채우지 않는다).
+- **검증**: 재시작된 데몬(11:30:19 기동 > 파일 mtime 11:29:56)의 `/api/guardian/history`
+  로 30일 25건 확인. 예: `RuntimeError` 가 ①발행 검증 순환에서 잡혀 → ③harness 자가해소 →
+  ⑤4시간 무재발(관측 중). ERRORS.md 링크는 88/300 만 연결(오연결 0).
+- **결과**: 오류 카드마다 ①어떻게 잡았나 ②무슨 증상 ③누가 고쳤나 ④어떻게 조치 ⑤지금 어떤가
+  5줄이 표시된다. "정상 상태" 를 *재발 여부* 로 증명하므로 화면이 늙지 않는다.
+- **파일**: `JARVIS07_GUARDIAN/repair_history.py`(신규) · `error_fixer.py` ·
+  `error_collector.py` · `api_server.py` · `dashboard/app/errors/page.tsx`
+- **교훈**: **답할 수 없다는 것은 데이터가 없다는 뜻이 아니라 잇는 곳이 없다는 뜻이다.**
+  그리고 *결과* 는 저장하는 순간 낡는다 — 재발로 증명하라.
+
+---
+
 ## [485] ★ 유령 피처(velocity·competition)를 학습 입력에서 제거 (2026-07-23)
 
 - **발단**: [484] 에서 "velocity·competition 은 수집 경로가 없는 유령 피처" 라고 화면에
@@ -2084,11 +2761,11 @@
 - **검증**: 9/9 — 시총 5.9조원·영익률 13.6%·2,644억원·ROE 15%·현재가 461,500원·PER 8.2배 통과, 조작(가계연료비 16만원·영익률 99.9%) 차단. 데몬 재시작(21266)으로 발효.
 - **교훈**: 수치의 사실성은 *LLM 문자열 매칭이 아니라 구조화 데이터와의 결정론적 숫자 비교*로 판정해야 한다. 텍스트 코퍼스에 수치를 렌더해 매칭시키는 방식은 표기 포맷 조합이 무한이라 반드시 whack-a-mole 이 된다. 같은 클래스 오류를 3회 이상 지표별로 땜질하고 있으면 그 자체가 "근본 로직이 틀렸다"는 신호(★ [343]~[348] 6회 = 강한 신호).
 
-### [349] GUARDIAN Tier 2(Opus 4.8) 자동수정이 실제로 성공해도 "Tier 1·2 모두 실패" 오보고 — targeted 프롬프트·파서 포맷 불일치 (★ 사용자 지적 2026-07-04)
+### [349] GUARDIAN Tier 2(LLM) 자동수정이 실제로 성공해도 "Tier 1·2 모두 실패" 오보고 — targeted 프롬프트·파서 포맷 불일치 (★ 사용자 지적 2026-07-04)
 
-- **증상**: `[GUARDIAN] 자동수정 실패 — 수동 검토 / Tier 1·2 모두 실패` 텔레그램 알림 수신. 사용자가 "Tier 2는 Opus 4.8인데 수정실패가 말이 되냐, 로직이 잘못되지 않고서야 실패할 수 없다"고 지적 — 실제로 [343]~[348] 근본 수정(grounding 코퍼스 unit/format 정합)이 이미 작업 트리에 반영돼 있었는데도 GUARDIAN 은 "실패"로 기록.
-- **환경**: `guardian_agent._orchestrate` → Tier 1 실패 시 `_try_sdk_targeted_fix` → `auto_repair.run_auto_repair_targeted()`(Tier 2, `claude-opus-4-8`, `permission_mode=bypassPermissions`). 성공 판정은 오직 `files_fixed = _parse_layer_counts(_parse_summary(sdk_stdout))["files_fixed"]; return files_fixed > 0` 한 줄.
-- **원인**: `run_auto_repair_targeted` 가 사용하는 `_TARGETED_PROMPT_TMPL` 의 완료 보고 포맷은 `files_fixed: <N>`(영문 필드명) 인데, 공용 파서 `_parse_layer_counts` 의 정규식은 `수정 파일[:\s]*(\d+)`(한글 문구) **만** 인식했다. 이 한글 포맷은 *다른* 프롬프트인 `_BASE_PROMPT`(전체 감사, 04:30 `job_deep_audit`)전용 — 두 프롬프트가 같은 파서 함수를 공유하면서 포맷이 갈라진 것. 결과: Opus 4.8 이 몇 개를 고치든 `files_fixed` 는 항상 0으로 파싱 → `run_auto_repair_targeted` 는 **항상** `False` 반환 → 실시간 포스팅 실패 대응 경로(Tier 2)는 구조적으로 절대 "성공"을 보고할 수 없었다.
+- **증상**: `[GUARDIAN] 자동수정 실패 — 수동 검토 / Tier 1·2 모두 실패` 텔레그램 알림 수신. 사용자가 "Tier 2는 최상급 LLM인데 수정실패가 말이 되냐, 로직이 잘못되지 않고서야 실패할 수 없다"고 지적 — 실제로 [343]~[348] 근본 수정(grounding 코퍼스 unit/format 정합)이 이미 작업 트리에 반영돼 있었는데도 GUARDIAN 은 "실패"로 기록.
+- **환경**: `guardian_agent._orchestrate` → Tier 1 실패 시 `_try_sdk_targeted_fix` → `auto_repair.run_auto_repair_targeted()`(Tier 2 LLM, `permission_mode=bypassPermissions`). 성공 판정은 오직 `files_fixed = _parse_layer_counts(_parse_summary(sdk_stdout))["files_fixed"]; return files_fixed > 0` 한 줄.
+- **원인**: `run_auto_repair_targeted` 가 사용하는 `_TARGETED_PROMPT_TMPL` 의 완료 보고 포맷은 `files_fixed: <N>`(영문 필드명) 인데, 공용 파서 `_parse_layer_counts` 의 정규식은 `수정 파일[:\s]*(\d+)`(한글 문구) **만** 인식했다. 이 한글 포맷은 *다른* 프롬프트인 `_BASE_PROMPT`(전체 감사, 04:30 `job_deep_audit`)전용 — 두 프롬프트가 같은 파서 함수를 공유하면서 포맷이 갈라진 것. 결과: LLM 이 몇 개를 고치든 `files_fixed` 는 항상 0으로 파싱 → `run_auto_repair_targeted` 는 **항상** `False` 반환 → 실시간 포스팅 실패 대응 경로(Tier 2)는 구조적으로 절대 "성공"을 보고할 수 없었다.
 - **헛다리**: 없음 — 사용자가 "모델이 실패할 리 없다"고 정확히 짚었고, 조사 결과 모델이 아니라 *성공 신호를 버리는 파서* 가 원인이었음을 확인.
 - **해결**: `_parse_layer_counts` 정규식을 `수정\s*파일[:\s]*(\d+)|files_fixed[:\s]*(\d+)` 로 확장 — 두 프롬프트 포맷 모두 인식. 다른 호출부(`_BASE_PROMPT` 경로)는 기존 그대로 정상 동작.
 - **파일**: `JARVIS07_GUARDIAN/auto_repair.py`(`_parse_layer_counts`).
@@ -2165,7 +2842,7 @@
 
 ### [320] 표시 계층 하드코딩 — 웹·텔레그램이 코드 정본(SSOT)에서 자동 파생하도록 전면 전환 (★ 사용자 박제 2026-07-04)
 
-- **증상**: 코드(모델·스케줄·개수 등)를 바꿔도 웹 대시보드·텔레그램 표시가 안 따라와, 코드+웹+텔레그램 2중·3중 수정을 반복. 예: 모델 마이그레이션 후에도 대시보드 "Opus 4.6", 트렌드 "09/12/15"(06 누락), train_weights "매일"(→매주 일요일).
+- **증상**: 코드(모델·스케줄·개수 등)를 바꿔도 웹 대시보드·텔레그램 표시가 안 따라와, 코드+웹+텔레그램 2중·3중 수정을 반복. 예: 모델 마이그레이션 후에도 대시보드는 *옛 모델명* 표시, 트렌드 "09/12/15"(06 누락), train_weights "매일"(→매주 일요일).
 - **원인**: 표시 계층(hub.py·각 status_fn·데몬 메시지)이 사실을 *복제 하드코딩*. 정본(shared/llm.py·DEFAULT_JOBS·architecture 상수 등)과 따로 놀아 드리프트.
 - **해결**: 워크플로우로 전 표시면 하드코딩 22건 인벤토리 → SSOT 파생 전환. 접근자/상수: `shared.llm.model_label`, `job_registry.cron_phrase`/`cron_times`/`job_ids`, `collector_engine.list_provider_names`/`SOURCE_CATEGORIES`, `architecture.DOMAIN_SKEW_THRESHOLD`/`ERROR_STATS_WINDOW_DAYS`, `harness.HARNESS_VERSION`, `jarvis_daemon._ST_MAX_FAIL`, 기존 `VISION_PORT`·`HUB_PORT`·`DENY_FIX_PATHS`·`CB_MAX_HOUR`. OWNER_LABEL 은 id→'J0N' 규칙 파생(신규 에이전트 자동). precommit `ssot` 카테고리 신설 — 표시 파일 모델라벨·스케줄 하드코딩을 커밋·부팅 차단.
 - **파일**: `hub.py`·`shared/llm.py`·`JARVIS04_SCHEDULER/job_registry.py`·`JARVIS07_GUARDIAN/architecture.py`·`JARVIS09_COLLECTOR/collector_engine.py`·`JARVIS00_INFRA/{infra_agent,harness}.py`·`jarvis_daemon.py`·`{writer,radar,collector,guardian,vision}_agent.py`·`bot.py`·`shared/precommit_check.py`.
@@ -2842,7 +3519,7 @@
 
 ### [262] Claude Code SDK `Command failed with exit code 1` 근본 원인 = `ANTHROPIC_API_KEY` 가짜 키 미오버라이드 (2026-06-07)
 
-- **증상**: KST 16:00 테마 발행 + 07:00 경제 브리핑 + 자가진단 — 모두 `[harness:auto-repair] attempt=1 step=③ Claude Code SDK 실행: Exception: Command failed with exit code 1 (exit code: 1) / Error output: Check stderr output`. 어제 (06-06) 가짜 모델 ID `claude-opus-4-8` → `claude-opus-4-6` 수정 후 데몬 KST 10:12 재시작 + 모델 ID 적용 확인됐는데도 여전히 실패. 종목 데이터 0개 (홈쇼핑·리튬·스마트팩토리) 도 동일 원인 — LLM 호출 전부 실패.
+- **증상**: KST 16:00 테마 발행 + 07:00 경제 브리핑 + 자가진단 — 모두 `[harness:auto-repair] attempt=1 step=③ Claude Code SDK 실행: Exception: Command failed with exit code 1 (exit code: 1) / Error output: Check stderr output`. 어제 (06-06) 가짜 모델 ID 를 실재 ID 로 고친 뒤([254]) 데몬 KST 10:12 재시작 + 적용 확인됐는데도 여전히 실패. 종목 데이터 0개 (홈쇼핑·리튬·스마트팩토리) 도 동일 원인 — LLM 호출 전부 실패.
 - **환경**: macOS 호스트, claude-code-sdk Python 패키지 + `claude` CLI 바이너리 (npm @anthropic-ai/claude-code), MAX 구독 OAuth 인증 모드.
 - **원인 — 환경변수 누수 1곳**:
   - `shared/llm.py:25` — `os.environ.setdefault("ANTHROPIC_API_KEY", "max-subscription-no-api-cost")` 가짜 키 세팅. CrewAI/LangChain native init 우회용 트릭.
@@ -2879,10 +3556,10 @@
 ### [324] `ValueError: JSON not found` @ JARVIS03_RADAR.analyzer — 사용자 오해 + 학습 노이즈 5중 누수 (2026-06-07)
 
 - **증상**: 사용자 텔레그램 알림 `⚠️ [GUARDIAN] 자동 수정 실패 / 자체 학습·Claude Code 모두 수정 불가 / 오류: ValueError @ JARVIS03_RADAR.analyzer / 내용: JSON not found / → 수동 검토 필요`. error_log 4건 누적 (ID 229·395·741·754 / 2026-05-16 ~ 2026-06-07).
-- **환경**: `JARVIS03_RADAR/analyzer.py:_classify_with_llm()` — RADAR가 1차 규칙 분류 후 "기타" 키워드를 LLM(writer_fast=sonnet-4-6)에 배치 분류 의뢰. 응답 파싱 단계.
+- **환경**: `JARVIS03_RADAR/analyzer.py:_classify_with_llm()` — RADAR가 1차 규칙 분류 후 "기타" 키워드를 LLM(alias `writer_fast`)에 배치 분류 의뢰. 응답 파싱 단계.
 - **원인 — 5중 누수 동시 검출**:
   1. **메시지 오해 유발**: `"JSON not found"` 는 *파일 JSON 미존재* 처럼 보이지만 실제로는 *LLM 응답 텍스트에 `{...}` 형식 없음*. 사용자·GUARDIAN·RL 모두 잘못된 진단 방향.
-  2. **raw None/빈 분기 부재**: `re.search(r"\{.*\}", raw, re.DOTALL)` 가 `raw=None` 시 TypeError, `raw=""` 시 매칭 실패. 어제 모델 ID 수정 전 가짜 ID `claude-opus-4-8` 로 빈 응답 자주 발생 → 본 오류 누적.
+  2. **raw None/빈 분기 부재**: `re.search(r"\{.*\}", raw, re.DOTALL)` 가 `raw=None` 시 TypeError, `raw=""` 시 매칭 실패. 어제 모델 ID 수정 전 가짜 ID([254]) 로 빈 응답 자주 발생 → 본 오류 누적.
   3. **재시도 없음**: 1회 실패 시 즉시 ValueError → except → GUARDIAN report. LLM 응답 형식 일시 변동에 무방비.
   4. **transient ↔ permanent 미구분**: severity classifier 가 `ValueError` 를 medium 으로 분류 → `_PATTERN_FIXABLE_TYPES` 포함 → `is_auto_fixable=True` → GUARDIAN 자동 수정 시도 → pattern_fixer 7종/RL Tier 1.5/Claude Code SDK Tier 2 *전부 실패* (코드 버그 아니라 LLM 응답 문제) → 사용자에게 "수정 불가" 알림.
   5. **학습 자산 노이즈**: 매번 GUARDIAN report → error_log 박제 → RL 학습 시 "ValueError → llm_fallback" 신호 강화 → 진짜 ValueError 자동 수정 가능 케이스도 RL이 무력화 가능.
@@ -3027,23 +3704,23 @@
 
 ---
 
-### [254] 가짜 모델 ID `claude-opus-4-8` — 자가진단 CLI exit code 1 + 발행 4일 연쇄 실패 (2026-06-06)
+### [254] 실재하지 않는 가짜 모델 ID — 자가진단 CLI exit code 1 + 발행 4일 연쇄 실패 (2026-06-06)
 
 - **증상**: 06-04 16:00 ~ 06-06 07:00 발행 4회 전부 실패. 텔레그램에 `[harness:auto-repair] ③ Claude Code SDK 실행: exitcode=-1: cli_not_found` 또는 `Command failed with exit code 1`. 종목 데이터 0개로 차단된 테마글(유리 기판·마이크로LED·생명보험·바이오인식·원자력발전소 해체)도 동일 원인.
 - **환경**: macOS 호스트, claude-code-sdk 위 `query()` 호출, MAX 구독 OAuth 모드. 데몬 정상 부팅 + claude CLI 존재.
-- **원인**: `shared/llm.py` + `JARVIS07_GUARDIAN/auto_repair.py` + `error_analyzer.py` 등 12+곳에 사용된 모델 ID `claude-opus-4-8` 은 **존재하지 않는 가짜 ID**. 실제 Opus 최신은 `claude-opus-4-6`. Claude Code CLI 는 미지원 모델로 호출되면 exit code 1 반환 → harness Layer 3 abort → 자가진단 중단 + 발행 stocks_data enrich 도 동일 모델 호출로 0개 반환 + self_repair_runs DB 박제도 자동 누락 (delivered=False).
+- **원인**: `shared/llm.py` + `JARVIS07_GUARDIAN/auto_repair.py` + `error_analyzer.py` 등 12+곳에 *같은 모델 ID 문자열이 복사*돼 있었고, 그 ID 는 **당시 실재하지 않는 가설값**이었다. Claude Code CLI 는 미지원 모델로 호출되면 exit code 1 반환 → harness Layer 3 abort → 자가진단 중단 + 발행 stocks_data enrich 도 동일 모델 호출로 0개 반환 + self_repair_runs DB 박제도 자동 누락 (delivered=False).
 - **헛다리**:
   - keeper.plist launchd 등록 누락은 별개 결함 ([255])
   - JARVIS09 collect_stocks_data 5종 폴백 로직 결함 의심 → 실제로는 폴백 로직 정상. 5차 폴백 LLM 호출이 동일 모델 ID 문제로 전부 실패.
-- **해결**: 12곳 일괄 교체 — `claude-opus-4-8` → `claude-opus-4-6`.
+- **해결**: 12곳 일괄 교체 — 가짜 ID → 당시 실재하던 ID (지금은 이런 12곳 사본 자체가 금지 — 아래 교훈).
   - `shared/llm.py`: ModelSpec 4종 (coder/guardian/architect/diagnostic) + `_sdk_model` map + `_ALIAS_MODEL` map + `_model_map` (총 12 occurrences)
-  - `JARVIS07_GUARDIAN/auto_repair.py`: `_MODEL = "claude-opus-4-6"` + 표시 텍스트 4종
+  - `JARVIS07_GUARDIAN/auto_repair.py`: `_MODEL` + 표시 텍스트 4종
   - `JARVIS07_GUARDIAN/error_analyzer.py`: docstring
   - `JARVIS07_GUARDIAN/auditor.py`: 주석
   - `hub.py`: 학습 곡선 카드 제목
   - `CLAUDE.md`: auto_repair.py 행 설명
 - **파일**: 6개 파일 — 총 ~15곳 수정
-- **교훈**: Anthropic 공식 모델 ID 는 `claude-opus-4-6` / `claude-sonnet-4-6` / `claude-haiku-4-5`. "4.8" 같은 비공식 ID 절대 사용 금지. **모델 ID 변경 시 `_ALIAS_MODEL`, `_sdk_model`, `_model_map`, `ModelSpec` 4곳 모두 동기화 의무** — 한 곳만 바꾸면 다른 경로로 가짜 ID 누수. 검증 명령: `grep -rn "claude-opus-4-[0-9]\|claude-sonnet-4-[0-9]\|claude-haiku-4-[0-9]" --include="*.py" .` → 결과 모두 공식 ID(4-6/4-6/4-5) 이어야.
+- **교훈**: ① 존재 여부를 확인하지 않은 *가설* 모델 ID 를 코드에 박지 말 것. ② 진짜 병은 "ID 가 틀렸다"가 아니라 **같은 ID 가 12곳에 복사돼 있었다**는 것 — 그래서 한 곳만 고치면 다른 경로로 옛 ID 가 누수됐다. ★ 2026-07-24 부터 모델 ID 리터럴의 소유자는 `shared/llm.py` `MODELS` **단 하나**이고, 다른 파일은 `from shared.llm import model_id` 로 파생한다 (ERRORS [491]). 검증: `python3 shared/precommit_check.py --category model`.
 
 ---
 
@@ -3118,7 +3795,7 @@
 
 - **증상**: `Layer 1 precondition 실패: collect_theme import 실패: ImportError: Error importing native provider: OPENAI_API_KEY is required`
 - **환경**: `JARVIS02_WRITER.scheduler.run_economic_poster` harness precondition 체크
-- **원인**: `ClaudeCLILLM`이 crewai `BaseLLM`/`LLM`의 서브클래스가 아님 → crewai `create_llm()`이 "unknown object" 경로로 처리 → `model="claude-sonnet-4-6"` 추출 → crewai `ANTHROPIC_MODELS` 상수에 미등록(claude-sonnet-4-6 신규 명명 미반영) → `_infer_provider_from_model` 기본값 `"openai"` → OpenAI native provider 초기화 → `OPENAI_API_KEY` 에러
+- **원인**: `ClaudeCLILLM`이 crewai `BaseLLM`/`LLM`의 서브클래스가 아님 → crewai `create_llm()`이 "unknown object" 경로로 처리 → 우리 model_id 문자열 추출 → crewai `ANTHROPIC_MODELS` 상수에 미등록(당시 신규 명명 미반영) → `_infer_provider_from_model` 기본값 `"openai"` → OpenAI native provider 초기화 → `OPENAI_API_KEY` 에러
 - **헛다리**: 없음.
 - **해결 (`shared/llm.py`)**: `ClaudeCLILLM` 클래스 정의 후 `BaseLLM.register(ClaudeCLILLM)` virtual subclass 등록. `isinstance(ClaudeCLILLM(...), BaseLLM)` → True → `create_llm` 첫 번째 체크 통과 → 변환 없이 그대로 반환.
 - **파일**: `shared/llm.py`
@@ -3627,14 +4304,14 @@
 - **환경**: `JARVIS07_GUARDIAN/auto_repair.py:830` (harness step ②) + `:974` (legacy fallback) — `subprocess.run([claude_bin, "--dangerously-skip-permissions", "--model", _MODEL, "-p", prompt], ...)`.
   - 옛 `_MODEL = "sonnet"` (alias)
   - 옛 `_errors_tail(10)` 가 ERRORS.md 최근 10개 항목 일괄 주입 → prompt ≈ 200K+ 토큰
-- **원인 1 (모델 alias)**: `--model sonnet` alias 는 CLI 가 *컨텍스트 자동 선택* — prompt 가 200K 초과 시 CLI 가 자동으로 1M 변형 (`claude-opus-4-7[1m]` 등) 선택. 1M context 는 별도 usage credits 활성화가 필요한 베타 기능 → API Error.
+- **원인 1 (모델 alias)**: 짧은 alias(`--model sonnet`) 는 CLI 가 *컨텍스트 자동 선택* — prompt 가 200K 초과 시 CLI 가 자동으로 1M 변형(`...[1m]`) 을 고른다. 1M context 는 별도 usage credits 활성화가 필요한 베타 기능 → API Error.
 - **원인 2 (옛 ERRORS.md 일괄 주입)**: `_errors_tail(10)` 가 시간순 최근 10개 항목을 *prompt 에 무조건* append. ERRORS.md 1항목 ≈ 수십~수백 줄 → 10개 누적 = 수만~20만 토큰. 7-Layer prompt 본문 + learned_patterns + ERRORS 누적 = 200K+ 토큰 돌파 → 1M 자동 승격 트리거.
 - **원인 3 (구조적 비효율)**: 옛 매칭 방식은 *"증상 발생 → 진단"* 의 자연 순서가 아니라 *"무조건 최근 10개를 미리 주입"* 형태. 지금 발생한 오류와 *무관한* 항목 다수 포함 → 토큰 낭비 + 매칭 정확도 저하. 또한 11번째부터 옛 항목 (170+ 누적) 은 매번 빠짐 → 헛다리 재시도 위험.
 - **헛다리** (다시 시도하지 말 것):
   - usage credits 활성화 (https://claude.ai/settings/usage) — 비용 발생 + 근본 원인 미해결 + 다른 사용자 환경 호환성 깨짐.
   - prompt 단순 축소 (`_errors_tail(5)`) — 토큰 절반 줄지만 매칭 정확도는 그대로 떨어진 채 유지. 근본 구조 결함 미해결.
 - **해결** (3 갈래 묶음 — 동시 적용):
-  1. **모델 ID 명시 박제**: `_MODEL = "sonnet"` → `_MODEL = "claude-sonnet-4-6"`. alias 가 아닌 *정확한 모델 ID* 로 CLI 의 자동 컨텍스트 변형 선택을 차단. CLAUDE.md `--model sonnet` 박제 문구도 동시 갱신.
+  1. **모델 ID 명시 박제**: `_MODEL` 을 짧은 alias 가 아닌 *full 모델 ID* 로 넘겨 CLI 의 자동 컨텍스트 변형 선택을 차단. CLAUDE.md 박제 문구도 동시 갱신. (★ 2026-07-24 개정: ID 문자열은 박지 않고 `shared.llm.model_id()` 로 파생 — ERRORS [491])
   2. **fingerprint 검색 도입**: `_errors_tail(10)` 호출 2곳 (라인 614 harness / 라인 818 legacy) 제거. 신규 함수 5개 추가:
      - `_tokenize(text)` — 한글 2자+/영문 3자+ 추출
      - `_load_errors_blocks()` — ERRORS.md 파싱 + mtime 캐시
@@ -3650,14 +4327,14 @@
   ```
   # 단위 검증 (모두 PASS)
   python -m py_compile JARVIS07_GUARDIAN/auto_repair.py
-  python -c "from JARVIS07_GUARDIAN.auto_repair import _MODEL; assert _MODEL == 'claude-sonnet-4-6'"
+  python -c "from JARVIS07_GUARDIAN.auto_repair import _MODEL; from shared.llm import model_id; assert _MODEL == model_id('guardian')"
   python -c "from JARVIS07_GUARDIAN.auto_repair import _errors_match; r=_errors_match('ImportError',['claude','CLI']); assert len(r)>100"
   python -c "from JARVIS07_GUARDIAN.auto_repair import _errors_match; assert _errors_match('XYZ',['zzz'])==''"
   grep -cE '_errors_tail\(' JARVIS07_GUARDIAN/auto_repair.py  # → 호출 0건 (정의 1행만)
   python shared/precommit_check.py  # → 11+ 카테고리 ZERO
   ```
 - **교훈** (★ 3가지):
-  1. **alias 모델명은 CLI 가 자동 최적 변형 선택 가능** → 정확한 모델 ID (예: `claude-sonnet-4-6`) 명시 박제 필수. alias 는 미래 CLI 업데이트 시 의도하지 않은 모델 선택 위험.
+  1. **짧은 alias 는 CLI 가 자동 최적 변형을 고른다** → SDK·CLI 에는 *full 모델 ID* 를 넘길 것. 단, 그 ID 를 파일에 박지 말고 `shared.llm.model_id()` 로 파생한다 (ERRORS [491]).
   2. **ERRORS.md 컨텍스트 주입은 fingerprint 매칭 기반** — 시간순 일괄 주입은 토큰 낭비 + 매칭 정확도 저하 + 옛 항목 누락. 발생한 오류의 error_type + 키워드 추출 → ERRORS.md 전체에서 score 기반 검색이 자연 순서.
   3. **사용자 통찰** ★ : *"발생한 오류를 먼저 파악한 후, 저장된 것과 비교"* — 진단의 자연 순서. *"미리 10개만 오류 읽어 오는 건 아니다"*. 이 통찰이 fingerprint 검색 구조 전환의 근거.
 
@@ -4207,7 +4884,7 @@
   ```
   07:00 (또는 16:00) callback 진입
     ① _run_self_repair_phase(label)
-       → auto_repair.run_auto_repair()  # Claude CLI Sonnet 4.6 7-Layer (max 15분)
+       → auto_repair.run_auto_repair()  # Claude CLI 7-Layer (max 15분)
        → self_repair_runs 테이블에서 code_changed 카운트 추출
     ② 코드 변경 발생 시 → 텔레그램 "데몬 재시작 권장" 알림
     ③ run_economic_poster() 또는 run_radar_top_theme()  # harness 5-Layer 발행
@@ -4269,7 +4946,7 @@
   - `target=** \`JARVIS00_INFRA/harness.py\`` (마크다운 볼드) → 경로 파싱 실패
   - `target=none** (코드 수정 불필요)` → "none" 자연어 응답인데 처리 불가
   - `target=requirements.txt (신규 생성 권장)` → 괄호 후행 잡음으로 인식
-- **원인**: analyzer LLM (Sonnet 4.6) 응답이 *마크다운 + 자연어 설명* 포함. fixer 가 형식적 정제 없이 그대로 file path 로 사용.
+- **원인**: analyzer LLM 응답이 *마크다운 + 자연어 설명* 포함. fixer 가 형식적 정제 없이 그대로 file path 로 사용.
 - **패치** (`JARVIS07_GUARDIAN/error_fixer.py`): `_normalize_target(raw)` 신설 + `_safe_path` 진입 시 선행 호출.
   정규화 규칙:
   1. 마크다운 정제 — 백틱(`` ` ``)·볼드(`**`)·이탤릭(`*`)·따옴표 제거
@@ -4322,7 +4999,7 @@
 - **전수 점검**: `grep -rnE 'ThreadPoolExecutor\(max_workers=' --include='*.py'` 13 위치 (`.venv` 제외) — 각각 *Claude CLI 통과 여부* 확인.
 - **누수 발견·수정 4건 (모두 max_workers=1 로 직렬화)**:
   1. **`jarvis_main.py:639`** — `max_workers=len(active_pfxs)` (3~4 플랫폼 병렬) → `max_workers=1`. `_generate_platform_article` 가 Claude CLI 텍스트 생성 호출. 테마주 글 핵심 누수.
-  2. **`jarvis_main.py:940`** — `max_workers=5` (단락이미지 병렬) → `max_workers=1`. `_make_para_image` → `generate_image_spec` → `invoke_text("analyzer")` → Claude CLI Sonnet 4.6 호출.
+  2. **`jarvis_main.py:940`** — `max_workers=5` (단락이미지 병렬) → `max_workers=1`. `_make_para_image` → `generate_image_spec` → `invoke_text("analyzer")` → Claude CLI 호출.
   3. **`collect_theme.py:1297`** — `max_workers=2` (대장주·부대장주 enrich 병렬) → `max_workers=1`. `_enrich_leader_desc` → `invoke_text("writer_fast")` → Claude CLI 호출.
   4. **`theme_html_writer.py:349`** — `max_workers=min(8, len(chart_placeholders))` (SVG 8개 병렬) → `_workers=1`. `_generate_svg_pass2` 가 Claude CLI 로 SVG 차트 생성.
 - **추가 직렬화 (외부 이미지 API quota)**:
@@ -4751,7 +5428,7 @@
 ### [133] CrewAI native Anthropic provider 자동 초기화 → ImportError 폭발 (2026-05-17 07:00 KST 발행 실패)
 - **증상**: 07:00 경제 브리핑 발행 잡 트리거 정상 → `jarvis_main` → `JARVIS02_WRITER.collect_theme` import 단계에서 `ImportError: Error importing native provider: ANTHROPIC_API_KEY is required`. GUARDIAN 3회 자가수정 시도 모두 구문 오류로 중단 (`#249 status=wontfix`). post_analysis 신규 행 0건 — 발행 미완료. 16시 테마글 발행도 동일 import 체인 → 또 실패 예정 발견.
 - **원인**: 어제 박제 [126-129] **Anthropic 흔적 완전 삭제** 작업의 사각지대. `ClaudeCLILLM` adapter 가 CrewAI 의 LLM 호출을 *런타임에* 가로채는 것은 OK 였으나, CrewAI 의 `llm.py:413` 에서 `model_id` 가 `"claude-..."` 로 시작하면 *adapter 와 별개로* native Anthropic provider 인스턴스(`anthropic/completion.py:175` 의 `Anthropic(**)`) 도 *자동 초기화* 시도. 그 시점에 `ANTHROPIC_API_KEY` 환경변수가 없으니 폭발. 실제 호출은 안 가지만 *초기화 검증* 단계에서 막힘.
-- **헛다리**: GUARDIAN 자가수정은 `jarvis_main.py` 자체를 패치하려다 syntax 오류로 롤백. 진짜 원인은 `shared/llm.py` 의 ClaudeCLILLM 인스턴스가 `"claude-haiku-4-5-20251001"` 같은 model_id 보유 → CrewAI 가 prefix 매칭 → native init.
+- **헛다리**: GUARDIAN 자가수정은 `jarvis_main.py` 자체를 패치하려다 syntax 오류로 롤백. 진짜 원인은 `shared/llm.py` 의 ClaudeCLILLM 인스턴스가 (당시 하위 계층) model_id 를 보유 → CrewAI 가 prefix 매칭 → native init.
 - **해결 (A안 — 1줄 setdefault, 누수 0 다층 안전망)**: `shared/llm.py` 상단 `load_dotenv()` 직후에 `os.environ.setdefault("ANTHROPIC_API_KEY", "claude-cli-adapter-placeholder-do-not-call-external-api")` 추가.
   - **누수 방지 4겹 보장**:
     1. `setdefault` — 진짜 키 존재 시 *덮어쓰지 않음*. 운영자가 별도 진짜 키 박은 경우 그대로 사용.
@@ -4855,7 +5532,7 @@
 - **해결**:
   1. **`shared/llm.py` 에 `ClaudeCLILLM` 클래스 신설** — CrewAI 호환 LLM 어댑터. `.call(messages)` 메서드 + LiteLLM 호환 인터페이스 + LangChain message 포맷 (system/user/assistant) 지원. 내부적으로 `invoke_claude_cli` 위임 — Max 구독 사용.
   2. **`JARVIS02_WRITER/collect_theme.py:885-888` 교체**:
-     - 옛: `_llm_researcher = LLM(model="anthropic/claude-haiku-...", api_key=_api_key, max_tokens=800)` (외부 API)
+     - 옛: `_llm_researcher = LLM(model="anthropic/<모델ID>", api_key=_api_key, max_tokens=800)` (외부 API)
      - 새: `_llm_researcher = ClaudeCLILLM(alias="writer_fast", max_tokens=800)` (Claude CLI)
      - 동일하게 auditor/writer 모두 ClaudeCLILLM 으로 교체.
   3. **`from crewai import LLM` 미사용 import 제거**.
@@ -4886,7 +5563,7 @@
   3. `npm install -g @anthropic-ai/claude-code` 설치 안내 — Claude Code CLI 정식 npm 패키지명.
   4. 환경변수 `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_DEV` 격리 코드 (shared/llm.py + auto_repair.py) — ERRORS [112] Claude CLI API 모드 전환 사고 *영구 방지*.
   5. `requirements.txt:3` `anthropic>=0.40.0` — `langchain_anthropic` 의 transitive 의존.
-- **사용자 결정 보류 (4건)**: `JARVIS02_WRITER/collect_theme.py:885-888` 의 CrewAI LiteLLM `anthropic/claude-haiku-...` provider prefix + `_api_key = os.getenv("ANTHROPIC_API_KEY")` — *진짜 외부 API 직접 호출 기능 코드*. CrewAI Researcher/Auditor/Writer 에이전트가 사용 중. 제거 시 테마 발행 깨짐 위험. 사용자 결정 필요: ① 그대로 유지 (외부 API 비용 발생), ② Claude CLI 경유로 마이그레이션 (CrewAI 인터페이스 재설계 필요 — 큰 작업), ③ CrewAI 자체 제거 + JARVIS02 작성 흐름 재설계.
+- **사용자 결정 보류 (4건)**: `JARVIS02_WRITER/collect_theme.py:885-888` 의 CrewAI LiteLLM `anthropic/<모델ID>` provider prefix + `_api_key = os.getenv("ANTHROPIC_API_KEY")` — *진짜 외부 API 직접 호출 기능 코드*. CrewAI Researcher/Auditor/Writer 에이전트가 사용 중. 제거 시 테마 발행 깨짐 위험. 사용자 결정 필요: ① 그대로 유지 (외부 API 비용 발생), ② Claude CLI 경유로 마이그레이션 (CrewAI 인터페이스 재설계 필요 — 큰 작업), ③ CrewAI 자체 제거 + JARVIS02 작성 흐름 재설계.
 - **헛다리**: 단순 grep `anthropic` 만 보면 *17건이나 잔재* 처럼 보임. 실제로는 *외부 PyPI 패키지 이름* + *환경 변수 표준 이름* + *npm 패키지 정식 명칭* + *LiteLLM provider 식별자* 등 *제거 시 외부 호환성 깨짐* 영역. 분류 없이 일괄 제거 시 LangChain·Claude CLI·CrewAI 모두 깨짐.
 - **회귀**: 변경 7 파일 py_compile 통과. precommit 8 카테고리 ZERO 유지. `chat()` LangChain 팩토리 정상 동작 (langchain_anthropic 설치 시 ChatAnthropic 인스턴스 반환).
 - **파일**: `shared/llm.py` (docstring + dead 함수 삭제 + 격리 코드 정제), `shared/style_indexer.py`, `JARVIS01_MASTER/{router,proactive_monitor}.py`, `JARVIS03_RADAR/{daily_review,post_quality_analyzer}.py`, `JARVIS07_GUARDIAN/auto_repair.py`.
@@ -5394,7 +6071,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **환경**: `JARVIS07_GUARDIAN/error_collector.py`, `JARVIS06_IMAGE/thumbnail_maker.py`, `JARVIS06_IMAGE/economic_charts.py`.
 - **원인**:
   1. **거짓 양성 무한 루프**: `_LOG_ERROR_PAT` 정규식 `(ERROR|CRITICAL)\s.*?(?P<etype>\w*Error|\w*Exception)` 가 너무 광범위. INFO 로그 메시지 안에 "NameError" 단어만 있어도 매칭. GUARDIAN 가 *자기 자신의 오류 수집 로그* (`[INFO] [GUARDIAN] 오류 수집 — #189 [medium] NameError...`) 를 다시 오류로 수집하는 *무한 재귀*.
-  2. **SVG ParseError**: LLM (haiku) 이 생성한 SVG 안에 동일 속성을 중복으로 출력 (예: `<text x="10" x="20">`). `cairosvg.svg2png` 내부 `xml.etree.ElementTree` 가 `ParseError: duplicate attribute` 발생. 같은 사고 클러스터 — #3 mismatched tag, #110 economic_charts, #111 thumbnail_maker.
+  2. **SVG ParseError**: LLM 이 생성한 SVG 안에 동일 속성을 중복으로 출력 (예: `<text x="10" x="20">`). `cairosvg.svg2png` 내부 `xml.etree.ElementTree` 가 `ParseError: duplicate attribute` 발생. 같은 사고 클러스터 — #3 mismatched tag, #110 economic_charts, #111 thumbnail_maker.
 - **해결**:
   1. **로그 스캐너 패턴 정밀화** (`error_collector.py`) — `_LOG_ERROR_PAT` 가 로그 레벨이 *실제로* ERROR/CRITICAL 인 줄만 매칭. `[ERROR]` / `[CRITICAL]` / `^ERROR\b` / `ERROR:logger:` / ` - ERROR - ` 5종 형식 명시. etype 도 `[A-Z]...(?:Error|Exception)` 첫 글자 대문자 강제.
   2. **재귀 차단 가드** (`_LOG_SKIP_PAT`) — `[GUARDIAN] 오류 수집/로그 스캔/학습/패턴/fingerprint/hit_count` + APScheduler `Job "..." (trigger:` + `오류 수집 — #N` 패턴 검출 시 *수집 skip*. `_scan_file` 안 매치 직후 *전체 라인* 추출 → 가드 패턴 검사 후 collect.
@@ -5555,11 +6232,11 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ### [99] 자가 학습 엔진 — 세상에서 가장 똑똑한 에이전트 6 Phase (2026-05-15)
 - **목표**: 시간이 지날수록 *스스로 똑똑해지는* 에이전트. 자가 진단 결과 → 학습 자산 누적 → 다음 회차 활용 폐쇄 학습 루프.
-- **사용자 박제**: "하루 2회 (08:30/18:00), 진단·수정 모두 Sonnet 4.6, 학습 누적 가시화 + 비전 구체화".
+- **사용자 박제**: "하루 2회 (08:30/18:00), 진단·수정 모두 동일 모델, 학습 누적 가시화 + 비전 구체화".
 - **환경**: `JARVIS01_MASTER/auto_repair.py` + `JARVIS04_SCHEDULER/job_registry.py` + `shared/db.py` + `hub.py` + `CLAUDE.md`.
 - **해결 — 6 Phase 통합**:
   - **Phase 1·2 (스케줄)**: 기존 3회 (09:05/13:05/18:05) → **2회 (08:30/18:00)**. `auto_repair_morning`/`auto_repair_evening` 잡 ID 변경.
-  - **Phase 3 (모델)**: `--model sonnet` 명시 박제 (사용자 정정 후 — Opus 아닌 Sonnet 4.6 단일 모델).
+  - **Phase 3 (모델)**: `--model` 명시 박제 (사용자 정정 후 — 최상위가 아닌 중간 계층 단일 모델).
   - **Phase 4 (prompt + 결과 박제)**: 7-Layer 종합 진단:
     1. Syntax & Import 정합성
     2. CLAUDE.md 규정 위반 (7종 grep 검증)
@@ -5887,31 +6564,31 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [89] 코드 수정 모델 업그레이드 — Sonnet 4.6 + Opus 4.6 분리 (2026-05-14)
-- **증상**: ① JARVIS07 자동 수정 LLM 폴백이 *유효하지 않은 모델 ID* (`claude-opus-4-7`) 를 호출 → CLI silently 실패 → `raw=""` → "분석 실패" 박제만 누적, 실제 수정 0건. ② `JARVIS01_MASTER/auto_repair.py` Claude Code CLI 호출에 `--model` 인자 없음 → CLI 기본값 의존 (미래 변경 시 회귀 위험). ③ ARCHITECT 새 에이전트 설계도 Haiku 호출 (`invoke_text("writer")`) — 12 섹션 기획서 + 자동 검증에 *최강 추론* 필요한데 저급 모델 사용.
-- **환경**: `shared/llm.py` MODELS 카탈로그 / `JARVIS07_GUARDIAN/error_analyzer.py` / `JARVIS01_MASTER/auto_repair.py` / `JARVIS00_INFRA/architect.py`. 사용자 요청: "글작성 = Haiku, 코드 수정 = 상위 모델".
-- **원인**: 초기 카탈로그 설계 시 `claude-opus-4-7` 으로 가설값 박제 → 실재 모델 ID 아님 (최신 Opus 는 4-6). `auto_repair` 는 Claude Code CLI 호환성 위해 model 인자 생략 — 명시적 박제 누락. `architect.py` 는 *기획서 작성* 도 글쓰기로 분류 → Haiku 였음.
+### [89] 코드 수정 모델 업그레이드 — 용도별 모델 계층 분리 (2026-05-14) ※ 계층 자체는 ADR 017 로 폐지됨
+- **증상**: ① JARVIS07 자동 수정 LLM 폴백이 *실재하지 않는 모델 ID* (카탈로그에 박아둔 가설값) 를 호출 → CLI silently 실패 → `raw=""` → "분석 실패" 박제만 누적, 실제 수정 0건. ② `JARVIS01_MASTER/auto_repair.py` Claude Code CLI 호출에 `--model` 인자 없음 → CLI 기본값 의존 (미래 변경 시 회귀 위험). ③ ARCHITECT 새 에이전트 설계도 저비용 모델 호출 (`invoke_text("writer")`) — 12 섹션 기획서 + 자동 검증에 *최강 추론* 필요한데 하위 계층 사용.
+- **환경**: `shared/llm.py` MODELS 카탈로그 / `JARVIS07_GUARDIAN/error_analyzer.py` / `JARVIS01_MASTER/auto_repair.py` / `JARVIS00_INFRA/architect.py`. 사용자 요청: "글작성 = 저비용 모델, 코드 수정 = 상위 모델".
+- **원인**: 초기 카탈로그 설계 시 실재 확인 없이 가설 ID 를 박제 → 실재 모델 ID 아님. `auto_repair` 는 Claude Code CLI 호환성 위해 model 인자 생략 — 명시적 박제 누락. `architect.py` 는 *기획서 작성* 도 글쓰기로 분류 → 저비용 계층이었음.
 - **헛다리**:
-  1. *Opus 도 빠른 응답 가능* 가정 → 실제로는 코드 수정 단순 케이스에 과한 소비. Sonnet 4.6 이 3배 빠르고 코드 추론 충분.
-  2. *CLI 기본값 의존 OK* 가정 → 미래 Claude Code 가 기본을 Haiku 로 바꾸면 자가수정 품질 즉시 하락. *항상 명시*.
+  1. *최상위 모델도 빠른 응답 가능* 가정 → 실제로는 코드 수정 단순 케이스에 과한 소비. 한 단계 아래가 3배 빠르고 코드 추론 충분.
+  2. *CLI 기본값 의존 OK* 가정 → 미래 Claude Code 가 기본을 저비용 모델로 바꾸면 자가수정 품질 즉시 하락. *항상 명시*.
 - **해결 (모델 정책 — ★ 사용자 박제 영구)**:
-  - **글 작성 (Haiku 4.5)**: writer / writer_fast / router / analyzer alias. 변경 없음. 100+ 호출 지점 그대로.
-  - **코드 수정 (Sonnet 4.6)**: 신규 alias 2종 — `coder` (`claude-sonnet-4-6`, max=8000, temp=0.1) + `guardian` (호환 alias, 동일). CLI alias = `sonnet`.
-  - **복잡 추론 (Opus 4.6)**: 신규 alias 2종 — `architect` (`claude-opus-4-6`, max=10000, temp=0.3) + `diagnostic` (max=6000, temp=0.2). CLI alias = `opus`.
+  - **글 작성 (하위 계층)**: writer / writer_fast / router / analyzer alias. 변경 없음. 100+ 호출 지점 그대로.
+  - **코드 수정 (중간 계층)**: 신규 alias 2종 — `coder` (max=8000, temp=0.1) + `guardian` (호환 alias, 동일).
+  - **복잡 추론 (상위 계층)**: 신규 alias 2종 — `architect` (max=10000, temp=0.3) + `diagnostic` (max=6000, temp=0.2).
   - 적용 4파일:
     1. `shared/llm.py` MODELS 카탈로그 — 4 alias 신설/수정 + `invoke_text._ALIAS_MODEL` 라우팅 추가.
-    2. `JARVIS07_GUARDIAN/error_analyzer.py` — `cli_model = "sonnet"` 명시. Sonnet 빈 결과 + severity in (high, critical) → Opus 재시도 폴백.
-    3. `JARVIS01_MASTER/auto_repair.py` — Claude Code CLI 명령에 `"--model", "sonnet"` 명시 박제.
-    4. `JARVIS00_INFRA/architect.py` — `_generate_spec` → `invoke_text("architect", ...)` (Opus). `_generate_exec_plan` → `invoke_text("coder", ...)` (Sonnet, 코드 스켈레톤 JSON 생성).
+    2. `JARVIS07_GUARDIAN/error_analyzer.py` — 중간 계층 명시. 빈 결과 + severity in (high, critical) → 상위 계층 재시도 폴백.
+    3. `JARVIS01_MASTER/auto_repair.py` — Claude Code CLI 명령에 `--model` 명시 박제.
+    4. `JARVIS00_INFRA/architect.py` — `_generate_spec` → `invoke_text("architect", ...)` (상위). `_generate_exec_plan` → `invoke_text("coder", ...)` (중간, 코드 스켈레톤 JSON 생성).
 - **검증**:
   - `python3 -c "from shared.llm import MODELS; [print(a,s.model_id) for a,s in MODELS.items()]"` → 8 alias 정확.
-  - `grep -rn "claude-opus-4-7" --include='*.py'` → 0 행 (잔존 없음).
+  - 가설 ID 잔존 grep → 0 행.
   - `ast.parse` 4파일 OK.
 - **파일**: `shared/llm.py`, `JARVIS07_GUARDIAN/error_analyzer.py`, `JARVIS01_MASTER/auto_repair.py`, `JARVIS00_INFRA/architect.py`
 - **교훈**:
-  1. 모델 ID 는 항상 `shared/llm.py` MODELS 단일 진입점 — 다른 파일에 raw 모델 ID 박지 말 것 (CLI alias `haiku`/`sonnet`/`opus` 만 사용).
+  1. 모델 ID 는 항상 `shared/llm.py` MODELS 단일 진입점 — 다른 파일에 raw 모델 ID 박지 말 것 (CLI alias 만 사용). ★ 2026-07-24 [491] 로 강화 — alias 도 `shared.llm.model_id()` 파생.
   2. CLI 호출 `--model` 인자 *반드시 명시* — 기본값 의존 금지.
-  3. 코드 수정 vs 글 작성 vs 아키텍처 설계는 *추론 깊이* 다름 → 모델 분리 (Haiku / Sonnet / Opus).
+  3. 코드 수정 vs 글 작성 vs 아키텍처 설계는 *추론 깊이* 다름 → 모델 계층 분리 (저비용/중간/상위 3단). ★ 이 판단은 2026-07-06 ADR 017 로 폐기 — 단일 계층.
   4. 새 alias 추가 시 ① MODELS dict ② `invoke_text._ALIAS_MODEL` 라우팅 ③ 호출 지점 alias 교체 — 3단계 모두 필수.
 
 ---
@@ -6088,7 +6765,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
   2. *테마글 발행* 만 옛 패턴 — `jarvis_main.run_theme` + `generate_all_articles` + `collect_theme.generate_report` (CrewAI 3-agent). 매우 무거움 + subprocess 호출 잠재 사고.
   3. 통일 파이프라인 적용 시 *①단계 데이터 수집만 다름* — 시장 데이터(경제) vs 종목 데이터(테마).
 - **해결** (5개 파일 신설/수정):
-  1. **`collect_theme.collect_stocks_data(theme)` 신설** — CrewAI 폐기. Claude haiku 1회 (종목 7개 + 야후 티커 추출) + `_naver_fin(code)` 병렬(ThreadPoolExecutor max_workers=4) 호출. 결과: `{"theme", "stocks": [...], "summary": {...}}`. 호출 시간 90% 단축.
+  1. **`collect_theme.collect_stocks_data(theme)` 신설** — CrewAI 폐기. LLM 1회 (종목 7개 + 야후 티커 추출) + `_naver_fin(code)` 병렬(ThreadPoolExecutor max_workers=4) 호출. 결과: `{"theme", "stocks": [...], "summary": {...}}`. 호출 시간 90% 단축.
   2. **`JARVIS02_WRITER/theme_html_writer.py` 신설** — 테마주 HTML 1-pass(실제 2-pass) 생성기. `tistory_html_writer` 의 헬퍼 5종 재사용 (save/screenshot/assemble/extract_title/extract_text_content). 테마 전용 prompt + Pass-2 SVG 8개 병렬.
   3. **`JARVIS02_WRITER/trend_theme_writer.py` 신설** — 테마 통일 파이프라인. 8단계 (`trend_economic_writer` 와 100% 동일):
      ```
@@ -6448,7 +7125,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
   └────────────────────────────────────────────────┘
       ↓ 미매칭
   ┌── tier 3: LLM 폴백 (error_analyzer) ──────────┐
-  │   Haiku 전체 파일 분석                          │
+  │   LLM 전체 파일 분석                            │
   │   LLM 호출: 1회 │ 속도: ~10초 │ 정확도: 가변   │
   │   → 성공 시 자동 학습 등록 (다음엔 tier 1)     │
   └────────────────────────────────────────────────┘
@@ -6478,7 +7155,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **증상**: 사용자 지적 "자동 수정 비율 너무 낮음. 진짜 어려운 거 빼고는 거의 다 자동이어야 진정한 GUARDIAN. 수동 수정도 카운트 안 됨." → 본질적 한계 진단·구조 개편.
 - **환경**: `JARVIS07_GUARDIAN/` 전체.
 - **본질 진단** (4가지 한계):
-  1. **자동 수정이 LLM 전체 patch 생성에만 의존** — error_analyzer 가 흔한 패턴(상대 import·NoneType slicing 등)도 무조건 Claude haiku 호출 → 전체 파일 patch 받아 덮어쓰기. 위험·느림·실패율 높음.
+  1. **자동 수정이 LLM 전체 patch 생성에만 의존** — error_analyzer 가 흔한 패턴(상대 import·NoneType slicing 등)도 무조건 LLM 호출 → 전체 파일 patch 받아 덮어쓰기. 위험·느림·실패율 높음.
   2. **패턴 기반 자동 fixer 0** — 명확하고 결정적인 패턴도 LLM fallback. 비용 낭비 + 결과 불일치.
   3. **수동 수정 추적 API 부재** — Claude/사용자가 실제로 다수의 결함 수정해도 *런타임 오류로 잡힌 항목* 만 DB INSERT. 수동수정 카드 영구 0.
   4. **severity 룰 보수적** — high 는 무조건 LLM 분석 대기. 패턴으로 즉시 해결 가능한 case 도 대기.
@@ -6496,7 +7173,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
   5. **CLAUDE.md "오류 관리 규정" 보강** — 수동 수정 기록 의무 + 패턴 fixer 확장 절차 박제.
 - **결과**:
   - 패턴 매칭 검증 — `JARVIS03_RADAR/charts.py` 의 `from constants import` 가상 traceback → `_fix_relative_import` 매칭 ✅ + 정확한 절대 경로 patch 생성.
-  - 수동 수정 회고 박제 — 최근 세션 15+ 작업 (Sonnet→Haiku 통일, BLOG_SUPREME_LAW 단일화, hub.py NoneType, GUARDIAN 흐름, naver_poster import 등) → 19건 manual 박제 완료.
+  - 수동 수정 회고 박제 — 최근 세션 15+ 작업 (모델 계층 통일, BLOG_SUPREME_LAW 단일화, hub.py NoneType, GUARDIAN 흐름, naver_poster import 등) → 19건 manual 박제 완료.
   - 카드 변경: 수동수정 **0건 → 22건** (정확한 작업량 반영).
   - 출처별: writer 11건 / infra 5건 / guardian 5건 / radar 1건.
 - **파일**:
@@ -6670,29 +7347,29 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-### [74] Sonnet/Opus 잔존 검사 — 코드 클린, 옛 문서 표기만 잔존 (2026-05-12)
-- **증상**: 사용자 "Sonnet, Opus가 있는지 체크하고 전부 Haiku로 대체" 요청. 데몬 부팅 로그(2026-05-11 22:39)에 `ask_sonnet` 도구 등록 표기 노출 — 진행 중인 데몬이 옛 코드 기준이라는 인상.
+### [74] 상위 계층 모델 잔존 검사 — 코드 클린, 옛 문서 표기만 잔존 (2026-05-12)
+- **증상**: 사용자가 *상위 계층 모델이 남아 있는지 점검하고 전부 저비용 계층으로 대체* 요청. 데몬 부팅 로그(2026-05-11 22:39)에 상위 계층 이름이 박힌 도구 등록 표기 노출 — 진행 중인 데몬이 옛 코드 기준이라는 인상.
 - **환경**: 전체 코드베이스 (`JARVIS00_INFRA` ~ `JARVIS07_GUARDIAN` + `shared/`).
 - **원인 진단**:
-  1. **실제 코드는 이미 Haiku 100%** — `shared/llm.py` MODELS 4 alias(writer/writer_fast/router/analyzer) 모두 `claude-haiku-4-5-20251001`. `invoke_text` alias 매핑 모두 `"haiku"`. `invoke_claude_cli(model="haiku")` 기본값.
+  1. **실제 코드는 이미 저비용 계층 100%** — `shared/llm.py` MODELS 4 alias(writer/writer_fast/router/analyzer) 모두 하위 계층 model_id. `invoke_text` alias 매핑·`invoke_claude_cli` 기본값 모두 동일.
   2. `JARVIS01_MASTER/agent_tools.py` 도구는 이미 `ask_claude` (이전 `ask_sonnet`에서 교체 완료). `ensure_loaded()` expected set·`core_agent.py` CAPABILITIES·`router.py` REACT_SYSTEM_PROMPT 모두 ask_claude.
-  3. `JARVIS00_INFRA/architect.py` 실제 호출 = `invoke_text("writer_fast"/"writer")` → Haiku.
+  3. `JARVIS00_INFRA/architect.py` 실제 호출 = `invoke_text("writer_fast"/"writer")` → 저비용 계층.
   4. **데몬 로그의 `ask_sonnet` 표기 = 2026-05-11 22:39 부팅 시점의 옛 상태 기록** — 코드 교체 후 데몬 미재시작. 데몬 재시작 시 ask_claude 로 갱신됨.
-  5. **옛 문서 표기 잔존**: `JARVIS00_INFRA/ARCHITECT_DESIGN.md` 3곳 ("Sonnet 호출", "Haiku + Sonnet + Haiku", "Haiku 2회 + Sonnet 1회").
+  5. **옛 문서 표기 잔존**: `JARVIS00_INFRA/ARCHITECT_DESIGN.md` 3곳 — 문서가 *상위 계층 혼용* 으로 적혀 있었으나 코드는 이미 저비용 단일이었다.
 - **헛다리**: grep 검색에서 `.venv/*` (3rd party — crewai/langgraph 라이브러리 상수), `chrome_profile/*` (Chrome 사전 데이터 — sonnet/octopus 등 일반 영단어), `logs/*.txt` (블로그 본문에 "팝송", "옵션" 등 자연 등장) false positive 다수. 프로젝트 코드(.py) + 자비스 문서(.md) 만 정밀 검사 필요.
 - **해결**: ARCHITECT_DESIGN.md 3곳 표기 갱신.
-  1. L36: "Sonnet 호출 + 표준 양식 강제 prompt" → "Haiku 호출 (`invoke_text(\"writer\")`) + 표준 양식 강제 prompt"
-  2. L109 cost: "Haiku 의도 파싱 + Sonnet 설계 + Haiku 검증" → "Haiku 의도 파싱 + Haiku 설계 + Haiku 검증 — 전체 Haiku 단일 모델"
-  3. L391: "Haiku 2회 + Sonnet 1회 ≈ ~$0.05" → "Haiku 3회 ≈ ~$0.01. 자비스 전체가 Haiku 단일 모델로 통일 — Sonnet/Opus 의존 0"
+  1. L36: 상위 계층 호출 표기 → 실제 호출(`invoke_text("writer")`) 표기로 정정
+  2. L109 cost: 계층 혼용 표기 → *전 단계 동일 모델* 표기로 정정
+  3. L391: 계층 혼용 비용 추정 → *동일 모델 3회* 비용으로 정정 (상위 계층 의존 0)
 - **파일**: `JARVIS00_INFRA/ARCHITECT_DESIGN.md` (3곳)
-- **보존**: `JARVIS01_MASTER/proactive_monitor.py:772` `_MODEL_PAT` 정규식 — 모델 호출이 아니라 *false positive 방지 패턴*. 코드 라인에서 모델명 문자열을 제거해서 `_YEAR_PAT(2023~2029년)` 검사가 모델명 안 연도(예: `claude-3-5-sonnet-20240620`)에 false match 안 되도록 함. 보안 안전망 — sonnet/opus 패턴 유지 필요.
+- **보존**: `JARVIS01_MASTER/proactive_monitor.py:772` `_MODEL_PAT` 정규식 — 모델 호출이 아니라 *false positive 방지 패턴*. 코드 라인에서 모델명 문자열을 제거해서 `_YEAR_PAT(2023~2029년)` 검사가 모델명 안 연도(예: `claude-<family>-20240620`)에 false match 안 되도록 함. 보안 안전망 — family 패턴 유지 필요.
 - **데몬 재시작 필요**: 코드는 이미 ask_claude 이지만 진행 중인 데몬은 옛 상태(ask_sonnet 등록). `pkill -f jarvis_daemon.py && nohup python jarvis_daemon.py > logs/daemon.log 2>&1 &` 후 부팅 로그에서 `ask_claude` 확인.
 - **검증 명령** (둘 다 0행):
   ```bash
   # ① 프로젝트 .py 파일에서 모델 ID 직접 사용 (.venv 제외)
-  grep -rnE 'claude-(sonnet|opus|3-5|3-)' --include='*.py' JARVIS* shared 2>/dev/null
-  # ② JARVIS00~07 .md 문서에서 Sonnet/Opus 호출 표현
-  grep -rnE 'Sonnet 호출|Opus 호출|Sonnet 설계' JARVIS*/*.md 2>/dev/null
+  # ★ 2026-07-24 [491] 이후로는 이 grep 대신 `precommit_check.py --category model` 을 쓴다
+  #   (유효 ID 를 박지 않고 shared/llm.py 를 매 실행 파싱 — 검사기가 낡지 않는다)
+  # ② JARVIS00~07 .md 문서에서 상위 계층 호출 표현 — 위 검사가 .md 까지 스캔하므로 불필요
   ```
 - **교훈**: 모델 검사는 ① 실제 호출 경로(`shared/llm.py` MODELS + `invoke_text`) ② 도구 정의(`agent_tools.py`) ③ 설계 문서(`*.md`) 세 층 모두. 데몬 부팅 로그는 *부팅 시점 상태* — 코드 진실은 grep. 광범위 grep 시 `.venv`·`chrome_profile`·`logs/*.txt` 제외 필수. 모델명 정규식 패턴은 false positive 방지용이므로 보존.
 
@@ -7402,7 +8079,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **증상**: 16시 발행 테마글 3건(id=31/32/33, 가상화폐 비트코인) 한글 1407/1440/1716자 — 목표 2500자의 56~69% 수준. 사용자가 "2500자 압축이 아니라 2500자에서 끊었다"고 클레임.
 - **환경**: `shared/seo.py compress_to_korean()` 의 5중 방어선이 모두 작동했으나 결과가 너무 짧음.
 - **원인** (3중 결함):
-  1. **프롬프트 모호성**: `"한글 {target_low}~{max_korean}자 이내"` 의 *이내*가 상한만 강조 → Claude haiku 가 "더 짧아도 OK"로 해석. 실측 평균 944자 (목표의 38%).
+  1. **프롬프트 모호성**: `"한글 {target_low}~{max_korean}자 이내"` 의 *이내*가 상한만 강조 → LLM 이 "더 짧아도 OK"로 해석. 실측 평균 944자 (목표의 38%).
   2. **하한선 검증 부재**: 결과 길이 검증 없이 첫 응답을 그대로 반환. `target_low=2125`(85%) 미달이어도 통과.
   3. **경계 강제 호출**: 살짝 초과(2662자, 110% 이내)도 LLM 호출 → 1055자로 더 망가짐. 2500자에 가까운 글은 그냥 두는 게 안전.
   4. **max_tokens=4500 부족**: 한글 2500자 = 약 5000~6500 tokens. 4500은 빠듯.
@@ -7617,7 +8294,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
   - LLM prompt 에 "다양하게 써라" 만 추가 — 코드의 고정 텍스트 분기가 그대로면 효과 없음.
   - tip_box 변형을 5~6개로 늘리는 단순 패치 — 사용자 의도 (매번 다른 표현) 미충족.
 - **해결**:
-  1. `collect_theme.py` 에 `_make_stock_tip(theme, name, is_profit, op_good, per_ok)` 신설 — Claude haiku 호출 (temperature 0.8). prompt 에 `today` 시드·"매번 다른 표현 필수"·"어제 글과 동일 금지" 명시.
+  1. `collect_theme.py` 에 `_make_stock_tip(theme, name, is_profit, op_good, per_ok)` 신설 — LLM 호출 (temperature 0.8). prompt 에 `today` 시드·"매번 다른 표현 필수"·"어제 글과 동일 금지" 명시.
   2. `_make_stock_analysis` fallback — 4가지 변형 풀 + `hashlib.md5(date|name)` 시드 → 매일·매 종목 다른 결과.
   3. `jarvis_main.py` `_OUTRO_RULES` — "disclaimer 금지" → "면책 1문장 *반드시* 자유 작성" 으로 정책 반전. 문구는 LLM 자유 생성.
   4. `_safe_outro` 정책 반전 — 면책 키워드 (`참고|권유|책임`) *없으면* 폴백 추가, 있으면 그대로 통과. 폴백도 3가지 변형 + 날짜 시드.
@@ -7796,13 +8473,13 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **증상**: 하루 API 토큰 사용량이 비정상적으로 높음. 원인 불명.
 - **환경**: JARVIS01 테마 발행(16:00) + 경제지표 발행(07:00) 매일 실행 중.
 - **원인**: 3곳에서 토큰 낭비 발생.
-  1. `collect_theme.py` CrewAI: researcher/auditor/writer 3개 에이전트 모두 `claude-sonnet-4-5 max_tokens=16000` 공유. CrewAI 내부 반복 호출 포함 시 테마 발행 1회당 Sonnet 16000 × 8~15회.
-  2. `economic_poster.py` `generate_articles_triple()`: Sonnet 15000짜리 dead code 함수가 실수로 호출될 위험 상존.
-  3. `shared/seo.py` compress: Haiku max_tokens=8000. 압축 결과는 항상 원문보다 작아 4000이면 충분.
+  1. `collect_theme.py` CrewAI: researcher/auditor/writer 3개 에이전트가 같은 모델 `max_tokens=16000` 공유. CrewAI 내부 반복 호출 포함 시 테마 발행 1회당 16000 토큰 × 8~15회.
+  2. `economic_poster.py` `generate_articles_triple()`: max_tokens=15000 짜리 dead code 함수가 실수로 호출될 위험 상존.
+  3. `shared/seo.py` compress: max_tokens=8000. 압축 결과는 항상 원문보다 작아 4000이면 충분.
 - **헛다리**: 없음 (정적 분석으로 즉시 특정).
 - **해결**:
-  1. `collect_theme.py`: 에이전트별 LLM 분리. researcher→Haiku 800, auditor→Haiku 2500, writer→Sonnet 8000. `my_llm` 전역 변수 완전 제거.
-  2. `economic_poster.py`: `generate_articles_triple()` 함수에 deprecation guard 추가. 호출 시 `generate_article_single` 3회로 redirect. Sonnet 15000 코드는 unreachable로 격리.
+  1. `collect_theme.py`: 에이전트별 LLM 분리. researcher→저비용 800, auditor→저비용 2500, writer→상위 8000. `my_llm` 전역 변수 완전 제거.
+  2. `economic_poster.py`: `generate_articles_triple()` 함수에 deprecation guard 추가. 호출 시 `generate_article_single` 3회로 redirect. max_tokens=15000 코드는 unreachable로 격리.
   3. `shared/seo.py`: `max_tokens=8000 → 4000`.
 - **파일**: `JARVIS02_WRITER/collect_theme.py`, `JARVIS02_WRITER/economic_poster.py`, `shared/seo.py`
 - **교훈**: CrewAI 에이전트는 역할별로 LLM을 분리해야 함. 단순 목록 출력(researcher)·툴 결과 전달(auditor)에 Sonnet은 낭비. writer만 Sonnet. max_tokens는 실제 출력 크기 기준으로 설정.
@@ -7842,7 +8519,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 ### [36] ReAct 결과 `list.strip()` AttributeError — Claude content 멀티블록 미처리 (2026-05-07)
 
 - **증상**: 텔레그램 "등록 완결 요청" 버튼 → ReAct 10단계 실행 후 `'list' object has no attribute 'strip'` 에러. 수동 처리 안내만 뜨고 자동 수정 실패.
-- **환경**: `JARVIS01_MASTER/router.py` `_extract_react_result()` → `jarvis_daemon.py` `_run_react()`. Claude Sonnet 4.6 API 응답.
+- **환경**: `JARVIS01_MASTER/router.py` `_extract_react_result()` → `jarvis_daemon.py` `_run_react()`. Claude API 응답.
 - **원인**: Claude API는 `AIMessage.content` 를 `str` 이 아닌 `list[dict]` (멀티블록: `[{"type":"text","text":"..."}]`) 로 반환하는 경우가 있음. `_extract_react_result` 에서 이를 그대로 `text` 필드에 담았고, `_run_react` 끝에서 `out.get("text","").strip()` 호출 시 `list.strip()` → AttributeError.
 - **헛다리**: 없음 (traceback으로 즉시 특정).
 - **해결**:
@@ -8173,10 +8850,10 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 ---
 
 ### [66] 유료 API 직접 호출 — shared/llm.py 우회 (2026-05-11)
-- **증상**: `trend_alert.py`, `post_quality_analyzer.py`, `competitor_analyzer.py`, `daily_review.py`, `analyzer.py` 에서 `requests.post(CLAUDE_URL, ...)` 또는 `anthropic.Anthropic()` 직접 사용. 모델 버전 불일치 (`claude-sonnet-4-5-20250929` 존재하지 않는 모델).
+- **증상**: `trend_alert.py`, `post_quality_analyzer.py`, `competitor_analyzer.py`, `daily_review.py`, `analyzer.py` 에서 `requests.post(CLAUDE_URL, ...)` 또는 `anthropic.Anthropic()` 직접 사용. 모델 버전 불일치 (실재하지 않는 모델 ID 를 각자 박아둠).
 - **환경**: `JARVIS03_RADAR/*.py`, `JARVIS02_WRITER/collect_theme.py`
 - **원인**: 각 파일이 독립적으로 Anthropic API 를 직접 호출. `shared/llm.py` 의 중앙화된 `invoke_text()` 미사용.
-- **해결**: 5개 파일 모두 `from shared.llm import invoke_text as _inv` → `_inv(alias, prompt, ...)` 패턴으로 교체. `daily_review.py` 의 존재하지 않는 모델 상수 제거. `collect_theme.py` CrewAI LLM 인스턴스 모델 버전 업데이트 (`claude-sonnet-4-6`, `claude-haiku-4-5-20251001`).
+- **해결**: 5개 파일 모두 `from shared.llm import invoke_text as _inv` → `_inv(alias, prompt, ...)` 패턴으로 교체. `daily_review.py` 의 존재하지 않는 모델 상수 제거. `collect_theme.py` CrewAI LLM 인스턴스 모델 버전 업데이트.
 - **파일**: `trend_alert.py`, `post_quality_analyzer.py`, `competitor_analyzer.py`, `daily_review.py`, `analyzer.py`, `collect_theme.py`
 - **교훈**: 모든 LLM 호출은 `shared/llm.py invoke_text()` 를 통해야 함. 모델 버전 변경 시 `shared/llm.py` 의 `MODELS` dict 한 곳만 수정하면 전체 반영. 직접 API 키·URL 사용은 버전 불일치와 비용 추적 불가 문제 유발.
 
@@ -8577,13 +9254,13 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [354] 구버전 모델 ID 코드 전반 잔존 — Sonnet 4.6·Opus 4.6·Haiku (2026-07-05)
+## [354] 구버전 모델 표기 코드 전반 잔존 — 주석·docstring (2026-07-05)
 
-- **증상**: 주석·docstring·탐지 프롬프트에 `Sonnet 4.6`, `Opus 4.6`, `Haiku` 구버전 표기 10+건 잔존. `shared/llm.py` `MODELS` dict 런타임은 이미 `claude-sonnet-5`/`claude-opus-4-8` 로 정확했으나 주석이 구버전 기술.
+- **증상**: 주석·docstring·탐지 프롬프트에 *구버전 모델 표기* 10+건 잔존. `shared/llm.py` `MODELS` dict 런타임은 이미 갱신돼 정확했으나 주석만 옛 세대를 기술.
 - **환경**: `JARVIS06_IMAGE/draft_processor.py`, `JARVIS07_GUARDIAN/error_analyzer.py`, `JARVIS07_GUARDIAN/auto_repair.py`, `JARVIS00_INFRA/architect.py`, `JARVIS01_MASTER/proactive_monitor.py`, `jarvis_daemon.py`, `JARVIS03_RADAR/post_quality_analyzer.py`, `JARVIS07_GUARDIAN/{auditor,eval_agent,error_collector,pattern_fixer,incident_responder}.py`, `shared/llm.py`.
-- **원인**: 모델 버전 정책 갱신(Sonnet→5, Opus→4.8, Haiku 완전 폐지) 시 런타임 코드는 수정했으나 주석·docstring은 일괄 스크럽 미실시.
+- **원인**: 모델 버전 정책 갱신 시 런타임 코드는 수정했으나 주석·docstring 은 일괄 스크럽 미실시.
 - **헛다리**: 없음
-- **해결**: 전수 grep(`Sonnet 4.[0-9]`, `Opus 4.[0-7]`, `Haiku\b`, `claude-haiku`) → 10+ 파일 주석·docstring 일괄 수정. 최소 버전 = Sonnet 5. Haiku는 완전 폐지(detection 패턴으로만 존재 허용).
+- **해결**: 구버전 표기 전수 grep → 10+ 파일 주석·docstring 일괄 수정. (★ 2026-07-24: 이 grep 을 사람 손이 아니라 `precommit --category model` 이 대신하도록 자동화 — ERRORS [491])
 - **파일**: 위 열거 10+ 파일 (코드 런타임 변경 0 — 주석·docstring만)
 - **교훈**: 런타임 단일 진입점(`shared/llm.py MODELS` dict)이 정확해도 주석이 구버전이면 다음 작업자가 혼동함. 모델 정책 변경 시 런타임 + 주석·docstring 동시 전수 스크럽 의무.
 
@@ -8729,7 +9406,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 ## [458] "SDK 사용량 한도는 Max 구독과 별개" 주장 반증 — 별도 버킷 없음. 한도 창은 `limits` 배열로 동적 렌더 (2026-07-20)
 - **증상**: 사용자가 "Claude 토큰이 아직 많이 남았는데 왜 사용량 한도에 걸리냐" 고 물었을 때, 어시스턴트가 *근거 없이* "SDK 사용량 한도는 Max 구독과 별도로 존재한다" 고 답한 이력이 있음. 사용자가 그 한도를 대시보드에 표시해달라고 요구 → 실존 여부부터 검증 필요.
 - **환경**: `/api/oauth/usage` (Anthropic 비공개 엔드포인트), claude-code-sdk 0.0.25, Max 구독 OAuth.
-- **원인**(주장의 근거 부재): SDK 는 `claude` CLI 를 spawn 하고 **동일한 OAuth 토큰** 을 사용한다. 따라서 대화·CLI·SDK 가 *같은 구독 한도* 를 소비한다. 실측 응답에서 SDK/OAuth 앱 전용 버킷으로 보이는 `seven_day_oauth_apps` 는 **null**, `seven_day_opus`·`seven_day_sonnet`·`seven_day_cowork` 등도 전부 **null**. 활성 한도는 `limits` 배열의 3개뿐 — `session`(5시간, 잔여 90%, is_active=false) / `weekly_all`(7일, 잔여 54%, **is_active=true**) / `weekly_scoped`(Fable, 잔여 100%, is_active=false). **별도 SDK 한도는 존재하지 않는다.**
+- **원인**(주장의 근거 부재): SDK 는 `claude` CLI 를 spawn 하고 **동일한 OAuth 토큰** 을 사용한다. 따라서 대화·CLI·SDK 가 *같은 구독 한도* 를 소비한다. 실측 응답에서 SDK/OAuth 앱 전용 버킷으로 보이는 `seven_day_oauth_apps` 는 **null**, 모델 계층별 `seven_day_*` 버킷과 `seven_day_cowork` 등도 전부 **null**. 활성 한도는 `limits` 배열의 3개뿐 — `session`(5시간, 잔여 90%, is_active=false) / `weekly_all`(7일, 잔여 54%, **is_active=true**) / `weekly_scoped`(Fable, 잔여 100%, is_active=false). **별도 SDK 한도는 존재하지 않는다.**
 - **헛다리**: ① "SDK 한도가 따로 있다" — 반증됨(전용 버킷 전부 null). 이 잘못된 설명이 ERRORS [457] 의 "한도 소진" 오진을 강화하는 데 일조했다. ② 초기 UI 가 `five_hour`·`seven_day` 두 키를 *하드코딩* — Anthropic 이 버킷을 추가/개명하면 화면이 조용히 낡는다(ERRORS [456] 에서 지적한 것과 동일한 실수를 UI 에서 반복할 뻔).
 - **해결**: 응답의 **`limits` 배열이 구조화된 정식 소스**(kind·group·percent·severity·resets_at·scope·is_active)임을 확인하고, UI 가 이 배열을 *그대로 순회 렌더* 하도록 변경. 창 종류·개수를 하드코딩하지 않으므로 버킷이 추가돼도 자동 노출된다. 대표 KPI 는 `is_active=true` 인 창 중 잔여 최소값(없으면 전체 최소). 각 카드에 '● 적용중' 배지로 실제 구속 창을 명시하고, "SDK·CLI·대화가 같은 구독 한도를 공유 — 별도 SDK 한도 없음" 을 화면에 못박음.
 - **검증**: 렌더 데이터 = 5시간 창 90%(대기) / 7일 창 54%(● 적용중) / 모델별 주간 Fable 100%(대기). `npx tsc --noEmit` 통과.
@@ -8805,3 +9482,81 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **원인**: `_collect_naver_views`/`_collect_tistory_views`/`_collect_naver_rank` 내부의 `requests.get(..., timeout=N)`은 TCP 연결·응답 타임아웃만 보장할 뿐, DNS 조회(getaddrinfo)가 멈추거나 소켓 레벨에서 무응답이 발생하면 지정한 timeout을 넘겨 무한정 블로킹될 수 있다(이전 ERRORS [401] yfinance hang과 동일 근본 원인 클래스). 이 파일은 게시글 1건당 한 번만 `_wd_beat()`를 호출하므로, 특정 게시글 처리 중 위와 같은 소켓 레벨 hang이 발생하면 300초 무진전 기준을 넘겨 watchdog이 freeze로 판단해 `os._exit(75)`로 강제 종료시킨다. `RequestsDependencyWarning`은 종료 시점에 버퍼에 남아있던 무해한 경고 텍스트일 뿐 실제 원인이 아니다.
 - **파일**: JARVIS03_RADAR/performance_collector.py
 - **해결**: 자동 수정 적용
+
+## [500] 사실성 게이트가 *진짜 사실* 을 오차단 — NaN 이 grounds() 를 크래시시켜 '미확인'으로 둔갑 (2026-07-25)
+
+- **증상**: 경제 브리핑 티스토리 2회 연속 `[사실성] 출처·데이터 미확인: 반도체 -9.5% 출렁인 한 주` → max_attempts(2) 소진 → 미발행. 같은 날 이미지에서 `ValueError: cannot convert float NaN to integer`.
+- **환경**: 2026-07-25 07:00 경제 브리핑. 네이버는 2차 시도(제목 `EBSI 144`)로 발행 성공 — 단위 토큰(%·원)이 없어 수치 검사를 *건너뛴* 것이지 잘 써서가 아니었다.
+- **원인**: ① yfinance 는 비거래일·미체결 구간에도 행을 붙이고 그 Close 는 NaN. `get_market_data` 가 `period="2d"` 의 `iloc[-1]` 을 무조건 집어 코스피·코스닥이 NaN 으로 수집됨(로그는 "12개 지표 수집 완료" — 실패로도 안 잡히는 무증상 오염). ② 그 NaN 이 gt 로 흘러 `grounds()` 의 `math.floor(NaN)` 에서 ValueError → `prepublish_gate` 의 `except Exception: grounded=False` 가 크래시를 삼켜 **진짜 사실을 '출처 미확인'으로 차단**. `any()` 단축평가라 NaN 이 매치보다 앞설 때만 터져 비결정적이었다. ③ 같은 NaN 이 `pro_templates` 의 `int(NaN)` 도 터뜨림 — 한 병의 두 증상.
+- **헛다리**: GUARDIAN 이 이를 'LLM 이 카탈로그에 없는 수치를 제목에 지어냄'으로 오진단(error_log 4144 `FactualityGateTitleFabrication`) → TITLE 수치 전면금지 규칙을 심음(커밋 363f5c2). **-9.5% 는 etoday 기사 원문·KRX datasets·evidence fact(신뢰 0.9) 3중 근거가 있는 실제 수치**였다. Tier-2 도 2회 태웠으나 고친 것 0(id=4142, fixed_file=None).
+- **해결**: ★발생원 — `Close.dropna()` 후 마지막 유효 종가 사용(창 2d→5d, economic·finance provider 양쪽). 지표를 잃지 않고 NaN 이 안 생김(라이브 12지표 NaN 0). ★방어1 — `grounds()` 가 NaN/Inf 를 크래시 대신 '미근거'(False) 처리(공유 비교기 단일 진입점). ★방어2 — `compose_collected` 조립 지점에서 결측 포인트 제거(0 으로 채우지 않음). ★분류 — `NON_CODE_ISSUE_KINDS` 에 `factuality` 추가(사실성 차단은 글 내용 문제, 코드버그 아님 — 2026-07-22 미승인 → 2026-07-25 승인 번복). ★규칙 — TITLE 은 '창작 금지'(근거 있으면 허용)로 교정.
+- **파일**: JARVIS09_COLLECTOR/models.py · collector_engine.py · providers/economic_data_provider.py · providers/finance_provider.py · JARVIS02_WRITER/draft_writer.py · JARVIS07_GUARDIAN/severity.py
+- **교훈**: **결측(NaN)을 값으로 착각하면 검증기가 거짓말을 한다.** 크래시를 삼키는 `except` 는 "판정 불가"를 "판정 실패(차단)"로 둔갑시킨다 — 비교기는 결측에서 *터지지 말고 False* 여야 한다. 그리고 게이트가 막았다고 해서 LLM 이 틀린 게 아니다. 오진단은 코드보다 **학습 원장을 더 오래 오염**시킨다.
+
+## [501] GUARDIAN 재시도가 '새 주제로 갈아엎기' 였다 — 수집·차단사유를 통째로 버림 (2026-07-25)
+
+- **증상**: 티스토리가 품질 게이트로 막히자 GUARDIAN 재시도가 *다른 주제*(반도체→액화천연가스)로 처음부터 다시 수집·작성.
+- **원인**: 재시도가 플랫폼 단독(`run(post_tistory=True)`)으로 재진입하면서 네이버 문맥을 잃고, 방금 네이버가 발행한 `반도체` 가 중복회피 원장(`post_analysis`)에 '사용됨'으로 잡혀 후보에서 밀려났다. 테마는 더 심해서 카탈로그 random 재선정(같은 테마 확률 ≈0). *주제를 물려줄 통로 자체가 없었다* — 의도가 아니라 사고.
+- **해결**: 재시도 = **같은 주제 이어받기 + 직전 차단사유 물려주기**. 주제 고정은 기존 장치 재사용(경제 `pick_slot_candidate(force_env=)` / 테마 `pick_theme(pinned=)`) — 새 선정 경로 신설 0. 차단사유는 하네스 내부 재작성과 같은 경로(`_{nv,ts}_draft_gate_feedback`)로 주입. 테마는 차단사유가 밖으로 안 나와 `run_all_themes` 반환에 `issues` 신설(경제 `EP_RESULT_FILE.harness_issues` 와 동일 규약). 슬롯→강제주제 env 접두사 사본 3곳은 `topic_pack.FORCE_ENV_PREFIX` 단일 소스로 통일.
+- **파일**: JARVIS02_WRITER/scheduler.py · economic_poster.py · trend_theme_writer.py · trend_economic_writer.py · JARVIS03_RADAR/topic_pack.py · JARVIS09_COLLECTOR/precollect.py
+- **교훈**: 재시도의 값어치는 *무엇을 물려주느냐* 에 있다. 주제와 실패 사유를 안 물려주면 그건 재시도가 아니라 **처음부터 다시**다.
+
+---
+### [2026-07-25 16:35] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/lib.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: reproduced_gone — import_symbol(_vt_demo.lib) OK
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
+
+---
+### [2026-07-25 16:35] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/user.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: reproduced_gone — import_symbol(_vt_demo.lib) OK
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
+
+---
+### [2026-07-25 16:35] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/lib.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: reproduced_gone — import_symbol(_vt_demo.lib) OK
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
+
+---
+### [2026-07-25 16:36] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/lib.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: reproduced_gone — import_symbol(_vt_demo.lib) OK
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
+
+---
+### [2026-07-25 16:36] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/lib.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: unverifiable — TypeError 는 런타임 데이터 의존 — 재현 불가 유형
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
+
+---
+### [2026-07-25 16:36] ✅ 자동수정 — 기타(?)
+- **증상**: 
+- **모듈**: 
+- **원인**: 
+- **파일**: _vt_demo/user.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정

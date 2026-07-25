@@ -16,58 +16,20 @@ except ImportError:
         def __call__(self, fn): return fn
         def __enter__(self): return self
         def __exit__(self, *a): return False
-from .providers import (
-    BlogProvider, NewsProvider,
-    FinanceProvider, WebProvider, KorEconProvider,
-    NaverNewsProvider, DartProvider, EcosProvider,
-    KosisProvider, KrxProvider, BokProvider,
-    CustomsProvider, KofiaProvider, FssProvider,
-    MlitProvider, EmploymentProvider,
-)
+from .source_registry import main_providers   # ★ 메인 수집 provider 목록 SSOT 파생
 
 log = logging.getLogger("jarvis.collector.engine")
 
 # ★ 수집 풍부 원칙 (사용자 박제 2026-07-03 ×2 — ADR 013 / ERRORS [314]):
 #   "주제가 설정되면 그 주제에 맞는 정보는 싹다 받아버려, 제한 두지 말고."
-#   "데이터가 부족해서 이미지를 생성 못하는 상황을 만들지 마라. 데이터는 충분해야 해."
-#   아래 상한은 무한루프 방지용 안전망일 뿐 — 신뢰순 *선별* 은 사용 시점(주입·검증)에.
-_PROVIDER_LIMITS = {
-    "naver_news": 30,  # 네이버 뉴스 API: 가장 정확한 한국어 뉴스
-    "news":       25,  # Google News + 경제지 RSS
-    "kor_econ":   15,  # 네이버 금융 + 전문 경제지
-    "krx":          20,  # KRX 시장 통계 (Tier 2 API)
-    "dart":         20,  # DART 전자공시 (Tier 2 API)
-    "ecos":         20,  # 한국은행 거시경제 지표 (Tier 2 API)
-    "kosis":        20,  # 통계청 산업 통계 (Tier 2 API)
-    "finance":      15,  # yfinance 글로벌 지표 (Tier 2 API)
-    "bok_official": 10,  # 한국은행 기준금리·환율·CPI (Tier 2 API)
-    "customs":     10,  # 관세청 수출입 통계 (Tier 2 API)
-    "kofia":        8,  # 금융투자협회 채권 수익률 (Tier 2 API)
-    "fss":          8,  # 금융감독원 금융통계 (Tier 2 API)
-    "mlit":         8,  # 국토교통부 부동산 통계 (Tier 2 API)
-    "employment":  10,  # 고용노동부 고용통계 (Tier 2 API)
-    "blog":       10,  # 네이버 블로그
-    "web":        10,  # 위키 + 지식백과 + 다음
-}
+#   소스별 상한은 무한루프 방지용 안전망일 뿐 — 신뢰순 *선별* 은 사용 시점(주입·검증)에.
+#   ★ source_registry.SOURCES 의 max_items 에서 파생 (사용자 박제 2026-07-24) — 사본 폐지. default 8.
+from .source_registry import MAX_PER_SOURCE as _PROVIDER_LIMITS
 
-_PROVIDERS = [
-    NaverNewsProvider(),   # 네이버 뉴스 API (키 있으면 최우선)
-    NewsProvider(),        # Google News + 경제지 RSS
-    KorEconProvider(),     # 네이버 금융 + 전문 경제지
-    KrxProvider(),         # KRX 시장 통계 (키 불필요)
-    BlogProvider(),        # 네이버 블로그
-    WebProvider(),         # 위키 + 지식백과 + 다음
-    DartProvider(),        # DART 전자공시 (키 필요)
-    EcosProvider(),        # 한국은행 ECOS (키 필요)
-    KosisProvider(),       # 통계청 KOSIS (키 필요)
-    FinanceProvider(),     # yfinance 글로벌 지표
-    BokProvider(),         # 한국은행 기준금리·달러/원·CPI 공식 지표
-    CustomsProvider(),     # 관세청 수출입 통계 (KOSIS 경유)
-    KofiaProvider(),       # 금융투자협회 채권·국고채 수익률 (ECOS 경유)
-    FssProvider(),         # 금융감독원 금융통계 (금융 주제 전용)
-    MlitProvider(),        # 국토교통부 부동산 통계 (부동산 주제 전용)
-    EmploymentProvider(),  # 고용노동부 고용통계 (KOSIS 경유)
-]
+# ★ 메인 수집 provider — source_registry.SOURCES(SSOT) 에서 파생 (사용자 박제 2026-07-24).
+#   종전엔 여기 16줄을 손수 유지했고 provider 목록이 chart_data._m·providers/__init__ 과 3벌
+#   흩어져 소스 하나 넣고 뺄 때마다 3곳을 고쳐야 했다. 이제 SOURCES 한 줄이면 전부 자동 반영.
+_PROVIDERS = main_providers()
 _MAX_WORKERS = 8   # 병렬 수집
 
 
@@ -75,7 +37,7 @@ _MAX_WORKERS = 8   # 병렬 수집
 def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
     """주제·섹터에 맞는 전 소스 병렬 수집 → 정제 결과 반환.
 
-    수집 소스: 뉴스(Google+한국경제지) + 한국경제전문 + 블로그 + 웹(위키+지식백과) + 금융지표 + 논문
+    수집 소스: 뉴스(Google+한국경제지) + 한국경제전문 + 블로그 + 웹(위키+지식백과) + 금융지표
     """
     try:
         from shared.pipeline_activity import mark_busy as _mb
@@ -142,7 +104,7 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
                 log.warning(f"[Engine] 정제 실패 ({raw.url}): {e}")
 
         # ★ 신뢰 우선 정렬 + 동일 내용 중복 시 고신뢰 소스 유지 (사용자 박제 2026-07-03 — ADR 013)
-        #   "논문 > API > 뉴스 > 기사 > 웹 — 겹치면 이 순서로 선택. 수집 자체는 전부."
+        #   "API > 뉴스 > 기사 > 웹 — 겹치면 이 순서로 선택. 수집 자체는 전부."
         from .models import trust_rank as _trust
         results.sort(key=lambda r: _trust(r.source_type))   # stable — 티어 내 원래 순서 보존
         _seen_hash: set[str] = set()
@@ -183,7 +145,7 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
 #
 #  "항상 설계를 먼저 하고 그 설계대로 수집한다. 부족하면 더 받아온다."
 #
-#  흐름: ① 티어순 광역 수집(_collect_tier — 논문>API>뉴스>기사>웹, 신뢰순위) + discover 웹발견
+#  흐름: ① 티어순 광역 수집(_collect_tier — API>뉴스>기사>웹, 신뢰순위) + discover 웹발견
 #        → ② 얇은 문서 전문 딥페치 → ③ EvidencePack 추출·커버리지 측정
 #        → ④ 미충족 시 2라운드 재수집(변형 쿼리+discover) → ⑤ 박제·반환
 #  (구 plan_research 설계-LLM·질문별 조준수집은 2026-07-11 _collect_tier 재작성으로 폐지)
@@ -192,7 +154,7 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
 _PROVIDER_BY_TYPE = {p.source_type: p for p in _PROVIDERS}
 
 
-SOURCE_CATEGORIES = ["blog", "news", "academic", "finance", "web"]
+SOURCE_CATEGORIES = ["blog", "news", "finance", "web"]
 """수집 소스 카테고리 (표시 SSOT — 대시보드가 이 목록·개수에서 파생)."""
 
 
@@ -269,21 +231,19 @@ def select_by_trust_quota(docs: list[CollectionResult],
                           budget: int | None = None) -> list[CollectionResult]:
     """★ 신뢰 서열 쿼터 선별 (사용자 박제 2026-07-06 v2 — "인포그래픽 만들 만큼 총 15개").
 
-    논문 최대 3 · API 최대 7 · 나머지 5(소스별 1개씩), 총 `budget`(기본 15)개.
+    API 최대 10 · 나머지 5(소스별 1개씩), 총 `budget`(기본 15)개.
     상위 티어 미달분은 다음 티어로 이월(cascade):
-      논문 2개 → API 8개까지 / 논문 0개 → API 10개까지 /
-      논문·API 모두 0 → 나머지에서 budget 전부.
+      API 8개 → 나머지 7개까지 / API 0개 → 나머지에서 budget 전부.
     나머지는 source_type 라운드로빈(각 1개씩 우선)으로 다양성 확보.
-    env: J09_QUOTA_BUDGET(총량)·J09_PAPER_CAP·J09_API_CAP 로 튜닝.
+    env: J09_QUOTA_BUDGET(총량)·J09_API_CAP 로 튜닝.
     """
     from .models import (quota_group, trust_rank,
-                         COLLECT_QUOTA_BUDGET, COLLECT_PAPER_CAP, COLLECT_API_CAP)
+                         COLLECT_QUOTA_BUDGET, COLLECT_API_CAP)
     budget = int(_os.getenv("J09_QUOTA_BUDGET", str(budget or COLLECT_QUOTA_BUDGET))
                  or COLLECT_QUOTA_BUDGET)
-    paper_cap = int(_os.getenv("J09_PAPER_CAP", str(COLLECT_PAPER_CAP)) or COLLECT_PAPER_CAP)
     api_cap = int(_os.getenv("J09_API_CAP", str(COLLECT_API_CAP)) or COLLECT_API_CAP)
 
-    groups: dict[str, list] = {"paper": [], "api": [], "rest": []}
+    groups: dict[str, list] = {"api": [], "rest": []}
     for d in docs:
         groups[quota_group(d.source_type)].append(d)
     # 각 그룹 내부: 신뢰 높은 소스 우선 (stable — 티어 내 원래 관련도 순서 보존)
@@ -293,18 +253,12 @@ def select_by_trust_quota(docs: list[CollectionResult],
     selected: list[CollectionResult] = []
     remaining = budget
 
-    # 논문: 최대 paper_cap
-    take = groups["paper"][:min(paper_cap, remaining)]
-    selected += take
-    remaining -= len(take)
-
-    # API: 최대 api_cap + 논문 미달분 이월
-    api_allow = api_cap + (paper_cap - len(take))
-    take_api = groups["api"][:min(api_allow, remaining)]
+    # API: 최대 api_cap
+    take_api = groups["api"][:min(api_cap, remaining)]
     selected += take_api
     remaining -= len(take_api)
 
-    # 나머지: 라운드로빈(각 source_type 1개씩) — 남은 예산 전부 (논문·API 미달분 자동 이월)
+    # 나머지: 라운드로빈(각 source_type 1개씩) — 남은 예산 전부 (API 미달분 자동 이월)
     if remaining > 0 and groups["rest"]:
         by_src: dict[str, list] = {}
         for d in groups["rest"]:   # 이미 trust 정렬됨 → 삽입 순서가 신뢰 순
@@ -317,8 +271,8 @@ def select_by_trust_quota(docs: list[CollectionResult],
                     selected.append(lst.pop(0))
                     remaining -= 1
 
-    log.info(f"[quota] 신뢰 쿼터 선별: 논문 {len(take)} · API {len(take_api)} · "
-             f"나머지 {len(selected) - len(take) - len(take_api)} = 총 {len(selected)}건 "
+    log.info(f"[quota] 신뢰 쿼터 선별: API {len(take_api)} · "
+             f"나머지 {len(selected) - len(take_api)} = 총 {len(selected)}건 "
              f"(후보 {len(docs)}건 중, 예산 {budget})")
     return selected
 
@@ -390,7 +344,7 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
                      max_rounds: int = 3, with_facts: bool = False,
                      with_digest: bool = False) -> dict:
     """★ 티어순 상한 수집 (사용자 박제 2026-07-11 — ERRORS [423]):
-    처음부터 논문 최대 3·API 최대 7·나머지 최대 5, cascade 이월.
+    처음부터 API 최대 10·나머지 최대 5, cascade 이월.
     광역수집 후 절삭 방식 완전 폐지 — 각 티어가 수집 시점에 상한 적용.
 
     ★ fact 추출 09 통일 (사용자 박제 2026-07-18): with_facts=True 면 수집 직후 09 내부에서
@@ -411,43 +365,35 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
     # busy 신호 수명 = 함수 수명 — 종료(성공·실패) 시 finally 에서 즉시 해제 (근본 수정 2026-07-16)
     try:
         from .models import (quota_group,
-                             COLLECT_QUOTA_BUDGET, COLLECT_PAPER_CAP, COLLECT_API_CAP)
+                             COLLECT_QUOTA_BUDGET, COLLECT_API_CAP)
 
-        paper_cap = int(_os.getenv("J09_PAPER_CAP",    str(COLLECT_PAPER_CAP))    or COLLECT_PAPER_CAP)
         api_cap   = int(_os.getenv("J09_API_CAP",      str(COLLECT_API_CAP))      or COLLECT_API_CAP)
         budget    = int(_os.getenv("J09_QUOTA_BUDGET", str(COLLECT_QUOTA_BUDGET)) or COLLECT_QUOTA_BUDGET)
 
         log.info(f"[research] 티어순 수집 시작: theme='{theme}' "
-                 f"쿼터=논문{paper_cap}·API{api_cap}·총{budget}")
+                 f"쿼터=API{api_cap}·총{budget}")
 
         # 티어별 프로바이더 분류
-        paper_provs = [p for p in _PROVIDERS if quota_group(p.source_type) == "paper"]
         api_provs   = [p for p in _PROVIDERS if quota_group(p.source_type) == "api"]
         rest_provs  = [p for p in _PROVIDERS if quota_group(p.source_type) == "rest"]
 
         seen_urls: set[str] = set()
 
-        # ① 논문: 최대 paper_cap
-        paper_docs = _collect_tier(paper_provs, theme, sector, paper_cap, seen_urls)
-        log.info(f"[research] 논문 {len(paper_docs)}/{paper_cap}건 확보")
-
-        # ② API: 최대 api_cap + 논문 이월
-        # ★ 뉴스·웹 최소보장 (2026-07-17): cascade(논문 미달분 이월)가 API 예산을 부풀려
-        #   '나머지'(뉴스·웹) 슬롯을 굶기지 않도록 상한 — budget 에서 rest_floor 는 남긴다.
-        #   기본 rest_floor=5 는 현행 '나머지5' 와 정합(숫자 변화 0, 순수 회귀 방지 안전망).
+        # ① API: 최대 api_cap
+        # ★ 뉴스·웹 최소보장 (2026-07-17): API 예산이 '나머지'(뉴스·웹) 슬롯을 굶기지 않도록
+        #   budget 에서 rest_floor 는 남긴다. 기본 rest_floor=5 는 현행 '나머지5' 와 정합.
         _rest_floor = int(_os.getenv("J09_REST_FLOOR", "5") or "5")
-        api_allow = api_cap + (paper_cap - len(paper_docs))
-        api_allow = min(api_allow, max(0, budget - len(paper_docs) - _rest_floor))
+        api_allow = min(api_cap, max(0, budget - _rest_floor))
         api_docs  = _collect_tier(api_provs, theme, sector, api_allow, seen_urls)
         log.info(f"[research] API {len(api_docs)}/{api_allow}건 확보")
 
-        # ③ 나머지: 남은 예산 전부 (cascade 자동)
-        rest_allow = budget - len(paper_docs) - len(api_docs)
+        # ② 나머지: 남은 예산 전부 (cascade 자동)
+        rest_allow = budget - len(api_docs)
         rest_docs  = (_collect_tier(rest_provs, theme, sector, rest_allow, seen_urls)
                       if rest_allow > 0 else [])
         log.info(f"[research] 나머지 {len(rest_docs)}/{rest_allow}건 확보")
 
-        all_docs = paper_docs + api_docs + rest_docs
+        all_docs = api_docs + rest_docs
 
         # 얇은 문서 전문 딥페치
         all_docs = _deep_fetch_thin_docs(all_docs, theme)
@@ -460,13 +406,13 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
                 from .evidence_pack import build_evidence_pack
                 _pack = build_evidence_pack(theme, {}, all_docs) or {}
                 out["pack"] = _pack
-                log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
+                log.info(f"[research] 완료: API{len(api_docs)}"
                          f"+나머지{len(rest_docs)}={total}건 → fact {len(_pack.get('facts', []))}개 추출(09)")
             except Exception as _fe:
                 out["pack"] = {}
                 log.warning(f"[research] fact 추출 실패: {_fe} — 문서만 반환")
         else:
-            log.info(f"[research] 완료: 논문{len(paper_docs)}+API{len(api_docs)}"
+            log.info(f"[research] 완료: API{len(api_docs)}"
                      f"+나머지{len(rest_docs)}={total}건 (원시 문서만)")
         # ★ corpus digest (distill 압축 2026-07-19) — 선계산 창에서만 생성(발행창이면 build_corpus_digest
         #   가 "" 반환 → 호출자 원문 폴백). writer 프롬프트 축소용. docs(원문)는 그대로 유지(사실성용).
@@ -555,7 +501,8 @@ def compose_collected(keyword: str, stocks_data: dict | None = None,
     meta['raw_stocks'] 로 원본 종목 dict 를 side-channel 보존 (프롬프트 빌더용).
     """
     from datetime import datetime as _dt
-    from .models import CollectedData
+    from .models import (CollectedData, policy_for, dataset_is_stock_financial,
+                         sanitize_datasets)
     from .collect_theme import stocks_to_datasets
     from .evidence_pack import facts_to_datasets
     stocks_data = stocks_data or {}
@@ -564,6 +511,21 @@ def compose_collected(keyword: str, stocks_data: dict | None = None,
     stock_ds = stocks_to_datasets(stocks_data) if stocks_data.get("stocks") else []
     fact_ds = facts_to_datasets(pack) if pack else []
     datasets = _dedupe_datasets(list(extra_datasets or []) + list(stock_ds) + list(fact_ds))
+    # ★ 결측(NaN) 위생 — *조립 지점 한 곳* (사용자 박제 2026-07-25). 상자를 나가기 전에 턴다:
+    #   남으면 검증(gt→grounds 크래시→사실 오차단)·이미지(int(NaN) 크래시) 양쪽에서 터진다.
+    _pre_n = sum(len(d.get("data") or []) for d in datasets if isinstance(d, dict))
+    datasets = sanitize_datasets(datasets)
+    _post_n = sum(len(d.get("data") or []) for d in datasets if isinstance(d, dict))
+    if _pre_n != _post_n:
+        log.info(f"[compose] 결측(NaN) 포인트 {_pre_n - _post_n}개 제거 (0 으로 채우지 않음)")
+    # ★ 종목재무 배제는 *조립 지점 한 곳* 에서 (사용자 박제 2026-07-23 — 수집 09 이관).
+    #   종전엔 경제 파이프라인(02)만 fact 유래 dataset 을 걸러서, 같은 조립 함수를 쓰는
+    #   다른 경로는 정책이 새어나갔다. 판정 근거는 models.dataset_is_stock_financial 단일 소스.
+    if not policy_for(category).get("allow_stock_financial", True):
+        _before = len(datasets)
+        datasets = [d for d in datasets if not dataset_is_stock_financial(d)]
+        if _before != len(datasets):
+            log.info(f"[compose] '{category}' 종목재무 dataset {_before - len(datasets)}개 배제")
     facts = list(pack.get("facts") or [])
     meta = {
         "keyword": keyword, "profile": profile or {}, "sector": sector,
@@ -578,27 +540,257 @@ def compose_collected(keyword: str, stocks_data: dict | None = None,
                          facts=facts, entities=entities)
 
 
-def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
-                category: str = "theme", angle: str = "") -> "CollectedData":
-    """★ 통합 수집 — J09-측 컴포저 (수집 + compose_collected).
-
-    theme 카테고리는 종목(entities)+research(docs+facts)+datasets 를,
-    그 외 카테고리는 research 만 수집(종목 없으면 entities 빈 리스트).
-    """
+def _collect_stocks_leg(keyword: str, profile: dict | None) -> dict:
+    """종목 시세·재무 수집 (실패해도 빈 dict — 리서치만으로 글은 성립)."""
     from .collect_theme import collect_stocks_data
-    stocks_data: dict = {}
-    if (category or "").strip().lower() == "theme":
+    try:
+        return collect_stocks_data(
+            keyword, related_terms=(profile or {}).get("related_terms"),
+            profile=profile) or {}
+    except Exception as e:
+        log.warning(f"[collect_all] 종목 수집 실패: {e}")
+        return {}
+
+
+def _collect_charts_leg(keyword: str, sector: str, angle: str,
+                        profile: dict | None, synonyms: list | None,
+                        plan_cache: dict | None, category: str) -> list:
+    """주제 연관 차트 실데이터 수집 (ADR 010/011). 실패해도 빈 리스트."""
+    try:
+        from .chart_data import collect_chart_data
+        chart = collect_chart_data(
+            keyword, sector=sector, description=angle,
+            synonyms=synonyms, related_terms=(profile or {}).get("related_terms"),
+            profile=profile, plan_cache=plan_cache, category=category) or {}
+        return list(chart.get("datasets") or [])
+    except Exception as e:
+        log.warning(f"[collect_all] 차트 실데이터 수집 실패: {e}")
+        return []
+
+
+def _collect_research_leg(keyword: str, sector: str, angle: str) -> dict:
+    """설계-우선 리서치 (ADR 012) + fact 추출 + digest. 킬스위치 RESEARCH_FIRST=0 → 종전 스윕."""
+    import os as _os
+    if _os.getenv("RESEARCH_FIRST", "1") != "0":
         try:
-            stocks_data = collect_stocks_data(keyword, related_terms=(profile or {}).get('related_terms'), profile=profile) or {}
+            res = collect_research(keyword, sector=sector, angle=angle,
+                                   with_facts=True, with_digest=True) or {}
+            return {"docs": list(res.get("docs") or []),
+                    "pack": res.get("pack") or None,
+                    "corpus_digest": res.get("corpus_digest") or ""}
         except Exception as e:
-            log.warning(f"[collect_all] 종목 수집 실패: {e}")
-    # ★ collect_all 은 원시 컴포저 — facts 미포함(evidence_pack=None, docs+entities 만).
-    #   fact 가 필요한 호출자는 collect_research(with_facts=True) 로 pack 을 받는다(추출 09 통일 2026-07-18).
-    rs = collect_research(keyword, sector=sector, angle=angle) or {}
-    return compose_collected(
-        keyword, stocks_data=stocks_data, docs=rs.get("docs"),
-        evidence_pack=None, sector=sector,
-        category=category, profile=profile)
+            log.warning(f"[collect_all] 리서치 실패 — 종전 스윕 폴백: {e}")
+    try:
+        # ★ 2026-07-24 P2: 스윕 폴백도 신뢰 쿼터(기본 COLLECT_QUOTA_BUDGET=15) 적용.
+        #   RESEARCH_FIRST 정상경로는 이미 쿼터를 타지만 이 예외 폴백은 무쿼터라
+        #   205~226문서(119K자) 프롬프트 폭주의 진원이었다(발행 지연·overage). SSOT=models 쿼터.
+        return {"docs": select_by_trust_quota(collect_for_theme(keyword, sector)),
+                "pack": None, "corpus_digest": ""}
+    except Exception as e:
+        log.warning(f"[collect_all] 스윕 폴백도 실패: {e}")
+        return {"docs": [], "pack": None, "corpus_digest": ""}
+
+
+def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
+                category: str = "theme", angle: str = "",
+                synonyms: list | None = None, plan_cache: dict | None = None,
+                market_data: dict | None = None,
+                extra_meta: dict | None = None,
+                parallel: bool = True, use_cache: bool = True) -> dict:
+    """★★ 수집 단일 진입점 — 주제 하나 → 완성된 CollectedData 상자 (사용자 박제 2026-07-23).
+
+    종전에는 이 함수가 죽은 코드였고, 실제 수집 오케스트레이션이 JARVIS02 안에 *5벌*
+    흩어져 있었다 (테마 선계산·테마 발행·경제 네이버·경제 티스토리·시장지표 변환).
+    "수집은 09, 02는 대본" 이라는 도메인 경계가 호출 한 줄 단위로만 지켜지고 *순서·조합·
+    폴백 판단* 은 02 가 하고 있었던 것 — 그래서 테마만 고치면 경제에서 재발했다.
+    이제 4조합(경제·테마 × 네이버·티스토리)이 전부 이 함수 하나를 부른다.
+
+    카테고리별 차이(종목·차트·시장지표 폴백·종목재무 배제)는 `if category ==` 로 박지
+    않고 `CATEGORY_POLICY` 에서 파생한다 — 새 카테고리는 레지스트리 한 줄.
+
+    Args:
+        keyword:    주제 (자비스03 이 프로필과 함께 준 것 — 키워드 단독 전송 금지)
+        profile:    자비스03 keyword_profile (summary·related_terms·entity_type)
+        angle:      리서치 조준 각도. 미지정 시 profile.summary 에서 파생
+        synonyms/plan_cache: 자비스03 저부하창 선계산 산출물 (있으면 발행창 LLM 0회)
+        market_data: 시장지표 (경제 브리핑에서 차트 0개일 때 폴백 소스)
+        parallel:   리서치를 별도 스레드로 (종목·차트와 동시). 인터프리터 종료 중이면 자동 동기.
+        use_cache:  선계산 잡(발행창 밖)이 미리 수집해 둔 상자가 있으면 재사용
+                    (사용자 박제 2026-07-18 / 소유 이관 2026-07-23 — 종전엔 02 가 캐시를
+                    먼저 뒤지고 없으면 수집을 불렀다. '캐시냐 수집이냐' 는 수집 시점 판단이므로
+                    09 안으로 들어온다. 선계산 잡 자신은 use_cache=False 로 실제 수집.)
+                    킬스위치: 환경변수 `PRECOLLECT_CACHE=0`.
+
+    Returns:
+        {"collected": CollectedData, "stocks_data": dict, "docs": list,
+         "evidence_pack": dict|None, "datasets": list, "corpus_digest": str,
+         "data_empty": bool}
+        data_empty = 종목·문서·근거가 *전부* 0 (테마 교체 판단용 — 부분 결손은 진행).
+    """
+    import os as _os
+    from .models import policy_for
+    pol = policy_for(category)
+
+    # ── 선계산 캐시 재사용 (수집 *시점* 판단 — 09 소유) ────────────────
+    if use_cache and _os.environ.get("PRECOLLECT_CACHE", "1") != "0":
+        try:
+            from .precollect_cache import load_precollect
+            _hit = load_precollect(category, keyword)
+            if _hit is not None:
+                log.info(f"[collect_all] 선계산 캐시 재사용: {category}/{keyword} — 발행창 추출 LLM 0회")
+                return _hit
+        except Exception as e:
+            log.warning(f"[collect_all] 캐시 조회 스킵({category}/{keyword}): {e} — 실제 수집 진행")
+
+    # ── 새 수집 런 = 09 메모리 상태 초기화 (09 소유 상태) ───────────────
+    #   ★ 플랫폼은 *덮어쓰지 않는다* — 발행 액션(02)이 이미 naver/tistory 를 세팅해 두고,
+    #     그 값이 이미지 출력 폴더(economic_naver 등)를 가른다. 여기서 기본값으로 되돌리면
+    #     경제 네이버 글의 이미지가 theme 폴더로 새는 회귀가 난다. post_type 은 category 에서 파생.
+    try:
+        from .run_context import new_run as _new_run, active_run as _active
+        _prev = _active()
+        _new_run(keyword,
+                 platform=(_prev.platform if _prev else "naver"),
+                 post_type=(pol.get("run_post_type") or category))
+    except Exception as e:
+        log.warning(f"[collect_all] run_context 초기화 스킵: {e}")
+
+    # ── 프로필 보강 — 키워드 단독 수집 금지 (ADR 013) ──────────────────
+    #   ② 동적 설계: `if category ==` 이 아니라 정책 노브(profile_provider)에서 파생.
+    if profile is None:
+        _pp = (pol.get("profile_provider") or "").strip()
+        if _pp:
+            try:
+                import importlib as _il
+                _mod, _fn = _pp.split(":", 1)
+                _topic = getattr(_il.import_module(_mod), _fn)(keyword, sector=sector) or {}
+                profile = _topic.get("profile") or {}
+                sector = _topic.get("sector") or sector
+                if profile:
+                    log.info(f"[collect_all] 자비스03 프로필 수령: {str(profile.get('summary'))[:60]}")
+            except Exception as e:
+                log.warning(f"[collect_all] 프로필 조회 실패({_pp}): {e}")
+                profile = {}
+
+    angle = (angle or (profile or {}).get("summary") or "").strip()
+
+    # ── 리서치 레그 (느림) — 가능하면 병렬 ────────────────────────────
+    _fut = None
+    if parallel:
+        try:
+            from concurrent.futures import ThreadPoolExecutor as _TExec
+            _exec = _TExec(max_workers=1)
+            _fut = _exec.submit(_collect_research_leg, keyword, sector, angle)
+        except RuntimeError as e:
+            # 인터프리터 종료 레이스 (ERRORS [361]) — 병렬 이득만 포기, 수집은 계속
+            log.warning(f"[collect_all] 스레드 스케줄 불가 — 동기 폴백: {e}")
+            _fut = None
+
+    # ── 구조데이터 레그 (정책 파생) ───────────────────────────────────
+    stocks_data = _collect_stocks_leg(keyword, profile) if pol.get("collect_stocks") else {}
+    chart_ds = (_collect_charts_leg(keyword, sector, angle, profile, synonyms,
+                                    plan_cache, category)
+                if pol.get("collect_charts") else [])
+
+    if _fut is not None:
+        try:
+            rs = _fut.result(timeout=600) or {}
+        except Exception as e:
+            log.warning(f"[collect_all] 리서치 수령 실패: {e}")
+            rs = {"docs": [], "pack": None, "corpus_digest": ""}
+        finally:
+            try:
+                _exec.shutdown(wait=False)
+            except Exception:
+                pass
+    else:
+        rs = _collect_research_leg(keyword, sector, angle)
+
+    docs = rs.get("docs") or []
+    pack = rs.get("pack") or None
+    digest = rs.get("corpus_digest") or ""
+
+    # ── 시장지표 폴백 (차트 0개일 때만 — 경제 브리핑) ──────────────────
+    if not chart_ds and market_data and pol.get("market_fallback"):
+        chart_ds = market_data_to_datasets(market_data)
+        if chart_ds:
+            log.info(f"[collect_all] 차트 0 → 시장지표 {len(chart_ds)}개로 폴백")
+
+    meta_extra = dict(extra_meta or {})
+    if digest:
+        meta_extra["corpus_digest"] = digest
+    collected = compose_collected(
+        keyword, stocks_data=stocks_data, docs=docs, evidence_pack=pack,
+        sector=sector, category=category, profile=profile,
+        extra_datasets=chart_ds, extra_meta=meta_extra or None)
+
+    n_stocks = len((stocks_data or {}).get("stocks") or [])
+    n_facts = len((pack or {}).get("facts") or [])
+    log.info(f"[collect_all] '{keyword}'({category}) 종목 {n_stocks} · 문서 {len(docs)} · "
+             f"근거 {n_facts} · 데이터셋 {len(collected.datasets)}")
+    return {"collected": collected, "stocks_data": stocks_data, "docs": docs,
+            "evidence_pack": pack, "datasets": list(collected.datasets),
+            "corpus_digest": digest,
+            "data_empty": (n_stocks == 0 and not docs and n_facts == 0)}
+
+
+def market_snapshot() -> dict:
+    """★ 시장 스냅샷 수집 — 지표 + 일정 (사용자 박제 2026-07-23).
+
+    종전엔 02 의 두 곳(economic_poster·precollect_economic)이 각자
+    get_market_data()+get_economic_calendar() 를 불러 dict 를 조립했다. 두 번 조립하는
+    순간 키 이름이 어긋날 수 있고, 그 조립 규칙이 02 에 있으면 수집 산출물의 *형태* 를
+    02 가 정하는 셈이다. 형태도 09 가 정한다.
+    """
+    from .providers.economic_data_provider import get_market_data, get_economic_calendar
+    out = {"market": {}, "calendar": {}}
+    try:
+        out["market"] = get_market_data() or {}
+    except Exception as e:
+        log.warning(f"[market_snapshot] 지표 수집 실패: {e}")
+    try:
+        out["calendar"] = get_economic_calendar() or {}
+    except Exception as e:
+        log.warning(f"[market_snapshot] 일정 수집 실패: {e}")
+    return out
+
+
+# ── 시장지표 → datasets (JARVIS02 에서 이관 2026-07-23) ──────────────────
+_MD_INDICES  = ["코스피", "코스닥", "S&P500", "NASDAQ", "DOW"]
+_MD_FX_COMMO = ["달러/원", "금", "유가(WTI)"]
+_MD_RATES    = ["미국채10년"]
+_MD_GROUPS = [
+    ("주요 증시 지표", _MD_INDICES,  "pt"),
+    ("환율·원자재",    _MD_FX_COMMO, ""),
+    ("금리 지표",      _MD_RATES,    "%"),
+]
+
+
+def market_data_to_datasets(market_data: dict) -> list:
+    """시장지표(get_market_data) → CollectedData datasets.
+
+    수집 산출물의 형태 변환은 수집 도메인의 일 — 종전 JARVIS02 `_market_data_to_datasets`
+    에 있던 것을 09 로 이관 (사용자 박제 2026-07-23). collect_all 이 차트 0개일 때 호출.
+    """
+    import hashlib as _hl
+    market = (market_data or {}).get("market") or {}
+    if not market:
+        return []
+    out: list[dict] = []
+    for title, keys, unit in _MD_GROUPS:
+        rows = [(k, market[k]) for k in keys if k in market]
+        if not rows:
+            continue
+        as_of = max((v.get("as_of") or "") for _, v in rows)
+        out.append({
+            "title": title, "viz_hint": "kpi_cards", "unit": unit,
+            "data": [{"label": k, "value": v.get("value", 0),
+                      "change_pct": v.get("change", 0)} for k, v in rows],
+            "source": {"provider": "yfinance", "name": "Yahoo Finance",
+                       "url": "https://finance.yahoo.com", "as_of": as_of},
+            "fingerprint": _hl.md5(f"{title}{as_of}".encode()).hexdigest()[:12],
+        })
+    return out
 
 
 # ── delta-aware 교류 프로토콜 (★ 사용자 박제 2026-06-07) ────────────────

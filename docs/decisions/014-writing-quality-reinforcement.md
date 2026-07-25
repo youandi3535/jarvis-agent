@@ -25,10 +25,11 @@
    ├─ UCB 랭킹: effective_weight + 0.35·√(ln(1+총사용)/(1+개별사용))
    │            → 신규 지침도 탐색 기회 확보 (exploration)
    └─ insight_usage 에 배치 기록 (보상 귀속 대기)
-        │  (발행 → post_quality_analyzer 분석 → post_analysis.suggestions)
+        │  (발행 → post_quality_analyzer 100점 루브릭 채점 → post_analysis.quality_score)
 [매일 23:45] j07_quality_learn (DEFAULT_JOBS)
-   ├─ 사용 기록 ↔ 분석 글 매칭 (scope=post_type · platform · 18h 창)
-   ├─ 보상 = 1 − Σ(제안 페널티: high .25 / medium .12 / low .05)  ∈ [0,1]
+   ├─ 사용 기록 ↔ 채점 글 매칭 (scope=post_type · platform · 18h 창)
+   ├─ 보상 = quality_score / 100  ∈ [0,1]  (★ 2026-07-24 개정 — 발행 전 게이트와
+   │         *같은 채점표*(post_scorer). 비례·무포화. 옛 '제안 priority 버킷' 폐지)
    ├─ weight ← clamp(0.05, 3.0, weight + 0.3·(보상 − 0.5))   [EMA]
    └─ 저성과 가속 감쇠 (검증 5회+ & 평균보상 < 0.35 → weight ×0.5)
         │

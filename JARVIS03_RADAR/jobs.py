@@ -276,8 +276,9 @@ def job_collect_trends_morning() -> None:
     """
     job_collect_trends()   # 트렌드 수집 + topic_pack 빌드 (소요시간 가변)
     try:
-        from JARVIS02_WRITER.scheduler import run_precollect_economic
-        run_precollect_economic()   # 팩 준비 완료 → 이어서 선계산 (자체 동적 데드라인으로 06:28 前 종료)
+        # ★ 선계산 = 수집 도메인(09) 단독 (사용자 박제 2026-07-23)
+        from JARVIS09_COLLECTOR.precollect import job_precollect_economic
+        job_precollect_economic()   # 팩 준비 완료 → 이어서 선계산 (자체 동적 데드라인으로 발행창 前 종료)
     except Exception as _e:
         _log.warning(f"[아침 체인] 경제 선계산 스킵 — 06:30 발행이 기존 수집 폴백: {_e}")
 
@@ -360,6 +361,18 @@ def job_analyzer_fallback() -> None:
     _ANALYZER = _RADAR_DIR / "post_quality_analyzer.py"
 
     def _run():
+        # ★ 2026-07-24 P3: 발행 우선 — 발행 중·직전이면 분석 subprocess 를 미룬다 (ERRORS [474]).
+        #   post_quality_analyzer 는 글마다 LLM(매력도·사실성 채점)을 점유 → 발행 파이프라인의
+        #   필수 LLM 호출과 전역 llm_exec.lock 을 경합(관측: lock_contention 45s 대기·플랫폼 defer).
+        #   pending 분석은 급하지 않다 — 5분 뒤 이 잡이 다시 집어간다 (GUARDIAN Tier-2 와 동일 게이트).
+        try:
+            from shared.llm import bg_defer_reason as _bg_defer
+            _defer_why = _bg_defer()
+        except Exception:
+            _defer_why = ""
+        if _defer_why:
+            _log.info(f"⏸ [Fallback] 분석 보류 — {_defer_why} (발행 우선, 다음 회차 재개)")
+            return {"launched": 0, "deferred": _defer_why}
         from shared import db
         pending = db.get_pending_analysis(limit=5)
         if pending:
@@ -416,30 +429,11 @@ def job_auto_approve() -> None:
                     continue
 
                 db.approve_analysis(aid, {"suggestions": applied, "mode": mode, "auto": True})
-                platform = r.get("platform", "all")
-                learned = 0
-                for s in applied:
-                    if not isinstance(s, dict):
-                        continue
-                    field = s.get("field", "content")
-                    stype = s.get("type", "revision")
-                    issue = s.get("issue", "")
-                    after = s.get("after", "")
-                    if not issue:
-                        continue
-                    try:
-                        db.upsert_learning_insight(
-                            insight_key  = f"{stype}_{field}",
-                            insight_type = stype,
-                            description  = issue,
-                            directive    = after,
-                            weight       = 1.0,
-                            scope        = platform,
-                        )
-                        learned += 1
-                    except Exception as le:
-                        _log.warning(f"[auto_approve] insight 저장 실패: {le}")
-                        _g_report("radar", le, module=__name__)
+                # ★ 학습 단일 진입점 (사용자 박제 2026-07-24) — 수동 ✅ 와 동일 함수.
+                #   scope=post_type 이어야 소비자(_build_learning_block)가 실제 재사용(종전 platform=死).
+                from JARVIS03_RADAR.post_quality_analyzer import learn_from_suggestions
+                _scope = (r.get("post_type") or "").strip() or "all"
+                learned = learn_from_suggestions(applied, scope=_scope)
 
                 send_tg(
                     f"⏰ *자동 학습* [{r['platform'].upper()}] {r['theme']}\n"

@@ -16,6 +16,38 @@ _QUEUE_FULL_DELAY = 30  # ★ 402 Queue full 전용 — 큐 해소까지 더 긴
 _QUEUE_FULL_ABORT = 3   # ★ ERRORS [269] — 연속 402 N회 후 조기 중단 (7분 낭비 방지)
 
 
+def _get_with_beat(url: str, timeout: int, wd_beat) -> "requests.Response":
+    """requests.get 을 폴링으로 감싸 대기 중에도 watchdog.beat() 유지.
+
+    ★ ERRORS [456] 동일 클래스 (일반 trickle 방어) — requests 의 timeout= 은 개별
+    소켓 연산(연결/청크 수신) 간격만 제한할 뿐 총 소요시간 상한이 아니다. 느리게
+    trickle 되는 응답은 timeout 을 넘기지 않고도 총 소요가 freeze 워치독 임계(300s)를
+    넘길 수 있어, beat() 없이 블로킹된 GET 하나가 프로세스 강제종료(os._exit 75)를
+    유발할 수 있다. 그런 오탐을 예방하는 *선제적 방어* 다.
+
+    주의: 2026-07-24 경제 브리핑의 실제 freeze 는 여기(Pollinations 사진 GET)가 아니라
+    차트 인포그래픽 Chromium 렌더(`html_infographic._html_to_jpg`)의 누적 지연이었다.
+    Pollinations 는 본문 AI 사진·썸네일 전용이며 차트 수치 렌더에 관여하지 않는다.
+    """
+    from concurrent.futures import ThreadPoolExecutor as _PpTPE, TimeoutError as _PpTimeout
+    exe = _PpTPE(max_workers=1)
+    try:
+        fut = exe.submit(requests.get, url, timeout=timeout)
+        max_wait = timeout + 60.0  # read-timeout 상한 + 여유 — freeze 임계(300s) 대비 안전
+        waited = 0.0
+        poll = 15.0
+        while waited < max_wait:
+            try:
+                return fut.result(timeout=poll)
+            except _PpTimeout:
+                waited += poll
+                wd_beat()   # ★ GET 블로킹 중 진행 신호 — freeze 오탐 방지
+        fut.cancel()
+        raise requests.exceptions.Timeout(f"Pollinations GET {max_wait:.0f}초 초과 무응답")
+    finally:
+        exe.shutdown(wait=False)
+
+
 class PollinationsProvider:
     PROVIDER_ID = "pollinations"
     requires_approval = False  # 무료·인증 없음 — 승인 불필요
@@ -74,7 +106,7 @@ class PollinationsProvider:
                 time.sleep(delay)
             try:
                 log.info(f"[Pollinations] GET (attempt={attempt}) {url[:120]}")
-                r = requests.get(url, timeout=_TIMEOUT)
+                r = _get_with_beat(url, _TIMEOUT, _wd_beat)
                 ct = r.headers.get("Content-Type", "")
                 if "image" in ct:
                     # 성공 — 파일 저장

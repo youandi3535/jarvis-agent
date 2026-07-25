@@ -79,6 +79,7 @@ from typing import Callable, Optional
 
 from JARVIS00_INFRA.watchdog import (
     Watchdog, StuckError, DEFAULT_ACTION_DEADLINE_SEC, FREEZE_LIMIT_SEC,
+    is_killable_subprocess,
 )
 
 _log = logging.getLogger("jarvis")
@@ -168,9 +169,37 @@ class Issue:
     step: str           # 문제 발생한 step 이름 (또는 "전체")
     kind: str           # 문제 종류 (예: "length", "draft_quality", "login_invalid", "draft_fixed")
     detail: str = ""    # 상세 설명
+    # ★ 원인 예외 보존 (결함1 — 2026-07-25).
+    #   종전엔 Layer 2/3/4 에서 실제로 터진 예외를 `f"{type(e).__name__}: {e}"` 문자열로
+    #   납작하게 만든 뒤 GUARDIAN 에 `RuntimeError` 로 합성해 보고했다. 그 결과
+    #   error_log.error_type 이 harness 소스 **342/342 = 100% RuntimeError** 가 되어
+    #   `_TRANSIENT_TYPES`·`DETERMINISTIC_CODE_ERROR_TYPES`·`_PATTERN_FIXABLE_TYPES`
+    #   같은 *타입 기반 게이트가 전부 무효* 였다 (남은 판별 수단이 메시지 정규식뿐인
+    #   상태를 시스템이 스스로 만든 것). 이제 원 예외를 구조로 들고 다닌다.
+    #   compare/repr 제외 — fingerprint(=(step,kind,detail[:80]))·로그 의미 불변.
+    cause: Optional[BaseException] = field(default=None, repr=False, compare=False)
+
+    @property
+    def cause_type(self) -> str:
+        """원 예외 타입명 — 없으면 빈 문자열(정직하게 '모름')."""
+        return type(self.cause).__name__ if self.cause is not None else ""
 
     def to_context(self) -> dict:
-        return {"step": self.step, "kind": self.kind, "detail": self.detail[:300]}
+        return {"step": self.step, "kind": self.kind, "detail": self.detail[:300],
+                "cause_type": self.cause_type}
+
+
+def issue_from_exception(step: str, kind: str, exc: BaseException,
+                         prefix: str = "") -> Issue:
+    """예외 → Issue 변환 *단일 진입점* (결함1).
+
+    detail 포맷(`{타입}: {메시지}`)을 여기 한 곳에서만 만든다. 종전엔 Layer 1·2·3·4
+    네 곳이 같은 f-string 을 각자 조립했고, 그 문자열이 원인 타입의 *유일한* 흔적이라
+    (구조화 필드가 아니라) 하류가 정규식으로 되캐야 했다.
+    """
+    return Issue(step=step, kind=kind,
+                 detail=f"{prefix}{type(exc).__name__}: {str(exc)[:200]}",
+                 cause=exc)
 
 
 @dataclass
@@ -270,10 +299,94 @@ def action_step(name: str) -> Callable:
 #   단일 진입점 — 다른 곳에서 개별 해소 로직을 만들지 말 것.
 _ATTEMPT_ERROR_IDS: dict[str, list[int]] = {}
 
+# ── ★ 프로세스 경계를 넘는 되돌림 (결함3 — 2026-07-25) ────────────────────
+#
+# ★ 문제: 위 dict 은 *프로세스 메모리* 다. 그런데 판정을 되돌리는 경로는 이것 하나뿐이었다.
+#   경제 브리핑은 **subprocess** 로 돌고, 워치독은 freeze 시 `os._exit` 로 강제 종료하며,
+#   keeper 는 데몬을 통째로 재기동한다. 그 순간 id 목록이 증발하고 → 잠정(provisional)
+#   표시가 영영 안 풀려 → 30분 뒤 `job_retry_pending` 이 **분석 0회로 `ignored`** 처리한다.
+#   실측 2026-07-25: harness 오류 342건 중 `ignored` 225건(66%), 그중 178건이 llm_attempts=0.
+#   CLAUDE.md 명문 위반이다 — "threading.Event·메모리 집합은 같은 프로세스만 방어한다".
+#
+# ★ 해결: id 목록을 *저장* 하지 않고 **DB 에서 파생**한다 (② 동적 설계).
+#   harness 는 이미 모든 시도 오류를 `source='harness'` + `module=action_module(name)` 로
+#   박아두고 있다 — 그것이 곧 소유 표식이다. 스키마 변경 0, 새 컬럼 0, 기존 공개 헬퍼만 사용.
+#   메모리 목록은 *빠른 경로* 로 남기고 DB 파생분과 합집합을 취한다 (기존 동작 완전 보존).
+_HARNESS_MODULE_PREFIX = "JARVIS00_INFRA.harness."
+
+
+def action_module(action_name: str) -> str:
+    """액션의 error_log.module 값 — 보고·회수 양쪽이 이 한 함수에서 파생 (① 단일 진입점)."""
+    return f"{_HARNESS_MODULE_PREFIX}{action_name}"
+
+
+def _orphan_window_min() -> float:
+    try:
+        return float(_os_mx.getenv("HARNESS_ORPHAN_WINDOW_MIN", "720") or "720")
+    except Exception:
+        return 720.0
+
+
+def _db_attempt_error_ids(action_name: str, statuses: tuple) -> list[int]:
+    """이 액션이 낸 *미결* 시도 오류 id 를 DB 에서 파생 — 프로세스 경계를 넘는다.
+
+    킬스위치 `HARNESS_DB_ATTEMPT_IDS=0` → 즉시 종전(메모리 전용) 동작으로 복귀.
+    창(window) 밖 과거 행은 건드리지 않는다 (`HARNESS_ORPHAN_WINDOW_MIN`, 기본 720분).
+    """
+    if (_os_mx.getenv("HARNESS_DB_ATTEMPT_IDS", "1") or "1").strip() == "0":
+        return []
+    try:
+        from shared.db import list_errors
+        from datetime import datetime as _dt, timedelta as _td
+    except Exception:
+        return []
+    cutoff = _dt.now() - _td(minutes=_orphan_window_min())
+    mod = action_module(action_name)
+    out: list[int] = []
+    for st in statuses:
+        try:
+            rows = list_errors(status=st, limit=300) or []
+        except Exception:
+            continue
+        for r in rows:
+            try:
+                if str(r.get("source") or "") != "harness":
+                    continue
+                if str(r.get("module") or "") != mod:
+                    continue
+                ts = str(r.get("timestamp") or "")
+                if ts:
+                    try:
+                        if _dt.fromisoformat(ts.replace("Z", "+00:00").split("+")[0]) < cutoff:
+                            continue
+                    except Exception:
+                        pass
+                out.append(int(r["id"]))
+            except Exception:
+                continue
+    return out
+
+
+def _attempt_error_ids(action_name: str, statuses: tuple) -> list[int]:
+    """메모리(빠름) ∪ DB 파생(프로세스 경계 넘김) — 되돌림 대상 id 단일 조회."""
+    ids = list(_ATTEMPT_ERROR_IDS.get(action_name) or [])
+    seen = set(ids)
+    for i in _db_attempt_error_ids(action_name, statuses):
+        if i not in seen:
+            ids.append(i)
+            seen.add(i)
+    return ids
+
 
 def _resolve_attempt_errors(action_name: str, resolution: str) -> int:
-    """액션이 최종 성공했을 때, 그 과정에서 보고된 시도 오류를 해소 처리."""
-    ids = _ATTEMPT_ERROR_IDS.pop(action_name, [])
+    """액션이 최종 성공했을 때, 그 과정에서 보고된 시도 오류를 해소 처리.
+
+    ★ 이번 실행분(메모리)뿐 아니라, *같은 액션이 앞서 죽으면서 남긴 고아 행*(DB 파생)도
+      함께 해소한다 — 그 실패들은 지금의 성공으로 무효화된 것이 맞고, 방치하면 아무도
+      분석하지 않은 채 `ignored` 로 썩는다.
+    """
+    ids = _attempt_error_ids(action_name, ("new", "analyzing", "ignored"))
+    _ATTEMPT_ERROR_IDS.pop(action_name, None)
     if not ids:
         return 0
     try:
@@ -299,8 +412,11 @@ def _finalize_attempt_errors(action_name: str) -> int:
       성공하면 '문제가 아니었던 것' 이고, 최종 실패해야 비로소 '진짜 볼 만한 것' 이다.
       _ATTEMPT_ERROR_IDS 는 여기서 pop 하지 않는다 — escalation 후에도 소급 성공
       (best-so-far 발행)이 있을 수 있어 `_resolve_attempt_errors` 가 여전히 필요하다.
+
+      ★ 결함3: DB 파생분을 합쳐, *이전 프로세스가 죽으면서 남긴* 잠정 행도 여기서 승격된다.
+        (`ignored` 는 제외 — 이미 격리된 것을 되살리지 않는다. 승격은 미결 행에만.)
     """
-    ids = list(_ATTEMPT_ERROR_IDS.get(action_name) or [])
+    ids = _attempt_error_ids(action_name, ("new", "analyzing"))
     if not ids:
         return 0
     try:
@@ -325,25 +441,54 @@ def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issu
         _log.warning("[harness] GUARDIAN import 실패 — 학습 자산화 생략 (검증 순환은 계속)")
         return
 
+    _preserve = (_os_mx.getenv("HARNESS_PRESERVE_CAUSE", "1") or "1").strip() != "0"
+
     for issue in issues:
         try:
-            exc = RuntimeError(
-                f"[harness:{action_name}] attempt={attempt} step={issue.step}: {issue.detail}"
-            )
-            _eid = g_report(
-                exc,                       # ★ catch(exc_or_type, ...) 첫 위치 인자 (exc= 키워드 없음)
-                source="harness",
-                module=f"JARVIS00_INFRA.harness.{action_name}",
-                func_name=issue.step,
-                context={
-                    "layer": 3,
-                    "action": action_name,
-                    "attempt": attempt,
-                    "step": issue.step,
-                    "kind": issue.kind,
-                    "detail": issue.detail,
-                },
-            )
+            _msg = f"[harness:{action_name}] attempt={attempt} step={issue.step}: {issue.detail}"
+            # ★ kind 는 *반드시* 실린다 (결함1). `severity.kind_of()` 는 context 만 읽으므로
+            #   여기서 비면 하류의 kind 기반 게이트(NON_CODE_ISSUE_KINDS)가 통째로 죽는다.
+            _ctx = {
+                "layer": 3,
+                "action": action_name,
+                "attempt": attempt,
+                "step": issue.step,
+                "kind": (issue.kind or "unknown"),
+                "detail": issue.detail,
+                # ★ 원인 타입을 *구조화 필드* 로도 보존 — 메시지 정규식으로 되캐지 않게 한다.
+                "cause_type": issue.cause_type,
+                "harness_wrapped": True,
+            }
+            _cause = issue.cause if _preserve else None
+            if _cause is not None:
+                # ★ 래핑하되 원인을 잃지 않는다 — error_type 을 *원 예외 타입* 으로 보고한다.
+                #   RuntimeError 합성이 타입 기반 게이트를 무력화하던 구간의 근본 차단.
+                #   traceback 도 원 예외 것을 그대로 넘긴다(format_exc() 는 except 블록 밖에서
+                #   "NoneType: None" 을 돌려주므로 신뢰 불가).
+                try:
+                    import traceback as _tbm
+                    _tb = "".join(_tbm.format_exception(
+                        type(_cause), _cause, _cause.__traceback__))
+                except Exception:
+                    _tb = None
+                _eid = g_report(
+                    type(_cause).__name__,     # ★ 문자열 형태 = error_type 직접 지정
+                    source="harness",
+                    message=_msg,
+                    module=action_module(action_name),
+                    func_name=issue.step,
+                    tb_str=_tb,
+                    context=_ctx,
+                )
+            else:
+                exc = RuntimeError(_msg)
+                _eid = g_report(
+                    exc,                   # ★ catch(exc_or_type, ...) 첫 위치 인자 (exc= 키워드 없음)
+                    source="harness",
+                    module=action_module(action_name),
+                    func_name=issue.step,
+                    context=_ctx,
+                )
             # ★ 최종 성공 시 되돌리기 위해 액션별로 보관 (ERRORS [462])
             if _eid:
                 _ATTEMPT_ERROR_IDS.setdefault(action_name, []).append(int(_eid))
@@ -456,7 +601,35 @@ def _is_fixed_issue(iss: Issue) -> bool:
 #   콘텐츠 결함(draft_failed·draft_quality·factuality·engagement)은 *포함하지 않는다* —
 #   그건 재작성으로 고칠 수 있는 것. 여기엔 '아직 인프라가 안 풀렸다' 신호만.
 #   보수적으로 명시 kind 만(과대분류 시 진짜 코드버그가 abort 없이 max_attempts 소진).
-_INFRA_ISSUE_KINDS = frozenset({"infra_throttle"})
+INFRA_KIND = "infra_throttle"
+_INFRA_ISSUE_KINDS = frozenset({INFRA_KIND})   # ★ 목록은 상수에서 *파생* (② 동적 설계)
+
+
+def classify_failure_issue(step: str, error, *,
+                           content_kind: str = "draft_failed",
+                           content_prefix: str = "대본 생성 실패: ") -> Issue:
+    """산출물 생성 실패 → Issue 로 *분류* 하는 단일 진입점 (결함2 — 2026-07-25).
+
+    ★ 왜 여기인가: 인프라 미완결(`infra_throttle`)과 콘텐츠 결함을 가르는 판정은
+      harness 의 재시도 정책(`_INFRA_ISSUE_KINDS` → fingerprint 제외·backoff·defer)에
+      전적으로 종속된다. 그런데 이 판정 코드가 `economic_poster` 와 `trend_theme_writer`
+      **두 파일에 그대로 복사**돼 있었다. "4조합에 자동 적용된다" 는 말이 성립한 이유가
+      *구조화 필드라서* 가 아니라 *같은 코드를 두 벌 붙여놨기 때문* 이었다는 뜻이고,
+      한쪽만 고치면 다른 쪽에서 재발한다 (CLAUDE.md ①단일 진입점 + ③모든 곳 적용 위반).
+      → 판정은 여기 한 곳. 호출자는 결과를 *받기만* 한다.
+
+    detail 은 fingerprint 안정성을 위해 고정 문자열만 쓴다 (attempt·점수 등 변동값 금지).
+    """
+    _derr = str(error if error is not None else "unknown")
+    try:
+        from shared.llm import is_infra_error as _is_infra, describe_infra_error as _desc
+    except Exception:
+        # shared.llm 미가용 = 판정 불가 → 보수적으로 콘텐츠 결함(재작성 시도) 유지.
+        return Issue(step=step, kind=content_kind, detail=f"{content_prefix}{_derr}")
+    if _is_infra(_derr):
+        return Issue(step=step, kind=INFRA_KIND,
+                     detail=_desc(_derr) + " — 대본 생성 미완결(일시적, 다음 시도/회차 재개)")
+    return Issue(step=step, kind=content_kind, detail=f"{content_prefix}{_derr}")
 
 
 def _is_infra_issue(iss: Issue) -> bool:
@@ -557,10 +730,8 @@ def _execute_steps(action_def: ActionDefinition, state: dict,
         except Exception as e:
             _log.error(f"[harness] Layer 2 step '{step.name}' 폭발: {type(e).__name__}: {e}")
             state = dict(state)
-            state["__step_error__"] = Issue(
-                step=step.name, kind="execution_error",
-                detail=f"{type(e).__name__}: {str(e)[:200]}",
-            )
+            # ★ 결함1: 원 예외를 그대로 들고 간다 (RuntimeError 합성으로 타입이 지워지던 구간)
+            state["__step_error__"] = issue_from_exception(step.name, "execution_error", e)
             break
 
     return state
@@ -629,8 +800,26 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
     def _on_stuck(name: str, reason: str) -> None:
         try:
             iss = [Issue(step="전체", kind="stuck", detail=reason)]
+            # 원인 진단은 killable 여부와 무관하게 항상 GUARDIAN 에 박제(가시성 유지 —
+            # 반복 freeze 는 진짜 성능결함일 수 있음, 사용자 박제 2026-07-22).
             _report_issues_to_guardian(name, result.attempts, iss)
-            _notify_escalation(name, result.attempts, iss, reason=reason)
+            # ★ 2026-07-24: killable subprocess 는 freeze 직후 os._exit(WATCHDOG_KILL_RC)
+            #   → 다음 예약 회차에 자동 재시도된다. "🚨 송출 차단" escalation 은
+            #   *오경보* — 수동 조치 불필요를 알리는 정보성 메시지로 대체.
+            #   (non-killable in-process 동작은 종전대로 escalation — 자연 재시도 없음.)
+            if is_killable_subprocess():
+                try:
+                    from shared.notify import send_tg
+                    send_tg(
+                        f"⏱ *정지 감지 — 자동 재시도 예정*\n\n"
+                        f"동작: `{name}`\n사유: {reason}\n\n"
+                        f"_killable 프로세스 강제 재기동 — 수동 조치 불필요 "
+                        f"(다음 예약 회차 자동 재시도)_"
+                    )
+                except Exception:
+                    pass
+            else:
+                _notify_escalation(name, result.attempts, iss, reason=reason)
         except Exception:
             pass
 
@@ -642,7 +831,8 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
     except StuckError as _se:
         reason = str(_se)
         _log.error(f"[harness] ⏱ 정지 감지 — {action_def.name}: {reason} (송출 안 함)")
-        iss = [Issue(step="전체", kind="stuck", detail=reason)]
+        # ★ 결함1: StuckError 원 타입 보존 (detail 은 종전 문구 유지 — fingerprint 불변)
+        iss = [Issue(step="전체", kind="stuck", detail=reason, cause=_se)]
         result.issues_history.append(iss)
         result.escalation_reason = reason
         try:
@@ -666,10 +856,8 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             pre_issues = action_def.precondition(state) or []
         except Exception as e:
             _log.error(f"[harness] Layer 1 precondition 폭발: {type(e).__name__}: {e}")
-            pre_issues = [Issue(
-                step="precondition (Layer 1)", kind="precondition_error",
-                detail=f"{type(e).__name__}: {str(e)[:200]}",
-            )]
+            pre_issues = [issue_from_exception(
+                "precondition (Layer 1)", "precondition_error", e)]
 
         if pre_issues:
             _log.warning(f"[harness] Layer 1 precondition 실패: {len(pre_issues)} issues")
@@ -714,10 +902,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                     issues = []
             except Exception as e:
                 _log.error(f"[harness] verify 폭발: {type(e).__name__}: {e}")
-                issues = [Issue(
-                    step="verify (Layer 3)", kind="verify_error",
-                    detail=f"{type(e).__name__}: {str(e)[:200]}",
-                )]
+                issues = [issue_from_exception("verify (Layer 3)", "verify_error", e)]
 
         # ── 검증 통과 → Layer 4 송출 ──
         if not issues:
@@ -742,10 +927,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                     f"[harness] Layer 4 송출 실패 (시도 {attempt}) — 검증 순환 재진입: "
                     f"{type(e).__name__}: {e}"
                 )
-                send_issue = Issue(
-                    step="송출 (Layer 4)", kind="send_failure",
-                    detail=f"{type(e).__name__}: {str(e)[:200]}",
-                )
+                send_issue = issue_from_exception("송출 (Layer 4)", "send_failure", e)
                 result.issues_history.append([send_issue])
                 _report_issues_to_guardian(action_def.name, attempt, [send_issue], action_def.max_attempts)
                 continue
@@ -778,8 +960,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                     except Exception as _ve:
                         # ★ 재검증 자체 폭발 = 무검증 송출 금지 (ADR 009) — 이슈로 박제
                         #   (기존: _rev=[] 로 '통과' 처리 → 검증 안 된 산출물이 송출되는 구멍)
-                        _rev = [Issue(step="verify (Layer 3)", kind="verify_error",
-                                      detail=f"{type(_ve).__name__}: {str(_ve)[:200]}")]
+                        _rev = [issue_from_exception("verify (Layer 3)", "verify_error", _ve)]
                     if not _rev:
                         _log.info(f"[harness] ✅ 즉시수정 후 재검증 통과 — 재생성 없이 송출: {action_def.name}")
                         print(f"  ✅ [harness] 즉시수정 후 검증 통과 — 재생성 건너뜀")
@@ -789,8 +970,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                             result.issues_history.append([])
                             return result
                         except Exception as _se:
-                            send_issue = Issue(step="송출 (Layer 4)", kind="send_failure",
-                                               detail=f"{type(_se).__name__}: {str(_se)[:200]}")
+                            send_issue = issue_from_exception("송출 (Layer 4)", "send_failure", _se)
                             result.issues_history.append([send_issue])
                             _report_issues_to_guardian(action_def.name, attempt, [send_issue], action_def.max_attempts)
                             # 송출 실패 → 정상 재시도 루프로 fall-through
@@ -969,4 +1149,9 @@ __all__ = [
     "run_action",
     "interpreter_shutting_down",
     "DEFAULT_MAX_ATTEMPTS",
+    # ★ 2026-07-25 — 원인 보존·kind 분류 단일 진입점 (결함1·2)
+    "issue_from_exception",
+    "classify_failure_issue",
+    "INFRA_KIND",
+    "action_module",
 ]

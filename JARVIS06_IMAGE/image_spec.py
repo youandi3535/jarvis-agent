@@ -26,9 +26,8 @@ except ImportError:
 
 log = logging.getLogger("jarvis")
 
-# ── 주제 연관 실데이터 캐시 (auto-fetch 시 같은 글 반복 수집 방지) ─────────
-_DS_CACHE: dict[str, tuple[float, list]] = {}
-_DS_TTL = 1800  # 30분
+# ★ 주제 연관 실데이터 캐시는 여기 없다 (사용자 박제 2026-07-23) —
+#   "언제 다시 수집할지" 는 수집 도메인(09)의 판단. `chart_datasets()` 안에 있다.
 
 # ── 지원 시각화 타입 ──────────────────────────────────────────────────
 
@@ -203,22 +202,17 @@ def _datasets_block(datasets: list) -> str:
 
 
 def _auto_fetch_datasets(keyword: str, sector: str, section_text: str) -> list:
-    """real_datasets 미제공 + 수치 차트일 때 JARVIS09 실데이터 자동 수집 (캐시)."""
-    import time
-    now = time.time()
-    hit = _DS_CACHE.get(keyword)
-    if hit and now - hit[0] < _DS_TTL:
-        return hit[1]
-    ds: list = []
+    """real_datasets 미제공 + 수치 차트일 때 JARVIS09 실데이터 요청 (한 줄 파사드).
+
+    ★ 06 은 "이 주제 차트 데이터 줘" 만 부른다 — 캐시·재수집 시점·폴백은 09 소유.
+    """
     try:
-        from JARVIS09_COLLECTOR import collect_chart_data
-        res = collect_chart_data(keyword, sector=sector, description=(section_text or "")[:500])
-        ds = res.get("datasets") or []
+        from JARVIS09_COLLECTOR import chart_datasets
+        return chart_datasets(keyword, sector=sector, description=section_text or "")
     except Exception as e:
-        log.warning(f"[image_spec] collect_chart_data 자동 수집 실패: {e}")
+        log.warning(f"[image_spec] chart_datasets 요청 실패: {e}")
         _g_report("image", e, module=__name__)
-    _DS_CACHE[keyword] = (now, ds)
-    return ds
+        return []
 
 
 def _text_card_spec(failed_spec: dict, keyword: str, sector: str) -> dict[str, Any]:

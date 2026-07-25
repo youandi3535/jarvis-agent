@@ -71,12 +71,19 @@
 - `login_manager.verify_all_logins()` — 3 플랫폼 인증 상태 dict 반환
 - 한 곳이라도 실패 → `_harness_precondition_check()` (scheduler.py) 가 발행 차단
 
-자동 갱신 (cron 잡):
-- `j02_naver_cookie_pre_morning` (06:30) — 네이버 쿠키 만료 임박 시 자동 갱신
-- `j02_naver_cookie_pre_afternoon` (15:30) — 네이버 쿠키 만료 임박 시 자동 갱신
-- `j02_tistory_cookie_pre_morning` (06:30) — 티스토리 쿠키 만료 임박 시 자동 갱신
-- `j02_tistory_cookie_pre_afternoon` (15:30) — 티스토리 쿠키 만료 임박 시 자동 갱신
-- 모든 잡은 `login_manager.job_pre_publish_check(platform=...)` 단일 callback 호출
+자동 갱신 (cron 잡) — ★ **발행 시각에서 파생** (2026-07-25 정정):
+- 잡 ID: `j08_cookie_precheck_{발행잡ID}` — 발행 잡마다 1개씩 자동 생성
+  · `j08_cookie_precheck_j01_economic_post` — 경제 발행(07:00) 30분 전 = 06:30
+  · `j08_cookie_precheck_j01_theme_post_21` — 테마 발행(21:00) 30분 전 = 20:30
+- 생성 위치: `JARVIS04_SCHEDULER/job_registry._build_cookie_precheck_jobs()`
+  발행 cron 에서 `_COOKIE_PRECHECK_LEAD_MIN`(30분)을 빼서 파생 — **시각을 박지 않는다**.
+  발행 시각을 옮기면 쿠키 점검도 자동으로 따라 이동한다.
+- 모든 잡은 `login_manager.job_pre_publish_check()` 단일 callback 호출 (플랫폼 전체 일괄)
+
+> ★ 2026-07-25 이전 이 문서는 `j02_*_pre_morning/afternoon`(06:30·15:30) 4개를 규정했으나
+> **DEFAULT_JOBS 에 실제로는 하나도 등록돼 있지 않았고** `job_pre_publish_check` 는 호출자 0인
+> 죽은 함수였다(문서가 진실이고 코드가 따라오지 않은 드리프트). 게다가 15:30 은 옛 16시 발행
+> 기준이라 살아 있었어도 21:00 발행과 어긋났다. 지금은 발행 시각에서 파생하므로 드리프트 불가.
 
 ---
 

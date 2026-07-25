@@ -991,57 +991,130 @@ def check_verification(report: Report) -> None:
 CATEGORIES["verification"] = check_verification
 
 
+# ── 모델 위생 (검사기가 모델명을 '박지 않는다') ──────────────────────
+# 버전 세그먼트는 숫자로 시작 — 문장 끝 마침표("...4-6.") 오탐 방지
+_PAT_MODEL_ID = re.compile(r"claude-([a-z]+)-([0-9][0-9a-z\-]*)")
+# 버전이 생략·말줄임된 형태 — `claude-<family>-...` 처럼. 뒤가 숫자/점일 때만 family 로 인정해
+# `claude-code-sdk` 같은 *모델 아닌* 이름을 오탐하지 않는다.
+_PAT_MODEL_ID_LOOSE = re.compile(r"claude-([a-z]+)-(?=[0-9.])")
+# 사람이 읽는 라벨 + 접두 없는 축약형 — "<Family> 5" / "<family>-4-5" / "<family> 4.6"
+# 대소문자 무시·구분자(공백/하이픈) 허용·버전 구분자(점/하이픈) 허용:
+# `claude-` 접두가 떨어져 나간 흔적(예: `writer_fast=<family>-4-6`)까지 잡기 위함.
+_PAT_MODEL_LABEL = re.compile(
+    r"\b([A-Za-z]{3,9})[\s\-]([0-9](?:[.\-][0-9]){0,3})\b")
+# family 단독 등장 — "<Family> 전체 파일 분석" 처럼 버전 없이 이름만 남은 흔적
+_PAT_MODEL_FAMILY = re.compile(r"\b([A-Za-z]{4,9})\b")
+# 모델 ID 리터럴의 유일한 소유자 + 이 검사기 자신(패턴 보유)
+_MODEL_ID_OWNERS = ("shared/llm.py", "shared/precommit_check.py")
+
+
+def _live_model_ids() -> set[str]:
+    """살아있는 모델 ID 를 shared/llm.py 원문에서 *매번* 파싱.
+
+    ② 동적 설계 — 검사기에 유효 ID 를 박아두면 그 목록이 또 하나의 사본이 되어
+    모델 교체 시 검사기만 옛 값을 가리킨다. import 대신 원문 파싱인 이유:
+    precommit 은 의존성 없이 단독 실행돼야 하고, llm.py import 는 무겁다.
+    """
+    try:
+        src = (ROOT / "shared" / "llm.py").read_text(encoding="utf-8")
+    except Exception:
+        return set()
+    return set(re.findall(r'model_id\s*=\s*"([^"]+)"', src))
+
+
+def _label_of(model_id: str) -> tuple[str, str]:
+    """모델 ID → (family 소문자, 버전 점표기). 'claude-sonnet-5' → ('sonnet','5')"""
+    m = _PAT_MODEL_ID.search(model_id)
+    if not m:
+        return ("", "")
+    ver = ".".join(x for x in m.group(2).split("-") if x.isdigit() and len(x) <= 2)
+    return (m.group(1), ver)
+
+
 def check_model(report: Report) -> None:
-    """모델 위생 — 폐기·저급 모델 흔적 잔재 차단 (사용자 박제 2026-07-02).
+    """모델 위생 — 폐기 모델 흔적 0 + 모델 ID 단일 소유 (사용자 박제 2026-07-24).
 
-    리팩터로 모델을 바꿨는데 주석·로그·docstring 에 옛 모델 이름을 남기면
-    (예: 실제론 Sonnet 5 인데 주석은 "Haiku") 사람이 로그·grep 에서
-    보고 오해한다. 실행 코드만 검사하는 다른 카테고리와 달리 *모든 라인*
-    (주석·문자열 포함)을 훑어 리팩터 잔재를 커밋 단계에서 원천 차단한다.
+    두 가지를 동시에 막는다. 둘 다 실제로 사고를 냈다(ERRORS [491]).
 
-    ① haiku 흔적 일체 — Haiku 완전 폐지 원칙 (사용자 박제 2026-07-04, ADR 015 — haiku 사용 금지)
-    ② 표준 외 모델 ID — 유효 ID 는 shared/llm.py MODELS 의 1종만
-       (claude-sonnet-5 — Sonnet 5 단일 통일, 사용자 박제 2026-07-06 ADR 017. Opus 4.8 폐지).
-       그 외 claude-*-* 는 폐기·미래 잔재.
+    ① `model/hardcoded-id` — 모델 ID 리터럴은 `shared/llm.py` 의 MODELS 만 소유.
+       다른 파일이 ID 를 박으면 모델을 갈아끼울 때 그 사본만 옛 모델에 남는다.
+       파생 방법: `from shared.llm import model_id` → `model_id("guardian")`.
+    ② `model/dead-name` — 지금 살아있지 않은 모델 ID·라벨은 코드·문서 어디에도
+       남기지 않는다. 주석·docstring 의 옛 이름은 사람이 grep 에서 보고 오해한다.
 
-    예외(allowlist): 모델 이름을 *탐지* 하는 정규식·grep 패턴을 보유한 파일.
-    유효 ID 변경 시 아래 valid_ids 를 shared/llm.py MODELS 와 동시 갱신.
+    유효 목록을 검사기에 박지 않는다 — `shared/llm.py` 를 매 실행 파싱해 파생하고,
+    못 읽으면 통과가 아니라 `model/self-check` 위반(fail-closed).
+    폐기 family 어휘도 저장소에서 실제 발견된 ID 로부터 파생 — 이름 목록 박제 없음.
+
+    ★ 흔적은 온전한 ID 형태로만 남지 않는다 (2026-07-24 보강). 실제로 세 변형이
+    1차 검사를 빠져나갔다 — `claude-<family>-...`(버전 생략) · `<family>-4-6`(접두 탈락) ·
+    `<Family>`(이름만). 그래서 family 어휘를 알면 *버전 없이 이름만* 있어도 잡는다.
+    한계는 정직하게 적는다: family 어휘는 저장소에 남은 ID 에서 파생하므로, 저장소가
+    완전히 깨끗해진 뒤 새로 유입되는 *처음 보는* 폐기 family 는 ID 형태로 들어와야
+    걸린다. 그 경우도 ID 레그가 잡으므로 실질 구멍은 없다.
     """
     cat = "model"
-    valid_ids = {"claude-sonnet-5"}
-    # haiku 를 '탐지' 하는 정규식·grep 패턴 보유 (모델 ID 파서 / 감사 grep) — 정당
-    #   shared/llm.py = 모델 SSOT + 라벨 파서(pretty_model_id) — 모델명 언급이 본질.
-    haiku_allow = (
-        "JARVIS01_MASTER/proactive_monitor.py",
-        "JARVIS07_GUARDIAN/auto_repair.py",
-        "shared/llm.py",
-    )
-    # 폐기 모델 ID 를 '탐지' 하는 grep 패턴 + 교체 이력 주석 보유 — 정당
-    modelid_allow = (
-        "JARVIS07_GUARDIAN/auto_repair.py",
-        "JARVIS01_MASTER/proactive_monitor.py",
-        "shared/llm.py",
-    )
+    live_ids = _live_model_ids()
+    if not live_ids:
+        report.add(Violation(cat, "model/self-check", "shared/llm.py", 0,
+                             "MODELS 에서 유효 모델 ID 를 파싱하지 못함 — 검사 불능(fail-closed)"))
+        report.checks_run += 1
+        return
+    live_labels = {_label_of(m) for m in live_ids}
+    live_families = {f for f, _ in live_labels}
 
-    pat_haiku = re.compile(r"haiku", re.IGNORECASE)
-    # 버전 세그먼트는 숫자로 시작 — 문장 끝 마침표("...4-6.") 오탐 방지
-    pat_modelid = re.compile(r"claude-(?:sonnet|opus|haiku|fable)-[0-9][0-9a-z\-]*")
+    # 검사 대상 = 코드(.py) + 문서(.md) — 흔적은 주석·문서에 더 오래 남는다
+    targets: list[Path] = list(_iter_py())
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRS]
+        for fn in filenames:
+            if fn.endswith(".md"):
+                p = Path(dirpath) / fn
+                if not _is_excluded(p):
+                    targets.append(p)
 
-    for p in _iter_py():
-        rel_s = str(p.relative_to(ROOT))
+    # 폐기 family 어휘: 저장소에 실제로 등장한 ID 들에서 파생 (목록 하드코딩 회피)
+    seen_families: set[str] = set()
+    file_lines: list[tuple[str, list[str]]] = []
+    for p in targets:
         text = _read_py(p)
         if text is None:
             continue
-        is_haiku_allow = any(a in rel_s for a in haiku_allow)
-        is_modelid_allow = any(a in rel_s for a in modelid_allow)
-        for i, line in enumerate(text.splitlines(), 1):
-            if not is_haiku_allow and pat_haiku.search(line):
-                report.add(Violation(cat, "model/haiku", rel_s, i, line))
-            if not is_modelid_allow:
-                for mid in pat_modelid.findall(line):
-                    if mid not in valid_ids:
-                        report.add(Violation(cat, "model/stale-id", rel_s, i, line))
-    report.checks_run += 2
+        lines = text.splitlines()
+        file_lines.append((str(p.relative_to(ROOT)), lines))
+        for f, _v in _PAT_MODEL_ID.findall(text):
+            seen_families.add(f)
+        seen_families.update(_PAT_MODEL_ID_LOOSE.findall(text))
+    known_families = seen_families | live_families
+
+    for rel_s, lines in file_lines:
+        is_owner = any(rel_s == o or rel_s.endswith("/" + o) for o in _MODEL_ID_OWNERS)
+        for i, line in enumerate(lines, 1):
+            for f, v in _PAT_MODEL_ID.findall(line):
+                mid = f"claude-{f}-{v}"
+                if mid not in live_ids:
+                    report.add(Violation(cat, "model/dead-name", rel_s, i, line))
+                elif not is_owner and rel_s.endswith(".py"):
+                    report.add(Violation(cat, "model/hardcoded-id", rel_s, i, line))
+            if is_owner:
+                continue
+            flagged = False
+            for word, ver in _PAT_MODEL_LABEL.findall(line):
+                fam = word.lower()
+                ver_dot = ver.replace("-", ".")
+                if fam in known_families and (fam, ver_dot) not in live_labels:
+                    report.add(Violation(cat, "model/dead-name", rel_s, i, line))
+                    flagged = True
+                    break
+            if flagged:
+                continue
+            # 버전 없이 이름만 남은 흔적 — 폐기 family 는 단독 등장도 흔적이다
+            for word in _PAT_MODEL_FAMILY.findall(line):
+                fam = word.lower()
+                if fam in known_families and fam not in live_families:
+                    report.add(Violation(cat, "model/dead-name", rel_s, i, line))
+                    break
+    report.checks_run += 3
 
 
 # model 카테고리 등록
@@ -1052,7 +1125,7 @@ def check_ssot(report: Report) -> None:
     """표시 계층 SSOT — 웹 대시보드가 모델명을 *하드코딩* 하지 못하게 강제.
 
     사용자 박제 2026-07-04: "코드만 바꾸면 웹·텔레그램이 자동으로 따라와야 한다."
-    hub.py 는 모델명을 'Opus 4.8' 처럼 직접 쓰지 말고 shared.llm.model_label()
+    hub.py 는 모델명을 '<Family> 4.8' 처럼 직접 쓰지 말고 shared.llm.model_label()
     로 파생해야 한다 → 코드(shared/llm.py MODELS)가 모델을 바꾸면 대시보드가
     자동 갱신, 2중·3중 수정 제거. 하드코딩 리터럴 발견 시 커밋·부팅 단계에서 차단.
 
@@ -1060,7 +1133,11 @@ def check_ssot(report: Report) -> None:
     telegram_summary 등이 이미 model_label 로 파생 — 함수 파생이라 리터럴 없음.)
     """
     cat = "ssot"
-    pat_label = re.compile(r"\b(?:Opus|Sonnet|Haiku|Fable)\s+[0-9]")        # 사람이 읽는 모델 라벨
+    # 모델 family 이름을 검사기에 박지 않는다 — 살아있는 ID 에서 파생 (② 동적 설계)
+    _fams = sorted({f for f, _ in (_label_of(m) for m in _live_model_ids()) if f})
+    pat_label = re.compile(
+        r"\b(?:" + "|".join(f.capitalize() for f in _fams) + r")\s+[0-9]"
+    ) if _fams else re.compile(r"(?!x)x")                                    # 사람이 읽는 모델 라벨
     pat_sched = re.compile(r"(?:매일|매주|매월)[가-힣\s·]*[0-9]{1,2}:[0-9]{2}")  # 스케줄 구절(매일 06:30 등)
     display_files = ()   # hub.py 삭제됨 — Next.js 프론트엔드는 Python SSOT 검사 대상 아님
     for p in _iter_py():
@@ -1195,6 +1272,283 @@ def check_visual_dup(report: Report) -> None:
 
 CATEGORIES["visualdup"] = check_visual_dup
 
+
+# ── 수집 단일 진입점 강제 (★ 사용자 박제 2026-07-23) ────────────────────────────
+#   "자비스09가 데이터 수집 에이전트다. 모든 수집은 09 단일 진입점이다.
+#    수집을 엉뚱한 놈이 하는 막되먹은 수정이 절대 안 되도록 강제하라."
+#
+#   왜 grep 하나로 안 되나: 지금까지도 02 는 09 의 *API 를 호출* 했다. 규정을 어긴 건
+#   호출이 아니라 **조합** 이었다 — 무엇을 먼저 부르고, 실패하면 무엇으로 대체하고,
+#   결과를 어떤 상자로 조립할지를 02 가 정했다. 그래서 "requests.get 금지" 류 검사는
+#   전부 통과하는데도 수집 오케스트레이션이 5벌 흩어져 있었다.
+#   → 이 검사는 *조합* 을 잡는다: 09 의 수집 API 를 2종 이상 쓰거나, 수집 산출물 조립
+#     함수를 09 밖에서 부르면 위반.
+#
+#   ② 동적 설계: 금지 대상 API 목록을 여기에 박지 않는다. `JARVIS09_COLLECTOR.__all__`
+#     을 런타임에 읽어 파생 — 09 에 새 수집 API 가 생기면 자동으로 이 검사에 편입된다.
+
+# 조합을 대신해 주는 *정문* — 이것만은 몇 개를 쓰든 정상 (09 가 조합한 결과를 받는 것)
+_COLLECT_FACADES = {"collect_all", "market_snapshot", "CollectedData", "CATEGORY_POLICY",
+                    "policy_for", "grounds", "ATTR_UNITS", "evidence_brief", "as_source_docs",
+                    "check_source_onboarding", "register_source_key", "onboarding_status",
+                    # ★ 선계산이 남긴 *마커 조회* — 밖에 나가 받아오는 게 없으니 수집이 아니다.
+                    #   (02 가 21:00 발행에서 "어떤 테마가 고정됐나" 를 묻는 한 줄)
+                    "load_pinned_theme"}
+# 수집 산출물 *조립* 함수 — 09 밖 호출 자체가 위반 (조립 규칙은 09 소유)
+_COLLECT_ASSEMBLERS = {"compose_collected", "market_data_to_datasets",
+                       "facts_to_datasets", "stocks_to_datasets", "select_by_trust_quota"}
+# 수집 도메인 owner + 정당한 예외
+_COLLECT_OWNER = "JARVIS09_COLLECTOR/"
+_COLLECT_EXEMPT_DIRS = (
+    "JARVIS03_RADAR/",   # 주제·트렌드 owner — 선수집 요청은 ADR 013 정본 경로
+    "tools/",            # 계측 스크립트 (발행 경로 아님)
+)
+# 원시 수집 라이브러리 — 09 밖에서 *데이터를 받아오면* 위반 (pytrends 는 03 트렌드 예외)
+_COLLECT_RAW_LIB_NAMES = ("yfinance", "pykrx", "FinanceDataReader", "pytrends", "feedparser")
+_COLLECT_RAW_FROM = re.compile(
+    rf"^\s*from\s+({'|'.join(_COLLECT_RAW_LIB_NAMES)})\b.*\bimport\b")
+_COLLECT_RAW_IMPORT = re.compile(
+    rf"^\s*import\s+({'|'.join(_COLLECT_RAW_LIB_NAMES)})\b(?:\s+as\s+(\w+))?")
+# 패키지 *메타* 만 쓰는 건 수집이 아니다 (예: 번들 폰트 경로 탐색 `pykrx.__file__`)
+_COLLECT_LIB_META_ATTRS = {"__file__", "__path__", "__version__", "__name__", "__doc__"}
+
+# ── ④⑤ 정문 우회 — 09 의 *내부* 를 밖에서 붙잡는 형태 (사용자 박제 2026-07-23) ──
+#   ①②③ 은 "몇 종을 조합했나" 를 본다. 그런데 09 API 를 *한 종만* 쓰면서도 경계가 새는
+#   길이 두 개 남아 있었다 (실제로 4곳이 이 길로 새 있었고 ①②③ 은 전부 통과했다):
+#     ④ private 심볼 직수입 — `_fetch_naver_theme_catalog` 처럼 `_` 로 시작하는 내부 함수.
+#        밖이 붙잡는 순간 09 는 자기 내부를 못 고친다 (이름 하나가 곧 공개 계약이 된다).
+#     ⑤ 내부 계층(하위 패키지) 직수입 — `JARVIS09_COLLECTOR.providers.*`.
+#        provider 선택은 09 가 하는 판단이다. 밖에서 특정 provider 를 지목하면 폴백이 죽는다.
+#   ② 동적 설계: '내부 계층' 목록도 박지 않는다 — 09 폴더의 하위 *패키지* 를 실물로 훑어 파생.
+_COLLECT_FROM_09 = re.compile(r"^\s*from\s+JARVIS09_COLLECTOR(?:\.([\w.]+))?\s+import\s+(.+)$")
+_COLLECT_IMPORT_09 = re.compile(r"^\s*import\s+JARVIS09_COLLECTOR\.([\w.]+)")
+
+
+def _collect_internal_packages() -> set[str] | None:
+    """09 의 내부 계층(하위 패키지) 이름 — 파일시스템에서 파생. 09 가 계층을 늘리면 자동 편입.
+
+    읽기 실패는 `None` (= 검사 무력화, fail-closed). 빈 집합은 '하위 패키지가 없다' 는 사실.
+    """
+    root = ROOT / "JARVIS09_COLLECTOR"
+    try:
+        return {d.name for d in root.iterdir()
+                if d.is_dir() and not d.name.startswith((".", "__")) and (d / "__init__.py").exists()}
+    except Exception:
+        return None
+
+
+def _collect_imported_names(names_s: str, lineno: int, lines: list[str]) -> list[str]:
+    """`from ... import` 의 *원본* 이름들 (alias 는 무시 — `as _x` 는 밖의 사정)."""
+    if "(" in names_s and ")" not in names_s:          # 괄호 여러 줄
+        buf, j = [names_s], lineno
+        while j < len(lines) and ")" not in lines[j]:
+            buf.append(lines[j]); j += 1
+        if j < len(lines):
+            buf.append(lines[j])
+        names_s = " ".join(buf)
+    raw = names_s.replace("(", " ").replace(")", " ").replace("\\", " ")
+    out = []
+    for tok in raw.split(","):
+        nm = tok.split("#")[0].split(" as ")[0].strip()
+        if nm:
+            out.append(nm)
+    return out
+
+
+def _collect_api_names() -> set[str]:
+    """09 가 공개한 수집 API 이름 — 런타임 파생 (하드코딩 금지, ② 동적 설계).
+
+    ★ 무거운 import 없이 `__init__.py` 의 `__all__` 을 *소스에서* 읽는다.
+      importlib 로 실제 로드하면 `python3 shared/precommit_check.py` 처럼
+      sys.path[0]=shared/ 인 실행에서 조용히 실패해 **검사가 통째로 무력화**된다
+      (실제로 그렇게 통과했다 — '검사 존재'는 '적용'의 증거가 아니다).
+    빈 집합이면 호출자가 검사 무력화로 간주하고 위반을 낸다 (fail-closed).
+    """
+    src = ROOT / "JARVIS09_COLLECTOR" / "__init__.py"
+    try:
+        text = src.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return set()
+    m = re.search(r"__all__\s*=\s*\[(.*?)\]", text, re.S)
+    if not m:
+        return set()
+    names = set(re.findall(r"[\"'](\w+)[\"']", m.group(1)))
+    return {n for n in names if n not in _COLLECT_FACADES}
+
+
+def check_collect(report: Report) -> None:
+    """★ 수집 단일 진입점 = JARVIS09 (사용자 박제 2026-07-23).
+
+    ① 09 밖에서 수집 API 2종 이상 사용 → *조합* = 수집 오케스트레이션 (위반)
+    ② 09 밖에서 수집 산출물 조립 함수 호출 → 조립 규칙 유출 (위반)
+    ③ 09 밖에서 원시 수집 라이브러리 import → 수집 신설 (위반)
+    ④ 09 의 private(`_`) 심볼 직수입 → 내부 구현을 밖이 붙잡음 (위반)
+    ⑤ 09 의 내부 계층(하위 패키지) 직수입 → provider 선택 판단 유출 (위반)
+    """
+    cat = "collect"
+    api = _collect_api_names()
+    internal_pkgs = _collect_internal_packages()
+    assemblers = _COLLECT_ASSEMBLERS & (api | _COLLECT_ASSEMBLERS)
+    if not api or internal_pkgs is None:
+        # fail-closed — 목록을 못 읽으면 검사가 *조용히 무력화*된다. 통과시키지 않는다.
+        what = "__all__" if not api else "하위 패키지 목록"
+        report.add(Violation(
+            cat, "collect/self-check", "JARVIS09_COLLECTOR/__init__.py", 0,
+            f"09 의 {what} 을 읽지 못해 수집 검사가 무력화됨 — 검사 자체를 고칠 것"))
+        report.checks_run += 1
+        return
+
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        if rel_s == "shared/precommit_check.py" or rel_s.startswith(_COLLECT_OWNER):
+            continue
+        text = _read_py(p)
+        if text is None:
+            continue
+        lines = text.splitlines()
+        code = [(i, l) for i, l in enumerate(lines, 1) if not l.lstrip().startswith("#")]
+
+        # ④⑤ 정문 우회 — 예외 폴더(03·tools)도 대상. 정문은 *누구에게나* 정문이다.
+        for i, l in code:
+            m = _COLLECT_IMPORT_09.match(l)
+            if m:
+                if m.group(1).split(".")[0] in internal_pkgs:
+                    report.add(Violation(
+                        cat, "collect/internal-module", rel_s, i,
+                        f"09 내부 계층 `{m.group(1)}` 직수입 — 09 **정문**"
+                        f"(`from JARVIS09_COLLECTOR import ...`) 으로 받을 것"))
+                continue
+            m = _COLLECT_FROM_09.match(l)
+            if not m:
+                continue
+            sub = m.group(1) or ""
+            if sub.split(".")[0] in internal_pkgs:
+                report.add(Violation(
+                    cat, "collect/internal-module", rel_s, i,
+                    f"09 내부 계층 `{sub}` 직수입 — provider 선택·폴백은 09 의 판단. "
+                    f"09 **정문** 으로 받을 것"))
+            for nm in _collect_imported_names(m.group(2), i, lines):
+                if nm.startswith("_") and not nm.startswith("__"):
+                    report.add(Violation(
+                        cat, "collect/private-api", rel_s, i,
+                        f"09 private 심볼 `{nm}` 직수입 — 내부 구현을 밖이 붙잡으면 "
+                        f"09 가 자기 내부를 못 고친다. 09 에 **공개 정문** 을 만들어 쓸 것"))
+
+        # ③ 원시 수집 라이브러리 — *데이터 API 를 실제로 쓰는지* 로 판정
+        if not rel_s.startswith("JARVIS03_RADAR/"):     # 03 트렌드 수집만 예외 (CLAUDE.md)
+            for i, l in code:
+                m = _COLLECT_RAW_FROM.match(l)
+                if m:
+                    report.add(Violation(
+                        cat, "collect/raw-lib", rel_s, i,
+                        f"`{m.group(1)}` API 직접 import — 수집은 JARVIS09 단독"))
+                    continue
+                m = _COLLECT_RAW_IMPORT.match(l)
+                if not m:
+                    continue
+                alias = m.group(2) or m.group(1)
+                # 모듈 메타(`__file__` 등) 외의 속성을 쓰면 = 데이터 API 사용 = 위반
+                hits = re.findall(rf"\b{re.escape(alias)}\.(\w+)", text)
+                if any(h not in _COLLECT_LIB_META_ATTRS for h in hits):
+                    report.add(Violation(
+                        cat, "collect/raw-lib", rel_s, i,
+                        f"`{m.group(1)}` 로 직접 데이터 취득 — 수집은 JARVIS09 단독"))
+
+        if any(rel_s.startswith(d) for d in _COLLECT_EXEMPT_DIRS):
+            continue
+
+        # ② 조립 함수 유출
+        for i, l in code:
+            for name in assemblers:
+                if re.search(rf"\b{name}\s*\(", l):
+                    report.add(Violation(
+                        cat, "collect/assembler-outside", rel_s, i,
+                        f"수집 산출물 조립 `{name}()` 을 09 밖에서 호출 — "
+                        f"조립은 compose_collected(09) 안에서만"))
+
+        # ① 수집 API 조합
+        used: dict[str, int] = {}
+        for i, l in code:
+            for name in api:
+                if name in used:
+                    continue
+                if re.search(rf"\b{name}\s*\(", l):
+                    used[name] = i
+        if len(used) >= 2:
+            first_line = min(used.values())
+            report.add(Violation(
+                cat, "collect/orchestration-outside", rel_s, first_line,
+                f"09 수집 API {len(used)}종({', '.join(sorted(used))})을 한 파일에서 조합 "
+                f"— 순서·폴백·조립 판단이 09 밖에 생김. `collect_all()` 한 번으로 받을 것"))
+
+    report.checks_run += 5
+
+
+CATEGORIES["collect"] = check_collect
+
+
+# ══════════════════════════════════════════════════════════════════
+#  crossproc — 크로스커팅 상태를 메모리 플래그로 두지 말 것 (사용자 박제 2026-07-25)
+# ══════════════════════════════════════════════════════════════════
+def check_crossproc(report: "Report") -> None:
+    """프로세스 경계를 넘어야 하는 상태를 *메모리* 로만 판정하는 코드를 차단.
+
+    **왜 (같은 병이 3번 났다)**
+      경제 브리핑은 subprocess, 테마는 데몬 안에서 돈다. 그래서 `threading.Event`·전역 set
+      같은 메모리 표식은 *한쪽에서만* 참이다. 실제 사고:
+        · ERRORS [474] — 발행 우선 규칙이 `invoke_text` 에만 걸려 `run_sdk_query` 로 우회
+        · 2026-07-25   — 배경 LLM 차단이 `_PUBLISHING_ACTIVE.is_set()`(Event)만 봐서
+                         경제 발행(subprocess) 내내 데몬 쪽 배경 작업이 한도를 먹음
+      CLAUDE.md 에 "프로세스 경계를 넘는가" 가 적혀 있었지만 *검사가 없어* 반복됐다.
+
+    **규칙** — 크로스커팅 상태(발행 중 여부 등)는 파일/DB 가 진실이고 메모리는 캐시다.
+      판정은 반드시 *합성 조회 함수*(`is_publishing()` 등)를 쓴다. 원시 Event 직접 조회 금지.
+
+    검사: `_PUBLISHING_ACTIVE.is_set()` 를 소유 모듈(shared/llm.py) 밖에서, 또는 소유 모듈
+      안이라도 합성 함수(`is_publishing`)를 우회해 *판정에* 쓰면 위반.
+    """
+    cat = "crossproc"
+    owner = "shared/llm.py"
+    # 소유 모듈 안에서 원시 Event 조회가 허용되는 곳 = 합성 함수 자신과 상태 조작부
+    allowed_owner_ctx = ("def is_publishing", "def mark_publishing",
+                         "def _reset_publishing_state", "_PUBLISHING_ACTIVE.set",
+                         "_PUBLISHING_ACTIVE.clear")
+    pat = re.compile(r"_PUBLISHING_ACTIVE\s*\.\s*is_set\s*\(")
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        if any(seg in rel_s for seg in (".venv/", "__pycache__", "node_modules")):
+            continue
+        try:
+            lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            continue
+        for i, line in enumerate(lines, 1):
+            if not pat.search(line):
+                continue
+            if rel_s == owner:
+                ctx = "\n".join(lines[max(0, i - 12): i + 2])
+                if any(w in ctx for w in allowed_owner_ctx):
+                    continue
+            report.add(Violation(
+                cat, "crossproc/memory-flag-as-truth", rel_s, i,
+                "발행 여부를 메모리 Event 로 직접 판정 — subprocess 에서 항상 False. "
+                "`is_publishing()`(파일 표식 포함) 또는 `bg_defer_reason()` 을 쓸 것"))
+
+    # ② 잡 래퍼는 picklable 이어야 한다 (processpool 잡 6개) — 실제 직렬화로 확인
+    try:
+        from JARVIS04_SCHEDULER.job_llm_priority import selfcheck as _jlp_selfcheck
+        why = _jlp_selfcheck()
+        if why:
+            report.add(Violation(
+                cat, "crossproc/job-wrapper-unpicklable",
+                "JARVIS04_SCHEDULER/job_llm_priority.py", 0, why))
+    except Exception:
+        pass
+
+    report.checks_run += 2
+
+
+CATEGORIES["crossproc"] = check_crossproc
 
 
 def run(categories: list[str] | None = None) -> Report:

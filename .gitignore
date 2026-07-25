@@ -79,3 +79,5 @@ JARVIS02_WRITER/scheduler_progress.json
 pid/
 *.lock
 JARVIS07_GUARDIAN/bandit_state.json
+# 선계산 수집 캐시 — transient 바이너리(pkl), 데몬 precollect 잡이 재생성. 학습자산 아님.
+data/precollect/

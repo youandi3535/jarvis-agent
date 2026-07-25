@@ -60,7 +60,7 @@ except Exception:
 TG_TOKEN      = os.getenv("TELEGRAM_TOKEN", "")
 TG_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# 모델은 shared/llm.py "analyzer" alias(claude-sonnet-5)로 중앙 관리
+# 모델은 shared/llm.py 의 "analyzer" alias 로 중앙 관리 (ID 는 MODELS 만 소유)
 # CLAUDE_URL / CLAUDE_MODEL 직접 호출 → invoke_text("analyzer") 로 교체됨
 
 PLATFORM_EMOJI = {"naver": "🟢", "tistory": "🟠"}
@@ -369,7 +369,7 @@ def _build_claude_input(date_str: str, posts: list[dict], agg: dict,
 
 def _call_claude(user_msg: str, max_tokens: int = 1500) -> list:
     """Claude 호출 — JSON 배열 반환. 실패 시 빈 리스트 + stderr.
-    shared/llm.py invoke_text("analyzer") 로 중앙화 — claude-sonnet-5.
+    shared/llm.py invoke_text("analyzer") 로 중앙화 — 모델 ID 는 MODELS 파생.
     """
     try:
         from shared.llm import invoke_text as _inv
@@ -414,36 +414,6 @@ def _persist_insights(insights: list[dict], scope: str = "all") -> int:
             print(f"  ⚠️ insight 저장 실패: {e}", file=sys.stderr)
             _g_report("radar", e, module=__name__)
     return n
-
-
-def _build_telegram_report(date_str: str, agg: dict, insights: list[dict]) -> str:
-    lines = [
-        f"📊 *일일 분석 리포트* ({date_str})",
-        "━━━━━━━━━━━━━━━━━━",
-        f"발행: {agg['posts_count']}건  |  품질: {agg['quality_score']}/100",
-        f"평균 조회수: {agg['avg_views']}  (최고 {agg['top_views']})",
-        f"사전 수정 적용률: {agg['pre_applied_ratio']*100:.0f}%",
-    ]
-    if agg["posts_count"] == 0:
-        lines.append("\n_오늘 발행된 글이 없어 분석을 건너뜁니다._")
-        return "\n".join(lines)
-
-    if agg.get("issue_types"):
-        top_issues = ", ".join(f"{k}({v})" for k, v in agg["issue_types"].most_common(3))
-        lines.append(f"잦은 이슈: {top_issues}")
-
-    if insights:
-        lines.append("\n💡 *내일 적용할 학습 지침*")
-        for i, ins in enumerate(insights[:5], 1):
-            d = (ins.get("directive") or ins.get("description") or "")[:100]
-            lines.append(f"{i}. {d}")
-    else:
-        lines.append("\n_오늘은 새로 도출된 학습 지침이 없습니다._")
-
-    if agg["avg_views"] == 0:
-        lines.append("\n⚠️ 조회수 0 — performance_collector 점검 필요 "
-                     "(TS_COOKIE 점검).")
-    return "\n".join(lines)
 
 
 def _send_tg(text: str):
@@ -577,24 +547,25 @@ def run_daily_review(date_str: str | None = None) -> dict:
 
 
 def _build_grouped_telegram_report(date_str: str, groups: dict, total: int) -> str:
-    """그룹별 섹션을 분리한 일일 리포트."""
-    lines = [
-        f"📊 *일일 분석 리포트* ({date_str})",
-        "━━━━━━━━━━━━━━━━━━",
-        f"총 발행: {total}건  ({len(groups)}개 종류)",
-    ]
-    pt_label = {"economic":"📰 경제 브리핑", "theme":"📈 테마글",
-                "manual":"✍️ 수동", "unknown":"❓ 미분류"}
+    """★ 2026-07-24 (사용자 박제): 집계·조회수·품질 블록 폐지 → *학습된 사항만 한 줄씩, 전부* 남긴다.
+    품질은 per-post 100점 점수가, 성과는 대시보드(9199)가 이미 커버 — 여기선 '오늘 배운 것' 전량."""
+    pt_label = {"economic": "📰 경제 브리핑", "theme": "📈 테마글",
+                "manual": "✍️ 수동", "unknown": "❓ 미분류"}
+    total_ins = sum(len(r.get("insights") or []) for r in groups.values())
+    lines = [f"🧠 *오늘의 학습* ({date_str}) — 총 {total_ins}건", "━━━━━━━━━━━━━━━━━━"]
+    if total_ins == 0:
+        lines.append("_오늘은 새로 도출된 학습 지침이 없습니다._")
+        return "\n".join(lines)
     for pt, r in groups.items():
-        label = pt_label.get(pt, f"🔖 {pt}")
+        ins_list = r.get("insights") or []
+        if not ins_list:
+            continue
         lines.append("")
-        lines.append(f"{label} — {r['posts']}건  품질 {r['quality']:.0f}/100")
-        if r["insights"]:
-            for i, ins in enumerate(r["insights"][:3], 1):
-                d = (ins.get("directive") or ins.get("description") or "")[:90]
+        lines.append(f"{pt_label.get(pt, f'🔖 {pt}')} ({len(ins_list)}건)")
+        for i, ins in enumerate(ins_list, 1):   # ★ 전부 (종전 [:3] 제한 폐지 — 사용자: 전부 남겨줘)
+            d = (ins.get("directive") or ins.get("description") or "").strip().replace("\n", " ")
+            if d:
                 lines.append(f"  {i}. {d}")
-        else:
-            lines.append("  _(새 인사이트 없음)_")
     return "\n".join(lines)
 
 

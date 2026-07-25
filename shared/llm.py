@@ -43,6 +43,10 @@ class ModelSpec:
     max_tokens: int
     temperature: float
     description: str = ""
+    # ★ 배경(비긴급) 작업용 alias 인가 — 발행창에서는 한도를 글 작성에 양보하고 *보류* 된다.
+    #   (사용자 박제 2026-07-25: "03·09·02·06·08 이 도는 동안 LLM 은 오로지 글 작성에만")
+    #   여기 선언 한 곳에서 `_BG_ALIASES` 를 파생 — 별도 목록을 두면 alias 추가 시 드리프트.
+    background: bool = False
 
 
 # ★ 모델 계층 — 사용자 박제 2026-07-06 (ADR 017): Sonnet 5 단일 모델 통일 (ADR 015 폐지).
@@ -83,6 +87,7 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=8000,
         temperature=0.1,
         description="코드 수정·patch 생성·자가수정 (Sonnet 5 — 오류 수정 전용)",
+        background=True,   # 배경 작업 — 발행창에서 보류
     ),
     "guardian": ModelSpec(
         alias="guardian",
@@ -90,6 +95,7 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=8000,
         temperature=0.1,
         description="JARVIS07 오류 분석·패치 생성 (Sonnet 5)",
+        background=True,   # 배경 작업 — 발행창에서 보류
     ),
     "architect": ModelSpec(
         alias="architect",
@@ -97,6 +103,7 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=10000,
         temperature=0.3,
         description="ARCHITECT 새 에이전트·시스템 설계 (Sonnet 5)",
+        background=True,   # 배경 작업 — 발행창에서 보류
     ),
     "diagnostic": ModelSpec(
         alias="diagnostic",
@@ -104,6 +111,7 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=6000,
         temperature=0.2,
         description="복잡 multi-cause traceback 진단·근본 원인 추론 (Sonnet 5)",
+        background=True,   # 배경 작업 — 발행창에서 보류
     ),
     "learn_eval": ModelSpec(
         alias="learn_eval",
@@ -111,6 +119,7 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=4000,
         temperature=0.1,
         description="learned_patterns 등록 게이트 — patch 안전성·정확성·재사용 가치 채점 (Sonnet 5)",
+        background=True,   # 배경 작업 — 발행창에서 보류
     ),
     "fact_judge": ModelSpec(
         alias="fact_judge",
@@ -163,9 +172,24 @@ def model_label(alias: str) -> str:
     """alias(writer/guardian/…) → 사람이 읽는 모델명. MODELS 에서 파생.
 
     코드가 모델을 바꾸면 이 라벨을 쓰는 모든 표시(웹·텔레그램)가 자동 갱신된다.
-    표시 코드에 'Opus 4.x' 같은 리터럴을 직접 쓰지 말고 이 함수를 호출할 것.
+    표시 코드에 모델명 리터럴을 직접 쓰지 말고 이 함수를 호출할 것.
     """
     return pretty_model_id(_ALIAS_MODEL.get(alias, _DEFAULT_MODEL_ID))
+
+
+def model_id(alias: str = "writer") -> str:
+    """alias → 실제 모델 ID. **모델 ID 리터럴의 유일한 소유자는 이 모듈**.
+
+    다른 파일에서 모델 ID 문자열을 직접 쓰면 모델 교체 시 그 사본이 그대로 남아
+    폐기된 모델을 계속 가리킨다(② 동적 설계 / '복사본을 진실로 믿지 말 것').
+    반드시 이 함수로 파생할 것 — precommit `model` 카테고리가 강제한다.
+    """
+    return _ALIAS_MODEL.get(alias, _DEFAULT_MODEL_ID)
+
+
+def live_model_ids() -> set[str]:
+    """현재 살아있는 모델 ID 전부 — 검사·표시가 목록을 박지 않도록 런타임 파생."""
+    return set(_ALIAS_MODEL.values())
 
 
 def get_spec(alias: str) -> ModelSpec:
@@ -338,6 +362,7 @@ except ImportError:
 #     단일 진입점에서 프로세스 전역 세마포어로 spawn 을 직렬화 → 각 호출이 실제 성공.
 import re as _re_ctrl
 import threading as _threading
+import time as _time          # 발행창 만료 판정 (불균형 복구)
 import time as _time_pace
 
 _CTRL_RE = _re_ctrl.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -429,7 +454,69 @@ def _proc_lock_release() -> None:
 # mark_publishing(True) 동안 background alias(guardian 등)의 timeout 을 90s 로 단축,
 # retries=1 → 세마포어 장기 점유로 발행 파이프라인을 최대 300s 블로킹하던 사고 방지.
 _PUBLISHING_ACTIVE = _threading.Event()
-_BG_ALIASES = frozenset({"guardian", "learn_eval", "architect", "diagnostic"})
+_PUBLISHING_DEPTH = 0                        # 중첩 표시 참조수 (잡 래퍼 + 내부 run())
+_PUBLISHING_DEPTH_LOCK = _threading.Lock()
+_PUBLISHING_SINCE = 0.0                      # 창이 열린 시각 (불균형 만료 판정용)
+
+
+def _reset_publishing_state() -> None:
+    """발행창 강제 해제 — 불균형(mark_publishing(False) 누락) 복구용."""
+    global _PUBLISHING_DEPTH, _PUBLISHING_SINCE
+    with _PUBLISHING_DEPTH_LOCK:
+        _PUBLISHING_DEPTH = 0
+        _PUBLISHING_SINCE = 0.0
+    _PUBLISHING_ACTIVE.clear()
+    try:
+        _PUBLISHING_MARK_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+# ★ 현재 스레드의 스케줄 잡 문맥 (2026-07-25) — JARVIS04 잡 래퍼가 설정.
+#   왜 필요한가: 배경 잡 중 *글 작성 alias* 를 쓰는 것이 있다(daily_review=analyzer,
+#   design_learn=writer). alias 만 보면 이들을 못 거르고, 그렇다고 analyzer/writer 를 막으면
+#   09 수집·06 이미지가 죽는다. "누가 부르는가"(잡 문맥)로 갈라야 정확하다.
+_JOB_CTX = _threading.local()
+
+
+def mark_job_context(job_id: str = "", pipeline: bool = False) -> None:
+    """현재 스레드가 실행 중인 스케줄 잡 표시 — JARVIS04 `job_llm_priority.gate()` 전용.
+    job_id="" 로 호출하면 해제(스레드풀 재사용 대비 반드시 finally 에서 해제)."""
+    _JOB_CTX.job_id = job_id or ""
+    _JOB_CTX.pipeline = bool(pipeline)
+
+
+def current_job_is_background() -> bool:
+    """지금이 *파이프라인이 아닌* 스케줄 잡 안인가 (발행창에서 양보 대상)."""
+    return bool(getattr(_JOB_CTX, "job_id", "")) and not getattr(_JOB_CTX, "pipeline", False)
+
+
+def defer_reason(alias: str = "", background: bool | None = None) -> str:
+    """★ LLM 착수 보류 사유 — **모든 통로의 단일 판정 함수** (2026-07-25).
+
+    LLM 은 네 개의 문으로 나간다: `invoke_text` · `invoke_vision` · `_run_sdk_sync`(chat) ·
+    `run_sdk_query`(Claude Code SDK). 종전엔 `invoke_text` 한 곳만 막혀 있어
+    GUARDIAN auto_repair(run_sdk_query, timeout 1200s)·design_learner(invoke_vision)가
+    발행창에서도 그대로 나갔다. 판정을 여기 한 곳에 모아 네 문이 같은 답을 쓰게 한다.
+
+    배경 여부 판정 (우선순위):
+      ① background 인자가 명시되면 그대로 (호출자가 아는 것이 가장 정확)
+      ② alias 가 MODELS 에서 background=True 로 선언됐으면 배경
+      ③ 파이프라인이 아닌 *스케줄 잡* 문맥 안이면 배경 (alias 로 못 거르는 잡용)
+    잡이 아닌 문맥(텔레그램 사용자 명령·사용자 수동 실행)은 ②만 걸린다 — 사용자 작업은 막지 않는다.
+
+    반환: 보류 사유 문자열(발행 중/보호 구간) 또는 "" (진행해도 됨).
+    """
+    if background is None:
+        background = (alias in _BG_ALIASES) or current_job_is_background()
+    if not background:
+        return ""
+    try:
+        return bg_defer_reason()
+    except Exception:
+        return ""
+# ★ MODELS 선언에서 파생 (사본 금지 — 2026-07-25). 종전엔 여기 손으로 4개를 적어둬서
+#   `coder`(architect 코드생성)가 누락돼 발행창에도 그대로 나갔다.
+_BG_ALIASES = frozenset(a for a, s in MODELS.items() if getattr(s, "background", False))
 
 # ★ 발행창 essential 재시도 캡 대상 (P-C 사용자 박제 2026-07-18) — 본문 생성·발행전 검증 호출.
 #   스로틀/SDK 스톨 시 재시도 증폭(913s) 차단용 retries=1. analyzer(추출)는 제외(선계산으로 이전).
@@ -468,6 +555,20 @@ def mark_publishing(active: bool) -> None:
 
     ★ in-process Event + 파일 표식을 *함께* 갱신 → 다른 프로세스(데몬 GUARDIAN)도 인지.
     """
+    # ★ 중첩 안전 refcount (2026-07-25): 잡 래퍼(JARVIS04)가 파이프라인 잡 전체를 감싸고
+    #   그 안에서 economic_poster.run()/run_all_themes() 가 또 표시한다. 참조수 없이 bool 로
+    #   다루면 *안쪽이 끝날 때 바깥 창까지 꺼져* 발행 후반부가 무방비가 된다.
+    global _PUBLISHING_DEPTH, _PUBLISHING_SINCE
+    with _PUBLISHING_DEPTH_LOCK:
+        if active:
+            if _PUBLISHING_DEPTH == 0:
+                _PUBLISHING_SINCE = _time.time()   # 0→1 시각 기록 (불균형 만료 판정)
+            _PUBLISHING_DEPTH += 1
+        else:
+            _PUBLISHING_DEPTH = max(0, _PUBLISHING_DEPTH - 1)
+            if _PUBLISHING_DEPTH == 0:
+                _PUBLISHING_SINCE = 0.0
+        active = _PUBLISHING_DEPTH > 0      # 실제 창 상태 = 참조수 > 0
     if active:
         _PUBLISHING_ACTIVE.set()
     else:
@@ -494,7 +595,17 @@ def _publishing_mark_active() -> bool:
         _started = _dt_p.fromisoformat(_raw)
         _age = (_dt_p.now() - _started).total_seconds()
         if _age > _publishing_stale_sec():
-            return False   # 정리 실패로 남은 표식 — 무시(영구 차단 방지)
+            # ★ 자가 치유 (2026-07-25): 무시만 하지 말고 *지운다*.
+            #   watchdog os._exit(75)·proc.kill() 로 죽은 발행은 표식을 남기는데, 종전엔
+            #   지우는 주체가 없어 재부팅 후에도 파일이 남아 최대 80분간 배경 LLM 이 전면 보류됐다.
+            try:
+                _PUBLISHING_MARK_PATH.unlink(missing_ok=True)
+                import logging as _lg0
+                _lg0.getLogger("jarvis.llm").warning(
+                    f"🧹 발행 표식이 {_age/60:.0f}분째 남아 있어 제거 (비정상 종료 잔재)")
+            except Exception:
+                pass
+            return False
         return True
     except Exception:
         return False
@@ -600,18 +711,12 @@ def _publish_times() -> tuple:
     now = _t.time()
     if _protect_cache[1] and now - _protect_cache[0] < _PROTECT_TTL:
         return _protect_cache[1]
-    times = []
+    times: tuple = ()
     try:
-        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
-        for j in DEFAULT_JOBS:
-            cb = str(j.get("callback", ""))
-            # 실제 *발행* 콜백만 (선계산·로그점검 제외)
-            if j.get("trigger") != "cron" or "run_self_repair_then_" not in cb:
-                continue
-            kw = j.get("kwargs") or {}
-            h, m = kw.get("hour"), kw.get("minute", 0)
-            if isinstance(h, int):
-                times.append((h, int(m or 0)))
+        # ★ 발행 잡 판별은 JARVIS04 단일 소스에서 파생 (2026-07-25). 종전엔 여기에
+        #   "run_self_repair_then_" 문자열이 *복사* 돼 있어 job_llm_priority 와 2벌이었다.
+        from JARVIS04_SCHEDULER.job_llm_priority import publish_cron_times
+        times = publish_cron_times()
     except Exception:
         pass
     _protect_cache[0], _protect_cache[1] = now, tuple(sorted(set(times)))
@@ -646,7 +751,20 @@ def is_publishing() -> bool:
     in-process Event(테마=데몬 내부) + 파일 표식(경제=별도 subprocess) 둘 다 확인.
     한쪽만 보면 '모든 글에 적용' 이 안 된다.
     """
-    return _PUBLISHING_ACTIVE.is_set() or _publishing_mark_active()
+    if _PUBLISHING_ACTIVE.is_set():
+        # ★ 균형 안 맞은 표시로 인한 *영구 블랙아웃* 방지 (2026-07-25).
+        #   mark_publishing(True) 후 예외로 (False) 가 누락되면 참조수가 영영 안 내려간다
+        #   → 배경 LLM 이 데몬 재시작 전까지 전면 보류. 파일 표식과 같은 만료 규칙을 적용한다.
+        _since = globals().get("_PUBLISHING_SINCE") or 0.0
+        if _since and (_time.time() - _since) > _publishing_stale_sec():
+            import logging as _lg1
+            _lg1.getLogger("jarvis.llm").warning(
+                f"🧹 발행창이 {(_time.time()-_since)/60:.0f}분째 열려 있어 강제 해제 "
+                f"(mark_publishing 불균형 — 영구 블랙아웃 방지)")
+            _reset_publishing_state()
+        else:
+            return True
+    return _publishing_mark_active()
 
 
 def bg_defer_reason() -> str:
@@ -1011,6 +1129,14 @@ def invoke_vision(alias: str, prompt: str, image_paths: list,
     """이미지 입력 LLM 단일 진입점 (SDK Read 도구). 텍스트 결과 반환. 실패/미가용 시 ""."""
     if not image_paths:
         return ""
+    # ★ 발행창 보류 — 네 통로 공통 판정 (2026-07-25). 종전엔 이 문이 무방비라
+    #   design_learner(job j06_design_learn, 05:00)의 비전 호출이 발행 보호구간을 그대로 통과했다.
+    _v_why = defer_reason(alias)
+    if _v_why:
+        import logging as _lgv
+        _lgv.getLogger("jarvis.llm").info(
+            f"🛡 {_v_why} — 배경 vision 호출({alias}) 보류 (한도를 글 작성에 우선 배정)")
+        return ""
     model = _ALIAS_MODEL.get(alias, _DEFAULT_MODEL_ID)
     try:
         return _invoke_sdk_vision(prompt, model, [str(p) for p in image_paths],
@@ -1142,7 +1268,35 @@ def circuit_is_open() -> bool:
 def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
                 _retries: int = 4, _essential: bool = False,
                 _nonessential: bool = False, **overrides) -> str:
-    """Claude Code SDK 호출 단일 진입점.
+    """Claude Code SDK 호출 단일 진입점 — 본문(text)만 반환 (하위호환 유지).
+
+    ★ 2026-07-25 ①단일 진입점: 구현 본체는 `invoke_text_result` 하나뿐이고 이 함수는
+      그 위에 얹힌 얇은 어댑터다. 시그니처·반환·동작은 종전과 **완전히 동일** —
+      호출자(수백 곳) 무영향. "모델이 판정을 못 했다"를 구분해야 하는 *판정형* 호출만
+      `invoke_text_result` 를 쓴다 (빈 문자열과 판정불가가 구분되지 않는 게 결함이었다).
+    """
+    text, _ok = invoke_text_result(
+        alias, prompt, system=system, timeout=timeout, _retries=_retries,
+        _essential=_essential, _nonessential=_nonessential, **overrides)
+    return text
+
+
+def invoke_text_result(alias: str, prompt: str, system: str = "", timeout: int = 180,
+                       _retries: int = 4, _essential: bool = False,
+                       _nonessential: bool = False, **overrides) -> tuple[str, bool]:
+    """Claude Code SDK 호출 단일 진입점 — `(text, ok)` 반환.
+
+    ★ ok 의 의미 (에이전트 간 계약 — 2026-07-25):
+        ok=True  : 모델이 실제로 답했다. text 는 그 답(비어있지 않음).
+        ok=False : **모델이 판정을 못 했다.** 회로 open·발행창 보호·SDK 실패·빈 응답·
+                   절단(truncated) 전부 여기. text 는 "" 이거나 절단된 부분출력이다.
+
+      종전 `invoke_text` 는 이 셋(정상 빈 답변 / 회로 open 즉시 폴백 / SDK 실패)을
+      **모두 ""** 로 뭉개서 반환했다. 예외도 없어 GUARDIAN 기록도 로그도 남지 않았고,
+      품질 게이트들이 *판정을 한 번도 안 하고* "통과" 시키는 implicit error 의 진원지였다.
+      판정형 호출(사실성·매력도·진실성 감사)은 반드시 이 함수로 ok 를 확인할 것.
+
+    모든 alias — Sonnet 5 단일 모델 (ADR 017, 사용자 박제 2026-07-06 — ADR 015 폐지).
 
     모든 alias — Sonnet 5 단일 모델 (ADR 017, 사용자 박제 2026-07-06 — ADR 015 폐지).
 
@@ -1197,28 +1351,32 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
     #   종전엔 발행이 *시작된 뒤*(mark_publishing) 강등만 했으므로, 발행 직전에
     #   심층감사·학습이 한도를 태워버리는 것을 막지 못했다.
     #   보호 시각은 DEFAULT_JOBS cron 에서 도출 — 하드코딩 없음.
-    if alias in _BG_ALIASES and not _PUBLISHING_ACTIVE.is_set():
-        try:
-            if in_publish_protection():
-                import logging as _lg
-                _lg.getLogger("jarvis.llm").info(
-                    f"🛡 발행창 보호 구간 — background alias '{alias}' 차단 "
-                    f"(발행 前 {_PROTECT_MIN}분). 한도를 발행에 우선 배정."
-                )
-                return ""
-        except Exception:
-            pass
-
-    if alias in _BG_ALIASES and _PUBLISHING_ACTIVE.is_set():
-        retries = min(retries, 1)
-        backoff = False
-        timeout = min(timeout, 90)
+    # ★★ 배경 alias 는 발행창에서 *보류* — 강등 아님 (사용자 박제 2026-07-25).
+    #   "03·09·02·06·08 이 도는 동안 LLM 은 오로지 글 작성에만 쓰인다."
+    #   ① 판정은 `bg_defer_reason()` 단일 소스 — 발행 中 + 발행 前 보호구간을 한 번에 답한다.
+    #   ② 종전 결함(같은 병 3번째): 여기서 `_PUBLISHING_ACTIVE`(threading.Event)만 봤다.
+    #      경제 브리핑은 **subprocess** 라 데몬의 Event 는 꺼져 있어(ERRORS [474] 와 동일)
+    #      경제 발행 내내 데몬 쪽 배경 LLM 이 차단도 강등도 안 된 채 한도를 먹었다.
+    #      `bg_defer_reason()` 은 파일 표식까지 보므로 프로세스 경계를 넘는다.
+    #   ③ '90초로 강등' 은 의미가 없었다 — Tier-2 한 세션이 10분 이상이라 강등해도 차선을 문다.
+    #   ④ alias 로는 못 거르는 배경 잡이 있다 — daily_review 는 `analyzer`, design_learn 은
+    #      `writer` 를 쓴다(둘 다 글 작성 alias). 그렇다고 그 alias 를 막으면 09 수집·06 이미지가
+    #      죽는다. 그래서 *잡 문맥* 으로 함께 판정한다: 파이프라인이 아닌 스케줄 잡이면 보류.
+    #      잡이 아닌 문맥(텔레그램 사용자 명령·수동 실행)은 job_id 가 없어 여기 안 걸린다.
+    _bg_why = defer_reason(alias)          # ★ 네 통로 공통 단일 판정
+    if _bg_why:
+        import logging as _lg
+        _who = getattr(_JOB_CTX, "job_id", "") or f"alias:{alias}"
+        _lg.getLogger("jarvis.llm").info(
+            f"🛡 {_bg_why} — 배경 작업 '{_who}'({alias}) 보류 (한도를 글 작성에 우선 배정)"
+        )
+        return "", False      # ★ 모델 미호출 — 호출자는 다음 기회에 재시도
     # ★ P-C 발행창 essential 재시도 캡 (사용자 박제 2026-07-18): writer(본문 생성)·fact_judge·
     #   engagement_judge(발행 전 검증)는 필수라 timeout 은 유지하되, 스로틀/SDK 스톨 시 재시도로
     #   913s(최대 3×300+백오프)로 증폭되는 것을 차단 — retries=1. 스로틀·스톨 창에서 같은 창
     #   재발사는 무의미하므로 1회 후 defer 가 정상경로다. analyzer(fact·chart 추출)는 품질 보존 위해
     #   강등 제외 — 추출은 선계산(06:00/20:30 저부하 창)으로 발행창 밖 이전됨.
-    elif alias in _PUBLISH_ESSENTIAL_CAP and _PUBLISHING_ACTIVE.is_set():
+    elif alias in _PUBLISH_ESSENTIAL_CAP and is_publishing():
         retries = min(retries, 1)
         backoff = False
 
@@ -1228,7 +1386,8 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
     # ★ 비필수 호출 — 스로틀 시 임계경로 블로킹 절대 금지 (ERRORS [368]). 필수 면제보다 우선.
     if _nonessential:
         if _gate in ("open", "probe"):
-            return ""                      # 스로틀 중 — SDK 미호출·즉시 폴백 (발행 안 막음)
+            # 스로틀 중 — SDK 미호출·즉시 폴백. ok=False 로 *판정 불가* 를 명시한다.
+            return "", False
         retries, backoff = 1, False        # 정상일 때도 1샷
         timeout = min(timeout, 90)         # 시간 상자 — 최악 90초 (max_tokens≤700 안에 완료)
     elif _gate == "open":
@@ -1236,7 +1395,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
             retries, backoff = 1, False   # 필수 호출 — open 중에도 1회 실시도
         else:
             print("  ⏳ [LLM] 회로 차단 중 — 즉시 폴백 (재시도 생략)")
-            return ""
+            return "", False           # ★ 모델 미호출 — 판정 불가
     elif _gate == "probe":
         retries, backoff = 1, False       # probe 는 1샷 — 최악 1 spawn 만 소모
 
@@ -1264,7 +1423,7 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
         _truncated = getattr(_LAST_CALL, "truncated", False)
         if result.strip() and not _truncated:
             _circuit_record_success()
-            return result
+            return result, True        # ★ 유일한 ok=True 경로 — 모델이 실제로 답했다
         # ★ 절단(우리 데드라인이 스트림을 끊음 + 부분출력) = 인프라 스로틀 — 성공 처리·회로 리셋
         #   금지. 빈 응답과 동급으로 재시도 루프에 흘리고, 소진 후 best-effort 로 절단본 반환.
         if _truncated:
@@ -1292,7 +1451,9 @@ def invoke_text(alias: str, prompt: str, system: str = "", timeout: int = 180,
     # 회로차단기 카운트. CLI 부재·auth 빠른 실패는 hung=False라 오탐 없음.
     if throttled_seen or hung_seen or truncated_seen:
         _circuit_record_throttle()
-    return result
+    # ★ 루프를 끝까지 돈 = 성공 분기를 한 번도 못 탔다 → 판정 불가.
+    #   text 는 "" 이거나 *절단된 부분출력* (best-effort 로 계속 반환 — 하위호환).
+    return result, False
 
 
 class ClaudeSDKLLM:
@@ -1373,7 +1534,8 @@ ClaudeCLILLM = ClaudeSDKLLM
 
 __all__ = [
     "ModelSpec", "MODELS", "get_spec",
-    "chat", "invoke_text", "invoke_vision",
+    "model_id", "model_label", "pretty_model_id", "live_model_ids",
+    "chat", "invoke_text", "invoke_text_result", "invoke_vision",
     "last_call_infra_incomplete", "circuit_is_open",
     "is_langchain_available",
     "ClaudeSDKLLM", "ClaudeCLILLM",

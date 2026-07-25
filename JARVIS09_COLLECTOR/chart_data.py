@@ -386,7 +386,7 @@ def _cached_collect(prov, source: str, term: str, sector: str, max_items: int) -
     """provider.collect 결과를 (source,term,sector) 키로 run 내 캐시. 느린 출처 반복 호출 방지.
 
     ★ ERRORS [413]/[426]/[436] 동일 클래스 (2026-07-19 경제 선계산 freeze 사고) — 프로바이더
-    내부 재시도(예: arXiv 429 백오프)가 timeout= 파라미터와 무관하게 수십~백여 초 블로킹 가능.
+    내부 재시도(예: 외부 API 429 백오프)가 timeout= 파라미터와 무관하게 수십~백여 초 블로킹 가능.
     이 함수가 chart_data.py 의 모든 수집 호출(step1 스레드풀·step3 순차 루프) 단일 통로이므로
     여기 한 곳에서 ThreadPoolExecutor 폴링 + watchdog.beat() 로 진행 신호를 유지한다.
     """
@@ -447,17 +447,9 @@ def _get_provider(source: str):
         return _PROVIDER_REGISTRY[source]
     inst = None
     try:
-        from JARVIS09_COLLECTOR.providers import (
-            BlogProvider, NewsProvider, AcademicProvider, FinanceProvider, WebProvider,
-            KorEconProvider, NaverNewsProvider, DartProvider, EcosProvider,
-            KosisProvider, KrxProvider, KciProvider, DiscoveryProvider,
-        )
-        _m = {"blog": BlogProvider, "news": NewsProvider, "academic": AcademicProvider,
-              "finance": FinanceProvider, "web": WebProvider, "kor_econ": KorEconProvider,
-              "naver_news": NaverNewsProvider, "dart": DartProvider, "ecos": EcosProvider,
-              "kosis": KosisProvider, "krx": KrxProvider, "kci": KciProvider,
-              "discover": DiscoveryProvider}
-        cls = _m.get(source)
+        # ★ provider 조회 = source_registry(SSOT) 파생 (사용자 박제 2026-07-24) — 종전 로컬 _m 사본 폐지.
+        from JARVIS09_COLLECTOR.source_registry import provider_class
+        cls = provider_class(source)
         inst = cls() if cls else None
     except Exception as e:
         log.warning(f"[chart_data] provider 로드 실패({source}): {e}")
@@ -1142,26 +1134,13 @@ def _query_candidates(series: dict, theme: str) -> list[str]:
 
 
 # 텍스트 출처 — 제목 관련성 1차 필터 적용 대상 (finance 류는 제목이 종목/지수명이라 면제)
-_TEXT_SOURCES = {"kosis", "academic", "kci", "kor_econ", "naver_news", "news", "web"}
+from JARVIS09_COLLECTOR.source_registry import TEXT_SOURCES as _TEXT_SOURCES   # ★ SSOT 파생 (사용자 박제 2026-07-24)
 
 # ★ 소스 신뢰도 순위 — LLM 설계 순서 무관, 항상 이 순위로 재정렬 (ERRORS [421])
-# 근거: ADR 013 "신뢰순위 논문>API>뉴스>기사>웹". LLM이 ["web","kosis"] 설계해도
+# 근거: ADR 013 "신뢰순위 API>뉴스>기사>웹". LLM이 ["web","kosis"] 설계해도
 # 실행은 항상 kosis → web 순서. web/blog가 먼저 실행되어 틀린 수치 채택 사고 원천 차단.
-_SOURCE_TRUST_RANK: dict[str, int] = {
-    "finance": 1,     # yfinance — 공식 금융 API
-    "krx":     1,     # 한국거래소 공식 API
-    "ecos":    1,     # 한국은행 ECOS 공식 API
-    "dart":    2,     # 금감원 전자공시 API
-    "kosis":   2,     # 통계청 공식 통계 DB
-    "kor_econ":3,     # 정부 보도자료
-    "academic":3,     # 학술 논문 (arXiv 등)
-    "kci":     3,     # 국내 학술논문
-    "naver_news":4,   # 네이버 뉴스
-    "news":    4,     # 언론사 뉴스
-    "discover":5,     # 웹 발견 (구글·네이버 검색)
-    "web":     6,     # 웹 (낮은 신뢰도)
-    "blog":    7,     # 블로그 (최저 신뢰도)
-}
+# ★ source_registry.SOURCES 의 chart_rank 에서 파생 (사용자 박제 2026-07-24) — 사본 폐지. default 99.
+from JARVIS09_COLLECTOR.source_registry import CHART_TRUST_RANK as _SOURCE_TRUST_RANK
 
 # 시장 지표 키워드 — discover 웹 폴백 차단 대상 (ERRORS [421])
 # 이 키워드가 series name/query에 있으면 API/kosis 실패해도 웹 검색 폴백 금지.
@@ -1372,7 +1351,7 @@ def _collect_one_series(series: dict, sector: str, theme: str = "", ref_tokens: 
     """한 series 를 신뢰도 순으로 조준 수집. 첫 성공 소스 사용.
 
     ★ 소스 신뢰도 강제 재정렬 (ERRORS [421]): LLM 설계 순서 무관, _SOURCE_TRUST_RANK 순으로
-      항상 재정렬. API(1) → 공식통계(2) → 논문/정부(3) → 뉴스(4) → discover(5) → web(6) → blog(7).
+      항상 재정렬. API(1) → 공식통계(2) → 정부(3) → 뉴스(4) → discover(5) → web(6) → blog(7).
       LLM이 ["web","kosis"] 설계해도 실행은 kosis → web 순서.
     ★ 텍스트 출처: 제목 관련성 필터 — KOSIS 가 엉뚱한 표 반환해도 주제·series 겹치는 것만 채택.
     ★ 시장 지표 discover 폴백 차단 (ERRORS [421]): _NO_WEB_FALLBACK_KWS 키워드 있는 series 는
@@ -1575,14 +1554,14 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
 
             def _natural_title(d):
                 t = getattr(d, "title", "") or ""
-                for pre in ("KOSIS 통계청 — ", "한국은행 ECOS", "arXiv", "통계청 KOSIS"):
+                for pre in ("KOSIS 통계청 — ", "한국은행 ECOS", "통계청 KOSIS"):
                     if t.startswith(pre):
                         t = t[len(pre):]
                 return t
 
             _PER_SOURCE = max(3, (max_datasets + 3) // 3)
             _cands: list[tuple] = []   # (nat_title, doc, source)
-            for source in ("kci", "academic", "news", "kor_econ", "kosis", "naver_news", "web", "discover"):
+            for source in ("news", "kor_econ", "kosis", "naver_news", "web", "discover"):
                 if len(_cands) >= _cand_cap:
                     break
                 _ensure_source_ready(source)
@@ -1631,9 +1610,10 @@ def collect_chart_data(theme: str, sector: str = "", description: str = "",
         #    KOSIS fast-path 데이터는 제목 필터(_doc_title_relevant)를 통과한 것만 들어오므로 별도 불필요.
 
         # ── 5) ★ 출처 다양성 선택 (사용자 박제 2026-07-01 '전부 받아와') — provider 별로 묶어
-        #    우선순위 라운드로빈 → 한 출처(KOSIS) 독점 방지, 뉴스·정부보도·논문이 함께 섞임. ──────
-        _PROV_RANK = {"kosis": 0, "ecos": 1, "dart": 1, "academic": 1, "kci": 1, "krx": 2,
-                      "finance": 2, "news": 2, "kor_econ": 2, "naver_news": 3, "web": 4, "market": 3}
+        #    우선순위 라운드로빈 → 한 출처(KOSIS) 독점 방지, 뉴스·정부보도가 함께 섞임. ──────
+        # ★ source_registry.SOURCES 의 prov_rank 파생 + market(데이터셋 provenance, 비-수집소스) 특례.
+        from JARVIS09_COLLECTOR.source_registry import PROV_RANK as _PR
+        _PROV_RANK = {**_PR, "market": 3}
         from collections import OrderedDict as _OD
         _groups: "_OD[str, list]" = _OD()
         for ds in sorted(deduped, key=lambda d: _PROV_RANK.get((d.get("source") or {}).get("provider", ""), 5)):
@@ -1717,4 +1697,50 @@ def get_krx_raw(keyword: str, max_items: int | None = None) -> str:
         return ""
 
 
-__all__ = ["collect_chart_data", "get_ecos_raw", "get_krx_raw"]
+# ── 차트 데이터 파사드 (이미지 도메인 전용 한 줄 창구) ──────────────────────────
+# ★ 사용자 박제 2026-07-23 — "언제 다시 수집할지" 는 수집 도메인의 판단.
+#   종전엔 JARVIS06 image_spec 이 자기 모듈에 TTL 캐시(_DS_CACHE/30분)를 두고
+#   collect_chart_data 를 직접 불렀다. 그러면 *재수집 시점* 이라는 수집 판단이 06 에
+#   생기고, 09 가 런(run_id)을 새로 열어도 06 캐시는 그대로 남아 이전 글 데이터가
+#   새 글에 새어든다(= 복사본을 진실로 믿는 형태). 캐시를 09 안으로 들인다.
+_AUTO_DS_CACHE: dict[tuple, tuple[float, list]] = {}
+_AUTO_DS_TTL = 1800.0   # 30분 — 같은 글 안 반복 호출 비용만 흡수
+
+
+def chart_datasets(theme: str, sector: str = "", description: str = "") -> list:
+    """주제 → 차트용 실데이터 datasets (없으면 []). 재수집 시점 판단 포함.
+
+    호출자(JARVIS06)는 "이 주제 차트 데이터 줘" 한 줄만 부른다. 캐시 키에 run_id 를
+    넣어 *새 글이 시작되면 자동으로 새로 수집* 한다 — 글 사이 데이터 누수 차단.
+    """
+    theme = (theme or "").strip()
+    if not theme:
+        return []
+    import time as _t
+    try:
+        from JARVIS09_COLLECTOR.run_context import active_run as _ar
+        _ctx = _ar()
+        run_id = _ctx.run_id if _ctx else ""
+    except Exception:
+        run_id = ""
+    key = (run_id, theme, sector or "")
+    now = _t.time()
+    hit = _AUTO_DS_CACHE.get(key)
+    if hit and now - hit[0] < _AUTO_DS_TTL:
+        return hit[1]
+    try:
+        res = collect_chart_data(theme, sector=sector, description=(description or "")[:500])
+        ds = res.get("datasets") or []
+    except Exception as e:
+        log.warning(f"[chart_data] chart_datasets 수집 실패: {e}")
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report as _rep
+            _rep("collector", e, module=__name__, func_name="chart_datasets")
+        except Exception:
+            pass
+        ds = []
+    _AUTO_DS_CACHE[key] = (now, ds)
+    return ds
+
+
+__all__ = ["collect_chart_data", "chart_datasets", "get_ecos_raw", "get_krx_raw"]

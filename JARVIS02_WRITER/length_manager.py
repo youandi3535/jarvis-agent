@@ -356,17 +356,7 @@ except ImportError:
     def _seo_sanitize(text: str) -> str:
         return text or ""
 
-# ── 텔레그램 (jarvis_main.tg 와 동일 패턴, 순환 import 회피) ─────
-try:
-    import requests as _requests
-    _TG_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
-    _TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-except ImportError:
-    _requests = None
-    _TG_TOKEN = ""
-    _TG_CHAT_ID = ""
-
-
+# ── 텔레그램 (shared.notify 단일 진입점 위임) ─────
 def _tg(msg: str) -> None:
     """텔레그램 알림 (실패 무시)."""
     try:

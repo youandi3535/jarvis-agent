@@ -51,7 +51,6 @@ CLAUDE.md 는 *현재 적용 규칙* 만 박제한다. *왜 이 규칙인지* �
 | 영역 | ADR |
 |------|-----|
 | 단일 진입점 원칙 | [ADR 001](docs/decisions/001-single-entry-point.md) |
-| 모델 다층 분리 (Haiku / Sonnet 4.6 / Opus 4.6) | [ADR 002](docs/decisions/002-model-layering.md) |
 | BLOG_SUPREME_LAW.md 14조 헌법화 | [ADR 003](docs/decisions/003-blog-supreme-law.md) |
 | 텔레그램 승인 게이트 (외부 영향 단일 차단점) | [ADR 004](docs/decisions/004-telegram-approval-gate.md) |
 | 자가 학습 — catch() 단일 진입점 + 2-Tier (패턴·Bandit → LLM) ★ 단일 진실 소스 `architecture.py` | [ADR 005](docs/decisions/005-three-tier-learning.md) |
@@ -65,7 +64,7 @@ CLAUDE.md 는 *현재 적용 규칙* 만 박제한다. *왜 이 규칙인지* �
 | **★ 설계-우선 리서치 파이프라인 — 리서치 설계→근거팩(fact·출처·커버리지)→갭 재수집 + 3-패스 작성 (사용자 박제 2026-07-02)** | [ADR 012](docs/decisions/012-research-first-pipeline.md) |
 | **★ 에이전트 파이프라인 정본 흐름 — 03(주제+프로필, 키워드 단독 전송 금지)→02·09 동시 제공→09 무제한 수집(신뢰순위 논문>API>뉴스>기사>웹)→02 매력 대본(수치만 하드 게이트)→06 이미지→08 발행 (사용자 박제 2026-07-03)** | [ADR 013](docs/decisions/013-agent-pipeline-flow.md) |
 | **★ 글 품질 강화학습 폐쇄 루프 — 주입(UCB 선택+사용기록)→분석 보상 귀속→weight EMA 갱신→검증된 지침만 생존. 엔진 `JARVIS07_GUARDIAN/quality_learner.py` 단독 (사용자 박제 2026-07-03)** | [ADR 014](docs/decisions/014-writing-quality-reinforcement.md) |
-| **★ 모델 단일 계층 통일 — Sonnet 5 하나로, Opus 4.8 폐지 (ADR 015 대체, 사용자 박제 2026-07-06)** | [ADR 017](docs/decisions/017-model-single-tier-sonnet5.md) |
+| **★ 모델 단일 계층 통일 — 시스템 전역 한 모델 + 모델 ID 는 `shared/llm.py` MODELS 단독 소유 (ADR 002·015 대체, 사용자 박제 2026-07-06 · 2026-07-24 개정)** | [ADR 017](docs/decisions/017-model-single-tier-sonnet5.md) |
 | **★ 로그인·인증 단일 진입점 (사용자 박제 2026-05-17)** | `JARVIS08_PUBLISH/credentials/LOGIN_SUPREME_LAW.md` + `login_manager.py` |
 
 신규 결정·번복은 [`docs/decisions/README.md`](docs/decisions/README.md) 의 형식·정책 따름.
@@ -164,8 +163,7 @@ pkill -f jarvis_daemon.py        # 전체 종료
 |------|------|-----------------|
 | `JARVIS02_WRITER/scheduler.py` | JARVIS02 작업 로직 전체 | importlib 로드 → schedule_mode() 스레드 |
 | `JARVIS03_RADAR/approval_bot.py` | 인라인 버튼 콜백 처리 | _handle_callback() 만 import |
-| `JARVIS03_RADAR/post_quality_analyzer.py` | 발행 글 품질 분석 | subprocess Popen |
-| `JARVIS02_WRITER/revise_adapter.py` | 승인 후 자동 재발행 | subprocess Popen |
+| `JARVIS03_RADAR/post_quality_analyzer.py` | 발행 글 품질 분석 → 개선 제안 → 승인 시 학습(다음 글 반영). ★ '이 글 재발행'은 폐지(fd87275) — 학습만 | subprocess Popen |
 | `JARVIS07_GUARDIAN/auto_repair.py` | 전체 코드 검토·수정 (새벽 04:30 `job_deep_audit`, Sonnet 5) | claude-code-sdk query |
 
 ## 공유 자원 (신경계)
@@ -428,7 +426,7 @@ pkill -f jarvis_daemon.py        # 전체 종료
   # ③ subprocess.run 외부 (raw shell — 위험)
   grep -rnE 'subprocess\.(run|Popen|call)' --include='*.py' . \
     | grep -v 'JARVIS01_MASTER/agent_tools.py' | grep -v 'jarvis_daemon.py' \
-    | grep -v 'performance_collector\|approval_bot\|radar_main\|post_quality\|revise_adapter\|auto_repair' \
+    | grep -v 'performance_collector\|radar_main\|post_quality\|auto_repair' \
     | grep -v __pycache__ | grep -v '\.venv/'
   # ④ create_plan 우회 — write_file/edit_file/run_bash 가 LLM 응답에 *직접* 등장
   # (REACT_SYSTEM_PROMPT 검증 — 위 도구는 plan steps 안에서만 호출되어야 함)
@@ -530,19 +528,56 @@ pkill -f jarvis_daemon.py        # 전체 종료
 
 예외: JARVIS03 RADAR 자체 트렌드 수집 (pytrends·네이버 DataLab — RADAR 고유 영역).
 
-**허용 호출 패턴 (다른 에이전트에서 수집이 필요한 경우):**
+**★ 허용 호출 패턴 — 파사드 단 하나 (사용자 박제 2026-07-23)**
+
+다른 에이전트는 **"이 주제로 수집해줘" 한 줄** 만 부른다. *무엇을 먼저 부를지 · 실패하면
+무엇으로 대체할지 · 결과를 어떻게 조립할지* 는 전부 09 안에서 끝난다.
+
 ```python
-from JARVIS09_COLLECTOR import (
-    collect_research,       # ★ 설계-우선 리서치 수집 (ADR 012) — 근거팩+문서 반환. 발행 파이프라인 기본
-    collect_for_theme,      # 주제 관련 텍스트 자료 (뉴스·블로그·학술·금융기사) — 광역 스윕
-    collect_stocks_data,    # 테마 종목 데이터 (시세·재무)
-    collect_chart_data,     # 차트용 실데이터 (ADR 010/011)
-    evidence_brief,         # 근거팩 → 대본 프롬프트 브리프 (ADR 012)
-    as_source_docs,         # 근거팩 → 사실성 게이트 대조군 어댑터 (ADR 012)
-    get_market_data,        # 글로벌 시장 지표 (yfinance)
-    get_economic_calendar,  # 경제 일정 (investing.com)
-)
+from JARVIS09_COLLECTOR import collect_all, market_snapshot
+
+# 주제 하나 → 완성된 CollectedData 상자 (4조합 공통 — 경제·테마 × 네이버·티스토리)
+bundle = collect_all(keyword, profile=profile, sector=sector, category="theme")
+#   → {"collected", "stocks_data", "docs", "evidence_pack", "datasets",
+#      "corpus_digest", "data_empty"}
+snap = market_snapshot()          # 시장 지표 + 경제 일정 (조립까지 09)
 ```
+
+- **카테고리 차이는 노브로** — `CATEGORY_POLICY[category]`(`models.py`) 가 종목/차트/폴백
+  수집 여부를 결정. 호출자에 `if category == "economic"` 분기 박지 말 것 (② 동적 설계).
+- **저수준 API**(`collect_research`·`collect_for_theme`·`collect_stocks_data`·
+  `collect_chart_data`·`get_market_data`·`get_economic_calendar`·`stocks_to_datasets` 등)
+  **를 09 밖에서 조합하는 것이 곧 위반** — 2종 이상 쓰면 precommit 이 차단한다.
+  09 내부(`collector_engine.collect_all`)에서만 조합한다.
+- `evidence_brief` / `as_source_docs` 는 *수집이 아니라 프롬프트 변환* 어댑터 — 02 사용 정상.
+- **★ 정문만 잡는다 — private 심볼·내부 계층 직수입 금지 (사용자 박제 2026-07-23)**
+  `_` 로 시작하는 09 함수(`_fetch_naver_theme_catalog` 등)와 09 하위 패키지
+  (`JARVIS09_COLLECTOR.providers.*`) 를 밖에서 import 하지 말 것. 밖이 붙잡는 순간 그 이름이
+  공개 계약이 되어 **09 가 자기 내부를 못 고친다**. 필요하면 09 에 *공개 정문* 을 신설한다
+  (예: `naver_theme_catalog()` — 카탈로그 수집·1h 캐시·폴백을 09 안에서 끝내고 결과만 준다).
+  필요한 데이터가 캐시·재수집 시점 판단을 동반하면 그 판단도 09 것 —
+  `chart_datasets(theme, sector, description)` 처럼 09 가 캐시(run 단위)까지 소유한다.
+
+**★ 02 에는 수집이 한 줄도 없다 (물리 이관 완료 — 사용자 박제 2026-07-23)**
+
+"02는 수집 관련한건 아무것도 없도록 만들어" — 파사드 호출만 남기고 *파일·함수·잡을 전부* 09 로 옮겼다.
+
+| 옮긴 것 | 종전 (02) | 현재 (09) |
+|---|---|---|
+| 선계산 캐시 | `JARVIS02_WRITER/precollect_cache.py` | `JARVIS09_COLLECTOR/precollect_cache.py` |
+| 선계산 잡 본체·래퍼 | `trend_theme_writer.precollect_theme` · `trend_economic_writer.precollect_economic` · `scheduler.run_precollect_*` | `JARVIS09_COLLECTOR/precollect.py` (`job_precollect_{theme,economic}`) |
+| 수집 호출 조립 | `trend_theme_writer._theme_collect` | `collect_all()` 안 (프로필 보강까지) |
+| 캐시 재사용 판단 | 02 가 `load_precollect` 를 직접 열어봄 | `collect_all(use_cache=)` — **02 는 캐시를 열지 않는다** |
+| 발행 글 글자수 크롤링 | `scheduler.fetch_kor_counts` | `providers/published_provider.published_post_kor_counts` |
+| SEO 참고 문서 수집 | `seo_learner._SEO_SOURCES`/`_build_fetched_block` | `seo_reference_docs()` (09 원본 단일) |
+| 주제 슬롯 선정 중복 | `nv_collect`/`ts_collect` 각자 강제주제·재빌드 분기 | `JARVIS03_RADAR.topic_pack.pick_slot_candidate()` 단일 |
+
+- **왜 "선계산"이 09 인가**: *언제 미리 수집해 둘지* 는 수집 시점 판단 = 수집 도메인의 일.
+  02 안에 있는 동안 02 가 수집 순서·재사용 여부를 정했고 그게 곧 단일 진입점 위반이었다.
+- **캐시에 담는 것은 09 의 상자뿐** — 02 의 `supreme_block` 은 담지 않는다. 담으면 06:05 에
+  굳은 헌법 블록이 07:00 발행까지 그대로 쓰여 *복사본을 진실로 믿는* 사고가 된다.
+- `load_pinned_theme` 는 마커 *조회* (밖에 나가 받아오는 게 없음) → 파사드 면제 목록.
+
 **★ 리서치 설계-우선 (ADR 012 — 사용자 박제 2026-07-02)**: 발행용 텍스트 수집은
 `collect_research` 가 기본 — 설계(research_planner)→조준 수집→근거팩(evidence_pack)→
 커버리지 갭 재수집 순환. 키 필요 소스 누락은 `source_onboarding` 이 감지·텔레그램 안내.
@@ -559,20 +594,44 @@ from JARVIS09_COLLECTOR import (
 ② `JARVIS09_COLLECTOR/__init__.py` `__all__` 갱신
 ③ 호출자는 위 허용 패턴으로 import
 
-**검증 명령** (모두 0행이어야 함):
+### ★ 자동 강제 — `--category collect` (사용자 박제 2026-07-23)
+
+**"수집을 엉뚱한 놈이 하는 막되먹은 수정이 절대 안 되도록 강제하라."**
+
 ```bash
-# ① yfinance 직접 import (JARVIS09 외)
-grep -rnE '^import yfinance|^from yfinance' --include='*.py' . \
-  | grep -v 'JARVIS09_COLLECTOR/' | grep -v __pycache__ | grep -v .venv
-# ② pykrx / FinanceDataReader 직접 import (JARVIS09 외)
-grep -rnE 'import pykrx|import FinanceDataReader' --include='*.py' . \
-  | grep -v 'JARVIS09_COLLECTOR/' | grep -v __pycache__ | grep -v .venv
-# ③ requests.get 수집 목적 직접 호출 (이미지 다운로드·발행·쿠키 제외)
-grep -rnE 'requests\.get\(' --include='*.py' . \
-  | grep -v 'JARVIS09_COLLECTOR/' | grep -v 'JARVIS06_IMAGE/providers/' \
-  | grep -v 'JARVIS08_PUBLISH/' | grep -v 'JARVIS00_INFRA/' \
-  | grep -v 'tools/' | grep -v __pycache__ | grep -v .venv
+python3 shared/precommit_check.py --category collect    # git 훅·데몬 부팅·GUARDIAN 잡 3곳 자동
 ```
+
+**왜 grep 으로는 못 막았나 (★ 비직관 — 이게 핵심)**: 2026-07-23 이전에도 02 는 09 의
+*API 를 호출* 하고 있었다. 위 grep 3종은 **전부 0행 통과**였다. 그런데도 수집 오케스트레이션이
+02 안에 5벌 흩어져 있었다 — 어긴 것은 *호출* 이 아니라 **조합**이었기 때문이다.
+무엇을 먼저 부르고 · 실패하면 무엇으로 대체하고 · 결과를 어떤 상자로 조립할지를 02 가 정했다.
+그래서 검사는 *조합* 을 잡는다. 5레그 (④⑤ 는 2026-07-23 증설 — 아래 '왜 5레그인가' 참조):
+
+| 레그 | 위반 조건 | 뜻 |
+|------|----------|-----|
+| `collect/orchestration-outside` | 09 밖 한 파일에서 09 수집 API **2종 이상** 호출 | 순서·폴백 판단이 09 밖에 생김 → `collect_all()` 한 번으로 받을 것 |
+| `collect/assembler-outside` | `compose_collected`·`*_to_datasets`·`select_by_trust_quota` 를 09 밖에서 호출 | 조립 규칙 유출 (09 가 걸러낸 항목이 되살아나는 구멍) |
+| `collect/raw-lib` | yfinance·pykrx·FinanceDataReader·pytrends·feedparser 로 09 밖에서 데이터 취득 | 수집 신설 |
+| **`collect/private-api`** | 09 의 `_` 접두 심볼을 09 밖에서 import | 내부 구현이 공개 계약이 됨 → 09 가 자기 내부를 못 고침 |
+| **`collect/internal-module`** | `JARVIS09_COLLECTOR.<하위패키지>.*` 를 09 밖에서 import | provider *지목* = 폴백 우회. 정문으로 받을 것 |
+
+**왜 5레그인가 (★ 비직관 — 같은 병의 2차 발현)**: ①②③ 만 있던 동안 **09 API 를 한 종만 쓰면서**
+경계가 새는 길이 남아 있었다. 실제로 4곳이 그 길로 새 있었고 ①②③ 은 전부 통과했다 —
+06 이 `providers.economic_data_provider` 를 지목(⑤), 03·api_server 가 `_fetch_naver_theme_catalog`
+를 직수입(④). *갯수* 가 아니라 **어느 층을 붙잡았는가** 가 경계다.
+
+- **② 동적 설계**: 금지 API 목록도, '내부 계층' 목록도 검사에 박지 않는다 —
+  `JARVIS09_COLLECTOR/__init__.py` 의 `__all__` 을 매 실행 파싱(①②) + 09 폴더의 하위 *패키지*
+  를 실물로 훑어 파생(⑤). **09 에 새 수집 API·새 계층을 추가하면 자동으로 검사 대상**이 된다.
+- **fail-closed**: `__all__` 이나 하위 패키지 목록을 못 읽으면 통과가 아니라 `collect/self-check` 위반.
+  (실제로 초판이 `importlib` 로 09 를 로드하다 `python3 shared/precommit_check.py` 실행에서
+  조용히 실패 → **검사가 있는데 무력화된 채 통과**했다. 검사 존재는 적용의 증거가 아니다.)
+- **정당한 예외**: JARVIS03(트렌드 수집 owner) · `tools/`(계측 스크립트) · 패키지 메타만 쓰는
+  import(예: `pykrx.__file__` 로 번들 폰트 경로 탐색 — 데이터 취득 아님).
+  단 **④⑤ 에는 예외가 없다** — 03·tools 도 정문으로만 받는다. 정문은 누구에게나 정문이다.
+- **면제 정문**: `collect_all` · `market_snapshot` · `CollectedData` 등 *09 가 조합해 준 결과를
+  받는* 파사드는 몇 개를 쓰든 정상. 이게 유일한 정상 소비 형태.
 
 ### ★ 차트용 실데이터 + 무료 라이브러리 자동설치 (사용자 박제 2026-06-29 — ADR 010)
 
@@ -687,7 +746,7 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
 
 | 컴포넌트 | 책임 | 주기 |
 |---------|------|------|
-| `pattern_fixer` (Tier-1 sweep) | 발행 전 미해결 오류 LLM-0 소급 수리 *만* | 발행 직전 (06:30·16:00 callback) |
+| `pattern_fixer` (Tier-1 sweep) | 발행 전 미해결 오류 LLM-0 소급 수리 *만* | 발행 직전 (07:00·21:00 callback) |
 | `auto_repair` + backlog Tier-2 | 광범위 코드 감사 + backlog 진단·수정 | 새벽 04:30 `job_deep_audit` (★ 사용자 박제 2026-06-28 — 발행과 분리) |
 | `eval_agent` ★ | 수정 결과 평가 + learned_patterns 등록 *게이트* | 수정마다 즉시 |
 | `auditor` ★ | 헌법 위반·드리프트 검출 + Refine Rules 제안 | 주 1회 (일 04:30) |
@@ -704,7 +763,7 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
   - ① `deep_audit_backlog()` — 미해결 오류 Tier 1 → Tier 2(LLM). ★ Tier 2 도 `apply_fix` 경유 *실제 오류 지문* 으로 학습 (AutoRepairFix 합성 지문 아님) → 다음 sweep 이 재사용 → 밴딧 학습 (복리 루프).
   - ② `auto_repair.run_auto_repair()` — 광범위 코드 감사 (새 잠재 버그 발굴·수정).
 - **즉시 반영 vs 데몬 재시작**: 코드 수정은 Python import 캐시 때문에 *현재 데몬 프로세스 무효* → 다음 데몬 재시작 후 발효.
-- **심층 감사 모델**: Sonnet 5 (`auto_repair._MODEL = "claude-sonnet-5"` — ★ 사용자 박제 2026-07-06 (ADR 017): 모든 LLM 호출 Sonnet 5 단일 통일, ADR 015(Opus 4.8 2계층) 폐지. ERRORS [184]: 정확한 모델 ID 명시, alias 금지 원칙은 모델 무관 유지)
+- **심층 감사 모델**: 전역 단일 모델 (`auto_repair._MODEL = model_id("guardian")` — ★ ADR 017: 모든 LLM 호출이 같은 모델. **모델 ID 리터럴을 박지 말고 `shared.llm.model_id()` 로 파생**할 것 — 사본을 두면 모델 교체 시 거기만 옛 모델을 가리킨다 (ERRORS [491]). SDK 에 full model ID 를 넘기는 관행은 유지 — bare alias 는 1M context 자동 승격 위험 (ERRORS [184]))
 - **전체 코드 검토 3단계** (auto_repair.py `_BASE_PROMPT` — ★ 2026-05-30 8 Layer 폐지 → 단순화):
   1. **Syntax 전수 검사** — `find . -name "*.py" | xargs python -m py_compile` 전체 파일
   2. **핵심 규정 위반 grep** — APScheduler 외부 사용 / schedule 라이브러리 / 글자수 하드코딩 / 폐기 model ID

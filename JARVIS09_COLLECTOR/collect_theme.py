@@ -276,6 +276,17 @@ def _fetch_naver_theme_catalog(timeout: int = 8) -> dict:
     return themes or dict(_THEME_CATALOG_CACHE["themes"])
 
 
+def naver_theme_catalog(timeout: int = 8) -> dict:
+    """★ 네이버 금융 공식 테마 카탈로그 {테마명: 테마번호} — 09 **공개 정문**.
+
+    (사용자 박제 2026-07-23) 종전엔 03·api_server 가 private `_fetch_naver_theme_catalog`
+    를 직수입했다. private 심볼은 09 가 언제든 바꿀 수 있는 *내부 구현* 이라, 밖에서 붙잡는
+    순간 09 는 자기 내부를 못 고친다 — 경계가 이름 하나로 새는 형태.
+    수집·캐시(1h)·폴백은 전부 이 함수 안(09)에서 끝난다. 밖은 결과만 받는다.
+    """
+    return _fetch_naver_theme_catalog(timeout=timeout)
+
+
 def _ko_common_len(a: str, b: str) -> int:
     """두 문자열 간 공통 한국어 부분 문자열 최대 길이 (공식 테마 매칭 기준)."""
     a_ko = re.sub(r'[^가-힣]', '', a)

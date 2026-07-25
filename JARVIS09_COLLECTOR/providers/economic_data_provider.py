@@ -41,36 +41,55 @@ _MARKET_TICKERS = {
 def get_market_data() -> dict:
     """yfinance로 주요 시장 데이터 수집 (JARVIS09 단일 진입점).
 
+    ★ 결측 판정은 `models.is_finite_num` 단일 소스 (NaN/Inf = 값 없음. 0 으로 채우지 않는다).
+
     ★ 2-1 (2026-07-02): 각 지표에 as_of(실제 종가 기준일) 부착 — 06:30 발행 시 미국
       지수는 전일 종가인데 '오늘'처럼 서술되던 시점 오류를 사실성 게이트가 검증 가능하게.
     """
     import yfinance as yf
+    from ..models import is_finite_num as _finite   # 결측 판정 단일 소스
     result = {}
     for name, ticker in _MARKET_TICKERS.items():
         try:
             # ★ session= 제거 (ERRORS [407]): yfinance 1.x는 curl_cffi 세션만 허용
             #   타임아웃은 futures로 대체 (ERRORS [401] hang 방지 유지)
+            # ★ NaN 발생원 차단 (사용자 박제 2026-07-25 — 경제 티스토리 발행 실패 근본원인):
+            #   야후는 *비거래일·미체결 구간에도 행을 붙여* 주고 그 행의 Close 는 NaN 이다.
+            #   종전 코드는 `period="2d"` 의 `iloc[-1]` 을 무조건 집어서, 토요일 새벽 선계산에선
+            #   코스피·코스닥이 NaN 으로 수집됐다(로그: '12개 지표 수집 완료' — 실패로도 안 잡힘).
+            #   그 NaN 이 ① 검증 gt → grounds() math.floor(NaN) ValueError → 게이트가 예외를
+            #   삼켜 *진짜 사실을 '출처 미확인' 차단* ② 이미지 int(NaN) 크래시 로 터졌다.
+            #   해법: 결측 행을 *버리고* 마지막 **유효 종가** 를 쓴다 → 지표를 잃지도, NaN 을
+            #   만들지도 않는다. 창을 5d 로 넓혀 연휴에도 직전 거래일 대비 등락을 확보.
             def _fetch(t=ticker):
-                return yf.Ticker(t).history(period="2d")
+                return yf.Ticker(t).history(period="5d")
             hist = _yf_with_timeout(_fetch, timeout=15)
-            if len(hist) >= 2:
-                prev = hist["Close"].iloc[-2]
-                curr = hist["Close"].iloc[-1]
-                chg  = (curr - prev) / prev * 100
-                as_of = hist.index[-1].strftime("%Y-%m-%d")
-                result[name] = {"value": round(curr, 2), "change": round(chg, 2), "as_of": as_of}
-            elif len(hist) == 1:
-                curr = hist["Close"].iloc[-1]
-                as_of = hist.index[-1].strftime("%Y-%m-%d")
+            closes = hist["Close"].dropna() if len(hist) else hist
+            if len(closes) >= 2:
+                prev = float(closes.iloc[-2])
+                curr = float(closes.iloc[-1])
+                as_of = closes.index[-1].strftime("%Y-%m-%d")
+                chg = ((curr - prev) / prev * 100) if prev else 0.0
+                result[name] = {"value": round(curr, 2), "change": round(chg, 2),
+                                "as_of": as_of}
+            elif len(closes) == 1:
+                curr = float(closes.iloc[-1])
+                as_of = closes.index[-1].strftime("%Y-%m-%d")
                 result[name] = {"value": round(curr, 2), "change": 0.0, "as_of": as_of}
+            else:
+                log.warning(f"[EconData] {name} 유효 종가 0건 — 지표 제외(0 채움 금지)")
         except Exception as e:
             log.warning(f"[EconData] {name} 수집 실패: {e}")
     # ★ 한국은행 공식 지표 병합 (기준금리·달러원·CPI) — BOK_ECOS_KEY 미설정 시 자동 스킵
     try:
         from .bok_provider import get_bok_indicators
         for name, info in get_bok_indicators().items():
+            # ★ NaN 은 truthy — 종전 `if info["value"] else 0.0` 를 그대로 통과해 결측이 샜다.
+            if not _finite(info.get("value")):
+                log.warning(f"[EconData] BOK {name} 결측 — 지표 제외")
+                continue
             result[name] = {
-                "value": float(info["value"]) if info["value"] else 0.0,
+                "value": float(info["value"]),
                 "change": None,           # BOK 지표는 전일비 미제공
                 "as_of": info["as_of"],
                 "unit": info["unit"],

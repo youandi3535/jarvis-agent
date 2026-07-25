@@ -345,17 +345,19 @@ def build_corpus_block(docs, max_total: int | None = None, per_doc: int | None =
 
     자비스09 수집 문서 전부를 대본 프롬프트에 전달 — LLM 이 모든 자료를 보고
     주제·서사·통찰을 구성한다. evidence_brief(수치 규율)와 *병행* 주입.
-    신뢰 서열(논문>API>뉴스>기사>웹) 정렬.
+    신뢰 서열(API>뉴스>기사>웹) 정렬.
 
     ★ 입력 절단 폐지 (사용자 박제 2026-07-17): per_doc(문서당 자수컷) 기본 None = 전문 그대로.
-      max_total 은 *컨텍스트 오버플로 방지용 최후 안전판* 일 뿐 — 초과 시에만 저신뢰부터 통째
-      생략(건수 명시). 15건 신뢰 쿼터 규모에선 사실상 발동 안 함.
+      max_total 은 *컨텍스트 오버플로 방지용 최후 안전판* — 초과 시에만 저신뢰부터 통째 생략(건수 명시).
+    ★ 2026-07-24 P2: 기본 상한 200000→40000. 수집 쿼터(15건)가 정상 동작하면 발동 안 하나,
+      쿼터 우회 폴백(collect_for_theme 무쿼터, 205문서·119K자)이 프롬프트를 폭증시켜 발행 지연·
+      overage 를 유발했다 — 총량을 유계로 캡해 병적 사례를 정상대로 되돌린다. 근본은 P2-c(쿼터).
     """
     if not docs:
         return ""
     import os as _os_c
     if max_total is None:
-        max_total = int(_os_c.getenv("DRAFT_CORPUS_MAX_CHARS", "200000") or "200000")
+        max_total = int(_os_c.getenv("DRAFT_CORPUS_MAX_CHARS", "40000") or "40000")
 
     def _a(d, k, default=""):
         return d.get(k, default) if isinstance(d, dict) else getattr(d, k, default)
@@ -647,8 +649,8 @@ def _gen_economic_ts_nv(
         _spec_eco = _gs_eco("economic")
     except Exception:
         pass
-    _max_sents = _spec_eco.max_sentences if _spec_eco else 40
-    _max_kor = _spec_eco.max_korean if _spec_eco else 2000
+    _max_sents = _spec_eco.max_sentences if _spec_eco else 45
+    _max_kor = _spec_eco.max_korean if _spec_eco else 2500
     _target_sents = _spec_eco.target_sentences if _spec_eco else 30
     _min_sents = _spec_eco.min_sentences if _spec_eco else 20
     # ★ <p> 상한을 *목표(32) 앵커* 로 (사용자 박제 2026-07-18 — 오버슈트→재작성 순환 방지).
@@ -675,6 +677,7 @@ def _gen_economic_ts_nv(
   ★ 슬롯 안 필드: 제목 / 단위 / 데이터 / 출처 — 이 4개만. 종류: 필드 쓰지 말 것.
 - <svg>·<img> 태그 직접 쓰지 말 것
 - ★★ 본문 산문(<p> — 감성 오프닝·배경·섹션 설명·중간감성·마무리)은 *수치 0존*: 숫자·통계·%·금액·비율·연도별 값을 산문에 쓰지 마십시오. *모든 수치는 오직 [CHART_N] 슬롯 안*(카탈로그 D번호 값)에만 등장. 산문은 개념·맥락·배경·흐름을 서술한다. 근거 없는 산문 수치는 사실성 게이트에서 차단→재작성을 유발한다.
+- ★★ TITLE 도 예외 아님 — 수치 0존 규칙은 <p> 산문뿐 아니라 TITLE 한 줄에도 동일 적용. "-9.5%"·"OO% 급락/출렁" 같은 카탈로그에 없는 수치를 궁금증 유발 목적으로 제목에 지어내지 말 것 — 근거 없는 제목 수치도 사실성 게이트가 차단한다. 숫자 없이 궁금증을 유발하거나, 굳이 수치를 쓰려면 위 카탈로그(D번호) 값 그대로만 사용.
 - 연속 <p>↔<p> 사이마다 슬롯 삽입 (h2 직전·면책 직전 제외)
 - 문체: {spec['tone']}
 - 위 지시문(괄호 안 설명·헌법 조항 번호·"정확히 N문장" 등) 본문에 그대로 출력 금지 — *완성된 HTML만* 출력"""
@@ -769,6 +772,8 @@ def _build_section_system_msg(supreme_block: str, platform: str) -> str:
 - [CHART_N]...[/CHART_N] 슬롯은 *그대로 유지* (내용 채우지 말 것)
   ★ 반드시 [CHART_N] 오프닝 태그로 시작하고 [/CHART_N] 클로징 태그로 닫는다.
   ★ 슬롯 안 필드: 제목 / 단위 / 데이터 / 출처 — 이 4개만. 종류: 필드 절대 금지.
+- ★★ 본문 산문(<p>)은 *수치 0존*: 숫자·통계·%·금액·비율·연도별 값을 산문에 쓰지 마십시오. 산문 수치는 오직 [CHART_N] 슬롯 안(카탈로그 값)에만 등장.
+- ★★ TITLE 은 *창작 금지*(0존 아님): 카탈로그·수집 자료에 **있는 값이면 제목에 써도 된다**(예: 실제 등락률). 없는 수치를 궁금증 유발용으로 지어내지 말 것 — 근거 없는 제목 수치만 사실성 게이트가 차단한다.
 - 문체: {spec['tone']}
 - *위 지시문(헌법 조항 번호·"정확히 N문장"·"플레이스홀더 포함" 등) 본문에 그대로 출력 금지* — *완성된 HTML 만* 출력
 - 출력 형식 외 설명·주석·코드블록 절대 금지"""
@@ -1044,6 +1049,7 @@ def _gen_theme(
     evidence_pack: dict | None = None,
     gate_feedback: list | None = None,
     corpus_digest: str = "",
+    datasets: list | None = None,
 ) -> str:
     """테마글 Pass-1: 텍스트 + 데이터 내장 [CHART_N] 블록 (+구형식 폴백).
 
@@ -1057,10 +1063,13 @@ def _gen_theme(
     # ★ 데이터 내장 슬롯 카탈로그 (ADR 013 테마 이행 — ERRORS [316]): 경제와 동일 로직.
     #   종목 시세 승격 + 텍스트 수치 승격 → 카탈로그 주입, 슬롯 안에 차트 데이터까지 내장.
     #   카탈로그에 맞는 데이터 없는 슬롯만 구형식 유지 → 자비스06 Pass-2 실데이터 폴백.
+    #   ★ 2026-07-23: datasets 는 09(compose_collected)가 이미 조립·중복제거·출처박제한
+    #   결과를 그대로 받는다. 종전엔 여기서 stocks_to_datasets+facts_to_datasets 를 *다시*
+    #   돌려 같은 것을 두 번 조립했다 — 09 가 걸러낸 항목(예: 종목재무 배제)이 여기서
+    #   되살아나는 새는 구멍이었다.
     _theme_catalog = ""
     try:
-        from JARVIS09_COLLECTOR import stocks_to_datasets as _s2d_t, facts_to_datasets as _f2d_t
-        _cat_ds = _s2d_t(stocks_data) + _f2d_t(evidence_pack or {})
+        _cat_ds = list(datasets or [])
         _theme_catalog = _build_data_catalog(_cat_ds)
     except Exception as _ce:
         print(f"  ⚠️ [Theme/Pass-1] 카탈로그 구성 실패 (구형식 슬롯으로 진행): {_ce}")
@@ -1088,8 +1097,8 @@ def _gen_theme(
         _spec_theme = _gs("theme")
     except Exception:
         pass
-    _max_sents = _spec_theme.max_sentences if _spec_theme else 40
-    _max_kor = _spec_theme.max_korean if _spec_theme else 2000
+    _max_sents = _spec_theme.max_sentences if _spec_theme else 45
+    _max_kor = _spec_theme.max_korean if _spec_theme else 2500
     _target_sents = _spec_theme.target_sentences if _spec_theme else 32
     _insights = _load_learn_insights("theme", platform)
 
@@ -1125,6 +1134,10 @@ def _gen_theme(
   거시 통계는 사실성 게이트에서 반드시 차단됨). 날짜가 안 붙어도(현재 추진 중·업계 전체·로드맵 등)
   아래 수집 자료나 종목 데이터에 *명시된 값만* 인용.
   근거 없는 임의 수치는 사실성 게이트에서 차단된다. 없으면 "수치를 확인할 수 없었습니다" 등 정성 서술로 대체.
+- ★★ TITLE 도 예외 아님 — 위 수치 창작 금지는 본문뿐 아니라 TITLE 한 줄에도 동일 적용. "-9.5%"·
+  "OO% 급락/급등/출렁" 같은 궁금증 유발용 수치를 카탈로그·종목 데이터에 없이 제목에 지어내지 말 것 —
+  근거 없는 제목 수치도 사실성 게이트가 차단한다. 숫자 없이 궁금증을 유발하거나, 굳이 쓰려면 위 카탈로그·
+  종목 데이터 값 그대로만 사용.
 - ★ 수치 없이도 설득력 있게 서술 — 맥락·경향·비교 표현은 검증 불가 숫자보다 낫다.
   과거 특정 시점 임의 통계("2023년 1분기 ○○원" 류)뿐 아니라 현재·미래 산업 규모 추정
   ("생산능력 25%·370만 톤 감축" 류)도 근거 없으면 생성 금지 — 대신 "구조조정 논의가 진행 중" 식 정성 서술.
@@ -1355,6 +1368,7 @@ def generate_theme_draft(
     evidence_pack: dict | None = None,
     gate_feedback: list | None = None,
     corpus_digest: str = "",
+    datasets: list | None = None,
 ) -> str:
     """테마글 텍스트 대본 생성 (Pass-1).
 
@@ -1374,5 +1388,6 @@ def generate_theme_draft(
                       collection_docs=collection_docs or [],
                       evidence_pack=evidence_pack,
                       gate_feedback=gate_feedback,
-                      corpus_digest=corpus_digest)
+                      corpus_digest=corpus_digest,
+                      datasets=datasets)
 

@@ -28,25 +28,9 @@ except ImportError:
     def _g_report(*a, **k): pass
 
 # ── 가용 출처 메커니즘 카탈로그 (provider 능력 설명 — LLM 이 주제에 맞게 *선택* 한다) ──────
-#   ★ 이건 "도구 목록"이지 주제 로직이 아님. provider 추가 시 여기에 한 줄 추가하면 LLM 이 자동 활용.
-_SOURCE_CATALOG = {
-    "kosis":      "통계청 국가통계포털 — 인구·산업·고용·물가·소비·지역경제 등 공식 통계표(시계열)",
-    "ecos":       "한국은행 ECOS — 거시경제(기준금리·환율·통화량·물가·국제수지·실업률) 시계열",
-    "dart":       "금융감독원 전자공시 — 상장기업 재무제표·사업보고서·직원수·매출·영업이익",
-    "krx":        "한국거래소 — 상장 종목 주가·등락률·거래량·시가총액·코스닥/코스피 업종별 시가총액 비중·코스닥 150 섹터 지수(8개 전체)",
-    "finance":    "글로벌 시장지표(yfinance) — 해외 지수(S&P·나스닥)·환율·금·유가·미국채",
-    "academic":   "arXiv 학술 논문 — 기술·과학·AI·경제 연구의 수치·통계(영어 논문 출처)",
-    "kci":        "KCI 국내 학술논문(한국연구재단)+Crossref/Semantic Scholar — 국내 연구의 수치·통계(한국어 논문 우선, 거짓 없음)",
-    "naver_news": "네이버 뉴스 — 한국어 시사·정책·기업 뉴스에 인용된 수치(가장 정확한 한국어 뉴스)",
-    "news":       "Google News + 경제지(한국경제·매경·연합) — 뉴스 인용 수치",
-    "kor_econ":   "산업부·중소벤처부 보도자료 + 네이버금융 — 정부 정책·산업 공식 발표 수치",
-    "web":        "위키백과·지식백과 — 개념·배경·정의(수치보다 설명 위주)",
-    "blog":       "네이버 블로그 — 체감·후기(보조, 신뢰도 낮음)",
-    # ★ discover — 위 고정 카탈로그로 못 받는 주제의 *만능 발견 경로* (사용자 박제 2026-07-01)
-    "discover":   "웹 발견 — 구글(DuckDuckGo)·네이버검색·공공데이터포털로 *실제 데이터 페이지*를 "
-                  "찾아 받음. 위 카탈로그에 딱 맞는 출처가 없는 주제(지역·교통·특정기업·신기술·해외 등)는 "
-                  "*반드시* 이것을 넣어라. 어떤 주제든 동작. query 를 구체적으로.",
-}
+#   ★ source_registry(SSOT) 에서 파생 (사용자 박제 2026-07-24). "도구 목록"이지 주제 로직 아님.
+#   provider 추가 시 source_registry.SOURCES 에 한 줄(catalog=...) 이면 LLM 이 자동 활용.
+from .source_registry import CATALOG as _SOURCE_CATALOG
 _VALID_SOURCES = set(_SOURCE_CATALOG)
 
 # ★ 시장 지표 키워드 — 이 키워드가 series name/query 에 있으면 공식 API 소스만 허용.
@@ -103,9 +87,9 @@ _PLAN_PROMPT = """글 주제: {topic}
 - ★ **각도(aspect)를 다양하게**: 같은 지표의 변형만 여러 개 넣지 마라. *서로 다른 차원* 으로
   골고루 — ① 규모·추이(시계열) ② 수량·개수 ③ 구성비·비중 ④ 비교(지역별·연도별) ⑤ 평가·효과.
   최소 3개 이상 서로 다른 차원을 커버.
-- 출처 우선순위: ① 주제에 딱 맞는 공식 통계·공시(kosis·ecos·dart·kor_econ) → ② **논문(academic·kci)**
-  → ③ 뉴스(naver_news·news) → ④ **discover(웹 발견 — 위로 안 되는 주제의 만능 경로)**.
-  ★ 논문은 거짓이 없으니 적극 활용. ★ 최신 규모·실적 수치는 뉴스·discover 에 많다.
+- 출처 우선순위: ① 주제에 딱 맞는 공식 통계·공시(kosis·ecos·dart·kor_econ)
+  → ② 뉴스(naver_news·news) → ③ **discover(웹 발견 — 위로 안 되는 주제의 만능 경로)**.
+  ★ 최신 규모·실적 수치는 뉴스·discover 에 많다.
 - 한 series 의 sources 는 2~4개를 넉넉히(우선순위 순) — 데이터는 많을수록 좋다(여러 출처 시도).
 - 데이터로 만들 수 없는 추상 주장은 series 로 넣지 마라(수치 series 만). series 는 4~6개로 풍부하게.
 
@@ -137,8 +121,8 @@ def _sanitize(plan: dict) -> tuple[list[dict], list[str]]:
         srcs = [x for x in (s.get("sources") or []) if x in _VALID_SOURCES]
         if not name or not query:
             continue
-        if not srcs:                       # 출처 미지정 → 안전 기본(뉴스·논문 + 웹발견 폴백)
-            srcs = ["naver_news", "academic", "discover"]
+        if not srcs:                       # 출처 미지정 → 안전 기본(뉴스 + 웹발견 폴백)
+            srcs = ["naver_news", "news", "discover"]
         # ★ 시장 지표 키워드 → 공식 API 소스만 허용, web/blog 제거 (ERRORS [416])
         # web/blog 소스의 시장 수치는 틀린 사례 다수 — 공식 소스가 없으면 finance/ecos 기본값
         _combined = (name + " " + query).lower()

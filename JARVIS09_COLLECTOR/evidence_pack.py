@@ -47,16 +47,16 @@ except ImportError:
 _OUT_DIR = Path(__file__).parent / "output" / "evidence"
 
 # ★ 출처 신뢰 등급 — models.SOURCE_TRUST_TIER 단일 진입점 (사용자 박제 2026-07-03 — ADR 013)
-#   논문(1) > 공식 API(2) > 뉴스(3) > 기사(4) > 웹(5) > 블로그(6).
+#   공식 API(1) > 뉴스(2) > 기사(3) > 웹(4) > 블로그(5).
 #   중복 fact 충돌 시 낮은 티어(=높은 신뢰)가 이긴다 (_dedupe_facts).
 from .models import SOURCE_TRUST_TIER as _TIER_BY_TYPE
 
 # ★ 입력 절단 폐지 (사용자 박제 2026-07-17): fact 추출은 수집 문서 *전문* 을 읽는다.
 #   옛 티어별 자수컷(_TIER_CHARS)은 뉴스 600·웹 300자 등으로 뒷부분 수치·사실을 통째
 #   버렸다 → 폐지. 상수는 하위호환·env 재활성화용으로만 잔존(기본 미적용).
-_TIER_CHARS: dict[int, int] = {1: 2500, 2: 1500, 3: 600, 4: 400, 5: 300, 6: 200}
+_TIER_CHARS: dict[int, int] = {1: 1500, 2: 600, 3: 400, 4: 300, 5: 200}
 # ★ 티어별 문서당 fact 추출 상한
-_TIER_MAX_FACTS_PER_DOC: dict[int, int] = {1: 6, 2: 5, 3: 2, 4: 1, 5: 1, 6: 0}
+_TIER_MAX_FACTS_PER_DOC: dict[int, int] = {1: 5, 2: 2, 3: 1, 4: 1, 5: 0}
 
 _EXTRACT_SYSTEM = """당신은 팩트체커 겸 리서처다. 수집 문서에서 *문서에 실제로 적힌*
 사실만 추출한다. 문서에 없는 내용을 추론·창작하면 절대 안 된다.
@@ -77,7 +77,7 @@ _EXTRACT_PROMPT = """주제: {theme}
 - as_of 는 문서에서 확인된 시점만 (없으면 빈 문자열).
 - question_id 는 위 질문 중 가장 맞는 것 (없으면 "").
 - doc 번호(doc_idx)를 정확히 — 출처 추적에 쓴다.
-- 문서 표시 [T1]=논문(최대 6개), [T2]=공식 API(최대 5개), [T3]=뉴스(최대 2개), [T4+]=기타(최대 1개).
+- 문서 표시 [T1]=공식 API, [T2]=뉴스, [T3+]=기타.
 - 전체 최대 {max_facts}개. 관련 없는 문서는 건너뛴다.
 
 [수집 문서]
@@ -85,7 +85,7 @@ _EXTRACT_PROMPT = """주제: {theme}
 
 [★ 추출 전 — 먼저 *전문 리서처의 추출 전략* 을 설계 (꼼꼼·전문·디테일)]
 먼저 <design> 안에 추출 전략을 세워라 (중괄호 절대 금지, 6줄 이내):
-① [문서 유형·신뢰도] 각 문서가 뉴스·재무·통계·논문·블로그 중 무엇이고 어느 게 신뢰 우선인지.
+① [문서 유형·신뢰도] 각 문서가 뉴스·재무·통계·블로그 중 무엇이고 어느 게 신뢰 우선인지.
 ② [질문 매핑] 위 핵심 질문 각각에 답이 될 수치·사실이 어느 문서(doc 번호)에 있는지.
 ③ [우선 추출] 수치가 살아있는 사실(kind=stat)을 최우선 — 구체 금액·비율·규모·시점.
 ④ [상충·중복] 문서 간 값이 다르면 신뢰 높은 출처 채택, 같은 사실은 한 번만.
@@ -145,7 +145,11 @@ def build_corpus_digest(docs: list, per_source_chars: int = 700) -> str:
     보존하므로 digest 는 서사·맥락 담당. 사실성 게이트는 원문(collection_docs) 그대로 사용(별개).
 
     ★ 선계산(저부하 창)에서만 실행 — 발행창(is_publishing)이면 "" 반환 → 호출자는 원문
-      build_corpus_block 폴백(21시 추가 LLM 0). distill LLM 비용은 20:00/06:00 창에 흡수.
+      build_corpus_block 폴백. distill LLM 비용은 20:00/06:00 창에 흡수. analyzer alias 는
+      발행창 LLM 경합을 피하려 선계산으로 이전된 것이라(shared/llm.py:448) 이 게이트 유지가 정석.
+    ★ 2026-07-24 P2: 종전엔 이 게이트로 캐시미스 시 원문 폴백이 205문서·119K자로 폭주했는데,
+      그 폭주는 *원문 폴백 자체를 유계로 캡*(P2-b: DRAFT_CORPUS_MAX_CHARS 40000 + P2-c: 스윕
+      쿼터)해서 잡는다 — 발행창에 LLM(analyzer)을 새로 들이지 않고(P3 와 정합) 코퍼스만 유계화.
     """
     docs = list(docs or [])
     if not docs:
@@ -155,7 +159,7 @@ def build_corpus_digest(docs: list, per_source_chars: int = 700) -> str:
     except Exception:
         return ""
     if is_publishing():
-        return ""   # 발행창 — 즉석 digest 금지, 호출자 원문 폴백
+        return ""   # 발행창 — 즉석 digest 금지(analyzer 경합 회피), 호출자 원문 폴백(P2-b 로 캡됨)
     blocks = []
     for i, d in enumerate(docs, 1):
         body = str(_doc_attr(d, "cleaned_text") or _doc_attr(d, "raw_text") or "").strip()
@@ -198,7 +202,7 @@ def _extract_facts_batch(theme: str, plan: dict, docs: list,
     try:
         from shared.llm import invoke_text
         # ★ 단일 호출로 전 문서 처리 (ERRORS [374])
-        # max_tokens=4800: 논문·API 티어 고품질 fact 증가 수용 (2026-07-12)
+        # max_tokens=4800: 공식 API 티어 고품질 fact 증가 수용 (2026-07-12)
         # timeout=150: 스로틀 시 5분 무한대기 방지 (빈 facts로 계속 진행)
         raw = invoke_text("analyzer", prompt, system=_EXTRACT_SYSTEM,
                           max_tokens=4800, temperature=0.1, timeout=150)
@@ -301,7 +305,7 @@ def _measure_coverage(plan: dict, facts: list[dict]) -> dict:
     return cov
 
 
-_HIGH_TIER_SET = frozenset({1, 2})   # 논문(1) + 공식 API(2)
+_HIGH_TIER_SET = frozenset({1})   # 공식 API(1) — 최상위 신뢰 티어
 _HIGH_TARGET   = 30                  # 고품질 소스 목표 fact 수 (★ 15→30 상향 2026-07-17 — 전문 추출로 사실 밀도 증가분 수용)
 
 
@@ -310,26 +314,26 @@ def build_evidence_pack(theme: str, plan: dict, docs: list,
     """수집 문서 → EvidencePack.
 
     ★ 2-패스 추출 (사용자 박제 2026-07-12):
-      Pass-1: 논문(T1)·공식API(T2) 에서만 최대 15개 추출.
-      Pass-2: 15개 미달 시에만 뉴스·기사·웹(T3+) 에서 부족분 보충.
+      Pass-1: 공식 API(T1) 에서만 최대 15개 추출.
+      Pass-2: 15개 미달 시에만 뉴스·기사·웹(T2+) 에서 부족분 보충.
     → 고품질 소스가 충분하면 뉴스 LLM 호출 발생하지 않음.
     """
     docs = list(docs or [])
     docs.sort(key=lambda d: _TIER_BY_TYPE.get(str(_doc_attr(d, "source_type")), 5))
 
-    # 고품질(T1·T2) / 후순위(T3+) 분리
+    # 고품질(T1) / 후순위(T2+) 분리
     def _tier(d):
         return _TIER_BY_TYPE.get(str(_doc_attr(d, "source_type")).strip().lower(), 5)
 
     high_docs = [d for d in docs if _tier(d) in _HIGH_TIER_SET]
     low_docs  = [d for d in docs if _tier(d) not in _HIGH_TIER_SET]
 
-    # Pass-1: 논문·API
+    # Pass-1: 공식 API
     facts: list[dict] = []
     if high_docs:
         facts = _extract_facts_batch(theme, plan, high_docs[:max_docs],
                                      max_facts=_HIGH_TARGET, per_doc_chars=per_doc_chars)
-        log.info(f"[evidence] Pass-1(논문·API) 문서 {len(high_docs)}개 → fact {len(facts)}개")
+        log.info(f"[evidence] Pass-1(공식 API) 문서 {len(high_docs)}개 → fact {len(facts)}개")
 
     # Pass-2: 부족 시에만 후순위 소스 보충
     gap = _HIGH_TARGET - len(facts)
@@ -580,7 +584,7 @@ def facts_to_datasets(pack: dict, max_datasets: int = 60) -> list[dict]:   # ★
         items = _scale_filter(items)
         if not items:
             continue
-        # 대표 출처 = 신뢰 티어 최상 fact (논문>API>뉴스>기사>웹 — ADR 013)
+        # 대표 출처 = 신뢰 티어 최상 fact (API>뉴스>기사>웹 — ADR 013)
         best = min(items, key=lambda x: x[0].get("source", {}).get("tier", 5))[0]
         # 제목 작명: category 우선 → 없으면 라벨 상위 2개 → 최후 폴백
         if cat and cat != "기타":

@@ -18,7 +18,6 @@ import re
 import json
 import time
 import subprocess
-import requests
 import glob
 import shutil
 from datetime import datetime

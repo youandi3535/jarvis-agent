@@ -25,7 +25,6 @@ log = logging.getLogger("jarvis")
 
 _RADAR_DIR = Path(__file__).resolve().parent
 _DATA_DIR = _RADAR_DIR / "data"
-_USED_KW_FILE = _DATA_DIR / "used_economic_keywords.json"
 
 # 경제 브리핑 대상 섹터 (★ 사용자 박제 2026-07-18) — analyzer 실제 분류 라벨과 일치.
 # JARVIS02_WRITER/trend_economic_writer._ECON_SECTORS 와 동치 유지(03→02 import 순환 금지라 로컬).
@@ -49,14 +48,32 @@ def _pack_path(day: str | None = None) -> Path:
 
 
 def _used_keywords(days: int = 7) -> set[str]:
-    """최근 N일 발행 사용 키워드 (JARVIS02 _mark_keyword_used 가 적재하는 파일)."""
-    if not _USED_KW_FILE.exists():
-        return set()
+    """최근 N일 경제 브리핑에 *실제로 발행된* 키워드 — 발행 원장(post_analysis)에서 파생.
+
+    ★ 2026-07-23 정정 — 종전엔 `data/used_economic_keywords.json` 사본을 읽었다.
+      그 파일을 적재하던 유일한 코드가 JARVIS02 의 레거시 `run_naver/run_tistory` 였고,
+      harness 경로로 갈아탄 뒤로는 *아무도 쓰지 않아 파일 자체가 존재하지 않았다* →
+      중복 제외가 조용히 죽은 채(항상 빈 집합) 돌고 있었다. 원장은 DB 한 곳뿐이므로
+      사본을 두지 않고 매번 조회한다 (②동적 설계 / 복사본을 진실로 믿지 말 것).
+    """
     try:
-        data = json.loads(_USED_KW_FILE.read_text(encoding="utf-8"))
-        cutoff = (date.today() - timedelta(days=days)).isoformat()
-        return {e["keyword"].strip().lower() for e in data if e.get("date", "") >= cutoff}
-    except Exception:
+        import sqlite3
+        from shared.db import DB_PATH
+        con = sqlite3.connect(str(DB_PATH))
+        try:
+            rows = con.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(TRIM(source_keyword), ''), TRIM(theme)) "
+                "FROM post_analysis "
+                "WHERE post_type = 'economic' "
+                "  AND created_at >= datetime('now', 'localtime', ?)",
+                (f"-{int(days)} day",),
+            ).fetchall()
+        finally:
+            con.close()
+        return {r[0].strip().lower() for r in rows if r and r[0] and r[0].strip()}
+    except Exception as e:
+        log.warning(f"[topic_pack] 최근 발행 키워드 조회 실패: {e}")
+        _g_report("radar", e, module=__name__, func_name="_used_keywords")
         return set()
 
 
@@ -350,6 +367,49 @@ def pick_candidate(exclude_keyword: str = "") -> dict | None:
     return None
 
 
+# ★ 발행 슬롯(플랫폼) → 강제주제 env 접두사 — *단일 진실 소스* (2026-07-25).
+#   종전엔 이 매핑이 trend_economic_writer(리터럴 2곳)·JARVIS09 precollect(_ECON_SLOTS)에
+#   각자 박혀 있었다. 강제주제 장치의 주인은 아래 pick_slot_candidate 이므로 여기 한 곳.
+FORCE_ENV_PREFIX = {"naver": "JARVIS_FORCE_NV", "tistory": "JARVIS_FORCE"}
+
+
+def pick_slot_candidate(exclude_keyword: str = "", force_env: str = "") -> dict | None:
+    """★ 발행 슬롯 1개용 주제 후보 — 강제 주제 > 당일 팩 > 소진 복구 재빌드 (박제 2026-07-23).
+
+    종전 이 로직(강제 주제 env 3종 → pick → 소진 시 build_topic_pack(8) → 재pick)이
+    JARVIS02 의 `nv_collect`·`ts_collect` 두 곳에 *복제* 돼 있었고, 선계산 경로까지 더하면
+    세 번째 복사본이 생길 참이었다. 주제 선정은 자비스03 의 일이므로 여기 한 곳에 둔다
+    (① 단일 진입점).
+
+    Args:
+        exclude_keyword: 같은 회차 다른 슬롯이 선점한 키워드 (중복 회피)
+        force_env:       강제 주제 환경변수 접두사. 예 "JARVIS_FORCE_NV" →
+                         `JARVIS_FORCE_NV_TOPIC` / `_SECTOR` / `_REASON`
+    Returns:
+        후보 dict (keyword/sector/profile/…) — 없으면 None
+    """
+    import os as _os
+    if force_env:
+        forced = _os.environ.get(f"{force_env}_TOPIC", "").strip()
+        if forced:
+            log.info(f"[topic_pack] 강제 주제({force_env}): {forced}")
+            return build_for_keyword(
+                forced,
+                sector=_os.environ.get(f"{force_env}_SECTOR", "").strip() or "강제 지정",
+                reason=_os.environ.get(f"{force_env}_REASON", "").strip() or "사용자 강제 주제",
+            )
+    cand = pick_candidate(exclude_keyword=exclude_keyword)
+    if cand is not None:
+        return cand
+    # ★ ERRORS [404]: 팩이 publish_slots(=2)개만 박제(ERRORS [384])되므로 fit 후보가 1개뿐이면
+    #   한 슬롯이 선점한 뒤 재빌드해도 동일 1개만 재생산돼 다른 슬롯이 영구 소진. *소진 복구
+    #   재빌드만* max_candidates 를 넓혀 더 깊은 후보 풀에서 대안을 찾는다 (평시 프로파일링
+    #   비용은 그대로 — ERRORS [384] 원칙 유지, 소진 시에만 예외).
+    log.info("[topic_pack] 당일 팩 없음/소진 — 파이프라인 즉석 실행(확장 재탐색)")
+    build_topic_pack(max_candidates=8)
+    return pick_candidate(exclude_keyword=exclude_keyword)
+
+
 def keyword_profile(keyword: str, sector: str = "") -> dict:
     """★ 키워드 단독 전송 금지 규정용 공용 헬퍼 (사용자 박제 2026-07-03 — 강제).
 
@@ -392,4 +452,4 @@ def build_for_keyword(keyword: str, sector: str = "", reason: str = "") -> dict:
 
 
 __all__ = ["build_topic_pack", "load_topic_pack", "pick_candidate",
-           "build_for_keyword", "keyword_profile"]
+           "pick_slot_candidate", "build_for_keyword", "keyword_profile"]

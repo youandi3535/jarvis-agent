@@ -82,7 +82,7 @@ DEFAULT_JOBS: list[dict] = [
      "misfire_grace_time":3600, "owner":"jarvis02_writer"},
     # ★ 경제 선계산은 별도 고정 잡이 아니라 06:00 트렌드 잡(radar_trends_06 → job_collect_trends_morning)
     # 말미에 *이벤트 체이닝*: 트렌드 분석(topic_pack 빌드)이 끝나는 즉시 이어서 실행(고정 지연 없음 —
-    # 사용자 박제 2026-07-18). run_precollect_economic 이 06:58 前 종료 동적 데드라인으로 발행창 미침범.
+    # 사용자 박제 2026-07-18). 09 의 job_precollect_economic 이 동적 데드라인으로 발행창 미침범.
     # ★ 발행 시각 07:00 (사용자 박제 2026-07-18): 06:00 트렌드+선계산(~06:20 완료) → 07:00 발행 사이
     # ~40분 Max 풀 회복 갭 확보 → writer 스톨 방지 강화. (종전 06:30 은 회복 갭 ~5분으로 빡빡)
     # ★ 발행 전 자체수리 + 발행 *하나의 세트* (사용자 박제 2026-06-28):
@@ -91,31 +91,31 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"j01_economic_post",      "name":"자가진단+경제 브리핑 발행 07:00", "trigger":"cron",
      "kwargs":{"hour":7, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_economic",
+     # ★ requires — 선행 없으면 발행하지 않는다 (사용자 박제 2026-07-23, job_prereq.py 참조).
+     #   06:00 트렌드 수집이 주제팩·데이터를 만든다. 잠들었다 깨면 유예 차이로 선행만 폐기되고
+     #   발행만 살아남던 결함 차단. 미충족 시 선행 즉시 실행 → 회복 갭(07:00-06:00) 뒤 발행.
+     "requires":["radar_trends_06"],
      "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e13"]},
     # ★ 테마 선계산 (20:00 = 21:00 발행 1시간 전 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18):
     # 테마를 고정(pin)하고 무거운 fact·chart 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 가
-    # 회복된 Max 풀에서 실행(300s 스톨 조건 제거). 선계산(~20:20 완료)과 발행(21:00) 사이 ~40분 회복
-    # 갭(경제와 대칭). 순수 최적화 — 실패해도 21:00 발행이 기존 random 선정 + 기존 수집으로 폴백.
+    # 회복된 Max 풀에서 실행(300s 스톨 조건 제거). 회복 갭 = 21:00-20:00 = 1시간(cron 차이에서 파생).
+    # ★ 2026-07-23 부터 *필수 선행* — 종전 "순수 최적화·실패해도 random 폴백" 은 폐지됐다.
+    #   이게 안 돌면 21:00 발행은 시작되지 않는다 (job_prereq.gate 가 requires 로 강제).
     {"id":"j02_theme_precollect",   "name":"테마 선계산 20:00", "trigger":"cron",
      "kwargs":{"hour":20, "minute":0},
-     "callback":"JARVIS02_WRITER.scheduler.run_precollect_theme",
-     "misfire_grace_time":1200, "owner":"jarvis02_writer"},
+     "callback":"JARVIS09_COLLECTOR.precollect.job_precollect_theme",
+     "misfire_grace_time":1200, "owner":"jarvis09_collector"},
     # ★ 발행 전 자체수리 + 테마글 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 16:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 테마글 발행.
     # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리.
     {"id":"j01_theme_post_21",      "name":"자가진단+테마 발행 21:00 ★", "trigger":"cron",
      "kwargs":{"hour":21, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_theme",
+     # ★ requires — 20:00 선계산(테마 고정 + fact·chart 선수집)이 *필수 선행*
+     #   (사용자 박제 2026-07-23 — 종전 "순수 최적화·폴백 허용" 폐지).
+     "requires":["j02_theme_precollect"],
      "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e13"]},
 
-    {"id":"j01_radar_check_09",     "name":"RADAR 자동실행 체크 09:00", "trigger":"cron",
-     "kwargs":{"hour":9, "minute":0},
-     "callback":"JARVIS02_WRITER.scheduler.job_radar_pipeline_check",
-     "misfire_grace_time":1800, "owner":"jarvis02_writer"},
-    {"id":"j01_radar_check_15",     "name":"RADAR 자동실행 체크 15:00", "trigger":"cron",
-     "kwargs":{"hour":15, "minute":0},
-     "callback":"JARVIS02_WRITER.scheduler.job_radar_pipeline_check",
-     "misfire_grace_time":1800, "owner":"jarvis02_writer"},
     # ── JARVIS01 MASTER ────────────────────────────────────────
     {"id":"jarvis00_router_health", "name":"JARVIS01 라우터 헬스", "trigger":"cron",
      "kwargs":{"minute":0},
@@ -170,8 +170,10 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"hour":7, "minute":45},
      "callback":"JARVIS02_WRITER.log_monitor.job_check_economic_result",
      "misfire_grace_time":1800, "owner":"jarvis02_writer"},
-    {"id":"log_monitor_theme",     "name":"테마주 로그 확인 (16:30)", "trigger":"cron",
-     "kwargs":{"hour":16, "minute":30},
+    # ★ 2026-07-25 정정: 테마 발행이 21:00 인데 감시가 16:30 이었다(옛 16시 발행 시절 잔재) —
+    #   *발행 4시간 半 전* 로그를 요약해 보고하던 죽은 잡. 경제(발행+45분)와 같은 간격으로 통일.
+    {"id":"log_monitor_theme",     "name":"테마주 로그 확인 (21:45)", "trigger":"cron",
+     "kwargs":{"hour":21, "minute":45},
      "callback":"JARVIS02_WRITER.log_monitor.job_check_theme_result",
      "misfire_grace_time":1800, "owner":"jarvis02_writer"},
     # ── JARVIS06 IMAGE — 인포그래픽 디자인 강화학습 (★ 사용자 박제 2026-07-05) ──
@@ -239,6 +241,54 @@ DEFAULT_JOBS: list[dict] = [
 ]
 
 
+# ══════════════════════════════════════════════════════════════════
+#  발행 前 쿠키 사전 점검 — **발행 시각에서 파생** (사용자 박제 2026-07-25)
+# ══════════════════════════════════════════════════════════════════
+# ★ 왜 파생인가 (2026-07-25 발견한 단절):
+#   `JARVIS08_PUBLISH/credentials/LOGIN_SUPREME_LAW.md` 는 쿠키 자동갱신 cron 잡 4개
+#   (`j02_{naver,tistory}_cookie_pre_{morning,afternoon}` 06:30·15:30)를 규정하고 있었는데
+#   **DEFAULT_JOBS 에 하나도 없었다** — `login_manager.job_pre_publish_check` 는 호출자 0인
+#   죽은 함수였다. 문서가 진실이라 믿고 코드가 따라오지 않은 전형적 드리프트.
+#   게다가 그 문서 시각(15:30)은 옛 16시 발행 기준이라, 살아 있었어도 21:00 발행에는 어긋났다.
+#   → 시각을 박지 않고 *실제 발행 잡 cron 에서 30분 전* 으로 파생한다.
+#     발행 시각을 옮기면 쿠키 사전점검도 자동으로 따라 이동한다(② 동적 설계).
+_COOKIE_PRECHECK_LEAD_MIN = 30
+
+
+def _publish_job_times() -> list[tuple[str, int, int]]:
+    """(발행잡ID, 시, 분) — 위 리터럴 카탈로그에서 직접 파생(순환 import 회피)."""
+    out = []
+    for j in DEFAULT_JOBS:
+        if j.get("trigger") != "cron":
+            continue
+        if "run_self_repair_then" not in (j.get("callback") or ""):
+            continue
+        kw = j.get("kwargs") or {}
+        h = kw.get("hour")
+        if isinstance(h, int):
+            out.append((j["id"], h, int(kw.get("minute") or 0)))
+    return out
+
+
+def _build_cookie_precheck_jobs() -> list[dict]:
+    """발행 잡마다 '발행 N분 전 쿠키 점검' 잡 1개씩 생성 (플랫폼 전체 일괄)."""
+    jobs = []
+    for jid, h, m in _publish_job_times():
+        total = (h * 60 + m - _COOKIE_PRECHECK_LEAD_MIN) % (24 * 60)
+        ph, pm = divmod(total, 60)
+        jobs.append({
+            "id": f"j08_cookie_precheck_{jid}",
+            "name": f"발행 前 쿠키 점검 ({ph:02d}:{pm:02d} — {jid} 발행 {_COOKIE_PRECHECK_LEAD_MIN}분 전)",
+            "trigger": "cron", "kwargs": {"hour": ph, "minute": pm},
+            "callback": "JARVIS08_PUBLISH.credentials.login_manager.job_pre_publish_check",
+            "misfire_grace_time": 1200, "owner": "jarvis08_publish",
+        })
+    return jobs
+
+
+DEFAULT_JOBS.extend(_build_cookie_precheck_jobs())
+
+
 def _resolve_callback(path: str) -> Callable:
     """'module.func' → 함수 객체. lazy import."""
     mod_name, fn_name = path.rsplit(".", 1)
@@ -251,10 +301,33 @@ def _resolve_callback(path: str) -> Callable:
 
 # 잡 ID → owner agent 매핑 (job_history listener 가 사용)
 def get_owner(job_id: str) -> Optional[str]:
+    # 연기분(`<id>__deferred`)도 같은 잡이다 — owner 가 비면 job_runs 통계·브리핑이 어긋난다.
+    from JARVIS04_SCHEDULER.job_prereq import DEFERRED_SUFFIX
+    base = str(job_id).split(DEFERRED_SUFFIX)[0]
     for j in DEFAULT_JOBS:
-        if j["id"] == job_id:
+        if j["id"] == base:
             return j.get("owner")
     return None
+
+
+def job_specs() -> list[dict]:
+    """실제로 등록되는 잡 명세 — DEFAULT_JOBS 의 *선언* 이 아니라 *유효값*.
+
+    ★ 선행 잡의 misfire 유예는 자신을 요구하는 후행에서 파생된다
+      (job_prereq.effective_grace — 사용자 박제 2026-07-23). 등록은 파생값을 쓰는데
+      화면은 선언값을 보여주면 "복사본을 진실로 믿는" 그 병이다. 등록·표시가 같은
+      함수를 읽게 한다. 표시 계층(api_server /api/jobs)도 이것을 호출할 것.
+    """
+    from JARVIS04_SCHEDULER.job_prereq import effective_grace
+    out = []
+    for j in DEFAULT_JOBS:
+        spec = dict(j)
+        try:
+            spec["misfire_grace_time"] = effective_grace(j["id"])
+        except Exception:
+            pass
+        out.append(spec)
+    return out
 
 
 def register_default_jobs(scheduler: Any) -> int:
@@ -265,16 +338,24 @@ def register_default_jobs(scheduler: Any) -> int:
     Returns: 등록한 잡 수.
     """
     n = 0
-    for j in DEFAULT_JOBS:
+    for j in job_specs():
         try:
             fn = _resolve_callback(j["callback"])
+            # ★ 선행조건 집행 단일 지점 (사용자 박제 2026-07-23) — `requires` 가 선언된 잡만
+            #   래핑된다. 각 콜백에 if 문을 흩지 않는다. 상세 사유: job_prereq.py 모듈 docstring.
+            from JARVIS04_SCHEDULER.job_prereq import gate as _prereq_gate
+            fn = _prereq_gate(j["id"], fn)
+            # ★ 발행창 LLM 우선권 (사용자 박제 2026-07-25) — 파이프라인 잡(03 트렌드·09 선계산·
+            #   02 발행) 실행 구간을 '발행중' 으로 표시해 배경 LLM 을 보류시킨다. 선례와 같은 자리.
+            from JARVIS04_SCHEDULER.job_llm_priority import gate as _llm_gate
+            fn = _llm_gate(j["id"], fn)
             exec_kwargs = {}
             if j.get("executor"):
                 exec_kwargs["executor"] = j["executor"]
             scheduler.add_job(
                 fn, j["trigger"], **j["kwargs"],
                 id=j["id"], name=j["name"],
-                misfire_grace_time=j.get("misfire_grace_time", 600),
+                misfire_grace_time=j["misfire_grace_time"],
                 replace_existing=True,
                 **exec_kwargs,
             )

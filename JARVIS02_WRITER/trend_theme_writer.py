@@ -16,28 +16,33 @@
   Phase 1: ts/nv 대본 *순차* 생성 (서로 다른 키워드 보장 위해 — ts_keyword 전달)
   Phase 2: Tistory/Naver Selenium 순차 (충돌 방지)
 
-진입점:
-  run_all_themes(theme)  — 데몬·scheduler 가 호출. 2개 플랫폼 통합 발행.
-  run_naver_theme(theme, sector="", ts_keyword="") -> dict
-  run_tistory_theme(theme, sector="") -> dict
+진입점 (하나뿐 — 레거시 직접발행은 2026-07-23 삭제):
+  run_all_themes(theme, sector="")  — 데몬·scheduler·CLI 공통. 하네스 액션 2개
+    (네이버 완결 → 티스토리) 로 발행. 검증 순환을 거치지 않는 발행 경로는 없다.
 """
 from __future__ import annotations
 
 import os
 import sys
 import re
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 
-# ★ 블로그(플랫폼) 액션 하드 데드라인 SSOT (watchdog.py) — economic_poster.py 와 동일 상수 참조
-#   (2026-07-18: 1800 리터럴 하드코딩이 SSOT 상향과 어긋나던 것을 상수 참조로 정정)
-from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC
-
 # ── sys.path 보정 (subprocess 직접 실행과 데몬 모듈 로드 양쪽 호환) ──
+#   ★ 반드시 JARVIS* 패키지 import *보다 먼저* (2026-07-25 실행모델 통일에서 발견):
+#   종전엔 아래 `from JARVIS00_INFRA...` 가 이 보정보다 위에 있어, 저장소 루트에서
+#   `python3 JARVIS02_WRITER/trend_theme_writer.py <테마>` 로 띄우면 ModuleNotFoundError 로
+#   즉사했다. 데몬이 *직접 호출* 만 하던 동안엔 드러나지 않던 잠복 결함
+#   (economic_poster.py 는 처음부터 보정이 먼저였다 — 같은 파일에서 순서만 달랐다).
 _JARVIS_ROOT = Path(__file__).parent.parent
 if str(_JARVIS_ROOT) not in sys.path:
     sys.path.insert(0, str(_JARVIS_ROOT))
+
+# ★ 블로그(플랫폼) 액션 하드 데드라인 SSOT (watchdog.py) — economic_poster.py 와 동일 상수 참조
+#   (2026-07-18: 1800 리터럴 하드코딩이 SSOT 상향과 어긋나던 것을 상수 참조로 정정)
+from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
@@ -61,6 +66,46 @@ def _tg(msg: str) -> None:
     except Exception:
         pass
 
+
+# ── ★ 발행창 표시 — 단일 진입점 (2026-07-25) ─────────────────────────────────
+# 왜 컨텍스트 매니저인가: `mark_publishing(True)` / `(False)` 를 *손으로* 짝맞추면
+# 예외·조기 return 한 번에 짝이 깨진다. 그 순간 `is_publishing()` 이 True 로 굳는데,
+# 커밋 d0af298 이후 그것은 'timeout 강등' 이 아니라 **GUARDIAN 자동수정 + 모든 background
+# LLM 의 전면 보류** 를 뜻한다 → 데몬 재시작 전까지 영구 정지. 회수 잡(j07_retry_pending)
+# 조차 같은 `_orchestrate` 로 재투입돼 자기가 닫은 문에 갇힌다(스스로 회복 불가).
+# 짝 맞춤을 사람의 규율이 아니라 **문법(finally)** 에 맡긴다.
+#
+# ① 단일 진입점: 정의는 여기 한 곳뿐. `economic_poster.py` 는 이 함수를 import 해서 쓴다.
+#    ※ 본래 자리는 `shared/llm.py`(mark_publishing 의 주인)이나 이번 작업 소유 범위 밖이라
+#      차선책으로 여기 둔다 — 이관 요구사항은 보고서에 명시.
+# ② 동적 설계: 킬스위치는 **호출 시점** 에 읽는다 (모듈 로드 시점 캡처 금지).
+# ③ 모든 글 적용: 테마(데몬 in-process)·경제(subprocess) 4조합이 같은 규약을 쓴다.
+@contextmanager
+def publishing(label: str = ""):
+    """with 블록 동안만 `is_publishing()` 이 True — 어떤 경로로 나가도 반드시 닫힌다.
+
+    킬스위치: `JARVIS_PUBLISH_MARK=0` → 표시 자체를 하지 않음 (호출 시점 조회).
+    표시 실패(shared.llm import 실패 등)는 삼킨다 — 발행을 절대 막지 않는다.
+    """
+    _on = (os.getenv("JARVIS_PUBLISH_MARK", "1").strip() != "0")   # ★ 호출 시점 조회
+    _marked = False
+    if _on:
+        try:
+            from shared.llm import mark_publishing as _mark_pub
+            _mark_pub(True)
+            _marked = True
+        except Exception as _pe:
+            print(f"  ⚠️ 발행창 표시 실패(무시하고 발행 진행){(' — ' + label) if label else ''}: {_pe}")
+    try:
+        yield
+    finally:
+        if _marked:                     # True 표시에 성공한 경우에만 짝을 맞춘다 (음수 방지)
+            try:
+                from shared.llm import mark_publishing as _mark_pub
+                _mark_pub(False)
+            except Exception:
+                pass
+
 # ── 글자수 정책 ────────────────────────────────────────
 try:
     from JARVIS02_WRITER import length_manager as _L
@@ -83,135 +128,18 @@ _TODAY_DOW = ["월", "화", "수", "목", "금", "토", "일"][_TODAY.weekday()]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ① 데이터 수집 — collect_stocks_data 위임
+#  ① 데이터 수집 — ★ 02 에는 코드가 없다 (사용자 박제 2026-07-23)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def _collect(theme: str, sector: str = "", related_terms: list | None = None,
-             profile: dict | None = None) -> dict:
-    """테마 키워드 → 종목 데이터. collect_theme.collect_stocks_data 위임.
-
-    ★ related_terms 미제공 시 자비스03 keyword_profile() 로 자체 조회 (사용자 박제
-    2026-07-17 — "파운드리"→가구주 오매칭 사고 근본수정). 종목 검색은 테마명 단독
-    fuzzy-match 로는 "파운드리"처럼 네이버 공식 카탈로그와 겹치는 부분문자열이 없는
-    키워드에서 LLM 폴백에 의존하게 되고, 그 LLM 폴백은 266개 평문 목록에서 번호 하나를
-    고르는 방식이라 위치편향으로 무관한 테마를 잘못 고르는 사고가 반복됐다. 관련어
-    (예: "반도체 위탁생산")를 함께 매칭하면 결정론적 부분문자열 일치로 해결되는 경우가
-    대부분이라 여기서 항상 확보해 내려보낸다.
-
-    ★ profile 관통 (사용자 박제 2026-07-17 — '라면'→종목 0개 사고 근본수정): 프로필
-    전체(summary·entity_type 포함)를 collect_stocks_data 까지 내려보내 LLM 상위
-    카테고리 매핑('라면'→'음식료업종')이 가능하도록 한다. profile 미제공 시 여기서
-    keyword_profile() 로 1회 조회하고, 그 결과에서 related_terms 도 함께 파생한다.
-    """
-    # ★ 단일 진입점 — 새 테마 = 전체 상태 초기화
-    from JARVIS09_COLLECTOR.run_context import new_run as _new_run
-    _new_run(theme)
-    if profile is None or related_terms is None:
-        try:
-            from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
-            _p = _kw_prof(theme, sector) or {}
-            if profile is None:
-                profile = _p
-            if related_terms is None:
-                related_terms = _p.get("related_terms")
-        except Exception:
-            pass
-    try:
-        from JARVIS02_WRITER.collect_theme import collect_stocks_data
-        return collect_stocks_data(theme, related_terms=related_terms, profile=profile)
-    except Exception as e:
-        print(f"  ❌ [theme] collect_stocks_data 실패: {e}")
-        _g_report("writer", e, module=__name__)
-        return {"theme": theme, "stocks": [], "summary": {}}
-
-
-def _theme_collect_bundle(theme: str, sector: str = "") -> dict:
-    """★ 테마 수집 번들 (사용자 박제 2026-07-18) — 프로필 + 리서치(fact 추출) + 종목 →
-    CollectedData 조립. _step_collect 본체와 precollect_theme 가 공유하는 단일 수집 로직.
-
-    반환: {collected, stocks_data, collection_docs, evidence_pack, data_empty}
-    (선계산 잡이 저부하 창에서 이 무거운 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회.)
-    """
-    _prof, _angle = {}, ""
-    try:
-        from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
-        _prof = _kw_prof(theme, sector) or {}
-        _angle = (_prof.get("summary") or "").strip()
-        if _angle:
-            print(f"  🏷️ [THEME 선계산] 자비스03 프로필: {_angle[:60]}")
-    except Exception:
-        pass
-
-    # 리서치(설계-우선) + 02 fact 추출 — 동기(선계산은 병렬 이득 불필요)
-    collection_docs, evidence_pack, _corpus_digest = [], None, ""
-    try:
-        if os.getenv("RESEARCH_FIRST", "1") != "0":
-            from JARVIS09_COLLECTOR import collect_research
-            # ★ fact 추출 09 통일 + corpus digest(distill 압축 2026-07-19) — 09가 수집+추출+요약.
-            _res = collect_research(theme, sector, angle=_angle, with_facts=True, with_digest=True) or {}
-            collection_docs = _res.get("docs") or []
-            evidence_pack = _res.get("pack") or None
-            _corpus_digest = _res.get("corpus_digest") or ""
-        else:
-            raise RuntimeError("RESEARCH_FIRST=0")
-    except Exception as e:
-        _g_report("writer", e, module=__name__, func_name="_theme_collect_bundle")
-        try:
-            from JARVIS09_COLLECTOR.collector_engine import collect_for_theme
-            collection_docs = collect_for_theme(theme, sector)
-        except Exception:
-            collection_docs, evidence_pack = [], None
-
-    # 종목 데이터
-    data = _collect(theme, sector=sector, related_terms=_prof.get("related_terms"), profile=_prof)
-
-    from JARVIS09_COLLECTOR import compose_collected
-    # ★ corpus digest(요약)를 meta 에 실어 writer(_gen_theme)가 원문 대신 사용 → 프롬프트 축소.
-    collected = compose_collected(theme, stocks_data=data, docs=collection_docs,
-                                  evidence_pack=evidence_pack, sector=sector,
-                                  category="theme", profile=_prof,
-                                  extra_meta=({"corpus_digest": _corpus_digest} if _corpus_digest else None))
-    _n_stocks = len(data.get("stocks") or [])
-    _n_facts = len((evidence_pack or {}).get("facts") or [])
-    return {"collected": collected, "stocks_data": data,
-            "collection_docs": collection_docs, "evidence_pack": evidence_pack,
-            "data_empty": (_n_stocks == 0 and not collection_docs and _n_facts == 0)}
-
-
-def precollect_theme() -> dict:
-    """★ 테마 선계산 잡 (20:00 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
-
-    테마는 네이버 금융 카탈로그에서 random 선정되므로, 여기서 테마를 *고정(pin)* 하고 미리
-    수집·추출해 캐시한다. 21:00 발행은 고정 테마를 우선 사용(→ 캐시 히트, 추출 LLM 0회) →
-    writer 가 버스트로 열화되지 않은 Max 풀에서 실행(스톨 조건 제거). 순수 최적화 — 고정·캐시가
-    없으면 발행은 기존 random 선정 + 기존 수집으로 폴백.
-    """
-    from datetime import datetime as _dt
-    from JARVIS02_WRITER.precollect_cache import save_precollect, pin_theme
-    print(f"\n{'='*50}\n⚡ 테마 선계산 시작 [{_dt.now().strftime('%H:%M:%S')}] — 발행창 밖 추출\n{'='*50}")
-    try:
-        from JARVIS02_WRITER.scheduler import select_top_theme as _sel
-        theme = _sel()
-    except Exception as e:
-        print(f"  ⚠️ [테마 선계산] 테마 선정 실패: {e}")
-        return {"success": False, "cached": 0}
-    if not theme:
-        print("  ⚠️ [테마 선계산] 선정 가능한 미발행 테마 없음")
-        return {"success": False, "cached": 0}
-    saved = 0
-    try:
-        bundle = _theme_collect_bundle(theme, sector="")
-        if bundle and not bundle.get("data_empty"):
-            if save_precollect("theme", theme, bundle):
-                pin_theme(theme)
-                saved = 1
-        else:
-            print(f"  ⏭️ [테마 선계산] '{theme}' 데이터 0 — 고정 안 함(발행 시 재선정)")
-    except Exception as e:
-        _g_report("writer", e, module=__name__, func_name="precollect_theme")
-        print(f"  ⚠️ [테마 선계산] 예외: {e} — 발행이 기존 수집 폴백")
-    print(f"⚡ 테마 선계산 완료 — 고정·캐시 {saved}개 (21:00 발행 재사용 대기)")
-    return {"success": bool(saved), "cached": saved, "theme": theme}
+#  종전 이 자리에 `_collect`(종목)·`_theme_collect_bundle`(프로필·리서치·종목·조립)·
+#  `_theme_collect`(런컨텍스트·프로필 조회·수집 호출)·`precollect_theme`(선계산 잡) 이
+#  있었다. 09 API 를 *호출* 하긴 했지만 수집의 순서·조합·재사용·폴백 판단을 02 가 했으므로
+#  사실상 02 가 수집을 오케스트레이션한 것 — 수집 단일 진입점(JARVIS09) 위반.
+#
+#  지금 02 에 남은 수집 관련 코드는 `_step_collect` 의 `collect_all()` *호출 한 줄* 뿐이다.
+#  프로필 조회(자비스03)·런컨텍스트 초기화·선계산 캐시 재사용은 전부 09 안에서 끝난다.
+#    - 선계산 잡    → `JARVIS09_COLLECTOR.precollect.precollect_theme`
+#    - 캐시 재사용  → `JARVIS09_COLLECTOR.collector_engine.collect_all(use_cache=True)`
+#  같은 병이 경제 브리핑에도 있었으므로 함께 이관(③ 4조합).
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -408,79 +336,14 @@ def _publish_naver(draft: dict, theme: str, sector: str) -> dict:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  진입점 — 플랫폼별 단일 함수 (외부에서 직접 호출 가능)
+#  레거시 직접발행 진입점 — ★ 삭제됨 (사용자 박제 2026-07-23)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def run_tistory_theme(theme: str, sector: str = "",
-                      stocks_data: dict | None = None) -> dict:
-    """테마주 티스토리 발행 — ⓪ 쿠키 갱신 → ①~⑦ → ⑧ 발행 (driver 재사용).
-
-    ★ P0-② 테마 버전 (사용자 박제 2026-05-18) — harness 외부 호출 차단.
-    """
-    from JARVIS02_WRITER.trend_economic_writer import _legacy_publish_guard as _gd
-    _gd("run_tistory_theme")
-    print(f"\n  🔴 [THEME-TISTORY] 테마 발행 시작: {theme}")
-
-    # ── ⓪ 쿠키 사전 갱신 (★ 글 작성 전 항상 — 사용자 직접 박제 2026-05-14) ──
-    print(f"  🍪 [THEME-TISTORY] ⓪ 글 작성 전 쿠키 강제 갱신")
-    _preloaded_driver = None
-    try:
-        from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr_run
-        ok, _preloaded_driver = _tcr_run(force=True, return_driver=True)
-        if not ok:
-            _tg(f"❌ [THEME-TISTORY] 쿠키 갱신 실패 — 글 작성 중단: {theme}")
-            if _preloaded_driver:
-                try: _preloaded_driver.quit()
-                except Exception: pass
-            return {"success": False, "url": "", "keyword": theme, "error": "쿠키 갱신 실패"}
-        load_dotenv(override=True)
-        print(f"  ✅ [THEME-TISTORY] ⓪ 쿠키 갱신 완료 — driver 재사용")
-    except Exception as e:
-        print(f"  ❌ [THEME-TISTORY] ⓪ 쿠키 갱신 예외: {e}")
-        _g_report("writer", e, module=__name__)
-        if _preloaded_driver:
-            try: _preloaded_driver.quit()
-            except Exception: pass
-        return {"success": False, "url": "", "keyword": theme, "error": str(e)[:100]}
-
-    # ── ① 데이터 수집 ───────────────────────────────────────────
-    if stocks_data is None:
-        stocks_data = _collect(theme, sector=sector)
-    if not stocks_data.get("stocks"):
-        _tg(f"⚠️ [THEME-TISTORY] 종목 데이터 없음 — 발행 건너뜀: {theme}")
-        if _preloaded_driver:
-            try: _preloaded_driver.quit()
-            except Exception: pass
-        return {"success": False, "url": "", "keyword": theme, "error": "종목 데이터 없음"}
-
-    # ── ②~⑦ HTML 생성 + 블록 조립 + 검증 ─────────────────────
-    from JARVIS09_COLLECTOR import compose_collected
-    collected = compose_collected(theme, stocks_data=stocks_data, sector=sector, category="theme")
-    draft = _build_blocks(collected, "tistory", TISTORY_IMG_DIR)
-    # ── ⑧ 발행 (⓪에서 받은 driver 재사용) ─────────────────────
-    return _publish_tistory(draft, theme, sector, preloaded_driver=_preloaded_driver)
-
-
-def run_naver_theme(theme: str, sector: str = "",
-                    stocks_data: dict | None = None,
-                    ts_keyword: str = "") -> dict:
-    """테마주 네이버 발행.
-
-    ★ P0-② 테마 버전 (사용자 박제 2026-05-18) — harness 외부 호출 차단.
-    """
-    from JARVIS02_WRITER.trend_economic_writer import _legacy_publish_guard as _gd
-    _gd("run_naver_theme")
-    print(f"\n  🟢 [THEME-NAVER] 테마 발행 시작: {theme}")
-    if stocks_data is None:
-        stocks_data = _collect(theme, sector=sector)
-    if not stocks_data.get("stocks"):
-        _tg(f"⚠️ [THEME-NAVER] 종목 데이터 없음 — 발행 건너뜀: {theme}")
-        return {"success": False, "url": "", "keyword": theme, "error": "종목 데이터 없음"}
-    from JARVIS09_COLLECTOR import compose_collected
-    collected = compose_collected(theme, stocks_data=stocks_data, sector=sector, category="theme")
-    draft = _build_blocks(collected, "naver", NAVER_IMG_DIR)
-    return _publish_naver(draft, theme, sector)
-
+#   `run_tistory_theme` / `run_naver_theme` 는 수집→대본→발행을 **하네스 밖에서**
+#   한 벌 더 구현한 복사본이었다 — prepublish 게이트(사실성·매력도)도, Layer 3 검증
+#   순환도 타지 않고 곧장 실제 블로그로 나갔다. `JARVIS_ALLOW_LEGACY_PUBLISH=1` 로
+#   차단을 스스로 풀던 CLI 가 유일한 호출자.
+#   경제(`trend_economic_writer.run_naver/run_tistory`)를 지운 것과 같은 이유·같은 조치
+#   (③ 모든 글에 적용). 발행 경로는 `run_all_themes()` 하네스 액션 **하나**.
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  통합 진입점 — run_all_themes (scheduler 가 호출) — 하네스 5-Layer 적용
@@ -551,7 +414,7 @@ def _layer3_verify_draft(draft: dict, platform: str) -> list[str]:
     return issues
 
 
-def run_all_themes(theme: str, sector: str = "") -> dict:
+def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = None) -> dict:
     """테마 1개 → 2개 플랫폼 발행 — 하네스 5-Layer 검증 적용 (ADR 009).
 
     Layer 0: preflight (데몬 부팅 시 완료)
@@ -565,7 +428,6 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     """
     # chart_generator 경로 폐기 — infographic_engine 경로로 통합 (ERRORS [355])
 
-    from concurrent.futures import ThreadPoolExecutor as _TExec
     from JARVIS00_INFRA.harness import (
         action_step, ActionDefinition, run_action, Issue, interpreter_shutting_down,
     )
@@ -600,116 +462,23 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             print("  ⏭️ [② 수집] 이전 시도 종목 0개 — collect 재실행 스킵 (결과 동일 예상)")
             return {}
 
-        # ★ 선계산 캐시 재사용 (사용자 박제 2026-07-18): precollect 잡(20:00)이 고정·선수집한
-        #   테마면 발행창(21:00) 추출 LLM 0회로 재사용 → writer 회복된 풀에서 실행.
-        #   순수 최적화 — 미스·오류 시 아래 기존 수집 경로로 폴백(현행 동작 보존).
-        try:
-            from JARVIS02_WRITER.precollect_cache import load_precollect
-            _cached = load_precollect("theme", state["theme"])
-            if _cached and _cached.get("collected") is not None:
-                print(f"  ⚡ [② 수집] 선계산 캐시 재사용: {state['theme']} (발행창 추출 LLM 0회)")
-                _out = {k: _cached[k] for k in
-                        ("collected", "stocks_data", "collection_docs", "evidence_pack")
-                        if k in _cached}
-                if _cached.get("data_empty"):
-                    _out["_collect_data_empty"] = True
-                return _out
-        except Exception as _pce:
-            print(f"  ⚠️ [선계산] 캐시 조회 스킵: {_pce}")
-
-        # ★ 키워드 단독 전송 금지 (사용자 박제 2026-07-03 — ADR 013 강제):
-        #   테마 키워드도 자비스03 프로필(정의·관련어)을 동봉해 JARVIS09 에 전달.
-        #   ★ 종목 검색 관련어 근본수정 (사용자 박제 2026-07-17 — "파운드리"→가구주 오매칭
-        #   사고): 리서치 스레드가 시작하기 *전* 동기로 1회만 조회해 리서치·종목 수집
-        #   양쪽이 재사용 — 중복 LLM 호출 방지 + related_terms 를 _collect 에도 공급.
-        _prof, _angle = {}, ""
-        try:
-            from JARVIS03_RADAR.topic_pack import keyword_profile as _kw_prof
-            _prof = _kw_prof(state["theme"], state.get("sector", "")) or {}
-            _angle = (_prof.get("summary") or "").strip()
-            if _angle:
-                state["theme_profile"] = _prof
-                print(f"  🏷️ [THEME] 자비스03 프로필: {_angle[:60]}")
-        except Exception:
-            pass
-
-        _col_exec = _TExec(max_workers=1)
-
-        def _run_jarvis09():
-            """★ ADR 012 — 설계-우선 리서치 수집 (킬스위치 RESEARCH_FIRST=0 → 종전 스윕).
-
-            반환: {"docs": [...], "pack": dict|None}
-            """
-            try:
-                if os.getenv("RESEARCH_FIRST", "1") != "0":
-                    from JARVIS09_COLLECTOR import collect_research
-                    # ★ fact 추출 09 통일 (사용자 박제 2026-07-18) — 09가 수집+추출, pack 동봉.
-                    res = collect_research(state["theme"], state.get("sector", ""),
-                                           angle=_angle, with_facts=True, with_digest=True)
-                    docs = res.get("docs") or []
-                    pack = res.get("pack") or None
-                    n_facts = len((pack or {}).get("facts", []))
-                    print(f"  ✅ [THEME] JARVIS09 수집+fact 추출 완료: 문서 {len(docs)}건 "
-                          f"→ fact {n_facts}개")
-                    return {"docs": docs, "pack": pack}
-            except Exception as e:
-                print(f"  ⚠️ [THEME] 리서치 수집 실패 — 종전 스윕 폴백: {e}")
-                _g_report("writer", e, module=__name__, func_name="_run_jarvis09")
-            try:
-                from JARVIS09_COLLECTOR.collector_engine import collect_for_theme
-                docs = collect_for_theme(state["theme"], state.get("sector", ""))
-                print(f"  ✅ [THEME] JARVIS09 수집 완료(폴백): {len(docs)}건")
-                return {"docs": docs, "pack": None}
-            except Exception as e:
-                print(f"  ⚠️ [THEME] JARVIS09 수집 실패: {e}")
-                return {"docs": [], "pack": None}
-
-        # ★ 인터프리터 종료 레이스 (ERRORS [361]): 데몬 재시작 등으로 인터프리터가
-        #   종료 단계에 들어가면 ThreadPoolExecutor.submit 이
-        #   'cannot schedule new futures after interpreter shutdown' RuntimeError 를 던진다.
-        #   병렬 이득만 포기하고 리서치 수집은 동기 폴백으로 이어간다 — 종료 레이스로 발행 크래시 금지.
-        try:
-            _col_fut = _col_exec.submit(_run_jarvis09)
-        except RuntimeError as _sub_e:
-            print(f"  ⚠️ [② 수집] 스레드 스케줄 불가(인터프리터 종료 중?) — 동기 폴백: {_sub_e}")
-            _col_fut = None
-
-        # 종목 데이터 수집 (주식 시세·재무)
-        data = _collect(state["theme"], sector=state.get("sector", ""),
-                        related_terms=_prof.get("related_terms"), profile=_prof)
-
-        # ★ 다소스 결손 분리 (사용자 박제 2026-07-04 — 경제 파이프라인과 동렬화, ERRORS [351]):
-        #   종목(stocks)이 0개여도 JARVIS09 다소스 리서치(논문·뉴스·DART·ECOS·웹 등)를
-        #   *취소하지 않고 항상 수령*. 경제글이 구조데이터 0개여도 collection_docs·
-        #   evidence_pack 을 보존하고 계속 쓰는 것과 동일. 리서치만으로도 글은 성립하며,
-        #   차트는 실데이터 폴백/AI 사진으로 대체(_generate_charts). 진짜 폐기·테마 교체는
-        #   종목·리서치·근거가 *전부* 비었을 때만 (KRX 종속 결합 해제).
-        if _col_fut is not None:
-            try:
-                _col_res = _col_fut.result(timeout=600) or {}
-            except Exception:
-                _col_res = {}
-            finally:
-                _col_exec.shutdown(wait=False)
-        else:
-            # submit 실패(인터프리터 종료 레이스) → 리서치를 동기 실행(스레드 미사용)
-            _col_exec.shutdown(wait=False)
-            try:
-                _col_res = _run_jarvis09() or {}
-            except Exception:
-                _col_res = {}
-        collection_docs = _col_res.get("docs") or []
-        evidence_pack   = _col_res.get("pack") or None
-
+        # ★ 수집은 자비스09 단독 (사용자 박제 2026-07-23): 02 는 "이 주제로 수집해줘" 한 줄만.
+        #   무엇을·어떤 순서로·어떻게 병렬로·실패 시 무엇으로 폴백할지, 선계산(20:00) 캐시를
+        #   재사용할지, 프로필을 자비스03 에서 받아올지 — 전부 09 소관. 02 에는 판단 0.
+        from JARVIS09_COLLECTOR import collect_all
+        _bundle = collect_all(state["theme"], profile=state.get("theme_profile"),
+                              sector=state.get("sector", ""), category="theme")
+        collected       = _bundle.get("collected")
+        data            = _bundle.get("stocks_data") or {}
+        collection_docs = _bundle.get("docs") or []
+        evidence_pack   = _bundle.get("evidence_pack") or None
         _n_stocks = len(data.get("stocks") or [])
         _n_facts  = len((evidence_pack or {}).get("facts") or [])
-        # ★ Step 7: 조각 → CollectedData 단일 상자 (재수집 없음). 옛 state 키는 back-compat 유지.
-        from JARVIS09_COLLECTOR import compose_collected
-        collected = compose_collected(
-            state["theme"], stocks_data=data, docs=collection_docs,
-            evidence_pack=evidence_pack, sector=state.get("sector", ""),
-            category="theme", profile=state.get("theme_profile"))
-        if _n_stocks == 0 and not collection_docs and _n_facts == 0:
+
+        # ★ 다소스 결손 분리 (사용자 박제 2026-07-04 — 경제 파이프라인과 동렬화, ERRORS [351]):
+        #   종목(stocks)이 0개여도 리서치(뉴스·DART·ECOS·웹)만으로 글은 성립한다.
+        #   진짜 폐기·테마 교체는 종목·리서치·근거가 *전부* 비었을 때만 (KRX 종속 결합 해제).
+        if _bundle.get("data_empty"):
             print("  ⏭️ [② 수집] 종목·리서치·근거 전부 0 — 데이터 없음(테마 교체 대상)")
             return {"collected": collected, "_collect_data_empty": True,
                     "stocks_data": data, "collection_docs": [], "evidence_pack": None}
@@ -824,18 +593,12 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         # [L3] 단일 플랫폼 대본 규정 준수 검증 (순수 "발견"만)
         draft = state.get(draft_key) or {}
         if not draft.get("success"):
-            # ★ 인프라 스로틀(일시적)과 콘텐츠 결함 분리(rank5). detail 은 fingerprint 안정성 위해
-            #   고정 문자열(attempt 변동값 금지) — harness 가 fingerprint 제외·backoff·defer 처리.
-            from shared.llm import (is_infra_error as _is_infra_err,
-                                    describe_infra_error as _desc_infra)
-            _derr = str(draft.get("error", "unknown"))
-            _is_infra = _is_infra_err(_derr)
-            issues.append(Issue(
-                step=step_name,
-                kind="infra_throttle" if _is_infra else "draft_failed",
-                detail=(_desc_infra(_derr)
-                        + " — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"
-                        if _is_infra else f"대본 생성 실패: {_derr}")))
+            # ★ 인프라 스로틀(일시적)과 콘텐츠 결함 분리 — 판정은 harness 단독
+            #   (`classify_failure_issue`). 종전엔 이 블록이 economic_poster 에도
+            #   **그대로 복사**돼 있어 한쪽만 고치면 다른 쪽에서 재발했다
+            #   (CLAUDE.md ①단일 진입점·③모든 곳 적용 위반, 2026-07-25 통합).
+            from JARVIS00_INFRA.harness import classify_failure_issue as _classify_fail
+            issues.append(_classify_fail(step_name, draft.get("error")))
             return issues
         di_list = _layer3_verify_draft(draft, platform)
         for di in di_list:
@@ -859,7 +622,10 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             try:
                 _sd = state.get("stocks_data") or {}
                 if _sd.get("stocks"):
-                    from JARVIS09_COLLECTOR.collect_theme import stocks_to_datasets
+                    # ★ 2026-07-23: 09 가 조립해준 collected.datasets 를 *읽기만* 한다.
+                    #   종전엔 여기서 stocks_to_datasets 를 다시 돌려 09 의 조립을 재현했고,
+                    #   그 사이 09 가 정책으로 걸러낸 항목이 코퍼스에서 되살아날 수 있었다.
+                    _all_ds = list(getattr(state.get("collected"), "datasets", None) or [])
 
                     def _fmt_val(v):
                         # ★ ERRORS [346] — 코퍼스 수치를 본문 표기와 정합.
@@ -874,14 +640,14 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                         return f"{v}"
 
                     _stock_docs = []
-                    for _ds in stocks_to_datasets(_sd):
+                    for _ds in _all_ds:
                         _unit = _ds.get("unit", "")
                         _rows = ", ".join(
                             f"{_r['label']} {_fmt_val(_r['value'])}{_unit}"
-                            for _r in _ds.get("data", []))
+                            for _r in _ds.get("data", []) if isinstance(_r, dict) and "label" in _r)
                         if _rows:
                             _stock_docs.append(
-                                f"[종목 실측] {_ds.get('title', '')}: {_rows} "
+                                f"[수집 실측] {_ds.get('title', '')}: {_rows} "
                                 f"(출처: {(_ds.get('source') or {}).get('name', 'KRX 시세')})")
                     # ★ ERRORS [347] — 조원 필드(marcap·revenue)를 본문 표기와 정합.
                     #   본문(_stocks_text→프로즈)은 `_fmt_marcap` 으로 규모별 조원(대형주
@@ -962,6 +728,31 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                     _fb.append(d)
             state[f"_{draft_key}_gate_feedback"] = _fb[-8:]
 
+        # ★ 사실성 차단 → 영구 학습 인사이트 (ERRORS [454] 재발 대응 — 2026-07-24)
+        #   위 gate_feedback 은 state 딕셔너리(이번 harness 실행 한정)라 프로세스가
+        #   끝나면 사라진다. 같은 테마가 며칠 뒤 새 harness 실행으로 다시 돌면
+        #   LLM 이 동일한(또는 숫자만 바뀐) 산업 총계 수치를 파라메트릭 지식에서
+        #   그대로 재생성 — draft_writer 의 절대제약 문구만으론 확률적으로 못 막는다.
+        #   차단된 주장을 learning_insights(scope='theme')에 영구 기록해
+        #   _load_learn_insights 가 이후 *모든* 테마 실행에서 프롬프트에 재주입하게 한다.
+        _fact_details = [i.detail for i in non_draft if i.kind == "factuality" and i.detail]
+        if _fact_details:
+            try:
+                from shared.db import upsert_learning_insight
+                _theme = str(state.get("theme") or "").strip()
+                for d in _fact_details:
+                    _key = f"factuality_block:{_theme}:{d[:60]}"
+                    upsert_learning_insight(
+                        insight_key=_key,
+                        insight_type="avoid",
+                        description=f"[{_theme}] 사실성 게이트 차단 이력: {d[:120]}",
+                        directive=f"다음 주장·수치(또는 비슷한 변형)는 출처가 확인되지 않아 "
+                                  f"과거 발행이 차단됐다 — 다시 쓰지 말 것: {d[:200]}",
+                        weight=1.0, scope="theme",
+                    )
+            except Exception as _e:
+                print(f"  ⚠️ 사실성 차단 인사이트 영구화 실패(무시): {_e}")
+
         # 재생성 필요성 표시 (재시도 시 이미지 폴더 불필요 리셋 방지)
         # ★ 리뷰 확정 수정 (2026-07-03): 해당 step 의 *어떤* 이슈든(draft_failed 뿐 아니라
         #   prepublish 게이트 factuality/engagement 포함) 있으면 skip 금지 — 재작성 순환 보존.
@@ -982,12 +773,16 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
         state[f"_{draft_key}_skip_regen"] = not _remaining_step_issue
 
         # ★ 회복 불가 조건 → abort (harness 즉시 차단, 2차 시도 낭비 없음)
+        #   ★ 2026-07-24 P1: data_insufficient(이미지 사실성 — 수집 datasets 부족) 도 동일 —
+        #   재시도는 collect step 을 건너뛰어 datasets 불변이라 재작성으로 충족 불가.
         _has_data_empty = any(i.kind == "data_empty" for i in non_draft)
+        _has_data_insuff = any(i.kind == "data_insufficient" for i in non_draft)
         _has_login_issue = any(i.kind in ("login_invalid", "login_error") for i in non_draft)
-        if _has_data_empty and not _has_login_issue:
-            print("  ⚡ [fix] 회복 불가 확정 → abort: 종목 데이터 0개 — 다른 테마로 전환 필요")
-            return fixed_all, [Issue(step="전체", kind="abort",
-                                     detail="종목 데이터 0개 — 다른 테마로 전환 필요")]
+        if (_has_data_empty or _has_data_insuff) and not _has_login_issue:
+            _reason = ("종목 데이터 0개 — 다른 테마로 전환 필요" if _has_data_empty
+                       else "검증 데이터 부족(이미지 사실성) — 재작성으로 충족 불가")
+            print(f"  ⚡ [fix] 회복 불가 확정 → abort: {_reason}")
+            return fixed_all, [Issue(step="전체", kind="abort", detail=_reason)]
         return fixed_all, unfixed_all
 
     # ── Layer 4 발행 — ★ 플랫폼 단위 (사용자 박제 2026-07-03: 끝까지 직렬) ──────
@@ -1096,72 +891,92 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     _new_run(theme)
 
     # ★ 발행 기간 LLM 우선권 선언 — background alias 자동 강등
-    from shared.llm import mark_publishing as _mark_pub
-    _mark_pub(True)
-    import time as _tm_act
-    # ★ 액션별 LLM 데드라인 (economic_poster.py 와 동일 SSOT 패턴 — ERRORS [438][440][441]류
-    #   재발 방지): 반드시 _nv_action_def.deadline_sec 과 동일한 BLOG_ACTION_DEADLINE_SEC 사용.
-    #   더 큰/다른 값을 쓰면 "잔여 <10분 강등"이 harness 하드 데드라인보다 늦게 트리거되어
-    #   watchdog 이 재시도·백오프 도중 강제 종료한다.
-    os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
-    # ① 네이버 액션 (공유 수집 포함) — 완전 종결까지
-    _nv_result = run_action(_nv_action_def, {"theme": theme, "sector": sector})
-    _nv_st = _nv_result.state
-    _nv_res = _nv_st.get("nv_pub_result", {"success": False, "url": "", "keyword": theme})
-    # ★ 리뷰 확정 수정 (2026-07-03): data_empty 는 *수집이 실행되어 비었을 때만* —
-    #   precondition 실패·동시성 차단 등 수집 미실행을 테마 교체로 오분류 금지.
-    _sd = _nv_st.get("stocks_data")
-    _stocks_ok = bool((_sd or {}).get("stocks"))
-    _data_empty = bool(_nv_st.get("_collect_data_empty")) or (_sd is not None and not _stocks_ok)
-    _deferred = bool(getattr(_nv_result, "deferred", False))
-    if not _nv_result.delivered and not _deferred:
-        _reason = getattr(_nv_result, "escalation_reason", "최대 시도 초과 또는 abort")
-        _tg(f"❌ [THEME] 네이버 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
-    if _deferred:
-        _mark_pub(False)
-        print("  ⏸ [THEME] 네이버 액션 연기(인터프리터 종료) — 티스토리·보고 스킵, 재시작 후 재시도")
-        return {"theme": theme,
-                "tistory": {"success": False, "url": "", "keyword": theme},
-                "naver": _nv_res, "data_empty": False, "shutdown_deferred": True}
-
-    # ② 티스토리 액션 — 네이버 *종결 후* 시작. 종목 데이터 없으면 스킵
-    #    (진짜 data_empty → 상위 테마 교체 / 수집 미실행 → 교체 아닌 단순 실패)
-    _ts_res = {"success": False, "url": "", "keyword": theme}
-    _ts_deferred = False
-    if not _stocks_ok:
-        print(f"  ⏭️ [티스토리] 종목 데이터 {'0개' if _data_empty else '미수집(네이버 액션 조기 종결)'} — 발행 스킵")
-    else:
-        # ★ _ts_action_def.deadline_sec 과 동일한 SSOT 상수 (위 네이버 리셋과 동일 사유) —
-        #   네이버 액션 소요로 흘러간 시간만큼 티스토리 액션에도 신선한 예산을 부여.
+    #   ★ 2026-07-25 refcount 안전화: mark_publishing(True/False) 손 짝맞춤 → publishing() CM.
+    #     예외·조기 return·deferred 어느 경로로 나가도 finally 가 창을 닫는다.
+    #     (누수 1회 = GUARDIAN 자동수정·모든 background LLM 이 데몬 재시작까지 영구 보류)
+    with publishing("theme"):
+        import time as _tm_act
+        # ★ 액션별 LLM 데드라인 (economic_poster.py 와 동일 SSOT 패턴 — ERRORS [438][440][441]류
+        #   재발 방지): 반드시 _nv_action_def.deadline_sec 과 동일한 BLOG_ACTION_DEADLINE_SEC 사용.
+        #   더 큰/다른 값을 쓰면 "잔여 <10분 강등"이 harness 하드 데드라인보다 늦게 트리거되어
+        #   watchdog 이 재시도·백오프 도중 강제 종료한다.
         os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
-        _ts_result = run_action(_ts_action_def, {
+        # ① 네이버 액션 (공유 수집 포함) — 완전 종결까지
+        #   ★ gate_feedback: GUARDIAN 재시도가 물려준 직전 차단사유 — 첫 시도부터 보완 재작성
+        #     (경제 economic_poster.run(resume=) 과 동일 규약. ③ 모든 글 적용)
+        _gfb = gate_feedback or {}
+        _nv_result = run_action(_nv_action_def, {
             "theme": theme, "sector": sector,
-            "collected": _nv_st.get("collected"),          # ★ Step 7: 액션1 → 액션2 전달
-            "stocks_data": _nv_st.get("stocks_data"),      # back-compat (verify 등)
-            "collection_docs": _nv_st.get("collection_docs") or [],
-            "evidence_pack": _nv_st.get("evidence_pack"),
-            "supreme_block": _nv_st.get("supreme_block"),
+            "_nv_draft_gate_feedback": list(_gfb.get("naver") or []),
         })
-        _ts_st = _ts_result.state
-        _ts_res = _ts_st.get("ts_pub_result", {"success": False, "url": "", "keyword": theme})
-        if not _ts_result.delivered:
-            _reason = getattr(_ts_result, "escalation_reason", "최대 시도 초과 또는 abort")
-            if getattr(_ts_result, "deferred", False):
-                # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도.
-                _ts_deferred = True
-                print(f"  ⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
-                _tg(f"⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n테마: {theme}")
-            else:
-                _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
+        _nv_st = _nv_result.state
+        _nv_res = _nv_st.get("nv_pub_result", {"success": False, "url": "", "keyword": theme})
+        # ★ 리뷰 확정 수정 (2026-07-03): data_empty 는 *수집이 실행되어 비었을 때만* —
+        #   precondition 실패·동시성 차단 등 수집 미실행을 테마 교체로 오분류 금지.
+        _sd = _nv_st.get("stocks_data")
+        _stocks_ok = bool((_sd or {}).get("stocks"))
+        _data_empty = bool(_nv_st.get("_collect_data_empty")) or (_sd is not None and not _stocks_ok)
+        _deferred = bool(getattr(_nv_result, "deferred", False))
+        if not _nv_result.delivered and not _deferred:
+            _reason = getattr(_nv_result, "escalation_reason", "최대 시도 초과 또는 abort")
+            _tg(f"❌ [THEME] 네이버 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
+        if _deferred:
+            print("  ⏸ [THEME] 네이버 액션 연기(인터프리터 종료) — 티스토리·보고 스킵, 재시작 후 재시도")
+            return {"theme": theme,
+                    "tistory": {"success": False, "url": "", "keyword": theme},
+                    "naver": _nv_res, "data_empty": False, "shutdown_deferred": True}
 
-    _mark_pub(False)  # ★ 테마 발행 완료 — background alias 강등 해제
+        # ② 티스토리 액션 — 네이버 *종결 후* 시작. 종목 데이터 없으면 스킵
+        #    (진짜 data_empty → 상위 테마 교체 / 수집 미실행 → 교체 아닌 단순 실패)
+        _ts_res = {"success": False, "url": "", "keyword": theme}
+        _ts_deferred = False
+        if not _stocks_ok:
+            print(f"  ⏭️ [티스토리] 종목 데이터 {'0개' if _data_empty else '미수집(네이버 액션 조기 종결)'} — 발행 스킵")
+        else:
+            # ★ _ts_action_def.deadline_sec 과 동일한 SSOT 상수 (위 네이버 리셋과 동일 사유) —
+            #   네이버 액션 소요로 흘러간 시간만큼 티스토리 액션에도 신선한 예산을 부여.
+            os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
+            _ts_result = run_action(_ts_action_def, {
+                "theme": theme, "sector": sector,
+                "collected": _nv_st.get("collected"),          # ★ Step 7: 액션1 → 액션2 전달
+                "stocks_data": _nv_st.get("stocks_data"),      # back-compat (verify 등)
+                "collection_docs": _nv_st.get("collection_docs") or [],
+                "evidence_pack": _nv_st.get("evidence_pack"),
+                "supreme_block": _nv_st.get("supreme_block"),
+                "_ts_draft_gate_feedback": list(_gfb.get("tistory") or []),
+            })
+            _ts_st = _ts_result.state
+            _ts_res = _ts_st.get("ts_pub_result", {"success": False, "url": "", "keyword": theme})
+            if not _ts_result.delivered:
+                _reason = getattr(_ts_result, "escalation_reason", "최대 시도 초과 또는 abort")
+                if getattr(_ts_result, "deferred", False):
+                    # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도.
+                    _ts_deferred = True
+                    print(f"  ⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
+                    _tg(f"⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n테마: {theme}")
+                else:
+                    _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
+
+
+    # ★ 차단사유를 밖으로 (2026-07-25): GUARDIAN 재시도가 *무엇이 부족했는지* 를 물려받아
+    #   같은 테마로 보완 재작성할 수 있게 한다. 경제 EP_RESULT_FILE["harness_issues"] 와 동일 규약.
+    def _issues_of(res) -> list:
+        out = []
+        for _hist in (getattr(res, "issues_history", None) or []):
+            for _iss in _hist:
+                out.append(f"{getattr(_iss,'step','?')}: {getattr(_iss,'kind','?')}: "
+                           f"{getattr(_iss,'detail','?')[:120]}")
+        return out[-8:]
+
     return {"theme": theme, "tistory": _ts_res, "naver": _nv_res, "data_empty": _data_empty,
-            "tistory_deferred": _ts_deferred}
+            "tistory_deferred": _ts_deferred,
+            "issues": {"naver": _issues_of(_nv_result),
+                       "tistory": _issues_of(_ts_result) if _stocks_ok else []}}
 
 
 __all__ = [
     "run_all_themes",
-    "run_tistory_theme", "run_naver_theme",
+    "publishing",      # ★ 발행창 표시 CM — economic_poster 가 파생해 쓴다 (①단일 진입점)
 ]
 
 
@@ -1174,30 +989,43 @@ if __name__ == "__main__":
     except Exception as _ee:
         print(f"⚠️ preflight 호출 실패: {_ee}")
 
-    # ★ P0-② 테마 버전 우회 허용 (사용자 박제 2026-05-18) — CLI 직접 실행 디버그 모드.
-    # run_tistory_theme/run_naver_theme 의 _legacy_publish_guard 차단을
-    # 명시적으로 우회. 데몬 흐름에서는 환경변수 미설정 — 자동 차단.
-    import os as _osg
-    _osg.environ["JARVIS_ALLOW_LEGACY_PUBLISH"] = "1"
-
+    # ★ 우회 환경변수(JARVIS_ALLOW_LEGACY_PUBLISH) 폐기 (2026-07-23):
+    #   그 변수는 *하네스 검증 순환을 건너뛰는 발행* 을 CLI 가 스스로 허용하던 스위치였다.
+    #   레거시 직접발행 함수를 지운 지금 우회할 대상 자체가 없다. CLI 도 하네스로만 나간다.
+    #   플랫폼 단독(--naver-only/--tistory-only) 도 폐기 — run_all_themes 가 플랫폼별
+    #   독립 액션으로 실행하며 한쪽 실패가 다른 쪽을 막지 않는다.
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("theme", help="테마명 (예: '반도체')")
     p.add_argument("--sector", default="", help="섹터 (선택)")
-    p.add_argument("--naver-only", action="store_true")
-    p.add_argument("--tistory-only", action="store_true")
     args = p.parse_args()
+
+    # ★ 재시도 이어받기 — 부모가 env 로 넘긴 직전 차단사유 (실행모델 통일 2026-07-25).
+    #   프로세스 경계를 넘어야 하므로 메모리가 아니라 env(문자열 JSON)로 받는다.
+    _gate_fb = None
+    try:
+        _raw_fb = os.environ.get("JARVIS_GATE_FEEDBACK", "").strip()
+        if _raw_fb:
+            import json as _json_fb
+            _gate_fb = _json_fb.loads(_raw_fb)
+    except Exception as _fe:
+        print(f"⚠️ gate_feedback 파싱 실패(무시): {_fe}")
 
     # ★ 정지 방어 (사용자 박제 2026-07-06): 일회성 발행 작업 freeze/deadline 가드.
     from JARVIS00_INFRA.watchdog import guard_main
     with guard_main("테마 발행", deadline_sec=2 * BLOG_ACTION_DEADLINE_SEC + 600):   # 부모 backstop — 플랫폼당 데드라인×2 + 여유
-        if args.naver_only:
-            r = run_naver_theme(args.theme, args.sector)
-            sys.exit(0 if r.get("success") else 1)
-        if args.tistory_only:
-            r = run_tistory_theme(args.theme, args.sector)
-            sys.exit(0 if r.get("success") else 1)
-        # 기본 — 2개 통합
-        r = run_all_themes(args.theme, args.sector)
+        r = run_all_themes(args.theme, args.sector, gate_feedback=_gate_fb)
+
+        # ★ 결과를 부모에게 — 경제(EP_RESULT_FILE)와 *동일 규약* (실행모델 통일 2026-07-25).
+        #   함수 반환값은 프로세스 경계를 못 넘는다. 파일이 유일한 통로.
+        _res_file = os.environ.get("JARVIS_EP_RESULT_FILE", "")
+        if _res_file:
+            try:
+                import json as _json_r
+                with open(_res_file, "w", encoding="utf-8") as _rf:
+                    _json_r.dump(r, _rf, ensure_ascii=False, default=str)
+            except Exception as _re:
+                print(f"⚠️ 결과 파일 기록 실패: {_re}")
+
         ok = any(r.get(p, {}).get("success") for p in ("tistory", "naver"))
         sys.exit(0 if ok else 1)

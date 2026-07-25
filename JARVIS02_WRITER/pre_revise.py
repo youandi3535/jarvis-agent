@@ -149,7 +149,9 @@ def _analyze(platform: str, title: str, content_text: str,
         import os as _os
         post_type = _os.environ.get("JARVIS_POST_TYPE", "").strip()
     try:
-        return _analyze_with_claude(platform, title, content_text, post_type=post_type) or []
+        # analyze_post_quality 는 (제안, 루브릭점수) 튜플 반환 — 여기선 제안만 사용
+        _sugs, _ = _analyze_with_claude(platform, title, content_text, post_type=post_type) or ([], None)
+        return _sugs or []
     except Exception as e:
         print(f"  ⚠️ pre_revise 분석 실패 (원본 유지): {e}")
         _g_report("writer", e, module=__name__)

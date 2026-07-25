@@ -133,8 +133,8 @@ def get_official_themes():
     try:
         import sys as _sys
         _sys.path.insert(0, str(BASE_DIR))
-        from JARVIS09_COLLECTOR.collect_theme import _fetch_naver_theme_catalog
-        catalog: dict = _fetch_naver_theme_catalog()   # {테마명: 테마번호}
+        from JARVIS09_COLLECTOR import naver_theme_catalog   # ★ 09 공개 정문 (private 직수입 폐기 2026-07-23)
+        catalog: dict = naver_theme_catalog()   # {테마명: 테마번호}
     except Exception:
         catalog = {}
 
@@ -707,8 +707,9 @@ def get_feedback(limit: int = 20):
 @app.get("/api/jobs")
 def get_jobs():
     try:
-        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
-        return DEFAULT_JOBS
+        # 선언(DEFAULT_JOBS)이 아니라 *실제 등록되는* 명세. 유예는 선행 관계에서 파생된다.
+        from JARVIS04_SCHEDULER.job_registry import job_specs
+        return job_specs()
     except Exception:
         return []
 
@@ -954,6 +955,18 @@ def get_errors(
         return rows
     except Exception:
         return []
+
+
+@app.get("/api/guardian/history")
+def get_guardian_history(days: int = 30, limit: int = 40, actor: str = ""):
+    """수리 이력 — 조립은 JARVIS07 `repair_history` 단독. 여기는 위임만."""
+    try:
+        from JARVIS07_GUARDIAN.repair_history import history, SLOT_LABELS
+        # slots 를 함께 내려 화면이 라벨을 하드코딩하지 않게 한다 (② 동적 설계).
+        return {"items": history(days=days, limit=limit, actor=actor),
+                "slots": SLOT_LABELS}
+    except Exception as e:
+        return {"error": str(e)[:300], "items": [], "slots": {}}
 
 
 @app.get("/api/guardian/trend")

@@ -873,10 +873,11 @@ def delegate_to_claude_code(prompt: str,
     #   경합 사고로 이어진다 — run_sdk_query() 는 이미 이 네 가지를 전부 갖춘 canonical
     #   wrapper이므로 직접 호출 대신 이것에 위임한다(ADR 001 단일 진입점).
     from shared.claude_sdk_compat import run_sdk_query
+    from shared.llm import model_id as _model_id
 
     result = run_sdk_query(
         prompt,
-        model="claude-sonnet-5",   # ★ 수정 가능 위임 도구 — Sonnet 5 단일 통일 (사용자 박제 2026-07-06, ADR 017)
+        model=_model_id("guardian"),   # ★ 모델 ID 는 shared/llm.MODELS 파생 (단일 계층 — ADR 017)
         cwd=str(_JARVIS_ROOT_ABS),
         max_turns=max_turns,
         timeout=timeout,
@@ -991,7 +992,8 @@ def ask_claude(prompt: str, system: str = "",
         text = invoke_text("writer", prompt,
                            max_tokens=int(max_tokens),
                            **({"system": system} if system else {}))
-        return {"ok": True, "text": text or "", "model": "claude-sonnet-5"}
+        from shared.llm import model_id as _model_id
+        return {"ok": True, "text": text or "", "model": _model_id("writer")}
     except Exception as e:
         # fallback — invoke_text 직접 호출
         try:
@@ -999,7 +1001,8 @@ def ask_claude(prompt: str, system: str = "",
             _full = f"{system}\n\n{prompt}".strip() if system else prompt
             from shared.llm import writer_timeout as _wt
             text2 = _inv_cli("writer", _full, timeout=_wt())
-            return {"ok": True, "text": text2 or "", "model": "claude-sonnet-5"}
+            from shared.llm import model_id as _model_id
+            return {"ok": True, "text": text2 or "", "model": _model_id("writer")}
         except Exception as e2:
             return {"ok": False, "error": f"{e}; fallback: {e2}"}
 

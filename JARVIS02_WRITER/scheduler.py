@@ -29,7 +29,7 @@ Market Signal 자동 스케줄러 v4
   python scheduler.py --run 반도체  # 특정 테마 실행
   python scheduler.py --reset       # 진행 상황 초기화
 """
-import os, sys, time, json, subprocess, requests, threading
+import os, sys, time, json, subprocess, threading
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -46,16 +46,27 @@ PYTHON        = sys.executable
 
 sys.path.insert(0, str(BASE_DIR.parent))  # shared/ 접근
 
+
+def _parent_subproc_timeout() -> int:
+    """경제 발행 subprocess 부모 백스톱 — 자식 guard_main(2*BLOG+600) 보다 *크게* 파생.
+
+    ★ 2026-07-24 P4: 종전 하드코딩 3600(60분) 은 자식 guard_main 백스톱(5400) 보다 작아
+      ① 자식의 협조종료(guard_main→os._exit·chrome 정리·GUARDIAN 보고) 전에 부모가 먼저 SIGKILL
+      ② 2 플랫폼×BLOG(4800) > 3600 이라 2번째 플랫폼을 발행 도중 강제종료 — 계층 역전 버그였다.
+      부모>자식 으로 복원하되 파생(하드코딩 금지, ② 동적설계) — BLOG 를 낮추면(P5) 자동 동반 하락.
+      ★ 이 값은 정상 완료 시간을 늘리지 않는다 — 자식 자체 가드(freeze 300s·플랫폼 BLOG·guard_main
+      2*BLOG+600)가 먼저 발화하는 '절대 안 터지는 최후 안전판'일 뿐. 정상 30분 수렴은 P1·P2 담당.
+    """
+    from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC as _b
+    return 2 * _b + 900   # 자식 guard_main(2*BLOG+600) + 300 여유
+
 SCHEDULE_HOURS      = [21]   # ★ 테마 발행 시간 (표시용 — 실제 트리거는 DEFAULT_JOBS j01_theme_post_21). 16→21 (2026-07-05)
-RADAR_CHECK_HOURS   = [9, 15]   # RADAR 파이프라인 확인: 오전 09:00 · 오후 15:00
 MAX_RETRY           = 3
 TG_TOKEN        = os.getenv("TELEGRAM_TOKEN", "")
 TG_CHAT_ID      = os.getenv("TELEGRAM_CHAT_ID", "")
 
 _paused         = False
 _shutdown       = False
-_radar_auto     = False   # True: RADAR 추천 테마 자동 실행
-_last_update_id = 0
 _posting_lock   = threading.Lock()
 
 
@@ -220,22 +231,8 @@ def send_telegram(msg: str):
     send_tg(msg)
 
 
-def get_telegram_updates():
-    global _last_update_id
-    try:
-        res = requests.get(
-            f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
-            params={"offset": _last_update_id + 1, "timeout": 5},
-            timeout=10,
-        )
-        if res.status_code != 200:
-            return []
-        updates = res.json().get("result", [])
-        if updates:
-            _last_update_id = updates[-1]["update_id"]
-        return updates
-    except Exception:
-        return []
+# ★ 텔레그램 폴링(get_telegram_updates)은 폐지 — 호출자 0인 죽은 코드였고, 02 안의 마지막
+#   `requests` 사용처였다. 봇 폴링은 데몬 단일 루프(jarvis_daemon)가 단독 수행한다.
 
 
 # ══════════════════════════════════════════
@@ -264,58 +261,8 @@ def get_result_path(theme: str) -> Path:
     return LOGS_DIR / f"result_{safe}.json"
 
 
-def fetch_kor_counts(theme: str) -> dict:
-    """각 플랫폼 실제 발행 URL 크롤링 → 한글 글자수 반환. {naver: N, tistory: N}"""
-    import re as _re, requests as _req
-
-    _headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-
-    def _kor(text: str) -> int:
-        return sum(1 for ch in text if "가" <= ch <= "힣")
-
-    # DB에서 URL 조회
-    from shared.db import get_db as _get_db
-    con = _get_db()
-    rows = con.execute(
-        "SELECT platform, url FROM post_analysis "
-        "WHERE theme=? ORDER BY created_at DESC LIMIT 6",
-        (theme,)
-    ).fetchall()
-    con.close()
-
-    url_map = {}
-    for platform, url in rows:
-        if platform not in url_map:
-            url_map[platform] = url or ""
-
-    counts = {}
-
-    # 네이버 — 모바일 크롤링
-    try:
-        nv_url = url_map.get("naver", "").replace("blog.naver.com", "m.blog.naver.com").split("?")[0]
-        if nv_url:
-            r = _req.get(nv_url, headers=_headers, timeout=15)
-            raw = _re.sub(r"<script.*?</script>", "", r.text, flags=_re.DOTALL)
-            raw = _re.sub(r"<style.*?</style>", "", raw, flags=_re.DOTALL)
-            raw = _re.sub(r"<[^>]+>", " ", raw)
-            raw = _re.sub(r"\s+", " ", raw).strip()
-            s = raw.find("이웃추가"); e = raw.find("댓글", s + 5 if s > 0 else 0)
-            counts["naver"] = _kor(raw[s + 5:e] if s > 0 and e > 0 else raw)
-    except Exception:
-        pass
-
-    # 티스토리 — tt_article_useless_p_margin
-    try:
-        ts_url = url_map.get("tistory", "")
-        if ts_url:
-            r = _req.get(ts_url, headers=_headers, timeout=15)
-            m = _re.search(r'class="tt_article_useless_p_margin[^"]*"[^>]*>(.*?)</div>', r.text, _re.DOTALL)
-            if m:
-                counts["tistory"] = _kor(_re.sub(r"<[^>]+>", "", m.group(1)))
-    except Exception:
-        pass
-
-    return counts
+# ★ 발행 글 글자수 크롤링은 09 (사용자 박제 2026-07-23) — 밖에 나가 HTML 을 받아오면
+#   그건 수집이다. `JARVIS09_COLLECTOR.published_post_kor_counts(theme)` 단독.
 
 
 def load_platform_result(theme: str) -> dict:
@@ -379,11 +326,85 @@ def get_status_text() -> str:
 #  테마 전체 실행
 # ══════════════════════════════════════════
 
-def run_theme(theme: str) -> dict:
-    """★ 통일 파이프라인 — trend_theme_writer.run_all_themes 직접 호출 (subprocess 폐기).
+def _spawn_publisher(label: str, cmd: list, log_stem: str,
+                     *, extra_env: dict | None = None) -> tuple:
+    """★ 발행 스크립트 subprocess 실행 — **경제·테마 공통 단일 경로** (사용자 박제 2026-07-25).
 
-    경제 트렌드(trend_economic_writer)와 동일한 1-pass 블록 파이프라인.
-    Phase 1 (2 플랫폼 draft 생성) + Phase 2 (Naver·Tistory Selenium 순차).
+    **왜 subprocess 로 통일했나 (실행모델 통일)**
+      종전엔 경제=subprocess, 테마=데몬 내부 직접호출로 *두 실행모델* 이었다. 그 결과
+        · watchdog `os._exit(WATCHDOG_KILL_RC)` 강제종료가 테마에선 무력 (파이썬은 스레드를
+          안전하게 죽일 수 없다) → 테마가 멈추면 데몬째 재시작 외에 방법이 없었다
+        · 자가수정한 코드가 테마에선 *데몬 재시작 전까지 무효* (import 캐시)
+        · 크로스커팅 관심사(LLM 우선권·락·관측성)를 두 번 구현해야 했고, 실제로 한쪽만
+          새는 사고가 반복됐다 (배경 LLM 차단이 경제 발행 중에만 무력화된 건 등)
+      발행은 오래 걸리고(플랫폼당 ~40분) 불안정한 외부 자원(Chrome/Selenium)을 쓰는 작업이라
+      업계 표준(워커 프로세스 격리)대로 **격리 쪽으로 통일** 한다.
+
+    Returns: (returncode, result_dict|None, logpath)
+      result_dict 는 자식이 `JARVIS_EP_RESULT_FILE` 에 남긴 JSON (없으면 None).
+    """
+    import tempfile
+    import sys as _sys
+    from datetime import datetime as _dt
+
+    _res_fd, _res_path = tempfile.mkstemp(suffix=".json", prefix="ep_result_")
+    os.close(_res_fd)
+    _env = dict(os.environ)
+    _env["JARVIS_EP_RESULT_FILE"] = _res_path
+    # ★ 로그 유실 방지 (ERRORS [289]): 파일 리다이렉트 시 블록 버퍼링 → SIGKILL 시 마지막
+    #   수 분(발행 단계) 로그 통째 유실. 무버퍼 강제.
+    _env["PYTHONUNBUFFERED"] = "1"
+    if extra_env:
+        _env.update({k: str(v) for k, v in extra_env.items()})
+
+    _ts = _dt.now().strftime('%Y%m%d_%H%M%S')
+    _logpath = BASE_DIR / 'logs' / f'{log_stem}_{_ts}.log'
+    _logpath.parent.mkdir(parents=True, exist_ok=True)
+    _is_tty = _sys.stdout.isatty() or bool(os.environ.get("JARVIS_VERBOSE"))
+
+    rc = -1
+    try:
+        with open(_logpath, 'w', encoding='utf-8') as _lf:
+            if _is_tty:
+                # 터미널 직접 실행 — 로그파일 + 터미널 동시 출력
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, env=_env)
+                try:
+                    for _line in proc.stdout:
+                        _decoded = _line.decode("utf-8", errors="replace")
+                        _sys.stdout.write(_decoded)
+                        _sys.stdout.flush()
+                        _lf.write(_decoded)
+                    proc.wait(timeout=_parent_subproc_timeout())
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                rc = proc.returncode
+            else:
+                rc = subprocess.run(cmd, timeout=_parent_subproc_timeout(), stdout=_lf,
+                                    stderr=subprocess.STDOUT, env=_env).returncode
+    except subprocess.TimeoutExpired:
+        log(f"⏱ {label} 부모 타임아웃 — 자식 종료 (로그: {_logpath.name})")
+        rc = -9
+
+    result = None
+    try:
+        result = json.loads(Path(_res_path).read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    finally:
+        try:
+            Path(_res_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+    return rc, result, _logpath
+
+
+def run_theme(theme: str, gate_feedback: dict | None = None) -> dict:
+    """테마 발행 — ★ subprocess 실행 (경제와 동일 실행모델, 사용자 박제 2026-07-25).
+
+    종전엔 데몬 안에서 `run_all_themes` 를 직접 호출했다(=경제와 다른 모델). 통일 사유는
+    `_spawn_publisher` docstring 참조 — watchdog 강제종료·최신코드 반영·장애 격리.
     """
     log(f"▶ 테마 시작: {theme}")
     log("=" * 50)
@@ -401,11 +422,21 @@ def run_theme(theme: str) -> dict:
 
     send_telegram(f"🚀 [{theme}] 작성 시작\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # ── 1차: 통일 파이프라인 (run_all_themes) ────────────────
-    log(f"  ▶ 1차 통합 실행 (trend_theme_writer.run_all_themes)")
+    # ── 발행 실행 (subprocess — 경제와 동일 경로) ────────────────
+    log(f"  ▶ 테마 발행 subprocess 실행 (trend_theme_writer)")
     try:
-        from JARVIS02_WRITER.trend_theme_writer import run_all_themes
-        result = run_all_themes(theme)
+        _cmd = [PYTHON, str(BASE_DIR / 'trend_theme_writer.py'), theme]
+        _extra = {}
+        if gate_feedback:
+            # 재시도 이어받기 — 직전 차단사유를 자식에게 전달 (프로세스 경계를 넘는 매체 = env)
+            _extra["JARVIS_GATE_FEEDBACK"] = json.dumps(gate_feedback, ensure_ascii=False)
+        _rc, result, _logpath = _spawn_publisher(f"테마 발행 [{theme}]", _cmd,
+                                                 "theme", extra_env=_extra)
+        if result is None:
+            # 결과 파일이 없다 = 자식이 결과를 못 남기고 죽음 (freeze kill·크래시)
+            log(f"  ❌ 테마 결과 파일 없음 (returncode={_rc}, 로그: {_logpath.name})")
+            result = {"naver": {"success": False}, "tistory": {"success": False},
+                      "data_empty": False}
         results = {
             "naver":   result.get("naver",   {}).get("success", False),
             "tistory": result.get("tistory", {}).get("success", False),
@@ -417,6 +448,8 @@ def run_theme(theme: str) -> dict:
         #   세션(최대 10분)을 낭비한다 — 아래 GUARDIAN 트리거 조건에서 제외 대상으로 사용.
         _result_deferred = {"naver": result.get("naver_deferred", False),
                              "tistory": result.get("tistory_deferred", False)}
+        # ★ 차단사유 — GUARDIAN 재시도가 같은 테마로 보완할 때 물려줄 근거 (2026-07-25)
+        _result_issues = result.get("issues") or {}
         # ★ 인터프리터 종료 레이스 (ERRORS [362]) — 발행이 시작조차 못 함(연기).
         #   "글자수 실패" 텔레그램·GUARDIAN·실패 오기록 전부 스킵하고 즉시 반환 → 재시작 후 재시도.
         if result.get("shutdown_deferred"):
@@ -428,12 +461,13 @@ def run_theme(theme: str) -> dict:
         results = {"naver": False, "tistory": False}
         _result_data_empty = False
         _result_deferred = {"naver": False, "tistory": False}
+        _result_issues = {}
 
     log(f"  📋 1차 결과: 네이버={'✅' if results.get('naver') else '❌'} | "
         f"티스토리={'✅' if results.get('tistory') else '❌'}")
 
-    # ── 2차 재시도 제거 (ERRORS [160] — harness 가 max_attempts 내부 재시도를 이미 소진;
-    #   legacy run_naver/tistory_theme() 는 _legacy_publish_guard() 차단 대상) ──
+    # ── 2차 재시도 제거 (ERRORS [160] — harness 가 max_attempts 내부 재시도를 이미 소진.
+    #   그때 재시도가 호출하던 legacy run_naver/tistory_theme() 는 2026-07-23 **삭제됨**) ──
 
     # ── 최종 결과 ────────────────────────────────────────────
     ok   = [k for k, v in results.items() if v]
@@ -441,7 +475,8 @@ def run_theme(theme: str) -> dict:
     log("=" * 50)
 
     all_ok = all(results.values())
-    kor_map = fetch_kor_counts(theme)
+    from JARVIS09_COLLECTOR import published_post_kor_counts
+    kor_map = published_post_kor_counts(theme)
     def _fmt(key):
         n = kor_map.get(key, 0)
         return f"{n:,}자" if (results.get(key) and n > 0) else ("-" if results.get(key) else "실패")
@@ -476,9 +511,14 @@ def run_theme(theme: str) -> dict:
 
             # ★ 재발행 retry_fn — 코드 수정 후 즉시 재발행 (harness 통과 보장)
             # theme runner 는 run_radar_top_theme() 를 reload 후 재호출 (harness 내장 함수)
+            # ★ 재시도 이어받기 (2026-07-25 — 경제와 동일 규약, ③ 모든 글 적용):
+            #   막힌 *같은 테마* + 직전 차단사유를 물려준다. 종전엔 카탈로그에서 임의 재선정.
+            _resume_fb = {p: list((_result_issues or {}).get(p) or []) for p in _guardian_fail}
+
             def _make_theme_retry():
                 """수정된 코드로 즉시 재발행. importlib.reload → harness 5-Layer 통과."""
                 _fail_platforms = list(_guardian_fail)
+                _rt, _rf = theme, dict(_resume_fb)
                 def _retry():
                     import importlib, sys as _sys
                     # ★ 의존성 순서 정렬 (ERRORS [222][224] 박제)
@@ -500,7 +540,7 @@ def run_theme(theme: str) -> dict:
                                 except Exception:
                                     pass
                     # run_radar_top_theme 은 harness run_action() 래핑 → 검증 순환 보장
-                    result = run_radar_top_theme()
+                    result = run_radar_top_theme(resume_theme=_rt, resume_feedback=_rf)
                     return bool(result)
                 return _retry
 
@@ -607,37 +647,19 @@ def select_top_theme() -> str | None:
     return select_theme(exclude=_theme_exclude())
 
 
-def run_precollect_theme():
-    """★ 테마 선계산 잡 (20:00 = 21:00 발행 1시간 전 — 발행창 밖 저부하 창, 사용자 박제 2026-07-18).
-
-    테마를 고정(pin)하고 무거운 fact·chart 추출을 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer
-    회복된 Max 풀에서 실행(스톨 조건 제거). 선계산(~20:20)과 발행(21:00) 사이 ~40분 회복 갭(경제와
-    대칭). 순수 최적화 — 실패해도 21:00 발행이 기존 random 선정 + 기존 수집으로 폴백.
-    """
-    from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
-    if _isd():
-        log("⏸ [테마 선계산] 인터프리터 종료 중(데몬 재시작) — 연기")
-        return
-    try:
-        from JARVIS00_INFRA.watchdog import guard_main
-        from JARVIS02_WRITER.trend_theme_writer import precollect_theme
-        # ★ 동적 데드라인 (동적 설계): 고정 상한이 아니라 21:00 발행 2분 전(20:58)까지만 수행하도록
-        #   현재 시각에서 파생 → 미스파이어로 늦게 떠도 발행창을 침범하지 않는다. 목표 지났거나
-        #   여유<2분이면 기본 25분. 20:00 시작이라 실제로는 ~20:20 완료 → 21:00까지 ~40분 회복 갭.
-        from datetime import datetime as _dt
-        _now = _dt.now()
-        _target = _now.replace(hour=20, minute=58, second=0, microsecond=0)
-        _remaining = (_target - _now).total_seconds()
-        _dl = int(_remaining) if _remaining >= 120 else 1500
-        with guard_main("테마 선계산", deadline_sec=_dl):
-            res = precollect_theme()
-        log(f"⚡ [테마 선계산] 완료 — 고정·캐시 {res.get('cached', 0)}개 (21:00 발행 재사용 대기)")
-    except Exception as _e:
-        log(f"⚠️ [테마 선계산] 실패 ({_e}) — 21:00 발행이 기존 수집으로 폴백")
+# ★ 선계산(precollect) 잡은 02 에 없다 (사용자 박제 2026-07-23) —
+#   `JARVIS09_COLLECTOR.precollect.job_precollect_{theme,economic}` 이 잡 진입점.
+#   02 는 `select_top_theme()` 로 *어떤 테마가 미발행인지* 만 알려준다 (발행 상태 = 02 소유).
 
 
-def run_radar_top_theme():
+def run_radar_top_theme(resume_theme: str = "", resume_feedback: dict | None = None):
     """★ 네이버 금융 공식 테마 카탈로그 → 미발행 테마 임의 선정 → 발행.
+
+    resume_theme/resume_feedback: ★ GUARDIAN 재시도용 — *막힌 테마를 이어받아 보완*
+      (사용자 박제 2026-07-25, 경제 `economic_poster.run(resume=)` 과 동일 규약).
+      종전엔 재시도가 카탈로그에서 *임의 재선정* 했다 — 차단된 테마는 published/done 에
+      안 들어가 후보에 남지만 200여 개 중 random 이라 같은 테마를 다시 잡을 확률이 사실상 0.
+      수집·대본을 통째로 버리고, 무엇이 부족했는지도 함께 버려졌다.
 
     테마주 주제 선정 원칙: 오늘 트렌드 키워드(RADAR)가 아니라 네이버 금융 공식 테마
     목록을 전부 로드한 뒤, 지금껏 발행하지 않은 테마를 임의로 하나 골라 발행한다.
@@ -690,13 +712,21 @@ def run_radar_top_theme():
     # ★ 선계산 고정 테마 우선 (사용자 박제 2026-07-18): 20:00 선계산 잡이 고정·선수집한 테마가
     #   있으면 첫 시도에 그 테마를 써서 캐시 히트(발행창 추출 LLM 0회). 없으면 기존 random 선정.
     _pinned = None
-    try:
-        from JARVIS02_WRITER.precollect_cache import load_pinned_theme
-        _pinned = load_pinned_theme()
-        if _pinned and _pinned in available:
-            log(f"⚡ [선계산] 고정 테마 우선 사용: {_pinned}")
-    except Exception:
-        pass
+    # ★ 재시도 이어받기가 최우선 — 선계산 고정보다 앞선다 (막힌 테마를 보완해야 하므로).
+    #   고정 장치는 기존 `pick_theme(pinned=)` 하나뿐 — 새 선정 경로를 만들지 않는다(①).
+    if resume_theme:
+        _pinned = resume_theme
+        if _pinned not in available:
+            available = [_pinned] + available   # 차단분은 미발행이라 보통 남아있지만 안전망
+        log(f"🔁 [재시도] 직전 차단 테마 이어받음: {_pinned}")
+    else:
+        try:
+            from JARVIS09_COLLECTOR import load_pinned_theme
+            _pinned = load_pinned_theme()
+            if _pinned and _pinned in available:
+                log(f"⚡ [선계산] 고정 테마 우선 사용: {_pinned}")
+        except Exception:
+            pass
 
     tried: list[str] = []
     result_any_ok   = False
@@ -727,7 +757,12 @@ def run_radar_top_theme():
         try:
             os.environ["JARVIS_SOURCE_KEYWORD"] = theme
             os.environ["JARVIS_POST_TYPE"]      = "theme"
-            results = run_theme(theme)
+            # 재시도로 이어받은 테마의 첫 시도에만 직전 차단사유 주입 (보완 재작성)
+            results = run_theme(
+                theme,
+                gate_feedback=(resume_feedback if (resume_theme and theme == resume_theme
+                                                   and attempt == 0) else None),
+            )
 
             if _isd() and not any(results.values()):
                 log(f"⏸ [{theme}] 발행 연기(데몬 재시작) — 재시작 후 재시도")
@@ -836,37 +871,6 @@ def _run_self_repair_phase(label: str) -> dict:
             pass
         return {"ok": True, "elapsed_sec": elapsed, "code_changed": 0,
                 "skip_reason": f"{type(_e).__name__}: {str(_e)[:80]}"}
-
-
-def run_precollect_economic():
-    """★ 경제 선계산 (06:00 트렌드 잡 말미 체이닝 — 사용자 박제 2026-07-18).
-
-    고정 시각 잡이 아니라 job_collect_trends_morning 이 트렌드 분석(topic_pack 빌드)을 끝낸 *직후*
-    이어서 호출한다(트렌드 소요시간 가변 — 재빌드 낭비·헛대기 0). 무거운 fact·chart 추출을 07:00
-    발행 전에 미리 수행·캐시 → 발행창 추출 LLM 0회 → 직후 writer 가 버스트로 열화되지 않은 Max
-    풀에서 실행(300s 스톨 조건 제거). 전문 추출 그대로·시점만 앞당김(박제 무위반). 순수 최적화 —
-    실패해도 07:00 발행이 기존 수집 폴백.
-    """
-    from JARVIS00_INFRA.harness import interpreter_shutting_down as _isd
-    if _isd():
-        log("⏸ [경제 선계산] 인터프리터 종료 중(데몬 재시작) — 연기")
-        return
-    try:
-        from JARVIS00_INFRA.watchdog import guard_main
-        from JARVIS02_WRITER.trend_economic_writer import precollect_economic
-        # ★ 동적 데드라인 — 트렌드 완료 후 이어서 실행되므로 시작 시각이 가변. 07:00 발행 2분 전
-        #   (06:58)까지만 수행해 발행창을 침범하지 않는다. 목표 지났거나(수동 실행 등) 여유<2분이면
-        #   기본 17분. 06:00 시작이라 실제로는 ~06:20 완료 → 07:00 발행까지 ~40분 회복 갭(넉넉).
-        from datetime import datetime as _dt
-        _now = _dt.now()
-        _target = _now.replace(hour=6, minute=58, second=0, microsecond=0)
-        _remaining = (_target - _now).total_seconds()
-        _dl = int(_remaining) if _remaining >= 120 else 1020
-        with guard_main("경제 선계산", deadline_sec=_dl):
-            res = precollect_economic()
-        log(f"⚡ [경제 선계산] 완료 — 캐시 {res.get('cached', 0)}개 (07:00 발행 재사용 대기)")
-    except Exception as _e:
-        log(f"⚠️ [경제 선계산] 실패 ({_e}) — 07:00 발행이 기존 수집으로 폴백")
 
 
 def run_self_repair_then_economic():
@@ -1010,7 +1014,8 @@ def run_self_repair_then_theme():
 
 
 def _trigger_economic_incident(
-    failed: list, error_text: str, harness_issues: list | None = None
+    failed: list, error_text: str, harness_issues: list | None = None,
+    returncode: int | None = None, keywords: dict | None = None,
 ) -> None:
     """경제 브리핑 실패 플랫폼 → GUARDIAN incident_responder 백그라운드 트리거.
 
@@ -1023,6 +1028,8 @@ def _trigger_economic_incident(
        retry 시 구버전 코드가 실행됨. → 항상 importlib.reload 후 fresh import 사용.
 
     harness_issues: 하네스 abort 시 구조화된 이슈 목록 (경제글 EP_RESULT_FILE 에서 읽음).
+    returncode: 발행 subprocess 종료코드. WATCHDOG_KILL_RC(freeze 강제종료)면
+      incident_responder 가 transient 로 확정 → Tier-2 SDK 낭비 없이 in-process 재시도.
     """
     try:
         from JARVIS07_GUARDIAN.incident_responder import respond_in_background
@@ -1032,9 +1039,23 @@ def _trigger_economic_incident(
             _structured = "\n".join(f"  • {s}" for s in harness_issues[:10])
             error_text = f"[하네스 검증 실패 상세]\n{_structured}\n\n[로그 끝 3000자]\n{error_text}"
 
-        def _make_retry(*, post_naver=False, post_tistory=False):
+        # ★ 재시도 = *같은 주제 이어받아 보완* (사용자 박제 2026-07-25).
+        #   종전엔 주제 없이 재진입해 새 주제를 뽑았다 — 방금 발행된 키워드가 중복회피
+        #   원장(post_analysis)에 '사용됨'으로 잡혀 밀려나기 때문(네이버 반도체 발행 →
+        #   티스토리 재시도가 액화천연가스로 갈아탐). 수집 15분을 버리고, 정작 *무엇이
+        #   부족했는지* 도 함께 버려졌다. 이제 주제 + 직전 차단사유를 물려준다.
+        _kws = keywords or {}
+
+        def _resume_for(platform: str) -> dict:
+            kw = (_kws.get(platform) or "").strip()
+            fb = [s for s in (harness_issues or []) if s.startswith(f"[{platform}]")]
+            if not (kw or fb):
+                return {}
+            return {platform: {"keyword": kw, "feedback": fb}}
+
+        def _make_retry(*, post_naver=False, post_tistory=False, resume=None):
             """★ 항상 fresh import — Claude Code SDK 가 코드 수정해도 즉시 반영."""
-            _pn, _pt = post_naver, post_tistory
+            _pn, _pt, _rs = post_naver, post_tistory, resume or {}
             def _retry():
                 import importlib, sys as _sys
                 # 수정된 코드 반영: economic_poster 관련 모듈 강제 재로드
@@ -1046,15 +1067,15 @@ def _trigger_economic_incident(
                             pass
                 # 재로드 후 fresh import — ★ 반환값 실제 성공 여부 반영 (ERRORS [427])
                 from JARVIS02_WRITER.economic_poster import run as _fresh_run
-                return bool(_fresh_run(post_naver=_pn, post_tistory=_pt))
+                return bool(_fresh_run(post_naver=_pn, post_tistory=_pt, resume=_rs))
             return _retry
 
         _retry_fns = {}
         if "naver" in failed:
-            _retry_fns["naver"] = _make_retry(post_naver=True)
+            _retry_fns["naver"] = _make_retry(post_naver=True, resume=_resume_for("naver"))
         if "tistory" in failed:
-            _retry_fns["tistory"] = _make_retry(post_tistory=True)
-        respond_in_background("economic", failed, error_text, _retry_fns)
+            _retry_fns["tistory"] = _make_retry(post_tistory=True, resume=_resume_for("tistory"))
+        respond_in_background("economic", failed, error_text, _retry_fns, returncode=returncode)
         log(f"🛡️ GUARDIAN incident_responder 트리거됨 (harness 경로): {failed}")
     except Exception as _ie:
         log(f"⚠️ GUARDIAN 트리거 실패: {_ie}")
@@ -1105,56 +1126,24 @@ def run_economic_poster(*extra_flags):
         return
     log(f"⏰ {label} 실행 시작")
 
-    import tempfile
-    _res_fd, _res_path = tempfile.mkstemp(suffix=".json", prefix="ep_result_")
-    os.close(_res_fd)
-    _env = dict(os.environ)
-    _env["JARVIS_EP_RESULT_FILE"] = _res_path
-    # ★ 로그 유실 방지 (ERRORS [289] — 2026-07-03): 파일 리다이렉트 시 블록 버퍼링 →
-    #   타임아웃 SIGKILL 시 마지막 수 분의 로그(발행 단계) 통째 유실. 무버퍼 강제.
-    _env["PYTHONUNBUFFERED"] = "1"
-
+    _full: dict | None = None      # 예외 경로에서도 참조되므로 선초기화
     try:
-        from datetime import datetime as _dt
-        _ts = _dt.now().strftime('%Y%m%d_%H%M%S')
-        _logpath = BASE_DIR / 'logs' / f'economic_{_ts}.log'
+        # ★ 실행모델 통일 (2026-07-25): 경제·테마가 **같은 헬퍼** 로 subprocess 를 띄운다.
+        #   종전엔 이 자리에 tempfile·env·tty분기·timeout 처리가 통째로 복사돼 있었고
+        #   테마는 아예 직접호출이라 두 모델이 공존했다.
         cmd = [PYTHON, str(BASE_DIR / 'economic_poster.py'), '--scheduled'] + list(extra_flags)
-        # ★ 부모 벽시계 backstop = 60분 (사용자 박제 2026-07-06: 5400→3600). 자식(harness)이
-        #   블로그(네이버·티스토리) 액션당 30분 데드라인 + 300초 freeze 워치독으로 스스로 중단
-        #   → 부모 timeout 은 그마저 안 될 때의 OS 최종 안전망(2블로그×30). 자식이 killable
-        #   subprocess(--scheduled)라 freeze 시 os._exit → 부모는 대개 이 값에 안 닿음.
-        import sys as _sys
-        _is_tty = _sys.stdout.isatty() or bool(os.environ.get("JARVIS_VERBOSE"))
-        with open(_logpath, 'w', encoding='utf-8') as _lf:
-            if _is_tty:
-                # 터미널 직접 실행 시 — 로그파일 + 터미널 동시 출력
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, env=_env)
-                try:
-                    for _line in proc.stdout:
-                        _decoded = _line.decode("utf-8", errors="replace")
-                        _sys.stdout.write(_decoded)
-                        _sys.stdout.flush()
-                        _lf.write(_decoded)
-                    proc.wait(timeout=3600)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
+        _rc, _full, _logpath = _spawn_publisher(label, cmd, "economic")
 
-                class _R:
-                    returncode = proc.returncode
-                result = _R()
-            else:
-                result = subprocess.run(cmd, timeout=3600, stdout=_lf,
-                                        stderr=subprocess.STDOUT, env=_env)
+        class _R:
+            returncode = _rc
+        result = _R()
 
-        # 플랫폼별 결과 읽기 (economic_poster.py 가 JARVIS_EP_RESULT_FILE 에 기록)
-        _platform_results = {"naver": True, "tistory": True}
-        try:
-            _platform_results = json.loads(Path(_res_path).read_text(encoding="utf-8"))
-        except Exception:
-            if result.returncode != 0:
-                _platform_results = {"naver": False, "tistory": False}
+        # 플랫폼별 결과 (economic_poster.py 가 JARVIS_EP_RESULT_FILE 에 기록)
+        if _full is not None:
+            _platform_results = _full
+        else:
+            _platform_results = ({"naver": True, "tistory": True} if _rc == 0
+                                 else {"naver": False, "tistory": False})
 
         _PLATFORM_KEYS = {"naver", "tistory"}
         failed = [k for k, v in _platform_results.items() if k in _PLATFORM_KEYS and not v]
@@ -1184,13 +1173,13 @@ def run_economic_poster(*extra_flags):
             except Exception:
                 _err_txt = f"returncode={result.returncode}, failed_platforms={_guardian_failed}"
             # ★ EP_RESULT_FILE 에서 하네스 이슈 구조화 데이터 추출
-            _harness_issues: list[str] = []
-            try:
-                _full_result = json.loads(Path(_res_path).read_text(encoding="utf-8"))
-                _harness_issues = _full_result.get("harness_issues") or []
-            except Exception:
-                pass
-            _trigger_economic_incident(_guardian_failed, _err_txt, harness_issues=_harness_issues)
+            _full_result = _full or {}
+            _harness_issues = _full_result.get("harness_issues") or []
+            # ★ 재시도 이어받기 (2026-07-25): 막힌 주제를 그대로 물려준다.
+            _failed_keywords = _full_result.get("keywords") or {}
+            _trigger_economic_incident(_guardian_failed, _err_txt, harness_issues=_harness_issues,
+                                       returncode=result.returncode,
+                                       keywords=_failed_keywords)
 
     except Exception as e:
         log(f"❌ {label} 예외: {e}")
@@ -1211,21 +1200,15 @@ def run_economic_poster(*extra_flags):
             # ★ 리뷰 확정 수정 (2026-07-03): 타임아웃 kill 이어도 결과 파일(증분 기록)을
             #   읽어 *이미 성공한 플랫폼은 재발행 제외* (플랫폼 직렬화 이중 발행 차단).
             _failed = ["naver", "tistory"]
-            try:
-                _pr = json.loads(Path(_res_path).read_text(encoding="utf-8"))
+            _pr = _full if isinstance(_full, dict) else None
+            if _pr:
                 _failed = [k for k in ("naver", "tistory") if not _pr.get(k)]
-            except Exception:
-                pass
             if _failed:
                 _trigger_economic_incident(_failed, str(e))
             else:
                 log("ℹ️ 예외 발생했으나 결과 파일상 양 플랫폼 발행 완료 — incident 생략")
     finally:
-        _lock_release()
-        try:
-            Path(_res_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+        _lock_release()   # 결과 임시파일 정리는 _spawn_publisher 가 담당
 
 
 def cleanup_screenshots():
@@ -1246,52 +1229,21 @@ def cleanup_screenshots():
 
 
 
-def job_radar_pipeline_check():
-    """매일 09·15시 — RADAR 추천 파이프라인 자동실행 체크 (JARVIS04 잡).
-
-    조건: _radar_auto + 일시정지 아님 + 외부 lock 아님.
-    매칭되면 RADAR 최상위 미작성 테마 자동 실행, 아니면 텔레그램 알림.
-    """
-    try:
-        from shared.db import get_pending_pipeline, update_pipeline_status
-        items = get_pending_pipeline(limit=1)
-        if not items:
-            return
-        item = items[0]
-        if _radar_auto and not _paused and not _is_locked_externally():
-            log(f"📡 RADAR 자동실행: {item['theme']} (기회점수 {item['opportunity_score']:.0f})")
-            update_pipeline_status(item["id"], "processing")
-            def _run_radar_theme(t=item["theme"], iid=item["id"]):
-                if not _lock_acquire(f"RADAR: {t}"):
-                    update_pipeline_status(iid, "suggested")
-                    return
-                try:
-                    os.environ["JARVIS_SOURCE_KEYWORD"] = t
-                    os.environ["JARVIS_POST_TYPE"]      = "theme"
-                    run_theme(t)
-                    update_pipeline_status(iid, "done")
-                    try:
-                        from shared.bus import on_post_published
-                        on_post_published(t, "all", source="radar")
-                    except Exception:
-                        pass
-                finally:
-                    os.environ.pop("JARVIS_SOURCE_KEYWORD", None)
-                    os.environ.pop("JARVIS_POST_TYPE", None)
-                    _lock_release()
-            threading.Thread(target=_run_radar_theme, daemon=True).start()
-    except Exception as e:
-        log(f"⚠️ RADAR 파이프라인 확인 오류: {e}")
-
-
 # ══════════════════════════════════════════
 #  JARVIS03 → JARVIS02 연결 방식
 #  즉시 실행(버스 구독) 방식은 사용하지 않음.
-#  발행 스케줄은 JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 가 단독 관리:
-#    07:00  j01_economic_post   → run_economic_poster()  (경제 브리핑, 3개 블로그 각각 다르게)
-#    21:00  j01_theme_post_21   → run_radar_top_theme()  (테마주, RADAR 최상위 키워드 → 3개 블로그 다르게)
-#  JARVIS03 는 09/12/15시 트렌드 수집 후 DB 파이프라인에 적재.
-#  16시 잡이 DB에서 당일 최고 점수 테마를 꺼내 실행.
+#  ★★ 발행 시각은 **07:00 · 21:00 딱 둘뿐** (사용자 박제 2026-07-25).
+#     JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 가 단독 관리:
+#       07:00  j01_economic_post   → run_economic_poster()   (경제 브리핑)
+#       21:00  j01_theme_post_21   → run_radar_top_theme()   (테마주)
+#     JARVIS03 는 06/09/12/15시에 *트렌드를 수집* 할 뿐 — 그 시각에 발행하지 않는다.
+#
+#  ★ 삭제됨 (2026-07-25): `job_radar_pipeline_check`(09·15시) + `_radar_auto` +
+#    jobs `j01_radar_check_09`/`j01_radar_check_15`.
+#    RADAR 추천 대기열을 09·15시에 꺼내 `run_theme()` 로 **자동 발행** 하던 경로였다.
+#    `_radar_auto` 기본 False 라 실제로 돌지는 않았지만, 스위치 하나로 발행이 07/21시 밖에서
+#    일어나는 *잠재 경로* 였고 else 분기조차 없어 그 외엔 아무 일도 하지 않는 함수였다.
+#    사용자 지시: "발행은 07시와 21시뿐. 다른 시간 발행 로직은 흔적조차 남기지 말 것."
 # ══════════════════════════════════════════
 
 

@@ -68,6 +68,16 @@ def new_run(theme: str, platform: str = "naver", post_type: str = "theme") -> Ru
     return ctx
 
 
+def active_run() -> RunContext | None:
+    """현재 활성 컨텍스트 (없으면 None).
+
+    ★ 필요 이유 (2026-07-23): `collect_all` 이 수집 런을 새로 열 때, 발행 액션이 이미
+      세팅해 둔 platform(naver/tistory)을 *덮어쓰지 않기* 위해 직전 값을 읽는다.
+      platform 은 이미지 출력 폴더를 가르므로 기본값으로 되돌리면 이미지가 새 폴더로 샌다.
+    """
+    return _active_ctx
+
+
 def _rebind_globals(ctx: RunContext) -> None:
     """모든 관련 모듈의 전역 상태를 ctx 의 dict 로 교체 (lazy import)."""
     try:

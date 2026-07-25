@@ -1,9 +1,13 @@
 """
 JARVIS03 — 블로그 품질 분석 엔진
 post_analysis 테이블에서 pending_analysis 글을 가져와:
-  1. Claude API로 개선 제안(before→after) 생성
+  1. 발행 전 100점 루브릭(post_scorer)과 *동일 기준* 으로 감점 항목 개선안(before→after) 생성
   2. DB 저장 (status: analyzed → pending_approval)
   3. 텔레그램 인라인 버튼으로 사용자에게 전달
+  4. 승인(수동 ✅ / 1시간 자동) → learning_insights 누적 → *다음 글* 에 반영
+
+★ '이 글 즉시 재발행' 은 없다 (revise_adapter 는 fd87275 에서 폐지 — 사용자 결정 2026-07-24).
+  개선은 오직 *학습* 으로 다음 글에 반영된다. 학습 단일 진입점 = learn_from_suggestions().
 
 실행: python post_quality_analyzer.py          (1회 실행)
       python post_quality_analyzer.py --watch   (폴링 데몬)
@@ -49,43 +53,39 @@ TG_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID", "")
 PLATFORM_EMOJI = {"naver": "🟢", "tistory": "🟠"}
 
 # ─────────────────────────────────────────────────────────────
-# 분석 프롬프트
+# 분석 프롬프트 — ★ 발행 전 100점 루브릭(post_scorer)과 *동일 기준* 으로 통일 (사용자 박제 2026-07-24)
 # ─────────────────────────────────────────────────────────────
+# 종전엔 발행 후 분석이 별도 7차원 기준(제목·도입·SEO·가독성·키워드·CTA·구조)을 따로 썼다.
+# 이제 post_scorer 의 50개 항목 중 *감점된 것만* 겨냥해 before→after 를 낸다 → 발행 전 채점과
+# 100% 같은 잣대 → 반복 개선으로 100점에 수렴. (기준의 단일 진실 = post_scorer. 여기 항목 나열 금지.)
 
-SYSTEM_PROMPT = """당신은 한국 블로그 SEO·콘텐츠 품질 전문가입니다.
-주어진 블로그 글을 분석하고, 개선이 필요한 부분을 JSON 배열로만 반환하세요.
-응답은 반드시 순수 JSON 배열이어야 하며 다른 텍스트는 포함하지 마세요.
+# after 필드 절대 규칙 — 개선안이 그대로 발행 텍스트로 치환되므로 메타 지시문 금지 (단일 상수).
+_AFTER_RULES = """⚠️ after 필드 절대 규칙 ⚠️
+- after 는 **본문에 그대로 들어갈 최종 완성 텍스트만** 작성합니다.
+- before 가 있으면 after 는 그 자리에 그대로 치환됩니다.
+- 메타 설명·작성 지시문 금지: "~ 제시/추가/권장/보강/필요", "~등", "또는 ~", "예: ~",
+  "다음과 같이 ~", "마무리 후 추가:", after 안 예시 인용, 괄호 안 작성 지시문.
+- ❌ "…를 추천합니다" 등 더 구체적인 실행 단계 제시   ❌ 마무리 후 추가: '…'
+- ✅ 관심 종목의 목표가를 재설정한 뒤 지정가 매수 주문을 걸어두는 것을 추천합니다."""
+
+# 발행 후 개선 제안 프롬프트 — 100점 루브릭 감점 항목만 겨냥.
+_RUBRIC_SUGGEST_SYSTEM = ("""당신은 한국 블로그 SEO·콘텐츠 품질 전문가입니다.
+이 글은 우리 *100점 검증 루브릭*(발행 전과 동일 기준)에서 아래 '감점 항목'을 잃었습니다.
+각 감점 항목을 실제로 해소하는 개선안을 JSON 배열로만 반환하세요. 다른 텍스트 금지.
 
 각 항목 형식:
 {
   "type": "title|intro|seo|readability|keyword|cta|structure",
-  "field": "한글 항목명 (예: 제목, 도입부, 태그 등)",
-  "issue": "문제점 한 줄 설명",
-  "before": "개선 전 원문 (__BEFORE_SNIPPET__자 이내로 발췌)",
-  "after": "개선 후 제안 (구체적으로)",
-  "priority": "high|medium|low"
+  "field": "감점 항목명 (아래 감점 목록의 이름 그대로 사용)",
+  "issue": "왜 감점됐는지 한 줄",
+  "before": "개선 전 원문 (__BEFORE_SNIPPET__자 이내 발췌, 해당 부분 없으면 빈 문자열)",
+  "after": "개선 후 — 본문에 그대로 들어갈 최종 완성 텍스트",
+  "priority": "high|medium|low (감점이 클수록 high)"
 }
 
-⚠️ **after 필드 절대 규칙** ⚠️
-- after 는 **본문에 그대로 들어갈 최종 완성 텍스트만** 작성합니다.
-- before 가 있으면 after 는 그 자리에 그대로 치환되어 발행되는 글에 표시됩니다.
-- 다음 표현을 절대 포함하지 마세요 (메타 설명·작성 지시문 금지):
-  • "~ 제시", "~ 추가", "~ 권장", "~ 보강", "~ 필요"
-  • "~등", "또는 ~", "예: ~", "예시: ~"
-  • "다음과 같이 ~", "마무리 후 추가:", "글 마지막에 ~"
-  • after 안에 큰따옴표나 작은따옴표로 묶인 예시 인용
-  • 괄호 안의 작성 지시문 (예: "(주어-술어를 더 간결하게)")
-- 잘못된 예 (이런 식으로 쓰면 안 됩니다):
-  ❌ "관심 종목의 목표가 재설정 후 지정가 매수 주문을 설정하는 것을 추천합니다" 등 더 구체적인 실행 단계 제시
-  ❌ 마무리 후 추가: '이 분석이 도움이 되었다면 댓글 남겨주세요'
-  ❌ ③ 미국채 금리 상승(4.42%) → 고PER 성장주 압박 (주어-술어를 더 간결하게)
-- 올바른 예:
-  ✅ 관심 종목의 목표가를 재설정한 뒤 지정가 매수 주문을 걸어두는 것을 추천합니다.
-  ✅ 이 분석이 도움이 되었다면 댓글로 의견을 남겨주세요.
-  ✅ ③ 미국채 금리 상승(4.42%)은 고PER 성장주 밸류에이션에 부담입니다.
+""" + _AFTER_RULES + """
 
-개선 제안은 3~6개로 제한하고, 우선순위가 높은 것부터 정렬하세요.
-실질적이고 즉시 적용 가능한 개선안만 포함하세요.""".replace(
+감점이 큰 항목부터 최대 6개. 각 개선은 *그 감점 항목을 실제로 없애는* 구체적 수정만.""").replace(
     "__BEFORE_SNIPPET__",
     str(_LM.ECO_BEFORE_SNIPPET) if _LM else "50"
 )
@@ -128,42 +128,64 @@ def _build_learning_block(post_type: str = "") -> str:
 
 
 def analyze_post_quality(platform: str, title: str, content: str,
-                          post_type: str = "") -> list:
-    """Claude API로 품질 분석 — JSON suggestion list 반환. (공개 인터페이스)
+                          post_type: str = "") -> tuple:
+    """발행 후 품질 분석 → (개선 제안, 루브릭 총점) (공개 인터페이스). pre_revise.py 등이 사용.
 
-    pre_revise.py 등 외부에서 이 함수를 사용할 것. _analyze_with_claude 는
-    내부 호환 alias 로 유지.
+    ★ 발행 전 100점 루브릭(post_scorer)과 *동일 기준* (사용자 박제 2026-07-24):
+      발행글을 같은 채점표로 채점 → *감점된 항목만* 골라 before→after 개선안 생성.
+      반복하면 100점에 수렴. 감점 0(사실상 만점)이면 제안 없음([]).
+      채점·LLM 실패 시 규칙 기반 폴백. post_type 매칭 학습 지침도 동적 주입.
 
-    post_type 명시 시 SYSTEM_PROMPT 에 *해당 글 종류 인사이트만* 동적 주입 →
-    경제 브리핑 글에는 경제 브리핑 학습만, 테마 글에는 테마 학습만 적용.
+    반환: (suggestions, quality_score). quality_score = 100점 루브릭 총점(강화학습 보상 신호,
+      ADR 014). 채점 불가/규칙폴백은 None → 보상 스킵. 저장은 save_analysis_result 단일 진입점.
     """
-    # Claude Code SDK 단일화 — fallback 은 invoke_text 실패 시에만 자동 발동 (아래 try 블록).
-    # 본문 앞 length_manager.ANALYZER_INPUT_MAX 자만 분석 (토큰 절약)
-    _ana_max = _LM.ANALYZER_INPUT_MAX if _LM else len(content)  # _LM 없으면 자르지 않음
-    snippet = content[:_ana_max].strip()
-    user_msg = f"""[플랫폼: {platform.upper()}]
-제목: {title}
-
-본문:
-{snippet}
-
-위 블로그 글의 개선점을 JSON 배열로 분석해주세요."""
-
-    # 동적 SYSTEM_PROMPT — base + 학습된 지침 (post_type 매칭)
-    augmented_prompt = SYSTEM_PROMPT + _build_learning_block(post_type)
-
     try:
-        from shared.llm import invoke_text as _inv
-        raw = _inv("writer_fast", user_msg, system=augmented_prompt, max_tokens=1500)
-        if raw:
-            match = re.search(r'\[.*\]', raw, re.DOTALL)
-            if match:
-                return json.loads(match.group())
+        return _analyze_by_rubric(platform, title, content, post_type)
     except Exception as e:
-        print(f"  ⚠️ Claude API 오류: {e} — 규칙 기반 분석으로 대체")
+        print(f"  ⚠️ 루브릭 분석 오류: {e} — 규칙 기반 분석으로 대체")
         _g_report("radar", e, module=__name__)
+        return _rule_based_analysis(title, content), None
 
-    return _rule_based_analysis(title, content)
+
+def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str) -> tuple:
+    """발행글을 100점 루브릭으로 채점 → (감점 항목만 겨냥한 before→after 개선안, 루브릭 총점).
+
+    총점은 강화학습 보상 신호(reward=총점/100). 단 매력도 심사(Section A) 불가 시 총점이
+    A=0 으로 눌려 부당 저평가 → 그 경우 score=None(보상 스킵, fail-open).
+    """
+    from JARVIS02_WRITER.post_scorer import score_post, deducted_items
+    # Section A(매력·유익)는 발행 전과 *동일한* 매력도 심사관(judge_engagement)으로 LLM 채점.
+    eng = judge_engagement(title, content, post_type, platform)
+    _a_ok = int(eng.get("engagement_score", -1)) >= 0
+    draft = {"html": content, "content": content, "title": title,
+             "keyword": title, "post_type": post_type}
+    sr = score_post(draft, platform=platform, post_type=post_type,
+                    llm_scores=(eng if _a_ok else {}), factuality_issues=[])
+    _score = float(sr.get("total", 0)) if _a_ok else None   # A 채점 불가면 보상 신호 없음
+    ded = deducted_items(sr)
+    if not _a_ok:
+        ded = [d for d in ded if d.get("section") != "A"]   # 매력도 심사 불가 → A 감점 제외(fail-open)
+    _log = __import__("logging").getLogger("jarvis")
+    _log.info("[post_analyzer] 루브릭 %.1f/100 · 감점 %d개 (%s/%s)",
+              sr.get("total", 0), len(ded), platform, post_type)
+    if not ded:
+        return [], _score   # 감점 없음(사실상 만점) — 개선 제안 없음
+    _ded_block = "\n".join(
+        f"- [{d['section']}] {d['name']} ({d['score']:.1f}/{d['max']:.0f}, 감점 {d['gap']:.1f})"
+        for d in ded[:12]
+    )
+    _ana_max = _LM.ANALYZER_INPUT_MAX if _LM else len(content)
+    user_msg = (f"[플랫폼: {platform.upper()}] 제목: {title}\n\n"
+                f"[100점 루브릭 감점 항목 — 감점 큰 순, 이 항목만 고쳐라]\n{_ded_block}\n\n"
+                f"본문:\n{content[:_ana_max].strip()}\n\n"
+                f"위 감점 항목을 없애는 개선안을 JSON 배열로 반환.")
+    system = _RUBRIC_SUGGEST_SYSTEM + _build_learning_block(post_type)
+    from shared.llm import invoke_text as _inv
+    raw = _inv("writer_fast", user_msg, system=system, max_tokens=1500)
+    m = re.search(r'\[.*\]', raw or "", re.DOTALL) if raw else None
+    if not m:
+        raise RuntimeError("루브릭 개선안 LLM 응답 파싱 실패")
+    return json.loads(m.group()), _score
 
 
 # 내부 호환 alias — 직접 호출은 analyze_post_quality 사용 권장
@@ -536,11 +558,11 @@ def run_once():
             continue
 
         # 분석 — post_type 으로 학습 인사이트 scope 매칭
-        suggestions = analyze_post_quality(platform, title, content, post_type=post_type)
-        print(f"  → 제안 {len(suggestions)}개 생성")
+        suggestions, quality_score = analyze_post_quality(platform, title, content, post_type=post_type)
+        print(f"  → 제안 {len(suggestions)}개 생성 (루브릭 {quality_score if quality_score is not None else '—'}/100)")
 
-        # DB 저장
-        db.save_analysis_result(aid, suggestions)
+        # DB 저장 (quality_score = 강화학습 보상 신호)
+        db.save_analysis_result(aid, suggestions, quality_score=quality_score)
 
         # 텔레그램 전송
         _send_telegram_analysis(record, suggestions)
@@ -554,6 +576,36 @@ def run_once():
         processed += 1
 
     return processed
+
+
+def learn_from_suggestions(applied: list, scope: str = "all") -> int:
+    """★ 승인된 개선 제안 → learning_insights 누적 — *단일 진입점* (사용자 박제 2026-07-24).
+
+    수동 ✅(approval_bot)·1시간 자동승인(job_auto_approve) 둘 다 이 함수로만 학습한다.
+    per-post 개선은 '이 글 재발행'(revise_adapter 폐지)이 아니라 학습으로 *다음 글* 에 반영된다.
+    ★ scope 는 반드시 글 종류(economic/theme) — 소비자 _build_learning_block 이
+      scope IN (post_type,'all') 로 조회하므로 platform(naver/tistory)을 넣으면 영영 재사용 안 됨.
+    """
+    learned = 0
+    for s in applied or []:
+        if not isinstance(s, dict):
+            continue
+        issue = (s.get("issue") or "").strip()
+        if not issue:
+            continue
+        try:
+            db.upsert_learning_insight(
+                insight_key=f"{s.get('type', 'revision')}_{s.get('field', 'content')}",
+                insight_type=s.get("type", "revision"),
+                description=issue,
+                directive=s.get("after", ""),
+                weight=1.0,
+                scope=scope or "all",
+            )
+            learned += 1
+        except Exception as e:
+            _g_report("radar", e, module=__name__)
+    return learned
 
 
 def run_single(analysis_id: int) -> bool:
@@ -578,10 +630,10 @@ def run_single(analysis_id: int) -> bool:
     post_type = record.get("post_type") or ""  # P1 패치 (2026-05-04): scope 매칭
 
     print(f"\n🔍 즉시 분석: [{platform}] {title} (id={analysis_id})")
-    suggestions = _analyze_with_claude(platform, title, content, post_type=post_type)
-    print(f"  → 제안 {len(suggestions)}개 생성")
+    suggestions, quality_score = _analyze_with_claude(platform, title, content, post_type=post_type)
+    print(f"  → 제안 {len(suggestions)}개 생성 (루브릭 {quality_score if quality_score is not None else '—'}/100)")
 
-    db.save_analysis_result(analysis_id, suggestions)
+    db.save_analysis_result(analysis_id, suggestions, quality_score=quality_score)
     _send_telegram_analysis(record, suggestions)
     db.set_analysis_pending_approval(analysis_id)
     on_post_analyzed(analysis_id, platform, theme, len(suggestions))

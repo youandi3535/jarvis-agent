@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Optional
@@ -76,6 +77,25 @@ _LOSS   = -1.0                   # 실패 보상
 _LAMBDA = 1.0                    # ridge prior (A 초기 = λI)
 _ROUND  = 6                      # 직렬화 소수 자리 (파일 크기 절감)
 
+# ★ 감쇠 계수 γ — 유효 기억 창 ≈ 1/(1-γ) 관측 (ERRORS [498], 사용자 승인 2026-07-25)
+#   0.995 → 최근 약 200 관측. 귀속 가능한 관측만 남긴 뒤라 200 이면 수개월치다.
+#   ① 단일 진입점: γ 는 이 상수 한 곳. ② 동적 설계: `_gamma()` 가 *호출 시점* 조회라
+#   `GUARDIAN_BANDIT_GAMMA=0.99` 로 재시작 없이 조정된다(모듈 로드 캡처 금지).
+_GAMMA_DEFAULT = 0.995
+
+
+def _gamma() -> float:
+    """감쇠 계수 — 호출 시점 조회. 1.0 이면 감쇠 없음(종전 동작 = 킬스위치)."""
+    raw = (os.getenv("GUARDIAN_BANDIT_GAMMA") or "").strip()
+    if raw:
+        try:
+            g = float(raw)
+            if 0.0 < g <= 1.0:
+                return g
+        except ValueError:
+            pass
+    return _GAMMA_DEFAULT
+
 # v2 오류 프로토타입 대표 문장 (부팅 1회 임베딩·캐시). error_type 계열과 1:1 정렬.
 _PROTO_SENTENCES = [
     "NoneType object has no attribute 값이 None 인데 속성이나 인덱스에 접근했습니다",
@@ -95,13 +115,80 @@ _KNOWN_ERROR_TYPES = [
 ]
 
 # ── ★ arm 전략 공간 (유한) — _arm_key 가 모든 입력을 이 공간으로 접는다 ──────────
-#   정적 fixer 6종 + auto_patch (모두 pattern_fixer._FIXER_REGISTRY 와 정합) +
-#   learned_verified / learned_new (학습 캐시 조회) + llm (LLM 폴백).
-#   이 집합 밖의 이름은 _arm_key 가 규칙적으로 접거나(prefix) 그대로 통과(정적)시킨다.
-_STATIC_FIXER_ARMS = frozenset({
-    "relative_import", "none_slicing", "name_typo",
-    "none_attribute", "import_name", "unpack_mismatch", "auto_patch",
+#
+#   ★ 2026-07-25 — 종전엔 정적 fixer 7종 이름을 여기에 **손으로 나열**하고
+#     "pattern_fixer._FIXER_REGISTRY 와 정합" 이라고 *주석으로만* 선언했다(①② 위반).
+#     주석은 강제력이 0이라, fixer 를 하나 추가하면 registry 만 늘고 arm 공간은 낡는다.
+#     그 상태에서 새 fixer 이름이 오면 `_arm_key` 가 None 을 돌려주고 →
+#       · rank_fixers : 점수 -inf → 항상 맨 뒤 (실행은 되지만 학습 순위에서 배제)
+#       · reward      : 조기 return → **학습이 조용히 유실**
+#     즉 "새 fixer 는 영원히 학습되지 않는" 무증상 열화다. → 런타임 파생으로 교체.
+#
+#   bandit 이 스스로 소유하는 *합성* 전략명(아래 `_RESERVED_ARMS`)만 이 파일 소유.
+#   정적 fixer 이름의 주인은 pattern_fixer 다.
+_RESERVED_ARMS = frozenset({
+    "learned_verified",   # 검증된 학습 캐시 조회 전략
+    "learned_new",        # 신규 학습 캐시 조회 전략
+    "llm",                # LLM 폴백 전략
 })
+
+# last-known-good 캐시 — *성공한 파생만* 적재 (실패값을 캐시하면 영구 degrade).
+_ARMS_CACHE: frozenset = frozenset()
+
+
+def _flag(name: str, default: bool = True) -> bool:
+    """킬스위치 — *호출 시점* 조회 (모듈 로드 시 캡처 금지: 복사본을 진실로 믿지 말 것)."""
+    import os as _os
+    raw = _os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _persisted_static_arms() -> frozenset:
+    """degrade 바닥 — 학습 원장(`bandit_state.json`)에 *이미 있는* 정적 arm 이름.
+
+    ★ 왜 이게 안전한 폴백인가: 원장의 arm 키는 전부 과거 `_arm_key` 를 통과해 기록된
+      것이다(= 그 시점의 유효한 전략명). 새 이름을 만들어내지 않으므로 arm 무한 증식
+      (ADR 016 이 막는 것) 위험이 0이고, *기존 학습을 계속 쓸 수 있게* 해 준다.
+      리터럴 목록을 되살리는 것보다 낫다 — 리터럴은 다시 드리프트하지만 이건 안 한다.
+    """
+    try:
+        arms = _read_state().get("arms", {}) or {}
+    except Exception:  # noqa: BLE001
+        return frozenset()
+    return frozenset(a for a in arms if a not in _RESERVED_ARMS)
+
+
+def _static_fixer_arms() -> frozenset:
+    """정적 fixer arm 공간 — `pattern_fixer._FIXER_REGISTRY` 에서 **런타임 파생**(② 동적 설계).
+
+    ★ 왜 지연(호출 시점) import 인가 — `pattern_fixer` 는 bandit 을 *함수 안에서* 불러 쓴다
+      (`pattern_fixer.py:1343/1457/1829`). bandit 이 모듈 로드 시점에 pattern_fixer 를
+      끌어오면 두 모듈이 서로를 로드 시점에 참조하는 순환이 만들어질 여지가 생긴다.
+      지연 조회면 그 창이 아예 없다 (`sys.modules` 적중이라 비용도 무시 가능).
+
+    ★ 캐시하지 않고 매번 파생하는 이유: registry 는 진실이고 여기 값은 파생물이다.
+      한 번 떠서 굳혀두면 그게 곧 사본이다 — "복사본을 진실로 믿지 말 것".
+
+    fail-open 판단: 파생 실패 시 last-known-good → 없으면 원장 기반 바닥.
+      근거 — `_arm_key` 가 None 을 돌려주면 **보상이 통째로 버려진다**(학습 유실).
+      반대로 폴백이 약간 낡아봐야 새 fixer 하나가 잠시 랭킹에서 빠질 뿐이다.
+      유실 > 지연 이므로 fail-open 이 옳다. 파생 실패 자체는 WARNING 으로 남긴다.
+
+    킬스위치 `GUARDIAN_BANDIT_DERIVE_ARMS=0` → 파생을 끄고 원장 기반 바닥만 사용.
+    """
+    global _ARMS_CACHE
+    if _flag("GUARDIAN_BANDIT_DERIVE_ARMS", True):
+        try:
+            from JARVIS07_GUARDIAN.pattern_fixer import _FIXER_REGISTRY  # noqa: PLC0415
+            got = frozenset(_FIXER_REGISTRY.keys())
+            if got:
+                _ARMS_CACHE = got
+                return got
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"[BANDIT] arm 공간 파생 실패 — 폴백 사용: {e}")
+    return _ARMS_CACHE or _persisted_static_arms()
 
 
 def _arm_key(name: str) -> Optional[str]:
@@ -113,6 +200,9 @@ def _arm_key(name: str) -> Optional[str]:
     - 정적 6종 + auto_patch   → 그대로                (고정 전략)
     - "learned"               → "learned_verified"    (통합 학습 조회 후보)
     - 그 외(빈 값/미상)       → None                  (arm 생성 안 함 = 보상/랭킹 제외)
+
+    ★ '정적 6종 + auto_patch' 는 손 목록이 아니라 `_static_fixer_arms()` 파생이다 —
+      pattern_fixer 에 fixer 를 추가하면 arm 공간이 *자동으로* 따라 늘어난다.
 
     이 규칙 덕분에 오류 지문(GitCommit/ExternalEdit/…)이 arm 으로 새는 일이 원천 차단된다.
     """
@@ -127,7 +217,7 @@ def _arm_key(name: str) -> Optional[str]:
         return "llm"
     if n == "learned":
         return "learned_verified"
-    if n in _STATIC_FIXER_ARMS:
+    if n in _static_fixer_arms():   # ★ pattern_fixer 레지스트리에서 호출 시점 파생
         return n
     # 미지의 이름 — 전략으로 인정하지 않음(오염 방지). 정적 등록 경로만 arm 이 된다.
     return None
@@ -292,16 +382,18 @@ def _fit_x(x: np.ndarray, dim: int) -> np.ndarray:
 
 # ── 상태 직렬화 ───────────────────────────────────────────────────
 
-def _arm_to_dict(A: np.ndarray, b: np.ndarray, n: int = 0, rsum: float = 0.0) -> dict:
+def _arm_to_dict(A: np.ndarray, b: np.ndarray, n: float = 0.0, rsum: float = 0.0) -> dict:
     """arm 상태 → JSON dict. 파일 크기 절감 위해 반올림.
 
     n    : 실제 pull(시도) 횟수 — 정직한 통계용 (Frobenius 추정치 대체)
+           ★ ERRORS [498]: 감쇠(discounting) 도입으로 **실수**다. γ 를 곱하면
+             정수로는 표현이 안 된다(1 → 0.995). `int()` 로 자르면 감쇠가 조용히 소실된다.
     rsum : 보상 누적합 — 평균 보상 = rsum / n (θ 평균 희석 문제 회피)
     """
     return {
         "A":    [[round(float(v), _ROUND) for v in row] for row in A.tolist()],
         "b":    [round(float(v), _ROUND) for v in b.tolist()],
-        "n":    int(n),
+        "n":    round(float(n), _ROUND),
         "rsum": round(float(rsum), _ROUND),
     }
 
@@ -318,24 +410,26 @@ def _new_arm(dim: int = _D_BASE) -> tuple[np.ndarray, np.ndarray]:
 # ── 영속성 ────────────────────────────────────────────────────────
 
 def _load() -> dict:
-    """bandit_state.json 로드. 없거나 손상이면 빈 dict."""
-    try:
-        if _BANDIT_FILE.exists():
-            return json.loads(_BANDIT_FILE.read_text(encoding="utf-8"))
-    except Exception as e:
-        log.warning(f"[BANDIT] 상태 로드 실패: {e}")
-    return {}
+    """bandit_state.json 로드 — 손상 시 **빈 dict 로 삼키지 않는다** (ERRORS [497]).
+
+    ★ 종전엔 손상이면 `{}` 였고, 그 빈 상태를 다음 `_save` 가 덮어써
+      8 arm / obs 21,451 / feature_version 3 → 1 arm / obs 1 / fv 1(28D→14D 퇴행)
+      이 가능했다. 이제 `json_store` 가 손상본 격리 + `.bak` 승격을 시도한다.
+    """
+    from JARVIS07_GUARDIAN.json_store import read_json  # noqa: PLC0415
+    data = read_json(_BANDIT_FILE, default=None)
+    return data if isinstance(data, dict) else {}
 
 
 def _save(state: dict) -> None:
-    """compact 저장 — indent 없음(separators). arm 유한 + 반올림 → 파일 수십 KB."""
-    try:
-        _BANDIT_FILE.write_text(
-            json.dumps(state, ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
-        )
-    except Exception as e:
-        log.warning(f"[BANDIT] 상태 저장 실패: {e}")
+    """compact 원자 저장 — 임시파일 → fsync → `os.replace` + 교차 프로세스 락 (ERRORS [497]).
+
+    ★ 저장 로직은 `json_store` 단독 소유 — pattern_fixer 와 **같은 헬퍼**를 쓴다
+      (① 단일 진입점. 종전엔 두 파일이 각자 `write_text` 를 복사해 갖고 있었다).
+    """
+    from JARVIS07_GUARDIAN.json_store import write_json  # noqa: PLC0415
+    if not write_json(_BANDIT_FILE, state, compact=True):
+        log.warning("[BANDIT] 상태 저장 실패 — 이번 갱신 누락")
 
 
 def _read_state() -> dict:
@@ -375,7 +469,7 @@ def _migrate_arms_to_version(state: dict, target_version: int) -> None:
         b_new[:d0] = b_old
         state["arms"][name] = _arm_to_dict(
             A_new, b_new,
-            n=int(arm.get("n", 0)), rsum=float(arm.get("rsum", 0.0)),
+            n=float(arm.get("n", 0) or 0.0), rsum=float(arm.get("rsum", 0.0)),
         )
     state["feature_version"] = target_version
 
@@ -458,6 +552,7 @@ def rank_fixers(error_record: dict, fixer_names: list[str]) -> list[str]:
 
     version = _read_state().get("feature_version", 1)
     x = _extract_features(error_record, version)   # 느린 encode 는 락 밖
+    _static_fixer_arms()   # arm 공간 파생 워밍업 — 락 안에서 import·파일읽기 하지 않도록
 
     with _LOCK:
         state = _read_state()
@@ -525,17 +620,35 @@ def reward(
         arm_data = arms.get(key)
         if arm_data:
             A, b = _arm_from_dict(arm_data)
-            n_prev = int(arm_data.get("n", 0))
+            n_prev = float(arm_data.get("n", 0) or 0.0)
             rsum_prev = float(arm_data.get("rsum", 0.0))
         else:
             A, b = _new_arm(_dim_for_version(state["feature_version"]))
-            n_prev, rsum_prev = 0, 0.0
+            n_prev, rsum_prev = 0.0, 0.0
 
         xv = _fit_x(x, A.shape[0])   # 승급 경계 race 방어
+
+        # ★ 감쇠(discounted linear UCB) — ERRORS [498] 3단계 (사용자 승인 2026-07-25)
+        #   옛 관측을 지수적으로 잊는다. 두 가지를 동시에 해결한다:
+        #     ① 과거 오염 회복 — 잡음이 쌓여도 시간이 지나면 스스로 씻긴다
+        #     ② 비정상성 대응 — fixer 성능·오류 분포가 변해도 따라간다
+        #   Russac et al. "Weighted Linear Bandits for Non-Stationary Environments" 형태:
+        #       V_t = Σ γ^(t-s)·x_s x_sᵀ + λI      (★ ridge λI 는 감쇠 대상이 아니다)
+        #   ridge 까지 같이 곱하면 A 가 0 으로 수축 → A⁻¹ 폭발 → 탐색항이 발산한다.
+        #   그래서 *데이터 부분만* 감쇠하고 λI 는 매번 되돌려 놓는다.
+        g = _gamma()
+        if g < 1.0:
+            dim = A.shape[0]
+            ridge = _LAMBDA * np.eye(dim, dtype=np.float64)
+            A = g * (A - ridge) + ridge      # 데이터 부분만 감쇠
+            b = g * b
+            n_prev *= g
+            rsum_prev *= g
+
         A = A + np.outer(xv, xv)
         b = b + r * xv
 
-        arms[key] = _arm_to_dict(A, b, n=n_prev + 1, rsum=rsum_prev + r)
+        arms[key] = _arm_to_dict(A, b, n=n_prev + 1.0, rsum=rsum_prev + r)
         state["obs_count"] = state.get("obs_count", 0) + 1
         _maybe_upgrade_features(state)   # 임계 도달 시 블록확장 승급
         _write_state(state)
@@ -547,9 +660,68 @@ def reward(
 
 # ── 통계 / 대시보드 ───────────────────────────────────────────────
 
+def selfcheck() -> list[str]:
+    """★ 퇴화 감지 — 밴딧이 *실제로 학습하고 있는지* 동작으로 확인 (ERRORS [498] 4단계).
+
+    ★ 왜 필요한가: 2026-07-25 이전 밴딧은 **3,062회 동안 학습을 멈춘 채** 돌았고
+      아무도 몰랐다. 8 arm 중 7개가 n=3062 / rsum=-3062.0 (평균 정확히 -1.000) —
+      소수점 한 자리도 안 틀리게 같았다. 코드는 "돌고 있었" 지만 학습은 죽어 있었다.
+      `severity.selfcheck()` · `json_store.store_effective()` 와 같은 철학 —
+      **존재가 아니라 동작으로 확인**한다.
+
+    반환: 위반 문자열 목록 (빈 리스트 = 정상).
+    """
+    issues: list[str] = []
+    try:
+        state = _read_state()
+        arms = state.get("arms", {}) or {}
+        if not arms:
+            return issues                     # 아직 관측 0 — 퇴화가 아니라 미시작
+
+        pulled = {k: v for k, v in arms.items()
+                  if isinstance(v, dict) and float(v.get("n", 0) or 0.0) > 0}
+        if len(pulled) < 2:
+            return issues                     # 비교 대상 부족
+
+        avgs = {k: _arm_avg_reward(v) for k, v in pulled.items()}
+
+        # [D1] 평균 보상이 전부 같다 → arm 을 구분하지 못한다 = 학습 정지
+        spread = max(avgs.values()) - min(avgs.values())
+        if spread < 1e-9:
+            issues.append(
+                f"[D1] 전 arm 평균 보상 동일({next(iter(avgs.values())):+.3f}) — "
+                f"학습 정지. 보상이 arm 을 구분하지 못한다 (n={len(pulled)})"
+            )
+
+        # [D2] pull 횟수가 전부 같다 → 개별 선택이 아니라 *일괄 보상* 의심 (귀속 버그 재발)
+        ns = [round(float(v.get("n", 0) or 0.0), 3) for v in pulled.values()]
+        if len(ns) >= 3 and len(set(ns)) == 1 and ns[0] >= 10:
+            issues.append(
+                f"[D2] 전 arm pull 횟수 동일(n={ns[0]}) — 일괄 보상 의심. "
+                f"귀속 불가 관측이 기록되고 있는지 확인 (GUARDIAN_BANDIT_ATTRIBUTED_ONLY)"
+            )
+
+        # [D3] 한쪽으로 완전히 쏠림 → 신호가 아니라 상수를 학습 중
+        if all(abs(a - _LOSS) < 1e-9 for a in avgs.values()):
+            issues.append("[D3] 전 arm 이 최저 보상에 고착 — 성공 관측이 유입되지 않는다")
+
+        # [D4] arm 공간이 pattern_fixer 레지스트리와 어긋남 → 새 fixer 가 학습에서 누락
+        derived = _static_fixer_arms()
+        if derived:
+            missing = derived - set(arms) - _RESERVED_ARMS
+            if missing:
+                issues.append(
+                    f"[D4] 레지스트리에 있으나 arm 이 없는 fixer: {sorted(missing)} "
+                    f"— 첫 보상 때 생성되므로 지속되면 보상 경로 점검"
+                )
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"[D0] selfcheck 실행 실패: {type(e).__name__}: {e}")
+    return issues
+
+
 def _arm_avg_reward(arm_data: dict) -> float:
     """arm 의 실제 평균 보상 = rsum / n (정직한 지표, θ 평균 희석 회피)."""
-    n = int(arm_data.get("n", 0))
+    n = float(arm_data.get("n", 0) or 0.0)
     if n <= 0:
         return 0.0
     return float(arm_data.get("rsum", 0.0)) / n
@@ -560,7 +732,7 @@ def stats() -> dict:
     state = _read_state()
     arm_summaries = {}
     for name, arm_data in state["arms"].items():
-        n = int(arm_data.get("n", 0))
+        n = float(arm_data.get("n", 0) or 0.0)
         arm_summaries[name] = {
             "pulls_est":   n,                                   # ★ 실제 pull 수 (정직)
             "mean_reward": round(_arm_avg_reward(arm_data), 3),  # ★ rsum/n
@@ -582,7 +754,7 @@ def top_fixers(n: int = 5) -> list[dict]:
     state = _read_state()
     rows: list[dict] = []
     for name, arm_data in state["arms"].items():
-        if int(arm_data.get("n", 0)) <= 0:
+        if float(arm_data.get("n", 0) or 0.0) <= 0:
             continue
         rows.append({"fixer": name, "mean_reward": round(_arm_avg_reward(arm_data), 3)})
     rows.sort(key=lambda x: -x["mean_reward"])

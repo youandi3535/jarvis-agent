@@ -146,14 +146,14 @@
 
 **금지 패턴:**
 - **이미지 연속 금지**: `이미지 → 이미지` 어떤 이유로도 발행 불가. 이미지 사이에는 반드시 문단 1개 이상.
-- **문단 3개 이상 연속 금지**: 이미지 없이 문단 3개+ 연속 금지. 임계값: `length_manager.MAX_CONSECUTIVE_PARAGRAPHS_WITHOUT_IMAGE = 2`.
+- **문단 3개 이상 연속 시 이미지 우선, 없으면 글 허용** (★ 사용자 박제 2026-07-24 개정): 문단 3개+ 연속이면 사이에 이미지를 넣는 게 원칙. 단 넣을 **실데이터 인포그래픽이 없으면**(datasets 소진 등) 억지 이미지(AI사진·배너)나 거짓 데이터를 만들지 말고 **그대로 텍스트로 유지**한다 — 위반 아님. 임계값: `length_manager.MAX_CONSECUTIVE_PARAGRAPHS_WITHOUT_IMAGE = 2`. 벽(문단 연속) 품질은 100점 루브릭 B9 가 별도 채점·전송.
 - **표도 이미지로 카운트**: 표(`<table>`) 뒤에 즉시 차트/이미지가 오면 이미지 연속. 표 뒤에는 반드시 `<p>` 단락 1개 이상 삽입 후 차트.
 
 **예외**: 소제목 배너 이미지(파일명 `heading_` / `section_title` 포함)는 이미지 카운트 제외.
 
 **런타임 집행**:
 - `law_enforcer._dedupe_consecutive_images()` — 이미지 연속 제거.
-- `law_enforcer.enforce_image_between_paragraphs()` — 문단 3+ 연속 검출 시 이미지 풀에서 삽입. 풀 부족 시 텔레그램 경고 + 발행 진행.
+- `law_enforcer.enforce_image_between_paragraphs()` — 문단 3+ 연속 검출 시 이미지 풀(image_pool)이 있으면 삽입. ★ 2026-07-24: image_pool 이 *없으면*(넣을 실데이터 인포그래픽 부재) 텍스트로 유지 — **위반·텔레그램 알림 없이 로그만**(억지 이미지 금지). image_pool 이 있는데 못 채운 경우만 배치 결함으로 알림.
 - `law_enforcer.enforce_supreme_law()` — 위 함수들을 차례로 호출.
 
 **프롬프트 의무**: 모든 작성 프롬프트는 허용 패턴 4가지를 사용. `1:1 교대` 강제 표현 금지.

@@ -911,7 +911,7 @@ _PROVIDER_LABEL = {
     "kosis": "통계청 KOSIS", "krx": "한국거래소(KRX)", "yfinance": "Yahoo Finance",
     "ecos": "한국은행 ECOS", "bok": "한국은행", "dart": "금융감독원 DART",
     "naver_news": "언론 보도", "news": "언론 보도", "kor_econ": "경제 뉴스",
-    "academic": "학술 논문", "web": "웹 공개자료", "market": "시장 데이터",
+    "web": "웹 공개자료", "market": "시장 데이터",
 }
 
 

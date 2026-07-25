@@ -54,7 +54,7 @@ _REQUIRED_INTERNAL_MODULES = (
     "shared.db",
     "shared.tools",
     "shared.notify",
-    "JARVIS02_WRITER.collect_theme",      # 7시 사고 진원지
+    "JARVIS09_COLLECTOR.collect_theme",   # 7시 사고 진원지 (02 shim 폐지 2026-07-23 — 본체 위치)
     "JARVIS02_WRITER.jarvis_main",
     "JARVIS02_WRITER.economic_poster",
     "JARVIS02_WRITER.law_enforcer",

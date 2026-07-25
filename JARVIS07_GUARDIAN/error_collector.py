@@ -29,21 +29,82 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+import os
+
 # 쿨다운: 동일 오류 60초 내 재수집 방지 (메모리 캐시)
 _cooldown_lock = threading.Lock()
 _cooldown: dict[str, float] = {}   # key → last_seen epoch
 _COOLDOWN_SECS = 60
+# ★ 만료 항목 제거 — 상주 데몬에서 _cooldown 이 무한 증가하던 누수 차단 (2026-07-25)
+_COOLDOWN_MAX_KEYS = 5000
 
-# 로그 레벨 ERROR/CRITICAL + WARNING 이면서 *Exception/Error 타입 이름* 이 포함된 줄만 수집.
-# WARNING 단독(메시지만)은 노이즈가 많아 제외 — Exception 타입명이 반드시 있어야 함.
-_LOG_ERROR_PAT = re.compile(
-    r"(?:\[ERROR\]|\[CRITICAL\]|\[WARNING\]"
-    r"|^\s*ERROR\b|^\s*CRITICAL\b|^\s*WARNING\b"
-    r"|\bERROR:[\w.]+:|\bCRITICAL:[\w.]+:|\bWARNING:[\w.]+:"
-    r"|\s\-\s(?:ERROR|CRITICAL|WARNING)\s)"
-    r".*?(?P<etype>[A-Z][A-Za-z]{0,40}(?:Error|Exception))"
-    r"(?:[:\s]|$)"
-    r"(?P<msg>[^\n]{0,200})",
+# ── 킬스위치 (라이브 안전 — 코드 수정 없이 즉시 무효화) ──────────────────
+#
+# ★★ 공용 진입점 — 킬스위치는 *호출 시점* 에 환경변수를 조회한다 (2026-07-25 수정)
+#
+# 종전 이 자리엔 `_LOG_SCAN_ENABLED = os.environ.get(...) != "0"` 같은 **모듈 로드 시점
+# 캡처** 4종이 있었다. 그러면 값이 import 순간 상수로 굳어 **데몬 재시작 전에는 토글이
+# 안 먹는다** — "코드 수정 없이 즉시 무효화" 라는 킬스위치의 존재 이유가 그대로 무산된다.
+# CLAUDE.md 「복사본을 진실로 믿지 말 것」의 첫 줄(값을 코드에 복사) 정면 위반이고,
+# 같은 GUARDIAN 안의 `guardian_agent._flag()`·`severity._flag()` 가 이미 호출시점 조회라
+# **같은 도메인에서 킬스위치 계약이 둘로 갈라져 있던** ①단일 진입점 위반이기도 했다.
+#
+# → 그 세 곳과 *완전히 같은 판정 규칙* 을 갖는 공개 헬퍼를 여기 하나 두고, 나머지가
+#   이걸 import 해서 파생하도록 한다. (error_collector 는 GUARDIAN 최하위 모듈 —
+#   guardian_agent·severity·eval_agent 를 module-level 로 import 하지 않으므로
+#   반대 방향 import 가 순환을 만들지 않는다.)
+def env_flag(name: str, default: bool = True) -> bool:
+    """★ 킬스위치 단일 진입점 — 환경변수를 **호출할 때마다** 조회한다.
+
+    판정 규칙(guardian_agent._flag / severity._flag 와 동일):
+      · 미설정        → `default`
+      · "0"/"false"/"no"/"off" (대소문자·공백 무시) → False
+      · 그 외 값      → True
+
+    ★ 모듈 로드 시점에 결과를 상수에 담아두지 말 것. 담는 순간 그건 복사본이고,
+      데몬이 떠 있는 동안 `export` 를 바꿔도 반영되지 않는다.
+
+    공개 심볼 — 다른 GUARDIAN 모듈은 자체 `_flag` 를 새로 정의하지 말고
+        `from JARVIS07_GUARDIAN.error_collector import env_flag as _flag`
+    로 파생할 것.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
+# 킬스위치 이름 (문자열 오타 방지용 상수 — 값이 아니라 *이름* 만 박는다)
+_ENV_LOG_SCAN           = "GUARDIAN_LOG_SCAN"
+_ENV_LOG_SCAN_TAIL      = "GUARDIAN_LOG_SCAN_TAIL"
+# 인터프리터가 스스로 '무시했다' 고 선언한 예외(unraisable)까지 수집할지 — 기본 제외
+_ENV_LOG_SCAN_UNRAISABLE = "GUARDIAN_LOG_SCAN_UNRAISABLE"
+# 쿨다운 키 정규화(_normalize_message 재사용) — 0 이면 종전 message[:80] 동작
+_ENV_COOLDOWN_NORMALIZE = "GUARDIAN_COOLDOWN_NORMALIZE"
+
+# ★★ 로그 스캐너 — 자연어 레벨 문구 스크래핑 폐기, *구조적 증거* 만 취한다 (2026-07-25)
+#
+# 폐기한 것: 종전 `_LOG_ERROR_PAT` 은 `[ERROR]`·`[WARNING]` 같은 *레벨 문구* 를 찾고
+#   같은 줄에서 영문 예외 타입명을 요구했다. 두 가지 이유로 **70일간 매치 0건** 이었다.
+#     ① 데몬 포매터가 `%(levelname)-8s` → 실제 출력은 `[ERROR   ]`(패딩) 인데 `\[ERROR\]` 요구
+#     ② `etype` 그룹이 필수라 같은 줄에 영문 예외명이 없으면 전부 탈락 — 우리 로그는 한국어다
+#   (그래서 `or "LogError"` 폴백은 도달 불가 코드였다.)
+#
+# 왜 패딩만 맞추지 않았나: 포맷을 맞추는 순간 `[WARNING ]` 4,894줄 + `[ERROR   ]` 819줄이
+#   한꺼번에 깨어난다. 거기엔 *재시도로 이미 회복된 건* 이 대량 포함되어 실패로 오적재된다.
+#   현업 표준도 로그 텍스트로 오류를 판별하지 않는다(SRE Workbook: 이벤트에 카운터를 올리고
+#   그 값으로 알림). Sentry 가 ERROR 로그를 이벤트화하는 것도 `record.exc_info` **객체** 를
+#   갖기 때문이지 텍스트 파싱이 아니다.
+#
+# 그래서: `Traceback (most recent call last):` **블록** 만 취한다. 이건 자연어가 아니라
+#   *진짜 예외의 구조적 증거* 다 — 예외 타입·프레임이 그 안에 있고, 레벨 문구·언어와 무관하다.
+#   부수효과로 tb_str 이 확보되어 기존 `_is_sandbox_traceback` 가 비로소 실제로 동작한다.
+_TRACEBACK_PAT = re.compile(
+    r"(?P<unraisable>^Exception ignored in:[^\n]*\n)?"
+    r"^Traceback \(most recent call last\):\n"
+    r"(?P<frames>(?:[ \t]+[^\n]*\n|[ \t]*\.\.\.[^\n]*\n)+)"
+    r"(?P<exc>[A-Za-z_][\w\.]*(?:Error|Exception|Exit|Interrupt|Timeout|Warning)"
+    r"(?::[^\n]*)?)",
     re.MULTILINE,
 )
 # 추가 가드: GUARDIAN 자체 수집 로그 (재귀 차단) + 오류 수집/스캔 정상 로그 줄 제외
@@ -61,6 +122,11 @@ _LOG_SKIP_PAT = re.compile(
 # traceback 첫 File 경로가 sandbox 마운트(/sessions/*/mnt/) 면 수집 skip.
 _SANDBOX_PATH_PAT = re.compile(r'/sessions/[^/]+/mnt/')
 
+# ── 스모크 테스트 표식 ────────────────────────────────────────
+# 합성 입력을 실제 소비자 경로로 통과시키되 DB·통계에는 남기지 않기 위한 표식.
+_SMOKE_MARK = "__smoke__"
+_SMOKE_ID = -1          # 스모크 통과를 뜻하는 sentinel error_id (DB 미기록)
+
 
 def _is_sandbox_traceback(tb_str: Optional[str]) -> bool:
     """traceback 첫 File 경로가 sandbox 마운트 경로면 True."""
@@ -74,13 +140,46 @@ def _is_sandbox_traceback(tb_str: Optional[str]) -> bool:
 
 # ── 쿨다운 헬퍼 ─────────────────────────────────────────────────
 
+def _cool_key(source, module, error_type, message: str) -> str:
+    """쿨다운 키 — ★ 기존 `_normalize_message` 재사용 (신설 금지, ①단일 진입점).
+
+    종전 키는 `message[:80]` 이었다. harness 가 만드는 메시지는
+    `[harness:경제 브리핑 발행 — 티스토리] attempt=2 step=⑥ ...` 형태라
+    **`attempt=N` 이 80자 안에 들어간다** → 재시도마다 키가 달라져 *쿨다운이 안 걸렸다*.
+    같은 실패가 attempt 1·2 마다 새 행으로 적재된 이유다(DB 실측 395건).
+
+    이미 `pattern_fixer._normalize_message()` 가 7종 placeholder 로 이걸 정확히
+    처리한다 — 마지막 규칙 `\\b\\d+\\b → <N>` 이 `attempt=2` 를 `attempt=<N>` 으로 만든다.
+    있는 도구를 안 쓰고 있던 것 자체가 ①위반이었으므로 *그 함수를 그대로 재사용* 한다.
+
+    killswitch: GUARDIAN_COOLDOWN_NORMALIZE=0 → 종전 message[:80] 동작으로 즉시 복귀.
+    """
+    raw = message or ""
+    if env_flag(_ENV_COOLDOWN_NORMALIZE):        # ★ 호출시점 조회 (로드시점 캡처 금지)
+        try:
+            from JARVIS07_GUARDIAN.pattern_fixer import _normalize_message
+            norm = _normalize_message(raw)
+        except Exception:
+            norm = raw[:80]           # 정규화 불가 시 종전 동작 — 절대 막지 않는다
+    else:
+        norm = raw[:80]
+    return f"{source}:{module}:{error_type}:{norm}"
+
+
 def _in_cooldown(key: str) -> bool:
     import time
+    now = time.time()
     with _cooldown_lock:
         last = _cooldown.get(key, 0)
-        if time.time() - last < _COOLDOWN_SECS:
+        if now - last < _COOLDOWN_SECS:
             return True
-        _cooldown[key] = time.time()
+        # ★ 만료 항목 제거 — 종전엔 삭제가 없어 상주 데몬에서 _cooldown 이 무한 증가했다.
+        #   (키가 계속 새로 생기는 harness 메시지와 겹쳐 누수가 특히 빨랐다.)
+        if len(_cooldown) >= _COOLDOWN_MAX_KEYS:
+            cutoff = now - _COOLDOWN_SECS
+            for k in [k for k, v in _cooldown.items() if v < cutoff]:
+                _cooldown.pop(k, None)
+        _cooldown[key] = now
         return False
 
 
@@ -105,12 +204,22 @@ def _collect_error(
         log.debug(f"[GUARDIAN] sandbox traceback skip — {error_type}: {(message or '')[:60]}")
         return None
 
-    cool_key = f"{source}:{module}:{error_type}:{(message or '')[:80]}"
+    # ★ `__smoke__` 표식 — 스모크 테스트의 *합성 입력* 은 DB·통계·이벤트를 오염시키지 않는다.
+    #   (shared/claude_sdk_compat.py 의 선례. 표식 없이 던지면 검사용 가짜 오류가 진짜처럼
+    #    error_log 에 쌓여 관측 도구가 관측 대상을 더럽힌다.)
+    #   경로는 여기까지 *전부 실제로* 통과했으므로 '살아있음' 판정 근거는 그대로다.
+    if _SMOKE_MARK in f"{message or ''}{context or ''}{tb_str or ''}":
+        log.debug("[GUARDIAN] __smoke__ 합성 입력 — DB/이벤트 기록 생략 (경로는 통과)")
+        return _SMOKE_ID
+
+    cool_key = _cool_key(source, module, error_type, message)
     if _in_cooldown(cool_key):
         return None
 
     try:
-        from JARVIS07_GUARDIAN.severity import classify, is_auto_fixable
+        # ★ is_auto_fixable 은 여기서 안 쓴다 — 실제 게이트는 guardian_agent 가
+        #   `GUARDIAN_AUTOFIX_GATE` 아래에서 직접 import 해 호출한다. 미사용 import 제거.
+        from JARVIS07_GUARDIAN.severity import classify
         sev = classify(error_type, message, source, module or "")
     except Exception:
         sev = "medium"
@@ -183,14 +292,32 @@ def make_scheduler_listener():
 # ── C. 로그 파일 watchdog ─────────────────────────────────────────
 
 class _LogFileHandler:
-    """로그 파일에서 ERROR/CRITICAL 줄을 실시간 감지."""
+    """로그 파일에서 *Traceback 블록* (진짜 예외의 구조적 증거) 을 실시간 감지."""
 
-    def __init__(self, log_dir: Path):
+    def __init__(self, log_dir: Path, tail: bool = None):
         self._log_dir = log_dir
         self._positions: dict[str, int] = {}
+        # ★ tail=True: 처음 보는 파일은 *현재 끝* 에서 시작 (아래 _scan_file 주석 참조)
+        #   ★ 명시 인자가 없으면 값을 여기서 굳히지 않는다 — 스캐너 인스턴스는 install()
+        #     때 한 번 만들어져 데몬 수명 내내 살아있으므로, 생성자에서 env 를 읽어
+        #     담아두면 그것도 결국 '로드시점 캡처' 와 같은 복사본이 된다.
+        #     → None 으로 보관하고 `_tail` 프로퍼티가 매 스캔마다 env 를 조회한다.
+        self._tail_override: Optional[bool] = None if tail is None else bool(tail)
+
+    @property
+    def _tail(self) -> bool:
+        """호출시점 조회 — 생성자 명시값이 있으면 그것이 우선(스모크 테스트용)."""
+        if self._tail_override is not None:
+            return self._tail_override
+        return env_flag(_ENV_LOG_SCAN_TAIL)
+
+    @_tail.setter
+    def _tail(self, value) -> None:
+        """하위호환 — 외부에서 `handler._tail = False` 로 덮어쓰던 코드 보호."""
+        self._tail_override = None if value is None else bool(value)
 
     def scan(self):
-        """로그 폴더 내 *.log 파일 스캔 — 신규 ERROR/CRITICAL 줄 수집."""
+        """로그 폴더 내 *.log 파일 스캔 — 신규 Traceback 블록 수집."""
         for log_file in self._log_dir.glob("*.log"):
             try:
                 self._scan_file(log_file)
@@ -198,11 +325,25 @@ class _LogFileHandler:
                 log.debug(f"[GUARDIAN] 로그 스캔 오류 ({log_file.name}): {e}")
 
     def _scan_file(self, log_file: Path):
-        pos = self._positions.get(str(log_file), 0)
+        key  = str(log_file)
         size = log_file.stat().st_size
+
+        # ★★ 과거분 홍수 차단 (2026-07-25 — 이 수정에서 함께 발견한 결함)
+        #   `_positions` 는 메모리라 처음 보는 파일은 pos=0 → *파일 전체* 를 읽는다.
+        #   스캐너를 되살리는 순간 과거 Traceback 1,126건이 한꺼번에 '신규 오류' 로
+        #   적재된다 — 그중 1,104건은 **이미 폐기된 Streamlit** 의 죽은 로그다.
+        #   로그 스캐너는 *지금 벌어지는 일* 을 보는 실시간 감지기지 과거 발굴기가 아니다.
+        #   → 처음 보는 파일은 끝(EOF)에서 시작한다 (`tail -f` 의미론).
+        #   과거분 백필이 필요하면 GUARDIAN_LOG_SCAN_TAIL=0.
+        if key not in self._positions:
+            self._positions[key] = size if self._tail else 0
+            if self._tail:
+                return
+
+        pos = self._positions[key]
         if size <= pos:
-            if size < pos:  # 파일 회전
-                self._positions[str(log_file)] = 0
+            if size < pos:  # 파일 회전 — 처음부터 다시
+                self._positions[key] = 0
                 pos = 0
             else:
                 return
@@ -210,23 +351,31 @@ class _LogFileHandler:
         with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
             f.seek(pos)
             new_text = f.read()
-            self._positions[str(log_file)] = f.tell()
+            self._positions[key] = f.tell()
 
-        for m in _LOG_ERROR_PAT.finditer(new_text):
-            # 매치된 줄 *전체 라인* 추출 — 가드 패턴 검사
-            line_start = new_text.rfind('\n', 0, m.start()) + 1
-            line_end = new_text.find('\n', m.end())
-            if line_end == -1:
-                line_end = len(new_text)
-            full_line = new_text[line_start:line_end]
-            # ★ 재귀 차단 — GUARDIAN 자체 수집/스캔 로그는 수집 안 함
-            if _LOG_SKIP_PAT.search(full_line):
+        for m in _TRACEBACK_PAT.finditer(new_text):
+            block = m.group(0)
+            # ★ 인터프리터가 스스로 '무시했다' 고 선언한 예외 — __del__·GC·종료 중 발생.
+            #   전파되지 않으므로 기능 실패가 아니다. 자연어 노이즈 목록이 아니라
+            #   CPython unraisable hook 의 *구조적 판정* 을 그대로 존중한다.
+            #   킬스위치는 ★ 호출시점 조회 (기본 False = 수집 제외)
+            if m.group("unraisable") and not env_flag(_ENV_LOG_SCAN_UNRAISABLE,
+                                                      default=False):
                 continue
+            # ★ 재귀 차단 — GUARDIAN 자체 수집/스캔 로그는 수집 안 함
+            if _LOG_SKIP_PAT.search(block):
+                continue
+            exc_line = m.group("exc").strip()
+            dotted, _, msg = exc_line.partition(":")
+            etype = dotted.strip().split(".")[-1] or "LogError"
             catch(
-                m.group("etype") or "LogError",
+                etype,
                 "log_file",
-                message=m.group("msg").strip(),
+                message=(msg.strip() or exc_line)[:500],
                 module=log_file.name,
+                # ★ tb_str 전달 — 이제야 _is_sandbox_traceback 가 실제로 동작한다
+                #   (종전 경로는 tb 를 안 넘겨 sandbox 차단이 무력했다)
+                tb_str=block,
             )
 
 
@@ -256,6 +405,8 @@ def _discover_log_dirs() -> list[Path]:
 
 def scan_all_logs():
     """등록된 모든 로그 디렉토리 스캔 (job_scan_logs 에서 호출)."""
+    if not env_flag(_ENV_LOG_SCAN):    # ★ 호출시점 조회 — GUARDIAN_LOG_SCAN=0 즉시 반영
+        return
     for scanner in _log_scanners:
         try:
             scanner.scan()
@@ -425,7 +576,7 @@ def catch(
     # ★ 재시도가 아직 남은 '잠정' 실패 → Tier-2 판정 보류 (ERRORS [477])
     #   1회 실패는 오류가 아니다. 재시도가 다 끝나야 진짜 실패인지 알 수 있다.
     #   기록은 이미 남았으므로 대시보드에는 그대로 보인다 — 미루는 건 LLM 착수뿐.
-    if _eid and max_attempts and attempt and attempt < max_attempts:
+    if _eid and _eid != _SMOKE_ID and max_attempts and attempt and attempt < max_attempts:
         try:
             from shared.db import mark_error_provisional
             mark_error_provisional(int(_eid), True)
@@ -505,6 +656,87 @@ def install() -> None:
 register_global_hook = install
 
 
+# ── F. 스모크 테스트 — 캐치 경로가 *실제로* 살아있는지 동작으로 확인 ──────────
+
+def catch_path_effective() -> Optional[bool]:
+    """★ 캐치 경로 스모크 — `patch_effective()` 표준 (CLAUDE.md '복사본을 진실로 믿지 말 것').
+
+    **왜 필요한가**: 로그 스캐너는 70일간 매치 0건이었는데 아무도 몰랐다. 코드는 멀쩡히
+    존재했고, 잡도 정상 실행됐고, 로그에도 오류가 없었다. *작동하는지 확인하는 장치가
+    없었기* 때문이다. 코드 존재는 적용의 증거가 아니다 — 그래서 여기서는 가짜 오류를
+    **실제 소비자가 쓰는 경로 그대로** 통과시켜 예외/결과 유무로 판정한다.
+
+    검사하는 두 다리:
+      ① 로그 스캐너: 임시 로그 파일에 진짜 형태의 Traceback 을 쓰고
+         `_LogFileHandler._scan_file`(실 소비자) 로 스캔 → catch() 까지 도달하는가
+      ② 쿨다운: harness 형식 메시지의 attempt 만 바꿔 두 번 호출 → 2회차가 막히는가
+
+    ★ 합성 입력에는 `__smoke__` 표식이 박혀 있어 DB·이벤트·통계를 오염시키지 않는다.
+
+    반환: True(유효) / False(무력 — 즉시 수리 필요) / None(판정 불가)
+    """
+    import tempfile
+
+    try:
+        # ── ① 로그 스캐너 다리 ────────────────────────────────────────
+        seen: list[tuple] = []
+        _orig_catch = globals().get("catch")
+        if _orig_catch is None:
+            return None
+
+        def _spy(exc_or_type, source, **kw):
+            seen.append((exc_or_type, source, kw.get("message", "")))
+            return _orig_catch(exc_or_type, source, **kw)
+
+        synthetic = (
+            'Traceback (most recent call last):\n'
+            '  File "/does/not/exist/__smoke__probe.py", line 1, in <module>\n'
+            '    raise RuntimeError("__smoke__ guardian catch-path probe")\n'
+            'RuntimeError: __smoke__ guardian catch-path probe\n'
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            logf = tmpdir / "smoke_probe.log"
+            logf.write_text("정상 동작 중\n", encoding="utf-8")
+            # tail=False → 합성 파일은 처음부터 읽어야 검사가 성립
+            handler = _LogFileHandler(tmpdir, tail=False)
+            globals()["catch"] = _spy
+            try:
+                handler._scan_file(logf)                  # 기준선(예외 없음)
+                base = len(seen)
+                with open(logf, "a", encoding="utf-8") as f:
+                    f.write(synthetic)
+                handler._scan_file(logf)                  # ★ 실 소비자 경로
+            finally:
+                globals()["catch"] = _orig_catch
+
+        scanner_ok = len(seen) > base and any(
+            s[0] == "RuntimeError" and s[1] == "log_file" for s in seen
+        )
+
+        # ── ② 쿨다운 다리 (harness 형식 — attempt 만 다름) ─────────────
+        h1 = "[harness:__smoke__ 발행] attempt=1 step=③ 대본 생성: 실패"
+        h2 = "[harness:__smoke__ 발행] attempt=2 step=③ 대본 생성: 실패"
+        k1 = _cool_key("smoke", "probe", "RuntimeError", h1)
+        k2 = _cool_key("smoke", "probe", "RuntimeError", h2)
+        cooldown_ok = (k1 == k2)          # attempt 가 정규화되어 같은 키여야 한다
+
+        ok = bool(scanner_ok and cooldown_ok)
+        if not ok:
+            log.error(
+                f"[GUARDIAN] ★ 캐치 경로 스모크 실패 — "
+                f"로그스캐너={'OK' if scanner_ok else '무력'} / "
+                f"쿨다운={'OK' if cooldown_ok else '무력'}"
+            )
+        else:
+            log.info("[GUARDIAN] 캐치 경로 스모크 통과 — 로그스캐너 ✅ 쿨다운 ✅")
+        return ok
+    except Exception as e:
+        log.warning(f"[GUARDIAN] 캐치 경로 스모크 판정 불가: {e}")
+        return None
+
+
 def record_external_change(
     source: str,
     fixed_file: str,
@@ -572,6 +804,7 @@ def report_manual_fix(
     target_file: str = "",
     error_message: str = "",
     recurrable: Optional[bool] = None,
+    symptom: str = "",
 ) -> Optional[int]:
     """Claude 또는 사용자가 *발견·수정한* 결함을 회고적으로 박제하는 API.
 
@@ -588,6 +821,9 @@ def report_manual_fix(
         error_type:  분류 (예: "RelativeImport", "NoneSlicing", "PromptLeak")
         severity:    "low" | "medium" | "high"
         actor:       "claude" | "user" — 수정 주체
+        symptom:     ★ *고치기 전에 무엇이 잘못 보였는지* (증상). 생략하면 description 이
+            증상 자리에도 들어가 수리 이력의 "②증상" 과 "④조치" 가 같은 문장이 된다
+            (사용자 박제 2026-07-23). 재현 가능한 현상을 한 문장으로 적을 것.
 
     Returns:
         int | None: error_log.id
@@ -610,7 +846,7 @@ def report_manual_fix(
         error_id = _db.save_error(
             source=source,
             error_type=error_type,
-            message=description[:500],
+            message=(symptom or description)[:500],
             module=fixed_file,
             func_name=None,
             traceback=None,

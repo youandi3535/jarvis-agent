@@ -18,56 +18,42 @@ def _hash_text(text: str) -> str:
     return hashlib.sha1((text or "").encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
-# ★ 출처 신뢰 우선순위 — 단일 진입점 (사용자 박제 2026-07-03 — ADR 013)
-#   "논문 > API > 뉴스 > 기사 > 웹. 데이터가 겹치면 이 순서로 하나를 선택.
-#    단, 수집은 받을 수 있는 곳 전부에서 다 받는다 — 논문만 받으면 안 된다."
+# ★ 출처 신뢰 우선순위 — source_registry(SSOT) 에서 파생 (사용자 박제 2026-07-24)
+#   "API > 뉴스 > 기사 > 웹. 데이터가 겹치면 이 순서로 하나를 선택. 수집 자체는 전부에서."
 #   이 티어는 *중복·충돌 해소 전용* — 수집 범위 제한에 사용 금지.
-SOURCE_TRUST_TIER: dict[str, int] = {
-    "academic": 1, "kci": 1,                                   # 논문
-    "kosis": 2, "ecos": 2, "dart": 2, "krx": 2, "finance": 2, "bok_official": 2,  # 공식 데이터 API
-    "customs": 2, "kofia": 2, "fss": 2, "mlit": 2, "employment": 2,              # 국내 공공 경제 API
-    "naver_news": 3, "news": 3,                                # 뉴스
-    "kor_econ": 4, "web_data": 4,                              # 기사·전문지
-    "web": 5,                                                  # 웹
-    "blog": 6,                                                 # 블로그
-}
+#   ★ 종전엔 여기 dict 를 손수 유지했으나 같은 정보(티어·provider·카탈로그)가 5~10곳에 흩어져
+#     소스 하나 바꾸면 전체를 훑어야 했다(논문 제거 시 17파일). 이제 source_registry.SOURCES 파생.
+from .source_registry import SOURCE_TRUST_TIER   # noqa: F401 — SSOT 파생 재노출(evidence_pack 등 소비)
 
 
 def trust_rank(source_type: str) -> int:
-    """출처 신뢰 순위 (낮을수록 신뢰 높음). 미지 소스는 웹 수준(5)."""
+    """출처 신뢰 순위 (낮을수록 신뢰 높음). 미지 소스는 최하위(5)."""
     return SOURCE_TRUST_TIER.get((source_type or "").strip().lower(), 5)
 
 
 # ★ 수집 쿼터 (사용자 박제 2026-07-06, v2 정정): "인포그래픽을 만들 수 있을 만큼"의 자료를
-#   신뢰 서열대로 총 15개 확보 — 논문 최대 3, API 최대 7, 나머지 5(소스별 1개씩 라운드로빈).
-#   상위 티어가 슬롯을 못 채우면 미달분을 다음 티어로 이월(cascade). 예: 논문 2개면
-#   API 는 7+1=8개, 논문 0개면 API 10개, 논문·API 모두 0이면 나머지에서 15개 전부.
+#   신뢰 서열대로 총 15개 확보 — API 최대 10, 나머지 5(소스별 1개씩 라운드로빈).
+#   상위 티어가 슬롯을 못 채우면 미달분을 다음 티어로 이월(cascade). 예: API 8개면
+#   나머지 7개, API 0개면 나머지에서 15개 전부.
 COLLECT_QUOTA_BUDGET = 15   # 총 수집 상한
-COLLECT_PAPER_CAP    = 3    # 논문(academic·kci) 기본 상한
-COLLECT_API_CAP      = 7    # 공식 데이터 API(kosis·ecos·dart·krx·finance) 기본 상한
-
-_QUOTA_GROUP: dict[str, str] = {
-    "academic": "paper", "kci": "paper",
-    "kosis": "api", "ecos": "api", "dart": "api", "krx": "api", "finance": "api",
-    # ★ 국내 공공 경제 API 6종 (2026-07-17): SOURCE_TRUST_TIER 에선 tier 2(공식 API)인데
-    #   여기 누락돼 default "rest" 로 오분류 → tier2 라 뉴스(3)·웹(5)을 '나머지5' 슬롯에서
-    #   밀어내 뉴스 0건 사고. 반드시 tier 분류와 동치 유지 (라이브 재현: 뉴스 0→5).
-    "bok_official": "api", "customs": "api", "kofia": "api",
-    "fss": "api", "mlit": "api", "employment": "api",
-    # 나머지(naver_news·news·kor_econ·web·web_data·blog·discover 등) → "rest"
-}
-
+COLLECT_API_CAP      = 10   # 공식 데이터 API(kosis·ecos·dart·krx·finance) 기본 상한
 
 def quota_group(source_type: str) -> str:
-    """수집 쿼터 그룹: paper(논문) | api(공식데이터) | rest(뉴스·기사·웹·블로그)."""
-    return _QUOTA_GROUP.get((source_type or "").strip().lower(), "rest")
+    """수집 쿼터 그룹: api(공식 데이터 — 신뢰 tier 1) | rest(그 외: 뉴스·기사·웹·블로그).
+
+    ★ 2026-07-24 (② 동적설계): SOURCE_TRUST_TIER(trust_rank) *단일 소스* 에서 파생.
+      종전엔 별도 _QUOTA_GROUP 사본을 두고 "반드시 tier 분류와 동치 유지" 라고 주석까지
+      달았는데, 그 사본이 tier 와 어긋나 '뉴스 0건 사고'(2026-07-17)를 냈다 — 사본을
+      진실로 믿던 전형. 이제 API 그룹 = 공식 데이터 API(tier 1) 로 파생해 드리프트 원천 차단.
+    """
+    return "api" if trust_rank(source_type) == 1 else "rest"
 
 
 @dataclass
 class RawDocument:
     """수집 직후 원본 문서."""
     url: str
-    source_type: str          # blog | news | academic | finance | web
+    source_type: str          # blog | news | finance | web
     raw_html: str = ""
     raw_text: str = ""
     title: str = ""
@@ -126,14 +112,32 @@ ATTR_UNITS: dict[str, str] = {
 # ★ allow_stock_financial (사용자 박제 2026-07-18): 테마주=개별 종목 재무(PER·ROE·영업이익률·
 #   현재가) 차트 허용. 경제 브리핑=트렌드 경제·금융 상식/배경 글이므로 종목 재무 *배제*
 #   (거시지표·개념 인포그래픽만). 두 글은 성격이 완전히 다름 → 데이터·이미지도 분리.
+# ★ 수집 노브 (사용자 박제 2026-07-23 — 수집 오케스트레이션 09 이관): 카테고리별로 무엇을
+#   수집하느냐의 차이를 `if category == "theme"` 분기로 박지 않고 여기서 파생한다.
+#   collect_stocks = 개별 종목 시세·재무 수집 여부 / collect_charts = 주제 연관 차트 실데이터
+#   수집 여부 / market_fallback = 차트 0개일 때 시장지표(yfinance)로 datasets 를 채울지.
+#   profile_provider — 프로필 없이 키워드만 들어왔을 때 프로필을 받아올 자비스03 진입점
+#     ("모듈경로:함수명", `fn(keyword, sector=...)` → {"profile","sector"}). ADR 013 의
+#     '키워드 단독 전송 금지' 를 *수집 경계에서* 강제한다 — 02 에 프로필 재조회 코드를
+#     두지 않기 위한 노브 (사용자 박제 2026-07-23).
 CATEGORY_POLICY: dict[str, dict] = {
     "theme":    {"min_images": 5, "thumbnail_body_chars": 3000,
-                 "allow_stock_financial": True},
+                 "allow_stock_financial": True,
+                 "collect_stocks": True,  "collect_charts": False,
+                 "market_fallback": False,
+                 "profile_provider": "JARVIS03_RADAR.theme_picker:theme_topic"},
     "economic": {"min_images": 5, "thumbnail_body_chars": 3000,
-                 "allow_stock_financial": False},
+                 "allow_stock_financial": False,
+                 "collect_stocks": False, "collect_charts": True,
+                 "market_fallback": True,
+                 # 경제는 자비스03 topic_pack 이 후보와 함께 프로필을 항상 동봉한다.
+                 "profile_provider": ""},
 }
 _DEFAULT_POLICY = {"min_images": 5, "thumbnail_body_chars": 3000,
-                   "allow_stock_financial": True}
+                   "allow_stock_financial": True,
+                   "collect_stocks": True,  "collect_charts": False,
+                   "market_fallback": False,
+                   "profile_provider": ""}
 
 
 def policy_for(category: str) -> dict:
@@ -173,6 +177,47 @@ def dataset_fingerprint(title: str, unit: str) -> str:
 _GROUND_ABS_FLOOR = 1e-9   # g 가 0 근처일 때 절대 바닥 tolerance
 
 
+def is_finite_num(v) -> bool:
+    """유한 실수인가 (NaN·Inf·비수치 = False). ★ 결측 판정 단일 소스.
+
+    yfinance·BOK 등 외부 소스는 휴장·미집계 구간을 **NaN** 으로 돌려준다. NaN 은
+    '값이 없다'는 뜻이지 0 이 아니다 — 0 으로 채우면 거짓 데이터가 된다(제4조·ADR 010).
+    grounds()·sanitize_datasets()·시장데이터 생산자가 모두 이 함수로 판정한다.
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(f)
+
+
+def sanitize_datasets(datasets: list | None) -> list:
+    """dataset 의 결측(NaN/Inf) 포인트 제거 + 전량 결측 dataset 배제.
+
+    ★ 왜 조립 지점에서 한 번에 (사용자 박제 2026-07-25 — ERRORS 사실성 오차단):
+      NaN 이 상자에 남으면 *두 갈래로* 터진다 —
+        ① 검증: gt 에 섞여 grounds() 가 math.floor(NaN) 로 ValueError →
+           게이트가 except 로 삼켜 **진짜 사실을 '출처 미확인'으로 차단** (2026-07-25 경제 티스토리)
+        ② 이미지: pro_templates int(NaN) 크래시 (같은 날 GUARDIAN 보고)
+      결측은 채우지 않고 *버린다*. 포인트가 0 개가 되면 dataset 자체를 뺀다(빈 차트 방지).
+    """
+    out: list = []
+    for ds in datasets or []:
+        if not isinstance(ds, dict):
+            out.append(ds)
+            continue
+        pts = ds.get("data")
+        if not isinstance(pts, list):
+            out.append(ds)
+            continue
+        keep = [p for p in pts
+                if not isinstance(p, dict) or is_finite_num(p.get("value"))]
+        if not keep:
+            continue                      # 전량 결측 → dataset 배제
+        out.append(ds if len(keep) == len(pts) else {**ds, "data": keep})
+    return out
+
+
 def _decimals_of(x: float) -> int:
     """부동소수 표시 소수 자릿수 추정 (display_precision 폴백)."""
     s = repr(float(x))
@@ -193,11 +238,13 @@ def grounds(n, g, display_precision: int | None = None) -> bool:
     display_precision: 대본 원토큰의 소수 자릿수. None 이면 n 에서 추정
                        (★ _canon_num 이 정밀도를 버리므로 호출측이 원토큰 자릿수 전달 권장).
     """
-    try:
-        n = float(n)
-        g = float(g)
-    except (TypeError, ValueError):
+    # ★ 결측(NaN/Inf)은 근거가 될 수 없다 — *크래시 대신 미근거* (사용자 박제 2026-07-25).
+    #   종전엔 NaN 이 ②의 math.floor(NaN) 에서 ValueError 로 터졌고, 호출측 게이트가
+    #   그 예외를 except 로 삼켜 **진짜 사실을 '출처 미확인' 으로 차단**했다 (경제 티스토리 발행 실패).
+    if not (is_finite_num(n) and is_finite_num(g)):
         return False
+    n = float(n)
+    g = float(g)
     # ① ±5% (절대 바닥 포함)
     if abs(n - g) <= max(abs(g) * 0.05, _GROUND_ABS_FLOOR):
         return True
@@ -216,7 +263,7 @@ class CollectedData:
     대본 작성기·process_draft·prepublish_gate·law_enforcer 검증이 *모두* 이 상자를 소비.
       meta     : {keyword, profile, sector, category, as_of, + 사이드채널(coverage_ratio…)}
       datasets : 차트-준비 수치 [{title, viz_hint, unit, data:[{label,value}], source, fingerprint}]
-      docs     : 텍스트 코퍼스 [CollectionResult]  (논문>API>뉴스>기사>웹)
+      docs     : 텍스트 코퍼스 [CollectionResult]  (API>뉴스>기사>웹)
       facts    : 원자적 검증 수치 [{claim/statement, value, unit, source, as_of}]
       entities : 다속성 도메인 객체 [{name, type, attrs, source}] (종목·매물·코인…)
     """

@@ -1,9 +1,19 @@
 """발행창 밖 선계산(precollect) 캐시 — 사용자 박제 2026-07-18.
 
+★ 소유 이관 2026-07-23 (사용자 박제): 종전 `JARVIS02_WRITER/precollect_cache.py`.
+  "수집을 언제 해두고 언제 재사용할지" 는 *수집 시점 판단* 이므로 수집 도메인(JARVIS09)의 일이다.
+  02 에 있던 동안 캐시 조회가 발행 코드 안에 흩어져, 02 가 "캐시 먼저·없으면 수집" 이라는
+  *수집 순서* 를 판단하고 있었다 (수집 단일 진입점 위반). 이제 조회는 `collect_all(use_cache=True)`
+  안에서만, 저장은 `precollect.py` 안에서만 일어난다.
+
 무거운 fact·chart 추출 LLM 을 *저부하 창*(경제=06:00 트렌드 잡 말미 체이닝 / 테마 20:00)에서 미리
 수행해 캐시하고, 발행창(경제 07:00 / 테마 21:00)은 캐시를 재사용한다 → 발행창 내 추출 LLM 0회 →
 직후 writer 가 버스트로 열화되지 않은 Max 풀에서 실행(300s 스톨 조건 제거). "수집 데이터 전부 활용" 박제는
 전문 추출을 그대로 유지하고 *시점만* 앞당기므로 무위반.
+
+★ 캐시에 담는 것은 *09 의 수집 상자(collect_all 반환 dict)* 뿐 — 02 의 프롬프트 블록(supreme_block)
+  은 담지 않는다. 종전엔 02 의 nv_collect 반환 dict 를 통째로 캐시해 06:05 시점의 헌법 블록이
+  07:00 발행까지 얼어붙었다 (복사본을 진실로 믿은 사례). 대본 재료는 매 발행 새로 조립한다.
 
 ★ 순수 최적화 — 캐시 미스·만료·오류 시 호출자는 반드시 기존 수집 경로로 폴백(현행 동작 보존).
 캐시는 결코 발행을 막지 않는다.
@@ -24,48 +34,56 @@ _CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "precollect"
 _TTL_SEC = 6 * 3600
 
 
-def _key_path(post_type: str, keyword: str) -> Path:
+def _key_path(category: str, keyword: str) -> Path:
     h = hashlib.md5((keyword or "").strip().lower().encode("utf-8")).hexdigest()[:12]
     d = datetime.now().strftime("%Y%m%d")
-    return _CACHE_DIR / f"{post_type}_{d}_{h}.pkl"
+    return _CACHE_DIR / f"{category}_{d}_{h}.pkl"
 
 
-def save_precollect(post_type: str, keyword: str, payload: dict) -> bool:
-    """선계산 결과(nv_collect/ts_collect 반환 dict)를 피클 캐시. 성공 여부 반환."""
-    if not keyword or not isinstance(payload, dict) or not payload.get("success"):
+def _is_bundle(payload) -> bool:
+    """유효한 수집 상자인가 — `collect_all()` 반환 계약의 핵심 키 존재로 판정.
+
+    ② 동적 설계: "success" 같은 02 시절 플래그가 아니라 *09 계약* 을 근거로 판정한다.
+    """
+    return isinstance(payload, dict) and payload.get("collected") is not None
+
+
+def save_precollect(category: str, keyword: str, bundle: dict) -> bool:
+    """선계산 수집 상자(collect_all 반환 dict)를 피클 캐시. 성공 여부 반환."""
+    if not keyword or not _is_bundle(bundle):
         return False
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        p = _key_path(post_type, keyword)
+        p = _key_path(category, keyword)
         with open(p, "wb") as f:
-            pickle.dump({"ts": time.time(), "keyword": keyword, "payload": payload}, f)
-        log.info(f"[precollect] 저장: {post_type}/{keyword} → {p.name}")
+            pickle.dump({"ts": time.time(), "keyword": keyword, "payload": bundle}, f)
+        log.info(f"[precollect] 저장: {category}/{keyword} → {p.name}")
         return True
     except Exception as e:
-        log.warning(f"[precollect] 저장 실패({post_type}/{keyword}): {e}")
+        log.warning(f"[precollect] 저장 실패({category}/{keyword}): {e}")
         return False
 
 
-def load_precollect(post_type: str, keyword: str) -> dict | None:
-    """당일·TTL 내 선계산 결과 반환. 없거나 만료·오류면 None(호출자는 기존 수집으로 폴백)."""
+def load_precollect(category: str, keyword: str) -> dict | None:
+    """당일·TTL 내 선계산 수집 상자 반환. 없거나 만료·오류면 None(호출자는 실제 수집으로 폴백)."""
     if not keyword:
         return None
     try:
-        p = _key_path(post_type, keyword)
+        p = _key_path(category, keyword)
         if not p.exists():
             return None
         with open(p, "rb") as f:
             rec = pickle.load(f)
         if time.time() - float(rec.get("ts", 0)) > _TTL_SEC:
-            log.info(f"[precollect] 만료 무시: {post_type}/{keyword}")
+            log.info(f"[precollect] 만료 무시: {category}/{keyword}")
             return None
         payload = rec.get("payload")
-        if isinstance(payload, dict) and payload.get("success"):
-            log.info(f"[precollect] 히트: {post_type}/{keyword} — 발행창 추출 LLM 0회")
+        if _is_bundle(payload):
+            log.info(f"[precollect] 히트: {category}/{keyword} — 발행창 추출 LLM 0회")
             return payload
         return None
     except Exception as e:
-        log.warning(f"[precollect] 로드 실패({post_type}/{keyword}): {e} — 기존 수집 폴백")
+        log.warning(f"[precollect] 로드 실패({category}/{keyword}): {e} — 실제 수집 폴백")
         return None
 
 

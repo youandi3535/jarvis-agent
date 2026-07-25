@@ -8,6 +8,8 @@
         collect_for_theme,       # 주제 관련 텍스트 자료 (뉴스·블로그·학술 등)
         collect_stocks_data,     # 테마 종목 데이터 (시세·재무)
         collect_chart_data,      # ★ 주제 연관 차트용 실데이터 (출처 박제 — 2026-06-29)
+        chart_datasets,          # ★ 차트 datasets 파사드 (재수집 시점 판단 포함 — 2026-07-23)
+        naver_theme_catalog,     # ★ 네이버 공식 테마 카탈로그 (공개 정문 — 2026-07-23)
         get_market_data,         # 글로벌 시장 지표 (yfinance)
         get_economic_calendar,   # 경제 일정 (investing.com)
         web_verify,              # 발행 전 사실성 게이트용 웹 재검증
@@ -28,8 +30,10 @@ from JARVIS09_COLLECTOR.collector_engine import (
     collect_for_theme,
     collect_for_theme_delta,   # ★ delta-aware 교류 (사용자 박제 2026-06-07)
     collect_research,          # ★ 설계-우선 리서치 수집 (ADR 012 — 2026-07-02)
-    collect_all,               # ★ 통합 수집 컴포저 → CollectedData (Step 3 — 2026-07-05)
+    collect_all,               # ★★ 수집 단일 진입점 — 주제 → CollectedData (사용자 박제 2026-07-23)
     compose_collected,         # ★ 조각 → CollectedData 조립 (재수집 없음)
+    market_data_to_datasets,   # ★ 시장지표 → datasets (02 에서 이관 2026-07-23)
+    market_snapshot,           # ★ 시장 스냅샷(지표+일정) 수집·조립 (02 에서 이관 2026-07-23)
     select_by_trust_quota,     # ★ 신뢰 서열 쿼터 선별 (사용자 박제 2026-07-06)
 )
 from JARVIS09_COLLECTOR.evidence_pack import (
@@ -41,10 +45,15 @@ from JARVIS09_COLLECTOR.source_onboarding import (
     register_key as register_source_key,
     onboarding_status,
 )
-from JARVIS09_COLLECTOR.collect_theme import collect_stocks_data, stocks_to_datasets
+from JARVIS09_COLLECTOR.collect_theme import (
+    collect_stocks_data,
+    stocks_to_datasets,
+    naver_theme_catalog,       # ★ 네이버 공식 테마 카탈로그 — 공개 정문 (private 직수입 폐기 2026-07-23)
+)
 from JARVIS09_COLLECTOR.evidence_pack import facts_to_datasets   # 텍스트 수치 → 차트 승격 (ERRORS [302][315])
 from JARVIS09_COLLECTOR.chart_data import (
     collect_chart_data,
+    chart_datasets,      # ★ 차트 데이터 파사드 — 재수집 시점 판단까지 09 (2026-07-23)
     get_ecos_raw,        # ★ JARVIS06 차트용 ECOS 원시 수집 (provider 단일 진입점)
     get_krx_raw,         # ★ JARVIS06 차트용 KRX 원시 수집 (provider 단일 진입점)
 )
@@ -55,6 +64,19 @@ from JARVIS09_COLLECTOR.providers.economic_data_provider import (
     download_ticker,     # ★ JARVIS06 차트용 yfinance 단일 진입점
 )
 from JARVIS09_COLLECTOR.providers.verify_provider import web_verify
+from JARVIS09_COLLECTOR.providers.economic_data_provider import (
+    fetch_seo_docs as seo_reference_docs,   # ★ SEO 참고 문서 수집 (02 에서 이관 2026-07-23)
+)
+from JARVIS09_COLLECTOR.providers.published_provider import (
+    published_post_kor_counts,              # ★ 발행 글 글자수 크롤링 (02 에서 이관 2026-07-23)
+)
+from JARVIS09_COLLECTOR.precollect_cache import (
+    load_pinned_theme,         # ★ 선계산이 고정한 테마 조회 (02 에서 이관 2026-07-23)
+)
+from JARVIS09_COLLECTOR.precollect import (
+    precollect_theme,          # ★ 선계산 = "언제 미리 수집할지" — 수집 도메인 (이관 2026-07-23)
+    precollect_economic,
+)
 
 __all__ = [
     "CollectedData",
@@ -67,6 +89,8 @@ __all__ = [
     "collect_research",
     "collect_all",
     "compose_collected",
+    "market_data_to_datasets",
+    "market_snapshot",
     "select_by_trust_quota",
     "evidence_brief",
     "as_source_docs",
@@ -75,8 +99,10 @@ __all__ = [
     "onboarding_status",
     "collect_stocks_data",
     "stocks_to_datasets",
+    "naver_theme_catalog",
     "facts_to_datasets",
     "collect_chart_data",
+    "chart_datasets",
     "get_ecos_raw",
     "get_krx_raw",
     "get_market_data",
@@ -84,4 +110,9 @@ __all__ = [
     "get_ticker_history",
     "download_ticker",
     "web_verify",
+    "seo_reference_docs",
+    "published_post_kor_counts",
+    "load_pinned_theme",
+    "precollect_theme",
+    "precollect_economic",
 ]

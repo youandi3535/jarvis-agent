@@ -40,6 +40,14 @@ try:
 except ImportError:
     def _g_report(*a, **kw): pass
 
+# ── watchdog 진행신호 (★ 2026-07-24 freeze 방어) ──
+#   차트/PHOTO 슬롯이 여러 개면 인포그래픽 렌더 루프가 누적으로 freeze 임계(300s)를
+#   넘길 수 있다. 슬롯마다 beat() 로 진행 중임을 알린다(innermost 렌더는 #1 이 커버).
+try:
+    from JARVIS00_INFRA.watchdog import beat as _wd_beat
+except Exception:
+    def _wd_beat() -> None: pass
+
 
 # ── 본문 이미지 = 인포그래픽 디자인만 (★ 사용자 박제 2026-07-06) ────
 #   AI 사진(Pollinations) 영문 프롬프트 빌더·관련성 검증 전면 삭제.
@@ -285,6 +293,7 @@ def _generate_charts(html: str, theme: str, sector: str, collected,
     svg_map: dict[int, str] = {}
 
     for pos, desc in _desc_by_pos.items():
+        _wd_beat()   # ★ 인포그래픽 렌더 진입마다 진행 신호 — 누적 freeze 오탐 방지
         svg_map[pos] = _next_data_infographic(collected, out_dir, run_id, _used, platform, html)
 
     _pos = [0]
@@ -313,6 +322,7 @@ def _render_photo_slots(html: str, collected, out_dir: Path, run_id: str,
         return html
     info_map: dict[int, str] = {}
     for i, _ in enumerate(placeholders, 1):
+        _wd_beat()   # ★ 인포그래픽 렌더 진입마다 진행 신호 — 누적 freeze 오탐 방지
         info_map[i] = _next_data_infographic(collected, out_dir, run_id, used_titles, platform, html)
     ok = sum(1 for v in info_map.values() if v)
     print(f"  📊 [{platform}] PHOTO 슬롯 {ok}/{len(placeholders)}개 인포그래픽 치환 (나머지 빈 슬롯)")

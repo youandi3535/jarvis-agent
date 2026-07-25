@@ -32,53 +32,14 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
-# ═══════════════════════════════════════════════════════════════
-# 수집 대상 — 신뢰도 높은 공식/전문 SEO 소스
-# ═══════════════════════════════════════════════════════════════
-
-_SEO_SOURCES: list[tuple[str, str]] = [
-    # (이름, URL)
-    ("Google 검색 센터 - SEO 기초",
-     "https://developers.google.com/search/docs/fundamentals/seo-starter-guide"),
-    ("Google 검색 센터 - Helpful Content",
-     "https://developers.google.com/search/docs/fundamentals/creating-helpful-content"),
-    ("네이버 서치어드바이저 - 콘텐츠 가이드",
-     "https://searchadvisor.naver.com/guide/seo-basic-guide"),
-]
-
-_FETCH_TIMEOUT  = 12    # 초
-_MAX_CHARS_PAGE = 4000  # 페이지당 전달 글자 한도
+# ★ 02 에는 수집이 없다 (사용자 박제 2026-07-23) — SEO 참고 문서 수집(대상 목록·타임아웃·
+#   본문 추출)은 전부 `JARVIS09_COLLECTOR.seo_reference_docs()` 단독. 종전 02 가 갖고 있던
+#   `_SEO_SOURCES` 사본은 09 원본과 드리프트하는 복사본이었다(★ 복사본을 진실로 믿지 말 것).
 
 
 # ═══════════════════════════════════════════════════════════════
 # 내부 유틸
 # ═══════════════════════════════════════════════════════════════
-
-def _fetch_page(name: str, url: str) -> str:
-    """★ shim → JARVIS09 단일 진입점 위임 (2026-05-31 이관)."""
-    try:
-        from JARVIS09_COLLECTOR.providers.economic_data_provider import fetch_seo_docs as _j09_fetch
-        combined = _j09_fetch()
-        # 요청된 name/url에 해당하는 부분만 추출
-        for block in combined.split("\n\n"):
-            if name in block or url.split("/")[-1] in block:
-                return block[:_MAX_CHARS_PAGE]
-        return combined[:_MAX_CHARS_PAGE]
-    except Exception as e:
-        log.warning(f"[SEO Learner] fetch 위임 실패 ({name}): {e}")
-        return ""
-
-
-def _build_fetched_block() -> str:
-    """★ shim → JARVIS09 단일 진입점 위임 (2026-05-31 이관)."""
-    try:
-        from JARVIS09_COLLECTOR.providers.economic_data_provider import fetch_seo_docs as _j09_fetch
-        result = _j09_fetch()
-        return result if result else "외부 페이지 수집 실패 — Claude 내부 학습 데이터 기반 분석 수행."
-    except Exception as e:
-        log.warning(f"[SEO Learner] fetch_seo_docs 위임 실패: {e}")
-        return "외부 페이지 수집 실패 — Claude 내부 학습 데이터 기반 분석 수행."
-
 
 def _parse_improvements(raw: str) -> list[dict]:
     """Claude 응답에서 JSON 배열 파싱."""
@@ -143,7 +104,8 @@ def run_seo_learning() -> None:
 
     # ── 소스 수집 ───────────────────────────────────────────────
     log.info("[SEO Learner] 외부 소스 수집 중...")
-    fetched_block = _build_fetched_block()
+    from JARVIS09_COLLECTOR import seo_reference_docs as _seo_docs
+    fetched_block = _seo_docs() or "외부 페이지 수집 실패 — Claude 내부 학습 데이터 기반 분석 수행."
 
     # ── Claude 비교 분석 ────────────────────────────────────────
     prompt = f"""당신은 SEO 전문가입니다. 오늘 날짜: {today_str}

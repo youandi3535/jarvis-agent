@@ -6,7 +6,9 @@
 
 흐름:
   1. TG: 🔧 [GUARDIAN] {job_id} 실패 감지 — 자동 대응 시작
-  2. 오류 분류: code_bug (ImportError 등) | transient (네트워크·쿠키·셀레니움) | unknown
+  2. 오류 분류: code_bug | transient | unknown
+     ★ 판정 목록을 이 모듈이 **소유하지 않는다** — 전부 `severity` 단일 진입점 위임
+       (2026-07-25). 남은 정규식은 *구조 추출* 뿐(줄 앵커 + 길이 제한). 아래 `_classify` 참조.
   3. code_bug / unknown:
        Tier 1 — 패턴 자동 수정 (static 6 + learned + Contextual Bandit, ~5s)
        Tier 2 — LLM 자동 수정 (Claude Code SDK · Sonnet 5, ~10min) — Tier 1 실패 시만
@@ -19,7 +21,9 @@
 """
 from __future__ import annotations
 
+import builtins
 import logging
+import os
 import re
 import threading
 import time
@@ -30,25 +34,45 @@ log = logging.getLogger("jarvis.guardian.incident")
 # 동시 실행 방지 (같은 시간대 중복 incident 차단)
 _active = threading.Lock()
 
-_TRANSIENT_KEYWORDS = [
-    "timeout", "TimeoutException", "connection refused",
-    "WebDriverException", "NoSuchElement", "StaleElement",
-    "쿠키", "cookie", "TS_COOKIE", "NID_SES",
-    "HTTP Error", "503", "502", "rate limit", "403",
-    "ConnectionError", "ReadTimeout", "SSLError", "network",
-    # ★ ERRORS [405] — topic_pack 생성 실패는 LLM rate-limit/회로차단 자원 경합
-    # (코드 버그 아님). Tier2 SDK 낭비 세션이 재시도 LLM 슬롯과 경합해 재발 유발.
-    "주제 패키지 없음",
-]
-
-_CODE_BUG_TYPES = [
-    "ImportError", "ModuleNotFoundError", "AttributeError",
-    "NameError", "TypeError", "SyntaxError", "KeyError",
-    "IndentationError", "ValueError", "RecursionError",
-]
-
 _TG_MAX = 2000
 _TRANSIENT_WAIT = 30  # 일시적 오류 재시도 전 대기(초)
+
+# ── 오류 분류 — 판정 목록 0개 (★ 사용자 박제 2026-07-25) ──────────────────
+#
+# ★ 종전 결함: `_TRANSIENT_KEYWORDS` / `_CODE_BUG_TYPES` 두 *로컬 목록* 이
+#   `severity.is_transient()` 위임을 앞뒤로 포위하고 있었다. 둘 다 **단어 경계 없는
+#   부분문자열 검사** 를 로그 꼬리 3000자 전체에 던졌다 —
+#     "uuid": "235059e1-...-a0a10a4403cb"  ← 이 UUID 안의 '403' 3글자가
+#   발행 실패 대응 경로를 transient 로 확정시켰다(감사 재현 성공).
+#   또 목록이 로컬이라 severity 가 아무리 정교해져도 물려받지 못했다(①단일 진입점 위반).
+#
+# ★ 현재: 판정은 전부 `JARVIS07_GUARDIAN.severity` 단일 진입점에 위임한다.
+#   이 모듈에 남은 문자열 매칭은 *판정* 이 아니라 **구조 추출** 뿐이며(아래 두 정규식),
+#   ① 줄 시작 앵커 + 단어 경계를 강제하고 ② 스캔 길이를 `_TYPE_SCAN_CHARS` 로 제한한다.
+#   → UUID·해시·URL 안의 우연한 부분문자열은 구조상 매칭 불가.
+#
+# ★ severity 에 요청한 공개 API (있으면 자동 승계, 없으면 아래 폴백):
+#     · `severity.is_code_bug_type(error_type) -> bool`   ← 코드버그 타입 가드(작업 중)
+#     · `severity.detect_error_type(text) -> str`         ← 로그 텍스트 → error_type 추출
+#   getattr 로 *런타임 조회* 하므로 severity 에 생기는 즉시(데몬 재시작 후) 반영된다.
+
+# 파이썬 traceback 마지막 줄 형태만 매칭: "[pkg.mod.]ExcName: 메시지"
+#   · `^` (re.M) 로 줄 시작 앵커 → UUID/URL 중간 토큰 매칭 불가
+#   · 이름에 소문자 1자 이상 강제 → "INFO:" 같은 로그레벨 배제
+_EXC_LINE_RE = re.compile(
+    r"^[ \t]*(?:[A-Za-z_][\w.]*\.)?([A-Z][A-Za-z0-9_]*[a-z][A-Za-z0-9_]*)[ \t]*:",
+    re.M,
+)
+
+# harness 이슈 줄(economic_poster 가 기록하는 구조화 포맷): "[naver] step: kind: detail"
+#   kind 는 구조화 필드라 네이버·티스토리 × 경제·테마 4조합에 동일 적용된다(③).
+_HARNESS_KIND_RE = re.compile(
+    r"^[ \t]*[•\-\*]?[ \t]*\[[a-z_]+\][ \t]*[^:\n]+:[ \t]*([a-z][a-z0-9_]*)[ \t]*:",
+    re.M,
+)
+
+_TYPE_SCAN_CHARS = 1500   # 타입 추출 스캔 상한 (로그 꼬리 3000자 전체 스캔 금지)
+_MAX_KINDS = 20           # harness kind 추출 상한
 
 
 def _tg(msg: str) -> None:
@@ -59,32 +83,159 @@ def _tg(msg: str) -> None:
         pass
 
 
-def _classify(error_text: str) -> str:
-    """오류 유형 분류: 'code_bug' | 'transient' | 'unknown'"""
-    for kw in _CODE_BUG_TYPES:
-        if kw in error_text:
-            return "code_bug"
-    # ★ severity.is_transient() 를 단일 진실 소스로 우선 조회 — "인프라 스로틀"·
-    #   "데드라인 초과"·"종목 데이터 0개" 등 harness/GUARDIAN 전역에서 이미 검증된
-    #   transient 패턴이 여기 없어 매번 code_bug/unknown 으로 새 Tier-2 SDK 세션을
-    #   낭비하는 사고를 방지한다(복사본 드리프트 — CLAUDE.md 최우선 설계 원칙).
+# ── severity 위임 헬퍼 (모듈 객체는 매 호출 조회 — 함수 참조 선캡처 금지) ──
+def _severity():
     try:
-        from JARVIS07_GUARDIAN.severity import is_transient
-        if is_transient("", error_text):
-            return "transient"
-    except Exception:
-        pass
-    for kw in _TRANSIENT_KEYWORDS:
-        if kw.lower() in error_text.lower():
-            return "transient"
+        from JARVIS07_GUARDIAN import severity as _sev
+        return _sev
+    except Exception as e:            # pragma: no cover — severity 부재는 설치 이상
+        log.warning(f"[Incident] severity 로드 실패(분류 위임 불가): {e}")
+        return None
+
+
+def _is_exception_name(name: str) -> bool:
+    """이름이 *실제 파이썬 예외 클래스* 인가 — builtins 런타임 조회(② 동적 설계).
+
+    종전 `_CODE_BUG_TYPES` 10종 하드코딩을 대체. 목록을 손으로 나열하지 않고
+    언어 자체에서 파생하므로 IndexError·ZeroDivisionError 등도 자동 포함된다.
+    Warning 계열은 제외 (경고는 실패 원인이 아님).
+    """
+    obj = getattr(builtins, (name or "").strip(), None)
+    return (
+        isinstance(obj, type)
+        and issubclass(obj, Exception)
+        and not issubclass(obj, Warning)
+    )
+
+
+def _is_code_bug_type(etype: str) -> bool:
+    """코드 버그 타입인가 — severity 단일 진입점 위임 (로컬 목록 0)."""
+    if not etype:
+        return False
+    sev = _severity()
+    if sev is not None:
+        # ① severity 가 코드버그 타입 가드를 공개하면 그것이 단일 진실 소스
+        for probe in ("is_code_bug_type", "is_code_error_type"):
+            fn = getattr(sev, probe, None)
+            if callable(fn):
+                try:
+                    return bool(fn(etype))
+                except Exception:
+                    pass
+        # ② 폴백 — severity 가 *이미 공개한 판정* 만 조합
+        try:
+            if sev.is_transient(etype, ""):
+                return False          # severity 가 일시적이라 한 타입은 코드버그 아님
+            if sev.is_deterministic_code_error(etype):
+                return True
+        except Exception:
+            pass
+    return _is_exception_name(etype)
+
+
+def _harness_kinds(text: str) -> list[str]:
+    """harness 이슈 kind 목록 추출 (구조 추출 — 판정 아님)."""
+    return _HARNESS_KIND_RE.findall(text or "")[:_MAX_KINDS]
+
+
+def _detect_error_type(error_text: str) -> str:
+    """로그 텍스트에서 error_type 추출 — 줄 앵커 + 길이 제한.
+
+    킬스위치 `GUARDIAN_INCIDENT_TYPE_SCAN=0` → 추출 생략(텍스트 위임만 사용).
+    """
+    text = error_text or ""
+    if not text or os.getenv("GUARDIAN_INCIDENT_TYPE_SCAN", "1") == "0":
+        return ""
+    sev = _severity()
+    fn = getattr(sev, "detect_error_type", None) if sev is not None else None
+    if callable(fn):                  # ★ severity 신설 시 자동 승계
+        try:
+            return str(fn(text) or "")
+        except Exception:
+            pass
+    tail = text[-_TYPE_SCAN_CHARS:]
+    names = _EXC_LINE_RE.findall(tail)
+    for name in reversed(names):      # traceback 마지막 줄이 진짜 원인
+        if _is_exception_name(name):
+            return name
+        if name.endswith(("Error", "Exception")):
+            return name               # 서드파티 예외(TimeoutException 등) — 형태로 인정
+        if sev is not None:
+            try:
+                if sev.is_transient(name, ""):
+                    return name       # severity 가 아는 타입(ReadTimeout 등)
+            except Exception:
+                pass
+    return ""
+
+
+def _classify(error_text: str, returncode: int | None = None) -> str:
+    """오류 유형 분류: 'code_bug' | 'transient' | 'unknown'
+
+    ★ 판정 위임 순서 (전부 severity 소유 — 이 모듈에 판정 목록 0개):
+      0) returncode == WATCHDOG_KILL_RC       → transient  (구조 신호 최우선)
+      1) harness 이슈 kind 전부 NON_CODE      → transient  (구조화 필드 — 4조합 자동)
+      2) severity 가 코드버그 타입이라 판정   → code_bug
+      3) severity.is_transient(type, text)    → transient
+      4) 그 외                                 → unknown   (code_bug 와 동일 경로)
+
+    ★ 2026-07-24 구조적 신호 최우선: 발행 subprocess 가 watchdog freeze 로 강제종료된
+      경우(returncode == WATCHDOG_KILL_RC) 는 *일시적 정지* 이지 코드버그가 아니다.
+      오류 텍스트의 자연어 패턴에 의존하지 않고 종료코드로 확정 → Tier-2 SDK 낭비 차단.
+      (severity.NON_CODE_ISSUE_KINDS 는 건드리지 않는다 — 사용자 박제 2026-07-22:
+       freeze/stuck 은 반복 시 진짜 성능결함일 수 있어 *가시성* 은 유지. 여기서는
+       incident 자동수리 경로의 분류만 교정.)
+
+    킬스위치 `GUARDIAN_INCIDENT_CLASSIFY=0` → 항상 'unknown'(수정 시도 후 재발행).
+    """
+    text = error_text or ""
+    if os.getenv("GUARDIAN_INCIDENT_CLASSIFY", "1") == "0":
+        return "unknown"
+
+    # 0) 구조 신호 — watchdog 강제종료
+    if returncode is not None:
+        try:
+            from JARVIS00_INFRA.watchdog import WATCHDOG_KILL_RC
+            if int(returncode) == int(WATCHDOG_KILL_RC):
+                return "transient"
+        except Exception:
+            pass
+
+    sev = _severity()
+
+    # 1) harness 이슈 kind — severity.NON_CODE_ISSUE_KINDS 위임 (구조화 필드)
+    #    factuality·engagement·infra_throttle 등은 *글 내용/운영* 문제라 코드 수정 대상이
+    #    아니다(ERRORS [475], error_log id=4142 오학습 사고). 하나라도 코드 kind 가 섞이면
+    #    수정 경로를 유지 — 보수적.
+    kinds = _harness_kinds(text)
+    if sev is not None and kinds:
+        try:
+            if all(sev.is_transient("", "", kind=k) for k in kinds):
+                return "transient"
+        except Exception:
+            pass
+
+    etype = _detect_error_type(text)
+
+    # 2) 코드버그 타입 — severity 위임
+    if _is_code_bug_type(etype):
+        return "code_bug"
+
+    # 3) 일시적 판정 — severity 단일 진입점 (정규식은 severity 가 소유)
+    if sev is not None:
+        try:
+            if sev.is_transient(etype, text, source="incident_responder"):
+                return "transient"
+        except Exception:
+            pass
+
     return "unknown"
 
 
 def _make_error_record(error_text: str, job_id: str) -> dict:
     """pattern_fixer / error_analyzer 에 전달할 synthetic error_record."""
-    # 첫 번째 에러 타입 추출
-    m = re.search(r'\b(' + '|'.join(_CODE_BUG_TYPES) + r')\b', error_text)
-    detected_type = m.group(1) if m else "PostingFailure"
+    # 에러 타입 추출 — `_detect_error_type` 단일 경로 (종전 `_CODE_BUG_TYPES` 정규식 폐기)
+    detected_type = _detect_error_type(error_text) or "PostingFailure"
 
     # traceback 에서 모듈 경로 추출
     mod_m = re.search(r'File "([^"]+\.py)"', error_text)
@@ -166,6 +317,7 @@ def respond(
     error_text: str,
     retry_fns: dict[str, Callable],
     theme: str = "",
+    returncode: int | None = None,
 ) -> dict:
     """포스팅 실패 즉각 대응 메인 로직 (블로킹).
 
@@ -175,6 +327,7 @@ def respond(
         error_text: 로그·예외 텍스트 (원인 파악용)
         retry_fns: {platform: callable} — 재시도 함수 (실패 플랫폼만)
         theme: 테마주 이름 (theme job 시)
+        returncode: 발행 subprocess 종료코드 (있으면 분류 최우선 신호 — freeze 강제종료 판별)
 
     Returns:
         {"fixed": bool, "retried": list, "succeeded": list}
@@ -187,7 +340,7 @@ def respond(
         f"자동 수정·재발행 시작 중..."
     )
 
-    error_class = _classify(error_text)
+    error_class = _classify(error_text, returncode)
     log.info(f"[Incident] 오류 분류: {error_class}")
     fix_applied = False
 
@@ -264,10 +417,12 @@ def respond_in_background(
     error_text: str,
     retry_fns: dict[str, Callable],
     theme: str = "",
+    returncode: int | None = None,
 ) -> None:
     """백그라운드 스레드에서 respond() 실행 (호출 즉시 반환).
 
     이미 대응 중이면 스킵 (중복 실행 방지).
+    returncode: 발행 subprocess 종료코드 (freeze 강제종료 판별용 — respond 로 전달).
     """
     if not _active.acquire(blocking=False):
         log.warning("[Incident] 이미 다른 incident 처리 중 — 스킵")
@@ -279,7 +434,7 @@ def respond_in_background(
 
     def _worker():
         try:
-            respond(job_id, failed_platforms, error_text, retry_fns, theme)
+            respond(job_id, failed_platforms, error_text, retry_fns, theme, returncode)
         except Exception as e:
             log.error(f"[Incident] 대응 워커 예외: {e}")
         finally:

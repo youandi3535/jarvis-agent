@@ -28,7 +28,11 @@ ROOT = Path(__file__).parent.parent
 
 _TIMEOUT    = 1200  # 최대 20분 (★ ERRORS 박제 — 164파일 전수 검토 시 900s 초과 → 1200s, --max-turns 80 병행)
 _MAX_TG_LEN = 3500  # 텔레그램 메시지 최대 글자
-_MODEL      = "claude-sonnet-5"    # ★ 오류 수정 모델 — Sonnet 5 단일 통일 (사용자 박제 2026-07-06, ADR 017 — ADR 015 폐지). 전체 model ID 명시 (ERRORS [184] — bare alias 는 1M context 자동 승격 위험, 이 관행은 모델 무관 유지).
+# ★ 오류 수정 모델 — 단일 계층(ADR 017). ID 리터럴을 박지 않고 shared/llm.MODELS 에서 파생
+#   (사본을 두면 모델 교체 시 여기만 옛 모델을 계속 가리킨다 — ERRORS [491]).
+#   full model ID 로 넘기는 관행은 유지 (ERRORS [184] — bare alias 는 1M context 자동 승격 위험).
+from shared.llm import model_id as _model_id  # noqa: E402
+_MODEL      = _model_id("guardian")
 
 # macOS npm/nvm 설치 경로 포함 확장 PATH
 _EXTRA_PATHS = [
@@ -72,12 +76,15 @@ grep -rn \
   -e "from apscheduler" \
   -e "BackgroundScheduler\\|BlockingScheduler" \\
   -e "schedule\\.every\\|import schedule" \\
-  -e "claude-opus-4-6\\|claude-sonnet-4-6\\|claude-opus-4-7\\|claude-opus-4-8\\|claude-haiku" \\
+  -e "claude-[a-z]\\+-[0-9]" \\
   -e "anthropic\\.Anthropic()" \\
   --include="*.py" \
   --exclude-dir=.venv --exclude-dir=__pycache__ --exclude-dir=chroma_db \
-  {WORKDIR} 2>/dev/null | grep -v "JARVIS04_SCHEDULER/"
+  {WORKDIR} 2>/dev/null | grep -v "JARVIS04_SCHEDULER/" | grep -v "shared/llm.py"
 ```
+※ 모델 ID 리터럴은 `shared/llm.py` 의 MODELS 만 소유한다. 다른 파일에 모델 ID 가
+   박혀 있으면 위반 — `from shared.llm import model_id` 로 파생하도록 고칠 것.
+   (폐기된 모델명 목록을 여기 나열하지 않는 이유: 목록 자체가 또 하나의 사본이 된다)
 히트 파일만 Read → 수정.
 
 ## 단계 3 — 버그 패턴 grep (Bash 1턴)

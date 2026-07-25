@@ -131,12 +131,12 @@ try:
         help_section=(
             "🕸️ *수집 관리 (JARVIS09)*\n"
             "예: 수집 현황 보여줘 / 반도체 수집 이력\n"
-            "• blog·news·academic·finance·web 자동 수집\n"
+            "• blog·news·finance·web 자동 수집\n"
             "• 정제 원본 WRITER 전달 · robots.txt 준수"
         ),
         intents=["collect.status", "collect.history"],
         domain="collection",
-        description="주제별 인터넷 공개 데이터 수집·정제 (blog/news/academic/finance/web)",
+        description="주제별 인터넷 공개 데이터 수집·정제 (blog/news/finance/web)",
     )
 except Exception:
     pass
