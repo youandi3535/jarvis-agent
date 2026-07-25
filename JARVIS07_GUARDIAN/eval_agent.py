@@ -419,7 +419,17 @@ def record_fix_failure(
 
     now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     threshold = _quarantine_fails()
+    # ★ ERRORS [497] — read-modify-write 를 **교차 프로세스** 락으로 감싼다.
+    #   종전엔 `got=False`(타임아웃)여도 그대로 RMW 를 강행해 *lost update* 가 났다.
+    #   게다가 `threading.Lock` 은 같은 프로세스만 방어하는데, 테마가 subprocess 로
+    #   바뀐 뒤(c9c7c2b) 교차 프로세스에서는 `got` 이 **항상 True** 라 아무것도 못 막았다.
+    #   json_store.locked() 는 flock 기반이고 재진입 가능하다(내부 write_json 과 중첩 안전).
+    from JARVIS07_GUARDIAN.json_store import locked as _xp_locked  # noqa: PLC0415
+    _lpath = getattr(pf, "_LEARNED_PATH", None)
     got = lock.acquire(timeout=5.0) if lock is not None else True
+    _xp = _xp_locked(_lpath) if _lpath is not None else None
+    if _xp is not None:
+        _xp.__enter__()
     try:
         data = loader() or {}
         target = None
@@ -474,6 +484,11 @@ def record_fix_failure(
     finally:
         if lock is not None and got:
             lock.release()
+        if _xp is not None:                       # ★ 교차 프로세스 락 해제 (ERRORS [497])
+            try:
+                _xp.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
     return res
 
 
@@ -489,7 +504,17 @@ def prune_quarantined(dry_run: bool = True, keep_days: int = 30) -> dict:
     if loader is None or saver is None:
         return {"ok": False, "reason": "no-store-api"}
     lock = getattr(pf, "_LEARNED_LOCK", None)
+    # ★ ERRORS [497] — read-modify-write 를 **교차 프로세스** 락으로 감싼다.
+    #   종전엔 `got=False`(타임아웃)여도 그대로 RMW 를 강행해 *lost update* 가 났다.
+    #   게다가 `threading.Lock` 은 같은 프로세스만 방어하는데, 테마가 subprocess 로
+    #   바뀐 뒤(c9c7c2b) 교차 프로세스에서는 `got` 이 **항상 True** 라 아무것도 못 막았다.
+    #   json_store.locked() 는 flock 기반이고 재진입 가능하다(내부 write_json 과 중첩 안전).
+    from JARVIS07_GUARDIAN.json_store import locked as _xp_locked  # noqa: PLC0415
+    _lpath = getattr(pf, "_LEARNED_PATH", None)
     got = lock.acquire(timeout=5.0) if lock is not None else True
+    _xp = _xp_locked(_lpath) if _lpath is not None else None
+    if _xp is not None:
+        _xp.__enter__()
     try:
         data = loader() or {}
         q = data.get("quarantined", []) or []
@@ -510,6 +535,11 @@ def prune_quarantined(dry_run: bool = True, keep_days: int = 30) -> dict:
     finally:
         if lock is not None and got:
             lock.release()
+        if _xp is not None:                       # ★ 교차 프로세스 락 해제 (ERRORS [497])
+            try:
+                _xp.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 # ──────────────────────────────────────────────────────────────

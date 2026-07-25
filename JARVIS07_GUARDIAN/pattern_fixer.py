@@ -796,25 +796,30 @@ def bandit_arm_name(error_record: dict, hit_count: int) -> str:
 
 
 def _load_learned() -> dict:
-    """learned_patterns.json 로드. 파일 없으면 빈 구조 반환."""
-    if not _LEARNED_PATH.exists():
+    """learned_patterns.json 로드 — 손상 시 **빈 구조로 삼키지 않는다** (ERRORS [497]).
+
+    ★ 종전엔 `except: return {빈 구조}` 였다. 그 빈 구조를 다음 `_save_learned` 가
+      진실로 믿고 덮어써 48패턴(409KB) → 1패턴(7.8KB) 전멸이 가능했다.
+      이제 `json_store.read_json` 이 손상본을 격리하고 `.bak` 승격을 시도한다.
+    """
+    from JARVIS07_GUARDIAN.json_store import read_json  # noqa: PLC0415
+    data = read_json(_LEARNED_PATH, default=None)
+    if not isinstance(data, dict):
         return {"version": "1.0", "patterns": []}
-    try:
-        return json.loads(_LEARNED_PATH.read_text(encoding="utf-8"))
-    except Exception as e:
-        log.warning(f"[GUARDIAN/learned] 로드 실패: {e}")
-        return {"version": "1.0", "patterns": []}
+    return data
 
 
 def _save_learned(data: dict) -> None:
-    """learned_patterns.json 저장 (스레드 안전)."""
-    try:
-        _LEARNED_PATH.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception as e:
-        log.warning(f"[GUARDIAN/learned] 저장 실패: {e}")
+    """learned_patterns.json 저장 — **원자 교체 + 교차 프로세스 락** (ERRORS [497]).
+
+    ★ 종전 `Path.write_text()` 는 truncate-in-place 라, 쓰는 7.7ms 동안 다른
+      *프로세스* 가 읽으면 잘린 JSON 을 봤다(실측 82.9%). 테마가 subprocess 로
+      바뀐 뒤(커밋 c9c7c2b) 교차 프로세스 writer 가 2개가 되어 위험이 실재화됐다.
+      저장 로직은 `json_store` 단독 소유 — bandit 과 같은 헬퍼를 쓴다(① 단일 진입점).
+    """
+    from JARVIS07_GUARDIAN.json_store import write_json  # noqa: PLC0415
+    if not write_json(_LEARNED_PATH, data, indent=2):
+        log.warning("[GUARDIAN/learned] 저장 실패 — 학습 1회 누락")
 
 
 def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[dict]:

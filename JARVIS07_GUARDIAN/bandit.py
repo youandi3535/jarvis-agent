@@ -388,24 +388,26 @@ def _new_arm(dim: int = _D_BASE) -> tuple[np.ndarray, np.ndarray]:
 # ── 영속성 ────────────────────────────────────────────────────────
 
 def _load() -> dict:
-    """bandit_state.json 로드. 없거나 손상이면 빈 dict."""
-    try:
-        if _BANDIT_FILE.exists():
-            return json.loads(_BANDIT_FILE.read_text(encoding="utf-8"))
-    except Exception as e:
-        log.warning(f"[BANDIT] 상태 로드 실패: {e}")
-    return {}
+    """bandit_state.json 로드 — 손상 시 **빈 dict 로 삼키지 않는다** (ERRORS [497]).
+
+    ★ 종전엔 손상이면 `{}` 였고, 그 빈 상태를 다음 `_save` 가 덮어써
+      8 arm / obs 21,451 / feature_version 3 → 1 arm / obs 1 / fv 1(28D→14D 퇴행)
+      이 가능했다. 이제 `json_store` 가 손상본 격리 + `.bak` 승격을 시도한다.
+    """
+    from JARVIS07_GUARDIAN.json_store import read_json  # noqa: PLC0415
+    data = read_json(_BANDIT_FILE, default=None)
+    return data if isinstance(data, dict) else {}
 
 
 def _save(state: dict) -> None:
-    """compact 저장 — indent 없음(separators). arm 유한 + 반올림 → 파일 수십 KB."""
-    try:
-        _BANDIT_FILE.write_text(
-            json.dumps(state, ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
-        )
-    except Exception as e:
-        log.warning(f"[BANDIT] 상태 저장 실패: {e}")
+    """compact 원자 저장 — 임시파일 → fsync → `os.replace` + 교차 프로세스 락 (ERRORS [497]).
+
+    ★ 저장 로직은 `json_store` 단독 소유 — pattern_fixer 와 **같은 헬퍼**를 쓴다
+      (① 단일 진입점. 종전엔 두 파일이 각자 `write_text` 를 복사해 갖고 있었다).
+    """
+    from JARVIS07_GUARDIAN.json_store import write_json  # noqa: PLC0415
+    if not write_json(_BANDIT_FILE, state, compact=True):
+        log.warning("[BANDIT] 상태 저장 실패 — 이번 갱신 누락")
 
 
 def _read_state() -> dict:
