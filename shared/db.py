@@ -513,7 +513,7 @@ def push_pipeline(items: list):
 
 
 def get_todays_pipeline(limit: int = 20) -> list:
-    """오늘 날짜 pipeline 항목을 기회점수 내림차순으로 반환 (16시 테마 선택용)."""
+    """오늘 날짜 pipeline 항목을 기회점수 내림차순으로 반환 (RADAR 추천 대기열 조회용)."""
     with get_db() as conn:
         rows = conn.execute(
             "SELECT id, theme, sector, opportunity_score, created_at FROM pipeline "

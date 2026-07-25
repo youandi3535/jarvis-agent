@@ -62,11 +62,25 @@ def gate_fail_closed() -> bool:
 #   이 kind 여야 ① fingerprint 제외 ② 회로 쿨다운 backoff ③ max_attempts 도달 시
 #   deferred(=송출 안 함, 다음 회차 재시도) 로 처리된다. 재작성으로 못 고치는 사유이므로
 #   factuality/engagement 로 올리면 무의미한 재작성 루프가 된다.
-INFRA_ISSUE_KIND = "infra_throttle"
+#
+# ★ 값을 여기에 박지 않는다 (① 단일 진입점 / ② 동적 설계 — 2026-07-25 정정).
+#   소유자는 `JARVIS00_INFRA.harness.INFRA_KIND` 단 하나. 종전엔 harness 가 SSOT 를
+#   신설했는데도 이 파일이 "infra_throttle" 리터럴을 *다시 박아* 사본을 만들었다.
+#   지금은 값이 같아 동작이 정상이라 precommit 도 못 잡지만, harness 가 kind 를 바꾸면
+#   이 사본만 옛 값을 가리켜 harness 의 backoff/defer 계약에서 조용히 이탈한다.
+#   *호출 시점* 조회로 파생한다 — 모듈 로드 시점에 캡처하면 그 자체가 또 하나의 사본이다.
+def infra_issue_kind() -> str:
+    """harness 가 소유한 인프라 이슈 kind 를 *호출 시점* 에 파생한다 (사본 금지).
+
+    폴백 리터럴을 두지 않는다 — 폴백은 곧 사본이고, harness 를 못 읽는 상태면
+    harness 재시도 계약 자체가 성립하지 않으므로 조용히 옛 값으로 진행하면 안 된다.
+    """
+    from JARVIS00_INFRA.harness import INFRA_KIND
+    return INFRA_KIND
 
 
 def _report_judge_unavailable(leg: str, detail: str, post_type: str = "",
-                              platform: str = "", kind: str = INFRA_ISSUE_KIND) -> None:
+                              platform: str = "", kind: str = "") -> None:
     """판정 불가를 GUARDIAN·로그에 남긴다 — 침묵 금지 (통과시키더라도 관측 가능해야 함).
 
     ★ 이 결함의 본질은 '차단을 안 했다' 가 아니라 '아무도 몰랐다' 였다. 예외가 없으니
@@ -76,12 +90,24 @@ def _report_judge_unavailable(leg: str, detail: str, post_type: str = "",
       1순위로 본다. 이걸 빼면 'GateJudgeUnavailable' 이 코드버그로 분류돼 GUARDIAN 이
       Tier-2 LLM 자가수리를 착수한다 — 회로가 열린 것뿐인데 수십 분 LLM 을 태운다.
       kind 는 *실제로 harness 에 올린 kind* 를 그대로 넘긴다(둘 다 NON_CODE_ISSUE_KINDS).
+      미지정(기본 "")이면 harness SSOT 에서 호출 시점 파생.
     """
     log.warning(f"[prepublish_gate] ⚠️ 판정 불가({leg}) — {detail} "
                 f"[{post_type or '?'}·{platform or '?'}] fail_closed={gate_fail_closed()}")
+    if not kind:
+        try:
+            kind = infra_issue_kind()
+        except Exception:            # harness 미가용 — kind 없이라도 기록은 남긴다
+            kind = ""
     try:
         from JARVIS07_GUARDIAN.error_collector import report
-        report("writer", "GateJudgeUnavailable",
+        # ★ 인자 순서 주의 (2026-07-25 정정): 실제 시그니처는 catch(exc_or_type, source, ...)
+        #   이고 report = catch 다. 즉 *첫 인자가 error_type, 둘째가 source*.
+        #   종전엔 뒤바뀌어 source='GateJudgeUnavailable', error_type='writer' 로 적재돼
+        #   ① 이 기록의 목적(판정 불가 관측)이 무산 ② error_type 차원에 'writer' 오염
+        #   ③ _J02_SRCS 매칭 실패로 mark_active("e7") 미발화 였다.
+        #   하위호환 역순 교정은 source 가 Exception 일 때만 발동 → 양쪽 str 인 이 호출은 안 잡힌다.
+        report("GateJudgeUnavailable", "writer",
                message=f"[{leg}] {detail} ({post_type or '?'}·{platform or '?'})",
                module=__name__, func_name="prepublish_quality_issues",
                context={"kind": kind, "leg": leg, "post_type": post_type,
@@ -185,7 +211,7 @@ def prepublish_quality_issues(draft, post_type: str = "", platform: str = "",
                 # 인프라 미가용 = *재작성으로 못 고침*. harness 의 infra_throttle 계약을 쓴다:
                 #   fingerprint 제외 + 회로 쿨다운 backoff 후 재시도 → max_attempts 도달 시
                 #   deferred(=송출 안 함, 다음 회차 자연 재시도). 무한 재작성 루프 없음.
-                _lab, _kind = ("LLM 미가용(회로 open·SDK 실패·빈 응답)", INFRA_ISSUE_KIND)
+                _lab, _kind = ("LLM 미가용(회로 open·SDK 실패·빈 응답)", infra_issue_kind())
                 _detail = ("[사실성] 판정 불가 — 사실성·매력도 LLM 미가용"
                            "(일시적, 다음 시도/회차 재개)")
             else:

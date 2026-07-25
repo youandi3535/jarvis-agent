@@ -39,7 +39,7 @@ __all__ = [
 # ── 튜닝 상수 (단일 위치) ────────────────────────────────────────
 UCB_C: float = 0.35           # 탐색 보너스 계수 (신규·저사용 인사이트 기회 부여)
 REWARD_ALPHA: float = 0.3     # weight EMA 학습률
-ATTRIBUTION_WINDOW_H: int = 18   # 사용→분석 매칭 최대 시간 (h) — 06:30/16:00 발행 리듬 커버
+ATTRIBUTION_WINDOW_H: int = 18   # 사용→분석 매칭 최대 시간 (h) — 07:00/21:00 발행 리듬 커버
 UNDERPERFORM_MIN_N: int = 5   # 저성과 판정 최소 보상 횟수
 UNDERPERFORM_AVG: float = 0.35   # 평균 보상이 이 미만이면 가속 감쇠
 

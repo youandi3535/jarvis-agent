@@ -29,9 +29,38 @@ from typing import Any, Callable
 
 __all__ = ["pipeline_job_ids", "gate"]
 
-# 발행 파이프라인의 *뿌리* 를 찾는 표식 — 콜백 경로에 이 조각이 있으면 발행 잡.
-#   (잡 ID 를 박지 않는다: ID 가 바뀌어도 콜백은 그대로다.)
-_PUBLISH_CALLBACK_MARK = "run_self_repair_then"
+# ★★ 발행 시각은 **07:00 · 21:00 딱 둘뿐** (사용자 박제 2026-07-25).
+#    발행 잡을 콜백 표식으로 찾는다 — 잡 ID 를 박지 않는다(ID 가 바뀌어도 콜백은 그대로).
+#    ★ 단일 진실 소스: 종전엔 이 규칙이 `shared/llm.py:_publish_times()` 에도 복사돼 있었다(2벌).
+#      두 소비자(파이프라인 판정·보호구간 파생)가 모두 여기서 파생한다.
+#    ★ 09:00·15:00 은 **RADAR 트렌드 수집 시각일 뿐 발행이 아니다.** 그 시각에 발행하던
+#      `job_radar_pipeline_check`(+`_radar_auto`, 잡 j01_radar_check_09/15)는 2026-07-25 전면 삭제.
+PUBLISH_CALLBACK_MARKS = (
+    "run_self_repair_then",      # 경제 07:00 · 테마 21:00 — 이 둘뿐
+)
+
+
+def is_publish_callback(callback: str) -> bool:
+    """콜백 경로가 *발행을 수행하는* 잡인가 — 파생 판정 단일 소스."""
+    cb = str(callback or "")
+    return any(mark in cb for mark in PUBLISH_CALLBACK_MARKS)
+
+
+def publish_cron_times() -> tuple:
+    """발행 잡의 cron 시각 [(hour, minute), …] — 보호구간 계산용(shared/llm 소비)."""
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+    except Exception:
+        return ()
+    out = []
+    for j in DEFAULT_JOBS:
+        if j.get("trigger") != "cron" or not is_publish_callback(j.get("callback")):
+            continue
+        kw = j.get("kwargs") or {}
+        h = kw.get("hour")
+        if isinstance(h, int):
+            out.append((h, int(kw.get("minute") or 0)))
+    return tuple(sorted(set(out)))
 
 
 def pipeline_job_ids() -> frozenset[str]:
@@ -41,8 +70,7 @@ def pipeline_job_ids() -> frozenset[str]:
     except Exception:
         return frozenset()
     by_id = {j.get("id"): j for j in DEFAULT_JOBS if j.get("id")}
-    roots = [j["id"] for j in DEFAULT_JOBS
-             if _PUBLISH_CALLBACK_MARK in (j.get("callback") or "")]
+    roots = [j["id"] for j in DEFAULT_JOBS if is_publish_callback(j.get("callback"))]
     seen: set[str] = set()
 
     def _close(jid: str) -> None:
@@ -57,40 +85,80 @@ def pipeline_job_ids() -> frozenset[str]:
     return frozenset(seen)
 
 
+class _JobGate:
+    """잡 실행을 감싸 *잡 문맥* 을 심는 호출가능 객체.
+
+    ★ 왜 클로저가 아니라 모듈 레벨 클래스인가 (2026-07-25 회귀 수정):
+      `executor="processpool"` 잡(voice_index·keyword_embed_backfill·daily_review·
+      learn_log·feedback_upd·train_weights 6개)은 APScheduler 가 **pickle** 해서 워커
+      프로세스로 보낸다. 클로저(`gate.<locals>._wrapped`)는 picklable 이 아니라
+      `ValueError: This Job cannot be serialized` 로 *매 실행 실패* 한다.
+      모듈 레벨 클래스 + 모듈 레벨 함수(fn)는 참조로 직렬화되므로 안전하다.
+      회귀 방지: `selfcheck()` 가 6개 잡의 pickle 가능 여부를 실제로 확인한다.
+    """
+
+    __slots__ = ("job_id", "pipeline", "fn")
+
+    def __init__(self, job_id: str, pipeline: bool, fn: Callable[..., Any]):
+        self.job_id = job_id
+        self.pipeline = pipeline
+        self.fn = fn
+
+    def __call__(self, *args, **kwargs):
+        try:
+            from shared.llm import mark_publishing as _mark, mark_job_context as _ctx
+        except Exception:
+            return self.fn(*args, **kwargs)      # LLM 계층 미가용 — 원본 그대로
+        _ctx(self.job_id, self.pipeline)
+        if self.pipeline:
+            _mark(True)
+        try:
+            return self.fn(*args, **kwargs)
+        finally:
+            if self.pipeline:
+                try:
+                    _mark(False)
+                except Exception:
+                    pass
+            try:
+                _ctx("", False)             # ★ 스레드/프로세스 풀 재사용 대비 반드시 해제
+            except Exception:
+                pass
+
+
 def gate(job_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
     """모든 잡에 *잡 문맥* 을 심고, 파이프라인 잡이면 실행 구간을 '발행창' 으로 표시한다.
 
     · 파이프라인 잡  → 문맥(pipeline=True) + `mark_publishing` 창 ON
     · 그 외 잡        → 문맥(pipeline=False) 만. 발행창이면 그 잡의 LLM 호출이 보류된다.
       (alias 로는 못 거르는 배경 잡 때문 — daily_review=analyzer, design_learn=writer)
+      processpool 워커에서도 유효: 문맥은 워커 프로세스 안에서 설정되고, 발행 여부는
+      `is_publishing()` 이 *파일 표식* 으로 프로세스 경계를 넘어 판정한다.
     · 잡이 아닌 문맥(텔레그램 사용자 명령·수동 실행)은 문맥이 없어 보류 대상이 아니다.
     """
     try:
         _pipeline = job_id in pipeline_job_ids()
     except Exception:
         _pipeline = False
+    return _JobGate(job_id, _pipeline, fn)
 
-    def _wrapped(*args, **kwargs):
-        try:
-            from shared.llm import mark_publishing as _mark, mark_job_context as _ctx
-        except Exception:
-            return fn(*args, **kwargs)      # LLM 계층 미가용 — 원본 그대로
-        _ctx(job_id, _pipeline)
-        if _pipeline:
-            _mark(True)
-        try:
-            return fn(*args, **kwargs)
-        finally:
-            if _pipeline:
-                try:
-                    _mark(False)
-                except Exception:
-                    pass
-            try:
-                _ctx("", False)             # ★ 스레드풀 재사용 대비 반드시 해제
-            except Exception:
-                pass
 
-    _wrapped.__name__ = getattr(fn, "__name__", "job")
-    _wrapped.__doc__ = getattr(fn, "__doc__", None)
-    return _wrapped
+def selfcheck() -> str:
+    """회귀 감지 — processpool 잡이 직렬화 가능한가. 위반 시 사유 문자열, 정상이면 "".
+
+    ★ CLAUDE.md `patch_effective()` 표준: "코드 존재는 적용의 증거가 아니다".
+    """
+    import pickle
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS, _resolve_callback
+    except Exception as e:
+        return f"job_registry 로드 실패: {e}"
+    bad: list[str] = []
+    for j in DEFAULT_JOBS:
+        if j.get("executor") != "processpool":
+            continue
+        try:
+            pickle.dumps(gate(j["id"], _resolve_callback(j["callback"])))
+        except Exception as e:
+            bad.append(f"{j['id']}({type(e).__name__})")
+    return ("processpool 잡 직렬화 불가: " + ", ".join(bad)) if bad else ""

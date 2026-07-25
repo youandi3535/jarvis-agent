@@ -226,6 +226,22 @@ def run_sdk_query(
     """
     import time as _time
 
+    # ★ 발행창 보류 — 네 통로 공통 판정 (사용자 박제 2026-07-25).
+    #   이 문이 무방비여서 GUARDIAN auto_repair(Tier-2, timeout 1200s)가 발행 중에도
+    #   Claude Code SDK 세션을 잡았다. `background=True` 인 호출만 보류하므로
+    #   사용자 승인 기반 delegate_to_claude_code(background 미지정=False)는 영향 없다.
+    try:
+        from shared.llm import defer_reason as _defer_reason
+        _sdk_why = _defer_reason(background=background)
+    except Exception:
+        _sdk_why = ""
+    if _sdk_why:
+        import logging as _lgs
+        _lgs.getLogger("jarvis.llm").info(
+            f"🛡 {_sdk_why} — 배경 SDK 세션 보류 (한도를 글 작성에 우선 배정)")
+        return {"returncode": -4, "stdout": "", "stderr": f"보류: {_sdk_why}",
+                "elapsed": 0.0, "error_kind": "deferred"}
+
     if not model:
         # 지연 import — shared.llm 이 이 모듈을 import 하므로 모듈 최상단은 순환.
         from shared.llm import model_id as _model_id

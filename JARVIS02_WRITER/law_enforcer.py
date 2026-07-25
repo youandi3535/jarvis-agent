@@ -1194,12 +1194,20 @@ def _audit_report_undecided(reason: str, post_type: str, num_count: int) -> None
         from JARVIS07_GUARDIAN.error_collector import report
         # ★ context["kind"] 필수: severity.is_transient() 가 1순위로 보는 구조화 필드.
         #   빠지면 코드버그로 분류돼 GUARDIAN 이 Tier-2 LLM 자가수리를 헛돌린다
-        #   (회로가 열린 것뿐인데). kind 상수는 prepublish_gate 단일 소스에서 파생.
+        #   (회로가 열린 것뿐인데).
+        # ★ kind 는 소유자인 harness.INFRA_KIND 에서 *호출 시점* 파생 (① 단일 진입점).
+        #   종전엔 실패 시 "infra_throttle" 리터럴로 폴백했는데, 폴백 리터럴이 곧 사본이라
+        #   harness 가 kind 를 바꾸면 여기만 옛 값을 가리킨다. 파생 실패 시엔 값을 지어내지
+        #   않고 kind 를 비운다 — 틀린 kind 보다 없는 kind 가 낫다.
         try:
-            from JARVIS02_WRITER.prepublish_gate import INFRA_ISSUE_KIND as _ik
+            from JARVIS00_INFRA.harness import INFRA_KIND as _ik
         except Exception:
-            _ik = "infra_throttle"
-        report("writer", "FactAuditUndecided",
+            _ik = ""
+        # ★ 인자 순서 (2026-07-25 정정): catch(exc_or_type, source, ...) 이고 report = catch.
+        #   첫 인자가 error_type, 둘째가 source. 뒤바뀌면 source='FactAuditUndecided',
+        #   error_type='writer' 로 적재돼 error_type 차원이 오염되고 _J02_SRCS 매칭 실패로
+        #   mark_active("e7") 이 안 뛴다. 양쪽 str 이라 하위호환 역순 교정도 안 걸린다.
+        report("FactAuditUndecided", "writer",
                message=f"진실성 감사 판정 불가: {reason} (수치 {num_count}개 미검증)",
                module=__name__, func_name="audit_factuality",
                context={"kind": _ik, "post_type": post_type,

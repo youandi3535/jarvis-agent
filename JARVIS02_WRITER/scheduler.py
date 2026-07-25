@@ -61,14 +61,12 @@ def _parent_subproc_timeout() -> int:
     return 2 * _b + 900   # 자식 guard_main(2*BLOG+600) + 300 여유
 
 SCHEDULE_HOURS      = [21]   # ★ 테마 발행 시간 (표시용 — 실제 트리거는 DEFAULT_JOBS j01_theme_post_21). 16→21 (2026-07-05)
-RADAR_CHECK_HOURS   = [9, 15]   # RADAR 파이프라인 확인: 오전 09:00 · 오후 15:00
 MAX_RETRY           = 3
 TG_TOKEN        = os.getenv("TELEGRAM_TOKEN", "")
 TG_CHAT_ID      = os.getenv("TELEGRAM_CHAT_ID", "")
 
 _paused         = False
 _shutdown       = False
-_radar_auto     = False   # True: RADAR 추천 테마 자동 실행
 _posting_lock   = threading.Lock()
 
 
@@ -1191,52 +1189,21 @@ def cleanup_screenshots():
 
 
 
-def job_radar_pipeline_check():
-    """매일 09·15시 — RADAR 추천 파이프라인 자동실행 체크 (JARVIS04 잡).
-
-    조건: _radar_auto + 일시정지 아님 + 외부 lock 아님.
-    매칭되면 RADAR 최상위 미작성 테마 자동 실행, 아니면 텔레그램 알림.
-    """
-    try:
-        from shared.db import get_pending_pipeline, update_pipeline_status
-        items = get_pending_pipeline(limit=1)
-        if not items:
-            return
-        item = items[0]
-        if _radar_auto and not _paused and not _is_locked_externally():
-            log(f"📡 RADAR 자동실행: {item['theme']} (기회점수 {item['opportunity_score']:.0f})")
-            update_pipeline_status(item["id"], "processing")
-            def _run_radar_theme(t=item["theme"], iid=item["id"]):
-                if not _lock_acquire(f"RADAR: {t}"):
-                    update_pipeline_status(iid, "suggested")
-                    return
-                try:
-                    os.environ["JARVIS_SOURCE_KEYWORD"] = t
-                    os.environ["JARVIS_POST_TYPE"]      = "theme"
-                    run_theme(t)
-                    update_pipeline_status(iid, "done")
-                    try:
-                        from shared.bus import on_post_published
-                        on_post_published(t, "all", source="radar")
-                    except Exception:
-                        pass
-                finally:
-                    os.environ.pop("JARVIS_SOURCE_KEYWORD", None)
-                    os.environ.pop("JARVIS_POST_TYPE", None)
-                    _lock_release()
-            threading.Thread(target=_run_radar_theme, daemon=True).start()
-    except Exception as e:
-        log(f"⚠️ RADAR 파이프라인 확인 오류: {e}")
-
-
 # ══════════════════════════════════════════
 #  JARVIS03 → JARVIS02 연결 방식
 #  즉시 실행(버스 구독) 방식은 사용하지 않음.
-#  발행 스케줄은 JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 가 단독 관리:
-#    07:00  j01_economic_post   → run_economic_poster()  (경제 브리핑, 3개 블로그 각각 다르게)
-#    21:00  j01_theme_post_21   → run_radar_top_theme()  (테마주, RADAR 최상위 키워드 → 3개 블로그 다르게)
-#  JARVIS03 는 09/12/15시 트렌드 수집 후 DB 파이프라인에 적재.
-#  16시 잡이 DB에서 당일 최고 점수 테마를 꺼내 실행.
+#  ★★ 발행 시각은 **07:00 · 21:00 딱 둘뿐** (사용자 박제 2026-07-25).
+#     JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 가 단독 관리:
+#       07:00  j01_economic_post   → run_economic_poster()   (경제 브리핑)
+#       21:00  j01_theme_post_21   → run_radar_top_theme()   (테마주)
+#     JARVIS03 는 06/09/12/15시에 *트렌드를 수집* 할 뿐 — 그 시각에 발행하지 않는다.
+#
+#  ★ 삭제됨 (2026-07-25): `job_radar_pipeline_check`(09·15시) + `_radar_auto` +
+#    jobs `j01_radar_check_09`/`j01_radar_check_15`.
+#    RADAR 추천 대기열을 09·15시에 꺼내 `run_theme()` 로 **자동 발행** 하던 경로였다.
+#    `_radar_auto` 기본 False 라 실제로 돌지는 않았지만, 스위치 하나로 발행이 07/21시 밖에서
+#    일어나는 *잠재 경로* 였고 else 분기조차 없어 그 외엔 아무 일도 하지 않는 함수였다.
+#    사용자 지시: "발행은 07시와 21시뿐. 다른 시간 발행 로직은 흔적조차 남기지 말 것."
 # ══════════════════════════════════════════
 
 

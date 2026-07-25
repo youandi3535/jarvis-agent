@@ -447,15 +447,76 @@ _TRANSIENT_TYPES = frozenset({
 #     착각만 준다. CLI 운영 오류는 ① kind='sdk_error' ② `_NON_CODE_PATTERNS` 의
 #     'cli_not_found|CLI 타임아웃|Command failed with exit code' 행이 이미 덮는다.
 #     검증: grep -rnoE 'kind\s*=\s*"[a-z_]+"' --include='*.py' . | sort -u
-NON_CODE_ISSUE_KINDS = frozenset({
+#
+#   ★ 2026-07-25 P4 — `"infra_throttle"` 리터럴 제거 (① 위반 시정).
+#     이 kind 의 *주인* 은 harness 다 — 같은 커밋이 `harness.INFRA_KIND` 를 SSOT 로 신설하고
+#     `__all__` 에 공개했는데도 여기가 문자열을 한 벌 더 적고 있었다. harness 가 이름을
+#     바꾸는 순간 이쪽만 옛 이름을 가리켜 게이트가 *조용히* 새는 형태(복사본 드리프트).
+#     → 아래 `_harness_infra_kinds()` 로 **런타임 파생**한다(② 동적 설계).
+#     여기 남은 6종은 severity 자신의 정책(“코드 수정으로 고칠 수 있나?”)이라 정당한 소유.
+_OWN_NON_CODE_KINDS = frozenset({
     "engagement",     # 품질 점수 미달 — 글이 안 좋은 것이지 코드가 틀린 게 아니다
     "factuality",     # 사실성 차단 — 근거 미확인은 *글 내용* 문제 (2026-07-25 승인, 위 주석)
-    "infra_throttle", # 스로틀·락 경합 — 순번이 밀린 것
     "draft_failed",   # 대본 생성 실패 (LLM 무응답·HTML 생성 실패)
     "empty_output",   # LLM 응답 빈값
     "sdk_error",      # SDK 실행 오류 (CLI 미발견·인증 등 운영 사유)
     "timeout",        # LLM/CLI 타임아웃 — 응답이 안 온 것
 })
+
+# last-known-good 캐시 — *성공한 파생만* 적재한다(실패값을 캐시하면 영구 degrade).
+_INFRA_KINDS_CACHE: frozenset = frozenset()
+
+
+def _harness_infra_kinds() -> frozenset:
+    """harness 가 선언한 '인프라 미완결' kind 집합 — `harness.INFRA_KIND` 에서 파생.
+
+    ★ 왜 모듈 로드가 아니라 *지연(호출 시점)* import 인가 — severity 는 최하위 leaf 다.
+      severity 를 쓰는 `error_collector` 는 harness 실행 경로 *안* 에서 지연 import 된다
+      (`harness.py:439` `report`, `:514` `report_manual_fix`). 여기서 severity 가 모듈
+      로드 시점에 harness 를 끌어오면 harness 부분초기화 중 재진입 시 `INFRA_KIND`
+      미정의(ImportError)로 severity 자체가 못 뜬다 — GUARDIAN 전체가 죽는 형태.
+      지연 조회는 그 창(window)을 아예 만들지 않는다. (킬스위치 `_flag` 와 같은 원칙:
+      *호출 시점* 조회 — 모듈 로드 시 캡처 금지.)
+
+    실패 시 fail-open: 마지막 성공값(없으면 빈 집합). 빈 집합이면 `selfcheck()` 의
+    [P4] 레그가 위반으로 잡아낸다 — 조용한 열화를 만들지 않는다.
+    """
+    global _INFRA_KINDS_CACHE
+    try:
+        from JARVIS00_INFRA.harness import INFRA_KIND  # noqa: PLC0415 (의도된 지연)
+        got = frozenset({INFRA_KIND}) if INFRA_KIND else frozenset()
+        if got:
+            _INFRA_KINDS_CACHE = got
+            return got
+    except Exception:  # noqa: BLE001 — 파생 실패가 severity 를 죽이면 안 된다
+        pass
+    return _INFRA_KINDS_CACHE
+
+
+def _env_extra_kinds() -> frozenset:
+    """무배포 안전밸브 — `GUARDIAN_EXTRA_NON_CODE_KINDS=a,b` 로 kind 추가(호출 시점 조회).
+
+    파생이 깨졌거나 신규 kind 를 급히 막아야 할 때 *리터럴을 되살리지 않고* 대응하는 통로.
+    """
+    raw = os.getenv("GUARDIAN_EXTRA_NON_CODE_KINDS") or ""
+    return frozenset(t.strip() for t in raw.split(",") if t.strip())
+
+
+def non_code_issue_kinds() -> frozenset:
+    """★ 공개 API — 코드 수정 비대상 harness kind 집합(호출 시점 파생, 사본 없음)."""
+    return _OWN_NON_CODE_KINDS | _harness_infra_kinds() | _env_extra_kinds()
+
+
+def __getattr__(name: str):
+    """`severity.NON_CODE_ISSUE_KINDS` 하위호환 — *스냅샷이 아니라* 매번 라이브 파생.
+
+    모듈 상수로 두면 그 자체가 사본이 된다(로드 시점 고정 → env 밸브·harness 변경 미반영).
+    PEP 562 모듈 `__getattr__` 로 접근 순간 파생하므로 `from ... import NON_CODE_ISSUE_KINDS`
+    도 그대로 동작하면서 드리프트가 원천적으로 불가능하다.
+    """
+    if name == "NON_CODE_ISSUE_KINDS":
+        return non_code_issue_kinds()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def kind_of(record: dict) -> str:

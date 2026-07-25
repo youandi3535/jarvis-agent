@@ -5,7 +5,7 @@ register() 는 skip_dirs 로 호출되지 않으므로 모듈 레벨 _setup_subs
 
 이벤트 흐름:
 - POST_ANALYZED  → 분석 완료 텔레그램 알림 (suggestion 있을 때만)
-- TREND_DETECTED → 로그 기록 (테마 큐잉은 j01_radar_check cron 이 처리)
+- TREND_DETECTED → 로그 기록 (발행은 21:00 j01_theme_post_21 단독)
 - POST_REVISED   → 수정 완료 알림
 """
 from __future__ import annotations
@@ -79,7 +79,7 @@ CAPABILITIES = declare(
     agent_id="jarvis02_writer",
     domain="blog",
     intents=[
-        "blog.theme_post.create",       # 테마글 작성·발행 (16시)
+        "blog.theme_post.create",       # 테마글 작성·발행 (21:00)
         "blog.economic_post.create",    # 경제 브리핑 글 작성·발행 (07시)
         "blog.post.revise",             # 발행물 사후 수정 (인라인 버튼 승인)
         # NOTE: blog.post.evaluate 는 JARVIS03_RADAR (분석 담당) 단독 — 중복 제거
@@ -121,7 +121,7 @@ def _on_post_analyzed(payload: dict, source: str):
 
 
 def _on_trend_detected(payload: dict, source: str):
-    """TREND_DETECTED → 로그만 기록 (테마 큐잉은 j01_radar_check cron 담당)."""
+    """TREND_DETECTED → 로그만 기록 (발행은 21:00 잡 단독)."""
     import logging
     _log = logging.getLogger("writer_agent")
     top5 = payload.get("top_5", [])

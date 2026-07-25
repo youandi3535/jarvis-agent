@@ -950,31 +950,51 @@ def _ignore_reason(rec: dict) -> str:
 
 
 def _looks_like_code_bug(error_type: str) -> bool:
-    """코드 결함 타입인가 — severity.py 공개 API 에서 파생 (목록 복사 금지).
+    """코드 결함 타입인가 — `severity.CODE_BUG_TYPES` 파생 집합에서 *그대로* 가져온다.
 
-    `is_auto_fixable("low", et)` 는 severity 가 low 일 때 **패턴 fixer 대상 타입에만**
-    True 를 준다 → 사설 집합 `_PATTERN_FIXABLE_TYPES` 를 훔쳐보지 않고 같은 답을 얻는다.
+    ★ 2026-07-25 2차 수정 — 종전 구현은 `is_deterministic_code_error(et) or
+      is_auto_fixable("low", et)` 라는 *간접 프로빙* 이었다. 그 조합은
+      `_PATTERN_FIXABLE_TYPES ∪ DETERMINISTIC_CODE_ERROR_TYPES` 까지만 답을 주고,
+      1차 수정이 신설한 세 번째 근거(`_CATEGORY_LABELS` 여집합 — KeyError·IndexError·
+      JSONDecodeError·ZeroDivisionError 등)를 **빠뜨린다**. 즉 같은 질문에 답이 두 벌이었다(① 위반).
+      → 이제 severity 가 이미 파생해 둔 단일 집합의 공개 판정자(`is_code_bug_type`,
+        내부적으로 `CODE_BUG_TYPES` 조회 + 점표기 정규화)만 쓴다. severity 에 타입이
+        늘면 이 경보가 자동으로 따라온다(② 동적 설계).
     """
     try:
-        from JARVIS07_GUARDIAN.severity import (is_deterministic_code_error,
-                                                is_auto_fixable)
+        from JARVIS07_GUARDIAN.severity import is_code_bug_type
     except Exception:
         return False
-    et = error_type or ""
-    return bool(et) and (is_deterministic_code_error(et) or is_auto_fixable("low", et))
+    return bool((error_type or "").strip()) and is_code_bug_type(error_type)
 
 
 def ignored_bucket_report(days: int = 0, limit: int = 3000) -> dict:
     """격리 버킷 집계 — 사유별 분포 · 추세 · 오탐 조기경보.
 
     Returns: {"window_days","total","prev_total","delta_pct","by_reason",
-              "regex_code_bug","no_resolution","top_types","lines"}
+              "code_bug_ignored","regex_code_bug"(별칭),"fp_scope","fp_in_window",
+              "no_resolution","top_types","lines"}
+
+    ★ 2026-07-25 2차 수정 — 경보의 사각지대 2개를 닫는다.
+      (a) **버킷 한정 해제**: 종전엔 `reason == "정규식:메시지"` 일 때만 교차검사했다.
+          그런데 1차 수정이 severity 의 옛 provider 정규식을 삭제하면서 대표 물증 #582
+          (`ImportError: cannot import name 'HuggingFaceProvider'`)가 `기타` 버킷으로
+          이동 → **경보에서 사라졌다**. 오탐의 본질은 '어느 필터가 걸렀나' 가 아니라
+          '코드버그가 ignored 에 있다' 는 사실이므로 **전 버킷** 을 검사한다.
+          (걸러낸 필터 이름은 버리지 않고 각 항목의 `reason` 으로 함께 보고한다 — 진단용.)
+      (b) **창 한정 해제**: 조용히 버려진 코드버그는 시간이 지난다고 해결되지 않는다.
+          추세 집계는 `win` 일 창을 유지하되, 오탐 스캔은 격리 버킷 *전체* 를 훑는다
+          (#582 는 55일 전 — 30일 창에서는 영영 안 보인다). 실측 전기간 격리 440건 중
+          코드버그 타입은 5건뿐이라 비용·소음 모두 무시할 수준.
+          킬스위치 `GUARDIAN_IGNORED_FP_ALLTIME=0` → 종전처럼 창 안만 검사.
     """
     from collections import Counter
     win = days or _ERROR_STATS_WINDOW_DAYS
     out = {"window_days": win, "total": 0, "prev_total": 0, "delta_pct": None,
-           "by_reason": {}, "regex_code_bug": [], "no_resolution": 0,
+           "by_reason": {}, "code_bug_ignored": [], "regex_code_bug": [],
+           "fp_scope": "", "fp_in_window": 0, "no_resolution": 0,
            "top_types": [], "lines": []}
+    _fp_alltime = _flag("GUARDIAN_IGNORED_FP_ALLTIME")
     try:
         from shared.db import get_db
         with get_db() as conn:
@@ -992,30 +1012,46 @@ def ignored_bucket_report(days: int = 0, limit: int = 3000) -> dict:
                 f"AND {tcol} >= datetime('now', ?) AND {tcol} < datetime('now', ?)",
                 (f"-{win * 2} days", f"-{win} days"),
             ).fetchone()[0]
+            # 오탐 스캔 대상 — 기본은 격리 버킷 전체(창 무관), 킬스위치 시 창 안만
+            fp_rows = rows if not _fp_alltime else conn.execute(
+                f"SELECT {sel} FROM error_log WHERE status = 'ignored' "
+                f"ORDER BY {tcol} DESC LIMIT ?", (limit,),
+            ).fetchall()
     except Exception as e:
         _note_safety_fail("ignored_report", e)
         return out
 
     reasons = Counter()
     types   = Counter()
-    fp: list[dict] = []
     no_res  = 0
+    win_ids: set = set()
     for r in rows:
         rec = dict(zip(cols, r))
-        reason = _ignore_reason(rec)
-        reasons[reason] += 1
+        win_ids.add(rec.get("id"))
+        reasons[_ignore_reason(rec)] += 1
         types[rec.get("error_type") or "?"] += 1
         if not (rec.get("resolution") or "").strip():
             no_res += 1
-        # ★ 오탐 조기경보 — '메시지 정규식' 으로만 걸렸는데 타입은 코드버그
-        if reason == "정규식:메시지" and _looks_like_code_bug(rec.get("error_type")):
-            fp.append({"id": rec.get("id"), "error_type": rec.get("error_type"),
-                       "module": rec.get("module"),
-                       "message": (rec.get("message") or "")[:100]})
+
+    # ★ 오탐 조기경보 — **전 버킷**. 어느 필터가 걸렀든 코드버그 타입이면 경보다.
+    fp: list[dict] = []
+    in_win = 0
+    for r in fp_rows:
+        rec = dict(zip(cols, r))
+        if not _looks_like_code_bug(rec.get("error_type")):
+            continue
+        recent = rec.get("id") in win_ids
+        in_win += 1 if recent else 0
+        fp.append({"id": rec.get("id"), "error_type": rec.get("error_type"),
+                   "module": rec.get("module"), "reason": _ignore_reason(rec),
+                   "at": str(rec.get(tcol) or "")[:10], "in_window": recent,
+                   "message": (rec.get("message") or "")[:100]})
 
     total = len(rows)
     out.update(total=total, prev_total=prev, by_reason=dict(reasons.most_common()),
-               regex_code_bug=fp, no_resolution=no_res,
+               code_bug_ignored=fp, regex_code_bug=fp,   # 별칭 — 기존 소비자 호환
+               fp_scope=("전기간" if _fp_alltime else f"{win}일"),
+               fp_in_window=in_win, no_resolution=no_res,
                top_types=types.most_common(5))
     if prev:
         out["delta_pct"] = round((total - prev) * 100.0 / prev, 1)
@@ -1031,15 +1067,18 @@ def ignored_bucket_report(days: int = 0, limit: int = 3000) -> dict:
         lines.append(f"　⚠️ 무시 사유 미기록(resolution NULL): {no_res}건 "
                      f"— 왜 버렸는지 추적 불가")
     if fp:
-        lines.append(f"　🚨 *오탐 의심 {len(fp)}건* — 메시지 정규식으로 걸렀는데 "
-                     f"타입은 코드 결함:")
+        lines.append(f"　🚨 *오탐 의심 {len(fp)}건* (스캔범위 {out['fp_scope']}, "
+                     f"창 내 신규 {in_win}건) — 격리됐는데 타입은 코드 결함:")
         for it in fp[:5]:
-            lines.append(f"　　#{it['id']} {it['error_type']} @ {it['module']} — {it['message'][:60]}")
+            lines.append(f"　　#{it['id']} [{it['at']}] {it['error_type']} @ {it['module']} "
+                         f"— 사유 '{it['reason']}' · {it['message'][:50]}")
+        if len(fp) > 5:
+            lines.append(f"　　… 외 {len(fp) - 5}건")
     else:
-        lines.append("　✅ 정규식 격리분에 코드결함 타입 혼입 없음")
+        lines.append(f"　✅ 격리분({out['fp_scope']})에 코드결함 타입 혼입 없음")
     out["lines"] = lines
     log.info(f"[GUARDIAN/ignored] {win}일 {total}건 / 사유 {dict(reasons.most_common(5))} "
-             f"/ 오탐의심 {len(fp)} / 사유미기록 {no_res}")
+             f"/ 오탐의심 {len(fp)}건(범위 {out['fp_scope']}, 창내 {in_win}) / 사유미기록 {no_res}")
     return out
 
 

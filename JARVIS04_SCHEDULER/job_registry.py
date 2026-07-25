@@ -116,14 +116,6 @@ DEFAULT_JOBS: list[dict] = [
      "requires":["j02_theme_precollect"],
      "misfire_grace_time":3600, "owner":"jarvis02_writer", "edges":["e13"]},
 
-    {"id":"j01_radar_check_09",     "name":"RADAR 자동실행 체크 09:00", "trigger":"cron",
-     "kwargs":{"hour":9, "minute":0},
-     "callback":"JARVIS02_WRITER.scheduler.job_radar_pipeline_check",
-     "misfire_grace_time":1800, "owner":"jarvis02_writer"},
-    {"id":"j01_radar_check_15",     "name":"RADAR 자동실행 체크 15:00", "trigger":"cron",
-     "kwargs":{"hour":15, "minute":0},
-     "callback":"JARVIS02_WRITER.scheduler.job_radar_pipeline_check",
-     "misfire_grace_time":1800, "owner":"jarvis02_writer"},
     # ── JARVIS01 MASTER ────────────────────────────────────────
     {"id":"jarvis00_router_health", "name":"JARVIS01 라우터 헬스", "trigger":"cron",
      "kwargs":{"minute":0},

@@ -267,8 +267,17 @@ def _defer(job_id: str, fn: Callable, next_attempt: int, when: datetime,
         _tg(msg)
         return False
     base = job_id.split(DEFERRED_SUFFIX)[0]
+    # ★ 발행창 게이트를 함께 씌운다 (2026-07-25 회귀 수정): 종전엔 선행 회복 재예약 때
+    #   `job_registry` 가 씌우던 `job_llm_priority.gate` 가 사라져, *가장 경합이 심한 경로*
+    #   (맥이 잠들었다 깨어 선행+발행이 몰리는 상황)에서 발행창이 꺼진 채 돌았다.
+    _fn = gate(base, fn, attempt=next_attempt)
+    try:
+        from JARVIS04_SCHEDULER.job_llm_priority import gate as _llm_gate
+        _fn = _llm_gate(base, _fn)
+    except Exception:
+        pass
     sch.add_job(
-        gate(base, fn, attempt=next_attempt), "date", run_date=when,
+        _fn, "date", run_date=when,
         id=base + DEFERRED_SUFFIX, name=f"{base} (선행 회복 후 재실행)",
         misfire_grace_time=600, replace_existing=True,
     )

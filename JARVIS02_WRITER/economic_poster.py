@@ -1033,11 +1033,26 @@ def run(post_naver=True, post_tistory=True, resume=None):
                                 _g_report("writer", _e_pr, module=__name__)
                         elif _aid and _ANALYZER_SCRIPT.exists():
                             # 사전 수정 미적용 (분석기 모듈 오류 등) — 기존 사후 분석 흐름 fallback
-                            print(f"  📋 [{_plat.upper()}] 품질 분석 등록 (id={_aid}) — fallback")
-                            _sp.Popen(
-                                [sys.executable, str(_ANALYZER_SCRIPT), str(_aid)],
-                                cwd=str(_ANALYZER_SCRIPT.parent),
-                            )
+                            # ★ 발행창에서는 *띄우지 않는다* (사용자 박제 2026-07-25):
+                            #   네이버 발행 직후 이 subprocess 가 뜨면 **티스토리가 아직 대본을
+                            #   쓰는 중** 인데 매력도·사실성 채점 LLM 을 물어 한도를 경합한다.
+                            #   급하지 않다 — `job_analyzer_fallback`(5분 간격, bg_defer 게이트)이
+                            #   발행이 끝난 뒤 pending 을 그대로 집어간다. DB 에 이미 등록돼 있다.
+                            _an_why = ""
+                            try:
+                                from shared.llm import bg_defer_reason as _bgw
+                                _an_why = _bgw()
+                            except Exception:
+                                pass
+                            if _an_why:
+                                print(f"  ⏸ [{_plat.upper()}] 품질 분석 보류 — {_an_why} "
+                                      f"(id={_aid}, 발행 후 fallback 잡이 회수)")
+                            else:
+                                print(f"  📋 [{_plat.upper()}] 품질 분석 등록 (id={_aid}) — fallback")
+                                _sp.Popen(
+                                    [sys.executable, str(_ANALYZER_SCRIPT), str(_aid)],
+                                    cwd=str(_ANALYZER_SCRIPT.parent),
+                                )
                     except Exception as _ex:
                         print(f"  ⚠️ [{_plat}] 품질 분석 등록 실패: {_ex}")
                         _g_report("writer", _ex, module=__name__)

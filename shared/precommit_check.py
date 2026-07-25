@@ -1487,6 +1487,69 @@ def check_collect(report: Report) -> None:
 CATEGORIES["collect"] = check_collect
 
 
+# ══════════════════════════════════════════════════════════════════
+#  crossproc — 크로스커팅 상태를 메모리 플래그로 두지 말 것 (사용자 박제 2026-07-25)
+# ══════════════════════════════════════════════════════════════════
+def check_crossproc(report: "Report") -> None:
+    """프로세스 경계를 넘어야 하는 상태를 *메모리* 로만 판정하는 코드를 차단.
+
+    **왜 (같은 병이 3번 났다)**
+      경제 브리핑은 subprocess, 테마는 데몬 안에서 돈다. 그래서 `threading.Event`·전역 set
+      같은 메모리 표식은 *한쪽에서만* 참이다. 실제 사고:
+        · ERRORS [474] — 발행 우선 규칙이 `invoke_text` 에만 걸려 `run_sdk_query` 로 우회
+        · 2026-07-25   — 배경 LLM 차단이 `_PUBLISHING_ACTIVE.is_set()`(Event)만 봐서
+                         경제 발행(subprocess) 내내 데몬 쪽 배경 작업이 한도를 먹음
+      CLAUDE.md 에 "프로세스 경계를 넘는가" 가 적혀 있었지만 *검사가 없어* 반복됐다.
+
+    **규칙** — 크로스커팅 상태(발행 중 여부 등)는 파일/DB 가 진실이고 메모리는 캐시다.
+      판정은 반드시 *합성 조회 함수*(`is_publishing()` 등)를 쓴다. 원시 Event 직접 조회 금지.
+
+    검사: `_PUBLISHING_ACTIVE.is_set()` 를 소유 모듈(shared/llm.py) 밖에서, 또는 소유 모듈
+      안이라도 합성 함수(`is_publishing`)를 우회해 *판정에* 쓰면 위반.
+    """
+    cat = "crossproc"
+    owner = "shared/llm.py"
+    # 소유 모듈 안에서 원시 Event 조회가 허용되는 곳 = 합성 함수 자신과 상태 조작부
+    allowed_owner_ctx = ("def is_publishing", "def mark_publishing",
+                         "def _reset_publishing_state", "_PUBLISHING_ACTIVE.set",
+                         "_PUBLISHING_ACTIVE.clear")
+    pat = re.compile(r"_PUBLISHING_ACTIVE\s*\.\s*is_set\s*\(")
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        if any(seg in rel_s for seg in (".venv/", "__pycache__", "node_modules")):
+            continue
+        try:
+            lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            continue
+        for i, line in enumerate(lines, 1):
+            if not pat.search(line):
+                continue
+            if rel_s == owner:
+                ctx = "\n".join(lines[max(0, i - 12): i + 2])
+                if any(w in ctx for w in allowed_owner_ctx):
+                    continue
+            report.add(Violation(
+                cat, "crossproc/memory-flag-as-truth", rel_s, i,
+                "발행 여부를 메모리 Event 로 직접 판정 — subprocess 에서 항상 False. "
+                "`is_publishing()`(파일 표식 포함) 또는 `bg_defer_reason()` 을 쓸 것"))
+
+    # ② 잡 래퍼는 picklable 이어야 한다 (processpool 잡 6개) — 실제 직렬화로 확인
+    try:
+        from JARVIS04_SCHEDULER.job_llm_priority import selfcheck as _jlp_selfcheck
+        why = _jlp_selfcheck()
+        if why:
+            report.add(Violation(
+                cat, "crossproc/job-wrapper-unpicklable",
+                "JARVIS04_SCHEDULER/job_llm_priority.py", 0, why))
+    except Exception:
+        pass
+
+    report.checks_run += 2
+
+
+CATEGORIES["crossproc"] = check_crossproc
+
 
 def run(categories: list[str] | None = None) -> Report:
     """검증 실행. categories=None 이면 전체."""

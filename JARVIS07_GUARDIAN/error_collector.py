@@ -39,12 +39,48 @@ _COOLDOWN_SECS = 60
 _COOLDOWN_MAX_KEYS = 5000
 
 # ── 킬스위치 (라이브 안전 — 코드 수정 없이 즉시 무효화) ──────────────────
-_LOG_SCAN_ENABLED    = os.environ.get("GUARDIAN_LOG_SCAN", "1") != "0"
-_LOG_SCAN_TAIL       = os.environ.get("GUARDIAN_LOG_SCAN_TAIL", "1") != "0"
+#
+# ★★ 공용 진입점 — 킬스위치는 *호출 시점* 에 환경변수를 조회한다 (2026-07-25 수정)
+#
+# 종전 이 자리엔 `_LOG_SCAN_ENABLED = os.environ.get(...) != "0"` 같은 **모듈 로드 시점
+# 캡처** 4종이 있었다. 그러면 값이 import 순간 상수로 굳어 **데몬 재시작 전에는 토글이
+# 안 먹는다** — "코드 수정 없이 즉시 무효화" 라는 킬스위치의 존재 이유가 그대로 무산된다.
+# CLAUDE.md 「복사본을 진실로 믿지 말 것」의 첫 줄(값을 코드에 복사) 정면 위반이고,
+# 같은 GUARDIAN 안의 `guardian_agent._flag()`·`severity._flag()` 가 이미 호출시점 조회라
+# **같은 도메인에서 킬스위치 계약이 둘로 갈라져 있던** ①단일 진입점 위반이기도 했다.
+#
+# → 그 세 곳과 *완전히 같은 판정 규칙* 을 갖는 공개 헬퍼를 여기 하나 두고, 나머지가
+#   이걸 import 해서 파생하도록 한다. (error_collector 는 GUARDIAN 최하위 모듈 —
+#   guardian_agent·severity·eval_agent 를 module-level 로 import 하지 않으므로
+#   반대 방향 import 가 순환을 만들지 않는다.)
+def env_flag(name: str, default: bool = True) -> bool:
+    """★ 킬스위치 단일 진입점 — 환경변수를 **호출할 때마다** 조회한다.
+
+    판정 규칙(guardian_agent._flag / severity._flag 와 동일):
+      · 미설정        → `default`
+      · "0"/"false"/"no"/"off" (대소문자·공백 무시) → False
+      · 그 외 값      → True
+
+    ★ 모듈 로드 시점에 결과를 상수에 담아두지 말 것. 담는 순간 그건 복사본이고,
+      데몬이 떠 있는 동안 `export` 를 바꿔도 반영되지 않는다.
+
+    공개 심볼 — 다른 GUARDIAN 모듈은 자체 `_flag` 를 새로 정의하지 말고
+        `from JARVIS07_GUARDIAN.error_collector import env_flag as _flag`
+    로 파생할 것.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
+# 킬스위치 이름 (문자열 오타 방지용 상수 — 값이 아니라 *이름* 만 박는다)
+_ENV_LOG_SCAN           = "GUARDIAN_LOG_SCAN"
+_ENV_LOG_SCAN_TAIL      = "GUARDIAN_LOG_SCAN_TAIL"
 # 인터프리터가 스스로 '무시했다' 고 선언한 예외(unraisable)까지 수집할지 — 기본 제외
-_LOG_SCAN_UNRAISABLE = os.environ.get("GUARDIAN_LOG_SCAN_UNRAISABLE", "0") == "1"
+_ENV_LOG_SCAN_UNRAISABLE = "GUARDIAN_LOG_SCAN_UNRAISABLE"
 # 쿨다운 키 정규화(_normalize_message 재사용) — 0 이면 종전 message[:80] 동작
-_COOLDOWN_NORMALIZE  = os.environ.get("GUARDIAN_COOLDOWN_NORMALIZE", "1") != "0"
+_ENV_COOLDOWN_NORMALIZE = "GUARDIAN_COOLDOWN_NORMALIZE"
 
 # ★★ 로그 스캐너 — 자연어 레벨 문구 스크래핑 폐기, *구조적 증거* 만 취한다 (2026-07-25)
 #
@@ -119,7 +155,7 @@ def _cool_key(source, module, error_type, message: str) -> str:
     killswitch: GUARDIAN_COOLDOWN_NORMALIZE=0 → 종전 message[:80] 동작으로 즉시 복귀.
     """
     raw = message or ""
-    if _COOLDOWN_NORMALIZE:
+    if env_flag(_ENV_COOLDOWN_NORMALIZE):        # ★ 호출시점 조회 (로드시점 캡처 금지)
         try:
             from JARVIS07_GUARDIAN.pattern_fixer import _normalize_message
             norm = _normalize_message(raw)
@@ -181,7 +217,9 @@ def _collect_error(
         return None
 
     try:
-        from JARVIS07_GUARDIAN.severity import classify, is_auto_fixable
+        # ★ is_auto_fixable 은 여기서 안 쓴다 — 실제 게이트는 guardian_agent 가
+        #   `GUARDIAN_AUTOFIX_GATE` 아래에서 직접 import 해 호출한다. 미사용 import 제거.
+        from JARVIS07_GUARDIAN.severity import classify
         sev = classify(error_type, message, source, module or "")
     except Exception:
         sev = "medium"
@@ -260,7 +298,23 @@ class _LogFileHandler:
         self._log_dir = log_dir
         self._positions: dict[str, int] = {}
         # ★ tail=True: 처음 보는 파일은 *현재 끝* 에서 시작 (아래 _scan_file 주석 참조)
-        self._tail = _LOG_SCAN_TAIL if tail is None else bool(tail)
+        #   ★ 명시 인자가 없으면 값을 여기서 굳히지 않는다 — 스캐너 인스턴스는 install()
+        #     때 한 번 만들어져 데몬 수명 내내 살아있으므로, 생성자에서 env 를 읽어
+        #     담아두면 그것도 결국 '로드시점 캡처' 와 같은 복사본이 된다.
+        #     → None 으로 보관하고 `_tail` 프로퍼티가 매 스캔마다 env 를 조회한다.
+        self._tail_override: Optional[bool] = None if tail is None else bool(tail)
+
+    @property
+    def _tail(self) -> bool:
+        """호출시점 조회 — 생성자 명시값이 있으면 그것이 우선(스모크 테스트용)."""
+        if self._tail_override is not None:
+            return self._tail_override
+        return env_flag(_ENV_LOG_SCAN_TAIL)
+
+    @_tail.setter
+    def _tail(self, value) -> None:
+        """하위호환 — 외부에서 `handler._tail = False` 로 덮어쓰던 코드 보호."""
+        self._tail_override = None if value is None else bool(value)
 
     def scan(self):
         """로그 폴더 내 *.log 파일 스캔 — 신규 Traceback 블록 수집."""
@@ -304,7 +358,9 @@ class _LogFileHandler:
             # ★ 인터프리터가 스스로 '무시했다' 고 선언한 예외 — __del__·GC·종료 중 발생.
             #   전파되지 않으므로 기능 실패가 아니다. 자연어 노이즈 목록이 아니라
             #   CPython unraisable hook 의 *구조적 판정* 을 그대로 존중한다.
-            if m.group("unraisable") and not _LOG_SCAN_UNRAISABLE:
+            #   킬스위치는 ★ 호출시점 조회 (기본 False = 수집 제외)
+            if m.group("unraisable") and not env_flag(_ENV_LOG_SCAN_UNRAISABLE,
+                                                      default=False):
                 continue
             # ★ 재귀 차단 — GUARDIAN 자체 수집/스캔 로그는 수집 안 함
             if _LOG_SKIP_PAT.search(block):
@@ -349,7 +405,7 @@ def _discover_log_dirs() -> list[Path]:
 
 def scan_all_logs():
     """등록된 모든 로그 디렉토리 스캔 (job_scan_logs 에서 호출)."""
-    if not _LOG_SCAN_ENABLED:          # 킬스위치 GUARDIAN_LOG_SCAN=0
+    if not env_flag(_ENV_LOG_SCAN):    # ★ 호출시점 조회 — GUARDIAN_LOG_SCAN=0 즉시 반영
         return
     for scanner in _log_scanners:
         try:
