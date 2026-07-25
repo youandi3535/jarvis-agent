@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Optional
@@ -75,6 +76,25 @@ _WIN    = +1.0                   # 성공 보상
 _LOSS   = -1.0                   # 실패 보상
 _LAMBDA = 1.0                    # ridge prior (A 초기 = λI)
 _ROUND  = 6                      # 직렬화 소수 자리 (파일 크기 절감)
+
+# ★ 감쇠 계수 γ — 유효 기억 창 ≈ 1/(1-γ) 관측 (ERRORS [498], 사용자 승인 2026-07-25)
+#   0.995 → 최근 약 200 관측. 귀속 가능한 관측만 남긴 뒤라 200 이면 수개월치다.
+#   ① 단일 진입점: γ 는 이 상수 한 곳. ② 동적 설계: `_gamma()` 가 *호출 시점* 조회라
+#   `GUARDIAN_BANDIT_GAMMA=0.99` 로 재시작 없이 조정된다(모듈 로드 캡처 금지).
+_GAMMA_DEFAULT = 0.995
+
+
+def _gamma() -> float:
+    """감쇠 계수 — 호출 시점 조회. 1.0 이면 감쇠 없음(종전 동작 = 킬스위치)."""
+    raw = (os.getenv("GUARDIAN_BANDIT_GAMMA") or "").strip()
+    if raw:
+        try:
+            g = float(raw)
+            if 0.0 < g <= 1.0:
+                return g
+        except ValueError:
+            pass
+    return _GAMMA_DEFAULT
 
 # v2 오류 프로토타입 대표 문장 (부팅 1회 임베딩·캐시). error_type 계열과 1:1 정렬.
 _PROTO_SENTENCES = [
@@ -362,16 +382,18 @@ def _fit_x(x: np.ndarray, dim: int) -> np.ndarray:
 
 # ── 상태 직렬화 ───────────────────────────────────────────────────
 
-def _arm_to_dict(A: np.ndarray, b: np.ndarray, n: int = 0, rsum: float = 0.0) -> dict:
+def _arm_to_dict(A: np.ndarray, b: np.ndarray, n: float = 0.0, rsum: float = 0.0) -> dict:
     """arm 상태 → JSON dict. 파일 크기 절감 위해 반올림.
 
     n    : 실제 pull(시도) 횟수 — 정직한 통계용 (Frobenius 추정치 대체)
+           ★ ERRORS [498]: 감쇠(discounting) 도입으로 **실수**다. γ 를 곱하면
+             정수로는 표현이 안 된다(1 → 0.995). `int()` 로 자르면 감쇠가 조용히 소실된다.
     rsum : 보상 누적합 — 평균 보상 = rsum / n (θ 평균 희석 문제 회피)
     """
     return {
         "A":    [[round(float(v), _ROUND) for v in row] for row in A.tolist()],
         "b":    [round(float(v), _ROUND) for v in b.tolist()],
-        "n":    int(n),
+        "n":    round(float(n), _ROUND),
         "rsum": round(float(rsum), _ROUND),
     }
 
@@ -447,7 +469,7 @@ def _migrate_arms_to_version(state: dict, target_version: int) -> None:
         b_new[:d0] = b_old
         state["arms"][name] = _arm_to_dict(
             A_new, b_new,
-            n=int(arm.get("n", 0)), rsum=float(arm.get("rsum", 0.0)),
+            n=float(arm.get("n", 0) or 0.0), rsum=float(arm.get("rsum", 0.0)),
         )
     state["feature_version"] = target_version
 
@@ -598,17 +620,35 @@ def reward(
         arm_data = arms.get(key)
         if arm_data:
             A, b = _arm_from_dict(arm_data)
-            n_prev = int(arm_data.get("n", 0))
+            n_prev = float(arm_data.get("n", 0) or 0.0)
             rsum_prev = float(arm_data.get("rsum", 0.0))
         else:
             A, b = _new_arm(_dim_for_version(state["feature_version"]))
-            n_prev, rsum_prev = 0, 0.0
+            n_prev, rsum_prev = 0.0, 0.0
 
         xv = _fit_x(x, A.shape[0])   # 승급 경계 race 방어
+
+        # ★ 감쇠(discounted linear UCB) — ERRORS [498] 3단계 (사용자 승인 2026-07-25)
+        #   옛 관측을 지수적으로 잊는다. 두 가지를 동시에 해결한다:
+        #     ① 과거 오염 회복 — 잡음이 쌓여도 시간이 지나면 스스로 씻긴다
+        #     ② 비정상성 대응 — fixer 성능·오류 분포가 변해도 따라간다
+        #   Russac et al. "Weighted Linear Bandits for Non-Stationary Environments" 형태:
+        #       V_t = Σ γ^(t-s)·x_s x_sᵀ + λI      (★ ridge λI 는 감쇠 대상이 아니다)
+        #   ridge 까지 같이 곱하면 A 가 0 으로 수축 → A⁻¹ 폭발 → 탐색항이 발산한다.
+        #   그래서 *데이터 부분만* 감쇠하고 λI 는 매번 되돌려 놓는다.
+        g = _gamma()
+        if g < 1.0:
+            dim = A.shape[0]
+            ridge = _LAMBDA * np.eye(dim, dtype=np.float64)
+            A = g * (A - ridge) + ridge      # 데이터 부분만 감쇠
+            b = g * b
+            n_prev *= g
+            rsum_prev *= g
+
         A = A + np.outer(xv, xv)
         b = b + r * xv
 
-        arms[key] = _arm_to_dict(A, b, n=n_prev + 1, rsum=rsum_prev + r)
+        arms[key] = _arm_to_dict(A, b, n=n_prev + 1.0, rsum=rsum_prev + r)
         state["obs_count"] = state.get("obs_count", 0) + 1
         _maybe_upgrade_features(state)   # 임계 도달 시 블록확장 승급
         _write_state(state)
@@ -620,9 +660,68 @@ def reward(
 
 # ── 통계 / 대시보드 ───────────────────────────────────────────────
 
+def selfcheck() -> list[str]:
+    """★ 퇴화 감지 — 밴딧이 *실제로 학습하고 있는지* 동작으로 확인 (ERRORS [498] 4단계).
+
+    ★ 왜 필요한가: 2026-07-25 이전 밴딧은 **3,062회 동안 학습을 멈춘 채** 돌았고
+      아무도 몰랐다. 8 arm 중 7개가 n=3062 / rsum=-3062.0 (평균 정확히 -1.000) —
+      소수점 한 자리도 안 틀리게 같았다. 코드는 "돌고 있었" 지만 학습은 죽어 있었다.
+      `severity.selfcheck()` · `json_store.store_effective()` 와 같은 철학 —
+      **존재가 아니라 동작으로 확인**한다.
+
+    반환: 위반 문자열 목록 (빈 리스트 = 정상).
+    """
+    issues: list[str] = []
+    try:
+        state = _read_state()
+        arms = state.get("arms", {}) or {}
+        if not arms:
+            return issues                     # 아직 관측 0 — 퇴화가 아니라 미시작
+
+        pulled = {k: v for k, v in arms.items()
+                  if isinstance(v, dict) and float(v.get("n", 0) or 0.0) > 0}
+        if len(pulled) < 2:
+            return issues                     # 비교 대상 부족
+
+        avgs = {k: _arm_avg_reward(v) for k, v in pulled.items()}
+
+        # [D1] 평균 보상이 전부 같다 → arm 을 구분하지 못한다 = 학습 정지
+        spread = max(avgs.values()) - min(avgs.values())
+        if spread < 1e-9:
+            issues.append(
+                f"[D1] 전 arm 평균 보상 동일({next(iter(avgs.values())):+.3f}) — "
+                f"학습 정지. 보상이 arm 을 구분하지 못한다 (n={len(pulled)})"
+            )
+
+        # [D2] pull 횟수가 전부 같다 → 개별 선택이 아니라 *일괄 보상* 의심 (귀속 버그 재발)
+        ns = [round(float(v.get("n", 0) or 0.0), 3) for v in pulled.values()]
+        if len(ns) >= 3 and len(set(ns)) == 1 and ns[0] >= 10:
+            issues.append(
+                f"[D2] 전 arm pull 횟수 동일(n={ns[0]}) — 일괄 보상 의심. "
+                f"귀속 불가 관측이 기록되고 있는지 확인 (GUARDIAN_BANDIT_ATTRIBUTED_ONLY)"
+            )
+
+        # [D3] 한쪽으로 완전히 쏠림 → 신호가 아니라 상수를 학습 중
+        if all(abs(a - _LOSS) < 1e-9 for a in avgs.values()):
+            issues.append("[D3] 전 arm 이 최저 보상에 고착 — 성공 관측이 유입되지 않는다")
+
+        # [D4] arm 공간이 pattern_fixer 레지스트리와 어긋남 → 새 fixer 가 학습에서 누락
+        derived = _static_fixer_arms()
+        if derived:
+            missing = derived - set(arms) - _RESERVED_ARMS
+            if missing:
+                issues.append(
+                    f"[D4] 레지스트리에 있으나 arm 이 없는 fixer: {sorted(missing)} "
+                    f"— 첫 보상 때 생성되므로 지속되면 보상 경로 점검"
+                )
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"[D0] selfcheck 실행 실패: {type(e).__name__}: {e}")
+    return issues
+
+
 def _arm_avg_reward(arm_data: dict) -> float:
     """arm 의 실제 평균 보상 = rsum / n (정직한 지표, θ 평균 희석 회피)."""
-    n = int(arm_data.get("n", 0))
+    n = float(arm_data.get("n", 0) or 0.0)
     if n <= 0:
         return 0.0
     return float(arm_data.get("rsum", 0.0)) / n
@@ -633,7 +732,7 @@ def stats() -> dict:
     state = _read_state()
     arm_summaries = {}
     for name, arm_data in state["arms"].items():
-        n = int(arm_data.get("n", 0))
+        n = float(arm_data.get("n", 0) or 0.0)
         arm_summaries[name] = {
             "pulls_est":   n,                                   # ★ 실제 pull 수 (정직)
             "mean_reward": round(_arm_avg_reward(arm_data), 3),  # ★ rsum/n
@@ -655,7 +754,7 @@ def top_fixers(n: int = 5) -> list[dict]:
     state = _read_state()
     rows: list[dict] = []
     for name, arm_data in state["arms"].items():
-        if int(arm_data.get("n", 0)) <= 0:
+        if float(arm_data.get("n", 0) or 0.0) <= 0:
             continue
         rows.append({"fixer": name, "mean_reward": round(_arm_avg_reward(arm_data), 3)})
     rows.sort(key=lambda x: -x["mean_reward"])

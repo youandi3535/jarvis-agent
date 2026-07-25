@@ -1734,6 +1734,51 @@ def _get_new_fixers() -> list[tuple[str, object]]:
     return result
 
 
+def _attributed_only() -> bool:
+    """귀속 가능한 관측만 밴딧에 기록할지 — *호출 시점* 조회 (ERRORS [498] 1단계).
+
+    기본 True. `GUARDIAN_BANDIT_ATTRIBUTED_ONLY=0` 이면 종전 동작(그룹 전체 실패도 기록).
+    """
+    import os as _os
+    raw = (_os.getenv("GUARDIAN_BANDIT_ATTRIBUTED_ONLY") or "").strip().lower()
+    return raw not in ("0", "false", "off", "no")
+
+
+def learned_arm_name(error_record: dict) -> str:
+    """★ '학습 캐시 조회' 전략의 밴딧 arm 이름 — **양쪽 경로 공통 단일 규칙** (ERRORS [498] 2단계).
+
+    ★ 왜 필요했나 (실측 착시):
+      `learned_new` 가 n=24 rsum=+24 로 **평균 +1.000, 무패** 로 보였는데 실력이 아니라
+      집계 오류였다. 같은 '학습 캐시 조회' 전략인데 경로마다 다른 이름을 넘겼다:
+        · 실패 경로(_try_fixer_group) → 그룹명 `"learned"` → `_arm_key` → `learned_verified`
+        · 성공 경로(error_fixer)      → `bandit_arm_name()` → `"new:<지문>"` → `learned_new`
+      즉 **이기면 A 이름으로 상을 받고 지면 B 이름으로 벌을 받았다.** 그래서 A 는 전승,
+      B 는 전패가 된다 — arm 정체성이 *전략* 이 아니라 *결과* 로 갈린 자기충족 예언.
+
+    → 규칙을 한 곳(이 함수)으로 모은다. 양쪽 경로가 같은 fingerprint·같은 hit_count 로
+      같은 arm 을 지목한다. hit_count 는 학습 원장에서 *조회* 한다(② 동적 설계 — 넘겨받지 않음).
+      패턴이 없으면 hit_count=0 → 미성숙 regime(`learned_new`) 으로 귀속된다.
+    """
+    try:
+        fp = _make_fingerprint(
+            error_record.get("error_type", "") or "",
+            error_record.get("message", "") or "",
+        )
+        hit = 0
+        for p in (_load_learned().get("patterns", []) or []):
+            if p.get("fingerprint") == fp:
+                hit = int(p.get("hit_count", 0) or 0)
+                break
+        return bandit_arm_name(error_record, hit)
+    except Exception:  # noqa: BLE001 — 이름 해석 실패가 수정 흐름을 막으면 안 된다
+        return "learned"
+
+
+def _reward_arm_name(fixer_name: str, error_record: dict) -> str:
+    """보상 기록용 arm 이름 — 'learned' 그룹만 단일 규칙으로 해석, 정적 fixer 는 그대로."""
+    return learned_arm_name(error_record) if fixer_name == "learned" else fixer_name
+
+
 def _try_fixer_group(
     error_record: dict,
     group: list[tuple[str, object]],
@@ -1749,11 +1794,18 @@ def _try_fixer_group(
     if not group:
         return None
 
+    fn_map = {n: fn for n, fn in group}
     if bandit_rank_fn:
-        names       = [n for n, _ in group]
-        ranked      = bandit_rank_fn(error_record, names)
-        fn_map      = {n: fn for n, fn in group}
-        ordered     = [(n, fn_map[n]) for n in ranked if n in fn_map]
+        # ★ 랭킹도 보상과 *같은* arm 을 봐야 한다 (ERRORS [498] 2단계 · ③ 모든 곳).
+        #   종전엔 랭킹은 그룹명("learned" → learned_verified)으로, 보상은 지문 기반
+        #   이름으로 갔다. 서로 다른 arm 을 보면 "학습한 것과 쓰는 것이 어긋난다".
+        resolved = {n: _reward_arm_name(n, error_record) for n in fn_map}
+        inverse  = {v: k for k, v in resolved.items()}
+        ranked   = bandit_rank_fn(error_record, list(resolved.values()))
+        ordered  = [(inverse[r], fn_map[inverse[r]]) for r in ranked if r in inverse]
+        # 랭킹이 일부를 빠뜨려도 후보는 전부 시도한다 (밴딧은 *순서* 만 정한다)
+        seen = {n for n, _ in ordered}
+        ordered += [(n, fn) for n, fn in group if n not in seen]
     else:
         ordered = group
 
@@ -1763,12 +1815,14 @@ def _try_fixer_group(
         try:
             result = fn(error_record)   # type: ignore[operator]
             if result:
-                # 앞서 실패한 fixer 일괄 음의 보상
+                # ★ 귀속 가능한 음의 보상 — 이건 유지한다 (ERRORS [498] 1단계)
+                #   "이 맥락에서 A 는 안 먹었는데 B 는 먹었다" = arm 간 *직접 비교* 다.
+                #   순서 결정이 실제로 결과를 바꾼 경우이므로 학습 신호로 정당하다.
                 if bandit_reward_fn and failed:
                     for fn_fail in failed:
                         try:
-                            bandit_reward_fn(error_type, fn_fail, success=False,
-                                             error_record=error_record)
+                            bandit_reward_fn(error_type, _reward_arm_name(fn_fail, error_record),
+                                             success=False, error_record=error_record)
                         except Exception:
                             pass
 
@@ -1798,11 +1852,27 @@ def _try_fixer_group(
             log.debug(f"[GUARDIAN/pattern] {fixer_name} 시도 실패: {e}")
             failed.append(fixer_name)
 
-    # 그룹 전체 실패 → 일괄 음의 보상
-    if bandit_reward_fn and failed:
+    # ★★ 그룹 전체 실패 → **보상을 기록하지 않는다** (ERRORS [498] 1단계 — 사용자 승인 2026-07-25)
+    #
+    #   종전엔 여기서 후보 전원에게 -1 을 줬다. 그게 밴딧을 죽였다:
+    #     8 arm 중 7개가 n=3062, rsum=-3062.0 (평균 정확히 -1.000) — 소수점까지 동일.
+    #     3062 잡음 : 24 신호 = 127:1 로 진짜 신호가 완전히 묻혔다.
+    #
+    #   ★ 왜 기록하면 안 되는가 (핵심 논리):
+    #     밴딧이 정하는 것은 *시도 순서* 뿐이다. 그런데 아무도 매칭 안 되면 어차피 7개를
+    #     **전부** 시도하고 끝난다 — 즉 **순서를 어떻게 정했든 결과가 같았다.**
+    #     영향이 0이었던 결정에 보상을 매기는 것은 학습이 아니라 잡음 주입이다.
+    #     (업계 표준: 귀속 가능한 관측만 기록 / 선택되지 않은 arm 에 결과를 귀속시키지 않음)
+    #
+    #   실패 자체의 가시성은 유지된다 — 그룹 전체 실패는 Tier-2 위임으로 이어지고
+    #   그 결과는 error_fixer 가 별도로 기록한다. 여기서 잃는 것은 *잡음* 뿐이다.
+    #
+    #   킬스위치: GUARDIAN_BANDIT_ATTRIBUTED_ONLY=0 → 종전 동작(전원 음의 보상)
+    if bandit_reward_fn and failed and not _attributed_only():
         for fn_fail in failed:
             try:
-                bandit_reward_fn(error_type, fn_fail, success=False, error_record=error_record)
+                bandit_reward_fn(error_type, _reward_arm_name(fn_fail, error_record),
+                                 success=False, error_record=error_record)
             except Exception:
                 pass
     return None
