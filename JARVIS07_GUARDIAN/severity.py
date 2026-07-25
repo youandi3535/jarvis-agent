@@ -437,6 +437,13 @@ _TRANSIENT_TYPES = frozenset({
 #     · execution_error — 코드에서 실제로 난 예외. 반드시 Tier-2 유지.
 #     · draft_invalid / data_empty / send_failure / login_invalid — 미승인(유지).
 #
+#   ★★ data_insufficient 는 2026-07-25 감사에서 **판단 누락** 이 드러나 승인 (사용자 판단).
+#      `prepublish_gate.py` 가 생산하는데 이 집합에도, 위 '의도적 비포함' 목록에도 없었다
+#      — 즉 넣을지 뺄지를 *결정한 적이 없는* 상태로 코드버그로 분류돼 Tier-2 를 태우고 있었다.
+#      근거는 factuality·engagement 와 동일: 수집 datasets 이 부족한 것은 *데이터* 문제이지
+#      코드가 틀린 게 아니다(생산 지점 주석 자신이 "재작성으로 못 고친다" 고 명시).
+#      가시성은 유지된다 — 기록은 남고 반복되면 사람이 본다.
+#
 #   ★★ factuality 는 2026-07-22 '미승인' → 2026-07-25 **승인으로 번복** (사용자 판단).
 #      사실성 차단은 *글 내용* 의 문제이지 코드의 문제가 아니다 — engagement 와 같은 부류.
 #      (2026-07-25 경제 티스토리 사고: Tier-2 2회 소모 + 'TitleFabrication' 이라는 틀린 교훈을
@@ -457,6 +464,7 @@ _TRANSIENT_TYPES = frozenset({
 _OWN_NON_CODE_KINDS = frozenset({
     "engagement",     # 품질 점수 미달 — 글이 안 좋은 것이지 코드가 틀린 게 아니다
     "factuality",     # 사실성 차단 — 근거 미확인은 *글 내용* 문제 (2026-07-25 승인, 위 주석)
+    "data_insufficient",  # 수집 datasets 부족 — *데이터* 문제 (2026-07-25 승인, 위 주석)
     "draft_failed",   # 대본 생성 실패 (LLM 무응답·HTML 생성 실패)
     "empty_output",   # LLM 응답 빈값
     "sdk_error",      # SDK 실행 오류 (CLI 미발견·인증 등 운영 사유)

@@ -336,14 +336,140 @@ def _scope_bodies(tree: ast.AST) -> dict[str, "Counter"]:
         body = getattr(node, "body", None)
         if not isinstance(body, list):
             return
-        out.setdefault(path, Counter())
+        cnt: Counter = Counter()
         for st in body:
-            out[path][_stmt_key(st)] += 1
+            cnt[_stmt_key(st)] += 1
             if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 rec(st, f"{path}.{st.name}" if path else st.name)
+        # ★ 같은 이름이 두 번 정의되면 *마지막 정의가 산다* (Python 시맨틱) → 덮어쓴다.
+        #   누적(+=)하면 "중복 def 제거" 가 '문장이 사라졌다' 로 오판된다(실측).
+        out[path] = cnt
 
     rec(tree, "")
     return out
+
+
+# ── 저장소 전역 참조 검사 — "dead code" 를 *파일 안* 만 보고 단정하지 않는다 ──────
+_SKIP_PARTS = {".venv", ".git", "__pycache__", "chrome_profile", "logs", "backups",
+               "node_modules", "dashboard"}
+
+
+_PY_FILES_CACHE: tuple[float, list[Path]] = (0.0, [])
+
+
+def _repo_py_files() -> list[Path]:
+    """저장소 .py 목록 — *목록만* 60초 캐시. 파일 *내용* 은 매번 디스크에서 새로 읽는다
+    (복사본을 진실로 믿지 않는다 — 캐시하는 것은 '어디를 볼지' 뿐이다)."""
+    global _PY_FILES_CACHE
+    ts, cached = _PY_FILES_CACHE
+    if cached and (time.monotonic() - ts) < 60.0:
+        return cached
+    out: list[Path] = []
+    for p in _ROOT.rglob("*.py"):
+        if _SKIP_PARTS & set(p.relative_to(_ROOT).parts):
+            continue
+        out.append(p)
+    _PY_FILES_CACHE = (time.monotonic(), out)
+    return out
+
+
+def _ast_uses_name(src: str, name: str) -> bool:
+    """이 소스가 `name` 을 *코드로* 쓰는가 — 주석·문자열 오탐 배제 (AST 확인).
+
+    ★ 텍스트 검색만 하면 "dead code 제거" 같은 *주석 속 단어* 가 참조로 잡혀
+      정당한 dead code 정리를 영원히 막는다(실측). 그래서 텍스트는 *예선* 이고
+      본선 판정은 AST 가 한다. 파싱 실패 시에만 보수적으로 True.
+    """
+    try:
+        tree = ast.parse(src)
+    except Exception:                      # noqa: BLE001
+        return True
+    if name in _referenced_names(tree):
+        return True
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            for a in n.names:
+                if (a.asname or "") == name or a.name.split(".")[-1] == name:
+                    return True
+    return False
+
+
+def _module_names(path: Path) -> tuple[str, str]:
+    """파일 경로 → (dotted 모듈 경로, 마지막 세그먼트). 저장소 밖이면 ("","")."""
+    try:
+        rel = path.resolve().relative_to(_ROOT).with_suffix("")
+    except Exception:                      # noqa: BLE001
+        return "", ""
+    parts = rel.parts
+    return ".".join(parts), parts[-1]
+
+
+def _imports_symbol(src: str, dotted: str, seg: str, name: str) -> bool:
+    """이 소스가 *그 모듈의* `name` 을 가져다 쓰는가 — 모듈 경유 여부까지 확인.
+
+    ★ 이름만 맞으면 참조로 치면 안 된다: `dead` 같은 흔한 지역변수가 저장소 어딘가에
+      있다는 이유로 정당한 dead code 정리가 영원히 막힌다(실측 — shared/token_usage.py).
+      최상위 def 는 *그 모듈을 import 해야* 밖에서 쓸 수 있으므로 그 경로를 본다.
+    """
+    try:
+        tree = ast.parse(src)
+    except Exception:                      # noqa: BLE001
+        return True                        # 파싱 불가 → 보수적으로 '쓰인다'
+    aliases: set[str] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom):
+            m = n.module or ""
+            if m == dotted or m.endswith("." + seg) or m == seg:
+                for a in n.names:
+                    if a.name == name or a.name == "*":
+                        return True
+        elif isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name == dotted or a.name.endswith("." + seg) or a.name == seg:
+                    aliases.add(a.asname or a.name.split(".")[0])
+    if aliases:
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Attribute) and n.attr == name:
+                base = n.value
+                while isinstance(base, ast.Attribute):
+                    base = base.value
+                if isinstance(base, ast.Name) and base.id in aliases:
+                    return True
+    # 동적 참조(importlib + getattr 등) — 모듈명과 심볼명이 *둘 다* 텍스트로 있으면 보수적 True
+    return (dotted in src or seg in src) and (f'"{name}"' in src or f"'{name}'" in src)
+
+
+def _referenced_elsewhere(name: str, exclude: Path | None) -> bool:
+    """이 이름이 *다른 파일* 에서 그 모듈의 심볼로 쓰이는가.
+
+    공개 헬퍼를 dead code 로 오판해 지우는 것을 막는다.
+    ② 동적 설계: 예외 목록을 손으로 두지 않고 *저장소 실물* 을 훑어 판정한다.
+    """
+    if not name or name.startswith("__"):
+        return True                        # 던더는 판정 포기 → 보수적으로 '쓰인다'
+    if exclude is None:
+        return False                       # 대상 파일 불명 → 파일 안 판정만 (호출자 선택)
+    dotted, seg = _module_names(exclude)
+    if not seg:
+        return True                        # 저장소 밖 파일 → 판정 포기(보수적)
+    import re as _re
+    npat = _re.compile(r"\b" + _re.escape(name) + r"\b")
+    try:
+        ex = exclude.resolve()
+    except Exception:                      # noqa: BLE001
+        ex = None
+    for p in _repo_py_files():
+        try:
+            if ex and p.resolve() == ex:
+                continue
+            src = p.read_text(encoding="utf-8", errors="ignore")
+            if seg not in src or not npat.search(src):
+                continue                   # 예선 — 모듈도 이름도 언급 없으면 볼 것 없음
+            if _imports_symbol(src, dotted, seg, name):
+                return True
+        except Exception:                  # noqa: BLE001
+            continue
+    return False
 
 
 def _defined_names(tree: ast.AST) -> set[str]:
@@ -372,7 +498,8 @@ def _referenced_names(tree: ast.AST) -> set[str]:
     return refs
 
 
-def classify_pure_removal(original: str, patch: str) -> tuple[str, str]:
+def classify_pure_removal(original: str, patch: str,
+                          target_path: Path | None = None) -> tuple[str, str]:
     """순수 삭제 패치의 성격 판정. 반환 ("cleanup"|"functional"|"unparsable", 사유).
 
     ★ 공개(테스트·감사가 부를 수 있게) — 그러나 정책 결정은 `_removal_issue` 한 곳만 한다.
@@ -405,6 +532,8 @@ def classify_pure_removal(original: str, patch: str) -> tuple[str, str]:
                     continue
                 if nm in new_refs:
                     return "functional", f"삭제된 `{nm}` 가 패치 후에도 참조됨 @{where}"
+                if target_path is not None and _referenced_elsewhere(nm, target_path):
+                    return "functional", f"삭제된 `{nm}` 가 저장소 다른 파일에서 참조됨"
                 explained.append(f"dead code 제거({nm})")
                 continue
             if key.startswith("IMP:"):
@@ -421,13 +550,18 @@ def classify_pure_removal(original: str, patch: str) -> tuple[str, str]:
     return "cleanup", "제거된 유의미 문장 없음(주석·공백·문서열만)"
 
 
-def _removal_issue(original: str, patch: str) -> str:
+def _removal_issue(original: str, patch: str, target_path: Path | None = None) -> str:
     """★ code-removal patch 가드 — 기능을 *지워서* 통과시키는 패치 거부.
 
-    APR 문헌의 최악 실패 모드. 두 규칙 (임계 상수는 하나, 나머지는 *구조 술어*):
+    APR 문헌의 최악 실패 모드. 판정 순서 (P3 정교화 2026-07-25):
+      ⓪ 순수 삭제(추가 0줄) 이면 **AST 로 성격을 먼저 판정** —
+         정당한 정리(중복 def·dead code·미사용 import)면 통과, 기능 제거면 거부.
+         ★ 이때 ① 도 면제한다: 큰 dead 함수를 지우면 줄 수가 크게 주는 것이 *정상* 이고,
+           비율만 보면 헌법이 시킨 정리를 영원히 못 한다.
       ① 유의미한 줄이 `_max_shrink_ratio()` 넘게 줄어듦
-      ② 순수 삭제(추가 0줄) 이면서 **AST 상 기능 제거** 인 경우 (P3 정교화 2026-07-25)
-         — 중복 def·dead code·미사용 import 정리는 통과시킨다.
+      ② 순수 삭제이면서 AST 판정 불가(unparsable) → 종전대로 거부 (fail-closed)
+    ⓪ 는 *순수 삭제에만* 적용한다 — 추가가 있는 일반 패치까지 문장 손실로 재면
+      `x[:N]` → `(x or "")[:N]` 같은 정상 치환도 전부 거부돼 수정이 마비된다.
     위반 사유 문자열 반환, 정상이면 "".
     """
     orig = _meaningful_lines(original)
@@ -436,25 +570,31 @@ def _removal_issue(original: str, patch: str) -> str:
         return ""
     if not new:
         return "패치가 비어 있음(전체 삭제)"
+
+    added = set(new) - set(orig)
+    removed = set(orig) - set(new)
+    # ★ "순수 삭제" 판정은 *줄 집합 차이* 가 아니라 **추가 0 + 줄 수 감소** 로 본다.
+    #   집합 차이로 보면 *중복* 줄 삭제(중복 def 제거)가 removed=∅ 로 잡혀 이 경로를 못 탄다(실측).
+    pure_deletion = (not added) and len(new) < len(orig)
+
+    if pure_deletion and _cleanup_allowed():
+        kind, why = classify_pure_removal(original, patch, target_path)
+        if kind == "cleanup":
+            log.info(f"[GUARDIAN] 순수 삭제 허용 — {why}")
+            return ""
+        if kind == "functional":
+            return f"순수 삭제 패치 — {why}"
+        # unparsable → 아래 종전 규칙으로 넘긴다 (fail-closed)
+
     lost = len(orig) - len(new)
     if lost > 0:
         ratio = lost / len(orig)
         if ratio > _max_shrink_ratio():
             return (f"코드 삭제 과다 — 유의미한 줄 {len(orig)}→{len(new)} "
                     f"({ratio:.0%} 감소 > 임계 {_max_shrink_ratio():.0%})")
-    added = set(new) - set(orig)
-    removed = set(orig) - set(new)
-    if removed and not added:
-        if not _cleanup_allowed():
-            return f"순수 삭제 패치(추가 0줄 / 삭제 {len(removed)}줄) — 기능 제거로 통과 시도"
-        kind, why = classify_pure_removal(original, patch)
-        if kind == "cleanup":
-            log.info(f"[GUARDIAN] 순수 삭제 허용 — {why}")
-            return ""
-        if kind == "functional":
-            return f"순수 삭제 패치 — {why}"
-        # unparsable → 판정 불가. 종전대로 거부 (fail-closed)
-        return (f"순수 삭제 패치(추가 0줄 / 삭제 {len(removed)}줄) — {why}")
+    if pure_deletion:
+        return (f"순수 삭제 패치(추가 0줄 / 유의미한 줄 {len(orig)}→{len(new)}) "
+                f"— 기능 제거로 통과 시도")
     return ""
 
 
@@ -951,7 +1091,7 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
     #   "기능을 지워서 통과시키는" 패치는 파일이 파싱·import 되므로 종전 판정으론
     #   무조건 fixed 였다. APR 문헌의 최악 실패 모드 — 적용 자체를 막는다.
     if _verify_enabled() and file_path.suffix == ".py":   # 코드에만 적용(.md 재구성은 정상)
-        _rm = _removal_issue(original_content, patch)
+        _rm = _removal_issue(original_content, patch, target_path=file_path)
         if _rm:
             # ★ P3 (사용자 박제 2026-07-25): 거부는 *판정 불가·부적격* 이지 "수정 실패" 가 아니다.
             #   종전엔 여기서 밴딧에 음의 보상을 주고 verification=still_reproduces 로 흘려

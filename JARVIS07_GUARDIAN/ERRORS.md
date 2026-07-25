@@ -2,6 +2,85 @@
 
 ---
 
+## [496] ✅ 해결 — 오류 판별 체계 전면 감사·수정 — "코드버그를 transient 로 삼켜 폐기" 외 9종 (2026-07-25)
+
+> ★ **맥락**: 사용자 질문 *"오류를 어떤 기준으로 오류라고 판별하지? 이게 현업 방식과 맞나,
+> 우리만의 허술한 자체 방법인가?"* → 코드 4렌즈 + 현업표준(Sentry·SRE·OTel·APR) 3각도 +
+> 적대적 검증 감사. 이어 *"결함과 부족함을 전부 채우고 보완해줘"* 로 2차에 걸쳐 수정.
+
+- **증상**: 판별 체계에 *"이게 오류인가"* 판정이 없고 실질 기준은 **"코드로 고칠 수 있나"** 하나인데,
+  그 판단 재료의 29.1%(216/742)가 **자사 한국어 로그 문구 정규식**이었다. 결과:
+  ① **코드버그 8/8 이 transient 로 오분류** — docstring 이 *"코드 버그 타입은 절대 transient 로
+     분류하지 않음(오탐 방지)"* 이라 단언하는데 **그 분기가 본문에 없었다**.
+     라이브 물증 #582: `ImportError: cannot import name 'HuggingFaceProvider'` 가
+     "HuggingFace 네트워크 오류"를 거르려 넣은 클래스명에 걸려 `ignored` 폐기.
+  ② `log_scanner` **70일간 0건** — 로그 포맷 `[ERROR   ]`(패딩) vs 정규식 `\[ERROR\]`.
+     55파일 전수 0매치, DB `source='log_file'` 은 2026-05-15 이후 전무. **아무도 몰랐다.**
+  ③ 빈도 severity 자동 상향이 **없는 컬럼**(`created_at`) 조회 → `except: pass` 로 **상시 무력**.
+  ④ `is_auto_fixable()` **호출자 0** — CLAUDE.md 가 "단일 진입점"이라 박제한 게이트가 부재.
+  ⑤ `eval_agent.STATIC_FIXERS ∩ pattern_fixer._FIXER_REGISTRY = ∅` — 정적 fixer 7종 전부
+     "unknown→보수적 통과 70점". 드리프트가 아니라 **처음부터 구조적 rubber-stamp**.
+  ⑥ `invoke_text` 가 예외 대신 `""` 반환 → 진실성 감사가 **수치 검사 0회로 통과**(fail-open).
+  ⑦ harness 가 원인 타입을 `RuntimeError` 로 합성(**342건 100%**) → 타입 게이트 전부 무효.
+  ⑧ `incident_responder` 가 로그꼬리 3000자에 **경계 없는 부분문자열** — 세션 UUID 안
+     `...a0a10a4403cb` 의 `403` 이 발행실패 대응 경로를 결정(재현 성공). 게다가 로컬 목록 2개가
+     단일 진입점 위임을 **앞뒤로 포위**해 무력화. (부수 발견: 중복 `_classify` 정의 중
+     살아있는 쪽이 미정의 심볼 참조로 **실제 NameError 를 던지고 있었다**.)
+  ⑨ 자동수정 "성공" 판정이 `ast.parse`+import 통과뿐 → 원 오류를 재확인하지 않고
+     **밴딧에 단방향 양의 보상** → *증상 은폐를 강화학습*.
+  ⑩ 격리 버킷 관측 부재 — `ignored` 440건 중 **221건이 `resolution` NULL**.
+- **환경**: `severity.py` / `error_collector.py` / `error_fixer.py` / `eval_agent.py` /
+  `pattern_fixer.py` / `guardian_agent.py` / `incident_responder.py` / `bandit.py` /
+  `harness.py` / `shared/{llm,db}.py` / `prepublish_gate.py` / `law_enforcer.py`
+- **원인**: 판별 재료가 *우리가 직접 찍은 자연어 로그 문구* 였다. 업계 표준은 스택트레이스·
+  예외 객체·구조화 메트릭으로 판별하고 메시지는 **지문 우선순위 최하위**로 둔다(Sentry).
+  게다가 harness 가 타입을 지워(81%) **메시지 말고 볼 게 없는 구조를 시스템이 스스로 만들었다.**
+  → 로그 문구를 바꾸면 필터가 *소리 없이 죽고*, 우연히 겹치면 *진짜 버그가 버려진다*.
+- **헛다리** (전부 실측으로 기각 — 다시 시도 금지):
+  - *"log_scanner 정규식 패딩을 맞추면 된다"* → **틀림**. 맞추는 순간 `[WARNING ]` 4,697줄 +
+    `[ERROR   ]` 809줄이 깨어나고 그중엔 **재시도로 이미 회복된 건이 대량**. 표준은 애초에
+    로그 텍스트로 판별하지 않는다 → **traceback 블록(구조적 신호)만 취하도록 전환**(파싱 98%).
+  - *"`ignored` 440 > `fixed` 67 = 6.5배가 이상 징후"* → **표준과 정반대**. Ewaschuk:
+    *"over-monitoring is a harder problem than under-monitoring."* 높은 필터율 자체는 정상.
+    오작동의 증거는 **8/8 오탐 재현** 하나로 충분하다.
+  - *"수집 시점에 '진짜 오류인가' 판정이 없는 게 결함"* → **표준을 거꾸로 읽은 것**.
+    Sentry·Rollbar·BugSnag 모두 수집 시 판정하지 않는다. 진짜 결함은 **판정 시점과 되돌림**이다.
+  - 1차 수정 보고서 주장 7건이 검증에서 기각(근거 쿼리 모집단 오류·과장·전제 오류).
+- **해결 (2차)**:
+  - **(1차)** 코드버그 가드 신설(`CODE_BUG_TYPES` = 기존 두 집합 **합집합 파생**) /
+    등급 강등 대상 축소 / 죽은 정규식·중복 24토큰·벤더 하드코딩 제거 /
+    `created_at`→PRAGMA 파생 / `is_auto_fixable` Tier-2 게이트 배선 /
+    `STATIC_FIXERS` 를 레지스트리에서 파생 / **원 오류 재현 검증**(`verification` 3상태) +
+    **양방향 밴딧 보상** / `invoke_text_result(text, ok)` 신설(기존 `invoke_text` 는 그 위에 얹음) /
+    사실성 fail-closed / 로그스캐너 traceback 전환 / dedup·쿨다운 정규화 / 스모크 테스트 /
+    harness 원인타입 보존 + kind 부여 2벌→1벌 + 되돌림 id 를 메모리→DB.
+  - **(2차 — 검증이 잡아낸 신규 결함)** `report()` 인자순서 역전(신규 2줄, 컬럼 뒤바뀜) /
+    **발행창 refcount 누수**(try/finally 부재 — 커밋 `d0af298` 이후 누수 1회 = GUARDIAN
+    영구 정지) / 외생검증 관통 배선(`pattern_fixer:1164` 이 `verification` 미전달로 **라이브에서
+    한 번도 발동 안 함**) / `record_fix_failure` 호출부 / 발행창 학습 폐기 완화 /
+    code-removal 가드가 **정당한 삭제**(중복 def·dead code)를 거부하고 음의 보상까지 주던 것 완화 /
+    킬스위치 4종 로드시점→**호출시점** 조회 / 오탐 경보 전 버킷 확대 / `infra_throttle` 리터럴
+    4곳→`harness.INFRA_KIND` 파생 / bandit arm 을 `pattern_fixer` 에서 파생.
+  - **(정책 — 사용자 판단 2026-07-25)** `data_insufficient` 를 `NON_CODE_ISSUE_KINDS` 에 **추가**
+    (넣을지 뺄지 *결정한 적 없는* 누락 상태였음) / `guardian_error_hook.py` 배선 **안 함**
+    (Layer A·B 가 이미 커버) / `GATE_FAIL_CLOSED` **기본 1 유지**(미검증 글 발행보다 회차 거르기).
+- **검증**: 전수 컴파일 통과 · 모듈 12개 import(순환 0) · 코드버그 8/8 `False` ·
+  `engagement`·환경오류 회귀 0 · `MemoryError`+retry `low`→`critical` · `severity.selfcheck()` OK ·
+  **precommit 58종 위반 0건**.
+- **교훈**:
+  - **판별 재료가 곧 판별의 수명이다.** 자연어 로그 문구로 거르면, 문구를 바꾸는 순간 필터가
+    *조용히* 죽는다(70일). 구조화 필드(kind·예외 타입·traceback)로 걸러야 한다.
+  - **타입을 지우지 마라.** 예외를 래핑해 원인 타입을 잃으면 하류의 모든 타입 게이트가 무효가 된다.
+  - **"고쳤다" 는 원 오류를 재현해봐야 안다.** 파싱·import 통과는 *그럴듯함*이지 *고쳐짐*이 아니다.
+    검증 없이 양의 보상을 주면 시스템은 **증상 은폐를 학습**한다(APR overfitting 92~98%).
+  - **자기 채점 게이트는 도장 찍기로 퇴화한다**(arXiv 2606.28438). 외생 신호를 반드시 섞어라.
+  - **①단일 진입점의 payoff 는 위임한 쪽이 자동으로 방어를 물려받는 것**이다 —
+    `incident_responder` 가 로컬 목록을 지우고 위임하자 severity 의 새 가드를 공짜로 얻었다.
+  - **docstring 은 코드가 아니다.** "절대 ~하지 않음" 이라 적어두고 그 분기가 없으면
+    다음 사람은 방어가 있는 줄 안다. 그래서 `selfcheck()` 를 함께 둔다.
+
+---
+
 ## [495] ✅ 해결 — 경제 브리핑 TITLE 수치 창작 — '수치 0존' 프롬프트가 <p> 산문에만 스코프, TITLE 은 감시망 밖 + 테마 미적용 (2026-07-25)
 
 > ★ **맥락**: harness RuntimeError(`JARVIS00_INFRA.harness.경제 브리핑 발행 — 티스토리`, `⑥ TS 대본 생성`,
@@ -9399,14 +9478,4 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: _vt_demo/user.py
 - **해결**: 자동 수정 적용
 - **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관
-- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
-
----
-### [2026-07-25 17:11] ✅ 자동수정 — 임포트 오류(ImportError)
-- **증상**: cannot import name 'zzz_proof' from 'JARVIS07_GUARDIAN._proof_target_hj'
-- **모듈**: JARVIS07_GUARDIAN._proof_target_hj
-- **원인**: proof
-- **파일**: JARVIS07_GUARDIAN/_proof_target_hj.py
-- **해결**: 자동 수정 적용
-- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: unverifiable — error_type 없음 — 재현 대상 특정 불가
 - **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
