@@ -21,6 +21,14 @@ economic_poster._verify_all / trend_theme_writer._verify_all 양쪽이 호출한
   PREPUBLISH_IMAGE_GATE=0      이미지(차트) 사실성 게이트 끔
   PREPUBLISH_CROSSCHECK_GATE=0 본문↔차트 수치 교차대조 게이트 끔
   PREPUBLISH_SCORE_GATE=0      100점 루브릭 종합 점수 게이트 끔 (70점 미달 재작성 순환)
+  GATE_FAIL_CLOSED=0           ★ 판정 불가(LLM 미가용) 시 차단하지 않고 종전처럼 통과
+
+★ 판정 불가 ≠ 통과 (사용자 박제 2026-07-25): LLM 이 판정을 *못 한* 경우
+  (회로 open·SDK 실패·빈 응답·형식 오류)와 *판정한 결과 문제 없음* 은 전혀 다른 사건이다.
+  종전엔 둘 다 blocked_claims=[] 라 게이트가 검사를 한 번도 안 하고 통과시켰고,
+  예외가 없어 로그·GUARDIAN 기록도 남지 않았다(implicit error). 이제
+  shared.llm.invoke_text_result 의 ok 로 구분해 ① 항상 GUARDIAN 기록
+  ② 사실성은 fail-closed(차단) — 헌법 "사실 판정 LLM 실패=차단".
 
 ★ 이미지 사실성 (사용자 박제 2026-06-29): 본문 수치는 사실성 게이트가, *차트 안의 수치*
   는 이미지 게이트가 막는다. JARVIS06 render_from_spec 가 검증 우회(실데이터 미확인)
@@ -37,6 +45,49 @@ _MIN_BODY = 200  # 이 미만은 구조 검증(_layer3_verify_draft)이 이미 �
 
 def _disabled(env_key: str) -> bool:
     return os.getenv(env_key, "1").strip().lower() in ("0", "false", "off", "no")
+
+
+# ★ 판정 불가(LLM 미가용) 정책 — 단일 진입점 (사용자 박제 2026-07-25) ─────────────
+#   "판정 불가" 를 "통과" 로 취급하면 게이트는 *한 번도 검사하지 않고* 무성무취로 통과한다
+#   (implicit error). 사실성은 fail-closed 가 헌법(CLAUDE_WRITER.md "사실 판정 LLM 실패=차단").
+#   ① 단일 진입점: 이 함수 하나가 게이트 fail-closed 정책의 유일한 스위치 —
+#      law_enforcer.audit_factuality 도 여기서 파생한다(정책 상수 복제 금지).
+#   킬스위치: GATE_FAIL_CLOSED=0 → 종전 동작(판정 불가 = 통과)으로 즉시 복귀.
+def gate_fail_closed() -> bool:
+    """판정 불가 시 차단할 것인가 (기본 True). GATE_FAIL_CLOSED=0 이면 종전 fail-open."""
+    return not _disabled("GATE_FAIL_CLOSED")
+
+
+# harness 의 *일시적 인프라* 이슈 kind (JARVIS00_INFRA.harness._INFRA_ISSUE_KINDS 계약).
+#   이 kind 여야 ① fingerprint 제외 ② 회로 쿨다운 backoff ③ max_attempts 도달 시
+#   deferred(=송출 안 함, 다음 회차 재시도) 로 처리된다. 재작성으로 못 고치는 사유이므로
+#   factuality/engagement 로 올리면 무의미한 재작성 루프가 된다.
+INFRA_ISSUE_KIND = "infra_throttle"
+
+
+def _report_judge_unavailable(leg: str, detail: str, post_type: str = "",
+                              platform: str = "", kind: str = INFRA_ISSUE_KIND) -> None:
+    """판정 불가를 GUARDIAN·로그에 남긴다 — 침묵 금지 (통과시키더라도 관측 가능해야 함).
+
+    ★ 이 결함의 본질은 '차단을 안 했다' 가 아니라 '아무도 몰랐다' 였다. 예외가 없으니
+      GUARDIAN 기록도 로그도 없었다. 기록은 fail-closed/open 과 무관하게 *항상* 한다.
+
+    ★ context["kind"] 필수 (실측으로 확인): severity.is_transient() 는 *구조화 필드* kind 를
+      1순위로 본다. 이걸 빼면 'GateJudgeUnavailable' 이 코드버그로 분류돼 GUARDIAN 이
+      Tier-2 LLM 자가수리를 착수한다 — 회로가 열린 것뿐인데 수십 분 LLM 을 태운다.
+      kind 는 *실제로 harness 에 올린 kind* 를 그대로 넘긴다(둘 다 NON_CODE_ISSUE_KINDS).
+    """
+    log.warning(f"[prepublish_gate] ⚠️ 판정 불가({leg}) — {detail} "
+                f"[{post_type or '?'}·{platform or '?'}] fail_closed={gate_fail_closed()}")
+    try:
+        from JARVIS07_GUARDIAN.error_collector import report
+        report("writer", "GateJudgeUnavailable",
+               message=f"[{leg}] {detail} ({post_type or '?'}·{platform or '?'})",
+               module=__name__, func_name="prepublish_quality_issues",
+               context={"kind": kind, "leg": leg, "post_type": post_type,
+                        "platform": platform, "fail_closed": gate_fail_closed()})
+    except Exception as _e:      # GUARDIAN 실패가 발행을 막지 않도록
+        log.debug(f"[prepublish_gate] GUARDIAN 기록 실패(무시): {_e}")
 
 
 def _draft_body(draft: dict) -> str:
@@ -123,6 +174,36 @@ def prepublish_quality_issues(draft, post_type: str = "", platform: str = "",
             log.warning(f"[prepublish_gate] law_enforcer import 실패: {e}")
 
         cqr = _combined_quality_call(body, title, corpus, post_type)
+
+        # ── ★ 판정 불가 처리 (사용자 박제 2026-07-25) ────────────────────────
+        #   종전: 회로 open 이면 두 LLM 레그 모두 SDK 미호출 즉시 "" → blocked_claims=[]
+        #         → "차단할 게 없다" 로 읽혀 *검사 0회로* 통과. 예외도 로그도 GUARDIAN 기록도 없음.
+        #   현재: judge_status 로 구분해 ① 항상 기록(침묵 금지) ② 사실성은 fail-closed.
+        _js = cqr.get("judge_status", "ok")
+        if _js != "ok":
+            if _js == "unavailable":
+                # 인프라 미가용 = *재작성으로 못 고침*. harness 의 infra_throttle 계약을 쓴다:
+                #   fingerprint 제외 + 회로 쿨다운 backoff 후 재시도 → max_attempts 도달 시
+                #   deferred(=송출 안 함, 다음 회차 자연 재시도). 무한 재작성 루프 없음.
+                _lab, _kind = ("LLM 미가용(회로 open·SDK 실패·빈 응답)", INFRA_ISSUE_KIND)
+                _detail = ("[사실성] 판정 불가 — 사실성·매력도 LLM 미가용"
+                           "(일시적, 다음 시도/회차 재개)")
+            else:
+                # 형식 오류는 재호출로 풀릴 수 있으나 반복되면 지문 동일 → harness abort.
+                #   (무한 defer 로 조용히 묻히지 않고 사용자에게 escalation 된다)
+                _lab, _kind = ("판정 응답 형식 오류(JSON 아님)", "factuality")
+                _detail = "[사실성] 판정 불가 — 판정 응답 형식 오류(검증 미수행)"
+            # ③ 모든 글: 경제·테마 × 네이버·티스토리 4조합이 전부 이 한 지점을 지난다.
+            _report_judge_unavailable(
+                f"fact+engagement/{_js}", _lab, post_type, platform, kind=_kind)
+            if _fact_on and gate_fail_closed():
+                out.append({"kind": _kind, "detail": _detail})
+                log.warning("[prepublish_gate] 🚫 판정 불가 → fail-closed 차단 "
+                            "(발행 안 함). 종전 동작 복귀: GATE_FAIL_CLOSED=0")
+            else:
+                # 매력도만 켜져 있거나 킬스위치 OFF — 통과시키되 위 기록으로 관측 가능.
+                log.warning("[prepublish_gate] 판정 불가 → 통과(fail-open) "
+                            f"[fact_on={_fact_on} fail_closed={gate_fail_closed()}]")
 
         if _fact_on:
             gt: list = []
@@ -314,19 +395,33 @@ ENGAGEMENT_THRESHOLDS: dict = {
 def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -> dict:
     """사실성 + 매력도 통합 LLM 1회 판정 (★ 사용자 박제 2026-07-12).
 
-    fail-open: LLM 실패·스로틀 시 모두 통과.
     Returns: {"blocked_claims": [str], "engagement_passed": bool, "failed_dims": [str],
-              "llm_scores": dict|None}
+              "llm_scores": dict|None, "judge_status": "ok"|"unavailable"|"malformed"}
+
+    ★ judge_status (2026-07-25 — 이 반환값의 핵심 결함 수정):
+        "ok"          판정했다. blocked_claims=[] 는 *차단할 게 없다* 는 뜻.
+        "unavailable" 모델이 아예 답을 못 했다(회로 open·SDK 실패·빈 응답).
+        "malformed"   답은 왔는데 JSON 이 아니다(판정 형식 실패).
+      종전엔 셋 다 `{"blocked_claims": []}` 로 같아서 **"차단할 게 없다" 와 "판정을 못 했다"
+      가 반환값에서 구분되지 않았다** — 호출자는 그걸 통과로 읽을 수밖에 없었다.
+      판정 자체가 없었던 경우 blocked_claims 는 언제나 [] 이므로 호출자는 반드시
+      judge_status 를 먼저 본다.
+
     ★ llm_scores=None 은 통합 호출 실패/스킵을 의미 — 호출자(SCORE_GATE)는 이 경우
       Section A 를 0점 처리하지 말고 점수 게이트 자체를 fail-open 해야 한다
       (harness RuntimeError [품질점수] A=0.0/20 반복 사고 — prepublish_gate.py 수동수정 2026-07-16).
     """
     import json as _json
-    from shared.llm import invoke_text as _inv
+    from shared.llm import invoke_text_result as _inv_r
+
+    def _no_verdict(status: str) -> dict:
+        return {"blocked_claims": [], "engagement_passed": True, "failed_dims": [],
+                "llm_scores": None, "judge_status": status}
 
     stripped = re.sub(r"<[^>]+>", " ", body or "")[:4000].strip()
     if not stripped:
-        return {"blocked_claims": [], "engagement_passed": True, "failed_dims": [], "llm_scores": None}
+        # 판정 *대상* 이 없는 것은 판정 불가가 아니다 → ok (차단·기록 대상 아님)
+        return _no_verdict("ok")
 
     corpus_snippet = (corpus or "").strip()[:2000] or "(없음)"
     prompt = (
@@ -345,17 +440,20 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -
         '"failed_dims":["임계 미달 차원 목록, 없으면 []"]}'
     )
     try:
-        raw = _inv("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
-        if not (raw or "").strip():
+        raw, ok = _inv_r("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
+        if not ok:
             # ★ 인프라 1회 재시도 (2026-07-16) — _nonessential 은 재시도 0회라
-            #   타임아웃 1번 = 판정 기회 소멸이었다. 한 번 더 시도 후에만 fail-open.
+            #   타임아웃 1번 = 판정 기회 소멸이었다. 한 번 더 시도 후에만 판정불가 확정.
+            #   ★ 2026-07-25: 판정 여부는 ok 로 본다. 종전엔 raw 공백 여부로만 봤는데,
+            #     회로 open 이면 두 호출 모두 *SDK 미호출 즉시 ""* 라 재시도가 무의미했고
+            #     그 사실이 반환값 어디에도 남지 않았다.
             log.info("[prepublish_gate] 통합 판정 응답 없음 — 1회 재시도")
-            raw = _inv("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
-        if not (raw or "").strip():
-            return {"blocked_claims": [], "engagement_passed": True, "failed_dims": [], "llm_scores": None}
+            raw, ok = _inv_r("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
+        if not ok or not (raw or "").strip():
+            return _no_verdict("unavailable")
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if not m:
-            return {"blocked_claims": [], "engagement_passed": True, "failed_dims": [], "llm_scores": None}
+            return _no_verdict("malformed")
         obj = _json.loads(m.group())
         blocked = [str(x).strip() for x in (obj.get("blocked_claims") or []) if str(x).strip()]
         raw_dims = list(obj.get("failed_dims") or [])
@@ -376,10 +474,12 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -
             "engagement_passed": not raw_dims,
             "failed_dims": raw_dims,
             "llm_scores": llm_scores,
+            "judge_status": "ok",
         }
     except Exception as e:
-        log.warning(f"[prepublish_gate] 통합 품질 판정 실패 → 통과(fail-open): {e}")
-        return {"blocked_claims": [], "engagement_passed": True, "failed_dims": [], "llm_scores": None}
+        # 응답은 왔으나 파싱·구조가 깨짐 = 판정 형식 실패(통과 아님).
+        log.warning(f"[prepublish_gate] 통합 품질 판정 파싱 실패: {e}")
+        return _no_verdict("malformed")
 
 
 _IMG_EXT = re.compile(r"\.(?:jpg|jpeg|png|webp)$", re.I)

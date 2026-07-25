@@ -303,6 +303,10 @@ def register_default_jobs(scheduler: Any) -> int:
             #   래핑된다. 각 콜백에 if 문을 흩지 않는다. 상세 사유: job_prereq.py 모듈 docstring.
             from JARVIS04_SCHEDULER.job_prereq import gate as _prereq_gate
             fn = _prereq_gate(j["id"], fn)
+            # ★ 발행창 LLM 우선권 (사용자 박제 2026-07-25) — 파이프라인 잡(03 트렌드·09 선계산·
+            #   02 발행) 실행 구간을 '발행중' 으로 표시해 배경 LLM 을 보류시킨다. 선례와 같은 자리.
+            from JARVIS04_SCHEDULER.job_llm_priority import gate as _llm_gate
+            fn = _llm_gate(j["id"], fn)
             exec_kwargs = {}
             if j.get("executor"):
                 exec_kwargs["executor"] = j["executor"]

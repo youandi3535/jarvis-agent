@@ -641,20 +641,12 @@ def run(post_naver=True, post_tistory=True, resume=None):
         # ── [L3] 단일 플랫폼 대본 규정 준수 검증 (순수 "발견"만) ─────────────
         draft = state.get(draft_key) or {}
         if not draft.get("success"):
-            # ★ 인프라 스로틀(일시적)과 콘텐츠 결함 분리(rank5). infra_throttle 은 재작성 대상이
-            #   아니라 harness 가 fingerprint 제외·backoff·defer 로 처리. detail 은 fingerprint
-            #   안정성 위해 고정 문자열(attempt 변동값 금지).
-            from shared.llm import (is_infra_error as _is_infra_err,
-                                    describe_infra_error as _desc_infra)
-            _derr = str(draft.get("error", "unknown"))
-            _is_infra = _is_infra_err(_derr)
-            issues.append(Issue(
-                step=step_name,
-                kind="infra_throttle" if _is_infra else "draft_failed",
-                detail=(_desc_infra(_derr)
-                        + " — 대본 생성 미완결(일시적, 다음 시도/회차 재개)"
-                        if _is_infra else f"대본 생성 실패: {_derr}"),
-            ))
+            # ★ 인프라 스로틀(일시적)과 콘텐츠 결함 분리 — 판정은 harness 단독
+            #   (`classify_failure_issue`). 종전엔 이 블록이 trend_theme_writer 에도
+            #   **그대로 복사**돼 있어 한쪽만 고치면 다른 쪽에서 재발했다
+            #   (CLAUDE.md ①단일 진입점·③모든 곳 적용 위반, 2026-07-25 통합).
+            from JARVIS00_INFRA.harness import classify_failure_issue as _classify_fail
+            issues.append(_classify_fail(step_name, draft.get("error")))
             return issues
         di_list = _layer3_verify_draft(draft, platform)
         for di in di_list:

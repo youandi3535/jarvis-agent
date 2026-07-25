@@ -1183,6 +1183,31 @@ def build_gate_checklist_block(post_type: str, platform: str) -> str:
     return "\n".join(lines) if len(lines) > 2 else ""
 
 
+def _audit_report_undecided(reason: str, post_type: str, num_count: int) -> None:
+    """진실성 감사 판정 불가를 GUARDIAN·로그에 남긴다 — 침묵 금지 (2026-07-25).
+
+    예외가 없으면 아무도 모른다. 차단 여부와 무관하게 기록은 *항상* 한다.
+    """
+    log.warning(f"[factuality] ⚠️ 진실성 판정 불가 — {reason} "
+                f"(post_type={post_type or '?'}, 미검증 수치 {num_count}개)")
+    try:
+        from JARVIS07_GUARDIAN.error_collector import report
+        # ★ context["kind"] 필수: severity.is_transient() 가 1순위로 보는 구조화 필드.
+        #   빠지면 코드버그로 분류돼 GUARDIAN 이 Tier-2 LLM 자가수리를 헛돌린다
+        #   (회로가 열린 것뿐인데). kind 상수는 prepublish_gate 단일 소스에서 파생.
+        try:
+            from JARVIS02_WRITER.prepublish_gate import INFRA_ISSUE_KIND as _ik
+        except Exception:
+            _ik = "infra_throttle"
+        report("writer", "FactAuditUndecided",
+               message=f"진실성 감사 판정 불가: {reason} (수치 {num_count}개 미검증)",
+               module=__name__, func_name="audit_factuality",
+               context={"kind": _ik, "post_type": post_type,
+                        "numeric_count": num_count, "reason": reason})
+    except Exception as _e:
+        log.debug(f"[factuality] GUARDIAN 기록 실패(무시): {_e}")
+
+
 def audit_factuality(
     html: str,
     source_data: str = "",
@@ -1229,7 +1254,7 @@ def audit_factuality(
     # 출처 데이터와 교차 검증 (제공된 경우)
     if source_data and num_patterns:
         try:
-            from shared.llm import invoke_text
+            from shared.llm import invoke_text_result
             nums_sample = ", ".join(num_patterns[:15])
             prompt = f"""아래 [출처 데이터]에 존재하지 않는 수치를 [본문 수치 목록]에서 찾아라.
 
@@ -1241,16 +1266,43 @@ def audit_factuality(
 
 출처에 없는 수치만 JSON 배열로 반환. 없으면 [].
 예: ["47.3%", "2,340억"]"""
-            result = invoke_text("writer_fast", prompt, temperature=0.1)
+            result, _ok = invoke_text_result("writer_fast", prompt, temperature=0.1)
             import json as _json
-            try:
-                unverified = _json.loads(result.strip())
-                if isinstance(unverified, list):
-                    suspicious.extend([f"출처 미확인 수치: {v}" for v in unverified[:5]])
-            except Exception:
-                pass
-        except Exception:
-            pass
+            # ★ 판정 불가 ≠ 통과 (사용자 박제 2026-07-25) — 이 감사의 핵심 결함이었다.
+            #   종전: invoke_text 가 회로 open 이면 "" 를 돌려주고 → json.loads("") 예외 →
+            #         `except: pass` ×2 → suspicious 가 빈 채로 남아 passed=True.
+            #         **수치 검사를 0회 하고 "진실성 감사 통과"** 가 되었고, 예외가 없으니
+            #         로그도 텔레그램도 GUARDIAN 기록도 남지 않았다(implicit error).
+            #   현재: ok=False(판정 못 함)와 파싱 실패를 *의심 항목* 으로 승격 →
+            #         passed=False → 아래 텔레그램 경고 + GUARDIAN 기록으로 관측된다.
+            #   ※ 이 감사는 설계상 *비차단* (제2조 경고 — "발행 계속 진행"). 차단 게이트는
+            #     prepublish_gate 가 담당하므로 여기서의 fail-closed 는 '통과로 위장하지
+            #     않는다' 까지다. 정책 스위치는 prepublish_gate.gate_fail_closed() 단일 소스.
+            _undecided = ""
+            if not _ok:
+                _undecided = "LLM 미가용(회로 open·SDK 실패·빈 응답)"
+            else:
+                try:
+                    unverified = _json.loads(result.strip())
+                    if isinstance(unverified, list):
+                        suspicious.extend([f"출처 미확인 수치: {v}" for v in unverified[:5]])
+                    else:
+                        _undecided = "판정 응답이 JSON 배열 아님"
+                except Exception as _pe:
+                    _undecided = f"판정 응답 파싱 실패({type(_pe).__name__})"
+            if _undecided:
+                _audit_report_undecided(_undecided, post_type, len(num_patterns))
+                try:
+                    from JARVIS02_WRITER.prepublish_gate import gate_fail_closed as _gfc
+                    _fail_closed = _gfc()
+                except Exception:
+                    _fail_closed = True
+                if _fail_closed:
+                    suspicious.append(
+                        f"⚠️ 진실성 판정 불가 — {_undecided} "
+                        f"(본문 수치 {len(num_patterns)}개 미검증)")
+        except Exception as _ae:
+            log.warning(f"[factuality] 진실성 교차검증 자체 실패(무시): {_ae}")
 
     passed = len(suspicious) == 0
 

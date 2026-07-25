@@ -46,6 +46,54 @@ _cb_count     = 0
 _cb_hour_ts   = 0.0
 
 
+# ── 킬스위치 (무배포 즉시 무효화 — 값은 환경변수에서 매 호출 조회) ────────
+#    ★ 모듈 로드 시점에 상수로 굳히지 않는다 (복사본을 진실로 믿지 말 것):
+#      데몬이 떠 있는 상태에서 export 만 바꿔도 다음 호출부터 반영되어야 한다.
+def _flag(name: str, default: bool = True) -> bool:
+    """환경변수 킬스위치. '0'/'false'/'off' 면 꺼짐. 미설정이면 default."""
+    import os
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return str(v).strip().lower() not in ("0", "false", "off", "no")
+
+
+# ── error_log 시간 컬럼 런타임 파생 (★ 결함1 재발 방지) ──────────────────
+#    종전 코드는 `created_at` 이라는 *존재하지 않는* 컬럼을 SQL 에 박아두고
+#    `except: pass` 로 예외를 삼켰다 → 빈도 상향 안전장치가 상시 무력(70일 무증상).
+#    이제 스키마를 PRAGMA 로 *조회해서* 컬럼명을 파생한다. 스키마가 바뀌어도 따라가고,
+#    후보가 하나도 없으면 조용히 통과하는 대신 시끄럽게 실패한다.
+_TIME_COL_PREF  = ("timestamp", "created_at", "occurred_at")
+_time_col_cache: str = ""
+
+
+def _error_time_col(conn) -> str:
+    """error_log 의 실제 시간 컬럼명을 런타임 조회로 파생 (캐시 1회)."""
+    global _time_col_cache
+    if _time_col_cache:
+        return _time_col_cache
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(error_log)")}
+    for cand in _TIME_COL_PREF:
+        if cand in cols and cand.isidentifier():
+            _time_col_cache = cand
+            return cand
+    raise RuntimeError(
+        f"error_log 에 시간 컬럼 없음 (후보 {_TIME_COL_PREF}) — 실제 컬럼: {sorted(cols)}"
+    )
+
+
+# 안전장치 실패 관측 카운터 — 침묵 금지. /status 에 그대로 노출된다.
+_SAFETY_FAILS: dict[str, dict] = {}
+
+
+def _note_safety_fail(gate: str, exc: Exception) -> None:
+    """안전장치 내부 실패를 *관측 가능하게* 기록 (로그 + /status 노출)."""
+    d = _SAFETY_FAILS.setdefault(gate, {"count": 0, "last": ""})
+    d["count"] += 1
+    d["last"] = f"{type(exc).__name__}: {exc}"[:200]
+    log.warning(f"[GUARDIAN] ⚠️ 안전장치 '{gate}' 실패({d['count']}회) — {d['last']}")
+
+
 # ── capability 선언 + 텔레그램 /status 섹션 ─────────────────────
 
 def _status_section() -> str:
@@ -107,6 +155,31 @@ def _status_section() -> str:
                 )
         except Exception:
             pass
+
+        # ★ 격리 버킷 요약 (결함3) — 걸러낸 것을 *보이게* 한다. 기존 섹션에 편승.
+        try:
+            _ig = ignored_bucket_report()
+            if _ig.get("total") or _ig.get("regex_code_bug"):
+                _r = _ig.get("by_reason") or {}
+                _top = " · ".join(f"{k} {v}" for k, v in list(_r.items())[:3])
+                _d = _ig.get("delta_pct")
+                lines.append(
+                    f"🧺 격리(ignored) {_ig['total']}건"
+                    + (f" ({_d:+.1f}%)" if _d is not None else "")
+                    + (f" — {_top}" if _top else "")
+                )
+                if _ig.get("regex_code_bug"):
+                    lines.append(f"🚨 격리 오탐 의심 {len(_ig['regex_code_bug'])}건 "
+                                 f"(정규식이 코드결함 타입을 걸렀음)")
+                if _ig.get("no_resolution"):
+                    lines.append(f"　⚠️ 무시 사유 미기록 {_ig['no_resolution']}건")
+        except Exception:
+            pass
+
+        # ★ 안전장치 자체가 실패하면 *그 사실* 을 보여준다 (침묵 금지 — 결함1 재발 방지)
+        if _SAFETY_FAILS:
+            for _g, _d in _SAFETY_FAILS.items():
+                lines.append(f"⚠️ 안전장치 '{_g}' 실패 {_d['count']}회 — {_d['last'][:80]}")
 
         # 자동수정 정책 요약 — 단일 진실 소스(architecture.telegram_summary)
         from JARVIS07_GUARDIAN.architecture import telegram_summary as _arch_summary
@@ -207,17 +280,24 @@ def _escalate_severity(error_record: dict) -> str:
 
     if base_sev in ("high", "critical"):
         return base_sev
+    if not _flag("GUARDIAN_ESCALATE"):
+        return base_sev
 
     try:
         from shared.db import get_db
         from datetime import datetime, timedelta
         since = (datetime.now() - timedelta(seconds=_ESCALATE_WINDOW_SECS)).isoformat()
         with get_db() as conn:
+            # ★ 결함 수정 2026-07-25 — 종전 `created_at` 은 error_log 에 *없는 컬럼* 이라
+            #   이 SELECT 가 매번 OperationalError 를 던졌고 아래 `except: pass` 가 삼켜
+            #   "1시간 3회 반복 → severity 상향" 안전장치가 **상시 무력** 이었다.
+            #   컬럼명을 박지 않고 PRAGMA 로 파생한다 (② 동적 설계).
+            tcol = _error_time_col(conn)
             row = conn.execute(
-                """SELECT COUNT(*) FROM error_log
-                   WHERE error_type = ? AND source = ?
-                     AND SUBSTR(message, 1, 40) = ?
-                     AND created_at >= ?""",
+                f"""SELECT COUNT(*) FROM error_log
+                    WHERE error_type = ? AND source = ?
+                      AND SUBSTR(message, 1, 40) = ?
+                      AND {tcol} >= ?""",
                 (error_type, source, message, since),
             ).fetchone()
         count = row[0] if row else 0
@@ -230,8 +310,10 @@ def _escalate_severity(error_record: dict) -> str:
                     f"({count}회/{_ESCALATE_WINDOW_SECS//60}분) — {error_type}"
                 )
             return new_sev
-    except Exception:
-        pass
+    except Exception as e:
+        # ★ 침묵 금지 — 이 except 가 70일짜리 무증상 열화를 만든 바로 그 지점이다.
+        #   실패해도 발행/수리를 막지 않되(보수적 폴백=기본 severity), 반드시 보이게 남긴다.
+        _note_safety_fail("escalate_severity", e)
     return base_sev
 
 
@@ -246,6 +328,7 @@ def _notify_all(error_record: dict, result: str, tier: int = 0, severity: str = 
     _ICONS = {
         "success": "✅", "failed": "❌", "critical_manual": "🔴",
         "circuit_open": "⚡", "deny_path": "🔒", "llm_cap_reached": "🛑",
+        "not_auto_fixable": "🚫",
     }
     _SEV_TAG = {"low": "⚪LOW", "medium": "🟡MED", "high": "🟠HIGH", "critical": "🔴CRIT"}
     icon     = _ICONS.get(result, "ℹ️")
@@ -279,6 +362,15 @@ def _notify_all(error_record: dict, result: str, tier: int = 0, severity: str = 
             f"자동수정 금지 파일: {module}\n"
             f"유형: {etype}\n"
             f"→ 수동 검토 필요"
+        )
+    elif result == "not_auto_fixable":
+        text = (
+            f"{icon} *[GUARDIAN] 자동수정 비적격 — Tier 2 생략*\n"
+            f"심각도: {sev_tag}  판정: severity.is_auto_fixable() = False\n"
+            f"소스: {source} / {module}\n"
+            f"유형: {etype}\n"
+            f"내용: {msg}\n"
+            f"→ 패턴 대상 아님 + 저위험 → LLM 비용 대신 수동 검토"
         )
     elif result == "llm_cap_reached":
         text = (
@@ -490,10 +582,26 @@ def _orchestrate(error_id: int):
             return
 
         # ── 안전장치 2: Circuit breaker ───────────────────────────
-        if not _circuit_breaker_ok():
+        #    ★ 순서 정정 2026-07-25 (결함4 검토): 종전엔 여기서 토큰을 *먼저 소모* 했는데,
+        #      이 아래에 "발행 중 보류"·"DB 선점 실패"·"잠정 실패 보류" 처럼 **아무것도
+        #      고치지 않고 되돌아가는 경로가 3개** 있다. 특히 발행 중 오류는 무더기로
+        #      들어오므로 CB_MAX_HOUR(10)을 *수리 0건인 채로* 통째로 태워버릴 수 있고,
+        #      그러면 정작 발행이 끝난 뒤 진짜 수리가 차단된다(정확히 거꾸로 된 보호).
+        #      → 토큰은 *실제로 파일을 건드리기 직전*(Tier 1 진입 직전)에 소모한다.
+        #      보호 강도는 동일하다: 수리는 반드시 토큰을 통과해야만 일어난다.
+        #    킬스위치 GUARDIAN_CB_LATE=0 → 종전 위치(여기서 소모)로 즉시 복귀.
+        _cb_late = _flag("GUARDIAN_CB_LATE")
+
+        def _circuit_blocked() -> bool:
+            """토큰 소모 + 초과 시 보고·상태 되돌림. True 면 호출자는 즉시 return."""
+            if _circuit_breaker_ok():
+                return False
             log.warning(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — 시간당 한도 초과")
             _notify_all(error_record, "circuit_open")
             _db.mark_error_status(error_id, "new")  # 다음 retry_pending 에서 재처리
+            return True
+
+        if not _cb_late and _circuit_blocked():
             return
 
         # ── 빈도 기반 severity 자동 상향 ─────────────────────────
@@ -557,6 +665,10 @@ def _orchestrate(error_id: int):
             _db.mark_error_status(error_id, "new")
             return
 
+        # ── 안전장치 2: Circuit breaker (새 위치 — 실제 수리 직전) ────────
+        if _cb_late and _circuit_blocked():
+            return
+
         # ── Tier 1: 패턴 수정 — 모든 심각도 시도 (Bandit, LLM 없음, 안전) ─
         #    (Bandit 보상은 pattern_fixer/error_fixer 내부에서 자동 기록)
         analysis = analyze(error_record)
@@ -604,6 +716,28 @@ def _orchestrate(error_id: int):
                      f"status=new 로 되돌려 다음 기회에 재처리")
             _db.mark_error_status(error_id, "new")
             return
+
+        # ── 안전장치 2.8: 자동수정 적격 판정 — `severity.is_auto_fixable()` (★ 결함2 배선) ──
+        #    루트 CLAUDE.md 는 "심각도 분류 단일 진입점 = severity.classify()/is_auto_fixable()
+        #    만 사용" 이라 박제해 두었는데, `is_auto_fixable` 은 **호출자가 0** 이었다
+        #    (정의 1곳 + error_collector 의 미사용 import 1줄). 박제한 게이트가 실재하지 않았다.
+        #    → 여기서 배선한다. *Tier 2 진입 게이트* 로 두는 이유:
+        #      · Tier 1(LLM 0)은 architecture.SEVERITY_MATRIX 가 "critical 포함 전 심각도 시도"
+        #        라고 규정한다. Tier 1 앞에 걸면 critical 이 Tier 1 조차 못 받아 매트릭스와 충돌.
+        #      · 함수의 실제 의미도 "패턴으로 못 고치는 걸 LLM 까지 태울 값어치가 있나" 다
+        #        (docstring: "나머지는 medium 만 LLM fallback").
+        #    잠정·발행보류 게이트보다 *뒤* 에 둔다 — 저 둘은 'new 로 되돌림'(재판정 여지)인데
+        #    이건 종결(wontfix)이라, 되돌릴 것을 먼저 되돌리고 나서 종결해야 한다.
+        #    실측 영향(라이브 DB, status!=manual): 전기간 251건 중 2건(0.8%)만 차단 →
+        #    기본 ON. 킬스위치 GUARDIAN_AUTOFIX_GATE=0 으로 종전 동작(무제한 Tier 2) 복귀.
+        if _flag("GUARDIAN_AUTOFIX_GATE"):
+            from JARVIS07_GUARDIAN.severity import is_auto_fixable
+            if not is_auto_fixable(severity, error_type):
+                log.info(f"[GUARDIAN] #{error_id} 자동수정 비적격 "
+                         f"(severity={severity}, type={error_type}) — Tier 2 생략, 수동 검토")
+                _notify_all(error_record, "not_auto_fixable", severity=severity)
+                _db.mark_error_status(error_id, "wontfix")
+                return
 
         # ── 안전장치 3: Tier 2(LLM) 재시도 횟수 상한 (★ 사용자 박제 2026-07-06) ──
         #    'analyzing' 상태로 멈춘 오류가 job_retry_pending 에 의해 재투입될 때마다
@@ -777,6 +911,157 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
             "ignored": ignored, "scanned": len(rows), "llm_used": llm_used}
 
 
+# ── ★ 격리 버킷(ignored) 집계·추세 보고 (결함3 — 2026-07-25) ─────────────
+#
+#  현업 표준: 격리한 것은 *별도 네임스페이스로 계량* 한다 (Envoy `retry.*`,
+#  Sentry crash-free rate). 우리는 격리(`ignored`)만 하고 아무도 안 봤다 —
+#  실측 440건, 그중 절반은 왜 무시됐는지 기록조차 없었다.
+#  → 걸러낸 것을 *세어서* 보고한다. 특히 **정규식에 걸린 코드버그 타입** 은
+#    오탐(진짜 버그를 조용히 버림)의 조기경보다.
+#
+#  ② 동적 설계: 무시 사유 목록을 여기에 나열하지 않는다. `severity.is_transient()`
+#     **공개 함수를 인자별로 프로빙** 해서 어느 필터가 걸었는지 런타임 파생한다
+#     (severity.py 의 필터가 늘거나 바뀌면 이 보고가 자동으로 따라온다).
+#  ① 단일 진입점: 새 잡·새 알림 경로를 만들지 않는다 — 기존 `job_deep_audit`
+#     말미 + 기존 `send_tg` + 기존 `/status` 섹션에 얹는다.
+
+def _ignore_reason(rec: dict) -> str:
+    """이 오류를 *어느 필터* 가 걸렀는지 — 공개 API 프로빙으로 런타임 파생."""
+    try:
+        from JARVIS07_GUARDIAN.severity import is_transient, kind_of
+    except Exception:
+        return "미분류"
+    et  = rec.get("error_type") or ""
+    msg = rec.get("message") or ""
+    src = rec.get("source") or ""
+    k   = kind_of(rec)
+    # is_transient 의 내부 판정 순서와 동일한 순서로 '한 인자만' 넣어 본다.
+    if k and is_transient("", "", "", kind=k):
+        return f"kind:{k}"
+    if src and is_transient("", "", src, ""):
+        return f"source:{src}"
+    if et and is_transient(et, "", "", ""):
+        return f"타입:{et}"
+    if msg and is_transient("", msg, "", ""):
+        return "정규식:메시지"
+    if rec.get("provisional"):
+        return "잠정만료"          # job_retry_pending 1-B 경로
+    return "기타(수동·구경로)"
+
+
+def _looks_like_code_bug(error_type: str) -> bool:
+    """코드 결함 타입인가 — severity.py 공개 API 에서 파생 (목록 복사 금지).
+
+    `is_auto_fixable("low", et)` 는 severity 가 low 일 때 **패턴 fixer 대상 타입에만**
+    True 를 준다 → 사설 집합 `_PATTERN_FIXABLE_TYPES` 를 훔쳐보지 않고 같은 답을 얻는다.
+    """
+    try:
+        from JARVIS07_GUARDIAN.severity import (is_deterministic_code_error,
+                                                is_auto_fixable)
+    except Exception:
+        return False
+    et = error_type or ""
+    return bool(et) and (is_deterministic_code_error(et) or is_auto_fixable("low", et))
+
+
+def ignored_bucket_report(days: int = 0, limit: int = 3000) -> dict:
+    """격리 버킷 집계 — 사유별 분포 · 추세 · 오탐 조기경보.
+
+    Returns: {"window_days","total","prev_total","delta_pct","by_reason",
+              "regex_code_bug","no_resolution","top_types","lines"}
+    """
+    from collections import Counter
+    win = days or _ERROR_STATS_WINDOW_DAYS
+    out = {"window_days": win, "total": 0, "prev_total": 0, "delta_pct": None,
+           "by_reason": {}, "regex_code_bug": [], "no_resolution": 0,
+           "top_types": [], "lines": []}
+    try:
+        from shared.db import get_db
+        with get_db() as conn:
+            tcol = _error_time_col(conn)          # ② 스키마 런타임 파생
+            cols = ["id", "source", "module", "error_type", "message",
+                    "context", "severity", "resolution", "provisional", tcol]
+            sel  = ", ".join(cols)
+            rows = conn.execute(
+                f"SELECT {sel} FROM error_log WHERE status = 'ignored' "
+                f"AND {tcol} >= datetime('now', ?) ORDER BY {tcol} DESC LIMIT ?",
+                (f"-{win} days", limit),
+            ).fetchall()
+            prev = conn.execute(
+                f"SELECT COUNT(*) FROM error_log WHERE status = 'ignored' "
+                f"AND {tcol} >= datetime('now', ?) AND {tcol} < datetime('now', ?)",
+                (f"-{win * 2} days", f"-{win} days"),
+            ).fetchone()[0]
+    except Exception as e:
+        _note_safety_fail("ignored_report", e)
+        return out
+
+    reasons = Counter()
+    types   = Counter()
+    fp: list[dict] = []
+    no_res  = 0
+    for r in rows:
+        rec = dict(zip(cols, r))
+        reason = _ignore_reason(rec)
+        reasons[reason] += 1
+        types[rec.get("error_type") or "?"] += 1
+        if not (rec.get("resolution") or "").strip():
+            no_res += 1
+        # ★ 오탐 조기경보 — '메시지 정규식' 으로만 걸렸는데 타입은 코드버그
+        if reason == "정규식:메시지" and _looks_like_code_bug(rec.get("error_type")):
+            fp.append({"id": rec.get("id"), "error_type": rec.get("error_type"),
+                       "module": rec.get("module"),
+                       "message": (rec.get("message") or "")[:100]})
+
+    total = len(rows)
+    out.update(total=total, prev_total=prev, by_reason=dict(reasons.most_common()),
+               regex_code_bug=fp, no_resolution=no_res,
+               top_types=types.most_common(5))
+    if prev:
+        out["delta_pct"] = round((total - prev) * 100.0 / prev, 1)
+
+    trend = ("추세 비교 불가(이전 창 0건)" if not prev
+             else f"이전 {win}일 {prev}건 → {'▲' if total > prev else '▼' if total < prev else '='}"
+                  f" {out['delta_pct']:+.1f}%")
+    lines = [f"🧺 *[GUARDIAN] 격리 버킷(ignored) {win}일 집계* — {total}건",
+             f"　추세: {trend}"]
+    if reasons:
+        lines.append("　사유별: " + " · ".join(f"{k} {v}" for k, v in reasons.most_common(6)))
+    if no_res:
+        lines.append(f"　⚠️ 무시 사유 미기록(resolution NULL): {no_res}건 "
+                     f"— 왜 버렸는지 추적 불가")
+    if fp:
+        lines.append(f"　🚨 *오탐 의심 {len(fp)}건* — 메시지 정규식으로 걸렀는데 "
+                     f"타입은 코드 결함:")
+        for it in fp[:5]:
+            lines.append(f"　　#{it['id']} {it['error_type']} @ {it['module']} — {it['message'][:60]}")
+    else:
+        lines.append("　✅ 정규식 격리분에 코드결함 타입 혼입 없음")
+    out["lines"] = lines
+    log.info(f"[GUARDIAN/ignored] {win}일 {total}건 / 사유 {dict(reasons.most_common(5))} "
+             f"/ 오탐의심 {len(fp)} / 사유미기록 {no_res}")
+    return out
+
+
+def report_ignored_bucket() -> dict:
+    """집계 → 기존 텔레그램 경로(send_tg)로 송출. 킬스위치 GUARDIAN_IGNORED_REPORT=0."""
+    rep = ignored_bucket_report()
+    if not _flag("GUARDIAN_IGNORED_REPORT"):
+        log.info("[GUARDIAN/ignored] 보고 비활성(GUARDIAN_IGNORED_REPORT=0) — 집계만 수행")
+        return rep
+    if not rep.get("lines"):
+        return rep
+    # 조용한 날엔 침묵: 0건이고 오탐도 없으면 알림 생략(알림 피로 방지)
+    if not rep.get("total") and not rep.get("regex_code_bug"):
+        return rep
+    try:
+        from shared.notify import send_tg
+        send_tg("\n".join(rep["lines"]))
+    except Exception as e:
+        _note_safety_fail("ignored_report_send", e)
+    return rep
+
+
 def job_deep_audit() -> None:
     """매일 04:30 — 심층 코드 감사 (DB 백업 03:00 이후, 발행과 분리).
 
@@ -803,6 +1088,11 @@ def job_deep_audit() -> None:
         run_auto_repair()
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] 광범위 감사 예외: {e}")
+    # 3부: 격리 버킷 집계·추세 보고 (★ 결함3) — 새 잡 신설 없이 기존 일일 잡에 편승
+    try:
+        report_ignored_bucket()
+    except Exception as e:
+        log.warning(f"[GUARDIAN/deepaudit] 격리 버킷 보고 예외: {e}")
     finally:
         try:
             from shared.pipeline_activity import clear_busy as _cb

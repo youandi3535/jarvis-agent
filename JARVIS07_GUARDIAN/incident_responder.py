@@ -6,7 +6,9 @@
 
 흐름:
   1. TG: 🔧 [GUARDIAN] {job_id} 실패 감지 — 자동 대응 시작
-  2. 오류 분류: code_bug (ImportError 등) | transient (네트워크·쿠키·셀레니움) | unknown
+  2. 오류 분류: code_bug | transient | unknown
+     ★ 판정 목록을 이 모듈이 **소유하지 않는다** — 전부 `severity` 단일 진입점 위임
+       (2026-07-25). 남은 정규식은 *구조 추출* 뿐(줄 앵커 + 길이 제한). 아래 `_classify` 참조.
   3. code_bug / unknown:
        Tier 1 — 패턴 자동 수정 (static 6 + learned + Contextual Bandit, ~5s)
        Tier 2 — LLM 자동 수정 (Claude Code SDK · Sonnet 5, ~10min) — Tier 1 실패 시만
@@ -230,47 +232,10 @@ def _classify(error_text: str, returncode: int | None = None) -> str:
     return "unknown"
 
 
-def _classify(error_text: str, returncode: int | None = None) -> str:
-    """오류 유형 분류: 'code_bug' | 'transient' | 'unknown'
-
-    ★ 2026-07-24 구조적 신호 최우선: 발행 subprocess 가 watchdog freeze 로 강제종료된
-      경우(returncode == WATCHDOG_KILL_RC) 는 *일시적 정지* 이지 코드버그가 아니다.
-      오류 텍스트의 자연어 패턴에 의존하지 않고 종료코드로 확정 → Tier-2 SDK 낭비 차단.
-      (severity.NON_CODE_ISSUE_KINDS 는 건드리지 않는다 — 사용자 박제 2026-07-22:
-       freeze/stuck 은 반복 시 진짜 성능결함일 수 있어 *가시성* 은 유지. 여기서는
-       incident 자동수리 경로의 분류만 교정.)
-    """
-    if returncode is not None:
-        try:
-            from JARVIS00_INFRA.watchdog import WATCHDOG_KILL_RC
-            if int(returncode) == int(WATCHDOG_KILL_RC):
-                return "transient"
-        except Exception:
-            pass
-    for kw in _CODE_BUG_TYPES:
-        if kw in error_text:
-            return "code_bug"
-    # ★ severity.is_transient() 를 단일 진실 소스로 우선 조회 — "인프라 스로틀"·
-    #   "데드라인 초과"·"종목 데이터 0개" 등 harness/GUARDIAN 전역에서 이미 검증된
-    #   transient 패턴이 여기 없어 매번 code_bug/unknown 으로 새 Tier-2 SDK 세션을
-    #   낭비하는 사고를 방지한다(복사본 드리프트 — CLAUDE.md 최우선 설계 원칙).
-    try:
-        from JARVIS07_GUARDIAN.severity import is_transient
-        if is_transient("", error_text):
-            return "transient"
-    except Exception:
-        pass
-    for kw in _TRANSIENT_KEYWORDS:
-        if kw.lower() in error_text.lower():
-            return "transient"
-    return "unknown"
-
-
 def _make_error_record(error_text: str, job_id: str) -> dict:
     """pattern_fixer / error_analyzer 에 전달할 synthetic error_record."""
-    # 첫 번째 에러 타입 추출
-    m = re.search(r'\b(' + '|'.join(_CODE_BUG_TYPES) + r')\b', error_text)
-    detected_type = m.group(1) if m else "PostingFailure"
+    # 에러 타입 추출 — `_detect_error_type` 단일 경로 (종전 `_CODE_BUG_TYPES` 정규식 폐기)
+    detected_type = _detect_error_type(error_text) or "PostingFailure"
 
     # traceback 에서 모듈 경로 추출
     mod_m = re.search(r'File "([^"]+\.py)"', error_text)

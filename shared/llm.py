@@ -43,6 +43,10 @@ class ModelSpec:
     max_tokens: int
     temperature: float
     description: str = ""
+    # ★ 배경(비긴급) 작업용 alias 인가 — 발행창에서는 한도를 글 작성에 양보하고 *보류* 된다.
+    #   (사용자 박제 2026-07-25: "03·09·02·06·08 이 도는 동안 LLM 은 오로지 글 작성에만")
+    #   여기 선언 한 곳에서 `_BG_ALIASES` 를 파생 — 별도 목록을 두면 alias 추가 시 드리프트.
+    background: bool = False
 
 
 # ★ 모델 계층 — 사용자 박제 2026-07-06 (ADR 017): Sonnet 5 단일 모델 통일 (ADR 015 폐지).
@@ -83,6 +87,7 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=8000,
         temperature=0.1,
         description="코드 수정·patch 생성·자가수정 (Sonnet 5 — 오류 수정 전용)",
+        background=True,   # 배경 작업 — 발행창에서 보류
     ),
     "guardian": ModelSpec(
         alias="guardian",
@@ -90,6 +95,7 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=8000,
         temperature=0.1,
         description="JARVIS07 오류 분석·패치 생성 (Sonnet 5)",
+        background=True,   # 배경 작업 — 발행창에서 보류
     ),
     "architect": ModelSpec(
         alias="architect",
@@ -97,6 +103,7 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=10000,
         temperature=0.3,
         description="ARCHITECT 새 에이전트·시스템 설계 (Sonnet 5)",
+        background=True,   # 배경 작업 — 발행창에서 보류
     ),
     "diagnostic": ModelSpec(
         alias="diagnostic",
@@ -104,6 +111,7 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=6000,
         temperature=0.2,
         description="복잡 multi-cause traceback 진단·근본 원인 추론 (Sonnet 5)",
+        background=True,   # 배경 작업 — 발행창에서 보류
     ),
     "learn_eval": ModelSpec(
         alias="learn_eval",
@@ -111,6 +119,7 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=4000,
         temperature=0.1,
         description="learned_patterns 등록 게이트 — patch 안전성·정확성·재사용 가치 채점 (Sonnet 5)",
+        background=True,   # 배경 작업 — 발행창에서 보류
     ),
     "fact_judge": ModelSpec(
         alias="fact_judge",
@@ -444,7 +453,11 @@ def _proc_lock_release() -> None:
 # mark_publishing(True) 동안 background alias(guardian 등)의 timeout 을 90s 로 단축,
 # retries=1 → 세마포어 장기 점유로 발행 파이프라인을 최대 300s 블로킹하던 사고 방지.
 _PUBLISHING_ACTIVE = _threading.Event()
-_BG_ALIASES = frozenset({"guardian", "learn_eval", "architect", "diagnostic"})
+_PUBLISHING_DEPTH = 0                        # 중첩 표시 참조수 (잡 래퍼 + 내부 run())
+_PUBLISHING_DEPTH_LOCK = _threading.Lock()
+# ★ MODELS 선언에서 파생 (사본 금지 — 2026-07-25). 종전엔 여기 손으로 4개를 적어둬서
+#   `coder`(architect 코드생성)가 누락돼 발행창에도 그대로 나갔다.
+_BG_ALIASES = frozenset(a for a, s in MODELS.items() if getattr(s, "background", False))
 
 # ★ 발행창 essential 재시도 캡 대상 (P-C 사용자 박제 2026-07-18) — 본문 생성·발행전 검증 호출.
 #   스로틀/SDK 스톨 시 재시도 증폭(913s) 차단용 retries=1. analyzer(추출)는 제외(선계산으로 이전).
@@ -483,6 +496,16 @@ def mark_publishing(active: bool) -> None:
 
     ★ in-process Event + 파일 표식을 *함께* 갱신 → 다른 프로세스(데몬 GUARDIAN)도 인지.
     """
+    # ★ 중첩 안전 refcount (2026-07-25): 잡 래퍼(JARVIS04)가 파이프라인 잡 전체를 감싸고
+    #   그 안에서 economic_poster.run()/run_all_themes() 가 또 표시한다. 참조수 없이 bool 로
+    #   다루면 *안쪽이 끝날 때 바깥 창까지 꺼져* 발행 후반부가 무방비가 된다.
+    global _PUBLISHING_DEPTH
+    with _PUBLISHING_DEPTH_LOCK:
+        if active:
+            _PUBLISHING_DEPTH += 1
+        else:
+            _PUBLISHING_DEPTH = max(0, _PUBLISHING_DEPTH - 1)
+        active = _PUBLISHING_DEPTH > 0      # 실제 창 상태 = 참조수 > 0
     if active:
         _PUBLISHING_ACTIVE.set()
     else:
@@ -1240,22 +1263,25 @@ def invoke_text_result(alias: str, prompt: str, system: str = "", timeout: int =
     #   종전엔 발행이 *시작된 뒤*(mark_publishing) 강등만 했으므로, 발행 직전에
     #   심층감사·학습이 한도를 태워버리는 것을 막지 못했다.
     #   보호 시각은 DEFAULT_JOBS cron 에서 도출 — 하드코딩 없음.
-    if alias in _BG_ALIASES and not _PUBLISHING_ACTIVE.is_set():
+    # ★★ 배경 alias 는 발행창에서 *보류* — 강등 아님 (사용자 박제 2026-07-25).
+    #   "03·09·02·06·08 이 도는 동안 LLM 은 오로지 글 작성에만 쓰인다."
+    #   ① 판정은 `bg_defer_reason()` 단일 소스 — 발행 中 + 발행 前 보호구간을 한 번에 답한다.
+    #   ② 종전 결함(같은 병 3번째): 여기서 `_PUBLISHING_ACTIVE`(threading.Event)만 봤다.
+    #      경제 브리핑은 **subprocess** 라 데몬의 Event 는 꺼져 있어(ERRORS [474] 와 동일)
+    #      경제 발행 내내 데몬 쪽 배경 LLM 이 차단도 강등도 안 된 채 한도를 먹었다.
+    #      `bg_defer_reason()` 은 파일 표식까지 보므로 프로세스 경계를 넘는다.
+    #   ③ '90초로 강등' 은 의미가 없었다 — Tier-2 한 세션이 10분 이상이라 강등해도 차선을 문다.
+    if alias in _BG_ALIASES:
         try:
-            if in_publish_protection():
-                import logging as _lg
-                _lg.getLogger("jarvis.llm").info(
-                    f"🛡 발행창 보호 구간 — background alias '{alias}' 차단 "
-                    f"(발행 前 {_PROTECT_MIN}분). 한도를 발행에 우선 배정."
-                )
-                return "", False      # ★ 모델 미호출 — 판정 불가
+            _bg_why = bg_defer_reason()
         except Exception:
-            pass
-
-    if alias in _BG_ALIASES and _PUBLISHING_ACTIVE.is_set():
-        retries = min(retries, 1)
-        backoff = False
-        timeout = min(timeout, 90)
+            _bg_why = ""
+        if _bg_why:
+            import logging as _lg
+            _lg.getLogger("jarvis.llm").info(
+                f"🛡 {_bg_why} — background alias '{alias}' 보류 (한도를 글 작성에 우선 배정)"
+            )
+            return "", False      # ★ 모델 미호출 — 호출자는 다음 기회에 재시도
     # ★ P-C 발행창 essential 재시도 캡 (사용자 박제 2026-07-18): writer(본문 생성)·fact_judge·
     #   engagement_judge(발행 전 검증)는 필수라 timeout 은 유지하되, 스로틀/SDK 스톨 시 재시도로
     #   913s(최대 3×300+백오프)로 증폭되는 것을 차단 — retries=1. 스로틀·스톨 창에서 같은 창
@@ -1308,7 +1334,7 @@ def invoke_text_result(alias: str, prompt: str, system: str = "", timeout: int =
         _truncated = getattr(_LAST_CALL, "truncated", False)
         if result.strip() and not _truncated:
             _circuit_record_success()
-            return result
+            return result, True        # ★ 유일한 ok=True 경로 — 모델이 실제로 답했다
         # ★ 절단(우리 데드라인이 스트림을 끊음 + 부분출력) = 인프라 스로틀 — 성공 처리·회로 리셋
         #   금지. 빈 응답과 동급으로 재시도 루프에 흘리고, 소진 후 best-effort 로 절단본 반환.
         if _truncated:
@@ -1336,7 +1362,9 @@ def invoke_text_result(alias: str, prompt: str, system: str = "", timeout: int =
     # 회로차단기 카운트. CLI 부재·auth 빠른 실패는 hung=False라 오탐 없음.
     if throttled_seen or hung_seen or truncated_seen:
         _circuit_record_throttle()
-    return result
+    # ★ 루프를 끝까지 돈 = 성공 분기를 한 번도 못 탔다 → 판정 불가.
+    #   text 는 "" 이거나 *절단된 부분출력* (best-effort 로 계속 반환 — 하위호환).
+    return result, False
 
 
 class ClaudeSDKLLM:
@@ -1418,7 +1446,7 @@ ClaudeCLILLM = ClaudeSDKLLM
 __all__ = [
     "ModelSpec", "MODELS", "get_spec",
     "model_id", "model_label", "pretty_model_id", "live_model_ids",
-    "chat", "invoke_text", "invoke_vision",
+    "chat", "invoke_text", "invoke_text_result", "invoke_vision",
     "last_call_infra_incomplete", "circuit_is_open",
     "is_langchain_available",
     "ClaudeSDKLLM", "ClaudeCLILLM",
