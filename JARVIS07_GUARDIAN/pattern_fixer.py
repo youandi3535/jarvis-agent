@@ -784,9 +784,11 @@ def _make_fingerprint(error_type: str, message: str) -> str:
 def bandit_arm_name(error_record: dict, hit_count: int) -> str:
     """학습 fingerprint 의 밴딧 arm 이름 — 단일 진실 소스.
 
-    _get_new_fixers / _get_verified_fixers 가 만드는 arm 이름과 *정확히* 동일해야
+    `apply_stored_patches` 의 보상 arm(`verified:`/`new:` + fingerprint)과 *정확히* 동일해야
     보상이 다음 랭킹에 반영된다. record_sdk_fix(SDK 경로) + error_fixer.apply_fix(LLM 경로)
     공용 → arm 이름 규칙 드리프트 방지.
+    (종전 이 자리에 적혀 있던 `_get_new_fixers`/`_get_verified_fixers` 는 2026-07-26
+     死코드로 삭제됐다 — 문서가 없는 함수를 가리키고 있었다.)
     """
     fp = _make_fingerprint(
         error_record.get("error_type", "") or "",
@@ -867,64 +869,33 @@ def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[di
     if not fixer_name:
         return None
 
-    # ── llm_patch: 저장된 패치 직접 반환 (LLM 재호출 없음) ──────
-    if fixer_name == "llm_patch":
-        stored_patch  = matched.get("stored_patch", "")
-        stored_target = matched.get("stored_target_file", "")
-        if not stored_patch or not stored_target:
-            log.debug("[GUARDIAN/learned] llm_patch 패치 없음 — LLM fallback")
-            return None
-        # stored_patch 가 unified diff 형식이면 diff 적용, 아니면 full-file 덮어쓰기
-        if stored_patch.lstrip().startswith(("---", "@@", "diff ")):
-            new_content = _apply_diff_replacements(stored_target, stored_patch)
-            if new_content is None:
-                log.debug("[GUARDIAN/learned] llm_patch diff 적용 불가 — LLM fallback")
-                return None
-            patch_to_use = new_content
-        else:
-            patch_to_use = stored_patch  # 기존 full-file 방식 (backward compat)
-        result = {
-            "fixable":     True,
-            "target_file": stored_target,
-            "patch":       patch_to_use,
-            "explanation": f"학습 캐시 재적용 — {matched.get('fingerprint','')[:60]}",
-            "pattern":     "llm_patch",
-            "source":      "learned_cache",
-        }
-        _bump_hit_count(data, matched.get("fingerprint"))
-        result["learned"] = True
-        result["fingerprint"] = matched.get("fingerprint")
-        log.info(
-            f"[GUARDIAN/learned] ★ LLM 패치 캐시 적용 — fp='{fp[:70]}' "
-            f"hit_count={matched.get('hit_count', 0) + 1}"
-        )
-        return result
-
-    # ── auto_patch: git diff → search-replace 적용 (LLM 재호출 없음) ──
-    if fixer_name == "auto_patch":
-        stored_diff   = matched.get("stored_patch", "")
-        stored_target = matched.get("stored_target_file", "")
-        if not stored_diff or not stored_target:
-            log.debug("[GUARDIAN/learned] auto_patch 없음 — fallback")
-            return None
-        new_content = _apply_diff_replacements(stored_target, stored_diff)
-        if new_content is None:
-            log.debug(f"[GUARDIAN/learned] auto_patch diff 적용 불가 ({stored_target}) — fallback")
+    # ── llm_patch / auto_patch: 저장된 패치 복원 (LLM 재호출 없음) ──────
+    #   ★ 두 분기가 같은 일을 서로 다르게 하고 있었다 (2026-07-26 ① 정리): llm 쪽만
+    #     다중·레거시·콤마를 처리하고 auto 쪽은 스칼라 직독이라, 다중 파일 auto_patch 는
+    #     반쪽만 복원됐다. 복원은 `_restore_items` **한 곳**이 한다.
+    if fixer_name in ("llm_patch", "auto_patch"):
+        _items = _restore_items(matched)
+        if not _items:
+            log.debug(f"[GUARDIAN/learned] {fixer_name} 복원 불가 — fallback")
             return None
         _bump_hit_count(data, matched.get("fingerprint"))
+        _tgt = _items[0]["target_file"]
         result = {
             "fixable":     True,
-            "target_file": stored_target,
-            "patch":       new_content,
-            "explanation": f"auto_patch 재적용 (LLM 0) — {stored_target}",
-            "pattern":     "auto_patch",
+            "target_file": _tgt,
+            "patch":       _items[0]["patch"],
+            "patches":     _items,          # ★ 다중 파일 트랜잭션 (apply_fix 가 전량 적용)
+            "explanation": (f"학습 캐시 재적용 — {matched.get('fingerprint','')[:60]}"
+                            if fixer_name == "llm_patch"
+                            else f"auto_patch 재적용 (LLM 0) — {_tgt}"),
+            "pattern":     fixer_name,
             "source":      "learned_cache",
+            "learned":     True,
+            "fingerprint": matched.get("fingerprint"),
         }
-        result["learned"] = True
-        result["fingerprint"] = matched.get("fingerprint")
         log.info(
-            f"[GUARDIAN/learned] ★ auto_patch 적용 — {stored_target} "
-            f"hit_count={matched.get('hit_count', 0) + 1}"
+            f"[GUARDIAN/learned] ★ {fixer_name} 캐시 적용 — fp='{fp[:70]}' "
+            f"파일 {len(_items)}개 hit_count={matched.get('hit_count', 0) + 1}"
         )
         return result
 
@@ -1085,6 +1056,58 @@ def calibrate_semantic_threshold() -> dict:
 _SYNTHETIC_TYPES = frozenset({"AutoRepairFix"})
 
 
+def _clean_target(raw: str, patches) -> str:
+    """`stored_target_file` 에 들어갈 **경로 하나**를 만든다 — 오염 차단은 *쓰기 측* 이 한다.
+
+    ★ 왜 여기인가 (2026-07-26): 콤마로 이어붙인 경로("a.py, b.py")를 거부하는 코드가
+      *읽는 쪽* 두 곳에 복사돼 있었는데, 정작 **만드는 쪽엔 없었다** — 그래서 원장은 계속
+      더러워졌다(실측 4건). 오염은 발생 지점에서 막는다. 다중 파일은 `stored_patches` 가
+      제 자리이므로, 여기서는 대표 1개만 남긴다.
+    """
+    s = str(raw or "").strip()
+    if "," not in s:
+        return s
+    first = (patches[0][0] if patches else s.split(",")[0]).strip()
+    log.warning(f"[GUARDIAN/learned] target_file 다중경로 문자열 정리 — "
+                f"대표 1개만 저장: {s[:80]} → {first}")
+    return first
+
+
+def _set_sample_message(entry: dict, error_record: dict) -> None:
+    """원 오류 메시지 **원문** 보관 — 재적용 시 진짜 재현검증을 하려면 이게 있어야 한다.
+
+    ★ `message_pattern` 은 정규식이라 `verify_fix` 가 모듈명·심볼명을 못 뽑는다.
+      원문이 없으면 재적용 검증이 `compile_file` 만 남아 *컴파일되면 통과* 가 되고,
+      그건 2026-07-25 에 폐기한 판정이다. 원문이 있어야 보상을 줄 자격이 생긴다.
+    """
+    msg = str((error_record or {}).get("message") or "").strip()
+    if msg and not entry.get("sample_message"):
+        entry["sample_message"] = msg[:400]
+
+
+def _set_stored_patches(entry: dict, patches) -> None:
+    """다중 파일 수정을 **통째로** 박제 (2026-07-26). 단일 파일이면 아무것도 하지 않는다.
+
+    ★ 왜 필요한가: 스칼라 두 필드(`stored_patch`/`stored_target_file`)만 있으면 3개 파일을
+      함께 고친 사례가 *대표 1개* 로만 학습된다. 그걸 나중에 재적용하면 **반쪽만 되살아나**
+      오히려 깨진 상태를 만든다 — 다중 파일 수정을 도입하면서 새로 생기는 위험이라
+      학습 쪽을 같이 넓히지 않으면 안 된다.
+      단일 파일 항목은 `stored_patches` 를 만들지 않는다(스키마 부풀리기 방지 —
+      읽기 측 `stored_patch_specs` 가 스칼라를 1원소로 승격한다).
+    """
+    # ★ `patches=None`(미지정) 과 "단일 파일" 을 구분한다 (2026-07-26 자수).
+    #   초판은 둘 다 `pop` 해버렸다. 그런데 `patches=` 를 넘기는 호출자는 `apply_fix` 뿐이고
+    #   `record_sdk_fix`·`report_manual_fix` 는 안 넘긴다 — 3파일로 박제된 지문에 그런 호출이
+    #   한 번만 와도 **다중 기록이 지워지고 대표 1개만 남아**, 다음 재적용이 정확히 이 함수가
+    #   막으려던 '반쪽 복원' 을 한다. 미지정은 *건드리지 않는 것* 이 옳다.
+    if patches is None:
+        return
+    if len(patches) < 2:
+        entry.pop("stored_patches", None)
+        return
+    entry["stored_patches"] = [{"target_file": r, "patch": d} for r, d in patches if r and d]
+
+
 def record_pattern_hit(
     error_record: dict,
     fixer_name: str,
@@ -1093,6 +1116,7 @@ def record_pattern_hit(
     patch: str = "",
     target_file: str = "",
     verification: str = "",
+    patches: list | None = None,
 ) -> int:
     """자동/수동 수정 성공 시 learned_patterns 에 fingerprint 등록·누적.
 
@@ -1248,7 +1272,9 @@ def record_pattern_hit(
                 # llm_patch / auto_patch: 최신 패치로 갱신
                 if fixer_name in ("llm_patch", "auto_patch") and patch:
                     p["stored_patch"]       = patch
-                    p["stored_target_file"] = target_file or fixed_file
+                    p["stored_target_file"] = _clean_target(target_file or fixed_file, patches)
+                    _set_stored_patches(p, patches)
+                _set_sample_message(p, error_record)
                 # ★ eval_meta 갱신 (A모델, ADR 007)
                 if _eval_meta is not None:
                     p["eval_meta"] = _eval_meta
@@ -1285,7 +1311,9 @@ def record_pattern_hit(
             # llm_patch / auto_patch: 패치 저장 → 재발 시 LLM 재호출 없이 즉시 적용
             if fixer_name in ("llm_patch", "auto_patch") and patch:
                 entry["stored_patch"]       = patch
-                entry["stored_target_file"] = target_file or fixed_file
+                entry["stored_target_file"] = _clean_target(target_file or fixed_file, patches)
+                _set_stored_patches(entry, patches)
+            _set_sample_message(entry, error_record)
             # ★ eval_meta 박제 (A모델, ADR 007)
             if _eval_meta is not None:
                 entry["eval_meta"] = _eval_meta
@@ -1419,20 +1447,90 @@ def stats() -> dict:
     }
 
 
+def stored_patch_specs(entry: dict) -> list:
+    """학습 항목 → `[(target_rel, diff), ...]` — **저장된 패치 해석 단일 지점**.
+
+    ★ 하위호환: 종전 스칼라 두 필드(`stored_patch`/`stored_target_file`)는 1원소로 승격.
+      새 필드 `stored_patches` 가 있으면 그쪽이 우선(다중 파일 수정을 통째로 되살린다).
+    ★ 콤마 이어붙인 경로("a.py, b.py")는 *경로가 아니다* — 실제로 원장에 4건 있었고
+      `_ROOT/"a.py, b.py"` 가 존재하지 않아 **조용히 영구 스킵**되고 있었다. 여기서 명시
+      거부한다(조용한 스킵보다 드러나는 거부가 낫다).
+    """
+    raw = entry.get("stored_patches")
+    if isinstance(raw, list) and raw:
+        out = []
+        for it in raw:
+            if not isinstance(it, dict):
+                continue
+            rel, dif = str(it.get("target_file") or "").strip(), it.get("patch") or ""
+            if rel and dif and "," not in rel:
+                out.append((rel, dif))
+        if out:
+            return out
+    rel = str(entry.get("stored_target_file") or "").strip()
+    dif = entry.get("stored_patch") or ""
+    if rel and "," in rel:
+        log.debug(f"[GUARDIAN/patch] 다중경로 문자열 학습항목 — 해석 불가로 skip: {rel[:80]}")
+        return []
+    return [(rel, dif)] if (rel and dif) else []
+
+
+def _restore_items(matched: dict, *, allow_full_file: bool = True) -> list:
+    """학습 항목 → 적용 가능한 `[{"target_file","patch"}, ...]` — **복원 단일 지점**.
+
+    저장된 것은 unified diff(현행) 또는 full-file(레거시)이다.
+    **전부** 복원돼야 반환한다 — 하나라도 불가하면 빈 목록(반쪽 복원 금지).
+
+    allow_full_file=False: `apply_stored_patches`(매일 04:30 전수 재적용)용.
+      레거시 full-file 은 "before 컨텍스트가 남아 있는가" 라는 회귀 감지 의미가 없어서
+      매번 무조건 덮어쓰게 된다 — 정기 스윕에서는 diff 만 다룬다.
+    """
+    specs = stored_patch_specs(matched)
+    if not specs:
+        return []
+    items: list = []
+    for rel, dif in specs:
+        if dif.lstrip().startswith(("---", "@@", "diff ")):
+            new_content = _apply_diff_replacements(rel, dif)
+            if new_content is None:
+                return []                    # context 불일치 = 이미 고쳐졌거나 코드가 달라짐
+        elif allow_full_file:
+            new_content = dif                # 레거시 full-file 호환
+        else:
+            return []
+        items.append({"target_file": rel, "patch": new_content})
+    return items
+
+
 def apply_stored_patches() -> int:
     """Claude Code SDK 호출 전 1순위 — learned_patterns.json 의 auto_patch/llm_patch 전수 재적용.
 
     ★ 사용자 박제 2026-05-31 — 스케줄 스캔(auto_repair) 에서 Claude Code SDK 보다 먼저 실행.
     이미 알려진 패치를 먼저 적용하여 자가 수정 비율 향상 + Claude 작업량 감소.
 
+    ★★ 2026-07-26 — **가드 아래로 이관** (ERRORS [502], 사용자 승인)
+      종전 이 함수는 저장소에서 **파일에 쓰는 두 번째 경로** 였는데 가드가 하나도 없었다:
+        · `_ROOT / target_rel` 직결 — 루트탈출·금지폴더·금지파일·확장자 검사 **전무**
+          (`_DENY_FILES` 로 지킨 learned_patterns.json 이 이 길에선 무방비. 실제로 그
+           파일을 대상으로 하는 학습 항목이 2건 있었다 — diff 컨텍스트가 안 맞아 스킵된 건
+           가드가 아니라 **운** 이었다)
+        · 구문 검사가 *파일에 쓴 뒤* — 깨진 코드가 디스크에 먼저 착지
+        · import·재현 검증 **없이 밴딧 양의 보상** — 2026-07-25 에 "재현 검증 없는 fixed 는
+          fixed 가 아니다" 로 고친 바로 그 병이 이 길에만 남아 있었다
+        · 성공 시 `bak.unlink()` — 되돌릴 수단을 스스로 지웠다
+      → 이제 `error_fixer.apply_files_safely`(선검사 전량 → 백업 전량 → 쓰기 전량 →
+        import 전량, 실패 시 전량 롤백) 한 문으로만 파일에 닿는다.
+
     적용 조건:
       - diff 의 before-context 가 현재 파일에 존재할 때만 (회귀 감지)
-      - _apply_diff_replacements 가 None 반환 시 skip (이미 수정됐거나 context 불일치)
+      - 다중 파일 항목은 **전부** 적용 가능해야 진행 (하나라도 불가면 트랜잭션 자체를 포기)
 
     Returns: 적용 성공 건수
     """
-    import ast as _ast
-    import shutil as _shutil
+    from JARVIS07_GUARDIAN.error_fixer import (
+        apply_files_safely, rollback_patchset, verify_fix, record_rollback_learning,
+        VERIFY_REPRODUCES, VERIFY_UNVERIFIABLE,
+    )
 
     data = _load_learned()
     patterns = data.get("patterns", [])
@@ -1444,49 +1542,89 @@ def apply_stored_patches() -> int:
         fixer = entry.get("fixer")
         if fixer not in ("auto_patch", "llm_patch"):
             continue
-        stored_diff = entry.get("stored_patch", "")
-        target_rel  = entry.get("stored_target_file", "")
-        if not stored_diff or not target_rel:
+        # ★ 복원은 `_restore_items` 단일 지점. 하나라도 불가면 전체 포기(전부 아니면 전무).
+        #   정기 스윕이라 레거시 full-file 은 제외한다(회귀 감지 의미가 없어 매번 덮어쓴다).
+        restored = _restore_items(entry, allow_full_file=False)
+        if not restored:
             continue
-        target_path = _ROOT / target_rel
-        if not target_path.exists():
+        items = [(it["target_file"], it["patch"]) for it in restored]
+
+        _fp   = entry.get("fingerprint", "")
+        _tag  = f"learned:{_fp[:40]}"
+        _rels = ", ".join(r for r, _ in items)
+
+        ok, why, staged = apply_files_safely(items, tag=_tag)
+        if not ok:
+            log.info(f"[GUARDIAN/patch] 학습 패치 거부 ({_rels}): {why}")
             continue
 
-        new_content = _apply_diff_replacements(target_rel, stored_diff)
-        if new_content is None:
-            continue  # context 불일치 → skip
+        # ★ 재현 검증 — 적용됐다고 고쳐진 것이 아니다. apply_fix 와 **같은 정책**.
+        #   ★★ `message_pattern` 을 message 로 넘기지 말 것 (2026-07-26 자수):
+        #     그건 메시지가 아니라 `record_pattern_hit` 이 만든 **정규식**(`re.escape` 포함)이다.
+        #     `verify_fix` 의 `_parse_import_target`·NameError 추출이 전부 no-op 이 되어
+        #     `compile_file` 프로브만 남고, 그건 이미 선검사(`ast.parse`)가 보장한 사실이라
+        #     **무조건 reproduced_gone → 근거 없는 +1 보상**이 된다. 2026-07-25 가 폐기한
+        #     "컴파일되면 fixed" 가 이 경로에서 되살아나는 것이다.
+        #     원문이 없으면 **검증 못 한 것으로 취급**한다(보상 0) — 이 파일이 스스로 세운 규칙.
+        _sample = str(entry.get("sample_message") or "").strip()
+        if _sample:
+            _rec = {"error_type": entry.get("error_type", "") or "",
+                    "message": _sample, "module": items[0][0]}
+            _vstate, _vdetail = verify_fix(
+                _rec, {"target_file": items[0][0], "patch": items[0][1]}, staged[0].path,
+                original_content=staged[0].original,
+            )
+        else:
+            _rec = {"error_type": entry.get("error_type", "") or "", "message": "",
+                    "module": items[0][0]}
+            _vstate, _vdetail = VERIFY_UNVERIFIABLE, "원 오류 메시지 원문 미보유 — 재현 불가"
 
-        bak = target_path.with_suffix(target_path.suffix + ".bak")
-        _shutil.copy2(target_path, bak)
-        try:
-            target_path.write_text(new_content, encoding="utf-8")
-            if target_path.suffix == ".py":
-                _ast.parse(new_content)
-            applied += 1
-            bumped.append(entry.get("fingerprint", ""))
-            log.info(f"[GUARDIAN/patch] ★ 학습 패치 재적용: {target_rel} ({fixer})")
-            bak.unlink(missing_ok=True)
-            # ★ 재적용 성공 → 밴딧 양의 보상 (재발→재적용→reward 사슬 완성, 2026-07-02).
-            #   arm 은 *저장된 fingerprint* 로 직접 계산 — bandit_arm_name 재계산 시
-            #   message_pattern(정규식)으로 fp 가 어긋나 다른 arm 에 보상되는 것 방지.
+        if _vstate == VERIFY_REPRODUCES:
+            _n, _failed = rollback_patchset(staged)
+            log.warning(f"[GUARDIAN/patch] 재적용했으나 원 오류 재현 → 전량 롤백 "
+                        f"({_rels}): {_vdetail[:80]}"
+                        + (f" / ★ 롤백 실패 {_failed}" if _failed else ""))
+            # ★ 롤백은 가장 강한 외생 신호다 — apply_fix 와 같은 3종을 여기서도 흘린다.
+            #   종전엔 `continue` 뿐이라 **양의 보상만 흐르고 음의 신호는 안 흘렀다**.
             try:
                 from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
-                _fp  = entry.get("fingerprint", "")
-                _hc  = int(entry.get("hit_count", 0) or 0)
-                _arm = (f"verified:{_fp[:32]}" if _hc >= _HIGH_COUNT_THRESHOLD
-                        else f"new:{_fp[:32]}")
-                _bandit_reward(
-                    entry.get("error_type", "") or "", _arm, success=True,
-                    error_record={"error_type": entry.get("error_type", "") or "",
-                                  "message": entry.get("message_pattern", "") or "",
-                                  "module": target_rel},
-                )
+                _hc0  = int(entry.get("hit_count", 0) or 0)
+                _arm0 = (f"verified:{_fp[:32]}" if _hc0 >= _HIGH_COUNT_THRESHOLD
+                         else f"new:{_fp[:32]}")
+                _bandit_reward(entry.get("error_type", "") or "", _arm0, success=False,
+                               error_record=_rec)
             except Exception as _re:
-                log.debug(f"[GUARDIAN/patch] 재적용 보상 실패: {_re}")
-        except Exception as _e:
-            _shutil.copy2(bak, target_path)
-            bak.unlink(missing_ok=True)
-            log.debug(f"[GUARDIAN/patch] 패치 검증 실패 ({target_rel}): {_e}")
+                log.debug(f"[GUARDIAN/patch] 롤백 음의보상 실패: {_re}")
+            try:
+                record_rollback_learning(
+                    _rec, {"pattern": fixer, "target_file": items[0][0]},
+                    f"학습 재적용 후 원 오류 재현 → 롤백: {_vdetail[:100]}",
+                    verification=VERIFY_REPRODUCES)
+            except Exception as _re:
+                log.debug(f"[GUARDIAN/patch] 롤백 학습강등 실패: {_re}")
+            continue
+
+        applied += 1
+        bumped.append(_fp)
+        log.info(f"[GUARDIAN/patch] ★ 학습 패치 재적용: {_rels} ({fixer}, "
+                 f"검증={_vstate or '비활성'})")
+
+        # ★ 밴딧 보상 — **검증된 것만** 양의 보상 (사용자 박제 2026-07-25 정책을 이 경로에도).
+        #   unverifiable 은 보상 호출 자체를 하지 않는다(0). 종전엔 무조건 +1 이었다.
+        #   arm 은 *저장된 fingerprint* 로 직접 계산 — bandit_arm_name 재계산 시
+        #   message_pattern(정규식)으로 fp 가 어긋나 다른 arm 에 보상되는 것 방지.
+        if _vstate == VERIFY_UNVERIFIABLE:
+            log.info(f"[BANDIT] 재적용 {_rels} unverifiable — 보상 생략(0)")
+            continue
+        try:
+            from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
+            _hc  = int(entry.get("hit_count", 0) or 0)
+            _arm = (f"verified:{_fp[:32]}" if _hc >= _HIGH_COUNT_THRESHOLD
+                    else f"new:{_fp[:32]}")
+            _bandit_reward(entry.get("error_type", "") or "", _arm, success=True,
+                           error_record=_rec)
+        except Exception as _re:
+            log.debug(f"[GUARDIAN/patch] 재적용 보상 실패: {_re}")
 
     if bumped:
         fresh = _load_learned()
@@ -1569,169 +1707,6 @@ def backfill_tiers() -> dict:
         t = p.get("tier", "unknown")
         by_tier[t] = by_tier.get(t, 0) + 1
     return {"total": len(pats), "updated": updated, "by_tier": by_tier}
-
-
-# ──────────────────────────────────────────────────────────────
-# 진입점
-# ──────────────────────────────────────────────────────────────
-
-# ★ 학습 패턴이 최우선 — 동일 사례 즉시 매칭
-# 정적 5종은 학습되지 않은 새 패턴 처리용
-def _apply_single_pattern(
-    pattern: dict,
-    error_record: dict,
-    data: Optional[dict] = None,
-) -> Optional[dict]:
-    """매칭된 학습 패턴 dict 를 error_record 에 적용 — 공통 적용 로직.
-
-    _fix_from_learned 내부 로직 + 승격 fixer 클로저에서 재사용.
-    data: 이미 로드된 learned data (None 이면 내부 로드).
-    """
-    fixer_name = pattern.get("fixer")
-    if not fixer_name:
-        return None
-    fp = pattern.get("fingerprint", "")
-
-    if data is None:
-        data = _load_learned()
-
-    # ── llm_patch ──────────────────────────────────────────────────
-    if fixer_name == "llm_patch":
-        stored_patch  = pattern.get("stored_patch", "")
-        stored_target = pattern.get("stored_target_file", "")
-        if not stored_patch or not stored_target:
-            return None
-        if stored_patch.lstrip().startswith(("---", "@@", "diff ")):
-            new_content = _apply_diff_replacements(stored_target, stored_patch)
-            if new_content is None:
-                return None
-            patch_to_use = new_content
-        else:
-            patch_to_use = stored_patch
-        _bump_hit_count(data, fp)
-        return {
-            "fixable":     True,
-            "target_file": stored_target,
-            "patch":       patch_to_use,
-            "explanation": f"학습 캐시 재적용 — {fp[:60]}",
-            "pattern":     "llm_patch",
-            "source":      "learned_cache",
-            "learned":     True,
-            "fingerprint": fp,
-        }
-
-    # ── auto_patch ─────────────────────────────────────────────────
-    if fixer_name == "auto_patch":
-        stored_diff   = pattern.get("stored_patch", "")
-        stored_target = pattern.get("stored_target_file", "")
-        if not stored_diff or not stored_target:
-            return None
-        new_content = _apply_diff_replacements(stored_target, stored_diff)
-        if new_content is None:
-            return None
-        _bump_hit_count(data, fp)
-        return {
-            "fixable":     True,
-            "target_file": stored_target,
-            "patch":       new_content,
-            "explanation": f"auto_patch 재적용 — {stored_target}",
-            "pattern":     "auto_patch",
-            "source":      "learned_cache",
-            "learned":     True,
-            "fingerprint": fp,
-        }
-
-    # ── 정적 fixer 함수 ─────────────────────────────────────────────
-    if fixer_name not in _FIXER_REGISTRY:
-        return None
-    fn_name = _FIXER_REGISTRY[fixer_name]
-    fn = globals().get(fn_name)
-    if not fn:
-        return None
-    try:
-        result = fn(error_record)
-    except Exception as e:
-        log.debug(f"[GUARDIAN/learned] {fn_name} 실행 실패: {e}")
-        return None
-    if not result:
-        return None
-
-    _bump_hit_count(data, fp)
-    result["learned"]     = True
-    result["fingerprint"] = fp
-    log.info(f"[GUARDIAN/learned] ★ 학습 매칭 — fp='{fp[:70]}' fixer={fixer_name}")
-    return result
-
-
-def _make_learned_fn(pattern: dict, stored_data: dict, source_label: str):
-    """학습 패턴 하나를 fixer 클로저로 변환 — 두 그룹 공용 팩토리."""
-    def _fn(error_record: dict) -> Optional[dict]:
-        et  = error_record.get("error_type", "") or ""
-        msg = error_record.get("message",    "") or ""
-        target_fp = pattern.get("fingerprint", "")
-
-        # 정확 매칭
-        matched = (_make_fingerprint(et, msg) == target_fp)
-        # 부분 매칭 (error_type + message_pattern regex)
-        if not matched and pattern.get("error_type") == et:
-            try:
-                if re.search(pattern.get("message_pattern", ""), msg):
-                    matched = True
-            except re.error:
-                pass
-        if not matched:
-            return None
-
-        r = _apply_single_pattern(pattern, error_record, stored_data)
-        if r:
-            r["source"] = r.get("source", source_label)
-        return r
-    return _fn
-
-
-# ⚠️ DEPRECATED (사용자 박제 2026-07-04) — _get_verified_fixers / _get_new_fixers 는
-#   더 이상 try_pattern_fix 의 *밴딧 후보* 로 쓰지 않는다. 학습 패턴을 개별 arm 으로 펼치면
-#   오류 지문마다 arm 이 생겨 밴딧이 무한 증식(402MB·θ≈0 죽은 신호)한다.
-#   학습 캐시 조회는 _fix_from_learned 단일 경로가 담당(정확→정규식→시맨틱 매칭).
-#   ★ 이 함수들을 밴딧 후보 리스트로 되돌리지 말 것 — 오염 회귀 금지. (잔존 이유: 하위호환)
-def _get_verified_fixers() -> list[tuple[str, object]]:
-    """(레거시 — 밴딧 후보 아님) hit_count ≥ _HIGH_COUNT_THRESHOLD 인 검증된 학습 패턴.
-
-    ⚠️ try_pattern_fix 는 이제 이 함수를 호출하지 않는다 (위 DEPRECATED 배너 참조).
-    """
-    data = _load_learned()
-    result: list[tuple[str, object]] = []
-    for p in data.get("patterns", []):
-        if int(p.get("hit_count", 0)) < _HIGH_COUNT_THRESHOLD:
-            continue
-        fp = p.get("fingerprint", "")
-        if not fp or not p.get("fixer"):
-            continue
-        result.append((f"verified:{fp[:32]}", _make_learned_fn(p, data, "verified_learned")))
-    if result:
-        log.debug(f"[GUARDIAN/pattern] 검증 학습 패턴 {len(result)}종 (hit≥{_HIGH_COUNT_THRESHOLD})")
-    return result
-
-
-def _get_new_fixers() -> list[tuple[str, object]]:
-    """hit_count 1 ~ (_HIGH_COUNT_THRESHOLD-1) 인 신규 학습 패턴 — Group 2.
-
-    1번이라도 수정 성공한 순간 Bandit 풀 편입 → UCB exploration bonus 받아 탐색.
-    검증된 그룹(Group 1)이 모두 실패한 뒤에 시도.
-    """
-    data = _load_learned()
-    result: list[tuple[str, object]] = []
-    for p in data.get("patterns", []):
-        hc = int(p.get("hit_count", 0))
-        if hc < 1 or hc >= _HIGH_COUNT_THRESHOLD:
-            continue
-        fp = p.get("fingerprint", "")
-        if not fp or not p.get("fixer"):
-            continue
-        result.append((f"new:{fp[:32]}", _make_learned_fn(p, data, "new_learned")))
-    if result:
-        log.debug(f"[GUARDIAN/pattern] 신규 학습 패턴 {len(result)}종 (hit 1~{_HIGH_COUNT_THRESHOLD-1})")
-    return result
 
 
 def _attributed_only() -> bool:
