@@ -30,14 +30,19 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 
-# ★ 블로그(플랫폼) 액션 하드 데드라인 SSOT (watchdog.py) — economic_poster.py 와 동일 상수 참조
-#   (2026-07-18: 1800 리터럴 하드코딩이 SSOT 상향과 어긋나던 것을 상수 참조로 정정)
-from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC
-
 # ── sys.path 보정 (subprocess 직접 실행과 데몬 모듈 로드 양쪽 호환) ──
+#   ★ 반드시 JARVIS* 패키지 import *보다 먼저* (2026-07-25 실행모델 통일에서 발견):
+#   종전엔 아래 `from JARVIS00_INFRA...` 가 이 보정보다 위에 있어, 저장소 루트에서
+#   `python3 JARVIS02_WRITER/trend_theme_writer.py <테마>` 로 띄우면 ModuleNotFoundError 로
+#   즉사했다. 데몬이 *직접 호출* 만 하던 동안엔 드러나지 않던 잠복 결함
+#   (economic_poster.py 는 처음부터 보정이 먼저였다 — 같은 파일에서 순서만 달랐다).
 _JARVIS_ROOT = Path(__file__).parent.parent
 if str(_JARVIS_ROOT) not in sys.path:
     sys.path.insert(0, str(_JARVIS_ROOT))
+
+# ★ 블로그(플랫폼) 액션 하드 데드라인 SSOT (watchdog.py) — economic_poster.py 와 동일 상수 참조
+#   (2026-07-18: 1800 리터럴 하드코딩이 SSOT 상향과 어긋나던 것을 상수 참조로 정정)
+from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
@@ -60,6 +65,46 @@ def _tg(msg: str) -> None:
         send_tg(msg)
     except Exception:
         pass
+
+
+# ── ★ 발행창 표시 — 단일 진입점 (2026-07-25) ─────────────────────────────────
+# 왜 컨텍스트 매니저인가: `mark_publishing(True)` / `(False)` 를 *손으로* 짝맞추면
+# 예외·조기 return 한 번에 짝이 깨진다. 그 순간 `is_publishing()` 이 True 로 굳는데,
+# 커밋 d0af298 이후 그것은 'timeout 강등' 이 아니라 **GUARDIAN 자동수정 + 모든 background
+# LLM 의 전면 보류** 를 뜻한다 → 데몬 재시작 전까지 영구 정지. 회수 잡(j07_retry_pending)
+# 조차 같은 `_orchestrate` 로 재투입돼 자기가 닫은 문에 갇힌다(스스로 회복 불가).
+# 짝 맞춤을 사람의 규율이 아니라 **문법(finally)** 에 맡긴다.
+#
+# ① 단일 진입점: 정의는 여기 한 곳뿐. `economic_poster.py` 는 이 함수를 import 해서 쓴다.
+#    ※ 본래 자리는 `shared/llm.py`(mark_publishing 의 주인)이나 이번 작업 소유 범위 밖이라
+#      차선책으로 여기 둔다 — 이관 요구사항은 보고서에 명시.
+# ② 동적 설계: 킬스위치는 **호출 시점** 에 읽는다 (모듈 로드 시점 캡처 금지).
+# ③ 모든 글 적용: 테마(데몬 in-process)·경제(subprocess) 4조합이 같은 규약을 쓴다.
+@contextmanager
+def publishing(label: str = ""):
+    """with 블록 동안만 `is_publishing()` 이 True — 어떤 경로로 나가도 반드시 닫힌다.
+
+    킬스위치: `JARVIS_PUBLISH_MARK=0` → 표시 자체를 하지 않음 (호출 시점 조회).
+    표시 실패(shared.llm import 실패 등)는 삼킨다 — 발행을 절대 막지 않는다.
+    """
+    _on = (os.getenv("JARVIS_PUBLISH_MARK", "1").strip() != "0")   # ★ 호출 시점 조회
+    _marked = False
+    if _on:
+        try:
+            from shared.llm import mark_publishing as _mark_pub
+            _mark_pub(True)
+            _marked = True
+        except Exception as _pe:
+            print(f"  ⚠️ 발행창 표시 실패(무시하고 발행 진행){(' — ' + label) if label else ''}: {_pe}")
+    try:
+        yield
+    finally:
+        if _marked:                     # True 표시에 성공한 경우에만 짝을 맞춘다 (음수 방지)
+            try:
+                from shared.llm import mark_publishing as _mark_pub
+                _mark_pub(False)
+            except Exception:
+                pass
 
 # ── 글자수 정책 ────────────────────────────────────────
 try:
@@ -846,72 +891,72 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
     _new_run(theme)
 
     # ★ 발행 기간 LLM 우선권 선언 — background alias 자동 강등
-    from shared.llm import mark_publishing as _mark_pub
-    _mark_pub(True)
-    import time as _tm_act
-    # ★ 액션별 LLM 데드라인 (economic_poster.py 와 동일 SSOT 패턴 — ERRORS [438][440][441]류
-    #   재발 방지): 반드시 _nv_action_def.deadline_sec 과 동일한 BLOG_ACTION_DEADLINE_SEC 사용.
-    #   더 큰/다른 값을 쓰면 "잔여 <10분 강등"이 harness 하드 데드라인보다 늦게 트리거되어
-    #   watchdog 이 재시도·백오프 도중 강제 종료한다.
-    os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
-    # ① 네이버 액션 (공유 수집 포함) — 완전 종결까지
-    #   ★ gate_feedback: GUARDIAN 재시도가 물려준 직전 차단사유 — 첫 시도부터 보완 재작성
-    #     (경제 economic_poster.run(resume=) 과 동일 규약. ③ 모든 글 적용)
-    _gfb = gate_feedback or {}
-    _nv_result = run_action(_nv_action_def, {
-        "theme": theme, "sector": sector,
-        "_nv_draft_gate_feedback": list(_gfb.get("naver") or []),
-    })
-    _nv_st = _nv_result.state
-    _nv_res = _nv_st.get("nv_pub_result", {"success": False, "url": "", "keyword": theme})
-    # ★ 리뷰 확정 수정 (2026-07-03): data_empty 는 *수집이 실행되어 비었을 때만* —
-    #   precondition 실패·동시성 차단 등 수집 미실행을 테마 교체로 오분류 금지.
-    _sd = _nv_st.get("stocks_data")
-    _stocks_ok = bool((_sd or {}).get("stocks"))
-    _data_empty = bool(_nv_st.get("_collect_data_empty")) or (_sd is not None and not _stocks_ok)
-    _deferred = bool(getattr(_nv_result, "deferred", False))
-    if not _nv_result.delivered and not _deferred:
-        _reason = getattr(_nv_result, "escalation_reason", "최대 시도 초과 또는 abort")
-        _tg(f"❌ [THEME] 네이버 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
-    if _deferred:
-        _mark_pub(False)
-        print("  ⏸ [THEME] 네이버 액션 연기(인터프리터 종료) — 티스토리·보고 스킵, 재시작 후 재시도")
-        return {"theme": theme,
-                "tistory": {"success": False, "url": "", "keyword": theme},
-                "naver": _nv_res, "data_empty": False, "shutdown_deferred": True}
-
-    # ② 티스토리 액션 — 네이버 *종결 후* 시작. 종목 데이터 없으면 스킵
-    #    (진짜 data_empty → 상위 테마 교체 / 수집 미실행 → 교체 아닌 단순 실패)
-    _ts_res = {"success": False, "url": "", "keyword": theme}
-    _ts_deferred = False
-    if not _stocks_ok:
-        print(f"  ⏭️ [티스토리] 종목 데이터 {'0개' if _data_empty else '미수집(네이버 액션 조기 종결)'} — 발행 스킵")
-    else:
-        # ★ _ts_action_def.deadline_sec 과 동일한 SSOT 상수 (위 네이버 리셋과 동일 사유) —
-        #   네이버 액션 소요로 흘러간 시간만큼 티스토리 액션에도 신선한 예산을 부여.
+    #   ★ 2026-07-25 refcount 안전화: mark_publishing(True/False) 손 짝맞춤 → publishing() CM.
+    #     예외·조기 return·deferred 어느 경로로 나가도 finally 가 창을 닫는다.
+    #     (누수 1회 = GUARDIAN 자동수정·모든 background LLM 이 데몬 재시작까지 영구 보류)
+    with publishing("theme"):
+        import time as _tm_act
+        # ★ 액션별 LLM 데드라인 (economic_poster.py 와 동일 SSOT 패턴 — ERRORS [438][440][441]류
+        #   재발 방지): 반드시 _nv_action_def.deadline_sec 과 동일한 BLOG_ACTION_DEADLINE_SEC 사용.
+        #   더 큰/다른 값을 쓰면 "잔여 <10분 강등"이 harness 하드 데드라인보다 늦게 트리거되어
+        #   watchdog 이 재시도·백오프 도중 강제 종료한다.
         os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
-        _ts_result = run_action(_ts_action_def, {
+        # ① 네이버 액션 (공유 수집 포함) — 완전 종결까지
+        #   ★ gate_feedback: GUARDIAN 재시도가 물려준 직전 차단사유 — 첫 시도부터 보완 재작성
+        #     (경제 economic_poster.run(resume=) 과 동일 규약. ③ 모든 글 적용)
+        _gfb = gate_feedback or {}
+        _nv_result = run_action(_nv_action_def, {
             "theme": theme, "sector": sector,
-            "collected": _nv_st.get("collected"),          # ★ Step 7: 액션1 → 액션2 전달
-            "stocks_data": _nv_st.get("stocks_data"),      # back-compat (verify 등)
-            "collection_docs": _nv_st.get("collection_docs") or [],
-            "evidence_pack": _nv_st.get("evidence_pack"),
-            "supreme_block": _nv_st.get("supreme_block"),
-            "_ts_draft_gate_feedback": list(_gfb.get("tistory") or []),
+            "_nv_draft_gate_feedback": list(_gfb.get("naver") or []),
         })
-        _ts_st = _ts_result.state
-        _ts_res = _ts_st.get("ts_pub_result", {"success": False, "url": "", "keyword": theme})
-        if not _ts_result.delivered:
-            _reason = getattr(_ts_result, "escalation_reason", "최대 시도 초과 또는 abort")
-            if getattr(_ts_result, "deferred", False):
-                # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도.
-                _ts_deferred = True
-                print(f"  ⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
-                _tg(f"⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n테마: {theme}")
-            else:
-                _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
+        _nv_st = _nv_result.state
+        _nv_res = _nv_st.get("nv_pub_result", {"success": False, "url": "", "keyword": theme})
+        # ★ 리뷰 확정 수정 (2026-07-03): data_empty 는 *수집이 실행되어 비었을 때만* —
+        #   precondition 실패·동시성 차단 등 수집 미실행을 테마 교체로 오분류 금지.
+        _sd = _nv_st.get("stocks_data")
+        _stocks_ok = bool((_sd or {}).get("stocks"))
+        _data_empty = bool(_nv_st.get("_collect_data_empty")) or (_sd is not None and not _stocks_ok)
+        _deferred = bool(getattr(_nv_result, "deferred", False))
+        if not _nv_result.delivered and not _deferred:
+            _reason = getattr(_nv_result, "escalation_reason", "최대 시도 초과 또는 abort")
+            _tg(f"❌ [THEME] 네이버 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
+        if _deferred:
+            print("  ⏸ [THEME] 네이버 액션 연기(인터프리터 종료) — 티스토리·보고 스킵, 재시작 후 재시도")
+            return {"theme": theme,
+                    "tistory": {"success": False, "url": "", "keyword": theme},
+                    "naver": _nv_res, "data_empty": False, "shutdown_deferred": True}
 
-    _mark_pub(False)  # ★ 테마 발행 완료 — background alias 강등 해제
+        # ② 티스토리 액션 — 네이버 *종결 후* 시작. 종목 데이터 없으면 스킵
+        #    (진짜 data_empty → 상위 테마 교체 / 수집 미실행 → 교체 아닌 단순 실패)
+        _ts_res = {"success": False, "url": "", "keyword": theme}
+        _ts_deferred = False
+        if not _stocks_ok:
+            print(f"  ⏭️ [티스토리] 종목 데이터 {'0개' if _data_empty else '미수집(네이버 액션 조기 종결)'} — 발행 스킵")
+        else:
+            # ★ _ts_action_def.deadline_sec 과 동일한 SSOT 상수 (위 네이버 리셋과 동일 사유) —
+            #   네이버 액션 소요로 흘러간 시간만큼 티스토리 액션에도 신선한 예산을 부여.
+            os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
+            _ts_result = run_action(_ts_action_def, {
+                "theme": theme, "sector": sector,
+                "collected": _nv_st.get("collected"),          # ★ Step 7: 액션1 → 액션2 전달
+                "stocks_data": _nv_st.get("stocks_data"),      # back-compat (verify 등)
+                "collection_docs": _nv_st.get("collection_docs") or [],
+                "evidence_pack": _nv_st.get("evidence_pack"),
+                "supreme_block": _nv_st.get("supreme_block"),
+                "_ts_draft_gate_feedback": list(_gfb.get("tistory") or []),
+            })
+            _ts_st = _ts_result.state
+            _ts_res = _ts_st.get("ts_pub_result", {"success": False, "url": "", "keyword": theme})
+            if not _ts_result.delivered:
+                _reason = getattr(_ts_result, "escalation_reason", "최대 시도 초과 또는 abort")
+                if getattr(_ts_result, "deferred", False):
+                    # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도.
+                    _ts_deferred = True
+                    print(f"  ⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
+                    _tg(f"⏸ [THEME] 티스토리 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n테마: {theme}")
+                else:
+                    _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
+
 
     # ★ 차단사유를 밖으로 (2026-07-25): GUARDIAN 재시도가 *무엇이 부족했는지* 를 물려받아
     #   같은 테마로 보완 재작성할 수 있게 한다. 경제 EP_RESULT_FILE["harness_issues"] 와 동일 규약.
@@ -931,6 +976,7 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
 
 __all__ = [
     "run_all_themes",
+    "publishing",      # ★ 발행창 표시 CM — economic_poster 가 파생해 쓴다 (①단일 진입점)
 ]
 
 
@@ -954,9 +1000,32 @@ if __name__ == "__main__":
     p.add_argument("--sector", default="", help="섹터 (선택)")
     args = p.parse_args()
 
+    # ★ 재시도 이어받기 — 부모가 env 로 넘긴 직전 차단사유 (실행모델 통일 2026-07-25).
+    #   프로세스 경계를 넘어야 하므로 메모리가 아니라 env(문자열 JSON)로 받는다.
+    _gate_fb = None
+    try:
+        _raw_fb = os.environ.get("JARVIS_GATE_FEEDBACK", "").strip()
+        if _raw_fb:
+            import json as _json_fb
+            _gate_fb = _json_fb.loads(_raw_fb)
+    except Exception as _fe:
+        print(f"⚠️ gate_feedback 파싱 실패(무시): {_fe}")
+
     # ★ 정지 방어 (사용자 박제 2026-07-06): 일회성 발행 작업 freeze/deadline 가드.
     from JARVIS00_INFRA.watchdog import guard_main
     with guard_main("테마 발행", deadline_sec=2 * BLOG_ACTION_DEADLINE_SEC + 600):   # 부모 backstop — 플랫폼당 데드라인×2 + 여유
-        r = run_all_themes(args.theme, args.sector)
+        r = run_all_themes(args.theme, args.sector, gate_feedback=_gate_fb)
+
+        # ★ 결과를 부모에게 — 경제(EP_RESULT_FILE)와 *동일 규약* (실행모델 통일 2026-07-25).
+        #   함수 반환값은 프로세스 경계를 못 넘는다. 파일이 유일한 통로.
+        _res_file = os.environ.get("JARVIS_EP_RESULT_FILE", "")
+        if _res_file:
+            try:
+                import json as _json_r
+                with open(_res_file, "w", encoding="utf-8") as _rf:
+                    _json_r.dump(r, _rf, ensure_ascii=False, default=str)
+            except Exception as _re:
+                print(f"⚠️ 결과 파일 기록 실패: {_re}")
+
         ok = any(r.get(p, {}).get("success") for p in ("tistory", "naver"))
         sys.exit(0 if ok else 1)

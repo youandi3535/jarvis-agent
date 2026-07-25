@@ -9400,3 +9400,13 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **해결**: 자동 수정 적용
 - **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관
 - **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정
+
+---
+### [2026-07-25 17:11] ✅ 자동수정 — 임포트 오류(ImportError)
+- **증상**: cannot import name 'zzz_proof' from 'JARVIS07_GUARDIAN._proof_target_hj'
+- **모듈**: JARVIS07_GUARDIAN._proof_target_hj
+- **원인**: proof
+- **파일**: JARVIS07_GUARDIAN/_proof_target_hj.py
+- **해결**: 자동 수정 적용
+- **검증**: 문법 검사(ast.parse) 통과, import 검증 통과, 원본 .bak 보관, 원 오류 재현 검증: unverifiable — error_type 없음 — 재현 대상 특정 불가
+- **결과**: 수정본이 적용된 상태로 동작 중 — 같은 증상 재발 여부는 이후 발생 기록으로 판정

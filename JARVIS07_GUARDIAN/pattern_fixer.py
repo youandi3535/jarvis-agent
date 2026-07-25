@@ -1087,8 +1087,17 @@ def record_pattern_hit(
     source: str = "auto",
     patch: str = "",
     target_file: str = "",
+    verification: str = "",
 ) -> int:
     """자동/수동 수정 성공 시 learned_patterns 에 fingerprint 등록·누적.
+
+    Args:
+        verification: ★ 외생 검증 신호 (2026-07-25 결함 1 배선) —
+            `error_fixer.apply_fix` 가 원 오류를 실제로 재현해 본 결과
+            (`reproduced_gone` / `unverifiable` / `still_reproduces`).
+            **기본 ""(신호 없음) = 종전 동작 그대로** — 다른 호출자
+            (auto_repair·error_collector·harness·draft_fixer) 는 바꿀 필요 없다.
+            eval_agent 의 외생 게이트는 이 값이 실제로 도달해야만 발동한다.
 
     Returns:
         int: 등록·갱신된 패턴의 hit_count (skip·eval 거부 시 0).
@@ -1164,6 +1173,8 @@ def record_pattern_hit(
         _eval = _eval_mod.evaluate(
             error_record, fixer_name,
             patch=patch, target_file=target_file or fixed_file,
+            # ★ 결함 1 배선 — 외생 검증 신호 관통 (기본 "" → 종전 동작)
+            verification=verification or None,
         )
         if not _eval.should_register:
             log.info(

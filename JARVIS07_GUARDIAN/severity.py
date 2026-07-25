@@ -541,7 +541,7 @@ def is_transient(error_type: str, message: str = "", source: str = "",
 
     ★★ 판단 순서와 그 근거 (2026-07-25 감사로 재정비 — 순서 자체가 정책이다)
 
-      1) `kind` (구조화 필드)            → NON_CODE_ISSUE_KINDS 면 True
+      1) `kind` (구조화 필드)            → non_code_issue_kinds() 면 True
       2) `source == "audit_test"` (구조화 필드) → True
       3) **코드 버그 타입이면 즉시 False** ← ★ 결함 1 가드
       4) `_TRANSIENT_TYPES` (타입)       → True
@@ -565,7 +565,7 @@ def is_transient(error_type: str, message: str = "", source: str = "",
 
     킬스위치 `GUARDIAN_CODEBUG_GUARD=0` → 3) 만 비활성화(종전 동작 복귀).
     """
-    if kind and kind in NON_CODE_ISSUE_KINDS:
+    if kind and kind in non_code_issue_kinds():   # ★ 호출 시점 파생 (사본 없음)
         return True   # 1) 코드 수정으로 해결 불가한 harness 이슈 — Tier-2 낭비 차단
 
     # 2) ★ ERRORS [446][447][448] 박제 2026-07-17 — source="audit_test" 는 GUARDIAN
@@ -684,9 +684,22 @@ def selfcheck() -> list[str]:
         bad.append("[결함1] is_code_bug_type 이 점 표기 전체이름을 정규화하지 못한다")
 
     # ── 회귀: 구조화 필드(kind/source)는 타입보다 우선 — 여전히 True 여야 ──
-    for k in sorted(NON_CODE_ISSUE_KINDS):
+    for k in sorted(non_code_issue_kinds()):
         if not is_transient("ImportError", "cannot import name X", kind=k):
             bad.append(f"[회귀] kind={k!r} 인데 transient 가 아니다 — kind 우선순위가 깨졌다")
+
+    # ── P4: infra kind 는 harness 에서 *파생* 되는가 (리터럴 부활·조용한 파생실패 검출) ──
+    try:
+        from JARVIS00_INFRA.harness import INFRA_KIND as _hk
+    except Exception as _e:  # noqa: BLE001
+        bad.append(f"[P4] harness.INFRA_KIND 를 읽을 수 없다({_e}) — 파생 원본 소실")
+    else:
+        if _hk not in non_code_issue_kinds():
+            bad.append(f"[P4] harness.INFRA_KIND={_hk!r} 가 non_code_issue_kinds() 에 없다 — 파생 실패")
+        if _hk in _OWN_NON_CODE_KINDS:
+            bad.append(f"[P4] {_hk!r} 리터럴이 severity 에 부활했다 — ① 단일 진입점 위반")
+        if not is_transient("ImportError", "cannot import name X", kind=_hk):
+            bad.append(f"[P4] kind={_hk!r} 가 transient 가 아니다 — 인프라 스로틀이 Tier-2 로 샌다")
     if not is_transient("ImportError", "cannot import name X", source="audit_test"):
         bad.append("[회귀] source='audit_test' 합성 프로브가 transient 가 아니다")
 
@@ -729,7 +742,14 @@ def selfcheck() -> list[str]:
     return bad
 
 
-if __name__ == "__main__":  # pragma: no cover — 수동 점검용 (외부 영향 없음)
+if __name__ == "__main__":  # pragma: no cover — 수동 점검용 (읽기 전용·외부 영향 없음)
+    # `python3 JARVIS07_GUARDIAN/severity.py` 로 직접 실행하면 sys.path[0] 이 *이 폴더* 라
+    # 저장소 루트가 안 잡힌다 → `JARVIS00_INFRA.harness` 파생 원본을 못 읽어 P4 레그가
+    # 위양성(false positive)을 낸다. 실행 방식 때문에 검사가 틀리면 안 되므로 루트를 붙인다.
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+
     _v = selfcheck()
     print("severity.selfcheck():", "OK (위반 0)" if not _v else f"위반 {len(_v)}건")
     for _x in _v:

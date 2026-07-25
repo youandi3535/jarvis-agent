@@ -326,11 +326,85 @@ def get_status_text() -> str:
 #  테마 전체 실행
 # ══════════════════════════════════════════
 
-def run_theme(theme: str, gate_feedback: dict | None = None) -> dict:
-    """★ 통일 파이프라인 — trend_theme_writer.run_all_themes 직접 호출 (subprocess 폐기).
+def _spawn_publisher(label: str, cmd: list, log_stem: str,
+                     *, extra_env: dict | None = None) -> tuple:
+    """★ 발행 스크립트 subprocess 실행 — **경제·테마 공통 단일 경로** (사용자 박제 2026-07-25).
 
-    경제 트렌드(trend_economic_writer)와 동일한 1-pass 블록 파이프라인.
-    Phase 1 (2 플랫폼 draft 생성) + Phase 2 (Naver·Tistory Selenium 순차).
+    **왜 subprocess 로 통일했나 (실행모델 통일)**
+      종전엔 경제=subprocess, 테마=데몬 내부 직접호출로 *두 실행모델* 이었다. 그 결과
+        · watchdog `os._exit(WATCHDOG_KILL_RC)` 강제종료가 테마에선 무력 (파이썬은 스레드를
+          안전하게 죽일 수 없다) → 테마가 멈추면 데몬째 재시작 외에 방법이 없었다
+        · 자가수정한 코드가 테마에선 *데몬 재시작 전까지 무효* (import 캐시)
+        · 크로스커팅 관심사(LLM 우선권·락·관측성)를 두 번 구현해야 했고, 실제로 한쪽만
+          새는 사고가 반복됐다 (배경 LLM 차단이 경제 발행 중에만 무력화된 건 등)
+      발행은 오래 걸리고(플랫폼당 ~40분) 불안정한 외부 자원(Chrome/Selenium)을 쓰는 작업이라
+      업계 표준(워커 프로세스 격리)대로 **격리 쪽으로 통일** 한다.
+
+    Returns: (returncode, result_dict|None, logpath)
+      result_dict 는 자식이 `JARVIS_EP_RESULT_FILE` 에 남긴 JSON (없으면 None).
+    """
+    import tempfile
+    import sys as _sys
+    from datetime import datetime as _dt
+
+    _res_fd, _res_path = tempfile.mkstemp(suffix=".json", prefix="ep_result_")
+    os.close(_res_fd)
+    _env = dict(os.environ)
+    _env["JARVIS_EP_RESULT_FILE"] = _res_path
+    # ★ 로그 유실 방지 (ERRORS [289]): 파일 리다이렉트 시 블록 버퍼링 → SIGKILL 시 마지막
+    #   수 분(발행 단계) 로그 통째 유실. 무버퍼 강제.
+    _env["PYTHONUNBUFFERED"] = "1"
+    if extra_env:
+        _env.update({k: str(v) for k, v in extra_env.items()})
+
+    _ts = _dt.now().strftime('%Y%m%d_%H%M%S')
+    _logpath = BASE_DIR / 'logs' / f'{log_stem}_{_ts}.log'
+    _logpath.parent.mkdir(parents=True, exist_ok=True)
+    _is_tty = _sys.stdout.isatty() or bool(os.environ.get("JARVIS_VERBOSE"))
+
+    rc = -1
+    try:
+        with open(_logpath, 'w', encoding='utf-8') as _lf:
+            if _is_tty:
+                # 터미널 직접 실행 — 로그파일 + 터미널 동시 출력
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, env=_env)
+                try:
+                    for _line in proc.stdout:
+                        _decoded = _line.decode("utf-8", errors="replace")
+                        _sys.stdout.write(_decoded)
+                        _sys.stdout.flush()
+                        _lf.write(_decoded)
+                    proc.wait(timeout=_parent_subproc_timeout())
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                rc = proc.returncode
+            else:
+                rc = subprocess.run(cmd, timeout=_parent_subproc_timeout(), stdout=_lf,
+                                    stderr=subprocess.STDOUT, env=_env).returncode
+    except subprocess.TimeoutExpired:
+        log(f"⏱ {label} 부모 타임아웃 — 자식 종료 (로그: {_logpath.name})")
+        rc = -9
+
+    result = None
+    try:
+        result = json.loads(Path(_res_path).read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    finally:
+        try:
+            Path(_res_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+    return rc, result, _logpath
+
+
+def run_theme(theme: str, gate_feedback: dict | None = None) -> dict:
+    """테마 발행 — ★ subprocess 실행 (경제와 동일 실행모델, 사용자 박제 2026-07-25).
+
+    종전엔 데몬 안에서 `run_all_themes` 를 직접 호출했다(=경제와 다른 모델). 통일 사유는
+    `_spawn_publisher` docstring 참조 — watchdog 강제종료·최신코드 반영·장애 격리.
     """
     log(f"▶ 테마 시작: {theme}")
     log("=" * 50)
@@ -348,11 +422,21 @@ def run_theme(theme: str, gate_feedback: dict | None = None) -> dict:
 
     send_telegram(f"🚀 [{theme}] 작성 시작\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # ── 1차: 통일 파이프라인 (run_all_themes) ────────────────
-    log(f"  ▶ 1차 통합 실행 (trend_theme_writer.run_all_themes)")
+    # ── 발행 실행 (subprocess — 경제와 동일 경로) ────────────────
+    log(f"  ▶ 테마 발행 subprocess 실행 (trend_theme_writer)")
     try:
-        from JARVIS02_WRITER.trend_theme_writer import run_all_themes
-        result = run_all_themes(theme, gate_feedback=gate_feedback)
+        _cmd = [PYTHON, str(BASE_DIR / 'trend_theme_writer.py'), theme]
+        _extra = {}
+        if gate_feedback:
+            # 재시도 이어받기 — 직전 차단사유를 자식에게 전달 (프로세스 경계를 넘는 매체 = env)
+            _extra["JARVIS_GATE_FEEDBACK"] = json.dumps(gate_feedback, ensure_ascii=False)
+        _rc, result, _logpath = _spawn_publisher(f"테마 발행 [{theme}]", _cmd,
+                                                 "theme", extra_env=_extra)
+        if result is None:
+            # 결과 파일이 없다 = 자식이 결과를 못 남기고 죽음 (freeze kill·크래시)
+            log(f"  ❌ 테마 결과 파일 없음 (returncode={_rc}, 로그: {_logpath.name})")
+            result = {"naver": {"success": False}, "tistory": {"success": False},
+                      "data_empty": False}
         results = {
             "naver":   result.get("naver",   {}).get("success", False),
             "tistory": result.get("tistory", {}).get("success", False),
@@ -1042,57 +1126,24 @@ def run_economic_poster(*extra_flags):
         return
     log(f"⏰ {label} 실행 시작")
 
-    import tempfile
-    _res_fd, _res_path = tempfile.mkstemp(suffix=".json", prefix="ep_result_")
-    os.close(_res_fd)
-    _env = dict(os.environ)
-    _env["JARVIS_EP_RESULT_FILE"] = _res_path
-    # ★ 로그 유실 방지 (ERRORS [289] — 2026-07-03): 파일 리다이렉트 시 블록 버퍼링 →
-    #   타임아웃 SIGKILL 시 마지막 수 분의 로그(발행 단계) 통째 유실. 무버퍼 강제.
-    _env["PYTHONUNBUFFERED"] = "1"
-
+    _full: dict | None = None      # 예외 경로에서도 참조되므로 선초기화
     try:
-        from datetime import datetime as _dt
-        _ts = _dt.now().strftime('%Y%m%d_%H%M%S')
-        _logpath = BASE_DIR / 'logs' / f'economic_{_ts}.log'
+        # ★ 실행모델 통일 (2026-07-25): 경제·테마가 **같은 헬퍼** 로 subprocess 를 띄운다.
+        #   종전엔 이 자리에 tempfile·env·tty분기·timeout 처리가 통째로 복사돼 있었고
+        #   테마는 아예 직접호출이라 두 모델이 공존했다.
         cmd = [PYTHON, str(BASE_DIR / 'economic_poster.py'), '--scheduled'] + list(extra_flags)
-        # ★ 부모 벽시계 backstop = _parent_subproc_timeout()(자식 guard_main 보다 크게 파생, P4).
-        #   자식(harness)이 블로그(네이버·티스토리) 액션당 BLOG 데드라인 + 300초 freeze 워치독으로
-        #   스스로 중단 → 부모 timeout 은 그마저 안 될 때의 OS 최종 안전망. 자식이 killable
-        #   subprocess(--scheduled)라 freeze 시 os._exit → 부모는 정상 시 이 값에 닿지 않는다.
-        #   (종전 하드코딩 3600 은 자식 backstop 5400 보다 작아 계층 역전이었다 — 2026-07-24 수정.)
-        import sys as _sys
-        _is_tty = _sys.stdout.isatty() or bool(os.environ.get("JARVIS_VERBOSE"))
-        with open(_logpath, 'w', encoding='utf-8') as _lf:
-            if _is_tty:
-                # 터미널 직접 실행 시 — 로그파일 + 터미널 동시 출력
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, env=_env)
-                try:
-                    for _line in proc.stdout:
-                        _decoded = _line.decode("utf-8", errors="replace")
-                        _sys.stdout.write(_decoded)
-                        _sys.stdout.flush()
-                        _lf.write(_decoded)
-                    proc.wait(timeout=_parent_subproc_timeout())
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
+        _rc, _full, _logpath = _spawn_publisher(label, cmd, "economic")
 
-                class _R:
-                    returncode = proc.returncode
-                result = _R()
-            else:
-                result = subprocess.run(cmd, timeout=_parent_subproc_timeout(), stdout=_lf,
-                                        stderr=subprocess.STDOUT, env=_env)
+        class _R:
+            returncode = _rc
+        result = _R()
 
-        # 플랫폼별 결과 읽기 (economic_poster.py 가 JARVIS_EP_RESULT_FILE 에 기록)
-        _platform_results = {"naver": True, "tistory": True}
-        try:
-            _platform_results = json.loads(Path(_res_path).read_text(encoding="utf-8"))
-        except Exception:
-            if result.returncode != 0:
-                _platform_results = {"naver": False, "tistory": False}
+        # 플랫폼별 결과 (economic_poster.py 가 JARVIS_EP_RESULT_FILE 에 기록)
+        if _full is not None:
+            _platform_results = _full
+        else:
+            _platform_results = ({"naver": True, "tistory": True} if _rc == 0
+                                 else {"naver": False, "tistory": False})
 
         _PLATFORM_KEYS = {"naver", "tistory"}
         failed = [k for k, v in _platform_results.items() if k in _PLATFORM_KEYS and not v]
@@ -1122,15 +1173,10 @@ def run_economic_poster(*extra_flags):
             except Exception:
                 _err_txt = f"returncode={result.returncode}, failed_platforms={_guardian_failed}"
             # ★ EP_RESULT_FILE 에서 하네스 이슈 구조화 데이터 추출
-            _harness_issues: list[str] = []
-            _failed_keywords: dict = {}
-            try:
-                _full_result = json.loads(Path(_res_path).read_text(encoding="utf-8"))
-                _harness_issues = _full_result.get("harness_issues") or []
-                # ★ 재시도 이어받기 (2026-07-25): 막힌 주제를 그대로 물려준다.
-                _failed_keywords = _full_result.get("keywords") or {}
-            except Exception:
-                pass
+            _full_result = _full or {}
+            _harness_issues = _full_result.get("harness_issues") or []
+            # ★ 재시도 이어받기 (2026-07-25): 막힌 주제를 그대로 물려준다.
+            _failed_keywords = _full_result.get("keywords") or {}
             _trigger_economic_incident(_guardian_failed, _err_txt, harness_issues=_harness_issues,
                                        returncode=result.returncode,
                                        keywords=_failed_keywords)
@@ -1154,21 +1200,15 @@ def run_economic_poster(*extra_flags):
             # ★ 리뷰 확정 수정 (2026-07-03): 타임아웃 kill 이어도 결과 파일(증분 기록)을
             #   읽어 *이미 성공한 플랫폼은 재발행 제외* (플랫폼 직렬화 이중 발행 차단).
             _failed = ["naver", "tistory"]
-            try:
-                _pr = json.loads(Path(_res_path).read_text(encoding="utf-8"))
+            _pr = _full if isinstance(_full, dict) else None
+            if _pr:
                 _failed = [k for k in ("naver", "tistory") if not _pr.get(k)]
-            except Exception:
-                pass
             if _failed:
                 _trigger_economic_incident(_failed, str(e))
             else:
                 log("ℹ️ 예외 발생했으나 결과 파일상 양 플랫폼 발행 완료 — incident 생략")
     finally:
-        _lock_release()
-        try:
-            Path(_res_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+        _lock_release()   # 결과 임시파일 정리는 _spawn_publisher 가 담당
 
 
 def cleanup_screenshots():

@@ -823,119 +823,121 @@ def run(post_naver=True, post_tistory=True, resume=None):
 
     # ★ 발행 기간 LLM 우선권 선언 — background alias(guardian 등) 자동 강등
     #   + 크로스 프로세스 잠금(llm.py)이 함께 동작해 daemon 과 수동 실행 충돌 방지.
-    from shared.llm import mark_publishing as _mark_pub
-    _mark_pub(True)
-    import time as _tm_act
-    if post_naver:
-        # ★ 액션별 LLM 데드라인 (리뷰 확정 수정): 직렬화로 티스토리 시작이 늦어져
-        #   단일 예산이면 티스토리 생성이 상시 강등됨 — 액션마다 리셋.
-        #   ★ 반드시 _nv_action.deadline_sec 와 동일한 SSOT 상수 — 더 큰 값을 쓰면
-        #   "잔여 <10분 강등"이 harness 하드 데드라인보다 늦게 트리거되어 watchdog 이
-        #   재시도·백오프 도중 강제 종료한다(경제 브리핑 티스토리 데드라인 초과 사고 원인).
-        os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
-        _nv_fb = _apply_resume("naver")
-        try:
-            _nv_res = run_action(
-                _nv_action,
-                input_data={"post_naver": True, "post_tistory": False,
-                            "market_data": _j09_market_data,
-                            # ★ 재시도면 직전 차단사유를 첫 시도부터 주입 (보완 재작성)
-                            "_nv_draft_gate_feedback": _nv_fb},
-            )
-        finally:
-            _clear_resume("naver")
-        _results["naver"] = _nv_res
-        _nv_state = _nv_res.state
-        naver_ok = bool(_nv_state.get("naver_ok"))
-        # ★ 수집 스텝(② NV 수집)이 state["nv_keyword"] 에 저장 — 대본 스킵돼도 키워드 확보
-        nv_keyword = _nv_state.get("nv_keyword", "")
-        _write_ep_partial()
-        if not _nv_res.delivered:
-            _esc = getattr(_nv_res, "escalation_reason", "") or ""
-            if getattr(_nv_res, "deferred", False):
-                # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도(발행 0건 확정 아님).
-                print(f"\n  ⏸ [네이버] 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
-                tg(f"⏸ 경제 브리핑(네이버) 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n{_esc}")
-            elif "동시 실행 중복 차단" in _esc:
-                # ★ 리뷰 확정 수정: 다른 실행이 진행 중 — 티스토리도 중단 (인터리브 방지)
-                _concurrent_blocked = True
-                print("  🚫 동시 실행 중복 차단 — 티스토리 액션도 중단 (인터리브 이중 발행 방지)")
-            else:
-                print(f"\n  🚫 [네이버] harness max_attempts 도달 — 발행 차단 (attempts={_nv_res.attempts})")
-                tg(f"🚫 경제 브리핑(네이버) harness max_attempts 도달 — 발행 차단\nattempts={_nv_res.attempts}")
-    else:
-        print("  ─ 네이버 건너뜀 (플래그 OFF)")
-        # ★ tistory-only 재발행: DB에서 오늘 네이버 경제 발행글의 키워드 복구
-        #   → ts_collect 폴백이 오늘 아침과 동일 주제(키워드)를 선택하도록.
-        if post_tistory and not nv_keyword:
+    #   ★ 2026-07-25 refcount 안전화: mark_publishing(True/False) 손 짝맞춤 → publishing() CM.
+    #     정의는 trend_theme_writer.publishing 단 한 곳(①단일 진입점) — 경제·테마 동일 규약(③).
+    #     예외로 빠져나가도 finally 가 창을 닫는다(누수 시 background LLM 전면 보류).
+    from JARVIS02_WRITER.trend_theme_writer import publishing
+    with publishing("economic"):
+        import time as _tm_act
+        if post_naver:
+            # ★ 액션별 LLM 데드라인 (리뷰 확정 수정): 직렬화로 티스토리 시작이 늦어져
+            #   단일 예산이면 티스토리 생성이 상시 강등됨 — 액션마다 리셋.
+            #   ★ 반드시 _nv_action.deadline_sec 와 동일한 SSOT 상수 — 더 큰 값을 쓰면
+            #   "잔여 <10분 강등"이 harness 하드 데드라인보다 늦게 트리거되어 watchdog 이
+            #   재시도·백오프 도중 강제 종료한다(경제 브리핑 티스토리 데드라인 초과 사고 원인).
+            os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
+            _nv_fb = _apply_resume("naver")
             try:
-                from shared.db import DB_PATH as _DB_PATH
-                import sqlite3 as _sq3b, datetime as _dtb
-                _today_s = _dtb.date.today().isoformat()
-                _con_b = _sq3b.connect(str(_DB_PATH))
-                _row_b = _con_b.execute(
-                    "SELECT source_keyword FROM post_analysis "
-                    "WHERE created_at LIKE ? AND platform='naver' AND post_type='economic' "
-                    "ORDER BY id DESC LIMIT 1",
-                    (f"{_today_s}%",),
-                ).fetchone()
-                _con_b.close()
-                if _row_b and _row_b[0]:
-                    nv_keyword = _row_b[0]
-                    print(f"  🔗 [tistory-only] 오늘 네이버 키워드 DB 복구: '{nv_keyword}'")
-            except Exception as _nv_ke:
-                print(f"  ⚠️ [tistory-only] 네이버 키워드 DB 조회 실패: {_nv_ke}")
+                _nv_res = run_action(
+                    _nv_action,
+                    input_data={"post_naver": True, "post_tistory": False,
+                                "market_data": _j09_market_data,
+                                # ★ 재시도면 직전 차단사유를 첫 시도부터 주입 (보완 재작성)
+                                "_nv_draft_gate_feedback": _nv_fb},
+                )
+            finally:
+                _clear_resume("naver")
+            _results["naver"] = _nv_res
+            _nv_state = _nv_res.state
+            naver_ok = bool(_nv_state.get("naver_ok"))
+            # ★ 수집 스텝(② NV 수집)이 state["nv_keyword"] 에 저장 — 대본 스킵돼도 키워드 확보
+            nv_keyword = _nv_state.get("nv_keyword", "")
+            _write_ep_partial()
+            if not _nv_res.delivered:
+                _esc = getattr(_nv_res, "escalation_reason", "") or ""
+                if getattr(_nv_res, "deferred", False):
+                    # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도(발행 0건 확정 아님).
+                    print(f"\n  ⏸ [네이버] 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
+                    tg(f"⏸ 경제 브리핑(네이버) 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n{_esc}")
+                elif "동시 실행 중복 차단" in _esc:
+                    # ★ 리뷰 확정 수정: 다른 실행이 진행 중 — 티스토리도 중단 (인터리브 방지)
+                    _concurrent_blocked = True
+                    print("  🚫 동시 실행 중복 차단 — 티스토리 액션도 중단 (인터리브 이중 발행 방지)")
+                else:
+                    print(f"\n  🚫 [네이버] harness max_attempts 도달 — 발행 차단 (attempts={_nv_res.attempts})")
+                    tg(f"🚫 경제 브리핑(네이버) harness max_attempts 도달 — 발행 차단\nattempts={_nv_res.attempts}")
+        else:
+            print("  ─ 네이버 건너뜀 (플래그 OFF)")
+            # ★ tistory-only 재발행: DB에서 오늘 네이버 경제 발행글의 키워드 복구
+            #   → ts_collect 폴백이 오늘 아침과 동일 주제(키워드)를 선택하도록.
+            if post_tistory and not nv_keyword:
+                try:
+                    from shared.db import DB_PATH as _DB_PATH
+                    import sqlite3 as _sq3b, datetime as _dtb
+                    _today_s = _dtb.date.today().isoformat()
+                    _con_b = _sq3b.connect(str(_DB_PATH))
+                    _row_b = _con_b.execute(
+                        "SELECT source_keyword FROM post_analysis "
+                        "WHERE created_at LIKE ? AND platform='naver' AND post_type='economic' "
+                        "ORDER BY id DESC LIMIT 1",
+                        (f"{_today_s}%",),
+                    ).fetchone()
+                    _con_b.close()
+                    if _row_b and _row_b[0]:
+                        nv_keyword = _row_b[0]
+                        print(f"  🔗 [tistory-only] 오늘 네이버 키워드 DB 복구: '{nv_keyword}'")
+                except Exception as _nv_ke:
+                    print(f"  ⚠️ [tistory-only] 네이버 키워드 DB 조회 실패: {_nv_ke}")
 
-    # ★ 네이버 수집 자체가 실패하면(키워드 없음 = topic_pack 빌드 실패) 티스토리도 건너뜀.
-    # 동일 수집 경로(topic_pack)를 사용하므로 티스토리도 같은 이유로 실패 예상.
-    # post_naver=False 이면 _nv_state 비어있으니 False 로 처리 (건너뜀 안 함).
-    _nv_collect_failed = bool(
-        post_naver
-        and not (_nv_state.get("nv_collect_result") or {}).get("success")
-        and not nv_keyword
-    )
-    if _nv_collect_failed:
-        msg = "⏭ [티스토리] 네이버 수집 실패(topic_pack 없음) — 티스토리도 수집 실패 예상, 건너뜀"
-        print(f"\n  {msg}")
-        tg(msg)
+        # ★ 네이버 수집 자체가 실패하면(키워드 없음 = topic_pack 빌드 실패) 티스토리도 건너뜀.
+        # 동일 수집 경로(topic_pack)를 사용하므로 티스토리도 같은 이유로 실패 예상.
+        # post_naver=False 이면 _nv_state 비어있으니 False 로 처리 (건너뜀 안 함).
+        _nv_collect_failed = bool(
+            post_naver
+            and not (_nv_state.get("nv_collect_result") or {}).get("success")
+            and not nv_keyword
+        )
+        if _nv_collect_failed:
+            msg = "⏭ [티스토리] 네이버 수집 실패(topic_pack 없음) — 티스토리도 수집 실패 예상, 건너뜀"
+            print(f"\n  {msg}")
+            tg(msg)
 
-    # ★ 티스토리는 네이버 *종결 후* 에만 시작 — 네이버 성패와 무관하게 독립 진행
-    if post_tistory and not _concurrent_blocked and not _nv_collect_failed:
-        # ★ _ts_action.deadline_sec 과 동일한 SSOT 상수 (위 네이버 리셋과 동일 사유)
-        os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
-        _ts_fb = _apply_resume("tistory")
-        try:
-            _ts_res = run_action(
-                _ts_action,
-                input_data={"post_naver": False, "post_tistory": True,
-                            "market_data": _j09_market_data,
-                            "nv_keyword_final": nv_keyword,
-                            # ★ 수집 공유 (2026-07-12): 네이버 수집 성공 결과를 ts 액션에 전달.
-                            #   _step_ts_collect 가 이 값 확인 → 동일 주제·데이터 재사용.
-                            "nv_collect_result": _nv_state.get("nv_collect_result"),
-                            # ★ 재시도면 직전 차단사유를 첫 시도부터 주입 (보완 재작성)
-                            "_ts_draft_gate_feedback": _ts_fb},
-            )
-        finally:
-            _clear_resume("tistory")
-        _results["tistory"] = _ts_res
-        _ts_state = _ts_res.state
-        tistory_ok = bool(_ts_state.get("tistory_ok"))
-        ts_keyword = (_ts_state.get("ts_draft") or {}).get("keyword", "")
-        _write_ep_partial()
-        if not _ts_res.delivered:
-            if getattr(_ts_res, "deferred", False):
-                # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도.
-                print(f"\n  ⏸ [티스토리] 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
-                tg(f"⏸ 경제 브리핑(티스토리) 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도")
-            else:
-                print(f"\n  🚫 [티스토리] harness max_attempts 도달 — 발행 차단 (attempts={_ts_res.attempts})")
-                tg(f"🚫 경제 브리핑(티스토리) harness max_attempts 도달 — 발행 차단\nattempts={_ts_res.attempts}")
-    elif _concurrent_blocked:
-        print("  ⏭ 티스토리 스킵 — 동시 실행 중복 차단")
-    else:
-        print("  ─ 티스토리 건너뜀 (플래그 OFF)")
-    _mark_pub(False)  # ★ 발행 완료 — background alias 강등 해제
+        # ★ 티스토리는 네이버 *종결 후* 에만 시작 — 네이버 성패와 무관하게 독립 진행
+        if post_tistory and not _concurrent_blocked and not _nv_collect_failed:
+            # ★ _ts_action.deadline_sec 과 동일한 SSOT 상수 (위 네이버 리셋과 동일 사유)
+            os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
+            _ts_fb = _apply_resume("tistory")
+            try:
+                _ts_res = run_action(
+                    _ts_action,
+                    input_data={"post_naver": False, "post_tistory": True,
+                                "market_data": _j09_market_data,
+                                "nv_keyword_final": nv_keyword,
+                                # ★ 수집 공유 (2026-07-12): 네이버 수집 성공 결과를 ts 액션에 전달.
+                                #   _step_ts_collect 가 이 값 확인 → 동일 주제·데이터 재사용.
+                                "nv_collect_result": _nv_state.get("nv_collect_result"),
+                                # ★ 재시도면 직전 차단사유를 첫 시도부터 주입 (보완 재작성)
+                                "_ts_draft_gate_feedback": _ts_fb},
+                )
+            finally:
+                _clear_resume("tistory")
+            _results["tistory"] = _ts_res
+            _ts_state = _ts_res.state
+            tistory_ok = bool(_ts_state.get("tistory_ok"))
+            ts_keyword = (_ts_state.get("ts_draft") or {}).get("keyword", "")
+            _write_ep_partial()
+            if not _ts_res.delivered:
+                if getattr(_ts_res, "deferred", False):
+                    # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도.
+                    print(f"\n  ⏸ [티스토리] 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
+                    tg(f"⏸ 경제 브리핑(티스토리) 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도")
+                else:
+                    print(f"\n  🚫 [티스토리] harness max_attempts 도달 — 발행 차단 (attempts={_ts_res.attempts})")
+                    tg(f"🚫 경제 브리핑(티스토리) harness max_attempts 도달 — 발행 차단\nattempts={_ts_res.attempts}")
+        elif _concurrent_blocked:
+            print("  ⏭ 티스토리 스킵 — 동시 실행 중복 차단")
+        else:
+            print("  ─ 티스토리 건너뜀 (플래그 OFF)")
 
     _nv_r  = '✅' if naver_ok   else ('⏭' if not post_naver   else '❌')
     _ts_r  = '✅' if tistory_ok else ('⏭' if not post_tistory else '❌')

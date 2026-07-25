@@ -95,13 +95,80 @@ _KNOWN_ERROR_TYPES = [
 ]
 
 # ── ★ arm 전략 공간 (유한) — _arm_key 가 모든 입력을 이 공간으로 접는다 ──────────
-#   정적 fixer 6종 + auto_patch (모두 pattern_fixer._FIXER_REGISTRY 와 정합) +
-#   learned_verified / learned_new (학습 캐시 조회) + llm (LLM 폴백).
-#   이 집합 밖의 이름은 _arm_key 가 규칙적으로 접거나(prefix) 그대로 통과(정적)시킨다.
-_STATIC_FIXER_ARMS = frozenset({
-    "relative_import", "none_slicing", "name_typo",
-    "none_attribute", "import_name", "unpack_mismatch", "auto_patch",
+#
+#   ★ 2026-07-25 — 종전엔 정적 fixer 7종 이름을 여기에 **손으로 나열**하고
+#     "pattern_fixer._FIXER_REGISTRY 와 정합" 이라고 *주석으로만* 선언했다(①② 위반).
+#     주석은 강제력이 0이라, fixer 를 하나 추가하면 registry 만 늘고 arm 공간은 낡는다.
+#     그 상태에서 새 fixer 이름이 오면 `_arm_key` 가 None 을 돌려주고 →
+#       · rank_fixers : 점수 -inf → 항상 맨 뒤 (실행은 되지만 학습 순위에서 배제)
+#       · reward      : 조기 return → **학습이 조용히 유실**
+#     즉 "새 fixer 는 영원히 학습되지 않는" 무증상 열화다. → 런타임 파생으로 교체.
+#
+#   bandit 이 스스로 소유하는 *합성* 전략명(아래 `_RESERVED_ARMS`)만 이 파일 소유.
+#   정적 fixer 이름의 주인은 pattern_fixer 다.
+_RESERVED_ARMS = frozenset({
+    "learned_verified",   # 검증된 학습 캐시 조회 전략
+    "learned_new",        # 신규 학습 캐시 조회 전략
+    "llm",                # LLM 폴백 전략
 })
+
+# last-known-good 캐시 — *성공한 파생만* 적재 (실패값을 캐시하면 영구 degrade).
+_ARMS_CACHE: frozenset = frozenset()
+
+
+def _flag(name: str, default: bool = True) -> bool:
+    """킬스위치 — *호출 시점* 조회 (모듈 로드 시 캡처 금지: 복사본을 진실로 믿지 말 것)."""
+    import os as _os
+    raw = _os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _persisted_static_arms() -> frozenset:
+    """degrade 바닥 — 학습 원장(`bandit_state.json`)에 *이미 있는* 정적 arm 이름.
+
+    ★ 왜 이게 안전한 폴백인가: 원장의 arm 키는 전부 과거 `_arm_key` 를 통과해 기록된
+      것이다(= 그 시점의 유효한 전략명). 새 이름을 만들어내지 않으므로 arm 무한 증식
+      (ADR 016 이 막는 것) 위험이 0이고, *기존 학습을 계속 쓸 수 있게* 해 준다.
+      리터럴 목록을 되살리는 것보다 낫다 — 리터럴은 다시 드리프트하지만 이건 안 한다.
+    """
+    try:
+        arms = _read_state().get("arms", {}) or {}
+    except Exception:  # noqa: BLE001
+        return frozenset()
+    return frozenset(a for a in arms if a not in _RESERVED_ARMS)
+
+
+def _static_fixer_arms() -> frozenset:
+    """정적 fixer arm 공간 — `pattern_fixer._FIXER_REGISTRY` 에서 **런타임 파생**(② 동적 설계).
+
+    ★ 왜 지연(호출 시점) import 인가 — `pattern_fixer` 는 bandit 을 *함수 안에서* 불러 쓴다
+      (`pattern_fixer.py:1343/1457/1829`). bandit 이 모듈 로드 시점에 pattern_fixer 를
+      끌어오면 두 모듈이 서로를 로드 시점에 참조하는 순환이 만들어질 여지가 생긴다.
+      지연 조회면 그 창이 아예 없다 (`sys.modules` 적중이라 비용도 무시 가능).
+
+    ★ 캐시하지 않고 매번 파생하는 이유: registry 는 진실이고 여기 값은 파생물이다.
+      한 번 떠서 굳혀두면 그게 곧 사본이다 — "복사본을 진실로 믿지 말 것".
+
+    fail-open 판단: 파생 실패 시 last-known-good → 없으면 원장 기반 바닥.
+      근거 — `_arm_key` 가 None 을 돌려주면 **보상이 통째로 버려진다**(학습 유실).
+      반대로 폴백이 약간 낡아봐야 새 fixer 하나가 잠시 랭킹에서 빠질 뿐이다.
+      유실 > 지연 이므로 fail-open 이 옳다. 파생 실패 자체는 WARNING 으로 남긴다.
+
+    킬스위치 `GUARDIAN_BANDIT_DERIVE_ARMS=0` → 파생을 끄고 원장 기반 바닥만 사용.
+    """
+    global _ARMS_CACHE
+    if _flag("GUARDIAN_BANDIT_DERIVE_ARMS", True):
+        try:
+            from JARVIS07_GUARDIAN.pattern_fixer import _FIXER_REGISTRY  # noqa: PLC0415
+            got = frozenset(_FIXER_REGISTRY.keys())
+            if got:
+                _ARMS_CACHE = got
+                return got
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"[BANDIT] arm 공간 파생 실패 — 폴백 사용: {e}")
+    return _ARMS_CACHE or _persisted_static_arms()
 
 
 def _arm_key(name: str) -> Optional[str]:
@@ -113,6 +180,9 @@ def _arm_key(name: str) -> Optional[str]:
     - 정적 6종 + auto_patch   → 그대로                (고정 전략)
     - "learned"               → "learned_verified"    (통합 학습 조회 후보)
     - 그 외(빈 값/미상)       → None                  (arm 생성 안 함 = 보상/랭킹 제외)
+
+    ★ '정적 6종 + auto_patch' 는 손 목록이 아니라 `_static_fixer_arms()` 파생이다 —
+      pattern_fixer 에 fixer 를 추가하면 arm 공간이 *자동으로* 따라 늘어난다.
 
     이 규칙 덕분에 오류 지문(GitCommit/ExternalEdit/…)이 arm 으로 새는 일이 원천 차단된다.
     """
@@ -127,7 +197,7 @@ def _arm_key(name: str) -> Optional[str]:
         return "llm"
     if n == "learned":
         return "learned_verified"
-    if n in _STATIC_FIXER_ARMS:
+    if n in _static_fixer_arms():   # ★ pattern_fixer 레지스트리에서 호출 시점 파생
         return n
     # 미지의 이름 — 전략으로 인정하지 않음(오염 방지). 정적 등록 경로만 arm 이 된다.
     return None
@@ -458,6 +528,7 @@ def rank_fixers(error_record: dict, fixer_names: list[str]) -> list[str]:
 
     version = _read_state().get("feature_version", 1)
     x = _extract_features(error_record, version)   # 느린 encode 는 락 밖
+    _static_fixer_arms()   # arm 공간 파생 워밍업 — 락 안에서 import·파일읽기 하지 않도록
 
     with _LOCK:
         state = _read_state()

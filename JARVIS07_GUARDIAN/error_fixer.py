@@ -286,12 +286,148 @@ def _meaningful_lines(text: str) -> list[str]:
     return out
 
 
+# ── ★ P3 (사용자 박제 2026-07-25) — "정당한 정리" 와 "기능 제거" 를 구분한다 ────
+#
+#   종전 규칙② (`removed and not added` → 무조건 거부) 는 너무 넓었다. CLAUDE.md 가
+#   auto_repair 의 *명시적 대상* 으로 못박은 **중복 함수 제거 / dead code 제거** 가 정확히
+#   이 규칙에 걸려, GUARDIAN 이 자기 헌법이 시키는 정리를 스스로 못 하게 만들었다.
+#   게다가 거부하면서 밴딧에 음의 보상까지 줘 *맞는 수정을 낸 arm* 을 깎았다.
+#
+#   구분 기준을 **하드코딩 목록이 아니라 판별 가능한 성질** 로 둔다 (②동적 설계):
+#     · 살아있는 스코프의 *실행 문장* 이 사라졌는가            → 기능 제거 (거부)
+#     · 사라진 def/class 이름이 패치 후에도 *참조* 되는가       → 기능 제거 (거부)
+#     · 사라진 import 가 패치 후에도 *사용* 되는가              → 기능 제거 (거부)
+#     · 위 어디에도 해당 없음 = 중복 def·미참조 def·미사용 import·주석/문서열 뿐
+#                                                            → 정당한 정리 (통과)
+#   AST 파싱 실패 시엔 판정하지 않고 *종전대로 거부* (fail-closed).
+#   킬스위치: `GUARDIAN_FIX_ALLOW_CLEANUP=0` → 종전 동작(순수 삭제 전면 거부).
+
+def _cleanup_allowed() -> bool:
+    """P3 전용 킬스위치 — 런타임 조회(모듈 로드 시점 캡처 금지)."""
+    return os.getenv("GUARDIAN_FIX_ALLOW_CLEANUP", "1") != "0"
+
+
+def _stmt_key(node: ast.AST) -> str:
+    """문장 1개의 동일성 키. def/class·import 는 *이름만* 남겨 따로 판정한다."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return f"DEF:{node.name}"
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        names = ",".join(sorted((a.asname or a.name.split(".")[0]) for a in node.names))
+        return f"IMP:{names}"
+    if isinstance(node, ast.Expr) and isinstance(getattr(node, "value", None), ast.Constant) \
+            and isinstance(node.value.value, str):
+        return "DOC"                      # docstring — 주석성, 삭제돼도 기능 아님
+    try:
+        return "STMT:" + ast.dump(node, annotate_fields=False)
+    except Exception:                     # noqa: BLE001
+        return "STMT:?"
+
+
+def _scope_bodies(tree: ast.AST) -> dict[str, "Counter"]:
+    """스코프(qualname) → 그 스코프 *직속* 문장 키 Counter.
+
+    def/class 는 자식 스코프로 따로 수집하고 부모에는 `DEF:<name>` placeholder 만 남긴다
+    → *중복 정의 제거*(같은 이름 2개 → 1개)는 이름 집합이 안 변하므로 자연히 정당 판정된다.
+    """
+    from collections import Counter
+    out: dict[str, Counter] = {}
+
+    def rec(node: ast.AST, path: str) -> None:
+        body = getattr(node, "body", None)
+        if not isinstance(body, list):
+            return
+        out.setdefault(path, Counter())
+        for st in body:
+            out[path][_stmt_key(st)] += 1
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                rec(st, f"{path}.{st.name}" if path else st.name)
+
+    rec(tree, "")
+    return out
+
+
+def _defined_names(tree: ast.AST) -> set[str]:
+    return {n.name for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+
+
+def _referenced_names(tree: ast.AST) -> set[str]:
+    """패치 *후* 코드가 여전히 쓰고 있는 이름 — Load 참조 + 속성 베이스 + `__all__` 문자열."""
+    refs: set[str] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+            refs.add(n.id)
+        elif isinstance(n, ast.Attribute):
+            base = n
+            while isinstance(base, ast.Attribute):
+                base = base.value
+            if isinstance(base, ast.Name):
+                refs.add(base.id)
+        elif isinstance(n, ast.Assign):
+            # `__all__ = [...]` 의 문자열도 *공개 계약 참조* 로 본다
+            if any(isinstance(t, ast.Name) and t.id == "__all__" for t in n.targets):
+                for c in ast.walk(n.value):
+                    if isinstance(c, ast.Constant) and isinstance(c.value, str):
+                        refs.add(c.value)
+    return refs
+
+
+def classify_pure_removal(original: str, patch: str) -> tuple[str, str]:
+    """순수 삭제 패치의 성격 판정. 반환 ("cleanup"|"functional"|"unparsable", 사유).
+
+    ★ 공개(테스트·감사가 부를 수 있게) — 그러나 정책 결정은 `_removal_issue` 한 곳만 한다.
+    """
+    try:
+        o_tree = ast.parse(original)
+        n_tree = ast.parse(patch)
+    except Exception as e:                # noqa: BLE001
+        return "unparsable", f"AST 파싱 불가({type(e).__name__}) — 판정 포기"
+
+    o_bodies = _scope_bodies(o_tree)
+    n_bodies = _scope_bodies(n_tree)
+    new_defs = _defined_names(n_tree)
+    new_refs = _referenced_names(n_tree)
+
+    explained: list[str] = []
+    for scope, ocnt in o_bodies.items():
+        ncnt = n_bodies.get(scope)
+        if ncnt is None:
+            # 스코프 자체가 사라짐 → 부모 스코프의 DEF 손실로 이미 판정된다
+            continue
+        for key, cnt in (ocnt - ncnt).items():
+            if cnt <= 0 or key == "DOC":
+                continue
+            where = scope or "<module>"
+            if key.startswith("DEF:"):
+                nm = key[4:]
+                if nm in new_defs:
+                    explained.append(f"중복 정의 제거({nm})")
+                    continue
+                if nm in new_refs:
+                    return "functional", f"삭제된 `{nm}` 가 패치 후에도 참조됨 @{where}"
+                explained.append(f"dead code 제거({nm})")
+                continue
+            if key.startswith("IMP:"):
+                names = [x for x in key[4:].split(",") if x]
+                used = [x for x in names if x in new_refs]
+                if used:
+                    return "functional", f"사용 중인 import 제거({','.join(used)}) @{where}"
+                explained.append(f"미사용 import 제거({','.join(names) or '?'})")
+                continue
+            return "functional", f"실행 문장 제거 @{where}"
+
+    if explained:
+        return "cleanup", "정당한 정리로 설명됨 — " + ", ".join(explained[:4])
+    return "cleanup", "제거된 유의미 문장 없음(주석·공백·문서열만)"
+
+
 def _removal_issue(original: str, patch: str) -> str:
     """★ code-removal patch 가드 — 기능을 *지워서* 통과시키는 패치 거부.
 
     APR 문헌의 최악 실패 모드. 두 규칙 (임계 상수는 하나, 나머지는 *구조 술어*):
       ① 유의미한 줄이 `_max_shrink_ratio()` 넘게 줄어듦
-      ② 추가된 유의미한 줄이 **0** (순수 삭제) — 숫자 임계 없이 구조로 판정
+      ② 순수 삭제(추가 0줄) 이면서 **AST 상 기능 제거** 인 경우 (P3 정교화 2026-07-25)
+         — 중복 def·dead code·미사용 import 정리는 통과시킨다.
     위반 사유 문자열 반환, 정상이면 "".
     """
     orig = _meaningful_lines(original)
@@ -309,7 +445,16 @@ def _removal_issue(original: str, patch: str) -> str:
     added = set(new) - set(orig)
     removed = set(orig) - set(new)
     if removed and not added:
-        return f"순수 삭제 패치(추가 0줄 / 삭제 {len(removed)}줄) — 기능 제거로 통과 시도"
+        if not _cleanup_allowed():
+            return f"순수 삭제 패치(추가 0줄 / 삭제 {len(removed)}줄) — 기능 제거로 통과 시도"
+        kind, why = classify_pure_removal(original, patch)
+        if kind == "cleanup":
+            log.info(f"[GUARDIAN] 순수 삭제 허용 — {why}")
+            return ""
+        if kind == "functional":
+            return f"순수 삭제 패치 — {why}"
+        # unparsable → 판정 불가. 종전대로 거부 (fail-closed)
+        return (f"순수 삭제 패치(추가 0줄 / 삭제 {len(removed)}줄) — {why}")
     return ""
 
 
@@ -631,6 +776,39 @@ def _bandit_signal(error_record: dict, analysis: dict, success: bool,
         log.debug(f"[BANDIT] 보상 기록 실패: {_be}")
 
 
+def _record_learning_failure(error_record: dict, analysis: dict,
+                             reason: str, verification: str = "") -> dict:
+    """★ 결함 2 배선 (2026-07-25) — 롤백·재현 실패를 *학습 자산* 에 반영한다.
+
+    `eval_agent.record_fix_failure()` 는 만들어졌지만 **호출자가 0곳** 이었다 (죽은 함수).
+    적용한 수정이 되돌려졌다는 사실은 그 패턴이 나쁘다는 *가장 강한 외생 신호* 인데
+    learned_patterns 의 hit_count 는 오르기만 하고 내려가는 길이 없었다.
+
+    ★ 데드락 주의 (실측으로 확인한 락 순서):
+      `pattern_fixer.record_pattern_hit()` 의 `with _LEARNED_LOCK:` 블록은
+      1217~1289 줄이고, 그 안에서는 eval_agent 를 호출하지 않는다(evaluate 는 1164 —
+      락 *밖*). 본 함수는 apply_fix 의 *롤백 경로* 에서만, 어떤 락도 잡지 않은 상태로
+      호출된다 → `_LEARNED_LOCK` 중첩 획득 없음.
+      (게다가 record_fix_failure 는 `acquire(timeout=5.0)` 이라 최악에도 블록되지 않는다.)
+    """
+    try:
+        from JARVIS07_GUARDIAN.eval_agent import record_fix_failure as _rff
+        res = _rff(
+            error_record or {},
+            fixer_name=str(analysis.get("pattern") or analysis.get("_bandit_fixer")
+                           or ("llm_patch" if str(analysis.get("source", "")) in ("llm", "cached")
+                               else "")),
+            reason=reason,
+            verification=verification,
+        )
+        log.info(f"[GUARDIAN/learn-fail] {res.get('action')} — fp='{str(res.get('fingerprint'))[:50]}' "
+                 f"fail={res.get('fail_count')} hit={res.get('hit_count')} ({reason[:60]})")
+        return res
+    except Exception as e:      # noqa: BLE001 — 학습 반영 실패가 수정 흐름을 막지 않는다
+        log.debug(f"[GUARDIAN/learn-fail] record_fix_failure 호출 실패: {e}")
+        return {"ok": False, "action": f"error:{type(e).__name__}"}
+
+
 def _fetch_record(error_id: int, analysis: dict) -> dict:
     """error_record 확보 — 롤백 경로에서도 밴딧 귀속이 가능하도록."""
     try:
@@ -775,10 +953,13 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
     if _verify_enabled() and file_path.suffix == ".py":   # 코드에만 적용(.md 재구성은 정상)
         _rm = _removal_issue(original_content, patch)
         if _rm:
-            log.warning(f"[GUARDIAN] #{error_id} code-removal 패치 거부 — {_rm}")
-            _bandit_signal(_fetch_record(error_id, analysis), analysis, success=False,
-                           why="code-removal 패치 거부")
-            return _fail(f"code-removal 패치 거부: {_rm}", verification=VERIFY_REPRODUCES)
+            # ★ P3 (사용자 박제 2026-07-25): 거부는 *판정 불가·부적격* 이지 "수정 실패" 가 아니다.
+            #   종전엔 여기서 밴딧에 음의 보상을 주고 verification=still_reproduces 로 흘려
+            #   ① 맞는 수정을 낸 arm 을 깎고 ② 하류(eval)가 실패로 오인하게 만들었다.
+            #   → 보상 신호 없음(0) + verification 신호 없음("") 으로 정정.
+            log.warning(f"[GUARDIAN] #{error_id} code-removal 패치 거부 — {_rm} "
+                        f"(보상 0 — 판정 불가는 실패가 아니다)")
+            return _fail(f"code-removal 패치 거부: {_rm}")
 
     # ── .bak 백업 ────────────────────────────────────────────────
     bak = _backup(file_path)
@@ -792,8 +973,9 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
     except Exception as e:
         log.error(f"[GUARDIAN] #{error_id} 파일 쓰기 실패: {e}")
         _rollback(file_path, bak)
-        _bandit_signal(_fetch_record(error_id, analysis), analysis, success=False,
-                       why="파일 쓰기 실패 → 롤백")
+        _rec_w = _fetch_record(error_id, analysis)
+        _bandit_signal(_rec_w, analysis, success=False, why="파일 쓰기 실패 → 롤백")
+        _record_learning_failure(_rec_w, analysis, f"파일 쓰기 실패 → 롤백: {str(e)[:60]}")
         return _fail(f"파일 쓰기 실패: {str(e)[:50]}", verification=VERIFY_REPRODUCES)
 
     # ── import 검증 ──────────────────────────────────────────────
@@ -801,8 +983,10 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
     if not _import_check(file_path):
         log.warning(f"[GUARDIAN] #{error_id} import 실패 → 롤백")
         _rollback(file_path, bak)
-        _bandit_signal(_fetch_record(error_id, analysis), analysis, success=False,
-                       why="import 검증 실패 → 롤백")
+        _rec_i = _fetch_record(error_id, analysis)
+        _bandit_signal(_rec_i, analysis, success=False, why="import 검증 실패 → 롤백")
+        # ★ 결함 2 배선 — 롤백은 학습 자산에도 반영한다 (감쇠·강등·격리)
+        _record_learning_failure(_rec_i, analysis, "import 검증 실패 → 롤백")
         if mark_wontfix:
             try:
                 from shared import db as _db
@@ -832,6 +1016,10 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
         _rollback(file_path, bak)
         _bandit_signal(_rec_for_verify, analysis, success=False,
                        why=f"still_reproduces — {_vdetail[:80]}")
+        # ★ 결함 2 배선 — 외생 신호(재현됨)를 learned_patterns 에 반영: 감쇠 → 임계 시 격리
+        _record_learning_failure(_rec_for_verify, analysis,
+                                 f"원 오류 재현 → 롤백: {_vdetail[:100]}",
+                                 verification=VERIFY_REPRODUCES)
         if mark_wontfix:
             try:
                 from shared import db as _db
@@ -886,6 +1074,11 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
             source=analysis.get("source", "auto-llm"),
             patch=_store_patch,
             target_file=target_rel or "",
+            # ★ 결함 1 배선 (2026-07-25) — 외생 검증 신호를 *생산지에서 소비지까지* 관통.
+            #   종전엔 eval_agent 가 verification 인자를 받도록 만들어져 있었지만
+            #   저장소 전체에 그 인자를 넘기는 호출자가 **0곳** 이라 인위 주입 시에만
+            #   동작하는 죽은 배선이었다. 여기가 유일한 생산 지점이다.
+            verification=_vstate or "",
         )
     except Exception as e:
         log.debug(f"[GUARDIAN/learned] apply_fix 학습 등록 실패: {e}")

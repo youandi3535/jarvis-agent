@@ -159,7 +159,7 @@ def _status_section() -> str:
         # ★ 격리 버킷 요약 (결함3) — 걸러낸 것을 *보이게* 한다. 기존 섹션에 편승.
         try:
             _ig = ignored_bucket_report()
-            if _ig.get("total") or _ig.get("regex_code_bug"):
+            if _ig.get("total") or _ig.get("code_bug_ignored"):
                 _r = _ig.get("by_reason") or {}
                 _top = " · ".join(f"{k} {v}" for k, v in list(_r.items())[:3])
                 _d = _ig.get("delta_pct")
@@ -168,9 +168,15 @@ def _status_section() -> str:
                     + (f" ({_d:+.1f}%)" if _d is not None else "")
                     + (f" — {_top}" if _top else "")
                 )
-                if _ig.get("regex_code_bug"):
-                    lines.append(f"🚨 격리 오탐 의심 {len(_ig['regex_code_bug'])}건 "
-                                 f"(정규식이 코드결함 타입을 걸렀음)")
+                _fpl = _ig.get("code_bug_ignored") or []
+                if _fpl:
+                    lines.append(
+                        f"🚨 격리 오탐 의심 {len(_fpl)}건 "
+                        f"(코드결함 타입이 ignored 에 있음 · 스캔 {_ig.get('fp_scope','?')} "
+                        f"· 창 내 {_ig.get('fp_in_window', 0)}건)"
+                    )
+                    lines.append("　　" + " / ".join(
+                        f"#{i['id']} {i['error_type']}({i['reason']})" for i in _fpl[:3]))
                 if _ig.get("no_resolution"):
                     lines.append(f"　⚠️ 무시 사유 미기록 {_ig['no_resolution']}건")
         except Exception:
@@ -728,16 +734,44 @@ def _orchestrate(error_id: int):
         #        (docstring: "나머지는 medium 만 LLM fallback").
         #    잠정·발행보류 게이트보다 *뒤* 에 둔다 — 저 둘은 'new 로 되돌림'(재판정 여지)인데
         #    이건 종결(wontfix)이라, 되돌릴 것을 먼저 되돌리고 나서 종결해야 한다.
-        #    실측 영향(라이브 DB, status!=manual): 전기간 251건 중 2건(0.8%)만 차단 →
-        #    기본 ON. 킬스위치 GUARDIAN_AUTOFIX_GATE=0 으로 종전 동작(무제한 Tier 2) 복귀.
+        #
+        #    ★ 2026-07-25 2차 — 영향도 재계산 (1차 보고의 모집단 표기가 틀려 기각됨).
+        #      · 1차 보고: "최근30일 48건 중 1건(2%)" ← 모집단을 `status!='manual'` 이라 *적어놓고*
+        #        실제로는 ignored 까지 뺀 더 좁은 집합을 셌다.
+        #      · 명시 모집단 그대로(`status!='manual'`) 재측정: 최근30일 **324건 중 87건(26.9%)**,
+        #        전기간 **751건 중 174건(23.2%)**. 차단분의 압도적 다수가 low/ConnectionError(30일 75건).
+        #      · 그러나 이 게이트에 *실제로 도달하는* 모집단은 그게 아니다 — 위 '안전장치 0'
+        #        (`is_transient` → ignored, 즉시 return)이 네트워크·Selenium 부류를 여기 오기 전에
+        #        전부 걷어낸다. 그 걸 반영해 재측정하면 최근30일 **50건 중 1건(2.0%)**,
+        #        전기간 **258건 중 3건(1.2%)** — 게다가 차단분 중 코드버그 타입은 **0건**.
+        #        (차단 3건 = low/ExternalEditTest·low/RuntimeError·critical/SystemExit,
+        #         critical 은 애초에 위 critical 분기에서 끝나므로 게이트와 무관.)
+        #      · severity 상향(_escalate_severity)은 low→medium→high 방향뿐이라 게이트를 *느슨하게*
+        #        만들 뿐 차단을 늘리지 않는다 → 상호작용도 안전한 방향.
+        #      ⇒ 결론(영향 미미, 기본 ON) 유지. 단 근거 수치는 위 두 모집단 모두 명시한다.
+        #
+        #    ★ 잠재 사각지대 하나를 함께 막는다: `is_auto_fixable` 은 *타입 레벨* 판정이라
+        #      low + 비(非)패턴 코드버그 타입(예: low/KeyError, low/JSONDecodeError)이면
+        #      **진짜 코드 버그인데 Tier 2 를 못 받고 wontfix 로 종결**된다. 이건 이번 감사가
+        #      쫓는 결함(진짜 버그를 조용히 버림)과 정확히 같은 부류다. severity.py 자신도
+        #      "코드버그를 버리는 쪽이 그 반대보다 훨씬 위험" 이라고 박아 두었다.
+        #      → 코드버그 타입(`severity.CODE_BUG_TYPES` 파생)은 게이트를 통과시킨다.
+        #      실측 영향 0건(위 차단분 중 코드버그 타입 0) — 오늘 동작은 바뀌지 않고,
+        #      미래에 low/KeyError 가 들어와도 조용히 버려지지 않는다.
+        #      킬스위치 GUARDIAN_AUTOFIX_GATE_CODEBUG_PASS=0 → 이 예외만 끔.
         if _flag("GUARDIAN_AUTOFIX_GATE"):
-            from JARVIS07_GUARDIAN.severity import is_auto_fixable
-            if not is_auto_fixable(severity, error_type):
+            from JARVIS07_GUARDIAN.severity import is_auto_fixable, is_code_bug_type
+            _codebug_pass = (_flag("GUARDIAN_AUTOFIX_GATE_CODEBUG_PASS")
+                             and is_code_bug_type(error_type))
+            if not is_auto_fixable(severity, error_type) and not _codebug_pass:
                 log.info(f"[GUARDIAN] #{error_id} 자동수정 비적격 "
                          f"(severity={severity}, type={error_type}) — Tier 2 생략, 수동 검토")
                 _notify_all(error_record, "not_auto_fixable", severity=severity)
                 _db.mark_error_status(error_id, "wontfix")
                 return
+            if _codebug_pass and not is_auto_fixable(severity, error_type):
+                log.info(f"[GUARDIAN] #{error_id} 게이트 예외 통과 — 코드버그 타입"
+                         f"({error_type}, severity={severity})은 조용히 버리지 않는다")
 
         # ── 안전장치 3: Tier 2(LLM) 재시도 횟수 상한 (★ 사용자 박제 2026-07-06) ──
         #    'analyzing' 상태로 멈춘 오류가 job_retry_pending 에 의해 재투입될 때마다
@@ -1091,7 +1125,7 @@ def report_ignored_bucket() -> dict:
     if not rep.get("lines"):
         return rep
     # 조용한 날엔 침묵: 0건이고 오탐도 없으면 알림 생략(알림 피로 방지)
-    if not rep.get("total") and not rep.get("regex_code_bug"):
+    if not rep.get("total") and not rep.get("code_bug_ignored"):
         return rep
     try:
         from shared.notify import send_tg

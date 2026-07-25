@@ -74,9 +74,19 @@ def infra_issue_kind() -> str:
 
     폴백 리터럴을 두지 않는다 — 폴백은 곧 사본이고, harness 를 못 읽는 상태면
     harness 재시도 계약 자체가 성립하지 않으므로 조용히 옛 값으로 진행하면 안 된다.
+
+    ★ 절대 raise 하지 않는다 (라이브 안전): 종전엔 모듈 상수라 예외가 날 수 없었다.
+      함수 파생으로 바꾸면서 발행 게이트 한복판에 새 예외 경로를 만들면 안 된다 —
+      kind 하나 때문에 발행이 막히는 것이 최악이다. harness 를 못 읽으면 ""(미지정)을
+      돌려주고 경고만 남긴다. 어차피 kind 의 유일한 소비자가 harness 이므로
+      harness 가 없는 상황이면 이 값의 의미 자체가 없다.
     """
-    from JARVIS00_INFRA.harness import INFRA_KIND
-    return INFRA_KIND
+    try:
+        from JARVIS00_INFRA.harness import INFRA_KIND
+        return INFRA_KIND
+    except Exception as _e:
+        log.warning(f"[prepublish_gate] harness.INFRA_KIND 파생 실패 — kind 미지정으로 진행: {_e}")
+        return ""
 
 
 def _report_judge_unavailable(leg: str, detail: str, post_type: str = "",

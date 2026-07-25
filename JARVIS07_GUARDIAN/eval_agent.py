@@ -48,11 +48,28 @@ LLM 이 자기 수정을 자기가 채점하면 rubber-stamp 체제(수락↑·�
   *pattern_fixer 수정 없이* 즉시 무력화된다).
 → `evaluate()` 는 `pattern_health()` 로 **eval_meta 를 읽어** 판정에 쓴다 (감쇠·격리 반영).
 
+# ★ P2 정정 (2026-07-25) — "LLM 판정 불가" 와 "검증 불가" 는 다른 것이다
+
+`learn_eval` 은 `background=True` alias 라 **발행창 + 발행 前 보호구간(90분)** 동안
+`shared.llm` 이 모델을 호출하지 않고 `("", False)` 를 즉시 반환한다. 종전 코드는 그것을
+"LLM 신호 0" 으로 보고 `unverifiable` 과 곱해 `should_register=False, score=0` 으로
+**학습을 전량 폐기** 했다 — 로그도 알림도 없이. `verify_fix` 는 결정론적 6종 밖이면 전부
+`unverifiable` 이므로 "흔한 오류 × 발행창" 이 곧 전량 폐기였다.
+
+→ 판정 불가는 *증거가 없는 것* 이지 *나쁜 수정이라는 증거* 가 아니다:
+    발행창 보류(LLM 미호출) → 종전의 **보수적 통과 70 으로 degrade** (`_hold_degraded`)
+    LLM 호출 실패·파싱 실패 → 종전대로 거부 (rubber-stamp 방지) — 단 **WARNING 로그 필수**
+  외생 *부정* 신호(still_reproduces·격리)는 그 앞 게이트에서 이미 걸러지므로 완화 대상 아님.
+  모든 강등·폐기는 `eval_signal_stats()` 카운터 + `eval_meta.{llm_judged,degraded,hold_reason}`
+  로 관측된다 (침묵 금지).
+
 # 킬스위치
 
 GUARDIAN_EVAL_EXOGENOUS=0        → 결함 2·3 로직 전부 무효 (종전 동작)
 GUARDIAN_EVAL_STATIC_DERIVE=0    → 결함 1 파생 무효 (레거시 리터럴로 롤백)
 GUARDIAN_EVAL_QUARANTINE_FAILS=N → 격리 임계 (기본 3)
+GUARDIAN_EVAL_HOLD_DEGRADE=0     → ★ P2 발행창 degrade 무효 (종전 = 폐기)
+GUARDIAN_EVAL_LLM_FAIL_PASS=1    → LLM 호출·파싱 실패까지 보수적 통과로 완화 (기본 off)
 """
 from __future__ import annotations
 
@@ -106,6 +123,54 @@ _LEGACY_LLM_FIXERS: tuple[str, ...] = ("llm_patch",)
 def _flag(name: str, default: str = "1") -> bool:
     """환경변수 킬스위치 — *호출 시점* 조회 (import 시 스냅샷 금지)."""
     return os.environ.get(name, default) != "0"
+
+
+# ★ 평가 LLM alias — 두 곳(보류 판정·실제 호출)이 같은 이름을 봐야 한다 (① 단일 진입점)
+_EVAL_ALIAS = "learn_eval"
+
+# ★ P2 관측 카운터 (2026-07-25) — "조용한 폐기" 금지. 로그 + 이 카운터로 항상 드러난다.
+#   프로세스 메모리 카운터라 재시작에 사라지지만, *영구* 기록은 learned_patterns 의
+#   `eval_meta.degraded / llm_judged / hold_reason` 로 남는다 (to_meta 가 그대로 실어보낸다).
+_SIGNAL_STATS: dict[str, int] = {
+    "llm_judged": 0,        # LLM 이 실제로 판정한 횟수
+    "hold_degrade": 0,      # 발행창 보류 → 보수적 통과로 degrade
+    "no_signal_reject": 0,  # LLM 판정 불가 + 외생 검증 불가 → 학습 폐기
+    "exogenous_pass": 0,    # LLM 없이 외생 검증(reproduced_gone) 만으로 통과
+}
+
+
+def eval_signal_stats() -> dict[str, int]:
+    """P2 관측 — 이번 프로세스에서 판정 신호가 어떻게 처리됐는가."""
+    return dict(_SIGNAL_STATS)
+
+
+def _llm_hold_reason() -> str:
+    """지금 평가 LLM 이 *발행창 보호* 로 보류되는가 — 보류 사유 문자열 (없으면 "").
+
+    ★ P2 (사용자 지적 2026-07-25): `learn_eval` 은 `background=True` alias 라
+      발행창 + 발행 前 보호구간(90분) 동안 `shared.llm` 이 모델을 **아예 호출하지 않고**
+      `("", False)` 를 즉시 반환한다. 그것은 *나쁜 수정이라는 증거* 가 아니라
+      **증거가 없는 상태** 다. 종전 코드는 이 둘을 구분하지 못해
+      "흔한 오류(=unverifiable) × 발행창" 조합에서 학습을 전량 폐기했다 — 그것도 침묵으로.
+      → 판정은 `shared.llm.defer_reason()` *단일 소스* 에서 파생한다 (사본 금지).
+    """
+    try:
+        from shared import llm as _llm  # type: ignore
+        fn = getattr(_llm, "defer_reason", None)
+        if callable(fn):
+            return str(fn(_EVAL_ALIAS) or "")
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def _hold_degrade_enabled() -> bool:
+    """P2 전용 킬스위치 — 발행창 degrade 를 끄면 종전(전량 폐기) 동작으로 회귀.
+
+    ★ 외생 로직 전체(`GUARDIAN_EVAL_EXOGENOUS=0`)를 끄지 않고 *이 동작만* 되돌릴 수 있게
+      전용 스위치를 둔다 (종전엔 거친 스위치 하나뿐이었다).
+    """
+    return _flag("GUARDIAN_EVAL_HOLD_DEGRADE")
 
 
 def _quarantine_fails() -> int:
@@ -215,6 +280,10 @@ class EvalResult:
     # ★ 학습 자산 건강도 (결함 3) — eval_meta 를 *읽어* 반영한 결과
     fail_count: int = 0
     quarantined: bool = False
+    # ★ P2 관측 (2026-07-25) — 판정 신호의 출처를 *영구 기록* 에 남긴다 (침묵 금지)
+    llm_judged: bool = True     # LLM 이 실제로 판정했는가 (False = 증거 없음)
+    degraded: bool = False      # 보수적 통과로 강등됐는가 (발행창 보류 등)
+    hold_reason: str = ""       # 보류 사유 (shared.llm.defer_reason 파생)
 
 
 def to_meta(result: EvalResult) -> dict[str, Any]:
@@ -655,6 +724,13 @@ def _evaluate_llm_patch(
         return _mk(False, 0, "llm_patch 이지만 patch 본문 없음 — 비actionable, 학습 거부",
                    safe=True, accurate=False, reusable=False)
 
+    # ── ★ P2 — LLM 을 호출하기 *전에* 보류 여부를 묻는다 ─────────────────
+    #   발행창·보호구간에서는 `shared.llm` 이 모델을 호출하지 않고 즉시 반환한다.
+    #   그 경우는 "판정 불가(증거 없음)" 이지 "나쁜 수정(증거 있음)" 이 아니다.
+    _hold = _llm_hold_reason()
+    if _hold:
+        return _hold_degraded(_hold, verif, fail_count, quarantined)
+
     pass_score = SCORE_PASS_UNVERIFIED if verif == V_UNVERIFIABLE else SCORE_PASS
 
     et = error_record.get("error_type", "")
@@ -675,14 +751,18 @@ def _evaluate_llm_patch(
         from shared import llm as _llm  # type: ignore
         _result_fn = getattr(_llm, "invoke_text_result", None)
         if callable(_result_fn):
-            raw, judged = _result_fn("learn_eval", prompt, max_tokens=300)
+            raw, judged = _result_fn(_EVAL_ALIAS, prompt, max_tokens=300)
         else:
-            raw = _llm.invoke_text("learn_eval", prompt, max_tokens=300)
+            raw = _llm.invoke_text(_EVAL_ALIAS, prompt, max_tokens=300)
     except Exception as e:
         log.warning("[GUARDIAN/eval] LLM 호출 실패: %s", e)
         return _no_llm_signal("LLM 호출 실패", e, verif, fail_count, quarantined)
 
     if not judged:
+        # 호출 직전엔 열려 있었으나 그 사이 발행창이 열렸을 수 있다 — 다시 물어본다.
+        _hold2 = _llm_hold_reason()
+        if _hold2:
+            return _hold_degraded(_hold2, verif, fail_count, quarantined)
         return _no_llm_signal("LLM 판정 불가 (ok=False)", (raw or "")[:120],
                               verif, fail_count, quarantined)
 
@@ -691,6 +771,7 @@ def _evaluate_llm_patch(
         return _no_llm_signal("LLM 응답 파싱 실패", (raw or "")[:200],
                               verif, fail_count, quarantined)
 
+    _SIGNAL_STATS["llm_judged"] += 1
     safe = bool(parsed.get("safe", 0))
     accurate = bool(parsed.get("accurate", 0))
     reusable = bool(parsed.get("reusable", 0))
@@ -742,15 +823,63 @@ def _parse_eval_response(raw: str) -> dict[str, Any] | None:
         return None
 
 
+def _hold_degraded(hold: str, verif: str, fail_count: int,
+                   quarantined: bool) -> EvalResult:
+    """★ P2 — 발행창 보류로 LLM 이 *호출조차 되지 않은* 경우의 처리.
+
+    "LLM 판정 불가" ≠ "검증 불가". 전자는 *증거가 없는 것* 이고 후자는 *증거를 만들 수 없는 것*
+    이다. 둘을 곱해 학습을 폐기하면, 하루 중 발행창(+前 90분)에 걸린 모든 수정이
+    조용히 버려진다 — 그게 실측된 P2 다.
+    → 종전(외생 로직 도입 전)의 **보수적 통과 70** 으로 degrade 한다.
+      · 격리 패턴은 이 경로로 못 온다 (evaluate 게이트 1 이 먼저 막는다)
+      · still_reproduces 도 못 온다 (게이트 0 이 먼저 막는다)
+      → 외생 *부정* 신호는 그대로 우선한다. 여기서 완화되는 것은 *신호 없음* 뿐이다.
+    킬스위치: `GUARDIAN_EVAL_HOLD_DEGRADE=0` → 종전(폐기) 동작.
+    """
+    if not _hold_degrade_enabled():
+        _SIGNAL_STATS["no_signal_reject"] += 1
+        log.warning("[GUARDIAN/eval] ★ 학습 폐기 — 발행창 보류(%s) + 외생=%s "
+                    "· HOLD_DEGRADE=0 으로 degrade 비활성", hold[:60], verif or "없음")
+        return EvalResult(
+            should_register=False, score=0, safe=True, accurate=False, reusable=False,
+            rationale=f"발행창 보류로 LLM 판정 없음 + 외생={verif or '없음'} — 폐기(킬스위치)",
+            tier="llm", verification=verif, exogenous=bool(verif) or quarantined,
+            fail_count=fail_count, quarantined=quarantined,
+            llm_judged=False, degraded=False, hold_reason=hold[:120],
+        )
+
+    score = _SCORE_CONSERVATIVE - _FAIL_DECAY * fail_count
+    ok = score >= _SCORE_CONSERVATIVE
+    _SIGNAL_STATS["hold_degrade"] += 1
+    # ★ 침묵 금지 — 강등이 일어날 때마다 WARNING 으로 드러낸다 (+ eval_meta 에 영구 박제)
+    log.warning(
+        "[GUARDIAN/eval] ★ 판정 강등 — 발행창 보류로 LLM 미호출(%s) · 외생=%s "
+        "→ 보수적 통과 score=%d register=%s (폐기 아님)",
+        hold[:60], verif or "없음", score, ok,
+    )
+    return EvalResult(
+        should_register=ok, score=max(0, score),
+        safe=True, accurate=True, reusable=True,
+        rationale=(f"발행창 보류로 LLM 판정 없음({hold[:40]}) · 외생={verif or '없음'} "
+                   f"— 증거 부재는 실패가 아님 → 보수적 통과"),
+        tier="llm", verification=verif, exogenous=bool(verif) or quarantined,
+        fail_count=fail_count, quarantined=quarantined,
+        llm_judged=False, degraded=True, hold_reason=hold[:120],
+    )
+
+
 def _no_llm_signal(reason: str, detail: Any, verif: str,
                    fail_count: int, quarantined: bool) -> EvalResult:
-    """LLM 신호 부재 시 처리.
+    """LLM 신호 부재 시 처리 (발행창 보류가 *아닌* 실패 — 호출 오류·파싱 실패).
 
     · 외생 검증 통과(reproduced_gone) → 외생 신호만으로 통과 (LLM 없이도 근거 있음)
     · 외생 검증 불가(unverifiable)     → 신호 0 → **거부** (rubber-stamp 방지)
+        ※ 단 `GUARDIAN_EVAL_LLM_FAIL_PASS=1` 이면 보수적 통과로 degrade.
     · 신호 없음(키 부재)               → 종전 그대로 보수적 통과 70
+    ★ 어느 경로든 *관측 가능* — 폐기는 WARNING 으로 반드시 남긴다.
     """
     if verif == V_GONE:
+        _SIGNAL_STATS["exogenous_pass"] += 1
         score = _SCORE_REPLAY_VERIFIED - _FAIL_DECAY * fail_count
         return EvalResult(
             should_register=score >= _SCORE_CONSERVATIVE, score=max(0, score),
@@ -758,14 +887,35 @@ def _no_llm_signal(reason: str, detail: Any, verif: str,
             rationale=f"{reason} — 그러나 외생 검증(reproduced_gone) 통과로 등록 ({str(detail)[:80]})",
             tier="llm", verification=verif, exogenous=True,
             fail_count=fail_count, quarantined=quarantined,
+            llm_judged=False,
         )
     if verif == V_UNVERIFIABLE:
+        if _flag("GUARDIAN_EVAL_LLM_FAIL_PASS", "0"):
+            # 운영 판단으로 LLM 실패까지 완화하고 싶을 때 (기본 off — rubber-stamp 방지 유지)
+            _SIGNAL_STATS["hold_degrade"] += 1
+            score = _SCORE_CONSERVATIVE - _FAIL_DECAY * fail_count
+            log.warning("[GUARDIAN/eval] ★ 판정 강등 — %s + 외생 검증 불가 "
+                        "· LLM_FAIL_PASS=1 → 보수적 통과 score=%d", reason, score)
+            return EvalResult(
+                should_register=score >= _SCORE_CONSERVATIVE, score=max(0, score),
+                safe=True, accurate=True, reusable=True,
+                rationale=f"{reason} + 외생 검증 불가 — 킬스위치로 보수적 통과",
+                tier="llm", verification=verif, exogenous=True,
+                fail_count=fail_count, quarantined=quarantined,
+                llm_judged=False, degraded=True,
+            )
+        # ★ 침묵 금지 — 폐기는 반드시 WARNING 으로 드러낸다 (종전엔 로그 0 이었다)
+        _SIGNAL_STATS["no_signal_reject"] += 1
+        log.warning("[GUARDIAN/eval] ★ 학습 폐기 — %s + 외생 검증 불가(unverifiable) "
+                    "→ 판정 신호 0 (%s). 완화하려면 GUARDIAN_EVAL_LLM_FAIL_PASS=1",
+                    reason, str(detail)[:80])
         return EvalResult(
             should_register=False, score=0,
             safe=True, accurate=False, reusable=False,
             rationale=f"{reason} + 외생 검증 불가 — 판정 신호 0, 학습 거부 ({str(detail)[:80]})",
             tier="llm", verification=verif, exogenous=True,
             fail_count=fail_count, quarantined=quarantined,
+            llm_judged=False,
         )
     return _conservative_pass(reason, detail, fail_count)
 
@@ -778,7 +928,7 @@ def _conservative_pass(reason: str, detail: Any = "", fail_count: int = 0) -> Ev
         score=max(0, score),
         safe=True, accurate=True, reusable=True,
         rationale=f"{reason} — 보수적 통과 ({str(detail)[:100]})",
-        tier="llm", fail_count=fail_count,
+        tier="llm", fail_count=fail_count, llm_judged=False, degraded=True,
     )
 
 
@@ -792,4 +942,5 @@ __all__ = ["evaluate", "should_register", "to_meta", "EvalResult",
            "STATIC_FIXERS", "REPLAY_FIXERS", "LLM_FIXERS", "fixer_sets", "FixerSets",
            "SCORE_PASS", "SCORE_PASS_UNVERIFIED",
            "pattern_health", "record_fix_failure", "prune_quarantined",
+           "eval_signal_stats",
            "V_GONE", "V_UNVERIFIABLE", "V_STILL", "VERIFICATION_VALUES"]
