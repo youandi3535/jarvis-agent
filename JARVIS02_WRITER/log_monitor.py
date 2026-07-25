@@ -1,7 +1,11 @@
 """
 자동 발행 작업 로그 모니터링 및 요약
-- 매일 07:30: 경제 브리핑 로그 확인
-- 매일 16:30: 테마주 로그 확인
+- 매일 07:45: 경제 브리핑 로그 확인 (발행 07:00)
+- 매일 21:45: 테마주 로그 확인   (발행 21:00)
+
+★ 2026-07-25 실행모델 통일 후속: 테마도 subprocess 가 되어 `logs/theme_*.log` 로 나간다.
+  종전엔 테마가 데몬 안에서 돌아 출력이 `scheduler.log` 에 섞였고, 이 모듈이 그 파일을 읽었다.
+  통일 후에도 그대로 두면 *발행 로그가 아닌 데몬 로그* 를 요약해 보고하는 단절이 된다.
 """
 from pathlib import Path
 from datetime import datetime
@@ -14,23 +18,21 @@ def get_todays_date():
     """오늘 날짜를 YYYYMMDD 형식으로 반환"""
     return datetime.now().strftime("%Y%m%d")
 
+
+def _latest_log(stem: str):
+    """오늘자 `{stem}_YYYYMMDD*.log` 중 최신 — 경제·테마 공통 (복사본 금지)."""
+    logs = sorted(LOG_DIR.glob(f"{stem}_{get_todays_date()}*.log"), reverse=True)
+    return logs[0] if logs else None
+
+
 def read_latest_economic_log():
-    """최근 경제 브리핑 로그 읽기"""
-    today = get_todays_date()
-    log_pattern = LOG_DIR / f"economic_{today}*.log"
+    """최근 경제 브리핑 로그 (logs/economic_YYYYMMDD_HHMMSS.log)"""
+    return _latest_log("economic")
 
-    logs = sorted(LOG_DIR.glob(f"economic_{today}*.log"), reverse=True)
-    if not logs:
-        return None
-
-    return logs[0]
 
 def read_latest_theme_log():
-    """최근 테마주 로그 읽기 (scheduler.log)"""
-    log_file = LOG_DIR / "scheduler.log"
-    if not log_file.exists():
-        return None
-    return log_file
+    """최근 테마주 로그 (logs/theme_YYYYMMDD_HHMMSS.log — subprocess 통일 후 신규 경로)."""
+    return _latest_log("theme")
 
 def summarize_economic_log(log_file):
     """경제 브리핑 로그 요약"""
@@ -72,16 +74,20 @@ def summarize_theme_log(log_file):
     try:
         content = log_file.read_text(encoding='utf-8', errors='ignore')
 
-        # 테마명 추출
-        theme_match = re.search(r'RADAR 선택:\s*([^\(]+)', content)
-        theme = theme_match.group(1).strip() if theme_match else "불명"
+        # 테마명 추출 — ★ 종전 `RADAR 선택:` 은 저장소 어디에서도 출력하지 않는 *죽은 패턴* 이라
+        #   테마가 항상 "불명" 으로 보고됐다(2026-07-25 발견). 실제 출력 문구로 교체.
+        theme = "불명"
+        for _pat in (r'\[THEME-(?:NAVER|TISTORY)\]\s*발행 완료[^\n]*?테마:\s*([^\n]+)',
+                     r'테마:\s*([^\n]+)',
+                     r'\[([^\]]+)\]\s*완료'):
+            m = re.search(_pat, content)
+            if m:
+                theme = m.group(1).strip()
+                break
 
-        # 결과 추출 (가장 최근 결과만)
-        naver_match = re.search(r'네이버[: ]+([✅❌])', content)
-        tistory_match = re.search(r'티스토리[: ]+([✅❌])', content)
-
-        naver_success = naver_match and "✅" in naver_match.group(1) if naver_match else False
-        tistory_success = tistory_match and "✅" in tistory_match.group(1) if tistory_match else False
+        # 결과 추출 — 발행 완료/실패 문구 기준 (플랫폼별 독립)
+        naver_success   = bool(re.search(r'\[THEME-NAVER\]\s*발행 완료', content))
+        tistory_success = bool(re.search(r'\[THEME-TISTORY\]\s*발행 완료', content))
 
         # 에러 확인
         has_error = "❌" in content or "실패" in content

@@ -170,8 +170,10 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"hour":7, "minute":45},
      "callback":"JARVIS02_WRITER.log_monitor.job_check_economic_result",
      "misfire_grace_time":1800, "owner":"jarvis02_writer"},
-    {"id":"log_monitor_theme",     "name":"테마주 로그 확인 (16:30)", "trigger":"cron",
-     "kwargs":{"hour":16, "minute":30},
+    # ★ 2026-07-25 정정: 테마 발행이 21:00 인데 감시가 16:30 이었다(옛 16시 발행 시절 잔재) —
+    #   *발행 4시간 半 전* 로그를 요약해 보고하던 죽은 잡. 경제(발행+45분)와 같은 간격으로 통일.
+    {"id":"log_monitor_theme",     "name":"테마주 로그 확인 (21:45)", "trigger":"cron",
+     "kwargs":{"hour":21, "minute":45},
      "callback":"JARVIS02_WRITER.log_monitor.job_check_theme_result",
      "misfire_grace_time":1800, "owner":"jarvis02_writer"},
     # ── JARVIS06 IMAGE — 인포그래픽 디자인 강화학습 (★ 사용자 박제 2026-07-05) ──
@@ -237,6 +239,54 @@ DEFAULT_JOBS: list[dict] = [
      "callback":"JARVIS09_COLLECTOR.collector_agent.job_cleanup_cache",
      "misfire_grace_time":3600, "owner":"jarvis09_collector"},
 ]
+
+
+# ══════════════════════════════════════════════════════════════════
+#  발행 前 쿠키 사전 점검 — **발행 시각에서 파생** (사용자 박제 2026-07-25)
+# ══════════════════════════════════════════════════════════════════
+# ★ 왜 파생인가 (2026-07-25 발견한 단절):
+#   `JARVIS08_PUBLISH/credentials/LOGIN_SUPREME_LAW.md` 는 쿠키 자동갱신 cron 잡 4개
+#   (`j02_{naver,tistory}_cookie_pre_{morning,afternoon}` 06:30·15:30)를 규정하고 있었는데
+#   **DEFAULT_JOBS 에 하나도 없었다** — `login_manager.job_pre_publish_check` 는 호출자 0인
+#   죽은 함수였다. 문서가 진실이라 믿고 코드가 따라오지 않은 전형적 드리프트.
+#   게다가 그 문서 시각(15:30)은 옛 16시 발행 기준이라, 살아 있었어도 21:00 발행에는 어긋났다.
+#   → 시각을 박지 않고 *실제 발행 잡 cron 에서 30분 전* 으로 파생한다.
+#     발행 시각을 옮기면 쿠키 사전점검도 자동으로 따라 이동한다(② 동적 설계).
+_COOKIE_PRECHECK_LEAD_MIN = 30
+
+
+def _publish_job_times() -> list[tuple[str, int, int]]:
+    """(발행잡ID, 시, 분) — 위 리터럴 카탈로그에서 직접 파생(순환 import 회피)."""
+    out = []
+    for j in DEFAULT_JOBS:
+        if j.get("trigger") != "cron":
+            continue
+        if "run_self_repair_then" not in (j.get("callback") or ""):
+            continue
+        kw = j.get("kwargs") or {}
+        h = kw.get("hour")
+        if isinstance(h, int):
+            out.append((j["id"], h, int(kw.get("minute") or 0)))
+    return out
+
+
+def _build_cookie_precheck_jobs() -> list[dict]:
+    """발행 잡마다 '발행 N분 전 쿠키 점검' 잡 1개씩 생성 (플랫폼 전체 일괄)."""
+    jobs = []
+    for jid, h, m in _publish_job_times():
+        total = (h * 60 + m - _COOKIE_PRECHECK_LEAD_MIN) % (24 * 60)
+        ph, pm = divmod(total, 60)
+        jobs.append({
+            "id": f"j08_cookie_precheck_{jid}",
+            "name": f"발행 前 쿠키 점검 ({ph:02d}:{pm:02d} — {jid} 발행 {_COOKIE_PRECHECK_LEAD_MIN}분 전)",
+            "trigger": "cron", "kwargs": {"hour": ph, "minute": pm},
+            "callback": "JARVIS08_PUBLISH.credentials.login_manager.job_pre_publish_check",
+            "misfire_grace_time": 1200, "owner": "jarvis08_publish",
+        })
+    return jobs
+
+
+DEFAULT_JOBS.extend(_build_cookie_precheck_jobs())
 
 
 def _resolve_callback(path: str) -> Callable:

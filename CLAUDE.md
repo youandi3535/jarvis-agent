@@ -746,7 +746,7 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
 
 | 컴포넌트 | 책임 | 주기 |
 |---------|------|------|
-| `pattern_fixer` (Tier-1 sweep) | 발행 전 미해결 오류 LLM-0 소급 수리 *만* | 발행 직전 (06:30·16:00 callback) |
+| `pattern_fixer` (Tier-1 sweep) | 발행 전 미해결 오류 LLM-0 소급 수리 *만* | 발행 직전 (07:00·21:00 callback) |
 | `auto_repair` + backlog Tier-2 | 광범위 코드 감사 + backlog 진단·수정 | 새벽 04:30 `job_deep_audit` (★ 사용자 박제 2026-06-28 — 발행과 분리) |
 | `eval_agent` ★ | 수정 결과 평가 + learned_patterns 등록 *게이트* | 수정마다 즉시 |
 | `auditor` ★ | 헌법 위반·드리프트 검출 + Refine Rules 제안 | 주 1회 (일 04:30) |
