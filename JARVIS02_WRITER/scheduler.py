@@ -328,7 +328,7 @@ def get_status_text() -> str:
 #  테마 전체 실행
 # ══════════════════════════════════════════
 
-def run_theme(theme: str) -> dict:
+def run_theme(theme: str, gate_feedback: dict | None = None) -> dict:
     """★ 통일 파이프라인 — trend_theme_writer.run_all_themes 직접 호출 (subprocess 폐기).
 
     경제 트렌드(trend_economic_writer)와 동일한 1-pass 블록 파이프라인.
@@ -354,7 +354,7 @@ def run_theme(theme: str) -> dict:
     log(f"  ▶ 1차 통합 실행 (trend_theme_writer.run_all_themes)")
     try:
         from JARVIS02_WRITER.trend_theme_writer import run_all_themes
-        result = run_all_themes(theme)
+        result = run_all_themes(theme, gate_feedback=gate_feedback)
         results = {
             "naver":   result.get("naver",   {}).get("success", False),
             "tistory": result.get("tistory", {}).get("success", False),
@@ -366,6 +366,8 @@ def run_theme(theme: str) -> dict:
         #   세션(최대 10분)을 낭비한다 — 아래 GUARDIAN 트리거 조건에서 제외 대상으로 사용.
         _result_deferred = {"naver": result.get("naver_deferred", False),
                              "tistory": result.get("tistory_deferred", False)}
+        # ★ 차단사유 — GUARDIAN 재시도가 같은 테마로 보완할 때 물려줄 근거 (2026-07-25)
+        _result_issues = result.get("issues") or {}
         # ★ 인터프리터 종료 레이스 (ERRORS [362]) — 발행이 시작조차 못 함(연기).
         #   "글자수 실패" 텔레그램·GUARDIAN·실패 오기록 전부 스킵하고 즉시 반환 → 재시작 후 재시도.
         if result.get("shutdown_deferred"):
@@ -377,6 +379,7 @@ def run_theme(theme: str) -> dict:
         results = {"naver": False, "tistory": False}
         _result_data_empty = False
         _result_deferred = {"naver": False, "tistory": False}
+        _result_issues = {}
 
     log(f"  📋 1차 결과: 네이버={'✅' if results.get('naver') else '❌'} | "
         f"티스토리={'✅' if results.get('tistory') else '❌'}")
@@ -426,9 +429,14 @@ def run_theme(theme: str) -> dict:
 
             # ★ 재발행 retry_fn — 코드 수정 후 즉시 재발행 (harness 통과 보장)
             # theme runner 는 run_radar_top_theme() 를 reload 후 재호출 (harness 내장 함수)
+            # ★ 재시도 이어받기 (2026-07-25 — 경제와 동일 규약, ③ 모든 글 적용):
+            #   막힌 *같은 테마* + 직전 차단사유를 물려준다. 종전엔 카탈로그에서 임의 재선정.
+            _resume_fb = {p: list((_result_issues or {}).get(p) or []) for p in _guardian_fail}
+
             def _make_theme_retry():
                 """수정된 코드로 즉시 재발행. importlib.reload → harness 5-Layer 통과."""
                 _fail_platforms = list(_guardian_fail)
+                _rt, _rf = theme, dict(_resume_fb)
                 def _retry():
                     import importlib, sys as _sys
                     # ★ 의존성 순서 정렬 (ERRORS [222][224] 박제)
@@ -450,7 +458,7 @@ def run_theme(theme: str) -> dict:
                                 except Exception:
                                     pass
                     # run_radar_top_theme 은 harness run_action() 래핑 → 검증 순환 보장
-                    result = run_radar_top_theme()
+                    result = run_radar_top_theme(resume_theme=_rt, resume_feedback=_rf)
                     return bool(result)
                 return _retry
 
@@ -562,8 +570,14 @@ def select_top_theme() -> str | None:
 #   02 는 `select_top_theme()` 로 *어떤 테마가 미발행인지* 만 알려준다 (발행 상태 = 02 소유).
 
 
-def run_radar_top_theme():
+def run_radar_top_theme(resume_theme: str = "", resume_feedback: dict | None = None):
     """★ 네이버 금융 공식 테마 카탈로그 → 미발행 테마 임의 선정 → 발행.
+
+    resume_theme/resume_feedback: ★ GUARDIAN 재시도용 — *막힌 테마를 이어받아 보완*
+      (사용자 박제 2026-07-25, 경제 `economic_poster.run(resume=)` 과 동일 규약).
+      종전엔 재시도가 카탈로그에서 *임의 재선정* 했다 — 차단된 테마는 published/done 에
+      안 들어가 후보에 남지만 200여 개 중 random 이라 같은 테마를 다시 잡을 확률이 사실상 0.
+      수집·대본을 통째로 버리고, 무엇이 부족했는지도 함께 버려졌다.
 
     테마주 주제 선정 원칙: 오늘 트렌드 키워드(RADAR)가 아니라 네이버 금융 공식 테마
     목록을 전부 로드한 뒤, 지금껏 발행하지 않은 테마를 임의로 하나 골라 발행한다.
@@ -616,13 +630,21 @@ def run_radar_top_theme():
     # ★ 선계산 고정 테마 우선 (사용자 박제 2026-07-18): 20:00 선계산 잡이 고정·선수집한 테마가
     #   있으면 첫 시도에 그 테마를 써서 캐시 히트(발행창 추출 LLM 0회). 없으면 기존 random 선정.
     _pinned = None
-    try:
-        from JARVIS09_COLLECTOR import load_pinned_theme
-        _pinned = load_pinned_theme()
-        if _pinned and _pinned in available:
-            log(f"⚡ [선계산] 고정 테마 우선 사용: {_pinned}")
-    except Exception:
-        pass
+    # ★ 재시도 이어받기가 최우선 — 선계산 고정보다 앞선다 (막힌 테마를 보완해야 하므로).
+    #   고정 장치는 기존 `pick_theme(pinned=)` 하나뿐 — 새 선정 경로를 만들지 않는다(①).
+    if resume_theme:
+        _pinned = resume_theme
+        if _pinned not in available:
+            available = [_pinned] + available   # 차단분은 미발행이라 보통 남아있지만 안전망
+        log(f"🔁 [재시도] 직전 차단 테마 이어받음: {_pinned}")
+    else:
+        try:
+            from JARVIS09_COLLECTOR import load_pinned_theme
+            _pinned = load_pinned_theme()
+            if _pinned and _pinned in available:
+                log(f"⚡ [선계산] 고정 테마 우선 사용: {_pinned}")
+        except Exception:
+            pass
 
     tried: list[str] = []
     result_any_ok   = False
@@ -653,7 +675,12 @@ def run_radar_top_theme():
         try:
             os.environ["JARVIS_SOURCE_KEYWORD"] = theme
             os.environ["JARVIS_POST_TYPE"]      = "theme"
-            results = run_theme(theme)
+            # 재시도로 이어받은 테마의 첫 시도에만 직전 차단사유 주입 (보완 재작성)
+            results = run_theme(
+                theme,
+                gate_feedback=(resume_feedback if (resume_theme and theme == resume_theme
+                                                   and attempt == 0) else None),
+            )
 
             if _isd() and not any(results.values()):
                 log(f"⏸ [{theme}] 발행 연기(데몬 재시작) — 재시작 후 재시도")
@@ -906,7 +933,7 @@ def run_self_repair_then_theme():
 
 def _trigger_economic_incident(
     failed: list, error_text: str, harness_issues: list | None = None,
-    returncode: int | None = None,
+    returncode: int | None = None, keywords: dict | None = None,
 ) -> None:
     """경제 브리핑 실패 플랫폼 → GUARDIAN incident_responder 백그라운드 트리거.
 
@@ -930,9 +957,23 @@ def _trigger_economic_incident(
             _structured = "\n".join(f"  • {s}" for s in harness_issues[:10])
             error_text = f"[하네스 검증 실패 상세]\n{_structured}\n\n[로그 끝 3000자]\n{error_text}"
 
-        def _make_retry(*, post_naver=False, post_tistory=False):
+        # ★ 재시도 = *같은 주제 이어받아 보완* (사용자 박제 2026-07-25).
+        #   종전엔 주제 없이 재진입해 새 주제를 뽑았다 — 방금 발행된 키워드가 중복회피
+        #   원장(post_analysis)에 '사용됨'으로 잡혀 밀려나기 때문(네이버 반도체 발행 →
+        #   티스토리 재시도가 액화천연가스로 갈아탐). 수집 15분을 버리고, 정작 *무엇이
+        #   부족했는지* 도 함께 버려졌다. 이제 주제 + 직전 차단사유를 물려준다.
+        _kws = keywords or {}
+
+        def _resume_for(platform: str) -> dict:
+            kw = (_kws.get(platform) or "").strip()
+            fb = [s for s in (harness_issues or []) if s.startswith(f"[{platform}]")]
+            if not (kw or fb):
+                return {}
+            return {platform: {"keyword": kw, "feedback": fb}}
+
+        def _make_retry(*, post_naver=False, post_tistory=False, resume=None):
             """★ 항상 fresh import — Claude Code SDK 가 코드 수정해도 즉시 반영."""
-            _pn, _pt = post_naver, post_tistory
+            _pn, _pt, _rs = post_naver, post_tistory, resume or {}
             def _retry():
                 import importlib, sys as _sys
                 # 수정된 코드 반영: economic_poster 관련 모듈 강제 재로드
@@ -944,14 +985,14 @@ def _trigger_economic_incident(
                             pass
                 # 재로드 후 fresh import — ★ 반환값 실제 성공 여부 반영 (ERRORS [427])
                 from JARVIS02_WRITER.economic_poster import run as _fresh_run
-                return bool(_fresh_run(post_naver=_pn, post_tistory=_pt))
+                return bool(_fresh_run(post_naver=_pn, post_tistory=_pt, resume=_rs))
             return _retry
 
         _retry_fns = {}
         if "naver" in failed:
-            _retry_fns["naver"] = _make_retry(post_naver=True)
+            _retry_fns["naver"] = _make_retry(post_naver=True, resume=_resume_for("naver"))
         if "tistory" in failed:
-            _retry_fns["tistory"] = _make_retry(post_tistory=True)
+            _retry_fns["tistory"] = _make_retry(post_tistory=True, resume=_resume_for("tistory"))
         respond_in_background("economic", failed, error_text, _retry_fns, returncode=returncode)
         log(f"🛡️ GUARDIAN incident_responder 트리거됨 (harness 경로): {failed}")
     except Exception as _ie:
@@ -1084,13 +1125,17 @@ def run_economic_poster(*extra_flags):
                 _err_txt = f"returncode={result.returncode}, failed_platforms={_guardian_failed}"
             # ★ EP_RESULT_FILE 에서 하네스 이슈 구조화 데이터 추출
             _harness_issues: list[str] = []
+            _failed_keywords: dict = {}
             try:
                 _full_result = json.loads(Path(_res_path).read_text(encoding="utf-8"))
                 _harness_issues = _full_result.get("harness_issues") or []
+                # ★ 재시도 이어받기 (2026-07-25): 막힌 주제를 그대로 물려준다.
+                _failed_keywords = _full_result.get("keywords") or {}
             except Exception:
                 pass
             _trigger_economic_incident(_guardian_failed, _err_txt, harness_issues=_harness_issues,
-                                       returncode=result.returncode)
+                                       returncode=result.returncode,
+                                       keywords=_failed_keywords)
 
     except Exception as e:
         log(f"❌ {label} 예외: {e}")

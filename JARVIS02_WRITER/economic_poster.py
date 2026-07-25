@@ -359,12 +359,22 @@ def _fix_consecutive_images(blocks: list, for_tistory: bool = False) -> list:
     return result
 
 
-def run(post_naver=True, post_tistory=True):
+def run(post_naver=True, post_tistory=True, resume=None):
     """경제 브리핑 포스팅 통합 진입점.
 
     2개 플랫폼 모두 JARVIS03 트렌드 기반, 각기 다른 주제(키워드)로 발행.
     대본 생성·발행은 trend_economic_writer 에 위임.
+
+    resume: ★ GUARDIAN 재시도용 — *같은 주제를 이어받아 부족분만 보완* (사용자 박제 2026-07-25).
+        {"tistory": {"keyword": "반도체", "feedback": ["[사실성] ..."]}, "naver": {...}}
+        - keyword  → 기존 강제주제 장치(`pick_slot_candidate(force_env=)`)로 주입.
+          안 주면 재시도가 *새 주제* 로 새로 뽑는다 — 방금 발행된 키워드가 중복회피 원장
+          (post_analysis)에 '사용됨'으로 잡혀 밀려나기 때문(예: 네이버 반도체 발행 →
+          티스토리 재시도가 액화천연가스로 갈아탐). 수집 캐시도 못 쓰고 15분을 버린다.
+        - feedback → 직전 차단 사유. 재시도 *첫 시도부터* 재작성 프롬프트에 주입돼
+          하네스 안 재작성(`_{draft_key}_gate_feedback`)과 동일 경로로 보완된다.
     """
+    resume = resume or {}
     print(f"\n{'='*50}")
     print(f"  📰 경제 브리핑 포스터")
     print(f"  {TODAY_STR} ({TODAY_DOW}요일)")
@@ -393,6 +403,27 @@ def run(post_naver=True, post_tistory=True):
         _j09_market_data = _j09_market_snapshot()
     except Exception as _md_e:
         print(f"  ⚠️ 시장 수치 수집 스킵(게이트 ground truth): {_md_e}")
+
+    # ── 재시도 이어받기 (resume) — 주제 강제 + 차단사유 시드 ──────────────
+    #   주제 선정 경로를 새로 만들지 않는다 (① 단일 진입점): JARVIS03 `pick_slot_candidate`
+    #   가 이미 가진 강제주제 장치(`{force_env}_TOPIC`)에 값을 넣어 같은 주제를 되받는다.
+    from JARVIS03_RADAR.topic_pack import FORCE_ENV_PREFIX as _FORCE_ENV  # 단일 소스
+
+    def _apply_resume(platform: str) -> list:
+        """resume[platform] → 강제주제 env 설정 + 차단사유 반환 (없으면 [])."""
+        info = resume.get(platform) or {}
+        kw = (info.get("keyword") or "").strip()
+        if kw:
+            _p = _FORCE_ENV[platform]
+            os.environ[f"{_p}_TOPIC"] = kw
+            os.environ[f"{_p}_REASON"] = "GUARDIAN 재시도 — 직전 차단 주제 이어받아 보완"
+            print(f"  🔁 [{platform}] 재시도: 주제 '{kw}' 이어받음 (수집 캐시 재사용)")
+        return [str(x) for x in (info.get("feedback") or []) if x][-8:]
+
+    def _clear_resume(platform: str) -> None:
+        _p = _FORCE_ENV[platform]
+        os.environ.pop(f"{_p}_TOPIC", None)
+        os.environ.pop(f"{_p}_REASON", None)
 
     cleanup_economic_images(post_naver=post_naver, post_tistory=post_tistory)
 
@@ -810,11 +841,17 @@ def run(post_naver=True, post_tistory=True):
         #   "잔여 <10분 강등"이 harness 하드 데드라인보다 늦게 트리거되어 watchdog 이
         #   재시도·백오프 도중 강제 종료한다(경제 브리핑 티스토리 데드라인 초과 사고 원인).
         os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
-        _nv_res = run_action(
-            _nv_action,
-            input_data={"post_naver": True, "post_tistory": False,
-                        "market_data": _j09_market_data},
-        )
+        _nv_fb = _apply_resume("naver")
+        try:
+            _nv_res = run_action(
+                _nv_action,
+                input_data={"post_naver": True, "post_tistory": False,
+                            "market_data": _j09_market_data,
+                            # ★ 재시도면 직전 차단사유를 첫 시도부터 주입 (보완 재작성)
+                            "_nv_draft_gate_feedback": _nv_fb},
+            )
+        finally:
+            _clear_resume("naver")
         _results["naver"] = _nv_res
         _nv_state = _nv_res.state
         naver_ok = bool(_nv_state.get("naver_ok"))
@@ -874,15 +911,21 @@ def run(post_naver=True, post_tistory=True):
     if post_tistory and not _concurrent_blocked and not _nv_collect_failed:
         # ★ _ts_action.deadline_sec 과 동일한 SSOT 상수 (위 네이버 리셋과 동일 사유)
         os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
-        _ts_res = run_action(
-            _ts_action,
-            input_data={"post_naver": False, "post_tistory": True,
-                        "market_data": _j09_market_data,
-                        "nv_keyword_final": nv_keyword,
-                        # ★ 수집 공유 (2026-07-12): 네이버 수집 성공 결과를 ts 액션에 전달.
-                        #   _step_ts_collect 가 이 값 확인 → 동일 주제·데이터 재사용.
-                        "nv_collect_result": _nv_state.get("nv_collect_result")},
-        )
+        _ts_fb = _apply_resume("tistory")
+        try:
+            _ts_res = run_action(
+                _ts_action,
+                input_data={"post_naver": False, "post_tistory": True,
+                            "market_data": _j09_market_data,
+                            "nv_keyword_final": nv_keyword,
+                            # ★ 수집 공유 (2026-07-12): 네이버 수집 성공 결과를 ts 액션에 전달.
+                            #   _step_ts_collect 가 이 값 확인 → 동일 주제·데이터 재사용.
+                            "nv_collect_result": _nv_state.get("nv_collect_result"),
+                            # ★ 재시도면 직전 차단사유를 첫 시도부터 주입 (보완 재작성)
+                            "_ts_draft_gate_feedback": _ts_fb},
+            )
+        finally:
+            _clear_resume("tistory")
         _results["tistory"] = _ts_res
         _ts_state = _ts_res.state
         tistory_ok = bool(_ts_state.get("tistory_ok"))
@@ -1040,6 +1083,9 @@ def run(post_naver=True, post_tistory=True):
                     "tistory_deferred": bool(getattr(_ts_res, "deferred", False)),
                     "harness_issues": _harness_issues,
                     "escalation_reason": _escalation_reason,
+                    # ★ 재시도 이어받기용 (2026-07-25): 어느 주제가 막혔는지 남긴다.
+                    #   없으면 GUARDIAN 재시도가 주제를 새로 뽑아 수집부터 다시 한다.
+                    "keywords": {"naver": nv_keyword, "tistory": ts_keyword},
                 }, _rf)
         except Exception:
             pass

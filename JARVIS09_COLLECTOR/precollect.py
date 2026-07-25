@@ -78,7 +78,11 @@ def precollect_theme() -> dict:
 
 #  발행 슬롯 = (캐시 카테고리, 강제 주제 env 접두사). 플랫폼별 분기를 코드에 박지 않고
 #  이 목록에서 파생한다 (② 동적 설계 — 슬롯 추가는 한 줄).
-_ECON_SLOTS = [("naver", "JARVIS_FORCE_NV"), ("tistory", "JARVIS_FORCE")]
+def _econ_slots() -> list[tuple[str, str]]:
+    """슬롯 목록을 JARVIS03 `topic_pack.FORCE_ENV_PREFIX`(단일 소스)에서 파생.
+    종전엔 여기에 접두사를 복사해 뒀다 — 03 이 슬롯을 늘려도 09 는 몰랐다."""
+    from JARVIS03_RADAR.topic_pack import FORCE_ENV_PREFIX
+    return list(FORCE_ENV_PREFIX.items())
 
 
 def precollect_economic() -> dict:
@@ -98,7 +102,7 @@ def precollect_economic() -> dict:
         print(f"  ⚠️ [경제 선계산] 시장 수치 스킵: {e}")
 
     saved, taken = 0, ""
-    for slot, force_env in _ECON_SLOTS:
+    for slot, force_env in _econ_slots():
         try:
             from JARVIS03_RADAR.topic_pack import pick_slot_candidate as _pick
             cand = _pick(exclude_keyword=taken, force_env=force_env) or {}

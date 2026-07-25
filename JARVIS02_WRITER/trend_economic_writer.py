@@ -386,8 +386,9 @@ def ts_collect(nv_keyword: str = '', supreme_block=None, market_data: dict | Non
     try:
         # ★ 주제 선정은 자비스03 단독 (사용자 박제 2026-07-03) — 강제주제·소진복구 재빌드까지
         #   `pick_slot_candidate()` 한 곳. 02 는 "앞 슬롯이 뭘 가져갔는지" 만 알려준다.
-        from JARVIS03_RADAR.topic_pack import pick_slot_candidate as _pick_slot
-        _cand = _pick_slot(exclude_keyword=nv_keyword, force_env="JARVIS_FORCE")
+        from JARVIS03_RADAR.topic_pack import (pick_slot_candidate as _pick_slot,
+                                               FORCE_ENV_PREFIX as _FEP)
+        _cand = _pick_slot(exclude_keyword=nv_keyword, force_env=_FEP["tistory"])
         if _cand is None:
             return {"success": False, "keyword": "",
                     "error": "자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)"}
@@ -656,8 +657,9 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
     keyword = ""
     try:
         # ★ 주제 선정은 자비스03 단독 (사용자 박제 2026-07-03) — ts_collect 와 동일 단일 진입점.
-        from JARVIS03_RADAR.topic_pack import pick_slot_candidate as _pick_slot
-        _cand = _pick_slot(exclude_keyword=ts_keyword, force_env="JARVIS_FORCE_NV")
+        from JARVIS03_RADAR.topic_pack import (pick_slot_candidate as _pick_slot,
+                                               FORCE_ENV_PREFIX as _FEP)
+        _cand = _pick_slot(exclude_keyword=ts_keyword, force_env=_FEP["naver"])
         if _cand is None:
             return {"success": False, "keyword": "",
                     "error": "자비스03 주제 패키지 없음 (트렌드·적합 후보·LLM 확인)"}

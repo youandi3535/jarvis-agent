@@ -367,6 +367,12 @@ def pick_candidate(exclude_keyword: str = "") -> dict | None:
     return None
 
 
+# ★ 발행 슬롯(플랫폼) → 강제주제 env 접두사 — *단일 진실 소스* (2026-07-25).
+#   종전엔 이 매핑이 trend_economic_writer(리터럴 2곳)·JARVIS09 precollect(_ECON_SLOTS)에
+#   각자 박혀 있었다. 강제주제 장치의 주인은 아래 pick_slot_candidate 이므로 여기 한 곳.
+FORCE_ENV_PREFIX = {"naver": "JARVIS_FORCE_NV", "tistory": "JARVIS_FORCE"}
+
+
 def pick_slot_candidate(exclude_keyword: str = "", force_env: str = "") -> dict | None:
     """★ 발행 슬롯 1개용 주제 후보 — 강제 주제 > 당일 팩 > 소진 복구 재빌드 (박제 2026-07-23).
 

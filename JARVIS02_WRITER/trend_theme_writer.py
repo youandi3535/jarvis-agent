@@ -368,7 +368,7 @@ def _layer3_verify_draft(draft: dict, platform: str) -> list[str]:
     return issues
 
 
-def run_all_themes(theme: str, sector: str = "") -> dict:
+def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = None) -> dict:
     """테마 1개 → 2개 플랫폼 발행 — 하네스 5-Layer 검증 적용 (ADR 009).
 
     Layer 0: preflight (데몬 부팅 시 완료)
@@ -860,7 +860,13 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
     #   watchdog 이 재시도·백오프 도중 강제 종료한다.
     os.environ["JARVIS_LLM_DEADLINE_TS"] = str(_tm_act.time() + BLOG_ACTION_DEADLINE_SEC)
     # ① 네이버 액션 (공유 수집 포함) — 완전 종결까지
-    _nv_result = run_action(_nv_action_def, {"theme": theme, "sector": sector})
+    #   ★ gate_feedback: GUARDIAN 재시도가 물려준 직전 차단사유 — 첫 시도부터 보완 재작성
+    #     (경제 economic_poster.run(resume=) 과 동일 규약. ③ 모든 글 적용)
+    _gfb = gate_feedback or {}
+    _nv_result = run_action(_nv_action_def, {
+        "theme": theme, "sector": sector,
+        "_nv_draft_gate_feedback": list(_gfb.get("naver") or []),
+    })
     _nv_st = _nv_result.state
     _nv_res = _nv_st.get("nv_pub_result", {"success": False, "url": "", "keyword": theme})
     # ★ 리뷰 확정 수정 (2026-07-03): data_empty 는 *수집이 실행되어 비었을 때만* —
@@ -896,6 +902,7 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
             "collection_docs": _nv_st.get("collection_docs") or [],
             "evidence_pack": _nv_st.get("evidence_pack"),
             "supreme_block": _nv_st.get("supreme_block"),
+            "_ts_draft_gate_feedback": list(_gfb.get("tistory") or []),
         })
         _ts_st = _ts_result.state
         _ts_res = _ts_st.get("ts_pub_result", {"success": False, "url": "", "keyword": theme})
@@ -910,8 +917,21 @@ def run_all_themes(theme: str, sector: str = "") -> dict:
                 _tg(f"❌ [THEME] 티스토리 발행 최종 실패\n테마: {theme}\n사유: {_reason}")
 
     _mark_pub(False)  # ★ 테마 발행 완료 — background alias 강등 해제
+
+    # ★ 차단사유를 밖으로 (2026-07-25): GUARDIAN 재시도가 *무엇이 부족했는지* 를 물려받아
+    #   같은 테마로 보완 재작성할 수 있게 한다. 경제 EP_RESULT_FILE["harness_issues"] 와 동일 규약.
+    def _issues_of(res) -> list:
+        out = []
+        for _hist in (getattr(res, "issues_history", None) or []):
+            for _iss in _hist:
+                out.append(f"{getattr(_iss,'step','?')}: {getattr(_iss,'kind','?')}: "
+                           f"{getattr(_iss,'detail','?')[:120]}")
+        return out[-8:]
+
     return {"theme": theme, "tistory": _ts_res, "naver": _nv_res, "data_empty": _data_empty,
-            "tistory_deferred": _ts_deferred}
+            "tistory_deferred": _ts_deferred,
+            "issues": {"naver": _issues_of(_nv_result),
+                       "tistory": _issues_of(_ts_result) if _stocks_ok else []}}
 
 
 __all__ = [
