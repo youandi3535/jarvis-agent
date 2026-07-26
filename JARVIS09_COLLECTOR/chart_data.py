@@ -1057,6 +1057,65 @@ def _doc_title_relevant(title: str, ref_tokens: set) -> bool:
     return any((len(rt) >= 3 and rt in title) or (rt in toks) for rt in ref_tokens)
 
 
+# ── 관련성 게이트 임베딩 선판정 (2026-07-26) ────────────────────────────────
+#   실측 보정(주제 4종 × 표 19개): 관련 최소 0.618 / 무관 최대 0.555.
+#   갈리긴 하지만 여유가 +0.063 뿐이라 **확실한 구간만** 임베딩이 결정하고 중간은 LLM 에 넘긴다.
+#   임계값은 손으로 박은 값이 아니라 위 보정에서 나온 값 — 무배포 조정 가능.
+def _gate_hi() -> float:
+    import os
+    try:
+        return float(os.getenv("CHART_GATE_HI", "") or 0.70)
+    except Exception:                                   # noqa: BLE001
+        return 0.70
+
+
+def _gate_lo() -> float:
+    import os
+    try:
+        return float(os.getenv("CHART_GATE_LO", "") or 0.45)
+    except Exception:                                   # noqa: BLE001
+        return 0.45
+
+
+def _embed_gate_enabled() -> bool:
+    """임베딩 선판정 사용 여부 — 킬스위치 `CHART_GATE_EMBED=0`."""
+    import os
+    if (os.getenv("CHART_GATE_EMBED", "1") or "1") == "0":
+        return False
+    try:
+        from shared.embeddings import available
+        return bool(available())
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+def _embed_prefilter(theme: str, description: str, datasets: list) -> tuple:
+    """주제↔표제목 코사인 유사도로 3분류. Returns `(확정유지, 애매, 확정제외)`.
+
+    ★ fail-safe: 어떤 이유로든 실패하면 **전부 '애매'** 로 돌려보낸다 = 종전대로 LLM 이
+      전량 판정한다. 절감 장치가 판정 품질을 떨어뜨리는 일은 없어야 한다.
+    """
+    try:
+        from shared.embeddings import embed_texts, cosine_sim
+        q = (theme or "").strip() + ((" " + description.strip()) if description else "")
+        texts = [q] + [str(d.get("title") or "") for d in datasets]
+        vecs = embed_texts(texts)
+        # ★ `if not vecs` 로 쓰지 말 것 — `embed_texts` 는 **numpy ndarray** 를 돌려주고,
+        #   다원소 배열의 진리값은 ValueError 다. 초판이 그 예외를 fail-safe 로 삼켜
+        #   *임베딩이 한 건도 판정하지 못한 채* 전량 LLM 으로 가고 있었다(실측으로 발견).
+        if vecs is None or len(vecs) != len(texts):
+            return [], list(datasets), []
+        base, hi, lo = vecs[0], _gate_hi(), _gate_lo()
+        keep, mid, drop = [], [], []
+        for d, v in zip(datasets, vecs[1:]):
+            s = float(cosine_sim(base, v))
+            (keep if s >= hi else drop if s <= lo else mid).append(d)
+        return keep, mid, drop
+    except Exception as e:                              # noqa: BLE001
+        log.debug(f"[chart_data] 임베딩 선판정 실패 — 전량 LLM 판정으로 폴백: {e}")
+        return [], list(datasets), []
+
+
 def _relevance_filter(theme: str, description: str, datasets: list) -> list:
     """★ 의미 기반 관련성 게이트 (사용자 박제 2026-07-01): 주제와 *직접* 관련된 dataset만 남김.
     농촌관광·식품소비행태처럼 다른 주제를 다루며 주제를 스쳐 언급할 뿐인 표를 제거.
@@ -1065,7 +1124,28 @@ def _relevance_filter(theme: str, description: str, datasets: list) -> list:
     최종 실패 시에만 결정론 백스톱(주제 핵심 토큰 미포함 표 제거)."""
     if len(datasets) <= 1:
         return datasets
-    listing = "\n".join(f"{i}. {d.get('title', '')}" for i, d in enumerate(datasets))
+
+    # ── ★ 임베딩 선판정 (2026-07-26 — LLM 호출 절감, 사용자 승인) ─────────────
+    #   "이 표가 이 주제를 다루는가" 는 **코사인 유사도가 하는 일 그 자체** 다.
+    #   `shared/embeddings`(로컬 MiniLM, 무료·CPU)가 이미 단일 진입점으로 있으므로 재사용.
+    #   ★ 순수 임계값이 아니라 **하이브리드** 인 이유(실측 보정):
+    #     관련 최소 0.618 / 무관 최대 0.555 — 갈리긴 하지만 여유가 +0.063 뿐이다.
+    #     그래서 확실한 것만 임베딩이 결정하고, **중간 밴드는 종전대로 LLM 에 넘긴다**.
+    #     판정 품질은 유지되고, LLM 이 보는 목록만 줄어든다(전부 확실하면 LLM 0회).
+    #   무배포 조정: `CHART_GATE_EMBED=0`(끄기) / `CHART_GATE_HI` / `CHART_GATE_LO`
+    _pre_keep, _borderline = [], list(datasets)
+    if _embed_gate_enabled() and len(datasets) > 1:
+        _pre_keep, _borderline, _pre_drop = _embed_prefilter(theme, description, datasets)
+        if not _borderline:
+            log.info(f"[chart_data] 관련성 게이트(임베딩 단독): {len(datasets)}→{len(_pre_keep)} "
+                     f"— LLM 0회")
+            return _pre_keep or datasets
+        if _pre_keep or _pre_drop:
+            log.info(f"[chart_data] 관련성 게이트 임베딩 선판정: 확정유지 {len(_pre_keep)} / "
+                     f"확정제외 {len(_pre_drop)} / LLM 판정 {len(_borderline)}")
+
+    _llm_targets = _borderline
+    listing = "\n".join(f"{i}. {d.get('title', '')}" for i, d in enumerate(_llm_targets))
     prompt = (
         f'블로그 글 주제: "{theme}"' + (f" — {description}" if description else "") + "\n\n"
         f'아래 데이터 표 목록 중, "{theme}" 자체를 다루는 표의 번호만 고르세요.\n'
@@ -1092,7 +1172,9 @@ def _relevance_filter(theme: str, description: str, datasets: list) -> list:
             if not isinstance(keep, list):
                 continue
             idx = {int(i) for i in keep if isinstance(i, int) or str(i).strip().isdigit()}
-            filtered = [d for i, d in enumerate(datasets) if i in idx]
+            # ★ 번호는 *LLM 이 본 목록*(`_llm_targets`) 기준이다 — 임베딩이 확정한 것은
+            #   목록에서 빠졌으므로 원본 `datasets` 로 인덱싱하면 엉뚱한 표가 남는다.
+            filtered = _pre_keep + [d for i, d in enumerate(_llm_targets) if i in idx]
             if filtered:
                 if len(filtered) < len(datasets):
                     log.info(f"[chart_data] 관련성 게이트: {len(datasets)}→{len(filtered)}개 "

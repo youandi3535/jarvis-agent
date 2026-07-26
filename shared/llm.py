@@ -666,6 +666,15 @@ def _max_retries() -> int:
 # ★ 동적: 경로를 박지 않고 DB 경로에서 도출. 킬스위치 LLM_ISOLATE_CWD=0.
 _ISOLATE_CWD = (os.getenv("LLM_ISOLATE_CWD", "1") or "1") != "0"
 
+# ── SDK 프리픽스 축소 2종 (2026-07-26, A/B 검증 후 적용) ────────────────────
+#   `_ISOLATE_CWD` 가 CLAUDE.md 자동 로드(48,940 토큰)를 걷어낸 뒤에도, 그 아래
+#   **Claude Code CLI 자체의 시스템 프롬프트 + 도구/MCP 스키마** 가 그대로 남아 있었다.
+#   같은 병의 2차 발현 — 실측 호출당 31,468 토큰 중 31,241 이 우리 프롬프트가 아니었다.
+#   두 노브를 분리해 둔 이유: 성격이 다르다. SPLIT_SYSTEM 은 *자리 이동*(내용 불변,
+#   위험 0), TEXT_NO_TOOLS 는 *기능 차단*(A/B 로 품질 확인 후 적용).
+_SPLIT_SYSTEM   = (os.getenv("LLM_SPLIT_SYSTEM", "1") or "1") != "0"
+_TEXT_NO_TOOLS  = (os.getenv("LLM_TEXT_NO_TOOLS", "1") or "1") != "0"
+
 
 def _llm_scratch_dir() -> str | None:
     """CLAUDE.md 가 없는 전용 cwd. 실패하면 None(종전 동작)."""
@@ -919,13 +928,45 @@ def _run_sdk_sync(
     from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
     from claude_code_sdk._errors import MessageParseError, ProcessError
 
-    full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
-    full_prompt = _sanitize_prompt(full_prompt)   # ★ embedded null byte 크래시 차단
     # ★ cwd 격리 — 저장소 밖 전용 폴더. CLAUDE.md 자동 로드(48,940 토큰/호출) 차단.
     _opts_kw: dict = {"model": model, "env": dict(_SDK_BASE_ENV)}
     _scratch = _llm_scratch_dir()
     if _scratch:
         _opts_kw["cwd"] = _scratch
+
+    # ── ② system 은 *system 자리* 로 (2026-07-26, 실측 −27%) ──────────────────
+    #   종전엔 `f"{system}\n\n{prompt}"` 로 **사용자 메시지에 병합** 했다. 그러면 매 호출
+    #   불변인 블록(헌법·루브릭·역할)이 프롬프트와 한 덩어리가 되어, 프롬프트가 한 글자만
+    #   달라도 캐시 블록 전체가 무효화된다 — `writer` 의 캐시 재사용이 **1.0x**(쓰기 2.27M ≈
+    #   읽기 2.17M)였던 이유다. 캐시 쓰기는 입력의 1.25배라 *캐싱이 절감이 아니라 순손실*.
+    #   ★ 내용은 한 글자도 바뀌지 않는다 — **자리만 옮긴다**. 그래서 품질 위험이 없다.
+    #   ★ ReAct 경로 보존: `router.py` 는 도구 스키마를 `system` 에 주입한 뒤 응답 텍스트에서
+    #     tool_calls 를 파싱한다. 호출자의 `system` 을 *그대로* 넘기므로 그 규약이 유지된다.
+    #     (호출자 system 을 다른 것으로 *대체* 하면 tool_calls 가 조용히 사라진다 — 금지.)
+    #   무배포 되돌리기: `LLM_SPLIT_SYSTEM=0`
+    full_prompt = prompt
+    if system:
+        if _SPLIT_SYSTEM:
+            _opts_kw["system_prompt"] = system
+        else:
+            full_prompt = f"{system}\n\n{prompt}".strip()
+    full_prompt = _sanitize_prompt(full_prompt)   # ★ embedded null byte 크래시 차단
+
+    # ── ① 도구 정의 제거 (2026-07-26, 실측 31,468 → 227 토큰/호출) ──────────────
+    #   ★ 근거 — 이 함수는 응답에서 **`TextBlock` 만 수집** 한다. 즉 모델이 도구를 써도
+    #     그 결과는 *버려진다*. 그런데 도구 왕복(멀티턴)은 호출의 11% 인데 토큰의 **36%**
+    #     (12.0M/33.2M)를 먹는다. 쓰지도 않는 기능에 토큰 1/3 을 태우고 있었다.
+    #   ★ 와일드카드인 이유(② 동적 설계): 이름 목록을 박으면 **MCP 도구를 놓친다**.
+    #     실측 — 명시 목록 11종은 13,914 토큰까지만 줄었고(사용자 커넥터 Notion·Drive 스키마가
+    #     남았다), `["*"]` 는 227 까지 내려갔다. 목록을 유지보수할 필요도 없다.
+    #   ★ 부수 효과(보안): 데몬 LLM 세션이 사용자 전역 MCP 커넥터를 상속해 실제로
+    #     Notion·Google Drive 를 검색한 기록이 트랜스크립트에 있었다. 이 차단이 그것도 닫는다.
+    #   ★ 적용 범위: **이 함수(invoke_text 경로)만**. 도구가 *필요한* 두 경로는 건드리지 않는다
+    #     — `_invoke_sdk_vision`(이미지 Read 필수) · `run_sdk_query`(auto_repair 자가수정).
+    #   무배포 되돌리기: `LLM_TEXT_NO_TOOLS=0`
+    if _TEXT_NO_TOOLS:
+        _opts_kw["disallowed_tools"] = ["*"]
+
     options = ClaudeCodeOptions(**_opts_kw)
     parts: list[str] = []
     throttled = {"v": False}
