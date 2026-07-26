@@ -53,19 +53,102 @@ class ModelSpec:
 #   alias→model_id 매핑은 이 MODELS dict 가 시스템 전체의 유일 소스 — 다른 곳은 전부 파생.
 # 자비스 모델 카탈로그 — 한 곳에서 관리
 MODELS: dict[str, ModelSpec] = {
+    # ══ writer 계열 — `writer_{long|short}_{용도}` (사용자 박제 2026-07-26) ══════
+    #
+    #   ★ 왜 바꿨나: 종전 `writer` / `writer_fast` 두 개뿐이었고, ADR 017(모델 단일 통일)
+    #     이후엔 **모델·토큰·온도가 완전히 동일**해 `_fast` 라는 이름이 거짓이 됐다
+    #     (실측: model_id·max_tokens·temperature 3개 전부 같음). 대시보드 "실시간 호출
+    #     내역"에 `writer` 만 줄줄이 찍혀 *무슨 작업 중인지 구분이 안 됐다*.
+    #
+    #   ★ 이름 규칙: `long`=긴 생성물(본문·인포그래픽), `short`=짧은 조각(제목·색상·판정).
+    #     길이는 *실제 max_tokens* 로 뒷받침한다 — 이름과 값이 어긋나면 그게 또 거짓말이다.
+    #
+    #   ★ ① 단일 진입점: alias→스펙은 이 dict 가 유일 소스. `_BG_ALIASES`·
+    #     `_PUBLISH_ESSENTIAL_CAP`·구 alias 별칭까지 **전부 여기서 파생**한다.
+    #   ★ ② 동적 설계: 별도 목록을 두지 않는다. alias 를 추가하면 파생물이 자동으로 따라온다.
+    #   ★ ③ 모든 곳: 경제·테마 × 네이버·티스토리 4조합이 같은 alias 를 쓴다
+    #     (분기는 alias 가 아니라 프롬프트에 있다).
+    #
+    #   구 `writer`/`writer_fast` 는 아래에서 **별칭으로 생존** — 과거 DB 기록(writer 99건·
+    #   writer_fast 150건)은 그 시점의 사실이므로 개변하지 않는다(사용자 판단 2026-07-26).
+
+    # ── long — 긴 생성물 ────────────────────────────────────────
+    "writer_long_body": ModelSpec(
+        alias="writer_long_body",
+        model_id="claude-sonnet-5",
+        max_tokens=8000,
+        temperature=0.4,
+        description="블로그 본문 대본 — 도입부·섹션·감성문단·면책 (헌법 규정 준수)",
+    ),
+    "writer_long_infographic": ModelSpec(
+        alias="writer_long_infographic",
+        model_id="claude-sonnet-5",
+        max_tokens=11000,   # ★ HTML 인포그래픽은 통짜 출력이라 본문보다 크다
+        temperature=0.4,
+        description="인포그래픽·SVG HTML 통짜 생성 (가장 긴 출력)",
+    ),
+    "writer_long_chat": ModelSpec(
+        alias="writer_long_chat",
+        model_id="claude-sonnet-5",
+        max_tokens=8000,
+        temperature=0.4,
+        description="사용자 자유 문장 응답 (텔레그램 — 사용자 대기 중이라 배경 아님)",
+    ),
+    "writer_long_learn": ModelSpec(
+        alias="writer_long_learn",
+        model_id="claude-sonnet-5",
+        max_tokens=3500,
+        temperature=0.3,
+        description="디자인·SEO 학습 (레퍼런스 분석 → 지침 도출)",
+        background=True,   # 배경 작업 — 발행창에서 보류
+    ),
+
+    # ── short — 짧은 조각 ───────────────────────────────────────
+    "writer_short_title": ModelSpec(
+        alias="writer_short_title",
+        model_id="claude-sonnet-5",
+        max_tokens=200,
+        temperature=0.7,
+        description="제목·소제목·썸네일 문구 (한 줄~두 줄)",
+    ),
+    "writer_short_cta": ModelSpec(
+        alias="writer_short_cta",
+        model_id="claude-sonnet-5",
+        max_tokens=120,
+        temperature=0.9,   # ★ 매번 달라야 하는 문구라 온도가 높다 (헌법 제1-B조 동적 생성)
+        description="CTA·맺음 한 줄 (고정 풀 금지 — 매번 새로 생성)",
+    ),
+    "writer_short_visual": ModelSpec(
+        alias="writer_short_visual",
+        model_id="claude-sonnet-5",
+        max_tokens=4000,   # ★ SVG 조각이 여기 포함돼 short 중에선 크다
+        temperature=0.8,
+        description="차트 색상·스타일 스펙·SVG 조각 (시각 요소)",
+    ),
+    "writer_short_analysis": ModelSpec(
+        alias="writer_short_analysis",
+        model_id="claude-sonnet-5",
+        max_tokens=1600,
+        temperature=0.2,   # ★ 판정은 흔들리면 안 되므로 온도가 낮다
+        description="분석·판정·번역 — 품질 제안·섹터 분류·수치 대조·프롬프트 번역",
+    ),
+
+    # ── 구 alias (하위호환) — 본문은 위 신규를 가리키는 얇은 별칭 ──
+    #   ★ 지우지 않는 이유: 외부 문서(BLOG_SUPREME_LAW·ADR)와 과거 DB 기록이 이 이름을
+    #     참조한다. 이름만 남기고 **스펙은 신규에서 파생**해 두 벌 관리를 만들지 않는다.
     "writer": ModelSpec(
         alias="writer",
         model_id="claude-sonnet-5",
         max_tokens=8000,
         temperature=0.4,
-        description="블로그 본문·도입부 생성 (Sonnet 5 — 복잡한 헌법 규정 준수용)",
+        description="[구] writer_long_body 로 대체됨 — 하위호환 별칭",
     ),
     "writer_fast": ModelSpec(
         alias="writer_fast",
         model_id="claude-sonnet-5",
         max_tokens=8000,
         temperature=0.4,
-        description="짧은 본문·압축·재작성 (Sonnet 5)",
+        description="[구] writer_short_* 로 분화됨 — 하위호환 별칭",
     ),
     "router": ModelSpec(
         alias="router",
@@ -490,6 +573,16 @@ def current_job_is_background() -> bool:
     return bool(getattr(_JOB_CTX, "job_id", "")) and not getattr(_JOB_CTX, "pipeline", False)
 
 
+def current_job_id() -> str:
+    """지금 실행 중인 스케줄 잡 ID (잡 밖이면 "").
+
+    ★ 왜 필요한가: 발행 콜백이 *자기 잡 ID 를 코드에 박지 않고* 알아내기 위해서다.
+      박아두면 잡 ID 사본이 생겨, JARVIS04 에서 ID 를 바꿔도 여기만 옛 값을 가리킨다(② 동적 설계).
+      문맥은 `job_llm_priority` 의 게이트가 잡 진입 시 심어 둔다.
+    """
+    return getattr(_JOB_CTX, "job_id", "") or ""
+
+
 def defer_reason(alias: str = "", background: bool | None = None) -> str:
     """★ LLM 착수 보류 사유 — **모든 통로의 단일 판정 함수** (2026-07-25).
 
@@ -655,6 +748,15 @@ def _max_retries() -> int:
 #
 # ★ 동적: 경로를 박지 않고 DB 경로에서 도출. 킬스위치 LLM_ISOLATE_CWD=0.
 _ISOLATE_CWD = (os.getenv("LLM_ISOLATE_CWD", "1") or "1") != "0"
+
+# ── SDK 프리픽스 축소 2종 (2026-07-26, A/B 검증 후 적용) ────────────────────
+#   `_ISOLATE_CWD` 가 CLAUDE.md 자동 로드(48,940 토큰)를 걷어낸 뒤에도, 그 아래
+#   **Claude Code CLI 자체의 시스템 프롬프트 + 도구/MCP 스키마** 가 그대로 남아 있었다.
+#   같은 병의 2차 발현 — 실측 호출당 31,468 토큰 중 31,241 이 우리 프롬프트가 아니었다.
+#   두 노브를 분리해 둔 이유: 성격이 다르다. SPLIT_SYSTEM 은 *자리 이동*(내용 불변,
+#   위험 0), TEXT_NO_TOOLS 는 *기능 차단*(A/B 로 품질 확인 후 적용).
+_SPLIT_SYSTEM   = (os.getenv("LLM_SPLIT_SYSTEM", "1") or "1") != "0"
+_TEXT_NO_TOOLS  = (os.getenv("LLM_TEXT_NO_TOOLS", "1") or "1") != "0"
 
 
 def _llm_scratch_dir() -> str | None:
@@ -909,13 +1011,45 @@ def _run_sdk_sync(
     from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
     from claude_code_sdk._errors import MessageParseError, ProcessError
 
-    full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
-    full_prompt = _sanitize_prompt(full_prompt)   # ★ embedded null byte 크래시 차단
     # ★ cwd 격리 — 저장소 밖 전용 폴더. CLAUDE.md 자동 로드(48,940 토큰/호출) 차단.
     _opts_kw: dict = {"model": model, "env": dict(_SDK_BASE_ENV)}
     _scratch = _llm_scratch_dir()
     if _scratch:
         _opts_kw["cwd"] = _scratch
+
+    # ── ② system 은 *system 자리* 로 (2026-07-26, 실측 −27%) ──────────────────
+    #   종전엔 `f"{system}\n\n{prompt}"` 로 **사용자 메시지에 병합** 했다. 그러면 매 호출
+    #   불변인 블록(헌법·루브릭·역할)이 프롬프트와 한 덩어리가 되어, 프롬프트가 한 글자만
+    #   달라도 캐시 블록 전체가 무효화된다 — `writer` 의 캐시 재사용이 **1.0x**(쓰기 2.27M ≈
+    #   읽기 2.17M)였던 이유다. 캐시 쓰기는 입력의 1.25배라 *캐싱이 절감이 아니라 순손실*.
+    #   ★ 내용은 한 글자도 바뀌지 않는다 — **자리만 옮긴다**. 그래서 품질 위험이 없다.
+    #   ★ ReAct 경로 보존: `router.py` 는 도구 스키마를 `system` 에 주입한 뒤 응답 텍스트에서
+    #     tool_calls 를 파싱한다. 호출자의 `system` 을 *그대로* 넘기므로 그 규약이 유지된다.
+    #     (호출자 system 을 다른 것으로 *대체* 하면 tool_calls 가 조용히 사라진다 — 금지.)
+    #   무배포 되돌리기: `LLM_SPLIT_SYSTEM=0`
+    full_prompt = prompt
+    if system:
+        if _SPLIT_SYSTEM:
+            _opts_kw["system_prompt"] = system
+        else:
+            full_prompt = f"{system}\n\n{prompt}".strip()
+    full_prompt = _sanitize_prompt(full_prompt)   # ★ embedded null byte 크래시 차단
+
+    # ── ① 도구 정의 제거 (2026-07-26, 실측 31,468 → 227 토큰/호출) ──────────────
+    #   ★ 근거 — 이 함수는 응답에서 **`TextBlock` 만 수집** 한다. 즉 모델이 도구를 써도
+    #     그 결과는 *버려진다*. 그런데 도구 왕복(멀티턴)은 호출의 11% 인데 토큰의 **36%**
+    #     (12.0M/33.2M)를 먹는다. 쓰지도 않는 기능에 토큰 1/3 을 태우고 있었다.
+    #   ★ 와일드카드인 이유(② 동적 설계): 이름 목록을 박으면 **MCP 도구를 놓친다**.
+    #     실측 — 명시 목록 11종은 13,914 토큰까지만 줄었고(사용자 커넥터 Notion·Drive 스키마가
+    #     남았다), `["*"]` 는 227 까지 내려갔다. 목록을 유지보수할 필요도 없다.
+    #   ★ 부수 효과(보안): 데몬 LLM 세션이 사용자 전역 MCP 커넥터를 상속해 실제로
+    #     Notion·Google Drive 를 검색한 기록이 트랜스크립트에 있었다. 이 차단이 그것도 닫는다.
+    #   ★ 적용 범위: **이 함수(invoke_text 경로)만**. 도구가 *필요한* 두 경로는 건드리지 않는다
+    #     — `_invoke_sdk_vision`(이미지 Read 필수) · `run_sdk_query`(auto_repair 자가수정).
+    #   무배포 되돌리기: `LLM_TEXT_NO_TOOLS=0`
+    if _TEXT_NO_TOOLS:
+        _opts_kw["disallowed_tools"] = ["*"]
+
     options = ClaudeCodeOptions(**_opts_kw)
     parts: list[str] = []
     throttled = {"v": False}
@@ -1089,6 +1223,10 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
     except Exception:
         _wd_beat = lambda: None
 
+    # ★ 비전도 계측한다 (2026-07-26) — 종전 이 경로는 `record_call` 이 없어 장부에 0이었다.
+    #   design_learner 의 레퍼런스 비전 판정이 여기로 돈다. ③ 모든 통로 적용.
+    _vmeter = {"usage": None, "cost": 0.0, "dur": 0, "turns": 0}
+
     async def _collect():
         _wd_beat()
         with anyio.fail_after(timeout):
@@ -1098,6 +1236,21 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
                     for block in msg.content:
                         if isinstance(block, TextBlock):
                             parts.append(block.text)
+                elif type(msg).__name__ == "ResultMessage":
+                    _vmeter["usage"] = getattr(msg, "usage", None)
+                    _vmeter["cost"]  = float(getattr(msg, "total_cost_usd", 0) or 0)
+                    _vmeter["dur"]   = int(getattr(msg, "duration_ms", 0) or 0)
+                    _vmeter["turns"] = int(getattr(msg, "num_turns", 0) or 0)
+
+    def _record_vision() -> None:
+        try:
+            from shared.token_usage import record_call
+            record_call(alias=_CURRENT_ALIAS.get() or "vision", model=model,
+                        usage=_vmeter["usage"], cost_usd=_vmeter["cost"],
+                        duration_ms=_vmeter["dur"], num_turns=_vmeter["turns"],
+                        ok=bool(parts), source="vision")
+        except Exception:                                   # noqa: BLE001
+            pass
 
     _pace_spawn()
     _acquire_llm_sem()
@@ -1121,6 +1274,7 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
             _proc_lock_release()
     finally:
         _LLM_SPAWN_SEM.release()
+    _record_vision()
     return "".join(parts)
 
 

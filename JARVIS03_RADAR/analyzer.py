@@ -300,7 +300,7 @@ def _classify_with_llm(keywords: list[str], context: list[str] | None = None) ->
         try:
             temp = 0.0 if attempt == 0 else 0.3
             raw = _inv(
-                "writer_fast", prompt,
+                "writer_short_analysis", prompt,
                 system=_persona("jarvis03_radar"),
                 max_tokens=512,
                 temperature=temp,
@@ -755,7 +755,7 @@ def generate_content_angles(recs: list[dict], autocomplete: dict[str, list[str]]
 - 경쟁사공백 정보가 있으면 그 빈 틈을 파고드는 제목 우선"""
 
         from shared.personas import get as _persona
-        raw = _inv_ca("writer_fast", prompt,
+        raw = _inv_ca("writer_short_analysis", prompt,
                       system=_persona("jarvis03_radar"), max_tokens=1024)
         raw = (raw or "").strip()
         m   = re.search(r"\[.*\]", raw, re.DOTALL)

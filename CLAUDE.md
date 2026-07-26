@@ -118,7 +118,7 @@ CLAUDE.md 는 *현재 적용 규칙* 만 박제한다. *왜 이 규칙인지* �
 python shared/agent_registration_check.py    # 모든 폴더 4 항목 검증
 ```
 
-GUARDIAN 이 발행 직전엔 Tier-1 자체수리 sweep(LLM-0), 매일 새벽 04:30 `job_deep_audit` 로 전체 코드 점검·수정 (backlog Tier-2 + 광범위 감사) + 누락 시 보강 안내. 데몬도 다중 `_agent.py` 지원 (한 폴더에 여러 agent 파일 OK — 예: JARVIS07 의 eval + guardian).
+GUARDIAN 이 발행 직전엔 Tier-1 자체수리 sweep(LLM-0), **토요일 새벽 03:00** `job_deep_audit` 로 전체 코드 점검·수정 (★ 토큰 절감 — 사용자 박제 2026-07-26) (backlog Tier-2 + 광범위 감사) + 누락 시 보강 안내. 데몬도 다중 `_agent.py` 지원 (한 폴더에 여러 agent 파일 OK — 예: JARVIS07 의 eval + guardian).
 
 ## 자동 검증 — `shared/precommit_check.py`
 
@@ -164,7 +164,7 @@ pkill -f jarvis_daemon.py        # 전체 종료
 | `JARVIS02_WRITER/scheduler.py` | JARVIS02 작업 로직 전체 | importlib 로드 → schedule_mode() 스레드 |
 | `JARVIS03_RADAR/approval_bot.py` | 인라인 버튼 콜백 처리 | _handle_callback() 만 import |
 | `JARVIS03_RADAR/post_quality_analyzer.py` | 발행 글 품질 분석 → 개선 제안 → 승인 시 학습(다음 글 반영). ★ '이 글 재발행'은 폐지(fd87275) — 학습만 | subprocess Popen |
-| `JARVIS07_GUARDIAN/auto_repair.py` | 전체 코드 검토·수정 (새벽 04:30 `job_deep_audit`, Sonnet 5) | claude-code-sdk query |
+| `JARVIS07_GUARDIAN/auto_repair.py` | 전체 코드 검토·수정 (토 03:00 `j07_deep_audit`, Sonnet 5) | claude-code-sdk query |
 
 ## 공유 자원 (신경계)
 
@@ -747,7 +747,7 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
 | 컴포넌트 | 책임 | 주기 |
 |---------|------|------|
 | `pattern_fixer` (Tier-1 sweep) | 발행 전 미해결 오류 LLM-0 소급 수리 *만* | 발행 직전 (07:00·21:00 callback) |
-| `auto_repair` + backlog Tier-2 | 광범위 코드 감사 + backlog 진단·수정 | 새벽 04:30 `job_deep_audit` (★ 사용자 박제 2026-06-28 — 발행과 분리) |
+| `auto_repair` + backlog Tier-2 | 광범위 코드 감사 + backlog 진단·수정 | **토 03:00** `j07_deep_audit` (발행과 분리 2026-06-28 / 주 1회로 축소 2026-07-26) |
 | `eval_agent` ★ | 수정 결과 평가 + learned_patterns 등록 *게이트* | 수정마다 즉시 |
 | `auditor` ★ | 헌법 위반·드리프트 검출 + Refine Rules 제안 | 주 1회 (일 04:30) |
 
@@ -759,7 +759,13 @@ ADR 007 [Self-Evolving Harness 비전](docs/decisions/007-self-evolving-harness.
 - **발행 전 (LLM-0)**: `guardian_agent.self_heal_known_errors()` — 미해결 오류(`new`·`wontfix`) 중 학습 패턴·정적 fixer·Bandit 로 *즉시 고칠 수 있는 것만* 소급 수리. *외부 LLM 호출 0*. 못 고치면 새벽 심층 감사로 위임.
   - Callback: `JARVIS02_WRITER.scheduler.run_self_repair_then_economic` / `run_self_repair_then_theme` → `_run_self_repair_phase` 안에서 호출.
   - 흐름: ① 쿠키 점검 → 실패 시 발행 건너뜀 ② Tier-1 sweep (수초) → ③ 코드 변경 시 "데몬 재시작 권장" TG 알림 → ④ 발행 진입
-- **새벽 04:30 심층 감사 (LLM)**: `guardian_agent.job_deep_audit` (DEFAULT_JOBS `j07_deep_audit`). 발행과 분리 → 발행 지연 0.
+- **★ 심층 감사 (LLM) — 토요일 03:00 주 1회** (사용자 박제 2026-07-26, 종전 매일): `guardian_agent.job_deep_audit`
+  (DEFAULT_JOBS `j07_deep_audit`). 발행과 분리 → 발행 지연 0.
+  · **왜 주 1회로 줄였나**: 이 잡이 `guardian` alias 토큰 소비의 *전량*(7일 3.41M, 단건 최대 439K·10턴).
+    도구를 들고 저장소를 훑는 무거운 세션이라 호출 1건이 크다.
+  · **늦어지지 않는 것**: 신규 오류 자동수정. `j07_retry_pending`(10분)이 `status='new'` 를 계속
+    `_orchestrate`(Tier1→Tier2, 상한 `MAX_LLM_ATTEMPTS`)로 돌린다. 발행 직전 LLM-0 sweep 도 그대로.
+  · **늦어지는 것**: ① 광범위 코드 감사(아직 안 난 문제 발굴) ② backlog 재처리 ③ 격리버킷 보고.
   - ① `deep_audit_backlog()` — 미해결 오류 Tier 1 → Tier 2(LLM). ★ Tier 2 도 `apply_fix` 경유 *실제 오류 지문* 으로 학습 (AutoRepairFix 합성 지문 아님) → 다음 sweep 이 재사용 → 밴딧 학습 (복리 루프).
   - ② `auto_repair.run_auto_repair()` — 광범위 코드 감사 (새 잠재 버그 발굴·수정).
 - **즉시 반영 vs 데몬 재시작**: 코드 수정은 Python import 캐시 때문에 *현재 데몬 프로세스 무효* → 다음 데몬 재시작 후 발효.

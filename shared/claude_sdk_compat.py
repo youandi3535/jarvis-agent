@@ -198,6 +198,29 @@ def patch_effective() -> bool | None:
 # ── 동기 query wrapper — 모든 호출자 단일 진입점 ────────────────────────
 
 
+def _record_sdk_usage(meter: dict, ok: bool) -> None:
+    """`run_sdk_query` 소비를 장부에 박제 — 계측 단일 진입점(`token_usage.record_call`) 경유.
+
+    ★ alias 는 `shared.llm._CURRENT_ALIAS` 에서 가져온다(문자열 박제 금지). 이 경로는
+      `invoke_text` 밖에서도 불리므로 비어 있을 수 있고, 그때는 `sdk_query` 로 표기해
+      **'어디서 왔는지 모름' 과 '0' 을 구분** 한다.
+    """
+    try:
+        from shared.token_usage import record_call
+        try:
+            from shared.llm import _CURRENT_ALIAS
+            alias = _CURRENT_ALIAS.get() or "sdk_query"
+        except Exception:                                   # noqa: BLE001
+            alias = "sdk_query"
+        record_call(
+            alias=alias, model="", usage=meter.get("usage"),
+            cost_usd=meter.get("cost") or 0.0, duration_ms=meter.get("dur") or 0,
+            num_turns=meter.get("turns") or 0, ok=ok, source="sdk_query",
+        )
+    except Exception:                                       # noqa: BLE001
+        pass
+
+
 def run_sdk_query(
     prompt: str,
     model: str | None = None,   # None = shared/llm.MODELS 에서 파생 (ID 리터럴 금지)
@@ -292,6 +315,11 @@ def run_sdk_query(
 
         _parts: list[str] = []
         _err_box = {"exc": None}
+        # ★ 토큰 계측 (2026-07-26) — 종전 이 경로는 `record_call` 을 **한 번도 부르지 않았다**.
+        #   그런데 여기로 도는 것이 auto_repair 심층감사·발행실패 즉시수정처럼 max_turns 가
+        #   큰 *가장 무거운* 호출들이다. 장부에 0으로 적히니 "무엇을 줄여야 하나" 를 물어도
+        #   답이 안 나왔다. 소비를 못 보면 절감도 증명할 수 없다.
+        _meter = {"usage": None, "cost": 0.0, "dur": 0, "turns": 0}
 
         async def _collect() -> None:
             _wd_beat()
@@ -303,6 +331,12 @@ def run_sdk_query(
                         for block in msg.content:
                             if isinstance(block, TextBlock):
                                 _parts.append(block.text)
+                    elif type(msg).__name__ == "ResultMessage":
+                        # usage 는 ResultMessage 에만 있다 (AssistantMessage 에는 필드 자체가 없음 — 실측 확인)
+                        _meter["usage"] = getattr(msg, "usage", None)
+                        _meter["cost"]  = float(getattr(msg, "total_cost_usd", 0) or 0)
+                        _meter["dur"]   = int(getattr(msg, "duration_ms", 0) or 0)
+                        _meter["turns"] = int(getattr(msg, "num_turns", 0) or 0)
 
         def _run_blocking() -> None:
             _aio.set_event_loop(_aio.new_event_loop())   # 재사용 오염 차단
@@ -375,6 +409,9 @@ def run_sdk_query(
                     except Exception: pass
 
         stdout = "\n".join(_parts)
+        # ★ 계측 박제 — 성공/부분수집 무관하게 항상. 실패해도 본류를 막지 않는다.
+        _record_sdk_usage(_meter, ok=bool(stdout))
+
         _exc = _err_box["exc"]
         if _exc is not None and not stdout:
             raise _exc   # 상위 except 로 error_kind 분류 (cli_not_found/timeout/auth/sdk_error)

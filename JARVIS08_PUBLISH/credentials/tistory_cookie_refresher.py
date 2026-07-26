@@ -28,13 +28,13 @@ from dotenv import load_dotenv
 
 
 def _is_network_up() -> bool:
-    """인터넷 연결 사전 확인 (Chrome 시작 전). 3초 timeout."""
-    try:
-        socket.setdefaulttimeout(3)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
-        return True
-    except OSError:
-        return False
+    """인터넷 연결 사전 확인 (Chrome 시작 전) — 판정 본체는 `login_manager.network_up()`.
+
+    ★ 종전엔 이 본체가 여기와 `naver_cookie_refresher` 양쪽에 똑같이 복사돼 있었다(2벌).
+      로그인 진입점이 하나이므로 그 전제 판정도 하나다 (LOGIN_SUPREME_LAW 단일 진입점).
+    """
+    from JARVIS08_PUBLISH.credentials.login_manager import network_up
+    return network_up()
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:

@@ -46,7 +46,7 @@ def translate(text_ko: str) -> str:
         # ★ 비필수 (ERRORS [368]): 번역은 스타일 앵커 폴백이 있으므로 스로틀 시 즉시 폴백
         #   — 이미지 프롬프트 번역 LLM 대기로 임계경로를 막지 않는다.
         result = invoke_text(
-            "writer_fast",
+            "writer_short_analysis",
             f"Korean description: {text_ko}\n\n"
             "Output the optimized English image prompt now.",
             system=system_msg,

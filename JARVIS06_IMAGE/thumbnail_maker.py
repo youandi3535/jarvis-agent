@@ -142,7 +142,7 @@ def _llm_thumbnail_params(title: str, keyword: str) -> dict:
             f"volcanic=oil/energy, indigo=tech, ocean=global finance, vivid_violet=entertainment)"
         )
         # ★ 비필수 (ERRORS [368]): 썸네일 배경 프롬프트는 결정론 폴백이 있으므로 스로틀 시 즉시 폴백
-        raw = (invoke_text("writer_fast", req, timeout=45, _nonessential=True) or "").strip()
+        raw = (invoke_text("writer_short_title", req, timeout=45, _nonessential=True) or "").strip()
         m = re.search(r'\{.*?\}', raw, re.DOTALL)
         if m:
             data = json.loads(m.group())

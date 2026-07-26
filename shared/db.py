@@ -447,6 +447,23 @@ def init_db():
         except Exception:
             pass
 
+        # ★ 알림 아웃박스 (사용자 승인 2026-07-25) — 전송 실패한 텔레그램 메시지를 *보관* 한다.
+        #   종전 `notify.send_tg` 는 실패 시 로그 한 줄 남기고 메시지를 버렸다. 2026-07-25
+        #   네트워크 단절 중 4건이 영구 소멸했고 그중 하나가 "테마글 발행 건너뜀" 통보라,
+        #   그날 테마글이 왜 없는지 아무도 몰랐다. 성공하면 행을 지우므로 평소엔 항상 빈 표.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS notify_outbox (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TEXT DEFAULT (datetime('now','localtime')),
+                chat_id     TEXT DEFAULT '',
+                text        TEXT NOT NULL,
+                parse_mode  TEXT DEFAULT 'Markdown',
+                attempts    INTEGER DEFAULT 0,
+                last_error  TEXT DEFAULT ''
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_outbox_created ON notify_outbox(created_at)")
+
         # post_analysis.naver_rank / naver_rank_at — update_naver_rank() 가 사용
         try:
             conn.execute("ALTER TABLE post_analysis ADD COLUMN naver_rank INTEGER")
@@ -1760,6 +1777,108 @@ def list_errors(status: str = "new", limit: int = 20) -> list:
             (status, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ══════════════════════════════════════════════════════════════════
+#  알림 아웃박스 — 전송 실패한 텔레그램 메시지 보관 (사용자 승인 2026-07-25)
+#  · SQL 은 여기(DB 소유자), *언제 보내고 언제 버릴지* 정책은 shared/notify.py(전송 소유자).
+#  · 성공 = 행 삭제. 그래서 평소 이 표는 비어 있고, 행이 있으면 곧 "아직 못 전한 말" 이다.
+# ══════════════════════════════════════════════════════════════════
+
+def outbox_put(text: str, parse_mode: str = "Markdown", chat_id: str = ""):
+    """전송 실패한 메시지를 보관. Returns: row id (실패 시 None — 알림 때문에 죽지 않는다)."""
+    try:
+        with get_db() as conn:
+            cur = conn.execute(
+                "INSERT INTO notify_outbox (chat_id, text, parse_mode) VALUES (?,?,?)",
+                (chat_id or "", text, parse_mode or ""),
+            )
+            return cur.lastrowid
+    except Exception:
+        return None
+
+
+def outbox_has_pending() -> bool:
+    """보관 중인 메시지가 있는가 — **DB 가 진실**(발행 subprocess 가 넣은 것도 보인다).
+
+    ★ 메모리 플래그를 쓰지 않는 이유: 경제 브리핑은 subprocess 라 데몬 메모리의 플래그로는
+      "저쪽이 넣은 미전송" 을 영영 못 본다 (CLAUDE.md 프로세스 경계 규칙).
+    """
+    try:
+        with get_db() as conn:
+            return conn.execute("SELECT 1 FROM notify_outbox LIMIT 1").fetchone() is not None
+    except Exception:
+        return False
+
+
+def outbox_pending(limit: int = 50) -> list:
+    """보관 중인 메시지를 **오래된 순** 으로. 순서를 지켜야 사건 순서대로 읽힌다."""
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT id, created_at, chat_id, text, parse_mode, attempts "
+                "FROM notify_outbox ORDER BY id LIMIT ?", (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def outbox_claim(row_id: int, attempts: int) -> bool:
+    """보내기 *직전* 에 이 행을 선점한다. 이미 남이 가져갔으면 False.
+
+    ★ 왜 필요한가 (프로세스 경계): 경제 브리핑은 subprocess 라 데몬과 *동시에* 아웃박스를
+      흘려보낼 수 있다. 메모리 잠금은 한 프로세스만 지킨다 — 그래서 DB 의 attempts 값을
+      조건으로 거는 낙관적 선점을 쓴다. 같은 메시지가 두 번 가는 것을 이것으로 막는다.
+    """
+    try:
+        with get_db() as conn:
+            cur = conn.execute(
+                "UPDATE notify_outbox SET attempts=attempts+1 WHERE id=? AND attempts=?",
+                (row_id, attempts),
+            )
+            return (cur.rowcount or 0) == 1
+    except Exception:
+        return False
+
+
+def outbox_done(row_id: int) -> None:
+    """전송 성공 — 보관 해제."""
+    try:
+        with get_db() as conn:
+            conn.execute("DELETE FROM notify_outbox WHERE id=?", (row_id,))
+    except Exception:
+        pass
+
+
+def outbox_fail(row_id: int, err: str) -> None:
+    """전송 재실패 — 시도 횟수·사유만 갱신하고 계속 보관."""
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE notify_outbox SET attempts=attempts+1, last_error=? WHERE id=?",
+                (str(err)[:200], row_id),
+            )
+    except Exception:
+        pass
+
+
+def outbox_purge(ttl_hours: float) -> int:
+    """유효기간 지난 메시지 폐기. Returns: 버린 건수.
+
+    ★ 왜 버리나: 3시간 전 "발행 건너뜀" 이 지금 도착하면 *지금 일* 로 오해된다.
+      너무 늦은 알림은 도움이 아니라 혼선이다 — 전달 실패보다 오해가 더 나쁘다.
+    """
+    try:
+        with get_db() as conn:
+            cur = conn.execute(
+                "DELETE FROM notify_outbox "
+                "WHERE created_at < datetime('now','localtime', ?)",
+                (f"-{float(ttl_hours)} hours",),
+            )
+            return cur.rowcount or 0
+    except Exception:
+        return 0
 
 
 def mark_error_fixed(error_id: int, resolution: str, fixed_file: str = None):

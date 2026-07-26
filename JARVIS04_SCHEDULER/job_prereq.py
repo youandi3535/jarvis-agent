@@ -230,16 +230,19 @@ def _run_prereq_now(prereq_id: str) -> None:
     if not j:
         return
     from JARVIS04_SCHEDULER.job_catalog import get_apscheduler
-    from JARVIS04_SCHEDULER.job_registry import _resolve_callback
-    fn = _resolve_callback(j["callback"])
+    from JARVIS04_SCHEDULER.job_registry import job_func_for
+    # ★ 정규 등록과 **같은 결정 지점** 에 묻는다 (ERRORS [499]) — 종전엔 여기서 콜백을
+    #   직접 해석해 발행창 게이트가 빠졌고, processpool 선행이 생기면 워커 복원까지
+    #   어긋날 자리였다. 잡을 스케줄러에 올리는 방법은 한 가지여야 한다(① 단일 진입점).
+    fn, args = job_func_for(j)
     sch = get_apscheduler()
     if sch is None:                                   # 스케줄러 없으면 최선 노력으로 인라인
         _log(f"APScheduler 미초기화 — {prereq_id} 인라인 실행")
-        fn()
+        fn(*args)
         return
     kw = {"executor": j["executor"]} if j.get("executor") else {}
     sch.add_job(
-        fn, "date", run_date=datetime.now(),
+        fn, "date", run_date=datetime.now(), args=args,
         id=prereq_id + DEFERRED_SUFFIX, name=f"{j['name']} (선행 회복)",
         misfire_grace_time=effective_grace(prereq_id), replace_existing=True, **kw,
     )

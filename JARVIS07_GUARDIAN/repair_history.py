@@ -134,7 +134,7 @@ def _pattern_index() -> dict[str, dict]:
 _DETECTOR_RULES: tuple[tuple[str, str], ...] = (
     ("harness",       "발행 검증 순환 — 송출 전 Layer 3 이 잡음"),
     ("git_audit",     "매일 03:30 git 회고 — 커밋된 변경을 사후 박제"),
-    ("auto_repair",   "새벽 04:30 심층 감사 — 코드 전수 점검 중 발견"),
+    ("auto_repair",   "심층 감사(`j07_deep_audit`) — 코드 전수 점검 중 발견"),
     ("vscode_claude", "작업 기록 — Claude 가 편집하며 스스로 신고"),
     ("user_incident", "사용자 신고 — 사람이 눈으로 발견"),
     ("manual-",       "사람이 발견 — 작업 중 결함 포착"),

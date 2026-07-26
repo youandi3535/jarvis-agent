@@ -237,11 +237,27 @@ def job_collect_trends() -> None:
     _run_with_harness("트렌드 수집", _run, verify_fn=_verify_trends,
                        deadline_sec=_TRENDS_DEADLINE_SEC)
 
-    # ★ 트렌드 수집 완료 직후 topic_pack 즉석 생성 (사용자 박제 2026-07-11 — ERRORS [406])
-    # CLAUDE_RADAR.md "job_collect_trends 말미 자동 생성" 규정 구현.
-    # 목적: 06:30 경제 포스터가 _tp_pick() 즉시 성공 → pack 재생성 LLM 호출 불필요.
-    #       LLM 경합(트렌드수집↔대본생성↔pack생성 동시) → rate-limit throttle 연쇄를 원천 차단.
-    # 실패해도 06:30 포스터가 _tp_build() 즉석 폴백(기존 동작) → 발행 안 막음.
+
+def build_topic_pack_once() -> None:
+    """트렌드 수집 뒤 topic_pack 생성 — **발행 준비용이므로 아침 1회만**.
+
+    ★ 사용자 박제 2026-07-11 (ERRORS [406]) — 생성 자체의 목적:
+      07:00 경제 포스터가 `pick_slot_candidate()` 즉시 성공 → 발행창에서 pack 재생성 LLM 0회.
+      LLM 경합(트렌드수집↔대본생성↔pack생성)으로 인한 throttle 연쇄를 원천 차단.
+
+    ★★ 2026-07-26 — **09/12/15 시 재빌드 중단** (사용자 승인, 토큰 절감).
+      종전엔 이 블록이 `job_collect_trends()` 안에 있어서 09·12·15시 트렌드 수집마다
+      **같은 `topic_pack_YYYY-MM-DD.json` 을 다시 만들어 덮어썼다.** 그런데 그 판을 먹는
+      소비자가 없다:
+        · 경제 발행(07:00)은 이미 지나갔고 **06시 판**을 먹었다.
+        · 테마 발행(21:00)은 `theme_picker` 를 쓴다 — 팩을 보지 않는다.
+        · 팩 소진 시 복구는 `pick_slot_candidate` 안의 즉석 재빌드가 따로 담당한다.
+      즉 발행 안전성은 09/12/15 재빌드에 의존하지 않는다. 실측 소비: 09+12+15 analyzer
+      118호출 / 5.27M(장부 16.3%).
+      **트렌드 *수집* 은 그대로 하루 4회 유지** — 줄인 것은 팩 *빌드* 뿐이다.
+      (대시보드는 당일 팩 파일을 읽으므로 06시 판을 하루 종일 보여준다 — 같은 날짜의
+       같은 주제 후보라 표시상 문제 없음.)
+    """
     # ★ 1회 재시도 — 06:00 auto_repair 경합 등 일시 LLM throttle 시 90초 후 재시도 (ERRORS [427])
     import time as _time_tp
     _MAX_TP_TRIES = 2
@@ -273,8 +289,12 @@ def job_collect_trends_morning() -> None:
     끝나는 즉시 경제 선계산으로 이어진다(팩 미완 재빌드 낭비·불필요 대기 0). 무거운 fact·chart 추출을
     06:30 발행 전 이 저부하 창에서 미리 수행·캐시 → 발행창 추출 LLM 0회 → writer 회복된 풀 실행.
     (radar_trends_09/12/15 는 기존 job_collect_trends 유지 — 경제 선계산은 아침 1회만.)
+
+    ★ 2026-07-26 — **topic_pack 빌드는 이 아침 잡에서만** 한다(`build_topic_pack_once`).
+      09/12/15 재빌드는 소비자가 없어 제거했다. 상세 근거는 그 함수 docstring.
     """
-    job_collect_trends()   # 트렌드 수집 + topic_pack 빌드 (소요시간 가변)
+    job_collect_trends()     # 트렌드 수집 (소요시간 가변)
+    build_topic_pack_once()  # ★ 팩 빌드 — 아침 1회. 07:00 발행이 이 판을 먹는다.
     try:
         # ★ 선계산 = 수집 도메인(09) 단독 (사용자 박제 2026-07-23)
         from JARVIS09_COLLECTOR.precollect import job_precollect_economic

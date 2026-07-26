@@ -834,7 +834,7 @@ def _run_self_repair_phase(label: str) -> dict:
         send_telegram(
             f"🔧 *[{label}] 발행 전 자체수리 시작*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"Tier-1 자체수리 (LLM-0, 수초) → 발행 — 심층 LLM 감사는 새벽 04:30 분리"
+            f"Tier-1 자체수리 (LLM-0, 수초) → 발행 — 심층 LLM 감사는 별도 잡(j07_deep_audit)"
         )
     except Exception:
         pass
@@ -843,7 +843,7 @@ def _run_self_repair_phase(label: str) -> dict:
     try:
         # ★ 2026-06-28 사용자 박제 — 발행 직전엔 *LLM-0 Tier-1 sweep* 만 (수초, 발행 지연 0).
         #   미해결 오류 중 학습 패턴·정적 fixer·Bandit 로 즉시 고칠 수 있는 것만 소급 수리.
-        #   비싼 LLM 심층 감사(backlog Tier-2 + 광범위 코드 감사)는 새벽 04:30 job_deep_audit 로 분리.
+        #   비싼 LLM 심층 감사(backlog Tier-2 + 광범위 코드 감사)는 `j07_deep_audit` 로 분리(시각은 DEFAULT_JOBS).
         from JARVIS07_GUARDIAN.guardian_agent import self_heal_known_errors as _sweep
         _res = _sweep()
         code_changed = int(_res.get("fixed", 0))  # 코드 수정 건수 → 데몬 재시작 권장 판단
@@ -871,6 +871,52 @@ def _run_self_repair_phase(label: str) -> dict:
             pass
         return {"ok": True, "elapsed_sec": elapsed, "code_changed": 0,
                 "skip_reason": f"{type(_e).__name__}: {str(_e)[:80]}"}
+
+
+def _naver_cookie_ready(label: str) -> bool:
+    """네이버 쿠키 전제조건 — 경제·테마 **공통 단일 지점** (사용자 승인 2026-07-25).
+
+    ★ 왜 만들었나: 2026-07-25 21:05, 네트워크가 끊긴 그 순간 쿠키 점검이 한 번 실패했고
+      그걸로 그날 테마글이 통째로 사라졌다. 원인이 *네트워크(곧 회복)* 인지
+      *CAPTCHA·계정(사람 필요)* 인지 구분이 없어 둘 다 "오늘 발행 없음" 으로 끝났다.
+
+    ★ ① 단일 진입점: 종전엔 이 블록이 경제·테마 두 콜백에 **똑같이 복사**돼 있었다.
+      한쪽만 고치면 다른 쪽이 옛 동작을 유지하는 자리라 함수 하나로 합쳤다.
+    ★ ② 동적 설계: 재시도 창을 여기서 만들지 않는다. **잡 자신의 misfire 유예시간**에서
+      파생한다(`job_window_deadline`). 지금 실행 중인 잡 ID 도 문맥에서 조회한다 —
+      코드에 박으면 JARVIS04 에서 ID·시각을 바꿔도 여기만 옛 값을 가리킨다.
+    ★ 발행 시각 원칙 (사용자 박제 "발행은 07시와 21시뿐"): 창을 넘기면 **기다리지 않는다.**
+      창을 모르면(파생 실패) 아예 기다리지 않는다 — 모르는 채로 미루는 것이 곧 시간외 발행이다.
+    """
+    deadline = None
+    try:
+        from shared.llm import current_job_id
+        from JARVIS04_SCHEDULER.job_registry import job_window_deadline
+        deadline = job_window_deadline(current_job_id())
+    except Exception as _e:
+        log(f"⚠️ [{label}] 발행 창 파생 실패 — 재시도 없이 1회만 점검: {_e}")
+
+    from JARVIS08_PUBLISH.credentials.login_manager import ensure_naver_ready
+    ok, why = ensure_naver_ready(deadline=deadline)
+
+    if ok:
+        if why.startswith("recovered"):
+            m = (f"✅ *[{label}] 네이버 쿠키 회복* — 발행 계속\n"
+                 f"네트워크 단절로 {why.split(':')[1]}회 재시도 후 통과했습니다.")
+            log(m.replace("*", ""))
+            send_telegram(m)
+        return True
+
+    if why == "permanent":
+        m = (f"🚨 *[{label}] 네이버 쿠키 점검 실패 — 발행 건너뜀*\n"
+             f"네트워크는 정상입니다. CAPTCHA·계정 문제로 보이며 *직접 로그인* 이 필요합니다.")
+    else:
+        _until = f" (창 마감 {deadline:%H:%M})" if deadline else ""
+        m = (f"🚨 *[{label}] 네이버 쿠키 점검 실패 — 오늘 발행 포기*\n"
+             f"네트워크 단절이 발행 창 안에 회복되지 않았습니다{_until}.")
+    log(m.replace("*", ""))
+    send_telegram(m)
+    return False
 
 
 def run_self_repair_then_economic():
@@ -933,18 +979,7 @@ def run_self_repair_then_economic():
     # ─── Step 3: 쿠키 체크 — ★ 네이버만 (사용자 박제 2026-07-12) ─────
     # 네이버가 첫 액션 → 네이버 쿠키만 지금 갱신. 티스토리 쿠키는 *티스토리 발행 직전*
     # (_step_ts_cookie, force=True)에 강제 갱신 → 신선 세션.
-    _cookie_failed = []
-    try:
-        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import job_pre_naver_check as _nv_ck
-        if not _nv_ck():
-            _cookie_failed.append("네이버")
-    except Exception as _e:
-        log(f"⚠️ [경제 브리핑] 네이버 쿠키 점검 예외: {_e}")
-        _cookie_failed.append("네이버")
-    if _cookie_failed:
-        msg = "🚨 네이버 쿠키 점검 실패 — 경제 브리핑 발행 건너뜀 (티스토리는 티스토리 차례에 갱신)"
-        log(msg)
-        send_telegram(msg)
+    if not _naver_cookie_ready("경제 브리핑"):
         return
 
     log(f"📤 [경제 브리핑] 발행 페이즈 진입 (자가진단 {_phase['elapsed_sec']}s 종료)")
@@ -994,18 +1029,7 @@ def run_self_repair_then_theme():
     # (`trend_theme_writer._step_ts_cookie`, 액션 2 시작)에 force 갱신 → 신선 세션.
     # 여기서 티스토리를 미리 로그인하면 네이버 발행 내내(10분+) 카카오 세션이 방치·만료된다
     # (선로그인 대기 사망, ERRORS [265]). "네이버 작성 타임엔 네이버 쿠키만".
-    _cookie_failed = []
-    try:
-        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import job_pre_naver_check as _nv_ck
-        if not _nv_ck():
-            _cookie_failed.append("네이버")
-    except Exception as _e:
-        log(f"⚠️ [테마글] 네이버 쿠키 점검 예외: {_e}")
-        _cookie_failed.append("네이버")
-    if _cookie_failed:
-        msg = "🚨 네이버 쿠키 점검 실패 — 테마글 발행 건너뜀 (티스토리는 티스토리 차례에 갱신)"
-        log(msg)
-        send_telegram(msg)
+    if not _naver_cookie_ready("테마글"):
         return
 
     log(f"📤 [테마글] 발행 페이즈 진입 (자가진단 {_phase['elapsed_sec']}s 종료)")

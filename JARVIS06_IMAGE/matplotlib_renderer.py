@@ -100,7 +100,7 @@ def _get_dynamic_colors(topic: str, count: int = 5) -> list[str]:
     try:
         from shared.llm import invoke_text
         prompt = f"Generate {count} harmonious hex colors for a data visualization about '{topic}'. Return ONLY a JSON array: [\"#xxxxxx\", ...]. NO explanation."
-        result = invoke_text("writer_fast", prompt, temperature=0.8)
+        result = invoke_text("writer_short_visual", prompt, temperature=0.8)
         import json
         colors = json.loads(result)
         return colors if len(colors) >= count else colors + ["#808080"] * (count - len(colors))

@@ -48,7 +48,7 @@ def _get_dynamic_palette_plotly(topic: str = "chart", count: int = 5, theme: str
         from shared.llm import invoke_text
         mode = "light" if theme == "light" else "dark"
         prompt = f"For {mode} theme plotly chart about '{topic}', generate {count} distinguishable hex colors. Return JSON array: [\"#xxxxxx\", ...]"
-        result = invoke_text("writer_fast", prompt, temperature=0.8)
+        result = invoke_text("writer_short_visual", prompt, temperature=0.8)
         import json as _json
         return _json.loads(result)
     except Exception:

@@ -134,7 +134,7 @@ class ClaudeSVGProvider:
                 "4. 범례 포함\n"
                 "5. 텍스트 내 특수문자(&, <, >) 는 반드시 XML 이스케이프(&amp; &lt; &gt;) 처리\n"
             )
-        svg_text = invoke_text("writer_fast", prompt, max_tokens=4000, temperature=0.3)
+        svg_text = invoke_text("writer_short_visual", prompt, max_tokens=4000, temperature=0.3)
         if not svg_text:
             raise RuntimeError("Claude SVG 생성 실패 (빈 응답)")
 

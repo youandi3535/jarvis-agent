@@ -547,7 +547,7 @@ def _generate_human_intro(keyword: str, platform: str) -> str:
     try:
         from shared.llm import invoke_text
         # ★ 비필수 (ERRORS [368/372]): 도입부 개선은 실패 시 폴백("")·비차단 → 스로틀 즉시 폴백
-        result = invoke_text("writer", prompt, timeout=45, _nonessential=True)
+        result = invoke_text("writer_short_analysis", prompt, timeout=45, _nonessential=True)
         if result:
             # HTML 태그 제거 후 순수 텍스트로
             return re.sub(r'<[^>]+>', '', result).strip()
@@ -1274,7 +1274,7 @@ def audit_factuality(
 
 출처에 없는 수치만 JSON 배열로 반환. 없으면 [].
 예: ["47.3%", "2,340억"]"""
-            result, _ok = invoke_text_result("writer_fast", prompt, temperature=0.1)
+            result, _ok = invoke_text_result("writer_short_analysis", prompt, temperature=0.1)
             import json as _json
             # ★ 판정 불가 ≠ 통과 (사용자 박제 2026-07-25) — 이 감사의 핵심 결함이었다.
             #   종전: invoke_text 가 회로 open 이면 "" 를 돌려주고 → json.loads("") 예외 →

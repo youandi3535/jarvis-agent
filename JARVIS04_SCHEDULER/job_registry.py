@@ -87,7 +87,7 @@ DEFAULT_JOBS: list[dict] = [
     # ~40분 Max 풀 회복 갭 확보 → writer 스톨 방지 강화. (종전 06:30 은 회복 갭 ~5분으로 빡빡)
     # ★ 발행 전 자체수리 + 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 07:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 경제 브리핑 발행.
-    # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리 (발행 지연 0).
+    # 비싼 LLM 심층 감사는 `j07_deep_audit`(주 1회, 토) 로 분리 (발행 지연 0).
     {"id":"j01_economic_post",      "name":"자가진단+경제 브리핑 발행 07:00", "trigger":"cron",
      "kwargs":{"hour":7, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_economic",
@@ -107,7 +107,7 @@ DEFAULT_JOBS: list[dict] = [
      "misfire_grace_time":1200, "owner":"jarvis09_collector"},
     # ★ 발행 전 자체수리 + 테마글 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 16:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 테마글 발행.
-    # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리.
+    # 비싼 LLM 심층 감사는 `j07_deep_audit`(주 1회, 토) 로 분리.
     {"id":"j01_theme_post_21",      "name":"자가진단+테마 발행 21:00 ★", "trigger":"cron",
      "kwargs":{"hour":21, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_theme",
@@ -124,7 +124,7 @@ DEFAULT_JOBS: list[dict] = [
     # ── JARVIS07 자가 진단·수정 (★ 사용자 박제 2026-06-28 — 2단 분리) ──
     # 발행 직전(07:00 / 21:00 callback): Tier-1 LLM-0 자체수리 sweep 만 (수초, 발행 지연 0).
     #   callback: `run_self_repair_then_economic` / `run_self_repair_then_theme`.
-    # 심층 LLM 감사(backlog Tier1→2 + 광범위 코드 감사): 새벽 03:00 `j07_deep_audit` 별도 cron.
+    # 심층 LLM 감사(backlog Tier1→2 + 광범위 코드 감사): `j07_deep_audit` 별도 cron(주 1회, 토).
     # → 학습 자산이 쌓일수록 다음 발행 전 sweep 자동수리율↑ (복리 학습 루프).
     # ── JARVIS02 WRITER — SEO 학습 ────────────────────────────────
     {"id":"weekly_seo_learn",  "name":"주간 SEO 학습·비교·업데이트", "trigger":"cron",
@@ -165,6 +165,14 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"minutes":15},
      "callback":"shared.file_cleanup.cleanup_fuse_hidden",
      "misfire_grace_time":300, "owner":"jarvis00_infra"},
+    # ★ 알림 아웃박스 재전송 (사용자 승인 2026-07-25) — 네트워크 단절 중 전송 실패한
+    #   텔레그램 메시지를 되살린다. 평소엔 표가 비어 있어 즉시 반환(비용 ~0).
+    #   복구 순간의 즉시 전달은 `notify._on_send_success` 가 담당하고, 이 잡은 *바닥* 이다
+    #   (아무 메시지도 안 나가는 조용한 시간대에도 밀린 것이 5분 안에 흘러가도록).
+    {"id":"notify_outbox_flush", "name":"밀린 알림 재전송 (5분)", "trigger":"interval",
+     "kwargs":{"minutes":5},
+     "callback":"shared.notify.job_flush_outbox",
+     "misfire_grace_time":300, "owner":"jarvis00_infra"},
     # ── JARVIS02 로그 모니터링 ──────────────────────────────────────
     {"id":"log_monitor_economic", "name":"경제 브리핑 로그 확인 (07:45)", "trigger":"cron",
      "kwargs":{"hour":7, "minute":45},
@@ -200,8 +208,16 @@ DEFAULT_JOBS: list[dict] = [
      "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
     # ★ 발행과 분리된 심층 LLM 감사 (사용자 박제 2026-06-28) — DB 백업 03:00 이후.
     #   1) backlog Tier 1→2 (실제 지문 학습) 2) 광범위 코드 감사. 발행 직전엔 LLM-0 sweep 만.
-    {"id":"j07_deep_audit",     "name":"GUARDIAN 심층 코드 감사 (매일 03:00)", "trigger":"cron",
-     "kwargs":{"hour":3, "minute":0},
+    # ★★ 매일 → **토요일 주 1회** (사용자 박제 2026-07-26 — 토큰 절감).
+    #   근거(실측): 이 잡이 `guardian` alias 소비의 **전량**(7일 3.41M, 단건 최대 439K·10턴).
+    #   도구를 들고 저장소를 훑는 무거운 세션이라 호출 1건이 크다.
+    #   ★ 안전 근거 — 매일→주1회로 늦어지는 것과 늦어지지 않는 것을 구분해 둔다:
+    #     · 늦어지지 않음: 신규 오류 자동수정. `j07_retry_pending`(10분)이 `status='new'` 를
+    #       계속 `_orchestrate`(Tier1→Tier2, 상한 3회)로 돌린다. 발행 직전 LLM-0 sweep 도 그대로.
+    #     · 늦어짐: ① 광범위 코드 감사(새 잠재버그 발굴) ② backlog 재처리 ③ 격리버킷 보고.
+    #       즉 "이미 난 오류의 처리"가 아니라 "아직 안 난 문제 찾기"가 주 1회가 된다.
+    {"id":"j07_deep_audit",     "name":"GUARDIAN 심층 코드 감사 (토 03:00)", "trigger":"cron",
+     "kwargs":{"day_of_week":"sat", "hour":3, "minute":0},
      "callback":"JARVIS07_GUARDIAN.guardian_agent.job_deep_audit",
      "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
     {"id":"j07_retry_pending",  "name":"GUARDIAN 잔류 오류 재처리 (10분)", "trigger":"interval",
@@ -330,6 +346,38 @@ def job_specs() -> list[dict]:
     return out
 
 
+def job_func_for(spec: dict) -> tuple[Any, tuple]:
+    """잡 하나가 스케줄러에 등록할 `(func, args)` — **등록·자가검사 공통 단일 결정 지점**.
+
+    ★ 왜 함수로 뽑았나 (ERRORS [499]): 종전엔 이 결정이 `register_default_jobs` 몸통 안에만
+      있어서, 자가검사(`job_llm_priority.selfcheck`)가 *등록이 실제로 무엇을 넘기는지* 를
+      볼 방법이 없었다. 그래서 검사는 상수 하나만 확인하며 통과했고(거짓 보증) 회귀가 그대로
+      운영에 나갔다. 이제 검사와 등록이 **같은 함수에 묻는다** — 둘이 갈라질 수 없다.
+    """
+    jid, cb = spec["id"], spec["callback"]
+
+    if spec.get("executor") == "processpool":
+        # ★ 워커가 별도 *프로세스* 라 func 는 pickle 이 아니라 참조(module:qualname)로 왕복한다.
+        #   콜러블 인스턴스(`_JobGate`)를 넘기면 그 이름이 인스턴스가 아니라 *클래스* 를 가리켜
+        #   워커에서 인자 없이 재구성돼 `_JobGate.__init__() missing 3 ...` TypeError 가 난다.
+        #   문자열은 참조가 아니라 *값* 이므로 job_id·callback 을 args 로 넘기고, 콜백 해석·
+        #   선행조건·발행창 판정은 워커 안에서 `run_gated` 가 그때그때 재수행한다(② 동적 설계).
+        _resolve_callback(cb)                        # 등록 시점 존재 검증 (fail-fast)
+        from JARVIS04_SCHEDULER.job_llm_priority import run_gated
+        return run_gated, (jid, cb)
+
+    fn = _resolve_callback(cb)
+    # ★ 선행조건 집행 단일 지점 (사용자 박제 2026-07-23) — `requires` 가 선언된 잡만
+    #   래핑된다. 각 콜백에 if 문을 흩지 않는다. 상세 사유: job_prereq.py 모듈 docstring.
+    from JARVIS04_SCHEDULER.job_prereq import gate as _prereq_gate
+    fn = _prereq_gate(jid, fn)
+    # ★ 발행창 LLM 우선권 (사용자 박제 2026-07-25) — 파이프라인 잡(03 트렌드·09 선계산·
+    #   02 발행) 실행 구간을 '발행중' 으로 표시해 배경 LLM 을 보류시킨다. 선례와 같은 자리.
+    #   (processpool 이 아닌 잡은 in-process 실행이라 클로저·인스턴스 래핑이 안전하다.)
+    from JARVIS04_SCHEDULER.job_llm_priority import gate as _llm_gate
+    return _llm_gate(jid, fn), ()
+
+
 def register_default_jobs(scheduler: Any) -> int:
     """DEFAULT_JOBS 의 모든 잡을 APScheduler 에 등록.
 
@@ -340,20 +388,20 @@ def register_default_jobs(scheduler: Any) -> int:
     n = 0
     for j in job_specs():
         try:
-            fn = _resolve_callback(j["callback"])
-            # ★ 선행조건 집행 단일 지점 (사용자 박제 2026-07-23) — `requires` 가 선언된 잡만
-            #   래핑된다. 각 콜백에 if 문을 흩지 않는다. 상세 사유: job_prereq.py 모듈 docstring.
-            from JARVIS04_SCHEDULER.job_prereq import gate as _prereq_gate
-            fn = _prereq_gate(j["id"], fn)
-            # ★ 발행창 LLM 우선권 (사용자 박제 2026-07-25) — 파이프라인 잡(03 트렌드·09 선계산·
-            #   02 발행) 실행 구간을 '발행중' 으로 표시해 배경 LLM 을 보류시킨다. 선례와 같은 자리.
-            from JARVIS04_SCHEDULER.job_llm_priority import gate as _llm_gate
-            fn = _llm_gate(j["id"], fn)
+            fn, args = job_func_for(j)
             exec_kwargs = {}
             if j.get("executor"):
                 exec_kwargs["executor"] = j["executor"]
+            if j.get("executor") == "processpool":
+                # ★ 효과를 동작으로 확인 (CLAUDE.md `patch_effective()` 표준, ERRORS [499]).
+                #   워커가 실제로 겪는 참조 왕복을 등록 *전* 에 재현한다. 어긋나면 그 잡이
+                #   처음 발화하는 밤 22:00 이 아니라 **부팅 즉시** 드러난다.
+                from JARVIS04_SCHEDULER.job_llm_priority import assert_ref_serializable
+                why = assert_ref_serializable(j["id"], fn, args)
+                if why:
+                    raise TypeError(why)
             scheduler.add_job(
-                fn, j["trigger"], **j["kwargs"],
+                fn, j["trigger"], args=args, **j["kwargs"],
                 id=j["id"], name=j["name"],
                 misfire_grace_time=j["misfire_grace_time"],
                 replace_existing=True,
@@ -396,6 +444,34 @@ def cron_times(*, job_id_prefix: str = "", callback_contains: str = "") -> list[
         if "hour" in kw:
             out.add(f"{int(kw['hour']):02d}:{int(kw.get('minute', 0)):02d}")
     return sorted(out)
+
+
+def job_window_deadline(job_id: str):
+    """이 잡의 **오늘치 실행 창 마감시각** (datetime) — 없으면 None.
+
+    창 = `예정 발화 시각 + misfire_grace_time`. APScheduler 가 "늦어도 여기까지는 실행한다"
+    고 이미 정해 둔 경계를 *그대로* 쓴다 — 새 숫자를 만들지 않는다(② 동적 설계).
+
+    ★ 왜 이 함수가 필요한가 (사용자 박제 "발행은 07시와 21시뿐"):
+      전제조건이 일시적 이유(네트워크)로 실패했을 때 재시도하려면 **언제까지** 를 정해야
+      하는데, 여기에 "30분" 같은 숫자를 새로 박으면 그게 곧 시간외 발행의 씨앗이 된다.
+      잡 자신의 유예시간을 경계로 삼으면 발행 시각을 옮겨도 창이 자동으로 따라온다.
+    """
+    from datetime import datetime, timedelta
+    from JARVIS04_SCHEDULER.job_prereq import effective_grace
+    spec = next((j for j in DEFAULT_JOBS if j.get("id") == job_id), None)
+    if not spec or spec.get("trigger") != "cron":
+        return None
+    kw = spec.get("kwargs") or {}
+    if "hour" not in kw:
+        return None
+    fire = datetime.now().replace(hour=int(kw["hour"]), minute=int(kw.get("minute", 0)),
+                                  second=0, microsecond=0)
+    try:
+        grace = float(effective_grace(job_id) or spec.get("misfire_grace_time") or 0)
+    except Exception:
+        grace = float(spec.get("misfire_grace_time") or 0)
+    return fire + timedelta(seconds=grace)
 
 
 _DOW_KO = {"mon": "월", "tue": "화", "wed": "수", "thu": "목",

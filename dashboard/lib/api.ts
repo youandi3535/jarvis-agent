@@ -81,6 +81,8 @@ export type GraphData  = { agents: AgentDef[]; edges: PipelineEdge[]; legend: Le
 export type TokenDaily   = { date: string; output: number; input: number; cache_create: number; cache_read: number; calls: number };
 export type TokenHour    = { hour: string; output: number };
 export type TokenProject = { project: string; output: number; calls: number };
+/** 소비 주체별 오늘 사용량 — 누가 태우는지 한눈에 (daemon / subagent / session) */
+export type TokenConsumer = { consumer: string; output: number; calls: number; total: number };
 export type TokenAlias   = { alias: string; model: string; calls: number; output: number; input: number; cache_create: number; cache_read: number; cost: number; failed: number };
 export type TokenCall    = { ts: string; alias: string; model: string; output_tokens: number;
                              input_tokens: number; cache_create: number; cache_read: number;
@@ -94,8 +96,9 @@ export type TokenData = {
   history?: TokenDaily[];
   quota?: { available: boolean; raw?: unknown; fetched_at?: string } | null;
   suggestions?: TokenSuggestion[];
-  totals?: { available: boolean; reason?: string; scanned_files?: number;
-             daily?: TokenDaily[]; hourly_today?: TokenHour[]; by_project_today?: TokenProject[] };
+  totals?: { available: boolean; reason?: string; scanned_files?: number; deduped_lines?: number;
+             daily?: TokenDaily[]; hourly_today?: TokenHour[]; by_project_today?: TokenProject[];
+             by_consumer_today?: TokenConsumer[] };
   by_alias?: TokenAlias[];
   recent_calls?: TokenCall[];
   daemon_today?: { calls:number; output:number; input:number; cache_create:number;

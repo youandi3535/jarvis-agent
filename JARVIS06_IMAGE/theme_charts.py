@@ -75,7 +75,7 @@ def _cap(key: str, t: str = '', **kw) -> str:
         data_ctx = ', '.join(f'{k}={v}' for k, v in kw.items()) if kw and key != 'profit_loss' else ''
         extra = f" 데이터: {data_ctx}." if data_ctx else ""
         return _llm(
-            "writer_fast",
+            "writer_short_visual",
             f"{theme_ctx}블로그 차트 캡션 1문장. 차트: {desc}.{extra} 25자 이내. 해요체. 문장만 출력.",
             max_tokens=40, temperature=0.8
         ) or f"{theme_ctx}{_CAP_DESC.get(key, key)}"

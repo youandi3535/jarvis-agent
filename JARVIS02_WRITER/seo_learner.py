@@ -133,7 +133,7 @@ JSON 배열로만 답변 (실제 개선 필요 항목만 — 이미 잘 적용�
 ]"""
 
     try:
-        raw_text     = (_inv_cli("writer", prompt, timeout=120) or "").strip()
+        raw_text     = (_inv_cli("writer_long_learn", prompt, timeout=120) or "").strip()
         improvements = _parse_improvements(raw_text)
     except Exception as e:
         log.error(f"[SEO Learner] Claude 분석 실패: {e}")

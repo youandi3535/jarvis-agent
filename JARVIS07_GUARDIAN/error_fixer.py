@@ -131,20 +131,25 @@ def _safe_path(target: str) -> Path | None:
     try:
         p = (_ROOT / target).resolve()
         # 루트 탈출 방지
-        p.relative_to(_ROOT)
-        # 금지 디렉터리 차단
+        rel_path = p.relative_to(_ROOT)
+        rel = str(rel_path)
+        # ── 금지 디렉터리 차단 — **경로 구성요소** 로 판정 (2026-07-26 오탐 수정) ──
+        #   ★ 종전 `if deny in str(p)` 는 *문자열 포함* 이라 이름에 우연히 들어간 파일까지
+        #     영구 차단했다. 실측: `JARVIS03_RADAR/blogs.py`(b-logs)·`shared/dialogs.py`
+        #     (dia-logs) 가 자동수정 불가였다. 저장소의 다른 두 곳은 이미 올바른 패턴을
+        #     쓰고 있었다 — `agent_tools.py:374`(rel==deny or startswith) ·
+        #     `auto_repair.py:346`(d in p.parts). 여기만 유일하게 substring 이었다.
+        #   다중 세그먼트 deny("shared/backups")도 함께 다루므로 두 형태를 모두 본다.
         for deny in _DENY_DIRS:
-            if deny in str(p):
-                log.warning(f"[GUARDIAN] 금지 경로: {p}")
+            hit = ((rel == deny or rel.startswith(deny + "/")) if "/" in deny
+                   else (deny in rel_path.parts))
+            if hit:
+                log.warning(f"[GUARDIAN] 금지 경로: {rel}")
                 return None
         # ★ 금지 파일 차단 (ERRORS.md 덮어쓰기 사고 재발 방지)
-        try:
-            rel = str(p.relative_to(_ROOT))
-            if rel in _DENY_FILES or any(rel.endswith("/" + d) or rel == d for d in _DENY_FILES):
-                log.warning(f"[GUARDIAN] 금지 파일 (기록·박제): {rel}")
-                return None
-        except Exception:
-            pass
+        if rel in _DENY_FILES or any(rel.endswith("/" + d) or rel == d for d in _DENY_FILES):
+            log.warning(f"[GUARDIAN] 금지 파일 (기록·박제): {rel}")
+            return None
         # 확장자 체크
         if p.suffix not in _ALLOW_EXT:
             log.warning(f"[GUARDIAN] 비허용 확장자: {p.suffix}")
@@ -176,6 +181,17 @@ def _backup(file_path: Path) -> Path | None:
         return None
 
 
+def _rollback_ok(file_path: Path, bak_path: Path) -> bool:
+    """복원 성공 여부를 **돌려주는** 롤백. 실패를 삼키면 파손을 성공으로 집계한다."""
+    try:
+        shutil.copy2(bak_path, file_path)
+        log.info(f"[GUARDIAN] 롤백 완료: {file_path.name}")
+        return True
+    except Exception as e:                              # noqa: BLE001
+        log.error(f"[GUARDIAN] ★ 롤백 실패 — 파일이 파손된 채 남았다: {file_path} — {e}")
+        return False
+
+
 def _rollback(file_path: Path, bak_path: Path):
     """백업에서 원복."""
     try:
@@ -185,20 +201,105 @@ def _rollback(file_path: Path, bak_path: Path):
         log.error(f"[GUARDIAN] 롤백 실패: {e}")
 
 
-def _import_check(file_path: Path) -> bool:
-    """수정 후 import 테스트. Python 파일만."""
+# ── import 검증 프로브 (별도 인터프리터) ─────────────────────────────────────
+#   ★ 왜 서브프로세스인가 (2026-07-26, ERRORS [502]):
+#     종전 `_import_check` 는 `spec.loader.exec_module(mod)` 로 **패치된 코드를 살아있는
+#     데몬 프로세스 안에서 실제로 실행** 했다. 두 가지가 문제였다.
+#       ① 모듈 레벨 부작용이 데몬 안에서 진짜로 일어난다 (LLM 이 쓴 코드를 그대로).
+#       ② `sys.modules` 캐시 — 모듈 안의 `import B` 는 데몬이 이미 들고 있는 **옛 B** 를
+#          집는다. 그래서 A·B 를 함께 고쳐도 검사는 "새 A + 옛 B" 를 본다. 다중 파일
+#          트랜잭션에서는 *정합성을 보려고* 함께 고치는 것이라 이 오염이 검증의 핵심을 무력화한다.
+#     저장소에는 이미 같은 이유로 만든 선례가 있다 — `_run_probe` 의 재현 프로브
+#     ("별도 인터프리터 — 데몬의 import 캐시가 진실을 가린다"). 그 패턴을 그대로 따른다.
+#   킬스위치 `GUARDIAN_IMPORT_SUBPROC=0` → 종전 in-process 방식.
+#   ★★ `sys.modules` 에 **선등록하지 말 것** (2026-07-26 회귀 자수):
+#     초판은 "자기참조 import 대비" 라며 `sys.modules[mod_name] = m` 를 넣었는데, 그게
+#     **멀쩡한 파일을 실패로 만든다**. 반쪽만 초기화된 모듈을 미리 꽂아두면 모듈 본문이
+#     자기 패키지를 건드리는 순간 `__init__.py` 가 그 빈 객체를 집어 재수출에 실패한다.
+#     실측: 무수정 상태에서 **24개 파일(JARVIS09 전량)** 이 import 실패 → 전량 롤백 →
+#     *옳은 패치를 낸 arm 에 음의 보상*. 종전 in-process 검사는 선등록을 하지 않았으므로
+#     이건 순수한 신규 회귀였다. 검사는 운영이 겪지 않는 상태를 만들어내면 안 된다.
+#   ★★ 그리고 **운영이 실제로 쓰는 import 머시너리를 그대로 타야 한다** — 실측으로 확정.
+#     무수정 저장소 202개 파일에 세 방식을 돌린 결과:
+#       · `sys.modules` 선등록 + spec/exec  → 실패 24 (JARVIS09 패키지 재수출 붕괴)
+#       · 선등록 없이 spec/exec             → 실패 15 (dataclass 가 `sys.modules[__module__]`
+#                                              를 찾지 못함 — 파일을 '이름 없는 모듈' 로 띄운 탓)
+#       · `importlib.import_module`         → **실패 0**
+#     spec/exec 는 부모 패키지도, 모듈 등록도 없는 *인공 상태* 를 만든다. 운영은 그런 상태로
+#     모듈을 쓰지 않는다. 같은 파일의 재현 프로브(`_PROBE_SRC`)가 이미 `import_module` 을
+#     쓰고 있었다 — 검사는 소비자의 경로를 재현해야 한다는 ERRORS [499] 교훈 그대로다.
+_IMPORT_PROBE_SRC = r'''
+import importlib, sys
+root, mod_name, path = sys.argv[1], sys.argv[2], sys.argv[3]
+if root not in sys.path:
+    sys.path.insert(0, root)
+if mod_name and all(seg.isidentifier() for seg in mod_name.split(".")):
+    importlib.import_module(mod_name)           # 운영과 동일 경로 (부모 패키지·순환 처리 포함)
+else:
+    # 모듈명으로 쓸 수 없는 경로(점으로 시작하는 폴더 등) — 파일 단위로만 확인
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_probe_mod", path)
+    if spec and spec.loader:
+        spec.loader.exec_module(importlib.util.module_from_spec(spec))
+'''
+
+
+def _import_timeout() -> float:
+    """import 검증 상한(초). ★ 리터럴을 박지 않는다 — 재현검증 예산에서 *파생* 한다.
+
+    같은 파일이 재현검증엔 `_verify_timeout()`(무배포 조정 노브)을 두고 있는데 import
+    검증만 숫자를 박아두면, 노브를 돌려도 한쪽만 따라오는 드리프트가 생긴다.
+    무배포 조정: `GUARDIAN_IMPORT_TIMEOUT`.
+    """
+    try:
+        v = float(os.getenv("GUARDIAN_IMPORT_TIMEOUT", "") or _verify_timeout())
+        return max(2.0, v)
+    except Exception:                                   # noqa: BLE001
+        return 25.0
+
+
+def _import_check(file_path: Path, timeout: float | None = None) -> bool:
+    """수정 후 import 테스트. Python 파일만. **깨끗한 인터프리터**에서 수행."""
     if file_path.suffix != ".py":
         return True
+    if timeout is None:
+        timeout = _import_timeout()
     try:
         rel = file_path.relative_to(_ROOT)
         module_str = str(rel).replace("/", ".").replace("\\", ".")[:-3]
+    except Exception as e:                                  # noqa: BLE001
+        log.warning(f"[GUARDIAN] import 대상 경로 해석 실패: {e}")
+        return False
+
+    if os.getenv("GUARDIAN_IMPORT_SUBPROC", "1").strip() not in ("0", "false", "False"):
+        try:
+            cp = subprocess.run(
+                [sys.executable, "-c", _IMPORT_PROBE_SRC,
+                 str(_ROOT), module_str, str(file_path)],
+                capture_output=True, text=True, timeout=timeout, cwd=str(_ROOT),
+            )
+            if cp.returncode == 0:
+                return True
+            log.warning(f"[GUARDIAN] import 테스트 실패({file_path.name}): "
+                        f"{(cp.stderr or '').strip()[-300:]}")
+            return False
+        except subprocess.TimeoutExpired:
+            # 시간 초과 = 모듈 레벨에서 뭔가 오래 도는 것. 판정 불가지만 **통과시키지 않는다**
+            # (import 조차 못 끝내는 상태를 정상으로 볼 수 없다 — fail-closed).
+            log.warning(f"[GUARDIAN] import 테스트 시간초과({file_path.name}, {timeout:.0f}s)")
+            return False
+        except Exception as e:                              # noqa: BLE001
+            # 프로브 자체를 못 띄운 경우 — 아래 in-process 로 폴백
+            log.debug(f"[GUARDIAN] import 프로브 기동 실패 → in-process 폴백: {e}")
+
+    try:
         import importlib
         spec = importlib.util.spec_from_file_location(module_str, str(file_path))
         if spec and spec.loader:
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
         return True
-    except Exception as e:
+    except Exception as e:                                  # noqa: BLE001
         log.warning(f"[GUARDIAN] import 테스트 실패: {e}")
         return False
 
@@ -276,13 +377,24 @@ def _max_shrink_ratio() -> float:
         return _MAX_SHRINK_RATIO_DEFAULT
 
 
-def _meaningful_lines(text: str) -> list[str]:
-    """공백·주석만인 줄 제외 — '지운 양' 판정의 분모."""
+def _meaningful_lines(text: str, suffix: str = ".py") -> list[str]:
+    """공백·주석만인 줄 제외 — '지운 양' 판정의 분모.
+
+    ★ 언어별 주석 규칙 (2026-07-26): `#` 를 무조건 주석으로 버리면 **마크다운의 제목이
+      통째로 사라진다**(`# 제목` 은 주석이 아니라 본문이다). 그러면 제목이 많은 문서는
+      분모가 텅 비어 판정이 뒤집힌다 — 정상 패치가 "전체 삭제" 로 거부되거나, 반대로
+      원본이 비어 보여 판정 자체를 포기(통과)한다.
+      실제로 `.md` 를 이 검사에 태우기 시작하면서 드러났다.
+    """
+    strip_hash = suffix in (".py", ".sh")      # 마크다운은 `#` 가 본문(제목)이다
     out = []
     for ln in (text or "").splitlines():
         s = ln.strip()
-        if s and not s.startswith("#"):
-            out.append(s)
+        if not s:
+            continue
+        if strip_hash and s.startswith("#"):
+            continue
+        out.append(s)
     return out
 
 
@@ -350,8 +462,12 @@ def _scope_bodies(tree: ast.AST) -> dict[str, "Counter"]:
 
 
 # ── 저장소 전역 참조 검사 — "dead code" 를 *파일 안* 만 보고 단정하지 않는다 ──────
+# ★ `.claude` 추가 (2026-07-26): 그 아래 `worktrees/` 에 **저장소 사본** 이 들어 있어
+#   저장소 .py 목록의 절반을 차지한다. 사본에는 지우려는 심볼이 그대로 남아 있으므로
+#   `_referenced_elsewhere` 가 "다른 파일이 아직 쓴다" 로 오판 → 정당한 정리가 영구 거부된다.
+#   (오버레이는 *이번 트랜잭션의 실제 경로* 만 덮으므로 사본까지 가려주지 못한다.)
 _SKIP_PARTS = {".venv", ".git", "__pycache__", "chrome_profile", "logs", "backups",
-               "node_modules", "dashboard"}
+               "node_modules", "dashboard", ".claude"}
 
 
 _PY_FILES_CACHE: tuple[float, list[Path]] = (0.0, [])
@@ -439,11 +555,19 @@ def _imports_symbol(src: str, dotted: str, seg: str, name: str) -> bool:
     return (dotted in src or seg in src) and (f'"{name}"' in src or f"'{name}'" in src)
 
 
-def _referenced_elsewhere(name: str, exclude: Path | None) -> bool:
+def _referenced_elsewhere(name: str, exclude: Path | None,
+                          overlay: dict | None = None) -> bool:
     """이 이름이 *다른 파일* 에서 그 모듈의 심볼로 쓰이는가.
 
     공개 헬퍼를 dead code 로 오판해 지우는 것을 막는다.
     ② 동적 설계: 예외 목록을 손으로 두지 않고 *저장소 실물* 을 훑어 판정한다.
+
+    ★ overlay (2026-07-26): `{resolved Path: 적용 후 내용}`. 다중 파일을 **한 트랜잭션으로**
+      고칠 때, 아직 디스크에 안 쓴 동료 파일의 *적용 후* 모습을 여기에 넣는다.
+      없으면 디스크만 보게 되는데, 그러면 A 에서 함수를 지우고 B 에서 그 호출부를 지우는
+      **정당한 리팩터가 "B 가 아직 참조한다" 로 영원히 거부**된다 (실측 확인:
+      `job_window_deadline` 제거 패치 → `functional — 저장소 다른 파일에서 참조됨`).
+      판정 기준은 "지금 디스크" 가 아니라 **"이 트랜잭션이 끝난 뒤의 저장소"** 여야 한다.
     """
     if not name or name.startswith("__"):
         return True                        # 던더는 판정 포기 → 보수적으로 '쓰인다'
@@ -460,9 +584,15 @@ def _referenced_elsewhere(name: str, exclude: Path | None) -> bool:
         ex = None
     for p in _repo_py_files():
         try:
-            if ex and p.resolve() == ex:
+            rp = p.resolve()
+            if ex and rp == ex:
                 continue
-            src = p.read_text(encoding="utf-8", errors="ignore")
+            # ★ 오버레이 우선 — `in` 으로 판정한다. `overlay.get(rp) or read_text()` 로 쓰면
+            #   *패치 결과가 빈 문자열* 일 때 falsy 로 떨어져 디스크 옛 내용을 읽는다.
+            if overlay is not None and rp in overlay:
+                src = overlay[rp]
+            else:
+                src = p.read_text(encoding="utf-8", errors="ignore")
             if seg not in src or not npat.search(src):
                 continue                   # 예선 — 모듈도 이름도 언급 없으면 볼 것 없음
             if _imports_symbol(src, dotted, seg, name):
@@ -499,7 +629,8 @@ def _referenced_names(tree: ast.AST) -> set[str]:
 
 
 def classify_pure_removal(original: str, patch: str,
-                          target_path: Path | None = None) -> tuple[str, str]:
+                          target_path: Path | None = None,
+                          overlay: dict | None = None) -> tuple[str, str]:
     """순수 삭제 패치의 성격 판정. 반환 ("cleanup"|"functional"|"unparsable", 사유).
 
     ★ 공개(테스트·감사가 부를 수 있게) — 그러나 정책 결정은 `_removal_issue` 한 곳만 한다.
@@ -532,7 +663,7 @@ def classify_pure_removal(original: str, patch: str,
                     continue
                 if nm in new_refs:
                     return "functional", f"삭제된 `{nm}` 가 패치 후에도 참조됨 @{where}"
-                if target_path is not None and _referenced_elsewhere(nm, target_path):
+                if target_path is not None and _referenced_elsewhere(nm, target_path, overlay):
                     return "functional", f"삭제된 `{nm}` 가 저장소 다른 파일에서 참조됨"
                 explained.append(f"dead code 제거({nm})")
                 continue
@@ -550,7 +681,8 @@ def classify_pure_removal(original: str, patch: str,
     return "cleanup", "제거된 유의미 문장 없음(주석·공백·문서열만)"
 
 
-def _removal_issue(original: str, patch: str, target_path: Path | None = None) -> str:
+def _removal_issue(original: str, patch: str, target_path: Path | None = None,
+                   overlay: dict | None = None) -> str:
     """★ code-removal patch 가드 — 기능을 *지워서* 통과시키는 패치 거부.
 
     APR 문헌의 최악 실패 모드. 판정 순서 (P3 정교화 2026-07-25):
@@ -564,21 +696,27 @@ def _removal_issue(original: str, patch: str, target_path: Path | None = None) -
       `x[:N]` → `(x or "")[:N]` 같은 정상 치환도 전부 거부돼 수정이 마비된다.
     위반 사유 문자열 반환, 정상이면 "".
     """
-    orig = _meaningful_lines(original)
-    new  = _meaningful_lines(patch)
+    _sfx = target_path.suffix if target_path is not None else ".py"
+    orig = _meaningful_lines(original, _sfx)
+    new  = _meaningful_lines(patch, _sfx)
     if not orig:                       # 원본을 못 읽었으면 판정 불가 — 통과(보수적)
         return ""
     if not new:
         return "패치가 비어 있음(전체 삭제)"
 
+    # ★ 언어 구분 (2026-07-26): `.md`/`.sh` 는 AST 가 없어 문장 단위 판정을 못 한다.
+    #   그렇다고 검사를 통째로 건너뛰면 — 종전이 그랬다 — 허용 확장자 3종 중 2종이
+    #   **전면 삭제까지 무검증** 으로 통과했다(호출자가 `.py` 일 때만 이 함수를 불렀다).
+    #   언어 무관한 두 검사(빈 패치·과다 축소)는 모두에 걸고, AST 판정만 `.py` 로 한정한다.
+    is_code = (target_path.suffix == ".py") if target_path is not None else True
+
     added = set(new) - set(orig)
-    removed = set(orig) - set(new)
     # ★ "순수 삭제" 판정은 *줄 집합 차이* 가 아니라 **추가 0 + 줄 수 감소** 로 본다.
     #   집합 차이로 보면 *중복* 줄 삭제(중복 def 제거)가 removed=∅ 로 잡혀 이 경로를 못 탄다(실측).
     pure_deletion = (not added) and len(new) < len(orig)
 
-    if pure_deletion and _cleanup_allowed():
-        kind, why = classify_pure_removal(original, patch, target_path)
+    if is_code and pure_deletion and _cleanup_allowed():
+        kind, why = classify_pure_removal(original, patch, target_path, overlay)
         if kind == "cleanup":
             log.info(f"[GUARDIAN] 순수 삭제 허용 — {why}")
             return ""
@@ -590,9 +728,12 @@ def _removal_issue(original: str, patch: str, target_path: Path | None = None) -
     if lost > 0:
         ratio = lost / len(orig)
         if ratio > _max_shrink_ratio():
-            return (f"코드 삭제 과다 — 유의미한 줄 {len(orig)}→{len(new)} "
+            return (f"삭제 과다 — 유의미한 줄 {len(orig)}→{len(new)} "
                     f"({ratio:.0%} 감소 > 임계 {_max_shrink_ratio():.0%})")
-    if pure_deletion:
+    # ★ "추가 0줄 순수 삭제" 자동 거부는 **코드에만** 적용한다.
+    #   문서(.md)·스크립트(.sh)는 내용을 덜어내는 정리가 정상 작업이라, 여기까지 걸면
+    #   문서 정리가 영원히 막힌다. 문서는 위의 과다 축소 임계로만 지킨다.
+    if is_code and pure_deletion:
         return (f"순수 삭제 패치(추가 0줄 / 유의미한 줄 {len(orig)}→{len(new)}) "
                 f"— 기능 제거로 통과 시도")
     return ""
@@ -916,6 +1057,17 @@ def _bandit_signal(error_record: dict, analysis: dict, success: bool,
         log.debug(f"[BANDIT] 보상 기록 실패: {_be}")
 
 
+def record_rollback_learning(error_record: dict, analysis: dict, reason: str,
+                             verification: str = "") -> dict:
+    """롤백을 학습 자산에 반영 — **GUARDIAN 내 두 적용 경로 공통 정문** (2026-07-26).
+
+    `apply_fix` 와 `pattern_fixer.apply_stored_patches` 가 같은 강등 규칙을 쓰도록
+    공개 이름 하나로 모은다. (밴딧 arm 은 경로마다 산출 근거가 달라 — 학습 재적용은
+    *저장된 fingerprint* 로 계산해야 한다 — 각자 계산하는 것이 맞다.)
+    """
+    return _record_learning_failure(error_record, analysis, reason, verification)
+
+
 def _record_learning_failure(error_record: dict, analysis: dict,
                              reason: str, verification: str = "") -> dict:
     """★ 결함 2 배선 (2026-07-25) — 롤백·재현 실패를 *학습 자산* 에 반영한다.
@@ -1006,6 +1158,225 @@ class FixResult(int):
         return f"FixResult({bool(self)}, {self._meta})"
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  ★★ 안전 적용 코어 — **정책 기반 자동수정**이 파일에 닿는 단 하나의 문 (사용자 승인 2026-07-26)
+#
+#  ★ 정확히 말한다 (과장 금지): 저장소에서 파일을 쓰는 자동 경로는 **셋** 이고, 이 코어는
+#    그중 *정책 기반 자동수정* 둘을 덮는다. 세 번째 — `auto_repair` 의 Claude Code SDK
+#    자율수정(`permission_mode="bypassPermissions"`, Edit/Write 직접) — 은 **여전히 경계 밖**
+#    이다. 그건 별도 신뢰 경계(사용자가 SDK 에 위임한 자율성)이며 이 코어로 덮이지 않는다.
+#    "단 하나의 문" 이라고 적어두면 그 배너 자체가 *복사본을 진실로 믿는* 사고가 된다.
+#
+#  왜 만들었나 (ERRORS [502]): 정책 기반 경로 **둘** 의 가드가 서로 달랐다.
+#    · `apply_fix`                     — 가드 5종 전부 통과
+#    · `pattern_fixer.apply_stored_patches` — 가드 **0종** (매일 04:30 auto_repair 가 호출)
+#  두 번째 길에는 경로안전·삭제가드·import 검증·재현검증이 하나도 없었고, 구문검사마저
+#  *파일에 쓴 뒤* 였다. `_DENY_FILES` 로 지킨 learned_patterns.json 이 그 길에선 무방비였다.
+#  가드를 아무리 정교하게 만들어도 옆문이 열려 있으면 정책은 새어나간다(CLAUDE.md 실례 [474]).
+#
+#  계약 — **전부 아니면 전무**:
+#    ① 검사는 *쓰기 전* 에 전량. 하나라도 어긋나면 **아무 파일도 건드리지 않는다**.
+#    ② 통과분은 전량 백업 → 전량 쓰기.
+#    ③ 이후 어떤 실패(쓰기·import·재현)든 **전량 롤백**.
+#  이 계약이 곧 다중파일 트랜잭션의 정의이기도 하다 — 파일 1개는 N=1인 특수경우일 뿐.
+# ══════════════════════════════════════════════════════════════════════════════
+
+class _Staged:
+    """검사를 통과해 적용 대기 중인 파일 하나. 롤백에 필요한 것을 전부 들고 있다."""
+    __slots__ = ("rel", "path", "content", "original", "bak", "written")
+
+    def __init__(self, rel: str, path: Path, content: str, original: str):
+        self.rel, self.path, self.content, self.original = rel, path, content, original
+        self.bak: Path | None = None
+        self.written = False
+
+    def __repr__(self):
+        return f"_Staged({self.rel})"
+
+
+def normalize_patch_items(analysis: dict) -> list:
+    """analysis dict → `[(target_rel, new_content), ...]` — **패치 목록 해석 단일 지점**.
+
+    ★ 하위호환: 종전 단일 키(`target_file`/`patch`)는 1원소 목록으로 승격된다.
+      새 키 `patches: [{"target_file","patch"}, ...]` 가 있으면 그쪽이 우선.
+    ★ `patch_full` 도 함께 흡수 — Tier-1 정적 fixer 6종이 쓰는 이름이다.
+    """
+    out: list = []
+    raw = analysis.get("patches")
+    if isinstance(raw, list) and raw:
+        for it in raw:
+            if not isinstance(it, dict):
+                continue
+            rel = str(it.get("target_file") or "").strip()
+            body = it.get("patch", it.get("patch_full", ""))
+            if rel and body:
+                out.append((rel, body))
+        if out:
+            return out
+    rel = str(analysis.get("target_file") or "").strip()
+    body = analysis.get("patch", analysis.get("patch_full", ""))
+    # ★ 콤마로 이어붙인 다중 경로("a.py, b.py")는 *경로가 아니다* — 학습 원장에 실제로
+    #   4건 쌓여 있었고 `_ROOT/"a.py, b.py"` 가 존재하지 않아 조용히 영구 스킵됐다.
+    #   내용이 하나뿐이라 어느 파일 것인지 복원할 수 없으므로 여기서 명시적으로 버린다
+    #   (조용한 스킵보다 드러나는 거부가 낫다).
+    if rel and "," in rel:
+        log.warning(f"[GUARDIAN] target_file 이 다중 경로 문자열 — 해석 불가로 거부: {rel[:120]}")
+        return []
+    return [(rel, body)] if (rel and body) else []
+
+
+# 거부 사유 *코드* — 호출자의 분기는 이 코드로만 한다.
+#   ★ 표시 문자열(한국어)로 분기하면 문구를 다듬는 순간 조용히 어긋난다.
+#     실제로 초판이 `if "구문 오류" in _why` 로 밴딧 보상 방향을 갈랐다 — 지금은 안전하지만
+#     사유 문자열에 남의 예외 메시지가 섞여 들어오는 구조라 언제든 오판이 될 수 있었다.
+REJ_NONE     = ""
+REJ_EMPTY    = "empty"        # 패치 목록·내용 없음
+REJ_PATH     = "path"         # 경로 안전 검증 실패 (금지폴더·금지파일·루트탈출·확장자)
+REJ_MISSING  = "missing"      # 대상 파일 없음
+REJ_DUP      = "duplicate"    # 같은 파일이 두 번 지정
+REJ_READ     = "read"         # 원본 읽기 실패
+REJ_SYNTAX   = "syntax"       # 패치 구문 오류 ← 유일하게 *전략의 실패*(음의 보상)
+REJ_REMOVAL  = "removal"      # 지워서 통과 가드
+
+
+def precheck_patchset(items: list, *, tag: str = "") -> tuple:
+    """적용 **전** 전수 검사. Returns `(staged, 사유, 사유코드)`.
+
+    하나라도 어긋나면 빈 목록을 돌려준다 — 호출자가 여기서 멈추면 파일은 무사하다.
+    """
+    if not items:
+        return [], "패치 목록 없음", REJ_EMPTY
+
+    # ① 경로·존재 — 먼저 전부 해석해야 오버레이를 만들 수 있다
+    staged: list = []
+    seen: dict = {}
+    for rel, content in items:
+        if not rel or not content:
+            return [], f"패치/대상 누락 ({rel or '(경로없음)'})", REJ_EMPTY
+        path = _safe_path(rel)
+        if not path:
+            return [], f"경로 검증 실패: {rel}", REJ_PATH
+        if not path.exists():
+            return [], f"파일 없음: {rel}", REJ_MISSING
+        if path in seen:
+            # 같은 파일을 두 항목이 가리키면 백업이 서로를 덮어써 롤백이 깨진다
+            return [], f"같은 파일이 두 번 지정됨: {rel} (= {seen[path]})", REJ_DUP
+        seen[path] = rel
+        try:
+            original = path.read_text(encoding="utf-8")
+        except Exception as e:                      # noqa: BLE001
+            return [], f"원본 읽기 실패 {rel}: {str(e)[:60]}", REJ_READ
+        staged.append(_Staged(rel, path, content, original))
+
+    # ② 구문 — `.py` 만. 쓰기 전에 보므로 깨진 코드는 디스크에 닿지 않는다
+    for st in staged:
+        if st.path.suffix == ".py" and not _validate_python(st.content):
+            return [], f"patch 구문 오류: {st.rel}", REJ_SYNTAX
+
+    # ③ 삭제 가드 — ★ 오버레이(트랜잭션 전체의 '적용 후' 모습)를 함께 넘긴다
+    if _verify_enabled():
+        overlay = {st.path: st.content for st in staged}
+        for st in staged:
+            why = _removal_issue(st.original, st.content, st.path, overlay)
+            if why:
+                return [], f"code-removal 패치 거부 ({st.rel}): {why}", REJ_REMOVAL
+
+    if tag:
+        log.info(f"[GUARDIAN/apply] {tag} 선검사 통과 — {len(staged)}개 파일: "
+                 f"{', '.join(s.rel for s in staged)}")
+    return staged, "", REJ_NONE
+
+
+def rollback_patchset(staged: list) -> tuple:
+    """쓴 것을 전부 되돌린다. Returns `(되돌린 수, 되돌리지 못한 rel 목록)`.
+
+    ★ 실패를 삼키지 않는다 (2026-07-26): 종전엔 `_rollback` 이 예외를 로그로만 남기고
+      호출자는 개수만 받아, **디스크에 파손된 파일을 남기고도 "되돌렸다" 고 보고**했다.
+      되돌리지 못한 파일이 있으면 그건 '자동수정 실패' 가 아니라 **저장소 파손** 이다.
+    """
+    ok, failed = 0, []
+    for st in staged:
+        if not st.bak:
+            continue
+        # ★ `written` 이 False 여도 시도한다 — 쓰기 도중 예외(인코딩·ENOSPC)면 파일이
+        #   이미 잘려 있을 수 있다. 백업이 있으면 되돌리는 쪽이 항상 안전하다.
+        if _rollback_ok(st.path, st.bak):
+            st.written = False
+            ok += 1
+        else:
+            failed.append(st.rel)
+    return ok, failed
+
+
+REJ_BACKUP = "backup"         # 백업 실패 — *아직 아무것도 안 쓴* 상태
+REJ_WRITE  = "write"          # 쓰기 실패 → 전량 롤백
+REJ_IMPORT = "import"         # import 검증 실패 → 전량 롤백
+
+
+def apply_patchset(staged: list, *, tag: str = "") -> tuple:
+    """백업 전량 → 쓰기 전량 → import 검증 전량. 실패 시 **전량 롤백**.
+
+    Returns `(성공?, 사유, 사유코드)`. 실패면 호출자가 추가로 되돌릴 것은 없다.
+    """
+    if not staged:
+        return False, "적용 대상 없음", REJ_EMPTY
+
+    def _abort(reason: str, kind: str) -> tuple:
+        """전량 롤백 후 실패 반환. 되돌리지 못한 파일이 있으면 **사유에 박아** 올린다."""
+        _n, _failed = rollback_patchset(staged)
+        if _failed:
+            reason = (f"{reason} / ★ 롤백 실패 {len(_failed)}개 — 저장소 파손 상태: "
+                      f"{', '.join(_failed)}")
+            log.error(f"[GUARDIAN/apply] {tag} {reason}")
+        return False, reason, kind
+
+    for st in staged:                                  # ① 백업 전량
+        st.bak = _backup(st.path)
+        if not st.bak:
+            return _abort(f"백업 실패: {st.rel}", REJ_BACKUP)
+
+    # ② 쓰기 전량 — ★ 임시파일에 쓴 뒤 **원자 교체**.
+    #   `write_text` 는 먼저 truncate 하고 인코딩하므로, 인코딩 도중 예외가 나면
+    #   원본이 이미 0바이트로 날아간 뒤다(실측: lone surrogate 가 섞인 `.md` 로 재현).
+    #   교체 방식이면 실패해도 원본이 그대로 남는다 — 되돌릴 일 자체를 없앤다.
+    #   같은 이유로 저장소는 이미 `json_store` 에서 이 패턴을 쓰고 있다.
+    for st in staged:
+        tmp = st.path.with_suffix(st.path.suffix + ".tmp")
+        try:
+            tmp.write_text(st.content, encoding="utf-8")
+            os.replace(tmp, st.path)
+            st.written = True
+        except Exception as e:                         # noqa: BLE001
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:                          # noqa: BLE001
+                pass
+            return _abort(f"파일 쓰기 실패 {st.rel}: {str(e)[:60]}", REJ_WRITE)
+
+    # ③ import 검증 — ★ N개를 *전부 쓴 뒤* 에 한다. 하나씩 쓰고 검사하면 중간 상태
+    #    (새 A + 옛 B)를 검사하게 되는데, 그건 우리가 만들려는 최종 상태가 아니다.
+    time.sleep(0.3)
+    for st in staged:
+        if not _import_check(st.path):
+            return _abort(f"import 검증 실패: {st.rel}", REJ_IMPORT)
+
+    if tag:
+        log.info(f"[GUARDIAN/apply] {tag} 적용 완료 — {len(staged)}개 파일")
+    return True, "", REJ_NONE
+
+
+def apply_files_safely(items: list, *, tag: str = "") -> tuple:
+    """선검사 → 적용을 한 번에. **외부 호출자용 정문** (pattern_fixer 등).
+
+    Returns `(성공?, 사유, staged)`. 성공 시 `staged` 로 추가 검증 후 직접 롤백할 수 있다.
+    """
+    staged, why, _kind = precheck_patchset(items, tag=tag)
+    if why:
+        return False, why, []
+    ok, why2, _k2 = apply_patchset(staged, tag=tag)
+    return ok, why2, (staged if ok else [])
+
+
 def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
     """분석 결과를 실제 파일에 적용.
 
@@ -1055,85 +1426,53 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
         log.info(f"[GUARDIAN] #{error_id} fixable=False — 수정 skip")
         return _fail("fixable=False")
 
-    patch      = analysis.get("patch", "")
-    target_rel = analysis.get("target_file", "")
-
-    if not patch or not target_rel:
+    # ── 패치 목록 해석 (단일/다중 공통 — `normalize_patch_items` 단일 지점) ──
+    _items = normalize_patch_items(analysis)
+    if not _items:
         log.warning(f"[GUARDIAN] #{error_id} patch 또는 target 없음")
         return _fail("patch/target 누락")
 
-    # ── 경로 안전 검증 ───────────────────────────────────────────
-    file_path = _safe_path(target_rel)
-    if not file_path:
-        log.warning(f"[GUARDIAN] #{error_id} 경로 검증 실패: {target_rel}")
-        return _fail("경로 검증 실패")
+    # ── ★ 선검사 전량 (경로안전·구문·삭제가드) — 통과 못 하면 파일은 손도 안 댄다 ──
+    _staged, _why, _kind = precheck_patchset(_items, tag=f"#{error_id}")
+    if _why:
+        log.warning(f"[GUARDIAN] #{error_id} 선검사 거부 — {_why}")
+        # ★ 구문 오류는 *그 전략의 실패* 다 → 음의 보상. 나머지 거부(경로·삭제가드)는
+        #   *판정 불가·부적격* 이지 "수정 실패" 가 아니다 → 보상 0 (사용자 박제 2026-07-25 P3).
+        #   판정은 **사유 코드**로 한다 — 표시 문구로 분기하면 문구를 다듬는 순간 어긋난다.
+        if _kind == REJ_SYNTAX:
+            if _verify_enabled():
+                _bandit_signal(_fetch_record(error_id, analysis), analysis, success=False,
+                               why="patch 구문 오류")
+            return _fail(_why, verification=VERIFY_REPRODUCES)
+        return _fail(_why)
 
-    if not file_path.exists():
-        log.warning(f"[GUARDIAN] #{error_id} 파일 없음: {file_path}")
-        return _fail("파일 없음")
+    # 하류(재현검증·학습·DB 기록)는 *대표 1개* 를 기준으로 동작한다 — 목록의 첫 원소.
+    _primary          = _staged[0]
+    file_path         = _primary.path
+    target_rel        = _primary.rel
+    patch             = _primary.content
+    original_content  = _primary.original
 
-    # ── Python 구문 검증 ─────────────────────────────────────────
-    if file_path.suffix == ".py" and not _validate_python(patch):
-        log.warning(f"[GUARDIAN] #{error_id} 구문 오류 — 수정 중단")
-        # 깨진 패치를 만든 것도 그 전략의 실패다 — 음의 보상(종전엔 무신호였다)
-        if _verify_enabled():
-            _bandit_signal(_fetch_record(error_id, analysis), analysis, success=False,
-                           why="patch 구문 오류")
-        return _fail("patch 구문 오류", verification=VERIFY_REPRODUCES)
+    # ── 백업 전량 → 쓰기 전량 → import 검증 전량 (실패 시 전량 롤백) ──
+    _ok, _why, _kind = apply_patchset(_staged, tag=f"#{error_id}")
+    if not _ok:
+        # 백업 실패는 *아직 아무것도 안 쓴* 상태 — 학습·보상 신호를 줄 사건이 아니다.
+        if _kind == REJ_BACKUP:
+            log.error(f"[GUARDIAN] #{error_id} {_why}")
+            return _fail(_why)
 
-    # ── 원본 캡처 (diff 저장 + code-removal 가드) ────────────────
-    try:
-        original_content = file_path.read_text(encoding="utf-8")
-    except Exception:
-        original_content = ""
-
-    # ── ★ code-removal 가드 (적용 *전* 차단) ─────────────────────
-    #   "기능을 지워서 통과시키는" 패치는 파일이 파싱·import 되므로 종전 판정으론
-    #   무조건 fixed 였다. APR 문헌의 최악 실패 모드 — 적용 자체를 막는다.
-    if _verify_enabled() and file_path.suffix == ".py":   # 코드에만 적용(.md 재구성은 정상)
-        _rm = _removal_issue(original_content, patch, target_path=file_path)
-        if _rm:
-            # ★ P3 (사용자 박제 2026-07-25): 거부는 *판정 불가·부적격* 이지 "수정 실패" 가 아니다.
-            #   종전엔 여기서 밴딧에 음의 보상을 주고 verification=still_reproduces 로 흘려
-            #   ① 맞는 수정을 낸 arm 을 깎고 ② 하류(eval)가 실패로 오인하게 만들었다.
-            #   → 보상 신호 없음(0) + verification 신호 없음("") 으로 정정.
-            log.warning(f"[GUARDIAN] #{error_id} code-removal 패치 거부 — {_rm} "
-                        f"(보상 0 — 판정 불가는 실패가 아니다)")
-            return _fail(f"code-removal 패치 거부: {_rm}")
-
-    # ── .bak 백업 ────────────────────────────────────────────────
-    bak = _backup(file_path)
-    if not bak:
-        return _fail("백업 실패")
-
-    # ── 파일 적용 ────────────────────────────────────────────────
-    try:
-        file_path.write_text(patch, encoding="utf-8")
-        log.info(f"[GUARDIAN] #{error_id} 파일 적용: {file_path.name}")
-    except Exception as e:
-        log.error(f"[GUARDIAN] #{error_id} 파일 쓰기 실패: {e}")
-        _rollback(file_path, bak)
         _rec_w = _fetch_record(error_id, analysis)
-        _bandit_signal(_rec_w, analysis, success=False, why="파일 쓰기 실패 → 롤백")
-        _record_learning_failure(_rec_w, analysis, f"파일 쓰기 실패 → 롤백: {str(e)[:60]}")
-        return _fail(f"파일 쓰기 실패: {str(e)[:50]}", verification=VERIFY_REPRODUCES)
-
-    # ── import 검증 ──────────────────────────────────────────────
-    time.sleep(0.3)
-    if not _import_check(file_path):
-        log.warning(f"[GUARDIAN] #{error_id} import 실패 → 롤백")
-        _rollback(file_path, bak)
-        _rec_i = _fetch_record(error_id, analysis)
-        _bandit_signal(_rec_i, analysis, success=False, why="import 검증 실패 → 롤백")
+        _bandit_signal(_rec_w, analysis, success=False, why=f"{_why} → 롤백")
         # ★ 결함 2 배선 — 롤백은 학습 자산에도 반영한다 (감쇠·강등·격리)
-        _record_learning_failure(_rec_i, analysis, "import 검증 실패 → 롤백")
+        _record_learning_failure(_rec_w, analysis, f"{_why} → 롤백")
+        log.warning(f"[GUARDIAN] #{error_id} {_why} → 전량 롤백")
         if mark_wontfix:
             try:
                 from shared import db as _db
                 _db.mark_error_status(error_id, "wontfix")
             except Exception:
                 pass
-            _notify_fail(error_id, "import 검증 실패 — 롤백 완료")
+            _notify_fail(error_id, f"{_why} — 롤백 완료")
             error_record = {}
             try:
                 from shared import db as _db
@@ -1141,8 +1480,8 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
             except Exception:
                 pass
             _update_errors_md(error_record, analysis, success=False,
-                              verified=["문법 검사 통과", "import 검증 실패 → 자동 롤백"])
-        return FixResult(False, verification=VERIFY_REPRODUCES, reason="import 검증 실패")
+                              verified=["선검사 통과", f"{_why} → 자동 롤백"])
+        return FixResult(False, verification=VERIFY_REPRODUCES, reason=_why)
 
     # ── ★ 원 오류 재현 검증 (구문·import 통과 ≠ 오류 해소) ──────────
     _rec_for_verify = _fetch_record(error_id, analysis)
@@ -1153,7 +1492,7 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
     if _vstate == VERIFY_REPRODUCES:
         # 원 오류가 그대로 재현 → 이 패치는 고친 것이 아니다. 되돌린다.
         log.warning(f"[GUARDIAN] #{error_id} 원 오류 재현됨 → 롤백 (증상 은폐 학습 차단)")
-        _rollback(file_path, bak)
+        rollback_patchset(_staged)          # ★ 전량 롤백 — 다중 파일이면 N개 전부
         _bandit_signal(_rec_for_verify, analysis, success=False,
                        why=f"still_reproduces — {_vdetail[:80]}")
         # ★ 결함 2 배선 — 외생 신호(재현됨)를 learned_patterns 에 반영: 감쇠 → 임계 시 격리
@@ -1181,9 +1520,16 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
     _vtag = f"[verification={_vstate or 'legacy_unchecked'}] "
     try:
         from shared import db as _db
+        # ★ fixed_file 은 **경로 하나** 로 유지한다 (2026-07-26). 다중 파일이라고 콤마로
+        #   이어붙이면 ① `pattern_fixer` 의 도메인 분류가 경로 prefix 로 판정하므로 어긋나고
+        #   ② 그 문자열이 학습 원장에 들어가 재적용 시 `_ROOT/"a.py, b.py"` 로 조회돼
+        #   **조용히 영구 스킵**된다 — 실제로 그렇게 죽은 항목이 4건 있었다.
+        #   함께 고친 파일 목록은 사람이 읽는 `resolution` 본문에만 남긴다.
+        _files_note = ("함께 수정: " + ", ".join(s.rel for s in _staged) + "\n"
+                       if len(_staged) > 1 else "")
         _db.mark_error_fixed(
             error_id,
-            resolution=_vtag + (_vdetail + "\n" if _vdetail else "")
+            resolution=_vtag + (_vdetail + "\n" if _vdetail else "") + _files_note
                        + analysis.get("explanation", "") + "\n" + (patch[:500] if patch else ""),
             fixed_file=str(file_path.relative_to(_ROOT)),
         )
@@ -1198,15 +1544,20 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
         import difflib as _dl
         from JARVIS07_GUARDIAN.pattern_fixer import record_pattern_hit
         _rel = str(file_path.relative_to(_ROOT))
-        # unified diff 계산 (5줄 context)
-        _diff_lines = list(_dl.unified_diff(
-            original_content.splitlines(keepends=True),
-            patch.splitlines(keepends=True),
-            fromfile=f"a/{_rel}",
-            tofile=f"b/{_rel}",
-            n=5,
-        ))
-        _store_patch = "".join(_diff_lines) if _diff_lines else patch
+
+        def _diff_of(st) -> str:
+            """파일 하나의 unified diff (5줄 context). 계산 불가면 full-file 로 폴백."""
+            _dl_lines = list(_dl.unified_diff(
+                st.original.splitlines(keepends=True),
+                st.content.splitlines(keepends=True),
+                fromfile=f"a/{st.rel}", tofile=f"b/{st.rel}", n=5,
+            ))
+            return "".join(_dl_lines) if _dl_lines else st.content
+
+        # ★ 다중 파일이면 **전부** 박제한다 (2026-07-26). 대표 1개만 저장하면 재적용이
+        #   반쪽만 되살려 오히려 깨진 상태를 만든다. 단일 파일이면 종전과 동일한 형태.
+        _all_patches = [(st.rel, _diff_of(st)) for st in _staged]
+        _store_patch = _all_patches[0][1]
         _learned_hits = record_pattern_hit(
             error_record or {},
             fixer_name=analysis.get("pattern") or "llm_patch",
@@ -1214,6 +1565,7 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
             source=analysis.get("source", "auto-llm"),
             patch=_store_patch,
             target_file=target_rel or "",
+            patches=_all_patches,
             # ★ 결함 1 배선 (2026-07-25) — 외생 검증 신호를 *생산지에서 소비지까지* 관통.
             #   종전엔 eval_agent 가 verification 인자를 받도록 만들어져 있었지만
             #   저장소 전체에 그 인자를 넘기는 호출자가 **0곳** 이라 인위 주입 시에만
@@ -1235,6 +1587,9 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
                        why=_vstate or "legacy_unchecked")
 
     _verified_notes = ["문법 검사(ast.parse) 통과", "import 검증 통과", "원본 .bak 보관"]
+    if len(_staged) > 1:
+        _verified_notes.insert(0, f"다중 파일 원자적 적용 {len(_staged)}개 — "
+                                  f"{', '.join(s.rel for s in _staged)}")
     if _vstate:
         _verified_notes.append(f"원 오류 재현 검증: {_vstate} — {_vdetail[:120]}")
     _update_errors_md(error_record, analysis, success=True, verified=_verified_notes)

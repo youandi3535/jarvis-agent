@@ -247,7 +247,7 @@ def _generate_recipe(existing: list, aesthetic: str) -> dict | None:
     try:
         # ★ 재시도 최대 3회 (사용자 박제 2026-07-06) — 기존 1회는 비용/latency 고려로
         #   의도적으로 낮춘 값이었으나 "무조건 3회" 지시에 따라 통일.
-        raw = invoke_text("writer", prompt, max_tokens=700, timeout=90, _retries=_max_attempts())
+        raw = invoke_text("writer_long_learn", prompt, max_tokens=700, timeout=90, _retries=_max_attempts())
         if not raw:
             return None
         m = re.search(r"\{.*\}", raw, re.S)
@@ -519,7 +519,7 @@ def _extract_vision(img_path: Path, existing: list) -> tuple[dict, str] | None:
     인포그래픽 아닌 이미지는 None 반환. 분리된 작은 task → 안정성 높음."""
     try:
         from shared.llm import invoke_vision
-        raw = invoke_vision("writer", _VISION_EXTRACT_PROMPT, [str(img_path)],
+        raw = invoke_vision("writer_long_learn", _VISION_EXTRACT_PROMPT, [str(img_path)],
                             timeout=120, cwd=str(img_path.parent))
         if not raw:
             return None
@@ -548,7 +548,7 @@ def _generate_html_from_desc(layout_desc: str) -> str | None:
     try:
         from shared.llm import invoke_text
         prompt = _HTML_GEN_PROMPT.format(layout_desc=layout_desc)
-        raw = invoke_text("writer", prompt, max_tokens=3500, timeout=180, _retries=2)
+        raw = invoke_text("writer_long_learn", prompt, max_tokens=3500, timeout=180, _retries=2)
         if not raw:
             return None
         # 코드펜스 제거
