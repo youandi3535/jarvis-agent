@@ -87,7 +87,7 @@ DEFAULT_JOBS: list[dict] = [
     # ~40분 Max 풀 회복 갭 확보 → writer 스톨 방지 강화. (종전 06:30 은 회복 갭 ~5분으로 빡빡)
     # ★ 발행 전 자체수리 + 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 07:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 경제 브리핑 발행.
-    # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리 (발행 지연 0).
+    # 비싼 LLM 심층 감사는 `j07_deep_audit`(주 1회, 토) 로 분리 (발행 지연 0).
     {"id":"j01_economic_post",      "name":"자가진단+경제 브리핑 발행 07:00", "trigger":"cron",
      "kwargs":{"hour":7, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_economic",
@@ -107,7 +107,7 @@ DEFAULT_JOBS: list[dict] = [
      "misfire_grace_time":1200, "owner":"jarvis09_collector"},
     # ★ 발행 전 자체수리 + 테마글 발행 *하나의 세트* (사용자 박제 2026-06-28):
     # 16:00 callback 진입 → 발행 전 Tier-1 자체수리(LLM-0 sweep, 수초) → 즉시 테마글 발행.
-    # 비싼 LLM 심층 감사는 새벽 03:00 j07_deep_audit 로 분리.
+    # 비싼 LLM 심층 감사는 `j07_deep_audit`(주 1회, 토) 로 분리.
     {"id":"j01_theme_post_21",      "name":"자가진단+테마 발행 21:00 ★", "trigger":"cron",
      "kwargs":{"hour":21, "minute":0},
      "callback":"JARVIS02_WRITER.scheduler.run_self_repair_then_theme",
@@ -124,7 +124,7 @@ DEFAULT_JOBS: list[dict] = [
     # ── JARVIS07 자가 진단·수정 (★ 사용자 박제 2026-06-28 — 2단 분리) ──
     # 발행 직전(07:00 / 21:00 callback): Tier-1 LLM-0 자체수리 sweep 만 (수초, 발행 지연 0).
     #   callback: `run_self_repair_then_economic` / `run_self_repair_then_theme`.
-    # 심층 LLM 감사(backlog Tier1→2 + 광범위 코드 감사): 새벽 03:00 `j07_deep_audit` 별도 cron.
+    # 심층 LLM 감사(backlog Tier1→2 + 광범위 코드 감사): `j07_deep_audit` 별도 cron(주 1회, 토).
     # → 학습 자산이 쌓일수록 다음 발행 전 sweep 자동수리율↑ (복리 학습 루프).
     # ── JARVIS02 WRITER — SEO 학습 ────────────────────────────────
     {"id":"weekly_seo_learn",  "name":"주간 SEO 학습·비교·업데이트", "trigger":"cron",
@@ -208,8 +208,16 @@ DEFAULT_JOBS: list[dict] = [
      "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
     # ★ 발행과 분리된 심층 LLM 감사 (사용자 박제 2026-06-28) — DB 백업 03:00 이후.
     #   1) backlog Tier 1→2 (실제 지문 학습) 2) 광범위 코드 감사. 발행 직전엔 LLM-0 sweep 만.
-    {"id":"j07_deep_audit",     "name":"GUARDIAN 심층 코드 감사 (매일 03:00)", "trigger":"cron",
-     "kwargs":{"hour":3, "minute":0},
+    # ★★ 매일 → **토요일 주 1회** (사용자 박제 2026-07-26 — 토큰 절감).
+    #   근거(실측): 이 잡이 `guardian` alias 소비의 **전량**(7일 3.41M, 단건 최대 439K·10턴).
+    #   도구를 들고 저장소를 훑는 무거운 세션이라 호출 1건이 크다.
+    #   ★ 안전 근거 — 매일→주1회로 늦어지는 것과 늦어지지 않는 것을 구분해 둔다:
+    #     · 늦어지지 않음: 신규 오류 자동수정. `j07_retry_pending`(10분)이 `status='new'` 를
+    #       계속 `_orchestrate`(Tier1→Tier2, 상한 3회)로 돌린다. 발행 직전 LLM-0 sweep 도 그대로.
+    #     · 늦어짐: ① 광범위 코드 감사(새 잠재버그 발굴) ② backlog 재처리 ③ 격리버킷 보고.
+    #       즉 "이미 난 오류의 처리"가 아니라 "아직 안 난 문제 찾기"가 주 1회가 된다.
+    {"id":"j07_deep_audit",     "name":"GUARDIAN 심층 코드 감사 (토 03:00)", "trigger":"cron",
+     "kwargs":{"day_of_week":"sat", "hour":3, "minute":0},
      "callback":"JARVIS07_GUARDIAN.guardian_agent.job_deep_audit",
      "misfire_grace_time":3600, "owner":"jarvis07_guardian"},
     {"id":"j07_retry_pending",  "name":"GUARDIAN 잔류 오류 재처리 (10분)", "trigger":"interval",

@@ -74,7 +74,7 @@ def analyze_llm_only(error_record: dict) -> dict:
               "explanation": "", "source": "llm"}
 
     # ★ 발행 중 Tier2 LLM 분석 패스 — 세마포어 선점으로 발행 차단 방지.
-    #   error 는 backlog 에 남아 다음 job_deep_audit(04:30) 에서 처리됨.
+    #   error 는 backlog 에 남아 다음 job_deep_audit(DEFAULT_JOBS `j07_deep_audit`) 에서 처리됨.
     try:
         from shared.llm import is_publishing as _is_pub
         if _is_pub():

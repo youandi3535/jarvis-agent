@@ -834,7 +834,7 @@ def _run_self_repair_phase(label: str) -> dict:
         send_telegram(
             f"🔧 *[{label}] 발행 전 자체수리 시작*\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"Tier-1 자체수리 (LLM-0, 수초) → 발행 — 심층 LLM 감사는 새벽 04:30 분리"
+            f"Tier-1 자체수리 (LLM-0, 수초) → 발행 — 심층 LLM 감사는 별도 잡(j07_deep_audit)"
         )
     except Exception:
         pass
@@ -843,7 +843,7 @@ def _run_self_repair_phase(label: str) -> dict:
     try:
         # ★ 2026-06-28 사용자 박제 — 발행 직전엔 *LLM-0 Tier-1 sweep* 만 (수초, 발행 지연 0).
         #   미해결 오류 중 학습 패턴·정적 fixer·Bandit 로 즉시 고칠 수 있는 것만 소급 수리.
-        #   비싼 LLM 심층 감사(backlog Tier-2 + 광범위 코드 감사)는 새벽 04:30 job_deep_audit 로 분리.
+        #   비싼 LLM 심층 감사(backlog Tier-2 + 광범위 코드 감사)는 `j07_deep_audit` 로 분리(시각은 DEFAULT_JOBS).
         from JARVIS07_GUARDIAN.guardian_agent import self_heal_known_errors as _sweep
         _res = _sweep()
         code_changed = int(_res.get("fixed", 0))  # 코드 수정 건수 → 데몬 재시작 권장 판단

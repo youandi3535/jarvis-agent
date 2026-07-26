@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import glob
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -148,31 +149,96 @@ def record_rate_limit(payload: dict | None, source: str = "daemon") -> None:
 
 # ── 트랜스크립트 스캔 (총량 — 대화·서브에이전트 포함) ──────────────────
 
+def _proj_dir_name(path: str) -> str:
+    """실제 cwd 경로 → Claude Code 가 만드는 트랜스크립트 폴더명.
+
+    ★ 규칙: **영숫자 외 문자는 전부 `-`**. `/Users/kimhyojung/.jarvis/llm_cwd`
+      → `-Users-kimhyojung--jarvis-llm-cwd` (슬래시·점뿐 아니라 **밑줄도** 바뀐다).
+      초판이 basename `llm_cwd` 로 매칭하다 실패했다 — 실제 폴더는 `llm-cwd` 였다.
+      경로에서 파생하되 *변환 규칙까지* 재현해야 진짜 파생이다.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path or ""))
+
+
+def _daemon_proj_dirs() -> tuple:
+    """데몬 LLM 이 쓰는 트랜스크립트 폴더명들 — 실제 cwd 에서 파생 (② 동적 설계).
+
+    문자열을 박지 않는다. `shared/llm` 이 cwd 를 바꾸면 분류가 자동으로 따라간다.
+
+    ★ 저장소 루트는 **넣지 않는다**: `LLM_ISOLATE_CWD=0` 이면 데몬 cwd 가 저장소 루트가 되는데,
+      그건 사람이 여는 Claude Code 세션의 cwd 와 **폴더명이 같아 구분 불가** 다. 넣었더니
+      사람 세션 전량이 daemon 으로 뒤집혔다(실측). 구분할 수 없으면 *섞어 세는 것보다
+      분류하지 않는 편* 이 정직하다 — 격리가 켜져 있을 때만(기본값) 데몬이 잡힌다.
+    """
+    names = []
+    try:
+        from shared.llm import _llm_scratch_dir      # noqa: PLC0415
+        d = _llm_scratch_dir()
+        if d:
+            names.append(_proj_dir_name(d))
+    except Exception:                                # noqa: BLE001
+        pass
+    return tuple(n for n in names if n)
+
+
+def _consumer_of(rel_parts: tuple, daemon_dirs: tuple) -> str:
+    """트랜스크립트 경로 → **소비 주체**. 홈탭이 '누가 태웠나' 를 보여주기 위한 분류.
+
+    · `daemon`    자비스 데몬이 글을 쓰고 검증하며 쓴 토큰 (실제 산출물로 이어지는 소비)
+    · `subagent`  Claude Code 가 띄운 서브에이전트·워크플로
+    · `session`   사람↔AI 대화 세션 본체
+    """
+    if not rel_parts:
+        return "session"
+    if rel_parts[0] in daemon_dirs:
+        return "daemon"
+    return "subagent" if "subagents" in rel_parts else "session"
+
+
 def _scan_transcripts(days: int = 8) -> dict:
     """`~/.claude/projects/**/*.jsonl` 에서 사용량 집계.
 
     라이브 계기가 못 잡는 Claude Code 대화·서브에이전트까지 포함한 *총량*.
     파일 수천 개라 mtime 으로 1차 컷 후 usage 라인만 파싱.
+
+    ★★ 2026-07-26 정확화 (사용자 지시 — 실측으로 두 결함 확정):
+      ① **서브에이전트 누락**: 종전 glob 은 `projects/*/ *.jsonl` 로 **깊이 2 고정** 이었다.
+         서브에이전트 트랜스크립트는 `프로젝트/세션/subagents/…/agent-*.jsonl`(깊이 6)이라
+         한 건도 닿지 않았다. docstring 은 "서브에이전트까지 포함" 이라 적혀 있었으니
+         *문서가 코드보다 앞서간* 드리프트다. 실측 누락분 **476,882,886 토큰(24.4%)**.
+      ② **같은 응답 중복 계수**: Claude Code 는 응답 1건을 content block 수만큼 JSONL
+         여러 줄로 쓰고 **각 줄에 같은 usage 를 복사** 한다. 줄 단위 합산은 실측 **2.22배**
+         부풀려졌다. `message.id` 로 한 번만 센다.
+      두 오차가 서로 반대 방향이라 합쳐서 1.62배 과대 — "대충 맞아 보이는데 둘 다 틀린"
+      상태였다. 눈금이 틀리면 어떤 절감도 증명할 수 없다.
     """
     cutoff_dt = datetime.now(timezone.utc) - timedelta(days=days)
     cutoff = cutoff_dt.timestamp()
     daily: dict[str, dict] = {}
     hourly: dict[str, int] = {}
     by_project: dict[str, dict] = {}
+    by_consumer: dict[str, dict] = {}
+    seen_msg: set = set()                      # ② 중복 제거 — message.id 기준
     scanned = 0
+    dup_lines = 0
     today = datetime.now(KST).strftime("%Y-%m-%d")
 
     if not _TRANSCRIPT_ROOT.exists():
         return {"available": False, "reason": "트랜스크립트 디렉터리 없음"}
 
-    for f in glob.glob(str(_TRANSCRIPT_ROOT / "*" / "*.jsonl")):
+    daemon_dirs = _daemon_proj_dirs()
+    root_s = str(_TRANSCRIPT_ROOT)
+    # ① 재귀 — 깊이를 박지 않는다. 폴더 구조가 또 바뀌어도 따라간다.
+    for f in glob.glob(os.path.join(root_s, "**", "*.jsonl"), recursive=True):
         try:
             if os.path.getmtime(f) < cutoff:
                 continue
         except OSError:
             continue
         scanned += 1
-        proj = os.path.basename(os.path.dirname(f))
+        rel_parts = tuple(os.path.relpath(f, root_s).split(os.sep))
+        proj = rel_parts[0] if rel_parts else "?"
+        consumer = _consumer_of(rel_parts, daemon_dirs)
         try:
             fh = open(f, errors="ignore")
         except OSError:
@@ -190,6 +256,12 @@ def _scan_transcripts(days: int = 8) -> dict:
                 ts = d.get("timestamp")
                 if not u or not ts:
                     continue
+                mid = m.get("id") or d.get("uuid")
+                if mid:
+                    if mid in seen_msg:
+                        dup_lines += 1
+                        continue
+                    seen_msg.add(mid)
                 try:
                     t = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(KST)
                 except Exception:
@@ -208,16 +280,24 @@ def _scan_transcripts(days: int = 8) -> dict:
                     hourly[hk] = hourly.get(hk, 0) + o
                     p = by_project.setdefault(proj, {"output": 0, "calls": 0})
                     p["output"] += o; p["calls"] += 1
+                    # 소비 주체별 — 총토큰까지 함께 (출력만 보면 캐시 소비가 안 보인다)
+                    cs = by_consumer.setdefault(consumer, {"output": 0, "calls": 0, "total": 0})
+                    cs["output"] += o; cs["calls"] += 1; cs["total"] += (o + i + cc + cr)
 
     return {
         "available": True,
         "scanned_files": scanned,
+        "deduped_lines": dup_lines,          # 중복으로 걸러낸 줄 수 (정확화가 실제로 작동했다는 증거)
         "daily": [{"date": k, **v} for k, v in sorted(daily.items())],
         "hourly_today": [{"hour": k, "output": hourly[k]} for k in sorted(hourly)],
         "by_project_today": [
             {"project": k, **v}
             for k, v in sorted(by_project.items(), key=lambda x: -x[1]["output"])
         ][:10],
+        "by_consumer_today": [
+            {"consumer": k, **v}
+            for k, v in sorted(by_consumer.items(), key=lambda x: -x[1]["total"])
+        ],
     }
 
 

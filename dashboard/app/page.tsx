@@ -909,6 +909,16 @@ function fmtTok(n?: number): string {
   return String(n);
 }
 
+/** 소비 주체 라벨·색 — 분류값 자체는 서버(shared/token_usage)가 정한다. 여기선 표시만. */
+const CONSUMER_LABEL: Record<string, string> = {
+  daemon:   "자비스 데몬 (글 작성·검증)",
+  subagent: "서브에이전트 / 워크플로",
+  session:  "Claude Code 대화",
+};
+const CONSUMER_COLOR: Record<string, string> = {
+  daemon: C.success, subagent: C.warn, session: C.primary,
+};
+
 function TokenPanel() {
   const { data } = useSWR<TokenData>("/api/tokens", fetcher, { refreshInterval: 20000 });
 
@@ -923,6 +933,9 @@ function TokenPanel() {
   const calls   = data?.recent_calls ?? [];
   const dt      = data?.daemon_today;
   const health  = data?.health;
+
+  const consumers    = data?.totals?.by_consumer_today ?? [];
+  const consumerTotal = Math.max(1, consumers.reduce((s, c) => s + (c.total || 0), 0));
 
   const week = daily.slice(-7).reduce((s, d) => s + (d.output || 0), 0);
   const maxHour = Math.max(1, ...hourly.map(h => h.output));
@@ -1007,6 +1020,40 @@ function TokenPanel() {
           </div>
         ))}
       </div>
+
+      {/* 오늘 소비 주체 — '누가 태웠나'. 총토큰(캐시 포함) 기준: 출력만 보면 캐시 소비가 안 보인다. */}
+      {consumers.length > 0 && (
+        <div style={{ marginBottom:20 }}>
+          <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>
+            오늘 소비 주체 <span style={{ fontSize:14,fontWeight:400,color:"var(--c-text5)" }}>
+              — 총 {fmtTok(consumerTotal)} (캐시 포함)</span>
+          </div>
+          <div style={{ display:"flex",height:14,borderRadius:7,overflow:"hidden",marginBottom:10 }}>
+            {consumers.map(c => (
+              <div key={c.consumer} title={`${CONSUMER_LABEL[c.consumer] ?? c.consumer} ${c.total.toLocaleString()}`}
+                   style={{ width:`${(c.total/consumerTotal)*100}%`,
+                            background: CONSUMER_COLOR[c.consumer] ?? C.muted }}/>
+            ))}
+          </div>
+          <div style={{ display:"grid",gridTemplateColumns:`repeat(${Math.min(3,consumers.length)},1fr)`,gap:12 }}>
+            {consumers.map(c => (
+              <div key={c.consumer} style={{ ...box, padding:14,
+                     borderTop:`3px solid ${CONSUMER_COLOR[c.consumer] ?? C.muted}` }}>
+                <div style={{ fontSize:14,color:"var(--c-text5)",marginBottom:6 }}>
+                  {CONSUMER_LABEL[c.consumer] ?? c.consumer}
+                </div>
+                <div style={{ fontSize:22,fontWeight:800,
+                              color: CONSUMER_COLOR[c.consumer] ?? C.muted }}>
+                  {fmtTok(c.total)}
+                </div>
+                <div style={{ fontSize:14,color:"var(--c-text5)",marginTop:4 }}>
+                  {Math.round((c.total/consumerTotal)*100)}% · 호출 {fmtNum(c.calls)}건
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:18 }}>
         {/* 오늘 시간대별 */}

@@ -1099,6 +1099,10 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
     except Exception:
         _wd_beat = lambda: None
 
+    # ★ 비전도 계측한다 (2026-07-26) — 종전 이 경로는 `record_call` 이 없어 장부에 0이었다.
+    #   design_learner 의 레퍼런스 비전 판정이 여기로 돈다. ③ 모든 통로 적용.
+    _vmeter = {"usage": None, "cost": 0.0, "dur": 0, "turns": 0}
+
     async def _collect():
         _wd_beat()
         with anyio.fail_after(timeout):
@@ -1108,6 +1112,21 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
                     for block in msg.content:
                         if isinstance(block, TextBlock):
                             parts.append(block.text)
+                elif type(msg).__name__ == "ResultMessage":
+                    _vmeter["usage"] = getattr(msg, "usage", None)
+                    _vmeter["cost"]  = float(getattr(msg, "total_cost_usd", 0) or 0)
+                    _vmeter["dur"]   = int(getattr(msg, "duration_ms", 0) or 0)
+                    _vmeter["turns"] = int(getattr(msg, "num_turns", 0) or 0)
+
+    def _record_vision() -> None:
+        try:
+            from shared.token_usage import record_call
+            record_call(alias=_CURRENT_ALIAS.get() or "vision", model=model,
+                        usage=_vmeter["usage"], cost_usd=_vmeter["cost"],
+                        duration_ms=_vmeter["dur"], num_turns=_vmeter["turns"],
+                        ok=bool(parts), source="vision")
+        except Exception:                                   # noqa: BLE001
+            pass
 
     _pace_spawn()
     _acquire_llm_sem()
@@ -1131,6 +1150,7 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
             _proc_lock_release()
     finally:
         _LLM_SPAWN_SEM.release()
+    _record_vision()
     return "".join(parts)
 
 
