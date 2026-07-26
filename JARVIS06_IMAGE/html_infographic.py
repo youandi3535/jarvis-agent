@@ -337,7 +337,7 @@ def generate_html_infographic(
 
             # ★ 2026-06-29: LLM 이 *직접 HTML* 을 출력하게 변경. (이전엔 거대 HTML 을
             #   Python 삼중따옴표 안에 담아 반환 → SDK 메시지 파서가 응답 0개로 실패.)
-            raw = invoke_text("writer", _prompt_a, timeout=240, max_tokens=11000)
+            raw = invoke_text("writer_long_infographic", _prompt_a, timeout=240, max_tokens=11000)
             if not raw:
                 continue
 

@@ -53,19 +53,102 @@ class ModelSpec:
 #   alias→model_id 매핑은 이 MODELS dict 가 시스템 전체의 유일 소스 — 다른 곳은 전부 파생.
 # 자비스 모델 카탈로그 — 한 곳에서 관리
 MODELS: dict[str, ModelSpec] = {
+    # ══ writer 계열 — `writer_{long|short}_{용도}` (사용자 박제 2026-07-26) ══════
+    #
+    #   ★ 왜 바꿨나: 종전 `writer` / `writer_fast` 두 개뿐이었고, ADR 017(모델 단일 통일)
+    #     이후엔 **모델·토큰·온도가 완전히 동일**해 `_fast` 라는 이름이 거짓이 됐다
+    #     (실측: model_id·max_tokens·temperature 3개 전부 같음). 대시보드 "실시간 호출
+    #     내역"에 `writer` 만 줄줄이 찍혀 *무슨 작업 중인지 구분이 안 됐다*.
+    #
+    #   ★ 이름 규칙: `long`=긴 생성물(본문·인포그래픽), `short`=짧은 조각(제목·색상·판정).
+    #     길이는 *실제 max_tokens* 로 뒷받침한다 — 이름과 값이 어긋나면 그게 또 거짓말이다.
+    #
+    #   ★ ① 단일 진입점: alias→스펙은 이 dict 가 유일 소스. `_BG_ALIASES`·
+    #     `_PUBLISH_ESSENTIAL_CAP`·구 alias 별칭까지 **전부 여기서 파생**한다.
+    #   ★ ② 동적 설계: 별도 목록을 두지 않는다. alias 를 추가하면 파생물이 자동으로 따라온다.
+    #   ★ ③ 모든 곳: 경제·테마 × 네이버·티스토리 4조합이 같은 alias 를 쓴다
+    #     (분기는 alias 가 아니라 프롬프트에 있다).
+    #
+    #   구 `writer`/`writer_fast` 는 아래에서 **별칭으로 생존** — 과거 DB 기록(writer 99건·
+    #   writer_fast 150건)은 그 시점의 사실이므로 개변하지 않는다(사용자 판단 2026-07-26).
+
+    # ── long — 긴 생성물 ────────────────────────────────────────
+    "writer_long_body": ModelSpec(
+        alias="writer_long_body",
+        model_id="claude-sonnet-5",
+        max_tokens=8000,
+        temperature=0.4,
+        description="블로그 본문 대본 — 도입부·섹션·감성문단·면책 (헌법 규정 준수)",
+    ),
+    "writer_long_infographic": ModelSpec(
+        alias="writer_long_infographic",
+        model_id="claude-sonnet-5",
+        max_tokens=11000,   # ★ HTML 인포그래픽은 통짜 출력이라 본문보다 크다
+        temperature=0.4,
+        description="인포그래픽·SVG HTML 통짜 생성 (가장 긴 출력)",
+    ),
+    "writer_long_chat": ModelSpec(
+        alias="writer_long_chat",
+        model_id="claude-sonnet-5",
+        max_tokens=8000,
+        temperature=0.4,
+        description="사용자 자유 문장 응답 (텔레그램 — 사용자 대기 중이라 배경 아님)",
+    ),
+    "writer_long_learn": ModelSpec(
+        alias="writer_long_learn",
+        model_id="claude-sonnet-5",
+        max_tokens=3500,
+        temperature=0.3,
+        description="디자인·SEO 학습 (레퍼런스 분석 → 지침 도출)",
+        background=True,   # 배경 작업 — 발행창에서 보류
+    ),
+
+    # ── short — 짧은 조각 ───────────────────────────────────────
+    "writer_short_title": ModelSpec(
+        alias="writer_short_title",
+        model_id="claude-sonnet-5",
+        max_tokens=200,
+        temperature=0.7,
+        description="제목·소제목·썸네일 문구 (한 줄~두 줄)",
+    ),
+    "writer_short_cta": ModelSpec(
+        alias="writer_short_cta",
+        model_id="claude-sonnet-5",
+        max_tokens=120,
+        temperature=0.9,   # ★ 매번 달라야 하는 문구라 온도가 높다 (헌법 제1-B조 동적 생성)
+        description="CTA·맺음 한 줄 (고정 풀 금지 — 매번 새로 생성)",
+    ),
+    "writer_short_visual": ModelSpec(
+        alias="writer_short_visual",
+        model_id="claude-sonnet-5",
+        max_tokens=4000,   # ★ SVG 조각이 여기 포함돼 short 중에선 크다
+        temperature=0.8,
+        description="차트 색상·스타일 스펙·SVG 조각 (시각 요소)",
+    ),
+    "writer_short_analysis": ModelSpec(
+        alias="writer_short_analysis",
+        model_id="claude-sonnet-5",
+        max_tokens=1600,
+        temperature=0.2,   # ★ 판정은 흔들리면 안 되므로 온도가 낮다
+        description="분석·판정·번역 — 품질 제안·섹터 분류·수치 대조·프롬프트 번역",
+    ),
+
+    # ── 구 alias (하위호환) — 본문은 위 신규를 가리키는 얇은 별칭 ──
+    #   ★ 지우지 않는 이유: 외부 문서(BLOG_SUPREME_LAW·ADR)와 과거 DB 기록이 이 이름을
+    #     참조한다. 이름만 남기고 **스펙은 신규에서 파생**해 두 벌 관리를 만들지 않는다.
     "writer": ModelSpec(
         alias="writer",
         model_id="claude-sonnet-5",
         max_tokens=8000,
         temperature=0.4,
-        description="블로그 본문·도입부 생성 (Sonnet 5 — 복잡한 헌법 규정 준수용)",
+        description="[구] writer_long_body 로 대체됨 — 하위호환 별칭",
     ),
     "writer_fast": ModelSpec(
         alias="writer_fast",
         model_id="claude-sonnet-5",
         max_tokens=8000,
         temperature=0.4,
-        description="짧은 본문·압축·재작성 (Sonnet 5)",
+        description="[구] writer_short_* 로 분화됨 — 하위호환 별칭",
     ),
     "router": ModelSpec(
         alias="router",

@@ -331,12 +331,12 @@ def _fix_consecutive_images(blocks: list, for_tistory: bool = False) -> list:
     """
     from shared.llm import invoke_text as _llm_fix
     _raw = _llm_fix(
-        "writer_fast",
+        "writer_short_analysis",
         f"경제 블로그에서 차트 이미지 두 개 사이에 들어가는 자연스러운 연결 설명 {_L.build_length_phrase(1, _L.MAX_P_SENTS)}. 해요체. 문장만 출력.",
         max_tokens=80, temperature=0.8
     ) or "위 지표와 차트를 함께 살펴보세요."
     _html_raw = _llm_fix(
-        "writer_fast",
+        "writer_short_analysis",
         f"경제 블로그에서 차트 이미지 두 개 사이 연결 설명 {_L.build_length_phrase(1, _L.MAX_P_SENTS)}. 합니다체. 문장만 출력.",
         max_tokens=80, temperature=0.8
     ) or "위 지표와 차트를 함께 확인해 주십시오."

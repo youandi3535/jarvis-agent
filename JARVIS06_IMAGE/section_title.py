@@ -19,7 +19,7 @@ def _get_dynamic_color(seed: str = "", fallback: str = "#1976D2") -> str:
     try:
         from shared.llm import invoke_text
         prompt = f"Generate 1 harmonious vibrant hex color for section title '{seed[:30]}'. Return JSON: {{\"color\": \"#xxxxxx\"}}"
-        result = invoke_text("writer_fast", prompt, temperature=0.7, max_tokens=50)
+        result = invoke_text("writer_short_visual", prompt, temperature=0.7, max_tokens=50)
         data = json.loads(result)
         color = data.get("color", fallback)
         # hex 형식 검증

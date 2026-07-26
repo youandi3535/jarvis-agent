@@ -165,7 +165,7 @@ def generate_style_spec(chart_type: str, theme: str, context: str = "") -> dict:
 
     try:
         response = invoke_text(
-            "writer_fast",
+            "writer_short_visual",
             prompt,
             temperature=0.8,  # 높은 창의성
             max_tokens=300
@@ -306,7 +306,7 @@ Return JSON (colors array, primary_color, accent_color, up_color, down_color):
   "text_color": "#...",
   "border_color": "#..."
 }}"""
-        response = invoke_text("writer_fast", prompt, temperature=0.8, max_tokens=200)
+        response = invoke_text("writer_short_visual", prompt, temperature=0.8, max_tokens=200)
         response = response.strip()
         if response.startswith("```"):
             response = response.split("```")[1].lstrip("json").strip()

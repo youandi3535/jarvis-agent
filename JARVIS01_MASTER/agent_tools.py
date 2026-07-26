@@ -989,20 +989,20 @@ def ask_claude(prompt: str, system: str = "",
         return {"ok": False, "error": "empty prompt"}
     try:
         from shared.llm import invoke_text
-        text = invoke_text("writer", prompt,
+        text = invoke_text("writer_long_chat", prompt,
                            max_tokens=int(max_tokens),
                            **({"system": system} if system else {}))
         from shared.llm import model_id as _model_id
-        return {"ok": True, "text": text or "", "model": _model_id("writer")}
+        return {"ok": True, "text": text or "", "model": _model_id("writer_long_chat")}
     except Exception as e:
         # fallback — invoke_text 직접 호출
         try:
             from shared.llm import invoke_text as _inv_cli
             _full = f"{system}\n\n{prompt}".strip() if system else prompt
             from shared.llm import writer_timeout as _wt
-            text2 = _inv_cli("writer", _full, timeout=_wt())
+            text2 = _inv_cli("writer_long_chat", _full, timeout=_wt())
             from shared.llm import model_id as _model_id
-            return {"ok": True, "text": text2 or "", "model": _model_id("writer")}
+            return {"ok": True, "text": text2 or "", "model": _model_id("writer_long_chat")}
         except Exception as e2:
             return {"ok": False, "error": f"{e}; fallback: {e2}"}
 

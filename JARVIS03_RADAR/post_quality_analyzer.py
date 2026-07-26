@@ -181,7 +181,7 @@ def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str) 
                 f"위 감점 항목을 없애는 개선안을 JSON 배열로 반환.")
     system = _RUBRIC_SUGGEST_SYSTEM + _build_learning_block(post_type)
     from shared.llm import invoke_text as _inv
-    raw = _inv("writer_fast", user_msg, system=system, max_tokens=1500)
+    raw = _inv("writer_short_analysis", user_msg, system=system, max_tokens=1500)
     m = re.search(r'\[.*\]', raw or "", re.DOTALL) if raw else None
     if not m:
         raise RuntimeError("루브릭 개선안 LLM 응답 파싱 실패")
@@ -369,7 +369,7 @@ def _pick_cta(platform: str) -> str:
 
 응답: 문구만 (설명 없음)"""
 
-        cta = _inv_cta("writer_fast", prompt, temperature=0.9, max_tokens=60)
+        cta = _inv_cta("writer_short_cta", prompt, temperature=0.9, max_tokens=60)
         return cta.strip() if cta else f"{platform_context}의 공감과 참여를 부탁드립니다."
     except Exception as e:
         log = __import__("logging").getLogger("jarvis")

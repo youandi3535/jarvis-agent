@@ -235,7 +235,7 @@ def _gen_hook(keyword: str, platform: str = "tistory") -> str:
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     try:
         result = invoke_text(
-            "writer",
+            "writer_long_body",
             f"{supreme_block}\n\n{spec['name']} 글 첫 문장. 키워드: '{keyword}'.\n"
             f"독자({spec['reader']})가 공감할 수 있는 일상 관찰·질문·감성 표현 {_L.build_length_phrase(1)}.\n"
             "★ 이 문장은 근거 데이터 없이 생성되므로 특정 수치·통계 창작 절대 금지 — "
@@ -574,18 +574,18 @@ def _draft_invoke(system_msg: str, user_msg: str) -> str:
     #   반환 → 상류(harness)가 defer/backoff 로 처리. *진짜 비인프라 빈응답/설계-only* 일 때만
     #   기존 콘텐츠 폴백(①②) 유지.
     from shared.llm import last_call_infra_incomplete as _infra
-    raw = invoke_text("writer", user_msg, timeout=_writer_timeout(), system=system_msg)
+    raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
     if _infra():
         return _strip_design(raw)                     # 인프라 스로틀 — 같은 창 재발사 금지
     if not (raw or "").strip():                       # ① 진짜 빈 응답(비인프라) → 1회 재시도
-        raw = invoke_text("writer", user_msg, timeout=_writer_timeout(), system=system_msg)
+        raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
         if _infra():
             return _strip_design(raw)
     body = _strip_design(raw)
     if not body and (raw or "").strip():              # ② <design>만·본문 없음 → 설계 빼고 재시도
         _plain = (user_msg.replace(_DESIGN_FIRST_BLOCK, "")
                   if _DESIGN_FIRST_BLOCK in (user_msg or "") else user_msg)
-        raw2 = invoke_text("writer", _plain, timeout=_writer_timeout(), system=system_msg)
+        raw2 = invoke_text("writer_long_body", _plain, timeout=_writer_timeout(), system=system_msg)
         if _infra():
             return _strip_design(raw2)
         body = _strip_design(raw2) or (raw2 or "").strip()
@@ -842,9 +842,9 @@ CONTENT:
 출처: (카탈로그 D5 출처)
 [/CHART_5]   ← (카탈로그에 데이터가 충분하면 [CHART_6] 추가 가능)
 """
-    raw = invoke_text("writer", user_msg, timeout=_writer_timeout(), system=system_msg)
+    raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
-        raw = invoke_text("writer", user_msg, timeout=_writer_timeout(), system=system_msg)
+        raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
     result = strip_html_wrapper(raw)
     chart_count = len(re.findall(r'\[CHART_\d+\]', result))
     if chart_count < _call1_min:
@@ -889,9 +889,9 @@ def _gen_section_call2(
 [/CHART_7]   ← (분량이 길면 차트 추가 가능)
 <p>(★ 감성 중간 문단 — 본문 중간에 글쓴이의 개인적 소회·공감 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 수치 없이 감성 서술만. 헌법 제0-C조)</p>
 """
-    raw = invoke_text("writer", user_msg, timeout=_writer_timeout(), system=system_msg)
+    raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
-        raw = invoke_text("writer", user_msg, timeout=_writer_timeout(), system=system_msg)
+        raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
     result = strip_html_wrapper(raw)
     chart_count = len(re.findall(r'\[CHART_\d+\]', result))
     _call2_min = max(2, _L.MIN_CHART_COUNT // 4)
@@ -938,9 +938,9 @@ def _gen_section_call3(
 <p>감성 마무리1. 감성 마무리2. — 단순 요약이 아니라 개인적 소회·독자에게 건네는 따뜻한 인사 (헌법 제0-C조 감성 마무리).</p>
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 맞춤형 표현으로 작성)</p>
 """
-    raw = invoke_text("writer", user_msg, timeout=_writer_timeout(), system=system_msg)
+    raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
-        raw = invoke_text("writer", user_msg, timeout=_writer_timeout(), system=system_msg)
+        raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
     result = strip_html_wrapper(raw)
     chart_count = len(re.findall(r'\[CHART_\d+\]', result))
     _call3_min = max(2, _L.MIN_CHART_COUNT // 4)

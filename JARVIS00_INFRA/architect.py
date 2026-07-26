@@ -657,7 +657,7 @@ def _parse_intent(user_intent: str) -> dict:
     try:
         from shared.llm import invoke_text
         text = invoke_text(
-            "writer_fast",
+            "writer_short_analysis",
             f"사용자 의도:\n{user_intent}\n\nJSON 만 출력하세요.",
             system=_PARSE_SYSTEM_PROMPT,
             max_tokens=800,

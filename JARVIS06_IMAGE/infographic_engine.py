@@ -469,7 +469,7 @@ def _llm_design(context, datasets, seed):
     try:
         from shared.llm import invoke_text
         prompt = _DESIGN_PROMPT.replace("__CONTEXT__", str(context)[:1200]).replace("__BRIEF__", brief)
-        raw = invoke_text("writer_fast", prompt, max_tokens=1600, timeout=90)
+        raw = invoke_text("writer_short_visual", prompt, max_tokens=1600, timeout=90)
         spec = _extract_json(raw)
         if spec and spec.get("panels"):
             return spec, "llm"
@@ -581,7 +581,7 @@ def prime_batch_designs(run_id, pool, context=""):
             items = "\n".join(f"[{i}] {_data_brief([ds])}" for i, ds in enumerate(_use))
             prompt = _BATCH_DESIGN_PROMPT.replace("__ITEMS__", items)
             from shared.llm import invoke_text
-            raw = invoke_text("writer_fast", prompt, timeout=150)
+            raw = invoke_text("writer_short_visual", prompt, timeout=150)
             for spec in (_extract_json_array(raw) or []):
                 if not isinstance(spec, dict):
                     continue
@@ -1134,7 +1134,7 @@ def _designgen(title, subtitle, datasets, out_path, context, seed) -> str:
     #   invoke_text 회로차단기가 연속 스로틀 시 "" 즉시 반환 → 발행 지연 0.
     #   실패는 곧 render_spec(안전 폴백)이라 손해 없음.
     try:
-        raw = invoke_text("writer", prompt, max_tokens=7000, timeout=110, _retries=_max_attempts())
+        raw = invoke_text("writer_long_infographic", prompt, max_tokens=7000, timeout=110, _retries=_max_attempts())
         if not raw:
             log.info("[designgen] LLM 저작 미수신(스로틀/타임아웃) → render_spec 폴백")
             return ""
