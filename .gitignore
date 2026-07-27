@@ -4,9 +4,24 @@
 chrome_profile/
 
 # ── 데이터베이스 ──────────────────────────────────────────────────
+# ★ 2026-07-27 — `*.sqlite` 만 막혀 있어 **`.sqlite3` 가 그대로 통과**했다.
+#   그 틈으로 141MB chroma.sqlite3 백업이 커밋에 실려 .git 이 169MB 가 됐고,
+#   GitHub 100MB 하드 리밋에 걸려 푸시가 막혔다(ERRORS [542]).
+#   확장자 변형·사이드카를 한꺼번에 막는다.
 *.sqlite
+*.sqlite3
 *.sqlite-wal
 *.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+# ★ 백업 산출물은 *어떤 경로에서도* 추적하지 않는다 — 되살릴 값이 아니라 사본이다.
+#   (원본은 코드·DB 에 있고, 사본을 git 에 넣으면 이력이 영구히 무거워진다)
+JARVIS07_GUARDIAN/_backup_*/
+*.removed-2*
+*.legacy-2*
+*.pre-renumber.*
+*.pre-reset.*
 # shared/backups/ — 2026-07-27 백업을 ~/.jarvis/backups/ 로 이관(ERRORS [536]).
 #   프로젝트 안에 두면 `git clean -xdf` 한 번에 백업이 통째로 사라진다.
 #   경로 규칙은 남겨둔다 — 옛 코드/스크립트가 되살릴 경우의 안전망.
