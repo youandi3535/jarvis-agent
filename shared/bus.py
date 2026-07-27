@@ -274,7 +274,7 @@ def on_post_published_detail(theme: str, platform: str, title: str,
     source_keyword: RADAR pipeline 에서 발행 트리거 시 trends.keyword 와 동일한
                     raw 키워드. 환경변수 JARVIS_SOURCE_KEYWORD fallback.
     post_type:      글 종류 식별자 ('economic' / 'theme' / 자유문자열). 환경변수
-                    JARVIS_POST_TYPE fallback. daily_review 분리 학습 + pre_revise
+                    JARVIS_POST_TYPE fallback. daily_review 분리 학습 + 작성 프롬프트
                     scope 매칭의 핵심 키.
     """
     import os as _os

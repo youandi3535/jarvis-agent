@@ -978,18 +978,7 @@ def run(post_naver=True, post_tistory=True, resume=None):
                                 html=_html_to_emit,
                                 post_type="economic",  # 글 종류별 분리 학습 키
                             )
-                        _pre_app = _art.get("_pre_applied") or []
-                        if _aid and _pre_app:
-                            # 사전 수정 적용된 글: revision_patch 저장 + is_revised=1 → 사후 분석/수정 자동 skip
-                            try:
-                                from shared import db as _db
-                                _db.save_pre_revise(_aid, _pre_app)
-                                print(f"  ✏️ [{_plat.upper()}] 사전 수정 {len(_pre_app)}건 기록 (id={_aid}, 사후 분석 skip)")
-                            except Exception as _e_pr:
-                                print(f"  ⚠️ save_pre_revise 실패 (무시): {_e_pr}")
-                                _g_report("writer", _e_pr, module=__name__)
-                        elif _aid and _ANALYZER_SCRIPT.exists():
-                            # 사전 수정 미적용 (분석기 모듈 오류 등) — 기존 사후 분석 흐름 fallback
+                        if _aid and _ANALYZER_SCRIPT.exists():
                             # ★ 발행창에서는 *띄우지 않는다* (사용자 박제 2026-07-25):
                             #   네이버 발행 직후 이 subprocess 가 뜨면 **티스토리가 아직 대본을
                             #   쓰는 중** 인데 매력도·사실성 채점 LLM 을 물어 한도를 경합한다.

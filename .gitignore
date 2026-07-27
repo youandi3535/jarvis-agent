@@ -99,3 +99,6 @@ pid/
 JARVIS07_GUARDIAN/bandit_state.json
 # 선계산 수집 캐시 — transient 바이너리(pkl), 데몬 precollect 잡이 재생성. 학습자산 아님.
 data/precollect/
+
+# 테스트 캐시 — 산출물이지 소스가 아니다
+.pytest_cache/

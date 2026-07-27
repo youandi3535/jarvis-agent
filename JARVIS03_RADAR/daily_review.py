@@ -5,7 +5,7 @@ JARVIS03 — 일일 종합 분석 (Daily Review)
   1) 조회수·인기도·품질 종합 집계
   2) Claude 가 묶음 분석으로 *오늘의 개선 인사이트* 도출
   3) daily_review 테이블에 결과 저장
-  4) learning_insights 누적 → pre_revise 가 다음날 글 작성 시 자동 참조
+  4) learning_insights 누적 → 다음날 작성 프롬프트에 자동 주입
   5) 텔레그램 일일 리포트 전송
 
 설계 원칙:
@@ -83,7 +83,7 @@ def _aggregate(posts: list[dict]) -> dict:
     avg_v = sum(views) / n if n else 0
     top_v = max(views) if views else 0
 
-    # quality_score: pre_revise 적용 비율 + suggestions 적음 + 본문 길이 + 조회수
+    # quality_score: 개선 제안 적음 + 본문 길이 + 조회수
     # (사슬 1 패치 2026-05-02: pre_applied=1, suggestions=0 만으로 100점 인플레이션 방지)
     pre_applied = sum(1 for p in posts if (p.get("revision_patch") or "{}") != "{}")
     pre_ratio   = pre_applied / n
@@ -124,8 +124,8 @@ def _aggregate(posts: list[dict]) -> dict:
     avg_len  = sum(body_lens) / n if n else 0
 
     # quality_score 4축 가중평균 (각 0~100, 가중치 합 1.0)
-    # ① pre_revise 적용률 (30%): pre_revise 가 작동했는가
-    # ② 사후 분석 청결도 (10%): suggestions 적을수록 좋음 (pre_revise 적용 글은 0이 정상이라 가중치 작음)
+    # ① 사전 품질 (30%): 발행 전 게이트를 통과한 수준인가
+    # ② 사후 분석 청결도 (10%): suggestions 적을수록 좋음
     # ③ 본문 길이 적정 (20%): 자비스01 length_manager 정책 범위 내 = full, 그 외 감점
     # ④ 평균 조회수 시그널 (40%): 조회수 200+ = full, 0 = 0
     score_pre   = pre_ratio * 100
@@ -175,7 +175,7 @@ REVIEW_SYSTEM_PROMPT = """당신은 한국 블로그 운영 전문가입니다.
 [입력 자료의 두 가지 모드]
 A) suggestions 가 있는 글: 사후 분석으로 도출된 이슈 목록을 우선 참고.
 B) suggestions 가 비어있고 본문 발췌가 있는 글: 발췌(도입 + 마무리) 를 직접 읽고
-   패턴을 발견하세요. 같은 글이 사전 수정(pre_revise)으로 다듬어진 경우입니다.
+   패턴을 발견하세요.
    이런 경우에도 *반복되는 표현·구조·길이·톤·SEO 약점* 을 능동적으로 찾아 인사이트로 만드세요.
 
 응답은 반드시 순수 JSON 배열이어야 하며 다른 텍스트는 포함하지 마세요.
@@ -214,7 +214,7 @@ B) suggestions 가 비어있고 본문 발췌가 있는 글: 발췌(도입 + 마
 
 
 # ─────────────────────────────────────────────────────────────
-# 본문 발췌 — pre_revise 적용 글도 Claude 가 직접 분석할 수 있게
+# 본문 발췌 — 제안이 없는 글도 Claude 가 직접 분석할 수 있게
 # (사슬 1 패치 2026-05-02: suggestions 비어있어도 학습 데이터 생성)
 # ─────────────────────────────────────────────────────────────
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -347,7 +347,7 @@ def _build_claude_input(date_str: str, posts: list[dict], agg: dict,
                 pri   = s.get("priority", "low")
                 lines.append(f"  - [{sty}/{pri}] {issue}")
         elif idx < EXCERPT_LIMIT:
-            # 모드 B: 본문 발췌 (suggestions 없는 글 = pre_revise 적용 글)
+            # 모드 B: 본문 발췌 (suggestions 없는 글)
             excerpt = _build_excerpt(p)
             if excerpt:
                 lines.append(f"  *suggestions 없음 — 본문 발췌(도입+마무리) 직접 분석:*")
@@ -434,7 +434,7 @@ def run_daily_review(date_str: str | None = None) -> dict:
     흐름:
       1) get_today_post_analyses_grouped() → {economic: [...], theme: [...], ...}
       2) 각 그룹마다 _aggregate + Claude 묶음 분석 + _persist_insights(scope=ptype)
-      3) 종류별 인사이트가 분리 누적되어 pre_revise 가 같은 종류 글에만 주입
+      3) 종류별 인사이트가 분리 누적되어 같은 종류 글에만 주입
       4) daily_review 테이블에는 *전체 통합 통계* 저장 (별도 group 통계는 insights 텍스트에)
       5) 텔레그램 리포트는 그룹별 섹션 분리
 

@@ -425,16 +425,6 @@ def warn_length(theme: str, platform: str, text: str, label: str = "") -> int:
 
 
 # ──────────────────────────────────────────────────────────────
-# 블록 누적 cap (pre_revise.py 용)
-# ──────────────────────────────────────────────────────────────
-
-def cap_blocks(blocks: list, context: str = "pre_revise",
-               max_korean: int = MAX_KOREAN) -> tuple:
-    """잘라내기 없음 — 모든 블록 그대로 반환. 호환성 유지용 passthrough."""
-    return blocks, False
-
-
-# ──────────────────────────────────────────────────────────────
 # 섹션 리스트 cap (jarvis_main.py 후처리 용)
 # ──────────────────────────────────────────────────────────────
 
@@ -594,7 +584,6 @@ __all__ = [
       
     "compress", "cap_for_publish",
     "warn_length", 
-    "cap_blocks", 
     
     "build_prompt_length_block", "build_short_length_phrase",
 ]

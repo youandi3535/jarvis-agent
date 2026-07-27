@@ -253,7 +253,7 @@ def init_db():
                 sector_dist    TEXT DEFAULT '{}',   -- {"금융": 2, "라이프": 1, ...}
                 common_issues  TEXT DEFAULT '[]',   -- [{"issue": "...", "count": 3}, ...]
                 insights       TEXT DEFAULT '',     -- 자연어 요약
-                next_directives TEXT DEFAULT '[]',  -- 다음날 pre_revise 에 주입할 지침 [{"do":"...","why":"..."}]
+                next_directives TEXT DEFAULT '[]',  -- 다음날 작성 프롬프트에 주입할 지침 [{"do":"...","why":"..."}]
                 reviewed_at    TEXT DEFAULT (datetime('now','localtime'))
             );
 
@@ -410,7 +410,7 @@ def init_db():
         except Exception:
             pass
         # learning_insights.scope: 어떤 글 종류에 적용할 인사이트인지.
-        # 'economic' / 'theme' / 'all'. pre_revise 가 호출 시 scope IN (post_type,'all') 만 주입.
+        # 'economic' / 'theme' / 'all'. 작성기가 호출 시 scope IN (post_type,'all') 만 주입.
         try:
             conn.execute("ALTER TABLE learning_insights ADD COLUMN scope TEXT DEFAULT 'all'")
         except Exception:
@@ -818,7 +818,7 @@ def save_post_for_analysis(platform: str, theme: str, title: str,
                     학습 페어링(learn_log)의 join 키로 사용. 비어 있으면 theme fallback.
     post_type:      글 종류별 분리 학습용. 'economic' / 'theme' / 자유문자열.
                     daily_review 가 GROUP BY post_type 으로 분기, learning_insights.scope
-                    로 매핑되어 pre_revise 가 같은 종류 글에만 인사이트 주입.
+                    로 매핑되어 같은 종류 글에만 인사이트 주입.
     """
     with get_db() as conn:
         cur = conn.execute(
@@ -960,27 +960,6 @@ def mark_revised(analysis_id: int):
             "UPDATE post_analysis SET status='revised', is_revised=1, "
             "revised_at=datetime('now','localtime') WHERE id=?",
             (analysis_id,),
-        )
-
-
-def save_pre_revise(analysis_id: int, applied_suggestions: list):
-    """사전 수정 완료 마킹 — 발행 전에 대본을 자동 패치한 글 표시.
-    revision_patch 저장 + status='revised' + is_revised=1 → 사후 분석/수정 큐 자동 skip.
-    JARVIS02 jarvis_main.py / economic_poster.py 가 발행 직전 호출.
-    """
-    patch = json.dumps(
-        {"suggestions": applied_suggestions or [], "mode": "pre_revise"},
-        ensure_ascii=False,
-    )
-    with get_db() as conn:
-        conn.execute(
-            """UPDATE post_analysis
-               SET revision_patch=?, status='revised', is_revised=1,
-                   analyzed_at=COALESCE(analyzed_at, datetime('now','localtime')),
-                   decided_at=COALESCE(decided_at, datetime('now','localtime')),
-                   revised_at=datetime('now','localtime')
-               WHERE id=?""",
-            (patch, analysis_id),
         )
 
 
@@ -1743,7 +1722,7 @@ def upsert_learning_insight(insight_key: str, insight_type: str,
 def get_top_learning_insights(limit: int = 10, days: int = 30,
                               insight_type: str = "",
                               scope: str = "") -> list[dict]:
-    """pre_revise SYSTEM_PROMPT 보강용 — 최근 N일 활성 + 가중치 상위 N개.
+    """작성 프롬프트 보강용 — 최근 N일 활성 + 가중치 상위 N개.
 
     scope: 'economic' / 'theme' 등 명시 시 scope IN (해당, 'all') 인 인사이트만.
            빈 문자열이면 전체. 가중치는 시간 감쇠 (7일마다 0.7 곱).
