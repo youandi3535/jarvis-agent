@@ -28,6 +28,9 @@ _PATTERNS = _DIR / "learned_patterns.json"
 
 __all__ = [
     "history", "history_text", "parse_errors_md", "SLOT_LABELS",
+    # ★ 사고 지식 검색 정문 (ERRORS [534]) — 호출자는 이것만 쓴다
+    "search_incidents", "incidents_brief",
+    "next_incident_no", "duplicate_incident_nos", "selfcheck",
 ]
 
 # ── 서술 슬롯 ────────────────────────────────────────────────────────
@@ -38,19 +41,25 @@ _SLOT_SYNONYMS: dict[str, tuple[str, ...]] = {
     "cause":   ("원인", "본질 진단", "진단", "결론", "근본원인", "근본 원인"),
     "action":  ("해결", "조치", "변경", "구현", "수정", "설계"),
     "verify":  ("검증", "회귀", "회귀 결과", "결과", "즉시 효과", "확인"),
-    "lesson":  ("교훈", "헛다리", "사용자 박제", "규정"),
+    # ★ ERRORS [534] — '헛다리' 를 lesson 에서 **분리**한다 (2026-07-27).
+    #   종전엔 교훈과 한 슬롯에 뭉쳐 있어 *"이미 틀린 것으로 판명난 가설"* 을 따로 꺼낼 수 없었다.
+    #   업계 포스트모템 템플릿(Google SRE·Amazon CoE·Atlassian·PagerDuty) 어디에도 없는
+    #   필드이고, 이 저장소의 가장 값진 자산(373건)이다. 뭉쳐두면 검색이 못 쓴다.
+    "dead_end": ("헛다리", "헛다리 (전부 실측으로 기각 — 다시 시도 금지)", "시도했으나 실패", "오진"),
+    "lesson":  ("교훈", "사용자 박제", "규정"),
     "files":   ("파일", "수정 파일", "모듈", "관련 파일"),
     "env":     ("환경",),
 }
 SLOT_LABELS: dict[str, str] = {
-    "symptom": "증상 — 무엇이 잘못 보였나",
-    "cause":   "원인 — 진짜 이유",
-    "action":  "조치 — 어떻게 고쳤나",
-    "verify":  "검증 — 정상임을 무엇으로 확인했나",
-    "lesson":  "교훈",
-    "files":   "파일",
-    "env":     "환경",
-    "other":   "기타",
+    "symptom":  "증상 — 무엇이 잘못 보였나",
+    "cause":    "원인 — 진짜 이유",
+    "dead_end": "헛다리 — 이미 틀린 것으로 판명 (다시 시도 금지)",
+    "action":   "조치 — 어떻게 고쳤나",
+    "verify":   "검증 — 정상임을 무엇으로 확인했나",
+    "lesson":   "교훈",
+    "files":    "파일",
+    "env":      "환경",
+    "other":    "기타",
 }
 _LABEL_TO_SLOT: dict[str, str] = {
     lab: slot for slot, labs in _SLOT_SYNONYMS.items() for lab in labs
@@ -469,7 +478,278 @@ def history_text(days: int = 7, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  사고 지식 검색 — ★ 정문 (ERRORS [534], 사용자 박제 2026-07-27)
+# ═══════════════════════════════════════════════════════════════════
+#
+# ★ 왜 만들었나: ERRORS.md 는 9,855줄(1.2MB)·사고 186건·**헛다리 373건** 인데,
+#   Tier-2 프롬프트는 `head -60` 으로 **앞 60줄(0.6%)** 만 읽고 있었다.
+#   CLAUDE.md 는 "오류 나면 ERRORS.md 를 먼저 읽어라" 라고 못박았지만
+#   실제로 도달하는 건 최신 1건뿐 — **규정이 코드에서 사실상 우회되고 있었다**
+#   (log_scanner 70일 0건과 같은 병: 코드는 있는데 일을 안 함).
+#
+# ★ 왜 '전량 읽기' 가 답이 아닌가 (반직관 — 이게 중요):
+#   Chroma 의 Context Rot 연구(프론티어 모델 18종 전수)는 **예외 없이 전부**
+#   입력이 길어질수록 성능이 떨어짐을 보였다. 한도 *한참 전* 에 시작되고,
+#   200K 창 모델이 50K 에서 이미 유의미하게 저하된다. 게다가
+#   **잘 구조화된 일관된 입력이 뒤죽박죽보다 주의를 더 갉아먹는다** —
+#   양식이 통일된 ERRORS.md 가 오히려 불리하다. 186건 중 1건을 찾을 때
+#   나머지 185건은 순수한 방해 요소(distractor)다.
+#   → 정답은 "전량"도 "앞 60줄"도 아닌 **조준 검색**이다.
+#
+# ★ 왜 ChromaDB 를 안 쓰나 (② 동적 설계):
+#   505 항목 × 384차원 = 758KB — 메모리로 충분하다. 영구 색인을 따로 두면
+#   그게 곧 *원본과 어긋날 수 있는 사본* 이다("복사본을 진실로 믿지 말 것").
+#   여기서는 ERRORS.md 를 진실로 두고 **mtime 이 바뀌면 자동 재계산**한다.
+#   색인 갱신 잡·백필·정합성 검사가 통째로 불필요해진다.
+#
+# ★ 왜 하이브리드(키워드+벡터)인가:
+#   순수 벡터는 `NoneType`·`TypeError`·파일경로 같은 **정확 문자열**에서 실패하고,
+#   순수 키워드는 "이미지가 연달아 붙는다" ↔ "figure 태그 연속" 같은
+#   **표현 차이**를 못 넘는다. 사고 기록은 둘 다 필요한 전형적 케이스다.
+#   임베딩 미가용 시에도 키워드만으로 degrade — 검색이 아예 죽지 않는다(fail-open).
+
+_SEARCH_CACHE: dict[str, Any] = {"mtime": 0.0, "vecs": None, "rows": [], "idf": {}, "toks": []}
+
+# 검색 튜닝 — ① 단일 진입점(여기 한 곳). ② `_flag`/env 로 무배포 조정.
+_KW_WEIGHT   = 0.5    # 키워드 점수 가중
+_VEC_WEIGHT  = 0.5    # 벡터 점수 가중
+# 실측 점수 분포로 교정 (ERRORS [534]): 무관 질의 0.09~0.37 / 유관 질의 0.40~0.71.
+# 경계를 유관 쪽 하한 바로 아래에 둔다 — 빈손이 오답보다 낫다.
+# 실측 분리 (토큰 매칭 + IDF 후): 무관 0.099~0.398 / 유관 0.427~0.709.
+# 경계를 그 사이에 둔다 — 빈손이 오답보다 낫다.
+_MIN_SCORE   = 0.41
+
+
+def _search_env(name: str, default: float) -> float:
+    """검색 노브 — *호출 시점* 조회 (모듈 로드 캡처 금지)."""
+    import os as _os
+    try:
+        return float(_os.getenv(name) or default)
+    except ValueError:
+        return default
+
+
+def _row_text(row: dict) -> str:
+    """한 사고를 검색 대상 문자열로 — 제목 + 전 슬롯. 누락 0 이 원칙."""
+    parts = [str(row.get("title") or "")]
+    for vals in (row.get("slots") or {}).values():
+        parts.extend(str(v) for v in (vals if isinstance(vals, list) else [vals]))
+    parts.extend(row.get("files") or [])
+    return "\n".join(p for p in parts if p)
+
+
+def _index() -> tuple[list[dict], Any]:
+    """검색 인덱스 — ERRORS.md 에서 *파생*. mtime 이 바뀌면 자동 재계산(사본 없음)."""
+    rows = parse_errors_md()          # 이미 mtime 캐시 내장
+    try:
+        mtime = _ERRORS_MD.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    if _SEARCH_CACHE["mtime"] == mtime and _SEARCH_CACHE["rows"]:
+        return _SEARCH_CACHE["rows"], _SEARCH_CACHE["vecs"]
+
+    # ★ IDF — 문서에서 파생한다(사본 없음). 흔한 토큰일수록 가중 ↓
+    import math as _math
+    texts = [_row_text(r).lower() for r in rows]
+    df: dict[str, int] = {}
+    for t in texts:
+        for tok in {x.lower() for x in _TOKEN_RE.findall(t)}:
+            df[tok] = df.get(tok, 0) + 1
+    n = len(texts) or 1
+    idf = {tok: _math.log(n / (1 + c)) + 1.0 for tok, c in df.items()}
+    toks = [{x.lower() for x in _TOKEN_RE.findall(t)} for t in texts]
+
+    vecs = None
+    try:
+        from shared import embeddings as _emb
+        if _emb.available() and rows:
+            vecs = _emb.embed_texts([_row_text(r)[:2000] for r in rows])
+    except Exception as e:  # noqa: BLE001 — 임베딩 실패해도 키워드로 degrade
+        log.debug(f"[repair_history] 임베딩 인덱스 생략 — 키워드만 사용: {e}")
+    _SEARCH_CACHE.update({"mtime": mtime, "rows": rows, "vecs": vecs, "idf": idf, "toks": toks})
+    return rows, vecs
+
+
+_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}|[가-힣]{2,}|[\w./-]+\.\w+")
+
+
+def _kw_score(q_tokens: set[str], doc_tokens: set[str], idf: dict[str, float]) -> float:
+    """IDF 가중 키워드 겹침 — 정확 식별자(NoneType·파일경로)가 벡터보다 강한 구간 담당.
+
+    ★ **토큰 경계 매칭이다. 부분문자열(`in`) 이 아니다** (ERRORS [534]).
+      종전 `t in text` 는 "사진" 이 "AI사진생성" 안에 걸리는 식으로 오탐을 냈다 —
+      어제 `incident_responder` 에서 고친 것과 **같은 병**(경계 없는 부분문자열).
+      실측: 부분문자열이면 무관 질의 kw 0.79 / 유관 0.72 로 **역전**했고,
+      토큰 매칭으로 바꾸자 무관 ≤0.56 / 유관 ≥0.72 로 갈렸다.
+
+    ★ IDF: 흔한 토큰일수록 가중 ↓ (BM25 와 같은 발상). 미등장 토큰은 희귀로 간주(3.0)해
+      "질의에만 있고 문서엔 없는 단어" 가 분모를 키우도록 한다 — 무관 질의가 눌린다.
+    """
+    if not q_tokens:
+        return 0.0
+    num = sum(idf.get(t, 3.0) for t in q_tokens if t in doc_tokens)
+    den = sum(idf.get(t, 3.0) for t in q_tokens) or 1.0
+    return num / den
+
+
+def search_incidents(query: str, top_k: int = 3, min_score: float | None = None) -> list[dict]:
+    """★ 사고 지식 검색 정문 — "이 증상 겪은 적 있나?" 한 줄로 묻는다.
+
+    하이브리드(키워드 + 시맨틱)로 ERRORS.md 전체를 조준 검색한다.
+    호출자가 파서·임베딩·점수 조합을 알 필요가 없다 (① 단일 진입점).
+
+    Args:
+        query:     증상·오류 메시지·traceback 등 자유 문장
+        top_k:     반환할 사고 수 (기본 3 — Context Rot 고려한 소수 정예)
+        min_score: 이 점수 미만은 버림 (None 이면 기본값)
+
+    Returns:
+        [{no, title, date, score, symptom, cause, dead_end, action, lesson, files}, ...]
+        관련 사고가 없으면 **빈 리스트** — 억지로 채우지 않는다(오답 < 빈손).
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    thr = _MIN_SCORE if min_score is None else min_score
+    kw_w = _search_env("GUARDIAN_SEARCH_KW_WEIGHT", _KW_WEIGHT)
+    vec_w = _search_env("GUARDIAN_SEARCH_VEC_WEIGHT", _VEC_WEIGHT)
+
+    try:
+        rows, vecs = _index()
+    except Exception as e:  # noqa: BLE001 — 검색 실패가 수리 흐름을 막으면 안 된다
+        log.warning(f"[repair_history] 사고 인덱스 실패: {e}")
+        return []
+    if not rows:
+        return []
+
+    q_tokens = {t.lower() for t in _TOKEN_RE.findall(q)}
+    _idf = _SEARCH_CACHE.get("idf") or {}
+    _toks = _SEARCH_CACHE.get("toks") or []
+    kw = [_kw_score(q_tokens, _toks[i] if i < len(_toks) else set(), _idf)
+          for i in range(len(rows))]
+
+    vec = [0.0] * len(rows)
+    if vecs is not None:
+        try:
+            from shared import embeddings as _emb
+            import numpy as _np
+            qv = _emb.embed_text(q[:2000])
+            sims = _np.asarray(vecs) @ _np.asarray(qv)
+            vec = [max(0.0, float(s)) for s in sims]
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"[repair_history] 벡터 점수 생략: {e}")
+
+    scored = []
+    for r, k, v in zip(rows, kw, vec):
+        s = kw_w * k + vec_w * v
+        if s >= thr:
+            scored.append((s, r))
+    scored.sort(key=lambda x: -x[0])
+
+    out = []
+    for s, r in scored[:top_k]:
+        slots = r.get("slots") or {}
+        first = lambda key: (slots.get(key) or [""])[0] if slots.get(key) else ""   # noqa: E731
+        out.append({
+            "no": r.get("no"), "title": r.get("title"), "date": r.get("date"),
+            "score": round(s, 4),
+            "symptom":  first("symptom"),
+            "cause":    first("cause"),
+            "dead_end": " / ".join(slots.get("dead_end") or []),   # ★ 가장 값진 필드
+            "action":   first("action"),
+            "lesson":   first("lesson"),
+            "files":    r.get("files") or [],
+        })
+    return out
+
+
+def incidents_brief(query: str, top_k: int = 3) -> str:
+    """검색 결과 → **프롬프트 주입용** 한국어 블록. 관련 사고 없으면 "" (빈손).
+
+    ★ Tier-2 프롬프트가 `head -60` 대신 이걸 쓴다. 왜 문자열까지 여기서 만드나 —
+      포맷이 호출자마다 갈리면 그게 곧 사본이다(① 단일 진입점).
+    """
+    hits = search_incidents(query, top_k=top_k)
+    if not hits:
+        return ""
+    lines = ["", "─" * 30,
+             f"📚 *과거 유사 사고 {len(hits)}건* — ERRORS.md 조준 검색 결과", ""]
+    for h in hits:
+        lines.append(f"### [{h['no']}] {h['title']}  ({h['date']}, 유사도 {h['score']})")
+        if h["symptom"]:
+            lines.append(f"- 증상: {h['symptom'][:300]}")
+        if h["cause"]:
+            lines.append(f"- 원인: {h['cause'][:300]}")
+        if h["dead_end"]:
+            # ★ 헛다리를 맨 앞·강조로 — 업계 템플릿에 없는 이 저장소의 핵심 자산이다.
+            lines.append(f"- ⛔ **헛다리(다시 시도 금지)**: {h['dead_end'][:400]}")
+        if h["action"]:
+            lines.append(f"- 해결: {h['action'][:300]}")
+        if h["files"]:
+            lines.append(f"- 파일: {', '.join(h['files'][:6])}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+# ── 사고 번호 — ★ 파일에서 파생 (② 동적 설계) ──────────────────────
+def next_incident_no() -> int:
+    """다음에 쓸 사고 번호 — ERRORS.md 최대값 + 1.
+
+    ★ 왜: 사람이 눈으로 세다가 **중복 ID 12개**가 생겼다([402][403][404][437]
+      [453]~[456] 등). CLAUDE.md 가 `ERRORS [474]` 처럼 번호로 참조하는데
+      한 번호가 두 곳을 가리키면 상호참조가 흔들린다. 숫자를 손으로 정하지 않는다.
+    """
+    try:
+        rows = parse_errors_md()
+        return max((int(r.get("no") or 0) for r in rows), default=0) + 1
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def duplicate_incident_nos() -> list[int]:
+    """중복 사용된 사고 번호 — 회귀 감시용(0건이어야 정상)."""
+    try:
+        from collections import Counter
+        c = Counter(int(r.get("no") or 0) for r in parse_errors_md())
+        return sorted(n for n, k in c.items() if k > 1 and n)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def selfcheck() -> list[str]:
+    """★ 검색이 *실제로 동작하는지* 확인 (존재가 아니라 동작으로).
+
+    `head -60` 이 0.6%만 읽으면서도 아무도 몰랐던 것과 같은 무증상 열화를 막는다.
+    """
+    issues: list[str] = []
+    try:
+        rows, vecs = _index()
+        if not rows:
+            issues.append("[S1] ERRORS.md 파싱 0건 — 파서 또는 파일 경로 확인")
+            return issues
+        if vecs is None:
+            issues.append("[S2] 임베딩 인덱스 없음 — 키워드 전용으로 degrade 중"
+                          " (shared.embeddings.available() 확인)")
+        # 자기 자신을 질의해 top-1 로 돌아오는지 (검색이 실제로 먹는가)
+        probe = rows[0]
+        hits = search_incidents((probe.get("title") or "")[:120], top_k=1)
+        if not hits:
+            issues.append("[S3] 자기 제목으로 검색해도 0건 — 점수 임계값이 과하게 높음")
+        elif hits[0]["no"] != probe.get("no"):
+            issues.append(f"[S3] 자기 제목 검색 top-1 불일치 "
+                          f"(기대 {probe.get('no')} / 실제 {hits[0]['no']})")
+        dups = duplicate_incident_nos()
+        if dups:
+            issues.append(f"[S4] 중복 사고 번호 {len(dups)}개: {dups[:12]}"
+                          " — next_incident_no() 로 발급할 것")
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"[S0] selfcheck 실패: {type(e).__name__}: {e}")
+    return issues
+
+
 if __name__ == "__main__":  # pragma: no cover
     from JARVIS00_INFRA.preflight import ensure_preflight
     ensure_preflight()
     print(history_text(days=7, limit=8))
+    print("\nselfcheck():", selfcheck() or "OK")

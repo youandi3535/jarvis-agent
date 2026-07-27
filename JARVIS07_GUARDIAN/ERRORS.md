@@ -2,6 +2,64 @@
 
 ---
 
+## [534] ✅ 해결 — 사고 지식 477건을 쌓아놓고 0.6%만 읽고 있었다 — 조준 검색 신설 (2026-07-27)
+
+> ★ **맥락**: 사용자 질문 *"현업에서는 이런 상황일 경우 어떻게 로직을 구성해?"* → 오류 지식 관리·
+> 자동복구 아키텍처 현업 표준 조사(런북·포스트모템·auto-remediation·RAG 4각도). 6층 중 5층은
+> 업계 수준 이상인데 **L5 '검색'만 비어 있음**이 드러나 4항목 전부 구현.
+
+- **증상**: Tier-2 프롬프트가 `head -60 ERRORS.md` — **9,855줄 중 60줄(0.6%), 사고 1건**만 읽었다.
+  CLAUDE.md 는 *"오류 나면 ERRORS.md 를 반드시 먼저 Read"* 라고 못박았는데
+  **규정이 코드에서 사실상 우회**되고 있었다. 헛다리 373건이 쌓여 있어도 도달하지 못한다.
+- **환경**: `auto_repair.py:723`(head -60) · `repair_history.py`(파서만 있고 검색 없음) ·
+  `CLAUDE.md:204`(통독 규정)
+- **원인**: 지식을 *쌓는* 경로만 만들고 *꺼내는* 경로를 안 만들었다. 부품은 이미 다 있었다 —
+  `repair_history.parse_errors_md`(mtime 캐시 파서) · `shared/embeddings`(로컬 MiniLM) ·
+  `vector_store`(ChromaDB). **비어 있던 건 이것들을 잇는 정문 함수 하나**였다.
+  같은 저장소가 JARVIS09 에는 `collect_all()` 파사드를 뒀으면서 사고 기록엔 안 뒀다.
+- **헛다리** (실측으로 기각 — 다시 시도 금지):
+  - *"`head -60` 을 `tail` 로 바꾸거나 줄 수를 늘리면 된다"* → **틀림**. 통독도 답이 아니다.
+    Chroma **Context Rot** 연구(프론티어 모델 18종 전수)에서 **예외 없이 전부** 입력이 길수록
+    성능 저하, 200K 창 모델도 **50K 부터** 저하. 게다가 *양식이 통일된 조밀한 문서일수록*
+    주의를 더 갉아먹는다 — ERRORS.md 가 정확히 그 형태다. 477건 중 1건을 찾을 때
+    나머지 476건은 **순수한 방해 요소**다. → 정답은 "전량"도 "앞 60줄"도 아닌 **조준 검색**.
+  - *"ChromaDB 로 영구 색인을 만든다"* → **과설계**. 505항목 × 384차원 = **758KB** 로 메모리면
+    충분하고, 영구 색인은 *원본과 어긋날 수 있는 사본* 이다("복사본을 진실로 믿지 말 것").
+    mtime 파생이면 색인 갱신 잡·백필·정합성 검사가 통째로 불필요해진다.
+  - *"키워드 겹침 비율이면 충분"* → **틀림**. 부분문자열(`in`) 매칭이라 흔한 토큰이 점수를 부풀려
+    **무관 질의 0.79 > 유관 0.72 로 역전**했다. 어제 `incident_responder` 에서 고친 것과
+    **같은 병**(경계 없는 부분문자열). 토큰 경계 매칭 + IDF 로 무관 ≤0.398 / 유관 ≥0.427 분리.
+- **해결 (4항목)**:
+  1. **`search_incidents()` / `incidents_brief()` 정문 신설**(`repair_history.py`) —
+     하이브리드(IDF 가중 키워드 + 시맨틱). 순수 벡터는 `NoneType`·파일경로 같은 **정확 식별자**에서
+     실패하고, 순수 키워드는 *"이미지가 연달아 붙는다"* ↔ *"figure 태그 연속"* 같은 **표현 차이**를
+     못 넘는다. 임베딩 미가용 시 키워드만으로 degrade(fail-open).
+  2. **Tier-2 연결** — `head -60` → `_incidents_block(context)` 로 교체. 이 오류 문장으로 조준한
+     상위 3건(헛다리 포함)만 주입. 킬스위치 `GUARDIAN_INCIDENT_SEARCH=0`.
+  3. **중복 사고 번호 28개 정리** + `next_incident_no()` 자동 발급.
+     `[500]` 이 두 번 쓰이는 등 상호참조(`ERRORS [474]` 형식)가 흔들리고 있었다.
+     ★ 재번호 부작용으로 `[506]` 이 선점돼 이 항목이 [534] 가 됨 — 번호를 손으로 정하지 말 것.
+  4. **`dead_end` 슬롯 분리** — 종전 파서가 '헛다리'를 `lesson` 에 뭉쳐 담아 **따로 꺼낼 수 없었다**.
+     업계 포스트모템 템플릿(Google SRE·Amazon CoE·Atlassian·PagerDuty) **어디에도 없는 필드**이고
+     이 저장소의 최대 자산인데, 뭉쳐두면 검색이 못 쓴다. 분리 후 **355건**이 독립 필드로 살아남.
+- **검증** (전부 실행 재현): 인덱스 505건·벡터 생성 확인 / 무관 질의 3종 **빈손** ·
+  유관 질의 5종 **전부 적중**(유사도 0.43~0.71) / 하이브리드 실증 — 키워드 단독은 파일경로 질의를,
+  벡터 단독은 의역 질의를 각각 담당 / 중복 번호 28→**0** / `selfcheck()` OK / precommit 58종 0건.
+- **파일**: `JARVIS07_GUARDIAN/repair_history.py`(정문·IDF·selfcheck) ·
+  `JARVIS07_GUARDIAN/auto_repair.py`(Tier-2 연결) · `CLAUDE.md`(통독→조준 검색 규정 개정) ·
+  `JARVIS07_GUARDIAN/ERRORS.md`(중복 번호 28건 재번호)
+- **교훈**:
+  - **쌓는 것과 꺼내는 것은 다른 일이다.** 373건을 모으는 데 성공하고도 0.6%만 읽고 있었다.
+    지식 자산은 *검색 경로가 있어야* 자산이다.
+  - **"더 많이 읽기"는 해법이 아니다.** 긴 입력은 그 자체로 정확도를 떨어뜨린다(Context Rot).
+    RAG 는 비용 절감 기법이 아니라 **정확도 기법**이다.
+  - **경계 없는 부분문자열 매칭은 반복되는 병이다** — 어제 `incident_responder`(UUID 안 '403'),
+    오늘 키워드 검색. 문자열을 비교할 땐 **토큰 경계**를 먼저 물어라.
+  - **작은 데이터엔 작은 도구를.** 505항목에 ChromaDB 는 과설계다. 영구 색인은 사본을 만들고,
+    사본은 원본과 어긋난다.
+
+---
+
 ## [505] ✅ 해결 — LLM 호출 1건마다 3만 토큰이 '봉투'로 나가고 있었다 (2026-07-26)
 
 > ★ **맥락**: 사용자 *"토큰 한도 소진을 품질 저하 없이 줄여라"* → ERRORS [504] 로 눈금을 먼저
@@ -8838,7 +8896,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [28] JARVIS00 능동형 자가진단 시스템 미구현 — JARVIS03 /status 누락 사태
+## [533] JARVIS00 능동형 자가진단 시스템 미구현 — JARVIS03 /status 누락 사태
 
 - **증상**: JARVIS04_SCHEDULER 에이전트가 새로 추가됐는데 `/status` 출력에 섹션이 없음. 사용자가 직접 발견해 보고함.
 - **환경**: 데몬 정상 가동 중. JARVIS03 capability 등록은 됐으나 build_status() 에 섹션 없음.
@@ -9285,7 +9343,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [42] 문장 수 하드코딩 전수 제거 (2026-05-11)
+## [532] 문장 수 하드코딩 전수 제거 (2026-05-11)
 - **증상**: `jarvis_main.py`, `economic_poster.py` 등 다수 파일에 "정확히 3문장", "2~3문장", "1~2문장" 등 숫자가 프롬프트에 직접 박혀 있음. `length_manager` 상수 변경 시 연동되지 않음.
 - **원인**: 초기 개발 시 prompt 안에 숫자를 직접 기재. length_manager 단일 진입점 규정 위반.
 - **헛다리**: 없음
@@ -9408,7 +9466,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [137] claude CLI — env: node: No such file or directory (2026-05-24)
+## [531] claude CLI — env: node: No such file or directory (2026-05-24)
 
 - **증상**: 경제 브리핑 전체 실패. `claude CLI 시도 1~4/4 실패 (exit 127: env: node: No such file or directory)`
 - **환경**: 데몬 프로세스 (APScheduler cron 07:00 자동 실행)
@@ -9420,7 +9478,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [138] 여백 2~4칸 중복 (제9조 위반) — &nbsp; 빈 블록 spacer 중복 삽입 (2026-05-24)
+## [530] 여백 2~4칸 중복 (제9조 위반) — &nbsp; 빈 블록 spacer 중복 삽입 (2026-05-24)
 
 - **증상**: 문단↔문단, 문단↔이미지 사이 2~4줄 빈칸 (규정: 1줄)
 - **원인**: LLM 이 `<p>&nbsp;</p>` 를 **text 블록**으로 생성 → `enforce_spacing()` 이 실질 콘텐츠로 인식해 앞뒤에 spacer 추가 → `&nbsp;` text + spacer + `&nbsp;` text + spacer = 4줄
@@ -9434,7 +9492,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [163] _parse_layer_counts 괄호 안 숫자 오집계 (2026-05-25)
+## [529] _parse_layer_counts 괄호 안 숫자 오집계 (2026-05-25)
 
 - **증상**: auto_repair 회차 id=20 에서 `fixers_added=91`, `vision_pinned=403`, `total_fixed=518` 로 잘못 집계. summary 본문엔 "수정 0건"이라고 정확히 기술. 대시보드 학습 곡선 수치 신뢰 불가.
 - **원인**: `_parse_layer_counts` fallback 로직(`nums[-1]` — 마지막 숫자)이 `" — "` 이후 설명 주석 속 숫자를 집계. `[Layer 6]` 줄의 `(RuntimeError 91건은...)` → 91, `[Layer 7]` 줄의 `[137][160]...397-403` → 403 오집계.
@@ -9445,7 +9503,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [164] _parse_self_scores **N/10** Markdown bold 형식 미매칭 (2026-05-25)
+## [528] _parse_self_scores **N/10** Markdown bold 형식 미매칭 (2026-05-25)
 
 - **증상**: 자기 평가 점수가 `**9/10**` 형식으로 생성됐을 때 regex `[:\s]+([0-9]+)` 매칭 실패 → score_quality/learning/vision = 0 저장.
 - **원인**: `[:\s]+` 는 콜론·공백만 허용 — `**: **9` 처럼 `**` (Markdown bold) 가 사이에 오면 매칭 불가.
@@ -9456,7 +9514,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [165] learned_patterns tier 필드 누락 — 자동수정 가능 여부 불투명 (2026-05-25)
+## [527] learned_patterns tier 필드 누락 — 자동수정 가능 여부 불투명 (2026-05-25)
 
 - **증상**: 160개 전체 패턴의 `tier='unknown'`. 대시보드에서 static/llm/manual 구분 불가. 실제 자동 수정 가능 패턴이 3개뿐인데 "160개 학습"으로 오해 소지.
 - **원인**: `record_pattern_hit` entry 생성 시 `tier` 필드 미포함.
@@ -9467,7 +9525,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [166] 학습 시스템 구조적 한계 — LLM 절약 과장 + auto_patch 부재 (2026-05-25)
+## [526] 학습 시스템 구조적 한계 — LLM 절약 과장 + auto_patch 부재 (2026-05-25)
 
 - **증상**: 대시보드 "LLM 절약 188회" 표시 — 실제 자동수정 가능 패턴은 3개(static 2 + llm 1)뿐. auto_repair(Claude CLI) 수정이 learned_patterns에 재사용 불가 형태로 저장되어 동일 패턴 재발 시 LLM 재호출 필수.
 - **원인 3가지**:
@@ -9485,7 +9543,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [167] 분량 상한 초과 5회 재시도 실패 (draft_fixer 핸들러 부재) (2026-05-25)
+## [525] 분량 상한 초과 5회 재시도 실패 (draft_fixer 핸들러 부재) (2026-05-25)
 
 - **증상**: 티스토리 대본 생성 시 LLM이 30문장 상한을 45~75문장으로 초과 생성. 하네스 5회 재시도해도 LLM은 동일 프롬프트로 반복 실패 — 결국 발행 없이 abort.
 - **원인**: `draft_fixer._route_fix()`에 `"분량 상한 초과"` 분기 없음 → unfixed 처리 → 하네스 retry 5회 → LLM 재호출해도 동일 초과 반복.
@@ -9499,7 +9557,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [168] CLAUDE_WRITER.md 검증 커맨드 오류 — _collect_data_empty 검색 파일 누락 (2026-05-29)
+## [524] CLAUDE_WRITER.md 검증 커맨드 오류 — _collect_data_empty 검색 파일 누락 (2026-05-29)
 
 - **증상**: CLAUDE_WRITER.md `검증` 커맨드가 `scheduler.py`·`collect_theme.py` 만 검색 → `_collect_data_empty` 미탐지. 실제 패턴은 `trend_theme_writer.py` 에 존재. 자가 진단 7-Layer 검증 시 false negative 발생.
 - **원인**: 검증 커맨드 작성 시 `_collect_data_empty` 가 어느 파일에 있는지 확인 없이 두 파일만 지정.
@@ -9510,7 +9568,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [169] post_type_specs.py 주석 `(1500자)` — CLAUDE.md 글자수 한도 grep 오탐 (2026-05-29)
+## [523] post_type_specs.py 주석 `(1500자)` — CLAUDE.md 글자수 한도 grep 오탐 (2026-05-29)
 
 - **증상**: `post_type_specs.py:160,181` 의 주석 `(1500자)` 가 CLAUDE.md 검증 명령 `\(1500` 패턴에 매칭 → 자가 진단 Layer 2 false alarm.
 - **원인**: 설명 주석에 `(1500자)` 형태로 글자수 직접 명시 → `\(1500` grep 패턴에 걸림. 실제 한도는 `max_korean=2000`.
@@ -9544,7 +9602,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS09_COLLECTOR/{chart_data.py,lib_bootstrap.py,__init__.py}`, `JARVIS06_IMAGE/validators/image_data_verifier.py`, `JARVIS06_IMAGE/{image_spec.py,image_agent.py}`, `JARVIS02_WRITER/prepublish_gate.py`, `shared/precommit_check.py`, `docs/decisions/010-image-factuality-real-data.md`, `CLAUDE.md`.
 - **교훈**: 이미지도 *콘텐츠*다. 텍스트에만 사실성 게이트를 걸면 데이터 시각화가 사각지대가 된다. 수치 이미지는 *반드시* 실데이터 출처를 박고 검증해야 함. 수집은 JARVIS09, 생성은 JARVIS06 — 단일 진입점 협업.
 
-## [288] LLM 호출 실패(null byte·Max burst 스로틀) → 발행 지연·검증 스킵·인포그래픽 폴백 균일화 (2026-07-02)
+## [522] LLM 호출 실패(null byte·Max burst 스로틀) → 발행 지연·검증 스킵·인포그래픽 폴백 균일화 (2026-07-02)
 
 - **증상**: 테마 발행이 극도로 느리고, 검증이 안 도는 듯 보이며, 인포그래픽 6장이 전부 비슷비슷. 로그에 `rate-limit 스로틀 (num_turns=0, 모델 미호출)` 20+회, `SDK 오류: Failed to start Claude Code: embedded null byte` 4회.
 - **환경**: `shared/llm.py` (claude-code-sdk, Max 구독 OAuth). 테마 발행 경로(`invoke_text` 정적 호출 57곳), 차트 4-way 병렬(theme_html_writer). 인터랙티브 Claude Code 세션·데몬 5분 잡과 같은 Max 구독 공유.
@@ -9561,7 +9619,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
   - C1 배치: ③가 차트마다 LLM 설계(N회)를 부르며 rate-limit 을 악화 → `prime_batch_designs(run_id, pool)` 글당 1회 LLM 으로 pool 전체를 개별 설계·캐시(`_BATCH_DESIGN_CACHE`), `generate_infographic` 은 캐시 사용(LLM 0). `chart_generator._collect_data_fallback` 에서 프라임. 검증: 3 데이터→1 호출, 개별폴백 0, 레이아웃 split_compare/hero_feature/kpi_hero 상이.
   - **핵심 교훈 (rate-limit)**: Max 구독은 *계정 단위 rate(요청/시간)* 제한 — 단일 호출은 되지만 발행의 호출 폭주(~40)가 천장을 넘음. 인터랙티브 세션·데몬·발행이 *같은 계정* 공유 → 코드 세마포어(프로세스 내)로 못 막음. 해법은 호출 수 자체를 줄이거나(C1) 발행 전용 API 키 분리. 발행은 무경쟁 시각(예약)에.
 
-## [289] 수집→작성 병목 — 근거 대부분이 대본 프롬프트에 미도달 (2026-07-02, ADR 012)
+## [521] 수집→작성 병목 — 근거 대부분이 대본 프롬프트에 미도달 (2026-07-02, ADR 012)
 
 - **증상**: JARVIS09가 문서 수십 건을 수집해도 테마글 본문의 근거 밀도가 낮음. 사실성 게이트가 대조할 출처도 빈약. 글이 일반론 위주로 흐름.
 - **환경**: `JARVIS02_WRITER/draft_writer.py` `_gen_theme` — collection_docs 주입부.
@@ -9571,7 +9629,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS09_COLLECTOR/{research_planner,evidence_pack,source_onboarding,collector_engine,generic_fetch,__init__}.py`, `JARVIS02_WRITER/{draft_writer,theme_html_writer,trend_theme_writer}.py`, `JARVIS06_IMAGE/draft_processor.py`, `shared/file_cleanup.py`.
 - **교훈**: 수집량이 아니라 *프롬프트 도달량* 이 병목이었다. 스테이지 간 계약(무엇을 얼마나 넘기는가)을 구조체(EvidencePack)로 명시해야 누수가 보인다. 수집은 "설계→수집→측정→재수집" 순환이어야 '충분한가'에 답할 수 있다.
 
-## [290] 대본 단일 패스 — 아웃라인·자기비평 부재로 흐름 단절·어미 반복 (2026-07-02, ADR 012)
+## [520] 대본 단일 패스 — 아웃라인·자기비평 부재로 흐름 단절·어미 반복 (2026-07-02, ADR 012)
 
 - **증상**: 섹션 간 서사 단절(각 섹션이 따로 노는 느낌), 같은 어미 반복, 마무리가 요약 재탕. 독자 감정 곡선 설계 없음.
 - **환경**: `JARVIS02_WRITER/draft_writer.py` — Pass-1 단일 호출로 전체 본문 생성.
@@ -9582,7 +9640,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **교훈**: 작성 품질은 "설계 → 작성 → 비평" 다층 패스가 기본기. 비평 패스에는 반드시 *구조 보존 가드* 를 붙여야 한다 — LLM 재작성은 플레이스홀더·표를 쉽게 훼손한다.
 
 
-## [320] 밴딧 강화학습 붕괴 — arm=오류지문 → 402MB·죽은 신호·오염 (2026-07-04, ADR 016)
+## [519] 밴딧 강화학습 붕괴 — arm=오류지문 → 402MB·죽은 신호·오염 (2026-07-04, ADR 016)
 
 - **증상**: `bandit_state.json` 402MB(매 보상마다 통째 로드 ≈8초·재저장), 89개 arm 전부 mean_reward≈0(-0.005, 좋은/나쁜 fixer 무차별), 89 arm 중 83개가 변경추적(GitCommit 31·ExternalEdit·PolicyChange…). `learned_patterns.json` 126개 중 119개가 재적용 불가한 변경추적 이력(stored_patch 0개).
 - **환경**: `JARVIS07_GUARDIAN/bandit.py`(Linear UCB Contextual Bandit), `pattern_fixer.py`(record_pattern_hit·try_pattern_fix·_get_verified_fixers/_get_new_fixers). 유입: `error_collector.record_external_change`/`report_manual_fix`.
@@ -9594,7 +9652,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 
 ---
 
-## [353] 경제 브리핑 이미지 전부 AI사진 — set_session_pool([]) 무조건 호출 (2026-07-05)
+## [518] 경제 브리핑 이미지 전부 AI사진 — set_session_pool([]) 무조건 호출 (2026-07-05)
 
 - **증상**: 경제 브리핑 네이버·티스토리 발행글의 이미지가 전부 AI사진. 데이터 차트·인포그래픽 0개.
 - **환경**: `JARVIS02_WRITER/trend_economic_writer.py` — 네이버(`_nv_generate_draft`)·티스토리(`_ts_generate_draft`) 양쪽 데이터 주입 구간.
@@ -9616,7 +9674,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: 위 열거 10+ 파일 (코드 런타임 변경 0 — 주석·docstring만)
 - **교훈**: 런타임 단일 진입점(`shared/llm.py MODELS` dict)이 정확해도 주석이 구버전이면 다음 작업자가 혼동함. 모델 정책 변경 시 런타임 + 주석·docstring 동시 전수 스크럽 의무.
 
-## [402] 네이버 제목이 본문에 입력 — pyautogui Cmd+V → OS focus(본문) 전달 (2026-07-11)
+## [517] 네이버 제목이 본문에 입력 — pyautogui Cmd+V → OS focus(본문) 전달 (2026-07-11)
 - **증상**: 네이버 발행 시 글 제목이 제목 칸이 아닌 본문 맨 앞에 입력됨. 경제 브리핑·테마주 모두 동일.
 - **환경**: `JARVIS08_PUBLISH/platforms/naver_poster.py` `_paste_title()` / SmartEditor ONE
 - **원인**: `_focus_title()`은 JS `execute_script`로 DOM-level focus만 제목 칸으로 이전. 그러나 `_pg2.hotkey('command', 'v')` (pyautogui HID 이벤트)는 OS-level focus 기준으로 키 이벤트 전달. SmartEditor ONE이 페이지 로드 시 본문 에디터에 OS focus를 자동 설정하므로, JS DOM focus가 제목 칸에 있어도 pyautogui Cmd+V는 OS focus가 있는 본문에 전달.
@@ -9625,7 +9683,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS08_PUBLISH/platforms/naver_poster.py` 816번 줄
 - **교훈**: SmartEditor ONE 같은 리치 에디터에서 JS focus + pyautogui HID 조합은 OS/DOM focus 불일치로 버그 발생. 에디터 내 입력은 반드시 Selenium ActionChains CDP 방식 사용.
 
-## [404] 레이더 수집 watchdog freeze(880s>300s) — SDK 호출이 anyio timeout 인터럽트 못 걸어 무진전 (2026-07-12)
+## [516] 레이더 수집 watchdog freeze(880s>300s) — SDK 호출이 anyio timeout 인터럽트 못 걸어 무진전 (2026-07-12)
 - **증상**: watchdog 이 "정지 감지 — 레이더 수집: 멈춤(freeze) 880s > 300s 무진전" RuntimeError 보고(source=watchdog, module=`JARVIS00_INFRA.watchdog`, func_name=`레이더 수집`). traceback 은 `NoneType: None`(watchdog 이 직접 report 로 생성한 인공 RuntimeError, freeze 판정 자체가 오류의 본체).
 - **환경**: `JARVIS03_RADAR/radar_main.py` `__main__` — `with guard_main("레이더 수집", deadline_sec=900):` 안의 `collect_today()` 마지막 단계 `generate_content_angles()` (`analyzer.py`) 가 `shared/llm.py` `invoke_text("writer_fast", ...)` 를 1회 호출.
 - **원인**: `shared/llm.py::_run_sdk_sync()` 가 `anyio.fail_after(timeout)` 하나에만 기대 벽시계 상한을 걸었는데, Claude Code SDK subprocess 가 블로킹(비-yield) I/O 로 멈추면 이 타임아웃이 인터럽트를 못 건다. 그 구간 동안 `_wd_beat()` 는 메시지를 실제로 수신했을 때만 호출되므로, SDK 가 메시지 0건인 채 멈추면 전역 heartbeat(`_GLOBAL_BEAT`) 가 전혀 갱신되지 않아 무진전 시간이 그대로 누적 — freeze 임계값(300s) 을 넘어 최종 880s 까지 커졌다. `JARVIS03_RADAR/collectors/google_collector.py::_bounded()` 가 pytrends 호출에 대해 이미 고친 것과 동일한 버그 클래스(라이브러리 자체 timeout= 파라미터가 블로킹 I/O 앞에서 무력).
@@ -9634,7 +9692,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `shared/llm.py`
 - **교훈**: 외부 라이브러리(pytrends·SDK subprocess 등)의 `timeout=` 파라미터는 내부에서 블로킹 I/O 를 쓰면 신뢰할 수 없다 — 진짜 벽시계 상한이 필요하면 `ThreadPoolExecutor` + `fut.result(timeout=)` 폴링 패턴(대기 중 주기적 beat 포함)으로 감싸야 한다. 이미 한 곳(`_bounded()`)에서 고친 버그 클래스라도 *같은 원인의 다른 호출부* (여기선 LLM SDK 호출)에 동일 결함이 잠복해 있을 수 있으니, freeze 류 오류를 진단할 때는 "이 함수가 heartbeat 없이 블로킹할 수 있는 구간이 있는가"를 항상 먼저 확인할 것.
 
-## [403] 성과 수집 watchdog 데드라인 초과(블로킹) — deadline_sec 1800 하드코딩 미스매치 (2026-07-11)
+## [515] 성과 수집 watchdog 데드라인 초과(블로킹) — deadline_sec 1800 하드코딩 미스매치 (2026-07-11)
 - **증상**: watchdog 이 "정지 감지 — 성과 수집: 데드라인 초과(블로킹) 1979s > 1800s" RuntimeError 보고(source=watchdog, module=`JARVIS00_INFRA.watchdog`, func_name=`성과 수집`). traceback 은 `NoneType: None`(watchdog 이 직접 report 로 생성한 인공 RuntimeError, freeze 오탐 아님).
 - **환경**: `JARVIS03_RADAR/performance_collector.py` `__main__` — `guard_main("성과 수집", deadline_sec=1800)`.
 - **원인**: [150]에서 글 단위 `_wd_beat()` 를 추가해 "무진전(freeze)" 오탐은 이미 해결됐으나, 이번 건은 `Watchdog._monitor()` 의 별개 분기(`elapsed > deadline_sec` — 협조적 check 밖의 블로킹 전체 데드라인)로, beat 는 정상 갱신되는데도 순수하게 총 소요시간이 30분을 넘김. `deadline_sec=1800` 은 블로그 발행 액션(네이버/티스토리 각 30분, `BLOG_ACTION_DEADLINE_SEC`) 용 값이 복붙된 것으로, 성과 수집은 100+글을 순차로 스크래핑(글당 최대 requests 15초×3후보+rank API 10초+sleep 1.3초)하는 별개 성격의 배치 작업이라 애초에 그 값이 부적합. 발행 글이 늘어나며 실제로 30분을 초과.
@@ -9643,7 +9701,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS03_RADAR/performance_collector.py`
 - **교훈**: `guard_main(deadline_sec=...)` 호출 시 숫자를 다른 액션에서 복붙하지 말고 작업 성격(단발 selenium 발행 vs N건 순차 배치)에 맞는 워치독 SSOT 상수(`BLOG_ACTION_DEADLINE_SEC` vs `DEFAULT_ACTION_DEADLINE_SEC`)를 그대로 import 해서 쓸 것 — 값이 같은 파일(watchdog.py)에 이미 정의돼 있음에도 호출부마다 raw 숫자를 재입력하면 작업량 증가에 따라 재발.
 
-## [437] 테마 발행(네이버) harness freeze(302s>300s) — JARVIS09 리서치 수집 경로 beat() 배선 누락 3+2곳 (2026-07-13)
+## [514] 테마 발행(네이버) harness freeze(302s>300s) — JARVIS09 리서치 수집 경로 beat() 배선 누락 3+2곳 (2026-07-13)
 - **증상**: harness 가 "[harness:theme-publish-고령화 사회(노인복지)-naver] attempt=1 step=전체: 멈춤(freeze) 302s > 300s 무진전" RuntimeError 보고(source=harness, module=`JARVIS00_INFRA.harness.theme-publish-고령화 사회(노인복지)-naver`, func_name=`전체`). traceback 은 `NoneType: None`(watchdog 이 직접 생성한 인공 RuntimeError, step="전체"는 실제 스텝명이 아니라 정지 escalation 라벨).
 - **환경**: `JARVIS02_WRITER/trend_theme_writer.py` `_step_collect` — 백그라운드 스레드로 `JARVIS09_COLLECTOR.collect_research()`(ADR 012 설계-우선 리서치, `RESEARCH_FIRST=1` 기본) 를 돌리며 메인 스레드는 동시에 `collect_stocks_data(theme)` 를 동기 실행 후 `_col_fut.result(timeout=600)` 로 대기.
 - **원인**: `run_action()` 이 attempt 전체를 단일 `Watchdog` 로 감싸고, 그 freeze 판정은 *전역* heartbeat(`_GLOBAL_BEAT`, 어느 스레드에서 호출해도 프로세스 전체 freeze 카운터 리셋) 기준이다. 그런데 `JARVIS09_COLLECTOR/collector_engine.py::_collect_tier()`(paper/API/rest 3티어 순차 호출, 자체 `ThreadPoolExecutor`+`as_completed(timeout=90)` 루프)와 `_deep_fetch_thin_docs()`(최대 8건 순차 `fetch_article()` HTTP 요청)가 sibling 함수 `collect_for_theme()` 와 달리 루프 안에서 전역 `beat()` 를 전혀 호출하지 않았다. 동시에 `JARVIS09_COLLECTOR/collect_theme.py::collect_stocks_data()` 경로의 `_fetch_naver_theme_catalog()`(순차 최대 10페이지 `requests.get`) · `_naver_fin_theme_search()` 상세페이지 3회 백오프 재시도 루프 · `_enrich_ex` ThreadPoolExecutor 재무데이터 취합 루프도 동일하게 beat() 미배선 — 여러 구간이 겹쳐 진행 신호 없는 공백이 300초를 넘겼다. 기존에 이미 4회(ERRORS [394][396][413][426]) 반복된 "새/누락 코드 경로에 표준 beat() 배선 누락" 버그 클래스의 재발.
@@ -9678,7 +9736,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS00_INFRA/watchdog.py`, `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS02_WRITER/economic_poster.py`
 - **교훈**: 수집·작성 파이프라인의 입력 크기를 바꾸는 변경(이번엔 절단 폐지로 입력 증가)은 하류 LLM 호출 시간에 직접 영향 — watchdog 데드라인 같은 "소요시간 기반" SSOT 상수는 파이프라인 변경 때마다 함께 재검토해야 한다([300] 교훈과 동형). 부모 backstop(`guard_main`)은 자식 액션 데드라인의 리터럴 배수(`3600` 등)로 고정하지 말고 `N × BLOG_ACTION_DEADLINE_SEC + 여유` 형태로 파생시켜야 SSOT 변경이 한 곳 수정으로 전파된다.
 
-## [453] 테마 21시 발행 과다 지연 — writer 프롬프트가 원시 corpus 전문(≈16만자)으로 비대(facts와 중복). distill 압축(선계산 요약)으로 프롬프트 축소 (2026-07-19)
+## [513] 테마 21시 발행 과다 지연 — writer 프롬프트가 원시 corpus 전문(≈16만자)으로 비대(facts와 중복). distill 압축(선계산 요약)으로 프롬프트 축소 (2026-07-19)
 - **증상**: 수집을 20:00 선계산으로 앞당겼는데도 21:00 테마 발행이 오래 걸림. "재시도·병목·누수" 의심.
 - **원인**(8에이전트 적대검증 워크플로): 선계산은 "수집·fact추출" 1다리(전체의 5~15%)만 앞당길 뿐, 21시 벽시계는 캐시 밖 작성기·이미지·검증·발행 × 플랫폼2회(직렬) × 검증→재작성 루프가 지배. 지연 1위 = **writer 프롬프트 비대**: `_gen_theme`(테마)·nv/ts_collect supreme_block(경제) 둘 다 `build_corpus_block`(per_doc=None 원시 전문)을 주입 → corpus가 프롬프트의 83%(콜당 6~13만 토큰, 경제 카탈로그의 10~20배). 이 corpus는 이미 뽑은 facts(evidence_brief)의 수치 부분집합 재표현이라 **순수 중복**. 비대한 prefill + 저녁 창 다콜 몰림 → TPM 스로틀 트리거. (★ 1차 진단의 "경제=카탈로그 단독"은 오진 — 경제도 supreme_block 경유 corpus 전문 주입. 공통 병목.)
 - **헛다리(적대검증 REJECT)**: ① 게이트 fingerprint 안정화로 재작성 루프 조기 abort — fingerprint가 이슈 *전체 집합*이라 점수만 고정해도 효과 0 + 조기 abort는 개선 중 대본 폐기(해로움) + 경제와 공유 게이트라 회귀. ② Selenium/이미지 바닥 단축 — 전부 경제 공유 함수라 발행 실패·회귀 위험 최상, 레버리지 낮음(재시도 안 곱함).
@@ -9698,7 +9756,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `shared/llm.py`, `JARVIS02_WRITER/precollect_cache.py`(신규), `JARVIS02_WRITER/trend_economic_writer.py`, `JARVIS02_WRITER/trend_theme_writer.py`, `JARVIS02_WRITER/scheduler.py`, `JARVIS04_SCHEDULER/job_registry.py`
 - **교훈**: ① "300s·0parts hung" 과 "num_turns=0 빠른 빈응답 throttle" 은 코드가 명시 구분하는 서로 다른 서명 — 발행 hang 을 진단할 땐 반드시 로그의 이 둘을 구별할 것(rate-limit 가설을 성급히 세우지 말 것). ② "수집 데이터 전부 활용(절단 폐지)" 과 "재시도·스톨 0" 은 전문 추출=무거운 버스트라 *동시 성립이 어려운 긴장* — 해법은 입력 축소(박제 위반)가 아니라 **무거운 LLM 을 발행창 밖 저부하 창으로 시간 분리**(사용자 제안 "분리"). ③ 이런 캐시성 최적화는 반드시 *순수 최적화(미스·오류 시 기존 경로 폴백)* 로 설계해 회귀 위험 0. ④ 테마처럼 주제가 random 선정되는 파이프라인은 선계산이 성립하려면 *주제 고정(pin)* 이 선행돼야 함.
 
-## [454] 저장소 폴더 이동 후 전 서비스 중단 — launchd plist·restart 스크립트의 옛 경로 하드코딩이 삭제된 코드의 좀비 데몬을 KeepAlive 로 유지 (2026-07-19)
+## [512] 저장소 폴더 이동 후 전 서비스 중단 — launchd plist·restart 스크립트의 옛 경로 하드코딩이 삭제된 코드의 좀비 데몬을 KeepAlive 로 유지 (2026-07-19)
 - **증상**: 저장소를 `~/portfolio/jarvis-agent` → `~/AI/personal/team_02p_202512_jarvis_agent` 로 이동하고 venv 를 새로 만든 뒤 ① 웹 대시보드(9199)가 안 열림 ② 텔레그램 무반응. 사용자 최초 가설은 "requirements.txt 재설치 누락".
 - **환경**: macOS launchd(`com.jarvis.keeper.plist`), `jarvis_daemon.py`(FastAPI 9198·Next.js 9199 를 *자식 프로세스* 로 스폰), `.venv` 신규 생성(Python 3.10.19·317패키지).
 - **원인**: 의존성과 무관. **경로 하드코딩 2곳**이 근본 원인. ① `~/Library/LaunchAgents/com.jarvis.keeper.plist` 가 ProgramArguments·WorkingDirectory·로그경로 전부 옛 절대경로 + `KeepAlive=true` → 옛 경로 keeper 가 계속 살아나 옛 데몬(PID 33511)을 유지. 그 데몬은 *이미 삭제된* 폴더의 코드를 메모리에 올린 채 실행 중이라 새 폴더 코드가 반영될 수 없고, 자식으로 띄우려는 `dashboard/` 가 옛 경로에 없어 Next.js(9199)만 조용히 실패 → 대시보드 미기동. ② `restart_daemon.sh` 가 `cd ~/portfolio/jarvis-agent` 등 5줄 하드코딩 → 새 폴더에서 실행해도 옛 경로를 기동 시도. 텔레그램은 토큰·봇 정상이었고, 좀비가 `getUpdates` 를 점유(동시 폴링 불가)해 무반응으로 보였을 뿐.
@@ -9712,7 +9770,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `restart_daemon.sh`, `install_keeper.sh`(신규), `jarvis_daemon.py`, `JARVIS00_INFRA/infra_agent.py`, `JARVIS02_WRITER/scheduler.py`, `JARVIS03_RADAR/approval_bot.py`
 - **교훈**: ① **KeepAlive=true 인 launchd plist 는 폴더 이동 시 "좀비 부활기"** — 데몬만 kill 하면 계속 되살아나므로 *반드시 launchctl unload 를 먼저* 할 것. ② 삭제된 경로의 프로세스는 코드가 메모리에 남아 *정상 동작처럼 보이지만* 파일 의존 기능(자식 프로세스 스폰 등)만 조용히 실패 → 증상이 "일부만 안 됨"으로 나타나 오진을 부름. ③ 이동 후 진단은 `ps` 의 *실행 경로* 를 최우선 확인할 것(포트·로그보다 빠름). ④ grep 으로 옛 경로를 훑을 땐 `.venv`·`logs` 제외 필터를 *경로* 에만 적용할 것 — 내용까지 걸면 `~/portfolio/.../.venv/bin/python` 같은 진짜 히트를 놓침(실제로 초기 조사에서 5건 중 4건 누락). ⑤ 저장소 밖(`~/Library/LaunchAgents`·crontab·shell rc)까지 조사 범위에 포함할 것 — 이번 근본 원인이 저장소 밖에 있었음.
 
-## [455] venv 재생성으로 pytrends 손수정 패치 소실 — TypeError 를 google_collector 가 삼켜 pytrends 경로만 죽은 무증상 열화 (2026-07-20)
+## [511] venv 재생성으로 pytrends 손수정 패치 소실 — TypeError 를 google_collector 가 삼켜 pytrends 경로만 죽은 무증상 열화 (2026-07-20)
 - **증상**: 폴더 이동 + venv 재생성 후 트렌드 수집은 "성공"으로 보였으나(`trends_2026-07-20.json` 46KB·google_trending 50건), 실제로는 **pytrends 경로가 전부 죽고 RSS 폴백만 동작** 중이었다. `pytrends trending_searches 성공` 로그가 최근 전무.
 - **환경**: 새 `.venv`(Python 3.10.19), pytrends 4.9.2, urllib3 2.6.3, `JARVIS03_RADAR/collectors/google_collector.py`(RSS/pytrends/네이버뉴스 3중 폴백).
 - **원인**: pytrends 4.9.2 `request.py:128` 이 `Retry(method_whitelist=frozenset(['GET','POST']))` 를 쓰는데 이 인자는 **urllib3 2.0 에서 `allowed_methods` 로 개명·제거** 됨 → `TypeError`. 종전 규정(CLAUDE_WRITER.md)은 *venv 안 site-packages 를 손수정* 하는 것이었는데 **venv 를 새로 만들면 패치가 소실**된다. 게다가 해당 라인은 `if self.retries > 0 or self.backoff_factor > 0:` **조건문 안** 이라 기본 생성(`TrendReq(hl,tz)`)으로 테스트하면 블록을 건너뛰어 *정상으로 보인다* — 실제 코드는 3곳 모두 `retries=3` 을 넘겨 반드시 터진다. 최종적으로 `_fetch_pytrends_trending` 의 `except Exception: return []` 이 예외를 삼켜 **아무 경보 없이** RSS 폴백으로 연명.
@@ -9722,7 +9780,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `shared/pytrends_utils.py`, `JARVIS02_WRITER/CLAUDE_WRITER.md`
 - **교훈**: ① **venv 안 site-packages 손수정은 규정으로 삼지 말 것** — venv 재생성 한 번에 소실되고, 폴백이 있는 코드에서는 *무증상* 으로 열화한다. 외부 라이브러리 비호환은 반드시 *저장소 코드* 에서 흡수. ② 라이브러리 패치 필요 여부를 검증할 땐 **실제 호출 시그니처 그대로** 재현할 것 — 기본 인자로 테스트하면 조건부 코드 경로를 건너뛰어 거짓 음성이 난다. ③ `except Exception: return []` 폴백은 견고성을 주지만 *열화를 은폐* 한다 — 폴백 발동 시 최소 1회는 경보를 남길 것. ④ 호환 셤의 *가드 조건* 자체를 반드시 실측 시그니처로 검증할 것(내가 한 번 틀렸다).
 
-## [456] LLM 토큰 사용량 관측 공백 — rate_limit_event 페이로드 폐기 + 집계 0줄 → 한도 문제를 매번 추측 (2026-07-20)
+## [510] LLM 토큰 사용량 관측 공백 — rate_limit_event 페이로드 폐기 + 집계 0줄 → 한도 문제를 매번 추측 (2026-07-20)
 - **증상**: 아침 경제 브리핑이 `topic_pack 프로필 LLM 빈 응답` 으로 차단됐는데, "언제 얼마나 썼는지·한도가 얼마인지" 를 확인할 방법이 전무해 원인 규명이 추측에 의존. 최초 진단에서 *워크플로 과다 사용이 원인* 이라 단정했다가, 트랜스크립트를 직접 집계한 뒤 해당 워크플로는 주간 총량의 0.6%(출력 154,795 토큰)에 불과함이 드러나 정정.
 - **환경**: `shared/llm.py`(Claude Code SDK·Max 구독 OAuth), `shared/claude_sdk_compat.py`, 대시보드 `dashboard/` + `api_server.py`.
 - **원인**: 관측 지점 3곳이 모두 비어 있었다. ① `shared/llm.py` 에 토큰 집계 코드 **0줄** — `ResultMessage` 를 받으면서도 `num_turns` 만 보고 `usage`·`total_cost_usd` 를 버림. ② `claude_sdk_compat._patched()` 가 `rate_limit_event` 를 `SystemMessage` 로 흡수하면서 **타입명만 로깅하고 페이로드를 폐기** — Anthropic 이 내려주는 한도·리셋 정보가 여기 들어오는데 통째로 유실. ③ `claude` CLI 에 사용량 조회 서브커맨드 없음. 결과적으로 유일한 사실 소스는 `~/.claude/projects/**/*.jsonl` 트랜스크립트뿐인데 아무도 읽지 않았다.
@@ -9765,7 +9823,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `dashboard/app/page.tsx`
 - **교훈**: ① **모르는 것을 그럴듯하게 답하면 다음 진단까지 오염된다** — "SDK 한도 별도" 라는 근거 없는 한 문장이 이후 "한도 소진" 오진의 방증으로 재활용됐다. 확인 안 된 메커니즘은 *모른다고* 말할 것. ② 외부 API 응답을 UI 에 붙일 때 **구조화된 배열/목록 필드가 있으면 그것을 렌더** 할 것 — 개별 키를 골라 하드코딩하면 스키마 변화에 조용히 낡는다. ③ 사용자가 "네가 전에 이렇게 말했잖아" 라고 할 때, *기억을 방어하지 말고 데이터로 재검증* 할 것.
 
-## [460] 테마 티스토리 6/6 발행 실패 — "인프라 스로틀" 은 오분류, 실제 원인은 writer timeout 300s 부족 (2026-07-20)
+## [509] 테마 티스토리 6/6 발행 실패 — "인프라 스로틀" 은 오분류, 실제 원인은 writer timeout 300s 부족 (2026-07-20)
 - **증상**: 21:00 테마 발행에서 네이버만 성공, 티스토리는 두 테마(mRNA·항공기부품) 모두 3시도 전부 실패 → `⏸ 인프라 스로틀 지속 — 발행 연기`. GUARDIAN 재발행도 실패. 7/16~19 는 매일 티스토리 1건 정상 발행되던 것이 7/20 에 0건.
 - **환경**: `JARVIS02_WRITER/draft_writer.py`(본문 생성), `shared/llm.py::_run_sdk_sync`, harness `theme-publish-*-tistory`(max_attempts=3, deadline 2400s).
 - **원인**: `SDK timeout 300s — 수집된 응답: 0개` 가 8건 전부의 실제 로그. 실측 생성 속도 **≈88 토큰/초** 인데 본문 분량이 커져 네이버가 **27,657 토큰을 292.1초** 에 생성 — 상한 300초를 *간신히* 통과했다. 대등한 분량의 티스토리는 314초가 필요해 벽을 넘었고, 부분 출력조차 없이(0 parts) 죽었다. `timeout=300` 이 `draft_writer.py` **12곳에 하드코딩** 되어 분량 정책이 늘어도 시간 예산이 따라오지 않은 것이 근본. 액션 데드라인은 2400초로 1500초 여유가 있었는데 쓰지 못했다.
@@ -9777,7 +9835,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `shared/llm.py`, `JARVIS02_WRITER/draft_writer.py`, `JARVIS02_WRITER/tistory_html_writer.py`
 - **교훈**: ① **오분류 라벨 하나가 진단 전체를 오염시킨다** — timeout 을 "스로틀" 로 표기해 한도·rate-limit 을 4번 의심하게 만들었다. 미완결 사유는 반드시 원인별로 분리해 표기할 것. ② **시간 예산도 '복사본을 진실로 믿는' 대상** — `timeout=300` 을 12곳에 복사해둔 탓에 분량 정책이 커져도 따라오지 못했다. 상한은 상위 SSOT(액션 데드라인)에서 *도출* 할 것. ③ 두 플랫폼이 직렬 실행될 때 **뒤에 오는 쪽이 항상 먼저 한계에 걸린다** — 앞 단계가 임계값을 아슬아슬하게 통과하면(292/300초) 뒤 단계 실패는 시간문제다. 임계 근접(90% 이상)은 그 자체로 경보 대상.
 
-## [461] 티스토리 본문 이미지 0개 — 데이터셋 제목이 *산문에 언급되기만 해도* 차트를 스킵 (2026-07-21)
+## [508] 티스토리 본문 이미지 0개 — 데이터셋 제목이 *산문에 언급되기만 해도* 차트를 스킵 (2026-07-21)
 - **증상**: 티스토리 발행 초기에 `⚠️ 제4조 금지 패턴 3 — 글 연속 + 이미지 부재 / 검출: 9개 섹션 / 삽입 불가 — 이미지 풀 미제공 또는 소진` 텔레그램 경고. **티스토리만**, 경제 브리핑·테마주 **양쪽 모두** 동일 발생. 네이버는 정상.
 - **환경**: `JARVIS06_IMAGE/draft_processor.py::_next_data_infographic`(본문 인포그래픽 단일 경로 — 경제·테마 공통), 커밋 `d948acb`(2026-07-05, ERRORS [362]-[364]) 도입분.
 - **원인**: 중복 방지 조건이 **본문 HTML 전체를 부분문자열 검색** 했다.
@@ -9795,7 +9853,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS06_IMAGE/draft_processor.py`, `shared/precommit_check.py`
 - **교훈**: ① **중복 판정의 대상을 정확히 좁힐 것** — "본문에 있으면 중복" 은 직관적이지만, 글과 그림이 *같은 것을 다루는 것* 은 중복이 아니라 좋은 편집이다. 판정 대상은 *의미* 가 아니라 *매체*(시각 요소)여야 한다. ② **`print()` 는 데몬에서 사라진다** — 진단에 필요한 정보는 반드시 `log` 로. 이번에도 로그 부재를 "코드가 거기 도달 못 함" 으로 오독해 조사가 한 바퀴 돌았다. ③ 플랫폼 한쪽만 증상이 나면 *플랫폼 고유 코드* 보다 **입력 데이터의 성향 차이** 를 먼저 의심할 것 — 여기서는 공통 코드에 티스토리 대본의 서술 습관이 얹혀 발현됐다.
 
-## [463] 품질점수 70 문턱 상습 미달 — "채점은 하는데 알려주지 않는" 항목이 16점 (2026-07-21)
+## [507] 품질점수 70 문턱 상습 미달 — "채점은 하는데 알려주지 않는" 항목이 16점 (2026-07-21)
 - **증상**: 테마·경제 모두 종합 65~69.5/100 으로 70 문턱을 반복 미달 → 재작성 순환 → best-so-far 발행. 사용자 지적: "규정을 먼저 숙지하고 그에 맞게 쓰는데 왜 점수가 안 나오나".
 - **환경**: `post_scorer.py`(A20+B50+C20+D10), `prepublish_gate`(70 임계), 작성 프롬프트 조립(`law_enforcer.build_writing_rules_block` + `seo_standards.build_seo_block` + `quality_learner.build_insights_block`).
 - **원인**: **지시(프롬프트)와 채점(스코어러)의 항목이 어긋나 있었다.** 실측 대조 결과 채점하면서 작성자에게 *전혀 알려주지 않는* 항목이 4개, 배점 합계 **16점**:
@@ -9835,7 +9893,7 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: JARVIS03_RADAR/performance_collector.py
 - **해결**: 자동 수정 적용
 
-## [500] 사실성 게이트가 *진짜 사실* 을 오차단 — NaN 이 grounds() 를 크래시시켜 '미확인'으로 둔갑 (2026-07-25)
+## [506] 사실성 게이트가 *진짜 사실* 을 오차단 — NaN 이 grounds() 를 크래시시켜 '미확인'으로 둔갑 (2026-07-25)
 
 - **증상**: 경제 브리핑 티스토리 2회 연속 `[사실성] 출처·데이터 미확인: 반도체 -9.5% 출렁인 한 주` → max_attempts(2) 소진 → 미발행. 같은 날 이미지에서 `ValueError: cannot convert float NaN to integer`.
 - **환경**: 2026-07-25 07:00 경제 브리핑. 네이버는 2차 시도(제목 `EBSI 144`)로 발행 성공 — 단위 토큰(%·원)이 없어 수치 검사를 *건너뛴* 것이지 잘 써서가 아니었다.
