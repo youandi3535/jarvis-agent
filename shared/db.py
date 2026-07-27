@@ -48,6 +48,15 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 #   파생 — DB 경로를 옮기면 백업도 자동으로 따라간다(두 곳을 각각 고치지 않는다).
 BACKUP_DIR = Path(os.environ.get("JARVIS_BACKUP_DIR", str(DB_PATH.parent / "backups")))
 
+# ★ LangGraph ReAct 체크포인트 경로 — 이 파일이 소유 (ERRORS [537], 2026-07-27).
+#   종전엔 `router.py` 가 `_ROOT / "shared" / "react_checkpoints.sqlite"` 로 **직접 조립**했다.
+#   본 DB 는 `from shared.db import DB_PATH` 로 받아쓰면서 체크포인트만 손으로 적고 있었다 —
+#   그래서 "어디에 박혀 있지?" 를 매번 찾아야 했다(① 위반).
+#   ② 동적 설계: `DB_PATH.parent` 에서 파생 → DB 를 옮기면 체크포인트도 자동으로 따라간다.
+#   `JARVIS_CHECKPOINT_PATH` 로 오버라이드 가능.
+CHECKPOINT_PATH = Path(os.environ.get(
+    "JARVIS_CHECKPOINT_PATH", str(DB_PATH.parent / "react_checkpoints.sqlite")))
+
 
 class _AutoCloseConnection(sqlite3.Connection):
     """`with get_db() as conn:` 종료 시 커밋/롤백뿐 아니라 연결 자체도 닫는다.
@@ -1377,7 +1386,7 @@ RETENTION: dict[str, tuple[int, str, str]] = {
 #     명시적으로 드러난다. RETENTION 과 같은 형식(일수·설명)을 유지한다.
 EXTERNAL_RETENTION: dict[str, tuple[Path, int, str]] = {
     "react_checkpoints": (
-        Path(__file__).parent / "react_checkpoints.sqlite", 14,
+        CHECKPOINT_PATH, 14,
         "ReAct 대화 체크포인트 — 재개는 최근 것만 의미 있다(오래된 스레드는 이어갈 일이 없음)",
     ),
 }
