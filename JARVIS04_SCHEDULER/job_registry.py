@@ -149,13 +149,15 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"db_backup",       "name":"DB 백업",              "trigger":"cron",
      "kwargs":{"hour":3, "minute":0}, "callback":"JARVIS00_INFRA.infra_agent.job_db_backup",
      "misfire_grace_time":3600, "owner":"jarvis00_infra"},
-    {"id":"ev_cleanup",      "name":"events 정리",          "trigger":"cron",
-     "kwargs":{"day_of_week":"sun", "hour":3, "minute":30}, "callback":"JARVIS00_INFRA.infra_agent.job_cleanup_events",
-     "misfire_grace_time":3600, "owner":"jarvis00_infra"},
-    # ★ vision_agent_history 는 30초 주기 수집(에이전트당 1행)이라 events 보다 훨씬
-    #   빨리 누적 — 방치 시 DB 팽창 → get_db() 지연 → keeper hang 오탐 (본 사고 원인).
-    {"id":"vision_history_cleanup", "name":"VISION 이력 정리", "trigger":"cron",
-     "kwargs":{"hour":3, "minute":15}, "callback":"JARVIS00_INFRA.infra_agent.job_cleanup_vision_history",
+    # ★★ DB 보존 정책 일괄 적용 (2026-07-27) — 종전 `ev_cleanup`(주1회)·
+    #   `vision_history_cleanup`(매일) 두 잡을 **하나로 통합**했다.
+    #   왜: 테이블마다 잡을 따로 두니 *규칙 없는 테이블이 방치* 됐다 — 실측 `job_runs`
+    #   155,483행 · `qa_ingested_sessions` 15,567행이 무한 누적(DB 209MB 의 주범).
+    #   보존 일수는 `shared/db.RETENTION` 단일 레지스트리가 소유하고 이 잡은 집행만 한다.
+    #   매일 도는 이유: vision_agent_history 가 30초마다 쌓여 하루만 밀려도 커진다.
+    {"id":"db_retention",    "name":"DB 보존정책 정리 (매일 03:15)", "trigger":"cron",
+     "kwargs":{"hour":3, "minute":15},
+     "callback":"JARVIS00_INFRA.infra_agent.job_db_retention",
      "misfire_grace_time":3600, "owner":"jarvis00_infra"},
     {"id":"file_cleanup",    "name":"파일 정리",            "trigger":"cron",
      "kwargs":{"day_of_week":"mon", "week":"*/2", "hour":4, "minute":0},

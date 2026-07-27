@@ -57,7 +57,15 @@ def _init_qa_tables(conn) -> None:
             confidence      REAL DEFAULT 1.0,
             created_at      TEXT DEFAULT (datetime('now')),
             updated_at      TEXT DEFAULT (datetime('now')),
-            file_changes    TEXT DEFAULT '[]'
+            file_changes    TEXT DEFAULT '[]',
+            -- ★ ERRORS [537] — 벡터를 *원본 행 옆에* 둔다 (2026-07-27).
+            --   종전엔 ChromaDB 별도 폴더(164MB)에 있었다. 그 결과 원본이 지워져도 벡터가
+            --   남아 **고아 3,800개**가 생겼다(v1 컬렉션 3,860 + v2 9,007 vs qa_entries 9,042).
+            --   같은 행에 두면 `DELETE FROM qa_entries` 하나로 벡터도 함께 사라진다 —
+            --   **고아가 구조적으로 불가능**해진다(② 사본 금지).
+            --   float32 × 384차원 = 1,536바이트/행. 9,042행 → 약 13MB.
+            embedding       BLOB,
+            embedding_model TEXT DEFAULT ''   -- 모델 교체 감지용(차원·의미 공간이 바뀌면 재색인)
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS qa_fts USING fts5(
@@ -91,6 +99,15 @@ def _init_qa_tables(conn) -> None:
             VALUES (new.id, new.question_norm, new.answer);
         END;
     """)
+    # ★ 기존 DB 마이그레이션 — 컬럼 없으면 추가 (ERRORS [537], 2026-07-27).
+    #   저장소 표준 패턴(shared/db.py:376~396)과 동일한 형태. SQLite 는 컬럼 추가가 O(1) 이라
+    #   9,042행이어도 즉시 끝난다. 여러 번 실행돼도 안전(멱등).
+    for _col, _ddl in (("embedding",       "ALTER TABLE qa_entries ADD COLUMN embedding BLOB"),
+                       ("embedding_model", "ALTER TABLE qa_entries ADD COLUMN embedding_model TEXT DEFAULT ''")):
+        try:
+            conn.execute(_ddl)
+        except Exception:      # noqa: BLE001 — 이미 있으면 OperationalError (정상)
+            pass
     conn.commit()
 
 

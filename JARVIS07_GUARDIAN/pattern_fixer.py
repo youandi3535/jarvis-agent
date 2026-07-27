@@ -31,6 +31,7 @@ import logging
 import re
 import sys
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -824,6 +825,54 @@ def _save_learned(data: dict) -> None:
         log.warning("[GUARDIAN/learned] 저장 실패 — 학습 1회 누락")
 
 
+def all_patterns() -> list[dict]:
+    """learned_patterns **조회의 유일한 진입점** — 읽는 쪽은 전부 이 문을 쓴다.
+
+    ★ 왜 (① 단일 진입점): 종전엔 auditor·repair_history·api_server(2곳)가 각자
+      `Path(...)/"learned_patterns.json"` 상수를 들고 `json.loads(read_text())` 를 했다.
+      경로가 4벌이면 파일이 옮겨질 때 3곳이 조용히 깨진다. 더 나쁜 건 그 직접 읽기가
+      `json_store.read_json` 의 **손상 격리를 우회**한다는 점이다 — 손상본을 만나면
+      `except Exception` 으로 삼켜 "패턴 0개" 로 보고한다. 학습이 사라진 것처럼 보이는
+      화면이 사실은 읽기 실패다. 진실은 한 곳에서 읽는다.
+    """
+    data = _load_learned()
+    pats = data.get("patterns", []) if isinstance(data, dict) else []
+    return pats if isinstance(pats, list) else []
+
+
+@contextmanager
+def mutate_learned():
+    """learned_patterns **변경의 유일한 진입점** — 읽기·수정·쓰기를 한 임계구역으로 묶는다.
+
+    ★ 왜 필요한가 (실측된 결함, 2026-07-27):
+      종전 모든 변경은 `data = _load_learned()` → 수정 → `_save_learned(data)` 였다.
+      락은 `_save_learned` **안에만** 있어서 *읽기와 쓰기 사이* 가 무방비였다.
+      두 프로세스가 같은 버전을 읽고 각자 자기 것을 더해 쓰면 **나중 쓰기가 앞선 학습을
+      통째로 지운다**(lost update). 운영 동시성(데몬 + 경제 subprocess) 재현 실측:
+      **50% 유실, 3/3 회**. 학습 자산이 조용히 절반씩 사라지고 있었다.
+
+    ★ 왜 여기 하나인가 (① 단일 진입점): 락을 6개 RMW 함수에 각각 거는 방법도 있다.
+      그러나 이 결함 자체가 *그 방식의 실패* 다 — ERRORS [497] 이 eval_agent 만 고치고
+      pattern_fixer 를 빠뜨려 생겼다. 규율을 여러 곳에 두면 다음 작업자가 또 빠뜨린다.
+      **변경하려면 이 문을 지나야 한다.**
+
+    ★ 왜 락이 둘인가 (비직관): 서로 다른 질문을 막는다.
+      · `_LEARNED_LOCK`(threading) = 같은 프로세스의 **스레드** 끼리
+      · `json_store.locked()`(flock) = **다른 프로세스** 끼리 (경제·테마 subprocess)
+      하나만으로는 반쪽이다. flock 은 재진입 가능해 내부 `write_json` 과 중첩 안전.
+
+    사용:
+        with mutate_learned() as data:
+            data["patterns"].append(...)      # 저장은 블록 종료 시 자동
+    예외가 나면 저장하지 않는다 — 반쪽 상태를 남기지 않는다.
+    """
+    from JARVIS07_GUARDIAN.json_store import locked as _xp_locked  # noqa: PLC0415
+    with _LEARNED_LOCK, _xp_locked(_LEARNED_PATH):
+        data = _load_learned()
+        yield data
+        _save_learned(data)
+
+
 def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[dict]:
     """★ 학습된 fingerprint 와 매칭되면 즉시 수정 반환 (LLM 호출 0).
 
@@ -878,7 +927,7 @@ def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[di
         if not _items:
             log.debug(f"[GUARDIAN/learned] {fixer_name} 복원 불가 — fallback")
             return None
-        _bump_hit_count(data, matched.get("fingerprint"))
+        _bump_hit_count(matched.get("fingerprint"))
         _tgt = _items[0]["target_file"]
         result = {
             "fixable":     True,
@@ -916,7 +965,7 @@ def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[di
     if not result:
         return None
 
-    _bump_hit_count(data, matched.get("fingerprint"))
+    _bump_hit_count(matched.get("fingerprint"))
 
     result["learned"] = True
     result["fingerprint"] = matched.get("fingerprint")
@@ -927,19 +976,21 @@ def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[di
     return result
 
 
-def _bump_hit_count(data: dict, fingerprint: str) -> None:
-    """hit_count 증가 + last_seen 갱신 (공통 헬퍼).
+def _bump_hit_count(fingerprint: str) -> None:
+    """hit_count 증가 + last_seen 갱신 — **락 안에서 다시 읽는다**.
 
-    호출자가 이미 `_load_learned()` 로 읽어 둔 `data` 를 전달 — 중복 디스크 읽기 회피.
+    ★ 종전 시그니처는 `(data, fingerprint)` 로, 호출자가 이미 읽어 둔 `data` 를 받아
+      "중복 디스크 읽기 회피" 를 했다. **그 최적화가 곧 유실 원인이었다** — 그 data 는
+      락 밖에서 뜬 스냅샷이라, 되쓰는 순간 그 사이 다른 프로세스가 추가한 학습을
+      통째로 덮었다. 523KB 재읽기 비용 < 학습 자산 소실. 항상 새로 읽는다.
     """
     from datetime import datetime
-    with _LEARNED_LOCK:
+    with mutate_learned() as data:
         for p in data.get("patterns", []):
             if p.get("fingerprint") == fingerprint:
                 p["hit_count"] = int(p.get("hit_count", 0)) + 1
                 p["last_seen"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
                 break
-        _save_learned(data)
 
 
 def _semantic_fallback_match(et: str, msg: str, data: dict, min_hit_count: int) -> Optional[dict]:
@@ -995,8 +1046,7 @@ def backfill_embeddings() -> int:
     if not _emb.available():
         return 0
     n = 0
-    with _LEARNED_LOCK:
-        data = _load_learned()
+    with mutate_learned() as data:
         for p in data.get("patterns", []):
             if p.get("embedding") or p.get("fixer") not in _ACTIONABLE_FIXERS:
                 continue
@@ -1008,8 +1058,6 @@ def backfill_embeddings() -> int:
             if vec:
                 p["embedding"] = [round(float(x), 5) for x in vec]
                 n += 1
-        if n:
-            _save_learned(data)
     log.info(f"[GUARDIAN/learned] backfill_embeddings — {n}개 패턴 임베딩 채움")
     return n
 
@@ -1254,8 +1302,7 @@ def record_pattern_hit(
     now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
     _result_hits = 0
-    with _LEARNED_LOCK:
-        data = _load_learned()
+    with mutate_learned() as data:
         found = False
         for p in data.get("patterns", []):
             if p.get("fingerprint") == fp:
@@ -1330,7 +1377,6 @@ def record_pattern_hit(
             _result_hits = 1
             log.info(f"[GUARDIAN/learned] ★ 신규 패턴 등록 — fp='{fp[:70]}' fixer={fixer_name} tier={_tier} domain={_domain}")
         data["patterns"].sort(key=lambda x: -int(x.get("hit_count", 0)))
-        _save_learned(data)
     return _result_hits
 
 
@@ -1627,11 +1673,17 @@ def apply_stored_patches() -> int:
             log.debug(f"[GUARDIAN/patch] 재적용 보상 실패: {_re}")
 
     if bumped:
-        fresh = _load_learned()
-        for fp in bumped:
-            if fp:
-                _bump_hit_count(fresh, fp)
-        _save_learned(fresh)
+        # ★ 한 임계구역에서 일괄 증가 — fingerprint 마다 따로 열면 523KB 를 N번 되쓴다.
+        #   (종전엔 여기서 `fresh` 를 따로 읽어 되썼는데, 그게 방금 올린 hit_count 를
+        #    도로 지우는 stale write 였다.)
+        from datetime import datetime as _dtm
+        _now = _dtm.now().strftime("%Y-%m-%dT%H:%M:%S")
+        _want = {fp for fp in bumped if fp}
+        with mutate_learned() as data:
+            for p in data.get("patterns", []):
+                if p.get("fingerprint") in _want:
+                    p["hit_count"] = int(p.get("hit_count", 0)) + 1
+                    p["last_seen"] = _now
 
     return applied
 
@@ -1645,8 +1697,7 @@ def backfill_domains() -> dict:
     Returns:
         {"total": int, "updated": int, "by_domain": dict, "before_unknown": int}
     """
-    with _LEARNED_LOCK:
-        data = _load_learned()
+    with mutate_learned() as data:
         pats = data.get("patterns", [])
         updated = 0
         before_unknown = sum(1 for p in pats if p.get("domain") in (None, "unknown"))
@@ -1668,7 +1719,6 @@ def backfill_domains() -> dict:
             )
             p["domain"] = _domain
             updated += 1
-        _save_learned(data)
     return {
         "total":          len(pats),
         "updated":        updated,
@@ -1684,8 +1734,7 @@ def backfill_tiers() -> dict:
     tier 없거나 'unknown' 인 entry 만 처리.
     fixer == 'llm_patch' → 'llm', fixer in _FIXER_REGISTRY → 'static', 그 외 → 'manual'
     """
-    with _LEARNED_LOCK:
-        data = _load_learned()
+    with mutate_learned() as data:
         pats = data.get("patterns", [])
         updated = 0
         for p in pats:
@@ -1701,7 +1750,6 @@ def backfill_tiers() -> dict:
             else:
                 p["tier"] = "manual"
             updated += 1
-        _save_learned(data)
     by_tier = {}
     for p in pats:
         t = p.get("tier", "unknown")

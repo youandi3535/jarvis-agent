@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { fetcher, OverviewData, VisionAgent, PipelineEdge, GraphData, AgentDef, TokenData } from "@/lib/api";
+import { fetcher, OverviewData, VisionAgent, PipelineEdge, GraphData, AgentDef, TokenData, VisionTimeline } from "@/lib/api";
 import { C, fmtNum, fmtTime, severityColor } from "@/lib/utils";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -1426,6 +1426,151 @@ function TokenPanel() {
   );
 }
 
+// ═══════════════════════════════════════════════════════
+// 에이전트 상태 흐름 (30일) — 한 줄 = 한 에이전트, 색 = 상태
+// ★ 구간·위치(%)·가동률은 전부 서버 계산 (JARVIS05 collector.get_status_timeline).
+//   여기서는 받은 %로 막대만 그린다 — 프론트에 조립 규칙을 복제하지 않는다.
+// ═══════════════════════════════════════════════════════
+const STATUS_COLOR: Record<string, string> = {
+  online: C.success, warn: C.warn, degraded: C.warn, offline: C.danger, error: C.danger,
+};
+const STATUS_LABEL: Record<string, string> = {
+  online: "정상", warn: "주의", degraded: "주의", offline: "중단", error: "오류",
+};
+const statusColor = (s: string) => STATUS_COLOR[s] ?? C.muted;
+
+function fmtDur(min: number): string {
+  if (min < 60) return `${min}분`;
+  if (min < 1440) return `${Math.floor(min / 60)}시간 ${min % 60}분`;
+  return `${Math.floor(min / 1440)}일 ${Math.floor((min % 1440) / 60)}시간`;
+}
+
+function StatusTimelinePanel() {
+  const { data } = useSWR<VisionTimeline>("/api/vision/timeline", fetcher, { refreshInterval: 60000 });
+  const agents = data?.agents ?? [];
+
+  // 날짜 눈금 — 창 길이에서 파생 (일수를 박지 않는다)
+  const ticks = useMemo(() => {
+    if (!data?.window_start || !data?.window_end) return [];
+    const t0 = new Date(data.window_start).getTime();
+    const t1 = new Date(data.window_end).getTime();
+    const n = 6;
+    return Array.from({ length: n + 1 }, (_, i) => {
+      const d = new Date(t0 + ((t1 - t0) * i) / n);
+      return { pct: (i / n) * 100, label: `${d.getMonth() + 1}/${d.getDate()}` };
+    });
+  }, [data?.window_start, data?.window_end]);
+
+  // 관측된 상태 종류만 범례에 (② 동적 — 고정 목록 금지)
+  const seen = useMemo(() => {
+    const s = new Set<string>();
+    agents.forEach(a => a.segments.forEach(g => s.add(g.status)));
+    return Array.from(s);
+  }, [agents]);
+
+  const totalInc = agents.reduce((s, a) => s + a.incidents, 0);
+  const worst = agents.filter(a => a.uptime_pct != null)
+                      .sort((a, b) => (a.uptime_pct! - b.uptime_pct!))[0];
+
+  return (
+    <div style={{
+      background:"var(--c-card)", border:"1px solid var(--c-bdr)",
+      borderTop:`3px solid ${C.primary}`, borderRadius:12, padding:20, marginBottom:26,
+    }}>
+      <div style={{ display:"flex", alignItems:"baseline", gap:12, marginBottom:6, flexWrap:"wrap" }}>
+        <div style={{ fontSize:18, fontWeight:700, color:"var(--c-text)" }}>
+          에이전트 상태 흐름 {data ? `— 최근 ${data.days}일` : ""}
+        </div>
+        <div style={{ fontSize:14, color:"var(--c-text5)" }}>
+          {data ? `${data.window_start.slice(5,10)} ~ ${data.window_end.slice(5,10)}` : "로딩 중…"}
+          {totalInc > 0 && <> · 비정상 전환 <b style={{ color:C.warn }}>{totalInc}회</b></>}
+          {worst?.uptime_pct != null && worst.uptime_pct < 100 &&
+            <> · 최저 가동 <b style={{ color:C.danger }}>{worst.agent_name} {worst.uptime_pct}%</b></>}
+        </div>
+        <div style={{ marginLeft:"auto", display:"flex", gap:12, fontSize:14, color:"var(--c-text5)" }}>
+          {seen.map(s => (
+            <span key={s} style={{ display:"flex", alignItems:"center", gap:6 }}>
+              <span style={{ width:12, height:12, borderRadius:3, background:statusColor(s) }}/>
+              {STATUS_LABEL[s] ?? s}
+            </span>
+          ))}
+          <span style={{ display:"flex", alignItems:"center", gap:6 }}>
+            <span style={{ width:12, height:12, borderRadius:3, background:"var(--c-bdr)" }}/>
+            관측 없음
+          </span>
+        </div>
+      </div>
+
+      {agents.length === 0 ? (
+        <div style={{ color:"var(--c-text5)", fontSize:14, padding:"12px 0" }}>
+          {data ? "기록된 상태 변화 없음" : "로딩 중…"}
+        </div>
+      ) : (
+        <>
+          {agents.map(a => (
+            <div key={a.agent_id} style={{ display:"flex", alignItems:"center", gap:12, marginTop:8 }}>
+              <div style={{
+                width:172, fontSize:14, color:"var(--c-text)", whiteSpace:"nowrap",
+                overflow:"hidden", textOverflow:"ellipsis",
+              }} title={a.agent_id}>{a.agent_name}</div>
+
+              {/* 트랙 — 배경은 '관측 없음', 그 위에 서버가 준 %로 구간을 얹는다 */}
+              <div style={{
+                position:"relative", flex:1, height:22, borderRadius:5,
+                background:"var(--c-bdr)", overflow:"hidden",
+              }}>
+                {a.segments.map((g, i) => (
+                  <div key={i}
+                    title={`${STATUS_LABEL[g.status] ?? g.status} · ${g.start.slice(5,16)} → ${g.end.slice(5,16)} (${fmtDur(g.minutes)})${g.message ? `\n${g.message}` : ""}`}
+                    style={{
+                      position:"absolute", top:0, bottom:0,
+                      left:`${g.left_pct}%`, width:`${g.width_pct}%`,
+                      background:statusColor(g.status),
+                      // 비정상은 얇아도 눈에 띄어야 한다
+                      zIndex: g.status === "online" ? 1 : 2,
+                    }}/>
+                ))}
+              </div>
+
+              <div style={{ width:62, textAlign:"right", fontSize:14, fontWeight:600,
+                            color: a.uptime_pct == null ? "var(--c-text5)"
+                                 : a.uptime_pct >= 99 ? C.success
+                                 : a.uptime_pct >= 90 ? C.warn : C.danger }}>
+                {a.uptime_pct != null ? `${a.uptime_pct}%` : "—"}
+              </div>
+              <div style={{ width:54, textAlign:"right", fontSize:14,
+                            color: a.incidents > 0 ? C.warn : "var(--c-text5)" }}>
+                {a.incidents > 0 ? `${a.incidents}회` : "—"}
+              </div>
+            </div>
+          ))}
+
+          {/* 날짜 축 */}
+          <div style={{ display:"flex", alignItems:"center", gap:12, marginTop:10 }}>
+            <div style={{ width:172 }}/>
+            <div style={{ position:"relative", flex:1, height:18 }}>
+              {ticks.map((t, i) => (
+                <span key={i} style={{
+                  position:"absolute", left:`${t.pct}%`, fontSize:14, color:"var(--c-text5)",
+                  transform: i === 0 ? "none" : i === ticks.length - 1 ? "translateX(-100%)" : "translateX(-50%)",
+                }}>{t.label}</span>
+              ))}
+            </div>
+            <div style={{ width:62, textAlign:"right", fontSize:14, color:"var(--c-text5)" }}>가동률</div>
+            <div style={{ width:54, textAlign:"right", fontSize:14, color:"var(--c-text5)" }}>전환</div>
+          </div>
+
+          <div style={{ marginTop:12, fontSize:14, color:"var(--c-text5)", lineHeight:1.6 }}>
+            상태가 <b>바뀐 시점만</b> 기록한다 — 같은 상태가 이어지는 동안은 한 칸이다.
+            회색은 아직 관측이 없던 구간(보존기간보다 이력이 짧을 때).
+            막대에 마우스를 올리면 정확한 시각·지속시간·사유가 나온다.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function HomePage() {
   const { data: ov }     = useSWR<OverviewData>("/api/overview",       fetcher, { refreshInterval:30000 });
   const { data: agents } = useSWR<VisionAgent[]>("/api/vision/agents", fetcher, { refreshInterval:30000 });
@@ -1477,6 +1622,9 @@ export default function HomePage() {
 
       {/* 에이전트 사무실 뷰 */}
       <OfficeView ov={ov} />
+
+      {/* 에이전트 상태 흐름 (30일) — 사무실 뷰가 '지금', 이건 '지나온 길' */}
+      <StatusTimelinePanel />
 
       {/* 토큰 사용량 현황판 */}
       <TokenPanel />

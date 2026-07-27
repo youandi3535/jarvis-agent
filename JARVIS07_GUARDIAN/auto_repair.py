@@ -704,6 +704,25 @@ def job_auto_repair() -> None:
 
 _TARGETED_TIMEOUT = 600  # 최대 10분 (full 15분의 2/3)
 
+def _incidents_block(context: str) -> str:
+    """오류 문맥 → 과거 유사 사고 블록 (ERRORS [534]).
+
+    ★ ① 단일 진입점: 검색·포맷은 `repair_history` 소유. 여기선 호출만 한다.
+    ★ fail-open: 검색이 실패해도 수리는 진행돼야 하므로 빈 문자열로 degrade.
+      단 실패를 조용히 넘기지 않고 로그로 남긴다(무증상 열화 금지).
+    킬스위치 `GUARDIAN_INCIDENT_SEARCH=0` → 종전처럼 검색 없이 진행.
+    """
+    import os as _os
+    if (_os.getenv("GUARDIAN_INCIDENT_SEARCH") or "").strip().lower() in ("0", "false", "off", "no"):
+        return "(과거 사고 검색 비활성 — GUARDIAN_INCIDENT_SEARCH=0)"
+    try:
+        from JARVIS07_GUARDIAN.repair_history import incidents_brief
+        return incidents_brief(context or "", top_k=3) or "(과거 유사 사고 없음)"
+    except Exception as e:  # noqa: BLE001
+        log.warning("[AutoRepair] 과거 사고 검색 실패 — 검색 없이 진행: %s", e)
+        return "(과거 사고 검색 실패)"
+
+
 _TARGETED_PROMPT_TMPL = """\
 당신은 JARVIS 포스팅 실패를 즉각 수정하는 Claude Code 에이전트입니다.
 워킹 디렉토리: {WORKDIR}
@@ -718,11 +737,14 @@ _TARGETED_PROMPT_TMPL = """\
 
 ## ★ 반드시 따를 수정 절차 (순서 엄수)
 
-### 1단계 — ERRORS.md 선행 확인 (필수)
-```bash
-head -60 JARVIS07_GUARDIAN/ERRORS.md
-```
-과거 동일·유사 증상이 있으면 **기록된 해결책 즉시 적용**. 헛다리 금지.
+### 1단계 — 과거 유사 사고 확인 (필수)
+{incidents}
+위 검색 결과는 `repair_history.search_incidents()` 가 ERRORS.md **전체**(사고 186건·
+헛다리 373건)를 이 오류 문장으로 조준 검색한 것이다.
+- 유사 사고가 있으면 **기록된 해결책을 먼저 적용**한다.
+- ⛔ **헛다리로 표시된 접근은 절대 다시 시도하지 마라** — 이미 실측으로 기각된 가설이다.
+- 검색 결과가 비어 있으면 과거 사례가 없다는 뜻이다. `grep` 으로 ERRORS.md 를 추가
+  탐색해도 되지만, **전체를 통독하지는 마라** (긴 입력은 오히려 정확도를 떨어뜨린다).
 
 ### 2단계 — 오류 메시지에서 핵심 키워드 추출
 오류 내용에서 다음 중 해당하는 것을 파악:
@@ -785,12 +807,16 @@ def run_auto_repair_targeted(
     log.info("[AutoRepair/Targeted] 시작: job=%s, platforms=%s", job_id, failed_platforms)
 
     theme_line = f"- 테마: {theme}" if theme else ""
+    # ★ ERRORS [534] — 종전 `head -60`(전체의 0.6%·최신 1건)을 **조준 검색**으로 교체.
+    #   1.2MB 를 통독시키지도, 앞부분만 보여주지도 않는다 — 이 오류와 유사한 사고
+    #   상위 3건만 주입한다(헛다리 포함). 검색 실패 시 빈 문자열 → 프롬프트는 정상 동작.
     prompt = _TARGETED_PROMPT_TMPL.format(
         WORKDIR=str(ROOT.resolve()),
         job_id=job_id,
         failed_platforms=", ".join(failed_platforms),
         theme_line=theme_line,
         context=context[-3000:],
+        incidents=_incidents_block(context),
     )
 
     # ★ 밴딧 학습 브리지 — error_record 있으면 SDK 실행 전 스냅샷 (수정 후 diff 계산용)

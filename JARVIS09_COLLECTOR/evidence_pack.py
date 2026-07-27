@@ -178,7 +178,7 @@ def build_corpus_digest(docs: list, per_source_chars: int = 700) -> str:
         + "\n\n출력: 자료마다 `[자료 N | 소스 | 제목]` 헤더 + 요약."
     )
     try:
-        raw = invoke_text("analyzer", prompt, max_tokens=6000, temperature=0.2, _nonessential=True)
+        raw = invoke_text("analyzer_evidence", prompt, max_tokens=6000, temperature=0.2, _nonessential=True)
     except Exception as e:
         log.warning(f"[digest] corpus 요약 실패: {e}")
         return ""
@@ -204,7 +204,7 @@ def _extract_facts_batch(theme: str, plan: dict, docs: list,
         # ★ 단일 호출로 전 문서 처리 (ERRORS [374])
         # max_tokens=4800: 공식 API 티어 고품질 fact 증가 수용 (2026-07-12)
         # timeout=150: 스로틀 시 5분 무한대기 방지 (빈 facts로 계속 진행)
-        raw = invoke_text("analyzer", prompt, system=_EXTRACT_SYSTEM,
+        raw = invoke_text("analyzer_evidence", prompt, system=_EXTRACT_SYSTEM,
                           max_tokens=4800, temperature=0.1, timeout=150)
     except Exception as e:
         log.warning(f"[evidence] fact 추출 실패: {e}")

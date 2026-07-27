@@ -887,7 +887,7 @@ def collect_stocks_data(theme_name: str, related_terms: list | None = None,
             f"예시: 삼성전자:005930.KS, SK하이닉스:000660.KS, ..."
         )
         try:
-            raw4 = invoke_text("router", _fallback_prompt, temperature=0.7) or ""
+            raw4 = invoke_text("collect_theme_fallback", _fallback_prompt, temperature=0.7) or ""
             new_pairs4 = _parse_pairs(raw4, exclude_codes=seen_codes)
             for p in new_pairs4:
                 if len(pairs) >= n:
@@ -954,7 +954,7 @@ def collect_stocks_data(theme_name: str, related_terms: list | None = None,
             )
         if len(pairs) < n:
             try:
-                raw5 = invoke_text("router", _ipo_prompt, temperature=0.5) or ""
+                raw5 = invoke_text("collect_theme_fallback", _ipo_prompt, temperature=0.5) or ""
                 new_pairs5 = _parse_pairs(raw5, exclude_codes=seen_codes)
                 for p in new_pairs5:
                     if len(pairs) >= n:

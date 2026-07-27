@@ -260,7 +260,7 @@ def _generate_svg(prompt: str) -> str:
     """Claude LLM으로 SVG 코드 생성."""
     try:
         from shared.llm import invoke_text as _inv
-        raw = _inv("analyzer", prompt, system=_SVG_SYSTEM, max_tokens=3000, temperature=0.3)
+        raw = _inv("analyzer_imagespec", prompt, system=_SVG_SYSTEM, max_tokens=3000, temperature=0.3)
         if not raw:
             return ""
         # SVG 블록 추출

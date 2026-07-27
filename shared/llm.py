@@ -47,6 +47,11 @@ class ModelSpec:
     #   (사용자 박제 2026-07-25: "03·09·02·06·08 이 도는 동안 LLM 은 오로지 글 작성에만")
     #   여기 선언 한 곳에서 `_BG_ALIASES` 를 파생 — 별도 목록을 두면 alias 추가 시 드리프트.
     background: bool = False
+    # ★ 프롬프트 캐시를 쓸 것인가 (ERRORS [541], 사용자 판단 2026-07-27).
+    #   캐시는 **쓰기 1.25배 / 읽기 0.1배** 다. 즉 한 번 비싸게 쓰고 여러 번 싸게 읽어야 이득이고,
+    #   **읽지 못하면 25% 를 그냥 버린다.** 재사용이 1배 미만인 alias 는 캐싱이 *절감이 아니라 손실*.
+    #   7일 실측 근거는 아래 MODELS 각 항목 주석에 박제. 판정이 낡으면 `cache_selfcheck()` 가 알린다.
+    cache: bool = True
 
 
 # ★ 모델 계층 — 사용자 박제 2026-07-06 (ADR 017): Sonnet 5 단일 모델 통일 (ADR 015 폐지).
@@ -79,6 +84,11 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=8000,
         temperature=0.4,
         description="블로그 본문 대본 — 도입부·섹션·감성문단·면책 (헌법 규정 준수)",
+        # ★ 캐시 끔 (ERRORS [541]) — 7일 실측 **재사용 0.00배** (생성 191,224 / 읽기 0).
+        #   네이버·티스토리 발행이 **12분 간격**(플랫폼 단위 직렬 — 사용자 박제 2026-07-03)이라
+        #   캐시 TTL 5분을 매번 넘긴다. 붙이면 실패 격리가 깨지므로 **간격은 못 줄인다**.
+        #   → 회수 못 할 캐시에 1.25배를 내느니 안 쓴다. 주간 약 47,806 토큰 절감.
+        cache=False,
     ),
     "writer_long_infographic": ModelSpec(
         alias="writer_long_infographic",
@@ -131,6 +141,10 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=1600,
         temperature=0.2,   # ★ 판정은 흔들리면 안 되므로 온도가 낮다
         description="분석·판정·번역 — 품질 제안·섹터 분류·수치 대조·프롬프트 번역",
+        # ★ 캐시 끔 (ERRORS [541]) — 7일 실측 **재사용 0.08배** (생성 20,187 / 읽기 1,696).
+        #   호출 묶음이 **3시간 간격**이라 TTL 5분 안에 재호출이 거의 없다.
+        #   주간 약 3,520 토큰 절감. (간격이 좁아지면 selfcheck 가 되돌리라고 알린다)
+        cache=False,
     ),
 
     # ── 구 alias (하위호환) — 본문은 위 신규를 가리키는 얇은 별칭 ──
@@ -157,12 +171,76 @@ MODELS: dict[str, ModelSpec] = {
         temperature=0.0,
         description="마스터 라우터 — 인텐트 분류·도메인 매칭 (Sonnet 5)",
     ),
+
+    # ★ 테마 종목 폴백 (ERRORS [540]) — 종전엔 `router` alias 를 빌려 쓰고 있었다.
+    #   `router` 는 "마스터 라우터 인텐트 분류" 인데 실제로는 JARVIS09 가 네이버 테마에서
+    #   종목·티커를 못 찾았을 때의 **LLM 폴백**이었다 — 이름이 하는 일과 달라 대시보드가 거짓말을 했다.
+    "collect_theme_fallback": ModelSpec(
+        alias="collect_theme_fallback",
+        model_id="claude-sonnet-5",
+        max_tokens=1000,
+        temperature=0.6,   # 후보를 넓게 뽑아야 하므로 라우팅(0.0)보다 높다
+        description="테마 종목·티커 폴백 — 카탈로그에서 못 찾을 때 (JARVIS09)",
+    ),
+
+    # ══ analyzer 계열 — `analyzer_{용도}` (사용자 박제 2026-07-27, ERRORS [540]) ══
+    #
+    #   ★ 왜 쪼갰나: `analyzer` 하나가 **5개 모듈 13곳**에서 전혀 다른 일을 하고 있었다 —
+    #     일일 리뷰 · 차트 데이터 판정 · 근거팩 추출 · 이미지 스펙 · 수집 설계 · 글종류 판정.
+    #     대시보드에 `analyzer` 만 찍히니 **무슨 작업이 토큰을 쓰는지 구분이 안 됐다.**
+    #     writer 계열을 8개로 쪼갠 것과 같은 이유·같은 방식.
+    #   ★ ② 동적 설계: alias 를 여기 추가하면 `_BG_ALIASES`·`_PUBLISH_ESSENTIAL_CAP` 등
+    #     파생물이 자동으로 따라온다. 별도 목록을 만들지 않는다.
+    #   ★ max_tokens·temperature 를 용도에 맞춘다 — 이름만 나누고 값이 같으면 그게 또
+    #     `writer_fast` 같은 거짓말이 된다(ERRORS 직전 교훈).
+    "analyzer_quality": ModelSpec(
+        alias="analyzer_quality",
+        model_id="claude-sonnet-5",
+        max_tokens=2500,
+        temperature=0.2,
+        description="발행 글 품질 분석·일일 리뷰 — 개선 제안 도출",
+    ),
+    "analyzer_chart": ModelSpec(
+        alias="analyzer_chart",
+        model_id="claude-sonnet-5",
+        max_tokens=1600,
+        temperature=0.0,   # 차트 수치 판정 — 흔들리면 안 된다
+        description="차트 데이터 판정·단위·랭크 (JARVIS09 chart_data)",
+    ),
+    "analyzer_evidence": ModelSpec(
+        alias="analyzer_evidence",
+        model_id="claude-sonnet-5",
+        max_tokens=6000,   # 전 문서 단일 호출 (ERRORS [374])
+        temperature=0.2,
+        description="근거팩 추출 — 수집 문서에서 fact·수치 뽑기",
+    ),
+    "analyzer_imagespec": ModelSpec(
+        alias="analyzer_imagespec",
+        model_id="claude-sonnet-5",
+        max_tokens=3000,
+        temperature=0.3,
+        description="이미지 스펙·SVG 코드 생성 (JARVIS06)",
+    ),
+    "analyzer_plan": ModelSpec(
+        alias="analyzer_plan",
+        model_id="claude-sonnet-5",
+        max_tokens=2500,
+        temperature=0.2,
+        description="수집 설계 — 리서치 플랜 (ADR 012, 수집 품질의 조타수)",
+    ),
+    "analyzer_posttype": ModelSpec(
+        alias="analyzer_posttype",
+        model_id="claude-sonnet-5",
+        max_tokens=2500,
+        temperature=0.5,
+        description="글종류별 섹션 구성 판정 (post_type_specs)",
+    ),
     "analyzer": ModelSpec(
         alias="analyzer",
         model_id="claude-sonnet-5",
         max_tokens=2500,
         temperature=0.2,
-        description="post_quality·daily_review 분석 (Sonnet 5)",
+        description="[구] analyzer_* 로 분화됨 — 하위호환 별칭",
     ),
     "coder": ModelSpec(
         alias="coder",
@@ -462,7 +540,64 @@ def _sanitize_prompt(s: str) -> str:
 # ★ 토큰 계측용 alias 전파 (ERRORS [456]) — _run_sdk_sync 는 model 만 받으므로
 #   "어느 용도(alias)가 얼마나 썼는지" 를 귀속하려면 호출 문맥이 필요하다.
 import contextvars as _contextvars
+import sys as _sys
 _CURRENT_ALIAS: "_contextvars.ContextVar[str]" = _contextvars.ContextVar("llm_alias", default="")
+
+
+def _bind_alias(alias: str) -> None:
+    """★ alias 귀속 단일 진입점 — **모든 LLM 통로가 이걸 거친다** (ERRORS [540], 2026-07-27).
+
+    ★ 왜 만들었나: 종전엔 `invoke_text_result` **한 곳에서만** `_CURRENT_ALIAS.set()` 을 했다.
+      `invoke_vision` 은 `alias` 를 인자로 받아놓고 컨텍스트에 넣지 않아, 비전 호출이 전부
+      폴백 라벨 `"vision"` 으로 찍혔다 — **MODELS 에 없는 가짜 alias 가 DB 에 쌓였다**.
+      실측(2026-07-27): `design_learner` 의 `invoke_vision("writer_long_learn", …)` 9회가
+      전부 `alias="vision"`(캐시읽기 349,701)으로 기록돼 **세분화가 이 통로에서만 무력**했다.
+
+    ★ CLAUDE.md 가 박제한 같은 병의 재발이다 —
+      *"실례 [474]: 발행 우선 규칙을 `invoke_text` 에만 걸어 `run_sdk_query` 로 우회됨"*.
+      한 통로에만 걸면 나머지로 샌다. → **귀속을 이 함수 하나로 모으고 모든 통로가 호출**한다.
+
+    ★ 왜 컨텍스트매니저가 아닌가: `contextvars` 는 스레드/태스크 로컬이라 `set` 만으로도
+      이 호출 문맥에 갇힌다. 게다가 호출부(`invoke_text_result`)는 긴 재시도 루프에
+      중간 return 이 많아 `with` 로 감싸면 구조가 크게 흔들린다. 다음 진입점이 다시 덮으므로
+      누수 위험도 없다 — **비어 있는 경우만 문제이고 그건 `alias_selfcheck()` 가 감시한다.**
+    """
+    _CURRENT_ALIAS.set(alias or "")
+
+
+def alias_selfcheck() -> list[str]:
+    """★ alias 귀속이 *실제로 되고 있는지* 동작으로 확인 (ERRORS [540]).
+
+    이 결함은 예외를 안 던지고 **계측 라벨만 조용히 틀어진다** — 그래서 감시가 필요하다.
+    """
+    issues: list[str] = []
+    try:
+        import inspect as _insp
+        src = _insp.getsource(_sys.modules[__name__])
+        # 통로마다 _bind_alias 를 거치는가 (누락 시 그 통로만 라벨이 샌다)
+        for fn in ("def invoke_text_result", "def invoke_vision"):
+            i = src.find(fn)
+            if i < 0:
+                continue
+            j = src.find("\ndef ", i + 1)
+            if "_bind_alias(" not in src[i: j if j > 0 else len(src)]:
+                issues.append(f"[A1] {fn.split()[1]} 가 _bind_alias 를 안 거침 — alias 라벨 유실")
+        # MODELS 에 없는 alias 가 DB 에 쌓이고 있지 않은가
+        from shared.db import get_db
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT alias, COUNT(*) FROM llm_token_usage "
+                "WHERE ts >= datetime('now','localtime','-1 day') GROUP BY alias"
+            ).fetchall()
+        for a, n in rows:
+            if a and a not in MODELS:
+                issues.append(f"[A2] MODELS 에 없는 alias 가 기록됨: {a!r} ({n}건)")
+            if not a:
+                issues.append(f"[A3] alias 빈 값으로 기록됨 ({n}건) — 귀속 누락 통로 존재")
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"[A0] alias_selfcheck 실패: {type(e).__name__}: {e}")
+    return issues
+
 
 _LLM_MAX_CONCURRENCY = max(1, int(os.getenv("LLM_MAX_CONCURRENCY", "1") or "1"))
 _LLM_SPAWN_SEM = _threading.BoundedSemaphore(_LLM_MAX_CONCURRENCY)
@@ -777,6 +912,74 @@ def _llm_scratch_dir() -> str | None:
 _SDK_BASE_ENV = {"ANTHROPIC_API_KEY": "", "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"}
 
 
+def _sdk_env(alias: str = "") -> dict:
+    """SDK 에 넘길 env — alias 의 캐시 정책까지 반영 (ERRORS [541], ① 단일 진입점).
+
+    ★ 왜 헬퍼인가: env 를 조립하는 곳이 텍스트(`_run_sdk_sync`)·비전(`_invoke_sdk_vision`)
+      **두 곳**이다. 각자 조립하면 한쪽만 정책이 걸려 또 통로별로 샌다 —
+      바로 앞 사고(ERRORS [540] alias 귀속 누락)와 **같은 형태의 병**이다.
+
+    ★ 캐시를 끄는 판정 근거: 캐시는 쓰기 1.25배 / 읽기 0.1배다.
+      재사용이 1배 미만이면 **쓰기 프리미엄만 내고 회수를 못 한다**(순손실).
+      판정은 `MODELS[alias].cache` 가 소유하고 여기선 집행만 한다(② 동적 설계).
+
+    무배포 되돌리기: `LLM_CACHE_POLICY=0` → 정책 무시(전부 SDK 기본값 = 캐시 켬).
+    """
+    env = dict(_SDK_BASE_ENV)
+    if (os.getenv("LLM_CACHE_POLICY", "1") or "1") == "0":
+        return env
+    spec = MODELS.get(alias)
+    if spec is not None and not getattr(spec, "cache", True):
+        # CLI 가 읽는 공식 스위치. 모델별 변수(_SONNET 등)도 있으나 우리는 단일 모델이라 전역으로 충분.
+        env["DISABLE_PROMPT_CACHING"] = "1"
+    return env
+
+
+# 캐시 정책 적용 시각 — 이 이후 데이터만 [C2] 판정에 쓴다 (과거 데이터 오탐 방지).
+_CACHE_POLICY_SINCE = "2026-07-27T14:30:00"
+
+
+def cache_selfcheck() -> list[str]:
+    """★ 캐시 정책이 *실측과 맞는지* 감시 (ERRORS [541]).
+
+    판정을 손으로 박아두면 호출 패턴이 바뀌었을 때 낡는다 — 그때 **조용히 손해**만 난다.
+    최근 7일 실사용에서 정책과 어긋나면 알린다(끈 게 이득이 됐거나, 켠 게 손해가 됐거나).
+    """
+    issues: list[str] = []
+    try:
+        from shared.db import get_db
+        with get_db() as conn:      # ★ 커넥션은 이 블록 안에서만 (auto-close 규약)
+            rows = conn.execute(
+                "SELECT alias, SUM(cache_create), SUM(cache_read) FROM llm_token_usage "
+                "WHERE ts >= datetime('now','localtime','-7 day') AND alias<>'' "
+                "GROUP BY alias").fetchall()
+            recent = dict(conn.execute(
+                "SELECT alias, COALESCE(SUM(cache_create),0) FROM llm_token_usage "
+                "WHERE ts >= ? AND alias<>'' GROUP BY alias",
+                (_CACHE_POLICY_SINCE,)).fetchall())
+        for a, cc, cr in rows:
+            spec = MODELS.get(a)
+            if spec is None:
+                continue
+            cc, cr = int(cc or 0), int(cr or 0)
+            if cc < 5000:
+                continue                      # 표본 부족 — 판정 보류
+            ratio = cr / cc
+            on_cost, off_cost = 1.25 * cc + 0.1 * cr, 1.0 * (cc + cr)
+            if spec.cache and on_cost > off_cost:
+                issues.append(f"[C1] {a}: 재사용 {ratio:.2f}배 — 캐시가 순손실"
+                              f"({on_cost - off_cost:+,.0f} 토큰/7일). cache=False 검토")
+        for a, n in recent.items():
+            spec = MODELS.get(a)
+            # ★ 정책 적용 *이후* 구간만 본다 — 과거 데이터로 오탐을 내면 감시를 못 믿게 된다.
+            if spec is not None and not spec.cache and int(n or 0) > 0:
+                issues.append(f"[C2] {a}: cache=False 인데 정책 적용 후에도 캐시생성 "
+                              f"{int(n):,} 발생 — 통로 누락 의심")
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"[C0] cache_selfcheck 실패: {type(e).__name__}: {e}")
+    return issues
+
+
 # ── 본문 생성 timeout 단일 진입점 (ERRORS [460] — 2026-07-20) ──────────
 #
 # 사고: 테마 티스토리 발행이 6/6 실패. 로그의 "인프라 스로틀" 은 *오분류* 였고
@@ -1012,7 +1215,7 @@ def _run_sdk_sync(
     from claude_code_sdk._errors import MessageParseError, ProcessError
 
     # ★ cwd 격리 — 저장소 밖 전용 폴더. CLAUDE.md 자동 로드(48,940 토큰/호출) 차단.
-    _opts_kw: dict = {"model": model, "env": dict(_SDK_BASE_ENV)}
+    _opts_kw: dict = {"model": model, "env": _sdk_env(_CURRENT_ALIAS.get())}
     _scratch = _llm_scratch_dir()
     if _scratch:
         _opts_kw["cwd"] = _scratch
@@ -1206,7 +1409,7 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
     _v_kw: dict = {
         "model": model, "allowed_tools": ["Read"],
         "permission_mode": "bypassPermissions", "max_turns": 6,
-        "env": dict(_SDK_BASE_ENV),
+        "env": _sdk_env(_CURRENT_ALIAS.get()),
     }
     _v_scratch = _llm_scratch_dir()
     if _v_scratch:
@@ -1245,7 +1448,10 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
     def _record_vision() -> None:
         try:
             from shared.token_usage import record_call
-            record_call(alias=_CURRENT_ALIAS.get() or "vision", model=model,
+            # ★ 폴백을 "vision" 으로 두지 않는다 (ERRORS [540]) — MODELS 에 없는 이름이
+            #   진짜 alias 인 척 DB 에 쌓여 세분화를 무력화했다. 비어 있으면 *비어 있음이
+            #   드러나야* 고칠 수 있다. 통로 구분은 `source="vision"` 이 이미 담당한다.
+            record_call(alias=_CURRENT_ALIAS.get() or "", model=model,
                         usage=_vmeter["usage"], cost_usd=_vmeter["cost"],
                         duration_ms=_vmeter["dur"], num_turns=_vmeter["turns"],
                         ok=bool(parts), source="vision")
@@ -1293,8 +1499,11 @@ def invoke_vision(alias: str, prompt: str, image_paths: list,
         return ""
     model = _ALIAS_MODEL.get(alias, _DEFAULT_MODEL_ID)
     try:
+        # ★ alias 귀속 (ERRORS [540]) — 종전엔 이 통로가 빠져 비전 호출이 전부
+        #   가짜 alias "vision" 으로 찍혔다. 텍스트 통로와 **같은 헬퍼**를 쓴다(① 단일 진입점).
+        _bind_alias(alias)
         return _invoke_sdk_vision(prompt, model, [str(p) for p in image_paths],
-                                  timeout=timeout, cwd=cwd)
+                                      timeout=timeout, cwd=cwd)
     except Exception as e:
         print(f"  ❌ invoke_vision 오류: {e}")
         return ""
@@ -1481,7 +1690,11 @@ def invoke_text_result(alias: str, prompt: str, system: str = "", timeout: int =
     #   상한을 바꾸려면 두 곳을 따로 고쳐야 했고, 두 층의 곱(최악 증폭)이 통제 불능이었다.
     retries = max(1, min(_max_retries(), _retries))
     backoff = True
-    _CURRENT_ALIAS.set(alias or "")   # ★ 토큰 계측 귀속 (ERRORS [456])
+    # ★ 토큰 계측 귀속 (ERRORS [456]) — 헬퍼 경유 (ERRORS [540]: 통로별 누락 차단).
+    #   ★ 여기서 `with` 를 쓰지 않는 이유: 이 함수는 아래 긴 재시도 루프 전체에서 alias 가
+    #     유지돼야 하고 중간에 return 하는 경로가 많다. contextvar 는 스레드/태스크 로컬이라
+    #     set 만으로도 이 호출 문맥에 갇힌다. (중첩이 실제로 생기는 곳은 vision 통로 뿐)
+    _bind_alias(alias)
 
     # ★ 글로벌 데드라인 강등 — 발행 파이프라인(economic_poster 등)이 설정
     try:

@@ -61,7 +61,7 @@ TG_TOKEN      = os.getenv("TELEGRAM_TOKEN", "")
 TG_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # 모델은 shared/llm.py 의 "analyzer" alias 로 중앙 관리 (ID 는 MODELS 만 소유)
-# CLAUDE_URL / CLAUDE_MODEL 직접 호출 → invoke_text("analyzer") 로 교체됨
+# CLAUDE_URL / CLAUDE_MODEL 직접 호출 → invoke_text("analyzer_quality") 로 교체됨
 
 PLATFORM_EMOJI = {"naver": "🟢", "tistory": "🟠"}
 
@@ -369,11 +369,11 @@ def _build_claude_input(date_str: str, posts: list[dict], agg: dict,
 
 def _call_claude(user_msg: str, max_tokens: int = 1500) -> list:
     """Claude 호출 — JSON 배열 반환. 실패 시 빈 리스트 + stderr.
-    shared/llm.py invoke_text("analyzer") 로 중앙화 — 모델 ID 는 MODELS 파생.
+    shared/llm.py invoke_text("analyzer_quality") 로 중앙화 — 모델 ID 는 MODELS 파생.
     """
     try:
         from shared.llm import invoke_text as _inv
-        text = _inv("analyzer", user_msg, system=REVIEW_SYSTEM_PROMPT,
+        text = _inv("analyzer_quality", user_msg, system=REVIEW_SYSTEM_PROMPT,
                     max_tokens=max_tokens)
         if not text:
             return []

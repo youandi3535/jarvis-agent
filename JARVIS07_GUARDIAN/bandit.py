@@ -53,6 +53,7 @@ import json
 import logging
 import os
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -448,6 +449,28 @@ def _write_state(state: dict) -> None:
     _save(state)
 
 
+@contextmanager
+def mutate_state():
+    """밴딧 학습 원장 **변경의 유일한 진입점** — 읽기·수정·쓰기를 한 임계구역으로.
+
+    ★ learned_patterns 와 **같은 병**이었다 (2026-07-27 실측). `_LOCK`(threading) 만으로는
+      같은 프로세스의 스레드끼리만 막는다. 경제 브리핑은 subprocess 라 프로세스가 갈리고,
+      그 사이에는 아무 방어가 없었다 — 두 프로세스가 같은 state 를 읽고 각자 자기 보상만
+      더해 쓰면 **나중 쓰기가 앞선 학습을 통째로 지운다**. 운영 동시성 재현: 50% 유실.
+
+    ★ 밴딧은 유실이 더 아프다: A(공분산)·b(보상) 는 *누적* 이라 한 번 잃으면 복구 불가다.
+      hit_count 처럼 다시 오르지 않는다 — 그 관측은 영영 없던 일이 된다.
+
+    ① 단일 진입점: `pattern_fixer.mutate_learned()` 와 같은 형태를 의도적으로 맞췄다.
+      두 학습 자산이 같은 규율을 쓰면 다음 작업자가 한쪽만 고치는 일이 줄어든다.
+    """
+    from JARVIS07_GUARDIAN.json_store import locked as _xp_locked  # noqa: PLC0415
+    with _LOCK, _xp_locked(_BANDIT_FILE):
+        state = _read_state()
+        yield state
+        _write_state(state)
+
+
 def _migrate_arms_to_version(state: dict, target_version: int) -> None:
     """학습보존 블록확장: A(d0×d0)→A'(dT×dT) 좌상=기존·우하=λI·off=0, b→앞d0 유지·뒤=0.
 
@@ -614,8 +637,7 @@ def reward(
     x = _extract_features(error_record or {}, version)   # 느린 encode 는 락 밖
     r = _WIN if success else _LOSS
 
-    with _LOCK:
-        state = _read_state()
+    with mutate_state() as state:
         arms = state["arms"]
         arm_data = arms.get(key)
         if arm_data:
@@ -651,7 +673,6 @@ def reward(
         arms[key] = _arm_to_dict(A, b, n=n_prev + 1.0, rsum=rsum_prev + r)
         state["obs_count"] = state.get("obs_count", 0) + 1
         _maybe_upgrade_features(state)   # 임계 도달 시 블록확장 승급
-        _write_state(state)
 
     log.info(
         f"[BANDIT] {'✅' if success else '❌'} {error_type}/{fixer_name}→arm={key} r={r:+.1f}"

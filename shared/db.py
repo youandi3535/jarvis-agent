@@ -1,13 +1,19 @@
 """
 JARVIS 공유 데이터베이스
-모든 에이전트가 읽고 쓰는 단일 SQLite — 기본: jarvis-agent/shared/jarvis.sqlite
+모든 에이전트가 읽고 쓰는 단일 SQLite — 기본: **`~/.jarvis/jarvis.sqlite`** (프로젝트 밖)
 ★ JARVIS_DB_PATH 환경변수로 경로 오버라이드 가능.
-  예) ~/.env: JARVIS_DB_PATH=/Users/kimhyojung/.jarvis/jarvis.sqlite
-  → 프로젝트 밖에 두면 Claude Code VM FUSE 마운트 밖 → .fuse_hidden* 생성 차단.
+
+★ 왜 프로젝트 밖인가 (ERRORS [535]):
+  ① git 오염 방지 — 209MB 가 매초 바뀌는 파일이라 커밋 대상이 되면 안 된다
+  ② 브랜치 이동에 안전 — `git checkout` 해도 데이터가 그대로 (코드는 되돌려도 데이터는 못 되돌린다)
+  ③ Claude Code VM FUSE 마운트 밖 → `.fuse_hidden*` 생성 차단
+  종전 기본값이 폴더 안(`shared/jarvis.sqlite`)이라 **잔재 파일이 반복 생성**됐다.
 """
-import os, sqlite3, json, shutil
+import os, sqlite3, json, shutil, logging
 from pathlib import Path
 from datetime import datetime, date, timedelta
+
+log = logging.getLogger("jarvis.db")
 
 # ★ .env 자가 로드 (단일 진입점 — db.py 가 import 순서와 무관하게 JARVIS_DB_PATH 를 항상 해석).
 #   미로드 시 standalone 호출(검증 one-liner·.env 미로드 프로세스)이 기본 경로로 떨어져
@@ -18,10 +24,38 @@ try:
 except Exception:
     pass
 
-_default_db = Path(__file__).parent / "jarvis.sqlite"
+# ★ 기본값을 *프로젝트 밖* 으로 (ERRORS [535], 사용자 판단 2026-07-27).
+#   종전 기본값은 `shared/jarvis.sqlite` — 즉 **프로젝트 폴더 안**이었다.
+#   `.env` 자가 로드(위)로 2026-06-28 에 한 번 막았지만 *기본값 자체는 그대로* 라
+#   .env 가 없거나·깨지거나·다른 홈에서 실행되면 **또 잔재가 생긴다**.
+#   실제로 344K 짜리 잔재(마지막 기록 2026-06-08, 31행)가 7주간 남아 혼동을 유발했다.
+#   → 기본값을 홈으로 옮겨 *어떤 경로로 떨어져도 프로젝트가 오염되지 않게* 한다.
+#   ② 동적 설계: 경로 문자열은 여기 한 곳. 다른 파일은 `from shared.db import DB_PATH`.
+#   (api_server.py·shared/llm.py 가 같은 기본값을 각자 적고 있는데, 그건 이 상수를
+#    import 못 하는 초기화 순서 때문 — 값이 일치하는지 selfcheck 로 감시한다.)
+_default_db = Path.home() / ".jarvis" / "jarvis.sqlite"
 DB_PATH     = Path(os.environ.get("JARVIS_DB_PATH", str(_default_db)))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-BACKUP_DIR  = Path(__file__).parent / "backups"
+# ★ 백업도 프로젝트 밖 — 원본(DB)과 같은 곳에 둔다 (ERRORS [536], 2026-07-27).
+#
+#   종전 `shared/backups/` 는 **프로젝트 폴더 안**이었다. 문제는 용량(6.2GB)이 아니라
+#   **`git clean -xdf` 한 번에 통째로 사라진다**는 것이다 — `.gitignore` 대상이라
+#   그 명령의 삭제 범위에 정확히 들어간다(IDE 의 clean 기능도 같은 것을 쓴다).
+#   백업의 존재 이유는 *실수해도 되게* 만드는 건데, 실수 한 번에 백업이 사라지면
+#   백업이 아니다. 브랜치 이동·워크트리 생성도 같은 위험(실제로 워크트리 잔재 발견).
+#
+#   ② 동적 설계: `JARVIS_BACKUP_DIR` 로 오버라이드 가능. 기본은 DB 와 **같은 부모**에서
+#   파생 — DB 경로를 옮기면 백업도 자동으로 따라간다(두 곳을 각각 고치지 않는다).
+BACKUP_DIR = Path(os.environ.get("JARVIS_BACKUP_DIR", str(DB_PATH.parent / "backups")))
+
+# ★ LangGraph ReAct 체크포인트 경로 — 이 파일이 소유 (ERRORS [537], 2026-07-27).
+#   종전엔 `router.py` 가 `_ROOT / "shared" / "react_checkpoints.sqlite"` 로 **직접 조립**했다.
+#   본 DB 는 `from shared.db import DB_PATH` 로 받아쓰면서 체크포인트만 손으로 적고 있었다 —
+#   그래서 "어디에 박혀 있지?" 를 매번 찾아야 했다(① 위반).
+#   ② 동적 설계: `DB_PATH.parent` 에서 파생 → DB 를 옮기면 체크포인트도 자동으로 따라간다.
+#   `JARVIS_CHECKPOINT_PATH` 로 오버라이드 가능.
+CHECKPOINT_PATH = Path(os.environ.get(
+    "JARVIS_CHECKPOINT_PATH", str(DB_PATH.parent / "react_checkpoints.sqlite")))
 
 
 class _AutoCloseConnection(sqlite3.Connection):
@@ -488,6 +522,104 @@ def init_db():
             conn.execute("ALTER TABLE keyword_performance ADD COLUMN composite_score REAL DEFAULT 0")
         except Exception:
             pass
+
+    # ★ 위까지가 **베이스라인(v1)** — 여기 있는 CREATE/ALTER 는 전부 멱등이라 몇 번
+    #   실행해도 안전하다. 그래서 과거분은 그대로 두고, *앞으로의 변경* 만 번호를 매겨
+    #   `_MIGRATIONS` 로 관리한다(아래). 기존 18개 ALTER 를 지금 번호로 재작성하면
+    #   이미 적용된 DB 와 새 DB 의 경로가 갈라져 위험만 커진다.
+    _apply_migrations()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ★★ 스키마 버전 관리 (2026-07-27)
+#
+#  종전: `try: ALTER TABLE ... except: pass` 18개. **동작은 하지만 세 가지가 없었다** —
+#    ① "지금 DB 가 몇 번 버전인가" 를 알 방법  ② 적용 시각 기록  ③ 되돌리기 근거.
+#  그래서 스키마가 바뀌어도 *언제 무엇이 왜 바뀌었는지* 가 코드 diff 에만 남았다.
+#
+#  방식: 번호 붙은 마이그레이션을 순서대로 1회씩 적용하고 `schema_migrations` 에 박제.
+#    · 새 스키마 변경은 **`_MIGRATIONS` 에 한 줄 추가** — 다른 곳에 ALTER 를 흩지 말 것.
+#    · 실패해도 부팅을 막지 않는다(로그 + 계속). 스키마 변경 때문에 데몬이 못 뜨는 것이
+#      더 나쁘다. 대신 적용 안 된 버전이 남아 다음 부팅에 재시도된다.
+#    · 멱등하게 쓸 것(ALTER 는 이미 있으면 예외 → 적용 성공으로 간주하고 기록).
+# ══════════════════════════════════════════════════════════════════════════════
+
+#: (버전, 설명, SQL) — **오름차순 유지**. 과거 번호를 수정하지 말 것(이미 적용된 DB 와 갈라짐).
+_MIGRATIONS: list[tuple[int, str, str]] = [
+    (1, "베이스라인 — init_db 의 CREATE/ALTER 전체 (2026-07-27 이전 누적분)", ""),
+    (2, "vision_agent_history 압축 — 직전과 같은 상태의 반복행 제거 (변화만 남김)", """
+        -- ★ 2026-07-27: 이 표는 30초마다 무조건 append 돼 182,687행(DB 최대 테이블)이
+        --   됐지만 읽는 코드가 없었다. 이제 collector 가 *상태 변화 시에만* 적재한다.
+        --   과거분도 같은 규칙으로 맞춘다 — 직전 행과 status 가 같은 행은 정보가 없다
+        --   (online 이 30초마다 반복). **변화 시점은 전부 보존되므로 정보 손실 0.**
+        --   실측: 182,687 → 48행.
+        DELETE FROM vision_agent_history
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id, status,
+                       LAG(status) OVER (PARTITION BY agent_id ORDER BY recorded_at, id) AS prev
+                FROM vision_agent_history
+            ) WHERE prev IS NOT NULL AND prev = status
+        );
+    """),
+]
+
+
+def schema_version() -> int:
+    """현재 DB 스키마 버전 — 적용된 마이그레이션 중 최대 번호. 미적용 DB 는 0."""
+    try:
+        with get_db() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version    INTEGER PRIMARY KEY,
+                    note       TEXT,
+                    applied_at TEXT DEFAULT (datetime('now','localtime'))
+                )
+            """)
+            row = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+    except Exception as e:                              # noqa: BLE001
+        log.warning(f"[db/schema] 버전 조회 실패: {e}")
+        return 0
+
+
+def _apply_migrations() -> int:
+    """미적용 마이그레이션을 번호순으로 적용. Returns: 이번에 적용한 개수."""
+    cur_ver = schema_version()
+    applied = 0
+    for version, note, sql in sorted(_MIGRATIONS, key=lambda m: m[0]):
+        if version <= cur_ver:
+            continue
+        try:
+            with get_db() as conn:
+                if sql.strip():
+                    conn.executescript(sql)
+                conn.execute(
+                    "INSERT OR REPLACE INTO schema_migrations (version, note) VALUES (?,?)",
+                    (version, note),
+                )
+                conn.commit()
+            applied += 1
+            log.info(f"[db/schema] v{version} 적용 — {note}")
+        except Exception as e:                          # noqa: BLE001
+            # 부팅을 막지 않는다. 다음 부팅에 재시도된다.
+            log.warning(f"[db/schema] v{version} 적용 실패(다음 부팅 재시도): {e}")
+            break                                       # 순서 보장 — 실패 뒤는 건너뛰지 않는다
+    return applied
+
+
+def schema_status() -> dict:
+    """스키마 상태 — 현재 버전 · 미적용 목록 (점검·대시보드용)."""
+    cur = schema_version()
+    pending = [{"version": v, "note": n} for v, n, _ in sorted(_MIGRATIONS) if v > cur]
+    with get_db() as conn:
+        try:
+            hist = [dict(r) for r in conn.execute(
+                "SELECT version, note, applied_at FROM schema_migrations ORDER BY version")]
+        except Exception:                               # noqa: BLE001
+            hist = []
+    return {"version": cur, "latest": max((v for v, _, _ in _MIGRATIONS), default=0),
+            "pending": pending, "applied": hist}
 
 
 # ── Trends ────────────────────────────────────────────────────
@@ -1072,12 +1204,83 @@ def is_favorite(keyword: str) -> bool:
 
 # ── Maintenance (백업·정리) ───────────────────────────────────
 
-def backup_db(retention_days: int = 30) -> dict:
-    """SQLite .backup API 로 WAL 안전 백업 + retention 보관.
+# ══════════════════════════════════════════════════════════════════════════════
+#  백업 보존 — 계층 보존(GFS: Grandfather-Father-Son)  ★ ERRORS [536] 2026-07-27
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  ★ 왜 매일 30개가 아닌가 (실측 근거):
+#    종전 "30일 매일 보관" 은 **24개 6.2GB** 였다. 본 DB 가 200MB 이므로
+#    백업 1개 = DB 전체다. 30일을 채우면 **7~8GB** 에서 평형을 이룬다.
+#
+#  ★ 백업은 최근 것일수록 가치가 높다:
+#      "어제 실수로 지웠다"     → 1~2일 전이 필요
+#      "이번 주에 뭔가 틀어졌다" → 7일 전
+#      "3주 전으로 되돌린다"    → 그 사이 3주치 발행·학습이 통째로 날아간다
+#                                → **되돌릴 수 있어도 되돌리지 않는다**
+#    따라서 오래된 구간은 *간격을 벌려도* 실질 손실이 없다.
+#
+#  ★ GFS = 최근은 촘촘히, 과거는 성기게. 백업 소프트웨어의 표준 방식.
+#    커버 기간(30일)은 그대로 두면서 개수를 절반으로 줄인다.
+#
+#  ② 동적 설계: 계층을 코드에 박지 않고 이 레지스트리에서 파생.
+#     무배포 조정: `DB_BACKUP_KEEP_DAILY` / `_WEEKLY` / `_MONTHLY`
+_BACKUP_TIERS: tuple[tuple[str, str, int], ...] = (
+    #  (계층,     설명,                     보관 개수)
+    ("daily",   "최근 N일 — 매일",           7),
+    ("weekly",  "그 이전 — 주 1회(월요일)",    4),
+    ("monthly", "그 이전 — 월 1회(1일)",      3),
+)
 
-    반환: {"backup": Path, "removed": int, "size_kb": int}
+
+def _backup_keep(tier: str, default: int) -> int:
+    """계층별 보관 개수 — *호출 시점* env 조회 (모듈 로드 캡처 금지)."""
+    raw = (os.getenv(f"DB_BACKUP_KEEP_{tier.upper()}") or "").strip()
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return default
+
+
+def _gfs_keep_set(dates: list[date]) -> set[date]:
+    """보관할 날짜 집합을 GFS 규칙으로 *파생*.
+
+    ★ 규칙을 날짜 리스트에서 파생한다 — "오늘부터 며칠 전" 같은 절대 계산을 쓰면
+      백업이 하루 걸렀을 때 구멍이 생긴다. **가진 것 중에서 고른다.**
     """
-    BACKUP_DIR.mkdir(exist_ok=True)
+    if not dates:
+        return set()
+    ds = sorted(set(dates), reverse=True)          # 최신 우선
+    keep: set[date] = set()
+
+    keep.update(ds[: _backup_keep("daily", 7)])    # ① 최근 N개는 무조건
+
+    # ② 주간 — 각 ISO 주(연도,주차)의 *가장 최신* 1개씩
+    seen_w: dict[tuple, date] = {}
+    for d in ds:
+        k = d.isocalendar()[:2]
+        seen_w.setdefault(k, d)
+    keep.update(list(seen_w.values())[: _backup_keep("weekly", 4) + _backup_keep("daily", 7)])
+
+    # ③ 월간 — 각 (연,월)의 가장 최신 1개씩
+    seen_m: dict[tuple, date] = {}
+    for d in ds:
+        seen_m.setdefault((d.year, d.month), d)
+    keep.update(list(seen_m.values())[: _backup_keep("monthly", 3)])
+    return keep
+
+
+def backup_db(retention_days: int = 30) -> dict:
+    """SQLite .backup API 로 WAL 안전 백업 + **GFS 계층 보존**.
+
+    ★ `retention_days` 는 **하위호환용 상한**으로만 쓴다 — 이보다 오래된 것은
+      GFS 가 남기려 해도 지운다. 실제 선별은 `_gfs_keep_set()` 이 한다.
+      (호출부 `job_db_backup(retention_days=30)` 을 안 깨기 위해 시그니처 유지.)
+
+    반환: {"backup": Path, "removed": int, "size_kb": int, "kept": int}
+    """
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     today  = date.today().isoformat()
     target = BACKUP_DIR / f"jarvis_{today}.sqlite"
 
@@ -1100,27 +1303,243 @@ def backup_db(retention_days: int = 30) -> dict:
             cp.execute("PRAGMA wal_checkpoint(FULL)")
         shutil.copy2(DB_PATH, target)
 
-    # 2) Retention — 30일 이전 백업 삭제
-    cutoff  = date.today() - timedelta(days=retention_days)
-    removed = 0
+    # 2) Retention — GFS 계층 보존 (일 7 + 주 4 + 월 3 ≈ 14개로 30일 커버)
+    cutoff = date.today() - timedelta(days=retention_days)
+    found: dict[date, Path] = {}
     for p in BACKUP_DIR.glob("jarvis_*.sqlite"):
         try:
-            d = date.fromisoformat(p.stem.replace("jarvis_", ""))
-            if d < cutoff:
-                p.unlink()
-                removed += 1
-        except Exception:
+            found[date.fromisoformat(p.stem.replace("jarvis_", ""))] = p
+        except Exception:  # noqa: BLE001 — 이름 규칙 밖 파일은 건드리지 않는다
             continue
+
+    keep = _gfs_keep_set(list(found))
+    removed = 0
+    for d, p in found.items():
+        if d in keep and d >= cutoff:
+            continue                       # 보관 대상
+        try:
+            p.unlink()
+            # WAL/SHM 동반 파일도 같이 (남으면 다음 조회에서 혼동)
+            for suf in ("-wal", "-shm"):
+                sib = p.with_name(p.name + suf)
+                if sib.exists():
+                    sib.unlink()
+            removed += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"[db/backup] 만료 백업 삭제 실패(무시) {p.name}: {e}")
 
     return {
         "backup":  target,
         "removed": removed,
+        "kept":    len(found) - removed,
         "size_kb": target.stat().st_size // 1024,
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  ★★ 보존 정책 레지스트리 — **테이블별 보존 기간의 단일 진실 소스** (2026-07-27)
+#
+#  왜 (실측): DB 209MB 의 대부분이 무한 누적 테이블이었다 —
+#    `vision_agent_history` **192,417행**(30초마다 적재) · `job_runs` **155,483행** ·
+#    `qa_ingested_sessions` 15,567행. 이 중 뒤 둘은 **보존 규칙이 아예 없었다**.
+#  그리고 규칙이 있는 둘조차 일수가 *잡 콜백에 박혀* 있었다
+#    (`job_cleanup_events(days=30)` · `job_cleanup_vision_history(days=7)`).
+#  → ① 단일 진입점 위반: "이 테이블 며칠 보관?" 의 답이 코드 두 곳에 흩어짐.
+#  → ② 동적 설계 위반: 숫자가 호출부에 박혀 있어 바꾸려면 잡을 찾아가야 함.
+#
+#  ★ 설계 원칙: **테이블을 만들 때 보존 기간을 함께 선언한다.** 종전엔 DB 가 453MB 로
+#    불어 데몬이 hang 된 *뒤에* 정리 잡이 생겼다(사후 대응). 이제 여기에 한 줄 추가하지
+#    않으면 그 테이블은 정리 대상이 아니라는 것이 **명시적으로 드러난다**.
+#
+#  형식: 테이블 → (보존일수, 시각컬럼, 설명).  보존일수 0 = 영구 보존(정리 안 함).
+#  무배포 조정: `DB_RETENTION_<대문자테이블명>=일수`  (예: DB_RETENTION_JOB_RUNS=30)
+# ══════════════════════════════════════════════════════════════════════════════
+
+RETENTION: dict[str, tuple[int, str, str]] = {
+    # 빠르게 쌓이는 관측 데이터 — 짧게
+    # ★ vision_agent_history 는 2026-07-27 부터 **상태 변화 시에만** 적재한다
+    #   (종전 30초마다 → 182,437행 = DB 최대 테이블, 그런데 읽는 코드 0).
+    #   양이 1/1000 로 줄었으므로 보존을 7일 → **30일로 늘렸다** — 대시보드가
+    #   "지난 30일 언제 죽었나" 를 차트로 보여준다(`/api/vision/history`).
+    "vision_agent_history":  (30,  "recorded_at",  "에이전트 상태 *변화* 이력 (30일 차트 근거)"),
+    "events":                (30,  "created_at",   "이벤트 버스 기록"),
+    "job_runs":              (60,  "started_at",   "잡 실행 이력 — 대시보드는 최근분만 본다"),
+    "qa_ingested_sessions":  (90,  "ingested_at",  "QA 세션 흡수 이력(중복 방지용 표식)"),
+    "llm_rate_limit_events": (90,  "ts",           "한도 이벤트"),
+    "tool_runs":             (90,  "ran_at",       "도구 실행 이력"),
+    "llm_token_usage":       (180, "ts",           "토큰 장부 — 추세 분석에 쓰이므로 길게"),
+    # ★ 영구 보존(0) — 지우면 안 되는 것들. *명시적으로* 0 을 적어 '누락' 과 구분한다.
+    "error_log":             (0,   "timestamp",    "오류 이력 — 학습 자산. 영구"),
+    "post_analysis":         (0,   "created_at",   "발행 이력 — 영구"),
+    "self_repair_runs":      (0,   "ran_at",       "자가수리 회차 메트릭 — 학습 곡선. 영구"),
+    "insight_usage":         (0,   "used_at",      "지침 보상 귀속 — 학습 자산. 영구"),
+    "keyword_embeddings":    (0,   "indexed_at",   "키워드 벡터 — 재생성 비용 큼. 영구"),
+}
+
+
+# ★ 본 DB 밖에 있는 SQLite — 같은 보존 원칙을 적용해야 하는데 위 루프가 닿지 않는다.
+#   (ERRORS [535], 사용자 판단 2026-07-27)
+#   `react_checkpoints.sqlite` 는 LangGraph SqliteSaver 가 쓰는 **별도 파일**이라
+#   `get_db()` 커넥션으로는 접근 불가 → 위 RETENTION 루프에서 구조적으로 누락됐다.
+#   실측 52MB / 체크포인트 898개 / writes 2,809행 — 정리 잡이 없어 무한 누적 중이었다.
+#   ★ 여기 선언해 두면 "정리 대상이 아니다" 가 아니라 "정리 대상인데 파일이 다르다" 가
+#     명시적으로 드러난다. RETENTION 과 같은 형식(일수·설명)을 유지한다.
+EXTERNAL_RETENTION: dict[str, tuple[Path, int, str]] = {
+    "react_checkpoints": (
+        CHECKPOINT_PATH, 14,
+        "ReAct 대화 체크포인트 — 재개는 최근 것만 의미 있다(오래된 스레드는 이어갈 일이 없음)",
+    ),
+}
+
+
+def external_retention_days(name: str) -> int:
+    """외부 SQLite 보존 일수 — env 우선(`DB_RETENTION_<대문자>`), 없으면 레지스트리."""
+    spec = EXTERNAL_RETENTION.get(name)
+    if not spec:
+        return 0
+    raw = os.getenv(f"DB_RETENTION_{name.upper()}", "").strip()
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return spec[1]
+
+
+def cleanup_external_sqlite(vacuum: bool = True) -> dict:
+    """본 DB 밖 SQLite 정리 — `EXTERNAL_RETENTION` 선언분만.
+
+    ★ LangGraph 체크포인트 스키마는 라이브러리 소유라 컬럼명을 박지 않는다(② 동적 설계).
+      `checkpoints` 테이블의 실제 컬럼을 PRAGMA 로 조회해 시각 후보를 *파생* 하고,
+      시각 컬럼이 없으면 **thread_id 단위로 최신 N개만 남기는** 방식으로 degrade 한다.
+      (스키마를 가정하고 짜면 라이브러리 업그레이드에 조용히 깨진다.)
+    """
+    out: dict = {}
+    for name, (path, _d, _desc) in EXTERNAL_RETENTION.items():
+        days = external_retention_days(name)
+        if days <= 0 or not path.exists():
+            continue
+        before = path.stat().st_size
+        try:
+            con = sqlite3.connect(str(path), timeout=10)
+            cols = {r[1] for r in con.execute("PRAGMA table_info(checkpoints)")}
+            if not cols:
+                con.close()
+                continue
+            ts_col = next((c for c in ("created_at", "ts", "checkpoint_ts") if c in cols), "")
+            if ts_col:
+                cur = con.execute(
+                    f'DELETE FROM checkpoints WHERE "{ts_col}" < '
+                    f"datetime('now','localtime',?)", (f"-{days} days",))
+                n = cur.rowcount or 0
+            else:
+                # 시각 컬럼 없음 → thread 별 최신 1개만 남기고 정리 (rowid 순서로 파생)
+                cur = con.execute(
+                    "DELETE FROM checkpoints WHERE rowid NOT IN "
+                    "(SELECT MAX(rowid) FROM checkpoints GROUP BY thread_id)")
+                n = cur.rowcount or 0
+            # 고아 writes 정리 (checkpoint 가 사라졌는데 남은 쓰기 기록)
+            if "writes" in {r[0] for r in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}:
+                wcols = {r[1] for r in con.execute("PRAGMA table_info(writes)")}
+                if "checkpoint_id" in wcols and "checkpoint_id" in cols:
+                    con.execute("DELETE FROM writes WHERE checkpoint_id NOT IN "
+                                "(SELECT checkpoint_id FROM checkpoints)")
+            con.commit()
+            if vacuum and n:
+                con.execute("VACUUM")
+            con.close()
+            if n:
+                freed = (before - path.stat().st_size) / 1048576
+                out[name] = {"deleted": n, "freed_mb": round(freed, 1)}
+        except Exception as e:  # noqa: BLE001 — 정리 실패가 데몬을 막으면 안 된다
+            log.warning(f"[db/retention] 외부 SQLite {name} 정리 실패(무시): {e}")
+    return out
+
+
+def retention_days(table: str) -> int:
+    """이 테이블의 보존 일수 — env 우선, 없으면 레지스트리 (② 런타임 파생)."""
+    spec = RETENTION.get(table)
+    if not spec:
+        return 0
+    raw = os.getenv(f"DB_RETENTION_{table.upper()}", "").strip()
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return spec[0]
+
+
+def cleanup_by_retention(vacuum: bool = True) -> dict:
+    """레지스트리에 선언된 모든 테이블을 한 번에 정리 — **정리의 단일 진입점**.
+
+    Returns: `{table: 삭제행수}` (+ `_vacuum_mb` 회수 용량).
+    ★ VACUUM 은 마지막에 **한 번만** — 테이블마다 돌리면 209MB 를 N번 재기록한다.
+    """
+    out: dict = {}
+    total = 0
+    for table, (_d, ts_col, _desc) in RETENTION.items():
+        days = retention_days(table)
+        if days <= 0:
+            continue                                   # 영구 보존
+        try:
+            with get_db() as conn:
+                cur = conn.execute(
+                    f'DELETE FROM "{table}" '
+                    f'WHERE "{ts_col}" IS NOT NULL '
+                    f'  AND "{ts_col}" < datetime(\'now\',\'localtime\',?)',
+                    (f"-{days} days",),
+                )
+                n = cur.rowcount or 0
+                conn.commit()
+            if n:
+                out[table] = n
+                total += n
+        except Exception as e:                          # noqa: BLE001
+            log.warning(f"[db/retention] {table} 정리 실패(무시): {e}")
+    if vacuum and total:
+        before = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        try:
+            with sqlite3.connect(str(DB_PATH), timeout=120) as v:
+                v.execute("VACUUM")
+            after = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+            out["_vacuum_mb"] = round((before - after) / 1024 / 1024, 1)
+        except Exception as e:                          # noqa: BLE001
+            log.warning(f"[db/retention] VACUUM 실패(무시): {e}")
+    return out
+
+
+def retention_report() -> list[dict]:
+    """테이블별 현재 행수 · 보존정책 · 정리 대상 행수 — 대시보드/점검용."""
+    rows: list[dict] = []
+    with get_db() as conn:
+        for table, (_d, ts_col, desc) in RETENTION.items():
+            days = retention_days(table)
+            try:
+                n = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            except Exception:                           # noqa: BLE001
+                continue
+            stale = 0
+            if days > 0:
+                try:
+                    stale = conn.execute(
+                        f'SELECT COUNT(*) FROM "{table}" WHERE "{ts_col}" IS NOT NULL '
+                        f'AND "{ts_col}" < datetime(\'now\',\'localtime\',?)',
+                        (f"-{days} days",),
+                    ).fetchone()[0]
+                except Exception:                       # noqa: BLE001
+                    pass
+            rows.append({"table": table, "rows": n, "days": days,
+                         "stale": stale, "desc": desc})
+    return sorted(rows, key=lambda r: -r["rows"])
+
+
 def cleanup_events(days: int = 30) -> int:
-    """events 테이블에서 N일 이전 row 삭제. 삭제 row 수 반환."""
+    """events 테이블에서 N일 이전 row 삭제. 삭제 row 수 반환.
+
+    ★ 하위호환 유지 — 신규 코드는 `cleanup_by_retention()` 을 쓸 것.
+    """
     with get_db() as conn:
         cur = conn.execute(
             "DELETE FROM events WHERE created_at < datetime('now','localtime',?)",

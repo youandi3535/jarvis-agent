@@ -382,11 +382,52 @@ def job_db_backup() -> None:
         send_tg(f"⚠️ DB 백업 실패: {e}")
 
 
-def job_cleanup_events() -> None:
-    """매주 일요일 03:30 — events 테이블 30일 이전 row 삭제."""
+def job_db_retention() -> None:
+    """DB 보존 정책 일괄 적용 — **정리의 단일 진입점** (2026-07-27).
+
+    ★ 종전엔 테이블마다 잡이 따로 있고 **보존 일수가 콜백에 박혀** 있었다
+      (`cleanup_events(days=30)` · `cleanup_vision_history(days=7)`).
+      그 결과 규칙 없는 테이블이 방치됐다 — 실측 `job_runs` **155,483행** ·
+      `qa_ingested_sessions` 15,567행이 무한 누적 중이었다(DB 209MB 의 주범).
+      이제 "며칠 보관하나" 의 답은 `shared/db.RETENTION` **한 곳**에 있고,
+      이 잡은 그것을 집행만 한다. 테이블을 추가하면 레지스트리에 한 줄 적으면 된다.
+    """
     from shared import db
     try:
-        n = db.cleanup_events(days=30)
+        res = db.cleanup_by_retention()
+        vac = res.pop("_vacuum_mb", 0)
+        if res:
+            detail = " · ".join(f"{t} {n:,}" for t, n in sorted(res.items(), key=lambda x: -x[1]))
+            log.info(f"🧹 DB 보존정책 정리: {detail}"
+                     + (f" / VACUUM 회수 {vac}MB" if vac else ""))
+        else:
+            log.info("🧹 DB 보존정책 정리: 삭제 대상 없음")
+    except Exception as e:
+        log.error(f"❌ DB 보존정책 정리 실패: {e}")
+        _g_report("infra", e, module=__name__)
+
+    # ★ 본 DB 밖 SQLite 도 같은 잡에서 집행 (ERRORS [535], 2026-07-27).
+    #   새 잡을 만들지 않는 이유 — "정리" 는 이미 이 잡이 주인이다(① 단일 진입점).
+    #   잡을 쪼개면 어느 잡이 무엇을 담당하는지가 또 흩어진다.
+    #   react_checkpoints.sqlite 는 별도 파일이라 위 루프가 구조적으로 못 닿았다(52MB 누적).
+    try:
+        ext = db.cleanup_external_sqlite()
+        if ext:
+            detail = " · ".join(
+                f"{k} {v['deleted']:,}행 회수 {v['freed_mb']}MB" for k, v in ext.items())
+            log.info(f"🧹 외부 SQLite 정리: {detail}")
+        else:
+            log.info("🧹 외부 SQLite 정리: 삭제 대상 없음")
+    except Exception as e:
+        log.error(f"❌ 외부 SQLite 정리 실패: {e}")
+        _g_report("infra", e, module=__name__)
+
+
+def job_cleanup_events() -> None:
+    """(하위호환) events 정리 — 신규 경로는 `job_db_retention`."""
+    from shared import db
+    try:
+        n = db.cleanup_events(days=db.retention_days("events") or 30)
         log.info(f"🧹 events 테이블 정리: {n}건 삭제")
     except Exception as e:
         log.error(f"❌ events 정리 실패: {e}")
@@ -394,10 +435,10 @@ def job_cleanup_events() -> None:
 
 
 def job_cleanup_vision_history() -> None:
-    """매일 03:15 — vision_agent_history 테이블 7일 이전 row 삭제 (무제한 누적 방지)."""
+    """(하위호환) vision_agent_history 정리 — 신규 경로는 `job_db_retention`."""
     from shared import db
     try:
-        n = db.cleanup_vision_history(days=7)
+        n = db.cleanup_vision_history(days=db.retention_days("vision_agent_history") or 7)
         log.info(f"🧹 vision_agent_history 정리: {n}건 삭제")
     except Exception as e:
         log.error(f"❌ vision_agent_history 정리 실패: {e}")

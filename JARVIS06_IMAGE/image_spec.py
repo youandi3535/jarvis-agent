@@ -301,7 +301,7 @@ def generate_image_spec(
 
     try:
         from shared.llm import invoke_text as _inv
-        raw = _inv("analyzer", prompt, system=_SPEC_SYSTEM, max_tokens=800, temperature=0.2)
+        raw = _inv("analyzer_imagespec", prompt, system=_SPEC_SYSTEM, max_tokens=800, temperature=0.2)
         if raw:
             # JSON 블록 추출
             m = re.search(r'\{[\s\S]*\}', raw)

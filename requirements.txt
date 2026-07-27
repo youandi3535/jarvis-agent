@@ -45,7 +45,7 @@ cfgv==3.5.0
 chardet==7.4.3
 charset-normalizer==3.4.4
 choreographer==1.3.0
-chromadb==1.1.1
+# chromadb==1.1.1   ← 2026-07-27 제거 (ERRORS [537]): 벡터를 qa_entries.embedding BLOB 로 이관
 claude-code-sdk==0.0.25
 click==8.4.1
 coloredlogs==15.0.1

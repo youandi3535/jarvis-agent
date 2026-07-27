@@ -741,6 +741,29 @@
       "source": "learned-vision",
       "created": "2026-07-26",
       "name": "rec30"
+    },
+    {
+      "hero": [
+        "#1a2f13",
+        "#2d4d23"
+      ],
+      "ink": "#24381e",
+      "a1": "#5ce830",
+      "a1s": "#91f174",
+      "a2": "#b937e1",
+      "a2s": "#d375f0",
+      "soft": "#f5f9f4",
+      "muted": "#707f6c",
+      "eyebrow": "#aaee96",
+      "grid": "#eaefe8",
+      "hero_texture": "dots",
+      "card_radius": 18,
+      "template": "<!DOCTYPE html>\n<html lang=\"ko\">\n<head>\n<meta charset=\"UTF-8\">\n<style>\n@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;800;900&display=swap');\n*{margin:0;padding:0;box-sizing:border-box;font-family:'Noto Sans KR',sans-serif}\n/* 좁은 피처 레일에서 히어로 스탯 슬롯을 세로 스택으로 재배치 (인라인 불가 — 자식 선택자) */\n.hero-rail-stats > div{flex-direction:column !important;gap:18px !important}\n.hero-rail-stats > div > div{flex:0 0 auto !important}\n/* 데이터 없는 슬롯은 접힘 (인라인 불가 — :empty 의사클래스) */\n.chart-block:empty{display:none}\n.mini-strip:empty{display:none}\n</style>\n</head>\n<body>\n<div style=\"width:1280px;background:var(--soft);overflow:hidden;position:relative\">\n\n  <!-- ── 비대칭 그리드: 좌측 피처 레일(어두움) / 우측 차트 흐름(밝음) ── -->\n  <div style=\"display:grid;grid-template-columns:500px 780px;align-items:stretch\">\n\n    <!-- 좌측 피처 레일 : 히어로 그라디언트 위 큰 스탯 -->\n    <aside style=\"position:relative;overflow:hidden;padding:56px 44px 48px;background:linear-gradient(155deg,var(--hero0),var(--hero1))\">\n      <div style=\"position:absolute;inset:0;pointer-events:none;background-image:repeating-linear-gradient(48deg,rgba(255,255,255,.05) 0 1px,transparent 1px 20px)\"></div>\n      <div style=\"position:absolute;left:-120px;bottom:-160px;width:440px;height:440px;border-radius:50%;background:radial-gradient(circle,var(--a1),transparent 62%);opacity:.22\"></div>\n      <div style=\"position:relative\">\n        <div style=\"display:inline-flex;align-items:center;gap:9px;padding:8px 16px;border:1px solid var(--eyebrow);border-radius:999px;color:var(--eyebrow);font-size:15px;font-weight:800;letter-spacing:.02em;background:rgba(255,255,255,.06)\">\n          <span style=\"width:9px;height:9px;border-radius:3px;background:var(--a1);display:block\"></span>{{EYEBROW}}</div>\n        <div style=\"margin-top:26px;padding-left:20px;border-left:5px solid var(--a1)\">\n          <div style=\"color:#fff;font-size:52px;font-weight:900;letter-spacing:-.03em;line-height:1.08\">{{TITLE}}</div>\n          <div style=\"margin-top:14px;color:rgba(255,255,255,.72);font-size:18px;font-weight:400;line-height:1.5\">{{SUBTITLE}}</div>\n        </div>\n        <div style=\"height:1px;background:rgba(255,255,255,.14);margin:34px 0 22px\"></div>\n        <div style=\"display:flex;align-items:center;gap:12px;color:var(--a2s);font-size:15px;font-weight:800;letter-spacing:.06em;margin-bottom:20px\">\n          핵심 지표<span style=\"flex:1;height:1px;background:rgba(255,255,255,.10)\"></span></div>\n        <div class=\"hero-rail-stats\">{{HERO_STATS}}</div>\n        <div style=\"margin-top:30px;color:rgba(255,255,255,.55);font-size:14px;font-weight:600\">{{BRAND}}</div>\n      </div>\n    </aside>\n\n    <!-- 우측 차트 흐름 : 밝은 배경 위 세로 리딩 플로우 -->\n    <main style=\"padding:52px 52px 44px;position:relative\">\n      <div style=\"display:flex;align-items:center;justify-content:space-between;margin-bottom:8px\">\n        <span style=\"font-size:15px;font-weight:800;color:var(--muted);letter-spacing:.10em\">데이터 리포트</span>\n        <span style=\"display:inline-flex;align-items:center;gap:8px;padding:7px 15px;border-radius:999px;background:var(--ink);color:#fff;font-size:14px;font-weight:800\">\n          <span style=\"width:8px;height:8px;border-radius:50%;background:var(--a2s);display:block\"></span>{{BRAND}}</span>\n      </div>\n      <div style=\"height:3px;width:64px;border-radius:3px;background:var(--a1);margin:14px 0 10px\"></div>\n      <div class=\"chart-block\" style=\"background:#fff;border-radius:22px;padding:30px 32px;margin-top:22px;border:1px solid var(--grid);border-left:5px solid var(--a2);box-shadow:0 16px 40px rgba(20,16,26,.06)\">{{CHART_1}}</div>\n      <div class=\"chart-block\" style=\"background:#fff;border-radius:22px;padding:30px 32px;margin-top:22px;border:1px solid var(--grid);border-left:5px solid var(--a1);box-shadow:0 16px 40px rgba(20,16,26,.06)\">{{CHART_2}}</div>\n      <div class=\"chart-block\" style=\"background:#fff;border-radius:22px;padding:30px 32px;margin-top:22px;border:1px solid var(--grid);border-left:5px solid var(--a2);box-shadow:0 16px 40px rgba(20,16,26,.06)\">{{CHART_3}}</div>\n    </main>\n  </div>\n\n  <!-- 전폭 보조 카드 스트립 -->\n  <div class=\"mini-strip\" style=\"padding:8px 52px 6px\">{{MINI_CARDS}}</div>\n\n  <!-- 푸터 -->\n  <div style=\"display:flex;align-items:center;justify-content:space-between;padding:22px 52px 30px;margin-top:14px;border-top:1px solid var(--grid)\">\n    <span style=\"color:var(--muted);font-size:14px;font-weight:600\">{{SOURCE}}</span>\n    <span style=\"color:var(--ink);font-size:15px;font-weight:800;letter-spacing:.02em\">{{BRAND}}</span>\n  </div>\n</div>\n</body>\n</html>",
+      "id": "rec31",
+      "source": "learned-auto",
+      "created": "2026-07-27",
+      "name": "rec31",
+      "aesthetic": "learned-auto"
     }
   ]
 }

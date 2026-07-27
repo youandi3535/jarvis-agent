@@ -242,7 +242,7 @@ def generate_section_plan(
     for attempt in range(1, max_retries + 1):
         prompt = spec.section_plan_prompt(topic, context)
         try:
-            raw = invoke_text("analyzer", prompt, temperature=0.5) or ""
+            raw = invoke_text("analyzer_posttype", prompt, temperature=0.5) or ""
         except Exception as e:
             log.warning(f"[section_plan] LLM 호출 실패 ({attempt}/{max_retries}): {e}")
             continue

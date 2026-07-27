@@ -471,7 +471,10 @@ def _get_react_checkpointer():
         try:
             from langgraph.checkpoint.sqlite import SqliteSaver
             import sqlite3 as _sq3
-            _db_path = str(_ROOT / "shared" / "react_checkpoints.sqlite")
+            # ★ 경로는 shared/db.py 가 소유 (ERRORS [537]) — 여기서 조립하지 않는다.
+            from shared.db import CHECKPOINT_PATH as _cp_path
+            _cp_path.parent.mkdir(parents=True, exist_ok=True)
+            _db_path = str(_cp_path)
             _conn = _sq3.connect(_db_path, check_same_thread=False)
             cp = SqliteSaver(_conn)
             cp.setup()
