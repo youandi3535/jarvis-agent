@@ -598,50 +598,16 @@ def opportunity_score(
 
 # ── 통합 파이프라인 ───────────────────────────────────────────
 
-# ── 사용자 favorites 캐시 (5분 TTL) ───────────────────────────
-_FAVORITES_CACHE: dict = {"data": set(), "ts": 0.0}
-_FAV_CACHE_TTL = 300
-
-
-def _get_favorites_set() -> set:
-    """user keyword_favorites 테이블의 키워드 집합 — 5분 캐시.
-
-    enrich_with_opportunity 가 매 키워드마다 DB 호출하지 않게.
-    """
-    import time
-    now = time.time()
-    if now - _FAVORITES_CACHE["ts"] < _FAV_CACHE_TTL and _FAVORITES_CACHE["data"]:
-        return _FAVORITES_CACHE["data"]
-    try:
-        from shared import db as _db
-        rows = _db.get_favorites() or []
-        favs = {(r.get("keyword") if isinstance(r, dict) else str(r)) for r in rows}
-        _FAVORITES_CACHE["data"] = favs
-        _FAVORITES_CACHE["ts"] = now
-    except Exception:
-        pass
-    return _FAVORITES_CACHE["data"]
-
-
 def enrich_with_opportunity(scored: list[dict]) -> list[dict]:
-    """score_keywords() 결과에 opportunity_score를 추가.
-
-    + 사용자 favorites 키워드는 +10 보너스 + `is_favorite` 플래그.
-      → 알림 우선순위 / 대시보드 강조 / RADAR 추천 가중치에 반영.
-    """
-    favs = _get_favorites_set()
+    """score_keywords() 결과에 opportunity_score를 추가."""
     for item in scored:
-        score = opportunity_score(
+        item["opportunity_score"] = opportunity_score(
             item["keyword"],
             item["score"],
             item.get("velocity_score", 0.0),
             item.get("competition", 50.0),
             sector=item.get("sector", ""),
         )
-        if item["keyword"] in favs:
-            score = min(150.0, score + 10.0)
-            item["is_favorite"] = True
-        item["opportunity_score"] = score
     return scored
 
 

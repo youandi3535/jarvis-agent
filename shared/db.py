@@ -171,13 +171,6 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_pa_status   ON post_analysis(status);
             CREATE INDEX IF NOT EXISTS idx_pa_platform ON post_analysis(platform);
 
-            -- 사용자 즐겨찾기 키워드 (대시보드 watch list)
-            CREATE TABLE IF NOT EXISTS keyword_favorites (
-                keyword   TEXT PRIMARY KEY,
-                note      TEXT DEFAULT '',
-                added_at  TEXT DEFAULT (datetime('now','localtime'))
-            );
-
             -- 사용자 설정 (key-value 저장소: 알림 임계치, UI 테마 등)
             CREATE TABLE IF NOT EXISTS user_settings (
                 key        TEXT PRIMARY KEY,
@@ -550,6 +543,13 @@ _MIGRATIONS: list[tuple[int, str, str]] = [
         --   MiniLM(384d)이 섞여 색인돼 검색 시 차원 다른 행을 서로 건너뛰는 상태였다.
         --   적재·조회·검색 스택을 전부 걷어냈으므로 표도 함께 제거한다.
         DROP TABLE IF EXISTS style_corpus;
+    """),
+    (4, "keyword_favorites 제거 — 화면 연결이 없어 3개월간 테스트 1행뿐이던 기능 폐기", """
+        -- ★ 2026-07-27: 찜한 키워드에 주제 점수 +10 을 주는 기능이었으나 추가·삭제 UI 가
+        --   끝내 붙지 않았다. 실측 1행('어린이날', 2026-04-30 수기 입력)뿐이고 3개월간
+        --   변동 0. 그 1행이 지금도 매 주제 선정마다 가산점을 주고 있었다 —
+        --   쓰지 않는 기능이 조용히 선정 결과를 흔드는 상태. 코드·표 전부 폐기.
+        DROP TABLE IF EXISTS keyword_favorites;
     """),
 ]
 
@@ -1157,38 +1157,6 @@ def get_post_summary() -> dict:
         by_platform.setdefault(r["platform"], {"posts": 0, "views": 0})
         by_platform[r["platform"]]["posts"] = max(by_platform[r["platform"]]["posts"], r["cnt"])
     return {"by_platform": by_platform, "today_posts": today_cnt}
-
-
-# ── 즐겨찾기 ──────────────────────────────────────────────────
-
-def add_favorite(keyword: str, note: str = "") -> None:
-    with get_db() as conn:
-        conn.execute(
-            "INSERT INTO keyword_favorites(keyword, note) VALUES(?, ?) "
-            "ON CONFLICT(keyword) DO UPDATE SET note=excluded.note",
-            (keyword, note),
-        )
-
-
-def remove_favorite(keyword: str) -> None:
-    with get_db() as conn:
-        conn.execute("DELETE FROM keyword_favorites WHERE keyword=?", (keyword,))
-
-
-def get_favorites() -> list:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM keyword_favorites ORDER BY added_at DESC"
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def is_favorite(keyword: str) -> bool:
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM keyword_favorites WHERE keyword=?", (keyword,)
-        ).fetchone()
-    return bool(row)
 
 
 # ── Maintenance (백업·정리) ───────────────────────────────────
