@@ -36,7 +36,17 @@ except Exception:
 _default_db = Path.home() / ".jarvis" / "jarvis.sqlite"
 DB_PATH     = Path(os.environ.get("JARVIS_DB_PATH", str(_default_db)))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-BACKUP_DIR  = Path(__file__).parent / "backups"
+# ★ 백업도 프로젝트 밖 — 원본(DB)과 같은 곳에 둔다 (ERRORS [536], 2026-07-27).
+#
+#   종전 `shared/backups/` 는 **프로젝트 폴더 안**이었다. 문제는 용량(6.2GB)이 아니라
+#   **`git clean -xdf` 한 번에 통째로 사라진다**는 것이다 — `.gitignore` 대상이라
+#   그 명령의 삭제 범위에 정확히 들어간다(IDE 의 clean 기능도 같은 것을 쓴다).
+#   백업의 존재 이유는 *실수해도 되게* 만드는 건데, 실수 한 번에 백업이 사라지면
+#   백업이 아니다. 브랜치 이동·워크트리 생성도 같은 위험(실제로 워크트리 잔재 발견).
+#
+#   ② 동적 설계: `JARVIS_BACKUP_DIR` 로 오버라이드 가능. 기본은 DB 와 **같은 부모**에서
+#   파생 — DB 경로를 옮기면 백업도 자동으로 따라간다(두 곳을 각각 고치지 않는다).
+BACKUP_DIR = Path(os.environ.get("JARVIS_BACKUP_DIR", str(DB_PATH.parent / "backups")))
 
 
 class _AutoCloseConnection(sqlite3.Connection):
@@ -1185,12 +1195,83 @@ def is_favorite(keyword: str) -> bool:
 
 # ── Maintenance (백업·정리) ───────────────────────────────────
 
-def backup_db(retention_days: int = 30) -> dict:
-    """SQLite .backup API 로 WAL 안전 백업 + retention 보관.
+# ══════════════════════════════════════════════════════════════════════════════
+#  백업 보존 — 계층 보존(GFS: Grandfather-Father-Son)  ★ ERRORS [536] 2026-07-27
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  ★ 왜 매일 30개가 아닌가 (실측 근거):
+#    종전 "30일 매일 보관" 은 **24개 6.2GB** 였다. 본 DB 가 200MB 이므로
+#    백업 1개 = DB 전체다. 30일을 채우면 **7~8GB** 에서 평형을 이룬다.
+#
+#  ★ 백업은 최근 것일수록 가치가 높다:
+#      "어제 실수로 지웠다"     → 1~2일 전이 필요
+#      "이번 주에 뭔가 틀어졌다" → 7일 전
+#      "3주 전으로 되돌린다"    → 그 사이 3주치 발행·학습이 통째로 날아간다
+#                                → **되돌릴 수 있어도 되돌리지 않는다**
+#    따라서 오래된 구간은 *간격을 벌려도* 실질 손실이 없다.
+#
+#  ★ GFS = 최근은 촘촘히, 과거는 성기게. 백업 소프트웨어의 표준 방식.
+#    커버 기간(30일)은 그대로 두면서 개수를 절반으로 줄인다.
+#
+#  ② 동적 설계: 계층을 코드에 박지 않고 이 레지스트리에서 파생.
+#     무배포 조정: `DB_BACKUP_KEEP_DAILY` / `_WEEKLY` / `_MONTHLY`
+_BACKUP_TIERS: tuple[tuple[str, str, int], ...] = (
+    #  (계층,     설명,                     보관 개수)
+    ("daily",   "최근 N일 — 매일",           7),
+    ("weekly",  "그 이전 — 주 1회(월요일)",    4),
+    ("monthly", "그 이전 — 월 1회(1일)",      3),
+)
 
-    반환: {"backup": Path, "removed": int, "size_kb": int}
+
+def _backup_keep(tier: str, default: int) -> int:
+    """계층별 보관 개수 — *호출 시점* env 조회 (모듈 로드 캡처 금지)."""
+    raw = (os.getenv(f"DB_BACKUP_KEEP_{tier.upper()}") or "").strip()
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return default
+
+
+def _gfs_keep_set(dates: list[date]) -> set[date]:
+    """보관할 날짜 집합을 GFS 규칙으로 *파생*.
+
+    ★ 규칙을 날짜 리스트에서 파생한다 — "오늘부터 며칠 전" 같은 절대 계산을 쓰면
+      백업이 하루 걸렀을 때 구멍이 생긴다. **가진 것 중에서 고른다.**
     """
-    BACKUP_DIR.mkdir(exist_ok=True)
+    if not dates:
+        return set()
+    ds = sorted(set(dates), reverse=True)          # 최신 우선
+    keep: set[date] = set()
+
+    keep.update(ds[: _backup_keep("daily", 7)])    # ① 최근 N개는 무조건
+
+    # ② 주간 — 각 ISO 주(연도,주차)의 *가장 최신* 1개씩
+    seen_w: dict[tuple, date] = {}
+    for d in ds:
+        k = d.isocalendar()[:2]
+        seen_w.setdefault(k, d)
+    keep.update(list(seen_w.values())[: _backup_keep("weekly", 4) + _backup_keep("daily", 7)])
+
+    # ③ 월간 — 각 (연,월)의 가장 최신 1개씩
+    seen_m: dict[tuple, date] = {}
+    for d in ds:
+        seen_m.setdefault((d.year, d.month), d)
+    keep.update(list(seen_m.values())[: _backup_keep("monthly", 3)])
+    return keep
+
+
+def backup_db(retention_days: int = 30) -> dict:
+    """SQLite .backup API 로 WAL 안전 백업 + **GFS 계층 보존**.
+
+    ★ `retention_days` 는 **하위호환용 상한**으로만 쓴다 — 이보다 오래된 것은
+      GFS 가 남기려 해도 지운다. 실제 선별은 `_gfs_keep_set()` 이 한다.
+      (호출부 `job_db_backup(retention_days=30)` 을 안 깨기 위해 시그니처 유지.)
+
+    반환: {"backup": Path, "removed": int, "size_kb": int, "kept": int}
+    """
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     today  = date.today().isoformat()
     target = BACKUP_DIR / f"jarvis_{today}.sqlite"
 
@@ -1213,21 +1294,35 @@ def backup_db(retention_days: int = 30) -> dict:
             cp.execute("PRAGMA wal_checkpoint(FULL)")
         shutil.copy2(DB_PATH, target)
 
-    # 2) Retention — 30일 이전 백업 삭제
-    cutoff  = date.today() - timedelta(days=retention_days)
-    removed = 0
+    # 2) Retention — GFS 계층 보존 (일 7 + 주 4 + 월 3 ≈ 14개로 30일 커버)
+    cutoff = date.today() - timedelta(days=retention_days)
+    found: dict[date, Path] = {}
     for p in BACKUP_DIR.glob("jarvis_*.sqlite"):
         try:
-            d = date.fromisoformat(p.stem.replace("jarvis_", ""))
-            if d < cutoff:
-                p.unlink()
-                removed += 1
-        except Exception:
+            found[date.fromisoformat(p.stem.replace("jarvis_", ""))] = p
+        except Exception:  # noqa: BLE001 — 이름 규칙 밖 파일은 건드리지 않는다
             continue
+
+    keep = _gfs_keep_set(list(found))
+    removed = 0
+    for d, p in found.items():
+        if d in keep and d >= cutoff:
+            continue                       # 보관 대상
+        try:
+            p.unlink()
+            # WAL/SHM 동반 파일도 같이 (남으면 다음 조회에서 혼동)
+            for suf in ("-wal", "-shm"):
+                sib = p.with_name(p.name + suf)
+                if sib.exists():
+                    sib.unlink()
+            removed += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"[db/backup] 만료 백업 삭제 실패(무시) {p.name}: {e}")
 
     return {
         "backup":  target,
         "removed": removed,
+        "kept":    len(found) - removed,
         "size_kb": target.stat().st_size // 1024,
     }
 
