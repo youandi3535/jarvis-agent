@@ -27,7 +27,6 @@ log = logging.getLogger(__name__)
 ROOT = Path(__file__).parent.parent
 
 _TIMEOUT    = 1200  # 최대 20분 (★ ERRORS 박제 — 164파일 전수 검토 시 900s 초과 → 1200s, --max-turns 80 병행)
-_MAX_TG_LEN = 3500  # 텔레그램 메시지 최대 글자
 # ★ 오류 수정 모델 — 단일 계층(ADR 017). ID 리터럴을 박지 않고 shared/llm.MODELS 에서 파생
 #   (사본을 두면 모델 교체 시 여기만 옛 모델을 계속 가리킨다 — ERRORS [491]).
 #   full model ID 로 넘기는 관행은 유지 (ERRORS [184] — bare alias 는 1M context 자동 승격 위험).
@@ -686,20 +685,6 @@ def run_auto_repair() -> None:
     finally:
         # ★ heartbeat 스레드 정지 — 종료 경로 무엇이든 무조건 정지
         _hb_stop.set()
-
-
-def job_auto_repair() -> None:
-    """APScheduler 콜백 진입점."""
-    try:
-        run_auto_repair()
-    except Exception as e:
-        log.error("[AutoRepair] job 최상위 예외: %s", e)
-        _g_report("master", e, module=__name__)
-        try:
-            from shared.notify import send_tg
-            send_tg(f"❌ *자가 수정 잡 예외*: {e}")
-        except Exception:
-            pass
 
 
 _TARGETED_TIMEOUT = 600  # 최대 10분 (full 15분의 2/3)

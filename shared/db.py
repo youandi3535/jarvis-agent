@@ -597,20 +597,6 @@ def _apply_migrations() -> int:
     return applied
 
 
-def schema_status() -> dict:
-    """스키마 상태 — 현재 버전 · 미적용 목록 (점검·대시보드용)."""
-    cur = schema_version()
-    pending = [{"version": v, "note": n} for v, n, _ in sorted(_MIGRATIONS) if v > cur]
-    with get_db() as conn:
-        try:
-            hist = [dict(r) for r in conn.execute(
-                "SELECT version, note, applied_at FROM schema_migrations ORDER BY version")]
-        except Exception:                               # noqa: BLE001
-            hist = []
-    return {"version": cur, "latest": max((v for v, _, _ in _MIGRATIONS), default=0),
-            "pending": pending, "applied": hist}
-
-
 # ── Trends ────────────────────────────────────────────────────
 
 def save_trends(date_str: str, scored_keywords: list):
@@ -1467,31 +1453,6 @@ def cleanup_by_retention(vacuum: bool = True) -> dict:
     return out
 
 
-def retention_report() -> list[dict]:
-    """테이블별 현재 행수 · 보존정책 · 정리 대상 행수 — 대시보드/점검용."""
-    rows: list[dict] = []
-    with get_db() as conn:
-        for table, (_d, ts_col, desc) in RETENTION.items():
-            days = retention_days(table)
-            try:
-                n = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-            except Exception:                           # noqa: BLE001
-                continue
-            stale = 0
-            if days > 0:
-                try:
-                    stale = conn.execute(
-                        f'SELECT COUNT(*) FROM "{table}" WHERE "{ts_col}" IS NOT NULL '
-                        f'AND "{ts_col}" < datetime(\'now\',\'localtime\',?)',
-                        (f"-{days} days",),
-                    ).fetchone()[0]
-                except Exception:                       # noqa: BLE001
-                    pass
-            rows.append({"table": table, "rows": n, "days": days,
-                         "stale": stale, "desc": desc})
-    return sorted(rows, key=lambda r: -r["rows"])
-
-
 # ── 자가학습 — learn_log ────────────────────────────────────────
 
 def learn_log_upsert(keyword: str, sector: str, platform: str,
@@ -2167,126 +2128,6 @@ def mark_error_status(error_id: int, status: str):
 #   · 코드버그 타입   : "실제로 코드를 고쳐 종결된 이력(status='fixed' AND fixed_file 존재)"
 #                      이 있는 error_type 집합을 DB 에서 파생 → ignored 와 교집합.
 #     손으로 나열하지 않으므로 새 오류 타입이 생겨도 자동으로 검사 대상이 된다.
-
-def ignored_bucket_stats(days: int = 30, top: int = 10) -> dict:
-    """격리(ignored) 버킷 집계 — 사유별 분포·추세·코드버그 타입 혼입 여부.
-
-    guardian_agent 가 이 함수를 호출해 보고한다. 표시용 수치를 코드에 박지 말고
-    *런타임 조회로 파생* 하기 위한 단일 진입점.
-
-    Args:
-        days: 추세(trend) 및 최근 창 집계 일수
-        top:  분포 상위 N개
-
-    Returns:
-        {
-          "total":            전체 ignored 건수,
-          "recent":           최근 days 일 ignored 건수,
-          "window_days":      days,
-          "reason_missing":   resolution NULL 건수 (사유 미기록 — 관측 결손 본체),
-          "reason_missing_pct": 비율(%),
-          "by_reason":        [{"reason","n"}]  사유 앞머리 기준 상위,
-          "by_type":          [{"error_type","n"}],
-          "by_source":        [{"source","n"}],
-          "trend":            [{"date","n"}]    최근 days 일자별,
-          "codebug_suspects": [{"error_type","ignored","code_fixed"}]
-                              — ignored 인데 *같은 타입이 코드 수정으로 종결된 이력* 이
-                                있는 것들. 진짜 코드 버그가 격리통에 섞였을 가능성.
-          "status_totals":    {status: n}  (DB 파생 — 전체 버킷 비교용)
-        }
-    """
-    out: dict = {
-        "total": 0, "recent": 0, "window_days": int(days),
-        "reason_missing": 0, "reason_missing_pct": 0.0,
-        "by_reason": [], "by_type": [], "by_source": [],
-        "trend": [], "codebug_suspects": [], "status_totals": {},
-    }
-    try:
-        since = f"-{int(days)} day"
-        with get_db() as conn:
-            # 전체 상태 분포 — 상태 목록을 박지 않고 DB 에서 파생
-            out["status_totals"] = {
-                r["status"]: r["n"] for r in conn.execute(
-                    "SELECT COALESCE(status,'(null)') status, COUNT(*) n "
-                    "FROM error_log GROUP BY 1 ORDER BY n DESC"
-                ).fetchall()
-            }
-            out["total"] = int(conn.execute(
-                "SELECT COUNT(*) n FROM error_log WHERE status='ignored'"
-            ).fetchone()["n"])
-            out["recent"] = int(conn.execute(
-                "SELECT COUNT(*) n FROM error_log WHERE status='ignored' "
-                "AND timestamp >= datetime('now',?,'localtime')", (since,)
-            ).fetchone()["n"])
-
-            # 사유 미기록 — 격리 버킷의 관측 결손 본체
-            out["reason_missing"] = int(conn.execute(
-                "SELECT COUNT(*) n FROM error_log WHERE status='ignored' "
-                "AND (resolution IS NULL OR TRIM(resolution)='')"
-            ).fetchone()["n"])
-            if out["total"]:
-                out["reason_missing_pct"] = round(
-                    out["reason_missing"] * 100.0 / out["total"], 1)
-
-            # 사유별 분포 — resolution 앞머리 60자로 버킷팅(자유서술이라 접두 기준)
-            out["by_reason"] = [
-                {"reason": r["reason"], "n": int(r["n"])}
-                for r in conn.execute(
-                    "SELECT CASE WHEN resolution IS NULL OR TRIM(resolution)='' "
-                    "            THEN '(사유 미기록)' "
-                    "       ELSE SUBSTR(TRIM(resolution),1,60) END reason, "
-                    "       COUNT(*) n FROM error_log WHERE status='ignored' "
-                    "GROUP BY 1 ORDER BY n DESC LIMIT ?", (int(top),)
-                ).fetchall()
-            ]
-            out["by_type"] = [
-                {"error_type": r["error_type"], "n": int(r["n"])}
-                for r in conn.execute(
-                    "SELECT COALESCE(error_type,'(null)') error_type, COUNT(*) n "
-                    "FROM error_log WHERE status='ignored' "
-                    "GROUP BY 1 ORDER BY n DESC LIMIT ?", (int(top),)
-                ).fetchall()
-            ]
-            out["by_source"] = [
-                {"source": r["source"], "n": int(r["n"])}
-                for r in conn.execute(
-                    "SELECT COALESCE(source,'(null)') source, COUNT(*) n "
-                    "FROM error_log WHERE status='ignored' "
-                    "GROUP BY 1 ORDER BY n DESC LIMIT ?", (int(top),)
-                ).fetchall()
-            ]
-            out["trend"] = [
-                {"date": r["d"], "n": int(r["n"])}
-                for r in conn.execute(
-                    "SELECT SUBSTR(timestamp,1,10) d, COUNT(*) n FROM error_log "
-                    "WHERE status='ignored' AND timestamp >= datetime('now',?,'localtime') "
-                    "GROUP BY 1 ORDER BY d", (since,)
-                ).fetchall()
-            ]
-
-            # ★ 코드버그 타입 혼입 — '코드를 실제로 고쳐 종결된 이력' 을 가진 타입을
-            #   DB 에서 파생해 ignored 와 교집합. 목록 하드코딩 0.
-            out["codebug_suspects"] = [
-                {"error_type": r["error_type"],
-                 "ignored": int(r["ig"]), "code_fixed": int(r["fx"])}
-                for r in conn.execute(
-                    "WITH codebug AS ("
-                    "  SELECT error_type, COUNT(*) fx FROM error_log "
-                    "  WHERE status='fixed' AND fixed_file IS NOT NULL "
-                    "    AND TRIM(COALESCE(fixed_file,''))<>'' "
-                    "  GROUP BY error_type"
-                    "), ign AS ("
-                    "  SELECT error_type, COUNT(*) ig FROM error_log "
-                    "  WHERE status='ignored' GROUP BY error_type"
-                    ") SELECT ign.error_type, ign.ig, codebug.fx "
-                    "FROM ign JOIN codebug USING(error_type) "
-                    "ORDER BY ign.ig DESC LIMIT ?", (int(top),)
-                ).fetchall()
-            ]
-    except Exception as e:                      # 관측 헬퍼는 절대 파이프라인을 막지 않는다
-        out["error"] = str(e)[:200]
-    return out
-
 
 def try_claim_error(error_id: int, claim_status: str = "analyzing",
                      from_statuses: tuple = ("new", "ignored")) -> bool:

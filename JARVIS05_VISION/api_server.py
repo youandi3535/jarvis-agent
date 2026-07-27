@@ -236,9 +236,3 @@ def start_api_server() -> None:
     log.info(f"✅ VISION API 서버 시작 — http://127.0.0.1:{VISION_PORT}/docs")
 
 
-def get_app():
-    """hub.py 또는 테스트에서 직접 앱 인스턴스 접근용."""
-    global _app
-    if _app is None:
-        _app = _build_app()
-    return _app

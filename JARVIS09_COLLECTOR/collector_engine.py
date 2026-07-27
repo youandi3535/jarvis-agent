@@ -208,25 +208,6 @@ def _deep_fetch_thin_docs(results: list[CollectionResult], theme: str) -> list[C
     return results
 
 
-def _clean_raw_docs(raw_docs: list[RawDocument], theme: str,
-                    seen_urls: set[str]) -> list[CollectionResult]:
-    out = []
-    for raw in raw_docs:
-        if not raw or raw.url in seen_urls:
-            continue
-        seen_urls.add(raw.url)
-        try:
-            raw.extra["theme"] = raw.extra.get("theme") or theme
-            cleaned = clean_document(raw)
-            if cleaned.word_count >= 20:
-                if raw.extra.get("question_id"):
-                    cleaned.meta["question_id"] = raw.extra["question_id"]
-                out.append(cleaned)
-        except Exception as e:
-            log.debug(f"[research] 정제 실패({raw.url}): {e}")
-    return out
-
-
 def select_by_trust_quota(docs: list[CollectionResult],
                           budget: int | None = None) -> list[CollectionResult]:
     """★ 신뢰 서열 쿼터 선별 (사용자 박제 2026-07-06 v2 — "인포그래픽 만들 만큼 총 15개").

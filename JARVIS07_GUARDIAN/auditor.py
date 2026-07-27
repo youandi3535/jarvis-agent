@@ -164,8 +164,6 @@ def audit_constitution_violations() -> ConstitutionAudit:
 # 2) ERRORS.md 회고 — 동일 교훈 3회+ 반복 검출
 # ──────────────────────────────────────────────────────────────
 
-# ERRORS.md 항목 헤더 패턴 (자유 형식이라 휴리스틱)
-_ERROR_HEADER_RE = re.compile(r"^##?\s*\[(\d+)\]\s+(.+?)$", re.MULTILINE)
 _LESSON_LINE_RE = re.compile(r"^\s*[교훈|결론|얻은\s*교훈]+\s*[:：]\s*(.+?)$", re.MULTILINE)
 _DATE_RE = re.compile(r"\b(20\d{2})[\-.](\d{1,2})[\-.](\d{1,2})\b")
 

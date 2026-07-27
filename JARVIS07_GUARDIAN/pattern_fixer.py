@@ -1911,14 +1911,6 @@ _STATIC_FIXERS_CORE: list[tuple[str, object]] = [
     ("unpack_mismatch", _fix_unpack_mismatch),
 ]
 
-# legacy 호환 참조
-_PATTERN_FIXERS = [
-    _fix_relative_import, _fix_none_slicing, _fix_name_typo,
-    _fix_none_attribute,  _fix_import_name,  _fix_unpack_mismatch,
-    _fix_from_learned,
-]
-
-
 def try_pattern_fix(error_record: dict) -> Optional[dict]:
     """패턴 기반 자동 수정 시도. 성공 시 patch dict 반환, 실패 시 None.
 

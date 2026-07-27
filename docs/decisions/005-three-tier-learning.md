@@ -73,5 +73,5 @@ JARVIS07 GUARDIAN 의 자동 수정 시스템 도입 초기에는 *모든 오류
 3-layer 가 모두 `record_pattern_hit()` 또는 `record_external_change()` 로 학습 자산화 → 어떤 경로의 변경도 누락 없이 캡처.
 
 ## 변경 정책
-- 새 fixer 추가: `pattern_fixer.py` `_fix_<name>(error_record)` 함수 + `_PATTERN_FIXERS` + `_FIXER_REGISTRY` 갱신 + `severity._PATTERN_FIXABLE_TYPES` 갱신 + 가상 traceback 단위 테스트.
+- 새 fixer 추가: `pattern_fixer.py` `_fix_<name>(error_record)` 함수 + `_FIXER_REGISTRY` 갱신 + `severity._PATTERN_FIXABLE_TYPES` 갱신 + 가상 traceback 단위 테스트.
 - learned_patterns 노이즈 게이트 변경은 *반드시* 본 ADR 갱신.

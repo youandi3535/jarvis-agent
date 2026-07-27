@@ -276,34 +276,6 @@ def _card_title(n, pal, title, unit):
             f"<div style='font-size:17px;font-weight:800;color:#16202e;flex:1'>{title}</div>"
             f"<div style='font-size:12.5px;color:#8893a6'>{unit}</div></div>")
 
-# ── 데이터셋 → 차트 ────────────────────────────────────────────────────
-def _chart_for(ds, pal, gid, w):
-    kind = _infer_kind(ds)
-    data = ds.get("data") or []
-    L = [str(r.get("label", "")) for r in data]; V = []
-    for r in data:
-        try: V.append(float(str(r.get("value")).replace(",", "")))
-        except (TypeError, ValueError): V.append(0.0)
-    unit = ds.get("unit", "")
-    if not V:
-        return ""
-    # 단일 수치 → 큰 숫자 스탯 카드 (깨진 1-막대/100% 도넛 방지)
-    if len(V) == 1:
-        return stat_block(_fmt(V[0]), L[0] if L else "", unit, pal["c1"], pal["c2"])
-    if kind == "timeseries":
-        return area_chart(L, V, gid, pal["c1"], W=w, H=300)
-    if kind == "ratio":
-        tot = sum(abs(x) for x in V) or 1
-        return donut_chart(round(V[0] / tot * 100, 1), f"{V[0]:g}", L[0][:8] if L else "", gid, pal["c1"], pal["c2"])
-    if kind == "category":
-        if len(V) >= 4:
-            rows = sorted(zip(L, V), key=lambda r: r[1], reverse=True)
-            return hbar_chart(rows, pal["c1"], pal["acc"], unit=unit, W=w)
-        return vbar_chart(L, V, gid, pal["c1"], pal["acc"], W=w, H=280, unit=unit)
-    # kpi
-    return vbar_chart(L, V, gid, pal["c1"], pal["acc"], W=w, H=240, unit=unit)
-
-
 # (select_design·render_infographic 제거 — 라이브 경로 generate_infographic 이 render_pro/
 #  render_spec 만 사용, 호출 0: 전수감사 DELETE[19])
 
