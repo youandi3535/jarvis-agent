@@ -518,7 +518,7 @@ def _expand_theme(theme: str) -> list:
     try:
         from shared.llm import invoke_text
         # ★ _nonessential=True: 스로틀 시 즉시 폴백, circuit breaker 카운트 제외
-        raw = invoke_text("analyzer", _prompt, max_tokens=120, temperature=0, _nonessential=True)
+        raw = invoke_text("analyzer_chart", _prompt, max_tokens=120, temperature=0, _nonessential=True)
         if not raw or not raw.strip():
             # 빈 응답 = 회로차단기 선제 차단 or API 스로틀 — 캐시 미저장, 다음 호출 재시도
             _throttled = True
@@ -969,7 +969,7 @@ def _extract_series_from_docs(series: dict, docs: list):
     try:
         from shared.llm import invoke_text
         # ★ _nonessential=True: 스로틀 시 즉시 폴백, circuit breaker 카운트 제외
-        raw = invoke_text("analyzer",
+        raw = invoke_text("analyzer_chart",
                           _SERIES_PROMPT.format(name=series["name"], unit=series.get("unit", ""), excerpts=excerpts),
                           system=_SERIES_SYSTEM, max_tokens=700, temperature=0.1, _nonessential=True)
     except Exception as e:
@@ -1161,7 +1161,7 @@ def _relevance_filter(theme: str, description: str, datasets: list) -> list:
         try:
             from shared.llm import invoke_text
             # ★ _nonessential=True: 스로틀 시 즉시 폴백, circuit breaker 카운트 제외
-            raw = invoke_text("analyzer", prompt, max_tokens=200, temperature=0, _nonessential=True)
+            raw = invoke_text("analyzer_chart", prompt, max_tokens=200, temperature=0, _nonessential=True)
             if not raw or not raw.strip():
                 log.warning(f"[chart_data] '{theme}' 관련성 게이트 빈 응답(스로틀) → 결정론 백스톱")
                 break
@@ -1350,7 +1350,7 @@ def _batch_extract_all(pending_items: list, theme: str) -> list[dict]:
     )
     try:
         from shared.llm import invoke_text
-        raw = invoke_text("analyzer", prompt, system=_BATCH_SYSTEM,
+        raw = invoke_text("analyzer_chart", prompt, system=_BATCH_SYSTEM,
                           max_tokens=4000, temperature=0.1, _nonessential=True)
     except Exception as e:
         log.warning(f"[chart_data] batch 추출 LLM 실패: {e}")

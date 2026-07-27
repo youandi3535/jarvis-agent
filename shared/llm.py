@@ -157,12 +157,76 @@ MODELS: dict[str, ModelSpec] = {
         temperature=0.0,
         description="마스터 라우터 — 인텐트 분류·도메인 매칭 (Sonnet 5)",
     ),
+
+    # ★ 테마 종목 폴백 (ERRORS [540]) — 종전엔 `router` alias 를 빌려 쓰고 있었다.
+    #   `router` 는 "마스터 라우터 인텐트 분류" 인데 실제로는 JARVIS09 가 네이버 테마에서
+    #   종목·티커를 못 찾았을 때의 **LLM 폴백**이었다 — 이름이 하는 일과 달라 대시보드가 거짓말을 했다.
+    "collect_theme_fallback": ModelSpec(
+        alias="collect_theme_fallback",
+        model_id="claude-sonnet-5",
+        max_tokens=1000,
+        temperature=0.6,   # 후보를 넓게 뽑아야 하므로 라우팅(0.0)보다 높다
+        description="테마 종목·티커 폴백 — 카탈로그에서 못 찾을 때 (JARVIS09)",
+    ),
+
+    # ══ analyzer 계열 — `analyzer_{용도}` (사용자 박제 2026-07-27, ERRORS [540]) ══
+    #
+    #   ★ 왜 쪼갰나: `analyzer` 하나가 **5개 모듈 13곳**에서 전혀 다른 일을 하고 있었다 —
+    #     일일 리뷰 · 차트 데이터 판정 · 근거팩 추출 · 이미지 스펙 · 수집 설계 · 글종류 판정.
+    #     대시보드에 `analyzer` 만 찍히니 **무슨 작업이 토큰을 쓰는지 구분이 안 됐다.**
+    #     writer 계열을 8개로 쪼갠 것과 같은 이유·같은 방식.
+    #   ★ ② 동적 설계: alias 를 여기 추가하면 `_BG_ALIASES`·`_PUBLISH_ESSENTIAL_CAP` 등
+    #     파생물이 자동으로 따라온다. 별도 목록을 만들지 않는다.
+    #   ★ max_tokens·temperature 를 용도에 맞춘다 — 이름만 나누고 값이 같으면 그게 또
+    #     `writer_fast` 같은 거짓말이 된다(ERRORS 직전 교훈).
+    "analyzer_quality": ModelSpec(
+        alias="analyzer_quality",
+        model_id="claude-sonnet-5",
+        max_tokens=2500,
+        temperature=0.2,
+        description="발행 글 품질 분석·일일 리뷰 — 개선 제안 도출",
+    ),
+    "analyzer_chart": ModelSpec(
+        alias="analyzer_chart",
+        model_id="claude-sonnet-5",
+        max_tokens=1600,
+        temperature=0.0,   # 차트 수치 판정 — 흔들리면 안 된다
+        description="차트 데이터 판정·단위·랭크 (JARVIS09 chart_data)",
+    ),
+    "analyzer_evidence": ModelSpec(
+        alias="analyzer_evidence",
+        model_id="claude-sonnet-5",
+        max_tokens=6000,   # 전 문서 단일 호출 (ERRORS [374])
+        temperature=0.2,
+        description="근거팩 추출 — 수집 문서에서 fact·수치 뽑기",
+    ),
+    "analyzer_imagespec": ModelSpec(
+        alias="analyzer_imagespec",
+        model_id="claude-sonnet-5",
+        max_tokens=3000,
+        temperature=0.3,
+        description="이미지 스펙·SVG 코드 생성 (JARVIS06)",
+    ),
+    "analyzer_plan": ModelSpec(
+        alias="analyzer_plan",
+        model_id="claude-sonnet-5",
+        max_tokens=2500,
+        temperature=0.2,
+        description="수집 설계 — 리서치 플랜 (ADR 012, 수집 품질의 조타수)",
+    ),
+    "analyzer_posttype": ModelSpec(
+        alias="analyzer_posttype",
+        model_id="claude-sonnet-5",
+        max_tokens=2500,
+        temperature=0.5,
+        description="글종류별 섹션 구성 판정 (post_type_specs)",
+    ),
     "analyzer": ModelSpec(
         alias="analyzer",
         model_id="claude-sonnet-5",
         max_tokens=2500,
         temperature=0.2,
-        description="post_quality·daily_review 분석 (Sonnet 5)",
+        description="[구] analyzer_* 로 분화됨 — 하위호환 별칭",
     ),
     "coder": ModelSpec(
         alias="coder",
@@ -462,7 +526,64 @@ def _sanitize_prompt(s: str) -> str:
 # ★ 토큰 계측용 alias 전파 (ERRORS [456]) — _run_sdk_sync 는 model 만 받으므로
 #   "어느 용도(alias)가 얼마나 썼는지" 를 귀속하려면 호출 문맥이 필요하다.
 import contextvars as _contextvars
+import sys as _sys
 _CURRENT_ALIAS: "_contextvars.ContextVar[str]" = _contextvars.ContextVar("llm_alias", default="")
+
+
+def _bind_alias(alias: str) -> None:
+    """★ alias 귀속 단일 진입점 — **모든 LLM 통로가 이걸 거친다** (ERRORS [540], 2026-07-27).
+
+    ★ 왜 만들었나: 종전엔 `invoke_text_result` **한 곳에서만** `_CURRENT_ALIAS.set()` 을 했다.
+      `invoke_vision` 은 `alias` 를 인자로 받아놓고 컨텍스트에 넣지 않아, 비전 호출이 전부
+      폴백 라벨 `"vision"` 으로 찍혔다 — **MODELS 에 없는 가짜 alias 가 DB 에 쌓였다**.
+      실측(2026-07-27): `design_learner` 의 `invoke_vision("writer_long_learn", …)` 9회가
+      전부 `alias="vision"`(캐시읽기 349,701)으로 기록돼 **세분화가 이 통로에서만 무력**했다.
+
+    ★ CLAUDE.md 가 박제한 같은 병의 재발이다 —
+      *"실례 [474]: 발행 우선 규칙을 `invoke_text` 에만 걸어 `run_sdk_query` 로 우회됨"*.
+      한 통로에만 걸면 나머지로 샌다. → **귀속을 이 함수 하나로 모으고 모든 통로가 호출**한다.
+
+    ★ 왜 컨텍스트매니저가 아닌가: `contextvars` 는 스레드/태스크 로컬이라 `set` 만으로도
+      이 호출 문맥에 갇힌다. 게다가 호출부(`invoke_text_result`)는 긴 재시도 루프에
+      중간 return 이 많아 `with` 로 감싸면 구조가 크게 흔들린다. 다음 진입점이 다시 덮으므로
+      누수 위험도 없다 — **비어 있는 경우만 문제이고 그건 `alias_selfcheck()` 가 감시한다.**
+    """
+    _CURRENT_ALIAS.set(alias or "")
+
+
+def alias_selfcheck() -> list[str]:
+    """★ alias 귀속이 *실제로 되고 있는지* 동작으로 확인 (ERRORS [540]).
+
+    이 결함은 예외를 안 던지고 **계측 라벨만 조용히 틀어진다** — 그래서 감시가 필요하다.
+    """
+    issues: list[str] = []
+    try:
+        import inspect as _insp
+        src = _insp.getsource(_sys.modules[__name__])
+        # 통로마다 _bind_alias 를 거치는가 (누락 시 그 통로만 라벨이 샌다)
+        for fn in ("def invoke_text_result", "def invoke_vision"):
+            i = src.find(fn)
+            if i < 0:
+                continue
+            j = src.find("\ndef ", i + 1)
+            if "_bind_alias(" not in src[i: j if j > 0 else len(src)]:
+                issues.append(f"[A1] {fn.split()[1]} 가 _bind_alias 를 안 거침 — alias 라벨 유실")
+        # MODELS 에 없는 alias 가 DB 에 쌓이고 있지 않은가
+        from shared.db import get_db
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT alias, COUNT(*) FROM llm_token_usage "
+                "WHERE ts >= datetime('now','localtime','-1 day') GROUP BY alias"
+            ).fetchall()
+        for a, n in rows:
+            if a and a not in MODELS:
+                issues.append(f"[A2] MODELS 에 없는 alias 가 기록됨: {a!r} ({n}건)")
+            if not a:
+                issues.append(f"[A3] alias 빈 값으로 기록됨 ({n}건) — 귀속 누락 통로 존재")
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"[A0] alias_selfcheck 실패: {type(e).__name__}: {e}")
+    return issues
+
 
 _LLM_MAX_CONCURRENCY = max(1, int(os.getenv("LLM_MAX_CONCURRENCY", "1") or "1"))
 _LLM_SPAWN_SEM = _threading.BoundedSemaphore(_LLM_MAX_CONCURRENCY)
@@ -1245,7 +1366,10 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
     def _record_vision() -> None:
         try:
             from shared.token_usage import record_call
-            record_call(alias=_CURRENT_ALIAS.get() or "vision", model=model,
+            # ★ 폴백을 "vision" 으로 두지 않는다 (ERRORS [540]) — MODELS 에 없는 이름이
+            #   진짜 alias 인 척 DB 에 쌓여 세분화를 무력화했다. 비어 있으면 *비어 있음이
+            #   드러나야* 고칠 수 있다. 통로 구분은 `source="vision"` 이 이미 담당한다.
+            record_call(alias=_CURRENT_ALIAS.get() or "", model=model,
                         usage=_vmeter["usage"], cost_usd=_vmeter["cost"],
                         duration_ms=_vmeter["dur"], num_turns=_vmeter["turns"],
                         ok=bool(parts), source="vision")
@@ -1293,8 +1417,11 @@ def invoke_vision(alias: str, prompt: str, image_paths: list,
         return ""
     model = _ALIAS_MODEL.get(alias, _DEFAULT_MODEL_ID)
     try:
+        # ★ alias 귀속 (ERRORS [540]) — 종전엔 이 통로가 빠져 비전 호출이 전부
+        #   가짜 alias "vision" 으로 찍혔다. 텍스트 통로와 **같은 헬퍼**를 쓴다(① 단일 진입점).
+        _bind_alias(alias)
         return _invoke_sdk_vision(prompt, model, [str(p) for p in image_paths],
-                                  timeout=timeout, cwd=cwd)
+                                      timeout=timeout, cwd=cwd)
     except Exception as e:
         print(f"  ❌ invoke_vision 오류: {e}")
         return ""
@@ -1481,7 +1608,11 @@ def invoke_text_result(alias: str, prompt: str, system: str = "", timeout: int =
     #   상한을 바꾸려면 두 곳을 따로 고쳐야 했고, 두 층의 곱(최악 증폭)이 통제 불능이었다.
     retries = max(1, min(_max_retries(), _retries))
     backoff = True
-    _CURRENT_ALIAS.set(alias or "")   # ★ 토큰 계측 귀속 (ERRORS [456])
+    # ★ 토큰 계측 귀속 (ERRORS [456]) — 헬퍼 경유 (ERRORS [540]: 통로별 누락 차단).
+    #   ★ 여기서 `with` 를 쓰지 않는 이유: 이 함수는 아래 긴 재시도 루프 전체에서 alias 가
+    #     유지돼야 하고 중간에 return 하는 경로가 많다. contextvar 는 스레드/태스크 로컬이라
+    #     set 만으로도 이 호출 문맥에 갇힌다. (중첩이 실제로 생기는 곳은 vision 통로 뿐)
+    _bind_alias(alias)
 
     # ★ 글로벌 데드라인 강등 — 발행 파이프라인(economic_poster 등)이 설정
     try:

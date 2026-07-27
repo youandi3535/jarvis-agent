@@ -222,7 +222,7 @@ def plan_data_sources(topic: str, sector: str = "", description: str = "",
         try:
             # ★ _essential=True (ERRORS [300]): 설계는 수집 품질의 조타수 —
             #   회로 차단 중에도 1회 실시도 보장 (즉시 폴백 금지).
-            raw = invoke_text("analyzer", prompt, system=_PLAN_SYSTEM,
+            raw = invoke_text("analyzer_plan", prompt, system=_PLAN_SYSTEM,
                               max_tokens=1200, temperature=0.2 if _attempt == 0 else 0.5,
                               _essential=True, timeout=90)
         except Exception as e:
