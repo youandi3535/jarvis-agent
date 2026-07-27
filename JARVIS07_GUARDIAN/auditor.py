@@ -38,7 +38,12 @@ from typing import Any
 log = logging.getLogger("jarvis.guardian.auditor")
 
 _ROOT = Path(__file__).resolve().parents[1]
-_LEARNED_JSON = Path(__file__).resolve().parent / "learned_patterns.json"
+# ★ 경로 상수를 두지 않는다 — 학습 패턴 조회의 주인은 pattern_fixer 다 (① 단일 진입점).
+#   종전엔 여기 사본 경로를 들고 `json.loads(read_text())` 로 직접 읽어
+#   json_store 의 손상 격리를 우회했다 (손상 시 조용히 "패턴 0개").
+def _learned_patterns() -> list:
+    from JARVIS07_GUARDIAN.pattern_fixer import all_patterns  # noqa: PLC0415
+    return all_patterns()
 _ERRORS_MD = Path(__file__).resolve().parent / "ERRORS.md"
 
 
@@ -255,16 +260,13 @@ def audit_learned_patterns_meta_learning(min_hits: int = 5) -> MetaLearningSugge
 
     이런 패턴은 *정적 fixer 로 승급* 할 가치가 있음 (pattern_fixer.py 의 5종 외 신설).
     """
-    if not _LEARNED_JSON.exists():
-        return MetaLearningSuggestion(candidates=[])
-
     try:
-        data = json.loads(_LEARNED_JSON.read_text(encoding="utf-8"))
+        _pats = _learned_patterns()
     except Exception:
         return MetaLearningSuggestion(candidates=[])
 
     out: list[dict[str, Any]] = []
-    for p in data.get("patterns", []):
+    for p in _pats:
         hit = int(p.get("hit_count", 0))
         fixer = (p.get("fixer_name") or p.get("fixer") or "").strip()
         # LLM patch 만 후보 (정적 fixer 는 이미 처리됨)
@@ -296,21 +298,15 @@ def audit_domain_distribution() -> DomainDistribution:
     학습 패턴이 *과도하게 한 도메인에 집중*되어 있는지 검출. 집중 = 그 도메인의
     *근본 결함* (예: image 도메인 40+ → 작성·발행 단계 자체 결함).
     """
-    if not _LEARNED_JSON.exists():
-        return DomainDistribution(
-            by_domain={}, by_domain_hits={}, skewed_domains=[],
-            unknown_count=0, top_fixers_by_domain={},
-        )
-
     try:
-        data = json.loads(_LEARNED_JSON.read_text(encoding="utf-8"))
+        _pats = _learned_patterns()
     except Exception:
         return DomainDistribution(
             by_domain={}, by_domain_hits={}, skewed_domains=[],
             unknown_count=0, top_fixers_by_domain={},
         )
 
-    pats = data.get("patterns", [])
+    pats = _pats
     by_domain: dict[str, int] = {}
     by_domain_hits: dict[str, int] = {}
     fixers_by_domain: dict[str, dict[str, int]] = {}

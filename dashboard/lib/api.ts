@@ -55,6 +55,25 @@ export type BacktestRow = { tested_at: string; backtest_type: string; score: num
 export type InsightRow = { insight_key: string; insight_type: string; description: string; directive: string; weight: number; scope: string; occurrences: number; last_seen: string };
 export type JobRun     = { job_id: string; job_name: string; started_at: string; success: number; error: string; owner_agent: string };
 export type VisionAgent = { agent_id: string; status: string; last_seen: string; metrics?: Record<string, number> };
+
+// ── 에이전트 상태 흐름 (30일) ─────────────────────────────
+// ★ 구간 조립·위치(%) 계산은 전부 서버(JARVIS05_VISION/collector.get_status_timeline).
+//   여기 타입은 *받은 것을 그대로 그리기* 위한 것 — 프론트에서 재계산하지 말 것.
+export type TimelineSegment = {
+  status: string; start: string; end: string; minutes: number;
+  message: string; left_pct: number; width_pct: number;
+};
+export type TimelineAgent = {
+  agent_id: string; agent_name: string; current: string;
+  uptime_pct: number | null; incidents: number;
+  observed_start: string | null; observed_pct: number;
+  segments: TimelineSegment[];
+};
+export type VisionTimeline = {
+  days: number; generated_at: string;
+  window_start: string; window_end: string; window_minutes: number;
+  agents: TimelineAgent[];
+};
 export type QualityHistory = { id: number; platform: string; theme: string; title: string; url: string; status: string; suggestions: string; analyzed_at: string; created_at: string; current_views: number; naver_rank: number | null };
 export type RepairRun  = { id: number; started_at: string; syntax_fixed: number; rules_fixed: number; patterns_count: number; hits_total: number; llm_saved: number };
 export type Pattern    = { fingerprint: string; fixer_name: string; hit_count: number; last_seen: string };

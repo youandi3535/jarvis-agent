@@ -628,10 +628,8 @@ def get_learning():
 
     # 현재 학습 자산 요약 (learned_patterns.json 실시간 조회 — 복사본 금지)
     try:
-        import json as _js
-        from pathlib import Path as _P
-        _lp = _js.loads((_P(__file__).parent / "JARVIS07_GUARDIAN" / "learned_patterns.json").read_text(encoding="utf-8"))
-        _pats = _lp.get("patterns", []) if isinstance(_lp, dict) else []
+        from JARVIS07_GUARDIAN.pattern_fixer import all_patterns
+        _pats = all_patterns()
         r["patterns_now"] = {
             "count": len(_pats),
             "hits":  sum(int(x.get("hit_count", 0) or 0) for x in _pats),
@@ -779,6 +777,30 @@ def get_vision_agents():
     except Exception:
         pass
     return []
+
+
+@app.get("/api/vision/timeline")
+def get_vision_timeline(days: int | None = None):
+    """에이전트 상태 변화 타임라인 — 대시보드 30일 흐름 차트 (2026-07-27).
+
+    ★ VISION(:8505) 을 프록시한다. 조립 로직은 `collector.get_status_timeline` 단독
+      (① 단일 진입점) — 여기서 다시 계산하지 않는다.
+    ★ VISION 이 내려가 있으면 **DB 를 직접 읽어** 폴백한다. 상태 이력은 DB 가 원본이고
+      VISION 은 그 조회자일 뿐이라, VISION 장애 때 차트가 통째로 비는 것이 더 나쁘다.
+    """
+    try:
+        import requests as _req
+        url = f"http://127.0.0.1:{_VISION_PORT}/api/history/timeline"
+        r = _req.get(url, params={"days": days} if days else None, timeout=5)
+        if r.ok:
+            return r.json()
+    except Exception:
+        pass
+    try:
+        from JARVIS05_VISION.collector import get_status_timeline
+        return get_status_timeline(days)
+    except Exception as e:                                  # noqa: BLE001
+        return {"days": days or 0, "agents": [], "error": str(e)[:120]}
 
 
 @app.get("/api/vision/summary")
@@ -1038,14 +1060,14 @@ def get_tokens(days: int = 8):
 
 @app.get("/api/patterns")
 def get_patterns():
+    # ★ 2026-07-27 — 종전 `list(data.values())` 는 {"version":"1.0","patterns":[...]} 를
+    #   **["1.0", [...]]** 로 만들어 반환했다(문자열이 첫 원소로 섞임). 경로 사본을 들고
+    #   직접 파싱하다 생긴 사고 — 조회는 pattern_fixer 단일 진입점으로 (① 단일 진입점).
     try:
-        patterns_file = BASE_DIR / "JARVIS07_GUARDIAN" / "learned_patterns.json"
-        if patterns_file.exists():
-            data = json.loads(patterns_file.read_text())
-            return data if isinstance(data, list) else list(data.values())
+        from JARVIS07_GUARDIAN.pattern_fixer import all_patterns
+        return all_patterns()
     except Exception:
-        pass
-    return []
+        return []
 
 
 # ── DB 통계 ──────────────────────────────────────────────────────

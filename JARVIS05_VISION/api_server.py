@@ -70,6 +70,16 @@ def _build_app():
         from JARVIS05_VISION.collector import get_latest_snapshot
         return get_latest_snapshot()
 
+    # ── 상태 변화 타임라인 (30일) ────────────────────────────
+    @app.get("/api/history/timeline", tags=["agents"])
+    def status_timeline(days: int | None = None) -> dict:
+        """에이전트별 상태 *구간* 타임라인 — 대시보드 30일 흐름 차트의 데이터원.
+
+        days 미지정 시 `shared/db.RETENTION` 의 실제 보존일수에서 파생(② 동적 설계).
+        """
+        from JARVIS05_VISION.collector import get_status_timeline
+        return get_status_timeline(days)
+
     # ── 특정 에이전트 ────────────────────────────────────────
     @app.get("/api/agents/{agent_id}", tags=["agents"])
     def get_agent(agent_id: str) -> dict:

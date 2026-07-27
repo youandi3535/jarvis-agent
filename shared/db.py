@@ -528,6 +528,21 @@ def init_db():
 #: (버전, 설명, SQL) — **오름차순 유지**. 과거 번호를 수정하지 말 것(이미 적용된 DB 와 갈라짐).
 _MIGRATIONS: list[tuple[int, str, str]] = [
     (1, "베이스라인 — init_db 의 CREATE/ALTER 전체 (2026-07-27 이전 누적분)", ""),
+    (2, "vision_agent_history 압축 — 직전과 같은 상태의 반복행 제거 (변화만 남김)", """
+        -- ★ 2026-07-27: 이 표는 30초마다 무조건 append 돼 182,687행(DB 최대 테이블)이
+        --   됐지만 읽는 코드가 없었다. 이제 collector 가 *상태 변화 시에만* 적재한다.
+        --   과거분도 같은 규칙으로 맞춘다 — 직전 행과 status 가 같은 행은 정보가 없다
+        --   (online 이 30초마다 반복). **변화 시점은 전부 보존되므로 정보 손실 0.**
+        --   실측: 182,687 → 48행.
+        DELETE FROM vision_agent_history
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id, status,
+                       LAG(status) OVER (PARTITION BY agent_id ORDER BY recorded_at, id) AS prev
+                FROM vision_agent_history
+            ) WHERE prev IS NOT NULL AND prev = status
+        );
+    """),
 ]
 
 
@@ -1238,7 +1253,11 @@ def backup_db(retention_days: int = 30) -> dict:
 
 RETENTION: dict[str, tuple[int, str, str]] = {
     # 빠르게 쌓이는 관측 데이터 — 짧게
-    "vision_agent_history":  (7,   "recorded_at",  "30초 주기 에이전트 상태(가장 빨리 쌓임)"),
+    # ★ vision_agent_history 는 2026-07-27 부터 **상태 변화 시에만** 적재한다
+    #   (종전 30초마다 → 182,437행 = DB 최대 테이블, 그런데 읽는 코드 0).
+    #   양이 1/1000 로 줄었으므로 보존을 7일 → **30일로 늘렸다** — 대시보드가
+    #   "지난 30일 언제 죽었나" 를 차트로 보여준다(`/api/vision/history`).
+    "vision_agent_history":  (30,  "recorded_at",  "에이전트 상태 *변화* 이력 (30일 차트 근거)"),
     "events":                (30,  "created_at",   "이벤트 버스 기록"),
     "job_runs":              (60,  "started_at",   "잡 실행 이력 — 대시보드는 최근분만 본다"),
     "qa_ingested_sessions":  (90,  "ingested_at",  "QA 세션 흡수 이력(중복 방지용 표식)"),

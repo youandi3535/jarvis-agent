@@ -9893,6 +9893,35 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `JARVIS06_IMAGE/draft_processor.py`, `shared/precommit_check.py`
 - **교훈**: ① **중복 판정의 대상을 정확히 좁힐 것** — "본문에 있으면 중복" 은 직관적이지만, 글과 그림이 *같은 것을 다루는 것* 은 중복이 아니라 좋은 편집이다. 판정 대상은 *의미* 가 아니라 *매체*(시각 요소)여야 한다. ② **`print()` 는 데몬에서 사라진다** — 진단에 필요한 정보는 반드시 `log` 로. 이번에도 로그 부재를 "코드가 거기 도달 못 함" 으로 오독해 조사가 한 바퀴 돌았다. ③ 플랫폼 한쪽만 증상이 나면 *플랫폼 고유 코드* 보다 **입력 데이터의 성향 차이** 를 먼저 의심할 것 — 여기서는 공통 코드에 티스토리 대본의 서술 습관이 얹혀 발현됐다.
 
+## [508] 학습 자산이 조용히 절반씩 사라지고 있었다 — 락 밖 읽기-수정-쓰기 (lost update) (2026-07-27)
+
+- **증상**: 무증상. 오류도, 로그도, 경고도 없다. `learned_patterns.json`(51패턴) 과 `bandit_state.json`(105관측)이 *늘긴 느는데* 기대보다 적게 는다. 아무도 몰랐다.
+- **환경**: `pattern_fixer` 6개 RMW 함수 · `bandit.reward`. 경제 브리핑이 subprocess 라 **쓰는 프로세스가 2개**.
+- **원인**: 모든 변경이 `data = _load_learned()` → 수정 → `_save_learned(data)` 형태였고, **락이 `_save_learned` 안에만** 있었다. 즉 *읽기와 쓰기 사이가 무방비*. 두 프로세스가 같은 버전을 읽고 각자 자기 것을 더해 통째로 되쓰면 **나중 쓰기가 앞선 학습을 지운다**. `_LEARNED_LOCK`/`_LOCK`(threading)은 같은 프로세스의 스레드만 막아 subprocess 에는 무력. 핫패스인 `record_pattern_hit`·`_bump_hit_count` 에는 그마저 없었다.
+  - **실측**: 운영 동시성(2프로세스) 재현 **50% 유실, 3/3회**. 4프로세스면 75%.
+  - **`_bump_hit_count(data, fp)` 의 `data` 인자가 결함 본체**였다 — "중복 디스크 읽기 회피" 최적화가 곧 *락 밖 스냅샷 되쓰기*였다.
+  - **`apply_stored_patches`** 는 한술 더 떠 `fresh = _load_learned()` … `_save_learned(fresh)` 로 **방금 올린 hit_count 를 도로 지우고** 있었다.
+- **헛다리**: "DB 로 이관하면 해결" 로 바로 가지 말 것. `json_store.locked()`(flock·재진입) 는 **이미 있었고** eval_agent 는 쓰고 있었다 — ERRORS [497] 수리가 `pattern_fixer` 를 빠뜨린 ③위반이었을 뿐이다. 도구가 없던 게 아니라 *한쪽에만 적용*됐다.
+- **해결**: 락을 6곳에 흩뿌리지 않는다 — **변경 진입점 하나**를 만들어 전부 통과시킨다.
+  - `pattern_fixer.mutate_learned()` / `bandit.mutate_state()` — `threading.Lock` + `json_store.locked()`(flock) 둘 다 잡고 load→yield→save 를 한 임계구역으로. 예외 시 저장 안 함. 두 자산이 *같은 형태* 를 쓰도록 의도적으로 맞췄다(한쪽만 고치는 재발 방지).
+  - `_bump_hit_count(fingerprint)` — `data` 인자 삭제, 락 안에서 다시 읽는다. 523KB 재읽기 < 학습 소실.
+  - `apply_stored_patches` — fingerprint 일괄 증가를 한 임계구역으로(N번 재쓰기도 제거).
+  - **조회도 단일 진입점** `pattern_fixer.all_patterns()` — 경로 사본 4벌(`auditor._LEARNED_JSON`·`repair_history._PATTERNS`·`api_server` 2곳)을 제거. 그 직접 읽기들은 `json_store` 의 **손상 격리를 우회**해, 손상본을 만나면 `except Exception` 으로 삼켜 "패턴 0개" 로 보고했다(학습이 사라진 것처럼 보이는 화면이 실은 읽기 실패).
+  - 곁다리로 드러난 실제 오작동: `/api/patterns` 가 `list(data.values())` 탓에 **`["1.0", [...]]`** (문자열이 첫 원소)를 반환하고 있었다 → 51개 순수 배열로 교정.
+- **검증**: 동일 재현 스크립트로 수정 전/후 대조 — `learned_patterns` **50%→0% 유실(3/3)**, `bandit` **50%→0%(3/3)**. 실자산 왕복 무손실 확인(523KB 내용 동일), 재시작된 데몬에서 `/api/patterns` 51개·dict 아닌 원소 0개.
+- **파일**: `JARVIS07_GUARDIAN/pattern_fixer.py` · `bandit.py` · `auditor.py` · `repair_history.py` · `api_server.py`
+- **교훈**: ① **락이 쓰기에만 걸려 있으면 락이 없는 것과 같다** — 보호해야 하는 것은 쓰기가 아니라 *읽기부터 쓰기까지*. ② **"중복 읽기 회피" 최적화가 데이터 유실의 전형적 입구다** — 미리 읽어 둔 값을 나중에 되쓰는 순간 그건 사본이고, 사본을 진실로 믿는 사고가 된다. ③ **규율을 여러 곳에 두면 반드시 한 곳이 빠진다** — [497] 이 eval_agent 만 고친 게 그 증거다. 락은 *지나가야만 하는 문* 으로 만들 것. ④ 무증상 결함은 **재현 실측으로만** 잡힌다 — 코드를 읽어 "위험해 보인다" 로는 50% 라는 숫자가 안 나온다.
+
+## [509] VISION 이력이 30초마다 18만 행 — 읽는 코드는 0 (2026-07-27)
+
+- **증상**: `vision_agent_history` 182,687행으로 DB 최대 테이블(전체 209MB). 그런데 대시보드는 `vision_agent_status`(10행)만 보고, `get_history()` 는 **호출자가 없었다**.
+- **원인**: 수집기가 30초마다 10개 에이전트 상태를 **변화 여부와 무관하게 무조건 append**. 하루 28,800행이 전부 `online, online, online…`. 사용자 질문("30초로 한 이유가 뭐냐")에 답할 근거를 찾다 발견 — `COLLECT_INTERVAL = 30` 에 **사유 주석이 코드·ERRORS·docs 어디에도 없었다**. 게다가 상태 변화 감지는 메모리 `_prev_status` 로 하므로, 30초 주기는 *장애 알림 지연* 만 좌우하고 이력 적재량과는 무관했다.
+- **해결**: **변화 시에만 적재**. ① `_collect_once` 의 INSERT 를 `if prev != status:` 안으로 ② 부팅 시 `_load_prev_status()` 가 `vision_agent_status` 에서 직전 상태 복원(안 하면 재시작마다 10행이 '첫 관측'으로 들어간다) ③ 보존 7→**30일**(변화만 남으니 길게 둬도 싸다) ④ 과거분은 마이그레이션 v2 로 압축 — `LAG(status) OVER (PARTITION BY agent_id …)` 로 직전과 같은 상태의 반복행만 삭제. **182,687 → 48행, 변화 시점은 전부 보존(정보 손실 0)**.
+- **파생 산출물**: 이력이 사람이 읽을 크기가 되자 *쓸 수 있는 데이터* 가 됐다 → `collector.get_status_timeline()` + 대시보드 **30일 상태 흐름 차트**. 구간 조립·위치(%)·가동률을 **서버에서 끝내고** 화면은 받은 %로 막대만 그린다(조립 규칙이 UI 로 새면 다른 화면이 복제해야 한다). 기간은 `retention_days('vision_agent_history')` 에서 파생 — 보존을 늘리면 차트가 자동으로 길어진다. 즉시 드러난 사실: **JARVIS08 PUBLISH 가동률 78.8% / 전환 12회, warn 이 07:00·21:00 발행 시각에 정확히 몰림**.
+- **검증**: 재시작 후 150초 관측 — 이력 증가 **0행**(옛 코드였다면 50행). 이는 ①변화 적재와 ②부팅 복원이 *둘 다* 동작해야만 나오는 값이다.
+- **파일**: `JARVIS05_VISION/collector.py` · `api_server.py` · `shared/db.py` · `dashboard/app/page.tsx` · `dashboard/lib/api.ts`
+- **교훈**: ① **"왜 이 값인가" 를 아무도 못 답하는 상수는 대개 근거 없이 굳은 값이다** — 물었을 때 사유가 안 나오면 그 자체가 점검 신호. ② 아무도 안 읽는 데이터를 30초마다 쌓는 것은 관측이 아니라 비용이다. **읽는 코드가 없으면 그 적재는 근거가 없다.** ③ 무엇을 남길지 정하면 얼마나 오래 남길지는 저절로 싸진다 — 변화만 남기니 보존을 4배 늘리고도 행수는 3,800배 줄었다.
+
 ## [507] 품질점수 70 문턱 상습 미달 — "채점은 하는데 알려주지 않는" 항목이 16점 (2026-07-21)
 - **증상**: 테마·경제 모두 종합 65~69.5/100 으로 70 문턱을 반복 미달 → 재작성 순환 → best-so-far 발행. 사용자 지적: "규정을 먼저 숙지하고 그에 맞게 쓰는데 왜 점수가 안 나오나".
 - **환경**: `post_scorer.py`(A20+B50+C20+D10), `prepublish_gate`(70 임계), 작성 프롬프트 조립(`law_enforcer.build_writing_rules_block` + `seo_standards.build_seo_block` + `quality_learner.build_insights_block`).

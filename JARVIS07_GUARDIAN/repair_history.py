@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 _DIR = Path(__file__).resolve().parent
 _ERRORS_MD = _DIR / "ERRORS.md"
-_PATTERNS = _DIR / "learned_patterns.json"
+# _PATTERNS 상수 제거 — 경로의 주인은 pattern_fixer (① 단일 진입점)
 
 __all__ = [
     "history", "history_text", "parse_errors_md", "SLOT_LABELS",
@@ -123,12 +123,11 @@ def parse_errors_md(path: Path | None = None) -> list[dict]:
 
 # ── learned_patterns 조회 (어떤 수단으로 고쳤나) ──────────────────────
 def _pattern_index() -> dict[str, dict]:
+    # ★ 조회는 pattern_fixer 단독 진입점 (① — 경로 사본·손상 격리 우회 제거)
     try:
-        raw = json.loads(_PATTERNS.read_text(encoding="utf-8"))
+        from JARVIS07_GUARDIAN.pattern_fixer import all_patterns  # noqa: PLC0415
+        items = all_patterns()
     except Exception:
-        return {}
-    items = raw.get("patterns", raw) if isinstance(raw, dict) else raw
-    if not isinstance(items, list):
         return {}
     idx: dict[str, dict] = {}
     for it in items:
