@@ -1488,6 +1488,85 @@ CATEGORIES["collect"] = check_collect
 
 
 # ══════════════════════════════════════════════════════════════════
+#  cache — system 프롬프트는 *플랫폼 무관* 이어야 한다 (ERRORS [542])
+# ══════════════════════════════════════════════════════════════════
+def _platform_varying_keys() -> set:
+    """PLATFORM_SPEC 에서 *플랫폼마다 값이 다른* 키만 파생 (원칙② — 목록을 박지 말 것).
+
+    반환 빈 집합 = 파생 실패. 호출자가 fail-closed 처리한다.
+    """
+    try:
+        import ast as _ast
+        src = (ROOT / "JARVIS02_WRITER" / "draft_writer.py").read_text(encoding="utf-8")
+        tree = _ast.parse(src)
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.Assign):
+                continue
+            if not any(getattr(t, "id", "") == "PLATFORM_SPEC" for t in node.targets):
+                continue
+            per_platform = {}
+            for vnode in node.value.values:          # 플랫폼별 dict
+                for k, v in zip(vnode.keys, vnode.values):
+                    per_platform.setdefault(k.value, []).append(_ast.dump(v))
+            # 값이 플랫폼마다 다른 키만 = system 에 있으면 캐시를 깨는 것
+            return {k for k, vs in per_platform.items() if len(set(vs)) > 1}
+    except Exception:
+        pass
+    return set()
+
+
+def check_cache(report: Report) -> None:
+    """★ 작성 프롬프트의 system 블록에 플랫폼별 문구를 두지 말 것 (ERRORS [542]).
+
+    **왜 (실측으로 확정)**
+      프롬프트 캐시는 *prefix* 로 동작하고 `system` 이 그 앞부분이다:
+        ① system 이 바이트 동일하면 user 가 완전히 달라도 system 은 회수된다 (read 23,875 실측)
+        ② system 이 한 줄이라도 다르면 user 가 같아도 **전부 무효** (read 0 실측)
+        ③ 블록 내부 부분 회수는 **없다** — 앞 27K 가 같아도 꼬리 한 줄이 다르면 통째로 날아간다
+      경제 브리핑 system 은 약 44,300 토큰이다. `문체: 해요체/격식체` 한 줄 때문에
+      네이버·티스토리가 매번 전량 재기록됐다.
+
+    플랫폼별 지시는 `draft_writer.build_platform_block()` 단일 출구로만 — 그것은 user 로 간다.
+    """
+    cat = "cache"
+    keys = _platform_varying_keys()
+    if not keys:
+        # fail-closed — 목록을 못 읽으면 검사가 *조용히 무력화*된다 (collect 와 같은 규약)
+        report.add(Violation(
+            cat, "cache/self-check", "JARVIS02_WRITER/draft_writer.py", 0,
+            "PLATFORM_SPEC 에서 플랫폼 가변 키를 파생하지 못해 캐시 검사가 무력화됨 — 검사를 고칠 것"))
+        report.checks_run += 1
+        return
+
+    path = ROOT / "JARVIS02_WRITER" / "draft_writer.py"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    # system 블록 = `system_msg = f"""` … `"""`  +  이름에 system_msg 가 든 함수의 return f"""…"""
+    in_block, opened_at = False, 0
+    for i, ln in enumerate(lines, 1):
+        s = ln.strip()
+        if not in_block:
+            if re.search(r'(system_msg\s*=\s*f"""|return f""")', s) and "system" in "".join(
+                    lines[max(0, i - 12):i]).lower():
+                in_block, opened_at = True, i
+            continue
+        if s.endswith('"""'):
+            in_block = False
+            continue
+        for k in sorted(keys):
+            if f"spec['{k}']" in ln or f'spec["{k}"]' in ln:
+                report.add(Violation(
+                    cat, "cache/platform-in-system",
+                    "JARVIS02_WRITER/draft_writer.py", i,
+                    f"system 블록(줄 {opened_at}~) 안에 플랫폼 가변 값 spec['{k}'] — "
+                    f"네이버/티스토리 프리픽스가 갈려 캐시가 통째로 무효화된다. "
+                    f"build_platform_block() 로 빼서 user_msg 에 둘 것"))
+    report.checks_run += 1
+
+
+CATEGORIES["cache"] = check_cache
+
+
+# ══════════════════════════════════════════════════════════════════
 #  crossproc — 크로스커팅 상태를 메모리 플래그로 두지 말 것 (사용자 박제 2026-07-25)
 # ══════════════════════════════════════════════════════════════════
 def check_crossproc(report: "Report") -> None:

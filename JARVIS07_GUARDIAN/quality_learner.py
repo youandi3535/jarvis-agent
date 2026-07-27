@@ -43,6 +43,23 @@ ATTRIBUTION_WINDOW_H: int = 18   # 사용→분석 매칭 최대 시간 (h) — 
 UNDERPERFORM_MIN_N: int = 5   # 저성과 판정 최소 보상 횟수
 UNDERPERFORM_AVG: float = 0.35   # 평균 보상이 이 미만이면 가속 감쇠
 
+# ★ 발행쌍 고정 — 네이버·티스토리가 *같은 지침 묶음* 을 받게 한다 (ERRORS [542]).
+#   왜 필요한가 (두 가지가 동시에 고쳐진다):
+#     ① 프롬프트 캐시 — 지침 블록은 작성 프롬프트의 *system* 안에 들어간다. 플랫폼마다
+#        묶음이 달라지면 system 이 바이트 불일치 → prefix 캐시가 통째로 깨져 전량 재기록된다.
+#        (실측: system 이 한 줄만 달라도 회수 0. 블록 내부 부분 회수는 없다.)
+#     ② UCB 공정성 — 종전엔 첫 플랫폼 호출이 `record_insight_usage` 로 uses 를 올려,
+#        *같은 글* 의 두 번째 플랫폼이 흔들린 랭킹을 받았다. 한 글에 대한 선택은 1회여야 한다.
+#   ★ 사용 기록은 플랫폼별로 *그대로 2건* 남긴다 — 묶음만 고정하고 기록은 안 줄인다.
+#     (`_match_analysis` 는 platform='' 이면 '가장 이른 글' 하나만 잡으므로, 1건으로 줄이면
+#      두 번째 글의 채점 신호가 학습에서 통째로 사라진다.)
+#   수명: 플랫폼 단위 직렬 발행 간격이 실측 12~13분이라 여유를 둔 값. 다음 발행 사이클
+#     (경제 07:00 / 테마 21:00 — 최소 14시간)까지 절대 새지 않는다.
+PAIR_PIN_TTL_MIN: int = 60
+
+# key -> (pinned_at, picked_rows). 프로세스 지역 — 발행은 subprocess 라 곧 run 단위다.
+_PAIR_PIN: dict[str, tuple] = {}
+
 
 # ═══════════════════════════════════════════════════════════════
 #  1. 선택 + 주입 (작성 시점)
@@ -64,6 +81,42 @@ def _ucb_rank(rows: list[dict], limit: int) -> list[dict]:
     return [r for _, r in scored[:limit]]
 
 
+def _pinned_pick(scope: str, theme: str, limit: int, rows: list[dict]) -> list[dict]:
+    """발행쌍(네이버→티스토리) 안에서는 *같은 묶음* 을 돌려준다 (위 PAIR_PIN_TTL_MIN 주석 참조).
+
+    첫 호출만 UCB 를 돌리고, TTL 안의 후속 호출은 그 결과를 그대로 재사용한다.
+    ★ 사용 기록(record_insight_usage)은 호출마다 그대로 남는다 — 여기서 줄이는 것은
+      *선택* 뿐이지 *기록* 이 아니다.
+    """
+    import time as _t
+    key = f"{scope}|{theme}|{limit}"
+    now = _t.monotonic()          # 벽시계 아님 — 시스템 시각 변경에 흔들리지 않게
+    hit = _PAIR_PIN.get(key)
+    if hit and (now - hit[0]) < PAIR_PIN_TTL_MIN * 60:
+        return hit[1]
+    picked = _ucb_rank(rows, limit)
+    if picked:
+        _PAIR_PIN[key] = (now, picked)
+    return picked
+
+
+def pair_pin_effective(scope: str = "__selfcheck__") -> bool:
+    """★ 고정이 *실제로 먹는지* 동작으로 확인 (저장소 표준 — 설치 플래그는 적용의 증거가 아니다).
+
+    가짜 rows 로 두 번 뽑아 같은 묶음이 나오는지 본다. True 면 발행쌍 고정이 살아 있다.
+    """
+    fake = [{"id": i, "effective_weight": 1.0, "uses": i, "directive": f"d{i}"}
+            for i in range(1, 6)]
+    _PAIR_PIN.pop(f"{scope}||3", None)
+    a = [r["id"] for r in _pinned_pick(scope, "", 3, fake)]
+    # uses 를 흔들어도(=UCB 랭킹이 바뀔 조건) 고정이면 같은 묶음이어야 한다
+    for r in fake:
+        r["uses"] = 100 - r["id"]
+    b = [r["id"] for r in _pinned_pick(scope, "", 3, fake)]
+    _PAIR_PIN.pop(f"{scope}||3", None)
+    return bool(a) and a == b
+
+
 def build_insights_block(scope: str = "all", theme: str = "",
                          platform: str = "", limit: int = 8,
                          days: int = 21) -> str:
@@ -78,7 +131,8 @@ def build_insights_block(scope: str = "all", theme: str = "",
         rows = _db.get_ranked_learning_insights(scope=_scope_filter, limit=limit, days=days)
         if not rows:
             return ""
-        picked = _ucb_rank(rows, limit)
+        # ★ 발행쌍 고정 — platform 은 키에 넣지 않는다 (NV·TS 가 같은 묶음을 받게 하는 것이 목적).
+        picked = _pinned_pick(scope, theme, limit, rows)
         if not picked:
             return ""
 
