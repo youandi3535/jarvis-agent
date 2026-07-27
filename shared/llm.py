@@ -47,6 +47,11 @@ class ModelSpec:
     #   (사용자 박제 2026-07-25: "03·09·02·06·08 이 도는 동안 LLM 은 오로지 글 작성에만")
     #   여기 선언 한 곳에서 `_BG_ALIASES` 를 파생 — 별도 목록을 두면 alias 추가 시 드리프트.
     background: bool = False
+    # ★ 프롬프트 캐시를 쓸 것인가 (ERRORS [541], 사용자 판단 2026-07-27).
+    #   캐시는 **쓰기 1.25배 / 읽기 0.1배** 다. 즉 한 번 비싸게 쓰고 여러 번 싸게 읽어야 이득이고,
+    #   **읽지 못하면 25% 를 그냥 버린다.** 재사용이 1배 미만인 alias 는 캐싱이 *절감이 아니라 손실*.
+    #   7일 실측 근거는 아래 MODELS 각 항목 주석에 박제. 판정이 낡으면 `cache_selfcheck()` 가 알린다.
+    cache: bool = True
 
 
 # ★ 모델 계층 — 사용자 박제 2026-07-06 (ADR 017): Sonnet 5 단일 모델 통일 (ADR 015 폐지).
@@ -79,6 +84,11 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=8000,
         temperature=0.4,
         description="블로그 본문 대본 — 도입부·섹션·감성문단·면책 (헌법 규정 준수)",
+        # ★ 캐시 끔 (ERRORS [541]) — 7일 실측 **재사용 0.00배** (생성 191,224 / 읽기 0).
+        #   네이버·티스토리 발행이 **12분 간격**(플랫폼 단위 직렬 — 사용자 박제 2026-07-03)이라
+        #   캐시 TTL 5분을 매번 넘긴다. 붙이면 실패 격리가 깨지므로 **간격은 못 줄인다**.
+        #   → 회수 못 할 캐시에 1.25배를 내느니 안 쓴다. 주간 약 47,806 토큰 절감.
+        cache=False,
     ),
     "writer_long_infographic": ModelSpec(
         alias="writer_long_infographic",
@@ -131,6 +141,10 @@ MODELS: dict[str, ModelSpec] = {
         max_tokens=1600,
         temperature=0.2,   # ★ 판정은 흔들리면 안 되므로 온도가 낮다
         description="분석·판정·번역 — 품질 제안·섹터 분류·수치 대조·프롬프트 번역",
+        # ★ 캐시 끔 (ERRORS [541]) — 7일 실측 **재사용 0.08배** (생성 20,187 / 읽기 1,696).
+        #   호출 묶음이 **3시간 간격**이라 TTL 5분 안에 재호출이 거의 없다.
+        #   주간 약 3,520 토큰 절감. (간격이 좁아지면 selfcheck 가 되돌리라고 알린다)
+        cache=False,
     ),
 
     # ── 구 alias (하위호환) — 본문은 위 신규를 가리키는 얇은 별칭 ──
@@ -898,6 +912,74 @@ def _llm_scratch_dir() -> str | None:
 _SDK_BASE_ENV = {"ANTHROPIC_API_KEY": "", "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"}
 
 
+def _sdk_env(alias: str = "") -> dict:
+    """SDK 에 넘길 env — alias 의 캐시 정책까지 반영 (ERRORS [541], ① 단일 진입점).
+
+    ★ 왜 헬퍼인가: env 를 조립하는 곳이 텍스트(`_run_sdk_sync`)·비전(`_invoke_sdk_vision`)
+      **두 곳**이다. 각자 조립하면 한쪽만 정책이 걸려 또 통로별로 샌다 —
+      바로 앞 사고(ERRORS [540] alias 귀속 누락)와 **같은 형태의 병**이다.
+
+    ★ 캐시를 끄는 판정 근거: 캐시는 쓰기 1.25배 / 읽기 0.1배다.
+      재사용이 1배 미만이면 **쓰기 프리미엄만 내고 회수를 못 한다**(순손실).
+      판정은 `MODELS[alias].cache` 가 소유하고 여기선 집행만 한다(② 동적 설계).
+
+    무배포 되돌리기: `LLM_CACHE_POLICY=0` → 정책 무시(전부 SDK 기본값 = 캐시 켬).
+    """
+    env = dict(_SDK_BASE_ENV)
+    if (os.getenv("LLM_CACHE_POLICY", "1") or "1") == "0":
+        return env
+    spec = MODELS.get(alias)
+    if spec is not None and not getattr(spec, "cache", True):
+        # CLI 가 읽는 공식 스위치. 모델별 변수(_SONNET 등)도 있으나 우리는 단일 모델이라 전역으로 충분.
+        env["DISABLE_PROMPT_CACHING"] = "1"
+    return env
+
+
+# 캐시 정책 적용 시각 — 이 이후 데이터만 [C2] 판정에 쓴다 (과거 데이터 오탐 방지).
+_CACHE_POLICY_SINCE = "2026-07-27T14:30:00"
+
+
+def cache_selfcheck() -> list[str]:
+    """★ 캐시 정책이 *실측과 맞는지* 감시 (ERRORS [541]).
+
+    판정을 손으로 박아두면 호출 패턴이 바뀌었을 때 낡는다 — 그때 **조용히 손해**만 난다.
+    최근 7일 실사용에서 정책과 어긋나면 알린다(끈 게 이득이 됐거나, 켠 게 손해가 됐거나).
+    """
+    issues: list[str] = []
+    try:
+        from shared.db import get_db
+        with get_db() as conn:      # ★ 커넥션은 이 블록 안에서만 (auto-close 규약)
+            rows = conn.execute(
+                "SELECT alias, SUM(cache_create), SUM(cache_read) FROM llm_token_usage "
+                "WHERE ts >= datetime('now','localtime','-7 day') AND alias<>'' "
+                "GROUP BY alias").fetchall()
+            recent = dict(conn.execute(
+                "SELECT alias, COALESCE(SUM(cache_create),0) FROM llm_token_usage "
+                "WHERE ts >= ? AND alias<>'' GROUP BY alias",
+                (_CACHE_POLICY_SINCE,)).fetchall())
+        for a, cc, cr in rows:
+            spec = MODELS.get(a)
+            if spec is None:
+                continue
+            cc, cr = int(cc or 0), int(cr or 0)
+            if cc < 5000:
+                continue                      # 표본 부족 — 판정 보류
+            ratio = cr / cc
+            on_cost, off_cost = 1.25 * cc + 0.1 * cr, 1.0 * (cc + cr)
+            if spec.cache and on_cost > off_cost:
+                issues.append(f"[C1] {a}: 재사용 {ratio:.2f}배 — 캐시가 순손실"
+                              f"({on_cost - off_cost:+,.0f} 토큰/7일). cache=False 검토")
+        for a, n in recent.items():
+            spec = MODELS.get(a)
+            # ★ 정책 적용 *이후* 구간만 본다 — 과거 데이터로 오탐을 내면 감시를 못 믿게 된다.
+            if spec is not None and not spec.cache and int(n or 0) > 0:
+                issues.append(f"[C2] {a}: cache=False 인데 정책 적용 후에도 캐시생성 "
+                              f"{int(n):,} 발생 — 통로 누락 의심")
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"[C0] cache_selfcheck 실패: {type(e).__name__}: {e}")
+    return issues
+
+
 # ── 본문 생성 timeout 단일 진입점 (ERRORS [460] — 2026-07-20) ──────────
 #
 # 사고: 테마 티스토리 발행이 6/6 실패. 로그의 "인프라 스로틀" 은 *오분류* 였고
@@ -1133,7 +1215,7 @@ def _run_sdk_sync(
     from claude_code_sdk._errors import MessageParseError, ProcessError
 
     # ★ cwd 격리 — 저장소 밖 전용 폴더. CLAUDE.md 자동 로드(48,940 토큰/호출) 차단.
-    _opts_kw: dict = {"model": model, "env": dict(_SDK_BASE_ENV)}
+    _opts_kw: dict = {"model": model, "env": _sdk_env(_CURRENT_ALIAS.get())}
     _scratch = _llm_scratch_dir()
     if _scratch:
         _opts_kw["cwd"] = _scratch
@@ -1327,7 +1409,7 @@ def _invoke_sdk_vision(prompt: str, model: str, image_paths: list,
     _v_kw: dict = {
         "model": model, "allowed_tools": ["Read"],
         "permission_mode": "bypassPermissions", "max_turns": 6,
-        "env": dict(_SDK_BASE_ENV),
+        "env": _sdk_env(_CURRENT_ALIAS.get()),
     }
     _v_scratch = _llm_scratch_dir()
     if _v_scratch:
