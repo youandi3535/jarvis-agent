@@ -598,15 +598,6 @@ def _clean_label(lab: str) -> str:
     return lab[:22]
 
 
-def _is_demo_value(s: str) -> bool:
-    """세그먼트가 인구통계 분류값(성별·지역·연령)인지 — 교차표 축약 시 차원 식별용."""
-    s = str(s or "").strip()
-    if s in _DEMO_TOTAL:
-        return True
-    return bool(re.search(r"(남자|여자|^남$|^여$|[동읍면시군]부|\d+\s*[~∼\-]\s*\d+\s*세|\d+세|\d+대|"
-                          r"이상|미만|수도권|비수도권|특별시|광역시|^.{1,4}도$|^.{1,5}시$|^.{1,4}군$)", s))
-
-
 def _is_period(s: str) -> bool:
     s = str(s or "").strip()
     return bool(re.match(r"^(19|20)\d{2}", s) or re.match(r"^\d{6}$", s))

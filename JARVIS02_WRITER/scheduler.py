@@ -1198,24 +1198,6 @@ def run_economic_poster(*extra_flags):
         _lock_release()   # 결과 임시파일 정리는 _spawn_publisher 가 담당
 
 
-def cleanup_screenshots():
-    """screenshots/ 폴더 내 파일 전체 삭제 (폴더 구조는 유지)"""
-    import shutil
-    ss_dir = BASE_DIR.parent / 'JARVIS06_IMAGE' / 'output' / 'screenshots'
-    deleted = 0
-    for sub in ss_dir.iterdir():
-        if sub.is_dir():
-            for f in sub.iterdir():
-                if f.is_file():
-                    f.unlink()
-                    deleted += 1
-    size_mb = sum(f.stat().st_size for f in ss_dir.rglob('*') if f.is_file()) / 1024 / 1024
-    log(f"🧹 스크린샷 정리 완료: {deleted}개 삭제 (남은 용량: {size_mb:.1f}MB)")
-    send_telegram(f"🧹 스크린샷 주간 정리 완료\n삭제: {deleted}개 파일")
-
-
-
-
 # ══════════════════════════════════════════
 #  JARVIS03 → JARVIS02 연결 방식
 #  즉시 실행(버스 구독) 방식은 사용하지 않음.

@@ -648,24 +648,6 @@ def get_todays_pipeline(limit: int = 20) -> list:
     return [dict(r) for r in rows]
 
 
-def get_pending_pipeline(limit: int = 5) -> list:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT id, theme, sector, opportunity_score, created_at FROM pipeline "
-            "WHERE status = 'suggested' ORDER BY opportunity_score DESC, created_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def update_pipeline_status(item_id: int, status: str):
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE pipeline SET status=?, processed_at=datetime('now','localtime') WHERE id=?",
-            (status, item_id),
-        )
-
-
 def get_recent_published_themes(days: int = 30) -> list[dict]:
     """최근 N일 이내 post_analysis 에 발행된 theme 목록 반환.
 
@@ -951,31 +933,6 @@ def reject_analysis(analysis_id: int):
             "decided_at=datetime('now','localtime') WHERE id=?",
             (analysis_id,),
         )
-
-
-def mark_revised(analysis_id: int):
-    """재발행 완료 — 루프 가드 플래그 ON."""
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE post_analysis SET status='revised', is_revised=1, "
-            "revised_at=datetime('now','localtime') WHERE id=?",
-            (analysis_id,),
-        )
-
-
-def get_approved_for_revision(limit: int = 5) -> list:
-    """재발행 대기 중인 승인 글 — 사용자가 직접 승인 트리거한 건만 처리.
-
-    사후 retry 잡은 폐기됨 (ERRORS.md [14]). 본 함수는 인라인 버튼/대시보드의
-    명시적 1회 트리거 직후 호출되는 경로만 가정한다.
-    """
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT * FROM post_analysis
-               WHERE status='approved' AND is_revised=0
-               ORDER BY decided_at ASC LIMIT ?""", (limit,)
-        ).fetchall()
-    return [dict(r) for r in rows]
 
 
 def get_analysis_history(limit: int = 50) -> list:

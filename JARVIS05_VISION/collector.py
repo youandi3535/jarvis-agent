@@ -217,12 +217,6 @@ def start_collector() -> None:
     log.info("✅ VISION Collector 스레드 시작")
 
 
-def stop_collector() -> None:
-    _stop_event.set()
-    if _collector_thread:
-        _collector_thread.join(timeout=5)
-
-
 # ── 조회 API ─────────────────────────────────────────────────────
 
 def get_status_timeline(days: int | None = None) -> dict:

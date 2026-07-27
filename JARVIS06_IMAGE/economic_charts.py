@@ -31,14 +31,6 @@ def _now():
     return datetime.now()
 
 
-def _today_str():
-    return _now().strftime("%Y년 %m월 %d일")
-
-
-def _today_dow():
-    return _DOW_KR[_now().weekday()]
-
-
 def _out(out_dir) -> Path:
     p = Path(out_dir) if out_dir else _OUTPUT_DIR
     p.mkdir(parents=True, exist_ok=True)

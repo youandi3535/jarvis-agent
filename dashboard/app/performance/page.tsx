@@ -11,10 +11,9 @@ import { fmtNum, fmtTime } from "@/lib/utils";
 const PLAT_HEX: Record<string, string> = {
   naver:   "#03c75a",
   tistory: "#f96400",
-  wp:      "#21759b",
 };
 const PLAT_SHORT: Record<string, string> = {
-  naver: "N", tistory: "T", wp: "W",
+  naver: "N", tistory: "T",
 };
 
 /* ── 공통 스타일 ─────────────────────────────────────────────────── */

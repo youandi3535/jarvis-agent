@@ -247,18 +247,6 @@ def fixer_sets() -> FixerSets:
                          derived=False, source=f"degraded:{type(e).__name__}")
 
 
-def __getattr__(name: str):
-    """모듈 속성 STATIC_FIXERS / REPLAY_FIXERS / LLM_FIXERS 를 *조회 시점* 파생.
-
-    모듈 레벨에 상수로 박아두면 그 자체가 '복사본을 진실로 믿기' 다.
-    (PEP 562 — 모듈에 실제 속성이 없을 때만 호출된다. 절대 대입하지 말 것.)
-    """
-    mapping = {"STATIC_FIXERS": "static", "REPLAY_FIXERS": "replay", "LLM_FIXERS": "llm"}
-    if name in mapping:
-        return getattr(fixer_sets(), mapping[name])
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 # ──────────────────────────────────────────────────────────────
 # 평가 결과
 # ──────────────────────────────────────────────────────────────

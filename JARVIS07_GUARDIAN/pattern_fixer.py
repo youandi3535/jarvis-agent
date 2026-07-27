@@ -1728,35 +1728,6 @@ def backfill_domains() -> dict:
     }
 
 
-def backfill_tiers() -> dict:
-    """기존 learned_patterns.json 의 entry 에 tier 필드 백필.
-
-    tier 없거나 'unknown' 인 entry 만 처리.
-    fixer == 'llm_patch' → 'llm', fixer in _FIXER_REGISTRY → 'static', 그 외 → 'manual'
-    """
-    with mutate_learned() as data:
-        pats = data.get("patterns", [])
-        updated = 0
-        for p in pats:
-            if p.get("tier") not in (None, "unknown"):
-                continue
-            fn = p.get("fixer", "")
-            if fn == "llm_patch":
-                p["tier"] = "llm"
-            elif fn == "auto_patch":
-                p["tier"] = "auto_patch"
-            elif fn in _FIXER_REGISTRY:
-                p["tier"] = "static"
-            else:
-                p["tier"] = "manual"
-            updated += 1
-    by_tier = {}
-    for p in pats:
-        t = p.get("tier", "unknown")
-        by_tier[t] = by_tier.get(t, 0) + 1
-    return {"total": len(pats), "updated": updated, "by_tier": by_tier}
-
-
 def _attributed_only() -> bool:
     """귀속 가능한 관측만 밴딧에 기록할지 — *호출 시점* 조회 (ERRORS [498] 1단계).
 
@@ -1947,5 +1918,5 @@ def try_pattern_fix(error_record: dict) -> Optional[dict]:
 __all__ = [
     "try_pattern_fix", "record_pattern_hit", "record_sdk_fix", "bandit_arm_name",
     "stats", "_make_fingerprint",
-    "_infer_domain", "backfill_domains", "backfill_tiers",   # ★ ADR 008 Phase 4
+    "_infer_domain", "backfill_domains",   # ★ ADR 008 Phase 4
 ]

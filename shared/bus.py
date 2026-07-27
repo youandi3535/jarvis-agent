@@ -183,7 +183,6 @@ class EventType:
     PERFORMANCE_UPDATED = "performance_updated"   # WRITER → RADAR(ANALYST)
     POST_ANALYZED       = "post_analyzed"         # RADAR → 전체 (분석 완료)
     POST_REVISE_APPROVED= "post_revise_approved"  # 사용자 승인 → WRITER
-    POST_REVISED        = "post_revised"          # WRITER → 전체 (재발행 완료)
     DAILY_REVIEW_DONE   = "daily_review_completed" # RADAR → 전체 (일일 분석 완료)
     ERROR_DETECTED      = "error_detected"         # GUARDIAN → 전체 (오류 감지)
     COLLECTION_READY    = "collection_ready"       # COLLECTOR → WRITER (수집·정제 완료)
@@ -316,12 +315,6 @@ def on_post_analyzed(analysis_id: int, platform: str, theme: str, suggestion_cou
 def on_post_revise_approved(analysis_id: int, platform: str, theme: str):
     publish(EventType.POST_REVISE_APPROVED, "USER", {
         "analysis_id": analysis_id, "platform": platform, "theme": theme,
-    })
-
-
-def on_post_revised(analysis_id: int, platform: str, theme: str, url: str):
-    publish(EventType.POST_REVISED, "WRITER", {
-        "analysis_id": analysis_id, "platform": platform, "theme": theme, "url": url,
     })
 
 
