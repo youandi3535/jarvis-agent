@@ -185,24 +185,6 @@ def init_db():
                 updated_at TEXT DEFAULT (datetime('now','localtime'))
             );
 
-            -- 브랜드 보이스 학습 코퍼스 (과거 발행 글 + 임베딩)
-            CREATE TABLE IF NOT EXISTS style_corpus (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_id     INTEGER UNIQUE,        -- post_analysis.id
-                platform      TEXT,
-                title         TEXT,
-                content       TEXT,                  -- 평문 (검색 결과 표시용)
-                excerpt       TEXT,                  -- 첫 800자 (few-shot 주입용)
-                embedding     BLOB,                  -- numpy float32 array
-                embed_model   TEXT,                  -- 모델 식별자
-                embed_dim     INTEGER,               -- 차원수
-                char_count    INTEGER DEFAULT 0,
-                published_at  TEXT,
-                views         INTEGER DEFAULT 0,
-                indexed_at    TEXT DEFAULT (datetime('now','localtime'))
-            );
-            CREATE INDEX IF NOT EXISTS idx_sc_platform ON style_corpus(platform);
-
             -- ─── 자가학습 백본 ───────────────────────────────────
             -- (예측, 실측) 페어 — 매일 적재 → 주별 회귀학습 입력
             CREATE TABLE IF NOT EXISTS learn_log (
@@ -561,6 +543,13 @@ _MIGRATIONS: list[tuple[int, str, str]] = [
                 FROM vision_agent_history
             ) WHERE prev IS NOT NULL AND prev = status
         );
+    """),
+    (3, "style_corpus 제거 — 읽는 코드가 0인 브랜드 보이스 코퍼스 폐기", """
+        -- ★ 2026-07-27: 이 표는 매일 02:30 잡이 적재했지만 **읽는 코드가 하나도 없었다**
+        --   (search_similar / build_few_shot_block 호출자 0). 게다가 tfidf(2048d)와
+        --   MiniLM(384d)이 섞여 색인돼 검색 시 차원 다른 행을 서로 건너뛰는 상태였다.
+        --   적재·조회·검색 스택을 전부 걷어냈으므로 표도 함께 제거한다.
+        DROP TABLE IF EXISTS style_corpus;
     """),
 ]
 
@@ -1533,125 +1522,6 @@ def retention_report() -> list[dict]:
             rows.append({"table": table, "rows": n, "days": days,
                          "stale": stale, "desc": desc})
     return sorted(rows, key=lambda r: -r["rows"])
-
-
-def cleanup_events(days: int = 30) -> int:
-    """events 테이블에서 N일 이전 row 삭제. 삭제 row 수 반환.
-
-    ★ 하위호환 유지 — 신규 코드는 `cleanup_by_retention()` 을 쓸 것.
-    """
-    with get_db() as conn:
-        cur = conn.execute(
-            "DELETE FROM events WHERE created_at < datetime('now','localtime',?)",
-            (f"-{days} days",),
-        )
-        deleted = cur.rowcount
-        conn.commit()
-    # 단편화 회수 — VACUUM 은 트랜잭션 밖에서만 실행
-    if deleted:
-        with sqlite3.connect(str(DB_PATH), timeout=30) as v:
-            v.execute("VACUUM")
-    return deleted
-
-
-def cleanup_vision_history(days: int = 7) -> int:
-    """vision_agent_history 테이블에서 N일 이전 row 삭제. 삭제 row 수 반환.
-
-    ★ 30초 주기 수집(에이전트당 1행)이 무제한 누적되면 DB 가 수백MB 로 팽창해
-    get_db() 신규 커넥션 오픈이 지연되고, GUARDIAN 오케스트레이터 스레드가 그
-    커넥션 대기로 정체되면서 스케줄러 heartbeat 지연 → keeper 가 데몬을 hang
-    으로 오판해 강제 재시작하는 사고로 이어진다.
-    """
-    with get_db() as conn:
-        cur = conn.execute(
-            "DELETE FROM vision_agent_history WHERE recorded_at < datetime('now','localtime',?)",
-            (f"-{days} days",),
-        )
-        deleted = cur.rowcount
-        conn.commit()
-    if deleted:
-        with sqlite3.connect(str(DB_PATH), timeout=30) as v:
-            v.execute("VACUUM")
-    return deleted
-
-
-# ─────────────────────────────────────────────────────────────
-# 브랜드 보이스 학습 코퍼스 (style_corpus)
-# ─────────────────────────────────────────────────────────────
-
-def style_corpus_upsert(
-    source_id: int, platform: str, title: str, content: str, excerpt: str,
-    embedding_bytes: bytes, embed_model: str, embed_dim: int,
-    char_count: int = 0, published_at: str = "", views: int = 0,
-) -> None:
-    """과거 발행 글 + 임베딩 저장. source_id 충돌 시 업데이트."""
-    with get_db() as conn:
-        conn.execute(
-            """INSERT INTO style_corpus
-                (source_id, platform, title, content, excerpt,
-                 embedding, embed_model, embed_dim, char_count,
-                 published_at, views, indexed_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?, datetime('now','localtime'))
-               ON CONFLICT(source_id) DO UPDATE SET
-                 platform=excluded.platform,
-                 title=excluded.title,
-                 content=excluded.content,
-                 excerpt=excluded.excerpt,
-                 embedding=excluded.embedding,
-                 embed_model=excluded.embed_model,
-                 embed_dim=excluded.embed_dim,
-                 char_count=excluded.char_count,
-                 views=excluded.views,
-                 indexed_at=excluded.indexed_at""",
-            (source_id, platform, title, content, excerpt,
-             embedding_bytes, embed_model, embed_dim, char_count,
-             published_at, views),
-        )
-
-
-def style_corpus_unindexed_post_ids(min_chars: int = 200) -> list[int]:
-    """post_analysis 에 본문 있고 style_corpus 에 없는 ID 목록."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT pa.id
-                 FROM post_analysis pa
-                 LEFT JOIN style_corpus sc ON sc.source_id = pa.id
-                WHERE sc.id IS NULL
-                  AND length(pa.original_content) >= ?
-                ORDER BY pa.created_at DESC""",
-            (min_chars,),
-        ).fetchall()
-    return [int(r["id"]) for r in rows]
-
-
-def style_corpus_fetch_post(post_id: int) -> dict | None:
-    """인덱싱용 — post_analysis 한 건 가져오기."""
-    with get_db() as conn:
-        row = conn.execute(
-            """SELECT id, platform, theme, title, original_content,
-                      created_at, current_views
-                 FROM post_analysis WHERE id = ?""",
-            (post_id,),
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def style_corpus_all_embeddings() -> list[dict]:
-    """전체 코퍼스 (임베딩 + 메타). 검색 시 메모리에 로드."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT id, source_id, platform, title, excerpt,
-                      embedding, embed_model, embed_dim,
-                      char_count, published_at, views
-                 FROM style_corpus""").fetchall()
-    return [dict(r) for r in rows]
-
-
-def style_corpus_clear() -> int:
-    """코퍼스 비우기 (재인덱싱 전 사용). 삭제 row 수 반환."""
-    with get_db() as conn:
-        cur = conn.execute("DELETE FROM style_corpus")
-        return cur.rowcount
 
 
 # ── 자가학습 — learn_log ────────────────────────────────────────

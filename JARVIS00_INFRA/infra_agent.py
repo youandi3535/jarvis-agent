@@ -386,7 +386,7 @@ def job_db_retention() -> None:
     """DB 보존 정책 일괄 적용 — **정리의 단일 진입점** (2026-07-27).
 
     ★ 종전엔 테이블마다 잡이 따로 있고 **보존 일수가 콜백에 박혀** 있었다
-      (`cleanup_events(days=30)` · `cleanup_vision_history(days=7)`).
+      (테이블마다 전용 잡이 있고 일수가 그 콜백 인자로 박혀 있었다).
       그 결과 규칙 없는 테이블이 방치됐다 — 실측 `job_runs` **155,483행** ·
       `qa_ingested_sessions` 15,567행이 무한 누적 중이었다(DB 209MB 의 주범).
       이제 "며칠 보관하나" 의 답은 `shared/db.RETENTION` **한 곳**에 있고,
@@ -420,28 +420,6 @@ def job_db_retention() -> None:
             log.info("🧹 외부 SQLite 정리: 삭제 대상 없음")
     except Exception as e:
         log.error(f"❌ 외부 SQLite 정리 실패: {e}")
-        _g_report("infra", e, module=__name__)
-
-
-def job_cleanup_events() -> None:
-    """(하위호환) events 정리 — 신규 경로는 `job_db_retention`."""
-    from shared import db
-    try:
-        n = db.cleanup_events(days=db.retention_days("events") or 30)
-        log.info(f"🧹 events 테이블 정리: {n}건 삭제")
-    except Exception as e:
-        log.error(f"❌ events 정리 실패: {e}")
-        _g_report("infra", e, module=__name__)
-
-
-def job_cleanup_vision_history() -> None:
-    """(하위호환) vision_agent_history 정리 — 신규 경로는 `job_db_retention`."""
-    from shared import db
-    try:
-        n = db.cleanup_vision_history(days=db.retention_days("vision_agent_history") or 7)
-        log.info(f"🧹 vision_agent_history 정리: {n}건 삭제")
-    except Exception as e:
-        log.error(f"❌ vision_agent_history 정리 실패: {e}")
         _g_report("infra", e, module=__name__)
 
 
@@ -544,7 +522,7 @@ __all__ = [
     "register", "register_capability",
     "build_status",
     "handle_command", "handle_safe_intent", "execute_approval",
-    "job_db_backup", "job_cleanup_events", "job_cleanup_vision_history", "job_file_cleanup",
+    "job_db_backup", "job_file_cleanup",
     "touch_heartbeat", "job_heartbeat", "enable_hang_forensics",
     "quiet_heartbeat_logs",
 ]

@@ -153,7 +153,7 @@ def _collect_once() -> dict:
             # ── 상태 변화 감지 → 이력 적재 + 텔레그램 알림 (2026-07-27 개편) ──
             #   ★ 종전엔 **매 수집마다** history 를 append 했다(30초 × 10에이전트 =
             #     하루 28,800행). 실측 182,437행으로 **DB 최대 테이블** 이 됐는데,
-            #     그 이력을 읽는 코드는 **하나도 없었다**(`get_history()` 호출자 0).
+            #     그 이력을 읽는 코드는 **하나도 없었다**(조회 함수조차 호출자 0이라 함께 삭제).
             #     같은 상태를 30초마다 반복 기록한 것이라 정보량은 변화 시점과 동일하다.
             #   ★ 이제 **상태가 바뀐 순간만** 적재한다 — "언제 죽었고 언제 살아났나" 는
             #     그대로 답할 수 있고(오히려 대시보드 차트가 생겼다), 양은 1/1000 이 된다.
@@ -347,35 +347,6 @@ def get_latest_snapshot() -> list[dict]:
         return result
     except Exception as e:
         log.warning(f"[VISION] snapshot 조회 실패: {e}")
-        _g_report("vision", e, module=__name__)
-        return []
-
-
-def get_history(agent_id: str | None = None, hours: int = 24, limit: int = 200) -> list[dict]:
-    """vision_agent_history 이력 조회."""
-    from shared.db import get_db
-    try:
-        with get_db() as conn:
-            if agent_id:
-                rows = conn.execute(
-                    """SELECT agent_id, agent_name, status, message, recorded_at
-                       FROM vision_agent_history
-                       WHERE agent_id=?
-                         AND recorded_at >= datetime('now','localtime',?)
-                       ORDER BY recorded_at DESC LIMIT ?""",
-                    (agent_id, f"-{hours} hours", limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """SELECT agent_id, agent_name, status, message, recorded_at
-                       FROM vision_agent_history
-                       WHERE recorded_at >= datetime('now','localtime',?)
-                       ORDER BY recorded_at DESC LIMIT ?""",
-                    (f"-{hours} hours", limit),
-                ).fetchall()
-        return [dict(r) for r in rows]
-    except Exception as e:
-        log.warning(f"[VISION] history 조회 실패: {e}")
         _g_report("vision", e, module=__name__)
         return []
 

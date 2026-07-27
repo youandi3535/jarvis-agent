@@ -469,22 +469,6 @@ def job_auto_approve() -> None:
     _run_with_harness("자동 승인 처리", _run)
 
 
-def job_voice_index() -> None:
-    """일별 — 신규 발행 글 브랜드 보이스 인덱싱 + 트렌드 키워드 임베딩 백필. ★ 하네스 래핑."""
-
-    def _run():
-        from shared.style import run_full_index  # ★ Phase 2 통합 (2026-05-18)
-        res = run_full_index(reindex=False, verbose=False)
-        _log.info(f"[voice_index] indexed={res['indexed']} provider={res['provider']}")
-        from JARVIS03_RADAR.learning import backfill_keyword_embeddings
-        embed_res = backfill_keyword_embeddings(verbose=False)
-        if embed_res["new"] > 0:
-            _log.info(f"[keyword_embed] 신규 {embed_res['new']}개 임베딩 완료 (total={embed_res['total']})")
-        return {"indexed": res["indexed"], "embed_new": embed_res["new"]}
-
-    _run_with_harness("보이스 인덱싱", _run)
-
-
 def job_daily_review() -> None:
     """매일 22:00 — 그날 발행 글 통합 분석 → 학습 인사이트 누적. ★ 하네스 래핑."""
     _log.info("=" * 50)
@@ -586,6 +570,6 @@ def job_keyword_embed_backfill() -> None:
 __all__ = [
     "job_collect_trends", "job_collect_performance",
     "job_recycle_check", "job_analyzer_fallback", "job_auto_approve",
-    "job_voice_index", "job_daily_review", "job_learn_log",
+    "job_daily_review", "job_learn_log",
     "job_feedback_update", "job_train_weights", "job_keyword_embed_backfill",
 ]
