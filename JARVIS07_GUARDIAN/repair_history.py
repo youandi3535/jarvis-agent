@@ -511,11 +511,19 @@ def history_text(days: int = 7, limit: int = 10) -> str:
 _SEARCH_CACHE: dict[str, Any] = {"mtime": 0.0, "vecs": None, "rows": [], "idf": {}, "toks": []}
 
 # 검색 튜닝 — ① 단일 진입점(여기 한 곳). ② `_flag`/env 로 무배포 조정.
-_KW_WEIGHT   = 0.5    # 키워드 점수 가중
-_VEC_WEIGHT  = 0.5    # 벡터 점수 가중
-# 실측 점수 분포로 교정 (ERRORS [534]): 무관 질의 0.09~0.37 / 유관 질의 0.40~0.71.
-# 경계를 유관 쪽 하한 바로 아래에 둔다 — 빈손이 오답보다 낫다.
-# 실측 분리 (토큰 매칭 + IDF 후): 무관 0.099~0.398 / 유관 0.427~0.709.
+# ★ 가중치 — 골든셋 스윕 실측 (ERRORS [545]). 문자 n-gram 도입으로 키워드 다리가
+#   되살아나 최적점이 0.5→0.7 로 이동했다 (recall@100: 0.5→75.5% / 0.7→79.1% / 0.8→78.2%).
+_KW_WEIGHT   = 0.7    # 키워드(문자 n-gram) 가중
+_VEC_WEIGHT  = 0.3    # 벡터(임베딩) 가중
+# ★ 이 임계는 **리랭커가 못 돌 때의 폴백 경로에서만** 쓰인다 (ERRORS [545]).
+#   정상 경로는 리랭커가 `RERANK_MIN_SCORE` 로 판정하므로 여기를 안 거친다.
+#   골든셋 실측 — 1단계 단독은 *어떤 임계에서도 쓸 만하지 않다*:
+#       0.20 → 정밀도 12.1%(빈손 0) · 0.30 → 16.7%(빈손 10/36) · 0.41 → 37.5%(빈손 32/36)
+#   그래서 **보수적으로 높게 유지**한다 — 재순위를 못 하는 열화 상태에서는
+#   "억지로 뭔가 주기" 보다 "조용히 있기" 가 맞다(계약: 오답 < 빈손). 오답은 무관 사고의
+#   "⛔ 헛다리" 를 LLM 에 주입해 능동적으로 오도하지만, 빈손은 자체 분석으로 진행하게 둘 뿐이다.
+#   ※ 옛 근거(토큰 매칭 시절 "무관 0.099~0.398 / 유관 0.427~0.709")는 문자 n-gram 도입으로
+#     점수 분포가 달라져 더는 유효하지 않다 — 위 폴백 실측이 현재 근거다.
 # 경계를 그 사이에 둔다 — 빈손이 오답보다 낫다.
 _MIN_SCORE   = 0.41
 
@@ -524,20 +532,25 @@ _MIN_SCORE   = 0.41
 #     (실측 1단계 recall @20 36.4% / @100 63.6% / @200 82.7%, 100건 재점수 1.2초 CPU).
 #   RERANK_MIN_SCORE: cross-encoder 로짓 임계 — **코사인 임계(_MIN_SCORE)와 스케일이 다르다.**
 #     둘을 섞어 쓰면 안 된다. 값 변경 시 `selfcheck()` 의 골든셋 레그로 반드시 재측정할 것.
-#   ★ 값 근거 — 골든셋 36질의/정답 110개 임계 스윕 실측 (2026-07-28):
-#       임계 | recall@5 | 정밀도 | 빈손
-#       없음 |   14.5%  |  16.7% | 26/36   ← 리랭커 도입 전 기준선
-#        -5  |   21.8%  |  34.8% | 11/36
-#        -1  |   17.3%  |  47.5% | 23/36   ← 채택
-#         0  |   14.5%  |  53.3% | 25/36
-#     -1 을 고른 이유: 세 지표가 **모두 기준선 이상**이면서, 이 저장소의 계약
-#     *"오답 < 빈손"* 을 -5 보다 잘 지킨다(오답 45→21). 오답은 무관 사고의
-#     "⛔ 헛다리" 를 LLM 프롬프트에 주입해 *능동적으로 오도* 하므로 빈손보다 비싸다.
-#   ⚠️ 이건 **부분 개선이지 해결이 아니다** — 진짜 병목은 1단계 recall 이다
-#     (1단계 recall@100 이 63.6% 라 리랭커가 볼 수 있는 상한 자체가 낮다).
-#     다음 작업: 1단계 개선(질의 확장·키워드 레그 보정·인덱스 텍스트 재구성).
+#   ★ 값 근거 — 골든셋 36질의/정답 110개 임계 스윕 실측 (2026-07-28, **문자 n-gram 도입 후 재측정**):
+#       임계 | recall@5 | 정밀도 | 빈손      ※ 재랭킹 입력은 `_row_text` 전문(제목+증상+원인 변형보다 전 구간 우월)
+#       기준 |   14.5%  |  16.7% | 26/36    ← 2단계 도입 *전* 원래 상태
+#        -1  |   30.9%  |  26.0% |  2/36
+#         0  |   25.5%  |  33.3% | 10/36
+#     **0**  |   25.5%  |  33.3% | 10/36    ← 채택
+#         1  |   20.9%  |  41.8% | 17/36
+#         2  |   12.7%  |  50.0% | 25/36
+#     0 을 고른 이유: 세 지표가 **모두 기준선 이상**(recall 1.8배·정밀도 2.0배·빈손 72%→28%)
+#     이면서 **대표 사례가 살아남는 가장 높은 임계**다.
+#   ★ 실패에서 배운 것 — 처음엔 계약 *"오답 < 빈손"* 만 보고 1 을 골랐다. 정밀도가 41.8% 로
+#     더 높았기 때문이다. 그런데 그 임계에서 질의 "사진 두 장이 딱 붙어 있다" 가 **빈손**이 됐다
+#     ([39] 점수 0.04 < 1.0). CLAUDE.md 가 "[39][103][170][171] 4회 반복 박제" 로 못 박은
+#     바로 그 사고군이다. **지표를 올리다 그 지표가 대표하려던 것을 잃은 것이다.**
+#     → 임계를 고를 때는 총계뿐 아니라 *반드시 통과해야 하는 대표 질의* 를 함께 확인할 것.
+#   ⚠️ **1단계를 손대면 이 값도 반드시 재스윕할 것** — 실제로 n-gram 도입으로 최적점이
+#     -1 에서 1 로 옮겨갔다. 점수 분포가 바뀌면 임계는 자동으로 낡는다.
 RERANK_POOL      = 100
-RERANK_MIN_SCORE = -1.0
+RERANK_MIN_SCORE = 0.0
 
 
 def _search_env(name: str, default: float) -> float:
@@ -547,6 +560,31 @@ def _search_env(name: str, default: float) -> float:
         return float(_os.getenv(name) or default)
     except ValueError:
         return default
+
+
+# ★ 문자 n-gram 크기 — 한국어 활용형·복합어를 형태소 분석기 없이 잇는다 (ERRORS [545]).
+#   왜 어절이 아니라 문자인가 (진단 실측):
+#     종전 토크나이저는 `[가-힣]{2,}` 로 **어절을 통째로** 잘랐다. 한국어는 교착어라
+#     "붙어/붙는다/붙었다" 가 전부 다른 토큰이 되고, 사용자 어휘("사진")와 문서 어휘
+#     ("이미지")도 안 이어진다. 실측 — **top-100 밖으로 탈락한 정답 40개 중 32개(80%)가
+#     키워드 점수 0.000** 이었다. 질의 단어가 문서에 하나도 안 겹친 것이다.
+#   왜 2인가: 3-gram 은 전 구간에서 2-gram 보다 낮았다 (recall@100 72.7% vs 79.1%).
+#     한국어 어근이 대개 1~2음절이라 2-gram 이 어간을 더 잘 공유한다.
+NGRAM_N = 2
+
+
+def _char_ngrams(s: str, n: int = NGRAM_N) -> set:
+    """검색용 문자 n-gram — 공백·기호를 걷어내고 n글자 창을 민다.
+
+    ★ 부분문자열 매칭이 아니다 — 양쪽을 같은 방식으로 n-gram 화해 *집합 교집합* 으로 센다.
+      ERRORS [534] 가 기각한 `t in text` 와는 다른 기법이다(그건 한쪽만 통째로 훑어
+      "사진" 이 "AI사진생성" 에 걸렸다). 여기서는 질의·문서가 대칭이고 IDF 가 흔한
+      n-gram 을 눌러 준다.
+    """
+    s = "".join(ch for ch in (s or "").lower() if ch.isalnum())
+    if len(s) < n:
+        return {s} if s else set()
+    return {s[i:i + n] for i in range(len(s) - n + 1)}
 
 
 def _row_text(row: dict) -> str:
@@ -571,13 +609,15 @@ def _index() -> tuple[list[dict], Any]:
     # ★ IDF — 문서에서 파생한다(사본 없음). 흔한 토큰일수록 가중 ↓
     import math as _math
     texts = [_row_text(r).lower() for r in rows]
+    # ★ 문자 n-gram 색인 (ERRORS [545]) — 어절 토큰은 한국어 활용형·어휘 격차에서 죽는다.
+    #   식별자·파일경로(`NoneType`, `foo.py`)는 n-gram 으로도 잘 이어지므로 별도 유지 불필요.
+    toks = [_char_ngrams(t) for t in texts]
     df: dict[str, int] = {}
-    for t in texts:
-        for tok in {x.lower() for x in _TOKEN_RE.findall(t)}:
+    for s in toks:
+        for tok in s:
             df[tok] = df.get(tok, 0) + 1
     n = len(texts) or 1
     idf = {tok: _math.log(n / (1 + c)) + 1.0 for tok, c in df.items()}
-    toks = [{x.lower() for x in _TOKEN_RE.findall(t)} for t in texts]
 
     vecs = None
     try:
@@ -642,7 +682,7 @@ def search_incidents(query: str, top_k: int = 3, min_score: float | None = None)
     if not rows:
         return []
 
-    q_tokens = {t.lower() for t in _TOKEN_RE.findall(q)}
+    q_tokens = _char_ngrams(q)          # ★ 색인과 동일 방식 (ERRORS [545]) — 대칭 필수
     _idf = _SEARCH_CACHE.get("idf") or {}
     _toks = _SEARCH_CACHE.get("toks") or []
     kw = [_kw_score(q_tokens, _toks[i] if i < len(_toks) else set(), _idf)
@@ -810,8 +850,8 @@ GOLDEN_PATH = Path(__file__).parent / "golden_queries.json"
 # ★ 회귀 임계 — 아래로 떨어지면 알린다. 값 근거는 2026-07-28 실측 (RERANK_MIN_SCORE 주석 표).
 #   여유를 5%p 둔 이유: 리랭커·임베딩 모델은 미세하게 비결정적이고, ERRORS.md 가 자라면
 #   후보 경쟁이 달라진다. 진짜 열화만 잡고 잡음에는 안 울리게 한다.
-GOLDEN_MIN_RECALL   = 0.12      # 실측 0.173
-GOLDEN_MAX_EMPTY    = 0.72      # 실측 0.639 (23/36)
+GOLDEN_MIN_RECALL   = 0.18      # 실측 0.255 (ERRORS [545] 이후)
+GOLDEN_MAX_EMPTY    = 0.40      # 실측 0.278 (10/36) — [545] 이전엔 0.639 였다
 
 
 def golden_check(sample: int = 0) -> list[str]:
