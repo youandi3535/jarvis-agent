@@ -6,8 +6,14 @@
   2) APScheduler 인스턴스 등록 (job_catalog.set_apscheduler)
   3) EventListener attach (job_history.attach_listeners)
   4) DEFAULT_JOBS 등록 (job_registry.register_default_jobs) — 데몬에서 별도 호출도 가능
-  5) JARVIS04 자체 cron 잡 (일일 브리핑) 등록
-  6) 도구 9개 자동 등록 (모듈 import 시점에 @register_tool 트리거)
+  5) 도구 자동 등록 (모듈 import 시점에 @register_tool 트리거) + ensure_loaded() 검증
+
+★ JARVIS04 는 **자기 소유 잡이 0개** 다 (owner=jarvis04_scheduler 실측 0건).
+  남의 잡을 등록·집행·조회할 뿐 스스로 도는 일이 없다 — 그게 이 에이전트의 정의다.
+  (2026-07-29 정정: 종전엔 "5) JARVIS04 자체 cron 잡(일일 브리핑) 등록" 이라 적혀 있었으나
+   register() 에 add_job 호출이 없고 DEFAULT_JOBS 에도 브리핑 잡이 없다. 일일 브리핑은
+   잡이 아니라 `briefing.build_briefing_text()` 를 텔레그램·도구가 *요청 시* 호출하는
+   방식이다. 없는 잡을 찾게 만드는 문서 드리프트라 제거.)
 
 ★ 강제 규정 (CLAUDE.md):
 - 모든 APScheduler 잡은 *반드시* DEFAULT_JOBS (또는 자기 도메인 register()) 통해 등록.

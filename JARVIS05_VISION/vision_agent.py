@@ -7,7 +7,13 @@ register() 안에서:
   2. 기존 JARVIS00~04 어댑터 레지스트리 등록
   3. VisionCollector 스레드 시작 (30초 주기 메트릭 수집)
   4. FastAPI 서버 스레드 시작 (port 8505)
-  5. JARVIS04 DEFAULT_JOBS 에 1분 주기 수집 잡 등록
+
+★ JARVIS05 는 **DEFAULT_JOBS 에 잡을 등록하지 않는다** (owner=jarvis05_vision 실측 0건).
+  수집은 APScheduler 잡이 아니라 위 3의 데몬 스레드가 돈다 — 주기는
+  `collector.COLLECT_INTERVAL`(30초) 단일 상수가 소유한다.
+  (2026-07-29 정정: 종전엔 "5. DEFAULT_JOBS 에 1분 주기 수집 잡 등록" 이라 적혀 있었으나
+   register() 에 add_job 이 없다. 없는 잡을 찾다 "수집이 죽었나" 로 오독하게 만드는
+   문서 드리프트라 제거. 주기도 1분이 아니라 30초였다.)
 """
 from __future__ import annotations
 
