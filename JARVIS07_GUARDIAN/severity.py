@@ -601,13 +601,37 @@ def is_transient(error_type: str, message: str = "", source: str = "",
 # 6. 표시용 라벨
 # ══════════════════════════════════════════════════════════════════
 
+# ★ 도메인 접두사 → 라벨 (ERRORS [548]). `_CATEGORY_LABELS` 는 *파이썬 예외 이름* 표라
+#   도메인 타입(HarnessFactuality 등)을 담을 자리가 아니다. 접두사만 등록하면
+#   그 아래 세부 타입이 **몇 개 늘든 자동으로** 분류된다 — 타입마다 표에 줄을 추가하는
+#   방식은 새 kind 가 생길 때마다 낡는다(원칙②).
+#   ※ 접두사는 각 도메인의 파생 함수가 만드는 것과 짝: harness_error_type ·
+#     watchdog_error_type · posting_error_type · draft_fix_error_type.
+_DOMAIN_PREFIX_LABELS: tuple = (
+    ("Harness",  "발행 검증"),      # harness Layer 3 판정 (사실성·매력도·분량·중단 등)
+    ("Watchdog", "정지 감지"),      # freeze / 데드라인 초과
+    ("Posting",  "발행 대응"),      # 실패 후 자동 대응 결과
+    ("DraftFix", "대본 즉시수정"),   # Layer 3 inline 패치
+)
+
+
 def describe_category(error_type: str) -> str:
     """error_type → 한글 분류 라벨. 미등록 타입은 '기타' (판단 실패가 아니라 미분류 표시)."""
     et = (error_type or "").strip()
     if et in _CATEGORY_LABELS:
         return _CATEGORY_LABELS[et]
     short = _short_type(et)  # "selenium.common.exceptions.WebDriverException" 대응
-    return _CATEGORY_LABELS.get(short, _DEFAULT_CATEGORY)
+    if short in _CATEGORY_LABELS:
+        return _CATEGORY_LABELS[short]
+    # 도메인 접두사 파생 — 가장 긴 접두사 우선(겹칠 때 더 구체적인 쪽)
+    for pref, label in sorted(_DOMAIN_PREFIX_LABELS, key=lambda x: -len(x[0])):
+        if short.startswith(pref) and len(short) > len(pref):
+            return label
+    # ★ 오류가 아닌 *변경·정책 기록* (GitCommit·ExternalEdit 등) — 목록은 error_collector 소유.
+    #   화면에서 "기타" 로 뭉뚱그려지면 오류 975건이 섞여 보인다 — 실제로 그랬다.
+    if et in _policy_types() or short in _policy_types():
+        return "변경 기록"
+    return _DEFAULT_CATEGORY
 
 
 def format_error_label(error_type: str) -> str:

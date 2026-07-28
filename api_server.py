@@ -898,6 +898,27 @@ def get_publish():
 
 
 # ── GUARDIAN 오류 ────────────────────────────────────────────────
+def _with_error_category(rows: list) -> list:
+    """오류 행에 표시용 분류 라벨을 붙인다 — **API 가 오류를 내보내는 유일한 통로** (ERRORS [548]).
+
+    ★ 왜 헬퍼인가: 종전엔 `/api/errors` 한 곳에만 `describe_category` 가 붙어 있고
+      `/api/guardian/stats` 의 `recent` 에는 없었다. 대시보드는 두 응답을 **같은 타입**
+      (`ErrorRow`)으로 쓰므로, 같은 오류가 화면에 따라 `발행 검증(HarnessFactuality)` 로도
+      `HarnessFactuality` 로도 보였다. 부착을 두 곳에 두면 반드시 한쪽이 빠진다(원칙①).
+    ★ 라벨 자체는 만들지 않는다 — `severity.describe_category` 파생. 여기서 매핑하면 사본이 된다.
+    """
+    try:
+        from JARVIS07_GUARDIAN.severity import describe_category
+    except Exception:
+        return rows
+    for r in rows:
+        try:
+            r["error_category"] = describe_category(r.get("error_type", ""))
+        except Exception:
+            pass
+    return rows
+
+
 @app.get("/api/guardian/stats")
 def get_guardian_stats():
     try:
@@ -920,7 +941,8 @@ def get_guardian_stats():
             FROM error_log
             WHERE timestamp >= datetime('now', '-7 days')
         """).fetchone()
-        recent = [dict(r) for r in con.execute("SELECT id, timestamp, severity, status, error_type, module, message FROM error_log ORDER BY id DESC LIMIT 10").fetchall()]
+        recent = _with_error_category(
+            [dict(r) for r in con.execute("SELECT id, timestamp, severity, status, error_type, module, message FROM error_log ORDER BY id DESC LIMIT 10").fetchall()])
         con.close()
         return {
             "total": row["total"] or 0, "new": row["new_cnt"] or 0,
@@ -975,10 +997,7 @@ def get_errors(
             params,
         ).fetchall()]
         con.close()
-        from JARVIS07_GUARDIAN.severity import describe_category
-        for r in rows:
-            r["error_category"] = describe_category(r.get("error_type", ""))
-        return rows
+        return _with_error_category(rows)
     except Exception:
         return []
 
