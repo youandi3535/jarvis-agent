@@ -746,10 +746,29 @@ def _normalize_message(msg: str) -> str:
       - 임시 디렉터리 (/tmp/..., /var/folders/...)
       - 큰 숫자 (PID·timestamp)
     같은 오류라도 *경로·숫자·시각* 만 다르면 같은 fingerprint 로 통합.
+
+    ★ Phase D — harness 액션 이름의 *주제* 정규화 (ERRORS [546], 2026-07-29):
+      harness 오류 메시지는 `[harness:theme-publish-<테마>-naver] ...` 로 시작한다.
+      그 **테마 이름 때문에 같은 사고가 매번 새 지문**이 됐다 — 실측 336회 출현 중
+      `theme-publish-*` 가 **54종 고유**. "데드라인 초과" 하나가 고령화/주류업/음원…
+      테마 수만큼 갈라져, Tier 1 이 매번 *처음 보는 오류* 로 취급했다.
+      정규화 후 시뮬레이션(harness 339건 시간순): 재매칭 **29.8% → 48.4%**,
+      잘못 뭉갠 그룹 **0/41**(합쳐진 그룹의 context.kind 가 전부 단일).
+      ※ `경제 브리핑 발행 — 네이버` 처럼 이름에 변수가 없는 액션(3종)은 건드리지 않는다.
     """
     if not msg:
         return ""
     m = msg.strip()
+    # ★ harness 액션 이름의 가변부(주제) — `<종류>-publish-<주제>[-<플랫폼>]` 규약에서 파생.
+    #   "theme" 을 박지 않는다: 새 post_type 이 같은 규약을 쓰면 자동으로 따라온다 (원칙②).
+    #   플랫폼 접미사는 **보존** — 네이버/티스토리는 코드 경로가 달라 같은 사고가 아니다.
+    m = re.sub(r"\[harness:([a-z_]+)-publish-[^\]]+?-(naver|tistory)\]",
+               r"[harness:\1-publish-<TOPIC>-\2]", m)
+    #   ★ `(?!<TOPIC>)` 필수 — 없으면 이 줄이 **바로 위 줄의 결과를 다시 먹어**
+    #     `<TOPIC>-naver` → `<TOPIC>` 로 플랫폼 구분을 날린다. 네이버/티스토리는
+    #     코드 경로가 달라 같은 사고가 아니므로 반드시 구분을 유지해야 한다.
+    m = re.sub(r"\[harness:([a-z_]+)-publish-(?!<TOPIC>)[^\]]+\]",
+               r"[harness:\1-publish-<TOPIC>]", m)
     # 메모리 주소
     m = re.sub(r"0x[0-9a-fA-F]+",          "<ADDR>", m)
     # 시간·날짜
@@ -768,6 +787,11 @@ def _normalize_message(msg: str) -> str:
     # 인용 문자열 — 변수명·식별자
     m = re.sub(r"'[^']+'",                 "'<NAME>'", m)
     m = re.sub(r'"[^"]+"',                 '"<NAME>"', m)
+    # ★ 단위가 붙은 숫자 (ERRORS [546]) — `302s`·`5건`·`12개` 처럼 숫자와 단위가 **붙어 있으면**
+    #   아래 `\b\d+\b` 가 단어 경계를 못 찾아 통째로 빠져나간다(한글·영문 단위 모두 \w 라서).
+    #   그 결과 "멈춤 302s > 300s" 와 "멈춤 305s > 300s" 가 서로 다른 지문이 됐다 — 같은 사고인데.
+    #   실측: 이 한 줄로 harness 재매칭 46.0% → 51.3%. 안전성 — 병합 53그룹 전부 kind 단일(오병합 0).
+    m = re.sub(r"\b\d+(?=(?:s|ms|초|분|시간|건|개|자|회|%|MB|GB|KB)\b)", "<N>", m)
     # 남은 큰 숫자 (4자리+) — PID·timestamp·ID
     m = re.sub(r"\b\d{4,}\b",              "<BIGINT>", m)
     # 일반 숫자
