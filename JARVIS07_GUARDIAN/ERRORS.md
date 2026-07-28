@@ -2,6 +2,28 @@
 
 ---
 
+## [543] ✅ 해결 — 안 쓰는 프레임워크가 ChromaDB 를 되살려 놓고 있었다 (CrewAI 완전 제거) (2026-07-28)
+
+- **증상**: 무증상. 다만 ① 매 부팅마다 `crewai.cli.config Using config path:` 로그가 찍히고 ② 어제 코드에서 제거한 **ChromaDB 가 `.venv` 에 그대로 살아 있었다**.
+- **환경**: `crewai==1.10.1` + `crewai-tools==1.10.1`. `JARVIS00_INFRA/preflight.py:77` 이 **필수 외부 모듈**로 등재 → 없으면 Layer 0 에서 부팅 차단.
+- **원인**: 테마글 수집을 CrewAI Agent 로 하던 시절의 잔재. 그 용도는 이미 폐기됐는데(`collect_theme.py:529` 주석에 *"CrewAI 제거 — trend_theme_writer 용"* 이라고 **자기 손으로 적어 놓고도**) ① preflight 필수 목록 ② `shared/llm.py` 의 호환 어댑터 `ClaudeSDKLLM` ③ requirements 3곳이 그대로 남았다.
+  - **어댑터가 남은 이유**가 특히 비직관: CrewAI 는 OpenAI 를 전제하므로 Claude 를 물리려면 *메시지 형식 변환 + `BaseLLM.register()` 로 isinstance 통과* 가 필요했다. 그 통역이 어댑터였는데, **대화 상대(CrewAI 호출부)가 사라진 뒤에도 통역만 남아 있었다.**
+  - **진짜 손해**: crewai 가 의존성으로 **chromadb·lancedb·openai·instructor 등 28종**을 끌고 온다. 어제 ERRORS [539] 로 ChromaDB 를 *코드에서* 제거했지만 **패키지는 crewai 가 붙들고 있어 그대로였다** — "제거했다" 는 인식과 실제가 어긋난 상태.
+- **헛다리**: 어제 죽은 코드 감사에서 이 항목은 *"crewai 는 preflight 필수라 지우면 부팅이 막힌다"* 로 **기각(살아있음)** 됐다. 그 판정은 **preflight 등재를 근거로 삼은 것이지 실제 사용을 확인한 게 아니었다**. 등재 자체가 잔재였는데 그걸 생존 증거로 읽었다.
+- **해결**: 사용 → 등재 순으로 반증한 뒤 코드·설정·패키지 전부 제거.
+  1. **실사용 실측**: `ClaudeSDKLLM(...)` 실제 생성 **0건**(AST — 유일 매칭은 독스트링 예시). `collect_theme` 안 crewai 사용 **0건**.
+  2. **차단 실험**: `sys.meta_path` 로 crewai import 를 막고 핵심 7모듈 로드 → **7/7 성공**. 즉 필수가 아니었다.
+  3. 코드 제거 — `ClaudeSDKLLM`(63줄)·`ClaudeCLILLM` 별칭·`BaseLLM.register()` 블록·`CREWAI_DISABLE_TELEMETRY`·`__all__` 2항목.
+  4. preflight 필수 목록에서 제거(11 → 10종) · requirements 2파일 3줄 제거.
+  5. 패키지 제거 — `crewai`·`crewai-tools` + 고아 의존 **12종**(chromadb·lancedb·instructor·textual·uv 등). **역의존 확인 후** 남긴 것: `python-dotenv`(webdriver-manager 도 요구) · `openai`(instructor) · `aiosqlite`(langgraph-checkpoint-sqlite) · `pyjwt`(mcp) · `appdirs`(dart-fss) · `openpyxl`(arelle-release).
+  6. 흔적 정리 — 주석 7곳 · `LOGIN_SUPREME_LAW.md` 문구 · `~/.config/crewai` 폴더.
+- **효과**: `.venv` **2,494MB → 2,283MB (−211MB)** · 패키지 312 → 298종 · 부팅 로그에서 crewai 줄 소멸 · **ChromaDB 실제 제거 완료**(어제 못 끝낸 것).
+- **검증**: Layer 0 preflight **통과** · 발행경로 13/13 import OK · pytest 19 통과 · precommit 60종 0건 · 재시작(PID 58014, 12:37:33) `:9198`·`:9199`·`:8505` 전부 200 · 잡 40개 · 부팅 후 실 오류 0건 · 저장소 흔적 검사 **0건**(ERRORS.md 이력 34건은 의도적 보존).
+- **파일**: `shared/llm.py` · `JARVIS00_INFRA/preflight.py` · `requirements.txt` · `requirements.lock.txt` · `JARVIS02_WRITER/length_manager.py` · `JARVIS09_COLLECTOR/collect_theme.py` · `JARVIS07_GUARDIAN/severity.py` · `jarvis_keeper.py` · `JARVIS08_PUBLISH/credentials/LOGIN_SUPREME_LAW.md`
+- **교훈**: ① **"필수 목록에 있다" 는 필요하다는 증거가 아니다.** preflight·requirements 같은 *선언* 은 과거의 사실이고, 현재 필요 여부는 **실제로 막아 보고** 확인해야 한다(차단 실험 7/7). ② **의존성은 지운 것을 되살린다** — 코드에서 A 를 지워도 A 를 요구하는 B 가 남아 있으면 A 는 디스크에 그대로다. 제거는 *역의존까지* 봐야 끝난다. ③ **어댑터는 상대가 사라지면 같이 죽는다** — 통역만 남기는 것은 "혹시 몰라" 의 전형이고, 그게 28개 패키지를 인질로 잡고 있었다.
+
+---
+
 ## [542] ✅ 해결 — 캐시가 안 걸린 이유를 3번 오진했다 (TTL→앞부분→호출횟수) (2026-07-28)
 
 - **증상**: `writer_long_body` 의 프롬프트 캐시 재사용이 **0.00배**(7일 생성 191,224 / 읽기 0). 오류도 경고도 없다.

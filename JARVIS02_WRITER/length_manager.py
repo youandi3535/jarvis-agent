@@ -324,7 +324,7 @@ TITLE_MAX_RECOMMEND:   int = 60     # 제목 너무 김 판정 상한 (제목 �
 MIN_SENTENCES_PER_HEADING: int = 1  # 모든 소제목 아래 최소 문장 수 (강제 — 빈 소제목 금지)
 MIN_KOREAN_PER_HEADING:    int = 30 # 소제목 아래 최소 한글 (1문장 보장 임계 — 1문장 미만이라 문장 표기 제외)
 
-# ── CrewAI 내부 짧은 리포트 (블로그 본문 X — 이미지 보조 자료) ──
+# ── 내부 짧은 리포트 (블로그 본문 X — 이미지 보조 자료) ──
 # 문장수 메인 (사용자 박제 2026-05-14)
 BRIEF_REPORT_SENTS_LO:  int = 12                                              # 12문장
 BRIEF_REPORT_SENTS_HI:  int = 18                                              # 18문장
@@ -568,7 +568,7 @@ __all__ = [
     "TITLE_MIN_RECOMMEND", "TITLE_MAX_RECOMMEND",
     "BODY_SNIPPET_LEN", "INDEXER_BODY_MAX", "INDEXER_BODY_MIN", "INDEXER_EMBED_MAX",
     "MIN_SENTENCES_PER_HEADING", "MIN_KOREAN_PER_HEADING",
-    # CrewAI 짧은 리포트 분량
+    # 짧은 리포트 분량
     "BRIEF_REPORT_SENTS_LO", "BRIEF_REPORT_SENTS_HI",
     "BRIEF_REPORT_LO", "BRIEF_REPORT_HI",
     "BRIEF_SECTION_SENTS_LO", "BRIEF_SECTION_SENTS_HI",

@@ -454,7 +454,12 @@ def run(post_naver=True, post_tistory=True, resume=None):
 
     @action_step(name="④ TS 쿠키")
     def _step_ts_cookie(state):
-        if state.get("ts_driver") is not None:
+        # ★ 살아있는 핸들은 state 밖 (ERRORS [543]) — state 엔 키 문자열만.
+        #   종전엔 driver 객체를 state 에 직접 넣었고, 이 경로는 **소비처가 0** 이면서
+        #   quit() 은 실패 분기에만 있어 *성공할 때마다 Chrome 이 남았다*.
+        #   이제 harness 가 액션 종료 시 close_scope 로 반드시 닫는다.
+        from JARVIS00_INFRA import resources as _res
+        if _res.get(state.get("ts_driver_key")) is not None:
             print("  ⏭️ [④] 티스토리 driver 이미 준비됨 (재시도 — 재갱신 스킵)")
             return {}
         try:
@@ -463,13 +468,14 @@ def run(post_naver=True, post_tistory=True, resume=None):
             ok, drv = _tcr(force=False, return_driver=True)
             if ok:
                 load_dotenv(override=True)
-                return {"ts_driver": drv}
+                from JARVIS00_INFRA.harness import ACTION_NAME_KEY as _ANK
+                return {"ts_driver_key": _res.put(state.get(_ANK, ""), "ts_driver", drv)}
             if drv:
                 try: drv.quit()
                 except Exception: pass
         except Exception as _e:
             print(f"  ❌ [④] 티스토리 쿠키 갱신 예외: {_e}")
-        return {"ts_driver": None}
+        return {"ts_driver_key": ""}
 
     @action_step(name="⑤ TS 수집")
     def _step_ts_collect(state):
@@ -696,6 +702,8 @@ def run(post_naver=True, post_tistory=True, resume=None):
                                        "naver_ok", "nv_pub_result", "__nv_send_attempted__"),
         # ★ max_attempts 미지정 = harness.DEFAULT_MAX_ATTEMPTS 상속 (SSOT, 현재 2회)
         deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
+        # ★ escalation 알림의 "지금 다시 실행" 버튼 대상 (ERRORS [543]) — DEFAULT_JOBS 의 잡 ID.
+        retry_job_id="j01_economic_post",
     )
     _ts_action = ActionDefinition(
         name="경제 브리핑 발행 — 티스토리",
@@ -707,6 +715,8 @@ def run(post_naver=True, post_tistory=True, resume=None):
                                        "tistory_ok", "ts_pub_result", "__ts_send_attempted__"),
         # ★ max_attempts 미지정 = harness.DEFAULT_MAX_ATTEMPTS 상속 (SSOT, 현재 2회)
         deadline_sec=BLOG_ACTION_DEADLINE_SEC,   # ★ 블로그(플랫폼)당 30분 — 사용자 박제 2026-07-06
+        # ★ escalation 알림의 "지금 다시 실행" 버튼 대상 (ERRORS [543]) — DEFAULT_JOBS 의 잡 ID.
+        retry_job_id="j01_economic_post",
     )
 
     _results: dict = {}          # platform → ActionResult (EP 결과 파일·incident 용)

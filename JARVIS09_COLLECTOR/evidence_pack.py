@@ -114,7 +114,17 @@ def _doc_attr(doc, name: str, default=""):
     return getattr(doc, name, default)
 
 
-def _docs_block(docs: list, per_doc_chars: int = 0) -> str:
+# ★ per-doc 절단 기본값 — **이 파일에서 이 상수 하나만** (ERRORS [543], 원칙①).
+#   왜 상수화했나: 같은 노브가 한 파일 안에 기본값 **셋**으로 흩어져 있었다 —
+#     `_docs_block(per_doc_chars=0)` / `_extract_facts(=1200)` / `build_evidence_pack(=900)`.
+#   실제로 걸리는 건 제일 바깥값(900)이라, 바로 위 docstring 이 선언한
+#   *"티어별 자수컷 폐지 — 문서 전문 주입"(사용자 박제 2026-07-17)* 이 **조용히 무효**였다.
+#   실측 손실: 팩당 35,000~47,000 토큰분(문서 15개 중 11~12개가 900자 초과, 중앙 1,618~3,449자).
+#   0 = 절단 없음(전문). 비상 축소는 코드가 아니라 env `JARVIS_EVIDENCE_PER_DOC_CHARS` 로만.
+PER_DOC_CHARS_DEFAULT = 0
+
+
+def _docs_block(docs: list, per_doc_chars: int = PER_DOC_CHARS_DEFAULT) -> str:
     """★ 수집 원본 전문 주입 (사용자 박제 2026-07-17 — 티어별 자수컷 폐지).
 
     옛 _TIER_CHARS 절단(뉴스 600·웹 300자 등)을 폐지 — 문서 전문을 그대로 넣어
@@ -190,7 +200,8 @@ def build_corpus_digest(docs: list, per_source_chars: int = 700) -> str:
 
 
 def _extract_facts_batch(theme: str, plan: dict, docs: list,
-                         max_facts: int = 14, per_doc_chars: int = 1200) -> list[dict]:
+                         max_facts: int = 14,
+                         per_doc_chars: int = PER_DOC_CHARS_DEFAULT) -> list[dict]:
     """문서 묶음 1회 LLM 호출 → fact 목록 (doc_idx → 출처 연결)."""
     if not docs:
         return []
@@ -310,7 +321,7 @@ _HIGH_TARGET   = 30                  # 고품질 소스 목표 fact 수 (★ 15�
 
 
 def build_evidence_pack(theme: str, plan: dict, docs: list,
-                        max_docs: int = 20, per_doc_chars: int = 900) -> dict:
+                        max_docs: int = 20, per_doc_chars: int = PER_DOC_CHARS_DEFAULT) -> dict:
     """수집 문서 → EvidencePack.
 
     ★ 2-패스 추출 (사용자 박제 2026-07-12):

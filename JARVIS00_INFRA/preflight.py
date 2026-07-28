@@ -74,7 +74,6 @@ _REQUIRED_INTERNAL_MODULES = (
 
 # ★ 외부 의존 — pip 설치 패키지 중 *발행 흐름이 의존* 하는 것
 _REQUIRED_EXTERNAL_MODULES = (
-    "crewai",         # 테마글 collect_theme Agent
     "langchain_core", # router LangChain adapter
     "yfinance",       # 종목 데이터
     "dotenv",         # 환경변수 로드

@@ -998,6 +998,28 @@ def run_bot_polling(shutdown_event: threading.Event):
                             _PENDING_J00_PLAN.pop(plan_id, None)
                             _answer_callback(cq_id, "취소했습니다.")
                             _send_tg("❌ 계획 취소됨.")
+                        # ★ harness escalation 행동 버튼 (ERRORS [543])
+                        #   서버측 대기 상태 없음 — 잡 ID 가 callback_data 에 실려 온다.
+                        #   (발행은 subprocess 라 _PENDING_* 메모리 딕셔너리를 쓸 수 없다.)
+                        elif cq_data.startswith("hesc_run:"):
+                            _job_id = cq_data[len("hesc_run:"):]
+                            _answer_callback(cq_id, "재실행합니다.")
+
+                            def _hesc_retry(jid=_job_id):
+                                try:
+                                    from JARVIS04_SCHEDULER.job_controller import run_job_now
+                                    _r = run_job_now(jid)
+                                    _ok = bool(_r.get("success") if isinstance(_r, dict) else _r)
+                                    _send_tg(f"{'🔁' if _ok else '❌'} `{jid}` 재실행 "
+                                             f"{'요청 완료' if _ok else '실패'} — "
+                                             f"{(_r or {}).get('message', '') if isinstance(_r, dict) else ''}")
+                                except Exception as _e:
+                                    _send_tg(f"❌ `{jid}` 재실행 실패: {type(_e).__name__}: {_e}")
+                            threading.Thread(target=_hesc_retry, daemon=True,
+                                             name=f"hesc_{_job_id}").start()
+                        elif cq_data == "hesc_skip":
+                            _answer_callback(cq_id, "보류했습니다.")
+                            _send_tg("🗑 이번 회차 보류 — 다음 예약까지 재시도하지 않습니다.")
                         elif cq_data.startswith("pm_batch_yes:"):
                             batch_id = cq_data[len("pm_batch_yes:"):]
                             _answer_callback(cq_id, "수정을 시작합니다!")

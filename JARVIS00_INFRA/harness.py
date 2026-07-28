@@ -239,7 +239,8 @@ class ActionDefinition:
                       - fixed_issues  : 즉시 패치 완료 (재생성 트리거 O, fingerprint 제외)
                       - unfixed_issues: 패치 불가   (재생성 트리거 O, fingerprint 포함)
                       등록하지 않으면 기존 GUARDIAN 보고만 → backward-compat 완전 보장.
-        max_attempts: 검증 순환 한계 (기본 DEFAULT_MAX_ATTEMPTS=3)
+        max_attempts: 검증 순환 한계 (미지정 시 `DEFAULT_MAX_ATTEMPTS` 상속 — 숫자를 적지 말 것.
+                      이 자리에 "3" 이 박혀 있었으나 실제 상수는 2 였다, ERRORS [543])
     """
     name: str
     steps: list[ActionStep]
@@ -249,9 +250,18 @@ class ActionDefinition:
     fix: Optional[Callable[[dict, list[Issue]], tuple[list[Issue], list[Issue]]]] = None
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
     # ★ 정지 방어 (사용자 박제 2026-07-06): 전체 데드라인(초) — 초과 시 중단(송출 안 함).
-    #   블로그 발행 액션은 1800(30분/블로그) 명시. 미지정 시 넉넉한 기본(60분) 안전망.
+    #   블로그 발행 액션은 `watchdog.BLOG_ACTION_DEADLINE_SEC` 명시(현재 2400=40분).
+    #   ★ 숫자를 여기 적지 말 것 — 종전 "1800(30분)" 은 실제 상수(2400)와 어긋나 있었다 (ERRORS [543]).
+    #   미지정 시 넉넉한 기본(60분) 안전망.
     #   멈춤(freeze) 300초 워치독은 데드라인과 무관하게 항상 적용.
     deadline_sec: float = DEFAULT_ACTION_DEADLINE_SEC
+    # ★ escalation 알림에 붙일 "지금 다시 실행" 버튼의 대상 잡 ID (ERRORS [543]).
+    #   빈 문자열이면 버튼 없이 종전대로 글만 보낸다(하위호환).
+    #   ★ 왜 호출자가 주나: 액션 이름→잡 ID 매핑표를 harness 가 들고 있으면 그게 곧 사본이고
+    #     잡이 바뀔 때마다 어긋난다(원칙②). 잡을 아는 쪽(발행 모듈)이 알려준다.
+    #   ★ 왜 "발행" 버튼이 아닌가: 헌법(ADR 009) — *결함 있는 결과물은 영원히 송출되지 않는다*.
+    #     검증을 우회하는 버튼은 만들지 않는다. 재실행은 **검증 순환을 처음부터 다시** 타는 것이다.
+    retry_job_id: str = ""
 
 
 @dataclass
@@ -553,10 +563,19 @@ def _record_fixed_to_guardian(action_name: str, attempt: int, fixed_issues: list
 
 
 def _notify_escalation(action_name: str, attempts: int, last_issues: list[Issue],
-                       reason: str = "") -> None:
+                       reason: str = "", retry_job_id: str = "") -> None:
     """max_attempts 도달 또는 precondition 실패 — 사용자 텔레그램 escalation.
 
     송출은 *절대 안 함*. 사용자가 수동 검토해야 함.
+
+    ★ 행동 버튼 (ERRORS [543]): 종전엔 *"호스트에서 수동 검토 필요"* 라는 **글만** 보내고 끝나
+      사용자가 텔레그램에서 할 수 있는 일이 0이었다. `retry_job_id` 가 있으면
+      "🔁 지금 다시 실행" 버튼을 붙인다.
+
+    ★ 왜 대기 딕셔너리를 안 쓰나 (비직관 — 프로세스 경계): `_PENDING_*` 는 **데몬 메모리** 인데
+      경제 브리핑은 **subprocess** 다. 서브프로세스가 거기 등록해도 데몬의 봇 루프는 못 본다
+      (CLAUDE.md 프로세스 경계 규정 / ERRORS [474] 와 같은 클래스).
+      → 필요한 정보(잡 ID)를 **callback_data 에 실어** 보낸다. 서버측 상태 0.
     """
     msg = (
         f"🚨 *하네스 검증 순환 한계 — 송출 차단*\n\n"
@@ -571,7 +590,18 @@ def _notify_escalation(action_name: str, attempts: int, last_issues: list[Issue]
             msg += f"  • `{issue.step}` — {issue.kind}: {issue.detail[:80]}\n"
     msg += "\n*송출은 차단됨*. 호스트에서 수동 검토 필요."
 
-    # 1순위: shared.notify
+    # 1순위: shared.notify — 재실행 잡을 아는 경우 행동 버튼 첨부
+    if retry_job_id:
+        try:
+            from shared.notify import send_tg_with_buttons  # type: ignore
+            send_tg_with_buttons(
+                msg + f"\n\n재실행 대상: `{retry_job_id}`",
+                [[{"text": "🔁 지금 다시 실행", "callback_data": f"hesc_run:{retry_job_id}"},
+                  {"text": "🗑 이번 회차 보류", "callback_data": "hesc_skip"}]],
+            )
+            return
+        except Exception:
+            pass          # 버튼 실패 시 아래 글 전송으로 폴백 (알림 자체는 절대 잃지 않는다)
     try:
         from shared.notify import send_tg  # type: ignore
         send_tg(msg)
@@ -587,6 +617,10 @@ def _notify_escalation(action_name: str, attempts: int, last_issues: list[Issue]
 
 # 산출물 재생성 없이 재검증만 수행하는 재개 신호 (검증·송출 단계 이슈 / 전부 즉시수정된 경우)
 VERIFY_ONLY = "__verify_only__"
+
+# ★ 액션 이름이 담기는 state 키 (ERRORS [543]) — step 이 리소스 스코프로 쓴다.
+#   `resources.close_scope(action_def.name)` 와 짝. 문자열을 양쪽에 박지 말 것.
+ACTION_NAME_KEY = "__action_name__"
 
 # 실제 수행 step 이 아닌 라벨 — 재생성 재개 지점 산정에서 제외
 _NON_STEP_LABELS = ("전체", "verify", "verify (Layer 3)", "송출 (Layer 4)")
@@ -765,6 +799,11 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
         ActionResult — delivered=True 면 송출 완료. False 면 escalation.
     """
     state: dict = dict(input_data or {})
+    # ★ 액션 이름을 state 로 (ERRORS [543]) — step 이 리소스 스코프로 쓴다.
+    #   왜 이렇게: 액션 이름을 step 쪽에 문자열로 박으면 두 곳이 되고(원칙① 위반),
+    #   테마는 이름이 *동적*(`theme-publish-{theme}-tistory`)이라 박을 수도 없다.
+    #   harness 가 알려주면 step 은 `resources.put(state[ACTION_NAME_KEY], ...)` 한 줄이면 된다.
+    state[ACTION_NAME_KEY] = action_def.name
     result = ActionResult(delivered=False, final_state=state)
 
     # ── ★ 인터프리터 종료 레이스 가드 (근본 원인 — ERRORS [362]) ──
@@ -790,7 +829,7 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
             _report_issues_to_guardian(action_def.name, 0, [dup_issue])
         except Exception:
             pass
-        _notify_escalation(action_def.name, 0, [dup_issue], reason=reason)
+        _notify_escalation(action_def.name, 0, [dup_issue], reason=reason, retry_job_id=action_def.retry_job_id)
         return result
 
     # ── ★ 정지 방어 워치독 (사용자 박제 2026-07-06) ──
@@ -819,7 +858,7 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
                 except Exception:
                     pass
             else:
-                _notify_escalation(name, result.attempts, iss, reason=reason)
+                _notify_escalation(name, result.attempts, iss, reason=reason, retry_job_id=action_def.retry_job_id)
         except Exception:
             pass
 
@@ -837,11 +876,22 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
         result.escalation_reason = reason
         try:
             _report_issues_to_guardian(action_def.name, result.attempts, iss)
-            _notify_escalation(action_def.name, result.attempts, iss, reason=reason)
+            _notify_escalation(action_def.name, result.attempts, iss, reason=reason, retry_job_id=action_def.retry_job_id)
         except Exception:
             pass
         return result
     finally:
+        # ★ 살아있는 핸들 일괄 정리 (ERRORS [543]) — 성공·실패·정지 **어느 경로로 끝나든**.
+        #   왜 여기인가: state 는 액션이 끝나면 그냥 버려진다. 호출자가 close 를 잊으면
+        #   아무도 안 닫는다 — 실제로 경제 브리핑이 티스토리 driver 를 성공할 때마다
+        #   남기고 있었다(소비처 0 · quit 은 실패 분기에만). 정리를 *지나가야만 하는 문* 으로 둔다.
+        try:
+            from JARVIS00_INFRA.resources import close_scope as _close_scope
+            _n = _close_scope(action_def.name)
+            if _n:
+                _log.info(f"[harness] 🧹 살아있는 핸들 {_n}개 정리: {action_def.name}")
+        except Exception:
+            pass          # 정리 실패가 본 작업 결과를 덮지 않는다
         _lock.release()
 
 
@@ -864,7 +914,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             _report_issues_to_guardian(action_def.name, 0, pre_issues)
             result.issues_history.append(pre_issues)
             result.escalation_reason = "Layer 1 precondition 실패"
-            _notify_escalation(action_def.name, 0, pre_issues, reason="precondition")
+            _notify_escalation(action_def.name, 0, pre_issues, reason="precondition", retry_job_id=action_def.retry_job_id)
             return result
 
     # ── Layer 2 + 3: 수행 + 검증 순환 ──
@@ -1038,6 +1088,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             _notify_escalation(
                 action_def.name, attempt, all_issues,
                 reason=result.escalation_reason,
+                retry_job_id=action_def.retry_job_id,
             )
             return result
 
@@ -1059,6 +1110,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             _notify_escalation(
                 action_def.name, attempt, all_issues,
                 reason=result.escalation_reason,
+                retry_job_id=action_def.retry_job_id,
             )
             return result
 
@@ -1084,6 +1136,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             _notify_escalation(
                 action_def.name, attempt, all_issues,
                 reason=result.escalation_reason,
+                retry_job_id=action_def.retry_job_id,
             )
             return result
 
@@ -1136,7 +1189,8 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
     _log.error(f"[harness] ❌ escalation — {action_def.name}: {result.escalation_reason}")
     # ★ 최종 실패 확정 — 잠정 표시 해제로 Tier-2 판정 대상 승격 (ERRORS [476])
     _finalize_attempt_errors(action_def.name)
-    _notify_escalation(action_def.name, action_def.max_attempts, last, reason=result.escalation_reason)
+    _notify_escalation(action_def.name, action_def.max_attempts, last,
+                       reason=result.escalation_reason, retry_job_id=action_def.retry_job_id)
     return result
 
 

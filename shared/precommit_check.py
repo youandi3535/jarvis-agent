@@ -790,6 +790,51 @@ def check_harness(report: Report) -> None:
             ))
     report.checks_run += 1
 
+    # ⑥ ★ harness state 에 *살아있는 핸들* 금지 (ERRORS [543])
+    #
+    #   왜: state 는 step 사이를 흐르는 dict 이고 액션이 끝나면 그냥 버려진다.
+    #     ① 살아있는 객체가 들어가면 직렬화가 통째로 불가능해지고
+    #        (실측: Selenium WebDriver → msgpack `TypeError`)
+    #     ② close 를 불러줄 주인이 없어 샌다 — 실제로 경제 브리핑이 티스토리 driver 를
+    #        성공할 때마다 남기고 있었다(소비처 0 · quit 은 실패 분기에만).
+    #   → 핸들은 `JARVIS00_INFRA/resources.py` 에 두고 state 엔 **키 문자열만**.
+    #   금지 접미사 목록의 주인은 `resources.LIVE_HANDLE_SUFFIXES` 한 곳 (원칙②).
+    _suffixes: tuple = ()
+    try:
+        _rsrc = (ROOT / "JARVIS00_INFRA" / "resources.py").read_text(encoding="utf-8")
+        _m = re.search(r"LIVE_HANDLE_SUFFIXES\s*=\s*\(([^)]*)\)", _rsrc)
+        if _m:
+            _suffixes = tuple(s.strip().strip("\"'") for s in _m.group(1).split(",") if s.strip())
+    except Exception:
+        pass
+    if not _suffixes:
+        # fail-closed — 목록을 못 읽으면 검사가 *조용히 무력화* 된다 (collect/cache 와 같은 규약)
+        report.add(Violation(
+            cat, "harness/resource-selfcheck", "JARVIS00_INFRA/resources.py", 0,
+            "LIVE_HANDLE_SUFFIXES 를 읽지 못해 state 핸들 검사가 무력화됨 — 검사를 고칠 것"))
+    else:
+        # step 반환 dict 리터럴에 금지 접미사 키가 있으면 위반 (`..._key` 는 정상)
+        pat_state = re.compile(
+            r"""["'](\w*(?:%s))["']\s*:""" % "|".join(re.escape(s) for s in _suffixes))
+        for p in _iter_py():
+            rel_s = str(p.relative_to(ROOT))
+            if rel_s in ("shared/precommit_check.py", "JARVIS00_INFRA/resources.py"):
+                continue
+            try:
+                lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+            except Exception:
+                continue
+            for i, ln in enumerate(lines, 1):
+                if "return {" not in ln and "state[" not in ln:
+                    continue
+                m = pat_state.search(ln)
+                if m and not m.group(1).endswith("_key"):
+                    report.add(Violation(
+                        cat, "harness/live-handle-in-state", rel_s, i,
+                        f"state 에 살아있는 핸들 추정 키 '{m.group(1)}' — 직렬화 불가 + 정리 미아. "
+                        f"`JARVIS00_INFRA.resources.put()` 로 넣고 state 엔 '<이름>_key' 만 둘 것"))
+    report.checks_run += 1
+
 
 # ============================================================================
 # 검증 9 — Layer 0 preflight (ADR 009 — 사용자 박제 2026-05-17)
