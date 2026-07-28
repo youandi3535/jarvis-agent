@@ -32,9 +32,6 @@ import json
 import math
 import os
 import re
-import subprocess
-import sys
-import base64
 import logging
 from pathlib import Path
 
@@ -535,35 +532,6 @@ def _extract_json_array(raw):
         return arr if isinstance(arr, list) else None
     except Exception:
         return None
-
-
-def prime_batch_designs(run_id, pool, context=""):
-    """글당 1회 — pool 의 모든 데이터셋을 *한 번의 LLM 호출* 로 각각 개별 설계 → 캐시.
-    idempotent(run_id 당 1회). 락을 배치 완료까지 보유 → 동시 차트 스레드는 대기 후 캐시 사용.
-    실패해도 빈 캐시 등록(개별 폴백) — 재시도 안 함."""
-    if not run_id or not pool:
-        return
-    with _BATCH_LOCK:
-        if run_id in _BATCH_DESIGN_CACHE:
-            return                       # 이미 다른 스레드가 배치 완료
-        # ★ 렌더와 동일 정규화 (사본) — 캐시 키 정합 (ERRORS [312])
-        _use = [_normalize_ds({**d, "data": list(d.get("data") or [])}) for d in list(pool)[:16]]
-        cache: dict = {}
-        try:
-            items = "\n".join(f"[{i}] {_data_brief([ds])}" for i, ds in enumerate(_use))
-            prompt = _BATCH_DESIGN_PROMPT.replace("__ITEMS__", items)
-            from shared.llm import invoke_text
-            raw = invoke_text("writer_short_visual", prompt, timeout=150)
-            for spec in (_extract_json_array(raw) or []):
-                if not isinstance(spec, dict):
-                    continue
-                idx = spec.get("idx")
-                if isinstance(idx, int) and 0 <= idx < len(_use) and spec.get("panels"):
-                    cache[_ds_key(_use[idx])] = spec
-            print(f"  🎨 [배치설계] {len(cache)}/{len(_use)}개 인포그래픽 LLM 설계 완료 (호출 1회)")
-        except Exception as e:
-            _g_report("image", e, module=__name__, func_name="prime_batch_designs")
-        _BATCH_DESIGN_CACHE[run_id] = cache
 
 
 def _callout_box(text, pal):
@@ -1294,4 +1262,4 @@ def render_table_infographic(table_html, idx=0, out_dir=None, *, title="", run_i
 
 
 __all__ = ["generate_infographic", "render_table_infographic",
-           "prime_batch_designs", "PALETTES"]
+           "PALETTES"]

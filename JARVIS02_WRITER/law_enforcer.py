@@ -22,7 +22,6 @@ from __future__ import annotations
 import logging
 import re
 from html import unescape
-from typing import Sequence
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
@@ -1355,21 +1354,6 @@ def audit_factuality(
 #  레벨이라 테스트에서 monkeypatch 가능.
 # ══════════════════════════════════════════════════════════════════════
 
-class FactJudgeError(Exception):
-    """사실 판정 LLM *형식* 실패 — 응답은 있으나 JSON 파싱 실패 등. 게이트는 fail-closed(차단)."""
-
-
-class FactJudgeUnavailable(FactJudgeError):
-    """사실 판정 LLM *호출* 실패 — 빈 응답(rate-limit 스로틀·num_turns=0 추정).
-
-    ★ ERRORS [371]: 이건 *판정 결과* 가 아니라 *인프라 미가용*. fail-closed 로 전체 차단하면
-    스로틀 지속 시 harness 재작성이 무한 반복(같은 인프라 실패). 따라서 호출자는 이 예외를
-    *판정 실패* 가 아니라 *그 LLM 레그 미가용* 으로 보고, throttle-proof 한 대체 검증 경로
-    (결정론 수치 grounding + 웹 재검증)로 위임한다. FactJudgeError 하위라서 기존
-    `except FactJudgeError` 는 여전히 잡히지만, 호출자는 *반드시* 이 예외를 먼저 분기한다.
-    """
-
-
 _FACT_MIN_SOURCE_CHARS = 200    # 이 미만이면 출처 약함 → 웹 1차 근거 (테마글 완화)
 _FACT_MAX_CLAIMS = 25           # 검사 주장 상한 (latency 가드)
 _FACT_MAX_WEB_CHECKS = 8        # 웹 재검증 호출 상한 (발행 임계경로 stall 방지)
@@ -1409,112 +1393,6 @@ def _build_source_corpus(source_docs, market_data=None) -> str:
 
 def _fact_strip_html(html: str) -> str:
     return re.sub(r"<[^>]+>", " ", html or "")
-
-
-def _fact_parse_json_list(text: str) -> list:
-    """LLM 응답에서 JSON 배열 추출.
-
-    빈 응답 → FactJudgeUnavailable(호출 실패 — 대체 경로 위임).
-    응답은 있으나 배열 없음·파싱 실패 → FactJudgeError(형식 오류 — fail-closed).
-    """
-    import json as _json
-    if not (text or "").strip():
-        raise FactJudgeUnavailable("LLM 응답 없음 — 판정 호출 실패(rate-limit 스로틀 추정)")
-    m = re.search(r"\[.*\]", text, re.DOTALL)
-    if not m:
-        raise FactJudgeError("LLM 응답에 JSON 배열 없음 (형식 오류)")
-    try:
-        v = _json.loads(m.group())
-    except Exception as e:
-        raise FactJudgeError(f"JSON 파싱 실패: {e}")
-    if not isinstance(v, list):
-        raise FactJudgeError("JSON 최상위가 배열 아님")
-    return v
-
-
-def _extract_claims(html: str) -> list[dict]:
-    """본문에서 검증 가능한 사실 주장 추출·분류. (fail-closed: LLM 실패 시 FactJudgeError)"""
-    body = _fact_strip_html(html).strip()
-    if not body:
-        return []
-    from shared.llm import invoke_text
-    # ★ 수치 중심 게이트 (사용자 박제 2026-07-03 — ADR 013): "숫자로 들어가는 수치
-    #   데이터는 무조건 진실. 글은 상상·추론·예상 가능 — 꼭 팩트가 아니어도 된다."
-    #   → 추출 범위를 *수치가 포함된 주장* 으로 한정. 비수치 서사는 게이트 대상 아님.
-    prompt = (
-        "다음 블로그 본문에서 *구체적인 숫자·수치가 포함된 사실 주장* 만 추출하라.\n"
-        "추출 대상: 구체 수치·통계·금액·비율(예: 영업이익 12조원, 35% 증가, PER 8.2배), "
-        "수치가 결부된 날짜·기간(예: 2026년 1분기 매출 3조원), 순위·규모 수치.\n"
-        "★ 추출하지 말 것(차단 대상 아님): 숫자가 없는 모든 서술 — 일반 배경지식, "
-        "감상·전망·해석·분석·상상·추론·예상, 수치 없는 사건·전략 서술, 두루뭉술한 표현. "
-        "— 글의 서사·전망은 자유이며 게이트 대상은 오직 *수치* 다.\n"
-        "각 주장을 JSON 배열로 반환: "
-        '[{"text":"주장 원문(본문에서 그대로)","type":"numeric|date","key":true/false}]. '
-        'key 는 글의 핵심 정보면 true. 없으면 []. JSON 외 다른 말 금지.\n\n'
-        "[본문]\n" + body
-    )
-    resp = invoke_text("fact_judge", prompt, timeout=90, _nonessential=True)  # ★ ERRORS [368] hang 방지
-    out: list[dict] = []
-    for it in _fact_parse_json_list(resp)[:_FACT_MAX_CLAIMS]:
-        if isinstance(it, dict) and str(it.get("text", "")).strip():
-            out.append({
-                "text": str(it["text"]).strip(),
-                "type": str(it.get("type", "fact")),
-                "key": bool(it.get("key", False)),
-            })
-        elif isinstance(it, str) and it.strip():
-            out.append({"text": it.strip(), "type": "fact", "key": False})
-    return out
-
-
-def _ground_unsupported(claims: list[dict], corpus: str) -> list[str]:
-    """출처 코퍼스가 뒷받침하지 *못하는* 주장 텍스트 목록. (fail-closed: LLM 실패 시 FactJudgeError)"""
-    from shared.llm import invoke_text
-    claim_lines = "\n".join(f"- {c['text']}" for c in claims)
-    # ★ 수치 중심 차단 (사용자 박제 2026-07-03 — ADR 013): 차단 사유는 *수치의 거짓* 만.
-    prompt = (
-        "아래 [주장 목록](수치 포함 주장들) 중 *발행하면 안 되는 것* 만 골라라. 차단 기준:\n"
-        "(a) 주장의 *수치* 가 [출처]의 수치와 *모순*된다 (다른 값·다른 단위·반대 방향).\n"
-        "(b) 구체 수치인데 [출처]에 그 수치의 근거가 전혀 없다 (지어낸 숫자 의심).\n"
-        "★ 다음은 차단하지 마라(제외): 숫자가 없는 서술 전부(분석·전망·해석·상상·추론·예상 — "
-        "글의 서사는 자유다), 널리 알려진 상식 수준의 수치, "
-        "출처 수치에서 자연스럽게 계산·추론되는 수치.\n"
-        "차단 대상 주장의 원문을 [주장 목록] 그대로 JSON 배열로 반환. 없으면 []. JSON 외 다른 말 금지.\n\n"
-        "[출처]\n" + (corpus or "(없음)") + "\n\n[주장 목록]\n" + claim_lines
-    )
-    resp = invoke_text("fact_judge", prompt, timeout=90, _nonessential=True)  # ★ ERRORS [368] hang 방지
-    return [str(x).strip() for x in _fact_parse_json_list(resp) if str(x).strip()]
-
-
-def _web_confirms(claim: str, evidence: list[dict]) -> bool:
-    """웹 근거가 주장을 뒷받침하는지 판정. 근거 없으면 False(=확인 불가).
-
-    (fail-closed: 판정 LLM 자체 실패 시 FactJudgeError → 호출자가 차단)
-    """
-    import json as _json
-    ev = "\n".join(
-        f"- {e.get('title','')}: {e.get('snippet','')}"
-        for e in (evidence or []) if isinstance(e, dict)
-    ).strip()
-    if not ev:
-        return False  # 웹은 됐으나 근거 못 찾음 → 확인 불가
-    from shared.llm import invoke_text
-    prompt = (
-        "아래 [웹 근거]가 [주장]을 사실로 뒷받침하는가? "
-        'JSON 한 줄로만 답: {"confirmed": true/false}. '
-        "근거가 주장과 무관하거나 모순되면 false.\n\n"
-        "[주장]\n" + claim + "\n\n[웹 근거]\n" + ev
-    )
-    resp = invoke_text("fact_judge", prompt, timeout=90, _nonessential=True)  # ★ ERRORS [368] hang 방지
-    if not (resp or "").strip():
-        raise FactJudgeUnavailable("웹 근거 판정 응답 없음 — 호출 실패(rate-limit 스로틀 추정)")
-    m = re.search(r"\{.*\}", resp, re.DOTALL)
-    if not m:
-        raise FactJudgeError("웹 근거 판정 응답 파싱 실패")
-    try:
-        return bool(_json.loads(m.group()).get("confirmed", False))
-    except Exception as e:
-        raise FactJudgeError(f"웹 근거 판정 JSON 실패: {e}")
 
 
 # ── 결정론 수치 스캐너 (★ 2-3 2026-07-02): LLM claims 누락 보완 ──────────────
@@ -1763,164 +1641,6 @@ def _market_point_deltas(market_data) -> list:
     return out
 
 
-def factuality_issues(
-    html: str,
-    source_docs=None,
-    post_type: str = "",
-    web_verify_fn=None,
-    market_data=None,
-    stocks_data=None,
-    collected=None,
-) -> dict:
-    """발행 전 사실성 차단 게이트 — 출처 대조 + 웹 재검증.
-
-    Args:
-        html:          발행 직전 HTML 본문
-        source_docs:   수집 출처 (JARVIS09 문서 리스트 / str / dict 혼용 허용)
-        post_type:     "economic" / "theme" / "" — theme 은 출처 약함 → 웹 1차 근거
-        web_verify_fn: 웹 재검증 함수 (보통 JARVIS09.web_verify). 호출 시 예외를
-                       던지면 *웹 인프라 실패* 로 보고 fail-open(미차단).
-        market_data:   글 작성에 쓴 구조화 수치(시장지표 등) — 신뢰 가능한 ground truth.
-
-    Returns:
-        {
-          "passed": bool,                # 차단 0 이면 True
-          "blocked": [{"claim","type","reason"}],
-          "checked": int,                # 검사한 주장 수
-          "source_weak": bool,
-          "policy_notes": [str],         # fail-open 적용 등 정책 기록
-        }
-
-    정책:
-      - 사실 판정 LLM(_extract/_ground/_web_confirms) 실패 → FactJudgeError → 차단(fail-closed).
-      - web_verify_fn 예외(타임아웃·전송오류·자격증명없음) → 미차단(fail-open).
-      - 테마글/약한 출처 → 웹 재검증을 1차 근거로 사용, 웹에서도 확인 불가만 차단.
-    """
-    corpus = _build_source_corpus(source_docs, market_data)
-    source_weak = (post_type == "theme") or (len(corpus.strip()) < _FACT_MIN_SOURCE_CHARS)
-
-    def _blocked(reason: str) -> dict:
-        return {"passed": False,
-                "blocked": [{"claim": "(전체)", "type": "judge_error", "reason": reason}],
-                "checked": 0, "source_weak": source_weak, "policy_notes": [reason]}
-
-    # ── 1. 주장 추출 — ★ LLM *어떤* 실패든 결정론 위임 (ERRORS [372]) ────────
-    #   빈 응답(스로틀)이든 형식 오류든, LLM 추출 실패는 *판정* 이 아니라 *추출기 미가용*.
-    #   사실성 안전망은 LLM 이 아니라 결정론 수치 대조(수집 실데이터)다 — 아래 1.5 정규식
-    #   스캔이 본문 수치를 전부 승격 → 2.5 데이터 grounding + 웹으로 검증. LLM 실패로
-    #   발행을 하드-차단하지 않는다(스로틀 지속 시 재작성 무한 반복 방지 — 21시 사고 근본).
-    try:
-        claims = _extract_claims(html)
-    except FactJudgeError as e:
-        log.warning(f"[factuality_gate] 주장 추출 LLM 미가용 → 결정론 수치 스캔 위임: {e}")
-        claims = []
-
-    # ── 1.5 결정론 수치 보완 (★ 2-3): LLM 이 놓친 단위-수치를 검증 대상으로 승격 ──
-    #   정규식이 잡았는데 LLM claims 어디에도 없는 수치는 문장 통째를 claim 으로 넣어
-    #   기존 grounding+web 파이프라인에 태운다. _FACT_MAX_CLAIMS 캡 준수. 예외는 삼켜
-    #   게이트 자체를 깨지 않음(fail-safe).
-    try:
-        body_text = _fact_strip_html(html)
-        claim_blob = "".join(c.get("text", "") for c in claims).replace(" ", "")
-        for tok in _scan_numeric_tokens(body_text):
-            if len(claims) >= _FACT_MAX_CLAIMS:
-                break
-            if tok.replace(" ", "") in claim_blob:
-                continue  # 이미 LLM claim 에 포함됨
-            claims.append({"text": _containing_sentence(body_text, tok),
-                           "type": "numeric", "key": False})
-    except Exception as e:
-        log.warning(f"[factuality_gate] 결정론 수치 보완 스킵: {e}")
-
-    if not claims:
-        return {"passed": True, "blocked": [], "checked": 0,
-                "source_weak": source_weak, "policy_notes": []}
-
-    # ── 2. 출처 grounding — ★ LLM *어떤* 실패든 결정론+웹 위임 (ERRORS [372]) ─────
-    if corpus.strip():
-        try:
-            unsupported = set(_ground_unsupported(claims, corpus))
-        except FactJudgeError as e:
-            # 빈 응답(스로틀)이든 형식 오류든 LLM 대조 미가용 = *판정 결과 아님*.
-            #   전 주장을 미확인으로 두고 throttle-proof 결정론 수치 grounding(수집 데이터
-            #   실측) + 웹 재검증으로 위임. 데이터/웹으로 못 살린 수치는 아래에서 여전히
-            #   차단(경제=strict) / 테마=fail-open. LLM 실패로 하드-차단하지 않음.
-            log.warning(f"[factuality_gate] 출처 대조 LLM 미가용 → 결정론+웹 위임: {e}")
-            unsupported = {c["text"] for c in claims}
-    else:
-        # 출처 코퍼스 없음(테마글 등) → 전 주장이 출처 미확인 → 웹으로 위임
-        unsupported = {c["text"] for c in claims}
-
-    # ── 2.5 결정론 수치 grounding (★ 근본 수정 — ERRORS [350]) ──────────────
-    #   LLM(_ground_unsupported)이 unsupported 로 오판한 주장이라도, 그 안의 *모든*
-    #   수치가 수집 데이터에 실재하면 '진실(데이터에서 옴)' 으로 보고 rescue → 취약한
-    #   웹-차단 경로를 우회. [343]~[348] 코퍼스 포맷-렌더 whack-a-mole 을 대체.
-    #   ★ ERRORS [382]: 구조화 데이터(stocks·market)뿐 아니라 *수집 문서 텍스트 corpus*
-    #     도 grounding 정답에 포함 — 뉴스에서 온 수치(건설 수주액·재개발 규모 등)는
-    #     structured data 에 없고 corpus 에만 있다. LLM 문자열 매칭(_ground_unsupported)이
-    #     스로틀/포맷으로 실패하면 corpus 실재 수치도 웹-차단됐다("수집했으면 출처는
-    #     분명하다" — ERRORS [350] 원칙의 결정론 안전망을 corpus 로 확장). 수치가 데이터·
-    #     문서 어디에도 *없는* 주장(창작)만 웹 검증으로 넘어간다.
-    gt_floats = (_collect_gt_floats(market_data, stocks_data, corpus)
-                 + _collected_gt(collected) + _market_point_deltas(market_data))
-    pending, _rescued = [], 0
-    for c in claims:
-        if c["text"] not in unsupported:
-            continue
-        if _claim_all_grounded(c["text"], gt_floats):
-            _rescued += 1
-            continue
-        pending.append(c)
-
-    # ── 3. 웹 재검증 + 정책 분기 ────────────────────────────────
-    blocked: list[dict] = []
-    policy_notes: list[str] = (
-        [f"결정론 수치 grounding — 수집 데이터 실측 일치 {_rescued}건 통과(웹검증 생략)"]
-        if _rescued else []
-    )
-    web_checks = 0
-
-    for c in pending:
-        claim = c["text"]
-        if web_verify_fn is not None and web_checks < _FACT_MAX_WEB_CHECKS:
-            web_checks += 1
-            try:
-                evidence = web_verify_fn(claim)            # 인프라 실패 시 예외
-            except Exception as e:                         # noqa: BLE001 — fail-open 의도
-                policy_notes.append(f"웹 검증 불가 → 미차단(fail-open): {claim} [{type(e).__name__}]")
-                continue
-            try:
-                confirmed = _web_confirms(claim, evidence)
-            except FactJudgeError as e:
-                # ★ ERRORS [372]: 웹 근거 판정 LLM *어떤* 실패든(빈응답·형식오류) = 웹 검증
-                #   인프라 미가용 → fail-open (web_verify_fn 예외와 동일 취급). LLM 실패로
-                #   발행을 막지 않는다. 경제글 미확인 수치의 strict 차단은 웹 미가용 분기에서 유지.
-                policy_notes.append(
-                    f"웹 근거 판정 LLM 미가용 → 미차단(fail-open): {claim} [{type(e).__name__}]")
-                continue
-            if confirmed:
-                continue                                    # 웹 확인 → 통과
-            blocked.append({"claim": claim, "type": c["type"],
-                            "reason": "출처·웹 모두 확인 불가"})
-        else:
-            # 웹 미가용
-            if source_weak:
-                # 약한 출처 + 웹 미가용 → 검증 수단 없음 → 대량 차단 방지 fail-open
-                policy_notes.append(f"출처 약함·웹 미가용 → 미차단(fail-open): {claim}")
-            else:
-                # 강한 출처(경제글) + 출처 미확인 → 차단(strict)
-                blocked.append({"claim": claim, "type": c["type"],
-                                "reason": "출처 미확인(웹 미가용)"})
-
-    return {
-        "passed": len(blocked) == 0,
-        "blocked": blocked,
-        "checked": len(claims),
-        "source_weak": source_weak,
-        "policy_notes": policy_notes,
-    }
-
-
 __all__ = [
     "enforce_supreme_law", "enforce_spacing", "check_human_intro",
     "fix_human_intro", "notify_violations", "is_blocking",
@@ -1929,7 +1649,6 @@ __all__ = [
     "parse_seo_block", "parse_diff_block",
     "parse_seo_meta", "parse_svg_rules",
     "audit_factuality",
-    "factuality_issues", "FactJudgeError", "FactJudgeUnavailable",
 ]
 # NOTE: ADR 008 Phase 1 — 이미지 함수는 JARVIS06_IMAGE 단일 진입점 강제.
 #   enforce_paragraph_pair_image / enforce_image_between_paragraphs / compute_unused_image_pool /

@@ -89,7 +89,6 @@ def setup_chart_defaults(font_path: str | None = None) -> None:
     })
 import json
 import logging
-from typing import Any
 
 log = logging.getLogger("jarvis")
 
@@ -287,65 +286,6 @@ def get_color_from_spec(spec: dict, color_key: str = "primary_color") -> str:
     return spec.get(color_key, "#4f46e5")
 
 
-def generate_sector_colors(sector: str, keyword: str = "") -> dict:
-    """섹터/키워드에 맞는 동적 색상 팔레트 생성. 매번 다른 색상."""
-    try:
-        from shared.llm import invoke_text
-        prompt = f"""Generate a color palette for trend analysis.
-Sector: {sector}
-Theme: {keyword}
-
-Return JSON (colors array, primary_color, accent_color, up_color, down_color):
-{{
-  "primary_color": "#...",
-  "accent_color": "#...",
-  "up_color": "#...",
-  "down_color": "#...",
-  "neutral_color": "#...",
-  "bg_color": "#...",
-  "text_color": "#...",
-  "border_color": "#..."
-}}"""
-        response = invoke_text("writer_short_visual", prompt, temperature=0.8, max_tokens=200)
-        response = response.strip()
-        if response.startswith("```"):
-            response = response.split("```")[1].lstrip("json").strip()
-
-        palette = {}
-        try:
-            import json
-            palette = json.loads(response)
-        except:
-            pass
-
-        # 폴백: 기본 팔레트
-        if not palette or "primary_color" not in palette:
-            palette = {
-                "primary_color": "#4f46e5",
-                "accent_color": "#0891b2",
-                "up_color": "#10b981",
-                "down_color": "#ef4444",
-                "neutral_color": "#6b7280",
-                "bg_color": "#ffffff",
-                "text_color": "#111827",
-                "border_color": "#e5e7eb"
-            }
-
-        return palette
-    except Exception as e:
-        log.warning(f"[STYLE] 섹터 색상 생성 실패: {e}, 폴백 사용")
-        return {
-            "primary_color": "#4f46e5",
-            "accent_color": "#0891b2",
-            "up_color": "#10b981",
-            "down_color": "#ef4444",
-            "neutral_color": "#6b7280",
-            "bg_color": "#ffffff",
-            "text_color": "#111827",
-            "border_color": "#e5e7eb"
-        }
-
-
 def _interpolate_color(hex1: str, hex2: str, ratio: float) -> str:
     """두 hex 색상을 보간하여 중간색 반환. ratio=0 → hex1, ratio=1 → hex2."""
     def _hex_to_rgb(h):
@@ -371,6 +311,5 @@ __all__ = [
     "apply_style_to_chart",
     "hex_to_rgb",
     "get_color_from_spec",
-    "generate_sector_colors",
     "_interpolate_color",
 ]

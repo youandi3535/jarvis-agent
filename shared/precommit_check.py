@@ -236,7 +236,7 @@ def check_length(report: Report) -> None:
     pat1 = re.compile(r"\[가-힣\]\s*[+*](?!\?)")
     # 자연어 분량 — `30자 이내` 형태. 단, `build_length_phrase()` 결과 표기는 허용.
     pat2 = re.compile(r"[0-9]+자\s*(이내|이하|초과|미만|이상|전후|범위|기준|정도|내외)|[0-9]+\s*~\s*[0-9]+자")
-    pat3 = re.compile(r"(compress_to_korean|cap_content|count_korean|sanitize_body)\(")
+    pat3 = re.compile(r"(cap_content|count_korean|sanitize_body)\(")
     pat3_exempt = re.compile(r"def _cap|return _L\.compress|__all__|\.compress\(")
     # 매직 넘버 — *블로그 본문 분량 한도* 상수만. LLM API max_tokens 는 토큰 한도라 무관.
     pat4 = re.compile(r"(?<!max_tokens=)(?<!max_tokens\s)(MAX_KOREAN|MAX_BODY|_MAX_KOREAN|_BODY_LIMIT)\s*=\s*(2500|2200|1500)")
@@ -600,7 +600,7 @@ _DOMAIN_OWNERSHIP: list[dict] = [
         "owner_dirs":  ("JARVIS02_WRITER/length_manager.py", "shared/seo.py"),
         "active":      True,
         "patterns": [
-            (re.compile(r"^def\s+(build_length_phrase|build_prompt_length_block|build_short_length_phrase|count_korean|compress_to_korean)"),
+            (re.compile(r"^def\s+(build_length_phrase|build_prompt_length_block|build_short_length_phrase|count_korean)"),
              "분량 헬퍼 본체 — length_manager 외부 정의 금지"),
             (re.compile(r"^(KOREAN_PER_SENTENCE|TARGET_SENTENCES|MAX_CONSECUTIVE_PARAGRAPHS_WITHOUT_IMAGE)\s*="),
              "분량 상수 본체 — length_manager 외부 정의 금지"),

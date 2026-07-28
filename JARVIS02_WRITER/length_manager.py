@@ -24,9 +24,7 @@
     build_length_phrase(5, 6) → "5~6문장(약 250~300자)"
 """
 from __future__ import annotations
-import os
 import re
-from typing import Iterable
 
 # ★ post_type_specs 단일 진실 소스 — 모든 분량은 spec 에서 도출
 from JARVIS02_WRITER.post_type_specs import get_spec as _get_spec
@@ -340,7 +338,6 @@ BRIEF_SECTION_HI:       int = BRIEF_SECTION_SENTS_HI * KOREAN_PER_SENTENCE   # �
 # ── shared.seo 위임 (없으면 fallback) ───────────────────────────
 try:
     from shared.seo import (
-        compress_to_korean as _seo_compress,
         count_korean as _seo_count,
         sanitize_body as _seo_sanitize,
     )
@@ -350,9 +347,6 @@ except ImportError:
     _KOR_RE_FALLBACK = re.compile(r"[가-힣]")
     def _seo_count(text: str) -> int:
         return len(_KOR_RE_FALLBACK.findall(text or ""))
-    def _seo_compress(text: str, max_korean: int = MAX_KOREAN,
-                      context: str = "", emit_event: bool = True, **_) -> str:
-        return text or ""
     def _seo_sanitize(text: str) -> str:
         return text or ""
 

@@ -280,40 +280,6 @@ TODAY_PREFIX       = f"[{TODAY.month}/{TODAY.day}]"
 
 
 
-def _fix_consecutive_images(blocks: list, for_tistory: bool = False) -> list:
-    """★ 글+이미지 규정 강제 안전망 — 이미지+이미지 연속 절대 금지.
-    소제목 이미지(heading_* 파일명) 제외, 데이터 이미지 연속 시 설명 텍스트 삽입.
-    """
-    from shared.llm import invoke_text as _llm_fix
-    _raw = _llm_fix(
-        "writer_short_analysis",
-        f"경제 블로그에서 차트 이미지 두 개 사이에 들어가는 자연스러운 연결 설명 {_L.build_length_phrase(1, _L.MAX_P_SENTS)}. 해요체. 문장만 출력.",
-        max_tokens=80, temperature=0.8
-    ) or "위 지표와 차트를 함께 살펴보세요."
-    _html_raw = _llm_fix(
-        "writer_short_analysis",
-        f"경제 블로그에서 차트 이미지 두 개 사이 연결 설명 {_L.build_length_phrase(1, _L.MAX_P_SENTS)}. 합니다체. 문장만 출력.",
-        max_tokens=80, temperature=0.8
-    ) or "위 지표와 차트를 함께 확인해 주십시오."
-    FALLBACK_TEXT = _raw
-    FALLBACK_HTML = f'<p style="font-size:14px;color:#555;line-height:1.8;">{_html_raw}</p>'
-    def _is_heading(bdata: str) -> bool:
-        fname = str(bdata)
-        return 'heading_' in fname or 'economic_h2_' in fname or 'section_title' in fname
-
-    result = []
-    for b in blocks:
-        if (b[0] == 'image'
-                and not _is_heading(b[1])
-                and result
-                and result[-1][0] == 'image'
-                and not _is_heading(result[-1][1])):
-            sep = ('html', FALLBACK_HTML) if for_tistory else ('text', FALLBACK_TEXT)
-            result.append(sep)
-        result.append(b)
-    return result
-
-
 def run(post_naver=True, post_tistory=True, resume=None):
     """경제 브리핑 포스팅 통합 진입점.
 
