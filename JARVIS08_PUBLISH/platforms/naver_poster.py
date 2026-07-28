@@ -132,8 +132,10 @@ def _generate_smart_tags(title: str, body_text: str) -> list:
     snippet = body_text[:_LM_naver.BODY_SNIPPET_LEN] if body_text else ''
     try:
         from shared.llm import invoke_text as _inv_cli
+        # ★ 2026-07-28 alias 교정 — 태그 6개(≈30자)에 8,000토큰 상한(writer)은 과했다.
+        #   실측 호출당 73,337 토큰(48h 최대). 용도에 맞는 짧은 alias 로 (사용자 승인).
         _raw = _inv_cli(
-            "writer",
+            "writer_short_title",
             f"네이버 블로그 검색 최적화 태그 6개를 쉼표로 구분해서 출력하세요.\n"
             f"규칙:\n"
             f"- 실제 네이버에서 검색할 법한 구체적 키워드 (예: 반도체관련주, 2차전지주식, HBM투자)\n"

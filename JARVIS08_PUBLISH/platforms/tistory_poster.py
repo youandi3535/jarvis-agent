@@ -117,8 +117,9 @@ def _generate_smart_tags(title: str, body_text: str) -> list:
     snippet = body_text[:_LM_ts.BODY_SNIPPET_LEN] if body_text else ''
     try:
         from shared.llm import invoke_text as _inv_cli
+        # ★ 2026-07-28 alias 교정 — 네이버와 동일 사유(③ 양 플랫폼 동시).
         _raw = _inv_cli(
-            "writer",
+            "writer_short_title",
             f"다음 제목과 본문을 보고 블로그 태그 4개를 쉼표로 구분해서 출력하세요.\n"
             f"- 제목에서 2개 (공백없이 붙여쓰기)\n"
             f"- 본문에서 2개 (공백없이 붙여쓰기)\n"
