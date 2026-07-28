@@ -277,42 +277,63 @@ def _fix_image_count_underflow(draft: dict, platform: str) -> bool:
 
 # ── 이슈 문자열 → 수정 함수 라우터 ─────────────────────────
 
-def _route_fix(issue_str: str, draft: dict, platform: str) -> bool:
-    """issue_str 키워드 분류 → 적절한 패치 함수 호출."""
+def _route_fix(issue_str: str, draft: dict, platform: str):
+    """issue_str 키워드 분류 → 적절한 패치 함수 호출.
+
+    반환: 수정 성공 시 **경로 이름**(str), 실패/미해당 시 `None`.
+
+    ★ 왜 bool 이 아니라 이름인가 (사용자 박제 2026-07-29 — ERRORS [547]):
+      오류를 세분화해 기록하려면 *무엇을 고쳤는지* 가 필요하다. 그 정보는 이미
+      여기 라우팅에 있다. 호출자가 issue_str 을 다시 키워드 분류하면 **같은 판단이
+      두 곳**이 되어 반드시 어긋난다(원칙①) — 라우팅이 유일한 진실 소스다.
+    """
     s = issue_str.lower()
 
     if "빈 헤더" in issue_str or "empty header" in s:
-        return _fix_empty_headers(draft)
+        return "empty_header" if _fix_empty_headers(draft) else None
 
     if "이미지" in issue_str and ("연속" in issue_str or "consecutive" in s):
-        return _fix_consecutive_images(draft, platform)
+        return "consecutive_images" if _fix_consecutive_images(draft, platform) else None
 
     # ★ ERRORS [145] — "② full_html 3+ 연속 빈 p 검출" / "연속 br 검출" 수정 분기 추가
     if ("연속 빈 p" in issue_str or "연속 br" in issue_str
             or "consecutive empty p" in s or "consecutive br" in s):
-        return _fix_excessive_empty_p(draft)
+        return "excessive_empty_p" if _fix_excessive_empty_p(draft) else None
 
     # ★ Layer 6 — 분량 상한 초과 (LLM이 5회 재시도해도 수렴 안 하는 패턴 해결)
     if "분량 상한 초과" in issue_str or "sentence overflow" in s:
-        return _fix_sentence_overflow(draft, issue_str)
+        return "sentence_overflow" if _fix_sentence_overflow(draft, issue_str) else None
 
     if any(k in issue_str for k in ("제3조", "제4조", "제9조", "헌법 위반", "enforce")):
-        return _fix_law_violations(draft, platform)
+        return "law_violation" if _fix_law_violations(draft, platform) else None
 
     # ★ 사용자 박제 2026-06-01 → 2026-07-05 정정: 이미지 최소 5장 미달 (제8조 5+α)
     if "이미지 최소 미달" in issue_str or "image underflow" in s or "이미지 부족" in issue_str:
-        return _fix_image_count_underflow(draft, platform)
+        return "image_underflow" if _fix_image_count_underflow(draft, platform) else None
 
     # 수정 불가 — 재생성 필요
-    return False
+    return None
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  GUARDIAN 기록 — 즉시수정 이력 + 자가 학습
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _record_to_guardian(issue_str: str, platform: str, action_name: str) -> None:
+def draft_fix_error_type(route: str) -> str:
+    """수정 경로 → 세분화된 error_type (사용자 박제 2026-07-29 — ERRORS [547]).
+
+    `DraftFix` + PascalCase(route) 로 **파생**한다. 매핑표를 두지 않는 이유는
+    `_route_fix` 에 경로가 늘 때마다 표가 낡기 때문 — 새 경로가 자동으로 타입이 된다(원칙②).
+      empty_header → DraftFixEmptyHeader / law_violation → DraftFixLawViolation
+    """
+    parts = [p for p in re.split(r"[_\-\s]+", (route or "unknown").strip()) if p]
+    return "DraftFix" + "".join(p[:1].upper() + p[1:] for p in parts)
+
+
+def _record_to_guardian(issue_str: str, platform: str, action_name: str,
+                        route: str = "") -> None:
     """수정 성공 → report_manual_fix + record_pattern_hit 2단 박제."""
+    _etype = draft_fix_error_type(route)
 
     # ① 수정 이력 박제 (오류 관리 탭 + ERRORS.md 연동)
     try:
@@ -324,7 +345,7 @@ def _record_to_guardian(issue_str: str, platform: str, action_name: str) -> None
                 f"[Layer3 즉시수정] [{platform}] {issue_str[:120]}\n"
                 f"하네스 검증 실패 항목을 발행 전 inline 패치 완료."
             ),
-            error_type="DraftQualityViolation",
+            error_type=_etype,
             severity="low",
             actor="harness_auto_fix",
         )
@@ -335,7 +356,7 @@ def _record_to_guardian(issue_str: str, platform: str, action_name: str) -> None
     try:
         from JARVIS07_GUARDIAN.pattern_fixer import record_pattern_hit
         _err_rec = {
-            "error_type": "DraftQualityViolation",
+            "error_type": _etype,
             "module": f"harness.{action_name}.{platform}",
             "message": issue_str,
             "source": f"harness/{action_name}",
@@ -383,11 +404,11 @@ def fix_and_learn(
     fixed, unfixed = [], []
 
     for iss in raw_issues:
-        ok = _route_fix(iss, draft, platform)
-        if ok:
+        route = _route_fix(iss, draft, platform)
+        if route:
             # state 갱신 (draft 객체 참조이므로 dict 재할당 보장)
             state[draft_key] = draft
-            _record_to_guardian(iss, platform, action_name)
+            _record_to_guardian(iss, platform, action_name, route)
             fixed.append(iss)
             print(f"  🔧 [Layer3 즉시수정] [{platform}] {iss[:80]}")
         else:

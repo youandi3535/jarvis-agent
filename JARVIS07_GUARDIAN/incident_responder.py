@@ -311,6 +311,20 @@ def _call_retry_fn(fn: Callable) -> bool:
         return False
 
 
+def posting_error_type(error_class: str, recovered: bool) -> str:
+    """발행 실패 분류 + 복구 여부 → 세분화된 error_type (ERRORS [547]).
+
+    `Posting` + PascalCase(분류) + (`Recovered`|`Unrecovered`) 로 **파생**.
+    `_classify()` 가 돌려주는 값이 늘면 타입도 자동으로 따라온다(원칙②).
+      code_bug + 복구  → PostingCodeBugRecovered
+      transient + 실패 → PostingTransientUnrecovered
+    """
+    import re as _re_p
+    parts = [x for x in _re_p.split(r"[_\-\s]+", (error_class or "unknown").strip()) if x]
+    body = "".join(x[:1].upper() + x[1:] for x in parts)
+    return f"Posting{body}{'Recovered' if recovered else 'Unrecovered'}"
+
+
 def respond(
     job_id: str,
     failed_platforms: list[str],
@@ -397,7 +411,9 @@ def respond(
                 f"포스팅 실패 자동 대응: {failed_platforms} → 복구 {succeeded} | "
                 f"코드 수정={'적용' if fix_applied else '없음'}"
             ),
-            error_type="PostingFailure",
+            # ★ 세분화 (ERRORS [547]) — 코드버그/일시적/미상은 대응이 전혀 다르다.
+            #   판정은 이미 _classify 가 했다 — 그 결과에서 파생(재분류 금지, 원칙①).
+            error_type=posting_error_type(error_class, bool(succeeded)),
             severity="high",
             actor="guardian",
         )

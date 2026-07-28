@@ -1906,6 +1906,45 @@ _STATIC_FIXERS_CORE: list[tuple[str, object]] = [
     ("unpack_mismatch", _fix_unpack_mismatch),
 ]
 
+def renormalize_fingerprints() -> dict:
+    """★ 저장된 지문을 **현재 정규화 규칙으로 다시 계산** — 규칙이 바뀌면 반드시 1회 (ERRORS [547]).
+
+    왜 필요한가: 매칭은 `_make_fingerprint(들어온 오류)` 와 *저장된* 지문의 문자열 비교다.
+    `_normalize_message` 를 고치면 들어오는 쪽만 새 규칙을 쓰고 저장분은 옛 규칙이라
+    **그 순간 학습 자산이 통째로 매칭 불능**이 된다 — 예외도 로그도 없이.
+    (실제로 [546] 이 액션명 정규화를 넣으면서 `theme-publish-<테마>` 지문 15개가 그렇게 됐다.)
+
+    같은 새 지문으로 합쳐지면 hit_count 를 **합산** 하고 나머지 필드는 hit 이 큰 쪽을 남긴다.
+    `mutate_learned()` 안에서만 쓴다 — 읽기·수정·쓰기가 한 임계구역이어야 한다.
+
+    반환: {"before": n, "after": m, "merged": k}
+    """
+    with mutate_learned() as data:
+        pats = data.get("patterns") or []
+        before = len(pats)
+        buckets: dict = {}
+        for p in pats:
+            fp = str(p.get("fingerprint") or "")
+            if "::" in fp:
+                et, msg = fp.split("::", 1)
+                new_fp = f"{et}::{_normalize_message(msg)}"
+            else:
+                new_fp = fp
+            p["fingerprint"] = new_fp
+            cur = buckets.get(new_fp)
+            if cur is None:
+                buckets[new_fp] = p
+            else:
+                # 합산: hit_count 는 더하고, 나머지는 hit 이 큰 쪽을 진실로
+                merged_hits = int(cur.get("hit_count", 0)) + int(p.get("hit_count", 0))
+                keep = cur if int(cur.get("hit_count", 0)) >= int(p.get("hit_count", 0)) else p
+                keep["hit_count"] = merged_hits
+                buckets[new_fp] = keep
+        data["patterns"] = list(buckets.values())
+        after = len(data["patterns"])
+    return {"before": before, "after": after, "merged": before - after}
+
+
 def try_pattern_fix(error_record: dict) -> Optional[dict]:
     """패턴 기반 자동 수정 시도. 성공 시 patch dict 반환, 실패 시 None.
 

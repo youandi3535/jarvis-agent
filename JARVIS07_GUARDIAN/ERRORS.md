@@ -2,6 +2,83 @@
 
 ---
 
+## [547] ✅ 해결 — 오류를 뭉뚱그려 기록해 왔다 (전체의 92.9%가 분류 불능) (2026-07-29)
+
+**사용자 박제**: *"오류는 디테일하게 세분화해서 기록하고 매칭하고 보고해라. 런타임오류, 이런 식이면
+모르잖아. 런타임 오류가 한두 개야? 딱 보면 어떤 오류구나 한눈에 알 수 있게. 이런 건 규정에 넣어도 좋다."*
+
+- **증상**: 없음. 오류는 정상적으로 기록됐다 — *무슨 오류인지 알 수 없는 이름으로*.
+- **실측 (전체 4,506건)**:
+  ```
+  타입만으로 분류 가능한 것        318건 =  7.1%
+  → 92.9% 는 타입을 봐도 모른다
+
+  단일 타입 100% 인 소스
+    harness            339건 → 전부 RuntimeError
+    harness/economic    35건 → 전부 DraftQualityViolation
+    harness/경제…       34건 → 전부 HarnessIssueFixed
+    incident_responder  31건 → 전부 PostingFailure
+    watchdog            21건 → 전부 RuntimeError
+  ```
+- **왜 나쁜가 (보기 나쁜 것으로 끝나지 않는다)**:
+  ① `RuntimeError`·`PostingFailure` 는 `_PATTERN_FIXABLE_TYPES`·`_TRANSIENT_TYPES`·
+     `DETERMINISTIC_CODE_ERROR_TYPES` **어디에도 없다** → 자동수리 판정이 통째로 분류 불능.
+     "재시도만 하면 되는 인프라 스로틀"과 "코드 버그"가 같은 이름을 달고 있었다.
+  ② Tier 1 매칭 3단(정확·정규식·시맨틱)의 **1차 게이트가 전부 `error_type` 완전일치** 다.
+     전부 같으면 게이트가 변별력 0.
+- **헛다리 (ERRORS [546] 에서 이미 기각된 것 — 다시 시도 금지)**: *"타입을 세분화하면 Tier 1
+  지문 매칭이 좋아진다"* 는 **아니다**. 시뮬레이션 실측 29.8% → 29.8% (효과 0).
+  지문은 `타입::메시지` 인데 타입이 전부 같으면 타입은 변별에 기여를 안 하기 때문이다.
+  **이번 수정의 값어치는 매칭이 아니라 ① 기록 가독성 ② 타입 기반 게이트 복구 ③ 보고** 다.
+  (그래서 [546] 은 *메시지 정규화*, [547] 은 *타입 세분화* — 서로 다른 병이다.)
+- **해결 — 각 도메인이 자기 타입을 *파생* 한다 (중앙 매핑표 금지)**:
+  | 도메인 | 단일 진입점 | 파생 근거 | 예 |
+  |---|---|---|---|
+  | harness | `harness_error_type(kind)` | `issue.kind` | `HarnessFactuality`·`HarnessInfraThrottle` |
+  | harness 즉시수정 | 위 + `"Fixed"` | 동일 | `HarnessDraftFailedFixed` |
+  | watchdog | `watchdog_error_type(reason)` | `stuck_reason` | `WatchdogFreeze`·`WatchdogDeadline` |
+  | 발행 실패 대응 | `posting_error_type(cls, ok)` | `_classify()` + 복구여부 | `PostingCodeBugRecovered` |
+  | 대본 즉시수정 | `draft_fix_error_type(route)` | `_route_fix` 경로 | `DraftFixLawViolation` |
+
+  전부 **이미 존재하는 판단**에서 기계적으로 만든다 — 새 kind·새 경로가 생기면 타입이
+  **자동으로** 따라온다(원칙②). 손으로 관리하는 표가 없으니 낡을 수가 없다.
+  ★ `draft_fixer._route_fix` 는 `bool` → **경로 이름** 반환으로 바꿨다. 호출자가 `issue_str` 을
+    다시 키워드 분류하면 *같은 판단이 두 곳* 이 되어 반드시 어긋난다(원칙①) — 라우팅이 유일한 진실.
+- **감시** (`severity.type_granularity_issues()` — `selfcheck()` `[결함4]`):
+  최근 14일에 한 소스가 20건 이상인데 **고유 타입이 1개** 면 위반. 금지 목록을 만들지 않고
+  **DB 에서 파생** 하므로 새 소스도 자동 감시된다.
+  ★ 시간창이 필수인 이유: 과거 기록까지 세면 코드를 고쳐도 알람이 **영구히** 울린다.
+    검사가 늑대를 계속 외치면 진짜 신호가 왔을 때 아무도 안 본다.
+  ★ 면제: `error_collector._MANUAL_POLICY_TYPES`(`GitCommit` 2,116건·`ExternalEdit` 975건 등)는
+    *오류가 아니라 변경·정책 기록* 이라 단일 타입이 정상 — 그 목록도 파생한다(사본 금지).
+- **곁다리 1 — 밴딧 `[D4]` 오탐**: `auto_patch` 가 "arm 누락"으로 계속 보고됐다.
+  `_fix_auto_patch` 는 **placeholder** 이고 실제 복원은 `_fix_from_learned` 안에서 일어나
+  `try_pattern_fix` 후보(`[("learned",…)] + _STATIC_FIXERS_CORE`)에 없다. 즉 **영원히 arm 이
+  될 수 없다.** 검사가 `_FIXER_REGISTRY`(복원용 이름표)에서 파생한 게 원인 →
+  `_rankable_arms()`(실제 랭킹 후보에서 파생) 신설로 교체. `_arm_key` 는 종전대로 관대하게 둔다
+  (보상 유실이 랭킹 지연보다 비싸다는 판단은 여전히 옳다).
+- **곁다리 2 — 학습자산 마이그레이션 (놓칠 뻔한 것)**: [546] 이 `_normalize_message` 를 바꾸면서
+  **저장된 지문 15개가 그 순간 매칭 불능**이 됐다. 매칭은 *들어온 오류의 새 지문* 과
+  *저장된 옛 지문* 의 문자열 비교인데 한쪽만 새 규칙이었기 때문 — 예외도 로그도 없다.
+  → `pattern_fixer.renormalize_fingerprints()` 신설(`mutate_learned()` 안에서만 실행,
+  같은 지문은 hit_count 합산). 실행 결과 51개 → **49개**(병합 2).
+  **정규화 규칙을 고치면 이 함수를 반드시 1회 돌릴 것.**
+- **검증**: 배선 5곳 전수 확인 · 옛 리터럴(`HarnessIssueFixed`·`DraftQualityViolation`·
+  `PostingFailure`) 잔존 **0행** · `bandit.selfcheck()` 위반 0 · `repair_history.selfcheck()` 위반 0 ·
+  precommit 60종 0건. `[결함4]` 는 최근 14일에 *수정 전* harness 기록 57건이 남아 아직 울리며,
+  새 오류가 쌓이면 자동으로 꺼진다(정상 동작).
+- **파일**: `JARVIS00_INFRA/{harness.py,watchdog.py}` · `JARVIS07_GUARDIAN/{severity.py,bandit.py,incident_responder.py,pattern_fixer.py}` · `JARVIS02_WRITER/draft_fixer.py` · `CLAUDE.md`
+- **교훈**:
+  ① **"기록은 되고 있다" 와 "기록이 쓸모 있다" 는 다르다** — 4,506건을 쌓아놓고 92.9%가
+     타입만으로는 아무것도 말해주지 않았다. 무증상이라 아무도 몰랐다.
+  ② **타입을 정하는 주인은 그 도메인이다** — 중앙 매핑표를 만들면 도메인이 늘 때마다 낡는다.
+     `kind`·`stuck_reason`·`분류 결과`·`라우팅 경로` 는 이미 그 도메인이 판단한 것이다. 재사용하라.
+  ③ **감시에 시간창을 넣어라** — 과거 데이터로 판정하면 고쳐도 안 꺼지고, 안 꺼지는 알람은 무시된다.
+  ④ **정규화·지문 규칙을 바꾸면 저장분 마이그레이션이 같은 커밋에 있어야 한다** —
+     [546] 이 그걸 빠뜨려 학습 자산이 하루 동안 매칭 불능이었다.
+
+---
+
 ## [546] ✅ 해결 — 테마 이름이 지문에 박혀 같은 사고가 매번 '처음 보는 오류'였다 (2026-07-29)
 
 [544][545] 는 **Tier 2 프롬프트의 정보 품질**(조준 검색)을 고쳤다. 이번엔 그 앞단 —

@@ -491,10 +491,17 @@ def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issu
                     context=_ctx,
                 )
             else:
-                exc = RuntimeError(_msg)
+                # ★ 원 예외가 없는 경우 = Layer 3 **검증 실패**(판정이지 예외가 아니다).
+                #   종전엔 `RuntimeError` 를 합성했다 → harness 소스 error_type 이
+                #   **전 기간 100% RuntimeError**(실측 2026-05~07). 사실성 실패인지
+                #   인프라 스로틀인지 대본 생성 실패인지 *기록만 보고는 알 수 없었고*,
+                #   `RuntimeError` 는 어떤 타입 게이트(_PATTERN_FIXABLE/_TRANSIENT/
+                #   DETERMINISTIC_CODE_ERROR)에도 없어 **분류 불능으로 방치**됐다.
+                #   → `issue.kind` 를 타입으로 승격한다 (사용자 박제 2026-07-29, ERRORS [547]).
                 _eid = g_report(
-                    exc,                   # ★ catch(exc_or_type, ...) 첫 위치 인자 (exc= 키워드 없음)
+                    harness_error_type(issue.kind),   # ★ 문자열 = error_type 직접 지정
                     source="harness",
+                    message=_msg,
                     module=action_module(action_name),
                     func_name=issue.step,
                     context=_ctx,
@@ -537,7 +544,8 @@ def _record_fixed_to_guardian(action_name: str, attempt: int, fixed_issues: list
                     f"[Layer3 즉시수정] attempt={attempt} [{iss.step}] {iss.detail[:120]}\n"
                     f"harness.fix 훅 inline 패치 완료."
                 ),
-                error_type="HarnessIssueFixed",
+                # ★ 세분화 (ERRORS [547]) — 무엇을 고쳤는지 타입만 보고 알게 한다
+                error_type=harness_error_type(iss.kind) + "Fixed",
                 severity="low",
                 actor="harness_auto_fix",
             )
@@ -547,7 +555,7 @@ def _record_fixed_to_guardian(action_name: str, attempt: int, fixed_issues: list
         # ② learned_patterns 자가 학습 등록
         try:
             _err_rec = {
-                "error_type": "HarnessIssueFixed",
+                "error_type": harness_error_type(iss.kind) + "Fixed",
                 "module": f"JARVIS00_INFRA.harness.{action_name}",
                 "message": iss.detail,
                 "source": f"harness/{action_name}",
@@ -636,6 +644,36 @@ def _is_fixed_issue(iss: Issue) -> bool:
 #   그건 재작성으로 고칠 수 있는 것. 여기엔 '아직 인프라가 안 풀렸다' 신호만.
 #   보수적으로 명시 kind 만(과대분류 시 진짜 코드버그가 abort 없이 max_attempts 소진).
 INFRA_KIND = "infra_throttle"
+
+# ★ 오류 타입 세분화 단일 진입점 (사용자 박제 2026-07-29 — ERRORS [547]).
+#
+#   규정: **"RuntimeError" 같은 뭉뚱그린 타입으로 기록하지 말 것.** 기록만 보고
+#   *어떤 오류인지 한눈에* 알 수 있어야 한다. 런타임 오류가 한두 개가 아니다.
+#
+#   왜 매핑표가 아니라 기계적 변환인가 (원칙②): kind 는 앞으로도 늘어난다.
+#   손으로 관리하는 표를 두면 새 kind 가 생길 때마다 표가 낡고, 고치는 사람은
+#   표가 있는 줄도 모른다. `Harness` + PascalCase(kind) 로 **파생**하면
+#   새 kind 가 자동으로 읽을 수 있는 타입이 된다.
+#     factuality     → HarnessFactuality
+#     infra_throttle → HarnessInfraThrottle
+#     draft_failed   → HarnessDraftFailed
+#   접두사 `Harness` 는 *어느 층에서 난 오류인지* 를 타입만 보고 알게 한다.
+_HARNESS_TYPE_PREFIX = "Harness"
+
+
+def harness_error_type(kind: str) -> str:
+    """harness issue kind → 읽을 수 있는 error_type. 빈 kind 는 `HarnessUnknown`."""
+    k = (kind or "").strip()
+    if not k:
+        return f"{_HARNESS_TYPE_PREFIX}Unknown"
+    parts = [p for p in _re_split_kind(k) if p]
+    return _HARNESS_TYPE_PREFIX + "".join(p[:1].upper() + p[1:] for p in parts)
+
+
+def _re_split_kind(k: str) -> list:
+    """kind 를 단어로 — `_`·`-`·공백 구분. 정규식 하나로 고정(호출자 분기 금지)."""
+    import re as _re_k
+    return _re_k.split(r"[_\-\s]+", k)
 _INFRA_ISSUE_KINDS = frozenset({INFRA_KIND})   # ★ 목록은 상수에서 *파생* (② 동적 설계)
 
 

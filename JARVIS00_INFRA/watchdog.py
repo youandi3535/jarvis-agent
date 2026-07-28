@@ -192,11 +192,29 @@ class Watchdog:
 import contextlib
 
 
+def watchdog_error_type(reason: str) -> str:
+    """정지 사유 → 세분화된 error_type (ERRORS [547]).
+
+    `Watchdog.stuck_reason` 이 만드는 두 형태에서 파생 — 문자열을 양쪽에 박지 않는다.
+      "멈춤(freeze) …"        → WatchdogFreeze   (무진전 — 보통 블로킹 I/O)
+      "데드라인 초과 …"        → WatchdogDeadline (총 시간 초과 — 작업이 큰 것)
+    """
+    r = reason or ""
+    if "freeze" in r or "멈춤" in r:
+        return "WatchdogFreeze"
+    if "데드라인" in r or "deadline" in r.lower():
+        return "WatchdogDeadline"
+    return "WatchdogStuck"
+
+
 def _default_on_stuck(name: str, reason: str) -> None:
     """정지 시 GUARDIAN 보고 (독립 스크립트 공용)."""
     try:
         from JARVIS07_GUARDIAN.error_collector import report
-        report("watchdog", RuntimeError(f"정지 감지 — {name}: {reason}"),
+        # ★ 세분화 (ERRORS [547]) — 멈춤(freeze)과 데드라인 초과는 원인도 대응도 다르다.
+        #   사유 문자열에 이미 구분이 있으니 거기서 파생한다(새 플래그를 만들지 않는다).
+        report("watchdog", watchdog_error_type(reason),
+               message=f"정지 감지 — {name}: {reason}",
                module="JARVIS00_INFRA.watchdog", func_name=name)
     except Exception:
         pass

@@ -201,6 +201,23 @@ pkill -f jarvis_daemon.py        # 전체 종료
 
 ## 오류·문제 기록 규정 (강제 — 모든 에이전트 공통)
 - **단일 위치**: `JARVIS07_GUARDIAN/ERRORS.md` — 모든 오류 기록의 유일한 저장소. 루트에 없음.
+- **★★ 오류는 *세분화* 해서 기록·매칭·보고한다 (사용자 박제 2026-07-29 — ERRORS [547])**:
+  `RuntimeError`·`PostingFailure` 처럼 **뭉뚱그린 타입 금지**. 기록만 보고 *어떤 오류인지
+  한눈에* 알 수 있어야 한다. 런타임 오류가 한두 개가 아니다.
+  실측(2026-07-29): 전체 4,506건 중 타입만으로 분류 가능한 것이 **7.1%** 뿐이었고,
+  `harness` 339건·`incident_responder` 31건·`watchdog` 21건이 **각각 단일 타입 100%** 였다.
+  그 결과 ① 타입 기반 게이트(`_PATTERN_FIXABLE_TYPES`·`_TRANSIENT_TYPES`·
+  `DETERMINISTIC_CODE_ERROR_TYPES`)가 전부 무력 ② Tier 1 지문 매칭이 타입에서 변별력 0.
+  - **타입은 그 도메인이 *파생* 한다 — 중앙 매핑표를 만들지 말 것**(원칙①②).
+    각 도메인의 단일 진입점: `harness.harness_error_type(kind)` ·
+    `watchdog.watchdog_error_type(reason)` · `incident_responder.posting_error_type(cls, ok)` ·
+    `draft_fixer.draft_fix_error_type(route)`. 전부 *이미 있는 판단*(kind·사유·분류·라우팅)에서
+    기계적으로 만든다 — 새 값이 생기면 타입이 **자동으로** 따라온다.
+  - **면제**: `error_collector._MANUAL_POLICY_TYPES`(`GitCommit`·`ExternalEdit` 등)는
+    오류가 아니라 *변경·정책 기록* 이라 단일 타입이 정상이다.
+  - **검증**: `severity.type_granularity_issues()` — 한 소스가 20건 이상인데 고유 타입이
+    1개면 위반으로 보고. 목록을 박지 않고 **DB 에서 파생**하므로 새 소스도 자동 감시.
+    `severity.selfcheck()` 의 `[결함4]` 로 상시 노출.
 - **★ 오류 발생 시 첫 행동 — 통독하지 말고 *조준 검색* 하라 (개정 2026-07-27, ERRORS [534])**:
   ```python
   from JARVIS07_GUARDIAN.repair_history import incidents_brief
