@@ -511,13 +511,46 @@ def history_text(days: int = 7, limit: int = 10) -> str:
 _SEARCH_CACHE: dict[str, Any] = {"mtime": 0.0, "vecs": None, "rows": [], "idf": {}, "toks": []}
 
 # 검색 튜닝 — ① 단일 진입점(여기 한 곳). ② `_flag`/env 로 무배포 조정.
-_KW_WEIGHT   = 0.5    # 키워드 점수 가중
-_VEC_WEIGHT  = 0.5    # 벡터 점수 가중
-# 실측 점수 분포로 교정 (ERRORS [534]): 무관 질의 0.09~0.37 / 유관 질의 0.40~0.71.
-# 경계를 유관 쪽 하한 바로 아래에 둔다 — 빈손이 오답보다 낫다.
-# 실측 분리 (토큰 매칭 + IDF 후): 무관 0.099~0.398 / 유관 0.427~0.709.
+# ★ 가중치 — 골든셋 스윕 실측 (ERRORS [545]). 문자 n-gram 도입으로 키워드 다리가
+#   되살아나 최적점이 0.5→0.7 로 이동했다 (recall@100: 0.5→75.5% / 0.7→79.1% / 0.8→78.2%).
+_KW_WEIGHT   = 0.7    # 키워드(문자 n-gram) 가중
+_VEC_WEIGHT  = 0.3    # 벡터(임베딩) 가중
+# ★ 이 임계는 **리랭커가 못 돌 때의 폴백 경로에서만** 쓰인다 (ERRORS [545]).
+#   정상 경로는 리랭커가 `RERANK_MIN_SCORE` 로 판정하므로 여기를 안 거친다.
+#   골든셋 실측 — 1단계 단독은 *어떤 임계에서도 쓸 만하지 않다*:
+#       0.20 → 정밀도 12.1%(빈손 0) · 0.30 → 16.7%(빈손 10/36) · 0.41 → 37.5%(빈손 32/36)
+#   그래서 **보수적으로 높게 유지**한다 — 재순위를 못 하는 열화 상태에서는
+#   "억지로 뭔가 주기" 보다 "조용히 있기" 가 맞다(계약: 오답 < 빈손). 오답은 무관 사고의
+#   "⛔ 헛다리" 를 LLM 에 주입해 능동적으로 오도하지만, 빈손은 자체 분석으로 진행하게 둘 뿐이다.
+#   ※ 옛 근거(토큰 매칭 시절 "무관 0.099~0.398 / 유관 0.427~0.709")는 문자 n-gram 도입으로
+#     점수 분포가 달라져 더는 유효하지 않다 — 위 폴백 실측이 현재 근거다.
 # 경계를 그 사이에 둔다 — 빈손이 오답보다 낫다.
 _MIN_SCORE   = 0.41
+
+# ★ 2단계 리랭커 노브 (ERRORS [544]) — 값의 근거는 `golden_queries.json` 실측 스윕.
+#   RERANK_POOL: 1단계에서 리랭커에 넘길 후보 수. 이게 recall 상한을 정한다
+#     (실측 1단계 recall @20 36.4% / @100 63.6% / @200 82.7%, 100건 재점수 1.2초 CPU).
+#   RERANK_MIN_SCORE: cross-encoder 로짓 임계 — **코사인 임계(_MIN_SCORE)와 스케일이 다르다.**
+#     둘을 섞어 쓰면 안 된다. 값 변경 시 `selfcheck()` 의 골든셋 레그로 반드시 재측정할 것.
+#   ★ 값 근거 — 골든셋 36질의/정답 110개 임계 스윕 실측 (2026-07-28, **문자 n-gram 도입 후 재측정**):
+#       임계 | recall@5 | 정밀도 | 빈손      ※ 재랭킹 입력은 `_row_text` 전문(제목+증상+원인 변형보다 전 구간 우월)
+#       기준 |   14.5%  |  16.7% | 26/36    ← 2단계 도입 *전* 원래 상태
+#        -1  |   30.9%  |  26.0% |  2/36
+#         0  |   25.5%  |  33.3% | 10/36
+#     **0**  |   25.5%  |  33.3% | 10/36    ← 채택
+#         1  |   20.9%  |  41.8% | 17/36
+#         2  |   12.7%  |  50.0% | 25/36
+#     0 을 고른 이유: 세 지표가 **모두 기준선 이상**(recall 1.8배·정밀도 2.0배·빈손 72%→28%)
+#     이면서 **대표 사례가 살아남는 가장 높은 임계**다.
+#   ★ 실패에서 배운 것 — 처음엔 계약 *"오답 < 빈손"* 만 보고 1 을 골랐다. 정밀도가 41.8% 로
+#     더 높았기 때문이다. 그런데 그 임계에서 질의 "사진 두 장이 딱 붙어 있다" 가 **빈손**이 됐다
+#     ([39] 점수 0.04 < 1.0). CLAUDE.md 가 "[39][103][170][171] 4회 반복 박제" 로 못 박은
+#     바로 그 사고군이다. **지표를 올리다 그 지표가 대표하려던 것을 잃은 것이다.**
+#     → 임계를 고를 때는 총계뿐 아니라 *반드시 통과해야 하는 대표 질의* 를 함께 확인할 것.
+#   ⚠️ **1단계를 손대면 이 값도 반드시 재스윕할 것** — 실제로 n-gram 도입으로 최적점이
+#     -1 에서 1 로 옮겨갔다. 점수 분포가 바뀌면 임계는 자동으로 낡는다.
+RERANK_POOL      = 100
+RERANK_MIN_SCORE = 0.0
 
 
 def _search_env(name: str, default: float) -> float:
@@ -527,6 +560,31 @@ def _search_env(name: str, default: float) -> float:
         return float(_os.getenv(name) or default)
     except ValueError:
         return default
+
+
+# ★ 문자 n-gram 크기 — 한국어 활용형·복합어를 형태소 분석기 없이 잇는다 (ERRORS [545]).
+#   왜 어절이 아니라 문자인가 (진단 실측):
+#     종전 토크나이저는 `[가-힣]{2,}` 로 **어절을 통째로** 잘랐다. 한국어는 교착어라
+#     "붙어/붙는다/붙었다" 가 전부 다른 토큰이 되고, 사용자 어휘("사진")와 문서 어휘
+#     ("이미지")도 안 이어진다. 실측 — **top-100 밖으로 탈락한 정답 40개 중 32개(80%)가
+#     키워드 점수 0.000** 이었다. 질의 단어가 문서에 하나도 안 겹친 것이다.
+#   왜 2인가: 3-gram 은 전 구간에서 2-gram 보다 낮았다 (recall@100 72.7% vs 79.1%).
+#     한국어 어근이 대개 1~2음절이라 2-gram 이 어간을 더 잘 공유한다.
+NGRAM_N = 2
+
+
+def _char_ngrams(s: str, n: int = NGRAM_N) -> set:
+    """검색용 문자 n-gram — 공백·기호를 걷어내고 n글자 창을 민다.
+
+    ★ 부분문자열 매칭이 아니다 — 양쪽을 같은 방식으로 n-gram 화해 *집합 교집합* 으로 센다.
+      ERRORS [534] 가 기각한 `t in text` 와는 다른 기법이다(그건 한쪽만 통째로 훑어
+      "사진" 이 "AI사진생성" 에 걸렸다). 여기서는 질의·문서가 대칭이고 IDF 가 흔한
+      n-gram 을 눌러 준다.
+    """
+    s = "".join(ch for ch in (s or "").lower() if ch.isalnum())
+    if len(s) < n:
+        return {s} if s else set()
+    return {s[i:i + n] for i in range(len(s) - n + 1)}
 
 
 def _row_text(row: dict) -> str:
@@ -551,13 +609,15 @@ def _index() -> tuple[list[dict], Any]:
     # ★ IDF — 문서에서 파생한다(사본 없음). 흔한 토큰일수록 가중 ↓
     import math as _math
     texts = [_row_text(r).lower() for r in rows]
+    # ★ 문자 n-gram 색인 (ERRORS [545]) — 어절 토큰은 한국어 활용형·어휘 격차에서 죽는다.
+    #   식별자·파일경로(`NoneType`, `foo.py`)는 n-gram 으로도 잘 이어지므로 별도 유지 불필요.
+    toks = [_char_ngrams(t) for t in texts]
     df: dict[str, int] = {}
-    for t in texts:
-        for tok in {x.lower() for x in _TOKEN_RE.findall(t)}:
+    for s in toks:
+        for tok in s:
             df[tok] = df.get(tok, 0) + 1
     n = len(texts) or 1
     idf = {tok: _math.log(n / (1 + c)) + 1.0 for tok, c in df.items()}
-    toks = [{x.lower() for x in _TOKEN_RE.findall(t)} for t in texts]
 
     vecs = None
     try:
@@ -622,7 +682,7 @@ def search_incidents(query: str, top_k: int = 3, min_score: float | None = None)
     if not rows:
         return []
 
-    q_tokens = {t.lower() for t in _TOKEN_RE.findall(q)}
+    q_tokens = _char_ngrams(q)          # ★ 색인과 동일 방식 (ERRORS [545]) — 대칭 필수
     _idf = _SEARCH_CACHE.get("idf") or {}
     _toks = _SEARCH_CACHE.get("toks") or []
     kw = [_kw_score(q_tokens, _toks[i] if i < len(_toks) else set(), _idf)
@@ -639,15 +699,49 @@ def search_incidents(query: str, top_k: int = 3, min_score: float | None = None)
         except Exception as e:  # noqa: BLE001
             log.debug(f"[repair_history] 벡터 점수 생략: {e}")
 
-    scored = []
-    for r, k, v in zip(rows, kw, vec):
-        s = kw_w * k + vec_w * v
-        if s >= thr:
-            scored.append((s, r))
+    scored = [(kw_w * k + vec_w * v, r) for r, k, v in zip(rows, kw, vec)]
     scored.sort(key=lambda x: -x[0])
 
+    # ── 2단계: 리랭커(cross-encoder) 재점수 (ERRORS [544]) ──────────────
+    #
+    # ★ 왜 필요했나 — 골든셋 36질의/정답 110개 실측으로 1단계 단독 성능이 드러났다:
+    #     recall@5 **14.5%** · 빈손율 **72.2%** · 임계 통과분의 정밀도 **16.7%**(정답4/오답20).
+    #   즉 CLAUDE.md 가 "통독 말고 조준 검색하라" 고 규정한 도구가 10번 중 7번 빈손이었고,
+    #   뭔가 나올 때도 5번 중 4번이 오답이었다.
+    #
+    # ★ 왜 리랭커로 고쳐지나 — 1단계는 질의와 문서를 *각각 따로* 벡터로 만들어 비교하므로
+    #   "단어가 겹친다" 에 속는다(자기참조 오염: 그 문구를 예시로 인용한 무관 사고가 1위).
+    #   cross-encoder 는 둘을 **붙여서 한 번에** 읽어 "인용이지 이 사고가 아니다" 를 구분한다.
+    #
+    # ★ 왜 풀을 넓히나 — 리랭커는 *후보에 올라온 것만* 재정렬한다. 1단계 recall 실측:
+    #     @5 14.5% / @20 36.4% / @100 **63.6%** / @200 82.7%
+    #   → 상한을 사려면 풀을 넓혀야 한다. 100건 재점수 실측 1.2초(CPU) 로 감당 가능하고,
+    #     이 함수는 발행 임계경로가 아니다(GUARDIAN Tier-2·auto_repair 진단 경로).
+    #
+    # ★ fail-open: 모델이 없거나 실패하면 1단계 결과를 종전 임계로 그대로 쓴다.
+    #   검색이 리랭커 때문에 멈추는 일은 없어야 한다.
+    import os as _os_rr
+    _use_rr = _os_rr.getenv("GUARDIAN_RERANK", "1") != "0"
+    _rr_hits: list = []
+    if _use_rr and scored:
+        try:
+            from shared import embeddings as _emb2
+            pool = scored[:RERANK_POOL]
+            _rr_hits = _emb2.rerank(q, [_row_text(r)[:2000] for _, r in pool])
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"[repair_history] 리랭크 생략: {e}")
+            _rr_hits = []
+
+    if _rr_hits:
+        rr_thr = _search_env("GUARDIAN_RERANK_MIN", RERANK_MIN_SCORE)
+        pool = scored[:RERANK_POOL]
+        # ★ 점수 의미가 바뀐다 — 로짓(음수 가능). 코사인 임계(_MIN_SCORE)를 재사용하면 안 된다.
+        final = [(rs, pool[i][1], pool[i][0]) for i, rs in _rr_hits if rs >= rr_thr]
+    else:
+        final = [(s, r, s) for s, r in scored if s >= thr]
+
     out = []
-    for s, r in scored[:top_k]:
+    for s, r, _stage1 in final[:top_k]:
         slots = r.get("slots") or {}
         first = lambda key: (slots.get(key) or [""])[0] if slots.get(key) else ""   # noqa: E731
         out.append({
@@ -742,9 +836,60 @@ def selfcheck() -> list[str]:
         if dups:
             issues.append(f"[S4] 중복 사고 번호 {len(dups)}개: {dups[:12]}"
                           " — next_incident_no() 로 발급할 것")
+        # [S5] 골든셋 회귀 감시 (ERRORS [544])
+        issues.extend(golden_check())
     except Exception as e:  # noqa: BLE001
         issues.append(f"[S0] selfcheck 실패: {type(e).__name__}: {e}")
     return issues
+
+
+# ── 골든셋 회귀 감시 ────────────────────────────────────────────────
+
+GOLDEN_PATH = Path(__file__).parent / "golden_queries.json"
+
+# ★ 회귀 임계 — 아래로 떨어지면 알린다. 값 근거는 2026-07-28 실측 (RERANK_MIN_SCORE 주석 표).
+#   여유를 5%p 둔 이유: 리랭커·임베딩 모델은 미세하게 비결정적이고, ERRORS.md 가 자라면
+#   후보 경쟁이 달라진다. 진짜 열화만 잡고 잡음에는 안 울리게 한다.
+GOLDEN_MIN_RECALL   = 0.18      # 실측 0.255 (ERRORS [545] 이후)
+GOLDEN_MAX_EMPTY    = 0.40      # 실측 0.278 (10/36) — [545] 이전엔 0.639 였다
+
+
+def golden_check(sample: int = 0) -> list[str]:
+    """★ 골든셋으로 검색 품질을 *실측* 한다 — 조준 검색의 무증상 열화 감시.
+
+    왜 필요한가: 이 검색은 **틀려도 예외를 안 던진다.** 빈손이나 오답을 조용히 돌려줄 뿐이라
+      코드를 읽어선 열화를 못 본다. 실제로 도입 시점 측정에서 recall@5 **14.5%** ·
+      빈손 **72%** 였는데 아무도 몰랐다. 정답이 적힌 시험지로 재는 수밖에 없다.
+
+    sample: 0 이면 전량. 양수면 앞에서 그만큼만 (빠른 점검용 — 부팅 경로 등).
+    반환: 위반 문자열 목록 (비면 정상). 골든셋 파일이 없으면 그 사실 자체가 위반.
+    """
+    out: list[str] = []
+    try:
+        if not GOLDEN_PATH.exists():
+            return [f"[S5] 골든셋 없음: {GOLDEN_PATH.name} — 검색 품질을 잴 수단이 없다"]
+        pairs = (json.loads(GOLDEN_PATH.read_text(encoding="utf-8")) or {}).get("pairs") or []
+        if not pairs:
+            return ["[S5] 골든셋이 비어 있음 — 측정 불가"]
+        if sample and sample > 0:
+            pairs = pairs[:sample]
+        tot = sum(len(p.get("expect") or []) for p in pairs) or 1
+        hit = empty = 0
+        for p in pairs:
+            nos = [h["no"] for h in (search_incidents(p["query"], top_k=5) or [])]
+            if not nos:
+                empty += 1
+            hit += len(set(p.get("expect") or []) & set(nos))
+        recall, empty_rate = hit / tot, empty / len(pairs)
+        if recall < GOLDEN_MIN_RECALL:
+            out.append(f"[S5] 골든셋 recall@5 {recall:.1%} < 기준 {GOLDEN_MIN_RECALL:.0%} "
+                       f"— 검색 열화 (질의 {len(pairs)}개/정답 {tot}개)")
+        if empty_rate > GOLDEN_MAX_EMPTY:
+            out.append(f"[S5] 골든셋 빈손율 {empty_rate:.1%} > 기준 {GOLDEN_MAX_EMPTY:.0%} "
+                       f"— '과거 사례 없음' 오답이 늘었다")
+    except Exception as e:  # noqa: BLE001
+        out.append(f"[S5] 골든셋 점검 실패: {type(e).__name__}: {e}")
+    return out
 
 
 if __name__ == "__main__":  # pragma: no cover

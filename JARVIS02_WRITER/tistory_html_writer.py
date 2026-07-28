@@ -38,7 +38,6 @@ sys.path.insert(0, str(_ROOT))
 from JARVIS02_WRITER.draft_writer import (
     PLATFORM_SPEC as _PLATFORM_SPEC,
     strip_html_wrapper as _strip_html_wrapper,
-    _gen_hook,
     _inject_missing_charts,
     _build_section_system_msg,
     _gen_economic_ts_nv as _generate_text_pass1,
@@ -64,7 +63,7 @@ _DATE_KEY  = _TODAY.strftime("%Y-%m-%d")
 OUTPUT_HTML_DIR = _ROOT / "output" / "html"
 OUTPUT_IMG_DIR  = _ROOT / "JARVIS06_IMAGE" / "output" / "images"   # JARVIS06 단일 진입점 (CLAUDE.md 규정)
 
-# _PLATFORM_SPEC / _strip_html_wrapper / _gen_hook / Pass-1 함수들 →
+# _PLATFORM_SPEC / _strip_html_wrapper / Pass-1 함수들 →
 # draft_writer.py 단일 진입점으로 이관 (위 import 참조)
 
 

@@ -63,7 +63,7 @@
 
 ### 1.4 Claude Code SDK (LLM 인증)
 - **방식**: OAuth — Anthropic Max 구독 (외부 API 비용 0)
-- **환경변수**: `ANTHROPIC_API_KEY` setdefault (CrewAI native init 우회용 dummy — SDK subprocess 에는 `""` 오버라이드)
+- **환경변수**: `ANTHROPIC_API_KEY` setdefault (LangChain 프로바이더 감지용 dummy — SDK subprocess 에는 `""` 오버라이드로 OAuth 모드 강제)
 - **단일 진입점**: `shared/llm.py` → `invoke_text(alias, prompt)` (별도 위임 — 본 헌법 대상 외, 인증 자체가 OAuth 라 코드 박제 없음)
 
 ---

@@ -58,7 +58,7 @@
 **"팩트만, 그리고 너무 읽고 싶은 글만 발행". 검수는 발행 *전* harness Layer 3 에서 한다.**
 
 - **단일 진입점**: `prepublish_gate.prepublish_quality_issues(draft, post_type, source_docs, market_data)`. economic_poster·trend_theme_writer 두 `_verify_all` 이 *구조 검증 통과 후에만* 호출 (LLM 비용 절약). 새 검수 차원 추가 시 이 모듈만 수정.
-- **두 레그**: ① 사실성 = `law_enforcer.factuality_issues` (출처 대조 + JARVIS09 `web_verify` 웹 재검증). ② 매력도/유익성 = `post_quality_analyzer.judge_engagement` (engagement_judge alias=Sonnet 5, 임계 70/70).
+- **사실성+매력도 통합 1콜**: `prepublish_gate._combined_quality_call` (fact_judge alias) 하나가 blocked_claims 와 매력도 5축을 함께 판정한다. ★ 2026-07-12 커밋 `0f9cdbc` 로 통합 — 종전 `law_enforcer.factuality_issues`(전용 3콜) 경로는 그때 고아가 됐고 2026-07-28 삭제됐다. 수치 대조 헬퍼(`_build_source_corpus`·`_claim_all_grounded` 등)는 law_enforcer 에 남아 게이트가 직접 쓴다.
 - **kind 규칙 (★ 비직관)**: 게이트 Issue 는 `kind="factuality"|"engagement"` — *`draft_quality` 아님*. 그래야 `_fix_drafts` 가 inline 패치를 *건너뛰고* 곧장 unfixed → WRITER step 재실행 = 재작성 순환. `draft_quality` 로 만들면 draft_fixer 가 못 고치는 걸 붙잡아 헛수고.
 - **fingerprint 안정성 (★ 비직관)**: `Issue.detail` 에 *점수 raw·attempt 변동값 금지*. factuality=claim 텍스트, engagement=실패 차원 태그만. 변동값 넣으면 매 attempt 지문이 달라져 abort 안 됨 → max_attempts 낭비.
 - **정책**: 사실 판정 LLM 실패=차단(fail-closed) / 웹 인프라 실패=통과(fail-open) / 테마글(약한 출처)=웹 1차 근거로 "웹도 확인 불가만 차단" / engagement LLM 실패=통과(fail-open, 재생성 사유일 뿐).

@@ -182,8 +182,13 @@ DEFAULT_JOBS: list[dict] = [
     # ── JARVIS06 IMAGE — 인포그래픽 디자인 강화학습 (★ 사용자 박제 2026-07-05) ──
     # 매일 05:00 Claude 가 새 전문 디자인 레시피 1개 창작 → 게이트 통과분만 누적 → pro_templates 소비.
     # 오류학습과 동형: 검증된 자산만 생존 → 다양성·품질 복리 상승. (ERRORS [359])
-    {"id":"j06_design_learn",   "name":"인포그래픽 디자인 학습 05:00 (하루 1개)", "trigger":"cron",
-     "kwargs":{"hour":5, "minute":0},
+    # ★ 2026-07-28 매일 → **일요일 주 1회** (사용자 승인). 토큰 절감.
+    #   근거: 레시피가 이미 33종 누적돼 한계효용이 낮다. 게다가 실측상 비전 학습 성공률이
+    #   30건 중 7건(23%)이고, 실패하면 LLM 을 27회(호출당 $1.95) 쓰고도 결과물은
+    #   **LLM 0인 코드 라이브러리/결정론** 에서 나온다 — 즉 비용만 나가고 산출은 무관.
+    #   주 1회면 학습은 계속되면서 소비는 1/7 이 된다.
+    {"id":"j06_design_learn",   "name":"인포그래픽 디자인 학습 (일 05:00)", "trigger":"cron",
+     "kwargs":{"day_of_week":"sun", "hour":5, "minute":0},
      "callback":"JARVIS06_IMAGE.design_learner.job_learn_design",
      "misfire_grace_time":7200, "owner":"jarvis06_image"},
     # ── JARVIS07 GUARDIAN ─────────────────────────────────────────

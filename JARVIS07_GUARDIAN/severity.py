@@ -197,7 +197,7 @@ _NON_CODE_PATTERNS = [
     #   실DB 마지막 적중도 2026-06-07(그 후 48일 0건). 벤더 이름은 늘어나기만 하므로
     #   *증상*(HTTP 코드·크레딧 소진·모델 폐기 문구)만 남긴다.
     re.compile(r"HTTP \d{3} —|depleted your.*credits|requested model.*(does not exist|deprecated)", re.I),
-    # crewai/native provider 환경 (외부 키·런타임 — 코드 버그 아님)
+    # native provider 환경 (외부 키·런타임 — 코드 버그 아님)
     #   ※ ImportError 로 올라오면 결함 1 가드가 우선한다(코드버그 타입 > 문구). 의도된 순서 —
     #     '없는 심볼을 import 했다' 는 사실 자체는 코드가 고쳐야 할 일이기 때문.
     re.compile(r"Error importing native provider|OPENAI_API_KEY is required", re.I),

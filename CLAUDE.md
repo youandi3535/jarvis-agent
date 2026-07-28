@@ -330,7 +330,7 @@ pkill -f jarvis_daemon.py        # 전체 종료
   # 2) 자연어 분량 표현
   grep -rnE '[0-9]+자\s*(이내|이하|초과|미만|이상|전후|범위|기준|정도|내외)|[0-9]+\s*~\s*[0-9]+자' --include='*.py' JARVIS02_WRITER shared JARVIS03_RADAR | grep -v length_manager.py | grep -v shared/seo.py
   # 3) compress / cap / count 직접 호출 (정의·_L 위임 제외)
-  grep -rnE 'compress_to_korean\(|cap_content\(|count_korean\(|sanitize_body\(' --include='*.py' . | grep -v length_manager.py | grep -v shared/seo.py | grep -v 'def _cap\|return _L\.compress\|__all__'
+  grep -rnE 'cap_content\(|count_korean\(|sanitize_body\(' --include='*.py' . | grep -v length_manager.py | grep -v shared/seo.py | grep -v 'def _cap\|return _L\.compress\|__all__'
   # 4) 글자수 한도 후보 숫자 (블로그 본문 맥락만)
   grep -rnE '\(2500|\(2200|\(1500|\b2500자|\b2200자|\b1500자' --include='*.py' . | grep -v length_manager.py | grep -v shared/seo.py | grep -v shared/precommit_check.py
   # 5) 검증 게이트

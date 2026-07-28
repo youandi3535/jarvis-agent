@@ -19,9 +19,7 @@ import base64
 import hashlib
 import logging
 import os
-import re
 import tempfile
-import time
 from pathlib import Path
 
 
@@ -288,89 +286,4 @@ def _html_to_jpg(html_str: str, out_path: Path, width: int = 980) -> bool:
 #  6. 공개 API
 # ══════════════════════════════════════════════════════════════════
 
-def generate_html_infographic(
-    theme: str,
-    purpose: str = "",
-    data: dict | None = None,
-    run_id: str = "",
-    slot_key: str = "",
-    max_retries: int | None = None,   # None = harness SSOT 상속 (2026-07-21: 2회)
-    out_dir: str | Path | None = None,
-) -> str:
-    """
-    HTML+CSS 기반 프리미엄 인포그래픽 생성.
-
-    Returns:
-        HTML <img> 문자열. 실패 시 빈 문자열.
-    """
-    from shared.llm import invoke_text
-
-    _rid = run_id or hashlib.md5(
-        f"{theme}|{purpose}|{time.time_ns()}".encode()
-    ).hexdigest()[:16]
-    _slot = slot_key or purpose[:12] or "infog"
-
-    H, S, L = _dyn_hsl(theme, _rid)
-    H2 = (H + 60) % 360
-    S2, L2 = max(S - 5, 40), min(L + 10, 55)
-
-    _data_str = _fmt_data(data)
-    _purpose = purpose or f"{theme} 데이터 시각화"
-
-    prompt = _PROMPT_TEMPLATE.format(
-        theme=theme, purpose=_purpose,
-        H=H, S=S, L=L, H2=H2, S2=S2, L2=L2,
-        data_str=_data_str,
-    )
-
-    _out_dir = Path(out_dir) if out_dir else Path(tempfile.gettempdir())
-    _out_dir.mkdir(parents=True, exist_ok=True)
-    _out = _out_dir / f"html_infog_{_rid[:12]}_{_slot[:6]}.jpg"
-
-    # ★ None = harness SSOT 상속 (호출자가 명시하면 그 값 사용)
-    max_retries = _max_attempts() if max_retries is None else max_retries
-    for attempt in range(max_retries):
-        try:
-            _prompt_a = prompt if attempt == 0 else (
-                prompt + f"\n\n[재시도{attempt+1}: 원형 게이지·픽토그램 반드시 포함, 더 풍부하게]"
-            )
-
-            # ★ 2026-06-29: LLM 이 *직접 HTML* 을 출력하게 변경. (이전엔 거대 HTML 을
-            #   Python 삼중따옴표 안에 담아 반환 → SDK 메시지 파서가 응답 0개로 실패.)
-            raw = invoke_text("writer_long_infographic", _prompt_a, timeout=240, max_tokens=11000)
-            if not raw:
-                continue
-
-            # ```html 코드블록 추출 (없으면 raw 자체에서 <html…</html> 추출)
-            m = re.search(r'```html\s*\n?([\s\S]*?)```', raw, re.IGNORECASE)
-            if not m:
-                m = re.search(r'```\s*\n([\s\S]*?)```', raw)
-            html = m.group(1).strip() if m else ""
-            if not html:
-                hm = re.search(r'(<!DOCTYPE html[\s\S]*?</html>)', raw, re.IGNORECASE)
-                html = hm.group(1) if hm else ""
-            if not (isinstance(html, str) and len(html) > 500 and "<html" in html.lower()):
-                log.debug(f"[html_infographic] HTML 추출 실패 (시도 {attempt+1})")
-                continue
-
-            if _out.exists():
-                _out.unlink(missing_ok=True)
-
-            if _html_to_jpg(html, _out, width=1240):
-                log.info(f"[html_infographic] ✅ {theme}/{_slot} (시도 {attempt+1})")
-                with open(_out, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode()
-                return _wrap_img(b64, f"{theme} — {_purpose}")
-
-            log.debug(f"[html_infographic] Selenium 캡처 실패 (시도 {attempt+1})")
-
-        except Exception as e:
-            log.debug(f"[html_infographic] 시도 {attempt+1} 예외: {e}")
-            _g_report("image", e, module=__name__, func_name="generate_html_infographic",
-                      attempt=attempt + 1, max_attempts=max_retries)
-
-    log.warning(f"[html_infographic] {max_retries}회 실패: {theme}/{_slot}")
-    return ""
-
-
-__all__ = ["generate_html_infographic"]
+__all__: list[str] = []

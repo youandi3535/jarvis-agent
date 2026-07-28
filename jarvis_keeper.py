@@ -45,7 +45,7 @@ MAX_RESTART_DELAY = 300  # 연속 실패 시 최대 5분 대기
 HANG_THRESHOLD = 360     # heartbeat 이만큼(초) stale 이면 hang 판정 (6분 = 6 missed beats)
 HANG_GRACE = 180         # (재)시작 직후 이 시간(초) 동안은 hang 검사 유예 (부팅 여유)
 BOOT_TIMEOUT = 180       # ★ (2026-07-06) 스폰된 데몬이 PID_FILE 쓸 때까지 최대 대기 —
-                         # crewai/langgraph/sentence-transformers 등 무거운 import + Layer 0
+                         # langgraph/sentence-transformers 등 무거운 import + Layer 0
                          # preflight 로 실제 부팅(=_acquire_lock 도달)에 60~70초 소요. CHECK_INTERVAL
                          # (30초) 이 이보다 짧아, 부팅 중인 프로세스를 "꺼짐"으로 오판하고 또 스폰
                          # 하는 중복 기동 사고 발생(같은 시각대 최대 3개 인스턴스 동시 부팅 확인).
@@ -63,7 +63,7 @@ def _acquire_keeper_lock() -> None:
 
     ★ (2026-07-12) launchd KeepAlive 경로 밖에서 keeper 가 우발적으로 두 번째
     스폰되면(수동 실행·wake 레이스 등), 두 keeper 가 각자 독립적으로 데몬 다운을
-    감지해 거의 동시에 jarvis_daemon.py 를 중복 스폰 → crewai/langgraph 등 무거운
+    감지해 거의 동시에 jarvis_daemon.py 를 중복 스폰 → langgraph 등 무거운
     import 를 두 벌 동시 로딩 → 메모리 압박으로 OS 가 한쪽을 SIGKILL(-9) →
     "데몬 즉시 종료 returncode=-9" 오탐 반복. jarvis_daemon.py 는 이미 동일 패턴의
     자체 락(`_acquire_lock`)을 갖고 있으나 감시자인 keeper 자신에는 없어 발생한 사고.

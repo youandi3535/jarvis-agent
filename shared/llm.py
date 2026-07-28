@@ -20,12 +20,11 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 
-# LangChain/CrewAI 프로바이더 감지용 센티넬 — 실제 API 호출 금지
+# LangChain 프로바이더 감지용 센티넬 — 실제 API 호출 금지
 # SDK subprocess 에는 별도로 "" 오버라이드해서 OAuth 모드 강제 (아래 _run_sdk_sync 참조)
 os.environ.setdefault("ANTHROPIC_API_KEY", "max-subscription-no-api-cost")
 
-# crewai telemetry 종료 노이즈('Loop is closed') + 외부 전송 차단
-os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
+# 외부 텔레메트리 전송 차단 (OpenTelemetry 계열 라이브러리 공통)
 os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 
 # ★ 사용자 박제 2026-06-07 — Claude CLI 잔존 흔적 일소.
@@ -505,9 +504,16 @@ def _build_claude_sdk_chat_model():
             tool_block = self._tool_schema_injection()
             if tool_block:
                 system_prompt = (system_prompt + tool_block).strip()
-            response_text = _run_sdk_sync(
-                user_prompt, model=self._sdk_model(), system=system_prompt,
-            ) or ""
+            # ★ 단일 진입점 경유 (ERRORS [544]) — 종전엔 `_run_sdk_sync` 를 **직접** 불러
+            #   alias 귀속(_bind_alias) · alias별 캐시정책(_sdk_env) · 회로차단 · 재시도 ·
+            #   발행창 배경보류 를 **전부 우회**했다. ERRORS [474]([540]) 와 같은 병 —
+            #   "한 통로에만 걸면 나머지로 샌다".
+            #   timeout 은 명시하지 않는다 → `invoke_text_result` 의 저장소 표준값을 상속
+            #   (종전 300s 는 `_run_sdk_sync` 의 raw 기본값이 우연히 걸린 것이지 정책이 아니었다).
+            response_text, _ok = invoke_text_result(
+                self.alias, user_prompt, system=system_prompt,
+            )
+            response_text = response_text or ""
             tool_calls, content = self._parse_tool_calls(response_text)
             msg = AIMessage(content=content, tool_calls=tool_calls or [])
             return ChatResult(generations=[ChatGeneration(message=msg)])
@@ -580,6 +586,48 @@ def _bind_alias(alias: str) -> None:
     _CURRENT_ALIAS.set(alias or "")
 
 
+def _raw_sdk_callers() -> list[tuple[str, int, bool]]:
+    """원시 SDK(`_run_sdk_sync`/`_invoke_sdk_vision`)를 *직접* 부르는 함수를 **소스에서 파생**.
+
+    ★ 왜 손목록을 버렸나 (ERRORS [544]): 종전 검사는 통로 이름 두 개
+      (`invoke_text_result`·`invoke_vision`)를 코드에 **박아뒀다**. 그 목록이
+      `_generate`(LangChain 어댑터) 경로를 **놓쳤고**,
+      두 어댑터는 alias 귀속·캐시정책·회로차단·재시도를 통째로 우회한 채 돌고 있었다.
+      *목록을 손으로 관리하는 검사는 반드시 낡는다* — 새 통로가 생기면 목록도
+      같이 고쳐야 하는데, 고치는 사람은 검사가 있는 줄도 모른다.
+
+    ★ 중첩 함수 처리: 호출은 **자기 몸통 것만** 센다. 그래야 팩토리
+      (`_build_claude_sdk_chat_model`)가 안에 든 `_generate` 때문에 오탐되지 않고,
+      `_generate` 자신이 독립 통로로 잡힌다.
+
+    반환: [(함수명, 줄번호, `_bind_alias` 를 거치는가)]
+    """
+    import ast as _ast
+    import inspect as _insp
+
+    def _own_calls(fnode) -> set:
+        out, stack = set(), list(fnode.body)
+        while stack:
+            n = stack.pop()
+            if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.Lambda)):
+                continue                      # 중첩 함수는 *그 자체가* 별도 통로
+            if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name):
+                out.add(n.func.id)
+            stack.extend(_ast.iter_child_nodes(n))
+        return out
+
+    _RAW = {"_run_sdk_sync", "_invoke_sdk_vision"}
+    found: list[tuple[str, int, bool]] = []
+    tree = _ast.parse(_insp.getsource(_sys.modules[__name__]))
+    for node in _ast.walk(tree):
+        if not isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            continue
+        calls = _own_calls(node)
+        if calls & _RAW:
+            found.append((node.name, node.lineno, "_bind_alias" in calls))
+    return found
+
+
 def alias_selfcheck() -> list[str]:
     """★ alias 귀속이 *실제로 되고 있는지* 동작으로 확인 (ERRORS [540]).
 
@@ -587,16 +635,11 @@ def alias_selfcheck() -> list[str]:
     """
     issues: list[str] = []
     try:
-        import inspect as _insp
-        src = _insp.getsource(_sys.modules[__name__])
-        # 통로마다 _bind_alias 를 거치는가 (누락 시 그 통로만 라벨이 샌다)
-        for fn in ("def invoke_text_result", "def invoke_vision"):
-            i = src.find(fn)
-            if i < 0:
-                continue
-            j = src.find("\ndef ", i + 1)
-            if "_bind_alias(" not in src[i: j if j > 0 else len(src)]:
-                issues.append(f"[A1] {fn.split()[1]} 가 _bind_alias 를 안 거침 — alias 라벨 유실")
+        # 원시 SDK 를 *직접* 부르는 함수는 반드시 alias 를 묶어야 한다.
+        for name, lineno, bound in _raw_sdk_callers():
+            if not bound:
+                issues.append(f"[A1] {name}(:{lineno}) 가 원시 SDK 를 직접 부르면서 "
+                              f"_bind_alias 를 안 거침 — alias 라벨·캐시정책 유실")
         # MODELS 에 없는 alias 가 DB 에 쌓이고 있지 않은가
         from shared.db import get_db
         with get_db() as conn:
@@ -1860,79 +1903,7 @@ def invoke_text_result(alias: str, prompt: str, system: str = "", timeout: int =
     return result, False
 
 
-class ClaudeSDKLLM:
-    """CrewAI 호환 LLM 어댑터 — claude-code-sdk 경유.
-
-    사용:
-        from shared.llm import ClaudeSDKLLM
-        researcher = Agent(
-            role='리서처', goal=..., backstory=...,
-            llm=ClaudeSDKLLM(alias='writer_fast', max_tokens=800),
-        )
-    """
-
-    def __init__(self, alias: str = "writer", max_tokens: int | None = None,
-                 temperature: float | None = None):
-        spec = get_spec(alias)
-        self.alias = alias
-        self.model = spec.model_id
-        self.max_tokens = max_tokens if max_tokens is not None else spec.max_tokens
-        self.temperature = temperature if temperature is not None else spec.temperature
-        self.api_key = ""
-        self.stop = None
-
-    @staticmethod
-    def _format_messages(messages) -> tuple[str, str]:
-        """CrewAI / LangChain message 리스트 → (system, user_prompt) 변환.
-
-        지원 형식:
-          - [{"role": "system"|"user"|"assistant", "content": "..."}, ...]
-          - 단일 문자열
-        """
-        if isinstance(messages, str):
-            return "", messages
-        system_parts: list[str] = []
-        user_parts: list[str] = []
-        for m in messages:
-            if isinstance(m, dict):
-                role = m.get("role", "user")
-                content = m.get("content", "")
-            elif isinstance(m, (list, tuple)) and len(m) == 2:
-                role, content = m
-            else:
-                role, content = "user", str(m)
-            if role == "system":
-                system_parts.append(str(content))
-            else:
-                user_parts.append(str(content))
-        return "\n\n".join(system_parts), "\n\n".join(user_parts)
-
-    def call(self, messages, **_kwargs) -> str:
-        """CrewAI 진입점."""
-        model = _ALIAS_MODEL.get(self.alias, _DEFAULT_MODEL_ID)
-        system, prompt = self._format_messages(messages)
-        return _run_sdk_sync(prompt, model=model, system=system) or ""
-
-    # LiteLLM 호환 entry point — CrewAI 의 일부 경로가 이걸 시도
-    def __call__(self, messages, **kwargs):
-        return self.call(messages, **kwargs)
-
-
 # ── 진단 ──────────────────────────────────────────────────────
-
-# ── CrewAI BaseLLM virtual subclass 등록 ────────────────────────
-# ClaudeSDKLLM 은 crewai 의 LLM/BaseLLM 을 상속하지 않으므로
-# crewai create_llm() 이 강제 변환 시도 → "claude-sonnet-5" 모델을
-# ANTHROPIC_MODELS 상수에 미등록 → provider=openai 기본값 → OPENAI_API_KEY 에러.
-# ABC.register() 로 virtual subclass 등록 → isinstance 체크 통과 → 변환 없이 반환.
-try:
-    from crewai.llms.base_llm import BaseLLM as _CrewAIBaseLLM
-    _CrewAIBaseLLM.register(ClaudeSDKLLM)
-except Exception:
-    pass
-
-# backward compat alias (ClaudeCLILLM 이름으로 import 하던 기존 코드 호환)
-ClaudeCLILLM = ClaudeSDKLLM
 
 # ── public ────────────────────────────────────────────────────
 
@@ -1942,5 +1913,4 @@ __all__ = [
     "chat", "invoke_text", "invoke_text_result", "invoke_vision",
     "last_call_infra_incomplete", "circuit_is_open",
     "is_langchain_available",
-    "ClaudeSDKLLM", "ClaudeCLILLM",
 ]
