@@ -129,7 +129,7 @@ def _build_learning_block(post_type: str = "") -> str:
 
 def analyze_post_quality(platform: str, title: str, content: str,
                           post_type: str = "") -> tuple:
-    """발행 후 품질 분석 → (개선 제안, 루브릭 총점) (공개 인터페이스). pre_revise.py 등이 사용.
+    """발행 후 품질 분석 → (개선 제안, 루브릭 총점) (공개 인터페이스).
 
     ★ 발행 전 100점 루브릭(post_scorer)과 *동일 기준* (사용자 박제 2026-07-24):
       발행글을 같은 채점표로 채점 → *감점된 항목만* 골라 before→after 개선안 생성.

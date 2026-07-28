@@ -171,37 +171,12 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_pa_status   ON post_analysis(status);
             CREATE INDEX IF NOT EXISTS idx_pa_platform ON post_analysis(platform);
 
-            -- 사용자 즐겨찾기 키워드 (대시보드 watch list)
-            CREATE TABLE IF NOT EXISTS keyword_favorites (
-                keyword   TEXT PRIMARY KEY,
-                note      TEXT DEFAULT '',
-                added_at  TEXT DEFAULT (datetime('now','localtime'))
-            );
-
             -- 사용자 설정 (key-value 저장소: 알림 임계치, UI 테마 등)
             CREATE TABLE IF NOT EXISTS user_settings (
                 key        TEXT PRIMARY KEY,
                 value      TEXT,
                 updated_at TEXT DEFAULT (datetime('now','localtime'))
             );
-
-            -- 브랜드 보이스 학습 코퍼스 (과거 발행 글 + 임베딩)
-            CREATE TABLE IF NOT EXISTS style_corpus (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_id     INTEGER UNIQUE,        -- post_analysis.id
-                platform      TEXT,
-                title         TEXT,
-                content       TEXT,                  -- 평문 (검색 결과 표시용)
-                excerpt       TEXT,                  -- 첫 800자 (few-shot 주입용)
-                embedding     BLOB,                  -- numpy float32 array
-                embed_model   TEXT,                  -- 모델 식별자
-                embed_dim     INTEGER,               -- 차원수
-                char_count    INTEGER DEFAULT 0,
-                published_at  TEXT,
-                views         INTEGER DEFAULT 0,
-                indexed_at    TEXT DEFAULT (datetime('now','localtime'))
-            );
-            CREATE INDEX IF NOT EXISTS idx_sc_platform ON style_corpus(platform);
 
             -- ─── 자가학습 백본 ───────────────────────────────────
             -- (예측, 실측) 페어 — 매일 적재 → 주별 회귀학습 입력
@@ -278,7 +253,7 @@ def init_db():
                 sector_dist    TEXT DEFAULT '{}',   -- {"금융": 2, "라이프": 1, ...}
                 common_issues  TEXT DEFAULT '[]',   -- [{"issue": "...", "count": 3}, ...]
                 insights       TEXT DEFAULT '',     -- 자연어 요약
-                next_directives TEXT DEFAULT '[]',  -- 다음날 pre_revise 에 주입할 지침 [{"do":"...","why":"..."}]
+                next_directives TEXT DEFAULT '[]',  -- 다음날 작성 프롬프트에 주입할 지침 [{"do":"...","why":"..."}]
                 reviewed_at    TEXT DEFAULT (datetime('now','localtime'))
             );
 
@@ -435,7 +410,7 @@ def init_db():
         except Exception:
             pass
         # learning_insights.scope: 어떤 글 종류에 적용할 인사이트인지.
-        # 'economic' / 'theme' / 'all'. pre_revise 가 호출 시 scope IN (post_type,'all') 만 주입.
+        # 'economic' / 'theme' / 'all'. 작성기가 호출 시 scope IN (post_type,'all') 만 주입.
         try:
             conn.execute("ALTER TABLE learning_insights ADD COLUMN scope TEXT DEFAULT 'all'")
         except Exception:
@@ -562,6 +537,20 @@ _MIGRATIONS: list[tuple[int, str, str]] = [
             ) WHERE prev IS NOT NULL AND prev = status
         );
     """),
+    (3, "style_corpus 제거 — 읽는 코드가 0인 브랜드 보이스 코퍼스 폐기", """
+        -- ★ 2026-07-27: 이 표는 매일 02:30 잡이 적재했지만 **읽는 코드가 하나도 없었다**
+        --   (search_similar / build_few_shot_block 호출자 0). 게다가 tfidf(2048d)와
+        --   MiniLM(384d)이 섞여 색인돼 검색 시 차원 다른 행을 서로 건너뛰는 상태였다.
+        --   적재·조회·검색 스택을 전부 걷어냈으므로 표도 함께 제거한다.
+        DROP TABLE IF EXISTS style_corpus;
+    """),
+    (4, "keyword_favorites 제거 — 화면 연결이 없어 3개월간 테스트 1행뿐이던 기능 폐기", """
+        -- ★ 2026-07-27: 찜한 키워드에 주제 점수 +10 을 주는 기능이었으나 추가·삭제 UI 가
+        --   끝내 붙지 않았다. 실측 1행('어린이날', 2026-04-30 수기 입력)뿐이고 3개월간
+        --   변동 0. 그 1행이 지금도 매 주제 선정마다 가산점을 주고 있었다 —
+        --   쓰지 않는 기능이 조용히 선정 결과를 흔드는 상태. 코드·표 전부 폐기.
+        DROP TABLE IF EXISTS keyword_favorites;
+    """),
 ]
 
 
@@ -606,20 +595,6 @@ def _apply_migrations() -> int:
             log.warning(f"[db/schema] v{version} 적용 실패(다음 부팅 재시도): {e}")
             break                                       # 순서 보장 — 실패 뒤는 건너뛰지 않는다
     return applied
-
-
-def schema_status() -> dict:
-    """스키마 상태 — 현재 버전 · 미적용 목록 (점검·대시보드용)."""
-    cur = schema_version()
-    pending = [{"version": v, "note": n} for v, n, _ in sorted(_MIGRATIONS) if v > cur]
-    with get_db() as conn:
-        try:
-            hist = [dict(r) for r in conn.execute(
-                "SELECT version, note, applied_at FROM schema_migrations ORDER BY version")]
-        except Exception:                               # noqa: BLE001
-            hist = []
-    return {"version": cur, "latest": max((v for v, _, _ in _MIGRATIONS), default=0),
-            "pending": pending, "applied": hist}
 
 
 # ── Trends ────────────────────────────────────────────────────
@@ -671,24 +646,6 @@ def get_todays_pipeline(limit: int = 20) -> list:
             (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
-
-
-def get_pending_pipeline(limit: int = 5) -> list:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT id, theme, sector, opportunity_score, created_at FROM pipeline "
-            "WHERE status = 'suggested' ORDER BY opportunity_score DESC, created_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def update_pipeline_status(item_id: int, status: str):
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE pipeline SET status=?, processed_at=datetime('now','localtime') WHERE id=?",
-            (status, item_id),
-        )
 
 
 def get_recent_published_themes(days: int = 30) -> list[dict]:
@@ -843,7 +800,7 @@ def save_post_for_analysis(platform: str, theme: str, title: str,
                     학습 페어링(learn_log)의 join 키로 사용. 비어 있으면 theme fallback.
     post_type:      글 종류별 분리 학습용. 'economic' / 'theme' / 자유문자열.
                     daily_review 가 GROUP BY post_type 으로 분기, learning_insights.scope
-                    로 매핑되어 pre_revise 가 같은 종류 글에만 인사이트 주입.
+                    로 매핑되어 같은 종류 글에만 인사이트 주입.
     """
     with get_db() as conn:
         cur = conn.execute(
@@ -976,52 +933,6 @@ def reject_analysis(analysis_id: int):
             "decided_at=datetime('now','localtime') WHERE id=?",
             (analysis_id,),
         )
-
-
-def mark_revised(analysis_id: int):
-    """재발행 완료 — 루프 가드 플래그 ON."""
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE post_analysis SET status='revised', is_revised=1, "
-            "revised_at=datetime('now','localtime') WHERE id=?",
-            (analysis_id,),
-        )
-
-
-def save_pre_revise(analysis_id: int, applied_suggestions: list):
-    """사전 수정 완료 마킹 — 발행 전에 대본을 자동 패치한 글 표시.
-    revision_patch 저장 + status='revised' + is_revised=1 → 사후 분석/수정 큐 자동 skip.
-    JARVIS02 jarvis_main.py / economic_poster.py 가 발행 직전 호출.
-    """
-    patch = json.dumps(
-        {"suggestions": applied_suggestions or [], "mode": "pre_revise"},
-        ensure_ascii=False,
-    )
-    with get_db() as conn:
-        conn.execute(
-            """UPDATE post_analysis
-               SET revision_patch=?, status='revised', is_revised=1,
-                   analyzed_at=COALESCE(analyzed_at, datetime('now','localtime')),
-                   decided_at=COALESCE(decided_at, datetime('now','localtime')),
-                   revised_at=datetime('now','localtime')
-               WHERE id=?""",
-            (patch, analysis_id),
-        )
-
-
-def get_approved_for_revision(limit: int = 5) -> list:
-    """재발행 대기 중인 승인 글 — 사용자가 직접 승인 트리거한 건만 처리.
-
-    사후 retry 잡은 폐기됨 (ERRORS.md [14]). 본 함수는 인라인 버튼/대시보드의
-    명시적 1회 트리거 직후 호출되는 경로만 가정한다.
-    """
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT * FROM post_analysis
-               WHERE status='approved' AND is_revised=0
-               ORDER BY decided_at ASC LIMIT ?""", (limit,)
-        ).fetchall()
-    return [dict(r) for r in rows]
 
 
 def get_analysis_history(limit: int = 50) -> list:
@@ -1168,38 +1079,6 @@ def get_post_summary() -> dict:
         by_platform.setdefault(r["platform"], {"posts": 0, "views": 0})
         by_platform[r["platform"]]["posts"] = max(by_platform[r["platform"]]["posts"], r["cnt"])
     return {"by_platform": by_platform, "today_posts": today_cnt}
-
-
-# ── 즐겨찾기 ──────────────────────────────────────────────────
-
-def add_favorite(keyword: str, note: str = "") -> None:
-    with get_db() as conn:
-        conn.execute(
-            "INSERT INTO keyword_favorites(keyword, note) VALUES(?, ?) "
-            "ON CONFLICT(keyword) DO UPDATE SET note=excluded.note",
-            (keyword, note),
-        )
-
-
-def remove_favorite(keyword: str) -> None:
-    with get_db() as conn:
-        conn.execute("DELETE FROM keyword_favorites WHERE keyword=?", (keyword,))
-
-
-def get_favorites() -> list:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM keyword_favorites ORDER BY added_at DESC"
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def is_favorite(keyword: str) -> bool:
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM keyword_favorites WHERE keyword=?", (keyword,)
-        ).fetchone()
-    return bool(row)
 
 
 # ── Maintenance (백업·정리) ───────────────────────────────────
@@ -1510,150 +1389,6 @@ def cleanup_by_retention(vacuum: bool = True) -> dict:
     return out
 
 
-def retention_report() -> list[dict]:
-    """테이블별 현재 행수 · 보존정책 · 정리 대상 행수 — 대시보드/점검용."""
-    rows: list[dict] = []
-    with get_db() as conn:
-        for table, (_d, ts_col, desc) in RETENTION.items():
-            days = retention_days(table)
-            try:
-                n = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-            except Exception:                           # noqa: BLE001
-                continue
-            stale = 0
-            if days > 0:
-                try:
-                    stale = conn.execute(
-                        f'SELECT COUNT(*) FROM "{table}" WHERE "{ts_col}" IS NOT NULL '
-                        f'AND "{ts_col}" < datetime(\'now\',\'localtime\',?)',
-                        (f"-{days} days",),
-                    ).fetchone()[0]
-                except Exception:                       # noqa: BLE001
-                    pass
-            rows.append({"table": table, "rows": n, "days": days,
-                         "stale": stale, "desc": desc})
-    return sorted(rows, key=lambda r: -r["rows"])
-
-
-def cleanup_events(days: int = 30) -> int:
-    """events 테이블에서 N일 이전 row 삭제. 삭제 row 수 반환.
-
-    ★ 하위호환 유지 — 신규 코드는 `cleanup_by_retention()` 을 쓸 것.
-    """
-    with get_db() as conn:
-        cur = conn.execute(
-            "DELETE FROM events WHERE created_at < datetime('now','localtime',?)",
-            (f"-{days} days",),
-        )
-        deleted = cur.rowcount
-        conn.commit()
-    # 단편화 회수 — VACUUM 은 트랜잭션 밖에서만 실행
-    if deleted:
-        with sqlite3.connect(str(DB_PATH), timeout=30) as v:
-            v.execute("VACUUM")
-    return deleted
-
-
-def cleanup_vision_history(days: int = 7) -> int:
-    """vision_agent_history 테이블에서 N일 이전 row 삭제. 삭제 row 수 반환.
-
-    ★ 30초 주기 수집(에이전트당 1행)이 무제한 누적되면 DB 가 수백MB 로 팽창해
-    get_db() 신규 커넥션 오픈이 지연되고, GUARDIAN 오케스트레이터 스레드가 그
-    커넥션 대기로 정체되면서 스케줄러 heartbeat 지연 → keeper 가 데몬을 hang
-    으로 오판해 강제 재시작하는 사고로 이어진다.
-    """
-    with get_db() as conn:
-        cur = conn.execute(
-            "DELETE FROM vision_agent_history WHERE recorded_at < datetime('now','localtime',?)",
-            (f"-{days} days",),
-        )
-        deleted = cur.rowcount
-        conn.commit()
-    if deleted:
-        with sqlite3.connect(str(DB_PATH), timeout=30) as v:
-            v.execute("VACUUM")
-    return deleted
-
-
-# ─────────────────────────────────────────────────────────────
-# 브랜드 보이스 학습 코퍼스 (style_corpus)
-# ─────────────────────────────────────────────────────────────
-
-def style_corpus_upsert(
-    source_id: int, platform: str, title: str, content: str, excerpt: str,
-    embedding_bytes: bytes, embed_model: str, embed_dim: int,
-    char_count: int = 0, published_at: str = "", views: int = 0,
-) -> None:
-    """과거 발행 글 + 임베딩 저장. source_id 충돌 시 업데이트."""
-    with get_db() as conn:
-        conn.execute(
-            """INSERT INTO style_corpus
-                (source_id, platform, title, content, excerpt,
-                 embedding, embed_model, embed_dim, char_count,
-                 published_at, views, indexed_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?, datetime('now','localtime'))
-               ON CONFLICT(source_id) DO UPDATE SET
-                 platform=excluded.platform,
-                 title=excluded.title,
-                 content=excluded.content,
-                 excerpt=excluded.excerpt,
-                 embedding=excluded.embedding,
-                 embed_model=excluded.embed_model,
-                 embed_dim=excluded.embed_dim,
-                 char_count=excluded.char_count,
-                 views=excluded.views,
-                 indexed_at=excluded.indexed_at""",
-            (source_id, platform, title, content, excerpt,
-             embedding_bytes, embed_model, embed_dim, char_count,
-             published_at, views),
-        )
-
-
-def style_corpus_unindexed_post_ids(min_chars: int = 200) -> list[int]:
-    """post_analysis 에 본문 있고 style_corpus 에 없는 ID 목록."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT pa.id
-                 FROM post_analysis pa
-                 LEFT JOIN style_corpus sc ON sc.source_id = pa.id
-                WHERE sc.id IS NULL
-                  AND length(pa.original_content) >= ?
-                ORDER BY pa.created_at DESC""",
-            (min_chars,),
-        ).fetchall()
-    return [int(r["id"]) for r in rows]
-
-
-def style_corpus_fetch_post(post_id: int) -> dict | None:
-    """인덱싱용 — post_analysis 한 건 가져오기."""
-    with get_db() as conn:
-        row = conn.execute(
-            """SELECT id, platform, theme, title, original_content,
-                      created_at, current_views
-                 FROM post_analysis WHERE id = ?""",
-            (post_id,),
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def style_corpus_all_embeddings() -> list[dict]:
-    """전체 코퍼스 (임베딩 + 메타). 검색 시 메모리에 로드."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT id, source_id, platform, title, excerpt,
-                      embedding, embed_model, embed_dim,
-                      char_count, published_at, views
-                 FROM style_corpus""").fetchall()
-    return [dict(r) for r in rows]
-
-
-def style_corpus_clear() -> int:
-    """코퍼스 비우기 (재인덱싱 전 사용). 삭제 row 수 반환."""
-    with get_db() as conn:
-        cur = conn.execute("DELETE FROM style_corpus")
-        return cur.rowcount
-
-
 # ── 자가학습 — learn_log ────────────────────────────────────────
 
 def learn_log_upsert(keyword: str, sector: str, platform: str,
@@ -1944,7 +1679,7 @@ def upsert_learning_insight(insight_key: str, insight_type: str,
 def get_top_learning_insights(limit: int = 10, days: int = 30,
                               insight_type: str = "",
                               scope: str = "") -> list[dict]:
-    """pre_revise SYSTEM_PROMPT 보강용 — 최근 N일 활성 + 가중치 상위 N개.
+    """작성 프롬프트 보강용 — 최근 N일 활성 + 가중치 상위 N개.
 
     scope: 'economic' / 'theme' 등 명시 시 scope IN (해당, 'all') 인 인사이트만.
            빈 문자열이면 전체. 가중치는 시간 감쇠 (7일마다 0.7 곱).
@@ -2329,126 +2064,6 @@ def mark_error_status(error_id: int, status: str):
 #   · 코드버그 타입   : "실제로 코드를 고쳐 종결된 이력(status='fixed' AND fixed_file 존재)"
 #                      이 있는 error_type 집합을 DB 에서 파생 → ignored 와 교집합.
 #     손으로 나열하지 않으므로 새 오류 타입이 생겨도 자동으로 검사 대상이 된다.
-
-def ignored_bucket_stats(days: int = 30, top: int = 10) -> dict:
-    """격리(ignored) 버킷 집계 — 사유별 분포·추세·코드버그 타입 혼입 여부.
-
-    guardian_agent 가 이 함수를 호출해 보고한다. 표시용 수치를 코드에 박지 말고
-    *런타임 조회로 파생* 하기 위한 단일 진입점.
-
-    Args:
-        days: 추세(trend) 및 최근 창 집계 일수
-        top:  분포 상위 N개
-
-    Returns:
-        {
-          "total":            전체 ignored 건수,
-          "recent":           최근 days 일 ignored 건수,
-          "window_days":      days,
-          "reason_missing":   resolution NULL 건수 (사유 미기록 — 관측 결손 본체),
-          "reason_missing_pct": 비율(%),
-          "by_reason":        [{"reason","n"}]  사유 앞머리 기준 상위,
-          "by_type":          [{"error_type","n"}],
-          "by_source":        [{"source","n"}],
-          "trend":            [{"date","n"}]    최근 days 일자별,
-          "codebug_suspects": [{"error_type","ignored","code_fixed"}]
-                              — ignored 인데 *같은 타입이 코드 수정으로 종결된 이력* 이
-                                있는 것들. 진짜 코드 버그가 격리통에 섞였을 가능성.
-          "status_totals":    {status: n}  (DB 파생 — 전체 버킷 비교용)
-        }
-    """
-    out: dict = {
-        "total": 0, "recent": 0, "window_days": int(days),
-        "reason_missing": 0, "reason_missing_pct": 0.0,
-        "by_reason": [], "by_type": [], "by_source": [],
-        "trend": [], "codebug_suspects": [], "status_totals": {},
-    }
-    try:
-        since = f"-{int(days)} day"
-        with get_db() as conn:
-            # 전체 상태 분포 — 상태 목록을 박지 않고 DB 에서 파생
-            out["status_totals"] = {
-                r["status"]: r["n"] for r in conn.execute(
-                    "SELECT COALESCE(status,'(null)') status, COUNT(*) n "
-                    "FROM error_log GROUP BY 1 ORDER BY n DESC"
-                ).fetchall()
-            }
-            out["total"] = int(conn.execute(
-                "SELECT COUNT(*) n FROM error_log WHERE status='ignored'"
-            ).fetchone()["n"])
-            out["recent"] = int(conn.execute(
-                "SELECT COUNT(*) n FROM error_log WHERE status='ignored' "
-                "AND timestamp >= datetime('now',?,'localtime')", (since,)
-            ).fetchone()["n"])
-
-            # 사유 미기록 — 격리 버킷의 관측 결손 본체
-            out["reason_missing"] = int(conn.execute(
-                "SELECT COUNT(*) n FROM error_log WHERE status='ignored' "
-                "AND (resolution IS NULL OR TRIM(resolution)='')"
-            ).fetchone()["n"])
-            if out["total"]:
-                out["reason_missing_pct"] = round(
-                    out["reason_missing"] * 100.0 / out["total"], 1)
-
-            # 사유별 분포 — resolution 앞머리 60자로 버킷팅(자유서술이라 접두 기준)
-            out["by_reason"] = [
-                {"reason": r["reason"], "n": int(r["n"])}
-                for r in conn.execute(
-                    "SELECT CASE WHEN resolution IS NULL OR TRIM(resolution)='' "
-                    "            THEN '(사유 미기록)' "
-                    "       ELSE SUBSTR(TRIM(resolution),1,60) END reason, "
-                    "       COUNT(*) n FROM error_log WHERE status='ignored' "
-                    "GROUP BY 1 ORDER BY n DESC LIMIT ?", (int(top),)
-                ).fetchall()
-            ]
-            out["by_type"] = [
-                {"error_type": r["error_type"], "n": int(r["n"])}
-                for r in conn.execute(
-                    "SELECT COALESCE(error_type,'(null)') error_type, COUNT(*) n "
-                    "FROM error_log WHERE status='ignored' "
-                    "GROUP BY 1 ORDER BY n DESC LIMIT ?", (int(top),)
-                ).fetchall()
-            ]
-            out["by_source"] = [
-                {"source": r["source"], "n": int(r["n"])}
-                for r in conn.execute(
-                    "SELECT COALESCE(source,'(null)') source, COUNT(*) n "
-                    "FROM error_log WHERE status='ignored' "
-                    "GROUP BY 1 ORDER BY n DESC LIMIT ?", (int(top),)
-                ).fetchall()
-            ]
-            out["trend"] = [
-                {"date": r["d"], "n": int(r["n"])}
-                for r in conn.execute(
-                    "SELECT SUBSTR(timestamp,1,10) d, COUNT(*) n FROM error_log "
-                    "WHERE status='ignored' AND timestamp >= datetime('now',?,'localtime') "
-                    "GROUP BY 1 ORDER BY d", (since,)
-                ).fetchall()
-            ]
-
-            # ★ 코드버그 타입 혼입 — '코드를 실제로 고쳐 종결된 이력' 을 가진 타입을
-            #   DB 에서 파생해 ignored 와 교집합. 목록 하드코딩 0.
-            out["codebug_suspects"] = [
-                {"error_type": r["error_type"],
-                 "ignored": int(r["ig"]), "code_fixed": int(r["fx"])}
-                for r in conn.execute(
-                    "WITH codebug AS ("
-                    "  SELECT error_type, COUNT(*) fx FROM error_log "
-                    "  WHERE status='fixed' AND fixed_file IS NOT NULL "
-                    "    AND TRIM(COALESCE(fixed_file,''))<>'' "
-                    "  GROUP BY error_type"
-                    "), ign AS ("
-                    "  SELECT error_type, COUNT(*) ig FROM error_log "
-                    "  WHERE status='ignored' GROUP BY error_type"
-                    ") SELECT ign.error_type, ign.ig, codebug.fx "
-                    "FROM ign JOIN codebug USING(error_type) "
-                    "ORDER BY ign.ig DESC LIMIT ?", (int(top),)
-                ).fetchall()
-            ]
-    except Exception as e:                      # 관측 헬퍼는 절대 파이프라인을 막지 않는다
-        out["error"] = str(e)[:200]
-    return out
-
 
 def try_claim_error(error_id: int, claim_status: str = "analyzing",
                      from_statuses: tuple = ("new", "ignored")) -> bool:

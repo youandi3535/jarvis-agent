@@ -415,8 +415,11 @@ _PERIOD_META: dict[str, dict] = {
     "year":   {"label": "1년",   "where": "date >= date('now','-365 days')","min_days": 364},
     "all":    {"label": "전체",  "where": "1=1",                           "min_days": 0},
 }
-_PLAT_COLS   = [("naver", "naver_views"), ("tistory", "tistory_views"), ("wp", "wp_views")]
-_PLAT_LABELS = {"naver": "네이버", "tistory": "티스토리", "wp": "WordPress"}
+# ★ 표시 대상 플랫폼의 단일 소스 — 아래 모든 조회가 여기서 파생한다(①②).
+#   WordPress('wp')는 2026-07-27 제거 — 발행자 코드가 없고 2026-05-18 이후 신규 0.
+#   과거 실측치(performance.wp_views)는 기록이라 컬럼째 남긴다.
+_PLAT_COLS   = [("naver", "naver_views"), ("tistory", "tistory_views")]
+_PLAT_LABELS = {"naver": "네이버", "tistory": "티스토리"}
 
 @app.get("/api/performance")
 def get_performance():
@@ -467,7 +470,8 @@ def get_performance():
 
         # 일별 추이 (스팬에 맞게 행 수 결정 — 최대 90행)
         trend_limit = max(7, min(span_days + 1, 90)) if span_days > 0 else 30
-        daily_rows = _rows(con, f"SELECT date, naver_views, tistory_views, wp_views FROM performance ORDER BY date DESC LIMIT {trend_limit}")
+        _trend_cols = ", ".join(c for _, c in _PLAT_COLS)
+        daily_rows = _rows(con, f"SELECT date, {_trend_cols} FROM performance ORDER BY date DESC LIMIT {trend_limit}")
         daily_trend: list[dict] = []
         for r in reversed(daily_rows):
             entry: dict = {"date": r["date"]}

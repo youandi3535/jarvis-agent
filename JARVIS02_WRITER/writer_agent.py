@@ -6,7 +6,6 @@ register() 는 skip_dirs 로 호출되지 않으므로 모듈 레벨 _setup_subs
 이벤트 흐름:
 - POST_ANALYZED  → 분석 완료 텔레그램 알림 (suggestion 있을 때만)
 - TREND_DETECTED → 로그 기록 (발행은 21:00 j01_theme_post_21 단독)
-- POST_REVISED   → 수정 완료 알림
 """
 from __future__ import annotations
 
@@ -128,25 +127,6 @@ def _on_trend_detected(payload: dict, source: str):
     _log.info(f"📊 TREND_DETECTED: {len(top5)}개 키워드 — {top5[:3]}")
 
 
-def _on_post_revised(payload: dict, source: str):
-    """POST_REVISED → 수정 완료 텔레그램 알림."""
-    try:
-        import importlib
-        dm = importlib.import_module("jarvis_daemon")
-        send = getattr(dm, "_send_tg", None)
-        if not send:
-            return
-        theme    = payload.get("theme", "?")
-        platform = payload.get("platform", "?")
-        url      = payload.get("url", "")
-        msg = f"🎉 수정 완료: *{theme}* ({platform})"
-        if url:
-            msg += f"\n{url}"
-        send(msg)
-    except Exception:
-        pass
-
-
 _SUBSCRIBED_W = False
 
 def _setup_subscriptions():
@@ -157,7 +137,6 @@ def _setup_subscriptions():
         from shared import bus as _bus
         _bus.subscribe(_bus.EventType.POST_ANALYZED,  _on_post_analyzed)
         _bus.subscribe(_bus.EventType.TREND_DETECTED, _on_trend_detected)
-        _bus.subscribe(_bus.EventType.POST_REVISED,   _on_post_revised)
         _SUBSCRIBED_W = True
     except Exception as e:
         import logging

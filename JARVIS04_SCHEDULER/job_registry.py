@@ -56,9 +56,6 @@ DEFAULT_JOBS: list[dict] = [
     {"id":"auto_approve",    "name":"1h 자동 승인",         "trigger":"interval",
      "kwargs":{"minutes":30}, "callback":"JARVIS03_RADAR.jobs.job_auto_approve",
      "misfire_grace_time":600,  "owner":"jarvis03_radar"},
-    {"id":"voice_index",     "name":"브랜드 보이스 인덱싱", "trigger":"cron",
-     "kwargs":{"hour":2, "minute":30}, "callback":"JARVIS03_RADAR.jobs.job_voice_index",
-     "misfire_grace_time":3600, "owner":"jarvis03_radar", "executor":"processpool"},
     {"id":"keyword_embed_backfill", "name":"키워드 임베딩 백필 (RAG cold-start)",
      "trigger":"cron", "kwargs":{"hour":2, "minute":45},
      "callback":"JARVIS03_RADAR.jobs.job_keyword_embed_backfill",
@@ -76,10 +73,6 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"day_of_week":"sun", "hour":4, "minute":0}, "callback":"JARVIS03_RADAR.jobs.job_train_weights",
      "misfire_grace_time":3600, "owner":"jarvis03_radar", "executor":"processpool"},
     # ── JARVIS02 WRITER (legacy schedule_mode → 이관 완료) ─────
-    {"id":"j01_screenshot_cleanup", "name":"스크린샷 주간 정리", "trigger":"cron",
-     "kwargs":{"day_of_week":"sun", "hour":2, "minute":0},
-     "callback":"JARVIS02_WRITER.scheduler.cleanup_screenshots",
-     "misfire_grace_time":3600, "owner":"jarvis02_writer"},
     # ★ 경제 선계산은 별도 고정 잡이 아니라 06:00 트렌드 잡(radar_trends_06 → job_collect_trends_morning)
     # 말미에 *이벤트 체이닝*: 트렌드 분석(topic_pack 빌드)이 끝나는 즉시 이어서 실행(고정 지연 없음 —
     # 사용자 박제 2026-07-18). 09 의 job_precollect_economic 이 동적 데드라인으로 발행창 미침범.

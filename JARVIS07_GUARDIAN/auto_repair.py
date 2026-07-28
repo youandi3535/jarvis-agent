@@ -27,7 +27,6 @@ log = logging.getLogger(__name__)
 ROOT = Path(__file__).parent.parent
 
 _TIMEOUT    = 1200  # 최대 20분 (★ ERRORS 박제 — 164파일 전수 검토 시 900s 초과 → 1200s, --max-turns 80 병행)
-_MAX_TG_LEN = 3500  # 텔레그램 메시지 최대 글자
 # ★ 오류 수정 모델 — 단일 계층(ADR 017). ID 리터럴을 박지 않고 shared/llm.MODELS 에서 파생
 #   (사본을 두면 모델 교체 시 여기만 옛 모델을 계속 가리킨다 — ERRORS [491]).
 #   full model ID 로 넘기는 관행은 유지 (ERRORS [184] — bare alias 는 1M context 자동 승격 위험).
@@ -57,7 +56,7 @@ JARVIS 전체 파일 자가 진단·수정. **Bash 배치 먼저, 히트 파일�
 대상: .py / .md / .json / .yaml / .yml / .txt (규정·설정·코드 전부 포함)
 
 ## 수정 절대 금지 목록
-- 폴더: .venv/ .git/ __pycache__/ chroma_db/
+- 폴더: .venv/ .git/ __pycache__/
 - 파일: .env, *.sqlite, *.pkl, CLAUDE.md, JARVIS*/CLAUDE_*.md, BLOG_SUPREME_LAW.md
 - 행위: git commit/push
 
@@ -65,7 +64,6 @@ JARVIS 전체 파일 자가 진단·수정. **Bash 배치 먼저, 히트 파일�
 ```
 find {WORKDIR} -name "*.py" \
   -not -path "*/.venv/*" -not -path "*/__pycache__/*" -not -path "*/.git/*" \
-  -not -path "*/chroma_db/*" \
   | xargs python -m py_compile 2>&1 | head -40
 ```
 오류 출력된 파일만 Read → 수정.
@@ -79,7 +77,7 @@ grep -rn \
   -e "claude-[a-z]\\+-[0-9]" \\
   -e "anthropic\\.Anthropic()" \\
   --include="*.py" \
-  --exclude-dir=.venv --exclude-dir=__pycache__ --exclude-dir=chroma_db \
+  --exclude-dir=.venv --exclude-dir=__pycache__ \
   {WORKDIR} 2>/dev/null | grep -v "JARVIS04_SCHEDULER/" | grep -v "shared/llm.py"
 ```
 ※ 모델 ID 리터럴은 `shared/llm.py` 의 MODELS 만 소유한다. 다른 파일에 모델 ID 가
@@ -126,7 +124,7 @@ FAIL 출력된 모듈의 파일만 Read → import 경로·시그니처 수정.
 ```
 # JSON 파싱 오류 확인
 find {WORKDIR} -name "*.json" \
-  -not -path "*/.venv/*" -not -path "*/chroma_db/*" -not -path "*/__pycache__/*" \
+  -not -path "*/.venv/*" -not -path "*/__pycache__/*" \
   -not -name "*.sqlite" \
   | xargs -I{{}} python -c "import json,sys; json.load(open('{{}}'))" 2>&1 | grep -v "^$" | head -20
 ```
@@ -335,7 +333,7 @@ def _snapshot_py_files() -> dict[str, str]:
     git repo 가 없어도 동작. 실행 후 파일 내용과 비교하여 변경분 감지.
     대상: .py / .md / .json / .yaml / .yml (절대금지 목록 제외)
     """
-    _DENY_DIRS  = {".venv", "__pycache__", ".git", "chroma_db", "chrome_profile", "logs", "shared/backups"}
+    _DENY_DIRS  = {".venv", "__pycache__", ".git", "chrome_profile", "logs"}
     _DENY_FILES = {"CLAUDE.md", "BLOG_SUPREME_LAW.md", ".env"}
     _DENY_EXT   = {".sqlite", ".pkl", ".bak"}
     _INCLUDE_EXT = {".py", ".md", ".json", ".yaml", ".yml"}
@@ -686,20 +684,6 @@ def run_auto_repair() -> None:
     finally:
         # ★ heartbeat 스레드 정지 — 종료 경로 무엇이든 무조건 정지
         _hb_stop.set()
-
-
-def job_auto_repair() -> None:
-    """APScheduler 콜백 진입점."""
-    try:
-        run_auto_repair()
-    except Exception as e:
-        log.error("[AutoRepair] job 최상위 예외: %s", e)
-        _g_report("master", e, module=__name__)
-        try:
-            from shared.notify import send_tg
-            send_tg(f"❌ *자가 수정 잡 예외*: {e}")
-        except Exception:
-            pass
 
 
 _TARGETED_TIMEOUT = 600  # 최대 10분 (full 15분의 2/3)

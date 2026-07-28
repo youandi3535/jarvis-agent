@@ -697,7 +697,7 @@ python3 shared/precommit_check.py --category collect    # git 훅·데몬 부팅
   2. **Layer B — git daily 회고 (D-1 박제)**: `j07_git_audit` 잡 매일 03:30 — `git log --since=24h` 의 커밋 변경 파일 (.py/.md/.json/.yml) → `record_external_change()` 자동 박제. VS Code Claude Code·사용자 직접 편집·외부 도구 변경 모두 captured.
   3. **Layer C — Cowork Claude (의무 호출)**: Cowork 환경에서 Claude 가 코드 수정 시 *반드시* `report_manual_fix()` 명시적 호출. 잊으면 학습 누락 → 동일 사고 재발 시 자동 처리 불가.
 - **`record_external_change()` API**: `from JARVIS07_GUARDIAN.error_collector import record_external_change`. severity 기본 'low' (외부 변경은 정상 작업). actor 식별자(`vscode_claude`/`git_audit`/`auto_repair`/`user_edit`). commit_hash 옵션 (git 추적).
-- **새 패턴 추가 절차**: `pattern_fixer.py` 의 `_fix_<name>(error_record)` 함수 + `_PATTERN_FIXERS` + `_FIXER_REGISTRY` 갱신 + `severity._PATTERN_FIXABLE_TYPES` 갱신. 가상 traceback 단위 테스트 후 머지.
+- **새 패턴 추가 절차**: `pattern_fixer.py` 의 `_fix_<name>(error_record)` 함수 + `_FIXER_REGISTRY` 갱신 + `severity._PATTERN_FIXABLE_TYPES` 갱신. 가상 traceback 단위 테스트 후 머지.
 - **학습 상태 조회**: `from JARVIS07_GUARDIAN.pattern_fixer import stats; stats()` → `total_patterns`·`total_hits`·`by_fixer`·`top5`.
 - **자동 승인 설계**: `guardian.apply_fix()` 는 Telegram 인라인 버튼 없이 자동 실행. 사유: 파일 변경이 `jarvis-agent` 폴더 내부(`side_effect="internal"`)이므로 CLAUDE.md 자율 코드 자가수정 규정의 외부 영향 게이트 적용 제외. **패치 크기 무제한으로 모든 오류 자동 수정** (critical 심각도 오류 실패 시에만 Telegram 알림).
 - **ERRORS.md 병행 — 자동**: `error_fixer.apply_fix()` 성공/실패 시 자동으로 ERRORS.md 에 항목 추가. 사용자·다른 에이전트가 수동 추가하는 것도 허용 (중복 기록 무방). ERRORS.md 선행 읽기 의무(루트 규정)는 여전히 유효 — guardian 자동 기록이 수동 검토를 대체하지 않음.
@@ -743,7 +743,7 @@ python3 shared/precommit_check.py --category collect    # git 훅·데몬 부팅
 
 **공용 자원** (다른 에이전트와 공유):
 - `shared/db.py` — `self_repair_runs` / `error_log` 테이블 (공용 DB)
-- `JARVIS04_SCHEDULER/job_registry.py` — 잡 등록 (callback 경로: `JARVIS07_GUARDIAN.auto_repair.job_auto_repair`)
+- `JARVIS04_SCHEDULER/job_registry.py` — 잡 등록 (callback 경로: `JARVIS07_GUARDIAN.guardian_agent.job_deep_audit`)
 - `api_server.py` (:9198) — `/api/errors`·`/api/guardian/*`·`/api/learning`·`/api/repairs` 라우트
 - `dashboard/app/{errors,learning}/` (:9199) — 오류·학습 페이지 (Next.js)
 

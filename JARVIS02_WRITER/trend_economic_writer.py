@@ -23,7 +23,6 @@ JARVIS02_WRITER / trend_economic_writer.py
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 from datetime import date, datetime
@@ -99,13 +98,6 @@ def _tg(msg: str) -> None:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
-def _img_dir(platform: str):
-    """플랫폼별 이미지 저장 디렉터리."""
-    if platform == 'naver':
-        return NAVER_IMG_DIR
-    return TISTORY_IMG_DIR
-
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  7. 원고 생성 — 티스토리 생활 밀착 Q&A형
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -144,215 +136,13 @@ def _cleanup_naver_images() -> None:
 #  9. 내부 유틸
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _parse_block(text: str, start_marker: str, end_marker: str | None) -> str:
-    """LLM 응답에서 마커 사이 텍스트 추출."""
-    idx = text.find(start_marker)
-    if idx == -1:
-        return ""
-    start = idx + len(start_marker)
-    if end_marker:
-        end = text.find(end_marker, start)
-        return text[start:end].strip() if end != -1 else text[start:].strip()
-    return text[start:].strip()
-
-
-def _enforce_paragraph_rule(html: str) -> str:
-    """최대 2문장 단락 규칙 적용 (개선사항 #3).
-
-    <p> 태그 내 3문장 이상이면 2문장 단위로 분리.
-    문장 구분: 마침표+공백 또는 다/니다/습니다 패턴.
-    """
-    import re
-
-    def split_sentences(text: str) -> list[str]:
-        # 한국어 문장 끝: 다./요./니다./습니다./이다. 등 + 따옴표 포함
-        pattern = r'(?<=[다요니]\.)\s+|(?<=다\.)\s+|(?<=요\.)\s+'
-        parts = re.split(pattern, text.strip())
-        # 공백만 남거나 빈 것 제거
-        return [p.strip() for p in parts if p.strip()]
-
-    def process_p(match):
-        inner = match.group(1)
-        # 이미 하위 태그(li, strong 등) 포함된 복잡한 p는 건드리지 않음
-        if re.search(r'<[a-z]', inner):
-            return match.group(0)
-        sentences = split_sentences(inner)
-        if len(sentences) <= 2:
-            return match.group(0)
-        # 2문장씩 묶어서 별도 <p>로 분리
-        chunks = []
-        for i in range(0, len(sentences), 2):
-            chunk = ' '.join(sentences[i:i+2])
-            chunks.append(f'<p>{chunk}</p>')
-        return '\n'.join(chunks)
-
-    return re.sub(r'<p>(.*?)</p>', process_p, html, flags=re.DOTALL)
-
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  섹션별 콘텐츠 차트 생성 — 섹션 내용 유형에 맞는 실제 시각화
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _detect_section_type(html: str) -> str:
-    """섹션 HTML 내용 분석 → 시각화 유형 결정."""
-    import re
-    text = re.sub(r'<[^>]+>', '', html)
-    if re.search(r'S&P|나스닥|다우|달러.?원|환율|WTI|금\s*현물|코스피|코스닥', text):
-        return 'market'
-    circ = len(re.findall(r'[①②③④⑤⑥⑦⑧⑨]', text))
-    num  = len(re.findall(r'\n\s*\d+\.\s', text))
-    if circ >= 2 or num >= 2:
-        return 'checklist'
-    if re.search(r'낙관|비관|중립|시나리오|[강약]세\s*시나리오', text):
-        return 'scenario'
-    nums = re.findall(r'\d+\.?\d*\s*%', text)
-    if len(nums) >= 2 and re.search(r'영향|상승|하락|증가|감소', text):
-        return 'impact'
-    return 'highlight'
-
-
-def _extract_list_items(html: str, max_items: int = 5) -> list:
-    """HTML에서 리스트 항목 추출 (①②③ 또는 번호 목록)."""
-    import re
-    text = re.sub(r'<br\s*/?>', '\n', html)
-    text = re.sub(r'<[^>]+>', '', text)
-    items = []
-    # ①②③ 패턴
-    for m in re.finditer(r'[①②③④⑤⑥⑦⑧⑨]\s*([^\n①②③④⑤⑥⑦⑧⑨]{8,80})', text):
-        items.append(m.group(1).strip()[:45])
-    if not items:
-        # 번호 목록 패턴
-        for m in re.finditer(r'\d+\.\s+([^\n]{8,80})', text):
-            items.append(m.group(1).strip()[:45])
-    if not items:
-        # 문장 분리 fallback
-        sentences = [s.strip() for s in re.split(r'[.。]', text) if len(s.strip()) >= 10]
-        items = sentences[:max_items]
-    return items[:max_items]
-
-
-def _extract_scenarios(html: str) -> list:
-    """HTML에서 낙관/중립/비관 시나리오 추출."""
-    import re
-    text = re.sub(r'<[^>]+>', '', html)
-    result = []
-    patterns = [
-        ('낙관', r'낙관[^。.]*[。.]?([^。.]{10,80})'),
-        ('중립', r'중립[^。.]*[。.]?([^。.]{10,80})'),
-        ('비관', r'비관[^。.]*[。.]?([^。.]{10,80})'),
-    ]
-    for label, pat in patterns:
-        m = re.search(pat, text)
-        if m:
-            result.append((label, m.group(1).strip()[:50]))
-        else:
-            # 키워드만 찾아서 주변 문장 추출
-            idx = text.find(label)
-            if idx != -1:
-                snippet = text[idx:idx+60].split('。')[0].split('.')[0]
-                result.append((label, snippet.strip()[:50]))
-            else:
-                result.append((label, '추가 분석 필요'))
-    return result
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  콘텐츠 차트 — JARVIS06_IMAGE draft_processor 위임
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-
-def _analyze_section_content(text_plain: str, keyword: str) -> dict:
-    """섹션 텍스트를 읽고 최적 차트 유형 + 실제 데이터를 반환.
-
-    위치 고정 없음 — 매일 달라지는 글 내용 기반으로 동적 결정.
-    Returns: {'type': str, 'data': any, 'label': str}
-    """
-    import re
-
-    # ── 1. 레이블 + 수치% 패턴 (가장 명확한 차트 데이터)
-    labeled = re.findall(
-        r'([가-힣A-Za-z·\/\-]{2,15})\s*[은는이가]?\s*(?:약\s*)?(\d+\.?\d*)\s*%',
-        text_plain)
-    if len(labeled) >= 2:
-        factors = []
-        for n, v in labeled[:5]:
-            val = float(v)
-            if val > 100:
-                val = round(val / 100, 1)
-            factors.append((n[:14], val))
-        return {'type': 'impact', 'data': factors, 'label': '주요 지표 분석'}
-
-    # ── 2. 원문자(①②③) / 번호 목록
-    circle = re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]\s*([^\n①②③④⑤⑥⑦⑧⑨⑩]{5,50})', text_plain)
-    num_list = re.findall(r'(?:^|\n)\s*\d+[\.)\s]\s*(.{5,50})', text_plain)
-    items = circle or num_list
-    if len(items) >= 3:
-        return {'type': 'checklist', 'data': [i.strip() for i in items[:6]],
-                'label': '핵심 포인트'}
-
-    # ── 3. 시나리오 구조
-    if re.search(r'낙관|비관|중립|시나리오|[강약]세', text_plain):
-        return {'type': 'scenario', 'data': None, 'label': '시나리오 분석'}
-
-    # ── 4. 레이블 없는 수치% (레이블은 앞 문맥에서 추출 시도)
-    context = re.findall(
-        r'([가-힣]{2,8})\s+(?:\w+\s*){0,3}?(\d+\.?\d*)\s*%', text_plain)
-    raw_pcts = re.findall(r'(\d+\.?\d*)\s*%', text_plain)
-    if len(raw_pcts) >= 2:
-        if context and len(context) >= 2:
-            factors = [(n[:12], float(v) if float(v) <= 100 else round(float(v)/10, 1))
-                       for n, v in context[:5]]
-        else:
-            factors = [(f'지표 {i+1}', float(p)) for i, p in enumerate(raw_pcts[:5])]
-        return {'type': 'impact', 'data': factors, 'label': '수치 분석'}
-
-    # ── 5. 레이블 + 정수/소수 (단위 없는 수치)
-    labeled_nums = re.findall(
-        r'([가-힣]{2,8})\s*[은는이가]?\s*(\d{1,6}(?:,\d{3})*(?:\.\d+)?)\s*'
-        r'(?:만|억|조|개|명|달러|원|위안|%)?',
-        text_plain)
-    if len(labeled_nums) >= 2:
-        factors = []
-        for n, v in labeled_nums[:5]:
-            raw = float(v.replace(',', ''))
-            if raw > 100_000:  raw = round(raw / 10_000, 1)
-            elif raw > 10_000: raw = round(raw / 1_000, 1)
-            elif raw > 1_000:  raw = round(raw / 100, 1)
-            elif raw > 100:    raw = round(raw / 10, 1)
-            factors.append((n[:12], raw))
-        if len(factors) >= 2:
-            return {'type': 'impact', 'data': factors, 'label': '주요 수치'}
-
-    # ── 6. fallback → 핵심 문장 하이라이트 (숫자 포함 문장 우선)
-    sentences = [s.strip() for s in re.split(r'[.。!?]', text_plain)
-                 if len(s.strip()) >= 15]
-    best = (next((s for s in sentences if re.search(r'\d', s)), None)
-            or (sentences[0] if sentences else keyword))
-    return {'type': 'highlight', 'data': best[:60], 'label': '핵심 인사이트'}
-
-
-def _split_long_paragraphs(html: str) -> str:
-    """각 <p> 안의 문장 중 2문장(약 100자) 이상인 것이 있으면 1문장씩 별도 <p>로 분리.
-
-    분리된 <p>들은 _inject_paragraph_images PASS 1에서 자연스럽게
-    이미지 삽입 대상이 됨 (마지막 <p> 제외).
-    """
-    import re
-
-    def _split_p(match):
-        inner = match.group(1).strip()
-        if not inner:
-            return match.group(0)
-        # 문장 경계: 한국어 마침표·물음표·느낌표 + 공백 or 끝
-        sents = re.split(r'(?<=[.。!?])\s+', inner)
-        sents = [s.strip() for s in sents if s.strip()]
-        if len(sents) <= 1:
-            return match.group(0)  # 단일 문장 → 그대로
-        # 2문장(약 100자) 이상인 문장이 하나라도 있을 때만 분리
-        if any(len(s) >= 100 for s in sents):
-            return '\n'.join(f'<p>{s}</p>' for s in sents)
-        return match.group(0)
-
-    return re.sub(r'<p>(.*?)</p>', _split_p, html, flags=re.DOTALL)
 
 
 # 섹션 이미지 + 단락 이미지 경로 임시 저장 (generate → run 간 전달)

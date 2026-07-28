@@ -1051,39 +1051,3 @@ def report_user_observed_incident(
     return error_id
 
 
-def incident_stats() -> dict:
-    """learned_incidents 통계 — 도메인별 누적 + 핫스팟 Top.
-
-    Returns:
-        {
-            "total_incidents":  int,
-            "by_domain":        {domain: hit_count},
-            "hotspots":         [{"domain", "symptom", "hit_count"}, ...] Top 10,
-        }
-    """
-    try:
-        import json
-        if not _LEARNED_INCIDENTS_PATH.exists():
-            return {"total_incidents": 0, "by_domain": {}, "hotspots": []}
-        data = json.loads(_LEARNED_INCIDENTS_PATH.read_text(encoding="utf-8"))
-        incs = data.get("incidents", [])
-        by_domain: dict[str, int] = {}
-        for inc in incs:
-            d = inc.get("domain", "other")
-            by_domain[d] = by_domain.get(d, 0) + int(inc.get("hit_count", 0))
-        sorted_incs = sorted(incs, key=lambda x: -int(x.get("hit_count", 0)))
-        return {
-            "total_incidents": len(incs),
-            "by_domain":       by_domain,
-            "hotspots": [
-                {
-                    "domain": i.get("domain"),
-                    "symptom": i.get("symptom", "")[:80],
-                    "hit_count": int(i.get("hit_count", 0)),
-                }
-                for i in sorted_incs[:10]
-            ],
-        }
-    except Exception as e:
-        log.error(f"[GUARDIAN/incident] stats 실패: {e}")
-        return {"total_incidents": 0, "by_domain": {}, "hotspots": []}

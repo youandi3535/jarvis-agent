@@ -19,7 +19,7 @@ prune_quarantined(dry_run=...) → dict  (격리 패턴 정리)
 # ★ 결함 1 정정 (2026-07-25) — fixer 집합은 pattern_fixer 에서 *런타임 파생*
 
 종전 `STATIC_FIXERS` 는 손으로 나열한 리터럴 5종이었고, 주석은 "pattern_fixer 의
-`_PATTERN_FIXERS` 와 동기" 라고 적혀 있었으나 **사실이 아니었다**.
+fixer 목록과 동기" 라고 적혀 있었으나 **사실이 아니었다**.
 실측: `STATIC_FIXERS ∩ pattern_fixer._FIXER_REGISTRY = ∅` (공집합).
 → 정적 fixer 전종이 "unknown → 보수적 통과 70점" 으로 떨어져 게이트가 *도장 찍기* 였다.
 이는 드리프트가 아니라 *처음부터 두 곳에 나열한* ① 단일 진입점 위반.
@@ -245,18 +245,6 @@ def fixer_sets() -> FixerSets:
         log.warning("[GUARDIAN/eval] fixer 집합 파생 실패 → 특권 회수(static=∅): %s", e)
         return FixerSets(static=(), replay=(), llm=_LEGACY_LLM_FIXERS,
                          derived=False, source=f"degraded:{type(e).__name__}")
-
-
-def __getattr__(name: str):
-    """모듈 속성 STATIC_FIXERS / REPLAY_FIXERS / LLM_FIXERS 를 *조회 시점* 파생.
-
-    모듈 레벨에 상수로 박아두면 그 자체가 '복사본을 진실로 믿기' 다.
-    (PEP 562 — 모듈에 실제 속성이 없을 때만 호출된다. 절대 대입하지 말 것.)
-    """
-    mapping = {"STATIC_FIXERS": "static", "REPLAY_FIXERS": "replay", "LLM_FIXERS": "llm"}
-    if name in mapping:
-        return getattr(fixer_sets(), mapping[name])
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ──────────────────────────────────────────────────────────────

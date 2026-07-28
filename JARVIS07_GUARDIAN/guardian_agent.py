@@ -1372,44 +1372,6 @@ def job_retry_pending(*, max_per_run: int = 20, stuck_minutes: int = 30):
 
 # ── 텔레그램 알림 헬퍼 (비활성 — 사용자 박제) ──────────────────
 
-def _notify_critical(error_record: dict):
-    log.warning(
-        f"[GUARDIAN] CRITICAL — {error_record.get('error_type','')} "
-        f"#{error_record.get('id','')} {(error_record.get('message',''))[:100]}"
-    )
-    try:
-        from shared.notify import send_tg
-        send_tg(
-            f"🔴 *[GUARDIAN] CRITICAL 오류 발생*\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"소스: {error_record.get('source','?')}\n"
-            f"유형: {error_record.get('error_type','?')}\n"
-            f"내용: {(error_record.get('message',''))[:200]}\n"
-            f"→ 자동 수정 불가 — 수동 검토 필요"
-        )
-    except Exception:
-        pass
-
-
-def _notify_medium(error_record: dict):
-    sev = error_record.get("severity", "medium")
-    log.info(
-        f"[GUARDIAN] {sev.upper()} — {error_record.get('error_type','')} "
-        f"{(error_record.get('message',''))[:100]}"
-    )
-    if sev in ("high",):
-        try:
-            from shared.notify import send_tg
-            send_tg(
-                f"🟠 *[GUARDIAN] HIGH 오류 자동수정 불가*\n"
-                f"소스: {error_record.get('source','?')}\n"
-                f"유형: {error_record.get('error_type','?')}\n"
-                f"내용: {(error_record.get('message',''))[:150]}"
-            )
-        except Exception:
-            pass
-
-
 # ── 공개 도구 API ─────────────────────────────────────────────────
 
 def mark_ignored(error_id: int) -> bool:

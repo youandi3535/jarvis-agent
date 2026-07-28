@@ -489,27 +489,6 @@ def _repo_py_files() -> list[Path]:
     return out
 
 
-def _ast_uses_name(src: str, name: str) -> bool:
-    """이 소스가 `name` 을 *코드로* 쓰는가 — 주석·문자열 오탐 배제 (AST 확인).
-
-    ★ 텍스트 검색만 하면 "dead code 제거" 같은 *주석 속 단어* 가 참조로 잡혀
-      정당한 dead code 정리를 영원히 막는다(실측). 그래서 텍스트는 *예선* 이고
-      본선 판정은 AST 가 한다. 파싱 실패 시에만 보수적으로 True.
-    """
-    try:
-        tree = ast.parse(src)
-    except Exception:                      # noqa: BLE001
-        return True
-    if name in _referenced_names(tree):
-        return True
-    for n in ast.walk(tree):
-        if isinstance(n, (ast.Import, ast.ImportFrom)):
-            for a in n.names:
-                if (a.asname or "") == name or a.name.split(".")[-1] == name:
-                    return True
-    return False
-
-
 def _module_names(path: Path) -> tuple[str, str]:
     """파일 경로 → (dotted 모듈 경로, 마지막 세그먼트). 저장소 밖이면 ("","")."""
     try:

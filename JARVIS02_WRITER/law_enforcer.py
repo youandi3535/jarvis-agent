@@ -124,7 +124,7 @@ _BANNED_EXACT = re.compile(
     re.IGNORECASE,
 )
 
-# (b) LLM 작성 지시문 누출 패턴 (pre_revise sanitizer 와 동일 목록)
+# (b) LLM 작성 지시문 누출 패턴
 _LLM_LEAK = re.compile(
     r'등\s+더\s+구체적인\s+\S+\s*제시|마무리\s+후\s+추가\s*:|또는\s+[\'\"][^\'\"]+[\'\"]|'
     r'주어[–-]술어를\s+더|다음과\s+같이\s+수정|예\s*:\s*[가-힣]|'

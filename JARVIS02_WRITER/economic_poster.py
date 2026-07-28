@@ -14,7 +14,7 @@ economic_poster.py
 """
 
 import os, re, json, base64, sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -256,7 +256,7 @@ def tg(msg: str):
 
 
 
-from JARVIS08_PUBLISH.category import ECONOMIC_CATEGORY, ECONOMIC_TAGS_DEFAULT  # noqa: F401
+from JARVIS08_PUBLISH.category import ECONOMIC_CATEGORY  # noqa: F401
 TODAY_PREFIX       = f"[{TODAY.month}/{TODAY.day}]"
 
 
@@ -273,51 +273,6 @@ TODAY_PREFIX       = f"[{TODAY.month}/{TODAY.day}]"
 # ══════════════════════════════════════════
 #  네이버 / 티스토리 포스팅
 # ══════════════════════════════════════════
-
-def post_to_naver_economic(title: str, content: str, blocks: list, tags: list,
-                           related_posts: list = None) -> bool:
-    from JARVIS08_PUBLISH.platforms import post_to_naver
-    return post_to_naver(
-        title=title,
-        html_content=content,
-        blocks=blocks,
-        category=ECONOMIC_CATEGORY,
-        tags=tags,
-        related_posts=related_posts,
-    )
-
-
-def post_to_tistory_economic(title: str, content: str, blocks: list, tags: list,
-                             related_posts: list = None) -> bool:
-    """티스토리 경제 브리핑 발행 — 쿠키 자동 강제 갱신 후 발행 (driver 재사용).
-
-    ★ force=True (사용자 직접 박제 2026-05-14) — 글 작성 전 항상 카카오 로그인으로
-    TSSESSION 새로 발급. 30분 사전 갱신만으로 카카오 세션 리다이렉트 사고 (ERRORS [62]) 재발 방지.
-    """
-    print("  🍪 티스토리 쿠키 강제 갱신 중 (.env 의 TS_USERNAME/TS_PASSWORD 사용)...")
-    # 절대 import — sys.path 조작 없이 안전하게 호출 (driver 재사용 → 2번 로그인 방지)
-    from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr_run
-    ok, preloaded_driver = _tcr_run(force=True, return_driver=True)
-    if not ok:
-        print("  ❌ 티스토리 쿠키 갱신 실패")
-        return False
-    load_dotenv(override=True)
-    # ★ ADR 008 Phase 2 완전 이관 (사용자 박제 2026-05-18) — shim 제거, 신 경로 직접 import
-    import JARVIS08_PUBLISH.platforms.tistory_poster as tistory_poster
-    # ★ ERRORS [145] LOGIN_SUPREME_LAW 위임
-    from JARVIS08_PUBLISH.credentials.login_manager import get_tistory_cookie
-    tistory_poster.TS_COOKIE = get_tistory_cookie().strip('"').strip("'")
-    from JARVIS08_PUBLISH.platforms import post_to_tistory
-    return post_to_tistory(
-        title=title,
-        html_content=content,
-        blocks=blocks,
-        category=ECONOMIC_CATEGORY,
-        preloaded_driver=preloaded_driver,
-        tags=tags,
-        related_posts=related_posts,
-    )
-
 
 # ══════════════════════════════════════════
 #  메인
@@ -1023,18 +978,7 @@ def run(post_naver=True, post_tistory=True, resume=None):
                                 html=_html_to_emit,
                                 post_type="economic",  # 글 종류별 분리 학습 키
                             )
-                        _pre_app = _art.get("_pre_applied") or []
-                        if _aid and _pre_app:
-                            # 사전 수정 적용된 글: revision_patch 저장 + is_revised=1 → 사후 분석/수정 자동 skip
-                            try:
-                                from shared import db as _db
-                                _db.save_pre_revise(_aid, _pre_app)
-                                print(f"  ✏️ [{_plat.upper()}] 사전 수정 {len(_pre_app)}건 기록 (id={_aid}, 사후 분석 skip)")
-                            except Exception as _e_pr:
-                                print(f"  ⚠️ save_pre_revise 실패 (무시): {_e_pr}")
-                                _g_report("writer", _e_pr, module=__name__)
-                        elif _aid and _ANALYZER_SCRIPT.exists():
-                            # 사전 수정 미적용 (분석기 모듈 오류 등) — 기존 사후 분석 흐름 fallback
+                        if _aid and _ANALYZER_SCRIPT.exists():
                             # ★ 발행창에서는 *띄우지 않는다* (사용자 박제 2026-07-25):
                             #   네이버 발행 직후 이 subprocess 가 뜨면 **티스토리가 아직 대본을
                             #   쓰는 중** 인데 매력도·사실성 채점 LLM 을 물어 한도를 경합한다.

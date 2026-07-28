@@ -161,7 +161,6 @@ class TestEventBus:
         assert hasattr(EventType, "TREND_DETECTED")
         assert hasattr(EventType, "POST_ANALYZED")
         assert hasattr(EventType, "PERFORMANCE_UPDATED")
-        assert hasattr(EventType, "POST_REVISED")
 
     def test_writer_agent_subscribes(self):
         """writer_agent 모듈 로드 시 3개 이벤트 구독 등록."""

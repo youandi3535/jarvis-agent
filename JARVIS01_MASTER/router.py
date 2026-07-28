@@ -411,12 +411,6 @@ REACT_SYSTEM_PROMPT = """\
 """
 
 
-def _safe_tool_names() -> set[str]:
-    """SAFE 도구 (requires_approval=False) 동적 수집."""
-    from shared.tools import all_tools
-    return {t.name for t in all_tools() if not t.requires_approval}
-
-
 def _approval_tool_names() -> set[str]:
     """★ APPROVAL 도구 (requires_approval=True) 동적 수집.
 

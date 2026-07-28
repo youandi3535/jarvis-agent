@@ -80,6 +80,28 @@ PLATFORM_SPEC = {
 _PLATFORM_SPEC = PLATFORM_SPEC
 
 
+def build_platform_block(platform: str) -> str:
+    """★ 플랫폼별 지시의 *유일한 출구* — 반드시 user_msg 로만 (ERRORS [542]).
+
+    ⛔ **system_msg 안에 `spec[...]` 보간을 새로 넣지 말 것.**
+
+    왜 (실측 근거):
+      프롬프트 캐시는 *prefix* 로 동작하고, `system` 이 그 앞부분이다. 실험으로 확정한 3가지 —
+        ① system 이 바이트 동일하면 user 가 완전히 달라도 **system 은 회수된다** (read 23,875)
+        ② system 이 한 줄이라도 다르면 user 가 같아도 **전부 무효** (read 0)
+        ③ 블록 내부 부분 회수는 **없다** — 앞 27K 가 같아도 꼬리 한 줄이 다르면 그 블록은 통째로 날아간다
+      경제 브리핑의 system 은 약 44,300 토큰이다. 여기에 `문체: 해요체/격식체` 한 줄이 남아
+      있던 탓에 네이버·티스토리가 매번 전량 재기록됐다.
+
+    ★ 내용은 `PLATFORM_SPEC` 에서 파생 — 문구를 여기에 박지 말 것 (원칙②).
+      플랫폼 축이 늘면 PLATFORM_SPEC 만 고치면 이 블록이 자동으로 따라온다.
+    """
+    spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
+    return (f"[플랫폼 프로필]\n"
+            f"플랫폼: {spec['name']} | 독자: {spec['reader']}\n"
+            f"문체: {spec['tone']} — 본문 전체에 일관 적용")
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  공통 헬퍼
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -679,11 +701,11 @@ def _gen_economic_ts_nv(
 - ★★ 본문 산문(<p> — 감성 오프닝·배경·섹션 설명·중간감성·마무리)은 *수치 0존*: 숫자·통계·%·금액·비율·연도별 값을 산문에 쓰지 마십시오. *모든 수치는 오직 [CHART_N] 슬롯 안*(카탈로그 D번호 값)에만 등장. 산문은 개념·맥락·배경·흐름을 서술한다. 근거 없는 산문 수치는 사실성 게이트에서 차단→재작성을 유발한다.
 - ★★ TITLE 도 예외 아님 — 수치 0존 규칙은 <p> 산문뿐 아니라 TITLE 한 줄에도 동일 적용. "-9.5%"·"OO% 급락/출렁" 같은 카탈로그에 없는 수치를 궁금증 유발 목적으로 제목에 지어내지 말 것 — 근거 없는 제목 수치도 사실성 게이트가 차단한다. 숫자 없이 궁금증을 유발하거나, 굳이 수치를 쓰려면 위 카탈로그(D번호) 값 그대로만 사용.
 - 연속 <p>↔<p> 사이마다 슬롯 삽입 (h2 직전·면책 직전 제외)
-- 문체: {spec['tone']}
+- 문체는 아래 작성 요청의 [플랫폼 프로필] 을 따른다 (★ system 은 플랫폼 무관 — ERRORS [542])
 - 위 지시문(괄호 안 설명·헌법 조항 번호·"정확히 N문장" 등) 본문에 그대로 출력 금지 — *완성된 HTML만* 출력"""
 
     user_msg = f"""[오늘 작성 요청]
-플랫폼: {spec['name']} | 독자: {spec['reader']}
+{build_platform_block(platform)}
 날짜: {_TODAY_KR} ({_TODAY_DOW}요일)
 키워드: {keyword} | 섹터: {sector} | 급상승 이유: {reason}
 
@@ -774,7 +796,7 @@ def _build_section_system_msg(supreme_block: str, platform: str) -> str:
   ★ 슬롯 안 필드: 제목 / 단위 / 데이터 / 출처 — 이 4개만. 종류: 필드 절대 금지.
 - ★★ 본문 산문(<p>)은 *수치 0존*: 숫자·통계·%·금액·비율·연도별 값을 산문에 쓰지 마십시오. 산문 수치는 오직 [CHART_N] 슬롯 안(카탈로그 값)에만 등장.
 - ★★ TITLE 은 *창작 금지*(0존 아님): 카탈로그·수집 자료에 **있는 값이면 제목에 써도 된다**(예: 실제 등락률). 없는 수치를 궁금증 유발용으로 지어내지 말 것 — 근거 없는 제목 수치만 사실성 게이트가 차단한다.
-- 문체: {spec['tone']}
+- 문체는 아래 작성 요청의 [플랫폼 프로필] 을 따른다 (★ system 은 플랫폼 무관 — ERRORS [542])
 - *위 지시문(헌법 조항 번호·"정확히 N문장"·"플레이스홀더 포함" 등) 본문에 그대로 출력 금지* — *완성된 HTML 만* 출력
 - 출력 형식 외 설명·주석·코드블록 절대 금지"""
 
@@ -791,7 +813,7 @@ def _gen_section_call1(
     _call1_min = max(2, _L.MIN_CHART_COUNT // 2)  # 전체 최솟값의 절반 (call-1은 절반 담당)
     user_msg = f"""[작성 요청] {platform} 경제 글 — 오프닝 + 섹션1만 생성
 
-플랫폼: {spec['name']} | 독자: {spec['reader']}
+{build_platform_block(platform)}
 키워드: {keyword} | 섹터: {sector} | 이유: {reason}
 
 {_catalog}
@@ -864,7 +886,8 @@ def _gen_section_call2(
     _catalog = _build_data_catalog(datasets)
     user_msg = f"""[작성 요청] {platform} 경제 글 — 섹션2만 생성 (독립적)
 
-플랫폼: {spec['name']} | 키워드: {keyword} | 섹터: {sector}
+{build_platform_block(platform)}
+키워드: {keyword} | 섹터: {sector}
 
 {_catalog}
 ★ CHART 최소 2개 이상 포함. 단락 수·분량에 따라 추가 배치 가능. 번호는 [CHART_6]부터 시작.
@@ -912,7 +935,8 @@ def _gen_section_call3(
     _catalog = _build_data_catalog(datasets)
     user_msg = f"""[작성 요청] {platform} 경제 글 — 섹션3 + 마무리 생성
 
-플랫폼: {spec['name']} | 키워드: {keyword} | 섹터: {sector}
+{build_platform_block(platform)}
+키워드: {keyword} | 섹터: {sector}
 
 {_catalog}
 ★ CHART 최소 2개 이상 포함. 단락 수·분량에 따라 추가 배치 가능. 번호는 [CHART_8]부터 시작.
@@ -1121,7 +1145,7 @@ def _gen_theme(
 - [PRICE_CHART_LEADER]...[/PRICE_CHART_LEADER] = 대장주 주가 흐름 차트 슬롯. 카탈로그에 "주가 흐름" 데이터가 있으면 반드시 포함하고 데이터 박기. 없으면 [PRICE_CHART_LEADER][/PRICE_CHART_LEADER] 빈 슬롯 유지 (삭제 금지).
 - [PRICE_CHART_SECOND]...[/PRICE_CHART_SECOND] = 부대장주 주가 흐름 차트 슬롯. 동일 규칙.
 - <svg>·<img> 태그 직접 쓰지 말 것 — 반드시 위 슬롯만 사용
-- 문체: {spec['tone']}
+- 문체는 아래 작성 요청의 [플랫폼 프로필] 을 따른다 (★ system 은 플랫폼 무관 — ERRORS [542])
 - 종목 데이터의 수치는 *그대로 인용* (가공·임의 변경 금지). 없으면 "N/A" 표기.
 - ★ 출처 없는 수치 창작 절대 금지 — 특정 연도·분기·기간의 가격·비용·규모·비율·지수뿐 아니라
   *산업·업계 단위 수치*(생산능력·감축/증설 톤수·시장 규모·점유율·"○○% 감축/증설 로드맵" 류)도 포함.
@@ -1167,7 +1191,7 @@ def _gen_theme(
     _narrative_block = ""
 
     user_msg = f"""[오늘 작성 요청 — 테마주 분석 글]
-플랫폼: {spec['name']} | 독자: {spec['reader']}
+{build_platform_block(platform)}
 날짜: {_TODAY_KR} ({_TODAY_DOW}요일)
 테마: {theme} | 섹터: {sector or '-'}
 대장주(시총 1위): {leader} · 부대장주(시총 2위): {second}

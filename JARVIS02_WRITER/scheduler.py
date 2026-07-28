@@ -291,37 +291,6 @@ def clear_theme_cache(theme: str):
         result_path.unlink()
 
 
-def get_status_text() -> str:
-    themes = load_themes()
-    p      = load_progress()
-    idx    = p['index']
-    next_t = themes[idx] if idx < len(themes) else "없음 (전체 완료)"
-    processed = len(p['done']) + len(p['failed'])
-    lines  = [
-        "📊 Market Signal 현황",
-        "━━━━━━━━━━━━━━━━━━",
-        f"전체  : {len(themes)}개",
-        f"처리됨: {processed}개 (완료 {len(p['done'])} + 실패 {len(p['failed'])})",
-        f"남은  : {len(themes) - idx}개",
-        f"다음  : {next_t}",
-        f"상태  : {'⏸ 일시정지' if _paused else '▶ 실행 중'}",
-    ]
-    ps = p.get('platform_status', {})
-    if ps:
-        lines.append("\n[최근 3개 결과]")
-        for theme, res in list(ps.items())[-3:]:
-            nv = '✅' if res.get('naver')   else '❌'
-            ts = '✅' if res.get('tistory') else '❌'
-            lines.append(f"{theme}: 네이버{nv} 티스토리{ts}")
-    if p.get('failed'):
-        lines.append("\n[실패 목록]")
-        for f in p['failed'][:5]:
-            lines.append(f"  • {f}")
-    return "\n".join(lines)
-
-
-
-
 # ══════════════════════════════════════════
 #  테마 전체 실행
 # ══════════════════════════════════════════
@@ -632,12 +601,6 @@ def _theme_exclude() -> set:
     from shared.db import get_recent_published_themes
     published = {r["theme"] for r in get_recent_published_themes(days=365)}
     return published | set(load_progress().get("done", []))
-
-
-def _theme_available() -> list:
-    """미발행 테마 목록 — 선정은 JARVIS03 theme_picker 위임, 발행상태(exclude)만 JARVIS02 제공."""
-    from JARVIS03_RADAR.theme_picker import available_themes
-    return available_themes(exclude=_theme_exclude())
 
 
 def select_top_theme() -> str | None:
@@ -1233,24 +1196,6 @@ def run_economic_poster(*extra_flags):
                 log("ℹ️ 예외 발생했으나 결과 파일상 양 플랫폼 발행 완료 — incident 생략")
     finally:
         _lock_release()   # 결과 임시파일 정리는 _spawn_publisher 가 담당
-
-
-def cleanup_screenshots():
-    """screenshots/ 폴더 내 파일 전체 삭제 (폴더 구조는 유지)"""
-    import shutil
-    ss_dir = BASE_DIR.parent / 'JARVIS06_IMAGE' / 'output' / 'screenshots'
-    deleted = 0
-    for sub in ss_dir.iterdir():
-        if sub.is_dir():
-            for f in sub.iterdir():
-                if f.is_file():
-                    f.unlink()
-                    deleted += 1
-    size_mb = sum(f.stat().st_size for f in ss_dir.rglob('*') if f.is_file()) / 1024 / 1024
-    log(f"🧹 스크린샷 정리 완료: {deleted}개 삭제 (남은 용량: {size_mb:.1f}MB)")
-    send_telegram(f"🧹 스크린샷 주간 정리 완료\n삭제: {deleted}개 파일")
-
-
 
 
 # ══════════════════════════════════════════

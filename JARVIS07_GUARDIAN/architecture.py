@@ -27,8 +27,6 @@ CATCH_MECHANISMS = [
 # ★ 모델명은 shared/llm.py(SSOT)에서 파생 — 하드코딩 금지 (사용자 박제 2026-07-04).
 #   코드가 모델을 바꾸면 웹·텔레그램 표시가 자동으로 따라온다.
 from shared.llm import get_spec as _get_spec, model_label as _model_label
-LLM_TIER_MODEL = _get_spec("guardian").model_id   # Tier 2 LLM 실모델 (SSOT 파생)
-
 TIERS = [
     {
         "n":        1,
@@ -71,7 +69,7 @@ DENY_FIX_PATHS = {            # 자동수정 절대 금지 파일 (보안·코�
 }
 
 __all__ = [
-    "CATCH_MECHANISMS", "TIERS", "SEVERITY_MATRIX", "LLM_TIER_MODEL",
+    "CATCH_MECHANISMS", "TIERS", "SEVERITY_MATRIX",
     "CB_MAX_HOUR", "ESCALATE_THRESHOLD", "ESCALATE_WINDOW_SECS", "DENY_FIX_PATHS",
     "DOMAIN_SKEW_THRESHOLD", "ERROR_STATS_WINDOW_DAYS", "MAX_LLM_ATTEMPTS",
     "tier_flow_for", "telegram_summary",
