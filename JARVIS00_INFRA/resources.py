@@ -1,4 +1,4 @@
-"""JARVIS00_INFRA/resources.py — ★ harness state 밖 *살아있는 핸들* 단일 진입점 (ERRORS [543]).
+"""JARVIS00_INFRA/resources.py — ★ harness state 밖 *살아있는 핸들* 단일 진입점 (ERRORS [544]).
 
 **state 에는 문자열 키만. 살아있는 객체는 여기에.**
 

@@ -998,7 +998,7 @@ def run_bot_polling(shutdown_event: threading.Event):
                             _PENDING_J00_PLAN.pop(plan_id, None)
                             _answer_callback(cq_id, "취소했습니다.")
                             _send_tg("❌ 계획 취소됨.")
-                        # ★ harness escalation 행동 버튼 (ERRORS [543])
+                        # ★ harness escalation 행동 버튼 (ERRORS [544])
                         #   서버측 대기 상태 없음 — 잡 ID 가 callback_data 에 실려 온다.
                         #   (발행은 subprocess 라 _PENDING_* 메모리 딕셔너리를 쓸 수 없다.)
                         elif cq_data.startswith("hesc_run:"):

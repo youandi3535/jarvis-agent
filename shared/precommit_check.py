@@ -790,7 +790,7 @@ def check_harness(report: Report) -> None:
             ))
     report.checks_run += 1
 
-    # ⑥ ★ harness state 에 *살아있는 핸들* 금지 (ERRORS [543])
+    # ⑥ ★ harness state 에 *살아있는 핸들* 금지 (ERRORS [544])
     #
     #   왜: state 는 step 사이를 흐르는 dict 이고 액션이 끝나면 그냥 버려진다.
     #     ① 살아있는 객체가 들어가면 직렬화가 통째로 불가능해지고

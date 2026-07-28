@@ -32,7 +32,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 EMBED_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"  # 무료·로컬·CPU·118MB
 EMBED_DIM = 384
 
-# ★ 리랭커(cross-encoder) 모델 — 2단계 검색의 2단계 (ERRORS [543]).
+# ★ 리랭커(cross-encoder) 모델 — 2단계 검색의 2단계 (ERRORS [544]).
 #
 #   왜 필요한가 — 임베딩(bi-encoder)만으로는 못 잡는 실패가 있다:
 #     질의와 문서를 **각각 따로** 벡터로 만들어 비교하므로 "단어가 겹친다" 에 약하다.

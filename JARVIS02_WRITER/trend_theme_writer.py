@@ -537,7 +537,7 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
 
         (종전에는 ②에서 선로그인 후 네이버 발행 내내 대기 → 세션 사망 위험, ERRORS [265])
         """
-        # ★ 살아있는 핸들은 state 밖 (ERRORS [543]) — state 엔 키 문자열만.
+        # ★ 살아있는 핸들은 state 밖 (ERRORS [544]) — state 엔 키 문자열만.
         #   경제(economic_poster)와 **동일 규약** (원칙③ — 4조합 전부).
         from JARVIS00_INFRA import resources as _res
         from JARVIS00_INFRA.harness import ACTION_NAME_KEY as _ANK
@@ -864,7 +864,7 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
     # 한쪽의 재작성 순환·실패가 다른 쪽을 지연·차단하지 않음 (실패 격리, max_attempts 각 3 — 사용자 지시로 3회 통일)
     _nv_action_def = ActionDefinition(
         name=f"theme-publish-{theme}-naver",
-        # ★ escalation "지금 다시 실행" 버튼 대상 (ERRORS [543])
+        # ★ escalation "지금 다시 실행" 버튼 대상 (ERRORS [544])
         retry_job_id="j01_theme_post_21",
         steps=[_step_load_rules, _step_collect, _step_nv_draft],
         verify=lambda st: _verify_theme_platform(st, "naver", "nv_draft",
@@ -880,7 +880,7 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
     )
     _ts_action_def = ActionDefinition(
         name=f"theme-publish-{theme}-tistory",
-        # ★ escalation "지금 다시 실행" 버튼 대상 (ERRORS [543])
+        # ★ escalation "지금 다시 실행" 버튼 대상 (ERRORS [544])
         retry_job_id="j01_theme_post_21",
         steps=[_step_ts_cookie, _step_ts_draft],
         verify=lambda st: _verify_theme_platform(st, "tistory", "ts_draft",

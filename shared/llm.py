@@ -504,7 +504,7 @@ def _build_claude_sdk_chat_model():
             tool_block = self._tool_schema_injection()
             if tool_block:
                 system_prompt = (system_prompt + tool_block).strip()
-            # ★ 단일 진입점 경유 (ERRORS [543]) — 종전엔 `_run_sdk_sync` 를 **직접** 불러
+            # ★ 단일 진입점 경유 (ERRORS [544]) — 종전엔 `_run_sdk_sync` 를 **직접** 불러
             #   alias 귀속(_bind_alias) · alias별 캐시정책(_sdk_env) · 회로차단 · 재시도 ·
             #   발행창 배경보류 를 **전부 우회**했다. ERRORS [474]([540]) 와 같은 병 —
             #   "한 통로에만 걸면 나머지로 샌다".
@@ -589,7 +589,7 @@ def _bind_alias(alias: str) -> None:
 def _raw_sdk_callers() -> list[tuple[str, int, bool]]:
     """원시 SDK(`_run_sdk_sync`/`_invoke_sdk_vision`)를 *직접* 부르는 함수를 **소스에서 파생**.
 
-    ★ 왜 손목록을 버렸나 (ERRORS [543]): 종전 검사는 통로 이름 두 개
+    ★ 왜 손목록을 버렸나 (ERRORS [544]): 종전 검사는 통로 이름 두 개
       (`invoke_text_result`·`invoke_vision`)를 코드에 **박아뒀다**. 그 목록이
       `_generate`(LangChain 어댑터) 경로를 **놓쳤고**,
       두 어댑터는 alias 귀속·캐시정책·회로차단·재시도를 통째로 우회한 채 돌고 있었다.

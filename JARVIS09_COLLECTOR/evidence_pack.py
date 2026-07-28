@@ -114,7 +114,7 @@ def _doc_attr(doc, name: str, default=""):
     return getattr(doc, name, default)
 
 
-# ★ per-doc 절단 기본값 — **이 파일에서 이 상수 하나만** (ERRORS [543], 원칙①).
+# ★ per-doc 절단 기본값 — **이 파일에서 이 상수 하나만** (ERRORS [544], 원칙①).
 #   왜 상수화했나: 같은 노브가 한 파일 안에 기본값 **셋**으로 흩어져 있었다 —
 #     `_docs_block(per_doc_chars=0)` / `_extract_facts(=1200)` / `build_evidence_pack(=900)`.
 #   실제로 걸리는 건 제일 바깥값(900)이라, 바로 위 docstring 이 선언한

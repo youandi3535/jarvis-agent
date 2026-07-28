@@ -240,7 +240,7 @@ class ActionDefinition:
                       - unfixed_issues: 패치 불가   (재생성 트리거 O, fingerprint 포함)
                       등록하지 않으면 기존 GUARDIAN 보고만 → backward-compat 완전 보장.
         max_attempts: 검증 순환 한계 (미지정 시 `DEFAULT_MAX_ATTEMPTS` 상속 — 숫자를 적지 말 것.
-                      이 자리에 "3" 이 박혀 있었으나 실제 상수는 2 였다, ERRORS [543])
+                      이 자리에 "3" 이 박혀 있었으나 실제 상수는 2 였다, ERRORS [544])
     """
     name: str
     steps: list[ActionStep]
@@ -251,11 +251,11 @@ class ActionDefinition:
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
     # ★ 정지 방어 (사용자 박제 2026-07-06): 전체 데드라인(초) — 초과 시 중단(송출 안 함).
     #   블로그 발행 액션은 `watchdog.BLOG_ACTION_DEADLINE_SEC` 명시(현재 2400=40분).
-    #   ★ 숫자를 여기 적지 말 것 — 종전 "1800(30분)" 은 실제 상수(2400)와 어긋나 있었다 (ERRORS [543]).
+    #   ★ 숫자를 여기 적지 말 것 — 종전 "1800(30분)" 은 실제 상수(2400)와 어긋나 있었다 (ERRORS [544]).
     #   미지정 시 넉넉한 기본(60분) 안전망.
     #   멈춤(freeze) 300초 워치독은 데드라인과 무관하게 항상 적용.
     deadline_sec: float = DEFAULT_ACTION_DEADLINE_SEC
-    # ★ escalation 알림에 붙일 "지금 다시 실행" 버튼의 대상 잡 ID (ERRORS [543]).
+    # ★ escalation 알림에 붙일 "지금 다시 실행" 버튼의 대상 잡 ID (ERRORS [544]).
     #   빈 문자열이면 버튼 없이 종전대로 글만 보낸다(하위호환).
     #   ★ 왜 호출자가 주나: 액션 이름→잡 ID 매핑표를 harness 가 들고 있으면 그게 곧 사본이고
     #     잡이 바뀔 때마다 어긋난다(원칙②). 잡을 아는 쪽(발행 모듈)이 알려준다.
@@ -568,7 +568,7 @@ def _notify_escalation(action_name: str, attempts: int, last_issues: list[Issue]
 
     송출은 *절대 안 함*. 사용자가 수동 검토해야 함.
 
-    ★ 행동 버튼 (ERRORS [543]): 종전엔 *"호스트에서 수동 검토 필요"* 라는 **글만** 보내고 끝나
+    ★ 행동 버튼 (ERRORS [544]): 종전엔 *"호스트에서 수동 검토 필요"* 라는 **글만** 보내고 끝나
       사용자가 텔레그램에서 할 수 있는 일이 0이었다. `retry_job_id` 가 있으면
       "🔁 지금 다시 실행" 버튼을 붙인다.
 
@@ -618,7 +618,7 @@ def _notify_escalation(action_name: str, attempts: int, last_issues: list[Issue]
 # 산출물 재생성 없이 재검증만 수행하는 재개 신호 (검증·송출 단계 이슈 / 전부 즉시수정된 경우)
 VERIFY_ONLY = "__verify_only__"
 
-# ★ 액션 이름이 담기는 state 키 (ERRORS [543]) — step 이 리소스 스코프로 쓴다.
+# ★ 액션 이름이 담기는 state 키 (ERRORS [544]) — step 이 리소스 스코프로 쓴다.
 #   `resources.close_scope(action_def.name)` 와 짝. 문자열을 양쪽에 박지 말 것.
 ACTION_NAME_KEY = "__action_name__"
 
@@ -799,7 +799,7 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
         ActionResult — delivered=True 면 송출 완료. False 면 escalation.
     """
     state: dict = dict(input_data or {})
-    # ★ 액션 이름을 state 로 (ERRORS [543]) — step 이 리소스 스코프로 쓴다.
+    # ★ 액션 이름을 state 로 (ERRORS [544]) — step 이 리소스 스코프로 쓴다.
     #   왜 이렇게: 액션 이름을 step 쪽에 문자열로 박으면 두 곳이 되고(원칙① 위반),
     #   테마는 이름이 *동적*(`theme-publish-{theme}-tistory`)이라 박을 수도 없다.
     #   harness 가 알려주면 step 은 `resources.put(state[ACTION_NAME_KEY], ...)` 한 줄이면 된다.
@@ -881,7 +881,7 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
             pass
         return result
     finally:
-        # ★ 살아있는 핸들 일괄 정리 (ERRORS [543]) — 성공·실패·정지 **어느 경로로 끝나든**.
+        # ★ 살아있는 핸들 일괄 정리 (ERRORS [544]) — 성공·실패·정지 **어느 경로로 끝나든**.
         #   왜 여기인가: state 는 액션이 끝나면 그냥 버려진다. 호출자가 close 를 잊으면
         #   아무도 안 닫는다 — 실제로 경제 브리핑이 티스토리 driver 를 성공할 때마다
         #   남기고 있었다(소비처 0 · quit 은 실패 분기에만). 정리를 *지나가야만 하는 문* 으로 둔다.

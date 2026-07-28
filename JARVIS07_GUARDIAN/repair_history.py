@@ -519,6 +519,26 @@ _VEC_WEIGHT  = 0.5    # 벡터 점수 가중
 # 경계를 그 사이에 둔다 — 빈손이 오답보다 낫다.
 _MIN_SCORE   = 0.41
 
+# ★ 2단계 리랭커 노브 (ERRORS [544]) — 값의 근거는 `golden_queries.json` 실측 스윕.
+#   RERANK_POOL: 1단계에서 리랭커에 넘길 후보 수. 이게 recall 상한을 정한다
+#     (실측 1단계 recall @20 36.4% / @100 63.6% / @200 82.7%, 100건 재점수 1.2초 CPU).
+#   RERANK_MIN_SCORE: cross-encoder 로짓 임계 — **코사인 임계(_MIN_SCORE)와 스케일이 다르다.**
+#     둘을 섞어 쓰면 안 된다. 값 변경 시 `selfcheck()` 의 골든셋 레그로 반드시 재측정할 것.
+#   ★ 값 근거 — 골든셋 36질의/정답 110개 임계 스윕 실측 (2026-07-28):
+#       임계 | recall@5 | 정밀도 | 빈손
+#       없음 |   14.5%  |  16.7% | 26/36   ← 리랭커 도입 전 기준선
+#        -5  |   21.8%  |  34.8% | 11/36
+#        -1  |   17.3%  |  47.5% | 23/36   ← 채택
+#         0  |   14.5%  |  53.3% | 25/36
+#     -1 을 고른 이유: 세 지표가 **모두 기준선 이상**이면서, 이 저장소의 계약
+#     *"오답 < 빈손"* 을 -5 보다 잘 지킨다(오답 45→21). 오답은 무관 사고의
+#     "⛔ 헛다리" 를 LLM 프롬프트에 주입해 *능동적으로 오도* 하므로 빈손보다 비싸다.
+#   ⚠️ 이건 **부분 개선이지 해결이 아니다** — 진짜 병목은 1단계 recall 이다
+#     (1단계 recall@100 이 63.6% 라 리랭커가 볼 수 있는 상한 자체가 낮다).
+#     다음 작업: 1단계 개선(질의 확장·키워드 레그 보정·인덱스 텍스트 재구성).
+RERANK_POOL      = 100
+RERANK_MIN_SCORE = -1.0
+
 
 def _search_env(name: str, default: float) -> float:
     """검색 노브 — *호출 시점* 조회 (모듈 로드 캡처 금지)."""
@@ -639,15 +659,49 @@ def search_incidents(query: str, top_k: int = 3, min_score: float | None = None)
         except Exception as e:  # noqa: BLE001
             log.debug(f"[repair_history] 벡터 점수 생략: {e}")
 
-    scored = []
-    for r, k, v in zip(rows, kw, vec):
-        s = kw_w * k + vec_w * v
-        if s >= thr:
-            scored.append((s, r))
+    scored = [(kw_w * k + vec_w * v, r) for r, k, v in zip(rows, kw, vec)]
     scored.sort(key=lambda x: -x[0])
 
+    # ── 2단계: 리랭커(cross-encoder) 재점수 (ERRORS [544]) ──────────────
+    #
+    # ★ 왜 필요했나 — 골든셋 36질의/정답 110개 실측으로 1단계 단독 성능이 드러났다:
+    #     recall@5 **14.5%** · 빈손율 **72.2%** · 임계 통과분의 정밀도 **16.7%**(정답4/오답20).
+    #   즉 CLAUDE.md 가 "통독 말고 조준 검색하라" 고 규정한 도구가 10번 중 7번 빈손이었고,
+    #   뭔가 나올 때도 5번 중 4번이 오답이었다.
+    #
+    # ★ 왜 리랭커로 고쳐지나 — 1단계는 질의와 문서를 *각각 따로* 벡터로 만들어 비교하므로
+    #   "단어가 겹친다" 에 속는다(자기참조 오염: 그 문구를 예시로 인용한 무관 사고가 1위).
+    #   cross-encoder 는 둘을 **붙여서 한 번에** 읽어 "인용이지 이 사고가 아니다" 를 구분한다.
+    #
+    # ★ 왜 풀을 넓히나 — 리랭커는 *후보에 올라온 것만* 재정렬한다. 1단계 recall 실측:
+    #     @5 14.5% / @20 36.4% / @100 **63.6%** / @200 82.7%
+    #   → 상한을 사려면 풀을 넓혀야 한다. 100건 재점수 실측 1.2초(CPU) 로 감당 가능하고,
+    #     이 함수는 발행 임계경로가 아니다(GUARDIAN Tier-2·auto_repair 진단 경로).
+    #
+    # ★ fail-open: 모델이 없거나 실패하면 1단계 결과를 종전 임계로 그대로 쓴다.
+    #   검색이 리랭커 때문에 멈추는 일은 없어야 한다.
+    import os as _os_rr
+    _use_rr = _os_rr.getenv("GUARDIAN_RERANK", "1") != "0"
+    _rr_hits: list = []
+    if _use_rr and scored:
+        try:
+            from shared import embeddings as _emb2
+            pool = scored[:RERANK_POOL]
+            _rr_hits = _emb2.rerank(q, [_row_text(r)[:2000] for _, r in pool])
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"[repair_history] 리랭크 생략: {e}")
+            _rr_hits = []
+
+    if _rr_hits:
+        rr_thr = _search_env("GUARDIAN_RERANK_MIN", RERANK_MIN_SCORE)
+        pool = scored[:RERANK_POOL]
+        # ★ 점수 의미가 바뀐다 — 로짓(음수 가능). 코사인 임계(_MIN_SCORE)를 재사용하면 안 된다.
+        final = [(rs, pool[i][1], pool[i][0]) for i, rs in _rr_hits if rs >= rr_thr]
+    else:
+        final = [(s, r, s) for s, r in scored if s >= thr]
+
     out = []
-    for s, r in scored[:top_k]:
+    for s, r, _stage1 in final[:top_k]:
         slots = r.get("slots") or {}
         first = lambda key: (slots.get(key) or [""])[0] if slots.get(key) else ""   # noqa: E731
         out.append({
@@ -742,9 +796,60 @@ def selfcheck() -> list[str]:
         if dups:
             issues.append(f"[S4] 중복 사고 번호 {len(dups)}개: {dups[:12]}"
                           " — next_incident_no() 로 발급할 것")
+        # [S5] 골든셋 회귀 감시 (ERRORS [544])
+        issues.extend(golden_check())
     except Exception as e:  # noqa: BLE001
         issues.append(f"[S0] selfcheck 실패: {type(e).__name__}: {e}")
     return issues
+
+
+# ── 골든셋 회귀 감시 ────────────────────────────────────────────────
+
+GOLDEN_PATH = Path(__file__).parent / "golden_queries.json"
+
+# ★ 회귀 임계 — 아래로 떨어지면 알린다. 값 근거는 2026-07-28 실측 (RERANK_MIN_SCORE 주석 표).
+#   여유를 5%p 둔 이유: 리랭커·임베딩 모델은 미세하게 비결정적이고, ERRORS.md 가 자라면
+#   후보 경쟁이 달라진다. 진짜 열화만 잡고 잡음에는 안 울리게 한다.
+GOLDEN_MIN_RECALL   = 0.12      # 실측 0.173
+GOLDEN_MAX_EMPTY    = 0.72      # 실측 0.639 (23/36)
+
+
+def golden_check(sample: int = 0) -> list[str]:
+    """★ 골든셋으로 검색 품질을 *실측* 한다 — 조준 검색의 무증상 열화 감시.
+
+    왜 필요한가: 이 검색은 **틀려도 예외를 안 던진다.** 빈손이나 오답을 조용히 돌려줄 뿐이라
+      코드를 읽어선 열화를 못 본다. 실제로 도입 시점 측정에서 recall@5 **14.5%** ·
+      빈손 **72%** 였는데 아무도 몰랐다. 정답이 적힌 시험지로 재는 수밖에 없다.
+
+    sample: 0 이면 전량. 양수면 앞에서 그만큼만 (빠른 점검용 — 부팅 경로 등).
+    반환: 위반 문자열 목록 (비면 정상). 골든셋 파일이 없으면 그 사실 자체가 위반.
+    """
+    out: list[str] = []
+    try:
+        if not GOLDEN_PATH.exists():
+            return [f"[S5] 골든셋 없음: {GOLDEN_PATH.name} — 검색 품질을 잴 수단이 없다"]
+        pairs = (json.loads(GOLDEN_PATH.read_text(encoding="utf-8")) or {}).get("pairs") or []
+        if not pairs:
+            return ["[S5] 골든셋이 비어 있음 — 측정 불가"]
+        if sample and sample > 0:
+            pairs = pairs[:sample]
+        tot = sum(len(p.get("expect") or []) for p in pairs) or 1
+        hit = empty = 0
+        for p in pairs:
+            nos = [h["no"] for h in (search_incidents(p["query"], top_k=5) or [])]
+            if not nos:
+                empty += 1
+            hit += len(set(p.get("expect") or []) & set(nos))
+        recall, empty_rate = hit / tot, empty / len(pairs)
+        if recall < GOLDEN_MIN_RECALL:
+            out.append(f"[S5] 골든셋 recall@5 {recall:.1%} < 기준 {GOLDEN_MIN_RECALL:.0%} "
+                       f"— 검색 열화 (질의 {len(pairs)}개/정답 {tot}개)")
+        if empty_rate > GOLDEN_MAX_EMPTY:
+            out.append(f"[S5] 골든셋 빈손율 {empty_rate:.1%} > 기준 {GOLDEN_MAX_EMPTY:.0%} "
+                       f"— '과거 사례 없음' 오답이 늘었다")
+    except Exception as e:  # noqa: BLE001
+        out.append(f"[S5] 골든셋 점검 실패: {type(e).__name__}: {e}")
+    return out
 
 
 if __name__ == "__main__":  # pragma: no cover
