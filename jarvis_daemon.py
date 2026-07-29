@@ -191,7 +191,7 @@ def _port_listeners(port: int, exclude_pid: int | None = None) -> list[int]:
     try:
         res = subprocess.run(
             ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, env=_build_env(),
         )
     except Exception as e:
         log.warning(f"_port_listeners lsof 오류 (port {port}): {e}")
@@ -255,7 +255,7 @@ def _kill_orphan_streamlits():
 
 def _build_env() -> dict:
     """자식 프로세스용 환경변수 — PATH prepend 포함."""
-    _EXTRA = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"]
+    _EXTRA = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/sbin", "/sbin"]
     env = os.environ.copy()
     env["PATH"] = ":".join(_EXTRA) + ":" + env.get("PATH", "")
     return env

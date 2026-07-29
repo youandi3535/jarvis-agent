@@ -148,16 +148,31 @@ def fallback_tags(title: str, count: int) -> list[str]:
     return list(dict.fromkeys(cands))[:count]
 
 
-def generate_tags(title: str, body_text: str, platform: str) -> list[str]:
-    """발행 태그 생성 — 4조합 공통 단일 진입점. 항상 태그다운 문자열만 반환."""
+def generate_tags(title: str, body_text: str, platform: str,
+                  seed_tags: list[str] | None = None) -> list[str]:
+    """발행 태그 생성 — 4조합 공통 단일 진입점. 항상 태그다운 문자열만 반환.
+
+    `seed_tags` — 호출자가 *확실히 아는* 주제어(테마명·섹터 등)를 앞자리에 고정한다.
+    ★ 왜 필요했나: 초판은 두 발행자의 `_generate_smart_tags` 만 통합했는데, **테마 발행은
+      그 함수를 아예 타지 않았다**. `trend_theme_writer` 가 `tags=` 로 직접 넘겼기 때문이다
+      (`[theme, sector, '테마주', '주식', '투자']` — 고정 템플릿). 즉 "4조합 단일 진입점" 은
+      실제로는 **경제 2조합만** 이었다(원칙③ 위반).
+      게다가 그 고정 풀은 BLOG_SUPREME_LAW 제1-B조(고정 풀·고정 템플릿 금지) 위반이고,
+      모든 테마 글이 같은 '테마주·주식·투자' 를 달아 검색 변별력이 0이었다.
+      실측 2026-07-29 21:00 — 네이버 태그가 4개뿐이라 `NAVER_HASHTAG_MIN`(5) 미달,
+      `post_scorer` N7_hashtags 에서 감점까지 받고 있었다.
+      → 테마의 *도메인 지식(테마명·섹터)* 은 seed 로 살리고, 나머지는 LLM 이 채운다.
+    """
     count = platform_tag_count(platform)
+    tags_seed = valid_tags(list(seed_tags or []), count)
     try:
         from JARVIS02_WRITER import length_manager as _LM
     except ImportError:  # 발행자 단독 실행 경로
         import length_manager as _LM  # type: ignore
 
     snippet = (body_text or "")[:_LM.BODY_SNIPPET_LEN]
-    tags: list[str] = []
+    tags: list[str] = list(tags_seed)
+    seed_hint = f"\n이미 확정된 태그(중복 금지): {', '.join(tags_seed)}" if tags_seed else ""
     try:
         from shared.llm import invoke_text
 
@@ -168,15 +183,20 @@ def generate_tags(title: str, body_text: str, platform: str) -> list[str]:
             f"- 이 글의 실제 주제를 검색할 때 쓸 법한 구체적 키워드\n"
             f"- 종목·투자를 다룬 글이면 테마명과 '관련주'·'주식' 을 결합 (예: 반도체관련주)\n"
             f"  그 외 주제(정책·통계·생활 등)라면 그 주제의 핵심어를 그대로 사용\n"
+            f"- 글마다 달라야 한다. 어느 글에나 붙는 '주식'·'투자' 같은 일반어 단독 금지\n"
             f"- 각 태그는 공백 없이 붙여쓰기, {MAX_TAG_LEN}자 이내\n"
-            f"- 태그 {count}개만 출력. 설명·사과·머리말 금지\n\n"
+            f"- 태그 {count}개만 출력. 설명·사과·머리말 금지{seed_hint}\n\n"
             f"제목: {title}\n"
             f"본문: {snippet}",
             timeout=60,
         ) or ""
 
         if response_is_tag_shaped(raw, count):
-            tags = valid_tags(split_candidates(raw), count)
+            for t in valid_tags(split_candidates(raw), count):
+                if t not in tags:
+                    tags.append(t)
+                if len(tags) >= count:
+                    break
         else:
             print(f"  ⚠️ 태그 응답이 태그 목록 형태가 아님 — 폐기 후 제목 파생 사용 "
                   f"(조각 {len(split_candidates(raw))}개, 최장 "

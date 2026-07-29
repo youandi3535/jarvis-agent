@@ -60,6 +60,21 @@ def is_publish_callback(callback: str) -> bool:
     return any(mark in cb for mark in PUBLISH_CALLBACK_MARKS)
 
 
+def publish_post_type(callback: str) -> str:
+    """발행 콜백에서 *글 종류* 파생 — `run_self_repair_then_economic` → `'economic'`.
+
+    ★ 이 어휘는 `post_analysis.post_type` 과 같다 — 그래서 발행 실적 대조에 그대로 쓴다.
+      마커 문자열을 밖에서 다시 쓰지 않게 하려고 여기(마커 소유자)에 둔다.
+      2026-07-29 실측: `publish_ledger` 가 `"run_self_repair_then_"` 를 자체 보유해
+      같은 판단이 **3벌**이 돼 있었다(job_llm_priority · job_registry · publish_ledger).
+    """
+    cb = str(callback or "")
+    for mark in PUBLISH_CALLBACK_MARKS:
+        if mark in cb:
+            return cb.rsplit(mark, 1)[-1].lstrip("_").strip()
+    return ""
+
+
 def publish_cron_times() -> tuple:
     """발행 잡의 cron 시각 [(hour, minute), …] — 보호구간 계산용(shared/llm 소비)."""
     try:

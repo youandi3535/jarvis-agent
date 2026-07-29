@@ -35,7 +35,7 @@
        아직 돌고 있는 것을 실패라 부르지 않는다.
 
 ★ 기대 집합을 코드에 박지 않는 이유 (② 동적 설계)
-  post_type  ← `DEFAULT_JOBS` 발행 잡의 callback 접미사 (`run_self_repair_then_<타입>`)
+  post_type  ← `job_llm_priority.publish_post_type()` (마커 소유자가 접미사에서 파생)
   platform   ← `JARVIS08_PUBLISH/platforms/` 의 `post_to_<플랫폼>` (AST 파생 — import 0)
   발행 잡·플랫폼이 늘면 기대 집합이 자동으로 따라온다. `{"economic","theme"} ×
   {"naver","tistory"}` 를 리터럴로 적으면 5번째 조합이 생긴 날 그 조합만 감시 밖에 남는다.
@@ -59,7 +59,6 @@ __all__ = [
 ]
 
 _PLATFORM_DIR = Path(__file__).resolve().parent / "platforms"
-_PUBLISH_CALLBACK_MARK = "run_self_repair_then_"
 
 # 파생에 실패했을 때만 쓰는 폴백(초). 실측 최악치(+246분)를 덮는 값 —
 # 감사가 *너무 이르면* 성공 발행을 결손으로 오신고하므로, 모르면 늦게 보는 쪽이 안전하다.
@@ -91,17 +90,18 @@ def expected_platforms() -> list[str]:
 def publish_slots() -> list[tuple[str, int, int]]:
     """(post_type, 시, 분) — `DEFAULT_JOBS` 의 발행 잡에서 파생.
 
-    callback 접미사가 곧 글 종류이고 그 어휘는 `post_analysis.post_type` 과 같다.
-    (`run_self_repair_then_economic` → `'economic'`)
+    발행 잡 판별과 글 종류 파생 모두 마커 소유자(`job_llm_priority`) 단독 —
+    여기에 마커 문자열 사본을 두지 않는다.
     """
-    from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS  # lazy — 순환 import 회피
+    # lazy — 순환 import 회피. 판별·글종류 파생은 마커 소유자(job_llm_priority) 단독.
+    from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+    from JARVIS04_SCHEDULER.job_llm_priority import is_publish_callback, publish_post_type
 
     out: list[tuple[str, int, int]] = []
     for j in DEFAULT_JOBS:
-        cb = j.get("callback") or ""
-        if j.get("trigger") != "cron" or _PUBLISH_CALLBACK_MARK not in cb:
+        if j.get("trigger") != "cron" or not is_publish_callback(j.get("callback")):
             continue
-        post_type = cb.rsplit(_PUBLISH_CALLBACK_MARK, 1)[-1].strip()
+        post_type = publish_post_type(j.get("callback"))
         kw = j.get("kwargs") or {}
         h = kw.get("hour")
         if post_type and isinstance(h, int):

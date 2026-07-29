@@ -57,14 +57,19 @@ def is_killable_subprocess() -> bool:
     데몬(jarvis_daemon)·keeper 본체는 절대 kill 금지 — 전체 시스템 다운.
     스케줄 발행·분석 등 --scheduled 로 뜬 독립 스크립트만 killable.
     """
-    if os.environ.get("JARVIS_KILLABLE_SUBPROCESS") == "1":
-        return True
+    # ★ 판정 순서 = 안전 우선 (2026-07-29 재감사 지적).
+    #   종전엔 `JARVIS_KILLABLE_SUBPROCESS` 를 **가장 먼저** 봤다. env 는 모든 자손에
+    #   상속되므로, 발행 subprocess 가 표식을 달고 무언가를 또 띄우면 그 손자까지
+    #   "죽여도 되는 프로세스" 로 판정된다 — 명시적 금지(`JARVIS_NO_WATCHDOG_KILL`)와
+    #   데몬·keeper 보호보다 표식이 앞서면 안 된다. **금지가 항상 허용을 이긴다.**
+    argv = " ".join(sys.argv)
     if os.environ.get("JARVIS_NO_WATCHDOG_KILL") == "1":
         return False
-    argv = " ".join(sys.argv)
-    # 데몬/keeper 본체는 제외
+    # 데몬/keeper 본체는 절대 kill 금지 — 전체 시스템 다운
     if "jarvis_daemon.py" in argv or "jarvis_keeper.py" in argv:
         return False
+    if os.environ.get("JARVIS_KILLABLE_SUBPROCESS") == "1":
+        return True
     return any(flag in argv for flag in ("--scheduled", "--naver-only", "--tistory-only"))
 
 

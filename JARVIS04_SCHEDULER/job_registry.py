@@ -272,7 +272,10 @@ def _publish_job_times() -> list[tuple[str, int, int]]:
     for j in DEFAULT_JOBS:
         if j.get("trigger") != "cron":
             continue
-        if "run_self_repair_then" not in (j.get("callback") or ""):
+        # ★ 발행 잡 판별은 `job_llm_priority.is_publish_callback` 단독 (마커 소유자).
+        #   종전엔 여기서 문자열을 다시 검사해 같은 판단이 2벌이었다.
+        from JARVIS04_SCHEDULER.job_llm_priority import is_publish_callback
+        if not is_publish_callback(j.get("callback")):
             continue
         kw = j.get("kwargs") or {}
         h = kw.get("hour")
