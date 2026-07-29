@@ -818,11 +818,19 @@ def save_post_for_analysis(platform: str, theme: str, title: str,
 
 
 def get_pending_analysis(limit: int = 10) -> list:
-    """분석 대기 중인 글 목록."""
+    """분석 대기 중인 글 목록 — **먼저 발행된 것부터**(FIFO).
+
+    ★ 2026-07-30 `DESC` → `ASC`. 대기열을 최신순으로 꺼내면 *같은 슬롯에서 나중에 발행된 글이
+      항상 먼저* 분석돼 LLM 예산을 먼저 쓴다. 그 결과 먼저 발행된 쪽(네이버, 07:12)이
+      **매번** 스로틀에 걸려 미채점으로 남았다 — 실측 07-26~29 naver 0/8 · tistory 7/8.
+      대기열은 먼저 들어온 것을 먼저 처리해야 한다(공정성이 곧 편향 제거다).
+      ※ 이것만 고치면 편향 방향만 뒤집힌다 — 근본은 `post_quality_analyzer` 의
+        `_essential` 교정이고, 둘은 같은 커밋에 있어야 한다.
+    """
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM post_analysis WHERE status='pending_analysis' AND is_revised=0 "
-            "ORDER BY created_at DESC LIMIT ?", (limit,)
+            "ORDER BY created_at ASC LIMIT ?", (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
 
