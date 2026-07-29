@@ -307,21 +307,29 @@ DEFAULT_JOBS.extend(_build_cookie_precheck_jobs())
 #   '글이 나갔는가' 는 모른다 — 그걸 묻는 코드가 저장소에 0줄이었다.
 #   판정 본체는 `JARVIS08_PUBLISH/publish_ledger.py` (발행 도메인 소유). 여기는 *시각* 만 정한다.
 #   쿠키 사전점검과 같은 형태로 **발행 잡 cron 에서 파생** — 발행 시각을 옮기면 감사도 따라 이동.
-_PUBLISH_AUDIT_LAG_MIN = 50
-
-
+#   ★ 지연(lag)도 리터럴로 박지 않는다 — 초판은 `50분` 고정이었는데 실측 59건 중 **19건(32%)**
+#     이 그 창을 넘겼다(최대 +246분). 감사가 너무 이르면 *성공한 발행을 결손으로 오신고* 해
+#     폐기한 log_monitor 의 위양성을 방향만 바꿔 재도입하게 된다.
+#     → `publish_ledger.audit_lag_minutes(misfire_grace)` 가 파생한다:
+#       잡이 늦게 시작될 수 있는 상한(misfire_grace_time) + 플랫폼 수 × 플랫폼당 상한
+#       (`watchdog.BLOG_ACTION_DEADLINE_SEC`). 그 값들을 바꾸면 감사 시각이 따라온다.
 def _build_publish_audit_jobs() -> list[dict]:
-    """발행 잡마다 '발행 N분 후 완결성 감사' 잡 1개씩 생성."""
+    """발행 잡마다 '발행 N분 후 완결성 감사' 잡 1개씩 생성 (N 은 파생)."""
+    from JARVIS08_PUBLISH.publish_ledger import audit_lag_minutes
+
+    grace_by_id = {j["id"]: int(j.get("misfire_grace_time") or 0) for j in DEFAULT_JOBS}
     jobs = []
     for jid, h, m in _publish_job_times():
-        total = (h * 60 + m + _PUBLISH_AUDIT_LAG_MIN) % (24 * 60)
+        lag = audit_lag_minutes(grace_by_id.get(jid, 0))
+        total = (h * 60 + m + lag) % (24 * 60)
         ah, am = divmod(total, 60)
         jobs.append({
             "id": f"j08_publish_audit_{jid}",
-            "name": f"발행 완결성 감사 ({ah:02d}:{am:02d} — {jid} 발행 {_PUBLISH_AUDIT_LAG_MIN}분 후)",
+            "name": f"발행 완결성 감사 ({ah:02d}:{am:02d} — {jid} 발행 {lag}분 후)",
             "trigger": "cron", "kwargs": {"hour": ah, "minute": am},
             "callback": "JARVIS08_PUBLISH.publish_ledger.job_audit_publish_completeness",
-            "misfire_grace_time": 3600, "owner": "jarvis08_publish",
+            # 데몬이 늦게 떠도 그 슬롯 감사는 살린다 — 다음 발행 슬롯 전까지 유효.
+            "misfire_grace_time": 6 * 3600, "owner": "jarvis08_publish",
         })
     return jobs
 

@@ -36,35 +36,80 @@
 """
 from __future__ import annotations
 
-__all__ = ["MAX_TAG_LEN", "platform_tag_count", "response_is_tag_shaped",
-           "valid_tags", "fallback_tags", "generate_tags"]
+__all__ = ["MAX_TAG_LEN", "MIN_TAG_LEN", "platform_tag_count", "split_candidates",
+           "response_is_tag_shaped", "valid_tags", "fallback_tags", "generate_tags"]
 
-# 한 태그의 최대 길이(정제 후). 이보다 길면 태그가 아니라 문장이다.
-MAX_TAG_LEN = 20
+# ★ 태그 길이·개수는 `length_manager` 가 소유자다 (분량 도메인 단일 진입점 — 루트 CLAUDE.md).
+#   초판은 여기에 20·6·4 를 새로 박아 **3벌째 사본**을 만들었다(재감사 19위 지적).
+#   `TAG_MAX`(태그 한 개 한도) · `NAVER_HASHTAG_MIN`(네이버 해시태그 최솟값)에서 파생한다.
+def _L():
+    from JARVIS02_WRITER import length_manager as _lm
+    return _lm
 
-# 플랫폼별 태그 개수 — 외부 플랫폼의 관행이라 런타임 파생 불가한 *정책 상수*.
-# 소유자를 여기 하나로 두는 것이 요점(종전엔 두 발행자에 흩어져 있었다).
-_PLATFORM_TAG_COUNT = {"naver": 6, "tistory": 4}
-_DEFAULT_TAG_COUNT = 4
+
+try:
+    MAX_TAG_LEN = int(_L().TAG_MAX) * 2      # 단어 한도 → 글자 한도(공백 제거 붙여쓰기 기준)
+except Exception:
+    MAX_TAG_LEN = 20
+MIN_TAG_LEN = 2                              # 1글자는 조사·관형사라 검색어가 되지 않는다
 
 
 def platform_tag_count(platform: str) -> int:
-    """플랫폼별 목표 태그 개수. 모르는 플랫폼은 보수적으로 기본값."""
-    return _PLATFORM_TAG_COUNT.get((platform or "").lower(), _DEFAULT_TAG_COUNT)
+    """플랫폼별 목표 태그 개수 — `length_manager` 에서 파생.
+
+    네이버는 `NAVER_HASHTAG_MIN`(=5) 을 목표로 한다(최솟값을 채우는 것이 규정 취지).
+    소유자 상수가 없는 플랫폼은 그 절반 수준으로 보수 적용하되, **모르는 플랫폼이면
+    로그로 알린다** — 조용한 기본값은 새 플랫폼이 감시 밖에 남는 길이다.
+    """
+    p = (platform or "").lower()
+    try:
+        naver_n = int(_L().NAVER_HASHTAG_MIN)
+    except Exception:
+        naver_n = 5
+    if p == "naver":
+        return naver_n
+    if p == "tistory":
+        return max(MIN_TAG_LEN, naver_n - 1)
+    print(f"  ⚠️ 태그 개수 기준이 없는 플랫폼 '{platform}' — 네이버 기준을 임시 적용")
+    return naver_n
+
+
+def split_candidates(raw: str) -> list[str]:
+    """LLM 응답을 태그 후보로 쪼갠다 — **쉼표와 줄바꿈 둘 다 구분자**.
+
+    ★ 초판은 개행이 있으면 응답 전체를 버렸다. 그런데 '한 줄에 하나씩' 은 태그 목록의
+      **정상적인 형태** 다 — 실측 `response_is_tag_shaped("태그1\\n태그2\\n태그3\\n태그4",4)`
+      → False. 즉 멀쩡한 응답을 통째로 폐기하고 폴백을 상시화하고 있었다.
+    """
+    import re
+    return [p.strip() for p in re.split(r"[,\n]+", raw or "") if p.strip()]
 
 
 def response_is_tag_shaped(raw: str, count: int) -> bool:
-    """LLM 응답 *전체* 가 태그 목록의 꼴인가 — 아니면 통째로 버린다.
+    """응답이 태그 목록의 *꼴* 인가 — 아니면 통째로 버린다.
 
-    태그 목록은 '단어, 단어, 단어' 한 줄이다. 설명·사과·마크다운은 반드시
-    개행을 동반하거나 길이가 폭증한다. 어휘를 보지 않으므로 낡지 않는다.
+    ★ 왜 어휘(금칙어)가 아니라 꼴을 보는가: '불가'·'죄송' 같은 목록을 박으면
+      목록에 없는 새 거부문은 그대로 통과한다. 거부 어휘는 무한하고 모델을 바꾸면
+      또 달라진다 — 목록은 반드시 낡는다.
+
+    판정 3단 (전부 구조):
+      ① 조각 중 하나라도 태그 한도의 2배를 넘으면 → 산문이 섞였다. 통째로 폐기.
+      ② 태그다운 조각이 2개 미만이면 → 목록이 아니다. (짧은 거부문이 여기서 걸린다 —
+         초판은 `'죄송하지만 … 만들 수 없습니다'` 를 **통과**시켰다.)
+      ③ 태그다운 비율이 절반 미만이면 → 설명이 주인공인 응답이다.
     """
-    if not raw or not raw.strip():
+    pieces = split_candidates(raw)
+    if not pieces:
         return False
-    if "\n" in raw.strip():
+    if any(len(p) > MAX_TAG_LEN * 2 for p in pieces):
         return False
-    # 태그 count 개 + 구분자가 차지할 수 있는 최대치
-    return len(raw.strip()) <= count * (MAX_TAG_LEN + 2)
+    good = len(valid_tags(pieces, count=len(pieces)))
+    return good >= 2 and good * 2 >= len(pieces)
+
+
+def _is_tag_like(clean: str) -> bool:
+    """정제된 문자열이 검색어로 쓸 만한가 — 길이·숫자단독만 본다(불용어 목록 없음)."""
+    return bool(clean) and MIN_TAG_LEN <= len(clean) <= MAX_TAG_LEN and not clean.isdigit()
 
 
 def valid_tags(candidates: list[str], count: int) -> list[str]:
@@ -74,10 +119,8 @@ def valid_tags(candidates: list[str], count: int) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for c in candidates:
-        if not c or "\n" in c:
-            continue
         clean = sanitize_tag(c)
-        if not clean or len(clean) > MAX_TAG_LEN or clean in seen:
+        if not _is_tag_like(clean) or clean in seen:
             continue
         seen.add(clean)
         out.append(clean)
@@ -89,22 +132,20 @@ def valid_tags(candidates: list[str], count: int) -> list[str]:
 def fallback_tags(title: str, count: int) -> list[str]:
     """LLM 을 못 쓸 때의 태그 — **제목에서 파생**.
 
-    종전 폴백은 `제목첫단어 + '관련주'/'테마주'/'대장주'` 였다. 테마글에는 맞지만
-    경제글에는 '중위소득관련주' 같은 실재하지 않는 검색어를 만들었다(원칙③ 위반).
-    제목의 낱말은 어떤 글이든 그 글의 주제어다 — 분기 없이 4조합 모두에 맞다.
+    종전 폴백은 `제목첫단어 + '관련주'/'테마주'/'대장주'` 라 경제글에 '중위소득관련주'
+    같은 실재하지 않는 검색어를 만들었다(원칙③ 위반). 제목의 낱말은 어떤 글이든
+    그 글의 주제어다 — 분기 없이 4조합 모두에 맞다.
+
+    ★ 단, 제목을 그냥 쪼개면 '내'·'3'·'어디쯤' 이 공개 태그로 나간다(재감사 7위 실측).
+      → `_is_tag_like` 로 거르고 **긴 낱말 우선**(제목에서 정보량이 큰 쪽)으로 고른다.
+      모자라면 억지로 채우지 않는다 — **빈 자리가 쓰레기 태그보다 낫다**.
     """
     from shared.seo import sanitize_tag
 
     words = [sanitize_tag(w) for w in (title or "").split()]
-    out = [w for w in words if w and len(w) <= MAX_TAG_LEN]
-    # 낱말이 모자라면 인접 낱말을 이어 붙여 채운다(그래도 제목 파생).
-    i = 0
-    while len(out) < count and i + 1 < len(words):
-        merged = (words[i] + words[i + 1])[:MAX_TAG_LEN]
-        if merged and merged not in out:
-            out.append(merged)
-        i += 1
-    return list(dict.fromkeys(out))[:count]
+    cands = [w for w in words if _is_tag_like(w)]
+    cands.sort(key=len, reverse=True)          # 조사·짧은 어절보다 주제어가 앞에
+    return list(dict.fromkeys(cands))[:count]
 
 
 def generate_tags(title: str, body_text: str, platform: str) -> list[str]:
@@ -135,10 +176,11 @@ def generate_tags(title: str, body_text: str, platform: str) -> list[str]:
         ) or ""
 
         if response_is_tag_shaped(raw, count):
-            tags = valid_tags(raw.strip().split(","), count)
+            tags = valid_tags(split_candidates(raw), count)
         else:
             print(f"  ⚠️ 태그 응답이 태그 목록 형태가 아님 — 폐기 후 제목 파생 사용 "
-                  f"(길이 {len(raw.strip())}, 개행 {'있음' if chr(10) in raw else '없음'})")
+                  f"(조각 {len(split_candidates(raw))}개, 최장 "
+                  f"{max((len(p) for p in split_candidates(raw)), default=0)}자)")
     except Exception as e:
         print(f"  ⚠️ 태그 생성 실패 — 제목 파생 사용: {e}")
 
@@ -148,4 +190,5 @@ def generate_tags(title: str, body_text: str, platform: str) -> list[str]:
                 tags.append(fb)
             if len(tags) >= count:
                 break
+    # ★ 모자라도 억지로 채우지 않는다 — 빈 자리가 쓰레기 태그보다 낫다.
     return tags[:count]
