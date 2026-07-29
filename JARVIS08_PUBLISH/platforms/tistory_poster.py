@@ -106,35 +106,13 @@ from selenium.webdriver.common.keys import Keys
 
 
 def _generate_smart_tags(title: str, body_text: str) -> list:
-    """제목에서 2개 + 본문에서 2개, 총 4개 태그를 Claude API로 생성.
-    Returns: 4개짜리 태그 리스트 (항상 보장)
+    """티스토리 태그 — 생성·검증 본체는 `JARVIS08_PUBLISH.tags` 단독 (2026-07-29 통합).
+
+    ★ 네이버와 같은 함수를 쓴다(개수만 플랫폼별). 종전엔 두 벌이라 한쪽 수정이
+      다른 쪽에 닿지 않았다 — 원칙① 위반이 실사고로 이어진 사례. 상세는 tags.py.
     """
-    theme_name = title.split()[0] if title else '주식'
-    try:
-        from JARVIS02_WRITER import length_manager as _LM_ts
-    except ImportError:
-        import length_manager as _LM_ts
-    snippet = body_text[:_LM_ts.BODY_SNIPPET_LEN] if body_text else ''
-    try:
-        from shared.llm import invoke_text as _inv_cli
-        # ★ 2026-07-28 alias 교정 — 네이버와 동일 사유(③ 양 플랫폼 동시).
-        _raw = _inv_cli(
-            "writer_short_title",
-            f"다음 제목과 본문을 보고 블로그 태그 4개를 쉼표로 구분해서 출력하세요.\n"
-            f"- 제목에서 2개 (공백없이 붙여쓰기)\n"
-            f"- 본문에서 2개 (공백없이 붙여쓰기)\n"
-            f"태그만 출력하고 다른 말은 하지 마세요.\n\n"
-            f"제목: {title}\n"
-            f"본문: {snippet}",
-            timeout=60
-        ) or ""
-        parts = [p.strip() for p in _raw.strip().split(',') if p.strip()]
-        fallbacks = [theme_name, f'{theme_name}주식', f'{theme_name}투자', f'{theme_name}테마주']
-        while len(parts) < 4:
-            parts.append(fallbacks[len(parts) % len(fallbacks)])
-        return list(dict.fromkeys(parts))[:4]
-    except Exception:
-        return [theme_name, f'{theme_name}주식', f'{theme_name}테마주', f'{theme_name}투자']
+    from JARVIS08_PUBLISH.tags import generate_tags
+    return generate_tags(title, body_text, "tistory")
 
 def _split_into_paragraphs(text: str) -> list:
     """누적 length_manager.PARAGRAPH_SPLIT_KOREAN 초과 후 문장 끝에서 단락 분리."""

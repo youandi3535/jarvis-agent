@@ -121,40 +121,13 @@ def rand(a=0.5, b=1.5):
 
 
 def _generate_smart_tags(title: str, body_text: str) -> list:
-    """네이버 검색 최적화 태그 6개 생성.
-    Returns: 6개짜리 태그 리스트 (항상 보장)
+    """네이버 태그 — 생성·검증 본체는 `JARVIS08_PUBLISH.tags` 단독 (2026-07-29 통합).
+
+    ★ 종전엔 여기와 tistory_poster 에 거의 같은 구현이 **두 벌** 있었고, 검증이 0이라
+      LLM 거부 산문이 그대로 발행됐다(2026-07-29 07:00 실사고). 사유·설계는 tags.py 참조.
     """
-    theme_name = title.split()[0] if title else '주식'
-    try:
-        from JARVIS02_WRITER import length_manager as _LM_naver
-    except ImportError:
-        import length_manager as _LM_naver
-    snippet = body_text[:_LM_naver.BODY_SNIPPET_LEN] if body_text else ''
-    try:
-        from shared.llm import invoke_text as _inv_cli
-        # ★ 2026-07-28 alias 교정 — 태그 6개(≈30자)에 8,000토큰 상한(writer)은 과했다.
-        #   실측 호출당 73,337 토큰(48h 최대). 용도에 맞는 짧은 alias 로 (사용자 승인).
-        _raw = _inv_cli(
-            "writer_short_title",
-            f"네이버 블로그 검색 최적화 태그 6개를 쉼표로 구분해서 출력하세요.\n"
-            f"규칙:\n"
-            f"- 실제 네이버에서 검색할 법한 구체적 키워드 (예: 반도체관련주, 2차전지주식, HBM투자)\n"
-            f"- 단독 '주식'·'투자' 금지. 반드시 테마명과 결합 (예: {theme_name}주식)\n"
-            f"- 공백 없이 붙여쓰기\n"
-            f"- 태그 6개만 출력, 다른 말 금지\n\n"
-            f"제목: {title}\n"
-            f"본문: {snippet}",
-            timeout=60
-        ) or ""
-        parts = [p.strip() for p in _raw.strip().split(',') if p.strip()]
-        fallbacks = [f'{theme_name}관련주', f'{theme_name}주식', f'{theme_name}테마주',
-                     f'{theme_name}투자', f'{theme_name}종목', f'{theme_name}대장주']
-        while len(parts) < 6:
-            parts.append(fallbacks[len(parts) % len(fallbacks)])
-        return list(dict.fromkeys(parts))[:6]
-    except Exception:
-        return [f'{theme_name}관련주', f'{theme_name}주식', f'{theme_name}테마주',
-                f'{theme_name}투자', f'{theme_name}종목', f'{theme_name}대장주']
+    from JARVIS08_PUBLISH.tags import generate_tags
+    return generate_tags(title, body_text, "naver")
 
 def html_to_naver_text(html: str) -> str:
     c = html
