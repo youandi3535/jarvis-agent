@@ -68,6 +68,13 @@ _AFTER_RULES = """⚠️ after 필드 절대 규칙 ⚠️
 - ❌ "…를 추천합니다" 등 더 구체적인 실행 단계 제시   ❌ 마무리 후 추가: '…'
 - ✅ 관심 종목의 목표가를 재설정한 뒤 지정가 매수 주문을 걸어두는 것을 추천합니다."""
 
+# ★ 지침 길이 상한 — 강화학습 소유자(quality_learner)가 length_manager 에서 파생한 값을
+#   그대로 가져온다. 프롬프트가 요구하는 길이와 저장 게이트가 거부하는 길이는 **같아야** 한다.
+try:
+    from JARVIS07_GUARDIAN.quality_learner import DIRECTIVE_MAX_LEN as _DIRECTIVE_MAX_LEN
+except Exception:
+    _DIRECTIVE_MAX_LEN = 100
+
 # 발행 후 개선 제안 프롬프트 — 100점 루브릭 감점 항목만 겨냥.
 _RUBRIC_SUGGEST_SYSTEM = ("""당신은 한국 블로그 SEO·콘텐츠 품질 전문가입니다.
 이 글은 우리 *100점 검증 루브릭*(발행 전과 동일 기준)에서 아래 '감점 항목'을 잃었습니다.
@@ -80,14 +87,30 @@ _RUBRIC_SUGGEST_SYSTEM = ("""당신은 한국 블로그 SEO·콘텐츠 품질 �
   "issue": "왜 감점됐는지 한 줄",
   "before": "개선 전 원문 (__BEFORE_SNIPPET__자 이내 발췌, 해당 부분 없으면 빈 문자열)",
   "after": "개선 후 — 본문에 그대로 들어갈 최종 완성 텍스트",
+  "rule": "★ 이 글과 무관하게 *다음 글* 에도 적용할 일반 지침 한 줄 (아래 규칙 준수)",
   "priority": "high|medium|low (감점이 클수록 high)"
 }
+
+★ "rule" 작성 규칙 — 이것만 학습 자산으로 누적된다 (틀리면 버려진다):
+  - **행동 지시문**으로 쓴다. "~하라 / ~할 것 / ~하지 말 것" 형태.
+  - 이 글의 **고유명사·수치·날짜를 넣지 말 것** (종목명·PER·%·원·년월 등).
+    그것들은 다음 글에서 거짓이 된다.
+  - HTML 태그·마크다운 기호를 넣지 말 것.
+  - __RULE_MAX__자 이내 한 줄.
+  - 좋은 예: "제목 앞부분에 핵심 키워드를 배치하고 숫자를 하나 포함하라"
+  - 나쁜 예: "현대차 PER 4.7배, 카카오 32.3배 비교" (← 이 글의 사실. 지침이 아님)
+  - 일반화할 수 없으면 "" 로 두라. **빈 값이 잘못된 지침보다 낫다.**
 
 """ + _AFTER_RULES + """
 
 감점이 큰 항목부터 최대 6개. 각 개선은 *그 감점 항목을 실제로 없애는* 구체적 수정만.""").replace(
     "__BEFORE_SNIPPET__",
     str(_LM.ECO_BEFORE_SNIPPET) if _LM else "50"
+).replace(
+    # ★ 지침 길이 상한도 박지 않고 파생 (원칙②) — 저장측 게이트와 *같은 함수* 에서 가져온다.
+    #   프롬프트가 요구하는 길이와 게이트가 거부하는 길이가 어긋나면 매번 버려진다.
+    "__RULE_MAX__",
+    str(_DIRECTIVE_MAX_LEN)
 )
 
 
@@ -607,12 +630,20 @@ def learn_from_suggestions(applied: list, scope: str = "all") -> int:
         issue = (s.get("issue") or "").strip()
         if not issue:
             continue
+        # ★ 2026-08-02 — 종전 `directive=s.get("after")` 였다. 그런데 프롬프트상 `after` 는
+        #   *"본문에 그대로 들어갈 최종 완성 텍스트"* 다. 즉 **글에 넣을 문장을 '지침' 이라며
+        #   저장** 하고 있었다(실측 오염 결과: 가중치 최상위가 전부 다른 글의 제목·본문).
+        #   → 글에 독립적인 일반 지침 `rule` 만 학습한다. 없으면 **학습하지 않는다** —
+        #     `after` 로 되돌아가면 같은 병이 그대로 재발한다.
+        directive = (s.get("rule") or "").strip()
+        if not directive:
+            continue
         try:
             db.upsert_learning_insight(
                 insight_key=f"{s.get('type', 'revision')}_{s.get('field', 'content')}",
                 insight_type=s.get("type", "revision"),
                 description=issue,
-                directive=s.get("after", ""),
+                directive=directive,
                 weight=1.0,
                 scope=scope or "all",
             )

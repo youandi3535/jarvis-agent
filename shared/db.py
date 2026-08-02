@@ -1666,6 +1666,22 @@ def upsert_learning_insight(insight_key: str, insight_type: str,
     제거 후 표시. get_top_learning_insights() 가 자동 처리.
     """
     scope = (scope or "all").strip() or "all"
+
+    # ★ 학습 지침 위생 게이트 (2026-08-02 전수 감사 6위 — 사용자 승인).
+    #   판정 규칙 본체는 강화학습 소유자 `JARVIS07_GUARDIAN.quality_learner`(ADR 014) 단독 —
+    #   저장소는 *묻기만* 한다. 여기 규칙을 복사하면 그 순간 두 곳이 어긋나기 시작한다(원칙①).
+    #   호출자가 3곳(post_quality_analyzer · daily_review · trend_theme_writer)이라
+    #   각 호출부에 검사를 흩지 않고 **반드시 지나가는 이 관문** 에서 한 번 막는다.
+    try:
+        from JARVIS07_GUARDIAN.quality_learner import directive_issues as _di
+        _issues = _di(directive)
+        if _issues:
+            print(f"  ⚠️ 학습 지침 거부 [{scope}:{insight_key}]: {', '.join(_issues)}"
+                  f" — {str(directive)[:50]}")
+            return 0
+    except ImportError:
+        pass   # 게이트 미가용 시 종전 동작 유지 (학습이 멈추는 것보다 낫다)
+
     composite_key = f"{scope}:{insight_key}" if not insight_key.startswith(f"{scope}:") else insight_key
     with get_db() as conn:
         existing = conn.execute(
@@ -1769,6 +1785,9 @@ def get_ranked_learning_insights(scope: str = "", limit: int = 8,
                           FROM insight_usage GROUP BY insight_id) u
                     ON u.insight_id = li.id
                WHERE li.last_seen >= date('now','localtime',?)
+               -- ★ weight=0 은 '무력화' 를 뜻한다 (2026-08-02 오염 지침 378건 정리).
+               --   종전엔 이 필터가 없어 weight 를 0 으로 내려도 **그대로 주입** 됐다.
+               AND li.weight > 0
                  AND (? = '' OR COALESCE(li.scope,'all') IN (?, 'all'))
                ORDER BY effective_weight DESC
                LIMIT ?""",

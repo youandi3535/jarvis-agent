@@ -34,7 +34,79 @@ __all__ = [
     "attribute_pending_rewards",
     "job_quality_learn",
     "stats",
+    "DIRECTIVE_MAX_LEN",
+    "directive_issues",
+    "is_learnable_directive",
 ]
+
+# ══════════════════════════════════════════════════════════════════
+# ★ 학습 지침 위생 게이트 (2026-08-02 전수 감사 6위 — 사용자 승인)
+# ══════════════════════════════════════════════════════════════════
+# 실측: `learning_insights` 381건 중 HTML 조각 24건 · 수치 포함 131건 · 최대 418자.
+# 가중치 최상위 항목이 전부 *다른 글의 제목·본문* 이었다:
+#     w=5.00  "미국 환율보고서, 한국 2026년에도 환율 관찰대상국 재지정"
+#     w=5.00  "미국 재무부가 반기 환율보고서에서 한국을 환율 관찰대상국으로 다시 지정했습니다…"
+# 그리고 이 값들이 `build_insights_block()` 을 통해 **"반드시 적용"** 헤더를 달고
+# 4조합 작성 프롬프트에 그대로 주입되고 있었다.
+#
+# ★ 뿌리 (비직관): `post_quality_analyzer.learn_from_suggestions` 가
+#   `directive = s.get("after")` 를 저장했는데, 프롬프트상 `after` 의 정의가
+#   *"본문에 그대로 들어갈 최종 완성 텍스트"* 다. **글에 넣을 문장을 지침이라며 저장**한 것.
+#   → 제안 스키마에 `rule`(글에 독립적인 일반 지침)을 신설하고 그것만 학습한다.
+#      여기 게이트는 그 뒤를 받치는 *안전망* 이다(upsert 호출자가 3곳이므로).
+#
+# ★ 왜 길이만으로는 못 막나: 실측한 오염분 중에는 33자짜리 *제목* 도 있었다.
+#   짧고 HTML 도 없어 길이·태그 검사를 전부 통과한다. 그래서 **행동 지시문인가** 를 함께 본다
+#   (한국어 지시 어미 — 특정 어휘 목록이 아니라 *문장의 꼴*).
+try:
+    from JARVIS02_WRITER.length_manager import KOREAN_PER_SENTENCE as _K
+except Exception:
+    _K = 50
+# 지침은 '한 줄' 이다 — 2문장 분량을 상한으로 본다. 리터럴을 박지 않고 파생(원칙②).
+DIRECTIVE_MAX_LEN: int = _K * 2
+
+import re as _re
+
+# ★ 지시문 판정 — *어휘 목록이 아니라 문장의 꼴*. 그런데 **어디에 나오는지가 결정적**이다.
+#   초판은 `유지하|포함하` 같은 어간을 문장 *아무 데서나* 찾았는데, 그러면
+#   "두 종목 모두 흑자를 **유지하**며 안정적인 포지션을 이어가고 있어요" 같은
+#   *본문 서술* 이 통과한다(실측으로 걸렸다). 한국어는 서술어가 **문장 끝** 에 오므로
+#   명령·당위는 *끝에서* 판정해야 한다.
+_IMPERATIVE_RE = _re.compile(
+    r"(하라|해라|하자|하십시오|할\s*것|하지\s*말\s*것|말\s*것|"
+    r"해야\s*한다|되어야\s*한다|돼야\s*한다|금지|필수|권장)\s*[.!]?\s*$"
+)
+_HTML_RE    = _re.compile(r"<[a-zA-Z/!]")
+_FACTUAL_RE = _re.compile(r"(PER|ROE|EPS|\d+\.\d+|\d+\s*(%|배|원|억|조|달러|년|월|일))")
+
+
+def directive_issues(directive: str) -> list[str]:
+    """학습 지침으로 부적격인 사유 목록. 비어 있으면 적격.
+
+    전부 *구조* 판정이다 — 금칙어 목록을 두지 않는다(목록은 반드시 낡는다).
+
+    ★ 판정을 엄격하게 두는 이유(비대칭): 옳은 지침을 놓치면 *그 하나를 못 배울* 뿐이지만,
+      틀린 지침을 들이면 **4조합 모든 글의 프롬프트를 오염** 시킨다. 손실 크기가 다르다.
+    """
+    d = (directive or "").strip()
+    if not d:
+        return ["빈 지침"]
+    issues: list[str] = []
+    if _HTML_RE.search(d):
+        issues.append("HTML 태그 포함")
+    if _FACTUAL_RE.search(d):
+        issues.append("이 글의 수치·날짜 포함 — 다음 글에서 거짓이 된다")
+    if len(d) > DIRECTIVE_MAX_LEN:
+        # ★ 사유 문자열에 가변값(실제 길이)을 넣지 않는다 — 집계·중복제거가 깨진다.
+        issues.append(f"{DIRECTIVE_MAX_LEN}자 초과 — 지침이 아니라 문단")
+    if not _IMPERATIVE_RE.search(d):
+        issues.append("행동 지시문이 아님 — 글의 제목·본문 조각으로 보임")
+    return issues
+
+
+def is_learnable_directive(directive: str) -> bool:
+    """학습 자산으로 누적해도 되는 지침인가."""
+    return not directive_issues(directive)
 
 # ── 튜닝 상수 (단일 위치) ────────────────────────────────────────
 UCB_C: float = 0.35           # 탐색 보너스 계수 (신규·저사용 인사이트 기회 부여)
@@ -129,6 +201,12 @@ def build_insights_block(scope: str = "all", theme: str = "",
         # scope='all' 은 SQL 필터에선 '전체'('') 를 의미해야 함 (필터 함정 방지 — 교차 리뷰)
         _scope_filter = "" if scope in ("", "all") else scope
         rows = _db.get_ranked_learning_insights(scope=_scope_filter, limit=limit, days=days)
+        # ★ 주입 직전 2차 방어 (2026-08-02). 저장 게이트가 있는데 왜 또 보는가 —
+        #   오늘 실측으로 *면제·필터가 있어도 앞단이 무력화하면 그대로 샌다* 는 것을 두 번 봤다
+        #   (watchdog 판정 순서 · engagement_judge 회로 면제). 프롬프트 주입은 4조합 모든 글에
+        #   영향을 주는 마지막 관문이므로 여기서 한 번 더 거른다.
+        #   규칙 본체는 `directive_issues` 하나 — 사본을 만들지 않는다(원칙①).
+        rows = [r for r in rows if not directive_issues(r.get("directive") or "")]
         if not rows:
             return ""
         # ★ 발행쌍 고정 — platform 은 키에 넣지 않는다 (NV·TS 가 같은 묶음을 받게 하는 것이 목적).
