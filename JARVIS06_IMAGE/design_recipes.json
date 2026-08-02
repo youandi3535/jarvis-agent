@@ -787,6 +787,29 @@
       "template": "<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"UTF-8\"><style>\n@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800;900&display=swap');\n*{margin:0;padding:0;box-sizing:border-box;font-family:'Noto Sans KR',sans-serif}\n.pg{width:1280px;background:var(--soft)}\n.hd{background:linear-gradient(135deg,var(--hero0),var(--hero1));padding:30px 60px;display:flex;align-items:center;gap:30px}\n.eb{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border:1px solid var(--eyebrow);border-radius:100px;color:var(--eyebrow);font-size:13px;font-weight:700;flex-shrink:0}\n.eb::before{content:\"\";width:6px;height:6px;border-radius:50%;background:var(--eyebrow)}\n.vd{width:1px;height:32px;background:rgba(255,255,255,.2)}\nh1{color:#fff;font-size:30px;font-weight:900;letter-spacing:-.02em;flex:1}\n.sub{color:rgba(255,255,255,.55);font-size:14px;max-width:300px}\n.kb{background:var(--ink);padding:18px 60px}.kb:empty{display:none}\n.pan{padding:26px 60px 18px}\nsection.pano{background:#fff;border-radius:20px;padding:28px 30px;border:1px solid var(--grid);box-shadow:0 4px 22px rgba(0,0,0,.06)}\nsection.pano:has([data-jarvis-empty]){display:none}\n.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px;padding:0 60px 18px}\nsection.cc{background:#fff;border-radius:20px;padding:24px 26px;border:1px solid var(--grid);box-shadow:0 3px 16px rgba(0,0,0,.04)}\nsection.cc:has([data-jarvis-empty]){display:none}\n.mc{padding:0 60px 18px;display:flex;gap:14px}.mc:empty{display:none}\nfooter{padding:16px 60px 26px;border-top:1px solid var(--grid);display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:14px}\n.br{font-weight:800;color:var(--ink)}\n</style></head><body><div class=\"pg\">\n  <header class=\"hd\">\n    <span class=\"eb\">{{EYEBROW}}</span>\n    <div class=\"vd\"></div>\n    <h1>{{TITLE}}</h1>\n    <p class=\"sub\">{{SUBTITLE}}</p>\n  </header>\n  <div class=\"kb\">{{HERO_STATS}}</div>\n  <div class=\"pan\"><section class=\"pano\">{{CHART_1}}</section></div>\n  <div class=\"row\">\n    <section class=\"cc\">{{CHART_2}}</section>\n    <section class=\"cc\">{{CHART_3}}</section>\n  </div>\n  <div class=\"mc\">{{MINI_CARDS}}</div>\n  <footer><span>{{SOURCE}}</span><span class=\"br\">{{BRAND}}</span></footer>\n</div></body></html>",
       "source": "learned-library",
       "created": "2026-07-28"
+    },
+    {
+      "hero": [
+        "#14132f",
+        "#24234d"
+      ],
+      "ink": "#1f1e38",
+      "a1": "#3830e8",
+      "a1s": "#7974f1",
+      "a2": "#dae137",
+      "a2s": "#ebf075",
+      "soft": "#f4f4f9",
+      "muted": "#6d6c7f",
+      "eyebrow": "#9996ee",
+      "grid": "#e9e8ef",
+      "hero_texture": "diagonal",
+      "card_radius": 22,
+      "id": "lib-minimal-light",
+      "name": "미니멀 라이트형",
+      "aesthetic": "minimal clean whitespace",
+      "template": "<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"UTF-8\"><style>\n@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800;900&display=swap');\n*{margin:0;padding:0;box-sizing:border-box;font-family:'Noto Sans KR',sans-serif}\n.pg{width:1280px;background:#fff}\n.topbar{height:5px;background:linear-gradient(90deg,var(--a1),var(--a2))}\n.hd{padding:44px 60px 32px;border-bottom:1px solid var(--grid)}\n.eb{display:inline-flex;align-items:center;gap:7px;padding:6px 14px;background:var(--soft);border-radius:100px;color:var(--a1);font-size:13px;font-weight:700}\n.eb::before{content:\"\";width:6px;height:6px;border-radius:50%;background:var(--a1)}\nh1{color:var(--ink);font-size:48px;font-weight:900;letter-spacing:-.025em;margin:18px 0 10px}\n.sub{color:var(--muted);font-size:18px;line-height:1.5}\n.hs{padding:26px 60px;background:var(--soft);border-bottom:1px solid var(--grid)}.hs:empty{display:none}\n.row2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));border-top:1px solid var(--grid)}\nsection.cc{background:#fff;padding:34px 40px;border-right:1px solid var(--grid)}\nsection.cc:last-child{border-right:none}\nsection.cc:has([data-jarvis-empty]){display:none}\nsection.wc{background:#fff;padding:34px 40px;border-top:1px solid var(--grid)}\nsection.wc:has([data-jarvis-empty]){display:none}\n.mc{padding:22px 60px;display:flex;gap:14px;background:var(--soft);border-top:1px solid var(--grid)}.mc:empty{display:none}\nfooter{padding:16px 60px;border-top:1px solid var(--grid);display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:14px}\n.br{font-weight:800;color:var(--ink)}\n</style></head><body><div class=\"pg\">\n  <div class=\"topbar\"></div>\n  <div class=\"hd\">\n    <span class=\"eb\">{{EYEBROW}}</span>\n    <h1>{{TITLE}}</h1><p class=\"sub\">{{SUBTITLE}}</p>\n  </div>\n  <div class=\"hs\">{{HERO_STATS}}</div>\n  <div class=\"row2\">\n    <section class=\"cc\">{{CHART_1}}</section>\n    <section class=\"cc\">{{CHART_2}}</section>\n  </div>\n  <section class=\"wc\">{{CHART_3}}</section>\n  <div class=\"mc\">{{MINI_CARDS}}</div>\n  <footer><span>{{SOURCE}}</span><span class=\"br\">{{BRAND}}</span></footer>\n</div></body></html>",
+      "source": "learned-library",
+      "created": "2026-08-02"
     }
   ]
 }
