@@ -769,10 +769,18 @@ def get_tool_stats(hours: int = 24) -> list:
 # ── Events ────────────────────────────────────────────────────
 
 def log_event(event_type: str, source: str, payload: dict = None) -> int:
+    # ★ 시크릿 마스킹 관문 (2026-07-30 전수 감사 3위 — 사용자 승인).
+    #   `events.payload` 에도 봇 토큰이 39행 평문으로 있었다(오류 payload 를 그대로 실어서).
+    #   `error_collector` 와 같은 이유로 *생산자* 가 아니라 **적재 관문** 에서 거른다(원칙①).
+    try:
+        from shared.secrets import mask_obj as _mask_obj
+        payload = _mask_obj(payload or {})
+    except Exception:
+        payload = payload or {}
     with get_db() as conn:
         cur = conn.execute(
             "INSERT INTO events (event_type, source, payload) VALUES (?,?,?)",
-            (event_type, source, json.dumps(payload or {}, ensure_ascii=False)),
+            (event_type, source, json.dumps(payload, ensure_ascii=False)),
         )
         return cur.lastrowid or 0
 

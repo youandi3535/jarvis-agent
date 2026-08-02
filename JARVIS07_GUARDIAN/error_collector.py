@@ -552,6 +552,21 @@ def catch(
         msg        = (message or "")[:500]
         tb         = tb_str
 
+    # ★ 시크릿 마스킹 관문 (2026-07-30 전수 감사 3위 — 사용자 승인)
+    #   실측: 텔레그램 봇 토큰이 DB **119행** 에 평문으로 있었다.
+    #   생산자는 "토큰을 로그에 찍은 코드" 가 아니라 *텔레그램 폴링 예외* 였다 —
+    #   requests 예외 문자열이 실패한 URL(`/bot<토큰>/getUpdates`)을 통째로 담고,
+    #   그게 여기로 들어와 그대로 박혔다. **아무도 기록하려 하지 않았는데 기록됐다.**
+    #   → 그래서 생산자를 하나씩 쫓지 않고 *반드시 지나가는 이 관문* 에서 한 번 거른다(원칙①).
+    #   가릴 값은 `.env` 키 이름 규칙에서 파생하므로 새 비밀이 생겨도 자동 적용(원칙②).
+    try:
+        from shared.secrets import mask as _mask_secret
+        msg     = _mask_secret(msg)
+        tb      = _mask_secret(tb) if tb else tb
+        context = _mask_secret(context) if context else context
+    except Exception:
+        pass   # 마스킹 실패가 오류 기록 자체를 죽이면 안 된다
+
     # e7 (J02→J07 오류 보고) — J02 소속 에이전트가 보고하는 경우
     _J02_SRCS = ("writer", "economic", "theme", "draft", "law_enforcer", "seo",
                  "poster", "revise", "scheduler", "trend_economic", "trend_theme")
