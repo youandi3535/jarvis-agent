@@ -143,11 +143,20 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ★ 설계-우선 리서치 수집 — collect_research (ADR 012, 사용자 박제 2026-07-02)
 #
-#  "항상 설계를 먼저 하고 그 설계대로 수집한다. 부족하면 더 받아온다."
+#  "신뢰순위대로 한 번에 충분히 받아온다."
 #
 #  흐름: ① 티어순 광역 수집(_collect_tier — API>뉴스>기사>웹, 신뢰순위) + discover 웹발견
-#        → ② 얇은 문서 전문 딥페치 → ③ EvidencePack 추출·커버리지 측정
-#        → ④ 미충족 시 2라운드 재수집(변형 쿼리+discover) → ⑤ 박제·반환
+#        → ② 얇은 문서 전문 딥페치 → ③ EvidencePack 추출·커버리지 측정 → ④ 박제·반환
+#
+#  ★ 갭 재수집 순환은 **없다** (2026-07-29 정식 폐기 — 사용자 승인).
+#    ADR 012 는 "미충족 질문만 2라운드 재수집" 을 적었고 `max_rounds=3` 인자도 남아 있었으나,
+#    본문에 루프가 0개라 **한 번도 돈 적이 없다**(AST 실측: 인자 등장 1회=시그니처뿐, For/While 0).
+#    되살리지 않는 이유는 ADR 012 자신이 적은 사고다 — 커버리지 루프가 재수집을 무한정 돌려
+#    **06:30 발행이 2시간+ 정지**(ERRORS [383][385]). 발행 시각이 계약인 시스템에서 수집이
+#    발행창을 먹는 구조는 되살릴 값이 없다. 자료 부족은 '더 모으기' 가 아니라
+#    prepublish_gate 의 `data_insufficient` 즉시 abort 로 처리한다.
+#    ※ **커버리지 *측정* 은 그대로 유지** — evidence_pack 이 pack["coverage"] 에 담고 로그로 남긴다.
+#      부족을 *알리는* 것과 부족하면 *다시 도는* 것은 다른 문제이고, 폐기한 것은 후자뿐이다.
 #  (구 plan_research 설계-LLM·질문별 조준수집은 2026-07-11 _collect_tier 재작성으로 폐지)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -322,7 +331,7 @@ def _collect_tier(provs: list, theme: str, sector: str, cap: int,
 
 @_auto_catch("collector", reraise=True)
 def collect_research(theme: str, sector: str = "", angle: str = "",
-                     max_rounds: int = 3, with_facts: bool = False,
+                     with_facts: bool = False,
                      with_digest: bool = False) -> dict:
     """★ 티어순 상한 수집 (사용자 박제 2026-07-11 — ERRORS [423]):
     처음부터 API 최대 10·나머지 최대 5, cascade 이월.

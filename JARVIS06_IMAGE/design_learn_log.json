@@ -267,5 +267,14 @@
     "aesthetic": "panoramic wide chart",
     "via": "라이브러리",
     "total": 33
+  },
+  {
+    "date": "2026-08-02",
+    "action": "learned",
+    "id": "lib-minimal-light",
+    "name": "미니멀 라이트형",
+    "aesthetic": "minimal clean whitespace",
+    "via": "라이브러리",
+    "total": 34
   }
 ]

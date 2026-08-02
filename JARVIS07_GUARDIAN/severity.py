@@ -601,13 +601,37 @@ def is_transient(error_type: str, message: str = "", source: str = "",
 # 6. 표시용 라벨
 # ══════════════════════════════════════════════════════════════════
 
+# ★ 도메인 접두사 → 라벨 (ERRORS [548]). `_CATEGORY_LABELS` 는 *파이썬 예외 이름* 표라
+#   도메인 타입(HarnessFactuality 등)을 담을 자리가 아니다. 접두사만 등록하면
+#   그 아래 세부 타입이 **몇 개 늘든 자동으로** 분류된다 — 타입마다 표에 줄을 추가하는
+#   방식은 새 kind 가 생길 때마다 낡는다(원칙②).
+#   ※ 접두사는 각 도메인의 파생 함수가 만드는 것과 짝: harness_error_type ·
+#     watchdog_error_type · posting_error_type · draft_fix_error_type.
+_DOMAIN_PREFIX_LABELS: tuple = (
+    ("Harness",  "발행 검증"),      # harness Layer 3 판정 (사실성·매력도·분량·중단 등)
+    ("Watchdog", "정지 감지"),      # freeze / 데드라인 초과
+    ("Posting",  "발행 대응"),      # 실패 후 자동 대응 결과
+    ("DraftFix", "대본 즉시수정"),   # Layer 3 inline 패치
+)
+
+
 def describe_category(error_type: str) -> str:
     """error_type → 한글 분류 라벨. 미등록 타입은 '기타' (판단 실패가 아니라 미분류 표시)."""
     et = (error_type or "").strip()
     if et in _CATEGORY_LABELS:
         return _CATEGORY_LABELS[et]
     short = _short_type(et)  # "selenium.common.exceptions.WebDriverException" 대응
-    return _CATEGORY_LABELS.get(short, _DEFAULT_CATEGORY)
+    if short in _CATEGORY_LABELS:
+        return _CATEGORY_LABELS[short]
+    # 도메인 접두사 파생 — 가장 긴 접두사 우선(겹칠 때 더 구체적인 쪽)
+    for pref, label in sorted(_DOMAIN_PREFIX_LABELS, key=lambda x: -len(x[0])):
+        if short.startswith(pref) and len(short) > len(pref):
+            return label
+    # ★ 오류가 아닌 *변경·정책 기록* (GitCommit·ExternalEdit 등) — 목록은 error_collector 소유.
+    #   화면에서 "기타" 로 뭉뚱그려지면 오류 975건이 섞여 보인다 — 실제로 그랬다.
+    if et in _policy_types() or short in _policy_types():
+        return "변경 기록"
+    return _DEFAULT_CATEGORY
 
 
 def format_error_label(error_type: str) -> str:
@@ -747,7 +771,72 @@ def selfcheck() -> list[str]:
     if is_auto_fixable("high", "WebDriverException"):
         bad.append("[결함3] is_auto_fixable(high, WebDriverException) == True — 환경 오류에 LLM 낭비")
 
+    # ── 결함4: 오류 타입이 뭉뚱그려져 있지 않은가 (사용자 박제 2026-07-29) ──
+    bad.extend(type_granularity_issues())
+
     return bad
+
+
+# ── 오류 타입 세분화 감시 (사용자 박제 2026-07-29 — ERRORS [547]) ────────
+#
+# **규정: 오류는 세분화해서 기록·매칭·보고한다.**
+#   "RuntimeError" 처럼 뭉뚱그린 타입은 기록만 보고 무슨 오류인지 알 수 없고,
+#   타입 기반 게이트(_PATTERN_FIXABLE_TYPES·_TRANSIENT_TYPES·DETERMINISTIC_CODE_ERROR_TYPES)
+#   와 Tier 1 지문 매칭이 **전부 무력화**된다. 실측(2026-07-29): 전체 4,506건 중
+#   타입만으로 분류 가능한 것이 **7.1%** 뿐이었다.
+#
+# ★ 왜 "금지 타입 목록" 을 만들지 않는가 (원칙②): 목록은 낡는다. 대신 **데이터에서 파생**한다 —
+#   *한 소스가 충분히 많은 오류를 내면서 고유 타입이 1개* 면 그 타입은 변별력이 0이다.
+#   새 소스가 생겨도 자동으로 검사 대상이 된다.
+#
+# ★ 면제: `error_collector._MANUAL_POLICY_TYPES` (GitCommit·ExternalEdit 등)는
+#   *오류가 아니라 변경·정책 기록* 이라 단일 타입이 정상이다. 그 목록도 파생한다(사본 금지).
+
+GRANULARITY_MIN_SAMPLES = 20      # 이 미만은 표본 부족 — 판정 보류
+# ★ 최근 N일만 본다 (ERRORS [547]) — 과거 데이터로는 절대 안 꺼진다.
+#   이 감시는 *지금 코드가 뭉뚱그려 기록하고 있는가* 를 묻는다. 이미 쌓인 옛 기록까지
+#   세면 코드를 고쳐도 알람이 영구히 울리고, 그러면 진짜 신호가 왔을 때 아무도 안 본다.
+GRANULARITY_WINDOW_DAYS = 14
+
+
+def _policy_types() -> frozenset:
+    """오류가 아닌 '기록' 타입 — error_collector 단독 소유. 사본을 만들지 않는다."""
+    try:
+        from JARVIS07_GUARDIAN.error_collector import _MANUAL_POLICY_TYPES  # noqa: PLC0415
+        return frozenset(_MANUAL_POLICY_TYPES)
+    except Exception:
+        return frozenset()
+
+
+def type_granularity_issues(min_samples: int = GRANULARITY_MIN_SAMPLES,
+                            window_days: int = GRANULARITY_WINDOW_DAYS) -> list:
+    """소스별로 오류 타입이 뭉뚱그려져 있으면 알린다. DB 미가용 시 조용히 [].
+
+    판정: 최근 `window_days` 일 안에서 한 소스가 `min_samples` 이상 오류를 냈는데
+          **고유 타입이 1개** → 세분화 필요.
+    """
+    out: list = []
+    try:
+        from shared.db import get_db  # noqa: PLC0415
+        policy = _policy_types()
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT source, COUNT(*) n, COUNT(DISTINCT error_type) d, "
+                "       MIN(error_type) t FROM error_log "
+                "WHERE source IS NOT NULL AND source <> '' "
+                "  AND ts_ok GROUP BY source".replace(
+                    "ts_ok",
+                    f"timestamp >= datetime('now','localtime','-{int(window_days)} day')")
+            ).fetchall()
+        for r in rows:
+            src, n, d, t = r[0], int(r[1] or 0), int(r[2] or 0), str(r[3] or "")
+            if n < min_samples or d != 1 or t in policy:
+                continue
+            out.append(f"[결함4] source='{src}' {n}건이 전부 '{t}' 한 타입 — "
+                       f"타입만으로 무슨 오류인지 알 수 없다(세분화 필요)")
+    except Exception:
+        pass          # 진단이 본 판정을 막지 않는다 (fail-open)
+    return out
 
 
 if __name__ == "__main__":  # pragma: no cover — 수동 점검용 (읽기 전용·외부 영향 없음)

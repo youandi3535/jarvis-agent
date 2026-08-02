@@ -294,10 +294,24 @@ def judge_engagement(title: str, content: str, post_type: str = "",
     last_err = ""
     for _attempt in range(2):
         try:
-            # ★ 비필수 (ERRORS [368]): 매력도는 fail-open(폴백=통과)이므로 스로틀 시 즉시 폴백
-            #   — 발행 임계경로를 매력도 LLM 대기로 막지 않는다(재생성 사유일 뿐).
+            # ★ 2026-07-30 정정 — 종전 `_nonessential=True` 는 **네이버 글을 3주간 전량
+            #   미채점** 으로 만들었다(실측 07-26~29 naver 0/8 · tistory 7/8, 100% 결정론적).
+            #   사슬: 네이버가 먼저 발행(07:12)되는데 `get_pending_analysis` 가 `created_at DESC`
+            #   라 **티스토리가 먼저** 분석돼 LLM 을 쓰고, 이어지는 네이버 차례엔 회로가
+            #   throttle 상태 → `_nonessential` 이 SDK 미호출·즉시 폴백 → 점수 None →
+            #   `quality_learner` 보상 귀속 불가. **ADR 014 강화학습 폐쇄루프가 한쪽만 열려 있었다.**
+            #
+            #   왜 `_nonessential` 이 붙어 있었나: 종전엔 이 심사관이 *발행 전* 게이트도 겸해서
+            #   임계경로를 막지 않으려는 조치였다(ERRORS [368]). 그런데 2026-07-12 `0f9cdbc`
+            #   로 발행 전 판정이 `prepublish_gate._combined_quality_call` 로 통합되면서
+            #   **이 함수의 호출자는 발행 *후* 분석 하나만 남았다**(실측 호출자 1곳).
+            #   발행 후 분석은 subprocess 로 돌고 아무도 기다리지 않는다 — 임계경로가 아니다.
+            #
+            #   `_essential=True` 인 이유: 이 점수가 곧 **강화학습 보상 신호**(reward=총점/100)다.
+            #   못 받으면 그 글은 학습에서 통째로 사라진다. 회로가 open 이어도 1회는 실시도해야
+            #   하는 '품질 조타수' 호출이다(ERRORS [300] 과 같은 부류). 글당 1회·600토큰.
             raw = _inv("engagement_judge", user_msg, system=system, max_tokens=600,
-                       timeout=45, _nonessential=True)
+                       timeout=45, _essential=True)
             if not raw or not raw.strip():
                 # ★ 빈 응답 = 스로틀 → 즉시 폴백 (ERRORS [400] 동일 패턴 — 회로차단기 보호)
                 last_err = "스로틀(빈 응답)"

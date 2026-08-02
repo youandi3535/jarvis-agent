@@ -251,9 +251,15 @@ def _publish_tistory(draft: dict, theme: str, sector: str,
         from JARVIS08_PUBLISH.platforms import post_to_tistory
         from JARVIS06_IMAGE.draft_processor import publish_assembled
 
-        # ★ 사용자 박제 2026-05-15 — 태그 특수기호 절대 금지 (제14조 단일 진입점)
-        from shared.seo import sanitize_tags as _stg
-        tags = _stg([theme, sector, '테마주', '주식', '투자'])
+        # ★ 태그는 JARVIS08 단일 진입점 (2026-07-29). 종전엔 여기서
+        #   `[theme, sector, '테마주', '주식', '투자']` 고정 템플릿을 만들었다 —
+        #   ① 모든 테마 글이 같은 태그라 검색 변별력 0 ② BLOG_SUPREME_LAW 제1-B조
+        #   (고정 풀·고정 템플릿 금지) 위반 ③ 실측 네이버 4개로 NAVER_HASHTAG_MIN(5)
+        #   미달이라 post_scorer N7 감점. 테마명·섹터는 seed 로 살리고 나머지는 LLM 이 채운다.
+        #   (특수기호 제거는 generate_tags 안의 sanitize 가 담당 — 제14조 그대로 준수)
+        from JARVIS08_PUBLISH.tags import generate_tags as _gen_tags
+        tags = _gen_tags(draft.get("title", theme), draft.get("content", ""),
+                         "tistory", seed_tags=[theme, sector])
 
         def _pub_fn(blocks, title, **_kw):
             return post_to_tistory(
@@ -297,9 +303,15 @@ def _publish_naver(draft: dict, theme: str, sector: str) -> dict:
     try:
         from JARVIS08_PUBLISH.platforms import post_to_naver
         from JARVIS06_IMAGE.draft_processor import publish_assembled
-        # ★ 사용자 박제 2026-05-15 — 태그 특수기호 절대 금지 (제14조 단일 진입점)
-        from shared.seo import sanitize_tags as _stg
-        tags = _stg([theme, sector, '테마주', '주식', '투자'])
+        # ★ 태그는 JARVIS08 단일 진입점 (2026-07-29). 종전엔 여기서
+        #   `[theme, sector, '테마주', '주식', '투자']` 고정 템플릿을 만들었다 —
+        #   ① 모든 테마 글이 같은 태그라 검색 변별력 0 ② BLOG_SUPREME_LAW 제1-B조
+        #   (고정 풀·고정 템플릿 금지) 위반 ③ 실측 네이버 4개로 NAVER_HASHTAG_MIN(5)
+        #   미달이라 post_scorer N7 감점. 테마명·섹터는 seed 로 살리고 나머지는 LLM 이 채운다.
+        #   (특수기호 제거는 generate_tags 안의 sanitize 가 담당 — 제14조 그대로 준수)
+        from JARVIS08_PUBLISH.tags import generate_tags as _gen_tags
+        tags = _gen_tags(draft.get("title", theme), draft.get("content", ""),
+                         "naver", seed_tags=[theme, sector])
 
         def _pub_fn(blocks, title, **_kw):
             return post_to_naver(

@@ -168,17 +168,12 @@ DEFAULT_JOBS: list[dict] = [
      "kwargs":{"minutes":5},
      "callback":"shared.notify.job_flush_outbox",
      "misfire_grace_time":300, "owner":"jarvis00_infra"},
-    # ── JARVIS02 로그 모니터링 ──────────────────────────────────────
-    {"id":"log_monitor_economic", "name":"경제 브리핑 로그 확인 (07:45)", "trigger":"cron",
-     "kwargs":{"hour":7, "minute":45},
-     "callback":"JARVIS02_WRITER.log_monitor.job_check_economic_result",
-     "misfire_grace_time":1800, "owner":"jarvis02_writer"},
-    # ★ 2026-07-25 정정: 테마 발행이 21:00 인데 감시가 16:30 이었다(옛 16시 발행 시절 잔재) —
-    #   *발행 4시간 半 전* 로그를 요약해 보고하던 죽은 잡. 경제(발행+45분)와 같은 간격으로 통일.
-    {"id":"log_monitor_theme",     "name":"테마주 로그 확인 (21:45)", "trigger":"cron",
-     "kwargs":{"hour":21, "minute":45},
-     "callback":"JARVIS02_WRITER.log_monitor.job_check_theme_result",
-     "misfire_grace_time":1800, "owner":"jarvis02_writer"},
+    # ── 발행 완결성 감사 ────────────────────────────────────────────
+    # ★ 2026-07-29: 종전 `log_monitor_{economic,theme}` 2잡 폐기.
+    #   그 잡들은 로그 텍스트에 '네이버' 와 '✅' 가 각각 한 번이라도 있으면 성공으로 봤다 —
+    #   10일 표본 위양성 2일·위음성 1일. 틀린 초록불은 없느니만 못하다.
+    #   대체 잡은 아래 `_build_publish_audit_jobs()` 가 **발행 잡에서 파생** 해 만든다
+    #   (시각을 박지 않는다 — 선례: 쿠키 사전점검).
     # ── JARVIS06 IMAGE — 인포그래픽 디자인 강화학습 (★ 사용자 박제 2026-07-05) ──
     # 매일 05:00 Claude 가 새 전문 디자인 레시피 1개 창작 → 게이트 통과분만 누적 → pro_templates 소비.
     # 오류학습과 동형: 검증된 자산만 생존 → 다양성·품질 복리 상승. (ERRORS [359])
@@ -277,7 +272,10 @@ def _publish_job_times() -> list[tuple[str, int, int]]:
     for j in DEFAULT_JOBS:
         if j.get("trigger") != "cron":
             continue
-        if "run_self_repair_then" not in (j.get("callback") or ""):
+        # ★ 발행 잡 판별은 `job_llm_priority.is_publish_callback` 단독 (마커 소유자).
+        #   종전엔 여기서 문자열을 다시 검사해 같은 판단이 2벌이었다.
+        from JARVIS04_SCHEDULER.job_llm_priority import is_publish_callback
+        if not is_publish_callback(j.get("callback")):
             continue
         kw = j.get("kwargs") or {}
         h = kw.get("hour")
@@ -303,6 +301,43 @@ def _build_cookie_precheck_jobs() -> list[dict]:
 
 
 DEFAULT_JOBS.extend(_build_cookie_precheck_jobs())
+
+
+# ══════════════════════════════════════════════════════════════════
+# ★ 발행 완결성 감사 (2026-07-29 전수 감사 1위 — 사용자 승인)
+#   실측: 2026-07-12~28 기대 68건 중 결손 18건(달성률 73.5%)인데 job_runs 는
+#   경제 23/23·테마 14/14 전부 success=1. 잡은 '내가 끝까지 돌았는가' 만 알고
+#   '글이 나갔는가' 는 모른다 — 그걸 묻는 코드가 저장소에 0줄이었다.
+#   판정 본체는 `JARVIS08_PUBLISH/publish_ledger.py` (발행 도메인 소유). 여기는 *시각* 만 정한다.
+#   쿠키 사전점검과 같은 형태로 **발행 잡 cron 에서 파생** — 발행 시각을 옮기면 감사도 따라 이동.
+#   ★ 지연(lag)도 리터럴로 박지 않는다 — 초판은 `50분` 고정이었는데 실측 59건 중 **19건(32%)**
+#     이 그 창을 넘겼다(최대 +246분). 감사가 너무 이르면 *성공한 발행을 결손으로 오신고* 해
+#     폐기한 log_monitor 의 위양성을 방향만 바꿔 재도입하게 된다.
+#     → `publish_ledger.audit_lag_minutes(misfire_grace)` 가 파생한다:
+#       잡이 늦게 시작될 수 있는 상한(misfire_grace_time) + 플랫폼 수 × 플랫폼당 상한
+#       (`watchdog.BLOG_ACTION_DEADLINE_SEC`). 그 값들을 바꾸면 감사 시각이 따라온다.
+def _build_publish_audit_jobs() -> list[dict]:
+    """발행 잡마다 '발행 N분 후 완결성 감사' 잡 1개씩 생성 (N 은 파생)."""
+    from JARVIS08_PUBLISH.publish_ledger import audit_lag_minutes
+
+    grace_by_id = {j["id"]: int(j.get("misfire_grace_time") or 0) for j in DEFAULT_JOBS}
+    jobs = []
+    for jid, h, m in _publish_job_times():
+        lag = audit_lag_minutes(grace_by_id.get(jid, 0))
+        total = (h * 60 + m + lag) % (24 * 60)
+        ah, am = divmod(total, 60)
+        jobs.append({
+            "id": f"j08_publish_audit_{jid}",
+            "name": f"발행 완결성 감사 ({ah:02d}:{am:02d} — {jid} 발행 {lag}분 후)",
+            "trigger": "cron", "kwargs": {"hour": ah, "minute": am},
+            "callback": "JARVIS08_PUBLISH.publish_ledger.job_audit_publish_completeness",
+            # 데몬이 늦게 떠도 그 슬롯 감사는 살린다 — 다음 발행 슬롯 전까지 유효.
+            "misfire_grace_time": 6 * 3600, "owner": "jarvis08_publish",
+        })
+    return jobs
+
+
+DEFAULT_JOBS.extend(_build_publish_audit_jobs())
 
 
 def _resolve_callback(path: str) -> Callable:

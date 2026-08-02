@@ -323,6 +323,16 @@ def _spawn_publisher(label: str, cmd: list, log_stem: str,
     # ★ 로그 유실 방지 (ERRORS [289]): 파일 리다이렉트 시 블록 버퍼링 → SIGKILL 시 마지막
     #   수 분(발행 단계) 로그 통째 유실. 무버퍼 강제.
     _env["PYTHONUNBUFFERED"] = "1"
+    # ★ 워치독 대상 표식 (2026-07-29 전수 감사 6위 — 사용자 승인)
+    #   `watchdog.is_killable_subprocess()` 는 이 변수를 최우선으로 읽고, 없으면 argv 에
+    #   `--scheduled` 가 있는지로 판정한다. 그런데 **테마 기동에는 그 플래그가 없어서**
+    #   실측 `(['trend_theme_writer.py','캐릭터상품'])=False` / `(['economic_poster.py',
+    #   '--scheduled'])=True` — 경제만 감시되고 **테마는 워치독 사각지대**였다.
+    #   kill 이 꺼지면 watchdog 은 감시 자체를 종료하므로(watchdog.py:170) 테마 발행이
+    #   얼어붙어도 아무도 깨우지 않는다. 원칙③(4조합 전부) 위반.
+    #   → 발행 subprocess 가 *반드시* 지나는 이 공통 경로에서 한 번에 표식한다(원칙①).
+    #     argv 문자열 판정에 의존하면 기동 명령이 바뀔 때마다 또 어긋난다.
+    _env["JARVIS_KILLABLE_SUBPROCESS"] = "1"
     if extra_env:
         _env.update({k: str(v) for k, v in extra_env.items()})
 

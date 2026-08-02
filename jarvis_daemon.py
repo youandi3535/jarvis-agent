@@ -191,7 +191,7 @@ def _port_listeners(port: int, exclude_pid: int | None = None) -> list[int]:
     try:
         res = subprocess.run(
             ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, env=_build_env(),
         )
     except Exception as e:
         log.warning(f"_port_listeners lsof 오류 (port {port}): {e}")
@@ -255,7 +255,7 @@ def _kill_orphan_streamlits():
 
 def _build_env() -> dict:
     """자식 프로세스용 환경변수 — PATH prepend 포함."""
-    _EXTRA = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"]
+    _EXTRA = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/sbin", "/sbin"]
     env = os.environ.copy()
     env["PATH"] = ":".join(_EXTRA) + ":" + env.get("PATH", "")
     return env
@@ -566,6 +566,24 @@ def main():
         enable_hang_forensics()
     except Exception as _e_fh:
         log.warning(f"⚠️ hang 포렌식 활성화 실패: {_e_fh}")
+
+    # -0.5. ★ SIGTERM 정상 종료 (2026-07-29 전수 감사 6위 — 사용자 승인)
+    #     파이썬 기본 SIGTERM 은 프로세스를 *즉사* 시킨다 — try/finally 도 atexit 도 안 돈다.
+    #     이 데몬의 정리 로직은 전량 main() 의 finally(락 해제·스케줄러 shutdown·자식 정리)에
+    #     있어 통째로 스킵됐다. 실측: daemon.log '데몬 v2 시작' 288회 대 '종료 완료' 153회
+    #     → **약 47% 가 정리 없이 끊겼다**. restart_daemon.sh 의 pkill 이 보내는 것도 SIGTERM 이라
+    #     재시작할 때마다 이 경로를 탔다.
+    #     핸들러는 Event 만 세운다 — 메인 루프의 wait() 가 깨어나 finally 가 정상 수행된다.
+    #     (keeper 는 이미 같은 자리에서 signal.signal 을 쓴다 — 데몬만 빠져 있었다.)
+    def _on_term(signum, _frame):
+        log.info(f"📥 시그널 {signum} 수신 — 정상 종료 절차 진입")
+        _daemon_shutdown.set()
+
+    for _sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(_sig, _on_term)
+        except (ValueError, OSError) as _e_sig:   # 메인 스레드가 아닌 경우 등
+            log.warning(f"⚠️ 시그널 {_sig} 핸들러 등록 실패: {_e_sig}")
 
     # 0. ★ Layer 0 preflight — 사용자 박제 2026-05-17 (ADR 009)
     #    부팅·환경 검증. 실패 시 sys.exit(1) 으로 *다른 어떤 코드 도달 전* 차단.

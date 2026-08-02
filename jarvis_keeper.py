@@ -42,7 +42,37 @@ KEEPER_LOCK_FILE = JARVIS_DIR / "logs" / "keeper.lock"      # ★ keeper 자신�
 _keeper_lock_fd = None   # 프로세스 생존 동안 열어 둬야 락 유지 (GC 방지)
 CHECK_INTERVAL = 30      # 초
 MAX_RESTART_DELAY = 300  # 연속 실패 시 최대 5분 대기
-HANG_THRESHOLD = 360     # heartbeat 이만큼(초) stale 이면 hang 판정 (6분 = 6 missed beats)
+
+# ★ hang 판정 임계 — heartbeat 실제 주기에서 **파생** (2026-07-29 전수 감사 6위, 사용자 승인)
+#   종전엔 `HANG_THRESHOLD = 360` 리터럴 + 주석 "6분 = 6 missed beats" 였다.
+#   그 주석은 heartbeat 가 60초일 때만 참인데 **실제 주기는 180초**(DEFAULT_JOBS
+#   `infra_heartbeat`, interval seconds=180) — 즉 실제로는 **2회 지연이면 SIGKILL** 이었다.
+#   정상 부하로도 두 번 밀리는 일은 흔하고, 실제로 2026-07-19 keeper.log 에서 두 번 발화했다.
+#   ★ 이게 왜 치명적인가: keeper 는 **SIGKILL** 을 보낸다(GIL 잠긴 hang 에 SIGTERM 이 무력해서).
+#     SIGKILL 은 파이썬 핸들러로 잡을 수 없으므로 데몬 쪽 정상종료 처리가 **원리적으로 무의미** 해진다.
+#     발행 중이었다면 그대로 소실된다 — 07-23 21:06 테마 발행이 21:20 'Scheduler has been shut down'
+#     으로 끊기고 그날 테마 0건이 된 사고가 이 형태다.
+#   → 주기를 바꾸면 임계가 자동으로 따라오게 파생한다(② 동적 설계). 주석이 거짓말할 수 없다.
+_MISSED_BEATS_TOLERANCE = 6      # 이 횟수만큼 연속 결측이면 hang
+_HEARTBEAT_FALLBACK_SEC = 180    # DEFAULT_JOBS 를 못 읽을 때만 (fail-safe: 실측 주기와 동일)
+
+
+def _heartbeat_interval_sec() -> int:
+    """데몬 heartbeat 실제 주기 — DEFAULT_JOBS 에서 파생. 실패 시 폴백."""
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+        for j in DEFAULT_JOBS:
+            if j.get("id") == "infra_heartbeat" and j.get("trigger") == "interval":
+                kw = j.get("kwargs") or {}
+                sec = int(kw.get("seconds") or 0) + int(kw.get("minutes") or 0) * 60
+                if sec > 0:
+                    return sec
+    except Exception:
+        pass
+    return _HEARTBEAT_FALLBACK_SEC
+
+
+HANG_THRESHOLD = _heartbeat_interval_sec() * _MISSED_BEATS_TOLERANCE
 HANG_GRACE = 180         # (재)시작 직후 이 시간(초) 동안은 hang 검사 유예 (부팅 여유)
 BOOT_TIMEOUT = 180       # ★ (2026-07-06) 스폰된 데몬이 PID_FILE 쓸 때까지 최대 대기 —
                          # langgraph/sentence-transformers 등 무거운 import + Layer 0

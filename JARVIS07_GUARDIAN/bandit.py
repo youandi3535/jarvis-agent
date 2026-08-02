@@ -192,6 +192,30 @@ def _static_fixer_arms() -> frozenset:
     return _ARMS_CACHE or _persisted_static_arms()
 
 
+def _rankable_arms() -> frozenset:
+    """★ 밴딧이 *실제로 랭킹·보상하는* arm 이름 (ERRORS [547]).
+
+    `_static_fixer_arms()`(=`_FIXER_REGISTRY`) 와 다르다 — 레지스트리에는 arm 이 될 수
+    없는 이름이 섞여 있다. `auto_patch` 가 그렇다: `_fix_auto_patch` 는 placeholder 이고
+    실제 복원은 `_fix_from_learned` 안에서 일어나므로 `try_pattern_fix` 의 후보
+    (`[("learned", …)] + _STATIC_FIXERS_CORE`)에 들어가지 않는다. 보상도
+    `bandit_arm_name` 이 `verified:`/`new:` 로 만들어 `learned_*` 로 흡수된다.
+    → 레지스트리 기준으로 재면 영원히 "누락" 오탐이 뜬다. 검사가 늑대를 계속 외치면
+      진짜 누락이 왔을 때 아무도 안 본다.
+
+    ★ 후보 목록에서 **파생** — 손으로 6개를 적지 않는다(원칙②). `_STATIC_FIXERS_CORE`
+      에 fixer 를 추가하면 감시 대상이 자동으로 따라 늘어난다.
+    """
+    try:
+        from JARVIS07_GUARDIAN.pattern_fixer import _STATIC_FIXERS_CORE  # noqa: PLC0415
+        got = frozenset(n for n, _ in _STATIC_FIXERS_CORE)
+        if got:
+            return got
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"[BANDIT] 랭킹 후보 파생 실패 — D4 검사 보류: {e}")
+    return frozenset()
+
+
 def _arm_key(name: str) -> Optional[str]:
     """★ 임의의 fixer 이름 → 유한한 전략 arm 키 (밴딧 무한 증식 방지 단일 초크포인트).
 
@@ -726,13 +750,24 @@ def selfcheck() -> list[str]:
         if all(abs(a - _LOSS) < 1e-9 for a in avgs.values()):
             issues.append("[D3] 전 arm 이 최저 보상에 고착 — 성공 관측이 유입되지 않는다")
 
-        # [D4] arm 공간이 pattern_fixer 레지스트리와 어긋남 → 새 fixer 가 학습에서 누락
-        derived = _static_fixer_arms()
+        # [D4] arm 공간이 *실제 랭킹 후보* 와 어긋남 → 새 fixer 가 학습에서 누락
+        #
+        # ★ 왜 `_static_fixer_arms()`(=_FIXER_REGISTRY) 가 아니라 `_rankable_arms()` 인가
+        #   (ERRORS [547]): 레지스트리에는 **arm 이 될 수 없는 이름** 이 섞여 있다.
+        #   `auto_patch` 가 그렇다 — `_fix_auto_patch` 는 *placeholder* 이고 실제 복원은
+        #   `_fix_from_learned` 안에서 일어난다. 그래서 `try_pattern_fix` 의 후보 목록
+        #   (`[("learned", …)] + _STATIC_FIXERS_CORE`)에 들어가지 않고, 보상도
+        #   `bandit_arm_name` 이 `verified:`/`new:` 로 만들어 `learned_*` 로 흡수된다.
+        #   → 레지스트리 기준으로 재면 `auto_patch` 가 **영원히 "누락"** 으로 잡힌다(오탐).
+        #   검사가 늑대를 계속 외치면 진짜 누락이 왔을 때 아무도 안 본다.
+        #   ※ `_arm_key` 는 종전대로 관대하게 둔다 — 보상 유실(arm_key=None)이
+        #     랭킹 지연보다 비싸다는 그 함수의 판단은 여전히 옳다.
+        derived = _rankable_arms()
         if derived:
             missing = derived - set(arms) - _RESERVED_ARMS
             if missing:
                 issues.append(
-                    f"[D4] 레지스트리에 있으나 arm 이 없는 fixer: {sorted(missing)} "
+                    f"[D4] 랭킹 후보인데 arm 이 없는 fixer: {sorted(missing)} "
                     f"— 첫 보상 때 생성되므로 지속되면 보상 경로 점검"
                 )
     except Exception as e:  # noqa: BLE001
