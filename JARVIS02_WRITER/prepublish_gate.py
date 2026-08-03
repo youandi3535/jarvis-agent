@@ -322,6 +322,23 @@ def prepublish_quality_issues(draft, post_type: str = "", platform: str = "",
             except Exception as _e:
                 log.warning(f"[prepublish_gate] score_post 실패 → 통과(fail-open): {_e}")
 
+    # ── ★ C축: 학습 지침 준수 (2026-08-03 — 사용자 승인) ─────────────────────
+    #   실측: 08-03 네이버 테마글이 주입된 지침 8건 중 2건을 어겼고 **같은 지적이 다음
+    #   분석에서 또 나왔다**. 넣어주기만 하고 검사하지 않으면 학습은 프롬프트만 길게 만든다.
+    #   ★ kind 를 "engagement" 로 둔다 — CLAUDE_WRITER 규칙상 `draft_quality` 가 아니어야
+    #     `_fix_drafts` 가 inline 패치를 건너뛰고 **WRITER step 재실행(재작성)** 으로 간다.
+    #     지침 위반은 문장 하나 고쳐 될 일이 아니라 글을 다시 쓰는 게 맞다.
+    #   ★ detail 에는 *지침 원문* 만 넣는다(점수·번호 등 가변값 금지) — attempt 마다 지문이
+    #     흔들리면 harness abort 가 안 걸려 max_attempts 를 낭비한다.
+    #   ★ 매력도 킬스위치를 공유한다 — 둘 다 '재작성 사유' 계열이라 함께 껐다 켜야 한다.
+    if _eng_on:
+        _violated = (cqr.get("violated_directives") or []) if "cqr" in dir() else []
+        if _violated:
+            log.warning(f"[prepublish_gate] 🚫 학습 지침 {len(_violated)}건 위반 → 재작성")
+            for _d in _violated[:3]:   # 상한 3 — 한 번에 다 못 고친다. 지문도 짧게 유지.
+                out.append({"kind": "engagement",
+                            "detail": f"[학습지침] 주입된 지침을 어겼다 — {_d}"})
+
     return out
 
 
@@ -428,7 +445,8 @@ ENGAGEMENT_THRESHOLDS: dict = {
 }
 
 
-def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -> dict:
+def _combined_quality_call(body: str, title: str, corpus: str, post_type: str,
+                           theme: str = "") -> dict:
     """사실성 + 매력도 통합 LLM 1회 판정 (★ 사용자 박제 2026-07-12).
 
     Returns: {"blocked_claims": [str], "engagement_passed": bool, "failed_dims": [str],
@@ -451,8 +469,9 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -
     from shared.llm import invoke_text_result as _inv_r
 
     def _no_verdict(status: str) -> dict:
+        # ★ 지침 위반도 판정 불가 시 빈 목록 — fail-open. 판정 못 한 것을 위반이라 하지 않는다.
         return {"blocked_claims": [], "engagement_passed": True, "failed_dims": [],
-                "llm_scores": None, "judge_status": status}
+                "violated_directives": [], "llm_scores": None, "judge_status": status}
 
     stripped = re.sub(r"<[^>]+>", " ", body or "")[:4000].strip()
     if not stripped:
@@ -460,20 +479,44 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -
         return _no_verdict("ok")
 
     corpus_snippet = (corpus or "").strip()[:2000] or "(없음)"
+
+    # ★ C축 — 이번 글에 *주입된* 학습 지침을 지켰는가 (2026-08-03, 사용자 승인).
+    #   실측: 08-03 네이버 테마글이 주입된 8건 중 2건을 어겼고 **같은 지적이 다음 분석에서
+    #   또 나왔다**. 넣어주기만 하고 검사하지 않으면 학습은 프롬프트만 길게 만든다.
+    #   지침 목록은 `quality_learner.active_directives()` 가 준다 — 게이트는 사본을 두지 않고
+    #   *작성기가 받은 것과 같은 묶음* 을 조회한다(발행쌍 고정 TTL 덕에 동일 보장, 원칙①).
+    #   ★ 별도 LLM 호출을 만들지 않는다 — 이미 도는 통합 1콜에 축을 하나 얹는다.
+    _directives: list[str] = []
+    try:
+        from JARVIS07_GUARDIAN.quality_learner import active_directives as _act_dir
+        _directives = _act_dir(scope=post_type or "all", theme=theme or "")
+    except Exception:
+        _directives = []
+    _dir_block = ""
+    if _directives:
+        _dir_block = (
+            "\n## C. 학습 지침 준수 — 이 글에 주입된 지침을 어겼는가\n"
+            "아래는 과거 글 분석에서 얻어 *이 글 작성 시 프롬프트에 넣어 준* 지침이다.\n"
+            "본문이 **명백히 어긴 것만** 골라라. 애매하면 위반이 아니다(과잉 차단 금지).\n"
+            + "\n".join(f"  D{i}. {d}" for i, d in enumerate(_directives, 1)) + "\n"
+        )
+
     prompt = (
         f"제목: {title}\n\n[본문]\n{stripped}\n\n[출처]\n{corpus_snippet}\n\n"
-        "아래 두 가지를 동시에 판정하라.\n\n"
+        f"아래를 동시에 판정하라.\n\n"
         "## A. 사실성 — 발행 차단 주장\n"
         "본문에서 *구체적 수치가 포함된 주장* 중 발행하면 안 되는 것만 골라라.\n"
         "차단 기준: (a) 출처 수치와 모순 (b) 구체 수치인데 출처에 근거 전혀 없음\n"
         "★ 차단 제외: 숫자 없는 서술·전망·해석, 상식 수치, 출처에서 추론 가능한 수치\n\n"
         "## B. 매력도·유익성 5축 (0~100 점수 — 임계: "
-        + ", ".join(f"{k}≥{v}" for k, v in ENGAGEMENT_THRESHOLDS.items()) + ")\n\n"
-        "JSON 하나만 반환(다른 말 금지):\n"
+        + ", ".join(f"{k}≥{v}" for k, v in ENGAGEMENT_THRESHOLDS.items()) + ")\n"
+        + _dir_block +
+        "\nJSON 하나만 반환(다른 말 금지):\n"
         '{"blocked_claims":["차단 주장 원문 최대5개, 없으면 []"],'
         '"engagement_score":85,"usefulness_score":80,"title_hook_score":70,'
         '"originality_score":75,"structure_score":70,'
-        '"failed_dims":["임계 미달 차원 목록, 없으면 []"]}'
+        '"failed_dims":["임계 미달 차원 목록, 없으면 []"],'
+        '"violated_directives":["명백히 어긴 지침 번호 D1 형식, 없으면 []"]}'
     )
     try:
         raw, ok = _inv_r("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
@@ -505,10 +548,28 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str) -
             "originality_score": _int("originality_score", 0),
             "structure_score":   _int("structure_score",   0),
         }
+        # ★ 위반 지침을 *번호가 아니라 원문* 으로 되돌린다.
+        #   Issue.detail 이 fingerprint 가 되므로 attempt 마다 달라지는 값(번호·점수)을
+        #   넣으면 지문이 매번 바뀌어 abort 가 안 걸리고 max_attempts 를 낭비한다
+        #   (CLAUDE_WRITER 의 fingerprint 안정성 규칙).
+        violated: list[str] = []
+        for tag in (obj.get("violated_directives") or []):
+            t = str(tag).strip()
+            idx = None
+            mnum = re.search(r"(\d+)", t)
+            if mnum:
+                i = int(mnum.group(1))
+                if 1 <= i <= len(_directives):
+                    idx = i - 1
+            if idx is not None:
+                violated.append(_directives[idx])
+            elif t and len(t) > 8:      # 번호가 아니라 문장을 그대로 준 경우
+                violated.append(t)
         return {
             "blocked_claims": blocked,
             "engagement_passed": not raw_dims,
             "failed_dims": raw_dims,
+            "violated_directives": violated,
             "llm_scores": llm_scores,
             "judge_status": "ok",
         }

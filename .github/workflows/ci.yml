@@ -30,6 +30,36 @@ jobs:
         env:
           JARVIS_STRICT: "1"
 
+  # ★ 동작 검증 (2026-08-02 전수 감사 9위 — 사용자 승인)
+  #   종전 CI 는 ① 규칙 문구 grep ② 파이썬 문법 둘뿐이었다. 즉 **글자 검사만** 했다.
+  #   그래서 2026-07-29 "결손이 있을 때 TypeError 로 죽는" 감사 코드가 CI 를 통과해 운영에 나갔다.
+  #   `pytest` 는 저장소에 있었지만 **CI 에서 한 번도 돌지 않았다** — 내 손으로 돌려야만 돌았다.
+  #   골든 테스트는 pytest + python-dotenv 만으로 돈다(실측: 최소 venv 에서 41개 통과).
+  #   무거운 의존성을 요구하면 CI 가 느려지고, 느린 CI 는 곧 꺼진다.
+  pytest:
+    name: 동작 검증 (pytest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.10 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: 의존성 설치 (테스트 실행 최소 패키지)
+        run: pip install pytest python-dotenv
+
+      - name: 테스트 실행
+        run: |
+          echo "=== JARVIS 동작 검증 ==="
+          python3 -m pytest tests/ -q
+        env:
+          # tests/conftest.py 가 임시 DB 로 덮어쓰지만, CI 에서도 운영 경로를 절대 잡지 않도록 이중 방어.
+          JARVIS_TEST_MODE: "1"
+
   syntax-check:
     name: Python Syntax 검사
     runs-on: ubuntu-latest

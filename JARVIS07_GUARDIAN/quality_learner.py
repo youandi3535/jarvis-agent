@@ -34,12 +34,131 @@ __all__ = [
     "attribute_pending_rewards",
     "job_quality_learn",
     "stats",
+    "DIRECTIVE_MAX_LEN",
+    "directive_issues",
+    "is_learnable_directive",
+    "active_directives",
 ]
+
+# ══════════════════════════════════════════════════════════════════
+# ★ 학습 지침 위생 게이트 (2026-08-02 전수 감사 6위 — 사용자 승인)
+# ══════════════════════════════════════════════════════════════════
+# 실측: `learning_insights` 381건 중 HTML 조각 24건 · 수치 포함 131건 · 최대 418자.
+# 가중치 최상위 항목이 전부 *다른 글의 제목·본문* 이었다:
+#     w=5.00  "미국 환율보고서, 한국 2026년에도 환율 관찰대상국 재지정"
+#     w=5.00  "미국 재무부가 반기 환율보고서에서 한국을 환율 관찰대상국으로 다시 지정했습니다…"
+# 그리고 이 값들이 `build_insights_block()` 을 통해 **"반드시 적용"** 헤더를 달고
+# 4조합 작성 프롬프트에 그대로 주입되고 있었다.
+#
+# ★ 뿌리 (비직관): `post_quality_analyzer.learn_from_suggestions` 가
+#   `directive = s.get("after")` 를 저장했는데, 프롬프트상 `after` 의 정의가
+#   *"본문에 그대로 들어갈 최종 완성 텍스트"* 다. **글에 넣을 문장을 지침이라며 저장**한 것.
+#   → 제안 스키마에 `rule`(글에 독립적인 일반 지침)을 신설하고 그것만 학습한다.
+#      여기 게이트는 그 뒤를 받치는 *안전망* 이다(upsert 호출자가 3곳이므로).
+#
+# ★ 왜 길이만으로는 못 막나: 실측한 오염분 중에는 33자짜리 *제목* 도 있었다.
+#   짧고 HTML 도 없어 길이·태그 검사를 전부 통과한다. 그래서 **행동 지시문인가** 를 함께 본다
+#   (한국어 지시 어미 — 특정 어휘 목록이 아니라 *문장의 꼴*).
+try:
+    from JARVIS02_WRITER.length_manager import KOREAN_PER_SENTENCE as _K
+except Exception:
+    _K = 50
+# 지침은 '한 줄' 이다 — 2문장 분량을 상한으로 본다. 리터럴을 박지 않고 파생(원칙②).
+DIRECTIVE_MAX_LEN: int = _K * 2
+
+import re as _re
+
+# ★ 지시문 판정 — *어휘 목록이 아니라 문장의 꼴*. 그런데 **어디에 나오는지가 결정적**이다.
+#   초판은 `유지하|포함하` 같은 어간을 문장 *아무 데서나* 찾았는데, 그러면
+#   "두 종목 모두 흑자를 **유지하**며 안정적인 포지션을 이어가고 있어요" 같은
+#   *본문 서술* 이 통과한다(실측으로 걸렸다). 한국어는 서술어가 **문장 끝** 에 오므로
+#   명령·당위는 *끝에서* 판정해야 한다.
+_IMPERATIVE_RE = _re.compile(
+    r"(하라|해라|하자|하십시오|할\s*것|하지\s*말\s*것|말\s*것|"
+    r"해야\s*한다|되어야\s*한다|돼야\s*한다|금지|필수|권장)\s*[.!]?\s*$"
+)
+_HTML_RE    = _re.compile(r"<[a-zA-Z/!]")
+_FACTUAL_RE = _re.compile(r"(PER|ROE|EPS|\d+\.\d+|\d+\s*(%|배|원|억|조|달러|년|월|일))")
+
+
+def directive_issues(directive: str) -> list[str]:
+    """학습 지침으로 부적격인 사유 목록. 비어 있으면 적격.
+
+    전부 *구조* 판정이다 — 금칙어 목록을 두지 않는다(목록은 반드시 낡는다).
+
+    ★ 판정을 엄격하게 두는 이유(비대칭): 옳은 지침을 놓치면 *그 하나를 못 배울* 뿐이지만,
+      틀린 지침을 들이면 **4조합 모든 글의 프롬프트를 오염** 시킨다. 손실 크기가 다르다.
+    """
+    d = (directive or "").strip()
+    if not d:
+        return ["빈 지침"]
+    issues: list[str] = []
+    if _HTML_RE.search(d):
+        issues.append("HTML 태그 포함")
+    if _FACTUAL_RE.search(d):
+        issues.append("이 글의 수치·날짜 포함 — 다음 글에서 거짓이 된다")
+    if len(d) > DIRECTIVE_MAX_LEN:
+        # ★ 사유 문자열에 가변값(실제 길이)을 넣지 않는다 — 집계·중복제거가 깨진다.
+        issues.append(f"{DIRECTIVE_MAX_LEN}자 초과 — 지침이 아니라 문단")
+    if not _IMPERATIVE_RE.search(d):
+        issues.append("행동 지시문이 아님 — 글의 제목·본문 조각으로 보임")
+    return issues
+
+
+def is_learnable_directive(directive: str) -> bool:
+    """학습 자산으로 누적해도 되는 지침인가."""
+    return not directive_issues(directive)
 
 # ── 튜닝 상수 (단일 위치) ────────────────────────────────────────
 UCB_C: float = 0.35           # 탐색 보너스 계수 (신규·저사용 인사이트 기회 부여)
 REWARD_ALPHA: float = 0.3     # weight EMA 학습률
-ATTRIBUTION_WINDOW_H: int = 18   # 사용→분석 매칭 최대 시간 (h) — 07:00/21:00 발행 리듬 커버
+
+# ★ 보상 귀속 창 — **발행 스케줄에서 파생** (2026-08-03, 사용자 승인)
+#   종전엔 `ATTRIBUTION_WINDOW_H = 18` 리터럴 + 주석 "07:00/21:00 발행 리듬 커버" 였다.
+#   그 18 은 사실 *같은 글종류 재발행 간격(24h)의 3/4* 이었는데, 그 계산이 주석에만 있고
+#   코드에 없었다 — 발행 시각을 바꾸면 주석이 조용히 거짓이 된다(오늘 keeper 에서 본 병).
+#   판정 요건: ① 이 글이 분석될 때까지는 살아 있어야 하고(실측 지연 중앙 5분·최대 21분)
+#             ② **같은 글종류의 다음 글이 나오기 전에** 닫혀야 한다(안 그러면 다음 회차 글에
+#                잘못 귀속된다). → 재발행 간격의 3/4 이 두 요건을 동시에 만족한다.
+_ATTRIB_SAFETY = 0.75         # 재발행 간격 대비 창 비율 (1.0 이면 다음 회차와 맞닿는다)
+_ATTRIB_FALLBACK_H = 18       # 슬롯 파생 실패 시에만 (= 24h × 0.75, 종전 값과 동일)
+
+# ★ 선택 대상 기간 — 이 기간이 지난 지침은 애초에 **다시 뽑히지 않는다**(SQL last_seen 필터).
+#   종전엔 21 이 세 곳(build_insights_block · active_directives · db 기본값)에 흩어져 있었다.
+SELECTION_DAYS: int = 21
+
+
+def _same_type_republish_gap_h() -> int:
+    """같은 글종류가 다시 발행되기까지의 **최소 간격(시간)** — 발행 슬롯에서 파생."""
+    try:
+        from JARVIS08_PUBLISH.publish_ledger import publish_slots
+
+        by: dict[str, list[int]] = {}
+        for pt, h, m in publish_slots():
+            by.setdefault(pt, []).append(h * 60 + m)
+        gaps = []
+        for mins in by.values():
+            mins.sort()
+            n = len(mins)
+            for i in range(n):
+                g = (mins[(i + 1) % n] - mins[i]) % 1440 or 1440
+                gaps.append(g)
+        if gaps:
+            return max(1, min(gaps) // 60)
+    except Exception:
+        pass
+    return 24
+
+
+def attribution_window_h() -> int:
+    """사용→분석 매칭 최대 시간(h). 발행 시각을 옮기면 이 값이 따라온다."""
+    try:
+        return max(1, int(_same_type_republish_gap_h() * _ATTRIB_SAFETY))
+    except Exception:
+        return _ATTRIB_FALLBACK_H
+
+
+ATTRIBUTION_WINDOW_H: int = attribution_window_h()   # 하위호환 — 기존 참조 그대로 동작
 UNDERPERFORM_MIN_N: int = 5   # 저성과 판정 최소 보상 횟수
 UNDERPERFORM_AVG: float = 0.35   # 평균 보상이 이 미만이면 가속 감쇠
 
@@ -100,6 +219,39 @@ def _pinned_pick(scope: str, theme: str, limit: int, rows: list[dict]) -> list[d
     return picked
 
 
+def active_directives(scope: str = "all", theme: str = "", limit: int = 8) -> list[str]:
+    """이번 발행쌍에 **주입된 지침 문장** 목록 — *조회 전용*(사용 기록을 남기지 않는다).
+
+    ★ 왜 필요한가 (2026-08-03 전수 감사 — 사용자 승인)
+      학습된 지침이 프롬프트에 들어가는 것은 실측으로 확인됐다(08-03 21:00 배치 8/8 주입).
+      그런데 **글이 그 지침을 지켰는지는 아무도 확인하지 않았다** — 실측: 08-03 네이버
+      테마글(70점)이 주입된 8건 중 2건을 어겼고 *같은 지적이 다음 분석에서 또 나왔다*.
+      넣어주기만 하고 검사하지 않으면 학습은 프롬프트를 길게 만들 뿐 글을 바꾸지 못한다.
+
+    ★ 왜 상태를 배선하지 않는가
+      작성 시점의 batch_id 를 draft 에 실어 게이트까지 나르는 방법도 있지만, 그러면
+      *그 값을 안 넘기는 호출자* 가 생기는 순간 조용히 검사가 꺼진다(오늘만 두 번 본 병).
+      대신 **같은 선택을 다시 묻는다** — `_pinned_pick` 이 `PAIR_PIN_TTL_MIN` 동안
+      같은 묶음을 돌려주므로(발행쌍 고정), 작성기가 받은 것과 동일한 지침을 얻는다.
+      선택 로직은 그대로 `quality_learner` 소유 — 게이트에 사본을 두지 않는다(원칙①).
+
+    ※ `build_insights_block` 과 달리 `record_insight_usage` 를 부르지 않는다.
+      검사 때문에 사용 기록이 두 배로 늘면 보상 통계가 오염된다.
+    """
+    try:
+        from shared import db as _db
+
+        _scope_filter = "" if scope in ("", "all") else scope
+        rows = _db.get_ranked_learning_insights(scope=_scope_filter, limit=limit, days=SELECTION_DAYS)
+        rows = [r for r in rows if not directive_issues(r.get("directive") or "")]
+        if not rows:
+            return []
+        picked = _pinned_pick(scope, theme, limit, rows)
+        return [(r.get("directive") or "").strip() for r in (picked or []) if (r.get("directive") or "").strip()]
+    except Exception:
+        return []
+
+
 def pair_pin_effective(scope: str = "__selfcheck__") -> bool:
     """★ 고정이 *실제로 먹는지* 동작으로 확인 (저장소 표준 — 설치 플래그는 적용의 증거가 아니다).
 
@@ -119,7 +271,7 @@ def pair_pin_effective(scope: str = "__selfcheck__") -> bool:
 
 def build_insights_block(scope: str = "all", theme: str = "",
                          platform: str = "", limit: int = 8,
-                         days: int = 21) -> str:
+                         days: int = 0) -> str:
     """학습된 작성 지침 블록 생성 + 사용 기록 (보상 귀속 대기 등록).
 
     반환: 프롬프트 주입용 한국어 블록 문자열. 인사이트 없음/실패 시 "".
@@ -128,7 +280,15 @@ def build_insights_block(scope: str = "all", theme: str = "",
         from shared import db as _db
         # scope='all' 은 SQL 필터에선 '전체'('') 를 의미해야 함 (필터 함정 방지 — 교차 리뷰)
         _scope_filter = "" if scope in ("", "all") else scope
-        rows = _db.get_ranked_learning_insights(scope=_scope_filter, limit=limit, days=days)
+        # days=0(기본) → 선택 기간 상수 상속. 0 을 그대로 SQL 에 넘기면 후보가 통째로 사라진다.
+        rows = _db.get_ranked_learning_insights(
+            scope=_scope_filter, limit=limit, days=(days or SELECTION_DAYS))
+        # ★ 주입 직전 2차 방어 (2026-08-02). 저장 게이트가 있는데 왜 또 보는가 —
+        #   오늘 실측으로 *면제·필터가 있어도 앞단이 무력화하면 그대로 샌다* 는 것을 두 번 봤다
+        #   (watchdog 판정 순서 · engagement_judge 회로 면제). 프롬프트 주입은 4조합 모든 글에
+        #   영향을 주는 마지막 관문이므로 여기서 한 번 더 거른다.
+        #   규칙 본체는 `directive_issues` 하나 — 사본을 만들지 않는다(원칙①).
+        rows = [r for r in rows if not directive_issues(r.get("directive") or "")]
         if not rows:
             return ""
         # ★ 발행쌍 고정 — platform 은 키에 넣지 않는다 (NV·TS 가 같은 묶음을 받게 하는 것이 목적).
@@ -233,13 +393,30 @@ def _match_analysis(usage: dict, analyses: list[dict]) -> Optional[dict]:
     return best[1] if best else None
 
 
-def attribute_pending_rewards(days: int = 3) -> dict:
+def reward_retry_days() -> int:
+    """미귀속 사용 기록을 **며칠까지 다시 시도할 것인가** — 선택 기간에서 파생.
+
+    ★ 왜 3 이 아니라 파생인가 (2026-08-03, 사용자 승인)
+      종전엔 `attribute_pending_rewards(days=3)` 로 3 을 박아 불렀다. 그 3 은
+      "채점이 3일 안에 끝난다" 는 *가정을 코드에 복사* 해 둔 것인데, 실측은 그 가정이
+      깨졌음을 보여준다 — `insight_usage` 694건 중 보상 귀속은 **170건(24.5%)** 뿐이고
+      나머지는 채점이 끝내 오지 않아 **영구 사장**됐다(사용자 휴가 3일 등 외부 요인 포함).
+
+      재시도의 값은 *그 지침이 아직 선택 대상일 때* 까지다 — `SELECTION_DAYS` 가 지나면
+      그 지침은 어차피 다시 뽑히지 않으므로 보상을 붙여도 다음 글에 영향이 없다.
+      그래서 재시도 창 = 선택 기간. 상한이 스스로 설명된다.
+    """
+    return max(1, int(SELECTION_DAYS))
+
+
+def attribute_pending_rewards(days: int | None = None) -> dict:
     """미귀속 사용 기록 전수 → 분석 결과 매칭 → 보상 귀속 + weight 갱신.
 
     Returns: {"matched": n, "pending": n, "avg_reward": f}
     """
     from shared import db as _db
 
+    days = reward_retry_days() if days is None else int(days)
     usages = _db.get_unrewarded_usage(days=days)
     if not usages:
         return {"matched": 0, "pending": 0, "avg_reward": None}
@@ -317,7 +494,7 @@ def _decay_underperformers() -> int:
 def job_quality_learn() -> None:
     """매일 23:45 — 보상 귀속 + 저성과 감쇠 + 요약 알림 (DEFAULT_JOBS callback)."""
     try:
-        res = attribute_pending_rewards(days=3)
+        res = attribute_pending_rewards()   # 창은 reward_retry_days() 가 파생 — 여기 박지 않는다
         n_decay = _decay_underperformers()
         if res["matched"] == 0 and n_decay == 0:
             return  # 조용히 패스 (신호 없음)
