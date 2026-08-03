@@ -69,24 +69,34 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
         # ★ shutdown(wait=False): 타임아웃된 프로바이더 스레드를 버리고 즉시 진행
         #   (yfinance 등 무한 hang 방지 — ERRORS [401])
         exe = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
-        futures = {exe.submit(_run_provider, p): p.source_type for p in _PROVIDERS}
         try:
-            for fut in as_completed(futures, timeout=90):  # 전체 90초 상한
-                beat()
-                try:
-                    docs = fut.result(timeout=30)  # 개별 프로바이더 30초 상한
-                except _FutureTimeout:
-                    ptype = futures.get(fut, "unknown")
-                    log.warning(f"[Engine] {ptype} 30초 타임아웃 — 스킵")
-                    docs = []
-                except Exception as e:
-                    log.warning(f"[Engine] 프로바이더 결과 취합 실패: {e}")
-                    docs = []
-                raw_docs.extend(docs)
-        except _FutureTimeout:
-            log.warning("[Engine] 전체 수집 90초 초과 — 수집된 데이터만 사용")
-        finally:
-            exe.shutdown(wait=False)  # 잔여 스레드 백그라운드로 버림
+            futures = {exe.submit(_run_provider, p): p.source_type for p in _PROVIDERS}
+        except RuntimeError as e:
+            # 인터프리터 종료 레이스 (ERRORS [361][362]) — 병렬 이득만 포기, 동기 폴백으로 수집 지속
+            log.warning(f"[Engine] 스레드 스케줄 불가 — 동기 폴백: {e}")
+            exe.shutdown(wait=False)
+            for p in _PROVIDERS:
+                raw_docs.extend(_run_provider(p))
+            futures = {}
+
+        if futures:
+            try:
+                for fut in as_completed(futures, timeout=90):  # 전체 90초 상한
+                    beat()
+                    try:
+                        docs = fut.result(timeout=30)  # 개별 프로바이더 30초 상한
+                    except _FutureTimeout:
+                        ptype = futures.get(fut, "unknown")
+                        log.warning(f"[Engine] {ptype} 30초 타임아웃 — 스킵")
+                        docs = []
+                    except Exception as e:
+                        log.warning(f"[Engine] 프로바이더 결과 취합 실패: {e}")
+                        docs = []
+                    raw_docs.extend(docs)
+            except _FutureTimeout:
+                log.warning("[Engine] 전체 수집 90초 초과 — 수집된 데이터만 사용")
+            finally:
+                exe.shutdown(wait=False)  # 잔여 스레드 백그라운드로 버림
 
         # 정제 + 중복 URL 제거
         seen_urls: set[str] = set()
@@ -297,20 +307,30 @@ def _collect_tier(provs: list, theme: str, sector: str, cap: int,
             return []
 
     exe = ThreadPoolExecutor(max_workers=min(len(provs), _MAX_WORKERS))
-    futures = {exe.submit(_run, p): p.source_type for p in provs}
     try:
-        for fut in as_completed(futures, timeout=90):
-            beat()   # ★ 프로바이더 결과 취합마다 진행 신호 (ERRORS [394]/[426] 동일 클래스)
-            try:
-                raw_docs.extend(fut.result(timeout=30) or [])
-            except _FutureTimeout:
-                log.warning(f"[tier] {futures.get(fut)} 30초 타임아웃 — 스킵")
-            except Exception as e:
-                log.warning(f"[tier] 결과 취합 실패: {e}")
-    except _FutureTimeout:
-        log.warning("[tier] 전체 90초 초과 — 수집된 데이터만 사용")
-    finally:
+        futures = {exe.submit(_run, p): p.source_type for p in provs}
+    except RuntimeError as e:
+        # 인터프리터 종료 레이스 (ERRORS [361][362]) — 병렬 이득만 포기, 동기 폴백으로 수집 지속
+        log.warning(f"[tier] 스레드 스케줄 불가 — 동기 폴백: {e}")
         exe.shutdown(wait=False)
+        for p in provs:
+            raw_docs.extend(_run(p))
+        futures = {}
+
+    if futures:
+        try:
+            for fut in as_completed(futures, timeout=90):
+                beat()   # ★ 프로바이더 결과 취합마다 진행 신호 (ERRORS [394]/[426] 동일 클래스)
+                try:
+                    raw_docs.extend(fut.result(timeout=30) or [])
+                except _FutureTimeout:
+                    log.warning(f"[tier] {futures.get(fut)} 30초 타임아웃 — 스킵")
+                except Exception as e:
+                    log.warning(f"[tier] 결과 취합 실패: {e}")
+        except _FutureTimeout:
+            log.warning("[tier] 전체 90초 초과 — 수집된 데이터만 사용")
+        finally:
+            exe.shutdown(wait=False)
 
     results = []
     for raw in raw_docs:

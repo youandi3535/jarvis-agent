@@ -251,3 +251,127 @@ def test_마스킹_자체검사가_통과한다():
     res = selfcheck()
     non_env = [i for i in res["issues"] if "미적재" not in i]
     assert not non_env, f"마스킹 자체검사 위반: {non_env}"
+
+
+# ══════════════════════════════════════════════════════════════════
+# 6) 학습 폐쇄루프 — 2026-08-03 감사에서 끊긴 곳을 못 박는다
+# ══════════════════════════════════════════════════════════════════
+def test_분석은_한_프로세스에서_순차_처리된다():
+    """★ 슬롯당 2글 중 1글만 채점되던 근본 원인.
+
+    종전엔 대기 글마다 subprocess 를 따로 띄웠다(2초 간격). LLM 크로스 프로세스 락 때문에
+    뒤 프로세스가 45초 한도를 넘겨 포기 → **항상 뒤엣것만 채점을 잃었다**
+    (실측 로그 `크로스 프로세스 잠금 45s 대기 초과`, 채점률 46%).
+    2026-07-30 의 대기열 DESC→ASC 수정은 *누가 지는가* 만 바꿨다.
+    """
+    import inspect
+    import re
+
+    from JARVIS03_RADAR import jobs
+
+    src = inspect.getsource(jobs.job_analyzer_fallback)
+    # 대기 글마다 Popen 을 도는 루프가 있으면 회귀
+    assert not re.search(r"for\s+record\s+in\s+pending", src), (
+        "대기 글마다 프로세스를 띄우고 있다 — 락 경합으로 뒤엣것이 채점을 잃는다"
+    )
+    assert src.count("Popen(") == 1, f"분석 프로세스는 하나여야 한다 (현재 {src.count('Popen(')}개)"
+
+
+def test_주입된_지침을_발행전에_검사한다():
+    """넣어주기만 하고 지켰는지 안 보면 학습은 프롬프트만 길게 만든다.
+
+    실측: 08-03 네이버 테마글이 주입된 8건 중 2건을 어겼고 같은 지적이 다음 분석에서 재발.
+    """
+    import inspect
+
+    from JARVIS02_WRITER import prepublish_gate as G
+
+    call_src = inspect.getsource(G._combined_quality_call)
+    assert "## C. 학습 지침 준수" in call_src, "발행 전 판정에 지침 준수 축이 없다"
+    assert "active_directives" in call_src, "지침 목록을 quality_learner 에서 받지 않는다"
+    assert "violated_directives" in call_src, "위반 지침 반환 스키마가 없다"
+
+    gate_src = inspect.getsource(G.prepublish_quality_issues)
+    assert "[학습지침]" in gate_src, "위반이 Issue 로 나오지 않는다"
+    # kind 는 engagement 여야 재작성 순환으로 간다 (draft_quality 면 inline 패치 시도)
+    assert "draft_quality" not in gate_src.split("[학습지침]")[1][:300], (
+        "지침 위반을 draft_quality 로 내면 draft_fixer 가 못 고칠 것을 붙잡는다"
+    )
+
+
+def test_지침조회는_사용기록을_남기지_않는다():
+    """검사 때문에 usage 가 두 배로 늘면 보상 통계가 오염된다."""
+    from shared.db import get_db
+    from JARVIS07_GUARDIAN.quality_learner import active_directives
+
+    with get_db() as con:
+        before = con.execute("SELECT COUNT(*) FROM insight_usage").fetchone()[0]
+    active_directives(scope="theme", limit=8)
+    active_directives(scope="economic", limit=8)
+    with get_db() as con:
+        after = con.execute("SELECT COUNT(*) FROM insight_usage").fetchone()[0]
+    assert before == after, f"조회가 사용 기록을 남겼다 ({before} → {after})"
+
+
+def test_보상창이_발행스케줄에서_파생된다():
+    """`18` 리터럴은 '24h 재발행 간격의 3/4' 이라는 계산을 주석에만 두고 있었다.
+
+    발행 시각을 옮기면 주석이 조용히 거짓이 된다(keeper HANG_THRESHOLD 와 같은 병).
+    """
+    from JARVIS07_GUARDIAN import quality_learner as Q
+
+    gap = Q._same_type_republish_gap_h()
+    assert gap > 0, "재발행 간격 파생 실패"
+    assert Q.attribution_window_h() == max(1, int(gap * Q._ATTRIB_SAFETY))
+    # 다음 회차 글에 잘못 귀속되지 않으려면 창이 재발행 간격보다 짧아야 한다
+    assert Q.attribution_window_h() < gap, "귀속 창이 재발행 간격 이상 — 다음 회차 글에 오귀속된다"
+
+    # ★ 진짜 파생인가 — **입력을 바꿔서 따라오는지** 본다.
+    #   현재 파생값이 우연히 옛 리터럴(18)과 같으므로, 값만 비교하면 리터럴로 되돌려도
+    #   테스트가 통과한다(실측으로 확인된 변별력 부족).
+    _orig = Q._same_type_republish_gap_h
+    try:
+        Q._same_type_republish_gap_h = lambda: 12          # 발행을 하루 2회로 옮겼다고 가정
+        assert Q.attribution_window_h() == 9, (
+            f"발행 간격을 바꿨는데 귀속 창이 따라오지 않는다 "
+            f"({Q.attribution_window_h()}h) — 리터럴로 회귀했을 가능성"
+        )
+    finally:
+        Q._same_type_republish_gap_h = _orig
+
+
+def test_보상_재시도창이_선택기간과_같다():
+    """선택 기간이 지난 지침은 어차피 안 뽑힌다 — 그때까지가 재시도의 값이다."""
+    from JARVIS07_GUARDIAN.quality_learner import SELECTION_DAYS, reward_retry_days
+
+    assert reward_retry_days() == SELECTION_DAYS
+    assert reward_retry_days() >= 7, "재시도 창이 너무 짧다 — 채점 지연 시 보상이 영구 사장된다"
+
+
+def test_지침블록_기본인자가_후보를_비우지_않는다():
+    """`days` 기본값을 0 으로 두면 SQL 이 '0일' 로 읽어 후보가 통째로 사라진다.
+
+    ★ 운영 데이터에 기대지 않는다 — 임시 DB 에 지침 하나를 심고 그것이 나오는지 본다.
+      (운영 DB 를 읽는 테스트는 데이터가 바뀌면 이유 없이 깨지고, 곧 꺼진다.)
+    """
+    from shared.db import upsert_learning_insight
+    from JARVIS07_GUARDIAN.quality_learner import build_insights_block
+
+    from shared.db import get_db
+
+    probe = "제목 앞부분에 핵심 키워드를 배치하고 숫자를 하나 포함하라"
+    upsert_learning_insight(
+        insight_key="golden_probe_title", insight_type="title",
+        description="테스트용 지침", directive=probe, weight=1.0, scope="economic",
+    )
+    # ★ last_seen 을 이틀 전으로 — `days=0` 이 새 나가면 이 지침이 탈락한다.
+    #   오늘 날짜로 두면 days=0 이어도 통과해 **변별력이 없다**(실측으로 확인).
+    with get_db() as con:
+        con.execute(
+            "UPDATE learning_insights SET last_seen = date('now','localtime','-2 day') "
+            "WHERE insight_key LIKE ?", ("%golden_probe_title",))
+        con.commit()
+
+    block = build_insights_block(scope="economic", limit=8)
+    assert block, "지침 블록이 비었다 — days 기본값이 0 으로 새 나갔을 가능성"
+    assert probe in block, f"심은 지침이 블록에 없다: {block[:120]}"

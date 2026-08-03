@@ -395,15 +395,29 @@ def job_analyzer_fallback() -> None:
             return {"launched": 0, "deferred": _defer_why}
         from shared import db
         pending = db.get_pending_analysis(limit=5)
-        if pending:
-            _log.info(f"🔍 [Fallback] 미처리 분석 {len(pending)}개 → 처리")
-            for record in pending:
-                subprocess.Popen(
-                    [_PYTHON, str(_ANALYZER), str(record["id"])],
-                    cwd=str(_ANALYZER.parent),
-                )
-                time.sleep(2)
-        return {"launched": len(pending) if pending else 0}
+        if not pending:
+            return {"launched": 0}
+
+        # ★ 프로세스 **하나**로 순차 처리 (2026-08-03 — 사용자 승인)
+        #   종전엔 대기 글마다 subprocess 를 따로 띄우고 2초 간격을 뒀다. 그런데 LLM 에는
+        #   **크로스 프로세스 락**(`llm_exec.lock`)이 있어, 앞 프로세스가 채점 LLM 을
+        #   ~38초 점유하는 동안 뒤 프로세스는 줄을 서다 **45초 한도를 넘겨 포기**한다
+        #   (실측 로그 `크로스 프로세스 잠금 45s 대기 초과 — lock_contention`).
+        #   → 한 슬롯에 2글이 나가면 **항상 뒤엣것만 채점을 잃었다.**
+        #
+        #   실측 피해(2026-07-26~08-03): 발행 24건 중 채점 11건 = **46%**.
+        #   fallback 기동 41회 중 '2개' 가 13회 — 그 13회가 전부 한쪽을 잃은 회차다.
+        #   2026-07-30 `622063b`(대기열 DESC→ASC)는 *누가 지는가* 만 바꿨다
+        #   (네이버 전패 → 티스토리 전패). 근본은 **동시 기동** 이었다.
+        #
+        #   인자 없이 실행하면 `run_once()` 가 pending 을 **한 프로세스 안에서 순차** 처리한다
+        #   → 락 경합이 구조적으로 사라진다(원칙①: 분석 프로세스는 하나).
+        #   개수를 여기서 정하지 않는다 — `run_once` 가 그때그때 대기열을 본다(원칙②).
+        #   순차라 4조합 어느 조합도 밀리지 않는다(원칙③).
+        #   ※ 자식은 `guard_main(deadline_sec=900)` 로 자체 보호된다(글 5건 × ~40초 ≪ 900초).
+        _log.info(f"🔍 [Fallback] 미처리 분석 {len(pending)}개 → 단일 프로세스 순차 처리")
+        subprocess.Popen([_PYTHON, str(_ANALYZER)], cwd=str(_ANALYZER.parent))
+        return {"launched": len(pending), "processes": 1}
 
     _run_with_harness("분석 fallback", _run)
 
