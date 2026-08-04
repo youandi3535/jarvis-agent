@@ -392,3 +392,43 @@ def test_지침블록_기본인자가_후보를_비우지_않는다():
     block = build_insights_block(scope="economic", limit=8)
     assert block, "지침 블록이 비었다 — days 기본값이 0 으로 새 나갔을 가능성"
     assert probe in block, f"심은 지침이 블록에 없다: {block[:120]}"
+
+
+def test_점수보고가_최종판정을_말한다():
+    """★ 2026-08-04 사용자 지적 — "모두 70점을 넘겼는데 왜 실패냐".
+
+    종전 메시지는 `✅ 통과 (기준 70)` 라고만 적었는데 그건 **점수 항목 하나의 판정**이었다.
+    실제로는 다른 검사가 막고 있었고 그 사실이 메시지에 없었다.
+    계기판이 사실과 다르게 읽히면 없느니만 못하다.
+    """
+    import shared.notify as N
+    from JARVIS02_WRITER import prepublish_gate as G
+
+    sent: list[str] = []
+    orig = N.send_tg
+    N.send_tg = lambda text, **kw: sent.append(text)
+    try:
+        sr = {"total": 72.0, "passed": True, "sections": {}}
+
+        # ① 점수 통과 + 다른 문제 없음 → 발행
+        sent.clear()
+        G.send_score_report(sr, "economic", "naver", "t", blocking=[])
+        assert sent and "발행 진행" in sent[0], f"발행 판정이 없다: {sent[:1]}"
+
+        # ② 점수는 통과인데 사실성이 막음 → **재작성** 이라고 말해야 한다
+        sent.clear()
+        G.send_score_report(sr, "economic", "naver", "t",
+                            blocking=[{"kind": "factuality", "detail": "[사실성] 출처 없는 수치"}])
+        assert sent, "메시지가 전송되지 않았다"
+        assert "재작성" in sent[0], (
+            "점수는 통과인데 다른 검사가 막았다 — 메시지가 '통과' 로만 보이면 어제 사고 재현"
+        )
+        assert "사실성" in sent[0], "차단 사유가 메시지에 없다"
+
+        # ③ 점수 미달 → 사유 명시
+        sent.clear()
+        G.send_score_report({"total": 65.0, "passed": False, "sections": {}},
+                            "economic", "naver", "t", blocking=[])
+        assert "점수 미달" in sent[0] and "재작성" in sent[0]
+    finally:
+        N.send_tg = orig

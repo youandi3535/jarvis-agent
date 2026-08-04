@@ -133,13 +133,24 @@ def _draft_body(draft: dict) -> str:
     return body or ""
 
 
-def send_score_report(sr: dict, post_type: str = "", platform: str = "", title: str = "") -> None:
+def send_score_report(sr: dict, post_type: str = "", platform: str = "", title: str = "",
+                      blocking: "list | None" = None) -> None:
     """★ 발행 전 100점 검증 점수 → 텔레그램 (사용자 박제 2026-07-24: 모든 글·항상).
 
     ① 단일 진입점 — 점수가 계산되는 유일 지점(prepublish_quality_issues 의 score_post 직후)에서만 호출.
     ② 동적 설계 — sr["sections"]/items dict 를 *순회* 해 렌더. 루브릭(항목·만점·이름)이 바뀌어도
        코드 수정 없이 자동 반영(post_scorer 가 유일한 진실). 항목명·만점을 하드코딩하지 않는다.
     ③ 모든 글 — 경제·테마 × 네이버·티스토리 4조합 모두 이 함수를 부른다(통과·미통과 무관).
+
+    ★ `blocking` (2026-08-04 — 사용자 지시): 이 시점까지 쌓인 *차단 사유* 목록.
+      왜 필요한가 — 종전 메시지는 `✅ 통과 (기준 70)` 라고만 적었는데, 그건 **점수 항목
+      하나의 판정**이었다. 실제 발행 여부는 사실성·기타 검사를 함께 봐야 정해진다.
+      2026-08-04 07:00 사고에서 사용자가 정확히 이 지점을 지적했다 —
+      *"모두 70점을 넘겼는데 왜 실패냐"*. 점수는 통과했고 다른 검사가 막았는데,
+      메시지에는 **통과만 크게 적혀 있었다.** 계기판이 사실과 다르게 읽히면 없느니만 못하다.
+      → 사실성 검사가 점수보다 *먼저* 끝나므로(호출부 순서), 이 시점에 이미 최종 판정이
+        가능하다. 점수 미달 여부와 합쳐 **진짜 결과**를 적는다.
+      사유 문구는 issue 에서 그대로 가져온다 — 여기에 사유 목록을 박지 않는다(원칙②).
     """
     try:
         from shared.notify import send_tg
@@ -148,10 +159,23 @@ def send_score_report(sr: dict, post_type: str = "", platform: str = "", title: 
         head = f"📊 *발행 전 품질검증* [{post_type or '?'}·{platform or '?'}]"
         if title:
             head += f" {title}"
-        _ok = sr.get("passed")
+        _score_ok = bool(sr.get("passed"))
+        _others = [b for b in (blocking or []) if isinstance(b, dict)]
+        _will_publish = _score_ok and not _others
+
         lines = [head, "━━━━━━━━━━━━━━━━━━",
                  f"*종합 {sr.get('total', 0):.1f}/100*  "
-                 f"{'✅ 통과' if _ok else '❌ 재작성'} (기준 {_PASS:.0f})"]
+                 f"{'✅ 점수 통과' if _score_ok else '❌ 점수 미달'} (기준 {_PASS:.0f})"]
+        # ★ 최종 판정을 *별도 줄* 로 분명히 — 점수 판정과 섞이지 않게.
+        if _will_publish:
+            lines.append("→ *발행 진행* (사실성 검사도 통과)")
+        else:
+            _why = []
+            if not _score_ok:
+                _why.append(f"점수 {_PASS:.0f} 미달")
+            for b in _others[:3]:
+                _why.append(str(b.get("detail") or b.get("kind") or "")[:60])
+            lines.append("→ *재작성* — " + " / ".join(_why))
         # 섹션·항목 동적 순회 (A/B/C/D 순서 보존, dict 순서 그대로)
         for skey, sec in secs.items():
             if not isinstance(sec, dict):
@@ -305,8 +329,11 @@ def prepublish_quality_issues(draft, post_type: str = "", platform: str = "",
                     _sr["total"], "통과" if _sr["passed"] else "재작성"
                 )
                 # ★ 모든 글·항상 점수 텔레그램 (사용자 박제 2026-07-24) — 통과·미통과 무관.
+                # ★ out 에는 이 시점까지의 차단 사유(사실성 등)가 들어 있다 —
+                #   사실성 검사가 점수보다 먼저 끝나므로 여기서 최종 판정이 가능하다.
                 send_score_report(_sr, post_type, platform,
-                                  (draft.get("title") or draft.get("keyword") or "").strip())
+                                  (draft.get("title") or draft.get("keyword") or "").strip(),
+                                  blocking=out)
                 if not _sr["passed"]:
                     sec = _sr.get("sections", {})
                     detail_parts = [
