@@ -432,3 +432,80 @@ def test_점수보고가_최종판정을_말한다():
         assert "점수 미달" in sent[0] and "재작성" in sent[0]
     finally:
         N.send_tg = orig
+
+
+# ══════════════════════════════════════════════════════════════════
+# 7) 2026-08-04 설계 감사에서 나온 3건
+# ══════════════════════════════════════════════════════════════════
+def test_테마_재시도가_전체발행을_한번만_돈다():
+    """★ 실측 피해 — 2026-07-20 21:00 슬롯이 네이버에 3건을 냈다.
+
+    종전 `{p: _make_theme_retry() for p in _guardian_fail}` 은 실패 플랫폼 수만큼
+    콜백을 등록했고 incident_responder 가 그걸 순회했다. 그런데 그 콜백은
+    `run_all_themes()` 로 **두 플랫폼을 통째로 다시 발행** 한다(플랫폼 인자가 없다).
+    → 두 플랫폼 동시 실패 시 전체 테마 발행이 2회.
+    """
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent
+           / "JARVIS02_WRITER" / "scheduler.py").read_text(encoding="utf-8")
+    # 플랫폼마다 콜백을 만드는 dict comprehension 이 있으면 회귀
+    assert not re.search(r"_retry_fns\s*=\s*\{\s*\w+\s*:\s*_make_theme_retry\(\)\s*for\s+", src), (
+        "테마 재시도가 플랫폼 수만큼 등록된다 — 전체 발행이 여러 번 돈다"
+    )
+
+
+def test_결손조회가_글종류를_구분한다():
+    """슬롯 창 안의 *다른 종류* 글이 결손을 지우면 감시가 조용히 꺼진다."""
+    import datetime as dt
+    import inspect
+
+    from JARVIS08_PUBLISH.publish_ledger import published_in_slot, slot_gaps
+
+    sig = inspect.signature(published_in_slot)
+    assert "post_type" in sig.parameters, "글종류 필터 인자가 없다"
+    # 호출부가 실제로 넘기는가 (인자만 있고 안 넘기면 무의미)
+    assert "published_in_slot(start, end, post_type)" in inspect.getsource(slot_gaps), (
+        "slot_gaps 가 post_type 을 넘기지 않는다 — 인자만 있고 안 쓰임"
+    )
+    # SQL 이 실제로 필터를 붙이는가
+    src = inspect.getsource(published_in_slot)
+    assert "post_type = ?" in src, "SQL 에 글종류 조건이 없다"
+
+
+def test_감사는_발행락을_지우지_않는다():
+    """★ 감시는 대상을 건드리지 않는다.
+
+    종전 `publishing_in_progress()` 는 `scheduler._is_locked_externally()` 를 불렀는데
+    그 함수는 3시간 넘은 락 파일을 **unlink 한다**. 실측 최대 발행 지연 4.1시간 —
+    즉 감사 잡이 도는 것만으로 살아 있는 발행 락이 지워질 수 있었다.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from JARVIS08_PUBLISH.publish_ledger import publishing_in_progress
+
+    # ★ 소스 텍스트가 아니라 **AST** 로 본다 — 주석·독스트링에 적힌 함수 이름을
+    #   호출로 오인하면(초판이 그랬다) 테스트가 스스로 거짓 실패한다.
+    tree = ast.parse(textwrap.dedent(inspect.getsource(publishing_in_progress)))
+    imported = {
+        alias.name
+        for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    called = {
+        node.func.id for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "_is_locked_externally" not in imported | called, (
+        "감사가 락을 *삭제하는* 함수를 부른다 — read-only 조회여야 한다"
+    )
+    attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    assert "exists" in attrs, "락 존재 여부 조회가 아니다"
+    # 실제로 호출해도 락 파일이 사라지지 않는가
+    from JARVIS02_WRITER.scheduler import LOCK_FILE
+    before = LOCK_FILE.exists()
+    publishing_in_progress()
+    assert LOCK_FILE.exists() == before, "조회가 락 파일 상태를 바꿨다"

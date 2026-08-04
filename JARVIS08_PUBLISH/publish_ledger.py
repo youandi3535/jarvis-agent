@@ -157,20 +157,30 @@ def audit_lag_minutes(misfire_grace_sec: int = 0) -> int:
 
 
 # ── 실제 발행 조회 ────────────────────────────────────────────────────────
-def published_in_slot(start: _dt.datetime, end: _dt.datetime) -> set[str]:
-    """슬롯 창 안에 실제로 발행된 플랫폼 집합.
+def published_in_slot(start: _dt.datetime, end: _dt.datetime,
+                      post_type: str = "") -> set[str]:
+    """슬롯 창 안에 **그 글종류로** 실제 발행된 플랫폼 집합.
 
     ★ `created_at` 을 쓴다 — 실측 244/244 채워져 있고 발행 시각이다.
       `analyzed_at` 은 234/244 뿐이라(분석이 안 돈 글이 있다) 결손 오탐을 만든다.
+    ★ `post_type` 필터 (2026-08-04 추가 — 내 초판 결함):
+      종전엔 창 안의 *모든* 글을 셌다. `post_analysis.post_type` 컬럼이 있는데도 안 썼다.
+      테마 슬롯 창은 21:00~다음날 07:00 이라, 그 안에 다른 종류 글이 한 건이라도
+      떨어지면 **테마 결손이 조용히 사라진다**. 지금 스케줄에선 경계가 맞물려 실피해가
+      적지만, GUARDIAN 재발행이 창을 넘나들면 바로 발현한다.
+      결손 감사는 *놓치는 쪽* 이 가장 나쁘다 — 감시가 꺼진 줄도 모르게 된다.
+      (빈 문자열이면 종전처럼 전체 — 하위호환)
     """
     from shared.db import get_db
 
+    sql = ("SELECT DISTINCT platform FROM post_analysis "
+           "WHERE created_at >= ? AND created_at < ?")
+    args = [start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")]
+    if post_type:
+        sql += " AND post_type = ?"
+        args.append(post_type)
     with get_db() as con:
-        rows = con.execute(
-            "SELECT DISTINCT platform FROM post_analysis "
-            "WHERE created_at >= ? AND created_at < ?",
-            (start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")),
-        ).fetchall()
+        rows = con.execute(sql, tuple(args)).fetchall()
     return {r[0] for r in rows if r[0]}
 
 
@@ -181,7 +191,7 @@ def slot_gaps(now: _dt.datetime | None = None) -> tuple[str, list[str], list[str
         return None
     post_type, start, end = slot
     platforms = expected_platforms()
-    done = published_in_slot(start, end)
+    done = published_in_slot(start, end, post_type)
     return post_type, sorted(set(platforms) - done), platforms
 
 
@@ -191,9 +201,14 @@ def publishing_in_progress() -> bool:
     아직 진행 중인 것을 '결손' 이라 부르면 안 된다. 지연과 실패는 다른 사건이고,
     다르게 알려야 사용자가 다르게 행동한다.
     """
+    # ★ read-only 조회만 한다 (2026-08-04 — 감사가 대상을 건드리던 결함).
+    #   종전엔 `scheduler._is_locked_externally()` 를 불렀는데, 그 함수는 3시간 넘은 락 파일을
+    #   **지운다**(scheduler.py:188-191 `LOCK_FILE.unlink`). 즉 *감사 잡이 도는 것만으로*
+    #   살아 있는 발행 락이 삭제될 수 있었다 — 실측 최대 발행 지연 4.1시간 > 3시간.
+    #   감시는 대상을 건드리지 않는다. 파일 존재 여부만 본다.
     try:
-        from JARVIS02_WRITER.scheduler import _is_locked_externally
-        return bool(_is_locked_externally())
+        from JARVIS02_WRITER.scheduler import LOCK_FILE as _LF
+        return bool(_LF.exists())
     except Exception:
         return False
 

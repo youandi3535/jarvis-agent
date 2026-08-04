@@ -523,8 +523,22 @@ def run_theme(theme: str, gate_feedback: dict | None = None) -> dict:
                     return bool(result)
                 return _retry
 
-            # 실패 플랫폼 수만큼 retry_fn 등록 (incident_responder 가 플랫폼별 호출)
-            _retry_fns = {p: _make_theme_retry() for p in _guardian_fail}
+            # ★ 재시도는 **한 번만** 등록한다 (2026-08-04 — 중복 발행 차단)
+            #   종전: `{p: _make_theme_retry() for p in _guardian_fail}` — 실패 플랫폼 수만큼
+            #   등록했고 `incident_responder:383` 이 그걸 순회하며 각각 호출했다.
+            #   그런데 그 콜백은 `run_radar_top_theme()` → `run_all_themes()` 로
+            #   **두 플랫폼을 통째로 다시 발행** 한다(경제와 달리 플랫폼 인자가 없다:
+            #   `run_all_themes(theme, sector, gate_feedback)` vs `economic.run(post_naver=, post_tistory=)`).
+            #   → 두 플랫폼이 함께 실패하면 **전체 테마 발행이 2회** 돌았다.
+            #
+            #   실측 피해: 2026-07-20 21:00 슬롯이 네이버에 **3건** 을 냈다 —
+            #     21:14 mRNA / 22:07 항공기부품 / 00:51 모바일솔루션 (전부 다른 테마).
+            #     재시도가 카탈로그에서 새 테마를 다시 골라 통째로 발행한 결과다.
+            #
+            #   한 번만 부르는 것이 *원래 맞다* — 콜백 자체가 두 플랫폼을 복구하므로
+            #   플랫폼 수만큼 부를 이유가 없다. 경제(`run(post_naver=, post_tistory=)` 1회 호출)와 동형.
+            #   ※ 근본 수정(테마에도 플랫폼 인자 배선)은 발행 경로 변경이라 별건으로 둔다.
+            _retry_fns = {"+".join(_guardian_fail): _make_theme_retry()}
             respond_in_background("theme", _guardian_fail, _err_ctx, _retry_fns, theme=theme)
             log(f"🛡️ GUARDIAN incident_responder 트리거됨: theme={theme}, fail={_guardian_fail}")
         except Exception as _ire:
