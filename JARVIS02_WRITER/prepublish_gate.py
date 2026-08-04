@@ -552,15 +552,25 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str,
         '"violated_directives":["명백히 어긴 지침 번호 D1 형식, 없으면 []"]}'
     )
     try:
-        raw, ok = _inv_r("fact_judge", prompt, timeout=_judge_timeout(), _nonessential=True)
+        # ★ `_essential=True` — `_nonessential` 이 **회로 면제를 앞질러 무력화** 했다
+        #   (2026-08-04 실측). `fact_judge` 는 이미 `_CIRCUIT_EXEMPT_ALIASES` 소속이라
+        #   시스템이 "회로가 열려도 이 호출은 살려라" 고 판정해 둔 것인데,
+        #   `shared/llm.py` 의 평가 순서가
+        #       if _nonessential:  → open/probe 면 즉시 폴백(SDK 미호출)
+        #       elif _gate=="open": → _essential or 면제 alias 면 1회 실시도
+        #   라서 **면제 분기에 도달조차 못 했다.**
+        #   실측 2026-08-04: fact_judge 24회 중 8회가 `ok=0, duration 0ms`(= SDK 미호출).
+        #   같은 시각 `writer_long_body` 는 356초씩 정상 — LLM 자체는 멀쩡했다.
+        #   결과: 판정 불가 → **fail-closed 차단** → 21:00 테마 티스토리 **발행 0건**.
+        #   ★ 이것은 `engagement_judge` 에서 2026-08-01(622063b) 에 이미 고친 것과
+        #     **정확히 같은 병** 이다. 그때 fact_judge 를 "별건" 으로 미뤘고 오늘 터졌다.
+        #   ★ 왜 이 호출이 essential 인가: 실패하면 fail-closed 로 **발행 자체가 막힌다**.
+        #     발행 시각이 계약인 시스템에서 이보다 필수인 호출은 없다. 글당 1~2회다.
+        raw, ok = _inv_r("fact_judge", prompt, timeout=_judge_timeout(), _essential=True)
         if not ok:
-            # ★ 인프라 1회 재시도 (2026-07-16) — _nonessential 은 재시도 0회라
-            #   타임아웃 1번 = 판정 기회 소멸이었다. 한 번 더 시도 후에만 판정불가 확정.
-            #   ★ 2026-07-25: 판정 여부는 ok 로 본다. 종전엔 raw 공백 여부로만 봤는데,
-            #     회로 open 이면 두 호출 모두 *SDK 미호출 즉시 ""* 라 재시도가 무의미했고
-            #     그 사실이 반환값 어디에도 남지 않았다.
+            # ★ 인프라 1회 재시도 (2026-07-16) — 타임아웃 1번 = 판정 기회 소멸이었다.
             log.info("[prepublish_gate] 통합 판정 응답 없음 — 1회 재시도")
-            raw, ok = _inv_r("fact_judge", prompt, timeout=_judge_timeout(), _nonessential=True)
+            raw, ok = _inv_r("fact_judge", prompt, timeout=_judge_timeout(), _essential=True)
         if not ok or not (raw or "").strip():
             return _no_verdict("unavailable")
         m = re.search(r"\{.*\}", raw, re.DOTALL)

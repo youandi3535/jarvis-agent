@@ -671,3 +671,125 @@ def test_시크릿_파일_권한이_소유자전용():
             continue
         mode = stat.S_IMODE(f.stat().st_mode)
         assert mode & 0o077 == 0, f"{rel} 권한 {oct(mode)} — 소유자 외 접근 가능"
+
+
+# ══════════════════════════════════════════════════════════════════
+# 7) ★ 판정 불가가 대본을 재생성시키지 않는가 (ERRORS [549] · 2026-08-04)
+# ══════════════════════════════════════════════════════════════════
+#   실사고: 21:00 테마 발행에서 판정기(fact_judge)가 서버 거절(turns=0)로 죽자
+#   harness 가 **대본을 통째로 재생성**했다. 대본은 멀쩡했는데도.
+#   그 재생성이 3만 토큰을 먹어 5시간 창을 소진 → 다음 판정도 거절 → 악순환.
+#   한 발행에 writer_long_body 4회 116,345 토큰(창의 86%), 판정 몫은 5.6% 였다.
+def _mk_action():
+    from JARVIS00_INFRA.harness import ActionDefinition, ActionStep
+    steps = [ActionStep(name=n, fn=lambda s: {}) for n in
+             ("① 규정 로드", "② 종목 수집", "③ 네이버 대본 생성", "⑤ 티스토리 대본 생성")]
+    return ActionDefinition(name="theme-publish-x-tistory", steps=steps,
+                            verify=lambda s: [], send=lambda s: None)
+
+
+def test_판정불가는_대본을_재생성시키지_않는다():
+    """★ 핵심 — 인프라 사유 이슈에 *대본 step 이름* 이 붙어 와도 재생성 금지.
+
+    게이트는 `Issue(step=step_name, kind=...)` 로 보내므로 step 은 실제 대본 step 이다.
+    판정은 `kind` 로 해야 한다 — step 이름으로 하면 이 사고가 그대로 재발한다.
+    """
+    from JARVIS00_INFRA.harness import Issue, _find_resume_step, VERIFY_ONLY, INFRA_KIND
+
+    iss = [Issue(step="⑤ 티스토리 대본 생성", kind=INFRA_KIND,
+                 detail="[사실성] 판정 불가 — LLM 미가용(일시적)")]
+    assert _find_resume_step(_mk_action(), iss) == VERIFY_ONLY, (
+        "판정 불가(인프라)인데 대본 재생성으로 갔다 — 2026-08-04 사고 재발")
+
+
+def test_진짜_대본결함은_여전히_재생성한다():
+    """반대 방향 — 인프라를 걸러내다 *진짜 결함* 까지 통과시키면 안 된다."""
+    from JARVIS00_INFRA.harness import Issue, _find_resume_step, VERIFY_ONLY
+
+    for kind in ("draft_failed", "factuality", "engagement"):
+        iss = [Issue(step="⑤ 티스토리 대본 생성", kind=kind, detail="결함")]
+        got = _find_resume_step(_mk_action(), iss)
+        assert got == "⑤ 티스토리 대본 생성", f"kind={kind} 가 재생성을 건너뛴다 (got={got})"
+        assert got != VERIFY_ONLY
+
+
+def test_판정_상한이_실측_최대보다_충분히_크다():
+    """90초 하드코딩 회귀 방지 — 실측 성공 최대 86.1s 대비 2배 이상."""
+    from shared.llm import judge_timeout
+
+    t = judge_timeout()
+    assert t >= 172, f"판정 상한 {t}s — 실측 최대 86.1s 대비 여유 부족(2배 미만)"
+
+
+def test_판정_alias_는_회로_면제를_유지한다():
+    """`_nonessential` 이 `_CIRCUIT_EXEMPT_ALIASES` 를 무력화하던 충돌 회귀 방지."""
+    from shared.llm import _CIRCUIT_EXEMPT_ALIASES
+    import inspect
+    import shared.llm as _m
+
+    for a in ("fact_judge", "engagement_judge"):
+        assert a in _CIRCUIT_EXEMPT_ALIASES, f"{a} 가 회로 면제 목록에서 빠졌다"
+    src = inspect.getsource(_m.invoke_text_result)
+    i = src.find("if _nonessential:")
+    assert i >= 0, "_nonessential 분기를 찾지 못함 — 테스트를 갱신할 것"
+    seg = src[i:i + 900]
+    assert "_CIRCUIT_EXEMPT_ALIASES" in seg, (
+        "_nonessential 분기가 면제 목록을 보지 않는다 — 게이트가 즉사하는 경로 재발")
+
+
+# ══════════════════════════════════════════════════════════════════
+# 10) 회로 면제를 플래그가 앞질러 무력화하는 병 — 구조로 차단
+# ══════════════════════════════════════════════════════════════════
+def test_회로면제_alias_에_nonessential_을_붙이지_않는다():
+    """★ 같은 병이 세 번 났다 — 이제 사람 기억이 아니라 테스트가 막는다.
+
+    `shared/llm.py` 평가 순서:
+        if _nonessential:      → open/probe 면 SDK 미호출 즉시 폴백
+        elif _gate == "open":  → _essential or 면제 alias 면 1회 실시도
+    즉 `_nonessential=True` 는 **면제 분기에 도달조차 못 하게** 만든다.
+    시스템이 "이 호출은 회로가 열려도 살려라" 고 판정해 둔 alias 에 이 플래그를 붙이면
+    그 판정이 통째로 무력화된다.
+
+    실측 피해:
+      · engagement_judge — 네이버 글 3주간 전량 미채점(2026-08-01 수정, 622063b)
+      · fact_judge       — 2026-08-04 24회 중 8회 `ok=0, 0ms`(SDK 미호출) →
+                           판정 불가 → fail-closed → 21:00 테마 티스토리 **발행 0건**
+    """
+    import re
+    from pathlib import Path
+
+    import shared.llm as L
+
+    exempt = set(getattr(L, "_CIRCUIT_EXEMPT_ALIASES", set()))
+    assert exempt, "회로 면제 목록을 읽지 못했다 — 검사가 무의미해진다"
+
+    root = Path(__file__).resolve().parent.parent
+    bad: list[str] = []
+    for f in root.rglob("*.py"):
+        sp = str(f)
+        if "__pycache__" in sp or "/.venv/" in sp or "/tests/" in sp:
+            continue
+        try:
+            src = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        # 같은 호출 안에서 alias 문자열과 _nonessential=True 가 함께 나오는지
+        for m in re.finditer(r'["\'](\w+)["\'][^)]{0,400}?_nonessential\s*=\s*True', src, re.S):
+            if m.group(1) in exempt:
+                bad.append(f"{f.relative_to(root)}: {m.group(1)}")
+    assert not bad, (
+        "회로 면제 alias 에 _nonessential=True 가 붙어 면제가 무력화된다:\n  " + "\n  ".join(bad)
+    )
+
+
+def test_사실성_판정은_필수호출이다():
+    """실패하면 fail-closed 로 **발행 자체가 막힌다** — 이보다 필수인 호출은 없다."""
+    import inspect
+
+    from JARVIS02_WRITER import prepublish_gate as G
+
+    src = inspect.getsource(G._combined_quality_call)
+    assert "_essential=True" in src, "사실성 판정이 필수 호출로 표시돼 있지 않다"
+    assert "_nonessential=True" not in src, (
+        "사실성 판정에 _nonessential 이 남아 있다 — 회로 면제가 무력화된다"
+    )
