@@ -793,3 +793,77 @@ def test_사실성_판정은_필수호출이다():
     assert "_nonessential=True" not in src, (
         "사실성 판정에 _nonessential 이 남아 있다 — 회로 면제가 무력화된다"
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+# 11) 전수감사 2위 — 채점표가 요구하는 헤딩을 생성기가 만들지 않았다
+# ══════════════════════════════════════════════════════════════════
+def test_헤딩골격이_헌법에서_파생된다():
+    """★ 채점표가 옳고 생성기가 헌법을 안 지키고 있었다.
+
+    헌법(BLOG_SUPREME_LAW 제15조): 네이버 `H3 소제목 3~4개` /
+    티스토리 `H1 1개 + H2 3~5개 + H3 0~3개`.
+    그런데 `draft_writer` 골격은 `<h2>` 를 21곳에 박고 `<h3>` 는 0회였다.
+    두 지시가 충돌하면 LLM 은 *구체적 골격 예시* 를 따른다 —
+    실측 발행본 24편 h3 평균 0.0~0.8 · h1 평균 0.0~0.2.
+    결과: 네이버 5점(N3+N4) · 티스토리 2점(T3)이 **매 글 죽었다**.
+    """
+    from JARVIS02_WRITER.seo_standards import heading_plan
+
+    nv, ts = heading_plan("naver"), heading_plan("tistory")
+    assert nv["section_tag"] == "h3", f"네이버 섹션 태그가 헌법과 다르다: {nv}"
+    assert ts["section_tag"] == "h2", f"티스토리 섹션 태그가 헌법과 다르다: {ts}"
+    assert ts["h1_required"] is True, "티스토리 H1 요구가 반영되지 않았다"
+    assert nv["h1_required"] is False, "네이버는 H1 을 요구하지 않는다"
+    # 파생인지 확인 — 헌법 원문이 함께 나와야 한다
+    assert "H3" in nv["source"] and "H1" in ts["source"], "헌법 원문에서 파생하지 않는다"
+
+
+def test_섹션_프롬프트가_플랫폼별_헤딩을_쓴다():
+    """골격에 태그를 박으면 헌법을 바꿔도 따라오지 않는다."""
+    import re
+
+    import JARVIS02_WRITER.draft_writer as D
+
+    seen = {}
+    orig = D.invoke_text
+    D.invoke_text = lambda alias, user_msg, **kw: seen.setdefault("msg", user_msg) or ""
+    try:
+        for pf, want in (("naver", "h3"), ("tistory", "h2")):
+            seen.clear()
+            try:
+                D._gen_section_call1("k", "s", "r", "(헌법)", platform=pf, datasets=None)
+            except Exception:
+                pass
+            msg = seen.get("msg", "")
+            assert msg, f"{pf}: 프롬프트를 못 잡았다"
+            assert "__SECTAG__" not in msg, f"{pf}: 플레이스홀더가 치환되지 않았다"
+            tags = set(re.findall(r"<(h[1-6])>소제목", msg))
+            assert tags == {want}, f"{pf}: 섹션 헤딩이 {tags} (기대 {want})"
+    finally:
+        D.invoke_text = orig
+
+
+def test_섹션_회수정규식이_골격과_같은_태그를_쓴다():
+    """골격과 회수 정규식이 어긋나면 섹션 2·3 이 통째로 유실된다."""
+    import inspect
+
+    import JARVIS02_WRITER.draft_writer as D
+
+    src = inspect.getsource(D._gen_economic_ts_nv_parallel)
+    assert "_heading_tags(platform)" in src, "회수 정규식이 파생 태그를 쓰지 않는다"
+    assert 'r"<h2>소제목' not in src, "회수 정규식에 h2 가 박혀 있다"
+
+
+def test_골격_플레이스홀더가_모두_치환된다():
+    """치환을 빠뜨리면 프롬프트에 `<__SECTAG__>` 가 그대로 나간다."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent
+           / "JARVIS02_WRITER" / "draft_writer.py").read_text(encoding="utf-8")
+    used = src.count("__SECTAG__>")                    # 골격 안 등장 횟수
+    replaced = src.count('replace("__SECTAG__"')       # 치환 호출 횟수
+    assert used == 0 or replaced >= 1, "플레이스홀더가 있는데 치환 호출이 없다"
+    assert used == replaced or replaced * 2 >= used, (
+        f"플레이스홀더 {used}곳 대비 치환 {replaced}곳 — 일부 경로가 치환되지 않는다"
+    )
