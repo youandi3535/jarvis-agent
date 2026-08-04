@@ -300,8 +300,13 @@ def redact_logs(dry_run: bool = True) -> dict:
       로그는 사고 조사의 유일한 1차 자료다. 지우면 노출은 끝나지만 조사도 끝난다.
       같은 내용을 `mask()` 로 통과시키면 **역사는 남고 비밀만 사라진다.**
 
-    ★ 대상 목록을 박지 않는다 (② 동적 설계)
-      `logs/` 실물을 훑는다. 새 로그 파일이 생겨도 자동으로 대상이 된다.
+    ★ 대상 목록을 박지 않는다 (② 동적 설계) — **디렉터리도 박지 않는다**
+      초판은 `root/"logs"` 한 곳만 훑었다. 그런데 실물 로그 디렉터리는 5개였고
+      (`logs` · `JARVIS02_WRITER/logs` · `JARVIS03_RADAR/logs` · `JARVIS07_GUARDIAN/logs` …)
+      **하필 평문 토큰 26회가 있는 곳이 사각지대**였다. "3,006 → 0" 이라는 보고가
+      사실은 "내가 본 한 곳에서 0" 이었다 — 범위를 박으면 보고까지 거짓이 된다.
+      → 이름이 `logs` 인 디렉터리를 실물로 찾아서 전부 훑는다. 새 에이전트가
+        자기 로그 폴더를 만들어도 자동으로 대상이 된다.
       바이너리·회전 백업(.gz)은 텍스트가 아니므로 건너뛴다.
 
     Args:
@@ -311,13 +316,17 @@ def redact_logs(dry_run: bool = True) -> dict:
         {"files": [(경로, 치환건수)], "total": N, "written": bool}
     """
     root = Path(__file__).resolve().parent.parent
-    log_dir = root / "logs"
     vals = [v for _k, v in secret_values()]
     out: list[tuple[str, int]] = []
     total = 0
-    if not log_dir.is_dir() or not vals:
+    if not vals:
         return {"files": [], "total": 0, "written": False}
-    for f in sorted(log_dir.rglob("*")):
+    targets: list[Path] = []
+    for d in sorted(root.rglob("logs")):
+        if not d.is_dir() or ".venv" in d.parts or ".git" in d.parts or "node_modules" in d.parts:
+            continue
+        targets.extend(sorted(d.rglob("*")))
+    for f in targets:
         if not f.is_file() or f.suffix in (".gz", ".zip", ".pkl", ".png", ".jpg"):
             continue
         try:

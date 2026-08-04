@@ -10942,3 +10942,21 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **해결**: ① `recovery_hint(post_type)` — 잡 ID 는 `DEFAULT_JOBS` 에서, 로그 경로는 **지금 이 프로세스가 실제로 쓰는 핸들러**에서, 복구 도구명은 도구 등록부에서 파생(리터럴 0). 절차 전문은 `docs/RUNBOOK.md` 신설 — *사실을 적지 않고 사실을 알아내는 명령을 적는다*(문서 드리프트 차단). ② `effective_grace(base)` 로 교정.
 - **파일**: JARVIS08_PUBLISH/publish_ledger.py · JARVIS04_SCHEDULER/job_prereq.py · docs/RUNBOOK.md
 - **교훈**: **경보는 다음 한 걸음까지 말해야 경보다.** 그리고 같은 파일 안에서도 사본은 생긴다 — 파생 형태가 이미 옆줄에 있는데 리터럴을 적는 순간이 그 시작이다.
+
+## [564] "3,006 → 0" 이 사실은 "내가 본 한 곳에서 0" 이었다 — 세척 범위를 박았다 (2026-08-05)
+
+- **증상**: [560] 세척 직후 프로덕션 감사가 살아있는 텔레그램 봇 토큰을 **무승인 도구로 평문 반환**하는 것을 재현. `read_file('JARVIS02_WRITER/logs/scheduler.log')` → 토큰 26회.
+- **환경**: 전날 밤 `redact_logs()` 로 3,006회를 0으로 만들고 그렇게 보고한 직후.
+- **원인**: ① `redact_logs` 가 `root/"logs"` **한 디렉터리만** 훑았다. 실물 로그 디렉터리는 5개(`logs`·`JARVIS02_WRITER/logs`·`JARVIS03_RADAR/logs`·`JARVIS07_GUARDIAN/logs`·`dashboard/.next/dev/logs`)였고 하필 누출이 남은 곳이 사각지대. ② 마스킹 필터를 **데몬 부팅 1곳**에만 걸었는데 발행·분석은 subprocess 라 부모 필터가 안 닿는다 — `requests` 예외 메시지가 URL 을 통째로 담아 토큰이 찍혔다. ③ `_safe_path` 는 `.env`·쿠키는 막지만 그 값이 *흘러든 로그* 는 안 막는다.
+- **헛다리**: `_DENY_DIRS` 에 `logs` 를 추가하는 것. 로그 열람을 막는 건 운영 편의를 해치고, **비밀이 로그에 있다는 사실 자체는 그대로 남는다**. 값을 지우는 것이 답이지 문을 잠그는 것이 아니다.
+- **해결**: ① 로그 디렉터리를 `root.rglob("logs")` 로 **실물 파생**(새 에이전트가 자기 로그 폴더를 만들어도 자동 대상). ② 마스킹 설치를 `preflight._check_secret_masking` 으로 이관 — `ensure_preflight()` 는 **모든 `__main__` 진입점의 의무 호출**이라 자식 프로세스까지 덮인다. 검사만 하던 것을 *걸고 나서 검사* 로 바꿨다. ③ 전 디렉터리 세척 26 → 0, 무승인 도구 재현 결과 `노출 False`.
+- **파일**: shared/secrets.py · JARVIS00_INFRA/preflight.py · tests/test_publish_golden.py
+- **교훈**: **범위를 박으면 보고까지 거짓이 된다.** 0 이라는 숫자는 "없다" 가 아니라 "내가 본 곳에는 없다" 였다. 그리고 단일 진입점은 *부모 프로세스* 가 아니라 **모두가 반드시 지나는 곳**이어야 한다 — subprocess 가 있는 시스템에서 부모의 전역 설정은 단일 진입점이 아니다.
+
+## [565] CI 가 '진짜 결함' 이 아니라 '빠진 의존' 으로 빨개졌다 (2026-08-05)
+
+- **증상**: 최소 환경 재현 결과 `2 failed, 89 passed` — `post_quality_analyzer.py:22 import requests` → ModuleNotFoundError. 로컬은 91 초록이라 아무도 몰랐고, 로컬이 origin 보다 10커밋 앞서 원격에서는 한 번도 돌지 않았다.
+- **원인**: `ci.yml` 이 `pip install pytest python-dotenv` 로 **의존 목록을 박제**. 전날 커밋이 테스트에서 런타임 모듈 하나를 더 건드리자 즉시 깨졌다.
+- **해결**: `requirements-test.txt` 단일 소스 신설 + CI 는 `-r` 로 설치. 테스트가 새 의존을 요구하면 그 파일만 고친다(yaml 은 안 건드린다). 두 파일이 갈라지는 것은 골든 테스트가 막는다. 최소 환경 재현 결과 **91 통과**.
+- **파일**: requirements-test.txt · .github/workflows/ci.yml · tests/test_publish_golden.py
+- **교훈**: **CI 가 빠진 의존으로 빨개지면 사람은 CI 를 안 보게 된다.** 게이트를 죽이는 가장 흔한 길은 게이트를 끄는 게 아니라 *신뢰를 잃게 만드는 것* 이다.

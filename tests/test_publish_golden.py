@@ -1115,3 +1115,64 @@ def test_잡_선행검사_grace가_파생값이다():
     src = inspect.getsource(JP)
     assert "misfire_grace_time=effective_grace(" in src, "grace 가 파생값이 아니다"
     assert "misfire_grace_time=600" not in src, "리터럴 600 잔존"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-08-05 프로덕션 감사 — 어젯밤 수정의 미비점 3건
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_로그세척이_모든_로그디렉터리를_훑는다():
+    """★ "3,006 → 0" 이 사실은 "내가 본 한 곳에서 0" 이었다.
+
+    실물 로그 디렉터리는 5개인데 초판 `redact_logs` 는 `root/"logs"` 하나만 훑었고,
+    하필 평문 봇 토큰 26회가 있던 `JARVIS02_WRITER/logs/scheduler.log` 가 사각지대였다.
+    범위를 박으면 보고까지 거짓이 된다.
+    """
+    import inspect
+    from pathlib import Path
+
+    from shared.secrets import redact_logs
+
+    src = inspect.getsource(redact_logs)
+    assert 'root / "logs"' not in src, "로그 디렉터리가 한 곳으로 박혀 있다"
+    assert 'rglob("logs")' in src, "로그 디렉터리를 실물에서 파생하지 않는다"
+
+    root = Path(__file__).resolve().parent.parent
+    real = {d for d in root.rglob("logs")
+            if d.is_dir() and not {".venv", ".git", "node_modules"} & set(d.parts)}
+    assert len(real) >= 2, f"로그 디렉터리가 {len(real)}개 — 이 테스트의 전제가 깨졌다"
+
+
+def test_preflight가_마스킹을_검사만_하지_않고_건다():
+    """★ 발행·분석은 subprocess 로 돈다 — 부모의 루트 필터가 안 닿는다.
+
+    `ensure_preflight()` 는 모든 `__main__` 진입점의 의무 호출이므로,
+    거기서 걸어야 자식 프로세스까지 덮인다.
+    """
+    import inspect
+
+    from JARVIS00_INFRA import preflight as P
+
+    src = inspect.getsource(P._check_secret_masking)
+    assert "install_log_masking()" in src, "preflight 가 마스킹을 걸지 않고 검사만 한다"
+
+
+def test_CI가_테스트_의존을_이_파일에서_설치한다():
+    """★ CI 가 '빠진 의존' 으로 빨개지면 사람은 CI 를 안 보게 된다 — 게이트가 죽는 길.
+
+    실측 2026-08-04: `pip install pytest python-dotenv` 로 고정돼 있어
+    `requests` 를 건드린 커밋이 CI 를 `2 failed` 로 만들었다(로컬은 초록).
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    dep_file = root / "requirements-test.txt"
+    assert dep_file.exists(), "requirements-test.txt 없음"
+
+    ci = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "requirements-test.txt" in ci, "CI 가 테스트 의존 파일을 쓰지 않는다"
+    assert "pip install pytest python-dotenv" not in ci, "CI 에 의존 목록이 박혀 있다"
+
+    pkgs = {l.strip() for l in dep_file.read_text(encoding="utf-8").splitlines()
+            if l.strip() and not l.startswith("#")}
+    assert "pytest" in pkgs

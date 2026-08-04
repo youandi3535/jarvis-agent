@@ -294,6 +294,15 @@ def _check_secret_masking(report: PreflightReport) -> None:
     """
     try:
         from shared import secrets as _sec
+        # ★ 검사만 하지 않고 **여기서 건다** (2026-08-05 정정).
+        #   종전엔 데몬 부팅 1곳에서만 필터를 걸었다. 그런데 발행·분석은 **subprocess**
+        #   로 돈다(`scheduler.py`·`post_quality_analyzer.py`). 그 자식들은 자기 로깅을
+        #   따로 세우므로 부모의 루트 필터가 닿지 않는다 — 실측으로
+        #   `JARVIS02_WRITER/logs/scheduler.log` 에 봇 토큰이 26회 평문으로 남았다
+        #   (requests 예외 메시지가 URL 을 통째로 담는다).
+        #   `ensure_preflight()` 는 **모든 __main__ 진입점의 의무 호출** 이다(CLAUDE.md).
+        #   즉 자식이든 부모든 반드시 여기를 지난다 — 그래서 여기가 진짜 단일 진입점이다.
+        _sec.install_log_masking()
         sc = _sec.selfcheck()
         if sc.get("issues"):
             report.warn("secret_masking", "selfcheck", "; ".join(sc["issues"]))

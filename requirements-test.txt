@@ -1,0 +1,20 @@
+# 골든 테스트가 도는 데 필요한 최소 의존 — **CI 와 이 파일이 단일 진실 소스**
+#
+# ★ 왜 별도 파일인가 (2026-08-05)
+#   CI 에 `pip install pytest python-dotenv` 라고 *적어 두었더니*, 테스트가 런타임
+#   모듈을 하나 더 건드리는 순간 CI 가 red 가 됐다. 실측: 2026-08-04 커밋이
+#   `post_quality_analyzer`(→ `import requests`)를 건드려 `2 failed, 89 passed`.
+#   그런데 로컬은 초록이라 아무도 몰랐다 — **CI 가 '진짜 결함' 이 아니라 '빠진 의존'
+#   으로 빨개지면, 사람은 CI 를 안 보게 된다.** 그게 게이트를 죽이는 가장 흔한 길이다.
+#
+# ★ 왜 requirements.txt 전체가 아닌가
+#   280줄에 selenium·matplotlib·scipy 가 들어 있다. 테스트는 브라우저를 띄우지 않는다.
+#   전부 설치하면 CI 가 느려지고, 느린 CI 는 꺼지는 CI 가 된다.
+#
+# ★ 규칙
+#   테스트가 새 서드파티를 요구하면 **여기에 추가**한다. CI yaml 을 고치지 않는다.
+#   `tests/test_publish_golden.py::test_CI가_테스트_의존을_이_파일에서_설치한다` 가
+#   CI 와 이 파일이 갈라지는 것을 막는다.
+pytest
+python-dotenv
+requests

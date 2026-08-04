@@ -50,7 +50,7 @@ jobs:
           python-version: "3.10"
 
       - name: 의존성 설치 (테스트 실행 최소 패키지)
-        run: pip install pytest python-dotenv
+        run: pip install -r requirements-test.txt
 
       - name: 테스트 실행
         run: |
