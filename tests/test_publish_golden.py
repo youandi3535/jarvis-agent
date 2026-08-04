@@ -277,26 +277,43 @@ def test_분석은_한_프로세스에서_순차_처리된다():
     assert src.count("Popen(") == 1, f"분석 프로세스는 하나여야 한다 (현재 {src.count('Popen(')}개)"
 
 
-def test_주입된_지침을_발행전에_검사한다():
-    """넣어주기만 하고 지켰는지 안 보면 학습은 프롬프트만 길게 만든다.
+def test_지침_미준수는_발행을_차단하지_않는다():
+    """★ 2026-08-04 회귀 수정 — 품질 기준의 단일 진입점은 100점 루브릭이다.
 
-    실측: 08-03 네이버 테마글이 주입된 8건 중 2건을 어겼고 같은 지적이 다음 분석에서 재발.
+    2026-08-03 에 나는 지침 위반을 *차단 사유* 로 만들었다. 그런데 주입 지침 8건이
+    **전부** 루브릭 항목과 겹친다(H3→N3_h3_count, 도입부→B1_intro, H1→T3_h1_count …).
+    검사는 이미 되고 있었고 — 다만 *감점* 이지 *차단* 이 아니었으며 그게 정상이다.
+    실제 피해: 08-04 07:00 네이버 경제글이 루브릭 72.0·79.0·75.5·78.0 으로 네 번 모두
+    기준(70)을 넘겼는데 그 게이트가 네 번 다 막아 **발행 0건**.
     """
     import inspect
 
     from JARVIS02_WRITER import prepublish_gate as G
 
-    call_src = inspect.getsource(G._combined_quality_call)
-    assert "## C. 학습 지침 준수" in call_src, "발행 전 판정에 지침 준수 축이 없다"
-    assert "active_directives" in call_src, "지침 목록을 quality_learner 에서 받지 않는다"
-    assert "violated_directives" in call_src, "위반 지침 반환 스키마가 없다"
-
     gate_src = inspect.getsource(G.prepublish_quality_issues)
-    assert "[학습지침]" in gate_src, "위반이 Issue 로 나오지 않는다"
-    # kind 는 engagement 여야 재작성 순환으로 간다 (draft_quality 면 inline 패치 시도)
-    assert "draft_quality" not in gate_src.split("[학습지침]")[1][:300], (
-        "지침 위반을 draft_quality 로 내면 draft_fixer 가 못 고칠 것을 붙잡는다"
+    # 위반이 Issue(=차단 사유)로 나가면 회귀
+    assert "[학습지침]" not in gate_src, (
+        "지침 미준수가 다시 차단 사유가 됐다 — 루브릭과 이중 기준이 된다"
     )
+    idx = gate_src.find("_violated")
+    assert idx > 0, "지침 판정 자체가 사라졌다 — 관측은 남겨야 한다"
+    assert "out.append" not in gate_src[idx:idx + 700], (
+        "_violated 처리부가 Issue 를 생성한다 — 차단 경로 부활"
+    )
+    assert "관측용" in gate_src, "관측 로그가 사라졌다"
+
+
+def test_지침_판정은_통합_1콜에_얹혀있다():
+    """관측은 유지하되 *별도 LLM 호출* 을 만들지 않는다."""
+    import inspect
+
+    from JARVIS02_WRITER import prepublish_gate as G
+
+    call_src = inspect.getsource(G._combined_quality_call)
+    assert "## C. 학습 지침 준수" in call_src, "지침 축이 통합 판정에서 사라졌다"
+    assert "active_directives" in call_src, "지침 목록을 quality_learner 에서 받지 않는다"
+    # 통합 호출은 하나여야 한다 (재시도 1회 포함 최대 2회)
+    assert call_src.count("_inv_r(") <= 2, "지침 판정용 LLM 호출이 따로 생겼다"
 
 
 def test_지침조회는_사용기록을_남기지_않는다():
