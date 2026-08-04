@@ -501,6 +501,26 @@ def _harness_infra_kinds() -> frozenset:
     return _INFRA_KINDS_CACHE
 
 
+def _harness_says_infra(kind: str) -> bool:
+    """인프라 kind 판별을 **harness 에 위임** (2026-08-04 감사 6위).
+
+    ★ 왜 집합 비교로는 안 되는가
+      harness 가 사유별 kind(`infra_throttle_timeout` 등)를 내기 시작하면서, 집합
+      등가비교는 그 kind 들을 **코드 결함으로 오분류** 한다 — 자동수리가 고칠 수 없는
+      것(서버 스로틀·락 경합)을 붙잡고 LLM 을 태우게 된다.
+      판별식을 여기 복제하면(`startswith`) 그게 곧 사본이고, harness 가 규칙을 바꾸는
+      순간 또 갈라진다. 그래서 **주인에게 묻는다.**
+
+    지연 import 이유는 `_harness_infra_kinds()` 와 동일(재진입 창 회피). 실패 시 False —
+    그러면 위 집합 비교 결과만 쓰이므로 종전 동작으로 안전하게 되돌아간다.
+    """
+    try:
+        from JARVIS00_INFRA.harness import is_infra_kind  # noqa: PLC0415 (의도된 지연)
+        return bool(is_infra_kind(kind))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _env_extra_kinds() -> frozenset:
     """무배포 안전밸브 — `GUARDIAN_EXTRA_NON_CODE_KINDS=a,b` 로 kind 추가(호출 시점 조회).
 
@@ -573,7 +593,7 @@ def is_transient(error_type: str, message: str = "", source: str = "",
 
     킬스위치 `GUARDIAN_CODEBUG_GUARD=0` → 3) 만 비활성화(종전 동작 복귀).
     """
-    if kind and kind in non_code_issue_kinds():   # ★ 호출 시점 파생 (사본 없음)
+    if kind and (kind in non_code_issue_kinds() or _harness_says_infra(kind)):
         return True   # 1) 코드 수정으로 해결 불가한 harness 이슈 — Tier-2 낭비 차단
 
     # 2) ★ ERRORS [446][447][448] 박제 2026-07-17 — source="audit_test" 는 GUARDIAN

@@ -615,6 +615,85 @@ def run_once():
     return processed
 
 
+def reward_cutoff() -> str:
+    """재채점이 아직 *의미 있는* 시각 — 보상을 소비하는 잡의 일정에서 파생.
+
+    ADR 014 보상은 `j07_quality_learn` 이 하루 한 번 읽어 간다. 그 잡이 이미 훑고 간
+    글을 나중에 채점해 봐야 보상은 발화하지 않는다. 그러므로 **마지막 보상 회수 이후에
+    발행된 글** 까지만 재채점한다.
+
+    시각을 여기 박지 않는다(② 동적 설계) — `DEFAULT_JOBS` 에서 그 잡의 cron 을 읽는다.
+    잡 시간을 바꾸면 재채점 창이 자동으로 따라온다.
+    """
+    import datetime as _dt
+    fallback = _dt.datetime.now() - _dt.timedelta(days=1)
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+        kw = None
+        for j in DEFAULT_JOBS:
+            if "quality_learner" in str(j.get("callback", "")):
+                kw = j.get("kwargs") or {}
+                break
+        if not kw or not isinstance(kw.get("hour"), int):
+            raise ValueError("보상 잡 cron 파생 실패")
+        now = _dt.datetime.now()
+        last = now.replace(hour=int(kw["hour"]), minute=int(kw.get("minute") or 0),
+                           second=0, microsecond=0)
+        if last > now:
+            last -= _dt.timedelta(days=1)
+        return last.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return fallback.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def rescore_unscored(limit: int = 3) -> dict:
+    """채점만 실패한 글을 **점수만** 다시 매긴다 (2026-08-04 감사 6위).
+
+    ★ 왜 필요한가
+      루브릭 채점은 Section A(매력도)를 LLM 으로 판정한다. 그 호출이 스로틀·락 경합으로
+      실패하면 `score=None` 으로 저장되고, 글의 status 는 이미 `analyzed` 라 **어느
+      대기열에도 다시 잡히지 않는다.** 실측 08-02~08-04 티스토리 4건 중 3건 소실.
+
+    ★ 무엇을 안 하는가 (중복 방지)
+      제안 재생성·텔레그램 재전송·승인 재요청을 하지 않는다. 이미 사용자에게 간 글이다.
+      비어 있는 점수 한 칸만 채운다(`db.save_quality_score`).
+
+    ★ 발행 우선 (ERRORS [474] 와 같은 게이트)
+      발행 중이면 아무 것도 하지 않는다. 재채점은 급하지 않다 — 다음 회차에 또 온다.
+    """
+    try:
+        from shared.llm import bg_defer_reason as _bg_defer
+        why = _bg_defer()
+    except Exception:
+        why = ""
+    if why:
+        return {"rescored": 0, "deferred": why}
+
+    rows = db.get_unscored_analyzed(reward_cutoff(), limit=limit)
+    if not rows:
+        return {"rescored": 0, "pending": 0}
+
+    done, failed = 0, 0
+    for r in rows:
+        content = r.get("original_content") or r.get("original_html") or ""
+        if not content:
+            continue
+        try:
+            _s, score = analyze_post_quality(
+                r.get("platform", ""), r.get("title", ""), content,
+                post_type=r.get("post_type", "") or "")
+            if score is None:
+                failed += 1
+                continue
+            if db.save_quality_score(int(r["id"]), float(score)):
+                done += 1
+                print(f"  ♻️ 재채점 #{r['id']} [{r.get('platform')}] {score:.1f}/100")
+        except Exception as e:
+            failed += 1
+            _g_report("radar", e, module=__name__, func_name="rescore_unscored")
+    return {"rescored": done, "still_failing": failed, "pending": len(rows)}
+
+
 def learn_from_suggestions(applied: list, scope: str = "all") -> int:
     """★ 승인된 개선 제안 → learning_insights 누적 — *단일 진입점* (사용자 박제 2026-07-24).
 

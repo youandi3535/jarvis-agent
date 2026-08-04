@@ -184,6 +184,31 @@ def published_in_slot(start: _dt.datetime, end: _dt.datetime,
     return {r[0] for r in rows if r[0]}
 
 
+def scoring_gaps(start: _dt.datetime, end: _dt.datetime,
+                 post_type: str = "") -> list[tuple[int, str]]:
+    """슬롯 창 안에 **발행은 됐는데 채점이 비어 있는** 글 — (id, platform).
+
+    ★ 왜 원장이 이걸 보는가 (감사와 수리를 나눈다)
+      원장이 답하는 질문은 하나다: *"이 슬롯은 완결됐는가?"* 발행만 되고 채점이 비면
+      ADR 014 보상 신호가 안 생기므로 슬롯은 완결된 게 아니다. 그래서 여기서 *본다*.
+      다만 **고치지는 않는다** — 재채점은 루브릭 주인(`post_quality_analyzer`) 일이다.
+      감사가 수리까지 하면 두 도메인이 한 파일에 엉킨다.
+
+    실측 배경(08-02~08-04): 티스토리 4건 중 3건이 `quality_score IS NULL` 로 남았고
+    아무도 몰랐다 — 발행은 성공했으니 어떤 경보도 울리지 않았다.
+    """
+    from shared.db import get_db
+    sql = ("SELECT id, platform FROM post_analysis "
+           "WHERE created_at >= ? AND created_at < ? AND is_revised=0 "
+           "  AND quality_score IS NULL")
+    args: list = [start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")]
+    if post_type:
+        sql += " AND post_type = ?"
+        args.append(post_type)
+    with get_db() as conn:
+        return [(int(r[0]), str(r[1])) for r in conn.execute(sql, args)]
+
+
 def slot_gaps(now: _dt.datetime | None = None) -> tuple[str, list[str], list[str]] | None:
     """(post_type, 결손 플랫폼, 기대 플랫폼) — 이번 슬롯 기준. 슬롯이 없으면 None."""
     slot = current_slot(now)
@@ -233,6 +258,67 @@ def publish_gap_error_type(post_type: str, platform: str) -> str:
     return "PublishGap" + post_type.capitalize() + platform.capitalize()
 
 
+def recovery_hint(post_type: str) -> list[str]:
+    """결손 1건을 사람이 *지금 손으로* 되살리는 데 필요한 최소 정보.
+
+    ★ 왜 알림에 이걸 넣는가 (2026-08-04 감사 5위)
+      종전 경보는 "무엇이 실패했는가" 만 말했다. 받은 사람은 그 다음에 무엇을 해야
+      하는지 몰라서 **터미널을 열고 잡 이름부터 찾아야** 했다. 새벽 2시에 그건
+      경보가 아니라 숙제다. 경보는 *다음 한 걸음* 까지 말해야 한다.
+
+    ★ 세 값 전부 파생 — 리터럴 0 (② 동적 설계)
+      · 잡 ID   ← `DEFAULT_JOBS` 에서 이 글종류의 발행 잡을 찾아서
+      · 로그    ← **지금 이 프로세스가 실제로 쓰고 있는** 파일 핸들러 경로
+                  (경로를 박으면 핸들러가 바뀔 때 알림만 옛 경로를 가리킨다)
+      · 복구 도구 ← JARVIS04 가 등록한 잡 실행 도구 이름 (승인 버튼 필요)
+    """
+    out: list[str] = []
+
+    job_id = ""
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+        from JARVIS04_SCHEDULER.job_llm_priority import is_publish_callback, publish_post_type
+        for j in DEFAULT_JOBS:
+            if is_publish_callback(j.get("callback")) and publish_post_type(j.get("callback")) == post_type:
+                job_id = str(j.get("id") or "")
+                break
+    except Exception:
+        pass
+    if job_id:
+        out.append(f"잡 ID: `{job_id}`")
+
+    try:
+        import logging as _lg
+        paths = [h.baseFilename for h in _lg.getLogger().handlers
+                 if getattr(h, "baseFilename", None)]
+        if paths:
+            root = str(Path(__file__).resolve().parent.parent)
+            shown = [pp[len(root) + 1:] if pp.startswith(root) else pp for pp in paths]
+            out.append("로그: " + " · ".join(f"`{x}`" for x in shown))
+    except Exception:
+        pass
+
+    # 도구 이름도 등록부에서 파생 — 이름이 바뀌면 알림이 자동으로 따라간다.
+    tool = ""
+    try:
+        from JARVIS04_SCHEDULER import scheduler_agent as _sa  # 도구 등록 유발
+        from shared.tools import _TOOLS as _T
+        _ = _sa
+        for name in _T:
+            if "run" in name and "job" in name:
+                tool = name
+                break
+    except Exception:
+        pass
+    if tool and job_id:
+        out.append(f"복구: 텔레그램에 «{job_id} 지금 실행» → 승인 버튼 ✅ (`{tool}`)")
+    elif job_id:
+        out.append(f"복구: 텔레그램에 «{job_id} 지금 실행» → 승인 버튼 ✅")
+
+    out.append("절차 전문: `docs/RUNBOOK.md`")
+    return out
+
+
 # ── 잡 콜백 ───────────────────────────────────────────────────────────────
 def job_audit_publish_completeness() -> dict:
     """이번 슬롯의 발행 완결성 감사 — 결손이면 텔레그램 + GUARDIAN 박제.
@@ -257,7 +343,20 @@ def job_audit_publish_completeness() -> dict:
         "published": len(platforms) - len(gaps),
         "gaps": gaps,
         "in_progress": in_progress,
+        "unscored": [f"#{i}/{pf}" for i, pf in scoring_gaps(start, end, post_type)],
     }
+
+    if result["unscored"] and not in_progress:
+        # 채점 결손은 *발행 결손과 별개* — 발행은 성공했으므로 🚨 가 아니라 경고다.
+        # 재채점은 analyzer_fb 잡이 한가할 때 자동으로 채운다(여기서 고치지 않는다).
+        print(f"  ⚠️ 채점 결손 {len(result['unscored'])}건: {result['unscored']}")
+        try:
+            from shared.notify import send_tg
+            send_tg("⚠️ *채점 결손* — " + " · ".join(result["unscored"])
+                    + f"\n보상 신호(ADR 014)가 비었습니다. 재채점 대기열에 자동 편입 — "
+                      f"다음 `analyzer_fb` 한가한 회차에 채워집니다.")
+        except Exception as e:
+            print(f"  ⚠️ 채점 결손 알림 실패: {e}")
 
     if not gaps:
         print(f"  ✅ 발행 완결성 — {post_type} {len(platforms)}/{len(platforms)} 정상 ({result['slot']})")
@@ -299,6 +398,8 @@ def job_audit_publish_completeness() -> dict:
         *[f"  ❌ {post_type} → {pf}" for pf in gaps],
         "",
         "_잡은 성공으로 기록됐지만 글이 나가지 않았습니다._",
+        "",
+        *recovery_hint(post_type),
     ]
     try:
         from shared.notify import send_tg

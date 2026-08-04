@@ -396,7 +396,15 @@ def job_analyzer_fallback() -> None:
         from shared import db
         pending = db.get_pending_analysis(limit=5)
         if not pending:
-            return {"launched": 0}
+            # ★ 대기열이 비었을 때만 재채점 (2026-08-04 감사 6위 — 새 잡을 만들지 않는다)
+            #   채점만 실패한 글은 status 가 이미 `analyzed` 라 위 대기열에 영영 안 잡힌다.
+            #   신규 분석이 항상 우선이므로, 한가할 때 밀린 점수를 채운다.
+            #   잡을 하나 더 만들면 같은 LLM 락을 두 잡이 다투게 된다(원칙①).
+            from JARVIS03_RADAR.post_quality_analyzer import rescore_unscored
+            rs = rescore_unscored(limit=3)
+            if rs.get("rescored"):
+                _log.info(f"♻️ [Fallback] 미채점 {rs['rescored']}건 재채점 완료")
+            return {"launched": 0, **rs}
 
         # ★ 프로세스 **하나**로 순차 처리 (2026-08-03 — 사용자 승인)
         #   종전엔 대기 글마다 subprocess 를 따로 띄우고 2초 간격을 뒀다. 그런데 LLM 에는

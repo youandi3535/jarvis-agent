@@ -674,7 +674,20 @@ def _re_split_kind(k: str) -> list:
     """kind 를 단어로 — `_`·`-`·공백 구분. 정규식 하나로 고정(호출자 분기 금지)."""
     import re as _re_k
     return _re_k.split(r"[_\-\s]+", k)
-_INFRA_ISSUE_KINDS = frozenset({INFRA_KIND})   # ★ 목록은 상수에서 *파생* (② 동적 설계)
+# ★ 사유별 kind — `infra_throttle_lock_contention` 처럼 **접두사 + 사유** (2026-08-04 감사 6위).
+#   종전엔 사유 4종(timeout·truncated·throttle·lock_contention)이 전부 `HarnessInfraThrottle`
+#   한 타입으로 기록돼, **로그만 봐서는 서버가 거절한 건지 우리끼리 락을 다툰 건지 구분이
+#   안 됐다** — 대응이 정반대인데도(전자는 기다림, 후자는 동시 실행 구조 문제).
+#   CLAUDE.md 오류 세분화 규정(ERRORS [547])이 금지하는 바로 그 형태다.
+#   판별은 *접두사* 로 한다 — 사유 목록을 여기 박지 않는다(② 동적 설계). `shared/llm` 에
+#   새 사유가 생기면 타입이 자동으로 따라오고, 재시도 정책(defer·지문 제외)은 그대로다.
+_INFRA_KIND_PREFIX = INFRA_KIND
+
+
+def infra_kind(reason: str = "") -> str:
+    """사유 코드 → harness issue kind. 사유가 없으면 종전과 동일한 `infra_throttle`."""
+    r = (reason or "").strip()
+    return f"{_INFRA_KIND_PREFIX}_{r}" if r and r != "unknown" else _INFRA_KIND_PREFIX
 
 
 def classify_failure_issue(step: str, error, *,
@@ -699,7 +712,12 @@ def classify_failure_issue(step: str, error, *,
         # shared.llm 미가용 = 판정 불가 → 보수적으로 콘텐츠 결함(재작성 시도) 유지.
         return Issue(step=step, kind=content_kind, detail=f"{content_prefix}{_derr}")
     if _is_infra(_derr):
-        return Issue(step=step, kind=INFRA_KIND,
+        try:
+            from shared.llm import infra_error_reason as _reason
+            _k = infra_kind(_reason(_derr))
+        except Exception:
+            _k = INFRA_KIND
+        return Issue(step=step, kind=_k,
                      detail=_desc(_derr) + " — 대본 생성 미완결(일시적, 다음 시도/회차 재개)")
     return Issue(step=step, kind=content_kind, detail=f"{content_prefix}{_derr}")
 
@@ -710,7 +728,17 @@ def _is_infra_issue(iss: Issue) -> bool:
     인프라 실패의 지문 반복은 '재생성해도 동일'이 아니라 '아직 인프라가 안 풀렸다'의 신호이므로
     abort 근거가 될 수 없다. 콘텐츠 결함(재작성으로 고칠 수 있는 것)은 여기 포함되지 않는다.
     """
-    return iss.kind in _INFRA_ISSUE_KINDS
+    return is_infra_kind(iss.kind)
+
+
+def is_infra_kind(kind: str) -> bool:
+    """이 kind 가 '인프라 미완결' 계열인가 — **판별의 단일 진입점**.
+
+    사유별 kind(`infra_throttle_lock_contention` …)를 도입한 뒤로, 밖에서 집합 등가비교
+    (`kind in {INFRA_KIND}`)를 하면 새 kind 를 **조용히 코드버그로 오분류** 한다.
+    실제로 `severity.non_code_issue_kinds()` 가 그 형태였다 — 판별은 여기서만 한다.
+    """
+    return bool(kind) and str(kind).startswith(_INFRA_KIND_PREFIX)
 
 
 def _backoff_infra_wait(action_def: "ActionDefinition", wd: Optional[Watchdog]) -> None:
@@ -942,6 +970,23 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
                 _log.info(f"[harness] 🧹 살아있는 핸들 {_n}개 정리: {action_def.name}")
         except Exception:
             pass          # 정리 실패가 본 작업 결과를 덮지 않는다
+
+        # ★ 잠정(provisional) 오류 확정/무효화 — **어느 출구로 끝나든** (2026-08-04 감사 4위)
+        #   종전엔 `_finalize_attempt_errors` 가 max_attempts 소진 경로 **한 곳**에만 있었다.
+        #   종료 return 은 넷(fingerprint abort · 누적 abort · verify 내부 abort · 시도소진)이라
+        #   **abort 로 끝난 액션의 오류는 provisional=1 로 영구 잔존** → Tier-2 판정에서 빠진다.
+        #   즉 *발행을 막은 오류일수록 학습에서 제외* 되는 거꾸로 된 편향이었다.
+        #   실측: 08-04 네이버 HarnessAbort(id 5031) 직전 attempt 4건이
+        #   provisional=1 · status=ignored · llm_attempts=0 으로 남아 있었다.
+        #   → 출구마다 붙이지 않는다(다음 출구가 또 빠진다). 이 finally 에서 한 번만 분기한다 —
+        #     close_scope 와 같은 이유·같은 자리.
+        try:
+            if getattr(result, "delivered", False):
+                _resolve_attempt_errors(action_def.name, "harness 최종 송출 성공 — 시도 실패 무효화")
+            elif not getattr(result, "deferred", False):
+                _finalize_attempt_errors(action_def.name)
+        except Exception:
+            pass          # 학습 정리 실패가 본 작업 결과를 덮지 않는다
         _lock.release()
 
 
@@ -1267,8 +1312,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
     # ── 콘텐츠 결함 등 — escalation (송출 절대 안 함) ──
     result.escalation_reason = f"max_attempts({action_def.max_attempts}) 도달 — 검증 통과 실패"
     _log.error(f"[harness] ❌ escalation — {action_def.name}: {result.escalation_reason}")
-    # ★ 최종 실패 확정 — 잠정 표시 해제로 Tier-2 판정 대상 승격 (ERRORS [476])
-    _finalize_attempt_errors(action_def.name)
+    # ★ 잠정 표시 해제는 finally 가 한다(출구 4곳 공통) — 여기서 또 부르지 않는다.
     _notify_escalation(action_def.name, action_def.max_attempts, last,
                        reason=result.escalation_reason, retry_job_id=action_def.retry_job_id)
     return result
@@ -1287,5 +1331,7 @@ __all__ = [
     "issue_from_exception",
     "classify_failure_issue",
     "INFRA_KIND",
+    "infra_kind",
+    "is_infra_kind",
     "action_module",
 ]

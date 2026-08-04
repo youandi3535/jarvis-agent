@@ -48,15 +48,39 @@ TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 LOG_DIR = JARVIS_ROOT / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
+# ★ 로그 회전 (2026-08-04 감사 9위) — 종전 `FileHandler` 는 무한 증가했다.
+#   실측 daemon.log 18MB · daemon_stdout.log 30MB. 디스크가 문제가 아니라
+#   **사고 조사 때 열리지 않는 파일**이 되는 것이 문제다(조준 검색도 느려진다).
+#   크기·보관 수는 file_cleanup 의 보존 정책과 별개인 *핸들러* 설정이라 여기 둔다.
+from logging.handlers import RotatingFileHandler as _RFH   # noqa: E402
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)-8s] %(name)-28s %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(LOG_DIR / "daemon.log", encoding="utf-8"),
+        _RFH(LOG_DIR / "daemon.log", maxBytes=20 * 1024 * 1024,
+             backupCount=3, encoding="utf-8"),
     ],
 )
+
+# ★ 시크릿 마스킹을 **루트 로거**에 건다 (2026-08-04 감사 9위).
+#   DB 관문 2곳만 덮고 있어 로그 파일에 평문이 3,006회 남아 있었다.
+#   발생원은 우리 코드가 아니라 `httpx` 의 INFO 로그 — API 키가 **URL 에 들어간다**.
+#   외부 라이브러리라 생산자를 쫓을 수 없으므로 *모든 로그가 지나는 문* 에서 거른다.
+#   basicConfig 직후에 걸어야 이후 모든 로그가 덮인다.
+try:
+    from shared.secrets import install_log_masking as _install_mask
+    _mask_info = _install_mask()
+except Exception as _e_mask:
+    _mask_info = {"error": str(_e_mask)}
+
 log = logging.getLogger("JARVIS-DAEMON")
+if _mask_info.get("effective"):
+    log.info(f"🔒 로그 마스킹 활성 — 비밀 {_mask_info.get('secrets')}종, "
+             f"조용히 한 로거 {_mask_info.get('quieted')}")
+else:
+    log.warning(f"⚠️ 로그 마스킹 미적용: {_mask_info}")
 
 
 def _report_daemon(e: Exception, func_name: str = "") -> None:

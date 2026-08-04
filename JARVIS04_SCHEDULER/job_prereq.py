@@ -282,7 +282,11 @@ def _defer(job_id: str, fn: Callable, next_attempt: int, when: datetime,
     sch.add_job(
         _fn, "date", run_date=when,
         id=base + DEFERRED_SUFFIX, name=f"{base} (선행 회복 후 재실행)",
-        misfire_grace_time=600, replace_existing=True,
+        # ★ 원 잡의 grace 에서 파생 (2026-08-04 감사 7위) — 종전 리터럴 600 이었다.
+        #   원 발행 잡은 3600 인데 *선행 회복 후 재실행* 만 600 이라, 지연 2,814초였던
+        #   08-01 경제 발행이 소멸했다(daemon.log `was missed by 0:46:54`).
+        #   같은 파일 :247 은 이미 `effective_grace()` 를 쓴다 — 한 파일 안 불일치였다.
+        misfire_grace_time=effective_grace(base), replace_existing=True,
     )
     _log(f"{base} → {when:%H:%M} 재예약 (시도 {next_attempt}/{_MAX_ATTEMPTS})")
     return True

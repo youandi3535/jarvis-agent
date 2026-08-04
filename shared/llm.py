@@ -1713,6 +1713,19 @@ def is_infra_error(err: str | None) -> bool:
     return bool(err) and str(err).startswith(_INFRA_ERR_PREFIX)
 
 
+def infra_error_reason(err: str | None) -> str:
+    """오류코드에서 **사유 코드만** 뽑는다 (`infra_throttle:lock_contention` → `lock_contention`).
+
+    `describe_infra_error` 는 *사람이 읽는 문장* 을 준다. 기계가 분류에 쓰려면 코드가 필요한데,
+    호출자가 `split(":")` 을 각자 하면 형식이 바뀔 때 전부 깨진다(ERRORS [460] 과 같은 병).
+    형식의 주인이 코드도 준다.
+    """
+    s = str(err or "")
+    if not is_infra_error(s):
+        return ""
+    return s.split(":", 1)[1].strip() if ":" in s else "unknown"
+
+
 def describe_infra_error(err: str | None) -> str:
     """오류코드 → 사람이 읽는 사유 설명. 사유가 없으면 일반 표기."""
     s = str(err or "")

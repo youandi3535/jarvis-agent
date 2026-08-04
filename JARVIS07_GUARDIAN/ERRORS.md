@@ -10895,3 +10895,50 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: JARVIS02_WRITER/scheduler.py · economic_poster.py · trend_theme_writer.py · trend_economic_writer.py · JARVIS03_RADAR/topic_pack.py · JARVIS09_COLLECTOR/precollect.py
 - **교훈**: 재시도의 값어치는 *무엇을 물려주느냐* 에 있다. 주제와 실패 사유를 안 물려주면 그건 재시도가 아니라 **처음부터 다시**다.
 
+
+## [559] 발행을 막은 오류일수록 학습에서 빠졌다 — abort 경로가 provisional 을 안 풀었다 (2026-08-04)
+
+- **증상**: 08-04 07:00 네이버 경제 `HarnessAbort`(error_log id 5031) 직전 attempt 4건이 `provisional=1 · status=ignored · llm_attempts=0` 으로 잔류. Tier-2 판정 대상에서 통째로 빠짐.
+- **환경**: 전수감사 4위. `harness.run_action` 의 종료 return 경로는 넷(지문반복 abort · 누적초과 abort · verify 내부 abort · 시도소진).
+- **원인**: 잠정 오류를 확정하는 `_finalize_attempt_errors` 가 **시도소진 경로 한 곳**에만 있었다. 나머지 세 출구로 끝나면 잠정 표시가 영구히 남는다. 즉 *가장 심각한 실패(발행을 막은 것)일수록* 학습에서 제외되는 거꾸로 된 편향.
+- **헛다리**: 출구마다 호출을 붙이는 방식. 다음에 출구가 하나 더 생기면 또 빠진다 — 같은 병의 5번째 발현이 된다.
+- **해결**: `close_scope` 정리와 **같은 자리**(run_action 의 `finally`)에서 한 번만 분기. 송출 성공이면 `_resolve_attempt_errors`(시도 실패 무효화), 연기(deferred)가 아니면 `_finalize_attempt_errors`. 골든 테스트가 "호출은 저장소 전체에 정확히 1곳 + finally 안" 을 강제한다.
+- **파일**: JARVIS00_INFRA/harness.py · tests/test_publish_golden.py
+- **교훈**: **출구가 여러 개인 함수에서 정리 코드를 출구마다 붙이면 반드시 하나를 빠뜨린다.** 정리는 `finally` — 하나뿐인 문.
+
+## [560] 로그에 API 키가 3,006회 평문으로 — 마스킹이 DB 관문 2곳만 덮고 있었다 (2026-08-04)
+
+- **증상**: `logs/daemon_stdout.log` 2,962회 · `logs/daemon.log` 44회 평문 시크릿(TELEGRAM 305 · DART 844 · BOK 1,813).
+- **환경**: 전수감사 9위. `shared/secrets.mask()` 는 존재했고 DB 저장 경로 2곳에 걸려 있었다.
+- **원인**: ① 유출 발생원이 우리 코드가 아니라 **`httpx` 의 INFO 로그** — API 키가 *URL 에 들어간다*. 생산자를 쫓을 수 없으니 관문을 늘려도 끝이 없다. ② `shared/secrets.py` 가 `.env` 를 스스로 안 읽어, 적재 전에 한 번 호출되면 `secret_values()` 가 **0개로 영구 고정**(빈 결과를 캐시) → `mask()` 가 *아무 것도 안 가리면서 성공* 하는 조용한 fail-open. ③ `logging.FileHandler` 라 회전이 없어 18MB·30MB 로 자랐다 — 사고 조사 때 열리지 않는 파일.
+- **헛다리**: 로그를 찍는 우리 코드를 찾아 하나씩 가리기. 발생원이 외부 라이브러리라 끝나지 않는다.
+- **해결**: **모든 로그가 지나는 문**(루트 로거)에 필터 1개 — `install_log_masking()` 을 데몬 부팅 직후 1회. httpx·httpcore·urllib3 은 WARNING 으로 낮춤(가려도 남을 이유가 없는 잡음). `.env` 자가 적재 + `if _cache:` 로 빈 목록 미캐시. preflight Layer 0 에 `secret_masking` 검사 등재 — 필터가 *붙었는데 안 먹으면* 부팅 실패, 미부착이면 경고(CLI 문맥은 정상). 과거분은 `redact_logs()` 로 **제자리 마스킹**(삭제 아님 — 역사는 남기고 비밀만 지움) → 3,006 → 0. 핸들러는 `RotatingFileHandler(20MB×3)`.
+- **파일**: shared/secrets.py · jarvis_daemon.py · JARVIS00_INFRA/preflight.py · docs/RUNBOOK.md
+- **교훈**: 유출 발생원이 외부 라이브러리면 **생산자를 쫓지 말고 모두가 지나는 문에서 거른다.** 그리고 *가릴 값이 0개인 마스킹* 은 실패가 아니라 성공으로 보인다 — 가장 위험한 형태다.
+
+## [561] 채점이 실패하면 그 글은 영원히 미채점 — 어느 대기열에도 없었다 (2026-08-04)
+
+- **증상**: 08-02~08-04 티스토리 4건 중 3건이 `quality_score IS NULL`. 발행은 성공했으므로 **어떤 경보도 울리지 않았다**. ADR 014 보상 신호가 조용히 소실.
+- **환경**: 전수감사 6위. 루브릭 채점은 Section A(매력도)를 LLM 으로 판정하는데 그 호출이 스로틀·락 경합으로 실패하면 `score=None` 으로 저장된다.
+- **원인**: `get_pending_analysis` 는 `status='pending_analysis'` 만 본다. 채점만 실패한 글은 status 가 이미 `analyzed` 라 **그 대기열에 다시 안 잡힌다.** 재시도 통로가 애초에 없었다.
+- **해결**: ① 재채점 대기열 `db.get_unscored_analyzed(since)` — '언제까지 재채점이 의미 있는가' 는 보상을 소비하는 잡(`j07_quality_learn`)의 cron 에서 파생(`reward_cutoff()`). ② `save_quality_score()` 는 **점수 한 칸만** 쓴다(제안·상태·analyzed_at 불변 — 건드리면 같은 글이 사용자에게 두 번 간다). ③ 새 잡을 만들지 않고 **기존 `analyzer_fb`** 의 대기열이 빈 회차에 배선(잡을 늘리면 같은 LLM 락을 두 잡이 다툰다). ④ 감시는 슬롯 원장이 — `publish_ledger.scoring_gaps()`. 감사는 원장이, 수리는 루브릭 주인이.
+- **파일**: shared/db.py · JARVIS03_RADAR/post_quality_analyzer.py · JARVIS03_RADAR/jobs.py · JARVIS08_PUBLISH/publish_ledger.py
+- **교훈**: **성공으로 표시된 상태값이 재시도 통로를 닫는다.** '분석 완료' 는 '채점 완료' 가 아니었는데 같은 status 를 썼다. 그리고 발행이 성공한 실패는 아무도 안 본다 — 그래서 감시가 필요하다.
+
+## [562] 인프라 사유 4종이 한 타입으로 뭉개져 대응을 못 정했다 (2026-08-04)
+
+- **증상**: 08-04 21:00 테마 티스토리 2회 시도 모두 `HarnessInfraThrottle`. 서버가 거절한 건지 우리끼리 락을 다툰 건지 로그만 봐서는 구분 불가 — 대응이 정반대인데도.
+- **환경**: 전수감사 6위. `shared/llm` 은 사유 4종(`timeout·truncated·throttle·lock_contention`)을 이미 구분해 오류코드에 실어 보내고 있었다.
+- **원인**: harness 가 `INFRA_KIND = "infra_throttle"` 단일 kind 로 뭉개 받아 `harness_error_type` 이 항상 같은 타입을 냈다. CLAUDE.md 오류 세분화 규정(ERRORS [547])이 금지하는 바로 그 형태.
+- **헛다리**: 사유별 kind 를 매핑표로 관리하는 것. 새 사유가 생기면 표가 낡는다.
+- **해결**: `infra_kind(reason)` 이 **접두사 + 사유** 로 kind 를 파생 → `harness_error_type` 이 기계적으로 `HarnessInfraThrottleLockContention` 등 4종을 낸다(표 0). 재시도 정책은 그대로 — 판별을 집합 등가비교에서 **접두사** 로 바꾸고 `is_infra_kind()` 로 공개. ★ 같은 커밋에서 `severity.py` 도 고쳤다 — 거기가 `kind in {INFRA_KIND}` 집합 비교라 새 kind 를 **코드 결함으로 오분류**해 자동수리가 고칠 수 없는 것(스로틀·락 경합)에 LLM 을 태울 뻔했다. 저장소 전역 등가비교 금지 테스트로 재발 차단.
+- **파일**: JARVIS00_INFRA/harness.py · JARVIS07_GUARDIAN/severity.py · shared/llm.py · tests/test_publish_golden.py
+- **교훈**: **타입을 뭉개면 로그가 있어도 대응을 못 정한다.** 그리고 kind 의 *형식* 을 바꿀 때는 그 kind 를 **판별하는 모든 곳**을 같이 찾아야 한다 — 등가비교는 새 형식 앞에서 조용히 틀린다(③원칙).
+
+## [563] 결손 경보가 다음 한 걸음을 안 줬다 + 선행 grace 리터럴이 연기된 발행을 소멸시켰다 (2026-08-04)
+
+- **증상**: ① 발행 결손 경보가 "무엇이 실패했는가" 만 말해, 받은 사람이 새벽에 터미널을 열고 잡 이름부터 찾아야 했다. ② 선행 미충족으로 연기된 발행이 재예약 후 조용히 사라졌다.
+- **원인**: ① 경보에 잡 ID·로그 경로·복구 절차가 없었다. ② `job_prereq.py:285` 가 `misfire_grace_time=600` 리터럴을 썼는데 실제 grace 는 3600 — 재예약된 발행이 600초 창을 넘겨 misfire 로 폐기. 같은 파일 247행은 이미 `effective_grace(base)` 파생을 쓰고 있었다(한 파일 안에서 갈라진 사본).
+- **해결**: ① `recovery_hint(post_type)` — 잡 ID 는 `DEFAULT_JOBS` 에서, 로그 경로는 **지금 이 프로세스가 실제로 쓰는 핸들러**에서, 복구 도구명은 도구 등록부에서 파생(리터럴 0). 절차 전문은 `docs/RUNBOOK.md` 신설 — *사실을 적지 않고 사실을 알아내는 명령을 적는다*(문서 드리프트 차단). ② `effective_grace(base)` 로 교정.
+- **파일**: JARVIS08_PUBLISH/publish_ledger.py · JARVIS04_SCHEDULER/job_prereq.py · docs/RUNBOOK.md
+- **교훈**: **경보는 다음 한 걸음까지 말해야 경보다.** 그리고 같은 파일 안에서도 사본은 생긴다 — 파생 형태가 이미 옆줄에 있는데 리터럴을 적는 순간이 그 시작이다.

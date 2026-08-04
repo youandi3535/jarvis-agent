@@ -31,12 +31,14 @@
 from __future__ import annotations
 
 import hashlib
+import logging as _logging
 import os
 import re
 from pathlib import Path
 
 __all__ = ["mask", "mask_obj", "secret_values", "reload_secrets", "selfcheck",
-           "secret_files", "is_secret_file"]
+           "install_log_masking", "masking_effective", "masking_filter_attached",
+           "secret_files", "is_secret_file", "backfill_db", "redact_logs"]
 
 # 키 *이름* 이 비밀을 뜻하는 패턴. 값 목록이 아니라 **이름 규칙** 이라 새 비밀에도 자동 적용된다.
 _SECRET_KEY_RE = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|_PW$|^PW_|COOKIE|API_KEY|_KEY$)", re.I)
@@ -52,11 +54,32 @@ def _label(key: str, value: str) -> str:
     return f"<{key}:{hashlib.sha256(value.encode('utf-8')).hexdigest()[:6]}>"
 
 
+def _ensure_env() -> None:
+    """`.env` 를 스스로 적재한다 — 호출자의 import 순서에 기대지 않는다.
+
+    ★ 왜 (2026-08-04 실측)
+      `.venv/bin/python -c "from shared.secrets import redact_logs"` 로 부르면
+      `secret_values()` 가 **0개** 를 돌려줬다. 가릴 값이 0이면 `mask()` 는
+      *아무 것도 안 가리면서 성공* 한다 — 가장 나쁜 실패 형태(조용한 fail-open).
+      `shared/db.py` 가 `DB_PATH` 를 정하려고 이미 쓰는 규약(.env 자가 적재)을 그대로 쓴다.
+      대상 키 목록은 여전히 `_SECRET_KEY_RE` 가 환경변수에서 *파생* 한다 — 목록을 박지 않는다.
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+    except Exception:
+        pass
+
+
 def secret_values() -> list[tuple[str, str]]:
     """가려야 할 (키이름, 값) 목록 — `os.environ` 에서 파생. 프로세스당 1회 계산."""
     global _cache
-    if _cache is not None:
+    # ★ `is not None` 이 아니라 truthy 검사 (2026-08-04 감사 9위).
+    #   .env 가 아직 적재되기 전에 한 번 호출되면 **빈 목록이 영구 고정** 되어
+    #   그 프로세스는 이후 아무것도 가리지 못한다. 빈 결과는 캐시하지 않는다.
+    if _cache:
         return _cache
+    _ensure_env()
     out: list[tuple[str, str]] = []
     for k, v in os.environ.items():
         if not v or len(v) < _MIN_SECRET_LEN:
@@ -108,6 +131,75 @@ def mask_obj(obj):
         return obj
     except Exception:
         return obj
+
+
+class _MaskingFilter(_logging.Filter):
+    """로그 레코드의 메시지·인자에서 비밀값을 가린다.
+
+    ★ 왜 루트 로거인가 (2026-08-04 감사 9위)
+      DB 관문 2곳(`error_collector.report` · `db.log_event`)만 덮고 있어서
+      **로그 파일에는 평문이 3,006회** 남아 있었다(daemon_stdout 2,962 · daemon 44).
+      발생원은 우리 코드가 아니라 `httpx` 의 INFO 로그다 —
+      `GET https://ecos.bok.or.kr/api/.../<KEY>/...` 처럼 **URL 에 키가 들어간다**.
+      즉 생산자를 쫓는 방식으로는 못 막는다(외부 라이브러리다).
+      → 핸들러가 아니라 **루트 로거**에 건다. 파일·stdout·앞으로 추가될 핸들러까지 한 번에.
+    """
+
+    def filter(self, record) -> bool:      # noqa: A003
+        try:
+            if isinstance(record.msg, str) and record.msg:
+                record.msg = mask(record.msg)
+            if record.args:
+                if isinstance(record.args, dict):
+                    record.args = {k: mask(v) if isinstance(v, str) else v
+                                   for k, v in record.args.items()}
+                elif isinstance(record.args, tuple):
+                    record.args = tuple(mask(a) if isinstance(a, str) else a
+                                        for a in record.args)
+        except Exception:
+            pass          # 마스킹 실패가 로그 자체를 죽이지 않는다
+        return True
+
+
+def install_log_masking() -> dict:
+    """루트 로거에 마스킹 필터를 건다 — **데몬 부팅 1곳에서만** 호출.
+
+    ★ 효과를 동작으로 확인한다(설치 플래그는 적용의 증거가 아니다).
+      추가로 키를 URL 에 싣는 HTTP 클라이언트 로거의 레벨을 낮춘다 —
+      가려도 남을 이유가 없는 잡음이고, 실측 3,006회 중 2,657회가 여기서 나왔다.
+    """
+    root = _logging.getLogger()
+    already = any(isinstance(f, _MaskingFilter) for f in root.filters)
+    if not already:
+        root.addFilter(_MaskingFilter())
+    quieted = []
+    for name in ("httpx", "httpcore", "urllib3"):
+        lg = _logging.getLogger(name)
+        if lg.level < _logging.WARNING:
+            lg.setLevel(_logging.WARNING)
+            quieted.append(name)
+    return {"filter_installed": not already, "secrets": len(secret_values()),
+            "quieted": quieted, "effective": masking_effective()}
+
+
+def masking_filter_attached() -> bool:
+    """루트 로거에 마스킹 필터가 붙어 있는지 (부착 여부만 — 효과는 별개)."""
+    return any(isinstance(f, _MaskingFilter) for f in _logging.getLogger().filters)
+
+
+def masking_effective() -> bool:
+    """필터가 *실제로* 먹는지 가짜 레코드 한 건으로 확인 (patch_effective 표준)."""
+    vals = secret_values()
+    if not vals:
+        return False
+    _k, v = vals[0]
+    rec = _logging.LogRecord("probe", _logging.INFO, __file__, 0,
+                             "GET https://x/api/%s/data", (v,), None)
+    for f in _logging.getLogger().filters:
+        if isinstance(f, _MaskingFilter):
+            f.filter(rec)
+            return v not in (rec.getMessage() or "")
+    return False
 
 
 def selfcheck() -> dict:
@@ -194,6 +286,55 @@ def is_secret_file(p) -> bool:
         except ValueError:
             continue
     return False
+
+
+def redact_logs(dry_run: bool = True) -> dict:
+    """이미 기록된 로그 파일의 평문 시크릿을 *제자리에서* 가린다.
+
+    ★ 왜 필요한가 — 필터는 미래만 막는다
+      루트 로거 필터를 걸어도 **이미 파일에 쓰인 평문은 그대로 남는다**. 실측
+      2026-08-04: `logs/` 에 평문 API 키 3,006회(daemon_stdout 2,962 · daemon 44).
+      키가 살아 있는 한 이건 지금 이 순간의 노출이다.
+
+    ★ 왜 삭제가 아니라 치환인가
+      로그는 사고 조사의 유일한 1차 자료다. 지우면 노출은 끝나지만 조사도 끝난다.
+      같은 내용을 `mask()` 로 통과시키면 **역사는 남고 비밀만 사라진다.**
+
+    ★ 대상 목록을 박지 않는다 (② 동적 설계)
+      `logs/` 실물을 훑는다. 새 로그 파일이 생겨도 자동으로 대상이 된다.
+      바이너리·회전 백업(.gz)은 텍스트가 아니므로 건너뛴다.
+
+    Args:
+        dry_run: True 면 세지만 하고 쓰지 않는다.
+
+    Returns:
+        {"files": [(경로, 치환건수)], "total": N, "written": bool}
+    """
+    root = Path(__file__).resolve().parent.parent
+    log_dir = root / "logs"
+    vals = [v for _k, v in secret_values()]
+    out: list[tuple[str, int]] = []
+    total = 0
+    if not log_dir.is_dir() or not vals:
+        return {"files": [], "total": 0, "written": False}
+    for f in sorted(log_dir.rglob("*")):
+        if not f.is_file() or f.suffix in (".gz", ".zip", ".pkl", ".png", ".jpg"):
+            continue
+        try:
+            raw = f.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        hits = sum(raw.count(v) for v in vals)
+        if not hits:
+            continue
+        total += hits
+        out.append((str(f.relative_to(root)), hits))
+        if not dry_run:
+            try:
+                f.write_text(mask(raw), encoding="utf-8")
+            except Exception:
+                pass
+    return {"files": out, "total": total, "written": not dry_run}
 
 
 def backfill_db(dry_run: bool = True) -> dict:

@@ -843,6 +843,44 @@ def get_pending_analysis(limit: int = 10) -> list:
     return [dict(r) for r in rows]
 
 
+def get_unscored_analyzed(since: str, limit: int = 5) -> list:
+    """분석은 끝났는데 **점수만 비어 있는** 글 — 재채점 대기열.
+
+    ★ 왜 별도 대기열인가 (2026-08-04 감사 6위)
+      `get_pending_analysis` 는 `status='pending_analysis'` 만 본다. 그런데 루브릭 채점이
+      실패하면 규칙 폴백으로 넘어가 **분석은 '완료'로 표시되고 점수만 None 으로 남는다**.
+      그 순간 이 글은 어느 대기열에도 없다 — 영원히 미채점이고, ADR 014 보상 신호가
+      조용히 사라진다. 실측 08-02~08-04 티스토리 4건 중 3건이 그렇게 사라졌다.
+
+    ★ `since` 를 인자로 받는 이유 (① 단일 진입점)
+      '언제까지 재채점이 의미 있는가' 는 **보상을 소비하는 잡의 일정** 이 정한다.
+      그 판단은 도메인(post_quality_analyzer)이 하고, 여기는 질의만 한다.
+      DB 계층이 스케줄러를 import 하기 시작하면 층이 무너진다.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM post_analysis "
+            "WHERE quality_score IS NULL AND is_revised=0 "
+            "  AND analyzed_at IS NOT NULL AND created_at >= ? "
+            "ORDER BY created_at ASC LIMIT ?", (since, limit)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_quality_score(analysis_id: int, quality_score: float) -> bool:
+    """재채점 결과 — **점수만** 채운다.
+
+    제안·상태·analyzed_at 을 건드리지 않는다. 건드리면 텔레그램 재전송·승인 재요청이
+    딸려와 사용자에게 같은 글이 두 번 간다. 이미 비어 있을 때만 쓴다(경합 방어).
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            "UPDATE post_analysis SET quality_score=? WHERE id=? AND quality_score IS NULL",
+            (quality_score, analysis_id),
+        )
+        return cur.rowcount > 0
+
+
 def try_claim_analysis(analysis_id: int) -> bool:
     """pending_analysis 상태인 경우에만 analyzing 으로 원자적 변경.
     다른 프로세스가 먼저 선점했으면 False 반환 (중복 실행 방지)."""

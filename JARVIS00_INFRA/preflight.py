@@ -278,6 +278,36 @@ def _check_disk_space(report: PreflightReport) -> None:
         report.warn("disk", "free_space", f"확인 실패: {e}")
 
 
+def _check_secret_masking(report: PreflightReport) -> None:
+    """시크릿 로그 마스킹이 *실제로 먹는지* 검증 (patch_effective 표준).
+
+    ★ 왜 Layer 0 인가 (2026-08-04 감사 9위)
+      로그에 평문 API 키가 3,006회 남아 있었다. 발생원은 우리 코드가 아니라 `httpx`
+      가 URL 을 통째로 찍는 INFO 로그였고, 마스킹은 DB 관문 2곳만 덮고 있었다.
+      *부팅 시점에 안 먹으면 그 뒤 모든 로그가 오염된다* — 그래서 부팅 게이트다.
+
+    ★ 등급을 나누는 이유 (② 동적 설계 — 상황에서 파생)
+      preflight 는 데몬만이 아니라 CLI·subprocess 자식도 부른다. 거기엔 필터가
+      안 붙어 있는 게 정상이다. 그러므로
+        · 필터 *미부착*  → 경고 (문맥상 정상일 수 있음)
+        · 필터 부착됐는데 *안 먹음* → 실패 (확실한 고장)
+    """
+    try:
+        from shared import secrets as _sec
+        sc = _sec.selfcheck()
+        if sc.get("issues"):
+            report.warn("secret_masking", "selfcheck", "; ".join(sc["issues"]))
+        attached = _sec.masking_filter_attached()
+        if attached and not _sec.masking_effective():
+            report.fail("secret_masking", "effective",
+                        "마스킹 필터가 붙었으나 실제로 가리지 못함 — 로그 오염 진행 중")
+        elif not attached:
+            report.warn("secret_masking", "install",
+                        "루트 로거에 마스킹 필터 미부착 (데몬이 아니면 정상)")
+    except Exception as e:
+        report.warn("secret_masking", "selfcheck", f"확인 실패: {type(e).__name__}: {e}")
+
+
 # ── 검증기 카탈로그 ────────────────────────────────────────────────
 
 _CHECKERS: tuple[tuple[str, Callable[[PreflightReport], None]], ...] = (
@@ -288,6 +318,7 @@ _CHECKERS: tuple[tuple[str, Callable[[PreflightReport], None]], ...] = (
     ("external_import", _check_external_imports),# 외부 의존 — 내부보다 먼저
     ("internal_import", _check_internal_imports),# 내부 모듈 — 외부 통과 후에야 의미
     ("db",             _check_db_integrity),     # DB — 마지막 (다른 검증과 독립)
+    ("secret_masking", _check_secret_masking), # 로그 오염 방지 — 부팅 후 전 구간 영향
 )
 
 

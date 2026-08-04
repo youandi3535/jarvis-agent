@@ -867,3 +867,251 @@ def test_골격_플레이스홀더가_모두_치환된다():
     assert used == replaced or replaced * 2 >= used, (
         f"플레이스홀더 {used}곳 대비 치환 {replaced}곳 — 일부 경로가 치환되지 않는다"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-08-04 전수 감사 4·5·6·7·9위 — 회귀 못
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_시크릿모듈이_env를_스스로_적재한다():
+    """★ 가릴 값이 0이면 `mask()` 는 *아무 것도 안 가리면서 성공* 한다 (조용한 fail-open).
+
+    실측: `.venv/bin/python -c "from shared.secrets import ..."` 로 부르면 0개였다.
+    호출자의 import 순서에 기대면 언젠가 반드시 어긋난다.
+    """
+    from shared.secrets import secret_values
+
+    assert len(secret_values()) > 0, "시크릿 0개 — .env 자가 적재가 깨졌다"
+
+
+def test_마스킹이_실제로_먹는다():
+    """설치 플래그가 아니라 *동작* 으로 확인 (CLAUDE.md patch_effective 표준)."""
+    from shared.secrets import install_log_masking, mask, secret_values
+
+    info = install_log_masking()
+    assert info["effective"] is True, f"필터가 안 먹는다: {info}"
+    _k, v = secret_values()[0]
+    assert v not in mask(f"GET https://api/x?key={v}"), "평문이 그대로 통과"
+
+
+def test_빈_시크릿목록은_캐시되지_않는다():
+    """빈 결과를 캐시하면 그 프로세스는 영영 아무것도 못 가린다."""
+    import inspect
+
+    import shared.secrets as S
+
+    src = inspect.getsource(S.secret_values)
+    assert "if _cache:" in src, "truthy 검사가 아니면 빈 목록이 영구 고정된다"
+    assert "if _cache is not None:" not in src
+
+
+def test_preflight에_마스킹_검사가_등재돼_있다():
+    """부팅 시점에 안 먹으면 그 뒤 모든 로그가 오염된다 — Layer 0 게이트."""
+    from JARVIS00_INFRA.preflight import _CHECKERS
+
+    assert "secret_masking" in [c for c, _ in _CHECKERS], "Layer 0 에 마스킹 검사 없음"
+
+
+def test_로그회전이_적용돼_있다():
+    """★ 무한 증가 로그는 사고 조사 때 '열리지 않는 파일' 이 된다 (실측 18MB·30MB)."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "jarvis_daemon.py").read_text(encoding="utf-8")
+    assert "RotatingFileHandler" in src, "회전 핸들러가 없다"
+    assert "maxBytes" in src and "backupCount" in src
+
+
+def test_데몬이_부팅에서_마스킹을_건다():
+    """모듈에 함수만 있고 아무도 안 부르면 그건 적용이 아니다."""
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse((Path(__file__).resolve().parent.parent
+                      / "jarvis_daemon.py").read_text(encoding="utf-8"))
+    called = any(
+        isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_install_mask"
+        for n in ast.walk(tree)
+    )
+    assert called, "jarvis_daemon 이 install_log_masking 을 호출하지 않는다"
+
+
+def test_결손알림_복구안내가_전부_파생된다():
+    """★ 잡 ID 를 알림에 박으면 잡 이름이 바뀔 때 알림만 옛 이름을 가리킨다."""
+    import inspect
+
+    from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+    from JARVIS08_PUBLISH.publish_ledger import recovery_hint
+
+    real_ids = {str(j.get("id")) for j in DEFAULT_JOBS}
+    for pt in ("economic", "theme"):
+        hint = "\n".join(recovery_hint(pt))
+        assert "RUNBOOK" in hint, f"{pt}: 절차 문서 링크 없음"
+        found = [i for i in real_ids if i in hint]
+        assert found, f"{pt}: 실제 잡 ID 가 안내에 없다"
+
+    src = inspect.getsource(recovery_hint)
+    for lit in ("j01_economic_post", "j01_theme_post_21", "logs/daemon.log"):
+        assert lit not in src, f"복구 안내에 리터럴 {lit!r} 이 박혀 있다"
+
+
+def test_런북이_존재하고_명령을_담고_있다():
+    from pathlib import Path
+
+    rb = Path(__file__).resolve().parent.parent / "docs" / "RUNBOOK.md"
+    assert rb.exists(), "docs/RUNBOOK.md 없음"
+    body = rb.read_text(encoding="utf-8")
+    assert "job_audit_publish_completeness" in body
+    assert "restart_daemon.sh" in body
+
+
+def test_채점결손을_슬롯감사가_잡는다():
+    """★ 발행은 성공했으므로 어떤 경보도 안 울리던 사각지대 (실측 08-02~04 티스토리 3건)."""
+    import datetime as dt
+    import inspect
+
+    from JARVIS08_PUBLISH.publish_ledger import job_audit_publish_completeness, scoring_gaps
+
+    # 미래 창 → 결과는 비지만 쿼리 자체가 성립해야 한다
+    s = dt.datetime.now() + dt.timedelta(days=400)
+    assert scoring_gaps(s, s + dt.timedelta(hours=1), "theme") == []
+
+    src = inspect.getsource(job_audit_publish_completeness)
+    assert "scoring_gaps" in src, "슬롯 감사가 채점 결손을 보지 않는다"
+    assert "unscored" in src
+
+
+def test_재채점_창이_보상잡_일정에서_파생된다():
+    """★ 보상을 이미 회수해 간 글을 다시 채점해봐야 보상은 발화하지 않는다."""
+    import inspect
+
+    from JARVIS03_RADAR.post_quality_analyzer import reward_cutoff
+
+    cut = reward_cutoff()
+    assert len(cut) == 19 and cut[4] == "-", f"시각 형식 이상: {cut}"
+
+    # ★ 문자열이 아니라 *동작* 으로 확인한다 — 잡 시각을 바꾸면 창도 따라와야 한다.
+    #   (뮤테이션 검증에서 `"DEFAULT_JOBS" in src` 만 보는 테스트가 가짜 통과를 냈다.)
+    from JARVIS04_SCHEDULER import job_registry as JR
+
+    target = next(j for j in JR.DEFAULT_JOBS if "quality_learner" in str(j.get("callback", "")))
+    orig = dict(target.get("kwargs") or {})
+    try:
+        target["kwargs"] = {"hour": (int(orig.get("hour", 23)) + 5) % 24,
+                            "minute": int(orig.get("minute", 0))}
+        moved = reward_cutoff()
+    finally:
+        target["kwargs"] = orig
+    assert moved != cut, "잡 시각을 바꿔도 재채점 창이 그대로 — 파생이 아니라 사본이다"
+
+    src = inspect.getsource(reward_cutoff)
+    assert "23:45" not in src, "시각이 박혀 있다"
+
+
+def test_재채점은_점수만_쓴다():
+    """제안·상태를 건드리면 같은 글이 사용자에게 두 번 간다."""
+    import inspect
+
+    from shared.db import save_quality_score
+
+    src = inspect.getsource(save_quality_score)
+    assert "quality_score IS NULL" in src, "이미 채점된 글을 덮어쓸 수 있다"
+    for forbidden in ("suggestions=", "status=", "analyzed_at="):
+        assert forbidden not in src, f"재채점이 {forbidden} 를 건드린다"
+
+
+def test_재채점이_기존_잡에_배선돼_있다():
+    """새 잡을 만들면 같은 LLM 락을 두 잡이 다툰다 (원칙①)."""
+    import inspect
+
+    from JARVIS03_RADAR import jobs as J
+
+    assert "rescore_unscored" in inspect.getsource(J.job_analyzer_fallback)
+
+
+def test_인프라_사유마다_오류타입이_갈라진다():
+    """★ 4종이 전부 `HarnessInfraThrottle` 한 타입이면 로그만 보고 대응을 못 정한다.
+
+    서버가 거절한 것(기다림)과 우리끼리 락을 다툰 것(동시 실행 구조)은 대응이 정반대다.
+    """
+    from JARVIS00_INFRA.harness import harness_error_type, infra_kind
+
+    types = {harness_error_type(infra_kind(r))
+             for r in ("timeout", "truncated", "throttle", "lock_contention")}
+    assert len(types) == 4, f"타입이 뭉개졌다: {types}"
+    assert all(t.startswith("HarnessInfraThrottle") for t in types)
+
+
+def test_사유별_kind도_인프라로_판정된다():
+    """판정이 접두사가 아니면 새 kind 가 '코드 결함' 으로 오분류돼 LLM 을 태운다."""
+    from JARVIS00_INFRA.harness import Issue, _is_infra_issue, infra_kind, is_infra_kind
+
+    for r in ("", "timeout", "truncated", "throttle", "lock_contention"):
+        k = infra_kind(r)
+        assert is_infra_kind(k), f"{k} 가 인프라로 안 잡힌다"
+        assert _is_infra_issue(Issue(step="s", kind=k, detail=""))
+    assert not is_infra_kind("draft_quality")
+    assert not is_infra_kind("")
+
+
+def test_사유별_kind가_자동수리_대상에서_빠진다():
+    """★ ③원칙 — harness 만 고치고 severity 를 놔두면 게이트가 조용히 샌다."""
+    from JARVIS00_INFRA.harness import infra_kind
+    from JARVIS07_GUARDIAN.severity import is_transient
+
+    for r in ("", "timeout", "truncated", "throttle", "lock_contention"):
+        assert is_transient("HarnessX", "", "harness", kind=infra_kind(r)), \
+            f"{infra_kind(r)} 가 자동수리 대상으로 샌다"
+    # 진짜 코드 버그는 여전히 잡혀야 한다
+    assert not is_transient("ImportError", "cannot import name X", "harness",
+                            kind="draft_quality")
+
+
+def test_인프라_kind_판별을_아무도_등가비교하지_않는다():
+    """★ 재발 방지 — 이 병이 바로 severity 에서 났다 (집합 등가비교가 새 kind 를 놓침).
+
+    저장소 전역에서 `INFRA_KIND` 를 == 나 집합 원소로 쓰는 코드를 금지한다.
+    판별은 `harness.is_infra_kind()` 한 곳.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    owner = root / "JARVIS00_INFRA" / "harness.py"
+    bad = []
+    for f in root.rglob("*.py"):
+        if ".venv" in f.parts or "__pycache__" in f.parts or f == owner:
+            continue
+        try:
+            src = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for m in re.finditer(r"(==\s*INFRA_KIND|INFRA_KIND\s*==|kind\s+in\s+\{[^}]*INFRA_KIND)", src):
+            bad.append(f"{f.relative_to(root)}: {m.group(0)}")
+    assert not bad, "INFRA_KIND 등가비교 잔존 — is_infra_kind() 로 물어야 한다:\n" + "\n".join(bad)
+
+
+def test_provisional_해제가_단일_출구에서만_일어난다():
+    """★ abort 경로가 provisional 을 안 풀면 성공한 시도의 오류가 영구 잔류한다."""
+    import inspect
+
+    import JARVIS00_INFRA.harness as H
+
+    whole = inspect.getsource(H)
+    assert whole.count("_finalize_attempt_errors(action_def.name)") == 1, \
+        "provisional 정리 호출이 여러 곳 — finally 단일 출구여야 한다"
+
+    src = inspect.getsource(H.run_action)
+    tail = src[src.rindex("finally:"):]
+    assert "_finalize_attempt_errors(" in tail, "정리가 finally 밖에 있다 — abort 시 누락"
+    assert "_resolve_attempt_errors(" in tail, "송출 성공 시 무효화가 finally 밖에 있다"
+
+
+def test_잡_선행검사_grace가_파생값이다():
+    """★ 리터럴 600 은 실제 grace(3600)와 어긋나 연기된 발행이 소멸했다."""
+    import inspect
+
+    from JARVIS04_SCHEDULER import job_prereq as JP
+
+    src = inspect.getsource(JP)
+    assert "misfire_grace_time=effective_grace(" in src, "grace 가 파생값이 아니다"
+    assert "misfire_grace_time=600" not in src, "리터럴 600 잔존"
