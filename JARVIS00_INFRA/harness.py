@@ -759,12 +759,24 @@ def _find_resume_step(action_def: ActionDefinition, last_issues: list[Issue]) ->
       ② 남은 이슈가 검증(verify)·송출 단계 것뿐이면 VERIFY_ONLY 반환 — 산출물은
         유효하므로 Layer 2 를 건너뛰고 재검증→재송출만 수행 (LLM 타임아웃 같은
         인프라 실패가 5분+ 산출물을 폐기시키는 경로 원천 차단).
+      ③ **인프라 사유 이슈는 재생성 트리거에서 제외** (ERRORS [549], 2026-08-04).
+        ②가 *step 이름* 으로만 판정해서 실제로는 안 걸렸다 — 발행 전 품질 게이트가
+        판정 불가(`infra_throttle`)를 내면서 issue.step 에 **"⑤ 티스토리 대본 생성"**
+        같은 *실제 step 이름* 을 달아 보냈기 때문이다(`trend_theme_writer.py:717` ·
+        `economic_poster.py:598`). 그래서 *대본은 멀쩡한데* 통째로 재생성됐다.
+        실측 사고: 2026-08-04 21:00 테마 발행 — 판정 실패 → 대본 재생성(3만 토큰) →
+        5시간 창 소모 → 다음 판정도 서버 거절(`turns=0`) → 재생성 … 악순환.
+        한 발행에 `writer_long_body` 가 **4회 116,345 토큰(창의 86%)** 을 먹었고
+        정작 판정은 5.6% 였다. **판정기가 못 돈 것을 대본 탓으로 읽은 것이 근본.**
+        → `kind` 로 판정한다. `_is_infra_issue` 가 이미 그 판단을 갖고 있었다(원칙①).
     """
     if not last_issues:
         return None
-    live = [iss for iss in last_issues if not _is_fixed_issue(iss)]
+    # ★ 즉시수정 완료 + 인프라 사유는 '산출물 문제 아님' — 재생성 트리거에서 제외
+    live = [iss for iss in last_issues
+            if not _is_fixed_issue(iss) and not _is_infra_issue(iss)]
     if not live:
-        return VERIFY_ONLY   # 전부 즉시수정 완료 — 수정된 산출물로 재검증만
+        return VERIFY_ONLY   # 전부 즉시수정 완료 or 인프라 사유 — 산출물 그대로 재검증만
     problem_step_names = {
         iss.step for iss in live
         if iss.step not in _NON_STEP_LABELS

@@ -588,3 +588,86 @@ def test_스테일_상수의_주인은_한곳():
     assert "10800" not in inspect.getsource(L.publishing_in_progress), (
         "스테일 초를 복사했다 — scheduler.publish_lock_stale_sec() 에서 파생할 것"
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+# 9) 2026-08-04 전수 감사 3위 — 무승인 도구의 시크릿 접근
+# ══════════════════════════════════════════════════════════════════
+def test_무승인_도구가_시크릿_파일을_못_읽는다():
+    """★ `run_bash("cat .env")` 는 승인 버튼에 막히는데 `read_file(".env")` 는 통과했다.
+
+    같은 행위인데 통로에 따라 게이트가 달랐다. `_DENY_DIRS` 가 디렉터리 접두어만
+    비교했기 때문이다. 이 관문 하나가 read_file·glob_files·grep_code 를 동시에 덮는다.
+    """
+    from pathlib import Path
+
+    from JARVIS01_MASTER.agent_tools import _safe_path
+
+    for blocked in (".env", "JARVIS02_WRITER/naver_cookies.pkl",
+                    "JARVIS08_PUBLISH/credentials/login_manager.py"):
+        assert _safe_path(blocked) is None, f"시크릿이 뚫린다: {blocked}"
+    # 과잉차단 검사 — 일반 코드·예시 파일은 계속 읽혀야 한다
+    for allowed in ("shared/db.py", "README.md", ".env.example"):
+        if (Path(__file__).resolve().parent.parent / allowed).exists():
+            assert _safe_path(allowed) is not None, f"정상 파일이 막힌다: {allowed}"
+
+
+def test_시크릿_목록이_파생이다():
+    """목록을 박으면 새 자격증명이 생겼을 때 조용히 새어 나간다."""
+    import inspect
+
+    from shared import secrets as S
+
+    assert hasattr(S, "secret_files") and hasattr(S, "is_secret_file")
+    src = inspect.getsource(S.secret_files)
+    assert "login_manager" in src, "쿠키 경로를 주인(login_manager)에게 묻지 않는다"
+    files = {p.name for p in S.secret_files()}
+    assert ".env" in files, f"파생 결과에 .env 가 없다: {files}"
+
+
+def test_web_fetch_가_내부주소를_거부한다():
+    """이 도구는 무승인이다. 내부 API 는 인증이 없어 시크릿 파일을 막아도 우회가 남는다."""
+    from JARVIS01_MASTER.agent_tools import web_fetch
+
+    for u in ("http://127.0.0.1:9198/api/errors", "http://localhost:9199/",
+              "http://192.168.0.1/", "http://169.254.169.254/latest/meta-data/"):
+        r = web_fetch(u)
+        assert not r.get("ok"), f"내부 주소가 통과했다: {u}"
+
+
+def test_web_fetch_주소판정이_목록이_아니다():
+    """사설 대역 목록을 박으면 IPv6·새 대역에서 샌다 — 표준 분류에 위임할 것."""
+    import inspect
+
+    from JARVIS01_MASTER.agent_tools import web_fetch
+
+    src = inspect.getsource(web_fetch)
+    assert "ipaddress" in src, "주소 분류를 표준 라이브러리에 위임하지 않는다"
+    assert "is_private" in src and "is_loopback" in src
+
+
+def test_쿠키_저장이_단일진입점이고_권한을_고정한다():
+    """저장이 여러 곳이면 한 곳만 고쳐도 다른 경로에서 다시 0644 로 쓰인다."""
+    import inspect
+
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as R
+
+    src = inspect.getsource(R)
+    # 단일 진입점 밖에서 직접 dump 하면 회귀
+    assert src.count('pickle.dump(cookies, open(') == 0, "쿠키를 직접 dump 하는 경로가 남아 있다"
+    assert hasattr(R, "_save_cookies"), "저장 단일 진입점이 없다"
+    assert "0o600" in inspect.getsource(R._save_cookies), "저장 후 권한을 고정하지 않는다"
+
+
+def test_시크릿_파일_권한이_소유자전용():
+    """쿠키는 비밀번호와 같다 — 있으면 로그인 없이 그 계정이 된다."""
+    import stat
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for rel in (".env", "JARVIS02_WRITER/naver_cookies.pkl"):
+        f = root / rel
+        if not f.exists():
+            continue
+        mode = stat.S_IMODE(f.stat().st_mode)
+        assert mode & 0o077 == 0, f"{rel} 권한 {oct(mode)} — 소유자 외 접근 가능"

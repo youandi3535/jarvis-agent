@@ -1081,6 +1081,28 @@ def writer_timeout() -> int:
         _d = 2400
     # 3회 재시도 + 수집·이미지·발행 단계 몫을 남기고 1/4 배정
     return max(300, min(900, int(_d / 4)))
+
+
+def judge_timeout() -> int:
+    """판정(비필수) LLM 호출 상한(초) — 액션 데드라인에서 도출. 하드코딩 금지 (ERRORS [549]).
+
+    ★ 왜 90 을 버렸나: `_nonessential` 시간 상자와 `prepublish_gate` 호출부에 **90 이
+      각각 박혀** 있었다. 실측 성공 소요는 최대 **86.1초**(2026-08-04 21:20) — 여유가
+      4% 뿐이라, 조금만 무거워지면 판정이 통째로 죽고 발행이 fail-closed 로 막힌다.
+      그런데 이 값은 "임계경로를 얼마나 붙잡아도 되나" 의 문제이므로 *액션 데드라인* 에서
+      나와야 한다 — `writer_timeout()` 이 이미 그 형태다(원칙②).
+
+    본문 상한의 1/3 (본문은 3만 토큰 수 분, 판정은 작은 JSON 한 개다).
+    무배포 조정: `LLM_JUDGE_TIMEOUT_SEC`.
+    """
+    env = os.getenv("LLM_JUDGE_TIMEOUT_SEC")
+    if env:
+        try:
+            return max(30, int(env))
+        except ValueError:
+            pass
+    # 실측 최대 86.1s 대비 최소 2배 여유를 보장하는 하한 180
+    return max(180, min(300, int(writer_timeout() / 3)))
 _protect_cache: list = [0.0, ()]     # (계산시각, ((hour,minute), ...))
 _PROTECT_TTL = 600.0
 
@@ -1833,10 +1855,19 @@ def invoke_text_result(alias: str, prompt: str, system: str = "", timeout: int =
     # ★ 비필수 호출 — 스로틀 시 임계경로 블로킹 절대 금지 (ERRORS [368]). 필수 면제보다 우선.
     if _nonessential:
         if _gate in ("open", "probe"):
-            # 스로틀 중 — SDK 미호출·즉시 폴백. ok=False 로 *판정 불가* 를 명시한다.
-            return "", False
+            # ★ 면제 alias 는 여기서도 1회는 실시도한다 (ERRORS [549], 2026-08-04).
+            #   종전엔 `_nonessential` 이 무조건 이겨서, `_CIRCUIT_EXEMPT_ALIASES` 에
+            #   `fact_judge`·`engagement_judge` 를 넣어둔 것이 **무력화**됐다.
+            #   그 면제 목록의 주석은 *"사실성 게이트가 '' 즉사 → 발행 통째 실패로 번지는 것 방지"*
+            #   라고 적혀 있는데, 정작 게이트 호출부가 `_nonessential=True` 라 그 보호를
+            #   스스로 껐다 — 두 규정이 정면 충돌했고 실측으로 발행이 막혔다.
+            #   비필수의 취지(임계경로 블로킹 금지)는 `retries=1`·`timeout` 상자로 이미 지켜진다.
+            if not (_essential or alias in _CIRCUIT_EXEMPT_ALIASES):
+                print(f"  ⏳ [LLM] 회로 {_gate} — 비필수 즉시 폴백 (alias={alias})")
+                return "", False
+            print(f"  ⚠️ [LLM] 회로 {_gate} — 면제 alias 1회 실시도 (alias={alias})")
         retries, backoff = 1, False        # 정상일 때도 1샷
-        timeout = min(timeout, 90)         # 시간 상자 — 최악 90초 (max_tokens≤700 안에 완료)
+        timeout = min(timeout, judge_timeout())   # 시간 상자 — 데드라인 파생(ERRORS [549])
     elif _gate == "open":
         if _essential or alias in _CIRCUIT_EXEMPT_ALIASES:
             retries, backoff = 1, False   # 필수 호출 — open 중에도 1회 실시도

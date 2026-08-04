@@ -33,8 +33,10 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from pathlib import Path
 
-__all__ = ["mask", "mask_obj", "secret_values", "reload_secrets", "selfcheck"]
+__all__ = ["mask", "mask_obj", "secret_values", "reload_secrets", "selfcheck",
+           "secret_files", "is_secret_file"]
 
 # 키 *이름* 이 비밀을 뜻하는 패턴. 값 목록이 아니라 **이름 규칙** 이라 새 비밀에도 자동 적용된다.
 _SECRET_KEY_RE = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|_PW$|^PW_|COOKIE|API_KEY|_KEY$)", re.I)
@@ -123,6 +125,75 @@ def selfcheck() -> dict:
         if v in mask(probe):
             issues.append(f"{k}: 마스킹 미적용")
     return {"secret_count": len(vals), "keys": [k for k, _ in vals], "issues": issues}
+
+
+# ══════════════════════════════════════════════════════════════════
+# 시크릿 *파일* — 자율 도구가 읽으면 안 되는 것들
+# ══════════════════════════════════════════════════════════════════
+# ★ 왜 필요한가 (2026-08-04 전수 감사 3위 — 사용자 승인)
+#   `agent_tools._DENY_DIRS` 는 **디렉터리 접두어만** 비교한다. 그래서 실측상
+#     `_safe_path('.env')` → 허용 · `_safe_path('JARVIS02_WRITER/naver_cookies.pkl')` → 허용
+#   이었고, `read_file`·`glob_files`·`grep_code`·`web_fetch` 는 전부
+#   `requires_approval=False` 다. 즉 **승인 버튼 없이 자격증명을 읽어 외부로 보낼 수 있었다.**
+#   대조: `run_bash("cat .env")` 는 `requires_approval=True` 라 버튼에 막힌다 —
+#   같은 행위인데 통로에 따라 게이트가 달랐다.
+#
+# ★ 목록을 박지 않는다 (원칙②): 경로의 *주인* 에게 물어서 만든다.
+#   .env  ← 저장소 루트 규약(shared/db.py 가 쓰는 그 파일)
+#   쿠키   ← `login_manager` 가 소유한 경로 상수
+#   자격증명 폴더 ← `credentials/` 실물
+#   새 자격증명이 그 소유자에 추가되면 여기 손대지 않아도 자동으로 막힌다.
+_SECRET_FILES_CACHE: "set | None" = None
+
+
+def secret_files() -> set:
+    """자율 도구가 접근하면 안 되는 파일·디렉터리의 절대경로 집합 (해석된 형태)."""
+    global _SECRET_FILES_CACHE
+    if _SECRET_FILES_CACHE is not None:
+        return _SECRET_FILES_CACHE
+    root = Path(__file__).resolve().parent.parent
+    out: set = set()
+    # ① .env — 값의 원본
+    for name in (".env",):
+        f = root / name
+        if f.exists():
+            out.add(f.resolve())
+    # ② 쿠키·자격증명 — 경로의 주인에게 묻는다
+    try:
+        from JARVIS08_PUBLISH.credentials import login_manager as _lm
+        for attr in dir(_lm):
+            if "COOKIE" in attr.upper() and "PATH" in attr.upper():
+                v = getattr(_lm, attr, None)
+                if isinstance(v, Path):
+                    out.add(v.resolve())
+    except Exception:
+        # 소유자를 못 읽으면 *알려진 위치* 로 최소 방어 (fail-closed)
+        legacy = root / "JARVIS02_WRITER"
+        for f in legacy.glob("*_cookies.pkl"):
+            out.add(f.resolve())
+    # ③ 자격증명 폴더 전체
+    cred = root / "JARVIS08_PUBLISH" / "credentials"
+    if cred.exists():
+        out.add(cred.resolve())
+    _SECRET_FILES_CACHE = out
+    return out
+
+
+def is_secret_file(p) -> bool:
+    """해석된 경로가 시크릿 파일이거나 시크릿 디렉터리 *안* 인가."""
+    try:
+        rp = Path(p).resolve()
+    except Exception:
+        return False
+    for sf in secret_files():
+        if rp == sf:
+            return True
+        try:
+            rp.relative_to(sf)      # 디렉터리면 그 안까지
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def backfill_db(dry_run: bool = True) -> dict:

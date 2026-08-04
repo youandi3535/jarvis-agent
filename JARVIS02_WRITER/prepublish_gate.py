@@ -498,6 +498,8 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str,
     """
     import json as _json
     from shared.llm import invoke_text_result as _inv_r
+    # ★ 상한은 액션 데드라인 파생 — 여기 숫자를 박지 않는다 (ERRORS [549])
+    from shared.llm import judge_timeout as _judge_timeout
 
     def _no_verdict(status: str) -> dict:
         # ★ 지침 위반도 판정 불가 시 빈 목록 — fail-open. 판정 못 한 것을 위반이라 하지 않는다.
@@ -550,7 +552,7 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str,
         '"violated_directives":["명백히 어긴 지침 번호 D1 형식, 없으면 []"]}'
     )
     try:
-        raw, ok = _inv_r("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
+        raw, ok = _inv_r("fact_judge", prompt, timeout=_judge_timeout(), _nonessential=True)
         if not ok:
             # ★ 인프라 1회 재시도 (2026-07-16) — _nonessential 은 재시도 0회라
             #   타임아웃 1번 = 판정 기회 소멸이었다. 한 번 더 시도 후에만 판정불가 확정.
@@ -558,7 +560,7 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str,
             #     회로 open 이면 두 호출 모두 *SDK 미호출 즉시 ""* 라 재시도가 무의미했고
             #     그 사실이 반환값 어디에도 남지 않았다.
             log.info("[prepublish_gate] 통합 판정 응답 없음 — 1회 재시도")
-            raw, ok = _inv_r("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
+            raw, ok = _inv_r("fact_judge", prompt, timeout=_judge_timeout(), _nonessential=True)
         if not ok or not (raw or "").strip():
             return _no_verdict("unavailable")
         m = re.search(r"\{.*\}", raw, re.DOTALL)
