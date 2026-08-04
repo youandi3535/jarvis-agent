@@ -207,8 +207,18 @@ def publishing_in_progress() -> bool:
     #   살아 있는 발행 락이 삭제될 수 있었다 — 실측 최대 발행 지연 4.1시간 > 3시간.
     #   감시는 대상을 건드리지 않는다. 파일 존재 여부만 본다.
     try:
-        from JARVIS02_WRITER.scheduler import LOCK_FILE as _LF
-        return bool(_LF.exists())
+        import time as _t
+
+        from JARVIS02_WRITER.scheduler import LOCK_FILE as _LF, publish_lock_stale_sec as _stale
+        if not _LF.exists():
+            return False
+        # ★ 신선도까지 본다 (2026-08-04 2차 — 같은 날 오전 수정의 부작용 교정).
+        #   오전에 '감사가 락을 지우던' 결함을 read-only 로 고쳤는데, 존재 여부만 보면
+        #   **반대 방향으로 샌다**: 비정상 종료로 새어 남은 락(os._exit(75)·keeper SIGKILL)이
+        #   영원히 '발행 진행 중' 으로 읽혀 그 슬롯 결손을 **영구히 놓친다**.
+        #   스테일 청소는 *다음 발행* 의 `_lock_acquire` 때만 도므로 감사는 스스로 판정해야 한다.
+        #   상한은 scheduler 가 소유한 값에서 가져온다 — 사본을 두면 한쪽만 바뀐다(원칙①).
+        return (_t.time() - _LF.stat().st_mtime) < _stale()
     except Exception:
         return False
 

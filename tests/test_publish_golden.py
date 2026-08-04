@@ -509,3 +509,82 @@ def test_감사는_발행락을_지우지_않는다():
     before = LOCK_FILE.exists()
     publishing_in_progress()
     assert LOCK_FILE.exists() == before, "조회가 락 파일 상태를 바꿨다"
+
+
+# ══════════════════════════════════════════════════════════════════
+# 8) 2026-08-04 전수 감사 1·8위
+# ══════════════════════════════════════════════════════════════════
+def test_모든_종료경로가_같은_best_so_far_판정을_쓴다():
+    """★ 발행/미발행이 '지문이 흔들렸는가' 라는 우연으로 갈리면 안 된다.
+
+    실측 2026-08-04 07:00 — 같은 원인인데 네이버는 지문이 안 흔들려 abort(미발행),
+    티스토리는 흔들려 best-so-far(발행). 판정이 max_attempts 경로에만 있고
+    abort 경로는 그 앞에서 먼저 return 했기 때문이다.
+    게다가 CLAUDE_WRITER 는 'issue detail 에 변동값 금지' 를 박제해 뒀으므로
+    **규정을 잘 지킬수록 지문이 안정돼 abort 에 걸린다** — 정확히 거꾸로였다.
+    """
+    import inspect
+
+    from JARVIS00_INFRA import harness as H
+
+    assert hasattr(H, "_best_so_far_eligible"), "자격 판정 함수가 없다"
+    assert hasattr(H, "_try_best_so_far"), "송출 헬퍼가 없다"
+
+    body = inspect.getsource(H._run_action_locked)
+    n = body.count("_try_best_so_far(")
+    assert n >= 3, f"종료 경로 중 일부가 best-so-far 를 안 본다 (호출 {n}곳, 3 이상이어야)"
+    # 조건을 손으로 다시 쓴 사본이 있으면 회귀
+    assert 'all(i.kind == "engagement"' not in body, (
+        "종료 경로에 자격 조건 사본이 남아 있다 — 헬퍼 하나만 쓸 것"
+    )
+
+
+def test_best_so_far_는_품질점수만_남았을때만():
+    """사실성·구조 결함이 섞이면 절대 내보내지 않는다 — 거짓 발행 금지."""
+    from JARVIS00_INFRA.harness import Issue, _best_so_far_eligible
+
+    assert _best_so_far_eligible([Issue(step="s", kind="engagement", detail="[품질점수] 68/100")])
+    assert not _best_so_far_eligible([
+        Issue(step="s", kind="engagement", detail="a"),
+        Issue(step="s", kind="factuality", detail="출처 없는 수치"),
+    ]), "사실성 결함이 섞였는데 발행 자격을 줬다"
+    assert not _best_so_far_eligible([Issue(step="s", kind="draft_quality", detail="구조")])
+    assert not _best_so_far_eligible([]), "남은 게 없는데 자격을 줬다"
+
+
+def test_결손감사가_스테일_락에_영원히_속지_않는다():
+    """★ 오전 수정(락 read-only)의 반대 방향 누수.
+
+    존재 여부만 보면 비정상 종료로 새어 남은 락이 영원히 '발행 중' 으로 읽혀
+    그 슬롯 결손을 **영구히 놓친다**. 스테일 청소는 *다음 발행* 때만 돌기 때문이다.
+    """
+    import inspect
+
+    from JARVIS08_PUBLISH.publish_ledger import publishing_in_progress
+
+    src = inspect.getsource(publishing_in_progress)
+    assert "publish_lock_stale_sec" in src, "신선도 상한을 보지 않는다 — 스테일 락에 영원히 속는다"
+    assert "st_mtime" in src, "락 갱신 시각을 보지 않는다"
+
+
+def test_스테일_상한이_최악_발행소요보다_크다():
+    """상한이 너무 짧으면 *진행 중인 발행* 을 죽은 락으로 오판한다."""
+    from JARVIS02_WRITER.scheduler import publish_lock_stale_sec
+    from JARVIS08_PUBLISH.publish_ledger import audit_lag_minutes
+
+    worst_min = audit_lag_minutes(3600)          # misfire_grace + 플랫폼수 × 플랫폼당 상한
+    assert publish_lock_stale_sec() // 60 > worst_min, (
+        f"스테일 상한 {publish_lock_stale_sec()//60}분 ≤ 최악 발행소요 {worst_min}분 — "
+        f"살아 있는 발행을 죽은 락으로 오판한다"
+    )
+
+
+def test_스테일_상수의_주인은_한곳():
+    """publish_ledger 가 상수를 복사하면 한쪽만 바뀌어 어긋난다."""
+    import inspect
+
+    from JARVIS08_PUBLISH import publish_ledger as L
+
+    assert "10800" not in inspect.getsource(L.publishing_in_progress), (
+        "스테일 초를 복사했다 — scheduler.publish_lock_stale_sec() 에서 파생할 것"
+    )

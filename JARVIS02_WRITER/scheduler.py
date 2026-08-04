@@ -181,12 +181,28 @@ def _lock_release():
         pass
 
 
+# ★ 발행 락 스테일 판정 상한 — **이 값의 주인은 여기 하나** (2026-08-04).
+#   비정상 종료(os._exit(75)·keeper SIGKILL)로 락이 새면 다음 발행이 영구 차단되므로
+#   이 시간이 지나면 죽은 락으로 본다. 실측 최대 발행 소요 +246분(4.1h)보다 짧으면
+#   *살아 있는 발행* 을 죽은 것으로 오판하므로 함부로 줄이지 말 것.
+_PUBLISH_LOCK_STALE_SEC = 10800   # 3시간
+
+
+def publish_lock_stale_sec() -> int:
+    """발행 락이 이 시간(초)을 넘으면 죽은 락으로 본다 — 외부 소비자용 공개 진입점.
+
+    `JARVIS08_PUBLISH.publish_ledger` 가 '발행 진행 중인가' 를 판정할 때 이 값을 쓴다.
+    그쪽에 상수를 복사하면 한쪽만 바뀌어 어긋난다(원칙①).
+    """
+    return _PUBLISH_LOCK_STALE_SEC
+
+
 def _is_locked_externally() -> bool:
     """외부 프로세스(수동 실행 등)가 락을 점유 중인지 확인."""
     if not LOCK_FILE.exists():
         return False
     # 3시간 이상 된 락은 비정상 종료로 간주 → 자동 제거
-    if time.time() - LOCK_FILE.stat().st_mtime > 10800:
+    if time.time() - LOCK_FILE.stat().st_mtime > publish_lock_stale_sec():
         LOCK_FILE.unlink(missing_ok=True)
         return False
     try:

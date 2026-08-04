@@ -933,6 +933,44 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
         _lock.release()
 
 
+def _best_so_far_eligible(issues) -> bool:
+    """남은 미해결이 **품질점수(engagement)뿐** 인가 — 최선 대본을 내보내도 되는 조건.
+
+    ★ 왜 함수로 뽑았나 (2026-08-04 전수 감사 1위)
+      이 판정은 원래 max_attempts 소진 경로에만 있었고 **abort 경로는 그 앞에서 먼저
+      `return`** 했다. 그래서 *같은 원인인데 지문이 흔들렸는가* 로 발행/미발행이 갈렸다 —
+      2026-08-04 07:00 실측: 네이버 5건→5건 동일 → abort(미발행) /
+      티스토리 4건→5건 변동 → best-so-far(발행). **우연이 결과를 정했다.**
+      게다가 CLAUDE_WRITER 는 "issue detail 에 변동값을 넣지 말라" 고 박제해 뒀으므로
+      **규정을 잘 지킬수록 지문이 안정돼 abort 에 걸린다.** 정확히 거꾸로다.
+    사실성·구조·분량 등 correctness 결함이 하나라도 섞이면 False — 거짓·결함 발행은 금지.
+    """
+    live = [i for i in (issues or []) if not _is_fixed_issue(i) and not _is_infra_issue(i)]
+    return bool(live) and all(i.kind == "engagement" for i in live)
+
+
+def _try_best_so_far(action_def, state, result, issues, why: str) -> bool:
+    """자격이 되면 최선 대본을 송출하고 True. 아니면 False(호출자가 종전 경로 유지).
+
+    ★ 모든 종료 경로가 이 함수 하나를 부른다 — 조건을 복사하면 다음에 또 어긋난다(원칙①).
+    """
+    if not _best_so_far_eligible(issues):
+        return False
+    try:
+        action_def.send(state)
+        result.delivered = True
+        result.escalation_reason = ""
+        _resolve_attempt_errors(
+            action_def.name, f"harness best-so-far 발행 성공({why}) — 시도 실패는 최종 결과로 무효")
+        _log.warning(f"[harness] ✅ best-so-far 발행({why}) — 품질점수만 미달, "
+                     f"correctness 결함 0: {action_def.name}")
+        print(f"  ✅ [harness] best-so-far 발행({why}) — correctness 결함 0 → 최선 대본 송출")
+        return True
+    except Exception as _e:
+        _log.warning(f"[harness] best-so-far 송출 실패({why}) → 종전 경로 유지: {_e}")
+        return False
+
+
 def _run_action_locked(action_def: ActionDefinition, state: dict,
                        result: ActionResult,
                        wd: Optional[Watchdog] = None) -> ActionResult:
@@ -1122,6 +1160,9 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
                 f"{action_def.name}"
             )
             _log.warning(f"[harness] 🚫 fingerprint abort: {action_def.name}")
+            # ★ 남은 것이 품질점수뿐이면 최선 대본을 내보낸다 (2026-08-04 감사 1위)
+            if _try_best_so_far(action_def, state, result, unfixed_issues, "지문반복"):
+                return result
             _report_issues_to_guardian(action_def.name, attempt, [_abort], action_def.max_attempts)
             _notify_escalation(
                 action_def.name, attempt, all_issues,
@@ -1144,6 +1185,9 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             result.escalation_reason = "누적 issue 임계 초과 — abort"
             print(f"  🚫 [harness] 누적 abort: {action_def.name} (총 {_cumulative}건)")
             _log.warning(f"[harness] 🚫 누적 abort: {action_def.name}")
+            # ★ 남은 것이 품질점수뿐이면 최선 대본을 내보낸다 (2026-08-04 감사 1위)
+            if _try_best_so_far(action_def, state, result, unfixed_issues, "누적초과"):
+                return result
             _report_issues_to_guardian(action_def.name, attempt, [_abort], action_def.max_attempts)
             _notify_escalation(
                 action_def.name, attempt, all_issues,
@@ -1204,23 +1248,9 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
     # ── ★ best-so-far 발행 (사용자 박제 2026-07-19): 남은 미해결이 *품질 점수(engagement)뿐* 이면
     #   escalation(미발행) 대신 최선(마지막 개선분) 대본을 발행한다 — 좋아지던 글을 버리지 않는다.
     #   사실성·구조·분량 등 correctness 실패가 하나라도 섞이면 기존 escalation 유지(거짓·결함 발행 금지). ──
-    _live_content = [i for i in last if not _is_fixed_issue(i) and not _is_infra_issue(i)]
-    if _live_content and all(i.kind == "engagement" for i in _live_content):
-        try:
-            action_def.send(state)
-            result.delivered = True
-            result.escalation_reason = ""
-            # ★ 발행 성공 → 시도 오류 무효화 (GUARDIAN 오알림 차단, ERRORS [462])
-            _resolve_attempt_errors(
-                action_def.name,
-                "harness best-so-far 발행 성공 — 시도 실패는 최종 결과로 무효")
-            _log.warning(
-                f"[harness] ✅ best-so-far 발행 — 품질점수(100점)만 미달({action_def.max_attempts}회), "
-                f"사실성·구조 결함 없어 최선 대본 송출: {action_def.name}")
-            print("  ✅ [harness] best-so-far 발행 — 100점 미달이나 correctness 결함 0 → 최선 대본 발행(미발행 방지)")
-            return result
-        except Exception as _bse:
-            _log.warning(f"[harness] best-so-far 송출 실패 → escalation: {_bse}")
+    # ★ abort 경로와 **같은 헬퍼** — 조건 사본 금지(원칙①)
+    if _try_best_so_far(action_def, state, result, last, "시도소진"):
+        return result
 
     # ── 콘텐츠 결함 등 — escalation (송출 절대 안 함) ──
     result.escalation_reason = f"max_attempts({action_def.max_attempts}) 도달 — 검증 통과 실패"
