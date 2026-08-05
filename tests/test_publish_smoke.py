@@ -27,9 +27,16 @@ pytestmark = pytest.mark.usefixtures("_no_external")
 
 # ── 4조합 파생 (리터럴 금지 — 조합이 늘면 테스트가 자동으로 따라온다) ──────────
 def _combos():
-    from JARVIS08_PUBLISH.publish_ledger import expected_platforms
-    from JARVIS09_COLLECTOR.models import CATEGORY_POLICY
-    return [(c, p) for c in sorted(CATEGORY_POLICY) for p in expected_platforms()]
+    """4조합 = 글종류 × 플랫폼. **발행 잡에서 파생** 한다.
+
+    ★ 파생 원본을 고른 이유: 처음엔 `JARVIS09_COLLECTOR.models.CATEGORY_POLICY` 를 썼는데,
+      그 패키지를 import 하면 수집 provider 사슬(`feedparser`→`yfinance`→…)이 딸려와
+      CI 최소 환경이 의존을 물고 끝없이 늘어났다. **같은 답을 더 가벼운 곳에서 얻는다** —
+      발행 잡 카탈로그가 이미 (글종류, 시각) 을 알고 있고, 그게 실제 발행의 진실이다.
+    """
+    from JARVIS08_PUBLISH.publish_ledger import expected_platforms, publish_slots
+    cats = sorted({pt for pt, _h, _m in publish_slots()})
+    return [(c, p) for c in cats for p in expected_platforms()]
 
 
 COMBOS = _combos()
@@ -43,23 +50,6 @@ def test_4조합이_실제_설정에서_파생된다():
 
 
 # ── 가짜 재료 ────────────────────────────────────────────────────────────
-def _fake_collected():
-    """최소 CollectedData — 실제 dataclass 를 쓴다(가짜 클래스를 만들면 계약이 갈린다)."""
-    from JARVIS09_COLLECTOR.models import CollectedData
-    return CollectedData(
-        meta={"keyword": "반도체", "sector": "IT", "category": "theme"},
-        datasets=[{"name": "월별 수출", "rows": [["1월", 100], ["2월", 120]],
-                   "columns": ["월", "억달러"],
-                   "source": {"provider": "KITA", "name": "무역통계",
-                              "url": "https://example.invalid/x", "as_of": "2026-08-01"}}],
-        docs=[{"title": "반도체 수출 증가", "url": "https://example.invalid/a",
-               "text": "2026년 2월 반도체 수출은 120억달러로 전월 대비 20% 늘었다."}],
-        facts=[{"claim": "2월 수출 120억달러", "confidence": 0.9,
-                "source": "https://example.invalid/a"}],
-        entities=[{"name": "반도체", "type": "industry"}],
-    )
-
-
 def _fake_png(counter=[0]):
     """★ 호출마다 **다른 바이트** 를 낸다.
 
