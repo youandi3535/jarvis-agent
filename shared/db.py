@@ -1204,6 +1204,59 @@ def _gfs_keep_set(dates: list[date]) -> set[date]:
     return keep
 
 
+def verify_backup(path) -> str:
+    """방금 만든 백업이 **성한가** — 빈 문자열이면 정상, 아니면 사유.
+
+    ★ 왜 필요한가 (2026-08-05 실측): 저장소 전체에 `integrity_check` 가 **0행**이었다.
+      백업 파일이 2.0GB 쌓여 있는데 *그중 하나라도 복원 가능한지 확인한 적이 없었다.*
+      백업은 "만들었다" 가 아니라 "복원된다" 여야 백업이다.
+
+    ★ 비용: 159MB DB 에 0.8초 (실측). 하루 1회니 무시할 수 있다.
+
+    ★ 왜 여기(shared/db)인가: '만들어진 DB 파일이 성한가' 는 DB 도메인의 질문이다.
+      다른 모듈에 두면 `shared.db ↔ 그 모듈` 순환 import 가 생긴다.
+    """
+    p = Path(path)
+    if not p.exists():
+        return "백업 파일이 만들어지지 않음"
+    if p.stat().st_size <= 0:
+        return "백업 파일이 0바이트"
+    try:
+        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=30)
+        try:
+            r = con.execute("PRAGMA integrity_check").fetchone()
+            if not r or str(r[0]).lower() != "ok":
+                return f"integrity_check 실패: {r}"
+            # 핵심 테이블이 실제로 읽히는가 (헤더만 성한 파일 방어)
+            for t in ("post_analysis", "error_log", "job_runs"):
+                con.execute(f"SELECT count(*) FROM {t}").fetchone()
+        finally:
+            con.close()
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    return ""
+
+
+def backup_gaps(days: int = 7) -> list:
+    """최근 N일 중 **백업이 없는 날** — 결손 감지.
+
+    ★ 발행 완결성 감사와 같은 사고방식: *기대* 를 파생하고 *실제* 와 대조한다.
+      기대 = 매일 1개(백업 잡이 cron daily). 실제 = 파일명의 날짜.
+      실측 2026-08-05: 07-31·08-02 백업이 **조용히 빠져 있었다** — 아무도 몰랐다.
+      ※ GFS 보존이 오래된 날을 의도적으로 지우므로 **최근 N일만** 본다.
+    """
+    have = set()
+    for p in BACKUP_DIR.glob("jarvis_*.sqlite"):
+        try:
+            have.add(date.fromisoformat(p.stem.replace("jarvis_", "")))
+        except Exception:
+            continue
+    today = date.today()
+    return [(today - timedelta(days=i)).isoformat()
+            for i in range(1, max(1, days) + 1)
+            if (today - timedelta(days=i)) not in have]
+
+
 def backup_db(retention_days: int = 30) -> dict:
     """SQLite .backup API 로 WAL 안전 백업 + **GFS 계층 보존**.
 
@@ -1235,6 +1288,27 @@ def backup_db(retention_days: int = 30) -> dict:
         with sqlite3.connect(str(DB_PATH), timeout=10) as cp:
             cp.execute("PRAGMA wal_checkpoint(FULL)")
         shutil.copy2(DB_PATH, target)
+
+    # 1-B) ★ 무결성 검증 — **retention 앞** (2026-08-05).
+    #   순서가 정책이다: 새 백업이 깨졌는데 옛 백업을 지우면 성한 사본이 하나도 안 남는다.
+    #   깨진 파일은 `.corrupt` 로 남기지 않는다 — 그러면 retention glob 밖이라 영구 잔존한다
+    #   (실측 선례: `jarvis_premask_2026-08-02.sqlite` 176MB 가 그렇게 관리 밖에 있다).
+    #   쓸모없는 파일이므로 즉시 지우고 사유만 박제한다.
+    _bad = verify_backup(target)
+    if _bad:
+        try:
+            target.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report as _rep
+            _rep("BackupIntegrityFailed", "infra",
+                 message=f"백업 무결성 검증 실패 — 파일 폐기, 옛 백업 보존: {_bad}",
+                 module=__name__, func_name="backup_db",
+                 context={"target": str(target), "reason": _bad, "kind": "daemon_down"})
+        except Exception:
+            pass
+        raise RuntimeError(f"백업 무결성 검증 실패: {_bad}")
 
     # 2) Retention — GFS 계층 보존 (일 7 + 주 4 + 월 3 ≈ 14개로 30일 커버)
     cutoff = date.today() - timedelta(days=retention_days)

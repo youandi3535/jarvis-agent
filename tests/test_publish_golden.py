@@ -1081,6 +1081,12 @@ def test_인프라_kind_판별을_아무도_등가비교하지_않는다():
     for f in root.rglob("*.py"):
         if ".venv" in f.parts or "__pycache__" in f.parts or f == owner:
             continue
+        # ★ 테스트는 예외 — 이 규칙이 막는 것은 *분류 판단* 을 등가비교로 하는 것이다.
+        #   "파생이 살아있는가" 를 확인하려면 테스트는 반드시 두 값을 비교해야 한다
+        #   (실제로 이 규칙이 그 검증 테스트를 잡았다 — 규칙이 동작한다는 증거이자,
+        #    예외를 명시해야 한다는 신호).
+        if "tests" in f.parts:
+            continue
         try:
             src = f.read_text(encoding="utf-8")
         except Exception:

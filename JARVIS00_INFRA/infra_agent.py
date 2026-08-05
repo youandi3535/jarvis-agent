@@ -379,8 +379,32 @@ def register(scheduler, bus):
 # ── Infra scheduled jobs (jarvis_daemon 에서 이관) ────────────────
 
 def job_db_backup() -> None:
-    """매일 03:00 — SQLite 백업 + 30일 retention."""
+    """매일 03:00 — SQLite 백업 + 무결성 검증 + 결손 감사.
+
+    ★ 결손 감사를 여기 두는 이유 (2026-08-05 — 새 잡을 만들지 않는다)
+      이 잡은 백업이 *실패해도* 매일 돈다. 그래서 "어제 백업이 없다" 를 여기서 알 수 있다.
+      별도 감사 잡을 만들면 같은 시각에 두 잡이 같은 디렉터리를 훑게 된다(①위반).
+      데몬이 꺼져 있어 이 잡조차 안 돈 구간은 `JARVIS00_INFRA/downtime.py` 가 이미 보고한다.
+    """
     from shared import db
+
+    # ── 결손 감사 (백업 시도 *전* — 이번 실행이 성공해도 과거 결손은 남는다)
+    try:
+        gaps = db.backup_gaps(days=7)
+        if gaps:
+            log.warning(f"⚠️ 백업 결손 {len(gaps)}일: {gaps}")
+            from shared.notify import send_tg
+            send_tg("⚠️ *백업 결손* — 최근 7일 중 " + ", ".join(gaps) + " 백업 없음\n"
+                    "_데몬이 03:00 에 꺼져 있었거나 백업이 실패했습니다._\n"
+                    "확인: `docs/RUNBOOK.md` §7-D")
+            from JARVIS07_GUARDIAN.error_collector import report as _rep
+            _rep("BackupGapDaily", "infra",
+                 message=f"최근 7일 백업 결손 {len(gaps)}일: {gaps}",
+                 module=__name__, func_name="job_db_backup",
+                 context={"gaps": gaps, "kind": "daemon_down"})
+    except Exception as e:
+        log.warning(f"백업 결손 감사 실패: {e}")
+
     try:
         r = db.backup_db(retention_days=30)
         msg = (

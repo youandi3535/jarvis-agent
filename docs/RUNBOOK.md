@@ -240,6 +240,35 @@ print(report_boot_downtime(dry_run=True))"   # dry_run — 박제·전송 없이
 
 ---
 
+## 7-D. 백업이 성한가
+
+```bash
+.venv/bin/python -c "
+from shared.db import verify_backup, backup_gaps, BACKUP_DIR
+print('최근 7일 결손:', backup_gaps(7) or '없음')
+for p in sorted(BACKUP_DIR.glob('jarvis_*.sqlite'))[-3:]:
+    print(p.name, '→', verify_backup(p) or '정상')"
+```
+
+- **결손이 있으면** — 그 날 03:00 에 데몬이 꺼져 있었거나 백업이 실패했다.
+  §7-C(공백 회계)와 대조하면 어느 쪽인지 갈린다.
+- **`verify_backup` 이 사유를 돌려주면** 그 백업은 복원에 못 쓴다.
+  운영 중 자동 백업은 검증 실패 시 **파일을 즉시 폐기하고 옛 백업을 보존** 한다
+  (retention 보다 검증이 먼저 — 순서가 정책이다).
+
+복원은 데몬을 내린 뒤에 한다:
+
+```bash
+pkill -f jarvis_daemon.py && sleep 3
+cp ~/.jarvis/backups/jarvis_YYYY-MM-DD.sqlite ~/.jarvis/jarvis.sqlite
+./restart_daemon.sh
+```
+
+> ★ 백업은 **DB 와 같은 디스크**에 있다. 디스크가 통째로 죽으면 둘 다 잃는다.
+> 외부 저장은 현재 없다 — 정직하게 알고 있어야 할 한계다.
+
+---
+
 ## 8. 고치고 나서 — 순서 고정
 
 ① 수정 → ② `./restart_daemon.sh` → ③ **재시작된 프로세스로** 검증 → ④ 전부 커밋

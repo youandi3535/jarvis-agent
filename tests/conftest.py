@@ -42,6 +42,61 @@ def test_db_path() -> Path:
     return Path(os.environ["JARVIS_DB_PATH"])
 
 
+# ── 실 LLM·실 네트워크 차단 (2026-08-05) ──────────────────────────────
+#   ★ `JARVIS_TEST_MODE=1` 은 **아무도 읽지 않았다** (실측: 소비자 0곳).
+#     설정하는 쪽만 있고 읽는 쪽이 없는 플래그는 "차단했다" 는 착각만 만든다.
+#     그래서 실제로 막는다 — 부르면 터진다.
+_BOOM_HITS: list = []
+
+
+def _forbid(name):
+    def _boom(*a, **kw):
+        _BOOM_HITS.append(name)
+        raise AssertionError(f"테스트가 실제 {name} 을 호출했다 — 가짜 주입이 빠진 경로가 있다")
+    return _boom
+
+
+@pytest.fixture
+def _no_external(monkeypatch):
+    """진짜 LLM 을 부르면 터진다. **삼켜져도** teardown 에서 반드시 드러난다.
+
+    ★ 이 저장소는 `except Exception: log.warning` 이 도처에 있어 "부르면 터진다" 만으로는
+      약하다 — 예외가 삼켜지고 테스트는 초록으로 통과한다. 그래서 호출 자체를 세고
+      끝에서 0인지 확인한다.
+    """
+    import sys as _sys
+
+    from pathlib import Path as _Path
+
+    import shared.llm as _llm
+
+    _BOOM_HITS.clear()
+    for fn in ("invoke_text", "invoke_text_result"):
+        orig = getattr(_llm, fn, None)
+        if orig is None:
+            continue
+        boom = _forbid(f"shared.llm.{fn}")
+        monkeypatch.setattr(_llm, fn, boom)
+        # ★ 모듈 레벨로 미리 복사해 간 바인딩까지 교체 (draft_writer.py:42 — ERRORS [457])
+        #   ※ **우리 저장소 모듈만** 훑는다. `sys.modules` 전체를 getattr 로 건드리면
+        #     지연 로딩 라이브러리(transformers 등)의 `__getattr__` 이 발동해
+        #     없는 의존(torchvision)을 import 하다 죽는다 (실측).
+        _root = str(_Path(__file__).resolve().parent.parent)
+        for mod in list(_sys.modules.values()):
+            if mod is None or getattr(mod, "__name__", "") == "shared.llm":
+                continue
+            f = getattr(mod, "__file__", None)
+            if not f or not str(f).startswith(_root) or "/.venv/" in str(f):
+                continue
+            try:
+                if getattr(mod, fn, None) is orig:
+                    monkeypatch.setattr(mod, fn, boom, raising=False)
+            except Exception:
+                continue
+    yield
+    assert not _BOOM_HITS, f"실 LLM 호출이 삼켜졌다: {sorted(set(_BOOM_HITS))}"
+
+
 @pytest.fixture(autouse=True)
 def _assert_not_production_db():
     """★ 모든 테스트에 자동 적용 — 운영 DB 를 잡았으면 즉시 실패시킨다.

@@ -570,6 +570,53 @@ def run_auto_repair() -> None:
                     ))
             return issues
 
+        # ── CI 게이트 (2026-08-05 — 축소판) ───────────────────────
+        #
+        # ★ 무엇을 하고 무엇을 안 하는가
+        #   한다  — SDK 가 저장소를 고친 뒤 CI 와 *같은 검사* 를 돌려보고, 실패하면
+        #           ① 텔레그램 경보 ② **검증 안 된 diff 를 학습에 넣지 않는다**
+        #   안 한다 — 롤백. 스냅샷 복원은 `dashboard/node_modules`(1,039개)와 학습 산출물
+        #           (`learned_patterns.json` 등)까지 되돌린다. "안전 게이트" 라는 이름으로
+        #           저장소에서 가장 파괴적인 경로를 만드는 셈이라 폐기했다.
+        #           변경은 워킹트리에 남고, 사람이 커밋할 때 pre-commit 훅이 차단한다.
+        #
+        # ★ 실측 근거로 범위를 좁혔다: auto_repair 는 최근 10회 연속 수정 0건이고
+        #   (마지막 실제 변경 2026-07-17), auto_patch 학습은 1건·diff 없음이었다.
+        #   유일하게 실재하는 위험이 "무가드 diff 의 학습 오염" 이라 그것만 막는다.
+        #
+        # ★ 인터프리터를 명시 치환한다 — 데몬은 `.../Python.app/Contents/MacOS/Python`
+        #   으로 도는데 그 디렉터리엔 `python3` 도 `pytest` 도 없다. CI 문자열의
+        #   `python3` 를 그대로 쓰면 엉뚱한 파이썬이 잡혀 *멀쩡한 수정이 실패로 판정* 된다.
+        def _ci_gate_failures() -> list:
+            """CI 가 정의한 검사를 그대로 돌려 실패 목록을 반환. 킬스위치 `GUARDIAN_CI_GATE=0`."""
+            import os as _os
+            import re as _re
+            import subprocess as _sp
+            import sys as _sys
+            if _os.getenv("GUARDIAN_CI_GATE", "1") == "0":
+                return []
+            ci = _ROOT / ".github" / "workflows" / "ci.yml"
+            if not ci.exists():
+                return ["ci.yml 부재 — 게이트 검사 불가"]
+            cmds = []
+            for line in ci.read_text(encoding="utf-8").splitlines():
+                m = _re.match(r"\s*(?:run:\s*)?(python3?\s+-m\s+pytest[^\n]*|python3?\s+shared/precommit_check\.py[^\n]*)", line)
+                if m:
+                    cmds.append(m.group(1).strip())
+            if not cmds:
+                return ["ci.yml 에서 검사 명령을 파생하지 못함"]
+            bad = []
+            for c in cmds:
+                c = _re.sub(r"^python3?\b", _sys.executable, c)
+                try:
+                    r = _sp.run(c, shell=True, cwd=str(_ROOT), capture_output=True,
+                                text=True, timeout=600)
+                    if r.returncode != 0:
+                        bad.append(f"{c.split()[-2:]}: rc={r.returncode} {(r.stdout or r.stderr)[-200:]}")
+                except Exception as e:
+                    bad.append(f"{c}: {type(e).__name__}: {e}")
+            return bad
+
         # ── [L3] 즉시 수정 훅 ─────────────────────────────────────
         def _fix(state: dict, issues: list) -> tuple:
             """SDK 오류는 인라인 수정 불가 — unfixed 전체 반환 (harness 가 재실행).
@@ -606,7 +653,26 @@ def run_auto_repair() -> None:
             scores = _parse_self_scores(summary)
             # ★ 변경된 파일 diff → auto_patch 학습 저장 (재발 시 LLM 0 재적용, git 불필요)
             py_snapshot = state.get("py_snapshot", {})
-            _capture_diff_patches(layers, py_snapshot)
+            # ★ 검증 안 된 diff 를 학습에 넣지 않는다 (2026-08-05).
+            #   여기 들어간 패치는 발행 직전 Tier-1 sweep 이 LLM 0 으로 재적용한다 —
+            #   즉 한 번 잘못 들어가면 매 발행마다 되풀이된다.
+            _ci_bad = _ci_gate_failures()
+            if _ci_bad:
+                log.error(f"[auto_repair] CI 게이트 실패 {len(_ci_bad)}건 — 학습 적재 건너뜀")
+                _send_tg("⚠️ *자가수정 사후 검증 실패*\n"
+                         + "\n".join(f"· {b}" for b in _ci_bad[:3])
+                         + "\n\n_변경은 워킹트리에 남아 있습니다. 커밋 시 pre-commit 훅이 차단합니다._"
+                           "\n_검증 안 된 패치는 학습에 넣지 않았습니다._")
+                try:
+                    from JARVIS07_GUARDIAN.error_collector import report as _rep
+                    _rep("AutoRepairCIGateFailed", "guardian",
+                         message=f"자가수정 후 CI 검사 실패: {_ci_bad[:2]}",
+                         module=__name__, func_name="_send",
+                         context={"kind": "sdk_error", "failures": _ci_bad[:3]})
+                except Exception:
+                    pass
+            else:
+                _capture_diff_patches(layers, py_snapshot)
             run_id = _save_run_to_db(_MODEL, elapsed, rc, layers, scores, summary)
             trend  = _learning_trend_brief()
 
