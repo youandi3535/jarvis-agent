@@ -246,10 +246,14 @@ def secret_files() -> set:
     root = Path(__file__).resolve().parent.parent
     out: set = set()
     # ① .env — 값의 원본
-    for name in (".env",):
-        f = root / name
-        if f.exists():
-            out.add(f.resolve())
+    #
+    # ★ 존재 여부로 거르지 않는다 (2026-08-05 — CI 가 잡아낸 구멍).
+    #   종전엔 `if f.exists()` 였다. 그런데 이 함수는 프로세스당 1회 캐시되므로,
+    #   `.env` 가 아직 없을 때 한 번 호출되면 **그 프로세스는 이후 `.env` 를 영영
+    #   비밀로 보지 않는다.** 깨끗한 체크아웃(CI)에서 실제로 `_safe_path('.env')` 가
+    #   경로를 반환했다 — 무승인 도구가 읽을 수 있는 상태.
+    #   비밀인지 아닌지는 *경로 규약* 이 정하는 것이지 파일이 지금 있느냐가 아니다.
+    out.add((root / ".env").resolve())
     # ② 쿠키·자격증명 — 경로의 주인에게 묻는다
     try:
         from JARVIS08_PUBLISH.credentials import login_manager as _lm
@@ -263,10 +267,8 @@ def secret_files() -> set:
         legacy = root / "JARVIS02_WRITER"
         for f in legacy.glob("*_cookies.pkl"):
             out.add(f.resolve())
-    # ③ 자격증명 폴더 전체
-    cred = root / "JARVIS08_PUBLISH" / "credentials"
-    if cred.exists():
-        out.add(cred.resolve())
+    # ③ 자격증명 폴더 전체 (①과 같은 이유로 존재 여부 무관)
+    out.add((root / "JARVIS08_PUBLISH" / "credentials").resolve())
     _SECRET_FILES_CACHE = out
     return out
 
@@ -288,7 +290,7 @@ def is_secret_file(p) -> bool:
     return False
 
 
-def redact_logs(dry_run: bool = True) -> dict:
+def redact_logs(dry_run: bool = True, root=None) -> dict:
     """이미 기록된 로그 파일의 평문 시크릿을 *제자리에서* 가린다.
 
     ★ 왜 필요한가 — 필터는 미래만 막는다
@@ -311,11 +313,15 @@ def redact_logs(dry_run: bool = True) -> dict:
 
     Args:
         dry_run: True 면 세지만 하고 쓰지 않는다.
+        root: 훑을 최상위 경로. 기본은 저장소 루트.
+            ★ 테스트가 *환경에 있는 실물 로그* 에 기대지 않게 하려고 뚫었다 —
+              CI 는 깨끗한 체크아웃이라 `logs/` 가 아예 없다(gitignore). 합성 트리로
+              "여러 디렉터리를 전부 훑는가" 를 검증할 수 있어야 한다.
 
     Returns:
         {"files": [(경로, 치환건수)], "total": N, "written": bool}
     """
-    root = Path(__file__).resolve().parent.parent
+    root = Path(root) if root else Path(__file__).resolve().parent.parent
     vals = [v for _k, v in secret_values()]
     out: list[tuple[str, int]] = []
     total = 0

@@ -1137,10 +1137,55 @@ def test_로그세척이_모든_로그디렉터리를_훑는다():
     assert 'root / "logs"' not in src, "로그 디렉터리가 한 곳으로 박혀 있다"
     assert 'rglob("logs")' in src, "로그 디렉터리를 실물에서 파생하지 않는다"
 
-    root = Path(__file__).resolve().parent.parent
-    real = {d for d in root.rglob("logs")
-            if d.is_dir() and not {".venv", ".git", "node_modules"} & set(d.parts)}
-    assert len(real) >= 2, f"로그 디렉터리가 {len(real)}개 — 이 테스트의 전제가 깨졌다"
+
+def test_로그세척이_합성트리의_모든_디렉터리를_훑는다(tmp_path, monkeypatch):
+    """★ 환경에 기대지 않고 *동작* 으로 확인한다.
+
+    종전 테스트는 "내 맥북에 로그 디렉터리가 2개 이상 있다" 를 전제로 삼았다.
+    CI 는 깨끗한 체크아웃이라 `logs/` 가 아예 없어(gitignore) 그 전제가 깨졌다 —
+    **테스트가 환경을 검사하면 환경이 바뀔 때마다 거짓말을 한다.**
+    """
+    import shared.secrets as S
+
+    secret = "SUPERSECRET_TOKEN_VALUE_1234567890"
+    monkeypatch.setattr(S, "_cache", [("PROBE_TOKEN", secret)])
+
+    for sub in ("logs", "AGENT_A/logs", "AGENT_B/nested/logs"):
+        d = tmp_path / sub
+        d.mkdir(parents=True)
+        (d / "x.log").write_text(f"GET https://api/?key={secret} ok\n", encoding="utf-8")
+    (tmp_path / "notlogs").mkdir()
+    (tmp_path / "notlogs" / "y.log").write_text(f"key={secret}\n", encoding="utf-8")
+
+    seen = S.redact_logs(dry_run=True, root=tmp_path)
+    assert seen["total"] == 3, f"3개 디렉터리를 다 훑지 못했다: {seen}"
+
+    S.redact_logs(dry_run=False, root=tmp_path)
+    assert S.redact_logs(dry_run=True, root=tmp_path)["total"] == 0, "세척이 안 됐다"
+    for sub in ("logs", "AGENT_A/logs", "AGENT_B/nested/logs"):
+        assert secret not in (tmp_path / sub / "x.log").read_text(encoding="utf-8")
+    # logs 가 아닌 폴더는 건드리지 않는다
+    assert secret in (tmp_path / "notlogs" / "y.log").read_text(encoding="utf-8")
+
+
+def test_비밀_경로는_파일_존재와_무관하다():
+    """★ CI(깨끗한 체크아웃)가 잡아낸 구멍 — `.env` 가 없으면 보호도 사라졌다.
+
+    `secret_files()` 는 프로세스당 1회 캐시된다. `.env` 가 아직 없을 때 한 번 불리면
+    그 프로세스는 이후 `.env` 를 영영 비밀로 보지 않는다. 실제로 CI 에서
+    `_safe_path('.env')` 가 경로를 반환했다 — 무승인 도구가 읽을 수 있는 상태.
+    비밀인지는 *경로 규약* 이 정한다. 지금 파일이 있느냐가 아니다.
+    """
+    import inspect
+
+    import shared.secrets as S
+
+    # 주석은 걷어내고 본다 — '왜 없앴는지' 설명하는 주석은 남아 있어야 한다.
+    code = "\n".join(l.split("#")[0] for l in inspect.getsource(S.secret_files).splitlines())
+    assert ".exists()" not in code, "비밀 경로를 존재 여부로 거른다"
+    names = {p.name for p in S.secret_files()}
+    assert ".env" in names, f"파생에 .env 가 없다: {names}"
+    assert "credentials" in names
 
 
 def test_preflight가_마스킹을_검사만_하지_않고_건다():
