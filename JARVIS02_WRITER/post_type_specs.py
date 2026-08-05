@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+from JARVIS07_GUARDIAN.json_store import write_json
 
 
 def _max_attempts() -> int:
@@ -387,8 +388,7 @@ def save_learned_adjustment(post_type: str, key: str, value) -> bool:
     type_adj[key] = value
     data[post_type] = type_adj
     try:
-        _LEARNED_ADJ_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                                      encoding="utf-8")
+        write_json(_LEARNED_ADJ_PATH, data, indent=2)
         return True
     except Exception:
         return False

@@ -33,6 +33,7 @@ import os, sys, time, json, subprocess, threading
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
+from JARVIS07_GUARDIAN.json_store import write_json
 
 load_dotenv()
 
@@ -268,8 +269,9 @@ def load_progress() -> dict:
 
 
 def save_progress(p: dict):
-    with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(p, f, ensure_ascii=False, indent=2)
+    # ★ 원자적 저장 — 이 파일은 발행 진행상태 원장이다. 쓰는 도중 프로세스가
+    #   죽으면 잘린 JSON 이 남고, 다음 회차가 그걸 읽어 진행상태를 잃는다.
+    write_json(PROGRESS_FILE, p, indent=2)
 
 
 def get_result_path(theme: str) -> Path:

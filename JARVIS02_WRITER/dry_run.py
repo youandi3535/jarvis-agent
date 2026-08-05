@@ -30,6 +30,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from JARVIS07_GUARDIAN.json_store import write_json
 
 log = logging.getLogger("jarvis")
 
@@ -39,7 +40,7 @@ def _save_result(mode: str, topic: str, data: dict) -> Path:
     safe_topic = "".join(c if c.isalnum() else "_" for c in topic)[:30]
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = Path(f"/tmp/dry_run_{mode}_{safe_topic}_{ts}.json")
-    out_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(out_path, data, indent=2)
     return out_path
 
 

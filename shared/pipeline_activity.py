@@ -38,6 +38,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from JARVIS07_GUARDIAN.json_store import write_json
 
 try:
     import fcntl  # darwin/linux — 크로스 프로세스 파일 락
@@ -103,11 +104,11 @@ def _read() -> dict:
 
 
 def _write(data: dict) -> None:
+    # ★ 원자 저장 로직을 직접 구현하지 않는다 (2026-08-05 — ①위반 시정).
+    #   여기 있던 tmp→os.replace 는 `json_store.write_json` 과 같은 일을 하는
+    #   *복사본* 이었다. 원본이 fsync·락·격리를 추가해도 이쪽은 안 따라온다.
     _DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = str(_DATA_FILE) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp, str(_DATA_FILE))  # atomic
+    write_json(_DATA_FILE, data, indent=None)
 
 
 @contextmanager

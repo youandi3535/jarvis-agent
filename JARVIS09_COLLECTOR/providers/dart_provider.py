@@ -28,6 +28,7 @@ from ..rate_limiter import wait_for
 from . import BaseProvider
 
 import logging
+from JARVIS07_GUARDIAN.json_store import write_json
 log = logging.getLogger("jarvis.collector.dart")
 
 _BASE = "https://opendart.fss.or.kr/api"
@@ -136,8 +137,7 @@ def _corp_code_map(api_key: str) -> dict[str, list[tuple[str, str]]]:
     # ④ 디스크 캐시 저장 + 메모리 캐시 확정
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        with open(_CACHE_FILE, "w", encoding="utf-8") as fp:
-            json.dump(result, fp, ensure_ascii=False)
+        write_json(_CACHE_FILE, result, indent=None)
     except Exception as e:
         log.debug(f"[DART] corpCode 캐시 저장 실패: {e}")
     _CORP_MAP_MEM = result

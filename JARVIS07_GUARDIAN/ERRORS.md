@@ -11098,3 +11098,33 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **부수 정정 — "있다고 가정한 상태 표시" 3곳**: `api_server` 의 `{"pollinations": True}` 하드코딩, `JARVIS05_VISION/registry` 의 `pollinations_available: True`, `image_agent` 의 "✅ Pollinations 가용" — 전부 죽어도·삭제돼도 초록불이었다. **실제 자격증명 확인** 으로 교체.
 - **파일**: JARVIS06_IMAGE/providers/cloudflare_provider.py(신설) · image_agent.py · thumbnail_maker.py · prompt_translator.py · draft_processor.py · api_server.py · JARVIS05_VISION/registry.py · JARVIS07_GUARDIAN/severity.py · shared/precommit_check.py · CLAUDE.md ×2
 - **교훈**: **외부 무료 서비스는 예고 없이 유료가 된다.** 그때 드러나는 건 "폴백이 몇 단인가" 인데, 문서가 말하는 단수와 코드의 단수가 달랐다. 그리고 *200 OK 는 관련성의 증거가 아니다* — 이미지를 받았으면 **눈으로 봐야** 안다.
+
+## [575] ③원칙만 자동 검사가 없어서 반복해서 샜다 — `symmetry` 카테고리 신설 (2026-08-05)
+
+- **증상**: 프로덕션 감사가 같은 병 5건을 찾았다 — 보호 장치를 만들어 놓고 *일부에만* 적용.
+  `json_store`(원자 저장) 2개 파일만 / `redact_logs` 로그 디렉터리 1/5 / 로그 회전 `daemon.log` 만 /
+  마스킹 12자 이상만 / 추적은 라우터만. **그리고 같은 날 나도 저질렀다** — 이미지 프로바이더
+  교체에서 `image_agent` 만 고치고 `thumbnail_maker` 를 빠뜨렸다(ERRORS [574]).
+- **원인**: CLAUDE.md 3원칙 중 **①②는 `precommit_check` 가 자동 강제하는데 ③만 사람 손**에
+  맡겨져 있었다. 유일하게 기계가 안 보는 규칙이라 그것만 반복해서 어긋났다.
+- **공통 구조**: *보호 함수 F 가 있는데 적용 대상 S 의 **진부분집합**에만 걸려 있다.*
+- **해결 — 11건 먼저 고치고, 그 다음 검사 추가** (순서가 중요하다):
+  ① `json.dump`/`write_text(json.dumps` 11곳을 `json_store.write_json` 으로 전환.
+     특히 `scheduler.save_progress`(발행 진행상태 원장)는 절단 시 피해가 크다.
+     `shared/pipeline_activity._write` 는 *이미 원자적* 이었지만 tmp→os.replace 를 **직접
+     구현한 복사본** 이라 같이 전환했다 — 원본이 fsync·락을 추가해도 사본은 안 따라온다.
+  ② `precommit_check` 에 `symmetry` 카테고리 신설(20번째).
+- **★ 설계 검토가 초안을 무너뜨렸다 (self-match 폐기)**:
+  초안은 "이 정규식은 owner 본체에도 매칭돼야 한다" 로 신선도를 재려 했다. 그런데
+  `json_store` 의 실제 쓰기는 `write_text(_dumps(...))` + `os.replace` 라 `json.dump(` 에
+  **안 걸린다** — 그대로 냈으면 검사가 **자기 self-check 에 걸려 실제 위반을 0건 보고**했다.
+  `collect/self-check` 가 겪은 사고를 새 카테고리로 재현할 뻔했다.
+  → owner 생존은 **동작 확인**(`store_effective()`)으로 판정. fail-closed.
+- **폐기한 레그**: L4(순회 범위 리터럴)는 정밀도 **0/3** 이고 처방이 해로웠다
+  (따르면 `file_cleanup` 이 저장소 전역 빈 디렉터리를 rmdir 한다). 정당한 비대칭을
+  위반이라 부르는 검사는 쓰이지 않게 된다.
+- **검증**: 뮤테이션 2/2 — 위반을 되살리면 잡고, owner 를 죽이면 fail-closed(rc=1).
+  pytest 137 · precommit **20개 카테고리** 위반 0 · 깨끗한 체크아웃 통과.
+- **파일**: shared/precommit_check.py · 전환 11파일 · tests/test_publish_golden.py
+- **교훈**: **기계가 안 보는 규칙만 반복해서 어긋난다.** 그리고 검사를 도입할 때는
+  *위반 해소를 먼저* 해야 한다 — 같은 커밋에 넣으면 첫날부터 모든 커밋이 막힌다.

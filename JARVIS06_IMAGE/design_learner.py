@@ -29,6 +29,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests as _req
+from JARVIS07_GUARDIAN.json_store import write_json
 
 def _max_attempts() -> int:
     """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
@@ -116,8 +117,7 @@ def pick_recipe(seed: int) -> dict:
 
 
 def _save_registry(recs: list) -> None:
-    _REGISTRY.write_text(json.dumps({"version": 1, "recipes": recs},
-                                    ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(_REGISTRY, {"version": 1, "recipes": recs}, indent=2)
 
 
 def _append_log(entry: dict) -> None:
@@ -126,7 +126,7 @@ def _append_log(entry: dict) -> None:
     except Exception:
         hist = []
     hist.append(entry)
-    _LOG.write_text(json.dumps(hist[-200:], ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(_LOG, hist[-200:], indent=2)
 
 
 def _tg(msg: str) -> None:

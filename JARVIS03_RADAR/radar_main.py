@@ -41,6 +41,7 @@ from JARVIS03_RADAR.analyzer import (
 
 # 글자수 정책은 length_manager 단일 진입점
 from JARVIS02_WRITER import length_manager as _LM
+from JARVIS07_GUARDIAN.json_store import write_json
 
 # kiwipiepy — 명사 성분 검증 (없으면 패턴 폴백)
 try:
@@ -415,7 +416,7 @@ def _calc_trend_delta(today_kws: list[str]) -> dict:
 
 def save(data: dict):
     path = DATA_DIR / f"trends_{data['date']}.json"
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(path, data, indent=2)
     print(f"[RADAR] 로컬 저장: {path.name}")
 
 

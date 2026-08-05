@@ -535,8 +535,7 @@ def _expand_theme(theme: str) -> list:
         # 정상 응답([] 포함) → 확정 결과 캐시 + 파일 영구 저장
         _SYNONYM_CACHE[theme] = syns
         try:
-            _SYNONYM_FILE.write_text(json.dumps(_SYNONYM_CACHE, ensure_ascii=False, indent=1),
-                                     encoding="utf-8")
+                write_json(_SYNONYM_FILE, _SYNONYM_CACHE, indent=1)
         except Exception:
             pass
     # throttle 시: _SYNONYM_CACHE 미저장 → 다음 호출 시 재시도(캐시 미스 → LLM 재요청)
@@ -1074,6 +1073,7 @@ from JARVIS09_COLLECTOR.source_registry import TEXT_SOURCES as _TEXT_SOURCES   #
 # 실행은 항상 kosis → web 순서. web/blog가 먼저 실행되어 틀린 수치 채택 사고 원천 차단.
 # ★ source_registry.SOURCES 의 chart_rank 에서 파생 (사용자 박제 2026-07-24) — 사본 폐지. default 99.
 from JARVIS09_COLLECTOR.source_registry import CHART_TRUST_RANK as _SOURCE_TRUST_RANK
+from JARVIS07_GUARDIAN.json_store import write_json
 
 # 시장 지표 키워드 — discover 웹 폴백 차단 대상 (ERRORS [421])
 # 이 키워드가 series name/query에 있으면 API/kosis 실패해도 웹 검색 폴백 금지.

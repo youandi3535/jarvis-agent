@@ -1678,3 +1678,60 @@ def test_이미지_프로바이더_상태를_하드코딩하지_않는다():
     assert isinstance(_cf_available(), bool)
     src = _code_only(inspect.getsource(_cf_available))
     assert "provider_available" in src, "가용 상태를 실제로 확인하지 않는다"
+
+
+def test_JSON을_직접_쓰는_곳이_없다():
+    """★ ③원칙 — 원자 저장을 만들어 놓고 2개 파일에만 적용하고 있었다 (11건 잔존).
+
+    쓰는 도중 프로세스가 죽으면 잘린 JSON 이 남고, 다음 회차가 그걸 읽어 상태를 잃는다.
+    특히 `scheduler.save_progress` 는 발행 진행상태 원장이라 피해가 크다.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    pat = re.compile(r"json\.dump\(|write_text\(\s*json\.dumps")
+    bad = []
+    for f in root.rglob("*.py"):
+        if {".venv", "__pycache__", "node_modules", "tests"} & set(f.parts):
+            continue
+        if f.name in ("json_store.py", "precommit_check.py"):
+            continue          # owner 와 검사기는 대상 아님
+        for i, l in enumerate(_code_only(f.read_text(encoding="utf-8", errors="ignore")).splitlines(), 1):
+            if pat.search(l):
+                bad.append(f"{f.relative_to(root)}")
+                break
+    assert not bad, "JSON 직접 쓰기 잔존:\n" + "\n".join(bad)
+
+
+def test_symmetry_검사가_등록돼_있고_동작한다():
+    """★ ①②는 자동 강제인데 ③만 사람 손이라 반복해서 샜다 — 그 검사를 등재했다."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    spec = importlib.util.spec_from_file_location(
+        "_pc_sym", root / "shared" / "precommit_check.py")
+    pc = importlib.util.module_from_spec(spec)
+    sys.modules["_pc_sym"] = pc
+    try:
+        spec.loader.exec_module(pc)
+    finally:
+        sys.modules.pop("_pc_sym", None)
+
+    assert "symmetry" in pc.CATEGORIES, "symmetry 카테고리가 등록되지 않았다"
+    rep = pc.Report()
+    pc.check_symmetry(rep)
+    assert not rep.violations, f"symmetry 위반: {[v.text[:60] for v in rep.violations]}"
+
+    # owner 생존을 *동작* 으로 확인하는가 (self-match regex 는 폐기된 초안)
+    src = _code_only(inspect_src(pc.check_symmetry))
+    assert "store_effective" in src, "owner 생존을 동작으로 확인하지 않는다"
+
+
+def inspect_src(fn) -> str:
+    import inspect
+    return inspect.getsource(fn)
