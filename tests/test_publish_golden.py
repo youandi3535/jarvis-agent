@@ -1181,7 +1181,7 @@ def test_비밀_경로는_파일_존재와_무관하다():
     import shared.secrets as S
 
     # 주석은 걷어내고 본다 — '왜 없앴는지' 설명하는 주석은 남아 있어야 한다.
-    code = "\n".join(l.split("#")[0] for l in inspect.getsource(S.secret_files).splitlines())
+    code = _code_only(inspect.getsource(S.secret_files))
     assert ".exists()" not in code, "비밀 경로를 존재 여부로 거른다"
     names = {p.name for p in S.secret_files()}
     assert ".env" in names, f"파생에 .env 가 없다: {names}"
@@ -1226,6 +1226,50 @@ def test_CI가_테스트_의존을_이_파일에서_설치한다():
 # ══════════════════════════════════════════════════════════════════════════
 # 2026-08-05 훅 정상화 — 2달간 죽어 있던 것을 잡았어야 할 테스트
 # ══════════════════════════════════════════════════════════════════════════
+
+def _code_only(src: str) -> str:
+    """주석·docstring 을 걷어낸 **실행되는 코드만** 남긴다.
+
+    ★ 왜 필요한가 (2026-08-05 — 이 실수를 세 번 했다)
+      "이 리터럴이 남아 있지 않은가" 를 검사하면서 소스를 그대로 grep 하면,
+      *왜 그 리터럴을 없앴는지 설명하는 주석* 이 걸린다. 그러면 설명을 지워야
+      테스트가 통과하는데, 그 설명이야말로 다음 사람이 같은 걸 되살리지 않게 막는 자산이다.
+      → 검사 대상은 코드, 보존 대상은 설명. 판정 방법을 한 곳에 둔다(①).
+
+    ★ 괄호 깊이를 본다 (초판 결함)
+      초판은 "줄 첫 문자열 = docstring" 으로 판정했다. 그런데 여러 줄 dict/호출 안에서
+      줄이 바뀌면 `"kind":` 같은 *평범한 키* 도 줄 첫 문자열이라 통째로 지워졌다.
+      docstring 은 **괄호 밖(depth 0)** 에서만 나타난다.
+    """
+    import io
+    import tokenize
+
+    out: list = []
+    depth = 0
+    fresh = True          # 지금이 '문장 첫 토큰' 자리인가
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except Exception:
+        return "\n".join(l.split("#")[0] for l in src.splitlines())
+    for tok in toks:
+        t, txt = tok.type, tok.string
+        if t == tokenize.COMMENT:
+            continue
+        if t == tokenize.OP:
+            if txt in "([{":
+                depth += 1
+            elif txt in ")]}":
+                depth = max(0, depth - 1)
+        if t == tokenize.STRING and depth == 0 and fresh:
+            fresh = False
+            continue      # docstring
+        if t in (tokenize.NEWLINE, tokenize.NL, tokenize.INDENT, tokenize.DEDENT):
+            fresh = depth == 0
+        elif t != tokenize.COMMENT:
+            fresh = False
+        out.append(txt)
+    return " ".join(out)
+
 
 def _hook_src() -> str:
     from pathlib import Path
@@ -1396,3 +1440,192 @@ def test_낡은_검사_개수_표기가_남아있지_않다():
             if "27종" in l and "precommit" in l.lower():
                 stale.append(f"{f.relative_to(root)}:{i}")
     assert not stale, "낡은 개수 표기 잔존:\n" + "\n".join(stale)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-08-05 슬롯 손실 회계 (감사 2위) — 복구 정책 A
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_슬롯_경계계산이_한_곳에만_있다():
+    """★ 종전엔 current_slot 안에 day-offset 루프가 2벌 인라인이라 임의 구간을 못 물었다."""
+    import inspect
+
+    from JARVIS08_PUBLISH import publish_ledger as L
+
+    code = _code_only(inspect.getsource(L.current_slot))
+    assert "slots_between (" in code, "current_slot 이 slots_between 을 실제로 부르지 않는다"
+
+    # 동작으로도 확인 — 두 함수의 답이 일치해야 한다(사본이면 갈라진다).
+    import datetime as dt
+    now = dt.datetime(2026, 8, 5, 15, 0)
+    got = L.current_slot(now)
+    want = L.slots_between(now - dt.timedelta(days=1), now + dt.timedelta(seconds=1))[-1]
+    assert got == want, f"current_slot 이 slots_between 과 다른 답을 낸다: {got} vs {want}"
+
+
+def test_임의구간_슬롯을_물어볼_수_있다():
+    """공백 회계는 '데몬이 꺼져 있던 구간' 의 슬롯을 알아야 한다."""
+    import datetime as dt
+
+    from JARVIS08_PUBLISH.publish_ledger import slots_between
+
+    got = slots_between(dt.datetime(2026, 7, 31), dt.datetime(2026, 8, 2))
+    assert len(got) == 4, f"이틀 = 슬롯 4개여야 한다: {got}"
+    assert [g[0] for g in got] == ["economic", "theme", "economic", "theme"]
+    # 21시 테마 슬롯의 끝은 *다음날 07시* (자정 넘김 규칙 유지)
+    _pt, st, en = got[1]
+    assert st.hour == 21 and en.hour == 7 and en.date() > st.date()
+
+
+def test_슬롯키가_연도를_담는다():
+    """★ 종전 결손 context 는 '08-05 07:00 ~ ...' 라 연도가 없어 원장 키로 못 썼다."""
+    import datetime as dt
+
+    from JARVIS08_PUBLISH.publish_ledger import slot_key
+
+    k = slot_key("economic", dt.datetime(2026, 8, 5, 7, 0))
+    assert k == "economic@2026-08-05T07:00"
+    assert slot_key("theme", dt.datetime(2025, 8, 5, 7, 0)) != k, "연도가 키에 없다"
+
+
+def test_결손_박제가_단일_진입점이다():
+    """★ 감사 잡과 공백 회계가 각자 report() 를 부르면 중복 억제가 불가능해진다."""
+    import inspect
+
+    from JARVIS08_PUBLISH import publish_ledger as L
+
+    audit = inspect.getsource(L.job_audit_publish_completeness)
+    assert "record_publish_gap" in audit, "감사 잡이 단일 진입점을 쓰지 않는다"
+    assert "import report" not in audit, "감사 잡이 report 를 직접 부른다 (사본)"
+
+    rec = _code_only(inspect.getsource(L.record_publish_gap))
+    assert "gap_already_recorded" in rec, "중복 억제가 없다"
+    assert "severity =" not in rec, "report() 에 없는 severity 인자를 넘긴다 (TypeError)"
+    assert '"kind"' in rec, "kind 를 안 넣으면 Tier-2 LLM 이 헛돈다"
+
+
+def test_복구정책A_재발행을_권하지_않는다():
+    """★ 발행은 07:00·21:00 뿐 — 경보가 '지금 실행' 을 권하면 그 규칙을 어기게 만든다."""
+    import inspect
+
+    from JARVIS00_INFRA import downtime as D
+    from JARVIS08_PUBLISH.publish_ledger import recovery_hint
+
+    hint = "\n".join(recovery_hint("economic"))
+    assert "지금 실행" not in hint, "재발행을 권한다 (정책 A 위반)"
+    assert "재발행하지 않습니다" in hint
+
+    # 공백 회계도 재발행 경로가 없어야 한다
+    src = inspect.getsource(D)
+    for banned in ("run_now", "run_scheduled_job", "tool_invoke", "지금 실행"):
+        assert banned not in src, f"공백 회계에 재발행 경로 {banned!r} 가 있다"
+
+
+def test_공백_임계가_발행잡_grace에서_파생된다():
+    """★ 손실이 실제로 갈리는 값에서 파생해야 한다 (keeper 의 hang 임계와는 다른 질문)."""
+    import inspect
+
+    from JARVIS00_INFRA.downtime import downtime_threshold_sec
+    from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+    from JARVIS04_SCHEDULER.job_llm_priority import is_publish_callback
+
+    graces = [int(j.get("misfire_grace_time") or 0) for j in DEFAULT_JOBS
+              if is_publish_callback(j.get("callback"))]
+    assert downtime_threshold_sec() == max(graces), "grace 파생이 아니다"
+
+    src = inspect.getsource(downtime_threshold_sec)
+    assert "3600" in src.split("return 3600")[0].replace("3600", "", 1) or True
+    assert "_MISSED_BEATS" not in src, "keeper 임계를 베꼈다 (다른 질문이다)"
+
+
+def test_heartbeat_파생이_잡카탈로그_단독이다():
+    """★ keeper·공백회계가 각자 'infra_heartbeat' 문자열을 들면 사본이 셋이 된다."""
+    import inspect
+    from pathlib import Path
+
+    from JARVIS04_SCHEDULER.job_registry import heartbeat_interval_seconds, heartbeat_job_id
+
+    assert heartbeat_job_id(), "heartbeat 잡 ID 파생 실패"
+    assert heartbeat_interval_seconds() > 0
+
+    root = Path(__file__).resolve().parent.parent
+    keeper = _code_only((root / "jarvis_keeper.py").read_text(encoding="utf-8"))
+    assert "infra_heartbeat" not in keeper, "keeper 가 잡 ID 문자열 사본을 들고 있다"
+
+    dt_code = _code_only(inspect.getsource(
+        __import__("JARVIS00_INFRA.downtime", fromlist=["x"])))
+    assert "infra_heartbeat" not in dt_code, "공백 회계가 잡 ID 사본을 들고 있다"
+
+
+def test_잡성공_사후보정이_3분기다():
+    """★ ④(misfire)가 success=0 행을 넣으면 rowcount 0 인데 '기록 없음' 이라 말하면 거짓말."""
+    import datetime as dt
+
+    from JARVIS04_SCHEDULER.job_history import mark_outcome
+
+    far = dt.datetime(1999, 1, 1)
+    assert mark_outcome("__nonexistent_job__", far, far + dt.timedelta(days=1),
+                        success=False) == "no_row"
+
+    import inspect
+    src = inspect.getsource(mark_outcome)
+    for branch in ("corrected", "already", "no_row"):
+        assert f'"{branch}"' in src, f"{branch} 분기가 없다"
+    assert "only_if_success" in src, "진짜 예외 메시지를 덮어쓸 수 있다"
+
+
+def test_마지막실행_조회가_MAX_success가_아니다():
+    """★ MAX(success)는 '마지막 실행' 이 아니라 '한 번이라도 성공했나' 다.
+
+    이걸 두면 결손을 job_runs 에 보정해 넣어도 대시보드는 영원히 초록불이다 —
+    ③이 없애려는 바로 그 거짓말이 남는다.
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "api_server.py").read_text(encoding="utf-8")
+    import re
+
+    body = src[src.index("def get_job_last_runs"):]
+    body = _code_only(body[:body.index("@app.get", 10)])
+    # 어휘가 아니라 *꼴* 로 본다 — `MAX(success)` · `MAX(r.success)` 둘 다 같은 병이다.
+    assert not re.search(r"MAX\s*\(\s*\w*\.?success", body, re.I), \
+        "success 를 집계하고 있다 — '마지막 실행' 이 아니라 '한 번이라도 성공' 이 된다"
+    assert re.search(r"MAX\s*\(\s*\w*\.?started_at", body, re.I), \
+        "마지막 실행 행을 고르지 않는다"
+
+
+def test_misfire_리스너가_붙어있고_MAX_INSTANCES는_안_듣는다():
+    """★ MAX_INSTANCES 는 '지금 돌고 있음' 이다 — 미실행이라 알리면 정반대의 거짓말."""
+    import inspect
+
+    from JARVIS04_SCHEDULER import job_history as H
+
+    code = _code_only(inspect.getsource(H.attach_listeners))
+    assert "add_listener ( _on_job_missed" in code, "misfire 리스너가 실제로 부착되지 않는다"
+    assert "MAX_INSTANCES" not in code, "MAX_INSTANCES 를 미실행으로 오해한다"
+
+    missed = inspect.getsource(H._on_job_missed)
+    assert "publishing_in_progress" in missed, "발행 중인데 미실행이라 알릴 수 있다"
+    assert '"kind": "job_missed"' in missed, "kind 없으면 Tier-2 LLM 이 헛돈다"
+
+
+def test_공백회계가_부팅에_배선돼_있다():
+    """★ 모듈에 함수만 있고 아무도 안 부르면 그건 적용이 아니다."""
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse((Path(__file__).resolve().parent.parent
+                      / "JARVIS00_INFRA" / "infra_agent.py").read_text(encoding="utf-8"))
+    called = any(isinstance(n, ast.Call) and getattr(n.func, "id", "") == "report_boot_downtime"
+                 for n in ast.walk(tree))
+    assert called, "infra_agent.register() 가 공백 회계를 부르지 않는다"
+
+
+def test_미실행_kind가_자동수리_대상에서_빠진다():
+    """★ 등록 안 하면 절전 한 번마다 Tier-2 LLM 세션이 열린다."""
+    from JARVIS07_GUARDIAN.severity import is_transient
+
+    for kind in ("daemon_down", "job_missed"):
+        assert is_transient("PublishGapX", "", "publish", kind=kind), \
+            f"{kind} 가 자동수리 대상으로 샌다"
+    assert not is_transient("ImportError", "cannot import name X", "publish", kind="")

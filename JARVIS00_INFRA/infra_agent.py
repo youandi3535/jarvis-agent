@@ -360,6 +360,21 @@ def register(scheduler, bus):
     """
     register_capability()
 
+    # ★ 부팅 1회 — 공백 회계 (2026-08-05). 데몬 파일은 한 줄도 안 고친다:
+    #   `register()` 는 부팅 시 자동 호출되는 표준 훅이다(AGENTS.md 4항목 규약).
+    #   실패해도 부팅을 막지 않는다 — 회계는 부가 기능이지 부팅 전제가 아니다.
+    try:
+        from JARVIS00_INFRA.downtime import report_boot_downtime
+        _dt_res = report_boot_downtime()
+        if _dt_res.get("downtime"):
+            log.info(f"📉 공백 회계: {_dt_res['hours']}h "
+                     f"({_dt_res['from']} ~ {_dt_res['to']}) "
+                     f"슬롯 손실 {len(_dt_res['slots'])}건 · 신규 박제 {_dt_res['recorded']}건")
+        else:
+            log.info("✅ 공백 회계: 직전 종료 이후 유의미한 공백 없음")
+    except Exception as _e:
+        log.warning(f"⚠️ 공백 회계 실패(부팅은 계속): {_e}")
+
 
 # ── Infra scheduled jobs (jarvis_daemon 에서 이관) ────────────────
 

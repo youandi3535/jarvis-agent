@@ -738,7 +738,17 @@ def get_job_last_runs():
     con = _db()
     if not con: return []
     try:
-        rows = _rows(con, "SELECT job_id, MAX(started_at) as started_at, MAX(success) as success FROM job_runs GROUP BY job_id")
+        # ★ `MAX(success)` 는 '마지막 실행' 이 아니라 **'한 번이라도 성공했나'** 다
+        #   (2026-08-05 교정). 그래서 잡이 오늘 실패해도 과거에 한 번 성공했으면
+        #   대시보드는 영원히 초록불이었다 — 발행 결손을 잡 이력에 보정해 넣어도
+        #   화면은 그대로였을 것이다.
+        #   → 진짜 *마지막 실행 행* 의 결과를 읽는다.
+        rows = _rows(con, """
+            SELECT r.job_id, r.started_at, r.success, r.error
+            FROM job_runs r
+            JOIN (SELECT job_id, MAX(started_at) AS m FROM job_runs GROUP BY job_id) t
+              ON r.job_id = t.job_id AND r.started_at = t.m
+            GROUP BY r.job_id""")
         con.close()
         return rows  # array — frontend LastRun[] expects started_at field
     except Exception:

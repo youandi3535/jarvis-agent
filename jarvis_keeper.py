@@ -58,15 +58,16 @@ _HEARTBEAT_FALLBACK_SEC = 180    # DEFAULT_JOBS 를 못 읽을 때만 (fail-safe
 
 
 def _heartbeat_interval_sec() -> int:
-    """데몬 heartbeat 실제 주기 — DEFAULT_JOBS 에서 파생. 실패 시 폴백."""
+    """데몬 heartbeat 실제 주기 — **잡 카탈로그의 주인에게 묻는다** (2026-08-05).
+
+    종전엔 여기서 `id == "infra_heartbeat"` 문자열과 kwargs 를 직접 파싱했다.
+    같은 값을 공백 회계도 쓰게 되면서 사본이 셋이 될 참이었다 → `job_registry` 로 단일화.
+    """
     try:
-        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
-        for j in DEFAULT_JOBS:
-            if j.get("id") == "infra_heartbeat" and j.get("trigger") == "interval":
-                kw = j.get("kwargs") or {}
-                sec = int(kw.get("seconds") or 0) + int(kw.get("minutes") or 0) * 60
-                if sec > 0:
-                    return sec
+        from JARVIS04_SCHEDULER.job_registry import heartbeat_interval_seconds
+        sec = heartbeat_interval_seconds()
+        if sec > 0:
+            return sec
     except Exception:
         pass
     return _HEARTBEAT_FALLBACK_SEC

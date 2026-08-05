@@ -266,6 +266,32 @@ DEFAULT_JOBS: list[dict] = [
 _COOKIE_PRECHECK_LEAD_MIN = 30
 
 
+
+# ── heartbeat 파생 — **잡 카탈로그의 주인이 직접 답한다** (2026-08-05) ──────────
+#   종전엔 `jarvis_keeper.py` 가 `j.get("id") == "infra_heartbeat"` 문자열과 kwargs
+#   파싱을 자체 보유했다(①위반). 공백 회계까지 같은 값이 필요해지면서 **세 번째 사본**이
+#   생길 참이었다. 잡 정의의 주인이 잡에 대한 질문에 답한다.
+def heartbeat_job_id() -> str:
+    """데몬 생존 신호 잡의 ID — 콜백 소유자(infra_agent.job_heartbeat)에서 파생.
+
+    ID 문자열을 비교하지 않는다. *무엇을 하는 잡인가* 로 찾는다 — 이름이 바뀌어도 따라온다.
+    """
+    for j in DEFAULT_JOBS:
+        if str(j.get("callback", "")).endswith(".job_heartbeat"):
+            return str(j.get("id") or "")
+    return ""
+
+
+def heartbeat_interval_seconds() -> int:
+    """그 잡의 실제 주기(초). 못 읽으면 0 — 호출자가 fail-closed 판단."""
+    jid = heartbeat_job_id()
+    for j in DEFAULT_JOBS:
+        if j.get("id") == jid and j.get("trigger") == "interval":
+            kw = j.get("kwargs") or {}
+            return int(kw.get("seconds") or 0) + int(kw.get("minutes") or 0) * 60
+    return 0
+
+
 def _publish_job_times() -> list[tuple[str, int, int]]:
     """(발행잡ID, 시, 분) — 위 리터럴 카탈로그에서 직접 파생(순환 import 회피)."""
     out = []

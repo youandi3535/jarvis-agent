@@ -107,7 +107,81 @@ def _on_job_error(event):
     _record(event, success=False, error=err or "unknown error")
 
 
-def _record(event, success: bool, error: Optional[str]):
+def _on_job_missed(event):
+    """EVENT_JOB_MISSED — grace 를 넘겨 **아예 실행되지 못한** 잡 (2026-08-05).
+
+    ★ 왜 듣는가: 종전엔 아무도 안 들어서, 잡이 통째로 건너뛰어도 흔적이 0이었다.
+      `job_runs` 는 '실행된 것' 만 담았으므로 *안 돈 것* 은 존재하지 않는 일이 됐다.
+
+    ★ 복구하지 않는다 (정책 A). 기록만 남긴다 — 재실행하면 정규 시각이 아닌 때 글이 나간다.
+
+    ★ `EVENT_JOB_MAX_INSTANCES` 는 일부러 듣지 않는다.
+      그건 '직전 회차가 아직 돌고 있어 스킵됨' 이라 *발행이 진행 중* 이라는 뜻이다.
+      그걸 '미실행' 으로 알리면 정반대의 거짓말이 된다.
+
+    ★ 한계: 스케줄러 자체가 안 떠 있었으면 이 이벤트도 발화하지 않는다.
+      그 구간은 `JARVIS00_INFRA/downtime.py` 의 공백 회계가 맡는다 (경계 분담).
+    """
+    job_id = getattr(event, "job_id", "")
+    if not job_id:
+        return
+    sched = ""
+    try:
+        srt = getattr(event, "scheduled_run_time", None)
+        if srt is not None:
+            sched = srt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        pass
+
+    # 발행 잡인지 판별 — 마커 소유자에게 묻는다(리터럴 금지).
+    is_pub = False
+    try:
+        from JARVIS04_SCHEDULER.job_llm_priority import is_publish_callback
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+        for j in DEFAULT_JOBS:
+            if j.get("id") == job_id:
+                is_pub = bool(is_publish_callback(j.get("callback")))
+                break
+    except Exception:
+        pass
+
+    # 발행 잡이 아니면 조용히 적재만 — 절전 아티팩트로 실패 랭킹을 도배하지 않는다.
+    _record(event, success=False, error="misfire — grace 내에 실행되지 못함",
+            started_override=sched)
+    if not is_pub:
+        return
+
+    # 발행이 *지금 돌고 있으면* 미실행이라고 알리지 않는다 (오탐 방지).
+    try:
+        from JARVIS08_PUBLISH.publish_ledger import publishing_in_progress
+        if publishing_in_progress():
+            print(f"  ⏳ [misfire] {job_id} — 발행 진행 중이라 알림 생략")
+            return
+    except Exception:
+        pass
+
+    try:
+        from JARVIS07_GUARDIAN.error_collector import report
+        report(
+            "PublishJobMissed" + "".join(w[:1].upper() + w[1:] for w in job_id.split("_")),
+            "scheduler",
+            message=f"{job_id} 가 예정 시각({sched or '?'})에 실행되지 못했다 (misfire)",
+            module=__name__, func_name="_on_job_missed",
+            # 코드 결함이 아니다 — 자동수리 대상에서 제외
+            context={"job_id": job_id, "scheduled": sched, "kind": "job_missed"},
+        )
+    except Exception as e:
+        print(f"  ⚠️ misfire 박제 실패 {job_id}: {e}")
+    try:
+        from shared.notify import send_tg
+        send_tg(f"⚠️ *발행 잡 미실행* — `{job_id}`\n"
+                f"예정 {sched or '?'} 에 실행되지 못했습니다 (misfire).\n"
+                f"_재발행하지 않습니다 (복구 정책 A)._")
+    except Exception:
+        pass
+
+
+def _record(event, success: bool, error: Optional[str], started_override: str = ""):
     from JARVIS04_SCHEDULER.job_registry import get_owner
 
     job_id = getattr(event, "job_id", "")
@@ -116,7 +190,8 @@ def _record(event, success: bool, error: Optional[str]):
     started = _job_start_ts.pop(job_id, None)
     finished_ts = time.time()
     duration_ms = int((finished_ts - started) * 1000) if started else None
-    started_iso = (
+    # misfire 는 '시작' 이 없다 — 예정 시각을 started_at 에 앉혀야 슬롯 창 조회에 잡힌다.
+    started_iso = started_override or (
         datetime.fromtimestamp(started).strftime("%Y-%m-%d %H:%M:%S")
         if started else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
@@ -156,6 +231,55 @@ def _record(event, success: bool, error: Optional[str]):
         _g_report("scheduler", e, module=__name__)
 
 
+def mark_outcome(job_id: str, window_start, window_end,
+                 *, success: bool, error: str = "",
+                 only_if_success: bool = True) -> str:
+    """이미 적재된 잡 실행 행의 결과를 **사후 보정** 한다 (2026-08-05).
+
+    ★ 왜 필요한가 — `success` 가 발행 성공을 뜻하지 않았다
+      실측: 발행 잡 이력 323건이 **전부 success=1**, 실패 기록 0건. 그런데 실제 결손은
+      14건 기록돼 있다. APScheduler 는 콜백이 예외 없이 끝나면 성공으로 친다 — 글이
+      안 나갔어도. 스케줄러가 자기는 한 번도 실패한 적 없다고 믿는 상태였다.
+
+    ★ 왜 예외를 던지게 만들지 않는가 (복구 정책 A)
+      잡이 예외를 던지면 재예약·재시도가 붙을 수 있다. 그건 *정규 시각이 아닌 때
+      발행* 로 이어져 "발행은 07시와 21시뿐" 규칙을 어긴다. 그래서 **기록만** 바로잡는다.
+
+    ★ 쓰기 주인은 여기(job_history), 판정 주인은 `publish_ledger`
+      "이 슬롯이 완결됐는가" 는 발행 도메인이 안다. "job_runs 에 어떻게 쓰는가" 는
+      이 파일이 안다. 서로의 영역을 넘지 않는다.
+
+    Args:
+        only_if_success: True 면 이미 실패(0)로 적힌 행은 건드리지 않는다 —
+            진짜 예외 메시지를 결손 사유로 덮어쓰지 않기 위해서다.
+
+    Returns:
+        'corrected'   — 성공으로 적힌 행을 실패로 고쳤다
+        'already'     — 이미 실패로 기록돼 있었다 (덮지 않음)
+        'no_row'      — 그 창에 실행 기록 자체가 없다 (데몬 미가동 추정)
+    """
+    ws = window_start.strftime("%Y-%m-%d %H:%M:%S")
+    we = window_end.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with db.get_db() as conn:
+            total = conn.execute(
+                "SELECT count(*) FROM job_runs WHERE job_id=? "
+                "AND started_at >= ? AND started_at < ?", (job_id, ws, we)).fetchone()[0]
+            if not total:
+                return "no_row"
+            sql = ("UPDATE job_runs SET success=?, error=? "
+                   "WHERE job_id=? AND started_at >= ? AND started_at < ?")
+            args = [1 if success else 0, error[:500], job_id, ws, we]
+            if only_if_success:
+                sql += " AND success=1"
+            cur = conn.execute(sql, args)
+            return "corrected" if cur.rowcount else "already"
+    except Exception as e:
+        print(f"  ⚠️ job_runs 사후 보정 실패 {job_id}: {e}")
+        _g_report("scheduler", e, module=__name__, func_name="mark_outcome")
+        return "no_row"
+
+
 def attach_listeners(scheduler: Any) -> bool:
     """APScheduler 에 listener 부착. 데몬 부팅 시 1회 호출.
 
@@ -168,11 +292,12 @@ def attach_listeners(scheduler: Any) -> bool:
         return True
     try:
         from apscheduler.events import (
-            EVENT_JOB_SUBMITTED, EVENT_JOB_EXECUTED, EVENT_JOB_ERROR,
+            EVENT_JOB_MISSED, EVENT_JOB_SUBMITTED, EVENT_JOB_EXECUTED, EVENT_JOB_ERROR,
         )
         scheduler.add_listener(_on_job_submitted, EVENT_JOB_SUBMITTED)
         scheduler.add_listener(_on_job_executed, EVENT_JOB_EXECUTED)
         scheduler.add_listener(_on_job_error,    EVENT_JOB_ERROR)
+        scheduler.add_listener(_on_job_missed,   EVENT_JOB_MISSED)
 
         # GUARDIAN 잡 실패 수집 리스너 — apscheduler import는 JARVIS04에서만
         try:
