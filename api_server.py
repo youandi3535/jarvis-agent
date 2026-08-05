@@ -837,6 +837,19 @@ def get_vision_summary():
 
 
 # ── 이미지 통계 ──────────────────────────────────────────────────
+def _image_providers() -> dict:
+    """이미지 프로바이더 가용 상태 — **실제로 확인** 한다.
+
+    ★ 종전엔 `{"pollinations": True}` 하드코딩이었다. Pollinations 가 죽어도
+      화면엔 계속 초록이었고(2026-08-05 실측), 삭제된 뒤에도 True 라고 말했을 것이다.
+    """
+    try:
+        from JARVIS06_IMAGE.providers.cloudflare_provider import provider_available
+        return {"cloudflare": bool(provider_available())}
+    except Exception:
+        return {"cloudflare": False}
+
+
 @app.get("/api/images")
 def get_images():
     out_dir = BASE_DIR / "JARVIS06_IMAGE" / "output"
@@ -857,7 +870,7 @@ def get_images():
             {"name": f.name, "mtime": datetime.fromtimestamp(f.stat().st_mtime).strftime("%m/%d %H:%M"), "size_kb": round(f.stat().st_size / 1024, 1), "type": f.suffix.lower().lstrip(".")}
             for f in files[:10]
         ]
-    return {"total": total, "by_type": by_type, "total_size_mb": round(total_size_mb, 1), "recent": recent, "providers": {"pollinations": True}}
+    return {"total": total, "by_type": by_type, "total_size_mb": round(total_size_mb, 1), "recent": recent, "providers": _image_providers()}
 
 
 # ── 발행 도메인 현황 ─────────────────────────────────────────────

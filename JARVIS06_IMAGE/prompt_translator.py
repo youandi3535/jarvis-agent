@@ -22,10 +22,10 @@ def translate(text_ko: str) -> str:
     try:
         from shared.llm import invoke_text
         # ★ 사용자 박제 2026-06-07 — 단순 번역 → 이미지 생성 특화 프롬프트 변환.
-        # Pollinations.ai (SDXL/Flux 계열) 가 잘 받아들이는 스타일 키워드 자동 첨가.
+        # Flux 계열이 잘 받아들이는 스타일 키워드 자동 첨가.
         system_msg = (
             "You are an image prompt engineer for Stable Diffusion / Flux models "
-            "(Pollinations.ai backend). Convert Korean descriptions into rich, "
+            "(Flux image backend). Convert Korean descriptions into rich, "
             "image-generation-optimized English prompts.\n\n"
             "Strict rules:\n"
             "- Output ONLY the English prompt — no preface, no markdown, no labels, no quotes.\n"

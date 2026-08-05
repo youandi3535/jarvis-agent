@@ -423,7 +423,7 @@ def check_autocode(report: Report) -> None:
         "JARVIS08_PUBLISH/platforms/tistory_poster.py",    # 티스토리 발행 (osascript·Selenium)
         "JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py",   # 쿠키 갱신 (subprocess)
         "JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py", # 쿠키 갱신 (subprocess)
-        "JARVIS06_IMAGE/",                    # 이미지 생성 (Pollinations — Bing/HF 폐기 2026-06-07)
+        "JARVIS06_IMAGE/",                    # 이미지 생성 (Cloudflare Workers AI 단독 2026-08-05)
         "JARVIS07_GUARDIAN/",                 # guardian 자가수정·git audit
         "jarvis_keeper.py",                   # 데몬 워치독 — 재시작 subprocess 정당
         # ★ 무료 데이터 라이브러리 자동설치 화이트리스트 (사용자 박제 2026-06-29 — ADR 010)
@@ -520,11 +520,11 @@ def check_tools(report: Report) -> None:
 # ============================================================================
 
 def check_image(report: Report) -> None:
-    """① Pollinations URL 직접 호출 (JARVIS06_IMAGE 외부)
+    """① 이미지 생성 API URL 직접 호출 (JARVIS06_IMAGE 외부)
        ② ImageGenerationModel 직접 사용 (JARVIS06_IMAGE 외부)
     """
     cat = "image"
-    pat1 = re.compile(r"https://image\.pollinations\.ai")
+    pat1 = re.compile(r"https://image\.pollinations\.ai|api\.cloudflare\.com/client/v4/accounts/[^\"']*\/ai/run")
     pat2 = re.compile(r"ImageGenerationModel\(|imagen-[0-9]")
     img_dir = "JARVIS06_IMAGE/"
 
@@ -541,7 +541,7 @@ def check_image(report: Report) -> None:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if pat1.search(line):
-                report.add(Violation(cat, "image/pollinations", rel_s, i, line))
+                report.add(Violation(cat, "image/direct-api", rel_s, i, line))
             if pat2.search(line):
                 report.add(Violation(cat, "image/imagen-direct", rel_s, i, line))
 

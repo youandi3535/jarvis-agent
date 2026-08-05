@@ -3,7 +3,7 @@
 ## 핵심 원칙
 0. **★ 시간축 좌→우 강제 (사용자 박제 2026-07-03)**: 시간·기간 라벨(연도·월·분기·날짜)이 있는 모든 차트·인포그래픽은 *과거 → 최근* 순서 (예: 2025년 좌, 2026년 우). 단일 진입점 `image_spec.enforce_time_axis_ltr()` — `render_from_spec`·`infographic_engine.generate_infographic` 양쪽에서 렌더 직전 자동 교정 + spec 생성 프롬프트에도 명시. 새 렌더 경로 추가 시 이 함수 경유 의무. 카테고리 라벨(비시간)은 무변경 (80% 파싱 임계).
 1. 한국어 프롬프트는 반드시 `prompt_translator.translate()` 로 영어 변환 후 제공자에 전달
-2. **★ 사진 프로바이더 (ERRORS [263] 박제 2026-06-07)**: Pollinations.ai 단일 사용. Bing/HuggingFace 완전 삭제 — Bing 쿠키 무한 만료 + HuggingFace DNS 차단 반복. 차기 1순위로 Nanobana(Gemini) 도입 예정.
+2. **★ 사진 프로바이더 — Cloudflare Workers AI 단독 (사용자 결정 2026-08-05 — ERRORS [574])**: `providers/cloudflare_provider.py` Flux-1-Schnell. 무료 10,000 neuron/일 = 하루 약 173장. **Pollinations 완전 삭제**(39개 모델 전부 유료화 402). Nanobana(Gemini)는 공식 가격표상 이미지 모델 전부 `Free Tier: Not available` — 도입하지 않는다. **프로바이더를 둘 이상 두지 말 것** — 둘이면 한쪽만 고치는 사고가 난다(실제로 이 교체 중 `thumbnail_maker` 를 빠뜨려 ③원칙 위반).
 3. SVG 차트 오버레이는 Claude LLM 동적 생성 — 고정 템플릿·스타일 풀 절대 금지
 3-B. **★ 썸네일 = 주제 대표 AI 실사 + 에디토리얼(폴라로이드) (사용자 박제 2026-07-05 — ERRORS [356])**: 대표 썸네일은 *주제를 한눈에 알아보는 실사*(지역화폐→돈, 반도체→웨이퍼)를 폴라로이드 프레임에 임베드 + PIL 오버레이. 단일 경로 `thumbnail_maker.create_thumbnail → _create → _apply_editorial`. **저품질 SVG 인포그래픽 썸네일(`_generate_svg_thumbnail`) 완전 폐기 — 재도입 금지.** 폴백 순서는 반드시 *품질 순*(AI사진→그라디언트→matplotlib). 하단 카테고리 태그는 `tag_line` 동적(하드코딩 금지). 데이터 인포그래픽(본문)과 대표 실사(썸네일)는 용도가 다름.
 3-C. **★ 본문 인포그래픽 = 결정론 전문 템플릿 (사용자 박제 2026-07-05 — ERRORS [357][358])**: `infographic_engine.generate_infographic` 1순위는 `pro_templates.render_pro` — *전문 디자인을 코드에 박제*(팔레트 5종 seed 회전·데이터형태 자동판별·히어로 밴드·듀오톤 라인·랭킹 막대·도넛)하고 검증 실데이터만 꽂아 **LLM 0회·5.4초** 렌더. 수치는 코드가 실데이터로 채움 → 조작 불가. **LLM 실시간 HTML 저작(`_designgen`)은 이미지당 수 분 latency(SDK 스로틀)로 폐기 → opt-in(`INFOGRAPHIC_DESIGNGEN=1`, 기본 OFF)**. 폴백 순서: pro_templates → (opt-in)design-gen → render_spec(손코딩 스펙). **교훈: 디자인 품질은 LLM 실시간 생성이 아니라 코드 템플릿에 박제. LLM은 데이터 수집·검증에만.** 새 데이터 형태 추가 시 `pro_templates.build_html` 분기 확장(다른 파일에 렌더 로직 신설 금지).
@@ -44,13 +44,13 @@
 | `section_title.py` | matplotlib 소제목 배너 이미지 |
 | `trend_charts.py` | 트렌드 키워드 차트 + 썸네일 |
 | `economic_charts.py` | 경제 브리핑 차트 + 썸네일 |
-| `providers/pollinations_provider.py` | Pollinations.ai REST 호출 (키 불필요 — 현재 단일 프로바이더) |
+| `providers/cloudflare_provider.py` | Cloudflare Workers AI REST 호출 (무료 티어 — **단일 프로바이더**) |
 | `providers/claude_svg_provider.py` | Claude LLM → SVG 동적 생성 → PNG 변환 |
 
 ## 외부에서 호출 방법 (유일한 합법 패턴)
 ```python
 from JARVIS06_IMAGE.image_agent import generate_photo, generate_chart, generate_thumbnail
-from JARVIS06_IMAGE.providers.pollinations_provider import PollinationsProvider  # 영어 프롬프트 있을 때만
+from JARVIS06_IMAGE.providers.cloudflare_provider import CloudflareProvider  # 영어 프롬프트 있을 때만
 ```
 
 ## 이관 의무 (★ 즉시 — 예외 없음)

@@ -11080,3 +11080,21 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **값어치 재평가**: `self_repair_runs` 실측 — **최근 10회 연속 수정 0건**, 마지막 실제 변경 2026-07-17(19일 전). `auto_patch` 학습은 **1건, diff 없음**. 위험은 크고 실측 값어치는 거의 없었다.
 - **해결(축소판)**: 롤백 폐기. CI 정의를 파싱해 같은 검사를 돌리고, 실패하면 ① 경보 ② **검증 안 된 diff 를 학습에 넣지 않는다** — 이게 원래 목적의 90%이고 파괴 위험이 0이다. 인터프리터는 `sys.executable` 로 명시 치환(데몬은 `.../Python.app/Contents/MacOS/Python` 으로 도는데 그 디렉터리엔 `python3` 도 `pytest` 도 없다).
 - **교훈**: **"안전" 이라는 이름이 붙으면 위험을 덜 따진다.** 롤백은 되돌릴 범위를 모르면 복구가 아니라 파괴다.
+
+## [574] 썸네일이 파란 그라디언트가 됐다 — Pollinations 가 하루아침에 유료화 (2026-08-05)
+
+- **증상**: 사용자가 "썸네일 이미지가 왜이래?" 로 발견. AI 실사여야 할 대표 썸네일이 파란 그라디언트 + 텍스트로 나갔다(4조합 전부).
+- **원인**: `Gen Sana request failed with 402: Insufficient balance` — 2026-08-05 07:36 최초. 라이브 확인: `image.pollinations.ai` 는 **모델 무관 402**(flux·turbo·미지정 전부), 신 엔드포인트 `gen.pollinations.ai` 는 **401 Authentication required**. `/models` 조회 결과 **이미지 모델 39개 전부 유료**(가장 싼 flux 도 0.002 pollen/장). 키 없는 익명 티어가 사라졌다.
+- **★ 더 큰 문제 — 문서가 없는 방어를 있다고 했다**: `image_agent.py` 와 CLAUDE.md 가 *"폴백 체인: Nanobana(Gemini) → Pollinations"* 라고 적어 놨는데 `providers/` 에 nanobana 파일이 **없었고** `.env` 에 GEMINI 키도 0개였다. **2단인 줄 알았던 체인이 실제로는 1단** 이라, 그 하나가 죽자 곧장 그라디언트까지 떨어졌다.
+- **헛다리 2건 (내가 성급했다)**:
+  ① `auth.pollinations.ai` 를 확인 없이 안내 → 존재하지 않는 도메인(`000`). 정답은 `enter.pollinations.ai/keys`.
+  ② 검색 결과만 보고 "flux 는 무료" 라고 전달 → 라이브 `/models` 는 0.002 pollen. **검색 결과가 공식보다 낡았다.**
+  ③ `loremflickr` 를 "200·image/jpeg·24KB" 만 보고 권했다 → 실제로 받아 보니 *핵융합 요청에 이스탄불 고양이 동상*. **태그가 안 맞아도 실패하지 않고 무관한 사진을 200 으로 준다** — 크기·content-type 으로는 구분 불가. 완전 삭제.
+- **나노바나나 검토**: 구글 **공식 가격 페이지**가 `Gemini 3.1/2.5 Flash Image`·`Imagen 4` 전부 `Free Tier: Not available`. 블로그들의 "하루 500장 무료" 는 공식과 어긋난다.
+- **해결 — Cloudflare Workers AI 단독 (사용자 결정: 유료 미사용)**:
+  공식 단가로 계산 — `Flux-1-Schnell` 4.80 neuron/512²타일 + 9.60/step → 1024² 4step = **57.6 neuron/장**, 무료 10,000/일 = **하루 약 173장**(사용량 4~10장, 여유 17배). 실측 **3.0초 · 784KB · 주제 정확**.
+  **Pollinations 는 코드에서 완전 삭제** — 파일·호출·죽은 서킷브레이커·전역 쿨다운·상태 문구까지.
+- **★ 교체 중 내가 ③원칙을 어겼다**: `image_agent.generate_photo` 만 고치고 `thumbnail_maker._generate_photo_pollinations` 를 빠뜨렸다. 그 함수는 `generate_photo` 를 안 거치고 **Pollinations 를 직접** 불렀다. 썸네일 경로를 *실제로 돌려봐서야* 발견했다 — 코드만 읽었으면 못 봤다. → 프로바이더를 **하나만** 두는 것으로 구조적 해결. 둘이면 또 갈라진다.
+- **부수 정정 — "있다고 가정한 상태 표시" 3곳**: `api_server` 의 `{"pollinations": True}` 하드코딩, `JARVIS05_VISION/registry` 의 `pollinations_available: True`, `image_agent` 의 "✅ Pollinations 가용" — 전부 죽어도·삭제돼도 초록불이었다. **실제 자격증명 확인** 으로 교체.
+- **파일**: JARVIS06_IMAGE/providers/cloudflare_provider.py(신설) · image_agent.py · thumbnail_maker.py · prompt_translator.py · draft_processor.py · api_server.py · JARVIS05_VISION/registry.py · JARVIS07_GUARDIAN/severity.py · shared/precommit_check.py · CLAUDE.md ×2
+- **교훈**: **외부 무료 서비스는 예고 없이 유료가 된다.** 그때 드러나는 건 "폴백이 몇 단인가" 인데, 문서가 말하는 단수와 코드의 단수가 달랐다. 그리고 *200 OK 는 관련성의 증거가 아니다* — 이미지를 받았으면 **눈으로 봐야** 안다.

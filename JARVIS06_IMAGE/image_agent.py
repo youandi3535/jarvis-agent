@@ -1,6 +1,6 @@
 """JARVIS06_IMAGE/image_agent.py — 이미지 생성 에이전트 단일 진입점.
 
-폴백 체인: Nanobana(Gemini) → Pollinations.ai  (★ 사용자 박제 2026-06-07 — ERRORS [263]:
+이미지 생성: Cloudflare Workers AI 단독 (무료 티어)  (★ 사용자 결정 2026-08-05:
 Bing / HuggingFace 전멸 → 완전 삭제)
 SVG 차트: Claude SVG Provider (LLM 동적 생성, 고정 템플릿 금지)
 버스 연동: image.request 이벤트 수신 → image.response 발행
@@ -23,16 +23,7 @@ log = logging.getLogger("jarvis")
 _ROOT      = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = _ROOT / "JARVIS06_IMAGE" / "output"
 
-# ★ Pollinations 전역 쿨다운 — Queue full (402) 방지
-# IP당 큐 1개 제한이므로 연속 호출 간 최소 간격 필요
-import threading as _threading, time as _time
-_POLL_LOCK = _threading.Lock()
-_last_pollinations_call: float = 0.0
-_POLLINATIONS_COOLDOWN = 25  # 초 (ERRORS [269] — 18초에도 402 재발, 25초로 확대)
 
-# ★ ERRORS [270] — 서킷 브레이커: 최근 실패 시 일정 시간 Pollinations 호출 자체 스킵
-_CIRCUIT_OPEN_UNTIL: float = 0.0          # 이 시각(epoch) 전까지 호출 차단
-_CIRCUIT_COOLDOWN_SEC = 180               # 실패 후 3분간 서킷 open (호출 스킵)
 
 
 # ── 공개 API ─────────────────────────────────────────────────
@@ -67,7 +58,7 @@ def generate_photo(prompt_ko: str, out_dir: Path | None = None,
                    prompt_en: str | None = None) -> Path:
     """사진 이미지 생성.
 
-    폴백 체인: Nanobana(Gemini) → Pollinations.ai
+    프로바이더: Cloudflare Workers AI 단독 (Pollinations 유료화로 2026-08-05 삭제)
     (★ Bing / HuggingFace 완전 삭제 — ERRORS [263] 박제 2026-06-07)
 
     Args:
@@ -84,7 +75,6 @@ def generate_photo(prompt_ko: str, out_dir: Path | None = None,
         RuntimeError: 모든 백엔드 실패 시.
     """
     from JARVIS06_IMAGE.prompt_translator import translate
-    from JARVIS06_IMAGE.providers.pollinations_provider import PollinationsProvider
 
     dest = Path(out_dir) if out_dir else OUTPUT_DIR
     if not prompt_en:
@@ -100,60 +90,40 @@ def generate_photo(prompt_ko: str, out_dir: Path | None = None,
 
     log.info(f"[J06] 사진 생성: '{prompt_ko[:40]}' → '{prompt_en[:60]}'")
 
-    # ★ ERRORS [270] — 서킷 브레이커 체크: 최근 실패 후 일정 시간 호출 스킵
-    global _CIRCUIT_OPEN_UNTIL
-    if _time.time() < _CIRCUIT_OPEN_UNTIL:
-        remaining = _CIRCUIT_OPEN_UNTIL - _time.time()
-        raise RuntimeError(
-            f"Pollinations 서킷 브레이커 open — {remaining:.0f}초 후 재시도 가능 (IP 레벨 제한 보호)"
-        )
-
-    # ★ 사용자 박제 2026-06-07 (ERRORS [263]) — Bing / HuggingFace 완전 삭제.
-    # Bing 쿠키 무한 만료 + HuggingFace DNS 차단·hf-inference 미지원 → 전멸.
-    # 단일 폴백: Pollinations.ai (키 불필요)
-
-    # ★ 전역 직렬화 — Queue full (402) 근본 차단 (ERRORS [267] 재발 수정)
-    # Pollinations IP당 큐 1개 제한 → 전체 요청을 락으로 직렬화.
-    # 락 범위: 쿨다운 대기 + HTTP 요청 전체. 동시 요청 원천 차단.
-    global _last_pollinations_call
-    import random as _random
+    # ★ 이미지 생성 = Cloudflare Workers AI 단독 (2026-08-05 사용자 결정 — ERRORS [574])
+    #
+    #   Pollinations 는 2026-08-05 07:36 부터 402 `Insufficient balance` 로 전멸했다.
+    #   라이브 확인: 이미지 모델 **39개 전부 유료**, 키 없는 익명 티어는 401.
+    #   Gemini(나노바나나)도 공식 가격표가 이미지 모델 전부 `Free Tier: Not available`.
+    #   → 사용자 결정 "유료는 금액이 작아도 안 쓴다" 에 따라 **완전 삭제**.
+    #
+    #   Cloudflare: 무료 10,000 neuron/일 · Flux-1-Schnell 57.6 neuron/장 = 하루 약 173장.
+    #   실측 3.0초 · 주제 정확. 우리가 쓰는 건 하루 4~10장이라 여유 17배.
+    #
+    #   ★ 프로바이더를 **하나만** 둔다. 둘이면 한쪽만 고치는 사고가 난다 —
+    #     실제로 이 교체 중에 `thumbnail_maker` 를 빠뜨려 ③원칙을 어겼고,
+    #     썸네일 경로를 *직접 돌려봐서야* 발견했다. 하나면 갈라질 수 없다.
+    #   ★ 서킷 브레이커·전역 쿨다운은 함께 삭제했다 — Pollinations 의 IP 레벨 큐 제한
+    #     (ERRORS [267][270]) 때문에 있던 것이고, Cloudflare 는 계정 단위 쿼터라 불필요하다.
+    #     남겨두면 "왜 있는지 모르는 코드" 가 되어 다음 사람을 헷갈린다.
+    _cf_err = ""
     try:
-        from JARVIS00_INFRA.watchdog import beat as _wd_beat
-    except Exception:
-        def _wd_beat() -> None: pass  # watchdog 부재 시 no-op
+        from JARVIS06_IMAGE.providers.cloudflare_provider import CloudflareProvider
+        _kw = {"seed": seed} if seed is not None else {}
+        result = CloudflareProvider().generate(
+            prompt_en, dest, width=width, height=height, **_kw)
+    except Exception as _cfe:
+        _cf_err = str(_cfe)
+        log.warning(f"[J06] Cloudflare 이미지 생성 실패: {_cfe}")
+        result = None
 
-    # ★ 사용자 박제 2026-07-06 후속: 다른 스레드/액션이 락을 오래 쥐고 있어도
-    #   (직렬화 대기 자체는 정상 동작) freeze 워치독이 오탐하지 않도록 폴링 대기 + beat().
-    while not _POLL_LOCK.acquire(timeout=15):
-        _wd_beat()
-    try:
-        elapsed = _time.time() - _last_pollinations_call
-        if elapsed < _POLLINATIONS_COOLDOWN:
-            wait = _POLLINATIONS_COOLDOWN - elapsed + _random.uniform(0, 3)
-            log.info(f"[J06] Pollinations 쿨다운 대기 {wait:.1f}초")
-            _time.sleep(wait)
+    # ★ Pollinations 완전 삭제 (2026-08-05 사용자 결정 — ERRORS [574])
+    #   이미지 모델 39개 전부 유료화(402). "유료는 금액이 작아도 안 쓴다."
+    #   프로바이더를 **하나만** 둔다 — 둘이면 한쪽만 고치는 사고가 다시 난다
+    #   (실제로 이 교체 중에 `thumbnail_maker` 를 빠뜨려 ③원칙을 어겼다).
+    if result is None:
+        raise RuntimeError(_cf_err or "이미지 생성 실패 — Cloudflare 자격증명/한도 확인")
 
-        _wd_beat()  # ★ 쿨다운 이후·HTTP 재시도 루프 진입 전 진행 신호
-        log.info("[J06] Pollinations.ai 호출")
-        kw_args: dict = {}
-        if seed is not None:
-            kw_args["seed"] = seed
-        try:
-            result = PollinationsProvider().generate(
-                prompt_en, dest, width=width, height=height, **kw_args
-            )
-        except RuntimeError:
-            # ★ 실패 시 서킷 open — 이후 호출들 즉시 실패 (7분 대기 낭비 방지)
-            _CIRCUIT_OPEN_UNTIL = _time.time() + _CIRCUIT_COOLDOWN_SEC
-            log.warning(f"[J06] Pollinations 서킷 브레이커 open ({_CIRCUIT_COOLDOWN_SEC}초)")
-            _last_pollinations_call = _time.time()
-            raise
-        # 완료 시점으로 갱신 — 다음 스레드 쿨다운 기준
-        _last_pollinations_call = _time.time()
-    finally:
-        _POLL_LOCK.release()
-    # ★ 검증 (2026-07-02): 생성 이미지가 유효한가(0바이트·손상) — 깨진 이미지 발행 방지.
-    #   실패 시 raise → 호출자 폴백/스킵(이중발행 위험 없는 안전 실패).
     _iv = _verify_image_file(result)
     if _iv:
         log.warning(f"[J06] 생성 이미지 검증 실패({_iv}) → 실패 처리(스킵/폴백)")
@@ -266,14 +236,13 @@ def _status_section() -> str:
             lines.append("📊 output 디렉토리 없음")
     except Exception as _e:
         lines.append(f"📊 통계 조회 실패: {_e}")
-    # 서킷 브레이커 상태
-    import time as _t
-    _cb_open = _CIRCUIT_OPEN_UNTIL > _t.time()
-    if _cb_open:
-        _remain = int(_CIRCUIT_OPEN_UNTIL - _t.time())
-        lines.append(f"⚡ Pollinations 서킷 OPEN ({_remain}초 후 복구)")
-    else:
-        lines.append("✅ Pollinations.ai 가용 (단일 프로바이더)")
+    # 프로바이더 상태 — **자격증명 유무를 실제로 확인** 한다(있다고 가정하지 않는다)
+    try:
+        from JARVIS06_IMAGE.providers.cloudflare_provider import provider_available as _cfa
+        lines.append("✅ Cloudflare Workers AI 가용 (무료 티어, 단일 프로바이더)" if _cfa()
+                     else "❌ Cloudflare 자격증명 없음 — .env 의 CLOUDFLARE_ACCOUNT_ID/API_TOKEN 확인")
+    except Exception as _e2:
+        lines.append(f"❌ 이미지 프로바이더 상태 확인 실패: {_e2}")
     lines.append("📁 출력: JARVIS06_IMAGE/output/")
     return "\n".join(lines)
 
@@ -289,8 +258,8 @@ def _register_capability() -> None:
             tools      = [],
             requires_approval = ["image.generate.photo"],
             cost_class = "low",
-            description= "이미지 생성 에이전트 — Pollinations(사진), Claude SVG(차트), 썸네일 (★ Bing/HF 폐기 2026-06-07)",
-            tags       = ["image", "chart", "thumbnail", "svg", "pollinations"],
+            description= "이미지 생성 에이전트 — Cloudflare Workers AI(사진), Claude SVG(차트), 썸네일",
+            tags       = ["image", "chart", "thumbnail", "svg", "cloudflare"],
             help_section=(
                 "🖼️ *이미지 생성 (JARVIS06)*\n"
                 "슬래시 명령어 없음 — 자유 문장으로 요청\n"

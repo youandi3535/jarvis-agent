@@ -1635,3 +1635,46 @@ def test_미실행_kind가_자동수리_대상에서_빠진다():
         assert is_transient("PublishGapX", "", "publish", kind=kind), \
             f"{kind} 가 자동수리 대상으로 샌다"
     assert not is_transient("ImportError", "cannot import name X", "publish", kind="")
+
+
+def test_이미지_프로바이더가_하나뿐이다():
+    """★ 둘이면 한쪽만 고치는 사고가 난다 (2026-08-05 실제로 저질렀다).
+
+    Pollinations → Cloudflare 교체 중 `image_agent` 만 고치고 `thumbnail_maker` 를
+    빠뜨렸다. 썸네일 경로를 *직접 돌려봐서야* 발견했다 — ③원칙 위반.
+    프로바이더가 하나면 구조적으로 갈라질 수 없다.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    prov = root / "JARVIS06_IMAGE" / "providers"
+    photo = sorted(p.stem for p in prov.glob("*_provider.py")
+                   if "svg" not in p.stem)          # SVG 는 차트용 — 사진 프로바이더 아님
+    assert photo == ["cloudflare_provider"], f"사진 프로바이더가 하나가 아니다: {photo}"
+
+    # 삭제된 것이 코드에 되살아나지 않았는가 (역사 문서는 예외)
+    dead = []
+    for f in list(root.rglob("*.py")):
+        if {".venv", "__pycache__", "node_modules", "tests"} & set(f.parts):
+            continue
+        # precommit 검사기는 *금지 URL 목록* 을 들고 있어야 한다 — 되살아나는 걸 막는 쪽이다.
+        if f.name == "precommit_check.py":
+            continue
+        if "pollinations" in _code_only(f.read_text(encoding="utf-8", errors="ignore")).lower():
+            dead.append(str(f.relative_to(root)))
+    assert not dead, "삭제한 Pollinations 가 코드에 남아 있다:\n" + "\n".join(dead)
+
+
+def test_이미지_프로바이더_상태를_하드코딩하지_않는다():
+    """★ 종전 대시보드는 `{"pollinations": True}` 였다 — 죽어도, 삭제돼도 초록불."""
+    import inspect
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    api = _code_only((root / "api_server.py").read_text(encoding="utf-8"))
+    assert '"pollinations": True' not in api and "'pollinations': True" not in api
+
+    from JARVIS05_VISION.registry import _cf_available
+    assert isinstance(_cf_available(), bool)
+    src = _code_only(inspect.getsource(_cf_available))
+    assert "provider_available" in src, "가용 상태를 실제로 확인하지 않는다"

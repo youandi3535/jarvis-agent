@@ -518,7 +518,14 @@ pkill -f jarvis_daemon.py        # 전체 종료
   | **섹션 구분 배너** (make_section_image) | matplotlib 텍스트 렌더링 — AI 불필요 | 고정 스타일 OK |
   | **데이터 차트** (경제·주식·시장 차트) | matplotlib 데이터 시각화 — AI 불필요 | 데이터 기반 |
 
-- **AI 사진 폴백 체인 (고정 순서 — 변경 금지)**: Nanobana(Gemini)(1순위) → Pollinations.ai(2순위). 모든 `generate_photo()` 호출은 이 체인을 자동 사용. (★ Bing/HuggingFace 완전 삭제 — ERRORS [263] 사용자 박제 2026-06-07. 본 행은 2026-07-03 코드 실상과 동기화 — 문서 드리프트 수정)
+- **AI 사진 프로바이더 — `Cloudflare Workers AI` 단독 (★ 사용자 결정 2026-08-05 — ERRORS [574])**:
+  무료 티어 10,000 neuron/일 · Flux-1-Schnell 57.6 neuron/장 = 하루 약 173장 (우리 사용량 4~10장).
+  **Pollinations 는 완전 삭제** — 2026-08-05 이미지 모델 39개가 전부 유료화(402)됐고
+  사용자 결정은 "유료는 금액이 작아도 안 쓴다". Gemini(나노바나나)도 공식 가격표상
+  이미지 모델 전부 `Free Tier: Not available` 이라 후보에서 제외.
+  **프로바이더를 둘 이상 두지 않는다** — 종전에 문서만 "Nanobana → Pollinations" 2단이라
+  적어놓고 코드는 하나뿐이라, 그 하나가 죽자 바로 그라디언트까지 떨어졌다.
+  자격증명: `.env` 의 `CLOUDFLARE_ACCOUNT_ID` · `CLOUDFLARE_API_TOKEN`.
 - **동적 생성 원칙 (★ 썸네일 고정 스타일 절대 금지)**: 썸네일·AI 사진 생성 시 *고정 스타일 풀·hardcoded 레이아웃·STYLE_ZONES·THEME_PALETTES* 일체 금지. Claude LLM이 매번 배경 프롬프트와 SVG 오버레이를 새로 창작.
 - **다른 파일 금지**: `JARVIS02_WRITER/*`, `JARVIS03_RADAR/*`, `JARVIS01_MASTER/*`, `shared/*`, 루트 `*.py` 어디에도 이미지 생성 *URL 호출·직접 provider import·새 matplotlib 이미지 함수* 를 추가하지 말 것. 예외 없음.
 - **출력 경로 단일 진입점**: 모든 이미지는 `JARVIS06_IMAGE/output/` 하위에 저장됨. 기본 경로는 `image_agent.OUTPUT_DIR`. 용도별 하위 폴더:

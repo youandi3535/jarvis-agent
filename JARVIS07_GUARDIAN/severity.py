@@ -169,9 +169,11 @@ _NON_CODE_PATTERNS = [
                r"|timed out receiving message from renderer", re.I),
     # ── 외부 API 할당량·rate limit ── (종전 `_LOW_PATTERNS` 사본 흡수)
     re.compile(r"rate limit|too many requests|hit your limit|resets \d+\s*(am|pm)", re.I),
-    # ★ ERRORS [272] 박제 2026-06-08 — Pollinations 402 Queue full (IP 레벨 외부 제한)
+    # ★ ERRORS [272] 박제 2026-06-08 — 외부 이미지 API 스로틀/한도 (우리 코드로 못 고침)
+    #   업체명을 박지 않는다 — 2026-08-05 Pollinations→Cloudflare 교체 때 여기만 낡았다.
     # 코드 버그 아님. 서킷 브레이커 + 폴백으로 graceful 처리됨 → Guardian 수정 불필요.
-    re.compile(r"Queue full|Pollinations.*(402|재시도.*실패|일시 오류|비정상 응답)", re.I),
+    re.compile(r"Queue full|이미지 (생성|프로바이더).*(402|재시도.*실패|일시 오류|비정상 응답)"
+               r"|Cloudflare.*(재시도.*실패|일시 오류)", re.I),
     # Claude CLI 운영 오류 (auto_repair — 코드 버그 아님)
     #   'You've hit your limit' 토큰은 위 rate-limit 행이 이미 덮는다 → 여기서 제거(중복 해소)
     re.compile(r"cli_not_found|CLI 타임아웃|Command failed with exit code|exitcode=-?\d"

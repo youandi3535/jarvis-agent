@@ -1,14 +1,14 @@
 """JARVIS06_IMAGE/thumbnail_maker.py — 블로그 대표 썸네일 동적 생성.
 
 ★ 2026-05-23 (사용자 박제):
-  - Pollinations.ai (FLUX) 로 AI 사진 배경 생성 → Bing 캐시 문제 원천 차단
+  - Cloudflare Workers AI (Flux-1-Schnell) 로 AI 사진 배경 생성 (무료 티어)
   - 두 가지 편집 레이아웃:
     * triptych  — 사진 3분할 + 대형 키워드 (유튜브/블로그 트렌드)
     * editorial — 폴라로이드 프레임 + 파스텔 배경 + 꾸밈 요소
-  - 폴백: PIL 그라디언트 아트 배경 (Pollinations 실패 시)
+  - 폴백: PIL 그라디언트 아트 배경 (사진 생성 실패 시)
 
 흐름:
-  _generate_photo()  → Pollinations FLUX AI 사진
+  _generate_photo()  → Cloudflare Flux-1-Schnell AI 사진
   _apply_triptych()  → 3분할 + 글로우 타이포
   _apply_editorial() → 폴라로이드 + 파스텔 + 데코
 """
@@ -108,7 +108,7 @@ def _llm_thumbnail_params(title: str, keyword: str) -> dict:
       *가장 대표적인 실사* 여야 한다 (지역화폐→동전더미, 반도체→웨이퍼). 추상·은유로
       빠지지 말 것. 동시에 고품질(영화적 조명·구도)이어야 클릭을 유도한다.
     ★ LLM 1회 절감: 같은 title+keyword 재호출 시 캐시 반환 (네이버/티스토리 공유).
-       AI 이미지 생성(Pollinations)은 플랫폼별 각각 독립 실행.
+       AI 이미지 생성은 플랫폼별 각각 독립 실행.
     """
     cache_key = (title, keyword)
     if cache_key in _PARAM_CACHE and _PARAM_CACHE[cache_key]:
@@ -228,7 +228,7 @@ def _draw_text_shadow(img, text: str, x: int, y: int, font, color: tuple):
 
 def _generate_photo(keyword: str, title: str, seed: int, tmp_dir: Path,
                     platform: str = "naver", prompt_en: str = "") -> Path | None:
-    """AI 사진 생성 — Pollinations.ai 단독.
+    """AI 사진 생성 — Cloudflare Workers AI 단독.
 
     ★ 사용자 박제 2026-06-07 (ERRORS [263]) — Bing / HuggingFace 완전 삭제.
     Bing 쿠키 무한 만료 + HuggingFace DNS 차단·hf-inference 미지원 → 전멸 → 폐기.
@@ -239,27 +239,33 @@ def _generate_photo(keyword: str, title: str, seed: int, tmp_dir: Path,
     )
     full_prompt = f"{base_prompt}, ultra high quality, professional photography, 4k, no text no watermark"
 
-    return _generate_photo_pollinations(full_prompt, seed, tmp_dir)
+    return _generate_photo_provider(full_prompt, seed, tmp_dir)
 
 
-def _generate_photo_pollinations(full_prompt: str, seed: int, tmp_dir: Path) -> Path | None:
-    """Pollinations.ai 생성 — 큐 제한 시 8초 후 재시도 (상한 = harness SSOT 파생, 2026-07-21: 2회)."""
-    from JARVIS06_IMAGE.providers.pollinations_provider import PollinationsProvider
-    log.info(f"[thumbnail] Pollinations 요청: {full_prompt[:70]}")
+def _generate_photo_provider(full_prompt: str, seed: int, tmp_dir: Path) -> Path | None:
+    """대표 사진 생성 — 실패 시 None (호출자가 그라디언트 폴백).
+
+    ★ 2026-08-05 — Pollinations 완전 삭제, Cloudflare Workers AI 단독.
+      Pollinations 는 이미지 모델 39개가 전부 유료화됐다(402). 사용자 결정: 유료 미사용.
+      ★ 종전엔 이 함수가 `generate_photo` 를 안 거치고 **Pollinations 를 직접** 불렀다.
+        그래서 `image_agent` 만 고쳤을 때 썸네일은 그대로 옛 경로로 갔다 —
+        ③원칙(모든 곳 적용) 위반. 이제 프로바이더가 하나뿐이라 갈라질 수 없다.
+    """
+    from JARVIS06_IMAGE.providers.cloudflare_provider import CloudflareProvider
+    log.info(f"[thumbnail] 사진 요청: {full_prompt[:70]}")
     for attempt in range(_max_attempts()):
         try:
-            path = PollinationsProvider().generate(
+            path = CloudflareProvider().generate(
                 full_prompt, tmp_dir, width=W, height=H, seed=seed + attempt
             )
-            log.info(f"[thumbnail] Pollinations 완료: {path}")
+            log.info(f"[thumbnail] 사진 완료: {path}")
             return path
         except Exception as e:
-            err_msg = str(e)
-            if attempt < 2 and ("Queue full" in err_msg or "429" in err_msg):
-                log.info("[thumbnail] Pollinations 큐 제한 → 8초 후 재시도")
-                time.sleep(8)
+            if attempt < _max_attempts() - 1:
+                log.info(f"[thumbnail] 재시도 {attempt + 1} — {e}")
+                time.sleep(3)
                 continue
-            log.warning(f"[thumbnail] Pollinations 실패 ({e}) → 그라디언트 폴백")
+            log.warning(f"[thumbnail] 사진 생성 실패 ({e}) → 그라디언트 폴백")
             return None
     return None
 
@@ -478,7 +484,7 @@ def _draw_tape(draw, x: int, y: int, w: int, h: int,
 # ── PIL 그라디언트 폴백 ─────────────────────────────────────
 
 def _make_gradient_fallback(scheme: dict, rng: random.Random) -> "Image.Image":
-    """Pollinations 실패 시 — 4코너 그라디언트 + 보케."""
+    """사진 생성 실패 시 — 4코너 그라디언트 + 보케."""
     import numpy as np
     from PIL import Image, ImageDraw, ImageFilter
 
