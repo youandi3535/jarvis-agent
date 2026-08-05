@@ -587,7 +587,7 @@ DB 테이블 2를 검사하고, 하나라도 실패하면 **기동하지 않습�
 | **학습** | Discounted Contextual Linear UCB(28D) · UCB 랭킹 + 보상 EMA · MiniLM 임베딩(로컬 CPU) |
 | **저장** | SQLite (WAL) 단일 DB · 스키마 마이그레이션 · 보존 레지스트리 · GFS 백업 |
 | **대시보드** | Next.js 16 · React 19 · Recharts · SWR / FastAPI |
-| **CI** | GitHub Actions — `precommit_check`(JARVIS_STRICT=1) + 전 파일 `py_compile` |
+| **CI** | GitHub Actions — `precommit_check` + `pytest` + 전 파일 `py_compile` |
 
 ---
 

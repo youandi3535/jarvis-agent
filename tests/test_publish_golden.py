@@ -1176,3 +1176,178 @@ def test_CI가_테스트_의존을_이_파일에서_설치한다():
     pkgs = {l.strip() for l in dep_file.read_text(encoding="utf-8").splitlines()
             if l.strip() and not l.startswith("#")}
     assert "pytest" in pkgs
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-08-05 훅 정상화 — 2달간 죽어 있던 것을 잡았어야 할 테스트
+# ══════════════════════════════════════════════════════════════════════════
+
+def _hook_src() -> str:
+    from pathlib import Path
+    return (Path(__file__).resolve().parent.parent
+            / ".githooks" / "pre-commit").read_text(encoding="utf-8")
+
+
+def test_훅에_set_e가_없다():
+    """★ `set -e` 는 '실패 즉시 멈춰라' 라 *실패를 받아서 판단하는* 코드와 양립 불가.
+
+    이 한 줄 때문에 경고 모드·JARVIS_STRICT·3원칙 안내가 2달간 전부 도달 불가였다.
+    """
+    lines = [l.strip() for l in _hook_src().splitlines()
+             if l.strip() and not l.strip().startswith("#")]
+    assert "set -e" not in lines, "set -e 가 되살아났다 — 아래 판단 코드가 전부 죽는다"
+
+
+def test_3원칙_안내가_검사기_호출보다_앞에_있다():
+    """★ 뒤에 있으면 *위반이 잡힌 바로 그 순간에만* 안 보인다 — 의도와 정반대."""
+    src = _hook_src()
+    assert src.index("3원칙 자가점검") < src.index('python3 "$SCRIPT"'), \
+        "3원칙 안내가 검사기 호출 뒤에 있다 — 위반 시 사라진다"
+
+
+def test_죽은_JARVIS_STRICT가_저장소에서_사라졌다():
+    """★ 값을 읽는 코드가 0곳인데 문서 5곳에 등장하던 유령 스위치.
+
+    '언급' 이 아니라 **실제 사용**만 잡는다 — 왜 없앴는지 설명하는 주석·문서는
+    남아 있어야 한다(그게 없으면 다음 사람이 또 되살린다).
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    # 값을 *읽거나 세팅* 하는 형태만 위반. 산문 속 이름 언급은 정상.
+    USE = re.compile(
+        r"\$\{?JARVIS_STRICT"                      # 셸에서 값 읽기
+        r"|getenv\(\s*[\"']JARVIS_STRICT"          # 파이썬 os.getenv
+        r"|environ(?:\.get\(|\[)\s*[\"']JARVIS_STRICT"  # os.environ
+        r"|^\s*(?:export\s+)?JARVIS_STRICT\s*[:=]"  # 셸/yaml 세팅
+    )
+    alive = []
+    for f in list(root.rglob("*.py")) + list(root.rglob("*.md")) \
+            + list(root.rglob("*.sh")) + list(root.rglob("*.yml")) \
+            + [root / ".githooks" / "pre-commit"]:
+        if not f.is_file() or {".venv", "__pycache__", ".git", "node_modules"} & set(f.parts):
+            continue
+        for i, l in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+            if USE.search(l):
+                alive.append(f"{f.relative_to(root)}:{i}: {l.strip()[:70]}")
+    assert not alive, "존재하지 않는 스위치를 실제로 쓰는 곳:\n" + "\n".join(alive)
+
+
+def test_훅이_실제로_막고_안내한다(tmp_path):
+    """★ 이 테스트가 2달 전에 있었으면 즉시 잡혔다 — 실제 git 저장소에서 훅을 돌린다.
+
+    진짜 저장소를 건드리지 않으려고 임시 저장소에 훅과 *가짜 검사기* 를 심는다.
+    검사기가 실패(1)를 내면 커밋이 막히고 안내가 나오는지, 성공(0)이면 통과하는지 본다.
+    """
+    import subprocess
+    from pathlib import Path
+
+    repo = tmp_path / "probe"
+    (repo / ".githooks").mkdir(parents=True)
+    (repo / "shared").mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "core.hooksPath", ".githooks"], cwd=repo, check=True)
+
+    hook = repo / ".githooks" / "pre-commit"
+    hook.write_text(_hook_src(), encoding="utf-8")
+    hook.chmod(0o755)
+    checker = repo / "shared" / "precommit_check.py"
+    (repo / "a.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+
+    def _commit(msg):
+        return subprocess.run(["git", "commit", "-m", msg], cwd=repo,
+                              capture_output=True, text=True)
+
+    # ① 위반 있음 → 차단 + 안내
+    checker.write_text('import sys\nprint("가짜 위반 1건")\nsys.exit(1)\n', encoding="utf-8")
+    r = _commit("blocked")
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, "위반이 있는데 커밋이 통과했다"
+    assert "3원칙 자가점검" in out, "위반 시 3원칙 안내가 안 나온다 (종전 버그)"
+    assert "--no-verify" in out, "우회 방법 안내가 없다"
+
+    # ② 검사기 부재 → fail-closed (통과시키지 않는다)
+    checker.unlink()
+    assert _commit("no-checker").returncode != 0, "검사기가 없는데 커밋이 통과했다"
+
+    # ③ 위반 없음 → 통과
+    checker.write_text('import sys\nsys.exit(0)\n', encoding="utf-8")
+    r = _commit("ok")
+    assert r.returncode == 0, f"정상인데 막혔다: {r.stdout + r.stderr}"
+
+
+def test_검사_개수를_손으로_세지_않는다():
+    """★ 손으로 더한 숫자는 검사를 늘려도 안 따라와 조용히 거짓말을 한다."""
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent
+           / "shared" / "precommit_check.py").read_text(encoding="utf-8")
+    m = re.search(r'print\(f"✅ JARVIS pre-commit 통과 — \{([^}]+)\}', src)
+    assert m, "통과 문구를 찾지 못했다"
+    assert "checks_run" not in m.group(1), "요약 문구가 손으로 더한 값을 쓴다"
+    assert "rep.ran" in m.group(1), "실행한 카테고리에서 파생하지 않는다"
+
+
+def test_crossproc_검사가_조용히_사라지지_않는다():
+    """★ 이 검사는 sys.path 때문에 쓰인 이래 한 번도 실행된 적이 없었다.
+
+    `except: pass` 가 ModuleNotFoundError 를 삼켰고 화면엔 계속 '위반 0건' 이 떴다.
+
+    문자열이 아니라 **동작** 으로 확인한다 — 검사기 안의 selfcheck 가 *실제로 불렸는지*
+      기록해서 본다. 소스에 문구가 있는 것과 그 코드가 실행되는 것은 다르다
+      (뮤테이션 검증에서 구조 검사가 가짜 통과를 냈다).
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+    spec = importlib.util.spec_from_file_location(
+        "_pc_probe", root / "shared" / "precommit_check.py")
+    pc = importlib.util.module_from_spec(spec)
+    # @dataclass 가 sys.modules 를 조회하므로 exec 전에 등록해야 한다.
+    sys.modules["_pc_probe"] = pc
+    try:
+        spec.loader.exec_module(pc)
+    finally:
+        sys.modules.pop("_pc_probe", None)
+
+    from JARVIS04_SCHEDULER import job_llm_priority as jlp
+
+    called = []
+    orig = jlp.selfcheck
+    jlp.selfcheck = lambda *a, **k: (called.append(1), orig(*a, **k))[1]
+    try:
+        rep = pc.Report()
+        pc.check_crossproc(rep)
+    finally:
+        jlp.selfcheck = orig
+
+    assert called, "crossproc 이 job_llm_priority.selfcheck 를 부르지 않는다 — 검사가 죽어 있다"
+    assert not [v for v in rep.violations if "self-check" in v.check_id], \
+        f"crossproc 자가검사 실패: {[v.text for v in rep.violations]}"
+
+
+def test_낡은_검사_개수_표기가_남아있지_않다():
+    """★ 검사는 27→60 으로 늘었는데 문서 9곳이 '27종' 이라고 적혀 있었다."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    stale = []
+    for f in list(root.rglob("*.md")) + list(root.rglob("*.py")):
+        if not f.is_file() or {".venv", "__pycache__", ".git", "node_modules"} & set(f.parts):
+            continue
+        if f.name == "ERRORS.md" or "decisions" in f.parts or "tests" in f.parts:
+            continue   # 사고 기록·ADR·테스트 설명문은 역사다 — 보존한다
+        for i, l in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+            if "27종" in l and "precommit" in l.lower():
+                stale.append(f"{f.relative_to(root)}:{i}")
+    assert not stale, "낡은 개수 표기 잔존:\n" + "\n".join(stale)
