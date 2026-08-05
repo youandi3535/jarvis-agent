@@ -13,7 +13,7 @@ JARVIS04 스케줄 DEFAULT_JOBS 의 `auditor_weekly` 잡 — 주 1회 일요일 
 run(now=None) → AuditResult
   종합 감사 수행 + 결과 반환 + 텔레그램 보고.
 
-audit_constitution_violations()  — shared/precommit_check.py 27종 호출
+audit_constitution_violations()  — shared/precommit_check.py 전 카테고리 호출
 audit_repeated_lessons(window_days=30) — ERRORS.md 최근 30일 회고
 audit_learned_patterns_meta_learning() — 5회+ 반복 → 새 fixer 신설 제안
 
@@ -53,7 +53,7 @@ _ERRORS_MD = Path(__file__).resolve().parent / "ERRORS.md"
 
 @dataclass
 class ConstitutionAudit:
-    """precommit_check 27종 검증 결과."""
+    """precommit_check 전 카테고리 검증 결과."""
     total_violations: int
     by_category: dict[str, int]
     sample: list[str]                    # 첫 5건 예시
@@ -115,7 +115,7 @@ class AuditResult:
 # ──────────────────────────────────────────────────────────────
 
 def audit_constitution_violations() -> ConstitutionAudit:
-    """shared/precommit_check.py 27종 검증 실행. 결과를 카테고리별 집계."""
+    """shared/precommit_check.py 전 카테고리 검증 실행. 결과를 카테고리별 집계."""
     script = _ROOT / "shared" / "precommit_check.py"
     if not script.exists():
         return ConstitutionAudit(total_violations=0, by_category={}, sample=[])

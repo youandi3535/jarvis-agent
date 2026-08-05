@@ -133,13 +133,24 @@ def _draft_body(draft: dict) -> str:
     return body or ""
 
 
-def send_score_report(sr: dict, post_type: str = "", platform: str = "", title: str = "") -> None:
+def send_score_report(sr: dict, post_type: str = "", platform: str = "", title: str = "",
+                      blocking: "list | None" = None) -> None:
     """★ 발행 전 100점 검증 점수 → 텔레그램 (사용자 박제 2026-07-24: 모든 글·항상).
 
     ① 단일 진입점 — 점수가 계산되는 유일 지점(prepublish_quality_issues 의 score_post 직후)에서만 호출.
     ② 동적 설계 — sr["sections"]/items dict 를 *순회* 해 렌더. 루브릭(항목·만점·이름)이 바뀌어도
        코드 수정 없이 자동 반영(post_scorer 가 유일한 진실). 항목명·만점을 하드코딩하지 않는다.
     ③ 모든 글 — 경제·테마 × 네이버·티스토리 4조합 모두 이 함수를 부른다(통과·미통과 무관).
+
+    ★ `blocking` (2026-08-04 — 사용자 지시): 이 시점까지 쌓인 *차단 사유* 목록.
+      왜 필요한가 — 종전 메시지는 `✅ 통과 (기준 70)` 라고만 적었는데, 그건 **점수 항목
+      하나의 판정**이었다. 실제 발행 여부는 사실성·기타 검사를 함께 봐야 정해진다.
+      2026-08-04 07:00 사고에서 사용자가 정확히 이 지점을 지적했다 —
+      *"모두 70점을 넘겼는데 왜 실패냐"*. 점수는 통과했고 다른 검사가 막았는데,
+      메시지에는 **통과만 크게 적혀 있었다.** 계기판이 사실과 다르게 읽히면 없느니만 못하다.
+      → 사실성 검사가 점수보다 *먼저* 끝나므로(호출부 순서), 이 시점에 이미 최종 판정이
+        가능하다. 점수 미달 여부와 합쳐 **진짜 결과**를 적는다.
+      사유 문구는 issue 에서 그대로 가져온다 — 여기에 사유 목록을 박지 않는다(원칙②).
     """
     try:
         from shared.notify import send_tg
@@ -148,10 +159,23 @@ def send_score_report(sr: dict, post_type: str = "", platform: str = "", title: 
         head = f"📊 *발행 전 품질검증* [{post_type or '?'}·{platform or '?'}]"
         if title:
             head += f" {title}"
-        _ok = sr.get("passed")
+        _score_ok = bool(sr.get("passed"))
+        _others = [b for b in (blocking or []) if isinstance(b, dict)]
+        _will_publish = _score_ok and not _others
+
         lines = [head, "━━━━━━━━━━━━━━━━━━",
                  f"*종합 {sr.get('total', 0):.1f}/100*  "
-                 f"{'✅ 통과' if _ok else '❌ 재작성'} (기준 {_PASS:.0f})"]
+                 f"{'✅ 점수 통과' if _score_ok else '❌ 점수 미달'} (기준 {_PASS:.0f})"]
+        # ★ 최종 판정을 *별도 줄* 로 분명히 — 점수 판정과 섞이지 않게.
+        if _will_publish:
+            lines.append("→ *발행 진행* (사실성 검사도 통과)")
+        else:
+            _why = []
+            if not _score_ok:
+                _why.append(f"점수 {_PASS:.0f} 미달")
+            for b in _others[:3]:
+                _why.append(str(b.get("detail") or b.get("kind") or "")[:60])
+            lines.append("→ *재작성* — " + " / ".join(_why))
         # 섹션·항목 동적 순회 (A/B/C/D 순서 보존, dict 순서 그대로)
         for skey, sec in secs.items():
             if not isinstance(sec, dict):
@@ -305,8 +329,11 @@ def prepublish_quality_issues(draft, post_type: str = "", platform: str = "",
                     _sr["total"], "통과" if _sr["passed"] else "재작성"
                 )
                 # ★ 모든 글·항상 점수 텔레그램 (사용자 박제 2026-07-24) — 통과·미통과 무관.
+                # ★ out 에는 이 시점까지의 차단 사유(사실성 등)가 들어 있다 —
+                #   사실성 검사가 점수보다 먼저 끝나므로 여기서 최종 판정이 가능하다.
                 send_score_report(_sr, post_type, platform,
-                                  (draft.get("title") or draft.get("keyword") or "").strip())
+                                  (draft.get("title") or draft.get("keyword") or "").strip(),
+                                  blocking=out)
                 if not _sr["passed"]:
                     sec = _sr.get("sections", {})
                     detail_parts = [
@@ -322,22 +349,26 @@ def prepublish_quality_issues(draft, post_type: str = "", platform: str = "",
             except Exception as _e:
                 log.warning(f"[prepublish_gate] score_post 실패 → 통과(fail-open): {_e}")
 
-    # ── ★ C축: 학습 지침 준수 (2026-08-03 — 사용자 승인) ─────────────────────
-    #   실측: 08-03 네이버 테마글이 주입된 지침 8건 중 2건을 어겼고 **같은 지적이 다음
-    #   분석에서 또 나왔다**. 넣어주기만 하고 검사하지 않으면 학습은 프롬프트만 길게 만든다.
-    #   ★ kind 를 "engagement" 로 둔다 — CLAUDE_WRITER 규칙상 `draft_quality` 가 아니어야
-    #     `_fix_drafts` 가 inline 패치를 건너뛰고 **WRITER step 재실행(재작성)** 으로 간다.
-    #     지침 위반은 문장 하나 고쳐 될 일이 아니라 글을 다시 쓰는 게 맞다.
-    #   ★ detail 에는 *지침 원문* 만 넣는다(점수·번호 등 가변값 금지) — attempt 마다 지문이
-    #     흔들리면 harness abort 가 안 걸려 max_attempts 를 낭비한다.
-    #   ★ 매력도 킬스위치를 공유한다 — 둘 다 '재작성 사유' 계열이라 함께 껐다 켜야 한다.
+    # ── 학습 지침 준수 — **차단하지 않는다** (2026-08-04 회귀 수정) ────────────
+    #   ★ 2026-08-03 에 나는 "주입한 지침을 지켰는지 아무도 안 본다" 며 이걸 *차단 사유* 로
+    #     만들었다. **틀린 진단이었다.** 실측 결과 주입 지침 8건이 **전부** 100점 루브릭
+    #     항목과 겹친다:
+    #       H3 소제목→`N3_h3_count` · 도입부 4문장→`B1_intro` · H1 1개→`T3_h1_count` ·
+    #       내부 링크→`T8` · 면책→`면책 문구 완비` · 여백·롱테일·독창성·실용성 전부 존재.
+    #     즉 검사는 **이미 되고 있었다** — 다만 *감점* 이지 *차단* 이 아니었고, 그게 정상이다.
+    #     품질 기준의 단일 진입점은 100점 루브릭(임계 70)이다. 내가 그 옆에 더 엄격한
+    #     두 번째 기준을 세운 것이 원칙① 위반이었다.
+    #   ★ 실제 피해 (2026-08-04 07:00): 네이버 경제글이 루브릭 **72.0·79.0·75.5·78.0** 으로
+    #     네 번 모두 기준을 넘겼는데 이 게이트가 네 번 다 막아 **발행 0건**.
+    #     티스토리는 재작성 1회를 더 태운 뒤 통과했다.
+    #   → 판정 자체는 남긴다(관측용 로그). *차단만* 하지 않는다.
+    #     지침 위반의 결과는 어차피 루브릭 점수로 내려가고, 그 감점 항목이 다음 회차
+    #     개선 제안이 된다 — 폐쇄루프는 그 경로로 이미 닫혀 있다.
     if _eng_on:
         _violated = (cqr.get("violated_directives") or []) if "cqr" in dir() else []
         if _violated:
-            log.warning(f"[prepublish_gate] 🚫 학습 지침 {len(_violated)}건 위반 → 재작성")
-            for _d in _violated[:3]:   # 상한 3 — 한 번에 다 못 고친다. 지문도 짧게 유지.
-                out.append({"kind": "engagement",
-                            "detail": f"[학습지침] 주입된 지침을 어겼다 — {_d}"})
+            log.info(f"[prepublish_gate] 학습 지침 {len(_violated)}건 미준수(관측용, 차단 아님): "
+                     + " / ".join(str(v)[:40] for v in _violated[:3]))
 
     return out
 
@@ -467,6 +498,8 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str,
     """
     import json as _json
     from shared.llm import invoke_text_result as _inv_r
+    # ★ 상한은 액션 데드라인 파생 — 여기 숫자를 박지 않는다 (ERRORS [549])
+    from shared.llm import judge_timeout as _judge_timeout
 
     def _no_verdict(status: str) -> dict:
         # ★ 지침 위반도 판정 불가 시 빈 목록 — fail-open. 판정 못 한 것을 위반이라 하지 않는다.
@@ -519,15 +552,25 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str,
         '"violated_directives":["명백히 어긴 지침 번호 D1 형식, 없으면 []"]}'
     )
     try:
-        raw, ok = _inv_r("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
+        # ★ `_essential=True` — `_nonessential` 이 **회로 면제를 앞질러 무력화** 했다
+        #   (2026-08-04 실측). `fact_judge` 는 이미 `_CIRCUIT_EXEMPT_ALIASES` 소속이라
+        #   시스템이 "회로가 열려도 이 호출은 살려라" 고 판정해 둔 것인데,
+        #   `shared/llm.py` 의 평가 순서가
+        #       if _nonessential:  → open/probe 면 즉시 폴백(SDK 미호출)
+        #       elif _gate=="open": → _essential or 면제 alias 면 1회 실시도
+        #   라서 **면제 분기에 도달조차 못 했다.**
+        #   실측 2026-08-04: fact_judge 24회 중 8회가 `ok=0, duration 0ms`(= SDK 미호출).
+        #   같은 시각 `writer_long_body` 는 356초씩 정상 — LLM 자체는 멀쩡했다.
+        #   결과: 판정 불가 → **fail-closed 차단** → 21:00 테마 티스토리 **발행 0건**.
+        #   ★ 이것은 `engagement_judge` 에서 2026-08-01(622063b) 에 이미 고친 것과
+        #     **정확히 같은 병** 이다. 그때 fact_judge 를 "별건" 으로 미뤘고 오늘 터졌다.
+        #   ★ 왜 이 호출이 essential 인가: 실패하면 fail-closed 로 **발행 자체가 막힌다**.
+        #     발행 시각이 계약인 시스템에서 이보다 필수인 호출은 없다. 글당 1~2회다.
+        raw, ok = _inv_r("fact_judge", prompt, timeout=_judge_timeout(), _essential=True)
         if not ok:
-            # ★ 인프라 1회 재시도 (2026-07-16) — _nonessential 은 재시도 0회라
-            #   타임아웃 1번 = 판정 기회 소멸이었다. 한 번 더 시도 후에만 판정불가 확정.
-            #   ★ 2026-07-25: 판정 여부는 ok 로 본다. 종전엔 raw 공백 여부로만 봤는데,
-            #     회로 open 이면 두 호출 모두 *SDK 미호출 즉시 ""* 라 재시도가 무의미했고
-            #     그 사실이 반환값 어디에도 남지 않았다.
+            # ★ 인프라 1회 재시도 (2026-07-16) — 타임아웃 1번 = 판정 기회 소멸이었다.
             log.info("[prepublish_gate] 통합 판정 응답 없음 — 1회 재시도")
-            raw, ok = _inv_r("fact_judge", prompt, max_tokens=600, timeout=90, _nonessential=True)
+            raw, ok = _inv_r("fact_judge", prompt, timeout=_judge_timeout(), _essential=True)
         if not ok or not (raw or "").strip():
             return _no_verdict("unavailable")
         m = re.search(r"\{.*\}", raw, re.DOTALL)

@@ -1,6 +1,7 @@
 # JARVIS Git Hooks
 
-CLAUDE.md 박제 규정 자동 검증 — `shared/precommit_check.py` 의 27종 grep 명령을 commit 시점에 자동 차단.
+CLAUDE.md 박제 규정 자동 검증 — `shared/precommit_check.py` 를 commit 시점에 실행해
+위반이 있으면 **차단**한다.
 
 ## 설치 (1회)
 
@@ -8,18 +9,20 @@ CLAUDE.md 박제 규정 자동 검증 — `shared/precommit_check.py` 의 27종 
 git config core.hooksPath .githooks
 ```
 
-## 작동 모드
+## 작동 — 모드는 하나뿐이다
 
-| 모드 | 환경변수 | 동작 |
-|------|----------|------|
-| **경고** (기본) | 미설정 | 위반 발견 시 stderr 출력, commit 통과 |
-| **차단** | `JARVIS_STRICT=1` | 위반 발견 시 exit 1, commit 거부 |
+**위반이 있으면 커밋이 막힌다.** 그게 전부다.
 
-## 권장 도입 순서
-
-1. **1주차** — `core.hooksPath` 설정만. 경고 모드로 누적 위반 가시화.
-2. **2주차** — 잔존 위반 0건 도달 후 `export JARVIS_STRICT=1` 박제.
-3. **3주차 이후** — `JARVIS_STRICT=1` 영구화 (`.zshrc` 또는 `.bashrc`).
+> ★ 2026-08-05 정정 — 종전 이 문서는 *"기본은 경고 모드, `JARVIS_STRICT=1` 이면 차단"*
+> 이라고 적고 3주짜리 단계적 도입 계획까지 실어 놨다. **둘 다 실제로 존재한 적이 없다.**
+>
+> 훅 맨 위의 `set -e`("명령 하나라도 실패하면 즉시 멈춰라")가 검사기 실패 즉시
+> 스크립트를 죽여서, 경고 모드도 `JARVIS_STRICT` 분기도 **2달간 한 번도 실행되지 않았다**
+> (실측 재현). `JARVIS_STRICT` 는 문서 5곳에 등장했지만 **그 값을 읽는 코드는 0곳**이었다.
+>
+> 그 2달 동안 커밋 446건이 차단 모드로 멀쩡히 쌓였다 — 차단이 발목을 잡은 적이 없다.
+> 그래서 되살리지 않고 **없앴다.** 문서가 코드를 따라간 것이 아니라, 애초에 코드가
+> 문서대로 된 적이 없었다. 있는 그대로를 규칙으로 삼는다.
 
 ## 우회
 
@@ -29,29 +32,43 @@ git config core.hooksPath .githooks
 git commit --no-verify -m "..."
 ```
 
-단, 우회 사실은 ERRORS.md 에 박제할 것.
+단, 우회 사실은 `JARVIS07_GUARDIAN/ERRORS.md` 에 박제할 것.
 
 ## 검증 카테고리
 
-```bash
-python3 shared/precommit_check.py --list
-```
-
-- `infra` — 인프라 단일 진입점 (3종)
-- `length` — 분량 표기 단일 진입점 (5종)
-- `blog` — 블로그 헌법 위반 (1종)
-- `schedule` — 스케줄 단일 진입점 (7종)
-- `autocode` — 자율 코드 자가수정 (3종)
-- `tools` — 자율 에이전트 도구 (3종)
-- `image` — 이미지 생성 단일 진입점 (2종)
-
-특정 카테고리만 검증:
+**개수·목록을 이 문서에 적지 않는다.** 카테고리는 계속 늘어나고, 적어두면 반드시 낡는다
+(종전 이 문서는 7개·"27종" 이라고 적고 있었다). 현재 값은 실행해서 본다:
 
 ```bash
-python3 shared/precommit_check.py --category schedule --category infra
+python3 shared/precommit_check.py --list                    # 전체 목록
+python3 shared/precommit_check.py --category schedule       # 하나만
+python3 shared/precommit_check.py                           # 전체 검증
 ```
+
+## 검사기의 성격과 한계 (알고 쓸 것)
+
+- **버그를 잡는 도구가 아니다.** 문법 오류·런타임 오류를 잡는 검사는 하나도 없다.
+  잡는 것은 전부 *"CLAUDE.md 규칙을 어긴 자리"* 다 — 사람이 리뷰하며 지적하던 것의 기계화.
+- **방식은 대부분 글자 찾기(정규식)** 라 두 가지 약점이 있다:
+  - *오탐* — 주석·문자열 안의 문장을 코드로 착각할 수 있다.
+  - *미탐* — 함수 안에 들여쓴 import 처럼 줄 맨 앞이 아닌 패턴은 놓친다.
+  오탐이라 판단되면 우회하지 말고 **검사 규칙 자체를 고치는 편**이 낫다.
+- **"숫자를 한 번 더 적는" 사고는 못 잡는다.** 예: `misfire_grace_time=600`
+  (ERRORS [563] 실물)은 통과한다 — 감시하는 변수 이름 목록에 없기 때문이다.
+  이 도구의 실효는 *예방* 이 아니라 **재발 차단** 이다.
+
+## 실제로 검사기를 돌리는 곳 — 3곳
+
+| 언제 | 어디 | 실패하면 |
+|------|------|---------|
+| 커밋할 때 | 이 훅 | 커밋 차단 |
+| push·PR 할 때 | GitHub Actions (`.github/workflows/ci.yml`) | 화면에 ❌ (브랜치 보호 미설정이면 머지는 막지 않음) |
+| 주 1회 | `JARVIS07_GUARDIAN/auditor.py` 잡 | 감사 리포트 |
+
+> ★ CLAUDE.md·README 에 *"데몬 부팅 시 자동 실행"* 이라 적혀 있었으나
+> `jarvis_daemon.py` 에 precommit 호출은 **0건**이었다 (2026-08-05 실측 정정).
 
 ## 관련 정책
 
 - 검증 명령 원본: `CLAUDE.md` 각 단일 진입점 섹션
-- 학습 시스템 연동: `JARVIS07_GUARDIAN/auto_repair.py` 7-Layer 자가 진단이 매일 08:30/18:00 동일 검증 수행
+- 훅이 왜 2달간 죽어 있었는지: `JARVIS07_GUARDIAN/ERRORS.md` [566]

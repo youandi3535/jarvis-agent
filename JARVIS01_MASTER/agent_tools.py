@@ -374,6 +374,22 @@ def _safe_path(path: str) -> Optional[Path]:
         for deny in _DENY_DIRS:
             if rel == deny or rel.startswith(deny + "/"):
                 return None
+        # ★ 시크릿 *파일* 차단 (2026-08-04 전수 감사 3위 — 사용자 승인)
+        #   `_DENY_DIRS` 는 디렉터리 접두어만 본다. 그래서 실측상 `.env` 와
+        #   `naver_cookies.pkl` 이 **허용** 이었고, 이 경로를 쓰는 `read_file`·`glob_files`·
+        #   `grep_code` 는 전부 `requires_approval=False` 다 — 즉 승인 버튼 없이 자격증명을
+        #   읽을 수 있었다. 대조로 `run_bash("cat .env")` 는 버튼에 막힌다.
+        #   **같은 행위인데 통로에 따라 게이트가 달랐다.**
+        #   목록은 여기 박지 않는다 — `shared.secrets.secret_files()` 가 경로의 *주인*
+        #   (.env 규약 · login_manager 의 쿠키 상수 · credentials/)에게 물어 파생한다(원칙②).
+        try:
+            from shared.secrets import is_secret_file as _is_secret
+            if _is_secret(p_resolved):
+                return None
+        except Exception:
+            # 파생 실패 시에도 최소 방어 — 이름으로 알려진 것은 막는다(fail-closed)
+            if p_resolved.name == ".env" or p_resolved.name.endswith("_cookies.pkl"):
+                return None
         return p_resolved
     except Exception:
         return None
@@ -925,6 +941,31 @@ def web_fetch(url: str) -> dict:
     """
     if not url or not (url.startswith("http://") or url.startswith("https://")):
         return {"ok": False, "error": "url must start with http:// or https://"}
+    # ★ 사설·루프백 대역 차단 (2026-08-04 전수 감사 3위 — 사용자 승인)
+    #   이 도구는 `requires_approval=False` 다. 검사가 http(s) 접두어뿐이라
+    #   `http://127.0.0.1:9198/api/errors` 같은 **내부 서비스**를 승인 없이 긁을 수 있었다.
+    #   그 API 는 인증이 없고(감사 실측) 오류 원문을 반환한다 — 시크릿 파일을 막아도
+    #   *내부 통로* 로 같은 값에 닿는 우회가 남는다. 바깥 문서를 읽으라고 만든 도구이므로
+    #   내부 주소는 애초에 대상이 아니다.
+    #   ※ 목록을 박지 않는다 — 표준 라이브러리의 주소 분류(ipaddress)에 판정을 위임한다.
+    try:
+        import ipaddress as _ipa
+        import socket as _sock
+        from urllib.parse import urlparse as _up
+        _host = (_up(url).hostname or "").strip()
+        if not _host:
+            return {"ok": False, "error": "invalid url host"}
+        _ips = {ai[4][0] for ai in _sock.getaddrinfo(_host, None)}
+        for _ip in _ips:
+            _a = _ipa.ip_address(_ip)
+            if (_a.is_private or _a.is_loopback or _a.is_link_local
+                    or _a.is_reserved or _a.is_multicast):
+                return {"ok": False,
+                        "error": f"내부·사설 주소는 허용되지 않습니다 ({_host} → {_ip})"}
+    except _sock.gaierror:
+        return {"ok": False, "error": f"이름을 확인할 수 없습니다: {url}"}
+    except Exception as _e:
+        return {"ok": False, "error": f"주소 검증 실패: {_e}"}
     try:
         import requests as _req
         r = _req.get(url, timeout=15,

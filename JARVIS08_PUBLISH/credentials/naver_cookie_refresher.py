@@ -35,6 +35,26 @@ NV_PW       = os.getenv("NV_PASSWORD", "")
 _PROJECT_ROOT    = Path(__file__).resolve().parent.parent.parent  # → root
 _LEGACY_BASE_DIR = _PROJECT_ROOT / "JARVIS02_WRITER"
 COOKIE_FILE = _LEGACY_BASE_DIR / "naver_cookies.pkl"
+
+
+def _save_cookies(cookies) -> None:
+    """쿠키 저장 **단일 진입점** — 저장 직후 권한을 소유자 전용(0600)으로 고정한다.
+
+    ★ 왜 (2026-08-04 전수 감사 3위): 실측 `naver_cookies.pkl` 권한이 **0644** 였다
+      (대조군 `.env` 0600 · `chrome_profile/` 0700 · `credentials/` 0700 — 이것만 열려 있었다).
+      상위 디렉터리도 0755 라 같은 머신의 다른 사용자가 그대로 읽을 수 있다.
+      쿠키는 비밀번호와 같은 값이다 — 있으면 로그인 없이 그 계정이 된다.
+    ★ 저장이 3곳(:234·:325·:402)에 흩어져 있었다. 한 곳만 고치면 다른 경로에서 다시
+      0644 로 쓰인다 — 그래서 저장 자체를 여기 하나로 모은다(원칙①).
+    """
+    import os as _os
+    import pickle as _pk
+    with open(COOKIE_FILE, "wb") as _f:
+        _pk.dump(cookies, _f)
+    try:
+        _os.chmod(COOKIE_FILE, 0o600)
+    except OSError:
+        pass
 COOKIE_MAX_AGE_HOURS = 10   # 이 시간 이상 된 쿠키는 갱신
 
 
@@ -231,7 +251,7 @@ def refresh_naver_cookies(force: bool = False) -> bool:
                 cookies = driver.get_cookies()
                 key_names = {c["name"] for c in cookies}
             if cookies and ("NID_AUT" in key_names and "NID_SES" in key_names):
-                pickle.dump(cookies, open(COOKIE_FILE, "wb"))
+                _save_cookies(cookies)
                 print(f"  ✅ 프로필 세션 유효 — 쿠키 추출 완료 ({len(cookies)}개, NID_AUT/SES 포함)")
                 return True
             print(f"  ⚠️ 로그인 확인됐으나 NID_AUT/SES 없음 (보유: {key_names}) — 재로그인 시도")
@@ -322,7 +342,7 @@ def refresh_naver_cookies(force: bool = False) -> bool:
 
         if logged:
             cookies = driver.get_cookies()
-            pickle.dump(cookies, open(COOKIE_FILE, "wb"))
+            _save_cookies(cookies)
             print(f"  ✅ 쿠키 갱신 완료 ({len(cookies)}개 저장)")
             return True
         else:
@@ -399,7 +419,7 @@ def manual_login_and_save():
                 all_cookies[c["name"]] = c  # blog.naver.com 쿠키 (JSESSIONID 등)
 
             cookies = list(all_cookies.values())
-            pickle.dump(cookies, open(COOKIE_FILE, "wb"))
+            _save_cookies(cookies)
             names = {c["name"] for c in cookies}
             print(f"  ✅ 쿠키 저장 완료 ({len(cookies)}개): {names}")
             now = time.time()

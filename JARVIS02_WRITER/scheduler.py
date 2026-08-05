@@ -181,12 +181,28 @@ def _lock_release():
         pass
 
 
+# ★ 발행 락 스테일 판정 상한 — **이 값의 주인은 여기 하나** (2026-08-04).
+#   비정상 종료(os._exit(75)·keeper SIGKILL)로 락이 새면 다음 발행이 영구 차단되므로
+#   이 시간이 지나면 죽은 락으로 본다. 실측 최대 발행 소요 +246분(4.1h)보다 짧으면
+#   *살아 있는 발행* 을 죽은 것으로 오판하므로 함부로 줄이지 말 것.
+_PUBLISH_LOCK_STALE_SEC = 10800   # 3시간
+
+
+def publish_lock_stale_sec() -> int:
+    """발행 락이 이 시간(초)을 넘으면 죽은 락으로 본다 — 외부 소비자용 공개 진입점.
+
+    `JARVIS08_PUBLISH.publish_ledger` 가 '발행 진행 중인가' 를 판정할 때 이 값을 쓴다.
+    그쪽에 상수를 복사하면 한쪽만 바뀌어 어긋난다(원칙①).
+    """
+    return _PUBLISH_LOCK_STALE_SEC
+
+
 def _is_locked_externally() -> bool:
     """외부 프로세스(수동 실행 등)가 락을 점유 중인지 확인."""
     if not LOCK_FILE.exists():
         return False
     # 3시간 이상 된 락은 비정상 종료로 간주 → 자동 제거
-    if time.time() - LOCK_FILE.stat().st_mtime > 10800:
+    if time.time() - LOCK_FILE.stat().st_mtime > publish_lock_stale_sec():
         LOCK_FILE.unlink(missing_ok=True)
         return False
     try:
@@ -523,8 +539,22 @@ def run_theme(theme: str, gate_feedback: dict | None = None) -> dict:
                     return bool(result)
                 return _retry
 
-            # 실패 플랫폼 수만큼 retry_fn 등록 (incident_responder 가 플랫폼별 호출)
-            _retry_fns = {p: _make_theme_retry() for p in _guardian_fail}
+            # ★ 재시도는 **한 번만** 등록한다 (2026-08-04 — 중복 발행 차단)
+            #   종전: `{p: _make_theme_retry() for p in _guardian_fail}` — 실패 플랫폼 수만큼
+            #   등록했고 `incident_responder:383` 이 그걸 순회하며 각각 호출했다.
+            #   그런데 그 콜백은 `run_radar_top_theme()` → `run_all_themes()` 로
+            #   **두 플랫폼을 통째로 다시 발행** 한다(경제와 달리 플랫폼 인자가 없다:
+            #   `run_all_themes(theme, sector, gate_feedback)` vs `economic.run(post_naver=, post_tistory=)`).
+            #   → 두 플랫폼이 함께 실패하면 **전체 테마 발행이 2회** 돌았다.
+            #
+            #   실측 피해: 2026-07-20 21:00 슬롯이 네이버에 **3건** 을 냈다 —
+            #     21:14 mRNA / 22:07 항공기부품 / 00:51 모바일솔루션 (전부 다른 테마).
+            #     재시도가 카탈로그에서 새 테마를 다시 골라 통째로 발행한 결과다.
+            #
+            #   한 번만 부르는 것이 *원래 맞다* — 콜백 자체가 두 플랫폼을 복구하므로
+            #   플랫폼 수만큼 부를 이유가 없다. 경제(`run(post_naver=, post_tistory=)` 1회 호출)와 동형.
+            #   ※ 근본 수정(테마에도 플랫폼 인자 배선)은 발행 경로 변경이라 별건으로 둔다.
+            _retry_fns = {"+".join(_guardian_fail): _make_theme_retry()}
             respond_in_background("theme", _guardian_fail, _err_ctx, _retry_fns, theme=theme)
             log(f"🛡️ GUARDIAN incident_responder 트리거됨: theme={theme}, fail={_guardian_fail}")
         except Exception as _ire:

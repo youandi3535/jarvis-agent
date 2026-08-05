@@ -122,13 +122,22 @@ GUARDIAN 이 발행 직전엔 Tier-1 자체수리 sweep(LLM-0), **토요일 새�
 
 ## 자동 검증 — `shared/precommit_check.py`
 
-CLAUDE.md 박제 27종 grep 검증을 통합한 단일 진입점. git pre-commit 훅 + 데몬 부팅 + JARVIS07 Auditor 잡 3곳에서 자동 실행.
+CLAUDE.md 박제 규정 검증을 통합한 단일 진입점.
+
+**실제 러너는 3곳** (★ 2026-08-05 실측 정정 — 종전엔 '데몬 부팅' 이라 적혀 있었으나
+`jarvis_daemon.py` 에 precommit 호출이 **0건**이었다):
+① git pre-commit 훅 (커밋 시, 차단) ② GitHub Actions CI (push·PR 시)
+③ JARVIS07 `auditor.py` 잡 (주 1회)
+
+**개수를 문서에 적지 않는다** — 카테고리는 계속 늘어난다. 현재 값은 실행해서 본다:
+`python3 shared/precommit_check.py --list`
 
 ```bash
 python3 shared/precommit_check.py            # 전체 검증
 python3 shared/precommit_check.py --list     # 카테고리 목록
 git config core.hooksPath .githooks          # pre-commit 훅 활성화 (1회)
-export JARVIS_STRICT=1                       # 위반 발견 시 commit 차단 (기본은 경고)
+# ※ 위반이 있으면 commit 은 *항상* 차단된다. 모드 스위치는 없다.
+#   급할 때만: git commit --no-verify
 ```
 
 ## 에이전트 목록
@@ -261,7 +270,7 @@ pkill -f jarvis_daemon.py        # 전체 종료
 - 외부 응답을 화면에 붙일 때 *구조화된 배열/목록 필드가 있으면 그것을 렌더* 한다.
 
 **자동 강제**: `python3 shared/precommit_check.py --category copytruth`
-— git 훅·데몬 부팅·GUARDIAN 잡 3곳에서 자동 실행. ① venv 내부 수정 *지시*
+— git 훅·CI·GUARDIAN auditor 잡 3곳에서 자동 실행. ① venv 내부 수정 *지시*
 ② 효과 검증 없는 monkey-patch ③ 효과 검증 없는 설치 플래그 를 커밋 단계에서 차단.
 
 ## ★ 작업 종료 절차 — 재시작·검증·커밋 (강제 — 사용자 박제 2026-07-20)
@@ -627,7 +636,7 @@ snap = market_snapshot()          # 시장 지표 + 경제 일정 (조립까지 
 **"수집을 엉뚱한 놈이 하는 막되먹은 수정이 절대 안 되도록 강제하라."**
 
 ```bash
-python3 shared/precommit_check.py --category collect    # git 훅·데몬 부팅·GUARDIAN 잡 3곳 자동
+python3 shared/precommit_check.py --category collect    # git 훅·CI·GUARDIAN 잡 3곳 자동
 ```
 
 **왜 grep 으로는 못 막았나 (★ 비직관 — 이게 핵심)**: 2026-07-23 이전에도 02 는 09 의

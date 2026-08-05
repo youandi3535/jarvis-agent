@@ -157,21 +157,56 @@ def audit_lag_minutes(misfire_grace_sec: int = 0) -> int:
 
 
 # ── 실제 발행 조회 ────────────────────────────────────────────────────────
-def published_in_slot(start: _dt.datetime, end: _dt.datetime) -> set[str]:
-    """슬롯 창 안에 실제로 발행된 플랫폼 집합.
+def published_in_slot(start: _dt.datetime, end: _dt.datetime,
+                      post_type: str = "") -> set[str]:
+    """슬롯 창 안에 **그 글종류로** 실제 발행된 플랫폼 집합.
 
     ★ `created_at` 을 쓴다 — 실측 244/244 채워져 있고 발행 시각이다.
       `analyzed_at` 은 234/244 뿐이라(분석이 안 돈 글이 있다) 결손 오탐을 만든다.
+    ★ `post_type` 필터 (2026-08-04 추가 — 내 초판 결함):
+      종전엔 창 안의 *모든* 글을 셌다. `post_analysis.post_type` 컬럼이 있는데도 안 썼다.
+      테마 슬롯 창은 21:00~다음날 07:00 이라, 그 안에 다른 종류 글이 한 건이라도
+      떨어지면 **테마 결손이 조용히 사라진다**. 지금 스케줄에선 경계가 맞물려 실피해가
+      적지만, GUARDIAN 재발행이 창을 넘나들면 바로 발현한다.
+      결손 감사는 *놓치는 쪽* 이 가장 나쁘다 — 감시가 꺼진 줄도 모르게 된다.
+      (빈 문자열이면 종전처럼 전체 — 하위호환)
     """
     from shared.db import get_db
 
+    sql = ("SELECT DISTINCT platform FROM post_analysis "
+           "WHERE created_at >= ? AND created_at < ?")
+    args = [start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")]
+    if post_type:
+        sql += " AND post_type = ?"
+        args.append(post_type)
     with get_db() as con:
-        rows = con.execute(
-            "SELECT DISTINCT platform FROM post_analysis "
-            "WHERE created_at >= ? AND created_at < ?",
-            (start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")),
-        ).fetchall()
+        rows = con.execute(sql, tuple(args)).fetchall()
     return {r[0] for r in rows if r[0]}
+
+
+def scoring_gaps(start: _dt.datetime, end: _dt.datetime,
+                 post_type: str = "") -> list[tuple[int, str]]:
+    """슬롯 창 안에 **발행은 됐는데 채점이 비어 있는** 글 — (id, platform).
+
+    ★ 왜 원장이 이걸 보는가 (감사와 수리를 나눈다)
+      원장이 답하는 질문은 하나다: *"이 슬롯은 완결됐는가?"* 발행만 되고 채점이 비면
+      ADR 014 보상 신호가 안 생기므로 슬롯은 완결된 게 아니다. 그래서 여기서 *본다*.
+      다만 **고치지는 않는다** — 재채점은 루브릭 주인(`post_quality_analyzer`) 일이다.
+      감사가 수리까지 하면 두 도메인이 한 파일에 엉킨다.
+
+    실측 배경(08-02~08-04): 티스토리 4건 중 3건이 `quality_score IS NULL` 로 남았고
+    아무도 몰랐다 — 발행은 성공했으니 어떤 경보도 울리지 않았다.
+    """
+    from shared.db import get_db
+    sql = ("SELECT id, platform FROM post_analysis "
+           "WHERE created_at >= ? AND created_at < ? AND is_revised=0 "
+           "  AND quality_score IS NULL")
+    args: list = [start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")]
+    if post_type:
+        sql += " AND post_type = ?"
+        args.append(post_type)
+    with get_db() as conn:
+        return [(int(r[0]), str(r[1])) for r in conn.execute(sql, args)]
 
 
 def slot_gaps(now: _dt.datetime | None = None) -> tuple[str, list[str], list[str]] | None:
@@ -181,7 +216,7 @@ def slot_gaps(now: _dt.datetime | None = None) -> tuple[str, list[str], list[str
         return None
     post_type, start, end = slot
     platforms = expected_platforms()
-    done = published_in_slot(start, end)
+    done = published_in_slot(start, end, post_type)
     return post_type, sorted(set(platforms) - done), platforms
 
 
@@ -191,9 +226,24 @@ def publishing_in_progress() -> bool:
     아직 진행 중인 것을 '결손' 이라 부르면 안 된다. 지연과 실패는 다른 사건이고,
     다르게 알려야 사용자가 다르게 행동한다.
     """
+    # ★ read-only 조회만 한다 (2026-08-04 — 감사가 대상을 건드리던 결함).
+    #   종전엔 `scheduler._is_locked_externally()` 를 불렀는데, 그 함수는 3시간 넘은 락 파일을
+    #   **지운다**(scheduler.py:188-191 `LOCK_FILE.unlink`). 즉 *감사 잡이 도는 것만으로*
+    #   살아 있는 발행 락이 삭제될 수 있었다 — 실측 최대 발행 지연 4.1시간 > 3시간.
+    #   감시는 대상을 건드리지 않는다. 파일 존재 여부만 본다.
     try:
-        from JARVIS02_WRITER.scheduler import _is_locked_externally
-        return bool(_is_locked_externally())
+        import time as _t
+
+        from JARVIS02_WRITER.scheduler import LOCK_FILE as _LF, publish_lock_stale_sec as _stale
+        if not _LF.exists():
+            return False
+        # ★ 신선도까지 본다 (2026-08-04 2차 — 같은 날 오전 수정의 부작용 교정).
+        #   오전에 '감사가 락을 지우던' 결함을 read-only 로 고쳤는데, 존재 여부만 보면
+        #   **반대 방향으로 샌다**: 비정상 종료로 새어 남은 락(os._exit(75)·keeper SIGKILL)이
+        #   영원히 '발행 진행 중' 으로 읽혀 그 슬롯 결손을 **영구히 놓친다**.
+        #   스테일 청소는 *다음 발행* 의 `_lock_acquire` 때만 도므로 감사는 스스로 판정해야 한다.
+        #   상한은 scheduler 가 소유한 값에서 가져온다 — 사본을 두면 한쪽만 바뀐다(원칙①).
+        return (_t.time() - _LF.stat().st_mtime) < _stale()
     except Exception:
         return False
 
@@ -206,6 +256,67 @@ def publish_gap_error_type(post_type: str, platform: str) -> str:
     예: ('economic','tistory') → 'PublishGapEconomicTistory'
     """
     return "PublishGap" + post_type.capitalize() + platform.capitalize()
+
+
+def recovery_hint(post_type: str) -> list[str]:
+    """결손 1건을 사람이 *지금 손으로* 되살리는 데 필요한 최소 정보.
+
+    ★ 왜 알림에 이걸 넣는가 (2026-08-04 감사 5위)
+      종전 경보는 "무엇이 실패했는가" 만 말했다. 받은 사람은 그 다음에 무엇을 해야
+      하는지 몰라서 **터미널을 열고 잡 이름부터 찾아야** 했다. 새벽 2시에 그건
+      경보가 아니라 숙제다. 경보는 *다음 한 걸음* 까지 말해야 한다.
+
+    ★ 세 값 전부 파생 — 리터럴 0 (② 동적 설계)
+      · 잡 ID   ← `DEFAULT_JOBS` 에서 이 글종류의 발행 잡을 찾아서
+      · 로그    ← **지금 이 프로세스가 실제로 쓰고 있는** 파일 핸들러 경로
+                  (경로를 박으면 핸들러가 바뀔 때 알림만 옛 경로를 가리킨다)
+      · 복구 도구 ← JARVIS04 가 등록한 잡 실행 도구 이름 (승인 버튼 필요)
+    """
+    out: list[str] = []
+
+    job_id = ""
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+        from JARVIS04_SCHEDULER.job_llm_priority import is_publish_callback, publish_post_type
+        for j in DEFAULT_JOBS:
+            if is_publish_callback(j.get("callback")) and publish_post_type(j.get("callback")) == post_type:
+                job_id = str(j.get("id") or "")
+                break
+    except Exception:
+        pass
+    if job_id:
+        out.append(f"잡 ID: `{job_id}`")
+
+    try:
+        import logging as _lg
+        paths = [h.baseFilename for h in _lg.getLogger().handlers
+                 if getattr(h, "baseFilename", None)]
+        if paths:
+            root = str(Path(__file__).resolve().parent.parent)
+            shown = [pp[len(root) + 1:] if pp.startswith(root) else pp for pp in paths]
+            out.append("로그: " + " · ".join(f"`{x}`" for x in shown))
+    except Exception:
+        pass
+
+    # 도구 이름도 등록부에서 파생 — 이름이 바뀌면 알림이 자동으로 따라간다.
+    tool = ""
+    try:
+        from JARVIS04_SCHEDULER import scheduler_agent as _sa  # 도구 등록 유발
+        from shared.tools import _TOOLS as _T
+        _ = _sa
+        for name in _T:
+            if "run" in name and "job" in name:
+                tool = name
+                break
+    except Exception:
+        pass
+    if tool and job_id:
+        out.append(f"복구: 텔레그램에 «{job_id} 지금 실행» → 승인 버튼 ✅ (`{tool}`)")
+    elif job_id:
+        out.append(f"복구: 텔레그램에 «{job_id} 지금 실행» → 승인 버튼 ✅")
+
+    out.append("절차 전문: `docs/RUNBOOK.md`")
+    return out
 
 
 # ── 잡 콜백 ───────────────────────────────────────────────────────────────
@@ -232,7 +343,20 @@ def job_audit_publish_completeness() -> dict:
         "published": len(platforms) - len(gaps),
         "gaps": gaps,
         "in_progress": in_progress,
+        "unscored": [f"#{i}/{pf}" for i, pf in scoring_gaps(start, end, post_type)],
     }
+
+    if result["unscored"] and not in_progress:
+        # 채점 결손은 *발행 결손과 별개* — 발행은 성공했으므로 🚨 가 아니라 경고다.
+        # 재채점은 analyzer_fb 잡이 한가할 때 자동으로 채운다(여기서 고치지 않는다).
+        print(f"  ⚠️ 채점 결손 {len(result['unscored'])}건: {result['unscored']}")
+        try:
+            from shared.notify import send_tg
+            send_tg("⚠️ *채점 결손* — " + " · ".join(result["unscored"])
+                    + f"\n보상 신호(ADR 014)가 비었습니다. 재채점 대기열에 자동 편입 — "
+                      f"다음 `analyzer_fb` 한가한 회차에 채워집니다.")
+        except Exception as e:
+            print(f"  ⚠️ 채점 결손 알림 실패: {e}")
 
     if not gaps:
         print(f"  ✅ 발행 완결성 — {post_type} {len(platforms)}/{len(platforms)} 정상 ({result['slot']})")
@@ -274,6 +398,8 @@ def job_audit_publish_completeness() -> dict:
         *[f"  ❌ {post_type} → {pf}" for pf in gaps],
         "",
         "_잡은 성공으로 기록됐지만 글이 나가지 않았습니다._",
+        "",
+        *recovery_hint(post_type),
     ]
     try:
         from shared.notify import send_tg

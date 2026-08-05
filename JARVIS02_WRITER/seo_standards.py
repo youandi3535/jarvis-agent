@@ -12,6 +12,8 @@
 주간 학습: run_seo_learning() (seo_learner.py → job_registry.py weekly_seo_learn 잡)
 """
 
+import re as _re
+
 LAST_UPDATED = "2026-05-17"
 SEO_VERSION  = "v2.1"
 
@@ -94,6 +96,49 @@ PLATFORM_STANDARDS: dict = {
 # ═══════════════════════════════════════════════════════════════
 # 공개 API — 프롬프트 주입용
 # ═══════════════════════════════════════════════════════════════
+
+
+def heading_plan(platform: str) -> dict:
+    """플랫폼별 **헤딩 골격** — BLOG_SUPREME_LAW 의 `heading_structure` 에서 파생.
+
+    반환: {"section_tag": "h3"|"h2", "h1_required": bool, "sec_min": int, "sec_max": int}
+
+    ★ 왜 필요한가 (2026-08-04 전수 감사 2위)
+      헌법은 플랫폼별 헤딩을 명확히 규정한다:
+        네이버   — `H3 소제목 3~4개 (각 소제목 아래 2~3문장)`
+        티스토리 — `H1 1개 + H2 3~5개 + H3 0~3개/H2`
+      그런데 `draft_writer` 골격은 `<h2>` 를 **21곳에 박아** 두고 `<h3>` 는 **0회** 였다.
+      두 지시가 충돌하면 LLM 은 추상 규정보다 *구체적 골격 예시* 를 따른다.
+      실측 발행본(07-20 이후 24편): h3 평균 **0.0~0.8** · h1 평균 **0.0~0.2**.
+      그 결과 채점표에서 네이버 5점(`N3_h3_count` 3 + `N4_section_sents` 2) ·
+      티스토리 2점(`T3_h1_count`)이 **매 글 죽어 있었다**.
+      → 채점표가 옳고 생성기가 헌법을 안 지킨 것이다. 골격이 헌법에서 파생하게 만든다.
+
+    ★ 파싱은 *구조* 만 본다 — 태그와 개수만 뽑고 문장은 해석하지 않는다.
+      헌법 문구가 다듬어져도 `H3 ... 3~4개` 꼴만 유지되면 계속 동작한다.
+    """
+    std = PLATFORM_STANDARDS.get((platform or "").lower(), {})
+    raw = str(std.get("heading_structure", "") or "")
+    found: dict[int, tuple] = {}
+    for m in _re.finditer(r"H([1-6])[^0-9]{0,12}(\d+)\s*(?:~\s*(\d+))?\s*개", raw, _re.I):
+        lvl = int(m.group(1))
+        lo = int(m.group(2))
+        hi = int(m.group(3)) if m.group(3) else lo
+        found[lvl] = (lo, hi)
+    # 섹션 태그 = *가장 많이 요구되는* 헤딩 레벨 (h1 은 문서 제목이라 제외)
+    body = {lvl: v for lvl, v in found.items() if lvl >= 2}
+    if body:
+        sec_lvl = max(body, key=lambda l: body[l][1])
+        sec_min, sec_max = body[sec_lvl]
+    else:                       # 헌법을 못 읽으면 종전 동작(h2) 유지 — fail-safe
+        sec_lvl, sec_min, sec_max = 2, 3, 5
+    return {
+        "section_tag": f"h{sec_lvl}",
+        "h1_required": found.get(1, (0, 0))[1] > 0,
+        "sec_min": sec_min,
+        "sec_max": sec_max,
+        "source": raw,
+    }
 
 def build_seo_block(platform: str, theme: str = "") -> str:
     """플랫폼별 SEO 핵심 지침 문자열 반환 — LLM 프롬프트 직접 주입.

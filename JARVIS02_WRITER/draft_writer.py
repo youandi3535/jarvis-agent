@@ -593,7 +593,25 @@ def _draft_invoke(system_msg: str, user_msg: str) -> str:
     return body
 
 
-def _build_economic_sections(section_plan, mid_emo_phrase: str, chart_start: int = 3) -> str | None:
+def _heading_tags(platform: str) -> tuple:
+    """플랫폼 섹션 헤딩 태그와 H1 필요 여부 — **헌법에서 파생** (2026-08-04 감사 2위).
+
+    종전엔 골격이 `<h2>` 를 21곳에 박아 두었는데, 헌법(BLOG_SUPREME_LAW 제15조)은
+    네이버에 `H3 소제목 3~4개`, 티스토리에 `H1 1개 + H2 3~5개` 를 규정한다.
+    두 지시가 충돌하면 LLM 은 *구체적 골격 예시* 를 따르므로 h3·h1 이 한 번도 안 나왔다
+    (실측 발행본 24편 h3 평균 0.0~0.8 · h1 평균 0.0~0.2) → 채점표에서 네이버 5점·
+    티스토리 2점이 **매 글 죽었다**. 골격이 헌법을 따르게 만든다.
+    """
+    try:
+        from JARVIS02_WRITER.seo_standards import heading_plan
+        hp = heading_plan(platform)
+        return hp["section_tag"], bool(hp["h1_required"]), hp["sec_min"], hp["sec_max"]
+    except Exception:
+        return "h2", False, 3, 5      # 헌법을 못 읽으면 종전 동작 유지 (fail-safe)
+
+
+def _build_economic_sections(section_plan, mid_emo_phrase: str, chart_start: int = 3,
+                             platform: str = "") -> str | None:
     """★ 주제별 섹션 스켈레톤 동적 조립 (사용자 박제 2026-07-18) — 고정 '소제목1..N' 탈피.
 
     topic_pack warm 단계가 선계산한 section_plan(주제 맞춤 섹션명·개수)을 받아 경제 대본
@@ -611,9 +629,10 @@ def _build_economic_sections(section_plan, mid_emo_phrase: str, chart_start: int
         secs.append(nm)
     if len(secs) < 2:
         return None
+    _tag, _need_h1, _smin, _smax = _heading_tags(platform)
     out, _cn, _mid = [], chart_start, len(secs) // 2
     for i, nm in enumerate(secs):
-        out.append(f"<h2>{nm}</h2>")
+        out.append(f"<{_tag}>{nm}</{_tag}>")
         out.append(f"<p>{nm} 핵심 2문장.</p>")
         out.append(f"[CHART_{_cn}]\n제목: {nm} 관련 시각화\n단위: (D{_cn} 단위)\n"
                    f"데이터: (D{_cn} 라벨=값)\n출처: (D{_cn} 출처)\n[/CHART_{_cn}]")
@@ -731,19 +750,24 @@ __SECTIONS__
     # ★ 동적 섹션 골격 주입 (사용자 박제 2026-07-18): section_plan(warm 선계산 — 주제별 섹션)
     #   있으면 __SECTIONS__ 를 주제 맞춤 구조로, 없으면 기존 고정 스켈레톤으로 안전 폴백.
     _mid_emo = _L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)
+    _lt_tag, _lt_h1, _lt_min, _lt_max = _heading_tags(platform)
     _literal_sections = (
-        "<h2>소제목1</h2>\n<p>섹션1 단락.</p>\n"
+        (f"<h1>(글 제목과 같거나 유사한 H1 — 정확히 1개)</h1>\n" if _lt_h1 else "")
+        + f"<{_lt_tag}>소제목1</{_lt_tag}>\n<p>섹션1 단락.</p>\n"
         "[CHART_3]\n제목: 섹션1 관련 시각화\n단위: (D3 단위)\n데이터: (D3 라벨=값)\n출처: (D3 출처)\n[/CHART_3]\n"
         "<p>섹션1 단락.</p>\n"
         "[CHART_4]\n제목: 섹션1 추가 분석\n단위: (D4 단위)\n데이터: (D4 라벨=값)\n출처: (D4 출처)\n[/CHART_4]   ← 섹션 분량이 길면 차트 더 추가 가능\n"
         f"<p>(★ 감성 중간 문단 — 본문 중간에 글쓴이의 개인적 소회·공감을 {_mid_emo}. 사람이 직접 쓴 듯한 온기 — 수치·데이터 없이 감성 서술만. 헌법 제0-C조)</p>\n"
-        "...\n<h2>소제목N</h2>\n<p>마지막 섹션 단락.</p>\n"
+        f"...  (소제목은 총 {_lt_min}~{_lt_max}개)\n<{_lt_tag}>소제목N</{_lt_tag}>\n<p>마지막 섹션 단락.</p>\n"
         "[CHART_M]\n제목: 마무리 차트\n단위: (Dm 단위)\n데이터: (Dm 라벨=값)\n출처: (Dm 출처)\n[/CHART_M]"
     )
-    _dyn_sections = _build_economic_sections(section_plan, _mid_emo) if section_plan else None
+    _dyn_sections = (_build_economic_sections(section_plan, _mid_emo, platform=platform)
+                     if section_plan else None)
     user_msg = user_msg.replace("__SECTIONS__", _dyn_sections or _literal_sections)
     if _dyn_sections:
-        print(f"  🧩 [Pass-1/{platform}] 주제별 동적 섹션 {_dyn_sections.count('<h2>')}개 적용")
+        _pt = _heading_tags(platform)[0]
+        print(f"  🧩 [Pass-1/{platform}] 주제별 동적 섹션 "
+              f"{_dyn_sections.count(f'<{_pt}>')}개 적용 (헌법 헤딩 <{_pt}>)")
 
     _chart_floor = max(8, _L.MAX_CHART_COUNT * 2 // 3)  # 경제: 8~12 범위 하한선
     user_msg = user_msg.replace(
@@ -786,6 +810,9 @@ def _gen_section_call1(
     datasets=None,
 ) -> str:
     """Call-1: 오프닝 + 섹션1 생성."""
+    # ★ 섹션 헤딩은 헌법에서 파생 (2026-08-04 감사 2위) — 골격과 아래 회수 정규식이
+    #   *같은 값* 을 써야 한다. 어긋나면 섹션이 통째로 유실된다.
+    _sectag = _heading_tags(platform)[0]
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     system_msg = _build_section_system_msg(supreme_block, platform)
     _catalog = _build_data_catalog(datasets)
@@ -820,7 +847,7 @@ CONTENT:
 출처: (카탈로그 D2 출처)
 [/CHART_2]
 <p>전환.</p>
-<h2>소제목1</h2>
+<__SECTAG__>소제목1</__SECTAG__>
 <p>섹션1 단락.</p>
 [CHART_3]
 제목: 섹션1 관련 시각화
@@ -843,6 +870,8 @@ CONTENT:
 출처: (카탈로그 D5 출처)
 [/CHART_5]   ← (카탈로그에 데이터가 충분하면 [CHART_6] 추가 가능)
 """
+    # 골격 헤딩 태그를 헌법 파생값으로 확정 (플레이스홀더 → 실제 태그)
+    user_msg = user_msg.replace("__SECTAG__", _sectag)
     raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
         raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
@@ -860,6 +889,9 @@ def _gen_section_call2(
     datasets=None,
 ) -> str:
     """Call-2: 섹션2만 생성."""
+    # ★ 섹션 헤딩은 헌법에서 파생 (2026-08-04 감사 2위) — 골격과 아래 회수 정규식이
+    #   *같은 값* 을 써야 한다. 어긋나면 섹션이 통째로 유실된다.
+    _sectag = _heading_tags(platform)[0]
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     system_msg = _build_section_system_msg(supreme_block, platform)
     _catalog = _build_data_catalog(datasets)
@@ -874,7 +906,7 @@ def _gen_section_call2(
 
 [출력 형식] — 섹션2만 생성
 
-<h2>소제목2</h2>
+<__SECTAG__>소제목2</__SECTAG__>
 <p>섹션2 단락.</p>
 [CHART_6]
 제목: 섹션2 관련 시각화
@@ -891,6 +923,8 @@ def _gen_section_call2(
 [/CHART_7]   ← (분량이 길면 차트 추가 가능)
 <p>(★ 감성 중간 문단 — 본문 중간에 글쓴이의 개인적 소회·공감 {_L.build_length_phrase(_L.MID_EMOTION_SENTS_MIN, _L.MID_EMOTION_SENTS_MAX)}, 수치 없이 감성 서술만. 헌법 제0-C조)</p>
 """
+    # 골격 헤딩 태그를 헌법 파생값으로 확정 (플레이스홀더 → 실제 태그)
+    user_msg = user_msg.replace("__SECTAG__", _sectag)
     raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
         raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
@@ -909,6 +943,9 @@ def _gen_section_call3(
     datasets=None,
 ) -> str:
     """Call-3: 섹션3 + 마무리 생성."""
+    # ★ 섹션 헤딩은 헌법에서 파생 (2026-08-04 감사 2위) — 골격과 아래 회수 정규식이
+    #   *같은 값* 을 써야 한다. 어긋나면 섹션이 통째로 유실된다.
+    _sectag = _heading_tags(platform)[0]
     spec = PLATFORM_SPEC.get(platform, PLATFORM_SPEC["tistory"])
     system_msg = _build_section_system_msg(supreme_block, platform)
     _catalog = _build_data_catalog(datasets)
@@ -923,7 +960,7 @@ def _gen_section_call3(
 
 [출력 형식] — 섹션3 + 마무리 생성
 
-<h2>소제목3</h2>
+<__SECTAG__>소제목3</__SECTAG__>
 <p>섹션3 단락.</p>
 [CHART_8]
 제목: 섹션3 관련 시각화
@@ -941,6 +978,8 @@ def _gen_section_call3(
 <p>감성 마무리1. 감성 마무리2. — 단순 요약이 아니라 개인적 소회·독자에게 건네는 따뜻한 인사 (헌법 제0-C조 감성 마무리).</p>
 <p>(여기에 면책 {_L.build_length_phrase(_L.DISCLAIMER_INLINE_SENTS)} — 본문에 맞춤형 표현으로 작성)</p>
 """
+    # 골격 헤딩 태그를 헌법 파생값으로 확정 (플레이스홀더 → 실제 태그)
+    user_msg = user_msg.replace("__SECTAG__", _sectag)
     raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
     if not raw:  # 일시 LLM 장애 → 1회 재시도
         raw = invoke_text("writer_long_body", user_msg, timeout=_writer_timeout(), system=system_msg)
@@ -975,9 +1014,11 @@ def _gen_economic_ts_nv_parallel(
     if "CONTENT:" not in call1_content:
         return ""
     title_part, _, content1 = call1_content.partition("CONTENT:")
-    sec2_match = re.search(r"<h2>소제목2.*?(?=<h2>|$)", call2_content, re.DOTALL | re.IGNORECASE)
+    # ★ 회수 정규식도 **골격과 같은 파생 태그** — 어긋나면 섹션이 통째로 유실된다.
+    _rt = _heading_tags(platform)[0]
+    sec2_match = re.search(rf"<{_rt}>소제목2.*?(?=<{_rt}>|$)", call2_content, re.DOTALL | re.IGNORECASE)
     sec2_content = sec2_match.group(0) if sec2_match else call2_content
-    sec3_match = re.search(r"<h2>소제목3.*?$", call3_content, re.DOTALL | re.IGNORECASE)
+    sec3_match = re.search(rf"<{_rt}>소제목3.*?$", call3_content, re.DOTALL | re.IGNORECASE)
     sec3_content = sec3_match.group(0) if sec3_match else call3_content
     combined = title_part + "CONTENT:" + content1 + "\n" + sec2_content + "\n" + sec3_content
     combined = _renumber_charts(combined)  # 3-call 병합 후 CHART 번호 1부터 재정렬

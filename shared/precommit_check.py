@@ -1,6 +1,6 @@
 """JARVIS pre-commit 검증 — CLAUDE.md 박제 grep 명령 통합 단일 진입점.
 
-CLAUDE.md 의 27종 grep 검증 명령을 Python 으로 통합. 의존성 0
+CLAUDE.md 박제 규정의 grep 검증을 Python 으로 통합. 의존성 0
 (외부 패키지 없음, ripgrep / grep 불요). 위반 발견 시 stderr 출력 +
 exit code 1 → git pre-commit 훅이 자동 차단.
 
@@ -152,6 +152,8 @@ class Report:
     """전체 검증 결과."""
     violations: list[Violation] = field(default_factory=list)
     checks_run: int = 0
+    # 실제로 실행된 카테고리 이름 — 보고 문구가 여기서 파생된다(손으로 센 숫자 금지).
+    ran: list = field(default_factory=list)
 
     def add(self, v: Violation) -> None:
         self.violations.append(v)
@@ -433,6 +435,13 @@ def check_autocode(report: Report) -> None:
         #   다루고 로깅·DB박제·반환값 포함 금지. 실패는 전부 흡수(None → UI 폴백).
         #   킬스위치: TOKEN_QUOTA_LOOKUP=0
         "shared/token_usage.py",
+        # ★ 테스트는 프로세스를 띄워야 검증이 된다 (2026-08-05 — 사용자 승인).
+        #   이 규칙의 목적은 *자율 에이전트가 임의 셸을 여는 것* 을 막는 것이지
+        #   테스트가 격리 저장소에 git 을 돌리는 것을 막는 게 아니다.
+        #   실제로 2026-08-05 "훅이 진짜로 막는지" 를 임시 저장소에서 확인하는 테스트가
+        #   여기 걸렸다 — 그 테스트가 없어서 훅이 2달간 죽어 있었다.
+        #   ※ 운영 코드가 아니므로 발행·외부 영향 경로와 무관하다.
+        "tests/",
     )
 
     for p in _iter_py():
@@ -1659,15 +1668,33 @@ def check_crossproc(report: "Report") -> None:
                 "`is_publishing()`(파일 표식 포함) 또는 `bg_defer_reason()` 을 쓸 것"))
 
     # ② 잡 래퍼는 picklable 이어야 한다 (processpool 잡 6개) — 실제 직렬화로 확인
+    #
+    # ★ sys.path 에 저장소 루트를 얹고 부른다 (2026-08-05).
+    #   훅은 `python3 shared/precommit_check.py` 로 실행하므로 sys.path[0] 이 `shared/` 다.
+    #   그래서 `JARVIS04_SCHEDULER` 를 못 찾고 ModuleNotFoundError 로 떨어졌는데,
+    #   종전 코드가 그걸 `except: pass` 로 삼켜 **이 검사는 쓰인 이래 한 번도 실행된 적이
+    #   없었다**(system·venv 양쪽에서 실측 확인). 화면엔 계속 "위반 0건" 이 떴다.
+    #   같은 함정을 `_collect_api_names()` 는 이미 알고 피했는데(그 docstring 참조)
+    #   여기만 빠져 있었다 — 같은 병의 두 번째 발현.
     try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
         from JARVIS04_SCHEDULER.job_llm_priority import selfcheck as _jlp_selfcheck
         why = _jlp_selfcheck()
         if why:
             report.add(Violation(
                 cat, "crossproc/job-wrapper-unpicklable",
                 "JARVIS04_SCHEDULER/job_llm_priority.py", 0, why))
-    except Exception:
-        pass
+    except Exception as _e:
+        # ★ fail-closed (2026-08-05) — 종전엔 `pass` 였다.
+        #   이 import 가 깨지면 잡 래퍼 직렬화 검사가 *조용히 사라지는데* 화면에는
+        #   여전히 "통과, 위반 0건" 이 뜬다. 검사가 없는 것과 통과한 것은 다르다.
+        #   `collect/self-check` 와 같은 형태로 통일한다.
+        report.add(Violation(
+            cat, "crossproc/self-check",
+            "JARVIS04_SCHEDULER/job_llm_priority.py", 0,
+            f"잡 래퍼 직렬화 검사를 실행하지 못해 무력화됨 ({type(_e).__name__}: {_e}) "
+            "— 검사 자체를 고칠 것"))
 
     report.checks_run += 2
 
@@ -1676,7 +1703,11 @@ CATEGORIES["crossproc"] = check_crossproc
 
 
 def run(categories: list[str] | None = None) -> Report:
-    """검증 실행. categories=None 이면 전체."""
+    """검증 실행. categories=None 이면 전체.
+
+    ★ 실행한 카테고리 이름을 `rep.ran` 에 남긴다 — 보고 문구가 *실제로 돈 것* 에서
+      파생되도록(② 동적 설계). 손으로 센 숫자를 화면에 띄우지 않는다.
+    """
     rep = Report()
     targets = categories or list(CATEGORIES.keys())
     for name in targets:
@@ -1685,6 +1716,7 @@ def run(categories: list[str] | None = None) -> Report:
             print(f"⚠️ 알 수 없는 카테고리: {name}", file=sys.stderr)
             continue
         fn(rep)
+        rep.ran.append(name)
     return rep
 
 
@@ -1707,7 +1739,12 @@ def main() -> int:
 
     if rep.ok:
         if not args.quiet:
-            print(f"✅ JARVIS pre-commit 통과 — {rep.checks_run}종 검증, 위반 0건")
+            # ★ 개수를 손으로 더하지 않는다 (2026-08-05).
+            #   종전 `checks_run` 은 각 검사 함수가 `+= 3`·`+= 5` 처럼 손으로 더한 값이라
+            #   검사를 늘려도 숫자를 안 고치면 조용히 어긋났다(실측: harness 는 6이라
+            #   세는데 실제 9개). 화면에 뜨는 숫자가 틀리면 *숫자를 믿을 수 없게* 된다.
+            #   → 실제로 실행한 카테고리 수를 센다. 늘리면 자동으로 따라온다.
+            print(f"✅ JARVIS pre-commit 통과 — {len(rep.ran)}개 카테고리 검증, 위반 0건")
         return 0
 
     # 위반 출력 (카테고리별 그룹)
