@@ -1913,3 +1913,20 @@ def test_llm_saved가_실제_절약만_센다():
     src = _code_only(inspect.getsource(_real_llm_saved))
     assert "llm_attempts = 0" in src, "LLM 없이 고친 것만 세지 않는다"
     assert "fixed_file IS NOT NULL" in src, "실제 파일 수정을 확인하지 않는다"
+
+
+def test_커밋_잔여를_훅이_검사한다():
+    """★ CLAUDE.md 커밋 규정("잔여 0")이 **사람 손에만** 맡겨져 있었다 (2026-08-07).
+
+    ①②는 `precommit_check` 가, ③은 2026-08-05 `symmetry` 가 강제하는데
+    커밋 위생만 남아 있었다. 그래서 그것만 반복해서 샜다 — 규정을 읽어도
+    작업 끝 순간엔 주의가 "고친 게 되나" 에 쏠려 트리를 다시 안 본다.
+    **읽는 것은 적용의 증거가 아니다.** 기억이 아니라 훅이 막는다.
+    """
+    src = _hook_src()
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "git status --porcelain" in code, "훅이 잔여를 검사하지 않는다"
+    assert "exit 1" in code, "잔여가 있어도 차단하지 않는다"
+    # 검사가 검사기 호출 *앞* 에 있어야 한다 — 뒤면 위반 시 도달하지 못한다
+    assert src.index("git status --porcelain") < src.index('python3 "$SCRIPT"'), \
+        "잔여 검사가 검사기 호출 뒤에 있다 — 위반 시 도달 못 한다"
