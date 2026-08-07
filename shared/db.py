@@ -566,10 +566,15 @@ _MIGRATIONS: list[tuple[int, str, str]] = [
                 SELECT id, status,
                        LAG(status) OVER (PARTITION BY agent_id ORDER BY recorded_at, id) AS prev
                 FROM vision_agent_history
-            ) WHERE prev IS NOT NULL AND prev = status,
-                    violated     INTEGER DEFAULT NULL   -- NULL=판정없음 0=준수 1=위반
-                );
+            ) WHERE prev IS NOT NULL AND prev = status
+        );
     """),
+    # ★ 2026-08-07 정정 — 위 v2 SQL 은 `WHERE ... prev = status,` 뒤에 `insight_usage` 의
+    #   DDL 조각(`violated INTEGER DEFAULT NULL … );`)이 잘못 이어붙어 **문법 오류**였다
+    #   (커밋 6170177 편집 사고). 그래서 v2 는 **어느 DB 에서도 성공한 적이 없고**,
+    #   순차 적용이라 v3·v4 도 함께 막혀 있었다 — 새로 만드는 DB(=CI 격리 DB)는 전부
+    #   `user_version=0` 에 갇힌다. 운영 DB 는 표가 이미 있어 증상이 안 보였다.
+    #   "과거 번호를 수정하지 말 것" 규칙의 예외 — *적용된 적이 없으므로* 갈라질 DB 가 없다.
     (3, "style_corpus 제거 — 읽는 코드가 0인 브랜드 보이스 코퍼스 폐기", """
         -- ★ 2026-07-27: 이 표는 매일 02:30 잡이 적재했지만 **읽는 코드가 하나도 없었다**
         --   (search_similar / build_few_shot_block 호출자 0). 게다가 tfidf(2048d)와
@@ -624,6 +629,21 @@ def _apply_migrations() -> int:
             applied += 1
             log.info(f"[db/schema] v{version} 적용 — {note}")
         except Exception as e:                          # noqa: BLE001
+            # ★ '대상이 없다' 는 실패가 아니라 **이미 만족된 상태** 다 (2026-08-07).
+            #   정리·삭제 마이그레이션은 표가 없으면 청소할 것도 없다. 새로 만드는 DB
+            #   (=CI 격리 DB)가 정확히 그 경우인데, 종전엔 이걸 실패로 보고 `break` 했다.
+            #   순차 적용이라 **뒤 버전이 통째로 막혀** 새 DB 는 영원히 v1 에 갇혔다.
+            #   (실측: v2 SQL 문법 오류가 고쳐진 뒤에도 새 DB 는 v1 그대로였다.)
+            if "no such table" in str(e).lower():
+                with get_db() as conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO schema_migrations (version, note) VALUES (?,?)",
+                        (version, f"{note} (대상 없음 — 이미 만족)"),
+                    )
+                    conn.commit()
+                applied += 1
+                log.info(f"[db/schema] v{version} 대상 없음 — 적용 완료로 기록")
+                continue
             # 부팅을 막지 않는다. 다음 부팅에 재시도된다.
             log.warning(f"[db/schema] v{version} 적용 실패(다음 부팅 재시도): {e}")
             break                                       # 순서 보장 — 실패 뒤는 건너뛰지 않는다
@@ -2099,10 +2119,19 @@ def apply_insight_reward(usage_id: int, insight_id: int, analysis_id: int,
         )
         if update_weight:
             conn.execute(
+                # ★ `weight <= 0` 은 **무력화** 를 뜻한다 (2026-08-02 오염 지침 정리).
+                #   그런데 하한 클램프 `max(0.05, …)` 가 그 행에도 걸려, 보상이 한 번만
+                #   귀속되면 0 → 0.05 로 **되살아났다**. 선택 쿼리가 `weight > 0` 으로
+                #   거르므로 그 순간부터 다시 4조합 프롬프트에 주입된다.
+                #   실측 2026-08-07: 무력화 342건 중 **52건**이 미귀속 사용기록을 들고 있어
+                #   다음 보상 잡에서 부활 대기 중이었다. 보상이 음수여도 클램프가 올린다.
+                #   → 무력화는 무력화로 유지한다. 되살리려면 사람이 명시적으로 올린다.
                 """UPDATE learning_insights
                    SET reward_sum   = COALESCE(reward_sum, 0) + ?,
                        reward_count = COALESCE(reward_count, 0) + 1,
-                       weight       = max(0.05, min(3.0, weight + ? * (? - ?)))
+                       weight       = CASE WHEN weight <= 0 THEN weight
+                                           ELSE max(0.05, min(3.0, weight + ? * (? - ?)))
+                                      END
                    WHERE id = ?""",
                 (float(reward), float(alpha), float(reward), float(neutral), int(insight_id)),
             )

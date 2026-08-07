@@ -2494,3 +2494,72 @@ def test_검색어는_머리_토큰을_고른다():
     assert sk("주류업(주정, 에탄올 등)") == "주류업"
     assert sk("가상화폐(비트코인 등)") == "가상화폐"
     assert sk("황사/미세먼지") == "황사"
+
+
+def test_무력화된_지침은_보상으로_부활하지_않는다():
+    """★ `weight=0` 은 '무력화' 다. 하한 클램프가 그걸 0.05 로 되살리면 안 된다.
+
+    2026-08-02 에 오염 지침 378건을 weight=0 으로 껐는데, 선택 쿼리는 `weight > 0` 만
+    거르므로 한 번만 되살아나면 **다시 4조합 프롬프트에 주입**된다.
+    실측 2026-08-07: 무력화 342건 중 52건이 미귀속 사용기록을 들고 대기 중이었다.
+    """
+    from shared import db as _db
+
+    with _db.get_db() as con:
+        con.execute("INSERT INTO learning_insights (insight_key, insight_type, description, "
+                    "directive, weight, scope) VALUES ('probe:off','x','x','x',0,'economic')")
+        off_id = con.execute("SELECT id FROM learning_insights WHERE insight_key='probe:off'").fetchone()[0]
+        con.execute("INSERT INTO learning_insights (insight_key, insight_type, description, "
+                    "directive, weight, scope) VALUES ('probe:on','x','x','x',1.0,'economic')")
+        on_id = con.execute("SELECT id FROM learning_insights WHERE insight_key='probe:on'").fetchone()[0]
+        con.execute("INSERT INTO post_analysis (platform, theme, title, post_type) "
+                    "VALUES ('naver','p','p','economic')")
+        aid = con.execute("SELECT id FROM post_analysis WHERE title='p' ORDER BY id DESC").fetchone()[0]
+        for iid in (off_id, on_id):
+            con.execute("INSERT INTO insight_usage (batch_id, insight_id, scope, platform) "
+                        "VALUES ('probe',?,'economic','naver')", (iid,))
+
+    with _db.get_db() as con:
+        uids = [r[0] for r in con.execute(
+            "SELECT id FROM insight_usage WHERE batch_id='probe' ORDER BY insight_id")]
+    for uid, iid in zip(uids, sorted((off_id, on_id))):
+        _db.apply_insight_reward(usage_id=uid, insight_id=iid, analysis_id=aid,
+                                 alpha=0.3, reward=1.0, neutral=0.5)
+
+    with _db.get_db() as con:
+        w = dict(con.execute(
+            "SELECT insight_key, weight FROM learning_insights "
+            "WHERE insight_key IN ('probe:off','probe:on')").fetchall())
+    assert w["probe:off"] <= 0, f"무력화 지침이 부활했다: weight={w['probe:off']}"
+    assert w["probe:on"] > 1.0, f"정상 지침이 보상을 못 받았다: weight={w['probe:on']}"
+
+
+def test_새_DB에서_마이그레이션이_끝까지_적용된다():
+    """★ 순차 적용이라 한 버전이 막히면 **뒤가 통째로** 막힌다.
+
+    실측: v2 SQL 에 다른 표의 DDL 조각이 섞여 문법 오류였고, 고친 뒤에도 새 DB 엔
+    대상 표가 없어 또 막혔다 — 새로 만드는 DB(=CI 격리 DB)는 영원히 v1 이었다.
+    """
+    import importlib
+    import os
+    import sqlite3
+    import tempfile
+
+    from shared.db import _MIGRATIONS
+
+    prev = os.environ.get("JARVIS_DB_PATH")
+    d = tempfile.mkdtemp()
+    os.environ["JARVIS_DB_PATH"] = os.path.join(d, "fresh.sqlite")
+    try:
+        import shared.db as _fresh
+        importlib.reload(_fresh)
+        _fresh.init_db()
+        con = sqlite3.connect(os.environ["JARVIS_DB_PATH"])
+        got = {r[0] for r in con.execute("SELECT version FROM schema_migrations")}
+    finally:
+        if prev is not None:
+            os.environ["JARVIS_DB_PATH"] = prev
+        import shared.db as _back
+        importlib.reload(_back)
+    want = {v for v, _n, _s in _MIGRATIONS}       # 목록에서 파생 — 개수를 박지 않는다
+    assert got == want, f"새 DB 미적용 마이그레이션: {sorted(want - got)}"
