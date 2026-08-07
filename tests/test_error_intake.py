@@ -221,3 +221,104 @@ def test_로그스캐너가_파일명을_원인위치로_쓰지_않는다():
                 assert "_origin_mod" in names, (
                     f"module 이 traceback 파생값을 쓰지 않는다 (참조: {names})")
     assert found, "log_scanner 의 catch(module=...) 호출을 찾지 못했다 — 테스트 갱신 필요"
+
+
+# ══════════════════════════════════════════════════════════════════
+# ③ "내가 껐다" 와 "진짜 고장" 을 가른다 (사용자 박제 2026-08-07)
+# ══════════════════════════════════════════════════════════════════
+#   이 시스템은 개인 노트북에서 돈다. 사용자가 다른 일을 하다 노트북을 끄면 그 회차는
+#   당연히 안 나간다 — **결함이 아니라 사실** 이다. 그걸 실패로 계상하면
+#   ① 완결률이 기계 사용 습관을 뒤쫓고 ② 고칠 것 없는 일에 GUARDIAN 이 매번 열리고
+#   ③ **진짜 고장이 그 소음에 묻힌다.**
+def _fake_slot(monkeypatch, *, was_down: bool, worst_sec: int = 0):
+    """`downtime_in_window` 를 대역으로 — 호출 인자도 함께 기록한다."""
+    import JARVIS00_INFRA.downtime as D
+    seen = {}
+
+    def _fake(start, end):
+        seen["start"], seen["end"] = start, end
+        return (was_down, worst_sec)
+
+    monkeypatch.setattr(D, "downtime_in_window", _fake)
+    return seen
+
+
+def test_전원_오프_슬롯은_조용히_기록되고_알림하지_않는다(monkeypatch):
+    """💤 사용자가 끈 것 — 기록만 남기고 🚨 도 잡이력 보정도 하지 않는다."""
+    import JARVIS08_PUBLISH.publish_ledger as L
+
+    _fake_slot(monkeypatch, was_down=True, worst_sec=9000)
+    monkeypatch.setattr(L, "slot_gaps", lambda now=None: ("economic", ["naver"], ["naver", "tistory"]))
+    monkeypatch.setattr(L, "publishing_in_progress", lambda: False)
+    monkeypatch.setattr(L, "scoring_gaps", lambda *a, **k: [])
+    monkeypatch.setattr(L, "record_publish_gap", lambda *a, **k: True)
+    sent = []
+    import shared.notify as N
+    monkeypatch.setattr(N, "send_tg", lambda *a, **k: sent.append(a))
+
+    res = L.job_audit_publish_completeness()
+    assert res.get("reason") == "daemon_down", f"전원 오프로 분류되지 않았다: {res}"
+    assert res.get("job_row") == "skipped(daemon_down)", "잡 이력을 건드렸다"
+    assert not sent, "전원 오프인데 🚨 를 쐈다"
+
+
+def test_기계가_켜져_있었으면_진짜_실패로_남는다(monkeypatch):
+    """🚨 같은 '글 0건' 이라도 기계가 살아 있었으면 코드 문제다 — 알려야 한다."""
+    import JARVIS08_PUBLISH.publish_ledger as L
+
+    _fake_slot(monkeypatch, was_down=False, worst_sec=180)
+    monkeypatch.setattr(L, "slot_gaps", lambda now=None: ("economic", ["naver"], ["naver", "tistory"]))
+    monkeypatch.setattr(L, "publishing_in_progress", lambda: False)
+    monkeypatch.setattr(L, "scoring_gaps", lambda *a, **k: [])
+    monkeypatch.setattr(L, "record_publish_gap", lambda *a, **k: True)
+    monkeypatch.setattr(L, "recovery_hint", lambda pt: [])
+    sent = []
+    import shared.notify as N
+    monkeypatch.setattr(N, "send_tg", lambda *a, **k: sent.append(a))
+
+    res = L.job_audit_publish_completeness()
+    assert res.get("reason") == "audit", f"진짜 실패로 분류되지 않았다: {res}"
+    assert res.get("job_row") != "skipped(daemon_down)", "잡 이력 보정을 건너뛰었다"
+
+
+def test_판정창은_슬롯_전체가_아니라_발행_필수구간이다(monkeypatch):
+    """★ 창이 넓으면 **낮에 노트북 닫은 것이 아침의 진짜 실패를 덮는다**.
+
+    경제 슬롯 창은 07:00~21:00(14시간)이다. 그 전체를 보면 15시에 한 번 닫은 것만으로
+    07:00 의 코드 결함이 '전원 오프' 가 된다 — 진짜 고장을 전원 탓으로 돌리는
+    이 방향의 오판이 반대(알림 한 번 더)보다 훨씬 나쁘다.
+    """
+    import JARVIS08_PUBLISH.publish_ledger as L
+
+    seen = _fake_slot(monkeypatch, was_down=False)
+    monkeypatch.setattr(L, "slot_gaps", lambda now=None: ("economic", ["naver"], ["naver", "tistory"]))
+    monkeypatch.setattr(L, "publishing_in_progress", lambda: False)
+    monkeypatch.setattr(L, "scoring_gaps", lambda *a, **k: [])
+    monkeypatch.setattr(L, "record_publish_gap", lambda *a, **k: True)
+    monkeypatch.setattr(L, "recovery_hint", lambda pt: [])
+    import shared.notify as N
+    monkeypatch.setattr(N, "send_tg", lambda *a, **k: None)
+
+    L.job_audit_publish_completeness()
+    span_min = (seen["end"] - seen["start"]).total_seconds() / 60
+    slot = L.current_slot()
+    full_min = (slot[2] - slot[1]).total_seconds() / 60 if slot else 840
+    assert span_min < full_min, (
+        f"판정창이 슬롯 전체({full_min:.0f}분)와 같다 — 발행 필수 구간으로 좁혀야 한다")
+    # 발행이 실제로 필요한 시간(= audit_lag)보다 짧아도 안 된다
+    from JARVIS04_SCHEDULER.job_registry import misfire_grace_for
+    need = L.audit_lag_minutes(misfire_grace_for(L.publish_job_id("economic")))
+    assert span_min >= min(need, full_min) - 1, (
+        f"판정창 {span_min:.0f}분 < 발행 필수 {need}분 — 정상 지연을 실패로 볼 수 있다")
+
+
+def test_생존신호를_못_읽으면_전원탓으로_돌리지_않는다(monkeypatch):
+    """모르면 '꺼져 있었다' 고 하지 않는다 — 진짜 고장을 덮는 쪽이 더 나쁘다."""
+    import JARVIS00_INFRA.downtime as D
+    import JARVIS04_SCHEDULER.job_registry as R
+    import datetime as _dt
+
+    monkeypatch.setattr(R, "heartbeat_job_id", lambda: "")   # 파생 실패 상황
+    down, worst = D.downtime_in_window(_dt.datetime(2026, 8, 7, 7),
+                                       _dt.datetime(2026, 8, 7, 9))
+    assert down is False and worst == 0, "판정 불가인데 전원 오프로 단정했다"

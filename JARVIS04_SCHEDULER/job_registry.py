@@ -292,6 +292,19 @@ def heartbeat_interval_seconds() -> int:
     return 0
 
 
+def misfire_grace_for(job_id: str) -> int:
+    """그 잡의 `misfire_grace_time`(초). 없으면 0 — **잡 정의의 주인이 답한다**.
+
+    ★ 2026-08-07: 결손 감사가 "발행이 일어나야 했던 구간" 을 계산하려면 이 값이 필요한데,
+      호출자가 `DEFAULT_JOBS` 를 다시 훑으면 같은 파생이 **세 번째 사본**이 된다
+      (`_publish_audit_jobs` 의 `grace_by_id` · `job_prereq.effective_grace` 에 이어).
+    """
+    for j in DEFAULT_JOBS:
+        if j.get("id") == job_id:
+            return int(j.get("misfire_grace_time") or 0)
+    return 0
+
+
 def _publish_job_times() -> list[tuple[str, int, int]]:
     """(발행잡ID, 시, 분) — 위 리터럴 카탈로그에서 직접 파생(순환 import 회피)."""
     out = []

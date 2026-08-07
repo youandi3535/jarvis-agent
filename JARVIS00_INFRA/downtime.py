@@ -62,6 +62,60 @@ def downtime_threshold_sec() -> int:
     return 3600
 
 
+def downtime_in_window(start: _dt.datetime,
+                       end: _dt.datetime) -> tuple[bool, int]:
+    """창 `[start, end)` 안에 **정지 구간이 있었는가** — (있었나, 최장 공백 초).
+
+    ★ 왜 이 질문이 필요한가 (사용자 박제 2026-08-07)
+      이 시스템은 **개인 노트북** 에서 돈다. 사용자가 다른 일을 하다 노트북을 끄면
+      그 회차는 당연히 안 나간다. 그건 *결함이 아니라 사실* 이므로 조용히 기록만 하고
+      넘어가야 한다 — 🚨 를 쏘거나 GUARDIAN 이 고치려 들면 **고칠 것이 없는 일에
+      매번 LLM 세션이 열리고, 진짜 고장이 그 소음에 묻힌다.**
+
+    ★ 종전 결함: 결손 사유가 *누가 먼저 발견했는가* 로 갈렸다.
+      · 데몬이 복귀하며 `report_boot_downtime()` 이 먼저 보면 → `daemon_down`(조용)
+      · 감사 잡이 먼저 보면 → `audit`(진짜 실패로 간주 → 🚨 + GUARDIAN)
+      같은 원인이 **레이스로** 다르게 분류됐다. 판정은 발견 순서가 아니라
+      *그 시간에 기계가 살아 있었는가* 에서 나와야 한다.
+
+    ★ 판정 재료는 이미 있는 것에서 파생한다(원칙②):
+      생존 신호 = `job_runs` 의 heartbeat 행 · 정지 임계 = `downtime_threshold_sec()`
+      (발행 잡 `misfire_grace_time` 파생). 새 상수를 만들지 않는다.
+
+    Returns:
+        (정지 있었나, 최장 공백 초). 조회 실패 시 `(False, 0)` —
+        **모르면 '꺼져 있었다' 고 하지 않는다.** 진짜 고장을 전원 탓으로 덮는 것이
+        반대 실수보다 나쁘다(그쪽은 알림만 한 번 더 갈 뿐이다).
+    """
+    try:
+        from JARVIS04_SCHEDULER.job_registry import heartbeat_job_id
+        from shared.db import get_db
+        jid = heartbeat_job_id()
+        if not jid:
+            print("  ⚠️ [downtime] heartbeat 잡 ID 파생 실패 — 창 판정 불가")
+            return (False, 0)
+        s = start.strftime("%Y-%m-%d %H:%M:%S")
+        e = end.strftime("%Y-%m-%d %H:%M:%S")
+        with get_db() as con:
+            rows = [r[0] for r in con.execute(
+                "SELECT started_at FROM job_runs WHERE job_id=? "
+                "AND started_at >= ? AND started_at < ? ORDER BY started_at",
+                (jid, s, e))]
+    except Exception as ex:
+        print(f"  ⚠️ [downtime] 창 판정 조회 실패: {ex}")
+        return (False, 0)
+
+    # ★ 선행 신호를 첫 마크로 쓴다 — 창을 `start` 에서 열면 **슬롯 이전의 정지가
+    #   안 보인다**. 밤새 꺼뒀다가 07:09 에 부팅한 날, 창 안 첫 공백은 9분뿐이라
+    #   "정상 가동" 으로 읽힌다. 실제로는 그 회차가 전원 때문에 날아간 것이다.
+    #   직전 beat 를 못 찾으면 `start` 로 폴백 — **모르면 '꺼져 있었다' 고 하지 않는다.**
+    head = last_alive(before=start) or start
+    marks = ([head] + [_dt.datetime.strptime(r, "%Y-%m-%d %H:%M:%S") for r in rows]
+             + [end])
+    worst = max(int((b - a).total_seconds()) for a, b in zip(marks, marks[1:]))
+    return (worst >= downtime_threshold_sec(), worst)
+
+
 def last_alive(before: _dt.datetime | None = None) -> _dt.datetime | None:
     """직전 화신이 마지막으로 살아 있던 시각 — `job_runs` 의 heartbeat 행에서.
 

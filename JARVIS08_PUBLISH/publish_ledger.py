@@ -531,12 +531,48 @@ def job_audit_publish_completeness() -> dict:
             print(f"  ⚠️ 지연 알림 전송 실패: {e}")
         return result
 
+    # ★ 결손의 *사유* 를 발견 순서가 아니라 **그 시간의 기계 상태**에서 파생한다
+    #   (사용자 박제 2026-08-07). 이 시스템은 개인 노트북에서 돈다 — 사용자가 다른
+    #   일을 하다 노트북을 끄면 그 회차는 당연히 안 나간다. **그건 결함이 아니라 사실**이다.
+    #   종전엔 감사 잡이 무조건 `reason="audit"`(=진짜 실패)로 박아, 전원을 끈 날에도
+    #   🚨 가 울리고 GUARDIAN 이 고칠 것 없는 일에 Tier-2 를 열었다. 같은 원인이
+    #   *누가 먼저 발견했는가* 로 갈리던 레이스도 이걸로 없어진다.
+    #   판정 본체는 생존 신호의 주인(`downtime`) — 여기서 heartbeat 를 직접 읽지 않는다(원칙①).
+    #   ★ 창은 **발행이 실제로 일어나야 하는 구간** 으로 좁힌다 (원칙② — 이미 있는
+    #     `audit_lag_minutes()`(misfire_grace + 플랫폼수 × 액션 데드라인)에서 파생).
+    #     슬롯 창 전체(경제는 07:00~21:00, 14시간)를 보면 **낮에 노트북을 닫은 것만으로
+    #     아침의 진짜 실패가 '전원 오프' 로 덮인다** — 진짜 고장을 전원 탓으로 돌리는
+    #     이 방향의 오판이 반대(알림 한 번 더)보다 훨씬 나쁘다.
+    _reason, _worst = "audit", 0
+    try:
+        from JARVIS00_INFRA.downtime import downtime_in_window
+        from JARVIS04_SCHEDULER.job_registry import misfire_grace_for
+        _lag = audit_lag_minutes(misfire_grace_for(publish_job_id(post_type)))
+        _pub_end = min(end, start + _dt.timedelta(minutes=_lag))
+        _was_down, _worst = downtime_in_window(start, _pub_end)
+        if _was_down:
+            _reason = "daemon_down"
+    except Exception as e:
+        print(f"  ⚠️ 정지 구간 판정 실패(진짜 실패로 간주): {e}")
+    if _reason == "daemon_down":
+        print(f"  💤 슬롯 창에 정지 구간 {_worst // 60}분 — 전원 오프로 기록(결함 아님)")
+
     # ★ 박제는 단일 진입점으로 (2026-08-05). 공백 회계도 같은 함수를 쓴다.
     #   반환값을 모아 **전부 이미 기록된 것이면 알림도 생략** — 복귀 회계가 먼저 알린
     #   슬롯을 감사 잡이 몇 시간 뒤 다시 🚨 로 알리는 중복을 막는다.
     fresh = [pf for pf in gaps
-             if record_publish_gap(post_type, pf, start, end, reason="audit")]
+             if record_publish_gap(post_type, pf, start, end, reason=_reason)]
     result["newly_recorded"] = len(fresh)
+    result["reason"] = _reason
+    result["downtime_sec"] = _worst
+
+    # ★ 전원 오프는 **조용히** 기록만 하고 끝낸다 — 알림도, 잡 이력 보정도 하지 않는다.
+    #   "내가 껐다" 를 실패로 계상하면 완결률·성공률이 기계 사용 습관을 뒤쫓게 되고,
+    #   진짜 고장이 그 소음에 묻힌다. `severity` 는 `daemon_down` 을 이미
+    #   *코드 결함 아님* 으로 분류하므로 GUARDIAN Tier-2 도 열리지 않는다.
+    if _reason == "daemon_down":
+        result["job_row"] = "skipped(daemon_down)"
+        return result
 
     # ★ 잡 이력을 진실로 되돌린다 (2026-08-05). 판정은 여기(발행 도메인),
     #   쓰기는 job_history — 서로의 영역을 넘지 않는다.
