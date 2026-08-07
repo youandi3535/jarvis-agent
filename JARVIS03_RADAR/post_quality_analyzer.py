@@ -203,11 +203,20 @@ def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str) 
                 f"본문:\n{content[:_ana_max].strip()}\n\n"
                 f"위 감점 항목을 없애는 개선안을 JSON 배열로 반환.")
     system = _RUBRIC_SUGGEST_SYSTEM + _build_learning_block(post_type)
-    from shared.llm import invoke_text as _inv
-    raw = _inv("writer_short_analysis", user_msg, system=system, max_tokens=1500)
-    m = re.search(r'\[.*\]', raw or "", re.DOTALL) if raw else None
+    # ★ invoke_text_result 로 ok 를 받는다 — invoke_text 는 회로open/발행창보류/스로틀/
+    #   절단을 전부 "" 로 뭉개(ERRORS [540][550] 동급 결함), 이를 raw 로 받으면 코드 결함이
+    #   아닌 *인프라 non-response* 도 "파싱 실패" RuntimeError 로 오탐 보고된다(law_enforcer.py
+    #   의 기확립 패턴과 동일 — invoke_text_result 로 ok 를 분리). _nonessential=True 는 이 분석이
+    #   비차단(발행 후 학습용)이라 회로 스로틀 중엔 즉시 포기해도 되는 호출임을 명시.
+    from shared.llm import invoke_text_result as _inv
+    raw, _llm_ok = _inv("writer_short_analysis", user_msg, system=system, _nonessential=True)
+    if not _llm_ok:
+        _log.info("[post_analyzer] LLM 미응답(회로open/발행창보류/스로틀/절단) — "
+                  "개선안 생략, 결함 아님 (%s/%s)", platform, post_type)
+        return [], _score
+    m = re.search(r'\[.*\]', raw or "", re.DOTALL)
     if not m:
-        raise RuntimeError("루브릭 개선안 LLM 응답 파싱 실패")
+        raise RuntimeError(f"루브릭 개선안 LLM 응답 파싱 실패 (raw={(raw or '')[:200]!r})")
     return json.loads(m.group()), _score
 
 
