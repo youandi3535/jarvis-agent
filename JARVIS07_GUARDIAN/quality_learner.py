@@ -68,6 +68,12 @@ DIRECTIVE_MAX_LEN: int = _K * 2
 
 import re as _re
 
+import logging as _logging
+
+# ★ 이 모듈에 로거가 없었다 — except 핸들러의 `log.warning` 이 NameError 를 내며
+#   *예외를 감추는 대신 예외를 더 만들었다* (2026-08-07 실측 확인).
+_log = _logging.getLogger("jarvis.guardian.quality")
+
 # ★ 지시문 판정 — *어휘 목록이 아니라 문장의 꼴*. 그런데 **어디에 나오는지가 결정적**이다.
 #   초판은 `유지하|포함하` 같은 어간을 문장 *아무 데서나* 찾았는데, 그러면
 #   "두 종목 모두 흑자를 **유지하**며 안정적인 포지션을 이어가고 있어요" 같은
@@ -419,13 +425,17 @@ def record_directive_violations(scope: str, platform: str, theme: str,
         if not batch:
             return 0
         # 텍스트 → id : 활성 지침 조회와 **같은 원본**에서 뽑는다(사본 금지)
-        rows = _db.get_learning_insights(scope=scope or "all") or []
+        # ★ 함수명 교정 (2026-08-07) — `get_learning_insights` 는 **존재하지 않는다**.
+        #   어제 이 코드를 넣으면서 실제로 부르지 않고 커밋했고, 골든 테스트도
+        #   *소스 문자열만* 검사해 초록으로 통과시켰다. 902행 중 violated 는 0행이었다.
+        #   "정적 검사는 코드가 어떻게 생겼나만 답한다" 를 그 자리에서 어겼다.
+        rows = _db.get_ranked_learning_insights(scope=scope or "all", limit=200) or []
         want = {str(t).strip()[:200] for t in violated_texts if str(t).strip()}
         ids = [r["id"] for r in rows
                if str(r.get("directive") or "").strip()[:200] in want]
         return _db.mark_usage_violated(batch, ids)
     except Exception as e:
-        log.warning(f"[quality_learner] 지침 위반 기록 실패: {e}")
+        _log.warning(f"[quality_learner] 지침 위반 기록 실패: {type(e).__name__}: {e}")
         return 0
 
 

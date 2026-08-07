@@ -1901,8 +1901,35 @@ def test_지침별_변별신호가_버려지지_않는다():
                    for n in _ast.walk(tree))
     assert called and imported, "게이트가 신호를 실제로 흘려보내지 않는다"
 
-    src = _code_only(inspect.getsource(record_directive_violations))
-    assert "mark_usage_violated" in src
+    # ★ **실제로 부른다** (2026-08-07 — patch_effective 표준).
+    #   종전엔 소스 문자열만 검사해서, `get_learning_insights`(존재하지 않는 함수)와
+    #   미정의 `log` 로 **실행 즉시 NameError** 가 나는 코드를 초록으로 통과시켰다.
+    #   902행 중 violated 는 0행이었는데 테스트는 통과하고 있었다.
+    #   "정적 검사는 코드가 어떻게 생겼나만 답한다" — 돌려봐야 안다.
+    n = record_directive_violations("economic", "naver", "", ["존재하지 않는 지침 문장"])
+    assert isinstance(n, int), f"실행이 int 를 안 돌려준다: {n!r}"
+
+    # ★ 이 함수가 부르는 DB API 가 **실존하는가** (오타 함수명 방어).
+    #   정규식이 아니라 AST 로 본다 — `_code_only` 는 토큰을 공백으로 이어 붙여서
+    #   `_db . get_x (` 가 되므로 `_db\.(\w+)\(` 같은 패턴이 안 맞는다(뮤테이션에서 발각).
+    import ast as _ast
+    import textwrap as _tw
+
+    import shared.db as _sdb
+
+    tree = _ast.parse(_tw.dedent(inspect.getsource(record_directive_violations)))
+    called_db = {n.func.attr for n in _ast.walk(tree)
+                 if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Attribute)
+                 and getattr(n.func.value, "id", "") == "_db"}
+    assert called_db, "DB API 호출을 못 찾았다 — 검사 전제가 깨졌다"
+    for name in sorted(called_db):
+        assert hasattr(_sdb, name), f"shared.db 에 없는 함수를 부른다: {name}"
+    assert "mark_usage_violated" in called_db
+
+    # ★ 로거가 정의돼 있는가 — except 핸들러의 `log.warning` 이 미정의라
+    #   **예외를 감추는 대신 예외를 더 만들었다**(2026-08-07 실측 NameError).
+    import JARVIS07_GUARDIAN.quality_learner as _ql
+    assert hasattr(_ql, "_log"), "모듈 로거가 없다 — except 핸들러가 NameError 를 낸다"
     _ = mark_usage_violated
 
 
