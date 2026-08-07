@@ -1170,7 +1170,7 @@ def _batch_extract_all(pending_items: list, theme: str) -> list[dict]:
     _bx_chars = int(_os_bx.getenv("CHART_BATCH_EXCERPT_CHARS", "4000") or "4000")
     for i, item in enumerate(pending_items):
         series = item["series"]
-        docs = item.get("docs", [])[:_bx_docs]   # 항목당 문서 (4→8 상향 2026-07-17)
+        docs = (item.get("docs") or [])[:_bx_docs]   # 항목당 문서 (4→8 상향 2026-07-17)
         docs_lookup[i] = []
         excerpts: list[str] = []
         for j, d in enumerate(docs):

@@ -329,7 +329,7 @@ def _update_errors_md(error_record: dict, analysis: dict, success: bool,
         entry = (
             f"\n---\n"
             f"### [{now_str}] {status_icon} — {format_error_label(error_record.get('error_type',''))}\n"
-            f"- **증상**: {error_record.get('message','')[:200]}\n"
+            f"- **증상**: {(error_record.get('message') or '')[:200]}\n"
             f"- **모듈**: {error_record.get('module','')}\n"
             f"- **원인**: {analysis.get('explanation','')}\n"
             f"- **파일**: {analysis.get('target_file','')}\n"
@@ -963,12 +963,12 @@ def verify_fix(error_record: dict, analysis: dict, file_path: Path,
             break
         r = _run_probe({**p, "etype": short}, budget=_left)
         if not r.get("ran"):
-            detail_bits.append(f"{p.get('kind')}: 실행 불가({r.get('msg','')[:60]})")
+            detail_bits.append(f"{p.get('kind')}: 실행 불가({(r.get('msg') or '')[:60]})")
             continue
         ran_any = True
         if r.get("repro"):
             _why = (f"{p.get('kind')}({p.get('mod') or p.get('path','')}) → "
-                    f"{r.get('raised')}: {r.get('msg','')[:120]}")
+                    f"{r.get('raised')}: {(r.get('msg') or '')[:120]}")
             _mod = str(p.get("mod") or "")
             if p.get("kind") == "import_module" and not _is_repo_module(_mod):
                 # ⓐ 실패하던 import 문 자체가 사라졌다 → 그 실패 지점은 진짜로 해소됨

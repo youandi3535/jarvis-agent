@@ -550,8 +550,8 @@ def _send_telegram_analysis(record: dict, suggestions: list):
     for i, s in enumerate(suggestions[:6], 1):
         p_icon = "🔴" if s.get("priority") == "high" else ("🟡" if s.get("priority") == "medium" else "🟢")
         lines.append(f"{p_icon} *{s.get('field','?')}*: {s.get('issue','')}")
-        lines.append(f"   Before: `{s.get('before','')[:60]}`")
-        lines.append(f"   After: `{s.get('after','')[:80]}`")
+        lines.append(f"   Before: `{(s.get('before') or '')[:60]}`")
+        lines.append(f"   After: `{(s.get('after') or '')[:80]}`")
 
     lines += [
         "",

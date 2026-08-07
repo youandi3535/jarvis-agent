@@ -392,3 +392,64 @@ def test_traceback이_NULL이어도_Tier2_브리지에_닿는다(monkeypatch):
 
     assert len(seen) == 1, (
         "traceback=None 이 Tier-2 브리지를 막았다 — 밴딧 보상 경로가 끊긴다")
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑥ `.get(키, 기본값)[...]` 미가드 — 사전 검사 (2026-08-07)
+# ══════════════════════════════════════════════════════════════════
+#   `dict.get(k, D)` 는 *키가 없을 때만* D 를 쓴다. 키가 **있고 값이 None** 이면 None 이
+#   그대로 나와 `[...]` 에서 TypeError. DB 의 NULL 이 정확히 이 꼴로 들어온다.
+#   실제 피해: `guardian_agent._try_sdk_targeted_fix` 가 이 병으로 터져 Tier-2 브리지가
+#   막혔고 7/27 이후 llm 시도 22건 중 18건이 wontfix 로 쌓였다.
+def test_저장소에_미가드_get_첨자가_없다():
+    """잔존 0 을 유지한다 — 하나라도 들어오면 여기서 죽는다.
+
+    ★ 검사기(`--category symmetry`)와 **같은 판정을 다시 쓰지 않는다**(원칙①).
+      검사기를 호출해 결과를 본다 — 판정 로직이 두 벌이 되면 서로 어긋난다.
+    """
+    import subprocess
+    import sys
+
+    r = subprocess.run(
+        [sys.executable, "shared/precommit_check.py", "--category", "symmetry"],
+        cwd=str(ROOT), capture_output=True, text=True)
+    assert "get-default-unguarded" not in r.stdout, (
+        f"미가드 `.get(k,D)[...]` 가 남아 있다:\n{r.stdout[-900:]}")
+
+
+def test_get_미가드_검사가_실제로_잡는다(tmp_path):
+    """검사기가 허수아비가 아닌지 — 위반 파일을 만들어 검출되는지 본다.
+
+    ★ 저장소 안에 임시 `.py` 를 만들었다가 지우는 방식은 쓰지 않는다.
+      다른 세션이 동시에 커밋하면 그 순간 위반 상태가 커밋될 수 있다.
+      대신 검사 로직의 *판정 함수* 를 직접 겨눈다.
+    """
+    import ast
+
+    bad = 'def f(rec):\n    return rec.get("msg", "")[:50]\n'
+    good = 'def f(rec):\n    return (rec.get("msg") or "")[:50]\n'
+    env = 'import os\ndef g():\n    return os.environ.get("PATH", "")[:10]\n'
+
+    def hits(src: str) -> int:
+        tree = ast.parse(src)
+        lines = src.splitlines()
+        n = 0
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Call)):
+                continue
+            fn = node.value.func
+            if not (isinstance(fn, ast.Attribute) and fn.attr == "get"
+                    and node.value.args):
+                continue
+            obj = ast.get_source_segment(src, fn.value) or ""
+            if obj.split(".")[-1] == "environ":
+                continue
+            if " or " in lines[node.lineno - 1]:
+                continue
+            n += 1
+        return n
+
+    assert hits(bad) == 1, "위반을 못 잡는다"
+    assert hits(good) == 0, "가드된 코드를 오탐한다"
+    assert hits(env) == 0, "os.environ 면제가 안 먹는다"

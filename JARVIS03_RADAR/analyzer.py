@@ -686,7 +686,7 @@ def generate_content_angles(recs: list[dict], autocomplete: dict[str, list[str]]
         kw_lines = []
         for i, rec in enumerate(recs, 1):
             kw      = rec["keyword"]
-            related = autocomplete.get(kw, [])[:5]
+            related = (autocomplete.get(kw) or [])[:5]
             rel_str = f" (연관검색: {', '.join(related)})" if related else ""
             vel     = rec.get("velocity", "—")
             comp    = rec.get("competition", 50.0)

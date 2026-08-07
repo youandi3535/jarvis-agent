@@ -226,7 +226,7 @@ def _test_render(rec: dict) -> bool:
 def _generate_recipe(existing: list, aesthetic: str) -> dict | None:
     from shared.llm import invoke_text
     ex_brief = "\n".join(
-        f"- {e.get('name','')}: hero {e.get('hero',['',''])[0]} / a1 {e.get('a1')} / a2 {e.get('a2')}"
+        f"- {e.get('name','')}: hero {(e.get('hero') or ['',''])[0]} / a1 {e.get('a1')} / a2 {e.get('a2')}"
         for e in existing[-12:])
     prompt = (
         "너는 세계적 인포그래픽 아트디렉터다. 아래 '기존 레시피'와 색이 뚜렷이 다른, "

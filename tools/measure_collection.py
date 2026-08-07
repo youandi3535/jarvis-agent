@@ -100,7 +100,7 @@ def measure(topic: str) -> dict:
             pts += npts
             if d.get("viz_hint") == "line_chart":
                 ts += 1
-            chart_detail.append({"title": d.get("title", "")[:30],
+            chart_detail.append({"title": (d.get("title") or "")[:30],
                                  "viz": d.get("viz_hint", ""), "points": npts, "provider": prov})
         out["charts_by_provider"] = dict(by_prov)
         out["charts_total"] = len(ds)

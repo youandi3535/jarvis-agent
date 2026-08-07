@@ -928,7 +928,7 @@ def run_auto_repair_targeted(
         elif kind == "timeout":
             _send_tg(f"⏰ *targeted 수정 timeout* ({_TARGETED_TIMEOUT}초 초과)")
         else:
-            _send_tg(f"❌ *targeted 수정 예외*: {result.get('stderr','?')[:200]}")
+            _send_tg(f"❌ *targeted 수정 예외*: {(result.get('stderr') or '?')[:200]}")
         log.error("[AutoRepair/Targeted] 실패(%s): %s", kind, result.get("stderr",""))
         return False
 

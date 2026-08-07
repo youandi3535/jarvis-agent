@@ -26,6 +26,7 @@ exit code 1 → git pre-commit 훅이 자동 차단.
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import re
 import sys
@@ -1796,7 +1797,61 @@ def check_symmetry(report: Report) -> None:
                         cat, "symmetry/sibling-drift",
                         str(folder.relative_to(ROOT)), 0,
                         f"{n} 이 형제와 다른 블록 타입 집합을 갖는다 — 누락: {sorted(missing)}"))
-    report.checks_run += 2
+
+    # ③ ★ `.get(키, 기본값)` 결과를 **or 가드 없이** 첨자/슬라이스 (2026-08-07)
+    #
+    #   `dict.get(k, D)` 는 *키가 없을 때만* D 를 쓴다. 키가 **있고 값이 None** 이면
+    #   그대로 None 을 돌려준다 — 그래서 `[...]` 에서 `TypeError: 'NoneType' object is
+    #   not subscriptable` 가 난다. DB 의 NULL 이 정확히 이 꼴로 들어온다
+    #   (`error_log.traceback` 은 실측 4,159/5,076 = 82% 가 NULL).
+    #
+    #   ★ 실제로 값을 치렀다 — `guardian_agent._try_sdk_targeted_fix` 가 이 병으로 터져
+    #     Tier-2(LLM 수리) 브리지가 막혔고, 7/27 이후 llm 시도 22건 중 **18건이 wontfix**
+    #     로 쌓였다. 밴딧 `llm` arm 의 유일한 보상 경로가 조용히 끊겨 있었다.
+    #
+    #   ★ 왜 *사전* 검사인가: `pattern_fixer._fix_none_slicing` 이라는 **사후 수리기**는
+    #     이미 있었다. 터진 다음 고치는 코드는 있는데 들어오는 걸 막는 코드가 없었다.
+    #     이 레그가 그 사전판이다(판정 로직은 여기 하나 — ①원칙).
+    #
+    #   처방은 `(d.get(k) or D)[...]`. `or` 는 None 뿐 아니라 빈 컬렉션까지 D 로 바꾸므로
+    #   인덱스 접근(`[0]`·`[i]`)의 IndexError 도 함께 막는다 (실증 12/12).
+    for p in _iter_py():
+        rel = str(p.relative_to(ROOT))
+        if rel == "shared/precommit_check.py":
+            continue                      # 이 검사기 자신의 설명 코드 제외
+        if rel.startswith("tests/"):
+            continue                      # 테스트는 일부러 위험한 꼴을 만든다
+        text = _read_py(p)
+        if text is None or ".get(" not in text:
+            continue                      # 2-phase — 사전 필터로 AST 파싱 비용 회피
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as e:
+            # fail-closed — 못 읽었으면 통과가 아니라 위반이다 (collect/self-check 관례)
+            report.add(Violation(cat, "symmetry/self-check", rel, e.lineno or 0,
+                                 f"파싱 실패로 검사 무력화: {e.msg}"))
+            continue
+        lines = text.splitlines()
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Call)):
+                continue
+            fn = node.value.func
+            if not (isinstance(fn, ast.Attribute) and fn.attr == "get"
+                    and node.value.args):
+                continue
+            # ★ 면제 — 목록을 박지 않는다(②원칙). "값이 None 일 수 없는 매핑" 만 제외.
+            #   `os.environ` 은 값이 항상 str 이고 없으면 default 를 준다(언어 계약).
+            obj = ast.get_source_segment(text, fn.value) or ""
+            if obj.split(".")[-1] == "environ":
+                continue
+            src_line = lines[node.lineno - 1] if node.lineno <= len(lines) else ""
+            if " or " in src_line:
+                continue                  # 이미 가드됨
+            report.add(Violation(
+                cat, "symmetry/get-default-unguarded", rel, node.lineno,
+                f"{src_line.strip()[:88]}  → `({obj}.get(...) or 기본값)[...]` 로 감쌀 것"))
+    report.checks_run += 3
 
 
 CATEGORIES["symmetry"] = check_symmetry
