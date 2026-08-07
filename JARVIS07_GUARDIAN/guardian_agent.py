@@ -483,7 +483,7 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
             f"func_name: {error_record.get('func_name','?')}\n"
             f"message: {error_record.get('message','?')}\n"
             f"severity: {error_record.get('severity','?')}\n"
-            f"traceback:\n{(error_record.get('traceback', ''))[:2000]}"
+            f"traceback:\n{(error_record.get('traceback', '') or '')[:2000]}"
         )
 
         log.info(f"[GUARDIAN] #{error_id} 2순위 Claude Code SDK 수정 시작 (최대 10분)")
