@@ -354,7 +354,11 @@ def build_insights_block(scope: str = "all", theme: str = "",
 
 
 WEAK_ITEM_LIMIT: int = 6      # 프롬프트에 실을 약점 개수 — 많으면 지시가 묽어진다
+# ★ 약점 판정에 쓰는 **최근 글 수**. 최소 표본의 4배 — 한 번 튀는 글에 흔들리지 않으면서
+#   개선이 4~5회 발행 만에 목록에서 빠질 만큼 짧다. 숫자를 따로 박지 않고 파생한다.
+WEAK_RECENT_N: int = 0        # (아래에서 WEAK_MIN_SAMPLE 로부터 파생)
 WEAK_MIN_SAMPLE: int = 5      # 이보다 표본이 적으면 약점을 말하지 않는다(소표본 오판)
+WEAK_RECENT_N = WEAK_MIN_SAMPLE * 4
 
 
 def weak_items(scope: str = "", platform: str = "", days: int = 30,
@@ -383,7 +387,8 @@ def weak_items(scope: str = "", platform: str = "", days: int = 30,
             args.append(platform)
         agg: dict = {}
         with get_db() as con:
-            for (raw,) in con.execute(q, tuple(args)):
+            # ★ 최신순으로 읽는다 — 항목마다 *최근* 성적만 보기 위해서다(아래 WEAK_RECENT_N).
+            for (raw,) in con.execute(q + " ORDER BY id DESC", tuple(args)):
                 try:
                     v = _json.loads(raw)
                 except Exception:
@@ -391,10 +396,27 @@ def weak_items(scope: str = "", platform: str = "", days: int = 30,
                 for k, sc in v.items():
                     agg.setdefault(k, []).append(float(sc))
         idx = item_index()
+        # ★ 작성 LLM 이 만들 수 없는 항목은 약점으로 지목하지 않는다 (2026-08-07).
+        #   태그·메타 설명·내부 링크는 **파이프라인이 만든다**. 작성자에게 "반드시 채울 것"
+        #   이라고 시키면 할 수 있는 일은 하나뿐 — **URL 을 지어내는 것** 이다.
+        #   (실측: 과거 T8 점수를 받은 3건이 전부 날조 URL 이었다.)
+        #   목록은 채점기에게 물어 파생한다 — 여기 박지 않는다(②).
+        try:
+            from JARVIS02_WRITER.post_scorer import pipeline_controlled_items
+            _pipe = pipeline_controlled_items()
+        except Exception:
+            _pipe = frozenset()
         out = []
         for k, vals in agg.items():
             mx = float(RUBRIC_MAX.get(k, 0))
-            if not mx or len(vals) < WEAK_MIN_SAMPLE:
+            if not mx or k in _pipe:
+                continue
+            # ★ **최근 N건만** 본다. 누적 절대량(`mx*n - sum`)은 만점 행이 쌓여도 줄지 않아
+            #   (만점 행은 분모에 mx 를 더하고 분자에서 mx 를 빼므로 기여가 정확히 0),
+            #   오늘 고친 항목이 옛 행이 창 밖으로 나갈 때까지 **최장 30일간** 계속
+            #   "100% 의 글에서 0점" 이라고 주입된다 — 이미 고친 걸 계속 고치라는 지시.
+            vals = vals[:WEAK_RECENT_N]
+            if len(vals) < WEAK_MIN_SAMPLE:
                 continue
             loss = mx * len(vals) - sum(vals)
             if loss <= 0:

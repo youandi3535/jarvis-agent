@@ -2579,3 +2579,75 @@ def test_새_DB에서_마이그레이션이_끝까지_적용된다():
         importlib.reload(_back)
     want = {v for v, _n, _s in _MIGRATIONS}       # 목록에서 파생 — 개수를 박지 않는다
     assert got == want, f"새 DB 미적용 마이그레이션: {sorted(want - got)}"
+
+
+def test_작성자가_만들_수_없는_항목은_지시하지_않는다():
+    """★ 태그·메타 설명·내부 링크는 **파이프라인이 만든다**.
+
+    작성 LLM 에게 '내부 링크 1개: 반드시 채울 것' 이라고 시키면 할 수 있는 일은 하나 —
+    **URL 을 지어내는 것** 이다(BLOG_SUPREME_LAW 제5조 진실성 위반).
+    과거 T8 점수를 받은 3건이 전부 날조 URL 이었다.
+    """
+    from JARVIS02_WRITER.post_scorer import pipeline_controlled_items
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+    from shared.db import get_db
+
+    # ★ 운영과 같은 조건을 만든다 — 격리 DB 엔 발행 이력이 없어 연관 글 블록이
+    #   폴백(짧은 것)으로 떨어지고, 그러면 '본문 길이에 딸려 흔들리는 항목' 이 안 보여
+    #   느슨한 판정(값이 달라지면 전부 파이프라인 항목)의 결함이 드러나지 않는다.
+    #   실측으로 이 차이 때문에 뮤테이션이 통과했다 — 환경 의존 테스트는 무는 척만 한다.
+    with get_db() as con:
+        for i in range(3):
+            con.execute("INSERT INTO post_analysis (platform, theme, title, url, post_type) "
+                        "VALUES ('tistory','p',?,?,'economic')",
+                        (f"이전 글 제목이 제법 길게 들어가는 경우 {i}",
+                         f"https://example.com/{i}"))
+    pipeline_controlled_items.cache_clear()
+    pipe = pipeline_controlled_items()
+    assert pipe, "파이프라인 항목 파생이 비었다 — 검사 전제가 깨졌다"
+    for k in ("N7_hashtags", "T7_meta_desc", "T8_internal_link"):
+        assert k in pipe, f"{k} 가 파이프라인 항목으로 안 잡힌다"
+    # 작성자가 고칠 수 있는 항목까지 빼앗으면 안 된다
+    assert "B1_intro" not in pipe, "도입부는 작성자의 몫인데 제외됐다"
+
+    # 그 항목만 0점인 표본을 심어도 약점 목록에 안 나와야 한다
+    probe = sorted(pipe)[0]
+    with get_db() as con:
+        for _ in range(_ql.WEAK_MIN_SAMPLE * 2):
+            con.execute("INSERT INTO post_analysis (platform, theme, title, post_type, "
+                        "rubric_items, created_at) VALUES ('naver','p','p','economic',?,"
+                        "datetime('now','localtime'))", (_jsonlib.dumps({probe: 0.0}),))
+    got = {d["key"] for d in _ql.weak_items(days=3650)}
+    assert probe not in got, f"{probe} 를 작성자에게 지시하고 있다 — 날조를 유발한다"
+
+
+def test_고친_항목은_최근_실적으로_목록에서_빠진다():
+    """★ 누적 손실은 만점 행이 쌓여도 줄지 않는다 — 이미 고친 걸 계속 고치라고 지시한다.
+
+    `loss = mx*n - sum` 에서 만점 행은 분모에 mx 를 더하고 분자에서 mx 를 빼므로 기여 0.
+    옛 행이 창 밖으로 나갈 때까지 최장 30일 — 그 사이 프롬프트 6칸을 헛되이 쓴다.
+    """
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+    from shared.db import get_db
+
+    pipe = set(__import__("JARVIS02_WRITER.post_scorer", fromlist=["x"])
+               .pipeline_controlled_items())
+    probe = next(k for k, v in sorted(RUBRIC_MAX.items())
+                 if v and k not in pipe and k.startswith("B"))
+    mx = float(RUBRIC_MAX[probe])
+
+    def _seed(score, n):
+        with get_db() as con:
+            for _ in range(n):
+                con.execute("INSERT INTO post_analysis (platform, theme, title, post_type, "
+                            "rubric_items, created_at) VALUES ('tistory','q','q','theme',?,"
+                            "datetime('now','localtime'))", (_jsonlib.dumps({probe: score}),))
+
+    _seed(0.0, _ql.WEAK_MIN_SAMPLE)                       # 과거: 전부 0점
+    assert probe in {d["key"] for d in _ql.weak_items(scope="theme", platform="tistory",
+                                                      days=3650)}, "0점 항목이 안 잡힌다"
+    _seed(mx, _ql.WEAK_RECENT_N)                          # 최근: 전부 만점
+    got = {d["key"] for d in _ql.weak_items(scope="theme", platform="tistory", days=3650)}
+    assert probe not in got, \
+        f"{probe} 를 고쳤는데도 계속 약점으로 지목한다 (최근 {_ql.WEAK_RECENT_N}건 전부 만점)"

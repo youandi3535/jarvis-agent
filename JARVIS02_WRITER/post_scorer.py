@@ -955,6 +955,53 @@ def item_index() -> dict:
     return out
 
 
+@_lru_cache(maxsize=1)
+def pipeline_controlled_items() -> frozenset:
+    """**파이프라인이 채우는** 항목들 — 작성 LLM 이 만들 수 없는 것 (2026-08-07 신설).
+
+    ★ 왜 필요한가
+      약점 항목을 작성 프롬프트에 주입하기 시작하면서, `내부 링크 1개: 최근 100% 의 글에서
+      0점 — 이번엔 반드시 채울 것` 같은 지시가 실제로 나갔다. 그런데 내부 링크·태그·
+      메타 설명은 **발행 파이프라인이 만든다**. 작성 LLM 에게 시키면 할 수 있는 일은
+      하나뿐 — **URL 을 지어내는 것** 이다(BLOG_SUPREME_LAW 제5조 진실성 정면 위반).
+      실제로 과거에 점수를 받은 3건이 전부 날조 URL 이었다.
+
+    ★ 목록을 박지 않는다 (② 동적 설계)
+      *생산물을 실제로 넣어 보고 점수가 움직이는 항목* 을 채점기에게 물어서 파생한다.
+      새 생산자가 생기면 아래 probe 에 그 산출물만 더하면 되고, **항목 목록은 자동**이다.
+    """
+    body = "코스피가 올랐다. 반도체가 지수를 이끌었다. 외국인이 순매수했다. " * 20
+    base = {"title": "코스피 상승", "keyword": "코스피", "post_type": "economic"}
+    try:
+        from JARVIS08_PUBLISH.internal_links import related_links_html
+        link = related_links_html("tistory") or \
+            '<hr/><ul><li><a href="https://example.com/1">이전 글</a></li></ul>'
+    except Exception:
+        link = '<hr/><ul><li><a href="https://example.com/1">이전 글</a></li></ul>'
+    out: set = set()
+    for plat in ("naver", "tistory"):
+        for pt in ("economic", "theme"):
+            try:
+                a = score_post({**base, "post_type": pt, "html": body, "content": body},
+                               platform=plat, post_type=pt)
+                b = score_post({**base, "post_type": pt,
+                                "html": body + link, "content": body + link,
+                                "tags": ["코스피", "반도체", "증시", "투자전략", "시장분석"],
+                                "meta_description": "가" * 150},
+                               platform=plat, post_type=pt)
+            except Exception:
+                continue
+            av = {i["key"]: i["score"] for i in item_scores(a)}
+            bv = {i["key"]: (i["score"], i["max"]) for i in item_scores(b)}
+            # ★ '값이 흔들렸다' 가 아니라 **0 → 만점** 인 항목만 잡는다.
+            #   생산물을 본문에 덧붙이면 문단 수 같은 것도 덩달아 움직여서(실측 B1_intro),
+            #   단순 차이로 보면 작성자가 고쳐야 할 항목까지 빼앗긴다.
+            #   0 → 만점은 "그 생산물이 곧 그 항목" 이라는 뜻이다.
+            out |= {k for k, (sc, mx) in bv.items()
+                    if mx and av.get(k) == 0 and sc >= mx}
+    return frozenset(out)
+
+
 def items_expand(compact: dict) -> list:
     """`items_compact()` 의 역변환 — 저장된 `{key: score}` → item_scores 와 같은 꼴.
 
