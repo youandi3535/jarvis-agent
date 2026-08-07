@@ -322,3 +322,73 @@ def test_생존신호를_못_읽으면_전원탓으로_돌리지_않는다(monke
     down, worst = D.downtime_in_window(_dt.datetime(2026, 8, 7, 7),
                                        _dt.datetime(2026, 8, 7, 9))
     assert down is False and worst == 0, "판정 불가인데 전원 오프로 단정했다"
+
+
+# ══════════════════════════════════════════════════════════════════
+# ④ 자기 자신과 교착하던 파일락 (2026-08-07)
+# ══════════════════════════════════════════════════════════════════
+def test_파이프라인_기록이_자기자신과_교착하지_않는다(tmp_path, monkeypatch):
+    """★ 실측 재현: 쓰기 1회에 **10.01초** 였다 (단독 락은 0.0001초).
+
+    원인 — `pipeline_activity` 가 `json_store.locked()` 와 **같은 `.lock` 파일**에
+    자체 flock 을 따로 걸었다. `_write()` → `write_json()` → `locked()` 로 중첩되는데
+    flock 은 *open file description* 단위라 **같은 프로세스의 두 fd 도 서로를 막는다.**
+    그 지연이 데몬 우아한 종료를 ~90초로 늘려 재시작이 실패하고 인스턴스가 2개가 됐다.
+
+    ★ 동작으로 검사한다 — "fcntl 이 없는가" 같은 꼴 검사는 다른 방식으로 사본이
+      되살아나면 못 잡는다. 느려지면 이 테스트가 즉시 죽는다.
+    """
+    import time
+    import shared.pipeline_activity as PA
+
+    monkeypatch.setattr(PA, "_DATA_FILE", tmp_path / "pipeline_activity.json")
+    t0 = time.time()
+    for i in range(3):
+        PA.mark_active(f"golden-{i}")
+    elapsed = time.time() - t0
+    assert elapsed < 1.0, (
+        f"쓰기 3회에 {elapsed:.1f}초 — 자기 잠금(회당 10초 타임아웃) 재발 의심")
+
+
+def test_크로스프로세스_락_구현이_한_벌뿐이다():
+    """락은 `json_store.locked()` 하나만 — 두 벌이면 서로를 막는다(원칙①).
+
+    `json_store.locked()` 는 재진입 가드를 갖고 있고 그 docstring 이
+    *"★ 재진입 필수 — 안 하면 자기 자신과 데드락"* 이라고 적어 두었다.
+    사본을 만들면 그 가드가 따라오지 않는다.
+    """
+    code = _code_only(ROOT / "shared/pipeline_activity.py")
+    assert "flock" not in code, (
+        "pipeline_activity 가 자체 flock 을 다시 갖고 있다 — json_store.locked() 를 쓸 것")
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑤ Tier-2 브리지가 traceback=None 에 막히지 않는다
+# ══════════════════════════════════════════════════════════════════
+def test_traceback이_NULL이어도_Tier2_브리지에_닿는다(monkeypatch):
+    """`error_log.traceback` 은 nullable — 실측 4,159/5,076(82%)이 NULL.
+
+    `dict.get(k, default)` 는 키가 **있고 값이 None** 이면 기본값을 쓰지 않는다.
+    그래서 프롬프트 조립의 `[:2000]` 이 TypeError 로 터졌고, `llm` arm 의 유일한
+    보상 경로가 조용히 막힌 채 status 만 wontfix 로 쌓였다.
+
+    ★ 단언을 'TypeError 가 안 난다' 로 쓰면 **안 된다** — 아래 `except Exception` 이
+      그 예외를 잡아 기록만 하고 밖으로 안 던진다. 가드를 지워도 통과하는
+      *가짜 회귀 테스트* 가 된다(메모리 뮤턴트로 실증: 도달 True/False 가 갈리는데
+      예외 전파는 양쪽 다 False). **판별식은 브리지 도달 여부 하나뿐이다.**
+    """
+    import JARVIS07_GUARDIAN.guardian_agent as ga
+    import JARVIS07_GUARDIAN.auto_repair as ar
+
+    seen: list = []
+    monkeypatch.setattr(ar, "run_auto_repair_targeted",
+                        lambda **kw: (seen.append(kw), False)[1])
+    if hasattr(ga, "_retry_original_job"):
+        monkeypatch.setattr(ga, "_retry_original_job", lambda *a, **k: None)
+
+    ga._try_sdk_targeted_fix(999999, {
+        "traceback": None, "error_type": "X", "source": "s", "module": "m",
+        "func_name": "f", "message": "m", "severity": "high"})
+
+    assert len(seen) == 1, (
+        "traceback=None 이 Tier-2 브리지를 막았다 — 밴딧 보상 경로가 끊긴다")
