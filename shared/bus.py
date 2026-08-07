@@ -267,7 +267,8 @@ def on_post_published_detail(theme: str, platform: str, title: str,
                               content: str = "", html: str = "",
                               source_keyword: str = "",
                               post_type: str = "",
-                              image_paths: list = None) -> int:
+                              image_paths: list = None,
+                              publish_meta: "dict | None" = None) -> int:
     """발행 직후 호출 — DB에 분석 대기 레코드 생성 후 이벤트 발행. 반환: analysis_id.
 
     source_keyword: RADAR pipeline 에서 발행 트리거 시 trends.keyword 와 동일한
@@ -294,6 +295,9 @@ def on_post_published_detail(theme: str, platform: str, title: str,
         source_keyword=source_keyword,
         post_type=post_type,
         image_paths=_json.dumps(image_paths or []),
+        # ★ 발행 메타(태그·메타 설명)를 DB 로 건넨다 (2026-08-07).
+        #   draft 는 발행 프로세스 안에서만 산다 — DB 가 프로세스 경계를 넘는 유일한 통로다.
+        publish_meta=publish_meta,
     )
     publish(EventType.POST_PUBLISHED, "WRITER", {
         "theme": theme, "platform": platform, "title": title,

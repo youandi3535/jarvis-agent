@@ -1649,7 +1649,13 @@ __all__ = [
     "parse_seo_block", "parse_diff_block",
     "parse_seo_meta", "parse_svg_rules",
     "audit_factuality",
+    # ★ 2026-08-07 — 여백 압축을 blocks 뿐 아니라 *저장·채점되는 html* 에도 걸기 위해
+    #   이름만 공개한다(사본 금지). 압축 규칙의 주인은 여전히 이 파일이다.
+    "compress_spacing",
 ]
+
+# 공개 이름 — 본체는 `_compress_excessive_whitespace` 하나뿐이다(별칭이지 사본이 아니다).
+compress_spacing = _compress_excessive_whitespace
 # NOTE: ADR 008 Phase 1 — 이미지 함수는 JARVIS06_IMAGE 단일 진입점 강제.
 #   enforce_paragraph_pair_image / enforce_image_between_paragraphs / compute_unused_image_pool /
 #   _dedupe_* / _validate_image_files / _is_heading_img_path / _is_h2_header

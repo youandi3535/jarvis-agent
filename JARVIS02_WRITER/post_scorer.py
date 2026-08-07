@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 import os
 import logging
+import logging as _logging
+from functools import lru_cache as _lru_cache
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -171,8 +173,17 @@ def target_phrase(key: str, unit: str = "개") -> str:
 def _strip(html: str) -> str:
     return re.sub(r"<[^>]+>", " ", html or "")
 
+#   ★ 소수점·자릿점을 문장 종결로 세지 않는다 (2026-08-07 — 실측 계측 결함).
+#     종전 정규식은 `[.!?。]` 를 무조건 종결로 봐서 **"8.7%" 를 문장 2개**로 셌다.
+#     경제·테마 글은 수치가 본문의 골격이라, 문장 수를 쓰는 B1(도입부)·B2(문단)·
+#     B10(면책)·N4(섹션 문장수)가 전부 부풀려진 값으로 채점되고 있었다
+#     (B2_paragraphs 손실의 49% 가 이 한 줄에서 나왔다).
+#     `(?<!\d)\.(?!\d)` — 앞뒤가 숫자인 마침표는 종결이 아니다. `!?。` 는 그대로 종결.
+_SENT_END = re.compile(r'[가-힣a-zA-Z0-9][^.!?。]*(?:(?<!\d)\.(?!\d)|[!?。])')
+
+
 def _sentences(text: str) -> int:
-    return len(re.findall(r'[가-힣a-zA-Z0-9][^.!?。]*[.!?。]', _strip(text)))
+    return len(_SENT_END.findall(_strip(text)))
 
 def _korean(html: str) -> int:
     from JARVIS02_WRITER.length_manager import count as _klen
@@ -817,14 +828,56 @@ def score_post(
     }
 
 
-def deducted_items(sr: dict) -> list:
-    """★ 100점 루브릭에서 *감점된 항목만* 추출 — 발행 후 개선 제안의 단일 기준 (사용자 박제 2026-07-24).
+def draft_from_row(row: dict) -> dict:
+    """저장된 `post_analysis` 행 → **채점용 draft** (2026-08-07 신설).
 
-    score_post(...) 결과 sr 을 받아 각 섹션·항목 중 score < max 인 것을 감점 큰 순으로 반환한다.
-    이 리스트가 "부족한 점" 의 유일한 출처 — 발행 후 품질 분석은 여기 항목만 개선안으로 만든다
-    (발행 전 채점 기준과 100% 동일). 항목명·만점은 하드코딩하지 않고 sr 에서 파생(② 동적 설계).
+    ★ 왜 단일 진입점이 필요했나
+      종전엔 `post_quality_analyzer` 안에 이 조립이 **인라인**으로 있었고, 거기서
+      `"keyword": title` 로 넘겼다. 제목 전체 문자열이 본문에 통째로 나오는 일은 없으므로
+      키워드 의존 항목들이 구조적으로 죽었다 — 실측 `N5_kw_density` 만점률 **0%**
+      (40건 전부 정확히 1.5점, 분산 0) · `N6_kw_in_body` 평균 0.55/2.
+      게다가 발행 메타(태그·메타 설명)를 싣지 않아 `N7`·`T7` 도 발행 후엔 다시 0점이었다.
+      "발행 전엔 만점, DB 점수는 0점" — 학습이 개선을 벌로 받는 구조다.
+
+    조립을 여기 하나로 모으면 *발행 전 draft* 와 *발행 후 복원 draft* 가 같은 것을 뜻하게 된다.
+    """
+    import json as _json
+    body = row.get("original_html") or row.get("original_content") or ""
+    meta = row.get("publish_meta")
+    if isinstance(meta, str):
+        try:
+            meta = _json.loads(meta)
+        except Exception:
+            meta = {}
+    meta = meta if isinstance(meta, dict) else {}
+    return {
+        "html": body, "content": body,
+        "title": row.get("title") or "",
+        # ★ 제목이 아니라 **실제 주제 키워드**. 없으면 theme 로 파생하고, 그것도 없으면 빈 값
+        #   (빈 값이면 채점기가 '키워드 없음' 분기로 빠진다 — 무상 만점이라 좋아 보이지만
+        #    실은 측정을 안 하는 것이다. 그래서 source_keyword 를 최대한 살린다).
+        "keyword": (row.get("source_keyword") or row.get("theme") or "").strip(),
+        "post_type": row.get("post_type") or "",
+        "platform": row.get("platform") or "",
+        "tags": meta.get("tags") or [],
+        "meta_description": meta.get("meta_description") or "",
+    }
+
+
+def item_scores(sr: dict) -> list:
+    """★ 채점된 **모든 항목** — 만점 항목까지 포함한 단일 진실 소스 (2026-08-07 신설).
+
+    ★ 왜 신설했나 (사용자 요구: "결국 100점 맞기 위해서 학습하는 거 아냐?")
+      종전엔 `deducted_items()` 하나뿐이라 **만점 항목이 시스템 눈에 보이지 않았다**.
+      그래서 "만점이던 항목이 떨어졌다" 를 감지할 수단이 없었다 — 실측으로 퇴행 45건이
+      개선 27건보다 많았는데 아무도 몰랐다. *유지* 도 학습 대상이다.
+
+    `deducted_items()` 는 이 함수의 **필터**다 — 항목 목록을 만드는 로직을 두 곳에 두지
+    않는다(① 단일 진입점). 항목명·만점은 sr 에서 파생하며 코드에 박지 않는다(② 동적 설계).
 
     Returns: [{"section","key","name","score","max","gap"}]  (gap=max-score, 내림차순)
+      · max=0 인 항목은 *그 조합에 적용되지 않는 항목* 이라 제외한다
+        (예: 네이버 글에 티스토리 전용 T7_meta_desc). 조합별 항목 수가 다른 이유다.
     """
     out: list = []
     for skey, sec in (sr.get("sections") or {}).items():
@@ -835,8 +888,81 @@ def deducted_items(sr: dict) -> list:
                 continue
             _sc = float(iv.get("score", 0))
             _mx = float(iv.get("max", 0))
-            if _sc < _mx:
-                out.append({"section": skey, "key": ikey, "name": iv.get("name", ikey),
-                            "score": _sc, "max": _mx, "gap": round(_mx - _sc, 2)})
+            if not _mx:
+                continue                      # 이 조합에 적용되지 않는 항목
+            out.append({"section": skey, "key": ikey, "name": iv.get("name", ikey),
+                        "score": _sc, "max": _mx, "gap": round(_mx - _sc, 2)})
+    out.sort(key=lambda x: -x["gap"])
+    return out
+
+
+def deducted_items(sr: dict) -> list:
+    """★ 100점 루브릭에서 *감점된 항목만* 추출 — 발행 후 개선 제안의 단일 기준 (사용자 박제 2026-07-24).
+
+    이 리스트가 "부족한 점" 의 유일한 출처 — 발행 후 품질 분석은 여기 항목만 개선안으로 만든다
+    (발행 전 채점 기준과 100% 동일).
+
+    ★ 2026-08-07 — `item_scores()` 의 **필터**로 재정의. 종전엔 순회 로직을 자체 보유했다.
+    """
+    return [d for d in item_scores(sr) if d["gap"] > 0]
+
+
+def items_compact(sr: dict) -> dict:
+    """항목 상세를 **저장용 최소 형태**로 — `{항목key: 점수}`.
+
+    ★ 만점·섹션·표시명을 함께 저장하지 않는 이유 (② 동적 설계)
+      셋 다 채점기가 이미 아는 값이다. 함께 저장하면 배점을 조정한 날부터 **옛 행이
+      옛 배점을 주장**하는 복사본 사고가 난다(CLAUDE.md "복사본을 진실로 믿지 말 것").
+      읽을 때 `RUBRIC_MAX` 와 `item_index()` 로 파생한다 — 진실은 언제나 채점기에 있다.
+    """
+    return {d["key"]: d["score"] for d in item_scores(sr)}
+
+
+@_lru_cache(maxsize=1)
+def item_index() -> dict:
+    """항목 key → {"section","name"} — **채점기 자신에서 파생** (② 동적 설계).
+
+    저장된 `{key: score}` 를 사람이 읽을 형태로 되돌릴 때 쓴다. 이름표를 따로 적어 두지
+    않는 이유는 `items_compact()` 와 같다 — 항목이 추가·개명되면 **자동으로 따라온다**.
+    빈 초안을 4조합으로 한 번씩 채점해 이름을 거둬들인다(LLM 호출 0 · 캐시 1회).
+    """
+    out: dict = {}
+    _lvl = log.level
+    log.setLevel(_logging.WARNING)          # 파생용 채점의 info 로그는 남기지 않는다
+    try:
+        for _plat in ("naver", "tistory"):
+            for _pt in ("economic", "theme"):
+                try:
+                    _sr = score_post({"html": "", "content": "", "title": "",
+                                      "keyword": "", "post_type": _pt},
+                                     platform=_plat, post_type=_pt)
+                except Exception:
+                    continue
+                for _sk, _sec in (_sr.get("sections") or {}).items():
+                    for _k, _iv in ((_sec or {}).get("items") or {}).items():
+                        if isinstance(_iv, dict):
+                            out.setdefault(_k, {"section": _sk,
+                                                "name": _iv.get("name", _k)})
+    finally:
+        log.setLevel(_lvl)
+    return out
+
+
+def items_expand(compact: dict) -> list:
+    """`items_compact()` 의 역변환 — 저장된 `{key: score}` → item_scores 와 같은 꼴.
+
+    만점은 `RUBRIC_MAX`(단일 진실 소스), 섹션·이름은 `item_index()` 에서 파생한다.
+    """
+    idx = item_index()
+    out = []
+    for k, sc in (compact or {}).items():
+        _mx = float(RUBRIC_MAX.get(k, 0))
+        if not _mx:
+            continue                        # 폐지된 항목 — 옛 행이 새 코드를 오염시키지 않는다
+        meta = idx.get(k) or {}
+        _sc = float(sc)
+        out.append({"section": meta.get("section", ""), "key": k,
+                    "name": meta.get("name", k), "score": _sc, "max": _mx,
+                    "gap": round(_mx - _sc, 2)})
     out.sort(key=lambda x: -x["gap"])
     return out

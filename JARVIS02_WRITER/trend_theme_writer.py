@@ -219,6 +219,9 @@ def _build_blocks(collected, platform: str, img_dir: Path,
     return {
         "success": True, "title": title, "content": content,
         "html": html, "blocks": blocks, "error": "",
+        # ★ 발행 메타 승계 (2026-08-07) — 사유는 경제 writer 와 동일.
+        "tags":             result.get("tags") or [],
+        "meta_description": result.get("meta_description") or "",
     }
 
 
@@ -251,15 +254,12 @@ def _publish_tistory(draft: dict, theme: str, sector: str,
         from JARVIS08_PUBLISH.platforms import post_to_tistory
         from JARVIS06_IMAGE.draft_processor import publish_assembled
 
-        # ★ 태그는 JARVIS08 단일 진입점 (2026-07-29). 종전엔 여기서
-        #   `[theme, sector, '테마주', '주식', '투자']` 고정 템플릿을 만들었다 —
-        #   ① 모든 테마 글이 같은 태그라 검색 변별력 0 ② BLOG_SUPREME_LAW 제1-B조
-        #   (고정 풀·고정 템플릿 금지) 위반 ③ 실측 네이버 4개로 NAVER_HASHTAG_MIN(5)
-        #   미달이라 post_scorer N7 감점. 테마명·섹터는 seed 로 살리고 나머지는 LLM 이 채운다.
-        #   (특수기호 제거는 generate_tags 안의 sanitize 가 담당 — 제14조 그대로 준수)
-        from JARVIS08_PUBLISH.tags import generate_tags as _gen_tags
-        tags = _gen_tags(draft.get("title", theme), draft.get("content", ""),
-                         "tistory", seed_tags=[theme, sector])
+        # ★ 태그는 **대본 완성 시점에 이미 만들어져 draft 에 실려 있다** (2026-08-07).
+        #   종전엔 여기(발행 = Layer 4)에서 만들었는데, 채점은 그보다 앞(Layer 3)이라
+        #   채점기가 보는 draft["tags"] 가 늘 비어 N7_hashtags 가 **전건 0점**이었다.
+        #   생성자는 여전히 JARVIS08 `generate_tags` 하나다 — 부르는 *시점* 만 앞당겼다(①).
+        #   여기서 다시 만들면 **채점한 태그와 발행된 태그가 갈라진다**.
+        tags = draft.get("tags") or []
 
         def _pub_fn(blocks, title, **_kw):
             return post_to_tistory(
@@ -281,6 +281,11 @@ def _publish_tistory(draft: dict, theme: str, sector: str,
                 _emit(theme=theme, platform="tistory", title=draft["title"],
                       url=_last_url("tistory"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=draft["content"], html=draft["html"],
+                      # ★ 발행 메타 동봉 (2026-08-07) — 발행 후 채점이 *발행 전과 같은*
+                      #   태그·메타 설명을 보게 한다. 빠뜨리면 그 조합만 N7·T7 이 0점으로
+                      #   기록돼 "개선했는데 보상이 깎이는" 상태가 된다.
+                      publish_meta={"tags": draft.get("tags") or [],
+                                    "meta_description": draft.get("meta_description") or ""},
                       source_keyword=theme, post_type="theme",
                       image_paths=_imgs)
             except Exception as e:
@@ -303,15 +308,12 @@ def _publish_naver(draft: dict, theme: str, sector: str) -> dict:
     try:
         from JARVIS08_PUBLISH.platforms import post_to_naver
         from JARVIS06_IMAGE.draft_processor import publish_assembled
-        # ★ 태그는 JARVIS08 단일 진입점 (2026-07-29). 종전엔 여기서
-        #   `[theme, sector, '테마주', '주식', '투자']` 고정 템플릿을 만들었다 —
-        #   ① 모든 테마 글이 같은 태그라 검색 변별력 0 ② BLOG_SUPREME_LAW 제1-B조
-        #   (고정 풀·고정 템플릿 금지) 위반 ③ 실측 네이버 4개로 NAVER_HASHTAG_MIN(5)
-        #   미달이라 post_scorer N7 감점. 테마명·섹터는 seed 로 살리고 나머지는 LLM 이 채운다.
-        #   (특수기호 제거는 generate_tags 안의 sanitize 가 담당 — 제14조 그대로 준수)
-        from JARVIS08_PUBLISH.tags import generate_tags as _gen_tags
-        tags = _gen_tags(draft.get("title", theme), draft.get("content", ""),
-                         "naver", seed_tags=[theme, sector])
+        # ★ 태그는 **대본 완성 시점에 이미 만들어져 draft 에 실려 있다** (2026-08-07).
+        #   종전엔 여기(발행 = Layer 4)에서 만들었는데, 채점은 그보다 앞(Layer 3)이라
+        #   채점기가 보는 draft["tags"] 가 늘 비어 N7_hashtags 가 **전건 0점**이었다.
+        #   생성자는 여전히 JARVIS08 `generate_tags` 하나다 — 부르는 *시점* 만 앞당겼다(①).
+        #   여기서 다시 만들면 **채점한 태그와 발행된 태그가 갈라진다**.
+        tags = draft.get("tags") or []
 
         def _pub_fn(blocks, title, **_kw):
             return post_to_naver(
@@ -332,6 +334,11 @@ def _publish_naver(draft: dict, theme: str, sector: str) -> dict:
                 _emit(theme=theme, platform="naver", title=draft["title"],
                       url=_last_url("naver"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=draft["content"], html=draft["html"],
+                      # ★ 발행 메타 동봉 (2026-08-07) — 발행 후 채점이 *발행 전과 같은*
+                      #   태그·메타 설명을 보게 한다. 빠뜨리면 그 조합만 N7·T7 이 0점으로
+                      #   기록돼 "개선했는데 보상이 깎이는" 상태가 된다.
+                      publish_meta={"tags": draft.get("tags") or [],
+                                    "meta_description": draft.get("meta_description") or ""},
                       source_keyword=theme, post_type="theme",
                       image_paths=_imgs)
             except Exception as e:

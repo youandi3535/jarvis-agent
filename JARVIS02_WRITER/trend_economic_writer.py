@@ -361,6 +361,11 @@ def ts_generate_draft(keyword: str, sector: str, reason: str,
             "visual_paths": visual_paths,
             "source_docs": source_docs or [],
             "collected": collected,
+            # ★ 발행 메타 승계 (2026-08-07) — process_draft ⑫ 가 만든 태그·메타 설명을
+            #   draft 에 실어야 **채점기가 실제 발행 메타를 본다**. 종전엔 태그가
+            #   발행 시점에 따로 만들어져 채점 시점의 draft["tags"] 는 늘 비어 있었다.
+            "tags":             result.get("tags") or [],
+            "meta_description": result.get("meta_description") or "",
         }
 
     except Exception as e:
@@ -396,6 +401,10 @@ def ts_publish(draft: dict) -> dict:
                 html_content=draft['content'],
                 blocks=blocks,
                 category=ECONOMIC_CATEGORY,
+                # ★ draft 의 태그를 넘긴다 (2026-08-07). 종전엔 아무것도 안 넘겨
+                #   발행자 내부 `_generate_smart_tags` shim 이 발행 시점에 따로
+                #   만들었다 — 채점한 태그와 발행된 태그가 서로 달랐다.
+                tags=draft.get("tags") or None,
             )
 
         result = publish_assembled(draft, _pub_fn, "tistory")
@@ -411,6 +420,11 @@ def ts_publish(draft: dict) -> dict:
                 _emit(theme=keyword, platform="tistory", title=draft['title'],
                       url=_last_url("tistory"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=draft.get('content', ''), html=html,
+                      # ★ 발행 메타 동봉 (2026-08-07) — 발행 후 채점이 *발행 전과 같은*
+                      #   태그·메타 설명을 보게 한다. 빠뜨리면 그 조합만 N7·T7 이 0점으로
+                      #   기록돼 "개선했는데 보상이 깎이는" 상태가 된다.
+                      publish_meta={"tags": draft.get("tags") or [],
+                                    "meta_description": draft.get("meta_description") or ""},
                       source_keyword=keyword, post_type="economic", image_paths=_imgs)
                 print(f"  ✅ [DB] post_analysis·posts 저장 완료 (이미지 {len(_imgs)}개)")
             except Exception as _dbe:
@@ -631,6 +645,11 @@ def nv_generate_draft(keyword: str, sector: str, reason: str,
             "visual_paths": visual_paths,
             "source_docs": source_docs or [],
             "collected": collected,
+            # ★ 발행 메타 승계 (2026-08-07) — process_draft ⑫ 가 만든 태그·메타 설명을
+            #   draft 에 실어야 **채점기가 실제 발행 메타를 본다**. 종전엔 태그가
+            #   발행 시점에 따로 만들어져 채점 시점의 draft["tags"] 는 늘 비어 있었다.
+            "tags":             result.get("tags") or [],
+            "meta_description": result.get("meta_description") or "",
         }
 
     except Exception as e:
@@ -665,6 +684,10 @@ def nv_publish(draft: dict, ts_keyword: str = '') -> dict:
                 html_content=draft['content'],
                 blocks=blocks,
                 category=ECONOMIC_CATEGORY,
+                # ★ draft 의 태그를 넘긴다 (2026-08-07). 종전엔 아무것도 안 넘겨
+                #   발행자 내부 `_generate_smart_tags` shim 이 발행 시점에 따로
+                #   만들었다 — 채점한 태그와 발행된 태그가 서로 달랐다.
+                tags=draft.get("tags") or None,
             )
 
         result = publish_assembled(draft, _pub_fn, "naver")
@@ -678,6 +701,11 @@ def nv_publish(draft: dict, ts_keyword: str = '') -> dict:
                 _emit(theme=keyword, platform="naver", title=draft['title'],
                       url=_last_url("naver"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=draft.get('content', ''), html=draft.get('html', ''),
+                      # ★ 발행 메타 동봉 (2026-08-07) — 발행 후 채점이 *발행 전과 같은*
+                      #   태그·메타 설명을 보게 한다. 빠뜨리면 그 조합만 N7·T7 이 0점으로
+                      #   기록돼 "개선했는데 보상이 깎이는" 상태가 된다.
+                      publish_meta={"tags": draft.get("tags") or [],
+                                    "meta_description": draft.get("meta_description") or ""},
                       source_keyword=keyword, post_type="economic", image_paths=_imgs)
                 print(f"  ✅ [DB] post_analysis·posts 저장 완료 (이미지 {len(_imgs)}개)")
             except Exception as _dbe:

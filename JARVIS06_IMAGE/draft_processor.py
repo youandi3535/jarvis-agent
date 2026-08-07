@@ -611,13 +611,49 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
     except Exception as _ee:
         log.warning(f"[{platform}] enforce_supreme_law 오류(무시): {_ee}")
 
-    print(f"  ✅ [{platform}] process_draft 완료 — 블록 {len(blocks)}개")
+    # ⑪ 저장·채점되는 html 에도 여백 규정 집행 (★ 2026-08-07 — 배선 결함 교정)
+    #   ★ 왜 필요했나: ⑩ 의 법률 집행은 `blocks` 에만 걸렸고 `html` 은 **집행 전 상태**로
+    #     반환됐다. 발행되는 것은 blocks, 저장·채점되는 것은 html — 즉 채점기는
+    #     '발행된 글' 을 한 번도 본 적이 없었다. B18_spacing 이 230건 중 평균 1.15/2 인
+    #     이유가 이것이다(글이 나쁜 게 아니라 **다른 물건을 재고 있었다**).
+    #     압축 함수를 여기 복사하지 않는다 — 주인은 law_enforcer 하나다(①).
+    try:
+        from JARVIS02_WRITER.law_enforcer import compress_spacing as _cs
+        html, _ncomp = _cs(html)
+        if _ncomp:
+            log.info(f"[{platform}] 저장 html 여백 압축 {_ncomp}건")
+    except Exception as _ee:
+        log.warning(f"[{platform}] html 여백 압축 오류(무시): {_ee}")
+
+    # ⑫ 발행 메타 (태그·메타 설명) — 채점 *전* 에 만든다 (★ 2026-08-07)
+    #   ★ 왜 여기인가: 종전엔 태그가 발행(Layer 4) 안에서 만들어져 채점(Layer 3)이
+    #     볼 수 없었고, 메타 설명은 생산자가 아예 없었다. 그래서 N7_hashtags·T7_meta_desc
+    #     가 **전건 0점** — 글을 아무리 잘 써도 못 받는 5점이었다.
+    #     `process_draft` 는 4조합이 전부 지나는 단일 깔때기라, 여기 한 번 걸면 ③이 선다.
+    #   실패해도 발행을 막지 않는다 — 메타가 없으면 종전과 같은 0점일 뿐이다.
+    _meta = {"tags": [], "meta_description": ""}
+    try:
+        from JARVIS08_PUBLISH.post_meta import build_post_meta as _bpm
+        _seed = []
+        try:
+            _m = getattr(collected, "meta", None) or {}
+            _seed = [str(_m.get(k)) for k in ("theme", "sector", "keyword") if _m.get(k)]
+        except Exception:
+            pass
+        _meta = _bpm(title, html, platform, seed_tags=_seed or None)
+    except Exception as _ee:
+        log.warning(f"[{platform}] 발행 메타 생성 오류(발행은 계속): {_ee}")
+
+    print(f"  ✅ [{platform}] process_draft 완료 — 블록 {len(blocks)}개 · "
+          f"태그 {len(_meta['tags'])}개 · 메타 {len(_meta['meta_description'])}자")
     return {
         "blocks":         blocks,
         "thumbnail_path": thumbnail_path,
         "title":          title,
         "html":           html,
         "html_path":      str(html_path),   # ★ Step 9: 경제 반환 계약 호환 (재저장 금지)
+        "tags":             _meta["tags"],
+        "meta_description": _meta["meta_description"],
     }
 
 

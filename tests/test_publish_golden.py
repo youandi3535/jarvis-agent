@@ -1960,3 +1960,288 @@ def test_커밋_잔여를_훅이_검사한다():
     # 검사가 검사기 호출 *앞* 에 있어야 한다 — 뒤면 위반 시 도달하지 못한다
     assert src.index("git status --porcelain") < src.index('python3 "$SCRIPT"'), \
         "잔여 검사가 검사기 호출 뒤에 있다 — 위반 시 도달 못 한다"
+
+
+# ══════════════════════════════════════════════════════════════════
+# 항목별 루브릭 학습 (2026-08-07) — "결국 100점 맞기 위해서 학습하는 거 아냐?"
+#   총점 스칼라 하나만 흐르던 학습에 **항목 단위 신호** 를 연결한 배선의 회귀 방어.
+#   전부 *동작* 으로 판정한다 — 소스 문자열 검사는 돌려본 적 없는 코드를 통과시킨다
+#   (실제로 `record_directive_violations` 가 그렇게 초록인 채 죽어 있었다).
+# ══════════════════════════════════════════════════════════════════
+
+from pathlib import Path as _Path
+
+_ROOT = _Path(__file__).resolve().parent.parent
+
+
+def _combos():
+    """4조합을 **파생**한다 — ['naver','tistory'] × ('economic','theme') 을 박지 않는다."""
+    from JARVIS08_PUBLISH.publish_ledger import expected_platforms, publish_slots
+    plats = sorted(expected_platforms())
+    types = sorted({pt for pt, _h, _m in publish_slots()})
+    assert plats and types, "조합 파생 실패 — 검사 전제가 깨졌다"
+    return [(p, t) for p in plats for t in types]
+
+
+def test_4조합_대본이_발행메타를_승계한다():
+    """★ draft 에 tags·meta_description 이 실려야 채점기가 *발행되는 메타* 를 본다.
+
+    종전엔 태그가 발행(Layer 4) 안에서 만들어져 채점(Layer 3)이 못 봤고,
+    메타 설명은 생산자가 아예 없었다 → N7_hashtags·T7_meta_desc **전건 0점**.
+    """
+    import ast
+
+    for f, fn in (("JARVIS02_WRITER/trend_economic_writer.py", "nv_generate_draft"),
+                  ("JARVIS02_WRITER/trend_economic_writer.py", "ts_generate_draft"),
+                  ("JARVIS02_WRITER/trend_theme_writer.py", "_build_blocks")):
+        tree = ast.parse((_ROOT / f).read_text(encoding="utf-8"))
+        tgt = next((n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == fn), None)
+        assert tgt, f"{f}::{fn} 을 찾을 수 없다"
+        keys = set()
+        for n in ast.walk(tgt):
+            if isinstance(n, ast.Dict):
+                keys |= {k.value for k in n.keys if isinstance(k, ast.Constant)}
+        assert {"tags", "meta_description"} <= keys, f"{fn} 이 발행 메타를 승계하지 않는다"
+
+
+def test_발행자에_tags를_넘기지_않는_경로가_없다():
+    """한 경로라도 빠지면 그 조합만 발행자 shim 이 *다른 태그* 를 만든다 — 채점과 갈라진다."""
+    import ast
+
+    seen = 0
+    for f in ("JARVIS02_WRITER/trend_economic_writer.py",
+              "JARVIS02_WRITER/trend_theme_writer.py"):
+        tree = ast.parse((_ROOT / f).read_text(encoding="utf-8"))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and getattr(n.func, "id", "") in (
+                    "post_to_naver", "post_to_tistory"):
+                seen += 1
+                assert any(k.arg == "tags" for k in n.keywords), \
+                    f"{f}:{n.lineno} 발행 호출에 tags 가 없다"
+    assert seen >= len(_combos()), f"발행 호출 {seen}개 — 4조합을 못 덮는다"
+
+
+def test_발행메타가_DB_경계를_넘는다():
+    """emit 4곳 전부 publish_meta 를 실어야 **발행 후 채점** 이 같은 값을 본다.
+
+    한 곳이라도 빠지면 그 조합만 발행 전 만점·DB 0점 — "개선했는데 보상이 깎이는" 상태.
+    """
+    import ast
+
+    tot = ok = 0
+    for f in ("JARVIS02_WRITER/trend_theme_writer.py",
+              "JARVIS02_WRITER/trend_economic_writer.py"):
+        tree = ast.parse((_ROOT / f).read_text(encoding="utf-8"))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_emit":
+                tot += 1
+                ok += any(k.arg == "publish_meta" for k in n.keywords)
+    assert tot >= 4, f"emit 지점 {tot}개 — 4조합을 못 덮는다"
+    assert ok == tot, f"publish_meta 누락 {tot - ok}곳"
+
+
+def test_발행메타가_실제로_점수를_만든다():
+    """★ 코드 존재가 아니라 **채점 결과** 로 판정 (patch_effective 표준)."""
+    from JARVIS02_WRITER.post_scorer import draft_from_row, item_scores, score_post
+
+    body = ("코스피가 상승 마감했다. 반도체가 지수를 이끌었다. 외국인이 순매수했다. " * 20)
+    base = {"title": "코스피 상승 마감", "source_keyword": "코스피",
+            "original_html": body}
+    got = {}
+    for plat, pt in _combos():
+        row = dict(base, platform=plat, post_type=pt)
+        a = score_post(draft_from_row(row), platform=plat, post_type=pt)
+        import json as _json
+        row["publish_meta"] = _json.dumps(
+            {"tags": ["코스피", "반도체", "증시", "투자전략", "시장분석"],
+             "meta_description": "가" * 150})
+        b = score_post(draft_from_row(row), platform=plat, post_type=pt)
+        got[(plat, pt)] = round(b["total"] - a["total"], 2)
+        keys = {i["key"] for i in item_scores(b)}
+        # 플랫폼 전용 항목이 그 플랫폼에서만 채점되는지 (조합 파생의 건전성)
+        assert ("N7_hashtags" in keys) == (plat == "naver")
+        assert ("T7_meta_desc" in keys) == (plat == "tistory")
+    assert all(v > 0 for v in got.values()), f"발행 메타가 점수를 못 만든다: {got}"
+
+
+def test_채점_draft_조립은_한_곳이다():
+    """`draft_from_row` 밖에서 채점용 draft 를 조립하면 keyword 가 또 title 이 된다.
+
+    종전 인라인 조립이 `"keyword": title` 이라 N5_kw_density 만점률이 **0%** 였다.
+    """
+    import inspect
+    from JARVIS02_WRITER.post_scorer import draft_from_row
+
+    d = draft_from_row({"title": "제목", "source_keyword": "코스피",
+                        "original_html": "<p>본문</p>"})
+    assert d["keyword"] == "코스피", f"keyword 가 실제 키워드가 아니다: {d['keyword']!r}"
+    assert d["keyword"] != d["title"], "keyword 가 제목으로 대체됐다 — 옛 결함 재발"
+
+    src = _code_only(inspect.getsource(
+        __import__("JARVIS03_RADAR.post_quality_analyzer", fromlist=["x"])))
+    assert '"keyword": title' not in src.replace(" ", ""), \
+        "분석기에 keyword=title 인라인 조립이 되살아났다"
+
+
+def test_만점_항목도_관측된다():
+    """`deducted_items` 만으로는 **만점이 떨어지는 것** 을 감지할 수 없다."""
+    from JARVIS02_WRITER.post_scorer import deducted_items, item_scores, score_post
+
+    body = "코스피가 올랐다. " * 40
+    sr = score_post({"html": body, "content": body, "title": "t",
+                     "keyword": "코스피", "post_type": "economic"},
+                    platform="naver", post_type="economic")
+    allx, ded = item_scores(sr), deducted_items(sr)
+    assert len(allx) > len(ded), "전체 항목이 감점 항목보다 많아야 한다(만점 항목 존재)"
+    assert all(d["gap"] > 0 for d in ded), "deducted_items 에 만점 항목이 섞였다"
+    assert {d["key"] for d in ded} <= {d["key"] for d in allx}, \
+        "deducted_items 가 item_scores 의 부분집합이 아니다 — 두 벌로 갈라졌다"
+
+
+def test_항목상세_왕복이_무손실이다():
+    """저장은 `{key: score}` 만 한다 — 만점·이름은 채점기에서 파생(② 복사본 금지)."""
+    from JARVIS02_WRITER.post_scorer import (item_scores, items_compact,
+                                             items_expand, score_post)
+
+    body = "코스피가 올랐다. " * 40
+    sr = score_post({"html": body, "content": body, "title": "t",
+                     "keyword": "코스피", "post_type": "theme"},
+                    platform="tistory", post_type="theme")
+    a = {x["key"]: (x["score"], x["max"], x["name"]) for x in item_scores(sr)}
+    b = {x["key"]: (x["score"], x["max"], x["name"]) for x in items_expand(items_compact(sr))}
+    assert a == b, f"왕복 손실 {len({k for k in a if a[k] != b.get(k)})}건"
+
+
+def test_지침_보상이_항목별로_갈린다():
+    """★ 신용할당 — 같은 글이라도 지침마다 보상이 달라야 한다.
+
+    실측으로 보상 배치 53개 전부 `distinct reward = 1` 이었다. 그 상태에서는
+    어느 지침이 기여했는지 구분이 0이라 "검증된 지침만 생존" 이 성립하지 않는다.
+    """
+    from JARVIS07_GUARDIAN.quality_learner import insight_target_item, item_reward
+
+    key = insight_target_item("economic:seo_메타 설명 길이(140-160)")
+    assert key == "T7_meta_desc", f"지침→항목 역추적 실패: {key!r}"
+    assert insight_target_item("economic:seo_존재하지않는항목명") is None
+
+    ri = {"T7_meta_desc": 0.0, "B1_intro": 6.0, "B18_spacing": 1.0}
+    vals = {k: item_reward(k, ri) for k in ri}
+    assert vals["T7_meta_desc"] == 0.0 and vals["B1_intro"] == 1.0
+    assert len(set(vals.values())) >= 3, f"보상이 갈리지 않는다: {vals}"
+    assert item_reward("없는항목", ri) is None
+
+
+def test_약점항목은_실측에서_파생된다():
+    """항목 목록을 코드에 박으면 고쳐도 계속 지목한다 — DB 집계에서 파생해야 한다."""
+    import inspect
+    import ast
+
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+
+    got = _ql.weak_items(days=3650)
+    assert isinstance(got, list), f"실행이 리스트를 안 돌려준다: {got!r}"
+    # ★ 빈 리스트를 통과시키면 "약점 없음" 과 "함수가 죽음" 을 구분 못 한다.
+    #   테스트는 **격리 DB** 를 쓰므로(conftest) 운영 데이터에 기댈 수 없다 —
+    #   최소 표본을 직접 심고 그것이 약점으로 잡히는지 본다.
+    import json as _json
+
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
+    from shared.db import get_db
+
+    _probe = next(k for k, v in sorted(RUBRIC_MAX.items()) if v)   # 파생 — key 를 박지 않는다
+    with get_db() as _con:
+        for _i in range(_ql.WEAK_MIN_SAMPLE):
+            _con.execute(
+                "INSERT INTO post_analysis (platform, theme, title, post_type, rubric_items, "
+                "created_at) VALUES ('naver','probe','probe','economic',?,"
+                "datetime('now','localtime'))",
+                (_json.dumps({_probe: 0.0}),))
+    got = _ql.weak_items(days=3650)
+    assert got, "심어둔 0점 표본을 약점으로 못 잡는다 — 파생이 죽었다"
+    assert any(d["key"] == _probe for d in got), f"{_probe} 가 약점 목록에 없다: {got}"
+    for d in got:
+        assert {"key", "name", "avg", "max", "loss"} <= set(d), f"필드 누락: {d}"
+        assert d["loss"] > 0, "손실 0인 항목이 약점으로 올라왔다"
+
+    # 루브릭 항목 key 리터럴이 소스에 박혀 있으면 파생이 아니다
+    src = _code_only(inspect.getsource(_ql.weak_items))
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
+    hard = [k for k in RUBRIC_MAX if k in src]
+    assert not hard, f"약점 목록에 항목 key 가 박혀 있다: {hard}"
+
+
+def test_문장수가_소수점을_종결로_세지_않는다():
+    """`8.7%` 를 문장 2개로 세면 B1·B2·B10·N4 가 통째로 부풀려진다."""
+    from JARVIS02_WRITER.post_scorer import _sentences
+
+    assert _sentences("코스피가 8.7% 상승했다.") == 1
+    assert _sentences("PER 12.5배다. 좋다!") == 2
+    assert _sentences("끝.") == 1
+
+
+def test_저장_html_에도_여백규정이_걸린다():
+    """발행되는 건 blocks, 저장·채점되는 건 html — 둘이 다르면 채점기는 딴 물건을 잰다."""
+    import ast
+
+    src = (_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "_process_draft_impl"), None)
+    assert fn, "_process_draft_impl 을 찾을 수 없다"
+    # 별칭이 아니라 **원래 이름** 으로 찾는다 (`as _cs` 로 가려져도 잡히도록)
+    alias = next((a.asname or a.name for n in ast.walk(fn)
+                  if isinstance(n, ast.ImportFrom) for a in n.names
+                  if a.name == "compress_spacing"), None)
+    assert alias, "저장 html 에 여백 압축이 걸려 있지 않다"
+    # 그리고 **html 을 인자로 실제 호출** 하는지 (import 만 해두는 무동작 방어)
+    called = any(isinstance(n, ast.Call) and getattr(n.func, "id", "") == alias
+                 and any(getattr(a, "id", "") == "html" for a in n.args)
+                 for n in ast.walk(fn))
+    assert called, f"{alias}() 를 html 로 부르지 않는다 — import 만 해둔 무동작"
+
+    # 압축이 실제로 B18 만점을 만드는지 — 동작으로 확인
+    from JARVIS02_WRITER.law_enforcer import compress_spacing
+    from JARVIS02_WRITER.post_scorer import score_post
+    bad = "<p>글</p>" + '<p>&nbsp;</p><p>&nbsp;</p>' * 3 + "<p>글</p>"
+    good, _n = compress_spacing(bad)
+    _b18 = lambda h: next(
+        v["score"] for v in score_post(
+            {"html": h, "content": h, "title": "t", "post_type": "economic"},
+            platform="naver", post_type="economic")["sections"]["B"]["items"].values()
+        if v.get("name") == "여백 규정 준수")
+    assert _b18(bad) < _b18(good), "압축이 B18 점수를 못 올린다 — 무동작"
+
+
+def test_process_draft가_생성한_메타를_그대로_반환한다():
+    """반환 dict 의 tags·meta_description 이 `build_post_meta` 산출물이어야 한다.
+
+    `"tags": []` 처럼 상수로 바꿔치면 4조합 전부 조용히 0점으로 되돌아간다 —
+    그런데 발행이 계속 성공하므로 **아무 증상이 없다**. AST 로 값의 출처를 본다.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8"))
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "_process_draft_impl"), None)
+    assert fn, "_process_draft_impl 을 찾을 수 없다"
+    # build_post_meta 를 담은 변수명을 파생한다 (이름을 테스트에 박지 않는다)
+    alias = next((a.asname or a.name for n in ast.walk(fn)
+                  if isinstance(n, ast.ImportFrom) for a in n.names
+                  if a.name == "build_post_meta"), None)
+    assert alias, "process_draft 가 발행 메타 생성자를 부르지 않는다"
+    var = next((t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                for t in n.targets if isinstance(t, ast.Name)
+                if isinstance(n.value, ast.Call) and getattr(n.value.func, "id", "") == alias), None)
+    assert var, f"{alias}() 결과를 변수에 담지 않는다"
+
+    ret = next((n for n in ast.walk(fn)
+                if isinstance(n, ast.Return) and isinstance(n.value, ast.Dict)), None)
+    assert ret, "반환 dict 를 찾을 수 없다"
+    got = {k.value: v for k, v in zip(ret.value.keys, ret.value.values)
+           if isinstance(k, ast.Constant)}
+    for key in ("tags", "meta_description"):
+        v = got.get(key)
+        assert v is not None, f"반환에 {key} 가 없다"
+        assert isinstance(v, ast.Subscript) and getattr(v.value, "id", "") == var, \
+            f"{key} 가 {alias}() 산출물이 아니다 — 상수·빈값으로 바뀌었다"

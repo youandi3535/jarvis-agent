@@ -419,6 +419,27 @@ def init_db():
             conn.execute("ALTER TABLE post_analysis ADD COLUMN quality_score REAL")
         except Exception:
             pass
+        # post_analysis.rubric_items: 100점 루브릭 **항목별** 점수 (2026-08-07 신설).
+        #   `post_scorer.items_compact(sr)` 의 `{항목key: 점수}` JSON.
+        #   ★ 왜 필요했나 — 종전엔 총점 스칼라 한 칸뿐이라 채점기가 글마다 계산한 50개
+        #     항목 결과가 **즉시 폐기**됐다. 그 결과 강화학습이 "이 글 67점" 이라는 한 덩어리
+        #     신호만 받아, *어느 항목이 왜 0점인지* 를 모른 채 가중치를 굴리고 있었다.
+        #   만점·섹션·표시명은 **넣지 않는다** — 채점기에서 파생한다(② 동적 설계).
+        #   컬럼을 50개 만들지 않는 이유도 같다: 항목이 늘 때마다 스키마를 고치게 된다.
+        try:
+            conn.execute("ALTER TABLE post_analysis ADD COLUMN rubric_items TEXT")
+        except Exception:
+            pass
+        # post_analysis.publish_meta: 발행에 실제로 붙은 메타 (2026-08-07 신설).
+        #   `{"tags": [...], "meta_description": "..."}` — process_draft ⑫ 산출물.
+        #   ★ 왜 필요했나 — 발행 draft 는 그 프로세스 안에서만 산다(경제는 subprocess).
+        #     이 값이 DB 를 건너지 못하면 **발행 후 채점이 태그·메타를 못 본다** →
+        #     발행 전엔 N7·T7 만점인데 DB 점수(=학습 보상)는 0점인 반쪽 적용이 된다.
+        #     "개선했는데 벌을 받는" 상태 — 학습이 정확히 거꾸로 간다.
+        try:
+            conn.execute("ALTER TABLE post_analysis ADD COLUMN publish_meta TEXT")
+        except Exception:
+            pass
         # learning_insights.scope: 어떤 글 종류에 적용할 인사이트인지.
         # 'economic' / 'theme' / 'all'. 작성기가 호출 시 scope IN (post_type,'all') 만 주입.
         try:
@@ -813,7 +834,8 @@ def save_post_for_analysis(platform: str, theme: str, title: str,
                             original_content: str = "", original_html: str = "",
                             source_keyword: str = "",
                             post_type: str = "",
-                            image_paths: str = "[]") -> int:
+                            image_paths: str = "[]",
+                            publish_meta: "dict | None" = None) -> int:
     """발행 직후 분석 대기 레코드 생성. 반환값: 생성된 id.
 
     source_keyword: RADAR pipeline 트리거 시 trends.keyword 와 동일한 raw 키워드.
@@ -826,13 +848,15 @@ def save_post_for_analysis(platform: str, theme: str, title: str,
         cur = conn.execute(
             """INSERT INTO post_analysis
                (platform, theme, title, url,
-                original_content, original_html, source_keyword, post_type, image_paths)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                original_content, original_html, source_keyword, post_type, image_paths,
+                publish_meta)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (platform, theme, title, url,
              original_content, original_html,
              (source_keyword or "").strip(),
              (post_type or "").strip() or None,
-             image_paths or "[]"),
+             image_paths or "[]",
+             _items_json(publish_meta)),
         )
         return cur.lastrowid
 
@@ -879,18 +903,59 @@ def get_unscored_analyzed(since: str, limit: int = 5) -> list:
     return [dict(r) for r in rows]
 
 
-def save_quality_score(analysis_id: int, quality_score: float) -> bool:
-    """재채점 결과 — **점수만** 채운다.
+def save_quality_score(analysis_id: int, quality_score: float,
+                       rubric_items: "dict | None" = None) -> bool:
+    """재채점 결과 — **점수(와 항목)만** 채운다.
 
     제안·상태·analyzed_at 을 건드리지 않는다. 건드리면 텔레그램 재전송·승인 재요청이
     딸려와 사용자에게 같은 글이 두 번 간다. 이미 비어 있을 때만 쓴다(경합 방어).
     """
+    _ij = _items_json(rubric_items)
+    with get_db() as conn:
+        if _ij is None:
+            cur = conn.execute(
+                "UPDATE post_analysis SET quality_score=? WHERE id=? AND quality_score IS NULL",
+                (quality_score, analysis_id),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE post_analysis SET quality_score=?, rubric_items=? "
+                "WHERE id=? AND quality_score IS NULL",
+                (quality_score, _ij, analysis_id),
+            )
+        return cur.rowcount > 0
+
+
+def backfill_rubric_items(analysis_id: int, rubric_items: dict) -> bool:
+    """★ 이미 총점은 있는데 **항목만 비어 있는** 옛 행을 채운다 (2026-08-07 소급).
+
+    `save_quality_score` 는 `quality_score IS NULL` 인 행만 쓰므로 옛 행에 닿지 못한다.
+    총점은 **건드리지 않는다** — 그날의 보상 신호를 사후에 바꾸면 학습 이력이 오염된다.
+    """
+    _ij = _items_json(rubric_items)
+    if _ij is None:
+        return False
     with get_db() as conn:
         cur = conn.execute(
-            "UPDATE post_analysis SET quality_score=? WHERE id=? AND quality_score IS NULL",
-            (quality_score, analysis_id),
+            "UPDATE post_analysis SET rubric_items=? WHERE id=? AND rubric_items IS NULL",
+            (_ij, analysis_id),
         )
         return cur.rowcount > 0
+
+
+def get_rubric_items(analysis_id: int) -> dict:
+    """저장된 항목별 점수 `{항목key: 점수}`. 없으면 빈 dict."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT rubric_items FROM post_analysis WHERE id=?", (analysis_id,)
+        ).fetchone()
+    if not row or not row["rubric_items"]:
+        return {}
+    try:
+        v = json.loads(row["rubric_items"])
+        return v if isinstance(v, dict) else {}
+    except Exception:
+        return {}
 
 
 def try_claim_analysis(analysis_id: int) -> bool:
@@ -905,19 +970,43 @@ def try_claim_analysis(analysis_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def _items_json(rubric_items: "dict | None") -> "str | None":
+    """항목별 점수를 저장 문자열로 — **직렬화를 한 곳에서만** 한다(① 단일 진입점).
+
+    두 저장 경로(`save_analysis_result` · `save_quality_score`)가 각자 json.dumps 하면
+    한쪽만 형식을 바꾸는 사고가 난다. 빈 dict 는 '항목 없음'이 아니라 '채점 안 함'과
+    구분이 안 되므로 None 으로 떨어뜨린다.
+    """
+    if not rubric_items:
+        return None
+    return json.dumps(rubric_items, ensure_ascii=False, sort_keys=True)
+
+
 def save_analysis_result(analysis_id: int, suggestions: list,
-                         quality_score: "float | None" = None):
+                         quality_score: "float | None" = None,
+                         rubric_items: "dict | None" = None):
     """분석 결과 저장 → status: analyzed.
 
     quality_score = 발행글 100점 루브릭 총점(post_scorer). ADR 014 강화학습 보상 신호로
     23:45 job_quality_learn 이 읽는다 (reward = score/100). None = 미채점(보상 스킵).
+
+    rubric_items = `post_scorer.items_compact(sr)` — 항목별 학습의 입력 (2026-08-07).
+      None 이면 **덮어쓰지 않는다** — 옛 호출자가 항목을 지우는 일이 없어야 한다.
     """
+    _ij = _items_json(rubric_items)
     with get_db() as conn:
-        conn.execute(
-            "UPDATE post_analysis SET suggestions=?, quality_score=?, status='analyzed', "
-            "analyzed_at=datetime('now','localtime') WHERE id=?",
-            (json.dumps(suggestions, ensure_ascii=False), quality_score, analysis_id),
-        )
+        if _ij is None:
+            conn.execute(
+                "UPDATE post_analysis SET suggestions=?, quality_score=?, status='analyzed', "
+                "analyzed_at=datetime('now','localtime') WHERE id=?",
+                (json.dumps(suggestions, ensure_ascii=False), quality_score, analysis_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE post_analysis SET suggestions=?, quality_score=?, rubric_items=?, "
+                "status='analyzed', analyzed_at=datetime('now','localtime') WHERE id=?",
+                (json.dumps(suggestions, ensure_ascii=False), quality_score, _ij, analysis_id),
+            )
 
 
 def set_analysis_pending_approval(analysis_id: int):
