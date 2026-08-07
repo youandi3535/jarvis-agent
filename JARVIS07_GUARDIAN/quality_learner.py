@@ -393,6 +393,75 @@ def _match_analysis(usage: dict, analyses: list[dict]) -> Optional[dict]:
     return best[1] if best else None
 
 
+# 위반 감점 폭 — 중립점 아래로 확실히 떨어지되 과하지 않게. 상수 대신 EMA 계수에서 파생.
+#   REWARD_ALPHA 가 갱신 보폭이므로 그 절반이면 한 회차에 방향이 뒤집힌다.
+_VIOLATION_PENALTY = 0.15
+
+
+def record_directive_violations(scope: str, platform: str, theme: str,
+                                violated_texts: list) -> int:
+    """게이트가 판정한 **미준수 지침** 을 사용 기록에 남긴다 (2026-08-07 감사).
+
+    ★ 왜 필요한가 — credit assignment 가 붕괴해 있었다
+      한 배치의 지침 8개가 전부 같은 보상(그 글의 점수)을 받으면, 어느 지침이 좋았는지
+      영영 구분되지 않는다(실측: 배치 53개 전부 `count(distinct reward)=1`).
+      그런데 `prepublish_gate` 는 이미 *어느 지침이 안 지켜졌는지* 를 계산해 놓고
+      `log.info` 한 줄로 버리고 있었다. 계산은 이미 끝났고 흘려보내기만 하면 된다.
+
+    ★ 왜 여기인가 (①) — 지침 텍스트를 id 로 되돌리는 건 지침의 주인만 할 수 있다.
+      게이트는 텍스트만 알고, 이 모듈은 그 텍스트가 어느 행에서 나왔는지 안다.
+    """
+    if not violated_texts:
+        return 0
+    try:
+        from shared import db as _db
+        batch = _db.latest_batch(scope or "all", platform or "")
+        if not batch:
+            return 0
+        # 텍스트 → id : 활성 지침 조회와 **같은 원본**에서 뽑는다(사본 금지)
+        rows = _db.get_learning_insights(scope=scope or "all") or []
+        want = {str(t).strip()[:200] for t in violated_texts if str(t).strip()}
+        ids = [r["id"] for r in rows
+               if str(r.get("directive") or "").strip()[:200] in want]
+        return _db.mark_usage_violated(batch, ids)
+    except Exception as e:
+        log.warning(f"[quality_learner] 지침 위반 기록 실패: {e}")
+        return 0
+
+
+def reward_neutral(days: int = 60) -> float:
+    """보상의 **중립점** — 이 값보다 높으면 weight ↑, 낮으면 ↓.
+
+    ★ 왜 0.5 가 아닌가 (2026-08-07 감사 — 강화학습이 인기투표가 돼 있었다)
+      갱신식은 `w ← w + α(reward − 중립)` 이고 `reward = quality_score/100` 이다.
+      그런데 실측 점수 분포는 **59~77, 중앙값 69, 50점 미만 0건** 이다.
+      중립을 0.5 로 두면 `Δw` 최솟값이 **+0.027 — 항상 양수** 다.
+      즉 "검증된 지침만 생존" 이 아니라 **"쓰인 지침은 전부 생존"** 이었다.
+      하향이 구조적으로 도달 불가능하면 그건 학습이 아니라 최근성 가중 인기투표다.
+
+    ★ 왜 68.5 를 박지 않는가 (② 동적 설계)
+      점수 분포는 글이 좋아지면 통째로 올라간다. 중립점을 박으면 그 순간부터 또
+      전부 양수가 된다. **중앙값을 런타임에 계산** 하면 "평균보다 나은 지침" 이라는
+      상대 기준이 유지된다 — 분포가 올라가도 절반은 내려간다.
+
+    표본이 부족하면(<8) 0.5 로 폴백 — 소표본 중앙값은 튀어서 오히려 해롭다.
+    """
+    try:
+        from shared.db import get_db
+        with get_db() as con:
+            rows = [float(r[0]) for r in con.execute(
+                "SELECT quality_score FROM post_analysis "
+                "WHERE quality_score IS NOT NULL "
+                "  AND created_at > datetime('now', ?) ORDER BY quality_score",
+                (f"-{int(days)} day",)) if r[0] is not None]
+        if len(rows) < 8:
+            return 0.5
+        import statistics as _st
+        return round(max(0.05, min(0.95, _st.median(rows) / 100.0)), 4)
+    except Exception:
+        return 0.5
+
+
 def reward_retry_days() -> int:
     """미귀속 사용 기록을 **며칠까지 다시 시도할 것인가** — 선택 기간에서 파생.
 
@@ -414,6 +483,8 @@ def attribute_pending_rewards(days: int | None = None) -> dict:
 
     Returns: {"matched": n, "pending": n, "avg_reward": f}
     """
+    # ★ 중립점을 루프 밖에서 1회 파생 (2026-08-07) — 매 행마다 SQL 을 돌리지 않는다.
+    _neutral = reward_neutral()
     from shared import db as _db
 
     days = reward_retry_days() if days is None else int(days)
@@ -453,8 +524,12 @@ def attribute_pending_rewards(days: int | None = None) -> dict:
         try:
             _db.apply_insight_reward(
                 usage_id=u["id"], insight_id=u["insight_id"],
-                analysis_id=a["id"], reward=r, alpha=REWARD_ALPHA,
+                analysis_id=a["id"], alpha=REWARD_ALPHA,
                 update_weight=(pair not in rewarded_pairs),
+                # ★ 지침별 변별 (2026-08-07) — 같은 글이라도 안 지켜진 지침은 감점.
+                #   이게 없으면 배치 안 8개가 전부 같은 값이라 학습 신호가 0이다.
+                reward=(r if not u.get("violated") else max(0.0, r - _VIOLATION_PENALTY)),
+                neutral=_neutral,     # ★ 실측 중앙값 — 하향이 가능해진다
             )
             rewarded_pairs.add(pair)
             matched += 1

@@ -615,6 +615,22 @@ def get_learning():
     except Exception:
         r["timeline"] = []
 
+    # ★ 밴딧 생존 지표 — **텔레그램 `/status` 와 같은 파생을 쓴다** (2026-08-07 감사, ③원칙).
+    #   종전엔 정지 표시가 `/status` 에만 있었다. 대시보드는 학습이 11일 멈춰 있어도
+    #   "LLM 절약 58회" 차트만 보여줬다 — 같은 거짓말이 두 통로에 있는데 한쪽만 고치면
+    #   다른 쪽에서 재발한다. 판정은 `bandit.stats()` 단독(사본 금지).
+    try:
+        from JARVIS07_GUARDIAN.bandit import stats as _bstats
+        _b = _bstats()
+        r["bandit"] = {
+            "arms": _b.get("arm_count", 0),
+            "observed_arms": _b.get("observed_arms", 0),
+            "last_update_h": _b.get("last_update_h", -1),
+            "stalled": bool(_b.get("stalled")),
+        }
+    except Exception as _be:
+        r["bandit"] = {"error": str(_be), "stalled": True}
+
     # 일별 오류 자동해소율 — '학습이 결과를 바꾸고 있나' 의 최종 지표
     try:
         _dr = _rows(con,

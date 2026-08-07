@@ -380,6 +380,16 @@ def init_db():
             conn.execute("ALTER TABLE error_log ADD COLUMN provisional INTEGER DEFAULT 0")
         except Exception:
             pass
+        # ★ 지침별 준수/위반 (2026-08-07 감사 — credit assignment 붕괴 시정)
+        #   종전엔 한 배치의 지침 8개가 **전부 같은 보상**(그 글의 점수)을 받았다.
+        #   그러면 어느 지침이 좋았는지 영영 구분되지 않는다(실측: 배치 53개 전부
+        #   `count(distinct reward)=1`). 발행 게이트가 이미 계산해 놓고 로그로만 흘리던
+        #   `violated_directives` 를 여기 적어 배치 안에서 변별을 만든다.
+        #   NULL = 판정 없음(옛 행), 0 = 준수, 1 = 위반.
+        try:
+            conn.execute("ALTER TABLE insight_usage ADD COLUMN violated INTEGER DEFAULT NULL")
+        except Exception:
+            pass
         # NOTE: retry_count / retry_at / last_error 컬럼은 사후 retry 잡 폐기로 더 이상
         # 사용하지 않음. 기존 DB 에 남아 있어도 무시됨 (drop 하지 않음 — 데이터 보존).
         # source_keyword: RADAR pipeline 에서 발행 트리거 시 채워지는 trends.keyword 와
@@ -443,7 +453,8 @@ def init_db():
                 used_at     TEXT DEFAULT (datetime('now','localtime')),
                 analysis_id INTEGER,                -- 보상 귀속된 post_analysis.id
                 reward      REAL,                   -- NULL = 미귀속
-                rewarded_at TEXT
+                rewarded_at TEXT,
+                violated    INTEGER DEFAULT NULL    -- NULL=판정없음 0=준수 1=위반
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_iu_pending ON insight_usage(reward, used_at)")
@@ -534,8 +545,9 @@ _MIGRATIONS: list[tuple[int, str, str]] = [
                 SELECT id, status,
                        LAG(status) OVER (PARTITION BY agent_id ORDER BY recorded_at, id) AS prev
                 FROM vision_agent_history
-            ) WHERE prev IS NOT NULL AND prev = status
-        );
+            ) WHERE prev IS NOT NULL AND prev = status,
+                    violated     INTEGER DEFAULT NULL   -- NULL=판정없음 0=준수 1=위반
+                );
     """),
     (3, "style_corpus 제거 — 읽는 코드가 0인 브랜드 보이스 코퍼스 폐기", """
         -- ★ 2026-07-27: 이 표는 매일 02:30 잡이 적재했지만 **읽는 코드가 하나도 없었다**
@@ -1929,6 +1941,37 @@ def record_insight_usage(batch_id: str, insight_ids: list,
     return len(insight_ids)
 
 
+def mark_usage_violated(batch_id: str, insight_ids: list) -> int:
+    """이번 배치에서 **지켜지지 않은** 지침을 표시 (2026-08-07).
+
+    표시된 행은 보상 귀속 때 감점을 받아, 같은 글이라도 지침마다 다른 신호가 된다.
+    `insight_ids` 에 없는 같은 배치 행은 0(준수)으로 마감한다 — 판정이 있었다는 뜻.
+    """
+    if not batch_id:
+        return 0
+    with get_db() as conn:
+        conn.execute("UPDATE insight_usage SET violated = 0 "
+                     "WHERE batch_id = ? AND violated IS NULL", (batch_id,))
+        if not insight_ids:
+            return 0
+        q = ",".join("?" * len(insight_ids))
+        cur = conn.execute(
+            f"UPDATE insight_usage SET violated = 1 "
+            f"WHERE batch_id = ? AND insight_id IN ({q})",
+            [batch_id, *[int(i) for i in insight_ids]])
+        return cur.rowcount
+
+
+def latest_batch(scope: str, platform: str) -> str:
+    """이 조합의 **가장 최근 미귀속 배치 id** — 게이트가 방금 주입분을 찾을 때 쓴다."""
+    with get_db() as conn:
+        r = conn.execute(
+            "SELECT batch_id FROM insight_usage "
+            "WHERE scope = ? AND platform = ? AND reward IS NULL "
+            "ORDER BY id DESC LIMIT 1", (scope, platform)).fetchone()
+    return str(r[0]) if r else ""
+
+
 def get_unrewarded_usage(days: int = 3) -> list[dict]:
     """reward 미귀속 사용 기록 (최근 N일)."""
     with get_db() as conn:
@@ -1944,11 +1987,17 @@ def get_unrewarded_usage(days: int = 3) -> list[dict]:
 
 def apply_insight_reward(usage_id: int, insight_id: int, analysis_id: int,
                          reward: float, alpha: float = 0.3,
-                         update_weight: bool = True) -> None:
+                         update_weight: bool = True,
+                         neutral: float = 0.5) -> None:
     """보상 귀속 — usage 행 마감 + learning_insights 가중치 EMA 갱신.
 
-    weight ← clamp(0.05, 3.0, weight + alpha*(reward - 0.5))
-    reward 0.5 중립 기준: 좋은 글(루브릭 점수 높음) → weight ↑, 나쁜 글 → ↓.
+    weight ← clamp(0.05, 3.0, weight + alpha*(reward - neutral))
+
+    ★ `neutral` 을 인자로 받는 이유 (2026-08-07 감사)
+      중립점 0.5 를 박아 두었더니 실측 점수 분포(59~77)에서 **Δw 가 항상 양수** 였다.
+      "쓰인 지침은 전부 생존" 이라 하향이 구조적으로 불가능했다.
+      *무엇이 중립인가* 는 보상 도메인(`quality_learner.reward_neutral()`)이 안다 —
+      DB 계층은 질의만 한다. 기본값 0.5 는 하위호환용이고, 호출자가 파생값을 넘긴다.
     update_weight=False: usage 마감(부기)만 — 같은 (insight, analysis) 쌍
     중복 보상 방지용 (quality_learner 가 판단).
     """
@@ -1964,9 +2013,9 @@ def apply_insight_reward(usage_id: int, insight_id: int, analysis_id: int,
                 """UPDATE learning_insights
                    SET reward_sum   = COALESCE(reward_sum, 0) + ?,
                        reward_count = COALESCE(reward_count, 0) + 1,
-                       weight       = max(0.05, min(3.0, weight + ? * (? - 0.5)))
+                       weight       = max(0.05, min(3.0, weight + ? * (? - ?)))
                    WHERE id = ?""",
-                (float(reward), float(alpha), float(reward), int(insight_id)),
+                (float(reward), float(alpha), float(reward), float(neutral), int(insight_id)),
             )
 
 

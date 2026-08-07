@@ -241,7 +241,12 @@ def _save_run_to_db(model: str, elapsed: int, returncode: int,
                 layers.get("length_fixed", 0), layers.get("quality_fixed", 0),
                 layers.get("data_cleaned", 0), layers.get("fixers_added", 0),
                 layers.get("vision_pinned", 0), total_fixed,
-                patterns_count, hits_total, actionable_hits,  # ★ llm_saved = actionable_hits (실제)
+                # ★ llm_saved 는 **실제로 LLM 없이 고친 횟수** 여야 한다 (2026-08-07 감사).
+                #   종전엔 actionable_hits 를 그대로 넣어 최근 21회차가 전부 58/58 이었고,
+                #   대시보드는 "LLM 절약 58회" 라고 말했다. 그런데 그 58 은 *복원 가능 여부를
+                #   확인하지 않은* 패턴 수였고, 실측 재적용은 81일간 1건뿐이다.
+                #   → 패턴이 실제로 적용된 횟수만 센다. 못 세면 0 (모르면 0이지 58이 아니다).
+                patterns_count, hits_total, _real_llm_saved(),
                 scores.get("quality", 0), scores.get("learning", 0),
                 scores.get("vision", 0), scores.get("next", ""),
                 summary[:4000],
@@ -292,6 +297,24 @@ def _learning_trend_brief() -> str:
     except Exception as e:
         log.debug(f"[AutoRepair] 학습 추세 로드 실패: {e}")
         return ""
+
+
+def _real_llm_saved() -> int:
+    """LLM 없이 실제로 고친 횟수 — **모르면 0** (2026-08-07 감사).
+
+    ★ 종전 값(`actionable_hits`)은 "학습에 저장된 패턴 수" 였지 "그 패턴으로 고친 수" 가
+      아니었다. 저장된 패치 47개 중 diff 컨텍스트가 맞아 **복원 가능한 것은 3개(6.4%)** 다.
+      나머지를 절약으로 계상하면 지표가 실제와 반대 방향으로 부풀어 오른다.
+    """
+    try:
+        from shared.db import get_db
+        with get_db() as con:
+            return int(con.execute(
+                "SELECT count(*) FROM error_log "
+                "WHERE status='fixed' AND llm_attempts = 0 AND fixed_file IS NOT NULL "
+                "  AND fixed_at > datetime('now','-1 day')").fetchone()[0] or 0)
+    except Exception:
+        return 0
 
 
 def _record_repairs_to_guardian(summary: str) -> int:
@@ -882,8 +905,15 @@ def run_auto_repair_targeted(
         timeout=_TARGETED_TIMEOUT,
         background=True,   # ★ 순번 대기 상한 — 줄이 길면 포기하고 defer (ERRORS [474])
     )
-    elapsed = result["elapsed"]
-    rc      = result["returncode"]
+    # ★ 계약 위반을 크래시로 만들지 않는다 (2026-08-07 감사).
+    #   run_sdk_query 는 이제 None 을 내지 않지만, 몽키패치·구버전 등으로 깨질 수 있다.
+    #   그때 `result["elapsed"]` 는 즉시 터지고, 위쪽 except 가 삼키면 원인이 사라진다.
+    if not isinstance(result, dict):
+        log.error(f"[AutoRepair/Targeted] run_sdk_query 계약 위반: {type(result).__name__} 반환")
+        result = {"returncode": -3, "stdout": "", "stderr": "SDK 반환 계약 위반",
+                  "elapsed": 0, "error_kind": "sdk_error"}
+    elapsed = result.get("elapsed", 0)
+    rc      = result.get("returncode", -3)
 
     if rc != 0:
         kind = result.get("error_kind") or "sdk_error"

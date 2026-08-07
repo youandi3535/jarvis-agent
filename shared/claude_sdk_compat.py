@@ -446,6 +446,20 @@ def run_sdk_query(
             "elapsed": int(_time.time() - t0), "error_kind": kind,
         }
 
+    # ★ 계약 보증 — **어떤 경로로도 None 을 반환하지 않는다** (2026-08-07 감사).
+    #   docstring 이 "returncode/stdout/elapsed 를 담은 dict" 를 약속하는데, 함수가
+    #   `try` 로 끝나 어떤 분기가 return 없이 빠지면 파이썬이 조용히 None 을 돌려준다.
+    #   호출자는 `result["elapsed"]` 로 첨자 접근하므로 즉시
+    #   `'NoneType' object is not subscriptable` 로 터진다 —
+    #   실제로 GUARDIAN Tier-2 브리지가 21회 그렇게 죽었고, 삼키는 except 탓에
+    #   **밴딧 보상 경로가 11일간 조용히 막혔다.**
+    #   계약은 계약의 주인이 지킨다(①). 호출자마다 None 검사를 흩지 않는다.
+    log.error("[sdk_compat] run_sdk_query 가 반환 없이 빠졌다 — 계약 위반 (fail-closed)")
+    return {
+        "returncode": -3, "stdout": "", "stderr": "run_sdk_query 반환 경로 누락",
+        "elapsed": int(_time.time() - t0), "error_kind": "sdk_error",
+    }
+
 
 # ── 모듈 import 시 1회 자동 설치 ────────────────────────────────────────
 _ensure_runtime_env()

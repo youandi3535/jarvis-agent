@@ -618,32 +618,29 @@ def run_once():
 def reward_cutoff() -> str:
     """재채점이 아직 *의미 있는* 시각 — 보상을 소비하는 잡의 일정에서 파생.
 
-    ADR 014 보상은 `j07_quality_learn` 이 하루 한 번 읽어 간다. 그 잡이 이미 훑고 간
-    글을 나중에 채점해 봐야 보상은 발화하지 않는다. 그러므로 **마지막 보상 회수 이후에
-    발행된 글** 까지만 재채점한다.
+    ADR 014 보상 귀속은 미귀속 사용 기록을 **`reward_retry_days()` 일까지** 재시도한다.
+    그 기간 안에 채점이 도착하면 보상이 발화하므로, 재채점도 같은 창을 봐야 한다.
 
-    시각을 여기 박지 않는다(② 동적 설계) — `DEFAULT_JOBS` 에서 그 잡의 cron 을 읽는다.
-    잡 시간을 바꾸면 재채점 창이 자동으로 따라온다.
+    시각을 여기 박지 않는다(② 동적 설계) — 보상 창의 주인에게 묻는다.
+    그쪽이 창을 바꾸면 재채점 창이 자동으로 따라온다.
     """
     import datetime as _dt
-    fallback = _dt.datetime.now() - _dt.timedelta(days=1)
     try:
-        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
-        kw = None
-        for j in DEFAULT_JOBS:
-            if "quality_learner" in str(j.get("callback", "")):
-                kw = j.get("kwargs") or {}
-                break
-        if not kw or not isinstance(kw.get("hour"), int):
-            raise ValueError("보상 잡 cron 파생 실패")
-        now = _dt.datetime.now()
-        last = now.replace(hour=int(kw["hour"]), minute=int(kw.get("minute") or 0),
-                           second=0, microsecond=0)
-        if last > now:
-            last -= _dt.timedelta(days=1)
-        return last.strftime("%Y-%m-%d %H:%M:%S")
+        # ★ 보상 **재시도 창**에서 파생한다 (2026-08-07 감사 — 창이 어긋나 있었다).
+        #
+        #   종전엔 보상 잡의 cron(23:45)에서 파생해 창이 **약 하루** 였다. 그런데
+        #   `quality_learner.attribute_pending_rewards` 는 **21일**까지 재시도한다.
+        #   두 창이 어긋난 결과: 21일 창 안의 미채점 글이 재채점 창 밖이라
+        #   **영영 채점되지 않고**, 거기 묶인 사용 기록이 미귀속으로 사장됐다
+        #   (실측 606행, 최고령 17일). 그런데 `get_unscored_analyzed` 는
+        #   "할 일 0건" 이라 보고했다 — 창 밖이라 안 보였을 뿐이다.
+        #
+        #   재채점은 *보상이 아직 가능한 동안* 의미가 있다. 그러니 그 창의 주인에게 묻는다.
+        from JARVIS07_GUARDIAN.quality_learner import reward_retry_days
+        days = max(1, int(reward_retry_days()))
     except Exception:
-        return fallback.strftime("%Y-%m-%d %H:%M:%S")
+        days = 1
+    return (_dt.datetime.now() - _dt.timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def rescore_unscored(limit: int = 3) -> dict:

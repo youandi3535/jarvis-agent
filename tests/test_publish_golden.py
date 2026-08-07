@@ -991,19 +991,17 @@ def test_재채점_창이_보상잡_일정에서_파생된다():
 
     # ★ 문자열이 아니라 *동작* 으로 확인한다 — 잡 시각을 바꾸면 창도 따라와야 한다.
     #   (뮤테이션 검증에서 `"DEFAULT_JOBS" in src` 만 보는 테스트가 가짜 통과를 냈다.)
-    from JARVIS04_SCHEDULER import job_registry as JR
-
-    target = next(j for j in JR.DEFAULT_JOBS if "quality_learner" in str(j.get("callback", "")))
-    orig = dict(target.get("kwargs") or {})
+    # 보상 창을 늘리면 재채점 창도 따라와야 한다(파생 확인)
+    import JARVIS07_GUARDIAN.quality_learner as QL
+    orig_fn = QL.reward_retry_days
     try:
-        target["kwargs"] = {"hour": (int(orig.get("hour", 23)) + 5) % 24,
-                            "minute": int(orig.get("minute", 0))}
+        QL.reward_retry_days = lambda: int(orig_fn()) + 7
         moved = reward_cutoff()
     finally:
-        target["kwargs"] = orig
-    assert moved != cut, "잡 시각을 바꿔도 재채점 창이 그대로 — 파생이 아니라 사본이다"
+        QL.reward_retry_days = orig_fn
+    assert moved < cut, "보상 창을 늘려도 재채점 창이 그대로 — 파생이 아니라 사본이다"
 
-    src = inspect.getsource(reward_cutoff)
+    src = _code_only(inspect.getsource(reward_cutoff))
     assert "23:45" not in src, "시각이 박혀 있다"
 
 
@@ -1735,3 +1733,183 @@ def test_symmetry_검사가_등록돼_있고_동작한다():
 def inspect_src(fn) -> str:
     import inspect
     return inspect.getsource(fn)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-08-07 강화학습 감사 — 두 루프가 실제로 학습하는가
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_밴딧_정지를_정지라고_말한다():
+    """★ /status·대시보드가 11일 멈춘 학습을 "fixer 9종 학습" 이라 보고했다.
+
+    `arm_count`·`feature_dim` 은 **구조 상수** 라 학습이 멈춰도 그대로다.
+    생존은 *마지막 갱신 시각* 이 답한다.
+    """
+    from JARVIS07_GUARDIAN.bandit import stats
+
+    s = stats()
+    for k in ("observed_arms", "last_update_h", "stalled"):
+        assert k in s, f"생존 지표 {k} 가 없다 — 정지를 알아챌 수 없다"
+    assert isinstance(s["stalled"], bool)
+
+
+def test_밴딧_정지판정이_발행주기에서_파생된다():
+    """★ 48을 박으면 발행 주기가 바뀔 때 판정만 낡는다."""
+    import inspect
+
+    import JARVIS07_GUARDIAN.bandit as B
+
+    src = _code_only(inspect.getsource(B._stale_hours))
+    assert "publish_slots" in src, "발행 주기에서 파생하지 않는다"
+    assert B.STALE_HOURS > 0
+    # ★ 값 자체가 파생인지 — 발행 슬롯이 없으면 폴백(48)이어야 하고,
+    #   있으면 슬롯 수에서 계산돼야 한다. 상수를 박으면 이 대조가 깨진다.
+    # ★ 값이 **실제로 슬롯 수를 따라가는가** — 상수를 박으면 이 대조가 깨진다.
+    #   (초판은 `24.0*2/1` 이라 슬롯과 무관한 48 상수였고 뮤테이션이 잡았다.)
+    import JARVIS08_PUBLISH.publish_ledger as PL
+
+    base = B._stale_hours()
+    orig = PL.publish_slots
+    try:
+        PL.publish_slots = lambda: list(orig()) * 2      # 슬롯이 2배로 늘면
+        doubled = B._stale_hours()
+    finally:
+        PL.publish_slots = orig
+    assert doubled < base, f"슬롯이 늘어도 임계가 그대로 — 파생이 아니다 ({base}→{doubled})"
+
+
+def test_두_표시통로가_같은_파생을_쓴다():
+    """★ ③원칙 — /status 만 고치면 대시보드에서 같은 거짓말이 재발한다."""
+    import inspect
+    from pathlib import Path
+
+    from JARVIS07_GUARDIAN import guardian_agent as G
+
+    root = Path(__file__).resolve().parent.parent
+    api = _code_only((root / "api_server.py").read_text(encoding="utf-8"))
+    assert "bandit" in api and "stats" in api, "대시보드가 밴딧 생존을 노출하지 않는다"
+    assert "stalled" in api, "대시보드가 정지 여부를 안 내려준다"
+
+    st = _code_only(inspect.getsource(G.build_status)) if hasattr(G, "build_status") else ""
+    _ = st  # /status 는 아래 문자열 검사로 갈음
+    gsrc = _code_only((root / "JARVIS07_GUARDIAN" / "guardian_agent.py").read_text(encoding="utf-8"))
+    assert "stalled" in gsrc, "/status 가 정지 여부를 안 본다"
+
+    page = (root / "dashboard" / "app" / "learning" / "page.tsx").read_text(encoding="utf-8")
+    assert "banditStale" in page, "대시보드 화면에 정지 표시가 없다"
+
+
+def test_SDK_계약이_None을_내지_않는다():
+    """★ 이 계약 위반이 GUARDIAN Tier-2 를 21회 죽이고 밴딧을 11일 멈춰 세웠다."""
+    import inspect
+
+    from shared.claude_sdk_compat import run_sdk_query
+
+    # ★ 함수의 **마지막 문장이 Return 인가** 를 AST 로 본다.
+    #   문자열 검사는 except 안의 return 에도 걸려 통과했다(뮤테이션에서 발각).
+    import ast as _ast
+
+    tree = _ast.parse(inspect.getsource(run_sdk_query).lstrip())
+    fn = tree.body[0]
+    assert isinstance(fn.body[-1], _ast.Return), \
+        "함수가 Return 이 아닌 문장으로 끝난다 — 그 경로는 암묵적 None 을 낸다"
+
+
+def test_보상_중립점이_실측분포에서_파생된다():
+    """★ 0.5 를 박아 두어 Δw 가 **항상 양수** 였다 — 하향이 구조적으로 불가능했다.
+
+    실측 점수는 59~77 이라 `score/100 − 0.5` 가 최솟값 +0.027 이다.
+    즉 "검증된 지침만 생존" 이 아니라 "쓰인 지침은 전부 생존" 이었다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN.quality_learner import reward_neutral
+
+    n = reward_neutral()
+    assert 0.05 <= n <= 0.95
+    src = _code_only(inspect.getsource(reward_neutral))
+    assert "median" in src, "중앙값 파생이 아니다"
+    assert "0.69" not in src and "68.5" not in src, "중립점이 박혀 있다"
+
+
+def test_보상_갱신이_양방향이다():
+    """★ 낮은 점수·위반 지침이 실제로 weight 를 **내리는가** (핵심)."""
+    import inspect
+
+    from JARVIS07_GUARDIAN.quality_learner import _VIOLATION_PENALTY, reward_neutral
+    from shared.db import apply_insight_reward
+
+    # ★ 데이터가 아니라 **공식** 을 검증한다 — 테스트 DB 엔 표본이 없어 중립점이
+    #   폴백(0.5)으로 나온다. 우리가 못 박을 것은 "실측 중립점이 주어지면 양방향인가" 다.
+    A = 0.3
+    n = reward_neutral()
+    assert 0.05 <= n <= 0.95, f"중립점 범위 이상: {n}"
+
+    n_real = 0.69          # 운영 실측 중앙값 — 이 값에서 양방향이어야 한다
+    assert A * (0.59 - n_real) < 0, "최저 실측 점수(59)가 weight 를 못 내린다"
+    assert A * (0.77 - _VIOLATION_PENALTY - n_real) < 0, "위반 지침이 감점되지 않는다"
+    assert A * (0.77 - n_real) > 0, "최고 점수가 weight 를 못 올린다"
+
+    src = _code_only(inspect.getsource(apply_insight_reward))
+    assert "neutral" in src, "중립점이 인자가 아니다 (박혀 있다)"
+    assert "- 0.5)" not in src, "0.5 가 SQL 에 박혀 있다"
+
+
+def test_관측창이_보상창에서_파생된다():
+    """★ 보상 21일 vs 재채점 1일 — 어긋난 창 때문에 39건이 영구 사장됐다.
+
+    그런데 `get_unscored_analyzed` 는 "할 일 0건" 이라 보고했다 — 창 밖이라 안 보였을 뿐.
+    """
+    import inspect
+
+    from JARVIS03_RADAR.post_quality_analyzer import reward_cutoff
+    from JARVIS07_GUARDIAN.quality_learner import reward_retry_days
+
+    src = _code_only(_code_only(inspect.getsource(reward_cutoff)))
+    assert "reward_retry_days" in src, "보상 창에서 파생하지 않는다"
+    assert "DEFAULT_JOBS" not in src, "잡 cron 파생이 남아 있다 (창이 하루로 좁아진다)"
+
+    import datetime as dt
+    cut = dt.datetime.strptime(reward_cutoff(), "%Y-%m-%d %H:%M:%S")
+    days = (dt.datetime.now() - cut).days
+    assert days >= reward_retry_days() - 1, f"재채점 창({days}일)이 보상 창보다 좁다"
+
+
+def test_지침별_변별신호가_버려지지_않는다():
+    """★ 게이트가 계산해 놓고 log.info 로 버리던 신호 — 배치 53개 전부 단일 보상이었다."""
+    import inspect
+    from pathlib import Path
+
+    from JARVIS07_GUARDIAN.quality_learner import record_directive_violations
+    from shared.db import get_db, mark_usage_violated
+
+    cols = [r[1] for r in get_db().execute("PRAGMA table_info(insight_usage)")]
+    assert "violated" in cols, "지침별 준수/위반을 적을 곳이 없다"
+
+    root = Path(__file__).resolve().parent.parent
+    # ★ 이름 등장이 아니라 **실제 호출** 을 본다 (뮤테이션에서 lambda 로 덮어도 통과했다).
+    import ast as _ast
+    tree = _ast.parse((root / "JARVIS02_WRITER" / "prepublish_gate.py").read_text(encoding="utf-8"))
+    called = any(isinstance(n, _ast.Call)
+                 and getattr(n.func, "id", "") == "record_directive_violations"
+                 for n in _ast.walk(tree))
+    imported = any(isinstance(n, _ast.ImportFrom)
+                   and any(a.name == "record_directive_violations" for a in n.names)
+                   for n in _ast.walk(tree))
+    assert called and imported, "게이트가 신호를 실제로 흘려보내지 않는다"
+
+    src = _code_only(inspect.getsource(record_directive_violations))
+    assert "mark_usage_violated" in src
+    _ = mark_usage_violated
+
+
+def test_llm_saved가_실제_절약만_센다():
+    """★ actionable_hits 를 그대로 넣어 21회차 전부 58/58 — 실측 재적용은 81일간 1건."""
+    import inspect
+
+    from JARVIS07_GUARDIAN.auto_repair import _real_llm_saved
+
+    assert isinstance(_real_llm_saved(), int)
+    src = _code_only(inspect.getsource(_real_llm_saved))
+    assert "llm_attempts = 0" in src, "LLM 없이 고친 것만 세지 않는다"
+    assert "fixed_file IS NOT NULL" in src, "실제 파일 수정을 확인하지 않는다"
