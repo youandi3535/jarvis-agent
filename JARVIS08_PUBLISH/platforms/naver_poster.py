@@ -1277,6 +1277,12 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
             _paste(naver_text)
 
         # ── 연관 글 ──────────────────────────────────
+        # ★ 이것은 *SEO 내부 링크가 아니라* 독자용 평문 목록이다 (앵커 태그가 아님).
+        #   SEO 내부 링크의 주인은 `JARVIS08_PUBLISH/internal_links.py` 하나이고,
+        #   네이버는 `seo_standards["naver"]["internal_links"] == 0` 이라 그 경로에서
+        #   블록이 **0개** 생성된다 — 그래서 지금은 두 벌이 붙지 않는다.
+        #   ⚠️ 네이버 기준을 0 → 1 이상으로 바꾸는 날에는 이 평문 블록을 함께 걷어낼 것.
+        #      (안 그러면 같은 내용이 두 번 나온다 — 티스토리에서 실제로 그랬다)
         _posts = related_posts if related_posts is not None else _fetch_recent_naver_posts(1)
         if _posts:
             _enter()

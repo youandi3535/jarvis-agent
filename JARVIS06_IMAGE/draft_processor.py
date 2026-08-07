@@ -625,7 +625,24 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
     except Exception as _ee:
         log.warning(f"[{platform}] html 여백 압축 오류(무시): {_ee}")
 
-    # ⑫ 발행 메타 (태그·메타 설명) — 채점 *전* 에 만든다 (★ 2026-08-07)
+    # ⑫ 내부 링크(연관 글) — 채점·저장되는 원고에 **실제로 넣는다** (★ 2026-08-07)
+    #   ★ 왜 여기인가: 종전엔 티스토리 발행자가 이 블록을 **에디터 DOM 에 직접 주입**해서,
+    #     발행된 글엔 있는데 채점·저장되는 html 엔 한 줄도 없었다 → T8_internal_link 가
+    #     94건 중 91건 0점. 채점기는 있지도 않은 링크를 찾고 있었다.
+    #   개수는 seo_standards 파생이라 네이버는 **분기 없이** 0개 → 블록이 안 붙는다(②).
+    #   법률 집행(⑩) *뒤* 에 붙인다 — 마지막 블록이라 재배치 대상이 아니고,
+    #   발행 시점 주입이 하던 위치(본문 맨 끝)와 같다.
+    try:
+        from JARVIS08_PUBLISH.internal_links import related_links_html as _rlh
+        _links = _rlh(platform)
+        if _links:
+            blocks = list(blocks) + [("html", _links)]
+            html = (html or "") + _links
+            log.info(f"[{platform}] 연관 글 링크 삽입 (원고 포함)")
+    except Exception as _ee:
+        log.warning(f"[{platform}] 연관 글 링크 오류(발행은 계속): {_ee}")
+
+    # ⑬ 발행 메타 (태그·메타 설명) — 채점 *전* 에 만든다 (★ 2026-08-07)
     #   ★ 왜 여기인가: 종전엔 태그가 발행(Layer 4) 안에서 만들어져 채점(Layer 3)이
     #     볼 수 없었고, 메타 설명은 생산자가 아예 없었다. 그래서 N7_hashtags·T7_meta_desc
     #     가 **전건 0점** — 글을 아무리 잘 써도 못 받는 5점이었다.

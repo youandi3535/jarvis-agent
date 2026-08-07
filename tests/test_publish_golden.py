@@ -2245,3 +2245,103 @@ def test_process_draft가_생성한_메타를_그대로_반환한다():
         assert v is not None, f"반환에 {key} 가 없다"
         assert isinstance(v, ast.Subscript) and getattr(v.value, "id", "") == var, \
             f"{key} 가 {alias}() 산출물이 아니다 — 상수·빈값으로 바뀌었다"
+
+
+def test_내부링크는_한_벌만_붙는다():
+    """티스토리 발행 시점 주입을 지우지 않으면 '함께 읽으면 좋은 글' 이 **두 번** 나온다.
+
+    링크 블록의 주인은 `JARVIS08_PUBLISH/internal_links.py` 하나다. 발행자가 또 만들면
+    ① 독자에게 같은 블록이 두 번 보이고 ② 채점되는 원고와 발행된 글이 또 갈라진다.
+    """
+    import ast
+
+    src = (_ROOT / "JARVIS08_PUBLISH/platforms/tistory_poster.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    # 발행자 안에서 앵커(<a href=)를 만들어 주입하는 코드가 남아 있으면 위반
+    injected = [n.lineno for n in ast.walk(tree)
+                if isinstance(n, ast.Call)
+                and getattr(n.func, "id", "") == "_inject_html_block"]
+    for ln in injected:
+        # 주입 자체는 본문 삽입에 쓰이므로, *연관 글* 블록만 금지한다
+        seg = "\n".join(src.splitlines()[max(0, ln - 14):ln])
+        assert "함께 읽으면 좋은 글" not in seg, \
+            f"tistory_poster:{ln} 에 연관 글 주입이 남아 있다 — 링크가 두 벌 붙는다"
+
+    # 생성자는 정확히 한 곳 (문서·주석 제외)
+    owners = []
+    for f in ("JARVIS08_PUBLISH/internal_links.py",
+              "JARVIS08_PUBLISH/platforms/tistory_poster.py",
+              "JARVIS06_IMAGE/draft_processor.py"):
+        s = _code_only((_ROOT / f).read_text(encoding="utf-8"))
+        if "함께 읽으면 좋은 글" in s:
+            owners.append(f)
+    assert owners == ["JARVIS08_PUBLISH/internal_links.py"], \
+        f"연관 글 블록 생성자가 한 곳이 아니다: {owners}"
+
+
+def test_내부링크_개수는_플랫폼_기준에서_파생된다():
+    """`if platform == "naver"` 분기 없이 기준값만으로 0/1 이 갈려야 한다."""
+    import inspect
+
+    from JARVIS08_PUBLISH import internal_links as _il
+
+    assert _il.link_count("naver") == 0, "네이버는 SEO 내부 링크를 세지 않는다"
+    assert _il.link_count("tistory") >= 1, "티스토리는 내부 링크 1개 이상이 기준"
+    assert _il.related_links_html("naver") == "", "네이버에 링크 블록이 붙었다"
+
+    src = _code_only(inspect.getsource(_il))
+    for bad in ('"naver"', "'naver'", '"tistory"', "'tistory'"):
+        assert f"== {bad}" not in src, f"플랫폼 이름 분기가 박혀 있다: {bad}"
+
+
+def test_연관글이_원고와_블록_양쪽에_들어간다():
+    """★ 한쪽만 넣으면 조용히 반쪽이 된다.
+
+    · `blocks` 에만 넣으면 → 발행은 되는데 채점·저장 원고엔 없다 (종전 결함 그대로 재발)
+    · `html` 에만 넣으면 → 점수는 오르는데 **독자에게 안 보인다** (채점 조작)
+    두 대입이 같은 값(`related_links_html` 산출물)에서 나오는지 AST 로 본다.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8"))
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "_process_draft_impl"), None)
+    assert fn, "_process_draft_impl 을 찾을 수 없다"
+
+    alias = next((a.asname or a.name for n in ast.walk(fn)
+                  if isinstance(n, ast.ImportFrom) for a in n.names
+                  if a.name == "related_links_html"), None)
+    assert alias, "연관 글 생성자를 부르지 않는다"
+    var = next((t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                for t in n.targets if isinstance(t, ast.Name)
+                if isinstance(n.value, ast.Call) and getattr(n.value.func, "id", "") == alias), None)
+    assert var, f"{alias}() 결과를 변수에 담지 않는다"
+
+    used = {t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+            for t in n.targets if isinstance(t, ast.Name)
+            if any(getattr(x, "id", "") == var for x in ast.walk(n.value))}
+    assert "blocks" in used, f"{var} 가 blocks 에 들어가지 않는다 — 발행에 안 나온다"
+    assert "html" in used, f"{var} 가 html 에 들어가지 않는다 — 채점·저장에 안 남는다"
+
+
+def test_연관글이_실제로_T8을_만점으로_만든다():
+    """코드 존재가 아니라 **채점 결과** 로 판정 (patch_effective 표준)."""
+    from JARVIS02_WRITER.post_scorer import item_scores, score_post
+    from JARVIS08_PUBLISH.internal_links import related_links_html
+    from shared.db import get_db
+
+    # 격리 DB — 링크 후보를 직접 심는다 (운영 데이터에 기대지 않는다)
+    with get_db() as con:
+        con.execute("INSERT INTO post_analysis (platform, theme, title, url, post_type) "
+                    "VALUES ('tistory','probe','이전 글','https://example.com/1','economic')")
+    body = "코스피가 올랐다. " * 40
+    _t8 = lambda h: next(
+        (i["score"], i["max"]) for i in item_scores(score_post(
+            {"html": h, "content": h, "title": "t", "keyword": "코스피",
+             "post_type": "economic"}, platform="tistory", post_type="economic"))
+        if i["key"] == "T8_internal_link")
+    block = related_links_html("tistory")
+    assert block, "격리 DB 에 후보를 심었는데 링크 블록이 안 나온다"
+    before, mx = _t8(body)
+    after, _ = _t8(body + block)
+    assert before < after == mx, f"연관 글이 T8 을 만점으로 못 만든다: {before} → {after}/{mx}"
