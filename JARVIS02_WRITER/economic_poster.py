@@ -660,6 +660,20 @@ def run(post_naver=True, post_tistory=True, resume=None):
               f"[{_dt_s.now().strftime('%H:%M:%S')}]")
         published = state.setdefault("published_platforms", set())
 
+        # ★ 최종 방어선 — 프로세스 밖(DB)에서 확인 (2026-08-07).
+        #   아래 플래그 3종은 *이 state* 안에서만 산다. 잡이 두 번 기동하거나(실측 90일 12회)
+        #   재시도 콜백이 새 액션으로 들어오면 플래그는 백지라 구조적으로 못 막는다.
+        #   판단 본체는 발행 도메인 단독 — 여기서 조건을 다시 쓰지 않는다(원칙①).
+        _pt = ((state.get(draft_key) or {}).get("post_type") or "economic").strip().lower()
+        try:
+            from JARVIS08_PUBLISH.publish_ledger import already_published_this_slot
+            if already_published_this_slot(_pt, platform):
+                print(f"  🛑 {platform} 이번 회차 글이 DB 에 이미 있음 — 중복 발행 차단")
+                published.add(platform)
+                return
+        except Exception as _e:      # 가드 고장이 발행을 막지 않는다(fail-open)
+            print(f"  ⚠️ 중복 확인 실패(통과 처리): {_e}")
+
         # ★ attempt >= 2 + 이전 실패 → 플래그 해제 (진짜 재발행, ERRORS [265])
         if (send_attempt >= 2 and platform not in published
                 and state.get(attempted_key) and not state.get(ok_key)):

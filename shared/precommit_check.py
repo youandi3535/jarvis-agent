@@ -1262,7 +1262,16 @@ def check_copytruth(report: Report) -> None:
     pat_patch_assign = re.compile(
         r"^\s*[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\s*=\s*_?[A-Za-z_][A-Za-z0-9_]*patch",
         re.MULTILINE)
-    pat_setattr = re.compile(r"setattr\(\s*_?[A-Za-z_][A-Za-z0-9_]*\s*,\s*[\"'][A-Za-z_]")
+    # ★ pytest 의 `monkeypatch` 픽스처는 제외 (2026-08-07).
+    #   이 규칙이 겨냥하는 것은 *운영 코드* 의 몽키패치다 — "설치했다고 적어놓고 실제로는
+    #   안 먹은" 사고(ERRORS [457]). pytest 픽스처는 성질이 다르다:
+    #     · 테스트 종료 시 **자동 원복** 되므로 잔존 상태가 없다
+    #     · 패치가 안 먹으면 그 테스트가 곧바로 실패한다 — **테스트 자체가 효과 검증**이다
+    #   즉 여기에 `patch_effective()` 를 요구하는 것은 "검증을 검증하라" 는 순환이다.
+    #   실제로 대역을 쓰는 정상 테스트가 이 규칙에 걸려 있었다(tests/test_publish_dedupe.py).
+    #   ※ 좁게 막는다 — 픽스처 호출 형태만 면제하고, 맨 `setattr(...)` 은 테스트에서도 잡는다.
+    pat_setattr = re.compile(
+        r"(?<!monkeypatch\.)setattr\(\s*_?[A-Za-z_][A-Za-z0-9_]*\s*,\s*[\"'][A-Za-z_]")
     pat_flag = re.compile(r"^\s*_?[A-Z][A-Z0-9_]*(?:INSTALLED|PATCHED|APPLIED|DONE)\s*=\s*(?:True|False)",
                           re.MULTILINE)
     # 효과 검증 신호 — 이 중 하나라도 있으면 통과

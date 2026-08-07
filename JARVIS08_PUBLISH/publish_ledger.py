@@ -52,6 +52,8 @@ __all__ = [
     "current_slot",
     "audit_lag_minutes",
     "published_in_slot",
+    "owning_slot",
+    "already_published_this_slot",
     "slot_gaps",
     "publishing_in_progress",
     "publish_gap_error_type",
@@ -199,6 +201,63 @@ def published_in_slot(start: _dt.datetime, end: _dt.datetime,
     with get_db() as con:
         rows = con.execute(sql, tuple(args)).fetchall()
     return {r[0] for r in rows if r[0]}
+
+
+# ── 중복 발행 최종 방어선 (2026-08-07) ────────────────────────────────────
+def owning_slot(post_type: str,
+                now: _dt.datetime | None = None) -> tuple | None:
+    """이 발행 시도가 속한 **그 글종류의** 슬롯 창. 창 밖이면 None.
+
+    ★ `current_slot()` 과 다르다 — 헷갈리면 어제 글로 오늘 발행을 막는다.
+      `current_slot` 은 *"지금 감사할 슬롯"* (시각 기준, 글종류 무관) 이라
+      06:30 에 물으면 **직전 테마 창** 을 답한다. 실측으로 경제 잡이 06:30 에
+      돈 날이 여러 날 있다(스케줄이 06:30→07:00 으로 바뀌기 전). 그 시각에
+      "경제가 이미 나갔나" 를 시각 기준 창으로 물으면 *어제 경제 글* 이 잡혀
+      **오늘 발행을 영구히 막는다** — 중복보다 나쁜 오탐이다.
+
+    ★ 창 밖이면 None(=억제 안 함) 인 이유: 판정 불가일 때 어느 쪽으로 틀릴지의
+      문제다. 중복 1건은 지우면 되지만 미발행은 그 회차가 영영 없다([553] 과 같은 축 —
+      *정상 산출물을 막는 게 가장 나쁘다*).
+    """
+    now = now or _dt.datetime.now()
+    # ★ `+1초` — 슬롯이 *정각에 시작* 하는 순간을 포함시킨다. `slots_between` 은 끝 경계를
+    #   배타적으로 보므로 이게 없으면 07:00:00 정각에 "창 밖" 이 나온다(실측). 발행 잡이
+    #   정각 기동이라 하필 가드가 가장 필요한 순간에 꺼진다. `current_slot` 도 같은 처리.
+    window_end = now + _dt.timedelta(seconds=1)
+    for pt, s, e in reversed(slots_between(now - _dt.timedelta(days=2), window_end)):
+        if pt == post_type and s <= now < e:
+            return (pt, s, e)
+    return None
+
+
+def already_published_this_slot(post_type: str, platform: str,
+                                now: _dt.datetime | None = None) -> bool:
+    """이번 회차에 이 (글종류·플랫폼) 글이 **DB 에 이미 있는가** — 발행 직전 최종 확인.
+
+    ★ 왜 메모리 플래그로는 부족했나 (원칙① — 판단이 두 벌이었다)
+      종전 중복 방지는 harness state 의 `__nv_send_attempted__` 류 불리언 **4개**가
+      전부였고, 그 로직이 `economic_poster._send_platform` 과
+      `trend_theme_writer._send_theme_platform` 에 **똑같이 두 벌** 적혀 있었다.
+      플래그는 *한 프로세스·한 액션* 안에서만 산다. 실측으로 그것들이 못 막은 경로:
+
+        · 같은 슬롯에 발행 잡이 2회 기동 — 최근 90일 **12회** (`job_runs`)
+        · 재시도 콜백이 발행 전체를 다시 돌림 — 2026-07-20 21:00 네이버 **3건**
+          (서로 다른 테마 3개. 그 *생성기* 는 커밋 bb436a9 에서 제거됐다)
+
+      둘 다 **새 state 로 들어오기 때문에** 플래그가 구조적으로 못 본다.
+      개별 재시도 경로를 하나씩 올바르게 고치는 방식은 다음 경로가 생기면 또 샌다 —
+      마지막 방어선은 프로세스 밖(DB)에 있어야 한다.
+
+    ★ 이건 '완벽한 exactly-once' 가 아니다 — 정직하게 적어 둔다.
+      글이 플랫폼에 올라갔는데 발행자가 실패로 보고하면(ack 유실) `post_analysis`
+      행이 안 생기므로 여기서도 못 잡는다. 그 창을 닫으려면 플랫폼 사실 조회가
+      필요하다(네이버는 `_fetch_recent_naver_posts` 가 이미 있다). 별건.
+    """
+    slot = owning_slot(post_type, now)
+    if not slot:
+        return False
+    _, s, e = slot
+    return platform in published_in_slot(s, e, post_type)
 
 
 def scoring_gaps(start: _dt.datetime, end: _dt.datetime,

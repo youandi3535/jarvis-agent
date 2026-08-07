@@ -817,6 +817,22 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
         print(f"\n  📤 [Phase 2] {platform} 발행 (send_attempt={send_attempt})")
         published = state.setdefault("published_platforms", set())
 
+        # ★ 최종 방어선 — 프로세스 밖(DB)에서 확인 (2026-08-07).
+        #   테마가 특히 위험했다: 2026-07-20 21:00 슬롯이 네이버에 **3건**(서로 다른 테마)을
+        #   냈다. 재시도 콜백이 *새 액션* 으로 들어와 아래 플래그가 백지였기 때문이다.
+        #   그 생성기는 bb436a9 에서 제거됐지만, 개별 경로를 고치는 방식은 다음 경로가
+        #   생기면 또 샌다 — 마지막 방어선은 state 밖에 둔다.
+        #   판단 본체는 발행 도메인 단독 — 여기서 조건을 다시 쓰지 않는다(원칙①).
+        _pt = "theme"     # `post_analysis.post_type` 에 박는 값과 동일 (284·335행 emit)
+        try:
+            from JARVIS08_PUBLISH.publish_ledger import already_published_this_slot
+            if already_published_this_slot(_pt, platform):
+                print(f"  🛑 {platform} 이번 회차 글이 DB 에 이미 있음 — 중복 발행 차단")
+                published.add(platform)
+                return
+        except Exception as _e:      # 가드 고장이 발행을 막지 않는다(fail-open)
+            print(f"  ⚠️ 중복 확인 실패(통과 처리): {_e}")
+
         # ★ attempt >= 2 + 이전 실패 → 플래그 해제 (진짜 재발행, ERRORS [265])
         if (send_attempt >= 2 and platform not in published
                 and state.get(attempted_key)
