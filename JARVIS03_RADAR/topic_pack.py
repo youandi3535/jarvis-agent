@@ -427,10 +427,12 @@ def search_keyword(label: str) -> str:
       → 라벨을 그대로 키워드로 쓰면 배선을 고쳐도 **절반은 여전히 0점**이다.
       실측: 최근 테마 12개 중 5개가 `/` 또는 `(` 를 포함한다.
 
-    ★ 왜 '최장 토큰' 인가
-      구분자로 쪼갠 조각 중 가장 긴 것이 그 테마의 대표어일 확률이 가장 높다
-      (`황사/미세먼지` → `미세먼지`, `스마트카(SMART CAR)` → `스마트카`).
+    ★ 왜 '머리 토큰' 인가 (최장 토큰이 아니다)
+      한국어 카탈로그 라벨은 **대표어를 앞에 두고 뒤에 부연을 단다**.
+      `로봇(산업용/협동로봇 등)` 의 대표어는 `로봇` 이지 가장 긴 `협동로봇 등` 이 아니다.
+      (초판은 최장 토큰이었고 실측에서 바로 이 라벨에 걸렸다.)
       영문 병기는 한글 조각이 있으면 버린다 — 본문은 한국어로 쓰인다.
+      꼬리의 `등`·`외` 같은 열거 표시는 검색어가 아니므로 떼어낸다.
 
     라벨이 이미 단일어면 그대로 돌려준다 (`핵융합에너지` → `핵융합에너지`).
     """
@@ -441,8 +443,8 @@ def search_keyword(label: str) -> str:
     if not parts:
         return s
     ko = [p for p in parts if _re.search(r"[가-힣]", p)]
-    pool = ko or parts
-    return max(pool, key=len)
+    head = (ko or parts)[0]
+    return _re.sub(r"\s*(등|외|관련)\s*$", "", head).strip() or head
 
 
 def keyword_profile(keyword: str, sector: str = "") -> dict:

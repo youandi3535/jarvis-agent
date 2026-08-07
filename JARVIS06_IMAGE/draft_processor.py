@@ -637,7 +637,11 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
         _links = _rlh(platform)
         if _links:
             blocks = list(blocks) + [("html", _links)]
-            html = (html or "") + _links
+            # ★ 문자열 맨 뒤에 붙이면 `</html>` **바깥** 이 된다 — 이 시점의 html 은
+            #   `<!DOCTYPE html>…</body></html>` 인 **완전한 문서** 이기 때문이다(실측 10/10).
+            #   그러면 호출자의 본문 추출(`extract_text_content`)이 걷어내 DB 엔 안 남고,
+            #   발행 후 채점에서 T8 이 **다시 0점** 이 된다 — 고친 것이 조용히 되돌아간다.
+            html = _insert_into_body(html, _links)
             log.info(f"[{platform}] 연관 글 링크 삽입 (원고 포함)")
     except Exception as _ee:
         log.warning(f"[{platform}] 연관 글 링크 오류(발행은 계속): {_ee}")
@@ -657,7 +661,10 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
             _seed = [str(_m.get(k)) for k in ("theme", "sector", "keyword") if _m.get(k)]
         except Exception:
             pass
-        _meta = _bpm(title, html, platform, seed_tags=_seed or None)
+        # ★ 완전 문서를 그대로 넘기면 생성기가 보는 앞 800자가 `<!DOCTYPE><head><style>` 다
+        #   (실측 앞 800자에 <style>·<head> 포함). 태그·메타 설명이 **스타일시트를 읽고**
+        #   만들어진다. 본문만 넘긴다 — 시점을 앞당기며 입력 품질을 떨어뜨리면 안 된다.
+        _meta = _bpm(title, _body_text(html), platform, seed_tags=_seed or None)
     except Exception as _ee:
         log.warning(f"[{platform}] 발행 메타 생성 오류(발행은 계속): {_ee}")
 
@@ -673,6 +680,29 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
         "meta_description": _meta["meta_description"],
     }
 
+
+
+def _insert_into_body(html: str, fragment: str) -> str:
+    """`</body>` 직전에 끼워 넣는다. 완전 문서가 아니면 그냥 뒤에 붙인다."""
+    h = html or ""
+    if not fragment:
+        return h
+    for close in ("</body>", "</BODY>"):
+        i = h.rfind(close)
+        if i >= 0:
+            return h[:i] + fragment + h[i:]
+    return h + fragment
+
+
+def _body_text(html: str) -> str:
+    """완전 문서에서 `<body>` 안쪽만. head·style·script 를 걷어낸다."""
+    import re as _re
+    h = html or ""
+    m = _re.search(r"<body[^>]*>(.*)</body>", h, _re.I | _re.S)
+    if m:
+        h = m.group(1)
+    h = _re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", h, flags=_re.I | _re.S)
+    return h
 
 def publish_assembled(result: dict, publish_fn, platform: str = "") -> dict:
     """★ J06 발행 진입점 — process_draft() 완성 블록을 J08 에 직접 넘긴다 (사용자 박제 2026-07-11).

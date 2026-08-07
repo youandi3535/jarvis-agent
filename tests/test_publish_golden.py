@@ -2408,3 +2408,89 @@ def test_검색어는_카탈로그_라벨에서_파생된다():
     src = _code_only(inspect.getsource(sk))
     for lit in ("황사", "미세먼지", "스마트카"):
         assert lit not in src, f"라벨 리터럴이 박혀 있다: {lit}"
+
+
+def test_연관글이_문서_바깥에_붙지_않는다():
+    """★ `html + fragment` 는 `</html>` **바깥** 이다 — 이 html 은 완전한 문서다.
+
+    바깥에 붙으면 호출자의 본문 추출이 걷어내 DB 에 안 남고, 발행 후 채점에서 T8 이
+    **다시 0점** 이 된다. 고친 것이 조용히 되돌아가는데 아무 증상이 없다.
+    """
+    from JARVIS06_IMAGE.draft_processor import _insert_into_body
+
+    doc = "<!DOCTYPE html><html><head></head><body><p>본문.</p></body></html>"
+    got = _insert_into_body(doc, '<a href="u">링크</a>')
+    assert got.index("<a href") < got.index("</body>"), "링크가 </body> 바깥에 붙었다"
+    assert got.count("<a href") == 1
+    # 완전 문서가 아니면 그냥 뒤에 (조각 원고도 깨뜨리지 않는다)
+    assert _insert_into_body("<p>본문.</p>", "<i>x</i>").endswith("<i>x</i>")
+    assert _insert_into_body(doc, "") == doc
+
+    # ★ ⑫ 가 실제로 이 함수를 거치는지 — 안 거치면 위 단언이 전부 무동작이다
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_process_draft_impl")
+    assign = next((n for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                   and any(getattr(t, "id", "") == "html" for t in n.targets)
+                   and isinstance(n.value, ast.Call)
+                   and getattr(n.value.func, "id", "") == "_insert_into_body"), None)
+    assert assign, "html 에 링크를 넣을 때 _insert_into_body 를 쓰지 않는다 — 문서 바깥에 붙는다"
+
+
+def test_발행메타_생성기에_본문만_넘어간다():
+    """`<head><style>` 을 '본문' 이라며 넘기면 태그·메타 설명이 스타일시트를 읽고 만들어진다."""
+    import ast
+
+    from JARVIS06_IMAGE.draft_processor import _body_text
+
+    doc = ("<!DOCTYPE html><html><head><style>*{margin:0}</style>"
+           "<script>var a=1</script></head><body><p>코스피가 올랐다.</p></body></html>")
+    got = _body_text(doc)
+    for bad in ("<style", "<head", "<script", "DOCTYPE", "margin"):
+        assert bad not in got, f"본문 추출에 {bad} 가 남았다: {got[:80]!r}"
+    assert "코스피가 올랐다" in got
+
+    # ⑬ 이 실제로 _body_text 를 거쳐 넘기는지 (원문 그대로 넘기면 무동작)
+    tree = ast.parse((_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_process_draft_impl")
+    alias = next((a.asname or a.name for n in ast.walk(fn)
+                  if isinstance(n, ast.ImportFrom) for a in n.names
+                  if a.name == "build_post_meta"), None)
+    call = next((n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", "") == alias), None)
+    assert call, "build_post_meta 호출을 찾을 수 없다"
+    body_arg = call.args[1] if len(call.args) > 1 else None
+    assert isinstance(body_arg, ast.Call) and getattr(body_arg.func, "id", "") == "_body_text", \
+        "본문 인자가 _body_text() 를 거치지 않는다 — 완전 문서가 그대로 간다"
+
+
+def test_저장되는_키워드가_4조합_모두_정규화된다():
+    """발행 전(draft.keyword)과 발행 후(DB.source_keyword)가 갈라지면 두 잣대가 된다."""
+    import ast
+
+    checked = 0
+    for f in ("JARVIS02_WRITER/trend_theme_writer.py",
+              "JARVIS02_WRITER/trend_economic_writer.py"):
+        tree = ast.parse((_ROOT / f).read_text(encoding="utf-8"))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_emit":
+                kw = next((k.value for k in n.keywords if k.arg == "source_keyword"), None)
+                assert kw is not None, f"{f}:{n.lineno} source_keyword 가 없다"
+                # 원본 라벨을 그대로 넘기면 위반 (Name 노드 하나면 미정규화)
+                assert not isinstance(kw, ast.Name), \
+                    f"{f}:{n.lineno} 원본 라벨을 그대로 저장한다 — 정규화를 거쳐야 한다"
+                checked += 1
+    assert checked >= 4, f"emit {checked}곳 — 4조합을 못 덮는다"
+
+
+def test_검색어는_머리_토큰을_고른다():
+    """최장 토큰이면 `로봇(산업용/협동로봇 등)` 이 `협동로봇 등` 이 된다 (실측 오답)."""
+    from JARVIS03_RADAR.topic_pack import search_keyword as sk
+
+    assert sk("로봇(산업용/협동로봇 등)") == "로봇"
+    assert sk("주류업(주정, 에탄올 등)") == "주류업"
+    assert sk("가상화폐(비트코인 등)") == "가상화폐"
+    assert sk("황사/미세먼지") == "황사"

@@ -425,7 +425,10 @@ def ts_publish(draft: dict) -> dict:
                       #   기록돼 "개선했는데 보상이 깎이는" 상태가 된다.
                       publish_meta={"tags": draft.get("tags") or [],
                                     "meta_description": draft.get("meta_description") or ""},
-                      source_keyword=keyword, post_type="economic", image_paths=_imgs)
+                      # ★ 테마와 같은 정규화를 거친다 (2026-08-07, 원칙③ 대칭).
+                      #   경제 키워드는 대개 단일어라 값이 그대로지만, 복합 표기가 들어와도
+                      #   4조합이 **같은 잣대**로 저장되게 한다 — 한쪽만 정규화하면 그게 곧 비대칭이다.
+                      source_keyword=_norm_kw(keyword), post_type="economic", image_paths=_imgs)
                 print(f"  ✅ [DB] post_analysis·posts 저장 완료 (이미지 {len(_imgs)}개)")
             except Exception as _dbe:
                 print(f"  ⚠️ [DB] 저장 오류(무시): {_dbe}")
@@ -586,6 +589,15 @@ def nv_collect(ts_keyword: str = '', supreme_block=None, market_data: dict | Non
 #   `JARVIS09_COLLECTOR/precollect.py:precollect_economic()` 단독.
 
 
+
+def _norm_kw(kw: str) -> str:
+    """저장용 검색어 정규화 — 주제 소유자(JARVIS03)의 파생을 그대로 쓴다(①)."""
+    try:
+        from JARVIS03_RADAR.topic_pack import search_keyword
+        return search_keyword(kw) or (kw or "")
+    except Exception:
+        return kw or ""
+
 def nv_generate_draft(keyword: str, sector: str, reason: str,
                       collected, supreme_block=None,
                       gate_feedback: list | None = None,
@@ -706,7 +718,10 @@ def nv_publish(draft: dict, ts_keyword: str = '') -> dict:
                       #   기록돼 "개선했는데 보상이 깎이는" 상태가 된다.
                       publish_meta={"tags": draft.get("tags") or [],
                                     "meta_description": draft.get("meta_description") or ""},
-                      source_keyword=keyword, post_type="economic", image_paths=_imgs)
+                      # ★ 테마와 같은 정규화를 거친다 (2026-08-07, 원칙③ 대칭).
+                      #   경제 키워드는 대개 단일어라 값이 그대로지만, 복합 표기가 들어와도
+                      #   4조합이 **같은 잣대**로 저장되게 한다 — 한쪽만 정규화하면 그게 곧 비대칭이다.
+                      source_keyword=_norm_kw(keyword), post_type="economic", image_paths=_imgs)
                 print(f"  ✅ [DB] post_analysis·posts 저장 완료 (이미지 {len(_imgs)}개)")
             except Exception as _dbe:
                 print(f"  ⚠️ [DB] 저장 오류(무시): {_dbe}")

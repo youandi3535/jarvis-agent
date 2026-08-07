@@ -207,12 +207,20 @@ def _fix_excessive_empty_p(draft: dict) -> bool:
     return changed
 
 
-def _fix_image_count_underflow(draft: dict, platform: str) -> bool:
+def _fix_image_count_underflow(draft: dict, platform: str, action_name: str = "economic") -> bool:
     """제8조 위반 — 썸네일 제외 이미지 최소 5장(5+α) 미달 시 AI 사진 추가.
 
     ★ 사용자 박제 2026-06-01 → 2026-07-05 정정 8→5: 5장은 디폴트가 아닌 절대 최솟값.
     blocks에서 content 이미지(heading_ 제외)를 세어 MIN_IMAGES 미달이면
     render_from_spec으로 AI 인포그래픽을 생성하여 text 블록 사이에 삽입.
+
+    ★ 2026-08-07 수정 (ERRORS [image _validate_image_files 렌더 후 파일 소실]):
+    img_dir 이 `economic_naver`/`economic_tistory` 로 고정돼 있어 테마(action_name="theme")
+    호출 시에도 경제 폴더에 이미지를 썼다 — `theme_naver`/`theme_tistory` 와 어긋나
+    경제 파이프라인의 `cleanup_economic_images()` 전체 초기화에 테마 이미지가 함께
+    삭제되는 경로가 열려 있었다. 폴더명은 CLAUDE.md 이미지 경로 표와 동일하게
+    `{action_name}_{platform}` 로 *파생* — 호출자(economic_poster="economic" /
+    trend_theme_writer="theme")가 이미 넘기던 action_name 을 여기까지 관통시킨다.
     """
     from pathlib import Path as _P
     from JARVIS02_WRITER.length_manager import MIN_IMAGES as _MIN
@@ -236,11 +244,9 @@ def _fix_image_count_underflow(draft: dict, platform: str) -> bool:
 
     keyword = draft.get("theme") or draft.get("keyword") or "경제"
     sector = draft.get("sector") or ""
-    _plat_dirs = {
-        "naver":   _P(__file__).parent.parent / "JARVIS06_IMAGE" / "output" / "images" / "economic_naver",
-        "tistory": _P(__file__).parent.parent / "JARVIS06_IMAGE" / "output" / "images" / "economic_tistory",
-    }
-    img_dir = _plat_dirs.get(platform, _plat_dirs["tistory"])
+    _plat = platform if platform in ("naver", "tistory") else "tistory"
+    img_dir = (_P(__file__).parent.parent / "JARVIS06_IMAGE" / "output" / "images"
+               / f"{action_name}_{_plat}")
     img_dir.mkdir(parents=True, exist_ok=True)
 
     added = 0
@@ -277,7 +283,7 @@ def _fix_image_count_underflow(draft: dict, platform: str) -> bool:
 
 # ── 이슈 문자열 → 수정 함수 라우터 ─────────────────────────
 
-def _route_fix(issue_str: str, draft: dict, platform: str):
+def _route_fix(issue_str: str, draft: dict, platform: str, action_name: str = "economic"):
     """issue_str 키워드 분류 → 적절한 패치 함수 호출.
 
     반환: 수정 성공 시 **경로 이름**(str), 실패/미해당 시 `None`.
@@ -309,7 +315,7 @@ def _route_fix(issue_str: str, draft: dict, platform: str):
 
     # ★ 사용자 박제 2026-06-01 → 2026-07-05 정정: 이미지 최소 5장 미달 (제8조 5+α)
     if "이미지 최소 미달" in issue_str or "image underflow" in s or "이미지 부족" in issue_str:
-        return "image_underflow" if _fix_image_count_underflow(draft, platform) else None
+        return "image_underflow" if _fix_image_count_underflow(draft, platform, action_name) else None
 
     # 수정 불가 — 재생성 필요
     return None
@@ -404,7 +410,7 @@ def fix_and_learn(
     fixed, unfixed = [], []
 
     for iss in raw_issues:
-        route = _route_fix(iss, draft, platform)
+        route = _route_fix(iss, draft, platform, action_name)
         if route:
             # state 갱신 (draft 객체 참조이므로 dict 재할당 보장)
             state[draft_key] = draft
