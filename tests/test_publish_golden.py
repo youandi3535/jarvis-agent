@@ -1352,6 +1352,9 @@ def test_훅이_실제로_막고_안내한다(tmp_path):
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
 
     def _commit(msg):
+        # ★ 커밋 전 스테이징 — 훅이 '잔여 0' 을 검사하므로(2026-08-07) 실제 흐름과 맞춘다.
+        #   이 한 줄이 없으면 훅이 "잔여 있음" 으로 막는다 = 검사가 제대로 도는 증거.
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
         return subprocess.run(["git", "commit", "-m", msg], cwd=repo,
                               capture_output=True, text=True)
 
