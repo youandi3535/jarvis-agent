@@ -216,9 +216,22 @@ def _build_blocks(collected, platform: str, img_dir: Path,
     n_text = sum(1 for b in blocks if b[0] == "text")
     n_img  = sum(1 for b in blocks if b[0] == "image")
     print(f"  ✅ [Theme/{platform}] 완성 블록 {len(blocks)}개 (텍스트 {n_text} + 이미지 {n_img})")
+    # ★ 테마 draft 에 keyword 를 싣는다 (2026-08-07 — 원칙③ 위반 교정).
+    #   종전엔 테마 draft 에 keyword·theme 키가 **아예 없어서** 채점기의 `_keyword()` 가
+    #   빈 문자열을 받았고, 키워드 의존 항목(N2·N5·N6·T2·T6)이 '키워드 없음' 분기로 빠져
+    #   **무상 만점**을 받았다 — 네이버 최대 8점·티스토리 5점. 점수가 높아 보였을 뿐
+    #   *측정을 안 하고 있었다*. 경제 2조합은 처음부터 keyword 를 갖고 있었다(③ 비대칭).
+    #   검색어 파생은 주제 소유자(JARVIS03)의 일 — 라벨을 만든 쪽이 검색어도 만든다.
+    #   (`황사/미세먼지` 같은 복합 라벨은 본문에 통째로 나올 수 없다)
+    try:
+        from JARVIS03_RADAR.topic_pack import search_keyword as _skw
+        _kw = _skw(theme)          # theme = collected.meta["keyword"] (위에서 이미 파생)
+    except Exception:
+        _kw = (theme or "").strip()   # 파생 실패해도 라벨은 있다 — 여기서 또 죽으면 발행이 멎는다
     return {
         "success": True, "title": title, "content": content,
         "html": html, "blocks": blocks, "error": "",
+        "keyword": _kw,
         # ★ 발행 메타 승계 (2026-08-07) — 사유는 경제 writer 와 동일.
         "tags":             result.get("tags") or [],
         "meta_description": result.get("meta_description") or "",

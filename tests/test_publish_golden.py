@@ -2345,3 +2345,66 @@ def test_연관글이_실제로_T8을_만점으로_만든다():
     before, mx = _t8(body)
     after, _ = _t8(body + block)
     assert before < after == mx, f"연관 글이 T8 을 만점으로 못 만든다: {before} → {after}/{mx}"
+
+
+def test_테마_draft에도_keyword가_실린다():
+    """★ 없으면 키워드 항목이 '키워드 없음' 분기로 빠져 **무상 만점**을 받는다.
+
+    점수가 높아 보이지만 실은 *측정을 안 하는 것* 이다 — 네이버 최대 8점·티스토리 5점.
+    경제 2조합은 처음부터 keyword 를 갖고 있었다(원칙③ 비대칭).
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS02_WRITER/trend_theme_writer.py").read_text(encoding="utf-8"))
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "_build_blocks"), None)
+    assert fn, "_build_blocks 를 찾을 수 없다"
+    ret = next((n for n in ast.walk(fn)
+                if isinstance(n, ast.Return) and isinstance(n.value, ast.Dict)
+                and any(isinstance(k, ast.Constant) and k.value == "success"
+                        for k in n.value.keys)), None)
+    assert ret, "성공 반환 dict 를 찾을 수 없다"
+    keys = {k.value for k in ret.value.keys if isinstance(k, ast.Constant)}
+    assert "keyword" in keys, "테마 draft 에 keyword 가 없다 — 키워드 항목이 무상 만점이 된다"
+
+    # 함수 안에서 해결되지 않는 이름을 쓰면 발행이 통째로 멎는다 (except 안에서도 마찬가지)
+    import builtins
+    args = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+    assigned = {t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                for t in n.targets if isinstance(t, ast.Name)}
+    assigned |= {n.name for n in ast.walk(fn) if isinstance(n, ast.ExceptHandler) and n.name}
+    assigned |= {t.id for n in ast.walk(fn) if isinstance(n, (ast.comprehension,))
+                 for t in ast.walk(n.target) if isinstance(t, ast.Name)}
+    assigned |= {t.id for n in ast.walk(fn) if isinstance(n, ast.For)
+                 for t in ast.walk(n.target) if isinstance(t, ast.Name)}
+    assigned |= {a.asname or a.name.split(".")[0] for n in ast.walk(fn)
+                 if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names}
+    mod = {a.asname or a.name.split(".")[0] for n in ast.walk(tree)
+           if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names}
+    mod |= {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+    mod |= {t.id for n in tree.body if isinstance(n, ast.Assign)
+            for t in n.targets if isinstance(t, ast.Name)}
+    free = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    unknown = free - args - assigned - mod - set(dir(builtins))
+    assert not unknown, f"_build_blocks 에 해결 안 되는 이름: {sorted(unknown)}"
+
+
+def test_검색어는_카탈로그_라벨에서_파생된다():
+    """`황사/미세먼지` 를 그대로 키워드로 쓰면 배선을 고쳐도 절반은 여전히 0점이다."""
+    import inspect
+
+    from JARVIS03_RADAR.topic_pack import search_keyword as sk
+
+    assert sk("핵융합에너지") == "핵융합에너지", "단일어는 그대로여야 한다"
+    for label in ("황사/미세먼지", "스마트카(SMART CAR)", "유전자 치료제/분석"):
+        got = sk(label)
+        assert got and got != label, f"{label!r} 가 분해되지 않았다: {got!r}"
+        assert got in label, f"{got!r} 가 원 라벨의 조각이 아니다"
+        import re as _re2
+        assert _re2.search(r"[가-힣]", got), f"{got!r} — 한글 조각을 골라야 한다"
+    assert sk("") == "" and sk(None) == ""
+
+    # 라벨 목록을 코드에 박으면 새 라벨이 나올 때 낡는다
+    src = _code_only(inspect.getsource(sk))
+    for lit in ("황사", "미세먼지", "스마트카"):
+        assert lit not in src, f"라벨 리터럴이 박혀 있다: {lit}"
