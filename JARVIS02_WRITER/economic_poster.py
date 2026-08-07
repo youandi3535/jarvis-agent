@@ -800,14 +800,20 @@ def run(post_naver=True, post_tistory=True, resume=None):
             _write_ep_partial()
             if not _nv_res.delivered:
                 _esc = getattr(_nv_res, "escalation_reason", "") or ""
-                if getattr(_nv_res, "deferred", False):
+                # ★ 순서 주의 (2026-08-07): 동시 중복을 **deferred 보다 먼저** 본다.
+                #   동시 중복도 deferred 의 한 종류라, deferred 를 먼저 검사하면 이 분기에
+                #   영영 도달하지 못해 `_concurrent_blocked` 가 안 서고 **티스토리가 그대로
+                #   진행** 된다 → 인터리브 이중 발행. (테마는 deferred 면 티스토리를 아예
+                #   건너뛰어 이 함정이 없다 — 경제만 순서가 반대였다.)
+                #   ★ 판정은 구조화 필드로 — 종전 `"동시 실행 중복 차단" in _esc` 문자열
+                #     비교는 harness 문구가 한 글자만 바뀌어도 조용히 죽는다.
+                if getattr(_nv_res, "concurrent_blocked", False):
+                    _concurrent_blocked = True
+                    print("  🚫 동시 실행 중복 차단 — 티스토리 액션도 중단 (인터리브 이중 발행 방지)")
+                elif getattr(_nv_res, "deferred", False):
                     # ★ rank8: 인프라 스로틀 지속 — 하드 실패 아님. 다음 회차 자연 재시도(발행 0건 확정 아님).
                     print(f"\n  ⏸ [네이버] 인프라 스로틀 지속 — 발행 연기(다음 회차 재시도)")
                     tg(f"⏸ 경제 브리핑(네이버) 인프라 스로틀 지속 — 발행 연기, 다음 회차 재시도\n{_esc}")
-                elif "동시 실행 중복 차단" in _esc:
-                    # ★ 리뷰 확정 수정: 다른 실행이 진행 중 — 티스토리도 중단 (인터리브 방지)
-                    _concurrent_blocked = True
-                    print("  🚫 동시 실행 중복 차단 — 티스토리 액션도 중단 (인터리브 이중 발행 방지)")
                 else:
                     print(f"\n  🚫 [네이버] harness max_attempts 도달 — 발행 차단 (attempts={_nv_res.attempts})")
                     tg(f"🚫 경제 브리핑(네이버) harness max_attempts 도달 — 발행 차단\nattempts={_nv_res.attempts}")

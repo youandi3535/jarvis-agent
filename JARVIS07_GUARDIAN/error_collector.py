@@ -107,6 +107,38 @@ _TRACEBACK_PAT = re.compile(
     r"(?::[^\n]*)?)",
     re.MULTILINE,
 )
+# traceback 프레임 한 줄 — `  File "<경로>", line <N>, in <함수>`
+_TB_FRAME_PAT = re.compile(
+    r'^[ \t]+File "(?P<file>[^"]+)", line (?P<line>\d+), in (?P<func>\S+)',
+    re.MULTILINE,
+)
+
+
+def _tb_origin(tb: str) -> tuple[str, str]:
+    """traceback → (모듈, 함수). 못 찾으면 ("", "").
+
+    ★ **저장소 안쪽의 마지막 프레임**을 고른다 — 그게 '우리가 고칠 수 있는 곳' 이다.
+      맨 마지막 프레임을 그냥 쓰면 `.venv/.../selenium/webdriver.py` 같은
+      *남의 코드* 가 잡혀서, 고칠 수 없는 파일을 원인으로 박제하게 된다.
+      저장소 안 프레임이 하나도 없으면(순수 라이브러리 크래시) 빈 값 — 그때는
+      호출부가 종전대로 로그 파일명을 쓴다.
+
+    ★ 반환하는 모듈 표기는 **저장소 상대 경로**(`JARVIS07_GUARDIAN/guardian_agent.py`).
+      DB 의 `module` 은 점표기와 경로표기가 섞여 있어 어느 쪽으로도 통일돼 있지 않은데,
+      경로표기는 *그대로 열어볼 수 있다* 는 장점이 있어 수리 계층에 유리하다.
+    """
+    root = str(_ROOT)          # 28행에 이미 있는 저장소 루트 — 사본 만들지 않는다
+    inside: list[tuple[str, str]] = []
+    for m in _TB_FRAME_PAT.finditer(tb or ""):
+        path, func = m.group("file"), m.group("func")
+        if not path.startswith(root):
+            continue
+        if "/.venv/" in path or "/site-packages/" in path:
+            continue          # 저장소 *안* 이라도 남의 코드다
+        inside.append((path[len(root):].lstrip("/"), func))
+    return inside[-1] if inside else ("", "")
+
+
 # 추가 가드: GUARDIAN 자체 수집 로그 (재귀 차단) + 오류 수집/스캔 정상 로그 줄 제외
 _LOG_SKIP_PAT = re.compile(
     r"\[GUARDIAN\]\s*(?:오류 수집|로그 스캔|학습|패턴|fingerprint|hit_count)|"
@@ -368,11 +400,22 @@ class _LogFileHandler:
             exc_line = m.group("exc").strip()
             dotted, _, msg = exc_line.partition(":")
             etype = dotted.strip().split(".")[-1] or "LogError"
+            # ★ 발생 위치는 traceback 에서 **파생** 한다 (2026-08-07).
+            #   종전엔 `module=log_file.name` — 즉 *어디로 들어왔나*(daemon.log)를
+            #   *어디서 났나* 자리에 적었다. 그 결과 셋이 한꺼번에 망가졌다:
+            #     ① 같은 사건이 갈렸다 — 직접 report 는 실제 모듈로, 스캐너는 'daemon.log'
+            #     ② Tier 1·2 가 반드시 실패했다 — 'daemon.log' 는 고칠 수 있는 소스가 아니다
+            #     ③ 그래서 **이미 고친 버그를 수동 검토하라**는 알림이 사용자에게 갔다
+            #   실측(2026-08-07): `guardian_agent.py:486` 한 건이 14:49 에 고쳐졌는데,
+            #   14:54 로그 스캔이 같은 traceback 을 읽어 2건을 더 만들었다(둘 다 wontfix).
+            _origin_mod, _origin_func = _tb_origin(block)
             catch(
                 etype,
                 "log_file",
                 message=(msg.strip() or exc_line)[:500],
-                module=log_file.name,
+                # 파생 실패 시에만 종전처럼 파일명 — 위치 없는 기록이라도 남기는 편이 낫다
+                module=_origin_mod or log_file.name,
+                func_name=_origin_func,
                 # ★ tb_str 전달 — 이제야 _is_sandbox_traceback 가 실제로 동작한다
                 #   (종전 경로는 tb 를 안 넘겨 sandbox 차단이 무력했다)
                 tb_str=block,

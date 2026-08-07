@@ -273,6 +273,13 @@ class ActionResult:
     issues_history: list[list[Issue]] = field(default_factory=list)
     escalation_reason: str = ""             # 송출 안 된 사유 (delivered=False 일 때만)
     deferred: bool = False                  # ★ 인터프리터 종료 레이스로 *연기* (실패 아님 — 재시도 대상)
+    # ★ 같은 동작이 *이미 다른 호출에서 돌고 있어* 이번 호출을 건너뜀 (2026-08-07).
+    #   deferred 의 한 종류지만 호출자가 **다르게** 다뤄야 해서 별도 필드다 —
+    #   인프라 스로틀 deferred 는 "다른 플랫폼은 계속 진행" 이지만, 동시 중복은
+    #   "다른 플랫폼도 멈춰야 한다"(인터리브 이중 발행 방지). 종전엔 호출자가
+    #   `"동시 실행 중복 차단" in escalation_reason` 문자열로 판별했는데, 그러면
+    #   문구를 한 글자만 바꿔도 가드가 **조용히** 죽는다(원칙② — 복사본을 믿지 말 것).
+    concurrent_blocked: bool = False
 
     @property
     def state(self) -> dict:
@@ -897,17 +904,23 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
     # ── ★ P1-⑤ 동시성 락 (비블로킹) ──
     _lock = _acquire_action_lock(action_def.name)
     if _lock is None:
-        # 이미 같은 동작 실행 중 — 즉시 escalation (대기 안 함)
+        # ── 이미 같은 동작 실행 중 — 이번 호출만 건너뛴다 (실패 아님) ──
+        # ★ 2026-08-07: 종전엔 GUARDIAN 박제 + 🚨 "송출 차단 — 수동 검토 필요" 를 쐈다.
+        #   그건 **틀린 분류** 다. "아직 돌고 있다" 는 정상 동작이고 고칠 것이 없다.
+        #   · 바로 위 `interpreter_shutting_down()` 은 같은 성질을 이미 deferred 로 다룬다.
+        #   · `job_history._on_job_missed` 도 `EVENT_JOB_MAX_INSTANCES` 를 *일부러* 안 듣는다
+        #     ("직전 회차가 아직 돌고 있어 스킵됨" 은 실패가 아니라는 같은 판단).
+        #     같은 뜻을 세 곳이 서로 다르게 처리하고 있었다(원칙① 위반).
+        #   실측(전체 이력 3건): 전부 **데몬 부팅 즉시 실행 + 주기 잡** 이 겹친 것이다.
+        #   `jarvis_daemon.py:552` 가 부팅 때 `job_analyzer_fallback` 을 바로 돌리고,
+        #   5분 뒤 `analyzer_fb` 인터벌 잡이 같은 동작을 부른다 — 설계상 정상인 레이스다.
+        #   GUARDIAN 은 이걸 Tier1·2 로 고치려다 반드시 실패하고(고칠 코드가 없다),
+        #   사용자는 조치할 것이 없는 알림을 받았다.
         reason = f"동시 실행 중복 차단 — '{action_def.name}' 이미 다른 호출에서 실행 중"
-        _log.warning(f"[harness] 🚫 동시성 차단: {reason}")
-        dup_issue = Issue(step="전체", kind="concurrent_duplicate", detail=reason)
-        result.issues_history.append([dup_issue])
+        _log.info(f"[harness] ⏭ 동시 실행 중복 — 이번 호출 건너뜀(deferred): {action_def.name}")
+        result.deferred = True
+        result.concurrent_blocked = True
         result.escalation_reason = reason
-        try:
-            _report_issues_to_guardian(action_def.name, 0, [dup_issue])
-        except Exception:
-            pass
-        _notify_escalation(action_def.name, 0, [dup_issue], reason=reason, retry_job_id=action_def.retry_job_id)
         return result
 
     # ── ★ 정지 방어 워치독 (사용자 박제 2026-07-06) ──
