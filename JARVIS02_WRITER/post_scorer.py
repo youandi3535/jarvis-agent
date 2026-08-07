@@ -853,10 +853,17 @@ def draft_from_row(row: dict) -> dict:
     return {
         "html": body, "content": body,
         "title": row.get("title") or "",
-        # ★ 제목이 아니라 **실제 주제 키워드**. 없으면 theme 로 파생하고, 그것도 없으면 빈 값
-        #   (빈 값이면 채점기가 '키워드 없음' 분기로 빠진다 — 무상 만점이라 좋아 보이지만
-        #    실은 측정을 안 하는 것이다. 그래서 source_keyword 를 최대한 살린다).
-        "keyword": (row.get("source_keyword") or row.get("theme") or "").strip(),
+        # ★ 제목이 아니라 **실제 주제 키워드**.
+        #   우선순위: ① 발행 시점에 게이트가 *채점에 쓴 바로 그 키워드*(publish_meta.keyword)
+        #            ② source_keyword ③ theme.
+        #   ①이 먼저인 이유 — `source_keyword` 는 `trends.keyword` 와 맞춰 보는 **조인 키**라
+        #   원본 라벨(`황사/미세먼지`)이 그대로 들어온다. 그 라벨은 한국어 산문에 통째로
+        #   나올 수 없어, 그걸로 채점하면 발행 전(미세먼지)과 발행 후(황사/미세먼지)가
+        #   **다른 잣대**가 된다. 실측 6건 전부 2.0~5.5점 괴리.
+        #   조인 키의 의미를 바꾸지 않고 채점용 값을 따로 나르는 이유다 —
+        #   한 칸에 두 의미를 담으면 반드시 한쪽이 깨진다.
+        "keyword": (meta.get("keyword") or row.get("source_keyword")
+                    or row.get("theme") or "").strip(),
         "post_type": row.get("post_type") or "",
         "platform": row.get("platform") or "",
         "tags": meta.get("tags") or [],

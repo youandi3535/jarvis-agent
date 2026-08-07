@@ -1971,6 +1971,8 @@ def test_커밋_잔여를_훅이_검사한다():
 
 from pathlib import Path as _Path
 
+import json as _jsonlib
+
 _ROOT = _Path(__file__).resolve().parent.parent
 
 
@@ -2467,8 +2469,13 @@ def test_발행메타_생성기에_본문만_넘어간다():
         "본문 인자가 _body_text() 를 거치지 않는다 — 완전 문서가 그대로 간다"
 
 
-def test_저장되는_키워드가_4조합_모두_정규화된다():
-    """발행 전(draft.keyword)과 발행 후(DB.source_keyword)가 갈라지면 두 잣대가 된다."""
+def test_채점_키워드가_조인키와_분리되어_운반된다():
+    """★ 발행 전 게이트가 채점에 쓴 키워드가 발행 후 채점에도 그대로 가야 한다.
+
+    `source_keyword` 는 `trends.keyword` 와 맞춰 보는 **조인 키**라 원본 라벨이
+    들어온다(learning·topic_pack·daily_review·performance_collector 4곳이 쓴다).
+    그걸 정규화하면 조인이 깨지고, 안 하면 채점이 갈라진다 — 그래서 **따로 나른다.**
+    """
     import ast
 
     checked = 0
@@ -2477,13 +2484,22 @@ def test_저장되는_키워드가_4조합_모두_정규화된다():
         tree = ast.parse((_ROOT / f).read_text(encoding="utf-8"))
         for n in ast.walk(tree):
             if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_emit":
-                kw = next((k.value for k in n.keywords if k.arg == "source_keyword"), None)
-                assert kw is not None, f"{f}:{n.lineno} source_keyword 가 없다"
-                # 원본 라벨을 그대로 넘기면 위반 (Name 노드 하나면 미정규화)
-                assert not isinstance(kw, ast.Name), \
-                    f"{f}:{n.lineno} 원본 라벨을 그대로 저장한다 — 정규화를 거쳐야 한다"
+                pm = next((k.value for k in n.keywords if k.arg == "publish_meta"), None)
+                assert isinstance(pm, ast.Dict), f"{f}:{n.lineno} publish_meta 가 dict 가 아니다"
+                keys = {k.value for k in pm.keys if isinstance(k, ast.Constant)}
+                assert "keyword" in keys, \
+                    f"{f}:{n.lineno} publish_meta 에 채점용 keyword 가 없다 — 두 잣대가 된다"
                 checked += 1
     assert checked >= 4, f"emit {checked}곳 — 4조합을 못 덮는다"
+
+    # 실제 우선순위 — publish_meta.keyword 가 source_keyword 를 이긴다
+    from JARVIS02_WRITER.post_scorer import draft_from_row
+    row = {"title": "t", "original_html": "<p>x</p>",
+           "source_keyword": "황사/미세먼지", "theme": "황사/미세먼지",
+           "publish_meta": _jsonlib.dumps({"keyword": "미세먼지"})}
+    assert draft_from_row(row)["keyword"] == "미세먼지", "채점 키워드가 조인 키에 밀렸다"
+    del row["publish_meta"]
+    assert draft_from_row(row)["keyword"] == "황사/미세먼지", "폴백이 끊겼다"
 
 
 def test_검색어는_머리_토큰을_고른다():

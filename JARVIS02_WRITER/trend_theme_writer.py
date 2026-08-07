@@ -298,12 +298,16 @@ def _publish_tistory(draft: dict, theme: str, sector: str,
                       #   태그·메타 설명을 보게 한다. 빠뜨리면 그 조합만 N7·T7 이 0점으로
                       #   기록돼 "개선했는데 보상이 깎이는" 상태가 된다.
                       publish_meta={"tags": draft.get("tags") or [],
-                                    "meta_description": draft.get("meta_description") or ""},
-                      # ★ 정규화된 검색어를 저장한다 (2026-08-07). 원본 라벨
-                      #   (`로봇(산업용/협동로봇 등)`)을 저장하면 **발행 후 채점**이 그걸
-                      #   본문에서 찾다가 키워드 항목을 통째로 0점 처리한다 —
-                      #   발행 전(draft.keyword)과 발행 후(DB.source_keyword)가 갈라진다.
-                      source_keyword=(draft.get("keyword") or theme), post_type="theme",
+                                    "meta_description": draft.get("meta_description") or "",
+                                    # ★ 발행 전 게이트가 채점에 쓴 바로 그 키워드.
+                                    #   조인 키(source_keyword)와 용도가 다르므로 따로 나른다 —
+                                    #   같은 칸에 두 의미를 담으면 한쪽이 반드시 깨진다.
+                                    "keyword": draft.get("keyword") or ""},
+                      # ★ `source_keyword` 는 **조인 키**다 — `trends.keyword` 와 맞춰
+                      #   보는 값이라 정규화하면 안 된다(learning·topic_pack·daily_review·
+                      #   performance_collector 4곳이 이 값으로 매칭한다).
+                      #   채점용 검색어는 아래 publish_meta.keyword 로 따로 나른다.
+                      source_keyword=theme, post_type="theme",
                       image_paths=_imgs)
             except Exception as e:
                 print(f"  ⚠️ [DB] 저장 오류 (무시): {e}")
@@ -355,12 +359,16 @@ def _publish_naver(draft: dict, theme: str, sector: str) -> dict:
                       #   태그·메타 설명을 보게 한다. 빠뜨리면 그 조합만 N7·T7 이 0점으로
                       #   기록돼 "개선했는데 보상이 깎이는" 상태가 된다.
                       publish_meta={"tags": draft.get("tags") or [],
-                                    "meta_description": draft.get("meta_description") or ""},
-                      # ★ 정규화된 검색어를 저장한다 (2026-08-07). 원본 라벨
-                      #   (`로봇(산업용/협동로봇 등)`)을 저장하면 **발행 후 채점**이 그걸
-                      #   본문에서 찾다가 키워드 항목을 통째로 0점 처리한다 —
-                      #   발행 전(draft.keyword)과 발행 후(DB.source_keyword)가 갈라진다.
-                      source_keyword=(draft.get("keyword") or theme), post_type="theme",
+                                    "meta_description": draft.get("meta_description") or "",
+                                    # ★ 발행 전 게이트가 채점에 쓴 바로 그 키워드.
+                                    #   조인 키(source_keyword)와 용도가 다르므로 따로 나른다 —
+                                    #   같은 칸에 두 의미를 담으면 한쪽이 반드시 깨진다.
+                                    "keyword": draft.get("keyword") or ""},
+                      # ★ `source_keyword` 는 **조인 키**다 — `trends.keyword` 와 맞춰
+                      #   보는 값이라 정규화하면 안 된다(learning·topic_pack·daily_review·
+                      #   performance_collector 4곳이 이 값으로 매칭한다).
+                      #   채점용 검색어는 아래 publish_meta.keyword 로 따로 나른다.
+                      source_keyword=theme, post_type="theme",
                       image_paths=_imgs)
             except Exception as e:
                 print(f"  ⚠️ [DB] 저장 오류 (무시): {e}")
