@@ -2651,3 +2651,69 @@ def test_고친_항목은_최근_실적으로_목록에서_빠진다():
     got = {d["key"] for d in _ql.weak_items(scope="theme", platform="tistory", days=3650)}
     assert probe not in got, \
         f"{probe} 를 고쳤는데도 계속 약점으로 지목한다 (최근 {_ql.WEAK_RECENT_N}건 전부 만점)"
+
+
+def test_항목이름표에_박힌_수치가_기준에서_파생된다():
+    """★ 이름표는 이제 **작성 프롬프트로 나간다** — 낡으면 거짓 목표를 준다.
+
+    실측 2026-08-07: `B17_body_len` 이름이 `본문 분량 1500자+` 인데 채점은 1600 을 썼다.
+    1500자 글은 만점이 아닌데 이름은 만점이라고 말하고 있었다.
+    """
+    from JARVIS02_WRITER.length_manager import TARGET_KOREAN
+    from JARVIS02_WRITER.post_scorer import item_index
+    from JARVIS02_WRITER.seo_standards import PLATFORM_STANDARDS as P
+
+    idx = item_index()
+    want = {
+        "B17_body_len":  [str(int(TARGET_KOREAN))],
+        "N1_title_len":  [str(P["naver"]["title_max_chars"])],
+        "T1_title_len":  [str(P["tistory"]["title_max_chars"])],
+        "N7_hashtags":   [str(P["naver"]["hashtag_min"]), str(P["naver"]["hashtag_max"])],
+        "T7_meta_desc":  [str(P["tistory"]["meta_desc_min_chars"]),
+                          str(P["tistory"]["meta_desc_max_chars"])],
+    }
+    for key, nums in want.items():
+        name = (idx.get(key) or {}).get("name", "")
+        for n in nums:
+            assert n in name, f"{key} 이름표 {name!r} 에 기준값 {n} 이 없다 — 복사본이 낡았다"
+
+
+def test_항목_소급채점이_재현_가능한_함수다():
+    """★ 일회성 스크립트로 DB 를 바꾸면 검증도 재실행도 불가능하다.
+
+    2026-08-07 에 230행을 그렇게 채웠고, 그 코드가 저장소에 없었다.
+    """
+    import inspect
+
+    from JARVIS03_RADAR.post_quality_analyzer import backfill_item_scores
+
+    got = backfill_item_scores()
+    assert isinstance(got, dict) and "filled" in got, f"실행 결과가 이상하다: {got!r}"
+
+    # 총점을 건드리면 그날의 보상 신호가 사후에 바뀐다
+    src = _code_only(inspect.getsource(backfill_item_scores))
+    assert "save_quality_score" not in src, "소급 채점이 총점을 덮어쓴다"
+    assert "backfill_rubric_items" in src, "항목 전용 저장 API 를 쓰지 않는다"
+
+    # ★ Section A 는 소급 측정 불가 — **실제로 저장된 값** 으로 확인한다.
+    #   소스에 'A' 라는 글자가 있는지 보는 검사는 `a_keys` 를 만들어만 두고
+    #   쓰지 않아도 통과한다(뮤테이션에서 발각).
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX, item_index
+    from shared.db import get_db
+
+    body = "<p>" + "코스피가 올랐다. " * 60 + "</p>"
+    with get_db() as con:
+        con.execute("INSERT INTO post_analysis (platform, theme, title, post_type, "
+                    "source_keyword, original_html, status, analyzed_at) "
+                    "VALUES ('naver','a','제목','economic','코스피',?, 'analyzed',"
+                    "datetime('now','localtime'))", (body,))
+        aid = con.execute("SELECT id FROM post_analysis WHERE title='제목' "
+                          "ORDER BY id DESC LIMIT 1").fetchone()[0]
+    backfill_item_scores()
+    from shared import db as _sdb
+    stored = _sdb.get_rubric_items(aid)
+    assert stored, "소급 채점이 아무것도 저장하지 않았다"
+    a_keys = {k for k, v in item_index().items() if v.get("section") == "A"}
+    assert a_keys, "A 항목 파생 실패 — 검사 전제가 깨졌다"
+    leaked = a_keys & set(stored)
+    assert not leaked, f"측정하지 않은 Section A 를 0점으로 저장했다: {sorted(leaked)}"

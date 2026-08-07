@@ -127,6 +127,22 @@ def _section_of(key: str) -> str:
     return "?"
 
 
+
+def _target_korean() -> int:
+    """본문 분량 목표 — `length_manager` 단일 진입점에서 파생.
+
+    ★ 이름표에 수치를 **복사**해 두면 기준이 바뀌는 날 이름만 옛 값을 주장한다.
+      실측 2026-08-07: 이름은 `본문 분량 1500자+` 인데 채점은 1600 을 썼다 —
+      1500자 글은 만점이 아닌데 이름은 만점이라고 말하고 있었다.
+      그리고 이 **이름표가 이제 작성 프롬프트로 나간다**(약점 항목 주입) —
+      낡은 이름은 작성자에게 거짓 목표를 준다.
+    """
+    try:
+        from JARVIS02_WRITER.length_manager import TARGET_KOREAN
+        return int(TARGET_KOREAN)
+    except Exception:
+        return 1600
+
 def mx(key: str) -> float:
     """항목 만점 — 채점 함수·표시 양쪽의 *유일한* 배점 출처."""
     return float(RUBRIC_MAX[key])
@@ -502,7 +518,7 @@ def score_section_b(draft: Any, platform: str = "", factuality_issues: list = No
         "B14_incomplete2":  {"score": graded_violation(len(_INCOMPLETE.findall(_strip(html))), 1.0), "max": mx("B14_incomplete2"), "name": "미완성 표현 없음(제7조)"},
         "B15_img_pos":      {"score": graded_violation(len(_IMG_POS.findall(_strip(html))), 1.0), "max": mx("B15_img_pos"), "name": "이미지 위치 지칭 없음"},
         "B16_img_count":    {"score": _b16_image_count(html), "max": mx("B16_img_count"), "name": "이미지 최소 5장"},
-        "B17_body_len":     {"score": _b17_body_length(html), "max": mx("B17_body_len"), "name": "본문 분량 1500자+"},
+        "B17_body_len":     {"score": _b17_body_length(html), "max": mx("B17_body_len"), "name": f"본문 분량 {_target_korean()}자+"},
         "B18_spacing":      {"score": _b18_spacing(html), "max": mx("B18_spacing"), "name": "여백 규정 준수"},
         "B19_chart":        {"score": _b19_chart(draft), "max": mx("B19_chart"), "name": "차트 실데이터"},
         "B20_visual_div":   {"score": mx("B20_visual_div"), "max": mx("B20_visual_div"), "name": "시각화 스타일 중복 없음(프로세스)"},  # 근거: 차트 스타일 메타데이터 부재로 draft 단독 중복 관측 불가 → 프로세스 보장, max 유지(rule 3)
@@ -584,13 +600,13 @@ def score_section_c_naver(draft: Any, kw: str = "") -> dict:
         n8 = (_m - 1.0) if hayeo >= 5 else ((_m - 1.5) if hayeo >= 3 else 0.0)
 
     items = {
-        "N1_title_len":     {"score": n1, "max": mx("N1_title_len"), "name": "제목 길이(≤40)"},
+        "N1_title_len":     {"score": n1, "max": mx("N1_title_len"), "name": f"제목 길이(≤{_std('naver', 'title_max_chars', 40):.0f})"},
         "N2_kw_in_title":   {"score": n2, "max": mx("N2_kw_in_title"), "name": "제목 키워드 앞부분"},
         "N3_h3_count":      {"score": n3, "max": mx("N3_h3_count"), "name": "H3 소제목 3~4개"},
         "N4_section_sents": {"score": n4, "max": mx("N4_section_sents"), "name": "소제목 아래 2~3문장"},
         "N5_kw_density":    {"score": n5, "max": mx("N5_kw_density"), "name": "키워드 밀도 1~2%"},
         "N6_kw_in_body":    {"score": n6, "max": mx("N6_kw_in_body"), "name": "본문 키워드 3~5회"},
-        "N7_hashtags":      {"score": n7, "max": mx("N7_hashtags"), "name": "해시태그 5~10개"},
+        "N7_hashtags":      {"score": n7, "max": mx("N7_hashtags"), "name": f"해시태그 {_std('naver', 'hashtag_min', 5):.0f}~{_std('naver', 'hashtag_max', 10):.0f}개"},
         "N8_hayeo":         {"score": n8, "max": mx("N8_hayeo"), "name": "해요체 일관"},
     }
     return {"total": round(sum(v["score"] for v in items.values()), 2), "max": 20.0, "items": items}
@@ -656,13 +672,13 @@ def score_section_c_tistory(draft: Any, kw: str = "") -> dict:
     t9 = mx("T9_no_dup")
 
     items = {
-        "T1_title_len":     {"score": t1, "max": mx("T1_title_len"), "name": "제목 길이(≤55)"},
+        "T1_title_len":     {"score": t1, "max": mx("T1_title_len"), "name": f"제목 길이(≤{_std('tistory', 'title_max_chars', 55):.0f})"},
         "T2_kw_in_title":   {"score": t2, "max": mx("T2_kw_in_title"), "name": "제목 키워드 포함"},
         "T3_h1_count":      {"score": t3, "max": mx("T3_h1_count"), "name": "H1 1개"},
         "T4_h2_count":      {"score": t4, "max": mx("T4_h2_count"), "name": "H2 3~5개"},
         "T5_h3_range":      {"score": t5, "max": mx("T5_h3_range"), "name": "H3 범위 내 활용"},
         "T6_longtail":      {"score": t6, "max": mx("T6_longtail"), "name": "롱테일 키워드 헤더"},
-        "T7_meta_desc":     {"score": t7, "max": mx("T7_meta_desc"), "name": "메타 설명 길이(140-160)"},
+        "T7_meta_desc":     {"score": t7, "max": mx("T7_meta_desc"), "name": f"메타 설명 길이({_std('tistory', 'meta_desc_min_chars', 140):.0f}-{_std('tistory', 'meta_desc_max_chars', 160):.0f})"},
         "T8_internal_link": {"score": t8, "max": mx("T8_internal_link"), "name": "내부 링크 1개"},
         "T9_no_dup":        {"score": t9, "max": mx("T9_no_dup"), "name": "네이버 중복 없음(프로세스)"},
     }
