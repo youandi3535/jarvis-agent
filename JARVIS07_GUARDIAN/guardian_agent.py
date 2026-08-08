@@ -497,6 +497,8 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
         if fixed:
             # ★ 근거를 남긴다 (2026-08-08) — `fixed` 가 세 뜻을 말하지 않게.
             #   Tier-2 는 이제 재현검증을 통과해야만 True 를 돌려준다(auto_repair).
+            #   ※ 2026-08-08 19시경 자동 수정이 이 인자를 **주석만 남기고 지웠다**
+            #     (근거 없이 fixed 를 찍는 상태로 되돌아감). 골든 테스트가 잡았다.
             _db.mark_error_status(error_id, "fixed",
                                   "Tier-2 SDK 수정 + 재현검증 통과")
             log.info(f"[GUARDIAN] #{error_id} SDK 수정 성공 → 학습 저장 완료, 작업 재시도 중")
