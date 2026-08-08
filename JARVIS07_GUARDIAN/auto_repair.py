@@ -618,7 +618,7 @@ def run_auto_repair() -> None:
             import sys as _sys
             if _os.getenv("GUARDIAN_CI_GATE", "1") == "0":
                 return []
-            ci = _ROOT / ".github" / "workflows" / "ci.yml"
+            ci = ROOT / ".github" / "workflows" / "ci.yml"
             if not ci.exists():
                 return ["ci.yml 부재 — 게이트 검사 불가"]
             cmds = []
@@ -632,7 +632,7 @@ def run_auto_repair() -> None:
             for c in cmds:
                 c = _re.sub(r"^python3?\b", _sys.executable, c)
                 try:
-                    r = _sp.run(c, shell=True, cwd=str(_ROOT), capture_output=True,
+                    r = _sp.run(c, shell=True, cwd=str(ROOT), capture_output=True,
                                 text=True, timeout=600)
                     if r.returncode != 0:
                         bad.append(f"{c.split()[-2:]}: rc={r.returncode} {(r.stdout or r.stderr)[-200:]}")
