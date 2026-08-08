@@ -561,7 +561,7 @@ def _match_analysis(usage: dict, analyses: list[dict]) -> Optional[dict]:
 _VIOLATION_PENALTY = 0.15
 
 
-def record_directive_violations(scope: str, platform: str, theme: str,
+def record_directive_violations(scope: str, platform: str,
                                 violated_texts: list) -> int:
     """게이트가 판정한 **미준수 지침** 을 사용 기록에 남긴다 (2026-08-07 감사).
 
@@ -573,6 +573,11 @@ def record_directive_violations(scope: str, platform: str, theme: str,
 
     ★ 왜 여기인가 (①) — 지침 텍스트를 id 로 되돌리는 건 지침의 주인만 할 수 있다.
       게이트는 텍스트만 알고, 이 모듈은 그 텍스트가 어느 행에서 나왔는지 안다.
+
+    ★ `theme` 인자를 뺐다 (2026-08-08) — 본문에서 한 번도 쓰지 않는 **죽은 인자**였는데,
+      그걸 채우려던 호출부가 스코프에 없는 이름을 써서 **NameError** 를 냈다.
+      `build_insights_block` 도 작성기에서 theme 를 넘기지 않으므로(기본 "") 배치 매칭에
+      쓰이지도 않는다. 쓰지 않는 인자는 두지 않는다 — 채우려다 사고가 난다.
     """
     if not violated_texts:
         return 0

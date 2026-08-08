@@ -2763,3 +2763,89 @@ def test_메타설명_길이미달이면_다시_묻는다():
         _llm.invoke_text = orig
     assert len(calls) == 1, f"이미 범위 안인데 또 물었다 ({len(calls)}회)"
     assert lo <= len(ok) <= hi
+
+
+def _undefined_globals(fn) -> set:
+    """함수가 참조하는 전역 이름 중 **어디에도 없는 것** — 실행 시 NameError 가 될 것들.
+
+    파이썬은 이름 해석을 실행 시점에 하므로, `except` 가 감싸고 있으면 이런 코드가
+    조용히 죽는다. AST 가 아니라 **컴파일된 코드 객체**(co_names)를 보므로 정확하다.
+    """
+    import builtins
+    import dis
+
+    fn = getattr(fn, "__wrapped__", fn)      # lru_cache 등 래퍼를 벗긴다
+    g = fn.__globals__
+    seen, out = set(), set()
+
+    def walk(c):
+        if id(c) in seen:
+            return
+        seen.add(id(c))
+        # ★ co_names 는 **속성명까지** 담는다(`get`·`strip`). 전역 참조만 봐야 하므로
+        #   바이트코드에서 LOAD_GLOBAL 만 고른다. 함수 안 `import json` 은 지역이라
+        #   LOAD_FAST 가 되어 자동으로 빠진다 — 정확히 우리가 원하는 판정이다.
+        for ins in dis.get_instructions(c):
+            if ins.opname == "LOAD_GLOBAL":
+                n = ins.argval
+                if n not in g and not hasattr(builtins, n):
+                    out.add(n)
+        for const in c.co_consts:
+            if hasattr(const, "co_names"):
+                walk(const)
+
+    walk(fn.__code__)
+    return out
+
+
+def test_발행경로_함수가_없는_이름을_쓰지_않는다():
+    """★ `except` 가 감싸면 NameError 는 로그 한 줄이 되고 아무도 모른다.
+
+    실측 2026-08-08: `prepublish_quality_issues` 가 스코프에 없는 `theme` 을 참조해
+    **매 발행마다** 지침 위반 학습이 조용히 죽고 있었다. 어제 그 코드를 넣은 게 나다.
+    `co_names` 로 컴파일 결과를 직접 보므로 들여쓰인 참조·중첩 함수까지 잡는다.
+    """
+    import importlib
+
+    TARGETS = [
+        ("JARVIS02_WRITER.prepublish_gate", "prepublish_quality_issues"),
+        ("JARVIS07_GUARDIAN.quality_learner", "record_directive_violations"),
+        ("JARVIS07_GUARDIAN.quality_learner", "build_insights_block"),
+        ("JARVIS07_GUARDIAN.quality_learner", "attribute_pending_rewards"),
+        ("JARVIS07_GUARDIAN.quality_learner", "weak_items"),
+        ("JARVIS02_WRITER.post_scorer", "draft_from_row"),
+        ("JARVIS02_WRITER.post_scorer", "pipeline_controlled_items"),
+        ("JARVIS08_PUBLISH.post_meta", "build_post_meta"),
+        ("JARVIS08_PUBLISH.post_meta", "meta_description"),
+        ("JARVIS08_PUBLISH.internal_links", "related_links_html"),
+        ("JARVIS03_RADAR.post_quality_analyzer", "backfill_item_scores"),
+        ("JARVIS03_RADAR.topic_pack", "search_keyword"),
+    ]
+    bad = {}
+    for mod, name in TARGETS:
+        fn = getattr(importlib.import_module(mod), name)
+        miss = _undefined_globals(fn)
+        if miss:
+            bad[f"{mod}.{name}"] = sorted(miss)
+    assert not bad, f"실행 시 NameError 가 될 참조: {bad}"
+
+
+def test_지침위반_기록이_실제_호출과_시그니처가_맞는다():
+    """호출부와 정의가 어긋나면 `except` 가 삼켜 **매 발행마다** 학습이 죽는다."""
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN.quality_learner import record_directive_violations
+
+    sig = inspect.signature(record_directive_violations)
+    tree = ast.parse((_ROOT / "JARVIS02_WRITER/prepublish_gate.py").read_text(encoding="utf-8"))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", "") == "record_directive_violations"]
+    assert calls, "게이트가 지침 위반을 기록하지 않는다 — 신용할당 신호가 끊긴다"
+    for c in calls:
+        assert len(c.args) + len(c.keywords) == len(sig.parameters), \
+            f"호출 인자 {len(c.args) + len(c.keywords)}개 ≠ 정의 {len(sig.parameters)}개"
+
+    # 실제로 부른다 (patch_effective 표준)
+    n = record_directive_violations("economic", "naver", ["존재하지 않는 지침"])
+    assert isinstance(n, int)
