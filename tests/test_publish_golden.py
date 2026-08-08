@@ -1906,7 +1906,7 @@ def test_지침별_변별신호가_버려지지_않는다():
     #   미정의 `log` 로 **실행 즉시 NameError** 가 나는 코드를 초록으로 통과시켰다.
     #   902행 중 violated 는 0행이었는데 테스트는 통과하고 있었다.
     #   "정적 검사는 코드가 어떻게 생겼나만 답한다" — 돌려봐야 안다.
-    n = record_directive_violations("economic", "naver", "", ["존재하지 않는 지침 문장"])
+    n = record_directive_violations("economic", "naver", ["존재하지 않는 지침 문장"])
     assert isinstance(n, int), f"실행이 int 를 안 돌려준다: {n!r}"
 
     # ★ 이 함수가 부르는 DB API 가 **실존하는가** (오타 함수명 방어).
