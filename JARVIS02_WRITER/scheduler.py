@@ -237,11 +237,22 @@ def _is_locked_externally() -> bool:
 # ══════════════════════════════════════════
 
 def log(msg: str):
+    """스케줄러 로그 — **기록이 실패해도 본류를 막지 않는다** (2026-08-09, ERRORS [593]).
+
+    ★ 종전엔 `logs/` 가 없으면 `FileNotFoundError` 로 죽었다. 그 디렉터리는
+      `.gitignore` 대상이라 **새 체크아웃·새 기계에는 없다.** 하필 이 함수가
+      *발행 실패를 알리는 경로* 에서 불린다 — 실패를 알리려다 그 자리에서 크래시하면
+      운영자는 아무것도 못 받는다. 실측으로 확인했다(추적 파일만 있는 트리에서 재현).
+    """
     ts   = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     line = f"[{ts}] {msg}"
     print(line)
-    with open(LOG_FILE, 'a', encoding='utf-8') as f:
-        f.write(line + '\n')
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(line + '\n')
+    except Exception as e:                               # noqa: BLE001
+        print(f"[log] 파일 기록 실패(무시): {type(e).__name__}: {e}")
 
 
 # ══════════════════════════════════════════
@@ -917,15 +928,40 @@ def _naver_cookie_ready(label: str) -> bool:
             send_telegram(m)
         return True
 
+    # ★ 실패 사유를 *로그인 도메인* 에서 받아 온다 (2026-08-09 — ERRORS [593]).
+    #   `ensure_naver_ready` 의 반환은 네트워크/사람 두 갈래뿐이라 "왜 사람이 필요한가"
+    #   (CAPTCHA·기기인증·계정)를 구분하지 못한다. 08-09 07:00 사고에서 그 구분이 없어
+    #   **재현해 보고서야** 원인을 알았다 — 로그에도 원장에도 남지 않았기 때문이다.
+    try:
+        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import last_login_failure
+        _reason = last_login_failure() or why
+    except Exception:                                    # noqa: BLE001
+        _reason = why
+
     if why == "permanent":
+        _extra = {"captcha_unattended": "\n무인 실행이라 대기하지 않았습니다 — 직접 로그인 후 다음 회차에 발행됩니다.",
+                  "captcha_timeout":    "\n화면 인증이 제한시간 내에 끝나지 않았습니다."}.get(_reason, "")
         m = (f"🚨 *[{label}] 네이버 쿠키 점검 실패 — 발행 건너뜀*\n"
-             f"네트워크는 정상입니다. CAPTCHA·계정 문제로 보이며 *직접 로그인* 이 필요합니다.")
+             f"네트워크는 정상입니다. CAPTCHA·계정 문제로 보이며 *직접 로그인* 이 필요합니다."
+             f"{_extra}\n사유: `{_reason}`")
     else:
         _until = f" (창 마감 {deadline:%H:%M})" if deadline else ""
         m = (f"🚨 *[{label}] 네이버 쿠키 점검 실패 — 오늘 발행 포기*\n"
-             f"네트워크 단절이 발행 창 안에 회복되지 않았습니다{_until}.")
+             f"네트워크 단절이 발행 창 안에 회복되지 않았습니다{_until}.\n사유: `{_reason}`")
     log(m.replace("*", ""))
     send_telegram(m)
+
+    # ★ 오류 원장에 박제 — 종전엔 로그·텔레그램뿐이라 **자동수리·학습·감사 어디에도
+    #   들어가지 않았다.** 08-09 07:00 사고가 error_log 0건이었던 이유다(실측).
+    #   타입은 로그인 도메인이 사유에서 파생한다 — 중앙 매핑표를 만들지 않는다(ERRORS [547]).
+    try:
+        from JARVIS07_GUARDIAN.error_collector import report as _report
+        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import naver_login_error_type
+        _report(naver_login_error_type(_reason), "publish", module=__name__,
+                func_name="_naver_cookie_ready",
+                message=f"[{label}] 네이버 쿠키 점검 실패로 발행 건너뜀 (사유={_reason})")
+    except Exception as _re:                             # noqa: BLE001
+        log(f"⚠️ [{label}] 쿠키 점검 실패 박제 실패: {type(_re).__name__}: {_re}")
     return False
 
 

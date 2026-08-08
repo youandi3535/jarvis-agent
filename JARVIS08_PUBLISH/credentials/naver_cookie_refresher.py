@@ -37,6 +37,65 @@ _LEGACY_BASE_DIR = _PROJECT_ROOT / "JARVIS02_WRITER"
 COOKIE_FILE = _LEGACY_BASE_DIR / "naver_cookies.pkl"
 
 
+# ── CAPTCHA·기기인증: 사람을 기다릴 것인가 ──────────────────────────
+#
+# ★ 왜 이 판단이 필요한가 (2026-08-09 실사고 — ERRORS [593])
+#   08-09 07:00 경제 브리핑이 발행되지 않았다. 네이버가 CAPTCHA/기기 인증을 요구했고
+#   이 코드가 **"화면에서 직접 풀어주세요" 라며 120초를 기다렸다.** 새벽 7시 예약 실행에
+#   화면 앞에 사람이 있을 리 없다. 120초를 버리고 실패했다(잡 소요 163초 = sweep 2s +
+#   대기 120s + 부대). 기다림은 발행 창만 먹고 결과를 바꾸지 못했다.
+#
+# ★ ② 동적 설계 — '사람이 있는가' 를 새 플래그로 만들지 않는다.
+#   이미 있는 판단에서 파생한다: `shared.llm.current_job_id()` 는 예약 잡 안에서만
+#   잡 ID 를 돌려준다(밖에서는 ""). 잡 안 = 무인이다. 실측으로 확인했다.
+#   무인이면 0초 — 즉시 포기하고 사람을 부른다. 그게 더 빠른 복구다.
+CAPTCHA_WAIT_SEC = int(os.getenv("NAVER_CAPTCHA_WAIT_SEC", "120"))   # 대화형에서만 쓰인다
+
+
+def human_wait_sec() -> int:
+    """CAPTCHA·기기인증을 사람이 풀 때까지 기다릴 초 — 무인 실행이면 0."""
+    try:
+        from shared.llm import current_job_id            # noqa: PLC0415 — 순환 방지
+        if current_job_id():
+            return 0                                     # 예약 잡 = 무인
+    except Exception:                                    # noqa: BLE001
+        pass
+    return max(0, CAPTCHA_WAIT_SEC)
+
+
+# ── 마지막 실패 사유 ────────────────────────────────────────────────
+#
+# ★ 왜 반환형(bool)을 안 바꾸나: `refresh_naver_cookies` 호출자가 13곳이다.
+#   반환형을 넓히면 그 전부를 손대야 하고, 하나라도 놓치면 조용히 깨진다.
+#   사유는 옆문으로 노출한다 — 필요한 호출자만 읽는다.
+_LAST_FAILURE: str = ""
+
+
+def _fail(reason: str, msg: str = "") -> bool:
+    """실패를 기록하고 False 를 돌려준다 — 사유를 잃지 않는 유일한 출구."""
+    global _LAST_FAILURE
+    _LAST_FAILURE = reason
+    if msg:
+        print(msg)
+    return False
+
+
+def last_login_failure() -> str:
+    """직전 네이버 로그인 실패 사유 (성공했거나 시도 전이면 "")."""
+    return _LAST_FAILURE
+
+
+def naver_login_error_type(reason: str) -> str:
+    """실패 사유 → 오류 타입. *이미 있는 판단*(사유)에서 기계적으로 만든다.
+
+    ★ 중앙 매핑표를 두지 않는다 (CLAUDE.md ERRORS [547] — 도메인이 파생).
+      새 사유가 생기면 타입이 자동으로 따라온다.
+      예: 'captcha_unattended' → 'NaverLoginCaptchaUnattended'
+    """
+    slug = "".join(w.capitalize() for w in (reason or "unknown").split("_"))
+    return "NaverLogin" + slug
+
+
 def _save_cookies(cookies) -> None:
     """쿠키 저장 **단일 진입점** — 저장 직후 권한을 소유자 전용(0600)으로 고정한다.
 
@@ -192,11 +251,10 @@ def refresh_naver_cookies(force: bool = False) -> bool:
             _notify("⚠️ *네이버 쿠키 갱신 스킵*\n인터넷 연결을 확인하세요.\n(자동 수정 대상 아님 — 네트워크 복구 후 자동 재시도)")
         except Exception:
             pass
-        return False
+        return _fail("network_down")
 
     if not NV_ID or not NV_PW:
-        print("  ❌ NV_USERNAME / NV_PASSWORD 환경변수 없음")
-        return False
+        return _fail("credentials_missing", "  ❌ NV_USERNAME / NV_PASSWORD 환경변수 없음")
 
     print(f"  🔄 네이버 쿠키 갱신 시작 (ID: {NV_ID[:3]}***)")
 
@@ -265,8 +323,7 @@ def refresh_naver_cookies(force: bool = False) -> bool:
                 EC.presence_of_element_located((By.ID, "id"))
             )
         except Exception:
-            print("  ❌ 로그인 폼 로드 타임아웃")
-            return False
+            return _fail("login_form_timeout", "  ❌ 로그인 폼 로드 타임아웃")
 
         time.sleep(random.uniform(1.5, 2.5))
         _activate_chrome()
@@ -319,7 +376,7 @@ def refresh_naver_cookies(force: bool = False) -> bool:
         except Exception as e:
             print(f"  ⚠️ 로그인 버튼 클릭 실패: {e}")
             _g_report("writer", e, module=__name__)
-            return False
+            return _fail("login_button_click")
 
         # 로그인 완료 대기
         try:
@@ -330,18 +387,22 @@ def refresh_naver_cookies(force: bool = False) -> bool:
         except Exception:
             src = driver.page_source
             if "captcha" in src.lower() or "보안" in src or "기기" in src:
-                print("  ⚠️  CAPTCHA / 기기 인증 감지 — 화면에서 직접 풀어주세요 (최대 120초 대기)")
+                _wait = human_wait_sec()
+                if _wait <= 0:
+                    # 무인 실행 — 화면 앞에 아무도 없다. 기다려도 결과가 같으니 즉시 부른다.
+                    return _fail("captcha_unattended",
+                                 "  ❌ CAPTCHA / 기기 인증 요구 — 무인 실행이라 대기하지 않는다 "
+                                 "(사람이 직접 로그인해야 함)")
+                print(f"  ⚠️  CAPTCHA / 기기 인증 감지 — 화면에서 직접 풀어주세요 (최대 {_wait}초 대기)")
                 try:
-                    WebDriverWait(driver, 120).until(
+                    WebDriverWait(driver, _wait).until(
                         lambda d: "nidlogin" not in d.current_url
                     )
                     print("  ✅ 수동 인증 완료")
                 except Exception:
-                    print("  ❌ 120초 내 인증 미완료 — 종료")
-                    return False
+                    return _fail("captcha_timeout", f"  ❌ {_wait}초 내 인증 미완료 — 종료")
             else:
-                print("  ❌ 로그인 후 URL 전환 없음")
-                return False
+                return _fail("login_no_redirect", "  ❌ 로그인 후 URL 전환 없음")
 
         time.sleep(random.uniform(2, 3))
 
@@ -361,13 +422,12 @@ def refresh_naver_cookies(force: bool = False) -> bool:
             print(f"  ✅ 쿠키 갱신 완료 ({len(cookies)}개 저장)")
             return True
         else:
-            print("  ❌ 로그인 확인 실패")
-            return False
+            return _fail("login_unconfirmed", "  ❌ 로그인 확인 실패")
 
     except Exception as e:
         print(f"  ❌ 쿠키 갱신 오류: {e}")
         _g_report("writer", e, module=__name__)
-        return False
+        return _fail(f"exception_{type(e).__name__}")
     finally:
         try:
             driver.quit()

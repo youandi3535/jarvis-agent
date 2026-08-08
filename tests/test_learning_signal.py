@@ -402,3 +402,94 @@ def test_소급분은_실측과_구분되어_기록된다():
     # dry_run 기본값이 True 여야 실수로 DB 를 고치지 않는다
     sig = inspect.signature(tu.backfill_missing_model)
     assert sig.parameters["dry_run"].default is True, "기본값이 dry_run 이 아니다 — 사고 위험"
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑩ 발행 전 쿠키 게이트 — 무인 실행에서 사람을 기다리지 않는다 (ERRORS [593])
+# ══════════════════════════════════════════════════════════════════
+def test_무인이면_캡차를_기다리지_않는다():
+    """★ 2026-08-09 07:00 경제 브리핑 미발행의 직접 원인.
+
+    네이버가 CAPTCHA/기기 인증을 요구했고 코드가 "화면에서 직접 풀어주세요" 라며
+    120초를 기다렸다. 새벽 7시 예약 실행에 화면 앞에 사람이 있을 리 없다 —
+    기다림은 발행 창만 먹고 결과를 바꾸지 못한다(잡 소요 163초 실측).
+
+    ★ 판정은 새 플래그가 아니라 `current_job_id()` 에서 파생한다(② 동적 설계).
+    """
+    from JARVIS04_SCHEDULER.job_llm_priority import gate
+    from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import human_wait_sec
+
+    assert human_wait_sec() > 0, "대화형(잡 밖)에서는 사람을 기다려야 한다"
+
+    seen = {}
+    gate("j01_economic_post", lambda: seen.update(w=human_wait_sec()))()
+    assert seen["w"] == 0, f"예약 잡 안(무인)인데 {seen['w']}초를 기다린다"
+
+
+def test_로그인_실패_타입이_사유에서_파생된다():
+    """중앙 매핑표를 만들지 않는다 — 새 사유가 생기면 타입이 자동으로 따라온다."""
+    from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import naver_login_error_type
+
+    assert naver_login_error_type("captcha_unattended") == "NaverLoginCaptchaUnattended"
+    assert naver_login_error_type("login_no_redirect") == "NaverLoginLoginNoRedirect"
+    # 미지 사유도 뭉개지 않고 이름을 만든다 (ERRORS [547] — 뭉뚱그린 타입 금지)
+    assert naver_login_error_type("brand_new_reason") == "NaverLoginBrandNewReason"
+    assert naver_login_error_type("") == "NaverLoginUnknown"
+
+
+def test_캡차_분기가_사유를_남긴다():
+    """실패가 bool 로만 돌아오면 호출자는 '왜' 를 모른다 — 08-09 사고가 그랬다.
+
+    ★ 반환형(bool)은 바꾸지 않는다: 호출자가 13곳이라 하나라도 놓치면 조용히 깨진다.
+      사유는 옆문(`last_login_failure`)으로 노출한다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nc
+
+    src = inspect.getsource(nc.refresh_naver_cookies)
+    tree = ast.parse(src.lstrip())
+    reasons = {n.args[0].value for n in ast.walk(tree)
+               if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_fail"
+               and n.args and isinstance(n.args[0], ast.Constant)}
+    assert "captcha_unattended" in reasons, "무인 CAPTCHA 사유를 남기지 않는다"
+    # 사유 없이 그냥 False 로 빠지는 출구가 남아 있으면 다음에 또 '재현해야 안다'
+    # ★ 허용치를 두지 않는다 — 처음엔 `<= 2` 로 뒀다가 변이 시험에서 **한 곳을 되살려도
+    #   통과**하는 것을 봤다. 느슨한 허용치는 회귀를 그만큼 통과시킨다.
+    bare = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Return)
+            and isinstance(n.value, ast.Constant) and n.value.value is False]
+    assert not bare, (f"사유 없이 빠지는 출구가 {len(bare)}곳({bare}) — `_fail(사유)` 로 바꿀 것. "
+                      f"사유가 없으면 다음에도 '재현해 봐야 아는' 사고가 된다")
+
+
+def test_쿠키게이트_실패가_오류원장에_박제된다(monkeypatch):
+    """★ 종전엔 로그·텔레그램뿐이라 **자동수리·학습·감사 어디에도 안 들어갔다.**
+    08-09 07:00 사고의 error_log 가 0건이었던 이유다(실측).
+
+    경제·테마 공통 지점 하나만 검사한다 — 그 함수가 4조합 전부를 덮기 때문(③).
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("_sched_t", root / "JARVIS02_WRITER" / "scheduler.py")
+    sched = importlib.util.module_from_spec(spec)
+    sys.modules["_sched_t"] = spec.name and sched
+    spec.loader.exec_module(sched)
+
+    import JARVIS08_PUBLISH.credentials.login_manager as lm
+    import JARVIS08_PUBLISH.credentials.naver_cookie_refresher as nc
+    from JARVIS07_GUARDIAN import error_collector as ec
+
+    reported: list = []
+    monkeypatch.setattr(ec, "report", lambda *a, **k: reported.append((a, k)))
+    monkeypatch.setattr(lm, "ensure_naver_ready", lambda deadline=None: (False, "permanent"))
+    monkeypatch.setattr(nc, "_LAST_FAILURE", "captcha_unattended", raising=False)
+    monkeypatch.setattr(sched, "send_telegram", lambda *a, **k: None)
+
+    assert sched._naver_cookie_ready("경제 브리핑") is False, "실패인데 발행을 진행한다"
+    assert reported, "게이트 실패가 오류 원장에 박제되지 않는다"
+    assert reported[0][0][0] == "NaverLoginCaptchaUnattended", \
+        f"뭉뚱그린 타입으로 박제됐다: {reported[0][0][0]}"
