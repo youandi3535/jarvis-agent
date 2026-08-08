@@ -2083,7 +2083,15 @@ def get_ranked_learning_insights(scope: str = "", limit: int = 8,
                -- ★ weight=0 은 '무력화' 를 뜻한다 (2026-08-02 오염 지침 378건 정리).
                --   종전엔 이 필터가 없어 weight 를 0 으로 내려도 **그대로 주입** 됐다.
                AND li.weight > 0
-                 AND (? = '' OR COALESCE(li.scope,'all') IN (?, 'all'))
+                 -- ★ `''` 와 `'all'` 은 **둘 다 '제한 없음'** (2026-08-08).
+                 --   종전엔 `'all'` 이 리터럴 매칭이라 **0건**을 냈다 — DB 에 그런
+                 --   scope 값이 없기 때문(실측 economic/theme/naver/tistory/wp 뿐).
+                 --   `COALESCE(li.scope,'all')` 가 NULL 을 'all' 로 보는 것에서
+                 --   드러나듯 이 스키마에서 'all' 은 '보편' 을 뜻한다. 그런데
+                 --   호출자가 '전체' 를 뜻해 `'all'` 을 넘기면 조용히 빈 목록을
+                 --   받았다 — 실제로 `scope='all'` 배치가 8건 있었고 그 배치들은
+                 --   지침 위반을 **기록할 수 없었다**(전체 966건 중 violated=1건).
+                 AND (? IN ('', 'all') OR COALESCE(li.scope,'all') IN (?, 'all'))
                ORDER BY effective_weight DESC
                LIMIT ?""",
             (f"-{int(days)} day", scope, scope, int(limit) * 3),
@@ -2131,6 +2139,25 @@ def mark_usage_violated(batch_id: str, insight_ids: list) -> int:
             f"WHERE batch_id = ? AND insight_id IN ({q})",
             [batch_id, *[int(i) for i in insight_ids]])
         return cur.rowcount
+
+
+def batch_directives(batch_id: str) -> list[dict]:
+    """이 배치에 **실제로 주입된** 지침 `[{id, directive}]` — 기록에서 읽는다.
+
+    ★ 왜 랭킹을 다시 조회하지 않는가 (2026-08-08)
+      위반 판정은 발행 직전에 일어나고 주입은 그보다 앞이다. 그 사이 weight·TTL 이
+      바뀌면 **랭킹 재조회 결과는 주입된 묶음과 달라진다** — 실제로 어긴 지침이
+      재조회 목록에 없으면 위반이 조용히 사라진다(실측 966건 중 violated 1건).
+      `insight_usage` 가 "무엇을 넣었는지" 의 **기록** 이다. 진실은 여기서 읽는다.
+    """
+    if not batch_id:
+        return []
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT li.id AS id, li.directive AS directive "
+            "  FROM insight_usage u JOIN learning_insights li ON li.id = u.insight_id "
+            " WHERE u.batch_id = ?", (batch_id,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def latest_batch(scope: str, platform: str) -> str:

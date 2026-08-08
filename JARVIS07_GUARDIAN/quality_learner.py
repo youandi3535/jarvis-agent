@@ -610,12 +610,14 @@ def record_directive_violations(scope: str, platform: str,
         batch = _db.latest_batch(scope or "all", platform or "")
         if not batch:
             return 0
-        # 텍스트 → id : 활성 지침 조회와 **같은 원본**에서 뽑는다(사본 금지)
-        # ★ 함수명 교정 (2026-08-07) — `get_learning_insights` 는 **존재하지 않는다**.
-        #   어제 이 코드를 넣으면서 실제로 부르지 않고 커밋했고, 골든 테스트도
-        #   *소스 문자열만* 검사해 초록으로 통과시켰다. 902행 중 violated 는 0행이었다.
-        #   "정적 검사는 코드가 어떻게 생겼나만 답한다" 를 그 자리에서 어겼다.
-        rows = _db.get_ranked_learning_insights(scope=scope or "all", limit=200) or []
+        # 텍스트 → id : **이 배치에 실제로 주입된 것** 에서만 뽑는다 (2026-08-08).
+        # ★ 왜 랭킹 재조회를 그만뒀나 — 주입은 발행 *전*, 위반 판정은 발행 *직전* 이다.
+        #   그 사이 weight·TTL 이 바뀌면 재조회 결과가 주입 묶음과 달라져 **실제로 어긴
+        #   지침이 목록에 없으면 위반이 조용히 사라진다**. 실측 966건 중 violated=1건.
+        #   게다가 `scope or "all"` 은 `'all'` 을 리터럴 매칭시켜 **0건**을 냈다
+        #   (DB 에 그런 scope 값이 없다 — 규약은 `db` 쪽에서 바로잡았다).
+        #   `insight_usage` 가 "무엇을 넣었는지" 의 기록이다 — 진실은 거기서 읽는다.
+        rows = _db.batch_directives(batch) or []
         want = {str(t).strip()[:200] for t in violated_texts if str(t).strip()}
         ids = [r["id"] for r in rows
                if str(r.get("directive") or "").strip()[:200] in want]

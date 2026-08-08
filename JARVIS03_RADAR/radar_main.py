@@ -428,7 +428,39 @@ def _calc_trend_delta(today_kws: list[str]) -> dict:
 
 
 def save(data: dict):
+    """당일 파일 저장 — **좋은 판을 빈 판으로 덮지 않는다** (2026-08-08).
+
+    ★ 왜 가드가 필요한가 (비직관)
+      트렌드 수집은 하루 4회(06·09·12·15) 돌고 **같은 파일 하나** 를 통째로 덮어쓴다.
+      아침 06:00 이 `combined_keywords` 50개를 채워 07:00 발행이 그 판을 먹는데,
+      오후 회차가 외부 수집 실패로 0개를 들고 오면 그 순간 **아침 판이 사라진다**.
+      실측 26일 중 8일(31%)이 combined=0 으로 끝났고, 그 날들의 발행은 평균 1.9편
+      (정상일 3.1편)이었다 — 8일 중 정상 발행은 하루뿐.
+      수집 실패는 '새 정보 없음' 이지 '기존 정보 무효' 가 아니다. 덮지 않는다.
+
+      ※ 아침도 0 이었으면 지킬 게 없으므로 그대로 쓴다. 이 가드는 *더 나쁜 판으로의
+        교체* 만 막는다 — 정상 갱신·부분 갱신은 종전과 동일하다.
+    """
     path = DATA_DIR / f"trends_{data['date']}.json"
+    _new = len(data.get("combined_keywords") or [])
+    if _new == 0 and path.exists():
+        try:
+            _old = len(json.loads(path.read_text(encoding="utf-8"))
+                       .get("combined_keywords") or [])
+        except Exception:
+            _old = 0
+        if _old > 0:
+            print(f"[RADAR] ⚠️ 실트렌드 0개 — 기존 {_old}개 판을 보존하고 저장 생략: {path.name}")
+            try:
+                from JARVIS07_GUARDIAN.error_collector import report as _g_report
+                _g_report("TrendsEmptyOverwriteBlocked", "radar",
+                          message=(f"실트렌드 0개 수집 — 기존 {_old}개 판 보존 "
+                                   f"(덮었으면 하류 주제 선정 불가)"),
+                          module=__name__, func_name="save",
+                          context={"kind": "trends_empty", "kept": _old})
+            except Exception:
+                pass
+            return
     write_json(path, data, indent=2)
     print(f"[RADAR] 로컬 저장: {path.name}")
 

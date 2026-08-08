@@ -4031,3 +4031,132 @@ def test_재현할_오류메시지_없으면_학습_안_한다():
     # 지문 재료가 여전히 description 폴백인지 — 폴백이 남아 있어야 위 가드가 의미 있다
     assert "error_message or description" in body, \
         "지문 폴백이 사라졌다면 이 가드의 전제가 바뀐 것 — 함께 재검토할 것"
+
+
+def _seed_insights(con, rows):
+    """테스트용 지침 씨앗 — `(insight_key, directive, scope)` 목록을 넣고 id 를 준다."""
+    ids = []
+    for key, directive, scope in rows:
+        con.execute(
+            "INSERT INTO learning_insights (insight_key, insight_type, description, "
+            "  directive, weight, occurrences, first_seen, last_seen, scope) "
+            "VALUES (?,?,?,?,1.0,1,date('now','localtime'),date('now','localtime'),?)",
+            (key, "style", directive, directive, scope))
+        ids.append(con.execute("SELECT last_insert_rowid()").fetchone()[0])
+    return ids
+
+
+def test_scope_all은_제한없음을_뜻한다():
+    """★ `'all'` 이 리터럴 매칭이라 **0건**을 냈다 — DB 에 그런 scope 값이 없다.
+
+    호출자들은 `scope or "all"` 로 '전체' 를 뜻했는데 조용히 빈 목록을 받았다.
+    실측: `scope='all'` 배치가 8건 있었고 그 배치들은 위반을 기록할 수 없었다
+    (전체 966건 중 violated=1건).
+    """
+    from shared import db as _db
+
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [
+            ("economic:style_도입부", "도입부를 짧게 쓴다", "economic"),
+            ("theme:style_소제목", "소제목을 구체적으로 쓴다", "theme"),
+        ])
+    try:
+        everything = _db.get_ranked_learning_insights(scope="", limit=500)
+        assert len(everything) >= 2, "씨앗이 안 보인다 — 검사 전제가 깨졌다"
+        as_all = _db.get_ranked_learning_insights(scope="all", limit=500)
+        assert len(as_all) == len(everything), \
+            f"'all' 이 '제한 없음' 과 다르다: all={len(as_all)} vs ''={len(everything)}"
+
+        # 구체 scope 는 여전히 걸러야 한다 — 안 그러면 필터가 통째로 죽은 것
+        narrow = _db.get_ranked_learning_insights(scope="theme", limit=500)
+        assert 0 < len(narrow) < len(everything), \
+            f"구체 scope 필터가 무력해졌다: theme={len(narrow)} / 전체={len(everything)}"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
+                        % ",".join("?" * len(ids)), ids)
+
+
+def test_위반은_주입된_묶음에서만_찾는다():
+    """★ 랭킹 재조회는 주입 시점과 다른 묶음을 준다 — 어긴 지침이 목록에 없으면 사라진다.
+
+    주입은 발행 *전*, 위반 판정은 발행 *직전* 이다. 그 사이 weight·TTL 이 바뀌면
+    재조회 결과가 달라진다. `insight_usage` 가 '무엇을 넣었는지' 의 기록이다.
+    """
+    from shared import db as _db
+    from JARVIS07_GUARDIAN.quality_learner import record_directive_violations
+
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [
+            ("economic:style_A", "지침 에이", "economic"),
+            ("economic:style_B", "지침 비이", "economic"),
+        ])
+    batch = "tbatch_violate"
+    try:
+        _db.record_insight_usage(batch, ids, scope="economic", platform="naver")
+        injected = _db.batch_directives(batch)
+        assert {r["id"] for r in injected} == set(ids), "배치 기록이 주입과 다르다"
+
+        # ★ 재조회로는 못 찾는 상황을 만든다 — 주입 후 지침이 무력화(weight=0)된 경우.
+        #   종전 구현(랭킹 재조회)은 여기서 0건을 냈다: 어긴 사실이 조용히 사라진다.
+        with _db.get_db() as con:
+            con.execute("UPDATE learning_insights SET weight=0 WHERE id=?", (ids[0],))
+        assert not [r for r in _db.get_ranked_learning_insights(scope="economic", limit=500)
+                    if r["id"] == ids[0]], "전제 실패 — 재조회에서 아직 보인다"
+
+        n = record_directive_violations("economic", "naver", ["지침 에이"])
+        assert n == 1, f"주입된 지침을 어겼는데 기록이 {n}건 — 재조회 경로가 남아 있다"
+        assert record_directive_violations("economic", "naver", ["없는 문장 zzz"]) == 0, \
+            "주입되지 않은 문장까지 기록한다 — 과잉 기록"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM insight_usage WHERE batch_id=?", (batch,))
+            con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
+                        % ",".join("?" * len(ids)), ids)
+
+
+def test_좋은_트렌드판을_빈_판으로_안_덮는다():
+    """★ 하루 4회 수집이 **같은 파일 하나** 를 덮어쓴다.
+
+    아침이 채운 50개를 오후 수집 실패(0개)가 지우면 그날 주제 선정이 무너진다.
+    실측 26일 중 8일(31%) combined=0, 그 날 발행 평균 1.9편(정상일 3.1편).
+    수집 실패는 '새 정보 없음' 이지 '기존 정보 무효' 가 아니다.
+    """
+    import importlib
+    import json as _json
+
+    rm = importlib.import_module("JARVIS03_RADAR.radar_main")
+    day = "1999-12-31"                      # 실데이터와 겹치지 않는 날짜
+    path = rm.DATA_DIR / f"trends_{day}.json"
+    try:
+        rm.save({"date": day, "combined_keywords": [{"keyword": "가"}] * 3,
+                 "scored_keywords": [1, 2, 3]})
+        assert path.exists() and len(_json.loads(path.read_text())["combined_keywords"]) == 3
+
+        rm.save({"date": day, "combined_keywords": [], "scored_keywords": []})
+        kept = _json.loads(path.read_text())["combined_keywords"]
+        assert len(kept) == 3, f"좋은 판이 빈 판으로 덮였다 — 남은 {len(kept)}개"
+
+        # 정상 갱신은 종전대로 (가드가 저장을 통째로 막으면 안 된다)
+        rm.save({"date": day, "combined_keywords": [{"keyword": "나"}] * 7,
+                 "scored_keywords": [1]})
+        assert len(_json.loads(path.read_text())["combined_keywords"]) == 7, \
+            "정상 갱신까지 막혔다 — 과잉 가드"
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_빈판일때는_새로_쓴다():
+    """★ 지킬 게 없으면 그대로 쓴다 — 가드가 '영원히 0개' 를 만들면 안 된다."""
+    import importlib
+    import json as _json
+
+    rm = importlib.import_module("JARVIS03_RADAR.radar_main")
+    day = "1999-12-30"
+    path = rm.DATA_DIR / f"trends_{day}.json"
+    try:
+        rm.save({"date": day, "combined_keywords": [], "scored_keywords": [9]})
+        assert path.exists(), "기존 파일이 없는데 저장을 건너뛰었다"
+        assert _json.loads(path.read_text())["scored_keywords"] == [9]
+    finally:
+        path.unlink(missing_ok=True)
