@@ -879,6 +879,7 @@ def type_granularity_issues(min_samples: int = GRANULARITY_MIN_SAMPLES,
     out: list = []
     try:
         from shared.db import get_db  # noqa: PLC0415
+        from shared.db import ts_cutoff_sql as _ts_cut  # 포맷의 주인은 shared.db(①)
         policy = _policy_types()
         with get_db() as conn:
             # 소스별 **최빈 타입의 점유율**을 본다 (개수가 아니라 비율).
@@ -886,8 +887,11 @@ def type_granularity_issues(min_samples: int = GRANULARITY_MIN_SAMPLES,
                 "SELECT source, error_type, COUNT(*) c FROM error_log "
                 "WHERE source IS NOT NULL AND source <> '' "
                 "  AND ts_ok GROUP BY source, error_type".replace(
+                    # ★ `timestamp >=` 를 빼먹으면 조건이 *맨 표현식* 이 되고,
+                    #   SQLite 는 '2026-…' 를 숫자 2026 으로 캐스팅해 **참**으로 본다 —
+                    #   날짜 필터가 통째로 무력화된다(실측 452행 vs 올바른 197행).
                     "ts_ok",
-                    f"timestamp >= datetime('now','localtime','-{int(window_days)} day')")
+                    f"timestamp >= {_ts_cut(f'-{int(window_days)} day')}")
             ).fetchall()
         by_src: dict = {}
         for r in rows:

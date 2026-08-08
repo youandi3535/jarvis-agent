@@ -2272,7 +2272,7 @@ def save_error(
             """SELECT id, seen_count FROM error_log
                WHERE source=? AND module IS ? AND error_type=?
                  AND message=? AND status!='fixed'
-                 AND timestamp >= datetime('now','-1 hour','localtime')
+                 AND timestamp >= """ + ts_cutoff_sql('-1 hour') + """
                ORDER BY id DESC LIMIT 1""",
             (source, module, error_type, msg_key),
         ).fetchone()
@@ -2423,6 +2423,37 @@ def mark_error_fixed(error_id: int, resolution: str, fixed_file: str = None):
         )
 
 
+# ══════════════════════════════════════════════════════════════════
+# ★ error_log.timestamp 비교 — 구분자 단일 진입점 (2026-08-08 재검증)
+# ══════════════════════════════════════════════════════════════════
+#
+# `error_log.timestamp` 는 `strftime('%Y-%m-%dT%H:%M:%S')` 로 저장된다 — **'T' 구분자**.
+# 그런데 비교값을 `datetime('now','localtime',...)` 로 만들면 **공백 구분자**가 나온다.
+# SQLite 는 이 둘을 *문자열로* 비교하고 `'T'(0x54) > ' '(0x20)` 이므로,
+# **같은 날짜의 행이 시각과 무관하게 전부 조건을 통과한다.**
+#
+# 실측 2026-08-08: 60분 창이 **115행** 을 잡았다(올바른 값 3행). `window_min` 인자는
+# 무엇을 넣든 결과가 같은 **죽은 인자** 였다. 저장소 전역 11곳이 같은 병이었다.
+#
+# 표현식을 여기 한 곳에서만 만든다 — 11곳이 각자 SQL 을 쓰면 하나를 고쳐도 열 개가 남는다.
+TS_CUTOFF = "strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime',?))"
+
+
+def ts_cutoff_sql(*modifiers: str) -> str:
+    """`timestamp >=` 오른쪽에 쓸 SQL 표현식 — 저장 포맷과 **같은 구분자**로 만든다.
+
+    파라미터 바인딩을 쓰는 곳은 `TS_CUTOFF` 를, 수정자를 문자열로 박아야 하는 곳은
+    이 함수를 쓴다. 두 경우 모두 포맷은 한 곳에서 나온다(①).
+
+        con.execute(f"... WHERE timestamp >= {TS_CUTOFF}", ("-60 minute",))
+        con.execute(f"... WHERE timestamp >= {ts_cutoff_sql('-7 days')}")
+    """
+    if not modifiers:
+        return "strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime'))"
+    mods = ", ".join("'" + m.replace("'", "''") + "'" for m in modifiers)
+    return f"strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime', {mods}))"
+
+
 def bump_error_seen(source: str, module: str, error_type: str,
                     message: str, window_min: int = 60) -> bool:
     """쿨다운으로 **저장을 건너뛴** 오류의 빈도만 올린다 (2026-08-08 감사).
@@ -2441,7 +2472,7 @@ def bump_error_seen(source: str, module: str, error_type: str,
         with get_db() as conn:
             row = conn.execute(
                 "SELECT id FROM error_log WHERE source=? AND module=? AND error_type=? "
-                "  AND timestamp >= datetime('now','localtime',?) "
+                f"  AND timestamp >= {TS_CUTOFF} "
                 "ORDER BY id DESC LIMIT 1",
                 (source or "", module or "", error_type or "", f"-{int(window_min)} minute"),
             ).fetchone()
@@ -2579,7 +2610,7 @@ def get_error_stats(days: int = 7) -> dict:
         rows = conn.execute(
             """SELECT severity, status, COUNT(*) as cnt
                FROM error_log
-               WHERE timestamp >= datetime('now',?,'localtime')
+               WHERE timestamp >= """ + TS_CUTOFF + """
                GROUP BY severity, status""",
             (f"-{days} days",),
         ).fetchall()
@@ -2588,7 +2619,7 @@ def get_error_stats(days: int = 7) -> dict:
             key = f"{r['severity']}_{r['status']}"
             stats[key] = r["cnt"]
         total = conn.execute(
-            "SELECT COUNT(*) FROM error_log WHERE timestamp >= datetime('now',?,'localtime')",
+            f"SELECT COUNT(*) FROM error_log WHERE timestamp >= {TS_CUTOFF}",
             (f"-{days} days",),
         ).fetchone()[0]
         stats["total"] = total

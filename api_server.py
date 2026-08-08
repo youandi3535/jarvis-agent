@@ -21,7 +21,10 @@ sys.path.insert(0, str(BASE_DIR))
 
 # ── DB ───────────────────────────────────────────────────────────
 try:
-    from shared.db import DB_PATH, get_db as _get_db
+    # ★ error_log.timestamp 비교 포맷의 주인은 shared.db 하나다 (2026-08-08, ①).
+    #   여기서 datetime(...) 을 직접 쓰면 'T' vs 공백 구분자 때문에 같은 날짜 행이
+    #   시각과 무관하게 전부 통과한다 (실측 60분 창 115행 vs 올바른 3행).
+    from shared.db import DB_PATH, get_db as _get_db, ts_cutoff_sql as _ts_cut
     def _db():
         try:
             return _get_db()
@@ -39,6 +42,17 @@ except ImportError:
         return con
     def _get_db():
         return _db()
+    def _ts_cut(*mods: str) -> str:
+        """폴백 — `shared.db` 를 못 불러온 환경에서도 **같은 포맷**을 쓴다.
+
+        ★ 포맷을 두 벌 적는 것처럼 보이지만, 이 분기는 `shared.db` 자체가 없을 때만
+          도는 최후 폴백이다(그때는 참조할 원본이 없다). 위 정상 분기가 진실이고,
+          둘이 어긋나면 `test_timestamp_비교가_한_포맷을_쓴다` 가 잡는다.
+        """
+        if not mods:
+            return "strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime'))"
+        _m = ", ".join("'" + x.replace("'", "''") + "'" for x in mods)
+        return f"strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime', {_m}))"
 
 # ── Vision 포트 ──────────────────────────────────────────────────
 _VISION_PORT = int(os.getenv("JARVIS_VISION_PORT", "8505"))
@@ -984,7 +998,7 @@ def get_guardian_stats():
                 SUM(CASE WHEN severity='medium'   THEN 1 ELSE 0 END) AS med_cnt,
                 SUM(CASE WHEN severity='low'      THEN 1 ELSE 0 END) AS low_cnt
             FROM error_log
-            WHERE timestamp >= datetime('now', '-7 days')
+            WHERE timestamp >= """ + _ts_cut('-7 days') + """
         """).fetchone()
         recent = _with_error_category(
             [dict(r) for r in con.execute("SELECT id, timestamp, severity, status, error_type, module, message FROM error_log ORDER BY id DESC LIMIT 10").fetchall()])
@@ -1030,7 +1044,7 @@ def get_errors(
 ):
     try:
         con = _get_db()
-        where = [f"timestamp >= datetime('now', '-{days} days', 'localtime')"]
+        where = [f"timestamp >= {_ts_cut(f'-{days} days')}"]
         params: list = []
         if status:
             where.append("status = ?"); params.append(status)
@@ -1063,6 +1077,7 @@ def get_guardian_history(days: int = 30, limit: int = 40, actor: str = ""):
 def get_guardian_trend(days: int = 14):
     try:
         con = _get_db()
+        _TSCUT = _ts_cut(f"-{days} days")
         rows = con.execute(f"""
             SELECT DATE(timestamp, 'localtime') AS day,
                    COUNT(*) AS total,
@@ -1070,7 +1085,7 @@ def get_guardian_trend(days: int = 14):
                    SUM(CASE WHEN severity='high'     THEN 1 ELSE 0 END) AS high,
                    SUM(CASE WHEN status='fixed'      THEN 1 ELSE 0 END) AS fixed
             FROM error_log
-            WHERE timestamp >= datetime('now', '-{days} days', 'localtime')
+            WHERE timestamp >= {_TSCUT}
             GROUP BY day ORDER BY day
         """).fetchall()
         con.close()
@@ -1083,13 +1098,14 @@ def get_guardian_trend(days: int = 14):
 def get_guardian_sources(days: int = 7):
     try:
         con = _get_db()
+        _TSCUT = _ts_cut(f"-{days} days")
         rows = con.execute(f"""
             SELECT source, COUNT(*) AS total,
                    SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END) AS crit,
                    SUM(CASE WHEN status='fixed'      THEN 1 ELSE 0 END) AS fixed,
                    SUM(CASE WHEN status='new'        THEN 1 ELSE 0 END) AS new_cnt
             FROM error_log
-            WHERE timestamp >= datetime('now', '-{days} days', 'localtime')
+            WHERE timestamp >= {_TSCUT}
             GROUP BY source ORDER BY total DESC LIMIT 10
         """).fetchall()
         con.close()

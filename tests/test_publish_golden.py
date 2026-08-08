@@ -2996,24 +2996,44 @@ def test_심층감사_실패가_job_runs에_success0로_적힌다():
         from JARVIS04_SCHEDULER.job_history import attach_listeners
         from datetime import datetime, timedelta
         sch = create_scheduler(); attach_listeners(sch); sch.start()
+        # ★ misfire_grace_time 을 명시한다 — APScheduler 기본값은 **1초** 이고
+        #   create_scheduler 는 ProcessPoolExecutor 를 만든다(콜드 러너에서 프로세스
+        #   spawn 이 1초를 쉽게 넘긴다). 느린 CI 에서 잡이 *실행조차 안 되고* misfire 로
+        #   빠지면 `_on_job_missed` 가 success=0 을 적어 **판정 실패처럼 보인다**.
         sch.add_job(ga.job_deep_audit, "date", id="j07_deep_audit",
-                    run_date=datetime.now() + timedelta(seconds=1))
-        time.sleep(4); sch.shutdown(wait=True)
-        with db.get_db() as c:
-            r = c.execute("SELECT success FROM job_runs WHERE job_id='j07_deep_audit'"
-                          ).fetchone()
-        print("SUCCESS=" + (str(r["success"]) if r else "NOROW"))
+                    run_date=datetime.now() + timedelta(seconds=1),
+                    misfire_grace_time=60)
+        # ★ 고정 sleep 대신 **행이 나타날 때까지** 폴링 — 빠른 기계에선 즉시 끝나고
+        #   느린 기계에선 충분히 기다린다. 시간에 기대는 단언을 만들지 않는다.
+        r = None
+        for _ in range(150):
+            with db.get_db() as c:
+                r = c.execute("SELECT success, error FROM job_runs "
+                              "WHERE job_id='j07_deep_audit'").fetchone()
+            if r:
+                break
+            time.sleep(0.2)
+        sch.shutdown(wait=True)
+        # ★ error 를 함께 싣는다 — misfire 와 판정 실패를 로그만 보고 구분하기 위해.
+        print("SUCCESS=" + (str(r["success"]) if r else "NOROW")
+              + "|ERR=" + ((r["error"] or "") if r else "")[:120])
     """)
     out = {}
     for rc in ("-99", "0"):
         r = subprocess.run([sys.executable, "-c", probe, rc], cwd=str(_ROOT),
                            capture_output=True, text=True, timeout=120)
         line = next((l for l in r.stdout.splitlines() if l.startswith("SUCCESS=")), "")
-        out[rc] = line.replace("SUCCESS=", "")
-    assert out["-99"] == "0", \
-        f"실패 회차(rc=-99)가 job_runs 에 success={out['-99']} 로 적혔다 (기대 0)"
-    assert out["0"] == "1", \
-        f"성공 회차(rc=0)가 success={out['0']} 로 적혔다 (기대 1) — 과잉 실패 처리"
+        val, _, err = line.replace("SUCCESS=", "").partition("|ERR=")
+        out[rc] = (val, err)
+    for rc, (val, err) in out.items():
+        assert "misfire" not in err, \
+            f"rc={rc}: 잡이 실행되지 않았다(misfire) — 판정 실패가 아니다: {err}"
+    assert out["-99"][0] == "0", \
+        f"실패 회차(rc=-99)가 success={out['-99'][0]} 로 적혔다 (기대 0) · err={out['-99'][1]}"
+    assert "returncode" in out["-99"][1], \
+        f"실패 사유가 returncode 를 안 담는다: {out['-99'][1]!r}"
+    assert out["0"][0] == "1", \
+        f"성공 회차(rc=0)가 success={out['0'][0]} 로 적혔다 (기대 1) · err={out['0'][1]}"
 
 
 def test_회차_판정이_테이블_최신행이_아니라_이번_회차를_본다():
@@ -3555,9 +3575,11 @@ def test_쿨다운_억제가_빈도를_지우지_않는다():
 
     # 실제로 seen_count 가 오르는가
     with _sdb.get_db() as con:
+        # ★ timestamp 를 손으로 넣지 않는다 — 스키마 기본값(`%Y-%m-%dT%H:%M:%S`)이 진실이다.
+        #   종전엔 `datetime('now','localtime')`(공백 구분자)로 심어, 구분자 불일치가
+        #   고쳐지자 이 행이 60분 창에서 빠졌다. 테스트가 현실과 다른 행을 만들고 있었다.
         con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
-                    "seen_count, timestamp) VALUES ('cd','m','RuntimeError','첫 건','new',1,"
-                    "datetime('now','localtime'))")
+                    "seen_count) VALUES ('cd','m','RuntimeError','첫 건','new',1)")
         eid = con.execute("SELECT id FROM error_log ORDER BY id DESC LIMIT 1").fetchone()[0]
     assert _sdb.bump_error_seen("cd", "m", "RuntimeError", "다른 메시지") is True
     with _sdb.get_db() as con:
@@ -3690,3 +3712,103 @@ def test_무예외_발행실패도_보고된다():
         a2 = con.execute(_q).fetchone()[0]
     assert a2 == b2, "성공했는데 오류를 남겼다"
     assert ok["success"] is True
+
+
+def test_timestamp_비교가_한_포맷을_쓴다():
+    """★ 저장은 'T' 구분자, 비교는 공백 — 문자열 비교라 **같은 날짜가 전부 통과**했다.
+
+    실측 2026-08-08: 60분 창이 115행을 잡았다(올바른 값 3행). `window_min` 인자는
+    무엇을 넣든 결과가 같은 **죽은 인자**였다. 저장소 전역 11곳이 같은 병이었다.
+    """
+    import sqlite3
+
+    from shared.db import DB_PATH, TS_CUTOFF, get_db, ts_cutoff_sql
+
+    # ① 저장 포맷과 비교 포맷이 같은가 (실제 행으로)
+    with get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('tsprobe','m','X','now','new')")
+        stored = con.execute("SELECT timestamp FROM error_log WHERE source='tsprobe' "
+                             "ORDER BY id DESC LIMIT 1").fetchone()[0]
+        cut = con.execute(f"SELECT {ts_cutoff_sql()}").fetchone()[0]
+    assert "T" in stored, f"저장 포맷이 바뀌었다: {stored!r}"
+    assert "T" in cut, f"비교 포맷이 저장과 다르다: {cut!r} vs {stored!r}"
+    # ★ 수정자 **있는** 분기도 같은 포맷이어야 한다 (뮤테이션에서 발각 — 무인자 분기만
+    #   검사하면 인자 있는 쪽이 공백 구분자로 돌아가도 통과했다).
+    with get_db() as con:
+        cut2 = con.execute(f"SELECT {ts_cutoff_sql('-1 hour')}").fetchone()[0]
+        cut3 = con.execute(f"SELECT {TS_CUTOFF}", ("-1 hour",)).fetchone()[0]
+    for v, who in ((cut2, "ts_cutoff_sql(mods)"), (cut3, "TS_CUTOFF")):
+        assert "T" in v and " " not in v.strip(), f"{who} 가 공백 구분자를 낸다: {v!r}"
+
+    # ② 창이 실제로 좁혀지는가 — 옛 행을 심고 좁은 창이 그것을 **제외**하는지
+    with get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
+                    "timestamp) VALUES ('tsprobe','m','X','old','new', "
+                    "strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime','-3 hour')))")
+        narrow = con.execute(
+            f"SELECT COUNT(*) FROM error_log WHERE source='tsprobe' "
+            f"  AND timestamp >= {TS_CUTOFF}", ("-60 minute",)).fetchone()[0]
+        wide = con.execute(
+            f"SELECT COUNT(*) FROM error_log WHERE source='tsprobe' "
+            f"  AND timestamp >= {TS_CUTOFF}", ("-6 hour",)).fetchone()[0]
+    assert narrow == 1, f"60분 창에 3시간 전 행이 들어왔다 (narrow={narrow})"
+    assert wide == 2, f"6시간 창이 3시간 전 행을 놓쳤다 (wide={wide})"
+    assert narrow < wide, "창 폭이 결과를 바꾸지 않는다 — 죽은 인자"
+
+    # ③ 종전 방식은 실제로 틀린다 (이 검사가 진짜를 잡는지 확인)
+    with get_db() as con:
+        legacy = con.execute(
+            "SELECT COUNT(*) FROM error_log WHERE source='tsprobe' "
+            "  AND timestamp >= datetime('now','localtime','-60 minute')").fetchone()[0]
+    assert legacy == 2, \
+        f"종전 방식이 틀리지 않는다 — 검사 전제가 깨졌다 (legacy={legacy})"
+
+
+def test_편중판정이_날짜창을_실제로_적용한다():
+    """★ `timestamp >=` 를 빼먹으면 조건이 **맨 표현식** 이 된다.
+
+    SQLite 는 `'2026-…'` 를 숫자 2026 으로 캐스팅해 **참**으로 본다 —
+    날짜 필터가 통째로 무력화되는데 SQL 은 멀쩡히 돌고 결과도 나온다.
+    실측 2026-08-08: 그렇게 452행이 통과했다(올바른 값 197행).
+    """
+    from JARVIS07_GUARDIAN import severity as _sv
+    from shared.db import get_db
+
+    # 창 안 1건 + 창 밖 1건을 심고, 좁은 창이 창 밖을 **제외** 하는지 본다
+    with get_db() as con:
+        for _ in range(_sv.GRANULARITY_MIN_SAMPLES + 1):
+            con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                        "VALUES ('gprobe','m','SameType','recent','new')")
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
+                    "timestamp) VALUES ('gprobe','m','OldType','old','new', "
+                    "strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime','-400 day')))")
+
+    near = _sv.type_granularity_issues(window_days=1)
+    far = _sv.type_granularity_issues(window_days=3650)
+    g_near = next((x for x in near if "gprobe" in x), "")
+    g_far = next((x for x in far if "gprobe" in x), "")
+    assert g_near, "1일 창에서 최근 표본을 못 본다"
+    assert "100%" in g_near, f"창 밖 옛 행이 섞였다: {g_near}"
+    assert g_far and "100%" not in g_far, \
+        f"3650일 창인데도 옛 행이 안 섞인다 — 창이 결과를 안 바꾼다: {g_far}"
+
+
+def test_timestamp_비교를_직접_쓰는_곳이_없다():
+    """③ — 11곳이 각자 SQL 을 쓰면 하나를 고쳐도 열 개가 남는다."""
+    import re
+
+    bad = []
+    for f in sorted(_ROOT.rglob("*.py")):
+        rel = str(f.relative_to(_ROOT))
+        if any(x in rel for x in ("__pycache__", ".venv", "tests/", "scratchpad")):
+            continue
+        # ★ `_code_only` 를 쓰지 않는다 — SQL 은 **문자열 안에** 산다.
+        #   문자열을 지우면 정작 검사 대상이 사라진다(뮤테이션에서 발각).
+        #   대신 주석 줄만 건너뛴다.
+        for i, line in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if re.search(r"timestamp\s*>=?\s*datetime\(", line):
+                bad.append(f"{rel}:{i}")
+    assert not bad, f"timestamp 를 datetime() 과 직접 비교한다(구분자 불일치): {bad}"

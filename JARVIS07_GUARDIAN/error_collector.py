@@ -735,14 +735,14 @@ def _log_scanner_silent() -> Optional[bool]:
     import re as _re2
     import time as _t
     try:
-        from shared.db import get_db
+        from shared.db import TS_CUTOFF as _TS_CUTOFF, get_db
         # 관측 창 — '이 정도면 뭔가 잡혔어야 한다' 는 기간. 발행이 하루 4회이므로
         # 3일이면 12회 발행분 로그가 쌓인다. 리터럴 임계를 판정에 박지 않는다.
         days = 3
         with get_db() as con:
             got = con.execute(
                 "SELECT COUNT(*) FROM error_log WHERE source='log_file' "
-                "  AND timestamp >= datetime('now','localtime',?)", (f"-{days} day",)
+                f"  AND timestamp >= {_TS_CUTOFF}", (f"-{days} day",)
             ).fetchone()[0]
         if got:
             return False                      # 잡고 있다
