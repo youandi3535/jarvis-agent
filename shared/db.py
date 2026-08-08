@@ -1388,6 +1388,26 @@ def backup_gaps(days: int = 7) -> list:
             if (today - timedelta(days=i)) not in have]
 
 
+def learning_asset_files() -> list:
+    """DB 밖에 사는 **학습 산출물 파일** 목록 — 백업 대상 (2026-08-08).
+
+    ★ 목록을 박지 않는다(②): 소유 폴더에서 *꼴* 로 찾는다. 새 학습기가
+      `learned_*.json`·`*_state.json` 을 만들면 자동으로 백업에 딸려온다.
+    ★ 왜 분리했나: `backup_db` 안에 인라인으로 두면 **동작으로 검증할 수가 없어서**
+      회귀 테스트가 소스 문자열을 보게 되고, 그건 주석에 속는다(실측: 이 파일에서 발생).
+    """
+    root = Path(__file__).resolve().parent.parent
+    pats = ("learned_*.json", "*_state.json", "design_recipes.json")
+    out: list = []
+    for folder in ("JARVIS07_GUARDIAN", "JARVIS06_IMAGE"):
+        d = root / folder
+        if not d.is_dir():
+            continue
+        for pat in pats:
+            out += [q for q in d.glob(pat) if q.is_file()]
+    return sorted(set(out))
+
+
 def backup_db(retention_days: int = 30) -> dict:
     """SQLite .backup API 로 WAL 안전 백업 + **GFS 계층 보존**.
 
@@ -1451,13 +1471,7 @@ def backup_db(retention_days: int = 30) -> dict:
     #   ★ 목록을 박지 않는다(②): *DB 밖에 사는 학습 산출물* 을 소유 폴더에서 찾는다.
     #     새 학습기가 `*_state.json`·`learned_*.json` 을 만들면 자동으로 딸려온다.
     try:
-        _root = Path(__file__).resolve().parent.parent
-        _assets = sorted(
-            q for pat in ("learned_*.json", "*_state.json", "design_recipes.json")
-            for q in (_root / "JARVIS07_GUARDIAN").glob(pat)
-            if q.is_file())
-        _assets += [q for q in (_root / "JARVIS06_IMAGE").glob("design_recipes.json")
-                    if q.is_file()]
+        _assets = learning_asset_files()
         if _assets:
             _adir = BACKUP_DIR / f"assets_{today}"
             _adir.mkdir(parents=True, exist_ok=True)
@@ -2402,10 +2416,29 @@ def mark_error_fixed(error_id: int, resolution: str, fixed_file: str = None):
         )
 
 
-def mark_error_status(error_id: int, status: str):
-    """오류 상태 변경 (analyzing / wontfix / ignored)."""
+def mark_error_status(error_id: int, status: str, resolution: str = ""):
+    """오류 상태 변경 (analyzing / wontfix / ignored / fixed).
+
+    ★ `resolution` — **왜 그 상태가 됐는지** (2026-08-08 감사).
+      실측: `fixed` 81건 중 **34건(42%)** 이 `fixed_file`·`resolution` 전부 NULL —
+      *왜 고쳐졌다고 하는지 아무도 모르는* 상태였다. 그 결과 `fixed` 하나가
+      ① 실제 코드 수정 ② harness 재시도 성공(코드 무수정) ③ 근거 전무
+      세 가지를 한 이름으로 말했다. 근거 없이 상태를 바꾸지 않는다.
+      비워 두면 경고를 남기고 그 사실 자체를 기록한다 — 조용히 넘어가지 않는다.
+    """
+    _why = (resolution or "").strip()
+    if status == "fixed" and not _why:
+        _why = "근거 미기록(호출자가 사유를 남기지 않음)"
+        log.warning("[db] #%s fixed 인데 사유가 없다 — 근거를 남길 것", error_id)
     with get_db() as conn:
-        conn.execute("UPDATE error_log SET status=? WHERE id=?", (status, error_id))
+        if _why:
+            conn.execute(
+                "UPDATE error_log SET status=?, "
+                "  resolution = COALESCE(NULLIF(resolution,''), ?), "
+                "  fixed_at = COALESCE(fixed_at, datetime('now','localtime')) "
+                "WHERE id=?", (status, _why[:500], error_id))
+        else:
+            conn.execute("UPDATE error_log SET status=? WHERE id=?", (status, error_id))
 
 
 # ── 격리 버킷(ignored) 관측 — 공개 헬퍼 (사용자 박제 2026-07-25) ──────────────

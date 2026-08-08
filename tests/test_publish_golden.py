@@ -3213,3 +3213,118 @@ def test_분류_자가검사가_실제로_돈다():
     assert _after > _before, "위반을 보고했는데 오류가 안 쌓였다"
     assert (row["func_name"] or "").startswith("SeverityGateDefect"), \
         f"타입이 머리표에서 파생되지 않았다: {row['func_name']!r}"
+
+
+def test_Tier2가_자기보고만으로_fixed를_확정하지_않는다():
+    """★ `files_fixed` 는 LLM 이 쓴 산문에서 정규식으로 뽑은 숫자다.
+
+    실행 검증: "수정 파일 3개를 검토했으나 아무것도 고치지 않았습니다" → 3 → fixed.
+    결정적 대조(2026-08-08 03:04): Tier-1 은 같은 수정을 재현검증으로 롤백했는데
+    38초 뒤 Tier-2 가 같은 파일을 무검증으로 통과시켰다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+
+    # 산문이 숫자로 오독되는 것은 여전히 사실이다 (그래서 검증이 필요하다)
+    assert _ar._parse_layer_counts("수정 파일 3개를 검토했으나 아무것도 고치지 않았습니다"
+                                  )["files_fixed"] == 3
+
+    # 성공 경로가 검증·롤백을 실제로 부르는가
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/auto_repair.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "run_auto_repair_targeted")
+    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "_verify_sdk_fix" in called, "Tier-2 가 재현검증을 안 탄다"
+    assert "_restore_snapshot" in called, "검증 실패 시 롤백 경로가 없다"
+
+    # 검증의 주인은 error_fixer 다 — 여기서 새 판정 로직을 만들지 않았는가(①)
+    import textwrap
+    vtree = ast.parse(textwrap.dedent(inspect.getsource(_ar._verify_sdk_fix)))
+    vcalled = {getattr(n.func, "id", "") or getattr(n.func, "attr", "")
+               for n in ast.walk(vtree) if isinstance(n, ast.Call)}
+    assert "verify_fix" in vcalled, \
+        f"error_fixer 정문을 import 만 하고 부르지 않는다 — 검증이 두 벌이 된다: {sorted(vcalled)}"
+
+    # ★ 판정 불가(None)에 롤백하면 정상 수정까지 되돌린다
+    ok, why = _ar._verify_sdk_fix(None, None)
+    assert ok is None, f"error_record 없음인데 실패로 단정했다: {ok} / {why}"
+
+
+def test_롤백이_새로_만든_파일을_지우지_않는다():
+    """되돌리기가 새 사고를 만들면 안 된다 — 스냅샷에 있던 파일만 복원한다."""
+    import tempfile
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+
+    root = _P(_ar.ROOT)
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        d = _P(td)
+        known, fresh = d / "known.py", d / "fresh.py"
+        known.write_text("x = 1\n", encoding="utf-8")
+        rel = str(known.relative_to(root))
+        snap = {rel: "x = 1\n"}
+        known.write_text("x = 999\n", encoding="utf-8")     # SDK 가 고침
+        fresh.write_text("y = 2\n", encoding="utf-8")       # SDK 가 새로 만듦
+        # 스냅샷에 있지만 **바뀌지 않은** 파일 — 건드리면 안 된다
+        untouched = d / "untouched.py"
+        untouched.write_text("z = 3\n", encoding="utf-8")
+        rel_u = str(untouched.relative_to(root))
+        snap[rel_u] = "z = 3\n"
+        _mtime_before = untouched.stat().st_mtime_ns
+
+        n = _ar._restore_snapshot(snap)
+        assert n == 1, f"복원 파일 수가 다르다: {n} (바뀐 파일 1개만이어야)"
+        assert known.read_text(encoding="utf-8") == "x = 1\n", "복원이 안 됐다"
+        assert fresh.exists(), "새로 만든 파일을 지웠다 — 롤백이 새 사고를 만든다"
+        assert untouched.stat().st_mtime_ns == _mtime_before, \
+            "안 바뀐 파일까지 다시 썼다 — 동시 편집을 덮어쓸 수 있다"
+
+
+def test_fixed에는_근거가_남는다():
+    """★ `fixed` 81건 중 34건(42%)이 근거 전무였다 — 세 가지 다른 뜻이 한 이름이었다."""
+    import inspect
+
+    from shared import db as _db
+
+    sig = inspect.signature(_db.mark_error_status)
+    assert "resolution" in sig.parameters, "상태 변경이 근거를 안 받는다"
+
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('probe','m','X','probe','new')")
+        eid = con.execute("SELECT id FROM error_log ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+    # 근거를 안 주면 '근거 미기록' 이 남는다 — 조용히 넘어가지 않는다
+    _db.mark_error_status(eid, "fixed")
+    with _db.get_db() as con:
+        row = con.execute("SELECT status, resolution, fixed_at FROM error_log WHERE id=?",
+                          (eid,)).fetchone()
+    assert row["status"] == "fixed"
+    assert row["resolution"], "근거 없이 fixed 가 됐다 — 42% 사고의 재발"
+    assert row["fixed_at"], "fixed 인데 시각이 없다"
+
+    # 근거를 주면 그대로 남는다
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('probe','m','X','probe2','new')")
+        eid2 = con.execute("SELECT id FROM error_log ORDER BY id DESC LIMIT 1").fetchone()[0]
+    _db.mark_error_status(eid2, "fixed", "Tier-2 SDK 수정 + 재현검증 통과")
+    with _db.get_db() as con:
+        r2 = con.execute("SELECT resolution FROM error_log WHERE id=?", (eid2,)).fetchone()
+    assert "재현검증" in r2["resolution"], f"근거가 안 남았다: {r2['resolution']!r}"
+
+
+def test_Tier2_fixed_표시가_근거를_동반한다():
+    """호출부가 근거를 안 주면 DB 계층이 메워주더라도 '누가 왜' 를 알 수 없다."""
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Call)
+                and getattr(n.func, "attr", "") == "mark_error_status"
+                and any(isinstance(a, ast.Constant) and a.value == "fixed" for a in n.args)):
+            assert len(n.args) >= 3 or n.keywords, \
+                f"guardian_agent:{n.lineno} fixed 를 근거 없이 찍는다"

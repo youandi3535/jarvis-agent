@@ -202,27 +202,41 @@ def test_발행잡_유예는_늘어나지_않는다():
 # ⑥⑦ 학습 자산 백업 · 폴백 경로 주입
 # ══════════════════════════════════════════════════════════════════
 def test_학습자산이_백업에_동반된다():
-    """`learned_patterns.json`·`bandit_state.json` 은 git 밖이라 사본이 0개였다."""
+    """`learned_patterns.json`·`bandit_state.json` 은 git 밖이라 사본이 0개였다.
+
+    ★ **동작으로** 검사한다 — 소스 문자열 검사는 *이 테스트의 설명 주석* 에 속는다
+      (실측: 초판이 그렇게 변이를 통과시켰다. 오늘 네 번째 같은 실수).
+    """
+    from shared.db import learning_asset_files
+
+    names = {p.name for p in learning_asset_files()}
+    assert "learned_patterns.json" in names, "패턴 자산이 백업 대상에서 빠졌다"
+    assert "bandit_state.json" in names, "밴딧 상태가 백업 대상에서 빠졌다"
+    assert all(p.exists() for p in learning_asset_files()), "존재하지 않는 경로가 섞였다"
+
+
+def test_백업잡이_자산목록을_실제로_부른다():
+    """분리한 함수를 백업 잡이 안 부르면 파일은 여전히 사본 0개다."""
+    import ast
     import inspect
+    import textwrap
 
     from shared import db
 
-    src = inspect.getsource(db.backup_db)
-    assert "learned_*.json" in src and "_state.json" in src, (
-        "학습 자산 JSON 이 백업 대상에서 빠졌다 — 파일 하나 날아가면 끝이다")
-    assert "assets_" in src, "자산 백업 폴더 규칙이 없다"
+    tree = ast.parse(textwrap.dedent(inspect.getsource(db.backup_db)))
+    called = {n.func.id for n in ast.walk(tree)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert "learning_asset_files" in called, "백업 잡이 학습 자산 목록을 부르지 않는다"
 
 
-def test_폴백_경로에도_학습지침이_주입된다():
-    """주 경로가 실패해 폴백으로 떨어지면 **학습 0 상태로 발행** 되고 있었다."""
-    from JARVIS02_WRITER.draft_writer import _build_section_system_msg
+def test_폴백_경로에도_학습지침이_주입된다(monkeypatch):
+    """주 경로가 실패해 폴백으로 떨어지면 **학습 0 상태로 발행** 되고 있었다.
 
-    msg = _build_section_system_msg("[헌법]", "tistory")
-    import inspect
-
+    ★ 동작으로 검사 — 대역을 심어 그 값이 실제 프롬프트에 나타나는지 본다.
+    """
     from JARVIS02_WRITER import draft_writer as dw
 
-    src = inspect.getsource(dw._build_section_system_msg)
-    assert "_load_learn_insights" in src, (
-        "폴백 공통 system 에 학습 지침 조달이 없다 — 4개 함수가 전부 학습 0 이 된다")
-    assert "{_insights}" in src or "_insights" in msg or len(msg) > 0
+    MARK = "◇지침대역◇"
+    monkeypatch.setattr(dw, "_load_learn_insights", lambda *a, **k: MARK)
+    msg = dw._build_section_system_msg("[헌법]", "tistory")
+    assert MARK in msg, "폴백 공통 system 에 학습 지침이 실리지 않는다"

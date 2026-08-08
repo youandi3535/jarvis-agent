@@ -495,7 +495,10 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
         )
 
         if fixed:
-            _db.mark_error_status(error_id, "fixed")
+            # ★ 근거를 남긴다 (2026-08-08) — `fixed` 가 세 뜻을 말하지 않게.
+            #   Tier-2 는 이제 재현검증을 통과해야만 True 를 돌려준다(auto_repair).
+            _db.mark_error_status(error_id, "fixed",
+                                  "Tier-2 SDK 수정 + 재현검증 통과")
             log.info(f"[GUARDIAN] #{error_id} SDK 수정 성공 → 학습 저장 완료, 작업 재시도 중")
             # 학습 저장: ① _record_repairs_to_guardian(external_change) ② record_sdk_fix(밴딧 보상 + llm_patch) — 둘 다 run_auto_repair_targeted 내부 자동
             _retry_original_job(error_record)
