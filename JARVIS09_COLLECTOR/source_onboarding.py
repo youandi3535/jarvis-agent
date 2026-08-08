@@ -26,6 +26,7 @@ import os
 import re
 import time
 from pathlib import Path
+from JARVIS07_GUARDIAN.json_store import write_json
 
 log = logging.getLogger("jarvis.collector.onboarding")
 
@@ -94,8 +95,7 @@ def _load_state() -> dict:
 def _save_state(state: dict) -> None:
     try:
         _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=1),
-                               encoding="utf-8")
+        write_json(_STATE_PATH, state, indent=1)
     except Exception:
         pass
 

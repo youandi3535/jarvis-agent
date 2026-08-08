@@ -11,7 +11,7 @@
     만료 항목은 메모리에서 필터해 반환만 하고, 물리적 삭제는 쓰기 시점
     (_purge_expired 헬퍼)에만 수행 — API 서버(별도 프로세스)가 writer 가 되어
     데몬과 read-modify-write 경합하는 사고 차단.
-  - read-modify-write 구간은 fcntl.flock 파일 락으로 크로스 프로세스 직렬화
+  - read-modify-write 구간은 `json_store.locked()`(재진입 가드 보유)로 크로스 프로세스 직렬화
     (threading.Lock 은 프로세스 간 무력). 락 실패 시 락 없이 진행 — 가용성 우선.
 
 엣지 ID → 파이프라인 단계 매핑:
@@ -38,11 +38,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-
-try:
-    import fcntl  # darwin/linux — 크로스 프로세스 파일 락
-except ImportError:  # 비 POSIX 환경 — 파일 락 없이 진행 (가용성 우선)
-    fcntl = None
+from JARVIS07_GUARDIAN.json_store import write_json, locked as _xp_locked
 
 _LOCK = threading.Lock()
 
@@ -103,47 +99,25 @@ def _read() -> dict:
 
 
 def _write(data: dict) -> None:
+    # ★ 원자 저장 로직을 직접 구현하지 않는다 (2026-08-05 — ①위반 시정).
+    #   여기 있던 tmp→os.replace 는 `json_store.write_json` 과 같은 일을 하는
+    #   *복사본* 이었다. 원본이 fsync·락·격리를 추가해도 이쪽은 안 따라온다.
     _DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = str(_DATA_FILE) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp, str(_DATA_FILE))  # atomic
+    write_json(_DATA_FILE, data, indent=None)
 
 
-@contextmanager
-def _file_lock():
-    """fcntl.flock 기반 크로스 프로세스 파일 락 — read-modify-write 경합 방지.
-
-    데몬·API서버 등 여러 프로세스가 같은 파일을 갱신할 수 있으므로
-    threading.Lock(_LOCK) 만으로는 부족. _LOCK 안에서 이 락을 함께 잡는다.
-    락 획득 실패(파일시스템 문제 등) 시 락 없이 진행 — 가용성 우선.
-    """
-    fd = None
-    if fcntl is not None:
-        try:
-            _DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-            fd = open(str(_DATA_FILE) + ".lock", "w")
-            fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
-        except Exception:
-            if fd is not None:
-                try:
-                    fd.close()
-                except Exception:
-                    pass
-            fd = None
-    try:
-        yield
-    finally:
-        if fd is not None:
-            try:
-                fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
-            try:
-                fd.close()
-            except Exception:
-                pass
-
+# ★ 자체 flock 삭제 (2026-08-07) — **자기 자신과 교착하고 있었다**
+#   여기 있던 `_file_lock()` 은 `json_store.locked()` 와 **같은 `.lock` 파일**에
+#   각자 `open()+flock(LOCK_EX)` 했다. 그런데 `_write()` 는 `write_json()` 을 부르고
+#   그 안에서 다시 `locked()` 를 잡는다 — flock 은 *open file description* 단위라
+#   같은 프로세스의 두 fd 도 서로를 막는다. 결과: **모든 쓰기가 10초 타임아웃**
+#   (실측 재현: 단독 0.0001s / 중첩 10.0099s, 로그 누적 2,817회).
+#   그 지연이 데몬 우아한 종료를 ~90초로 늘려 `restart_daemon.sh`(대기 3~4초)가
+#   실패하고 인스턴스가 2개가 됐다.
+#   `json_store.locked()` 는 **재진입 가드**(깊이 카운트)를 갖고 있고 그 docstring 이
+#   *"★ 재진입 필수 — 안 하면 자기 자신과 데드락"* 이라고 적어 두었다. 교훈은 거기
+#   있었는데 이 파일이 *재진입 없는 사본* 을 따로 갖고 있었던 것이다(원칙① 위반).
+#   2026-08-05 에 원자 저장(tmp→os.replace) 사본은 걷어냈으면서 **락 사본은 남겼다.**
 
 def _expires_of(v) -> float:
     """항목 만료 시각 추출 — active(float)·busy(dict / 숫자 레거시) 공용."""
@@ -172,7 +146,7 @@ def mark_active(edge_id: "str | list[str]", ttl: int = DEFAULT_TTL) -> None:
     ids = [edge_id] if isinstance(edge_id, str) else list(edge_id)
     expires = time.time() + ttl
     ts = datetime.now().strftime("%H:%M:%S")
-    with _LOCK, _file_lock():
+    with _LOCK, _xp_locked(_DATA_FILE):
         # ★ 전체 dict 보존형 쓰기 — active·log 외 키(busy 등) 절대 드랍 금지
         data = _read()
         _purge_expired(data)
@@ -214,7 +188,7 @@ def mark_flow(from_id: str, to_id: str, label: str = "", ttl: int = DEFAULT_TTL)
     lbl = (label or "").strip()
     fn, tn = _agent_name(from_id), _agent_name(to_id)
     msg = f"{fn} → {tn}  {lbl}".rstrip() if lbl else f"{fn} → {tn}"
-    with _LOCK, _file_lock():
+    with _LOCK, _xp_locked(_DATA_FILE):
         # ★ 전체 dict 보존형 쓰기 — flows·log 외 키(active·busy 등) 절대 드랍 금지
         data = _read()
         _purge_expired(data)
@@ -241,7 +215,7 @@ def get_active_flows() -> list[dict]:
 def log_activity(msg: str) -> None:
     """파이프라인 현황 메시지를 수동으로 로그에 추가."""
     ts = datetime.now().strftime("%H:%M:%S")
-    with _LOCK, _file_lock():
+    with _LOCK, _xp_locked(_DATA_FILE):
         # ★ 전체 dict 보존형 쓰기 — log 만 갱신, 나머지 키 그대로 유지
         data = _read()
         _purge_expired(data)
@@ -275,7 +249,7 @@ def mark_busy(agent_id: str, task: str = "", ttl: int = 120, log: bool = True) -
     now = time.time()
     expires = now + ttl
     ts = datetime.now().strftime("%H:%M:%S")
-    with _LOCK, _file_lock():
+    with _LOCK, _xp_locked(_DATA_FILE):
         # ★ 전체 dict 보존형 쓰기 — busy 만 갱신, 나머지 키 그대로 유지
         data = _read()
         _purge_expired(data)
@@ -297,7 +271,7 @@ def clear_busy(agent_id: str) -> None:
 
     해당 항목이 없어도 조용히 무시 (호출자는 finally 에서 무조건 불러도 안전).
     """
-    with _LOCK, _file_lock():
+    with _LOCK, _xp_locked(_DATA_FILE):
         data = _read()
         _purge_expired(data)
         busy: dict = data.setdefault("busy", {})

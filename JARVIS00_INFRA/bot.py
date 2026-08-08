@@ -324,7 +324,7 @@ def _run_react(user_msg: str, max_steps: int = 12, verbose: bool = True, session
     if err:
         log.warning(f"[J00] ReAct error: {err}")
         if verbose:
-            _send_tg(f"⚠️ ReAct 오류: {err}\n\n{out.get('text','')[:200]}")
+            _send_tg(f"⚠️ ReAct 오류: {err}\n\n{(out.get('text') or '')[:200]}")
         return False
 
     tcalls = out.get("tool_calls", [])
@@ -488,7 +488,7 @@ def _handle_react_result(out: dict, user_msg: str, verbose: bool = False):
     """react_handle / resume_react 결과 공통 처리 → 텔레그램 전송."""
     err = out.get("error") or ""
     if err:
-        _send_tg(f"⚠️ ReAct 오류: {err}\n\n{out.get('text','')[:200]}")
+        _send_tg(f"⚠️ ReAct 오류: {err}\n\n{(out.get('text') or '')[:200]}")
         return
     pending = out.get("pending_approvals", [])
     if pending:
@@ -704,10 +704,10 @@ def _dispatch_text_command(text: str):
                 f"도메인: `{cls.get('target_domain','?')}`\n"
                 f"인텐트: `{cls.get('intent','?')}` ({cls.get('intent_kind','?')})\n"
                 f"확신도: {cls.get('confidence', 0):.2f}\n"
-                f"근거: {cls.get('rationale','')[:120]}\n"
+                f"근거: {(cls.get('rationale') or '')[:120]}\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"매칭 에이전트: `{tgt or '없음'}`\n"
-                f"디스패치: {disp.get('note','')[:100]}"
+                f"디스패치: {(disp.get('note') or '')[:100]}"
             )
         except Exception as e:
             _reply(f"⚠️ /route 실패: {e}")

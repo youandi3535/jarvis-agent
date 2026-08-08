@@ -38,6 +38,9 @@ __all__ = [
     "directive_issues",
     "is_learnable_directive",
     "active_directives",
+    # ★ 항목별 학습 (2026-08-07) — 총점 하나가 아니라 항목마다 신호를 준다
+    "insight_target_item", "item_reward", "item_reward_neutral",
+    "weak_items", "maintained_items",
 ]
 
 # ══════════════════════════════════════════════════════════════════
@@ -67,6 +70,13 @@ except Exception:
 DIRECTIVE_MAX_LEN: int = _K * 2
 
 import re as _re
+from functools import lru_cache as _lru_cache
+
+import logging as _logging
+
+# ★ 이 모듈에 로거가 없었다 — except 핸들러의 `log.warning` 이 NameError 를 내며
+#   *예외를 감추는 대신 예외를 더 만들었다* (2026-08-07 실측 확인).
+_log = _logging.getLogger("jarvis.guardian.quality")
 
 # ★ 지시문 판정 — *어휘 목록이 아니라 문장의 꼴*. 그런데 **어디에 나오는지가 결정적**이다.
 #   초판은 `유지하|포함하` 같은 어간을 문장 *아무 데서나* 찾았는데, 그러면
@@ -319,6 +329,12 @@ def build_insights_block(scope: str = "all", theme: str = "",
         if not used_ids:
             return ""
 
+        # ★ 약점 항목 명시 주입 (2026-08-07 — 사용자 요구 "0점이 안 나오도록 학습")
+        #   지침만으로는 부족했다. 지침은 *일반론* 이라 "이번에 어디서 몇 점을 잃고 있는지"
+        #   를 알려주지 못한다. 실측 230건에서 **8개 항목이 전건 0점** 이었는데도 지침은
+        #   그걸 한 번도 지목하지 못했다. 여기서 채점기의 실측을 그대로 들이민다.
+        lines.append(_weak_items_block(scope, platform))
+
         # 사용 기록 — 보상 귀속 대기 (배치 = 이 글에 함께 주입된 묶음)
         # dry_run 은 발행이 없어 영원히 미귀속 노이즈 → 기록 스킵 (블록은 정상 반환)
         import os as _os
@@ -335,6 +351,153 @@ def build_insights_block(scope: str = "all", theme: str = "",
         return "\n".join(lines)
     except Exception:
         return ""
+
+
+WEAK_ITEM_LIMIT: int = 6      # 프롬프트에 실을 약점 개수 — 많으면 지시가 묽어진다
+# ★ 약점 판정에 쓰는 **최근 글 수**. 최소 표본의 4배 — 한 번 튀는 글에 흔들리지 않으면서
+#   개선이 4~5회 발행 만에 목록에서 빠질 만큼 짧다. 숫자를 따로 박지 않고 파생한다.
+WEAK_RECENT_N: int = 0        # (아래에서 WEAK_MIN_SAMPLE 로부터 파생)
+WEAK_MIN_SAMPLE: int = 5      # 이보다 표본이 적으면 약점을 말하지 않는다(소표본 오판)
+WEAK_RECENT_N = WEAK_MIN_SAMPLE * 4
+
+
+def weak_items(scope: str = "", platform: str = "", days: int = 30,
+               limit: int = 0) -> list:
+    """최근 글에서 **가장 많이 잃고 있는 항목** — 저장된 채점 실측에서 파생.
+
+    ★ 목록을 코드에 박지 않는다 (② 동적 설계). `post_analysis.rubric_items` 를 집계해
+      *지금* 무엇을 잃고 있는지 매번 다시 구한다. 어떤 항목을 고쳐 손실이 사라지면
+      그 항목은 **자동으로 목록에서 빠지고** 다음 약점이 올라온다 — 100점 수렴의 동력이다.
+
+    Returns: [{"key","name","avg","max","zero_rate","loss","n"}]  손실 큰 순
+    """
+    try:
+        import json as _json
+        from shared.db import get_db
+        from JARVIS02_WRITER.post_scorer import RUBRIC_MAX, item_index
+
+        q = ("SELECT rubric_items FROM post_analysis WHERE rubric_items IS NOT NULL "
+             "AND created_at > datetime('now', ?)")
+        args: list = [f"-{int(days)} day"]
+        if scope and scope != "all":
+            q += " AND post_type = ?"
+            args.append(scope)
+        if platform:
+            q += " AND platform = ?"
+            args.append(platform)
+        agg: dict = {}
+        with get_db() as con:
+            # ★ 최신순으로 읽는다 — 항목마다 *최근* 성적만 보기 위해서다(아래 WEAK_RECENT_N).
+            for (raw,) in con.execute(q + " ORDER BY id DESC", tuple(args)):
+                try:
+                    v = _json.loads(raw)
+                except Exception:
+                    continue
+                for k, sc in v.items():
+                    agg.setdefault(k, []).append(float(sc))
+        idx = item_index()
+        # ★ 작성 LLM 이 만들 수 없는 항목은 약점으로 지목하지 않는다 (2026-08-07).
+        #   태그·메타 설명·내부 링크는 **파이프라인이 만든다**. 작성자에게 "반드시 채울 것"
+        #   이라고 시키면 할 수 있는 일은 하나뿐 — **URL 을 지어내는 것** 이다.
+        #   (실측: 과거 T8 점수를 받은 3건이 전부 날조 URL 이었다.)
+        #   목록은 채점기에게 물어 파생한다 — 여기 박지 않는다(②).
+        try:
+            from JARVIS02_WRITER.post_scorer import pipeline_controlled_items
+            _pipe = pipeline_controlled_items()
+        except Exception:
+            _pipe = frozenset()
+        out = []
+        for k, vals in agg.items():
+            mx = float(RUBRIC_MAX.get(k, 0))
+            if not mx or k in _pipe:
+                continue
+            # ★ **최근 N건만** 본다. 누적 절대량(`mx*n - sum`)은 만점 행이 쌓여도 줄지 않아
+            #   (만점 행은 분모에 mx 를 더하고 분자에서 mx 를 빼므로 기여가 정확히 0),
+            #   오늘 고친 항목이 옛 행이 창 밖으로 나갈 때까지 **최장 30일간** 계속
+            #   "100% 의 글에서 0점" 이라고 주입된다 — 이미 고친 걸 계속 고치라는 지시.
+            vals = vals[:WEAK_RECENT_N]
+            if len(vals) < WEAK_MIN_SAMPLE:
+                continue
+            loss = mx * len(vals) - sum(vals)
+            if loss <= 0:
+                continue                     # 전건 만점 — 약점이 아니다
+            out.append({
+                "key": k, "name": (idx.get(k) or {}).get("name", k),
+                "avg": round(sum(vals) / len(vals), 2), "max": mx,
+                "zero_rate": round(sum(1 for x in vals if x == 0) / len(vals), 2),
+                "loss": round(loss, 1), "n": len(vals),
+            })
+        out.sort(key=lambda d: -d["loss"])
+        return out[: (limit or WEAK_ITEM_LIMIT)]
+    except Exception as e:
+        _log.warning(f"[quality_learner] 약점 항목 파생 실패: {type(e).__name__}: {e}")
+        return []
+
+
+def _weak_items_block(scope: str = "", platform: str = "") -> str:
+    """약점 항목을 작성 프롬프트용 한국어 블록으로. 없으면 "".
+
+    ★ 점수·항목key 를 그대로 노출하지 않는다 — 작성 LLM 에게 필요한 것은
+      *무엇을 어떻게 해야 하는가* 이지 내부 채점 코드가 아니다. 다만 **0점 항목은
+      0점이라고 분명히 말한다** — 그게 이 블록의 존재 이유다.
+    """
+    items = weak_items(scope=scope, platform=platform)
+    if not items:
+        return ""
+    lines = ["",
+             "⚠️ *최근 같은 종류 글에서 실제로 점수를 잃은 지점* — 이번 글에서는 반드시 확보:"]
+    for d in items:
+        if d["zero_rate"] >= 0.9:
+            how = f"**최근 {int(d['zero_rate']*100)}% 의 글에서 0점** — 이번엔 반드시 채울 것"
+        elif d["avg"] < d["max"] * 0.5:
+            how = f"평균 {d['avg']}/{d['max']:.0f} 로 절반 미만 — 우선 보강"
+        else:
+            how = f"평균 {d['avg']}/{d['max']:.0f} — 만점까지 조금 남음"
+        lines.append(f"- {d['name']}: {how}")
+    return "\n".join(lines)
+
+
+def maintained_items(scope: str = "", platform: str = "", days: int = 30) -> list:
+    """**만점을 유지 중인 항목** — 퇴행 감시 대상 (2026-08-07).
+
+    ★ 왜 필요한가: `deducted_items()` 는 감점된 것만 돌려주므로 만점 항목은 시스템
+      눈에 보이지 않았다. "만점이던 게 떨어졌다" 를 감지할 수단이 없어, 실측으로
+      퇴행 45건이 개선 27건보다 많은데도 아무도 몰랐다. *유지* 도 학습 대상이다.
+    """
+    try:
+        import json as _json
+        from shared.db import get_db
+        from JARVIS02_WRITER.post_scorer import RUBRIC_MAX, item_index
+        q = ("SELECT rubric_items FROM post_analysis WHERE rubric_items IS NOT NULL "
+             "AND created_at > datetime('now', ?)")
+        args: list = [f"-{int(days)} day"]
+        if scope and scope != "all":
+            q += " AND post_type = ?"; args.append(scope)
+        if platform:
+            q += " AND platform = ?"; args.append(platform)
+        agg: dict = {}
+        with get_db() as con:
+            for (raw,) in con.execute(q, tuple(args)):
+                try:
+                    v = _json.loads(raw)
+                except Exception:
+                    continue
+                for k, sc in v.items():
+                    agg.setdefault(k, []).append(float(sc))
+        idx = item_index()
+        out = []
+        for k, vals in agg.items():
+            mx = float(RUBRIC_MAX.get(k, 0))
+            if not mx or len(vals) < WEAK_MIN_SAMPLE:
+                continue
+            if all(x >= mx for x in vals):
+                out.append({"key": k, "name": (idx.get(k) or {}).get("name", k),
+                            "max": mx, "n": len(vals)})
+        out.sort(key=lambda d: -d["max"])
+        return out
+    except Exception as e:
+        _log.warning(f"[quality_learner] 유지 항목 파생 실패: {type(e).__name__}: {e}")
+        return []
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -393,6 +556,171 @@ def _match_analysis(usage: dict, analyses: list[dict]) -> Optional[dict]:
     return best[1] if best else None
 
 
+# 위반 감점 폭 — 중립점 아래로 확실히 떨어지되 과하지 않게. 상수 대신 EMA 계수에서 파생.
+#   REWARD_ALPHA 가 갱신 보폭이므로 그 절반이면 한 회차에 방향이 뒤집힌다.
+_VIOLATION_PENALTY = 0.15
+
+
+def record_directive_violations(scope: str, platform: str, theme: str,
+                                violated_texts: list) -> int:
+    """게이트가 판정한 **미준수 지침** 을 사용 기록에 남긴다 (2026-08-07 감사).
+
+    ★ 왜 필요한가 — credit assignment 가 붕괴해 있었다
+      한 배치의 지침 8개가 전부 같은 보상(그 글의 점수)을 받으면, 어느 지침이 좋았는지
+      영영 구분되지 않는다(실측: 배치 53개 전부 `count(distinct reward)=1`).
+      그런데 `prepublish_gate` 는 이미 *어느 지침이 안 지켜졌는지* 를 계산해 놓고
+      `log.info` 한 줄로 버리고 있었다. 계산은 이미 끝났고 흘려보내기만 하면 된다.
+
+    ★ 왜 여기인가 (①) — 지침 텍스트를 id 로 되돌리는 건 지침의 주인만 할 수 있다.
+      게이트는 텍스트만 알고, 이 모듈은 그 텍스트가 어느 행에서 나왔는지 안다.
+    """
+    if not violated_texts:
+        return 0
+    try:
+        from shared import db as _db
+        batch = _db.latest_batch(scope or "all", platform or "")
+        if not batch:
+            return 0
+        # 텍스트 → id : 활성 지침 조회와 **같은 원본**에서 뽑는다(사본 금지)
+        # ★ 함수명 교정 (2026-08-07) — `get_learning_insights` 는 **존재하지 않는다**.
+        #   어제 이 코드를 넣으면서 실제로 부르지 않고 커밋했고, 골든 테스트도
+        #   *소스 문자열만* 검사해 초록으로 통과시켰다. 902행 중 violated 는 0행이었다.
+        #   "정적 검사는 코드가 어떻게 생겼나만 답한다" 를 그 자리에서 어겼다.
+        rows = _db.get_ranked_learning_insights(scope=scope or "all", limit=200) or []
+        want = {str(t).strip()[:200] for t in violated_texts if str(t).strip()}
+        ids = [r["id"] for r in rows
+               if str(r.get("directive") or "").strip()[:200] in want]
+        return _db.mark_usage_violated(batch, ids)
+    except Exception as e:
+        _log.warning(f"[quality_learner] 지침 위반 기록 실패: {type(e).__name__}: {e}")
+        return 0
+
+
+@_lru_cache(maxsize=1)
+def _item_name_index() -> list:
+    """루브릭 **항목명 → 항목key** 색인 — 긴 이름부터 (부분일치 오탐 방지).
+
+    ★ 이 표를 손으로 적지 않는다 (② 동적 설계). `post_scorer.item_index()` 가
+      채점기 자신에서 파생한 것을 그대로 뒤집는다 — 항목이 추가·개명되면 **자동 추종**한다.
+    """
+    try:
+        from JARVIS02_WRITER.post_scorer import item_index
+        pairs = [(v.get("name") or "", k) for k, v in item_index().items()]
+    except Exception:
+        return []
+    return sorted([(n, k) for n, k in pairs if n], key=lambda x: -len(x[0]))
+
+
+def insight_target_item(insight_key: str) -> "str | None":
+    """지침이 **겨누는 루브릭 항목** — `insight_key` 에서 파생. 없으면 None.
+
+    ★ 왜 파생이 가능한가 (비직관)
+      `insight_key` 는 `"{scope}:{type}_{감점항목명}"` 꼴이고, 그 항목명은 발행 후 분석
+      프롬프트가 **"감점 목록의 이름 그대로 사용"** 하라고 지시해 만들어진 것이다.
+      즉 지침↔항목 연결은 *데이터에 이미 있었는데* 코드가 그걸 읽지 않았을 뿐이다.
+      실측: 가중치 상위 10개 전부(10/10) 이 방식으로 항목이 역추적된다.
+
+    이 연결이 없으면 배치 안 8개 지침이 **전부 같은 총점 보상**을 받는다 —
+    실측으로 보상 배치 53개 전부 `distinct reward = 1` 이었다(신용할당 붕괴).
+    """
+    if not insight_key:
+        return None
+    for name, key in _item_name_index():
+        if name in insight_key:
+            return key
+    return None
+
+
+def item_reward(item_key: str, rubric_items: dict) -> "float | None":
+    """그 항목의 획득률 `점수/만점` → 보상 [0,1]. 채점 안 된 항목이면 None.
+
+    만점은 `RUBRIC_MAX`(단일 진실 소스)에서 파생한다 — 저장된 값을 믿지 않는다.
+    """
+    if not item_key or not rubric_items or item_key not in rubric_items:
+        return None
+    try:
+        from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
+        mx = float(RUBRIC_MAX.get(item_key, 0))
+        if not mx:
+            return None
+        return round(max(0.0, min(1.0, float(rubric_items[item_key]) / mx)), 4)
+    except Exception:
+        return None
+
+
+def item_reward_neutral(item_key: str, days: int = 60) -> "float | None":
+    """**항목별** 중립점 — 그 항목 획득률의 최근 중앙값. 표본 부족(<8)이면 None.
+
+    ★ 왜 항목마다 따로 두는가
+      항목은 난이도가 제각각이다. `B5_factuality` 는 230건 전부 만점(획득률 1.0)이고
+      `T7_meta_desc` 는 전건 0점이었다. 전역 중립점(총점 중앙값 ≈0.69) 하나로 재면
+      쉬운 항목을 겨눈 지침은 **가만히 있어도** 계속 오르고, 어려운 항목을 겨눈 지침은
+      **아무리 개선해도** 계속 내린다 — 학습이 난이도를 실력으로 착각한다.
+      항목별 중앙값을 쓰면 "이 항목에서 평균보다 나았는가" 라는 옳은 질문이 된다.
+    """
+    if not item_key:
+        return None
+    try:
+        import json as _json
+        import statistics as _st
+        from shared.db import get_db
+        from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
+        mx = float(RUBRIC_MAX.get(item_key, 0))
+        if not mx:
+            return None
+        vals = []
+        with get_db() as con:
+            for (raw,) in con.execute(
+                "SELECT rubric_items FROM post_analysis "
+                "WHERE rubric_items IS NOT NULL AND created_at > datetime('now', ?)",
+                (f"-{int(days)} day",),
+            ):
+                try:
+                    v = _json.loads(raw)
+                except Exception:
+                    continue
+                if item_key in v:
+                    vals.append(max(0.0, min(1.0, float(v[item_key]) / mx)))
+        if len(vals) < 8:
+            return None
+        return round(max(0.05, min(0.95, _st.median(vals))), 4)
+    except Exception:
+        return None
+
+
+def reward_neutral(days: int = 60) -> float:
+    """보상의 **중립점** — 이 값보다 높으면 weight ↑, 낮으면 ↓.
+
+    ★ 왜 0.5 가 아닌가 (2026-08-07 감사 — 강화학습이 인기투표가 돼 있었다)
+      갱신식은 `w ← w + α(reward − 중립)` 이고 `reward = quality_score/100` 이다.
+      그런데 실측 점수 분포는 **59~77, 중앙값 69, 50점 미만 0건** 이다.
+      중립을 0.5 로 두면 `Δw` 최솟값이 **+0.027 — 항상 양수** 다.
+      즉 "검증된 지침만 생존" 이 아니라 **"쓰인 지침은 전부 생존"** 이었다.
+      하향이 구조적으로 도달 불가능하면 그건 학습이 아니라 최근성 가중 인기투표다.
+
+    ★ 왜 68.5 를 박지 않는가 (② 동적 설계)
+      점수 분포는 글이 좋아지면 통째로 올라간다. 중립점을 박으면 그 순간부터 또
+      전부 양수가 된다. **중앙값을 런타임에 계산** 하면 "평균보다 나은 지침" 이라는
+      상대 기준이 유지된다 — 분포가 올라가도 절반은 내려간다.
+
+    표본이 부족하면(<8) 0.5 로 폴백 — 소표본 중앙값은 튀어서 오히려 해롭다.
+    """
+    try:
+        from shared.db import get_db
+        with get_db() as con:
+            rows = [float(r[0]) for r in con.execute(
+                "SELECT quality_score FROM post_analysis "
+                "WHERE quality_score IS NOT NULL "
+                "  AND created_at > datetime('now', ?) ORDER BY quality_score",
+                (f"-{int(days)} day",)) if r[0] is not None]
+        if len(rows) < 8:
+            return 0.5
+        import statistics as _st
+        return round(max(0.05, min(0.95, _st.median(rows) / 100.0)), 4)
+    except Exception:
+        return 0.5
+
+
 def reward_retry_days() -> int:
     """미귀속 사용 기록을 **며칠까지 다시 시도할 것인가** — 선택 기간에서 파생.
 
@@ -409,11 +737,53 @@ def reward_retry_days() -> int:
     return max(1, int(SELECTION_DAYS))
 
 
+def _insight_key_of(insight_id) -> str:
+    """insight_id → insight_key. 한 회차 안에서 반복 조회되므로 프로세스 캐시를 둔다."""
+    if insight_id is None:
+        return ""
+    try:
+        iid = int(insight_id)
+    except (TypeError, ValueError):
+        return ""
+    if iid in _IKEY_CACHE:
+        return _IKEY_CACHE[iid]
+    try:
+        from shared.db import get_db
+        with get_db() as con:
+            row = con.execute("SELECT insight_key FROM learning_insights WHERE id=?",
+                              (iid,)).fetchone()
+        val = (row["insight_key"] if row else "") or ""
+    except Exception:
+        val = ""
+    _IKEY_CACHE[iid] = val
+    return val
+
+
+def _rubric_items_of(analysis_row: dict) -> dict:
+    """분석 행의 `rubric_items` 를 dict 로. 없거나 깨졌으면 빈 dict."""
+    raw = (analysis_row or {}).get("rubric_items")
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        import json as _json
+        v = _json.loads(raw)
+        return v if isinstance(v, dict) else {}
+    except Exception:
+        return {}
+
+
+_IKEY_CACHE: dict = {}
+
+
 def attribute_pending_rewards(days: int | None = None) -> dict:
     """미귀속 사용 기록 전수 → 분석 결과 매칭 → 보상 귀속 + weight 갱신.
 
     Returns: {"matched": n, "pending": n, "avg_reward": f}
     """
+    # ★ 중립점을 루프 밖에서 1회 파생 (2026-08-07) — 매 행마다 SQL 을 돌리지 않는다.
+    _neutral = reward_neutral()
     from shared import db as _db
 
     days = reward_retry_days() if days is None else int(days)
@@ -424,7 +794,8 @@ def attribute_pending_rewards(days: int | None = None) -> dict:
     # 분석 완료된 글 (채점된 것) — 최근 days+1일. quality_score = 보상 신호(루브릭 총점).
     with _db.get_db() as conn:
         analyses = [dict(r) for r in conn.execute(
-            """SELECT id, platform, theme, post_type, quality_score, created_at, analyzed_at
+            """SELECT id, platform, theme, post_type, quality_score, created_at, analyzed_at,
+                      rubric_items
                FROM post_analysis
                WHERE analyzed_at IS NOT NULL
                  AND created_at >= datetime('now','localtime',?)""",
@@ -446,15 +817,31 @@ def attribute_pending_rewards(days: int | None = None) -> dict:
         a = _match_analysis(u, analyses)
         if a is None:
             continue
-        r = _reward_from_analysis(a)
+        # ★ 항목별 신용할당 (2026-08-07) — 지침이 겨눈 **그 항목의 획득률** 을 보상으로 쓴다.
+        #   종전엔 배치 안 모든 지침이 같은 총점을 받아 실측 53개 배치 전부
+        #   distinct reward = 1 이었다 — 어느 지침이 기여했는지 구분이 0이었다.
+        #   항목이 역추적 안 되거나(일반 지침) 그 항목이 채점 안 됐으면 총점으로 폴백한다.
+        _ikey = _insight_key_of(u["insight_id"])
+        _item = insight_target_item(_ikey)
+        _ri = _rubric_items_of(a)
+        r = item_reward(_item, _ri)
+        _n = item_reward_neutral(_item) if r is not None else None
+        if r is None:
+            r = _reward_from_analysis(a)
+        if _n is None:
+            _n = _neutral
         if r is None:
             continue   # 점수 미기록(옛 행·채점 불가) → 보상 신호 없음, 귀속 스킵
         pair = (u["insight_id"], a["id"])
         try:
             _db.apply_insight_reward(
                 usage_id=u["id"], insight_id=u["insight_id"],
-                analysis_id=a["id"], reward=r, alpha=REWARD_ALPHA,
+                analysis_id=a["id"], alpha=REWARD_ALPHA,
                 update_weight=(pair not in rewarded_pairs),
+                # ★ 지침별 변별 (2026-08-07) — 같은 글이라도 안 지켜진 지침은 감점.
+                #   이게 없으면 배치 안 8개가 전부 같은 값이라 학습 신호가 0이다.
+                reward=(r if not u.get("violated") else max(0.0, r - _VIOLATION_PENALTY)),
+                neutral=_n,           # ★ 항목별 중앙값(없으면 전역) — 하향이 가능해진다
             )
             rewarded_pairs.add(pair)
             matched += 1

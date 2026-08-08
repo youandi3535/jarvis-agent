@@ -958,7 +958,7 @@ def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[di
             "target_file": _tgt,
             "patch":       _items[0]["patch"],
             "patches":     _items,          # ★ 다중 파일 트랜잭션 (apply_fix 가 전량 적용)
-            "explanation": (f"학습 캐시 재적용 — {matched.get('fingerprint','')[:60]}"
+            "explanation": (f"학습 캐시 재적용 — {(matched.get('fingerprint') or '')[:60]}"
                             if fixer_name == "llm_patch"
                             else f"auto_patch 재적용 (LLM 0) — {_tgt}"),
             "pattern":     fixer_name,
@@ -1051,7 +1051,7 @@ def _semantic_fallback_match(et: str, msg: str, data: dict, min_hit_count: int) 
     if best is None or best_sim < _SEMANTIC_SIM_MIN:
         return None
     log.info(f"[GUARDIAN/learned] ★ 시맨틱 폴백 매칭 sim={best_sim:.3f} "
-             f"et={et} fp='{best.get('fingerprint','')[:50]}' fixer={best.get('fixer')}")
+             f"et={et} fp='{(best.get('fingerprint') or '')[:50]}' fixer={best.get('fixer')}")
     best = dict(best)          # 원본 오염 방지 (표식만 추가)
     best["_semantic_sim"] = round(best_sim, 4)
     return best
@@ -1861,7 +1861,7 @@ def _try_fixer_group(
                 result["_bandit_fixer"] = fixer_name
                 log.info(
                     f"[GUARDIAN/pattern] {fixer_name} 매칭 — "
-                    f"{result.get('target_file','?')} : {result.get('explanation','')[:60]}"
+                    f"{result.get('target_file','?')} : {(result.get('explanation') or '')[:60]}"
                 )
                 return result
             else:

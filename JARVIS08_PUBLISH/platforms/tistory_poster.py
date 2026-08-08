@@ -1094,20 +1094,15 @@ def post_to_tistory(
                 _upload_image(str(img), driver=driver)
 
         # ── 연관 글 ──────────────────────────────────
-        _posts = related_posts if related_posts is not None else _fetch_recent_tistory_posts(1)
-        if _posts:
-            related_html = (
-                '<hr/>'
-                '<div style="background:#f8f9fa;border-left:4px solid #2563eb;'
-                'padding:14px 18px;margin:20px 0;border-radius:4px;">'
-                '<p style="font-weight:700;margin:0 0 8px;">[함께 읽으면 좋은 글]</p>'
-                '<ul style="margin:0;padding-left:18px;line-height:1.9;">'
-            )
-            for rp in _posts:
-                related_html += f'<li><a href="{rp["url"]}" style="color:#2563eb;">{rp["title"]}</a></li>'
-            related_html += '</ul></div>'
-            _inject_html_block(related_html, driver=driver)
-            _p("  ✅ 연관 글 삽입 완료")
+        # ★ 발행 시점 주입을 **삭제했다** (2026-08-07). 링크 블록은 이제 대본 완성 시점에
+        #   `JARVIS08_PUBLISH/internal_links.py` 가 만들어 원고(html)와 blocks 양쪽에 들어간다.
+        #   여기 남겨두면 **링크가 두 벌** 붙는다 — 이 삭제가 이 변경에서 가장 잊기 쉬운 지점이다.
+        #   왜 옮겼나: 종전 주입은 에디터 DOM 에만 닿아서, 발행된 글엔 링크가 있는데
+        #   채점·저장되는 원고엔 없었다 → T8_internal_link 94건 중 91건 0점.
+        #   `related_posts` 인자는 외부·수동 호출 호환으로 남기되, 오면 경고를 남긴다
+        #   (4조합이 그 길로 새면 즉시 드러나게).
+        if related_posts:
+            _p("  ⚠️ related_posts 직접 전달 — 연관 글은 대본 단계(internal_links)에서 붙는다")
 
         # 7. 태그 입력 (완료 버튼 전에)
         _p("  🏷️  태그 입력...")

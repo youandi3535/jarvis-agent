@@ -135,10 +135,22 @@ def _status_section() -> str:
             _bs = _bandit_stats()
             _arms = _bs.get("arm_count", 0)
             if _arms:
-                lines.append(
-                    f"🎰 Tier 1 Contextual Bandit — fixer {_arms}종 학습 "
-                    f"(Linear UCB · {_bs.get('feature_dim', 0)}차원)"
-                )
+                # ★ 구조 상수가 아니라 **생존 지표** 를 표시한다 (2026-08-07 감사).
+                #   종전엔 arm_count·feature_dim 만 읽어 "fixer 9종 학습" 이라 했는데,
+                #   그 값들은 학습이 11일 멈춰 있어도 그대로다 — 화면만 초록불이었다.
+                _obs = _bs.get("observed_arms", 0)
+                _h = _bs.get("last_update_h", -1)
+                if _bs.get("stalled"):
+                    _ago = f"{_h/24:.0f}일" if _h >= 24 else (f"{_h:.0f}시간" if _h >= 0 else "기록 없음")
+                    lines.append(
+                        f"🛑 Tier 1 Bandit **정지** — 마지막 학습 {_ago} 전 "
+                        f"(관측된 arm {_obs}/{_arms})"
+                    )
+                else:
+                    lines.append(
+                        f"🎰 Tier 1 Bandit 학습 중 — 관측 arm {_obs}/{_arms}, "
+                        f"{_h:.0f}시간 전 갱신"
+                    )
         except Exception:
             pass
 
@@ -471,7 +483,7 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
             f"func_name: {error_record.get('func_name','?')}\n"
             f"message: {error_record.get('message','?')}\n"
             f"severity: {error_record.get('severity','?')}\n"
-            f"traceback:\n{(error_record.get('traceback', ''))[:2000]}"
+            f"traceback:\n{(error_record.get('traceback', '') or '')[:2000]}"
         )
 
         log.info(f"[GUARDIAN] #{error_id} 2순위 Claude Code SDK 수정 시작 (최대 10분)")
@@ -495,7 +507,25 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
             return False
 
     except Exception as e:
-        log.warning(f"[GUARDIAN] SDK targeted 수정 예외: {e}")
+        # ★ 삼키지 않는다 (2026-08-07 감사 — 이 except 가 밴딧을 11일 멈춰 세웠다).
+        #
+        #   종전엔 `log.warning(f"...: {e}")` 한 줄이었다. 그래서 전체 로그에 21회 터진
+        #   `'NoneType' object is not subscriptable` 가 **어느 줄인지 아무도 몰랐고**,
+        #   `llm` arm 의 유일한 보상 경로가 조용히 막힌 채 status 만 wontfix 로 쌓였다
+        #   (07-27 이후 llm_attempts>0 17건 중 16건 wontfix).
+        #   → traceback 을 남기고 GUARDIAN 에 박제한다. 자기 자신의 고장도 학습 대상이다.
+        import traceback as _tb
+        _trace = _tb.format_exc()
+        log.error(f"[GUARDIAN] SDK targeted 수정 예외 (#{error_id}): "
+                  f"{type(e).__name__}: {e}\n{_trace}")
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report as _rep
+            _rep("GuardianTier2BridgeCrash", "guardian",
+                 message=f"Tier-2 SDK 브리지가 터져 밴딧 보상 경로가 막힘: {type(e).__name__}: {e}",
+                 module=__name__, func_name="_try_sdk_targeted_fix",
+                 tb_str=_trace, context={"error_id": error_id})
+        except Exception:
+            pass
         try:
             from shared import db as _db
             _db.mark_error_status(error_id, "wontfix")

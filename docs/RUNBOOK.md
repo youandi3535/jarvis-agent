@@ -171,6 +171,104 @@ from shared.secrets import redact_logs; print(redact_logs(dry_run=False))"  # �
 
 ---
 
+## 7-B. 맥북이 잠들어서 놓치는 것을 막기
+
+발행은 **07:00 · 21:00** 두 번뿐이다. 그 시각에 맥이 잠들어 있으면 그 슬롯은 사라진다
+(복구하지 않는다 — 정책 A).
+
+먼저 **지금 설정을 본다.** 값을 여기 적지 않는다 — 바뀌면 이 문서가 거짓말을 한다:
+
+```bash
+pmset -g custom | sed -n '/AC Power/,$p' | grep -E "^\s+sleep"     # 꽂았을 때
+pmset -g custom | sed -n '/Battery/,/AC Power/p' | grep -E "^\s+sleep"  # 배터리
+```
+
+읽는 법 — `sleep 0` 이면 **잠들지 않음**(안전), `sleep N` 이면 N분 뒤 잠듦.
+
+> ★ `pmset -g sched` 만 봐서는 안 된다. 거기엔 *예약된 1회성 이벤트* 만 나오고
+> 실제 절전 정책은 `-g custom` 에 있다. (2026-08-05: 이걸 혼동한 탐지기 설계를 폐기했다 —
+> 사용자가 처방을 정확히 따라도 영원히 "미설정" 이라고 나무라는 감시가 될 뻔했다.)
+
+### 조치 — 상황별
+
+| 상황 | 할 일 |
+|------|------|
+| **평소 전원에 꽂아둠** | 대개 이미 `sleep 0` 이라 추가 조치 불필요. 위 명령으로 확인만 |
+| **배터리로 두는 시간이 있음** | `sudo pmset -b sleep 0` (배터리에서도 안 잠듦 — 배터리 소모 증가) |
+| **잠들어도 깨우고 싶음** | `sudo pmset repeat wakeorpoweron MTWRFSU 06:50` |
+
+기상 시각은 **발행 시각에서 파생**한다. 직접 계산하지 말고 물어본다:
+
+```bash
+.venv/bin/python -c "
+from JARVIS08_PUBLISH.publish_ledger import publish_slots
+import datetime as dt
+for pt, h, m in sorted(publish_slots(), key=lambda x:(x[1],x[2])):
+    t = dt.datetime(2000,1,1,h,m) - dt.timedelta(minutes=10)
+    print(f'{pt}: 발행 {h:02d}:{m:02d} → 기상 {t:%H:%M}')"
+```
+
+### 한계 — 정직하게
+
+- **`pmset repeat` 은 반복 기상을 하나만 등록할 수 있다.** 두 슬롯을 다 덮으려면
+  전원에 꽂아 두는 편(위 첫 줄)이 확실하다.
+- **완전히 종료(shutdown)한 경우** `wakeorpoweron` 이 전원을 켤 수는 있지만,
+  FileVault 가 켜져 있고 자동 로그인이 없으면 **로그인 화면에서 멈춰 데몬이 안 뜬다.**
+  휴가처럼 며칠 끄는 경우는 어떤 설정으로도 구제되지 않는다 —
+  대신 돌아왔을 때 **공백 회계**가 무엇을 잃었는지 보고한다(§7-C).
+- 이 설정은 `sudo` 가 필요해 자동화하지 않는다. **저장소가 시스템 전원 정책을 몰래
+  바꾸지 않는다** — 사용자가 알고 켜는 것이 맞다.
+
+---
+
+## 7-C. 공백 회계 — "꺼져 있던 동안 무엇을 잃었나"
+
+데몬이 다시 뜨면 자동으로 계산해서 텔레그램으로 보고한다. 손으로 확인하려면:
+
+```bash
+.venv/bin/python -c "
+from JARVIS00_INFRA.downtime import report_boot_downtime, selfcheck
+print(selfcheck())
+print(report_boot_downtime(dry_run=True))"   # dry_run — 박제·전송 없이 계산만
+```
+
+- `downtime: False` → 유의미한 공백 없음
+- `slots: [...]` → 그 슬롯들을 잃었다. **재발행하지 않는다**(정책 A)
+
+공백 판정 임계는 **발행 잡의 `misfire_grace_time` 에서 파생**한다 — 그 안에 데몬이
+돌아오면 스케줄러가 늦게라도 실행하므로 손실이 아니다.
+
+---
+
+## 7-D. 백업이 성한가
+
+```bash
+.venv/bin/python -c "
+from shared.db import verify_backup, backup_gaps, BACKUP_DIR
+print('최근 7일 결손:', backup_gaps(7) or '없음')
+for p in sorted(BACKUP_DIR.glob('jarvis_*.sqlite'))[-3:]:
+    print(p.name, '→', verify_backup(p) or '정상')"
+```
+
+- **결손이 있으면** — 그 날 03:00 에 데몬이 꺼져 있었거나 백업이 실패했다.
+  §7-C(공백 회계)와 대조하면 어느 쪽인지 갈린다.
+- **`verify_backup` 이 사유를 돌려주면** 그 백업은 복원에 못 쓴다.
+  운영 중 자동 백업은 검증 실패 시 **파일을 즉시 폐기하고 옛 백업을 보존** 한다
+  (retention 보다 검증이 먼저 — 순서가 정책이다).
+
+복원은 데몬을 내린 뒤에 한다:
+
+```bash
+pkill -f jarvis_daemon.py && sleep 3
+cp ~/.jarvis/backups/jarvis_YYYY-MM-DD.sqlite ~/.jarvis/jarvis.sqlite
+./restart_daemon.sh
+```
+
+> ★ 백업은 **DB 와 같은 디스크**에 있다. 디스크가 통째로 죽으면 둘 다 잃는다.
+> 외부 저장은 현재 없다 — 정직하게 알고 있어야 할 한계다.
+
+---
+
 ## 8. 고치고 나서 — 순서 고정
 
 ① 수정 → ② `./restart_daemon.sh` → ③ **재시작된 프로세스로** 검증 → ④ 전부 커밋

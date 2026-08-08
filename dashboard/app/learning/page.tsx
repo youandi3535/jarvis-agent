@@ -205,6 +205,15 @@ export default function LearningPage() {
   const kpiPatterns = patNow.count || last?.patterns || 0;
   const kpiHits     = patNow.hits  || last?.hits     || 0;
   const kpiSaved    = last?.llm_saved ?? 0;
+  // ★ 밴딧 생존 — 텔레그램 /status 와 같은 판정(서버 파생). 정지를 정지라고 말한다.
+  //   종전 이 화면은 학습이 11일 멈춰 있어도 "LLM 절약" 차트만 보여줬다.
+  const bandit      = data?.bandit ?? {};
+  const banditStale = Boolean(bandit?.stalled);
+  const banditAgo   = typeof bandit?.last_update_h === "number" && bandit.last_update_h >= 0
+    ? (bandit.last_update_h >= 24
+        ? `${Math.round(bandit.last_update_h / 24)}일 전`
+        : `${Math.round(bandit.last_update_h)}시간 전`)
+    : "기록 없음";
   const kpiRate     = resolveRate.length ? resolveRate[resolveRate.length - 1].rate : null;
 
   /* 글 품질 학습(ADR 014) — 오류 학습과 다른 시스템 (★ ERRORS [480]) */
@@ -227,6 +236,20 @@ export default function LearningPage() {
             서로 다른 두 학습 시스템 — ① 오류 자가수리(GUARDIAN) ② 글 품질(ADR 014)
           </p>
       </div>
+
+      {/* ★ 밴딧 정지 배너 — 텔레그램 /status 와 같은 판정(서버 파생, 사본 없음).
+          종전 이 화면은 학습이 11일 멈춰 있어도 "LLM 절약" 차트만 보여줬다. */}
+      {banditStale && (
+        <div style={{ padding: "14px 18px", marginBottom: 20, borderRadius: 8,
+          border: "1px solid var(--c-warn)", background: "var(--c-bg2)",
+          fontSize: 16, lineHeight: 1.6, color: "var(--c-text)" }}>
+          🛑 <b>Tier 1 Bandit 정지</b> — 마지막 학습 {banditAgo}
+          {" "}(관측 arm {bandit.observed_arms ?? 0}/{bandit.arms ?? 0})
+          <div style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 4 }}>
+            아래 지표는 정지 이전 값입니다.
+          </div>
+        </div>
+      )}
 
       {/* KPI 4개 */}
       {isLoading ? (

@@ -169,9 +169,11 @@ _NON_CODE_PATTERNS = [
                r"|timed out receiving message from renderer", re.I),
     # ── 외부 API 할당량·rate limit ── (종전 `_LOW_PATTERNS` 사본 흡수)
     re.compile(r"rate limit|too many requests|hit your limit|resets \d+\s*(am|pm)", re.I),
-    # ★ ERRORS [272] 박제 2026-06-08 — Pollinations 402 Queue full (IP 레벨 외부 제한)
+    # ★ ERRORS [272] 박제 2026-06-08 — 외부 이미지 API 스로틀/한도 (우리 코드로 못 고침)
+    #   업체명을 박지 않는다 — 2026-08-05 Pollinations→Cloudflare 교체 때 여기만 낡았다.
     # 코드 버그 아님. 서킷 브레이커 + 폴백으로 graceful 처리됨 → Guardian 수정 불필요.
-    re.compile(r"Queue full|Pollinations.*(402|재시도.*실패|일시 오류|비정상 응답)", re.I),
+    re.compile(r"Queue full|이미지 (생성|프로바이더).*(402|재시도.*실패|일시 오류|비정상 응답)"
+               r"|Cloudflare.*(재시도.*실패|일시 오류)", re.I),
     # Claude CLI 운영 오류 (auto_repair — 코드 버그 아님)
     #   'You've hit your limit' 토큰은 위 rate-limit 행이 이미 덮는다 → 여기서 제거(중복 해소)
     re.compile(r"cli_not_found|CLI 타임아웃|Command failed with exit code|exitcode=-?\d"
@@ -469,6 +471,11 @@ _OWN_NON_CODE_KINDS = frozenset({
     "empty_output",   # LLM 응답 빈값
     "sdk_error",      # SDK 실행 오류 (CLI 미발견·인증 등 운영 사유)
     "timeout",        # LLM/CLI 타임아웃 — 응답이 안 온 것
+    # ★ 2026-08-05 — 발행 회계 kind 2종. 둘 다 *코드로 못 고치는* 사건이다.
+    #   등록하지 않으면 절전 한 번마다 Tier-2 LLM 세션이 열린다
+    #   (`PublishGap*` 이 실제로 그렇게 됐다 — 자동수리가 고칠 수 없는 것에 토큰을 태웠다).
+    "daemon_down",    # 데몬이 꺼져 있어 슬롯을 통째로 잃음 — 기계 상태이지 코드 결함 아님
+    "job_missed",     # grace 를 넘겨 잡이 아예 실행되지 못함 (misfire) — 같은 이유
 })
 
 # last-known-good 캐시 — *성공한 파생만* 적재한다(실패값을 캐시하면 영구 degrade).

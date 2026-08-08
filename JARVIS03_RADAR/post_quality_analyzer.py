@@ -151,7 +151,8 @@ def _build_learning_block(post_type: str = "") -> str:
 
 
 def analyze_post_quality(platform: str, title: str, content: str,
-                          post_type: str = "") -> tuple:
+                         record: "dict | None" = None,
+                         post_type: str = "") -> tuple:
     """발행 후 품질 분석 → (개선 제안, 루브릭 총점) (공개 인터페이스).
 
     ★ 발행 전 100점 루브릭(post_scorer)과 *동일 기준* (사용자 박제 2026-07-24):
@@ -159,32 +160,52 @@ def analyze_post_quality(platform: str, title: str, content: str,
       반복하면 100점에 수렴. 감점 0(사실상 만점)이면 제안 없음([]).
       채점·LLM 실패 시 규칙 기반 폴백. post_type 매칭 학습 지침도 동적 주입.
 
-    반환: (suggestions, quality_score). quality_score = 100점 루브릭 총점(강화학습 보상 신호,
+    반환: (suggestions, quality_score, rubric_items). quality_score = 100점 루브릭 총점(보상 신호,
       ADR 014). 채점 불가/규칙폴백은 None → 보상 스킵. 저장은 save_analysis_result 단일 진입점.
+      rubric_items = `{항목key: 점수}` — **항목별** 학습 입력 (2026-08-07). 규칙폴백은 {}.
     """
     try:
-        return _analyze_by_rubric(platform, title, content, post_type)
+        return _analyze_by_rubric(platform, title, content, post_type, record)
     except Exception as e:
         print(f"  ⚠️ 루브릭 분석 오류: {e} — 규칙 기반 분석으로 대체")
         _g_report("radar", e, module=__name__)
-        return _rule_based_analysis(title, content), None
+        return _rule_based_analysis(title, content), None, {}
 
 
-def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str) -> tuple:
+def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str,
+                       record: "dict | None" = None) -> tuple:
     """발행글을 100점 루브릭으로 채점 → (감점 항목만 겨냥한 before→after 개선안, 루브릭 총점).
 
     총점은 강화학습 보상 신호(reward=총점/100). 단 매력도 심사(Section A) 불가 시 총점이
     A=0 으로 눌려 부당 저평가 → 그 경우 score=None(보상 스킵, fail-open).
     """
-    from JARVIS02_WRITER.post_scorer import score_post, deducted_items
+    from JARVIS02_WRITER.post_scorer import (score_post, deducted_items, items_compact,
+                                             draft_from_row)
     # Section A(매력·유익)는 발행 전과 *동일한* 매력도 심사관(judge_engagement)으로 LLM 채점.
     eng = judge_engagement(title, content, post_type, platform)
     _a_ok = int(eng.get("engagement_score", -1)) >= 0
-    draft = {"html": content, "content": content, "title": title,
-             "keyword": title, "post_type": post_type}
+    # ★ 채점 draft 조립은 `post_scorer.draft_from_row` 단일 자리다 (2026-08-07).
+    #   종전엔 여기 인라인이었고 `"keyword": title` 이라, 제목 전체가 본문에 통째로
+    #   나올 리 없어 N5_kw_density 만점률이 **0%**(40건 전부 1.5점, 분산 0)였다.
+    #   발행 메타(태그·메타 설명)도 안 실려 N7·T7 이 발행 후 다시 0점이 됐다.
+    _row = dict(record or {})
+    _row.setdefault("platform", platform)
+    _row.setdefault("title", title)
+    _row.setdefault("post_type", post_type)
+    _row["original_html"] = content          # 호출자가 이미 정제한 본문을 쓴다
+    draft = draft_from_row(_row)
     sr = score_post(draft, platform=platform, post_type=post_type,
                     llm_scores=(eng if _a_ok else {}), factuality_issues=[])
     _score = float(sr.get("total", 0)) if _a_ok else None   # A 채점 불가면 보상 신호 없음
+    # ★ 항목 상세를 **버리지 않는다** (2026-08-07 — 사용자 요구 "각 항목별 학습도 해야지").
+    #   종전엔 채점기가 글마다 계산한 40~50개 항목이 이 줄에서 즉시 폐기됐고, 학습은
+    #   "이 글 67점" 이라는 한 덩어리 신호만 받았다. 어느 항목이 왜 0점인지 알 길이 없었다.
+    #   A 채점 불가(fail-open)면 A 항목은 실측이 아니라 *미측정* 이므로 빼고 저장한다 —
+    #   0점으로 저장하면 "몰입도가 0점이었다" 는 **거짓 기록**이 학습에 들어간다.
+    _items = items_compact(sr)
+    if not _a_ok:
+        _a_keys = set(((sr.get("sections") or {}).get("A") or {}).get("items") or {})
+        _items = {k: v for k, v in _items.items() if k not in _a_keys}
     ded = deducted_items(sr)
     if not _a_ok:
         ded = [d for d in ded if d.get("section") != "A"]   # 매력도 심사 불가 → A 감점 제외(fail-open)
@@ -192,7 +213,7 @@ def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str) 
     _log.info("[post_analyzer] 루브릭 %.1f/100 · 감점 %d개 (%s/%s)",
               sr.get("total", 0), len(ded), platform, post_type)
     if not ded:
-        return [], _score   # 감점 없음(사실상 만점) — 개선 제안 없음
+        return [], _score, _items   # 감점 없음(사실상 만점) — 개선 제안 없음
     _ded_block = "\n".join(
         f"- [{d['section']}] {d['name']} ({d['score']:.1f}/{d['max']:.0f}, 감점 {d['gap']:.1f})"
         for d in ded[:12]
@@ -203,12 +224,21 @@ def _analyze_by_rubric(platform: str, title: str, content: str, post_type: str) 
                 f"본문:\n{content[:_ana_max].strip()}\n\n"
                 f"위 감점 항목을 없애는 개선안을 JSON 배열로 반환.")
     system = _RUBRIC_SUGGEST_SYSTEM + _build_learning_block(post_type)
-    from shared.llm import invoke_text as _inv
-    raw = _inv("writer_short_analysis", user_msg, system=system, max_tokens=1500)
-    m = re.search(r'\[.*\]', raw or "", re.DOTALL) if raw else None
+    # ★ invoke_text_result 로 ok 를 받는다 — invoke_text 는 회로open/발행창보류/스로틀/
+    #   절단을 전부 "" 로 뭉개(ERRORS [540][550] 동급 결함), 이를 raw 로 받으면 코드 결함이
+    #   아닌 *인프라 non-response* 도 "파싱 실패" RuntimeError 로 오탐 보고된다(law_enforcer.py
+    #   의 기확립 패턴과 동일 — invoke_text_result 로 ok 를 분리). _nonessential=True 는 이 분석이
+    #   비차단(발행 후 학습용)이라 회로 스로틀 중엔 즉시 포기해도 되는 호출임을 명시.
+    from shared.llm import invoke_text_result as _inv
+    raw, _llm_ok = _inv("writer_short_analysis", user_msg, system=system, _nonessential=True)
+    if not _llm_ok:
+        _log.info("[post_analyzer] LLM 미응답(회로open/발행창보류/스로틀/절단) — "
+                  "개선안 생략, 결함 아님 (%s/%s)", platform, post_type)
+        return [], _score, _items
+    m = re.search(r'\[.*\]', raw or "", re.DOTALL)
     if not m:
-        raise RuntimeError("루브릭 개선안 LLM 응답 파싱 실패")
-    return json.loads(m.group()), _score
+        raise RuntimeError(f"루브릭 개선안 LLM 응답 파싱 실패 (raw={(raw or '')[:200]!r})")
+    return json.loads(m.group()), _score, _items
 
 
 # 내부 호환 alias — 직접 호출은 analyze_post_quality 사용 권장
@@ -541,8 +571,8 @@ def _send_telegram_analysis(record: dict, suggestions: list):
     for i, s in enumerate(suggestions[:6], 1):
         p_icon = "🔴" if s.get("priority") == "high" else ("🟡" if s.get("priority") == "medium" else "🟢")
         lines.append(f"{p_icon} *{s.get('field','?')}*: {s.get('issue','')}")
-        lines.append(f"   Before: `{s.get('before','')[:60]}`")
-        lines.append(f"   After: `{s.get('after','')[:80]}`")
+        lines.append(f"   Before: `{(s.get('before') or '')[:60]}`")
+        lines.append(f"   After: `{(s.get('after') or '')[:80]}`")
 
     lines += [
         "",
@@ -595,11 +625,13 @@ def run_once():
             continue
 
         # 분석 — post_type 으로 학습 인사이트 scope 매칭
-        suggestions, quality_score = analyze_post_quality(platform, title, content, post_type=post_type)
+        suggestions, quality_score, rubric_items = analyze_post_quality(
+            platform, title, content, record=record, post_type=post_type)
         print(f"  → 제안 {len(suggestions)}개 생성 (루브릭 {quality_score if quality_score is not None else '—'}/100)")
 
         # DB 저장 (quality_score = 강화학습 보상 신호)
-        db.save_analysis_result(aid, suggestions, quality_score=quality_score)
+        db.save_analysis_result(aid, suggestions, quality_score=quality_score,
+                                rubric_items=rubric_items)
 
         # 텔레그램 전송
         _send_telegram_analysis(record, suggestions)
@@ -618,32 +650,29 @@ def run_once():
 def reward_cutoff() -> str:
     """재채점이 아직 *의미 있는* 시각 — 보상을 소비하는 잡의 일정에서 파생.
 
-    ADR 014 보상은 `j07_quality_learn` 이 하루 한 번 읽어 간다. 그 잡이 이미 훑고 간
-    글을 나중에 채점해 봐야 보상은 발화하지 않는다. 그러므로 **마지막 보상 회수 이후에
-    발행된 글** 까지만 재채점한다.
+    ADR 014 보상 귀속은 미귀속 사용 기록을 **`reward_retry_days()` 일까지** 재시도한다.
+    그 기간 안에 채점이 도착하면 보상이 발화하므로, 재채점도 같은 창을 봐야 한다.
 
-    시각을 여기 박지 않는다(② 동적 설계) — `DEFAULT_JOBS` 에서 그 잡의 cron 을 읽는다.
-    잡 시간을 바꾸면 재채점 창이 자동으로 따라온다.
+    시각을 여기 박지 않는다(② 동적 설계) — 보상 창의 주인에게 묻는다.
+    그쪽이 창을 바꾸면 재채점 창이 자동으로 따라온다.
     """
     import datetime as _dt
-    fallback = _dt.datetime.now() - _dt.timedelta(days=1)
     try:
-        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
-        kw = None
-        for j in DEFAULT_JOBS:
-            if "quality_learner" in str(j.get("callback", "")):
-                kw = j.get("kwargs") or {}
-                break
-        if not kw or not isinstance(kw.get("hour"), int):
-            raise ValueError("보상 잡 cron 파생 실패")
-        now = _dt.datetime.now()
-        last = now.replace(hour=int(kw["hour"]), minute=int(kw.get("minute") or 0),
-                           second=0, microsecond=0)
-        if last > now:
-            last -= _dt.timedelta(days=1)
-        return last.strftime("%Y-%m-%d %H:%M:%S")
+        # ★ 보상 **재시도 창**에서 파생한다 (2026-08-07 감사 — 창이 어긋나 있었다).
+        #
+        #   종전엔 보상 잡의 cron(23:45)에서 파생해 창이 **약 하루** 였다. 그런데
+        #   `quality_learner.attribute_pending_rewards` 는 **21일**까지 재시도한다.
+        #   두 창이 어긋난 결과: 21일 창 안의 미채점 글이 재채점 창 밖이라
+        #   **영영 채점되지 않고**, 거기 묶인 사용 기록이 미귀속으로 사장됐다
+        #   (실측 606행, 최고령 17일). 그런데 `get_unscored_analyzed` 는
+        #   "할 일 0건" 이라 보고했다 — 창 밖이라 안 보였을 뿐이다.
+        #
+        #   재채점은 *보상이 아직 가능한 동안* 의미가 있다. 그러니 그 창의 주인에게 묻는다.
+        from JARVIS07_GUARDIAN.quality_learner import reward_retry_days
+        days = max(1, int(reward_retry_days()))
     except Exception:
-        return fallback.strftime("%Y-%m-%d %H:%M:%S")
+        days = 1
+    return (_dt.datetime.now() - _dt.timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def rescore_unscored(limit: int = 3) -> dict:
@@ -679,13 +708,13 @@ def rescore_unscored(limit: int = 3) -> dict:
         if not content:
             continue
         try:
-            _s, score = analyze_post_quality(
+            _s, score, _items = analyze_post_quality(
                 r.get("platform", ""), r.get("title", ""), content,
-                post_type=r.get("post_type", "") or "")
+                record=r, post_type=r.get("post_type", "") or "")
             if score is None:
                 failed += 1
                 continue
-            if db.save_quality_score(int(r["id"]), float(score)):
+            if db.save_quality_score(int(r["id"]), float(score), rubric_items=_items):
                 done += 1
                 print(f"  ♻️ 재채점 #{r['id']} [{r.get('platform')}] {score:.1f}/100")
         except Exception as e:
@@ -754,10 +783,12 @@ def run_single(analysis_id: int) -> bool:
     post_type = record.get("post_type") or ""  # P1 패치 (2026-05-04): scope 매칭
 
     print(f"\n🔍 즉시 분석: [{platform}] {title} (id={analysis_id})")
-    suggestions, quality_score = _analyze_with_claude(platform, title, content, post_type=post_type)
+    suggestions, quality_score, rubric_items = _analyze_with_claude(
+        platform, title, content, record=record, post_type=post_type)
     print(f"  → 제안 {len(suggestions)}개 생성 (루브릭 {quality_score if quality_score is not None else '—'}/100)")
 
-    db.save_analysis_result(analysis_id, suggestions, quality_score=quality_score)
+    db.save_analysis_result(analysis_id, suggestions, quality_score=quality_score,
+                            rubric_items=rubric_items)
     _send_telegram_analysis(record, suggestions)
     db.set_analysis_pending_approval(analysis_id)
     on_post_analyzed(analysis_id, platform, theme, len(suggestions))

@@ -369,6 +369,18 @@ def prepublish_quality_issues(draft, post_type: str = "", platform: str = "",
         if _violated:
             log.info(f"[prepublish_gate] 학습 지침 {len(_violated)}건 미준수(관측용, 차단 아님): "
                      + " / ".join(str(v)[:40] for v in _violated[:3]))
+            # ★ 로그로 버리지 않고 학습으로 흘려보낸다 (2026-08-07 감사).
+            #   여기서 이미 *어느 지침이* 안 지켜졌는지 계산이 끝나 있다. 그걸 버리면
+            #   한 배치의 지침 8개가 전부 같은 보상을 받아 변별이 0이 된다.
+            #   차단은 여전히 안 한다(08-04 과잉차단 교훈) — *신호만* 남긴다.
+            try:
+                from JARVIS07_GUARDIAN.quality_learner import record_directive_violations
+                _n = record_directive_violations(post_type or "all", platform or "",
+                                                 theme or "", _violated)
+                if _n:
+                    log.info(f"[prepublish_gate] 지침 위반 {_n}건 학습 반영")
+            except Exception as _ve:
+                log.warning(f"[prepublish_gate] 지침 위반 기록 실패: {_ve}")
 
     return out
 

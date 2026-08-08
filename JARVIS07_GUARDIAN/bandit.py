@@ -794,6 +794,18 @@ def stats() -> dict:
             "mean_reward": round(_arm_avg_reward(arm_data), 3),  # ★ rsum/n
         }
 
+    # ★ **살아 있는가** 를 함께 낸다 (2026-08-07 감사).
+    #   종전 `stats()` 는 `arm_count`·`feature_dim` 같은 **구조 상수만** 냈다. 그래서
+    #   `/status` 가 "fixer 9종 학습" 이라고 계속 말했는데 실측은 **11일 정지** 였다.
+    #   구조는 학습이 멈춰도 그대로다 — 살아 있는지는 *마지막 관측 시각* 이 답한다.
+    import time as _t
+    try:
+        _mtime = _BANDIT_FILE.stat().st_mtime if _BANDIT_FILE.exists() else 0.0
+    except Exception:
+        _mtime = 0.0
+    _stale_h = (_t.time() - _mtime) / 3600.0 if _mtime else -1.0
+    _observed = sum(1 for a in state["arms"].values() if float(a.get("n", 0) or 0) > 0)
+
     return {
         "model":           "Linear UCB Contextual Bandit",
         "feature_dim":     _dim_for_version(state["feature_version"]),
@@ -802,7 +814,39 @@ def stats() -> dict:
         "alpha":           _ALPHA,
         "arm_count":       len(arm_summaries),
         "arms":            arm_summaries,
+        # ── 생존 지표 (표시부가 이걸 써야 정지를 알아챈다) ──
+        "observed_arms":   _observed,          # 실제로 보상을 한 번이라도 받은 arm 수
+        "last_update_h":   round(_stale_h, 1),  # 마지막 갱신 이후 경과(시간). -1 = 파일 없음
+        "stalled":         _stale_h < 0 or _stale_h > STALE_HOURS,
     }
+
+
+# ★ 이만큼 갱신이 없으면 '정지' 로 본다 — 발행 주기에서 파생.
+#   발행이 하루 2슬롯이니, 이틀(4슬롯)이 지나도 관측이 0이면 학습이 멈춘 것이다.
+# 이 횟수만큼 연속으로 슬롯이 지나도 관측이 없으면 정지.
+_STALE_MISSED_SLOTS = 4
+
+
+def _stale_hours() -> float:
+    """슬롯 간격 × 이 횟수만큼 관측이 없으면 정지로 본다.
+
+    ★ 초판은 `24.0 * 2 / 1` 이라 **슬롯 수와 무관한 상수(48)** 였다 — 파생인 척한 사본이다.
+      뮤테이션 테스트가 그걸 잡았다(발행 슬롯을 못 읽게 만들어도 값이 안 변했다).
+      진짜 파생: 하루 n슬롯이면 간격은 24/n 시간이고, 그 간격 4번을 놓치면 정지다.
+      발행이 잦아지면 임계가 자동으로 짧아진다.
+    """
+    try:
+        from JARVIS08_PUBLISH.publish_ledger import publish_slots
+        n = len(publish_slots())
+        if n <= 0:
+            raise ValueError("발행 슬롯 파생 실패")
+        return round(24.0 / n * _STALE_MISSED_SLOTS, 1)
+    except Exception:
+        return 48.0
+
+
+
+STALE_HOURS = _stale_hours()
 
 
 def top_fixers(n: int = 5) -> list[dict]:

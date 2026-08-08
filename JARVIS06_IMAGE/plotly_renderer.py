@@ -242,7 +242,7 @@ def _render_line(spec: dict, fig_obj, fill: bool = False, tc: dict | None = None
             color = palette[si % len(palette)]
             vals  = s.get("values", [])
             cats  = s.get("labels") or spec.get("categories") or [str(i+1) for i in range(len(vals))]
-            units = spec.get("data", [{}] * len(vals))
+            units = (spec.get("data") or [{}] * len(vals))
             text_labels = [
                 _label_with_unit(v, (units[i].get("unit", "") if i < len(units) else ""))
                 for i, v in enumerate(vals)
@@ -325,8 +325,12 @@ def _render_grouped_bar(spec: dict, fig_obj, tc: dict | None = None) -> None:
     for si, s in enumerate(series):
         color = palette[si % len(palette)]
         vals  = s.get("values", [])
-        units = [spec.get("data", [{}] * len(vals))[i].get("unit", "")
-                 if i < len(spec.get("data", [])) else "" for i in range(len(vals))]
+        # ★ 한 번만 파생해 두 곳에서 쓴다 (2026-08-07) — 종전엔 `spec.get("data", ...)` 를
+        #   같은 표현식 안에서 **두 번** 호출했고 둘 다 `or` 가드가 없었다.
+        #   `spec["data"]` 가 None 이면 `[i]` 도 `len()` 도 터진다.
+        _units_src = spec.get("data") or [{}] * len(vals)
+        units = [_units_src[i].get("unit", "") if i < len(_units_src) else ""
+                 for i in range(len(vals))]
         text_labels = [_label_with_unit(v, u) for v, u in zip(vals, units)]
         fig_obj.add_trace(go.Bar(
             name=s.get("name", f"시리즈{si+1}"),

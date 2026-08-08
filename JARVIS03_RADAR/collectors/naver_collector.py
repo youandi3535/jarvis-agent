@@ -73,7 +73,7 @@ def get_autocomplete(query: str) -> list[str]:
             timeout=5,
         )
         if r.status_code == 200:
-            items = r.json().get("items", [[]])[0]
+            items = (r.json().get("items") or [[]])[0]
             return [item[0] for item in items if item]
     except Exception as e:
         print(f"[Naver 자동완성] 오류: {e}")

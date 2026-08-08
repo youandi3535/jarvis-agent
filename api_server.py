@@ -615,6 +615,22 @@ def get_learning():
     except Exception:
         r["timeline"] = []
 
+    # ★ 밴딧 생존 지표 — **텔레그램 `/status` 와 같은 파생을 쓴다** (2026-08-07 감사, ③원칙).
+    #   종전엔 정지 표시가 `/status` 에만 있었다. 대시보드는 학습이 11일 멈춰 있어도
+    #   "LLM 절약 58회" 차트만 보여줬다 — 같은 거짓말이 두 통로에 있는데 한쪽만 고치면
+    #   다른 쪽에서 재발한다. 판정은 `bandit.stats()` 단독(사본 금지).
+    try:
+        from JARVIS07_GUARDIAN.bandit import stats as _bstats
+        _b = _bstats()
+        r["bandit"] = {
+            "arms": _b.get("arm_count", 0),
+            "observed_arms": _b.get("observed_arms", 0),
+            "last_update_h": _b.get("last_update_h", -1),
+            "stalled": bool(_b.get("stalled")),
+        }
+    except Exception as _be:
+        r["bandit"] = {"error": str(_be), "stalled": True}
+
     # 일별 오류 자동해소율 — '학습이 결과를 바꾸고 있나' 의 최종 지표
     try:
         _dr = _rows(con,
@@ -738,7 +754,17 @@ def get_job_last_runs():
     con = _db()
     if not con: return []
     try:
-        rows = _rows(con, "SELECT job_id, MAX(started_at) as started_at, MAX(success) as success FROM job_runs GROUP BY job_id")
+        # ★ `MAX(success)` 는 '마지막 실행' 이 아니라 **'한 번이라도 성공했나'** 다
+        #   (2026-08-05 교정). 그래서 잡이 오늘 실패해도 과거에 한 번 성공했으면
+        #   대시보드는 영원히 초록불이었다 — 발행 결손을 잡 이력에 보정해 넣어도
+        #   화면은 그대로였을 것이다.
+        #   → 진짜 *마지막 실행 행* 의 결과를 읽는다.
+        rows = _rows(con, """
+            SELECT r.job_id, r.started_at, r.success, r.error
+            FROM job_runs r
+            JOIN (SELECT job_id, MAX(started_at) AS m FROM job_runs GROUP BY job_id) t
+              ON r.job_id = t.job_id AND r.started_at = t.m
+            GROUP BY r.job_id""")
         con.close()
         return rows  # array — frontend LastRun[] expects started_at field
     except Exception:
@@ -827,6 +853,19 @@ def get_vision_summary():
 
 
 # ── 이미지 통계 ──────────────────────────────────────────────────
+def _image_providers() -> dict:
+    """이미지 프로바이더 가용 상태 — **실제로 확인** 한다.
+
+    ★ 종전엔 `{"pollinations": True}` 하드코딩이었다. Pollinations 가 죽어도
+      화면엔 계속 초록이었고(2026-08-05 실측), 삭제된 뒤에도 True 라고 말했을 것이다.
+    """
+    try:
+        from JARVIS06_IMAGE.providers.cloudflare_provider import provider_available
+        return {"cloudflare": bool(provider_available())}
+    except Exception:
+        return {"cloudflare": False}
+
+
 @app.get("/api/images")
 def get_images():
     out_dir = BASE_DIR / "JARVIS06_IMAGE" / "output"
@@ -847,7 +886,7 @@ def get_images():
             {"name": f.name, "mtime": datetime.fromtimestamp(f.stat().st_mtime).strftime("%m/%d %H:%M"), "size_kb": round(f.stat().st_size / 1024, 1), "type": f.suffix.lower().lstrip(".")}
             for f in files[:10]
         ]
-    return {"total": total, "by_type": by_type, "total_size_mb": round(total_size_mb, 1), "recent": recent, "providers": {"pollinations": True}}
+    return {"total": total, "by_type": by_type, "total_size_mb": round(total_size_mb, 1), "recent": recent, "providers": _image_providers()}
 
 
 # ── 발행 도메인 현황 ─────────────────────────────────────────────

@@ -216,9 +216,25 @@ def _build_blocks(collected, platform: str, img_dir: Path,
     n_text = sum(1 for b in blocks if b[0] == "text")
     n_img  = sum(1 for b in blocks if b[0] == "image")
     print(f"  ✅ [Theme/{platform}] 완성 블록 {len(blocks)}개 (텍스트 {n_text} + 이미지 {n_img})")
+    # ★ 테마 draft 에 keyword 를 싣는다 (2026-08-07 — 원칙③ 위반 교정).
+    #   종전엔 테마 draft 에 keyword·theme 키가 **아예 없어서** 채점기의 `_keyword()` 가
+    #   빈 문자열을 받았고, 키워드 의존 항목(N2·N5·N6·T2·T6)이 '키워드 없음' 분기로 빠져
+    #   **무상 만점**을 받았다 — 네이버 최대 8점·티스토리 5점. 점수가 높아 보였을 뿐
+    #   *측정을 안 하고 있었다*. 경제 2조합은 처음부터 keyword 를 갖고 있었다(③ 비대칭).
+    #   검색어 파생은 주제 소유자(JARVIS03)의 일 — 라벨을 만든 쪽이 검색어도 만든다.
+    #   (`황사/미세먼지` 같은 복합 라벨은 본문에 통째로 나올 수 없다)
+    try:
+        from JARVIS03_RADAR.topic_pack import search_keyword as _skw
+        _kw = _skw(theme)          # theme = collected.meta["keyword"] (위에서 이미 파생)
+    except Exception:
+        _kw = (theme or "").strip()   # 파생 실패해도 라벨은 있다 — 여기서 또 죽으면 발행이 멎는다
     return {
         "success": True, "title": title, "content": content,
         "html": html, "blocks": blocks, "error": "",
+        "keyword": _kw,
+        # ★ 발행 메타 승계 (2026-08-07) — 사유는 경제 writer 와 동일.
+        "tags":             result.get("tags") or [],
+        "meta_description": result.get("meta_description") or "",
     }
 
 
@@ -251,15 +267,12 @@ def _publish_tistory(draft: dict, theme: str, sector: str,
         from JARVIS08_PUBLISH.platforms import post_to_tistory
         from JARVIS06_IMAGE.draft_processor import publish_assembled
 
-        # ★ 태그는 JARVIS08 단일 진입점 (2026-07-29). 종전엔 여기서
-        #   `[theme, sector, '테마주', '주식', '투자']` 고정 템플릿을 만들었다 —
-        #   ① 모든 테마 글이 같은 태그라 검색 변별력 0 ② BLOG_SUPREME_LAW 제1-B조
-        #   (고정 풀·고정 템플릿 금지) 위반 ③ 실측 네이버 4개로 NAVER_HASHTAG_MIN(5)
-        #   미달이라 post_scorer N7 감점. 테마명·섹터는 seed 로 살리고 나머지는 LLM 이 채운다.
-        #   (특수기호 제거는 generate_tags 안의 sanitize 가 담당 — 제14조 그대로 준수)
-        from JARVIS08_PUBLISH.tags import generate_tags as _gen_tags
-        tags = _gen_tags(draft.get("title", theme), draft.get("content", ""),
-                         "tistory", seed_tags=[theme, sector])
+        # ★ 태그는 **대본 완성 시점에 이미 만들어져 draft 에 실려 있다** (2026-08-07).
+        #   종전엔 여기(발행 = Layer 4)에서 만들었는데, 채점은 그보다 앞(Layer 3)이라
+        #   채점기가 보는 draft["tags"] 가 늘 비어 N7_hashtags 가 **전건 0점**이었다.
+        #   생성자는 여전히 JARVIS08 `generate_tags` 하나다 — 부르는 *시점* 만 앞당겼다(①).
+        #   여기서 다시 만들면 **채점한 태그와 발행된 태그가 갈라진다**.
+        tags = draft.get("tags") or []
 
         def _pub_fn(blocks, title, **_kw):
             return post_to_tistory(
@@ -281,6 +294,19 @@ def _publish_tistory(draft: dict, theme: str, sector: str,
                 _emit(theme=theme, platform="tistory", title=draft["title"],
                       url=_last_url("tistory"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=draft["content"], html=draft["html"],
+                      # ★ 발행 메타 동봉 (2026-08-07) — 발행 후 채점이 *발행 전과 같은*
+                      #   태그·메타 설명을 보게 한다. 빠뜨리면 그 조합만 N7·T7 이 0점으로
+                      #   기록돼 "개선했는데 보상이 깎이는" 상태가 된다.
+                      publish_meta={"tags": draft.get("tags") or [],
+                                    "meta_description": draft.get("meta_description") or "",
+                                    # ★ 발행 전 게이트가 채점에 쓴 바로 그 키워드.
+                                    #   조인 키(source_keyword)와 용도가 다르므로 따로 나른다 —
+                                    #   같은 칸에 두 의미를 담으면 한쪽이 반드시 깨진다.
+                                    "keyword": draft.get("keyword") or ""},
+                      # ★ `source_keyword` 는 **조인 키**다 — `trends.keyword` 와 맞춰
+                      #   보는 값이라 정규화하면 안 된다(learning·topic_pack·daily_review·
+                      #   performance_collector 4곳이 이 값으로 매칭한다).
+                      #   채점용 검색어는 아래 publish_meta.keyword 로 따로 나른다.
                       source_keyword=theme, post_type="theme",
                       image_paths=_imgs)
             except Exception as e:
@@ -303,15 +329,12 @@ def _publish_naver(draft: dict, theme: str, sector: str) -> dict:
     try:
         from JARVIS08_PUBLISH.platforms import post_to_naver
         from JARVIS06_IMAGE.draft_processor import publish_assembled
-        # ★ 태그는 JARVIS08 단일 진입점 (2026-07-29). 종전엔 여기서
-        #   `[theme, sector, '테마주', '주식', '투자']` 고정 템플릿을 만들었다 —
-        #   ① 모든 테마 글이 같은 태그라 검색 변별력 0 ② BLOG_SUPREME_LAW 제1-B조
-        #   (고정 풀·고정 템플릿 금지) 위반 ③ 실측 네이버 4개로 NAVER_HASHTAG_MIN(5)
-        #   미달이라 post_scorer N7 감점. 테마명·섹터는 seed 로 살리고 나머지는 LLM 이 채운다.
-        #   (특수기호 제거는 generate_tags 안의 sanitize 가 담당 — 제14조 그대로 준수)
-        from JARVIS08_PUBLISH.tags import generate_tags as _gen_tags
-        tags = _gen_tags(draft.get("title", theme), draft.get("content", ""),
-                         "naver", seed_tags=[theme, sector])
+        # ★ 태그는 **대본 완성 시점에 이미 만들어져 draft 에 실려 있다** (2026-08-07).
+        #   종전엔 여기(발행 = Layer 4)에서 만들었는데, 채점은 그보다 앞(Layer 3)이라
+        #   채점기가 보는 draft["tags"] 가 늘 비어 N7_hashtags 가 **전건 0점**이었다.
+        #   생성자는 여전히 JARVIS08 `generate_tags` 하나다 — 부르는 *시점* 만 앞당겼다(①).
+        #   여기서 다시 만들면 **채점한 태그와 발행된 태그가 갈라진다**.
+        tags = draft.get("tags") or []
 
         def _pub_fn(blocks, title, **_kw):
             return post_to_naver(
@@ -332,6 +355,19 @@ def _publish_naver(draft: dict, theme: str, sector: str) -> dict:
                 _emit(theme=theme, platform="naver", title=draft["title"],
                       url=_last_url("naver"),   # ★ ERRORS [482] — URL 누락 시 조회수 수집 불가
                       content=draft["content"], html=draft["html"],
+                      # ★ 발행 메타 동봉 (2026-08-07) — 발행 후 채점이 *발행 전과 같은*
+                      #   태그·메타 설명을 보게 한다. 빠뜨리면 그 조합만 N7·T7 이 0점으로
+                      #   기록돼 "개선했는데 보상이 깎이는" 상태가 된다.
+                      publish_meta={"tags": draft.get("tags") or [],
+                                    "meta_description": draft.get("meta_description") or "",
+                                    # ★ 발행 전 게이트가 채점에 쓴 바로 그 키워드.
+                                    #   조인 키(source_keyword)와 용도가 다르므로 따로 나른다 —
+                                    #   같은 칸에 두 의미를 담으면 한쪽이 반드시 깨진다.
+                                    "keyword": draft.get("keyword") or ""},
+                      # ★ `source_keyword` 는 **조인 키**다 — `trends.keyword` 와 맞춰
+                      #   보는 값이라 정규화하면 안 된다(learning·topic_pack·daily_review·
+                      #   performance_collector 4곳이 이 값으로 매칭한다).
+                      #   채점용 검색어는 아래 publish_meta.keyword 로 따로 나른다.
                       source_keyword=theme, post_type="theme",
                       image_paths=_imgs)
             except Exception as e:
@@ -816,6 +852,22 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
         state["__send_attempt__"] = send_attempt
         print(f"\n  📤 [Phase 2] {platform} 발행 (send_attempt={send_attempt})")
         published = state.setdefault("published_platforms", set())
+
+        # ★ 최종 방어선 — 프로세스 밖(DB)에서 확인 (2026-08-07).
+        #   테마가 특히 위험했다: 2026-07-20 21:00 슬롯이 네이버에 **3건**(서로 다른 테마)을
+        #   냈다. 재시도 콜백이 *새 액션* 으로 들어와 아래 플래그가 백지였기 때문이다.
+        #   그 생성기는 bb436a9 에서 제거됐지만, 개별 경로를 고치는 방식은 다음 경로가
+        #   생기면 또 샌다 — 마지막 방어선은 state 밖에 둔다.
+        #   판단 본체는 발행 도메인 단독 — 여기서 조건을 다시 쓰지 않는다(원칙①).
+        _pt = "theme"     # `post_analysis.post_type` 에 박는 값과 동일 (284·335행 emit)
+        try:
+            from JARVIS08_PUBLISH.publish_ledger import already_published_this_slot
+            if already_published_this_slot(_pt, platform):
+                print(f"  🛑 {platform} 이번 회차 글이 DB 에 이미 있음 — 중복 발행 차단")
+                published.add(platform)
+                return
+        except Exception as _e:      # 가드 고장이 발행을 막지 않는다(fail-open)
+            print(f"  ⚠️ 중복 확인 실패(통과 처리): {_e}")
 
         # ★ attempt >= 2 + 이전 실패 → 플래그 해제 (진짜 재발행, ERRORS [265])
         if (send_attempt >= 2 and platform not in published

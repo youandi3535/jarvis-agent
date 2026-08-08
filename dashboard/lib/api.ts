@@ -43,7 +43,10 @@ export type PerformanceData = {
 export type PostRow    = { platform: string; title: string; current_views: number; naver_rank: number | null; created_at: string };
 export type LearningPoint  = { at: string; patterns: number; hits: number; llm_saved: number };
 export type ResolvePoint   = { at: string; total: number; resolved: number; rate: number };
-export type LearningData = { weights: WeightRow[]; backtest: BacktestRow[]; insights: InsightRow[]; learn_log: { cnt: number; mae: number | null };
+export type LearningData = {
+  /** 밴딧 생존 지표 — 서버(`bandit.stats()`) 단독 파생. 정지를 정지라고 말하기 위한 것. */
+  bandit?: { arms?: number; observed_arms?: number; last_update_h?: number; stalled?: boolean; error?: string };
+ weights: WeightRow[]; backtest: BacktestRow[]; insights: InsightRow[]; learn_log: { cnt: number; mae: number | null };
   insights_total?: number; timeline?: LearningPoint[]; resolve_rate?: ResolvePoint[];
   patterns_now?: { count: number; hits: number };
   quality_now?: { insights: number; usage: number; rewards: number; avg_reward: number; avg_weight: number; rediscovered: number; rewarded: number };

@@ -52,6 +52,8 @@ __all__ = [
     "current_slot",
     "audit_lag_minutes",
     "published_in_slot",
+    "owning_slot",
+    "already_published_this_slot",
     "slot_gaps",
     "publishing_in_progress",
     "publish_gap_error_type",
@@ -109,36 +111,53 @@ def publish_slots() -> list[tuple[str, int, int]]:
     return out
 
 
-def current_slot(now: _dt.datetime | None = None) -> tuple[str, _dt.datetime, _dt.datetime] | None:
-    """지금 감사해야 할 슬롯 — (post_type, 슬롯 시작, 슬롯 끝).
+def slots_between(start: _dt.datetime, end: _dt.datetime) -> list:
+    """[start, end) 안에 **발행 시각이 든** 슬롯 전부 — [(post_type, 슬롯시작, 슬롯끝), ...].
+
+    ★ 슬롯 경계 계산의 **단일 소스** (2026-08-05). `current_slot()` 도 여기서 파생한다.
+      종전엔 `current_slot()` 안에 시작용·끝용 day-offset 루프가 2벌 인라인이었고,
+      임의 구간(= 데몬이 꺼져 있던 구간)을 물어볼 길이 아예 없었다.
+      슬롯 끝은 언제나 *다음 발행 시각* — 자정을 넘긴 21시 테마가 제 슬롯으로 계산되는
+      v2 규칙이 여기 한 곳에만 산다.
+    """
+    slots = publish_slots()
+    if not slots or end <= start:
+        return []
+    # 경계(다음 슬롯 시각)를 얻으려면 구간 앞뒤로 하루씩 여유가 필요하다.
+    span: list = []
+    d = (start - _dt.timedelta(days=1)).date()
+    last = (end + _dt.timedelta(days=1)).date()
+    while d <= last:
+        for pt, h, m in slots:
+            span.append((_dt.datetime.combine(d, _dt.time(h, m)), pt))
+        d += _dt.timedelta(days=1)
+    span.sort()
+    out = []
+    for i, (st, pt) in enumerate(span):
+        en = span[i + 1][0] if i + 1 < len(span) else st + _dt.timedelta(days=1)
+        if start <= st < end:
+            out.append((pt, st, en))
+    return out
+
+
+def slot_key(post_type: str, slot_start: _dt.datetime) -> str:
+    """슬롯 1개의 전역 유일 식별자 — `economic@2026-08-05T07:00`.
+
+    ★ 왜 필요한가: 종전 결손 박제의 context 는 `"08-05 07:00 ~ 08-05 21:00"` 이라
+      **연도가 없어** 원장 키로 쓸 수 없었다. 같은 슬롯을 두 번 보고해도 막을 수단이 없다.
+    """
+    return f"{post_type}@{slot_start:%Y-%m-%dT%H:%M}"
+
+
+def current_slot(now: _dt.datetime | None = None) -> tuple | None:
+    """지금 감사해야 할 슬롯 — (post_type, 슬롯 시작, 슬롯 끝). 동작 불변.
 
     ★ '오늘 날짜' 가 아니라 **가장 최근에 시작된 발행 슬롯** 을 고르고, 그 창의 끝은
-      *다음 발행 슬롯 시각* 이다. 21:00 테마 슬롯의 창은 다음날 07:00 까지이므로
-      자정을 넘겨 끝난 발행도 제 슬롯의 실적으로 세어진다(v2 결함② 수정).
+      *다음 발행 슬롯 시각* 이다. 경계 계산은 `slots_between()` 단독(사본 0).
     """
     now = now or _dt.datetime.now()
-    slots = publish_slots()
-    if not slots:
-        return None
-
-    started = []
-    for pt, h, m in slots:
-        for d in (0, -1):
-            st = (now + _dt.timedelta(days=d)).replace(hour=h, minute=m, second=0, microsecond=0)
-            if st <= now:
-                started.append((st, pt))
-    if not started:
-        return None
-    start, post_type = max(started)
-
-    ends = []
-    for _pt, h, m in slots:
-        for d in (0, 1):
-            en = (start + _dt.timedelta(days=d)).replace(hour=h, minute=m, second=0, microsecond=0)
-            if en > start:
-                ends.append(en)
-    end = min(ends) if ends else start + _dt.timedelta(days=1)
-    return post_type, start, end
+    cands = slots_between(now - _dt.timedelta(days=1), now + _dt.timedelta(seconds=1))
+    return cands[-1] if cands else None
 
 
 def audit_lag_minutes(misfire_grace_sec: int = 0) -> int:
@@ -182,6 +201,63 @@ def published_in_slot(start: _dt.datetime, end: _dt.datetime,
     with get_db() as con:
         rows = con.execute(sql, tuple(args)).fetchall()
     return {r[0] for r in rows if r[0]}
+
+
+# ── 중복 발행 최종 방어선 (2026-08-07) ────────────────────────────────────
+def owning_slot(post_type: str,
+                now: _dt.datetime | None = None) -> tuple | None:
+    """이 발행 시도가 속한 **그 글종류의** 슬롯 창. 창 밖이면 None.
+
+    ★ `current_slot()` 과 다르다 — 헷갈리면 어제 글로 오늘 발행을 막는다.
+      `current_slot` 은 *"지금 감사할 슬롯"* (시각 기준, 글종류 무관) 이라
+      06:30 에 물으면 **직전 테마 창** 을 답한다. 실측으로 경제 잡이 06:30 에
+      돈 날이 여러 날 있다(스케줄이 06:30→07:00 으로 바뀌기 전). 그 시각에
+      "경제가 이미 나갔나" 를 시각 기준 창으로 물으면 *어제 경제 글* 이 잡혀
+      **오늘 발행을 영구히 막는다** — 중복보다 나쁜 오탐이다.
+
+    ★ 창 밖이면 None(=억제 안 함) 인 이유: 판정 불가일 때 어느 쪽으로 틀릴지의
+      문제다. 중복 1건은 지우면 되지만 미발행은 그 회차가 영영 없다([553] 과 같은 축 —
+      *정상 산출물을 막는 게 가장 나쁘다*).
+    """
+    now = now or _dt.datetime.now()
+    # ★ `+1초` — 슬롯이 *정각에 시작* 하는 순간을 포함시킨다. `slots_between` 은 끝 경계를
+    #   배타적으로 보므로 이게 없으면 07:00:00 정각에 "창 밖" 이 나온다(실측). 발행 잡이
+    #   정각 기동이라 하필 가드가 가장 필요한 순간에 꺼진다. `current_slot` 도 같은 처리.
+    window_end = now + _dt.timedelta(seconds=1)
+    for pt, s, e in reversed(slots_between(now - _dt.timedelta(days=2), window_end)):
+        if pt == post_type and s <= now < e:
+            return (pt, s, e)
+    return None
+
+
+def already_published_this_slot(post_type: str, platform: str,
+                                now: _dt.datetime | None = None) -> bool:
+    """이번 회차에 이 (글종류·플랫폼) 글이 **DB 에 이미 있는가** — 발행 직전 최종 확인.
+
+    ★ 왜 메모리 플래그로는 부족했나 (원칙① — 판단이 두 벌이었다)
+      종전 중복 방지는 harness state 의 `__nv_send_attempted__` 류 불리언 **4개**가
+      전부였고, 그 로직이 `economic_poster._send_platform` 과
+      `trend_theme_writer._send_theme_platform` 에 **똑같이 두 벌** 적혀 있었다.
+      플래그는 *한 프로세스·한 액션* 안에서만 산다. 실측으로 그것들이 못 막은 경로:
+
+        · 같은 슬롯에 발행 잡이 2회 기동 — 최근 90일 **12회** (`job_runs`)
+        · 재시도 콜백이 발행 전체를 다시 돌림 — 2026-07-20 21:00 네이버 **3건**
+          (서로 다른 테마 3개. 그 *생성기* 는 커밋 bb436a9 에서 제거됐다)
+
+      둘 다 **새 state 로 들어오기 때문에** 플래그가 구조적으로 못 본다.
+      개별 재시도 경로를 하나씩 올바르게 고치는 방식은 다음 경로가 생기면 또 샌다 —
+      마지막 방어선은 프로세스 밖(DB)에 있어야 한다.
+
+    ★ 이건 '완벽한 exactly-once' 가 아니다 — 정직하게 적어 둔다.
+      글이 플랫폼에 올라갔는데 발행자가 실패로 보고하면(ack 유실) `post_analysis`
+      행이 안 생기므로 여기서도 못 잡는다. 그 창을 닫으려면 플랫폼 사실 조회가
+      필요하다(네이버는 `_fetch_recent_naver_posts` 가 이미 있다). 별건.
+    """
+    slot = owning_slot(post_type, now)
+    if not slot:
+        return False
+    _, s, e = slot
+    return platform in published_in_slot(s, e, post_type)
 
 
 def scoring_gaps(start: _dt.datetime, end: _dt.datetime,
@@ -258,6 +334,23 @@ def publish_gap_error_type(post_type: str, platform: str) -> str:
     return "PublishGap" + post_type.capitalize() + platform.capitalize()
 
 
+def publish_job_id(post_type: str) -> str:
+    """이 글종류의 발행 잡 ID — `DEFAULT_JOBS` 에서 파생 (리터럴 금지).
+
+    ★ 종전엔 `recovery_hint()` 안에 인라인이었는데 잡 이력 보정도 같은 값이 필요해졌다.
+      두 번째 소비자가 생기는 순간이 함수로 꺼낼 때다(①).
+    """
+    try:
+        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+        from JARVIS04_SCHEDULER.job_llm_priority import is_publish_callback, publish_post_type
+        for j in DEFAULT_JOBS:
+            if is_publish_callback(j.get("callback")) and publish_post_type(j.get("callback")) == post_type:
+                return str(j.get("id") or "")
+    except Exception:
+        pass
+    return ""
+
+
 def recovery_hint(post_type: str) -> list[str]:
     """결손 1건을 사람이 *지금 손으로* 되살리는 데 필요한 최소 정보.
 
@@ -274,16 +367,7 @@ def recovery_hint(post_type: str) -> list[str]:
     """
     out: list[str] = []
 
-    job_id = ""
-    try:
-        from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
-        from JARVIS04_SCHEDULER.job_llm_priority import is_publish_callback, publish_post_type
-        for j in DEFAULT_JOBS:
-            if is_publish_callback(j.get("callback")) and publish_post_type(j.get("callback")) == post_type:
-                job_id = str(j.get("id") or "")
-                break
-    except Exception:
-        pass
+    job_id = publish_job_id(post_type)
     if job_id:
         out.append(f"잡 ID: `{job_id}`")
 
@@ -298,24 +382,99 @@ def recovery_hint(post_type: str) -> list[str]:
     except Exception:
         pass
 
-    # 도구 이름도 등록부에서 파생 — 이름이 바뀌면 알림이 자동으로 따라간다.
-    tool = ""
+    # ★ 재발행을 권하지 않는다 — 복구 정책 A (사용자 결정 2026-08-05).
+    #
+    #   종전엔 «{job_id} 지금 실행» 을 권했다. 그런데 발행 시각은 **07:00 과 21:00
+    #   두 번뿐** 이고(사용자 박제), 잡을 지금 돌리면 그 규칙을 어긴 시각에 글이 나간다.
+    #   놓친 슬롯은 **손실로 둔다.** 경보의 목적은 되살리기가 아니라
+    #   *무엇을 왜 잃었는지 알게 하는 것* 이다.
+    #
+    #   그래서 안내도 '실행' 이 아니라 '조사' 를 향한다. 다음 정규 시각은 파생한다.
+    nxt = ""
     try:
-        from JARVIS04_SCHEDULER import scheduler_agent as _sa  # 도구 등록 유발
-        from shared.tools import _TOOLS as _T
-        _ = _sa
-        for name in _T:
-            if "run" in name and "job" in name:
-                tool = name
-                break
+        _c = current_slot()
+        if _c:
+            nxt = f"{_c[2]:%m/%d %H:%M}"
     except Exception:
         pass
-    if tool and job_id:
-        out.append(f"복구: 텔레그램에 «{job_id} 지금 실행» → 승인 버튼 ✅ (`{tool}`)")
-    elif job_id:
-        out.append(f"복구: 텔레그램에 «{job_id} 지금 실행» → 승인 버튼 ✅")
+    out.append("↳ *재발행하지 않습니다* (복구 정책 A — 발행은 정규 시각에만)")
+    if nxt:
+        out.append(f"다음 정규 발행: {nxt}")
+    out.append("원인 조사: `docs/RUNBOOK.md` §5 (잡은 돌았는데 글이 안 나갔다)")
+    return out
 
-    out.append("절차 전문: `docs/RUNBOOK.md`")
+
+# ── 결손 원장 — 박제·중복억제 단일 진입점 (2026-08-05) ────────────────────
+def gap_already_recorded(key: str) -> bool:
+    """이 슬롯 결손이 이미 원장에 있는가 — 중복 보고·중복 학습 차단.
+
+    ★ 왜 필요한가: 같은 슬롯을 두 경로가 발견할 수 있다.
+      ① 감사 잡(발행 +N분)  ② 공백 회계(데몬이 복귀할 때)
+      둘 다 보고하면 원장에 같은 사건이 2건 쌓이고 사용자에게 알림도 2번 간다.
+      `slot_key` 가 연도까지 담은 안정 키라 이 판정이 성립한다.
+    """
+    try:
+        from shared.db import get_db
+        with get_db() as con:
+            return con.execute(
+                "SELECT 1 FROM error_log WHERE error_type LIKE 'PublishGap%' "
+                "AND context LIKE ? LIMIT 1", (f'%{key}%',)).fetchone() is not None
+    except Exception:
+        return False   # 조회 실패 시 보고를 막지 않는다(누락보다 중복이 낫다)
+
+
+def record_publish_gap(post_type: str, platform: str,
+                       start: _dt.datetime, end: _dt.datetime,
+                       *, reason: str = "audit") -> bool:
+    """결손 1건 박제 — **유일한 진입점**. 이미 기록됐으면 False(아무 것도 안 함).
+
+    Args:
+        reason: 'audit'(감사 잡이 발견) | 'daemon_down'(데몬이 꺼져 있어 통째로 잃음)
+
+    ★ `kind` 를 context 에 넣는 이유: GUARDIAN 이 이걸 읽어 *코드로 못 고치는 사건* 으로
+      분류한다(`severity.is_transient`). 안 넣으면 절전 한 번마다 Tier-2 LLM 세션이 열린다.
+      ★ `severity=` 인자는 `report()` 에 **없다** — 심각도는 severity 모듈이 단독 결정한다.
+    """
+    key = slot_key(post_type, start)
+    if gap_already_recorded(key):
+        return False
+    label = f"{start:%Y-%m-%d %H:%M} ~ {end:%m-%d %H:%M}"
+    why = ("데몬이 꺼져 있어 슬롯을 통째로 잃음" if reason == "daemon_down"
+           else "잡은 성공으로 기록됐지만 글이 나가지 않음")
+    try:
+        from JARVIS07_GUARDIAN.error_collector import report
+        report(
+            publish_gap_error_type(post_type, platform),
+            "publish",
+            message=f"{post_type} 글이 {platform} 에 발행되지 않았다 ({why}, 슬롯 {label})",
+            module=__name__,
+            func_name="record_publish_gap",
+            context={"post_type": post_type, "platform": platform,
+                     "slot": label, "slot_key": key, "reason": reason,
+                     # 코드 결함이 아님 → Tier-2 자동수리 대상에서 제외
+                     "kind": "daemon_down" if reason == "daemon_down" else "publish_gap"},
+        )
+        return True
+    except Exception as e:
+        print(f"  ⚠️ 결손 박제 실패({post_type}/{platform}): {e}")
+        return False
+
+
+def missed_slots(start: _dt.datetime, end: _dt.datetime) -> list:
+    """[start,end) 안 각 슬롯의 결손 — 기대 플랫폼 − 실제 발행 플랫폼.
+
+    ★ '공백에 걸렸다' 는 이유만으로 결손이라 부르지 않는다. 반드시 DB 로 한 번 더
+      확인한다 — 공백 직전에 이미 나간 글을 손실로 세면 회계가 거짓이 된다.
+    """
+    out = []
+    expected = expected_platforms()
+    for pt, st, en in slots_between(start, end):
+        done = published_in_slot(st, en, pt)
+        missing = sorted(set(expected) - done)
+        if missing:
+            out.append({"post_type": pt, "start": st, "end": en,
+                        "expected": expected, "missing": missing,
+                        "key": slot_key(pt, st)})
     return out
 
 
@@ -372,22 +531,65 @@ def job_audit_publish_completeness() -> dict:
             print(f"  ⚠️ 지연 알림 전송 실패: {e}")
         return result
 
-    for pf in gaps:
-        try:
-            # ★ 첫 인자에 문자열을 주면 그것이 곧 error_type (error_collector.report:51).
-            #   `error_type=` 키워드는 존재하지 않는다 — 초판이 그걸 불러 여기서 죽었다.
-            from JARVIS07_GUARDIAN.error_collector import report
-            report(
-                publish_gap_error_type(post_type, pf),
-                "publish",
-                message=f"{post_type} 글이 {pf} 에 발행되지 않았다 (슬롯 {result['slot']})",
-                module=__name__,
-                func_name="job_audit_publish_completeness",
-                context={"post_type": post_type, "platform": pf, "slot": result["slot"]},
-            )
-        except Exception as e:
-            # 박제 실패가 사용자 경보까지 죽이면 안 된다 — 초판의 진짜 사고 원인.
-            print(f"  ⚠️ 결손 박제 실패({post_type}/{pf}): {e}")
+    # ★ 결손의 *사유* 를 발견 순서가 아니라 **그 시간의 기계 상태**에서 파생한다
+    #   (사용자 박제 2026-08-07). 이 시스템은 개인 노트북에서 돈다 — 사용자가 다른
+    #   일을 하다 노트북을 끄면 그 회차는 당연히 안 나간다. **그건 결함이 아니라 사실**이다.
+    #   종전엔 감사 잡이 무조건 `reason="audit"`(=진짜 실패)로 박아, 전원을 끈 날에도
+    #   🚨 가 울리고 GUARDIAN 이 고칠 것 없는 일에 Tier-2 를 열었다. 같은 원인이
+    #   *누가 먼저 발견했는가* 로 갈리던 레이스도 이걸로 없어진다.
+    #   판정 본체는 생존 신호의 주인(`downtime`) — 여기서 heartbeat 를 직접 읽지 않는다(원칙①).
+    #   ★ 창은 **발행이 실제로 일어나야 하는 구간** 으로 좁힌다 (원칙② — 이미 있는
+    #     `audit_lag_minutes()`(misfire_grace + 플랫폼수 × 액션 데드라인)에서 파생).
+    #     슬롯 창 전체(경제는 07:00~21:00, 14시간)를 보면 **낮에 노트북을 닫은 것만으로
+    #     아침의 진짜 실패가 '전원 오프' 로 덮인다** — 진짜 고장을 전원 탓으로 돌리는
+    #     이 방향의 오판이 반대(알림 한 번 더)보다 훨씬 나쁘다.
+    _reason, _worst = "audit", 0
+    try:
+        from JARVIS00_INFRA.downtime import downtime_in_window
+        from JARVIS04_SCHEDULER.job_registry import misfire_grace_for
+        _lag = audit_lag_minutes(misfire_grace_for(publish_job_id(post_type)))
+        _pub_end = min(end, start + _dt.timedelta(minutes=_lag))
+        _was_down, _worst = downtime_in_window(start, _pub_end)
+        if _was_down:
+            _reason = "daemon_down"
+    except Exception as e:
+        print(f"  ⚠️ 정지 구간 판정 실패(진짜 실패로 간주): {e}")
+    if _reason == "daemon_down":
+        print(f"  💤 슬롯 창에 정지 구간 {_worst // 60}분 — 전원 오프로 기록(결함 아님)")
+
+    # ★ 박제는 단일 진입점으로 (2026-08-05). 공백 회계도 같은 함수를 쓴다.
+    #   반환값을 모아 **전부 이미 기록된 것이면 알림도 생략** — 복귀 회계가 먼저 알린
+    #   슬롯을 감사 잡이 몇 시간 뒤 다시 🚨 로 알리는 중복을 막는다.
+    fresh = [pf for pf in gaps
+             if record_publish_gap(post_type, pf, start, end, reason=_reason)]
+    result["newly_recorded"] = len(fresh)
+    result["reason"] = _reason
+    result["downtime_sec"] = _worst
+
+    # ★ 전원 오프는 **조용히** 기록만 하고 끝낸다 — 알림도, 잡 이력 보정도 하지 않는다.
+    #   "내가 껐다" 를 실패로 계상하면 완결률·성공률이 기계 사용 습관을 뒤쫓게 되고,
+    #   진짜 고장이 그 소음에 묻힌다. `severity` 는 `daemon_down` 을 이미
+    #   *코드 결함 아님* 으로 분류하므로 GUARDIAN Tier-2 도 열리지 않는다.
+    if _reason == "daemon_down":
+        result["job_row"] = "skipped(daemon_down)"
+        return result
+
+    # ★ 잡 이력을 진실로 되돌린다 (2026-08-05). 판정은 여기(발행 도메인),
+    #   쓰기는 job_history — 서로의 영역을 넘지 않는다.
+    #   재시도를 유발하지 않는다: UPDATE 일 뿐 예외를 던지지 않는다(정책 A).
+    result["job_row"] = "skipped"
+    try:
+        from JARVIS04_SCHEDULER.job_history import mark_outcome
+        jid = publish_job_id(post_type)
+        if jid:
+            result["job_row"] = mark_outcome(
+                jid, start, end, success=False,
+                error=f"발행 결손 {len(gaps)}건: {'·'.join(gaps)} (완결성 감사)")
+    except Exception as e:
+        print(f"  ⚠️ 잡 이력 보정 실패: {e}")
+    if not fresh:
+        print(f"  🔁 결손 {len(gaps)}건 — 이미 원장에 있음(중복 알림 생략)")
+        return result
 
     lines = [
         f"🚨 *발행 결손 {len(gaps)}건* — {post_type} ({now:%m/%d %H:%M} 감사)",

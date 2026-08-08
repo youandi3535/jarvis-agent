@@ -26,6 +26,7 @@ exit code 1 → git pre-commit 훅이 자동 차단.
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import re
 import sys
@@ -423,7 +424,7 @@ def check_autocode(report: Report) -> None:
         "JARVIS08_PUBLISH/platforms/tistory_poster.py",    # 티스토리 발행 (osascript·Selenium)
         "JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py",   # 쿠키 갱신 (subprocess)
         "JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py", # 쿠키 갱신 (subprocess)
-        "JARVIS06_IMAGE/",                    # 이미지 생성 (Pollinations — Bing/HF 폐기 2026-06-07)
+        "JARVIS06_IMAGE/",                    # 이미지 생성 (Cloudflare Workers AI 단독 2026-08-05)
         "JARVIS07_GUARDIAN/",                 # guardian 자가수정·git audit
         "jarvis_keeper.py",                   # 데몬 워치독 — 재시작 subprocess 정당
         # ★ 무료 데이터 라이브러리 자동설치 화이트리스트 (사용자 박제 2026-06-29 — ADR 010)
@@ -520,11 +521,11 @@ def check_tools(report: Report) -> None:
 # ============================================================================
 
 def check_image(report: Report) -> None:
-    """① Pollinations URL 직접 호출 (JARVIS06_IMAGE 외부)
+    """① 이미지 생성 API URL 직접 호출 (JARVIS06_IMAGE 외부)
        ② ImageGenerationModel 직접 사용 (JARVIS06_IMAGE 외부)
     """
     cat = "image"
-    pat1 = re.compile(r"https://image\.pollinations\.ai")
+    pat1 = re.compile(r"https://image\.pollinations\.ai|api\.cloudflare\.com/client/v4/accounts/[^\"']*\/ai/run")
     pat2 = re.compile(r"ImageGenerationModel\(|imagen-[0-9]")
     img_dir = "JARVIS06_IMAGE/"
 
@@ -541,7 +542,7 @@ def check_image(report: Report) -> None:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if pat1.search(line):
-                report.add(Violation(cat, "image/pollinations", rel_s, i, line))
+                report.add(Violation(cat, "image/direct-api", rel_s, i, line))
             if pat2.search(line):
                 report.add(Violation(cat, "image/imagen-direct", rel_s, i, line))
 
@@ -1262,7 +1263,16 @@ def check_copytruth(report: Report) -> None:
     pat_patch_assign = re.compile(
         r"^\s*[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\s*=\s*_?[A-Za-z_][A-Za-z0-9_]*patch",
         re.MULTILINE)
-    pat_setattr = re.compile(r"setattr\(\s*_?[A-Za-z_][A-Za-z0-9_]*\s*,\s*[\"'][A-Za-z_]")
+    # ★ pytest 의 `monkeypatch` 픽스처는 제외 (2026-08-07).
+    #   이 규칙이 겨냥하는 것은 *운영 코드* 의 몽키패치다 — "설치했다고 적어놓고 실제로는
+    #   안 먹은" 사고(ERRORS [457]). pytest 픽스처는 성질이 다르다:
+    #     · 테스트 종료 시 **자동 원복** 되므로 잔존 상태가 없다
+    #     · 패치가 안 먹으면 그 테스트가 곧바로 실패한다 — **테스트 자체가 효과 검증**이다
+    #   즉 여기에 `patch_effective()` 를 요구하는 것은 "검증을 검증하라" 는 순환이다.
+    #   실제로 대역을 쓰는 정상 테스트가 이 규칙에 걸려 있었다(tests/test_publish_dedupe.py).
+    #   ※ 좁게 막는다 — 픽스처 호출 형태만 면제하고, 맨 `setattr(...)` 은 테스트에서도 잡는다.
+    pat_setattr = re.compile(
+        r"(?<!monkeypatch\.)setattr\(\s*_?[A-Za-z_][A-Za-z0-9_]*\s*,\s*[\"'][A-Za-z_]")
     pat_flag = re.compile(r"^\s*_?[A-Z][A-Z0-9_]*(?:INSTALLED|PATCHED|APPLIED|DONE)\s*=\s*(?:True|False)",
                           re.MULTILINE)
     # 효과 검증 신호 — 이 중 하나라도 있으면 통과
@@ -1700,6 +1710,151 @@ def check_crossproc(report: "Report") -> None:
 
 
 CATEGORIES["crossproc"] = check_crossproc
+
+
+# ── symmetry — ③원칙(모든 곳 적용) 자동 검사 (2026-08-05) ──────────────────
+#
+# ★ 왜 이 카테고리가 필요한가
+#   CLAUDE.md 3원칙 중 ①②는 이 파일이 이미 자동 강제하는데 **③만 사람 손에** 맡겨져
+#   있었다. 그래서 ③만 반복해서 샜다 — 프로덕션 감사가 실례 5건을 찾았다:
+#     · json_store(원자 저장)를 만들어 놓고 2개 파일에만 적용
+#     · redact_logs 가 로그 디렉터리 5개 중 1개만 훑음
+#     · 로그 회전이 daemon.log 에만
+#     · 마스킹이 12자 이상만
+#     · 이미지 프로바이더 교체 때 thumbnail_maker 를 빠뜨림 (2026-08-05 실제 발생)
+#   공통 구조: **보호 함수 F 가 있는데 적용 대상 S 의 진부분집합에만 걸려 있다.**
+#
+# ★ self-match 로 신선도를 재지 않는다 (설계 검토에서 폐기된 초안)
+#   "이 정규식은 owner 본체에도 매칭돼야 한다" 는 발상은 owner 를 한 줄 regex 로
+#   표현할 수 있을 때만 성립한다. `json_store` 의 실제 쓰기는
+#   `write_text(_dumps(...))` + `os.replace` 라 `json.dump(` 에 안 걸린다 —
+#   초판대로 냈으면 **검사가 자기 self-check 에 걸려 실제 위반을 0건 보고**했다.
+#   → owner 의 생존은 **동작 확인**(`store_effective()`)으로 판정한다.
+def check_symmetry(report: Report) -> None:
+    """③원칙 — 보호 장치가 *일부에만* 걸린 상태를 검출."""
+    cat = "symmetry"
+
+    # ① 원자적 JSON 저장 — owner 가 살아 있는가를 *동작* 으로 먼저 확인 (fail-closed)
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from JARVIS07_GUARDIAN.json_store import store_effective
+        if store_effective() is False:
+            report.add(Violation(
+                cat, "symmetry/self-check", "JARVIS07_GUARDIAN/json_store.py", 0,
+                "원자 저장이 실제로 동작하지 않음 — 이 검사의 전제가 무너졌다"))
+            report.checks_run += 1
+            return
+    except Exception as e:
+        report.add(Violation(
+            cat, "symmetry/self-check", "JARVIS07_GUARDIAN/json_store.py", 0,
+            f"원자 저장 owner 를 확인하지 못해 검사 무력화 ({type(e).__name__}: {e})"))
+        report.checks_run += 1
+        return
+
+    raw_write = re.compile(r"json\.dump\(|write_text\(\s*json\.dumps")
+    for p in _iter_py():
+        rel = str(p.relative_to(ROOT))
+        if "json_store.py" in rel or rel.startswith("tests/"):
+            continue      # owner 자신과 테스트는 대상 아님
+        text = _read_py(p)
+        if text is None:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if raw_write.search(line):
+                report.add(Violation(
+                    cat, "symmetry/json-atomic", rel, i,
+                    "JSON 을 직접 쓴다 — 쓰는 도중 죽으면 잘린 파일이 남는다. "
+                    "`json_store.write_json()` 을 쓸 것 (원자 교체·fsync·락)"))
+
+    # ② 형제 대칭 — 같은 폴더의 `post_to_*` 같은 짝은 같은 처리를 갖춰야 한다.
+    #   (블록 타입 추가 시 발행자 양쪽 동시 갱신 의무 — CLAUDE.md 제4조 6곳 규정)
+    sib: dict = {}
+    for p in _iter_py():
+        text = _read_py(p)
+        if text is None:
+            continue
+        for m in re.finditer(r"^def (post_to_\w+)", text, re.M):
+            sib.setdefault(p.parent, set()).add(m.group(1))
+    for folder, names in sib.items():
+        if len(names) < 2:
+            continue
+        # 각 발행자가 다루는 블록 타입 집합이 어긋나면 한쪽만 고친 것이다.
+        types: dict = {}
+        for n in sorted(names):
+            for p in folder.glob("*.py"):
+                text = _read_py(p) or ""
+                if f"def {n}" in text:
+                    types[n] = set(re.findall(r'btype\s*==\s*["\'](\w+)["\']', text))
+        if len(types) >= 2:
+            allt = set().union(*types.values())
+            for n, ts in types.items():
+                missing = allt - ts
+                if missing:
+                    report.add(Violation(
+                        cat, "symmetry/sibling-drift",
+                        str(folder.relative_to(ROOT)), 0,
+                        f"{n} 이 형제와 다른 블록 타입 집합을 갖는다 — 누락: {sorted(missing)}"))
+
+    # ③ ★ `.get(키, 기본값)` 결과를 **or 가드 없이** 첨자/슬라이스 (2026-08-07)
+    #
+    #   `dict.get(k, D)` 는 *키가 없을 때만* D 를 쓴다. 키가 **있고 값이 None** 이면
+    #   그대로 None 을 돌려준다 — 그래서 `[...]` 에서 `TypeError: 'NoneType' object is
+    #   not subscriptable` 가 난다. DB 의 NULL 이 정확히 이 꼴로 들어온다
+    #   (`error_log.traceback` 은 실측 4,159/5,076 = 82% 가 NULL).
+    #
+    #   ★ 실제로 값을 치렀다 — `guardian_agent._try_sdk_targeted_fix` 가 이 병으로 터져
+    #     Tier-2(LLM 수리) 브리지가 막혔고, 7/27 이후 llm 시도 22건 중 **18건이 wontfix**
+    #     로 쌓였다. 밴딧 `llm` arm 의 유일한 보상 경로가 조용히 끊겨 있었다.
+    #
+    #   ★ 왜 *사전* 검사인가: `pattern_fixer._fix_none_slicing` 이라는 **사후 수리기**는
+    #     이미 있었다. 터진 다음 고치는 코드는 있는데 들어오는 걸 막는 코드가 없었다.
+    #     이 레그가 그 사전판이다(판정 로직은 여기 하나 — ①원칙).
+    #
+    #   처방은 `(d.get(k) or D)[...]`. `or` 는 None 뿐 아니라 빈 컬렉션까지 D 로 바꾸므로
+    #   인덱스 접근(`[0]`·`[i]`)의 IndexError 도 함께 막는다 (실증 12/12).
+    for p in _iter_py():
+        rel = str(p.relative_to(ROOT))
+        if rel == "shared/precommit_check.py":
+            continue                      # 이 검사기 자신의 설명 코드 제외
+        if rel.startswith("tests/"):
+            continue                      # 테스트는 일부러 위험한 꼴을 만든다
+        text = _read_py(p)
+        if text is None or ".get(" not in text:
+            continue                      # 2-phase — 사전 필터로 AST 파싱 비용 회피
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as e:
+            # fail-closed — 못 읽었으면 통과가 아니라 위반이다 (collect/self-check 관례)
+            report.add(Violation(cat, "symmetry/self-check", rel, e.lineno or 0,
+                                 f"파싱 실패로 검사 무력화: {e.msg}"))
+            continue
+        lines = text.splitlines()
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Call)):
+                continue
+            fn = node.value.func
+            if not (isinstance(fn, ast.Attribute) and fn.attr == "get"
+                    and node.value.args):
+                continue
+            # ★ 면제 — 목록을 박지 않는다(②원칙). "값이 None 일 수 없는 매핑" 만 제외.
+            #   `os.environ` 은 값이 항상 str 이고 없으면 default 를 준다(언어 계약).
+            obj = ast.get_source_segment(text, fn.value) or ""
+            if obj.split(".")[-1] == "environ":
+                continue
+            src_line = lines[node.lineno - 1] if node.lineno <= len(lines) else ""
+            if " or " in src_line:
+                continue                  # 이미 가드됨
+            report.add(Violation(
+                cat, "symmetry/get-default-unguarded", rel, node.lineno,
+                f"{src_line.strip()[:88]}  → `({obj}.get(...) or 기본값)[...]` 로 감쌀 것"))
+    report.checks_run += 3
+
+
+CATEGORIES["symmetry"] = check_symmetry
 
 
 def run(categories: list[str] | None = None) -> Report:

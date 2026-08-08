@@ -266,6 +266,20 @@ class AgentRegistry:
 _registry = AgentRegistry()
 
 
+
+def _cf_available() -> bool:
+    """이미지 프로바이더 가용 — **하드코딩 True 금지** (2026-08-05).
+
+    종전엔 `{"pollinations_available": True}` 였다. 프로바이더가 죽어도, 심지어
+    코드에서 삭제된 뒤에도 화면은 계속 "가용" 이라고 말했을 것이다.
+    """
+    try:
+        from JARVIS06_IMAGE.providers.cloudflare_provider import provider_available
+        return bool(provider_available())
+    except Exception:
+        return False
+
+
 def get_registry() -> AgentRegistry:
     return _registry
 
@@ -303,11 +317,11 @@ class _Image06Adapter(BaseAgent):
 
     def get_health(self) -> dict:
         # ★ 사용자 박제 2026-06-07 — Bing / HuggingFace 완전 삭제 (ERRORS [263])
-        return {"status": "online", "message": "활성 백엔드: Pollinations"}
+        return {"status": "online", "message": "활성 백엔드: Cloudflare Workers AI"}
 
     def get_metrics(self) -> dict:
         # ★ 사용자 박제 2026-06-07 — Bing / HuggingFace 완전 삭제
-        return {"pollinations_available": True}
+        return {"cloudflare_available": _cf_available()}
 
 
 class _Guardian07Adapter(BaseAgent):

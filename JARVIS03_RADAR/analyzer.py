@@ -33,7 +33,7 @@ def _load_cache() -> None:
 
 def _save_cache() -> None:
     _CACHE_FILE.parent.mkdir(exist_ok=True)
-    _CACHE_FILE.write_text(json.dumps(_SECTOR_CACHE, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(_CACHE_FILE, _SECTOR_CACHE, indent=2)
 
 _load_cache()
 
@@ -503,6 +503,7 @@ def get_freshness_bonus(keyword: str) -> float:
 # ── 학습 모듈 통합 (가중치·페널티·cold-start) ─────────────────
 # learning.py 가 매번 DB hit 하지 않도록 5분 캐싱 — 학습은 주간 cron 이라 충분.
 import time as _time
+from JARVIS07_GUARDIAN.json_store import write_json
 
 def _max_attempts() -> int:
     """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
@@ -685,7 +686,7 @@ def generate_content_angles(recs: list[dict], autocomplete: dict[str, list[str]]
         kw_lines = []
         for i, rec in enumerate(recs, 1):
             kw      = rec["keyword"]
-            related = autocomplete.get(kw, [])[:5]
+            related = (autocomplete.get(kw) or [])[:5]
             rel_str = f" (연관검색: {', '.join(related)})" if related else ""
             vel     = rec.get("velocity", "—")
             comp    = rec.get("competition", 50.0)

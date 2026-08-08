@@ -50,7 +50,7 @@ except Exception:
 
 
 # ── 본문 이미지 = 인포그래픽 디자인만 (★ 사용자 박제 2026-07-06) ────
-#   AI 사진(Pollinations) 영문 프롬프트 빌더·관련성 검증 전면 삭제.
+#   AI 사진 영문 프롬프트 빌더·관련성 검증 전면 삭제.
 #   본문 이미지는 실데이터 인포그래픽만 — 못 만들면 빈 슬롯. 썸네일만 예외(대표 실사).
 
 
@@ -611,15 +611,98 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
     except Exception as _ee:
         log.warning(f"[{platform}] enforce_supreme_law 오류(무시): {_ee}")
 
-    print(f"  ✅ [{platform}] process_draft 완료 — 블록 {len(blocks)}개")
+    # ⑪ 저장·채점되는 html 에도 여백 규정 집행 (★ 2026-08-07 — 배선 결함 교정)
+    #   ★ 왜 필요했나: ⑩ 의 법률 집행은 `blocks` 에만 걸렸고 `html` 은 **집행 전 상태**로
+    #     반환됐다. 발행되는 것은 blocks, 저장·채점되는 것은 html — 즉 채점기는
+    #     '발행된 글' 을 한 번도 본 적이 없었다. B18_spacing 이 230건 중 평균 1.15/2 인
+    #     이유가 이것이다(글이 나쁜 게 아니라 **다른 물건을 재고 있었다**).
+    #     압축 함수를 여기 복사하지 않는다 — 주인은 law_enforcer 하나다(①).
+    try:
+        from JARVIS02_WRITER.law_enforcer import compress_spacing as _cs
+        html, _ncomp = _cs(html)
+        if _ncomp:
+            log.info(f"[{platform}] 저장 html 여백 압축 {_ncomp}건")
+    except Exception as _ee:
+        log.warning(f"[{platform}] html 여백 압축 오류(무시): {_ee}")
+
+    # ⑫ 내부 링크(연관 글) — 채점·저장되는 원고에 **실제로 넣는다** (★ 2026-08-07)
+    #   ★ 왜 여기인가: 종전엔 티스토리 발행자가 이 블록을 **에디터 DOM 에 직접 주입**해서,
+    #     발행된 글엔 있는데 채점·저장되는 html 엔 한 줄도 없었다 → T8_internal_link 가
+    #     94건 중 91건 0점. 채점기는 있지도 않은 링크를 찾고 있었다.
+    #   개수는 seo_standards 파생이라 네이버는 **분기 없이** 0개 → 블록이 안 붙는다(②).
+    #   법률 집행(⑩) *뒤* 에 붙인다 — 마지막 블록이라 재배치 대상이 아니고,
+    #   발행 시점 주입이 하던 위치(본문 맨 끝)와 같다.
+    try:
+        from JARVIS08_PUBLISH.internal_links import related_links_html as _rlh
+        _links = _rlh(platform)
+        if _links:
+            blocks = list(blocks) + [("html", _links)]
+            # ★ 문자열 맨 뒤에 붙이면 `</html>` **바깥** 이 된다 — 이 시점의 html 은
+            #   `<!DOCTYPE html>…</body></html>` 인 **완전한 문서** 이기 때문이다(실측 10/10).
+            #   그러면 호출자의 본문 추출(`extract_text_content`)이 걷어내 DB 엔 안 남고,
+            #   발행 후 채점에서 T8 이 **다시 0점** 이 된다 — 고친 것이 조용히 되돌아간다.
+            html = _insert_into_body(html, _links)
+            log.info(f"[{platform}] 연관 글 링크 삽입 (원고 포함)")
+    except Exception as _ee:
+        log.warning(f"[{platform}] 연관 글 링크 오류(발행은 계속): {_ee}")
+
+    # ⑬ 발행 메타 (태그·메타 설명) — 채점 *전* 에 만든다 (★ 2026-08-07)
+    #   ★ 왜 여기인가: 종전엔 태그가 발행(Layer 4) 안에서 만들어져 채점(Layer 3)이
+    #     볼 수 없었고, 메타 설명은 생산자가 아예 없었다. 그래서 N7_hashtags·T7_meta_desc
+    #     가 **전건 0점** — 글을 아무리 잘 써도 못 받는 5점이었다.
+    #     `process_draft` 는 4조합이 전부 지나는 단일 깔때기라, 여기 한 번 걸면 ③이 선다.
+    #   실패해도 발행을 막지 않는다 — 메타가 없으면 종전과 같은 0점일 뿐이다.
+    _meta = {"tags": [], "meta_description": ""}
+    try:
+        from JARVIS08_PUBLISH.post_meta import build_post_meta as _bpm
+        _seed = []
+        try:
+            _m = getattr(collected, "meta", None) or {}
+            _seed = [str(_m.get(k)) for k in ("theme", "sector", "keyword") if _m.get(k)]
+        except Exception:
+            pass
+        # ★ 완전 문서를 그대로 넘기면 생성기가 보는 앞 800자가 `<!DOCTYPE><head><style>` 다
+        #   (실측 앞 800자에 <style>·<head> 포함). 태그·메타 설명이 **스타일시트를 읽고**
+        #   만들어진다. 본문만 넘긴다 — 시점을 앞당기며 입력 품질을 떨어뜨리면 안 된다.
+        _meta = _bpm(title, _body_text(html), platform, seed_tags=_seed or None)
+    except Exception as _ee:
+        log.warning(f"[{platform}] 발행 메타 생성 오류(발행은 계속): {_ee}")
+
+    print(f"  ✅ [{platform}] process_draft 완료 — 블록 {len(blocks)}개 · "
+          f"태그 {len(_meta['tags'])}개 · 메타 {len(_meta['meta_description'])}자")
     return {
         "blocks":         blocks,
         "thumbnail_path": thumbnail_path,
         "title":          title,
         "html":           html,
         "html_path":      str(html_path),   # ★ Step 9: 경제 반환 계약 호환 (재저장 금지)
+        "tags":             _meta["tags"],
+        "meta_description": _meta["meta_description"],
     }
 
+
+
+def _insert_into_body(html: str, fragment: str) -> str:
+    """`</body>` 직전에 끼워 넣는다. 완전 문서가 아니면 그냥 뒤에 붙인다."""
+    h = html or ""
+    if not fragment:
+        return h
+    for close in ("</body>", "</BODY>"):
+        i = h.rfind(close)
+        if i >= 0:
+            return h[:i] + fragment + h[i:]
+    return h + fragment
+
+
+def _body_text(html: str) -> str:
+    """완전 문서에서 `<body>` 안쪽만. head·style·script 를 걷어낸다."""
+    import re as _re
+    h = html or ""
+    m = _re.search(r"<body[^>]*>(.*)</body>", h, _re.I | _re.S)
+    if m:
+        h = m.group(1)
+    h = _re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", h, flags=_re.I | _re.S)
+    return h
 
 def publish_assembled(result: dict, publish_fn, platform: str = "") -> dict:
     """★ J06 발행 진입점 — process_draft() 완성 블록을 J08 에 직접 넘긴다 (사용자 박제 2026-07-11).

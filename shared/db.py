@@ -380,6 +380,16 @@ def init_db():
             conn.execute("ALTER TABLE error_log ADD COLUMN provisional INTEGER DEFAULT 0")
         except Exception:
             pass
+        # ★ 지침별 준수/위반 (2026-08-07 감사 — credit assignment 붕괴 시정)
+        #   종전엔 한 배치의 지침 8개가 **전부 같은 보상**(그 글의 점수)을 받았다.
+        #   그러면 어느 지침이 좋았는지 영영 구분되지 않는다(실측: 배치 53개 전부
+        #   `count(distinct reward)=1`). 발행 게이트가 이미 계산해 놓고 로그로만 흘리던
+        #   `violated_directives` 를 여기 적어 배치 안에서 변별을 만든다.
+        #   NULL = 판정 없음(옛 행), 0 = 준수, 1 = 위반.
+        try:
+            conn.execute("ALTER TABLE insight_usage ADD COLUMN violated INTEGER DEFAULT NULL")
+        except Exception:
+            pass
         # NOTE: retry_count / retry_at / last_error 컬럼은 사후 retry 잡 폐기로 더 이상
         # 사용하지 않음. 기존 DB 에 남아 있어도 무시됨 (drop 하지 않음 — 데이터 보존).
         # source_keyword: RADAR pipeline 에서 발행 트리거 시 채워지는 trends.keyword 와
@@ -407,6 +417,27 @@ def init_db():
         #   글품질 강화학습 보상 = quality_score/100. NULL = 미채점(옛 행·채점불가) → 보상 스킵.
         try:
             conn.execute("ALTER TABLE post_analysis ADD COLUMN quality_score REAL")
+        except Exception:
+            pass
+        # post_analysis.rubric_items: 100점 루브릭 **항목별** 점수 (2026-08-07 신설).
+        #   `post_scorer.items_compact(sr)` 의 `{항목key: 점수}` JSON.
+        #   ★ 왜 필요했나 — 종전엔 총점 스칼라 한 칸뿐이라 채점기가 글마다 계산한 50개
+        #     항목 결과가 **즉시 폐기**됐다. 그 결과 강화학습이 "이 글 67점" 이라는 한 덩어리
+        #     신호만 받아, *어느 항목이 왜 0점인지* 를 모른 채 가중치를 굴리고 있었다.
+        #   만점·섹션·표시명은 **넣지 않는다** — 채점기에서 파생한다(② 동적 설계).
+        #   컬럼을 50개 만들지 않는 이유도 같다: 항목이 늘 때마다 스키마를 고치게 된다.
+        try:
+            conn.execute("ALTER TABLE post_analysis ADD COLUMN rubric_items TEXT")
+        except Exception:
+            pass
+        # post_analysis.publish_meta: 발행에 실제로 붙은 메타 (2026-08-07 신설).
+        #   `{"tags": [...], "meta_description": "..."}` — process_draft ⑫ 산출물.
+        #   ★ 왜 필요했나 — 발행 draft 는 그 프로세스 안에서만 산다(경제는 subprocess).
+        #     이 값이 DB 를 건너지 못하면 **발행 후 채점이 태그·메타를 못 본다** →
+        #     발행 전엔 N7·T7 만점인데 DB 점수(=학습 보상)는 0점인 반쪽 적용이 된다.
+        #     "개선했는데 벌을 받는" 상태 — 학습이 정확히 거꾸로 간다.
+        try:
+            conn.execute("ALTER TABLE post_analysis ADD COLUMN publish_meta TEXT")
         except Exception:
             pass
         # learning_insights.scope: 어떤 글 종류에 적용할 인사이트인지.
@@ -443,7 +474,8 @@ def init_db():
                 used_at     TEXT DEFAULT (datetime('now','localtime')),
                 analysis_id INTEGER,                -- 보상 귀속된 post_analysis.id
                 reward      REAL,                   -- NULL = 미귀속
-                rewarded_at TEXT
+                rewarded_at TEXT,
+                violated    INTEGER DEFAULT NULL    -- NULL=판정없음 0=준수 1=위반
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_iu_pending ON insight_usage(reward, used_at)")
@@ -537,6 +569,12 @@ _MIGRATIONS: list[tuple[int, str, str]] = [
             ) WHERE prev IS NOT NULL AND prev = status
         );
     """),
+    # ★ 2026-08-07 정정 — 위 v2 SQL 은 `WHERE ... prev = status,` 뒤에 `insight_usage` 의
+    #   DDL 조각(`violated INTEGER DEFAULT NULL … );`)이 잘못 이어붙어 **문법 오류**였다
+    #   (커밋 6170177 편집 사고). 그래서 v2 는 **어느 DB 에서도 성공한 적이 없고**,
+    #   순차 적용이라 v3·v4 도 함께 막혀 있었다 — 새로 만드는 DB(=CI 격리 DB)는 전부
+    #   `user_version=0` 에 갇힌다. 운영 DB 는 표가 이미 있어 증상이 안 보였다.
+    #   "과거 번호를 수정하지 말 것" 규칙의 예외 — *적용된 적이 없으므로* 갈라질 DB 가 없다.
     (3, "style_corpus 제거 — 읽는 코드가 0인 브랜드 보이스 코퍼스 폐기", """
         -- ★ 2026-07-27: 이 표는 매일 02:30 잡이 적재했지만 **읽는 코드가 하나도 없었다**
         --   (search_similar / build_few_shot_block 호출자 0). 게다가 tfidf(2048d)와
@@ -591,6 +629,21 @@ def _apply_migrations() -> int:
             applied += 1
             log.info(f"[db/schema] v{version} 적용 — {note}")
         except Exception as e:                          # noqa: BLE001
+            # ★ '대상이 없다' 는 실패가 아니라 **이미 만족된 상태** 다 (2026-08-07).
+            #   정리·삭제 마이그레이션은 표가 없으면 청소할 것도 없다. 새로 만드는 DB
+            #   (=CI 격리 DB)가 정확히 그 경우인데, 종전엔 이걸 실패로 보고 `break` 했다.
+            #   순차 적용이라 **뒤 버전이 통째로 막혀** 새 DB 는 영원히 v1 에 갇혔다.
+            #   (실측: v2 SQL 문법 오류가 고쳐진 뒤에도 새 DB 는 v1 그대로였다.)
+            if "no such table" in str(e).lower():
+                with get_db() as conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO schema_migrations (version, note) VALUES (?,?)",
+                        (version, f"{note} (대상 없음 — 이미 만족)"),
+                    )
+                    conn.commit()
+                applied += 1
+                log.info(f"[db/schema] v{version} 대상 없음 — 적용 완료로 기록")
+                continue
             # 부팅을 막지 않는다. 다음 부팅에 재시도된다.
             log.warning(f"[db/schema] v{version} 적용 실패(다음 부팅 재시도): {e}")
             break                                       # 순서 보장 — 실패 뒤는 건너뛰지 않는다
@@ -801,7 +854,8 @@ def save_post_for_analysis(platform: str, theme: str, title: str,
                             original_content: str = "", original_html: str = "",
                             source_keyword: str = "",
                             post_type: str = "",
-                            image_paths: str = "[]") -> int:
+                            image_paths: str = "[]",
+                            publish_meta: "dict | None" = None) -> int:
     """발행 직후 분석 대기 레코드 생성. 반환값: 생성된 id.
 
     source_keyword: RADAR pipeline 트리거 시 trends.keyword 와 동일한 raw 키워드.
@@ -814,13 +868,15 @@ def save_post_for_analysis(platform: str, theme: str, title: str,
         cur = conn.execute(
             """INSERT INTO post_analysis
                (platform, theme, title, url,
-                original_content, original_html, source_keyword, post_type, image_paths)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                original_content, original_html, source_keyword, post_type, image_paths,
+                publish_meta)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (platform, theme, title, url,
              original_content, original_html,
              (source_keyword or "").strip(),
              (post_type or "").strip() or None,
-             image_paths or "[]"),
+             image_paths or "[]",
+             _items_json(publish_meta)),
         )
         return cur.lastrowid
 
@@ -867,18 +923,59 @@ def get_unscored_analyzed(since: str, limit: int = 5) -> list:
     return [dict(r) for r in rows]
 
 
-def save_quality_score(analysis_id: int, quality_score: float) -> bool:
-    """재채점 결과 — **점수만** 채운다.
+def save_quality_score(analysis_id: int, quality_score: float,
+                       rubric_items: "dict | None" = None) -> bool:
+    """재채점 결과 — **점수(와 항목)만** 채운다.
 
     제안·상태·analyzed_at 을 건드리지 않는다. 건드리면 텔레그램 재전송·승인 재요청이
     딸려와 사용자에게 같은 글이 두 번 간다. 이미 비어 있을 때만 쓴다(경합 방어).
     """
+    _ij = _items_json(rubric_items)
+    with get_db() as conn:
+        if _ij is None:
+            cur = conn.execute(
+                "UPDATE post_analysis SET quality_score=? WHERE id=? AND quality_score IS NULL",
+                (quality_score, analysis_id),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE post_analysis SET quality_score=?, rubric_items=? "
+                "WHERE id=? AND quality_score IS NULL",
+                (quality_score, _ij, analysis_id),
+            )
+        return cur.rowcount > 0
+
+
+def backfill_rubric_items(analysis_id: int, rubric_items: dict) -> bool:
+    """★ 이미 총점은 있는데 **항목만 비어 있는** 옛 행을 채운다 (2026-08-07 소급).
+
+    `save_quality_score` 는 `quality_score IS NULL` 인 행만 쓰므로 옛 행에 닿지 못한다.
+    총점은 **건드리지 않는다** — 그날의 보상 신호를 사후에 바꾸면 학습 이력이 오염된다.
+    """
+    _ij = _items_json(rubric_items)
+    if _ij is None:
+        return False
     with get_db() as conn:
         cur = conn.execute(
-            "UPDATE post_analysis SET quality_score=? WHERE id=? AND quality_score IS NULL",
-            (quality_score, analysis_id),
+            "UPDATE post_analysis SET rubric_items=? WHERE id=? AND rubric_items IS NULL",
+            (_ij, analysis_id),
         )
         return cur.rowcount > 0
+
+
+def get_rubric_items(analysis_id: int) -> dict:
+    """저장된 항목별 점수 `{항목key: 점수}`. 없으면 빈 dict."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT rubric_items FROM post_analysis WHERE id=?", (analysis_id,)
+        ).fetchone()
+    if not row or not row["rubric_items"]:
+        return {}
+    try:
+        v = json.loads(row["rubric_items"])
+        return v if isinstance(v, dict) else {}
+    except Exception:
+        return {}
 
 
 def try_claim_analysis(analysis_id: int) -> bool:
@@ -893,19 +990,43 @@ def try_claim_analysis(analysis_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def _items_json(rubric_items: "dict | None") -> "str | None":
+    """항목별 점수를 저장 문자열로 — **직렬화를 한 곳에서만** 한다(① 단일 진입점).
+
+    두 저장 경로(`save_analysis_result` · `save_quality_score`)가 각자 json.dumps 하면
+    한쪽만 형식을 바꾸는 사고가 난다. 빈 dict 는 '항목 없음'이 아니라 '채점 안 함'과
+    구분이 안 되므로 None 으로 떨어뜨린다.
+    """
+    if not rubric_items:
+        return None
+    return json.dumps(rubric_items, ensure_ascii=False, sort_keys=True)
+
+
 def save_analysis_result(analysis_id: int, suggestions: list,
-                         quality_score: "float | None" = None):
+                         quality_score: "float | None" = None,
+                         rubric_items: "dict | None" = None):
     """분석 결과 저장 → status: analyzed.
 
     quality_score = 발행글 100점 루브릭 총점(post_scorer). ADR 014 강화학습 보상 신호로
     23:45 job_quality_learn 이 읽는다 (reward = score/100). None = 미채점(보상 스킵).
+
+    rubric_items = `post_scorer.items_compact(sr)` — 항목별 학습의 입력 (2026-08-07).
+      None 이면 **덮어쓰지 않는다** — 옛 호출자가 항목을 지우는 일이 없어야 한다.
     """
+    _ij = _items_json(rubric_items)
     with get_db() as conn:
-        conn.execute(
-            "UPDATE post_analysis SET suggestions=?, quality_score=?, status='analyzed', "
-            "analyzed_at=datetime('now','localtime') WHERE id=?",
-            (json.dumps(suggestions, ensure_ascii=False), quality_score, analysis_id),
-        )
+        if _ij is None:
+            conn.execute(
+                "UPDATE post_analysis SET suggestions=?, quality_score=?, status='analyzed', "
+                "analyzed_at=datetime('now','localtime') WHERE id=?",
+                (json.dumps(suggestions, ensure_ascii=False), quality_score, analysis_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE post_analysis SET suggestions=?, quality_score=?, rubric_items=?, "
+                "status='analyzed', analyzed_at=datetime('now','localtime') WHERE id=?",
+                (json.dumps(suggestions, ensure_ascii=False), quality_score, _ij, analysis_id),
+            )
 
 
 def set_analysis_pending_approval(analysis_id: int):
@@ -1204,6 +1325,59 @@ def _gfs_keep_set(dates: list[date]) -> set[date]:
     return keep
 
 
+def verify_backup(path) -> str:
+    """방금 만든 백업이 **성한가** — 빈 문자열이면 정상, 아니면 사유.
+
+    ★ 왜 필요한가 (2026-08-05 실측): 저장소 전체에 `integrity_check` 가 **0행**이었다.
+      백업 파일이 2.0GB 쌓여 있는데 *그중 하나라도 복원 가능한지 확인한 적이 없었다.*
+      백업은 "만들었다" 가 아니라 "복원된다" 여야 백업이다.
+
+    ★ 비용: 159MB DB 에 0.8초 (실측). 하루 1회니 무시할 수 있다.
+
+    ★ 왜 여기(shared/db)인가: '만들어진 DB 파일이 성한가' 는 DB 도메인의 질문이다.
+      다른 모듈에 두면 `shared.db ↔ 그 모듈` 순환 import 가 생긴다.
+    """
+    p = Path(path)
+    if not p.exists():
+        return "백업 파일이 만들어지지 않음"
+    if p.stat().st_size <= 0:
+        return "백업 파일이 0바이트"
+    try:
+        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=30)
+        try:
+            r = con.execute("PRAGMA integrity_check").fetchone()
+            if not r or str(r[0]).lower() != "ok":
+                return f"integrity_check 실패: {r}"
+            # 핵심 테이블이 실제로 읽히는가 (헤더만 성한 파일 방어)
+            for t in ("post_analysis", "error_log", "job_runs"):
+                con.execute(f"SELECT count(*) FROM {t}").fetchone()
+        finally:
+            con.close()
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    return ""
+
+
+def backup_gaps(days: int = 7) -> list:
+    """최근 N일 중 **백업이 없는 날** — 결손 감지.
+
+    ★ 발행 완결성 감사와 같은 사고방식: *기대* 를 파생하고 *실제* 와 대조한다.
+      기대 = 매일 1개(백업 잡이 cron daily). 실제 = 파일명의 날짜.
+      실측 2026-08-05: 07-31·08-02 백업이 **조용히 빠져 있었다** — 아무도 몰랐다.
+      ※ GFS 보존이 오래된 날을 의도적으로 지우므로 **최근 N일만** 본다.
+    """
+    have = set()
+    for p in BACKUP_DIR.glob("jarvis_*.sqlite"):
+        try:
+            have.add(date.fromisoformat(p.stem.replace("jarvis_", "")))
+        except Exception:
+            continue
+    today = date.today()
+    return [(today - timedelta(days=i)).isoformat()
+            for i in range(1, max(1, days) + 1)
+            if (today - timedelta(days=i)) not in have]
+
+
 def backup_db(retention_days: int = 30) -> dict:
     """SQLite .backup API 로 WAL 안전 백업 + **GFS 계층 보존**.
 
@@ -1235,6 +1409,27 @@ def backup_db(retention_days: int = 30) -> dict:
         with sqlite3.connect(str(DB_PATH), timeout=10) as cp:
             cp.execute("PRAGMA wal_checkpoint(FULL)")
         shutil.copy2(DB_PATH, target)
+
+    # 1-B) ★ 무결성 검증 — **retention 앞** (2026-08-05).
+    #   순서가 정책이다: 새 백업이 깨졌는데 옛 백업을 지우면 성한 사본이 하나도 안 남는다.
+    #   깨진 파일은 `.corrupt` 로 남기지 않는다 — 그러면 retention glob 밖이라 영구 잔존한다
+    #   (실측 선례: `jarvis_premask_2026-08-02.sqlite` 176MB 가 그렇게 관리 밖에 있다).
+    #   쓸모없는 파일이므로 즉시 지우고 사유만 박제한다.
+    _bad = verify_backup(target)
+    if _bad:
+        try:
+            target.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report as _rep
+            _rep("BackupIntegrityFailed", "infra",
+                 message=f"백업 무결성 검증 실패 — 파일 폐기, 옛 백업 보존: {_bad}",
+                 module=__name__, func_name="backup_db",
+                 context={"target": str(target), "reason": _bad, "kind": "daemon_down"})
+        except Exception:
+            pass
+        raise RuntimeError(f"백업 무결성 검증 실패: {_bad}")
 
     # 2) Retention — GFS 계층 보존 (일 7 + 주 4 + 월 3 ≈ 14개로 30일 커버)
     cutoff = date.today() - timedelta(days=retention_days)
@@ -1855,6 +2050,37 @@ def record_insight_usage(batch_id: str, insight_ids: list,
     return len(insight_ids)
 
 
+def mark_usage_violated(batch_id: str, insight_ids: list) -> int:
+    """이번 배치에서 **지켜지지 않은** 지침을 표시 (2026-08-07).
+
+    표시된 행은 보상 귀속 때 감점을 받아, 같은 글이라도 지침마다 다른 신호가 된다.
+    `insight_ids` 에 없는 같은 배치 행은 0(준수)으로 마감한다 — 판정이 있었다는 뜻.
+    """
+    if not batch_id:
+        return 0
+    with get_db() as conn:
+        conn.execute("UPDATE insight_usage SET violated = 0 "
+                     "WHERE batch_id = ? AND violated IS NULL", (batch_id,))
+        if not insight_ids:
+            return 0
+        q = ",".join("?" * len(insight_ids))
+        cur = conn.execute(
+            f"UPDATE insight_usage SET violated = 1 "
+            f"WHERE batch_id = ? AND insight_id IN ({q})",
+            [batch_id, *[int(i) for i in insight_ids]])
+        return cur.rowcount
+
+
+def latest_batch(scope: str, platform: str) -> str:
+    """이 조합의 **가장 최근 미귀속 배치 id** — 게이트가 방금 주입분을 찾을 때 쓴다."""
+    with get_db() as conn:
+        r = conn.execute(
+            "SELECT batch_id FROM insight_usage "
+            "WHERE scope = ? AND platform = ? AND reward IS NULL "
+            "ORDER BY id DESC LIMIT 1", (scope, platform)).fetchone()
+    return str(r[0]) if r else ""
+
+
 def get_unrewarded_usage(days: int = 3) -> list[dict]:
     """reward 미귀속 사용 기록 (최근 N일)."""
     with get_db() as conn:
@@ -1870,11 +2096,17 @@ def get_unrewarded_usage(days: int = 3) -> list[dict]:
 
 def apply_insight_reward(usage_id: int, insight_id: int, analysis_id: int,
                          reward: float, alpha: float = 0.3,
-                         update_weight: bool = True) -> None:
+                         update_weight: bool = True,
+                         neutral: float = 0.5) -> None:
     """보상 귀속 — usage 행 마감 + learning_insights 가중치 EMA 갱신.
 
-    weight ← clamp(0.05, 3.0, weight + alpha*(reward - 0.5))
-    reward 0.5 중립 기준: 좋은 글(루브릭 점수 높음) → weight ↑, 나쁜 글 → ↓.
+    weight ← clamp(0.05, 3.0, weight + alpha*(reward - neutral))
+
+    ★ `neutral` 을 인자로 받는 이유 (2026-08-07 감사)
+      중립점 0.5 를 박아 두었더니 실측 점수 분포(59~77)에서 **Δw 가 항상 양수** 였다.
+      "쓰인 지침은 전부 생존" 이라 하향이 구조적으로 불가능했다.
+      *무엇이 중립인가* 는 보상 도메인(`quality_learner.reward_neutral()`)이 안다 —
+      DB 계층은 질의만 한다. 기본값 0.5 는 하위호환용이고, 호출자가 파생값을 넘긴다.
     update_weight=False: usage 마감(부기)만 — 같은 (insight, analysis) 쌍
     중복 보상 방지용 (quality_learner 가 판단).
     """
@@ -1887,12 +2119,21 @@ def apply_insight_reward(usage_id: int, insight_id: int, analysis_id: int,
         )
         if update_weight:
             conn.execute(
+                # ★ `weight <= 0` 은 **무력화** 를 뜻한다 (2026-08-02 오염 지침 정리).
+                #   그런데 하한 클램프 `max(0.05, …)` 가 그 행에도 걸려, 보상이 한 번만
+                #   귀속되면 0 → 0.05 로 **되살아났다**. 선택 쿼리가 `weight > 0` 으로
+                #   거르므로 그 순간부터 다시 4조합 프롬프트에 주입된다.
+                #   실측 2026-08-07: 무력화 342건 중 **52건**이 미귀속 사용기록을 들고 있어
+                #   다음 보상 잡에서 부활 대기 중이었다. 보상이 음수여도 클램프가 올린다.
+                #   → 무력화는 무력화로 유지한다. 되살리려면 사람이 명시적으로 올린다.
                 """UPDATE learning_insights
                    SET reward_sum   = COALESCE(reward_sum, 0) + ?,
                        reward_count = COALESCE(reward_count, 0) + 1,
-                       weight       = max(0.05, min(3.0, weight + ? * (? - 0.5)))
+                       weight       = CASE WHEN weight <= 0 THEN weight
+                                           ELSE max(0.05, min(3.0, weight + ? * (? - ?)))
+                                      END
                    WHERE id = ?""",
-                (float(reward), float(alpha), float(reward), int(insight_id)),
+                (float(reward), float(alpha), float(reward), float(neutral), int(insight_id)),
             )
 
 

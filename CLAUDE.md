@@ -287,6 +287,13 @@ pkill -f jarvis_daemon.py        # 전체 종료
 - **절차**: 커밋 직전 `git status --short` 로 잔여 확인 → 전부 스테이징 (`git add -A`) → 커밋 메시지 본문에 *내 변경분* 을 쓰고, 말미에 *동반 커밋된 런타임 산출물* 을 한 줄로 명시.
 - **예외**: `.gitignore` 대상·비밀정보·대용량 바이너리는 제외 (해당 시 `.gitignore` 에 추가하고 그 사실을 메시지에 남길 것).
 - **검증**: 커밋 후 `git status --short` 결과가 비어 있어야 함.
+- **★ 자동 강제 (2026-08-07)**: `.githooks/pre-commit` 이 커밋 시점에 `git status --porcelain`
+  으로 **미스테이징·미추적 파일을 검출해 차단**한다. 급할 때만 `git commit --no-verify`.
+  · **왜 기계에 걸었나** — 이 규정만 사람 손에 맡겨져 있어 반복해서 샜다.
+    ①②는 `precommit_check`, ③은 `symmetry` 카테고리가 강제하는데 커밋 위생만 남아 있었다.
+    **규정을 읽는 것은 적용의 증거가 아니다** — 작업 끝 순간엔 주의가 "고친 게 되나" 에
+    쏠려 트리를 다시 안 본다. 새 세션은 지난 실수를 기억하지 못한 채 시작한다.
+    사람(과 에이전트)의 기억에 기대는 규칙은 반드시 샌다.
 
 ## Claude Code 작업 효율 규정 (강제)
 - **파일 읽기**: 이미 읽은 파일 재읽기 금지. 필요한 범위만 Read(offset+limit).
@@ -518,7 +525,14 @@ pkill -f jarvis_daemon.py        # 전체 종료
   | **섹션 구분 배너** (make_section_image) | matplotlib 텍스트 렌더링 — AI 불필요 | 고정 스타일 OK |
   | **데이터 차트** (경제·주식·시장 차트) | matplotlib 데이터 시각화 — AI 불필요 | 데이터 기반 |
 
-- **AI 사진 폴백 체인 (고정 순서 — 변경 금지)**: Nanobana(Gemini)(1순위) → Pollinations.ai(2순위). 모든 `generate_photo()` 호출은 이 체인을 자동 사용. (★ Bing/HuggingFace 완전 삭제 — ERRORS [263] 사용자 박제 2026-06-07. 본 행은 2026-07-03 코드 실상과 동기화 — 문서 드리프트 수정)
+- **AI 사진 프로바이더 — `Cloudflare Workers AI` 단독 (★ 사용자 결정 2026-08-05 — ERRORS [574])**:
+  무료 티어 10,000 neuron/일 · Flux-1-Schnell 57.6 neuron/장 = 하루 약 173장 (우리 사용량 4~10장).
+  **Pollinations 는 완전 삭제** — 2026-08-05 이미지 모델 39개가 전부 유료화(402)됐고
+  사용자 결정은 "유료는 금액이 작아도 안 쓴다". Gemini(나노바나나)도 공식 가격표상
+  이미지 모델 전부 `Free Tier: Not available` 이라 후보에서 제외.
+  **프로바이더를 둘 이상 두지 않는다** — 종전에 문서만 "Nanobana → Pollinations" 2단이라
+  적어놓고 코드는 하나뿐이라, 그 하나가 죽자 바로 그라디언트까지 떨어졌다.
+  자격증명: `.env` 의 `CLOUDFLARE_ACCOUNT_ID` · `CLOUDFLARE_API_TOKEN`.
 - **동적 생성 원칙 (★ 썸네일 고정 스타일 절대 금지)**: 썸네일·AI 사진 생성 시 *고정 스타일 풀·hardcoded 레이아웃·STYLE_ZONES·THEME_PALETTES* 일체 금지. Claude LLM이 매번 배경 프롬프트와 SVG 오버레이를 새로 창작.
 - **다른 파일 금지**: `JARVIS02_WRITER/*`, `JARVIS03_RADAR/*`, `JARVIS01_MASTER/*`, `shared/*`, 루트 `*.py` 어디에도 이미지 생성 *URL 호출·직접 provider import·새 matplotlib 이미지 함수* 를 추가하지 말 것. 예외 없음.
 - **출력 경로 단일 진입점**: 모든 이미지는 `JARVIS06_IMAGE/output/` 하위에 저장됨. 기본 경로는 `image_agent.OUTPUT_DIR`. 용도별 하위 폴더:

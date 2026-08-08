@@ -150,7 +150,7 @@ JSON 배열로만 답변 (실제 개선 필요 항목만 — 이미 잘 적용�
         pf_label = imp.get("platform", "all").upper()
         sev      = "warning" if imp.get("severity") == "important" else "info"
         findings.append(Finding(
-            key=f"seo_learn:{pf_label}:{imp.get('title','')[:25]}",
+            key=f"seo_learn:{pf_label}:{(imp.get('title') or '')[:25]}",
             severity=sev,
             title=f"[SEO 주간학습] {pf_label}: {imp.get('title','')}",
             detail=(

@@ -272,7 +272,7 @@ def audit_learned_patterns_meta_learning(min_hits: int = 5) -> MetaLearningSugge
             continue
         out.append({
             "error_type": p.get("error_type", ""),
-            "fingerprint": p.get("fingerprint", "")[:40],
+            "fingerprint": (p.get("fingerprint") or "")[:40],
             "hit_count": hit,
             "sample_message": (p.get("normalized_message") or p.get("message_pattern") or "")[:120],
         })

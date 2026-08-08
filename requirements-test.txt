@@ -18,3 +18,5 @@
 pytest
 python-dotenv
 requests
+# 밴딧(Linear UCB) 테스트가 행렬 연산을 실제로 돌린다 (2026-08-07)
+numpy

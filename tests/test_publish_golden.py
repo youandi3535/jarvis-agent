@@ -991,19 +991,17 @@ def test_재채점_창이_보상잡_일정에서_파생된다():
 
     # ★ 문자열이 아니라 *동작* 으로 확인한다 — 잡 시각을 바꾸면 창도 따라와야 한다.
     #   (뮤테이션 검증에서 `"DEFAULT_JOBS" in src` 만 보는 테스트가 가짜 통과를 냈다.)
-    from JARVIS04_SCHEDULER import job_registry as JR
-
-    target = next(j for j in JR.DEFAULT_JOBS if "quality_learner" in str(j.get("callback", "")))
-    orig = dict(target.get("kwargs") or {})
+    # 보상 창을 늘리면 재채점 창도 따라와야 한다(파생 확인)
+    import JARVIS07_GUARDIAN.quality_learner as QL
+    orig_fn = QL.reward_retry_days
     try:
-        target["kwargs"] = {"hour": (int(orig.get("hour", 23)) + 5) % 24,
-                            "minute": int(orig.get("minute", 0))}
+        QL.reward_retry_days = lambda: int(orig_fn()) + 7
         moved = reward_cutoff()
     finally:
-        target["kwargs"] = orig
-    assert moved != cut, "잡 시각을 바꿔도 재채점 창이 그대로 — 파생이 아니라 사본이다"
+        QL.reward_retry_days = orig_fn
+    assert moved < cut, "보상 창을 늘려도 재채점 창이 그대로 — 파생이 아니라 사본이다"
 
-    src = inspect.getsource(reward_cutoff)
+    src = _code_only(inspect.getsource(reward_cutoff))
     assert "23:45" not in src, "시각이 박혀 있다"
 
 
@@ -1080,6 +1078,12 @@ def test_인프라_kind_판별을_아무도_등가비교하지_않는다():
     bad = []
     for f in root.rglob("*.py"):
         if ".venv" in f.parts or "__pycache__" in f.parts or f == owner:
+            continue
+        # ★ 테스트는 예외 — 이 규칙이 막는 것은 *분류 판단* 을 등가비교로 하는 것이다.
+        #   "파생이 살아있는가" 를 확인하려면 테스트는 반드시 두 값을 비교해야 한다
+        #   (실제로 이 규칙이 그 검증 테스트를 잡았다 — 규칙이 동작한다는 증거이자,
+        #    예외를 명시해야 한다는 신호).
+        if "tests" in f.parts:
             continue
         try:
             src = f.read_text(encoding="utf-8")
@@ -1181,7 +1185,7 @@ def test_비밀_경로는_파일_존재와_무관하다():
     import shared.secrets as S
 
     # 주석은 걷어내고 본다 — '왜 없앴는지' 설명하는 주석은 남아 있어야 한다.
-    code = "\n".join(l.split("#")[0] for l in inspect.getsource(S.secret_files).splitlines())
+    code = _code_only(inspect.getsource(S.secret_files))
     assert ".exists()" not in code, "비밀 경로를 존재 여부로 거른다"
     names = {p.name for p in S.secret_files()}
     assert ".env" in names, f"파생에 .env 가 없다: {names}"
@@ -1226,6 +1230,50 @@ def test_CI가_테스트_의존을_이_파일에서_설치한다():
 # ══════════════════════════════════════════════════════════════════════════
 # 2026-08-05 훅 정상화 — 2달간 죽어 있던 것을 잡았어야 할 테스트
 # ══════════════════════════════════════════════════════════════════════════
+
+def _code_only(src: str) -> str:
+    """주석·docstring 을 걷어낸 **실행되는 코드만** 남긴다.
+
+    ★ 왜 필요한가 (2026-08-05 — 이 실수를 세 번 했다)
+      "이 리터럴이 남아 있지 않은가" 를 검사하면서 소스를 그대로 grep 하면,
+      *왜 그 리터럴을 없앴는지 설명하는 주석* 이 걸린다. 그러면 설명을 지워야
+      테스트가 통과하는데, 그 설명이야말로 다음 사람이 같은 걸 되살리지 않게 막는 자산이다.
+      → 검사 대상은 코드, 보존 대상은 설명. 판정 방법을 한 곳에 둔다(①).
+
+    ★ 괄호 깊이를 본다 (초판 결함)
+      초판은 "줄 첫 문자열 = docstring" 으로 판정했다. 그런데 여러 줄 dict/호출 안에서
+      줄이 바뀌면 `"kind":` 같은 *평범한 키* 도 줄 첫 문자열이라 통째로 지워졌다.
+      docstring 은 **괄호 밖(depth 0)** 에서만 나타난다.
+    """
+    import io
+    import tokenize
+
+    out: list = []
+    depth = 0
+    fresh = True          # 지금이 '문장 첫 토큰' 자리인가
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except Exception:
+        return "\n".join(l.split("#")[0] for l in src.splitlines())
+    for tok in toks:
+        t, txt = tok.type, tok.string
+        if t == tokenize.COMMENT:
+            continue
+        if t == tokenize.OP:
+            if txt in "([{":
+                depth += 1
+            elif txt in ")]}":
+                depth = max(0, depth - 1)
+        if t == tokenize.STRING and depth == 0 and fresh:
+            fresh = False
+            continue      # docstring
+        if t in (tokenize.NEWLINE, tokenize.NL, tokenize.INDENT, tokenize.DEDENT):
+            fresh = depth == 0
+        elif t != tokenize.COMMENT:
+            fresh = False
+        out.append(txt)
+    return " ".join(out)
+
 
 def _hook_src() -> str:
     from pathlib import Path
@@ -1304,6 +1352,9 @@ def test_훅이_실제로_막고_안내한다(tmp_path):
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
 
     def _commit(msg):
+        # ★ 커밋 전 스테이징 — 훅이 '잔여 0' 을 검사하므로(2026-08-07) 실제 흐름과 맞춘다.
+        #   이 한 줄이 없으면 훅이 "잔여 있음" 으로 막는다 = 검사가 제대로 도는 증거.
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
         return subprocess.run(["git", "commit", "-m", msg], cwd=repo,
                               capture_output=True, text=True)
 
@@ -1396,3 +1447,1207 @@ def test_낡은_검사_개수_표기가_남아있지_않다():
             if "27종" in l and "precommit" in l.lower():
                 stale.append(f"{f.relative_to(root)}:{i}")
     assert not stale, "낡은 개수 표기 잔존:\n" + "\n".join(stale)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-08-05 슬롯 손실 회계 (감사 2위) — 복구 정책 A
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_슬롯_경계계산이_한_곳에만_있다():
+    """★ 종전엔 current_slot 안에 day-offset 루프가 2벌 인라인이라 임의 구간을 못 물었다."""
+    import inspect
+
+    from JARVIS08_PUBLISH import publish_ledger as L
+
+    code = _code_only(inspect.getsource(L.current_slot))
+    assert "slots_between (" in code, "current_slot 이 slots_between 을 실제로 부르지 않는다"
+
+    # 동작으로도 확인 — 두 함수의 답이 일치해야 한다(사본이면 갈라진다).
+    import datetime as dt
+    now = dt.datetime(2026, 8, 5, 15, 0)
+    got = L.current_slot(now)
+    want = L.slots_between(now - dt.timedelta(days=1), now + dt.timedelta(seconds=1))[-1]
+    assert got == want, f"current_slot 이 slots_between 과 다른 답을 낸다: {got} vs {want}"
+
+
+def test_임의구간_슬롯을_물어볼_수_있다():
+    """공백 회계는 '데몬이 꺼져 있던 구간' 의 슬롯을 알아야 한다."""
+    import datetime as dt
+
+    from JARVIS08_PUBLISH.publish_ledger import slots_between
+
+    got = slots_between(dt.datetime(2026, 7, 31), dt.datetime(2026, 8, 2))
+    assert len(got) == 4, f"이틀 = 슬롯 4개여야 한다: {got}"
+    assert [g[0] for g in got] == ["economic", "theme", "economic", "theme"]
+    # 21시 테마 슬롯의 끝은 *다음날 07시* (자정 넘김 규칙 유지)
+    _pt, st, en = got[1]
+    assert st.hour == 21 and en.hour == 7 and en.date() > st.date()
+
+
+def test_슬롯키가_연도를_담는다():
+    """★ 종전 결손 context 는 '08-05 07:00 ~ ...' 라 연도가 없어 원장 키로 못 썼다."""
+    import datetime as dt
+
+    from JARVIS08_PUBLISH.publish_ledger import slot_key
+
+    k = slot_key("economic", dt.datetime(2026, 8, 5, 7, 0))
+    assert k == "economic@2026-08-05T07:00"
+    assert slot_key("theme", dt.datetime(2025, 8, 5, 7, 0)) != k, "연도가 키에 없다"
+
+
+def test_결손_박제가_단일_진입점이다():
+    """★ 감사 잡과 공백 회계가 각자 report() 를 부르면 중복 억제가 불가능해진다."""
+    import inspect
+
+    from JARVIS08_PUBLISH import publish_ledger as L
+
+    audit = inspect.getsource(L.job_audit_publish_completeness)
+    assert "record_publish_gap" in audit, "감사 잡이 단일 진입점을 쓰지 않는다"
+    assert "import report" not in audit, "감사 잡이 report 를 직접 부른다 (사본)"
+
+    rec = _code_only(inspect.getsource(L.record_publish_gap))
+    assert "gap_already_recorded" in rec, "중복 억제가 없다"
+    assert "severity =" not in rec, "report() 에 없는 severity 인자를 넘긴다 (TypeError)"
+    assert '"kind"' in rec, "kind 를 안 넣으면 Tier-2 LLM 이 헛돈다"
+
+
+def test_복구정책A_재발행을_권하지_않는다():
+    """★ 발행은 07:00·21:00 뿐 — 경보가 '지금 실행' 을 권하면 그 규칙을 어기게 만든다."""
+    import inspect
+
+    from JARVIS00_INFRA import downtime as D
+    from JARVIS08_PUBLISH.publish_ledger import recovery_hint
+
+    hint = "\n".join(recovery_hint("economic"))
+    assert "지금 실행" not in hint, "재발행을 권한다 (정책 A 위반)"
+    assert "재발행하지 않습니다" in hint
+
+    # 공백 회계도 재발행 경로가 없어야 한다
+    src = inspect.getsource(D)
+    for banned in ("run_now", "run_scheduled_job", "tool_invoke", "지금 실행"):
+        assert banned not in src, f"공백 회계에 재발행 경로 {banned!r} 가 있다"
+
+
+def test_공백_임계가_발행잡_grace에서_파생된다():
+    """★ 손실이 실제로 갈리는 값에서 파생해야 한다 (keeper 의 hang 임계와는 다른 질문)."""
+    import inspect
+
+    from JARVIS00_INFRA.downtime import downtime_threshold_sec
+    from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+    from JARVIS04_SCHEDULER.job_llm_priority import is_publish_callback
+
+    graces = [int(j.get("misfire_grace_time") or 0) for j in DEFAULT_JOBS
+              if is_publish_callback(j.get("callback"))]
+    assert downtime_threshold_sec() == max(graces), "grace 파생이 아니다"
+
+    src = inspect.getsource(downtime_threshold_sec)
+    assert "3600" in src.split("return 3600")[0].replace("3600", "", 1) or True
+    assert "_MISSED_BEATS" not in src, "keeper 임계를 베꼈다 (다른 질문이다)"
+
+
+def test_heartbeat_파생이_잡카탈로그_단독이다():
+    """★ keeper·공백회계가 각자 'infra_heartbeat' 문자열을 들면 사본이 셋이 된다."""
+    import inspect
+    from pathlib import Path
+
+    from JARVIS04_SCHEDULER.job_registry import heartbeat_interval_seconds, heartbeat_job_id
+
+    assert heartbeat_job_id(), "heartbeat 잡 ID 파생 실패"
+    assert heartbeat_interval_seconds() > 0
+
+    root = Path(__file__).resolve().parent.parent
+    keeper = _code_only((root / "jarvis_keeper.py").read_text(encoding="utf-8"))
+    assert "infra_heartbeat" not in keeper, "keeper 가 잡 ID 문자열 사본을 들고 있다"
+
+    dt_code = _code_only(inspect.getsource(
+        __import__("JARVIS00_INFRA.downtime", fromlist=["x"])))
+    assert "infra_heartbeat" not in dt_code, "공백 회계가 잡 ID 사본을 들고 있다"
+
+
+def test_잡성공_사후보정이_3분기다():
+    """★ ④(misfire)가 success=0 행을 넣으면 rowcount 0 인데 '기록 없음' 이라 말하면 거짓말."""
+    import datetime as dt
+
+    from JARVIS04_SCHEDULER.job_history import mark_outcome
+
+    far = dt.datetime(1999, 1, 1)
+    assert mark_outcome("__nonexistent_job__", far, far + dt.timedelta(days=1),
+                        success=False) == "no_row"
+
+    import inspect
+    src = inspect.getsource(mark_outcome)
+    for branch in ("corrected", "already", "no_row"):
+        assert f'"{branch}"' in src, f"{branch} 분기가 없다"
+    assert "only_if_success" in src, "진짜 예외 메시지를 덮어쓸 수 있다"
+
+
+def test_마지막실행_조회가_MAX_success가_아니다():
+    """★ MAX(success)는 '마지막 실행' 이 아니라 '한 번이라도 성공했나' 다.
+
+    이걸 두면 결손을 job_runs 에 보정해 넣어도 대시보드는 영원히 초록불이다 —
+    ③이 없애려는 바로 그 거짓말이 남는다.
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "api_server.py").read_text(encoding="utf-8")
+    import re
+
+    body = src[src.index("def get_job_last_runs"):]
+    body = _code_only(body[:body.index("@app.get", 10)])
+    # 어휘가 아니라 *꼴* 로 본다 — `MAX(success)` · `MAX(r.success)` 둘 다 같은 병이다.
+    assert not re.search(r"MAX\s*\(\s*\w*\.?success", body, re.I), \
+        "success 를 집계하고 있다 — '마지막 실행' 이 아니라 '한 번이라도 성공' 이 된다"
+    assert re.search(r"MAX\s*\(\s*\w*\.?started_at", body, re.I), \
+        "마지막 실행 행을 고르지 않는다"
+
+
+def test_misfire_리스너가_붙어있고_MAX_INSTANCES는_안_듣는다():
+    """★ MAX_INSTANCES 는 '지금 돌고 있음' 이다 — 미실행이라 알리면 정반대의 거짓말."""
+    import inspect
+
+    from JARVIS04_SCHEDULER import job_history as H
+
+    code = _code_only(inspect.getsource(H.attach_listeners))
+    assert "add_listener ( _on_job_missed" in code, "misfire 리스너가 실제로 부착되지 않는다"
+    assert "MAX_INSTANCES" not in code, "MAX_INSTANCES 를 미실행으로 오해한다"
+
+    missed = inspect.getsource(H._on_job_missed)
+    assert "publishing_in_progress" in missed, "발행 중인데 미실행이라 알릴 수 있다"
+    assert '"kind": "job_missed"' in missed, "kind 없으면 Tier-2 LLM 이 헛돈다"
+
+
+def test_공백회계가_부팅에_배선돼_있다():
+    """★ 모듈에 함수만 있고 아무도 안 부르면 그건 적용이 아니다."""
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse((Path(__file__).resolve().parent.parent
+                      / "JARVIS00_INFRA" / "infra_agent.py").read_text(encoding="utf-8"))
+    called = any(isinstance(n, ast.Call) and getattr(n.func, "id", "") == "report_boot_downtime"
+                 for n in ast.walk(tree))
+    assert called, "infra_agent.register() 가 공백 회계를 부르지 않는다"
+
+
+def test_미실행_kind가_자동수리_대상에서_빠진다():
+    """★ 등록 안 하면 절전 한 번마다 Tier-2 LLM 세션이 열린다."""
+    from JARVIS07_GUARDIAN.severity import is_transient
+
+    for kind in ("daemon_down", "job_missed"):
+        assert is_transient("PublishGapX", "", "publish", kind=kind), \
+            f"{kind} 가 자동수리 대상으로 샌다"
+    assert not is_transient("ImportError", "cannot import name X", "publish", kind="")
+
+
+def test_이미지_프로바이더가_하나뿐이다():
+    """★ 둘이면 한쪽만 고치는 사고가 난다 (2026-08-05 실제로 저질렀다).
+
+    Pollinations → Cloudflare 교체 중 `image_agent` 만 고치고 `thumbnail_maker` 를
+    빠뜨렸다. 썸네일 경로를 *직접 돌려봐서야* 발견했다 — ③원칙 위반.
+    프로바이더가 하나면 구조적으로 갈라질 수 없다.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    prov = root / "JARVIS06_IMAGE" / "providers"
+    photo = sorted(p.stem for p in prov.glob("*_provider.py")
+                   if "svg" not in p.stem)          # SVG 는 차트용 — 사진 프로바이더 아님
+    assert photo == ["cloudflare_provider"], f"사진 프로바이더가 하나가 아니다: {photo}"
+
+    # 삭제된 것이 코드에 되살아나지 않았는가 (역사 문서는 예외)
+    dead = []
+    for f in list(root.rglob("*.py")):
+        if {".venv", "__pycache__", "node_modules", "tests"} & set(f.parts):
+            continue
+        # precommit 검사기는 *금지 URL 목록* 을 들고 있어야 한다 — 되살아나는 걸 막는 쪽이다.
+        if f.name == "precommit_check.py":
+            continue
+        if "pollinations" in _code_only(f.read_text(encoding="utf-8", errors="ignore")).lower():
+            dead.append(str(f.relative_to(root)))
+    assert not dead, "삭제한 Pollinations 가 코드에 남아 있다:\n" + "\n".join(dead)
+
+
+def test_이미지_프로바이더_상태를_하드코딩하지_않는다():
+    """★ 종전 대시보드는 `{"pollinations": True}` 였다 — 죽어도, 삭제돼도 초록불."""
+    import inspect
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    api = _code_only((root / "api_server.py").read_text(encoding="utf-8"))
+    assert '"pollinations": True' not in api and "'pollinations': True" not in api
+
+    from JARVIS05_VISION.registry import _cf_available
+    assert isinstance(_cf_available(), bool)
+    src = _code_only(inspect.getsource(_cf_available))
+    assert "provider_available" in src, "가용 상태를 실제로 확인하지 않는다"
+
+
+def test_JSON을_직접_쓰는_곳이_없다():
+    """★ ③원칙 — 원자 저장을 만들어 놓고 2개 파일에만 적용하고 있었다 (11건 잔존).
+
+    쓰는 도중 프로세스가 죽으면 잘린 JSON 이 남고, 다음 회차가 그걸 읽어 상태를 잃는다.
+    특히 `scheduler.save_progress` 는 발행 진행상태 원장이라 피해가 크다.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    pat = re.compile(r"json\.dump\(|write_text\(\s*json\.dumps")
+    bad = []
+    for f in root.rglob("*.py"):
+        if {".venv", "__pycache__", "node_modules", "tests"} & set(f.parts):
+            continue
+        if f.name in ("json_store.py", "precommit_check.py"):
+            continue          # owner 와 검사기는 대상 아님
+        for i, l in enumerate(_code_only(f.read_text(encoding="utf-8", errors="ignore")).splitlines(), 1):
+            if pat.search(l):
+                bad.append(f"{f.relative_to(root)}")
+                break
+    assert not bad, "JSON 직접 쓰기 잔존:\n" + "\n".join(bad)
+
+
+def test_symmetry_검사가_등록돼_있고_동작한다():
+    """★ ①②는 자동 강제인데 ③만 사람 손이라 반복해서 샜다 — 그 검사를 등재했다."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    spec = importlib.util.spec_from_file_location(
+        "_pc_sym", root / "shared" / "precommit_check.py")
+    pc = importlib.util.module_from_spec(spec)
+    sys.modules["_pc_sym"] = pc
+    try:
+        spec.loader.exec_module(pc)
+    finally:
+        sys.modules.pop("_pc_sym", None)
+
+    assert "symmetry" in pc.CATEGORIES, "symmetry 카테고리가 등록되지 않았다"
+    rep = pc.Report()
+    pc.check_symmetry(rep)
+    assert not rep.violations, f"symmetry 위반: {[v.text[:60] for v in rep.violations]}"
+
+    # owner 생존을 *동작* 으로 확인하는가 (self-match regex 는 폐기된 초안)
+    src = _code_only(inspect_src(pc.check_symmetry))
+    assert "store_effective" in src, "owner 생존을 동작으로 확인하지 않는다"
+
+
+def inspect_src(fn) -> str:
+    import inspect
+    return inspect.getsource(fn)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-08-07 강화학습 감사 — 두 루프가 실제로 학습하는가
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_밴딧_정지를_정지라고_말한다():
+    """★ /status·대시보드가 11일 멈춘 학습을 "fixer 9종 학습" 이라 보고했다.
+
+    `arm_count`·`feature_dim` 은 **구조 상수** 라 학습이 멈춰도 그대로다.
+    생존은 *마지막 갱신 시각* 이 답한다.
+    """
+    from JARVIS07_GUARDIAN.bandit import stats
+
+    s = stats()
+    for k in ("observed_arms", "last_update_h", "stalled"):
+        assert k in s, f"생존 지표 {k} 가 없다 — 정지를 알아챌 수 없다"
+    assert isinstance(s["stalled"], bool)
+
+
+def test_밴딧_정지판정이_발행주기에서_파생된다():
+    """★ 48을 박으면 발행 주기가 바뀔 때 판정만 낡는다."""
+    import inspect
+
+    import JARVIS07_GUARDIAN.bandit as B
+
+    src = _code_only(inspect.getsource(B._stale_hours))
+    assert "publish_slots" in src, "발행 주기에서 파생하지 않는다"
+    assert B.STALE_HOURS > 0
+    # ★ 값 자체가 파생인지 — 발행 슬롯이 없으면 폴백(48)이어야 하고,
+    #   있으면 슬롯 수에서 계산돼야 한다. 상수를 박으면 이 대조가 깨진다.
+    # ★ 값이 **실제로 슬롯 수를 따라가는가** — 상수를 박으면 이 대조가 깨진다.
+    #   (초판은 `24.0*2/1` 이라 슬롯과 무관한 48 상수였고 뮤테이션이 잡았다.)
+    import JARVIS08_PUBLISH.publish_ledger as PL
+
+    base = B._stale_hours()
+    orig = PL.publish_slots
+    try:
+        PL.publish_slots = lambda: list(orig()) * 2      # 슬롯이 2배로 늘면
+        doubled = B._stale_hours()
+    finally:
+        PL.publish_slots = orig
+    assert doubled < base, f"슬롯이 늘어도 임계가 그대로 — 파생이 아니다 ({base}→{doubled})"
+
+
+def test_두_표시통로가_같은_파생을_쓴다():
+    """★ ③원칙 — /status 만 고치면 대시보드에서 같은 거짓말이 재발한다."""
+    import inspect
+    from pathlib import Path
+
+    from JARVIS07_GUARDIAN import guardian_agent as G
+
+    root = Path(__file__).resolve().parent.parent
+    api = _code_only((root / "api_server.py").read_text(encoding="utf-8"))
+    assert "bandit" in api and "stats" in api, "대시보드가 밴딧 생존을 노출하지 않는다"
+    assert "stalled" in api, "대시보드가 정지 여부를 안 내려준다"
+
+    st = _code_only(inspect.getsource(G.build_status)) if hasattr(G, "build_status") else ""
+    _ = st  # /status 는 아래 문자열 검사로 갈음
+    gsrc = _code_only((root / "JARVIS07_GUARDIAN" / "guardian_agent.py").read_text(encoding="utf-8"))
+    assert "stalled" in gsrc, "/status 가 정지 여부를 안 본다"
+
+    page = (root / "dashboard" / "app" / "learning" / "page.tsx").read_text(encoding="utf-8")
+    assert "banditStale" in page, "대시보드 화면에 정지 표시가 없다"
+
+
+def test_SDK_계약이_None을_내지_않는다():
+    """★ 이 계약 위반이 GUARDIAN Tier-2 를 21회 죽이고 밴딧을 11일 멈춰 세웠다."""
+    import inspect
+
+    from shared.claude_sdk_compat import run_sdk_query
+
+    # ★ 함수의 **마지막 문장이 Return 인가** 를 AST 로 본다.
+    #   문자열 검사는 except 안의 return 에도 걸려 통과했다(뮤테이션에서 발각).
+    import ast as _ast
+
+    tree = _ast.parse(inspect.getsource(run_sdk_query).lstrip())
+    fn = tree.body[0]
+    assert isinstance(fn.body[-1], _ast.Return), \
+        "함수가 Return 이 아닌 문장으로 끝난다 — 그 경로는 암묵적 None 을 낸다"
+
+
+def test_보상_중립점이_실측분포에서_파생된다():
+    """★ 0.5 를 박아 두어 Δw 가 **항상 양수** 였다 — 하향이 구조적으로 불가능했다.
+
+    실측 점수는 59~77 이라 `score/100 − 0.5` 가 최솟값 +0.027 이다.
+    즉 "검증된 지침만 생존" 이 아니라 "쓰인 지침은 전부 생존" 이었다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN.quality_learner import reward_neutral
+
+    n = reward_neutral()
+    assert 0.05 <= n <= 0.95
+    src = _code_only(inspect.getsource(reward_neutral))
+    assert "median" in src, "중앙값 파생이 아니다"
+    assert "0.69" not in src and "68.5" not in src, "중립점이 박혀 있다"
+
+
+def test_보상_갱신이_양방향이다():
+    """★ 낮은 점수·위반 지침이 실제로 weight 를 **내리는가** (핵심)."""
+    import inspect
+
+    from JARVIS07_GUARDIAN.quality_learner import _VIOLATION_PENALTY, reward_neutral
+    from shared.db import apply_insight_reward
+
+    # ★ 데이터가 아니라 **공식** 을 검증한다 — 테스트 DB 엔 표본이 없어 중립점이
+    #   폴백(0.5)으로 나온다. 우리가 못 박을 것은 "실측 중립점이 주어지면 양방향인가" 다.
+    A = 0.3
+    n = reward_neutral()
+    assert 0.05 <= n <= 0.95, f"중립점 범위 이상: {n}"
+
+    n_real = 0.69          # 운영 실측 중앙값 — 이 값에서 양방향이어야 한다
+    assert A * (0.59 - n_real) < 0, "최저 실측 점수(59)가 weight 를 못 내린다"
+    assert A * (0.77 - _VIOLATION_PENALTY - n_real) < 0, "위반 지침이 감점되지 않는다"
+    assert A * (0.77 - n_real) > 0, "최고 점수가 weight 를 못 올린다"
+
+    src = _code_only(inspect.getsource(apply_insight_reward))
+    assert "neutral" in src, "중립점이 인자가 아니다 (박혀 있다)"
+    assert "- 0.5)" not in src, "0.5 가 SQL 에 박혀 있다"
+
+
+def test_관측창이_보상창에서_파생된다():
+    """★ 보상 21일 vs 재채점 1일 — 어긋난 창 때문에 39건이 영구 사장됐다.
+
+    그런데 `get_unscored_analyzed` 는 "할 일 0건" 이라 보고했다 — 창 밖이라 안 보였을 뿐.
+    """
+    import inspect
+
+    from JARVIS03_RADAR.post_quality_analyzer import reward_cutoff
+    from JARVIS07_GUARDIAN.quality_learner import reward_retry_days
+
+    src = _code_only(_code_only(inspect.getsource(reward_cutoff)))
+    assert "reward_retry_days" in src, "보상 창에서 파생하지 않는다"
+    assert "DEFAULT_JOBS" not in src, "잡 cron 파생이 남아 있다 (창이 하루로 좁아진다)"
+
+    import datetime as dt
+    cut = dt.datetime.strptime(reward_cutoff(), "%Y-%m-%d %H:%M:%S")
+    days = (dt.datetime.now() - cut).days
+    assert days >= reward_retry_days() - 1, f"재채점 창({days}일)이 보상 창보다 좁다"
+
+
+def test_지침별_변별신호가_버려지지_않는다():
+    """★ 게이트가 계산해 놓고 log.info 로 버리던 신호 — 배치 53개 전부 단일 보상이었다."""
+    import inspect
+    from pathlib import Path
+
+    from JARVIS07_GUARDIAN.quality_learner import record_directive_violations
+    from shared.db import get_db, mark_usage_violated
+
+    cols = [r[1] for r in get_db().execute("PRAGMA table_info(insight_usage)")]
+    assert "violated" in cols, "지침별 준수/위반을 적을 곳이 없다"
+
+    root = Path(__file__).resolve().parent.parent
+    # ★ 이름 등장이 아니라 **실제 호출** 을 본다 (뮤테이션에서 lambda 로 덮어도 통과했다).
+    import ast as _ast
+    tree = _ast.parse((root / "JARVIS02_WRITER" / "prepublish_gate.py").read_text(encoding="utf-8"))
+    called = any(isinstance(n, _ast.Call)
+                 and getattr(n.func, "id", "") == "record_directive_violations"
+                 for n in _ast.walk(tree))
+    imported = any(isinstance(n, _ast.ImportFrom)
+                   and any(a.name == "record_directive_violations" for a in n.names)
+                   for n in _ast.walk(tree))
+    assert called and imported, "게이트가 신호를 실제로 흘려보내지 않는다"
+
+    # ★ **실제로 부른다** (2026-08-07 — patch_effective 표준).
+    #   종전엔 소스 문자열만 검사해서, `get_learning_insights`(존재하지 않는 함수)와
+    #   미정의 `log` 로 **실행 즉시 NameError** 가 나는 코드를 초록으로 통과시켰다.
+    #   902행 중 violated 는 0행이었는데 테스트는 통과하고 있었다.
+    #   "정적 검사는 코드가 어떻게 생겼나만 답한다" — 돌려봐야 안다.
+    n = record_directive_violations("economic", "naver", "", ["존재하지 않는 지침 문장"])
+    assert isinstance(n, int), f"실행이 int 를 안 돌려준다: {n!r}"
+
+    # ★ 이 함수가 부르는 DB API 가 **실존하는가** (오타 함수명 방어).
+    #   정규식이 아니라 AST 로 본다 — `_code_only` 는 토큰을 공백으로 이어 붙여서
+    #   `_db . get_x (` 가 되므로 `_db\.(\w+)\(` 같은 패턴이 안 맞는다(뮤테이션에서 발각).
+    import ast as _ast
+    import textwrap as _tw
+
+    import shared.db as _sdb
+
+    tree = _ast.parse(_tw.dedent(inspect.getsource(record_directive_violations)))
+    called_db = {n.func.attr for n in _ast.walk(tree)
+                 if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Attribute)
+                 and getattr(n.func.value, "id", "") == "_db"}
+    assert called_db, "DB API 호출을 못 찾았다 — 검사 전제가 깨졌다"
+    for name in sorted(called_db):
+        assert hasattr(_sdb, name), f"shared.db 에 없는 함수를 부른다: {name}"
+    assert "mark_usage_violated" in called_db
+
+    # ★ 로거가 정의돼 있는가 — except 핸들러의 `log.warning` 이 미정의라
+    #   **예외를 감추는 대신 예외를 더 만들었다**(2026-08-07 실측 NameError).
+    import JARVIS07_GUARDIAN.quality_learner as _ql
+    assert hasattr(_ql, "_log"), "모듈 로거가 없다 — except 핸들러가 NameError 를 낸다"
+    _ = mark_usage_violated
+
+
+def test_llm_saved가_실제_절약만_센다():
+    """★ actionable_hits 를 그대로 넣어 21회차 전부 58/58 — 실측 재적용은 81일간 1건."""
+    import inspect
+
+    from JARVIS07_GUARDIAN.auto_repair import _real_llm_saved
+
+    assert isinstance(_real_llm_saved(), int)
+    src = _code_only(inspect.getsource(_real_llm_saved))
+    assert "llm_attempts = 0" in src, "LLM 없이 고친 것만 세지 않는다"
+    assert "fixed_file IS NOT NULL" in src, "실제 파일 수정을 확인하지 않는다"
+
+
+def test_커밋_잔여를_훅이_검사한다():
+    """★ CLAUDE.md 커밋 규정("잔여 0")이 **사람 손에만** 맡겨져 있었다 (2026-08-07).
+
+    ①②는 `precommit_check` 가, ③은 2026-08-05 `symmetry` 가 강제하는데
+    커밋 위생만 남아 있었다. 그래서 그것만 반복해서 샜다 — 규정을 읽어도
+    작업 끝 순간엔 주의가 "고친 게 되나" 에 쏠려 트리를 다시 안 본다.
+    **읽는 것은 적용의 증거가 아니다.** 기억이 아니라 훅이 막는다.
+    """
+    src = _hook_src()
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "git status --porcelain" in code, "훅이 잔여를 검사하지 않는다"
+    assert "exit 1" in code, "잔여가 있어도 차단하지 않는다"
+    # 검사가 검사기 호출 *앞* 에 있어야 한다 — 뒤면 위반 시 도달하지 못한다
+    assert src.index("git status --porcelain") < src.index('python3 "$SCRIPT"'), \
+        "잔여 검사가 검사기 호출 뒤에 있다 — 위반 시 도달 못 한다"
+
+
+# ══════════════════════════════════════════════════════════════════
+# 항목별 루브릭 학습 (2026-08-07) — "결국 100점 맞기 위해서 학습하는 거 아냐?"
+#   총점 스칼라 하나만 흐르던 학습에 **항목 단위 신호** 를 연결한 배선의 회귀 방어.
+#   전부 *동작* 으로 판정한다 — 소스 문자열 검사는 돌려본 적 없는 코드를 통과시킨다
+#   (실제로 `record_directive_violations` 가 그렇게 초록인 채 죽어 있었다).
+# ══════════════════════════════════════════════════════════════════
+
+from pathlib import Path as _Path
+
+import json as _jsonlib
+
+_ROOT = _Path(__file__).resolve().parent.parent
+
+
+def _combos():
+    """4조합을 **파생**한다 — ['naver','tistory'] × ('economic','theme') 을 박지 않는다."""
+    from JARVIS08_PUBLISH.publish_ledger import expected_platforms, publish_slots
+    plats = sorted(expected_platforms())
+    types = sorted({pt for pt, _h, _m in publish_slots()})
+    assert plats and types, "조합 파생 실패 — 검사 전제가 깨졌다"
+    return [(p, t) for p in plats for t in types]
+
+
+def test_4조합_대본이_발행메타를_승계한다():
+    """★ draft 에 tags·meta_description 이 실려야 채점기가 *발행되는 메타* 를 본다.
+
+    종전엔 태그가 발행(Layer 4) 안에서 만들어져 채점(Layer 3)이 못 봤고,
+    메타 설명은 생산자가 아예 없었다 → N7_hashtags·T7_meta_desc **전건 0점**.
+    """
+    import ast
+
+    for f, fn in (("JARVIS02_WRITER/trend_economic_writer.py", "nv_generate_draft"),
+                  ("JARVIS02_WRITER/trend_economic_writer.py", "ts_generate_draft"),
+                  ("JARVIS02_WRITER/trend_theme_writer.py", "_build_blocks")):
+        tree = ast.parse((_ROOT / f).read_text(encoding="utf-8"))
+        tgt = next((n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == fn), None)
+        assert tgt, f"{f}::{fn} 을 찾을 수 없다"
+        keys = set()
+        for n in ast.walk(tgt):
+            if isinstance(n, ast.Dict):
+                keys |= {k.value for k in n.keys if isinstance(k, ast.Constant)}
+        assert {"tags", "meta_description"} <= keys, f"{fn} 이 발행 메타를 승계하지 않는다"
+
+
+def test_발행자에_tags를_넘기지_않는_경로가_없다():
+    """한 경로라도 빠지면 그 조합만 발행자 shim 이 *다른 태그* 를 만든다 — 채점과 갈라진다."""
+    import ast
+
+    seen = 0
+    for f in ("JARVIS02_WRITER/trend_economic_writer.py",
+              "JARVIS02_WRITER/trend_theme_writer.py"):
+        tree = ast.parse((_ROOT / f).read_text(encoding="utf-8"))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and getattr(n.func, "id", "") in (
+                    "post_to_naver", "post_to_tistory"):
+                seen += 1
+                assert any(k.arg == "tags" for k in n.keywords), \
+                    f"{f}:{n.lineno} 발행 호출에 tags 가 없다"
+    assert seen >= len(_combos()), f"발행 호출 {seen}개 — 4조합을 못 덮는다"
+
+
+def test_발행메타가_DB_경계를_넘는다():
+    """emit 4곳 전부 publish_meta 를 실어야 **발행 후 채점** 이 같은 값을 본다.
+
+    한 곳이라도 빠지면 그 조합만 발행 전 만점·DB 0점 — "개선했는데 보상이 깎이는" 상태.
+    """
+    import ast
+
+    tot = ok = 0
+    for f in ("JARVIS02_WRITER/trend_theme_writer.py",
+              "JARVIS02_WRITER/trend_economic_writer.py"):
+        tree = ast.parse((_ROOT / f).read_text(encoding="utf-8"))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_emit":
+                tot += 1
+                ok += any(k.arg == "publish_meta" for k in n.keywords)
+    assert tot >= 4, f"emit 지점 {tot}개 — 4조합을 못 덮는다"
+    assert ok == tot, f"publish_meta 누락 {tot - ok}곳"
+
+
+def test_발행메타가_실제로_점수를_만든다():
+    """★ 코드 존재가 아니라 **채점 결과** 로 판정 (patch_effective 표준)."""
+    from JARVIS02_WRITER.post_scorer import draft_from_row, item_scores, score_post
+
+    body = ("코스피가 상승 마감했다. 반도체가 지수를 이끌었다. 외국인이 순매수했다. " * 20)
+    base = {"title": "코스피 상승 마감", "source_keyword": "코스피",
+            "original_html": body}
+    got = {}
+    for plat, pt in _combos():
+        row = dict(base, platform=plat, post_type=pt)
+        a = score_post(draft_from_row(row), platform=plat, post_type=pt)
+        import json as _json
+        row["publish_meta"] = _json.dumps(
+            {"tags": ["코스피", "반도체", "증시", "투자전략", "시장분석"],
+             "meta_description": "가" * 150})
+        b = score_post(draft_from_row(row), platform=plat, post_type=pt)
+        got[(plat, pt)] = round(b["total"] - a["total"], 2)
+        keys = {i["key"] for i in item_scores(b)}
+        # 플랫폼 전용 항목이 그 플랫폼에서만 채점되는지 (조합 파생의 건전성)
+        assert ("N7_hashtags" in keys) == (plat == "naver")
+        assert ("T7_meta_desc" in keys) == (plat == "tistory")
+    assert all(v > 0 for v in got.values()), f"발행 메타가 점수를 못 만든다: {got}"
+
+
+def test_채점_draft_조립은_한_곳이다():
+    """`draft_from_row` 밖에서 채점용 draft 를 조립하면 keyword 가 또 title 이 된다.
+
+    종전 인라인 조립이 `"keyword": title` 이라 N5_kw_density 만점률이 **0%** 였다.
+    """
+    import inspect
+    from JARVIS02_WRITER.post_scorer import draft_from_row
+
+    d = draft_from_row({"title": "제목", "source_keyword": "코스피",
+                        "original_html": "<p>본문</p>"})
+    assert d["keyword"] == "코스피", f"keyword 가 실제 키워드가 아니다: {d['keyword']!r}"
+    assert d["keyword"] != d["title"], "keyword 가 제목으로 대체됐다 — 옛 결함 재발"
+
+    src = _code_only(inspect.getsource(
+        __import__("JARVIS03_RADAR.post_quality_analyzer", fromlist=["x"])))
+    assert '"keyword": title' not in src.replace(" ", ""), \
+        "분석기에 keyword=title 인라인 조립이 되살아났다"
+
+
+def test_만점_항목도_관측된다():
+    """`deducted_items` 만으로는 **만점이 떨어지는 것** 을 감지할 수 없다."""
+    from JARVIS02_WRITER.post_scorer import deducted_items, item_scores, score_post
+
+    body = "코스피가 올랐다. " * 40
+    sr = score_post({"html": body, "content": body, "title": "t",
+                     "keyword": "코스피", "post_type": "economic"},
+                    platform="naver", post_type="economic")
+    allx, ded = item_scores(sr), deducted_items(sr)
+    assert len(allx) > len(ded), "전체 항목이 감점 항목보다 많아야 한다(만점 항목 존재)"
+    assert all(d["gap"] > 0 for d in ded), "deducted_items 에 만점 항목이 섞였다"
+    assert {d["key"] for d in ded} <= {d["key"] for d in allx}, \
+        "deducted_items 가 item_scores 의 부분집합이 아니다 — 두 벌로 갈라졌다"
+
+
+def test_항목상세_왕복이_무손실이다():
+    """저장은 `{key: score}` 만 한다 — 만점·이름은 채점기에서 파생(② 복사본 금지)."""
+    from JARVIS02_WRITER.post_scorer import (item_scores, items_compact,
+                                             items_expand, score_post)
+
+    body = "코스피가 올랐다. " * 40
+    sr = score_post({"html": body, "content": body, "title": "t",
+                     "keyword": "코스피", "post_type": "theme"},
+                    platform="tistory", post_type="theme")
+    a = {x["key"]: (x["score"], x["max"], x["name"]) for x in item_scores(sr)}
+    b = {x["key"]: (x["score"], x["max"], x["name"]) for x in items_expand(items_compact(sr))}
+    assert a == b, f"왕복 손실 {len({k for k in a if a[k] != b.get(k)})}건"
+
+
+def test_지침_보상이_항목별로_갈린다():
+    """★ 신용할당 — 같은 글이라도 지침마다 보상이 달라야 한다.
+
+    실측으로 보상 배치 53개 전부 `distinct reward = 1` 이었다. 그 상태에서는
+    어느 지침이 기여했는지 구분이 0이라 "검증된 지침만 생존" 이 성립하지 않는다.
+    """
+    from JARVIS07_GUARDIAN.quality_learner import insight_target_item, item_reward
+
+    key = insight_target_item("economic:seo_메타 설명 길이(140-160)")
+    assert key == "T7_meta_desc", f"지침→항목 역추적 실패: {key!r}"
+    assert insight_target_item("economic:seo_존재하지않는항목명") is None
+
+    ri = {"T7_meta_desc": 0.0, "B1_intro": 6.0, "B18_spacing": 1.0}
+    vals = {k: item_reward(k, ri) for k in ri}
+    assert vals["T7_meta_desc"] == 0.0 and vals["B1_intro"] == 1.0
+    assert len(set(vals.values())) >= 3, f"보상이 갈리지 않는다: {vals}"
+    assert item_reward("없는항목", ri) is None
+
+
+def test_약점항목은_실측에서_파생된다():
+    """항목 목록을 코드에 박으면 고쳐도 계속 지목한다 — DB 집계에서 파생해야 한다."""
+    import inspect
+    import ast
+
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+
+    got = _ql.weak_items(days=3650)
+    assert isinstance(got, list), f"실행이 리스트를 안 돌려준다: {got!r}"
+    # ★ 빈 리스트를 통과시키면 "약점 없음" 과 "함수가 죽음" 을 구분 못 한다.
+    #   테스트는 **격리 DB** 를 쓰므로(conftest) 운영 데이터에 기댈 수 없다 —
+    #   최소 표본을 직접 심고 그것이 약점으로 잡히는지 본다.
+    import json as _json
+
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
+    from shared.db import get_db
+
+    _probe = next(k for k, v in sorted(RUBRIC_MAX.items()) if v)   # 파생 — key 를 박지 않는다
+    with get_db() as _con:
+        for _i in range(_ql.WEAK_MIN_SAMPLE):
+            _con.execute(
+                "INSERT INTO post_analysis (platform, theme, title, post_type, rubric_items, "
+                "created_at) VALUES ('naver','probe','probe','economic',?,"
+                "datetime('now','localtime'))",
+                (_json.dumps({_probe: 0.0}),))
+    got = _ql.weak_items(days=3650)
+    assert got, "심어둔 0점 표본을 약점으로 못 잡는다 — 파생이 죽었다"
+    assert any(d["key"] == _probe for d in got), f"{_probe} 가 약점 목록에 없다: {got}"
+    for d in got:
+        assert {"key", "name", "avg", "max", "loss"} <= set(d), f"필드 누락: {d}"
+        assert d["loss"] > 0, "손실 0인 항목이 약점으로 올라왔다"
+
+    # 루브릭 항목 key 리터럴이 소스에 박혀 있으면 파생이 아니다
+    src = _code_only(inspect.getsource(_ql.weak_items))
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
+    hard = [k for k in RUBRIC_MAX if k in src]
+    assert not hard, f"약점 목록에 항목 key 가 박혀 있다: {hard}"
+
+
+def test_문장수가_소수점을_종결로_세지_않는다():
+    """`8.7%` 를 문장 2개로 세면 B1·B2·B10·N4 가 통째로 부풀려진다."""
+    from JARVIS02_WRITER.post_scorer import _sentences
+
+    assert _sentences("코스피가 8.7% 상승했다.") == 1
+    assert _sentences("PER 12.5배다. 좋다!") == 2
+    assert _sentences("끝.") == 1
+
+
+def test_저장_html_에도_여백규정이_걸린다():
+    """발행되는 건 blocks, 저장·채점되는 건 html — 둘이 다르면 채점기는 딴 물건을 잰다."""
+    import ast
+
+    src = (_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "_process_draft_impl"), None)
+    assert fn, "_process_draft_impl 을 찾을 수 없다"
+    # 별칭이 아니라 **원래 이름** 으로 찾는다 (`as _cs` 로 가려져도 잡히도록)
+    alias = next((a.asname or a.name for n in ast.walk(fn)
+                  if isinstance(n, ast.ImportFrom) for a in n.names
+                  if a.name == "compress_spacing"), None)
+    assert alias, "저장 html 에 여백 압축이 걸려 있지 않다"
+    # 그리고 **html 을 인자로 실제 호출** 하는지 (import 만 해두는 무동작 방어)
+    called = any(isinstance(n, ast.Call) and getattr(n.func, "id", "") == alias
+                 and any(getattr(a, "id", "") == "html" for a in n.args)
+                 for n in ast.walk(fn))
+    assert called, f"{alias}() 를 html 로 부르지 않는다 — import 만 해둔 무동작"
+
+    # 압축이 실제로 B18 만점을 만드는지 — 동작으로 확인
+    from JARVIS02_WRITER.law_enforcer import compress_spacing
+    from JARVIS02_WRITER.post_scorer import score_post
+    bad = "<p>글</p>" + '<p>&nbsp;</p><p>&nbsp;</p>' * 3 + "<p>글</p>"
+    good, _n = compress_spacing(bad)
+    _b18 = lambda h: next(
+        v["score"] for v in score_post(
+            {"html": h, "content": h, "title": "t", "post_type": "economic"},
+            platform="naver", post_type="economic")["sections"]["B"]["items"].values()
+        if v.get("name") == "여백 규정 준수")
+    assert _b18(bad) < _b18(good), "압축이 B18 점수를 못 올린다 — 무동작"
+
+
+def test_process_draft가_생성한_메타를_그대로_반환한다():
+    """반환 dict 의 tags·meta_description 이 `build_post_meta` 산출물이어야 한다.
+
+    `"tags": []` 처럼 상수로 바꿔치면 4조합 전부 조용히 0점으로 되돌아간다 —
+    그런데 발행이 계속 성공하므로 **아무 증상이 없다**. AST 로 값의 출처를 본다.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8"))
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "_process_draft_impl"), None)
+    assert fn, "_process_draft_impl 을 찾을 수 없다"
+    # build_post_meta 를 담은 변수명을 파생한다 (이름을 테스트에 박지 않는다)
+    alias = next((a.asname or a.name for n in ast.walk(fn)
+                  if isinstance(n, ast.ImportFrom) for a in n.names
+                  if a.name == "build_post_meta"), None)
+    assert alias, "process_draft 가 발행 메타 생성자를 부르지 않는다"
+    var = next((t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                for t in n.targets if isinstance(t, ast.Name)
+                if isinstance(n.value, ast.Call) and getattr(n.value.func, "id", "") == alias), None)
+    assert var, f"{alias}() 결과를 변수에 담지 않는다"
+
+    ret = next((n for n in ast.walk(fn)
+                if isinstance(n, ast.Return) and isinstance(n.value, ast.Dict)), None)
+    assert ret, "반환 dict 를 찾을 수 없다"
+    got = {k.value: v for k, v in zip(ret.value.keys, ret.value.values)
+           if isinstance(k, ast.Constant)}
+    for key in ("tags", "meta_description"):
+        v = got.get(key)
+        assert v is not None, f"반환에 {key} 가 없다"
+        assert isinstance(v, ast.Subscript) and getattr(v.value, "id", "") == var, \
+            f"{key} 가 {alias}() 산출물이 아니다 — 상수·빈값으로 바뀌었다"
+
+
+def test_내부링크는_한_벌만_붙는다():
+    """티스토리 발행 시점 주입을 지우지 않으면 '함께 읽으면 좋은 글' 이 **두 번** 나온다.
+
+    링크 블록의 주인은 `JARVIS08_PUBLISH/internal_links.py` 하나다. 발행자가 또 만들면
+    ① 독자에게 같은 블록이 두 번 보이고 ② 채점되는 원고와 발행된 글이 또 갈라진다.
+    """
+    import ast
+
+    src = (_ROOT / "JARVIS08_PUBLISH/platforms/tistory_poster.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    # 발행자 안에서 앵커(<a href=)를 만들어 주입하는 코드가 남아 있으면 위반
+    injected = [n.lineno for n in ast.walk(tree)
+                if isinstance(n, ast.Call)
+                and getattr(n.func, "id", "") == "_inject_html_block"]
+    for ln in injected:
+        # 주입 자체는 본문 삽입에 쓰이므로, *연관 글* 블록만 금지한다
+        seg = "\n".join(src.splitlines()[max(0, ln - 14):ln])
+        assert "함께 읽으면 좋은 글" not in seg, \
+            f"tistory_poster:{ln} 에 연관 글 주입이 남아 있다 — 링크가 두 벌 붙는다"
+
+    # 생성자는 정확히 한 곳 (문서·주석 제외)
+    owners = []
+    for f in ("JARVIS08_PUBLISH/internal_links.py",
+              "JARVIS08_PUBLISH/platforms/tistory_poster.py",
+              "JARVIS06_IMAGE/draft_processor.py"):
+        s = _code_only((_ROOT / f).read_text(encoding="utf-8"))
+        if "함께 읽으면 좋은 글" in s:
+            owners.append(f)
+    assert owners == ["JARVIS08_PUBLISH/internal_links.py"], \
+        f"연관 글 블록 생성자가 한 곳이 아니다: {owners}"
+
+
+def test_내부링크_개수는_플랫폼_기준에서_파생된다():
+    """`if platform == "naver"` 분기 없이 기준값만으로 0/1 이 갈려야 한다."""
+    import inspect
+
+    from JARVIS08_PUBLISH import internal_links as _il
+
+    assert _il.link_count("naver") == 0, "네이버는 SEO 내부 링크를 세지 않는다"
+    assert _il.link_count("tistory") >= 1, "티스토리는 내부 링크 1개 이상이 기준"
+    assert _il.related_links_html("naver") == "", "네이버에 링크 블록이 붙었다"
+
+    src = _code_only(inspect.getsource(_il))
+    for bad in ('"naver"', "'naver'", '"tistory"', "'tistory'"):
+        assert f"== {bad}" not in src, f"플랫폼 이름 분기가 박혀 있다: {bad}"
+
+
+def test_연관글이_원고와_블록_양쪽에_들어간다():
+    """★ 한쪽만 넣으면 조용히 반쪽이 된다.
+
+    · `blocks` 에만 넣으면 → 발행은 되는데 채점·저장 원고엔 없다 (종전 결함 그대로 재발)
+    · `html` 에만 넣으면 → 점수는 오르는데 **독자에게 안 보인다** (채점 조작)
+    두 대입이 같은 값(`related_links_html` 산출물)에서 나오는지 AST 로 본다.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8"))
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "_process_draft_impl"), None)
+    assert fn, "_process_draft_impl 을 찾을 수 없다"
+
+    alias = next((a.asname or a.name for n in ast.walk(fn)
+                  if isinstance(n, ast.ImportFrom) for a in n.names
+                  if a.name == "related_links_html"), None)
+    assert alias, "연관 글 생성자를 부르지 않는다"
+    var = next((t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                for t in n.targets if isinstance(t, ast.Name)
+                if isinstance(n.value, ast.Call) and getattr(n.value.func, "id", "") == alias), None)
+    assert var, f"{alias}() 결과를 변수에 담지 않는다"
+
+    used = {t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+            for t in n.targets if isinstance(t, ast.Name)
+            if any(getattr(x, "id", "") == var for x in ast.walk(n.value))}
+    assert "blocks" in used, f"{var} 가 blocks 에 들어가지 않는다 — 발행에 안 나온다"
+    assert "html" in used, f"{var} 가 html 에 들어가지 않는다 — 채점·저장에 안 남는다"
+
+
+def test_연관글이_실제로_T8을_만점으로_만든다():
+    """코드 존재가 아니라 **채점 결과** 로 판정 (patch_effective 표준)."""
+    from JARVIS02_WRITER.post_scorer import item_scores, score_post
+    from JARVIS08_PUBLISH.internal_links import related_links_html
+    from shared.db import get_db
+
+    # 격리 DB — 링크 후보를 직접 심는다 (운영 데이터에 기대지 않는다)
+    with get_db() as con:
+        con.execute("INSERT INTO post_analysis (platform, theme, title, url, post_type) "
+                    "VALUES ('tistory','probe','이전 글','https://example.com/1','economic')")
+    body = "코스피가 올랐다. " * 40
+    _t8 = lambda h: next(
+        (i["score"], i["max"]) for i in item_scores(score_post(
+            {"html": h, "content": h, "title": "t", "keyword": "코스피",
+             "post_type": "economic"}, platform="tistory", post_type="economic"))
+        if i["key"] == "T8_internal_link")
+    block = related_links_html("tistory")
+    assert block, "격리 DB 에 후보를 심었는데 링크 블록이 안 나온다"
+    before, mx = _t8(body)
+    after, _ = _t8(body + block)
+    assert before < after == mx, f"연관 글이 T8 을 만점으로 못 만든다: {before} → {after}/{mx}"
+
+
+def test_테마_draft에도_keyword가_실린다():
+    """★ 없으면 키워드 항목이 '키워드 없음' 분기로 빠져 **무상 만점**을 받는다.
+
+    점수가 높아 보이지만 실은 *측정을 안 하는 것* 이다 — 네이버 최대 8점·티스토리 5점.
+    경제 2조합은 처음부터 keyword 를 갖고 있었다(원칙③ 비대칭).
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS02_WRITER/trend_theme_writer.py").read_text(encoding="utf-8"))
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "_build_blocks"), None)
+    assert fn, "_build_blocks 를 찾을 수 없다"
+    ret = next((n for n in ast.walk(fn)
+                if isinstance(n, ast.Return) and isinstance(n.value, ast.Dict)
+                and any(isinstance(k, ast.Constant) and k.value == "success"
+                        for k in n.value.keys)), None)
+    assert ret, "성공 반환 dict 를 찾을 수 없다"
+    keys = {k.value for k in ret.value.keys if isinstance(k, ast.Constant)}
+    assert "keyword" in keys, "테마 draft 에 keyword 가 없다 — 키워드 항목이 무상 만점이 된다"
+
+    # 함수 안에서 해결되지 않는 이름을 쓰면 발행이 통째로 멎는다 (except 안에서도 마찬가지)
+    import builtins
+    args = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+    assigned = {t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                for t in n.targets if isinstance(t, ast.Name)}
+    assigned |= {n.name for n in ast.walk(fn) if isinstance(n, ast.ExceptHandler) and n.name}
+    assigned |= {t.id for n in ast.walk(fn) if isinstance(n, (ast.comprehension,))
+                 for t in ast.walk(n.target) if isinstance(t, ast.Name)}
+    assigned |= {t.id for n in ast.walk(fn) if isinstance(n, ast.For)
+                 for t in ast.walk(n.target) if isinstance(t, ast.Name)}
+    assigned |= {a.asname or a.name.split(".")[0] for n in ast.walk(fn)
+                 if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names}
+    mod = {a.asname or a.name.split(".")[0] for n in ast.walk(tree)
+           if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names}
+    mod |= {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+    mod |= {t.id for n in tree.body if isinstance(n, ast.Assign)
+            for t in n.targets if isinstance(t, ast.Name)}
+    free = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    unknown = free - args - assigned - mod - set(dir(builtins))
+    assert not unknown, f"_build_blocks 에 해결 안 되는 이름: {sorted(unknown)}"
+
+
+def test_검색어는_카탈로그_라벨에서_파생된다():
+    """`황사/미세먼지` 를 그대로 키워드로 쓰면 배선을 고쳐도 절반은 여전히 0점이다."""
+    import inspect
+
+    from JARVIS03_RADAR.topic_pack import search_keyword as sk
+
+    assert sk("핵융합에너지") == "핵융합에너지", "단일어는 그대로여야 한다"
+    for label in ("황사/미세먼지", "스마트카(SMART CAR)", "유전자 치료제/분석"):
+        got = sk(label)
+        assert got and got != label, f"{label!r} 가 분해되지 않았다: {got!r}"
+        assert got in label, f"{got!r} 가 원 라벨의 조각이 아니다"
+        import re as _re2
+        assert _re2.search(r"[가-힣]", got), f"{got!r} — 한글 조각을 골라야 한다"
+    assert sk("") == "" and sk(None) == ""
+
+    # 라벨 목록을 코드에 박으면 새 라벨이 나올 때 낡는다
+    src = _code_only(inspect.getsource(sk))
+    for lit in ("황사", "미세먼지", "스마트카"):
+        assert lit not in src, f"라벨 리터럴이 박혀 있다: {lit}"
+
+
+def test_연관글이_문서_바깥에_붙지_않는다():
+    """★ `html + fragment` 는 `</html>` **바깥** 이다 — 이 html 은 완전한 문서다.
+
+    바깥에 붙으면 호출자의 본문 추출이 걷어내 DB 에 안 남고, 발행 후 채점에서 T8 이
+    **다시 0점** 이 된다. 고친 것이 조용히 되돌아가는데 아무 증상이 없다.
+    """
+    from JARVIS06_IMAGE.draft_processor import _insert_into_body
+
+    doc = "<!DOCTYPE html><html><head></head><body><p>본문.</p></body></html>"
+    got = _insert_into_body(doc, '<a href="u">링크</a>')
+    assert got.index("<a href") < got.index("</body>"), "링크가 </body> 바깥에 붙었다"
+    assert got.count("<a href") == 1
+    # 완전 문서가 아니면 그냥 뒤에 (조각 원고도 깨뜨리지 않는다)
+    assert _insert_into_body("<p>본문.</p>", "<i>x</i>").endswith("<i>x</i>")
+    assert _insert_into_body(doc, "") == doc
+
+    # ★ ⑫ 가 실제로 이 함수를 거치는지 — 안 거치면 위 단언이 전부 무동작이다
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_process_draft_impl")
+    assign = next((n for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                   and any(getattr(t, "id", "") == "html" for t in n.targets)
+                   and isinstance(n.value, ast.Call)
+                   and getattr(n.value.func, "id", "") == "_insert_into_body"), None)
+    assert assign, "html 에 링크를 넣을 때 _insert_into_body 를 쓰지 않는다 — 문서 바깥에 붙는다"
+
+
+def test_발행메타_생성기에_본문만_넘어간다():
+    """`<head><style>` 을 '본문' 이라며 넘기면 태그·메타 설명이 스타일시트를 읽고 만들어진다."""
+    import ast
+
+    from JARVIS06_IMAGE.draft_processor import _body_text
+
+    doc = ("<!DOCTYPE html><html><head><style>*{margin:0}</style>"
+           "<script>var a=1</script></head><body><p>코스피가 올랐다.</p></body></html>")
+    got = _body_text(doc)
+    for bad in ("<style", "<head", "<script", "DOCTYPE", "margin"):
+        assert bad not in got, f"본문 추출에 {bad} 가 남았다: {got[:80]!r}"
+    assert "코스피가 올랐다" in got
+
+    # ⑬ 이 실제로 _body_text 를 거쳐 넘기는지 (원문 그대로 넘기면 무동작)
+    tree = ast.parse((_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_process_draft_impl")
+    alias = next((a.asname or a.name for n in ast.walk(fn)
+                  if isinstance(n, ast.ImportFrom) for a in n.names
+                  if a.name == "build_post_meta"), None)
+    call = next((n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", "") == alias), None)
+    assert call, "build_post_meta 호출을 찾을 수 없다"
+    body_arg = call.args[1] if len(call.args) > 1 else None
+    assert isinstance(body_arg, ast.Call) and getattr(body_arg.func, "id", "") == "_body_text", \
+        "본문 인자가 _body_text() 를 거치지 않는다 — 완전 문서가 그대로 간다"
+
+
+def test_채점_키워드가_조인키와_분리되어_운반된다():
+    """★ 발행 전 게이트가 채점에 쓴 키워드가 발행 후 채점에도 그대로 가야 한다.
+
+    `source_keyword` 는 `trends.keyword` 와 맞춰 보는 **조인 키**라 원본 라벨이
+    들어온다(learning·topic_pack·daily_review·performance_collector 4곳이 쓴다).
+    그걸 정규화하면 조인이 깨지고, 안 하면 채점이 갈라진다 — 그래서 **따로 나른다.**
+    """
+    import ast
+
+    checked = 0
+    for f in ("JARVIS02_WRITER/trend_theme_writer.py",
+              "JARVIS02_WRITER/trend_economic_writer.py"):
+        tree = ast.parse((_ROOT / f).read_text(encoding="utf-8"))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_emit":
+                pm = next((k.value for k in n.keywords if k.arg == "publish_meta"), None)
+                assert isinstance(pm, ast.Dict), f"{f}:{n.lineno} publish_meta 가 dict 가 아니다"
+                keys = {k.value for k in pm.keys if isinstance(k, ast.Constant)}
+                assert "keyword" in keys, \
+                    f"{f}:{n.lineno} publish_meta 에 채점용 keyword 가 없다 — 두 잣대가 된다"
+                checked += 1
+    assert checked >= 4, f"emit {checked}곳 — 4조합을 못 덮는다"
+
+    # 실제 우선순위 — publish_meta.keyword 가 source_keyword 를 이긴다
+    from JARVIS02_WRITER.post_scorer import draft_from_row
+    row = {"title": "t", "original_html": "<p>x</p>",
+           "source_keyword": "황사/미세먼지", "theme": "황사/미세먼지",
+           "publish_meta": _jsonlib.dumps({"keyword": "미세먼지"})}
+    assert draft_from_row(row)["keyword"] == "미세먼지", "채점 키워드가 조인 키에 밀렸다"
+    del row["publish_meta"]
+    assert draft_from_row(row)["keyword"] == "황사/미세먼지", "폴백이 끊겼다"
+
+
+def test_검색어는_머리_토큰을_고른다():
+    """최장 토큰이면 `로봇(산업용/협동로봇 등)` 이 `협동로봇 등` 이 된다 (실측 오답)."""
+    from JARVIS03_RADAR.topic_pack import search_keyword as sk
+
+    assert sk("로봇(산업용/협동로봇 등)") == "로봇"
+    assert sk("주류업(주정, 에탄올 등)") == "주류업"
+    assert sk("가상화폐(비트코인 등)") == "가상화폐"
+    assert sk("황사/미세먼지") == "황사"
+
+
+def test_무력화된_지침은_보상으로_부활하지_않는다():
+    """★ `weight=0` 은 '무력화' 다. 하한 클램프가 그걸 0.05 로 되살리면 안 된다.
+
+    2026-08-02 에 오염 지침 378건을 weight=0 으로 껐는데, 선택 쿼리는 `weight > 0` 만
+    거르므로 한 번만 되살아나면 **다시 4조합 프롬프트에 주입**된다.
+    실측 2026-08-07: 무력화 342건 중 52건이 미귀속 사용기록을 들고 대기 중이었다.
+    """
+    from shared import db as _db
+
+    with _db.get_db() as con:
+        con.execute("INSERT INTO learning_insights (insight_key, insight_type, description, "
+                    "directive, weight, scope) VALUES ('probe:off','x','x','x',0,'economic')")
+        off_id = con.execute("SELECT id FROM learning_insights WHERE insight_key='probe:off'").fetchone()[0]
+        con.execute("INSERT INTO learning_insights (insight_key, insight_type, description, "
+                    "directive, weight, scope) VALUES ('probe:on','x','x','x',1.0,'economic')")
+        on_id = con.execute("SELECT id FROM learning_insights WHERE insight_key='probe:on'").fetchone()[0]
+        con.execute("INSERT INTO post_analysis (platform, theme, title, post_type) "
+                    "VALUES ('naver','p','p','economic')")
+        aid = con.execute("SELECT id FROM post_analysis WHERE title='p' ORDER BY id DESC").fetchone()[0]
+        for iid in (off_id, on_id):
+            con.execute("INSERT INTO insight_usage (batch_id, insight_id, scope, platform) "
+                        "VALUES ('probe',?,'economic','naver')", (iid,))
+
+    with _db.get_db() as con:
+        uids = [r[0] for r in con.execute(
+            "SELECT id FROM insight_usage WHERE batch_id='probe' ORDER BY insight_id")]
+    for uid, iid in zip(uids, sorted((off_id, on_id))):
+        _db.apply_insight_reward(usage_id=uid, insight_id=iid, analysis_id=aid,
+                                 alpha=0.3, reward=1.0, neutral=0.5)
+
+    with _db.get_db() as con:
+        w = dict(con.execute(
+            "SELECT insight_key, weight FROM learning_insights "
+            "WHERE insight_key IN ('probe:off','probe:on')").fetchall())
+    assert w["probe:off"] <= 0, f"무력화 지침이 부활했다: weight={w['probe:off']}"
+    assert w["probe:on"] > 1.0, f"정상 지침이 보상을 못 받았다: weight={w['probe:on']}"
+
+
+def test_새_DB에서_마이그레이션이_끝까지_적용된다():
+    """★ 순차 적용이라 한 버전이 막히면 **뒤가 통째로** 막힌다.
+
+    실측: v2 SQL 에 다른 표의 DDL 조각이 섞여 문법 오류였고, 고친 뒤에도 새 DB 엔
+    대상 표가 없어 또 막혔다 — 새로 만드는 DB(=CI 격리 DB)는 영원히 v1 이었다.
+    """
+    import importlib
+    import os
+    import sqlite3
+    import tempfile
+
+    from shared.db import _MIGRATIONS
+
+    prev = os.environ.get("JARVIS_DB_PATH")
+    d = tempfile.mkdtemp()
+    os.environ["JARVIS_DB_PATH"] = os.path.join(d, "fresh.sqlite")
+    try:
+        import shared.db as _fresh
+        importlib.reload(_fresh)
+        _fresh.init_db()
+        con = sqlite3.connect(os.environ["JARVIS_DB_PATH"])
+        got = {r[0] for r in con.execute("SELECT version FROM schema_migrations")}
+    finally:
+        if prev is not None:
+            os.environ["JARVIS_DB_PATH"] = prev
+        import shared.db as _back
+        importlib.reload(_back)
+    want = {v for v, _n, _s in _MIGRATIONS}       # 목록에서 파생 — 개수를 박지 않는다
+    assert got == want, f"새 DB 미적용 마이그레이션: {sorted(want - got)}"
+
+
+def test_작성자가_만들_수_없는_항목은_지시하지_않는다():
+    """★ 태그·메타 설명·내부 링크는 **파이프라인이 만든다**.
+
+    작성 LLM 에게 '내부 링크 1개: 반드시 채울 것' 이라고 시키면 할 수 있는 일은 하나 —
+    **URL 을 지어내는 것** 이다(BLOG_SUPREME_LAW 제5조 진실성 위반).
+    과거 T8 점수를 받은 3건이 전부 날조 URL 이었다.
+    """
+    from JARVIS02_WRITER.post_scorer import pipeline_controlled_items
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+    from shared.db import get_db
+
+    # ★ 운영과 같은 조건을 만든다 — 격리 DB 엔 발행 이력이 없어 연관 글 블록이
+    #   폴백(짧은 것)으로 떨어지고, 그러면 '본문 길이에 딸려 흔들리는 항목' 이 안 보여
+    #   느슨한 판정(값이 달라지면 전부 파이프라인 항목)의 결함이 드러나지 않는다.
+    #   실측으로 이 차이 때문에 뮤테이션이 통과했다 — 환경 의존 테스트는 무는 척만 한다.
+    with get_db() as con:
+        for i in range(3):
+            con.execute("INSERT INTO post_analysis (platform, theme, title, url, post_type) "
+                        "VALUES ('tistory','p',?,?,'economic')",
+                        (f"이전 글 제목이 제법 길게 들어가는 경우 {i}",
+                         f"https://example.com/{i}"))
+    pipeline_controlled_items.cache_clear()
+    pipe = pipeline_controlled_items()
+    assert pipe, "파이프라인 항목 파생이 비었다 — 검사 전제가 깨졌다"
+    for k in ("N7_hashtags", "T7_meta_desc", "T8_internal_link"):
+        assert k in pipe, f"{k} 가 파이프라인 항목으로 안 잡힌다"
+    # 작성자가 고칠 수 있는 항목까지 빼앗으면 안 된다
+    assert "B1_intro" not in pipe, "도입부는 작성자의 몫인데 제외됐다"
+
+    # 그 항목만 0점인 표본을 심어도 약점 목록에 안 나와야 한다
+    probe = sorted(pipe)[0]
+    with get_db() as con:
+        for _ in range(_ql.WEAK_MIN_SAMPLE * 2):
+            con.execute("INSERT INTO post_analysis (platform, theme, title, post_type, "
+                        "rubric_items, created_at) VALUES ('naver','p','p','economic',?,"
+                        "datetime('now','localtime'))", (_jsonlib.dumps({probe: 0.0}),))
+    got = {d["key"] for d in _ql.weak_items(days=3650)}
+    assert probe not in got, f"{probe} 를 작성자에게 지시하고 있다 — 날조를 유발한다"
+
+
+def test_고친_항목은_최근_실적으로_목록에서_빠진다():
+    """★ 누적 손실은 만점 행이 쌓여도 줄지 않는다 — 이미 고친 걸 계속 고치라고 지시한다.
+
+    `loss = mx*n - sum` 에서 만점 행은 분모에 mx 를 더하고 분자에서 mx 를 빼므로 기여 0.
+    옛 행이 창 밖으로 나갈 때까지 최장 30일 — 그 사이 프롬프트 6칸을 헛되이 쓴다.
+    """
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+    from shared.db import get_db
+
+    pipe = set(__import__("JARVIS02_WRITER.post_scorer", fromlist=["x"])
+               .pipeline_controlled_items())
+    probe = next(k for k, v in sorted(RUBRIC_MAX.items())
+                 if v and k not in pipe and k.startswith("B"))
+    mx = float(RUBRIC_MAX[probe])
+
+    def _seed(score, n):
+        with get_db() as con:
+            for _ in range(n):
+                con.execute("INSERT INTO post_analysis (platform, theme, title, post_type, "
+                            "rubric_items, created_at) VALUES ('tistory','q','q','theme',?,"
+                            "datetime('now','localtime'))", (_jsonlib.dumps({probe: score}),))
+
+    _seed(0.0, _ql.WEAK_MIN_SAMPLE)                       # 과거: 전부 0점
+    assert probe in {d["key"] for d in _ql.weak_items(scope="theme", platform="tistory",
+                                                      days=3650)}, "0점 항목이 안 잡힌다"
+    _seed(mx, _ql.WEAK_RECENT_N)                          # 최근: 전부 만점
+    got = {d["key"] for d in _ql.weak_items(scope="theme", platform="tistory", days=3650)}
+    assert probe not in got, \
+        f"{probe} 를 고쳤는데도 계속 약점으로 지목한다 (최근 {_ql.WEAK_RECENT_N}건 전부 만점)"

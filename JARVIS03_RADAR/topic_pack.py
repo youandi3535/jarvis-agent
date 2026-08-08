@@ -16,6 +16,7 @@ import 방향: 02→03(소비) 단방향. 03은 02를 import 하지 않는다 (�
 from __future__ import annotations
 
 import json
+import re as _re
 import logging
 import os
 from datetime import date, datetime, timedelta
@@ -410,6 +411,42 @@ def pick_slot_candidate(exclude_keyword: str = "", force_env: str = "") -> dict 
     return pick_candidate(exclude_keyword=exclude_keyword)
 
 
+# 라벨 구분자 — 카탈로그 라벨은 사람이 읽으라고 만든 것이라 이런 기호가 섞인다.
+#   ★ 목록을 여러 곳에 적지 않는다. 이 정규식이 유일한 정의다(①).
+_LABEL_SEP = _re.compile(r"[/·,()\[\]{}|]|\s[-–—]\s")
+
+
+def search_keyword(label: str) -> str:
+    """카탈로그 라벨 → **본문에 실제로 등장할 수 있는 검색어** (2026-08-07 신설).
+
+    ★ 왜 필요했나 (③ 4조합 — 테마 2조합이 여기서 통째로 죽고 있었다)
+      네이버 금융 테마 라벨은 `황사/미세먼지` · `스마트카(SMART CAR)` ·
+      `유전자 치료제/분석` 처럼 **사람이 읽으라고 만든 복합 표기**다. 이런 문자열이
+      한국어 산문에 *통째로* 나오는 일은 없다. 그런데 채점기는 키워드가 본문에 몇 번
+      나오는지(N6)·밀도가 얼마인지(N5)·헤더에 있는지(T6)를 그 라벨 그대로 찾는다.
+      → 라벨을 그대로 키워드로 쓰면 배선을 고쳐도 **절반은 여전히 0점**이다.
+      실측: 최근 테마 12개 중 5개가 `/` 또는 `(` 를 포함한다.
+
+    ★ 왜 '머리 토큰' 인가 (최장 토큰이 아니다)
+      한국어 카탈로그 라벨은 **대표어를 앞에 두고 뒤에 부연을 단다**.
+      `로봇(산업용/협동로봇 등)` 의 대표어는 `로봇` 이지 가장 긴 `협동로봇 등` 이 아니다.
+      (초판은 최장 토큰이었고 실측에서 바로 이 라벨에 걸렸다.)
+      영문 병기는 한글 조각이 있으면 버린다 — 본문은 한국어로 쓰인다.
+      꼬리의 `등`·`외` 같은 열거 표시는 검색어가 아니므로 떼어낸다.
+
+    라벨이 이미 단일어면 그대로 돌려준다 (`핵융합에너지` → `핵융합에너지`).
+    """
+    s = (label or "").strip()
+    if not s:
+        return ""
+    parts = [p.strip() for p in _LABEL_SEP.split(s) if p and p.strip()]
+    if not parts:
+        return s
+    ko = [p for p in parts if _re.search(r"[가-힣]", p)]
+    head = (ko or parts)[0]
+    return _re.sub(r"\s*(등|외|관련)\s*$", "", head).strip() or head
+
+
 def keyword_profile(keyword: str, sector: str = "") -> dict:
     """★ 키워드 단독 전송 금지 규정용 공용 헬퍼 (사용자 박제 2026-07-03 — 강제).
 
@@ -451,5 +488,6 @@ def build_for_keyword(keyword: str, sector: str = "", reason: str = "") -> dict:
     return cand
 
 
-__all__ = ["build_topic_pack", "load_topic_pack", "pick_candidate",
+__all__ = ["search_keyword",
+           "build_topic_pack", "load_topic_pack", "pick_candidate",
            "pick_slot_candidate", "build_for_keyword", "keyword_profile"]

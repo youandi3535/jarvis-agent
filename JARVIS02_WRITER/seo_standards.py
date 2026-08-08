@@ -134,7 +134,7 @@ def heading_plan(platform: str) -> dict:
         sec_lvl, sec_min, sec_max = 2, 3, 5
     return {
         "section_tag": f"h{sec_lvl}",
-        "h1_required": found.get(1, (0, 0))[1] > 0,
+        "h1_required": (found.get(1) or (0, 0))[1] > 0,
         "sec_min": sec_min,
         "sec_max": sec_max,
         "source": raw,
