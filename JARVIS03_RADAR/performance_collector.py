@@ -137,101 +137,98 @@ def _collect_naver_rank(keyword: str, post_url: str) -> int | None:
 # 네이버 블로그 조회수 수집
 # ─────────────────────────────────────────────────────────────
 
-def _collect_naver_views(url: str) -> int:
+# ─────────────────────────────────────────────────────────────
+# 네이버 글별 조회수 — 관리자 통계 (2026-08-08)
+# ─────────────────────────────────────────────────────────────
+#
+# ★ 공개 페이지 스크래핑은 **원리적으로 불가능** 하다 (실측 2026-08-08)
+#   `m.blog.naver.com` 응답 10만자 안에 `조회`·`visitorCount`·`viewCount` 가 **각 0회**.
+#   네이버는 공개 페이지에 조회수를 노출하지 않는다 — 패턴을 고쳐도 없는 값은 못 찾는다.
+#   (그래서 종전 `_collect_naver_views` 는 "패턴 8개 모두 매칭 실패" 를 반복했고,
+#    `post_analysis.current_views` 가 네이버 107편 중 2편만 >0 이었다.)
+#
+# ★ 진짜 경로는 로그인 후 **관리자 통계 도메인** 이다.
+#   추측으로 찾은 게 아니라 통계 화면의 링크를 그대로 따라갔다:
+#       admin.blog.naver.com/{uid}/stat/today  →  iframe  →
+#       blog.stat.naver.com/blog/article/{logNo}/cv
+#   그 페이지에 `날짜 조회수` 표가 있고 `2026.08.05. (수) 7` 형태로 **일별** 값이 온다.
+#
+# ★ 브라우저를 글마다 띄우지 않는다 — 한 번 띄워 전부 순회한다(티스토리 배치와 같은 형태).
+_NAVER_STAT_URL = "https://blog.stat.naver.com/blog/article/{log_no}/cv"
+_NV_DAILY_ROW = re.compile(r"^\s*\d{4}\.\d{2}\.\d{2}\.\s*\([월화수목금토일]\)\s*([\d,]+)\s*$", re.M)
+_NV_BATCH_CACHE: dict[str, int] = {}
+
+
+def _naver_log_no(url: str) -> str:
+    """URL → logNo. 못 찾으면 빈 문자열."""
+    for pat in (r"blog\.naver\.com/[^/]+/(\d{6,})", r"logNo=(\d{6,})"):
+        m = re.search(pat, url or "")
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _collect_naver_stats_batch(urls: list) -> dict:
+    """네이버 글별 조회수 일괄 수집 — {logNo: 조회수}. 실패 시 빈 dict.
+
+    ★ 레이블로 판정한다, 위치로 하지 않는다
+      통계 페이지엔 조회수·공감수·댓글수가 섞여 나온다. "숫자 N번째" 로 집으면
+      네이버가 항목 하나만 추가해도 조용히 엉뚱한 값을 학습에 넣게 된다.
+      `날짜 조회수` 표의 **행 꼴**(`YYYY.MM.DD. (요일) 숫자`)만 취해 합산한다.
     """
-    네이버 블로그 포스트 조회수 스크래핑.
-    URL 예: https://blog.naver.com/{blogId}/{logNo}
-    반환: 조회수 (실패 시 0)
-    """
+    log_nos = [n for n in (_naver_log_no(u) for u in urls) if n]
+    if not log_nos:
+        return {}
+    drv = None
+    out: dict = {}
     try:
-        # logNo 추출
-        m = re.search(r'blog\.naver\.com/[^/]+/(\d+)', url)
-        if not m:
-            m = re.search(r'logNo=(\d+)', url)
-        if not m:
-            print(f"  [네이버] logNo 파악 불가: {url}")
-            return 0
-
-        log_no  = m.group(1)
-        # ★ ERRORS [145] LOGIN_SUPREME_LAW 위임
-        from JARVIS08_PUBLISH.credentials.login_manager import get_naver_user
-        blog_id = get_naver_user()
-        if not blog_id:
-            return 0
-
-        # 네이버 블로그 모바일 페이지 — 조회수 파싱 용이
-        api_url = (
-            f"https://blog.naver.com/PostView.naver"
-            f"?blogId={blog_id}&logNo={log_no}&redirect=Dlog"
-        )
-        # 다중 URL 시도: PostView (PC) → m.blog (모바일) → 일반 desktop
-        candidate_urls = [
-            api_url,
-            f"https://m.blog.naver.com/{blog_id}/{log_no}",
-            f"https://blog.naver.com/{blog_id}/{log_no}",
-        ]
-        html = ""
-        for try_url in candidate_urls:
+        from JARVIS08_PUBLISH.credentials.login_manager import get_naver_cookies
+        from JARVIS08_PUBLISH.platforms.naver_poster import _get_driver
+        drv = _get_driver()
+        drv.set_page_load_timeout(40)
+        drv.get("https://www.naver.com")
+        time.sleep(1)
+        for c in (get_naver_cookies() or []):
             try:
-                resp = requests.get(try_url, headers=_HEADERS, timeout=15)
-                if resp.status_code == 200 and len(resp.text) > 1000:
-                    html = resp.text
-                    break
+                drv.add_cookie({"name": c["name"], "value": c["value"],
+                                "domain": c.get("domain") or ".naver.com",
+                                "path": c.get("path", "/")})
             except Exception:
-                continue
-
-        if not html:
-            print(f"  [네이버] 모든 URL 응답 실패")
-            return 0
-
-        # 패턴 풀 — '조회/뷰' 관련 컨텍스트가 있는 마크업만 신뢰 (2026-05-04 정밀화)
-        # 일반적 cnt/pcol2/viewCount 단독 매칭은 연도(2026) 오인 위험 → 제거
-        # 각 패턴은 *조회수임이 명백한* 컨텍스트 (조회/view-count/visitorCount/inflowCount) 필수
-        patterns = [
-            ("se_viewCount",    r'se_viewCount[^>]*>[^<]*<em[^>]*>([0-9,]+)</em>'),
-            ("조회 라벨인접",    r'조회\s*</?[^>]*>\s*<[^>]+>\s*([\d,]+)'),
-            ("조회 직후 숫자",  r'조회수?\s*[:：]?\s*([\d,]+)\s*(?:회|명|view)'),
-            ("inflowCount",     r'inflowCount["\']?\s*[:=]\s*["\']?(\d+)'),
-            ("visitorCount",    r'visitorCount["\']?\s*[:=]\s*["\']?(\d+)'),
-            ("data-view-count", r'data-view-count\s*=\s*["\'](\d+)'),
-            ("post-views",      r'class="[^"]*post-views?[-_]count[^"]*"[^>]*>\s*([\d,]+)'),
-            ("viewCount JSON",  r'"viewCount"\s*:\s*(\d+)'),  # 마지막 — 가장 일반적이라 후순위
-        ]
-
-        # 연도 오인 가드: 1900~2099 범위의 4자리이면서 컨텍스트가 약하면 skip
-        def _is_year_like(v: int, pattern_name: str) -> bool:
-            if 1900 <= v <= 2099 and pattern_name in ("viewCount JSON", "조회 직후 숫자"):
-                return True
-            return False
-
-        for name, pat in patterns:
-            m = re.search(pat, html)
-            if m:
-                raw = m.group(1).replace(",", "")
-                views = int(raw)
-                if views <= 0:
-                    continue
-                if _is_year_like(views, name):
-                    print(f"  [네이버] '{name}' 패턴이 {views} 잡았으나 연도 의심 — skip")
-                    continue
-                # 정상 인식 — 어느 패턴이 잡았는지 명시
-                print(f"  [네이버] 조회수: {views:,}회 (패턴: {name})")
-                return views
-
-        # 모든 패턴 실패
-        print(f"  [네이버] 패턴 8개 모두 매칭 실패 (응답 길이 {len(html)}자)")
-
-    except Exception as e:
-        print(f"  [네이버] 조회수 수집 오류: {e}")
-        _g_report("radar", e, module=__name__)
-    return 0
+                pass
+        for log_no in log_nos:
+            try:
+                drv.get(_NAVER_STAT_URL.format(log_no=log_no))
+                time.sleep(3)
+                text = drv.find_element("tag name", "body").text or ""
+                if "조회수" not in text:
+                    continue          # 로그인 만료·페이지 변경 — 0 으로 단정하지 않는다
+                vals = [int(v.replace(",", "")) for v in _NV_DAILY_ROW.findall(text)]
+                if vals:
+                    out[log_no] = sum(vals)
+            except Exception as e:      # noqa: BLE001 — 한 건 실패가 배치를 깨지 않는다
+                print(f"  [네이버] logNo={log_no} 통계 실패: {type(e).__name__}")
+    except Exception as e:              # noqa: BLE001
+        print(f"  [네이버] 통계 배치 실패: {type(e).__name__}: {e}")
+    finally:
+        if drv is not None:
+            try:
+                drv.quit()
+            except Exception:
+                pass
+    return out
 
 
-# ─────────────────────────────────────────────────────────────
-# 티스토리 조회수 수집
-# ─────────────────────────────────────────────────────────────
+def _collect_naver_views(url: str) -> int:
+    """네이버 글 조회수 — 배치 캐시에서 조회. 없으면 0.
 
-# ── 티스토리 관리자 배치 수집 캐시 (collect_all() 1회 run 동안 유효) ──────
+    ★ 배치가 먼저 채운다(`collect_all` 이 호출). 캐시에 없으면 **0 을 돌려주되
+      그건 '미수집' 이지 '조회 0' 이 아니다** — 학습 쪽(`build_target`)이
+      관측/결측을 구분하므로 여기서 거짓 0 을 만들지 않는 것이 중요하다.
+    """
+    log_no = _naver_log_no(url)
+    return int(_NV_BATCH_CACHE.get(log_no, 0)) if log_no else 0
+
+
 _TS_BATCH_CACHE: dict[str, int] = {}
 
 
@@ -472,8 +469,9 @@ def collect_all(today_only: bool = False) -> dict:
     모든 발행 글 조회수 수집 → DB 업데이트 → 키워드 학습 반영.
     반환: {"updated": N, "total": M, "by_platform": {...}}
     """
-    global _TS_BATCH_CACHE
+    global _TS_BATCH_CACHE, _NV_BATCH_CACHE
     _TS_BATCH_CACHE = {}  # 매 실행마다 캐시 초기화
+    _NV_BATCH_CACHE = {}
 
     posts = db.get_posts_for_view_collection()
     if today_only:
@@ -483,6 +481,14 @@ def collect_all(today_only: bool = False) -> dict:
     # 티스토리 글이 있으면 관리자 배치 수집 선행 (N+1 HTTP 요청 방지)
     if any(p.get("platform") == "tistory" for p in posts):
         _TS_BATCH_CACHE = _collect_tistory_stats_batch()
+
+    # ★ 네이버도 같은 형태 — 브라우저를 글마다 띄우지 않는다 (2026-08-08).
+    #   공개 페이지엔 조회수가 없어(실측) 관리자 통계로만 얻을 수 있고, 그건 로그인
+    #   세션이 필요하다. 한 번 띄워 전부 순회한 뒤 닫는다.
+    _nv_urls = [p.get("url", "") for p in posts if p.get("platform") == "naver"]
+    if _nv_urls:
+        _NV_BATCH_CACHE = _collect_naver_stats_batch(_nv_urls)
+        print(f"  [네이버] 통계 배치: {len(_NV_BATCH_CACHE)}/{len(_nv_urls)}건 수집")
 
     try:
         from JARVIS00_INFRA.watchdog import beat as _wd_beat

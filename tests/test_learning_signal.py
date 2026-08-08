@@ -240,3 +240,61 @@ def test_폴백_경로에도_학습지침이_주입된다(monkeypatch):
     monkeypatch.setattr(dw, "_load_learn_insights", lambda *a, **k: MARK)
     msg = dw._build_section_system_msg("[헌법]", "tistory")
     assert MARK in msg, "폴백 공통 system 에 학습 지침이 실리지 않는다"
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑧ 네이버 글별 조회수 — 관리자 통계 (2026-08-08)
+# ══════════════════════════════════════════════════════════════════
+def test_공개페이지_스크래핑으로_돌아가지_않는다():
+    """★ 공개 페이지엔 조회수가 **없다** — 실측: m.blog 응답 10만자 안에
+    `조회`·`visitorCount`·`viewCount` 각 **0회**. 패턴을 고쳐도 없는 값은 못 찾는다.
+    ERRORS 가 두 번 기각한 길이므로 되돌아가면 안 된다.
+    """
+    import inspect
+
+    from JARVIS03_RADAR import performance_collector as pc
+
+    src = inspect.getsource(pc._collect_naver_views)
+    code = "\n".join(l.split("#")[0] for l in src.splitlines())
+    assert "PostView.naver" not in code and "m.blog.naver.com" not in code, (
+        "공개 페이지 스크래핑으로 회귀했다 — 그 경로엔 조회수가 존재하지 않는다")
+    assert "_NV_BATCH_CACHE" in code, "배치 캐시를 쓰지 않는다"
+
+
+def test_조회수를_위치가_아니라_레이블로_읽는다():
+    """통계 페이지엔 조회수·공감수·댓글수가 섞여 나온다.
+    "숫자 N번째" 로 집으면 네이버가 항목 하나만 추가해도 **엉뚱한 값이 학습에 들어간다**.
+    """
+    from JARVIS03_RADAR.performance_collector import _NV_DAILY_ROW
+
+    page = ("조회수\n날짜 조회수\n"
+            "2026.08.08. (토) 0\n2026.08.07. (금) 1\n2026.08.06. (목) 4\n"
+            "공감수\n0\n댓글수\n0\n단위 : 건\n")
+    vals = [int(v.replace(",", "")) for v in _NV_DAILY_ROW.findall(page)]
+    assert vals == [0, 1, 4], f"일별 행만 뽑아야 하는데 {vals}"
+    assert sum(vals) == 5
+
+
+def test_logNo_추출이_URL_형태에_흔들리지_않는다():
+    """발행 URL 은 `?fromRss=true&trackingCode=rss` 가 붙어 온다."""
+    from JARVIS03_RADAR.performance_collector import _naver_log_no
+
+    assert _naver_log_no(
+        "https://blog.naver.com/youandi3535/224371775209?fromRss=true") == "224371775209"
+    assert _naver_log_no(
+        "https://blog.naver.com/PostView.naver?blogId=x&logNo=224369275563") == "224369275563"
+    assert _naver_log_no("https://blog.naver.com/youandi3535") == ""
+
+
+def test_미수집을_조회0으로_단정하지_않는다():
+    """★ 이번 감사의 핵심 교훈 — **0 은 '나빴다' 이지 '모른다' 가 아니다.**
+    통계 페이지가 로그인 만료 등으로 안 열리면 캐시에 안 담기고,
+    학습 쪽(`build_target`)이 그 결측을 제외한다.
+    """
+    import inspect
+
+    from JARVIS03_RADAR import performance_collector as pc
+
+    src = inspect.getsource(pc._collect_naver_stats_batch)
+    assert '"조회수" not in text' in src or "'조회수' not in text" in src, (
+        "페이지가 열리지 않았을 때 0 으로 단정하지 않는 가드가 없다")
