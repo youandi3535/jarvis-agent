@@ -11689,12 +11689,41 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - **파일**: `shared/db.py` · `tests/test_learning_signal.py` · `tests/test_publish_golden.py`
 - **검증**: **CI 환경을 모사해** 확인했다 — `git archive HEAD` 로 *추적 파일만* 있는 트리를
   만들어(332개) 거기서 실행:
+  ```bash
+  S=/tmp/citest; rm -rf $S && mkdir -p $S
+  git archive HEAD | tar -x -C $S              # 추적 파일만 = CI 체크아웃과 동일
+  python3 -m venv /tmp/civenv
+  /tmp/civenv/bin/pip install -q -r requirements-test.txt   # CI 와 같은 최소 의존
+  (cd $S && TZ=UTC /tmp/civenv/bin/python -m pytest tests/ -q)
+  #          ^^^^^^ ★ 러너는 UTC 다. 빼면 시간대 의존 결함이 통째로 안 보인다 (아래 ★ 참조)
+  ```
   ```
   learned_patterns.json 없음 · .claude/ 없음 · JARVIS03_RADAR/data/ 없음
   → 249 passed, 1 skipped        (종전 같은 조건에서 4 failed)
   변이 3/3 검출: 백업패턴 learned_* 제거 / 소유폴더 JARVIS06 제거 / backup=True→False
   로컬 250 passed · precommit 20 카테고리 0건
   ```
+- **★ 후속 — 레시피에 `TZ=UTC` 가 빠져 있었다 (2026-08-08 정정, 내 오진)**:
+  위 레시피로도 못 잡는 실패가 하나 남았다. `test_심층감사_실패가_job_runs에_success0로_적힌다`
+  가 CI 에서만 `misfire — grace 내에 실행되지 못함` 으로 죽었다.
+  나는 이것을 **"콜드 러너가 1초를 못 맞춘 타이밍 문제 · 모사로는 못 잡는다"** 로 진단했다.
+  **틀렸다.** `misfire_grace_time=60` 을 줘도 그대로였고, 그러면 타이밍일 수 없다.
+  진짜 원인은 **시간대**다:
+  ```
+  create_scheduler(timezone="Asia/Seoul")  ←  프로브는 naive datetime.now() 를 넘긴다
+  APScheduler 는 naive 값을 *스케줄러 tz* 로 해석한다. UTC 러너에서:
+      naive now()+1s : 2026-08-08 12:51:26          (러너 UTC 벽시계)
+      스케줄러 해석  : 2026-08-08 12:51:26+09:00  = 03:51:26 UTC
+      실제 현재(UTC) : 2026-08-08 12:51:25+00:00
+  → 9시간 과거로 예약된다. grace 를 3600 으로 줘도 못 막는다.
+  ```
+  내 맥북은 로컬 tz 가 KST 라 naive 값이 **우연히** 맞아떨어져 늘 초록이었다.
+  `TZ=UTC` 를 붙이자 맥북에서도 즉시 재현됐다(`1 failed` / 없으면 `1 passed`).
+  처방은 `datetime.now(sch.timezone)` — tz 문자열을 테스트에 박지 않고 스케줄러에서 파생(②).
+  전체 스위트 `TZ=UTC` 재검: `1 failed, 254 passed, 1 skipped` — 시간대 의존은 이 한 건뿐.
+  · **교훈 보강**: "재현이 안 된다" 는 *모사가 부족하다* 는 뜻이지 *환경 탓* 이라는 뜻이 아니다.
+    나는 재현 실패를 근거로 "타이밍이라 못 잡는다" 는 **검증 불가능한 가설** 로 도망쳤다.
+    `grace=60 인데도 misfire` 라는 관측이 그 가설을 이미 반증하고 있었는데 읽지 않았다.
 - **교훈**:
   ① **"로컬 통과" 는 통과의 증거가 아니다.** 저장소 검사는 *저장소가 가진 것* 만 봐야 한다.
      확인 방법이 있다 — `git archive HEAD` 로 추적 파일만 있는 트리를 만들어 거기서 돌린다.
