@@ -3178,53 +3178,46 @@ def test_회차_판정이_테이블_최신행이_아니라_이번_회차를_본�
     assert _ga._repair_returncode_since(_ga._repair_watermark()) is None
 
 
-def test_트렌드검증이_정적시드에_속지_않는다():
+def test_트렌드검증이_정적시드에_속지_않는다(tmp_path, monkeypatch):
     """★ 시드가 `trending` 을 채우면 `scored_keywords` 는 30개가 되지만 하류는 굶는다.
 
     실측 07-28·07-31·08-01·08-02 — combined=0 인데 scored=30 이라 검증이 통과했고
     topic_pack 이 안 만들어져 **글 10편이 조용히 유실**됐다.
     검증 대상은 하류(`topic_pack._candidates`)가 실제로 먹는 필드여야 한다.
+
+    ★ 데이터 디렉터리를 **임시 경로로 갈아끼운다** (2026-08-09 2차 적대적 검증)
+      종전엔 운영 `JARVIS03_RADAR/data/trends_<오늘>.json` 을 가짜 판(`combined:[]`)으로
+      덮었다가 `finally` 로 복원했다. 바이트는 같게 돌아오지만 **그 사이 데몬이 같은
+      파일을 읽는다**(발행·팩 빌드가 이 판을 먹는다). `.gitignore` 대상이라
+      `git status` 로도 안 보여 사고가 나도 흔적이 없다. 운영 파일은 건드리지 않는다.
     """
     import datetime as dt
     import json
 
+    from JARVIS03_RADAR import jobs as _jobs
     from JARVIS03_RADAR.jobs import _verify_trends
     from JARVIS03_RADAR.topic_pack import _candidates
 
-    root = _ROOT / "JARVIS03_RADAR" / "data"
+    (tmp_path / "data").mkdir()
+    monkeypatch.setattr(_jobs, "_RADAR_DIR", tmp_path)
+    fp = tmp_path / "data" / f"trends_{dt.date.today().isoformat()}.json"
     today = dt.date.today().isoformat()
-    fp = root / f"trends_{today}.json"
-    # ★ CI 엔 이 폴더가 **통째로 없다** (data/*.json 이 .gitignore 라 디렉터리도 안 온다).
-    #   종전엔 곧장 write_text 를 불러 FileNotFoundError 로 깨졌다 — 테스트가
-    #   '내 맥북에 폴더가 있다' 는 사실에 기댄 것이다 (ERRORS [568] 과 같은 병).
-    dir_made = not root.exists()
-    root.mkdir(parents=True, exist_ok=True)
-    backup = fp.read_text(encoding="utf-8") if fp.exists() else None
-    try:
-        # 실트렌드 전멸 + 정적 시드로 채워진 날 (실측 08-01 의 모양)
-        seeded = {"date": today, "combined_keywords": [],
-                  "scored_keywords": [{"keyword": f"시드{i}", "sector": "금융·투자"}
-                                      for i in range(30)]}
-        fp.write_text(json.dumps(seeded, ensure_ascii=False), encoding="utf-8")
-        issues = _verify_trends(None)
-        assert issues, "실트렌드 0인데 검증이 통과했다 — 시드에 속았다"
-        assert any("combined" in i for i in issues), f"combined 를 안 본다: {issues}"
-        # 하류가 실제로 굶는지 확인 (검증 기준의 정당성)
-        assert not _candidates(seeded), "하류가 후보를 못 만드는 것이 맞다"
 
-        ok = dict(seeded, combined_keywords=[{"keyword": "코스피", "score": 9,
-                                              "sources": ["google"]}])
-        assert not _verify_trends(None) or True   # 파일 기준이므로 아래로 재검사
-        fp.write_text(json.dumps(ok, ensure_ascii=False), encoding="utf-8")
-        assert not _verify_trends(None), "정상 데이터인데 차단됐다 — 과잉 차단"
-    finally:
-        if backup is not None:
-            fp.write_text(backup, encoding="utf-8")
-        elif fp.exists():
-            fp.unlink()
-        # 우리가 만든 폴더면 되돌린다 — 테스트가 저장소에 흔적을 남기지 않는다
-        if dir_made and root.is_dir() and not any(root.iterdir()):
-            root.rmdir()
+    # 실트렌드 전멸 + 정적 시드로 채워진 날 (실측 08-01 의 모양)
+    seeded = {"date": today, "combined_keywords": [],
+              "scored_keywords": [{"keyword": f"시드{i}", "sector": "금융·투자"}
+                                  for i in range(30)]}
+    fp.write_text(json.dumps(seeded, ensure_ascii=False), encoding="utf-8")
+    issues = _verify_trends(None)
+    assert issues, "실트렌드 0인데 검증이 통과했다 — 시드에 속았다"
+    assert any("combined" in i for i in issues), f"combined 를 안 본다: {issues}"
+    # 하류가 실제로 굶는지 확인 (검증 기준의 정당성)
+    assert not _candidates(seeded), "하류가 후보를 못 만드는 것이 맞다"
+
+    ok = dict(seeded, combined_keywords=[{"keyword": "코스피", "score": 9,
+                                          "sources": ["google"]}])
+    fp.write_text(json.dumps(ok, ensure_ascii=False), encoding="utf-8")
+    assert not _verify_trends(None), "정상 데이터인데 차단됐다 — 과잉 차단"
 
 
 def test_수집_산출물이_시드_비율을_남긴다():
@@ -4670,3 +4663,184 @@ def test_보존해도_수집전멸은_보인다(tmp_path, monkeypatch):
     path.unlink()
     rm.save({"date": day, "combined_keywords": [], "scored_keywords": []})
     assert jobs._pack_empty_reason() == "TrendCollectEmpty"
+
+
+def test_배치는_이번_회차의_것만_잡는다():
+    """★ `reward IS NULL` 만 걸면 **며칠 묵은 배치** 가 그대로 후보다.
+
+    실측: 미귀속 배치 33개가 1일 이상 묵어 있었다(가장 오래된 것 7/21).
+    그 상태에서 오늘 주입이 `platform=''` 로 들어가면 게이트가 `'naver'` 로 물어
+    **7월 배치** 를 잡고 무관한 지침을 검사·마감한다.
+    경계는 박지 않고 액션 상한(`watchdog.BLOG_ACTION_DEADLINE_SEC`)에서 파생한다 —
+    주입과 검사는 같은 발행 액션 안에서 일어나므로 그보다 오래된 배치는 이번 것이 아니다.
+    """
+    from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC as _dl
+    from shared import db as _db
+
+    SC = "__stale_batch_probe__"
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [(f"{SC}:s1", "옛 지침", SC), (f"{SC}:s2", "새 지침", SC)])
+    try:
+        _db.record_insight_usage("tbatch_stale", [ids[0]], scope=SC, platform="naver")
+        with _db.get_db() as con:      # 액션 상한보다 확실히 오래된 것으로 만든다
+            con.execute("UPDATE insight_usage SET used_at = "
+                        "datetime('now','localtime',?) WHERE batch_id='tbatch_stale'",
+                        (f"-{int(_dl) + 3600} seconds",))
+        assert _db.latest_batch(SC, "naver") == "", \
+            "액션 상한보다 오래된 배치를 이번 회차 것으로 잡는다"
+
+        _db.record_insight_usage("tbatch_fresh", [ids[1]], scope=SC, platform="naver")
+        assert _db.latest_batch(SC, "naver") == "tbatch_fresh", "방금 주입분을 못 잡는다"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM insight_usage WHERE batch_id LIKE 'tbatch_%'")
+            con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
+                        % ",".join("?" * len(ids)), ids)
+
+
+def test_사용기록_실패가_조용히_넘어가지_않는다():
+    """★ 게이트가 이 기록을 읽게 된 뒤로, 기록 실패는 '학습 1회 누락' 이 아니다.
+
+    지침은 프롬프트에 들어갔는데 지켰는지 **아무도 안 보는** 상태가 된다
+    (C축 검사가 통째로 꺼진다). `except: pass` 로 두면 그 사실이 어디에도 안 남는다.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/quality_learner.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "build_insights_block")
+    # ★ **가장 안쪽** try 를 본다 — 함수 전체를 감싼 바깥 try 를 잡으면 검사가 헛돈다.
+    inner = [n for n in ast.walk(fn)
+             if isinstance(n, ast.Try) and any(
+                 isinstance(c, ast.Call)
+                 and getattr(c.func, "attr", "") == "record_insight_usage"
+                 for stmt in n.body for c in ast.walk(stmt))]
+    assert inner, "record_insight_usage 를 감싼 try 를 못 찾았다"
+    target = min(inner, key=lambda n: n.end_lineno - n.lineno)
+    handler_src = "\n".join(ast.unparse(h) for h in target.handlers)
+    assert "report" in handler_src, \
+        f"사용 기록 실패를 조용히 삼킨다 — C축 검사가 꺼진 줄 아무도 모른다: {handler_src[:80]}"
+
+
+def test_수집전멸_신호가_기록되되_Tier2는_안_연다():
+    """★ 판 보존이 *수집 실패 사실* 까지 숨기면 안 되고, 그렇다고 LLM 을 태워도 안 된다.
+
+    실측 90일 radar 실패 264건 중 **263건이 DNS 이름풀이 실패** — 코드로 못 고친다.
+    기록은 남기되 Tier-2 세션은 열리지 않아야 한다.
+    """
+    import inspect
+
+    from JARVIS03_RADAR import radar_main as _rm
+    from JARVIS07_GUARDIAN.severity import is_transient, non_code_issue_kinds
+
+    src = _code_only(inspect.getsource(_rm.save))
+    assert "_g_report" in src, "빈손 회차 신호가 아무 데도 안 간다"
+    assert "trends_empty" in inspect.getsource(_rm.save), "kind 가 안 실린다"
+
+    assert "trends_empty" in non_code_issue_kinds(), "승인 목록에 없다 — Tier-2 를 태운다"
+    assert is_transient("TrendsEmptyRunPreserved", "실트렌드 0개", "radar",
+                        kind="trends_empty"), "수집 전멸이 Tier-2 로 간다"
+    # 진짜 코드결함까지 삼키면 안 된다
+    assert not is_transient("NameError", "name 'x' is not defined", "radar", kind="")
+
+
+def test_격리_설명이_실제_결정과_같다():
+    """★ 설명기가 다리를 하나씩 물어 **조기 return 우선순위를 무시**했다.
+
+    봉투 kind + companions 없음 → 실제 판정은 *격리 안 함* 인데, 설명기는 그 분기를
+    건너뛰고 메시지 정규식 다리가 True 인 것을 보고 "정규식:메시지" 라 답했다 —
+    격리 버킷 보고 **91행 전부**가 그랬다. 설명이 결정과 어긋나면 엉뚱한 곳을 고친다.
+    """
+    import json
+
+    from JARVIS07_GUARDIAN.guardian_agent import _ignore_reason
+    from JARVIS07_GUARDIAN.severity import is_transient, kind_of
+
+    cases = [
+        # (context, 실제로 격리되나)
+        ({"kind": "stuck", "companions": 0}, False),
+        ({"kind": "abort", "companions": 5}, True),
+        ({"kind": "abort"}, False),                       # companions 미상 = fail-closed
+    ]
+    for ctx, expect_ignored in cases:
+        rec = {"error_type": "RuntimeError", "source": "harness",
+               "message": "일시적인 네트워크 오류로 실패했습니다", "context": json.dumps(ctx)}
+        from JARVIS07_GUARDIAN.severity import companions_of
+        real = is_transient(rec["error_type"], rec["message"], rec["source"],
+                            kind=kind_of(rec), companions=companions_of(rec))
+        assert real is expect_ignored, f"전제 변경: {ctx} → {real}"
+        why = _ignore_reason(rec)
+        if not real:
+            assert "격리 대상 아님" in why, \
+                f"격리되지 않았는데 '걸렀다' 고 설명한다: {why}"
+        else:
+            assert "격리 대상 아님" not in why, f"격리됐는데 아니라고 한다: {why}"
+
+
+def test_시도_상한이_모든_통로에_걸린다():
+    """★ 상한을 만들어 놓고 한 통로에만 걸면 그 상한은 없는 것과 같다 (③원칙).
+
+    실측: `_orchestrate` 만 `bump_llm_attempts` 를 불렀고 backlog 경로는 안 불렀다.
+    그래서 7월 워치독 freeze 같은 *지나간 사건* 이 심층 감사마다 LLM 세션을 다시 열었다.
+    게다가 상한에 도달해 `wontfix` 가 된 것을 backlog 수집기가 **다시 끌어왔다**.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+    from JARVIS07_GUARDIAN.architecture import MAX_LLM_ATTEMPTS as _cap
+
+    # ① 수집기가 상한을 존중하는가 — 숫자를 박지 않고 주인에서 파생하는가
+    src = _code_only(inspect.getsource(_ga._collect_unresolved))
+    assert "MAX_LLM_ATTEMPTS" in src, "수집기가 상한을 안 본다"
+    assert str(_cap) not in src.replace("MAX_LLM_ATTEMPTS", ""), "상한 숫자를 박았다"
+
+    # ② LLM 을 부르는 **모든** 곳이 시도를 세는가
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        body = ast.unparse(fn)
+        if "analyze_llm_only" not in body and "analyze_llm" not in body:
+            continue
+        assert "bump_llm_attempts" in body, \
+            f"{fn.name} 이 LLM 을 부르면서 시도를 세지 않는다 — 상한이 무력해진다"
+
+    # ③ 실제로 걸러지는가 (실행 검증)
+    from shared import db as _db
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
+                    "llm_attempts) VALUES ('capprobe','m','X','x','wontfix',?)", (_cap,))
+        eid = con.execute("SELECT id FROM error_log WHERE source='capprobe' "
+                          "ORDER BY id DESC LIMIT 1").fetchone()[0]
+    try:
+        got = {r.get("id") for r in _ga._collect_unresolved(500)}
+        assert eid not in got, "상한 도달분이 backlog 에 다시 들어온다 — 상한이 무력"
+        with _db.get_db() as con:
+            con.execute("UPDATE error_log SET llm_attempts=? WHERE id=?", (_cap - 1, eid))
+        assert eid in _ga._collect_unresolved.__wrapped__(500) if hasattr(
+            _ga._collect_unresolved, "__wrapped__") else eid in {
+            r.get("id") for r in _ga._collect_unresolved(500)}, \
+            "여유가 남았는데 제외했다 — 과잉 차단"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+
+
+def test_테스트가_운영_데이터_폴더를_안_쓴다():
+    """★ DB 는 막고 있었는데 **파일** 은 아무도 안 막고 있었다.
+
+    운영 `JARVIS03_RADAR/data/` 는 데몬이 동시에 읽는다(발행·팩 빌드가 이 판을 먹는다).
+    `.gitignore` 대상이라 `git status` 로도 안 보여 사고가 나도 흔적이 없다.
+    검사가 아니라 **기본값 교체** 다 — 새로 쓰는 테스트도 자동으로 안전해야 한다.
+    """
+    from pathlib import Path as _P
+
+    from JARVIS03_RADAR import jobs as _jobs
+    from JARVIS03_RADAR import radar_main as _rm
+
+    real = _ROOT / "JARVIS03_RADAR" / "data"
+    assert _P(_rm.DATA_DIR).resolve() != real.resolve(), \
+        f"테스트가 운영 데이터 폴더를 잡았다: {_rm.DATA_DIR}"
+    assert _P(_jobs._RADAR_DIR).resolve() != (_ROOT / "JARVIS03_RADAR").resolve(), \
+        f"jobs 가 운영 폴더를 잡았다: {_jobs._RADAR_DIR}"

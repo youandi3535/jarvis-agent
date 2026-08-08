@@ -112,3 +112,34 @@ def _assert_not_production_db():
         f"conftest 가 shared.db 보다 늦게 로드됐을 가능성 — import 순서를 확인하라."
     )
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_production_data_writes(tmp_path_factory, monkeypatch):
+    """★ 운영 **데이터 파일** 도 DB 와 같은 원칙으로 막는다 (2026-08-09 적대적 검증).
+
+    DB 는 위에서 막고 있었는데 파일은 아무도 안 막고 있었다. 실측: 트렌드 테스트가
+    운영 `JARVIS03_RADAR/data/trends_<오늘>.json` 을 가짜 판(`combined_keywords: []`)으로
+    덮었다가 `finally` 로 복원했다 — 바이트는 같게 돌아오지만 **그 사이 데몬이 같은
+    파일을 읽는다**(발행·팩 빌드가 이 판을 먹는다). 그 폴더는 `.gitignore` 대상이라
+    `git status` 로도 안 보여, 사고가 나도 흔적이 남지 않는다.
+
+    ★ 검사가 아니라 **기본값 교체** 다 — "쓰면 실패" 로 만들면 데몬이 같은 창에
+      쓸 때 헛경보가 난다. 아예 *임시 경로를 기본* 으로 주면 새로 쓰는 테스트도
+      자동으로 안전하고, 운영 경로가 필요한 테스트만 명시적으로 되돌리면 된다.
+      경로 상수의 주인은 각 모듈이므로 목록을 박지 않고 **모듈에서 파생**한다.
+    """
+    tmp = tmp_path_factory.mktemp("radar_data")
+    (tmp / "data").mkdir(exist_ok=True)
+    for mod_name, attr, value in (
+        ("JARVIS03_RADAR.radar_main", "DATA_DIR", tmp / "data"),
+        ("JARVIS03_RADAR.jobs", "_RADAR_DIR", tmp),
+    ):
+        try:
+            import importlib
+            mod = importlib.import_module(mod_name)
+        except Exception:
+            continue          # 그 모듈을 안 쓰는 테스트도 있다 — 없으면 넘어간다
+        if hasattr(mod, attr):
+            monkeypatch.setattr(mod, attr, value)
+    yield

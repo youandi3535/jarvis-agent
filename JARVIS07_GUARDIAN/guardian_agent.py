@@ -880,13 +880,26 @@ def _on_error_detected(payload: dict, source: str):
 #  대상 status: 'new'(미처리) + 'wontfix'(과거 실패 — 패턴 성장 시 재수리 기회).
 
 def _collect_unresolved(limit: int) -> list:
-    """미해결 오류 수집 — status 'new' + 'wontfix' 병합·dedup (최신순)."""
+    """미해결 오류 수집 — status 'new' + 'wontfix' 병합·dedup (최신순).
+
+    ★ **시도 상한을 존중한다** (2026-08-09 2차 적대적 검증)
+      `MAX_LLM_ATTEMPTS` 로 시도를 막아 놓고, 상한에 도달해 `wontfix` 가 된 오류를
+      여기서 **다시 끌어와** 심층 감사마다 Tier-2 를 또 열고 있었다 — 상한이 무력이다.
+      실측: 미해결 64건 전원이 `wontfix` 이고 그중 8월 이전이 46건. 7/13 워치독 freeze
+      같은 *지나간 사건* 은 코드 패치로 되살아나지 않는데 매 회차 LLM 세션을 태웠다.
+      상한값은 `architecture.MAX_LLM_ATTEMPTS` 단독 소유 — 여기 숫자를 적지 않는다.
+    """
     try:
         from shared import db as _db
     except Exception:
         return []
+    try:
+        from JARVIS07_GUARDIAN.architecture import MAX_LLM_ATTEMPTS as _cap
+    except Exception:      # 파생 실패 시 종전 동작(전량 수집) — 조용히 덜 고치지 않는다
+        _cap = None
     seen: set = set()
     out: list = []
+    skipped = 0
     for st in ("new", "wontfix"):
         try:
             for r in _db.list_errors(status=st, limit=limit):
@@ -894,9 +907,15 @@ def _collect_unresolved(limit: int) -> list:
                 if i in seen:
                     continue
                 seen.add(i)
+                if _cap is not None and int(r.get("llm_attempts") or 0) >= int(_cap):
+                    skipped += 1
+                    continue
                 out.append(r)
         except Exception as e:
             log.debug(f"[GUARDIAN/unresolved] {st} 조회 실패: {e}")
+    if skipped:
+        log.info(f"[GUARDIAN/unresolved] 시도 상한({_cap}) 도달 {skipped}건 제외 — "
+                 f"재시도해도 같은 결과, 수동 검토 대상")
     return out
 
 
@@ -992,6 +1011,12 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
                 failed += 1
                 continue
             llm_used += 1
+            # ★ **시도 횟수를 여기서도 센다** (2026-08-09 2차 적대적 검증)
+            #   `_orchestrate` 만 `bump_llm_attempts` 를 불렀고 이 backlog 경로는 안 불렀다.
+            #   그래서 상한(`MAX_LLM_ATTEMPTS`)이 이 통로에선 **영영 걸리지 않았고**,
+            #   7월 워치독 freeze 같은 지나간 사건이 심층 감사마다 LLM 세션을 다시 열었다.
+            #   상한을 만들어 놓고 한 통로에만 걸면 그 상한은 없는 것과 같다(③원칙).
+            _db.bump_llm_attempts(eid)
             a2 = analyze_llm_only(er)  # Tier 2 — apply_fix 경유 *실제 지문* 학습
             if a2.get("fixable") and apply_fix(eid, a2, mark_wontfix=True):
                 fixed_t2 += 1
