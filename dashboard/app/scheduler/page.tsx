@@ -45,7 +45,7 @@ function Badge({ label, color }: { label: string; color: string }) {
     <span style={{
       display: "inline-flex", alignItems: "center",
       padding: "2px 10px", borderRadius: 20,
-      fontSize: 12, fontWeight: 600,
+      fontSize: 14, fontWeight: 600,
       background: color + "22", color,
     }}>{label}</span>
   );
@@ -121,8 +121,8 @@ export default function SchedulerPage() {
               <tr>
                 {["잡 ID", "이름", "트리거", "소유 에이전트", "마지막 실행", "성공"].map(h => (
                   <th key={h} style={{
-                    textAlign: "left", padding: "8px 12px",
-                    fontSize: 12, color: "var(--c-text5)", fontWeight: 600,
+                    textAlign: "left", padding: "8px 10px",
+                    fontSize: 14, color: "var(--c-text5)", fontWeight: 600,
                     borderBottom: "1px solid var(--c-bdr)", whiteSpace: "nowrap",
                   }}>{h}</th>
                 ))}
@@ -134,14 +134,14 @@ export default function SchedulerPage() {
                 const ok = lr ? (lr.success === 1 || lr.success === true) : null;
                 return (
                   <tr key={job.id} style={{ background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)" }}>
-                    <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--c-text5)", fontFamily: "monospace" }}>{job.id}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text)", fontWeight: 500 }}>{job.name}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-primary)" }}>{formatTrigger(job.trigger)}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)" }}>{job.owner ?? "—"}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", whiteSpace: "nowrap" }}>
+                    <td style={{ padding: "8px 10px", fontSize: 14, color: "var(--c-text5)", fontFamily: "monospace", overflowWrap: "anywhere" }}>{job.id}</td>
+                    <td style={{ padding: "8px 10px", fontSize: 14, color: "var(--c-text)", fontWeight: 500 }}>{job.name}</td>
+                    <td style={{ padding: "8px 10px", fontSize: 14, color: "var(--c-primary)" }}>{formatTrigger(job.trigger)}</td>
+                    <td style={{ padding: "8px 10px", fontSize: 14, color: "var(--c-text2)" }}>{job.owner ?? "—"}</td>
+                    <td style={{ padding: "8px 10px", fontSize: 14, color: "var(--c-text2)", whiteSpace: "nowrap" }}>
                       {lr ? fmtTime(lr.started_at) : "—"}
                     </td>
-                    <td style={{ padding: "8px 12px", fontSize: 16 }}>
+                    <td style={{ padding: "8px 10px", fontSize: 16 }}>
                       {ok === null ? <span style={{ color: "var(--c-text5)" }}>—</span> : <SuccessIcon ok={ok} />}
                     </td>
                   </tr>
@@ -170,8 +170,8 @@ export default function SchedulerPage() {
               <tr>
                 {["잡 ID", "소유자", "시작 시각", "결과", "오류"].map(h => (
                   <th key={h} style={{
-                    textAlign: "left", padding: "8px 12px",
-                    fontSize: 12, color: "var(--c-text5)", fontWeight: 600,
+                    textAlign: "left", padding: "8px 10px",
+                    fontSize: 14, color: "var(--c-text5)", fontWeight: 600,
                     borderBottom: "1px solid var(--c-bdr)", whiteSpace: "nowrap",
                   }}>{h}</th>
                 ))}
@@ -182,13 +182,13 @@ export default function SchedulerPage() {
                 const ok = r.success === 1 || r.success === true;
                 return (
                   <tr key={`${r.job_id}-${r.started_at}-${i}`} style={{ background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)" }}>
-                    <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--c-text5)", fontFamily: "monospace" }}>{r.job_id}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)" }}>{r.owner_agent ?? "—"}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", whiteSpace: "nowrap" }}>{fmtTime(r.started_at)}</td>
-                    <td style={{ padding: "8px 12px" }}>
+                    <td style={{ padding: "8px 10px", fontSize: 14, color: "var(--c-text5)", fontFamily: "monospace", overflowWrap: "anywhere" }}>{r.job_id}</td>
+                    <td style={{ padding: "8px 10px", fontSize: 14, color: "var(--c-text2)" }}>{r.owner_agent ?? "—"}</td>
+                    <td style={{ padding: "8px 10px", fontSize: 14, color: "var(--c-text2)", whiteSpace: "nowrap" }}>{fmtTime(r.started_at)}</td>
+                    <td style={{ padding: "8px 10px" }}>
                       <Badge label={ok ? "성공" : "실패"} color={ok ? C.success : C.danger} />
                     </td>
-                    <td style={{ padding: "8px 12px", fontSize: 14, color: C.danger, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <td title={r.error ?? ""} style={{ padding: "8px 10px", fontSize: 14, color: C.danger, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {r.error ?? ""}
                     </td>
                   </tr>

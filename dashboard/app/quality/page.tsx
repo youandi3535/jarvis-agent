@@ -46,11 +46,22 @@ const TYPE_KO: Record<string, string> = {
   content:     "내용",
 };
 
-/* ── 차트 색상 팔레트 ──────────────────────────────────────────────── */
+/* ── 이슈 유형 구분 색 ──────────────────────────────────────────────
+   시맨틱 토큰으로 표현되는 5색은 var(--c-*) 에서 파생한다(색 정의처 = globals.css).
+   남은 3색은 유형이 5개를 넘을 때만 쓰이는 *시리즈 구분색* 이라 대응 토큰이 없다. */
 const BAR_COLORS = [
-  "#4f8ef7", "#34c77b", "#f59e0b", "#ef4444",
-  "#8b5cf6", "#06b6d4", "#f97316", "#6b7280",
+  "var(--c-primary)", "var(--c-success)", "var(--c-warn)", "var(--c-danger)",
+  "#8b5cf6", "#06b6d4", "#f97316", // 차트 시리즈 구분색 — 대응 var(--c-*) 토큰 없음
+  "var(--c-muted)",
 ];
+
+/* ── 플랫폼 브랜드 색 ────────────────────────────────────────────────
+   네이버·티스토리의 *상표색* 이라 시맨틱 토큰으로 바꾸면 뜻이 달라진다
+   (success=양호 / warn=경고). 토큰으로 표현할 수 없는 색이라 hex 로 남긴다. */
+const PLATFORM_BRAND: Record<string, { fg: string; bg: string }> = {
+  naver:   { fg: "#03c75a", bg: "#03c75a22" }, // 네이버 상표색 — 대응 토큰 없음
+  tistory: { fg: "#f96400", bg: "#f9640022" }, // 티스토리 상표색 — 대응 토큰 없음
+};
 
 /* ── 공통 스타일 ─────────────────────────────────────────────────── */
 const panel = (accent?: string): React.CSSProperties => ({
@@ -100,7 +111,8 @@ function StatusBadge({ status, label }: { status: string; label: string }) {
   return (
     <span style={{
       display: "inline-flex", alignItems: "center",
-      padding: "2px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600,
+      padding: "3px 10px", borderRadius: 20, fontSize: 14, fontWeight: 600,
+      whiteSpace: "nowrap",
       background: color + "22", color, border: `1px solid ${color}44`,
     }}>{label}</span>
   );
@@ -138,7 +150,7 @@ function TrendTooltip({ active, payload, label }: { active?: boolean; payload?: 
   return (
     <div style={{
       background: "var(--c-card)", border: "1px solid var(--c-bdr)",
-      borderRadius: 8, padding: "10px 14px", fontSize: 13,
+      borderRadius: 8, padding: "10px 14px", fontSize: 14,
     }}>
       <div style={{ fontWeight: 700, marginBottom: 4 }}>{label}</div>
       <div style={{ color: "var(--c-primary)" }}>평균 이슈 {payload[0].value}개</div>
@@ -221,7 +233,7 @@ export default function QualityPage() {
         <div style={panel("var(--c-primary)")}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
             <SectionTitle>글당 평균 이슈 수 추이</SectionTitle>
-            <div style={{ fontSize: 13, color: "var(--c-text2)", textAlign: "right" }}>
+            <div style={{ fontSize: 14, color: "var(--c-text2)", textAlign: "right", flexShrink: 0 }}>
               <div>↓ 낮을수록 품질 좋음</div>
               {improvement > 0 && (
                 <div style={{ color: "var(--c-success)", fontWeight: 700 }}>
@@ -233,10 +245,10 @@ export default function QualityPage() {
           <div ref={chartBoxRef} style={{ width: "100%" }}>
           {chartWidth > 0 && (
           <ResponsiveContainer width={chartWidth} height={220}>
-            <LineChart data={weekly} margin={{ top: 4, right: 16, left: -16, bottom: 0 }}>
+            <LineChart data={weekly} margin={{ top: 4, right: 16, left: -8, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--c-bdr)" />
-              <XAxis dataKey="week" tick={{ fontSize: 12, fill: "var(--c-text2)" }} />
-              <YAxis tick={{ fontSize: 12, fill: "var(--c-text2)" }} domain={[0, 7]} />
+              <XAxis dataKey="week" tick={{ fontSize: 14, fill: "var(--c-text2)" }} />
+              <YAxis tick={{ fontSize: 14, fill: "var(--c-text2)" }} domain={[0, 7]} width={44} />
               <Tooltip content={<TrendTooltip />} />
               <Line
                 type="monotone" dataKey="avg_issues"
@@ -257,7 +269,7 @@ export default function QualityPage() {
         {/* 반복 문제 유형 */}
         <div style={{ ...panel(), marginTop: 0 }}>
           <SectionTitle>반복 문제 유형</SectionTitle>
-          <div style={{ fontSize: 13, color: "var(--c-text2)", marginBottom: 12 }}>
+          <div style={{ fontSize: 14, color: "var(--c-text2)", marginBottom: 12 }}>
             많을수록 아직 해결 안 된 약점
           </div>
           {typeEntries.map((item, i) => {
@@ -286,12 +298,12 @@ export default function QualityPage() {
         {/* 플랫폼 / 글 유형 비교 */}
         <div style={{ ...panel(), marginTop: 0 }}>
           <SectionTitle>플랫폼 · 글 유형별 품질</SectionTitle>
-          <div style={{ fontSize: 13, color: "var(--c-text2)", marginBottom: 12 }}>
+          <div style={{ fontSize: 14, color: "var(--c-text2)", marginBottom: 12 }}>
             글당 평균 이슈 수 — 낮을수록 좋음
           </div>
 
           <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--c-text2)", marginBottom: 8 }}>플랫폼</div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: "var(--c-text2)", marginBottom: 8 }}>플랫폼</div>
             {Object.entries(byPlatform).map(([plat, d]) => (
               <div key={plat} style={{
                 display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -310,7 +322,7 @@ export default function QualityPage() {
           </div>
 
           <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--c-text2)", marginBottom: 8 }}>글 유형</div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: "var(--c-text2)", marginBottom: 8 }}>글 유형</div>
             {Object.entries(byPostType).map(([pt, d]) => {
               const label = pt === "economic" ? "경제 브리핑" : pt === "theme" ? "테마주 분석" : pt;
               return (
@@ -337,7 +349,7 @@ export default function QualityPage() {
       {topInsights.length > 0 && (
         <div style={panel("var(--c-success)")}>
           <SectionTitle>현재 학습된 인사이트 TOP {topInsights.length}</SectionTitle>
-          <div style={{ fontSize: 13, color: "var(--c-text2)", marginBottom: 16 }}>
+          <div style={{ fontSize: 14, color: "var(--c-text2)", marginBottom: 16 }}>
             다음 글 작성 시 자동으로 주입되는 개선 지침
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -348,22 +360,23 @@ export default function QualityPage() {
                 display: "flex", gap: 14, alignItems: "flex-start",
               }}>
                 <div style={{
-                  flexShrink: 0, width: 28, height: 28, borderRadius: "50%",
+                  flexShrink: 0, width: 32, height: 32, borderRadius: "50%",
                   background: "var(--c-success)22", color: "var(--c-success)",
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 12, fontWeight: 700,
+                  fontSize: 14, fontWeight: 700,
                 }}>
                   {ins.occurrences}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", gap: 8, marginBottom: 4, alignItems: "center" }}>
                     <span style={{
-                      fontSize: 11, fontWeight: 700, padding: "1px 7px", borderRadius: 10,
+                      fontSize: 14, fontWeight: 700, padding: "2px 9px", borderRadius: 12,
+                      whiteSpace: "nowrap",
                       background: "var(--c-primary)22", color: "var(--c-primary)",
                     }}>
                       {TYPE_KO[ins.insight_type] ?? ins.insight_type}
                     </span>
-                    <span style={{ fontSize: 12, color: "var(--c-text2)" }}>
+                    <span style={{ fontSize: 14, color: "var(--c-text2)", whiteSpace: "nowrap" }}>
                       {ins.occurrences}회 발견
                     </span>
                   </div>
@@ -415,15 +428,15 @@ export default function QualityPage() {
                   const rowTd = isLast ? { ...td, borderBottom: "none" } : td;
                   const busy = loadingId === row.id;
                   const rowLabel = labels[row.status] ?? row.status;
+                  const brand = row.platform === "naver" ? PLATFORM_BRAND.naver : PLATFORM_BRAND.tistory;
                   return (
                     <tr key={row.id} style={{ transition: "background 0.15s" }}
                       onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.03)")}
                       onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                       <td style={rowTd}>
-                        <span style={{
-                          fontSize: 12, fontWeight: 700, padding: "2px 8px", borderRadius: 6,
-                          background: row.platform === "naver" ? "#03c75a22" : "#f9640022",
-                          color: row.platform === "naver" ? "#03c75a" : "#f96400",
+                        <span title={row.platform} style={{
+                          fontSize: 14, fontWeight: 700, padding: "2px 9px", borderRadius: 6,
+                          background: brand.bg, color: brand.fg,
                         }}>
                           {row.platform === "naver" ? "N" : "T"}
                         </span>
@@ -442,7 +455,7 @@ export default function QualityPage() {
                       <td style={{ ...rowTd, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                         {fmtNum(row.current_views)}
                       </td>
-                      <td style={{ ...rowTd, textAlign: "right", color: "var(--c-text2)" }}>
+                      <td style={{ ...rowTd, textAlign: "right", color: "var(--c-text2)", whiteSpace: "nowrap" }}>
                         {fmtTime(row.analyzed_at)}
                       </td>
                       <td style={{ ...rowTd, textAlign: "center" }}>
@@ -450,7 +463,8 @@ export default function QualityPage() {
                           <button disabled={busy || row.status === "approved"}
                             onClick={() => doAction(row.id, "approve")}
                             style={{
-                              fontSize: 12, fontWeight: 600, padding: "4px 12px", borderRadius: 6,
+                              fontSize: 14, fontWeight: 600, padding: "5px 12px", borderRadius: 6,
+                              whiteSpace: "nowrap",
                               border: "1px solid var(--c-success)", background: "transparent",
                               color: "var(--c-success)",
                               cursor: busy || row.status === "approved" ? "not-allowed" : "pointer",
@@ -459,7 +473,8 @@ export default function QualityPage() {
                           <button disabled={busy || row.status === "rejected"}
                             onClick={() => doAction(row.id, "reject")}
                             style={{
-                              fontSize: 12, fontWeight: 600, padding: "4px 12px", borderRadius: 6,
+                              fontSize: 14, fontWeight: 600, padding: "5px 12px", borderRadius: 6,
+                              whiteSpace: "nowrap",
                               border: "1px solid var(--c-danger)", background: "transparent",
                               color: "var(--c-danger)",
                               cursor: busy || row.status === "rejected" ? "not-allowed" : "pointer",

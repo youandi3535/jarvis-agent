@@ -406,12 +406,14 @@ def recovery_hint(post_type: str) -> list[str]:
 
 # ── 결손 원장 — 박제·중복억제 단일 진입점 (2026-08-05) ────────────────────
 def gap_already_recorded(key: str) -> bool:
-    """이 슬롯 결손이 이미 원장에 있는가 — 중복 보고·중복 학습 차단.
+    """이 (글종류·플랫폼·슬롯) 결손이 이미 원장에 있는가 — 중복 보고·중복 학습 차단.
 
     ★ 왜 필요한가: 같은 슬롯을 두 경로가 발견할 수 있다.
       ① 감사 잡(발행 +N분)  ② 공백 회계(데몬이 복귀할 때)
       둘 다 보고하면 원장에 같은 사건이 2건 쌓이고 사용자에게 알림도 2번 간다.
-      `slot_key` 가 연도까지 담은 안정 키라 이 판정이 성립한다.
+      `key` 에 연도·플랫폼까지 담긴 안정 키라 이 판정이 성립한다 — 플랫폼이 빠지면
+      한 슬롯에 두 플랫폼이 동시에 결손일 때 두 번째가 '이미 기록됨' 으로 오판된다
+      (실측 2026-08-08 21:00 테마: naver·tistory 동시 결손인데 naver 만 박제됨).
     """
     try:
         from shared.db import get_db
@@ -434,8 +436,19 @@ def record_publish_gap(post_type: str, platform: str,
     ★ `kind` 를 context 에 넣는 이유: GUARDIAN 이 이걸 읽어 *코드로 못 고치는 사건* 으로
       분류한다(`severity.is_transient`). 안 넣으면 절전 한 번마다 Tier-2 LLM 세션이 열린다.
       ★ `severity=` 인자는 `report()` 에 **없다** — 심각도는 severity 모듈이 단독 결정한다.
+
+    ★★ 중복억제 키 = 슬롯 + 플랫폼 (2026-08-08 수정 — 종전 결함)
+      종전엔 `gap_already_recorded(slot_key(...))` 로 **플랫폼을 뺀** 슬롯 키만 봤다.
+      `job_audit_publish_completeness` 가 `gaps` 를 순회하며 플랫폼별로 이 함수를
+      호출하는데, 첫 플랫폼(naver)을 기록하는 순간 그 error_log 행의 context 에
+      슬롯 키가 남아 — 같은 루프의 다음 플랫폼(tistory) 이 그 슬롯 키로
+      "이미 기록됨" 을 오판해 **조용히 스킵**됐다. 감사가 나빠지면 침묵하는,
+      원장이 막으려던 바로 그 사고(①번 v2 결함)가 다른 경로로 재발한 것.
+      `downtime.report_boot_downtime` 의 공백 회계도 같은 루프 구조라 동일하게 샜다.
+      한 슬롯의 결손이 플랫폼 1개뿐일 땐 무증상이라 지금까지 드러나지 않았다.
     """
-    key = slot_key(post_type, start)
+    slot = slot_key(post_type, start)
+    key = f"{slot}:{platform}"
     if gap_already_recorded(key):
         return False
     label = f"{start:%Y-%m-%d %H:%M} ~ {end:%m-%d %H:%M}"
@@ -450,7 +463,7 @@ def record_publish_gap(post_type: str, platform: str,
             module=__name__,
             func_name="record_publish_gap",
             context={"post_type": post_type, "platform": platform,
-                     "slot": label, "slot_key": key, "reason": reason,
+                     "slot": label, "slot_key": slot, "gap_key": key, "reason": reason,
                      # 코드 결함이 아님 → Tier-2 자동수리 대상에서 제외
                      "kind": "daemon_down" if reason == "daemon_down" else "publish_gap"},
         )

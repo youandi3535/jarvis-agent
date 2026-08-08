@@ -559,7 +559,7 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
     title = extract_title(html, theme)
 
     # ⑤ HTML 저장
-    html_path, _ = save_article_html(html, theme, platform=platform)
+    html_path, _ = save_article_html(html, theme, platform=platform, img_dir=out_dir)
 
     # ⑥ SVG 캡처 → JPG — 인라인 <svg> 있을 때만 (슬롯 렌더 경로는 차트를 이미
     #    JPG 파일 + <p><img> 로 본문에 내장 → inline SVG 0개가 *정상* — 오경보 방지)

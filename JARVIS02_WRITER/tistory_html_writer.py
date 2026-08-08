@@ -445,13 +445,23 @@ svg {{ display: block; margin: 16px 0; border-radius: 8px; }}
 #  2. HTML 저장
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def save_article_html(html: str, keyword: str, platform: str = "") -> tuple:
+def save_article_html(html: str, keyword: str, platform: str = "", img_dir: Path = None) -> tuple:
     """HTML 파일 저장.
 
     Args:
         html: 원고 HTML
         keyword: 키워드 (slug 생성용)
-        platform: "tistory" | "naver" (플랫폼별 이미지 폴더 사용)
+        platform: "tistory" | "naver" (img_dir 미지정 시 폴백 폴더 추정용)
+        img_dir: 이미지 폴더 — 호출자(process_draft)가 실제 렌더에 쓴 out_dir 를
+            *그대로* 넘긴다. ★ 2026-08-08 수정 (ERRORS [image _validate_image_files
+            렌더 후 파일 소실] 재발): 이 함수는 economic·theme 공용 `draft_processor.
+            process_draft` 에서 호출되는데, img_dir 미지정 시 platform 만 보고
+            `economic_naver`/`economic_tistory` 로 고정 추정했다 — draft_fixer.py 의
+            동일 클래스 결함(2026-08-07 수정)이 여기 그대로 남아 있었다. 테마 렌더가
+            이 함수를 지날 때마다 실제 폴더(theme_naver 등)가 아닌 economic 폴더를
+            "정리 대상"으로 잘못 짚어, 그 폴더의 참조 없는 .jpg 를 전부 삭제했다
+            (아래 잔재 정리 로직 참조). 호출자가 자신의 out_dir 를 아는 지금은 그것을
+            그대로 받는다 — platform 만으로 이름을 다시 만들지 않는다(① 단일 진입점).
 
     Returns:
         (html_path: str, img_dir: str)
@@ -461,8 +471,10 @@ def save_article_html(html: str, keyword: str, platform: str = "") -> tuple:
     slug     = f"{_DATE_KEY}_{kw_hash}"
     html_dir = OUTPUT_HTML_DIR / slug
 
-    # 플랫폼별 이미지 폴더 사용 (새 폴더 생성 X)
-    if platform == "tistory":
+    if img_dir is not None:
+        img_dir = Path(img_dir)
+    # ★ 폴백 — img_dir 미지정 호출자만(현재 없음): 옛 platform 추정 유지(하위호환)
+    elif platform == "tistory":
         from JARVIS06_IMAGE import image_agent
         img_dir = image_agent.OUTPUT_DIR / 'images' / 'economic_tistory'
     elif platform == "naver":

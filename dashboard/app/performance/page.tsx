@@ -8,10 +8,14 @@ import {
 import { apiFetch, PerformanceData } from "@/lib/api";
 import { fmtNum, fmtTime } from "@/lib/utils";
 
-/* ── 플랫폼 표시 설정 (시각 전용 — 색상·약자) ─────────────────────── */
+/* ── 플랫폼 표시 설정 (시각 전용 — 색상·약자) ───────────────────────
+ * 이 두 색은 아래 막대·선 차트의 *시리즈 색* 이자 플랫폼 브랜드 고유색이다.
+ * `--c-*` 5색은 뜻이 붙은 의미 토큰(primary/success/warn/danger/muted)이라
+ * 여기에 끌어쓰면 "티스토리 = 경고" 처럼 색의 뜻이 뒤집힌다.
+ * → CLAUDE.md 색상 규정의 '섹터 색은 예외' 와 같은 부류 (토큰으로 대체 불가). */
 const PLAT_HEX: Record<string, string> = {
-  naver:   "#03c75a",
-  tistory: "#f96400",
+  naver:   "#03c75a", // 차트 시리즈 색 — 네이버 브랜드 그린 (토큰 대체 불가)
+  tistory: "#f96400", // 차트 시리즈 색 — 티스토리 브랜드 오렌지 (토큰 대체 불가)
 };
 const PLAT_SHORT: Record<string, string> = {
   naver: "N", tistory: "T",
@@ -92,7 +96,7 @@ function PlatBadge({ platform }: { platform: string }) {
     <span style={{
       display: "inline-flex", alignItems: "center", justifyContent: "center",
       width: 24, height: 24, borderRadius: 6,
-      fontSize: 12, fontWeight: 800,
+      fontSize: 14, fontWeight: 800,
       background: color + "22", color,
       flexShrink: 0,
     }}>
@@ -228,9 +232,9 @@ export default function PerformancePage() {
           <ChartBox height={260}>{(w, h) => (
             <BarChart width={w} height={h} data={periodChartData} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--c-bdr)" vertical={false} />
-              <XAxis dataKey="name" tick={{ fontSize: 13, fill: "var(--c-text2)" }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="name" tick={{ fontSize: 14, fill: "var(--c-text2)" }} axisLine={false} tickLine={false} />
               <YAxis
-                tick={{ fontSize: 12, fill: "var(--c-text2)" }}
+                tick={{ fontSize: 14, fill: "var(--c-text2)" }}
                 axisLine={false} tickLine={false}
                 tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)}
               />
@@ -266,9 +270,9 @@ export default function PerformancePage() {
           <ChartBox height={220}>{(w, h) => (
             <LineChart width={w} height={h} data={trendFormatted} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--c-bdr)" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--c-text2)" }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 14, fill: "var(--c-text2)" }} axisLine={false} tickLine={false} />
               <YAxis
-                tick={{ fontSize: 12, fill: "var(--c-text2)" }}
+                tick={{ fontSize: 14, fill: "var(--c-text2)" }}
                 axisLine={false} tickLine={false}
                 tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)}
               />

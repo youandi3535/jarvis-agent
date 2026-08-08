@@ -313,17 +313,30 @@ pkill -f jarvis_daemon.py        # 전체 종료
   - 24~28px — 카드 KPI 숫자
   - 30~34px — Hero 타이틀, 큰 KPI
   - 38~44px — 페이지 메인 타이틀
-- **검증 명령**: `grep -oE 'font-size:\s*[0-9.]+px' app.py | sort -u` — 모든 값이 짝수 + 14+ 인지 확인.
+- **★ 대상은 `dashboard/` (Next.js :9199) 다** — 2026-08-08 정정.
+  종전 이 규정의 검증 명령은 `app.py`(Streamlit) 를 겨눴는데 그 파일은 커밋 `0be08d9` 에서
+  **대시보드와 함께 삭제**됐다. 대상이 없으니 grep 은 늘 "위반 0" 이었고,
+  **규정이 한 번도 집행되지 않은 채** 살아있는 대시보드에 94곳이 쌓였다(실측).
+  화면 실측으로는 7.5~13px 글자가 848개 요소에 걸쳐 있었다.
+- **검증 명령** (자동 강제 — 커밋 훅·CI·GUARDIAN 감사 3곳에서 돈다):
+  ```bash
+  python3 shared/precommit_check.py --category dashboard
+  ```
 - **위반 시**: 즉시 일괄 변환. 새 코드 작성 시 *최소 14px / 짝수* 자동 준수.
 
 ## 웹 대시보드 색상 토큰 규정 (강제 — JARVIS03 RADAR + 모든 신규 에이전트)
-- **단일 진실 소스**: `JARVIS03_RADAR/tokens.py` 의 `COLOR` 5색 + `NEUTRAL` 만 사용.
+- **★ 단일 진실 소스는 `dashboard/app/globals.css` 의 `--c-*` CSS 변수다** — 2026-08-08 정정.
+  종전엔 `JARVIS03_RADAR/tokens.py` 라 적혀 있었으나 그 파일은 Streamlit 대시보드와 함께
+  삭제돼 **존재하지 않는다**(`components.py`·`app.py` 도 마찬가지).
+  없는 파일을 단일 진입점으로 지정한 규정은 아무도 지킬 수 없다.
 - **5색**: primary(파랑) / success(초록) / warn(앰버) / danger(빨강) / muted(슬레이트). 추가 금지.
-- **인라인 hex 금지**: `#abcdef` 직접 작성 금지. `from tokens import COLOR; COLOR["primary"]` 만.
+- **인라인 hex 금지**: `#abcdef` 직접 작성 금지. `var(--c-primary)` 또는 각 페이지의 `C` 상수
+  경유만. (차트 시리즈 색처럼 토큰으로 표현할 수 없는 것은 예외 — 주석으로 사유 명시)
 - **그라디언트·네온 글로우·shadow 남발 금지**: 카드 border-top 1색 / 보더 1색 끝.
-- **카드 렌더**: `components.py` 의 `kpi_card / action_card / insight_card / status_chip / empty_state / error_state / section_header` 만 호출. 인라인 `<div style="...">` 작성 금지.
-- **velocity·level·status 매핑**: `tokens.py` 의 `VELOCITY_COLOR / LEVEL_COLOR / DIFFICULTY_COLOR` 만 사용.
-- **검증 명령**: `grep -oE '#[0-9a-fA-F]{6}' app.py | sort -u` — 결과가 토큰 5색 + neutral 외에 거의 없어야 함 (섹터 색은 예외).
+- **검증 명령**: `python3 shared/precommit_check.py --category dashboard`
+- ~~카드 렌더 `components.py`~~ · ~~`tokens.py` 매핑~~ — **두 파일 모두 삭제됐다.**
+  Next.js 대시보드는 `globals.css` 의 `.card` 와 각 페이지의 인라인 스타일을 쓴다.
+  공용 컴포넌트를 다시 만든다면 그때 이 항목을 되살릴 것.
 
 ## 인프라 관리 규정 (강제 — 절대 — 모든 인프라 책임 단일 진입점)
 - **단일 진입점**: `JARVIS00_INFRA/infra_agent.py`. 데몬 프로세스 라이프사이클·시스템 상태 종합 빌드(`build_status`)·텔레그램 시스템 관리 명령(/status·/restart·/quit) 핸들러·infra.* 인텐트 처리 모두 여기.
@@ -332,7 +345,7 @@ pkill -f jarvis_daemon.py        # 전체 종료
 - **발견 즉시 이관**: 인프라 관련 신규 코드를 다른 파일에서 발견하면 *즉시* `JARVIS00_INFRA/infra_agent.py` 로 이관. 미루지 말 것.
 - **이관 절차**: ① `JARVIS00_INFRA/infra_agent.py` 에 함수/핸들러 추가 → `__all__` 업데이트 → ② 호출자 (jarvis_daemon 등) 는 `from JARVIS00_INFRA.infra_agent import ...` 로 위임 → ③ 호출자에 fallback 인프라 로직 두지 말 것.
 - **★ 이관 완전성 (헌법 박제 2026-05-15 — 3회 반복 교훈)**: `import` 추가만으로는 불충분 — *반드시 구 함수 본체를 삭제*. Python last-def override 로 인해 구 정의가 새 정의를 덮어쓸 위험. 이관 완료 후 `grep -rn "^def <함수명>" --include="*.py" .` 으로 중복 정의 잔존 여부 반드시 확인.
-- **infra 인텐트 추가**: ① `JARVIS00_INFRA/infra_agent.py` 의 `register_capability()` 의 intents 목록 + `handle_safe_intent` / `execute_approval` 분기 추가 → ② `JARVIS01_MASTER/dispatchers.py` 의 `SAFE_INTENTS` / `APPROVAL_INTENTS` 동시 추가 → ③ `JARVIS00_INFRA/CLAUDE.md` 의 비직관 규칙 표 갱신.
+- **infra 인텐트 추가**: ① `JARVIS00_INFRA/infra_agent.py` 의 `register_capability()` 의 intents 목록 + `handle_safe_intent` / `execute_approval` 분기 추가 → ② `JARVIS01_MASTER/dispatchers.py` 의 `SAFE_INTENTS` / `APPROVAL_INTENTS` 동시 추가 → ③ `JARVIS00_INFRA/CLAUDE_INFRA.md` 의 비직관 규칙 표 갱신.
 - **검증 명령** (본체 로직 잔존 — 위임 형태와 카탈로그 매핑은 정당):
   ```bash
   # ① jarvis00_infra capability 본체 declare (JARVIS00_INFRA/infra_agent.py 만 합법)

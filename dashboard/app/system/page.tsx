@@ -61,7 +61,7 @@ function StatusBadge({ status }: { status: string }) {
     <span style={{
       display: "inline-flex", alignItems: "center",
       padding: "2px 10px", borderRadius: 20,
-      fontSize: 12, fontWeight: 600,
+      fontSize: 14, fontWeight: 600,
       background: color + "22", color,
     }}>{status}</span>
   );
@@ -189,11 +189,11 @@ export default function SystemPage() {
           <SectionTitle>이미지 현황</SectionTitle>
           <div style={{ display: "flex", gap: 24, marginBottom: 16 }}>
             <div>
-              <div style={{ fontSize: 12, color: "var(--c-text5)" }}>총 이미지</div>
+              <div style={{ fontSize: 14, color: "var(--c-text5)" }}>총 이미지</div>
               <div style={{ fontSize: 22, fontWeight: 700, color: C.primary }}>{fmtNum(images?.total)}</div>
             </div>
             <div>
-              <div style={{ fontSize: 12, color: "var(--c-text5)" }}>용량</div>
+              <div style={{ fontSize: 14, color: "var(--c-text5)" }}>용량</div>
               <div style={{ fontSize: 22, fontWeight: 700, color: C.muted }}>
                 {images?.total_size_mb != null ? `${images.total_size_mb.toFixed(1)} MB` : "—"}
               </div>
@@ -214,16 +214,16 @@ export default function SystemPage() {
                 <thead>
                   <tr>
                     {["파일명", "크기", "생성"].map(h => (
-                      <th key={h} style={{ textAlign: "left", padding: "6px 8px", fontSize: 12, color: "var(--c-text5)", fontWeight: 600, borderBottom: "1px solid var(--c-bdr)" }}>{h}</th>
+                      <th key={h} style={{ textAlign: "left", padding: "6px 8px", fontSize: 14, color: "var(--c-text5)", fontWeight: 600, borderBottom: "1px solid var(--c-bdr)" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {images.recent.slice(0, 8).map(img => (
                     <tr key={img.name}>
-                      <td style={{ padding: "6px 8px", fontSize: 12, color: "var(--c-text2)", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{img.name}</td>
-                      <td style={{ padding: "6px 8px", fontSize: 12, color: "var(--c-text5)", whiteSpace: "nowrap" }}>{img.size_kb} KB</td>
-                      <td style={{ padding: "6px 8px", fontSize: 12, color: "var(--c-text5)", whiteSpace: "nowrap" }}>{ago(img.mtime)}</td>
+                      <td title={img.name} style={{ padding: "6px 8px", fontSize: 14, color: "var(--c-text2)", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{img.name}</td>
+                      <td style={{ padding: "6px 8px", fontSize: 14, color: "var(--c-text5)", whiteSpace: "nowrap" }}>{img.size_kb} KB</td>
+                      <td style={{ padding: "6px 8px", fontSize: 14, color: "var(--c-text5)", whiteSpace: "nowrap" }}>{ago(img.mtime)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -246,7 +246,7 @@ export default function SystemPage() {
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, flex: 1 }}>
                   {(cap.intents ?? []).map(intent => (
                     <span key={intent} style={{
-                      fontSize: 12, padding: "2px 10px", borderRadius: 20,
+                      fontSize: 14, padding: "2px 10px", borderRadius: 20,
                       background: "var(--c-bdr)", color: "var(--c-text2)",
                     }}>{intent}</span>
                   ))}

@@ -338,3 +338,67 @@ def test_미수집을_조회0으로_단정하지_않는다():
     src = inspect.getsource(pc._collect_naver_stats_batch)
     assert '"조회수" not in text' in src or "'조회수' not in text" in src, (
         "페이지가 열리지 않았을 때 0 으로 단정하지 않는 가드가 없다")
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑨ 토큰 장부 — `model` 이 비면 모델 교체 전후 비교가 불가능해진다
+# ══════════════════════════════════════════════════════════════════
+def test_sdk_경로가_모델을_장부에_남긴다():
+    """★ `sdk_query` 경로만 `model=""` 이 코드에 박혀 있었다 (ERRORS [592]).
+
+    값이 없어서가 아니라 **안 넘겨서** 비었다 — `run_sdk_query` 는 같은 함수 안에서
+    이미 `shared.llm.model_id()` 로 모델을 정하고 SDK 옵션엔 제대로 실어 보내면서
+    장부에만 빈 문자열을 적었다. 그 경로가 전체 캐시 읽기의 절반을 쓴다.
+    """
+    import shared.claude_sdk_compat as sc
+    import shared.token_usage as tu
+
+    seen: dict = {}
+    orig = tu.record_call
+    tu.record_call = lambda **kw: seen.update(kw)
+    try:
+        sc._record_sdk_usage({"usage": {}, "cost": 0, "dur": 0, "turns": 3},
+                             ok=True, model="test-model-xyz")
+    finally:
+        tu.record_call = orig
+    assert seen.get("model") == "test-model-xyz", \
+        f"모델이 장부까지 흘러가지 않는다: {seen.get('model')!r}"
+
+
+def test_sdk_호출부가_모델을_실제로_넘긴다():
+    """헬퍼가 받을 준비만 하고 호출부가 안 넘기면 여전히 빈다 — 배선을 AST 로 본다."""
+    import ast
+    import inspect
+
+    import shared.claude_sdk_compat as sc
+
+    tree = ast.parse(inspect.getsource(sc.run_sdk_query).lstrip())
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", "") == "_record_sdk_usage"]
+    assert calls, "run_sdk_query 가 계측을 부르지 않는다"
+    for c in calls:
+        assert any(k.arg == "model" for k in c.keywords), \
+            "계측 호출에 model 인자가 없다 — 장부의 model 이 빈 채로 쌓인다"
+
+
+def test_소급분은_실측과_구분되어_기록된다():
+    """소급 추정치를 실측처럼 적으면 다음 사람이 그것을 실측으로 믿는다.
+
+    ★ 값이 아니라 **규약** 을 검사한다 — 로컬 DB 의 행 수를 세면 CI 에서 무의미해진다
+      (ERRORS [587] 과 같은 병).
+    """
+    import ast
+    import inspect
+
+    import shared.token_usage as tu
+
+    src = inspect.getsource(tu.backfill_missing_model)
+    tree = ast.parse(src.lstrip())
+    lits = {n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    joined = " ".join(lits)
+    assert "model_origin" in joined, "소급 표시 컬럼을 쓰지 않는다"
+    assert "backfill_git" in joined, "소급분에 출처 표시를 남기지 않는다"
+    # dry_run 기본값이 True 여야 실수로 DB 를 고치지 않는다
+    sig = inspect.signature(tu.backfill_missing_model)
+    assert sig.parameters["dry_run"].default is True, "기본값이 dry_run 이 아니다 — 사고 위험"

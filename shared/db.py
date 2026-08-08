@@ -2163,12 +2163,25 @@ def latest_batch(scope: str, platform: str) -> str:
       `''` 는 '플랫폼 미상' 이지 '다른 플랫폼' 이 아니다 — 정확 일치를 먼저 찾고,
       없을 때만 미상 주입으로 내려간다. 규약 해석은 여기 한 곳에서만 한다.
     """
+    # ★ **이번 회차의 것만** 잡는다 (2026-08-09 2차 적대적 검증)
+    #   `reward IS NULL` 만 걸면 보상이 안 붙은 옛 배치가 그대로 후보다 — 실측
+    #   **33개가 1일 이상 묵어 있었다**(가장 오래된 것 7/21). 그 상태에서 오늘 주입이
+    #   `platform=''` 로 들어가면, 게이트가 `'naver'` 로 물어 **7월 배치** 를 잡고
+    #   무관한 지침을 검사·마감한다(재현: 오늘 어긴 지침 기록 0행, 옛 배치가 violated=0 마감).
+    #   경계는 박지 않고 **액션 상한에서 파생** 한다 — 주입과 검사는 *같은 발행 액션
+    #   안* 에서 일어나므로, 액션 상한보다 오래된 배치는 이번 회차의 것일 수 없다.
+    try:
+        from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC as _dl
+    except Exception:      # 파생 실패 시에도 무한 과거를 열지 않는다(fail-closed)
+        _dl = 2400
+    _window = f"-{int(_dl)} seconds"
     with get_db() as conn:
         for pf in ([platform, ""] if platform else [""]):
             r = conn.execute(
                 "SELECT batch_id FROM insight_usage "
                 "WHERE scope = ? AND platform = ? AND reward IS NULL "
-                "ORDER BY id DESC LIMIT 1", (scope, pf)).fetchone()
+                "  AND used_at >= datetime('now','localtime',?) "
+                "ORDER BY id DESC LIMIT 1", (scope, pf, _window)).fetchone()
             if r:
                 return str(r[0])
     return ""

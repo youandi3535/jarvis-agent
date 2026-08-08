@@ -1030,11 +1030,17 @@ def _ignore_reason(rec: dict) -> str:
     msg = rec.get("message") or ""
     src = rec.get("source") or ""
     k   = kind_of(rec)
-    # is_transient 의 내부 판정 순서와 동일한 순서로 '한 인자만' 넣어 본다.
-    # ★ 실제 판정과 **같은 인자** 로 물어본다 (2026-08-08) — companions 를 빼면
-    #   봉투 신호를 "kind 때문에 무시됨" 이라고 설명하는데 정작 무시되지 않았다.
+    # ★ **먼저 실제 결정을 그대로 묻는다** (2026-08-09 2차 적대적 검증)
+    #   종전엔 다리를 하나씩 물어(`한 인자만`) 어느 필터가 걸렀는지 추정했는데,
+    #   그 방식은 `is_transient` 의 **조기 return 우선순위를 무시** 한다.
+    #   실측: 봉투 kind + companions 없음 → 실제 판정은 *격리 안 함*(봉투 분기가
+    #   먼저 return) 인데, 설명기는 그 분기를 건너뛰고 메시지 정규식 다리가 True 인 것을
+    #   보고 "정규식:메시지" 라 답했다 — 격리 버킷 보고 **91행 전부**가 그랬다.
     #   설명이 결정과 어긋나면 사람이 엉뚱한 곳을 고친다.
-    if k and is_transient("", "", "", kind=k, companions=companions_of(rec)):
+    _comp = companions_of(rec)
+    if not is_transient(et, msg, src, kind=k, companions=_comp):
+        return "격리 대상 아님(현행 규칙)"
+    if k and is_transient("", "", "", kind=k, companions=_comp):
         return f"kind:{k}"
     if src and is_transient("", "", src, ""):
         return f"source:{src}"

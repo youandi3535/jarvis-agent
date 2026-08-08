@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useLatestVisible } from "@/lib/scroll";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 import { severityColor, statusColor, fmtNum, fmtTime, C } from "@/lib/utils";
@@ -57,7 +58,7 @@ function Badge({ label, color }: { label: string; color: string }) {
     <span style={{
       display: "inline-flex", alignItems: "center",
       padding: "2px 10px", borderRadius: 20,
-      fontSize: 12, fontWeight: 600,
+      fontSize: 14, fontWeight: 600,
       background: color + "22", color,
     }}>{label}</span>
   );
@@ -65,7 +66,8 @@ function Badge({ label, color }: { label: string; color: string }) {
 
 /* ─── 7일 추이 바 차트 ──────────────────────────────── */
 function TrendChart({ trend }: { trend: TrendDay[] }) {
-  const max = Math.max(...trend.map(d => d.total), 1);
+  const trendScrollRef = useLatestVisible(trend);
+    const max = Math.max(...trend.map(d => d.total), 1);
   return (
     /* 막대 개수는 API 파생(런타임)이라 폭을 보장할 수 없다 —
        자리가 남으면 flex:1 로 채우고, 모자라면 *의도된* 가로 스크롤로 전부 보여준다.
@@ -75,10 +77,10 @@ function TrendChart({ trend }: { trend: TrendDay[] }) {
         갉아먹어 막대 값 라벨 위쪽이 잘리는데, 세로로는 스크롤이 안 생겨(시작 경계 밖은
         스크롤 대상이 아니다) **읽을 방법이 사라진다**. 실측: clientH 74 / 내용 84.
         minHeight 로 두면 스크롤바 자리를 높이가 흡수한다. */
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 6, minHeight: 80, marginTop: 12, overflowX: "auto" }}>
+    <div ref={trendScrollRef} style={{ display: "flex", alignItems: "flex-end", gap: 6, minHeight: 80, marginTop: 12, overflowX: "auto" }}>
       {trend.map(d => (
         <div key={d.day} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-          <div style={{ fontSize: 12, color: "var(--c-text5)", whiteSpace: "nowrap" }}>{d.total}</div>
+          <div style={{ fontSize: 14, color: "var(--c-text5)", whiteSpace: "nowrap" }}>{d.total}</div>
           <div style={{ width: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", height: 40 }}>
             <div style={{
               width: "100%",
@@ -88,7 +90,7 @@ function TrendChart({ trend }: { trend: TrendDay[] }) {
               opacity: 0.85,
             }} />
           </div>
-          <div style={{ fontSize: 12, color: "var(--c-text5)", whiteSpace: "nowrap" }}>
+          <div style={{ fontSize: 14, color: "var(--c-text5)", whiteSpace: "nowrap" }}>
             {d.day.slice(5)}
           </div>
         </div>
@@ -119,7 +121,7 @@ function SourceChart({ sources }: { sources: SourceRow[] }) {
           <div style={{ width: 40, fontSize: 14, color: "var(--c-text)", textAlign: "right", flexShrink: 0 }}>
             {s.total}
           </div>
-          <div style={{ width: 32, fontSize: 12, color: C.success, textAlign: "right", flexShrink: 0 }}>
+          <div style={{ width: 44, fontSize: 14, color: C.success, textAlign: "right", flexShrink: 0 }}>
             {s.fixed > 0 ? `+${s.fixed}` : ""}
           </div>
         </div>
@@ -373,7 +375,7 @@ export default function ErrorsPage() {
                 {["ID", "시각", "에이전트", "모듈", "타입", "심각도", "상태", "메시지"].map(h => (
                   <th key={h} style={{
                     textAlign: "left", padding: "8px 12px",
-                    fontSize: 12, color: "var(--c-text5)", fontWeight: 600,
+                    fontSize: 14, color: "var(--c-text5)", fontWeight: 600,
                     borderBottom: "1px solid var(--c-bdr)", whiteSpace: "nowrap",
                   }}>{h}</th>
                 ))}
@@ -382,7 +384,7 @@ export default function ErrorsPage() {
             <tbody>
               {latest.map((e, i) => (
                 <tr key={e.id} style={{ background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)" }}>
-                  <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--c-text5)" }}>{e.id}</td>
+                  <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text5)" }}>{e.id}</td>
                   <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", whiteSpace: "nowrap" }}>{fmtTime(e.timestamp)}</td>
                   <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", overflowWrap: "break-word" }}>{e.source ?? "—"}</td>
                   <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", ...wrapCell(CELL_CH.module) }}>{e.module ?? "—"}</td>

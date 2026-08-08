@@ -1085,7 +1085,7 @@ def report_user_observed_incident(
             expected="'경제 브리핑' 카테고리",
             actual="첫 번째 항목으로 fallback",
             detection="user_visual",
-            source_files=["JARVIS02_WRITER/naver_poster.py"],
+            source_files=["JARVIS08_PUBLISH/platforms/naver_poster.py"],
             severity="high",
         )
     """

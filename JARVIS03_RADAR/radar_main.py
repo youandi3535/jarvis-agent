@@ -466,6 +466,24 @@ def save(data: dict):
             write_json(path, _kept, indent=2)
             print(f"[RADAR] ⚠️ 실트렌드 0개 — 기존 {len(_kept['combined_keywords'])}개 판 보존 "
                   f"(이번 회차 빈손 {_kept['last_run_empty_count']}회째): {path.name}")
+            # ★ 신호를 되살린다 (2026-08-09 2차 적대적 검증)
+            #   판을 보존하면 하류(`_verify_trends`·`_pack_empty_reason`)가 파일만 보고
+            #   정상이라 판단한다 — 그래서 **이번 회차가 빈손이었다는 사실이 아무 데도
+            #   가지 않았다**. 파일 도장의 유일한 소비자(`_pack_empty_reason`)는 *팩이 빌 때만*
+            #   불리는데 판을 지켰으니 팩은 안 빈다 — 도장만으론 관측이 안 된다.
+            #   ※ `kind="trends_empty"` — 코드로 못 고치는 외부 상태라 기록만 남고
+            #     Tier-2 LLM 세션은 열리지 않는다(`severity._OWN_NON_CODE_KINDS`).
+            try:
+                _g_report("TrendsEmptyRunPreserved", "radar",
+                          message=(f"이번 회차 실트렌드 0개 (연속 {_kept['last_run_empty_count']}회) — "
+                                   f"기존 {len(_kept['combined_keywords'])}개 판 보존. "
+                                   f"덮었으면 하류 주제 선정 불가"),
+                          module=__name__, func_name="save",
+                          context={"kind": "trends_empty",
+                                   "empty_streak": _kept["last_run_empty_count"],
+                                   "kept": len(_kept["combined_keywords"])})
+            except Exception:
+                pass
             return
     write_json(path, data, indent=2)
     print(f"[RADAR] 로컬 저장: {path.name}")

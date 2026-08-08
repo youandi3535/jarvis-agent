@@ -373,8 +373,23 @@ def build_insights_block(scope: str = "all", theme: str = "",
                     insight_ids=used_ids,
                     scope=scope, platform=platform, theme=theme,
                 )
-            except Exception:
-                pass  # 기록 실패해도 주입은 진행 (학습 1회 누락 < 글 품질)
+            except Exception as _ue:
+                # 주입은 계속한다 (학습 1회 누락 < 글 품질) — 다만 **조용히 넘기지 않는다**.
+                # ★ 2026-08-09 2차 적대적 검증: 게이트가 이 기록을 읽도록 바뀐 뒤로,
+                #   기록 실패는 '학습 1회 누락' 이 아니라 **C축 검사가 통째로 꺼지는** 사건이다
+                #   (지침은 프롬프트에 들어갔는데 지켰는지 아무도 안 본다).
+                #   `except: pass` 로 두면 그 사실이 어디에도 남지 않는다.
+                try:
+                    from JARVIS07_GUARDIAN.error_collector import report as _g_rep
+                    _g_rep("InsightUsageRecordFailed", "quality_learner",
+                           message=(f"지침 {len(used_ids)}건을 주입했으나 사용 기록 실패 — "
+                                    f"이번 글의 지침 준수 검사가 꺼진다: "
+                                    f"{type(_ue).__name__}: {_ue}"),
+                           module=__name__, func_name="build_insights_block",
+                           context={"kind": "usage_record_failed", "scope": scope,
+                                    "platform": platform, "n": len(used_ids)})
+                except Exception:
+                    pass
 
         return "\n".join(lines)
     except Exception:
