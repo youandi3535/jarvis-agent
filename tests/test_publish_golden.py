@@ -2963,34 +2963,76 @@ def test_LLM절약_지표가_한_칸에_두_정의를_담지_않는다():
         "API 타임라인이 옛 칸을 내려보낸다"
 
 
-def test_심층감사_실패가_성공으로_기록되지_않는다():
-    """★ `run_auto_repair` 는 SDK 실패를 예외로 올리지 않고 returncode 로만 남긴다.
+def test_심층감사_실패가_job_runs에_success0로_적힌다():
+    """★ **실제 스케줄러로** 돌려 `job_runs` 행을 확인한다 (2026-08-08 재검증 후 재작성).
 
-    실측: job_runs **39/39 success** 인데 rc=0 마지막이 2026-07-26 — 13일째 죽어 있었다.
-    사후 보정은 발행 도메인이 쓰는 `job_history.mark_outcome` 을 재사용한다(①).
+    초판은 AST 로 "보정 함수를 부르는가" 만 봤고 **통과했다** — 그런데 실동작은
+    항상 `no_row` 였다. `job_runs` 행은 `_on_job_executed`(콜백 *종료 후*)에만
+    INSERT 되므로, 콜백 본체에서 보정하면 대상 행이 아직 없다.
+    실측 j07_deep_audit 39/39 success=1 — 끄겠다던 초록불이 그대로였다.
+
+    그래서 이 검사는 **행을 본다.** 함수 이름이 아니라.
     """
-    import ast
-    import inspect
+    import subprocess
+    import sys
+    import textwrap
 
+    probe = textwrap.dedent("""
+        import os, sys, tempfile, time
+        os.environ["JARVIS_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "e2e.sqlite")
+        sys.path.insert(0, os.getcwd())
+        import shared.db as db; db.init_db()
+        import JARVIS07_GUARDIAN.guardian_agent as ga
+        RC = int(sys.argv[1])
+        ga.deep_audit_backlog = lambda *a, **k: {}
+        ga.report_ignored_bucket = lambda *a, **k: None
+        def _fake():
+            with db.get_db() as c:
+                c.execute("INSERT INTO self_repair_runs (model, elapsed_sec, returncode,"
+                          " summary) VALUES ('t',1,?,'x')", (RC,))
+        import JARVIS07_GUARDIAN.auto_repair as ar
+        ar.run_auto_repair = _fake
+        from JARVIS04_SCHEDULER.job_catalog import create_scheduler
+        from JARVIS04_SCHEDULER.job_history import attach_listeners
+        from datetime import datetime, timedelta
+        sch = create_scheduler(); attach_listeners(sch); sch.start()
+        sch.add_job(ga.job_deep_audit, "date", id="j07_deep_audit",
+                    run_date=datetime.now() + timedelta(seconds=1))
+        time.sleep(4); sch.shutdown(wait=True)
+        with db.get_db() as c:
+            r = c.execute("SELECT success FROM job_runs WHERE job_id='j07_deep_audit'"
+                          ).fetchone()
+        print("SUCCESS=" + (str(r["success"]) if r else "NOROW"))
+    """)
+    out = {}
+    for rc in ("-99", "0"):
+        r = subprocess.run([sys.executable, "-c", probe, rc], cwd=str(_ROOT),
+                           capture_output=True, text=True, timeout=120)
+        line = next((l for l in r.stdout.splitlines() if l.startswith("SUCCESS=")), "")
+        out[rc] = line.replace("SUCCESS=", "")
+    assert out["-99"] == "0", \
+        f"실패 회차(rc=-99)가 job_runs 에 success={out['-99']} 로 적혔다 (기대 0)"
+    assert out["0"] == "1", \
+        f"성공 회차(rc=0)가 success={out['0']} 로 적혔다 (기대 1) — 과잉 실패 처리"
+
+
+def test_회차_판정이_테이블_최신행이_아니라_이번_회차를_본다():
+    """★ 남의 회차 결과로 이번 판정을 하면 안 된다."""
     from JARVIS07_GUARDIAN import guardian_agent as _ga
+    from shared.db import get_db
 
-    assert hasattr(_ga, "_last_repair_returncode"), "returncode 파생이 없다"
-    assert hasattr(_ga, "_mark_job_failed"), "실패 보정 경로가 없다"
-
-    # job_deep_audit 이 실제로 그 둘을 부르는가 (AST)
-    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
-    fn = next((n for n in ast.walk(tree)
-               if isinstance(n, ast.FunctionDef) and n.name == "job_deep_audit"), None)
-    assert fn, "job_deep_audit 을 찾을 수 없다"
-    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
-    assert "_last_repair_returncode" in called, "returncode 를 보지 않는다"
-    assert "_mark_job_failed" in called, "실패를 기록하지 않는다"
-
-    # 보정 경로가 job_history 단일 진입점을 쓰는가 (새 SQL 신설 금지)
-    src = _code_only(inspect.getsource(_ga._mark_job_failed))
-    assert "mark_outcome" in src, "job_history 단일 진입점을 안 쓴다"
-    assert "INSERT" not in src.upper() and "UPDATE" not in src.upper(), \
-        "사후 보정이 자체 SQL 을 만든다 — 주인은 job_history 하나다"
+    wm = _ga._repair_watermark()
+    assert _ga._repair_returncode_since(wm) is None, "워터마크 이후가 비었는데 값이 나온다"
+    with get_db() as c:
+        c.execute("INSERT INTO self_repair_runs (model, elapsed_sec, returncode, summary) "
+                  "VALUES ('probe',1,0,'ok')")
+    assert _ga._repair_returncode_since(wm) == 0
+    with get_db() as c:
+        c.execute("INSERT INTO self_repair_runs (model, elapsed_sec, returncode, summary) "
+                  "VALUES ('probe',1,-99,'bad')")
+    assert _ga._repair_returncode_since(wm) == -99, "실패가 섞였는데 성공으로 본다"
+    # 워터마크를 지금으로 올리면 이전 행은 안 보인다
+    assert _ga._repair_returncode_since(_ga._repair_watermark()) is None
 
 
 def test_트렌드검증이_정적시드에_속지_않는다():
@@ -3009,6 +3051,11 @@ def test_트렌드검증이_정적시드에_속지_않는다():
     root = _ROOT / "JARVIS03_RADAR" / "data"
     today = dt.date.today().isoformat()
     fp = root / f"trends_{today}.json"
+    # ★ CI 엔 이 폴더가 **통째로 없다** (data/*.json 이 .gitignore 라 디렉터리도 안 온다).
+    #   종전엔 곧장 write_text 를 불러 FileNotFoundError 로 깨졌다 — 테스트가
+    #   '내 맥북에 폴더가 있다' 는 사실에 기댄 것이다 (ERRORS [568] 과 같은 병).
+    dir_made = not root.exists()
+    root.mkdir(parents=True, exist_ok=True)
     backup = fp.read_text(encoding="utf-8") if fp.exists() else None
     try:
         # 실트렌드 전멸 + 정적 시드로 채워진 날 (실측 08-01 의 모양)
@@ -3032,6 +3079,9 @@ def test_트렌드검증이_정적시드에_속지_않는다():
             fp.write_text(backup, encoding="utf-8")
         elif fp.exists():
             fp.unlink()
+        # 우리가 만든 폴더면 되돌린다 — 테스트가 저장소에 흔적을 남기지 않는다
+        if dir_made and root.is_dir() and not any(root.iterdir()):
+            root.rmdir()
 
 
 def test_수집_산출물이_시드_비율을_남긴다():
@@ -3340,6 +3390,13 @@ def test_eval_훅이_venv_파이썬을_쓴다():
     import subprocess
 
     cfg = _ROOT / ".claude" / "settings.json"
+    # ★ `.claude/` 는 **의도적 .gitignore**(.gitignore:60) — 로컬 Claude Code 설정이라
+    #   CI 에는 존재할 수 없다. 종전엔 곧장 read_text 를 불러 GitHub Actions 에서
+    #   FileNotFoundError 로 깨졌다. 저장소가 갖고 있지 않은 것을 저장소 검사가
+    #   보장할 수는 없다 — 없으면 *조용히 통과* 가 아니라 **사유를 밝히고 건너뛴다**.
+    #   (설정을 추적 대상으로 바꾸면 이 검사가 CI 에서도 돈다 — 별건 판단.)
+    if not cfg.is_file():
+        pytest.skip("로컬 전용 훅 설정 부재 (.claude/ 는 .gitignore) — CI 에서는 검사 불가")
     raw = cfg.read_text(encoding="utf-8")
     json.loads(raw)                        # 깨진 JSON 이면 훅이 통째로 죽는다
 
@@ -3351,7 +3408,9 @@ def test_eval_훅이_venv_파이썬을_쓴다():
     # 폴백이 있는가 (venv 가 없는 환경에서도 훅이 죽지 않아야 한다)
     assert "|| echo python3" in raw, "venv 부재 시 폴백이 없다 — 다른 환경에서 훅이 죽는다"
 
-    # 그 표현이 실제로 도는 파이썬을 고르는가
+    # 그 표현이 실제로 도는 파이썬을 고르는가 (venv 가 있는 환경에서만 — 폴백은 위에서 검사)
+    if not (_ROOT / ".venv" / "bin" / "python").exists():
+        pytest.skip("venv 부재 — 훅 표현의 폴백 분기는 위에서 이미 검사했다")
     expr = ('test -x "$D/.venv/bin/python" && echo "$D/.venv/bin/python" || echo python3')
     got = subprocess.run(["sh", "-c", f'D="{_ROOT}"; {expr}'],
                          capture_output=True, text=True).stdout.strip()
@@ -3379,10 +3438,28 @@ def test_학습원장에_복구경로가_있다():
     assert "backup" in kw and getattr(kw["backup"], "value", False) is True, \
         "저장 시 .bak 을 만들지 않는다 — 복구 경로가 없다"
 
-    # 실제로 .bak 이 생기는가
-    _pf._save_learned(_pf._load_learned())
-    bak = _ROOT / "JARVIS07_GUARDIAN" / "learned_patterns.json.bak"
-    assert bak.exists() and bak.stat().st_size > 0, ".bak 이 안 생긴다"
+    # 실제로 .bak 이 생기는가 — **합성 파일로** 확인한다
+    #  ★ 종전엔 `_save_learned(_load_learned())` 로 *실 원장* 을 다시 썼다. 두 가지가 틀렸다:
+    #    ① 원장은 `.gitignore` 대상이라 CI 엔 없다 → 백업할 원본이 없어 `.bak` 이 안 생기고
+    #       테스트가 GitHub Actions 에서만 깨졌다 (ERRORS [568] 과 같은 병).
+    #    ② 테스트가 **운영 학습 자산을 덮어썼다** — 검사가 부작용을 남기면 안 된다.
+    #  검사할 것은 '내 맥북에 원장이 있나' 가 아니라 **'정문이 직전 세대를 남기는가'** 다.
+    import tempfile
+    from pathlib import Path
+
+    from JARVIS07_GUARDIAN.json_store import write_json
+
+    with tempfile.TemporaryDirectory() as td:
+        fp = Path(td) / "learned_patterns.json"
+        write_json(fp, {"세대": 1}, backup=True)          # 첫 저장 — 원본이 없다
+        write_json(fp, {"세대": 2}, backup=True)          # 두 번째 — 직전 세대가 .bak 으로
+        bak = fp.with_suffix(fp.suffix + ".bak")
+        assert bak.exists() and bak.stat().st_size > 0, ".bak 이 안 생긴다"
+        import json as _json
+        assert _json.loads(bak.read_text(encoding="utf-8")) == {"세대": 1}, \
+            ".bak 이 직전 세대가 아니다 — 복구해도 옛 상태로 못 돌아간다"
+        assert _json.loads(fp.read_text(encoding="utf-8")) == {"세대": 2}, \
+            "본문이 최신이 아니다"
 
 
 def test_도달불가_지문이_매칭후보에서_빠진다():

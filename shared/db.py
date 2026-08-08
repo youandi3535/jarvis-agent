@@ -1388,18 +1388,25 @@ def backup_gaps(days: int = 7) -> list:
             if (today - timedelta(days=i)) not in have]
 
 
-def learning_asset_files() -> list:
+LEARNING_ASSET_DIRS = ("JARVIS07_GUARDIAN", "JARVIS06_IMAGE")
+LEARNING_ASSET_PATTERNS = ("learned_*.json", "*_state.json", "design_recipes.json")
+
+
+def learning_asset_files(root=None) -> list:
     """DB 밖에 사는 **학습 산출물 파일** 목록 — 백업 대상 (2026-08-08).
 
     ★ 목록을 박지 않는다(②): 소유 폴더에서 *꼴* 로 찾는다. 새 학습기가
       `learned_*.json`·`*_state.json` 을 만들면 자동으로 백업에 딸려온다.
     ★ 왜 분리했나: `backup_db` 안에 인라인으로 두면 **동작으로 검증할 수가 없어서**
       회귀 테스트가 소스 문자열을 보게 되고, 그건 주석에 속는다(실측: 이 파일에서 발생).
+    ★ `root` 인자 (2026-08-08 추가) — 대상 파일이 전부 `.gitignore` 라 **CI 에는 없다**.
+      실 저장소를 보게 두면 회귀 테스트가 "내 맥북에서만 통과" 가 된다(ERRORS [568]).
+      테스트는 합성 트리를 넘겨 *규칙* 을 검사하고, 운영은 인자 없이 종전대로 쓴다.
     """
-    root = Path(__file__).resolve().parent.parent
-    pats = ("learned_*.json", "*_state.json", "design_recipes.json")
+    root = Path(root) if root is not None else Path(__file__).resolve().parent.parent
+    pats = LEARNING_ASSET_PATTERNS
     out: list = []
-    for folder in ("JARVIS07_GUARDIAN", "JARVIS06_IMAGE"):
+    for folder in LEARNING_ASSET_DIRS:
         d = root / folder
         if not d.is_dir():
             continue

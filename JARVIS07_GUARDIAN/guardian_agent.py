@@ -1171,36 +1171,44 @@ def report_ignored_bucket() -> dict:
 
 
 
-def _last_repair_returncode() -> "int | None":
-    """직전 자가진단 회차의 returncode — `self_repair_runs` 에서 파생. 없으면 None."""
+def _repair_watermark() -> int:
+    """지금까지 기록된 자가진단 회차의 최대 id — **이번 회차를 가려내는 기준선**.
+
+    ★ 왜 필요한가 (2026-08-08 재검증)
+      종전 `_last_repair_returncode()` 는 `ORDER BY id DESC LIMIT 1` 로 **테이블 최신 행**
+      을 봤다. 그건 '이번 회차' 가 아니다 — 다른 경로가 그 사이 회차를 적었거나
+      이번 회차가 아예 기록을 못 남긴 경우, 남의 결과를 이번 판정에 쓴다.
+      실행 전 워터마크를 찍어 두고 그보다 뒤에 생긴 행만 본다.
+    """
     try:
         from shared import db as _db
         with _db.get_db() as conn:
-            row = conn.execute(
-                "SELECT returncode FROM self_repair_runs ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-        return int(row["returncode"]) if row is not None else None
+            row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM self_repair_runs").fetchone()
+        return int(row[0] or 0)
+    except Exception as e:
+        log.warning(f"[GUARDIAN/deepaudit] 워터마크 조회 실패: {e}")
+        return 0
+
+
+def _repair_returncode_since(watermark: int) -> "int | None":
+    """워터마크 **이후** 기록된 회차의 returncode. 기록이 없으면 None.
+
+    여러 건이면 하나라도 실패면 실패로 본다(가장 나쁜 것을 보고한다).
+    """
+    try:
+        from shared import db as _db
+        with _db.get_db() as conn:
+            rows = conn.execute(
+                "SELECT returncode FROM self_repair_runs WHERE id > ? ORDER BY id",
+                (int(watermark),)).fetchall()
+        if not rows:
+            return None
+        codes = [int(r["returncode"]) for r in rows]
+        bad = [c for c in codes if c != 0]
+        return bad[0] if bad else 0
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] returncode 조회 실패: {e}")
         return None
-
-
-def _mark_job_failed(job_id: str, error: str) -> None:
-    """잡 실행 이력을 **사후 실패로 보정** — 창은 잡 스케줄에서 파생한다.
-
-    ★ 시각을 박지 않는다(②). 방금 끝난 실행을 가리키려면 '지금 기준 최근 창' 이면 되고,
-      그 폭은 `job_history` 가 이미 아는 값이다. 여기서 새 규칙을 만들지 않는다.
-    """
-    try:
-        from datetime import datetime, timedelta
-
-        from JARVIS04_SCHEDULER.job_history import mark_outcome
-        now = datetime.now()
-        r = mark_outcome(job_id, now - timedelta(hours=6), now + timedelta(minutes=5),
-                         success=False, error=error[:300])
-        log.warning(f"[GUARDIAN/deepaudit] 실패 보정 → {job_id}: {r} ({error[:120]})")
-    except Exception as e:
-        log.warning(f"[GUARDIAN/deepaudit] 실패 보정 불가: {e}")
 
 def job_deep_audit() -> None:
     """매일 04:30 — 심층 코드 감사 (DB 백업 03:00 이후, 발행과 분리).
@@ -1224,22 +1232,28 @@ def job_deep_audit() -> None:
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] backlog 처리 예외: {e}")
     _audit_rc = None
+    _wm = _repair_watermark()
     try:
         from JARVIS07_GUARDIAN.auto_repair import run_auto_repair
         run_auto_repair()
-        _audit_rc = _last_repair_returncode()
+        _audit_rc = _repair_returncode_since(_wm)
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] 광범위 감사 예외: {e}")
         _audit_rc = -1
-    # ★ 실패한 회차를 **성공으로 기록하지 않는다** (2026-08-08 감사).
-    #   `run_auto_repair` 는 SDK 실패를 예외로 올리지 않고 returncode 로만 남긴다.
-    #   그래서 APScheduler 는 "콜백이 예외 없이 끝났다" 는 이유로 success=1 을 적었고,
-    #   실측 job_runs 는 **39/39 success** 인데 rc=0 인 마지막 회차는 2026-07-26 이었다
-    #   — 13일째 죽어 있었는데 대시보드는 내내 초록불이었다.
-    #   새 잡·새 알림을 만들지 않는다. 발행 도메인이 같은 병에 쓰는 `mark_outcome` 을
-    #   그대로 재사용한다(① 단일 진입점 — 사후 보정의 주인은 job_history 하나).
+    # ★ 실패한 회차를 **성공으로 기록하지 않는다** (2026-08-08 재검증으로 재작성).
+    #
+    #   1차 시도는 콜백 안에서 `mark_outcome` 으로 사후 보정하려 했는데 **항상 no_row**
+    #   였다 — `job_runs` 행은 `_on_job_executed`(콜백 *종료 후*)에만 INSERT 되므로
+    #   콜백 본체에서는 보정할 행이 아직 없다. 실측 j07_deep_audit 39/39 success=1 그대로.
+    #   더 나쁜 건 6시간 창에 이전 행이 있으면 **직전의 진짜 성공 회차를 실패로 뒤집는다**.
+    #
+    #   그래서 보정을 하지 않는다 — **애초에 실패로 적히게** 한다.
+    #   `run_auto_repair` 가 rc 로만 남기는 실패를 여기서 예외로 올리면
+    #   APScheduler 의 `EVENT_JOB_ERROR` → `job_history._on_job_error` 가
+    #   `success=False` 로 **정규 경로에서** 적재한다. 새 보정 경로를 만들지 않는다(①).
+    #   ※ 예외는 이 잡을 끝내는 것뿐 — 스케줄러도 다른 잡도 영향받지 않는다.
     if _audit_rc not in (None, 0):
-        _mark_job_failed("j07_deep_audit", f"auto_repair returncode={_audit_rc}")
+        raise RuntimeError(f"심층 감사 실패 — auto_repair returncode={_audit_rc}")
     # 3부: 격리 버킷 집계·추세 보고 (★ 결함3) — 새 잡 신설 없이 기존 일일 잡에 편승
     try:
         report_ignored_bucket()

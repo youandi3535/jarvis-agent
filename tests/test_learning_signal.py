@@ -201,18 +201,58 @@ def test_발행잡_유예는_늘어나지_않는다():
 # ══════════════════════════════════════════════════════════════════
 # ⑥⑦ 학습 자산 백업 · 폴백 경로 주입
 # ══════════════════════════════════════════════════════════════════
-def test_학습자산이_백업에_동반된다():
+def test_학습자산이_백업에_동반된다(tmp_path):
     """`learned_patterns.json`·`bandit_state.json` 은 git 밖이라 사본이 0개였다.
 
     ★ **동작으로** 검사한다 — 소스 문자열 검사는 *이 테스트의 설명 주석* 에 속는다
       (실측: 초판이 그렇게 변이를 통과시켰다. 오늘 네 번째 같은 실수).
+    ★ **합성 트리로** 검사한다 (2026-08-08 정정) — 초판은 실 저장소를 훑어
+      `learned_patterns.json` 이 *내 맥북에 있다* 는 사실에 기댔다. 그 파일은
+      `.gitignore` 대상이라 CI 엔 없고, 그래서 이 테스트는 GitHub Actions 에서
+      깨졌다. 검사해야 할 것은 '내 컴퓨터에 파일이 있나' 가 아니라
+      **'이 꼴의 파일을 백업 대상으로 집어내는가'** 다 (ERRORS [568] 과 같은 병).
     """
     from shared.db import learning_asset_files
 
-    names = {p.name for p in learning_asset_files()}
-    assert "learned_patterns.json" in names, "패턴 자산이 백업 대상에서 빠졌다"
-    assert "bandit_state.json" in names, "밴딧 상태가 백업 대상에서 빠졌다"
-    assert all(p.exists() for p in learning_asset_files()), "존재하지 않는 경로가 섞였다"
+    want = {
+        "JARVIS07_GUARDIAN/learned_patterns.json",   # 자동수리 지문 원장
+        "JARVIS07_GUARDIAN/bandit_state.json",       # 밴딧 학습 상태
+        "JARVIS06_IMAGE/design_recipes.json",        # 이미지 디자인 학습
+    }
+    skip = {
+        "JARVIS07_GUARDIAN/ERRORS.md",               # 학습 산출물이 아니다
+        "JARVIS07_GUARDIAN/notes.txt",
+        "JARVIS02_WRITER/learned_patterns.json",     # 소유 폴더 밖 — 대상 아님
+    }
+    for rel in want | skip:
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("{}", encoding="utf-8")
+
+    got = {str(q.relative_to(tmp_path)) for q in learning_asset_files(root=tmp_path)}
+    assert want <= got, f"학습 자산이 백업 대상에서 빠졌다: {want - got}"
+    assert not (skip & got), f"백업 대상이 아닌 것이 섞였다: {skip & got}"
+
+
+def test_백업자산_탐색이_실저장소에서도_돈다():
+    """합성 트리 검사가 *운영 경로* 까지 보장하지는 않는다 — 인자 없는 호출도 확인한다.
+
+    파일 존재는 머신마다 다르므로 **존재를 단정하지 않는다.** 대신 규약만 본다:
+    반환은 리스트, 모든 항목은 실존 파일, 소유 폴더 안, 패턴에 부합.
+    """
+    import fnmatch
+    from pathlib import Path
+
+    from shared.db import (LEARNING_ASSET_DIRS, LEARNING_ASSET_PATTERNS,
+                           learning_asset_files)
+
+    root = Path(__file__).resolve().parent.parent
+    for q in learning_asset_files():
+        assert q.is_file(), f"존재하지 않는 경로가 섞였다: {q}"
+        assert q.parent.name in LEARNING_ASSET_DIRS, f"소유 폴더 밖: {q}"
+        assert any(fnmatch.fnmatch(q.name, pat) for pat in LEARNING_ASSET_PATTERNS), \
+            f"패턴에 없는 파일: {q.name}"
+        assert q.is_relative_to(root), f"저장소 밖: {q}"
 
 
 def test_백업잡이_자산목록을_실제로_부른다():
