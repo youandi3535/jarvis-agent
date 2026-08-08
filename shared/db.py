@@ -2486,6 +2486,27 @@ def bump_error_seen(source: str, module: str, error_type: str,
         return False
 
 
+def _caller_reason(status: str) -> str:
+    """근거를 안 남긴 호출자에게서 **근거를 파생** 한다 (2026-08-08).
+
+    ★ 왜 호출자마다 문구를 박지 않았나 — 실측으로 근거 없는 상태 변경이 **18곳**이었고
+      (`wontfix` 61건 전원 `resolution` NULL), 문구를 18벌 박으면 ① 한 곳을 빠뜨리고
+      ② 새 호출자가 생기면 또 NULL 이 된다. 주인(DB)이 *보장* 하면 새 호출자도 자동으로
+      근거를 갖는다 — 목록을 관리할 필요가 없다(원칙①②).
+      사람이 쓴 사유가 있으면 **항상 그쪽이 우선** — 이건 최후의 바닥이다.
+    """
+    import inspect
+    try:
+        for fr in inspect.stack()[2:6]:          # 0=_caller_reason 1=mark_error_status
+            mod = (fr.frame.f_globals.get("__name__") or "")
+            if mod.startswith("shared.db") or mod == "__main__":
+                continue
+            return f"{status} — 사유 미기록 ({mod}.{fr.function}:{fr.lineno})"
+    except Exception:
+        pass
+    return f"{status} — 사유 미기록 (호출자 불명)"
+
+
 def mark_error_status(error_id: int, status: str, resolution: str = ""):
     """오류 상태 변경 (analyzing / wontfix / ignored / fixed).
 
@@ -2496,19 +2517,23 @@ def mark_error_status(error_id: int, status: str, resolution: str = ""):
       세 가지를 한 이름으로 말했다. 근거 없이 상태를 바꾸지 않는다.
       비워 두면 경고를 남기고 그 사실 자체를 기록한다 — 조용히 넘어가지 않는다.
     """
-    _why = (resolution or "").strip()
-    if status == "fixed" and not _why:
-        _why = "근거 미기록(호출자가 사유를 남기지 않음)"
-        log.warning("[db] #%s fixed 인데 사유가 없다 — 근거를 남길 것", error_id)
+    _why = (resolution or "").strip() or _caller_reason(status)
     with get_db() as conn:
-        if _why:
+        if status == "fixed":
+            # ★ `fixed_at` 은 **고쳐진 시각** 이다 — 다른 상태에 찍으면 수리시간 지표가
+            #   오염된다(2026-08-08 재검증). `new`·`wontfix` 는 사유만 남긴다.
             conn.execute(
                 "UPDATE error_log SET status=?, "
                 "  resolution = COALESCE(NULLIF(resolution,''), ?), "
                 "  fixed_at = COALESCE(fixed_at, datetime('now','localtime')) "
                 "WHERE id=?", (status, _why[:500], error_id))
         else:
-            conn.execute("UPDATE error_log SET status=? WHERE id=?", (status, error_id))
+            # ★ 사유는 **마지막 것을 남긴다** — 재시도 이력에서 중요한 건 *지금 왜 이 상태인가*
+            #   이고, 첫 사유를 고집하면 3회차 실패가 1회차 문구로 보인다.
+            #   (`fixed` 는 반대로 first-wins — 처음 고쳐진 근거가 진실이다.)
+            conn.execute(
+                "UPDATE error_log SET status=?, resolution=? WHERE id=?",
+                (status, _why[:500], error_id))
 
 
 # ── 격리 버킷(ignored) 관측 — 공개 헬퍼 (사용자 박제 2026-07-25) ──────────────

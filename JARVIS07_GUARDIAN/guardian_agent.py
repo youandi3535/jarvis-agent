@@ -506,8 +506,24 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
             _retry_original_job(error_record)
             return True
         else:
-            _db.mark_error_status(error_id, "wontfix")
-            log.warning(f"[GUARDIAN] #{error_id} SDK 수정 실패 → status=wontfix")
+            # ★ 롤백된 오류는 **여전히 살아 있다** (2026-08-08 재검증).
+            #   종전엔 `wontfix` 로 찍었는데, `j07_retry_pending`(10분)은 `status='new'`
+            #   만 보므로 그 순간 재시도 루프에서 빠지고 다음 Tier-2 는 최대 7일 뒤다.
+            #   `MAX_LLM_ATTEMPTS` 상한이 이미 있어 무한 재시도 위험은 없다 —
+            #   시도 여유가 남아 있는데 스스로 문을 닫을 이유가 없다.
+            #   실측 wontfix 61건 전부 `resolution` NULL 이었다 — '왜' 가 공백이었다.
+            _attempts = int(error_record.get("llm_attempts") or 0)
+            if _attempts >= _MAX_LLM_ATTEMPTS:
+                _db.mark_error_status(
+                    error_id, "wontfix",
+                    f"Tier-2 {_attempts}회 시도 후에도 미해결 (상한 도달)")
+                log.warning(f"[GUARDIAN] #{error_id} SDK 수정 실패 · 상한 도달 → wontfix")
+            else:
+                _db.mark_error_status(
+                    error_id, "new",
+                    f"Tier-2 수정 실패/롤백 — 재시도 대기 ({_attempts}/{_MAX_LLM_ATTEMPTS})")
+                log.warning(f"[GUARDIAN] #{error_id} SDK 수정 실패 → new (재시도 여유 "
+                            f"{_MAX_LLM_ATTEMPTS - _attempts}회)")
             # 알림은 _orchestrate()의 _notify_all()에서 통합 처리
             return False
 
@@ -533,7 +549,8 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
             pass
         try:
             from shared import db as _db
-            _db.mark_error_status(error_id, "wontfix")
+            _db.mark_error_status(error_id, "wontfix",
+                                  "Tier-2 SDK 브리지 예외 — 수동 검토 필요")
         except Exception:
             pass
         return False
@@ -612,14 +629,16 @@ def _orchestrate(error_id: int):
         if is_transient(error_type, error_record.get("message", ""),
                         error_record.get("source", ""), kind=kind_of(error_record)):
             log.info(f"[GUARDIAN] #{error_id} 일시적/외부/제어흐름 오류 — ignored (자동수정 비대상): {error_type}")
-            _db.mark_error_status(error_id, "ignored")
+            _db.mark_error_status(error_id, "ignored",
+                                  f"일시적/외부/제어흐름 오류 — 자동수정 비대상 ({error_type})")
             return
 
         # ── 안전장치 1: 보안 파일 수정 금지 ───────────────────────
         if _is_deny_path(module):
             log.warning(f"[GUARDIAN] #{error_id} 보안 파일 수정 차단 — {module}")
             _notify_all(error_record, "deny_path")
-            _db.mark_error_status(error_id, "wontfix")
+            _db.mark_error_status(error_id, "wontfix",
+                                  f"보안 파일이라 자동수정 금지 — {module}")
             return
 
         # ── 안전장치 2: Circuit breaker ───────────────────────────
@@ -725,7 +744,8 @@ def _orchestrate(error_id: int):
         if severity == "critical":
             log.warning(f"[GUARDIAN] #{error_id} critical + Tier 1 실패 → 수동 검토")
             _notify_all(error_record, "critical_manual", severity=severity)
-            _db.mark_error_status(error_id, "wontfix")
+            _db.mark_error_status(error_id, "wontfix",
+                                  "critical + Tier-1 실패 — Tier-2 생략하고 수동 검토로")
             return
 
         # ── 안전장치 2.65: 잠정 실패는 Tier 2 보류 (★ ERRORS [476]) ────────────

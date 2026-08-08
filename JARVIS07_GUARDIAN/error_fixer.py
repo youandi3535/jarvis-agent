@@ -67,7 +67,25 @@ _DENY_FILES = {
     "JARVIS02_WRITER/BLOG_SUPREME_LAW.md",  # 블로그 헌법
     "JARVIS07_GUARDIAN/project_audit_log.json",  # 감사 기록
     "JARVIS07_GUARDIAN/learned_patterns.json",   # 학습 자산 (별도 API 만)
+    "JARVIS07_GUARDIAN/bandit_state.json",       # 밴딧 가중치 — 되돌리면 학습이 사라진다
+    "JARVIS07_GUARDIAN/learned_incidents.json",  # 사고 이력 (append only)
 }
+
+
+def protected_files() -> frozenset:
+    """**수정·복원 금지 파일** — 이 목록의 주인은 이 파일 하나다 (2026-08-08, ①).
+
+    ★ 왜 공개하나: `auto_repair._snapshot_py_files` 가 자기만의 deny 목록을 갖고 있었고
+      거기엔 학습 자산이 **없었다**. Tier-2 롤백이 `learned_patterns.json`·
+      `bandit_state.json` 을 되돌릴 수 있는 경로였다 — 되돌리면 그날의 학습이 사라진다.
+      두 벌을 두지 않는다. 여기서 읽어 간다.
+    """
+    return frozenset(_DENY_FILES)
+
+
+def deny_dirs() -> frozenset:
+    """수정·복원 금지 디렉터리 — 같은 이유로 여기가 주인이다."""
+    return frozenset(_DENY_DIRS)
 
 
 def _normalize_target(raw: str) -> str:

@@ -3815,3 +3815,140 @@ def test_timestamp_비교를_직접_쓰는_곳이_없다():
             if re.search(r"timestamp\s*>=?\s*datetime\(", line):
                 bad.append(f"{rel}:{i}")
     assert not bad, f"timestamp 를 datetime() 과 직접 비교한다(구분자 불일치): {bad}"
+
+
+def test_롤백이_학습자산을_되돌리지_않는다():
+    """★ 롤백 대상이 '스냅샷 이후 바뀐 파일 전부' 라 학습 자산이 포함될 수 있었다.
+
+    되돌리면 그날 쌓은 학습이 사라진다(2026-06-08 에 97.8% 소실 이력).
+    보호 목록의 주인은 `error_fixer` 하나여야 한다 — `auto_repair` 가 자기 목록을
+    갖고 있었고 거기엔 학습 자산이 **없었다**.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+    from JARVIS07_GUARDIAN.error_fixer import protected_files
+
+    prot = protected_files()
+    for f in ("JARVIS07_GUARDIAN/learned_patterns.json",
+              "JARVIS07_GUARDIAN/bandit_state.json"):
+        assert f in prot, f"{f} 가 보호 목록에 없다 — 롤백이 학습을 지운다"
+
+    # 스냅샷이 그 목록을 **실제로 반영** 하는가 (실행 검증)
+    snap = _ar._snapshot_py_files()
+    leaked = [f for f in prot if f in snap]
+    assert not leaked, f"보호 파일이 스냅샷에 들어갔다 — 롤백 대상이 된다: {leaked}"
+
+    # 목록을 자체 보유하지 않는가 (①)
+    src = _code_only(inspect.getsource(_ar._snapshot_py_files))
+    assert "protected_files" in src or "deny_dirs" in src, \
+        "auto_repair 가 보호 목록을 자체 보유한다 — 두 벌이 되면 한쪽만 낡는다"
+
+
+def test_재현불가여도_깨뜨렸는지는_본다():
+    """★ 재현 가능 타입은 6종뿐인데 Tier-2 는 대부분 RuntimeError — 커버리지 0/158 이었다.
+
+    타입을 억지로 넓히는 대신 타입과 무관한 질문을 던진다:
+    "SDK 가 만진 파일이 아직 import 되는가".
+    """
+    import inspect
+    import tempfile
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+
+    # 검사 본체를 새로 만들지 않고 error_fixer 것을 부르는가 (①)
+    src = _code_only(inspect.getsource(_ar._import_broken_files))
+    assert "_import_check" in src, "import 검사를 자체 구현한다 — 주인은 error_fixer 다"
+
+    # 깨진 파일을 실제로 잡는가 (실행 검증)
+    root = _P(_ar.ROOT)
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        broken = _P(td) / "broken_probe.py"
+        broken.write_text("def f(\n", encoding="utf-8")     # 문법 오류
+        rel = str(broken.relative_to(root))
+        assert _ar._import_broken_files({rel: "diff"}) == [rel], \
+            "import 이 깨진 파일을 못 잡는다"
+        ok = _P(td) / "ok_probe.py"
+        ok.write_text("X = 1\n", encoding="utf-8")
+        assert _ar._import_broken_files({str(ok.relative_to(root)): "diff"}) == [], \
+            "정상 파일을 깨졌다고 한다 — 과잉 롤백"
+
+    # 검증 사슬이 그 결과를 쓰는가
+    vsrc = _code_only(inspect.getsource(_ar._verify_sdk_fix))
+    assert "_import_broken_files" in vsrc, "타입 무관 검증을 안 쓴다"
+
+
+def test_롤백된_오류가_재시도_큐에_남는다():
+    """★ `wontfix` 로 찍으면 10분 재시도(`status='new'` 만 본다)에서 빠진다.
+
+    상한(`MAX_LLM_ATTEMPTS`)이 이미 있어 무한 재시도 위험은 없는데, 시도 여유가
+    남아 있는데도 스스로 문을 닫고 있었다.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_try_sdk_targeted_fix")
+    states = {c.args[1].value for c in ast.walk(fn)
+              if isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "mark_error_status"
+              and len(c.args) >= 2 and isinstance(c.args[1], ast.Constant)}
+    assert "new" in states, "롤백 시 재시도 큐로 되돌리지 않는다 — 상한 전에 문을 닫는다"
+
+
+def test_근거_없이는_상태가_안_바뀐다():
+    """★ 실측 `wontfix` 61건 전원 `resolution` NULL — '왜' 가 통째로 비어 있었다.
+
+    문구를 호출자마다 박으면(18곳) 한 곳을 빠뜨리고, 새 호출자가 생기면 또 NULL 이
+    된다. 주인(DB)이 **파생해서 보장** 한다 — 목록 관리가 필요 없다(①②).
+    """
+    from shared import db as _db
+
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('whyprobe','m','X','x','new')")
+        eid = con.execute("SELECT id FROM error_log WHERE source='whyprobe' "
+                          "ORDER BY id DESC LIMIT 1").fetchone()[0]
+    try:
+        for st in ("analyzing", "ignored", "wontfix", "fixed"):
+            _db.mark_error_status(eid, st)          # ← 사유를 **안** 넘긴다
+            with _db.get_db() as con:
+                why = con.execute("SELECT resolution FROM error_log WHERE id=?",
+                                  (eid,)).fetchone()[0]
+            assert (why or "").strip(), f"{st} 인데 사유가 비었다"
+            assert __name__.rsplit(".", 1)[-1] in why or "미기록" in why, \
+                f"파생 사유가 호출 지점을 못 가리킨다: {why}"
+        # 사람이 쓴 사유가 있으면 그쪽이 이긴다
+        _db.mark_error_status(eid, "wontfix", "사람이 쓴 진짜 사유")
+        with _db.get_db() as con:
+            assert con.execute("SELECT resolution FROM error_log WHERE id=?",
+                               (eid,)).fetchone()[0] == "사람이 쓴 진짜 사유"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+
+
+def test_fixed_at은_fixed에만_찍힌다():
+    """★ `new`·`wontfix` 에 찍히면 수리시간 지표가 오염된다."""
+    from shared import db as _db
+
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('atprobe','m','X','x','new')")
+        eid = con.execute("SELECT id FROM error_log WHERE source='atprobe' "
+                          "ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+    _db.mark_error_status(eid, "new", "1회차 실패")
+    _db.mark_error_status(eid, "new", "2회차 실패")
+    with _db.get_db() as con:
+        r = dict(con.execute("SELECT status, resolution, fixed_at FROM error_log "
+                             "WHERE id=?", (eid,)).fetchone())
+    assert r["fixed_at"] is None, f"new 인데 fixed_at 이 찍혔다: {r['fixed_at']}"
+    assert "2회차" in r["resolution"], \
+        f"재시도 사유가 last-wins 가 아니다 — 3회차 실패가 1회차 문구로 보인다: {r['resolution']}"
+
+    _db.mark_error_status(eid, "fixed", "고쳤다")
+    with _db.get_db() as con:
+        r2 = dict(con.execute("SELECT resolution, fixed_at FROM error_log WHERE id=?",
+                              (eid,)).fetchone())
+    assert r2["fixed_at"], "fixed 인데 시각이 없다"
