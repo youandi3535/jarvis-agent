@@ -1359,8 +1359,14 @@ def job_deep_audit() -> None:
     #   APScheduler 의 `EVENT_JOB_ERROR` → `job_history._on_job_error` 가
     #   `success=False` 로 **정규 경로에서** 적재한다. 새 보정 경로를 만들지 않는다(①).
     #   ※ 예외는 이 잡을 끝내는 것뿐 — 스케줄러도 다른 잡도 영향받지 않는다.
-    if _audit_rc not in (None, 0):
-        raise RuntimeError(f"심층 감사 실패 — auto_repair returncode={_audit_rc}")
+    # ★ **정리를 먼저 하고 올린다** (2026-08-09 3차 적대적 검증)
+    #   종전엔 `raise` 가 3부보다 **앞** 에 있었다. 그래서 심층 감사가 실패한 회차엔
+    #   ① 격리 버킷 주간 보고(오탐 조기경보 포함)가 통째로 안 나가고
+    #   ② `mark_busy("j07", ttl=3600)` 이 해제되지 않아 파이프라인 활동 표시가
+    #      최대 1시간 거짓으로 남았다.
+    #   격리분을 가장 봐야 할 회차가 정확히 실패한 회차인데 그때 보고가 꺼졌다.
+    #   실측: `self_repair_runs` 106회 중 9회(8.5%)가 비0 rc 이고 **최근 5회 중 2회** —
+    #   가상의 경로가 아니다.
     # 3부: 격리 버킷 집계·추세 보고 (★ 결함3) — 새 잡 신설 없이 기존 일일 잡에 편승
     try:
         report_ignored_bucket()
@@ -1372,6 +1378,8 @@ def job_deep_audit() -> None:
             _cb("j07")
         except Exception:
             pass
+    if _audit_rc not in (None, 0):
+        raise RuntimeError(f"심층 감사 실패 — auto_repair returncode={_audit_rc}")
 
 
 # ── 스케줄 잡 ─────────────────────────────────────────────────────

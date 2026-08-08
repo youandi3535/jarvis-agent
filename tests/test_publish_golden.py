@@ -3897,13 +3897,20 @@ def test_timestamp_비교가_한_포맷을_쓴다():
     assert wide == 2, f"6시간 창이 3시간 전 행을 놓쳤다 (wide={wide})"
     assert narrow < wide, "창 폭이 결과를 바꾸지 않는다 — 죽은 인자"
 
-    # ③ 종전 방식은 실제로 틀린다 (이 검사가 진짜를 잡는지 확인)
+    # ③ 종전 방식(공백 구분자)이 실제로 틀린다 — **벽시계에 기대지 않고** 증명한다.
+    #   ★ 2026-08-09 3차 적대적 검증: 종전 검사는 `now-3h` 가 오늘 날짜에 남아 있을 때만
+    #     참이었다. 로컬 01:00~02:59 면 `now-3h` 가 어제로 넘어가 문자열 비교가 *우연히*
+    #     옳아지고 legacy=1 이 되어 **매일 정확히 2시간 동안 결정론적으로 red** 였다.
+    #     CI(ubuntu=UTC)에서는 UTC 01~03시의 모든 push 가 진짜 결함이 아닌 이유로 깨진다.
+    #     "진짜 결함 아닌 이유로 빨개지면 사람이 CI 를 안 본다" 는 실패양식 그대로다.
+    #     성질 자체는 시각과 무관하다 — 같은 날짜에서 'T'(0x54) > ' '(0x20) 이라는 것뿐.
     with get_db() as con:
-        legacy = con.execute(
-            "SELECT COUNT(*) FROM error_log WHERE source='tsprobe' "
-            "  AND timestamp >= datetime('now','localtime','-60 minute')").fetchone()[0]
-    assert legacy == 2, \
-        f"종전 방식이 틀리지 않는다 — 검사 전제가 깨졌다 (legacy={legacy})"
+        wrong = con.execute(
+            "SELECT ? >= ?", ("2026-03-05T22:45:00", "2026-03-05 23:45:00")).fetchone()[0]
+        right = con.execute(
+            "SELECT ? >= ?", ("2026-03-05T22:45:00", "2026-03-05T23:45:00")).fetchone()[0]
+    assert wrong == 1, "공백 구분자 비교가 틀리지 않는다 — 검사 전제가 깨졌다"
+    assert right == 0, "같은 포맷끼리도 결과가 이상하다 — 전제 붕괴"
 
 
 def test_편중판정이_날짜창을_실제로_적용한다():
@@ -5042,3 +5049,199 @@ def test_판을_지켰으면_DB도_안_무른다(tmp_path, monkeypatch):
     tail = src[i:i + 800]
     assert "not _fresh" in tail and "push_to_shared" in tail, \
         "DB 통로가 보존 여부를 안 본다 — 파일만 지키고 DB 는 갈린다"
+
+
+def test_위반_판정을_가진_행이_weight를_움직인다():
+    """★ `(insight_id, analysis_id)` 쌍당 *처음 만난 행* 이 weight 를 갱신했는데,
+
+    `get_unrewarded_usage` 가 `used_at ASC` 라 그 '처음' 은 **항상 가장 오래된 미귀속 행**
+    이었다. 발행이 막혀 남은 옛 배치가 이번 회차 글의 보상을 선점하면, 게이트가 기록한
+    `violated` 는 weight 에 한 번도 닿지 않는다(실측 창 안 288행·37배치, 54개 지침이
+    여러 배치에 걸침). '위반 기록 → 보상 귀속' 고리가 거기서 끊긴다.
+
+    ★ 이 검사는 **실제 귀속을 돌려** 확인한다 — 소스에 이름이 있는지나 순위 함수를
+      테스트가 재구현해서 보면, 실제 호출부에서 그 순위를 안 써도 통과한다
+      (뮤테이션에서 실제로 통과했다).
+    """
+    from JARVIS07_GUARDIAN.quality_learner import (attribute_pending_rewards,
+                                                   _VIOLATION_PENALTY)
+    from shared import db as _db
+
+    SC = "__reward_race__"
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [(f"{SC}:style_R", "경합 지침", SC)])
+        iid = ids[0]
+        con.execute("UPDATE learning_insights SET weight=1.0 WHERE id=?", (iid,))
+        # 채점 완료된 글 1건 (보상 신호)
+        con.execute(
+            "INSERT INTO post_analysis (platform, post_type, theme, quality_score, "
+            "  created_at, analyzed_at) VALUES ('naver', ?, 't', 80, "
+            "  datetime('now','localtime'), datetime('now','localtime'))", (SC,))
+        aid = con.execute("SELECT id FROM post_analysis WHERE post_type=? "
+                          "ORDER BY id DESC LIMIT 1", (SC,)).fetchone()[0]
+        # 같은 지침이 두 배치에 — 옛 배치(위반 판정 없음) + 이번 배치(위반)
+        for bid, delta, viol in (("b_old", "-90 minute", None), ("b_new", "-5 minute", 1)):
+            con.execute(
+                "INSERT INTO insight_usage (batch_id, insight_id, scope, platform, "
+                "  used_at, violated) VALUES (?,?,?,?, "
+                "  datetime('now','localtime',?), ?)",
+                (bid, iid, SC, "naver", delta, viol))
+
+    def _w():
+        with _db.get_db() as con:
+            return con.execute("SELECT weight FROM learning_insights WHERE id=?",
+                               (iid,)).fetchone()[0]
+    before = _w()
+    try:
+        attribute_pending_rewards(days=7)
+        after = _w()
+        assert after != before, "보상이 아예 안 붙었다 — 검사 전제가 깨졌다"
+
+        # 위반 페널티가 반영됐다면, 페널티 없는 경우보다 **덜 올라야** 한다.
+        with _db.get_db() as con:
+            rows = [dict(r) for r in con.execute(
+                "SELECT batch_id, reward, violated FROM insight_usage WHERE insight_id=?",
+                (iid,))]
+        rewarded = {r["batch_id"]: r["reward"] for r in rows if r["reward"] is not None}
+        assert len(rewarded) == 2, f"두 행 모두 마감돼야 한다: {rewarded}"
+        assert rewarded["b_new"] is not None and rewarded["b_old"] is not None
+        # 위반 행의 보상이 무위반 행보다 정확히 페널티만큼 낮아야 한다
+        assert abs((rewarded["b_old"] - rewarded["b_new"]) - _VIOLATION_PENALTY) < 1e-6, \
+            f"위반 페널티가 보상에 반영되지 않았다: {rewarded}"
+
+        # ★ 핵심 — weight 는 **위반 행의 보상** 으로 움직여야 한다.
+        #   공식(`shared/db.apply_insight_reward`): weight + alpha*(reward - neutral).
+        #   어느 행이 weight 를 움직였는지는 그 값에 그대로 드러난다.
+        from JARVIS07_GUARDIAN.quality_learner import REWARD_ALPHA, reward_neutral
+        _n = reward_neutral()
+        want_viol = before + REWARD_ALPHA * (rewarded["b_new"] - _n)
+        want_old  = before + REWARD_ALPHA * (rewarded["b_old"] - _n)
+        assert abs(after - want_viol) < 1e-6, (
+            f"weight 를 움직인 행이 위반 행이 아니다 — 옛 행이 선점했다 "
+            f"(after={after:.6f} / 위반행 기준={want_viol:.6f} / 옛행 기준={want_old:.6f})")
+        assert abs(want_viol - want_old) > 1e-6, "두 기준이 같아 판별이 안 된다 — 전제 붕괴"
+
+        # ★ **판정을 가진 행** 이 기준이다 — '최신' 만으로는 부족하다.
+        #   옛 배치가 검사됐고 새 배치는 미검사인 경우(게이트가 못 돈 회차), 시각만
+        #   보면 미검사 행이 이겨 판정이 통째로 버려진다.
+        with _db.get_db() as con:
+            con.execute("UPDATE learning_insights SET weight=1.0 WHERE id=?", (iid,))
+            con.execute("UPDATE insight_usage SET reward=NULL, analysis_id=NULL, "
+                        "rewarded_at=NULL WHERE insight_id=?", (iid,))
+            con.execute("UPDATE insight_usage SET violated=1 WHERE batch_id='b_old' "
+                        "  AND insight_id=?", (iid,))
+            con.execute("UPDATE insight_usage SET violated=NULL WHERE batch_id='b_new' "
+                        "  AND insight_id=?", (iid,))
+        attribute_pending_rewards(days=7)
+        with _db.get_db() as con:
+            rows2 = {r["batch_id"]: r["reward"] for r in con.execute(
+                "SELECT batch_id, reward FROM insight_usage WHERE insight_id=?", (iid,))}
+        after2 = _w()
+        want_judged = 1.0 + REWARD_ALPHA * (rows2["b_old"] - _n)     # 판정을 가진 옛 행
+        want_newest = 1.0 + REWARD_ALPHA * (rows2["b_new"] - _n)     # 그냥 최신 행
+        assert abs(want_judged - want_newest) > 1e-6, "판별이 안 되는 배치 — 전제 붕괴"
+        assert abs(after2 - want_judged) < 1e-6, (
+            f"판정 없는 최신 행이 weight 를 움직였다 — 게이트 판정이 버려진다 "
+            f"(after={after2:.6f} / 판정행={want_judged:.6f} / 최신행={want_newest:.6f})")
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM insight_usage WHERE insight_id=?", (iid,))
+            con.execute("DELETE FROM learning_insights WHERE id=?", (iid,))
+            con.execute("DELETE FROM post_analysis WHERE post_type=?", (SC,))
+
+
+def test_보상과_중립점은_같은_자에서_나온다():
+    """★ 둘을 *따로* 폴백시켜 **[0,1] 획득률을 총점 중앙값 0.685 와 비교** 했다.
+
+    실측 A1~A5(매력도 5축) 5개 항목이 그 상태이고 그 항목을 겨눈 활성 지침이 18개.
+    0점 항목을 겨눈 지침은 매 귀속마다 Δw ≈ −0.21 을 맞는데 방향이 반대다 —
+    지침이 옳아도 항목이 어려우면 계속 내려간다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+
+    fn = inspect.getsource(_ql.attribute_pending_rewards)
+    tree = ast.parse(fn.lstrip())
+    # `r is None or _n is None` 한 조건에서 **둘 다** 총점 자로 되돌아가야 한다
+    joined = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+              and isinstance(n.test, ast.BoolOp) and isinstance(n.test.op, ast.Or)
+              and "_n is None" in ast.unparse(n.test) and "r is None" in ast.unparse(n.test)]
+    assert joined, "보상과 중립점이 따로 폴백한다 — 단위가 섞인다"
+    body = ast.unparse(joined[0])
+    assert "_reward_from_analysis" in body and "_neutral" in body, \
+        f"한쪽만 되돌린다: {body[:120]}"
+
+    # 항목별 중립점이 없는 항목이 실제로 존재하는지 (전제 확인)
+    from JARVIS02_WRITER.post_scorer import item_index
+    missing = [k for k in item_index() if _ql.item_reward_neutral(k) is None]
+    assert missing, "중립점 없는 항목이 0개 — 이 검사의 전제가 사라졌다(그래도 가드는 유지)"
+
+
+def test_지침이_없어도_약점항목은_주입된다():
+    """★ 두 주입은 원본이 다르다 — 지침은 UCB 풀에서, 약점은 채점 실측에서.
+
+    그런데 후자의 생사가 전자에 묶여 있어, 지침 풀이 마르면 "최근 100% 의 글에서 0점"
+    이라는 가장 구체적인 지시가 통째로 사라졌다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+
+    src = inspect.getsource(_ql.build_insights_block)
+    i = src.index("if not rows:")
+    tail = src[i:i + 900]
+    assert "_weak_items_block" in tail, \
+        "지침이 없으면 약점 블록까지 버린다 — 원본이 다른데 생사가 묶였다"
+
+    # ③ 4조합 전부에서 같은 동작인가
+    for scope in ("economic", "theme"):
+        for platform in ("naver", "tistory"):
+            blk = _ql.build_insights_block(scope=f"__empty_{scope}__", platform=platform)
+            weak = _ql._weak_items_block(f"__empty_{scope}__", platform)
+            assert blk == (weak or ""), f"{scope}/{platform} 에서 약점 블록이 유실된다"
+
+
+def test_심층감사_실패해도_격리보고와_busy해제는_된다():
+    """★ `raise` 가 3부보다 **앞** 이라, 실패한 회차엔 격리 버킷 주간 보고가 안 나가고
+
+    `mark_busy("j07", ttl=3600)` 이 해제되지 않아 활동 표시가 최대 1시간 거짓으로 남았다.
+    격리분을 가장 봐야 할 회차가 정확히 실패한 회차인데 그때 보고가 꺼졌다.
+    실측 `self_repair_runs` 106회 중 9회(8.5%) 비0 rc · 최근 5회 중 2회.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "job_deep_audit")
+    body = ast.unparse(fn)
+    for what in ("report_ignored_bucket", "clear_busy"):
+        assert body.index(what) < body.index("심층 감사 실패"), \
+            f"{what} 가 raise 뒤에 있다 — 실패한 회차엔 실행되지 않는다"
+
+
+def test_저장_실패를_성공으로_적지_않는다(tmp_path, monkeypatch):
+    """★ `write_json` 은 예외를 안 던지고 `False` 를 돌려준다.
+
+    반환을 버리면 디스크 풀·권한·락 실패가 **성공으로 보고** 되고, 유일한 안전망인
+    `_verify_trends` 는 파일만 읽어 앞 회차의 낡은 판을 보고 통과시킨다.
+    """
+    import importlib
+
+    import pytest
+
+    rm = importlib.import_module("JARVIS03_RADAR.radar_main")
+    monkeypatch.setattr(rm, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(rm, "write_json", lambda *a, **k: False)
+    with pytest.raises(RuntimeError, match="저장 실패"):
+        rm.save({"date": "2026-01-09", "combined_keywords": [{"keyword": "x"}],
+                 "scored_keywords": [1]})
+
+    # 보존 분기도 같은 규칙 (③ — 통로가 둘이면 둘 다)
+    monkeypatch.setattr(rm, "write_json", lambda *a, **k: True)
+    rm.save({"date": "2026-01-09", "combined_keywords": [{"keyword": "x"}] * 2,
+             "scored_keywords": [1]})
+    monkeypatch.setattr(rm, "write_json", lambda *a, **k: False)
+    with pytest.raises(RuntimeError, match="저장 실패"):
+        rm.save({"date": "2026-01-09", "combined_keywords": [], "scored_keywords": []})

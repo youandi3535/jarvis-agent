@@ -328,7 +328,17 @@ def build_insights_block(scope: str = "all", theme: str = "",
         # days=0(기본) → 선택 기간 상수 상속. 0 을 그대로 SQL 에 넘기면 후보가 통째로 사라진다.
         rows = selectable_insights(_scope_filter, limit, days or SELECTION_DAYS)
         if not rows:
-            return ""
+            # ★ 지침이 없다고 **약점 블록까지** 버리지 않는다 (2026-08-09 3차 적대적 검증)
+            #   두 주입은 원본이 서로 다르다 — 지침은 `learning_insights` UCB 풀에서,
+            #   약점은 `post_analysis.rubric_items` **채점 실측** 에서 나온다.
+            #   그런데 후자의 생사가 전자에 묶여 있어, 지침 풀이 마르면
+            #   "최근 100% 의 글에서 0점" 이라는 **가장 구체적인 지시** 가 통째로 사라졌다.
+            #   지침 풀은 `last_seen>=21일` + `weight>0` + 꼴 검사 + 파이프라인 항목 제외를
+            #   모두 통과해야 남으므로 비는 일이 드물지 않다.
+            #   사용 기록(`record_insight_usage`)은 지침이 있을 때만 남기는 게 맞다 —
+            #   약점 블록은 UCB 선택이 아니라 실측 통보라서 보상 귀속 대상이 아니다.
+            _weak_only = _weak_items_block(scope, platform)
+            return _weak_only or ""
         # ★ 발행쌍 고정 — platform 은 키에 넣지 않는다 (NV·TS 가 같은 묶음을 받게 하는 것이 목적).
         picked = _pinned_pick(scope, theme, limit, rows)
         if not picked:
@@ -862,11 +872,34 @@ def attribute_pending_rewards(days: int | None = None) -> dict:
             ).fetchall()
         }
 
-    matched, rewards = 0, []
+    # ★ **어느 행이 weight 를 움직이는지** 를 먼저 정한다 (2026-08-09 3차 적대적 검증)
+    #   종전엔 `(insight_id, analysis_id)` 쌍당 *처음 만난 행* 이 weight 를 갱신했는데,
+    #   `get_unrewarded_usage` 가 `used_at ASC` 라 그 '처음' 은 **항상 가장 오래된
+    #   미귀속 행** 이었다. 발행이 막혀 남은 옛 배치가 있으면(실측 창 안 288행·37배치,
+    #   그중 **54개 지침이 여러 배치에 걸침**) 그 행이 이번 회차 글의 보상을 선점하고,
+    #   이번 회차에 게이트가 기록한 `violated` 는 weight 에 **한 번도 닿지 않는다**.
+    #   7860dfd·03111b8 이 잇겠다던 '위반 기록 → 보상 귀속' 고리가 거기서 끊긴다.
+    #   → 대표 행은 **판단을 가진 행** 이다: 위반 판정이 실린 행 우선, 없으면 최신 행.
+    _pairs: dict = {}
+    _matched_rows = []
     for u in usages:
         a = _match_analysis(u, analyses)
         if a is None:
             continue
+        _matched_rows.append((u, a))
+        key = (u["insight_id"], a["id"])
+        cur = _pairs.get(key)
+        # 정렬 우선순위: ① **판정을 가진 행**(게이트가 실제로 검사한 것) ② 그중 최신.
+        #   ★ '위반 우선' 이 아니다 — 재작성 순환이면 같은 글에 여러 배치가 붙고,
+        #     최종본이 안 어겼는데 옛 초안의 위반으로 감점하면 그것도 거짓 신호다.
+        #     진실은 "발행된 글을 설명하는 판정" = 판정이 있는 것 중 가장 나중 것이다.
+        rank = (1 if u.get("violated") is not None else 0, str(u.get("used_at") or ""))
+        if cur is None or rank > cur[0]:
+            _pairs[key] = (rank, u["id"])
+    _authoritative = {k: v[1] for k, v in _pairs.items()}
+
+    matched, rewards = 0, []
+    for u, a in _matched_rows:
         # ★ 항목별 신용할당 (2026-08-07) — 지침이 겨눈 **그 항목의 획득률** 을 보상으로 쓴다.
         #   종전엔 배치 안 모든 지침이 같은 총점을 받아 실측 53개 배치 전부
         #   distinct reward = 1 이었다 — 어느 지침이 기여했는지 구분이 0이었다.
@@ -876,9 +909,18 @@ def attribute_pending_rewards(days: int | None = None) -> dict:
         _ri = _rubric_items_of(a)
         r = item_reward(_item, _ri)
         _n = item_reward_neutral(_item) if r is not None else None
-        if r is None:
+        # ★ 보상과 중립점은 **같은 자에서** 나와야 한다 (2026-08-09 3차 적대적 검증)
+        #   종전엔 둘을 *따로* 폴백시켰다 — 항목 획득률은 구해지는데 항목별 중립점만
+        #   표본부족(<8)이면 **[0,1] 획득률을 총점 중앙값 0.685 와 비교** 하게 된다.
+        #   실측: A1~A5(매력도 5축) 5개 항목이 정확히 그 상태이고, 그 항목을 겨눈 활성
+        #   지침이 18개다. 0점 항목을 겨눈 지침은 매 귀속마다 Δw ≈ −0.21 을 맞는데
+        #   이는 시스템 최대 단일 weight 이동이며 **방향이 반대** 다 — 지침이 옳아도
+        #   항목이 어려우면 계속 내려간다. `item_reward_neutral` 독스트링이 막겠다고
+        #   써 둔 바로 그 사고를, 폴백이 뒷문으로 되살리고 있었다.
+        #   한쪽만 있으면 항목 신호를 포기하고 **둘 다 총점 자** 로 되돌린다.
+        #   (표본이 8건 이상 쌓이면 항목별 경로가 자동으로 되살아난다.)
+        if r is None or _n is None:
             r = _reward_from_analysis(a)
-        if _n is None:
             _n = _neutral
         if r is None:
             continue   # 점수 미기록(옛 행·채점 불가) → 보상 신호 없음, 귀속 스킵
@@ -887,13 +929,16 @@ def attribute_pending_rewards(days: int | None = None) -> dict:
             _db.apply_insight_reward(
                 usage_id=u["id"], insight_id=u["insight_id"],
                 analysis_id=a["id"], alpha=REWARD_ALPHA,
-                update_weight=(pair not in rewarded_pairs),
+                # ★ 대표 행만 weight 를 움직인다 — 그 행이 위반 판정을 들고 있다.
+                update_weight=(pair not in rewarded_pairs
+                               and u["id"] == _authoritative.get(pair)),
                 # ★ 지침별 변별 (2026-08-07) — 같은 글이라도 안 지켜진 지침은 감점.
                 #   이게 없으면 배치 안 8개가 전부 같은 값이라 학습 신호가 0이다.
                 reward=(r if not u.get("violated") else max(0.0, r - _VIOLATION_PENALTY)),
                 neutral=_n,           # ★ 항목별 중앙값(없으면 전역) — 하향이 가능해진다
             )
-            rewarded_pairs.add(pair)
+            if u["id"] == _authoritative.get(pair):
+                rewarded_pairs.add(pair)
             matched += 1
             rewards.append(r)
         except Exception:

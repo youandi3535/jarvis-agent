@@ -472,7 +472,13 @@ def save(data: dict) -> bool:
             #     이미 `Radar*` 세분화 타입으로 보고했다. 요약을 오류로 또 만들면 중복이다.
             _kept["last_run_empty_at"] = _dt_now_iso()
             _kept["last_run_empty_count"] = int(_kept.get("last_run_empty_count") or 0) + 1
-            write_json(path, _kept, indent=2)
+            if not write_json(path, _kept, indent=2):
+                # ★ 저장 실패를 성공 문구로 덮지 않는다 (2026-08-09 3차 적대적 검증).
+                #   `write_json` 은 예외를 던지지 않고 False 를 돌려준다. 반환을 버리면
+                #   디스크 풀·권한·락 실패가 **성공으로 보고** 되고, 유일한 안전망인
+                #   `_verify_trends` 는 *파일만* 읽어서 앞 회차가 남긴 낡은 판을 보고
+                #   통과시킨다 — 회차가 성공으로 기록된다.
+                raise RuntimeError(f"트렌드 판 보존 저장 실패: {path.name}")
             print(f"[RADAR] ⚠️ 실트렌드 0개 — 기존 {len(_kept['combined_keywords'])}개 판 보존 "
                   f"(이번 회차 빈손 {_kept['last_run_empty_count']}회째): {path.name}")
             # ★ 신호를 되살린다 (2026-08-09 2차 적대적 검증)
@@ -494,7 +500,9 @@ def save(data: dict) -> bool:
             except Exception:
                 pass
             return False
-    write_json(path, data, indent=2)
+    if not write_json(path, data, indent=2):
+        # 위와 같은 이유 — 저장 실패는 조용히 넘어갈 사건이 아니다.
+        raise RuntimeError(f"트렌드 판 저장 실패: {path.name}")
     print(f"[RADAR] 로컬 저장: {path.name}")
     return True
 
