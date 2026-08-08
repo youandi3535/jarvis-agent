@@ -14,7 +14,7 @@ from __future__ import annotations
 import re as _re
 import traceback as _traceback
 
-__all__ = ["radar_error_type", "report_radar"]
+__all__ = ["radar_error_type", "radar_error_type_from_record", "report_radar"]
 
 # 호스트·원인은 **예외 메시지에 이미 들어 있다** — 새 판단을 만들지 않고 그걸 읽는다.
 _HOST_RE  = _re.compile(r"host=['\"]([A-Za-z0-9.\-]+)['\"]")
@@ -23,6 +23,20 @@ _CAUSE_RE = _re.compile(r"Caused by ([A-Za-z]+?)(?:Error|Exception)?\(")
 
 def _camel(text: str) -> str:
     return "".join(p[:1].upper() + p[1:] for p in _re.split(r"[^A-Za-z0-9]+", text) if p)
+
+
+def _derive_type(base: str, msg: str) -> str:
+    """`radar_error_type` 과 `radar_error_type_from_record` 공용 파생 규칙 (① 단일 진입점)."""
+    m = _HOST_RE.search(msg)
+    if not m:
+        return base
+    labels = [l for l in m.group(1).split(".") if l]
+    host = _camel("".join(f"{l} " for l in labels[:-1])) if len(labels) > 1 else _camel(labels[0])
+    if not host:
+        return base
+    c = _CAUSE_RE.search(msg)
+    cause = _camel(c.group(1)) if c else "Unreachable"
+    return f"Radar{host}{cause}"
 
 
 def radar_error_type(exc) -> str:
@@ -38,16 +52,21 @@ def radar_error_type(exc) -> str:
     """
     base = type(exc).__name__ if isinstance(exc, BaseException) else str(exc or "")
     msg = str(exc or "")
-    m = _HOST_RE.search(msg)
-    if not m:
-        return base
-    labels = [l for l in m.group(1).split(".") if l]
-    host = _camel("".join(f"{l} " for l in labels[:-1])) if len(labels) > 1 else _camel(labels[0])
-    if not host:
-        return base
-    c = _CAUSE_RE.search(msg)
-    cause = _camel(c.group(1)) if c else "Unreachable"
-    return f"Radar{host}{cause}"
+    return _derive_type(base, msg)
+
+
+def radar_error_type_from_record(error_type: str, message: str) -> str:
+    """DB 에 이미 저장된 (error_type, message) 쌍에서 세분화 타입을 소급 파생.
+
+    ★ 왜 필요한가 (2026-08-09 GUARDIAN 감사 — `severity.selfcheck()` [결함4] 재발)
+      `radar_error_type(exc)` 는 *앞으로* 들어오는 실시간 예외만 세분화한다.
+      2026-08-08 fix 이전에 이미 `error_log` 에 뭉뚱그려 쌓인 행은 그대로 남아
+      `type_granularity_issues()` 14일 창 안에서 계속 걸린다. 이 함수는 `_derive_type`
+      (①단일 진입점)을 그대로 재사용해 저장된 message 문자열에서 같은 규칙으로
+      재분류값을 계산한다 — 로직을 복제하지 않는다. 실제 UPDATE 는 호출자(backfill
+      스크립트) 책임.
+    """
+    return _derive_type(error_type or "", message or "")
 
 
 def report_radar(a, b, **kw):
