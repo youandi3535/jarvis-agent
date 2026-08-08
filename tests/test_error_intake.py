@@ -406,50 +406,53 @@ def test_저장소에_미가드_get_첨자가_없다():
 
     ★ 검사기(`--category symmetry`)와 **같은 판정을 다시 쓰지 않는다**(원칙①).
       검사기를 호출해 결과를 본다 — 판정 로직이 두 벌이 되면 서로 어긋난다.
+    ★ **반환 객체를 본다** (2026-08-08 정정). 초판은 subprocess 의 `stdout` 을 봤는데
+      `main()` 은 위반을 전부 `file=sys.stderr` 로 찍는다 — stdout 에는 성공 문구만 간다.
+      그래서 `shared/precommit_check.py` 를 **통째로 지워도 이 테스트는 통과했다**
+      (실측 변이: 검사기 mv 후 `1 passed`). 진짜 위반을 심어도 초록이었다.
+      스트림·종료코드에 기대지 않고 `Report.violations` 를 직접 본다.
     """
-    import subprocess
-    import sys
+    from shared.precommit_check import run
 
-    r = subprocess.run(
-        [sys.executable, "shared/precommit_check.py", "--category", "symmetry"],
-        cwd=str(ROOT), capture_output=True, text=True)
-    assert "get-default-unguarded" not in r.stdout, (
-        f"미가드 `.get(k,D)[...]` 가 남아 있다:\n{r.stdout[-900:]}")
+    rep = run(["symmetry"])
+    assert "symmetry" in rep.ran, "symmetry 카테고리가 실행되지 않았다 — 검사가 무력"
+    bad = [v for v in rep.violations
+           if v.check_id == "symmetry/get-default-unguarded"]
+    assert not bad, ("미가드 `.get(k,D)[...]` 가 남아 있다:\n"
+                     + "\n".join(v.fmt() for v in bad[:20]))
 
 
-def test_get_미가드_검사가_실제로_잡는다(tmp_path):
-    """검사기가 허수아비가 아닌지 — 위반 파일을 만들어 검출되는지 본다.
+def test_get_미가드_검사가_실제로_잡는다(tmp_path, monkeypatch):
+    """검사기가 허수아비가 아닌지 — **배포되는 검사기 그 자체**에 위반을 먹여본다.
 
-    ★ 저장소 안에 임시 `.py` 를 만들었다가 지우는 방식은 쓰지 않는다.
-      다른 세션이 동시에 커밋하면 그 순간 위반 상태가 커밋될 수 있다.
-      대신 검사 로직의 *판정 함수* 를 직접 겨눈다.
+    ★ 초판은 판정 AST 로직을 이 테스트 안에 *베껴* 두고 그 사본을 채점했다.
+      배포 검사기를 한 줄도 부르지 않아서, `shared/precommit_check.py` 를 통째로
+      지운 상태에서도 초록이었다(실측 변이). CLAUDE.md **'복사본을 진실로 믿지 말 것'**
+      정면 위반이고, 바로 위 테스트가 선언한 원칙①("판정을 두 벌 만들지 않는다")과도
+      스스로 어긋났다.
+    ★ 저장소 안에 임시 `.py` 를 만들지 않는다 — 다른 세션이 그 순간 커밋하면
+      위반 상태가 커밋된다. 대신 **검사기의 탐색 뿌리를 임시 트리로 돌린다.**
+      `_iter_py` 의 `root` 기본값은 *정의 시점* 에 묶이므로 `ROOT` 만 바꿔선 안 되고
+      순회 자체도 함께 갈아끼워야 한다(실측).
     """
-    import ast
+    from shared import precommit_check as pc
 
-    bad = 'def f(rec):\n    return rec.get("msg", "")[:50]\n'
-    good = 'def f(rec):\n    return (rec.get("msg") or "")[:50]\n'
-    env = 'import os\ndef g():\n    return os.environ.get("PATH", "")[:10]\n'
+    cases = {
+        "bad.py":  'def f(rec):\n    return rec.get("msg", "")[:50]\n',
+        "good.py": 'def f(rec):\n    return (rec.get("msg") or "")[:50]\n',
+        "env.py":  'import os\ndef g():\n    return os.environ.get("PATH", "")[:10]\n',
+    }
+    for name, src in cases.items():
+        (tmp_path / name).write_text(src, encoding="utf-8")
+    files = sorted(tmp_path.glob("*.py"))
 
-    def hits(src: str) -> int:
-        tree = ast.parse(src)
-        lines = src.splitlines()
-        n = 0
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Subscript)
-                    and isinstance(node.value, ast.Call)):
-                continue
-            fn = node.value.func
-            if not (isinstance(fn, ast.Attribute) and fn.attr == "get"
-                    and node.value.args):
-                continue
-            obj = ast.get_source_segment(src, fn.value) or ""
-            if obj.split(".")[-1] == "environ":
-                continue
-            if " or " in lines[node.lineno - 1]:
-                continue
-            n += 1
-        return n
+    monkeypatch.setattr(pc, "ROOT", tmp_path)
+    monkeypatch.setattr(pc, "_iter_py", lambda *a, **k: iter(files))
+    rep = pc.Report()
+    pc.check_symmetry(rep)
 
-    assert hits(bad) == 1, "위반을 못 잡는다"
-    assert hits(good) == 0, "가드된 코드를 오탐한다"
-    assert hits(env) == 0, "os.environ 면제가 안 먹는다"
+    hits = {v.file for v in rep.violations
+            if v.check_id == "symmetry/get-default-unguarded"}
+    assert "bad.py" in hits, "배포 검사기가 위반을 못 잡는다 — 허수아비다"
+    assert "good.py" not in hits, "가드된 코드를 오탐한다"
+    assert "env.py" not in hits, "os.environ 면제가 안 먹는다"
