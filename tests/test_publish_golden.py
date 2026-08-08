@@ -480,35 +480,37 @@ def test_감사는_발행락을_지우지_않는다():
     종전 `publishing_in_progress()` 는 `scheduler._is_locked_externally()` 를 불렀는데
     그 함수는 3시간 넘은 락 파일을 **unlink 한다**. 실측 최대 발행 지연 4.1시간 —
     즉 감사 잡이 도는 것만으로 살아 있는 발행 락이 지워질 수 있었다.
-    """
-    import ast
-    import inspect
-    import textwrap
 
+    ★ 실행 검증으로 바꿨다 (2026-08-08) — 종전 검사는 `before = LOCK_FILE.exists()` 로
+      *지금 상태* 만 보고 비교해서, 락이 없는 평시엔 **아무것도 검증하지 않았다**
+      (없음 → 없음 = 통과). 위험한 것은 *오래된* 락이므로 그걸 직접 만들어 본다.
+      운영 락을 건드리지 않도록 **임시 경로로 갈아끼운 뒤** 잰다.
+    """
+    import os
+    import time
+
+    from JARVIS02_WRITER import scheduler as _sch
     from JARVIS08_PUBLISH.publish_ledger import publishing_in_progress
 
-    # ★ 소스 텍스트가 아니라 **AST** 로 본다 — 주석·독스트링에 적힌 함수 이름을
-    #   호출로 오인하면(초판이 그랬다) 테스트가 스스로 거짓 실패한다.
-    tree = ast.parse(textwrap.dedent(inspect.getsource(publishing_in_progress)))
-    imported = {
-        alias.name
-        for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
-        for alias in node.names
-    }
-    called = {
-        node.func.id for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert "_is_locked_externally" not in imported | called, (
-        "감사가 락을 *삭제하는* 함수를 부른다 — read-only 조회여야 한다"
-    )
-    attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
-    assert "exists" in attrs, "락 존재 여부 조회가 아니다"
-    # 실제로 호출해도 락 파일이 사라지지 않는가
-    from JARVIS02_WRITER.scheduler import LOCK_FILE
-    before = LOCK_FILE.exists()
-    publishing_in_progress()
-    assert LOCK_FILE.exists() == before, "조회가 락 파일 상태를 바꿨다"
+    _orig = _sch.LOCK_FILE
+    tmp = _ROOT / "logs" / "_probe_publish.lock"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    _sch.LOCK_FILE = tmp
+    try:
+        stale = time.time() - (_sch.publish_lock_stale_sec() + 3600)
+        tmp.write_text("probe", encoding="utf-8")
+        os.utime(tmp, (stale, stale))
+        assert publishing_in_progress() in (True, False)   # 판정값은 정책 소관
+        assert tmp.exists(), "오래된 락을 조회가 **삭제했다** — 감시가 대상을 건드린다"
+
+        # 갓 만든 락은 '진행 중' 이어야 한다 (과잉 관용 방지)
+        tmp.write_text("probe", encoding="utf-8")
+        assert publishing_in_progress() is True, "살아 있는 락을 진행 중으로 안 본다"
+        assert tmp.exists(), "조회가 락을 삭제했다"
+    finally:
+        _sch.LOCK_FILE = _orig
+        tmp.unlink(missing_ok=True)
+    assert _sch.LOCK_FILE is _orig, "락 경로 복원 실패"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -660,17 +662,56 @@ def test_쿠키_저장이_단일진입점이고_권한을_고정한다():
 
 
 def test_시크릿_파일_권한이_소유자전용():
-    """쿠키는 비밀번호와 같다 — 있으면 로그인 없이 그 계정이 된다."""
+    """쿠키는 비밀번호와 같다 — 있으면 로그인 없이 그 계정이 된다.
+
+    ★ 세 가지를 고쳤다 (2026-08-08)
+      ① 대상 목록을 **박지 않는다** — `secrets.secret_files()` 가 주인이다.
+        종전엔 `.env` 와 쿠키 두 개를 손으로 적어 두어, 새 비밀 파일이 생겨도 모른 채
+        통과했다(실측 목록은 3개 — `JARVIS08_PUBLISH/credentials` 가 빠져 있었다).
+      ② **아무것도 검사 안 하고 통과하지 않는다** — 하나도 없으면 명시적 skip.
+        통과와 미검사는 다른 사건이다.
+      ③ 디렉터리는 *안에 든 것* 으로 판단한다 — 체크아웃의 `credentials/` 는 0755 지만
+        추적 파일(소스)만 들어 있어 비밀이 아니다. **git 이 추적하지 않는 파일** 이
+        실제 비밀이다(쿠키·토큰은 전부 .gitignore 대상).
+    """
     import stat
+    import subprocess
     from pathlib import Path
 
-    root = Path(__file__).resolve().parent.parent
-    for rel in (".env", "JARVIS02_WRITER/naver_cookies.pkl"):
-        f = root / rel
-        if not f.exists():
-            continue
-        mode = stat.S_IMODE(f.stat().st_mode)
-        assert mode & 0o077 == 0, f"{rel} 권한 {oct(mode)} — 소유자 외 접근 가능"
+    import pytest
+
+    from shared.secrets import secret_files
+
+    tracked = set(subprocess.run(
+        ["git", "ls-files"], cwd=str(_ROOT), capture_output=True, text=True
+    ).stdout.split())
+    if not tracked:
+        # git 저장소가 아니면 '추적됨/아님' 을 가를 수 없다 → 전부 비밀로 오판한다.
+        # 모른다는 것을 통과로도 실패로도 바꾸지 않는다.
+        pytest.skip("git 추적 목록을 읽을 수 없다 — 비밀 파일 판별 불가")
+
+    def _is_secret_file(path: Path) -> bool:
+        # `__pycache__` 는 추적되지 않지만 *추적 소스의 컴파일 산출물* 이라 비밀이 아니다.
+        if "__pycache__" in path.parts or path.suffix == ".pyc":
+            return False
+        try:
+            return path.is_file() and str(path.relative_to(_ROOT)) not in tracked
+        except ValueError:
+            return path.is_file()
+
+    targets = []
+    for f in sorted(secret_files()):
+        path = Path(f)
+        if path.is_dir():
+            targets += [q for q in sorted(path.rglob("*")) if _is_secret_file(q)]
+        elif _is_secret_file(path):
+            targets.append(path)
+
+    for path in targets:
+        mode = stat.S_IMODE(path.stat().st_mode)
+        assert mode & 0o077 == 0, f"{path} 권한 {oct(mode)} — 소유자 외 접근 가능"
+    if not targets:
+        pytest.skip("비밀 파일이 하나도 없다(체크아웃 환경) — 권한 검사 불가")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -876,21 +917,71 @@ def test_골격_플레이스홀더가_모두_치환된다():
 def test_시크릿모듈이_env를_스스로_적재한다():
     """★ 가릴 값이 0이면 `mask()` 는 *아무 것도 안 가리면서 성공* 한다 (조용한 fail-open).
 
-    실측: `.venv/bin/python -c "from shared.secrets import ..."` 로 부르면 0개였다.
-    호출자의 import 순서에 기대면 언젠가 반드시 어긋난다.
-    """
-    from shared.secrets import secret_values
+    ★ 검사를 **별도 프로세스 + `.env` 대조** 로 바꿨다 (2026-08-08)
+      종전은 `len(secret_values()) > 0` 하나였다. 그건 `.env` 가 *있는* 환경에서만
+      의미가 있어 CI 체크아웃에선 0이라 실패해야 하는데, 전체 실행에선 **앞선 테스트가
+      먼저 `shared.llm` 을 import 해** 환경변수를 채우는 바람에 초록이 됐다
+      (실측: 단독 실행 FAIL / 전체 실행 PASS — 순서 의존).
+      정작 지키려던 성질은 "호출자의 import 순서에 기대지 않는다" 다.
+      → 아무것도 먼저 import 하지 않은 **별도 프로세스** 에서 `.env` 의 비밀 키가
+        **전부** 잡히는지 본다.
 
-    assert len(secret_values()) > 0, "시크릿 0개 — .env 자가 적재가 깨졌다"
+    ※ 개수 동일 비교는 쓰지 않는다 — `shared/llm.py` 가 `ANTHROPIC_API_KEY` 를
+      `setdefault` 로 넣는 것처럼 *다른 모듈이 환경변수를 더하는 것은 정상* 이고,
+      그건 `.env` 자가 적재와 무관하다. 기준은 **`.env` 에 실린 것** 이다.
+    """
+    import re
+    import subprocess
+    import sys
+
+    import pytest
+
+    from shared.secrets import _SECRET_KEY_RE   # 비밀 판별 규칙의 주인
+
+    env_file = _ROOT / ".env"
+    if not env_file.exists():
+        pytest.skip(".env 가 없다(체크아웃 환경) — 자가 적재를 잴 수 없다")
+
+    want = set()
+    for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+        m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line)
+        if m and _SECRET_KEY_RE.search(m.group(1)) and len(m.group(2).strip().strip("'\"")) >= 12:
+            want.add(m.group(1))
+    if not want:
+        pytest.skip(".env 에 비밀 키가 없다 — 잴 대상이 없다")
+
+    # ★ 부모 환경을 **물려주지 않는다** (2026-08-08 — 뮤테이션에서 발각).
+    #   `subprocess.run` 은 기본으로 `os.environ` 을 상속한다. pytest 프로세스는 이미
+    #   `.env` 를 적재한 상태라, 자식은 *스스로 적재하지 않아도* 값을 보게 된다 —
+    #   자가 적재를 지워도 초록이었다. 잴 대상을 지운 환경에서만 의미가 있다.
+    import os
+    child_env = {k: v for k, v in os.environ.items() if k not in want}
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "from shared.secrets import secret_values; "
+         "print(','.join(k for k, _ in secret_values()))"],
+        cwd=str(_ROOT), env=child_env, capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, f"프로브 실패: {out.stderr[-300:]}"
+    got = set(out.stdout.strip().split(",")) - {""}
+
+    missing = want - got
+    assert not missing, (
+        f".env 의 비밀 {len(missing)}개가 단독 import 로는 안 잡힌다 — "
+        f"자가 적재가 깨졌고 호출자 import 순서에 기대고 있다: {sorted(missing)[:5]}")
 
 
 def test_마스킹이_실제로_먹는다():
     """설치 플래그가 아니라 *동작* 으로 확인 (CLAUDE.md patch_effective 표준)."""
+    import pytest
+
     from shared.secrets import install_log_masking, mask, secret_values
 
     info = install_log_masking()
     assert info["effective"] is True, f"필터가 안 먹는다: {info}"
-    _k, v = secret_values()[0]
+    vals = secret_values()
+    if not vals:
+        pytest.skip("시크릿 0개(체크아웃 환경) — 가릴 대상이 없다")
+    _k, v = vals[0]
     assert v not in mask(f"GET https://api/x?key={v}"), "평문이 그대로 통과"
 
 
