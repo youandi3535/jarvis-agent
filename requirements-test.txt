@@ -24,3 +24,10 @@ numpy
 #  없으면 create_scheduler() 가 None 을 돌려주고 프로브가 죽는데, 그 죽음이
 #  "행이 success='' 로 적혔다" 라는 *엉뚱한 진단* 으로 보고됐다 — ERRORS [587] 과 같은 병.
 apscheduler
+# 트렌드 판 보존 테스트가 JARVIS03_RADAR/collectors/google_collector 를 import 한다
+# (2026-08-09). 그 모듈이 pandas + pytrends 를 쓴다 — apscheduler 와 같은 계열의 누락.
+#   ★ 한 번에 다 넣지 못한 이유: pandas 만 넣고 재검하니 다음 줄의 pytrends 에서 또 멈췄다.
+#     import 사슬은 **한 번에 하나씩** 드러난다 — 그래서 CI 를 기다리지 말고
+#     `git archive HEAD` + 최소 의존 venv 로 로컬에서 끝까지 돌려봐야 한다.
+pandas
+pytrends

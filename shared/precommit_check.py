@@ -1913,15 +1913,20 @@ def check_dashboard(report: Report) -> None:
                              "대시보드 폴더를 찾지 못함 — 규정 대상이 바뀌었으면 CLAUDE.md 를 함께 고칠 것"))
         return
 
-    import subprocess as _sp
-    try:
-        files = _sp.run(["git", "ls-files", "dashboard"], cwd=str(ROOT),
-                        capture_output=True, text=True).stdout.split()
-    except Exception as e:
-        report.add(Violation(cat, "dashboard/self-check", "dashboard/", 0,
-                             f"파일 목록 파생 실패로 검사 무력화: {type(e).__name__}: {e}"))
-        return
-    files = [f for f in files if f.endswith((".tsx", ".ts", ".css"))]
+    # ★ git 에 의존하지 않는다 (2026-08-09 정정) — 초판은 `git ls-files` 로 대상을 파생했다.
+    #   `.git` 이 없는 트리(배포 아카이브·CI 모사·워크트리 밖 복사본)에서 목록이 0개가 되고,
+    #   fail-closed 규칙이 **거짓 위반**을 낸다. 실측: `git archive HEAD` 로 만든 트리에서
+    #   "검사할 파일이 0개" 위반이 떴다. 거짓 위반은 진짜 위반만큼 게이트를 망친다 —
+    #   사람이 검사를 무시하게 만들기 때문이다. 파일 계통에서 직접 훑는다.
+    _SKIP = ("node_modules", ".next", "dist", "build", ".turbo")
+    files = []
+    for q in root.rglob("*"):
+        if not q.is_file() or q.suffix not in (".tsx", ".ts", ".css"):
+            continue
+        if any(part in _SKIP for part in q.relative_to(ROOT).parts):
+            continue
+        files.append(str(q.relative_to(ROOT)))
+    files.sort()
     if not files:
         report.add(Violation(cat, "dashboard/self-check", "dashboard/", 0,
                              "검사할 파일이 0개 — 확장자 규칙이 낡았는지 확인할 것"))

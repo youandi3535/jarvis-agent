@@ -78,6 +78,16 @@ def locked(path: Path, timeout: float = 10.0):
 
     타임아웃이면 락 없이 진행한다(fail-open) — 학습 저장이 발행을 막으면 안 된다.
     단 그 사실을 로그로 남긴다(조용한 열화 금지).
+
+    ★★ `<path>.lock` 파일은 **일부러 남긴다. 지우지 말 것** (2026-08-09 박제)
+      0바이트이고 `.gitignore` 대상이라 비용이 없다. 반면 지우면 *진짜 경합* 이 생긴다:
+        ① A 가 foo.lock 에 flock 보유 → ② B 가 foo.lock 을 unlink →
+        ③ C 가 foo.lock 을 새로 만들어 flock 획득 → **A 와 C 가 동시에 락을 가졌다고 믿는다**
+      flock 은 *inode* 에 걸리는데 unlink 는 이름만 떼어내기 때문이다.
+      "쓰고 남은 찌꺼기" 처럼 보여 청소하고 싶어지는 자리라 여기 박아둔다.
+      실측(2026-08-09): 저장소에 10개가 남아 있고 전부 0바이트·git 무시 대상이며,
+      `shared/file_cleanup.py` 의 규칙(`trends_*.json` 등)은 `.lock` 을 잡지 않는다.
+      **정리 규칙에 `*.lock` 을 추가하지 말 것.**
     """
     if not _flag("GUARDIAN_STORE_LOCK"):
         yield False
