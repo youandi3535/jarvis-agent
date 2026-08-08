@@ -1441,6 +1441,37 @@ def backup_db(retention_days: int = 30) -> dict:
             pass
         raise RuntimeError(f"백업 무결성 검증 실패: {_bad}")
 
+    # 1-C) ★ 학습 자산 JSON 동반 백업 (2026-08-08 — 사용자 지시 감사)
+    #
+    #   `learned_patterns.json`(535KB)·`bandit_state.json`(45KB) 은 **git 추적 밖**
+    #   (`.gitignore` 등재)이고 DB 도 아니라 **사본이 세상에 하나도 없었다.**
+    #   패턴 54개·밴딧 학습 상태 — 몇 달치 누적 자산인데 파일 하나 날아가면 끝이다.
+    #   백업 잡이 이미 매일 도니 여기 태운다(원칙① — 백업의 주인은 이 함수 하나).
+    #
+    #   ★ 목록을 박지 않는다(②): *DB 밖에 사는 학습 산출물* 을 소유 폴더에서 찾는다.
+    #     새 학습기가 `*_state.json`·`learned_*.json` 을 만들면 자동으로 딸려온다.
+    try:
+        _root = Path(__file__).resolve().parent.parent
+        _assets = sorted(
+            q for pat in ("learned_*.json", "*_state.json", "design_recipes.json")
+            for q in (_root / "JARVIS07_GUARDIAN").glob(pat)
+            if q.is_file())
+        _assets += [q for q in (_root / "JARVIS06_IMAGE").glob("design_recipes.json")
+                    if q.is_file()]
+        if _assets:
+            _adir = BACKUP_DIR / f"assets_{today}"
+            _adir.mkdir(parents=True, exist_ok=True)
+            for _a in _assets:
+                shutil.copy2(_a, _adir / _a.name)
+    except Exception as _e:      # 자산 백업 실패가 DB 백업을 깨뜨리면 안 된다
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report as _rep
+            _rep("LearningAssetBackupFailed", "infra",
+                 message=f"학습 자산 JSON 백업 실패(DB 백업은 정상): {type(_e).__name__}: {_e}",
+                 module=__name__, func_name="backup_db", context={"kind": "daemon_down"})
+        except Exception:
+            pass
+
     # 2) Retention — GFS 계층 보존 (일 7 + 주 4 + 월 3 ≈ 14개로 30일 커버)
     cutoff = date.today() - timedelta(days=retention_days)
     found: dict[date, Path] = {}

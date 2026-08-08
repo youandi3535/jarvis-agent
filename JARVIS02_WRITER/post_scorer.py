@@ -356,6 +356,38 @@ def repetition_penalty(intro_first: str, recent_intros: list[str] | None) -> flo
     return min(1.0, head_share * 2.0 + gram_share)
 
 
+@_lru_cache(maxsize=1)
+def _recent_intros_cached(limit: int = 30) -> tuple:
+    """최근 발행글의 **도입부 첫 문장** — 반복 판정의 기준선 (2026-08-08).
+
+    ★ 왜 호출자가 아니라 채점기가 조달하는가 (원칙①)
+      `score_post` 호출자는 4곳이다(게이트·발행후분석·소급재채점·자기검사). 각자
+      "최근 도입부를 챙겨 넘겨라" 로 두면 **반드시 잊는 곳이 생긴다** — 그리고 잊은 쪽은
+      감점 0 으로 조용히 통과한다. 같은 파일의 `pipeline_controlled_items()` 도 이미
+      DB 를 직접 보므로 설계 일관성도 있다.
+
+    실패하면 빈 튜플 — **감점하지 않는다**(기준선을 못 얻었다고 글을 벌하지 않는다).
+    """
+    try:
+        from shared.db import get_db
+        with get_db() as con:
+            rows = con.execute(
+                "SELECT original_html FROM post_analysis "
+                "WHERE original_html IS NOT NULL AND original_html <> '' "
+                "ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
+    except Exception:
+        return ()
+    out = []
+    for (html,) in rows:
+        body = (html or "").split("<body", 1)[-1]
+        m = re.search(r"<p[^>]*>(.*?)</p>", body, re.DOTALL)
+        if m:
+            t = _strip(m.group(1)).strip()
+            if t:
+                out.append(t)
+    return tuple(out)
+
+
 def _b1_intro(html: str, recent_intros: list[str] | None = None) -> float:
     """B1: 도입부 4문장 + 도입 이미지 + AI 자동생성형 금지 (헌법 제1조).
 
@@ -366,6 +398,10 @@ def _b1_intro(html: str, recent_intros: list[str] | None = None) -> float:
     _ai_pt = max(0.0, _mx - 5.0)   # 5점 초과 배점 = 'AI 자동생성형 회피' 몫
     paras = re.findall(r'<p[^>]*>(.*?)</p>', html, re.DOTALL)[:6]
     if not paras: return 0.0
+    # ★ 호출자가 안 주면 채점기가 직접 조달한다 — 잊을 수 있는 배선을 만들지 않는다.
+    #   명시적으로 `[]` 를 넘기면 감점 없음(소급 재채점처럼 *당시 기준* 이 필요한 경우).
+    if recent_intros is None:
+        recent_intros = list(_recent_intros_cached())
     intro = " ".join(_strip(p) for p in paras[:4])
     sents = _sentences(intro)
     first_text = _strip(paras[0]).strip()[:60]

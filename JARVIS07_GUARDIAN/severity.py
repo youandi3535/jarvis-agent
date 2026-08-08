@@ -620,6 +620,29 @@ def is_transient(error_type: str, message: str = "", source: str = "",
     if et in _TRANSIENT_TYPES or _short_type(et) in _TRANSIENT_TYPES:
         return True
 
+    # 4-B) ★ 결함 2 가드 (2026-08-08 감사) — **kind 선언을 메시지 문구가 뒤집지 못한다**
+    #
+    #   이 파일은 `_OWN_NON_CODE_KINDS` 주석에 stuck·abort·execution_error·
+    #   draft_invalid·data_empty·send_failure·login_invalid 를 "★ 의도적 *비*포함 …
+    #   반드시 Tier-2 유지" 라고 **선언**해 놓았다. 그런데 5) 메시지 정규식에는 그 선언을
+    #   존중하는 가드가 없어서, 정규식이 선언을 뒤집고 있었다.
+    #
+    #   실측 2026-08-08: `ignored` 705건 중 **142건(20.1%)** 이 '유지 선언 kind' 이고
+    #   그중 **138건(97%)** 을 이 메시지 정규식이 결정했다. kind별 무력화율 —
+    #   abort 81/86(94%) · send_failure 22/23(96%) · execution_error 16/19(84%).
+    #   즉 harness 가 max_attempts 를 소진하고 escalate 한 **발행 최종 실패 신호가
+    #   통째로 격리 버킷에 버려졌다**(그래서 Tier-1·Tier-2·학습 전 구간 미진입).
+    #   정규식은 2026-06-28, kind 선언은 2026-07-22 → **선언이 태어날 때부터 사문**이었다.
+    #
+    #   여기 넣는 논리는 새것이 아니다 — 위 1)·3) 이 이미 쓰는 "구조화 필드가 추론보다
+    #   권위 있다" 를 5)에도 **일관 적용**하는 것뿐이다. kind 가 명시됐는데 승인 목록
+    #   (`non_code_issue_kinds()`)에 없다면, 그건 생산자가 "이건 코드 문제다" 라고
+    #   말한 것이므로 문구가 뒤집을 수 없다.
+    #   ※ kind 가 *비어 있는* 비-harness 경로는 종전대로 5)로 간다.
+    #   킬스위치 `GUARDIAN_KIND_OVERRIDE_GUARD=0` → 종전 동작 복귀.
+    if _flag("GUARDIAN_KIND_OVERRIDE_GUARD", True) and (kind or "").strip():
+        return False
+
     # 5) 메시지
     return any(pat.search(msg) for pat in _NON_CODE_PATTERNS)
 
@@ -835,32 +858,50 @@ def _policy_types() -> frozenset:
         return frozenset()
 
 
+# 최빈 타입이 이 비율 이상을 차지하면 "뭉뚱그려졌다" 로 본다.
+#   1.0(=정확히 1종)은 다른 타입 1건에 영구히 꺼진다 — 실측으로 두 소스가 그렇게 침묵했다.
+GRANULARITY_DOMINANCE: float = 0.9
+
+
 def type_granularity_issues(min_samples: int = GRANULARITY_MIN_SAMPLES,
                             window_days: int = GRANULARITY_WINDOW_DAYS) -> list:
     """소스별로 오류 타입이 뭉뚱그려져 있으면 알린다. DB 미가용 시 조용히 [].
 
     판정: 최근 `window_days` 일 안에서 한 소스가 `min_samples` 이상 오류를 냈는데
-          **고유 타입이 1개** → 세분화 필요.
+          **한 타입이 대부분을 차지** → 세분화 필요.
+
+    ★ '고유 타입 == 1' 정확일치를 버린 이유 (2026-08-08 감사)
+      다른 타입이 **단 1건** 섞이면 그 순간 검사가 영구히 꺼진다. 실측: radar 224건 중
+      223건이 같은 타입인데 d=2 라 보고되지 않았고, harness 도 359건 중 337건이
+      `RuntimeError` 인데 d=9 라 조용했다. 편중은 개수가 아니라 **비율**이다.
+      임계는 상수 하나(`GRANULARITY_DOMINANCE`)에서 파생 — 검사마다 박지 않는다.
     """
     out: list = []
     try:
         from shared.db import get_db  # noqa: PLC0415
         policy = _policy_types()
         with get_db() as conn:
+            # 소스별 **최빈 타입의 점유율**을 본다 (개수가 아니라 비율).
             rows = conn.execute(
-                "SELECT source, COUNT(*) n, COUNT(DISTINCT error_type) d, "
-                "       MIN(error_type) t FROM error_log "
+                "SELECT source, error_type, COUNT(*) c FROM error_log "
                 "WHERE source IS NOT NULL AND source <> '' "
-                "  AND ts_ok GROUP BY source".replace(
+                "  AND ts_ok GROUP BY source, error_type".replace(
                     "ts_ok",
                     f"timestamp >= datetime('now','localtime','-{int(window_days)} day')")
             ).fetchall()
+        by_src: dict = {}
         for r in rows:
-            src, n, d, t = r[0], int(r[1] or 0), int(r[2] or 0), str(r[3] or "")
-            if n < min_samples or d != 1 or t in policy:
+            by_src.setdefault(str(r[0]), []).append((str(r[1] or ""), int(r[2] or 0)))
+        for src, pairs in by_src.items():
+            n = sum(c for _t, c in pairs)
+            t, top = max(pairs, key=lambda x: x[1])
+            if n < min_samples or t in policy:
                 continue
-            out.append(f"[결함4] source='{src}' {n}건이 전부 '{t}' 한 타입 — "
-                       f"타입만으로 무슨 오류인지 알 수 없다(세분화 필요)")
+            share = top / n if n else 0.0
+            if share < GRANULARITY_DOMINANCE:
+                continue
+            out.append(f"[결함4] source='{src}' {n}건 중 {top}건({share:.0%})이 "
+                       f"'{t}' 한 타입 — 타입만으로 무슨 오류인지 알 수 없다(세분화 필요)")
     except Exception:
         pass          # 진단이 본 판정을 막지 않는다 (fail-open)
     return out

@@ -25,6 +25,8 @@ AuditResult dataclass — 텔레그램 인라인 버튼 ✅/❌ 게이트로 사
 """
 from __future__ import annotations
 
+import re as _re
+
 import json
 import logging
 import re
@@ -465,16 +467,74 @@ def _save_to_db(result: AuditResult) -> None:
 # 스케줄 잡 진입점 (JARVIS04 DEFAULT_JOBS 에서 호출)
 # ──────────────────────────────────────────────────────────────
 
+# 위반 문자열의 머리표 `[결함N]` → 세분화 타입 파생용 (목록을 박지 않는다).
+_re_defect = _re.compile(r"^\[결함(\d+)\]")
+
+
+def audit_severity_selfcheck() -> list:
+    """분류 게이트 자가검사를 **실제로 돌린다** (2026-08-08 감사).
+
+    ★ 왜 여기인가
+      `severity.selfcheck()` 와 `type_granularity_issues()` 는 "감사가 실증한 결함이
+      되살아나면 알린다" 는 목적으로 만들어졌는데, **프로덕션 호출자가 0곳**이었다
+      (테스트와 수동 실행뿐). 검사가 존재하는 것과 검사가 도는 것은 다른 문제다 —
+      이 저장소가 반복해서 겪은 병이다(`catch_path_effective` 도 같은 상태).
+
+      새 잡을 만들지 않는다(①). 주 1회 감사가 이미 돌고 있고, 이 검사는 그 감사가
+      묻는 것과 같은 질문("정책이 실제로 적용되고 있나")이다.
+    """
+    try:
+        from JARVIS07_GUARDIAN.severity import selfcheck as _sc
+        return list(_sc() or [])
+    except Exception as e:
+        log.warning("[AUDITOR] severity 자가검사 실패: %s", e)
+        return []
+
+
 def job_auditor_weekly() -> None:
     """주 1회 일요일 04:30 자동 실행 — DEFAULT_JOBS callback."""
     try:
         run(send_telegram=True)
     except Exception as e:
         log.error("[AUDITOR] 주간 감사 실패: %s", e, exc_info=True)
+    # ★ 분류 게이트 자가검사 — 위반이 있으면 조용히 넘기지 않고 사용자에게 알린다.
+    try:
+        _v = audit_severity_selfcheck()
+        if _v:
+            log.warning("[AUDITOR] severity 위반 %d건", len(_v))
+            _notify_severity_violations(_v)
+        else:
+            log.info("[AUDITOR] severity 자가검사 통과")
+    except Exception as e:
+        log.error("[AUDITOR] severity 자가검사 처리 실패: %s", e, exc_info=True)
+
+
+def _notify_severity_violations(violations: list) -> None:
+    """위반을 **GUARDIAN 오류로** 흘려보낸다 — 새 알림 채널을 만들지 않는다(①).
+
+    ★ 왜 텔레그램이 아닌가
+      이 파일의 `_send_telegram_report` 는 *사용자 박제로 비활성* 이다("로그만 기록").
+      그 결정을 우회해 새 통로를 뚫으면 같은 정책이 두 곳이 된다.
+      대신 오류 파이프라인에 넣으면 ① 이미 사람이 보는 화면에 뜨고
+      ② 세분화 타입으로 남아 학습 입력이 되며 ③ 재발이 집계된다.
+      "정책 위반도 오류다" — 조용히 로그로 끝내면 아무도 안 읽는다.
+    """
+    try:
+        from JARVIS07_GUARDIAN.error_collector import report as _rep
+        for v in violations[:8]:
+            # 타입은 위반 머리표(`[결함N]`)에서 파생 — 중앙 매핑표를 만들지 않는다(②).
+            _kind = "SeverityGate"
+            _m = _re_defect.match(str(v))
+            if _m:
+                _kind = f"SeverityGateDefect{_m.group(1)}"
+            _rep("guardian", RuntimeError(str(v)[:400]),
+                 module=__name__, func_name=_kind)
+    except Exception as e:
+        log.warning("[AUDITOR] severity 위반 보고 실패: %s", e)
 
 
 __all__ = [
-    "run", "job_auditor_weekly",
+    "run", "job_auditor_weekly", "audit_severity_selfcheck",
     "audit_constitution_violations",
     "audit_repeated_lessons",
     "audit_learned_patterns_meta_learning",

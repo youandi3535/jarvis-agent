@@ -3107,3 +3107,109 @@ def test_지침_선택규칙이_한_곳이다():
     got = {r.get("insight_key") for r in _ql.selectable_insights("economic", 50, 21)}
     assert f"economic:seo_{name}" not in got, \
         f"작성 LLM 이 만들 수 없는 항목({pipe[0]})을 겨눈 지침이 선택됐다"
+
+
+def test_kind_선언을_메시지_문구가_뒤집지_못한다():
+    """★ 구조화 필드가 문구보다 권위 있다 — `is_transient` 1)·3) 원칙을 5)에도 적용.
+
+    실측 2026-08-08: `ignored` 705건 중 142건이 '반드시 Tier-2 유지' 로 선언된 kind 인데
+    그중 138건(97%)을 메시지 정규식이 격리로 보냈다. 발행 최종 실패가 통째로 버려졌다.
+    """
+    from JARVIS07_GUARDIAN.severity import is_transient, non_code_issue_kinds
+
+    approved = non_code_issue_kinds()
+    assert approved, "승인 kind 집합이 비었다 — 검사 전제가 깨졌다"
+
+    # 정규식에 확실히 걸리는 문구 (실제 DB 메시지 형태)
+    MSGS = ["[Layer4] 활성 플랫폼 전부 실패 — 송출 미완료: ['naver']",
+            "수정 불가 — 패턴 반복 3건",
+            "종목 데이터 0개 — 다른 테마로 교체"]
+
+    # ① 선언된(=승인 목록 밖) kind 는 문구가 뭐든 transient 가 아니다
+    for kind in ("send_failure", "abort", "execution_error", "draft_invalid",
+                 "stuck", "data_empty", "login_invalid"):
+        assert kind not in approved, f"{kind} 가 승인 목록에 들어갔다 — 전제 변경"
+        for m in MSGS:
+            assert is_transient("RuntimeError", m, kind=kind) is False, \
+                f"kind={kind} 인데 문구가 선언을 뒤집었다: {m[:40]}"
+
+    # ② 승인된 kind 는 종전대로 transient 다 (과잉 차단 없음)
+    for kind in sorted(approved)[:3]:
+        assert is_transient("RuntimeError", MSGS[0], kind=kind) is True, \
+            f"승인 kind({kind})까지 막혔다 — 과잉 차단"
+
+    # ③ kind 가 없는 비-harness 경로는 종전대로 메시지 판정
+    assert is_transient("RuntimeError", MSGS[0]) is True, "kind 없는 경로가 바뀌었다"
+
+    # ④ 코드 버그 타입 가드는 그대로 (3단계가 4-B 앞이다)
+    assert is_transient("NameError", MSGS[0]) is False
+
+
+def test_타입편중_판정이_한_건에_꺼지지_않는다():
+    """★ '고유 타입 == 1' 정확일치는 다른 타입 1건에 **영구히** 꺼진다.
+
+    실측: radar 224건 중 223건이 같은 타입인데 d=2 라 보고되지 않았다.
+    편중은 개수가 아니라 비율이다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import severity as _sv
+
+    assert hasattr(_sv, "GRANULARITY_DOMINANCE"), "임계 상수가 없다 — 검사 안에 박혔다"
+    assert 0.5 < _sv.GRANULARITY_DOMINANCE <= 1.0
+
+    src = _code_only(inspect.getsource(_sv.type_granularity_issues))
+    assert "d != 1" not in src, "정확일치 판정이 남아 있다 — 1건에 꺼진다"
+    assert "GRANULARITY_DOMINANCE" in src, "임계를 상수에서 파생하지 않는다"
+
+    got = _sv.type_granularity_issues()
+    assert isinstance(got, list)
+    for g in got:
+        assert "%" in g, f"비율을 알려주지 않는다: {g}"
+
+
+def test_분류_자가검사가_실제로_돈다():
+    """★ 검사가 존재하는 것과 검사가 도는 것은 다른 문제다 — 호출자가 0곳이었다."""
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import auditor as _au
+
+    got = _au.audit_severity_selfcheck()
+    assert isinstance(got, list), f"실행이 리스트를 안 돌려준다: {got!r}"
+
+    # 주간 잡이 실제로 부르는가
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/auditor.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "job_auditor_weekly")
+    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "audit_severity_selfcheck" in called, "주간 감사가 자가검사를 안 부른다"
+
+    # 새 알림 채널을 만들지 않았는가 (이 파일의 텔레그램은 사용자 박제로 비활성)
+    ntree = ast.parse(inspect.getsource(_au._notify_severity_violations)
+                      .replace("def _notify", "def _notify", 1))
+    import textwrap
+    ntree = ast.parse(textwrap.dedent(inspect.getsource(_au._notify_severity_violations)))
+    called = {getattr(n.func, "id", "") or getattr(n.func, "attr", "")
+              for n in ast.walk(ntree) if isinstance(n, ast.Call)}
+    imported = {a.asname or a.name for n in ast.walk(ntree)
+                if isinstance(n, ast.ImportFrom) for a in n.names}
+    assert not any("tg" in x or "telegram" in x.lower()
+                   for x in (called | imported) if x), \
+        f"비활성 박제를 우회해 새 알림 통로를 만들었다: {sorted(called | imported)}"
+    # ★ import 만 있고 **부르지 않으면** 위반은 여전히 로그로 끝난다(뮤테이션에서 발각).
+    assert "_rep" in called, \
+        f"오류 보고를 import 만 하고 부르지 않는다 — 로그로 끝난다: {sorted(called)}"
+
+    # 실제로 부르면 오류가 쌓이는가 (patch_effective 표준)
+    import shared.db as _sdb
+    from shared.db import get_db
+    with get_db() as con:
+        _before = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+    _au._notify_severity_violations(["[결함4] source='probe' 9건 중 9건(100%)이 'X' 한 타입"])
+    with get_db() as con:
+        _after = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+        row = con.execute("SELECT func_name FROM error_log ORDER BY id DESC LIMIT 1").fetchone()
+    assert _after > _before, "위반을 보고했는데 오류가 안 쌓였다"
+    assert (row["func_name"] or "").startswith("SeverityGateDefect"), \
+        f"타입이 머리표에서 파생되지 않았다: {row['func_name']!r}"
