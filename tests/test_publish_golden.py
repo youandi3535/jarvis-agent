@@ -3259,10 +3259,10 @@ def test_분류_자가검사가_실제로_돈다():
     _au._notify_severity_violations(["[결함4] source='probe' 9건 중 9건(100%)이 'X' 한 타입"])
     with get_db() as con:
         _after = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
-        row = con.execute("SELECT func_name FROM error_log ORDER BY id DESC LIMIT 1").fetchone()
+        row = con.execute("SELECT error_type FROM error_log ORDER BY id DESC LIMIT 1").fetchone()
     assert _after > _before, "위반을 보고했는데 오류가 안 쌓였다"
-    assert (row["func_name"] or "").startswith("SeverityGateDefect"), \
-        f"타입이 머리표에서 파생되지 않았다: {row['func_name']!r}"
+    assert (row["error_type"] or "").startswith("SeverityGateDefect"), \
+        f"타입이 머리표에서 파생되지 않았다: {row['error_type']!r}"
 
 
 def test_Tier2가_자기보고만으로_fixed를_확정하지_않는다():
@@ -3658,28 +3658,35 @@ def test_무예외_발행실패도_보고된다():
 
     # 실제로 실패를 보고하는가 + 제어흐름은 그대로인가
     from shared.db import get_db
+    # ★ 행 개수로 판정하지 않는다 — 같은 오류가 60초 안에 겹치면 쿨다운이 억제하고
+    #   `seen_count` 만 올린다(그게 정상 동작이다). **기록 총량**(행 + 빈도)으로 본다.
+    _q = ("SELECT COALESCE(SUM(seen_count), 0) FROM error_log "
+          "WHERE source='publish' AND error_type LIKE 'Posting%'")
     with get_db() as con:
-        before = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+        before = con.execute(_q).fetchone()[0]
     res = _dp.publish_assembled({"blocks": [], "title": "t"},
                                 lambda blocks, title, **kw: {"success": False,
                                                              "error": "쿠키 만료"},
                                 "naver")
     with get_db() as con:
-        after = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
-        row = con.execute("SELECT func_name, source FROM error_log "
-                          "ORDER BY id DESC LIMIT 1").fetchone()
-    assert after > before, "무예외 실패가 보고되지 않았다"
-    assert row["source"] == "publish"
-    assert "Naver" in (row["func_name"] or ""), f"타입이 플랫폼에서 파생 안 됐다: {row['func_name']}"
+        after = con.execute(_q).fetchone()[0]
+        row = con.execute("SELECT error_type, func_name, source FROM error_log "
+                          "WHERE source='publish' ORDER BY id DESC LIMIT 1").fetchone()
+    assert after > before, f"무예외 실패가 기록되지 않았다 ({before} → {after})"
+    assert row is not None and row["source"] == "publish"
+    # ★ 세분화 타입은 `error_type` 자리다 (2026-08-08 교정 — func_name 에 두면
+    #   error_type 이 RuntimeError 가 돼 즉시 격리된다).
+    assert "Naver" in (row["error_type"] or ""), \
+        f"타입이 플랫폼에서 파생 안 됐다: {row['error_type']}"
     assert isinstance(res, dict) and res["success"] is False, \
         "보고하면서 결과를 바꿨다 — 제어흐름은 건드리면 안 된다"
 
     # 성공 경로는 보고하지 않는다 (과잉 보고 금지)
     with get_db() as con:
-        b2 = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+        b2 = con.execute(_q).fetchone()[0]
     ok = _dp.publish_assembled({"blocks": [], "title": "t"},
                                lambda blocks, title, **kw: {"success": True}, "tistory")
     with get_db() as con:
-        a2 = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+        a2 = con.execute(_q).fetchone()[0]
     assert a2 == b2, "성공했는데 오류를 남겼다"
     assert ok["success"] is True
