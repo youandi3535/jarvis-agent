@@ -1602,6 +1602,34 @@ def test_결손_박제가_단일_진입점이다():
     assert '"kind"' in rec, "kind 를 안 넣으면 Tier-2 LLM 이 헛돈다"
 
 
+def test_한_슬롯_두_플랫폼_결손이_둘_다_박제된다(monkeypatch):
+    """★ 실측 2026-08-08 21:00 테마: naver·tistory 동시 결손인데 naver 만 박제됐다.
+
+    `slot_key` 는 플랫폼을 담지 않는다 — 첫 플랫폼을 기록하면 그 error_log 행의
+    context 에 슬롯 키가 남고, 같은 루프의 다음 플랫폼이 그 슬롯 키로
+    '이미 기록됨' 을 오판해 조용히 스킵되던 결함(record_publish_gap 참조).
+    """
+    import datetime as dt
+
+    from JARVIS08_PUBLISH import publish_ledger as L
+
+    recorded = []
+
+    def _fake_report(error_type, source, **kw):
+        recorded.append((error_type, kw.get("context", {}).get("platform")))
+
+    import JARVIS07_GUARDIAN.error_collector as EC
+    monkeypatch.setattr(EC, "report", _fake_report)
+
+    start = dt.datetime(2026, 8, 8, 21, 0)
+    end = dt.datetime(2026, 8, 9, 7, 0)
+    first = L.record_publish_gap("theme", "naver", start, end)
+    second = L.record_publish_gap("theme", "tistory", start, end)
+
+    assert first and second, "같은 슬롯의 서로 다른 플랫폼 결손은 둘 다 박제돼야 한다"
+    assert {p for _, p in recorded} == {"naver", "tistory"}
+
+
 def test_복구정책A_재발행을_권하지_않는다():
     """★ 발행은 07:00·21:00 뿐 — 경보가 '지금 실행' 을 권하면 그 규칙을 어기게 만든다."""
     import inspect
@@ -4013,8 +4041,13 @@ def test_근거_없이는_상태가_안_바뀐다():
                 why = con.execute("SELECT resolution FROM error_log WHERE id=?",
                                   (eid,)).fetchone()[0]
             assert (why or "").strip(), f"{st} 인데 사유가 비었다"
-            assert __name__.rsplit(".", 1)[-1] in why or "미기록" in why, \
+            # ★ "미기록" 만 확인하면 파생이 '호출자 불명' 만 뱉어도 통과한다 —
+            #   그러면 근거는 있으나 *어디서 찍었는지* 를 모르는, 반쯤 죽은 상태다.
+            #   호출 지점(모듈.함수:줄)이 실제로 박히는지 본다.
+            assert f"{__name__.rsplit('.', 1)[-1]}.test_" in why, \
                 f"파생 사유가 호출 지점을 못 가리킨다: {why}"
+            assert why.rsplit(":", 1)[-1].rstrip(")").isdigit(), \
+                f"줄번호가 없다 — 재현 지점을 못 찾는다: {why}"
         # 사람이 쓴 사유가 있으면 그쪽이 이긴다
         _db.mark_error_status(eid, "wontfix", "사람이 쓴 진짜 사유")
         with _db.get_db() as con:
