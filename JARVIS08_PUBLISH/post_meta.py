@@ -51,6 +51,18 @@ def _std(platform: str, key: str, default):
         return default
 
 
+
+def _max_attempts() -> int:
+    """재시도 상한 — harness 단일 진실 소스에서 파생 (사용자 박제: 어떤 재시도도 최대 2회)."""
+    try:
+        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
+        return max(1, int(DEFAULT_MAX_ATTEMPTS))
+    except Exception:
+        return 2
+
+
+_MAX_ATTEMPTS = _max_attempts()
+
 def meta_target_range(platform: str) -> "tuple[int, int] | None":
     """메타 설명 목표 길이 `(min, max)`. 기준이 없는 플랫폼은 None → 생성 안 함.
 
@@ -100,30 +112,48 @@ def meta_description(title: str, body_text: str, platform: str) -> str:
     except Exception:
         snippet = plain[:1200]
 
-    try:
+    def _ask(feedback: str = "") -> str:
         from shared.llm import invoke_text
-        raw = invoke_text(
+        return invoke_text(
             "writer_short_title",
             f"아래 글의 검색 결과 요약문(메타 설명)을 **한 문단**으로 쓰세요.\n"
             f"규칙:\n"
             f"- 정확히 {lo}~{hi}자. 이 범위를 벗어나면 실패입니다\n"
             f"- 이 글이 실제로 다루는 내용만. 본문에 없는 사실·수치 금지\n"
             f"- 검색자가 클릭하고 싶게 — 무엇을 알 수 있는지 구체적으로\n"
-            f"- 요약문 본문만 출력. 따옴표·머리말·설명 금지\n\n"
+            f"- 요약문 본문만 출력. 따옴표·머리말·설명 금지\n"
+            f"{feedback}\n"
             f"제목: {title}\n"
             f"본문: {snippet}",
             timeout=60,
         ) or ""
+
+    out = ""
+    try:
+        # ★ 길이 미달이면 **한 번만** 다시 묻는다 (2026-08-08 — 실측 교정).
+        #   `_trim_to_range` 는 자르기만 한다(늘리면 없는 말을 지어내게 되므로 옳다).
+        #   그래서 짧게 오면 그대로 감점이었다 — 실측 2026-08-07 21:29 티스토리 글이
+        #   99자로 와서 T7 이 0.5/3 이었다. 재시도 상한은 harness 표준(최대 2회)을 따른다.
+        for attempt in range(_MAX_ATTEMPTS):
+            fb = ""
+            if attempt:
+                fb = (f"- 직전 답이 {len(out)}자였습니다. {lo}~{hi}자 범위를 반드시 지키세요."
+                      f" 내용을 지어내지 말고 본문에 있는 내용을 더 담아 늘리세요.\n")
+            cand = _trim_to_range(_ask(fb), lo, hi)
+            # ★ 거부문·머리말이 오면 버린다 — 어휘 목록이 아니라 *꼴* 로 판정한다
+            #   (`tags.response_is_tag_shaped` 와 같은 철학: 새 거부 표현이 생겨도 낡지 않는다).
+            if len(cand) < lo // 2 or "\n" in cand.strip():
+                log.warning(f"[post_meta] 메타 설명 응답이 요약문 형태가 아님 — 폐기 ({len(cand)}자)")
+                cand = ""
+            if cand and len(cand) > len(out):
+                out = cand
+            if lo <= len(out) <= hi:
+                break
     except Exception as e:
         log.warning(f"[post_meta] 메타 설명 생성 실패(발행은 계속): {type(e).__name__}: {e}")
-        return ""
-
-    out = _trim_to_range(raw, lo, hi)
-    # ★ 거부문·머리말이 오면 버린다 — 어휘 목록이 아니라 *꼴* 로 판정한다
-    #   (`tags.response_is_tag_shaped` 와 같은 철학: 새 거부 표현이 생겨도 낡지 않는다).
-    if len(out) < lo // 2 or "\n" in out.strip():
-        log.warning(f"[post_meta] 메타 설명 응답이 요약문 형태가 아님 — 폐기 ({len(out)}자)")
-        return ""
+        return out
+    if out and not (lo <= len(out) <= hi):
+        log.warning(f"[post_meta] 메타 설명 {len(out)}자 — 목표 {lo}~{hi}자 미달(부분 점수)")
     return out
 
 

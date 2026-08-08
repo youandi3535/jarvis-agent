@@ -2717,3 +2717,49 @@ def test_항목_소급채점이_재현_가능한_함수다():
     assert a_keys, "A 항목 파생 실패 — 검사 전제가 깨졌다"
     leaked = a_keys & set(stored)
     assert not leaked, f"측정하지 않은 Section A 를 0점으로 저장했다: {sorted(leaked)}"
+
+
+def test_메타설명_길이미달이면_다시_묻는다():
+    """★ `_trim_to_range` 는 자르기만 한다(늘리면 없는 말을 지어내므로 옳다).
+
+    그래서 짧게 오면 그대로 감점이었다 — 실측 2026-08-07 21:29 티스토리 글이 99자로 와
+    T7 이 0.5/3 이었다. 짧으면 **한 번만** 다시 묻는다(상한은 harness 표준 파생).
+    """
+    import inspect
+
+    from JARVIS08_PUBLISH import post_meta as _pm
+
+    # 상한을 박지 않고 harness 에서 파생하는가
+    assert _pm._MAX_ATTEMPTS >= 1
+    src = _code_only(inspect.getsource(_pm._max_attempts))
+    assert "DEFAULT_MAX_ATTEMPTS" in src, "재시도 상한을 harness 에서 파생하지 않는다"
+
+    calls = []
+    lo, hi = _pm.meta_target_range("tistory")
+
+    def _fake(alias, prompt, **kw):
+        calls.append(prompt)
+        # 1회차는 짧게, 2회차는 범위 안으로
+        return "가" * (lo // 2 + 5) if len(calls) == 1 else "나" * (lo + 3)
+
+    import shared.llm as _llm
+    orig = _llm.invoke_text
+    _llm.invoke_text = _fake
+    try:
+        got = _pm.meta_description("제목", "<p>" + "본문이다. " * 80 + "</p>", "tistory")
+    finally:
+        _llm.invoke_text = orig
+
+    assert len(calls) == 2, f"짧은 응답인데 다시 묻지 않았다 (호출 {len(calls)}회)"
+    assert lo <= len(got) <= hi, f"재시도 후에도 범위 밖: {len(got)}자"
+    assert "직전 답이" in calls[1], "재시도 프롬프트에 길이 피드백이 없다"
+
+    # 첫 응답이 이미 범위 안이면 다시 묻지 않는다 (발행 창에서 헛 LLM 호출 금지)
+    calls.clear()
+    _llm.invoke_text = lambda a, p, **k: (calls.append(p), "다" * (lo + 2))[1]
+    try:
+        ok = _pm.meta_description("제목", "<p>" + "본문이다. " * 80 + "</p>", "tistory")
+    finally:
+        _llm.invoke_text = orig
+    assert len(calls) == 1, f"이미 범위 안인데 또 물었다 ({len(calls)}회)"
+    assert lo <= len(ok) <= hi
