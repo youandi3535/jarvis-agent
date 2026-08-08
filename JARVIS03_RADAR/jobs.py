@@ -270,6 +270,12 @@ def _pack_empty_reason() -> str:
         d = _json.loads(fp.read_text(encoding="utf-8"))
         if not (d.get("combined_keywords") or d.get("combined_top50") or []):
             return "TrendCollectEmpty"
+        # ★ 판은 남아 있지만 **최근 회차가 빈손** 이었으면 그것이 진실이다 (2026-08-08).
+        #   보존 가드가 아침 판을 지키는 덕에 파일만 보면 정상으로 보인다 — 그대로 두면
+        #   원인이 `TopicPackNoCandidate`(적합 후보 없음) 로 **오분류** 되어 사람이
+        #   엉뚱한 곳(주제 선정)을 고치게 된다. 실제 원인은 수집 실패다.
+        if d.get("last_run_empty_at"):
+            return "TrendCollectEmptyLastRun"
         return "TopicPackNoCandidate"
     except Exception:
         return "TopicPackUnknown"

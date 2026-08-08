@@ -624,10 +624,12 @@ def _orchestrate(error_id: int):
         #    ★ ERRORS [286] — 네트워크·Selenium 환경·외부 API 할당량·정상 제어흐름(테마 교체)·
         #    외부 발행(Layer 4)·Claude CLI 운영 오류는 wontfix 가 아니라 ignored.
         #    수동검토 큐 오염·알림 폭주 방지. 자동수정 파이프라인 진입 안 함.
-        from JARVIS07_GUARDIAN.severity import (is_transient, kind_of,
+        from JARVIS07_GUARDIAN.severity import (companions_of, is_transient, kind_of,
                                                 is_deterministic_code_error)
+        # ★ `companions` 를 넘긴다 — 봉투 신호가 *유일한 신호* 면 삼키지 않기 위해.
         if is_transient(error_type, error_record.get("message", ""),
-                        error_record.get("source", ""), kind=kind_of(error_record)):
+                        error_record.get("source", ""), kind=kind_of(error_record),
+                        companions=companions_of(error_record)):
             log.info(f"[GUARDIAN] #{error_id} 일시적/외부/제어흐름 오류 — ignored (자동수정 비대상): {error_type}")
             _db.mark_error_status(error_id, "ignored",
                                   f"일시적/외부/제어흐름 오류 — 자동수정 비대상 ({error_type})")
@@ -917,7 +919,8 @@ def self_heal_known_errors(limit: int = 40) -> dict:
         from shared import db as _db
         from JARVIS07_GUARDIAN.error_analyzer import analyze
         from JARVIS07_GUARDIAN.error_fixer import apply_fix
-        from JARVIS07_GUARDIAN.severity import is_transient, kind_of as _kind_of
+        from JARVIS07_GUARDIAN.severity import (companions_of as _companions_of,
+                                                is_transient, kind_of as _kind_of)
     except Exception as e:
         log.warning(f"[GUARDIAN/selfheal] import 실패: {e}")
         return {"fixed": 0, "skipped": 0, "ignored": 0, "scanned": 0}
@@ -927,7 +930,8 @@ def self_heal_known_errors(limit: int = 40) -> dict:
         eid = er.get("id")
         et  = er.get("error_type", "")
         try:
-            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er)):
+            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er),
+                            companions=_companions_of(er)):
                 _db.mark_error_status(eid, "ignored")
                 ignored += 1
                 continue
@@ -964,7 +968,8 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
         from shared import db as _db
         from JARVIS07_GUARDIAN.error_analyzer import analyze, analyze_llm_only
         from JARVIS07_GUARDIAN.error_fixer import apply_fix
-        from JARVIS07_GUARDIAN.severity import is_transient, kind_of as _kind_of
+        from JARVIS07_GUARDIAN.severity import (companions_of as _companions_of,
+                                                is_transient, kind_of as _kind_of)
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] import 실패: {e}")
         return {"fixed_t1": 0, "fixed_t2": 0, "failed": 0, "ignored": 0, "scanned": 0, "llm_used": 0}
@@ -974,7 +979,8 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
         eid = er.get("id")
         et  = er.get("error_type", "")
         try:
-            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er)):
+            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er),
+                            companions=_companions_of(er)):
                 _db.mark_error_status(eid, "ignored")
                 ignored += 1
                 continue
@@ -1017,7 +1023,7 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
 def _ignore_reason(rec: dict) -> str:
     """이 오류를 *어느 필터* 가 걸렀는지 — 공개 API 프로빙으로 런타임 파생."""
     try:
-        from JARVIS07_GUARDIAN.severity import is_transient, kind_of
+        from JARVIS07_GUARDIAN.severity import companions_of, is_transient, kind_of
     except Exception:
         return "미분류"
     et  = rec.get("error_type") or ""
@@ -1025,7 +1031,10 @@ def _ignore_reason(rec: dict) -> str:
     src = rec.get("source") or ""
     k   = kind_of(rec)
     # is_transient 의 내부 판정 순서와 동일한 순서로 '한 인자만' 넣어 본다.
-    if k and is_transient("", "", "", kind=k):
+    # ★ 실제 판정과 **같은 인자** 로 물어본다 (2026-08-08) — companions 를 빼면
+    #   봉투 신호를 "kind 때문에 무시됨" 이라고 설명하는데 정작 무시되지 않았다.
+    #   설명이 결정과 어긋나면 사람이 엉뚱한 곳을 고친다.
+    if k and is_transient("", "", "", kind=k, companions=companions_of(rec)):
         return f"kind:{k}"
     if src and is_transient("", "", src, ""):
         return f"source:{src}"

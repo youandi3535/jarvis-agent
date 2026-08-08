@@ -543,7 +543,10 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str,
     _directives: list[str] = []
     try:
         from JARVIS07_GUARDIAN.quality_learner import active_directives as _act_dir
-        _directives = _act_dir(scope=post_type or "all", theme=theme or "")
+        # ★ 기록(`record_directive_violations`)과 **같은 인자** 로 묻는다 (2026-08-08).
+        #   platform 이 다르면 다른 배치를 잡아 검사 목록과 기록 대상이 갈라진다.
+        _directives = _act_dir(scope=post_type or "all", theme=theme or "",
+                               platform=platform or "")
     except Exception:
         _directives = []
     _dir_block = ""

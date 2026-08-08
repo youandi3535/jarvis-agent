@@ -475,6 +475,15 @@ def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issu
                 # ★ 원인 타입을 *구조화 필드* 로도 보존 — 메시지 정규식으로 되캐지 않게 한다.
                 "cause_type": issue.cause_type,
                 "harness_wrapped": True,
+                # ★ 봉투 신호의 **동봉 실이슈 수** (2026-08-08 적대적 검증에서 발각).
+                #   `abort`·`stuck` 을 "근본 원인은 따로 보고된다" 는 이유로 Tier-2 에서
+                #   빼 놨는데, 그 전제가 두 경우에 **거짓** 이었다:
+                #     · `stuck`(워치독 freeze/데드라인) — 예외가 없어 동봉될 이슈 자체가 없다.
+                #       실측 24건 중 13건(54%)이 ±15분 내 다른 harness 보고 0건.
+                #     · 누적 abort 가 시도 1 에 터지면 그 시도의 unfixed 가 아직 미보고다.
+                #   kind 로 판단하면 이 구분이 안 된다 — **사실을 싣는다**(원칙②).
+                #   0 이면 이 봉투가 *유일한 신호* 이므로 하류가 삼키면 안 된다.
+                "companions": max(0, len(issues) - 1),
             }
             _cause = issue.cause if _preserve else None
             if _cause is not None:
@@ -1282,7 +1291,11 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             # ★ 남은 것이 품질점수뿐이면 최선 대본을 내보낸다 (2026-08-04 감사 1위)
             if _try_best_so_far(action_def, state, result, unfixed_issues, "지문반복"):
                 return result
-            _report_issues_to_guardian(action_def.name, attempt, [_abort], action_def.max_attempts)
+            # ★ 봉투만 보내지 않는다 (2026-08-08) — 종전엔 `[_abort]` 만 보내서,
+            #   누적 abort 가 시도 1 에 터지면 그 시도의 실이슈(예: NameError 20건)가
+            #   **통째로 사라졌다**. 실이슈를 함께 실어야 봉투가 비로소 *요약* 이 된다.
+            _report_issues_to_guardian(action_def.name, attempt,
+                                       unfixed_issues + [_abort], action_def.max_attempts)
             _notify_escalation(
                 action_def.name, attempt, all_issues,
                 reason=result.escalation_reason,
@@ -1307,7 +1320,11 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             # ★ 남은 것이 품질점수뿐이면 최선 대본을 내보낸다 (2026-08-04 감사 1위)
             if _try_best_so_far(action_def, state, result, unfixed_issues, "누적초과"):
                 return result
-            _report_issues_to_guardian(action_def.name, attempt, [_abort], action_def.max_attempts)
+            # ★ 봉투만 보내지 않는다 (2026-08-08) — 종전엔 `[_abort]` 만 보내서,
+            #   누적 abort 가 시도 1 에 터지면 그 시도의 실이슈(예: NameError 20건)가
+            #   **통째로 사라졌다**. 실이슈를 함께 실어야 봉투가 비로소 *요약* 이 된다.
+            _report_issues_to_guardian(action_def.name, attempt,
+                                       unfixed_issues + [_abort], action_def.max_attempts)
             _notify_escalation(
                 action_def.name, attempt, all_issues,
                 reason=result.escalation_reason,

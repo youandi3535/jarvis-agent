@@ -471,11 +471,16 @@ _OWN_NON_CODE_KINDS = frozenset({
     "empty_output",   # LLM 응답 빈값
     "sdk_error",      # SDK 실행 오류 (CLI 미발견·인증 등 운영 사유)
     "timeout",        # LLM/CLI 타임아웃 — 응답이 안 온 것
-    # ★ 2026-08-05 — 발행 회계 kind 2종. 둘 다 *코드로 못 고치는* 사건이다.
+    # ★ 2026-08-05 — 발행 회계 kind. 셋 다 *코드로 못 고치는* 사건이다.
     #   등록하지 않으면 절전 한 번마다 Tier-2 LLM 세션이 열린다
     #   (`PublishGap*` 이 실제로 그렇게 됐다 — 자동수리가 고칠 수 없는 것에 토큰을 태웠다).
     "daemon_down",    # 데몬이 꺼져 있어 슬롯을 통째로 잃음 — 기계 상태이지 코드 결함 아님
     "job_missed",     # grace 를 넘겨 잡이 아예 실행되지 못함 (misfire) — 같은 이유
+    # ★ 2026-08-08 박제 (실측 #5417·#5421) — `daemon_down` 만 등록되고 정작 감사가
+    #   *기본으로* 찍는 `reason="audit"` 쪽 kind(`publish_gap`, `record_publish_gap` 참조)는
+    #   빠져 있었다. 그 결과 감사가 발견한 결손(전원 오프가 아닌 진짜 발행 실패)이 매번
+    #   Tier-2 로 들어가 "수정 실패/롤백" 을 반복 — 과거 슬롯은 코드 패치로 되살아나지 않는다.
+    "publish_gap",    # 발행 완결성 감사가 찾은 결손 — 지난 슬롯이라 코드 수정 대상이 아님
 })
 
 # last-known-good 캐시 — *성공한 파생만* 적재한다(실패값을 캐시하면 영구 degrade).
@@ -590,8 +595,35 @@ def kind_of(record: dict) -> str:
     return ""
 
 
+def companions_of(record: dict):
+    """이 봉투 보고와 **함께 실린 실이슈 수** — context 단일 경로. 없으면 None(=모름).
+
+    ★ 왜 필요한가 (2026-08-08 적대적 검증)
+      `abort`·`stuck` 을 "근본 원인은 따로 보고된다" 는 이유로 Tier-2 에서 뺐는데,
+      그 전제가 두 경우에 거짓이었다 — ① `stuck` 은 예외가 없어 동봉될 이슈가 아예
+      없다(실측 24건 중 13건이 단독 보고) ② 누적 abort 가 시도 1 에 터지면 그 시도의
+      unfixed 가 아직 미보고다(NameError 20건이 통째로 사라지는 경로였다).
+      kind 로는 이 구분이 안 된다. harness 가 싣는 **사실** 로 판단한다(원칙②).
+    """
+    if not isinstance(record, dict):
+        return None
+    ctx = record.get("context")
+    if isinstance(ctx, str):
+        try:
+            import json as _json
+            ctx = _json.loads(ctx)
+        except Exception:
+            return None
+    if isinstance(ctx, dict) and "companions" in ctx:
+        try:
+            return int(ctx.get("companions") or 0)
+        except Exception:
+            return None
+    return None
+
+
 def is_transient(error_type: str, message: str = "", source: str = "",
-                 kind: str = "") -> bool:
+                 kind: str = "", companions=None) -> bool:
     """일시적·외부·제어흐름 오류 여부 — True 면 자동수정 비대상(ignored 처리).
 
     ★★ 판단 순서와 그 근거 (2026-07-25 감사로 재정비 — 순서 자체가 정책이다)
@@ -664,7 +696,11 @@ def is_transient(error_type: str, message: str = "", source: str = "",
     #     게 아니라 "포기했다" 고 말한 것이다. 근본 원인은 동봉된 다른 issue 가 각자
     #     자기 kind 로 따로 보고한다. 실측 90일 실제 파일 수정 **0건**(2026-08-08).
     if _harness_says_envelope(kind):
-        return True
+        # ★ 봉투는 *동봉된 실이슈가 있을 때만* 중복이다 (2026-08-08 적대적 검증).
+        #   `companions` 를 안 받았거나 0 이면 이 보고가 **유일한 신호** 이므로 삼키지
+        #   않는다(fail-closed). 종전엔 kind 만 보고 무조건 격리해서, 워치독 freeze 와
+        #   시도 1 누적 abort 의 실이슈가 아무 데도 안 갔다.
+        return bool(companions)
     if _flag("GUARDIAN_KIND_OVERRIDE_GUARD", True) and (kind or "").strip():
         return False
 

@@ -427,6 +427,11 @@ def _calc_trend_delta(today_kws: list[str]) -> dict:
     }
 
 
+def _dt_now_iso() -> str:
+    """지금 시각 — 파일에 박는 사실의 시간 도장."""
+    return datetime.now().isoformat(timespec="seconds")
+
+
 def save(data: dict):
     """당일 파일 저장 — **좋은 판을 빈 판으로 덮지 않는다** (2026-08-08).
 
@@ -445,20 +450,22 @@ def save(data: dict):
     _new = len(data.get("combined_keywords") or [])
     if _new == 0 and path.exists():
         try:
-            _old = len(json.loads(path.read_text(encoding="utf-8"))
-                       .get("combined_keywords") or [])
+            _kept = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
-            _old = 0
-        if _old > 0:
-            print(f"[RADAR] ⚠️ 실트렌드 0개 — 기존 {_old}개 판을 보존하고 저장 생략: {path.name}")
-            try:
-                _g_report("TrendsEmptyOverwriteBlocked", "radar",
-                          message=(f"실트렌드 0개 수집 — 기존 {_old}개 판 보존 "
-                                   f"(덮었으면 하류 주제 선정 불가)"),
-                          module=__name__, func_name="save",
-                          context={"kind": "trends_empty", "kept": _old})
-            except Exception:
-                pass
+            _kept = {}
+        if _kept.get("combined_keywords"):
+            # ★ 보존하되 **이번 회차가 빈손이었다는 사실을 파일에 박는다** (2026-08-08).
+            #   종전엔 그냥 저장을 건너뛰어서, 하류(`_verify_trends`·`_pack_empty_reason`)가
+            #   파일만 보고 "정상" 이라 판단했다 — 판은 지켜지지만 *수집 전멸이 안 보였고*,
+            #   팩이 비었을 때 원인이 `TrendCollectEmpty` 대신 `TopicPackNoCandidate` 로
+            #   오분류됐다(세분화 취지와 역행). 데이터에 사실을 남기면 둘 다 해결된다.
+            #   ※ 별도 오류를 만들지 않는다 — 진짜 원인(DNS·수집기 실패)은 수집기가
+            #     이미 `Radar*` 세분화 타입으로 보고했다. 요약을 오류로 또 만들면 중복이다.
+            _kept["last_run_empty_at"] = _dt_now_iso()
+            _kept["last_run_empty_count"] = int(_kept.get("last_run_empty_count") or 0) + 1
+            write_json(path, _kept, indent=2)
+            print(f"[RADAR] ⚠️ 실트렌드 0개 — 기존 {len(_kept['combined_keywords'])}개 판 보존 "
+                  f"(이번 회차 빈손 {_kept['last_run_empty_count']}회째): {path.name}")
             return
     write_json(path, data, indent=2)
     print(f"[RADAR] 로컬 저장: {path.name}")

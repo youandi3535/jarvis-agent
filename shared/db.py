@@ -2011,7 +2011,11 @@ def get_top_learning_insights(limit: int = 10, days: int = 30,
         if insight_type:
             sql += " AND insight_type = ?"
             params.append(insight_type)
-        if scope:
+        # ★ `'all'` 은 여기서도 **제한 없음** 이다 (2026-08-08 적대적 검증 — 관용구 통일).
+        #   같은 파일의 `get_ranked_learning_insights` 만 고치고 여기를 두면 두 함수의
+        #   규약이 어긋난다 — 지금은 호출자가 `'all'` 을 안 넘겨 무해하지만, 규약이
+        #   갈라진 채 남으면 다음 호출자가 반드시 밟는다(원칙①·③).
+        if scope and scope != "all":
             sql += " AND COALESCE(scope,'all') IN (?, 'all')"
             params.append(scope)
         sql += " ORDER BY effective_weight DESC LIMIT ?"
@@ -2149,13 +2153,25 @@ def batch_directives(batch_id: str) -> list[dict]:
 
 
 def latest_batch(scope: str, platform: str) -> str:
-    """이 조합의 **가장 최근 미귀속 배치 id** — 게이트가 방금 주입분을 찾을 때 쓴다."""
+    """이 조합의 **가장 최근 미귀속 배치 id** — 게이트가 방금 주입분을 찾을 때 쓴다.
+
+    ★ `platform=''` 주입도 같은 발행쌍으로 본다 (2026-08-08 적대적 검증)
+      주입은 작성기가 하는데 `_load_learn_insights(platform='')` 처럼 **플랫폼을 안 넘기는
+      경로** 가 있다(실측: `economic/''` 1배치·`theme/''` 1배치, 최근 것은 오늘 19:43).
+      그러면 기록은 `platform=''` 인데 게이트는 `'naver'` 로 물어 **다른 배치** 를 잡고,
+      어긴 지침이 그 배치에 없어 위반이 조용히 사라진다.
+      `''` 는 '플랫폼 미상' 이지 '다른 플랫폼' 이 아니다 — 정확 일치를 먼저 찾고,
+      없을 때만 미상 주입으로 내려간다. 규약 해석은 여기 한 곳에서만 한다.
+    """
     with get_db() as conn:
-        r = conn.execute(
-            "SELECT batch_id FROM insight_usage "
-            "WHERE scope = ? AND platform = ? AND reward IS NULL "
-            "ORDER BY id DESC LIMIT 1", (scope, platform)).fetchone()
-    return str(r[0]) if r else ""
+        for pf in ([platform, ""] if platform else [""]):
+            r = conn.execute(
+                "SELECT batch_id FROM insight_usage "
+                "WHERE scope = ? AND platform = ? AND reward IS NULL "
+                "ORDER BY id DESC LIMIT 1", (scope, pf)).fetchone()
+            if r:
+                return str(r[0])
+    return ""
 
 
 def get_unrewarded_usage(days: int = 3) -> list[dict]:

@@ -261,7 +261,8 @@ def selectable_insights(scope_filter: str, limit: int, days: int) -> list:
         _log.warning(f"[quality_learner] 파이프라인 항목 파생 실패: {type(e).__name__}: {e}")
     return rows
 
-def active_directives(scope: str = "all", theme: str = "", limit: int = 8) -> list[str]:
+def active_directives(scope: str = "all", theme: str = "", limit: int = 8,
+                      platform: str = "") -> list[str]:
     """이번 발행쌍에 **주입된 지침 문장** 목록 — *조회 전용*(사용 기록을 남기지 않는다).
 
     ★ 왜 필요한가 (2026-08-03 전수 감사 — 사용자 승인)
@@ -270,25 +271,28 @@ def active_directives(scope: str = "all", theme: str = "", limit: int = 8) -> li
       테마글(70점)이 주입된 8건 중 2건을 어겼고 *같은 지적이 다음 분석에서 또 나왔다*.
       넣어주기만 하고 검사하지 않으면 학습은 프롬프트를 길게 만들 뿐 글을 바꾸지 못한다.
 
-    ★ 왜 상태를 배선하지 않는가
-      작성 시점의 batch_id 를 draft 에 실어 게이트까지 나르는 방법도 있지만, 그러면
-      *그 값을 안 넘기는 호출자* 가 생기는 순간 조용히 검사가 꺼진다(오늘만 두 번 본 병).
-      대신 **같은 선택을 다시 묻는다** — `_pinned_pick` 이 `PAIR_PIN_TTL_MIN` 동안
-      같은 묶음을 돌려주므로(발행쌍 고정), 작성기가 받은 것과 동일한 지침을 얻는다.
-      선택 로직은 그대로 `quality_learner` 소유 — 게이트에 사본을 두지 않는다(원칙①).
+    ★ **주입 기록에서 읽는다** (2026-08-08 적대적 검증으로 교체)
+      종전엔 랭킹을 *다시 물어* `_pinned_pick`(60분 인메모리 고정)으로 같은 묶음을
+      얻는다고 봤다. 그런데 고정은 프로세스 메모리라 **데몬 재시작·TTL 만료** 로
+      사라지고, weight 가 바뀌면 재조회 결과가 주입 묶음과 갈라진다.
+      실제로 갈라졌다 — 게이트가 검사한 지침 중 주입 묶음에 없는 것이 나왔고,
+      그건 어겼다고 판정돼도 `record_directive_violations` 가 **기록하지 못한다**
+      (검사 원본 ≠ 기록 원본). 실측 `insight_usage` 966건 중 `violated=1` 은 1건.
+      `insight_usage` 가 "무엇을 넣었는지" 의 기록이다 — 검사도 기록도 여기서 읽는다(①).
 
+    ※ 배치가 없으면 빈 목록이 정답이다 — 주입된 게 없으면 어길 것도 없다.
     ※ `build_insights_block` 과 달리 `record_insight_usage` 를 부르지 않는다.
       검사 때문에 사용 기록이 두 배로 늘면 보상 통계가 오염된다.
     """
     try:
         from shared import db as _db
 
-        _scope_filter = "" if scope in ("", "all") else scope
-        rows = selectable_insights(_scope_filter, limit, SELECTION_DAYS)
-        if not rows:
+        batch = _db.latest_batch(scope or "all", platform or "")
+        if not batch:
             return []
-        picked = _pinned_pick(scope, theme, limit, rows)
-        return [(r.get("directive") or "").strip() for r in (picked or []) if (r.get("directive") or "").strip()]
+        rows = _db.batch_directives(batch) or []
+        return [(r.get("directive") or "").strip() for r in rows
+                if (r.get("directive") or "").strip()][:limit]
     except Exception:
         return []
 

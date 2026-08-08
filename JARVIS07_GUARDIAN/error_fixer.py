@@ -954,8 +954,9 @@ def verify_fix(error_record: dict, analysis: dict, file_path: Path,
 
     # 일시적·외부 오류는 재현 자체가 무의미 (severity 판단 재사용 — 사본 금지)
     try:
-        from JARVIS07_GUARDIAN.severity import is_transient, kind_of
-        if is_transient(et, msg, str(rec.get("source") or ""), kind_of(rec)):
+        from JARVIS07_GUARDIAN.severity import companions_of, is_transient, kind_of
+        if is_transient(et, msg, str(rec.get("source") or ""), kind_of(rec),
+                        companions=companions_of(rec)):
             return VERIFY_UNVERIFIABLE, f"일시적·외부 오류({et}) — 재현 불가 유형"
     except Exception:
         pass
