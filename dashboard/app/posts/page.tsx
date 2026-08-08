@@ -208,9 +208,13 @@ export default function PostsPage() {
                 <span style={{ fontSize: 14, color: t.written ? C.success : "var(--c-text5)", flexShrink: 0 }}>
                   {t.written ? "✓" : "○"}
                 </span>
-                <span style={{
+                <span title={t.name} style={{
                   fontSize: 14, color: t.written ? "var(--c-text)" : "var(--c-text5)",
                   fontWeight: t.written ? 600 : 400,
+                  // ★ minWidth:0 이 없으면 아래 ellipsis 가 **한 번도 동작하지 않는다**
+                  //   flex 자식의 min-width 기본값은 auto — 내용 폭 아래로 안 줄어들어
+                  //   자를 기회 자체가 생기지 않고, 칩이 칸 밖으로 밀려난다(실측 +125px).
+                  minWidth: 0,
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                 }}>
                   {t.name}

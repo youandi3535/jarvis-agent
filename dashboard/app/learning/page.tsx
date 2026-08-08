@@ -1,9 +1,10 @@
 "use client";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { apiFetch, LearningData, WeightRow, BacktestRow, InsightRow } from "@/lib/api";
 import { fmtNum, fmtTime } from "@/lib/utils";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
 } from "recharts";
 
 /* ── 공통 스타일 ─────────────────────────────────────────────────── */
@@ -60,8 +61,12 @@ function parseWeights(json: string): Record<string, number> {
 
 /* ── KPI 카드 ────────────────────────────────────────────────────── */
 function KpiCard({ label, value, color }: { label: string; value: string | number; color: string }) {
+  /* ★ minWidth 를 내용에서 파생(min-content)한다 — 고정 140px 은 44px 숫자보다 좁아질 수 있어
+     좁은 뷰포트에서 값이 카드 밖으로 삐져나갔다(실측 768px: "0.608" 128px vs 내용폭 103px = +25px).
+     min-content 는 *가장 긴 끊을 수 없는 토큰* 을 바닥으로 삼으므로 값이 잘리지도, 넘치지도 않는다.
+     한글 라벨은 글자 단위로 줄바꿈되어 바닥값을 키우지 않는다. 넓은 화면에선 flex:1 이 이겨 무변화. */
   return (
-    <div style={card(color)}>
+    <div style={{ ...card(color), minWidth: "min-content" }}>
       <div style={{ fontSize: 44, fontWeight: 800, color, lineHeight: 1.1 }}>{value}</div>
       <div style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 8 }}>{label}</div>
     </div>
@@ -133,6 +138,34 @@ function WeightCard({ row, featVar }: { row: WeightRow; featVar?: Record<string,
   );
 }
 
+/* ── 차트 높이 (단일 소스) ────────────────────────────────────────── */
+const CHART_H = 180;
+
+/* ── 컨테이너 폭 실측 훅 (★ 가로 넘침 0) ───────────────────────────────
+   recharts 3.9 의 <ResponsiveContainer width="100%"> 는 폭을 재려고 내부에
+   `width:0; overflow-x:visible` 인 *0폭 측정용 div* 를 깐다
+   (node_modules/recharts/es6/component/responsiveContainerUtils.js
+    → getInnerDivStyle: width 가 % 면 `{width:0, overflowX:'visible'}`).
+   그 div 는 clientWidth 0 · scrollWidth = 차트폭 이라 넘침으로 계상된다
+   (실측 1440px: +380 ×3 · +599 ×2 = 5건). 차트를 좁히는 게 아니라
+   *폭을 우리가 직접 재서 숫자로 넘기면* 그 측정용 div 자체가 사라진다.
+   폭은 ResizeObserver 실측 파생 — 고정 px 를 박지 않는다(원칙②). */
+function useBoxWidth() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const apply = (px: number) => setW(Math.max(0, Math.floor(px)));
+    apply(el.getBoundingClientRect().width);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => apply(entries[0].contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w] as const;
+}
+
 /* ── KPI 추세 차트 (★ ERRORS [479]) ───────────────────────────────
    홈탭과 동일한 recharts 패턴 사용 — 새 라이브러리·새 API 도입 없음. */
 function TrendChart({ title, hint, data, xKey, yKey, color, unit = "" }: {
@@ -141,22 +174,31 @@ function TrendChart({ title, hint, data, xKey, yKey, color, unit = "" }: {
   color: string; unit?: string;
 }) {
   const pts = data ?? [];
+  const [boxRef, boxW] = useBoxWidth();
+  const enough = pts.length >= 2;
   return (
     <div style={card(color)}>
       <div style={{ fontSize: 16, fontWeight: 700, color: "var(--c-text)" }}>{title}</div>
       <div style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 4, marginBottom: 12 }}>{hint}</div>
-      {pts.length < 2 ? (
-        <div style={{ fontSize: 14, color: "var(--c-text2)", padding: "28px 0", textAlign: "center" }}>
-          추세를 그릴 만큼 기록이 쌓이지 않았습니다 ({pts.length}개)
-        </div>
-      ) : (
-        <ResponsiveContainer width="100%" height={180}>
-          <LineChart data={pts} margin={{ top: 4, right: 12, left: -12, bottom: 0 }}>
+      {/* 측정용 래퍼는 *항상* 렌더한다 — 조건부로 달면 ref 가 붙었다 떨어져 재측정을 놓친다.
+          width:100% 블록이라 그리드 트랙보다 넓어질 수 없다 = 넘침 구조적 0. */}
+      <div ref={boxRef} style={{ width: "100%", minHeight: enough ? CHART_H : undefined }}>
+        {!enough ? (
+          <div style={{ fontSize: 14, color: "var(--c-text2)", padding: "28px 0", textAlign: "center" }}>
+            추세를 그릴 만큼 기록이 쌓이지 않았습니다 ({pts.length}개)
+          </div>
+        ) : boxW > 0 ? (
+          <LineChart width={boxW} height={CHART_H} data={pts}
+                     margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
             <CartesianGrid stroke="var(--c-bdr)" strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey={xKey} tick={{ fontSize: 14, fill: "var(--c-text2)" }}
                    tickFormatter={(v: string) => String(v ?? "").slice(5, 10)}
                    minTickGap={28} stroke="var(--c-bdr)" />
-            <YAxis tick={{ fontSize: 14, fill: "var(--c-text2)" }} stroke="var(--c-bdr)" width={44} />
+            {/* ★ width="auto" — 종전 `width={44}` + `margin.left:-12` 조합은 눈금 라벨의
+                anchor 를 x=24 로 밀어, 24px 보다 넓은 라벨("1200"=32px·"1600"=32.5px)이
+                SVG 왼쪽 밖으로 8px 삐져나가 *잘려* 있었다(실측 text sw32 vs cw24 ×9건).
+                auto 는 실제 라벨 폭에서 축 폭을 파생한다 — 고정 px 를 박지 않는다(원칙②). */}
+            <YAxis tick={{ fontSize: 14, fill: "var(--c-text2)" }} stroke="var(--c-bdr)" width="auto" />
             <Tooltip
               contentStyle={{ background: "var(--c-card)", border: "1px solid var(--c-bdr)",
                               borderRadius: 8, fontSize: 14 }}
@@ -164,8 +206,8 @@ function TrendChart({ title, hint, data, xKey, yKey, color, unit = "" }: {
               formatter={(v) => [`${v ?? ""}${unit}`, title] as [string, string]} />
             <Line type="monotone" dataKey={yKey} stroke={color} strokeWidth={2} dot={false} />
           </LineChart>
-        </ResponsiveContainer>
-      )}
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -428,6 +470,7 @@ export default function LearningPage() {
                 <div key={i} style={{
                   display: "flex",
                   alignItems: "center",
+                  flexWrap: "wrap",
                   gap: 16,
                   padding: "12px 16px",
                   background: "rgba(255,255,255,0.02)",
@@ -454,8 +497,12 @@ export default function LearningPage() {
                   <span style={{ fontSize: 12, color: "var(--c-text2)", minWidth: 80, flexShrink: 0 }}>
                     {row.backtest_type}
                   </span>
-                  {/* 상세 */}
-                  <span style={{ fontSize: 14, color: "var(--c-text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {/* 상세 — ★ 종전 `overflow:hidden + textOverflow:ellipsis + whiteSpace:nowrap` 은
+                       좁은 폭에서 값을 *숨겨서* 넘침을 없앴다(실측 390px: 내용폭 0 · 내용 125px).
+                       숨기는 대신 줄바꿈시킨다: minWidth:0 으로 flex 자식이 내용 아래로 줄어들 수 있게 하고
+                       anywhere 로 "n=391, MSE=1.530" 같은 공백 없는 토큰도 접히게 한다. 값은 전부 보인다. */}
+                  <span style={{ fontSize: 14, color: "var(--c-text)", flex: 1, minWidth: 0,
+                                 overflowWrap: "anywhere" }}>
                     {detailStr}
                   </span>
                   {/* 시각 */}

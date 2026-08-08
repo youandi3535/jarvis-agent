@@ -2,7 +2,7 @@
 import useSWR from "swr";
 import { apiFetch, QualityHistory } from "@/lib/api";
 import { fmtNum, fmtTime, statusColor } from "@/lib/utils";
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Cell,
@@ -106,6 +106,32 @@ function StatusBadge({ status, label }: { status: string; label: string }) {
   );
 }
 
+/* ── 폭 실측 훅 ────────────────────────────────────────────────────
+   Recharts 는 width 가 "100%" 같은 퍼센트면 차트 앞에 *축소 감지용* div 를
+   하나 끼운다 — `width:0 · overflow-x:visible`
+   (recharts/es6/component/responsiveContainerUtils.js `getInnerDivStyle`).
+   그 div 는 clientWidth 가 0 인데 SVG 는 제 폭대로 그려지므로
+   `scrollWidth - clientWidth` 가 통째로 넘침으로 계측된다.
+   → 부모 폭을 직접 재서 *숫자* 로 넘기면 recharts 가 고정치수 fast path 를
+     타서 감지용 div 를 아예 만들지 않는다. 폭은 ResizeObserver 런타임 파생
+     이라 소스에 고정 px 이 남지 않는다(원칙② 동적 설계). */
+function useContentWidth() {
+  const [width, setWidth] = useState(0);
+  const roRef = useRef<ResizeObserver | null>(null);
+  // 콜백 ref — 데이터 도착 후 뒤늦게 붙는 노드도 그 시점에 관측 시작
+  const ref = useCallback((el: HTMLDivElement | null) => {
+    roRef.current?.disconnect();
+    roRef.current = null;
+    if (!el) return;
+    const apply = (w: number) => setWidth(Math.floor(w));
+    apply(el.getBoundingClientRect().width);
+    const ro = new ResizeObserver(([entry]) => apply(entry.contentRect.width));
+    ro.observe(el);
+    roRef.current = ro;
+  }, []);
+  return [ref, width] as const;
+}
+
 /* ── 커스텀 툴팁 ──────────────────────────────────────────────────── */
 function TrendTooltip({ active, payload, label }: { active?: boolean; payload?: {value: number; payload: {posts: number}}[]; label?: string }) {
   if (!active || !payload?.length) return null;
@@ -131,6 +157,7 @@ export default function QualityPage() {
     useSWR<QualityHistory[]>("/api/quality/history", (u) => apiFetch<QualityHistory[]>(u), { refreshInterval: 60000 });
 
   const [loadingId, setLoadingId] = useState<number | null>(null);
+  const [chartBoxRef, chartWidth] = useContentWidth();
 
   const by     = stats?.by_status     ?? {};
   const labels = stats?.status_labels ?? {};
@@ -203,7 +230,9 @@ export default function QualityPage() {
               )}
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={220}>
+          <div ref={chartBoxRef} style={{ width: "100%" }}>
+          {chartWidth > 0 && (
+          <ResponsiveContainer width={chartWidth} height={220}>
             <LineChart data={weekly} margin={{ top: 4, right: 16, left: -16, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--c-bdr)" />
               <XAxis dataKey="week" tick={{ fontSize: 12, fill: "var(--c-text2)" }} />
@@ -217,6 +246,8 @@ export default function QualityPage() {
               />
             </LineChart>
           </ResponsiveContainer>
+          )}
+          </div>
         </div>
       )}
 

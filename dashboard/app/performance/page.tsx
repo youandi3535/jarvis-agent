@@ -1,8 +1,9 @@
 "use client";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  LineChart, Line, ResponsiveContainer,
+  LineChart, Line,
 } from "recharts";
 import { apiFetch, PerformanceData } from "@/lib/api";
 import { fmtNum, fmtTime } from "@/lib/utils";
@@ -48,6 +49,40 @@ const tooltipStyle: React.CSSProperties = {
   borderRadius: 8,
   fontSize: 14,
 };
+
+/* ── 차트 박스 ─────────────────────────────────────────────────────
+ * recharts 의 ResponsiveContainer(width="100%") 는 "차트가 컨테이너를 넓히지 못하게" 하려고
+ * 내부에 {width:0, overflowX:'visible'} 짜리 0폭 측정용 div 를 깔고 그 안에서 차트를
+ * 일부러 넘치게 그린다(responsiveContainerUtils.getInnerDivStyle). 그래서 그 div 는 항상
+ * scrollWidth(차트폭) − clientWidth(0) = 차트폭 만큼 가로 넘침으로 계측된다.
+ * → 컨테이너 실폭을 우리가 ResizeObserver 로 측정해 차트에 *숫자* width 로 넘긴다.
+ *   폭은 런타임 파생이라 고정 px 를 박지 않는다(원칙②). 내용은 그대로 다 그려진다. */
+function ChartBox({ height, children }: {
+  height: number;
+  children: (width: number, height: number) => React.ReactElement;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // 내림(floor) — 소수점 폭에서 1px 이라도 컨테이너를 넘지 않게
+    const measure = (w: number) => setWidth(Math.floor(w));
+    measure(el.getBoundingClientRect().width);
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) measure(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div ref={ref} style={{ width: "100%", height }}>
+      {width > 0 && children(width, height)}
+    </div>
+  );
+}
 
 /* ── 플랫폼 뱃지 ──────────────────────────────────────────────────── */
 function PlatBadge({ platform }: { platform: string }) {
@@ -190,8 +225,8 @@ export default function PerformancePage() {
           <h2 style={{ fontSize: 18, fontWeight: 700, color: "var(--c-text)", margin: "0 0 16px" }}>
             기간별 조회수 비교
           </h2>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={periodChartData} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
+          <ChartBox height={260}>{(w, h) => (
+            <BarChart width={w} height={h} data={periodChartData} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--c-bdr)" vertical={false} />
               <XAxis dataKey="name" tick={{ fontSize: 13, fill: "var(--c-text2)" }} axisLine={false} tickLine={false} />
               <YAxis
@@ -210,7 +245,7 @@ export default function PerformancePage() {
                 <Bar key={plat} dataKey={plat} fill={PLAT_HEX[plat] ?? "#888"} radius={[4, 4, 0, 0]} maxBarSize={48} />
               ))}
             </BarChart>
-          </ResponsiveContainer>
+          )}</ChartBox>
         </div>
       )}
 
@@ -228,8 +263,8 @@ export default function PerformancePage() {
               마지막 수집 {dr.to}
             </p>
           )}
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={trendFormatted} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
+          <ChartBox height={220}>{(w, h) => (
+            <LineChart width={w} height={h} data={trendFormatted} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--c-bdr)" vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--c-text2)" }} axisLine={false} tickLine={false} />
               <YAxis
@@ -256,7 +291,7 @@ export default function PerformancePage() {
                 />
               ))}
             </LineChart>
-          </ResponsiveContainer>
+          )}</ChartBox>
         </div>
       )}
 

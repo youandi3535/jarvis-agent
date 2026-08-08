@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { fetcher, OverviewData, VisionAgent, PipelineEdge, GraphData, AgentDef, TokenData, VisionTimeline } from "@/lib/api";
 import { C, fmtNum, fmtTime, severityColor } from "@/lib/utils";
@@ -241,8 +241,8 @@ function AgentCard({
       {/* 작업 중 — 앰버 후광 맥동 (busy only, 마우스 없이도 강하게 부각) */}
       {showBusy && (
         <div style={{
-          position:"absolute", inset:-7, borderRadius:18,
-          background:"radial-gradient(ellipse at center,#f59e0b66 0%,#f59e0b22 45%,transparent 72%)",
+          position:"absolute", inset:0, borderRadius:12,
+          boxShadow:"0 0 26px 10px #f59e0b66, 0 0 62px 22px #f59e0b22",
           animation:"busy-halo 1.8s ease-in-out infinite",
           pointerEvents:"none", zIndex:0,
         }}/>
@@ -250,19 +250,24 @@ function AgentCard({
       {/* 활성 맥동 링 — 카드 외부로 방사 (에이전트 간 데이터 전달) */}
       {isActive && [0, 0.55, 1.1].map((delay, i) => (
         <div key={i} style={{
-          position:"absolute", inset:"-8px",
-          border:`2px solid ${color}`,
-          borderRadius:16,
+          // 카드 박스 *안* 에 두고 바깥으로는 outline 으로만 번진다.
+          // (음수 inset·scale 은 레이아웃 넘침을 만든다 — outline/box-shadow 는 안 만든다)
+          position:"absolute", inset:0,
+          borderRadius:12,
+          outline:`2px solid ${color}`,
+          outlineOffset:"8px",
+          // 최대 확산 거리 = 옛 scale(1.65) 와 동일하게 카드 크기에서 파생
+          ["--ring-max"]: `${Math.round(((w + 16) * 1.65 - w) / 2)}px`,
           animation:`agent-ring-expand 1.65s ease-out ${delay}s infinite`,
           pointerEvents:"none",
-        }}/>
+        } as any}/>
       ))}
 
       {/* 행진 개미 테두리 — 에이전트 작업 진행 중 (앰버·굵고 빠르게, 데이터전달과 구분) */}
       {showBusy && (
-        <div style={{ position:"absolute", inset:-1, pointerEvents:"none", zIndex:6 }}
+        <div style={{ position:"absolute", inset:0, pointerEvents:"none", zIndex:6 }}
           dangerouslySetInnerHTML={{ __html:
-            `<svg width="${w+2}" height="${h+2}" viewBox="-1 -1 ${w+2} ${h+2}" xmlns="http://www.w3.org/2000/svg">` +
+            `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">` +
             `<rect x="1" y="1" width="${w-2}" height="${h-2}" rx="12" ry="12"` +
             ` fill="none" stroke="#f59e0b" stroke-width="2.6" stroke-dasharray="14 8" opacity="0.95">` +
             `<animate attributeName="stroke-dashoffset" from="0" to="-88" dur="0.9s" repeatCount="indefinite"/>` +
@@ -384,9 +389,9 @@ function AgentCard({
           color:isActive ? "#b8cce0" : showBusy ? "#fbbf24" : "#9aafc8",
           textAlign:"center",
           borderTop:`1px solid ${isActive ? color+"55" : showBusy ? "#f59e0b77" : color+"28"}`,
-          overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
+          overflow:"hidden",whiteSpace:"normal",overflowWrap:"anywhere",lineHeight:1.3,
           animation: showBusy ? "busy-chip-blink 1.6s ease-in-out infinite" : undefined,
-        }}>{showBusy ? `⚙ ${busyTask || "작업 중"}` : (stat ?? "—")}</div>
+        }} title={showBusy ? (busyTask || "작업 중") : (stat ?? "")}>{showBusy ? `⚙ ${busyTask || "작업 중"}` : (stat ?? "—")}</div>
       </div>
     </div>
   );
@@ -594,8 +599,8 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   return (<>
     <style>{`
       @keyframes agent-ring-expand {
-        0%   { transform: scale(1.0); opacity: 0.85; }
-        100% { transform: scale(1.65); opacity: 0.0; }
+        0%   { outline-offset: 8px; opacity: 0.85; }
+        100% { outline-offset: var(--ring-max); opacity: 0.0; }
       }
       @keyframes led-blink {
         0%, 100% { opacity: 1.0; }
@@ -612,12 +617,12 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
         50%       { opacity: 0.28; }
       }
       @keyframes busy-breathe {
-        0%, 100% { transform: scale(1); }
-        50%      { transform: scale(1.045); }
+        0%, 100% { transform: scale(0.955); }
+        50%      { transform: scale(1); }
       }
       @keyframes busy-halo {
-        0%, 100% { opacity: 0.28; transform: scale(0.97); }
-        50%      { opacity: 0.9;  transform: scale(1.07); }
+        0%, 100% { opacity: 0.28; }
+        50%      { opacity: 0.9;  }
       }
       @keyframes busy-scan-down {
         0%   { top: 2%;  opacity: 0; }
@@ -919,7 +924,29 @@ const CONSUMER_COLOR: Record<string, string> = {
   daemon: C.success, subagent: C.warn, session: C.primary,
 };
 
+// ═══════════════════════════════════════════════
+// 컨테이너 실측 폭 — 차트에 %(퍼센트) 대신 *실측 px* 을 넘긴다.
+// Recharts ResponsiveContainer 는 width="100%" 일 때 내부에
+// width:0 짜리 측정용 div 를 만들고 그 안에서 차트가 밖으로 삐져나온다.
+// 폭을 숫자로 주면 그 측정용 div 자체가 사라진다(고정 px 하드코딩 아님 — 런타임 실측).
+// ═══════════════════════════════════════════════
+function useBoxWidth<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => setW(Math.max(0, Math.floor(el.clientWidth)));
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w] as const;
+}
+
 function TokenPanel() {
+  const [chartBoxRef, chartW] = useBoxWidth<HTMLDivElement>();
   const { data } = useSWR<TokenData>("/api/tokens", fetcher, { refreshInterval: 20000 });
 
   const hist    = data?.history ?? [];
@@ -938,6 +965,11 @@ function TokenPanel() {
   const consumerTotal = Math.max(1, consumers.reduce((s, c) => s + (c.total || 0), 0));
 
   const week = daily.slice(-7).reduce((s, d) => s + (d.output || 0), 0);
+  // 막대차트 한 열의 최소 폭 — *막대 개수에서 파생* (고정 px 아님, ch 는 글꼴 상대 단위).
+  // 이 폭을 못 받으면 2열을 포기하고 한 열로 내려가 막대가 전부 보인다.
+  // 차트 카드가 2단으로 설 수 있는 최소 폭(px). 파생할 원본이 없는 *레이아웃 결정* 이라
+  // 상수로 두되 정의는 이 한 곳뿐이다. 이보다 좁으면 auto-fit 이 1단으로 내린다.
+  const CHART_COL_MIN = 380;
   const maxHour = Math.max(1, ...hourly.map(h => h.output));
   const maxDay  = Math.max(1, ...daily.map(d => d.output));
 
@@ -1055,23 +1087,31 @@ function TokenPanel() {
         </div>
       )}
 
-      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:18 }}>
+                    /* ★ 열 최소폭은 "막대가 다 들어갈 폭" 이 아니라 "카드가 읽을 만한 폭" 이다.
+                       막대 행은 아래에서 overflowX:auto 로 카드 안에서 스크롤되므로 열이 막대 전체를
+                       담을 필요가 없다. 종전엔 막대 개수에서 파생한 값(15개 → 105ch ≈ 840px)을 최소폭으로
+                       써서 1680px 화면에서도 2단이 성립하지 못했다 — 넘침은 고쳤지만 디자인이 폐지됐다. */
+      <div style={{ display:"grid",
+                    gridTemplateColumns:`repeat(auto-fit, minmax(min(100%, ${CHART_COL_MIN}px), 1fr))`,
+                    gap:18 }}>
         {/* 오늘 시간대별 */}
         <div>
           <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>오늘 시간대별 출력</div>
           {hourly.length === 0 ? (
             <div style={{ fontSize:14,color:"var(--c-text5)" }}>아직 사용 없음</div>
           ) : (
-            <div style={{ display:"flex",alignItems:"flex-end",gap:4,height:120 }}>
+            <div style={{ overflowX:"auto" }}>
+            <div style={{ display:"flex",alignItems:"flex-end",gap:4,minHeight:120,minWidth:"max-content" }}>
               {hourly.map(h => (
                 <div key={h.hour} style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4 }}>
-                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{fmtTok(h.output)}</div>
+                  <div style={{ fontSize:14,color:"var(--c-text5)",whiteSpace:"nowrap" }}>{fmtTok(h.output)}</div>
                   <div title={`${h.hour}시 ${h.output.toLocaleString()}`}
                        style={{ width:"100%",background:C.primary,borderRadius:"4px 4px 0 0",
                                 height:Math.max(4, (h.output/maxHour)*80) }}/>
-                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{h.hour}</div>
+                  <div style={{ fontSize:14,color:"var(--c-text5)",whiteSpace:"nowrap" }}>{h.hour}</div>
                 </div>
               ))}
+            </div>
             </div>
           )}
         </div>
@@ -1082,24 +1122,26 @@ function TokenPanel() {
           {daily.length === 0 ? (
             <div style={{ fontSize:14,color:"var(--c-text5)" }}>데이터 없음</div>
           ) : (
-            <div style={{ display:"flex",alignItems:"flex-end",gap:6,height:120 }}>
+            <div style={{ overflowX:"auto" }}>
+            <div style={{ display:"flex",alignItems:"flex-end",gap:6,minHeight:120,minWidth:"max-content" }}>
               {daily.map(d => (
                 <div key={d.date} style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4 }}>
-                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{fmtTok(d.output)}</div>
+                  <div style={{ fontSize:14,color:"var(--c-text5)",whiteSpace:"nowrap" }}>{fmtTok(d.output)}</div>
                   <div title={`${d.date} ${d.output.toLocaleString()}`}
                        style={{ width:"100%",borderRadius:"4px 4px 0 0",
                                 background:d===today?C.success:C.muted,
                                 height:Math.max(4,(d.output/maxDay)*80) }}/>
-                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{d.date.slice(5)}</div>
+                  <div style={{ fontSize:14,color:"var(--c-text5)",whiteSpace:"nowrap" }}>{d.date.slice(5)}</div>
                 </div>
               ))}
+            </div>
             </div>
           )}
         </div>
       </div>
 
       {/* 전체 이력 선 차트 */}
-      <div style={{ marginTop:20 }}>
+      <div style={{ marginTop:20 }} ref={chartBoxRef}>
         <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>
           일별 사용량 추이
           <span style={{ fontSize:14,fontWeight:400,color:"var(--c-text5)",marginLeft:8 }}>
@@ -1108,13 +1150,13 @@ function TokenPanel() {
         </div>
         {hist.length === 0 ? (
           <div style={{ fontSize:14,color:"var(--c-text5)" }}>데이터 없음</div>
-        ) : (
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={hist} margin={{ top:4,right:16,left:-8,bottom:0 }}>
+        ) : chartW > 0 && (
+          <ResponsiveContainer width={chartW} height={240}>
+            <LineChart data={hist} margin={{ top:4,right:16,left:0,bottom:0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--c-bdr)" />
               <XAxis dataKey="date" tickFormatter={(d:string)=>d.slice(5)}
                      tick={{ fontSize:14, fill:"var(--c-text5)" }} minTickGap={16}/>
-              <YAxis tickFormatter={(v:number)=>fmtTok(v)}
+              <YAxis width="auto" tickFormatter={(v:number)=>fmtTok(v)}
                      tick={{ fontSize:14, fill:"var(--c-text5)" }}/>
               <Tooltip
                 formatter={(v)=>Number(v ?? 0).toLocaleString()}
@@ -1630,7 +1672,7 @@ export default function HomePage() {
       <TokenPanel />
 
       {/* 최근 오류 + 심각도 분포 */}
-      <div style={{ display:"grid",gridTemplateColumns:"3fr 1fr",gap:18 }}>
+      <div style={{ display:"grid",gridTemplateColumns:"minmax(0, 3fr) minmax(0, 1fr)",gap:18 }}>
         <div style={{
           background:"var(--c-card)",border:"1px solid var(--c-bdr)",
           borderTop:`3px solid ${C.danger}`,borderRadius:12,padding:20,
@@ -1652,8 +1694,13 @@ export default function HomePage() {
                   <tr key={e.id} style={{ borderTop:"1px solid var(--c-bdr)" }}>
                     <td style={{ padding:"9px 12px 9px 0",color:"var(--c-text5)",whiteSpace:"nowrap" }}>{fmtTime(e.timestamp)}</td>
                     <td style={{ padding:"9px 12px 9px 0" }}><Badge text={e.severity} color={severityColor(e.severity)}/></td>
-                    <td style={{ padding:"9px 12px 9px 0",color:"var(--c-text2)",whiteSpace:"nowrap" }}>{e.module}</td>
-                    <td style={{ padding:"9px 0",color:"var(--c-text2)",maxWidth:300,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.message?.slice(0,100)}</td>
+                    {/* nowrap 을 빼는 이유: 모듈 경로가 길면 이 칸이 폭을 독점해 표 auto-layout 이
+                        메시지 열을 36px 까지 짜부라뜨린다(1024 실측 — 행 높이 523px, 글자가 세로로 흐름).
+                        단어 경계에서만 접도록 break-word 를 쓴다 — anywhere 는 경로를 7조각으로 가른다. */}
+                    <td style={{ padding:"9px 12px 9px 0",color:"var(--c-text2)",minWidth:"14ch",maxWidth:"22ch",overflowWrap:"anywhere" }}>{e.module}</td>
+                    <td title={e.message ?? ""}
+                        style={{ padding:"9px 0",color:"var(--c-text2)",
+                                 width:"100%",whiteSpace:"normal",overflowWrap:"break-word",wordBreak:"break-word" }}>{e.message?.slice(0,100)}</td>
                   </tr>
                 ))}
               </tbody>
