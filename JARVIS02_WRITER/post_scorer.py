@@ -294,8 +294,74 @@ _DISCLAIM  = re.compile(r'참고|권유|책임|판단.*본인|투자.*아님|정
 _UNIT_MIX  = re.compile(r'(?:KRW.*?원|원.*?KRW|퍼센트.*?%|%.*?퍼센트)')
 
 
-def _b1_intro(html: str) -> float:
-    """B1: 도입부 4문장 + 도입 이미지 + AI 자동생성형 금지 (헌법 제1조)."""
+def _stem(word: str) -> str:
+    """어절의 앞머리만 — 조사 차이를 흡수한다 (`퇴근길` ≡ `퇴근길에`)."""
+    w = re.sub(r"[^가-힣A-Za-z]", "", word or "")
+    return w[:3] if len(w) >= 3 else w
+
+
+def _phrase_ngrams(text: str, n: int = 2) -> set[str]:
+    """어절 n-gram(어간 기준) — 표현의 '뼈대' 만 남긴다."""
+    words = [_stem(w) for w in re.split(r"\s+", _strip(text or "")) if w]
+    words = [w for w in words if w]
+    return {" ".join(words[i:i + n]) for i in range(max(0, len(words) - n + 1))}
+
+
+def repetition_penalty(intro_first: str, recent_intros: list[str] | None) -> float:
+    """도입부가 최근 글들과 **얼마나 닮았는가** — 0.0(신선) ~ 1.0(판박이).
+
+    ★ 왜 상투구 *목록* 을 박지 않는가 (2026-08-08 — 사용자 지시 감사)
+      실측: 본문 첫 문단의 감성 상투구 비율이 **32.9% → 70.1%** 로 두 배가 됐다.
+      그런데 기존 `_AI_OPEN` 은 `퇴근길에…` `주말 아침…` `요즘…` 을 **전부 통과** 시키고,
+      통과하면 'AI 회피' 보너스를 준다 — **반복이 보상받는 구조** 였다.
+      여기서 금지어를 박으면 다음 상투구를 찾아낼 뿐이다(두더지 잡기).
+      → **최근 발행글에서 파생** 한다. 새 상투구가 생기면 그것도 자동으로 잡힌다.
+
+    ★ 왜 '첫 어절' 이 주 신호인가 (실측으로 정한 것 — 초판은 여기서 틀렸다)
+      최근 40편을 세어 보니 3어절 공유는 **0종**, 2어절은 최대 5편,
+      그런데 **첫 어절은 40편 중 23편(58%)이 단 6개 단어**(요즘8·퇴근길6·출근길3·주말2
+      ·아침2…)로 시작했다. 초판은 2어절만 봐서 감점이 **전부 0.00** 이었다.
+      상투구는 문장 *앞* 에 산다 — 거기를 봐야 잡힌다.
+
+    Args:
+        recent_intros: 최근 발행글의 도입부 첫 문장들. **None 이면 0.0** —
+            호출자가 맥락을 못 주면 감점하지 않는다(종전 동작 보존).
+    """
+    if not recent_intros:
+        return 0.0
+    text = _strip(intro_first or "")
+    words = [w for w in re.split(r"\s+", text) if w]
+    if not words:
+        return 0.0
+
+    def _head(t):
+        ws = [w for w in re.split(r"\s+", _strip(t or "")) if w]
+        return _stem(ws[0]) if ws else ""
+
+    # ① 첫 어절 — 같은 말로 시작하는 글이 최근에 얼마나 흔한가 (주 신호)
+    head = _stem(words[0])
+    heads = [_head(r) for r in recent_intros]
+    head_share = (sum(1 for h in heads if h and h == head) / len(recent_intros)) if head else 0.0
+
+    # ② 2어절 뼈대 공유 — 보조 신호. 표본 크기에서 정족수를 파생한다.
+    grams = _phrase_ngrams(text, 2)
+    gram_share = 0.0
+    if grams:
+        quorum = max(2, len(recent_intros) // 5)
+        shared = sum(1 for g in grams
+                     if sum(1 for r in recent_intros if g in _phrase_ngrams(r, 2)) >= quorum)
+        gram_share = shared / len(grams)
+
+    # 첫 어절에 무게를 싣는다 — 실측상 그쪽이 변별력이 크다.
+    return min(1.0, head_share * 2.0 + gram_share)
+
+
+def _b1_intro(html: str, recent_intros: list[str] | None = None) -> float:
+    """B1: 도입부 4문장 + 도입 이미지 + AI 자동생성형 금지 (헌법 제1조).
+
+    ★ `recent_intros` 가 주어지면 **반복 감점** 을 적용한다 (2026-08-08).
+      종전엔 상투구가 `_AI_OPEN` 을 통과해 오히려 'AI 회피' 보너스를 받았다.
+    """
     _mx = mx("B1_intro")
     _ai_pt = max(0.0, _mx - 5.0)   # 5점 초과 배점 = 'AI 자동생성형 회피' 몫
     paras = re.findall(r'<p[^>]*>(.*?)</p>', html, re.DOTALL)[:6]
@@ -311,7 +377,10 @@ def _b1_intro(html: str) -> float:
         return round(max(0.0, (min(sents, 4) - 1) * 0.5) * 2) / 2
     # 정상: 4문장 근접도(문장당 1점, 상한 4.0) + 도입부 이미지 1점 + AI 회피 배점
     score = min(4.0, sents * 1.0) + (1.0 if has_img else 0.0) + _ai_pt
-    return round(min(_mx, score) * 2) / 2
+    # ★ 반복 감점 — 'AI 회피' 몫(_ai_pt)을 상한으로 깎는다. 상투구를 피한 대가로 준 점수이니
+    #   판박이면 그 몫부터 회수하는 것이 맞다. 문장수·이미지 같은 구조 점수는 건드리지 않는다.
+    score -= _ai_pt * repetition_penalty(first_text, recent_intros)
+    return round(max(0.0, min(_mx, score)) * 2) / 2
 
 
 def _b2_paragraphs(html: str) -> float:

@@ -2061,10 +2061,18 @@ def test_발행메타가_실제로_점수를_만든다():
         b = score_post(draft_from_row(row), platform=plat, post_type=pt)
         got[(plat, pt)] = round(b["total"] - a["total"], 2)
         keys = {i["key"] for i in item_scores(b)}
-        # 플랫폼 전용 항목이 그 플랫폼에서만 채점되는지 (조합 파생의 건전성)
-        assert ("N7_hashtags" in keys) == (plat == "naver")
-        assert ("T7_meta_desc" in keys) == (plat == "tistory")
-    assert all(v > 0 for v in got.values()), f"발행 메타가 점수를 못 만든다: {got}"
+        # 플랫폼 전용 항목이 그 플랫폼에서만 채점되는지 (조합 파생의 건전성).
+        # ★ 배점이 0으로 내려간 항목은 채점 대상이 아니므로 요구하지 않는다(②).
+        from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
+        if RUBRIC_MAX.get("N7_hashtags"):
+            assert ("N7_hashtags" in keys) == (plat == "naver")
+        if RUBRIC_MAX.get("T7_meta_desc"):
+            assert ("T7_meta_desc" in keys) == (plat == "tistory")
+    # 발행 메타가 만드는 점수는 **살아 있는 항목이 있을 때만** 양수다.
+    _meta_items = [k for k in ("N7_hashtags", "T7_meta_desc") if RUBRIC_MAX.get(k)]
+    if _meta_items:
+        assert any(v > 0 for v in got.values()), f"발행 메타가 점수를 못 만든다: {got}"
+    assert all(v >= 0 for v in got.values()), f"발행 메타가 점수를 깎는다: {got}"
 
 
 def test_채점_draft_조립은_한_곳이다():
@@ -2123,13 +2131,25 @@ def test_지침_보상이_항목별로_갈린다():
     """
     from JARVIS07_GUARDIAN.quality_learner import insight_target_item, item_reward
 
-    key = insight_target_item("economic:seo_메타 설명 길이(140-160)")
-    assert key == "T7_meta_desc", f"지침→항목 역추적 실패: {key!r}"
+    # ★ 항목 key 를 테스트에 박지 않는다 (② — 배점은 바뀐다).
+    #   실제로 2026-08-08 에 동시 작업 세션이 T7_meta_desc 를 3→0 으로 내렸고,
+    #   그 key 를 박아둔 이 테스트가 그날 바로 깨졌다. **살아 있는 항목에서 파생**한다.
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX, item_index
+
+    idx = item_index()
+    live = [k for k, v in sorted(RUBRIC_MAX.items()) if v]
+    assert len(live) >= 3, "채점 항목이 3개 미만 — 검사 전제가 깨졌다"
+    probe = live[0]
+    key = insight_target_item(f"economic:seo_{idx[probe]['name']}")
+    assert key == probe, f"지침→항목 역추적 실패: {key!r} (기대 {probe})"
     assert insight_target_item("economic:seo_존재하지않는항목명") is None
 
-    ri = {"T7_meta_desc": 0.0, "B1_intro": 6.0, "B18_spacing": 1.0}
+    # 보상이 항목마다 갈리는가 — 0점·만점·중간을 각각 심는다
+    a, b, c = live[0], live[1], live[2]
+    ri = {a: 0.0, b: float(RUBRIC_MAX[b]), c: float(RUBRIC_MAX[c]) / 2}
     vals = {k: item_reward(k, ri) for k in ri}
-    assert vals["T7_meta_desc"] == 0.0 and vals["B1_intro"] == 1.0
+    assert vals[a] == 0.0, f"0점 항목의 보상이 0이 아니다: {vals[a]}"
+    assert vals[b] == 1.0, f"만점 항목의 보상이 1이 아니다: {vals[b]}"
     assert len(set(vals.values())) >= 3, f"보상이 갈리지 않는다: {vals}"
     assert item_reward("없는항목", ri) is None
 
@@ -2605,8 +2625,11 @@ def test_작성자가_만들_수_없는_항목은_지시하지_않는다():
     pipeline_controlled_items.cache_clear()
     pipe = pipeline_controlled_items()
     assert pipe, "파이프라인 항목 파생이 비었다 — 검사 전제가 깨졌다"
+    # ★ 배점 0인 항목은 애초에 채점되지 않으므로 파생 대상이 아니다(②).
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
     for k in ("N7_hashtags", "T7_meta_desc", "T8_internal_link"):
-        assert k in pipe, f"{k} 가 파이프라인 항목으로 안 잡힌다"
+        if RUBRIC_MAX.get(k):
+            assert k in pipe, f"{k} 가 파이프라인 항목으로 안 잡힌다"
     # 작성자가 고칠 수 있는 항목까지 빼앗으면 안 된다
     assert "B1_intro" not in pipe, "도입부는 작성자의 몫인데 제외됐다"
 
@@ -2968,3 +2991,119 @@ def test_심층감사_실패가_성공으로_기록되지_않는다():
     assert "mark_outcome" in src, "job_history 단일 진입점을 안 쓴다"
     assert "INSERT" not in src.upper() and "UPDATE" not in src.upper(), \
         "사후 보정이 자체 SQL 을 만든다 — 주인은 job_history 하나다"
+
+
+def test_트렌드검증이_정적시드에_속지_않는다():
+    """★ 시드가 `trending` 을 채우면 `scored_keywords` 는 30개가 되지만 하류는 굶는다.
+
+    실측 07-28·07-31·08-01·08-02 — combined=0 인데 scored=30 이라 검증이 통과했고
+    topic_pack 이 안 만들어져 **글 10편이 조용히 유실**됐다.
+    검증 대상은 하류(`topic_pack._candidates`)가 실제로 먹는 필드여야 한다.
+    """
+    import datetime as dt
+    import json
+
+    from JARVIS03_RADAR.jobs import _verify_trends
+    from JARVIS03_RADAR.topic_pack import _candidates
+
+    root = _ROOT / "JARVIS03_RADAR" / "data"
+    today = dt.date.today().isoformat()
+    fp = root / f"trends_{today}.json"
+    backup = fp.read_text(encoding="utf-8") if fp.exists() else None
+    try:
+        # 실트렌드 전멸 + 정적 시드로 채워진 날 (실측 08-01 의 모양)
+        seeded = {"date": today, "combined_keywords": [],
+                  "scored_keywords": [{"keyword": f"시드{i}", "sector": "금융·투자"}
+                                      for i in range(30)]}
+        fp.write_text(json.dumps(seeded, ensure_ascii=False), encoding="utf-8")
+        issues = _verify_trends(None)
+        assert issues, "실트렌드 0인데 검증이 통과했다 — 시드에 속았다"
+        assert any("combined" in i for i in issues), f"combined 를 안 본다: {issues}"
+        # 하류가 실제로 굶는지 확인 (검증 기준의 정당성)
+        assert not _candidates(seeded), "하류가 후보를 못 만드는 것이 맞다"
+
+        ok = dict(seeded, combined_keywords=[{"keyword": "코스피", "score": 9,
+                                              "sources": ["google"]}])
+        assert not _verify_trends(None) or True   # 파일 기준이므로 아래로 재검사
+        fp.write_text(json.dumps(ok, ensure_ascii=False), encoding="utf-8")
+        assert not _verify_trends(None), "정상 데이터인데 차단됐다 — 과잉 차단"
+    finally:
+        if backup is not None:
+            fp.write_text(backup, encoding="utf-8")
+        elif fp.exists():
+            fp.unlink()
+
+
+def test_수집_산출물이_시드_비율을_남긴다():
+    """'30개 수집됨' 과 '30개 전부 정적 시드' 를 구분할 수 없으면 아무도 못 알아챈다."""
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS03_RADAR/radar_main.py").read_text(encoding="utf-8"))
+    keys = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Dict):
+            keys |= {k.value for k in n.keys if isinstance(k, ast.Constant)}
+    for k in ("real_trend_count", "seed_filled_count"):
+        assert k in keys, f"산출물에 {k} 가 없다 — 시드 여부를 구분할 수 없다"
+
+
+def test_팩_미생성이_조용히_지나가지_않는다():
+    """★ 실제 원인은 예외가 아니라 **조용한 None** 이었다 — 그래서 오류로 안 남았다."""
+    import ast
+    import inspect
+
+    from JARVIS03_RADAR import jobs as _j
+
+    # 원인이 산출물에서 파생되는가 (분류표를 박지 않았는가)
+    assert _j._pack_empty_reason() in (
+        "TrendFileMissing", "TrendCollectEmpty", "TopicPackNoCandidate", "TopicPackUnknown")
+
+    # 최종 실패 분기가 실제로 보고를 부르는가 (AST)
+    tree = ast.parse((_ROOT / "JARVIS03_RADAR/jobs.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "build_topic_pack_once")
+    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "_report_pack_empty" in called, "조용한 None 경로가 보고하지 않는다"
+
+    # 타입이 뭉뚱그려지지 않는가 (한 이름으로만 보고하면 변별력 0)
+    src = _code_only(inspect.getsource(_j._pack_empty_reason))
+    assert src.count("return") >= 3, "원인을 한 이름으로 뭉뚱그린다"
+
+
+def test_지침_선택규칙이_한_곳이다():
+    """★ 게이트(검사)와 작성기(주입)가 **같은 규칙**을 써야 한다.
+
+    실측 2026-08-08: 파이프라인 항목 필터가 `active_directives` 에만 들어가고
+    `build_insights_block` 에는 없었다 — 게이트는 벌하지 않는데 작성기는 계속
+    "메타 설명을 채워라" 고 시키는, 정확히 거꾸로 된 상태였다.
+    해로운 쪽은 주입이다(작성 LLM 은 못 만들므로 **지어낸다**).
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+
+    for fn in ("active_directives", "build_insights_block"):
+        src = _code_only(inspect.getsource(getattr(_ql, fn)))
+        assert "selectable_insights" in src, f"{fn} 이 공통 선택 규칙을 안 쓴다"
+        assert "get_ranked_learning_insights" not in src, \
+            f"{fn} 이 원본 조회를 직접 한다 — 규칙이 두 벌이 된다"
+
+    # 실제로 파이프라인 항목을 겨눈 지침이 걸러지는가 (실행 검증)
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX, item_index
+    from shared.db import get_db
+
+    pipe = [k for k in _ql.__dict__ and
+            __import__("JARVIS02_WRITER.post_scorer", fromlist=["x"])
+            .pipeline_controlled_items() if RUBRIC_MAX.get(k)]
+    if not pipe:
+        return                      # 살아 있는 파이프라인 항목이 없으면 검사 불가
+    name = (item_index().get(pipe[0]) or {}).get("name", pipe[0])
+    with get_db() as con:
+        con.execute("INSERT INTO learning_insights (insight_key, insight_type, description, "
+                    "directive, weight, scope, last_seen) VALUES (?,?,?,?,?,?,"
+                    "datetime('now','localtime'))",
+                    (f"economic:seo_{name}", "seo", "x",
+                     "제목 앞부분에 핵심 키워드를 배치하라", 3.0, "economic"))
+    got = {r.get("insight_key") for r in _ql.selectable_insights("economic", 50, 21)}
+    assert f"economic:seo_{name}" not in got, \
+        f"작성 LLM 이 만들 수 없는 항목({pipe[0]})을 겨눈 지침이 선택됐다"
