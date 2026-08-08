@@ -432,8 +432,17 @@ def _dt_now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def save(data: dict):
+def save(data: dict) -> bool:
     """당일 파일 저장 — **좋은 판을 빈 판으로 덮지 않는다** (2026-08-08).
+
+    Returns: 이번 회차 수집분을 실제로 반영했으면 True, 기존 판을 보존했으면 False.
+      ★ 왜 반환하나 (2026-08-09 3차 적대적 검증) — 보존 판단이 *파일 한 통로* 에만
+        걸려 있었다. 같은 회차에서 `push_to_shared(data)` 가 무조건 이어 돌며
+        `save_trends()` 가 `DELETE FROM trends WHERE date=?` 후 이번 회차분을 넣는다.
+        빈손 회차의 실제 모양은 combined=0 · scored=정적시드 30 이므로, 파일은 아침
+        실트렌드 50개를 지키는데 **DB 는 정적시드 30개로 갈렸다**. 대시보드·API 는
+        파일이 아니라 DB 를 읽는다 — 지킨 줄 알았던 판이 하류엔 없었다.
+        판단은 여기 하나가 하고, 다른 통로는 그 답을 따른다(①).
 
     ★ 왜 가드가 필요한가 (비직관)
       트렌드 수집은 하루 4회(06·09·12·15) 돌고 **같은 파일 하나** 를 통째로 덮어쓴다.
@@ -484,9 +493,10 @@ def save(data: dict):
                                    "kept": len(_kept["combined_keywords"])})
             except Exception:
                 pass
-            return
+            return False
     write_json(path, data, indent=2)
     print(f"[RADAR] 로컬 저장: {path.name}")
+    return True
 
 
 def push_to_shared(data: dict):
@@ -613,9 +623,14 @@ if __name__ == "__main__":
         from JARVIS00_INFRA.watchdog import guard_main
         with guard_main("레이더 수집", deadline_sec=1800):
             data     = collect_today()
-            save(data)
+            _fresh   = save(data)
             no_push  = "--no-push" in args
-            if not no_push:
+            if not no_push and not _fresh:
+                # ★ 파일에서 지킨 판을 DB 에서 무르지 않는다 (2026-08-09).
+                #   `save_trends()` 는 `DELETE` 후 삽입이라, 빈손 회차의 정적시드 30개가
+                #   아침 실트렌드를 통째로 대체한다. 대시보드·API 는 DB 를 읽는다.
+                print("[RADAR] ⚠️ 이번 회차 빈손 — 기존 판 보존 중이므로 DB 반영도 건너뜀")
+            elif not no_push:
                 push_to_shared(data)
 
             print("\n[RADAR] 섹터별 TOP 3:")

@@ -26,7 +26,14 @@ _TEST_DB_DIR = Path(tempfile.mkdtemp(prefix="jarvis_test_db_"))
 os.environ["JARVIS_DB_PATH"] = str(_TEST_DB_DIR / "test.sqlite")
 
 # 텔레그램·외부 전송 차단 — 테스트가 실제로 메시지를 보내면 안 된다.
-os.environ.setdefault("JARVIS_TEST_MODE", "1")
+os.environ["JARVIS_TEST_MODE"] = "1"      # ★ setdefault 아님 — 밖에서 "0" 이 와도 켠다
+# ★ 런타임 상태 파일도 임시 경로로 (2026-08-09 3차 적대적 검증)
+#   `shared/pipeline_activity.py` 는 데몬·API서버(:9198)가 **동시에 읽고 쓰는** 파일을
+#   `os.replace` 로 통째로 교체한다. 테스트가 그걸 건드려 라이브 대시보드에
+#   가짜 발행 엣지(J06→J08)가 남았다. 경로는 모듈 로드 시점에 고정되므로
+#   **여기(import 전)에서** 세워야 한다.
+os.environ.setdefault("JARVIS_PIPELINE_ACTIVITY",
+                      str(_TEST_DB_DIR / "pipeline_activity.json"))
 
 import pytest  # noqa: E402
 

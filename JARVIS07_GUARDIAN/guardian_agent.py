@@ -636,11 +636,14 @@ def _orchestrate(error_id: int):
             return
 
         # ── 안전장치 1: 보안 파일 수정 금지 ───────────────────────
+        #   ★ 판단은 `tier2_blocked_reason` 단독 (2026-08-09) — backlog 통로와 **같은 문**.
+        #     여기만 고치면 저쪽이 열린 채로 남는다(실제로 그랬다).
         if _is_deny_path(module):
             log.warning(f"[GUARDIAN] #{error_id} 보안 파일 수정 차단 — {module}")
             _notify_all(error_record, "deny_path")
             _db.mark_error_status(error_id, "wontfix",
-                                  f"보안 파일이라 자동수정 금지 — {module}")
+                                  tier2_blocked_reason(error_record)
+                                  or f"보안 파일이라 자동수정 금지 — {module}")
             return
 
         # ── 안전장치 2: Circuit breaker ───────────────────────────
@@ -747,7 +750,8 @@ def _orchestrate(error_id: int):
             log.warning(f"[GUARDIAN] #{error_id} critical + Tier 1 실패 → 수동 검토")
             _notify_all(error_record, "critical_manual", severity=severity)
             _db.mark_error_status(error_id, "wontfix",
-                                  "critical + Tier-1 실패 — Tier-2 생략하고 수동 검토로")
+                                  tier2_blocked_reason(error_record)
+                                  or "critical — Tier-2 생략하고 수동 검토로")
             return
 
         # ── 안전장치 2.65: 잠정 실패는 Tier 2 보류 (★ ERRORS [476]) ────────────
@@ -879,6 +883,36 @@ def _on_error_detected(payload: dict, source: str):
 #  학습 자산(learned_patterns·Bandit)이 비대해질수록 미해결 오류 소급 자동수리율↑.
 #  대상 status: 'new'(미처리) + 'wontfix'(과거 실패 — 패턴 성장 시 재수리 기회).
 
+def tier2_blocked_reason(error_record: dict) -> "str | None":
+    """이 오류에 **Tier-2(LLM)를 태우면 안 되는 사유** — 없으면 None.
+
+    ★ 왜 함수로 뺐나 (2026-08-09 3차 적대적 검증 — ①·③)
+      `_orchestrate` 는 Tier-2 앞에 세 개의 문을 세워 뒀는데(critical 은 Tier-1 까지만 ·
+      보안 파일 차단 · 재시도 남은 잠정실패는 보류), `deep_audit_backlog` 루프에는
+      **셋 다 없었다**. 실측 재현: `_orchestrate` 가 LLM 0회로 돌려보낸 바로 그 3행이
+      backlog 통로에서는 전원 `invoke_text("guardian")` 을 열었다.
+      2차 수정 때 `bump_llm_attempts` 한 줄만 옮겨 "상한을 전 통로에 걸었다" 고 했지만,
+      옮긴 것은 *숫자* 였고 **상한 앞의 판단** 은 여전히 한쪽에만 있었다.
+      판단이 두 벌이면 반드시 갈라진다 — 그래서 판단을 하나로 만든다.
+
+    사유 문자열은 그대로 `resolution` 에 쓰이므로 사람이 읽을 수 있어야 한다.
+    """
+    if not isinstance(error_record, dict):
+        return None
+    module = error_record.get("module", "") or ""
+    if _is_deny_path(module):
+        return f"보안 파일이라 자동수정 금지 — {module}"
+    if (error_record.get("severity") or "") == "critical":
+        return "critical — Tier-2 생략하고 수동 검토로 (architecture.SEVERITY_MATRIX)"
+    try:
+        from JARVIS07_GUARDIAN.severity import is_deterministic_code_error as _det
+    except Exception:
+        _det = lambda _t: False        # noqa: E731 — 파생 실패 시 보수적으로 '비결정론'
+    if error_record.get("provisional") and not _det(error_record.get("error_type", "")):
+        return "잠정 실패(재시도 남음) + 비결정론 — 재시도가 끝난 뒤 판정"
+    return None
+
+
 def _collect_unresolved(limit: int) -> list:
     """미해결 오류 수집 — status 'new' + 'wontfix' 병합·dedup (최신순).
 
@@ -1007,17 +1041,30 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
             if a1.get("fixable") and apply_fix(eid, a1, mark_wontfix=False):
                 fixed_t1 += 1
                 continue
+            # ★ Tier-2 앞 판단은 `_orchestrate` 와 **같은 함수** 를 쓴다 (①·③).
+            #   종전엔 이 루프에 critical·보안파일·잠정실패 문이 하나도 없어,
+            #   `_orchestrate` 가 LLM 0회로 돌려보낸 오류가 여기선 전부 세션을 열었다.
+            _blocked = tier2_blocked_reason(er)
+            if _blocked:
+                log.info(f"[GUARDIAN/deepaudit] #{eid} Tier-2 비대상 — {_blocked}")
+                _db.mark_error_status(eid, "wontfix", _blocked)
+                ignored += 1
+                continue
             if llm_used >= max_llm:
                 failed += 1
                 continue
-            llm_used += 1
-            # ★ **시도 횟수를 여기서도 센다** (2026-08-09 2차 적대적 검증)
-            #   `_orchestrate` 만 `bump_llm_attempts` 를 불렀고 이 backlog 경로는 안 불렀다.
-            #   그래서 상한(`MAX_LLM_ATTEMPTS`)이 이 통로에선 **영영 걸리지 않았고**,
-            #   7월 워치독 freeze 같은 지나간 사건이 심층 감사마다 LLM 세션을 다시 열었다.
-            #   상한을 만들어 놓고 한 통로에만 걸면 그 상한은 없는 것과 같다(③원칙).
-            _db.bump_llm_attempts(eid)
             a2 = analyze_llm_only(er)  # Tier 2 — apply_fix 경유 *실제 지문* 학습
+            # ★ **LLM 이 실제로 돌았을 때만 센다** (2026-08-09 3차 적대적 검증)
+            #   종전엔 호출 *앞* 에서 셌는데, `analyze_llm_only` 는 발행 중이면 맨 앞에서
+            #   LLM 없이 돌아온다("다음 심층 감사로 위임"). 그러면 **실제 호출 0회로**
+            #   상한이 소진되고 `_collect_unresolved` 가 그 행을 영구 제외한다 —
+            #   고칠 기회를 한 번도 안 주고 버리는 셈이다. API 예외도 같은 결과였다.
+            if not (a2 or {}).get("deferred"):
+                llm_used += 1
+                _db.bump_llm_attempts(eid)
+            else:
+                log.info(f"[GUARDIAN/deepaudit] #{eid} LLM 미실행(위임) — 시도로 세지 않는다")
+                continue
             if a2.get("fixable") and apply_fix(eid, a2, mark_wontfix=True):
                 fixed_t2 += 1
             else:

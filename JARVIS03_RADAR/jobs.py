@@ -189,7 +189,7 @@ def _run_with_harness(
 
     from JARVIS00_INFRA.watchdog import DEFAULT_ACTION_DEADLINE_SEC as _DFLT_DEADLINE
 
-    run_action(ActionDefinition(
+    _res = run_action(ActionDefinition(
         name=name,
         steps=[_step],
         verify=_verify,
@@ -198,6 +198,18 @@ def _run_with_harness(
         **({} if max_attempts is None else {'max_attempts': max_attempts}),
         deadline_sec=float(deadline_sec) if deadline_sec else _DFLT_DEADLINE,
     ))
+    # ★ **하네스 결과를 버리지 않는다** (2026-08-09 3차 적대적 검증)
+    #   종전엔 반환을 통째로 버려서, 하네스가 abort 해 송출을 막아도 이 함수는 정상
+    #   종료했다 → APScheduler `EVENT_JOB_EXECUTED` → `job_runs.success=1`.
+    #   실측: combined_keywords=0(수집 전멸, 하류 주제 선정 불가)이던 07-31·08-01·08-02
+    #   의 `radar_trends_*` 6건이 **전부 success=1 · error=''** 로 남아 있다.
+    #   일일 잡 리포트(`JARVIS04_SCHEDULER/briefing.py`)는 이 컬럼만 세므로 사람에게는
+    #   '✅ 정상' 으로 보고됐다 — 글이 유실된 그 날에.
+    #   실패를 실패로 적는 통로는 예외뿐이므로, 미송출이면 올린다.
+    if _res is not None and not getattr(_res, "delivered", True):
+        _reason = getattr(_res, "escalation_reason", "") or "검증 순환 한계 — 송출 미완료"
+        raise RuntimeError(f"{name} 미완료: {_reason}")
+    return _res
 
 
 def _verify_trends(_result) -> list:

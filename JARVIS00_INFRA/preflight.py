@@ -424,6 +424,10 @@ def _notify_telegram(failures: list[tuple[str, str, str]], warnings: list[tuple[
         import urllib.request
         import urllib.parse
         import json
+        # ★ 테스트에선 나가지 않는다 (2026-08-09) — Layer 0 은 `shared.notify` 를 못 쓰는
+        #   *문서화된 예외* 지만, '예외' 는 차단 면제가 아니다. 통로가 둘이면 둘 다 막는다(③).
+        if (os.environ.get("JARVIS_TEST_MODE", "") or "").strip() not in ("", "0"):
+            return
         token = os.environ.get("TELEGRAM_TOKEN", "").strip()
         chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
         if not (token and chat_id):

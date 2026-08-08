@@ -79,7 +79,12 @@ def analyze_llm_only(error_record: dict) -> dict:
         from shared.llm import is_publishing as _is_pub
         if _is_pub():
             log.info("[GUARDIAN] 발행 중 — Tier2 분석 패스, 다음 심층 감사로 위임")
-            return {**_empty, "explanation": "발행 중 패스 — 다음 심층 감사에서 처리"}
+            # ★ `deferred` 를 **구조화 필드로** 알린다 (2026-08-09 3차 적대적 검증).
+            #   호출자가 이걸 모르면 "LLM 을 태웠다" 고 착각해 시도 횟수를 올리고,
+            #   실제 호출 0회로 상한이 소진돼 오류가 영구 제외된다. 문구로 추측하게
+            #   두지 않는다 — 문구는 바뀌고 추측은 낡는다.
+            return {**_empty, "deferred": True,
+                    "explanation": "발행 중 패스 — 다음 심층 감사에서 처리"}
     except Exception:
         pass
 

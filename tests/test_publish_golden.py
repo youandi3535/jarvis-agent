@@ -4844,3 +4844,201 @@ def test_테스트가_운영_데이터_폴더를_안_쓴다():
         f"테스트가 운영 데이터 폴더를 잡았다: {_rm.DATA_DIR}"
     assert _P(_jobs._RADAR_DIR).resolve() != (_ROOT / "JARVIS03_RADAR").resolve(), \
         f"jobs 가 운영 폴더를 잡았다: {_jobs._RADAR_DIR}"
+
+
+def test_테스트가_외부로_메시지를_안_보낸다():
+    """★ conftest 는 "외부 전송 차단" 이라 적어 뒀는데 **그 값을 읽는 코드가 0곳**이었다.
+
+    실제로는 아무것도 막지 않아서 `pytest tests/` 를 돌릴 때마다 사용자 실제 챗으로
+    가짜 운영 경보가 나갔다('🚨 하네스 검증 순환 한계 — 송출 차단' 등, 진짜 사고
+    알림과 구분 불가). CI 가 조용했던 건 막아서가 아니라 클론에 `.env` 가 없어
+    토큰이 없었기 때문 — 즉 이 경로는 한 번도 검증된 적이 없었다.
+
+    막는 곳은 **실제로 던지는 함수** 여야 한다(①). 상위 래퍼에 걸면 새 래퍼가 샌다.
+    """
+    import os
+    import ast
+
+    assert os.getenv("JARVIS_TEST_MODE") == "1", "테스트 모드 플래그가 안 켜졌다"
+
+    # ① 실제 전송 함수가 막는가 — 동작으로 확인 (설정 존재는 적용의 증거가 아니다)
+    from shared.notify import _post_message
+    ok, why, retry = _post_message("이 문장이 밖으로 나가면 안 된다", "", "8443184086")
+    assert ok is False and "테스트 모드" in why, f"외부 전송이 열려 있다: {ok} / {why}"
+    assert retry is False, "재시도 대상으로 남으면 아웃박스가 나중에 보낸다"
+
+    # ② 전송 통로가 하나 더 있으면 거기도 막혀야 한다 (③ — 통로가 둘이면 둘 다)
+    senders = []
+    for f in sorted(_ROOT.rglob("*.py")):
+        if any(x in f.parts for x in (".venv", "__pycache__", "tests", "dashboard")):
+            continue
+        src = f.read_text(encoding="utf-8", errors="ignore")
+        if "/sendMessage" not in src:
+            continue
+        senders.append(str(f.relative_to(_ROOT)))
+        assert "JARVIS_TEST_MODE" in src, \
+            f"{f.relative_to(_ROOT)} 이 sendMessage 를 치는데 테스트 모드를 안 본다"
+    assert len(senders) >= 2, f"전송 통로 탐지가 실패했다: {senders}"
+
+
+def test_테스트가_라이브_대시보드를_안_건드린다():
+    """★ 데몬·API서버(:9198)가 **동시에 읽고 쓰는** 파일을 테스트가 통째로 교체했다.
+
+    라이브 피드에 가짜 발행 엣지(J06 IMAGE → J08 PUBLISH)가 남았다.
+    conftest 의 데이터 가드는 RADAR 상수 두 개만 갈아끼워 이 파일을 놓쳤다.
+    """
+    from pathlib import Path as _P
+
+    import shared.pipeline_activity as _pa
+
+    live = _P.home() / ".jarvis" / "pipeline_activity.json"
+    assert _P(_pa._DATA_FILE).resolve() != live.resolve(), \
+        f"테스트가 라이브 대시보드 파일을 잡았다: {_pa._DATA_FILE}"
+
+
+def test_Tier2_앞_판단이_두_통로에서_같다():
+    """★ 상한을 옮겼는데 **상한 앞의 판단** 은 한쪽에만 있었다 (2026-08-09 3차 검증).
+
+    `_orchestrate` 는 Tier-2 앞에 세 문을 세워 뒀다 — critical 은 Tier-1 까지만 ·
+    보안 파일 차단 · 재시도 남은 잠정실패 보류. `deep_audit_backlog` 루프엔 **셋 다
+    없어서**, `_orchestrate` 가 LLM 0회로 돌려보낸 오류가 여기선 전원 세션을 열었다.
+    판단이 두 벌이면 반드시 갈라진다.
+    """
+    import ast
+
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+
+    # ① 판단 자체 (실행 검증)
+    cases = [
+        ({"module": "jarvis_daemon.py"}, "보안"),
+        ({"module": "JARVIS08_PUBLISH/credentials/login_manager.py"}, "보안"),
+        ({"severity": "critical", "module": "x.py"}, "critical"),
+        ({"provisional": 1, "error_type": "RuntimeError", "module": "x.py"}, "잠정"),
+        ({"module": "JARVIS02_WRITER/length_manager.py", "severity": "medium"}, None),
+    ]
+    for rec, want in cases:
+        got = _ga.tier2_blocked_reason(rec)
+        if want is None:
+            assert got is None, f"정상 오류를 막았다: {rec} → {got}"
+        else:
+            assert got and want in got, f"{rec} 를 안 막는다 (got={got})"
+
+    # ② 두 통로가 **그 함수** 를 쓰는가 (판단 복제 금지)
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    for name in ("_orchestrate", "deep_audit_backlog"):
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == name)
+        assert "tier2_blocked_reason" in ast.unparse(fn), \
+            f"{name} 이 공용 판단을 안 쓴다 — 문이 두 벌이 된다"
+
+
+def test_보안파일은_실제_쓰기관문에서_막힌다():
+    """★ `DENY_FIX_PATHS` 는 '자동수정 절대 금지' 인데 소비자가 하나뿐이었다.
+
+    그마저 *오류 레코드의 module* 만 봤고, 정작 **파일을 여는 관문**(`_safe_path`)은
+    그 목록을 몰랐다. 실측: `jarvis_daemon.py`·`login_manager.py` 가 관문을 그대로
+    통과했고 샌드박스 end-to-end 에서 두 파일 모두 실제로 패치됐다.
+    (`.env`·`*.pkl` 은 확장자 규칙에 *우연히* 걸렸을 뿐 목록 때문이 아니었다.)
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN.architecture import DENY_FIX_PATHS
+    from JARVIS07_GUARDIAN.error_fixer import _safe_path
+
+    for name in sorted(DENY_FIX_PATHS):
+        assert _safe_path(name) is None, f"보안 파일이 쓰기 관문을 통과한다: {name}"
+    # 경로가 붙은 형태도 (LLM 이 TARGET_FILE 로 지목하는 실제 모양)
+    assert _safe_path("JARVIS08_PUBLISH/credentials/login_manager.py") is None
+    # 정상 파일까지 막으면 자동수정이 죽는다
+    assert _safe_path("JARVIS02_WRITER/length_manager.py") is not None
+
+    # 목록을 복제하지 않고 주인에서 파생하는가 (①)
+    src = _code_only(inspect.getsource(_safe_path))
+    assert "DENY_FIX_PATHS" in src, "쓰기 관문이 주인 목록을 안 본다"
+    for lit in ("jarvis_daemon", "login_manager"):
+        assert lit not in src, f"목록을 복제했다({lit}) — 주인이 바뀌면 갈라진다"
+
+
+def test_LLM이_안_돌면_시도로_세지_않는다():
+    """★ 발행 중이면 `analyze_llm_only` 는 맨 앞에서 LLM 없이 돌아온다.
+
+    그런데 시도 카운트를 호출 *앞* 에서 올려서, **실제 호출 0회로 상한이 소진** 되고
+    `_collect_unresolved` 가 그 행을 영구 제외했다 — 고칠 기회를 한 번도 안 주고 버린다.
+    """
+    import ast
+
+    from JARVIS07_GUARDIAN.error_analyzer import analyze_llm_only
+
+    # ① 위임을 **구조화 필드**로 알리는가 (문구 추측 금지)
+    import shared.llm as _sl
+    _orig = _sl.is_publishing
+    _sl.is_publishing = lambda: True
+    try:
+        got = analyze_llm_only({"error_type": "X", "message": "m", "module": "x.py"})
+    finally:
+        _sl.is_publishing = _orig
+    assert got.get("deferred") is True, f"위임을 구조화 필드로 안 알린다: {got}"
+    assert got.get("fixable") is False
+
+    # ② 호출자가 그 필드를 보고 세는가 — bump 가 호출 *뒤* 에, deferred 검사와 함께
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "deep_audit_backlog")
+    body = ast.unparse(fn)
+    assert "deferred" in body, "위임 여부를 안 본다 — LLM 0회로 상한이 소진된다"
+    assert body.index("analyze_llm_only") < body.index("bump_llm_attempts"), \
+        "시도를 호출 앞에서 센다 — 실제로 안 돈 것까지 세어진다"
+
+
+def test_하네스_미송출이_잡_실패로_남는다():
+    """★ `run_action` 반환을 **통째로 버려서**, abort 해도 함수는 정상 종료했다.
+
+    → APScheduler `EVENT_JOB_EXECUTED` → `job_runs.success=1`.
+    실측: combined_keywords=0(수집 전멸, 글 유실)이던 07-31·08-01·08-02 의
+    `radar_trends_*` **6건이 전부 success=1 · error=''**. 일일 잡 리포트는 이 컬럼만
+    세므로 사람에게는 '✅ 정상' 으로 보고됐다 — 글이 사라진 그 날에.
+    """
+    import importlib
+
+    jobs = importlib.import_module("JARVIS03_RADAR.jobs")
+
+    # 검증이 실패하는 액션 → 예외로 올라와야 한다 (실행 검증)
+    raised = None
+    try:
+        jobs._run_with_harness("probe_fail", lambda: None,
+                               verify_fn=lambda _r: ["일부러 실패"], max_attempts=1)
+    except Exception as e:
+        raised = e
+    assert raised is not None, "미송출인데 조용히 정상 종료한다 — job_runs 에 success=1 로 남는다"
+    assert "probe_fail" in str(raised), f"어느 잡이 실패했는지 안 알린다: {raised}"
+
+    # 정상 액션은 예외 없이 끝나야 한다 (과잉 실패 금지)
+    jobs._run_with_harness("probe_ok", lambda: None, verify_fn=lambda _r: [], max_attempts=1)
+
+
+def test_판을_지켰으면_DB도_안_무른다(tmp_path, monkeypatch):
+    """★ 보존 가드가 *파일 한 통로* 에만 걸려 있었다.
+
+    같은 회차에서 `push_to_shared` 가 이어 돌며 `save_trends()` 가
+    `DELETE FROM trends WHERE date=?` 후 이번 회차분을 넣는다. 빈손 회차의 실제 모양은
+    combined=0 · scored=정적시드 30 이라, 파일은 아침 실트렌드 50개를 지키는데
+    **DB 는 정적시드 30개로 갈렸다**. 대시보드·API 는 파일이 아니라 DB 를 읽는다.
+    """
+    import importlib
+
+    rm = importlib.import_module("JARVIS03_RADAR.radar_main")
+    monkeypatch.setattr(rm, "DATA_DIR", tmp_path)
+    day = "2026-01-05"
+
+    assert rm.save({"date": day, "combined_keywords": [{"keyword": "가"}] * 4,
+                    "scored_keywords": [1]}) is True, "정상 수집분을 안 썼다"
+    assert rm.save({"date": day, "combined_keywords": [],
+                    "scored_keywords": [1] * 30}) is False, \
+        "빈손 회차인데 '새로 썼다' 고 답한다 — DB 통로가 그 답을 믿고 덮는다"
+
+    # 호출부가 그 답을 실제로 따르는가
+    src = (_ROOT / "JARVIS03_RADAR/radar_main.py").read_text(encoding="utf-8")
+    i = src.index("_fresh   = save(data)")
+    tail = src[i:i + 800]
+    assert "not _fresh" in tail and "push_to_shared" in tail, \
+        "DB 통로가 보존 여부를 안 본다 — 파일만 지키고 DB 는 갈린다"
