@@ -46,6 +46,12 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+# ★ `sys.executable` 금지 (2026-08-08, ERRORS EvalEnvBroken #5386/#5389) — macOS Framework
+#   Python 재기동 시 venv 밖으로 떨어질 위험. `.venv/bin/python3` 를 경로로 직접 지정
+#   (auto_repair.py 와 동일 패턴, 단일 진실). venv 부재 시에만 sys.executable 로 폴백.
+_VENV_PY = _ROOT / ".venv" / "bin" / "python3"
+_SUBPROC_PY = str(_VENV_PY) if _VENV_PY.exists() else sys.executable
+
 # 수정 금지 디렉터리
 _DENY_DIRS = {".venv", ".git", "__pycache__", "shared/backups", "chrome_profile", "logs"}
 # 수정 허용 확장자
@@ -274,7 +280,7 @@ def _import_check(file_path: Path, timeout: float | None = None) -> bool:
     if os.getenv("GUARDIAN_IMPORT_SUBPROC", "1").strip() not in ("0", "false", "False"):
         try:
             cp = subprocess.run(
-                [sys.executable, "-c", _IMPORT_PROBE_SRC,
+                [_SUBPROC_PY, "-c", _IMPORT_PROBE_SRC,
                  str(_ROOT), module_str, str(file_path)],
                 capture_output=True, text=True, timeout=timeout, cwd=str(_ROOT),
             )
@@ -788,7 +794,7 @@ def _run_probe(spec: dict, budget: float | None = None) -> dict:
     spec["root"] = str(_ROOT)
     try:
         cp = subprocess.run(
-            [sys.executable, "-c", _PROBE_SRC, json.dumps(spec)],
+            [_SUBPROC_PY, "-c", _PROBE_SRC, json.dumps(spec)],
             cwd=str(_ROOT), env=env, capture_output=True, text=True,
             timeout=max(2.0, budget if budget is not None else _verify_timeout()),
         )

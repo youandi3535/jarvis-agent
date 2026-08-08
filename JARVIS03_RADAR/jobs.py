@@ -38,7 +38,11 @@ _log = logging.getLogger("radar.jobs")
 _RADAR_DIR = Path(__file__).parent
 _ROOT = _RADAR_DIR.parent
 _WRITER_DIR = _ROOT / "JARVIS02_WRITER"
-_PYTHON = sys.executable
+# ★ `sys.executable` 금지 (2026-08-08, ERRORS EvalEnvBroken #5386/#5389) — macOS Framework
+#   Python 이 GUI 관련 import(matplotlib/Quartz/pyautogui 등)로 자기 자신을 재기동하면
+#   `sys.executable` 이 venv 밖 바이너리를 가리킬 수 있다. `.venv/bin/python3` 를
+#   경로로 직접 지정 (jarvis_keeper.py·JARVIS01_MASTER/dispatchers.py 와 동일 패턴).
+_PYTHON = str(_ROOT / ".venv" / "bin" / "python3")
 
 
 

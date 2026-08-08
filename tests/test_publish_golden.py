@@ -3449,3 +3449,107 @@ def test_도달불가_지문이_매칭후보에서_빠진다():
 
     # 삭제가 아니라 제외인가 — 전체 목록은 그대로여야 한다
     assert len(_pf.all_patterns()) >= len(un), "지문을 지웠다 — 기록이 사라진다"
+
+
+def test_쿨다운_억제가_빈도를_지우지_않는다():
+    """★ dedup 은 seen_count 를 올리는데 쿨다운만 흔적 없이 버렸다 — 탈락 방식이 비대칭.
+
+    빈도가 곧 신호인 사고(keeper HANG 처럼 정체 시간이 매번 다른 것)에서
+    60초 안에 겹친 두 번째 건은 복구 불가였다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import error_collector as _ec
+    from shared import db as _sdb
+
+    assert hasattr(_sdb, "bump_error_seen"), "억제분 빈도 집계 API 가 없다"
+
+    # ★ 쿨다운 분기가 있는 함수를 **찾아서** 검사한다 — 함수명을 박으면 옮길 때 낡는다.
+    src = (_ROOT / "JARVIS07_GUARDIAN/error_collector.py").read_text(encoding="utf-8")
+    ftree = ast.parse(src)
+    ln = next(i + 1 for i, l in enumerate(src.splitlines()) if "_in_cooldown(cool_key)" in l)
+    holder = next(n for n in ast.walk(ftree)
+                  if isinstance(n, ast.FunctionDef) and n.lineno <= ln <= (n.end_lineno or 0))
+    called = {getattr(n.func, "id", "") or getattr(n.func, "attr", "")
+              for n in ast.walk(holder) if isinstance(n, ast.Call)}
+    assert "bump_error_seen" in called, \
+        f"쿨다운 억제가 여전히 흔적 없이 버린다 ({holder.name})"
+
+    # 실제로 seen_count 가 오르는가
+    with _sdb.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
+                    "seen_count, timestamp) VALUES ('cd','m','RuntimeError','첫 건','new',1,"
+                    "datetime('now','localtime'))")
+        eid = con.execute("SELECT id FROM error_log ORDER BY id DESC LIMIT 1").fetchone()[0]
+    assert _sdb.bump_error_seen("cd", "m", "RuntimeError", "다른 메시지") is True
+    with _sdb.get_db() as con:
+        sc = con.execute("SELECT seen_count FROM error_log WHERE id=?", (eid,)).fetchone()[0]
+    assert sc == 2, f"빈도가 안 올랐다: {sc}"
+    # 없는 조합은 조용히 False (없는 행을 만들지 않는다)
+    assert _sdb.bump_error_seen("없음", "없음", "없음", "x") is False
+
+
+def test_캐치_스모크가_부팅때_실제로_돈다():
+    """★ 정의 1행뿐이고 호출자가 0곳이었다 — 그 사이 스캐너는 71일간 수확 0건."""
+    import ast
+
+    from JARVIS07_GUARDIAN import error_collector as _ec
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "register")
+    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "catch_path_effective" in called, "부팅 시 스모크를 안 부른다"
+
+    # ★ 실수확 다리가 있는가 — 합성 프로브만으로는 71일 침묵을 못 잡는다
+    assert hasattr(_ec, "_log_scanner_silent"), "실수확 판정이 없다"
+    ftree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/error_collector.py").read_text(encoding="utf-8"))
+    sfn = next(n for n in ast.walk(ftree)
+               if isinstance(n, ast.FunctionDef) and n.name == "catch_path_effective")
+    scalled = {getattr(n.func, "id", "") for n in ast.walk(sfn) if isinstance(n, ast.Call)}
+    assert "_log_scanner_silent" in scalled, "스모크가 실수확을 안 본다"
+
+    got = _ec._log_scanner_silent()
+    assert got in (True, False, None)
+
+
+def test_무예외_발행실패도_보고된다():
+    """★ 예외는 보고되는데 `success=False` 는 조용했다 — 4조합이 지나는 길목에서 막는다."""
+    import ast
+
+    from JARVIS06_IMAGE import draft_processor as _dp
+
+    tree = ast.parse((_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "publish_assembled")
+    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "posting_error_type" in called, "타입을 파생하지 않는다 — 뭉뚱그린 타입 금지"
+
+    # 실제로 실패를 보고하는가 + 제어흐름은 그대로인가
+    from shared.db import get_db
+    with get_db() as con:
+        before = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+    res = _dp.publish_assembled({"blocks": [], "title": "t"},
+                                lambda blocks, title, **kw: {"success": False,
+                                                             "error": "쿠키 만료"},
+                                "naver")
+    with get_db() as con:
+        after = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+        row = con.execute("SELECT func_name, source FROM error_log "
+                          "ORDER BY id DESC LIMIT 1").fetchone()
+    assert after > before, "무예외 실패가 보고되지 않았다"
+    assert row["source"] == "publish"
+    assert "Naver" in (row["func_name"] or ""), f"타입이 플랫폼에서 파생 안 됐다: {row['func_name']}"
+    assert isinstance(res, dict) and res["success"] is False, \
+        "보고하면서 결과를 바꿨다 — 제어흐름은 건드리면 안 된다"
+
+    # 성공 경로는 보고하지 않는다 (과잉 보고 금지)
+    with get_db() as con:
+        b2 = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+    ok = _dp.publish_assembled({"blocks": [], "title": "t"},
+                               lambda blocks, title, **kw: {"success": True}, "tistory")
+    with get_db() as con:
+        a2 = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+    assert a2 == b2, "성공했는데 오류를 남겼다"
+    assert ok["success"] is True

@@ -2416,6 +2416,38 @@ def mark_error_fixed(error_id: int, resolution: str, fixed_file: str = None):
         )
 
 
+def bump_error_seen(source: str, module: str, error_type: str,
+                    message: str, window_min: int = 60) -> bool:
+    """쿨다운으로 **저장을 건너뛴** 오류의 빈도만 올린다 (2026-08-08 감사).
+
+    ★ 왜 필요한가 — 두 층의 탈락 방식이 비대칭이었다
+      DB dedup 은 `seen_count` 를 올려 *몇 번 더 났는지* 를 보존한다. 그런데 60초 쿨다운은
+      `return None` 으로 **흔적 없이 버린다**. 빈도가 곧 신호인 사고(keeper HANG 처럼
+      정체 시간·PID 가 매번 다른 것)에서 60초 안에 겹친 두 번째 건은 복구 불가다.
+      억제는 "시끄러움 줄이기" 이지 "없던 일로 하기" 가 아니다.
+
+    같은 (source, module, error_type) 의 최근 행 하나에만 올린다 — message 는 매번
+    다를 수 있으므로 조건에 넣지 않는다(그게 쿨다운이 정규화 키를 쓰는 이유다).
+    Returns: 올렸으면 True.
+    """
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT id FROM error_log WHERE source=? AND module=? AND error_type=? "
+                "  AND timestamp >= datetime('now','localtime',?) "
+                "ORDER BY id DESC LIMIT 1",
+                (source or "", module or "", error_type or "", f"-{int(window_min)} minute"),
+            ).fetchone()
+            if not row:
+                return False
+            conn.execute("UPDATE error_log SET seen_count = seen_count + 1 WHERE id=?",
+                         (row["id"],))
+        return True
+    except Exception as e:
+        log.warning("[db] seen_count 증가 실패: %s", e)
+        return False
+
+
 def mark_error_status(error_id: int, status: str, resolution: str = ""):
     """오류 상태 변경 (analyzing / wontfix / ignored / fixed).
 

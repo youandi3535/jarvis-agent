@@ -96,8 +96,12 @@ JARVIS06_BASE = _PROJECT_ROOT / "JARVIS06_IMAGE"                  # 이미지 �
 SS_DIR        = JARVIS06_BASE / "output" / "screenshots" / "tistory"
 SS_DIR.mkdir(parents=True, exist_ok=True)
 
-import pyautogui as _pg
-import pyperclip
+# ★ pyautogui/pyperclip 모듈 레벨 import 금지 (2026-08-08, ERRORS EvalEnvBroken #5386/#5389) —
+#   pyobjc(Quartz/AppKit) 백엔드가 import 시점에 macOS Framework Python 을
+#   `Python.app/Contents/MacOS/Python` 로 자기 자신 재기동시켜, 그 이후 `sys.executable` 을
+#   쓰는 모든 subprocess 생성이 venv 밖으로 떨어질 위험이 생긴다. 이 파일은 데몬 부팅 시
+#   JARVIS08_PUBLISH 등록 과정에서 import 되므로 여기 있으면 *발행과 무관하게 매 부팅마다*
+#   재기동이 트리거된다. naver_poster.py 와 동일하게 실제 사용하는 함수 안에서만 지연 import.
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
@@ -436,6 +440,7 @@ def _upload_image_once(img_path: str, driver=None, after_newline: bool = True):
     if not file_sent:
         # 4) Fallback: 기존 Cmd+Shift+G (스크린 활성 상태 전용)
         _p("    ⚠️ Cmd+Shift+G fallback 시도")
+        import pyperclip  # 지연 import 사유: 파일 상단 주석 참조
         pyperclip.copy(img_path)
         _s(0.3)
         _chrome_focus()
@@ -542,6 +547,8 @@ def _input_text(text: str, driver=None):
     combined = ''.join(html_parts)
     if not _tinymce_insert(combined, driver):
         # fallback: HID paste (포커스 상태 의존, 실패할 수 있음)
+        import pyautogui as _pg  # 지연 import 사유: 파일 상단 주석 참조
+        import pyperclip
         pyperclip.copy(text)
         _s(0.4)
         _cgevent_paste()
@@ -1114,6 +1121,7 @@ def post_to_tistory(
             tags = _generate_smart_tags(title, body_text)
 
         # 화면 50% 스크롤 다운 후 태그란 클릭
+        import pyautogui as _pg  # 지연 import 사유: 파일 상단 주석 참조
         _chrome_focus()
         screen_h = _pg.size().height
         _pg.scroll(-int(screen_h * 0.5), x=694, y=400)

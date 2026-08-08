@@ -1497,6 +1497,27 @@ def register(scheduler, bus):
     except Exception as e:
         log.warning(f"[GUARDIAN] 로그 스캐너 초기화 실패: {e}")
 
+    # 4-B) ★ 캐치 경로 스모크 — **설치했다는 것은 동작한다는 증거가 아니다** (2026-08-08).
+    #   `catch_path_effective()` 는 정확히 이 목적으로 만들어졌는데 **호출자가 0곳**이었다
+    #   (정의 1행뿐). 그 사이 로그 스캐너는 71일간 수확 0건이었고 아무도 몰랐다.
+    #   CLAUDE.md 가 `patch_effective` 표준으로 박아둔 셋 중 이것만 배선이 빠져 있었다.
+    #   실패해도 부팅을 막지 않는다 — 관측이 가용성을 해치면 안 된다. 대신 오류로 남긴다.
+    try:
+        from JARVIS07_GUARDIAN.error_collector import catch_path_effective
+        _smoke = catch_path_effective()
+        if _smoke is False:
+            log.error("[GUARDIAN] ★ 캐치 경로 무력 — 오류가 수집되지 않는다")
+            try:
+                from JARVIS07_GUARDIAN.error_collector import report as _rep
+                _rep("guardian", RuntimeError("캐치 경로 스모크 실패 — 오류 수집 무력"),
+                     module=__name__, func_name="CatchPathDead")
+            except Exception:
+                pass
+        elif _smoke is None:
+            log.info("[GUARDIAN] 캐치 경로 스모크 판정 불가")
+    except Exception as e:
+        log.warning(f"[GUARDIAN] 캐치 경로 스모크 실행 실패: {e}")
+
     # 5) 스케줄 잡 등록 — JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 에서 관리 (이관 완료)
     # guardian_log_scan / guardian_archive / j07_git_audit / j07_retry_pending
 

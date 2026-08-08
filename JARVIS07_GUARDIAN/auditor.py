@@ -123,8 +123,11 @@ def audit_constitution_violations() -> ConstitutionAudit:
         return ConstitutionAudit(total_violations=0, by_category={}, sample=[])
 
     try:
+        # ★ `sys.executable` 금지 (2026-08-08, ERRORS EvalEnvBroken #5386/#5389) —
+        #   `.venv/bin/python3` 를 경로로 직접 지정 (auto_repair.py 와 동일 패턴, 단일 진실).
+        venv_py = _ROOT / ".venv" / "bin" / "python3"
         proc = subprocess.run(
-            [sys.executable, str(script)],
+            [str(venv_py) if venv_py.exists() else sys.executable, str(script)],
             cwd=str(_ROOT),
             capture_output=True,
             text=True,

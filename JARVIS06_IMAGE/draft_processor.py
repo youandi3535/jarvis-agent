@@ -726,8 +726,29 @@ def publish_assembled(result: dict, publish_fn, platform: str = "") -> dict:
         pass
     print(f"  📤 [J06→J08] {platform} 발행 위임 — 블록 {len(blocks)}개")
     try:
-        return publish_fn(blocks=blocks, title=title)
+        _res = publish_fn(blocks=blocks, title=title)
     except Exception as _pe:
         log.error(f"[J06→J08] {platform} 발행 실패: {_pe}")
         _g_report("image", _pe, module=__name__, func_name="publish_assembled")
         return None
+    # ★ **실패가 예외로 오지 않는 경로** 를 막는다 (2026-08-08 감사).
+    #   예외는 위에서 보고되지만, 발행자가 조용히 False/실패 dict 를 돌려주면
+    #   error_log 에 **아무것도 남지 않았다** — 실측 2026-08-08 07:00 발행 로그에
+    #   실패 신호 2건이 찍혔는데 같은 창의 유입은 0건이었다.
+    #   여기가 4조합이 모두 지나는 길목이라 한 곳만 막으면 된다(①③).
+    #   ※ 제어흐름은 바꾸지 않는다 — 보고만 하고 결과를 그대로 돌려준다.
+    #     발행자의 폴백·재시도를 여기서 끊으면 그게 더 큰 사고다.
+    try:
+        _ok = bool(_res.get("success")) if isinstance(_res, dict) else bool(_res)
+        if not _ok:
+            from JARVIS07_GUARDIAN.incident_responder import posting_error_type
+            _why = (_res.get("error") or _res.get("reason") or "")[:200] \
+                if isinstance(_res, dict) else ""
+            _et = posting_error_type(f"{platform}_publish", recovered=False)
+            _g_report("publish",
+                      RuntimeError(f"{platform} 발행 실패(예외 없음) — {_why or '사유 미기재'}"),
+                      module=__name__, func_name=_et)
+            log.error(f"[J06→J08] {platform} 발행 실패(무예외) — GUARDIAN 보고: {_et}")
+    except Exception as _re2:
+        log.warning(f"[J06→J08] 발행 실패 보고 자체 실패(무시): {_re2}")
+    return _res

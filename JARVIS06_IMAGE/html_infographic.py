@@ -180,6 +180,11 @@ def _html_to_jpg(html_str: str, out_path: Path, width: int = 980) -> bool:
        html_renderer._find_chromium() 의 작동하는 Chromium 경로 재사용 + full_page.
     """
     import subprocess, sys as _sys, signal
+    # ★ `sys.executable` 금지 (2026-08-08, ERRORS EvalEnvBroken #5386/#5389) — macOS Framework
+    #   Python 재기동 시 venv 밖으로 떨어질 위험. `.venv/bin/python3` 를 경로로 직접 지정
+    #   (auto_repair.py 와 동일 패턴 — 단일 진실).
+    _venv_py = Path(__file__).resolve().parent.parent / ".venv" / "bin" / "python3"
+    _subproc_py = str(_venv_py) if _venv_py.exists() else _sys.executable
     try:
         from JARVIS06_IMAGE.html_renderer import _find_chromium
         chromium = _find_chromium()
@@ -232,7 +237,7 @@ def _html_to_jpg(html_str: str, out_path: Path, width: int = 980) -> bool:
             def _wd_beat() -> None: pass  # watchdog 부재 시 no-op
         try:
             proc = subprocess.Popen(
-                [_sys.executable, "-c", render_code],
+                [_subproc_py, "-c", render_code],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 start_new_session=True,
             )
