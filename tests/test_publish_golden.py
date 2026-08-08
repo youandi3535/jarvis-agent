@@ -4160,3 +4160,117 @@ def test_빈판일때는_새로_쓴다():
         assert _json.loads(path.read_text())["scored_keywords"] == [9]
     finally:
         path.unlink(missing_ok=True)
+
+
+def test_RADAR_수집실패가_어디였는지_타입에_남는다():
+    """★ 실측 90일 `source='radar'` 264건이 **전부 `ConnectionError`** 한 타입이었다.
+
+    타입만으로는 구글이 죽었는지 네이버가 죽었는지 알 수 없고, 그래서
+    ① 타입 기반 게이트 무력 ② Tier-1 지문 매칭의 변별력 0.
+    호스트·원인은 예외 메시지에 **이미 들어 있다** — 새 판단을 만들지 않고 읽는다.
+    """
+    from JARVIS03_RADAR.collectors import radar_error_type
+
+    cases = {
+        "HTTPSConnectionPool(host='trends.google.com', port=443): Max retries exceeded "
+        "with url: /trending/rss (Caused by NameResolutionError('x'))":
+            "RadarTrendsGoogleNameResolution",
+        "HTTPSConnectionPool(host='openapi.naver.com', port=443): Max retries exceeded "
+        "with url: /v1/search (Caused by ConnectTimeoutError('y'))":
+            "RadarOpenapiNaverConnectTimeout",
+    }
+    got = {radar_error_type(ConnectionError(m)) for m in cases}
+    assert got == set(cases.values()), f"파생 결과가 다르다: {got}"
+    assert len(got) == 2, "서로 다른 수집처가 같은 타입으로 뭉개진다"
+
+    # 네트워크 실패가 아니면 **종전 그대로** — 없는 정보를 지어내지 않는다
+    assert radar_error_type(ValueError("그냥 값 오류")) == "ValueError"
+    assert radar_error_type(ConnectionError("호스트 정보 없음")) == "ConnectionError"
+
+
+def test_RADAR_전_파일이_같은_통로를_쓴다():
+    """★ ③원칙 — 한 파일만 고치면 다른 파일에서 그대로 뭉개진 타입이 나온다."""
+    import ast
+
+    raw, wired = [], []
+    for f in sorted((_ROOT / "JARVIS03_RADAR").rglob("*.py")):
+        if "__pycache__" in f.parts:
+            continue
+        src = f.read_text(encoding="utf-8")
+        if "error_collector import report as _g_report" in src:
+            raw.append(str(f.relative_to(_ROOT)))
+        if "collectors import report_radar as _g_report" in src:
+            wired.append(str(f.relative_to(_ROOT)))
+    assert not raw, f"세분화를 우회하는 파일이 남았다: {raw}"
+    assert len(wired) >= 10, f"연결된 파일이 {len(wired)}개뿐 — 누락 의심"
+
+    # ★ 래퍼가 **세 가지 호출 형태** 를 다 지키는가 (실행 검증)
+    #   `catch` 는 구 시그니처 `report(source, exc)` 314곳을 위해 역순 자동 교정을
+    #   갖고 있다(ERRORS [298]). 래퍼가 서명을 `(source, exc)` 로 고정하면 문자열
+    #   타입 호출이 통째로 뒤집혀 error_type 에 `radar` 가 박힌다 — 실제로 났던 사고.
+    from JARVIS03_RADAR.collectors import report_radar
+    from shared import db as _db
+
+    net = ("HTTPSConnectionPool(host='trends.google.com', port=443): x "
+           "(Caused by NameResolutionError('z'))")
+    cases = [
+        (("radar", ConnectionError(net)), {}, "radar", "RadarTrendsGoogleNameResolution"),
+        ((ConnectionError(net + " 2"), "radar"), {}, "radar", "RadarTrendsGoogleNameResolution"),
+        (("TrendsEmptyOverwriteBlocked", "radar"), {"message": "보존"},
+         "radar", "TrendsEmptyOverwriteBlocked"),
+        (("radar", ValueError("비네트워크")), {}, "radar", "ValueError"),
+    ]
+    ids = []
+    try:
+        for args, kw, want_src, want_type in cases:
+            eid = report_radar(*args, module="t", func_name="t", **kw)
+            assert eid, f"보고 자체가 안 됐다: {args}"
+            ids.append(eid)
+            with _db.get_db() as con:
+                r = con.execute("SELECT source, error_type FROM error_log WHERE id=?",
+                                (eid,)).fetchone()
+            assert (r[0], r[1]) == (want_src, want_type), \
+                f"호출형태 {args[0]!r} → source={r[0]} type={r[1]} (기대 {want_src}/{want_type})"
+    finally:
+        with _db.get_db() as con:
+            for i in ids:
+                con.execute("DELETE FROM error_log WHERE id=?", (i,))
+
+
+def test_RADAR_래퍼가_세분화_대상만_손댄다():
+    """★ 래퍼는 '타입 세분화' 만 한다 — 그 외에는 인자를 **그대로** 넘겨야 한다.
+
+    무엇이 넘어가는지 직접 관찰한다(반환값만 보면 두 경로가 같아 보인다):
+      ① 문자열 타입 호출 → 원래 두 인자 그대로, `tb_str` 을 지어내지 않는다
+         (except 블록 밖에서 `format_exc()` 는 `"NoneType: None"` 쓰레기를 만든다)
+      ② 세분화할 게 없는 예외 → **예외 객체 그대로** (문자열로 바꾸면 `catch` 가
+         예외에서만 뽑을 수 있는 것들을 못 쓴다)
+    """
+    from JARVIS07_GUARDIAN import error_collector as _ec
+    from JARVIS03_RADAR.collectors import report_radar
+
+    seen = []
+    orig = _ec.report
+    _ec.report = lambda a, b, **kw: (seen.append((a, b, kw)), 1)[1]
+    try:
+        report_radar("TrendsEmptyOverwriteBlocked", "radar", message="보존", module="m")
+        a, b, kw = seen[-1]
+        assert (a, b) == ("TrendsEmptyOverwriteBlocked", "radar"), \
+            f"문자열 타입 호출의 인자가 변형됐다: {a!r}, {b!r}"
+        assert "tb_str" not in kw, f"없는 traceback 을 지어냈다: {kw.get('tb_str')!r}"
+
+        err = ValueError("비네트워크")
+        report_radar("radar", err, module="m")
+        a, b, kw = seen[-1]
+        assert b is err, f"예외 객체를 잃었다 — {type(b).__name__} 로 넘어갔다"
+        assert "tb_str" not in kw, "세분화 대상이 아닌데 traceback 을 지어냈다"
+
+        # 세분화 대상은 타입 문자열 + 원문 메시지로 넘어간다
+        net = ("HTTPSConnectionPool(host='trends.google.com', port=443): x "
+               "(Caused by NameResolutionError('z'))")
+        report_radar("radar", ConnectionError(net), module="m")
+        a, b, kw = seen[-1]
+        assert a == "RadarTrendsGoogleNameResolution" and b == "radar", f"{a!r}/{b!r}"
+        assert kw.get("message") == net, "원문 메시지가 유실됐다"
+    finally:
+        _ec.report = orig

@@ -13,7 +13,7 @@ from datetime import date, datetime
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
-    from JARVIS07_GUARDIAN.error_collector import report as _g_report
+    from JARVIS03_RADAR.collectors import report_radar as _g_report
 except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────
@@ -452,7 +452,6 @@ def save(data: dict):
         if _old > 0:
             print(f"[RADAR] ⚠️ 실트렌드 0개 — 기존 {_old}개 판을 보존하고 저장 생략: {path.name}")
             try:
-                from JARVIS07_GUARDIAN.error_collector import report as _g_report
                 _g_report("TrendsEmptyOverwriteBlocked", "radar",
                           message=(f"실트렌드 0개 수집 — 기존 {_old}개 판 보존 "
                                    f"(덮었으면 하류 주제 선정 불가)"),
