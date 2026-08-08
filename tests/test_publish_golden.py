@@ -474,7 +474,7 @@ def test_결손조회가_글종류를_구분한다():
     assert "post_type = ?" in src, "SQL 에 글종류 조건이 없다"
 
 
-def test_감사는_발행락을_지우지_않는다():
+def test_감사는_발행락을_지우지_않는다(tmp_path):
     """★ 감시는 대상을 건드리지 않는다.
 
     종전 `publishing_in_progress()` 는 `scheduler._is_locked_externally()` 를 불렀는데
@@ -492,9 +492,10 @@ def test_감사는_발행락을_지우지_않는다():
     from JARVIS02_WRITER import scheduler as _sch
     from JARVIS08_PUBLISH.publish_ledger import publishing_in_progress
 
+    # ★ 운영 `logs/` 가 아니라 **임시 경로** 로 (2026-08-09) — 데몬이 같은 폴더를 쓰고,
+    #   그 폴더는 `.gitignore` 대상이라 잔여물이 `git status` 로도 안 보인다.
     _orig = _sch.LOCK_FILE
-    tmp = _ROOT / "logs" / "_probe_publish.lock"
-    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp = tmp_path / "_probe_publish.lock"
     _sch.LOCK_FILE = tmp
     try:
         stale = time.time() - (_sch.publish_lock_stale_sec() + 3600)
@@ -4885,7 +4886,20 @@ def test_테스트가_외부로_메시지를_안_보낸다():
         senders.append(str(f.relative_to(_ROOT)))
         assert "JARVIS_TEST_MODE" in src, \
             f"{f.relative_to(_ROOT)} 이 sendMessage 를 치는데 테스트 모드를 안 본다"
-    assert len(senders) >= 2, f"전송 통로 탐지가 실패했다: {senders}"
+    # ★ 개수 하한(`>= 2`)은 회귀를 통과시킨다 (2026-08-09 — 동시 세션 지적).
+    #   탐지가 새 통로를 놓쳐도 옛 통로 둘만 세면 통과한다. **집합으로** 대조한다:
+    #   텔레그램 호스트를 언급하는 파일과, 실제로 메시지를 던지는 파일을 따로 구해
+    #   후자가 전자에 포함되고 비어 있지 않은지 본다.
+    mentions = set()
+    for f in sorted(_ROOT.rglob("*.py")):
+        if any(x in f.parts for x in (".venv", "__pycache__", "tests", "dashboard")):
+            continue
+        if "api.telegram.org" in f.read_text(encoding="utf-8", errors="ignore"):
+            mentions.add(str(f.relative_to(_ROOT)))
+    assert set(senders) <= mentions, f"탐지 집합이 어긋난다: {set(senders) - mentions}"
+    assert "shared/notify.py" in senders, \
+        f"실제 전송 함수를 못 찾았다 — 탐지가 깨졌다: {sorted(senders)}"
+    assert len(senders) >= 2, f"전송 통로가 하나뿐? 탐지 실패 의심: {sorted(senders)}"
 
 
 def test_테스트가_라이브_대시보드를_안_건드린다():
