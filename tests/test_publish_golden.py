@@ -3192,6 +3192,9 @@ def test_kind_선언을_메시지_문구가_뒤집지_못한다():
 
     approved = non_code_issue_kinds()
     assert approved, "승인 kind 집합이 비었다 — 검사 전제가 깨졌다"
+    from JARVIS00_INFRA.harness import envelope_kinds
+    assert not (envelope_kinds() & approved), \
+        "봉투 kind 가 승인 목록에도 들어갔다 — 두 경계가 겹치면 어느 쪽도 검증이 안 된다"
 
     # 정규식에 확실히 걸리는 문구 (실제 DB 메시지 형태)
     MSGS = ["[Layer4] 활성 플랫폼 전부 실패 — 송출 미완료: ['naver']",
@@ -3199,8 +3202,11 @@ def test_kind_선언을_메시지_문구가_뒤집지_못한다():
             "종목 데이터 0개 — 다른 테마로 교체"]
 
     # ① 선언된(=승인 목록 밖) kind 는 문구가 뭐든 transient 가 아니다
-    for kind in ("send_failure", "abort", "execution_error", "draft_invalid",
-                 "stuck", "data_empty", "login_invalid"):
+    #    ※ 봉투 신호(`abort`·`stuck`)는 이 경계 밖이다 — 문구가 뒤집은 게 아니라
+    #      harness 가 "이건 근본 원인이 아니라 포기 신고" 라고 *선언* 했기 때문이다.
+    #      (실측 90일 실제 파일 수정 0건. `test_봉투신호는_Tier2로_안_간다` 가 담당.)
+    for kind in ("send_failure", "execution_error", "draft_invalid",
+                 "data_empty", "login_invalid"):
         assert kind not in approved, f"{kind} 가 승인 목록에 들어갔다 — 전제 변경"
         for m in MSGS:
             assert is_transient("RuntimeError", m, kind=kind) is False, \
@@ -3952,3 +3958,76 @@ def test_fixed_at은_fixed에만_찍힌다():
         r2 = dict(con.execute("SELECT resolution, fixed_at FROM error_log WHERE id=?",
                               (eid,)).fetchone())
     assert r2["fixed_at"], "fixed 인데 시각이 없다"
+
+
+def test_봉투신호는_Tier2로_안_간다():
+    """★ `abort`·`stuck` 은 근본 원인이 아니라 harness 가 '포기했다' 는 신고다.
+
+    실측 90일 `abort` 86건·`stuck` 24건 → 자동수리가 만든 **실제 파일 수정 0건**.
+    봉투를 LLM 에 보내면 "수정 불가 3건 패턴 반복" 같은 *코드 위치가 아닌 문장* 을
+    고치라고 시키는 셈이다. 진짜 원인은 동봉된 다른 issue 가 각자 보고한다.
+    """
+    from JARVIS00_INFRA.harness import envelope_kinds, is_envelope_kind
+    from JARVIS07_GUARDIAN.severity import is_transient
+
+    env = envelope_kinds()
+    assert env, "봉투 kind 파생이 빈 집합 — 판별이 무력이다"
+    assert {"abort", "stuck"} <= env, f"알려진 봉투가 빠졌다: {sorted(env)}"
+
+    for k in sorted(env):
+        assert is_transient("RuntimeError", "수정 불가 3건 패턴 반복", "harness", kind=k), \
+            f"봉투 {k} 가 Tier-2 로 간다 — 고칠 수 없는 것에 토큰을 태운다"
+
+    # 봉투가 아닌 kind 까지 삼키면 진짜 코드결함을 놓친다
+    for k in ("draft_invalid", "execution_error", "send_failure"):
+        assert not is_envelope_kind(k), f"{k} 를 봉투로 오분류 — 코드결함이 격리된다"
+        assert not is_transient("RuntimeError", "x", "harness", kind=k), \
+            f"{k} 가 격리 버킷으로 샌다"
+
+
+def test_봉투_kind가_소스에서_파생된다():
+    """★ 목록을 박으면 새 봉투 kind 가 조용히 Tier-2 로 샌다 — 파생이어야 한다."""
+    import inspect
+
+    from JARVIS00_INFRA import harness as _h
+
+    src = (_ROOT / "JARVIS00_INFRA/harness.py").read_text(encoding="utf-8")
+    # 봉투 생성부가 리터럴 step 으로 되돌아가면 파생이 그 자리에서 무력해진다
+    assert 'step="전체"' not in src, \
+        "봉투 생성부가 리터럴 step 으로 돌아갔다 — 파생이 못 본다"
+    assert src.count("step=ENVELOPE_STEP") >= 4, "봉투 생성부가 상수를 안 쓴다"
+
+    fsrc = _code_only(inspect.getsource(_h.envelope_kinds))
+    assert "ast" in fsrc and "ENVELOPE_STEP" in fsrc, "소스 파생이 아니다"
+    assert '"abort"' not in fsrc and '"stuck"' not in fsrc, \
+        "봉투 목록을 박았다 — 새 봉투가 생기면 샌다"
+
+    # severity 가 판별을 복제하지 않고 주인에게 묻는가 (①)
+    ssrc = (_ROOT / "JARVIS07_GUARDIAN/severity.py").read_text(encoding="utf-8")
+    assert "is_envelope_kind" in ssrc, "severity 가 harness 에 묻지 않는다"
+    assert 'kind == "abort"' not in ssrc, "severity 가 판별을 복제했다"
+
+
+def test_재현할_오류메시지_없으면_학습_안_한다():
+    """★ 지문 재료는 실오류 메시지다 — `description` 은 두 번 다시 같은 문자열로 안 온다.
+
+    그런 패턴은 태어날 때부터 hit=1 로 죽어 있고 밴딧에 영영 보상 없는 arm 을 늘린다.
+    `_MANUAL_POLICY_TYPES` 목록만으론 못 막는다 — 자가검사 타입은 세션마다 새 이름으로
+    생긴다(실측 `Observability`·`CopyOfTruth`·`DomainBoundary`·`ModelNamePurge` 4종 전부
+    목록 밖). 목록 대신 **레코드 자신에게 묻는다**.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/error_collector.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "report_manual_fix")
+    body = ast.unparse(fn)
+    assert "_has_real_error" in body, "실오류 메시지 유무를 안 본다"
+    # 세 갈래(True/False/자동) 중 학습으로 가는 두 갈래 모두 걸려야 한다
+    acts = [ln for ln in body.splitlines() if "_actionable =" in ln and "False" not in ln]
+    assert acts and all("_has_real_error" in ln for ln in acts), \
+        f"학습 분기 중 메시지 검사를 빠뜨린 곳이 있다: {acts}"
+
+    # 지문 재료가 여전히 description 폴백인지 — 폴백이 남아 있어야 위 가드가 의미 있다
+    assert "error_message or description" in body, \
+        "지문 폴백이 사라졌다면 이 가드의 전제가 바뀐 것 — 함께 재검토할 것"

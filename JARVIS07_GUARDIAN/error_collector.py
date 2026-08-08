@@ -981,12 +981,24 @@ def report_manual_fix(
         try:
             from JARVIS07_GUARDIAN.pattern_fixer import record_pattern_hit
             # actionable 3-state opt-in: True=명시 오류수정 / False=명시 제외 / None=자동(실오류타입+diff)
+            # ★ 재발 지문의 재료는 **실오류 메시지** 다 (2026-08-08).
+            #   지문은 아래에서 `error_message or description` 으로 만들어지는데,
+            #   `description` 은 사람이 쓴 작업 설명이라 **두 번 다시 같은 문자열로
+            #   나타나지 않는다** — 그런 패턴은 태어날 때부터 hit=1 로 죽어 있고,
+            #   밴딧에는 영영 보상이 안 오는 arm 을 하나 늘린다.
+            #   `_MANUAL_POLICY_TYPES` 목록만으로는 못 막는다: 자가검사 타입은 세션마다
+            #   새 이름으로 생긴다(실측 `Observability`·`CopyOfTruth`·`DomainBoundary`·
+            #   `ModelNamePurge` 4종 전부 목록 밖이었다). 목록을 늘리는 대신
+            #   **레코드 자신에게 묻는다** — 재현할 오류 메시지가 있는가(원칙②).
+            #   CLAUDE.md 계약과 동일: "patch + error_message + recurrable=True 를 함께".
+            _has_real_error = bool((error_message or "").strip())
             if recurrable is True:
-                _actionable = bool(patch)
+                _actionable = bool(patch) and _has_real_error
             elif recurrable is False:
                 _actionable = False
             else:
-                _actionable = bool(patch) and error_type not in _MANUAL_POLICY_TYPES
+                _actionable = (bool(patch) and _has_real_error
+                               and error_type not in _MANUAL_POLICY_TYPES)
 
             _learned = False
             if _actionable:

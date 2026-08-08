@@ -528,6 +528,26 @@ def _harness_says_infra(kind: str) -> bool:
         return False
 
 
+def _harness_says_envelope(kind: str) -> bool:
+    """봉투 신호 판별을 **harness 에 위임** (2026-08-08).
+
+    ★ 무엇이 봉투인가 — `abort`(재시도 접음)·`stuck`(워치독 freeze)은 *근본 원인이
+      아니라* harness 가 포기했다는 신고다. 진짜 원인은 같은 보고에 동봉된 다른
+      issue 에 있고, 그것들은 각자 자기 kind 로 따로 보고된다.
+      실측 90일: `abort` 86건·`stuck` 24건 → 자동수리가 만든 **실제 파일 수정 0건**.
+      봉투를 Tier-2 로 보내면 "수정 불가 3건 패턴 반복" 같은 *코드 위치가 아닌 문장* 을
+      LLM 에게 고치라고 시키는 셈이다 — 토큰만 태우고 아무것도 안 고친다.
+      가시성은 유지된다: `ignored` 도 DB 에 남고 격리 버킷 보고에 그대로 뜬다.
+      판별식을 여기 복제하면 그게 곧 사본이므로 **주인에게 묻는다**(`_harness_says_infra` 와 동형).
+    지연 import 이유는 `_harness_infra_kinds()` 와 동일(재진입 창 회피). 실패 시 False.
+    """
+    try:
+        from JARVIS00_INFRA.harness import is_envelope_kind  # noqa: PLC0415 (의도된 지연)
+        return bool(is_envelope_kind(kind))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _env_extra_kinds() -> frozenset:
     """무배포 안전밸브 — `GUARDIAN_EXTRA_NON_CODE_KINDS=a,b` 로 kind 추가(호출 시점 조회).
 
@@ -640,6 +660,11 @@ def is_transient(error_type: str, message: str = "", source: str = "",
     #   말한 것이므로 문구가 뒤집을 수 없다.
     #   ※ kind 가 *비어 있는* 비-harness 경로는 종전대로 5)로 간다.
     #   킬스위치 `GUARDIAN_KIND_OVERRIDE_GUARD=0` → 종전 동작 복귀.
+    #   ※ 단, **봉투 신호**(`abort`·`stuck`)는 예외 — 생산자가 "코드 문제다" 라고 말한
+    #     게 아니라 "포기했다" 고 말한 것이다. 근본 원인은 동봉된 다른 issue 가 각자
+    #     자기 kind 로 따로 보고한다. 실측 90일 실제 파일 수정 **0건**(2026-08-08).
+    if _harness_says_envelope(kind):
+        return True
     if _flag("GUARDIAN_KIND_OVERRIDE_GUARD", True) and (kind or "").strip():
         return False
 
