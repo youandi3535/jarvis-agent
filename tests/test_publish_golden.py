@@ -2996,12 +2996,15 @@ def test_심층감사_실패가_job_runs에_success0로_적힌다():
         from JARVIS04_SCHEDULER.job_history import attach_listeners
         from datetime import datetime, timedelta
         sch = create_scheduler(); attach_listeners(sch); sch.start()
-        # ★ misfire_grace_time 을 명시한다 — APScheduler 기본값은 **1초** 이고
-        #   create_scheduler 는 ProcessPoolExecutor 를 만든다(콜드 러너에서 프로세스
-        #   spawn 이 1초를 쉽게 넘긴다). 느린 CI 에서 잡이 *실행조차 안 되고* misfire 로
-        #   빠지면 `_on_job_missed` 가 success=0 을 적어 **판정 실패처럼 보인다**.
+        # ★ 예약 시각을 **스케줄러의 시간대로** 만든다 (2026-08-08).
+        #   `create_scheduler` 는 timezone="Asia/Seoul" 이고, APScheduler 는 naive
+        #   datetime 을 *스케줄러 tz* 로 해석한다. UTC 러너에서 naive `now()+1s` 를 주면
+        #   그 값이 KST 로 읽혀 **9시간 과거**로 예약된다 → grace 를 아무리 늘려도 misfire.
+        #   내 맥북은 로컬 tz 가 KST 라 우연히 맞아떨어져 늘 초록이었다(TZ=UTC 로 재현).
+        #   tz 문자열을 여기 박지 않고 `sch.timezone` 에서 파생한다 — 기본 tz 가 바뀌어도 따라온다.
+        #   grace 는 콜드 러너의 ProcessPoolExecutor spawn 지연 대비(기본값은 1초다).
         sch.add_job(ga.job_deep_audit, "date", id="j07_deep_audit",
-                    run_date=datetime.now() + timedelta(seconds=1),
+                    run_date=datetime.now(sch.timezone) + timedelta(seconds=1),
                     misfire_grace_time=60)
         # ★ 고정 sleep 대신 **행이 나타날 때까지** 폴링 — 빠른 기계에선 즉시 끝나고
         #   느린 기계에선 충분히 기다린다. 시간에 기대는 단언을 만들지 않는다.
