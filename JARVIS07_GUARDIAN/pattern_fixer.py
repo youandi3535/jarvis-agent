@@ -845,7 +845,13 @@ def _save_learned(data: dict) -> None:
       저장 로직은 `json_store` 단독 소유 — bandit 과 같은 헬퍼를 쓴다(① 단일 진입점).
     """
     from JARVIS07_GUARDIAN.json_store import write_json  # noqa: PLC0415
-    if not write_json(_LEARNED_PATH, data, indent=2):
+    # ★ `backup=True` — 이 파일은 `.gitignore` 대상이라 **git 복구 경로가 없다**
+    #   (2026-06-07 박제: 팀원 빈 상태가 운영 학습을 덮어쓰는 것을 막기 위한 결정).
+    #   그런데 2026-06-08 에 319패턴 → 7패턴, **97.8% 가 소실**된 이력이 있고 그때
+    #   되돌릴 방법이 없었다. `write_json` 은 이미 `.bak` 승격 기능을 갖고 있는데
+    #   **켜져 있지 않았다** — 있는 안전장치를 안 쓰고 있었다.
+    #   .gitignore 결정은 건드리지 않는다(두 박제가 충돌한다). 대신 로컬 복구 경로를 켠다.
+    if not write_json(_LEARNED_PATH, data, indent=2, backup=True):
         log.warning("[GUARDIAN/learned] 저장 실패 — 학습 1회 누락")
 
 
@@ -897,6 +903,59 @@ def mutate_learned():
         _save_learned(data)
 
 
+
+# 런타임에 실제로 난 적 있는 오류 타입 — 캐시(프로세스 지역, TTL).
+_RUNTIME_TYPES: dict = {"at": 0.0, "types": frozenset()}
+_RUNTIME_TYPES_TTL = 600.0
+
+
+def runtime_error_types() -> frozenset:
+    """**런타임에 실제로 발생한** error_type 집합 — DB 에서 파생.
+
+    ★ 왜 필요한가 (2026-08-08 감사 — 재사용 5주+ 0회의 근본 원인 하나)
+      학습 지문 54개 중 **26개(48%)** 의 `error_type` 이 `report_manual_fix` 로 들어온
+      *사람이 붙인 라벨*(`DraftFixerWrongImageDir`·`ParserFormatMismatch` 등)이다.
+      같은 결함이 런타임에 올라올 때 예외 클래스는 `RuntimeError` 라, 정확매칭도
+      부분매칭도 시맨틱 폴백도 **구조적으로 영원히 미스**한다.
+      그 지문들은 매칭 후보를 늘리기만 하고 한 번도 걸리지 않는다.
+
+    ★ 왜 목록을 박지 않는가 (②)
+      "도달 가능한 타입" 은 시간이 지나면 바뀐다 — 오늘 수동 라벨뿐이던 타입이
+      내일 도메인 파생 함수로 실제 발생할 수 있다. 그때 자동으로 후보에 들어와야 한다.
+      `status='manual'` 행은 *오류가 아니라 변경 기록* 이므로 제외한다.
+    """
+    import time as _t
+    now = _t.time()
+    if _RUNTIME_TYPES["types"] and now - _RUNTIME_TYPES["at"] < _RUNTIME_TYPES_TTL:
+        return _RUNTIME_TYPES["types"]
+    try:
+        from shared.db import get_db
+        with get_db() as con:
+            rows = con.execute(
+                "SELECT DISTINCT error_type FROM error_log "
+                "WHERE status <> 'manual' AND error_type IS NOT NULL AND error_type <> ''"
+            ).fetchall()
+        got = frozenset(str(r[0]) for r in rows)
+    except Exception as e:
+        log.warning("[GUARDIAN/learned] 런타임 타입 조회 실패: %s", e)
+        return frozenset()
+    if got:
+        _RUNTIME_TYPES.update(at=now, types=got)
+    return got
+
+
+def unreachable_patterns() -> list:
+    """런타임에 도달할 수 없는 학습 지문 — 관측용(삭제하지 않는다).
+
+    삭제 대신 *매칭에서만* 뺀다. 지문 자체는 "그때 이런 결함이 있었다" 는 기록이고,
+    타입이 나중에 실제로 발생하기 시작하면 자동으로 다시 후보가 된다.
+    """
+    live = runtime_error_types()
+    if not live:
+        return []
+    return [p for p in all_patterns()
+            if str(p.get("error_type") or "") and str(p.get("error_type")) not in live]
+
 def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[dict]:
     """★ 학습된 fingerprint 와 매칭되면 즉시 수정 반환 (LLM 호출 0).
 
@@ -915,10 +974,17 @@ def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[di
 
     data = _load_learned()
     matched = None
+    # ★ 런타임에 난 적 없는 타입의 지문은 후보에서 뺀다 (2026-08-08).
+    #   수기 라벨 지문 26개(48%)가 매칭을 늘리기만 하고 한 번도 걸리지 않았다.
+    #   조회 실패 시 빈 집합 → 아래 가드가 통째로 비활성(종전 동작) — 가용성 우선.
+    _live = runtime_error_types()
     for p in data.get("patterns", []):
         # hit_count 필터 (고빈도 승격 전용 호출 시)
         if int(p.get("hit_count", 0)) < min_hit_count:
             continue
+        _pt = str(p.get("error_type") or "")
+        if _live and _pt and _pt not in _live:
+            continue          # 도달 불가 지문 — 삭제하지 않고 매칭에서만 제외
         # 정확 매칭 (fingerprint 동일) 우선
         if p.get("fingerprint") == fp:
             matched = p

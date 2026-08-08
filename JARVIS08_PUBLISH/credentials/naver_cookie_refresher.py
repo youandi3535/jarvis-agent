@@ -295,8 +295,23 @@ def refresh_naver_cookies(force: bool = False) -> bool:
         time.sleep(random.uniform(0.8, 1.5))
 
         # 로그인 버튼 — pyautogui 클릭
+        # ★ 네이버가 id="log.login" 을 폐기하고 반응형 레이아웃 변형(loginBtn_row/
+        #   loginBtn_column) 둘 중 하나만 display:none 없이 노출한다 (ERRORS 참조:
+        #   NoSuchElementException [log.login]). 둘 다 후보로 두고 실제 보이는 것을 쓴다.
         try:
-            btn = driver.find_element(By.ID, "log.login")
+            btn = None
+            for candidate_id in ("loginBtn_row", "loginBtn_column"):
+                for el in driver.find_elements(By.ID, candidate_id):
+                    if el.is_displayed():
+                        btn = el
+                        break
+                if btn is not None:
+                    break
+            if btn is None:
+                btn = driver.find_element(
+                    By.XPATH,
+                    "//button[contains(@class,'btn_done') and .//span[text()='로그인']]",
+                )
             rect = btn.rect
             _pg.moveTo(bx + rect["x"] + rect["width"]//2, by + rect["y"] + rect["height"]//2, duration=random.uniform(0.3, 0.6))
             time.sleep(0.2)

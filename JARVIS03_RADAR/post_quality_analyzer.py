@@ -675,6 +675,52 @@ def reward_cutoff() -> str:
     return (_dt.datetime.now() - _dt.timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def backfill_item_scores(limit: int = 0) -> dict:
+    """**항목별** 점수만 소급 적재 — LLM 호출 0 (2026-08-07 신설).
+
+    ★ 왜 별도 함수인가 (재현 가능성)
+      2026-08-07 에 230행을 이렇게 채웠는데 그 코드가 *일회성 스크립트* 라 저장소에
+      남지 않았다. 그러면 ① 어떤 규칙으로 채웠는지 검증 불가 ② 채점기가 바뀐 뒤
+      다시 돌릴 방법 없음 ③ 새 환경에서 재현 불가. 일회성으로 DB 를 바꾸지 말 것.
+
+    ★ Section A 를 넣지 않는 이유
+      A(매력도)는 LLM 심사라 **소급 시점에 실측할 방법이 없다**. 0으로 채우면
+      "몰입도가 0이었다" 는 *거짓 기록* 이 학습에 들어간다. 빈 값이 거짓보다 낫다.
+
+    총점(`quality_score`)은 **건드리지 않는다** — 그날의 보상 신호를 사후에 바꾸면
+    학습 이력이 오염된다. 항목이 이미 있는 행도 건드리지 않는다(`rubric_items IS NULL`).
+    """
+    from JARVIS02_WRITER.post_scorer import items_compact, score_post
+
+    q = ("SELECT id, platform, post_type, title, source_keyword, publish_meta, theme, "
+         "       original_html, original_content "
+         "FROM post_analysis WHERE rubric_items IS NULL")
+    if limit:
+        q += f" ORDER BY id DESC LIMIT {int(limit)}"
+    with db.get_db() as con:
+        rows = [dict(r) for r in con.execute(q).fetchall()]
+
+    ok = skipped = failed = 0
+    for r in rows:
+        if not (r.get("original_html") or r.get("original_content")):
+            skipped += 1
+            continue
+        try:
+            from JARVIS02_WRITER.post_scorer import draft_from_row
+            sr = score_post(draft_from_row(r), platform=r.get("platform") or "",
+                            post_type=r.get("post_type") or "")
+            a_keys = set(((sr.get("sections") or {}).get("A") or {}).get("items") or {})
+            items = {k: v for k, v in items_compact(sr).items() if k not in a_keys}
+            if items and db.backfill_rubric_items(int(r["id"]), items):
+                ok += 1
+            else:
+                skipped += 1
+        except Exception as e:
+            failed += 1
+            _g_report("radar", e, module=__name__, func_name="backfill_item_scores")
+    return {"filled": ok, "skipped": skipped, "failed": failed, "candidates": len(rows)}
+
+
 def rescore_unscored(limit: int = 3) -> dict:
     """채점만 실패한 글을 **점수만** 다시 매긴다 (2026-08-04 감사 6위).
 

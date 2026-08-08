@@ -348,6 +348,7 @@ def history(days: int = 30, limit: int = 40, actor: str = "",
     """
     if db_path is None:
         from shared.db import DB_PATH as db_path  # type: ignore
+        from shared.db import TS_CUTOFF as _TS_CUTOFF  # 포맷 주인은 shared.db(①)
     con = sqlite3.connect(str(db_path))
     con.row_factory = sqlite3.Row
     try:
@@ -356,7 +357,7 @@ def history(days: int = 30, limit: int = 40, actor: str = "",
             "       severity, status, resolution, fixed_file, fixed_at, seen_count "
             "FROM error_log "
             "WHERE status IN ('fixed','resolved','manual','wontfix') "
-            "  AND timestamp >= datetime('now', ?, 'localtime') "
+            f"  AND timestamp >= {_TS_CUTOFF} "
             "ORDER BY id DESC LIMIT 4000",
             (f"-{int(days)} days",),
         ).fetchall()]

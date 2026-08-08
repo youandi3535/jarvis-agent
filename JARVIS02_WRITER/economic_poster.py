@@ -205,6 +205,12 @@ load_dotenv()
 BASE_DIR        = Path(__file__).parent
 JARVIS06_BASE   = BASE_DIR.parent / "JARVIS06_IMAGE"               # 이미지 단일 진입점 (CLAUDE.md 규정)
 
+# ★ `sys.executable` 금지 (2026-08-08, ERRORS EvalEnvBroken #5386/#5389) — macOS Framework
+#   Python 재기동 시 venv 밖으로 떨어질 위험. `.venv/bin/python3` 를 경로로 직접 지정
+#   (jarvis_keeper.py·auto_repair.py 와 동일 패턴 — 단일 진실).
+_VENV_PY = BASE_DIR.parent / ".venv" / "bin" / "python3"
+_SUBPROC_PY = str(_VENV_PY) if _VENV_PY.exists() else sys.executable
+
 # ── 플랫폼별 이미지 디렉터리 — JARVIS06_IMAGE/output/ 아래 단일 관리 ────────
 ECONOMIC_IMG_DIR        = JARVIS06_BASE / 'output' / 'images' / 'economic_naver'   # 네이버 전용
 ECONOMIC_IMG_DIR_TISTORY= JARVIS06_BASE / 'output' / 'images' / 'economic_tistory' # 티스토리 전용
@@ -992,7 +998,7 @@ def run(post_naver=True, post_tistory=True, resume=None):
                             else:
                                 print(f"  📋 [{_plat.upper()}] 품질 분석 등록 (id={_aid}) — fallback")
                                 _sp.Popen(
-                                    [sys.executable, str(_ANALYZER_SCRIPT), str(_aid)],
+                                    [_SUBPROC_PY, str(_ANALYZER_SCRIPT), str(_aid)],
                                     cwd=str(_ANALYZER_SCRIPT.parent),
                                 )
                     except Exception as _ex:

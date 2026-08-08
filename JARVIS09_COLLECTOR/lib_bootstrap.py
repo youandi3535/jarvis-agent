@@ -111,11 +111,19 @@ def _pypi_check(pip_name: str) -> tuple[bool, bool]:
 
 
 def _pip_install(pip_name: str) -> bool:
-    """현재 인터프리터의 pip 로 라이브러리 설치. 성공 시 True. (갯수 제한 없음)"""
+    """현재 인터프리터의 pip 로 라이브러리 설치. 성공 시 True. (갯수 제한 없음)
+
+    ★ `sys.executable` 금지 (2026-08-08, ERRORS EvalEnvBroken #5386/#5389) — macOS Framework
+      Python 재기동 시 venv 밖 pip 로 떨어지면 설치해도 *현재 프로세스가 못 찾는* 위치에
+      깔린다. `.venv/bin/python3` 를 경로로 직접 지정 (auto_repair.py 와 동일 패턴).
+    """
+    _root = Path(__file__).resolve().parent.parent
+    _venv_py = _root / ".venv" / "bin" / "python3"
+    _pip_py = str(_venv_py) if _venv_py.exists() else sys.executable
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--quiet", pip_name],
-            cwd=str(Path(__file__).resolve().parent.parent),
+            [_pip_py, "-m", "pip", "install", "--quiet", pip_name],
+            cwd=str(_root),
             env=_pip_env(),
             capture_output=True, text=True, timeout=300,
         )

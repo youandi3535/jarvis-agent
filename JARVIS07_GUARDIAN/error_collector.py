@@ -246,6 +246,15 @@ def _collect_error(
 
     cool_key = _cool_key(source, module, error_type, message)
     if _in_cooldown(cool_key):
+        # ★ 억제는 '없던 일로 하기' 가 아니다 (2026-08-08 감사).
+        #   종전엔 그냥 `return None` — 행도 seen_count 도 없이 완전 소실이었다.
+        #   같은 사고가 몇 번 더 났는지는 신호다(keeper HANG 처럼 정체 시간이 매번 다른
+        #   부류에서 특히). DB dedup 은 seen_count 를 올리는데 쿨다운만 버리고 있었다.
+        try:
+            from shared.db import bump_error_seen
+            bump_error_seen(source or "", module or "", error_type or "", message or "")
+        except Exception as _be:
+            log.debug("[GUARDIAN] 쿨다운 빈도 집계 실패(무시): %s", _be)
         return None
 
     try:
@@ -716,6 +725,42 @@ register_global_hook = install
 
 # ── F. 스모크 테스트 — 캐치 경로가 *실제로* 살아있는지 동작으로 확인 ──────────
 
+
+def _log_scanner_silent() -> Optional[bool]:
+    """로그 스캐너가 **최근에 아무것도 못 잡았는가** — DB·파일 실측에서 파생.
+
+    로그에 애초에 오류가 없으면 수확 0 이 정상이다. 그래서 *감시 대상 로그에 오류
+    흔적이 있는데도* 유입이 0 일 때만 침묵(True)으로 본다. 판정 불가면 None.
+    """
+    import re as _re2
+    import time as _t
+    try:
+        from shared.db import TS_CUTOFF as _TS_CUTOFF, get_db
+        # 관측 창 — '이 정도면 뭔가 잡혔어야 한다' 는 기간. 발행이 하루 4회이므로
+        # 3일이면 12회 발행분 로그가 쌓인다. 리터럴 임계를 판정에 박지 않는다.
+        days = 3
+        with get_db() as con:
+            got = con.execute(
+                "SELECT COUNT(*) FROM error_log WHERE source='log_file' "
+                f"  AND timestamp >= {_TS_CUTOFF}", (f"-{days} day",)
+            ).fetchone()[0]
+        if got:
+            return False                      # 잡고 있다
+        cutoff = _t.time() - days * 86400
+        pat = _re2.compile(r"^Traceback \(most recent call last\)", _re2.M)
+        for d in _discover_log_dirs():
+            for f in Path(d).glob("*.log"):
+                try:
+                    if f.stat().st_mtime < cutoff:
+                        continue
+                    if pat.search(f.read_text(encoding="utf-8", errors="ignore")[-200_000:]):
+                        return True           # 잡을 게 있었는데 0건 = 침묵
+                except Exception:
+                    continue
+        return False                          # 잡을 것이 없었다 — 정상
+    except Exception:
+        return None
+
 def catch_path_effective() -> Optional[bool]:
     """★ 캐치 경로 스모크 — `patch_effective()` 표준 (CLAUDE.md '복사본을 진실로 믿지 말 것').
 
@@ -724,10 +769,12 @@ def catch_path_effective() -> Optional[bool]:
     없었기* 때문이다. 코드 존재는 적용의 증거가 아니다 — 그래서 여기서는 가짜 오류를
     **실제 소비자가 쓰는 경로 그대로** 통과시켜 예외/결과 유무로 판정한다.
 
-    검사하는 두 다리:
+    검사하는 세 다리:
       ① 로그 스캐너: 임시 로그 파일에 진짜 형태의 Traceback 을 쓰고
          `_LogFileHandler._scan_file`(실 소비자) 로 스캔 → catch() 까지 도달하는가
       ② 쿨다운: harness 형식 메시지의 attempt 만 바꿔 두 번 호출 → 2회차가 막히는가
+      ③ **실수확**: 감시 로그에 Traceback 이 있는데도 최근 유입이 0 인가
+         (①②는 합성 입력이라 실 로그를 못 봐도 통과한다 — 71일 침묵이 그렇게 숨었다)
 
     ★ 합성 입력에는 `__smoke__` 표식이 박혀 있어 DB·이벤트·통계를 오염시키지 않는다.
 
@@ -780,15 +827,22 @@ def catch_path_effective() -> Optional[bool]:
         k2 = _cool_key("smoke", "probe", "RuntimeError", h2)
         cooldown_ok = (k1 == k2)          # attempt 가 정규화되어 같은 키여야 한다
 
-        ok = bool(scanner_ok and cooldown_ok)
+        # ── ③ 실수확 다리 (2026-08-08 추가) ──────────────────────────
+        #   ①②는 *임시 파일*·*합성 입력* 으로 도는 프로브라, 실제 로그가 감시 밖에 있어도
+        #   True 를 낸다 — 실측 71일 침묵(2026-05-15~07-25) 때도 통과했을 것이다.
+        #   "장치가 살아 있다" 와 "장치가 뭔가 잡고 있다" 는 다른 질문이고, 둘 다 물어야 한다.
+        silent = _log_scanner_silent()
+        harvest_ok = (silent is not True)     # None(판정 불가)은 통과로 본다
+        ok = bool(scanner_ok and cooldown_ok and harvest_ok)
         if not ok:
             log.error(
                 f"[GUARDIAN] ★ 캐치 경로 스모크 실패 — "
                 f"로그스캐너={'OK' if scanner_ok else '무력'} / "
-                f"쿨다운={'OK' if cooldown_ok else '무력'}"
+                f"쿨다운={'OK' if cooldown_ok else '무력'} / "
+                f"실수확={'OK' if harvest_ok else '침묵(잡을 게 있는데 0건)'}"
             )
         else:
-            log.info("[GUARDIAN] 캐치 경로 스모크 통과 — 로그스캐너 ✅ 쿨다운 ✅")
+            log.info("[GUARDIAN] 캐치 경로 스모크 통과 — 로그스캐너 ✅ 쿨다운 ✅ 실수확 ✅")
         return ok
     except Exception as e:
         log.warning(f"[GUARDIAN] 캐치 경로 스모크 판정 불가: {e}")

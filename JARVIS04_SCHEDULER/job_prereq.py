@@ -172,7 +172,49 @@ def effective_grace(job_id: str) -> int:
     from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
     deps = [int(d.get("misfire_grace_time", 600) or 600)
             for d in DEFAULT_JOBS if job_id in (d.get("requires") or [])]
-    return max([own] + deps)
+    return max([own, _period_floor(j)] + deps)
+
+
+def _period_floor(job: Optional[dict]) -> int:
+    """주기가 긴 잡의 **유예 하한** — 주기에서 파생한다 (2026-08-08).
+
+    ★ 왜 필요한가 (실측)
+      주 1회 잡 9개가 전부 `misfire_grace_time` 1~2시간이었다. 이 시스템은 **개인
+      노트북** 에서 돌고 새벽엔 자주 자 있다. 실측 2026-08-02(일) 02~06시 잡 **0건** —
+      그 사이 04:00 의 `train_weights`·`auditor_weekly`, 02:30 의 `j07_vector_backfill`
+      이 통째로 유실됐고, 주 1회라 **다음 기회가 일주일 뒤** 였다.
+      그 셋의 마지막 실행이 **2026-07-26** 인 이유가 이것이다(13일 정지).
+
+    ★ 발행 잡에는 적용하지 않는다
+      발행은 *시각이 계약* 이라 늦게 나가면 안 된다(정책 A — 놓친 슬롯 재발행 금지).
+      반면 학습·정비 잡은 **멱등** 이라 몇 시간 늦게 돌아도 결과가 같다.
+      판정은 이미 있는 `is_publish_callback` 하나로 한다(원칙① — 사본 금지).
+
+    하한 = 주기의 1/4. "관대하되 무한정은 아니다" — 주 1회면 약 42시간,
+    그 안에 한 번도 안 깨어 있었다면 그 회차는 포기하는 게 맞다.
+    """
+    if not job:
+        return 0
+    try:
+        from JARVIS04_SCHEDULER.job_llm_priority import is_publish_callback
+        if is_publish_callback(job.get("callback")):
+            return 0                      # 발행은 시각이 계약 — 유예를 늘리지 않는다
+    except Exception:
+        return 0                          # 판정 불가면 늘리지 않는다(보수적)
+
+    kw = job.get("kwargs") or {}
+    trig = job.get("trigger")
+    if trig == "interval":
+        period = (int(kw.get("seconds") or 0) + int(kw.get("minutes") or 0) * 60
+                  + int(kw.get("hours") or 0) * 3600 + int(kw.get("days") or 0) * 86400)
+    elif trig == "cron":
+        dow = kw.get("day_of_week")
+        # 요일 지정 = 주 1회(복수 요일이면 그만큼 잦다) · 없으면 매일
+        n = len([x for x in str(dow).split(",") if x.strip()]) if dow else 0
+        period = (7 * 86400 // max(1, n)) if n else 86400
+    else:
+        return 0
+    return max(0, period // 4)
 
 
 # ── ⑤ 선행이 쓸 수 있는 시간 — 후행 실행 시각에서 파생 ──────────────────

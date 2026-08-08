@@ -375,12 +375,21 @@ def prepublish_quality_issues(draft, post_type: str = "", platform: str = "",
             #   차단은 여전히 안 한다(08-04 과잉차단 교훈) — *신호만* 남긴다.
             try:
                 from JARVIS07_GUARDIAN.quality_learner import record_directive_violations
-                _n = record_directive_violations(post_type or "all", platform or "",
-                                                 theme or "", _violated)
+                _n = record_directive_violations(post_type or "all", platform or "", _violated)
                 if _n:
                     log.info(f"[prepublish_gate] 지침 위반 {_n}건 학습 반영")
             except Exception as _ve:
+                # ★ 삼키지 않는다 (2026-08-08). 종전엔 `log.warning` 한 줄이라,
+                #   여기 있던 `theme` NameError 가 **매 발행마다** 조용히 터지는데도
+                #   아무도 몰랐다(로그를 읽는 사람이 없다). 오류는 학습 입력이다 —
+                #   GUARDIAN 으로 보내야 잡히고 고쳐지고 자산이 된다.
                 log.warning(f"[prepublish_gate] 지침 위반 기록 실패: {_ve}")
+                try:
+                    from JARVIS07_GUARDIAN.error_collector import report as _rep
+                    _rep("writer", _ve, module=__name__,
+                         func_name="prepublish_quality_issues")
+                except Exception:
+                    pass
 
     return out
 

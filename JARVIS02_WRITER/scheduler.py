@@ -43,7 +43,12 @@ THEME_FILE    = BASE_DIR / 'theme_list.txt'
 PROGRESS_FILE = BASE_DIR / 'scheduler_progress.json'
 LOG_FILE      = BASE_DIR / 'logs' / 'scheduler.log'
 LOCK_FILE     = BASE_DIR / '.posting.lock'
-PYTHON        = sys.executable
+# ★ `sys.executable` 금지 (2026-08-08, ERRORS EvalEnvBroken #5386/#5389) — macOS Framework
+#   Python 이 GUI 관련 import 로 자기 자신을 재기동하면 `sys.executable` 이 venv 밖
+#   바이너리를 가리킬 위험. `.venv/bin/python3` 를 경로로 직접 지정 (jarvis_keeper.py·
+#   JARVIS01_MASTER/dispatchers.py·auto_repair.py 와 동일 패턴 — 단일 진실).
+_VENV_PYTHON  = BASE_DIR.parent / ".venv" / "bin" / "python3"
+PYTHON        = str(_VENV_PYTHON) if _VENV_PYTHON.exists() else sys.executable
 
 sys.path.insert(0, str(BASE_DIR.parent))  # shared/ 접근
 

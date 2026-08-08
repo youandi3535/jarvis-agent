@@ -100,6 +100,41 @@ def _iter_py(extra_exclude: tuple[str, ...] = (), root: Path = ROOT) -> Iterable
 _FILE_CACHE: dict[str, str | None] = {}
 
 
+
+def _blank_string_literals(text: str) -> str:
+    """문자열 리터럴 *내용* 을 지운다 — 줄 수·줄번호는 그대로 보존.
+
+    ★ 왜 필요한가 (2026-08-08)
+      이 검사기는 대부분 글자 찾기라 **주석·문자열 안의 문장을 코드로 착각** 한다
+      (README 가 스스로 밝힌 약점). 실제로 `tests/` 의 E2E 프로브가
+      `sch.add_job(...)` 을 *subprocess 로 넘길 문자열* 안에 담고 있었는데
+      `schedule/add_job` 이 그걸 코드로 보고 커밋을 막았다.
+      우회(`--no-verify`)하지 않고 **규칙을 고친다** — README 가 지시한 방향이다.
+
+    토큰 단위로 처리하므로 따옴표 종류·삼중따옴표·f-string 을 가리지 않는다.
+    실패 시 원문을 그대로 돌려준다(검사가 파일 하나 때문에 죽지 않게).
+    """
+    import io
+    import tokenize
+    try:
+        lines = text.splitlines(keepends=True)
+        out = list(lines)
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type != tokenize.STRING:
+                continue
+            (sr, sc), (er, ec) = tok.start, tok.end
+            for ln in range(sr, er + 1):
+                idx = ln - 1
+                if idx >= len(out):
+                    break
+                cur = out[idx].rstrip("\n")
+                a = sc if ln == sr else 0
+                b = ec if ln == er else len(cur)
+                out[idx] = (cur[:a] + " " * max(0, b - a) + cur[b:]) + "\n"
+        return "".join(out)
+    except Exception:
+        return text
+
 def _read_py(p: Path) -> str | None:
     """파일 내용 반환 (읽기 실패 시 None). 프로세스 수명 동안 캐시."""
     key = str(p)
@@ -336,6 +371,9 @@ def check_schedule(report: Report) -> None:
         text = _read_py(p)
         if text is None:
             continue
+        # ★ 문자열 리터럴 안의 코드 조각은 *실행되는 코드가 아니다* (2026-08-08).
+        #   E2E 테스트가 subprocess 로 넘길 프로브를 문자열에 담으면 여기 걸렸다.
+        text = _blank_string_literals(text)
         for i, line in enumerate(text.splitlines(), 1):
             ls = line.strip()
             if ls.startswith("#"):

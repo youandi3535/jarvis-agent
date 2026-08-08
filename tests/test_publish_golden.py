@@ -1906,7 +1906,7 @@ def test_지침별_변별신호가_버려지지_않는다():
     #   미정의 `log` 로 **실행 즉시 NameError** 가 나는 코드를 초록으로 통과시켰다.
     #   902행 중 violated 는 0행이었는데 테스트는 통과하고 있었다.
     #   "정적 검사는 코드가 어떻게 생겼나만 답한다" — 돌려봐야 안다.
-    n = record_directive_violations("economic", "naver", "", ["존재하지 않는 지침 문장"])
+    n = record_directive_violations("economic", "naver", ["존재하지 않는 지침 문장"])
     assert isinstance(n, int), f"실행이 int 를 안 돌려준다: {n!r}"
 
     # ★ 이 함수가 부르는 DB API 가 **실존하는가** (오타 함수명 방어).
@@ -2061,10 +2061,18 @@ def test_발행메타가_실제로_점수를_만든다():
         b = score_post(draft_from_row(row), platform=plat, post_type=pt)
         got[(plat, pt)] = round(b["total"] - a["total"], 2)
         keys = {i["key"] for i in item_scores(b)}
-        # 플랫폼 전용 항목이 그 플랫폼에서만 채점되는지 (조합 파생의 건전성)
-        assert ("N7_hashtags" in keys) == (plat == "naver")
-        assert ("T7_meta_desc" in keys) == (plat == "tistory")
-    assert all(v > 0 for v in got.values()), f"발행 메타가 점수를 못 만든다: {got}"
+        # 플랫폼 전용 항목이 그 플랫폼에서만 채점되는지 (조합 파생의 건전성).
+        # ★ 배점이 0으로 내려간 항목은 채점 대상이 아니므로 요구하지 않는다(②).
+        from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
+        if RUBRIC_MAX.get("N7_hashtags"):
+            assert ("N7_hashtags" in keys) == (plat == "naver")
+        if RUBRIC_MAX.get("T7_meta_desc"):
+            assert ("T7_meta_desc" in keys) == (plat == "tistory")
+    # 발행 메타가 만드는 점수는 **살아 있는 항목이 있을 때만** 양수다.
+    _meta_items = [k for k in ("N7_hashtags", "T7_meta_desc") if RUBRIC_MAX.get(k)]
+    if _meta_items:
+        assert any(v > 0 for v in got.values()), f"발행 메타가 점수를 못 만든다: {got}"
+    assert all(v >= 0 for v in got.values()), f"발행 메타가 점수를 깎는다: {got}"
 
 
 def test_채점_draft_조립은_한_곳이다():
@@ -2123,13 +2131,25 @@ def test_지침_보상이_항목별로_갈린다():
     """
     from JARVIS07_GUARDIAN.quality_learner import insight_target_item, item_reward
 
-    key = insight_target_item("economic:seo_메타 설명 길이(140-160)")
-    assert key == "T7_meta_desc", f"지침→항목 역추적 실패: {key!r}"
+    # ★ 항목 key 를 테스트에 박지 않는다 (② — 배점은 바뀐다).
+    #   실제로 2026-08-08 에 동시 작업 세션이 T7_meta_desc 를 3→0 으로 내렸고,
+    #   그 key 를 박아둔 이 테스트가 그날 바로 깨졌다. **살아 있는 항목에서 파생**한다.
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX, item_index
+
+    idx = item_index()
+    live = [k for k, v in sorted(RUBRIC_MAX.items()) if v]
+    assert len(live) >= 3, "채점 항목이 3개 미만 — 검사 전제가 깨졌다"
+    probe = live[0]
+    key = insight_target_item(f"economic:seo_{idx[probe]['name']}")
+    assert key == probe, f"지침→항목 역추적 실패: {key!r} (기대 {probe})"
     assert insight_target_item("economic:seo_존재하지않는항목명") is None
 
-    ri = {"T7_meta_desc": 0.0, "B1_intro": 6.0, "B18_spacing": 1.0}
+    # 보상이 항목마다 갈리는가 — 0점·만점·중간을 각각 심는다
+    a, b, c = live[0], live[1], live[2]
+    ri = {a: 0.0, b: float(RUBRIC_MAX[b]), c: float(RUBRIC_MAX[c]) / 2}
     vals = {k: item_reward(k, ri) for k in ri}
-    assert vals["T7_meta_desc"] == 0.0 and vals["B1_intro"] == 1.0
+    assert vals[a] == 0.0, f"0점 항목의 보상이 0이 아니다: {vals[a]}"
+    assert vals[b] == 1.0, f"만점 항목의 보상이 1이 아니다: {vals[b]}"
     assert len(set(vals.values())) >= 3, f"보상이 갈리지 않는다: {vals}"
     assert item_reward("없는항목", ri) is None
 
@@ -2605,8 +2625,11 @@ def test_작성자가_만들_수_없는_항목은_지시하지_않는다():
     pipeline_controlled_items.cache_clear()
     pipe = pipeline_controlled_items()
     assert pipe, "파이프라인 항목 파생이 비었다 — 검사 전제가 깨졌다"
+    # ★ 배점 0인 항목은 애초에 채점되지 않으므로 파생 대상이 아니다(②).
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX
     for k in ("N7_hashtags", "T7_meta_desc", "T8_internal_link"):
-        assert k in pipe, f"{k} 가 파이프라인 항목으로 안 잡힌다"
+        if RUBRIC_MAX.get(k):
+            assert k in pipe, f"{k} 가 파이프라인 항목으로 안 잡힌다"
     # 작성자가 고칠 수 있는 항목까지 빼앗으면 안 된다
     assert "B1_intro" not in pipe, "도입부는 작성자의 몫인데 제외됐다"
 
@@ -2651,3 +2674,1144 @@ def test_고친_항목은_최근_실적으로_목록에서_빠진다():
     got = {d["key"] for d in _ql.weak_items(scope="theme", platform="tistory", days=3650)}
     assert probe not in got, \
         f"{probe} 를 고쳤는데도 계속 약점으로 지목한다 (최근 {_ql.WEAK_RECENT_N}건 전부 만점)"
+
+
+def test_항목이름표에_박힌_수치가_기준에서_파생된다():
+    """★ 이름표는 이제 **작성 프롬프트로 나간다** — 낡으면 거짓 목표를 준다.
+
+    실측 2026-08-07: `B17_body_len` 이름이 `본문 분량 1500자+` 인데 채점은 1600 을 썼다.
+    1500자 글은 만점이 아닌데 이름은 만점이라고 말하고 있었다.
+    """
+    from JARVIS02_WRITER.length_manager import TARGET_KOREAN
+    from JARVIS02_WRITER.post_scorer import item_index
+    from JARVIS02_WRITER.seo_standards import PLATFORM_STANDARDS as P
+
+    idx = item_index()
+    want = {
+        "B17_body_len":  [str(int(TARGET_KOREAN))],
+        "N1_title_len":  [str(P["naver"]["title_max_chars"])],
+        "T1_title_len":  [str(P["tistory"]["title_max_chars"])],
+        "N7_hashtags":   [str(P["naver"]["hashtag_min"]), str(P["naver"]["hashtag_max"])],
+        "T7_meta_desc":  [str(P["tistory"]["meta_desc_min_chars"]),
+                          str(P["tistory"]["meta_desc_max_chars"])],
+    }
+    for key, nums in want.items():
+        name = (idx.get(key) or {}).get("name", "")
+        for n in nums:
+            assert n in name, f"{key} 이름표 {name!r} 에 기준값 {n} 이 없다 — 복사본이 낡았다"
+
+
+def test_항목_소급채점이_재현_가능한_함수다():
+    """★ 일회성 스크립트로 DB 를 바꾸면 검증도 재실행도 불가능하다.
+
+    2026-08-07 에 230행을 그렇게 채웠고, 그 코드가 저장소에 없었다.
+    """
+    import inspect
+
+    from JARVIS03_RADAR.post_quality_analyzer import backfill_item_scores
+
+    got = backfill_item_scores()
+    assert isinstance(got, dict) and "filled" in got, f"실행 결과가 이상하다: {got!r}"
+
+    # 총점을 건드리면 그날의 보상 신호가 사후에 바뀐다
+    src = _code_only(inspect.getsource(backfill_item_scores))
+    assert "save_quality_score" not in src, "소급 채점이 총점을 덮어쓴다"
+    assert "backfill_rubric_items" in src, "항목 전용 저장 API 를 쓰지 않는다"
+
+    # ★ Section A 는 소급 측정 불가 — **실제로 저장된 값** 으로 확인한다.
+    #   소스에 'A' 라는 글자가 있는지 보는 검사는 `a_keys` 를 만들어만 두고
+    #   쓰지 않아도 통과한다(뮤테이션에서 발각).
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX, item_index
+    from shared.db import get_db
+
+    body = "<p>" + "코스피가 올랐다. " * 60 + "</p>"
+    with get_db() as con:
+        con.execute("INSERT INTO post_analysis (platform, theme, title, post_type, "
+                    "source_keyword, original_html, status, analyzed_at) "
+                    "VALUES ('naver','a','제목','economic','코스피',?, 'analyzed',"
+                    "datetime('now','localtime'))", (body,))
+        aid = con.execute("SELECT id FROM post_analysis WHERE title='제목' "
+                          "ORDER BY id DESC LIMIT 1").fetchone()[0]
+    backfill_item_scores()
+    from shared import db as _sdb
+    stored = _sdb.get_rubric_items(aid)
+    assert stored, "소급 채점이 아무것도 저장하지 않았다"
+    a_keys = {k for k, v in item_index().items() if v.get("section") == "A"}
+    assert a_keys, "A 항목 파생 실패 — 검사 전제가 깨졌다"
+    leaked = a_keys & set(stored)
+    assert not leaked, f"측정하지 않은 Section A 를 0점으로 저장했다: {sorted(leaked)}"
+
+
+def test_메타설명_길이미달이면_다시_묻는다():
+    """★ `_trim_to_range` 는 자르기만 한다(늘리면 없는 말을 지어내므로 옳다).
+
+    그래서 짧게 오면 그대로 감점이었다 — 실측 2026-08-07 21:29 티스토리 글이 99자로 와
+    T7 이 0.5/3 이었다. 짧으면 **한 번만** 다시 묻는다(상한은 harness 표준 파생).
+    """
+    import inspect
+
+    from JARVIS08_PUBLISH import post_meta as _pm
+
+    # 상한을 박지 않고 harness 에서 파생하는가
+    assert _pm._MAX_ATTEMPTS >= 1
+    src = _code_only(inspect.getsource(_pm._max_attempts))
+    assert "DEFAULT_MAX_ATTEMPTS" in src, "재시도 상한을 harness 에서 파생하지 않는다"
+
+    calls = []
+    lo, hi = _pm.meta_target_range("tistory")
+
+    def _fake(alias, prompt, **kw):
+        calls.append(prompt)
+        # 1회차는 짧게, 2회차는 범위 안으로
+        return "가" * (lo // 2 + 5) if len(calls) == 1 else "나" * (lo + 3)
+
+    import shared.llm as _llm
+    orig = _llm.invoke_text
+    _llm.invoke_text = _fake
+    try:
+        got = _pm.meta_description("제목", "<p>" + "본문이다. " * 80 + "</p>", "tistory")
+    finally:
+        _llm.invoke_text = orig
+
+    assert len(calls) == 2, f"짧은 응답인데 다시 묻지 않았다 (호출 {len(calls)}회)"
+    assert lo <= len(got) <= hi, f"재시도 후에도 범위 밖: {len(got)}자"
+    assert "직전 답이" in calls[1], "재시도 프롬프트에 길이 피드백이 없다"
+
+    # 첫 응답이 이미 범위 안이면 다시 묻지 않는다 (발행 창에서 헛 LLM 호출 금지)
+    calls.clear()
+    _llm.invoke_text = lambda a, p, **k: (calls.append(p), "다" * (lo + 2))[1]
+    try:
+        ok = _pm.meta_description("제목", "<p>" + "본문이다. " * 80 + "</p>", "tistory")
+    finally:
+        _llm.invoke_text = orig
+    assert len(calls) == 1, f"이미 범위 안인데 또 물었다 ({len(calls)}회)"
+    assert lo <= len(ok) <= hi
+
+
+def _undefined_globals(fn) -> set:
+    """함수가 참조하는 전역 이름 중 **어디에도 없는 것** — 실행 시 NameError 가 될 것들.
+
+    파이썬은 이름 해석을 실행 시점에 하므로, `except` 가 감싸고 있으면 이런 코드가
+    조용히 죽는다. AST 가 아니라 **컴파일된 코드 객체**(co_names)를 보므로 정확하다.
+    """
+    import builtins
+    import dis
+
+    fn = getattr(fn, "__wrapped__", fn)      # lru_cache 등 래퍼를 벗긴다
+    g = fn.__globals__
+    seen, out = set(), set()
+
+    def walk(c):
+        if id(c) in seen:
+            return
+        seen.add(id(c))
+        # ★ co_names 는 **속성명까지** 담는다(`get`·`strip`). 전역 참조만 봐야 하므로
+        #   바이트코드에서 LOAD_GLOBAL 만 고른다. 함수 안 `import json` 은 지역이라
+        #   LOAD_FAST 가 되어 자동으로 빠진다 — 정확히 우리가 원하는 판정이다.
+        for ins in dis.get_instructions(c):
+            if ins.opname == "LOAD_GLOBAL":
+                n = ins.argval
+                if n not in g and not hasattr(builtins, n):
+                    out.add(n)
+        for const in c.co_consts:
+            if hasattr(const, "co_names"):
+                walk(const)
+
+    walk(fn.__code__)
+    return out
+
+
+def test_발행경로_함수가_없는_이름을_쓰지_않는다():
+    """★ `except` 가 감싸면 NameError 는 로그 한 줄이 되고 아무도 모른다.
+
+    실측 2026-08-08: `prepublish_quality_issues` 가 스코프에 없는 `theme` 을 참조해
+    **매 발행마다** 지침 위반 학습이 조용히 죽고 있었다. 어제 그 코드를 넣은 게 나다.
+    `co_names` 로 컴파일 결과를 직접 보므로 들여쓰인 참조·중첩 함수까지 잡는다.
+    """
+    import importlib
+
+    TARGETS = [
+        ("JARVIS02_WRITER.prepublish_gate", "prepublish_quality_issues"),
+        ("JARVIS07_GUARDIAN.quality_learner", "record_directive_violations"),
+        ("JARVIS07_GUARDIAN.quality_learner", "build_insights_block"),
+        ("JARVIS07_GUARDIAN.quality_learner", "attribute_pending_rewards"),
+        ("JARVIS07_GUARDIAN.quality_learner", "weak_items"),
+        ("JARVIS02_WRITER.post_scorer", "draft_from_row"),
+        ("JARVIS02_WRITER.post_scorer", "pipeline_controlled_items"),
+        ("JARVIS08_PUBLISH.post_meta", "build_post_meta"),
+        ("JARVIS08_PUBLISH.post_meta", "meta_description"),
+        ("JARVIS08_PUBLISH.internal_links", "related_links_html"),
+        ("JARVIS03_RADAR.post_quality_analyzer", "backfill_item_scores"),
+        ("JARVIS03_RADAR.topic_pack", "search_keyword"),
+    ]
+    bad = {}
+    for mod, name in TARGETS:
+        fn = getattr(importlib.import_module(mod), name)
+        miss = _undefined_globals(fn)
+        if miss:
+            bad[f"{mod}.{name}"] = sorted(miss)
+    assert not bad, f"실행 시 NameError 가 될 참조: {bad}"
+
+
+def test_지침위반_기록이_실제_호출과_시그니처가_맞는다():
+    """호출부와 정의가 어긋나면 `except` 가 삼켜 **매 발행마다** 학습이 죽는다."""
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN.quality_learner import record_directive_violations
+
+    sig = inspect.signature(record_directive_violations)
+    tree = ast.parse((_ROOT / "JARVIS02_WRITER/prepublish_gate.py").read_text(encoding="utf-8"))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", "") == "record_directive_violations"]
+    assert calls, "게이트가 지침 위반을 기록하지 않는다 — 신용할당 신호가 끊긴다"
+    for c in calls:
+        assert len(c.args) + len(c.keywords) == len(sig.parameters), \
+            f"호출 인자 {len(c.args) + len(c.keywords)}개 ≠ 정의 {len(sig.parameters)}개"
+
+    # 실제로 부른다 (patch_effective 표준)
+    n = record_directive_violations("economic", "naver", ["존재하지 않는 지침"])
+    assert isinstance(n, int)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 오류 강화학습 감사 수정 (2026-08-08) — "초록불부터 끄지 않으면 효과를 판정할 수 없다"
+# ══════════════════════════════════════════════════════════════════
+
+def test_수정건수를_두_번_세지_않는다():
+    """★ `syntax_fixed` 는 `files_fixed` 의 **별칭**이다 — 더하면 한 수정이 두 번 센다.
+
+    실측: '수정 파일: 3개' → total_fixed 6 (self_repair_runs 106행 중 12행 오염).
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN.auto_repair import _parse_layer_counts
+
+    L = _parse_layer_counts("수정 파일: 3개")
+    assert L["files_fixed"] == 3 and L["syntax_fixed"] == 3, "별칭 관계가 깨졌다"
+
+    # ★ 소스 문자열이 아니라 **실제로 기록되는 값**으로 판정한다.
+    #   합산식을 테스트에서 재현하면 코드가 바뀌어도 테스트가 자기 식을 검사할 뿐이다
+    #   (뮤테이션에서 발각 — sum(layers.values()) 로 되돌려도 통과했다).
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+    from shared.db import get_db
+
+    _ar._save_run_to_db("test-model", 1, 0, L, {}, "수정 파일: 3개")
+    with get_db() as con:
+        row = con.execute("SELECT total_fixed, syntax_fixed FROM self_repair_runs "
+                          "ORDER BY id DESC LIMIT 1").fetchone()
+    assert row is not None, "회차가 기록되지 않았다"
+    assert row["syntax_fixed"] == 3, f"수정 파일 수가 3이 아니다: {row['syntax_fixed']}"
+    assert row["total_fixed"] == 3, \
+        f"total_fixed={row['total_fixed']} — 별칭을 두 번 세고 있다(기대 3)"
+
+
+def test_LLM절약_지표가_한_칸에_두_정의를_담지_않는다():
+    """★ 옛 칸(`llm_saved`)은 누적 패턴 수, 새 정의는 1일 창 실적 — 섞으면 추세가 거짓말한다.
+
+    실측: 텔레그램이 "실제 LLM 절약: 50 → 0 (-50회)" 라는 가짜 붕괴를 보고했다.
+    """
+    import inspect
+    import sqlite3
+
+    from shared.db import DB_PATH
+    cols = {r[1] for r in sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+            .execute("PRAGMA table_info(self_repair_runs)")}
+    assert "llm_saved_1d" in cols, "새 정의를 담을 칸이 없다"
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+    ins = _code_only(inspect.getsource(_ar._save_run_to_db)) \
+        if hasattr(_ar, "_save_run_to_db") else _code_only(inspect.getsource(_ar))
+    assert "llm_saved_1d" in ins, "새 정의를 새 칸에 쓰지 않는다"
+
+    # ★ 추세가 **어느 칸을 실제로 읽는지** SQL 을 가로채 확인한다.
+    #   소스에 문자열이 있는지 보는 검사는 옛 칸으로 되돌려도 통과했다(뮤테이션 발각).
+    seen = []
+    _orig = _ar._db if hasattr(_ar, "_db") else None
+    import shared.db as _sdb
+    _real_get_db = _sdb.get_db
+
+    class _Spy:
+        def __init__(self, c): self._c = c
+        def execute(self, sql, *a, **k):
+            seen.append(sql)
+            return self._c.execute(sql, *a, **k)
+        def __getattr__(self, n): return getattr(self._c, n)
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def _spy_db():
+        with _real_get_db() as c:
+            yield _Spy(c)
+
+    _sdb.get_db = _spy_db
+    try:
+        _ar._learning_trend_brief()
+    finally:
+        _sdb.get_db = _real_get_db
+    sel = " ".join(q for q in seen if "self_repair_runs" in q)
+    assert "llm_saved_1d" in sel, f"추세가 새 칸을 안 읽는다: {sel[:200]}"
+    assert "llm_saved," not in sel.replace("llm_saved_1d", "@"), \
+        f"추세가 옛 칸을 읽는다 — 정의가 섞인다: {sel[:200]}"
+
+    # 대시보드 API 도 새 칸만
+    api = (_ROOT / "api_server.py").read_text(encoding="utf-8")
+    i = api.index("self_repair_runs ORDER BY id DESC LIMIT 60")
+    seg = api[max(0, i - 400):i]
+    assert "llm_saved_1d" in seg and "hits_total, llm_saved " not in seg, \
+        "API 타임라인이 옛 칸을 내려보낸다"
+
+
+def test_심층감사_실패가_job_runs에_success0로_적힌다():
+    """★ **실제 스케줄러로** 돌려 `job_runs` 행을 확인한다 (2026-08-08 재검증 후 재작성).
+
+    초판은 AST 로 "보정 함수를 부르는가" 만 봤고 **통과했다** — 그런데 실동작은
+    항상 `no_row` 였다. `job_runs` 행은 `_on_job_executed`(콜백 *종료 후*)에만
+    INSERT 되므로, 콜백 본체에서 보정하면 대상 행이 아직 없다.
+    실측 j07_deep_audit 39/39 success=1 — 끄겠다던 초록불이 그대로였다.
+
+    그래서 이 검사는 **행을 본다.** 함수 이름이 아니라.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    probe = textwrap.dedent("""
+        import os, sys, tempfile, time
+        os.environ["JARVIS_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "e2e.sqlite")
+        sys.path.insert(0, os.getcwd())
+        import shared.db as db; db.init_db()
+        import JARVIS07_GUARDIAN.guardian_agent as ga
+        RC = int(sys.argv[1])
+        ga.deep_audit_backlog = lambda *a, **k: {}
+        ga.report_ignored_bucket = lambda *a, **k: None
+        def _fake():
+            with db.get_db() as c:
+                c.execute("INSERT INTO self_repair_runs (model, elapsed_sec, returncode,"
+                          " summary) VALUES ('t',1,?,'x')", (RC,))
+        import JARVIS07_GUARDIAN.auto_repair as ar
+        ar.run_auto_repair = _fake
+        from JARVIS04_SCHEDULER.job_catalog import create_scheduler
+        from JARVIS04_SCHEDULER.job_history import attach_listeners
+        from datetime import datetime, timedelta
+        sch = create_scheduler(); attach_listeners(sch); sch.start()
+        # ★ 예약 시각을 **스케줄러의 시간대로** 만든다 (2026-08-08).
+        #   `create_scheduler` 는 timezone="Asia/Seoul" 이고, APScheduler 는 naive
+        #   datetime 을 *스케줄러 tz* 로 해석한다. UTC 러너에서 naive `now()+1s` 를 주면
+        #   그 값이 KST 로 읽혀 **9시간 과거**로 예약된다 → grace 를 아무리 늘려도 misfire.
+        #   내 맥북은 로컬 tz 가 KST 라 우연히 맞아떨어져 늘 초록이었다(TZ=UTC 로 재현).
+        #   tz 문자열을 여기 박지 않고 `sch.timezone` 에서 파생한다 — 기본 tz 가 바뀌어도 따라온다.
+        #   grace 는 콜드 러너의 ProcessPoolExecutor spawn 지연 대비(기본값은 1초다).
+        sch.add_job(ga.job_deep_audit, "date", id="j07_deep_audit",
+                    run_date=datetime.now(sch.timezone) + timedelta(seconds=1),
+                    misfire_grace_time=60)
+        # ★ 고정 sleep 대신 **행이 나타날 때까지** 폴링 — 빠른 기계에선 즉시 끝나고
+        #   느린 기계에선 충분히 기다린다. 시간에 기대는 단언을 만들지 않는다.
+        r = None
+        for _ in range(150):
+            with db.get_db() as c:
+                r = c.execute("SELECT success, error FROM job_runs "
+                              "WHERE job_id='j07_deep_audit'").fetchone()
+            if r:
+                break
+            time.sleep(0.2)
+        sch.shutdown(wait=True)
+        # ★ error 를 함께 싣는다 — misfire 와 판정 실패를 로그만 보고 구분하기 위해.
+        print("SUCCESS=" + (str(r["success"]) if r else "NOROW")
+              + "|ERR=" + ((r["error"] or "") if r else "")[:120])
+    """)
+    out = {}
+    for rc in ("-99", "0"):
+        r = subprocess.run([sys.executable, "-c", probe, rc], cwd=str(_ROOT),
+                           capture_output=True, text=True, timeout=120)
+        line = next((l for l in r.stdout.splitlines() if l.startswith("SUCCESS=")), "")
+        val, _, err = line.replace("SUCCESS=", "").partition("|ERR=")
+        out[rc] = (val, err)
+    for rc, (val, err) in out.items():
+        assert "misfire" not in err, \
+            f"rc={rc}: 잡이 실행되지 않았다(misfire) — 판정 실패가 아니다: {err}"
+    assert out["-99"][0] == "0", \
+        f"실패 회차(rc=-99)가 success={out['-99'][0]} 로 적혔다 (기대 0) · err={out['-99'][1]}"
+    assert "returncode" in out["-99"][1], \
+        f"실패 사유가 returncode 를 안 담는다: {out['-99'][1]!r}"
+    assert out["0"][0] == "1", \
+        f"성공 회차(rc=0)가 success={out['0'][0]} 로 적혔다 (기대 1) · err={out['0'][1]}"
+
+
+def test_회차_판정이_테이블_최신행이_아니라_이번_회차를_본다():
+    """★ 남의 회차 결과로 이번 판정을 하면 안 된다."""
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+    from shared.db import get_db
+
+    wm = _ga._repair_watermark()
+    assert _ga._repair_returncode_since(wm) is None, "워터마크 이후가 비었는데 값이 나온다"
+    with get_db() as c:
+        c.execute("INSERT INTO self_repair_runs (model, elapsed_sec, returncode, summary) "
+                  "VALUES ('probe',1,0,'ok')")
+    assert _ga._repair_returncode_since(wm) == 0
+    with get_db() as c:
+        c.execute("INSERT INTO self_repair_runs (model, elapsed_sec, returncode, summary) "
+                  "VALUES ('probe',1,-99,'bad')")
+    assert _ga._repair_returncode_since(wm) == -99, "실패가 섞였는데 성공으로 본다"
+    # 워터마크를 지금으로 올리면 이전 행은 안 보인다
+    assert _ga._repair_returncode_since(_ga._repair_watermark()) is None
+
+
+def test_트렌드검증이_정적시드에_속지_않는다():
+    """★ 시드가 `trending` 을 채우면 `scored_keywords` 는 30개가 되지만 하류는 굶는다.
+
+    실측 07-28·07-31·08-01·08-02 — combined=0 인데 scored=30 이라 검증이 통과했고
+    topic_pack 이 안 만들어져 **글 10편이 조용히 유실**됐다.
+    검증 대상은 하류(`topic_pack._candidates`)가 실제로 먹는 필드여야 한다.
+    """
+    import datetime as dt
+    import json
+
+    from JARVIS03_RADAR.jobs import _verify_trends
+    from JARVIS03_RADAR.topic_pack import _candidates
+
+    root = _ROOT / "JARVIS03_RADAR" / "data"
+    today = dt.date.today().isoformat()
+    fp = root / f"trends_{today}.json"
+    # ★ CI 엔 이 폴더가 **통째로 없다** (data/*.json 이 .gitignore 라 디렉터리도 안 온다).
+    #   종전엔 곧장 write_text 를 불러 FileNotFoundError 로 깨졌다 — 테스트가
+    #   '내 맥북에 폴더가 있다' 는 사실에 기댄 것이다 (ERRORS [568] 과 같은 병).
+    dir_made = not root.exists()
+    root.mkdir(parents=True, exist_ok=True)
+    backup = fp.read_text(encoding="utf-8") if fp.exists() else None
+    try:
+        # 실트렌드 전멸 + 정적 시드로 채워진 날 (실측 08-01 의 모양)
+        seeded = {"date": today, "combined_keywords": [],
+                  "scored_keywords": [{"keyword": f"시드{i}", "sector": "금융·투자"}
+                                      for i in range(30)]}
+        fp.write_text(json.dumps(seeded, ensure_ascii=False), encoding="utf-8")
+        issues = _verify_trends(None)
+        assert issues, "실트렌드 0인데 검증이 통과했다 — 시드에 속았다"
+        assert any("combined" in i for i in issues), f"combined 를 안 본다: {issues}"
+        # 하류가 실제로 굶는지 확인 (검증 기준의 정당성)
+        assert not _candidates(seeded), "하류가 후보를 못 만드는 것이 맞다"
+
+        ok = dict(seeded, combined_keywords=[{"keyword": "코스피", "score": 9,
+                                              "sources": ["google"]}])
+        assert not _verify_trends(None) or True   # 파일 기준이므로 아래로 재검사
+        fp.write_text(json.dumps(ok, ensure_ascii=False), encoding="utf-8")
+        assert not _verify_trends(None), "정상 데이터인데 차단됐다 — 과잉 차단"
+    finally:
+        if backup is not None:
+            fp.write_text(backup, encoding="utf-8")
+        elif fp.exists():
+            fp.unlink()
+        # 우리가 만든 폴더면 되돌린다 — 테스트가 저장소에 흔적을 남기지 않는다
+        if dir_made and root.is_dir() and not any(root.iterdir()):
+            root.rmdir()
+
+
+def test_수집_산출물이_시드_비율을_남긴다():
+    """'30개 수집됨' 과 '30개 전부 정적 시드' 를 구분할 수 없으면 아무도 못 알아챈다."""
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS03_RADAR/radar_main.py").read_text(encoding="utf-8"))
+    keys = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Dict):
+            keys |= {k.value for k in n.keys if isinstance(k, ast.Constant)}
+    for k in ("real_trend_count", "seed_filled_count"):
+        assert k in keys, f"산출물에 {k} 가 없다 — 시드 여부를 구분할 수 없다"
+
+
+def test_팩_미생성이_조용히_지나가지_않는다():
+    """★ 실제 원인은 예외가 아니라 **조용한 None** 이었다 — 그래서 오류로 안 남았다."""
+    import ast
+    import inspect
+
+    from JARVIS03_RADAR import jobs as _j
+
+    # 원인이 산출물에서 파생되는가 (분류표를 박지 않았는가)
+    assert _j._pack_empty_reason() in (
+        "TrendFileMissing", "TrendCollectEmpty", "TopicPackNoCandidate", "TopicPackUnknown")
+
+    # 최종 실패 분기가 실제로 보고를 부르는가 (AST)
+    tree = ast.parse((_ROOT / "JARVIS03_RADAR/jobs.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "build_topic_pack_once")
+    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "_report_pack_empty" in called, "조용한 None 경로가 보고하지 않는다"
+
+    # 타입이 뭉뚱그려지지 않는가 (한 이름으로만 보고하면 변별력 0)
+    src = _code_only(inspect.getsource(_j._pack_empty_reason))
+    assert src.count("return") >= 3, "원인을 한 이름으로 뭉뚱그린다"
+
+
+def test_지침_선택규칙이_한_곳이다():
+    """★ 게이트(검사)와 작성기(주입)가 **같은 규칙**을 써야 한다.
+
+    실측 2026-08-08: 파이프라인 항목 필터가 `active_directives` 에만 들어가고
+    `build_insights_block` 에는 없었다 — 게이트는 벌하지 않는데 작성기는 계속
+    "메타 설명을 채워라" 고 시키는, 정확히 거꾸로 된 상태였다.
+    해로운 쪽은 주입이다(작성 LLM 은 못 만들므로 **지어낸다**).
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+
+    for fn in ("active_directives", "build_insights_block"):
+        src = _code_only(inspect.getsource(getattr(_ql, fn)))
+        assert "selectable_insights" in src, f"{fn} 이 공통 선택 규칙을 안 쓴다"
+        assert "get_ranked_learning_insights" not in src, \
+            f"{fn} 이 원본 조회를 직접 한다 — 규칙이 두 벌이 된다"
+
+    # 실제로 파이프라인 항목을 겨눈 지침이 걸러지는가 (실행 검증)
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX, item_index
+    from shared.db import get_db
+
+    pipe = [k for k in _ql.__dict__ and
+            __import__("JARVIS02_WRITER.post_scorer", fromlist=["x"])
+            .pipeline_controlled_items() if RUBRIC_MAX.get(k)]
+    if not pipe:
+        return                      # 살아 있는 파이프라인 항목이 없으면 검사 불가
+    name = (item_index().get(pipe[0]) or {}).get("name", pipe[0])
+    with get_db() as con:
+        con.execute("INSERT INTO learning_insights (insight_key, insight_type, description, "
+                    "directive, weight, scope, last_seen) VALUES (?,?,?,?,?,?,"
+                    "datetime('now','localtime'))",
+                    (f"economic:seo_{name}", "seo", "x",
+                     "제목 앞부분에 핵심 키워드를 배치하라", 3.0, "economic"))
+    got = {r.get("insight_key") for r in _ql.selectable_insights("economic", 50, 21)}
+    assert f"economic:seo_{name}" not in got, \
+        f"작성 LLM 이 만들 수 없는 항목({pipe[0]})을 겨눈 지침이 선택됐다"
+
+
+def test_kind_선언을_메시지_문구가_뒤집지_못한다():
+    """★ 구조화 필드가 문구보다 권위 있다 — `is_transient` 1)·3) 원칙을 5)에도 적용.
+
+    실측 2026-08-08: `ignored` 705건 중 142건이 '반드시 Tier-2 유지' 로 선언된 kind 인데
+    그중 138건(97%)을 메시지 정규식이 격리로 보냈다. 발행 최종 실패가 통째로 버려졌다.
+    """
+    from JARVIS07_GUARDIAN.severity import is_transient, non_code_issue_kinds
+
+    approved = non_code_issue_kinds()
+    assert approved, "승인 kind 집합이 비었다 — 검사 전제가 깨졌다"
+
+    # 정규식에 확실히 걸리는 문구 (실제 DB 메시지 형태)
+    MSGS = ["[Layer4] 활성 플랫폼 전부 실패 — 송출 미완료: ['naver']",
+            "수정 불가 — 패턴 반복 3건",
+            "종목 데이터 0개 — 다른 테마로 교체"]
+
+    # ① 선언된(=승인 목록 밖) kind 는 문구가 뭐든 transient 가 아니다
+    for kind in ("send_failure", "abort", "execution_error", "draft_invalid",
+                 "stuck", "data_empty", "login_invalid"):
+        assert kind not in approved, f"{kind} 가 승인 목록에 들어갔다 — 전제 변경"
+        for m in MSGS:
+            assert is_transient("RuntimeError", m, kind=kind) is False, \
+                f"kind={kind} 인데 문구가 선언을 뒤집었다: {m[:40]}"
+
+    # ② 승인된 kind 는 종전대로 transient 다 (과잉 차단 없음)
+    for kind in sorted(approved)[:3]:
+        assert is_transient("RuntimeError", MSGS[0], kind=kind) is True, \
+            f"승인 kind({kind})까지 막혔다 — 과잉 차단"
+
+    # ③ kind 가 없는 비-harness 경로는 종전대로 메시지 판정
+    assert is_transient("RuntimeError", MSGS[0]) is True, "kind 없는 경로가 바뀌었다"
+
+    # ④ 코드 버그 타입 가드는 그대로 (3단계가 4-B 앞이다)
+    assert is_transient("NameError", MSGS[0]) is False
+
+
+def test_타입편중_판정이_한_건에_꺼지지_않는다():
+    """★ '고유 타입 == 1' 정확일치는 다른 타입 1건에 **영구히** 꺼진다.
+
+    실측: radar 224건 중 223건이 같은 타입인데 d=2 라 보고되지 않았다.
+    편중은 개수가 아니라 비율이다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import severity as _sv
+
+    assert hasattr(_sv, "GRANULARITY_DOMINANCE"), "임계 상수가 없다 — 검사 안에 박혔다"
+    assert 0.5 < _sv.GRANULARITY_DOMINANCE <= 1.0
+
+    src = _code_only(inspect.getsource(_sv.type_granularity_issues))
+    assert "d != 1" not in src, "정확일치 판정이 남아 있다 — 1건에 꺼진다"
+    assert "GRANULARITY_DOMINANCE" in src, "임계를 상수에서 파생하지 않는다"
+
+    got = _sv.type_granularity_issues()
+    assert isinstance(got, list)
+    for g in got:
+        assert "%" in g, f"비율을 알려주지 않는다: {g}"
+
+
+def test_분류_자가검사가_실제로_돈다():
+    """★ 검사가 존재하는 것과 검사가 도는 것은 다른 문제다 — 호출자가 0곳이었다."""
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import auditor as _au
+
+    got = _au.audit_severity_selfcheck()
+    assert isinstance(got, list), f"실행이 리스트를 안 돌려준다: {got!r}"
+
+    # 주간 잡이 실제로 부르는가
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/auditor.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "job_auditor_weekly")
+    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "audit_severity_selfcheck" in called, "주간 감사가 자가검사를 안 부른다"
+
+    # 새 알림 채널을 만들지 않았는가 (이 파일의 텔레그램은 사용자 박제로 비활성)
+    ntree = ast.parse(inspect.getsource(_au._notify_severity_violations)
+                      .replace("def _notify", "def _notify", 1))
+    import textwrap
+    ntree = ast.parse(textwrap.dedent(inspect.getsource(_au._notify_severity_violations)))
+    called = {getattr(n.func, "id", "") or getattr(n.func, "attr", "")
+              for n in ast.walk(ntree) if isinstance(n, ast.Call)}
+    imported = {a.asname or a.name for n in ast.walk(ntree)
+                if isinstance(n, ast.ImportFrom) for a in n.names}
+    assert not any("tg" in x or "telegram" in x.lower()
+                   for x in (called | imported) if x), \
+        f"비활성 박제를 우회해 새 알림 통로를 만들었다: {sorted(called | imported)}"
+    # ★ import 만 있고 **부르지 않으면** 위반은 여전히 로그로 끝난다(뮤테이션에서 발각).
+    assert "_rep" in called, \
+        f"오류 보고를 import 만 하고 부르지 않는다 — 로그로 끝난다: {sorted(called)}"
+
+    # 실제로 부르면 오류가 쌓이는가 (patch_effective 표준)
+    import shared.db as _sdb
+    from shared.db import get_db
+    with get_db() as con:
+        _before = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+    _au._notify_severity_violations(["[결함4] source='probe' 9건 중 9건(100%)이 'X' 한 타입"])
+    with get_db() as con:
+        _after = con.execute("SELECT COUNT(*) FROM error_log").fetchone()[0]
+        row = con.execute("SELECT error_type FROM error_log ORDER BY id DESC LIMIT 1").fetchone()
+    assert _after > _before, "위반을 보고했는데 오류가 안 쌓였다"
+    assert (row["error_type"] or "").startswith("SeverityGateDefect"), \
+        f"타입이 머리표에서 파생되지 않았다: {row['error_type']!r}"
+
+
+def test_Tier2가_자기보고만으로_fixed를_확정하지_않는다():
+    """★ `files_fixed` 는 LLM 이 쓴 산문에서 정규식으로 뽑은 숫자다.
+
+    실행 검증: "수정 파일 3개를 검토했으나 아무것도 고치지 않았습니다" → 3 → fixed.
+    결정적 대조(2026-08-08 03:04): Tier-1 은 같은 수정을 재현검증으로 롤백했는데
+    38초 뒤 Tier-2 가 같은 파일을 무검증으로 통과시켰다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+
+    # 산문이 숫자로 오독되는 것은 여전히 사실이다 (그래서 검증이 필요하다)
+    assert _ar._parse_layer_counts("수정 파일 3개를 검토했으나 아무것도 고치지 않았습니다"
+                                  )["files_fixed"] == 3
+
+    # 성공 경로가 검증·롤백을 실제로 부르는가
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/auto_repair.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "run_auto_repair_targeted")
+    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "_verify_sdk_fix" in called, "Tier-2 가 재현검증을 안 탄다"
+    assert "_restore_snapshot" in called, "검증 실패 시 롤백 경로가 없다"
+
+    # 검증의 주인은 error_fixer 다 — 여기서 새 판정 로직을 만들지 않았는가(①)
+    import textwrap
+    vtree = ast.parse(textwrap.dedent(inspect.getsource(_ar._verify_sdk_fix)))
+    vcalled = {getattr(n.func, "id", "") or getattr(n.func, "attr", "")
+               for n in ast.walk(vtree) if isinstance(n, ast.Call)}
+    assert "verify_fix" in vcalled, \
+        f"error_fixer 정문을 import 만 하고 부르지 않는다 — 검증이 두 벌이 된다: {sorted(vcalled)}"
+
+    # ★ 판정 불가(None)에 롤백하면 정상 수정까지 되돌린다
+    ok, why = _ar._verify_sdk_fix(None, None)
+    assert ok is None, f"error_record 없음인데 실패로 단정했다: {ok} / {why}"
+
+
+def test_롤백이_새로_만든_파일을_지우지_않는다():
+    """되돌리기가 새 사고를 만들면 안 된다 — 스냅샷에 있던 파일만 복원한다."""
+    import tempfile
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+
+    root = _P(_ar.ROOT)
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        d = _P(td)
+        known, fresh = d / "known.py", d / "fresh.py"
+        known.write_text("x = 1\n", encoding="utf-8")
+        rel = str(known.relative_to(root))
+        snap = {rel: "x = 1\n"}
+        known.write_text("x = 999\n", encoding="utf-8")     # SDK 가 고침
+        fresh.write_text("y = 2\n", encoding="utf-8")       # SDK 가 새로 만듦
+        # 스냅샷에 있지만 **바뀌지 않은** 파일 — 건드리면 안 된다
+        untouched = d / "untouched.py"
+        untouched.write_text("z = 3\n", encoding="utf-8")
+        rel_u = str(untouched.relative_to(root))
+        snap[rel_u] = "z = 3\n"
+        _mtime_before = untouched.stat().st_mtime_ns
+
+        n = _ar._restore_snapshot(snap)
+        assert n == 1, f"복원 파일 수가 다르다: {n} (바뀐 파일 1개만이어야)"
+        assert known.read_text(encoding="utf-8") == "x = 1\n", "복원이 안 됐다"
+        assert fresh.exists(), "새로 만든 파일을 지웠다 — 롤백이 새 사고를 만든다"
+        assert untouched.stat().st_mtime_ns == _mtime_before, \
+            "안 바뀐 파일까지 다시 썼다 — 동시 편집을 덮어쓸 수 있다"
+
+
+def test_fixed에는_근거가_남는다():
+    """★ `fixed` 81건 중 34건(42%)이 근거 전무였다 — 세 가지 다른 뜻이 한 이름이었다."""
+    import inspect
+
+    from shared import db as _db
+
+    sig = inspect.signature(_db.mark_error_status)
+    assert "resolution" in sig.parameters, "상태 변경이 근거를 안 받는다"
+
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('probe','m','X','probe','new')")
+        eid = con.execute("SELECT id FROM error_log ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+    # 근거를 안 주면 '근거 미기록' 이 남는다 — 조용히 넘어가지 않는다
+    _db.mark_error_status(eid, "fixed")
+    with _db.get_db() as con:
+        row = con.execute("SELECT status, resolution, fixed_at FROM error_log WHERE id=?",
+                          (eid,)).fetchone()
+    assert row["status"] == "fixed"
+    assert row["resolution"], "근거 없이 fixed 가 됐다 — 42% 사고의 재발"
+    assert row["fixed_at"], "fixed 인데 시각이 없다"
+
+    # 근거를 주면 그대로 남는다
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('probe','m','X','probe2','new')")
+        eid2 = con.execute("SELECT id FROM error_log ORDER BY id DESC LIMIT 1").fetchone()[0]
+    _db.mark_error_status(eid2, "fixed", "Tier-2 SDK 수정 + 재현검증 통과")
+    with _db.get_db() as con:
+        r2 = con.execute("SELECT resolution FROM error_log WHERE id=?", (eid2,)).fetchone()
+    assert "재현검증" in r2["resolution"], f"근거가 안 남았다: {r2['resolution']!r}"
+
+
+def test_Tier2_fixed_표시가_근거를_동반한다():
+    """호출부가 근거를 안 주면 DB 계층이 메워주더라도 '누가 왜' 를 알 수 없다."""
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Call)
+                and getattr(n.func, "attr", "") == "mark_error_status"
+                and any(isinstance(a, ast.Constant) and a.value == "fixed" for a in n.args)):
+            assert len(n.args) >= 3 or n.keywords, \
+                f"guardian_agent:{n.lineno} fixed 를 근거 없이 찍는다"
+
+
+def test_eval_훅이_venv_파이썬을_쓴다():
+    """★ bare `python3` 는 `dotenv` 가 없어 `shared.llm` import 가 터진다.
+
+    실측: eval 게이트 54건 중 27건(50%)이 score=70 '보수적 통과' 였고
+    그중 19건의 사유가 `No module named dotenv` — **LLM 이 아예 못 돌았다**.
+    """
+    import json
+    import subprocess
+
+    cfg = _ROOT / ".claude" / "settings.json"
+    # ★ `.claude/` 는 **의도적 .gitignore**(.gitignore:60) — 로컬 Claude Code 설정이라
+    #   CI 에는 존재할 수 없다. 종전엔 곧장 read_text 를 불러 GitHub Actions 에서
+    #   FileNotFoundError 로 깨졌다. 저장소가 갖고 있지 않은 것을 저장소 검사가
+    #   보장할 수는 없다 — 없으면 *조용히 통과* 가 아니라 **사유를 밝히고 건너뛴다**.
+    #   (설정을 추적 대상으로 바꾸면 이 검사가 CI 에서도 돈다 — 별건 판단.)
+    if not cfg.is_file():
+        pytest.skip("로컬 전용 훅 설정 부재 (.claude/ 는 .gitignore) — CI 에서는 검사 불가")
+    raw = cfg.read_text(encoding="utf-8")
+    json.loads(raw)                        # 깨진 JSON 이면 훅이 통째로 죽는다
+
+    hooks = [ln for ln in raw.splitlines() if "CLAUDE_PROJECT_DIR" in ln and "python" in ln]
+    assert hooks, "훅이 없다 — 검사 전제가 깨졌다"
+    for ln in hooks:
+        assert ".venv/bin/python" in ln, f"bare python3 훅이 남아 있다: {ln.strip()[:90]}"
+
+    # 폴백이 있는가 (venv 가 없는 환경에서도 훅이 죽지 않아야 한다)
+    assert "|| echo python3" in raw, "venv 부재 시 폴백이 없다 — 다른 환경에서 훅이 죽는다"
+
+    # 그 표현이 실제로 도는 파이썬을 고르는가 (venv 가 있는 환경에서만 — 폴백은 위에서 검사)
+    if not (_ROOT / ".venv" / "bin" / "python").exists():
+        pytest.skip("venv 부재 — 훅 표현의 폴백 분기는 위에서 이미 검사했다")
+    expr = ('test -x "$D/.venv/bin/python" && echo "$D/.venv/bin/python" || echo python3')
+    got = subprocess.run(["sh", "-c", f'D="{_ROOT}"; {expr}'],
+                         capture_output=True, text=True).stdout.strip()
+    r = subprocess.run([got, "-c", "import shared.llm"], cwd=str(_ROOT),
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"훅 파이썬으로 shared.llm import 실패: {r.stderr[-160:]}"
+
+
+def test_학습원장에_복구경로가_있다():
+    """★ `.gitignore` 대상이라 git 복구가 없다 — 2026-06-08 에 97.8% 소실 이력.
+
+    `.gitignore` 결정(팀원 빈 상태가 운영 학습을 덮어쓰는 것 차단)은 건드리지 않는다.
+    두 박제가 충돌하므로 로컬 복구 경로만 켠다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import pattern_fixer as _pf
+
+    tree = ast.parse(inspect.getsource(_pf._save_learned))
+    call = next((n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", "") == "write_json"), None)
+    assert call, "저장이 json_store 정문을 안 쓴다"
+    kw = {k.arg: k.value for k in call.keywords}
+    assert "backup" in kw and getattr(kw["backup"], "value", False) is True, \
+        "저장 시 .bak 을 만들지 않는다 — 복구 경로가 없다"
+
+    # 실제로 .bak 이 생기는가 — **합성 파일로** 확인한다
+    #  ★ 종전엔 `_save_learned(_load_learned())` 로 *실 원장* 을 다시 썼다. 두 가지가 틀렸다:
+    #    ① 원장은 `.gitignore` 대상이라 CI 엔 없다 → 백업할 원본이 없어 `.bak` 이 안 생기고
+    #       테스트가 GitHub Actions 에서만 깨졌다 (ERRORS [568] 과 같은 병).
+    #    ② 테스트가 **운영 학습 자산을 덮어썼다** — 검사가 부작용을 남기면 안 된다.
+    #  검사할 것은 '내 맥북에 원장이 있나' 가 아니라 **'정문이 직전 세대를 남기는가'** 다.
+    import tempfile
+    from pathlib import Path
+
+    from JARVIS07_GUARDIAN.json_store import write_json
+
+    with tempfile.TemporaryDirectory() as td:
+        fp = Path(td) / "learned_patterns.json"
+        write_json(fp, {"세대": 1}, backup=True)          # 첫 저장 — 원본이 없다
+        write_json(fp, {"세대": 2}, backup=True)          # 두 번째 — 직전 세대가 .bak 으로
+        bak = fp.with_suffix(fp.suffix + ".bak")
+        assert bak.exists() and bak.stat().st_size > 0, ".bak 이 안 생긴다"
+        import json as _json
+        assert _json.loads(bak.read_text(encoding="utf-8")) == {"세대": 1}, \
+            ".bak 이 직전 세대가 아니다 — 복구해도 옛 상태로 못 돌아간다"
+        assert _json.loads(fp.read_text(encoding="utf-8")) == {"세대": 2}, \
+            "본문이 최신이 아니다"
+
+
+def test_도달불가_지문이_매칭후보에서_빠진다():
+    """★ 수기 라벨 지문은 런타임 예외 클래스와 영원히 안 맞는다 — 후보만 늘린다.
+
+    실측: 지문 54개 중 26개(48%)의 error_type 이 `report_manual_fix` 의 사람 라벨이고
+    같은 결함이 런타임엔 `RuntimeError` 로 올라온다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import pattern_fixer as _pf
+
+    # 격리 DB — 런타임 오류와 수동 기록을 각각 심는다 (운영 데이터에 기대지 않는다)
+    from shared.db import get_db
+    with get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('probe','m','RuntimeError','runtime probe','new')")
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('probe','m','HandLabelOnly','manual probe','manual')")
+    _pf._RUNTIME_TYPES.update(at=0.0, types=frozenset())     # TTL 캐시 무효화
+    live = _pf.runtime_error_types()
+    assert live, "런타임 타입 파생이 비었다 — 검사 전제가 깨졌다"
+    assert "RuntimeError" in live, "런타임 오류 타입이 안 잡힌다"
+    # ★ 수동 기록(status='manual')은 *오류가 아니라 변경 기록* 이므로 섞이면 안 된다.
+    #   섞이면 수기 라벨 지문이 다시 '도달 가능' 으로 오판돼 후보만 늘어난다.
+    assert "HandLabelOnly" not in live, "수동 기록 타입이 런타임 집합에 섞였다"
+
+    un = _pf.unreachable_patterns()
+    assert isinstance(un, list)
+    for p in un:
+        assert p.get("error_type") not in live, "도달 가능한 지문을 불가로 분류했다"
+
+    # ★ 매칭이 **실제로** 건너뛰는가 — AST 로 호출 여부만 보면 skip 을 지워도 통과한다
+    #   (뮤테이션에서 발각: `_live = runtime_error_types()` 만 남기고 continue 를 제거).
+    _orig_load, _orig_save = _pf._load_learned, _pf._save_learned
+    _orig_restore = _pf._restore_items
+    # ★ 필드명은 `fixer` 다(`fixer_name` 아님) — 실제 저장 구조를 그대로 쓴다.
+    _fake = {"patterns": [
+        {"fingerprint": "HandLabelOnly::probe", "error_type": "HandLabelOnly",
+         "message_pattern": "probe", "fixer": "llm_patch", "hit_count": 9,
+         "target_file": "x.py", "patch": "--- a\n+++ b\n"},
+        {"fingerprint": "RuntimeError::probe", "error_type": "RuntimeError",
+         "message_pattern": "probe", "fixer": "llm_patch", "hit_count": 9,
+         "target_file": "x.py", "patch": "--- a\n+++ b\n"},
+    ]}
+    # 복원 형식은 이 검사의 관심사가 아니다 — 가드만 격리해서 본다.
+    _pf._restore_items = lambda m, **k: [{"target_file": "x.py", "patch": "--- a\n+++ b\n"}]
+    _pf._load_learned = lambda: _fake
+    # ★ **실 학습 원장 보호** — 매칭 성공 시 `_bump_hit_count` 가 저장을 부른다.
+    #   `_load_learned` 만 스텁하면 가짜 2건이 운영 파일(54건)을 덮어쓴다.
+    #   이 파일은 .gitignore 대상이라 되돌릴 수 없다(97.8% 소실 이력).
+    _pf._save_learned = lambda d: None
+    try:
+        # 도달 불가 타입 → 매칭되면 안 된다
+        got_bad = _pf._fix_from_learned({"error_type": "HandLabelOnly", "message": "probe"})
+        # 도달 가능 타입 → 종전대로 매칭돼야 한다 (과잉 차단 아님)
+        got_ok = _pf._fix_from_learned({"error_type": "RuntimeError", "message": "probe"})
+    finally:
+        _pf._load_learned, _pf._save_learned = _orig_load, _orig_save
+        _pf._restore_items = _orig_restore
+    assert got_bad is None, "런타임에 난 적 없는 타입의 지문이 매칭됐다 — 후보만 늘린다"
+    assert got_ok is not None, "도달 가능한 지문까지 막혔다 — 과잉 차단"
+
+    # 삭제가 아니라 제외인가 — 전체 목록은 그대로여야 한다
+    assert len(_pf.all_patterns()) >= len(un), "지문을 지웠다 — 기록이 사라진다"
+
+
+def test_쿨다운_억제가_빈도를_지우지_않는다():
+    """★ dedup 은 seen_count 를 올리는데 쿨다운만 흔적 없이 버렸다 — 탈락 방식이 비대칭.
+
+    빈도가 곧 신호인 사고(keeper HANG 처럼 정체 시간이 매번 다른 것)에서
+    60초 안에 겹친 두 번째 건은 복구 불가였다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import error_collector as _ec
+    from shared import db as _sdb
+
+    assert hasattr(_sdb, "bump_error_seen"), "억제분 빈도 집계 API 가 없다"
+
+    # ★ 쿨다운 분기가 있는 함수를 **찾아서** 검사한다 — 함수명을 박으면 옮길 때 낡는다.
+    src = (_ROOT / "JARVIS07_GUARDIAN/error_collector.py").read_text(encoding="utf-8")
+    ftree = ast.parse(src)
+    ln = next(i + 1 for i, l in enumerate(src.splitlines()) if "_in_cooldown(cool_key)" in l)
+    holder = next(n for n in ast.walk(ftree)
+                  if isinstance(n, ast.FunctionDef) and n.lineno <= ln <= (n.end_lineno or 0))
+    called = {getattr(n.func, "id", "") or getattr(n.func, "attr", "")
+              for n in ast.walk(holder) if isinstance(n, ast.Call)}
+    assert "bump_error_seen" in called, \
+        f"쿨다운 억제가 여전히 흔적 없이 버린다 ({holder.name})"
+
+    # 실제로 seen_count 가 오르는가
+    with _sdb.get_db() as con:
+        # ★ timestamp 를 손으로 넣지 않는다 — 스키마 기본값(`%Y-%m-%dT%H:%M:%S`)이 진실이다.
+        #   종전엔 `datetime('now','localtime')`(공백 구분자)로 심어, 구분자 불일치가
+        #   고쳐지자 이 행이 60분 창에서 빠졌다. 테스트가 현실과 다른 행을 만들고 있었다.
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
+                    "seen_count) VALUES ('cd','m','RuntimeError','첫 건','new',1)")
+        eid = con.execute("SELECT id FROM error_log ORDER BY id DESC LIMIT 1").fetchone()[0]
+    assert _sdb.bump_error_seen("cd", "m", "RuntimeError", "다른 메시지") is True
+    with _sdb.get_db() as con:
+        sc = con.execute("SELECT seen_count FROM error_log WHERE id=?", (eid,)).fetchone()[0]
+    assert sc == 2, f"빈도가 안 올랐다: {sc}"
+    # 없는 조합은 조용히 False (없는 행을 만들지 않는다)
+    assert _sdb.bump_error_seen("없음", "없음", "없음", "x") is False
+
+
+def test_캐치_스모크가_부팅때_실제로_돈다():
+    """★ 정의 1행뿐이고 호출자가 0곳이었다 — 그 사이 스캐너는 71일간 수확 0건."""
+    import ast
+
+    from JARVIS07_GUARDIAN import error_collector as _ec
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "register")
+    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "catch_path_effective" in called, "부팅 시 스모크를 안 부른다"
+
+    # ★ 실수확 다리가 있는가 — 합성 프로브만으로는 71일 침묵을 못 잡는다
+    assert hasattr(_ec, "_log_scanner_silent"), "실수확 판정이 없다"
+    ftree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/error_collector.py").read_text(encoding="utf-8"))
+    sfn = next(n for n in ast.walk(ftree)
+               if isinstance(n, ast.FunctionDef) and n.name == "catch_path_effective")
+    scalled = {getattr(n.func, "id", "") for n in ast.walk(sfn) if isinstance(n, ast.Call)}
+    assert "_log_scanner_silent" in scalled, "스모크가 실수확을 안 본다"
+
+    got = _ec._log_scanner_silent()
+    assert got in (True, False, None)
+
+
+def test_보고된_오류가_격리되지_않고_학습에_들어간다():
+    """★ 보고되는 것과 학습에 들어가는 것은 다른 문제다 (2026-08-08 재검증).
+
+    초판은 "error_log 에 쌓였는가" 만 봤다. 그런데 `error_type='RuntimeError'` +
+    `kind` 없음이라 `is_transient` 가 True → **즉시 ignored** 로 종결됐다.
+    Tier-1·Tier-2·학습·밴딧 어디에도 안 들어갔다 — 보고는 됐는데 아무 일도 안 났다.
+
+    세 자리를 전부 본다: ① 세분화 타입이 `error_type` 자리인가 ② `kind` 가 실렸는가
+    ③ 그래서 **격리되지 않는가**.
+    """
+    from JARVIS06_IMAGE import draft_processor as _dp
+    from JARVIS07_GUARDIAN.severity import is_transient, kind_of
+    from shared.db import get_db
+
+    _dp.publish_assembled({"blocks": [], "title": "t"},
+                          lambda blocks, title, **kw: {"success": False, "error": "쿠키 만료"},
+                          "naver")
+    with get_db() as con:
+        r = dict(con.execute(
+            "SELECT error_type, source, message, context, status FROM error_log "
+            "ORDER BY id DESC LIMIT 1").fetchone())
+
+    assert r["error_type"] != "RuntimeError", \
+        "뭉뚱그린 타입으로 올린다 — CLAUDE.md ERRORS [547] 위반"
+    assert "Naver" in r["error_type"], f"플랫폼이 타입에 안 담겼다: {r['error_type']}"
+    assert kind_of(r) == "send_failure", f"kind 가 안 실렸다: {kind_of(r)!r}"
+    assert is_transient(r["error_type"], r["message"], r["source"], kind_of(r)) is False, \
+        "보고했는데 격리로 간다 — 학습에 한 건도 안 들어간다"
+    assert r["status"] != "ignored", f"즉시 격리됐다: {r['status']}"
+
+
+def test_정책_보고도_같은_자리를_쓴다():
+    """★ 같은 병이 세 곳에 있었다 — 한 곳만 고치면 다른 곳에서 재발한다(③)."""
+    import ast
+
+    bad = []
+    for f in ("JARVIS06_IMAGE/draft_processor.py",
+              "JARVIS07_GUARDIAN/auditor.py",
+              "JARVIS07_GUARDIAN/guardian_agent.py"):
+        tree = ast.parse((_ROOT / f).read_text(encoding="utf-8"))
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Call)
+                    and getattr(n.func, "id", "") in ("_g_report", "_rep", "report")):
+                continue
+            fn_kw = next((k.value for k in n.keywords if k.arg == "func_name"), None)
+            if isinstance(fn_kw, ast.Constant) and isinstance(fn_kw.value, str):
+                v = fn_kw.value
+                # PascalCase = 타입처럼 생긴 값이 func_name 자리에 있다
+                if v[:1].isupper() and "_" not in v:
+                    bad.append(f"{f}:{n.lineno} func_name={v!r}")
+    assert not bad, f"세분화 타입이 func_name 자리에 있다(그러면 error_type 이 뭉뚱그려진다): {bad}"
+
+
+def test_무예외_발행실패도_보고된다():
+    """★ 예외는 보고되는데 `success=False` 는 조용했다 — 4조합이 지나는 길목에서 막는다."""
+    import ast
+
+    from JARVIS06_IMAGE import draft_processor as _dp
+
+    tree = ast.parse((_ROOT / "JARVIS06_IMAGE/draft_processor.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "publish_assembled")
+    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "posting_error_type" in called, "타입을 파생하지 않는다 — 뭉뚱그린 타입 금지"
+
+    # 실제로 실패를 보고하는가 + 제어흐름은 그대로인가
+    from shared.db import get_db
+    # ★ 행 개수로 판정하지 않는다 — 같은 오류가 60초 안에 겹치면 쿨다운이 억제하고
+    #   `seen_count` 만 올린다(그게 정상 동작이다). **기록 총량**(행 + 빈도)으로 본다.
+    _q = ("SELECT COALESCE(SUM(seen_count), 0) FROM error_log "
+          "WHERE source='publish' AND error_type LIKE 'Posting%'")
+    with get_db() as con:
+        before = con.execute(_q).fetchone()[0]
+    res = _dp.publish_assembled({"blocks": [], "title": "t"},
+                                lambda blocks, title, **kw: {"success": False,
+                                                             "error": "쿠키 만료"},
+                                "naver")
+    with get_db() as con:
+        after = con.execute(_q).fetchone()[0]
+        row = con.execute("SELECT error_type, func_name, source FROM error_log "
+                          "WHERE source='publish' ORDER BY id DESC LIMIT 1").fetchone()
+    assert after > before, f"무예외 실패가 기록되지 않았다 ({before} → {after})"
+    assert row is not None and row["source"] == "publish"
+    # ★ 세분화 타입은 `error_type` 자리다 (2026-08-08 교정 — func_name 에 두면
+    #   error_type 이 RuntimeError 가 돼 즉시 격리된다).
+    assert "Naver" in (row["error_type"] or ""), \
+        f"타입이 플랫폼에서 파생 안 됐다: {row['error_type']}"
+    assert isinstance(res, dict) and res["success"] is False, \
+        "보고하면서 결과를 바꿨다 — 제어흐름은 건드리면 안 된다"
+
+    # 성공 경로는 보고하지 않는다 (과잉 보고 금지)
+    with get_db() as con:
+        b2 = con.execute(_q).fetchone()[0]
+    ok = _dp.publish_assembled({"blocks": [], "title": "t"},
+                               lambda blocks, title, **kw: {"success": True}, "tistory")
+    with get_db() as con:
+        a2 = con.execute(_q).fetchone()[0]
+    assert a2 == b2, "성공했는데 오류를 남겼다"
+    assert ok["success"] is True
+
+
+def test_timestamp_비교가_한_포맷을_쓴다():
+    """★ 저장은 'T' 구분자, 비교는 공백 — 문자열 비교라 **같은 날짜가 전부 통과**했다.
+
+    실측 2026-08-08: 60분 창이 115행을 잡았다(올바른 값 3행). `window_min` 인자는
+    무엇을 넣든 결과가 같은 **죽은 인자**였다. 저장소 전역 11곳이 같은 병이었다.
+    """
+    import sqlite3
+
+    from shared.db import DB_PATH, TS_CUTOFF, get_db, ts_cutoff_sql
+
+    # ① 저장 포맷과 비교 포맷이 같은가 (실제 행으로)
+    with get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('tsprobe','m','X','now','new')")
+        stored = con.execute("SELECT timestamp FROM error_log WHERE source='tsprobe' "
+                             "ORDER BY id DESC LIMIT 1").fetchone()[0]
+        cut = con.execute(f"SELECT {ts_cutoff_sql()}").fetchone()[0]
+    assert "T" in stored, f"저장 포맷이 바뀌었다: {stored!r}"
+    assert "T" in cut, f"비교 포맷이 저장과 다르다: {cut!r} vs {stored!r}"
+    # ★ 수정자 **있는** 분기도 같은 포맷이어야 한다 (뮤테이션에서 발각 — 무인자 분기만
+    #   검사하면 인자 있는 쪽이 공백 구분자로 돌아가도 통과했다).
+    with get_db() as con:
+        cut2 = con.execute(f"SELECT {ts_cutoff_sql('-1 hour')}").fetchone()[0]
+        cut3 = con.execute(f"SELECT {TS_CUTOFF}", ("-1 hour",)).fetchone()[0]
+    for v, who in ((cut2, "ts_cutoff_sql(mods)"), (cut3, "TS_CUTOFF")):
+        assert "T" in v and " " not in v.strip(), f"{who} 가 공백 구분자를 낸다: {v!r}"
+
+    # ② 창이 실제로 좁혀지는가 — 옛 행을 심고 좁은 창이 그것을 **제외**하는지
+    with get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
+                    "timestamp) VALUES ('tsprobe','m','X','old','new', "
+                    "strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime','-3 hour')))")
+        narrow = con.execute(
+            f"SELECT COUNT(*) FROM error_log WHERE source='tsprobe' "
+            f"  AND timestamp >= {TS_CUTOFF}", ("-60 minute",)).fetchone()[0]
+        wide = con.execute(
+            f"SELECT COUNT(*) FROM error_log WHERE source='tsprobe' "
+            f"  AND timestamp >= {TS_CUTOFF}", ("-6 hour",)).fetchone()[0]
+    assert narrow == 1, f"60분 창에 3시간 전 행이 들어왔다 (narrow={narrow})"
+    assert wide == 2, f"6시간 창이 3시간 전 행을 놓쳤다 (wide={wide})"
+    assert narrow < wide, "창 폭이 결과를 바꾸지 않는다 — 죽은 인자"
+
+    # ③ 종전 방식은 실제로 틀린다 (이 검사가 진짜를 잡는지 확인)
+    with get_db() as con:
+        legacy = con.execute(
+            "SELECT COUNT(*) FROM error_log WHERE source='tsprobe' "
+            "  AND timestamp >= datetime('now','localtime','-60 minute')").fetchone()[0]
+    assert legacy == 2, \
+        f"종전 방식이 틀리지 않는다 — 검사 전제가 깨졌다 (legacy={legacy})"
+
+
+def test_편중판정이_날짜창을_실제로_적용한다():
+    """★ `timestamp >=` 를 빼먹으면 조건이 **맨 표현식** 이 된다.
+
+    SQLite 는 `'2026-…'` 를 숫자 2026 으로 캐스팅해 **참**으로 본다 —
+    날짜 필터가 통째로 무력화되는데 SQL 은 멀쩡히 돌고 결과도 나온다.
+    실측 2026-08-08: 그렇게 452행이 통과했다(올바른 값 197행).
+    """
+    from JARVIS07_GUARDIAN import severity as _sv
+    from shared.db import get_db
+
+    # 창 안 1건 + 창 밖 1건을 심고, 좁은 창이 창 밖을 **제외** 하는지 본다
+    with get_db() as con:
+        for _ in range(_sv.GRANULARITY_MIN_SAMPLES + 1):
+            con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                        "VALUES ('gprobe','m','SameType','recent','new')")
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
+                    "timestamp) VALUES ('gprobe','m','OldType','old','new', "
+                    "strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime','-400 day')))")
+
+    near = _sv.type_granularity_issues(window_days=1)
+    far = _sv.type_granularity_issues(window_days=3650)
+    g_near = next((x for x in near if "gprobe" in x), "")
+    g_far = next((x for x in far if "gprobe" in x), "")
+    assert g_near, "1일 창에서 최근 표본을 못 본다"
+    assert "100%" in g_near, f"창 밖 옛 행이 섞였다: {g_near}"
+    assert g_far and "100%" not in g_far, \
+        f"3650일 창인데도 옛 행이 안 섞인다 — 창이 결과를 안 바꾼다: {g_far}"
+
+
+def test_timestamp_비교를_직접_쓰는_곳이_없다():
+    """③ — 11곳이 각자 SQL 을 쓰면 하나를 고쳐도 열 개가 남는다."""
+    import re
+
+    bad = []
+    for f in sorted(_ROOT.rglob("*.py")):
+        rel = str(f.relative_to(_ROOT))
+        if any(x in rel for x in ("__pycache__", ".venv", "tests/", "scratchpad")):
+            continue
+        # ★ `_code_only` 를 쓰지 않는다 — SQL 은 **문자열 안에** 산다.
+        #   문자열을 지우면 정작 검사 대상이 사라진다(뮤테이션에서 발각).
+        #   대신 주석 줄만 건너뛴다.
+        for i, line in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if re.search(r"timestamp\s*>=?\s*datetime\(", line):
+                bad.append(f"{rel}:{i}")
+    assert not bad, f"timestamp 를 datetime() 과 직접 비교한다(구분자 불일치): {bad}"

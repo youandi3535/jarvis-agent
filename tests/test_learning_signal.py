@@ -1,0 +1,340 @@
+"""블로그 품질 학습의 *신호* 무결성 — 골든 테스트 (2026-08-08).
+
+★ 별도 파일 이유: 다른 세션이 `test_publish_golden.py` 를 동시 수정 중이다.
+★ 기계 독립: 운영 DB 를 읽지 않는다. 합성 행으로 판정 로직만 검사한다(ERRORS [568]).
+"""
+from __future__ import annotations
+
+import ast
+import inspect
+import textwrap
+
+import numpy as np
+import pytest
+
+
+# ══════════════════════════════════════════════════════════════════
+# ① 관측되지 않은 것을 0 으로 채우지 않는다
+# ══════════════════════════════════════════════════════════════════
+def _row(platform, views, rank, trend=50.0, perf=1.0, fresh=1.0):
+    return {"platform": platform, "actual_views": views, "naver_rank": rank,
+            "trend_score": trend, "perf_boost": perf, "freshness": fresh}
+
+
+def test_미관측_행은_0이_아니라_NaN이다():
+    """★ 실사고: `float(r["actual_views"] or 0)` 이 학습기를 통째로 망가뜨렸다.
+
+    실측 — 두 신호가 정확히 상보적이었다:
+        naver   438행: actual_views 전부 0  · naver_rank 전부 관측
+        tistory  42행: actual_views 전부 >0 · naver_rank 전부 NULL
+    그런데 42 >= min_signal(20) 이라 조회수가 채택됐고, **네이버 438행(91%)이
+    "조회수 0 = 나쁨" 으로 학습**됐다. 0 은 "나빴다" 이지 "모른다" 가 아니다.
+    """
+    from JARVIS03_RADAR.learning import build_target
+
+    rows = ([_row("tistory", 10 + i, None) for i in range(25)]
+            + [_row("naver", 0, None) for _ in range(30)])   # 네이버: 둘 다 미관측
+    y, sig = build_target(rows, min_signal=20)
+
+    assert "actual_views" in sig
+    obs, miss = ~np.isnan(y), np.isnan(y)
+    assert obs.sum() == 25, f"관측 25행이어야 하는데 {obs.sum()}"
+    assert miss.sum() == 30, "미관측 30행이 NaN 으로 표시되어야 한다"
+    assert not (y[obs] == 0).all(), "관측 행이 전부 0 — 백분위 정규화가 안 됐다"
+
+
+def test_두_신호가_상보적이면_둘_다_쓴다():
+    """플랫폼마다 측정 가능한 신호가 다르다 — 하나만 고르면 나머지가 '나쁜 사례' 가 된다."""
+    from JARVIS03_RADAR.learning import build_target
+
+    rows = ([_row("tistory", 10 + i, None) for i in range(25)]
+            + [_row("naver", 0, 5 + i) for i in range(25)])
+    y, sig = build_target(rows, min_signal=20)
+
+    assert "actual_views" in sig and "naver_rank" in sig, f"신호가 하나만 쓰였다: {sig}"
+    assert (~np.isnan(y)).sum() == 50, "두 신호 모두 관측된 50행 전부 학습에 쓰여야 한다"
+    assert len(np.unique(y)) > 2, "정답값에 변별이 없다"
+
+
+def test_표본이_부족하면_학습하지_않는다():
+    """어느 신호도 최소 표본을 못 채우면 상수 y → 호출자가 보류한다."""
+    from JARVIS03_RADAR.learning import build_target
+
+    y, sig = build_target([_row("tistory", 5, None) for _ in range(3)], min_signal=20)
+    assert sig == "none"
+    assert len(np.unique(y)) < 2, "표본 부족인데 학습 가능한 y 가 나왔다"
+
+
+# ══════════════════════════════════════════════════════════════════
+# ② 가중치가 정렬 변별력을 죽이면 저장하지 않는다
+# ══════════════════════════════════════════════════════════════════
+def test_음수_계수를_0으로_자르지_않는다():
+    """★ 종전 `max(0.0, v)` 가 지배 피처를 삭제해 정렬키를 상수로 만들었다.
+
+    음수 계수는 *가정 위반* 이지 잡음이 아니다 — `freshness` 음수는 "갓 나온 키워드는
+    아직 검색 노출이 없다" 는 **진짜 발견** 일 수 있다. 가정을 코드에 박으면
+    데이터가 말하는 것을 못 듣는다.
+    """
+    import inspect
+
+    from JARVIS03_RADAR import learning
+
+    src = inspect.getsource(learning.train_weights)
+    code = "\n".join(l.split("#")[0] for l in src.splitlines())   # 주석 제외
+    assert "max(0.0, v)" not in code and "max(0., v)" not in code, (
+        "음수 절단이 되살아났다 — 지배 피처가 삭제되어 정렬키가 상수가 된다")
+
+
+def test_변별력_판정이_상대기준이다():
+    """기준을 절대값으로 박으면 입력이 원래 뭉쳐 있을 때 영원히 거부한다(원칙②)."""
+    import inspect
+
+    from JARVIS03_RADAR import learning
+
+    src = inspect.getsource(learning.train_weights)
+    assert "_in_ratio" in src and "_out_ratio" in src, "변별력 판정이 없다"
+    assert "_in_ratio" in src.split("_out_ratio <")[1][:60], (
+        "출력 변별력을 *입력 대비* 로 판정해야 한다 — 절대 임계는 원칙② 위반")
+
+
+# ══════════════════════════════════════════════════════════════════
+# ③ 반복이 보상받지 않는다 — 상투구 감점
+# ══════════════════════════════════════════════════════════════════
+def test_판박이_도입부는_감점되고_신선한_것은_아니다():
+    """★ 실측: 본문 첫 문단 감성 상투구 32.9% → 70.1%.
+
+    기존 `_AI_OPEN` 은 `퇴근길에…` `요즘…` 을 전부 통과시키고 'AI 회피' 보너스를 줬다 —
+    **반복이 보상받는 구조** 였다.
+    """
+    from JARVIS02_WRITER.post_scorer import repetition_penalty
+
+    recent = ["요즘 뉴스만 틀면 이 종목 얘기가 나옵니다.",
+              "요즘 증시가 출렁이면서 관심이 쏠립니다.",
+              "퇴근길에 문득 시세를 확인했습니다.",
+              "퇴근길 지하철에서 무심코 뉴스를 봤습니다.",
+              "출근길에 라디오에서 들었습니다.",
+              "장마철 습도가 공장 가동률을 바꿉니다."]
+    stale = repetition_penalty("요즘 이 테마가 다시 움직이고 있습니다.", recent)
+    fresh = repetition_penalty("작년 겨울 전력 수요가 기록을 갈아치웠습니다.", recent)
+    assert stale > fresh, f"판박이({stale:.2f})가 신선한 것({fresh:.2f})보다 감점이 크지 않다"
+    assert stale > 0, "판박이인데 감점 0"
+    assert fresh == 0, f"신선한 도입부가 감점됐다 ({fresh:.2f})"
+
+
+def test_상투구_목록을_코드에_박지_않는다():
+    """금지어를 박으면 다음 상투구를 찾아낼 뿐이다 — 최근 글에서 파생해야 한다(원칙②)."""
+    import inspect
+
+    from JARVIS02_WRITER import post_scorer as ps
+
+    # ★ AST 로 본다 — 주석만 걷어내면 **docstring 의 설명 문구**가 걸린다.
+    #   이 저장소에서 같은 실수가 오늘만 세 번 났다(주석·지역변수·토큰공백).
+    tree = ast.parse(textwrap.dedent(inspect.getsource(ps.repetition_penalty)))
+    fn = tree.body[0]
+    if (fn.body and isinstance(fn.body[0], ast.Expr)
+            and isinstance(fn.body[0].value, ast.Constant)):
+        fn.body = fn.body[1:]                      # docstring 제거
+    literals = {n.value for n in ast.walk(ast.Module(body=fn.body, type_ignores=[]))
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    joined = " ".join(literals)
+    for w in ("퇴근길", "출근길", "주말", "장마"):
+        assert w not in joined, f"상투구 '{w}' 가 코드 리터럴에 박혔다 — 두더지 잡기가 된다"
+
+
+def test_기준선을_못_얻으면_감점하지_않는다():
+    """기준선 부재는 글의 잘못이 아니다 — fail-open."""
+    from JARVIS02_WRITER.post_scorer import repetition_penalty
+
+    assert repetition_penalty("아무 문장", None) == 0.0
+    assert repetition_penalty("아무 문장", []) == 0.0
+
+
+# ══════════════════════════════════════════════════════════════════
+# ④ 게이트 항등식 — 구조적 실패는 통과시키지 않는다
+# ══════════════════════════════════════════════════════════════════
+def test_구조적_실패는_학습을_통과시키지_않는다():
+    """★ 실측: 학습 패턴 54개 중 49개(91%)가 LLM 판정 없이 등록됐고,
+    사유 1위가 `No module named 'dotenv'` **19건** — LLM 실패가 아니라 환경 결함이다.
+    재시도해도 같으므로 통과시키면 안 되고 드러내야 한다.
+    """
+    from JARVIS07_GUARDIAN.eval_agent import _conservative_pass
+
+    broken = _conservative_pass("LLM 호출 실패", "No module named 'dotenv'")
+    assert broken.should_register is False, "환경 결함인데 학습을 통과시켰다"
+    assert broken.score == 0
+
+
+def test_일시적_실패는_종전대로_통과한다():
+    """LLM 스로틀·타임아웃으로 학습을 멈추면 그게 더 나쁘다 — 원래 의도를 지킨다."""
+    from JARVIS07_GUARDIAN.eval_agent import _conservative_pass
+
+    transient = _conservative_pass("LLM 판정 불가 (ok=False)", "")
+    assert transient.should_register is True, "일시적 실패까지 막으면 학습이 멈춘다"
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑤ 잡 유예 — 주기에서 파생하되 발행은 건드리지 않는다
+# ══════════════════════════════════════════════════════════════════
+def test_주1회_학습잡의_유예가_주기에서_파생된다():
+    """★ 실측: 주 1회 잡 9개가 전부 유예 1~2시간이었다. 2026-08-02(일) 02~06시
+    잡 0건(노트북 수면)으로 3개가 통째로 유실됐고, 다음 기회가 **일주일 뒤** 였다
+    (마지막 실행 07-26 — 13일 정지).
+    """
+    from JARVIS04_SCHEDULER.job_prereq import effective_grace
+
+    for jid in ("train_weights", "auditor_weekly", "j07_vector_backfill"):
+        g = effective_grace(jid)
+        assert g >= 24 * 3600, f"{jid} 유예 {g}s — 주 1회 잡인데 하루도 안 된다"
+
+
+def test_발행잡_유예는_늘어나지_않는다():
+    """발행은 *시각이 계약* 이다 — 정책 A(놓친 슬롯 재발행 금지)와 정면 충돌한다."""
+    from JARVIS04_SCHEDULER.job_prereq import effective_grace
+    from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+
+    for j in DEFAULT_JOBS:
+        if j["id"] in ("j01_economic_post", "j01_theme_post_21"):
+            assert effective_grace(j["id"]) <= 2 * 3600, (
+                f"{j['id']} 유예가 늘었다 — 정규 시각이 아닌 때 발행될 수 있다")
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑥⑦ 학습 자산 백업 · 폴백 경로 주입
+# ══════════════════════════════════════════════════════════════════
+def test_학습자산이_백업에_동반된다(tmp_path):
+    """`learned_patterns.json`·`bandit_state.json` 은 git 밖이라 사본이 0개였다.
+
+    ★ **동작으로** 검사한다 — 소스 문자열 검사는 *이 테스트의 설명 주석* 에 속는다
+      (실측: 초판이 그렇게 변이를 통과시켰다. 오늘 네 번째 같은 실수).
+    ★ **합성 트리로** 검사한다 (2026-08-08 정정) — 초판은 실 저장소를 훑어
+      `learned_patterns.json` 이 *내 맥북에 있다* 는 사실에 기댔다. 그 파일은
+      `.gitignore` 대상이라 CI 엔 없고, 그래서 이 테스트는 GitHub Actions 에서
+      깨졌다. 검사해야 할 것은 '내 컴퓨터에 파일이 있나' 가 아니라
+      **'이 꼴의 파일을 백업 대상으로 집어내는가'** 다 (ERRORS [568] 과 같은 병).
+    """
+    from shared.db import learning_asset_files
+
+    want = {
+        "JARVIS07_GUARDIAN/learned_patterns.json",   # 자동수리 지문 원장
+        "JARVIS07_GUARDIAN/bandit_state.json",       # 밴딧 학습 상태
+        "JARVIS06_IMAGE/design_recipes.json",        # 이미지 디자인 학습
+    }
+    skip = {
+        "JARVIS07_GUARDIAN/ERRORS.md",               # 학습 산출물이 아니다
+        "JARVIS07_GUARDIAN/notes.txt",
+        "JARVIS02_WRITER/learned_patterns.json",     # 소유 폴더 밖 — 대상 아님
+    }
+    for rel in want | skip:
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("{}", encoding="utf-8")
+
+    got = {str(q.relative_to(tmp_path)) for q in learning_asset_files(root=tmp_path)}
+    assert want <= got, f"학습 자산이 백업 대상에서 빠졌다: {want - got}"
+    assert not (skip & got), f"백업 대상이 아닌 것이 섞였다: {skip & got}"
+
+
+def test_백업자산_탐색이_실저장소에서도_돈다():
+    """합성 트리 검사가 *운영 경로* 까지 보장하지는 않는다 — 인자 없는 호출도 확인한다.
+
+    파일 존재는 머신마다 다르므로 **존재를 단정하지 않는다.** 대신 규약만 본다:
+    반환은 리스트, 모든 항목은 실존 파일, 소유 폴더 안, 패턴에 부합.
+    """
+    import fnmatch
+    from pathlib import Path
+
+    from shared.db import (LEARNING_ASSET_DIRS, LEARNING_ASSET_PATTERNS,
+                           learning_asset_files)
+
+    root = Path(__file__).resolve().parent.parent
+    for q in learning_asset_files():
+        assert q.is_file(), f"존재하지 않는 경로가 섞였다: {q}"
+        assert q.parent.name in LEARNING_ASSET_DIRS, f"소유 폴더 밖: {q}"
+        assert any(fnmatch.fnmatch(q.name, pat) for pat in LEARNING_ASSET_PATTERNS), \
+            f"패턴에 없는 파일: {q.name}"
+        assert q.is_relative_to(root), f"저장소 밖: {q}"
+
+
+def test_백업잡이_자산목록을_실제로_부른다():
+    """분리한 함수를 백업 잡이 안 부르면 파일은 여전히 사본 0개다."""
+    import ast
+    import inspect
+    import textwrap
+
+    from shared import db
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(db.backup_db)))
+    called = {n.func.id for n in ast.walk(tree)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert "learning_asset_files" in called, "백업 잡이 학습 자산 목록을 부르지 않는다"
+
+
+def test_폴백_경로에도_학습지침이_주입된다(monkeypatch):
+    """주 경로가 실패해 폴백으로 떨어지면 **학습 0 상태로 발행** 되고 있었다.
+
+    ★ 동작으로 검사 — 대역을 심어 그 값이 실제 프롬프트에 나타나는지 본다.
+    """
+    from JARVIS02_WRITER import draft_writer as dw
+
+    MARK = "◇지침대역◇"
+    monkeypatch.setattr(dw, "_load_learn_insights", lambda *a, **k: MARK)
+    msg = dw._build_section_system_msg("[헌법]", "tistory")
+    assert MARK in msg, "폴백 공통 system 에 학습 지침이 실리지 않는다"
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑧ 네이버 글별 조회수 — 관리자 통계 (2026-08-08)
+# ══════════════════════════════════════════════════════════════════
+def test_공개페이지_스크래핑으로_돌아가지_않는다():
+    """★ 공개 페이지엔 조회수가 **없다** — 실측: m.blog 응답 10만자 안에
+    `조회`·`visitorCount`·`viewCount` 각 **0회**. 패턴을 고쳐도 없는 값은 못 찾는다.
+    ERRORS 가 두 번 기각한 길이므로 되돌아가면 안 된다.
+    """
+    import inspect
+
+    from JARVIS03_RADAR import performance_collector as pc
+
+    src = inspect.getsource(pc._collect_naver_views)
+    code = "\n".join(l.split("#")[0] for l in src.splitlines())
+    assert "PostView.naver" not in code and "m.blog.naver.com" not in code, (
+        "공개 페이지 스크래핑으로 회귀했다 — 그 경로엔 조회수가 존재하지 않는다")
+    assert "_NV_BATCH_CACHE" in code, "배치 캐시를 쓰지 않는다"
+
+
+def test_조회수를_위치가_아니라_레이블로_읽는다():
+    """통계 페이지엔 조회수·공감수·댓글수가 섞여 나온다.
+    "숫자 N번째" 로 집으면 네이버가 항목 하나만 추가해도 **엉뚱한 값이 학습에 들어간다**.
+    """
+    from JARVIS03_RADAR.performance_collector import _NV_DAILY_ROW
+
+    page = ("조회수\n날짜 조회수\n"
+            "2026.08.08. (토) 0\n2026.08.07. (금) 1\n2026.08.06. (목) 4\n"
+            "공감수\n0\n댓글수\n0\n단위 : 건\n")
+    vals = [int(v.replace(",", "")) for v in _NV_DAILY_ROW.findall(page)]
+    assert vals == [0, 1, 4], f"일별 행만 뽑아야 하는데 {vals}"
+    assert sum(vals) == 5
+
+
+def test_logNo_추출이_URL_형태에_흔들리지_않는다():
+    """발행 URL 은 `?fromRss=true&trackingCode=rss` 가 붙어 온다."""
+    from JARVIS03_RADAR.performance_collector import _naver_log_no
+
+    assert _naver_log_no(
+        "https://blog.naver.com/youandi3535/224371775209?fromRss=true") == "224371775209"
+    assert _naver_log_no(
+        "https://blog.naver.com/PostView.naver?blogId=x&logNo=224369275563") == "224369275563"
+    assert _naver_log_no("https://blog.naver.com/youandi3535") == ""
+
+
+def test_미수집을_조회0으로_단정하지_않는다():
+    """★ 이번 감사의 핵심 교훈 — **0 은 '나빴다' 이지 '모른다' 가 아니다.**
+    통계 페이지가 로그인 만료 등으로 안 열리면 캐시에 안 담기고,
+    학습 쪽(`build_target`)이 그 결측을 제외한다.
+    """
+    import inspect
+
+    from JARVIS03_RADAR import performance_collector as pc
+
+    src = inspect.getsource(pc._collect_naver_stats_batch)
+    assert '"조회수" not in text' in src or "'조회수' not in text" in src, (
+        "페이지가 열리지 않았을 때 0 으로 단정하지 않는 가드가 없다")

@@ -127,6 +127,22 @@ def _section_of(key: str) -> str:
     return "?"
 
 
+
+def _target_korean() -> int:
+    """본문 분량 목표 — `length_manager` 단일 진입점에서 파생.
+
+    ★ 이름표에 수치를 **복사**해 두면 기준이 바뀌는 날 이름만 옛 값을 주장한다.
+      실측 2026-08-07: 이름은 `본문 분량 1500자+` 인데 채점은 1600 을 썼다 —
+      1500자 글은 만점이 아닌데 이름은 만점이라고 말하고 있었다.
+      그리고 이 **이름표가 이제 작성 프롬프트로 나간다**(약점 항목 주입) —
+      낡은 이름은 작성자에게 거짓 목표를 준다.
+    """
+    try:
+        from JARVIS02_WRITER.length_manager import TARGET_KOREAN
+        return int(TARGET_KOREAN)
+    except Exception:
+        return 1600
+
 def mx(key: str) -> float:
     """항목 만점 — 채점 함수·표시 양쪽의 *유일한* 배점 출처."""
     return float(RUBRIC_MAX[key])
@@ -278,12 +294,114 @@ _DISCLAIM  = re.compile(r'참고|권유|책임|판단.*본인|투자.*아님|정
 _UNIT_MIX  = re.compile(r'(?:KRW.*?원|원.*?KRW|퍼센트.*?%|%.*?퍼센트)')
 
 
-def _b1_intro(html: str) -> float:
-    """B1: 도입부 4문장 + 도입 이미지 + AI 자동생성형 금지 (헌법 제1조)."""
+def _stem(word: str) -> str:
+    """어절의 앞머리만 — 조사 차이를 흡수한다 (`퇴근길` ≡ `퇴근길에`)."""
+    w = re.sub(r"[^가-힣A-Za-z]", "", word or "")
+    return w[:3] if len(w) >= 3 else w
+
+
+def _phrase_ngrams(text: str, n: int = 2) -> set[str]:
+    """어절 n-gram(어간 기준) — 표현의 '뼈대' 만 남긴다."""
+    words = [_stem(w) for w in re.split(r"\s+", _strip(text or "")) if w]
+    words = [w for w in words if w]
+    return {" ".join(words[i:i + n]) for i in range(max(0, len(words) - n + 1))}
+
+
+def repetition_penalty(intro_first: str, recent_intros: list[str] | None) -> float:
+    """도입부가 최근 글들과 **얼마나 닮았는가** — 0.0(신선) ~ 1.0(판박이).
+
+    ★ 왜 상투구 *목록* 을 박지 않는가 (2026-08-08 — 사용자 지시 감사)
+      실측: 본문 첫 문단의 감성 상투구 비율이 **32.9% → 70.1%** 로 두 배가 됐다.
+      그런데 기존 `_AI_OPEN` 은 `퇴근길에…` `주말 아침…` `요즘…` 을 **전부 통과** 시키고,
+      통과하면 'AI 회피' 보너스를 준다 — **반복이 보상받는 구조** 였다.
+      여기서 금지어를 박으면 다음 상투구를 찾아낼 뿐이다(두더지 잡기).
+      → **최근 발행글에서 파생** 한다. 새 상투구가 생기면 그것도 자동으로 잡힌다.
+
+    ★ 왜 '첫 어절' 이 주 신호인가 (실측으로 정한 것 — 초판은 여기서 틀렸다)
+      최근 40편을 세어 보니 3어절 공유는 **0종**, 2어절은 최대 5편,
+      그런데 **첫 어절은 40편 중 23편(58%)이 단 6개 단어**(요즘8·퇴근길6·출근길3·주말2
+      ·아침2…)로 시작했다. 초판은 2어절만 봐서 감점이 **전부 0.00** 이었다.
+      상투구는 문장 *앞* 에 산다 — 거기를 봐야 잡힌다.
+
+    Args:
+        recent_intros: 최근 발행글의 도입부 첫 문장들. **None 이면 0.0** —
+            호출자가 맥락을 못 주면 감점하지 않는다(종전 동작 보존).
+    """
+    if not recent_intros:
+        return 0.0
+    text = _strip(intro_first or "")
+    words = [w for w in re.split(r"\s+", text) if w]
+    if not words:
+        return 0.0
+
+    def _head(t):
+        ws = [w for w in re.split(r"\s+", _strip(t or "")) if w]
+        return _stem(ws[0]) if ws else ""
+
+    # ① 첫 어절 — 같은 말로 시작하는 글이 최근에 얼마나 흔한가 (주 신호)
+    head = _stem(words[0])
+    heads = [_head(r) for r in recent_intros]
+    head_share = (sum(1 for h in heads if h and h == head) / len(recent_intros)) if head else 0.0
+
+    # ② 2어절 뼈대 공유 — 보조 신호. 표본 크기에서 정족수를 파생한다.
+    grams = _phrase_ngrams(text, 2)
+    gram_share = 0.0
+    if grams:
+        quorum = max(2, len(recent_intros) // 5)
+        shared = sum(1 for g in grams
+                     if sum(1 for r in recent_intros if g in _phrase_ngrams(r, 2)) >= quorum)
+        gram_share = shared / len(grams)
+
+    # 첫 어절에 무게를 싣는다 — 실측상 그쪽이 변별력이 크다.
+    return min(1.0, head_share * 2.0 + gram_share)
+
+
+@_lru_cache(maxsize=1)
+def _recent_intros_cached(limit: int = 30) -> tuple:
+    """최근 발행글의 **도입부 첫 문장** — 반복 판정의 기준선 (2026-08-08).
+
+    ★ 왜 호출자가 아니라 채점기가 조달하는가 (원칙①)
+      `score_post` 호출자는 4곳이다(게이트·발행후분석·소급재채점·자기검사). 각자
+      "최근 도입부를 챙겨 넘겨라" 로 두면 **반드시 잊는 곳이 생긴다** — 그리고 잊은 쪽은
+      감점 0 으로 조용히 통과한다. 같은 파일의 `pipeline_controlled_items()` 도 이미
+      DB 를 직접 보므로 설계 일관성도 있다.
+
+    실패하면 빈 튜플 — **감점하지 않는다**(기준선을 못 얻었다고 글을 벌하지 않는다).
+    """
+    try:
+        from shared.db import get_db
+        with get_db() as con:
+            rows = con.execute(
+                "SELECT original_html FROM post_analysis "
+                "WHERE original_html IS NOT NULL AND original_html <> '' "
+                "ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
+    except Exception:
+        return ()
+    out = []
+    for (html,) in rows:
+        body = (html or "").split("<body", 1)[-1]
+        m = re.search(r"<p[^>]*>(.*?)</p>", body, re.DOTALL)
+        if m:
+            t = _strip(m.group(1)).strip()
+            if t:
+                out.append(t)
+    return tuple(out)
+
+
+def _b1_intro(html: str, recent_intros: list[str] | None = None) -> float:
+    """B1: 도입부 4문장 + 도입 이미지 + AI 자동생성형 금지 (헌법 제1조).
+
+    ★ `recent_intros` 가 주어지면 **반복 감점** 을 적용한다 (2026-08-08).
+      종전엔 상투구가 `_AI_OPEN` 을 통과해 오히려 'AI 회피' 보너스를 받았다.
+    """
     _mx = mx("B1_intro")
     _ai_pt = max(0.0, _mx - 5.0)   # 5점 초과 배점 = 'AI 자동생성형 회피' 몫
     paras = re.findall(r'<p[^>]*>(.*?)</p>', html, re.DOTALL)[:6]
     if not paras: return 0.0
+    # ★ 호출자가 안 주면 채점기가 직접 조달한다 — 잊을 수 있는 배선을 만들지 않는다.
+    #   명시적으로 `[]` 를 넘기면 감점 없음(소급 재채점처럼 *당시 기준* 이 필요한 경우).
+    if recent_intros is None:
+        recent_intros = list(_recent_intros_cached())
     intro = " ".join(_strip(p) for p in paras[:4])
     sents = _sentences(intro)
     first_text = _strip(paras[0]).strip()[:60]
@@ -295,7 +413,10 @@ def _b1_intro(html: str) -> float:
         return round(max(0.0, (min(sents, 4) - 1) * 0.5) * 2) / 2
     # 정상: 4문장 근접도(문장당 1점, 상한 4.0) + 도입부 이미지 1점 + AI 회피 배점
     score = min(4.0, sents * 1.0) + (1.0 if has_img else 0.0) + _ai_pt
-    return round(min(_mx, score) * 2) / 2
+    # ★ 반복 감점 — 'AI 회피' 몫(_ai_pt)을 상한으로 깎는다. 상투구를 피한 대가로 준 점수이니
+    #   판박이면 그 몫부터 회수하는 것이 맞다. 문장수·이미지 같은 구조 점수는 건드리지 않는다.
+    score -= _ai_pt * repetition_penalty(first_text, recent_intros)
+    return round(max(0.0, min(_mx, score)) * 2) / 2
 
 
 def _b2_paragraphs(html: str) -> float:
@@ -502,7 +623,7 @@ def score_section_b(draft: Any, platform: str = "", factuality_issues: list = No
         "B14_incomplete2":  {"score": graded_violation(len(_INCOMPLETE.findall(_strip(html))), 1.0), "max": mx("B14_incomplete2"), "name": "미완성 표현 없음(제7조)"},
         "B15_img_pos":      {"score": graded_violation(len(_IMG_POS.findall(_strip(html))), 1.0), "max": mx("B15_img_pos"), "name": "이미지 위치 지칭 없음"},
         "B16_img_count":    {"score": _b16_image_count(html), "max": mx("B16_img_count"), "name": "이미지 최소 5장"},
-        "B17_body_len":     {"score": _b17_body_length(html), "max": mx("B17_body_len"), "name": "본문 분량 1500자+"},
+        "B17_body_len":     {"score": _b17_body_length(html), "max": mx("B17_body_len"), "name": f"본문 분량 {_target_korean()}자+"},
         "B18_spacing":      {"score": _b18_spacing(html), "max": mx("B18_spacing"), "name": "여백 규정 준수"},
         "B19_chart":        {"score": _b19_chart(draft), "max": mx("B19_chart"), "name": "차트 실데이터"},
         "B20_visual_div":   {"score": mx("B20_visual_div"), "max": mx("B20_visual_div"), "name": "시각화 스타일 중복 없음(프로세스)"},  # 근거: 차트 스타일 메타데이터 부재로 draft 단독 중복 관측 불가 → 프로세스 보장, max 유지(rule 3)
@@ -584,13 +705,13 @@ def score_section_c_naver(draft: Any, kw: str = "") -> dict:
         n8 = (_m - 1.0) if hayeo >= 5 else ((_m - 1.5) if hayeo >= 3 else 0.0)
 
     items = {
-        "N1_title_len":     {"score": n1, "max": mx("N1_title_len"), "name": "제목 길이(≤40)"},
+        "N1_title_len":     {"score": n1, "max": mx("N1_title_len"), "name": f"제목 길이(≤{_std('naver', 'title_max_chars', 40):.0f})"},
         "N2_kw_in_title":   {"score": n2, "max": mx("N2_kw_in_title"), "name": "제목 키워드 앞부분"},
         "N3_h3_count":      {"score": n3, "max": mx("N3_h3_count"), "name": "H3 소제목 3~4개"},
         "N4_section_sents": {"score": n4, "max": mx("N4_section_sents"), "name": "소제목 아래 2~3문장"},
         "N5_kw_density":    {"score": n5, "max": mx("N5_kw_density"), "name": "키워드 밀도 1~2%"},
         "N6_kw_in_body":    {"score": n6, "max": mx("N6_kw_in_body"), "name": "본문 키워드 3~5회"},
-        "N7_hashtags":      {"score": n7, "max": mx("N7_hashtags"), "name": "해시태그 5~10개"},
+        "N7_hashtags":      {"score": n7, "max": mx("N7_hashtags"), "name": f"해시태그 {_std('naver', 'hashtag_min', 5):.0f}~{_std('naver', 'hashtag_max', 10):.0f}개"},
         "N8_hayeo":         {"score": n8, "max": mx("N8_hayeo"), "name": "해요체 일관"},
     }
     return {"total": round(sum(v["score"] for v in items.values()), 2), "max": 20.0, "items": items}
@@ -656,13 +777,13 @@ def score_section_c_tistory(draft: Any, kw: str = "") -> dict:
     t9 = mx("T9_no_dup")
 
     items = {
-        "T1_title_len":     {"score": t1, "max": mx("T1_title_len"), "name": "제목 길이(≤55)"},
+        "T1_title_len":     {"score": t1, "max": mx("T1_title_len"), "name": f"제목 길이(≤{_std('tistory', 'title_max_chars', 55):.0f})"},
         "T2_kw_in_title":   {"score": t2, "max": mx("T2_kw_in_title"), "name": "제목 키워드 포함"},
         "T3_h1_count":      {"score": t3, "max": mx("T3_h1_count"), "name": "H1 1개"},
         "T4_h2_count":      {"score": t4, "max": mx("T4_h2_count"), "name": "H2 3~5개"},
         "T5_h3_range":      {"score": t5, "max": mx("T5_h3_range"), "name": "H3 범위 내 활용"},
         "T6_longtail":      {"score": t6, "max": mx("T6_longtail"), "name": "롱테일 키워드 헤더"},
-        "T7_meta_desc":     {"score": t7, "max": mx("T7_meta_desc"), "name": "메타 설명 길이(140-160)"},
+        "T7_meta_desc":     {"score": t7, "max": mx("T7_meta_desc"), "name": f"메타 설명 길이({_std('tistory', 'meta_desc_min_chars', 140):.0f}-{_std('tistory', 'meta_desc_max_chars', 160):.0f})"},
         "T8_internal_link": {"score": t8, "max": mx("T8_internal_link"), "name": "내부 링크 1개"},
         "T9_no_dup":        {"score": t9, "max": mx("T9_no_dup"), "name": "네이버 중복 없음(프로세스)"},
     }

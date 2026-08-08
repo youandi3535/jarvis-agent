@@ -495,7 +495,12 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
         )
 
         if fixed:
-            _db.mark_error_status(error_id, "fixed")
+            # ★ 근거를 남긴다 (2026-08-08) — `fixed` 가 세 뜻을 말하지 않게.
+            #   Tier-2 는 이제 재현검증을 통과해야만 True 를 돌려준다(auto_repair).
+            #   ※ 2026-08-08 19시경 자동 수정이 이 인자를 **주석만 남기고 지웠다**
+            #     (근거 없이 fixed 를 찍는 상태로 되돌아감). 골든 테스트가 잡았다.
+            _db.mark_error_status(error_id, "fixed",
+                                  "Tier-2 SDK 수정 + 재현검증 통과")
             log.info(f"[GUARDIAN] #{error_id} SDK 수정 성공 → 학습 저장 완료, 작업 재시도 중")
             # 학습 저장: ① _record_repairs_to_guardian(external_change) ② record_sdk_fix(밴딧 보상 + llm_patch) — 둘 다 run_auto_repair_targeted 내부 자동
             _retry_original_job(error_record)
@@ -1165,6 +1170,46 @@ def report_ignored_bucket() -> dict:
     return rep
 
 
+
+def _repair_watermark() -> int:
+    """지금까지 기록된 자가진단 회차의 최대 id — **이번 회차를 가려내는 기준선**.
+
+    ★ 왜 필요한가 (2026-08-08 재검증)
+      종전 `_last_repair_returncode()` 는 `ORDER BY id DESC LIMIT 1` 로 **테이블 최신 행**
+      을 봤다. 그건 '이번 회차' 가 아니다 — 다른 경로가 그 사이 회차를 적었거나
+      이번 회차가 아예 기록을 못 남긴 경우, 남의 결과를 이번 판정에 쓴다.
+      실행 전 워터마크를 찍어 두고 그보다 뒤에 생긴 행만 본다.
+    """
+    try:
+        from shared import db as _db
+        with _db.get_db() as conn:
+            row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM self_repair_runs").fetchone()
+        return int(row[0] or 0)
+    except Exception as e:
+        log.warning(f"[GUARDIAN/deepaudit] 워터마크 조회 실패: {e}")
+        return 0
+
+
+def _repair_returncode_since(watermark: int) -> "int | None":
+    """워터마크 **이후** 기록된 회차의 returncode. 기록이 없으면 None.
+
+    여러 건이면 하나라도 실패면 실패로 본다(가장 나쁜 것을 보고한다).
+    """
+    try:
+        from shared import db as _db
+        with _db.get_db() as conn:
+            rows = conn.execute(
+                "SELECT returncode FROM self_repair_runs WHERE id > ? ORDER BY id",
+                (int(watermark),)).fetchall()
+        if not rows:
+            return None
+        codes = [int(r["returncode"]) for r in rows]
+        bad = [c for c in codes if c != 0]
+        return bad[0] if bad else 0
+    except Exception as e:
+        log.warning(f"[GUARDIAN/deepaudit] returncode 조회 실패: {e}")
+        return None
+
 def job_deep_audit() -> None:
     """매일 04:30 — 심층 코드 감사 (DB 백업 03:00 이후, 발행과 분리).
 
@@ -1186,11 +1231,29 @@ def job_deep_audit() -> None:
         log.info(f"[GUARDIAN/deepaudit] backlog 완료: {b}")
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] backlog 처리 예외: {e}")
+    _audit_rc = None
+    _wm = _repair_watermark()
     try:
         from JARVIS07_GUARDIAN.auto_repair import run_auto_repair
         run_auto_repair()
+        _audit_rc = _repair_returncode_since(_wm)
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] 광범위 감사 예외: {e}")
+        _audit_rc = -1
+    # ★ 실패한 회차를 **성공으로 기록하지 않는다** (2026-08-08 재검증으로 재작성).
+    #
+    #   1차 시도는 콜백 안에서 `mark_outcome` 으로 사후 보정하려 했는데 **항상 no_row**
+    #   였다 — `job_runs` 행은 `_on_job_executed`(콜백 *종료 후*)에만 INSERT 되므로
+    #   콜백 본체에서는 보정할 행이 아직 없다. 실측 j07_deep_audit 39/39 success=1 그대로.
+    #   더 나쁜 건 6시간 창에 이전 행이 있으면 **직전의 진짜 성공 회차를 실패로 뒤집는다**.
+    #
+    #   그래서 보정을 하지 않는다 — **애초에 실패로 적히게** 한다.
+    #   `run_auto_repair` 가 rc 로만 남기는 실패를 여기서 예외로 올리면
+    #   APScheduler 의 `EVENT_JOB_ERROR` → `job_history._on_job_error` 가
+    #   `success=False` 로 **정규 경로에서** 적재한다. 새 보정 경로를 만들지 않는다(①).
+    #   ※ 예외는 이 잡을 끝내는 것뿐 — 스케줄러도 다른 잡도 영향받지 않는다.
+    if _audit_rc not in (None, 0):
+        raise RuntimeError(f"심층 감사 실패 — auto_repair returncode={_audit_rc}")
     # 3부: 격리 버킷 집계·추세 보고 (★ 결함3) — 새 잡 신설 없이 기존 일일 잡에 편승
     try:
         report_ignored_bucket()
@@ -1449,6 +1512,29 @@ def register(scheduler, bus):
         init_log_scanner()
     except Exception as e:
         log.warning(f"[GUARDIAN] 로그 스캐너 초기화 실패: {e}")
+
+    # 4-B) ★ 캐치 경로 스모크 — **설치했다는 것은 동작한다는 증거가 아니다** (2026-08-08).
+    #   `catch_path_effective()` 는 정확히 이 목적으로 만들어졌는데 **호출자가 0곳**이었다
+    #   (정의 1행뿐). 그 사이 로그 스캐너는 71일간 수확 0건이었고 아무도 몰랐다.
+    #   CLAUDE.md 가 `patch_effective` 표준으로 박아둔 셋 중 이것만 배선이 빠져 있었다.
+    #   실패해도 부팅을 막지 않는다 — 관측이 가용성을 해치면 안 된다. 대신 오류로 남긴다.
+    try:
+        from JARVIS07_GUARDIAN.error_collector import catch_path_effective
+        _smoke = catch_path_effective()
+        if _smoke is False:
+            log.error("[GUARDIAN] ★ 캐치 경로 무력 — 오류가 수집되지 않는다")
+            try:
+                from JARVIS07_GUARDIAN.error_collector import report as _rep
+                # ★ 타입을 error_type 자리로 (2026-08-08) — 위 두 곳과 같은 이유.
+                _rep("CatchPathDead", "guardian",
+                     message="캐치 경로 스모크 실패 — 오류 수집 무력",
+                     module=__name__, func_name="register")
+            except Exception:
+                pass
+        elif _smoke is None:
+            log.info("[GUARDIAN] 캐치 경로 스모크 판정 불가")
+    except Exception as e:
+        log.warning(f"[GUARDIAN] 캐치 경로 스모크 실행 실패: {e}")
 
     # 5) 스케줄 잡 등록 — JARVIS04_SCHEDULER/job_registry.DEFAULT_JOBS 에서 관리 (이관 완료)
     # guardian_log_scan / guardian_archive / j07_git_audit / j07_retry_pending

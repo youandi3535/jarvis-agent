@@ -40,7 +40,7 @@ __all__ = [
     "active_directives",
     # ★ 항목별 학습 (2026-08-07) — 총점 하나가 아니라 항목마다 신호를 준다
     "insight_target_item", "item_reward", "item_reward_neutral",
-    "weak_items", "maintained_items",
+    "weak_items", "maintained_items", "selectable_insights",
 ]
 
 # ══════════════════════════════════════════════════════════════════
@@ -229,6 +229,38 @@ def _pinned_pick(scope: str, theme: str, limit: int, rows: list[dict]) -> list[d
     return picked
 
 
+
+def selectable_insights(scope_filter: str, limit: int, days: int) -> list:
+    """주입·검사에 **쓸 수 있는 지침**만 — 선택 규칙의 단일 진입점 (2026-08-08).
+
+    ★ 왜 함수로 뺐나 (③ 4조합/전 경로 — 한쪽만 걸면 다른 쪽에서 샌다)
+      2026-08-08 에 "파이프라인이 채우는 항목을 겨눈 지침은 쓰지 않는다" 필터가
+      `active_directives`(게이트가 *검사* 할 때)에만 들어갔다. 그런데 정작 해로운 쪽은
+      `build_insights_block`(작성 프롬프트에 *주입* 할 때)이고 거기엔 안 걸려 있었다 —
+      게이트는 벌하지 않는데 작성기는 계속 시키는, 정확히 거꾸로 된 상태다.
+      두 소비자가 같은 규칙을 쓰려면 규칙이 한 곳에 있어야 한다.
+
+    거르는 것 둘:
+      ① `directive_issues` — 지침 꼴이 아닌 것(글 조각·수치 포함·HTML)
+      ② 파이프라인이 채우는 항목을 겨눈 것 — 작성 LLM 이 만들 수 없다.
+         메타 설명·태그·내부 링크가 그것이고, 시키면 **지어낸다**
+         (BLOG_SUPREME_LAW 제5조 진실성 위반). 항목 집합은 채점기에서 파생한다(②).
+    """
+    from shared import db as _db
+    rows = _db.get_ranked_learning_insights(
+        scope=scope_filter, limit=limit, days=days) or []
+    rows = [r for r in rows if not directive_issues(r.get("directive") or "")]
+    try:
+        from JARVIS02_WRITER.post_scorer import pipeline_controlled_items
+        pipe = pipeline_controlled_items()
+        if pipe:
+            rows = [r for r in rows
+                    if insight_target_item(r.get("insight_key") or "") not in pipe]
+    except Exception as e:
+        # 파생 실패 시 종전대로 — 주입을 막지는 않는다(가용성 우선).
+        _log.warning(f"[quality_learner] 파이프라인 항목 파생 실패: {type(e).__name__}: {e}")
+    return rows
+
 def active_directives(scope: str = "all", theme: str = "", limit: int = 8) -> list[str]:
     """이번 발행쌍에 **주입된 지침 문장** 목록 — *조회 전용*(사용 기록을 남기지 않는다).
 
@@ -252,8 +284,7 @@ def active_directives(scope: str = "all", theme: str = "", limit: int = 8) -> li
         from shared import db as _db
 
         _scope_filter = "" if scope in ("", "all") else scope
-        rows = _db.get_ranked_learning_insights(scope=_scope_filter, limit=limit, days=SELECTION_DAYS)
-        rows = [r for r in rows if not directive_issues(r.get("directive") or "")]
+        rows = selectable_insights(_scope_filter, limit, SELECTION_DAYS)
         if not rows:
             return []
         picked = _pinned_pick(scope, theme, limit, rows)
@@ -291,14 +322,7 @@ def build_insights_block(scope: str = "all", theme: str = "",
         # scope='all' 은 SQL 필터에선 '전체'('') 를 의미해야 함 (필터 함정 방지 — 교차 리뷰)
         _scope_filter = "" if scope in ("", "all") else scope
         # days=0(기본) → 선택 기간 상수 상속. 0 을 그대로 SQL 에 넘기면 후보가 통째로 사라진다.
-        rows = _db.get_ranked_learning_insights(
-            scope=_scope_filter, limit=limit, days=(days or SELECTION_DAYS))
-        # ★ 주입 직전 2차 방어 (2026-08-02). 저장 게이트가 있는데 왜 또 보는가 —
-        #   오늘 실측으로 *면제·필터가 있어도 앞단이 무력화하면 그대로 샌다* 는 것을 두 번 봤다
-        #   (watchdog 판정 순서 · engagement_judge 회로 면제). 프롬프트 주입은 4조합 모든 글에
-        #   영향을 주는 마지막 관문이므로 여기서 한 번 더 거른다.
-        #   규칙 본체는 `directive_issues` 하나 — 사본을 만들지 않는다(원칙①).
-        rows = [r for r in rows if not directive_issues(r.get("directive") or "")]
+        rows = selectable_insights(_scope_filter, limit, days or SELECTION_DAYS)
         if not rows:
             return ""
         # ★ 발행쌍 고정 — platform 은 키에 넣지 않는다 (NV·TS 가 같은 묶음을 받게 하는 것이 목적).
@@ -561,7 +585,7 @@ def _match_analysis(usage: dict, analyses: list[dict]) -> Optional[dict]:
 _VIOLATION_PENALTY = 0.15
 
 
-def record_directive_violations(scope: str, platform: str, theme: str,
+def record_directive_violations(scope: str, platform: str,
                                 violated_texts: list) -> int:
     """게이트가 판정한 **미준수 지침** 을 사용 기록에 남긴다 (2026-08-07 감사).
 
@@ -573,6 +597,11 @@ def record_directive_violations(scope: str, platform: str, theme: str,
 
     ★ 왜 여기인가 (①) — 지침 텍스트를 id 로 되돌리는 건 지침의 주인만 할 수 있다.
       게이트는 텍스트만 알고, 이 모듈은 그 텍스트가 어느 행에서 나왔는지 안다.
+
+    ★ `theme` 인자를 뺐다 (2026-08-08) — 본문에서 한 번도 쓰지 않는 **죽은 인자**였는데,
+      그걸 채우려던 호출부가 스코프에 없는 이름을 써서 **NameError** 를 냈다.
+      `build_insights_block` 도 작성기에서 theme 를 넘기지 않으므로(기본 "") 배치 매칭에
+      쓰이지도 않는다. 쓰지 않는 인자는 두지 않는다 — 채우려다 사고가 난다.
     """
     if not violated_texts:
         return 0

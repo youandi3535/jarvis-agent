@@ -440,6 +440,16 @@ def init_db():
             conn.execute("ALTER TABLE post_analysis ADD COLUMN publish_meta TEXT")
         except Exception:
             pass
+        # self_repair_runs.llm_saved_1d: **하루 창에서 LLM 없이 실제로 고친 횟수** (2026-08-08).
+        #   ★ 왜 새 칸인가 — `llm_saved` 는 2026-08-07 이전 105행이 `actionable_hits`
+        #     (= 저장된 패턴 수, 누적)를 담고 있고 그 뒤 행은 전혀 다른 정의(1일 창 실적)를
+        #     담는다. **한 칸에 두 정의가 섞이면 추세 계산이 거짓말을 한다** — 실제로
+        #     텔레그램이 "실제 LLM 절약: 50 → 0 (-50회)" 라는 가짜 붕괴를 보고했다.
+        #     옛 값을 덮어쓰지 않는다(이력 오염). 새 정의는 새 칸에 담고 옛 칸은 읽지 않는다.
+        try:
+            conn.execute("ALTER TABLE self_repair_runs ADD COLUMN llm_saved_1d INTEGER DEFAULT NULL")
+        except Exception:
+            pass
         # learning_insights.scope: 어떤 글 종류에 적용할 인사이트인지.
         # 'economic' / 'theme' / 'all'. 작성기가 호출 시 scope IN (post_type,'all') 만 주입.
         try:
@@ -1378,6 +1388,33 @@ def backup_gaps(days: int = 7) -> list:
             if (today - timedelta(days=i)) not in have]
 
 
+LEARNING_ASSET_DIRS = ("JARVIS07_GUARDIAN", "JARVIS06_IMAGE")
+LEARNING_ASSET_PATTERNS = ("learned_*.json", "*_state.json", "design_recipes.json")
+
+
+def learning_asset_files(root=None) -> list:
+    """DB 밖에 사는 **학습 산출물 파일** 목록 — 백업 대상 (2026-08-08).
+
+    ★ 목록을 박지 않는다(②): 소유 폴더에서 *꼴* 로 찾는다. 새 학습기가
+      `learned_*.json`·`*_state.json` 을 만들면 자동으로 백업에 딸려온다.
+    ★ 왜 분리했나: `backup_db` 안에 인라인으로 두면 **동작으로 검증할 수가 없어서**
+      회귀 테스트가 소스 문자열을 보게 되고, 그건 주석에 속는다(실측: 이 파일에서 발생).
+    ★ `root` 인자 (2026-08-08 추가) — 대상 파일이 전부 `.gitignore` 라 **CI 에는 없다**.
+      실 저장소를 보게 두면 회귀 테스트가 "내 맥북에서만 통과" 가 된다(ERRORS [568]).
+      테스트는 합성 트리를 넘겨 *규칙* 을 검사하고, 운영은 인자 없이 종전대로 쓴다.
+    """
+    root = Path(root) if root is not None else Path(__file__).resolve().parent.parent
+    pats = LEARNING_ASSET_PATTERNS
+    out: list = []
+    for folder in LEARNING_ASSET_DIRS:
+        d = root / folder
+        if not d.is_dir():
+            continue
+        for pat in pats:
+            out += [q for q in d.glob(pat) if q.is_file()]
+    return sorted(set(out))
+
+
 def backup_db(retention_days: int = 30) -> dict:
     """SQLite .backup API 로 WAL 안전 백업 + **GFS 계층 보존**.
 
@@ -1430,6 +1467,31 @@ def backup_db(retention_days: int = 30) -> dict:
         except Exception:
             pass
         raise RuntimeError(f"백업 무결성 검증 실패: {_bad}")
+
+    # 1-C) ★ 학습 자산 JSON 동반 백업 (2026-08-08 — 사용자 지시 감사)
+    #
+    #   `learned_patterns.json`(535KB)·`bandit_state.json`(45KB) 은 **git 추적 밖**
+    #   (`.gitignore` 등재)이고 DB 도 아니라 **사본이 세상에 하나도 없었다.**
+    #   패턴 54개·밴딧 학습 상태 — 몇 달치 누적 자산인데 파일 하나 날아가면 끝이다.
+    #   백업 잡이 이미 매일 도니 여기 태운다(원칙① — 백업의 주인은 이 함수 하나).
+    #
+    #   ★ 목록을 박지 않는다(②): *DB 밖에 사는 학습 산출물* 을 소유 폴더에서 찾는다.
+    #     새 학습기가 `*_state.json`·`learned_*.json` 을 만들면 자동으로 딸려온다.
+    try:
+        _assets = learning_asset_files()
+        if _assets:
+            _adir = BACKUP_DIR / f"assets_{today}"
+            _adir.mkdir(parents=True, exist_ok=True)
+            for _a in _assets:
+                shutil.copy2(_a, _adir / _a.name)
+    except Exception as _e:      # 자산 백업 실패가 DB 백업을 깨뜨리면 안 된다
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report as _rep
+            _rep("LearningAssetBackupFailed", "infra",
+                 message=f"학습 자산 JSON 백업 실패(DB 백업은 정상): {type(_e).__name__}: {_e}",
+                 module=__name__, func_name="backup_db", context={"kind": "daemon_down"})
+        except Exception:
+            pass
 
     # 2) Retention — GFS 계층 보존 (일 7 + 주 4 + 월 3 ≈ 14개로 30일 커버)
     cutoff = date.today() - timedelta(days=retention_days)
@@ -2210,7 +2272,7 @@ def save_error(
             """SELECT id, seen_count FROM error_log
                WHERE source=? AND module IS ? AND error_type=?
                  AND message=? AND status!='fixed'
-                 AND timestamp >= datetime('now','-1 hour','localtime')
+                 AND timestamp >= """ + ts_cutoff_sql('-1 hour') + """
                ORDER BY id DESC LIMIT 1""",
             (source, module, error_type, msg_key),
         ).fetchone()
@@ -2361,10 +2423,92 @@ def mark_error_fixed(error_id: int, resolution: str, fixed_file: str = None):
         )
 
 
-def mark_error_status(error_id: int, status: str):
-    """오류 상태 변경 (analyzing / wontfix / ignored)."""
+# ══════════════════════════════════════════════════════════════════
+# ★ error_log.timestamp 비교 — 구분자 단일 진입점 (2026-08-08 재검증)
+# ══════════════════════════════════════════════════════════════════
+#
+# `error_log.timestamp` 는 `strftime('%Y-%m-%dT%H:%M:%S')` 로 저장된다 — **'T' 구분자**.
+# 그런데 비교값을 `datetime('now','localtime',...)` 로 만들면 **공백 구분자**가 나온다.
+# SQLite 는 이 둘을 *문자열로* 비교하고 `'T'(0x54) > ' '(0x20)` 이므로,
+# **같은 날짜의 행이 시각과 무관하게 전부 조건을 통과한다.**
+#
+# 실측 2026-08-08: 60분 창이 **115행** 을 잡았다(올바른 값 3행). `window_min` 인자는
+# 무엇을 넣든 결과가 같은 **죽은 인자** 였다. 저장소 전역 11곳이 같은 병이었다.
+#
+# 표현식을 여기 한 곳에서만 만든다 — 11곳이 각자 SQL 을 쓰면 하나를 고쳐도 열 개가 남는다.
+TS_CUTOFF = "strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime',?))"
+
+
+def ts_cutoff_sql(*modifiers: str) -> str:
+    """`timestamp >=` 오른쪽에 쓸 SQL 표현식 — 저장 포맷과 **같은 구분자**로 만든다.
+
+    파라미터 바인딩을 쓰는 곳은 `TS_CUTOFF` 를, 수정자를 문자열로 박아야 하는 곳은
+    이 함수를 쓴다. 두 경우 모두 포맷은 한 곳에서 나온다(①).
+
+        con.execute(f"... WHERE timestamp >= {TS_CUTOFF}", ("-60 minute",))
+        con.execute(f"... WHERE timestamp >= {ts_cutoff_sql('-7 days')}")
+    """
+    if not modifiers:
+        return "strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime'))"
+    mods = ", ".join("'" + m.replace("'", "''") + "'" for m in modifiers)
+    return f"strftime('%Y-%m-%dT%H:%M:%S', datetime('now','localtime', {mods}))"
+
+
+def bump_error_seen(source: str, module: str, error_type: str,
+                    message: str, window_min: int = 60) -> bool:
+    """쿨다운으로 **저장을 건너뛴** 오류의 빈도만 올린다 (2026-08-08 감사).
+
+    ★ 왜 필요한가 — 두 층의 탈락 방식이 비대칭이었다
+      DB dedup 은 `seen_count` 를 올려 *몇 번 더 났는지* 를 보존한다. 그런데 60초 쿨다운은
+      `return None` 으로 **흔적 없이 버린다**. 빈도가 곧 신호인 사고(keeper HANG 처럼
+      정체 시간·PID 가 매번 다른 것)에서 60초 안에 겹친 두 번째 건은 복구 불가다.
+      억제는 "시끄러움 줄이기" 이지 "없던 일로 하기" 가 아니다.
+
+    같은 (source, module, error_type) 의 최근 행 하나에만 올린다 — message 는 매번
+    다를 수 있으므로 조건에 넣지 않는다(그게 쿨다운이 정규화 키를 쓰는 이유다).
+    Returns: 올렸으면 True.
+    """
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT id FROM error_log WHERE source=? AND module=? AND error_type=? "
+                f"  AND timestamp >= {TS_CUTOFF} "
+                "ORDER BY id DESC LIMIT 1",
+                (source or "", module or "", error_type or "", f"-{int(window_min)} minute"),
+            ).fetchone()
+            if not row:
+                return False
+            conn.execute("UPDATE error_log SET seen_count = seen_count + 1 WHERE id=?",
+                         (row["id"],))
+        return True
+    except Exception as e:
+        log.warning("[db] seen_count 증가 실패: %s", e)
+        return False
+
+
+def mark_error_status(error_id: int, status: str, resolution: str = ""):
+    """오류 상태 변경 (analyzing / wontfix / ignored / fixed).
+
+    ★ `resolution` — **왜 그 상태가 됐는지** (2026-08-08 감사).
+      실측: `fixed` 81건 중 **34건(42%)** 이 `fixed_file`·`resolution` 전부 NULL —
+      *왜 고쳐졌다고 하는지 아무도 모르는* 상태였다. 그 결과 `fixed` 하나가
+      ① 실제 코드 수정 ② harness 재시도 성공(코드 무수정) ③ 근거 전무
+      세 가지를 한 이름으로 말했다. 근거 없이 상태를 바꾸지 않는다.
+      비워 두면 경고를 남기고 그 사실 자체를 기록한다 — 조용히 넘어가지 않는다.
+    """
+    _why = (resolution or "").strip()
+    if status == "fixed" and not _why:
+        _why = "근거 미기록(호출자가 사유를 남기지 않음)"
+        log.warning("[db] #%s fixed 인데 사유가 없다 — 근거를 남길 것", error_id)
     with get_db() as conn:
-        conn.execute("UPDATE error_log SET status=? WHERE id=?", (status, error_id))
+        if _why:
+            conn.execute(
+                "UPDATE error_log SET status=?, "
+                "  resolution = COALESCE(NULLIF(resolution,''), ?), "
+                "  fixed_at = COALESCE(fixed_at, datetime('now','localtime')) "
+                "WHERE id=?", (status, _why[:500], error_id))
+        else:
+            conn.execute("UPDATE error_log SET status=? WHERE id=?", (status, error_id))
 
 
 # ── 격리 버킷(ignored) 관측 — 공개 헬퍼 (사용자 박제 2026-07-25) ──────────────
@@ -2466,7 +2610,7 @@ def get_error_stats(days: int = 7) -> dict:
         rows = conn.execute(
             """SELECT severity, status, COUNT(*) as cnt
                FROM error_log
-               WHERE timestamp >= datetime('now',?,'localtime')
+               WHERE timestamp >= """ + TS_CUTOFF + """
                GROUP BY severity, status""",
             (f"-{days} days",),
         ).fetchall()
@@ -2475,7 +2619,7 @@ def get_error_stats(days: int = 7) -> dict:
             key = f"{r['severity']}_{r['status']}"
             stats[key] = r["cnt"]
         total = conn.execute(
-            "SELECT COUNT(*) FROM error_log WHERE timestamp >= datetime('now',?,'localtime')",
+            f"SELECT COUNT(*) FROM error_log WHERE timestamp >= {TS_CUTOFF}",
             (f"-{days} days",),
         ).fetchone()[0]
         stats["total"] = total

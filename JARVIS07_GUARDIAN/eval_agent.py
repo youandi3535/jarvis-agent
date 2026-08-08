@@ -938,8 +938,46 @@ def _no_llm_signal(reason: str, detail: Any, verif: str,
     return _conservative_pass(reason, detail, fail_count)
 
 
+# 구조적 실패 — *환경이 깨진 것* 이라 재시도해도 같다. 일시적 실패와 구분해야 한다.
+#   목록을 넓게 잡지 않는다: 파이썬이 "그 모듈/이름이 없다" 고 말한 것만.
+_STRUCTURAL_FAIL = re.compile(
+    r"No module named|ModuleNotFoundError|ImportError|NameError|AttributeError", re.I)
+
+
 def _conservative_pass(reason: str, detail: Any = "", fail_count: int = 0) -> EvalResult:
-    """LLM 평가 실패 + 외생 신호 없음 → 보수적 통과 (종전 동작 유지, 학습 중단 방지)."""
+    """LLM 평가 실패 + 외생 신호 없음 → 보수적 통과 (종전 동작 유지, 학습 중단 방지).
+
+    ★ 항등식이었다 (2026-08-08 — 사용자 지시 감사)
+      `score = 70 - 15×fail_count` · `should_register = score >= 70` 이라
+      **fail_count=0 이면 무조건 참** 이다. 실측: 학습 패턴 54개 중 **49개(91%)** 가
+      LLM 판정 없이 이 경로로 등록됐다.
+
+    ★ 그런데 통과 자체가 틀린 것은 아니다 — LLM 이 스로틀·타임아웃으로 못 돌았다고
+      학습을 멈추면 그게 더 나쁘다(원래 의도가 옳다). 문제는 **구분이 없었다** 는 것:
+      실측 사유 1위가 `No module named 'dotenv'` **19건** — 이건 LLM 실패가 아니라
+      *환경이 깨진 것* 이고, 재시도해도 같다. 그걸 '보수적 통과' 로 덮어 19번 지나갔다.
+      → **구조적 실패는 통과시키지 않고 드러낸다.** 일시적 실패는 종전대로.
+    """
+    _structural = bool(_STRUCTURAL_FAIL.search(f"{reason} {detail}"))
+    if _structural:
+        log.error("[GUARDIAN/eval] ★ 구조적 실패로 학습 거부 — %s (%s). "
+                  "환경이 깨진 것이라 재시도해도 같다 — 고쳐야 한다.",
+                  reason, str(detail)[:100])
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report as _rep
+            _rep("EvalEnvBroken", "guardian",
+                 message=f"평가 환경이 깨져 학습 게이트가 무력화됨: {reason} ({str(detail)[:80]})",
+                 module=__name__, func_name="_conservative_pass",
+                 context={"reason": reason, "detail": str(detail)[:200]})
+        except Exception:
+            pass
+        return EvalResult(
+            should_register=False, score=0,
+            safe=True, accurate=False, reusable=False,
+            rationale=f"{reason} — 구조적 실패, 학습 거부 ({str(detail)[:100]})",
+            tier="llm", fail_count=fail_count, llm_judged=False, degraded=True,
+        )
+
     score = _SCORE_CONSERVATIVE - _FAIL_DECAY * fail_count
     return EvalResult(
         should_register=score >= _SCORE_CONSERVATIVE,

@@ -255,8 +255,17 @@ def collect_today() -> dict:
         # 경제 뉴스 헤드라인 + 주식 시드 키워드 병합 (중복 제거)
         finance_kws = _collect_finance_headlines()
         extra = [kw for kw in (finance_kws + _STOCK_SEEDS) if kw not in trending]
+        # ★ 실트렌드가 몇 개였는지 **기록해 둔다** (2026-08-08 감사).
+        #   시드가 `trending` 을 채우면 하류(scored_keywords)가 정상처럼 보인다 —
+        #   실측 07-30~08-02 에 실트렌드 0인데 30/30 정적 시드로 '정상' 통과했고
+        #   글 10편이 조용히 유실됐다. 세어서 남기면 검증도 사람도 구분할 수 있다.
+        _real_trend_n = len(trending)
+        _seed_n = len([kw for kw in extra if kw in _STOCK_SEEDS])
         trending = list(dict.fromkeys(trending + extra))[:50]
-        print(f"[RADAR] 경제 보완 후 총 키워드: {len(trending)}개")
+        print(f"[RADAR] 경제 보완 후 총 키워드: {len(trending)}개 "
+              f"(실트렌드 {_real_trend_n} · 정적시드 {_seed_n})")
+        if not _real_trend_n:
+            print("[RADAR] ⚠️ 실트렌드 0 — 정적 시드만으로 채워짐(하류 주제 선정 불가)")
 
         # ── 1. Naver DataLab: 30일 추세 곡선 ─────────────────────────
         datalab: dict = {}
@@ -359,6 +368,10 @@ def collect_today() -> dict:
             "google_top10":    google_top10,      # 구글 독립 TOP 10
             "naver_top10":     naver_top10,       # 네이버 독립 TOP 10
             "combined_keywords": combined_keywords,  # 혼합 키워드 풀 (프론트 슬라이스로 표시 개수 결정)
+            # ★ 출처 구분 (2026-08-08) — `trending` 이 정적 시드로 채워졌는지 알려 준다.
+            #   이 값이 없으면 "30개 수집됨" 과 "30개 전부 시드" 를 구분할 수 없다.
+            "real_trend_count": _real_trend_n,
+            "seed_filled_count": _seed_n,
             "scored_keywords": scored,
             "sector_summary":  dict(sector_sum),
             "recommendations": recs,

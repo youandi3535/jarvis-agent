@@ -41,7 +41,9 @@ export type PerformanceData = {
   data_range:       { from: string | null; to: string | null; days: number };
 };
 export type PostRow    = { platform: string; title: string; current_views: number; naver_rank: number | null; created_at: string };
-export type LearningPoint  = { at: string; patterns: number; hits: number; llm_saved: number };
+// ★ `llm_saved_1d` — 1일 창에서 LLM 없이 실제로 고친 횟수. 옛 칸(`llm_saved`)은
+//   정의가 달라(누적 패턴 수) 더 이상 내려오지 않는다. null = 그 회차엔 측정 안 함.
+export type LearningPoint  = { at: string; patterns: number; hits: number; llm_saved_1d: number | null };
 export type ResolvePoint   = { at: string; total: number; resolved: number; rate: number };
 export type LearningData = {
   /** 밴딧 생존 지표 — 서버(`bandit.stats()`) 단독 파생. 정지를 정지라고 말하기 위한 것. */

@@ -224,14 +224,22 @@ def _save_run_to_db(model: str, elapsed: int, returncode: int,
         except Exception:
             patterns_count = hits_total = actionable_hits = 0
 
-        total_fixed = sum(layers.values())
+        # ★ 별칭을 두 번 세지 않는다 (2026-08-08 감사 — 항상 정확히 2배였다).
+        #   `_parse_layer_counts` 는 호환을 위해 `syntax_fixed` 에 `files_fixed` 와
+        #   **같은 값**을 넣는다. 그걸 `sum(layers.values())` 로 더하면 한 수정이 두 번 센다.
+        #   실측: '수정 파일: 3개' → total_fixed 6 (106행 중 12행 오염).
+        #   총계는 별칭이 아닌 **정본 필드**에서 파생한다(② — 사본을 더하지 않는다).
+        _ALIAS_OF_FILES_FIXED = ("syntax_fixed",)
+        total_fixed = layers.get("files_fixed", 0) + sum(
+            v for k, v in layers.items()
+            if k not in ("files_fixed",) + _ALIAS_OF_FILES_FIXED)
         with _db.get_db() as conn:
             cur = conn.execute("""
                 INSERT INTO self_repair_runs
                 (model, elapsed_sec, returncode,
                  syntax_fixed, rules_fixed, length_fixed, quality_fixed,
                  data_cleaned, fixers_added, vision_pinned, total_fixed,
-                 patterns_count, hits_total, llm_saved,
+                 patterns_count, hits_total, llm_saved_1d,
                  score_quality, score_learning, score_vision,
                  next_suggestion, summary)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -241,11 +249,11 @@ def _save_run_to_db(model: str, elapsed: int, returncode: int,
                 layers.get("length_fixed", 0), layers.get("quality_fixed", 0),
                 layers.get("data_cleaned", 0), layers.get("fixers_added", 0),
                 layers.get("vision_pinned", 0), total_fixed,
-                # ★ llm_saved 는 **실제로 LLM 없이 고친 횟수** 여야 한다 (2026-08-07 감사).
-                #   종전엔 actionable_hits 를 그대로 넣어 최근 21회차가 전부 58/58 이었고,
-                #   대시보드는 "LLM 절약 58회" 라고 말했다. 그런데 그 58 은 *복원 가능 여부를
-                #   확인하지 않은* 패턴 수였고, 실측 재적용은 81일간 1건뿐이다.
-                #   → 패턴이 실제로 적용된 횟수만 센다. 못 세면 0 (모르면 0이지 58이 아니다).
+                # ★ 새 정의는 **새 칸(`llm_saved_1d`)** 에 담는다 (2026-08-08 정정).
+                #   종전엔 옛 칸 `llm_saved` 에 그대로 덮어썼는데, 그 칸의 앞 105행은
+                #   `actionable_hits`(누적 패턴 수)라 정의가 다르다. 한 칸에 두 정의가
+                #   섞이면 추세가 거짓말을 한다 — 실측으로 "50 → 0 (-50회)" 라는 가짜
+                #   붕괴가 텔레그램에 나갔다. 옛 값은 건드리지 않고 읽지도 않는다.
                 patterns_count, hits_total, _real_llm_saved(),
                 scores.get("quality", 0), scores.get("learning", 0),
                 scores.get("vision", 0), scores.get("next", ""),
@@ -263,9 +271,10 @@ def _learning_trend_brief() -> str:
         from shared import db as _db
         with _db.get_db() as conn:
             rows = conn.execute("""
-                SELECT ran_at, total_fixed, patterns_count, hits_total, llm_saved,
+                SELECT ran_at, total_fixed, patterns_count, hits_total, llm_saved_1d,
                        score_quality, score_learning
                 FROM self_repair_runs
+                WHERE llm_saved_1d IS NOT NULL
                 ORDER BY id DESC LIMIT 5
             """).fetchall()
         if not rows:
@@ -276,7 +285,8 @@ def _learning_trend_brief() -> str:
         if not oldest:
             return ""
         d_pat  = latest["patterns_count"] - oldest["patterns_count"]
-        d_llm  = latest["llm_saved"]      - oldest["llm_saved"]   # ★ 실제 절약 (actionable_hits)
+        # ★ 같은 정의를 쓰는 행끼리만 뺀다 — WHERE 절이 옛 정의 행을 이미 걸러낸다.
+        d_llm  = (latest["llm_saved_1d"] or 0) - (oldest["llm_saved_1d"] or 0)
         d_qual = latest["score_quality"]  - oldest["score_quality"]
         sign = lambda n: f"+{n}" if n > 0 else str(n)
         # 현재 stats() 에서 actionable 현황 실시간 조회
@@ -291,7 +301,8 @@ def _learning_trend_brief() -> str:
         return (
             f"\n📈 *학습 추세* (최근 {len(rows)}회)\n"
             f"  • 패턴 누적: {oldest['patterns_count']} → {latest['patterns_count']} ({sign(d_pat)})\n"
-            f"  • 실제 LLM 절약: {oldest['llm_saved']} → {latest['llm_saved']} ({sign(d_llm)}회){extra}\n"
+            f"  • 실제 LLM 절약(1일): {oldest['llm_saved_1d'] or 0} → "
+            f"{latest['llm_saved_1d'] or 0} ({sign(d_llm)}회){extra}\n"
             f"  • 품질 점수: {oldest['score_quality']} → {latest['score_quality']} ({sign(d_qual)})/10"
         )
     except Exception as e:
@@ -610,17 +621,30 @@ def run_auto_repair() -> None:
         # ★ 인터프리터를 명시 치환한다 — 데몬은 `.../Python.app/Contents/MacOS/Python`
         #   으로 도는데 그 디렉터리엔 `python3` 도 `pytest` 도 없다. CI 문자열의
         #   `python3` 를 그대로 쓰면 엉뚱한 파이썬이 잡혀 *멀쩡한 수정이 실패로 판정* 된다.
+        #
+        # ★ `sys.executable` 은 오답이었다 (2026-08-08, ERRORS EvalEnvBroken #5386) —
+        #   macOS Framework Python 이 GUI 관련 import(예: matplotlib/Quartz 경로)로
+        #   자기 자신을 `Python.app/Contents/MacOS/Python` 로 재기동(re-exec)하면
+        #   `sys.executable` 이 *그 원본 프레임워크 바이너리* 를 가리키게 된다.
+        #   그 경로를 새 subprocess 로 그대로 실행하면 `.venv/pyvenv.cfg` 를 찾지 못해
+        #   venv 밖 시스템 site-packages 로 떨어진다 — `python-dotenv` 등 venv 전용
+        #   패키지가 전부 빠진 채로 pytest/precommit_check 가 돌아 즉시
+        #   `ModuleNotFoundError` 로 깨졌다(eval_agent 학습 게이트까지 무력화).
+        #   `.venv/bin/python3` 를 **경로로 직접** 가리키면 pyvenv.cfg 탐색이 항상 성립한다
+        #   (jarvis_keeper.py·JARVIS01_MASTER/dispatchers.py 와 동일 패턴 — 단일 진실).
         def _ci_gate_failures() -> list:
             """CI 가 정의한 검사를 그대로 돌려 실패 목록을 반환. 킬스위치 `GUARDIAN_CI_GATE=0`."""
             import os as _os
             import re as _re
             import subprocess as _sp
-            import sys as _sys
             if _os.getenv("GUARDIAN_CI_GATE", "1") == "0":
                 return []
-            ci = _ROOT / ".github" / "workflows" / "ci.yml"
+            ci = ROOT / ".github" / "workflows" / "ci.yml"
             if not ci.exists():
                 return ["ci.yml 부재 — 게이트 검사 불가"]
+            venv_py = ROOT / ".venv" / "bin" / "python3"
+            if not venv_py.exists():
+                return [f"venv 파이썬 부재 — 게이트 검사 불가: {venv_py}"]
             cmds = []
             for line in ci.read_text(encoding="utf-8").splitlines():
                 m = _re.match(r"\s*(?:run:\s*)?(python3?\s+-m\s+pytest[^\n]*|python3?\s+shared/precommit_check\.py[^\n]*)", line)
@@ -630,9 +654,9 @@ def run_auto_repair() -> None:
                 return ["ci.yml 에서 검사 명령을 파생하지 못함"]
             bad = []
             for c in cmds:
-                c = _re.sub(r"^python3?\b", _sys.executable, c)
+                c = _re.sub(r"^python3?\b", str(venv_py), c)
                 try:
-                    r = _sp.run(c, shell=True, cwd=str(_ROOT), capture_output=True,
+                    r = _sp.run(c, shell=True, cwd=str(ROOT), capture_output=True,
                                 text=True, timeout=600)
                     if r.returncode != 0:
                         bad.append(f"{c.split()[-2:]}: rc={r.returncode} {(r.stdout or r.stderr)[-200:]}")
@@ -857,6 +881,61 @@ vision_pinned: 0
 """
 
 
+
+def _verify_sdk_fix(error_record: "dict | None",
+                    pre_snapshot: "dict | None") -> "tuple[bool | None, str]":
+    """SDK 수정이 **원 오류를 실제로 없앴는지** 판정. 검증의 주인은 error_fixer 다(①).
+
+    Returns `(ok, why)`:
+      · `True`  — 재현되지 않음(수정 성공)
+      · `False` — **여전히 재현됨** → 호출자가 롤백해야 한다
+      · `None`  — 판정 불가(일시적 오류·검증 비활성·대상 특정 실패) → **롤백하지 않는다**
+
+    ★ `None` 에 롤백하지 않는 이유: 판정을 못 한 것과 실패한 것은 다르다.
+      모르는 것을 실패로 취급하면 SDK 가 고친 정상 수정까지 되돌려 다음 발행에
+      옛 코드가 남는다. 되돌리는 것은 **확실히 재현될 때만**.
+    """
+    if not error_record:
+        return None, "error_record 없음 — 재현 대상 특정 불가"
+    try:
+        from JARVIS07_GUARDIAN.error_fixer import (VERIFY_REPRODUCES, verify_fix)
+    except Exception as e:
+        return None, f"검증 모듈 로드 실패: {type(e).__name__}: {e}"
+    try:
+        changed = _compute_diffs(pre_snapshot)
+        # 검증 프로브의 앵커 파일 — 바뀐 파일 중 첫 번째(없으면 오류가 난 파일).
+        rel = sorted(changed)[0] if changed else str(error_record.get("fixed_file") or "")
+        target = (ROOT / rel) if rel else ROOT
+        before = (pre_snapshot or {}).get(rel, "") if rel else ""
+        verdict, why = verify_fix(error_record, {}, target, before)
+        if verdict == VERIFY_REPRODUCES:
+            return False, why
+        if not verdict:
+            return None, why or "검증 비활성"
+        return True, why
+    except Exception as e:
+        # 검증기 자체가 터진 것을 '수정 실패' 로 단정하지 않는다(fail-open).
+        return None, f"검증 예외: {type(e).__name__}: {e}"
+
+
+def _restore_snapshot(pre_snapshot: "dict | None") -> int:
+    """스냅샷 시점 내용으로 되돌린다. 반환: 복원한 파일 수.
+
+    ★ 스냅샷에 있던 파일만 되돌린다 — SDK 가 *새로 만든* 파일은 건드리지 않는다
+      (지우면 그 자체가 새 사고가 된다). 복원 실패는 로그만 남기고 계속한다.
+    """
+    if not pre_snapshot:
+        return 0
+    n = 0
+    for rel, before in (_compute_diffs(pre_snapshot) or {}).items():
+        _ = before                       # diff 는 대상 선별용 — 내용은 스냅샷에서 가져온다
+        try:
+            (ROOT / rel).write_text(pre_snapshot[rel], encoding="utf-8")
+            n += 1
+        except Exception as e:
+            log.warning("[AutoRepair/Targeted] 복원 실패 %s: %s", rel, e)
+    return n
+
 def run_auto_repair_targeted(
     context: str,
     job_id: str,
@@ -945,6 +1024,29 @@ def run_auto_repair_targeted(
     )
 
     if files_fixed > 0:
+        # ★ **자기보고를 믿지 않는다** (2026-08-08 감사 — Tier-2 가 무검증이었다).
+        #
+        #   종전엔 `files_fixed > 0` 하나로 `fixed` 를 확정했다. 그 값은 LLM 이 쓴
+        #   산문에서 정규식으로 뽑은 숫자다 — 실행 검증: "수정 파일 3개를 검토했으나
+        #   아무것도 고치지 않았습니다" → 3 → fixed. 요약 블록에 files_fixed:0 이 있어도
+        #   앞줄 산문이 먼저 매치된다.
+        #
+        #   결정적 대조(2026-08-08 03:04): Tier-1 은 같은 수정을 적용하고
+        #   재현검증에서 still_reproduces 를 받아 **롤백**했는데, 38초 뒤 Tier-2 가
+        #   같은 파일을 **무검증으로 통과**시켰다. 같은 저장소, 같은 오류, 반대 결론.
+        #
+        #   검증·롤백의 주인은 `error_fixer` 하나다(①). 여기서 새로 만들지 않고
+        #   그 정문(`verify_fix`)을 부른다 — 지금 그 정문의 호출자는 Tier-1 뿐이었다.
+        _v_ok, _v_why = _verify_sdk_fix(error_record, _pre_snapshot)
+        if _v_ok is False:
+            _restored = _restore_snapshot(_pre_snapshot)
+            log.warning("[AutoRepair/Targeted] 재현검증 실패 → 롤백 %d파일: %s",
+                        _restored, _v_why)
+            _send_tg(f"↩️ *targeted 수정 롤백* (job={job_id})\n"
+                     f"재현검증 실패 — {_v_why[:180]}\n복원 {_restored}개 파일")
+            return False
+        if _v_ok is None:
+            log.info("[AutoRepair/Targeted] 재현검증 불가 — 수정 유지(%s)", _v_why)
         _record_repairs_to_guardian(summary)
         # ★ 밴딧 학습 브리지 — SDK 수정 diff → 원본 오류 fingerprint llm_patch 등록 + 밴딧 보상
         if error_record and _pre_snapshot:

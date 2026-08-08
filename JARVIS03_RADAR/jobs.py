@@ -38,7 +38,11 @@ _log = logging.getLogger("radar.jobs")
 _RADAR_DIR = Path(__file__).parent
 _ROOT = _RADAR_DIR.parent
 _WRITER_DIR = _ROOT / "JARVIS02_WRITER"
-_PYTHON = sys.executable
+# ★ `sys.executable` 금지 (2026-08-08, ERRORS EvalEnvBroken #5386/#5389) — macOS Framework
+#   Python 이 GUI 관련 import(matplotlib/Quartz/pyautogui 등)로 자기 자신을 재기동하면
+#   `sys.executable` 이 venv 밖 바이너리를 가리킬 수 있다. `.venv/bin/python3` 를
+#   경로로 직접 지정 (jarvis_keeper.py·JARVIS01_MASTER/dispatchers.py 와 동일 패턴).
+_PYTHON = str(_ROOT / ".venv" / "bin" / "python3")
 
 
 
@@ -210,6 +214,17 @@ def _verify_trends(_result) -> list:
         issues = []
         if data.get("date") != today:
             issues.append(f"트렌드 date({data.get('date')})가 오늘 아님 — 전일 캐시 재사용 의심")
+        # ★ 검증 대상을 **하류가 실제로 먹는 필드** 로 (2026-08-08 감사).
+        #   종전엔 `scored_keywords` 를 봤는데, 그건 `trending` 에서 파생되고 `trending` 은
+        #   실트렌드가 0이어도 `_STOCK_SEEDS`(정적 시드)로 채워진다. 그래서
+        #   **30/30 이 정적 시드인 날조차 '정상' 으로 통과**했다.
+        #   실제 소비자는 `topic_pack._candidates` → `trends["combined_keywords"]` 다.
+        #   실측: 07-30~08-02 combined=0 → topic_pack 파일 미생성 → **글 10편 유실**.
+        #   그런데 job_runs 는 success=1, error_log 에는 '무시해도 되는' ConnectionError 뿐.
+        #   combined=0 은 도입 이후 26일 중 8일(31%) 발생 — 재발이 확정적이다.
+        _combined = data.get("combined_keywords") or data.get("combined_top50") or []
+        if not _combined:
+            issues.append("combined_keywords 0개 — 실트렌드 전멸(하류 주제 선정 불가)")
         if not (data.get("scored_keywords") or []):
             issues.append("scored_keywords 0개 — 수집 결과 공백")
         return issues
@@ -237,6 +252,38 @@ def job_collect_trends() -> None:
     _run_with_harness("트렌드 수집", _run, verify_fn=_verify_trends,
                        deadline_sec=_TRENDS_DEADLINE_SEC)
 
+
+
+def _pack_empty_reason() -> str:
+    """팩이 왜 비었는지 — **당일 산출물에서 파생** 한다(리터럴 분류표 금지).
+
+    같은 '팩 없음' 이라도 원인이 다르면 대응이 다르다:
+      · 실트렌드 0(수집 전멸)  → 네트워크·수집기 문제
+      · 실트렌드는 있는데 팩 0 → 적합 후보 없음 또는 프로필 LLM 미가용
+    """
+    import datetime as _dt
+    import json as _json
+    try:
+        fp = _RADAR_DIR / "data" / f"trends_{_dt.date.today().isoformat()}.json"
+        if not fp.exists():
+            return "TrendFileMissing"
+        d = _json.loads(fp.read_text(encoding="utf-8"))
+        if not (d.get("combined_keywords") or d.get("combined_top50") or []):
+            return "TrendCollectEmpty"
+        return "TopicPackNoCandidate"
+    except Exception:
+        return "TopicPackUnknown"
+
+
+def _report_pack_empty() -> None:
+    """팩 미생성을 GUARDIAN 에 **세분화 타입**으로 보고. 발행을 막지는 않는다."""
+    kind = _pack_empty_reason()
+    try:
+        _g_report("radar", RuntimeError(
+            f"topic_pack 미생성 — 07:00 경제 발행이 주제를 못 받는다 ({kind})"),
+            module=__name__, func_name=kind)
+    except Exception as _e:
+        _log.warning(f"[topic_pack] 미생성 보고 실패: {_e}")
 
 def build_topic_pack_once() -> None:
     """트렌드 수집 뒤 topic_pack 생성 — **발행 준비용이므로 아침 1회만**.
@@ -274,6 +321,13 @@ def build_topic_pack_once() -> None:
                 _time_tp.sleep(90)
             else:
                 _log.warning("[topic_pack] 사전 생성 최종 실패 — 06:30 포스터에서 즉석 재시도")
+                # ★ **정상 None 도 오류로 남긴다** (2026-08-08 감사).
+                #   종전엔 예외 경로에서만 report 했다. 그런데 팩 미생성의 실제 원인은
+                #   예외가 아니라 *조용한 None* 이었다 — 실측 07-31·08-01·08-02 에
+                #   팩 파일이 아예 없었고, error_log 에 남은 건 '무시해도 되는'
+                #   ConnectionError 뿐이라 **글 10편 유실이 어디에도 오류로 안 남았다.**
+                #   타입은 뭉뚱그리지 않는다(CLAUDE.md ERRORS [547]) — 원인을 이름에 담는다.
+                _report_pack_empty()
         except Exception as _e:
             _log.warning(f"[topic_pack] 사전 생성 예외 (시도 {_tp_try+1}/{_MAX_TP_TRIES}): {_e}")
             _g_report("radar", _e, module=__name__,
