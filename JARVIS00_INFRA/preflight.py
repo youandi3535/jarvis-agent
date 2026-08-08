@@ -317,10 +317,44 @@ def _check_secret_masking(report: PreflightReport) -> None:
         report.warn("secret_masking", "selfcheck", f"확인 실패: {type(e).__name__}: {e}")
 
 
+def _check_chart_font(report: PreflightReport) -> None:
+    """차트 한글 폰트가 *실제로 적용되는지* 동작으로 확인 (patch_effective 표준).
+
+    ★ 왜 Layer 0 인가 (ERRORS [459] — 본문 차트 한글 두부(□□□) **무증상** 발행)
+      폰트 설정은 "시도" 이지 "적용" 이 아니다. rcParams 에 이름을 넣어도 그 폰트 파일에
+      한글 글리프가 없으면 조용히 □□□ 로 그려지고, 발행은 성공으로 끝난다.
+      `matplotlib_renderer.font_effective()` 는 선택된 폰트의 charmap 에 U+ACBD('경')이
+      있는지 보는 *효과* 판정인데, **호출자가 0곳이라 한 번도 돌지 않았다**(2026-08-08 실측).
+      만들어 두고 배선하지 않은 안전장치는 없는 것과 같다.
+
+    ★ 왜 fail 이 아니라 warn 인가 (② 상황에서 파생)
+      이 결함은 *차트 이미지* 만 망가뜨린다. 부팅을 막으면 글·발행·수집까지 전부 멈춰
+      피해가 원인보다 커진다. 이 사고의 본질은 "깨졌다" 가 아니라 **"아무도 몰랐다"** 이므로,
+      부팅 보고에 드러나게 하는 것으로 충분하다.
+    """
+    try:
+        from JARVIS06_IMAGE.matplotlib_renderer import font_effective
+    except Exception as e:
+        report.warn("chart_font", "import", f"확인 불가: {type(e).__name__}: {e}")
+        return
+    try:
+        eff = font_effective()
+    except Exception as e:
+        report.warn("chart_font", "effective", f"판정 실패: {type(e).__name__}: {e}")
+        return
+    if eff is False:
+        report.warn("chart_font", "effective",
+                    "차트 한글 폰트가 적용되지 않음 — 그래프 글자가 □□□ 로 발행된다 "
+                    "(한글 폰트 설치 후 재기동 필요)")
+    elif eff is None:
+        report.warn("chart_font", "effective", "판정 불가 (matplotlib 미설치이면 정상)")
+
+
 # ── 검증기 카탈로그 ────────────────────────────────────────────────
 
 _CHECKERS: tuple[tuple[str, Callable[[PreflightReport], None]], ...] = (
     ("policy_file",    _check_policy_files),     # 헌법 파일이 첫 게이트
+    ("chart_font",     _check_chart_font),       # 차트 한글 폰트 *효과* 확인 (ERRORS [459])
     ("env_var",        _check_env_vars),         # 환경변수 먼저 로드해야 다른 검증 가능
     ("claude_sdk_binary", _check_claude_sdk_binary),  # 바이너리 없으면 SDK 호출 불가
     ("disk",           _check_disk_space),       # 디스크 부족이면 즉시 차단

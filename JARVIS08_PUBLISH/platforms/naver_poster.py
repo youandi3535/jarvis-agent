@@ -113,10 +113,6 @@ for d in [LOGS_DIR, IMG_EDITOR, IMG_PUBLISH, IMG_RESULT]:
     d.mkdir(parents=True, exist_ok=True)
 
 
-def rand(a=0.5, b=1.5):
-    time.sleep(random.uniform(a, b))
-
-
 
 
 

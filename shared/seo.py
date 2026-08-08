@@ -84,35 +84,3 @@ def sanitize_tags(tags: list[str], max_count: int = 10) -> list[str]:
     return out
 
 
-def _hard_cut(plain: str, max_korean: int) -> str:
-    """최후 fallback — 한글 max_korean자에서 다음 문장 끝까지만 살림.
-
-    Claude 호출 실패 시에만 사용. 학습 인사이트로 *원치 않는 패치* 임을 표시.
-    """
-    kor_count = 0
-    for i, ch in enumerate(plain):
-        if _KOR_RE.match(ch):
-            kor_count += 1
-            if kor_count >= max_korean:
-                rest = plain[i:i+200]
-                m = re.search(r"[.!?。]", rest)
-                end = i + (m.end() if m else 1)
-                return plain[:end]
-    return plain
-
-
-def _emit_overflow_event(context: str, original_kor: int,
-                         compressed_kor: int, method: str) -> None:
-    """압축 발생을 events 테이블에 기록 → daily_review 가 학습 인사이트로 누적."""
-    try:
-        from shared import bus
-        bus.publish("post_overflow_compressed", "WRITER", {
-            "context":         context,
-            "original_korean": original_kor,
-            "compressed_korean": compressed_kor,
-            "method":          method,  # "claude_summary" | "hard_cut_fallback"
-        })
-    except Exception:
-        pass
-
-

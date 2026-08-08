@@ -11868,3 +11868,55 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
      주기적으로 확인해야 한다.
 
 ---
+## [590] ✅ 정리 — 죽은 함수 10개(146줄) 삭제 · 살아있는 줄 알았던 안전장치 1개는 **배선 누락**이었다 (2026-08-08)
+
+- **배경**: 사용자 지시 — *"죽은 코드·안 쓰는 파일은 삭제해라. 혼란을 야기한다.
+  단, 삭제는 진짜 위험하니 크로스 체크를 몇 번씩 하고 정말 필요 없는지 확인 후에 지워라."*
+- **★ 파일 단위로는 고아가 0개였다** — 이 저장소는 *간접 참조* 가 조밀해 단순 grep 으로
+  "참조 없음" 을 판단하면 살아있는 것을 지운다. 실측한 통로:
+  ```
+  DEFAULT_JOBS callback 문자열 42개 · importlib 69곳 · getattr 문자열 187곳
+  레지스트리 등록(@register_tool·CATEGORIES[]·declare) 82곳
+  데몬 폴더 스캔(*_agent.py) · Next.js 파일 라우팅 · pytest 자동수집 · sys.modules shim
+  ```
+  이 8종을 전부 고려한 스캐너에서 **212개 .py 중 고아 0개**. 죽은 것은 *살아있는 파일 안의
+  코드* 였다 — 최상위 함수 11개가 참조 0.
+- **검증 절차 (후보 1개당 2단, 총 21 에이전트)**:
+  ① **반증 시도** — 기본 자세를 "살아있다" 로 두고 위 8종 + `__all__` + 문서 언급 +
+     `git log -S`(태생) + 바이트코드(`.pyc` 문자열) + 동적 호출(exec/eval/globals()[])
+     까지 훑어 *조금이라도* 걸리면 살린다.
+  ② **격리 시험** — `git archive HEAD` 로 임시 트리를 만들어 **실제로 지운 뒤**
+     컴파일·테스트·정책·소유 모듈 import 를 돌린다. 원본은 읽기 전용.
+  · 개별 통과가 조합 통과를 보장하지 않으므로 **10개를 동시에 지운 상태로 다시 6종 검증**:
+    ```
+    컴파일 212파일 오류 0 · pytest 270 passed · precommit 20카테고리 0위반
+    소유 모듈 6개 import OK · preflight import OK
+    에이전트 모듈 11개 import OK · DEFAULT_JOBS callback 40개 해석 실패 0
+    ```
+- **삭제 (10개 · 146줄)**:
+  `html_infographic._fmt_data/_wrap_img/_dyn_hsl` (커밋 8334fae 가 본체만 지우고 남긴 부품 —
+  이 모듈에서 실제로 도는 것은 `_html_to_jpg` 하나뿐임을 데몬 로그 스택으로 확인) ·
+  `seo._hard_cut/_emit_overflow_event` · `infographic_engine._extract_json_array` ·
+  `law_enforcer._scan_numeric_tokens/_containing_sentence` · `db.get_todays_pipeline` ·
+  `naver_poster.rand`
+- **★ 살려둔 1개 — `matplotlib_renderer.font_effective()`**:
+  참조 0 은 사실이나 **죽은 게 아니라 배선 누락**이었다. `git log -S` 로 태생을 보니
+  ERRORS [459](본문 차트 한글 두부 □□□ **무증상** 발행) 근본수정의 일부로 추가된
+  *효과 검증 스모크* 였다 — CLAUDE.md 가 `patch_effective()` 표준으로 요구하는 바로 그 형태.
+  **만들어 두고 아무도 부르지 않아 한 번도 돌지 않았다.** 지울 게 아니라 걸어야 한다.
+  → `JARVIS00_INFRA/preflight.py` 에 `_check_chart_font` 신설 + `_CHECKERS` 등록.
+  등급은 **warn** — 이 결함은 차트 이미지만 망가뜨리는데 부팅을 막으면 글·발행·수집까지
+  멈춰 피해가 원인보다 커진다. 이 사고의 본질은 "깨졌다" 가 아니라 **"아무도 몰랐다"** 다.
+  변이 3/3 감지(False→경고 / None→경고 / True→무경고).
+- **파일**: 위 6개 + `JARVIS00_INFRA/preflight.py`
+- **검증**: pytest **271 passed** · precommit 0위반 · 데몬 재시작 후
+  `✅ Layer 0 preflight 통과`(신설 검사 포함) · 재시작 시각 > 수정 mtime 확인
+- **교훈**:
+  ① **"참조 0" 과 "죽었다" 는 다른 말이다.** 11개 중 1개는 *아직 배선 안 된 안전장치* 였다.
+     지우기 전에 **왜 생겼는지**(`git log -S`)를 봐야 한다 — 태생을 보면 의도가 나온다.
+  ② **간접 참조가 많은 저장소에서 grep 만으로 지우면 안 된다.** 문자열 콜백·레지스트리·
+     폴더 스캔은 grep 에 안 걸리거나, 걸려도 사람이 "그냥 언급" 으로 넘긴다.
+  ③ **개별 검증 ≠ 조합 검증.** 하나씩 지웠을 때 통과해도 함께 지우면 깨질 수 있다.
+     마지막엔 반드시 *최종 상태 그대로* 다시 돌린다.
+
+---

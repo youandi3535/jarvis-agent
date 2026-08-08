@@ -699,18 +699,6 @@ def push_pipeline(items: list):
                 )
 
 
-def get_todays_pipeline(limit: int = 20) -> list:
-    """오늘 날짜 pipeline 항목을 기회점수 내림차순으로 반환 (RADAR 추천 대기열 조회용)."""
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT id, theme, sector, opportunity_score, created_at FROM pipeline "
-            "WHERE status = 'suggested' AND date(created_at) = date('now','localtime') "
-            "ORDER BY opportunity_score DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
 def get_recent_published_themes(days: int = 30) -> list[dict]:
     """최근 N일 이내 post_analysis 에 발행된 theme 목록 반환.
 

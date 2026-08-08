@@ -521,19 +521,6 @@ def _ds_key(ds):
     return f"{str(ds.get('title', ''))}|{'|'.join(L)}|{str(ds.get('unit', ''))}|{vh}"
 
 
-def _extract_json_array(raw):
-    if not raw:
-        return None
-    m = re.search(r"\[.*\]", str(raw), re.S)
-    if not m:
-        return None
-    try:
-        arr = json.loads(m.group(0))
-        return arr if isinstance(arr, list) else None
-    except Exception:
-        return None
-
-
 def _callout_box(text, pal):
     if not text:
         return ""
