@@ -3328,3 +3328,124 @@ def test_Tier2_fixed_표시가_근거를_동반한다():
                 and any(isinstance(a, ast.Constant) and a.value == "fixed" for a in n.args)):
             assert len(n.args) >= 3 or n.keywords, \
                 f"guardian_agent:{n.lineno} fixed 를 근거 없이 찍는다"
+
+
+def test_eval_훅이_venv_파이썬을_쓴다():
+    """★ bare `python3` 는 `dotenv` 가 없어 `shared.llm` import 가 터진다.
+
+    실측: eval 게이트 54건 중 27건(50%)이 score=70 '보수적 통과' 였고
+    그중 19건의 사유가 `No module named dotenv` — **LLM 이 아예 못 돌았다**.
+    """
+    import json
+    import subprocess
+
+    cfg = _ROOT / ".claude" / "settings.json"
+    raw = cfg.read_text(encoding="utf-8")
+    json.loads(raw)                        # 깨진 JSON 이면 훅이 통째로 죽는다
+
+    hooks = [ln for ln in raw.splitlines() if "CLAUDE_PROJECT_DIR" in ln and "python" in ln]
+    assert hooks, "훅이 없다 — 검사 전제가 깨졌다"
+    for ln in hooks:
+        assert ".venv/bin/python" in ln, f"bare python3 훅이 남아 있다: {ln.strip()[:90]}"
+
+    # 폴백이 있는가 (venv 가 없는 환경에서도 훅이 죽지 않아야 한다)
+    assert "|| echo python3" in raw, "venv 부재 시 폴백이 없다 — 다른 환경에서 훅이 죽는다"
+
+    # 그 표현이 실제로 도는 파이썬을 고르는가
+    expr = ('test -x "$D/.venv/bin/python" && echo "$D/.venv/bin/python" || echo python3')
+    got = subprocess.run(["sh", "-c", f'D="{_ROOT}"; {expr}'],
+                         capture_output=True, text=True).stdout.strip()
+    r = subprocess.run([got, "-c", "import shared.llm"], cwd=str(_ROOT),
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"훅 파이썬으로 shared.llm import 실패: {r.stderr[-160:]}"
+
+
+def test_학습원장에_복구경로가_있다():
+    """★ `.gitignore` 대상이라 git 복구가 없다 — 2026-06-08 에 97.8% 소실 이력.
+
+    `.gitignore` 결정(팀원 빈 상태가 운영 학습을 덮어쓰는 것 차단)은 건드리지 않는다.
+    두 박제가 충돌하므로 로컬 복구 경로만 켠다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import pattern_fixer as _pf
+
+    tree = ast.parse(inspect.getsource(_pf._save_learned))
+    call = next((n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", "") == "write_json"), None)
+    assert call, "저장이 json_store 정문을 안 쓴다"
+    kw = {k.arg: k.value for k in call.keywords}
+    assert "backup" in kw and getattr(kw["backup"], "value", False) is True, \
+        "저장 시 .bak 을 만들지 않는다 — 복구 경로가 없다"
+
+    # 실제로 .bak 이 생기는가
+    _pf._save_learned(_pf._load_learned())
+    bak = _ROOT / "JARVIS07_GUARDIAN" / "learned_patterns.json.bak"
+    assert bak.exists() and bak.stat().st_size > 0, ".bak 이 안 생긴다"
+
+
+def test_도달불가_지문이_매칭후보에서_빠진다():
+    """★ 수기 라벨 지문은 런타임 예외 클래스와 영원히 안 맞는다 — 후보만 늘린다.
+
+    실측: 지문 54개 중 26개(48%)의 error_type 이 `report_manual_fix` 의 사람 라벨이고
+    같은 결함이 런타임엔 `RuntimeError` 로 올라온다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import pattern_fixer as _pf
+
+    # 격리 DB — 런타임 오류와 수동 기록을 각각 심는다 (운영 데이터에 기대지 않는다)
+    from shared.db import get_db
+    with get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('probe','m','RuntimeError','runtime probe','new')")
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('probe','m','HandLabelOnly','manual probe','manual')")
+    _pf._RUNTIME_TYPES.update(at=0.0, types=frozenset())     # TTL 캐시 무효화
+    live = _pf.runtime_error_types()
+    assert live, "런타임 타입 파생이 비었다 — 검사 전제가 깨졌다"
+    assert "RuntimeError" in live, "런타임 오류 타입이 안 잡힌다"
+    # ★ 수동 기록(status='manual')은 *오류가 아니라 변경 기록* 이므로 섞이면 안 된다.
+    #   섞이면 수기 라벨 지문이 다시 '도달 가능' 으로 오판돼 후보만 늘어난다.
+    assert "HandLabelOnly" not in live, "수동 기록 타입이 런타임 집합에 섞였다"
+
+    un = _pf.unreachable_patterns()
+    assert isinstance(un, list)
+    for p in un:
+        assert p.get("error_type") not in live, "도달 가능한 지문을 불가로 분류했다"
+
+    # ★ 매칭이 **실제로** 건너뛰는가 — AST 로 호출 여부만 보면 skip 을 지워도 통과한다
+    #   (뮤테이션에서 발각: `_live = runtime_error_types()` 만 남기고 continue 를 제거).
+    _orig_load, _orig_save = _pf._load_learned, _pf._save_learned
+    _orig_restore = _pf._restore_items
+    # ★ 필드명은 `fixer` 다(`fixer_name` 아님) — 실제 저장 구조를 그대로 쓴다.
+    _fake = {"patterns": [
+        {"fingerprint": "HandLabelOnly::probe", "error_type": "HandLabelOnly",
+         "message_pattern": "probe", "fixer": "llm_patch", "hit_count": 9,
+         "target_file": "x.py", "patch": "--- a\n+++ b\n"},
+        {"fingerprint": "RuntimeError::probe", "error_type": "RuntimeError",
+         "message_pattern": "probe", "fixer": "llm_patch", "hit_count": 9,
+         "target_file": "x.py", "patch": "--- a\n+++ b\n"},
+    ]}
+    # 복원 형식은 이 검사의 관심사가 아니다 — 가드만 격리해서 본다.
+    _pf._restore_items = lambda m, **k: [{"target_file": "x.py", "patch": "--- a\n+++ b\n"}]
+    _pf._load_learned = lambda: _fake
+    # ★ **실 학습 원장 보호** — 매칭 성공 시 `_bump_hit_count` 가 저장을 부른다.
+    #   `_load_learned` 만 스텁하면 가짜 2건이 운영 파일(54건)을 덮어쓴다.
+    #   이 파일은 .gitignore 대상이라 되돌릴 수 없다(97.8% 소실 이력).
+    _pf._save_learned = lambda d: None
+    try:
+        # 도달 불가 타입 → 매칭되면 안 된다
+        got_bad = _pf._fix_from_learned({"error_type": "HandLabelOnly", "message": "probe"})
+        # 도달 가능 타입 → 종전대로 매칭돼야 한다 (과잉 차단 아님)
+        got_ok = _pf._fix_from_learned({"error_type": "RuntimeError", "message": "probe"})
+    finally:
+        _pf._load_learned, _pf._save_learned = _orig_load, _orig_save
+        _pf._restore_items = _orig_restore
+    assert got_bad is None, "런타임에 난 적 없는 타입의 지문이 매칭됐다 — 후보만 늘린다"
+    assert got_ok is not None, "도달 가능한 지문까지 막혔다 — 과잉 차단"
+
+    # 삭제가 아니라 제외인가 — 전체 목록은 그대로여야 한다
+    assert len(_pf.all_patterns()) >= len(un), "지문을 지웠다 — 기록이 사라진다"
