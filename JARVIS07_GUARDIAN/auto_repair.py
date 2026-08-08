@@ -224,14 +224,22 @@ def _save_run_to_db(model: str, elapsed: int, returncode: int,
         except Exception:
             patterns_count = hits_total = actionable_hits = 0
 
-        total_fixed = sum(layers.values())
+        # ★ 별칭을 두 번 세지 않는다 (2026-08-08 감사 — 항상 정확히 2배였다).
+        #   `_parse_layer_counts` 는 호환을 위해 `syntax_fixed` 에 `files_fixed` 와
+        #   **같은 값**을 넣는다. 그걸 `sum(layers.values())` 로 더하면 한 수정이 두 번 센다.
+        #   실측: '수정 파일: 3개' → total_fixed 6 (106행 중 12행 오염).
+        #   총계는 별칭이 아닌 **정본 필드**에서 파생한다(② — 사본을 더하지 않는다).
+        _ALIAS_OF_FILES_FIXED = ("syntax_fixed",)
+        total_fixed = layers.get("files_fixed", 0) + sum(
+            v for k, v in layers.items()
+            if k not in ("files_fixed",) + _ALIAS_OF_FILES_FIXED)
         with _db.get_db() as conn:
             cur = conn.execute("""
                 INSERT INTO self_repair_runs
                 (model, elapsed_sec, returncode,
                  syntax_fixed, rules_fixed, length_fixed, quality_fixed,
                  data_cleaned, fixers_added, vision_pinned, total_fixed,
-                 patterns_count, hits_total, llm_saved,
+                 patterns_count, hits_total, llm_saved_1d,
                  score_quality, score_learning, score_vision,
                  next_suggestion, summary)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -241,11 +249,11 @@ def _save_run_to_db(model: str, elapsed: int, returncode: int,
                 layers.get("length_fixed", 0), layers.get("quality_fixed", 0),
                 layers.get("data_cleaned", 0), layers.get("fixers_added", 0),
                 layers.get("vision_pinned", 0), total_fixed,
-                # ★ llm_saved 는 **실제로 LLM 없이 고친 횟수** 여야 한다 (2026-08-07 감사).
-                #   종전엔 actionable_hits 를 그대로 넣어 최근 21회차가 전부 58/58 이었고,
-                #   대시보드는 "LLM 절약 58회" 라고 말했다. 그런데 그 58 은 *복원 가능 여부를
-                #   확인하지 않은* 패턴 수였고, 실측 재적용은 81일간 1건뿐이다.
-                #   → 패턴이 실제로 적용된 횟수만 센다. 못 세면 0 (모르면 0이지 58이 아니다).
+                # ★ 새 정의는 **새 칸(`llm_saved_1d`)** 에 담는다 (2026-08-08 정정).
+                #   종전엔 옛 칸 `llm_saved` 에 그대로 덮어썼는데, 그 칸의 앞 105행은
+                #   `actionable_hits`(누적 패턴 수)라 정의가 다르다. 한 칸에 두 정의가
+                #   섞이면 추세가 거짓말을 한다 — 실측으로 "50 → 0 (-50회)" 라는 가짜
+                #   붕괴가 텔레그램에 나갔다. 옛 값은 건드리지 않고 읽지도 않는다.
                 patterns_count, hits_total, _real_llm_saved(),
                 scores.get("quality", 0), scores.get("learning", 0),
                 scores.get("vision", 0), scores.get("next", ""),
@@ -263,9 +271,10 @@ def _learning_trend_brief() -> str:
         from shared import db as _db
         with _db.get_db() as conn:
             rows = conn.execute("""
-                SELECT ran_at, total_fixed, patterns_count, hits_total, llm_saved,
+                SELECT ran_at, total_fixed, patterns_count, hits_total, llm_saved_1d,
                        score_quality, score_learning
                 FROM self_repair_runs
+                WHERE llm_saved_1d IS NOT NULL
                 ORDER BY id DESC LIMIT 5
             """).fetchall()
         if not rows:
@@ -276,7 +285,8 @@ def _learning_trend_brief() -> str:
         if not oldest:
             return ""
         d_pat  = latest["patterns_count"] - oldest["patterns_count"]
-        d_llm  = latest["llm_saved"]      - oldest["llm_saved"]   # ★ 실제 절약 (actionable_hits)
+        # ★ 같은 정의를 쓰는 행끼리만 뺀다 — WHERE 절이 옛 정의 행을 이미 걸러낸다.
+        d_llm  = (latest["llm_saved_1d"] or 0) - (oldest["llm_saved_1d"] or 0)
         d_qual = latest["score_quality"]  - oldest["score_quality"]
         sign = lambda n: f"+{n}" if n > 0 else str(n)
         # 현재 stats() 에서 actionable 현황 실시간 조회
@@ -291,7 +301,8 @@ def _learning_trend_brief() -> str:
         return (
             f"\n📈 *학습 추세* (최근 {len(rows)}회)\n"
             f"  • 패턴 누적: {oldest['patterns_count']} → {latest['patterns_count']} ({sign(d_pat)})\n"
-            f"  • 실제 LLM 절약: {oldest['llm_saved']} → {latest['llm_saved']} ({sign(d_llm)}회){extra}\n"
+            f"  • 실제 LLM 절약(1일): {oldest['llm_saved_1d'] or 0} → "
+            f"{latest['llm_saved_1d'] or 0} ({sign(d_llm)}회){extra}\n"
             f"  • 품질 점수: {oldest['score_quality']} → {latest['score_quality']} ({sign(d_qual)})/10"
         )
     except Exception as e:

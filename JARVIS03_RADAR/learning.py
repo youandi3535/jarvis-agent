@@ -240,18 +240,68 @@ def build_target(rows: list, min_signal: int = 20) -> "tuple[np.ndarray, str]":
 
     Returns: (y, 사용한 신호 이름)
     """
-    views = np.array([float(r["actual_views"] or 0) for r in rows], dtype=np.float64)
-    # ★ "고유값 2종 이상" 만으로는 부족하다 — 실측에서 366행 중 365행이 0, 1행이 1 이라
-    #   조건을 통과해버렸다(그런 신호로 학습하면 잡음만 배운다).
-    #   *0 이 아닌 표본이 학습 최소 표본 수 이상* 일 때만 조회수를 신뢰한다.
-    if int((views > 0).sum()) >= min_signal:
-        return np.log1p(views), "actual_views"
+    # ★★ 2026-08-08 — **관측되지 않은 것을 0 으로 채우지 않는다** (사용자 지시 감사)
+    #
+    #   종전 `float(r["actual_views"] or 0)` 이 이 학습기를 통째로 망가뜨렸다. 실측:
+    #     platform  actual_views        naver_rank
+    #     naver     438행 전부 0        438행 전부 관측
+    #     tistory    42행 전부 >0        42행 전부 NULL
+    #   **두 신호가 정확히 상보적** 이다 — 각 플랫폼이 *자기가 측정 가능한 것만* 갖는다.
+    #   그런데 종전 코드는 둘 중 하나만 골랐고, `42 >= min_signal(20)` 이라 조회수를
+    #   채택했다. 그 순간 네이버 438행(91%)이 **"조회수 0 = 나쁨"** 으로 학습됐다.
+    #   결과: `trend_score` 계수가 음수 → 아래 절단으로 0 → **정렬키 사망**
+    #   (실측: opportunity_score 고유값이 07-22 48종 → 07-23 6종 → 지금 50개 중 49개 동점).
+    #
+    #   → 신호별 **관측 마스크** 를 데이터에서 파생하고, 관측된 행만으로 그 신호를 만든다.
+    #     관측 안 된 행은 *제외* 한다. 0 은 "나빴다" 이지 "모른다" 가 아니다.
+    #
+    #   ★ 그룹 내 백분위로 통일하는 이유: 조회수(0~수십)와 순위(1~100)는 척도가 달라
+    #     같은 y 에 섞을 수 없다. **각 신호 안에서의 상대 위치** 로 바꾸면 비교 가능해진다.
+    #     "그 플랫폼 안에서 얼마나 잘했나" 가 우리가 배우려는 것이기도 하다.
+    def _observed(key, ok):
+        """(행 인덱스, 원값) — 그 신호가 *실제로 관측된* 행만."""
+        out = []
+        for i, r in enumerate(rows):
+            v = r.get(key)
+            if v is not None and ok(float(v)):
+                out.append((i, float(v)))
+        return out
 
-    ranks = np.array(
-        [float(r["naver_rank"]) if r.get("naver_rank") is not None else _RANK_UNRANKED
-         for r in rows], dtype=np.float64)
-    # 순위 → 점수: 1위가 가장 높고 미노출이 0 (log 로 상위권 차이를 키움)
-    return np.log1p(np.maximum(0.0, _RANK_UNRANKED - ranks)), "naver_rank"
+    def _pct(pairs, higher_is_better: bool):
+        """관측값 → 그룹 내 백분위(0~1). 동점은 평균 순위."""
+        order = sorted(pairs, key=lambda t: t[1], reverse=higher_is_better)
+        n = len(order)
+        out = {}
+        i = 0
+        while i < n:
+            j = i
+            while j + 1 < n and order[j + 1][1] == order[i][1]:
+                j += 1
+            rank = (i + j) / 2.0
+            for k in range(i, j + 1):
+                out[order[k][0]] = 1.0 - (rank / max(1, n - 1)) if n > 1 else 1.0
+            i = j + 1
+        return out
+
+    #   조회수는 클수록 좋고(0 은 '노출됐으나 안 읽힘' 이 아니라 '미수집' 이라 제외),
+    #   순위는 작을수록 좋다.
+    views_obs = _observed("actual_views", lambda v: v > 0)
+    ranks_obs = _observed("naver_rank",   lambda v: v > 0)
+
+    merged, used = {}, []
+    if len(views_obs) >= min_signal:
+        merged.update(_pct(views_obs, higher_is_better=True));  used.append("actual_views")
+    if len(ranks_obs) >= min_signal:
+        merged.update(_pct(ranks_obs, higher_is_better=False)); used.append("naver_rank")
+
+    if not merged:
+        # 어느 신호도 최소 표본을 못 채웠다 — 상수 y 를 돌려주면 호출자가 학습을 보류한다.
+        return np.zeros(len(rows), dtype=np.float64), "none"
+
+    # 관측 안 된 행은 학습에서 빠져야 한다. y 에 NaN 을 실어 호출자가 걸러내게 한다
+    # (여기서 행을 지우면 X 와 길이가 어긋나 조용한 오정렬이 난다).
+    y = np.array([merged.get(i, np.nan) for i in range(len(rows))], dtype=np.float64)
+    return y, "+".join(used)
 
 
 def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
@@ -277,6 +327,15 @@ def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
     X = np.array([[r[f] or 0.0 for f in FEATURES] for r in rows], dtype=np.float64)
     y, _signal = build_target(rows, min_signal=min_samples)   # ★ ERRORS [483] (단일 진입점)
 
+    # ★ 미관측 행 제거 (2026-08-08) — `build_target` 이 관측 안 된 행에 NaN 을 싣는다.
+    #   종전엔 0 으로 채워져 "조회수 0" 으로 학습됐고, 그게 네이버 438행(91%)을
+    #   통째로 '나쁜 사례' 로 만들어 `trend_score` 계수를 음수로 끌어내렸다.
+    _keep = ~np.isnan(y)
+    _dropped = int((~_keep).sum())
+    X, y = X[_keep], y[_keep]
+    if verbose and _dropped:
+        print(f"  · 미관측 {_dropped}행 제외 — 학습 표본 {X.shape[0]}행 (신호={_signal})")
+
     if X.shape[0] < min_samples or len(np.unique(y)) < 2:
         # ★ 조용한 포기 금지 — 왜 학습이 안 됐는지 남긴다 (종전엔 이유 없이 return 만 했고,
         #   잡은 success=1 로 보고돼 "성공했는데 결과가 없는" 상태가 몇 달 지속됐다)
@@ -301,9 +360,47 @@ def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
     SCALE = 6.0  # 경험적 — 학습 가중치를 0.1~5 범위로 끌어올림
     w_scaled = [v * SCALE for v in w]
 
-    # FEATURES 는 전부 클수록 좋음 → 음수 방지 (인덱스 하드코딩 제거 — FEATURES 파생)
-    w_scaled = [max(0.0, v) for v in w_scaled]
-    _wmap = dict(zip(FEATURES, w_scaled))   # {trend_score: w, perf_boost: w, freshness: w}
+    # ★★ 2026-08-08 — **음수를 0 으로 자르지 않는다. 대신 *결과* 로 판정한다.**
+    #
+    #   종전 `w_scaled = [max(0.0, v) for v in w_scaled]` 의 주석은
+    #   "FEATURES 는 전부 클수록 좋음 → 음수 방지" 였다. 그 **가정 자체가 틀렸다** —
+    #   `freshness` 음수는 오염이 아니라 진짜 발견일 수 있다(갓 나온 키워드는 아직
+    #   검색 노출이 쌓이지 않았다). 가정을 코드에 박으면 데이터가 말하는 것을 못 듣는다.
+    #
+    #   ★ 그렇다고 아무 가중치나 저장하면 안 된다. 실제 피해는 부호가 아니라
+    #     **정렬키가 변별력을 잃는 것** 이었다(실측: 50개 키워드 중 49개가 4.5 동점,
+    #     opportunity_score 고유값 07-22 48종 → 07-23 6종). 그러니 *가정* 이 아니라
+    #     *결과* 를 본다 — 학습된 가중치로 실제 표본을 채점해 변별이 남는지 확인한다.
+    #     기준값도 박지 않는다: **입력 피처가 가진 변별력** 에서 파생한다(원칙②).
+    _wmap = dict(zip(FEATURES, w_scaled))
+
+    def _distinct_ratio(vals) -> float:
+        vals = [round(float(v), 6) for v in vals]
+        return len(set(vals)) / max(1, len(vals))
+
+    _scored = [sum(row[i] * w_scaled[i] for i in range(len(FEATURES))) for row in X]
+    _out_ratio = _distinct_ratio(_scored)
+    #   입력이 가진 변별력의 절반은 살아남아야 한다 — 입력 자체가 뭉쳐 있으면(예: 피처가
+    #   모두 상수) 출력도 뭉치는 게 정상이므로, 절대 기준이 아니라 *상대* 기준을 쓴다.
+    _in_ratio = max(_distinct_ratio([row[i] for row in X]) for i in range(len(FEATURES)))
+    if _out_ratio < _in_ratio * 0.5:
+        _msg = (f"학습 가중치가 정렬 변별력을 죽인다 "
+                f"(출력 고유비 {_out_ratio:.3f} < 입력 {_in_ratio:.3f}×0.5) — 이전 가중치 유지")
+        if verbose:
+            print(f"  ⏸  학습 거부 — {_msg}")
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report as _rep
+            _rep("RadarWeightDegenerate", "radar",
+                 message=f"회귀 결과가 정렬키를 상수화시켜 학습 거부 "
+                         f"(출력 {_out_ratio:.3f} / 입력 {_in_ratio:.3f}, 신호={_signal})",
+                 module=__name__, func_name="train_weights",
+                 context={"kind": "learning_rejected", "out_ratio": round(_out_ratio, 4),
+                          "in_ratio": round(_in_ratio, 4), "signal": _signal,
+                          "weights": {f: round(v, 4) for f, v in _wmap.items()}})
+        except Exception:
+            pass
+        return {"trained": False, "n_samples": int(X.shape[0]), "reason": _msg,
+                "signal": _signal, "out_ratio": round(_out_ratio, 4)}
 
     new_id = _db.learned_weights_save(
         w_trend=round(_wmap.get("trend_score", 0.0), 4),

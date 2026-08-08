@@ -440,6 +440,16 @@ def init_db():
             conn.execute("ALTER TABLE post_analysis ADD COLUMN publish_meta TEXT")
         except Exception:
             pass
+        # self_repair_runs.llm_saved_1d: **하루 창에서 LLM 없이 실제로 고친 횟수** (2026-08-08).
+        #   ★ 왜 새 칸인가 — `llm_saved` 는 2026-08-07 이전 105행이 `actionable_hits`
+        #     (= 저장된 패턴 수, 누적)를 담고 있고 그 뒤 행은 전혀 다른 정의(1일 창 실적)를
+        #     담는다. **한 칸에 두 정의가 섞이면 추세 계산이 거짓말을 한다** — 실제로
+        #     텔레그램이 "실제 LLM 절약: 50 → 0 (-50회)" 라는 가짜 붕괴를 보고했다.
+        #     옛 값을 덮어쓰지 않는다(이력 오염). 새 정의는 새 칸에 담고 옛 칸은 읽지 않는다.
+        try:
+            conn.execute("ALTER TABLE self_repair_runs ADD COLUMN llm_saved_1d INTEGER DEFAULT NULL")
+        except Exception:
+            pass
         # learning_insights.scope: 어떤 글 종류에 적용할 인사이트인지.
         # 'economic' / 'theme' / 'all'. 작성기가 호출 시 scope IN (post_type,'all') 만 주입.
         try:

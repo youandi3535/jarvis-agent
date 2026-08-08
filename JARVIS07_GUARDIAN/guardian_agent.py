@@ -1165,6 +1165,38 @@ def report_ignored_bucket() -> dict:
     return rep
 
 
+
+def _last_repair_returncode() -> "int | None":
+    """직전 자가진단 회차의 returncode — `self_repair_runs` 에서 파생. 없으면 None."""
+    try:
+        from shared import db as _db
+        with _db.get_db() as conn:
+            row = conn.execute(
+                "SELECT returncode FROM self_repair_runs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return int(row["returncode"]) if row is not None else None
+    except Exception as e:
+        log.warning(f"[GUARDIAN/deepaudit] returncode 조회 실패: {e}")
+        return None
+
+
+def _mark_job_failed(job_id: str, error: str) -> None:
+    """잡 실행 이력을 **사후 실패로 보정** — 창은 잡 스케줄에서 파생한다.
+
+    ★ 시각을 박지 않는다(②). 방금 끝난 실행을 가리키려면 '지금 기준 최근 창' 이면 되고,
+      그 폭은 `job_history` 가 이미 아는 값이다. 여기서 새 규칙을 만들지 않는다.
+    """
+    try:
+        from datetime import datetime, timedelta
+
+        from JARVIS04_SCHEDULER.job_history import mark_outcome
+        now = datetime.now()
+        r = mark_outcome(job_id, now - timedelta(hours=6), now + timedelta(minutes=5),
+                         success=False, error=error[:300])
+        log.warning(f"[GUARDIAN/deepaudit] 실패 보정 → {job_id}: {r} ({error[:120]})")
+    except Exception as e:
+        log.warning(f"[GUARDIAN/deepaudit] 실패 보정 불가: {e}")
+
 def job_deep_audit() -> None:
     """매일 04:30 — 심층 코드 감사 (DB 백업 03:00 이후, 발행과 분리).
 
@@ -1186,11 +1218,23 @@ def job_deep_audit() -> None:
         log.info(f"[GUARDIAN/deepaudit] backlog 완료: {b}")
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] backlog 처리 예외: {e}")
+    _audit_rc = None
     try:
         from JARVIS07_GUARDIAN.auto_repair import run_auto_repair
         run_auto_repair()
+        _audit_rc = _last_repair_returncode()
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] 광범위 감사 예외: {e}")
+        _audit_rc = -1
+    # ★ 실패한 회차를 **성공으로 기록하지 않는다** (2026-08-08 감사).
+    #   `run_auto_repair` 는 SDK 실패를 예외로 올리지 않고 returncode 로만 남긴다.
+    #   그래서 APScheduler 는 "콜백이 예외 없이 끝났다" 는 이유로 success=1 을 적었고,
+    #   실측 job_runs 는 **39/39 success** 인데 rc=0 인 마지막 회차는 2026-07-26 이었다
+    #   — 13일째 죽어 있었는데 대시보드는 내내 초록불이었다.
+    #   새 잡·새 알림을 만들지 않는다. 발행 도메인이 같은 병에 쓰는 `mark_outcome` 을
+    #   그대로 재사용한다(① 단일 진입점 — 사후 보정의 주인은 job_history 하나).
+    if _audit_rc not in (None, 0):
+        _mark_job_failed("j07_deep_audit", f"auto_repair returncode={_audit_rc}")
     # 3부: 격리 버킷 집계·추세 보고 (★ 결함3) — 새 잡 신설 없이 기존 일일 잡에 편승
     try:
         report_ignored_bucket()

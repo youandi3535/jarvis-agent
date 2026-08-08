@@ -204,7 +204,8 @@ export default function LearningPage() {
 
   const kpiPatterns = patNow.count || last?.patterns || 0;
   const kpiHits     = patNow.hits  || last?.hits     || 0;
-  const kpiSaved    = last?.llm_saved ?? 0;
+  // 측정 안 한 회차(null)는 0 이 아니라 '—' 로 보여야 하므로 null 을 유지한다.
+  const kpiSaved    = last?.llm_saved_1d ?? null;
   // ★ 밴딧 생존 — 텔레그램 /status 와 같은 판정(서버 파생). 정지를 정지라고 말한다.
   //   종전 이 화면은 학습이 11일 멈춰 있어도 "LLM 절약" 차트만 보여줬다.
   const bandit      = data?.bandit ?? {};
@@ -278,8 +279,9 @@ export default function LearningPage() {
                         data={timeline} xKey="at" yKey="patterns" color="#3b82f6" />
             <TrendChart title="오류 패턴 적중 누적" hint="학습한 패턴이 실제로 재사용되고 있나"
                         data={timeline} xKey="at" yKey="hits" color="#22c55e" />
-            <TrendChart title="오류 — LLM 없이 해결" hint="학습의 목적 — 높을수록 LLM 호출 절약"
-                        data={timeline} xKey="at" yKey="llm_saved" color="#f59e0b" />
+            <TrendChart title="오류 — LLM 없이 해결 (1일)" hint="학습의 목적 — 높을수록 LLM 호출 절약"
+                        data={timeline.filter((p) => p.llm_saved_1d !== null)}
+                        xKey="at" yKey="llm_saved_1d" color="#f59e0b" />
             <TrendChart title="오류 자동해소율 (일별)" hint="학습이 결과를 바꾸고 있나" unit="%"
                         data={resolveRate} xKey="at" yKey="rate" color="#94a3b8" />
           </div>

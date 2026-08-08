@@ -604,12 +604,18 @@ def get_learning():
     # ★ KPI 시계열 (ERRORS [479]) — 과거→현재 추세를 화면에서 바로 보이게.
     #   원천은 self_repair_runs(자가진단 회차별 스냅샷). 오래된 것부터 정렬해 그대로 차트에 사용.
     try:
+        # ★ `llm_saved` 옛 칸을 차트에 쓰지 않는다 (2026-08-08 감사).
+        #   그 칸의 앞 105행은 `actionable_hits`(누적 패턴 수)이고 뒤 행은 1일 창 실적이라
+        #   **정의가 다르다**. 한 축에 그리면 정의가 바뀐 지점이 '붕괴' 로 보인다.
+        #   새 칸(`llm_saved_1d`)만 쓰고, 값이 없는 옛 회차는 None 으로 내려 화면이
+        #   0 과 '측정 안 함' 을 구분하게 한다.
         _tl = _rows(con,
-            "SELECT ran_at, patterns_count, hits_total, llm_saved "
+            "SELECT ran_at, patterns_count, hits_total, llm_saved_1d "
             "FROM self_repair_runs ORDER BY id DESC LIMIT 60")
         r["timeline"] = [
             {"at": x["ran_at"], "patterns": x["patterns_count"] or 0,
-             "hits": x["hits_total"] or 0, "llm_saved": x["llm_saved"] or 0}
+             "hits": x["hits_total"] or 0,
+             "llm_saved_1d": x["llm_saved_1d"]}
             for x in reversed(_tl)
         ]
     except Exception:

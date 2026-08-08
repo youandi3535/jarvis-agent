@@ -2849,3 +2849,122 @@ def test_지침위반_기록이_실제_호출과_시그니처가_맞는다():
     # 실제로 부른다 (patch_effective 표준)
     n = record_directive_violations("economic", "naver", ["존재하지 않는 지침"])
     assert isinstance(n, int)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 오류 강화학습 감사 수정 (2026-08-08) — "초록불부터 끄지 않으면 효과를 판정할 수 없다"
+# ══════════════════════════════════════════════════════════════════
+
+def test_수정건수를_두_번_세지_않는다():
+    """★ `syntax_fixed` 는 `files_fixed` 의 **별칭**이다 — 더하면 한 수정이 두 번 센다.
+
+    실측: '수정 파일: 3개' → total_fixed 6 (self_repair_runs 106행 중 12행 오염).
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN.auto_repair import _parse_layer_counts
+
+    L = _parse_layer_counts("수정 파일: 3개")
+    assert L["files_fixed"] == 3 and L["syntax_fixed"] == 3, "별칭 관계가 깨졌다"
+
+    # ★ 소스 문자열이 아니라 **실제로 기록되는 값**으로 판정한다.
+    #   합산식을 테스트에서 재현하면 코드가 바뀌어도 테스트가 자기 식을 검사할 뿐이다
+    #   (뮤테이션에서 발각 — sum(layers.values()) 로 되돌려도 통과했다).
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+    from shared.db import get_db
+
+    _ar._save_run_to_db("test-model", 1, 0, L, {}, "수정 파일: 3개")
+    with get_db() as con:
+        row = con.execute("SELECT total_fixed, syntax_fixed FROM self_repair_runs "
+                          "ORDER BY id DESC LIMIT 1").fetchone()
+    assert row is not None, "회차가 기록되지 않았다"
+    assert row["syntax_fixed"] == 3, f"수정 파일 수가 3이 아니다: {row['syntax_fixed']}"
+    assert row["total_fixed"] == 3, \
+        f"total_fixed={row['total_fixed']} — 별칭을 두 번 세고 있다(기대 3)"
+
+
+def test_LLM절약_지표가_한_칸에_두_정의를_담지_않는다():
+    """★ 옛 칸(`llm_saved`)은 누적 패턴 수, 새 정의는 1일 창 실적 — 섞으면 추세가 거짓말한다.
+
+    실측: 텔레그램이 "실제 LLM 절약: 50 → 0 (-50회)" 라는 가짜 붕괴를 보고했다.
+    """
+    import inspect
+    import sqlite3
+
+    from shared.db import DB_PATH
+    cols = {r[1] for r in sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+            .execute("PRAGMA table_info(self_repair_runs)")}
+    assert "llm_saved_1d" in cols, "새 정의를 담을 칸이 없다"
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+    ins = _code_only(inspect.getsource(_ar._save_run_to_db)) \
+        if hasattr(_ar, "_save_run_to_db") else _code_only(inspect.getsource(_ar))
+    assert "llm_saved_1d" in ins, "새 정의를 새 칸에 쓰지 않는다"
+
+    # ★ 추세가 **어느 칸을 실제로 읽는지** SQL 을 가로채 확인한다.
+    #   소스에 문자열이 있는지 보는 검사는 옛 칸으로 되돌려도 통과했다(뮤테이션 발각).
+    seen = []
+    _orig = _ar._db if hasattr(_ar, "_db") else None
+    import shared.db as _sdb
+    _real_get_db = _sdb.get_db
+
+    class _Spy:
+        def __init__(self, c): self._c = c
+        def execute(self, sql, *a, **k):
+            seen.append(sql)
+            return self._c.execute(sql, *a, **k)
+        def __getattr__(self, n): return getattr(self._c, n)
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def _spy_db():
+        with _real_get_db() as c:
+            yield _Spy(c)
+
+    _sdb.get_db = _spy_db
+    try:
+        _ar._learning_trend_brief()
+    finally:
+        _sdb.get_db = _real_get_db
+    sel = " ".join(q for q in seen if "self_repair_runs" in q)
+    assert "llm_saved_1d" in sel, f"추세가 새 칸을 안 읽는다: {sel[:200]}"
+    assert "llm_saved," not in sel.replace("llm_saved_1d", "@"), \
+        f"추세가 옛 칸을 읽는다 — 정의가 섞인다: {sel[:200]}"
+
+    # 대시보드 API 도 새 칸만
+    api = (_ROOT / "api_server.py").read_text(encoding="utf-8")
+    i = api.index("self_repair_runs ORDER BY id DESC LIMIT 60")
+    seg = api[max(0, i - 400):i]
+    assert "llm_saved_1d" in seg and "hits_total, llm_saved " not in seg, \
+        "API 타임라인이 옛 칸을 내려보낸다"
+
+
+def test_심층감사_실패가_성공으로_기록되지_않는다():
+    """★ `run_auto_repair` 는 SDK 실패를 예외로 올리지 않고 returncode 로만 남긴다.
+
+    실측: job_runs **39/39 success** 인데 rc=0 마지막이 2026-07-26 — 13일째 죽어 있었다.
+    사후 보정은 발행 도메인이 쓰는 `job_history.mark_outcome` 을 재사용한다(①).
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+
+    assert hasattr(_ga, "_last_repair_returncode"), "returncode 파생이 없다"
+    assert hasattr(_ga, "_mark_job_failed"), "실패 보정 경로가 없다"
+
+    # job_deep_audit 이 실제로 그 둘을 부르는가 (AST)
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "job_deep_audit"), None)
+    assert fn, "job_deep_audit 을 찾을 수 없다"
+    called = {getattr(n.func, "id", "") for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "_last_repair_returncode" in called, "returncode 를 보지 않는다"
+    assert "_mark_job_failed" in called, "실패를 기록하지 않는다"
+
+    # 보정 경로가 job_history 단일 진입점을 쓰는가 (새 SQL 신설 금지)
+    src = _code_only(inspect.getsource(_ga._mark_job_failed))
+    assert "mark_outcome" in src, "job_history 단일 진입점을 안 쓴다"
+    assert "INSERT" not in src.upper() and "UPDATE" not in src.upper(), \
+        "사후 보정이 자체 SQL 을 만든다 — 주인은 job_history 하나다"
