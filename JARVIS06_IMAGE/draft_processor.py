@@ -745,9 +745,17 @@ def publish_assembled(result: dict, publish_fn, platform: str = "") -> dict:
             _why = (_res.get("error") or _res.get("reason") or "")[:200] \
                 if isinstance(_res, dict) else ""
             _et = posting_error_type(f"{platform}_publish", recovered=False)
-            _g_report("publish",
-                      RuntimeError(f"{platform} 발행 실패(예외 없음) — {_why or '사유 미기재'}"),
-                      module=__name__, func_name=_et)
+            # ★ 세분화 타입을 **error_type 자리**로 (2026-08-08 재검증).
+            #   종전엔 `RuntimeError` 로 올리고 세분화 타입을 `func_name` 에 넣었다.
+            #   그러면 ① CLAUDE.md 가 금지한 뭉뚱그린 타입이 되고 ② `kind` 가 비어
+            #   `is_transient('RuntimeError', …)` 가 True → **즉시 ignored** 로 끝난다.
+            #   실측: 보고는 되는데 Tier-1·Tier-2·학습·밴딧 어디에도 안 들어갔다.
+            #   `kind='send_failure'` 는 severity 가 "반드시 Tier-2 유지" 로 선언한 값이라
+            #   4-B 가드가 격리를 막아 준다(그 가드를 넣은 이유가 정확히 이것이다).
+            _g_report(_et, "publish",
+                      message=f"{platform} 발행 실패(예외 없음) — {_why or '사유 미기재'}",
+                      module=__name__, func_name="publish_assembled",
+                      context={"kind": "send_failure", "platform": platform})
             log.error(f"[J06→J08] {platform} 발행 실패(무예외) — GUARDIAN 보고: {_et}")
     except Exception as _re2:
         log.warning(f"[J06→J08] 발행 실패 보고 자체 실패(무시): {_re2}")

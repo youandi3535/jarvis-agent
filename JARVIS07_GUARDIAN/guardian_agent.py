@@ -1525,8 +1525,10 @@ def register(scheduler, bus):
             log.error("[GUARDIAN] ★ 캐치 경로 무력 — 오류가 수집되지 않는다")
             try:
                 from JARVIS07_GUARDIAN.error_collector import report as _rep
-                _rep("guardian", RuntimeError("캐치 경로 스모크 실패 — 오류 수집 무력"),
-                     module=__name__, func_name="CatchPathDead")
+                # ★ 타입을 error_type 자리로 (2026-08-08) — 위 두 곳과 같은 이유.
+                _rep("CatchPathDead", "guardian",
+                     message="캐치 경로 스모크 실패 — 오류 수집 무력",
+                     module=__name__, func_name="register")
             except Exception:
                 pass
         elif _smoke is None:

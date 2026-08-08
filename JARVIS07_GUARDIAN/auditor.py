@@ -530,8 +530,10 @@ def _notify_severity_violations(violations: list) -> None:
             _m = _re_defect.match(str(v))
             if _m:
                 _kind = f"SeverityGateDefect{_m.group(1)}"
-            _rep("guardian", RuntimeError(str(v)[:400]),
-                 module=__name__, func_name=_kind)
+            # ★ 타입을 error_type 자리로 (2026-08-08) — func_name 에 넣으면
+            #   error_type 이 'RuntimeError' 가 돼 뭉뚱그려지고 격리로 샌다.
+            _rep(_kind, "guardian", message=str(v)[:400],
+                 module=__name__, func_name="audit_severity_selfcheck")
     except Exception as e:
         log.warning("[AUDITOR] severity 위반 보고 실패: %s", e)
 

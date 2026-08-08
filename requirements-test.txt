@@ -20,3 +20,7 @@ python-dotenv
 requests
 # 밴딧(Linear UCB) 테스트가 행렬 연산을 실제로 돌린다 (2026-08-07)
 numpy
+# 심층감사 회차 판정 테스트가 **실제 스케줄러를 띄워** job_runs 행을 확인한다 (2026-08-08).
+#  없으면 create_scheduler() 가 None 을 돌려주고 프로브가 죽는데, 그 죽음이
+#  "행이 success='' 로 적혔다" 라는 *엉뚱한 진단* 으로 보고됐다 — ERRORS [587] 과 같은 병.
+apscheduler

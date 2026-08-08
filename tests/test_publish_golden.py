@@ -3591,6 +3591,59 @@ def test_캐치_스모크가_부팅때_실제로_돈다():
     assert got in (True, False, None)
 
 
+def test_보고된_오류가_격리되지_않고_학습에_들어간다():
+    """★ 보고되는 것과 학습에 들어가는 것은 다른 문제다 (2026-08-08 재검증).
+
+    초판은 "error_log 에 쌓였는가" 만 봤다. 그런데 `error_type='RuntimeError'` +
+    `kind` 없음이라 `is_transient` 가 True → **즉시 ignored** 로 종결됐다.
+    Tier-1·Tier-2·학습·밴딧 어디에도 안 들어갔다 — 보고는 됐는데 아무 일도 안 났다.
+
+    세 자리를 전부 본다: ① 세분화 타입이 `error_type` 자리인가 ② `kind` 가 실렸는가
+    ③ 그래서 **격리되지 않는가**.
+    """
+    from JARVIS06_IMAGE import draft_processor as _dp
+    from JARVIS07_GUARDIAN.severity import is_transient, kind_of
+    from shared.db import get_db
+
+    _dp.publish_assembled({"blocks": [], "title": "t"},
+                          lambda blocks, title, **kw: {"success": False, "error": "쿠키 만료"},
+                          "naver")
+    with get_db() as con:
+        r = dict(con.execute(
+            "SELECT error_type, source, message, context, status FROM error_log "
+            "ORDER BY id DESC LIMIT 1").fetchone())
+
+    assert r["error_type"] != "RuntimeError", \
+        "뭉뚱그린 타입으로 올린다 — CLAUDE.md ERRORS [547] 위반"
+    assert "Naver" in r["error_type"], f"플랫폼이 타입에 안 담겼다: {r['error_type']}"
+    assert kind_of(r) == "send_failure", f"kind 가 안 실렸다: {kind_of(r)!r}"
+    assert is_transient(r["error_type"], r["message"], r["source"], kind_of(r)) is False, \
+        "보고했는데 격리로 간다 — 학습에 한 건도 안 들어간다"
+    assert r["status"] != "ignored", f"즉시 격리됐다: {r['status']}"
+
+
+def test_정책_보고도_같은_자리를_쓴다():
+    """★ 같은 병이 세 곳에 있었다 — 한 곳만 고치면 다른 곳에서 재발한다(③)."""
+    import ast
+
+    bad = []
+    for f in ("JARVIS06_IMAGE/draft_processor.py",
+              "JARVIS07_GUARDIAN/auditor.py",
+              "JARVIS07_GUARDIAN/guardian_agent.py"):
+        tree = ast.parse((_ROOT / f).read_text(encoding="utf-8"))
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Call)
+                    and getattr(n.func, "id", "") in ("_g_report", "_rep", "report")):
+                continue
+            fn_kw = next((k.value for k in n.keywords if k.arg == "func_name"), None)
+            if isinstance(fn_kw, ast.Constant) and isinstance(fn_kw.value, str):
+                v = fn_kw.value
+                # PascalCase = 타입처럼 생긴 값이 func_name 자리에 있다
+                if v[:1].isupper() and "_" not in v:
+                    bad.append(f"{f}:{n.lineno} func_name={v!r}")
+    assert not bad, f"세분화 타입이 func_name 자리에 있다(그러면 error_type 이 뭉뚱그려진다): {bad}"
+
+
 def test_무예외_발행실패도_보고된다():
     """★ 예외는 보고되는데 `success=False` 는 조용했다 — 4조합이 지나는 길목에서 막는다."""
     import ast
