@@ -5288,3 +5288,103 @@ def test_저장_실패를_성공으로_적지_않는다(tmp_path, monkeypatch):
     monkeypatch.setattr(rm, "write_json", lambda *a, **k: False)
     with pytest.raises(RuntimeError, match="저장 실패"):
         rm.save({"date": "2026-01-09", "combined_keywords": [], "scored_keywords": []})
+
+
+def test_오류_사슬이_끊기지_않고_이어진다():
+    """★ 오늘 깨진 것은 전부 **링크 하나** 가 아니라 **링크 사이의 연결** 이었다.
+
+    개별 함수는 각자 테스트가 있는데도 캐치→분류→backlog→상태 사이에서 계속 끊겼다
+    (게이트가 한 통로에만 · 검사와 기록이 다른 원본 · 상한이 한 경로에만).
+    그래서 사슬을 **한 바퀴 돌려** 연결 자체를 검사한다.
+    """
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+    from JARVIS07_GUARDIAN.error_collector import report as _catch
+    from shared import db as _db
+
+    try:
+        raise NameError("name 'undefined_chain_probe' is not defined")
+    except NameError as e:
+        eid = _catch(e, "writer", module="JARVIS02_WRITER/length_manager.py",
+                     func_name="chain_probe")
+    assert eid, "① 캐치 실패 — 예외가 error_log 에 안 들어간다"
+    try:
+        with _db.get_db() as con:
+            rec = dict(con.execute("SELECT * FROM error_log WHERE id=?", (eid,)).fetchone())
+        assert rec["error_type"] == "NameError", f"타입이 뭉개졌다: {rec['error_type']}"
+        assert rec["status"] == "new", f"수집 직후 상태가 다르다: {rec['status']}"
+
+        # ② 분류 — 평범한 코드 오류는 Tier-2 로 갈 수 있어야 한다 (과잉 차단 금지)
+        assert _ga.tier2_blocked_reason(rec) is None, \
+            f"정상 코드 오류를 Tier-2 에서 막는다: {_ga.tier2_blocked_reason(rec)}"
+
+        # ③ backlog 가 그것을 집는가 (상한 필터가 정상 오류까지 걸러내면 안 된다)
+        got = {r.get("id") for r in _ga._collect_unresolved(500)}
+        assert eid in got, "③ backlog 가 미해결 오류를 안 집는다 — 재시도 경로 단절"
+
+        # ④ 상태 변경에 근거가 남는가 (호출 지점까지)
+        _db.mark_error_status(eid, "wontfix")
+        with _db.get_db() as con:
+            why = con.execute("SELECT resolution FROM error_log WHERE id=?",
+                              (eid,)).fetchone()[0]
+        assert (why or "").strip(), "④ 근거 없이 상태가 바뀐다"
+        assert f"{__name__.rsplit('.', 1)[-1]}.test_" in why, \
+            f"④ 근거가 호출 지점을 못 가리킨다: {why}"
+
+        # ⑤ 상한에 도달하면 재시도 큐에서 빠지는가 (무한 재시도 방지)
+        from JARVIS07_GUARDIAN.architecture import MAX_LLM_ATTEMPTS as _cap
+        with _db.get_db() as con:
+            con.execute("UPDATE error_log SET llm_attempts=? WHERE id=?", (_cap, eid))
+        assert eid not in {r.get("id") for r in _ga._collect_unresolved(500)}, \
+            "⑤ 상한 도달분이 계속 재시도된다 — 상한이 무력"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+
+
+def test_지침_사슬이_끊기지_않고_이어진다():
+    """★ 주입 → 사용기록 → 검사 → 위반기록 → 보상 → weight 가 **한 원본**으로 이어지는가.
+
+    실측 `insight_usage` 966건 중 `violated` 1건 — 판정은 돌았는데 기록에 닿지 않았다.
+    링크마다 테스트가 있어도 *사이* 가 끊기면 학습은 프롬프트만 길게 만든다.
+    """
+    from JARVIS07_GUARDIAN.quality_learner import (active_directives,
+                                                   attribute_pending_rewards,
+                                                   record_directive_violations)
+    from shared import db as _db
+
+    SC = "__chain_probe__"
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [(f"{SC}:style_C", "사슬 지침", SC)])
+        con.execute("INSERT INTO post_analysis (platform, post_type, theme, quality_score, "
+                    "  created_at, analyzed_at) VALUES ('naver', ?, 't', 70, "
+                    "  datetime('now','localtime'), datetime('now','localtime'))", (SC,))
+    batch = "tbatch_chain"
+    try:
+        # ① 주입 기록
+        _db.record_insight_usage(batch, ids, scope=SC, platform="naver")
+        # ② 게이트가 **같은 묶음** 을 본다
+        checked = active_directives(scope=SC, platform="naver")
+        assert "사슬 지침" in checked, f"② 검사 목록이 주입과 다르다: {checked}"
+        # ③ 어긴 것이 기록된다
+        assert record_directive_violations(SC, "naver", ["사슬 지침"]) == 1, \
+            "③ 검사한 지침을 기록하지 못한다 — 검사·기록 원본이 갈라졌다"
+        with _db.get_db() as con:
+            assert con.execute("SELECT violated FROM insight_usage WHERE batch_id=?",
+                               (batch,)).fetchone()[0] == 1
+        # ④ 보상이 그 판정을 반영해 weight 로 간다
+        before = _db.get_db().execute("SELECT weight FROM learning_insights WHERE id=?",
+                                      (ids[0],)).fetchone()[0]
+        attribute_pending_rewards(days=7)
+        with _db.get_db() as con:
+            row = dict(con.execute("SELECT reward, rewarded_at FROM insight_usage "
+                                   "WHERE batch_id=?", (batch,)).fetchone())
+            after = con.execute("SELECT weight FROM learning_insights WHERE id=?",
+                                (ids[0],)).fetchone()[0]
+        assert row["reward"] is not None, "④ 보상이 귀속되지 않는다 — 고리 단절"
+        assert after != before, "④ weight 가 안 움직인다 — 학습이 반영되지 않는다"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM insight_usage WHERE batch_id=?", (batch,))
+            con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
+                        % ",".join("?" * len(ids)), ids)
+            con.execute("DELETE FROM post_analysis WHERE post_type=?", (SC,))
