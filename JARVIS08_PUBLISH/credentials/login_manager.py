@@ -350,8 +350,6 @@ def verify_all_logins(
         if not cookies:
             nv_issues.append("쿠키 파일 없음 또는 빈 list")
         cookie_age = naver_cookie_age_hours()
-        if cookie_age > 10:
-            nv_issues.append(f"쿠키 만료 임박 ({cookie_age:.1f}h > 10h)")
         # ★ '파일이 있고 신선한가' 는 '쓸 수 있는가' 가 아니다 (2026-08-09, ERRORS [597]).
         #   실측: 08-08 20:30 · 08-09 06:30 두 사전점검이 **둘 다 초록**이었는데
         #   30분 뒤 발행은 로그인 튕김(28초)·CAPTCHA(163초)로 실패했다.
@@ -366,6 +364,19 @@ def verify_all_logins(
         #     True 가 '유효' 와 '판정 불가' 를 함께 뜻한다. 건강진단은 그 둘을 구분해야
         #     하므로 3-상태(`bool | None`)를 쓴다. 티스토리와 **계약까지 대칭**(③).
         #   판정은 네이버 도메인이 소유한다 — 여기서 새로 만들지 않는다(①).
+        # ★ 나이만으로 "만료" 를 단정하지 않는다 (2026-08-09, PrecheckNaverCookieStale
+        #   반복 오경보 — [398]의 거울상). `naver_cookie_refresher.cookie_needs_refresh()`
+        #   는 age>10h 여도 실유효성(`check_cookie_valid`)을 먼저 재확인해 valid 면
+        #   mtime 만 touch 하고 재로그인을 생략한다 — 즉 "나이만 많고 실제론 멀쩡한" 쿠키는
+        #   시스템 자신도 문제 삼지 않는다. 그런데 종전 이 함수는 age>10h 를 보자마자(옛
+        #   `if cookie_age > 10: nv_issues.append(...)` 가 여기 있었다) 실유효성 확인(바로
+        #   아래 블록) 없이 곧장 "만료 임박" 을 확정해 버렸다 — 그 블록이 `if not nv_issues:`
+        #   로 게이트돼 있어 age 로 이미 이슈가 쌓이면 실유효성 체크 자체가 건너뛰어졌기
+        #   때문이다. 몇 줄 뒤 `job_pre_publish_check()` 의 `auto_refresh_if_needed()` 가
+        #   같은 쿠키를 "사실 유효했다" 며 mtime 만 되돌리는 동안, 경보와 GUARDIAN 오류
+        #   보고(`_alert_precheck`)는 이미 나가버린 뒤였다 — 자기모순적 이중판정.
+        #   age 자체를 이슈로 적지 않고 `cookie_age_h` 로만 보고 — "만료" 판정은 실유효성
+        #   (`cookie_valid_http`) 결과 단독 근거로 통일한다(①, 판정 로직 복제 금지).
         if not nv_issues:
             try:
                 from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
@@ -462,10 +473,19 @@ def precheck_error_type(platform: str, issues: list) -> str:
     ★ 중앙 매핑표를 두지 않는다 (CLAUDE.md ERRORS [547]). 새 이슈 문구가 생기면
       타입이 자동으로 따라온다. 뭉뚱그린 `RuntimeError` 로 적으면 타입 기반 게이트와
       Tier-1 지문 매칭이 변별력을 잃는다.
+
+    ★ `CookieExpired` (2026-08-09, PrecheckTistoryUnknown 사고): `verify_all_logins()`
+      가 나이 추정("만료 임박")이 아니라 *실유효성 판정*(`cookie_valid_http`)으로
+      옮겨가면서(위 386·411행) 실제 발생 문구가 "쿠키 만료 — ..." 로 바뀌었는데, 이
+      분류기는 옛 문구("만료 임박")만 보고 있어 새 문구가 전부 `Unknown` 으로 떨어졌다
+      — 판정 로직과 분류 로직이 같은 파일 안에서도 따로 놀면 샌다는 실례. "만료 임박"
+      을 먼저 검사해 레거시 문구(테스트 고정값)는 그대로 `CookieStale` 유지하고,
+      실유효성 판정 문구는 새 kind 로 갈라 *어떤 근거로 만료를 판정했는지* 도 보존한다.
     """
     txt = " ".join(issues or [])
     kind = ("CookieMissing" if "쿠키 파일 없음" in txt
             else "CookieStale" if "만료 임박" in txt
+            else "CookieExpired" if "쿠키 만료" in txt
             else "EnvMissing" if "env " in txt
             else "Unknown")
     return "Precheck" + platform.capitalize() + kind

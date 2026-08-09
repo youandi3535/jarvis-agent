@@ -62,22 +62,65 @@ CAPTCHA_WAIT_SEC = int(os.getenv("NAVER_CAPTCHA_WAIT_SEC", "120"))   # 대화형
 LOGIN_REDIRECT_WAIT_SEC = int(os.getenv("NAVER_LOGIN_WAIT_SEC", "60"))
 
 
-def captcha_present(driver) -> bool:
-    """화면에 **진짜 캡차 요소** 가 보이는가 — 낱말이 아니라 요소로 판정한다.
+# 로그인이 15초 안에 안 끝났을 때 화면 증거를 남길 곳 (ERRORS [606])
+LOGIN_STUCK_DIR = _LEGACY_BASE_DIR / "logs" / "login_stuck"
 
-    ★ 낱말 판정이 왜 틀렸나: 캡차가 없는 평상시 페이지에도 `captcha` 7회·`보안` 2회가
-      스크립트·숨은 필드에 들어 있다(실측). 반면 캡차 *요소* 는 0건이었다.
-    ★ 못 찾으면 False — "모른다" 를 "사람 필요" 로 단정하지 않는다. 단정하면
-      느린 정상 로그인이 사람 대기로 오해돼 무인 실행에서 죽는다.
+
+def capture_login_stuck(driver, tag: str = "") -> str:
+    """로그인이 멈춘 화면을 **증거로 남긴다** — HTML + 스크린샷.
+
+    ★ 왜 (2026-08-09, ERRORS [606]): 캡차 판정 선택자를 *본 적 없는 화면을 추측해서*
+      만들었다가 실제 캡차를 놓쳤다(미탐). 사용자가 손으로 풀어 로그인이 성공했는데
+      로그에는 `캡차 요소 없음` 이라고 **거짓 진술** 이 남았다.
+      추측을 고치려면 실물이 필요하다 — 다음에 뜨면 이 파일이 선택자를 알려준다.
+    """
+    import datetime as _dt                                # noqa: PLC0415
+    stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = LOGIN_STUCK_DIR / f"{stamp}{('_' + tag) if tag else ''}"
+    try:
+        LOGIN_STUCK_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            base.with_suffix(".html").write_text(driver.page_source, encoding="utf-8")
+        except Exception:                                # noqa: BLE001
+            pass
+        try:
+            driver.save_screenshot(str(base.with_suffix(".png")))
+        except Exception:                                # noqa: BLE001
+            pass
+        return str(base)
+    except Exception as e:                               # noqa: BLE001
+        print(f"  ⚠️ 로그인 정지 화면 저장 실패: {type(e).__name__}: {e}")
+        return ""
+
+
+def captcha_present(driver) -> "bool | None":
+    """화면에 캡차가 있는가 — **True(확실) / None(모름)**. False 는 돌려주지 않는다.
+
+    ★ 왜 False 가 없나 (2026-08-09 정정, ERRORS [606])
+      초판은 선택자에 안 걸리면 `False`(= 캡차 아님)를 단정했다. 그 선택자는
+      **실제 네이버 캡차 화면을 한 번도 보지 않고 추측으로 만든 것** 이었고,
+      진짜 캡차가 떴을 때 놓쳤다(미탐). 그런데 로그에는 `캡차 요소 없음` 이라고
+      *확신에 찬 거짓* 이 남았다 — 사용자가 손으로 풀어 성공한 것을 시스템이
+      자기 판정 덕이라 오해하게 만드는 문구다.
+      **모르는 것을 모른다고 말하는 것이 최소 조건이다.**
+
+    ★ 그래서 호출자는 이렇게 쓴다:
+      · True  → 캡차 확실. 무인이면 즉시 포기하고 사람을 부른다.
+      · None  → 모름. 로그인이 느린 것일 수도 있으니 **기다려 본다.**
+                실패하면 "캡차일 수 있음 — 화면 확인 필요" 로 알린다(단정하지 않는다).
     """
     try:
         from selenium.webdriver.common.by import By      # noqa: PLC0415
+        # 아래 목록은 *확실한 양성* 만 담는다. 여기 없다고 캡차가 아닌 것은 아니다.
         sel = ("img[id*='captcha' i], img[src*='captcha' i], "
                "input[id*='captcha' i], input[name*='captcha' i], "
-               "#captchaimg, #chptchaimg, iframe[src*='recaptcha' i]")
-        return any(e.is_displayed() for e in driver.find_elements(By.CSS_SELECTOR, sel))
+               "#captchaimg, #chptchaimg, iframe[src*='recaptcha' i], "
+               "img[alt*='보안' i], img[alt*='자동입력' i]")
+        if any(e.is_displayed() for e in driver.find_elements(By.CSS_SELECTOR, sel)):
+            return True
     except Exception:                                    # noqa: BLE001
-        return False
+        pass
+    return None
 
 
 def human_wait_sec() -> int:
@@ -122,6 +165,15 @@ def naver_login_error_type(reason: str) -> str:
     """
     slug = "".join(w.capitalize() for w in (reason or "unknown").split("_"))
     return "NaverLogin" + slug
+
+
+# ★ 이 `_fail()` 사유 중 *사람이 화면 앞에 있어야만* 풀리는 것 — 코드 수정으로 해결 불가.
+#   (captcha_present() 가 실제 CAPTCHA 요소를 찾은 뒤에만 나는 사유 — 사람이 로그인해야
+#   사라진다.) network_down·credentials_missing·login_button_click 등 나머지 사유는
+#   진짜 코드/설정 결함일 수 있어 여기 넣지 않는다 — GUARDIAN Tier-2 가 계속 잡아야
+#   사람이 알아챈다. 이 상수가 "무엇이 CAPTCHA 인가"의 단일 진실 소스 — GUARDIAN 쪽은
+#   여기서 파생만 한다(JARVIS07_GUARDIAN/severity.py `_naver_login_human_required_types`).
+CAPTCHA_REASONS = frozenset({"captcha_unattended", "captcha_timeout"})
 
 
 def _save_cookies(cookies) -> None:
@@ -447,10 +499,14 @@ def refresh_naver_cookies(force: bool = False) -> bool:
             )
             print("  ✅ 로그인 완료")
         except Exception:
-            # ★ 낱말이 아니라 **요소** 로 판정한다 (ERRORS [595]).
-            #   낱말 판정은 캡차 없는 평상시 페이지에서도 항상 참이라, 여기 오는 모든 경우를
-            #   '사람 필요' 로 오해하게 만들었다.
-            if captcha_present(driver):
+            # ★ 판정은 요소로 하되 **모를 수 있다** (ERRORS [600]·[606]).
+            #   낱말 판정은 캡차 없는 페이지에서도 항상 참이었고(오탐),
+            #   추측으로 만든 요소 선택자는 진짜 캡차를 놓쳤다(미탐).
+            #   여기서 증거를 남겨 다음 판정을 고칠 재료로 삼는다.
+            _shot = capture_login_stuck(driver, "redirect_timeout")
+            if _shot:
+                print(f"  📸 로그인 정지 화면 저장: {_shot}.(html|png)")
+            if captcha_present(driver) is True:
                 _wait = human_wait_sec()
                 if _wait <= 0:
                     # 무인 — 화면 앞에 아무도 없다. 기다려도 결과가 같으니 즉시 부른다.
@@ -465,15 +521,18 @@ def refresh_naver_cookies(force: bool = False) -> bool:
                 except Exception:
                     return _fail("captcha_timeout", f"  ❌ {_wait}초 내 인증 미완료 — 종료")
             else:
-                # 캡차가 아니다 = 그냥 느리다. **무인이어도 기다린다** — 사람과 무관한 시간이다.
-                print(f"  ⏳ 로그인 전환 대기 ({LOGIN_REDIRECT_WAIT_SEC}초) — 캡차 요소 없음")
+                # 캡차인지 그냥 느린 것인지 **모른다**. 기다려 본다 —
+                # 느린 로그인이면 성공하고, 캡차면 어차피 시간이 지나야 알 수 있다.
+                # ★ "캡차 요소 없음" 이라고 단정하지 않는다(ERRORS [606] — 그 문구가 거짓이었다).
+                print(f"  ⏳ 로그인 전환 대기 ({LOGIN_REDIRECT_WAIT_SEC}초) — 캡차 여부 판정 불가")
                 try:
                     WebDriverWait(driver, LOGIN_REDIRECT_WAIT_SEC).until(
                         lambda d: "nidlogin" not in d.current_url)
-                    print("  ✅ 로그인 완료 (지연)")
+                    print("  ✅ 로그인 완료 (지연) — 사람이 캡차를 풀었을 수도 있다")
                 except Exception:
-                    return _fail("login_slow_timeout",
-                                 f"  ❌ {15 + LOGIN_REDIRECT_WAIT_SEC}초 내 로그인 전환 없음")
+                    return _fail("login_stuck_unknown",
+                                 f"  ❌ {15 + LOGIN_REDIRECT_WAIT_SEC}초 내 로그인 전환 없음 "
+                                 f"— 캡차일 수 있음(판정 불가). 저장된 화면 확인: {_shot or '저장 실패'}")
 
         time.sleep(random.uniform(2, 3))
 

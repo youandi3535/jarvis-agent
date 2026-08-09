@@ -557,6 +557,38 @@ def _harness_says_envelope(kind: str) -> bool:
         return False
 
 
+# last-known-good 캐시 — `_harness_infra_kinds()` 와 동일 원칙(성공값만 적재).
+_NAVER_CAPTCHA_TYPES_CACHE: frozenset = frozenset()
+
+
+def _naver_login_human_required_types() -> frozenset:
+    """네이버 로그인 실패 타입 중 *사람이 CAPTCHA 를 풀어야* 사라지는 것만 — 코드 수정 불가.
+
+    ★ 왜 생겼나 (2026-08-09, `_naver_cookie_ready` 사고 대응) — 무인 실행 중 CAPTCHA 를
+      만나면 `NaverLoginCaptchaUnattended`/`NaverLoginCaptchaTimeout` 으로 보고되는데
+      (`naver_cookie_refresher.naver_login_error_type`), 이 타입은 표준 파이썬 예외명이
+      아니라 `_TRANSIENT_TYPES`·`CODE_BUG_TYPES` 어디에도 안 걸려 **기본값으로 코드
+      버그 취급**됐다 — GUARDIAN 이 사람만 풀 수 있는 CAPTCHA 를 Tier-2 LLM 으로
+      "고치려" 세션을 태우는 낭비가 반복될 자리였다(패턴은 ERRORS [387][413][414]와 동형).
+    ★ 단일 진실 소스는 `naver_cookie_refresher.CAPTCHA_REASONS` — "어떤 사유가 CAPTCHA 인가"
+      는 로그인 도메인이 안다. 여기서는 그 사유 목록을 타입 문자열로만 변환한다(② 동적 설계,
+      credentials_missing·login_button_click 같은 *진짜 결함일 수 있는* 사유는 여기 안 들어옴).
+    ★ 지연 import + fail-open 캐시는 `_harness_infra_kinds()` 와 동일 원칙(순환·부분초기화
+      재진입 회피, 파생 실패가 severity 자체를 죽이지 않게).
+    """
+    global _NAVER_CAPTCHA_TYPES_CACHE
+    try:
+        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+            CAPTCHA_REASONS, naver_login_error_type)
+        got = frozenset(naver_login_error_type(r) for r in CAPTCHA_REASONS)
+        if got:
+            _NAVER_CAPTCHA_TYPES_CACHE = got
+            return got
+    except Exception:  # noqa: BLE001 — 파생 실패가 severity 를 죽이면 안 된다
+        pass
+    return _NAVER_CAPTCHA_TYPES_CACHE
+
+
 def _env_extra_kinds() -> frozenset:
     """무배포 안전밸브 — `GUARDIAN_EXTRA_NON_CODE_KINDS=a,b` 로 kind 추가(호출 시점 조회).
 
@@ -674,6 +706,12 @@ def is_transient(error_type: str, message: str = "", source: str = "",
 
     # 4) 타입
     if et in _TRANSIENT_TYPES or _short_type(et) in _TRANSIENT_TYPES:
+        return True
+
+    # 4-A) ★ 네이버 로그인 CAPTCHA — 사람이 화면 앞에서 풀어야 사라진다(코드 수정 불가).
+    #   `NaverLoginCaptchaUnattended`/`NaverLoginCaptchaTimeout` 만 해당 — 나머지 로그인
+    #   실패 타입(NaverLoginCredentialsMissing 등)은 진짜 결함일 수 있어 그대로 Tier-2 유지.
+    if et in _naver_login_human_required_types():
         return True
 
     # 4-B) ★ 결함 2 가드 (2026-08-08 감사) — **kind 선언을 메시지 문구가 뒤집지 못한다**
