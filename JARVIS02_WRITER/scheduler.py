@@ -81,31 +81,71 @@ _posting_lock   = threading.Lock()
 # ══════════════════════════════════════════
 
 def _clear_all_cookies(label: str) -> None:
-    """발행 전 기존 쿠키·캐시 전체 초기화 — 매번 새 로그인으로 신선한 쿠키 보장.
+    """발행 전 캐시 초기화 — **쓸 수 있는 쿠키는 지우지 않는다**.
 
-    삭제 대상:
-      - naver_cookies.pkl (쿠키 파일)
-      - TS_COOKIE 환경변수 (메모리 초기화, .env는 갱신 시 자동 업데이트)
-      - Chrome 캐시 폴더 (Cache / Code Cache / GPUCache / Service Worker)
-        → 로그인 데이터(Cookies, Login Data) 는 보존
+    ★★ 종전 동작이 발행을 세 번 깨뜨렸다 (2026-08-09, ERRORS [605])
+      원래 의도는 *"매번 새 로그인으로 신선한 쿠키 보장"* 이었다. 그 전제가 뒤집혔다 —
+      네이버가 **반복 로그인에 CAPTCHA** 를 걸기 시작했기 때문이다. 그래서 이 함수는
+      "신선한 쿠키를 보장" 하는 대신 **매 발행마다 CAPTCHA 확률에 노출**시켰다.
+
+      실측(2026-08-09):
+        07:00 경제  쿠키 없음 → 전체 로그인 → CAPTCHA 120초 대기 → 실패(163초)
+        21:00 테마  ★ 이 함수가 파일 삭제 → 전체 로그인 → 실패(43초)
+      로그가 그대로 말한다:
+        21:00:02 🗑️ 쿠키·캐시 초기화: **네이버 쿠키 파일**, ...
+        21:00:42 🚨 네이버 쿠키 점검 실패 — 발행 건너뜀
+
+      **시스템이 자기 발밑을 파고 있었다.**
+
+    ★ 지금 규칙 — 지울지 말지를 *유효성에서 파생* 한다(② 동적 설계).
+      · 쿠키가 **유효** 하면 보존 → 로그인 자체를 건너뛴다 → CAPTCHA 를 만날 일이 없다.
+      · **만료** 면 삭제 → 어차피 새로 받아야 한다.
+      · **판정 불가**(네트워크 등)면 보존 — '모른다' 를 '만료' 로 단정하지 않는다.
+        여기서 지우면 네트워크 순단이 곧 강제 재로그인이 되어 CAPTCHA 를 부른다.
+      · Chrome 캐시(Cache/Code Cache/GPUCache/Service Worker)는 로그인 데이터가 아니므로
+        종전대로 항상 지운다.
+
+    ★ ③ 4조합: 이 함수 하나가 경제·테마 두 발행 경로에 공통이다.
     """
     import os as _os, shutil as _shutil
 
     cleared = []
 
-    # 1) 네이버 쿠키 파일 삭제
+    kept = []
+
+    # 1) 네이버 쿠키 — **만료가 확인된 경우에만** 삭제
     _naver_cookie = BASE_DIR / "naver_cookies.pkl"
     if _naver_cookie.exists():
+        _valid = None
         try:
-            _naver_cookie.unlink()
-            cleared.append("네이버 쿠키 파일")
-        except Exception as _e:
-            log(f"⚠️ [{label}] 네이버 쿠키 파일 삭제 실패: {_e}")
+            from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+                cookie_valid_http as _nv_valid)
+            _valid = _nv_valid()
+        except Exception as _e:                          # noqa: BLE001
+            log(f"⚠️ [{label}] 네이버 쿠키 유효성 판정 실패 — 보존: {_e}")
+        if _valid is False:
+            try:
+                _naver_cookie.unlink()
+                cleared.append("네이버 쿠키 파일(만료)")
+            except Exception as _e:
+                log(f"⚠️ [{label}] 네이버 쿠키 파일 삭제 실패: {_e}")
+        else:
+            kept.append("네이버 쿠키" + ("(유효)" if _valid else "(판정 불가)"))
 
-    # 2) 티스토리 TS_COOKIE 환경변수 초기화 (.env 보존 — 갱신 성공 시 자동 업데이트)
+    # 2) 티스토리 TS_COOKIE — 같은 규칙. 유효하면 지우지 않는다.
     if _os.environ.get("TS_COOKIE"):
-        _os.environ.pop("TS_COOKIE", None)
-        cleared.append("TS_COOKIE 환경변수")
+        _ts_valid = None
+        try:
+            from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import (  # noqa: PLC0415
+                cookie_valid_http as _ts_ok)
+            _ts_valid = _ts_ok()
+        except Exception as _e:                          # noqa: BLE001
+            log(f"⚠️ [{label}] 티스토리 쿠키 유효성 판정 실패 — 보존: {_e}")
+        if _ts_valid is False:
+            _os.environ.pop("TS_COOKIE", None)
+            cleared.append("TS_COOKIE 환경변수(만료)")
+        else:
+            kept.append("TS_COOKIE" + ("(유효)" if _ts_valid else "(판정 불가)"))
 
     # 3) 네이버 Chrome 캐시 폴더 삭제 (로그인·세션 데이터는 보존)
     _chrome_cache_dirs = [
@@ -123,9 +163,13 @@ def _clear_all_cookies(label: str) -> None:
                 log(f"⚠️ [{label}] Chrome 캐시 삭제 실패 ({_cdir.name}): {_e}")
 
     if cleared:
-        log(f"🗑️ [{label}] 쿠키·캐시 초기화: {', '.join(cleared)}")
-    else:
-        log(f"ℹ️ [{label}] 삭제할 쿠키·캐시 없음")
+        log(f"🗑️ [{label}] 초기화: {', '.join(cleared)}")
+    if kept:
+        # ★ 보존한 것을 반드시 남긴다 — 종전엔 삭제만 찍혀서 "왜 로그인을 또 하지" 를
+        #   로그로 되짚을 수 없었다(21:00 사고의 원인 규명이 늦어진 이유).
+        log(f"🔒 [{label}] 보존(로그인 건너뜀): {', '.join(kept)}")
+    if not cleared and not kept:
+        log(f"ℹ️ [{label}] 삭제·보존할 쿠키 없음")
 
 
 def _lock_acquire(who: str) -> bool:

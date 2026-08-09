@@ -573,6 +573,12 @@ def test_부재_경보의_타입이_이슈에서_파생된다():
     assert precheck_error_type("naver", ["쿠키 파일 없음 또는 빈 list"]) == "PrecheckNaverCookieMissing"
     assert precheck_error_type("naver", ["쿠키 만료 임박 (12.0h > 10h)"]) == "PrecheckNaverCookieStale"
     assert precheck_error_type("tistory", ["env TS_COOKIE 누락"]) == "PrecheckTistoryEnvMissing"
+    # ★ 실유효성 판정(cookie_valid_http) 문구 — PrecheckTistoryUnknown 회귀 방지
+    #   (2026-08-09, "만료 임박" 이 아니라 "쿠키 만료" 로 갈아탄 뒤 Unknown 으로 떨어졌던 사고).
+    assert precheck_error_type(
+        "naver", ["쿠키 만료 — 실제 요청이 로그아웃 상태를 보고"]) == "PrecheckNaverCookieExpired"
+    assert precheck_error_type(
+        "tistory", ["쿠키 만료 — manage 접근이 로그인으로 리다이렉트"]) == "PrecheckTistoryCookieExpired"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -774,3 +780,72 @@ def test_네트워크_문제를_만료로_적지_않는다(monkeypatch):
             for n in ast.walk(h) if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)]
     assert None in rets, f"네트워크 예외에서 None(판정 불가)을 돌려주지 않는다: {rets}"
     assert False not in rets, f"네트워크 예외를 '만료' 로 단정한다: {rets}"
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑬ 발행 전 정리가 **쓸 수 있는 쿠키를 지우면 안 된다** (ERRORS [605])
+# ══════════════════════════════════════════════════════════════════
+def test_유효한_쿠키를_발행전에_지우지_않는다(monkeypatch, tmp_path):
+    """★ 2026-08-09 21:00 테마 미발행의 직접 원인.
+
+    `_clear_all_cookies` 가 *"매번 새 로그인으로 신선한 쿠키 보장"* 이라는 옛 전제로
+    네이버 쿠키 파일을 **무조건 삭제**했다. 그 전제는 뒤집혔다 — 네이버가 반복 로그인에
+    CAPTCHA 를 걸기 때문이다. 로그가 그대로 말한다:
+        21:00:02 🗑️ 쿠키·캐시 초기화: **네이버 쿠키 파일**, ...
+        21:00:42 🚨 네이버 쿠키 점검 실패 — 발행 건너뜀
+    시스템이 자기 발밑을 팠다.
+    """
+    import importlib.util
+    import os
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("_sched_clear", root / "JARVIS02_WRITER" / "scheduler.py")
+    sc = importlib.util.module_from_spec(spec)
+    sys.modules["_sched_clear"] = sc
+    spec.loader.exec_module(sc)
+
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nc
+    from JARVIS08_PUBLISH.credentials import tistory_cookie_refresher as tc
+
+    monkeypatch.setattr(sc, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(sc, "log", lambda *a, **k: None)
+    ck = tmp_path / "naver_cookies.pkl"
+
+    def run(valid):
+        ck.write_bytes(b"x")
+        monkeypatch.setenv("TS_COOKIE", "z" * 40)
+        monkeypatch.setattr(nc, "cookie_valid_http", lambda *a, **k: valid)
+        monkeypatch.setattr(tc, "cookie_valid_http", lambda *a, **k: valid)
+        sc._clear_all_cookies("시험")
+        return ck.exists(), bool(os.environ.get("TS_COOKIE"))
+
+    assert run(True) == (True, True), "유효한 쿠키를 지운다 — 매 발행이 전체 로그인이 되어 CAPTCHA 를 부른다"
+    assert run(None) == (True, True), "판정 불가를 만료로 단정해 지운다 — 네트워크 순단이 강제 재로그인이 된다"
+    assert run(False) == (False, False), "만료된 쿠키를 남긴다 — 갱신 기회를 놓친다"
+
+
+def test_쿠키_삭제가_유효성에서_파생된다():
+    """무조건 삭제로 되돌아가면 같은 사고가 재발한다 — 판정 호출을 구조로 강제한다."""
+    import ast
+    import inspect
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("_sched_clear2", root / "JARVIS02_WRITER" / "scheduler.py")
+    sc = importlib.util.module_from_spec(spec)
+    sys.modules["_sched_clear2"] = sc
+    spec.loader.exec_module(sc)
+
+    tree = ast.parse(inspect.getsource(sc._clear_all_cookies).lstrip())
+    names = {getattr(n.func, "id", "") or getattr(n.func, "attr", "")
+             for n in ast.walk(tree) if isinstance(n, ast.Call)}
+    assert "_nv_valid" in names or "cookie_valid_http" in names, \
+        "유효성 판정 없이 쿠키를 지운다 — 삭제가 무조건이면 매 발행이 전체 로그인이다"
+    # unlink 가 유효성 분기 *안* 에 있는지 — 분기 밖이면 판정이 장식이 된다
+    src = inspect.getsource(sc._clear_all_cookies)
+    i_valid, i_unlink = src.index("is False"), src.index("unlink()")
+    assert i_valid < i_unlink, "삭제가 유효성 판정보다 앞에 있다 — 판정이 무의미하다"
