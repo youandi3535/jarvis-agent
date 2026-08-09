@@ -743,24 +743,29 @@ def test_네트워크_문제를_만료로_적지_않는다(monkeypatch):
 
     # ★ 대역으로 갈아끼우기 **전에** 원본 소스를 잡는다 — 안 그러면 가짜 함수를 뜯어본다
     #   (초판이 정확히 그 실수를 했고, 테스트가 자기 대역을 검사하며 실패했다).
-    real_src = inspect.getsource(nc.check_cookie_valid)
+    # ★ 대역으로 갈아끼우기 **전에** 원본 소스를 잡는다 — 안 그러면 가짜 함수를 뜯어본다.
+    #   그리고 **건강진단이 실제로 부르는 함수** 를 갈아야 한다. 초판은 `check_cookie_valid`
+    #   를 갈았는데 코드는 `cookie_valid_http` 를 부르므로 단언이 **공허하게 통과**했다
+    #   (오늘 세 번째 같은 실수 — 대역이 소비자와 다른 심볼을 겨눈 경우).
+    real_src = inspect.getsource(nc.cookie_valid_http)
 
     for k in lm._REQUIRED_ENV["naver"]:
         monkeypatch.setenv(k, "x")
     monkeypatch.setattr(lm, "get_naver_cookies", lambda: [{"name": "NID_AUT"}])
     monkeypatch.setattr(lm, "naver_cookie_age_hours", lambda: 1.0)
 
-    def _boom():
+    def _boom(*a, **k):
         raise RuntimeError("DNS 실패")
 
-    monkeypatch.setattr(nc, "check_cookie_valid", _boom)
+    monkeypatch.setattr(nc, "cookie_valid_http", _boom)
     assert lm.verify_all_logins(platforms=("naver",))["naver"]["ok"], \
         "판정이 예외로 죽었는데 '만료' 로 단정한다"
 
-    # 네이버의 실제 인코딩 확인 — 네트워크 오류 때 True 를 돌려준다(:204)
+    # ★ 3-상태 계약 — 네트워크 예외에서 **None**(판정 불가)이어야 한다.
+    #   False(만료)로 돌려주면 DNS 순단마다 거짓 경보가 나고, 더 나쁘게는 불필요한
+    #   재로그인을 유발해 CAPTCHA 위험을 부른다(ERRORS [595]).
     tree = ast.parse(real_src.lstrip())
-    handlers = [h for h in ast.walk(tree) if isinstance(h, ast.ExceptHandler)]
-    last_returns = [n.value.value for h in handlers for n in ast.walk(h)
-                    if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)]
-    assert True in last_returns, \
-        "네트워크 예외에서 True(=만료 아님)를 돌려주지 않는다 — 거짓 만료 경보가 난다"
+    rets = [n.value.value for h in ast.walk(tree) if isinstance(h, ast.ExceptHandler)
+            for n in ast.walk(h) if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)]
+    assert None in rets, f"네트워크 예외에서 None(판정 불가)을 돌려주지 않는다: {rets}"
+    assert False not in rets, f"네트워크 예외를 '만료' 로 단정한다: {rets}"
