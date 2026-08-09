@@ -690,3 +690,77 @@ def test_캡차가_아니면_무인도_기다린다():
     assert seen["human"] == 0, "무인인데 사람을 기다린다"
     # 캡차가 아닐 때 쓰는 예산은 무인 여부와 무관해야 한다
     assert nc.LOGIN_REDIRECT_WAIT_SEC == nc.LOGIN_REDIRECT_WAIT_SEC
+
+
+def test_네이버도_실효를_검증한다(monkeypatch):
+    """★ 내가 "네이버와 대칭" 이라 주석에 썼는데 **그때는 거짓이었다** (ERRORS [597]).
+
+    네이버 분기도 '파일이 있고 신선한가' 만 봤다. 실측 근거 — 두 사전점검이 둘 다 초록:
+      08-08 20:30 precheck ok=1  → 21:00 테마  ok=0 (28초, 로그인 튕김)
+      08-09 06:30 precheck ok=1  → 07:00 경제  ok=0 (163초, CAPTCHA)
+    `check_cookie_valid()` 는 이미 있었다 — 안 부르고 있었을 뿐이다.
+    """
+    import JARVIS08_PUBLISH.credentials.login_manager as lm
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nc
+
+    # ★ `.env` 에 기대지 않는다 — 없는 트리(CI·새 체크아웃)에선 env 누락으로 막혀
+    #   검증 자체가 안 돌고, 그러면 이 테스트가 '내 맥북에서만' 이 된다 (ERRORS [587]).
+    for k in lm._REQUIRED_ENV["naver"]:
+        monkeypatch.setenv(k, "x")
+    monkeypatch.setattr(lm, "get_naver_cookies", lambda: [{"name": "NID_AUT"}])
+    monkeypatch.setattr(lm, "naver_cookie_age_hours", lambda: 1.0)
+
+    # ★ 판정 함수가 `check_cookie_valid`(2-상태) → `cookie_valid_http`(3-상태) 로 바뀌었다
+    #   (2026-08-09, 동시 세션 합의). 전자는 *갱신 여부* 판단용이라 네트워크 오류에 True 를
+    #   돌려줘 '유효' 와 '판정 불가' 가 섞인다. 건강진단은 그 둘을 구분해야 한다.
+    monkeypatch.setattr(nc, "cookie_valid_http", lambda *a, **k: True)
+    assert lm.verify_all_logins(platforms=("naver",))["naver"]["ok"]
+
+    monkeypatch.setattr(nc, "cookie_valid_http", lambda *a, **k: False)
+    r = lm.verify_all_logins(platforms=("naver",))["naver"]
+    assert not r["ok"], "실제 요청이 로그인 상태를 부정하는데 사전점검이 통과시킨다"
+    assert any("만료" in i for i in r["issues"])
+
+    # ★ '모른다'(None)를 '만료' 로 적지 않는다 — DNS 순단마다 거짓 경보가 나면 안 된다
+    #   (오늘 실측: RADAR 실패 264건 중 263건이 DNS 이름풀이 실패).
+    monkeypatch.setattr(nc, "cookie_valid_http", lambda *a, **k: None)
+    r2 = lm.verify_all_logins(platforms=("naver",))["naver"]
+    assert not any("만료" in i for i in r2["issues"]), \
+        f"판정 불가를 만료로 적는다 — 거짓 경보: {r2['issues']}"
+
+
+def test_네트워크_문제를_만료로_적지_않는다(monkeypatch):
+    """DNS 순단(오늘 263건)마다 '쿠키 만료' 경보가 나면 아무도 안 듣게 된다.
+
+    ★ 네이버·티스토리가 '판정 불가' 를 다르게 인코딩한다 — 네이버는 True, 티스토리는 None.
+      인코딩은 달라도 **'모른다' 를 '만료' 로 적지 않는다** 는 규칙은 같아야 한다.
+    """
+    import ast
+    import inspect
+
+    import JARVIS08_PUBLISH.credentials.login_manager as lm
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nc
+
+    # ★ 대역으로 갈아끼우기 **전에** 원본 소스를 잡는다 — 안 그러면 가짜 함수를 뜯어본다
+    #   (초판이 정확히 그 실수를 했고, 테스트가 자기 대역을 검사하며 실패했다).
+    real_src = inspect.getsource(nc.check_cookie_valid)
+
+    for k in lm._REQUIRED_ENV["naver"]:
+        monkeypatch.setenv(k, "x")
+    monkeypatch.setattr(lm, "get_naver_cookies", lambda: [{"name": "NID_AUT"}])
+    monkeypatch.setattr(lm, "naver_cookie_age_hours", lambda: 1.0)
+
+    def _boom():
+        raise RuntimeError("DNS 실패")
+
+    monkeypatch.setattr(nc, "check_cookie_valid", _boom)
+    assert lm.verify_all_logins(platforms=("naver",))["naver"]["ok"], \
+        "판정이 예외로 죽었는데 '만료' 로 단정한다"
+
+    # 네이버의 실제 인코딩 확인 — 네트워크 오류 때 True 를 돌려준다(:204)
+    tree = ast.parse(real_src.lstrip())
+    handlers = [h for h in ast.walk(tree) if isinstance(h, ast.ExceptHandler)]
+    last_returns = [n.value.value for h in handlers for n in ast.walk(h)
+                    if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)]
+    assert True in last_returns, \
+        "네트워크 예외에서 True(=만료 아님)를 돌려주지 않는다 — 거짓 만료 경보가 난다"

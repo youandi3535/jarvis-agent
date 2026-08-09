@@ -352,6 +352,30 @@ def verify_all_logins(
         cookie_age = naver_cookie_age_hours()
         if cookie_age > 10:
             nv_issues.append(f"쿠키 만료 임박 ({cookie_age:.1f}h > 10h)")
+        # ★ '파일이 있고 신선한가' 는 '쓸 수 있는가' 가 아니다 (2026-08-09, ERRORS [597]).
+        #   실측: 08-08 20:30 · 08-09 06:30 두 사전점검이 **둘 다 초록**이었는데
+        #   30분 뒤 발행은 로그인 튕김(28초)·CAPTCHA(163초)로 실패했다.
+        #   판정 함수는 이미 있었다 — 안 부르고 있었을 뿐이다.
+        #   ★ 이 검사는 **쿠키가 신선할 때야말로** 필요하다. 나이 조건 안에 넣으면
+        #     "신선하니 괜찮겠지" 라는 바로 그 가정을 다시 믿는 셈이다.
+        #     실제로 한 번 그렇게 들여써진 적이 있다(두 세션이 같은 자리를 동시에 고치다
+        #     스코프가 어긋났다) — 그때 판정 호출이 **0회** 였고 테스트가 잡았다.
+        #     들여쓰기 한 칸이 검사를 통째로 끄는 자리다. 옮길 때 반드시 호출 여부를 재라.
+        #   ★ `check_cookie_valid` 가 아니라 `cookie_valid_http` 를 쓰는 이유:
+        #     전자는 *갱신 여부* 판단용이라 네트워크 오류에 **True** 를 돌려준다 —
+        #     True 가 '유효' 와 '판정 불가' 를 함께 뜻한다. 건강진단은 그 둘을 구분해야
+        #     하므로 3-상태(`bool | None`)를 쓴다. 티스토리와 **계약까지 대칭**(③).
+        #   판정은 네이버 도메인이 소유한다 — 여기서 새로 만들지 않는다(①).
+        if not nv_issues:
+            try:
+                from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+                    cookie_valid_http as _nv_valid)
+                if _nv_valid() is False:
+                    nv_issues.append("쿠키 만료 — 실제 요청이 로그아웃 상태를 보고")
+                # None → 판정 불가(네트워크 등). '모른다' 를 '만료' 로 적지 않는다.
+            except Exception as e:                       # noqa: BLE001
+                log.warning(f"[login_manager] 네이버 유효성 판정 실패(무시): "
+                            f"{type(e).__name__}: {e}")
         result["naver"] = {"ok": not nv_issues, "issues": nv_issues, "cookie_age_h": cookie_age}
 
     # 티스토리
@@ -360,7 +384,10 @@ def verify_all_logins(
         for k in _REQUIRED_ENV["tistory"]:
             if not os.environ.get(k, "").strip():
                 ts_issues.append(f"env {k} 누락")
-        # ★ env '존재' 만으로 끝내지 않는다 — 네이버와 대칭 (2026-08-09, ERRORS [596]).
+        # ★ env '존재' 만으로 끝내지 않는다 (2026-08-09, ERRORS [596]).
+        #   ※ 초판 주석은 "네이버와 대칭" 이라 적었는데 **그때는 거짓이었다** —
+        #     네이버 분기도 실효 판정을 안 부르고 있었다(동시 세션 지적, ERRORS [597]).
+        #     지금은 양쪽 다 부른다. 확인하지 않은 단정을 주석에 쓰지 말 것.
         #   종전엔 만료된 쿠키도 ✅ 였다. 그래서 08-08 20:30 사전점검이 초록인 채로
         #   21:00 테마 발행이 28초 만에 로그인 화면으로 튕겨 끝났다(실측).
         #   판정 자체는 티스토리 도메인이 소유한다 — 여기서 새로 만들지 않는다(①).

@@ -5388,3 +5388,53 @@ def test_지침_사슬이_끊기지_않고_이어진다():
             con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
                         % ",".join("?" * len(ids)), ids)
             con.execute("DELETE FROM post_analysis WHERE post_type=?", (SC,))
+
+
+def test_사전점검이_두_플랫폼_모두_실효를_본다():
+    """★ "쿠키 파일이 신선한가" 와 "로그인이 되는가" 는 다른 질문이다.
+
+    실측 2회 — 사전점검이 초록인 채로 30분 뒤 발행이 로그인 화면에서 튕겼다:
+      08-08 20:30 precheck ok=1 (0s) → 21:00 theme   ok=0 (28s)
+      08-09 06:30 precheck ok=1      → 07:00 economic ok=0 (163s, CAPTCHA)
+    0초짜리 점검은 네트워크를 안 탔다는 뜻이다.
+
+    ★ **소스 모양이 아니라 동작으로** 본다 (2026-08-09) — 초판은 `"_valid(" in src` 로
+      검사해서, 판정을 `if False:` 로 바꿔도 통과했다(뮤테이션 생존). 게다가 같은 자리를
+      동시 세션과 몇 분 차이로 고쳐 **판정이 두 번 실린 것도** 못 잡았다.
+    """
+    import inspect
+
+    from JARVIS08_PUBLISH.credentials import login_manager as lm
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nvm
+    from JARVIS08_PUBLISH.credentials import tistory_cookie_refresher as tsm
+
+    # ① 두 판정 함수가 **같은 3-상태 계약** 인가
+    for mod, who in ((nvm, "naver"), (tsm, "tistory")):
+        fn = getattr(mod, "cookie_valid_http", None)
+        assert fn is not None, f"{who} 에 브라우저 없는 판정 함수가 없다"
+        assert "None" in str(inspect.signature(fn).return_annotation), \
+            f"{who} 판정이 3-상태가 아니다 — '모른다' 를 표현할 수 없다"
+
+    # ② 만료를 **실제로** 반영하는가 (동작 검증)
+    calls = {"naver": 0, "tistory": 0}
+    _onv, _ots = nvm.cookie_valid_http, tsm.cookie_valid_http
+    try:
+        nvm.cookie_valid_http = lambda *a, **k: (calls.__setitem__("naver", calls["naver"] + 1), False)[1]
+        tsm.cookie_valid_http = lambda *a, **k: (calls.__setitem__("tistory", calls["tistory"] + 1), False)[1]
+        got = lm.verify_all_logins()
+        for who in ("naver", "tistory"):
+            assert got[who]["ok"] is False, \
+                f"{who}: 판정이 '만료' 인데 사전점검이 초록이다 — 발행 직전에 튕긴다"
+            assert calls[who] == 1, \
+                f"{who}: 판정 호출이 {calls[who]}회 — 0이면 미배선, 2+ 면 중복(동시 수정 흔적)"
+
+        # ③ '모른다'(None)를 '만료' 로 적지 않는가 — 거짓 경보 방지
+        calls["naver"] = calls["tistory"] = 0
+        nvm.cookie_valid_http = lambda *a, **k: None
+        tsm.cookie_valid_http = lambda *a, **k: None
+        unknown = lm.verify_all_logins()
+        for who in ("naver", "tistory"):
+            assert not any("만료" in i for i in unknown[who]["issues"]), \
+                f"{who}: 판정 불가를 만료로 적는다 — DNS 순단마다 거짓 경보"
+    finally:
+        nvm.cookie_valid_http, tsm.cookie_valid_http = _onv, _ots

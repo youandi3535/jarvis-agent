@@ -145,6 +145,13 @@ def _save_cookies(cookies) -> None:
 COOKIE_MAX_AGE_HOURS = 10   # 이 시간 이상 된 쿠키는 갱신
 
 
+_UA_FOR_CHECK = (                       # 세션 판정용 UA — 두 판정 함수가 공유(② 값 복제 금지)
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+
 def check_cookie_valid() -> bool:
     """
     저장된 쿠키로 네이버에 실제 HTTP 요청을 보내 로그인 상태 확인.
@@ -176,14 +183,7 @@ def check_cookie_valid() -> bool:
 
     jar = {c["name"]: c["value"] for c in raw_cookies}
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "ko-KR,ko;q=0.9",
-    }
+    headers = {"User-Agent": _UA_FOR_CHECK, "Accept-Language": "ko-KR,ko;q=0.9"}
 
     try:
         # 네이버 메인 → 로그인 상태면 NV_ID 또는 '로그아웃' 텍스트 포함
@@ -205,6 +205,40 @@ def check_cookie_valid() -> bool:
         _g_report("writer", e, module=__name__)
         # 네트워크 오류는 만료로 보지 않음 → True 반환해서 갱신 시도 막음
         return True
+
+
+def cookie_valid_http(timeout: float = 8.0) -> "bool | None":
+    """브라우저 없이 네이버 세션 유효성 판정 — 티스토리 `cookie_valid_http()` 와 **대칭**.
+
+    ★ 왜 따로 두는가 (2026-08-09, ERRORS [596] 후속)
+      `check_cookie_valid()` 는 *갱신 여부를 정하는* 함수라 네트워크 오류에 **True** 를
+      돌려준다("모르면 갱신하지 말자"). 그 의미는 그 목적엔 맞지만, 건강진단
+      (`verify_all_logins`)이 그대로 쓰면 **네트워크 끊김이 '정상' 으로 보고** 된다 —
+      '모른다' 를 '정상' 으로 적는 셈이다. 오늘 실측만 봐도 RADAR 실패 264건 중 263건이
+      DNS 이름풀이 실패였으니 실제로 밟는 경로다.
+      그래서 *판정* 은 3-상태로 따로 노출하고, 판정 규칙 자체는 복제하지 않는다(①).
+
+    Returns: True(유효) / False(만료·쿠키없음) / None(판정 불가 — 네트워크 등)
+    """
+    if not COOKIE_FILE.exists():
+        return False
+    try:
+        import pickle as _pk                              # noqa: PLC0415
+        import requests as _req                           # noqa: PLC0415
+        with open(COOKIE_FILE, "rb") as _f:
+            raw = _pk.load(_f)
+        names = {c["name"] for c in raw}
+        if not {"NID_AUT", "NID_SES"} <= names:
+            return False                                  # 핵심 쿠키 부재 = 확실한 만료
+        jar = {c["name"]: c["value"] for c in raw}
+        res = _req.get("https://www.naver.com", cookies=jar, timeout=timeout,
+                       headers={"User-Agent": _UA_FOR_CHECK,
+                                "Accept-Language": "ko-KR,ko;q=0.9"},
+                       allow_redirects=True)
+        return ("로그아웃" in res.text) or bool(NV_ID and NV_ID in res.text)
+    except Exception as e:                                # noqa: BLE001
+        print(f"  ⚠️ 네이버 쿠키 HTTP 판정 불가: {type(e).__name__}: {e}")
+        return None
 
 
 def cookie_needs_refresh() -> bool:
