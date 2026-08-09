@@ -493,3 +493,83 @@ def test_쿠키게이트_실패가_오류원장에_박제된다(monkeypatch):
     assert reported, "게이트 실패가 오류 원장에 박제되지 않는다"
     assert reported[0][0][0] == "NaverLoginCaptchaUnattended", \
         f"뭉뚱그린 타입으로 박제됐다: {reported[0][0][0]}"
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑪ 쿠키 파일 부재 — 조용히 지나가지 않는다 (ERRORS [594])
+# ══════════════════════════════════════════════════════════════════
+def test_사전점검_실패가_사람과_원장_양쪽에_간다(monkeypatch, tmp_path):
+    """★ 종전엔 `log.warning` 한 줄이 전부였다.
+
+    그래서 `naver_cookies.pkl` 이 사라진 채로 **두 회차가 조용히 지나갔다**
+    (08-08 21:00 테마 실패 28초 · 08-09 07:00 경제 실패 163초).
+    쿠키가 없으면 매 발행이 *전체 로그인* 이 되고 그때마다 CAPTCHA 확률에 노출된다 —
+    이 경고는 "곧 발행이 깨진다" 는 예고인데 아무도 듣지 못했다.
+    """
+    import JARVIS08_PUBLISH.credentials.login_manager as lm
+    import shared.notify as notify
+    from JARVIS07_GUARDIAN import error_collector as ec
+
+    sent: list = []
+    reported: list = []
+    monkeypatch.setattr(notify, "send_tg", lambda m, **k: sent.append(m))
+    monkeypatch.setattr(ec, "report", lambda *a, **k: reported.append(a))
+    monkeypatch.setattr(lm, "NAVER_COOKIE_PATH", tmp_path / "none.pkl")
+    monkeypatch.setattr(lm, "_COOKIE_WATCH", tmp_path / "watch.json")
+    monkeypatch.setattr(lm, "auto_refresh_if_needed", lambda *a, **k: None)
+    monkeypatch.setattr(lm, "verify_all_logins", lambda platforms=("naver", "tistory"): {
+        "naver": {"ok": False, "issues": ["쿠키 파일 없음 또는 빈 list"], "cookie_age_h": 1e9}})
+
+    lm.job_pre_publish_check()
+
+    assert sent, "사전점검 실패가 사람에게 안 간다"
+    assert reported, "사전점검 실패가 오류 원장에 안 남는다"
+    assert reported[0][0] == "PrecheckNaverCookieMissing", \
+        f"뭉뚱그린 타입으로 박제됐다: {reported[0][0]}"
+
+
+def test_사전점검_정상이면_조용하다(monkeypatch, tmp_path):
+    """경보가 늘 울리면 아무도 안 듣는다 — 정상일 때는 침묵해야 한다."""
+    import JARVIS08_PUBLISH.credentials.login_manager as lm
+    import shared.notify as notify
+    from JARVIS07_GUARDIAN import error_collector as ec
+
+    sent: list = []
+    monkeypatch.setattr(notify, "send_tg", lambda m, **k: sent.append(m))
+    monkeypatch.setattr(ec, "report", lambda *a, **k: sent.append(("report",) + a))
+    monkeypatch.setattr(lm, "auto_refresh_if_needed", lambda *a, **k: None)
+    monkeypatch.setattr(lm, "verify_all_logins", lambda platforms=("naver", "tistory"): {
+        "naver": {"ok": True, "issues": [], "cookie_age_h": 1.0},
+        "tistory": {"ok": True, "issues": []}})
+
+    lm.job_pre_publish_check()
+    assert not sent, f"정상인데 경보가 울린다: {sent}"
+
+
+def test_소실_추적이_사라진_시점을_좁힌다(monkeypatch, tmp_path):
+    """"언제 사라졌나" 를 못 말하면 원인 추적이 불가능하다 — 08-09 사고가 그랬다."""
+    import JARVIS08_PUBLISH.credentials.login_manager as lm
+
+    ck = tmp_path / "naver_cookies.pkl"
+    ck.write_bytes(b"x")
+    monkeypatch.setattr(lm, "NAVER_COOKIE_PATH", ck)
+    monkeypatch.setattr(lm, "_COOKIE_WATCH", tmp_path / "watch.json")
+
+    first = lm.record_cookie_sighting()
+    assert first["present"] and not first["vanished"]
+    assert "현재 존재" in lm.cookie_loss_window(), "있는데 사라졌다고 말한다"
+
+    ck.unlink()                                   # 사라짐
+    second = lm.record_cookie_sighting()
+    assert second["vanished"], "사라진 것을 감지하지 못한다"
+    assert second["last_seen"] == first["at"], "마지막 관측 시각을 잃어버린다"
+    assert "사라졌다" in lm.cookie_loss_window(), "사라짐을 알리지 않는다"
+
+
+def test_부재_경보의_타입이_이슈에서_파생된다():
+    """중앙 매핑표를 만들지 않는다 — 새 이슈가 생기면 타입이 자동으로 따라온다."""
+    from JARVIS08_PUBLISH.credentials.login_manager import precheck_error_type
+
+    assert precheck_error_type("naver", ["쿠키 파일 없음 또는 빈 list"]) == "PrecheckNaverCookieMissing"
+    assert precheck_error_type("naver", ["쿠키 만료 임박 (12.0h > 10h)"]) == "PrecheckNaverCookieStale"
+    assert precheck_error_type("tistory", ["env TS_COOKIE 누락"]) == "PrecheckTistoryEnvMissing"

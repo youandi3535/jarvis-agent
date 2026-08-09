@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+import datetime as _dt
 import pickle
 from pathlib import Path
 from typing import Any, Optional
@@ -157,6 +158,7 @@ def get_naver_cookies() -> list[dict]:
     Returns:
         쿠키 dict list. 파일 없거나 비어있으면 [].
     """
+    record_cookie_sighting()          # 파일을 만지는 순간이 곧 관측 기회다(ERRORS [594])
     if not NAVER_COOKIE_PATH.exists():
         return []
     try:
@@ -167,6 +169,90 @@ def get_naver_cookies() -> list[dict]:
         log.warning(f"[login_manager] 네이버 쿠키 로드 실패: {e}")
         _g_report("publish", e, module=__name__)
         return []
+
+
+# ══════════════════════════════════════════════════════════
+# 쿠키 파일 소실 추적 — "언제 사라졌나" 를 알 수 있게 (2026-08-09, ERRORS [594])
+# ══════════════════════════════════════════════════════════
+#
+# ★ 왜 필요한가
+#   08-09 07:00 경제 브리핑 미발행의 근인은 CAPTCHA 였지만, *그 CAPTCHA 에 노출된 이유* 는
+#   `naver_cookies.pkl` 이 사라져 **매 발행이 전체 로그인**이 됐기 때문이다.
+#   그런데 파일이 없어진 사실도, 없어진 시각도 어디에도 남지 않아 원인을 추적할 수 없었다
+#   (저장소에 그 파일을 지우는 코드는 0곳 — grep 실측).
+#
+# ★ ① 새 잡을 만들지 않는다. 쿠키를 *만지는 지점* 에서 기록한다 —
+#   읽기(`get_naver_cookies`)·쓰기(`_save_cookies` 경유 갱신)·점검(`verify_all_logins`).
+#   관측 빈도가 곧 해상도이고, 그 지점들은 이미 publish 도메인 안에 있다.
+# ★ ② 저장은 `json_store` 정문(원자 교체 + 락 + 백업). 새 저장 방식을 만들지 않는다.
+_COOKIE_WATCH = Path(__file__).resolve().parent / "cookie_watch.json"
+
+
+def record_cookie_sighting() -> dict:
+    """네이버 쿠키 파일의 지금 상태를 기록하고, *사라짐* 을 감지하면 그 사실을 담아 돌려준다.
+
+    Returns: {"present", "mtime", "size", "vanished", "last_seen"}
+      · `vanished=True` 는 **직전 관측엔 있었는데 지금 없다** 는 뜻 — 이때가 경보 시점이다.
+    """
+    now = _dt.datetime.now().isoformat(timespec="seconds")
+    present = NAVER_COOKIE_PATH.exists()
+    cur: dict = {"present": present, "at": now, "vanished": False, "last_seen": ""}
+    try:
+        if present:
+            st = NAVER_COOKIE_PATH.stat()
+            cur["mtime"] = _dt.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")
+            cur["size"] = st.st_size
+    except Exception:                                    # noqa: BLE001
+        pass
+    try:
+        from JARVIS07_GUARDIAN.json_store import read_json, write_json  # noqa: PLC0415
+        prev = read_json(_COOKIE_WATCH, default={}) or {}
+        cur["last_seen"] = (cur["at"] if present
+                            else (prev.get("last_seen") or prev.get("at") or ""))
+        cur["vanished"] = bool(prev.get("present")) and not present
+        write_json(_COOKIE_WATCH, cur, backup=True)
+        # ★ `credentials/` 안의 파일은 소유자 전용(0600) — 이 폴더 규칙이다.
+        #   관측 파일 자체엔 비밀이 없지만 규칙에 예외를 두지 않는다(테스트가 강제한다).
+        #   `.lock` 과 `.bak` 도 같은 폴더에 생기므로 함께 조인다.
+        import os as _os                                  # noqa: PLC0415
+        for _q in (_COOKIE_WATCH,
+                   _COOKIE_WATCH.with_suffix(_COOKIE_WATCH.suffix + ".lock"),
+                   _COOKIE_WATCH.with_suffix(_COOKIE_WATCH.suffix + ".bak")):
+            try:
+                if _q.exists():
+                    _os.chmod(_q, 0o600)
+            except OSError:
+                pass
+    except Exception as e:                               # noqa: BLE001
+        log.warning(f"[login_manager] 쿠키 관측 기록 실패(무시): {type(e).__name__}: {e}")
+    return cur
+
+
+def cookie_loss_window() -> str:
+    """쿠키가 사라진 구간을 사람이 읽을 수 있게 — 원인 추적의 출발점.
+
+    ★ 창 안에 무엇이 돌았는지는 `job_runs` 가 이미 갖고 있다. 여기서 별도 기록을
+      만들지 않고 그 원장을 조회한다(② 파생 — 사본을 만들지 않는다).
+    """
+    try:
+        from JARVIS07_GUARDIAN.json_store import read_json  # noqa: PLC0415
+        prev = read_json(_COOKIE_WATCH, default={}) or {}
+    except Exception:                                    # noqa: BLE001
+        return ""
+    last = prev.get("last_seen") or ""
+    if not last:
+        return "마지막 관측 기록 없음 (추적 시작 전)"
+    # ★ 파일이 살아 있으면 '사라졌다' 고 말하지 않는다 — 이 작업의 요점이 정직한 보고다.
+    if NAVER_COOKIE_PATH.exists():
+        return f"현재 존재 (마지막 관측 {last})"
+    try:
+        from shared.db import get_db                     # noqa: PLC0415
+        with get_db() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM job_runs WHERE started_at >= ?", (last,)).fetchone()[0]
+        return f"마지막 관측 {last} 이후 잡 {n}건 실행 — 그 구간에서 사라졌다"
+    except Exception:                                    # noqa: BLE001
+        return f"마지막 관측 {last} 이후 사라졌다"
 
 
 def naver_cookie_age_hours() -> float:
@@ -298,6 +384,56 @@ def auto_refresh_if_needed(
 # 6) cron 잡 단일 진입점
 # ══════════════════════════════════════════════════════════
 
+def precheck_error_type(platform: str, issues: list) -> str:
+    """사전점검 실패 → 오류 타입. *이미 있는 판단*(플랫폼·이슈)에서 기계적으로 만든다.
+
+    ★ 중앙 매핑표를 두지 않는다 (CLAUDE.md ERRORS [547]). 새 이슈 문구가 생기면
+      타입이 자동으로 따라온다. 뭉뚱그린 `RuntimeError` 로 적으면 타입 기반 게이트와
+      Tier-1 지문 매칭이 변별력을 잃는다.
+    """
+    txt = " ".join(issues or [])
+    kind = ("CookieMissing" if "쿠키 파일 없음" in txt
+            else "CookieStale" if "만료 임박" in txt
+            else "EnvMissing" if "env " in txt
+            else "Unknown")
+    return "Precheck" + platform.capitalize() + kind
+
+
+def _alert_precheck(platform: str, info: dict) -> None:
+    """사전점검 실패를 **사람과 원장 양쪽에** 알린다 (2026-08-09, ERRORS [594]).
+
+    ★ 왜 (실사고): 종전엔 `log.warning` 한 줄이 전부였다. 그래서
+      `naver_cookies.pkl` 이 통째로 사라진 상태로 **두 번의 발행 회차가 조용히 지나갔다**
+      (08-08 21:00 테마 실패 28초 · 08-09 07:00 경제 실패 163초).
+      쿠키 파일이 없으면 매 발행이 *전체 로그인* 이 되고, 그때마다 CAPTCHA 확률에 노출된다.
+      즉 이 경고는 "곧 발행이 깨진다" 는 예고인데 아무도 듣지 못했다.
+    """
+    issues = list(info.get("issues") or [])
+    try:
+        extra = ""
+        if platform == "naver":
+            # ★ 이슈 *문구* 가 아니라 **지금 관측** 을 권위로 삼는다.
+            #   문구는 다른 시점의 판단이라, 그대로 믿으면 "파일 없음" 과 "현재 존재" 가
+            #   한 알림에 같이 실린다(실측으로 확인). 어긋나는 경보는 신뢰를 깎는다.
+            _seen = record_cookie_sighting()
+            if not _seen.get("present"):
+                extra = "\n" + cookie_loss_window()
+        msg = (f"⚠️ *[발행 前 점검] {platform.upper()} 인증 이상*\n"
+               + "\n".join(f"· {i}" for i in issues) + extra
+               + "\n\n이대로면 발행 시각에 *전체 로그인* 을 시도하고, CAPTCHA 가 뜨면 건너뜁니다.")
+        from shared.notify import send_tg                 # noqa: PLC0415
+        send_tg(msg)
+    except Exception as e:                                # noqa: BLE001
+        log.warning(f"[login_manager/pre_check] 알림 실패: {type(e).__name__}: {e}")
+    try:
+        from JARVIS07_GUARDIAN.error_collector import report  # noqa: PLC0415
+        report(precheck_error_type(platform, issues), "publish", module=__name__,
+               func_name="job_pre_publish_check",
+               message=f"[발행 前 점검] {platform}: {'; '.join(issues)}")
+    except Exception as e:                                # noqa: BLE001
+        log.warning(f"[login_manager/pre_check] 박제 실패: {type(e).__name__}: {e}")
+
+
 def job_pre_publish_check(platform: Optional[str] = None) -> None:
     """cron 잡 — 발행 직전 사전 점검.
 
@@ -309,6 +445,7 @@ def job_pre_publish_check(platform: Optional[str] = None) -> None:
         for plat, info in verify.items():
             if not info["ok"]:
                 log.warning(f"[login_manager/pre_check] {plat}: {info['issues']}")
+                _alert_precheck(plat, info)               # ★ 로그로만 끝내지 않는다
         # 자동 갱신
         auto_refresh_if_needed()
     elif platform == "naver":
