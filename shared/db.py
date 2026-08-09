@@ -699,18 +699,6 @@ def push_pipeline(items: list):
                 )
 
 
-def get_todays_pipeline(limit: int = 20) -> list:
-    """오늘 날짜 pipeline 항목을 기회점수 내림차순으로 반환 (RADAR 추천 대기열 조회용)."""
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT id, theme, sector, opportunity_score, created_at FROM pipeline "
-            "WHERE status = 'suggested' AND date(created_at) = date('now','localtime') "
-            "ORDER BY opportunity_score DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
 def get_recent_published_themes(days: int = 30) -> list[dict]:
     """최근 N일 이내 post_analysis 에 발행된 theme 목록 반환.
 
@@ -2023,7 +2011,11 @@ def get_top_learning_insights(limit: int = 10, days: int = 30,
         if insight_type:
             sql += " AND insight_type = ?"
             params.append(insight_type)
-        if scope:
+        # ★ `'all'` 은 여기서도 **제한 없음** 이다 (2026-08-08 적대적 검증 — 관용구 통일).
+        #   같은 파일의 `get_ranked_learning_insights` 만 고치고 여기를 두면 두 함수의
+        #   규약이 어긋난다 — 지금은 호출자가 `'all'` 을 안 넘겨 무해하지만, 규약이
+        #   갈라진 채 남으면 다음 호출자가 반드시 밟는다(원칙①·③).
+        if scope and scope != "all":
             sql += " AND COALESCE(scope,'all') IN (?, 'all')"
             params.append(scope)
         sql += " ORDER BY effective_weight DESC LIMIT ?"
@@ -2083,7 +2075,15 @@ def get_ranked_learning_insights(scope: str = "", limit: int = 8,
                -- ★ weight=0 은 '무력화' 를 뜻한다 (2026-08-02 오염 지침 378건 정리).
                --   종전엔 이 필터가 없어 weight 를 0 으로 내려도 **그대로 주입** 됐다.
                AND li.weight > 0
-                 AND (? = '' OR COALESCE(li.scope,'all') IN (?, 'all'))
+                 -- ★ `''` 와 `'all'` 은 **둘 다 '제한 없음'** (2026-08-08).
+                 --   종전엔 `'all'` 이 리터럴 매칭이라 **0건**을 냈다 — DB 에 그런
+                 --   scope 값이 없기 때문(실측 economic/theme/naver/tistory/wp 뿐).
+                 --   `COALESCE(li.scope,'all')` 가 NULL 을 'all' 로 보는 것에서
+                 --   드러나듯 이 스키마에서 'all' 은 '보편' 을 뜻한다. 그런데
+                 --   호출자가 '전체' 를 뜻해 `'all'` 을 넘기면 조용히 빈 목록을
+                 --   받았다 — 실제로 `scope='all'` 배치가 8건 있었고 그 배치들은
+                 --   지침 위반을 **기록할 수 없었다**(전체 966건 중 violated=1건).
+                 AND (? IN ('', 'all') OR COALESCE(li.scope,'all') IN (?, 'all'))
                ORDER BY effective_weight DESC
                LIMIT ?""",
             (f"-{int(days)} day", scope, scope, int(limit) * 3),
@@ -2133,14 +2133,58 @@ def mark_usage_violated(batch_id: str, insight_ids: list) -> int:
         return cur.rowcount
 
 
-def latest_batch(scope: str, platform: str) -> str:
-    """이 조합의 **가장 최근 미귀속 배치 id** — 게이트가 방금 주입분을 찾을 때 쓴다."""
+def batch_directives(batch_id: str) -> list[dict]:
+    """이 배치에 **실제로 주입된** 지침 `[{id, directive}]` — 기록에서 읽는다.
+
+    ★ 왜 랭킹을 다시 조회하지 않는가 (2026-08-08)
+      위반 판정은 발행 직전에 일어나고 주입은 그보다 앞이다. 그 사이 weight·TTL 이
+      바뀌면 **랭킹 재조회 결과는 주입된 묶음과 달라진다** — 실제로 어긴 지침이
+      재조회 목록에 없으면 위반이 조용히 사라진다(실측 966건 중 violated 1건).
+      `insight_usage` 가 "무엇을 넣었는지" 의 **기록** 이다. 진실은 여기서 읽는다.
+    """
+    if not batch_id:
+        return []
     with get_db() as conn:
-        r = conn.execute(
-            "SELECT batch_id FROM insight_usage "
-            "WHERE scope = ? AND platform = ? AND reward IS NULL "
-            "ORDER BY id DESC LIMIT 1", (scope, platform)).fetchone()
-    return str(r[0]) if r else ""
+        rows = conn.execute(
+            "SELECT li.id AS id, li.directive AS directive "
+            "  FROM insight_usage u JOIN learning_insights li ON li.id = u.insight_id "
+            " WHERE u.batch_id = ?", (batch_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def latest_batch(scope: str, platform: str) -> str:
+    """이 조합의 **가장 최근 미귀속 배치 id** — 게이트가 방금 주입분을 찾을 때 쓴다.
+
+    ★ `platform=''` 주입도 같은 발행쌍으로 본다 (2026-08-08 적대적 검증)
+      주입은 작성기가 하는데 `_load_learn_insights(platform='')` 처럼 **플랫폼을 안 넘기는
+      경로** 가 있다(실측: `economic/''` 1배치·`theme/''` 1배치, 최근 것은 오늘 19:43).
+      그러면 기록은 `platform=''` 인데 게이트는 `'naver'` 로 물어 **다른 배치** 를 잡고,
+      어긴 지침이 그 배치에 없어 위반이 조용히 사라진다.
+      `''` 는 '플랫폼 미상' 이지 '다른 플랫폼' 이 아니다 — 정확 일치를 먼저 찾고,
+      없을 때만 미상 주입으로 내려간다. 규약 해석은 여기 한 곳에서만 한다.
+    """
+    # ★ **이번 회차의 것만** 잡는다 (2026-08-09 2차 적대적 검증)
+    #   `reward IS NULL` 만 걸면 보상이 안 붙은 옛 배치가 그대로 후보다 — 실측
+    #   **33개가 1일 이상 묵어 있었다**(가장 오래된 것 7/21). 그 상태에서 오늘 주입이
+    #   `platform=''` 로 들어가면, 게이트가 `'naver'` 로 물어 **7월 배치** 를 잡고
+    #   무관한 지침을 검사·마감한다(재현: 오늘 어긴 지침 기록 0행, 옛 배치가 violated=0 마감).
+    #   경계는 박지 않고 **액션 상한에서 파생** 한다 — 주입과 검사는 *같은 발행 액션
+    #   안* 에서 일어나므로, 액션 상한보다 오래된 배치는 이번 회차의 것일 수 없다.
+    try:
+        from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC as _dl
+    except Exception:      # 파생 실패 시에도 무한 과거를 열지 않는다(fail-closed)
+        _dl = 2400
+    _window = f"-{int(_dl)} seconds"
+    with get_db() as conn:
+        for pf in ([platform, ""] if platform else [""]):
+            r = conn.execute(
+                "SELECT batch_id FROM insight_usage "
+                "WHERE scope = ? AND platform = ? AND reward IS NULL "
+                "  AND used_at >= datetime('now','localtime',?) "
+                "ORDER BY id DESC LIMIT 1", (scope, pf, _window)).fetchone()
+            if r:
+                return str(r[0])
+    return ""
 
 
 def get_unrewarded_usage(days: int = 3) -> list[dict]:
@@ -2486,6 +2530,27 @@ def bump_error_seen(source: str, module: str, error_type: str,
         return False
 
 
+def _caller_reason(status: str) -> str:
+    """근거를 안 남긴 호출자에게서 **근거를 파생** 한다 (2026-08-08).
+
+    ★ 왜 호출자마다 문구를 박지 않았나 — 실측으로 근거 없는 상태 변경이 **18곳**이었고
+      (`wontfix` 61건 전원 `resolution` NULL), 문구를 18벌 박으면 ① 한 곳을 빠뜨리고
+      ② 새 호출자가 생기면 또 NULL 이 된다. 주인(DB)이 *보장* 하면 새 호출자도 자동으로
+      근거를 갖는다 — 목록을 관리할 필요가 없다(원칙①②).
+      사람이 쓴 사유가 있으면 **항상 그쪽이 우선** — 이건 최후의 바닥이다.
+    """
+    import inspect
+    try:
+        for fr in inspect.stack()[2:6]:          # 0=_caller_reason 1=mark_error_status
+            mod = (fr.frame.f_globals.get("__name__") or "")
+            if mod.startswith("shared.db") or mod == "__main__":
+                continue
+            return f"{status} — 사유 미기록 ({mod}.{fr.function}:{fr.lineno})"
+    except Exception:
+        pass
+    return f"{status} — 사유 미기록 (호출자 불명)"
+
+
 def mark_error_status(error_id: int, status: str, resolution: str = ""):
     """오류 상태 변경 (analyzing / wontfix / ignored / fixed).
 
@@ -2496,19 +2561,23 @@ def mark_error_status(error_id: int, status: str, resolution: str = ""):
       세 가지를 한 이름으로 말했다. 근거 없이 상태를 바꾸지 않는다.
       비워 두면 경고를 남기고 그 사실 자체를 기록한다 — 조용히 넘어가지 않는다.
     """
-    _why = (resolution or "").strip()
-    if status == "fixed" and not _why:
-        _why = "근거 미기록(호출자가 사유를 남기지 않음)"
-        log.warning("[db] #%s fixed 인데 사유가 없다 — 근거를 남길 것", error_id)
+    _why = (resolution or "").strip() or _caller_reason(status)
     with get_db() as conn:
-        if _why:
+        if status == "fixed":
+            # ★ `fixed_at` 은 **고쳐진 시각** 이다 — 다른 상태에 찍으면 수리시간 지표가
+            #   오염된다(2026-08-08 재검증). `new`·`wontfix` 는 사유만 남긴다.
             conn.execute(
                 "UPDATE error_log SET status=?, "
                 "  resolution = COALESCE(NULLIF(resolution,''), ?), "
                 "  fixed_at = COALESCE(fixed_at, datetime('now','localtime')) "
                 "WHERE id=?", (status, _why[:500], error_id))
         else:
-            conn.execute("UPDATE error_log SET status=? WHERE id=?", (status, error_id))
+            # ★ 사유는 **마지막 것을 남긴다** — 재시도 이력에서 중요한 건 *지금 왜 이 상태인가*
+            #   이고, 첫 사유를 고집하면 3회차 실패가 1회차 문구로 보인다.
+            #   (`fixed` 는 반대로 first-wins — 처음 고쳐진 근거가 진실이다.)
+            conn.execute(
+                "UPDATE error_log SET status=?, resolution=? WHERE id=?",
+                (status, _why[:500], error_id))
 
 
 # ── 격리 버킷(ignored) 관측 — 공개 헬퍼 (사용자 박제 2026-07-25) ──────────────

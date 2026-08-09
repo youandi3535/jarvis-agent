@@ -67,7 +67,25 @@ _DENY_FILES = {
     "JARVIS02_WRITER/BLOG_SUPREME_LAW.md",  # 블로그 헌법
     "JARVIS07_GUARDIAN/project_audit_log.json",  # 감사 기록
     "JARVIS07_GUARDIAN/learned_patterns.json",   # 학습 자산 (별도 API 만)
+    "JARVIS07_GUARDIAN/bandit_state.json",       # 밴딧 가중치 — 되돌리면 학습이 사라진다
+    "JARVIS07_GUARDIAN/learned_incidents.json",  # 사고 이력 (append only)
 }
+
+
+def protected_files() -> frozenset:
+    """**수정·복원 금지 파일** — 이 목록의 주인은 이 파일 하나다 (2026-08-08, ①).
+
+    ★ 왜 공개하나: `auto_repair._snapshot_py_files` 가 자기만의 deny 목록을 갖고 있었고
+      거기엔 학습 자산이 **없었다**. Tier-2 롤백이 `learned_patterns.json`·
+      `bandit_state.json` 을 되돌릴 수 있는 경로였다 — 되돌리면 그날의 학습이 사라진다.
+      두 벌을 두지 않는다. 여기서 읽어 간다.
+    """
+    return frozenset(_DENY_FILES)
+
+
+def deny_dirs() -> frozenset:
+    """수정·복원 금지 디렉터리 — 같은 이유로 여기가 주인이다."""
+    return frozenset(_DENY_DIRS)
 
 
 def _normalize_target(raw: str) -> str:
@@ -155,6 +173,23 @@ def _safe_path(target: str) -> Path | None:
         # ★ 금지 파일 차단 (ERRORS.md 덮어쓰기 사고 재발 방지)
         if rel in _DENY_FILES or any(rel.endswith("/" + d) or rel == d for d in _DENY_FILES):
             log.warning(f"[GUARDIAN] 금지 파일 (기록·박제): {rel}")
+            return None
+        # ★ **보안·코어 파일 차단** (2026-08-09 3차 적대적 검증)
+        #   `architecture.DENY_FIX_PATHS` 는 "자동수정 절대 금지" 로 선언돼 있는데
+        #   소비자가 `guardian_agent._is_deny_path` **하나뿐** 이었고, 그마저 *오류
+        #   레코드의 module* 만 봤다. 정작 파일을 여는 관문인 여기는 그 목록을 **몰랐다**.
+        #   실측: `jarvis_daemon.py`·`login_manager.py` 가 이 관문을 그대로 통과했고,
+        #   샌드박스 end-to-end 에서 두 파일 모두 실제로 패치됐다.
+        #   (`.env`·`*.pkl` 은 확장자 규칙에 *우연히* 걸렸을 뿐 목록 때문이 아니었다.)
+        #   ★ 목록을 복제하지 않는다 — 주인(`architecture`)에서 파생한다. 파생 실패는
+        #     통과가 아니라 **차단**(fail-closed): 보안 판단을 못 하면 손대지 않는다.
+        try:
+            from JARVIS07_GUARDIAN.architecture import DENY_FIX_PATHS as _deny_core
+        except Exception as _de:
+            log.warning(f"[GUARDIAN] 보안 금지 목록 파생 실패 — 차단: {_de}")
+            return None
+        if rel in _deny_core or p.name in _deny_core:
+            log.warning(f"[GUARDIAN] 보안·코어 파일 수정 차단: {rel}")
             return None
         # 확장자 체크
         if p.suffix not in _ALLOW_EXT:
@@ -936,8 +971,9 @@ def verify_fix(error_record: dict, analysis: dict, file_path: Path,
 
     # 일시적·외부 오류는 재현 자체가 무의미 (severity 판단 재사용 — 사본 금지)
     try:
-        from JARVIS07_GUARDIAN.severity import is_transient, kind_of
-        if is_transient(et, msg, str(rec.get("source") or ""), kind_of(rec)):
+        from JARVIS07_GUARDIAN.severity import companions_of, is_transient, kind_of
+        if is_transient(et, msg, str(rec.get("source") or ""), kind_of(rec),
+                        companions=companions_of(rec)):
             return VERIFY_UNVERIFIABLE, f"일시적·외부 오류({et}) — 재현 불가 유형"
     except Exception:
         pass

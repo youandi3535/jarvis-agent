@@ -25,9 +25,23 @@ from __future__ import annotations
 
 import logging
 import os
+import datetime as _dt
 import pickle
 from pathlib import Path
 from typing import Any, Optional
+
+# ★ `.env` 자가 로드 (2026-08-09, ERRORS [594] 후속)
+#   이 모듈만 자가 로드가 없었다 — 형제인 `naver_cookie_refresher`·`tistory_cookie_refresher`
+#   와 `shared/db.py` 는 전부 스스로 읽는다. 그런데 **인증 판정의 단일 진입점**
+#   (`verify_all_logins`)이 여기 있어서, `.env` 를 안 읽은 프로세스(CLI·subprocess 자식)가
+#   부르면 멀쩡한 자격증명을 "env 누락" 으로 오판한다. 실측으로 확인했다.
+#   그 오판이 이제 **텔레그램 경보로 나가므로**(같은 커밋) 거짓 경보가 된다 —
+#   거짓 경보는 진짜 경보만큼 게이트를 망친다.
+try:                                                      # pragma: no cover
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+except Exception:                                         # noqa: BLE001
+    pass
 
 log = logging.getLogger("jarvis")
 
@@ -157,6 +171,7 @@ def get_naver_cookies() -> list[dict]:
     Returns:
         쿠키 dict list. 파일 없거나 비어있으면 [].
     """
+    record_cookie_sighting()          # 파일을 만지는 순간이 곧 관측 기회다(ERRORS [594])
     if not NAVER_COOKIE_PATH.exists():
         return []
     try:
@@ -167,6 +182,90 @@ def get_naver_cookies() -> list[dict]:
         log.warning(f"[login_manager] 네이버 쿠키 로드 실패: {e}")
         _g_report("publish", e, module=__name__)
         return []
+
+
+# ══════════════════════════════════════════════════════════
+# 쿠키 파일 소실 추적 — "언제 사라졌나" 를 알 수 있게 (2026-08-09, ERRORS [594])
+# ══════════════════════════════════════════════════════════
+#
+# ★ 왜 필요한가
+#   08-09 07:00 경제 브리핑 미발행의 근인은 CAPTCHA 였지만, *그 CAPTCHA 에 노출된 이유* 는
+#   `naver_cookies.pkl` 이 사라져 **매 발행이 전체 로그인**이 됐기 때문이다.
+#   그런데 파일이 없어진 사실도, 없어진 시각도 어디에도 남지 않아 원인을 추적할 수 없었다
+#   (저장소에 그 파일을 지우는 코드는 0곳 — grep 실측).
+#
+# ★ ① 새 잡을 만들지 않는다. 쿠키를 *만지는 지점* 에서 기록한다 —
+#   읽기(`get_naver_cookies`)·쓰기(`_save_cookies` 경유 갱신)·점검(`verify_all_logins`).
+#   관측 빈도가 곧 해상도이고, 그 지점들은 이미 publish 도메인 안에 있다.
+# ★ ② 저장은 `json_store` 정문(원자 교체 + 락 + 백업). 새 저장 방식을 만들지 않는다.
+_COOKIE_WATCH = Path(__file__).resolve().parent / "cookie_watch.json"
+
+
+def record_cookie_sighting() -> dict:
+    """네이버 쿠키 파일의 지금 상태를 기록하고, *사라짐* 을 감지하면 그 사실을 담아 돌려준다.
+
+    Returns: {"present", "mtime", "size", "vanished", "last_seen"}
+      · `vanished=True` 는 **직전 관측엔 있었는데 지금 없다** 는 뜻 — 이때가 경보 시점이다.
+    """
+    now = _dt.datetime.now().isoformat(timespec="seconds")
+    present = NAVER_COOKIE_PATH.exists()
+    cur: dict = {"present": present, "at": now, "vanished": False, "last_seen": ""}
+    try:
+        if present:
+            st = NAVER_COOKIE_PATH.stat()
+            cur["mtime"] = _dt.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")
+            cur["size"] = st.st_size
+    except Exception:                                    # noqa: BLE001
+        pass
+    try:
+        from JARVIS07_GUARDIAN.json_store import read_json, write_json  # noqa: PLC0415
+        prev = read_json(_COOKIE_WATCH, default={}) or {}
+        cur["last_seen"] = (cur["at"] if present
+                            else (prev.get("last_seen") or prev.get("at") or ""))
+        cur["vanished"] = bool(prev.get("present")) and not present
+        write_json(_COOKIE_WATCH, cur, backup=True)
+        # ★ `credentials/` 안의 파일은 소유자 전용(0600) — 이 폴더 규칙이다.
+        #   관측 파일 자체엔 비밀이 없지만 규칙에 예외를 두지 않는다(테스트가 강제한다).
+        #   `.lock` 과 `.bak` 도 같은 폴더에 생기므로 함께 조인다.
+        import os as _os                                  # noqa: PLC0415
+        for _q in (_COOKIE_WATCH,
+                   _COOKIE_WATCH.with_suffix(_COOKIE_WATCH.suffix + ".lock"),
+                   _COOKIE_WATCH.with_suffix(_COOKIE_WATCH.suffix + ".bak")):
+            try:
+                if _q.exists():
+                    _os.chmod(_q, 0o600)
+            except OSError:
+                pass
+    except Exception as e:                               # noqa: BLE001
+        log.warning(f"[login_manager] 쿠키 관측 기록 실패(무시): {type(e).__name__}: {e}")
+    return cur
+
+
+def cookie_loss_window() -> str:
+    """쿠키가 사라진 구간을 사람이 읽을 수 있게 — 원인 추적의 출발점.
+
+    ★ 창 안에 무엇이 돌았는지는 `job_runs` 가 이미 갖고 있다. 여기서 별도 기록을
+      만들지 않고 그 원장을 조회한다(② 파생 — 사본을 만들지 않는다).
+    """
+    try:
+        from JARVIS07_GUARDIAN.json_store import read_json  # noqa: PLC0415
+        prev = read_json(_COOKIE_WATCH, default={}) or {}
+    except Exception:                                    # noqa: BLE001
+        return ""
+    last = prev.get("last_seen") or ""
+    if not last:
+        return "마지막 관측 기록 없음 (추적 시작 전)"
+    # ★ 파일이 살아 있으면 '사라졌다' 고 말하지 않는다 — 이 작업의 요점이 정직한 보고다.
+    if NAVER_COOKIE_PATH.exists():
+        return f"현재 존재 (마지막 관측 {last})"
+    try:
+        from shared.db import get_db                     # noqa: PLC0415
+        with get_db() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM job_runs WHERE started_at >= ?", (last,)).fetchone()[0]
+        return f"마지막 관측 {last} 이후 잡 {n}건 실행 — 그 구간에서 사라졌다"
+    except Exception:                                    # noqa: BLE001
+        return f"마지막 관측 {last} 이후 사라졌다"
 
 
 def naver_cookie_age_hours() -> float:
@@ -251,8 +350,43 @@ def verify_all_logins(
         if not cookies:
             nv_issues.append("쿠키 파일 없음 또는 빈 list")
         cookie_age = naver_cookie_age_hours()
-        if cookie_age > 10:
-            nv_issues.append(f"쿠키 만료 임박 ({cookie_age:.1f}h > 10h)")
+        # ★ '파일이 있고 신선한가' 는 '쓸 수 있는가' 가 아니다 (2026-08-09, ERRORS [597]).
+        #   실측: 08-08 20:30 · 08-09 06:30 두 사전점검이 **둘 다 초록**이었는데
+        #   30분 뒤 발행은 로그인 튕김(28초)·CAPTCHA(163초)로 실패했다.
+        #   판정 함수는 이미 있었다 — 안 부르고 있었을 뿐이다.
+        #   ★ 이 검사는 **쿠키가 신선할 때야말로** 필요하다. 나이 조건 안에 넣으면
+        #     "신선하니 괜찮겠지" 라는 바로 그 가정을 다시 믿는 셈이다.
+        #     실제로 한 번 그렇게 들여써진 적이 있다(두 세션이 같은 자리를 동시에 고치다
+        #     스코프가 어긋났다) — 그때 판정 호출이 **0회** 였고 테스트가 잡았다.
+        #     들여쓰기 한 칸이 검사를 통째로 끄는 자리다. 옮길 때 반드시 호출 여부를 재라.
+        #   ★ `check_cookie_valid` 가 아니라 `cookie_valid_http` 를 쓰는 이유:
+        #     전자는 *갱신 여부* 판단용이라 네트워크 오류에 **True** 를 돌려준다 —
+        #     True 가 '유효' 와 '판정 불가' 를 함께 뜻한다. 건강진단은 그 둘을 구분해야
+        #     하므로 3-상태(`bool | None`)를 쓴다. 티스토리와 **계약까지 대칭**(③).
+        #   판정은 네이버 도메인이 소유한다 — 여기서 새로 만들지 않는다(①).
+        # ★ 나이만으로 "만료" 를 단정하지 않는다 (2026-08-09, PrecheckNaverCookieStale
+        #   반복 오경보 — [398]의 거울상). `naver_cookie_refresher.cookie_needs_refresh()`
+        #   는 age>10h 여도 실유효성(`check_cookie_valid`)을 먼저 재확인해 valid 면
+        #   mtime 만 touch 하고 재로그인을 생략한다 — 즉 "나이만 많고 실제론 멀쩡한" 쿠키는
+        #   시스템 자신도 문제 삼지 않는다. 그런데 종전 이 함수는 age>10h 를 보자마자(옛
+        #   `if cookie_age > 10: nv_issues.append(...)` 가 여기 있었다) 실유효성 확인(바로
+        #   아래 블록) 없이 곧장 "만료 임박" 을 확정해 버렸다 — 그 블록이 `if not nv_issues:`
+        #   로 게이트돼 있어 age 로 이미 이슈가 쌓이면 실유효성 체크 자체가 건너뛰어졌기
+        #   때문이다. 몇 줄 뒤 `job_pre_publish_check()` 의 `auto_refresh_if_needed()` 가
+        #   같은 쿠키를 "사실 유효했다" 며 mtime 만 되돌리는 동안, 경보와 GUARDIAN 오류
+        #   보고(`_alert_precheck`)는 이미 나가버린 뒤였다 — 자기모순적 이중판정.
+        #   age 자체를 이슈로 적지 않고 `cookie_age_h` 로만 보고 — "만료" 판정은 실유효성
+        #   (`cookie_valid_http`) 결과 단독 근거로 통일한다(①, 판정 로직 복제 금지).
+        if not nv_issues:
+            try:
+                from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+                    cookie_valid_http as _nv_valid)
+                if _nv_valid() is False:
+                    nv_issues.append("쿠키 만료 — 실제 요청이 로그아웃 상태를 보고")
+                # None → 판정 불가(네트워크 등). '모른다' 를 '만료' 로 적지 않는다.
+            except Exception as e:                       # noqa: BLE001
+                log.warning(f"[login_manager] 네이버 유효성 판정 실패(무시): "
+                            f"{type(e).__name__}: {e}")
         result["naver"] = {"ok": not nv_issues, "issues": nv_issues, "cookie_age_h": cookie_age}
 
     # 티스토리
@@ -261,6 +395,24 @@ def verify_all_logins(
         for k in _REQUIRED_ENV["tistory"]:
             if not os.environ.get(k, "").strip():
                 ts_issues.append(f"env {k} 누락")
+        # ★ env '존재' 만으로 끝내지 않는다 (2026-08-09, ERRORS [596]).
+        #   ※ 초판 주석은 "네이버와 대칭" 이라 적었는데 **그때는 거짓이었다** —
+        #     네이버 분기도 실효 판정을 안 부르고 있었다(동시 세션 지적, ERRORS [597]).
+        #     지금은 양쪽 다 부른다. 확인하지 않은 단정을 주석에 쓰지 말 것.
+        #   종전엔 만료된 쿠키도 ✅ 였다. 그래서 08-08 20:30 사전점검이 초록인 채로
+        #   21:00 테마 발행이 28초 만에 로그인 화면으로 튕겨 끝났다(실측).
+        #   판정 자체는 티스토리 도메인이 소유한다 — 여기서 새로 만들지 않는다(①).
+        if not ts_issues:
+            try:
+                from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import (  # noqa: PLC0415
+                    cookie_valid_http)
+                valid = cookie_valid_http()
+                if valid is False:
+                    ts_issues.append("쿠키 만료 — manage 접근이 로그인으로 리다이렉트")
+                # valid is None → 판정 불가(네트워크 등). '모른다' 를 '만료' 로 적지 않는다.
+            except Exception as e:                       # noqa: BLE001
+                log.warning(f"[login_manager] 티스토리 유효성 판정 실패(무시): "
+                            f"{type(e).__name__}: {e}")
         result["tistory"] = {"ok": not ts_issues, "issues": ts_issues}
 
     return result
@@ -288,8 +440,25 @@ def auto_refresh_if_needed(
             log.info(f"[login_manager] 네이버 쿠키 {age:.1f}h — 갱신 시도")
             result["naver"] = refresh_naver_cookies(force=False)
     if "tistory" in platforms:
+        # ★ '없음' 만 보면 절반만 고친다 (2026-08-09, ERRORS [596]).
+        #   08-08 21:00 테마 실패 때 TS_COOKIE 는 **있었다**(40자). 다만 만료였다.
+        #   그래서 여기서 아무 일도 하지 않았고, 발행은 28초 만에 로그인으로 튕겨 끝났다.
+        #   판정은 티스토리 도메인이 소유한 것을 그대로 쓴다 — 새 규칙을 만들지 않는다(①).
+        _need = False
         if not get_tistory_cookie():
             log.info("[login_manager] 티스토리 TS_COOKIE 없음 — 갱신 시도")
+            _need = True
+        else:
+            try:
+                from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import (  # noqa: PLC0415
+                    cookie_valid_http)
+                if cookie_valid_http() is False:          # None(판정 불가)은 건드리지 않는다
+                    log.info("[login_manager] 티스토리 TS_COOKIE 만료 — 갱신 시도")
+                    _need = True
+            except Exception as e:                        # noqa: BLE001
+                log.warning(f"[login_manager] 티스토리 유효성 판정 실패(갱신 보류): "
+                            f"{type(e).__name__}: {e}")
+        if _need:
             result["tistory"] = refresh_tistory_cookies(force=False)
     return result
 
@@ -297,6 +466,65 @@ def auto_refresh_if_needed(
 # ══════════════════════════════════════════════════════════
 # 6) cron 잡 단일 진입점
 # ══════════════════════════════════════════════════════════
+
+def precheck_error_type(platform: str, issues: list) -> str:
+    """사전점검 실패 → 오류 타입. *이미 있는 판단*(플랫폼·이슈)에서 기계적으로 만든다.
+
+    ★ 중앙 매핑표를 두지 않는다 (CLAUDE.md ERRORS [547]). 새 이슈 문구가 생기면
+      타입이 자동으로 따라온다. 뭉뚱그린 `RuntimeError` 로 적으면 타입 기반 게이트와
+      Tier-1 지문 매칭이 변별력을 잃는다.
+
+    ★ `CookieExpired` (2026-08-09, PrecheckTistoryUnknown 사고): `verify_all_logins()`
+      가 나이 추정("만료 임박")이 아니라 *실유효성 판정*(`cookie_valid_http`)으로
+      옮겨가면서(위 386·411행) 실제 발생 문구가 "쿠키 만료 — ..." 로 바뀌었는데, 이
+      분류기는 옛 문구("만료 임박")만 보고 있어 새 문구가 전부 `Unknown` 으로 떨어졌다
+      — 판정 로직과 분류 로직이 같은 파일 안에서도 따로 놀면 샌다는 실례. "만료 임박"
+      을 먼저 검사해 레거시 문구(테스트 고정값)는 그대로 `CookieStale` 유지하고,
+      실유효성 판정 문구는 새 kind 로 갈라 *어떤 근거로 만료를 판정했는지* 도 보존한다.
+    """
+    txt = " ".join(issues or [])
+    kind = ("CookieMissing" if "쿠키 파일 없음" in txt
+            else "CookieStale" if "만료 임박" in txt
+            else "CookieExpired" if "쿠키 만료" in txt
+            else "EnvMissing" if "env " in txt
+            else "Unknown")
+    return "Precheck" + platform.capitalize() + kind
+
+
+def _alert_precheck(platform: str, info: dict) -> None:
+    """사전점검 실패를 **사람과 원장 양쪽에** 알린다 (2026-08-09, ERRORS [594]).
+
+    ★ 왜 (실사고): 종전엔 `log.warning` 한 줄이 전부였다. 그래서
+      `naver_cookies.pkl` 이 통째로 사라진 상태로 **두 번의 발행 회차가 조용히 지나갔다**
+      (08-08 21:00 테마 실패 28초 · 08-09 07:00 경제 실패 163초).
+      쿠키 파일이 없으면 매 발행이 *전체 로그인* 이 되고, 그때마다 CAPTCHA 확률에 노출된다.
+      즉 이 경고는 "곧 발행이 깨진다" 는 예고인데 아무도 듣지 못했다.
+    """
+    issues = list(info.get("issues") or [])
+    try:
+        extra = ""
+        if platform == "naver":
+            # ★ 이슈 *문구* 가 아니라 **지금 관측** 을 권위로 삼는다.
+            #   문구는 다른 시점의 판단이라, 그대로 믿으면 "파일 없음" 과 "현재 존재" 가
+            #   한 알림에 같이 실린다(실측으로 확인). 어긋나는 경보는 신뢰를 깎는다.
+            _seen = record_cookie_sighting()
+            if not _seen.get("present"):
+                extra = "\n" + cookie_loss_window()
+        msg = (f"⚠️ *[발행 前 점검] {platform.upper()} 인증 이상*\n"
+               + "\n".join(f"· {i}" for i in issues) + extra
+               + "\n\n이대로면 발행 시각에 *전체 로그인* 을 시도하고, CAPTCHA 가 뜨면 건너뜁니다.")
+        from shared.notify import send_tg                 # noqa: PLC0415
+        send_tg(msg)
+    except Exception as e:                                # noqa: BLE001
+        log.warning(f"[login_manager/pre_check] 알림 실패: {type(e).__name__}: {e}")
+    try:
+        from JARVIS07_GUARDIAN.error_collector import report  # noqa: PLC0415
+        report(precheck_error_type(platform, issues), "publish", module=__name__,
+               func_name="job_pre_publish_check",
+               message=f"[발행 前 점검] {platform}: {'; '.join(issues)}")
+    except Exception as e:                                # noqa: BLE001
+        log.warning(f"[login_manager/pre_check] 박제 실패: {type(e).__name__}: {e}")
+
 
 def job_pre_publish_check(platform: Optional[str] = None) -> None:
     """cron 잡 — 발행 직전 사전 점검.
@@ -309,6 +537,7 @@ def job_pre_publish_check(platform: Optional[str] = None) -> None:
         for plat, info in verify.items():
             if not info["ok"]:
                 log.warning(f"[login_manager/pre_check] {plat}: {info['issues']}")
+                _alert_precheck(plat, info)               # ★ 로그로만 끝내지 않는다
         # 자동 갱신
         auto_refresh_if_needed()
     elif platform == "naver":

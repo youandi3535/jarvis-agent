@@ -198,12 +198,19 @@ def patch_effective() -> bool | None:
 # ── 동기 query wrapper — 모든 호출자 단일 진입점 ────────────────────────
 
 
-def _record_sdk_usage(meter: dict, ok: bool) -> None:
+def _record_sdk_usage(meter: dict, ok: bool, model: str = "") -> None:
     """`run_sdk_query` 소비를 장부에 박제 — 계측 단일 진입점(`token_usage.record_call`) 경유.
 
     ★ alias 는 `shared.llm._CURRENT_ALIAS` 에서 가져온다(문자열 박제 금지). 이 경로는
       `invoke_text` 밖에서도 불리므로 비어 있을 수 있고, 그때는 `sdk_query` 로 표기해
       **'어디서 왔는지 모름' 과 '0' 을 구분** 한다.
+
+    ★ `model` 은 **호출자가 넘긴다** (2026-08-09 정정 — ERRORS [592]).
+      종전엔 `model=""` 이 코드에 박혀 있었다. 값이 없어서가 아니라 **안 넘겨서** 비었다 —
+      `run_sdk_query` 는 145줄 위에서 이미 `shared.llm.model_id()` 로 모델을 정하고
+      SDK 옵션에는 제대로 실어 보내면서, 장부에만 빈 문자열을 적고 있었다.
+      그 결과 이 경로(전체 캐시 읽기의 50.7%)만 "어느 모델이 썼는지" 를 알 수 없어
+      모델 교체 전후 비교가 불가능했다.
     """
     try:
         from shared.token_usage import record_call
@@ -213,7 +220,7 @@ def _record_sdk_usage(meter: dict, ok: bool) -> None:
         except Exception:                                   # noqa: BLE001
             alias = "sdk_query"
         record_call(
-            alias=alias, model="", usage=meter.get("usage"),
+            alias=alias, model=model or "", usage=meter.get("usage"),
             cost_usd=meter.get("cost") or 0.0, duration_ms=meter.get("dur") or 0,
             num_turns=meter.get("turns") or 0, ok=ok, source="sdk_query",
         )
@@ -410,7 +417,7 @@ def run_sdk_query(
 
         stdout = "\n".join(_parts)
         # ★ 계측 박제 — 성공/부분수집 무관하게 항상. 실패해도 본류를 막지 않는다.
-        _record_sdk_usage(_meter, ok=bool(stdout))
+        _record_sdk_usage(_meter, ok=bool(stdout), model=model)
 
         _exc = _err_box["exc"]
         if _exc is not None and not stdout:

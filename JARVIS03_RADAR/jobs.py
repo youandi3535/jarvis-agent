@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
-    from JARVIS07_GUARDIAN.error_collector import report as _g_report
+    from JARVIS03_RADAR.collectors import report_radar as _g_report
 except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────
@@ -189,7 +189,7 @@ def _run_with_harness(
 
     from JARVIS00_INFRA.watchdog import DEFAULT_ACTION_DEADLINE_SEC as _DFLT_DEADLINE
 
-    run_action(ActionDefinition(
+    _res = run_action(ActionDefinition(
         name=name,
         steps=[_step],
         verify=_verify,
@@ -198,6 +198,29 @@ def _run_with_harness(
         **({} if max_attempts is None else {'max_attempts': max_attempts}),
         deadline_sec=float(deadline_sec) if deadline_sec else _DFLT_DEADLINE,
     ))
+    # ★ **하네스 결과를 버리지 않는다** (2026-08-09 3차 적대적 검증)
+    #   종전엔 반환을 통째로 버려서, 하네스가 abort 해 송출을 막아도 이 함수는 정상
+    #   종료했다 → APScheduler `EVENT_JOB_EXECUTED` → `job_runs.success=1`.
+    #   실측: combined_keywords=0(수집 전멸, 하류 주제 선정 불가)이던 07-31·08-01·08-02
+    #   의 `radar_trends_*` 6건이 **전부 success=1 · error=''** 로 남아 있다.
+    #   일일 잡 리포트(`JARVIS04_SCHEDULER/briefing.py`)는 이 컬럼만 세므로 사람에게는
+    #   '✅ 정상' 으로 보고됐다 — 글이 유실된 그 날에.
+    #   실패를 실패로 적는 통로는 예외뿐이므로, 미송출이면 올린다.
+    # ★ `deferred` 는 **실패가 아니다** (2026-08-09 회귀 검증에서 발각)
+    #   하네스는 ① 인터프리터 종료(데몬 재시작) ② 동시 실행 중복 차단 을 `delivered=False`
+    #   로 돌려주되 `deferred=True` 라는 **구조화 판정** 을 함께 싣는다. 2026-08-07 에
+    #   "아직 돌고 있다는 정상 동작이고 고칠 것이 없다" 며 일부러 실패에서 뺀 경우다.
+    #   내가 `delivered` 만 보고 raise 를 넣어 그 판단을 우회했고, 그 결과 정상 레이스가
+    #   `EVENT_JOB_ERROR` → `job_runs.success=0` + `error_log` 적재 → Tier-1/2 → 텔레그램
+    #   으로 되살아났다(실측 25일 8건 ≈ 0.3건/일, 재현 확인).
+    #   판정을 여기서 다시 만들지 않는다 — 하네스가 실은 필드를 그대로 존중한다(①).
+    #   같은 관례가 이미 저장소에 있다: `economic_poster.py` 는 `concurrent_blocked` 를
+    #   보고 *스킵* 으로 처리한다.
+    if (_res is not None and not getattr(_res, "delivered", True)
+            and not getattr(_res, "deferred", False)):
+        _reason = getattr(_res, "escalation_reason", "") or "검증 순환 한계 — 송출 미완료"
+        raise RuntimeError(f"{name} 미완료: {_reason}")
+    return _res
 
 
 def _verify_trends(_result) -> list:
@@ -270,6 +293,12 @@ def _pack_empty_reason() -> str:
         d = _json.loads(fp.read_text(encoding="utf-8"))
         if not (d.get("combined_keywords") or d.get("combined_top50") or []):
             return "TrendCollectEmpty"
+        # ★ 판은 남아 있지만 **최근 회차가 빈손** 이었으면 그것이 진실이다 (2026-08-08).
+        #   보존 가드가 아침 판을 지키는 덕에 파일만 보면 정상으로 보인다 — 그대로 두면
+        #   원인이 `TopicPackNoCandidate`(적합 후보 없음) 로 **오분류** 되어 사람이
+        #   엉뚱한 곳(주제 선정)을 고치게 된다. 실제 원인은 수집 실패다.
+        if d.get("last_run_empty_at"):
+            return "TrendCollectEmptyLastRun"
         return "TopicPackNoCandidate"
     except Exception:
         return "TopicPackUnknown"

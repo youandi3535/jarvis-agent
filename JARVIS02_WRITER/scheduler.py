@@ -81,31 +81,71 @@ _posting_lock   = threading.Lock()
 # ══════════════════════════════════════════
 
 def _clear_all_cookies(label: str) -> None:
-    """발행 전 기존 쿠키·캐시 전체 초기화 — 매번 새 로그인으로 신선한 쿠키 보장.
+    """발행 전 캐시 초기화 — **쓸 수 있는 쿠키는 지우지 않는다**.
 
-    삭제 대상:
-      - naver_cookies.pkl (쿠키 파일)
-      - TS_COOKIE 환경변수 (메모리 초기화, .env는 갱신 시 자동 업데이트)
-      - Chrome 캐시 폴더 (Cache / Code Cache / GPUCache / Service Worker)
-        → 로그인 데이터(Cookies, Login Data) 는 보존
+    ★★ 종전 동작이 발행을 세 번 깨뜨렸다 (2026-08-09, ERRORS [605])
+      원래 의도는 *"매번 새 로그인으로 신선한 쿠키 보장"* 이었다. 그 전제가 뒤집혔다 —
+      네이버가 **반복 로그인에 CAPTCHA** 를 걸기 시작했기 때문이다. 그래서 이 함수는
+      "신선한 쿠키를 보장" 하는 대신 **매 발행마다 CAPTCHA 확률에 노출**시켰다.
+
+      실측(2026-08-09):
+        07:00 경제  쿠키 없음 → 전체 로그인 → CAPTCHA 120초 대기 → 실패(163초)
+        21:00 테마  ★ 이 함수가 파일 삭제 → 전체 로그인 → 실패(43초)
+      로그가 그대로 말한다:
+        21:00:02 🗑️ 쿠키·캐시 초기화: **네이버 쿠키 파일**, ...
+        21:00:42 🚨 네이버 쿠키 점검 실패 — 발행 건너뜀
+
+      **시스템이 자기 발밑을 파고 있었다.**
+
+    ★ 지금 규칙 — 지울지 말지를 *유효성에서 파생* 한다(② 동적 설계).
+      · 쿠키가 **유효** 하면 보존 → 로그인 자체를 건너뛴다 → CAPTCHA 를 만날 일이 없다.
+      · **만료** 면 삭제 → 어차피 새로 받아야 한다.
+      · **판정 불가**(네트워크 등)면 보존 — '모른다' 를 '만료' 로 단정하지 않는다.
+        여기서 지우면 네트워크 순단이 곧 강제 재로그인이 되어 CAPTCHA 를 부른다.
+      · Chrome 캐시(Cache/Code Cache/GPUCache/Service Worker)는 로그인 데이터가 아니므로
+        종전대로 항상 지운다.
+
+    ★ ③ 4조합: 이 함수 하나가 경제·테마 두 발행 경로에 공통이다.
     """
     import os as _os, shutil as _shutil
 
     cleared = []
 
-    # 1) 네이버 쿠키 파일 삭제
+    kept = []
+
+    # 1) 네이버 쿠키 — **만료가 확인된 경우에만** 삭제
     _naver_cookie = BASE_DIR / "naver_cookies.pkl"
     if _naver_cookie.exists():
+        _valid = None
         try:
-            _naver_cookie.unlink()
-            cleared.append("네이버 쿠키 파일")
-        except Exception as _e:
-            log(f"⚠️ [{label}] 네이버 쿠키 파일 삭제 실패: {_e}")
+            from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+                cookie_valid_http as _nv_valid)
+            _valid = _nv_valid()
+        except Exception as _e:                          # noqa: BLE001
+            log(f"⚠️ [{label}] 네이버 쿠키 유효성 판정 실패 — 보존: {_e}")
+        if _valid is False:
+            try:
+                _naver_cookie.unlink()
+                cleared.append("네이버 쿠키 파일(만료)")
+            except Exception as _e:
+                log(f"⚠️ [{label}] 네이버 쿠키 파일 삭제 실패: {_e}")
+        else:
+            kept.append("네이버 쿠키" + ("(유효)" if _valid else "(판정 불가)"))
 
-    # 2) 티스토리 TS_COOKIE 환경변수 초기화 (.env 보존 — 갱신 성공 시 자동 업데이트)
+    # 2) 티스토리 TS_COOKIE — 같은 규칙. 유효하면 지우지 않는다.
     if _os.environ.get("TS_COOKIE"):
-        _os.environ.pop("TS_COOKIE", None)
-        cleared.append("TS_COOKIE 환경변수")
+        _ts_valid = None
+        try:
+            from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import (  # noqa: PLC0415
+                cookie_valid_http as _ts_ok)
+            _ts_valid = _ts_ok()
+        except Exception as _e:                          # noqa: BLE001
+            log(f"⚠️ [{label}] 티스토리 쿠키 유효성 판정 실패 — 보존: {_e}")
+        if _ts_valid is False:
+            _os.environ.pop("TS_COOKIE", None)
+            cleared.append("TS_COOKIE 환경변수(만료)")
+        else:
+            kept.append("TS_COOKIE" + ("(유효)" if _ts_valid else "(판정 불가)"))
 
     # 3) 네이버 Chrome 캐시 폴더 삭제 (로그인·세션 데이터는 보존)
     _chrome_cache_dirs = [
@@ -123,9 +163,13 @@ def _clear_all_cookies(label: str) -> None:
                 log(f"⚠️ [{label}] Chrome 캐시 삭제 실패 ({_cdir.name}): {_e}")
 
     if cleared:
-        log(f"🗑️ [{label}] 쿠키·캐시 초기화: {', '.join(cleared)}")
-    else:
-        log(f"ℹ️ [{label}] 삭제할 쿠키·캐시 없음")
+        log(f"🗑️ [{label}] 초기화: {', '.join(cleared)}")
+    if kept:
+        # ★ 보존한 것을 반드시 남긴다 — 종전엔 삭제만 찍혀서 "왜 로그인을 또 하지" 를
+        #   로그로 되짚을 수 없었다(21:00 사고의 원인 규명이 늦어진 이유).
+        log(f"🔒 [{label}] 보존(로그인 건너뜀): {', '.join(kept)}")
+    if not cleared and not kept:
+        log(f"ℹ️ [{label}] 삭제·보존할 쿠키 없음")
 
 
 def _lock_acquire(who: str) -> bool:
@@ -237,11 +281,22 @@ def _is_locked_externally() -> bool:
 # ══════════════════════════════════════════
 
 def log(msg: str):
+    """스케줄러 로그 — **기록이 실패해도 본류를 막지 않는다** (2026-08-09, ERRORS [593]).
+
+    ★ 종전엔 `logs/` 가 없으면 `FileNotFoundError` 로 죽었다. 그 디렉터리는
+      `.gitignore` 대상이라 **새 체크아웃·새 기계에는 없다.** 하필 이 함수가
+      *발행 실패를 알리는 경로* 에서 불린다 — 실패를 알리려다 그 자리에서 크래시하면
+      운영자는 아무것도 못 받는다. 실측으로 확인했다(추적 파일만 있는 트리에서 재현).
+    """
     ts   = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     line = f"[{ts}] {msg}"
     print(line)
-    with open(LOG_FILE, 'a', encoding='utf-8') as f:
-        f.write(line + '\n')
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(line + '\n')
+    except Exception as e:                               # noqa: BLE001
+        print(f"[log] 파일 기록 실패(무시): {type(e).__name__}: {e}")
 
 
 # ══════════════════════════════════════════
@@ -917,15 +972,40 @@ def _naver_cookie_ready(label: str) -> bool:
             send_telegram(m)
         return True
 
+    # ★ 실패 사유를 *로그인 도메인* 에서 받아 온다 (2026-08-09 — ERRORS [593]).
+    #   `ensure_naver_ready` 의 반환은 네트워크/사람 두 갈래뿐이라 "왜 사람이 필요한가"
+    #   (CAPTCHA·기기인증·계정)를 구분하지 못한다. 08-09 07:00 사고에서 그 구분이 없어
+    #   **재현해 보고서야** 원인을 알았다 — 로그에도 원장에도 남지 않았기 때문이다.
+    try:
+        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import last_login_failure
+        _reason = last_login_failure() or why
+    except Exception:                                    # noqa: BLE001
+        _reason = why
+
     if why == "permanent":
+        _extra = {"captcha_unattended": "\n무인 실행이라 대기하지 않았습니다 — 직접 로그인 후 다음 회차에 발행됩니다.",
+                  "captcha_timeout":    "\n화면 인증이 제한시간 내에 끝나지 않았습니다."}.get(_reason, "")
         m = (f"🚨 *[{label}] 네이버 쿠키 점검 실패 — 발행 건너뜀*\n"
-             f"네트워크는 정상입니다. CAPTCHA·계정 문제로 보이며 *직접 로그인* 이 필요합니다.")
+             f"네트워크는 정상입니다. CAPTCHA·계정 문제로 보이며 *직접 로그인* 이 필요합니다."
+             f"{_extra}\n사유: `{_reason}`")
     else:
         _until = f" (창 마감 {deadline:%H:%M})" if deadline else ""
         m = (f"🚨 *[{label}] 네이버 쿠키 점검 실패 — 오늘 발행 포기*\n"
-             f"네트워크 단절이 발행 창 안에 회복되지 않았습니다{_until}.")
+             f"네트워크 단절이 발행 창 안에 회복되지 않았습니다{_until}.\n사유: `{_reason}`")
     log(m.replace("*", ""))
     send_telegram(m)
+
+    # ★ 오류 원장에 박제 — 종전엔 로그·텔레그램뿐이라 **자동수리·학습·감사 어디에도
+    #   들어가지 않았다.** 08-09 07:00 사고가 error_log 0건이었던 이유다(실측).
+    #   타입은 로그인 도메인이 사유에서 파생한다 — 중앙 매핑표를 만들지 않는다(ERRORS [547]).
+    try:
+        from JARVIS07_GUARDIAN.error_collector import report as _report
+        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import naver_login_error_type
+        _report(naver_login_error_type(_reason), "publish", module=__name__,
+                func_name="_naver_cookie_ready",
+                message=f"[{label}] 네이버 쿠키 점검 실패로 발행 건너뜀 (사유={_reason})")
+    except Exception as _re:                             # noqa: BLE001
+        log(f"⚠️ [{label}] 쿠키 점검 실패 박제 실패: {type(_re).__name__}: {_re}")
     return False
 
 

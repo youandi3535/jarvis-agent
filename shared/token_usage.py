@@ -91,6 +91,88 @@ def _init() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_lrl_ts ON llm_rate_limit_events(ts);
         """)
+        # ★ model_origin — 그 행의 `model` 값이 **어떻게 알려졌는지** (2026-08-09, ERRORS [592]).
+        #   'measured'    = 호출 시점에 실제로 쓴 모델 (기본)
+        #   'backfill_git'= 사후에 git 이력에서 파생한 추정치
+        #   왜 나누나: `sdk_query` 경로가 `model=""` 로 박혀 있어 13건이 빈 채 쌓였다.
+        #   그 값을 소급해 채우면서 *실측과 추정을 한 칸에 섞으면* 다음 사람이 추정치를
+        #   실측으로 믿는다 — 이 저장소가 반복해서 값을 치른 '복사본을 진실로 믿는' 병이다.
+        try:
+            conn.execute("ALTER TABLE llm_token_usage ADD COLUMN model_origin TEXT DEFAULT 'measured'")
+        except Exception:
+            pass
+
+
+def backfill_missing_model(dry_run: bool = True) -> dict:
+    """`model` 이 빈 장부 행을 **git 이력에서 파생해** 채운다 (2026-08-09, ERRORS [592]).
+
+    ★ 왜 함수인가 (ERRORS [590] 교훈)
+      일회성 스크립트로 DB 를 고치면 *무슨 규칙으로 채웠는지* 확인할 수도, 다시 돌릴 수도
+      없다. 오늘 소급 채점에서 정확히 그 문제를 겪었다.
+
+    ★ 지어내지 않는다 — 그 시각 이전 마지막 `shared/llm.py` 커밋을 AST 로 파싱해
+      `MODELS["writer"].model_id` 를 읽는다. 추측이 아니라 **기록 조회**다.
+      못 읽으면 그 행은 건드리지 않는다(빈 값이 거짓 값보다 낫다).
+
+    ★ 채운 행은 `model_origin='backfill_git'` 로 표시해 실측과 구분한다.
+
+    Returns: {"candidates", "filled", "skipped", "by_model", "dry_run"}
+    """
+    import ast as _ast
+    import subprocess as _sp
+    from pathlib import Path as _P
+
+    root = _P(__file__).resolve().parent.parent
+
+    def _model_at(sha: str) -> str:
+        src = _sp.run(["git", "show", f"{sha}:shared/llm.py"], cwd=str(root),
+                      capture_output=True, text=True).stdout
+        if not src:
+            return ""
+        try:
+            tree = _ast.parse(src)
+        except SyntaxError:
+            return ""
+        for node in _ast.walk(tree):
+            tgt = (node.target if isinstance(node, _ast.AnnAssign)
+                   else (node.targets[0] if isinstance(node, _ast.Assign) and node.targets else None))
+            if getattr(tgt, "id", "") != "MODELS" or not isinstance(node.value, _ast.Dict):
+                continue
+            for k, v in zip(node.value.keys, node.value.values):
+                if getattr(k, "value", None) != "writer" or not isinstance(v, _ast.Call):
+                    continue
+                for kw in v.keywords:
+                    if kw.arg == "model_id" and isinstance(kw.value, _ast.Constant):
+                        return str(kw.value.value)
+                if v.args and isinstance(v.args[0], _ast.Constant):
+                    return str(v.args[0].value)
+        return ""
+
+    from shared.db import get_db
+    out = {"candidates": 0, "filled": 0, "skipped": 0, "by_model": {}, "dry_run": dry_run}
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, ts FROM llm_token_usage WHERE model IS NULL OR model=''").fetchall()
+        out["candidates"] = len(rows)
+        cache: dict[str, str] = {}
+        for r in rows:
+            day = str(r["ts"])[:10]
+            if day not in cache:
+                sha = _sp.run(["git", "rev-list", "-1", f"--before={day} 23:59:59",
+                               "HEAD", "--", "shared/llm.py"], cwd=str(root),
+                              capture_output=True, text=True).stdout.strip()
+                cache[day] = _model_at(sha) if sha else ""
+            mdl = cache[day]
+            if not mdl:
+                out["skipped"] += 1
+                continue
+            out["by_model"][mdl] = out["by_model"].get(mdl, 0) + 1
+            out["filled"] += 1
+            if not dry_run:
+                conn.execute(
+                    "UPDATE llm_token_usage SET model=?, model_origin='backfill_git' WHERE id=?",
+                    (mdl, r["id"]))
+    return out
 
 
 def record_call(alias: str, model: str, usage: dict | None,

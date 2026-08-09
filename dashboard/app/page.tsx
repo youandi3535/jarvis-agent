@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLatestVisible } from "@/lib/scroll";
 import useSWR from "swr";
 import { fetcher, OverviewData, VisionAgent, PipelineEdge, GraphData, AgentDef, TokenData, VisionTimeline } from "@/lib/api";
 import { C, fmtNum, fmtTime, severityColor } from "@/lib/utils";
@@ -114,6 +115,40 @@ function shortestPathEdges(from: string, to: string, adj: AdjMap): string[] {
 }
 
 // ═══════════════════════════════════════════════
+// 사무실 보드 전용 *조형색* — 3D 일러스트(로봇·책상·모니터)와 바닥·패널의 음영.
+// var(--c-*) 5색 토큰은 "상태(성공·경고·위험)" 를 나르는 의미색이라 명암 단계를
+// 표현할 수 없다. 그래서 토큰으로 치환하지 않고 *여기 한 곳* 에만 정의하고,
+// 각 줄에 무엇을 칠하는 색인지 사유를 남긴다 (검사기 면제 조건).
+// ※ 의미가 있는 색(상태 LED·강조·텍스트)은 전부 C.* / var(--c-*) 로 간다.
+// ═══════════════════════════════════════════════
+const ART = {
+  deskTop:     "#1e3d65", // 책상 상판 (3D 음영 — 토큰에 없는 명도 단계)
+  deskEdge:    "#152d4a", // 책상 앞면 (상판보다 어두운 단계)
+  deskLegIn:   "#1e3252", // 책상 안쪽 다리
+  deskLegOut:  "#243c5c", // 책상 바깥 다리
+  screenBezel: "#050810", // 모니터 베젤 (거의 검정 — 화면 대비용)
+  screenFace:  "#060a18", // 모니터 화면 바탕
+  kbdBase:     "#0e1c30", // 키보드 밑단
+  kbdTop:      "#112236", // 키보드 상판
+  pupil:       "#030509", // 로봇 눈동자
+  chairLeg:    "#1a2d45", // 의자 다리
+  chairFoot:   "#121f35", // 의자 발
+  mug:         "#2a1608", // 커피잔 (책상 위 소품)
+  cardActiveA: "#1c2140", // 카드 배경 그라디언트 — 활성 시작
+  cardActiveB: "#0e1020", // 카드 배경 그라디언트 — 활성 끝
+  cardBusyA:   "#2a2113", // 카드 배경 그라디언트 — 작업중 시작
+  cardBusyB:   "#0f0c06", // 카드 배경 그라디언트 — 작업중 끝
+  cardIdleA:   "#131827", // 카드 배경 그라디언트 — 대기 시작
+  cardIdleB:   "#0b0d1a", // 카드 배경 그라디언트 — 대기 끝
+  barEdge:     "#0e1119", // 타이틀바 그라디언트 양끝
+  barMid:      "#121624", // 타이틀바 그라디언트 가운데
+  floorGrid:   "#1a2035", // 바닥 격자선
+  floorGlow:   "#1a2540", // 바닥 방사 그라디언트 중심
+  floorDark:   "#090b14", // 바닥 외곽 · 소형 패널 배경
+  panelBdr:    "#1e2640", // 범례 패널 테두리
+};
+
+// ═══════════════════════════════════════════════
 // 로봇 SVG — 3D 책상·컴퓨터 작업
 // 책상: 배경과 구분되는 명도로 조정
 // ═══════════════════════════════════════════════
@@ -140,24 +175,24 @@ function mkRobot(color: string, uid: string, size = 50): string {
 <!-- ══ 바닥 그림자 ══ -->
 <ellipse cx="36" cy="78" rx="24" ry="3" fill="black" opacity="0.32"/>
 <!-- ══ 책상 3D (배경과 구분되는 청회색) ══ -->
-<rect x="16" y="44" width="4" height="17" rx="2" fill="#1e3252"/>
-<rect x="52" y="44" width="4" height="17" rx="2" fill="#1e3252"/>
-<rect x="9"  y="49" width="5" height="22" rx="2.5" fill="#243c5c"/>
-<rect x="58" y="49" width="5" height="22" rx="2.5" fill="#243c5c"/>
-<path d="M7 44 L65 44 L65 49 L7 49 Z" fill="#152d4a"/>
-<path d="M11 39 L61 39 L65 44 L7 44 Z" fill="#1e3d65"/>
+<rect x="16" y="44" width="4" height="17" rx="2" fill="${ART.deskLegIn}"/>
+<rect x="52" y="44" width="4" height="17" rx="2" fill="${ART.deskLegIn}"/>
+<rect x="9"  y="49" width="5" height="22" rx="2.5" fill="${ART.deskLegOut}"/>
+<rect x="58" y="49" width="5" height="22" rx="2.5" fill="${ART.deskLegOut}"/>
+<path d="M7 44 L65 44 L65 49 L7 49 Z" fill="${ART.deskEdge}"/>
+<path d="M11 39 L61 39 L65 44 L7 44 Z" fill="${ART.deskTop}"/>
 <path d="M11 39 L61 39 L61 40.5 L11 40.5 Z" fill="${color}" opacity="0.28"/>
 <!-- ══ 책상 표면 하이라이트 ══ -->
 <path d="M12 39.5 L60 39.5 L60 40 L12 40 Z" fill="white" opacity="0.07"/>
 <!-- ══ 모니터 3D ══ -->
 <path d="M48 4 L53 7 L53 31 L48 28 Z" fill="${color}" opacity="0.18"/>
 <path d="M14 28 L48 28 L53 31 L19 31 Z" fill="${color}" opacity="0.12"/>
-<rect x="14" y="4" width="34" height="26" rx="2.5" fill="#050810" stroke="${color}" stroke-width="1.5" filter="url(#fs${uid})"/>
-<rect x="16" y="6" width="30" height="22" rx="1.5" fill="#060a18"/>
+<rect x="14" y="4" width="34" height="26" rx="2.5" fill="${ART.screenBezel}" stroke="${color}" stroke-width="1.5" filter="url(#fs${uid})"/>
+<rect x="16" y="6" width="30" height="22" rx="1.5" fill="${ART.screenFace}"/>
 <path d="M17 7 L30 7 L27 11 L16 11 Z" fill="white" opacity="0.05"/>
 <rect x="19" y="10" width="15" height="1.8" rx="0.7" fill="${color}" opacity="0.6"><animate attributeName="opacity" values="0.2;0.75;0.2" dur="1.8s" repeatCount="indefinite"/></rect>
 <rect x="19" y="14" width="23" height="1.8" rx="0.7" fill="${color}" opacity="0.35"/>
-<rect x="19" y="18" width="17" height="1.8" rx="0.7" fill="#4ade80" opacity="0.55"/>
+<rect x="19" y="18" width="17" height="1.8" rx="0.7" fill="${C.success}" opacity="0.55"/>
 <rect x="19" y="22" width="6" height="1.8" rx="0.7" fill="${color}" opacity="0.4"><animate attributeName="width" values="3;20;3" dur="2.5s" repeatCount="indefinite"/></rect>
 <circle cx="31" cy="27.2" r="0.9" fill="${color}" opacity="0.7"/>
 <!-- ══ 스탠드 3D ══ -->
@@ -166,8 +201,8 @@ function mkRobot(color: string, uid: string, size = 50): string {
 <path d="M26 37 L47 37 L50 39.5 L23 39.5 Z" fill="${color}" opacity="0.15"/>
 <rect x="26" y="35" width="21" height="4" rx="1.5" fill="${color}" opacity="0.22"/>
 <!-- ══ 키보드 3D ══ -->
-<path d="M16 37.5 L56 37.5 L56 39.5 L16 39.5 Z" fill="#0e1c30"/>
-<path d="M18 34 L54 34 L56 37.5 L16 37.5 Z" fill="#112236" stroke="${color}" stroke-width="0.7" stroke-opacity="0.3"/>
+<path d="M16 37.5 L56 37.5 L56 39.5 L16 39.5 Z" fill="${ART.kbdBase}"/>
+<path d="M18 34 L54 34 L56 37.5 L16 37.5 Z" fill="${ART.kbdTop}" stroke="${color}" stroke-width="0.7" stroke-opacity="0.3"/>
 <rect x="20" y="34.5" width="4" height="2" rx="0.4" fill="${color}" opacity="0.25"/>
 <rect x="25" y="34.5" width="4" height="2" rx="0.4" fill="${color}" opacity="0.25"/>
 <rect x="30" y="34.5" width="4" height="2" rx="0.4" fill="${color}" opacity="0.25"/>
@@ -186,10 +221,10 @@ function mkRobot(color: string, uid: string, size = 50): string {
 <rect x="28" y="27" width="16" height="12" rx="3.5" fill="url(#gHL${uid})"/>
 <rect x="28" y="27" width="16" height="3" rx="1.5" fill="white" opacity="0.08"/>
 <circle cx="32" cy="32" r="3.3" fill="white" opacity="0.92"/>
-<circle cx="32" cy="32.3" r="2" fill="#030509"/>
+<circle cx="32" cy="32.3" r="2" fill="${ART.pupil}"/>
 <circle cx="31.2" cy="30.9" r="0.75" fill="white"/>
 <circle cx="37.5" cy="32" r="3.3" fill="white" opacity="0.92"/>
-<circle cx="37.5" cy="32.3" r="2" fill="#030509"/>
+<circle cx="37.5" cy="32.3" r="2" fill="${ART.pupil}"/>
 <circle cx="36.7" cy="30.9" r="0.75" fill="white"/>
 <path d="M31 36.5 Q35.5 38.5 40 36.5" stroke="${color}" stroke-width="1.2" fill="none" opacity="0.6"/>
 <!-- ══ 몸통 3D ══ -->
@@ -200,7 +235,7 @@ function mkRobot(color: string, uid: string, size = 50): string {
 <rect x="30" y="42" width="12" height="2.5" rx="1.2" fill="white" opacity="0.07"/>
 <rect x="29.5" y="46.5" width="13" height="6" rx="1.8" fill="rgba(0,0,0,0.45)"/>
 <circle cx="33" cy="49.5" r="1.9" fill="${color}" filter="url(#fw${uid})"><animate attributeName="opacity" values="0.25;1;0.25" dur="1.7s" repeatCount="indefinite"/></circle>
-<circle cx="36.5" cy="49.5" r="1.9" fill="#4ade80" filter="url(#fw${uid})"><animate attributeName="opacity" values="0.55;1;0.55" dur="1.05s" repeatCount="indefinite"/></circle>
+<circle cx="36.5" cy="49.5" r="1.9" fill="${C.success}" filter="url(#fw${uid})"><animate attributeName="opacity" values="0.55;1;0.55" dur="1.05s" repeatCount="indefinite"/></circle>
 <circle cx="40" cy="49.5" r="1.9" fill="${color}" filter="url(#fw${uid})"><animate attributeName="opacity" values="0.15;0.75;0.15" dur="2.2s" repeatCount="indefinite"/></circle>
 <!-- ══ 팔 3D ══ -->
 <path d="M18 42.5 L28 44.5 L28 48 L17 47 Z" fill="url(#gLR${uid})" opacity="0.6"/>
@@ -211,12 +246,12 @@ function mkRobot(color: string, uid: string, size = 50): string {
 <path d="M44 56 L48 58.5 L48 65 L44 62.5 Z" fill="${color}" opacity="0.2"/>
 <rect x="26" y="56" width="18" height="9" rx="2.5" fill="url(#gLR${uid})" opacity="0.52"/>
 <rect x="26" y="56" width="18" height="9" rx="2.5" fill="url(#gHL${uid})"/>
-<rect x="29" y="65" width="3.5" height="8" rx="1.75" fill="#1a2d45"/>
-<rect x="39.5" y="65" width="3.5" height="8" rx="1.75" fill="#1a2d45"/>
-<rect x="33" y="63" width="2.5" height="6" rx="1.25" fill="#121f35"/>
-<rect x="36.5" y="63" width="2.5" height="6" rx="1.25" fill="#121f35"/>
+<rect x="29" y="65" width="3.5" height="8" rx="1.75" fill="${ART.chairLeg}"/>
+<rect x="39.5" y="65" width="3.5" height="8" rx="1.75" fill="${ART.chairLeg}"/>
+<rect x="33" y="63" width="2.5" height="6" rx="1.25" fill="${ART.chairFoot}"/>
+<rect x="36.5" y="63" width="2.5" height="6" rx="1.25" fill="${ART.chairFoot}"/>
 <!-- ══ 커피잔 (책상 위) ══ -->
-<rect x="57" y="37" width="5" height="4" rx="1" fill="#2a1608" stroke="${color}" stroke-width="0.5" stroke-opacity="0.4"/>
+<rect x="57" y="37" width="5" height="4" rx="1" fill="${ART.mug}" stroke="${color}" stroke-width="0.5" stroke-opacity="0.4"/>
 <path d="M57.5 38 Q59.5 37.2 61.5 38" stroke="${color}" stroke-width="0.6" fill="none" opacity="0.5"/>
 </svg>`;
 }
@@ -229,7 +264,7 @@ function AgentCard({
 }: { num:string; label:string; sub:string; color:string; stat?:string; big?:boolean; isActive?:boolean; isBusy?:boolean; busyTask?:string }) {
   const [hov, setHov] = useState(false);
   const w = big ? BIG_W : CARD_W, h = big ? BIG_H : CARD_H;
-  const rSz = big ? 62 : 50;
+  const rSz = big ? 54 : 42;
   // active(데이터 전달 중)가 busy(작업 중)보다 우선 — 동시엔 큰 모션만
   const showBusy = isBusy && !isActive;
 
@@ -241,8 +276,8 @@ function AgentCard({
       {/* 작업 중 — 앰버 후광 맥동 (busy only, 마우스 없이도 강하게 부각) */}
       {showBusy && (
         <div style={{
-          position:"absolute", inset:-7, borderRadius:18,
-          background:"radial-gradient(ellipse at center,#f59e0b66 0%,#f59e0b22 45%,transparent 72%)",
+          position:"absolute", inset:0, borderRadius:12,
+          boxShadow:`0 0 26px 10px ${C.warn}66, 0 0 62px 22px ${C.warn}22`,
           animation:"busy-halo 1.8s ease-in-out infinite",
           pointerEvents:"none", zIndex:0,
         }}/>
@@ -250,21 +285,26 @@ function AgentCard({
       {/* 활성 맥동 링 — 카드 외부로 방사 (에이전트 간 데이터 전달) */}
       {isActive && [0, 0.55, 1.1].map((delay, i) => (
         <div key={i} style={{
-          position:"absolute", inset:"-8px",
-          border:`2px solid ${color}`,
-          borderRadius:16,
+          // 카드 박스 *안* 에 두고 바깥으로는 outline 으로만 번진다.
+          // (음수 inset·scale 은 레이아웃 넘침을 만든다 — outline/box-shadow 는 안 만든다)
+          position:"absolute", inset:0,
+          borderRadius:12,
+          outline:`2px solid ${color}`,
+          outlineOffset:"8px",
+          // 최대 확산 거리 = 옛 scale(1.65) 와 동일하게 카드 크기에서 파생
+          ["--ring-max"]: `${Math.round(((w + 16) * 1.65 - w) / 2)}px`,
           animation:`agent-ring-expand 1.65s ease-out ${delay}s infinite`,
           pointerEvents:"none",
-        }}/>
+        } as any}/>
       ))}
 
       {/* 행진 개미 테두리 — 에이전트 작업 진행 중 (앰버·굵고 빠르게, 데이터전달과 구분) */}
       {showBusy && (
-        <div style={{ position:"absolute", inset:-1, pointerEvents:"none", zIndex:6 }}
+        <div style={{ position:"absolute", inset:0, pointerEvents:"none", zIndex:6 }}
           dangerouslySetInnerHTML={{ __html:
-            `<svg width="${w+2}" height="${h+2}" viewBox="-1 -1 ${w+2} ${h+2}" xmlns="http://www.w3.org/2000/svg">` +
+            `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">` +
             `<rect x="1" y="1" width="${w-2}" height="${h-2}" rx="12" ry="12"` +
-            ` fill="none" stroke="#f59e0b" stroke-width="2.6" stroke-dasharray="14 8" opacity="0.95">` +
+            ` fill="none" stroke="${C.warn}" stroke-width="2.6" stroke-dasharray="14 8" opacity="0.95">` +
             `<animate attributeName="stroke-dashoffset" from="0" to="-88" dur="0.9s" repeatCount="indefinite"/>` +
             `</rect></svg>`
           }}
@@ -276,14 +316,15 @@ function AgentCard({
         onMouseLeave={() => setHov(false)}
         style={{
           width:w, height:h, position:"relative", overflow:"hidden",
+          display:"flex", flexDirection:"column",
           background: isActive
-            ? `linear-gradient(145deg,#1c2140 0%,#0e1020 100%)`
+            ? `linear-gradient(145deg,${ART.cardActiveA} 0%,${ART.cardActiveB} 100%)`
             : showBusy
-              ? `linear-gradient(145deg,#2a2113 0%,#0f0c06 100%)`
-              : `linear-gradient(145deg,#131827 0%,#0b0d1a 100%)`,
-          border:`2px solid ${showBusy ? "#f59e0b" : color}`,
+              ? `linear-gradient(145deg,${ART.cardBusyA} 0%,${ART.cardBusyB} 100%)`
+              : `linear-gradient(145deg,${ART.cardIdleA} 0%,${ART.cardIdleB} 100%)`,
+          border:`2px solid ${showBusy ? C.warn : color}`,
           borderRadius:12,
-          padding:"7px 9px",
+          padding:"6px 8px",
           transform: hov
             ? `perspective(450px) rotateX(-7deg) rotateY(5deg) scale(1.05) translateZ(8px)`
             : `perspective(450px) rotateX(0) rotateY(0) scale(1)`,
@@ -293,7 +334,7 @@ function AgentCard({
             : isActive
               ? `0 0 60px ${color}cc, 0 0 120px ${color}55, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}99`
               : showBusy
-                ? `0 0 34px #f59e0baa, 0 0 68px #f59e0b40, 0 6px 22px rgba(0,0,0,0.55), inset 0 1px 0 #f59e0b66`
+                ? `0 0 34px ${C.warn}aa, 0 0 68px ${C.warn}40, 0 6px 22px rgba(0,0,0,0.55), inset 0 1px 0 ${C.warn}66`
                 : `0 0 16px ${color}44, 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 ${color}28`,
           cursor:"default",
         }}
@@ -311,8 +352,8 @@ function AgentCard({
         {showBusy && (
           <div style={{
             position:"absolute", left:6, right:6, height:2, borderRadius:2,
-            background:"linear-gradient(90deg,transparent,#f59e0b,#fbbf24,#f59e0b,transparent)",
-            boxShadow:"0 0 8px #f59e0b",
+            background:`linear-gradient(90deg,transparent,${C.warn}88,${C.warn},${C.warn}88,transparent)`,
+            boxShadow:`0 0 8px ${C.warn}`,
             animation:"busy-scan-down 1.9s ease-in-out infinite",
             pointerEvents:"none", zIndex:9,
           }}/>
@@ -332,14 +373,14 @@ function AgentCard({
           <div key={i} style={{ position:"absolute",width:12,height:12,...s }}/>
         ))}
         {/* 번호 + 상태 LED */}
-        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2 }}>
-          <span style={{ fontSize:9,fontWeight:900,color,letterSpacing:1.5,opacity:isActive ? 1 : 0.7 }}>J{num}</span>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:1,flexShrink:0 }}>
+          <span style={{ fontSize:14,fontWeight:900,color,letterSpacing:1.5,opacity:isActive ? 1 : 0.7 }}>J{num}</span>
           <div style={{ display:"flex",alignItems:"center",gap:3 }}>
             {showBusy && (
               <span style={{ display:"inline-flex" }} dangerouslySetInnerHTML={{ __html:
                 `<svg width="14" height="14" viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">` +
-                `<circle cx="5" cy="5" r="3.6" fill="none" stroke="#f59e0b44" stroke-width="1.3"/>` +
-                `<path d="M5 1.4 A3.6 3.6 0 0 1 8.6 5" fill="none" stroke="#f59e0b" stroke-width="1.6" stroke-linecap="round">` +
+                `<circle cx="5" cy="5" r="3.6" fill="none" stroke="${C.warn}44" stroke-width="1.3"/>` +
+                `<path d="M5 1.4 A3.6 3.6 0 0 1 8.6 5" fill="none" stroke="${C.warn}" stroke-width="1.6" stroke-linecap="round">` +
                 `<animateTransform attributeName="transform" type="rotate" from="0 5 5" to="360 5 5" dur="0.75s" repeatCount="indefinite"/>` +
                 `</path></svg>`
               }}/>
@@ -348,12 +389,12 @@ function AgentCard({
               width:isActive ? 8 : showBusy ? 7 : 5,
               height:isActive ? 8 : showBusy ? 7 : 5,
               borderRadius:"50%",
-              background:isActive ? color : showBusy ? "#f59e0b" : "#4ade80",
+              background:isActive ? color : showBusy ? C.warn : C.success,
               boxShadow:isActive
                 ? `0 0 16px ${color}, 0 0 32px ${color}66`
                 : showBusy
-                  ? "0 0 10px #f59e0b, 0 0 22px #f59e0b99"
-                  : "0 0 6px #4ade80",
+                  ? `0 0 10px ${C.warn}, 0 0 22px ${C.warn}99`
+                  : `0 0 6px ${C.success}`,
               display:"inline-block",
               animation:isActive
                 ? "led-blink 0.45s ease-in-out infinite"
@@ -365,28 +406,29 @@ function AgentCard({
           </div>
         </div>
         {/* 로봇 */}
-        <div style={{ display:"flex",justifyContent:"center",marginBottom:3 }}
+        <div style={{ display:"flex",justifyContent:"center",marginBottom:1,flexShrink:0 }}
           dangerouslySetInnerHTML={{ __html: mkRobot(color, `r${num}`, rSz) }}/>
         {/* 이름 */}
-        <div style={{ textAlign:"center",fontSize:big?13:11,fontWeight:900,
+        <div style={{ textAlign:"center",fontSize:big?16:14,fontWeight:900,flexShrink:0,
           letterSpacing:0.5,color,
           textShadow:isActive ? `0 0 22px ${color}, 0 0 44px ${color}88` : `0 0 12px ${color}cc`,
-          marginBottom:1 }}>
+          marginBottom:0 }}>
           {label}
         </div>
         {/* 역할 */}
-        <div style={{ textAlign:"center",fontSize:9.5,color:isActive ? "#b8c8d8" : "#8a9fb8",marginBottom:4 }}>{sub}</div>
+        <div style={{ textAlign:"center",fontSize:14,lineHeight:1.25,
+          color:isActive ? "var(--c-text2)" : "var(--c-text5)",marginBottom:2 }}>{sub}</div>
         {/* 데이터 칩 */}
         <div style={{
           background:isActive ? "rgba(0,0,0,0.55)" : showBusy ? "rgba(245,158,11,0.12)" : "rgba(0,0,0,0.45)",
-          borderRadius:5,padding:"3px 6px",
-          fontSize:9.5, fontWeight: showBusy ? 800 : 400,
-          color:isActive ? "#b8cce0" : showBusy ? "#fbbf24" : "#9aafc8",
+          borderRadius:5,padding:"2px 5px",
+          fontSize:14, fontWeight: showBusy ? 800 : 400,
+          color:isActive ? "var(--c-text2)" : showBusy ? C.warn : "var(--c-text5)",
           textAlign:"center",
-          borderTop:`1px solid ${isActive ? color+"55" : showBusy ? "#f59e0b77" : color+"28"}`,
-          overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
+          borderTop:`1px solid ${isActive ? color+"55" : showBusy ? C.warn+"77" : color+"28"}`,
+          minHeight:0,overflowY:"auto",whiteSpace:"normal",overflowWrap:"anywhere",lineHeight:1.3,
           animation: showBusy ? "busy-chip-blink 1.6s ease-in-out infinite" : undefined,
-        }}>{showBusy ? `⚙ ${busyTask || "작업 중"}` : (stat ?? "—")}</div>
+        }} title={showBusy ? (busyTask || "작업 중") : (stat ?? "")}>{showBusy ? `⚙ ${busyTask || "작업 중"}` : (stat ?? "—")}</div>
       </div>
     </div>
   );
@@ -534,7 +576,7 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   const flowEdgeColor = useMemo(() => {
     const m = new Map<string, string>();
     activeFlows.forEach((f, i) => {
-      const col = agents.find(a => a.id === f.from)?.color ?? "#f43f5e";
+      const col = agents.find(a => a.id === f.from)?.color ?? C.danger;
       for (const id of flowPaths[i] ?? []) m.set(id, col);
     });
     return m;
@@ -594,8 +636,8 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
   return (<>
     <style>{`
       @keyframes agent-ring-expand {
-        0%   { transform: scale(1.0); opacity: 0.85; }
-        100% { transform: scale(1.65); opacity: 0.0; }
+        0%   { outline-offset: 8px; opacity: 0.85; }
+        100% { outline-offset: var(--ring-max); opacity: 0.0; }
       }
       @keyframes led-blink {
         0%, 100% { opacity: 1.0; }
@@ -612,12 +654,12 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
         50%       { opacity: 0.28; }
       }
       @keyframes busy-breathe {
-        0%, 100% { transform: scale(1); }
-        50%      { transform: scale(1.045); }
+        0%, 100% { transform: scale(0.955); }
+        50%      { transform: scale(1); }
       }
       @keyframes busy-halo {
-        0%, 100% { opacity: 0.28; transform: scale(0.97); }
-        50%      { opacity: 0.9;  transform: scale(1.07); }
+        0%, 100% { opacity: 0.28; }
+        50%      { opacity: 0.9;  }
       }
       @keyframes busy-scan-down {
         0%   { top: 2%;  opacity: 0; }
@@ -639,21 +681,21 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
       <div style={{
         display:"flex", alignItems:"center", justifyContent:"space-between",
         padding:"10px 20px", borderBottom:"1px solid var(--c-bdr)",
-        background:"linear-gradient(90deg,#0e1119,#121624,#0e1119)",
+        background:`linear-gradient(90deg,${ART.barEdge},${ART.barMid},${ART.barEdge})`,
       }}>
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-          <span style={{ fontSize:17, fontWeight:700, color:"var(--c-text)" }}>🖥 JARVIS 에이전트 사무실</span>
-          <span style={{ fontSize:12, color:"var(--c-text5)" }}>10개 에이전트 · Self-Evolving v3</span>
+          <span style={{ fontSize:18, fontWeight:700, color:"var(--c-text)" }}>🖥 JARVIS 에이전트 사무실</span>
+          <span style={{ fontSize:14, color:"var(--c-text5)" }}>10개 에이전트 · Self-Evolving v3</span>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-          <span style={{ fontFamily:"monospace", fontSize:14, fontWeight:700, color:"#4ade80" }}>{time}</span>
+          <span style={{ fontFamily:"monospace", fontSize:14, fontWeight:700, color:C.success }}>{time}</span>
           <span style={{ display:"flex", alignItems:"center", gap:5 }}>
             <span style={{
-              width:8, height:8, borderRadius:"50%", background:"#4ade80",
-              boxShadow:"0 0 8px #4ade80", display:"inline-block",
+              width:8, height:8, borderRadius:"50%", background:C.success,
+              boxShadow:`0 0 8px ${C.success}`, display:"inline-block",
               opacity: blink ? 1 : 0.25, transition:"opacity 0.4s",
             }}/>
-            <span style={{ fontSize:11, fontWeight:800, color:"#4ade80", letterSpacing:1 }}>LIVE</span>
+            <span style={{ fontSize:14, fontWeight:800, color:C.success, letterSpacing:1 }}>LIVE</span>
           </span>
         </div>
       </div>
@@ -662,18 +704,20 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
       {activeEdgeSet.size > 0 && (
         <div style={{
           display:"flex", alignItems:"center", gap:12,
-          padding:"6px 20px", borderBottom:"1px solid #4ade8022",
+          padding:"6px 20px", borderBottom:`1px solid ${C.success}22`,
           background:"rgba(74,222,128,0.05)",
         }}>
           <span style={{ display:"flex",alignItems:"center",gap:5,flexShrink:0 }}>
             <span style={{
-              width:7, height:7, borderRadius:"50%", background:"#4ade80",
-              boxShadow:"0 0 8px #4ade80", display:"inline-block",
+              width:8, height:8, borderRadius:"50%", background:C.success,
+              boxShadow:`0 0 8px ${C.success}`, display:"inline-block",
               animation:"busy-led-pulse 0.8s ease-in-out infinite",
             }}/>
-            <span style={{ fontSize:9,fontWeight:800,color:"#4ade80",letterSpacing:1.5 }}>ACTIVE</span>
+            <span style={{ fontSize:14,fontWeight:800,color:C.success,letterSpacing:1.5 }}>ACTIVE</span>
           </span>
-          <span style={{ fontSize:11, color:"#6ee7b7", letterSpacing:0.3 }}>
+          <span style={{ fontSize:14, color:C.success, letterSpacing:0.3,
+                        flex:1, minWidth:0, lineHeight:1.4,
+                        whiteSpace:"normal", overflowWrap:"anywhere" }}>
             {Array.from(activeEdgeSet).map(id => edgeDescFrom(id, graphData?.edges ?? [])).join("  →  ")}
           </span>
         </div>
@@ -686,13 +730,13 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
           {/* 배경 그리드 */}
           <div style={{
             position:"absolute", inset:0,
-            backgroundImage:"linear-gradient(#1a2035 1px,transparent 1px),linear-gradient(90deg,#1a2035 1px,transparent 1px)",
+            backgroundImage:`linear-gradient(${ART.floorGrid} 1px,transparent 1px),linear-gradient(90deg,${ART.floorGrid} 1px,transparent 1px)`,
             backgroundSize:"44px 44px", opacity:0.2,
           }}/>
           {/* 중앙 방사 그라디언트 */}
           <div style={{
             position:"absolute", inset:0,
-            background:"radial-gradient(ellipse 60% 50% at 50% 38%,#1a2540 0%,#090b14 100%)",
+            background:`radial-gradient(ellipse 60% 50% at 50% 38%,${ART.floorGlow} 0%,${ART.floorDark} 100%)`,
           }}/>
 
           {/* 파이프라인 흐름 표시줄 (ROW1 배경 하이라이트) */}
@@ -708,9 +752,9 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
           }}/>
           {/* 파이프라인 라벨 — 점선 제거, 박스 위 빈 공간(트리거선 오른쪽)으로 이동해 겹침 방지 */}
           <div style={{
-            position:"absolute", left:J03_X + 210, top:ROW1_Y - 34,
-            fontSize:10, fontWeight:800, color:"#4ade80", letterSpacing:1.5,
-            background:"rgba(74,222,128,0.12)", padding:"3px 12px", borderRadius:7,
+            position:"absolute", left:J03_X + 210, top:ROW1_Y - 36,
+            fontSize:14, fontWeight:800, color:C.success, letterSpacing:1.5,
+            background:"rgba(74,222,128,0.12)", padding:"2px 12px", borderRadius:7,
             border:"1px solid rgba(74,222,128,0.32)",
           }}>발행 파이프라인</div>
 
@@ -728,9 +772,9 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
             return (
               <div key={i} style={{
                 position:"absolute",
-                left: lb.x - 28, top: lb.y - 8,
-                width: 56, textAlign:"center",
-                fontSize:8, fontWeight: on ? 900 : 700,
+                left: lb.x - 34, top: lb.y - 10,
+                width: 68, textAlign:"center",
+                fontSize:14, fontWeight: on ? 900 : 700,
                 color: lb.col, opacity: on ? 1 : 0.55,
                 letterSpacing:0.3,
                 pointerEvents:"none", zIndex:2,
@@ -743,31 +787,31 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
           {/* CCTV — J00 우측 ↔ Mission Board 사이 빈 공간 (top 18) */}
           <div style={{
             position:"absolute", left:192, top:18,
-            background:"#090b14", border:"1.5px solid #38bdf8",
-            borderRadius:8, padding:"5px 10px",
-            boxShadow:"0 0 14px #38bdf822",
+            background:ART.floorDark, border:`1.5px solid ${C.primary}`,
+            borderRadius:8, padding:"4px 10px",
+            boxShadow:`0 0 14px ${C.primary}22`,
             display:"flex", alignItems:"center", gap:7,
             zIndex:3,
           }}>
-            <div style={{ width:8,height:8,borderRadius:"50%",background:"#f43f5e",
-              boxShadow:"0 0 8px #f43f5e", opacity:blink?1:0.35, transition:"opacity 0.5s" }}/>
+            <div style={{ width:8,height:8,borderRadius:"50%",background:C.danger,
+              boxShadow:`0 0 8px ${C.danger}`, opacity:blink?1:0.35, transition:"opacity 0.5s" }}/>
             <div>
-              <div style={{ fontSize:9,fontWeight:900,color:"#38bdf8",letterSpacing:1.5 }}>CCTV</div>
-              <div style={{ fontSize:8,color:"#2d3d55" }}>REC 24/7</div>
+              <div style={{ fontSize:14,fontWeight:900,color:C.primary,letterSpacing:1.5,lineHeight:1.2 }}>CCTV</div>
+              <div style={{ fontSize:14,color:C.muted,lineHeight:1.2 }}>REC 24/7</div>
             </div>
           </div>
 
           {/* MISSION BOARD */}
           <div style={{
-            position:"absolute", left:"50%", top:8, transform:"translateX(-50%)",
-            background:"#090b14", border:"1.5px solid #4f90d9",
-            borderRadius:8, padding:"6px 22px", textAlign:"center",
-            boxShadow:"0 0 22px #4f90d933", zIndex:3,
+            position:"absolute", left:"50%", top:0, transform:"translateX(-50%)",
+            background:ART.floorDark, border:`1.5px solid ${C.primary}`,
+            borderRadius:8, padding:"3px 18px", textAlign:"center",
+            boxShadow:`0 0 22px ${C.primary}33`, zIndex:3,
           }}>
-            <div style={{ fontSize:12,fontWeight:900,color:"#4f90d9",letterSpacing:2 }}>
+            <div style={{ fontSize:16,fontWeight:900,color:C.primary,letterSpacing:2,lineHeight:1.2 }}>
               🖥 JARVIS MISSION BOARD
             </div>
-            <div style={{ fontSize:9,color:"#2d3d55",marginTop:1 }}>
+            <div style={{ fontSize:14,color:C.muted,marginTop:0,lineHeight:1.2 }}>
               자동화 · 트렌드 · 자가학습 · Self-Evolving v3
             </div>
           </div>
@@ -788,17 +832,18 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
           {/* 연결 범례 */}
           <div style={{
             position:"absolute", right:12, bottom:14,
-            background:"rgba(9,11,20,0.9)", border:"1px solid #1e2640",
-            borderRadius:8, padding:"9px 13px",
+            background:"rgba(9,11,20,0.9)", border:`1px solid ${ART.panelBdr}`,
+            borderRadius:8, padding:"8px 12px",
             backdropFilter:"blur(8px)", zIndex:4,
           }}>
-            <div style={{ fontSize:9,fontWeight:700,color:"#374460",marginBottom:6,letterSpacing:1 }}>연결 범례</div>
-            <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <div style={{ fontSize:14,fontWeight:700,color:C.muted,marginBottom:6,letterSpacing:1 }}>연결 범례</div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(2, max-content)",
+                          columnGap:16, rowGap:3 }}>
               {(graphData?.legend ?? []).map(it => (
                 <div key={it.label} style={{ display:"flex",alignItems:"center",gap:6 }}>
                   <div style={{ width:20,height:2,background:it.col,borderRadius:1,
                     boxShadow:`0 0 4px ${it.col}88`,flexShrink:0 }}/>
-                  <span style={{ fontSize:9,color:"#a8bcd0" }}>{it.label}</span>
+                  <span style={{ fontSize:14,color:"var(--c-text5)",whiteSpace:"nowrap" }}>{it.label}</span>
                 </div>
               ))}
             </div>
@@ -807,55 +852,57 @@ function OfficeView({ ov }: { ov?: OverviewData }) {
           {/* 소품 */}
           <div style={{ position:"absolute",left:600,bottom:14,fontSize:22,opacity:0.35 }}>🌱</div>
           <div style={{ position:"absolute",left:640,bottom:12,fontSize:18,opacity:0.4 }}>☕</div>
-          <div style={{ position:"absolute",left:60, bottom:8,fontSize:18,opacity:0.30 }}>🖨️</div>
+          <div style={{ position:"absolute",left:690, bottom:8,fontSize:18,opacity:0.30 }}>🖨️</div>
           <div style={{ position:"absolute",right:12, top:12,fontSize:18,opacity:0.28 }}>📡</div>
 
           {/* ── 파이프라인 현황판 (좌하단) ── */}
           <div style={{
             position:"absolute", left:14, top:ROW2_Y,
-            width:230, height:CARD_H,
+            width:238, height:CARD_H + 20,
             background:"rgba(8,10,20,0.94)",
             border:`1px solid ${activeEdgeSet.size > 0 ? "rgba(74,222,128,0.22)" : "rgba(255,255,255,0.07)"}`,
-            borderTop:`2px solid ${activeEdgeSet.size > 0 ? "#4ade80" : "#1e3252"}`,
+borderTop:`2px solid ${activeEdgeSet.size > 0 ? C.success : ART.deskLegIn}`,
             borderRadius:12,
             overflow:"hidden", zIndex:2,
+            display:"flex", flexDirection:"column",
             transition:"border 0.6s ease, border-top 0.6s ease",
           }}>
             {/* 현황판 헤더 */}
             <div style={{
               display:"flex", alignItems:"center", justifyContent:"space-between",
-              padding:"6px 10px 5px",
+              flexShrink:0, padding:"5px 10px",
               borderBottom:"1px solid rgba(255,255,255,0.05)",
               background:"rgba(0,0,0,0.3)",
             }}>
               <div style={{ display:"flex", alignItems:"center", gap:5 }}>
-                <span style={{ width:6,height:6,borderRadius:"50%",background:"#4ade80",
-                  boxShadow:"0 0 6px #4ade80",display:"inline-block",
+                <span style={{ width:7,height:7,borderRadius:"50%",background:C.success,
+                  boxShadow:`0 0 6px ${C.success}`,display:"inline-block",
                   opacity: activeEdgeSet.size > 0 ? 1 : 0.35 }}/>
-                <span style={{ fontSize:9,fontWeight:900,color:"#4ade80",letterSpacing:1.5 }}>실시간 현황</span>
+                <span style={{ fontSize:14,fontWeight:900,color:C.success,letterSpacing:1 }}>실시간 현황</span>
               </div>
-              <span style={{ fontSize:8,color:"#2d3d55" }}>LIVE LOG</span>
+              <span style={{ fontSize:14,color:C.muted }}>LIVE LOG</span>
             </div>
             {/* 로그 목록 */}
-            <div style={{ overflowY:"auto", height:CARD_H - 32 }}>
+            <div style={{ overflowY:"auto", flex:1, minHeight:0 }}>
               {activityLog.length === 0 ? (
                 <div style={{
                   display:"flex", alignItems:"center", justifyContent:"center",
-                  height:"100%", fontSize:8, color:"#2d3d55", letterSpacing:0.5,
+                  height:"100%", fontSize:14, color:C.muted, letterSpacing:0.5,
                 }}>대기 중...</div>
               ) : activityLog.map((item, i) => (
                 <div key={i} style={{
-                  display:"flex", gap:7, padding:"4px 10px",
+                  display:"flex", gap:6, padding:"4px 8px",
                   borderBottom:"1px solid rgba(255,255,255,0.025)",
                   background: i === 0 ? "rgba(74,222,128,0.06)" : "transparent",
                 }}>
+                  <span title={item.ts} style={{
+                    fontSize:14, color:C.muted, flexShrink:0,
+                    fontFamily:"monospace", lineHeight:1.4,
+                  }}>{(item.ts ?? "").slice(0, 5)}</span>
                   <span style={{
-                    fontSize:7.5, color:"#2d3d55", flexShrink:0,
-                    fontFamily:"monospace", paddingTop:1,
-                  }}>{item.ts}</span>
-                  <span style={{
-                    fontSize:8.5, lineHeight:1.45,
-                    color: i === 0 ? "#6ee7b7" : "#7a90a8",
+                    fontSize:14, lineHeight:1.4, minWidth:0,
+                    overflowWrap:"anywhere",
+                    color: i === 0 ? C.success : "var(--c-text5)",
                   }}>{item.msg}</span>
                 </div>
               ))}
@@ -879,7 +926,7 @@ function KpiCard({ label, value, sub, color }: { label:string; value:string|numb
     }}>
       <div style={{ fontSize:14, color:"var(--c-text2)", marginBottom:10 }}>{label}</div>
       <div style={{ fontSize:42, fontWeight:800, color, lineHeight:1 }}>{value}</div>
-      <div style={{ fontSize:13, color:"var(--c-text5)", marginTop:8 }}>{sub}</div>
+      <div style={{ fontSize:14, color:"var(--c-text5)", marginTop:8 }}>{sub}</div>
     </div>
   );
 }
@@ -888,7 +935,7 @@ function Badge({ text, color }: { text:string; color:string }) {
   return (
     <span style={{
       display:"inline-flex", alignItems:"center", padding:"3px 10px",
-      borderRadius:20, fontSize:13, fontWeight:600,
+      borderRadius:20, fontSize:14, fontWeight:600,
       background:color+"22", color,
     }}>{text}</span>
   );
@@ -919,7 +966,29 @@ const CONSUMER_COLOR: Record<string, string> = {
   daemon: C.success, subagent: C.warn, session: C.primary,
 };
 
+// ═══════════════════════════════════════════════
+// 컨테이너 실측 폭 — 차트에 %(퍼센트) 대신 *실측 px* 을 넘긴다.
+// Recharts ResponsiveContainer 는 width="100%" 일 때 내부에
+// width:0 짜리 측정용 div 를 만들고 그 안에서 차트가 밖으로 삐져나온다.
+// 폭을 숫자로 주면 그 측정용 div 자체가 사라진다(고정 px 하드코딩 아님 — 런타임 실측).
+// ═══════════════════════════════════════════════
+function useBoxWidth<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => setW(Math.max(0, Math.floor(el.clientWidth)));
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w] as const;
+}
+
 function TokenPanel() {
+  const [chartBoxRef, chartW] = useBoxWidth<HTMLDivElement>();
   const { data } = useSWR<TokenData>("/api/tokens", fetcher, { refreshInterval: 20000 });
 
   const hist    = data?.history ?? [];
@@ -938,6 +1007,14 @@ function TokenPanel() {
   const consumerTotal = Math.max(1, consumers.reduce((s, c) => s + (c.total || 0), 0));
 
   const week = daily.slice(-7).reduce((s, d) => s + (d.output || 0), 0);
+  // 막대차트 한 열의 최소 폭 — *막대 개수에서 파생* (고정 px 아님, ch 는 글꼴 상대 단위).
+  // 이 폭을 못 받으면 2열을 포기하고 한 열로 내려가 막대가 전부 보인다.
+  // 차트 카드가 2단으로 설 수 있는 최소 폭(px). 파생할 원본이 없는 *레이아웃 결정* 이라
+  // 상수로 두되 정의는 이 한 곳뿐이다. 이보다 좁으면 auto-fit 이 1단으로 내린다.
+  const CHART_COL_MIN = 380;
+  // ★ 가로 스크롤의 기본 위치는 **최신(오른쪽 끝)** — 브라우저 기본값 0 은 가장 오래된 쪽이다.
+  const hourlyScrollRef = useLatestVisible(hourly);
+  const dailyScrollRef  = useLatestVisible(daily);
   const maxHour = Math.max(1, ...hourly.map(h => h.output));
   const maxDay  = Math.max(1, ...daily.map(d => d.output));
 
@@ -991,7 +1068,7 @@ function TokenPanel() {
   return (
     <div style={{ ...box, borderTop: `3px solid ${C.primary}`, marginBottom: 18 }}>
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}>
-        <span style={{ fontSize:17, fontWeight:700, color:"var(--c-text)" }}>🪙 토큰 사용량 현황판</span>
+        <span style={{ fontSize:18, fontWeight:700, color:"var(--c-text)" }}>🪙 토큰 사용량 현황판</span>
         <span style={{ fontSize:14, color:"var(--c-text5)" }}>
           {data?.totals?.scanned_files != null ? `세션 ${data.totals.scanned_files}건 집계` : "로딩 중…"}
         </span>
@@ -1055,23 +1132,32 @@ function TokenPanel() {
         </div>
       )}
 
-      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:18 }}>
+      {/* ★ 열 최소폭은 "막대가 다 들어갈 폭" 이 아니라 "카드가 읽을 만한 폭" 이다.
+          막대 행은 아래에서 overflowX:auto 로 카드 안에서 스크롤되므로 열이 막대 전체를
+          담을 필요가 없다. 종전엔 막대 개수에서 파생한 값(15개 → 105ch ≈ 840px)을 최소폭으로
+          써서 1680px 화면에서도 2단이 성립하지 못했다 — 넘침은 고쳤지만 디자인이 폐지됐다.
+          ※ JSX 중괄호가 빠져 있어 이 주석이 *화면에 본문으로 렌더* 되고 있었다. */}
+      <div style={{ display:"grid",
+                    gridTemplateColumns:`repeat(auto-fit, minmax(min(100%, ${CHART_COL_MIN}px), 1fr))`,
+                    gap:18 }}>
         {/* 오늘 시간대별 */}
         <div>
           <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>오늘 시간대별 출력</div>
           {hourly.length === 0 ? (
             <div style={{ fontSize:14,color:"var(--c-text5)" }}>아직 사용 없음</div>
           ) : (
-            <div style={{ display:"flex",alignItems:"flex-end",gap:4,height:120 }}>
+            <div ref={hourlyScrollRef} style={{ overflowX:"auto" }}>
+            <div style={{ display:"flex",alignItems:"flex-end",gap:4,minHeight:120,minWidth:"max-content" }}>
               {hourly.map(h => (
                 <div key={h.hour} style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4 }}>
-                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{fmtTok(h.output)}</div>
+                  <div style={{ fontSize:14,color:"var(--c-text5)",whiteSpace:"nowrap" }}>{fmtTok(h.output)}</div>
                   <div title={`${h.hour}시 ${h.output.toLocaleString()}`}
                        style={{ width:"100%",background:C.primary,borderRadius:"4px 4px 0 0",
                                 height:Math.max(4, (h.output/maxHour)*80) }}/>
-                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{h.hour}</div>
+                  <div style={{ fontSize:14,color:"var(--c-text5)",whiteSpace:"nowrap" }}>{h.hour}</div>
                 </div>
               ))}
+            </div>
             </div>
           )}
         </div>
@@ -1082,24 +1168,26 @@ function TokenPanel() {
           {daily.length === 0 ? (
             <div style={{ fontSize:14,color:"var(--c-text5)" }}>데이터 없음</div>
           ) : (
-            <div style={{ display:"flex",alignItems:"flex-end",gap:6,height:120 }}>
+            <div ref={dailyScrollRef} style={{ overflowX:"auto" }}>
+            <div style={{ display:"flex",alignItems:"flex-end",gap:6,minHeight:120,minWidth:"max-content" }}>
               {daily.map(d => (
                 <div key={d.date} style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4 }}>
-                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{fmtTok(d.output)}</div>
+                  <div style={{ fontSize:14,color:"var(--c-text5)",whiteSpace:"nowrap" }}>{fmtTok(d.output)}</div>
                   <div title={`${d.date} ${d.output.toLocaleString()}`}
                        style={{ width:"100%",borderRadius:"4px 4px 0 0",
                                 background:d===today?C.success:C.muted,
                                 height:Math.max(4,(d.output/maxDay)*80) }}/>
-                  <div style={{ fontSize:14,color:"var(--c-text5)" }}>{d.date.slice(5)}</div>
+                  <div style={{ fontSize:14,color:"var(--c-text5)",whiteSpace:"nowrap" }}>{d.date.slice(5)}</div>
                 </div>
               ))}
+            </div>
             </div>
           )}
         </div>
       </div>
 
       {/* 전체 이력 선 차트 */}
-      <div style={{ marginTop:20 }}>
+      <div style={{ marginTop:20 }} ref={chartBoxRef}>
         <div style={{ fontSize:16,fontWeight:700,marginBottom:10,color:"var(--c-text)" }}>
           일별 사용량 추이
           <span style={{ fontSize:14,fontWeight:400,color:"var(--c-text5)",marginLeft:8 }}>
@@ -1108,13 +1196,13 @@ function TokenPanel() {
         </div>
         {hist.length === 0 ? (
           <div style={{ fontSize:14,color:"var(--c-text5)" }}>데이터 없음</div>
-        ) : (
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={hist} margin={{ top:4,right:16,left:-8,bottom:0 }}>
+        ) : chartW > 0 && (
+          <ResponsiveContainer width={chartW} height={240}>
+            <LineChart data={hist} margin={{ top:4,right:16,left:0,bottom:0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--c-bdr)" />
               <XAxis dataKey="date" tickFormatter={(d:string)=>d.slice(5)}
                      tick={{ fontSize:14, fill:"var(--c-text5)" }} minTickGap={16}/>
-              <YAxis tickFormatter={(v:number)=>fmtTok(v)}
+              <YAxis width="auto" tickFormatter={(v:number)=>fmtTok(v)}
                      tick={{ fontSize:14, fill:"var(--c-text5)" }}/>
               <Tooltip
                 formatter={(v)=>Number(v ?? 0).toLocaleString()}
@@ -1593,7 +1681,7 @@ export default function HomePage() {
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:22 }}>
         <div>
           <h1 style={{ fontSize:30,fontWeight:800,margin:0,color:"var(--c-text)" }}>JARVIS Hub</h1>
-          <div style={{ fontSize:13,color:"var(--c-text5)",marginTop:4 }}>{nowStr}</div>
+          <div style={{ fontSize:14,color:"var(--c-text5)",marginTop:4 }}>{nowStr}</div>
         </div>
         <div style={{
           display:"flex",alignItems:"center",gap:16,
@@ -1603,12 +1691,12 @@ export default function HomePage() {
           <div style={{ display:"flex",alignItems:"center",gap:7 }}>
             <span style={{ width:9,height:9,borderRadius:"50%",display:"inline-block",
               background:ov?.daemon?.alive ? C.success : C.danger }}/>
-            <span style={{ fontSize:13,color:"var(--c-text)" }}>
+            <span style={{ fontSize:14,color:"var(--c-text)" }}>
               {ov?.daemon?.alive ? "데몬 실행 중" : "데몬 정지"}
             </span>
           </div>
-          {ov?.daemon?.pid    != null && <span style={{ fontSize:13,color:"var(--c-text5)" }}>PID {ov.daemon.pid}</span>}
-          {ov?.daemon?.uptime       && <span style={{ fontSize:13,color:"var(--c-text5)" }}>가동 {ov.daemon.uptime}</span>}
+          {ov?.daemon?.pid    != null && <span style={{ fontSize:14,color:"var(--c-text5)" }}>PID {ov.daemon.pid}</span>}
+          {ov?.daemon?.uptime       && <span style={{ fontSize:14,color:"var(--c-text5)" }}>가동 {ov.daemon.uptime}</span>}
         </div>
       </div>
 
@@ -1630,12 +1718,12 @@ export default function HomePage() {
       <TokenPanel />
 
       {/* 최근 오류 + 심각도 분포 */}
-      <div style={{ display:"grid",gridTemplateColumns:"3fr 1fr",gap:18 }}>
+      <div style={{ display:"grid",gridTemplateColumns:"minmax(0, 3fr) minmax(0, 1fr)",gap:18 }}>
         <div style={{
           background:"var(--c-card)",border:"1px solid var(--c-bdr)",
           borderTop:`3px solid ${C.danger}`,borderRadius:12,padding:20,
         }}>
-          <div style={{ fontSize:17,fontWeight:700,marginBottom:14,color:"var(--c-text)" }}>최근 오류</div>
+          <div style={{ fontSize:18,fontWeight:700,marginBottom:14,color:"var(--c-text)" }}>최근 오류</div>
           {errs.length===0 ? (
             <div style={{ color:"var(--c-text5)",fontSize:14 }}>{ov?"오류 없음 ✓":"로딩 중…"}</div>
           ) : (
@@ -1652,8 +1740,13 @@ export default function HomePage() {
                   <tr key={e.id} style={{ borderTop:"1px solid var(--c-bdr)" }}>
                     <td style={{ padding:"9px 12px 9px 0",color:"var(--c-text5)",whiteSpace:"nowrap" }}>{fmtTime(e.timestamp)}</td>
                     <td style={{ padding:"9px 12px 9px 0" }}><Badge text={e.severity} color={severityColor(e.severity)}/></td>
-                    <td style={{ padding:"9px 12px 9px 0",color:"var(--c-text2)",whiteSpace:"nowrap" }}>{e.module}</td>
-                    <td style={{ padding:"9px 0",color:"var(--c-text2)",maxWidth:300,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.message?.slice(0,100)}</td>
+                    {/* nowrap 을 빼는 이유: 모듈 경로가 길면 이 칸이 폭을 독점해 표 auto-layout 이
+                        메시지 열을 36px 까지 짜부라뜨린다(1024 실측 — 행 높이 523px, 글자가 세로로 흐름).
+                        단어 경계에서만 접도록 break-word 를 쓴다 — anywhere 는 경로를 7조각으로 가른다. */}
+                    <td style={{ padding:"9px 12px 9px 0",color:"var(--c-text2)",minWidth:"14ch",maxWidth:"22ch",overflowWrap:"anywhere" }}>{e.module}</td>
+                    <td title={e.message ?? ""}
+                        style={{ padding:"9px 0",color:"var(--c-text2)",
+                                 width:"100%",whiteSpace:"normal",overflowWrap:"break-word",wordBreak:"break-word" }}>{e.message?.slice(0,100)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1664,11 +1757,11 @@ export default function HomePage() {
           background:"var(--c-card)",border:"1px solid var(--c-bdr)",
           borderTop:`3px solid ${C.warn}`,borderRadius:12,padding:20,
         }}>
-          <div style={{ fontSize:17,fontWeight:700,marginBottom:14,color:"var(--c-text)" }}>심각도 분포</div>
+          <div style={{ fontSize:18,fontWeight:700,marginBottom:14,color:"var(--c-text)" }}>심각도 분포</div>
           <div style={{ display:"flex",flexDirection:"column",gap:9 }}>
             {[
               {label:"심각",  value:ov?.guardian?.critical??0, color:C.danger},
-              {label:"높음",  value:ov?.guardian?.high??0,     color:"#f97316"},
+              {label:"높음",  value:ov?.guardian?.high??0,     color:severityColor("high")},
               {label:"중간",  value:ov?.guardian?.medium??0,   color:C.warn},
               {label:"낮음",  value:ov?.guardian?.low??0,      color:C.muted},
               {label:"해결됨",value:ov?.guardian?.fixed??0,    color:C.success},

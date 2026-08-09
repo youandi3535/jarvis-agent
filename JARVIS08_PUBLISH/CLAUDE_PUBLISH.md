@@ -33,16 +33,15 @@ ADR 008 Phase 2~6 완료 (사용자 박제 2026-05-17) — ADR 008 *완전 종�
   플랫폼은 `platforms/` 의 `post_to_*` AST. 리터럴을 추가하지 말 것.
 - **발행 락이 잡혀 있으면 '결손' 이 아니라 '지연'** — 아직 돌고 있는 것을 실패라 부르지 않는다.
 
-## Backward compat shim
-옛 위치 (`JARVIS02_WRITER/{naver,tistory}_poster.py` 등) 는 *본체 삭제 후* import shim 만 남김:
-```python
-# JARVIS02_WRITER/naver_poster.py
-import sys as _sys
-from JARVIS08_PUBLISH.platforms import naver_poster as _new_module
-_sys.modules[__name__] = _new_module
-```
-**핵심 패턴** — `sys.modules[__name__] = _new_module` 로 옛 모듈 객체를 새 모듈로 교체.
-외부 setattr (`tp.TS_COOKIE = ...`), attribute 접근, `from JARVIS02_WRITER.tistory_poster import ...` 모두 동일하게 새 모듈에서 처리.
+## ~~Backward compat shim~~ — **shim 은 이제 없다** (2026-08-08 정정)
+종전 이 절은 `JARVIS02_WRITER/{naver,tistory}_poster.py` 가 import shim 으로 남아 있다고
+설명했으나 **두 파일 모두 존재하지 않는다.** 옛 경로로 import 하는 코드도 0곳이다(실측).
+호출자는 `from JARVIS08_PUBLISH.platforms import naver_poster` 형태로 **직접** 쓴다.
+
+> shim 패턴 자체가 필요해지면 그때 되살릴 것 —
+> `sys.modules[__name__] = _new_module` 로 옛 모듈 객체를 새 모듈로 교체하면
+> 외부 setattr·attribute 접근·`from ... import ...` 가 모두 새 모듈로 간다.
+> 현재 저장소에서 이 패턴을 쓰는 곳은 `shared/llm.py` 와 `JARVIS00_INFRA/harness.py` 다.
 
 ## 경로 anchor 주의
 새 위치의 발행자 모듈은 `JARVIS02_WRITER/` 의 chrome_profile·cookies 등 *물리적 자원* 을 참조해야 함.

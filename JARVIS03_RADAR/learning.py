@@ -23,7 +23,7 @@ from typing import Optional
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
-    from JARVIS07_GUARDIAN.error_collector import report as _g_report
+    from JARVIS03_RADAR.collectors import report_radar as _g_report
 except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────
@@ -304,6 +304,16 @@ def build_target(rows: list, min_signal: int = 20) -> "tuple[np.ndarray, str]":
     return y, "+".join(used)
 
 
+def _drop_unobserved(X: np.ndarray, y: np.ndarray) -> "tuple[np.ndarray, np.ndarray, int]":
+    """build_target() 이 미관측 행에 실어 보내는 NaN 을 제거 — 학습·백테스트 공용 단일 진입점.
+
+    두 호출부(train_weights/run_backtest) 가 각자 필터링하면 한쪽만 고쳐질 때 재발한다
+    (실제로 train_weights 만 필터링하던 사이 run_backtest 가 `Ridge.fit` 에 NaN 을 그대로
+    넘겨 ValueError 로 죽었다)."""
+    keep = ~np.isnan(y)
+    return X[keep], y[keep], int((~keep).sum())
+
+
 def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
     """
     learn_log 에서 (X, y) 학습 → Ridge regression → learned_weights 저장.
@@ -330,9 +340,7 @@ def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
     # ★ 미관측 행 제거 (2026-08-08) — `build_target` 이 관측 안 된 행에 NaN 을 싣는다.
     #   종전엔 0 으로 채워져 "조회수 0" 으로 학습됐고, 그게 네이버 438행(91%)을
     #   통째로 '나쁜 사례' 로 만들어 `trend_score` 계수를 음수로 끌어내렸다.
-    _keep = ~np.isnan(y)
-    _dropped = int((~_keep).sum())
-    X, y = X[_keep], y[_keep]
+    X, y, _dropped = _drop_unobserved(X, y)
     if verbose and _dropped:
         print(f"  · 미관측 {_dropped}행 제외 — 학습 표본 {X.shape[0]}행 (신호={_signal})")
 
@@ -691,10 +699,19 @@ def run_backtest(test_ratio: float = 0.2, verbose: bool = True) -> dict:
     def _xy(rs):
         X = np.array([[r[f] or 0.0 for f in FEATURES] for r in rs], dtype=np.float64)
         y, _ = build_target(rs)   # ★ ERRORS [483] — 학습과 *같은* 정답 정의 사용
+        # ★ 미관측 행(NaN) 제거 — train_weights() 와 동일 필터 (단일 진입점 _drop_unobserved).
+        #   이게 누락돼 있어 Ridge.fit 이 "Input y contains NaN" 으로 죽었다.
+        X, y, _ = _drop_unobserved(X, y)
         return X, y
 
     X_tr, y_tr = _xy(rows[:split])
     X_te, y_te = _xy(rows[split:])
+    # split 은 필터 전 행 수 기준이라, NaN 제거 후 실제 관측 표본이 부족할 수 있다.
+    if X_tr.shape[0] < 10 or X_te.shape[0] < 5:
+        if verbose:
+            print(f"  ⏸  백테스트 보류 — 미관측 제외 후 표본 부족 "
+                  f"(train={X_tr.shape[0]}, test={X_te.shape[0]})")
+        return {"ok": False, "reason": "insufficient observed samples after NaN filter"}
     m = Ridge(alpha=1.0).fit(X_tr, y_tr)
     pred = m.predict(X_te)
 

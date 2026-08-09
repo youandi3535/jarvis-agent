@@ -111,7 +111,7 @@ export default function DbPage() {
                 {["테이블명", "행 수", "오늘 행 수", "마지막 쓰기"].map(h => (
                   <th key={h} style={{
                     textAlign: "left", padding: "8px 12px",
-                    fontSize: 12, color: "var(--c-text5)", fontWeight: 600,
+                    fontSize: 14, color: "var(--c-text5)", fontWeight: 600,
                     borderBottom: "1px solid var(--c-bdr)", whiteSpace: "nowrap",
                   }}>{h}</th>
                 ))}
@@ -160,7 +160,7 @@ export default function DbPage() {
                   {["파일명", "크기", "생성 시각"].map(h => (
                     <th key={h} style={{
                       textAlign: "left", padding: "8px 12px",
-                      fontSize: 12, color: "var(--c-text5)", fontWeight: 600,
+                      fontSize: 14, color: "var(--c-text5)", fontWeight: 600,
                       borderBottom: "1px solid var(--c-bdr)", whiteSpace: "nowrap",
                     }}>{h}</th>
                   ))}

@@ -40,7 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           top: 0, left: 0, bottom: 0,
           zIndex: 100,
         }}>
-          <div style={{ fontSize: 13, fontWeight: 900, color: "var(--c-primary)", letterSpacing: 1, marginBottom: 24, textAlign: "center", lineHeight: 1.3 }}>
+          <div style={{ fontSize: 16, fontWeight: 900, color: "var(--c-primary)", letterSpacing: 1, marginBottom: 24, textAlign: "center", lineHeight: 1.3 }}>
             J<br/>A<br/>I
           </div>
           {NAV.map(n => {
@@ -53,7 +53,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 borderLeft: active ? "3px solid var(--c-primary)" : "3px solid transparent",
               }}>
                 <span style={{ fontSize: 16, color: active ? "var(--c-primary)" : "var(--c-text2)" }}>{n.icon}</span>
-                <span style={{ fontSize: 10, color: active ? "var(--c-primary)" : "var(--c-text2)", marginTop: 3, fontWeight: active ? 700 : 400 }}>{n.label}</span>
+                <span style={{ fontSize: 14, color: active ? "var(--c-primary)" : "var(--c-text2)", marginTop: 3, fontWeight: active ? 700 : 400 }}>{n.label}</span>
               </Link>
             );
           })}

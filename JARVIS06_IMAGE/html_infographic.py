@@ -51,17 +51,6 @@ except ImportError:
     def _g_report(*a, **kw): pass
 
 
-def _wrap_img(b64: str, alt: str) -> str:
-    return (
-        f'<div style="background:white;border-radius:16px;padding:18px 18px 10px;'
-        f'margin:22px 0;box-shadow:0 3px 20px rgba(102,126,234,0.1);'
-        f'border:1px solid #e8ecf0;">'
-        f'<img src="data:image/jpeg;base64,{b64}" '
-        f'style="width:100%;max-width:760px;display:block;margin:0 auto;border-radius:8px;" '
-        f'alt="{alt}"/></div>'
-    )
-
-
 # ══════════════════════════════════════════════════════════════════
 #  1. 동적 HSL 팔레트
 # ══════════════════════════════════════════════════════════════════
@@ -72,59 +61,9 @@ _PALETTE_SEEDS = [
 ]
 
 
-def _dyn_hsl(theme: str, run_id: str) -> tuple[int, int, int]:
-    h16 = hashlib.md5(f"{theme}|{run_id}".encode()).hexdigest()
-    idx = int(h16[:2], 16) % len(_PALETTE_SEEDS)
-    return _PALETTE_SEEDS[idx]
-
-
 # ══════════════════════════════════════════════════════════════════
 #  2. 데이터 포매터
 # ══════════════════════════════════════════════════════════════════
-
-def _fmt_data(data: dict | None) -> str:
-    if not data:
-        return "(데이터 없음 — 주제에 맞는 합리적 수치 사용)"
-    lines: list[str] = []
-    stocks = data.get("stocks") or []
-    if stocks:
-        lines.append("■ 종목 데이터:")
-        for s in stocks[:6]:
-            cap = s.get("cap_억")
-            cap_str = (f"{cap/10000:.1f}조" if cap and cap >= 10000 else f"{cap:,.0f}억") if cap else "N/A"
-            lines.append(
-                f"  {s.get('name','?')}: 시총={cap_str}, PER={s.get('per',0):.1f}배, "
-                f"ROE={s.get('roe',0):.1f}%, 영업이익률={s.get('op_margin',0):.1f}%"
-            )
-    summary = data.get("summary") or {}
-    if summary:
-        lines.append("■ 요약:")
-        for k, v in list(summary.items())[:8]:
-            lines.append(f"  {k}: {v}")
-    trends = data.get("trends") or []
-    if trends:
-        lines.append("■ 시계열:")
-        for t in trends[:5]:
-            lines.append(f"  {t}")
-    kpis = data.get("kpis") or []
-    if kpis:
-        lines.append("■ KPI:")
-        for k in kpis[:8]:
-            lines.append(f"  {k.get('label','?')}: {k.get('value','?')} {k.get('unit','')}")
-    # ★ 2026-06-29: 임의 키도 렌더 (이전엔 stocks/summary/trends/kpis 만 인식 →
-    #   일반 dict 는 "(데이터 없음)" 으로 흘려보내 LLM 이 빈 차트를 그리던 버그)
-    _known = {"stocks", "summary", "trends", "kpis"}
-    for k, v in data.items():
-        if k in _known:
-            continue
-        if isinstance(v, dict):
-            inner = ", ".join(f"{ik}={iv}" for ik, iv in list(v.items())[:14])
-            lines.append(f"■ {k}: {inner}")
-        elif isinstance(v, (list, tuple)):
-            lines.append(f"■ {k}: " + ", ".join(str(x) for x in list(v)[:14]))
-        else:
-            lines.append(f"■ {k}: {v}")
-    return "\n".join(lines) if lines else "(데이터 없음)"
 
 
 # ══════════════════════════════════════════════════════════════════

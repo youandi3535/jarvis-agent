@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
-    from JARVIS07_GUARDIAN.error_collector import report as _g_report
+    from JARVIS03_RADAR.collectors import report_radar as _g_report
 except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────

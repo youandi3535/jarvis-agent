@@ -102,3 +102,6 @@ data/precollect/
 
 # 테스트 캐시 — 산출물이지 소스가 아니다
 .pytest_cache/
+
+# 쿠키 파일 관측 기록 — 런타임 상태 (ERRORS [594]). 기계마다 다르고 비밀은 없다.
+JARVIS08_PUBLISH/credentials/cookie_watch.json*

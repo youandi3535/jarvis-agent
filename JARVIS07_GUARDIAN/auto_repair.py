@@ -367,8 +367,21 @@ def _snapshot_py_files() -> dict[str, str]:
     git repo 가 없어도 동작. 실행 후 파일 내용과 비교하여 변경분 감지.
     대상: .py / .md / .json / .yaml / .yml (절대금지 목록 제외)
     """
-    _DENY_DIRS  = {".venv", "__pycache__", ".git", "chrome_profile", "logs"}
-    _DENY_FILES = {"CLAUDE.md", "BLOG_SUPREME_LAW.md", ".env"}
+    # ★ 보호 목록의 주인은 `error_fixer` 하나다 (2026-08-08, ①).
+    #   종전엔 여기 자체 목록이 있었고 **학습 자산이 빠져 있었다** —
+    #   Tier-2 롤백이 `learned_patterns.json`·`bandit_state.json` 을 되돌릴 수 있었다.
+    #   되돌리면 그날 쌓은 학습이 사라진다(2026-06-08 에 97.8% 소실 이력).
+    try:
+        from JARVIS07_GUARDIAN.error_fixer import deny_dirs as _dd, protected_files as _pf
+        _DENY_DIRS  = set(_dd())
+        _DENY_FILES = set(_pf()) | {"CLAUDE.md", "BLOG_SUPREME_LAW.md", ".env"}
+    except Exception as _de:                       # fail-closed: 못 읽으면 더 넓게 막는다
+        log.warning("[AutoRepair] 보호 목록 파생 실패 — 보수적 기본값 사용: %s", _de)
+        _DENY_DIRS  = {".venv", "__pycache__", ".git", "chrome_profile", "logs",
+                       "shared/backups"}
+        _DENY_FILES = {"CLAUDE.md", "BLOG_SUPREME_LAW.md", ".env",
+                       "JARVIS07_GUARDIAN/learned_patterns.json",
+                       "JARVIS07_GUARDIAN/bandit_state.json"}
     _DENY_EXT   = {".sqlite", ".pkl", ".bak"}
     _INCLUDE_EXT = {".py", ".md", ".json", ".yaml", ".yml"}
     snap: dict[str, str] = {}
@@ -379,10 +392,21 @@ def _snapshot_py_files() -> dict[str, str]:
             continue
         if p.suffix in _DENY_EXT:
             continue
-        if p.name in _DENY_FILES or p.suffix not in _INCLUDE_EXT:
+        if p.suffix not in _INCLUDE_EXT:
             continue
         try:
-            snap[str(p.relative_to(ROOT))] = p.read_text(encoding="utf-8", errors="ignore")
+            _rel = str(p.relative_to(ROOT))
+        except Exception:
+            continue
+        # ★ 파일명이 아니라 **상대 경로** 로 대조한다 (2026-08-08).
+        #   `_DENY_FILES` 는 `JARVIS07_GUARDIAN/learned_patterns.json` 처럼 경로를 담는데
+        #   `p.name` 은 `learned_patterns.json` 뿐이라 **한 건도 안 걸렸다** —
+        #   보호 목록을 파생해 놓고 대조 키가 달라 무력이었다.
+        #   경로 없는 항목(`CLAUDE.md` 등)도 함께 잡히도록 둘 다 본다.
+        if _rel in _DENY_FILES or p.name in _DENY_FILES:
+            continue
+        try:
+            snap[_rel] = p.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             pass
     return snap
@@ -882,6 +906,32 @@ vision_pinned: 0
 
 
 
+
+def _import_broken_files(changed: "dict | None") -> list:
+    """SDK 가 만진 `.py` 중 **import 가 깨진** 파일 목록 — 타입 무관 검증.
+
+    검사 본체는 `error_fixer._import_check`(깨끗한 인터프리터에서 실행) 이다.
+    여기서 새로 만들지 않는다(①). 검사 자체가 실패하면 빈 목록(fail-open) —
+    검증기 고장을 '수정 실패' 로 단정하지 않는다.
+    """
+    if not changed:
+        return []
+    try:
+        from JARVIS07_GUARDIAN.error_fixer import _import_check
+    except Exception as e:
+        log.warning("[AutoRepair/Targeted] import 검사 로드 실패: %s", e)
+        return []
+    bad = []
+    for rel in sorted(changed):
+        if not rel.endswith(".py"):
+            continue
+        try:
+            if not _import_check(ROOT / rel):
+                bad.append(rel)
+        except Exception as e:
+            log.debug("[AutoRepair/Targeted] import 검사 예외(%s): %s", rel, e)
+    return bad
+
 def _verify_sdk_fix(error_record: "dict | None",
                     pre_snapshot: "dict | None") -> "tuple[bool | None, str]":
     """SDK 수정이 **원 오류를 실제로 없앴는지** 판정. 검증의 주인은 error_fixer 다(①).
@@ -910,6 +960,16 @@ def _verify_sdk_fix(error_record: "dict | None",
         verdict, why = verify_fix(error_record, {}, target, before)
         if verdict == VERIFY_REPRODUCES:
             return False, why
+        # ★ 재현 불가(UNVERIFIABLE)여도 **깨뜨리지 않았는지** 는 항상 볼 수 있다
+        #   (2026-08-08 재검증 — 커버리지가 0/158 이었다).
+        #   `verify_fix` 는 원 오류를 다시 일으켜 보는 검사라 대상 타입이 6종뿐인데,
+        #   Tier-2 가 실제로 태우는 건 대부분 `RuntimeError` 다. 그래서 98.9% 가
+        #   **아무 검사 없이** 통과했다. 타입을 억지로 넓히는 대신, 타입과 무관한
+        #   질문 하나를 더 던진다 — "SDK 가 만진 파일이 아직 import 되는가".
+        #   이건 Tier-1 안전박스가 이미 하는 검사다. 새로 만들지 않고 그 함수를 부른다(①).
+        broke = _import_broken_files(changed)
+        if broke:
+            return False, f"SDK 수정 후 import 실패: {', '.join(broke[:3])}"
         if not verdict:
             return None, why or "검증 비활성"
         return True, why

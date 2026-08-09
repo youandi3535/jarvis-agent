@@ -471,11 +471,20 @@ _OWN_NON_CODE_KINDS = frozenset({
     "empty_output",   # LLM 응답 빈값
     "sdk_error",      # SDK 실행 오류 (CLI 미발견·인증 등 운영 사유)
     "timeout",        # LLM/CLI 타임아웃 — 응답이 안 온 것
-    # ★ 2026-08-05 — 발행 회계 kind 2종. 둘 다 *코드로 못 고치는* 사건이다.
+    # ★ 2026-08-05 — 발행 회계 kind. 셋 다 *코드로 못 고치는* 사건이다.
     #   등록하지 않으면 절전 한 번마다 Tier-2 LLM 세션이 열린다
     #   (`PublishGap*` 이 실제로 그렇게 됐다 — 자동수리가 고칠 수 없는 것에 토큰을 태웠다).
     "daemon_down",    # 데몬이 꺼져 있어 슬롯을 통째로 잃음 — 기계 상태이지 코드 결함 아님
     "job_missed",     # grace 를 넘겨 잡이 아예 실행되지 못함 (misfire) — 같은 이유
+    # ★ 2026-08-08 박제 (실측 #5417·#5421) — `daemon_down` 만 등록되고 정작 감사가
+    #   *기본으로* 찍는 `reason="audit"` 쪽 kind(`publish_gap`, `record_publish_gap` 참조)는
+    #   빠져 있었다. 그 결과 감사가 발견한 결손(전원 오프가 아닌 진짜 발행 실패)이 매번
+    #   Tier-2 로 들어가 "수정 실패/롤백" 을 반복 — 과거 슬롯은 코드 패치로 되살아나지 않는다.
+    "publish_gap",    # 발행 완결성 감사가 찾은 결손 — 지난 슬롯이라 코드 수정 대상이 아님
+    # ★ 2026-08-09 — 수집 전멸도 같은 계열이다. 실측 90일 radar 실패 264건 중 **263건이
+    #   DNS 이름풀이 실패**(외부 서비스 장애가 아니라 이 기계의 네트워크가 끊긴 것).
+    #   코드로 고칠 수 없다. 보이긴 해야 하므로 기록은 남기되 Tier-2 세션은 열지 않는다.
+    "trends_empty",   # 이번 회차 수집이 0건 — 외부 네트워크·수집처 상태
 })
 
 # last-known-good 캐시 — *성공한 파생만* 적재한다(실패값을 캐시하면 영구 degrade).
@@ -528,6 +537,58 @@ def _harness_says_infra(kind: str) -> bool:
         return False
 
 
+def _harness_says_envelope(kind: str) -> bool:
+    """봉투 신호 판별을 **harness 에 위임** (2026-08-08).
+
+    ★ 무엇이 봉투인가 — `abort`(재시도 접음)·`stuck`(워치독 freeze)은 *근본 원인이
+      아니라* harness 가 포기했다는 신고다. 진짜 원인은 같은 보고에 동봉된 다른
+      issue 에 있고, 그것들은 각자 자기 kind 로 따로 보고된다.
+      실측 90일: `abort` 86건·`stuck` 24건 → 자동수리가 만든 **실제 파일 수정 0건**.
+      봉투를 Tier-2 로 보내면 "수정 불가 3건 패턴 반복" 같은 *코드 위치가 아닌 문장* 을
+      LLM 에게 고치라고 시키는 셈이다 — 토큰만 태우고 아무것도 안 고친다.
+      가시성은 유지된다: `ignored` 도 DB 에 남고 격리 버킷 보고에 그대로 뜬다.
+      판별식을 여기 복제하면 그게 곧 사본이므로 **주인에게 묻는다**(`_harness_says_infra` 와 동형).
+    지연 import 이유는 `_harness_infra_kinds()` 와 동일(재진입 창 회피). 실패 시 False.
+    """
+    try:
+        from JARVIS00_INFRA.harness import is_envelope_kind  # noqa: PLC0415 (의도된 지연)
+        return bool(is_envelope_kind(kind))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# last-known-good 캐시 — `_harness_infra_kinds()` 와 동일 원칙(성공값만 적재).
+_NAVER_CAPTCHA_TYPES_CACHE: frozenset = frozenset()
+
+
+def _naver_login_human_required_types() -> frozenset:
+    """네이버 로그인 실패 타입 중 *사람이 CAPTCHA 를 풀어야* 사라지는 것만 — 코드 수정 불가.
+
+    ★ 왜 생겼나 (2026-08-09, `_naver_cookie_ready` 사고 대응) — 무인 실행 중 CAPTCHA 를
+      만나면 `NaverLoginCaptchaUnattended`/`NaverLoginCaptchaTimeout` 으로 보고되는데
+      (`naver_cookie_refresher.naver_login_error_type`), 이 타입은 표준 파이썬 예외명이
+      아니라 `_TRANSIENT_TYPES`·`CODE_BUG_TYPES` 어디에도 안 걸려 **기본값으로 코드
+      버그 취급**됐다 — GUARDIAN 이 사람만 풀 수 있는 CAPTCHA 를 Tier-2 LLM 으로
+      "고치려" 세션을 태우는 낭비가 반복될 자리였다(패턴은 ERRORS [387][413][414]와 동형).
+    ★ 단일 진실 소스는 `naver_cookie_refresher.CAPTCHA_REASONS` — "어떤 사유가 CAPTCHA 인가"
+      는 로그인 도메인이 안다. 여기서는 그 사유 목록을 타입 문자열로만 변환한다(② 동적 설계,
+      credentials_missing·login_button_click 같은 *진짜 결함일 수 있는* 사유는 여기 안 들어옴).
+    ★ 지연 import + fail-open 캐시는 `_harness_infra_kinds()` 와 동일 원칙(순환·부분초기화
+      재진입 회피, 파생 실패가 severity 자체를 죽이지 않게).
+    """
+    global _NAVER_CAPTCHA_TYPES_CACHE
+    try:
+        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+            CAPTCHA_REASONS, naver_login_error_type)
+        got = frozenset(naver_login_error_type(r) for r in CAPTCHA_REASONS)
+        if got:
+            _NAVER_CAPTCHA_TYPES_CACHE = got
+            return got
+    except Exception:  # noqa: BLE001 — 파생 실패가 severity 를 죽이면 안 된다
+        pass
+    return _NAVER_CAPTCHA_TYPES_CACHE
+
+
 def _env_extra_kinds() -> frozenset:
     """무배포 안전밸브 — `GUARDIAN_EXTRA_NON_CODE_KINDS=a,b` 로 kind 추가(호출 시점 조회).
 
@@ -570,8 +631,35 @@ def kind_of(record: dict) -> str:
     return ""
 
 
+def companions_of(record: dict):
+    """이 봉투 보고와 **함께 실린 실이슈 수** — context 단일 경로. 없으면 None(=모름).
+
+    ★ 왜 필요한가 (2026-08-08 적대적 검증)
+      `abort`·`stuck` 을 "근본 원인은 따로 보고된다" 는 이유로 Tier-2 에서 뺐는데,
+      그 전제가 두 경우에 거짓이었다 — ① `stuck` 은 예외가 없어 동봉될 이슈가 아예
+      없다(실측 24건 중 13건이 단독 보고) ② 누적 abort 가 시도 1 에 터지면 그 시도의
+      unfixed 가 아직 미보고다(NameError 20건이 통째로 사라지는 경로였다).
+      kind 로는 이 구분이 안 된다. harness 가 싣는 **사실** 로 판단한다(원칙②).
+    """
+    if not isinstance(record, dict):
+        return None
+    ctx = record.get("context")
+    if isinstance(ctx, str):
+        try:
+            import json as _json
+            ctx = _json.loads(ctx)
+        except Exception:
+            return None
+    if isinstance(ctx, dict) and "companions" in ctx:
+        try:
+            return int(ctx.get("companions") or 0)
+        except Exception:
+            return None
+    return None
+
+
 def is_transient(error_type: str, message: str = "", source: str = "",
-                 kind: str = "") -> bool:
+                 kind: str = "", companions=None) -> bool:
     """일시적·외부·제어흐름 오류 여부 — True 면 자동수정 비대상(ignored 처리).
 
     ★★ 판단 순서와 그 근거 (2026-07-25 감사로 재정비 — 순서 자체가 정책이다)
@@ -620,6 +708,12 @@ def is_transient(error_type: str, message: str = "", source: str = "",
     if et in _TRANSIENT_TYPES or _short_type(et) in _TRANSIENT_TYPES:
         return True
 
+    # 4-A) ★ 네이버 로그인 CAPTCHA — 사람이 화면 앞에서 풀어야 사라진다(코드 수정 불가).
+    #   `NaverLoginCaptchaUnattended`/`NaverLoginCaptchaTimeout` 만 해당 — 나머지 로그인
+    #   실패 타입(NaverLoginCredentialsMissing 등)은 진짜 결함일 수 있어 그대로 Tier-2 유지.
+    if et in _naver_login_human_required_types():
+        return True
+
     # 4-B) ★ 결함 2 가드 (2026-08-08 감사) — **kind 선언을 메시지 문구가 뒤집지 못한다**
     #
     #   이 파일은 `_OWN_NON_CODE_KINDS` 주석에 stuck·abort·execution_error·
@@ -640,6 +734,15 @@ def is_transient(error_type: str, message: str = "", source: str = "",
     #   말한 것이므로 문구가 뒤집을 수 없다.
     #   ※ kind 가 *비어 있는* 비-harness 경로는 종전대로 5)로 간다.
     #   킬스위치 `GUARDIAN_KIND_OVERRIDE_GUARD=0` → 종전 동작 복귀.
+    #   ※ 단, **봉투 신호**(`abort`·`stuck`)는 예외 — 생산자가 "코드 문제다" 라고 말한
+    #     게 아니라 "포기했다" 고 말한 것이다. 근본 원인은 동봉된 다른 issue 가 각자
+    #     자기 kind 로 따로 보고한다. 실측 90일 실제 파일 수정 **0건**(2026-08-08).
+    if _harness_says_envelope(kind):
+        # ★ 봉투는 *동봉된 실이슈가 있을 때만* 중복이다 (2026-08-08 적대적 검증).
+        #   `companions` 를 안 받았거나 0 이면 이 보고가 **유일한 신호** 이므로 삼키지
+        #   않는다(fail-closed). 종전엔 kind 만 보고 무조건 격리해서, 워치독 freeze 와
+        #   시도 1 누적 abort 의 실이슈가 아무 데도 안 갔다.
+        return bool(companions)
     if _flag("GUARDIAN_KIND_OVERRIDE_GUARD", True) and (kind or "").strip():
         return False
 

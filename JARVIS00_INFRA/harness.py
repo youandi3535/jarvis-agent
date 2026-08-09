@@ -475,6 +475,15 @@ def _report_issues_to_guardian(action_name: str, attempt: int, issues: list[Issu
                 # ★ 원인 타입을 *구조화 필드* 로도 보존 — 메시지 정규식으로 되캐지 않게 한다.
                 "cause_type": issue.cause_type,
                 "harness_wrapped": True,
+                # ★ 봉투 신호의 **동봉 실이슈 수** (2026-08-08 적대적 검증에서 발각).
+                #   `abort`·`stuck` 을 "근본 원인은 따로 보고된다" 는 이유로 Tier-2 에서
+                #   빼 놨는데, 그 전제가 두 경우에 **거짓** 이었다:
+                #     · `stuck`(워치독 freeze/데드라인) — 예외가 없어 동봉될 이슈 자체가 없다.
+                #       실측 24건 중 13건(54%)이 ±15분 내 다른 harness 보고 0건.
+                #     · 누적 abort 가 시도 1 에 터지면 그 시도의 unfixed 가 아직 미보고다.
+                #   kind 로 판단하면 이 구분이 안 된다 — **사실을 싣는다**(원칙②).
+                #   0 이면 이 봉투가 *유일한 신호* 이므로 하류가 삼키면 안 된다.
+                "companions": max(0, len(issues) - 1),
             }
             _cause = issue.cause if _preserve else None
             if _cause is not None:
@@ -738,6 +747,55 @@ def _is_infra_issue(iss: Issue) -> bool:
     return is_infra_kind(iss.kind)
 
 
+ENVELOPE_STEP = "전체"          # ★ 봉투 신호의 step — 특정 step 실패가 아니라 '전체' 포기
+
+_ENVELOPE_KINDS_CACHE: frozenset = frozenset()
+
+
+def envelope_kinds() -> frozenset:
+    """harness 가 **'포기했다' 고 말하는** kind 집합 — 자기 소스에서 파생.
+
+    ★ 왜 목록을 박지 않는가 (2026-08-08) — `abort`·`stuck` 은 *근본 원인이 아니라*
+      harness 가 재시도를 접었다는 **봉투**다. 진짜 원인은 같은 보고에 동봉된 다른
+      issue 에 들어 있다. 실측 90일: `abort` 86건·`stuck` 24건 → 자동수리가 만든
+      **실제 파일 수정 0건**. 봉투를 Tier-2 LLM 에 보내면 "수정 불가 3건 패턴 반복"
+      같은 *코드 위치가 아닌 문장* 을 고치라고 시키는 셈이다.
+      목록을 박으면 새 봉투 kind 가 생길 때 조용히 Tier-2 로 샌다 —
+      그래서 `Issue(step=ENVELOPE_STEP, kind=...)` 호출부를 AST 로 훑어 파생한다.
+      새 봉투를 만들면 **자동으로** 포함된다(원칙②).
+    """
+    global _ENVELOPE_KINDS_CACHE
+    if _ENVELOPE_KINDS_CACHE:
+        return _ENVELOPE_KINDS_CACHE
+    import ast as _ast
+    import inspect as _inspect
+    import sys as _sys
+    found: set[str] = set()
+    try:
+        # 파일 경로를 직접 열지 않는다 — `_safe_path` 우회로 보이는 형태를 만들지 않기 위해
+        # 이미 로드된 자기 모듈에서 소스를 얻는다(같은 결과, 안전 박스와 충돌 없음).
+        tree = _ast.parse(_inspect.getsource(_sys.modules[__name__]))
+        for node in _ast.walk(tree):
+            if not (isinstance(node, _ast.Call)
+                    and getattr(node.func, "id", "") == "Issue"):
+                continue
+            kw = {k.arg: k.value for k in node.keywords}
+            step, kind = kw.get("step"), kw.get("kind")
+            if (isinstance(step, _ast.Name) and step.id == "ENVELOPE_STEP"
+                    and isinstance(kind, _ast.Constant) and isinstance(kind.value, str)):
+                found.add(kind.value)
+    except Exception as e:                       # fail-closed: 빈 집합 = 종전 동작
+        _log.warning(f"[harness] 봉투 kind 파생 실패 — 종전 동작 유지: {e}")
+        return frozenset()
+    _ENVELOPE_KINDS_CACHE = frozenset(found)     # 성공한 파생만 캐시
+    return _ENVELOPE_KINDS_CACHE
+
+
+def is_envelope_kind(kind: str) -> bool:
+    """이 kind 가 봉투 신호인가 — **판별의 단일 진입점**."""
+    return bool(kind) and str(kind).strip() in envelope_kinds()
+
+
 def is_infra_kind(kind: str) -> bool:
     """이 kind 가 '인프라 미완결' 계열인가 — **판별의 단일 진입점**.
 
@@ -929,7 +987,7 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
     #   중단 = 검증 순환 밖 강제 종료 → escalation(송출 절대 안 함) + GUARDIAN 원인 진단.
     def _on_stuck(name: str, reason: str) -> None:
         try:
-            iss = [Issue(step="전체", kind="stuck", detail=reason)]
+            iss = [Issue(step=ENVELOPE_STEP, kind="stuck", detail=reason)]
             # 원인 진단은 killable 여부와 무관하게 항상 GUARDIAN 에 박제(가시성 유지 —
             # 반복 freeze 는 진짜 성능결함일 수 있음, 사용자 박제 2026-07-22).
             _report_issues_to_guardian(name, result.attempts, iss)
@@ -962,7 +1020,7 @@ def run_action(action_def: ActionDefinition, input_data: Optional[dict] = None) 
         reason = str(_se)
         _log.error(f"[harness] ⏱ 정지 감지 — {action_def.name}: {reason} (송출 안 함)")
         # ★ 결함1: StuckError 원 타입 보존 (detail 은 종전 문구 유지 — fingerprint 불변)
-        iss = [Issue(step="전체", kind="stuck", detail=reason, cause=_se)]
+        iss = [Issue(step=ENVELOPE_STEP, kind="stuck", detail=reason, cause=_se)]
         result.issues_history.append(iss)
         result.escalation_reason = reason
         try:
@@ -1216,7 +1274,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
 
         if _prev_fp is not None and _curr_fp and _curr_fp == _prev_fp:
             _abort = Issue(
-                step="전체", kind="abort",
+                step=ENVELOPE_STEP, kind="abort",
                 detail=(
                     f"수정 불가 {len(unfixed_issues)}건 패턴 반복 — "
                     f"재생성해도 동일 결과 예상 (attempt={attempt})"
@@ -1233,7 +1291,11 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             # ★ 남은 것이 품질점수뿐이면 최선 대본을 내보낸다 (2026-08-04 감사 1위)
             if _try_best_so_far(action_def, state, result, unfixed_issues, "지문반복"):
                 return result
-            _report_issues_to_guardian(action_def.name, attempt, [_abort], action_def.max_attempts)
+            # ★ 봉투만 보내지 않는다 (2026-08-08) — 종전엔 `[_abort]` 만 보내서,
+            #   누적 abort 가 시도 1 에 터지면 그 시도의 실이슈(예: NameError 20건)가
+            #   **통째로 사라졌다**. 실이슈를 함께 실어야 봉투가 비로소 *요약* 이 된다.
+            _report_issues_to_guardian(action_def.name, attempt,
+                                       unfixed_issues + [_abort], action_def.max_attempts)
             _notify_escalation(
                 action_def.name, attempt, all_issues,
                 reason=result.escalation_reason,
@@ -1244,7 +1306,7 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
         # P2-⑧ — 누적 issue 가 임계치 초과 시 abort (fingerprint 변동만 시키는 위장 회피 차단)
         if _cumulative > _cum_threshold:
             _abort = Issue(
-                step="전체", kind="abort",
+                step=ENVELOPE_STEP, kind="abort",
                 detail=(
                     f"누적 issue {_cumulative}건 ≥ 임계 {_cum_threshold} — "
                     f"fingerprint 변동만 반복 의심, abort (attempt={attempt})"
@@ -1258,7 +1320,11 @@ def _run_action_locked(action_def: ActionDefinition, state: dict,
             # ★ 남은 것이 품질점수뿐이면 최선 대본을 내보낸다 (2026-08-04 감사 1위)
             if _try_best_so_far(action_def, state, result, unfixed_issues, "누적초과"):
                 return result
-            _report_issues_to_guardian(action_def.name, attempt, [_abort], action_def.max_attempts)
+            # ★ 봉투만 보내지 않는다 (2026-08-08) — 종전엔 `[_abort]` 만 보내서,
+            #   누적 abort 가 시도 1 에 터지면 그 시도의 실이슈(예: NameError 20건)가
+            #   **통째로 사라졌다**. 실이슈를 함께 실어야 봉투가 비로소 *요약* 이 된다.
+            _report_issues_to_guardian(action_def.name, attempt,
+                                       unfixed_issues + [_abort], action_def.max_attempts)
             _notify_escalation(
                 action_def.name, attempt, all_issues,
                 reason=result.escalation_reason,

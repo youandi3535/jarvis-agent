@@ -1892,6 +1892,78 @@ def check_symmetry(report: Report) -> None:
     report.checks_run += 3
 
 
+def check_dashboard(report: Report) -> None:
+    """대시보드 글자 크기·색상 규정 (CLAUDE.md '웹 대시보드 폰트/색상 규정').
+
+    ★ 왜 이 검사가 이제야 생겼나 (2026-08-08 — ERRORS [589])
+      규정은 오래전부터 있었지만 **검증 명령이 `app.py` 를 겨눴다.** 그 파일은 Streamlit
+      대시보드와 함께 커밋 `0be08d9` 에서 삭제됐다. 대상이 없으니 grep 은 늘 "위반 0" 이었고,
+      규정은 *한 번도 집행되지 않은 채* 살아있는 Next.js 대시보드에 94곳이 쌓였다.
+      **규정의 대상이 사라지면 규정은 조용히 죽는다** — 그래서 사람 손이 아니라 여기에 건다.
+
+    ★ 대상을 목록으로 박지 않는다(②) — `dashboard/` 의 추적 파일에서 파생한다.
+      새 페이지를 만들면 자동으로 검사 대상이 된다.
+    """
+    cat = "dashboard"
+    root = ROOT / "dashboard"
+    if not root.is_dir():
+        # fail-closed — 대상 폴더가 사라졌으면 '통과' 가 아니라 '검사 무력화' 다.
+        # 종전 규정이 정확히 이 방식으로 죽었다.
+        report.add(Violation(cat, "dashboard/self-check", "dashboard/", 0,
+                             "대시보드 폴더를 찾지 못함 — 규정 대상이 바뀌었으면 CLAUDE.md 를 함께 고칠 것"))
+        return
+
+    # ★ git 에 의존하지 않는다 (2026-08-09 정정) — 초판은 `git ls-files` 로 대상을 파생했다.
+    #   `.git` 이 없는 트리(배포 아카이브·CI 모사·워크트리 밖 복사본)에서 목록이 0개가 되고,
+    #   fail-closed 규칙이 **거짓 위반**을 낸다. 실측: `git archive HEAD` 로 만든 트리에서
+    #   "검사할 파일이 0개" 위반이 떴다. 거짓 위반은 진짜 위반만큼 게이트를 망친다 —
+    #   사람이 검사를 무시하게 만들기 때문이다. 파일 계통에서 직접 훑는다.
+    _SKIP = ("node_modules", ".next", "dist", "build", ".turbo")
+    files = []
+    for q in root.rglob("*"):
+        if not q.is_file() or q.suffix not in (".tsx", ".ts", ".css"):
+            continue
+        if any(part in _SKIP for part in q.relative_to(ROOT).parts):
+            continue
+        files.append(str(q.relative_to(ROOT)))
+    files.sort()
+    if not files:
+        report.add(Violation(cat, "dashboard/self-check", "dashboard/", 0,
+                             "검사할 파일이 0개 — 확장자 규칙이 낡았는지 확인할 것"))
+        return
+
+    size_re = re.compile(r'(?:fontSize:\s*|font-size:\s*)(\d+(?:\.\d+)?)')
+    hex_re = re.compile(r'#[0-9a-fA-F]{6}\b')
+    for rel in files:
+        text = _read_py(ROOT / rel)
+        if text is None:
+            try:
+                text = (ROOT / rel).read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if "precommit" in line or "eslint-disable" in line:
+                continue
+            for m in size_re.finditer(line):
+                v = float(m.group(1))
+                if v < 14:
+                    report.add(Violation(cat, "dashboard/font-too-small", rel, i,
+                                         f"{m.group(0)} — 최소 14px (CLAUDE.md 폰트 규정)"))
+                elif v != int(v) or int(v) % 2:
+                    report.add(Violation(cat, "dashboard/font-odd", rel, i,
+                                         f"{m.group(0)} — 짝수만 허용"))
+            # 색: globals.css 는 토큰 *정의처* 라 면제. 차트 시리즈 색은 주석으로 사유를 밝힌 줄만 면제.
+            if rel.endswith("globals.css"):
+                continue
+            if hex_re.search(line) and "//" not in line and "차트" not in line:
+                report.add(Violation(cat, "dashboard/inline-hex", rel, i,
+                                     f"{hex_re.search(line).group(0)} — `var(--c-*)` 토큰 사용"))
+    report.checks_run += 1
+
+
+CATEGORIES["dashboard"] = check_dashboard
+
+
 CATEGORIES["symmetry"] = check_symmetry
 
 

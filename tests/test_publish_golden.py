@@ -474,41 +474,44 @@ def test_결손조회가_글종류를_구분한다():
     assert "post_type = ?" in src, "SQL 에 글종류 조건이 없다"
 
 
-def test_감사는_발행락을_지우지_않는다():
+def test_감사는_발행락을_지우지_않는다(tmp_path):
     """★ 감시는 대상을 건드리지 않는다.
 
     종전 `publishing_in_progress()` 는 `scheduler._is_locked_externally()` 를 불렀는데
     그 함수는 3시간 넘은 락 파일을 **unlink 한다**. 실측 최대 발행 지연 4.1시간 —
     즉 감사 잡이 도는 것만으로 살아 있는 발행 락이 지워질 수 있었다.
-    """
-    import ast
-    import inspect
-    import textwrap
 
+    ★ 실행 검증으로 바꿨다 (2026-08-08) — 종전 검사는 `before = LOCK_FILE.exists()` 로
+      *지금 상태* 만 보고 비교해서, 락이 없는 평시엔 **아무것도 검증하지 않았다**
+      (없음 → 없음 = 통과). 위험한 것은 *오래된* 락이므로 그걸 직접 만들어 본다.
+      운영 락을 건드리지 않도록 **임시 경로로 갈아끼운 뒤** 잰다.
+    """
+    import os
+    import time
+
+    from JARVIS02_WRITER import scheduler as _sch
     from JARVIS08_PUBLISH.publish_ledger import publishing_in_progress
 
-    # ★ 소스 텍스트가 아니라 **AST** 로 본다 — 주석·독스트링에 적힌 함수 이름을
-    #   호출로 오인하면(초판이 그랬다) 테스트가 스스로 거짓 실패한다.
-    tree = ast.parse(textwrap.dedent(inspect.getsource(publishing_in_progress)))
-    imported = {
-        alias.name
-        for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
-        for alias in node.names
-    }
-    called = {
-        node.func.id for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert "_is_locked_externally" not in imported | called, (
-        "감사가 락을 *삭제하는* 함수를 부른다 — read-only 조회여야 한다"
-    )
-    attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
-    assert "exists" in attrs, "락 존재 여부 조회가 아니다"
-    # 실제로 호출해도 락 파일이 사라지지 않는가
-    from JARVIS02_WRITER.scheduler import LOCK_FILE
-    before = LOCK_FILE.exists()
-    publishing_in_progress()
-    assert LOCK_FILE.exists() == before, "조회가 락 파일 상태를 바꿨다"
+    # ★ 운영 `logs/` 가 아니라 **임시 경로** 로 (2026-08-09) — 데몬이 같은 폴더를 쓰고,
+    #   그 폴더는 `.gitignore` 대상이라 잔여물이 `git status` 로도 안 보인다.
+    _orig = _sch.LOCK_FILE
+    tmp = tmp_path / "_probe_publish.lock"
+    _sch.LOCK_FILE = tmp
+    try:
+        stale = time.time() - (_sch.publish_lock_stale_sec() + 3600)
+        tmp.write_text("probe", encoding="utf-8")
+        os.utime(tmp, (stale, stale))
+        assert publishing_in_progress() in (True, False)   # 판정값은 정책 소관
+        assert tmp.exists(), "오래된 락을 조회가 **삭제했다** — 감시가 대상을 건드린다"
+
+        # 갓 만든 락은 '진행 중' 이어야 한다 (과잉 관용 방지)
+        tmp.write_text("probe", encoding="utf-8")
+        assert publishing_in_progress() is True, "살아 있는 락을 진행 중으로 안 본다"
+        assert tmp.exists(), "조회가 락을 삭제했다"
+    finally:
+        _sch.LOCK_FILE = _orig
+        tmp.unlink(missing_ok=True)
+    assert _sch.LOCK_FILE is _orig, "락 경로 복원 실패"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -660,17 +663,56 @@ def test_쿠키_저장이_단일진입점이고_권한을_고정한다():
 
 
 def test_시크릿_파일_권한이_소유자전용():
-    """쿠키는 비밀번호와 같다 — 있으면 로그인 없이 그 계정이 된다."""
+    """쿠키는 비밀번호와 같다 — 있으면 로그인 없이 그 계정이 된다.
+
+    ★ 세 가지를 고쳤다 (2026-08-08)
+      ① 대상 목록을 **박지 않는다** — `secrets.secret_files()` 가 주인이다.
+        종전엔 `.env` 와 쿠키 두 개를 손으로 적어 두어, 새 비밀 파일이 생겨도 모른 채
+        통과했다(실측 목록은 3개 — `JARVIS08_PUBLISH/credentials` 가 빠져 있었다).
+      ② **아무것도 검사 안 하고 통과하지 않는다** — 하나도 없으면 명시적 skip.
+        통과와 미검사는 다른 사건이다.
+      ③ 디렉터리는 *안에 든 것* 으로 판단한다 — 체크아웃의 `credentials/` 는 0755 지만
+        추적 파일(소스)만 들어 있어 비밀이 아니다. **git 이 추적하지 않는 파일** 이
+        실제 비밀이다(쿠키·토큰은 전부 .gitignore 대상).
+    """
     import stat
+    import subprocess
     from pathlib import Path
 
-    root = Path(__file__).resolve().parent.parent
-    for rel in (".env", "JARVIS02_WRITER/naver_cookies.pkl"):
-        f = root / rel
-        if not f.exists():
-            continue
-        mode = stat.S_IMODE(f.stat().st_mode)
-        assert mode & 0o077 == 0, f"{rel} 권한 {oct(mode)} — 소유자 외 접근 가능"
+    import pytest
+
+    from shared.secrets import secret_files
+
+    tracked = set(subprocess.run(
+        ["git", "ls-files"], cwd=str(_ROOT), capture_output=True, text=True
+    ).stdout.split())
+    if not tracked:
+        # git 저장소가 아니면 '추적됨/아님' 을 가를 수 없다 → 전부 비밀로 오판한다.
+        # 모른다는 것을 통과로도 실패로도 바꾸지 않는다.
+        pytest.skip("git 추적 목록을 읽을 수 없다 — 비밀 파일 판별 불가")
+
+    def _is_secret_file(path: Path) -> bool:
+        # `__pycache__` 는 추적되지 않지만 *추적 소스의 컴파일 산출물* 이라 비밀이 아니다.
+        if "__pycache__" in path.parts or path.suffix == ".pyc":
+            return False
+        try:
+            return path.is_file() and str(path.relative_to(_ROOT)) not in tracked
+        except ValueError:
+            return path.is_file()
+
+    targets = []
+    for f in sorted(secret_files()):
+        path = Path(f)
+        if path.is_dir():
+            targets += [q for q in sorted(path.rglob("*")) if _is_secret_file(q)]
+        elif _is_secret_file(path):
+            targets.append(path)
+
+    for path in targets:
+        mode = stat.S_IMODE(path.stat().st_mode)
+        assert mode & 0o077 == 0, f"{path} 권한 {oct(mode)} — 소유자 외 접근 가능"
+    if not targets:
+        pytest.skip("비밀 파일이 하나도 없다(체크아웃 환경) — 권한 검사 불가")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -876,21 +918,71 @@ def test_골격_플레이스홀더가_모두_치환된다():
 def test_시크릿모듈이_env를_스스로_적재한다():
     """★ 가릴 값이 0이면 `mask()` 는 *아무 것도 안 가리면서 성공* 한다 (조용한 fail-open).
 
-    실측: `.venv/bin/python -c "from shared.secrets import ..."` 로 부르면 0개였다.
-    호출자의 import 순서에 기대면 언젠가 반드시 어긋난다.
-    """
-    from shared.secrets import secret_values
+    ★ 검사를 **별도 프로세스 + `.env` 대조** 로 바꿨다 (2026-08-08)
+      종전은 `len(secret_values()) > 0` 하나였다. 그건 `.env` 가 *있는* 환경에서만
+      의미가 있어 CI 체크아웃에선 0이라 실패해야 하는데, 전체 실행에선 **앞선 테스트가
+      먼저 `shared.llm` 을 import 해** 환경변수를 채우는 바람에 초록이 됐다
+      (실측: 단독 실행 FAIL / 전체 실행 PASS — 순서 의존).
+      정작 지키려던 성질은 "호출자의 import 순서에 기대지 않는다" 다.
+      → 아무것도 먼저 import 하지 않은 **별도 프로세스** 에서 `.env` 의 비밀 키가
+        **전부** 잡히는지 본다.
 
-    assert len(secret_values()) > 0, "시크릿 0개 — .env 자가 적재가 깨졌다"
+    ※ 개수 동일 비교는 쓰지 않는다 — `shared/llm.py` 가 `ANTHROPIC_API_KEY` 를
+      `setdefault` 로 넣는 것처럼 *다른 모듈이 환경변수를 더하는 것은 정상* 이고,
+      그건 `.env` 자가 적재와 무관하다. 기준은 **`.env` 에 실린 것** 이다.
+    """
+    import re
+    import subprocess
+    import sys
+
+    import pytest
+
+    from shared.secrets import _SECRET_KEY_RE   # 비밀 판별 규칙의 주인
+
+    env_file = _ROOT / ".env"
+    if not env_file.exists():
+        pytest.skip(".env 가 없다(체크아웃 환경) — 자가 적재를 잴 수 없다")
+
+    want = set()
+    for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+        m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line)
+        if m and _SECRET_KEY_RE.search(m.group(1)) and len(m.group(2).strip().strip("'\"")) >= 12:
+            want.add(m.group(1))
+    if not want:
+        pytest.skip(".env 에 비밀 키가 없다 — 잴 대상이 없다")
+
+    # ★ 부모 환경을 **물려주지 않는다** (2026-08-08 — 뮤테이션에서 발각).
+    #   `subprocess.run` 은 기본으로 `os.environ` 을 상속한다. pytest 프로세스는 이미
+    #   `.env` 를 적재한 상태라, 자식은 *스스로 적재하지 않아도* 값을 보게 된다 —
+    #   자가 적재를 지워도 초록이었다. 잴 대상을 지운 환경에서만 의미가 있다.
+    import os
+    child_env = {k: v for k, v in os.environ.items() if k not in want}
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "from shared.secrets import secret_values; "
+         "print(','.join(k for k, _ in secret_values()))"],
+        cwd=str(_ROOT), env=child_env, capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, f"프로브 실패: {out.stderr[-300:]}"
+    got = set(out.stdout.strip().split(",")) - {""}
+
+    missing = want - got
+    assert not missing, (
+        f".env 의 비밀 {len(missing)}개가 단독 import 로는 안 잡힌다 — "
+        f"자가 적재가 깨졌고 호출자 import 순서에 기대고 있다: {sorted(missing)[:5]}")
 
 
 def test_마스킹이_실제로_먹는다():
     """설치 플래그가 아니라 *동작* 으로 확인 (CLAUDE.md patch_effective 표준)."""
+    import pytest
+
     from shared.secrets import install_log_masking, mask, secret_values
 
     info = install_log_masking()
     assert info["effective"] is True, f"필터가 안 먹는다: {info}"
-    _k, v = secret_values()[0]
+    vals = secret_values()
+    if not vals:
+        pytest.skip("시크릿 0개(체크아웃 환경) — 가릴 대상이 없다")
+    _k, v = vals[0]
     assert v not in mask(f"GET https://api/x?key={v}"), "평문이 그대로 통과"
 
 
@@ -1509,6 +1601,35 @@ def test_결손_박제가_단일_진입점이다():
     assert "gap_already_recorded" in rec, "중복 억제가 없다"
     assert "severity =" not in rec, "report() 에 없는 severity 인자를 넘긴다 (TypeError)"
     assert '"kind"' in rec, "kind 를 안 넣으면 Tier-2 LLM 이 헛돈다"
+
+
+def test_한_슬롯_두_플랫폼_결손이_둘_다_박제된다():
+    """★ 실측 2026-08-08 21:00 테마: naver·tistory 동시 결손인데 naver 만 박제됐다.
+
+    `slot_key` 는 플랫폼을 담지 않는다 — 첫 플랫폼을 기록하면 그 error_log 행의
+    context 에 슬롯 키가 남고, 같은 루프의 다음 플랫폼이 그 슬롯 키로
+    '이미 기록됨' 을 오판해 조용히 스킵되던 결함(record_publish_gap 참조).
+    ★ report() 를 흉내내지 않고 실제로 호출한다 — 가짜 report 는 DB 에 아무것도
+      안 남겨 `gap_already_recorded` 의 DB 조회가 항상 False 가 되므로, dedup 키에
+      플랫폼이 빠진 결함을 이 테스트가 못 잡는다(mock 이 검증 대상 자체를 무력화).
+      conftest 가 DB 를 임시 경로로 격리하므로 운영 DB 오염 없이 실기록으로 검증한다.
+    """
+    import datetime as dt
+
+    from shared.db import get_db
+    from JARVIS08_PUBLISH import publish_ledger as L
+
+    start = dt.datetime(2026, 8, 8, 21, 0)
+    end = dt.datetime(2026, 8, 9, 7, 0)
+    first = L.record_publish_gap("theme", "naver", start, end)
+    second = L.record_publish_gap("theme", "tistory", start, end)
+
+    assert first and second, "같은 슬롯의 서로 다른 플랫폼 결손은 둘 다 박제돼야 한다"
+    with get_db() as con:
+        rows = con.execute(
+            "SELECT error_type FROM error_log WHERE error_type LIKE 'PublishGapTheme%' "
+            "AND context LIKE '%2026-08-08T21:00%'").fetchall()
+    assert {r[0] for r in rows} == {"PublishGapThemeNaver", "PublishGapThemeTistory"}
 
 
 def test_복구정책A_재발행을_권하지_않는다():
@@ -3058,53 +3179,46 @@ def test_회차_판정이_테이블_최신행이_아니라_이번_회차를_본�
     assert _ga._repair_returncode_since(_ga._repair_watermark()) is None
 
 
-def test_트렌드검증이_정적시드에_속지_않는다():
+def test_트렌드검증이_정적시드에_속지_않는다(tmp_path, monkeypatch):
     """★ 시드가 `trending` 을 채우면 `scored_keywords` 는 30개가 되지만 하류는 굶는다.
 
     실측 07-28·07-31·08-01·08-02 — combined=0 인데 scored=30 이라 검증이 통과했고
     topic_pack 이 안 만들어져 **글 10편이 조용히 유실**됐다.
     검증 대상은 하류(`topic_pack._candidates`)가 실제로 먹는 필드여야 한다.
+
+    ★ 데이터 디렉터리를 **임시 경로로 갈아끼운다** (2026-08-09 2차 적대적 검증)
+      종전엔 운영 `JARVIS03_RADAR/data/trends_<오늘>.json` 을 가짜 판(`combined:[]`)으로
+      덮었다가 `finally` 로 복원했다. 바이트는 같게 돌아오지만 **그 사이 데몬이 같은
+      파일을 읽는다**(발행·팩 빌드가 이 판을 먹는다). `.gitignore` 대상이라
+      `git status` 로도 안 보여 사고가 나도 흔적이 없다. 운영 파일은 건드리지 않는다.
     """
     import datetime as dt
     import json
 
+    from JARVIS03_RADAR import jobs as _jobs
     from JARVIS03_RADAR.jobs import _verify_trends
     from JARVIS03_RADAR.topic_pack import _candidates
 
-    root = _ROOT / "JARVIS03_RADAR" / "data"
+    (tmp_path / "data").mkdir()
+    monkeypatch.setattr(_jobs, "_RADAR_DIR", tmp_path)
+    fp = tmp_path / "data" / f"trends_{dt.date.today().isoformat()}.json"
     today = dt.date.today().isoformat()
-    fp = root / f"trends_{today}.json"
-    # ★ CI 엔 이 폴더가 **통째로 없다** (data/*.json 이 .gitignore 라 디렉터리도 안 온다).
-    #   종전엔 곧장 write_text 를 불러 FileNotFoundError 로 깨졌다 — 테스트가
-    #   '내 맥북에 폴더가 있다' 는 사실에 기댄 것이다 (ERRORS [568] 과 같은 병).
-    dir_made = not root.exists()
-    root.mkdir(parents=True, exist_ok=True)
-    backup = fp.read_text(encoding="utf-8") if fp.exists() else None
-    try:
-        # 실트렌드 전멸 + 정적 시드로 채워진 날 (실측 08-01 의 모양)
-        seeded = {"date": today, "combined_keywords": [],
-                  "scored_keywords": [{"keyword": f"시드{i}", "sector": "금융·투자"}
-                                      for i in range(30)]}
-        fp.write_text(json.dumps(seeded, ensure_ascii=False), encoding="utf-8")
-        issues = _verify_trends(None)
-        assert issues, "실트렌드 0인데 검증이 통과했다 — 시드에 속았다"
-        assert any("combined" in i for i in issues), f"combined 를 안 본다: {issues}"
-        # 하류가 실제로 굶는지 확인 (검증 기준의 정당성)
-        assert not _candidates(seeded), "하류가 후보를 못 만드는 것이 맞다"
 
-        ok = dict(seeded, combined_keywords=[{"keyword": "코스피", "score": 9,
-                                              "sources": ["google"]}])
-        assert not _verify_trends(None) or True   # 파일 기준이므로 아래로 재검사
-        fp.write_text(json.dumps(ok, ensure_ascii=False), encoding="utf-8")
-        assert not _verify_trends(None), "정상 데이터인데 차단됐다 — 과잉 차단"
-    finally:
-        if backup is not None:
-            fp.write_text(backup, encoding="utf-8")
-        elif fp.exists():
-            fp.unlink()
-        # 우리가 만든 폴더면 되돌린다 — 테스트가 저장소에 흔적을 남기지 않는다
-        if dir_made and root.is_dir() and not any(root.iterdir()):
-            root.rmdir()
+    # 실트렌드 전멸 + 정적 시드로 채워진 날 (실측 08-01 의 모양)
+    seeded = {"date": today, "combined_keywords": [],
+              "scored_keywords": [{"keyword": f"시드{i}", "sector": "금융·투자"}
+                                  for i in range(30)]}
+    fp.write_text(json.dumps(seeded, ensure_ascii=False), encoding="utf-8")
+    issues = _verify_trends(None)
+    assert issues, "실트렌드 0인데 검증이 통과했다 — 시드에 속았다"
+    assert any("combined" in i for i in issues), f"combined 를 안 본다: {issues}"
+    # 하류가 실제로 굶는지 확인 (검증 기준의 정당성)
+    assert not _candidates(seeded), "하류가 후보를 못 만드는 것이 맞다"
+
+    ok = dict(seeded, combined_keywords=[{"keyword": "코스피", "score": 9,
+                                          "sources": ["google"]}])
+    fp.write_text(json.dumps(ok, ensure_ascii=False), encoding="utf-8")
+    assert not _verify_trends(None), "정상 데이터인데 차단됐다 — 과잉 차단"
 
 
 def test_수집_산출물이_시드_비율을_남긴다():
@@ -3144,42 +3258,61 @@ def test_팩_미생성이_조용히_지나가지_않는다():
 
 
 def test_지침_선택규칙이_한_곳이다():
-    """★ 게이트(검사)와 작성기(주입)가 **같은 규칙**을 써야 한다.
+    """★ 게이트(검사)와 작성기(주입)가 어긋나면 학습이 헛돈다.
 
-    실측 2026-08-08: 파이프라인 항목 필터가 `active_directives` 에만 들어가고
-    `build_insights_block` 에는 없었다 — 게이트는 벌하지 않는데 작성기는 계속
-    "메타 설명을 채워라" 고 시키는, 정확히 거꾸로 된 상태였다.
-    해로운 쪽은 주입이다(작성 LLM 은 못 만들므로 **지어낸다**).
+    ★ 불변식이 **강해졌다** (2026-08-08 적대적 검증)
+      종전 요구는 "둘이 *같은 규칙*(`selectable_insights`)을 쓴다" 였다. 그런데 규칙이
+      같아도 *부르는 시점* 이 다르면 결과가 갈라진다 — 주입은 발행 전, 검사는 발행 직전이고
+      그 사이 weight·TTL 이 바뀐다(60분 인메모리 고정은 데몬 재시작에 사라진다).
+      실제로 갈라졌고, 갈라진 지침은 어겼다고 판정돼도 기록되지 못했다.
+      → 이제 요구는 "**같은 실물**을 본다" 다: 주입은 `selectable_insights` 로 *고르고*
+        `insight_usage` 에 남기고, 검사는 그 기록(`batch_directives`)을 *읽는다*.
+
+    해로운 쪽은 여전히 주입이다 — 작성 LLM 이 못 만드는 항목을 시키면 **지어낸다**.
+    그래서 파이프라인 항목 필터는 선택 규칙(`selectable_insights`) 쪽에 있어야 한다.
     """
     import inspect
 
     from JARVIS07_GUARDIAN import quality_learner as _ql
 
-    for fn in ("active_directives", "build_insights_block"):
-        src = _code_only(inspect.getsource(getattr(_ql, fn)))
-        assert "selectable_insights" in src, f"{fn} 이 공통 선택 규칙을 안 쓴다"
-        assert "get_ranked_learning_insights" not in src, \
-            f"{fn} 이 원본 조회를 직접 한다 — 규칙이 두 벌이 된다"
+    # ① 주입은 공통 선택 규칙으로 고른다
+    inject = _code_only(inspect.getsource(_ql.build_insights_block))
+    assert "selectable_insights" in inject, "주입이 공통 선택 규칙을 안 쓴다"
+    assert "get_ranked_learning_insights" not in inject, \
+        "주입이 원본 조회를 직접 한다 — 규칙이 두 벌이 된다"
+
+    # ② 검사는 다시 고르지 않고 **기록을 읽는다**
+    check = _code_only(inspect.getsource(_ql.active_directives))
+    assert "batch_directives" in check, "검사가 주입 기록을 읽지 않는다"
+    for banned in ("selectable_insights", "get_ranked_learning_insights", "_pinned_pick"):
+        assert banned not in check, \
+            f"검사가 다시 고른다({banned}) — 주입 묶음과 갈라져 위반이 사라진다"
+
+    # ③ 기록도 같은 실물에서 (세 소비자가 한 원본)
+    record = _code_only(inspect.getsource(_ql.record_directive_violations))
+    assert "batch_directives" in record, "기록이 주입 기록을 읽지 않는다"
 
     # 실제로 파이프라인 항목을 겨눈 지침이 걸러지는가 (실행 검증)
-    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX, item_index
+    from JARVIS02_WRITER.post_scorer import RUBRIC_MAX, item_index, pipeline_controlled_items
     from shared.db import get_db
 
-    pipe = [k for k in _ql.__dict__ and
-            __import__("JARVIS02_WRITER.post_scorer", fromlist=["x"])
-            .pipeline_controlled_items() if RUBRIC_MAX.get(k)]
+    pipe = [k for k in pipeline_controlled_items() if RUBRIC_MAX.get(k)]
     if not pipe:
         return                      # 살아 있는 파이프라인 항목이 없으면 검사 불가
     name = (item_index().get(pipe[0]) or {}).get("name", pipe[0])
+    key = f"economic:seo_{name}"
     with get_db() as con:
         con.execute("INSERT INTO learning_insights (insight_key, insight_type, description, "
                     "directive, weight, scope, last_seen) VALUES (?,?,?,?,?,?,"
                     "datetime('now','localtime'))",
-                    (f"economic:seo_{name}", "seo", "x",
-                     "제목 앞부분에 핵심 키워드를 배치하라", 3.0, "economic"))
-    got = {r.get("insight_key") for r in _ql.selectable_insights("economic", 50, 21)}
-    assert f"economic:seo_{name}" not in got, \
-        f"작성 LLM 이 만들 수 없는 항목({pipe[0]})을 겨눈 지침이 선택됐다"
+                    (key, "seo", "x", "제목 앞부분에 핵심 키워드를 배치하라", 3.0, "economic"))
+    try:
+        got = {r.get("insight_key") for r in _ql.selectable_insights("economic", 50, 21)}
+        assert key not in got, \
+            f"작성 LLM 이 만들 수 없는 항목({pipe[0]})을 겨눈 지침이 선택됐다"
+    finally:
+        with get_db() as con:
+            con.execute("DELETE FROM learning_insights WHERE insight_key=?", (key,))
 
 
 def test_kind_선언을_메시지_문구가_뒤집지_못한다():
@@ -3192,6 +3325,9 @@ def test_kind_선언을_메시지_문구가_뒤집지_못한다():
 
     approved = non_code_issue_kinds()
     assert approved, "승인 kind 집합이 비었다 — 검사 전제가 깨졌다"
+    from JARVIS00_INFRA.harness import envelope_kinds
+    assert not (envelope_kinds() & approved), \
+        "봉투 kind 가 승인 목록에도 들어갔다 — 두 경계가 겹치면 어느 쪽도 검증이 안 된다"
 
     # 정규식에 확실히 걸리는 문구 (실제 DB 메시지 형태)
     MSGS = ["[Layer4] 활성 플랫폼 전부 실패 — 송출 미완료: ['naver']",
@@ -3199,8 +3335,11 @@ def test_kind_선언을_메시지_문구가_뒤집지_못한다():
             "종목 데이터 0개 — 다른 테마로 교체"]
 
     # ① 선언된(=승인 목록 밖) kind 는 문구가 뭐든 transient 가 아니다
-    for kind in ("send_failure", "abort", "execution_error", "draft_invalid",
-                 "stuck", "data_empty", "login_invalid"):
+    #    ※ 봉투 신호(`abort`·`stuck`)는 이 경계 밖이다 — 문구가 뒤집은 게 아니라
+    #      harness 가 "이건 근본 원인이 아니라 포기 신고" 라고 *선언* 했기 때문이다.
+    #      (실측 90일 실제 파일 수정 0건. `test_봉투신호는_Tier2로_안_간다` 가 담당.)
+    for kind in ("send_failure", "execution_error", "draft_invalid",
+                 "data_empty", "login_invalid"):
         assert kind not in approved, f"{kind} 가 승인 목록에 들어갔다 — 전제 변경"
         for m in MSGS:
             assert is_transient("RuntimeError", m, kind=kind) is False, \
@@ -3759,13 +3898,20 @@ def test_timestamp_비교가_한_포맷을_쓴다():
     assert wide == 2, f"6시간 창이 3시간 전 행을 놓쳤다 (wide={wide})"
     assert narrow < wide, "창 폭이 결과를 바꾸지 않는다 — 죽은 인자"
 
-    # ③ 종전 방식은 실제로 틀린다 (이 검사가 진짜를 잡는지 확인)
+    # ③ 종전 방식(공백 구분자)이 실제로 틀린다 — **벽시계에 기대지 않고** 증명한다.
+    #   ★ 2026-08-09 3차 적대적 검증: 종전 검사는 `now-3h` 가 오늘 날짜에 남아 있을 때만
+    #     참이었다. 로컬 01:00~02:59 면 `now-3h` 가 어제로 넘어가 문자열 비교가 *우연히*
+    #     옳아지고 legacy=1 이 되어 **매일 정확히 2시간 동안 결정론적으로 red** 였다.
+    #     CI(ubuntu=UTC)에서는 UTC 01~03시의 모든 push 가 진짜 결함이 아닌 이유로 깨진다.
+    #     "진짜 결함 아닌 이유로 빨개지면 사람이 CI 를 안 본다" 는 실패양식 그대로다.
+    #     성질 자체는 시각과 무관하다 — 같은 날짜에서 'T'(0x54) > ' '(0x20) 이라는 것뿐.
     with get_db() as con:
-        legacy = con.execute(
-            "SELECT COUNT(*) FROM error_log WHERE source='tsprobe' "
-            "  AND timestamp >= datetime('now','localtime','-60 minute')").fetchone()[0]
-    assert legacy == 2, \
-        f"종전 방식이 틀리지 않는다 — 검사 전제가 깨졌다 (legacy={legacy})"
+        wrong = con.execute(
+            "SELECT ? >= ?", ("2026-03-05T22:45:00", "2026-03-05 23:45:00")).fetchone()[0]
+        right = con.execute(
+            "SELECT ? >= ?", ("2026-03-05T22:45:00", "2026-03-05T23:45:00")).fetchone()[0]
+    assert wrong == 1, "공백 구분자 비교가 틀리지 않는다 — 검사 전제가 깨졌다"
+    assert right == 0, "같은 포맷끼리도 결과가 이상하다 — 전제 붕괴"
 
 
 def test_편중판정이_날짜창을_실제로_적용한다():
@@ -3815,3 +3961,1491 @@ def test_timestamp_비교를_직접_쓰는_곳이_없다():
             if re.search(r"timestamp\s*>=?\s*datetime\(", line):
                 bad.append(f"{rel}:{i}")
     assert not bad, f"timestamp 를 datetime() 과 직접 비교한다(구분자 불일치): {bad}"
+
+
+def test_롤백이_학습자산을_되돌리지_않는다():
+    """★ 롤백 대상이 '스냅샷 이후 바뀐 파일 전부' 라 학습 자산이 포함될 수 있었다.
+
+    되돌리면 그날 쌓은 학습이 사라진다(2026-06-08 에 97.8% 소실 이력).
+    보호 목록의 주인은 `error_fixer` 하나여야 한다 — `auto_repair` 가 자기 목록을
+    갖고 있었고 거기엔 학습 자산이 **없었다**.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+    from JARVIS07_GUARDIAN.error_fixer import protected_files
+
+    prot = protected_files()
+    for f in ("JARVIS07_GUARDIAN/learned_patterns.json",
+              "JARVIS07_GUARDIAN/bandit_state.json"):
+        assert f in prot, f"{f} 가 보호 목록에 없다 — 롤백이 학습을 지운다"
+
+    # 스냅샷이 그 목록을 **실제로 반영** 하는가 (실행 검증)
+    snap = _ar._snapshot_py_files()
+    leaked = [f for f in prot if f in snap]
+    assert not leaked, f"보호 파일이 스냅샷에 들어갔다 — 롤백 대상이 된다: {leaked}"
+
+    # 목록을 자체 보유하지 않는가 (①)
+    src = _code_only(inspect.getsource(_ar._snapshot_py_files))
+    assert "protected_files" in src or "deny_dirs" in src, \
+        "auto_repair 가 보호 목록을 자체 보유한다 — 두 벌이 되면 한쪽만 낡는다"
+
+
+def test_재현불가여도_깨뜨렸는지는_본다():
+    """★ 재현 가능 타입은 6종뿐인데 Tier-2 는 대부분 RuntimeError — 커버리지 0/158 이었다.
+
+    타입을 억지로 넓히는 대신 타입과 무관한 질문을 던진다:
+    "SDK 가 만진 파일이 아직 import 되는가".
+    """
+    import inspect
+    import tempfile
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+
+    # 검사 본체를 새로 만들지 않고 error_fixer 것을 부르는가 (①)
+    src = _code_only(inspect.getsource(_ar._import_broken_files))
+    assert "_import_check" in src, "import 검사를 자체 구현한다 — 주인은 error_fixer 다"
+
+    # 깨진 파일을 실제로 잡는가 (실행 검증)
+    root = _P(_ar.ROOT)
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        broken = _P(td) / "broken_probe.py"
+        broken.write_text("def f(\n", encoding="utf-8")     # 문법 오류
+        rel = str(broken.relative_to(root))
+        assert _ar._import_broken_files({rel: "diff"}) == [rel], \
+            "import 이 깨진 파일을 못 잡는다"
+        ok = _P(td) / "ok_probe.py"
+        ok.write_text("X = 1\n", encoding="utf-8")
+        assert _ar._import_broken_files({str(ok.relative_to(root)): "diff"}) == [], \
+            "정상 파일을 깨졌다고 한다 — 과잉 롤백"
+
+    # 검증 사슬이 그 결과를 쓰는가
+    vsrc = _code_only(inspect.getsource(_ar._verify_sdk_fix))
+    assert "_import_broken_files" in vsrc, "타입 무관 검증을 안 쓴다"
+
+
+def test_롤백된_오류가_재시도_큐에_남는다():
+    """★ `wontfix` 로 찍으면 10분 재시도(`status='new'` 만 본다)에서 빠진다.
+
+    상한(`MAX_LLM_ATTEMPTS`)이 이미 있어 무한 재시도 위험은 없는데, 시도 여유가
+    남아 있는데도 스스로 문을 닫고 있었다.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_try_sdk_targeted_fix")
+    states = {c.args[1].value for c in ast.walk(fn)
+              if isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "mark_error_status"
+              and len(c.args) >= 2 and isinstance(c.args[1], ast.Constant)}
+    assert "new" in states, "롤백 시 재시도 큐로 되돌리지 않는다 — 상한 전에 문을 닫는다"
+
+
+def test_근거_없이는_상태가_안_바뀐다():
+    """★ 실측 `wontfix` 61건 전원 `resolution` NULL — '왜' 가 통째로 비어 있었다.
+
+    문구를 호출자마다 박으면(18곳) 한 곳을 빠뜨리고, 새 호출자가 생기면 또 NULL 이
+    된다. 주인(DB)이 **파생해서 보장** 한다 — 목록 관리가 필요 없다(①②).
+    """
+    from shared import db as _db
+
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('whyprobe','m','X','x','new')")
+        eid = con.execute("SELECT id FROM error_log WHERE source='whyprobe' "
+                          "ORDER BY id DESC LIMIT 1").fetchone()[0]
+    try:
+        for st in ("analyzing", "ignored", "wontfix", "fixed"):
+            _db.mark_error_status(eid, st)          # ← 사유를 **안** 넘긴다
+            with _db.get_db() as con:
+                why = con.execute("SELECT resolution FROM error_log WHERE id=?",
+                                  (eid,)).fetchone()[0]
+            assert (why or "").strip(), f"{st} 인데 사유가 비었다"
+            # ★ "미기록" 만 확인하면 파생이 '호출자 불명' 만 뱉어도 통과한다 —
+            #   그러면 근거는 있으나 *어디서 찍었는지* 를 모르는, 반쯤 죽은 상태다.
+            #   호출 지점(모듈.함수:줄)이 실제로 박히는지 본다.
+            assert f"{__name__.rsplit('.', 1)[-1]}.test_" in why, \
+                f"파생 사유가 호출 지점을 못 가리킨다: {why}"
+            assert why.rsplit(":", 1)[-1].rstrip(")").isdigit(), \
+                f"줄번호가 없다 — 재현 지점을 못 찾는다: {why}"
+        # 사람이 쓴 사유가 있으면 그쪽이 이긴다
+        _db.mark_error_status(eid, "wontfix", "사람이 쓴 진짜 사유")
+        with _db.get_db() as con:
+            assert con.execute("SELECT resolution FROM error_log WHERE id=?",
+                               (eid,)).fetchone()[0] == "사람이 쓴 진짜 사유"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+
+
+def test_fixed_at은_fixed에만_찍힌다():
+    """★ `new`·`wontfix` 에 찍히면 수리시간 지표가 오염된다."""
+    from shared import db as _db
+
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('atprobe','m','X','x','new')")
+        eid = con.execute("SELECT id FROM error_log WHERE source='atprobe' "
+                          "ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+    _db.mark_error_status(eid, "new", "1회차 실패")
+    _db.mark_error_status(eid, "new", "2회차 실패")
+    with _db.get_db() as con:
+        r = dict(con.execute("SELECT status, resolution, fixed_at FROM error_log "
+                             "WHERE id=?", (eid,)).fetchone())
+    assert r["fixed_at"] is None, f"new 인데 fixed_at 이 찍혔다: {r['fixed_at']}"
+    assert "2회차" in r["resolution"], \
+        f"재시도 사유가 last-wins 가 아니다 — 3회차 실패가 1회차 문구로 보인다: {r['resolution']}"
+
+    _db.mark_error_status(eid, "fixed", "고쳤다")
+    with _db.get_db() as con:
+        r2 = dict(con.execute("SELECT resolution, fixed_at FROM error_log WHERE id=?",
+                              (eid,)).fetchone())
+    assert r2["fixed_at"], "fixed 인데 시각이 없다"
+
+
+def test_봉투신호는_동봉이_있을_때만_중복이다():
+    """★ `abort`·`stuck` 은 harness 가 '포기했다' 는 신고다 — 다만 *언제나* 요약은 아니다.
+
+    2026-08-08 적대적 검증이 전제를 깨뜨렸다. "근본 원인은 따로 보고된다" 가
+    두 경우에 **거짓** 이었다:
+      · `stuck`(워치독 freeze/데드라인) — 예외가 없어 동봉될 이슈가 아예 없다.
+        실측 24건 중 **13건(54%)** 이 ±15분 내 다른 harness 보고 0건.
+      · 누적 abort 가 시도 1 에 터지면 그 시도의 unfixed 가 아직 미보고다
+        (실측 재현: NameError 20건이 통째로 사라졌다).
+    kind 로는 이 구분이 안 된다 — harness 가 싣는 **동봉 수** 로 판단한다(원칙②).
+    """
+    from JARVIS00_INFRA.harness import envelope_kinds, is_envelope_kind
+    from JARVIS07_GUARDIAN.severity import is_transient
+
+    env = envelope_kinds()
+    assert env, "봉투 kind 파생이 빈 집합 — 판별이 무력이다"
+    assert {"abort", "stuck"} <= env, f"알려진 봉투가 빠졌다: {sorted(env)}"
+
+    for k in sorted(env):
+        # 동봉이 있으면 요약이므로 격리 (LLM 에 같은 사건을 두 번 물어보지 않는다)
+        assert is_transient("RuntimeError", "수정 불가 3건 패턴 반복", "harness",
+                            kind=k, companions=3), f"동봉이 있는 봉투 {k} 가 격리되지 않는다"
+        # 동봉이 없으면 **유일한 신호** 이므로 삼키면 안 된다
+        for c in (0, None):
+            assert not is_transient("RuntimeError", "멈춤(freeze) 307s > 300s", "harness",
+                                    kind=k, companions=c), \
+                f"유일한 신호인 봉투 {k}(companions={c})를 삼킨다 — 아무 데도 안 간다"
+
+    # 봉투가 아닌 kind 까지 삼키면 진짜 코드결함을 놓친다
+    for k in ("draft_invalid", "execution_error", "send_failure"):
+        assert not is_envelope_kind(k), f"{k} 를 봉투로 오분류 — 코드결함이 격리된다"
+        assert not is_transient("RuntimeError", "x", "harness", kind=k, companions=5), \
+            f"{k} 가 격리 버킷으로 샌다"
+
+
+def test_봉투와_실이슈가_함께_보고된다():
+    """★ 종전 두 abort 분기는 GUARDIAN 에 `[_abort]` **만** 보냈다.
+
+    누적 abort 는 `_report_issues_to_guardian(..., unfixed, ...)` 보다 **앞** 에 있어,
+    시도 1 에 임계를 넘으면 그 시도의 실이슈가 아무 데도 가지 않았다
+    (적대적 검증 재현: NameError 20건 유실). 봉투가 '요약' 이려면 요약될 것이 함께 실려야 한다.
+    """
+    import ast
+
+    full = (_ROOT / "JARVIS00_INFRA/harness.py").read_text(encoding="utf-8")
+    tree = ast.parse(full)
+
+    # ※ `[send_issue]` 같은 *1차 신호* 단독 보고는 정상이다 — 겨누는 것은 **봉투** 뿐.
+    bad = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and getattr(node.func, "id", "") == "_report_issues_to_guardian"
+                and len(node.args) >= 3):
+            continue
+        names = {x.id for x in ast.walk(node.args[2]) if isinstance(x, ast.Name)}
+        if "_abort" in names and "unfixed_issues" not in names:
+            bad.append(node.lineno)
+    assert not bad, f"abort 봉투를 실이슈 없이 보고한다 (line {bad}) — 실이슈가 사라진다"
+
+    # ★ 실행 검증 — 시도 1 누적 abort 에서 실이슈가 GUARDIAN 에 실제로 닿는가
+    import JARVIS07_GUARDIAN.error_collector as _ec
+    from JARVIS00_INFRA import harness as _h
+
+    seen = []
+    _orig = _ec.report
+    _ec.report = lambda *a, **kw: (seen.append(kw.get("context") or {}), 1)[1]
+
+    @_h.action_step("만들기")
+    def _mk(state):
+        return {"done": True}
+
+    n_issues = 40          # 임계(max(max_attempts*3, 15))를 시도 1 에 확실히 넘긴다
+    try:
+        res = _h.run_action(_h.ActionDefinition(
+            name="probe_cum_abort",
+            steps=[_mk],
+            verify=lambda st: [_h.Issue(step="만들기", kind="execution_error",
+                                        detail=f"NameError {i}") for i in range(n_issues)],
+            send=lambda st: None,
+            max_attempts=2,
+        ))
+    finally:
+        _ec.report = _orig
+
+    assert not res.delivered, "이슈가 40건인데 송출됐다 — 검사 전제가 깨졌다"
+    kinds = [str((c or {}).get("kind") or "") for c in seen]
+    assert "execution_error" in kinds, \
+        f"시도 1 누적 abort 에서 실이슈가 통째로 사라졌다 (보고된 kind: {sorted(set(kinds))})"
+    assert "abort" in kinds, "봉투 자체는 남아 있어야 한다(요약 신호)"
+
+    # 봉투에는 동봉 수가 실려야 하고, 그래야 하류가 중복으로 판단할 수 있다
+    from JARVIS07_GUARDIAN.severity import companions_of, is_transient
+    env_ctx = next(c for c in seen if (c or {}).get("kind") == "abort")
+    comp = companions_of({"context": env_ctx})
+    assert comp and comp > 0, f"봉투에 동봉 수가 없다: {comp}"
+    assert is_transient("RuntimeError", "", "harness", kind="abort", companions=comp), \
+        "동봉이 있는 봉투가 중복으로 판정되지 않는다"
+
+
+def test_단독_봉투는_동봉0으로_보고된다():
+    """★ `stuck` 은 예외가 없어 동봉될 이슈가 아예 없다 — 그 사실이 실려야 삼키지 않는다."""
+    import JARVIS07_GUARDIAN.error_collector as _ec
+    from JARVIS00_INFRA import harness as _h
+    from JARVIS07_GUARDIAN.severity import companions_of, is_transient
+
+    seen = []
+    _orig = _ec.report
+    _ec.report = lambda *a, **kw: (seen.append(kw.get("context") or {}), 1)[1]
+    try:
+        _h._report_issues_to_guardian(
+            "probe", 1, [_h.Issue(step=_h.ENVELOPE_STEP, kind="stuck", detail="freeze 307s")], 2)
+    finally:
+        _ec.report = _orig
+    assert len(seen) == 1
+    assert companions_of({"context": seen[0]}) == 0, "단독 보고인데 동봉이 있다고 한다"
+    assert not is_transient("StuckError", "freeze", "harness", kind="stuck",
+                            companions=companions_of({"context": seen[0]})), \
+        "유일한 신호를 삼킨다 — 워치독 freeze 가 아무 데도 안 간다"
+
+
+def test_봉투_kind가_소스에서_파생된다():
+    """★ 목록을 박으면 새 봉투 kind 가 조용히 Tier-2 로 샌다 — 파생이어야 한다."""
+    import inspect
+
+    from JARVIS00_INFRA import harness as _h
+
+    src = (_ROOT / "JARVIS00_INFRA/harness.py").read_text(encoding="utf-8")
+    # 봉투 생성부가 리터럴 step 으로 되돌아가면 파생이 그 자리에서 무력해진다
+    assert 'step="전체"' not in src, \
+        "봉투 생성부가 리터럴 step 으로 돌아갔다 — 파생이 못 본다"
+    assert src.count("step=ENVELOPE_STEP") >= 4, "봉투 생성부가 상수를 안 쓴다"
+
+    fsrc = _code_only(inspect.getsource(_h.envelope_kinds))
+    assert "ast" in fsrc and "ENVELOPE_STEP" in fsrc, "소스 파생이 아니다"
+    assert '"abort"' not in fsrc and '"stuck"' not in fsrc, \
+        "봉투 목록을 박았다 — 새 봉투가 생기면 샌다"
+
+    # severity 가 판별을 복제하지 않고 주인에게 묻는가 (①)
+    ssrc = (_ROOT / "JARVIS07_GUARDIAN/severity.py").read_text(encoding="utf-8")
+    assert "is_envelope_kind" in ssrc, "severity 가 harness 에 묻지 않는다"
+    assert 'kind == "abort"' not in ssrc, "severity 가 판별을 복제했다"
+
+
+def test_재현할_오류메시지_없으면_학습_안_한다():
+    """★ 지문 재료는 실오류 메시지다 — `description` 은 두 번 다시 같은 문자열로 안 온다.
+
+    그런 패턴은 태어날 때부터 hit=1 로 죽어 있고 밴딧에 영영 보상 없는 arm 을 늘린다.
+    `_MANUAL_POLICY_TYPES` 목록만으론 못 막는다 — 자가검사 타입은 세션마다 새 이름으로
+    생긴다(실측 `Observability`·`CopyOfTruth`·`DomainBoundary`·`ModelNamePurge` 4종 전부
+    목록 밖). 목록 대신 **레코드 자신에게 묻는다**.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/error_collector.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "report_manual_fix")
+    body = ast.unparse(fn)
+    assert "_has_real_error" in body, "실오류 메시지 유무를 안 본다"
+    # 세 갈래(True/False/자동) 중 학습으로 가는 두 갈래 모두 걸려야 한다
+    acts = [ln for ln in body.splitlines() if "_actionable =" in ln and "False" not in ln]
+    assert acts and all("_has_real_error" in ln for ln in acts), \
+        f"학습 분기 중 메시지 검사를 빠뜨린 곳이 있다: {acts}"
+
+    # 지문 재료가 여전히 description 폴백인지 — 폴백이 남아 있어야 위 가드가 의미 있다
+    assert "error_message or description" in body, \
+        "지문 폴백이 사라졌다면 이 가드의 전제가 바뀐 것 — 함께 재검토할 것"
+
+
+def _seed_insights(con, rows):
+    """테스트용 지침 씨앗 — `(insight_key, directive, scope)` 목록을 넣고 id 를 준다."""
+    ids = []
+    for key, directive, scope in rows:
+        con.execute(
+            "INSERT INTO learning_insights (insight_key, insight_type, description, "
+            "  directive, weight, occurrences, first_seen, last_seen, scope) "
+            "VALUES (?,?,?,?,1.0,1,date('now','localtime'),date('now','localtime'),?)",
+            (key, "style", directive, directive, scope))
+        ids.append(con.execute("SELECT last_insert_rowid()").fetchone()[0])
+    return ids
+
+
+def test_scope_all은_제한없음을_뜻한다():
+    """★ `'all'` 이 리터럴 매칭이라 **0건**을 냈다 — DB 에 그런 scope 값이 없다.
+
+    호출자들은 `scope or "all"` 로 '전체' 를 뜻했는데 조용히 빈 목록을 받았다.
+    실측: `scope='all'` 배치가 8건 있었고 그 배치들은 위반을 기록할 수 없었다
+    (전체 966건 중 violated=1건).
+    """
+    from shared import db as _db
+
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [
+            ("economic:style_도입부", "도입부를 짧게 쓴다", "economic"),
+            ("theme:style_소제목", "소제목을 구체적으로 쓴다", "theme"),
+        ])
+    try:
+        everything = _db.get_ranked_learning_insights(scope="", limit=500)
+        assert len(everything) >= 2, "씨앗이 안 보인다 — 검사 전제가 깨졌다"
+        as_all = _db.get_ranked_learning_insights(scope="all", limit=500)
+        assert len(as_all) == len(everything), \
+            f"'all' 이 '제한 없음' 과 다르다: all={len(as_all)} vs ''={len(everything)}"
+
+        # 구체 scope 는 여전히 걸러야 한다 — 안 그러면 필터가 통째로 죽은 것
+        narrow = _db.get_ranked_learning_insights(scope="theme", limit=500)
+        assert 0 < len(narrow) < len(everything), \
+            f"구체 scope 필터가 무력해졌다: theme={len(narrow)} / 전체={len(everything)}"
+
+        # ★ 같은 규약이 **모든 조회 함수**에 걸려야 한다 (③ — 한 곳만 고치면 다음
+        #   호출자가 반대쪽을 밟는다). `get_top_learning_insights` 도 동렬이다.
+        top_all = _db.get_top_learning_insights(limit=500, scope="all")
+        top_any = _db.get_top_learning_insights(limit=500, scope="")
+        assert len(top_all) == len(top_any), \
+            f"get_top_learning_insights 의 'all' 이 제한없음과 다르다: {len(top_all)} vs {len(top_any)}"
+        top_narrow = _db.get_top_learning_insights(limit=500, scope="theme")
+        assert 0 < len(top_narrow) < len(top_any), \
+            f"구체 scope 필터가 무력해졌다: theme={len(top_narrow)} / 전체={len(top_any)}"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
+                        % ",".join("?" * len(ids)), ids)
+
+
+def test_위반은_주입된_묶음에서만_찾는다():
+    """★ 랭킹 재조회는 주입 시점과 다른 묶음을 준다 — 어긴 지침이 목록에 없으면 사라진다.
+
+    주입은 발행 *전*, 위반 판정은 발행 *직전* 이다. 그 사이 weight·TTL 이 바뀌면
+    재조회 결과가 달라진다. `insight_usage` 가 '무엇을 넣었는지' 의 기록이다.
+    """
+    from shared import db as _db
+    from JARVIS07_GUARDIAN.quality_learner import record_directive_violations
+
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [
+            ("economic:style_A", "지침 에이", "economic"),
+            ("economic:style_B", "지침 비이", "economic"),
+        ])
+    batch = "tbatch_violate"
+    try:
+        _db.record_insight_usage(batch, ids, scope="economic", platform="naver")
+        injected = _db.batch_directives(batch)
+        assert {r["id"] for r in injected} == set(ids), "배치 기록이 주입과 다르다"
+
+        # ★ 재조회로는 못 찾는 상황을 만든다 — 주입 후 지침이 무력화(weight=0)된 경우.
+        #   종전 구현(랭킹 재조회)은 여기서 0건을 냈다: 어긴 사실이 조용히 사라진다.
+        with _db.get_db() as con:
+            con.execute("UPDATE learning_insights SET weight=0 WHERE id=?", (ids[0],))
+        assert not [r for r in _db.get_ranked_learning_insights(scope="economic", limit=500)
+                    if r["id"] == ids[0]], "전제 실패 — 재조회에서 아직 보인다"
+
+        n = record_directive_violations("economic", "naver", ["지침 에이"])
+        assert n == 1, f"주입된 지침을 어겼는데 기록이 {n}건 — 재조회 경로가 남아 있다"
+        assert record_directive_violations("economic", "naver", ["없는 문장 zzz"]) == 0, \
+            "주입되지 않은 문장까지 기록한다 — 과잉 기록"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM insight_usage WHERE batch_id=?", (batch,))
+            con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
+                        % ",".join("?" * len(ids)), ids)
+
+
+def test_좋은_트렌드판을_빈_판으로_안_덮는다(tmp_path, monkeypatch):
+    """★ 하루 4회 수집이 **같은 파일 하나** 를 덮어쓴다.
+
+    아침이 채운 50개를 오후 수집 실패(0개)가 지우면 그날 주제 선정이 무너진다.
+    실측 26일 중 8일(31%) combined=0, 그 날 발행 평균 1.9편(정상일 3.1편).
+    수집 실패는 '새 정보 없음' 이지 '기존 정보 무효' 가 아니다.
+
+    ※ 데이터 디렉터리를 **임시 경로로 갈아끼운다** — 운영 `JARVIS03_RADAR/data/` 는
+      데몬이 동시에 읽는 곳이라 테스트가 실물을 건드리면 안 된다.
+    """
+    import importlib
+    import json as _json
+
+    rm = importlib.import_module("JARVIS03_RADAR.radar_main")
+    monkeypatch.setattr(rm, "DATA_DIR", tmp_path)
+    day = "2026-01-02"
+    path = tmp_path / f"trends_{day}.json"
+
+    rm.save({"date": day, "combined_keywords": [{"keyword": "가"}] * 3,
+             "scored_keywords": [1, 2, 3]})
+    assert path.exists() and len(_json.loads(path.read_text())["combined_keywords"]) == 3
+
+    rm.save({"date": day, "combined_keywords": [], "scored_keywords": []})
+    kept = _json.loads(path.read_text())["combined_keywords"]
+    assert len(kept) == 3, f"좋은 판이 빈 판으로 덮였다 — 남은 {len(kept)}개"
+
+    # 정상 갱신은 종전대로 (가드가 저장을 통째로 막으면 안 된다)
+    rm.save({"date": day, "combined_keywords": [{"keyword": "나"}] * 7,
+             "scored_keywords": [1]})
+    assert len(_json.loads(path.read_text())["combined_keywords"]) == 7, \
+        "정상 갱신까지 막혔다 — 과잉 가드"
+
+
+def test_빈판일때는_새로_쓴다(tmp_path, monkeypatch):
+    """★ 지킬 게 없으면 그대로 쓴다 — 가드가 '영원히 0개' 를 만들면 안 된다."""
+    import importlib
+    import json as _json
+
+    rm = importlib.import_module("JARVIS03_RADAR.radar_main")
+    monkeypatch.setattr(rm, "DATA_DIR", tmp_path)
+    day = "2026-01-03"
+    path = tmp_path / f"trends_{day}.json"
+
+    rm.save({"date": day, "combined_keywords": [], "scored_keywords": [9]})
+    assert path.exists(), "기존 파일이 없는데 저장을 건너뛰었다"
+    assert _json.loads(path.read_text())["scored_keywords"] == [9]
+
+
+def test_RADAR_수집실패가_어디였는지_타입에_남는다():
+    """★ 실측 90일 `source='radar'` 264건이 **전부 `ConnectionError`** 한 타입이었다.
+
+    타입만으로는 구글이 죽었는지 네이버가 죽었는지 알 수 없고, 그래서
+    ① 타입 기반 게이트 무력 ② Tier-1 지문 매칭의 변별력 0.
+    호스트·원인은 예외 메시지에 **이미 들어 있다** — 새 판단을 만들지 않고 읽는다.
+    """
+    from JARVIS03_RADAR.collectors import radar_error_type
+
+    cases = {
+        "HTTPSConnectionPool(host='trends.google.com', port=443): Max retries exceeded "
+        "with url: /trending/rss (Caused by NameResolutionError('x'))":
+            "RadarTrendsGoogleNameResolution",
+        "HTTPSConnectionPool(host='openapi.naver.com', port=443): Max retries exceeded "
+        "with url: /v1/search (Caused by ConnectTimeoutError('y'))":
+            "RadarOpenapiNaverConnectTimeout",
+    }
+    got = {radar_error_type(ConnectionError(m)) for m in cases}
+    assert got == set(cases.values()), f"파생 결과가 다르다: {got}"
+    assert len(got) == 2, "서로 다른 수집처가 같은 타입으로 뭉개진다"
+
+    # 네트워크 실패가 아니면 **종전 그대로** — 없는 정보를 지어내지 않는다
+    assert radar_error_type(ValueError("그냥 값 오류")) == "ValueError"
+    assert radar_error_type(ConnectionError("호스트 정보 없음")) == "ConnectionError"
+
+
+def test_RADAR_전_파일이_같은_통로를_쓴다():
+    """★ ③원칙 — 한 파일만 고치면 다른 파일에서 그대로 뭉개진 타입이 나온다."""
+    import ast
+
+    raw, wired = [], []
+    for f in sorted((_ROOT / "JARVIS03_RADAR").rglob("*.py")):
+        if "__pycache__" in f.parts:
+            continue
+        src = f.read_text(encoding="utf-8")
+        if "error_collector import report as _g_report" in src:
+            raw.append(str(f.relative_to(_ROOT)))
+        if "collectors import report_radar as _g_report" in src:
+            wired.append(str(f.relative_to(_ROOT)))
+    assert not raw, f"세분화를 우회하는 파일이 남았다: {raw}"
+    assert len(wired) >= 10, f"연결된 파일이 {len(wired)}개뿐 — 누락 의심"
+
+    # ★ 래퍼가 **세 가지 호출 형태** 를 다 지키는가 (실행 검증)
+    #   `catch` 는 구 시그니처 `report(source, exc)` 314곳을 위해 역순 자동 교정을
+    #   갖고 있다(ERRORS [298]). 래퍼가 서명을 `(source, exc)` 로 고정하면 문자열
+    #   타입 호출이 통째로 뒤집혀 error_type 에 `radar` 가 박힌다 — 실제로 났던 사고.
+    from JARVIS03_RADAR.collectors import report_radar
+    from shared import db as _db
+
+    net = ("HTTPSConnectionPool(host='trends.google.com', port=443): x "
+           "(Caused by NameResolutionError('z'))")
+    cases = [
+        (("radar", ConnectionError(net)), {}, "radar", "RadarTrendsGoogleNameResolution"),
+        ((ConnectionError(net + " 2"), "radar"), {}, "radar", "RadarTrendsGoogleNameResolution"),
+        (("TrendsEmptyOverwriteBlocked", "radar"), {"message": "보존"},
+         "radar", "TrendsEmptyOverwriteBlocked"),
+        (("radar", ValueError("비네트워크")), {}, "radar", "ValueError"),
+    ]
+    ids = []
+    try:
+        for args, kw, want_src, want_type in cases:
+            eid = report_radar(*args, module="t", func_name="t", **kw)
+            assert eid, f"보고 자체가 안 됐다: {args}"
+            ids.append(eid)
+            with _db.get_db() as con:
+                r = con.execute("SELECT source, error_type FROM error_log WHERE id=?",
+                                (eid,)).fetchone()
+            assert (r[0], r[1]) == (want_src, want_type), \
+                f"호출형태 {args[0]!r} → source={r[0]} type={r[1]} (기대 {want_src}/{want_type})"
+    finally:
+        with _db.get_db() as con:
+            for i in ids:
+                con.execute("DELETE FROM error_log WHERE id=?", (i,))
+
+
+def test_RADAR_래퍼가_세분화_대상만_손댄다():
+    """★ 래퍼는 '타입 세분화' 만 한다 — 그 외에는 인자를 **그대로** 넘겨야 한다.
+
+    무엇이 넘어가는지 직접 관찰한다(반환값만 보면 두 경로가 같아 보인다):
+      ① 문자열 타입 호출 → 원래 두 인자 그대로, `tb_str` 을 지어내지 않는다
+         (except 블록 밖에서 `format_exc()` 는 `"NoneType: None"` 쓰레기를 만든다)
+      ② 세분화할 게 없는 예외 → **예외 객체 그대로** (문자열로 바꾸면 `catch` 가
+         예외에서만 뽑을 수 있는 것들을 못 쓴다)
+    """
+    from JARVIS07_GUARDIAN import error_collector as _ec
+    from JARVIS03_RADAR.collectors import report_radar
+
+    seen = []
+    orig = _ec.report
+    _ec.report = lambda a, b, **kw: (seen.append((a, b, kw)), 1)[1]
+    try:
+        report_radar("TrendsEmptyOverwriteBlocked", "radar", message="보존", module="m")
+        a, b, kw = seen[-1]
+        assert (a, b) == ("TrendsEmptyOverwriteBlocked", "radar"), \
+            f"문자열 타입 호출의 인자가 변형됐다: {a!r}, {b!r}"
+        assert "tb_str" not in kw, f"없는 traceback 을 지어냈다: {kw.get('tb_str')!r}"
+
+        err = ValueError("비네트워크")
+        report_radar("radar", err, module="m")
+        a, b, kw = seen[-1]
+        assert b is err, f"예외 객체를 잃었다 — {type(b).__name__} 로 넘어갔다"
+        assert "tb_str" not in kw, "세분화 대상이 아닌데 traceback 을 지어냈다"
+
+        # 세분화 대상은 타입 문자열 + 원문 메시지로 넘어간다
+        net = ("HTTPSConnectionPool(host='trends.google.com', port=443): x "
+               "(Caused by NameResolutionError('z'))")
+        report_radar("radar", ConnectionError(net), module="m")
+        a, b, kw = seen[-1]
+        assert a == "RadarTrendsGoogleNameResolution" and b == "radar", f"{a!r}/{b!r}"
+        assert kw.get("message") == net, "원문 메시지가 유실됐다"
+    finally:
+        _ec.report = orig
+
+
+def test_검사한_지침은_반드시_기록될_수_있다():
+    """★ 게이트가 *검사한* 목록과 위반을 *기록하는* 대상이 갈라져 있었다.
+
+    검사는 랭킹 재조회(`_pinned_pick` 60분 인메모리 고정), 기록은 주입 배치.
+    고정은 데몬 재시작·TTL 만료로 사라지고 weight 가 바뀌면 두 목록이 갈라진다 —
+    갈라지는 순간 어겼다고 판정된 지침이 **기록되지 못한다**(실측 966건 중 violated 1건).
+    둘 다 `insight_usage`(무엇을 넣었는지의 기록)에서 읽어야 한다.
+    """
+    from shared import db as _db
+    from JARVIS07_GUARDIAN.quality_learner import (active_directives,
+                                                   record_directive_violations)
+
+    # ★ 고유 scope 로 격리한다 — 다른 테스트가 남긴 `economic` 배치를 잡으면
+    #   `latest_batch` 가 그쪽을 돌려주어 이 검사가 전역 상태에 좌우된다.
+    SC = "__gate_align_probe__"
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [
+            (f"{SC}:style_G1", "지침 하나", SC),
+            (f"{SC}:style_G2", "지침 둘", SC),
+        ])
+    batch = "tbatch_gate_align"
+    try:
+        _db.record_insight_usage(batch, ids, scope=SC, platform="naver")
+
+        # ★ 주입 후 랭킹이 흔들리는 상황을 만든다 — 종전 경로는 여기서 갈라졌다
+        with _db.get_db() as con:
+            con.execute("UPDATE learning_insights SET weight=0 WHERE id=?", (ids[0],))
+
+        checked = active_directives(scope=SC, platform="naver")
+        assert "지침 하나" in checked, \
+            f"주입된 지침이 검사 목록에서 사라졌다(랭킹 재조회 경로) — {checked}"
+
+        # 검사한 것은 **전부** 기록 가능해야 한다
+        for text in checked:
+            n = record_directive_violations(SC, "naver", [text])
+            assert n >= 1, f"검사했는데 기록이 안 된다: {text!r}"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM insight_usage WHERE batch_id=?", (batch,))
+            con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
+                        % ",".join("?" * len(ids)), ids)
+
+
+def test_platform_미상_주입도_같은_발행쌍으로_본다():
+    """★ 작성기에 플랫폼을 안 넘기는 경로가 있다 (`_load_learn_insights(platform='')`).
+
+    그러면 기록은 `platform=''` 인데 게이트는 `'naver'` 로 물어 **다른 배치** 를 잡고,
+    어긴 지침이 그 배치에 없어 위반이 사라진다. `''` 는 '미상' 이지 '다른 플랫폼' 이 아니다.
+    """
+    from shared import db as _db
+    from JARVIS07_GUARDIAN.quality_learner import active_directives
+
+    # ★ 고유 scope 로 격리 — 다른 테스트의 `economic/naver` 배치가 있으면 정확 일치가
+    #   이겨서(=올바른 동작) 이 검사가 전역 상태에 좌우된다.
+    SC = "__pf_blank_probe__"
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [(f"{SC}:style_P", "플랫폼 미상 지침", SC)])
+    batch = "tbatch_pf_blank"
+    try:
+        _db.record_insight_usage(batch, ids, scope=SC, platform="")   # 미상으로 주입
+        assert _db.latest_batch(SC, "naver") == batch, \
+            "미상 주입을 다른 플랫폼 배치로 잘못 잡는다"
+        assert "플랫폼 미상 지침" in active_directives(scope=SC, platform="naver")
+
+        # 정확 일치가 있으면 그쪽이 이겨야 한다 (미상으로 내려가면 안 된다)
+        ids2 = None
+        with _db.get_db() as con:
+            ids2 = _seed_insights(con, [(f"{SC}:style_N", "네이버 지침", SC)])
+        _db.record_insight_usage("tbatch_pf_naver", ids2, scope=SC, platform="naver")
+        try:
+            assert _db.latest_batch(SC, "naver") == "tbatch_pf_naver", \
+                "정확 일치 배치가 있는데 미상으로 내려갔다"
+        finally:
+            with _db.get_db() as con:
+                con.execute("DELETE FROM insight_usage WHERE batch_id='tbatch_pf_naver'")
+                con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
+                            % ",".join("?" * len(ids2)), ids2)
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM insight_usage WHERE batch_id=?", (batch,))
+            con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
+                        % ",".join("?" * len(ids)), ids)
+
+
+def test_게이트가_기록과_같은_인자로_묻는다():
+    """★ 검사와 기록이 다른 인자를 쓰면 다른 배치를 잡는다 — 호출부 정합."""
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS02_WRITER/prepublish_gate.py").read_text(encoding="utf-8"))
+    checks, records = [], []
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):
+            continue
+        fn = getattr(n.func, "id", "") or getattr(n.func, "attr", "")
+        if fn in ("_act_dir", "active_directives"):
+            checks.append({k.arg for k in n.keywords})
+        if fn == "record_directive_violations":
+            records.append(len(n.args) + len(n.keywords))
+    assert checks, "게이트가 지침을 조회하지 않는다"
+    assert records, "게이트가 위반을 기록하지 않는다"
+    for kw in checks:
+        assert "platform" in kw, f"검사 호출에 platform 이 없다 — 기록과 다른 배치를 잡는다: {kw}"
+
+
+def test_보존해도_수집전멸은_보인다(tmp_path, monkeypatch):
+    """★ 판 보존 가드가 *수집 실패 사실* 까지 숨기면 안 된다.
+
+    적대적 검증 지적: 가드가 아침 판을 지키는 덕에 파일만 보면 정상이라
+    `_pack_empty_reason` 이 `TopicPackNoCandidate`(적합 후보 없음)로 **오분류** 한다 —
+    사람이 주제 선정을 고치러 간다. 실제 원인은 수집 실패다.
+    별도 오류를 만들지 않고 **데이터에 사실을 박는다**(진짜 원인인 DNS·수집기 실패는
+    수집기가 이미 `Radar*` 세분화 타입으로 보고한다 — 요약을 오류로 또 만들면 중복).
+    """
+    import datetime as _dt
+    import importlib
+    import json as _json
+
+    rm = importlib.import_module("JARVIS03_RADAR.radar_main")
+    jobs = importlib.import_module("JARVIS03_RADAR.jobs")
+    (tmp_path / "data").mkdir()
+    monkeypatch.setattr(rm, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(jobs, "_RADAR_DIR", tmp_path)
+
+    day = _dt.date.today().isoformat()          # `_pack_empty_reason` 은 오늘 파일을 본다
+    path = tmp_path / "data" / f"trends_{day}.json"
+
+    rm.save({"date": day, "combined_keywords": [{"keyword": "가"}] * 5, "scored_keywords": [1]})
+    assert jobs._pack_empty_reason() == "TopicPackNoCandidate", "정상 판인데 분류가 다르다"
+
+    rm.save({"date": day, "combined_keywords": [], "scored_keywords": []})
+    kept = _json.loads(path.read_text())
+    assert len(kept["combined_keywords"]) == 5, "판이 지워졌다"
+    assert kept.get("last_run_empty_at"), "이번 회차가 빈손이었다는 사실이 안 남았다"
+    assert kept.get("last_run_empty_count") == 1
+    assert jobs._pack_empty_reason() == "TrendCollectEmptyLastRun", \
+        "판이 남았다고 수집 실패를 '적합 후보 없음' 으로 오분류한다"
+
+    rm.save({"date": day, "combined_keywords": [], "scored_keywords": []})
+    assert _json.loads(path.read_text())["last_run_empty_count"] == 2, \
+        "연속 빈손 횟수가 안 쌓인다 — 지속 장애를 구분 못 한다"
+
+    path.unlink()
+    rm.save({"date": day, "combined_keywords": [], "scored_keywords": []})
+    assert jobs._pack_empty_reason() == "TrendCollectEmpty"
+
+
+def test_배치는_이번_회차의_것만_잡는다():
+    """★ `reward IS NULL` 만 걸면 **며칠 묵은 배치** 가 그대로 후보다.
+
+    실측: 미귀속 배치 33개가 1일 이상 묵어 있었다(가장 오래된 것 7/21).
+    그 상태에서 오늘 주입이 `platform=''` 로 들어가면 게이트가 `'naver'` 로 물어
+    **7월 배치** 를 잡고 무관한 지침을 검사·마감한다.
+    경계는 박지 않고 액션 상한(`watchdog.BLOG_ACTION_DEADLINE_SEC`)에서 파생한다 —
+    주입과 검사는 같은 발행 액션 안에서 일어나므로 그보다 오래된 배치는 이번 것이 아니다.
+    """
+    from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC as _dl
+    from shared import db as _db
+
+    SC = "__stale_batch_probe__"
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [(f"{SC}:s1", "옛 지침", SC), (f"{SC}:s2", "새 지침", SC)])
+    try:
+        _db.record_insight_usage("tbatch_stale", [ids[0]], scope=SC, platform="naver")
+        with _db.get_db() as con:      # 액션 상한보다 확실히 오래된 것으로 만든다
+            con.execute("UPDATE insight_usage SET used_at = "
+                        "datetime('now','localtime',?) WHERE batch_id='tbatch_stale'",
+                        (f"-{int(_dl) + 3600} seconds",))
+        assert _db.latest_batch(SC, "naver") == "", \
+            "액션 상한보다 오래된 배치를 이번 회차 것으로 잡는다"
+
+        _db.record_insight_usage("tbatch_fresh", [ids[1]], scope=SC, platform="naver")
+        assert _db.latest_batch(SC, "naver") == "tbatch_fresh", "방금 주입분을 못 잡는다"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM insight_usage WHERE batch_id LIKE 'tbatch_%'")
+            con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
+                        % ",".join("?" * len(ids)), ids)
+
+
+def test_사용기록_실패가_조용히_넘어가지_않는다():
+    """★ 게이트가 이 기록을 읽게 된 뒤로, 기록 실패는 '학습 1회 누락' 이 아니다.
+
+    지침은 프롬프트에 들어갔는데 지켰는지 **아무도 안 보는** 상태가 된다
+    (C축 검사가 통째로 꺼진다). `except: pass` 로 두면 그 사실이 어디에도 안 남는다.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/quality_learner.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "build_insights_block")
+    # ★ **가장 안쪽** try 를 본다 — 함수 전체를 감싼 바깥 try 를 잡으면 검사가 헛돈다.
+    inner = [n for n in ast.walk(fn)
+             if isinstance(n, ast.Try) and any(
+                 isinstance(c, ast.Call)
+                 and getattr(c.func, "attr", "") == "record_insight_usage"
+                 for stmt in n.body for c in ast.walk(stmt))]
+    assert inner, "record_insight_usage 를 감싼 try 를 못 찾았다"
+    target = min(inner, key=lambda n: n.end_lineno - n.lineno)
+    handler_src = "\n".join(ast.unparse(h) for h in target.handlers)
+    assert "report" in handler_src, \
+        f"사용 기록 실패를 조용히 삼킨다 — C축 검사가 꺼진 줄 아무도 모른다: {handler_src[:80]}"
+
+
+def test_수집전멸_신호가_기록되되_Tier2는_안_연다():
+    """★ 판 보존이 *수집 실패 사실* 까지 숨기면 안 되고, 그렇다고 LLM 을 태워도 안 된다.
+
+    실측 90일 radar 실패 264건 중 **263건이 DNS 이름풀이 실패** — 코드로 못 고친다.
+    기록은 남기되 Tier-2 세션은 열리지 않아야 한다.
+    """
+    import inspect
+
+    from JARVIS03_RADAR import radar_main as _rm
+    from JARVIS07_GUARDIAN.severity import is_transient, non_code_issue_kinds
+
+    src = _code_only(inspect.getsource(_rm.save))
+    assert "_g_report" in src, "빈손 회차 신호가 아무 데도 안 간다"
+    assert "trends_empty" in inspect.getsource(_rm.save), "kind 가 안 실린다"
+
+    assert "trends_empty" in non_code_issue_kinds(), "승인 목록에 없다 — Tier-2 를 태운다"
+    assert is_transient("TrendsEmptyRunPreserved", "실트렌드 0개", "radar",
+                        kind="trends_empty"), "수집 전멸이 Tier-2 로 간다"
+    # 진짜 코드결함까지 삼키면 안 된다
+    assert not is_transient("NameError", "name 'x' is not defined", "radar", kind="")
+
+
+def test_격리_설명이_실제_결정과_같다():
+    """★ 설명기가 다리를 하나씩 물어 **조기 return 우선순위를 무시**했다.
+
+    봉투 kind + companions 없음 → 실제 판정은 *격리 안 함* 인데, 설명기는 그 분기를
+    건너뛰고 메시지 정규식 다리가 True 인 것을 보고 "정규식:메시지" 라 답했다 —
+    격리 버킷 보고 **91행 전부**가 그랬다. 설명이 결정과 어긋나면 엉뚱한 곳을 고친다.
+    """
+    import json
+
+    from JARVIS07_GUARDIAN.guardian_agent import _ignore_reason
+    from JARVIS07_GUARDIAN.severity import is_transient, kind_of
+
+    cases = [
+        # (context, 실제로 격리되나)
+        ({"kind": "stuck", "companions": 0}, False),
+        ({"kind": "abort", "companions": 5}, True),
+        ({"kind": "abort"}, False),                       # companions 미상 = fail-closed
+    ]
+    for ctx, expect_ignored in cases:
+        rec = {"error_type": "RuntimeError", "source": "harness",
+               "message": "일시적인 네트워크 오류로 실패했습니다", "context": json.dumps(ctx)}
+        from JARVIS07_GUARDIAN.severity import companions_of
+        real = is_transient(rec["error_type"], rec["message"], rec["source"],
+                            kind=kind_of(rec), companions=companions_of(rec))
+        assert real is expect_ignored, f"전제 변경: {ctx} → {real}"
+        why = _ignore_reason(rec)
+        if not real:
+            assert "격리 대상 아님" in why, \
+                f"격리되지 않았는데 '걸렀다' 고 설명한다: {why}"
+        else:
+            assert "격리 대상 아님" not in why, f"격리됐는데 아니라고 한다: {why}"
+
+
+def test_시도_상한이_모든_통로에_걸린다():
+    """★ 상한을 만들어 놓고 한 통로에만 걸면 그 상한은 없는 것과 같다 (③원칙).
+
+    실측: `_orchestrate` 만 `bump_llm_attempts` 를 불렀고 backlog 경로는 안 불렀다.
+    그래서 7월 워치독 freeze 같은 *지나간 사건* 이 심층 감사마다 LLM 세션을 다시 열었다.
+    게다가 상한에 도달해 `wontfix` 가 된 것을 backlog 수집기가 **다시 끌어왔다**.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+    from JARVIS07_GUARDIAN.architecture import MAX_LLM_ATTEMPTS as _cap
+
+    # ① 수집기가 상한을 존중하는가 — 숫자를 박지 않고 주인에서 파생하는가
+    src = _code_only(inspect.getsource(_ga._collect_unresolved))
+    assert "MAX_LLM_ATTEMPTS" in src, "수집기가 상한을 안 본다"
+    assert str(_cap) not in src.replace("MAX_LLM_ATTEMPTS", ""), "상한 숫자를 박았다"
+
+    # ② LLM 을 부르는 **모든** 곳이 시도를 세는가
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        body = ast.unparse(fn)
+        if "analyze_llm_only" not in body and "analyze_llm" not in body:
+            continue
+        assert "bump_llm_attempts" in body, \
+            f"{fn.name} 이 LLM 을 부르면서 시도를 세지 않는다 — 상한이 무력해진다"
+
+    # ③ 실제로 걸러지는가 (실행 검증)
+    from shared import db as _db
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
+                    "llm_attempts) VALUES ('capprobe','m','X','x','wontfix',?)", (_cap,))
+        eid = con.execute("SELECT id FROM error_log WHERE source='capprobe' "
+                          "ORDER BY id DESC LIMIT 1").fetchone()[0]
+    try:
+        got = {r.get("id") for r in _ga._collect_unresolved(500)}
+        assert eid not in got, "상한 도달분이 backlog 에 다시 들어온다 — 상한이 무력"
+        with _db.get_db() as con:
+            con.execute("UPDATE error_log SET llm_attempts=? WHERE id=?", (_cap - 1, eid))
+        assert eid in _ga._collect_unresolved.__wrapped__(500) if hasattr(
+            _ga._collect_unresolved, "__wrapped__") else eid in {
+            r.get("id") for r in _ga._collect_unresolved(500)}, \
+            "여유가 남았는데 제외했다 — 과잉 차단"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+
+
+def test_테스트가_운영_데이터_폴더를_안_쓴다():
+    """★ DB 는 막고 있었는데 **파일** 은 아무도 안 막고 있었다.
+
+    운영 `JARVIS03_RADAR/data/` 는 데몬이 동시에 읽는다(발행·팩 빌드가 이 판을 먹는다).
+    `.gitignore` 대상이라 `git status` 로도 안 보여 사고가 나도 흔적이 없다.
+    검사가 아니라 **기본값 교체** 다 — 새로 쓰는 테스트도 자동으로 안전해야 한다.
+    """
+    from pathlib import Path as _P
+
+    from JARVIS03_RADAR import jobs as _jobs
+    from JARVIS03_RADAR import radar_main as _rm
+
+    real = _ROOT / "JARVIS03_RADAR" / "data"
+    assert _P(_rm.DATA_DIR).resolve() != real.resolve(), \
+        f"테스트가 운영 데이터 폴더를 잡았다: {_rm.DATA_DIR}"
+    assert _P(_jobs._RADAR_DIR).resolve() != (_ROOT / "JARVIS03_RADAR").resolve(), \
+        f"jobs 가 운영 폴더를 잡았다: {_jobs._RADAR_DIR}"
+
+
+def test_테스트가_외부로_메시지를_안_보낸다():
+    """★ conftest 는 "외부 전송 차단" 이라 적어 뒀는데 **그 값을 읽는 코드가 0곳**이었다.
+
+    실제로는 아무것도 막지 않아서 `pytest tests/` 를 돌릴 때마다 사용자 실제 챗으로
+    가짜 운영 경보가 나갔다('🚨 하네스 검증 순환 한계 — 송출 차단' 등, 진짜 사고
+    알림과 구분 불가). CI 가 조용했던 건 막아서가 아니라 클론에 `.env` 가 없어
+    토큰이 없었기 때문 — 즉 이 경로는 한 번도 검증된 적이 없었다.
+
+    막는 곳은 **실제로 던지는 함수** 여야 한다(①). 상위 래퍼에 걸면 새 래퍼가 샌다.
+    """
+    import os
+    import ast
+
+    assert os.getenv("JARVIS_TEST_MODE") == "1", "테스트 모드 플래그가 안 켜졌다"
+
+    # ① 실제 전송 함수가 막는가 — 동작으로 확인 (설정 존재는 적용의 증거가 아니다)
+    from shared.notify import _post_message
+    ok, why, retry = _post_message("이 문장이 밖으로 나가면 안 된다", "", "8443184086")
+    assert ok is False and "테스트 모드" in why, f"외부 전송이 열려 있다: {ok} / {why}"
+    assert retry is False, "재시도 대상으로 남으면 아웃박스가 나중에 보낸다"
+
+    # ② 전송 통로가 하나 더 있으면 거기도 막혀야 한다 (③ — 통로가 둘이면 둘 다)
+    senders = []
+    for f in sorted(_ROOT.rglob("*.py")):
+        if any(x in f.parts for x in (".venv", "__pycache__", "tests", "dashboard")):
+            continue
+        src = f.read_text(encoding="utf-8", errors="ignore")
+        if "/sendMessage" not in src:
+            continue
+        senders.append(str(f.relative_to(_ROOT)))
+        assert "JARVIS_TEST_MODE" in src, \
+            f"{f.relative_to(_ROOT)} 이 sendMessage 를 치는데 테스트 모드를 안 본다"
+    # ★ 개수 하한(`>= 2`)은 회귀를 통과시킨다 (2026-08-09 — 동시 세션 지적).
+    #   탐지가 새 통로를 놓쳐도 옛 통로 둘만 세면 통과한다. **집합으로** 대조한다:
+    #   텔레그램 호스트를 언급하는 파일과, 실제로 메시지를 던지는 파일을 따로 구해
+    #   후자가 전자에 포함되고 비어 있지 않은지 본다.
+    mentions = set()
+    for f in sorted(_ROOT.rglob("*.py")):
+        if any(x in f.parts for x in (".venv", "__pycache__", "tests", "dashboard")):
+            continue
+        if "api.telegram.org" in f.read_text(encoding="utf-8", errors="ignore"):
+            mentions.add(str(f.relative_to(_ROOT)))
+    assert set(senders) <= mentions, f"탐지 집합이 어긋난다: {set(senders) - mentions}"
+    assert "shared/notify.py" in senders, \
+        f"실제 전송 함수를 못 찾았다 — 탐지가 깨졌다: {sorted(senders)}"
+    assert len(senders) >= 2, f"전송 통로가 하나뿐? 탐지 실패 의심: {sorted(senders)}"
+
+
+def test_테스트가_라이브_대시보드를_안_건드린다():
+    """★ 데몬·API서버(:9198)가 **동시에 읽고 쓰는** 파일을 테스트가 통째로 교체했다.
+
+    라이브 피드에 가짜 발행 엣지(J06 IMAGE → J08 PUBLISH)가 남았다.
+    conftest 의 데이터 가드는 RADAR 상수 두 개만 갈아끼워 이 파일을 놓쳤다.
+    """
+    from pathlib import Path as _P
+
+    import shared.pipeline_activity as _pa
+
+    live = _P.home() / ".jarvis" / "pipeline_activity.json"
+    assert _P(_pa._DATA_FILE).resolve() != live.resolve(), \
+        f"테스트가 라이브 대시보드 파일을 잡았다: {_pa._DATA_FILE}"
+
+
+def test_Tier2_앞_판단이_두_통로에서_같다():
+    """★ 상한을 옮겼는데 **상한 앞의 판단** 은 한쪽에만 있었다 (2026-08-09 3차 검증).
+
+    `_orchestrate` 는 Tier-2 앞에 세 문을 세워 뒀다 — critical 은 Tier-1 까지만 ·
+    보안 파일 차단 · 재시도 남은 잠정실패 보류. `deep_audit_backlog` 루프엔 **셋 다
+    없어서**, `_orchestrate` 가 LLM 0회로 돌려보낸 오류가 여기선 전원 세션을 열었다.
+    판단이 두 벌이면 반드시 갈라진다.
+    """
+    import ast
+
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+
+    # ① 판단 자체 (실행 검증)
+    cases = [
+        ({"module": "jarvis_daemon.py"}, "보안"),
+        ({"module": "JARVIS08_PUBLISH/credentials/login_manager.py"}, "보안"),
+        ({"severity": "critical", "module": "x.py"}, "critical"),
+        ({"provisional": 1, "error_type": "RuntimeError", "module": "x.py"}, "잠정"),
+        ({"module": "JARVIS02_WRITER/length_manager.py", "severity": "medium"}, None),
+    ]
+    for rec, want in cases:
+        got = _ga.tier2_blocked_reason(rec)
+        if want is None:
+            assert got is None, f"정상 오류를 막았다: {rec} → {got}"
+        else:
+            assert got and want in got, f"{rec} 를 안 막는다 (got={got})"
+
+    # ② 두 통로가 **그 함수** 를 쓰는가 (판단 복제 금지)
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    for name in ("_orchestrate", "deep_audit_backlog"):
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == name)
+        assert "tier2_blocked_reason" in ast.unparse(fn), \
+            f"{name} 이 공용 판단을 안 쓴다 — 문이 두 벌이 된다"
+
+
+def test_보안파일은_실제_쓰기관문에서_막힌다():
+    """★ `DENY_FIX_PATHS` 는 '자동수정 절대 금지' 인데 소비자가 하나뿐이었다.
+
+    그마저 *오류 레코드의 module* 만 봤고, 정작 **파일을 여는 관문**(`_safe_path`)은
+    그 목록을 몰랐다. 실측: `jarvis_daemon.py`·`login_manager.py` 가 관문을 그대로
+    통과했고 샌드박스 end-to-end 에서 두 파일 모두 실제로 패치됐다.
+    (`.env`·`*.pkl` 은 확장자 규칙에 *우연히* 걸렸을 뿐 목록 때문이 아니었다.)
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN.architecture import DENY_FIX_PATHS
+    from JARVIS07_GUARDIAN.error_fixer import _safe_path
+
+    for name in sorted(DENY_FIX_PATHS):
+        assert _safe_path(name) is None, f"보안 파일이 쓰기 관문을 통과한다: {name}"
+    # 경로가 붙은 형태도 (LLM 이 TARGET_FILE 로 지목하는 실제 모양)
+    assert _safe_path("JARVIS08_PUBLISH/credentials/login_manager.py") is None
+    # 정상 파일까지 막으면 자동수정이 죽는다
+    assert _safe_path("JARVIS02_WRITER/length_manager.py") is not None
+
+    # 목록을 복제하지 않고 주인에서 파생하는가 (①)
+    src = _code_only(inspect.getsource(_safe_path))
+    assert "DENY_FIX_PATHS" in src, "쓰기 관문이 주인 목록을 안 본다"
+    for lit in ("jarvis_daemon", "login_manager"):
+        assert lit not in src, f"목록을 복제했다({lit}) — 주인이 바뀌면 갈라진다"
+
+
+def test_LLM이_안_돌면_시도로_세지_않는다():
+    """★ 발행 중이면 `analyze_llm_only` 는 맨 앞에서 LLM 없이 돌아온다.
+
+    그런데 시도 카운트를 호출 *앞* 에서 올려서, **실제 호출 0회로 상한이 소진** 되고
+    `_collect_unresolved` 가 그 행을 영구 제외했다 — 고칠 기회를 한 번도 안 주고 버린다.
+    """
+    import ast
+
+    from JARVIS07_GUARDIAN.error_analyzer import analyze_llm_only
+
+    # ① 위임을 **구조화 필드**로 알리는가 (문구 추측 금지)
+    import shared.llm as _sl
+    _orig = _sl.is_publishing
+    _sl.is_publishing = lambda: True
+    try:
+        got = analyze_llm_only({"error_type": "X", "message": "m", "module": "x.py"})
+    finally:
+        _sl.is_publishing = _orig
+    assert got.get("deferred") is True, f"위임을 구조화 필드로 안 알린다: {got}"
+    assert got.get("fixable") is False
+
+    # ② 호출자가 그 필드를 보고 세는가 — bump 가 호출 *뒤* 에, deferred 검사와 함께
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "deep_audit_backlog")
+    body = ast.unparse(fn)
+    assert "deferred" in body, "위임 여부를 안 본다 — LLM 0회로 상한이 소진된다"
+    assert body.index("analyze_llm_only") < body.index("bump_llm_attempts"), \
+        "시도를 호출 앞에서 센다 — 실제로 안 돈 것까지 세어진다"
+
+
+def test_하네스_미송출이_잡_실패로_남는다():
+    """★ `run_action` 반환을 **통째로 버려서**, abort 해도 함수는 정상 종료했다.
+
+    → APScheduler `EVENT_JOB_EXECUTED` → `job_runs.success=1`.
+    실측: combined_keywords=0(수집 전멸, 글 유실)이던 07-31·08-01·08-02 의
+    `radar_trends_*` **6건이 전부 success=1 · error=''**. 일일 잡 리포트는 이 컬럼만
+    세므로 사람에게는 '✅ 정상' 으로 보고됐다 — 글이 사라진 그 날에.
+    """
+    import importlib
+
+    jobs = importlib.import_module("JARVIS03_RADAR.jobs")
+
+    # 검증이 실패하는 액션 → 예외로 올라와야 한다 (실행 검증)
+    raised = None
+    try:
+        jobs._run_with_harness("probe_fail", lambda: None,
+                               verify_fn=lambda _r: ["일부러 실패"], max_attempts=1)
+    except Exception as e:
+        raised = e
+    assert raised is not None, "미송출인데 조용히 정상 종료한다 — job_runs 에 success=1 로 남는다"
+    assert "probe_fail" in str(raised), f"어느 잡이 실패했는지 안 알린다: {raised}"
+
+    # 정상 액션은 예외 없이 끝나야 한다 (과잉 실패 금지)
+    jobs._run_with_harness("probe_ok", lambda: None, verify_fn=lambda _r: [], max_attempts=1)
+
+    # ★ `deferred` 는 **실패가 아니다** — 올리면 안 된다 (2026-08-09 회귀 검증).
+    #   하네스는 인터프리터 종료·동시 실행 중복을 `delivered=False` 로 돌려주되
+    #   `deferred=True` 를 함께 싣는다. 2026-08-07 에 "아직 돌고 있다는 정상 동작이고
+    #   고칠 것이 없다" 며 일부러 실패에서 뺀 경우인데, `delivered` 만 보면 되살아난다.
+    #   실측: 정상 레이스가 `job_runs.success=0` + `error_log` 적재 + 텔레그램까지 갔다.
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _slow():
+        started.set()
+        release.wait(10)
+
+    t = threading.Thread(target=lambda: jobs._run_with_harness(
+        "probe_race", _slow, verify_fn=lambda _r: [], max_attempts=1), daemon=True)
+    t.start()
+    assert started.wait(10), "첫 액션이 시작되지 않았다 — 검사 전제가 깨졌다"
+    try:
+        # 같은 액션명을 겹쳐 부른다 → 하네스가 동시중복으로 deferred 반환
+        second = jobs._run_with_harness("probe_race", lambda: None,
+                                        verify_fn=lambda _r: [], max_attempts=1)
+    except Exception as e:                       # noqa: BLE001
+        release.set(); t.join(10)
+        raise AssertionError(f"동시 실행 중복(정상 스킵)을 실패로 올린다: {e}") from None
+    release.set(); t.join(10)
+    assert getattr(second, "deferred", False), "전제 변경 — 동시중복이 deferred 가 아니다"
+    assert getattr(second, "concurrent_blocked", False), "구조화 판정 필드가 안 섰다"
+
+
+def test_판을_지켰으면_DB도_안_무른다(tmp_path, monkeypatch):
+    """★ 보존 가드가 *파일 한 통로* 에만 걸려 있었다.
+
+    같은 회차에서 `push_to_shared` 가 이어 돌며 `save_trends()` 가
+    `DELETE FROM trends WHERE date=?` 후 이번 회차분을 넣는다. 빈손 회차의 실제 모양은
+    combined=0 · scored=정적시드 30 이라, 파일은 아침 실트렌드 50개를 지키는데
+    **DB 는 정적시드 30개로 갈렸다**. 대시보드·API 는 파일이 아니라 DB 를 읽는다.
+    """
+    import importlib
+
+    rm = importlib.import_module("JARVIS03_RADAR.radar_main")
+    monkeypatch.setattr(rm, "DATA_DIR", tmp_path)
+    day = "2026-01-05"
+
+    assert rm.save({"date": day, "combined_keywords": [{"keyword": "가"}] * 4,
+                    "scored_keywords": [1]}) is True, "정상 수집분을 안 썼다"
+    assert rm.save({"date": day, "combined_keywords": [],
+                    "scored_keywords": [1] * 30}) is False, \
+        "빈손 회차인데 '새로 썼다' 고 답한다 — DB 통로가 그 답을 믿고 덮는다"
+
+    # 호출부가 그 답을 실제로 따르는가
+    src = (_ROOT / "JARVIS03_RADAR/radar_main.py").read_text(encoding="utf-8")
+    i = src.index("_fresh   = save(data)")
+    tail = src[i:i + 800]
+    assert "not _fresh" in tail and "push_to_shared" in tail, \
+        "DB 통로가 보존 여부를 안 본다 — 파일만 지키고 DB 는 갈린다"
+
+
+def test_위반_판정을_가진_행이_weight를_움직인다():
+    """★ `(insight_id, analysis_id)` 쌍당 *처음 만난 행* 이 weight 를 갱신했는데,
+
+    `get_unrewarded_usage` 가 `used_at ASC` 라 그 '처음' 은 **항상 가장 오래된 미귀속 행**
+    이었다. 발행이 막혀 남은 옛 배치가 이번 회차 글의 보상을 선점하면, 게이트가 기록한
+    `violated` 는 weight 에 한 번도 닿지 않는다(실측 창 안 288행·37배치, 54개 지침이
+    여러 배치에 걸침). '위반 기록 → 보상 귀속' 고리가 거기서 끊긴다.
+
+    ★ 이 검사는 **실제 귀속을 돌려** 확인한다 — 소스에 이름이 있는지나 순위 함수를
+      테스트가 재구현해서 보면, 실제 호출부에서 그 순위를 안 써도 통과한다
+      (뮤테이션에서 실제로 통과했다).
+    """
+    from JARVIS07_GUARDIAN.quality_learner import (attribute_pending_rewards,
+                                                   _VIOLATION_PENALTY)
+    from shared import db as _db
+
+    SC = "__reward_race__"
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [(f"{SC}:style_R", "경합 지침", SC)])
+        iid = ids[0]
+        con.execute("UPDATE learning_insights SET weight=1.0 WHERE id=?", (iid,))
+        # 채점 완료된 글 1건 (보상 신호)
+        con.execute(
+            "INSERT INTO post_analysis (platform, post_type, theme, quality_score, "
+            "  created_at, analyzed_at) VALUES ('naver', ?, 't', 80, "
+            "  datetime('now','localtime'), datetime('now','localtime'))", (SC,))
+        aid = con.execute("SELECT id FROM post_analysis WHERE post_type=? "
+                          "ORDER BY id DESC LIMIT 1", (SC,)).fetchone()[0]
+        # 같은 지침이 두 배치에 — 옛 배치(위반 판정 없음) + 이번 배치(위반)
+        for bid, delta, viol in (("b_old", "-90 minute", None), ("b_new", "-5 minute", 1)):
+            con.execute(
+                "INSERT INTO insight_usage (batch_id, insight_id, scope, platform, "
+                "  used_at, violated) VALUES (?,?,?,?, "
+                "  datetime('now','localtime',?), ?)",
+                (bid, iid, SC, "naver", delta, viol))
+
+    def _w():
+        with _db.get_db() as con:
+            return con.execute("SELECT weight FROM learning_insights WHERE id=?",
+                               (iid,)).fetchone()[0]
+    before = _w()
+    try:
+        attribute_pending_rewards(days=7)
+        after = _w()
+        assert after != before, "보상이 아예 안 붙었다 — 검사 전제가 깨졌다"
+
+        # 위반 페널티가 반영됐다면, 페널티 없는 경우보다 **덜 올라야** 한다.
+        with _db.get_db() as con:
+            rows = [dict(r) for r in con.execute(
+                "SELECT batch_id, reward, violated FROM insight_usage WHERE insight_id=?",
+                (iid,))]
+        rewarded = {r["batch_id"]: r["reward"] for r in rows if r["reward"] is not None}
+        assert len(rewarded) == 2, f"두 행 모두 마감돼야 한다: {rewarded}"
+        assert rewarded["b_new"] is not None and rewarded["b_old"] is not None
+        # 위반 행의 보상이 무위반 행보다 정확히 페널티만큼 낮아야 한다
+        assert abs((rewarded["b_old"] - rewarded["b_new"]) - _VIOLATION_PENALTY) < 1e-6, \
+            f"위반 페널티가 보상에 반영되지 않았다: {rewarded}"
+
+        # ★ 핵심 — weight 는 **위반 행의 보상** 으로 움직여야 한다.
+        #   공식(`shared/db.apply_insight_reward`): weight + alpha*(reward - neutral).
+        #   어느 행이 weight 를 움직였는지는 그 값에 그대로 드러난다.
+        from JARVIS07_GUARDIAN.quality_learner import REWARD_ALPHA, reward_neutral
+        _n = reward_neutral()
+        want_viol = before + REWARD_ALPHA * (rewarded["b_new"] - _n)
+        want_old  = before + REWARD_ALPHA * (rewarded["b_old"] - _n)
+        assert abs(after - want_viol) < 1e-6, (
+            f"weight 를 움직인 행이 위반 행이 아니다 — 옛 행이 선점했다 "
+            f"(after={after:.6f} / 위반행 기준={want_viol:.6f} / 옛행 기준={want_old:.6f})")
+        assert abs(want_viol - want_old) > 1e-6, "두 기준이 같아 판별이 안 된다 — 전제 붕괴"
+
+        # ★ **판정을 가진 행** 이 기준이다 — '최신' 만으로는 부족하다.
+        #   옛 배치가 검사됐고 새 배치는 미검사인 경우(게이트가 못 돈 회차), 시각만
+        #   보면 미검사 행이 이겨 판정이 통째로 버려진다.
+        with _db.get_db() as con:
+            con.execute("UPDATE learning_insights SET weight=1.0 WHERE id=?", (iid,))
+            con.execute("UPDATE insight_usage SET reward=NULL, analysis_id=NULL, "
+                        "rewarded_at=NULL WHERE insight_id=?", (iid,))
+            con.execute("UPDATE insight_usage SET violated=1 WHERE batch_id='b_old' "
+                        "  AND insight_id=?", (iid,))
+            con.execute("UPDATE insight_usage SET violated=NULL WHERE batch_id='b_new' "
+                        "  AND insight_id=?", (iid,))
+        attribute_pending_rewards(days=7)
+        with _db.get_db() as con:
+            rows2 = {r["batch_id"]: r["reward"] for r in con.execute(
+                "SELECT batch_id, reward FROM insight_usage WHERE insight_id=?", (iid,))}
+        after2 = _w()
+        want_judged = 1.0 + REWARD_ALPHA * (rows2["b_old"] - _n)     # 판정을 가진 옛 행
+        want_newest = 1.0 + REWARD_ALPHA * (rows2["b_new"] - _n)     # 그냥 최신 행
+        assert abs(want_judged - want_newest) > 1e-6, "판별이 안 되는 배치 — 전제 붕괴"
+        assert abs(after2 - want_judged) < 1e-6, (
+            f"판정 없는 최신 행이 weight 를 움직였다 — 게이트 판정이 버려진다 "
+            f"(after={after2:.6f} / 판정행={want_judged:.6f} / 최신행={want_newest:.6f})")
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM insight_usage WHERE insight_id=?", (iid,))
+            con.execute("DELETE FROM learning_insights WHERE id=?", (iid,))
+            con.execute("DELETE FROM post_analysis WHERE post_type=?", (SC,))
+
+
+def test_보상과_중립점은_같은_자에서_나온다():
+    """★ 둘을 *따로* 폴백시켜 **[0,1] 획득률을 총점 중앙값 0.685 와 비교** 했다.
+
+    실측 A1~A5(매력도 5축) 5개 항목이 그 상태이고 그 항목을 겨눈 활성 지침이 18개.
+    0점 항목을 겨눈 지침은 매 귀속마다 Δw ≈ −0.21 을 맞는데 방향이 반대다 —
+    지침이 옳아도 항목이 어려우면 계속 내려간다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+
+    fn = inspect.getsource(_ql.attribute_pending_rewards)
+    tree = ast.parse(fn.lstrip())
+    # `r is None or _n is None` 한 조건에서 **둘 다** 총점 자로 되돌아가야 한다
+    joined = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+              and isinstance(n.test, ast.BoolOp) and isinstance(n.test.op, ast.Or)
+              and "_n is None" in ast.unparse(n.test) and "r is None" in ast.unparse(n.test)]
+    assert joined, "보상과 중립점이 따로 폴백한다 — 단위가 섞인다"
+    body = ast.unparse(joined[0])
+    assert "_reward_from_analysis" in body and "_neutral" in body, \
+        f"한쪽만 되돌린다: {body[:120]}"
+
+    # 항목별 중립점이 없는 항목이 실제로 존재하는지 (전제 확인)
+    from JARVIS02_WRITER.post_scorer import item_index
+    missing = [k for k in item_index() if _ql.item_reward_neutral(k) is None]
+    assert missing, "중립점 없는 항목이 0개 — 이 검사의 전제가 사라졌다(그래도 가드는 유지)"
+
+
+def test_지침이_없어도_약점항목은_주입된다():
+    """★ 두 주입은 원본이 다르다 — 지침은 UCB 풀에서, 약점은 채점 실측에서.
+
+    그런데 후자의 생사가 전자에 묶여 있어, 지침 풀이 마르면 "최근 100% 의 글에서 0점"
+    이라는 가장 구체적인 지시가 통째로 사라졌다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import quality_learner as _ql
+
+    src = inspect.getsource(_ql.build_insights_block)
+    i = src.index("if not rows:")
+    tail = src[i:i + 900]
+    assert "_weak_items_block" in tail, \
+        "지침이 없으면 약점 블록까지 버린다 — 원본이 다른데 생사가 묶였다"
+
+    # ③ 4조합 전부에서 같은 동작인가
+    for scope in ("economic", "theme"):
+        for platform in ("naver", "tistory"):
+            blk = _ql.build_insights_block(scope=f"__empty_{scope}__", platform=platform)
+            weak = _ql._weak_items_block(f"__empty_{scope}__", platform)
+            assert blk == (weak or ""), f"{scope}/{platform} 에서 약점 블록이 유실된다"
+
+
+def test_심층감사_실패해도_격리보고와_busy해제는_된다():
+    """★ `raise` 가 3부보다 **앞** 이라, 실패한 회차엔 격리 버킷 주간 보고가 안 나가고
+
+    `mark_busy("j07", ttl=3600)` 이 해제되지 않아 활동 표시가 최대 1시간 거짓으로 남았다.
+    격리분을 가장 봐야 할 회차가 정확히 실패한 회차인데 그때 보고가 꺼졌다.
+    실측 `self_repair_runs` 106회 중 9회(8.5%) 비0 rc · 최근 5회 중 2회.
+    """
+    import ast
+
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "job_deep_audit")
+    body = ast.unparse(fn)
+    for what in ("report_ignored_bucket", "clear_busy"):
+        assert body.index(what) < body.index("심층 감사 실패"), \
+            f"{what} 가 raise 뒤에 있다 — 실패한 회차엔 실행되지 않는다"
+
+
+def test_저장_실패를_성공으로_적지_않는다(tmp_path, monkeypatch):
+    """★ `write_json` 은 예외를 안 던지고 `False` 를 돌려준다.
+
+    반환을 버리면 디스크 풀·권한·락 실패가 **성공으로 보고** 되고, 유일한 안전망인
+    `_verify_trends` 는 파일만 읽어 앞 회차의 낡은 판을 보고 통과시킨다.
+    """
+    import importlib
+
+    import pytest
+
+    rm = importlib.import_module("JARVIS03_RADAR.radar_main")
+    monkeypatch.setattr(rm, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(rm, "write_json", lambda *a, **k: False)
+    with pytest.raises(RuntimeError, match="저장 실패"):
+        rm.save({"date": "2026-01-09", "combined_keywords": [{"keyword": "x"}],
+                 "scored_keywords": [1]})
+
+    # 보존 분기도 같은 규칙 (③ — 통로가 둘이면 둘 다)
+    monkeypatch.setattr(rm, "write_json", lambda *a, **k: True)
+    rm.save({"date": "2026-01-09", "combined_keywords": [{"keyword": "x"}] * 2,
+             "scored_keywords": [1]})
+    monkeypatch.setattr(rm, "write_json", lambda *a, **k: False)
+    with pytest.raises(RuntimeError, match="저장 실패"):
+        rm.save({"date": "2026-01-09", "combined_keywords": [], "scored_keywords": []})
+
+
+def test_오류_사슬이_끊기지_않고_이어진다():
+    """★ 오늘 깨진 것은 전부 **링크 하나** 가 아니라 **링크 사이의 연결** 이었다.
+
+    개별 함수는 각자 테스트가 있는데도 캐치→분류→backlog→상태 사이에서 계속 끊겼다
+    (게이트가 한 통로에만 · 검사와 기록이 다른 원본 · 상한이 한 경로에만).
+    그래서 사슬을 **한 바퀴 돌려** 연결 자체를 검사한다.
+    """
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+    from JARVIS07_GUARDIAN.error_collector import report as _catch
+    from shared import db as _db
+
+    try:
+        raise NameError("name 'undefined_chain_probe' is not defined")
+    except NameError as e:
+        eid = _catch(e, "writer", module="JARVIS02_WRITER/length_manager.py",
+                     func_name="chain_probe")
+    assert eid, "① 캐치 실패 — 예외가 error_log 에 안 들어간다"
+    try:
+        with _db.get_db() as con:
+            rec = dict(con.execute("SELECT * FROM error_log WHERE id=?", (eid,)).fetchone())
+        assert rec["error_type"] == "NameError", f"타입이 뭉개졌다: {rec['error_type']}"
+        assert rec["status"] == "new", f"수집 직후 상태가 다르다: {rec['status']}"
+
+        # ② 분류 — 평범한 코드 오류는 Tier-2 로 갈 수 있어야 한다 (과잉 차단 금지)
+        assert _ga.tier2_blocked_reason(rec) is None, \
+            f"정상 코드 오류를 Tier-2 에서 막는다: {_ga.tier2_blocked_reason(rec)}"
+
+        # ③ backlog 가 그것을 집는가 (상한 필터가 정상 오류까지 걸러내면 안 된다)
+        got = {r.get("id") for r in _ga._collect_unresolved(500)}
+        assert eid in got, "③ backlog 가 미해결 오류를 안 집는다 — 재시도 경로 단절"
+
+        # ④ 상태 변경에 근거가 남는가 (호출 지점까지)
+        _db.mark_error_status(eid, "wontfix")
+        with _db.get_db() as con:
+            why = con.execute("SELECT resolution FROM error_log WHERE id=?",
+                              (eid,)).fetchone()[0]
+        assert (why or "").strip(), "④ 근거 없이 상태가 바뀐다"
+        assert f"{__name__.rsplit('.', 1)[-1]}.test_" in why, \
+            f"④ 근거가 호출 지점을 못 가리킨다: {why}"
+
+        # ⑤ 상한에 도달하면 재시도 큐에서 빠지는가 (무한 재시도 방지)
+        from JARVIS07_GUARDIAN.architecture import MAX_LLM_ATTEMPTS as _cap
+        with _db.get_db() as con:
+            con.execute("UPDATE error_log SET llm_attempts=? WHERE id=?", (_cap, eid))
+        assert eid not in {r.get("id") for r in _ga._collect_unresolved(500)}, \
+            "⑤ 상한 도달분이 계속 재시도된다 — 상한이 무력"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+
+
+def test_지침_사슬이_끊기지_않고_이어진다():
+    """★ 주입 → 사용기록 → 검사 → 위반기록 → 보상 → weight 가 **한 원본**으로 이어지는가.
+
+    실측 `insight_usage` 966건 중 `violated` 1건 — 판정은 돌았는데 기록에 닿지 않았다.
+    링크마다 테스트가 있어도 *사이* 가 끊기면 학습은 프롬프트만 길게 만든다.
+    """
+    from JARVIS07_GUARDIAN.quality_learner import (active_directives,
+                                                   attribute_pending_rewards,
+                                                   record_directive_violations)
+    from shared import db as _db
+
+    SC = "__chain_probe__"
+    with _db.get_db() as con:
+        ids = _seed_insights(con, [(f"{SC}:style_C", "사슬 지침", SC)])
+        con.execute("INSERT INTO post_analysis (platform, post_type, theme, quality_score, "
+                    "  created_at, analyzed_at) VALUES ('naver', ?, 't', 70, "
+                    "  datetime('now','localtime'), datetime('now','localtime'))", (SC,))
+    batch = "tbatch_chain"
+    try:
+        # ① 주입 기록
+        _db.record_insight_usage(batch, ids, scope=SC, platform="naver")
+        # ② 게이트가 **같은 묶음** 을 본다
+        checked = active_directives(scope=SC, platform="naver")
+        assert "사슬 지침" in checked, f"② 검사 목록이 주입과 다르다: {checked}"
+        # ③ 어긴 것이 기록된다
+        assert record_directive_violations(SC, "naver", ["사슬 지침"]) == 1, \
+            "③ 검사한 지침을 기록하지 못한다 — 검사·기록 원본이 갈라졌다"
+        with _db.get_db() as con:
+            assert con.execute("SELECT violated FROM insight_usage WHERE batch_id=?",
+                               (batch,)).fetchone()[0] == 1
+        # ④ 보상이 그 판정을 반영해 weight 로 간다
+        before = _db.get_db().execute("SELECT weight FROM learning_insights WHERE id=?",
+                                      (ids[0],)).fetchone()[0]
+        attribute_pending_rewards(days=7)
+        with _db.get_db() as con:
+            row = dict(con.execute("SELECT reward, rewarded_at FROM insight_usage "
+                                   "WHERE batch_id=?", (batch,)).fetchone())
+            after = con.execute("SELECT weight FROM learning_insights WHERE id=?",
+                                (ids[0],)).fetchone()[0]
+        assert row["reward"] is not None, "④ 보상이 귀속되지 않는다 — 고리 단절"
+        assert after != before, "④ weight 가 안 움직인다 — 학습이 반영되지 않는다"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM insight_usage WHERE batch_id=?", (batch,))
+            con.execute("DELETE FROM learning_insights WHERE id IN (%s)"
+                        % ",".join("?" * len(ids)), ids)
+            con.execute("DELETE FROM post_analysis WHERE post_type=?", (SC,))
+
+
+def test_사전점검이_두_플랫폼_모두_실효를_본다(monkeypatch):
+    """★ "쿠키 파일이 신선한가" 와 "로그인이 되는가" 는 다른 질문이다.
+
+    실측 2회 — 사전점검이 초록인 채로 30분 뒤 발행이 로그인 화면에서 튕겼다:
+      08-08 20:30 precheck ok=1 (0s) → 21:00 theme   ok=0 (28s)
+      08-09 06:30 precheck ok=1      → 07:00 economic ok=0 (163s, CAPTCHA)
+    0초짜리 점검은 네트워크를 안 탔다는 뜻이다.
+
+    ★ **소스 모양이 아니라 동작으로** 본다 (2026-08-09) — 초판은 `"_valid(" in src` 로
+      검사해서, 판정을 `if False:` 로 바꿔도 통과했다(뮤테이션 생존). 게다가 같은 자리를
+      동시 세션과 몇 분 차이로 고쳐 **판정이 두 번 실린 것도** 못 잡았다.
+    """
+    import inspect
+
+    from JARVIS08_PUBLISH.credentials import login_manager as lm
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nvm
+    from JARVIS08_PUBLISH.credentials import tistory_cookie_refresher as tsm
+
+    # ★ `.env` 에 기대지 않는다 (2026-08-09 CI 실패로 발각 — 동시 세션이 ERRORS [587] 로
+    #   **이미 기록해 둔 함정** 인데 내가 그대로 밟았다).
+    #   `.env` 없는 트리(CI·새 체크아웃)에선 env 누락이 먼저 걸려 `if not nv_issues:` 가
+    #   거짓이 되고, 그러면 **판정이 아예 호출되지 않는다**. 로컬만 초록인 테스트가 된다.
+    #   앞단 조건을 전부 통과시켜 두고, 검사하려는 그 한 가지만 남긴다.
+    for _plat in ("naver", "tistory"):
+        for _k in lm._REQUIRED_ENV[_plat]:
+            monkeypatch.setenv(_k, "x")
+    monkeypatch.setattr(lm, "get_naver_cookies", lambda: [{"name": "NID_AUT"}])
+    monkeypatch.setattr(lm, "naver_cookie_age_hours", lambda: 1.0)
+
+    # ① 두 판정 함수가 **같은 3-상태 계약** 인가
+    for mod, who in ((nvm, "naver"), (tsm, "tistory")):
+        fn = getattr(mod, "cookie_valid_http", None)
+        assert fn is not None, f"{who} 에 브라우저 없는 판정 함수가 없다"
+        assert "None" in str(inspect.signature(fn).return_annotation), \
+            f"{who} 판정이 3-상태가 아니다 — '모른다' 를 표현할 수 없다"
+
+    # ② 만료를 **실제로** 반영하는가 (동작 검증)
+    calls = {"naver": 0, "tistory": 0}
+    _onv, _ots = nvm.cookie_valid_http, tsm.cookie_valid_http
+    try:
+        nvm.cookie_valid_http = lambda *a, **k: (calls.__setitem__("naver", calls["naver"] + 1), False)[1]
+        tsm.cookie_valid_http = lambda *a, **k: (calls.__setitem__("tistory", calls["tistory"] + 1), False)[1]
+        got = lm.verify_all_logins()
+        for who in ("naver", "tistory"):
+            assert got[who]["ok"] is False, \
+                f"{who}: 판정이 '만료' 인데 사전점검이 초록이다 — 발행 직전에 튕긴다"
+            assert calls[who] == 1, \
+                f"{who}: 판정 호출이 {calls[who]}회 — 0이면 미배선, 2+ 면 중복(동시 수정 흔적)"
+
+        # ③ '모른다'(None)를 '만료' 로 적지 않는가 — 거짓 경보 방지
+        calls["naver"] = calls["tistory"] = 0
+        nvm.cookie_valid_http = lambda *a, **k: None
+        tsm.cookie_valid_http = lambda *a, **k: None
+        unknown = lm.verify_all_logins()
+        for who in ("naver", "tistory"):
+            assert not any("만료" in i for i in unknown[who]["issues"]), \
+                f"{who}: 판정 불가를 만료로 적는다 — DNS 순단마다 거짓 경보"
+    finally:
+        nvm.cookie_valid_http, tsm.cookie_valid_http = _onv, _ots

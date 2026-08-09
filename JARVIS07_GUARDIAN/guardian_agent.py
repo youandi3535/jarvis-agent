@@ -506,8 +506,24 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
             _retry_original_job(error_record)
             return True
         else:
-            _db.mark_error_status(error_id, "wontfix")
-            log.warning(f"[GUARDIAN] #{error_id} SDK 수정 실패 → status=wontfix")
+            # ★ 롤백된 오류는 **여전히 살아 있다** (2026-08-08 재검증).
+            #   종전엔 `wontfix` 로 찍었는데, `j07_retry_pending`(10분)은 `status='new'`
+            #   만 보므로 그 순간 재시도 루프에서 빠지고 다음 Tier-2 는 최대 7일 뒤다.
+            #   `MAX_LLM_ATTEMPTS` 상한이 이미 있어 무한 재시도 위험은 없다 —
+            #   시도 여유가 남아 있는데 스스로 문을 닫을 이유가 없다.
+            #   실측 wontfix 61건 전부 `resolution` NULL 이었다 — '왜' 가 공백이었다.
+            _attempts = int(error_record.get("llm_attempts") or 0)
+            if _attempts >= _MAX_LLM_ATTEMPTS:
+                _db.mark_error_status(
+                    error_id, "wontfix",
+                    f"Tier-2 {_attempts}회 시도 후에도 미해결 (상한 도달)")
+                log.warning(f"[GUARDIAN] #{error_id} SDK 수정 실패 · 상한 도달 → wontfix")
+            else:
+                _db.mark_error_status(
+                    error_id, "new",
+                    f"Tier-2 수정 실패/롤백 — 재시도 대기 ({_attempts}/{_MAX_LLM_ATTEMPTS})")
+                log.warning(f"[GUARDIAN] #{error_id} SDK 수정 실패 → new (재시도 여유 "
+                            f"{_MAX_LLM_ATTEMPTS - _attempts}회)")
             # 알림은 _orchestrate()의 _notify_all()에서 통합 처리
             return False
 
@@ -533,7 +549,8 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
             pass
         try:
             from shared import db as _db
-            _db.mark_error_status(error_id, "wontfix")
+            _db.mark_error_status(error_id, "wontfix",
+                                  "Tier-2 SDK 브리지 예외 — 수동 검토 필요")
         except Exception:
             pass
         return False
@@ -607,19 +624,26 @@ def _orchestrate(error_id: int):
         #    ★ ERRORS [286] — 네트워크·Selenium 환경·외부 API 할당량·정상 제어흐름(테마 교체)·
         #    외부 발행(Layer 4)·Claude CLI 운영 오류는 wontfix 가 아니라 ignored.
         #    수동검토 큐 오염·알림 폭주 방지. 자동수정 파이프라인 진입 안 함.
-        from JARVIS07_GUARDIAN.severity import (is_transient, kind_of,
+        from JARVIS07_GUARDIAN.severity import (companions_of, is_transient, kind_of,
                                                 is_deterministic_code_error)
+        # ★ `companions` 를 넘긴다 — 봉투 신호가 *유일한 신호* 면 삼키지 않기 위해.
         if is_transient(error_type, error_record.get("message", ""),
-                        error_record.get("source", ""), kind=kind_of(error_record)):
+                        error_record.get("source", ""), kind=kind_of(error_record),
+                        companions=companions_of(error_record)):
             log.info(f"[GUARDIAN] #{error_id} 일시적/외부/제어흐름 오류 — ignored (자동수정 비대상): {error_type}")
-            _db.mark_error_status(error_id, "ignored")
+            _db.mark_error_status(error_id, "ignored",
+                                  f"일시적/외부/제어흐름 오류 — 자동수정 비대상 ({error_type})")
             return
 
         # ── 안전장치 1: 보안 파일 수정 금지 ───────────────────────
+        #   ★ 판단은 `tier2_blocked_reason` 단독 (2026-08-09) — backlog 통로와 **같은 문**.
+        #     여기만 고치면 저쪽이 열린 채로 남는다(실제로 그랬다).
         if _is_deny_path(module):
             log.warning(f"[GUARDIAN] #{error_id} 보안 파일 수정 차단 — {module}")
             _notify_all(error_record, "deny_path")
-            _db.mark_error_status(error_id, "wontfix")
+            _db.mark_error_status(error_id, "wontfix",
+                                  tier2_blocked_reason(error_record)
+                                  or f"보안 파일이라 자동수정 금지 — {module}")
             return
 
         # ── 안전장치 2: Circuit breaker ───────────────────────────
@@ -725,7 +749,9 @@ def _orchestrate(error_id: int):
         if severity == "critical":
             log.warning(f"[GUARDIAN] #{error_id} critical + Tier 1 실패 → 수동 검토")
             _notify_all(error_record, "critical_manual", severity=severity)
-            _db.mark_error_status(error_id, "wontfix")
+            _db.mark_error_status(error_id, "wontfix",
+                                  tier2_blocked_reason(error_record)
+                                  or "critical — Tier-2 생략하고 수동 검토로")
             return
 
         # ── 안전장치 2.65: 잠정 실패는 Tier 2 보류 (★ ERRORS [476]) ────────────
@@ -857,14 +883,57 @@ def _on_error_detected(payload: dict, source: str):
 #  학습 자산(learned_patterns·Bandit)이 비대해질수록 미해결 오류 소급 자동수리율↑.
 #  대상 status: 'new'(미처리) + 'wontfix'(과거 실패 — 패턴 성장 시 재수리 기회).
 
+def tier2_blocked_reason(error_record: dict) -> "str | None":
+    """이 오류에 **Tier-2(LLM)를 태우면 안 되는 사유** — 없으면 None.
+
+    ★ 왜 함수로 뺐나 (2026-08-09 3차 적대적 검증 — ①·③)
+      `_orchestrate` 는 Tier-2 앞에 세 개의 문을 세워 뒀는데(critical 은 Tier-1 까지만 ·
+      보안 파일 차단 · 재시도 남은 잠정실패는 보류), `deep_audit_backlog` 루프에는
+      **셋 다 없었다**. 실측 재현: `_orchestrate` 가 LLM 0회로 돌려보낸 바로 그 3행이
+      backlog 통로에서는 전원 `invoke_text("guardian")` 을 열었다.
+      2차 수정 때 `bump_llm_attempts` 한 줄만 옮겨 "상한을 전 통로에 걸었다" 고 했지만,
+      옮긴 것은 *숫자* 였고 **상한 앞의 판단** 은 여전히 한쪽에만 있었다.
+      판단이 두 벌이면 반드시 갈라진다 — 그래서 판단을 하나로 만든다.
+
+    사유 문자열은 그대로 `resolution` 에 쓰이므로 사람이 읽을 수 있어야 한다.
+    """
+    if not isinstance(error_record, dict):
+        return None
+    module = error_record.get("module", "") or ""
+    if _is_deny_path(module):
+        return f"보안 파일이라 자동수정 금지 — {module}"
+    if (error_record.get("severity") or "") == "critical":
+        return "critical — Tier-2 생략하고 수동 검토로 (architecture.SEVERITY_MATRIX)"
+    try:
+        from JARVIS07_GUARDIAN.severity import is_deterministic_code_error as _det
+    except Exception:
+        _det = lambda _t: False        # noqa: E731 — 파생 실패 시 보수적으로 '비결정론'
+    if error_record.get("provisional") and not _det(error_record.get("error_type", "")):
+        return "잠정 실패(재시도 남음) + 비결정론 — 재시도가 끝난 뒤 판정"
+    return None
+
+
 def _collect_unresolved(limit: int) -> list:
-    """미해결 오류 수집 — status 'new' + 'wontfix' 병합·dedup (최신순)."""
+    """미해결 오류 수집 — status 'new' + 'wontfix' 병합·dedup (최신순).
+
+    ★ **시도 상한을 존중한다** (2026-08-09 2차 적대적 검증)
+      `MAX_LLM_ATTEMPTS` 로 시도를 막아 놓고, 상한에 도달해 `wontfix` 가 된 오류를
+      여기서 **다시 끌어와** 심층 감사마다 Tier-2 를 또 열고 있었다 — 상한이 무력이다.
+      실측: 미해결 64건 전원이 `wontfix` 이고 그중 8월 이전이 46건. 7/13 워치독 freeze
+      같은 *지나간 사건* 은 코드 패치로 되살아나지 않는데 매 회차 LLM 세션을 태웠다.
+      상한값은 `architecture.MAX_LLM_ATTEMPTS` 단독 소유 — 여기 숫자를 적지 않는다.
+    """
     try:
         from shared import db as _db
     except Exception:
         return []
+    try:
+        from JARVIS07_GUARDIAN.architecture import MAX_LLM_ATTEMPTS as _cap
+    except Exception:      # 파생 실패 시 종전 동작(전량 수집) — 조용히 덜 고치지 않는다
+        _cap = None
     seen: set = set()
     out: list = []
+    skipped = 0
     for st in ("new", "wontfix"):
         try:
             for r in _db.list_errors(status=st, limit=limit):
@@ -872,9 +941,15 @@ def _collect_unresolved(limit: int) -> list:
                 if i in seen:
                     continue
                 seen.add(i)
+                if _cap is not None and int(r.get("llm_attempts") or 0) >= int(_cap):
+                    skipped += 1
+                    continue
                 out.append(r)
         except Exception as e:
             log.debug(f"[GUARDIAN/unresolved] {st} 조회 실패: {e}")
+    if skipped:
+        log.info(f"[GUARDIAN/unresolved] 시도 상한({_cap}) 도달 {skipped}건 제외 — "
+                 f"재시도해도 같은 결과, 수동 검토 대상")
     return out
 
 
@@ -897,7 +972,8 @@ def self_heal_known_errors(limit: int = 40) -> dict:
         from shared import db as _db
         from JARVIS07_GUARDIAN.error_analyzer import analyze
         from JARVIS07_GUARDIAN.error_fixer import apply_fix
-        from JARVIS07_GUARDIAN.severity import is_transient, kind_of as _kind_of
+        from JARVIS07_GUARDIAN.severity import (companions_of as _companions_of,
+                                                is_transient, kind_of as _kind_of)
     except Exception as e:
         log.warning(f"[GUARDIAN/selfheal] import 실패: {e}")
         return {"fixed": 0, "skipped": 0, "ignored": 0, "scanned": 0}
@@ -907,7 +983,8 @@ def self_heal_known_errors(limit: int = 40) -> dict:
         eid = er.get("id")
         et  = er.get("error_type", "")
         try:
-            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er)):
+            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er),
+                            companions=_companions_of(er)):
                 _db.mark_error_status(eid, "ignored")
                 ignored += 1
                 continue
@@ -944,7 +1021,8 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
         from shared import db as _db
         from JARVIS07_GUARDIAN.error_analyzer import analyze, analyze_llm_only
         from JARVIS07_GUARDIAN.error_fixer import apply_fix
-        from JARVIS07_GUARDIAN.severity import is_transient, kind_of as _kind_of
+        from JARVIS07_GUARDIAN.severity import (companions_of as _companions_of,
+                                                is_transient, kind_of as _kind_of)
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] import 실패: {e}")
         return {"fixed_t1": 0, "fixed_t2": 0, "failed": 0, "ignored": 0, "scanned": 0, "llm_used": 0}
@@ -954,7 +1032,8 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
         eid = er.get("id")
         et  = er.get("error_type", "")
         try:
-            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er)):
+            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er),
+                            companions=_companions_of(er)):
                 _db.mark_error_status(eid, "ignored")
                 ignored += 1
                 continue
@@ -962,11 +1041,30 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
             if a1.get("fixable") and apply_fix(eid, a1, mark_wontfix=False):
                 fixed_t1 += 1
                 continue
+            # ★ Tier-2 앞 판단은 `_orchestrate` 와 **같은 함수** 를 쓴다 (①·③).
+            #   종전엔 이 루프에 critical·보안파일·잠정실패 문이 하나도 없어,
+            #   `_orchestrate` 가 LLM 0회로 돌려보낸 오류가 여기선 전부 세션을 열었다.
+            _blocked = tier2_blocked_reason(er)
+            if _blocked:
+                log.info(f"[GUARDIAN/deepaudit] #{eid} Tier-2 비대상 — {_blocked}")
+                _db.mark_error_status(eid, "wontfix", _blocked)
+                ignored += 1
+                continue
             if llm_used >= max_llm:
                 failed += 1
                 continue
-            llm_used += 1
             a2 = analyze_llm_only(er)  # Tier 2 — apply_fix 경유 *실제 지문* 학습
+            # ★ **LLM 이 실제로 돌았을 때만 센다** (2026-08-09 3차 적대적 검증)
+            #   종전엔 호출 *앞* 에서 셌는데, `analyze_llm_only` 는 발행 중이면 맨 앞에서
+            #   LLM 없이 돌아온다("다음 심층 감사로 위임"). 그러면 **실제 호출 0회로**
+            #   상한이 소진되고 `_collect_unresolved` 가 그 행을 영구 제외한다 —
+            #   고칠 기회를 한 번도 안 주고 버리는 셈이다. API 예외도 같은 결과였다.
+            if not (a2 or {}).get("deferred"):
+                llm_used += 1
+                _db.bump_llm_attempts(eid)
+            else:
+                log.info(f"[GUARDIAN/deepaudit] #{eid} LLM 미실행(위임) — 시도로 세지 않는다")
+                continue
             if a2.get("fixable") and apply_fix(eid, a2, mark_wontfix=True):
                 fixed_t2 += 1
             else:
@@ -997,15 +1095,24 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
 def _ignore_reason(rec: dict) -> str:
     """이 오류를 *어느 필터* 가 걸렀는지 — 공개 API 프로빙으로 런타임 파생."""
     try:
-        from JARVIS07_GUARDIAN.severity import is_transient, kind_of
+        from JARVIS07_GUARDIAN.severity import companions_of, is_transient, kind_of
     except Exception:
         return "미분류"
     et  = rec.get("error_type") or ""
     msg = rec.get("message") or ""
     src = rec.get("source") or ""
     k   = kind_of(rec)
-    # is_transient 의 내부 판정 순서와 동일한 순서로 '한 인자만' 넣어 본다.
-    if k and is_transient("", "", "", kind=k):
+    # ★ **먼저 실제 결정을 그대로 묻는다** (2026-08-09 2차 적대적 검증)
+    #   종전엔 다리를 하나씩 물어(`한 인자만`) 어느 필터가 걸렀는지 추정했는데,
+    #   그 방식은 `is_transient` 의 **조기 return 우선순위를 무시** 한다.
+    #   실측: 봉투 kind + companions 없음 → 실제 판정은 *격리 안 함*(봉투 분기가
+    #   먼저 return) 인데, 설명기는 그 분기를 건너뛰고 메시지 정규식 다리가 True 인 것을
+    #   보고 "정규식:메시지" 라 답했다 — 격리 버킷 보고 **91행 전부**가 그랬다.
+    #   설명이 결정과 어긋나면 사람이 엉뚱한 곳을 고친다.
+    _comp = companions_of(rec)
+    if not is_transient(et, msg, src, kind=k, companions=_comp):
+        return "격리 대상 아님(현행 규칙)"
+    if k and is_transient("", "", "", kind=k, companions=_comp):
         return f"kind:{k}"
     if src and is_transient("", "", src, ""):
         return f"source:{src}"
@@ -1252,8 +1359,14 @@ def job_deep_audit() -> None:
     #   APScheduler 의 `EVENT_JOB_ERROR` → `job_history._on_job_error` 가
     #   `success=False` 로 **정규 경로에서** 적재한다. 새 보정 경로를 만들지 않는다(①).
     #   ※ 예외는 이 잡을 끝내는 것뿐 — 스케줄러도 다른 잡도 영향받지 않는다.
-    if _audit_rc not in (None, 0):
-        raise RuntimeError(f"심층 감사 실패 — auto_repair returncode={_audit_rc}")
+    # ★ **정리를 먼저 하고 올린다** (2026-08-09 3차 적대적 검증)
+    #   종전엔 `raise` 가 3부보다 **앞** 에 있었다. 그래서 심층 감사가 실패한 회차엔
+    #   ① 격리 버킷 주간 보고(오탐 조기경보 포함)가 통째로 안 나가고
+    #   ② `mark_busy("j07", ttl=3600)` 이 해제되지 않아 파이프라인 활동 표시가
+    #      최대 1시간 거짓으로 남았다.
+    #   격리분을 가장 봐야 할 회차가 정확히 실패한 회차인데 그때 보고가 꺼졌다.
+    #   실측: `self_repair_runs` 106회 중 9회(8.5%)가 비0 rc 이고 **최근 5회 중 2회** —
+    #   가상의 경로가 아니다.
     # 3부: 격리 버킷 집계·추세 보고 (★ 결함3) — 새 잡 신설 없이 기존 일일 잡에 편승
     try:
         report_ignored_bucket()
@@ -1265,6 +1378,8 @@ def job_deep_audit() -> None:
             _cb("j07")
         except Exception:
             pass
+    if _audit_rc not in (None, 0):
+        raise RuntimeError(f"심층 감사 실패 — auto_repair returncode={_audit_rc}")
 
 
 # ── 스케줄 잡 ─────────────────────────────────────────────────────

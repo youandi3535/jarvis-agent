@@ -13,7 +13,7 @@ from datetime import date, datetime
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
-    from JARVIS07_GUARDIAN.error_collector import report as _g_report
+    from JARVIS03_RADAR.collectors import report_radar as _g_report
 except ImportError:
     def _g_report(*a, **kw): pass
 # ─────────────────────────────────────────────────────
@@ -427,10 +427,84 @@ def _calc_trend_delta(today_kws: list[str]) -> dict:
     }
 
 
-def save(data: dict):
+def _dt_now_iso() -> str:
+    """지금 시각 — 파일에 박는 사실의 시간 도장."""
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def save(data: dict) -> bool:
+    """당일 파일 저장 — **좋은 판을 빈 판으로 덮지 않는다** (2026-08-08).
+
+    Returns: 이번 회차 수집분을 실제로 반영했으면 True, 기존 판을 보존했으면 False.
+      ★ 왜 반환하나 (2026-08-09 3차 적대적 검증) — 보존 판단이 *파일 한 통로* 에만
+        걸려 있었다. 같은 회차에서 `push_to_shared(data)` 가 무조건 이어 돌며
+        `save_trends()` 가 `DELETE FROM trends WHERE date=?` 후 이번 회차분을 넣는다.
+        빈손 회차의 실제 모양은 combined=0 · scored=정적시드 30 이므로, 파일은 아침
+        실트렌드 50개를 지키는데 **DB 는 정적시드 30개로 갈렸다**. 대시보드·API 는
+        파일이 아니라 DB 를 읽는다 — 지킨 줄 알았던 판이 하류엔 없었다.
+        판단은 여기 하나가 하고, 다른 통로는 그 답을 따른다(①).
+
+    ★ 왜 가드가 필요한가 (비직관)
+      트렌드 수집은 하루 4회(06·09·12·15) 돌고 **같은 파일 하나** 를 통째로 덮어쓴다.
+      아침 06:00 이 `combined_keywords` 50개를 채워 07:00 발행이 그 판을 먹는데,
+      오후 회차가 외부 수집 실패로 0개를 들고 오면 그 순간 **아침 판이 사라진다**.
+      실측 26일 중 8일(31%)이 combined=0 으로 끝났고, 그 날들의 발행은 평균 1.9편
+      (정상일 3.1편)이었다 — 8일 중 정상 발행은 하루뿐.
+      수집 실패는 '새 정보 없음' 이지 '기존 정보 무효' 가 아니다. 덮지 않는다.
+
+      ※ 아침도 0 이었으면 지킬 게 없으므로 그대로 쓴다. 이 가드는 *더 나쁜 판으로의
+        교체* 만 막는다 — 정상 갱신·부분 갱신은 종전과 동일하다.
+    """
     path = DATA_DIR / f"trends_{data['date']}.json"
-    write_json(path, data, indent=2)
+    _new = len(data.get("combined_keywords") or [])
+    if _new == 0 and path.exists():
+        try:
+            _kept = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            _kept = {}
+        if _kept.get("combined_keywords"):
+            # ★ 보존하되 **이번 회차가 빈손이었다는 사실을 파일에 박는다** (2026-08-08).
+            #   종전엔 그냥 저장을 건너뛰어서, 하류(`_verify_trends`·`_pack_empty_reason`)가
+            #   파일만 보고 "정상" 이라 판단했다 — 판은 지켜지지만 *수집 전멸이 안 보였고*,
+            #   팩이 비었을 때 원인이 `TrendCollectEmpty` 대신 `TopicPackNoCandidate` 로
+            #   오분류됐다(세분화 취지와 역행). 데이터에 사실을 남기면 둘 다 해결된다.
+            #   ※ 별도 오류를 만들지 않는다 — 진짜 원인(DNS·수집기 실패)은 수집기가
+            #     이미 `Radar*` 세분화 타입으로 보고했다. 요약을 오류로 또 만들면 중복이다.
+            _kept["last_run_empty_at"] = _dt_now_iso()
+            _kept["last_run_empty_count"] = int(_kept.get("last_run_empty_count") or 0) + 1
+            if not write_json(path, _kept, indent=2):
+                # ★ 저장 실패를 성공 문구로 덮지 않는다 (2026-08-09 3차 적대적 검증).
+                #   `write_json` 은 예외를 던지지 않고 False 를 돌려준다. 반환을 버리면
+                #   디스크 풀·권한·락 실패가 **성공으로 보고** 되고, 유일한 안전망인
+                #   `_verify_trends` 는 *파일만* 읽어서 앞 회차가 남긴 낡은 판을 보고
+                #   통과시킨다 — 회차가 성공으로 기록된다.
+                raise RuntimeError(f"트렌드 판 보존 저장 실패: {path.name}")
+            print(f"[RADAR] ⚠️ 실트렌드 0개 — 기존 {len(_kept['combined_keywords'])}개 판 보존 "
+                  f"(이번 회차 빈손 {_kept['last_run_empty_count']}회째): {path.name}")
+            # ★ 신호를 되살린다 (2026-08-09 2차 적대적 검증)
+            #   판을 보존하면 하류(`_verify_trends`·`_pack_empty_reason`)가 파일만 보고
+            #   정상이라 판단한다 — 그래서 **이번 회차가 빈손이었다는 사실이 아무 데도
+            #   가지 않았다**. 파일 도장의 유일한 소비자(`_pack_empty_reason`)는 *팩이 빌 때만*
+            #   불리는데 판을 지켰으니 팩은 안 빈다 — 도장만으론 관측이 안 된다.
+            #   ※ `kind="trends_empty"` — 코드로 못 고치는 외부 상태라 기록만 남고
+            #     Tier-2 LLM 세션은 열리지 않는다(`severity._OWN_NON_CODE_KINDS`).
+            try:
+                _g_report("TrendsEmptyRunPreserved", "radar",
+                          message=(f"이번 회차 실트렌드 0개 (연속 {_kept['last_run_empty_count']}회) — "
+                                   f"기존 {len(_kept['combined_keywords'])}개 판 보존. "
+                                   f"덮었으면 하류 주제 선정 불가"),
+                          module=__name__, func_name="save",
+                          context={"kind": "trends_empty",
+                                   "empty_streak": _kept["last_run_empty_count"],
+                                   "kept": len(_kept["combined_keywords"])})
+            except Exception:
+                pass
+            return False
+    if not write_json(path, data, indent=2):
+        # 위와 같은 이유 — 저장 실패는 조용히 넘어갈 사건이 아니다.
+        raise RuntimeError(f"트렌드 판 저장 실패: {path.name}")
     print(f"[RADAR] 로컬 저장: {path.name}")
+    return True
 
 
 def push_to_shared(data: dict):
@@ -557,9 +631,14 @@ if __name__ == "__main__":
         from JARVIS00_INFRA.watchdog import guard_main
         with guard_main("레이더 수집", deadline_sec=1800):
             data     = collect_today()
-            save(data)
+            _fresh   = save(data)
             no_push  = "--no-push" in args
-            if not no_push:
+            if not no_push and not _fresh:
+                # ★ 파일에서 지킨 판을 DB 에서 무르지 않는다 (2026-08-09).
+                #   `save_trends()` 는 `DELETE` 후 삽입이라, 빈손 회차의 정적시드 30개가
+                #   아침 실트렌드를 통째로 대체한다. 대시보드·API 는 DB 를 읽는다.
+                print("[RADAR] ⚠️ 이번 회차 빈손 — 기존 판 보존 중이므로 DB 반영도 건너뜀")
+            elif not no_push:
                 push_to_shared(data)
 
             print("\n[RADAR] 섹터별 TOP 3:")

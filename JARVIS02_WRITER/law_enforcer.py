@@ -1408,30 +1408,6 @@ _NUMERIC_UNIT_RE = re.compile(
 )
 
 
-def _scan_numeric_tokens(text: str) -> list[str]:
-    """단위 붙은 구체 수치 토큰 리스트 (중복 제거, 등장 순서 유지)."""
-    seen, out = set(), []
-    for m in _NUMERIC_UNIT_RE.finditer(text or ""):
-        tok = m.group(0)
-        k = tok.replace(" ", "")
-        if k not in seen:
-            seen.add(k)
-            out.append(tok)
-    return out
-
-
-def _containing_sentence(text: str, token: str) -> str:
-    """token 을 포함하는 문장 추출 (grounding 문맥 확보용)."""
-    idx = (text or "").find(token)
-    if idx < 0:
-        return token
-    starts = [text.rfind(c, 0, idx) for c in ".!?。\n"]
-    start = max(starts) + 1 if any(s >= 0 for s in starts) else 0
-    ends = [e for e in (text.find(c, idx) for c in ".!?。\n") if e >= 0]
-    end = (min(ends) + 1) if ends else len(text)
-    return text[start:end].strip() or token
-
-
 # ── 결정론 수치 grounding (★ 근본 수정 2026-07-04 — ERRORS [350]) ───────────────
 # 사용자 박제: "수치는 수집된 데이터 그대로 들어가야 한다. 수집을 했으면 출처는 분명하다."
 # LLM 문자열 매칭(_ground_unsupported)은 본문 포맷(단위·콤마·소수)이 코퍼스와 조금만

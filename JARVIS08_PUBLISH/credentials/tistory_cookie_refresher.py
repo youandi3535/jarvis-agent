@@ -228,6 +228,50 @@ def force_my_blog(driver, *, max_retry: int = 3, wait_sec: float = 2.0,
 #  쿠키 유효성 체크
 # ══════════════════════════════════════════
 
+def is_login_redirect(url: str) -> bool:
+    """이 URL 이 '로그인으로 튕겼다' 는 뜻인가 — **판정 규칙의 단일 소유자**.
+
+    ★ ERRORS [292] 가 확립한 진실: *공개 블로그 홈* 은 비로그인에도 열리므로
+      "블로그명이 페이지에 있나" 같은 휴리스틱은 만료 쿠키를 유효로 오판한다.
+      **manage 진입이 로그인으로 리다이렉트되는가** 가 유일한 진실이다.
+    ★ 이 함수를 만든 이유(2026-08-09, ERRORS [596]): 같은 판정이 곧 두 곳에서 필요해졌다 —
+      셀레니움 경로(`check_cookie_valid`)와 **브라우저 없는 경로**(`cookie_valid_http`).
+      규칙을 복제하면 한쪽만 고쳐질 때 재발한다(① 단일 진입점).
+    """
+    u = (url or "").lower()
+    return "/auth/login" in u or "accounts.kakao.com" in u
+
+
+def cookie_valid_http(timeout: float = 8.0) -> "bool | None":
+    """브라우저 없이 TSSESSION 유효성 판정 — 네이버 `check_cookie_valid()` 와 **대칭**.
+
+    ★ 왜 필요한가 (2026-08-09 실사고, ERRORS [596])
+      `verify_all_logins()` 는 티스토리를 **env 변수 '존재' 로만** 판정했다. 그래서
+      08-08 21:00 테마 발행 직전 사전점검이 초록이었는데 실제 쿠키는 만료돼 있었고,
+      발행은 28초 만에 로그인 화면으로 튕겨 끝났다(실측). 네이버는 requests 로 실검증을
+      하는데 티스토리만 안 했다 — **원칙③(4조합 전부) 위반이 여기 있었다.**
+      브라우저를 띄우면 상태점검·텔레그램 `/status` 까지 무거워지므로 HTTP 로 판정한다.
+
+    Returns: True(유효) / False(만료) / None(판정 불가 — 네트워크 등)
+      · **None 을 False 로 뭉개지 않는다.** '모른다' 를 '만료' 로 적으면 거짓 경보가 된다.
+    """
+    ck = os.getenv("TS_COOKIE", "").strip('"').strip("'")
+    if not ck:
+        return False
+    try:
+        import requests as _req                          # noqa: PLC0415
+        r = _req.get(f"https://{TS_BLOG}.tistory.com/manage/newpost/",
+                     cookies={"TSSESSION": ck}, timeout=timeout,
+                     allow_redirects=False)
+        loc = r.headers.get("Location", "")
+        if r.status_code in (301, 302, 303, 307, 308):
+            return not is_login_redirect(loc)
+        return r.status_code < 400
+    except Exception as e:                               # noqa: BLE001
+        print(f"  ⚠️ 티스토리 쿠키 HTTP 판정 불가: {type(e).__name__}: {e}")
+        return None
+
+
 def check_cookie_valid(driver) -> bool:
     """현재 TSSESSION 쿠키로 로그인 유지되는지 확인"""
     ts_cookie = os.getenv("TS_COOKIE", "")
@@ -281,7 +325,7 @@ def check_cookie_valid(driver) -> bool:
                 except Exception:
                     _cur = ""
 
-            if "/auth/login" in _cur or "accounts.kakao.com" in _cur:
+            if is_login_redirect(_cur):        # 규칙은 한 곳(is_login_redirect)만 소유
                 print("  ❌ 쿠키 만료 — manage 진입이 로그인으로 리다이렉트")
                 return False
             print("  ✅ 쿠키 유효 — manage 페이지 접근 정상")

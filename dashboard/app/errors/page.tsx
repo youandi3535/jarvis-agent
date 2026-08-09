@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useLatestVisible } from "@/lib/scroll";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 import { severityColor, statusColor, fmtNum, fmtTime, C } from "@/lib/utils";
@@ -57,7 +58,7 @@ function Badge({ label, color }: { label: string; color: string }) {
     <span style={{
       display: "inline-flex", alignItems: "center",
       padding: "2px 10px", borderRadius: 20,
-      fontSize: 12, fontWeight: 600,
+      fontSize: 14, fontWeight: 600,
       background: color + "22", color,
     }}>{label}</span>
   );
@@ -65,12 +66,21 @@ function Badge({ label, color }: { label: string; color: string }) {
 
 /* ─── 7일 추이 바 차트 ──────────────────────────────── */
 function TrendChart({ trend }: { trend: TrendDay[] }) {
-  const max = Math.max(...trend.map(d => d.total), 1);
+  const trendScrollRef = useLatestVisible(trend);
+    const max = Math.max(...trend.map(d => d.total), 1);
   return (
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 80, marginTop: 12 }}>
+    /* 막대 개수는 API 파생(런타임)이라 폭을 보장할 수 없다 —
+       자리가 남으면 flex:1 로 채우고, 모자라면 *의도된* 가로 스크롤로 전부 보여준다.
+       (자르지 않는다: overflow-x 는 auto 이지 hidden 이 아니다) */
+    /* ★ height 가 아니라 minHeight — `overflow-x:auto` 를 주면 CSS 규칙상 `overflow-y` 가
+        visible 로 남지 못하고 auto 로 승격된다. 그러면 가로 스크롤바 6px 이 고정 높이 80 을
+        갉아먹어 막대 값 라벨 위쪽이 잘리는데, 세로로는 스크롤이 안 생겨(시작 경계 밖은
+        스크롤 대상이 아니다) **읽을 방법이 사라진다**. 실측: clientH 74 / 내용 84.
+        minHeight 로 두면 스크롤바 자리를 높이가 흡수한다. */
+    <div ref={trendScrollRef} style={{ display: "flex", alignItems: "flex-end", gap: 6, minHeight: 80, marginTop: 12, overflowX: "auto" }}>
       {trend.map(d => (
         <div key={d.day} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-          <div style={{ fontSize: 12, color: "var(--c-text5)", whiteSpace: "nowrap" }}>{d.total}</div>
+          <div style={{ fontSize: 14, color: "var(--c-text5)", whiteSpace: "nowrap" }}>{d.total}</div>
           <div style={{ width: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", height: 40 }}>
             <div style={{
               width: "100%",
@@ -80,7 +90,7 @@ function TrendChart({ trend }: { trend: TrendDay[] }) {
               opacity: 0.85,
             }} />
           </div>
-          <div style={{ fontSize: 12, color: "var(--c-text5)", whiteSpace: "nowrap" }}>
+          <div style={{ fontSize: 14, color: "var(--c-text5)", whiteSpace: "nowrap" }}>
             {d.day.slice(5)}
           </div>
         </div>
@@ -111,7 +121,7 @@ function SourceChart({ sources }: { sources: SourceRow[] }) {
           <div style={{ width: 40, fontSize: 14, color: "var(--c-text)", textAlign: "right", flexShrink: 0 }}>
             {s.total}
           </div>
-          <div style={{ width: 32, fontSize: 12, color: C.success, textAlign: "right", flexShrink: 0 }}>
+          <div style={{ width: 44, fontSize: 14, color: C.success, textAlign: "right", flexShrink: 0 }}>
             {s.fixed > 0 ? `+${s.fixed}` : ""}
           </div>
         </div>
@@ -289,6 +299,19 @@ function RepairHistory() {
   );
 }
 
+/* ─── 표 셀 — 긴 값을 *자르지 않고* 줄바꿈으로 흡수 ──────
+   ch = 글자수 기준 상대 폭(font-size 파생). 고정 px 폭을 박지 않는다.
+   overflow-wrap:anywhere 는 min-content 폭까지 줄여줘 auto 테이블이
+   컨테이너 안으로 접힌다 (break-word 는 min-content 를 못 줄인다). */
+const CELL_CH = { module: 18, type: 22, message: 40 } as const;
+const wrapCell = (ch: number): React.CSSProperties => ({
+  maxWidth: `${ch}ch`,
+  minWidth: `${Math.round(ch * 0.5)}ch`,   // 상한에서 파생 — 칸이 한 글자 폭으로 짜부라지지 않게
+  whiteSpace: "normal",
+  overflowWrap: "break-word",
+  wordBreak: "break-word",
+});
+
 /* ─── 메인 페이지 ───────────────────────────────────── */
 export default function ErrorsPage() {
   const { data: stats }   = useSWR<GuardianStats>("/api/guardian/stats",   fetcher, { refreshInterval: 30000 });
@@ -315,8 +338,9 @@ export default function ErrorsPage() {
         <KpiCard label="전체 누적"     value={fmtNum(alltime?.total)} color={C.primary} sub="총 오류 기록" />
       </div>
 
-      {/* 7일 추이 + 에이전트별 나란히 */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 28 }}>
+      {/* 7일 추이 + 에이전트별 나란히 —
+          1fr 은 minmax(auto,1fr) 이라 트랙이 내용보다 작아지지 못한다 → minmax(0,1fr) */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 16, marginBottom: 28 }}>
         <div style={{ background: "var(--c-card)", border: "1px solid var(--c-bdr)", borderRadius: 12, padding: "20px 24px" }}>
           <div style={{ fontSize: 16, fontWeight: 600, color: "var(--c-text)", marginBottom: 4 }}>7일 추이</div>
           <div style={{ fontSize: 14, color: "var(--c-text5)" }}>빨강=CRITICAL 포함, 파랑=일반</div>
@@ -351,7 +375,7 @@ export default function ErrorsPage() {
                 {["ID", "시각", "에이전트", "모듈", "타입", "심각도", "상태", "메시지"].map(h => (
                   <th key={h} style={{
                     textAlign: "left", padding: "8px 12px",
-                    fontSize: 12, color: "var(--c-text5)", fontWeight: 600,
+                    fontSize: 14, color: "var(--c-text5)", fontWeight: 600,
                     borderBottom: "1px solid var(--c-bdr)", whiteSpace: "nowrap",
                   }}>{h}</th>
                 ))}
@@ -360,13 +384,13 @@ export default function ErrorsPage() {
             <tbody>
               {latest.map((e, i) => (
                 <tr key={e.id} style={{ background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)" }}>
-                  <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--c-text5)" }}>{e.id}</td>
+                  <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text5)" }}>{e.id}</td>
                   <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", whiteSpace: "nowrap" }}>{fmtTime(e.timestamp)}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)" }}>{e.source ?? "—"}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.module ?? "—"}</td>
+                  <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", overflowWrap: "break-word" }}>{e.source ?? "—"}</td>
+                  <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", ...wrapCell(CELL_CH.module) }}>{e.module ?? "—"}</td>
                   <td
                     title={e.error_category ? `${e.error_category}(${e.error_type})` : e.error_type}
-                    style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text)", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text)", ...wrapCell(CELL_CH.type) }}
                   >
                     {e.error_category ? `${e.error_category}(${e.error_type})` : e.error_type}
                   </td>
@@ -376,7 +400,7 @@ export default function ErrorsPage() {
                   <td style={{ padding: "8px 12px" }}>
                     <Badge label={e.status} color={statusColor(e.status)} />
                   </td>
-                  <td style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <td title={e.message} style={{ padding: "8px 12px", fontSize: 14, color: "var(--c-text2)", ...wrapCell(CELL_CH.message) }}>
                     {e.message?.slice(0, 120)}
                   </td>
                 </tr>

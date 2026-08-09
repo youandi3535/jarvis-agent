@@ -91,6 +91,18 @@ def _post_message(text: str, parse_mode: str, chat_id: str,
         서버에 닿았는데 거절당한 것이므로 100번 더 보내도 같다.
       · 429(과다요청)·5xx 만 예외적으로 재시도 가치 있음.
     """
+    # ★ 테스트에서는 **절대 밖으로 나가지 않는다** (2026-08-09 3차 적대적 검증)
+    #   `tests/conftest.py` 는 `JARVIS_TEST_MODE=1` 을 세우며 "외부 전송 차단" 이라고
+    #   적어 뒀는데, 그 값을 **읽는 코드가 저장소에 0곳** 이었다. 실제로는 아무것도
+    #   막지 않아서 `pytest tests/` 를 돌릴 때마다 사용자 실제 챗으로 가짜 운영 경보가
+    #   나갔다('🚨 하네스 검증 순환 한계 — 송출 차단' 등, 진짜 사고 알림과 구분 불가).
+    #   CI 가 조용했던 건 막아서가 아니라 클론에 `.env` 가 없어 토큰이 없었기 때문 —
+    #   즉 이 경로는 한 번도 검증된 적이 없었다.
+    #   막는 곳은 **실제로 던지는 이 함수 하나** 다(①). 상위 래퍼에 걸면 새 래퍼가
+    #   생길 때마다 샌다.
+    if (os.getenv("JARVIS_TEST_MODE", "") or "").strip() not in ("", "0"):
+        return False, "테스트 모드 — 외부 전송 차단", False
+
     token = os.getenv("TELEGRAM_TOKEN", "")
     _chat = chat_id or os.getenv("TELEGRAM_CHAT_ID", "")
     if not token or not _chat:
