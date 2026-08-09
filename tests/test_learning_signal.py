@@ -573,3 +573,120 @@ def test_부재_경보의_타입이_이슈에서_파생된다():
     assert precheck_error_type("naver", ["쿠키 파일 없음 또는 빈 list"]) == "PrecheckNaverCookieMissing"
     assert precheck_error_type("naver", ["쿠키 만료 임박 (12.0h > 10h)"]) == "PrecheckNaverCookieStale"
     assert precheck_error_type("tistory", ["env TS_COOKIE 누락"]) == "PrecheckTistoryEnvMissing"
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑫ 티스토리도 네이버와 대칭으로 검증한다 (ERRORS [596] — 원칙③)
+# ══════════════════════════════════════════════════════════════════
+def test_로그인_리다이렉트_규칙이_한곳이다():
+    """★ 같은 판정이 두 곳(셀레니움·HTTP)에 필요해졌다 — 규칙을 복제하면 한쪽만 고쳐진다."""
+    import ast
+    import inspect
+
+    from JARVIS08_PUBLISH.credentials import tistory_cookie_refresher as tc
+
+    assert tc.is_login_redirect("https://www.tistory.com/auth/login?x")
+    assert tc.is_login_redirect("https://accounts.kakao.com/login")
+    assert not tc.is_login_redirect("https://blog.tistory.com/manage/newpost/")
+
+    # 셀레니움 경로가 규칙을 *베끼지 않고* 이 함수를 부르는가
+    src = inspect.getsource(tc.check_cookie_valid)
+    tree = ast.parse(src.lstrip())
+    calls = {getattr(n.func, "id", "") for n in ast.walk(tree) if isinstance(n, ast.Call)}
+    assert "is_login_redirect" in calls, "셀레니움 경로가 판정 규칙을 따로 갖고 있다"
+    lits = {n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    assert "/auth/login" not in lits, "규칙 문자열 사본이 남아 있다"
+
+
+def test_티스토리_만료를_사전점검이_잡는다(monkeypatch):
+    """★ 종전엔 env '존재' 만 봐서 **만료돼도 ✅** 였다.
+
+    그래서 08-08 20:30 사전점검이 초록인 채로 21:00 테마 발행이 28초 만에
+    로그인 화면으로 튕겨 끝났다(실측). 네이버는 실검증을 하는데 티스토리만 안 했다.
+    """
+    import JARVIS08_PUBLISH.credentials.login_manager as lm
+    from JARVIS08_PUBLISH.credentials import tistory_cookie_refresher as tc
+
+    monkeypatch.setenv("TS_URL", "https://x.tistory.com")
+    monkeypatch.setenv("TS_USERNAME", "u")
+    monkeypatch.setenv("TS_PASSWORD", "p")
+    monkeypatch.setenv("TS_COOKIE", "z" * 40)
+
+    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: False)
+    v = lm.verify_all_logins(platforms=("tistory",))
+    assert not v["tistory"]["ok"], "만료된 쿠키인데 사전점검이 통과시킨다"
+
+    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: True)
+    assert lm.verify_all_logins(platforms=("tistory",))["tistory"]["ok"]
+
+    # ★ '모른다'(None)를 '만료'로 적지 않는다 — 거짓 경보 금지
+    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: None)
+    assert lm.verify_all_logins(platforms=("tistory",))["tistory"]["ok"], \
+        "판정 불가를 만료로 단정한다 — 네트워크 순단마다 거짓 경보가 된다"
+
+
+def test_티스토리_만료면_자동갱신이_돈다(monkeypatch):
+    """★ 종전엔 '쿠키 없음' 일 때만 갱신했다 — 있는데 만료면 아무 일도 안 했다.
+
+    08-08 21:00 실패 때 TS_COOKIE 는 있었고(40자) 만료였다. 절반만 고친 조건이었다.
+    """
+    import JARVIS08_PUBLISH.credentials.login_manager as lm
+    from JARVIS08_PUBLISH.credentials import tistory_cookie_refresher as tc
+
+    calls: list = []
+    monkeypatch.setattr(lm, "refresh_tistory_cookies", lambda force=False: calls.append(force) or True)
+    monkeypatch.setenv("TS_COOKIE", "z" * 40)
+
+    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: True)
+    lm.auto_refresh_if_needed(platforms=("tistory",))
+    assert not calls, "유효한데 갱신을 시도한다 — 불필요한 로그인은 CAPTCHA 위험을 부른다"
+
+    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: False)
+    lm.auto_refresh_if_needed(platforms=("tistory",))
+    assert calls, "만료인데 갱신하지 않는다 — 발행 시각에 그대로 튕긴다"
+
+    calls.clear()
+    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: None)
+    lm.auto_refresh_if_needed(platforms=("tistory",))
+    assert not calls, "판정 불가인데 갱신한다 — 네트워크 순단마다 로그인하면 CAPTCHA 를 부른다"
+
+
+def test_캡차_판정이_낱말이_아니라_요소다():
+    """★ 오늘 내가 만든 회귀를 막는다 (ERRORS [595]).
+
+    종전 판정: `"captcha" in src.lower() or "보안" in src or "기기" in src`.
+    실측 — 캡차가 **없는** 평상시 로그인 페이지(19,620자)에 `captcha` 7회 · `보안` 2회.
+    **항상 참이다.** 그래서 그 분기는 '캡차 감지' 가 아니라 사실상 '더 기다리기' 였고,
+    내가 그 대기를 무인일 때 0 으로 만들자 *느린 정상 로그인* 까지 죽는 회귀가 됐다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nc
+
+    src = inspect.getsource(nc.refresh_naver_cookies)
+    tree = ast.parse(src.lstrip())
+    calls = {getattr(n.func, "id", "") for n in ast.walk(tree) if isinstance(n, ast.Call)}
+    assert "captcha_present" in calls, "캡차 판정을 요소로 하지 않는다"
+
+    # 낱말 판정이 되살아났는지 — 주석은 제외하고 *실행되는 문자열* 만 본다
+    lits = {n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    for bad in ("captcha", "보안", "기기"):
+        assert bad not in lits, (
+            f"낱말 판정 문자열 {bad!r} 이 실행 경로에 있다 — 캡차 없는 페이지에도 매칭된다")
+
+
+def test_캡차가_아니면_무인도_기다린다():
+    """'사람이 필요한 시간' 과 '로그인이 끝나는 시간' 은 다른 것이다 — 섞으면 회귀가 난다."""
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nc
+
+    assert nc.LOGIN_REDIRECT_WAIT_SEC > 0, "무인 로그인 대기 예산이 0 이면 느린 로그인이 죽는다"
+
+    from JARVIS04_SCHEDULER.job_llm_priority import gate
+    seen: dict = {}
+    gate("j01_economic_post", lambda: seen.update(human=nc.human_wait_sec()))()
+    assert seen["human"] == 0, "무인인데 사람을 기다린다"
+    # 캡차가 아닐 때 쓰는 예산은 무인 여부와 무관해야 한다
+    assert nc.LOGIN_REDIRECT_WAIT_SEC == nc.LOGIN_REDIRECT_WAIT_SEC

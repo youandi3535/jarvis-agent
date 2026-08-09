@@ -51,9 +51,37 @@ COOKIE_FILE = _LEGACY_BASE_DIR / "naver_cookies.pkl"
 #   무인이면 0초 — 즉시 포기하고 사람을 부른다. 그게 더 빠른 복구다.
 CAPTCHA_WAIT_SEC = int(os.getenv("NAVER_CAPTCHA_WAIT_SEC", "120"))   # 대화형에서만 쓰인다
 
+# ★ 두 가지를 섞지 않는다 (2026-08-09 정정 — 내가 만든 회귀, ERRORS [595])
+#   · "로그인이 끝나기를 기다리는 시간"  — 사람과 무관하다. 무인이어도 줘야 한다.
+#   · "사람이 캡차를 푸는 시간"          — 무인이면 0 이 맞다.
+#   종전 코드는 이 둘을 한 분기에 묶어 놓고, 판정을 **낱말**로 했다:
+#       if "captcha" in src.lower() or "보안" in src or "기기" in src
+#   실측(캡차 없는 평상시 로그인 페이지 19,620자): `captcha` 7회 · `보안` 2회.
+#   **항상 참이다.** 그래서 그 분기는 "캡차 감지" 가 아니라 사실상 "15초 더 기다리기" 였고,
+#   내가 그 대기를 무인일 때 0 으로 만들자 *느린 정상 로그인까지* 죽는 회귀가 됐다.
+LOGIN_REDIRECT_WAIT_SEC = int(os.getenv("NAVER_LOGIN_WAIT_SEC", "60"))
+
+
+def captcha_present(driver) -> bool:
+    """화면에 **진짜 캡차 요소** 가 보이는가 — 낱말이 아니라 요소로 판정한다.
+
+    ★ 낱말 판정이 왜 틀렸나: 캡차가 없는 평상시 페이지에도 `captcha` 7회·`보안` 2회가
+      스크립트·숨은 필드에 들어 있다(실측). 반면 캡차 *요소* 는 0건이었다.
+    ★ 못 찾으면 False — "모른다" 를 "사람 필요" 로 단정하지 않는다. 단정하면
+      느린 정상 로그인이 사람 대기로 오해돼 무인 실행에서 죽는다.
+    """
+    try:
+        from selenium.webdriver.common.by import By      # noqa: PLC0415
+        sel = ("img[id*='captcha' i], img[src*='captcha' i], "
+               "input[id*='captcha' i], input[name*='captcha' i], "
+               "#captchaimg, #chptchaimg, iframe[src*='recaptcha' i]")
+        return any(e.is_displayed() for e in driver.find_elements(By.CSS_SELECTOR, sel))
+    except Exception:                                    # noqa: BLE001
+        return False
+
 
 def human_wait_sec() -> int:
-    """CAPTCHA·기기인증을 사람이 풀 때까지 기다릴 초 — 무인 실행이면 0."""
+    """CAPTCHA 를 **사람이 풀 때까지** 기다릴 초 — 무인 실행이면 0."""
     try:
         from shared.llm import current_job_id            # noqa: PLC0415 — 순환 방지
         if current_job_id():
@@ -385,24 +413,33 @@ def refresh_naver_cookies(force: bool = False) -> bool:
             )
             print("  ✅ 로그인 완료")
         except Exception:
-            src = driver.page_source
-            if "captcha" in src.lower() or "보안" in src or "기기" in src:
+            # ★ 낱말이 아니라 **요소** 로 판정한다 (ERRORS [595]).
+            #   낱말 판정은 캡차 없는 평상시 페이지에서도 항상 참이라, 여기 오는 모든 경우를
+            #   '사람 필요' 로 오해하게 만들었다.
+            if captcha_present(driver):
                 _wait = human_wait_sec()
                 if _wait <= 0:
-                    # 무인 실행 — 화면 앞에 아무도 없다. 기다려도 결과가 같으니 즉시 부른다.
+                    # 무인 — 화면 앞에 아무도 없다. 기다려도 결과가 같으니 즉시 부른다.
                     return _fail("captcha_unattended",
-                                 "  ❌ CAPTCHA / 기기 인증 요구 — 무인 실행이라 대기하지 않는다 "
+                                 "  ❌ CAPTCHA 요소 확인 — 무인 실행이라 대기하지 않는다 "
                                  "(사람이 직접 로그인해야 함)")
-                print(f"  ⚠️  CAPTCHA / 기기 인증 감지 — 화면에서 직접 풀어주세요 (최대 {_wait}초 대기)")
+                print(f"  ⚠️  CAPTCHA 감지 — 화면에서 직접 풀어주세요 (최대 {_wait}초 대기)")
                 try:
                     WebDriverWait(driver, _wait).until(
-                        lambda d: "nidlogin" not in d.current_url
-                    )
+                        lambda d: "nidlogin" not in d.current_url)
                     print("  ✅ 수동 인증 완료")
                 except Exception:
                     return _fail("captcha_timeout", f"  ❌ {_wait}초 내 인증 미완료 — 종료")
             else:
-                return _fail("login_no_redirect", "  ❌ 로그인 후 URL 전환 없음")
+                # 캡차가 아니다 = 그냥 느리다. **무인이어도 기다린다** — 사람과 무관한 시간이다.
+                print(f"  ⏳ 로그인 전환 대기 ({LOGIN_REDIRECT_WAIT_SEC}초) — 캡차 요소 없음")
+                try:
+                    WebDriverWait(driver, LOGIN_REDIRECT_WAIT_SEC).until(
+                        lambda d: "nidlogin" not in d.current_url)
+                    print("  ✅ 로그인 완료 (지연)")
+                except Exception:
+                    return _fail("login_slow_timeout",
+                                 f"  ❌ {15 + LOGIN_REDIRECT_WAIT_SEC}초 내 로그인 전환 없음")
 
         time.sleep(random.uniform(2, 3))
 

@@ -30,6 +30,19 @@ import pickle
 from pathlib import Path
 from typing import Any, Optional
 
+# ★ `.env` 자가 로드 (2026-08-09, ERRORS [594] 후속)
+#   이 모듈만 자가 로드가 없었다 — 형제인 `naver_cookie_refresher`·`tistory_cookie_refresher`
+#   와 `shared/db.py` 는 전부 스스로 읽는다. 그런데 **인증 판정의 단일 진입점**
+#   (`verify_all_logins`)이 여기 있어서, `.env` 를 안 읽은 프로세스(CLI·subprocess 자식)가
+#   부르면 멀쩡한 자격증명을 "env 누락" 으로 오판한다. 실측으로 확인했다.
+#   그 오판이 이제 **텔레그램 경보로 나가므로**(같은 커밋) 거짓 경보가 된다 —
+#   거짓 경보는 진짜 경보만큼 게이트를 망친다.
+try:                                                      # pragma: no cover
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+except Exception:                                         # noqa: BLE001
+    pass
+
 log = logging.getLogger("jarvis")
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
@@ -347,6 +360,21 @@ def verify_all_logins(
         for k in _REQUIRED_ENV["tistory"]:
             if not os.environ.get(k, "").strip():
                 ts_issues.append(f"env {k} 누락")
+        # ★ env '존재' 만으로 끝내지 않는다 — 네이버와 대칭 (2026-08-09, ERRORS [596]).
+        #   종전엔 만료된 쿠키도 ✅ 였다. 그래서 08-08 20:30 사전점검이 초록인 채로
+        #   21:00 테마 발행이 28초 만에 로그인 화면으로 튕겨 끝났다(실측).
+        #   판정 자체는 티스토리 도메인이 소유한다 — 여기서 새로 만들지 않는다(①).
+        if not ts_issues:
+            try:
+                from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import (  # noqa: PLC0415
+                    cookie_valid_http)
+                valid = cookie_valid_http()
+                if valid is False:
+                    ts_issues.append("쿠키 만료 — manage 접근이 로그인으로 리다이렉트")
+                # valid is None → 판정 불가(네트워크 등). '모른다' 를 '만료' 로 적지 않는다.
+            except Exception as e:                       # noqa: BLE001
+                log.warning(f"[login_manager] 티스토리 유효성 판정 실패(무시): "
+                            f"{type(e).__name__}: {e}")
         result["tistory"] = {"ok": not ts_issues, "issues": ts_issues}
 
     return result
@@ -374,8 +402,25 @@ def auto_refresh_if_needed(
             log.info(f"[login_manager] 네이버 쿠키 {age:.1f}h — 갱신 시도")
             result["naver"] = refresh_naver_cookies(force=False)
     if "tistory" in platforms:
+        # ★ '없음' 만 보면 절반만 고친다 (2026-08-09, ERRORS [596]).
+        #   08-08 21:00 테마 실패 때 TS_COOKIE 는 **있었다**(40자). 다만 만료였다.
+        #   그래서 여기서 아무 일도 하지 않았고, 발행은 28초 만에 로그인으로 튕겨 끝났다.
+        #   판정은 티스토리 도메인이 소유한 것을 그대로 쓴다 — 새 규칙을 만들지 않는다(①).
+        _need = False
         if not get_tistory_cookie():
             log.info("[login_manager] 티스토리 TS_COOKIE 없음 — 갱신 시도")
+            _need = True
+        else:
+            try:
+                from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import (  # noqa: PLC0415
+                    cookie_valid_http)
+                if cookie_valid_http() is False:          # None(판정 불가)은 건드리지 않는다
+                    log.info("[login_manager] 티스토리 TS_COOKIE 만료 — 갱신 시도")
+                    _need = True
+            except Exception as e:                        # noqa: BLE001
+                log.warning(f"[login_manager] 티스토리 유효성 판정 실패(갱신 보류): "
+                            f"{type(e).__name__}: {e}")
+        if _need:
             result["tistory"] = refresh_tistory_cookies(force=False)
     return result
 
