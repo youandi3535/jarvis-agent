@@ -688,6 +688,46 @@ def test_캡차_판정이_낱말이_아니라_요소다():
         assert bad not in lits, (
             f"낱말 판정 문자열 {bad!r} 이 실행 경로에 있다 — 캡차 없는 페이지에도 매칭된다")
 
+    # ★ 판정은 3-상태여야 한다 (ERRORS [606]) — `is True` 로만 '캡차 확실' 을 받는다.
+    #   초판은 truthy 검사라 None(모름)까지 '캡차' 로 읽었다… 가 아니라 그 반대였다:
+    #   선택자에 안 걸리면 False(=캡차 아님)를 **단정** 해, 진짜 캡차를 놓치고도
+    #   로그에 "캡차 요소 없음" 이라는 거짓을 남겼다. 모름은 모름으로 다뤄야 한다.
+    assert "captcha_present(driver) is True" in src, \
+        "캡차 판정을 3-상태로 받지 않는다 — '모름' 을 '아님' 으로 단정하게 된다"
+
+    # 판정이 멈춘 화면을 증거로 남기는가 — 추측을 고칠 재료가 없으면 같은 미탐이 반복된다
+    assert "capture_login_stuck" in calls, "로그인 정지 화면을 저장하지 않는다"
+
+
+def test_캡차_판정이_모름을_아님으로_단정하지_않는다():
+    """★ 2026-08-09 실사고 — 진짜 캡차가 떴는데 감지기가 놓쳤다(미탐).
+
+    선택자를 **실제 캡차 화면을 한 번도 보지 않고 추측** 으로 만든 탓이다.
+    그런데 로그에는 `캡차 요소 없음` 이라는 *확신에 찬 거짓* 이 남았다 —
+    사용자가 손으로 풀어 성공한 것을 시스템이 자기 판정 덕이라 오해하게 만든다.
+    """
+    import inspect
+
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nc
+
+    # 아무것도 못 찾는 드라이버 대역 → False 가 아니라 None 이어야 한다
+    class _Blind:
+        def find_elements(self, *a, **k):
+            return []
+
+    assert nc.captcha_present(_Blind()) is None, \
+        "못 찾았는데 '캡차 아님' 을 단정한다 — 미탐을 확신으로 보고하게 된다"
+
+    # 예외가 나도 마찬가지
+    class _Broken:
+        def find_elements(self, *a, **k):
+            raise RuntimeError("driver dead")
+
+    assert nc.captcha_present(_Broken()) is None, "판정 실패를 '아님' 으로 단정한다"
+
+    src = inspect.getsource(nc.captcha_present)
+    assert "return False" not in src, "False(=캡차 아님)를 단정하는 경로가 남아 있다"
+
 
 def test_캡차가_아니면_무인도_기다린다():
     """'사람이 필요한 시간' 과 '로그인이 끝나는 시간' 은 다른 것이다 — 섞으면 회귀가 난다."""
