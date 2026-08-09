@@ -206,7 +206,18 @@ def _run_with_harness(
     #   일일 잡 리포트(`JARVIS04_SCHEDULER/briefing.py`)는 이 컬럼만 세므로 사람에게는
     #   '✅ 정상' 으로 보고됐다 — 글이 유실된 그 날에.
     #   실패를 실패로 적는 통로는 예외뿐이므로, 미송출이면 올린다.
-    if _res is not None and not getattr(_res, "delivered", True):
+    # ★ `deferred` 는 **실패가 아니다** (2026-08-09 회귀 검증에서 발각)
+    #   하네스는 ① 인터프리터 종료(데몬 재시작) ② 동시 실행 중복 차단 을 `delivered=False`
+    #   로 돌려주되 `deferred=True` 라는 **구조화 판정** 을 함께 싣는다. 2026-08-07 에
+    #   "아직 돌고 있다는 정상 동작이고 고칠 것이 없다" 며 일부러 실패에서 뺀 경우다.
+    #   내가 `delivered` 만 보고 raise 를 넣어 그 판단을 우회했고, 그 결과 정상 레이스가
+    #   `EVENT_JOB_ERROR` → `job_runs.success=0` + `error_log` 적재 → Tier-1/2 → 텔레그램
+    #   으로 되살아났다(실측 25일 8건 ≈ 0.3건/일, 재현 확인).
+    #   판정을 여기서 다시 만들지 않는다 — 하네스가 실은 필드를 그대로 존중한다(①).
+    #   같은 관례가 이미 저장소에 있다: `economic_poster.py` 는 `concurrent_blocked` 를
+    #   보고 *스킵* 으로 처리한다.
+    if (_res is not None and not getattr(_res, "delivered", True)
+            and not getattr(_res, "deferred", False)):
         _reason = getattr(_res, "escalation_reason", "") or "검증 순환 한계 — 송출 미완료"
         raise RuntimeError(f"{name} 미완료: {_reason}")
     return _res

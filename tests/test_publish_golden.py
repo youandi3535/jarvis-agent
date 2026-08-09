@@ -5036,6 +5036,35 @@ def test_하네스_미송출이_잡_실패로_남는다():
     # 정상 액션은 예외 없이 끝나야 한다 (과잉 실패 금지)
     jobs._run_with_harness("probe_ok", lambda: None, verify_fn=lambda _r: [], max_attempts=1)
 
+    # ★ `deferred` 는 **실패가 아니다** — 올리면 안 된다 (2026-08-09 회귀 검증).
+    #   하네스는 인터프리터 종료·동시 실행 중복을 `delivered=False` 로 돌려주되
+    #   `deferred=True` 를 함께 싣는다. 2026-08-07 에 "아직 돌고 있다는 정상 동작이고
+    #   고칠 것이 없다" 며 일부러 실패에서 뺀 경우인데, `delivered` 만 보면 되살아난다.
+    #   실측: 정상 레이스가 `job_runs.success=0` + `error_log` 적재 + 텔레그램까지 갔다.
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _slow():
+        started.set()
+        release.wait(10)
+
+    t = threading.Thread(target=lambda: jobs._run_with_harness(
+        "probe_race", _slow, verify_fn=lambda _r: [], max_attempts=1), daemon=True)
+    t.start()
+    assert started.wait(10), "첫 액션이 시작되지 않았다 — 검사 전제가 깨졌다"
+    try:
+        # 같은 액션명을 겹쳐 부른다 → 하네스가 동시중복으로 deferred 반환
+        second = jobs._run_with_harness("probe_race", lambda: None,
+                                        verify_fn=lambda _r: [], max_attempts=1)
+    except Exception as e:                       # noqa: BLE001
+        release.set(); t.join(10)
+        raise AssertionError(f"동시 실행 중복(정상 스킵)을 실패로 올린다: {e}") from None
+    release.set(); t.join(10)
+    assert getattr(second, "deferred", False), "전제 변경 — 동시중복이 deferred 가 아니다"
+    assert getattr(second, "concurrent_blocked", False), "구조화 판정 필드가 안 섰다"
+
 
 def test_판을_지켰으면_DB도_안_무른다(tmp_path, monkeypatch):
     """★ 보존 가드가 *파일 한 통로* 에만 걸려 있었다.
