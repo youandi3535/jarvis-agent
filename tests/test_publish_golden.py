@@ -5390,7 +5390,7 @@ def test_지침_사슬이_끊기지_않고_이어진다():
             con.execute("DELETE FROM post_analysis WHERE post_type=?", (SC,))
 
 
-def test_사전점검이_두_플랫폼_모두_실효를_본다():
+def test_사전점검이_두_플랫폼_모두_실효를_본다(monkeypatch):
     """★ "쿠키 파일이 신선한가" 와 "로그인이 되는가" 는 다른 질문이다.
 
     실측 2회 — 사전점검이 초록인 채로 30분 뒤 발행이 로그인 화면에서 튕겼다:
@@ -5407,6 +5407,17 @@ def test_사전점검이_두_플랫폼_모두_실효를_본다():
     from JARVIS08_PUBLISH.credentials import login_manager as lm
     from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nvm
     from JARVIS08_PUBLISH.credentials import tistory_cookie_refresher as tsm
+
+    # ★ `.env` 에 기대지 않는다 (2026-08-09 CI 실패로 발각 — 동시 세션이 ERRORS [587] 로
+    #   **이미 기록해 둔 함정** 인데 내가 그대로 밟았다).
+    #   `.env` 없는 트리(CI·새 체크아웃)에선 env 누락이 먼저 걸려 `if not nv_issues:` 가
+    #   거짓이 되고, 그러면 **판정이 아예 호출되지 않는다**. 로컬만 초록인 테스트가 된다.
+    #   앞단 조건을 전부 통과시켜 두고, 검사하려는 그 한 가지만 남긴다.
+    for _plat in ("naver", "tistory"):
+        for _k in lm._REQUIRED_ENV[_plat]:
+            monkeypatch.setenv(_k, "x")
+    monkeypatch.setattr(lm, "get_naver_cookies", lambda: [{"name": "NID_AUT"}])
+    monkeypatch.setattr(lm, "naver_cookie_age_hours", lambda: 1.0)
 
     # ① 두 판정 함수가 **같은 3-상태 계약** 인가
     for mod, who in ((nvm, "naver"), (tsm, "tistory")):
