@@ -213,8 +213,14 @@ def _login(driver) -> bool:
                 except Exception:
                     pass
             _mng_url = (driver.current_url or "").lower()
-            _logged_in = ("/auth/login" not in _mng_url
-                          and "accounts.kakao.com" not in _mng_url)
+            # ★ 판정 규칙은 credentials 도메인이 단독 소유한다 (2026-08-09, ERRORS [604]).
+            #   종전엔 같은 규칙이 여기 **세 번째 사본**으로 박혀 있었다. 앞서 두 곳
+            #   (`check_cookie_valid`·`cookie_valid_http`)만 `is_login_redirect` 로 묶었는데
+            #   정작 **발행 경로**가 따라오지 않았다 — URL 패턴이 바뀌면 사전점검은 고쳐지고
+            #   발행만 옛 규칙으로 남는다. 적대적 검증이 잡았다.
+            from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import (  # noqa: PLC0415
+                is_login_redirect as _is_login_redirect)
+            _logged_in = not _is_login_redirect(_mng_url)
         except Exception as _le:
             _p(f"  ⚠️ manage 판정 오류({_le}) — 만료로 간주")
             _logged_in = False

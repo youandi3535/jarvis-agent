@@ -603,7 +603,12 @@ def test_티스토리_만료를_사전점검이_잡는다(monkeypatch):
     """★ 종전엔 env '존재' 만 봐서 **만료돼도 ✅** 였다.
 
     그래서 08-08 20:30 사전점검이 초록인 채로 21:00 테마 발행이 28초 만에
-    로그인 화면으로 튕겨 끝났다(실측). 네이버는 실검증을 하는데 티스토리만 안 했다.
+    로그인 화면으로 튕겨 끝났다(실측).
+
+    ★ 정정 (적대적 검증) — 초판 서술 "네이버는 실검증을 하는데 티스토리만 안 했다" 는
+      **거짓이었다.** 그때는 네이버 분기도 HTTP 요청이 0회였다(env·파일·mtime 셋만).
+      비대칭이 아니라 **양쪽 다 존재 확인**이었고, 네이버는 별도 커밋에서 고쳐졌다.
+      확인하지 않은 단정을 도크스트링에 쓰지 말 것.
     """
     import JARVIS08_PUBLISH.credentials.login_manager as lm
     from JARVIS08_PUBLISH.credentials import tistory_cookie_refresher as tc
