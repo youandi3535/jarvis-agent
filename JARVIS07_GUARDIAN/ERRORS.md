@@ -13028,3 +13028,35 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - 교훈: 리페어 큐가 병행 세션이 이미 고친 사고를 다시 배정할 수 있다([613][617][618] 과
   동일 패턴). 착수 전 `error_log.resolution`/최근 git log 를 먼저 조회하면 중복 조사를
   빠르게 스킵할 수 있다.
+
+## [620] 🔍 조사완료(결함아님) — `PrecheckNaverCookieExpired`(id=5829, [619]의 형제 사고) — 실제 CAPTCHA, 코드 결함은 이미 수정, 쿠키는 사람 로그인 전까지 회복 불가 (2026-08-11)
+
+- 증상: 리페어 큐가 `error_log` id=5829(`PrecheckNaverCookieExpired`, `2026-08-11T06:30:01`,
+  `"[발행 前 점검] naver: 쿠키 만료 — 실제 요청이 로그아웃 상태를 보고"`)를 대상으로 호출.
+  착수 시점 `llm_attempts=3`(상한 도달), `status='analyzing'`. [619]가 처리한 `id=5830`
+  (tistory)과 같은 06:30 `job_pre_publish_check()` 호출에서 동시에 발생한 형제 사고.
+- 원인: 이 알림도 [619]와 동일하게 `verify_all_logins()` 의 *최초 감지* 일 뿐이다. 다만
+  결과는 tistory와 갈렸다 — 실측(`python -m JARVIS08_PUBLISH.credentials.login_manager status`,
+  08:56) `NAVER` 는 여전히 ❌(`naver_cookies.pkl` 파일 자체가 없음), `TISTORY` 만 ✅.
+  근본 원인은 06:30 자동 재로그인이 실제 CAPTCHA 에 막힌 것 — 07:00:46 실제 발행 시도가
+  같은 이유로 `NaverLoginCaptchaUnattended`(id=5831, "무인 실행이라 대기하지 않음")로
+  재확인됐고, 07:11 harness 도 `HarnessCookieMissing`(id=5832)으로 동일 사실을 보고했다.
+  CAPTCHA는 사람만 풀 수 있어 코드로 재현·수정할 대상이 아니다. 이 사고를 조사하던 병행
+  세션(commit `8578d7e`, 커밋 메시지에 "PrecheckNaverCookieExpired(#5829) 조사 중"이라 명시)이
+  이미 로그로 CAPTCHA를 확인했고, 그 조사 과정에서 형제 사고 `id=5830`의 stored `llm_patch`가
+  이미 반영된 코드라 재적용마다 구문 오류로 거부되면서도 `fail_count`가 배선되지 않아 10분
+  마다 무한 재시도되던 별개 결함(`error_fixer.apply_fix` REJ_SYNTAX 분기)을 부수적으로 찾아
+  고쳤다. 정작 06:30 무통보(재확인 없이 조용히 실패) 결함 자체는 이미 [619]가 확인한 대로
+  commit `5181210`(`_alert_refresh_failed`)으로 선행 수정돼 있다 — 다음 사전점검부터는
+  자동 갱신도 실패하면 재확인 후 즉시 텔레그램 알림이 나간다.
+- 헛다리: 없음. 코드 수정 여지를 찾아 `login_manager.py`/`naver_cookie_refresher.py` 를
+  검토했으나 판정·알림·재시도 로직 모두 정상 동작 중(③ CAPTCHA 는 애초에 코드가 못 푸는 영역).
+- 해결: 코드 변경 0건(무통보 결함은 5181210, 부수 발견된 무한재시도는 8578d7e 로 이미 수정
+  완료). `mark_error_status(5829, "wontfix", ...)` 로 종결 — 사유: 실제 CAPTCHA로 코드 결함
+  아님, 가시성은 이미 확보. **단, tistory와 달리 naver 쿠키는 아직 회복되지 않은 상태**이므로
+  다음 발행(21:00 테마 기준 20:30 사전점검) 전까지 사람이 직접 로그인해야 한다 — 이미 06:30·
+  07:00 두 차례 텔레그램으로 통지됨(추가 알림 발송 없음, 중복 경보 방지).
+- 파일: 없음 (조사 + DB 상태 갱신만, 저장소 코드 파일 변경 없음).
+- 교훈: [619]와 같은 06:30 배치의 두 형제 사고([619] tistory / [620] naver)가 겉보기엔
+  같은 오류 타입이라도 실제 회복 여부는 플랫폼마다 다를 수 있다 — "형제 사고니 결론도
+  같다"고 넘겨짚지 말고 플랫폼별로 반드시 실측(`login_manager status`)할 것.
