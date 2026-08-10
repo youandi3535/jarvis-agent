@@ -40,6 +40,8 @@ load_dotenv(JARVIS_ROOT / ".env")
 
 from shared import db
 from shared.bus import on_post_analyzed
+# 재시도 상한 — 파생 leaf 하나(`shared/limits.py`). 숫자를 여기 적지 말 것.
+from shared.limits import max_attempts as _max_attempts
 
 # 자비스01 글자수 정책 — length_manager 단일 진입점
 try:
@@ -337,15 +339,17 @@ def judge_engagement(title: str, content: str, post_type: str = "",
     user_msg = f"제목: {title}\n\n본문:\n{snippet}"
     system = ENGAGEMENT_SYSTEM_PROMPT + _build_learning_block(post_type)
 
-    # ★ fail-open 강화 (2026-07-02): 즉시 통과 대신 3회 재시도(★ 사용자 박제
-    #   2026-07-06 — 재시도 상한 예외 없이 3회 통일, 기존 2회에서 상향) → 심사관
+    # ★ fail-open 강화 (2026-07-02): 즉시 통과 대신 재시도(상한은 harness SSOT 파생 —
+    #   사용자 박제 2026-07-21 로 '어떤 재시도도 최대 2회'. 종전 이 주석의 '3회 통일'
+    #   문구는 폐지된 규정이라 실제 루프와 어긋나 있었다) → 심사관
     #   일시 불안정에 매력도 게이트가 통째로 무력화되는 것 방지. 재시도도 실패하면
     #   통과하되(진실성과 달리 재생성 사유일 뿐) '심사 불가'를 가시화(점수 -1 = 미채점,
     #   GUARDIAN·버스 경고).
     from shared.llm import invoke_text as _inv
     obj = None
     last_err = ""
-    for _attempt in range(2):
+    _att_max = _max_attempts()          # harness SSOT 파생 — 숫자를 적지 않는다
+    for _attempt in range(_att_max):
         try:
             # ★ 2026-07-30 정정 — 종전 `_nonessential=True` 는 **네이버 글을 3주간 전량
             #   미채점** 으로 만들었다(실측 07-26~29 naver 0/8 · tistory 7/8, 100% 결정론적).
@@ -378,7 +382,7 @@ def judge_engagement(title: str, content: str, post_type: str = "",
         except Exception as e:
             last_err = str(e)
             _g_report("radar", e, module=__name__,
-                      attempt=_attempt + 1, max_attempts=2)
+                      attempt=_attempt + 1, max_attempts=_att_max)
             break
 
     if obj is None:

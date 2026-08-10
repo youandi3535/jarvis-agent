@@ -39,11 +39,10 @@ __all__ = [
 
 DEFERRED_SUFFIX = "__deferred"
 
-# 연기 상한 — 하드코딩 금지. 시스템 전역 재시도 상한과 같은 상수에서 파생한다.
-try:
-    from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS as _MAX_ATTEMPTS
-except Exception:                                    # pragma: no cover
-    _MAX_ATTEMPTS = 2
+# 연기 상한 — 하드코딩 금지. 시스템 전역 재시도 상한 파생 leaf 하나에서 받는다.
+#   ★ 종전 except 절의 숫자 폴백을 지웠다 — 폴백에 적은 숫자가 곧 사본이고,
+#     그 사본은 harness 를 못 읽는 날에만 발동해 *아무도 모르게* 다른 상한으로 돈다.
+from shared.limits import max_attempts as _max_attempts
 
 
 def _log(msg: str) -> None:
@@ -330,7 +329,7 @@ def _defer(job_id: str, fn: Callable, next_attempt: int, when: datetime,
         #   같은 파일 :247 은 이미 `effective_grace()` 를 쓴다 — 한 파일 안 불일치였다.
         misfire_grace_time=effective_grace(base), replace_existing=True,
     )
-    _log(f"{base} → {when:%H:%M} 재예약 (시도 {next_attempt}/{_MAX_ATTEMPTS})")
+    _log(f"{base} → {when:%H:%M} 재예약 (시도 {next_attempt}/{_max_attempts()})")
     return True
 
 
@@ -361,7 +360,7 @@ def gate(job_id: str, fn: Callable, *, attempt: int = 1) -> Callable:
             return None
 
         names = ", ".join(missing)
-        if attempt >= _MAX_ATTEMPTS:
+        if attempt >= _max_attempts():
             msg = (f"⛔ *{job_id}* 실행 취소\n선행 {names} 이(가) {attempt}회 시도 후에도 "
                    f"충족되지 않았습니다. 이번 회차는 발행하지 않습니다.")
             _log(msg.replace("*", ""))

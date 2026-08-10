@@ -4,6 +4,9 @@ import logging
 import json
 from pathlib import Path
 
+# 차트 폰트 크기 단일 진입점 (JARVIS06/CLAUDE.md 규정14)
+from JARVIS06_IMAGE.style_engine import CHART_STYLE as _S
+
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
@@ -56,11 +59,11 @@ def make_section_title_image(title: str, save_path: str,
             ax.add_patch(mpatches.Rectangle((0, 0), box_w, fig_h, color=BOX_COLOR))
             num_str = f"{number:02d}" if number > 0 else "○"
             ax.text(box_w / 2, fig_h * 0.58, num_str,
-                    ha='center', va='center', fontsize=28, fontweight='bold', color=TXT_W)
+                    ha='center', va='center', fontsize=_S["FONT_BANNER_NUM"], fontweight='bold', color=TXT_W)
             ax.text(box_w / 2, fig_h * 0.20, 'SECTION',
-                    ha='center', va='center', fontsize=7, color=TXT_W, alpha=0.75)
+                    ha='center', va='center', fontsize=_S["FONT_PANEL_MICRO_SM"], color=TXT_W, alpha=0.75)
             ax.text(box_w + 0.4, fig_h * 0.58, title,
-                    ha='left', va='center', fontsize=36, fontweight='bold', color=TXT_W)
+                    ha='left', va='center', fontsize=_S["FONT_BANNER_TITLE"], fontweight='bold', color=TXT_W)
             line_y = fig_h * 0.26
             ax.plot([box_w + 0.4, 9.8], [line_y, line_y],
                     color=LINE_C, linewidth=0.8, alpha=0.9)
@@ -76,7 +79,7 @@ def make_section_title_image(title: str, save_path: str,
             ax.add_patch(mpatches.Rectangle((0, 0), 10, fig_h, color=BG_H3))
             ax.add_patch(mpatches.Rectangle((0, 0), 0.12, fig_h, color=ACC_H3))
             ax.text(0.37, fig_h / 2, title,
-                    ha='left', va='center', fontsize=26, fontweight='bold', color=TXT_H3)
+                    ha='left', va='center', fontsize=_S["FONT_BANNER_SUB"], fontweight='bold', color=TXT_H3)
 
         plt.savefig(save_path, dpi=120, bbox_inches='tight',
                     facecolor=fig.get_facecolor(), edgecolor='none')

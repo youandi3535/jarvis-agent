@@ -20,13 +20,15 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+from conftest import is_scannable_source  # noqa: E402  (제외 규칙 단일 소유자)
+
 
 def _entrypoints():
     """`ensure_preflight` 를 부르는 **하위 폴더** 진입점 — 목록을 박지 않고 실물에서 파생(②)."""
     out = []
     for p in ROOT.rglob("*.py"):
-        s = str(p)
-        if "__pycache__" in s or ".venv" in s:
+        # 제외 판정은 conftest 단독 (원칙①) — 중첩 워크트리·가상환경을 *성질* 로 뺀다
+        if not is_scannable_source(p, ROOT):
             continue
         rel = p.relative_to(ROOT)
         if len(rel.parts) < 2 or rel.parts[0] == "tests":

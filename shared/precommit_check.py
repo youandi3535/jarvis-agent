@@ -21,7 +21,7 @@ exit code 1 → git pre-commit 훅이 자동 차단.
     schedule   — 스케줄 단일 진입점 (7종)
     autocode   — 자율 코드 자가수정 (4종)
     tools      — 자율 에이전트 도구 (3종)
-    image      — 이미지 생성 단일 진입점 (2종)
+    image      — 이미지 단일 진입점 (외향 2종) + JARVIS06 내부 규정 집행
 """
 from __future__ import annotations
 
@@ -172,12 +172,23 @@ def _docstring_lines(source: str) -> set[int]:
 
 @dataclass
 class Violation:
-    """단일 위반."""
+    """단일 위반.
+
+    `severity` ─ "block"(기본, 커밋 차단) | "warn"(보고만 하고 exit code 0).
+
+    ★ 왜 경고 등급이 필요한가 (2026-08-10): 새 레그를 켜는 순간 *이미 있던* 위반이
+      쏟아지는 경우가 있다. 그때 선택지가 '차단' 뿐이면 사람은 레그를 끄거나 지연시키고
+      (= 결함이 다시 안 보이게 되고), `--no-verify` 가 습관이 된다. 규정의 owner 가
+      다른 폴더라 이 세션에서 고칠 수 없는 사본은 *끄지 말고 경고로 켜서 세어* 둔다 —
+      CLAUDE.md 가 `--category harness` 를 "경고 수준 시작" 으로 도입한 것과 같은 이유.
+      경고는 화면에 항상 뜨고 개수가 보인다. 보이지 않는 결함만이 방치된다.
+    """
     category: str
     check_id: str
     file: str
     line: int
     text: str
+    severity: str = "block"
 
     def fmt(self) -> str:
         return f"  [{self.check_id}] {self.file}:{self.line}: {self.text.strip()[:140]}"
@@ -194,13 +205,19 @@ class Report:
     def add(self, v: Violation) -> None:
         self.violations.append(v)
 
+    def blocking(self) -> list[Violation]:
+        return [v for v in self.violations if v.severity != "warn"]
+
+    def warnings(self) -> list[Violation]:
+        return [v for v in self.violations if v.severity == "warn"]
+
     @property
     def ok(self) -> bool:
-        return not self.violations
+        return not self.blocking()
 
-    def by_category(self) -> dict[str, list[Violation]]:
+    def by_category(self, items: list[Violation] | None = None) -> dict[str, list[Violation]]:
         out: dict[str, list[Violation]] = {}
-        for v in self.violations:
+        for v in (self.violations if items is None else items):
             out.setdefault(v.category, []).append(v)
         return out
 
@@ -558,18 +575,601 @@ def check_tools(report: Report) -> None:
 # 검증 7 — 이미지 생성 단일 진입점 (CLAUDE.md "이미지 생성 권한 규정")
 # ============================================================================
 
+# ── JARVIS06 내부 규정: *문서에서 파생* 한다 (② 동적 설계) ──────────────────
+#   JARVIS06_IMAGE/CLAUDE.md 는 스스로 검증 grep 을 박제해 뒀는데 **러너가 없어
+#   한 번도 집행되지 않았다** (실측 2026-08-10: fontsize 규정 65건 위반인 채
+#   전체 precommit 은 "위반 0건" 초록). 대시보드 폰트 규정이 94곳 쌓인 것과
+#   같은 병이다 — 사람의 기억에 기대는 규칙은 반드시 샌다.
+#   그래서 패턴 목록을 여기 박지 않고 **문서의 grep 줄을 파싱해 그대로 실행**한다.
+#   CLAUDE.md 에 검증 줄을 추가하면 자동으로 집행 대상이 된다.
+_J06_DIR = "JARVIS06_IMAGE/"
+_J06_DOC = "JARVIS06_IMAGE/CLAUDE.md"
+_GREP_HEAD = re.compile(r"grep\s+-rn(E?)\s+(?:--include=\S+\s+)?'([^']+)'\s*([^|`]*)")
+_GREP_NEG = re.compile(r"grep\s+-v\s+(?:'([^']*)'|([^\s|`]+))")
+
+
+# grep 기본 문법은 BRE — `(` `|` `+` 는 *리터럴* 이고 `\(` `\|` 가 특수문자다.
+# Python re 는 그 반대라 그대로 넘기면 `'_synth_data('` 가 "unbalanced parenthesis" 로
+# 컴파일에 실패한다. 실패를 조용히 건너뛰면 **규칙이 사라진 줄도 모른 채 초록** 이 된다.
+_BRE_SWAP = "(){}|+?"
+
+
+def _bre_to_py(pat: str) -> str:
+    out: list[str] = []
+    i = 0
+    while i < len(pat):
+        c = pat[i]
+        if c == "\\" and i + 1 < len(pat):
+            nxt = pat[i + 1]
+            out.append(nxt if nxt in _BRE_SWAP else c + nxt)
+            i += 2
+        elif c in _BRE_SWAP:
+            out.append("\\" + c)
+            i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _scope_tokens(scope: str) -> list[str]:
+    """grep 인자에서 옵션(-x, --include=…)을 뺀 *경로* 토큰."""
+    return [t for t in scope.replace("'", " ").split()
+            if t and not t.startswith("-")]
+
+
+class _DocRules(list):
+    """규칙 목록 + *만들지 못한 규칙*(losses).
+
+    list 를 그대로 상속하는 이유: 호출자·테스트가 `for r in rules` / `len(rules)` 로
+    쓰던 계약을 깨지 않으면서 손실을 함께 나른다. 손실을 별도 반환값으로 만들면
+    호출자가 하나만 받아 쓰다가 *또* 조용히 흘려버린다 — 그게 이 개정의 원인이다.
+    """
+
+    def __init__(self, items=(), losses=(), seen=0, outward=0):
+        super().__init__(items)
+        self.losses: list[str] = list(losses)
+        # 개수 대조용 원장 — 문서의 `grep -rn` 줄 수(seen)가 곧 규칙의 총량이다.
+        self.seen: int = seen          # 문서에서 본 검증 줄 수
+        self.outward: int = outward    # J06 *바깥* 을 겨누는 줄 (이 검사 소관 아님)
+
+    def unaccounted(self) -> int:
+        """설명되지 않은 검증 줄 — 규칙도 아니고 손실도 아니고 외향도 아닌 것.
+
+        0 이 아니면 규칙이 *소리 없이* 사라진 것이다. '위반 0' 과 '검사 없음' 은
+        화면에서 똑같아 보이므로, 숫자로 맞춰 두지 않으면 영영 드러나지 않는다.
+        """
+        return max(0, self.seen - len(self) - len(self.losses) - self.outward)
+
+
+def _j06_doc_rules(doc_text: str) -> _DocRules:
+    """CLAUDE.md 의 `grep -rn ... | grep -v ...` 줄 → 실행 가능한 규칙.
+
+    반환: `_DocRules` — 규칙 목록이며 `.losses` 에 *만들지 못한 규칙* 이 담긴다.
+
+    ★ fail-closed (2026-08-10 개정) — 종전엔 `except re.error: continue` 로 조용히
+      넘겼다. 바로 이 docstring 이 "조용히 건너뛰면 규칙이 사라진 줄도 모른 채 초록이
+      된다" 고 써 놓고 정확히 그 짓을 하고 있었다. 규칙 하나가 증발해도 출력은 그대로
+      '위반 0' 이라 아무도 모른다. → 못 만든 규칙은 *통과가 아니라 위반* 으로 올린다
+      (`collect/self-check` 가 세운 표준). 호출자는 손실을 image/self-check 로 보고한다.
+
+    반환 항목: {"pat": 정규식(본문 대조), "neg": [정규식](출력줄 대조),
+                "toplevel": bool, "src": 원문}
+
+    ★ grep 의미를 그대로 흉내낸다 — 본체 패턴은 *파일 내용* 에, 파이프의 `grep -v` 는
+      *출력 줄*(`경로:줄번호:내용`)에 걸린다. 이 구분을 뭉개면 `^_PALETTES` 같은
+      앵커 패턴이 경로에 막혀 영영 0행이 되고, `grep -v image_data_verifier`(경로 필터)는
+      아무것도 거르지 못한다.
+    ★ JARVIS06 *바깥* 을 겨누는 규칙(`grep -v JARVIS06_IMAGE/`)은 외향 검사라 제외한다 —
+      image/direct-api 가 이미 담당한다.
+    """
+    rules: list[dict] = []
+    losses: list[str] = []
+    seen = 0
+    outward = 0
+    j06 = _J06_DIR.rstrip("/")
+    for raw in doc_text.splitlines():
+        if "grep -rn" not in raw:
+            continue
+        seen += 1
+        m = _GREP_HEAD.search(raw)
+        if not m:
+            # 해석 못 한 줄은 *무엇을 겨누는지조차 모른다* → 통과가 아니라 손실이다.
+            # ★ 종전엔 `if j06 in raw` 조건이 붙어 있어, 저장소 전역(`.`)을 겨누면서
+            #   J06 도 포함하는 줄(예: `^_PALETTES … --include='*.py' .`)이 파싱에
+            #   실패하면 아무 소리 없이 사라졌다. 모르는 것을 통과시키지 않는다.
+            outward += 1 if f"grep -v {j06}" in raw else 0
+            if f"grep -v {j06}" not in raw:
+                losses.append(f"검증 줄을 해석하지 못했다 — {raw.strip()[:110]}")
+            continue
+        ere, pat_s, scope = bool(m.group(1)), m.group(2), (m.group(3) or "")
+        tail = raw[m.end():]
+        negs = [(a or b) for a, b in _GREP_NEG.findall(tail)]
+        if any("JARVIS06_IMAGE" in n for n in negs):
+            outward += 1
+            continue
+        toks = _scope_tokens(scope)
+        if not any(j06 in t or t in (".", "./") for t in toks):
+            # 규정은 J06 을 겨눈다고 써 있는데 러너가 검사 범위를 못 잡았다 =
+            # 규칙 1건이 *조용히* 빠진 것이다. 개수가 맞는지까지 대조해야
+            # '전부 소실'(0건) 뿐 아니라 '일부 소실' 도 드러난다.
+            if j06 in raw and f"grep -v {j06}" not in raw:
+                losses.append(f"검사 범위를 해석하지 못했다 — {raw.strip()[:110]}")
+            else:
+                outward += 1          # 다른 폴더를 겨누는 줄 — 이 검사 소관 아님
+            continue
+        negs = [n for n in negs if "__pycache__" not in n]
+        try:
+            pat = re.compile(pat_s if ere else _bre_to_py(pat_s))
+            neg_pats = [re.compile(_bre_to_py(n)) for n in negs]
+        except re.error as e:
+            losses.append(f"정규식 컴파일 실패({e}) — {raw.strip()[:110]}")
+            continue
+        rules.append({"pat": pat, "neg": neg_pats,
+                      "toplevel": any("*.py" in t for t in toks), "src": raw.strip()})
+    return _DocRules(rules, losses, seen=seen, outward=outward)
+
+
+def _j06_py(toplevel_only: bool) -> list[Path]:
+    base = ROOT / "JARVIS06_IMAGE"
+    out = []
+    for f in _walk_py(base):
+        if _is_excluded(f):
+            continue
+        if toplevel_only and f.parent != base:
+            continue
+        out.append(f)
+    return sorted(out)
+
+
+def _j06_module_defs() -> dict[tuple[str, int], list[tuple[str, int]]]:
+    """JARVIS06 모듈 레벨 def → {(이름, 인자수): [(파일, 줄), ...]}
+
+    ★ 순회·파싱은 `_j06_funcs()` 단독 (이 함수가 트리를 따로 또 읽으면 같은 일이
+      두 벌이 된다 — 읽기 실패 처리가 한쪽만 fail-closed 로 갈라진다).
+    """
+    found: dict[tuple[str, int], list[tuple[str, int]]] = {}
+    for rel, node in _j06_funcs():
+        a = node.args
+        n = len(a.posonlyargs) + len(a.args) + len(a.kwonlyargs)
+        found.setdefault((node.name, n), []).append((rel, node.lineno))
+    return found
+
+
+# ---------------------------------------------------------------------------
+# JARVIS06 소스 파생 — '무엇을 짓는 함수인가' 를 *꼴* 로 뽑아낸다
+# ---------------------------------------------------------------------------
+# ★ 이름 목록(_bar_chart·_donut·vbar_chart …)을 박지 않는다 (② 동적 설계).
+#   2026-07-06 사고의 사본은 **이름이 달랐다** — `pro_templates._bar_chart` ↔
+#   `infographic_engine.vbar_chart/hbar_chart`, `_donut` ↔ `donut_chart/pie_chart`.
+#   동명 def 만 보는 검사는 그때도 0건, 지금도 0건이다. 이름이 다르면 사람 눈에도
+#   기계 눈에도 '다른 함수' 로 보이고, 그래서 한쪽만 고쳐진다.
+#   → 판정 기준을 이름이 아니라 **산출물의 꼴**(어떤 마크업을 데이터로 채워 짓는가)로.
+
+_MARKUP_LITERAL = re.compile(r"</?[A-Za-z][\w:-]*[\s/>]")
+_FMT = "\x00"                       # f-string 치환부 자리표시 (데이터가 들어오는 지점)
+_BOUND_TAG = re.compile(r"<\s*([A-Za-z][\w:-]*)[^<>]*\x00[^<>]*>")
+_HEXCOLOR = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+_IMG_TAG = re.compile(r"<\s*img\b", re.I)
+_LETTER = re.compile(r"[가-힣A-Za-z]")
+
+_J06_CACHE: dict[str, object] = {}
+
+
+def _j06_trees() -> list[tuple[str, ast.Module]]:
+    """JARVIS06 하위 모든 .py 의 AST — 파싱 실패는 *조용히 버리지 않고* 알린다."""
+    if "trees" not in _J06_CACHE:
+        out: list[tuple[str, ast.Module]] = []
+        bad: list[str] = []
+        for f in _j06_py(False):
+            text = _read_py(f)
+            rel = str(f.relative_to(ROOT))
+            if text is None:
+                bad.append(rel)
+                continue
+            try:
+                out.append((rel, ast.parse(text)))
+            except SyntaxError as e:
+                bad.append(f"{rel} ({e})")
+        _J06_CACHE["trees"] = out
+        _J06_CACHE["unreadable"] = bad
+    return _J06_CACHE["trees"]                                   # type: ignore[return-value]
+
+
+def _j06_unreadable() -> list[str]:
+    """읽지 못한 JARVIS06 파일 — fail-closed 보고용 (못 본 것은 통과가 아니다)."""
+    _j06_trees()
+    return _J06_CACHE.get("unreadable", [])                      # type: ignore[return-value]
+
+
+def _j06_funcs() -> list[tuple[str, ast.FunctionDef]]:
+    """(파일, 모듈레벨 def) 목록."""
+    if "funcs" not in _J06_CACHE:
+        out = []
+        for rel, tree in _j06_trees():
+            for n in tree.body:
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    out.append((rel, n))
+        _J06_CACHE["funcs"] = out
+    return _J06_CACHE["funcs"]                                   # type: ignore[return-value]
+
+
+def _fn_strings(node: ast.AST) -> list[str]:
+    """함수가 만들어 내는 문자열 조각 — f-string 은 치환부를 `_FMT` 로 남긴다.
+
+    치환부를 지우지 않고 *표시* 하는 이유: `<rect width={w}>` 처럼 **속성이 데이터로
+    채워지는** 태그만이 '그림을 그린' 태그다. 정적 장식(`<rect fill='#eee'>`)과
+    데이터 결속을 가르지 못하면 배경 사각형까지 차트로 세게 된다.
+
+    ★ 독스트링·주석용 문자열(문 하나가 통째로 문자열인 것)은 제외한다 (2026-08-10).
+      함수가 *만들어 내는* 것이 아니라 *자기를 설명하는* 문자열이라, 설명문에 예시로
+      적힌 `<h2>` 한 글자 때문에 계산 헬퍼가 '마크업 빌더' 로 오분류되고 그 설명문의
+      한국어가 '이미지에 인쇄될 문구' 로 보고됐다 (실측 오탐 9건). 검사가 소음을 내면
+      사람은 검사를 끄지 결함을 고치지 않는다.
+    """
+    out: list[str] = []
+    stack: list[ast.AST] = [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, ast.Expr) and isinstance(n.value, (ast.Constant, ast.JoinedStr)):
+            if isinstance(n.value, ast.JoinedStr) or isinstance(n.value.value, str):
+                continue                      # 독스트링 — 방출되지 않는다
+        if isinstance(n, ast.JoinedStr):
+            out.append("".join(
+                v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else _FMT
+                for v in n.values))
+            for v in n.values:                    # 치환식 안에도 마크업이 있을 수 있다
+                if isinstance(v, ast.FormattedValue):
+                    stack.append(v.value)
+            continue
+        if isinstance(n, ast.Constant):
+            if isinstance(n.value, str):
+                out.append(n.value)
+            continue
+        stack.extend(ast.iter_child_nodes(n))
+    return out
+
+
+def _call_name(node: ast.AST) -> str | None:
+    if not isinstance(node, ast.Call):
+        return None
+    f = node.func
+    if isinstance(f, ast.Name):
+        return f.id
+    if isinstance(f, ast.Attribute):
+        return f.attr
+    return None
+
+
+def _j06_markup_builders() -> dict[str, list[tuple[str, int]]]:
+    """마크업을 짓는 함수 → [(파일, 줄)] — 실물에서 파생.
+
+    ① 씨앗: 본문 문자열에 태그(`<tag …>`)가 들어 있는 함수.
+    ② 디스패처 닫힘: *모든* return 이 씨앗(또는 이미 인정된 빌더) 호출인 함수도 빌더다.
+       ★ 이게 없으면 `pro_templates._bar_chart` 가 탈락한다 — 본문에 `<` 가 한 글자도
+         없고 세 갈래 하위 함수로 넘기기만 하기 때문이다. 정작 조립부가 부르는 이름은
+         `_bar_chart` 라, 가장 핵심인 프리미티브가 검사 밖에 있었다.
+       ★ 전이 폐포(호출만 하면 빌더)로 넓히면 process_draft·certify_image 까지 끌려와
+         (실측 +27개) 오탐이 쏟아진다 — '전부 위임' 인 함수만 인정한다(실측 +2개).
+    """
+    if "builders" in _J06_CACHE:
+        return _J06_CACHE["builders"]                            # type: ignore[return-value]
+    sites: dict[str, list[tuple[str, int]]] = {}
+    wrappers: set[str] = set()
+    for rel, fn in _j06_funcs():
+        strs = _fn_strings(fn)
+        if any(_MARKUP_LITERAL.search(s) for s in strs):
+            sites.setdefault(fn.name, []).append((rel, fn.lineno))
+        if any(_IMG_TAG.search(s) for s in strs):
+            wrappers.add(fn.name)
+    def _all_returns_delegate(fn: ast.AST, known) -> bool:
+        """이 함수의 *모든* 반환이 이미 인정된 이름으로 넘어가는가 (전부 위임)."""
+        rets = [r for r in ast.walk(fn) if isinstance(r, ast.Return)]
+        if not rets:
+            return False
+        hit = False
+        for r in rets:
+            v = r.value
+            if v is None or (isinstance(v, ast.Constant) and v.value in ("", None)):
+                continue                          # 빈 반환(실패 경로)은 무해
+            nm = _call_name(v)
+            if nm and nm in known:
+                hit = True
+            else:
+                return False
+        return hit
+
+    # 위임 폐포는 *빌더와 `<img>` 감싸개 양쪽* 에 똑같이 돌린다.
+    # ★ 감싸개에도 돌려야 하는 이유 (2026-08-10): 독스트링을 제외하자
+    #   `theme_charts._emit_price_chart` 가 감싸개 집합에서 빠졌다 — 자기 몸통엔 `<img` 가
+    #   없고 `data_image_html` 에 넘기기만 하기 때문이다. 그 순간 이 함수에 넘기는
+    #   **alt 텍스트**('… 주가 최근 …')가 '이미지에 인쇄될 문구' 로 오보고됐다.
+    #   alt 는 본문 HTML 의 글자지 그림 안 픽셀이 아니다. 판정 근거는 그대로 실물
+    #   (`<img` 를 내보내는가)이고, '내보낸다' 를 위임까지 포함해 볼 뿐이다.
+    changed = True
+    while changed:
+        changed = False
+        for rel, fn in _j06_funcs():
+            if fn.name not in sites and _all_returns_delegate(fn, sites):
+                sites.setdefault(fn.name, []).append((rel, fn.lineno))
+                changed = True
+            if fn.name not in wrappers and _all_returns_delegate(fn, wrappers):
+                wrappers.add(fn.name)
+                changed = True
+    _J06_CACHE["img_wrappers"] = wrappers
+    _J06_CACHE["builders"] = sites
+    return sites
+
+
+def _image_wrappers() -> set[str]:
+    """이미 만들어진 그림을 `<img>` 로 *감싸기만* 하는 함수 이름.
+
+    이들이 받는 문자열은 alt·caption — 그림 *안* 에 인쇄되는 픽셀이 아니라 본문 HTML
+    텍스트다. 표시문구 레그의 대상은 '이미지에 인쇄되는 문구' 이므로 제외한다.
+    (제외 근거도 실물 파생 — `<img` 를 내보내는가로 판정한다. 이름 목록 아님.)
+    """
+    _j06_markup_builders()
+    return _J06_CACHE.get("img_wrappers", set())                 # type: ignore[return-value]
+
+
+def _markup_builders(module_rel: str) -> set[str]:
+    """이 모듈에서 *마크업을 만들어 내는* 함수 이름 (전역 파생의 모듈 뷰)."""
+    return {name for name, sites in _j06_markup_builders().items()
+            if any(rel == module_rel for rel, _ in sites)}
+
+
+def _pro_template_primitives() -> set[str]:
+    """조립부(template_engine)가 import 해 쓰는 *표시* 프리미티브 — 실물에서 파생.
+
+    import 목록 ∩ '마크업을 만드는 함수'. 교집합을 쓰는 이유는 두 가지다 —
+      · import 목록만 쓰면 `_fmt`·`_pairs` 같은 계산 헬퍼까지 걸려 오탐이 쏟아진다
+        (실측 37건). 오탐이 많은 검사는 곧 무시당하고, 무시당한 검사는 없는 것과 같다.
+      · 마크업 함수만 쓰면 조립부가 안 쓰는 내부 조각까지 잡는다.
+    """
+    names: set[str] = set()
+    for rel, tree in _j06_trees():          # 트리 파싱은 _j06_trees 단독 (사본 금지)
+        if rel != "JARVIS06_IMAGE/template_engine.py":
+            continue
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom) and (n.module or "").endswith("pro_templates"):
+                names |= {a.name for a in n.names}
+    return names & _markup_builders("JARVIS06_IMAGE/pro_templates.py")
+
+
+def _bound_tags(fn: ast.AST) -> frozenset[str]:
+    """이 함수가 *데이터로 채워* 내보내는 마크업 원소 이름."""
+    out: set[str] = set()
+    for s in _fn_strings(fn):
+        for m in _BOUND_TAG.finditer(s):
+            out.add(m.group(1).lower())
+    return frozenset(out)
+
+
+def _j06_chart_builders() -> dict[str, list[tuple[str, int, frozenset]]]:
+    """'수치를 그림으로 바꾸는' 함수 → 파일별 목록.
+
+    판정: **좌표계(`<svg …{데이터}…>`)를 데이터로 열고** 그 안에 두 종류 이상의 원소를
+    데이터로 채우는 함수. 이름·인자 이름·모듈 위치를 보지 않는다.
+      · `<svg viewBox='0 0 24 24'>` 처럼 고정 좌표계만 여는 글리프(`_ic`)는 제외된다.
+      · 원소 1종(`_icon`)도 제외 — 그림이 아니라 장식이다.
+      · div/span 카드(html_renderer 의 템플릿들)는 svg 를 열지 않아 제외 — 이들은
+        서로 다른 레이아웃이지 같은 그림의 사본이 아니다(오탐 억제).
+    """
+    if "charts" in _J06_CACHE:
+        return _J06_CACHE["charts"]                              # type: ignore[return-value]
+    out: dict[str, list[tuple[str, int, frozenset]]] = {}
+    for rel, fn in _j06_funcs():
+        bt = _bound_tags(fn)
+        if "svg" in bt and len(bt) >= 2:
+            out.setdefault(rel, []).append((fn.name, fn.lineno, bt))
+    _J06_CACHE["charts"] = out
+    return out
+
+
+# 표시 문구인가, 식별자인가 — *꼴* 로 가른다. 어휘 목록은 새 문구를 못 잡고 낡는다.
+_DISPLAY_TEXT = re.compile(r"[가-힣]|\s")
+_HTML_STYLE_BLOCK = re.compile(r"<(style|script)\b[^>]*>.*?</\1>", re.S | re.I)
+# 실제 HTML/SVG *여는 태그* 문법 — 이름 뒤에 오는 것은 `attr` 또는 `attr=값` 뿐.
+# 산문에 낀 꺾쇠(LLM 프롬프트의 `<English scene that ...>`)를 태그로 오인하지 않기
+# 위한 *꼴* 판정이다. 어휘 목록이 아니라 문법으로 가른다.
+_HTML_OPEN_TAG = (r"""<[A-Za-z][\w:-]*"""
+                  r"""(?:\s+[\w:.-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>"']+))?)*\s*/?>""")
+# 여는 태그 바로 뒤의 텍스트 노드. 닫는 꺾쇠는 *소비하지 않는다*(lookahead) —
+# 소비하면 공백만 있는 노드가 다음 태그를 삼켜 그 안의 문구가 통째로 사라진다.
+_HTML_TEXT_NODE = re.compile(_HTML_OPEN_TAG + r"([^<>]+)(?=<)")
+_HTML_ENTITY = re.compile(r"&(?:#\d+|#x[0-9a-fA-F]+|\w+);")
+# 정규식 문자클래스 — `[\s\S]*?` 같은 패턴 리터럴이 '표시 문구' 로 세어지는 것 방지.
+_RE_CHARCLASS = re.compile(r"\[[^\]]*\]")
+_SLOT_TOKEN = re.compile(r"\{\{[^}]*\}\}")
+_NON_TEXT = re.compile(r"^[\d\s.,%:;/+\-—·|·]+$")
+_STR_METHODS = ("format", "join", "strip", "upper", "lower", "replace", "title")
+
+
+def _module_consts(tree: ast.Module) -> dict[str, ast.AST]:
+    """모듈 레벨 상수 이름 → 값 노드 (`_HERO_ROLE = {...}` 를 따라가기 위한 것)."""
+    out: dict[str, ast.AST] = {}
+    for n in tree.body:
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name):
+                    out[t.id] = n.value
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+            out[n.target.id] = n.value
+    return out
+
+
+def _local_assigns(fn: ast.AST) -> dict[str, ast.AST]:
+    """함수 안 이름 → 처음 대입된 값 노드."""
+    out: dict[str, ast.AST] = {}
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.Assign):
+            for t in sub.targets:
+                if isinstance(t, ast.Name):
+                    out.setdefault(t.id, sub.value)
+        elif isinstance(sub, (ast.AnnAssign, ast.AugAssign)):
+            if isinstance(sub.target, ast.Name) and sub.value is not None:
+                out.setdefault(sub.target.id, sub.value)
+    return out
+
+
+def _resolve_strings(node: ast.AST | None, consts: dict, local: dict,
+                     depth: int = 0, seen: frozenset = frozenset()) -> list[str]:
+    """이 인자가 결국 화면에 인쇄할 *문자열 리터럴* 조각들.
+
+    ★ 직접 인자 리터럴만 보면 안 되는 이유 (2026-08-10 실측):
+        `_hero_stat(pal, "항목 수", …)`            → 잡힌다
+        `label = f"{_HERO_ROLE[k]} · {t}"; _hero_stat(pal, label, …)` → **안 잡힌다**
+      현재 코드가 정확히 후자의 꼴이라, 0건은 '위반이 없어서' 가 아니라 '못 봐서' 였다.
+      그래서 지역 대입·모듈 상수·f-string 치환부·연결·포맷을 *따라간다*.
+    """
+    if node is None or depth > 6:
+        return []
+    out: list[str] = []
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            out.append(node.value)
+    elif isinstance(node, ast.JoinedStr):
+        for v in node.values:
+            if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                out.append(v.value)
+            elif isinstance(v, ast.FormattedValue):
+                out += _resolve_strings(v.value, consts, local, depth + 1, seen)
+    elif isinstance(node, ast.BinOp):
+        out += _resolve_strings(node.left, consts, local, depth + 1, seen)
+        out += _resolve_strings(node.right, consts, local, depth + 1, seen)
+    elif isinstance(node, ast.IfExp):
+        out += _resolve_strings(node.body, consts, local, depth + 1, seen)
+        out += _resolve_strings(node.orelse, consts, local, depth + 1, seen)
+    elif isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        for e in node.elts:
+            out += _resolve_strings(e, consts, local, depth + 1, seen)
+    elif isinstance(node, ast.Dict):
+        for v in node.values:
+            out += _resolve_strings(v, consts, local, depth + 1, seen)
+    elif isinstance(node, ast.Subscript):          # _HERO_ROLE[role_key]
+        out += _resolve_strings(node.value, consts, local, depth + 1, seen)
+    elif isinstance(node, ast.Name):
+        if node.id not in seen:
+            src = local.get(node.id, consts.get(node.id))
+            out += _resolve_strings(src, consts, local, depth + 1, seen | {node.id})
+    elif isinstance(node, ast.Call):
+        f = node.func
+        if isinstance(f, ast.Attribute) and f.attr in _STR_METHODS:
+            out += _resolve_strings(f.value, consts, local, depth + 1, seen)
+            for a in node.args:
+                out += _resolve_strings(a, consts, local, depth + 1, seen)
+    return out
+
+
+def _dict_literal(node: ast.AST | None, consts: dict, local: dict, depth: int = 0) -> bool:
+    if node is None or depth > 4:
+        return False
+    if isinstance(node, ast.Dict):
+        return True
+    if isinstance(node, ast.Name):
+        return _dict_literal(local.get(node.id, consts.get(node.id)), consts, local, depth + 1)
+    return False
+
+
+def _handmade_dataset(node: ast.AST | None, consts: dict, local: dict, depth: int = 0) -> bool:
+    """이 인자가 *함수가 스스로 지어낸* 데이터셋인가 (스모크 렌더 픽스처 판별).
+
+    ★ 왜 면제하나: `design_learner._test_render` 와 `verifier_effective` 는 자기가 만든
+      샘플을 한 번 그려 보고 버린다(임시폴더·크기 확인). 거기 박힌 '샘플 렌더' 는
+      *데이터에서 파생할 대상이 없다* — 데이터 자체가 없기 때문이다. 이것까지 위반으로
+      세면 검사가 픽스처를 잡는 소음이 되고, 소음이 많은 검사는 곧 무시당한다.
+      (`tests/` 를 provenance 레그에서 면제한 것과 같은 이유.)
+    """
+    if node is None or depth > 4:
+        return False
+    if isinstance(node, ast.Name):
+        return _handmade_dataset(local.get(node.id, consts.get(node.id)), consts, local, depth + 1)
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return any(_dict_literal(e, consts, local) for e in node.elts)
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+        return _dict_literal(node.elt, consts, local)
+    return False
+
+
+def _display_literals(source: str, prims: set[str]) -> list[tuple[int, str, str]]:
+    """표시 프리미티브에 넘긴 *표시 문구 리터럴* — [(줄, 함수명, 문구)].
+
+    식별자(`"chart"` 같은 아이콘 키)·색상(`'#0d2150,…'`)과 표시 문구를 *꼴* 로 가른다:
+    글자가 있고 hex 색·CSS 선언이 아니면 사람이 읽는 문구다. 어휘 목록을 쓰지 않는
+    이유는 JARVIS08 tags.py 가 남긴 교훈과 같다 — 목록은 새 문구를 못 잡고 낡는다.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    consts = _module_consts(tree)
+    out: list[tuple[int, str, str]] = []
+    for fn in tree.body:
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        local = _local_assigns(fn)
+        for node in ast.walk(fn):
+            name = _call_name(node)
+            if name not in prims:
+                continue
+            args = list(node.args) + [k.value for k in node.keywords]
+            if any(_handmade_dataset(a, consts, local) for a in args):
+                continue                       # 스모크 렌더(픽스처) — 파생할 데이터가 없다
+            for arg in args:
+                for lit in _resolve_strings(arg, consts, local):
+                    t = lit.strip()
+                    if not t or "<" in lit or not _DISPLAY_TEXT.search(t):
+                        continue
+                    if not _LETTER.search(t) or _HEXCOLOR.search(t) or ";" in t or "{" in t:
+                        continue               # 색·CSS·슬롯 토큰은 표시 문구가 아니다
+                    out.append((node.lineno, name or "?", t))
+    return out
+
+
+def _markup_display_text(markup: str) -> list[str]:
+    """마크업 안의 *표시 텍스트 노드* — 슬롯 토큰도 CSS 도 숫자도 아닌 것.
+
+    소비자가 둘이다. **둘 다 이 함수 하나를 지난다** (①단일 진입점) —
+      · 레시피 template (`design_recipes.json`) 의 고정 문구
+      · 프리미티브 *몸통 안* 에서 마크업에 직접 박히는 문구
+    종전엔 앞의 것만 있었고, 그래서 `pro_templates` 안의 `"↑ 2위 대비 {ratio}"` 처럼
+    **함수 자기 몸통에 박힌 문구는 레그가 0건**이었다. 사고 당시 그 문구가 든 이미지가
+    사실성 검증에서 폐기되고 있었는데도 커밋 단계는 조용했다.
+
+    `<style>`/`<script>` 블록은 먼저 걷어낸다 (CSS 본문이 `>...<` 로 잡혀 오탐).
+    다음 셋은 표시 문구가 아니므로 판정 전에 지운다 — 전부 *꼴* 로 가른다:
+      · `{{slot}}` 슬롯 토큰 · f-string 치환부(`_FMT`) → 데이터가 들어올 자리
+      · HTML 엔티티(`&nbsp;` 등) → 글자가 아니라 여백·기호
+      · 정규식 문자클래스(`[\s\S]`) → 코드가 *읽는* 패턴이지 인쇄되는 글자가 아니다
+    """
+    body = _HTML_STYLE_BLOCK.sub(" ", markup)
+    out: list[str] = []
+    for m in _HTML_TEXT_NODE.finditer(body):
+        t = _SLOT_TOKEN.sub("", m.group(1)).replace(_FMT, "")
+        t = _HTML_ENTITY.sub(" ", t).strip()
+        if not t or _NON_TEXT.match(t):
+            continue
+        if not re.search(r"[가-힣A-Za-z]", _RE_CHARCLASS.sub("", t)):
+            continue
+        out.append(t)
+    return out
+
+
 def check_image(report: Report) -> None:
-    """① 이미지 생성 API URL 직접 호출 (JARVIS06_IMAGE 외부)
+    """① 외부 이미지 생성 API 직접 호출 (JARVIS06_IMAGE 외부)
        ② ImageGenerationModel 직접 사용 (JARVIS06_IMAGE 외부)
+       ③ JARVIS06 *내부* 규정 — CLAUDE.md 박제 grep 을 문서에서 파생해 집행
+       ④ 사본·표시문구·초크포인트 우회 (2026-08-10 감사 D18/D19 — 뿌리1 재발방지)
     """
     cat = "image"
     pat1 = re.compile(r"https://image\.pollinations\.ai|api\.cloudflare\.com/client/v4/accounts/[^\"']*\/ai/run")
     pat2 = re.compile(r"ImageGenerationModel\(|imagen-[0-9]")
-    img_dir = "JARVIS06_IMAGE/"
+    img_dir = _J06_DIR
 
     # CLAUDE.md 규정 본문(이 파일 포함)은 검증 대상 외
     allow_files = ("shared/precommit_check.py", "CLAUDE.md")
 
+    # ── 외향 레그 (종전 2종) — 검증기 상태와 무관하므로 항상 먼저 돈다 ──────
     for p in _iter_py():
         rel = p.relative_to(ROOT)
         rel_s = str(rel)
@@ -583,8 +1183,378 @@ def check_image(report: Report) -> None:
                 report.add(Violation(cat, "image/direct-api", rel_s, i, line))
             if pat2.search(line):
                 report.add(Violation(cat, "image/imagen-direct", rel_s, i, line))
-
     report.checks_run += 2
+
+    _check_image_internal(report, cat)
+
+
+def _check_image_internal(report: Report, cat: str) -> None:
+    """JARVIS06 *안* 을 보는 레그. 종전 check_image 는 `if img_dir in rel_s: continue`
+    로 JARVIS06 내부를 통째로 면제했다 = '남이 이미지를 못 만들게' 하는 외향 검사뿐.
+    그 결과 이미지 내부의 하드코딩·사본·검증 우회는 커밋 단계에서 한 번도 걸리지 않았다.
+    """
+    # ── ⓪ 검사 전제 자기점검 (fail-closed) ────────────────────────────
+    #   규칙의 출처(CLAUDE.md)를 못 읽으면 '위반 0' 이 아니라 '검사 무력화' 다.
+    doc = _read_py(ROOT / _J06_DOC) if (ROOT / _J06_DOC).exists() else None
+    if doc is None:
+        try:
+            doc = (ROOT / _J06_DOC).read_text(encoding="utf-8")
+        except Exception:
+            doc = None
+    rules = _j06_doc_rules(doc) if doc else _DocRules()
+    report.checks_run += 1
+    if not rules:
+        report.add(Violation(
+            cat, "image/self-check", _J06_DOC, 0,
+            "JARVIS06 검증 규정을 문서에서 읽지 못했다 — 이 검사의 전제가 무너졌다"))
+        return
+    # ★ '규칙 0건' 만 보던 종전 자기점검은 *부분 소실* 을 못 잡았다 — 10개 중 9개가
+    #   증발해도 출력은 똑같이 '위반 0' 이다. 만들지 못한 규칙을 낱낱이 올린다.
+    for loss in rules.losses:
+        report.add(Violation(cat, "image/self-check", _J06_DOC, 0,
+                             f"검증 규칙 1건이 집행되지 않는다 — {loss}"))
+    # 개수 대조 — 문서의 검증 줄 = 집행 규칙 + 손실 + 외향. 남으면 조용히 증발한 것이다.
+    if rules.unaccounted():
+        report.add(Violation(
+            cat, "image/self-check", _J06_DOC, 0,
+            f"검증 줄 {rules.seen}개 중 집행 {len(rules)}·손실 {len(rules.losses)}·"
+            f"외향 {rules.outward} 로 {rules.unaccounted()}개가 설명되지 않는다 "
+            "— 규칙이 소리 없이 사라진 상태"))
+    # 읽지 못한 소스가 있으면 '위반 0' 이 아니라 '검사 불가' 다 (fail-closed).
+    for bad in _j06_unreadable():
+        report.add(Violation(cat, "image/self-check", bad, 0,
+                             "JARVIS06 소스를 읽지 못해 사본·표시문구 검사가 이 파일을 건너뛴다"))
+
+    # ── ① 검증기가 *실제로 동작하는가* (patch_effective 표준) ─────────────
+    report.checks_run += 1
+    try:
+        # ★ 스크립트 디렉터리(shared/)를 sys.path 에서 걷어낸다 (2026-08-10)
+        #   `python3 shared/precommit_check.py` 로 돌면 sys.path[0] 이 shared/ 라
+        #   `shared/secrets.py` 가 **표준 라이브러리 secrets 를 가린다**. numpy 의
+        #   bit_generator 가 `from secrets import randbits` 를 하므로 pandas·yfinance
+        #   경유 import 가 전부 터진다 — 검증기는 멀쩡한데 "미작동" 으로 오판정됐다.
+        #   검사기가 자기 실행 방식 때문에 거짓 위반을 내면 아무도 검사를 믿지 않는다.
+        _here = str(Path(__file__).resolve().parent)
+        sys.path[:] = [q for q in sys.path
+                       if q and str(Path(q).resolve()) != _here]
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from JARVIS06_IMAGE.validators import image_data_verifier as _idv
+        # 스모크는 일부러 '틀린 값' 을 흘려보낸다 — 그 경고가 검사기 출력에 섞이면
+        # 사용자가 진짜 위반과 구별하지 못한다.
+        import logging as _lg
+        _lg.getLogger("jarvis.image.dataverify").setLevel(_lg.CRITICAL)
+        _eff = getattr(_idv, "verifier_effective", None)
+        if _eff is None:
+            report.add(Violation(
+                cat, "image/self-check",
+                "JARVIS06_IMAGE/validators/image_data_verifier.py", 0,
+                "verifier_effective() 없음 — 검증기가 동작한다는 *증거* 없이 발행 게이트가 돈다"))
+        elif _eff() is not True:
+            report.add(Violation(
+                cat, "image/self-check",
+                "JARVIS06_IMAGE/validators/image_data_verifier.py", 0,
+                "검증기가 실제로 동작하지 않음 — 조작 수치를 통과시킨다"))
+    except Exception as e:
+        report.add(Violation(
+            cat, "image/self-check",
+            "JARVIS06_IMAGE/validators/image_data_verifier.py", 0,
+            f"검증기를 확인하지 못해 검사 무력화 ({type(e).__name__}: {e})"))
+
+    # ── ② CLAUDE.md 박제 grep (fontsize·_synth_data·고정 팔레트·사실성 owner) ──
+    report.checks_run += 1
+    for rule in rules:
+        for f in _j06_py(rule["toplevel"]):
+            text = _read_py(f)
+            if text is None:
+                continue
+            rel_s = str(f.relative_to(ROOT))
+            for i, line in enumerate(text.splitlines(), 1):
+                if not rule["pat"].search(line):        # 본체 패턴은 *내용* 에
+                    continue
+                probe = f"{rel_s}:{i}:{line}"           # 파이프 필터는 *출력 줄* 에
+                if any(n.search(probe) for n in rule["neg"]):
+                    continue
+                report.add(Violation(
+                    cat, "image/j06-style", rel_s, i,
+                    f"JARVIS06/CLAUDE.md 박제 위반 — {rule['src'][:90]}"))
+
+    # ── ③ 표시 문구 리터럴 — 이미지에 인쇄될 한국어/영문 고정 문구 ────────
+    #   '항목 수'·'합계 ' 처럼 코드에 박힌 라벨이 8장 전부에 인쇄됐다(D17).
+    #   ★ 대상 프리미티브는 *pro_templates 것만* 이 아니라 JARVIS06 의 **모든 마크업
+    #     빌더** 다 (2026-08-10). 종전엔 조립부가 import 한 pro_templates 함수만 봐서
+    #     `infographic_engine.kpi_card(..., "항목 수", ...)` 가 검사 밖에 있었다 —
+    #     정작 사고 당일 8장에 인쇄된 라벨이 바로 그 호출에서 나왔다.
+    prims = _j06_markup_builders()
+    report.checks_run += 1
+    if not prims:
+        report.add(Violation(
+            cat, "image/self-check", _J06_DIR, 0,
+            "마크업 빌더를 하나도 파생하지 못했다 — 표시문구·사본 검사 전제 붕괴"))
+    else:
+        names = set(prims) - _image_wrappers()
+        for f in _j06_py(False):
+            text = _read_py(f)
+            if text is None:
+                continue
+            rel_s = str(f.relative_to(ROOT))
+            seen_hits: set[tuple[int, str, str]] = set()
+            for hit in _display_literals(text, names):
+                if hit in seen_hits:      # 삼항·분기로 같은 문구가 두 번 풀리는 것뿐
+                    continue
+                seen_hits.add(hit)
+                lineno, fname, t = hit
+                report.add(Violation(
+                    cat, "image/display-literal", rel_s, lineno,
+                    f"이미지 표시 문구가 코드에 박혔다: {t[:40]!r} "
+                    f"→ 데이터에서 파생할 것 ({fname})"))
+
+    # ── ③-b 프리미티브 *몸통 안* 의 표시 문구 ────────────────────────────
+    #   ★ 2026-08-10 — ③ 은 *호출부가 프리미티브에 넘기는* 리터럴만 봤다. 정작 문구를
+    #     마크업에 직접 박는 쪽은 프리미티브 자신이다:
+    #       pro_templates `f"…font-weight='600'>↑ 2위 대비 {ratio_txt}</text>"`
+    #     이 문구는 데이터에 없는 글자라 사실성 검증이 그 이미지를 *실제로 폐기* 시키고
+    #     있었는데, 레그는 0건이었다. 인쇄되는 글자는 어느 쪽에서 오든 똑같이 위험하다.
+    #   ★ 함수명 목록을 박지 않는다 — 대상은 `_j06_markup_builders()` 가 실물에서 파생한
+    #     '마크업을 짓는 함수' 전부 (③ 과 같은 집합, `<img>` 감싸기만 하는 것은 제외).
+    report.checks_run += 1
+    if prims:
+        seen_body: set[tuple[str, str]] = set()
+        for rel_s, fn in _j06_funcs():
+            if fn.name not in names:
+                continue
+            for chunk in _fn_strings(fn):
+                for t in _markup_display_text(chunk):
+                    key = (rel_s, t)
+                    if key in seen_body:
+                        continue
+                    seen_body.add(key)
+                    report.add(Violation(
+                        cat, "image/display-literal", rel_s, fn.lineno,
+                        f"이미지에 인쇄될 문구가 마크업에 직접 박혔다: {t[:40]!r} "
+                        f"→ 데이터에서 파생할 것 ({fn.name}() 몸통)"))
+
+    # ── ④ 조립부 사본 (뿌리1) — 프리미티브를 정의자·조립부 밖에서 부르면 2벌째다 ──
+    #   여기는 *조립부가 쓰는* 프리미티브 기준 (전 빌더로 넓히면 모듈 내부 호출까지
+    #   전부 걸려 오탐이 된다).
+    report.checks_run += 1
+    prims = _pro_template_primitives()
+    if not prims:
+        report.add(Violation(
+            cat, "image/self-check", "JARVIS06_IMAGE/template_engine.py", 0,
+            "조립부의 프리미티브 import 를 파싱하지 못했다 — 조립부 사본 검사 전제 붕괴"))
+    if prims:
+        allowed = {"JARVIS06_IMAGE/pro_templates.py", "JARVIS06_IMAGE/template_engine.py"}
+        for rel_s, tree in _j06_trees():     # 트리 파싱은 _j06_trees 단독 (사본 금지)
+            if rel_s in allowed:
+                continue
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id in prims):
+                    report.add(Violation(
+                        cat, "image/assembler-drift", rel_s, node.lineno,
+                        f"차트 프리미티브 {node.func.id}() 를 조립부 밖에서 호출 — "
+                        "조립이 2벌이 되면 한쪽만 고쳐져 재발한다"))
+
+    # ── ⑤-a 형제 사본 — 같은 이름·같은 인자수의 private 헬퍼가 두 모듈에 ──────
+    #   public 동명 함수(render 등)는 렌더러 플러그인 *인터페이스* 라 대상 아님.
+    #   ★ 이 레그만으로는 부족하다 — 실제 사본은 이름이 다르다(⑤-b 참조).
+    report.checks_run += 1
+    for (name, argc), sites in sorted(_j06_module_defs().items()):
+        if not name.startswith("_") or len(sites) < 2:
+            continue
+        for rel_s, lineno in sites[1:]:
+            first = sites[0][0]
+            report.add(Violation(
+                cat, "image/sibling-drift", rel_s, lineno,
+                f"{name}({argc}인자) 가 {first} 에도 있다 — 사본은 한쪽만 고쳐진다(①단일 진입점)"))
+
+    # ── ⑤-b 그림 사본 — *이름이 달라도* 같은 그림을 짓는 함수가 두 모듈에 ────
+    report.checks_run += 1
+    _chart_drift_leg(report, cat)
+
+    # ── ⑥ provenance 레지스트리 직접 기록 (0단 초크포인트 우회) ──────────────
+    report.checks_run += 1
+    prov_write = re.compile(r"_PROV_REGISTRY\s*\[|(?<![\w.])_?record_provenance\s*\(")
+    owner = "JARVIS06_IMAGE/validators/image_data_verifier.py"
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        # 테스트는 게이트의 *입력* 을 만들어야 하므로 레지스트리를 직접 채운다.
+        # (check_symmetry 도 같은 이유로 tests/ 를 면제한다 — 대역을 못 세우면 검사를 못 짠다)
+        if rel_s == owner or rel_s.startswith("tests/") \
+                or any(a in rel_s for a in ("shared/precommit_check.py",)):
+            continue
+        text = _read_py(p)
+        if text is None:
+            continue
+        code = _blank_string_literals(text)
+        for i, line in enumerate(code.splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if prov_write.search(line):
+                report.add(Violation(
+                    cat, "image/provenance-write-outside", rel_s, i,
+                    "검증 기록을 직접 쓴다 — 등록은 certify_image() 단일 경로만 "
+                    "(우회 경로가 생기면 미검증 이미지가 '검증됨'으로 남는다)"))
+
+    # ── ⑦ 초크포인트 단일 출구 — generate_infographic 의 모든 return ─────────
+    #   2026-08-10: 반환이 4갈래라 그중 하나(render_pro)가 등록을 빠뜨려도 아무도 몰랐고
+    #   8장 전부가 provenance 없이 발행됐다. return 은 "" 아니면 _emit(...) 두 꼴만.
+    report.checks_run += 1
+    _chokepoint_leg(report, cat)
+
+    # ── ⑧ 레시피 표시 리터럴 — 학습·시드 레이아웃에 박힌 고정 문구 ───────────
+    report.checks_run += 1
+    _recipe_literal_leg(report, cat)
+
+    # ── ⑨ code_drawn 주장 — '코드가 그렸다' 는 면제는 실제로 코드가 그린 곳만 ──
+    report.checks_run += 1
+    _code_drawn_leg(report, cat)
+
+
+def _chart_drift_leg(report: Report, cat: str) -> None:
+    """'수치를 그림으로 바꾸는' 계층이 두 모듈 이상에 있으면 사본이다.
+
+    ★ 왜 이 레그가 이번 사고의 재발 방지 핵심인가
+      2026-07-06 에 `pro_templates` 쪽 막대차트를 고쳤지만 `infographic_engine` 의
+      `vbar_chart/hbar_chart` 는 그대로였다. 이름이 달라 동명 검사(⑤-a)는 0건이었고,
+      고쳐지지 않은 사본이 상시 실행되며 같은 결함을 8장 전부에 인쇄했다.
+      → 짝을 *이름* 이 아니라 *데이터로 채우는 마크업의 겹침* 으로 찾는다.
+
+    ★ '주인' 을 단정하지 않는다 — 어느 쪽을 지워야 하는지는 검사기가 정할 일이 아니다.
+      가장 많은 그림을 짓는 모듈을 기준으로 삼고(동수면 경로 사전순) 나머지를 보고한다.
+      한쪽을 지우거나 위임하면 이 레그는 스스로 0 이 된다. 게이트를 덧붙이는 것으로는
+      절대 0 이 되지 않는다 — 그것이 이 규정(①)의 요구다.
+    """
+    groups = _j06_chart_builders()
+    if not groups:
+        # fail-closed: 그림 짓는 함수를 하나도 못 찾았다면 파생이 깨진 것이다.
+        report.add(Violation(
+            cat, "image/self-check", _J06_DIR, 0,
+            "데이터로 그리는 함수를 하나도 파생하지 못했다 — 그림 사본 검사 무력화"))
+        return
+    if len(groups) < 2:
+        return
+    order = sorted(groups, key=lambda r: (-len(groups[r]), r))
+    primary = order[0]
+    for rel in order[1:]:
+        for name, lineno, sig in sorted(groups[rel], key=lambda t: t[1]):
+            best, jbest = None, -1.0
+            for pname, pline, psig in groups[primary]:
+                j = len(sig & psig) / len(sig | psig) if (sig | psig) else 0.0
+                if j > jbest:
+                    best, jbest = (pname, pline), j
+            twin = f"{primary}:{best[1]} {best[0]}()" if best else primary
+            report.add(Violation(
+                cat, "image/sibling-drift", rel, lineno,
+                f"{name}() 가 {twin} 과 같은 그림을 짓는다 "
+                f"(데이터 결속 마크업 겹침 {jbest:.0%}) — 이름이 달라도 사본이다. "
+                "한쪽을 지우거나 위임할 것(①단일 진입점)"))
+
+
+def _code_drawn_leg(report: Report, cat: str) -> None:
+    """`code_drawn=True` 는 *코드가 실제로 그린* 그림에서만 쓸 수 있다.
+
+    이 플래그는 사실성 검증을 건너뛰는 면제 사유다(`certify_image` 가 값 대조 대신
+    'LLM 이 쓴 글자가 없다' 를 근거로 통과시킨다). 그러니 이 주장을 아무 데서나 하면
+    3중 게이트가 통째로 무력해진다 — 미검증 이미지가 '검증됨' 으로 남는다.
+
+    판정은 어휘가 아니라 *꼴* — 그 호출을 감싼 함수가
+      ① 데이터로 SVG 를 조립하고 있거나(=코드가 아니라 마크업이 그린 그림), 또는
+      ② LLM 단일 진입점(`invoke_text`)을 직접 호출하면(=글자의 출처가 LLM)
+    '코드가 그렸다' 는 주장은 성립하지 않는다.
+    """
+    charts = {(rel, name) for rel, items in _j06_chart_builders().items()
+              for name, _l, _s in items}
+    for rel, fn in _j06_funcs():
+        claims = [n for n in ast.walk(fn)
+                  if isinstance(n, ast.keyword) and n.arg == "code_drawn"
+                  and isinstance(n.value, ast.Constant) and n.value.value is True]
+        if not claims:
+            continue
+        llm = any(_call_name(n) in ("invoke_text", "run_sdk_query")
+                  for n in ast.walk(fn) if isinstance(n, ast.Call))
+        drawn_markup = (rel, fn.name) in charts
+        if not (llm or drawn_markup):
+            continue
+        why = "SVG 를 데이터로 조립" if drawn_markup else "LLM 문장을 직접 생성"
+        for kw in claims:
+            report.add(Violation(
+                cat, "image/code-drawn-claim", rel, getattr(kw.value, "lineno", fn.lineno),
+                f"{fn.name}() 가 {why} 하면서 code_drawn=True 로 사실성 검증을 면제받는다 "
+                "— 면제는 코드가 수치를 직접 그린 이미지에만"))
+
+
+def _chokepoint_leg(report: Report, cat: str) -> None:
+    rel_s = "JARVIS06_IMAGE/infographic_engine.py"
+    text = _read_py(ROOT / rel_s)
+    if text is None:
+        report.add(Violation(cat, "image/self-check", rel_s, 0,
+                             "infographic_engine.py 를 읽지 못했다 — 초크포인트 검사 불가"))
+        return
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as e:
+        report.add(Violation(cat, "image/self-check", rel_s, 0,
+                             f"infographic_engine.py 파싱 실패 — 초크포인트 검사 불가 ({e})"))
+        return
+    target = None
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "generate_infographic":
+            target = node
+    if target is None:
+        report.add(Violation(cat, "image/self-check", rel_s, 0,
+                             "generate_infographic 정의를 찾지 못했다 — 초크포인트 검사 불가"))
+        return
+    for node in ast.walk(target):
+        if not isinstance(node, ast.Return):
+            continue
+        v = node.value
+        ok = (v is None
+              or (isinstance(v, ast.Constant) and v.value in ("", None))
+              or (isinstance(v, ast.Call) and isinstance(v.func, ast.Name)
+                  and v.func.id.endswith("_emit")))
+        if not ok:
+            report.add(Violation(
+                cat, "image/chokepoint-single-exit", rel_s, node.lineno,
+                "픽셀을 낳은 경로가 단일 출구(_emit)를 지나지 않는다 — "
+                "등록을 빠뜨린 반환이 생기면 미검증 이미지가 그대로 발행된다"))
+
+
+def _recipe_literal_leg(report: Report, cat: str) -> None:
+    """레시피 template 안의 *표시 텍스트 노드* 검사 — 어휘 목록을 쓰지 않는다.
+
+    슬롯 토큰({{...}})도 CSS/숫자도 아닌 텍스트가 남아 있으면 그것은 데이터와
+    무관하게 이미지에 인쇄되는 고정 문구다('핵심 지표 · KEY METRIC' 실제 발행).
+    """
+    import json
+    targets: list[tuple[str, list]] = []
+    rp = ROOT / "JARVIS06_IMAGE/design_recipes.json"
+    if rp.exists():
+        try:
+            data = json.loads(rp.read_text(encoding="utf-8"))
+            targets.append(("JARVIS06_IMAGE/design_recipes.json",
+                            data.get("recipes") if isinstance(data, dict) else data))
+        except Exception as e:
+            report.add(Violation(cat, "image/self-check",
+                                 "JARVIS06_IMAGE/design_recipes.json", 0,
+                                 f"레시피를 읽지 못했다 — 표시문구 검사 불가 ({e})"))
+            return
+    for rel_s, items in targets:
+        if not isinstance(items, list):
+            continue
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            tpl = it.get("template")
+            if not isinstance(tpl, str):
+                continue
+            bad = _markup_display_text(tpl)
+            if bad:
+                report.add(Violation(
+                    cat, "image/recipe-literal", rel_s, 0,
+                    f"레시피 '{it.get('id')}' 에 고정 표시 문구 {bad[:4]} — "
+                    "슬롯 토큰 외 텍스트는 데이터와 무관하게 인쇄된다"))
 
 
 # ============================================================================
@@ -1460,6 +2430,7 @@ _COLLECT_OWNER = "JARVIS09_COLLECTOR/"
 _COLLECT_EXEMPT_DIRS = (
     "JARVIS03_RADAR/",   # 주제·트렌드 owner — 선수집 요청은 ADR 013 정본 경로
     "tools/",            # 계측 스크립트 (발행 경로 아님)
+    "tests/",            # 회귀 테스트 (발행 경로 아님 — tools/ 와 같은 사유)
 )
 # 원시 수집 라이브러리 — 09 밖에서 *데이터를 받아오면* 위반 (pytrends 는 03 트렌드 예외)
 _COLLECT_RAW_LIB_NAMES = ("yfinance", "pykrx", "FinanceDataReader", "pytrends", "feedparser")
@@ -2023,6 +2994,196 @@ CATEGORIES["dashboard"] = check_dashboard
 CATEGORIES["symmetry"] = check_symmetry
 
 
+# ============================================================================
+# 검증 — 재시도 상한 단일 진실 소스 (CLAUDE.md 하네스 게이트 · 사용자 박제 2026-07-21)
+# ============================================================================
+#
+# 규정: "어떤 재시도도 최대 2회" 이고 그 숫자의 **단일 진실 소스는
+#        `JARVIS00_INFRA/harness.py` 의 `DEFAULT_MAX_ATTEMPTS` 하나뿐** 이다.
+#        호출자는 미지정으로 상속하거나 이 상수에서 파생한다 — 숫자를 적지 않는다.
+#
+# ★ 왜 검사가 필요한가 (2026-08-10 실측)
+#   저장소 전역에 `DEFAULT_MAX_ATTEMPTS` 를 읽는 accessor 가 여러 벌 있고, 그 대부분이
+#   `except Exception: return 2` 라는 **폴백 리터럴**을 각자 들고 있었다. 값 드리프트는
+#   아직 없다. 그래서 더 위험하다 — 아무 증상이 없으니 아무도 세지 않는다.
+#   harness 를 못 읽는 날(순환 import·부분 배포)엔 폴백이 발동하고, 그때 상한을 3 으로
+#   올려 둔 운영자는 *어떤 경로만* 2 로 도는지 알 길이 없다. 이것이 CLAUDE.md 가 말하는
+#   "복사본을 진실로 믿는" 사고의 교과서적 형태다.
+#
+# ★ 등급 — 2026-08-10 **차단(block)으로 전환**. 경위:
+#   도입 당시엔 경고로 시작했다. 위반 15건의 주인이 전부 다른 폴더라(J08·J03·J02·
+#   J00·shared·J04) 차단으로 켜면 커밋이 통째로 막히고, 그러면 사람은 레그를
+#   되돌리거나 `--no-verify` 를 쓴다 — 결함이 다시 안 보인다. 그래서 유예였다.
+#   같은 날 15건을 전부 해소(사본 9벌 → 파생 leaf `shared/limits.py` 하나)했으므로
+#   유예의 사유가 사라졌다. **경고로 남기면 영원히 안 고쳐진다** — 대시보드 폰트
+#   94곳·fontsize 65건이 정확히 그렇게 쌓였고, 이 레그가 지키는 상한은 "어떤 재시도도
+#   최대 2회"(사용자 박제)라 조용한 드리프트가 곧 발행 지연·중복 발행이 된다.
+#   되돌리지 말 것: 새 사본을 넣으려면 그 사본이 왜 필요한지부터 답해야 한다.
+
+_RETRY_SSOT_NAME = "DEFAULT_MAX_ATTEMPTS"   # 상수의 *이름* 이 곧 단일 진실 소스다
+_RETRY_SEVERITY = "block"                   # 2026-08-10 위반 0 달성 → 잠갔다
+
+
+def _retry_ssot_owner() -> tuple[str | None, list[str]]:
+    """`DEFAULT_MAX_ATTEMPTS` 를 *정의* 하는 파일 — 경로를 박지 않고 실물에서 찾는다."""
+    owners: list[str] = []
+    for p in _iter_py():
+        text = _read_py(p)
+        if text is None or _RETRY_SSOT_NAME not in text:
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        for n in tree.body:
+            tgts = (n.targets if isinstance(n, ast.Assign)
+                    else [n.target] if isinstance(n, ast.AnnAssign) else [])
+            if any(isinstance(t, ast.Name) and t.id == _RETRY_SSOT_NAME for t in tgts):
+                owners.append(str(p.relative_to(ROOT)))
+                break
+    return (owners[0] if len(owners) == 1 else None), owners
+
+
+def _retry_ssot_kwarg(owner: str) -> str | None:
+    """상한을 받는 *인자 이름* — owner 안에서 기본값이 SSOT 인 필드에서 파생.
+
+    (`harness.ActionDefinition.max_attempts: int = DEFAULT_MAX_ATTEMPTS`)
+    이름을 검사기에 박으면 필드명이 바뀌는 날 검사만 조용히 빗나간다.
+    """
+    text = _read_py(ROOT / owner)
+    if text is None:
+        return None
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    for n in ast.walk(tree):
+        val = getattr(n, "value", None)
+        if not (isinstance(val, ast.Name) and val.id == _RETRY_SSOT_NAME):
+            continue
+        tgts = (n.targets if isinstance(n, ast.Assign)
+                else [n.target] if isinstance(n, ast.AnnAssign) else [])
+        for t in tgts:
+            if isinstance(t, ast.Name) and t.id != _RETRY_SSOT_NAME:
+                return t.id
+    return None
+
+
+def _mentions_ssot(node: ast.AST) -> bool:
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name) and n.id == _RETRY_SSOT_NAME:
+            return True
+        if isinstance(n, ast.alias) and (n.name == _RETRY_SSOT_NAME
+                                         or n.name.endswith("." + _RETRY_SSOT_NAME)):
+            return True
+        if isinstance(n, ast.Attribute) and n.attr == _RETRY_SSOT_NAME:
+            return True
+    return False
+
+
+def check_retry_ssot(report: Report) -> None:
+    """재시도 상한 SSOT — harness.DEFAULT_MAX_ATTEMPTS 외의 상한 리터럴·사본 accessor 검출.
+
+    ① retry/ssot-fallback  — SSOT 를 읽는 try 의 except 에 박힌 숫자 폴백
+    ② retry/accessor-copy  — 한 패키지 안에 SSOT accessor 가 둘 이상
+    ③ retry/hardcoded-arg  — 상한 인자에 숫자 리터럴을 직접 전달
+    """
+    cat = "retry"
+    sev = _RETRY_SEVERITY
+    owner, owners = _retry_ssot_owner()
+    report.checks_run += 1
+    if owner is None:
+        # fail-closed: 주인을 못 찾으면 '위반 0' 이 아니라 *검사 불가* 다.
+        report.add(Violation(
+            cat, "retry/self-check", "shared/precommit_check.py", 0,
+            f"{_RETRY_SSOT_NAME} 의 정의를 하나로 특정하지 못했다 (후보 {owners or '없음'}) "
+            "— 재시도 상한 검사의 전제가 무너졌다"))
+        return
+    kwarg = _retry_ssot_kwarg(owner)
+
+    accessors: list[tuple[str, str, int]] = []      # (패키지, 파일, 줄)
+    for p in _iter_py():
+        rel_s = str(p.relative_to(ROOT))
+        if rel_s == owner or rel_s.startswith("tests/") or rel_s == "shared/precommit_check.py":
+            continue
+        text = _read_py(p)
+        if text is None:
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        # ★ ①② 는 SSOT 를 *읽는* 코드만 대상이지만 ③ 은 아니다 — 상한을 숫자로 넘기는
+        #   호출자는 대개 SSOT 이름을 한 번도 적지 않는다. 조기 skip 을 셋 다에 걸었더니
+        #   ③ 이 실험(주입한 `max_attempts=5`)에서 0건이었다. 검사가 있는 것과
+        #   검사가 도는 것은 다르다.
+        reads_ssot = _RETRY_SSOT_NAME in text
+
+        # ① 폴백 리터럴 — SSOT 를 읽는 try 의 except 안에 숫자가 있으면 그것이 사본이다.
+        for node in ast.walk(tree) if reads_ssot else ():
+            if not isinstance(node, ast.Try) or not _mentions_ssot(ast.Module(
+                    body=node.body, type_ignores=[])):
+                continue
+            for h in node.handlers:
+                for n in ast.walk(h):
+                    if (isinstance(n, ast.Constant) and isinstance(n.value, int)
+                            and not isinstance(n.value, bool)):
+                        report.add(Violation(
+                            cat, "retry/ssot-fallback", rel_s, n.lineno,
+                            f"재시도 상한 폴백 리터럴 {n.value} — 상한은 "
+                            f"{owner}:{_RETRY_SSOT_NAME} 한 곳에만 적는다 "
+                            "(폴백에 숫자를 적는 순간 사본이 하나 더 생긴다)",
+                            severity=sev))
+
+        # ② accessor 사본 — SSOT 를 *돌려주는* 모듈레벨 함수
+        #   ★ '함수 안 어딘가에 SSOT 가 있다' 로는 부족하다: `token_usage._live_config` 는
+        #     현황판에 띄우려고 상한을 dict 에 담을 뿐 재시도를 돌리지 않는다(실측 오탐).
+        #     반환식 자체가 SSOT 에서 나오는 것만 accessor 다.
+        for n in tree.body if reads_ssot else ():
+            if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not any(isinstance(r, ast.Return) and r.value is not None
+                       and _mentions_ssot(r.value)
+                       for r in ast.walk(n)):
+                continue
+            accessors.append((rel_s.split("/")[0], rel_s, n.lineno))
+
+        # ③ 상한 인자에 숫자 직접 전달
+        if kwarg:
+            for n in ast.walk(tree):
+                if not isinstance(n, ast.Call):
+                    continue
+                for k in n.keywords:
+                    if (k.arg == kwarg and isinstance(k.value, ast.Constant)
+                            and isinstance(k.value.value, int)
+                            and not isinstance(k.value.value, bool)):
+                        report.add(Violation(
+                            cat, "retry/hardcoded-arg", rel_s, k.value.lineno,
+                            f"{kwarg}={k.value.value} 하드코딩 — 미지정으로 "
+                            f"{owner}:{_RETRY_SSOT_NAME} 를 상속할 것",
+                            severity=sev))
+
+    # ② 판정 — 패키지당 accessor 는 하나(leaf)만. 둘 이상이면 나머지가 사본이다.
+    by_pkg: dict[str, list[tuple[str, int]]] = {}
+    for pkg, rel_s, lineno in accessors:
+        by_pkg.setdefault(pkg, []).append((rel_s, lineno))
+    for pkg, sites in sorted(by_pkg.items()):
+        if len(sites) < 2:
+            continue
+        sites.sort()
+        first = sites[0][0]
+        for rel_s, lineno in sites[1:]:
+            report.add(Violation(
+                cat, "retry/accessor-copy", rel_s, lineno,
+                f"재시도 상한 accessor 가 {pkg} 안에 {len(sites)}벌 — {first} 에도 있다. "
+                "패키지당 leaf 하나로 모으고 나머지는 지울 것(①단일 진입점)",
+                severity=sev))
+    report.checks_run += 2
+
+
+CATEGORIES["retry"] = check_retry_ssot
+
+
 def run(categories: list[str] | None = None) -> Report:
     """검증 실행. categories=None 이면 전체.
 
@@ -2058,6 +3219,18 @@ def main() -> int:
 
     rep = run(args.category)
 
+    # 경고는 *통과·실패와 무관하게* 항상 보여준다 — 안 보이면 방치된다.
+    warns = rep.warnings()
+    if warns:
+        print(f"\n⚠️  경고 {len(warns)}건 (커밋은 막지 않는다 — owner 폴더에서 고칠 것)",
+              file=sys.stderr)
+        for cat, vs in rep.by_category(warns).items():
+            print(f"\n[{cat}] 경고 {len(vs)}건", file=sys.stderr)
+            for v in vs[:20]:
+                print(v.fmt(), file=sys.stderr)
+            if len(vs) > 20:
+                print(f"  ... (+{len(vs) - 20} 추가)", file=sys.stderr)
+
     if rep.ok:
         if not args.quiet:
             # ★ 개수를 손으로 더하지 않는다 (2026-08-05).
@@ -2068,9 +3241,10 @@ def main() -> int:
             print(f"✅ JARVIS pre-commit 통과 — {len(rep.ran)}개 카테고리 검증, 위반 0건")
         return 0
 
-    # 위반 출력 (카테고리별 그룹)
-    print(f"❌ JARVIS pre-commit 위반 {len(rep.violations)}건 발견", file=sys.stderr)
-    for cat, vs in rep.by_category().items():
+    # 위반 출력 (카테고리별 그룹) — 차단 등급만 (경고는 위에서 이미 출력)
+    blocking = rep.blocking()
+    print(f"❌ JARVIS pre-commit 위반 {len(blocking)}건 발견", file=sys.stderr)
+    for cat, vs in rep.by_category(blocking).items():
         print(f"\n[{cat}] {len(vs)}건", file=sys.stderr)
         for v in vs[:20]:  # 카테고리당 최대 20건만 표시
             print(v.fmt(), file=sys.stderr)

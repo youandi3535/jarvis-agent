@@ -1,388 +1,27 @@
-"""JARVIS06_IMAGE/image_spec.py — 블로그 섹션 텍스트 → 이미지 설계서 생성.
+"""JARVIS06_IMAGE/image_spec.py — 차트 행(row) 정규화 헬퍼 단일 진입점.
 
-핵심 원칙:
-  - 섹션 전체 텍스트를 그대로 Claude에게 전달 (절대 자르지 않음)
-  - 차트 타입, 데이터, 디자인 방향 모두 LLM이 결정
-  - 코드는 렌더링만 담당
+★ 이 모듈에는 더 이상 '설계서 생성'도 '렌더링'도 없다 (사용자 박제 2026-08-10).
+  종전엔 `generate_image_spec()`(LLM 이 본문 텍스트에서 숫자를 추출해 spec 을 만든다)
+  → `render_from_spec()`(html→plotly→matplotlib→svg 4단 폴백) 라는 **제2 렌더
+  파이프라인**이 통째로 여기 있었다. 살아있는 호출자는 0곳이었는데도 남아 있었고,
+  그 탓에 ① `svg_renderer._make_fallback_svg` 가 `pro_templates._bar_chart_diverging`
+  와 같은 그림을 짓는 사본으로 자라 커밋을 막았고 ② `certify_image` 를 직접 부르는
+  두 번째 레지스트리 기록 경로가 되어 초크포인트(`infographic_engine._emit`)를
+  우회했다. **코드가 남아 있으면 다음 작업자의 손이 그리로 간다** — 그래서 지웠다.
+  함께 삭제된 파일: `svg_renderer.py` · `plotly_renderer.py` (둘 다 소비자가 여기뿐).
 
-공개 API:
-  generate_image_spec(section_text, keyword, sector, section_title) -> dict
-  render_from_spec(spec, out_path) -> Path
+  인포그래픽이 필요하면 초크포인트를 직접 부를 것:
+      from JARVIS06_IMAGE.infographic_engine import generate_infographic
+
+공개 API (렌더 직전 행 정규화 — 저장소 전역 단일 소유):
+  is_time_only_label(label) -> bool
+  row_time_key(row)         -> tuple | None
+  enforce_time_axis_ltr(rows) -> list   # 시간축 좌→우 (JARVIS06/CLAUDE.md 규정0)
+  dedupe_chart_rows(rows)     -> list   # 동일 수치·동일 항목 중복 행 제거
 """
 from __future__ import annotations
 
-import json
 import re
-import logging
-from pathlib import Path
-from typing import Any
-
-# ── JARVIS07 오류 보고 API ───────────────────────────
-try:
-    from JARVIS07_GUARDIAN.error_collector import report as _g_report
-except ImportError:
-    def _g_report(*a, **kw): pass
-# ─────────────────────────────────────────────────────
-
-log = logging.getLogger("jarvis")
-
-# ★ 주제 연관 실데이터 캐시는 여기 없다 (사용자 박제 2026-07-23) —
-#   "언제 다시 수집할지" 는 수집 도메인(09)의 판단. `chart_datasets()` 안에 있다.
-
-# ── 지원 시각화 타입 ──────────────────────────────────────────────────
-
-# HTML/CSS 렌더러 (Playwright) — 카드·레이아웃 타입
-HTML_TYPES = {
-    "comparison_kpi",    # 다중 컬럼 KPI 비교 (img1 스타일)
-    "status_checklist",  # 색상 배지 체크리스트 (img4 스타일)
-    "timeline",          # 수평 타임라인 (img5 스타일)
-    "decision_matrix",   # 상황 → 행동 매트릭스 (img8 스타일)
-    "dark_summary",      # 다크 배경 요약 카드 (img9 스타일)
-    "cost_breakdown",    # 비용 분해 테이블 (img10 스타일)
-    "kpi_cards",         # KPI 숫자 카드 그리드
-    "highlight_card",    # 한 줄 강조 카드
-    "insight_card",      # 인사이트 카드
-    "scenario_cards",    # 시나리오 3단 카드
-    "comparison_table",  # 좌우 2열 비교 테이블
-    "checklist",         # = status_checklist 별칭
-    "infographic",       # 기본 인포그래픽 (kpi_cards 형태)
-}
-
-# Matplotlib 렌더러 — 데이터 차트 타입
-CHART_TYPES = {
-    "bar_chart",
-    "horizontal_bar",
-    "line_chart",
-    "area_chart",
-    "pie_chart",
-    "stacked_bar",
-    "stacked_combo",
-    "grouped_bar",
-}
-
-# Plotly 렌더러 — 고급 차트 (matplotlib 실패 시 폴백)
-PLOTLY_TYPES = {
-    "bar_chart",
-    "horizontal_bar",
-    "line_chart",
-    "area_chart",
-    "pie_chart",
-    "scatter_chart",
-    "grouped_bar",
-    "waterfall_chart",
-    "gauge_chart",
-    "dashboard",
-}
-
-# SVG 렌더러 — 최후 폴백
-SVG_TYPES = {
-    "kpi_cards",
-    "comparison_table",
-    "infographic",
-    "timeline",
-    "checklist",
-    "scenario_cards",
-    "flow_diagram",
-    "highlight_card",
-    "insight_card",
-}
-
-# 전체 유효 타입
-ALL_TYPES = HTML_TYPES | CHART_TYPES | PLOTLY_TYPES | SVG_TYPES
-
-# ── 설계서 생성 프롬프트 ──────────────────────────────────────────────
-_SPEC_SYSTEM = """당신은 블로그 콘텐츠 전문 시각화 디자이너입니다.
-주어진 섹션 본문을 꼼꼼히 읽고, 독자가 핵심 정보를 한눈에 파악할 수 있는
-최적의 시각화 설계서를 작성합니다.
-
-타입 선택 기준:
-[HTML 카드·레이아웃 — 텍스트 중심]
-- 두 제품/상황의 수치 비교 (이전→이후, A vs B) → comparison_kpi
-- 추천/주의/대안 등 상태 배지가 붙는 목록 → status_checklist
-- 날짜·사건 순서 나열 → timeline
-- 상황 → 행동 매핑 표 → decision_matrix
-- 강한 결론·요약 (다크 배경) → dark_summary
-- 비용/가격 항목별 분해 → cost_breakdown
-- 핵심 숫자 KPI 3~6개 → kpi_cards
-- 시나리오 비교 3가지 → scenario_cards
-- 한 줄 강조 메시지 → highlight_card / insight_card
-
-[matplotlib 차트 — 수치 데이터]
-- 카테고리별 수치 비교 막대 → bar_chart
-- 수평 막대 (항목 많을 때) → horizontal_bar
-- 시간 흐름 추이 → line_chart / area_chart
-- 비율·구성 → pie_chart
-- 누적 비교 → stacked_bar
-
-데이터 추출 원칙:
-- 본문에 있는 숫자·수치를 그대로 사용 (추측 금지)
-- 단위 반드시 포함 (%, 억원, 만명 등)
-- 라벨은 본문 맥락에 맞는 명사 2~6글자
-- comparison_kpi는 data 항목마다 before/after 필드 사용
-- ★ 시간·기간 라벨(연도·월·분기·날짜)은 반드시 *과거 → 최근* 순서로 나열
-  (차트에서 시간은 좌→우로 흐른다. 예: 2025년이 왼쪽, 2026년이 오른쪽)"""
-
-_SPEC_PROMPT_TEMPLATE = """섹션 제목: {section_title}
-키워드: {keyword}
-섹터: {sector}
-
-━━━ 섹션 전체 본문 ━━━
-{section_text}
-━━━━━━━━━━━━━━━━━━━━━
-
-위 본문을 분석해서 가장 효과적인 시각화 설계서를 JSON으로 작성하세요.
-
-지원 타입 (viz_type):
-[HTML 카드] comparison_kpi, status_checklist, timeline, decision_matrix, dark_summary, cost_breakdown, kpi_cards, scenario_cards, highlight_card, insight_card, comparison_table
-[matplotlib 차트] bar_chart, horizontal_bar, line_chart, area_chart, pie_chart, stacked_bar, grouped_bar
-
-출력 형식 (JSON만, 설명 없이):
-{{
-  "viz_type": "타입명",
-  "title": "이미지 제목 (25자 이내)",
-  "subtitle": "부제목 또는 기준일 (선택)",
-  "key_message": "핵심 1문장 (40자 이내, 선택)",
-  "color_theme": "blue | green | red | orange | purple | mixed",
-  "source": "출처 표기 (선택)",
-  "data": [
-    {{"label": "항목명", "value": 숫자또는문자열, "unit": "단위",
-      "before": "이전값(comparison_kpi)", "after": "이후값(comparison_kpi)",
-      "highlight": true, "diff": "+3.2%", "diff_positive": true}}
-  ],
-  "items": ["텍스트1", "텍스트2"],
-  "items (status_checklist)": [{{"text": "내용", "status": "추천|대기 고려|대안"}}],
-  "items (timeline)": [{{"date": "2025.01", "label": "이벤트명", "highlight": false}}],
-  "items (decision_matrix)": [{{"situation": "상황", "action": "행동", "status": "추천|대기|대안"}}],
-  "items (dark_summary)": [{{"label": "카테고리", "text": "내용"}}],
-  "left_label": "왼쪽 헤더 (comparison_kpi/comparison_table)",
-  "right_label": "오른쪽 헤더",
-  "left_items": ["항목1"],
-  "right_items": ["항목1"],
-  "total": "합계 금액 (cost_breakdown)",
-  "series": [{{"name": "시리즈명", "values": [숫자], "labels": ["항목"]}}],
-  "x_label": "X축 설명",
-  "y_label": "Y축 설명"
-}}
-
-주의:
-- 본문에 없는 데이터 절대 금지
-- bar_chart/line_chart 등 차트의 data.value는 반드시 float
-- comparison_kpi의 data.value는 문자열 허용 (before/after 필드 우선)"""
-
-
-def _is_numeric_spec(spec: dict) -> bool:
-    """spec 에 수치 데이터(value/before/after)가 하나라도 있으면 True (= 사실성 검증 대상)."""
-    for d in (spec.get("data") or []):
-        if not isinstance(d, dict):
-            continue
-        for key in ("value", "before", "after"):
-            try:
-                float(str(d.get(key, "")).replace(",", "").replace("%", "").strip())
-                return True
-            except (ValueError, TypeError):
-                continue
-    return False
-
-
-def _datasets_block(datasets: list) -> str:
-    """실데이터 dataset → 프롬프트 주입용 텍스트 블록."""
-    if not datasets:
-        return ""
-    lines = ["", "━━━ 실데이터 (JARVIS09 수집 — 차트는 *반드시* 이 수치만 사용) ━━━"]
-    for ds in datasets:
-        unit = ds.get("unit", "")
-        rows = ", ".join(
-            f"{r.get('label','')} {r.get('value','')}{unit}" for r in (ds.get("data") or [])[:8]
-        )
-        src = (ds.get("source") or {}).get("name", "")
-        lines.append(f"· {ds.get('title','')} ({unit}): {rows}  [출처: {src}]")
-    lines.append("위 실데이터가 있으면 본문에서 숫자를 추측하지 말고 이 수치로 차트를 만드세요.")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━")
-    return "\n".join(lines)
-
-
-def _auto_fetch_datasets(keyword: str, sector: str, section_text: str) -> list:
-    """real_datasets 미제공 + 수치 차트일 때 JARVIS09 실데이터 요청 (한 줄 파사드).
-
-    ★ 06 은 "이 주제 차트 데이터 줘" 만 부른다 — 캐시·재수집 시점·폴백은 09 소유.
-    """
-    try:
-        from JARVIS09_COLLECTOR import chart_datasets
-        return chart_datasets(keyword, sector=sector, description=section_text or "")
-    except Exception as e:
-        log.warning(f"[image_spec] chart_datasets 요청 실패: {e}")
-        _g_report("image", e, module=__name__)
-        return []
-
-
-def _text_card_spec(failed_spec: dict, keyword: str, sector: str) -> dict[str, Any]:
-    """수치 차트가 실데이터로 검증 안 될 때 — 숫자 없는 안전한 텍스트 카드로 대체.
-
-    ★ 거짓 데이터 차트를 만드느니 숫자 없는 카드를 만든다 (사용자 박제 2026-06-29).
-    failed_spec 의 *텍스트* (title/key_message) 만 재사용 — 수치는 전부 버림.
-    """
-    msg = (failed_spec.get("key_message") or failed_spec.get("title") or keyword or "").strip()[:40]
-    title = (failed_spec.get("title") or keyword or "").strip()[:24]
-    return {
-        "viz_type": "highlight_card",
-        "title": title,
-        "key_message": msg,
-        "items": [msg] if msg else [],
-        "data": [],
-        "color_theme": failed_spec.get("color_theme", "blue"),
-        "keyword": keyword,
-        "sector": sector,
-        "_provenance": {"verified": True, "source": {}, "method": "text_card_no_data"},
-    }
-
-
-def _finalize_spec(spec: dict, keyword: str, sector: str,
-                   datasets: list, section_text: str) -> dict[str, Any]:
-    """spec 사실성 검증 → 검증분 재구성 / 실데이터 대체 / 텍스트카드 폴백 + 출처 캡션."""
-    spec.setdefault("keyword", keyword)
-    spec.setdefault("sector", sector)
-    try:
-        from JARVIS06_IMAGE.validators.image_data_verifier import (
-            verify_chart_spec, source_caption,
-        )
-        verified = verify_chart_spec(spec, datasets)
-    except Exception as e:
-        log.warning(f"[image_spec] 데이터 검증 예외: {e}")
-        _g_report("image", e, module=__name__)
-        # 검증 불가 — 수치 차트면 거짓 위험 → 텍스트카드로 안전 폴백
-        return _text_card_spec(spec, keyword, sector) if _is_numeric_spec(spec) else spec
-
-    if verified is None:
-        # 수치 차트인데 실데이터 뒷받침 0 → 텍스트 카드로 대체 (거짓 데이터 금지)
-        return _text_card_spec(spec, keyword, sector)
-
-    # 출처 캡션 가시화 (HTML=source / matplotlib=subtitle 모두 노출)
-    prov = verified.get("_provenance") or {}
-    cap = source_caption(prov.get("source") or {})
-    if cap:
-        verified.setdefault("source", cap)
-        if not verified.get("subtitle"):
-            verified["subtitle"] = cap
-    return verified
-
-
-def generate_image_spec(
-    section_text: str,
-    keyword: str,
-    sector: str = "",
-    section_title: str = "",
-    real_datasets: list | None = None,
-) -> dict[str, Any]:
-    """섹션 전체 텍스트 → 이미지 설계서(dict) 생성.
-
-    ★ 사실성 보증 (사용자 박제 2026-06-29): 수치 차트는 *본문 추측이 아니라*
-      JARVIS09 실데이터(real_datasets)로 만든다. 실데이터로 검증 안 되는 수치는
-      검증분만 재구성하거나 실데이터로 대체, 그것도 없으면 숫자 없는 카드로 폴백.
-
-    Args:
-        section_text:  섹션 전체 본문 (자르지 않고 전달)
-        keyword:       블로그 키워드
-        sector:        섹터 (예: '경제·경기')
-        section_title: 섹션 소제목
-        real_datasets: JARVIS09 collect_chart_data 의 datasets (호출자가 글 단위로 1회
-                       수집해 전달 권장). None 이면 수치 차트일 때 자동 수집.
-
-    Returns:
-        설계서 dict. 실패 시 fallback 설계서 반환 (절대 None 반환 안 함).
-    """
-    prompt = _SPEC_PROMPT_TEMPLATE.format(
-        section_title=section_title or keyword,
-        keyword=keyword,
-        sector=sector or "기타",
-        section_text=section_text,
-    )
-    if real_datasets:
-        prompt += "\n" + _datasets_block(real_datasets)
-
-    try:
-        from shared.llm import invoke_text as _inv
-        raw = _inv("analyzer_imagespec", prompt, system=_SPEC_SYSTEM, max_tokens=800, temperature=0.2)
-        if raw:
-            # JSON 블록 추출
-            m = re.search(r'\{[\s\S]*\}', raw)
-            if m:
-                spec = json.loads(m.group(0))
-                # viz_type 검증
-                vt = spec.get("viz_type", "")
-                if vt not in ALL_TYPES:
-                    log.warning(f"[image_spec] 알 수 없는 viz_type '{vt}' → infographic으로 대체")
-                    spec["viz_type"] = "infographic"
-                # data 배열 value 타입 안전 변환
-                for item in spec.get("data") or []:
-                    try:
-                        item["value"] = float(str(item.get("value", 0)).replace(",", ""))
-                    except (ValueError, TypeError):
-                        item["value"] = 0.0
-                # ★ 데이터 사실성 검증 — 수치 차트면 실데이터 확보 후 검증
-                datasets = real_datasets
-                if datasets is None and _is_numeric_spec(spec):
-                    datasets = _auto_fetch_datasets(keyword, sector, section_text)
-                spec = _finalize_spec(spec, keyword, sector, datasets or [], section_text)
-                log.info(f"[image_spec] ✅ '{keyword}' → {spec['viz_type']} / '{spec.get('title','')}'"
-                         f" (검증={(spec.get('_provenance') or {}).get('method','-')})")
-                return spec
-    except Exception as e:
-        log.warning(f"[image_spec] LLM 설계서 생성 실패: {e}")
-        _g_report("image", e, module=__name__)
-
-    fb = _fallback_spec(section_text, keyword, sector, section_title)
-    # 폴백도 본문 숫자 추출이므로 동일하게 검증 (거짓 데이터 차단)
-    datasets = real_datasets
-    if datasets is None and _is_numeric_spec(fb):
-        datasets = _auto_fetch_datasets(keyword, sector, section_text)
-    return _finalize_spec(fb, keyword, sector, datasets or [], section_text)
-
-
-def _fallback_spec(
-    section_text: str,
-    keyword: str,
-    sector: str,
-    section_title: str,
-) -> dict[str, Any]:
-    """LLM 실패 시 규칙 기반 기본 설계서."""
-    # 숫자 패턴 추출 시도
-    nums = re.findall(
-        r'([가-힣]{1,6})\s*[:은는이가]\s*(\d[\d,]*\.?\d*)\s*(%|억|조|만|명|개|배|위|년|원)?',
-        section_text,
-    )
-    data = []
-    seen: set = set()
-    for label, val, unit in nums[:6]:
-        if val in seen:
-            continue
-        seen.add(val)
-        try:
-            data.append({
-                "label": label[:6],
-                "value": float(val.replace(",", "")),
-                "unit": unit or "",
-                "highlight": False,
-            })
-        except ValueError:
-            pass
-
-    viz_type = "bar_chart" if len(data) >= 3 else "kpi_cards" if data else "infographic"
-
-    return {
-        "viz_type": viz_type,
-        "title": f"{keyword} 핵심 지표",
-        "subtitle": "",
-        "key_message": f"{keyword} 관련 핵심 정보를 확인하세요.",
-        "data": data,
-        "x_label": "",
-        "y_label": "",
-        "color_theme": "blue",
-        "design_notes": "",
-        "keyword": keyword,
-        "sector": sector,
-        "_fallback": True,
-    }
-
 
 def _time_axis_key(label) -> tuple | None:
     """시간 라벨 파싱 → (year, month, day) 정렬 키. 시간 라벨 아니면 None.
@@ -425,18 +64,67 @@ def _time_axis_key(label) -> tuple | None:
     return (year if year is not None else -1, month or 0, day or 0)
 
 
+# ── 행의 '시점' 단일 파생 (★ 사용자 박제 2026-08-10 — 신규거짓 #1) ──────────
+#   종전엔 시점을 *라벨 문자열* 에서만 재파싱했다. 1차 수정이 라벨에 as_of 를 심자
+#   그 파서가 뒤집혔고(환율 3행이 전부 (2026,0,0) 로 읽혀 정렬이 무력), 반대로
+#   '콜금리(1일)'·'통안증권 91일' 은 시간으로 오탐됐다.
+#   진실(as_of)은 *행에 실려 있다*. 라벨은 표시 산출물이다 — 진실을 먼저 읽는다.
+_TIME_TOKEN_RE = re.compile(
+    r"(?:19|20)\d{2}[-./]\d{1,2}(?:[-./]\d{1,2})?"      # 2026-08-10 / 2026.08
+    r"|(?:19|20)\d{2}\s*년?"                              # 2026년 / 2026
+    r"|['’‘]\d{2}\s*년"                                 # '25년
+    r"|\d{1,2}\s*분기|Q[1-4]"                             # 3분기 / Q1
+    r"|\d{1,2}\s*[월일]",                                 # 5월 / 12일
+    re.I)
+
+
+def is_time_only_label(label) -> bool:
+    """라벨 *전체* 가 시간 표기인가. '2026-08'·'3분기'·'2026년 5월' → True.
+
+    ★ 어휘가 아니라 꼴 — '시간 토큰을 *포함* 하는가' 가 아니라 '시간 토큰을 지우면
+      아무 내용도 남지 않는가' 를 묻는다. 종전 규칙(포함 여부)이 '콜금리(1일)' 을
+      시계열 근거로 세어 8개 이종 금리를 꺾은선으로 이었다.
+    """
+    s = str(label or "").strip()
+    if not s:
+        return False
+    rest = _TIME_TOKEN_RE.sub(" ", s)
+    return not re.search(r"[0-9A-Za-z가-힣]", rest)
+
+
+def row_time_key(row) -> tuple | None:
+    """이 행의 시점 정렬 키. 시점을 알 수 없으면 None.
+
+    우선순위: ① 행의 `as_of` (수집기가 실은 진실) ② 라벨 *전체* 가 시간일 때만 라벨.
+    """
+    if not isinstance(row, dict):
+        return _time_axis_key(row) if is_time_only_label(row) else None
+    ao = str(row.get("as_of") or "").strip()
+    if ao:
+        k = _time_axis_key(ao)
+        if k is not None:
+            return k
+    lb = row.get("label")
+    return _time_axis_key(lb) if is_time_only_label(lb) else None
+
+
 def enforce_time_axis_ltr(rows: list) -> list:
     """★ 시간축 좌→우 강제 (사용자 박제 2026-07-03): "이미지에서 시간 흐름은 항상
-    좌→우 — 25년이 좌, 26년이 우." data 행의 라벨이 시간이면 과거→최근 정렬.
+    좌→우 — 25년이 좌, 26년이 우."
+
+    ★ 정렬 키는 `row_time_key` — as_of 우선 (사용자 박제 2026-08-10).
+      종전엔 라벨만 파싱했고, 라벨에 지표명이 섞이면(달러/원 환율 2026.08.07) 월·일이
+      안 잡혀 세 행이 전부 같은 키가 되어 **정렬이 조용히 no-op** 이었다. 그 결과
+      [08.07, 08.10, 06] 순서 그대로 렌더돼 실제 -8.7% 하락이 +8.6% 상승으로 인쇄됐다.
 
     정책 (카테고리 차트 오폭 방지):
-      - 라벨 80% 미만이 시간 파싱되거나 키가 1종이면 무변경.
+      - 시점이 파악된 행이 80% 미만이거나 키가 1종이면 무변경.
       - 연도 정보가 있으면 오름차순 안정 정렬.
-      - 연도 없는 라벨(월·분기만)은 *엄격 내림차순일 때만* 역순 (연말→연초 랩 보존).
+      - 연도 없는 키(월·분기만)는 *엄격 내림차순일 때만* 역순 (연말→연초 랩 보존).
     """
     if not rows or len(rows) < 2:
         return rows
-    keys = [(_time_axis_key(r.get("label")) if isinstance(r, dict) else None) for r in rows]
+    keys = [row_time_key(r) for r in rows]
     parsed = [k for k in keys if k is not None]
     if len(parsed) < max(2, int(len(rows) * 0.8)) or len(set(parsed)) < 2:
         return rows
@@ -465,10 +153,17 @@ def dedupe_chart_rows(rows: list) -> list:
     if not rows or len(rows) < 2:
         return rows
     import re as _re_d
-    # 시계열 판정 — 시간 라벨 과반이면 dedupe 대상 아님
-    _t_keys = [_time_axis_key((r or {}).get("label")) for r in rows if isinstance(r, dict)]
-    if sum(1 for k in _t_keys if k is not None) >= max(2, int(len(rows) * 0.5)):
-        return rows
+    # 시계열이면 dedupe 대상 아님 — 평평한 시계열의 동일값은 정당한 데이터다.
+    # ★ 판정은 `image_data_verifier.is_timeseries` 단독 (사용자 박제 2026-08-10).
+    #   종전엔 여기에 '시간 라벨이 과반' 이라는 *세 번째* 라벨 규칙이 박혀 있었다.
+    #   ①위반이기도 하지만 더 나쁜 것은, J09 가 모든 행에 as_of 를 싣기 시작하면
+    #   '시간 라벨 과반' 이 카테고리 데이터에서도 참이 되어 dedupe 가 통째로 무력화된다.
+    try:
+        from JARVIS06_IMAGE.validators.image_data_verifier import is_timeseries as _is_ts
+        if _is_ts({"data": rows}):
+            return rows
+    except Exception:
+        pass
 
     def _norm(s: str) -> str:
         return _re_d.sub(r"[^가-힣a-z0-9]", "", str(s or "").lower())
@@ -515,105 +210,10 @@ def dedupe_chart_rows(rows: list) -> list:
     return kept
 
 
-def render_from_spec(spec: dict[str, Any], out_path: Path) -> Path:
-    """설계서 → 이미지 파일 생성 + 출처(provenance) 레지스트리 기록.
 
-    ★ 트립와이어 (사용자 박제 2026-06-29): 수치 차트는 _provenance.verified 없이
-      렌더되면 안 됨 (검증 우회). 그런 경우 unverified 로 기록 → prepublish_gate 가 차단.
-    ★ 시간축 좌→우 강제 (사용자 박제 2026-07-03): 렌더 직전 data 행 시간 정렬.
-    """
-    try:
-        if isinstance(spec.get("data"), list):
-            _fixed = enforce_time_axis_ltr(spec["data"])
-            if _fixed is not spec["data"]:
-                print("  ⏩ [시간축] 라벨 시간 순서 교정 — 과거→최근 (좌→우)")
-                spec = {**spec, "data": _fixed}
-            # ★ 동일 수치 중복 제거 (사용자 박제 2026-07-03)
-            _dd = dedupe_chart_rows(spec["data"])
-            if _dd is not spec["data"] and len(_dd) != len(spec["data"]):
-                spec = {**spec, "data": _dd}
-    except Exception:
-        pass
-    result = _render_impl(spec, out_path)
-    try:
-        from JARVIS06_IMAGE.validators.image_data_verifier import (
-            record_provenance, spec_chart_values)
-        prov = dict(spec.get("_provenance") or {})
-        if not prov:
-            numeric = _is_numeric_spec(spec)
-            prov = {"verified": not numeric,
-                    "method": "unverified_render" if numeric else "no_data"}
-        # ★ 2-4 (2026-07-02): 본문↔차트 교차대조용 라벨드 수치 박제.
-        prov["values"] = spec_chart_values(spec)
-        record_provenance(result, prov)
-    except Exception:
-        pass
-    return result
-
-
-def _render_impl(spec: dict[str, Any], out_path: Path) -> Path:
-    """설계서 → 이미지 파일 생성.
-
-    렌더링 우선순위 (★ 사용자 박제 2026-05-19 — Plotly 최우선):
-      [카드·레이아웃 타입] HTML_TYPES
-        1순위: html_renderer  (Playwright HTML/CSS → 고품질 preview 수준)
-        2순위: plotly_renderer
-        3순위: matplotlib_renderer (최후 폴백)
-      [데이터 차트 타입] CHART_TYPES / 공통
-        1순위: plotly_renderer  (scale=3, 4200px급 — 최고 품질)
-        2순위: matplotlib_renderer (DPI=250 폴백)
-      [공통 최후 폴백]
-        3순위: svg_renderer
-
-    Args:
-        spec:     generate_image_spec()이 반환한 설계서 dict
-        out_path: 저장할 파일 경로 (.jpg 권장)
-
-    Returns:
-        생성된 이미지 파일 Path.
-    Raises:
-        RuntimeError: 렌더링 완전 실패 시.
-    """
-    viz_type = spec.get("viz_type", "infographic")
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # ── 카드·레이아웃 타입: html_renderer 우선 ───────────────────────
-    if viz_type in HTML_TYPES:
-        try:
-            from JARVIS06_IMAGE.html_renderer import render as _html_render
-            result = _html_render(spec, out_path)
-            log.info(f"[image_spec] ✅ HTML 렌더링 완료: {result.name}")
-            return result
-        except Exception as e:
-            log.warning(f"[image_spec] HTML 렌더링 실패 ({e}) → Plotly 폴백")
-            _g_report("image", e, module=__name__)
-
-    # ── 1순위: Plotly 렌더러 (★ 사용자 박제 2026-05-19 — 최고 품질) ──
-    try:
-        from JARVIS06_IMAGE.plotly_renderer import render as _plotly_render
-        result = _plotly_render(spec, out_path)
-        log.info(f"[image_spec] ✅ Plotly 렌더링 완료: {result.name}")
-        return result
-    except Exception as e:
-        log.warning(f"[image_spec] Plotly 렌더링 실패 ({e}) → matplotlib 폴백")
-        _g_report("image", e, module=__name__)
-
-    # ── 2순위: matplotlib 렌더러 (폴백) ─────────────────────────────
-    try:
-        from JARVIS06_IMAGE.matplotlib_renderer import render as _mpl_render
-        result = _mpl_render(spec, out_path)
-        log.info(f"[image_spec] ✅ matplotlib 렌더링 완료: {result.name}")
-        return result
-    except Exception as e:
-        log.warning(f"[image_spec] matplotlib 렌더링 실패 ({e}) → SVG 폴백")
-        _g_report("image", e, module=__name__)
-
-    # ── 최후 폴백: SVG 렌더러 ────────────────────────────────────────
-    try:
-        from JARVIS06_IMAGE.svg_renderer import render as _svg_render
-        return _svg_render(spec, out_path)
-    except Exception as e:
-        log.error(f"[image_spec] SVG 렌더링도 실패: {e}")
-        _g_report("image", e, module=__name__)
-        raise RuntimeError(f"render_from_spec 완전 실패: {e}") from e
+__all__ = [
+    "is_time_only_label",
+    "row_time_key",
+    "enforce_time_axis_ltr",
+    "dedupe_chart_rows",
+]

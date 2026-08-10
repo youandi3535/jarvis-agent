@@ -65,6 +65,7 @@ CLAUDE.md 는 *현재 적용 규칙* 만 박제한다. *왜 이 규칙인지* �
 | **★ 에이전트 파이프라인 정본 흐름 — 03(주제+프로필, 키워드 단독 전송 금지)→02·09 동시 제공→09 무제한 수집(신뢰순위 논문>API>뉴스>기사>웹)→02 매력 대본(수치만 하드 게이트)→06 이미지→08 발행 (사용자 박제 2026-07-03)** | [ADR 013](docs/decisions/013-agent-pipeline-flow.md) |
 | **★ 글 품질 강화학습 폐쇄 루프 — 주입(UCB 선택+사용기록)→분석 보상 귀속→weight EMA 갱신→검증된 지침만 생존. 엔진 `JARVIS07_GUARDIAN/quality_learner.py` 단독 (사용자 박제 2026-07-03)** | [ADR 014](docs/decisions/014-writing-quality-reinforcement.md) |
 | **★ 모델 단일 계층 통일 — 시스템 전역 한 모델 + 모델 ID 는 `shared/llm.py` MODELS 단독 소유 (ADR 002·015 대체, 사용자 박제 2026-07-06 · 2026-07-24 개정)** | [ADR 017](docs/decisions/017-model-single-tier-sonnet5.md) |
+| **★ 이미지 사실성 단일 초크포인트 — 검사를 늘리지 말고 출구를 줄인다: `infographic_engine._emit` 단일 출구 + `certify_image` 레지스트리 단독 쓰기 + `prepublish_gate` fail-closed + 행별 as_of·source 보존 + 가산성 기본 '불가' (ADR 010 집행 방식 정정, 사용자 박제 2026-08-10)** | [ADR 018](docs/decisions/018-image-factuality-single-chokepoint.md) |
 | **★ 로그인·인증 단일 진입점 (사용자 박제 2026-05-17)** | `JARVIS08_PUBLISH/credentials/LOGIN_SUPREME_LAW.md` + `login_manager.py` |
 
 신규 결정·번복은 [`docs/decisions/README.md`](docs/decisions/README.md) 의 형식·정책 따름.
@@ -281,19 +282,29 @@ pkill -f jarvis_daemon.py        # 전체 종료
 - **③ 검증은 재시작 *후* 프로세스로**: `ps -o lstart= -p $(pgrep -f jarvis_daemon.py)` 시각이 수정 파일 mtime 보다 **나중** 인지 확인한 뒤 검증할 것. (2026-07-20 실제 사고: compat 패치를 고치고 12/12 성공까지 확인했으나 데몬은 4분 전에 뜬 *옛 코드* 였다 — 사용자 지적으로 발견.) 가능하면 패치 적용 여부를 로그로 남겨 확인 (예: `monkey-patch 설치 완료 (바인딩 참조 N곳 교체)`).
 - **재시작은 `./restart_daemon.sh` 만**: keeper 를 먼저 unload → 좀비 정리 → 기동 → keeper 재등록 순서가 스크립트에 박혀 있다. 수동 `pkill` + `nohup` 조합은 중복 인스턴스·keeper 영구 정지를 유발.
 
-## ★ 커밋 규정 (강제 — 사용자 박제 2026-07-20)
-- **작업 종료 시 워킹트리를 깨끗이 비운다**: `git status` 잔여 0. *내가 수정하지 않은 파일* (데몬이 런타임에 갱신한 학습 산출물 — `design_learn_log.json`·`design_recipes.json`·`synonym_cache.json`·`learned_patterns.json` 등) 도 **함께 커밋**한다.
-- **사유**: 이들은 에이전트가 누적한 *학습 자산* 이다. 미커밋으로 방치하면 ① `git checkout`·브랜치 이동 시 소실 ② 다음 작업자가 "누가 왜 바꿨나" 를 추적 불가 ③ 회고·롤백 불가. 내 변경분만 골라 커밋하는 것은 규정 위반.
-- **절차**: 커밋 직전 `git status --short` 로 잔여 확인 → 전부 스테이징 (`git add -A`) → 커밋 메시지 본문에 *내 변경분* 을 쓰고, 말미에 *동반 커밋된 런타임 산출물* 을 한 줄로 명시.
-- **예외**: `.gitignore` 대상·비밀정보·대용량 바이너리는 제외 (해당 시 `.gitignore` 에 추가하고 그 사실을 메시지에 남길 것).
-- **검증**: 커밋 후 `git status --short` 결과가 비어 있어야 함.
-- **★ 자동 강제 (2026-08-07)**: `.githooks/pre-commit` 이 커밋 시점에 `git status --porcelain`
-  으로 **미스테이징·미추적 파일을 검출해 차단**한다. 급할 때만 `git commit --no-verify`.
-  · **왜 기계에 걸었나** — 이 규정만 사람 손에 맡겨져 있어 반복해서 샜다.
-    ①②는 `precommit_check`, ③은 `symmetry` 카테고리가 강제하는데 커밋 위생만 남아 있었다.
-    **규정을 읽는 것은 적용의 증거가 아니다** — 작업 끝 순간엔 주의가 "고친 게 되나" 에
-    쏠려 트리를 다시 안 본다. 새 세션은 지난 실수를 기억하지 못한 채 시작한다.
-    사람(과 에이전트)의 기억에 기대는 규칙은 반드시 샌다.
+## ★ 커밋 규정 (강제 — 사용자 박제 2026-08-10 · 종전 2026-07-20 규정을 **정반대로 개정**)
+
+**자동 커밋은 *내가 수정한 것만* 커밋한다. `git add -A` 로 워킹트리를 쓸어 담지 않는다.**
+
+- **원칙**: 커밋에 담기는 파일 = *이번 작업에서 내가 실제로 손댄 파일* 뿐. 그 외에는
+  건드리지 않는다 — 데몬이 런타임에 갱신한 학습 산출물(`design_learn_log.json`·
+  `design_recipes.json`·`synonym_cache.json`·`learned_patterns.json` 등), **다른 세션·다른
+  작업자가 편집 중인 파일**, 내가 읽기만 한 파일 전부 그대로 둔다.
+- **절차**: `git status --short` 로 *내 변경분을 식별* → 그 경로만 **명시적으로** `git add <경로>`
+  → 커밋. 잔여가 남는 것은 **정상이며 위반이 아니다**.
+- **금지**: `git add -A` / `git add .` / `git commit -a` — 남의 변경을 내 커밋에 섞는다.
+- **왜 뒤집었나** — 종전 규정("잔여 0, 전부 함께 커밋")은 학습 자산 소실을 막으려던 것인데,
+  실제로는 *남의 작업을 내 커밋이 삼키는* 사고를 만들었다. 병행 편집 환경에서
+  ① 다른 세션이 편집 중인 파일이 내 커밋에 딸려 들어가고 ② 데몬이 *커밋 도중에도* 산출물을
+  갱신해 잔여 0 이 원리적으로 불가능하며 ③ "누가 왜 바꿨나" 가 오히려 **더** 추적 불가해진다
+  (한 커밋에 서로 무관한 변경이 섞이므로). 소유자가 아닌 자가 커밋하면 이력이 거짓이 된다.
+- **학습 산출물은 그럼 누가 커밋하나** — *그것을 생성한 주체* 다. 소실이 걱정되면 `.gitignore`
+  하거나 소유 에이전트가 자기 잡에서 커밋한다. **내 커밋에 얹는 것으로 해결하지 않는다.**
+- **★ 자동 강제 (2026-08-10 개정)**: `.githooks/pre-commit` 은 잔여를 **차단하지 않는다.**
+  대신 잔여 목록을 **보여만 준다**(비차단) — 잔여가 *보이지 않는* 것이 위험하지, *있는* 것이
+  위험한 게 아니다. 종전 차단 로직은 이 규정과 정면 충돌해 매 커밋을 막으므로 제거했다.
+  · **교훈 보존**: "규정을 읽는 것은 적용의 증거가 아니다" 는 여전히 유효하다. 다만 그 강제는
+    *잔여 0* 이 아니라 *남의 파일을 담지 않았는가* 에 걸어야 한다.
 
 ## Claude Code 작업 효율 규정 (강제)
 - **파일 읽기**: 이미 읽은 파일 재읽기 금지. 필요한 범위만 Read(offset+limit).
@@ -564,9 +575,13 @@ pkill -f jarvis_daemon.py        # 전체 종료
   path = generate_photo(prompt_ko="한국어 설명", out_dir=img_dir)
   # 이미 영어 프롬프트가 있는 경우: prompt_en= 파라미터 사용
 
-  # SVG/차트
-  from JARVIS06_IMAGE.image_agent import generate_chart
-  path = generate_chart(data={...}, chart_type="bar", title="제목")
+  # 데이터 인포그래픽 (차트) — ★ 유일한 진입점 (2026-08-10)
+  #   종전의 `image_agent.generate_chart` 는 **삭제됐다**. 그것은 certify_image 초크포인트를
+  #   지나지 않는 우회로였다(검증 없이 픽셀이 본문에 들어갔다). 게이트를 세우는 대신
+  #   도달 경로째 제거했다 — 남겨두면 다음 작업자의 손이 다시 그리로 간다.
+  from JARVIS06_IMAGE.infographic_engine import generate_infographic
+  path = generate_infographic(title, subtitle, datasets, out_dir=img_dir)
+  #   datasets 는 JARVIS09 실데이터(CollectedData). 미검증 수치는 폐기되어 "" 가 돌아온다.
 
   # 썸네일 (sector는 선택, out_dir 미지정 시 JARVIS06_IMAGE/output/ 사용)
   from JARVIS06_IMAGE.image_agent import generate_thumbnail
@@ -711,7 +726,13 @@ python3 shared/precommit_check.py --category collect    # git 훅·CI·GUARDIAN 
 
 - **검증 단일 진입점**: `JARVIS06_IMAGE/validators/image_data_verifier.py` `verify_chart_spec(spec, datasets)`. 다른 파일에 차트 데이터 사실성 로직 박지 말 것.
 - **정책 (검증분 재구성 → 대체 → 스킵)**: ① 텍스트 카드(숫자 없음)=면제 ② dataset 기반 spec=신뢰 ③ LLM 본문 추출 수치 = 실데이터 대조 → 검증 행만 재구성 / 0개면 실데이터로 대체 / 그것도 없으면 숫자 없는 카드로 폴백. *거짓 차트 < 차트 없음.*
-- **트립와이어**: `render_from_spec` 이 모든 생성 이미지의 검증 결과를 provenance 레지스트리에 기록 (`record_provenance`). 수치 차트가 `verified` 없이 렌더되면 `verified=False`.
+- **트립와이어 (★ 2026-08-10 개정 — 종전 `render_from_spec` 은 삭제됨)**: `infographic_engine._emit` 이
+  **모든** 생성 이미지를 `certify_image` 에 태워 provenance 레지스트리에 기록한다. 미검증이면
+  이미지를 **폐기**한다(거짓 차트 < 차트 없음). `generate_infographic` 의 반환은 정확히 두 꼴 —
+  `return ""` 과 `return _emit(...)` — 이라 우회 출구가 없다(`--category image` 의 `chokepoint-single-exit`).
+  · *왜 바뀌었나*: 종전 트립와이어는 `render_from_spec` 경로에만 걸려 있었는데 라이브 렌더러는
+    그 경로를 타지 않았다. 그래서 2026-08-10 경제 브리핑 8장이 **무검증·미등록으로 발행**됐다.
+    레지스트리 쓰기는 이제 `certify_image` 단독(`provenance-write-outside` 로 강제).
 - **발행 전 이미지 게이트**: `prepublish_gate._image_factuality_leg` 가 `verified=False` 차트를 `kind="factuality"` 로 차단 → 재작성 순환. 킬스위치 `PREPUBLISH_IMAGE_GATE=0`.
 - **검증 명령** (모두 0행 — owner 외부 정의 차단):
   ```bash

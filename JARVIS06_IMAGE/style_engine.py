@@ -18,15 +18,92 @@
 from __future__ import annotations
 import os
 
+# ══════════════════════════════════════════════════════════════════════
+# 폰트 크기 — 기준 하나 + 역할표 (★ 사용자 박제 2026-08-10 · CLAUDE.md 규정14 집행)
+# ══════════════════════════════════════════════════════════════════════
+# 규정14 는 2026-05-26 에 박제됐으나 **한 번도 집행되지 않아** 렌더러 6개에
+# `fontsize=` 리터럴이 65곳 쌓였다(2026-08-10 실측). 크기를 호출부에 적는 순간
+# ① 같은 역할이 파일마다 다른 숫자로 갈리고 ② 판형을 조정하려면 65곳을 손대야 한다.
+#
+# ★ ②동적 설계 — 숫자는 `FONT_BASE` 하나뿐이다.
+#   · `_FONT_TIER_STEPS` : 시각 위계 tier → **기준 대비 배율** (크기를 적지 않는다)
+#   · `_FONT_ROLE_TIER`  : 역할 → tier    (새 역할은 여기 한 줄, 숫자 없음)
+#   기준을 바꾸면 모든 렌더러의 모든 글자가 비율을 지키며 한꺼번에 따라온다.
+#   같은 tier 를 가리키는 역할이 여럿인 것은 *의도* 다 — 같은 위계는 같은 크기다.
+FONT_BASE: float = 10.0
+
+_FONT_TIER_STEPS: dict[str, float] = {
+    "micro_sm":   0.70,   # 촘촘한 눈금
+    "micro":      0.80,   # 미세 주석·보조 축
+    "badge":      0.85,   # 배지·글리프
+    "note":       0.90,   # 값 라벨·축 이름·범례
+    "note_lg":    0.95,   # 카드 안 짧은 문장
+    "row":        1.00,   # 기준 — 일반 행 텍스트·눈금 라벨
+    "body":       1.05,   # 목록 본문
+    "accent":     1.10,   # 강조 수치·리드
+    "colhead":    1.20,   # 열 머리
+    "plot":       1.30,   # 플롯 축·값 라벨
+    "small":      1.40,   # 최소 글씨 (이 아래는 카드 판형 전용)
+    "panel":      1.50,   # 패널 제목
+    "caption":    1.60,
+    "tick":       1.80,
+    "value":      2.00,
+    "label":      2.20,
+    "banner_sub": 2.60,   # 소제목 배너(h3)
+    "title":      2.80,
+    "hero_sub":   3.40,   # 썸네일 폴백 타이틀
+    "banner":     3.60,   # 소제목 배너(h2)
+    "hero":       4.20,   # 썸네일 대표 문구
+}
+
+_FONT_ROLE_TIER: dict[str, str] = {
+    # ── rcParams 기본값 (setup_chart_defaults 가 주입) ────────────────
+    "TITLE":          "title",
+    "LABEL":          "label",
+    "VALUE":          "value",
+    "TICK":           "tick",
+    "CAPTION":        "caption",
+    "SMALL":          "small",
+    # ── 카드/인포그래픽 판형 (matplotlib_renderer · theme_charts) ──────
+    "PANEL_TITLE":    "panel",      # 패널·카드 제목
+    "PANEL_CARD":     "small",      # 강조 카드 제목(작은 판형)
+    "PANEL_KPI":      "label",      # KPI 큰 숫자
+    "PANEL_KPI_SM":   "tick",       # KPI 숫자 — 카드가 많을 때
+    "PANEL_HEAD":     "colhead",    # 비교표 열 머리
+    "PANEL_ACCENT":   "accent",     # 변동률 등 강조 수치
+    "PANEL_BODY":     "body",       # 체크리스트·불릿 본문
+    "PANEL_ROW":      "row",        # 행 텍스트·눈금 라벨·부제
+    "PANEL_CAPTION":  "note_lg",    # 카드 안 짧은 문장
+    "PANEL_NOTE":     "note",       # 값 라벨·축 이름·범례·보조 문구
+    "PANEL_BADGE":    "badge",      # 💡 배지·체크 글리프
+    "PANEL_MICRO":    "micro",      # 계열 끝 주석·보조 축
+    "PANEL_MICRO_SM": "micro_sm",   # 촘촘한 날짜 눈금
+    # ── plotly 렌더러의 matplotlib 폴백 판형 ─────────────────────────
+    "PLOT_TITLE":     "value",
+    "PLOT_LABEL":     "plot",
+    "PLOT_NOTE":      "colhead",
+    # ── 소제목 배너 (section_title) ──────────────────────────────────
+    "BANNER_TITLE":   "banner",
+    "BANNER_SUB":     "banner_sub",
+    "BANNER_NUM":     "title",
+    # ── 썸네일 (thumbnail_maker · draft_processor 로컬 폴백) ──────────
+    "HERO":           "hero",
+    "HERO_SUB":       "hero_sub",
+    "HERO_TAG":       "tick",
+    "HERO_DATE":      "small",
+}
+
+
+def font_size(role: str) -> float:
+    """역할 이름 → 실제 크기. 크기를 아는 곳은 이 함수 하나뿐이다."""
+    try:
+        return round(FONT_BASE * _FONT_TIER_STEPS[_FONT_ROLE_TIER[role]], 2)
+    except KeyError as e:                                   # 오타를 조용히 넘기지 않는다
+        raise KeyError(f"style_engine: 등록되지 않은 폰트 역할 {role!r}") from e
+
+
 # ★ 차트 스타일 단일 진입점 — 여기만 수정하면 전체 차트에 적용
 CHART_STYLE: dict = {
-    # 폰트 크기 (2026-05-25: 2배 확대 + bold)
-    "FONT_TITLE":      28,   # 차트 제목
-    "FONT_LABEL":      22,   # 축 레이블, 카테고리명
-    "FONT_VALUE":      20,   # 데이터 값 표시
-    "FONT_TICK":       18,   # 축 눈금
-    "FONT_CAPTION":    16,   # 캡션, 보조 텍스트
-    "FONT_SMALL":      14,   # 최소 글씨 (14px 미만 금지)
     "FONT_WEIGHT":     "bold",  # 전체 굵기
 
     # figsize 표준 (단위: inch, dpi=150 기준)
@@ -44,6 +121,9 @@ CHART_STYLE: dict = {
     "LINE_WIDTH":      2.5,
     "BAR_WIDTH":       0.65,
 }
+
+# 역할표 → CHART_STYLE["FONT_*"] 주입 (규정14 가 요구하는 접근 형태를 유지)
+CHART_STYLE.update({f"FONT_{_r}": font_size(_r) for _r in _FONT_ROLE_TIER})
 
 
 def setup_chart_defaults(font_path: str | None = None) -> None:

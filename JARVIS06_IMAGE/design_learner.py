@@ -31,13 +31,8 @@ from pathlib import Path
 import requests as _req
 from JARVIS07_GUARDIAN.json_store import write_json
 
-def _max_attempts() -> int:
-    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
-    try:
-        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
-        return max(1, int(DEFAULT_MAX_ATTEMPTS))
-    except Exception:
-        return 2
+# 재시도 상한 — 정의는 JARVIS06_IMAGE/limits.py 단독 (사본 4벌 통합 2026-08-10)
+from JARVIS06_IMAGE.limits import max_attempts as _max_attempts   # noqa: E402
 
 
 try:
@@ -117,7 +112,25 @@ def pick_recipe(seed: int) -> dict:
 
 
 def _save_registry(recs: list) -> None:
-    write_json(_REGISTRY, {"version": 1, "recipes": recs}, indent=2)
+    """레시피 레지스트리 저장 — ★ 여기가 유일한 쓰기 경로이자 마지막 게이트.
+
+    ★ 왜 저장 시점에 또 검사하나 (사용자 박제 2026-08-10 — D19): 실제로 인쇄된
+      'big-number-hero' 를 포함해 오염 6건 중 4건이 `source:"seed-layout"` 이었다 —
+      JSON 에 직접 커밋돼 `_validate_recipe` 를 **거친 적이 없다**. 생성 게이트만 고치면
+      그 4건은 영원히 안 잡힌다. 그래서 '레지스트리에 들어가는 모든 것' 을 여기서 본다.
+      고정 표시문구가 있으면 레시피를 버리지 않고 *template 만* 떨어뜨린다(색은 멀쩡하다).
+    """
+    safe = []
+    for r in recs or []:
+        t = r.get("template")
+        if isinstance(t, str) and t.strip():
+            lits = _template_literals(t)
+            if lits:
+                log.warning(f"[design_learner] 레시피 '{r.get('id')}' 템플릿에 고정 표시문구 "
+                            f"{lits[:3]} → template 제거(색 레시피는 유지)")
+                r = {k: v for k, v in r.items() if k != "template"}
+        safe.append(r)
+    write_json(_REGISTRY, {"version": 1, "recipes": safe}, indent=2)
 
 
 def _append_log(entry: dict) -> None:
@@ -177,17 +190,27 @@ def _validate_recipe(rec: dict, existing: list) -> tuple[bool, str]:
                 return False, f"기존 '{ex.get('id')}' 과 너무 유사"
         except Exception:
             continue
-    # 템플릿 플레이스홀더 텍스트 차단 — 슬롯 외 고정 설명문 있으면 거부
-    tmpl = rec.get("template") or ""
-    if tmpl:
-        _BAD_PHRASES = [
-            "이 영역에 들어갑니다", "CALL TO ACTION", "lorem ipsum",
-            "placeholder", "설명이 이 영역", "보충 텍스트가 이 영역",
-        ]
-        for phrase in _BAD_PHRASES:
-            if phrase.lower() in tmpl.lower():
-                return False, f"템플릿에 고정 플레이스홀더 텍스트 있음: '{phrase}'"
+    # ★ 템플릿 고정 표시문구 차단 — *꼴* 로 판정 (사용자 박제 2026-08-10 — D19).
+    #   종전엔 6개짜리 어휘 블랙리스트라 새 문구는 원리적으로 못 잡았고, 실제로
+    #   '핵심 지표 · KEY METRIC'·'Chart 01'·'기준 A/VS/기준 B' 가 전량 통과해
+    #   2026-08-10 경제 slot4 이미지에 인쇄됐다. 판정 본체는 template_engine 단독.
+    lits = _template_literals(rec.get("template") or "")
+    if lits:
+        return False, f"템플릿에 고정 표시문구 {len(lits)}개: {lits[:3]}"
     return True, "ok"
+
+
+def _template_literals(tmpl: str) -> list:
+    """레이아웃 템플릿의 고정 표시문구 — 판정 본체는 template_engine.template_literals.
+    ★ 검출기를 못 부르면 '위반 없음' 이 아니라 *검사 불가* 다 → 안전하게 거부시킨다."""
+    if not tmpl:
+        return []
+    try:
+        from JARVIS06_IMAGE.template_engine import template_literals
+        return template_literals(tmpl)
+    except Exception as e:
+        log.warning(f"[design_learner] 리터럴 검출기 사용 불가 → 템플릿 거부: {e}")
+        return ["<검출기 사용 불가>"]
 
 
 def _test_render(rec: dict) -> bool:
@@ -207,7 +230,7 @@ def _test_render(rec: dict) -> bool:
         if rec.get("template"):
             from JARVIS06_IMAGE.template_engine import (render_layout,
                                                         has_all_slots_resolved, verify_layout_output)
-            html = render_layout(rec["template"], "레시피 검증 리포트", "샘플 렌더", sample, rec, "테스트")
+            html = render_layout(rec["template"], "레시피 검증 리포트", "샘플 렌더", sample, rec)
             if not has_all_slots_resolved(html) or not verify_layout_output(html, sample):
                 log.info("[design_learner] 템플릿 슬롯/데이터안전 실패 → 레시피 거부(다음 후보 시도)")
                 return False  # ★ silent drop 금지 — 다음 이미지/라이브러리로 재시도
@@ -623,15 +646,15 @@ def _generate_recipe_deterministic(existing: list, seed: int) -> dict:
     }
     # 색상(팔레트) × 레이아웃(template) 독립 조합 — 기존 template HTML 순환 배정
     # DELETED 및 플레이스홀더 텍스트 포함 템플릿은 제외
-    _BAD = ["이 영역에 들어갑니다", "CALL TO ACTION", "placeholder", "설명이 이 영역"]
     try:
         import json as _json
         _all = _json.loads(_REGISTRY.read_text(encoding="utf-8")).get("recipes", [])
+        # ★ 어휘 목록(_BAD) 폐기 — 고정 표시문구 판정은 _template_literals 단독 (D19)
         _tmpls = [
             r["template"] for r in _all
             if isinstance(r.get("template"), str)
             and not str(r.get("id", "")).endswith("-DELETED")
-            and not any(p.lower() in r["template"].lower() for p in _BAD)
+            and not _template_literals(r["template"])
         ]
         if _tmpls:
             rec["template"] = _tmpls[seed % len(_tmpls)]

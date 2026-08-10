@@ -352,7 +352,8 @@ def _collect_tier(provs: list, theme: str, sector: str, cap: int,
 @_auto_catch("collector", reraise=True)
 def collect_research(theme: str, sector: str = "", angle: str = "",
                      with_facts: bool = False,
-                     with_digest: bool = False) -> dict:
+                     with_digest: bool = False,
+                     category: str = "") -> dict:
     """★ 티어순 상한 수집 (사용자 박제 2026-07-11 — ERRORS [423]):
     처음부터 API 최대 10·나머지 최대 5, cascade 이월.
     광역수집 후 절삭 방식 완전 폐지 — 각 티어가 수집 시점에 상한 적용.
@@ -414,7 +415,9 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
         if with_facts:
             try:
                 from .evidence_pack import build_evidence_pack
-                _pack = build_evidence_pack(theme, {}, all_docs) or {}
+                # ★ category 동봉 (2026-08-10): 차트 승격 정책(출처 등급·원문 대조 문턱)이
+                #   CATEGORY_POLICY 파생이라 팩이 자기 카테고리를 알고 있어야 한다.
+                _pack = build_evidence_pack(theme, {}, all_docs, category=category) or {}
                 out["pack"] = _pack
                 log.info(f"[research] 완료: API{len(api_docs)}"
                          f"+나머지{len(rest_docs)}={total}건 → fact {len(_pack.get('facts', []))}개 추출(09)")
@@ -503,7 +506,8 @@ def compose_collected(keyword: str, stocks_data: dict | None = None,
                       sector: str = "", category: str = "theme",
                       profile: dict | None = None,
                       extra_datasets: list | None = None,
-                      extra_meta: dict | None = None) -> "CollectedData":
+                      extra_meta: dict | None = None,
+                      llm_label_fallback: bool = True) -> "CollectedData":
     """★ 이미 수집된 조각 → CollectedData 조립 (재수집 없음).
 
     테마 하네스처럼 자체 수집 흐름(병렬 stocks + research)을 가진 호출자가
@@ -519,7 +523,11 @@ def compose_collected(keyword: str, stocks_data: dict | None = None,
     pack = evidence_pack or {}
     entities = _stocks_to_entities(stocks_data)
     stock_ds = stocks_to_datasets(stocks_data) if stocks_data.get("stocks") else []
-    fact_ds = facts_to_datasets(pack) if pack else []
+    # ★ category 명시 전달 (2026-08-10): 차트 승격 자격(출처 등급·원문 대조)이 카테고리
+    #   정책 파생이다. 팩에도 박혀 오지만, 조립 지점이 아는 값을 그대로 넘겨 구버전 팩
+    #   (category 미기록)도 올바른 정책으로 심사되게 한다.
+    fact_ds = (facts_to_datasets(pack, category=category,
+                                 llm_label_fallback=llm_label_fallback) if pack else [])
     datasets = _dedupe_datasets(list(extra_datasets or []) + list(stock_ds) + list(fact_ds))
     # ★ 결측(NaN) 위생 — *조립 지점 한 곳* (사용자 박제 2026-07-25). 상자를 나가기 전에 턴다:
     #   남으면 검증(gt→grounds 크래시→사실 오차단)·이미지(int(NaN) 크래시) 양쪽에서 터진다.
@@ -578,13 +586,15 @@ def _collect_charts_leg(keyword: str, sector: str, angle: str,
         return []
 
 
-def _collect_research_leg(keyword: str, sector: str, angle: str) -> dict:
+def _collect_research_leg(keyword: str, sector: str, angle: str,
+                          category: str = "") -> dict:
     """설계-우선 리서치 (ADR 012) + fact 추출 + digest. 킬스위치 RESEARCH_FIRST=0 → 종전 스윕."""
     import os as _os
     if _os.getenv("RESEARCH_FIRST", "1") != "0":
         try:
             res = collect_research(keyword, sector=sector, angle=angle,
-                                   with_facts=True, with_digest=True) or {}
+                                   with_facts=True, with_digest=True,
+                                   category=category) or {}
             return {"docs": list(res.get("docs") or []),
                     "pack": res.get("pack") or None,
                     "corpus_digest": res.get("corpus_digest") or ""}
@@ -599,6 +609,61 @@ def _collect_research_leg(keyword: str, sector: str, angle: str) -> dict:
     except Exception as e:
         log.warning(f"[collect_all] 스윕 폴백도 실패: {e}")
         return {"docs": [], "pack": None, "corpus_digest": ""}
+
+
+def _rederive_cached(bundle: dict, keyword: str, category: str) -> dict:
+    """선계산 캐시 상자 → *조립을 다시 파생* 한 상자 (사용자 박제 2026-08-10).
+
+    ★ 왜 캐시를 그대로 돌려주지 않는가 — '복사본을 진실로 믿지 말 것' (루트 CLAUDE.md):
+      캐시에는 수집 *재료*(docs·evidence_pack·stocks_data)와 그 재료로 조립한 *결과*
+      (datasets)가 함께 들어 있다. 종전엔 결과를 그대로 돌려줬으므로, 조립 규칙을 고쳐도
+      06:05 에 굳은 옛 규칙의 산출물이 07:00 발행까지 그대로 갔다 — 같은 파일 docstring 이
+      이미 경고한 사고(02 의 supreme_block 동결)와 정확히 같은 형태다. 재료만 믿고
+      조립은 매번 `compose_collected` 한 곳에서 다시 한다 (① 단일 진입점).
+    ★ 원문 대조도 여기서 소급한다 — 캐시는 docs 를 함께 담으므로 '모름' 을 *측정* 으로
+      바꿀 수 있다 (backfill_verbatim). 대조 불가로 남는 것만 미검증 표시로 흐른다.
+    ★ 실패하면 캐시 원본을 그대로 반환한다 — 캐시는 결코 발행을 막지 않는다(순수 최적화).
+    """
+    try:
+        from .evidence_pack import backfill_verbatim
+        from .collect_theme import stocks_to_datasets
+        cached = bundle.get("collected")
+        meta = dict(getattr(cached, "meta", {}) or {})
+        docs = list(bundle.get("docs") or [])
+        pack = bundle.get("evidence_pack") or None
+        stocks_data = bundle.get("stocks_data") or {}
+        if pack:
+            backfill_verbatim(pack, docs)
+
+        # 재료에서 다시 만들 수 없는 dataset(주제 연관 차트·시장지표 폴백)만 골라 넘긴다.
+        # 종목·fact 유래는 compose_collected 가 stocks_data·pack 에서 다시 파생한다.
+        _stock_fps = {d.get("fingerprint") for d in
+                      (stocks_to_datasets(stocks_data) if stocks_data.get("stocks") else [])}
+        extra = [d for d in (getattr(cached, "datasets", None) or [])
+                 if isinstance(d, dict) and not d.get("_from_facts")
+                 and d.get("fingerprint") not in _stock_fps]
+
+        # compose_collected 가 직접 채우는 키를 빼고 나머지(사이드채널)만 이월.
+        _base_keys = {"keyword", "profile", "sector", "category", "as_of", "summary", "raw_stocks"}
+        extra_meta = {k: v for k, v in meta.items() if k not in _base_keys}
+
+        collected = compose_collected(
+            keyword, stocks_data=stocks_data, docs=docs, evidence_pack=pack,
+            sector=str(meta.get("sector") or ""), category=category,
+            profile=meta.get("profile") or {},
+            extra_datasets=extra, extra_meta=extra_meta or None,
+            llm_label_fallback=False)   # 발행창 — LLM 0회 계약을 구조로 보장
+        _before = len(getattr(cached, "datasets", None) or [])
+        log.info(f"[collect_all] 캐시 상자 재조립: dataset {_before} → {len(collected.datasets)} "
+                 f"(재료 재사용 · 조립 규칙은 현행)")
+        out = dict(bundle)
+        out["collected"] = collected
+        out["datasets"] = list(collected.datasets)
+        out["evidence_pack"] = pack
+        return out
+    except Exception as e:
+        log.warning(f"[collect_all] 캐시 재조립 실패 — 캐시 원본 사용: {e}")
+        return bundle
 
 
 def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
@@ -648,7 +713,7 @@ def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
             _hit = load_precollect(category, keyword)
             if _hit is not None:
                 log.info(f"[collect_all] 선계산 캐시 재사용: {category}/{keyword} — 발행창 추출 LLM 0회")
-                return _hit
+                return _rederive_cached(_hit, keyword, category)
         except Exception as e:
             log.warning(f"[collect_all] 캐시 조회 스킵({category}/{keyword}): {e} — 실제 수집 진행")
 
@@ -690,7 +755,7 @@ def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
         try:
             from concurrent.futures import ThreadPoolExecutor as _TExec
             _exec = _TExec(max_workers=1)
-            _fut = _exec.submit(_collect_research_leg, keyword, sector, angle)
+            _fut = _exec.submit(_collect_research_leg, keyword, sector, angle, category)
         except RuntimeError as e:
             # 인터프리터 종료 레이스 (ERRORS [361]) — 병렬 이득만 포기, 수집은 계속
             log.warning(f"[collect_all] 스레드 스케줄 불가 — 동기 폴백: {e}")
@@ -714,7 +779,7 @@ def collect_all(keyword: str, profile: dict | None = None, sector: str = "",
             except Exception:
                 pass
     else:
-        rs = _collect_research_leg(keyword, sector, angle)
+        rs = _collect_research_leg(keyword, sector, angle, category)
 
     docs = rs.get("docs") or []
     pack = rs.get("pack") or None

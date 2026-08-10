@@ -52,27 +52,18 @@ _FIELD_LINE_RE = re.compile(r"^(제목|단위|데이터|출처|종류|데이터�
 _VIZ_MAP = {"bar": "bar_chart", "line": "line_chart", "area": "area_chart",
             "pie": "pie_chart", "kpi": "kpi_cards"}
 
-_TIME_LABEL_RE = re.compile(
-    r"^(\d{4}[.\-/]\d{1,2}|\d{4}[년Q]\d?|Q[1-4]\s*\d{4}|\d{4}$)", re.IGNORECASE
-)
-_RATIO_KEYWORDS = ("%" , "퍼센트", "비율", "점유율", "비중", "분포")
 
 
 def _infer_viz_type(data: list, unit: str = "") -> str:
-    """데이터 성격으로 차트 종류 자동 추론 — 종류: 필드 대체."""
-    if len(data) == 1:
-        return "kpi_cards"
-    if not data:
-        return "bar_chart"
-    labels = [str(d["label"]) for d in data]
-    # 날짜/연도 라벨 70%+ → 시계열 라인
-    time_count = sum(1 for lb in labels if _TIME_LABEL_RE.match(lb.strip()))
-    if time_count >= len(labels) * 0.7:
-        return "line_chart"
-    # % 단위 + 5개 이하 → 파이 (비율)
-    if any(kw in unit for kw in _RATIO_KEYWORDS) and len(data) <= 5:
-        return "pie_chart"
-    return "bar_chart"
+    """데이터 성격으로 차트 종류 자동 추론 — 판정 본체는 image_data_verifier.chart_fit 단독.
+
+    ★ 사용자 박제 2026-08-10 (D13): 종전엔 여기서 "단일값 → kpi_cards" 를 *정확히 판정해*
+      viz_hint 로 실어 보냈는데, 정작 렌더러(template_engine._slot_chart_block)가 pie/donut
+      외에는 읽지 않고 전부 막대로 떨어뜨렸다 — 판정이 있는데 버려진 구조였다.
+      판정을 한 곳(verifier)으로 모으고 여기는 얇은 어댑터로 남긴다.
+    """
+    from JARVIS06_IMAGE.validators.image_data_verifier import chart_fit
+    return chart_fit({"data": data or [], "unit": unit})
 
 
 def parse_chart_slots(text: str) -> list[dict]:
@@ -254,18 +245,11 @@ def verify_slot(slot: dict, ref_pairs: list[tuple[float, str]]) -> dict | None:
     return {**slot, "data": kept}
 
 
-def _path_to_img_html(path: str, alt: str = "") -> str:
-    """인포그래픽 파일 경로 → <p><img> HTML 블록."""
-    return (f'<p><img src="{path}" alt="{alt}" '
-            f'style="width:100%;max-width:760px;border-radius:8px;'
-            f'margin:16px auto;display:block;"></p>')
-
-
 def render_slot(slot: dict, out_dir, run_id: str = "", theme: str = "") -> str:
     """검증된 슬롯 → 인포그래픽 렌더 (infographic_engine 위임). 실패 시 "".
     ★ 반환값은 <p><img> HTML — 파일 경로 아님 (draft HTML에 직접 삽입 가능)."""
     try:
-        from JARVIS06_IMAGE.infographic_engine import generate_infographic
+        from JARVIS06_IMAGE.infographic_engine import generate_infographic, data_image_html
         ds = {
             "title": slot.get("title") or f"{theme} 핵심 수치",
             "viz_hint": slot.get("viz", "bar_chart"),
@@ -275,13 +259,18 @@ def render_slot(slot: dict, out_dir, run_id: str = "", theme: str = "") -> str:
                        "name": slot.get("source_name") or "자비스09 수집(대본 내장)",
                        "url": ""},
         }
+        # ★ subtitle 무조건 배지 "수집 실데이터 기반" 폐기 (사용자 박제 2026-08-10 — D18):
+        #   검증 결과와 무관하게 늘 인쇄되던 주장이라 신뢰 표시로서 아무 정보가 없었다.
+        #   실제 검증은 초크포인트(_emit → certify_image)가 하고, 통과 못하면 이미지 자체가
+        #   나오지 않는다 — 배지가 아니라 *부재* 가 검증의 증거다.
+        # ★ src 미전달 (D20): 출처는 source_label 이 데이터에서만 파생. 종전엔 J09 원본
+        #   source.name(뉴스 헤드라인·보도자료 제목)을 그대로 넣어 가드를 우회했다.
         _path = generate_infographic(
-            ds["title"], "수집 실데이터 기반", [ds],
+            ds["title"], "", [ds],
             run_id=run_id, slot_key=f"slot{slot['idx']}", out_dir=out_dir,
             context=f"{theme} — {ds['title']}",
-            src=f"데이터 출처: {ds['source']['name']}",
         ) or ""
-        return _path_to_img_html(_path, ds["title"][:40]) if _path else ""
+        return data_image_html(_path, ds["title"][:40]) if _path else ""
     except Exception as e:
         log.warning(f"[slot] CHART_{slot['idx']} 렌더 실패: {e}")
         _g_report("image", e, module=__name__, func_name="render_slot")
@@ -330,7 +319,7 @@ def render_slots_from_collected(text: str, collected_datasets: list, out_dir,
       매칭 없으면 [CHART_N: 제목] 구형식 강등 → _next_data_infographic 경로 이어받음.
     """
     try:
-        from JARVIS06_IMAGE.infographic_engine import generate_infographic
+        from JARVIS06_IMAGE.infographic_engine import generate_infographic, data_image_html
     except ImportError:
         return text, 0, 0
 
@@ -376,11 +365,11 @@ def render_slots_from_collected(text: str, collected_datasets: list, out_dir,
             continue
 
         try:
+            # subtitle 무조건 배지·src 명시 전달 폐기 — 위 render_slot 주석 참조(D18/D20)
             _img_path = generate_infographic(
-                render_ds["title"], "수집 실데이터 기반", [render_ds],
+                render_ds["title"], "", [render_ds],
                 run_id=run_id, slot_key=f"slot{slot['idx']}", out_dir=out_dir,
                 context=f"{theme} — {render_ds['title']}",
-                src=f"데이터 출처: {render_ds['source'].get('name', '자비스09')}",
             ) or ""
         except Exception as e:
             log.warning(f"[slot] CHART_{slot['idx']} 렌더 실패: {e}")
@@ -388,7 +377,7 @@ def render_slots_from_collected(text: str, collected_datasets: list, out_dir,
             _img_path = ""
 
         if _img_path:
-            img_html = _path_to_img_html(_img_path, slot_title[:40])
+            img_html = data_image_html(_img_path, slot_title[:40])
             text = text.replace(slot["raw"], img_html, 1)
             ok += 1
             print(f"  ✅ [slot] CHART_{slot['idx']} 실데이터 렌더 완료 [{best.get('title','')}]")

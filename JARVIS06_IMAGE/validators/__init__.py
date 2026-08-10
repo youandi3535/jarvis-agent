@@ -14,6 +14,13 @@ from JARVIS06_IMAGE.validators.image_data_verifier import (  # noqa: F401
     verify_chart_spec,
     has_provenance,
     source_caption,
+    certify_image,
+    lookup_provenance,
+    verifier_effective,
+    chart_fit,
+    additive_total,
+    dataset_admissible,
+    DATA_IMAGE_ATTR,
 )
 
 __all__ = [
@@ -25,4 +32,11 @@ __all__ = [
     "verify_chart_spec",
     "has_provenance",
     "source_caption",
+    "certify_image",
+    "lookup_provenance",
+    "verifier_effective",
+    "chart_fit",
+    "additive_total",
+    "dataset_admissible",
+    "DATA_IMAGE_ATTR",
 ]

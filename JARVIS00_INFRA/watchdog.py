@@ -246,11 +246,10 @@ def __getattr__(name: str):
     # ★ 2026-07-24 P4: MAX_RETRIES 는 harness.DEFAULT_MAX_ATTEMPTS(재시도 상한 SSOT)에서 지연 파생.
     #   watchdog 은 harness 에 의해 import 되므로 모듈레벨 import 는 순환 — 접근 시점에만 lazy 조회.
     if name == "MAX_RETRIES":
-        try:
-            from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
-            return DEFAULT_MAX_ATTEMPTS
-        except Exception:
-            return 2
+        # 파생 leaf 하나(`shared/limits.py`)에서 받는다 — 종전 except 절의 숫자 폴백은
+        # 그 자체가 사본이었다(harness 를 못 읽는 날 watchdog 만 다른 상한으로 돈다).
+        from shared.limits import max_attempts
+        return max_attempts()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

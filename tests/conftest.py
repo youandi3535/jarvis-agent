@@ -150,3 +150,61 @@ def _no_production_data_writes(tmp_path_factory, monkeypatch):
         if hasattr(mod, attr):
             monkeypatch.setattr(mod, attr, value)
     yield
+
+
+# ── 저장소 스캔 대상 판정 — **단일 소유자** (사용자 박제 2026-08-10) ──────────
+#
+# ★ 왜 여기인가 — 저장소를 훑는 테스트(`ROOT.rglob("*.py")`)가 8곳인데 제외 목록이 제각각
+#   복사돼 있었다. 표기까지 갈렸다: `".venv" in str(p)` / `".venv" in p.parts` / `"/.venv/" in sp`.
+#   같은 판단이 여덟 벌이면 한 곳만 고쳐도 나머지가 남는다(원칙①).
+#
+# ★ 무엇이 터졌나 — `.claude/worktrees/<id>/` 에 git worktree(= 저장소 **통째 체크아웃**)가
+#   생기자 스캐너가 *옛 커밋의 모든 파일* 을 현재 소스로 착각해 테스트 2건이 깨졌다.
+#   어느 목록에도 `.claude` 가 없었다. 워크트리·벤더 체크아웃은 앞으로도 생긴다.
+#
+# ★ ② 동적 설계 — 디렉터리 이름을 세지 않는다. **git 이 추적하는가** 로 판정한다.
+#   이름 목록(`.venv`·`.claude`·…)은 새 도구가 생길 때마다 낡지만, 추적 여부는 저장소
+#   자신이 답을 갖고 있다. 부수효과로 `.githooks/pre-commit` 같은 *점으로 시작하지만
+#   추적되는* 소스는 그대로 스캔 대상으로 남는다 — 이름 기반 규칙이면 잘못 빠졌을 것이다.
+#   구체적으로 두 가지를 *실물에서* 알아낸다:
+#     · **중첩 체크아웃** — 그 디렉터리에 `.git` 이 있다(워크트리는 `.git` *파일*, 클론은 폴더).
+#     · **가상환경**     — 그 디렉터리에 `pyvenv.cfg` 가 있다(이름이 `.venv` 든 `env` 든 무관).
+#   이름 목록(`.venv`·`.claude`·…)은 새 도구가 생길 때마다 낡는다. 성질은 낡지 않는다.
+#   부수효과 ①: `.githooks/pre-commit` 같은 *점으로 시작하지만 추적되는* 소스는 그대로 스캔된다.
+#   부수효과 ②: **아직 커밋 안 된 새 파일도 스캔된다** — 갓 만든 파일이야말로 검사가 필요하다
+#              (git 추적 여부로 판정하면 신규 파일이 조용히 빠져나간다).
+_DIR_VERDICT: dict = {}
+
+
+def _is_foreign_dir(d: "Path") -> bool:
+    """이 디렉터리가 *남의 트리* 인가 — 중첩 체크아웃 또는 가상환경. 결과는 캐시."""
+    key = str(d)
+    if key not in _DIR_VERDICT:
+        try:
+            _DIR_VERDICT[key] = (d / ".git").exists() or (d / "pyvenv.cfg").exists()
+        except Exception:
+            _DIR_VERDICT[key] = False
+    return _DIR_VERDICT[key]
+
+
+def is_scannable_source(path, root=None) -> bool:
+    """저장소 *자기 소스* 인가 — 스캔 대상 판정의 단일 진입점.
+
+    제외: 중첩 git 체크아웃(워크트리·벤더 클론) / 가상환경 / 의존성·컴파일 산출물.
+    포함: 추적 여부와 무관한 저장소 자신의 소스(신규 미커밋 파일 포함).
+    """
+    _root = (Path(root) if root else Path(__file__).resolve().parent.parent).resolve()
+    p = Path(path)
+    p = p if p.is_absolute() else (_root / p)
+    try:
+        rel = p.resolve().relative_to(_root)
+    except Exception:
+        return True                     # root 밖 — 판단 불가면 넓게(조용한 0건 방지)
+    if {"node_modules", "__pycache__"} & set(rel.parts):
+        return False
+    cur = _root
+    for seg in rel.parts[:-1]:          # 파일명 제외한 디렉터리 성분만 훑는다
+        cur = cur / seg
+        if _is_foreign_dir(cur):
+            return False
+    return True

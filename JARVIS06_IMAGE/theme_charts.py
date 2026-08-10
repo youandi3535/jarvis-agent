@@ -1,6 +1,6 @@
 """JARVIS06_IMAGE/theme_charts.py — 테마주 차트·인포그래픽 생성 (collect_theme에서 이관)."""
 from __future__ import annotations
-import io, base64, os, logging
+import io, os, logging
 from pathlib import Path
 import matplotlib
 try:
@@ -15,19 +15,6 @@ import matplotlib.pyplot as plt
 from JARVIS06_IMAGE.style_engine import setup_chart_defaults, CHART_STYLE
 
 log = logging.getLogger("jarvis")
-
-
-def _j09_hist(ticker: str, period: str = "2d", interval: str = "1d"):
-    """시세 시계열 — JARVIS09 **정문** 경유 (2026-07-23).
-
-    ★ 지연 import 인 이유: 09 `collect_theme` 이 이 모듈을 *모듈 레벨* 로 import 한다
-      (09→06). 여기서 09 패키지를 모듈 레벨로 되받으면 부분 초기화 상태의 09 를
-      건드려 순환 import 로 죽는다. 호출 시점엔 09 초기화가 끝나 있으므로 안전.
-      (종전엔 `providers.economic_data_provider` 를 직수입해 이 문제를 피했는데,
-       그건 09 의 *내부 구현 계층* 을 밖에서 붙잡는 형태였다.)
-    """
-    from JARVIS09_COLLECTOR import get_ticker_history
-    return get_ticker_history(ticker, period=period, interval=interval)
 
 
 CHART_STORE: dict = {}
@@ -88,36 +75,141 @@ def set_font() -> None:
     setup_chart_defaults(_FONT_PATH)
 
 
-def fig_to_b64(fig) -> str:
-    setup_chart_defaults(_FONT_PATH)
+# ══════════════════════════════════════════════════════════════
+#  주가 차트 — ★ 픽셀을 낳는 유일한 반환 지점 (사용자 박제 2026-08-10)
+#
+#  왜 *한 벌* 만 남았는가 (①단일 진입점 · ③4조합 대칭):
+#    ┌ 2026-08-10 1차: `make_leader_price_chart_from_data`(수집 dataset) 와
+#    │ `make_leader_price_chart`(J09 시세를 이 파일이 직접 받아 조립) 가 *같은 일*
+#    │ (matplotlib 주가 PNG → 본문 이미지)을 **두 벌** 구현하고 있었다. 픽셀 반환만
+#    │ `_emit_price_chart` 로 모았을 뿐, 데이터 출처가 둘이라 사본은 그대로 남았다.
+#    └ 2026-08-10 2차: 뒤의 한 벌을 **삭제**했다. 이유는 게이트가 아니라 *구조* 다 —
+#      그 경로는 대조할 dataset 이 **원리적으로 존재하지 않는다**. 시세를 이 파일이
+#      받아 그리고, 그린 값을 그대로 "내가 그린 값이 맞다" 고 제출하는 자기증명이라
+#      `certify_image(code_drawn=True, datasets=None)` 의 `code_drawn:unaudited` 로
+#      빠져나갔다. 경제 인포그래픽은 전부 grounding 대조를 받는데 **테마 2조합의
+#      주가 차트만 무감사** 였던 ③원칙 비대칭이 바로 이 사본에서 나왔다.
+#      게이트를 하나 더 다는 것은 답이 아니다(사본이 남으면 언제든 출구가 된다).
+#    ★ 덤: 그 사본은 alt 티커 순회·5년 조회·기간 문자열 조립까지 J09
+#      `stocks_to_datasets` 의 대장주 이력 블록과 같은 일을 하고 있었다 —
+#      *수집 조립을 이미지 도메인이 한 벌 더* 갖고 있던 셈(CLAUDE.md 수집 단일 진입점).
+#      그리고 사본답게 한쪽만 어긋나 있었다: 같은 제목 템플릿을 쓰면서 변동률을
+#      전기간(`[-1]-[0]`)이 아니라 **전일 대비**(`[-1]-[-2]`)로 인쇄했다.
+#
+#  base64 인라인 분기 폐지: data URI 이미지는 *경로가 없어* provenance 등록도,
+#    prepublish_gate 의 경로 조회도 원리적으로 불가능하다 — 검증 밖으로 나가는 문이다.
+#    저장 경로를 안 받으면 이미지 도메인 기본 출력 폴더에서 *파생* 한다(②).
+# ══════════════════════════════════════════════════════════════
+
+
+def _default_price_path(name: str, tag: str) -> Path:
+    """저장 경로 미지정 시 이미지 도메인 출력 폴더에서 파생 (경로 리터럴 금지)."""
+    import hashlib
+    from JARVIS06_IMAGE.image_agent import OUTPUT_DIR
+    d = Path(OUTPUT_DIR) / "images" / "theme_price"
+    d.mkdir(parents=True, exist_ok=True)
+    h = hashlib.md5(f"{name}|{tag}".encode()).hexdigest()[:10]
+    return d / f"price_{h}.png"
+
+
+def _emit_price_chart(fig, *, name: str, alt: str, datasets: list,
+                      printed_rows: list, out_path=None,
+                      engine: str = "theme_price") -> str:
+    """완성된 figure → PNG 저장 → **대조 인증** → 본문 <img> 블록. 미인증이면 "".
+
+    ★ `datasets` 는 선택 인자가 아니다 (사용자 박제 2026-08-10 — ③원칙):
+      비어 있으면 `certify_image` 가 대조 없이 `code_drawn:unaudited` 로 통과시킨다.
+      그 통과는 "검증했다" 가 아니라 "검증할 것이 없었다" 는 뜻인데, 호출자는
+      `verified is True` 만 보므로 구분이 사라진다. 그래서 여기서 **먼저 막는다** —
+      대조군 없는 주가 차트는 만들지 않는다.
+    ★ `printed_rows` 는 *그림에 글자로 인쇄되는 수치 전부* 다. 꺾은선 점만 넘기면
+      제목의 현재가·변동률이 감사 밖에 남는다 — 2026-08-10 환율 사고(실제 -8.7% 를
+      +8.6% 로 인쇄)가 정확히 '인쇄되는 파생값' 계층에서 났다. 인쇄하는 함수
+      (`_price_title`)가 자기가 인쇄한 값을 돌려주게 해서 사본을 만들지 않는다(①).
+    ★ 실패를 삼키지 않는다: 등록 실패는 '검증 안 함' 과 같은 말이다 — 드러내고 버린다.
+    ★ <img> 마크업은 만들지 않고 `data_image_html` 에 위임한다 (①·표식 배선):
+      그 함수가 수치 이미지 표식(`DATA_IMAGE_ATTR`)을 붙이는 **단일 생산자** 다.
+    """
+    if not datasets:
+        log.error(f"[LeaderChart] {name} 대조군(datasets) 없음 → 차트 생성 안 함 "
+                  f"(무감사 통과 경로 폐쇄 — ADR 010: 거짓 차트 < 차트 없음)")
+        plt.close(fig)
+        return ''
+
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=CHART_STYLE["DPI"], bbox_inches='tight',
-                facecolor=fig.get_facecolor(), edgecolor='none')
+    plt.savefig(buf, format='png', dpi=140, bbox_inches='tight',
+                facecolor='#0d1117', edgecolor='none')
     plt.close(fig)
     buf.seek(0)
-    return base64.b64encode(buf.read()).decode('utf-8')
+    _p = Path(out_path) if out_path is not None else _default_price_path(name, alt)
+    _p.parent.mkdir(parents=True, exist_ok=True)
+    _p.write_bytes(buf.read())
+
+    try:
+        from JARVIS06_IMAGE.infographic_engine import emit_certified, data_image_html
+        # ★ 인증은 이미지 도메인 초크포인트 한 문으로만 (①): 종전엔 이 함수가
+        #   `certify_image` 를 직접 불러 *자기 인증* 을 한 벌 더 갖고 있었고, 그
+        #   한 벌만 datasets 를 안 넘겨 `code_drawn:unaudited` 로 통과했다.
+        got = emit_certified(_p, engine=engine,
+                             datasets=list(datasets),      # 대조군: J09 원본 dataset
+                             rows=list(printed_rows),      # 그림이 인쇄하는 수치 전부
+                             code_drawn=True)              # matplotlib PNG — LLM 글자 0
+    except Exception as e:
+        log.error(f"[LeaderChart] {name} 인증 실패 → 이미지 폐기: {e}")
+        _g_report("image", e, module=__name__, func_name="_emit_price_chart")
+        return ''
+    if not got:      # 미검증 사유는 초크포인트가 이미 로그에 남긴다
+        log.warning(f"[LeaderChart] {name} 검증 미통과 → 이미지 폐기")
+        return ''
+    return data_image_html(got, alt)
 
 
-def wrap_img(b64: str, alt: str, caption: str = '') -> str:
-    cap = (f'<p style="text-align:center;color:#888;font-size:12px;'
-           f'margin:6px 0 2px;font-style:italic;">{caption}</p>') if caption else ''
-    return (
-        f'<div style="background:white;border-radius:16px;padding:18px 18px 10px;'
-        f'margin:22px 0;box-shadow:0 3px 20px rgba(102,126,234,0.1);'
-        f'border:1px solid #e8ecf0;">'
-        f'<img src="data:image/png;base64,{b64}" '
-        f'style="width:100%;max-width:760px;display:block;margin:0 auto;border-radius:8px;" '
-        f'alt="{alt}"/>{cap}</div>'
-    )
+def _price_axes():
+    """주가 패널 공통 축 골격 — 스타일 사본 방지."""
+    fig, ax1 = plt.subplots(figsize=(10, 4.5), facecolor='#0d1117')
+    ax1.set_facecolor('#161b22')
+    ax1.set_ylabel('주가 (원)', color='#8b949e', fontsize=CHART_STYLE["FONT_PANEL_NOTE"])
+    ax1.tick_params(colors='#8b949e', labelsize=8)
+    for s in ax1.spines.values():
+        s.set_visible(False)
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{int(x):,}'))
+    ax1.grid(axis='y', color='#21262d', linewidth=0.7, zorder=1)
+    return fig, ax1
 
 
-def make_leader_price_chart_from_data(rows: list, name: str, period: str = "", out_path=None) -> str:
-    """JARVIS09 분기별 주가 이력 rows → 주가 차트 HTML.
+def _price_title(ax1, name: str, last: float, period_label: str, chg: float) -> list[dict]:
+    """제목·변동률 배지를 인쇄하고 **인쇄한 수치를 돌려준다**.
 
-    rows: [{"label": "2021.Q1", "value": 80000}, ...] (stocks_to_datasets 출력)
-    실데이터 없으면 '' (ADR 010). draft_processor._inject_leader_price_charts 주 경로.
+    ★ 반환이 인증 재료다 (사용자 박제 2026-08-10): '무엇을 인쇄했는가' 를 인쇄하는
+      곳에서만 파생한다. 호출자가 따로 목록을 만들면 그것이 사본이고, 사본은
+      제목 포맷이 바뀔 때 한쪽만 고쳐져 감사 밖 수치를 남긴다.
     """
-    if not rows or len(rows) < 4:
+    title_str = f'{name}   ₩{last:,.0f}'
+    if period_label:
+        title_str += f'   [{period_label}]'
+    ax1.set_title(title_str, color='#e6edf3',
+                  fontsize=CHART_STYLE["FONT_LABEL"],
+                  fontweight='bold', pad=12, loc='left', x=0.02)
+    ax1.annotate(f'{"+" if chg >= 0 else ""}{chg:.1f}%',
+                 xy=(0.98, 0.90), xycoords='axes fraction',
+                 color='#00d4aa' if chg >= 0 else '#ff6b6b',
+                 fontsize=CHART_STYLE["FONT_PANEL_ACCENT"], fontweight='bold', ha='right')
+    return [{"label": f"{name} 현재가", "value": float(last), "unit": "원"},
+            {"label": f"{name} 변동률", "value": float(chg), "unit": "%"}]
+
+
+def make_leader_price_chart(ds: dict, out_path=None) -> str:
+    """대장주·부대장주 주가 이력 dataset → **인증된** 주가 차트 HTML. 실패 시 ''.
+
+    입력은 JARVIS09 `stocks_to_datasets` 가 출처(provenance)까지 박아 낸
+    `viz_hint="stock_price"` dataset 한 건 — 이 파일은 수집하지 않는다(CLAUDE.md
+    수집 단일 진입점). 그 dataset 이 그대로 **대조군** 이 되므로, 그리면서 생긴
+    수치(현재가·변동률)가 원본에서 파생되지 않으면 이미지가 폐기된다.
+    """
+    rows = list((ds or {}).get("data") or [])
+    name = str((ds or {}).get("name") or (ds or {}).get("title") or "")
+    period = str((ds or {}).get("period") or "")
+    if len(rows) < 4:
         return ''
     try:
         import pandas as pd
@@ -129,184 +221,30 @@ def make_leader_price_chart_from_data(rows: list, name: str, period: str = "", o
             [f"{lb.replace('.', '-')}-01" for lb in labels], errors="coerce"
         )
 
-        is_up = values[-1] >= values[0]
-        color = '#00d4aa' if is_up else '#ff6b6b'
-        period_label = f"최근 {period}" if period else ""
-
-        fig, ax1 = plt.subplots(figsize=(10, 4.5), facecolor='#0d1117')
-        ax1.set_facecolor('#161b22')
+        color = '#00d4aa' if values[-1] >= values[0] else '#ff6b6b'
+        fig, ax1 = _price_axes()
         ax1.plot(dates, values, color=color, linewidth=2.2, marker='o',
                  markersize=4, zorder=3)
         ax1.fill_between(dates, values, min(values) * 0.99,
                          alpha=0.18, color=color, zorder=2)
-        ax1.set_ylabel('주가 (원)', color='#8b949e', fontsize=9)
-        ax1.tick_params(colors='#8b949e', labelsize=8)
-        for s in ax1.spines.values():
-            s.set_visible(False)
-        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{int(x):,}'))
-        ax1.grid(axis='y', color='#21262d', linewidth=0.7, zorder=1)
 
         chg = (values[-1] - values[0]) / values[0] * 100 if values[0] else 0
-        title_str = f'{name}   ₩{values[-1]:,.0f}'
-        if period_label:
-            title_str += f'   [{period_label}]'
-        ax1.set_title(title_str, color='#e6edf3',
-                      fontsize=CHART_STYLE["FONT_LABEL"],
-                      fontweight='bold', pad=12, loc='left', x=0.02)
-        ax1.annotate(f'{"+" if chg >= 0 else ""}{chg:.1f}%',
-                     xy=(0.98, 0.90), xycoords='axes fraction',
-                     color='#00d4aa' if chg >= 0 else '#ff6b6b',
-                     fontsize=11, fontweight='bold', ha='right')
+        printed = _price_title(ax1, name, values[-1],
+                               f"최근 {period}" if period else "", chg)
 
         step = max(len(dates) // 6, 1)
         ax1.set_xticks(dates[::step])
-        ax1.set_xticklabels(
-            [lb[:4] + "년" for lb in labels[::step]],
-            color='#8b949e', fontsize=7, rotation=0,
-        )
+        ax1.set_xticklabels([lb[:4] + "년" for lb in labels[::step]],
+                            color='#8b949e', fontsize=CHART_STYLE["FONT_PANEL_MICRO_SM"], rotation=0)
         fig.tight_layout(pad=1.2)
 
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=140, bbox_inches='tight',
-                    facecolor='#0d1117', edgecolor='none')
-        plt.close(fig)
-        buf.seek(0)
-        png_bytes = buf.read()
-
-        if out_path is not None:
-            _p = Path(out_path)
-            _p.parent.mkdir(parents=True, exist_ok=True)
-            _p.write_bytes(png_bytes)
-            return (
-                f'<figure><img src="{_p}" '
-                f'style="width:100%;max-width:760px;display:block;margin:0 auto;border-radius:8px;" '
-                f'alt="{name} 주가 흐름"/>'
-                f'<figcaption>{name} 주가 흐름</figcaption></figure>'
-            )
-
-        b64 = base64.b64encode(png_bytes).decode('utf-8')
-        return (
-            f'<div style="background:linear-gradient(135deg,#0d1117,#161b22);'
-            f'padding:20px;border-radius:16px;border:1px solid #30363d;'
-            f'margin:20px 0;box-shadow:0 4px 24px rgba(0,0,0,0.4);">'
-            f'<img src="data:image/png;base64,{b64}" '
-            f'style="width:100%;max-width:760px;display:block;margin:0 auto;border-radius:8px;" '
-            f'alt="{name} 주가 흐름"/></div>'
-        )
-    except Exception as e:
-        log.error(f"[LeaderChartData] {name} 오류: {e}")
-        _g_report("image", e, module=__name__)
-        return ''
-
-
-def make_leader_price_chart(yf_ticker: str, name: str, out_path=None) -> str:
-    """대장주·부대장주 전용 주가 차트 HTML (최대 5년, 있는 만큼 사용).
-
-    직접 HTML 반환 (CHART_STORE 미사용). 실데이터 없으면 '' (ADR 010).
-    수집 데이터 없을 때의 폴백 경로 — 주 경로는 make_leader_price_chart_from_data().
-    """
-    alt_tickers = [yf_ticker]
-    if yf_ticker.endswith('.KQ'):
-        alt_tickers += [yf_ticker.replace('.KQ', '.KS'), yf_ticker.split('.')[0]]
-    elif yf_ticker.endswith('.KS'):
-        alt_tickers += [yf_ticker.replace('.KS', '.KQ'), yf_ticker.split('.')[0]]
-
-    import pandas as pd
-    df = pd.DataFrame()
-    for ticker in alt_tickers:
-        df = _j09_hist(ticker, period="5y")
-        if not df.empty and len(df) >= 6:
-            break
-
-    if df.empty:
-        log.warning(f"[LeaderChart] {name}: 주가 데이터 없음 ({yf_ticker})")
-        return ''
-
-    try:
-        setup_chart_defaults(_FONT_PATH)
-
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 5),
-                                        gridspec_kw={'height_ratios': [3, 1]},
-                                        facecolor='#0d1117')
-        fig.subplots_adjust(hspace=0.04)
-        close, volume, dates = df['Close'], df['Volume'], df.index
-
-        color = '#00d4aa' if close.iloc[-1] >= close.iloc[0] else '#ff6b6b'
-
-        ax1.set_facecolor('#161b22')
-        ax1.plot(dates, close, color=color, linewidth=2.0, zorder=3)
-        ax1.fill_between(dates, close, close.min() * 0.99, alpha=0.18, color=color, zorder=2)
-        ax1.set_ylabel('주가 (원)', color='#8b949e', fontsize=9)
-        ax1.tick_params(colors='#8b949e', labelsize=8)
-        for s in ax1.spines.values():
-            s.set_visible(False)
-        ax1.set_xticklabels([])
-        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{int(x):,}'))
-        ax1.grid(axis='y', color='#21262d', linewidth=0.7, zorder=1)
-
-        current = close.iloc[-1]
-        chg = (close.iloc[-1] - close.iloc[-2]) / close.iloc[-2] * 100 if len(close) > 1 else 0
-        n_months = max(round((dates[-1] - dates[0]).days / 30), 1)
-        n_years, n_rem = divmod(n_months, 12)
-        if n_years >= 1 and n_rem > 0:
-            period_label = f"최근 {n_years}년 {n_rem}개월"
-        elif n_years >= 1:
-            period_label = f"최근 {n_years}년"
-        else:
-            period_label = f"최근 {n_months}개월"
-
-        ax1.set_title(f'{name}   ₩{current:,.0f}   [{period_label}]',
-                      color='#e6edf3',
-                      fontsize=CHART_STYLE["FONT_LABEL"],
-                      fontweight='bold', pad=12, loc='left', x=0.02)
-        ax1.annotate(f'{"+" if chg >= 0 else ""}{chg:.2f}%',
-                     xy=(0.98, 0.90), xycoords='axes fraction',
-                     color='#00d4aa' if chg >= 0 else '#ff6b6b',
-                     fontsize=11, fontweight='bold', ha='right')
-
-        ax2.set_facecolor('#161b22')
-        vcols = ['#00d4aa' if c >= o else '#ff6b6b'
-                 for c, o in zip(df['Close'], df['Open'])]
-        ax2.bar(dates, volume, color=vcols, width=0.8, alpha=0.8)
-        ax2.set_ylabel('거래량', color='#8b949e', fontsize=8)
-        ax2.tick_params(colors='#8b949e', labelsize=7)
-        for s in ax2.spines.values():
-            s.set_visible(False)
-        ax2.grid(axis='y', color='#21262d', linewidth=0.5)
-
-        step = max(len(dates) // 5, 1)
-        date_fmt = '%Y' if n_years >= 1 else '%Y/%m'
-        ax2.set_xticks(dates[::step])
-        ax2.set_xticklabels([d.strftime(date_fmt) for d in dates[::step]],
-                            color='#8b949e', fontsize=7)
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=140, bbox_inches='tight',
-                    facecolor='#0d1117', edgecolor='none')
-        plt.close(fig)
-        buf.seek(0)
-        png_bytes = buf.read()
-
-        if out_path is not None:
-            _p = Path(out_path)
-            _p.parent.mkdir(parents=True, exist_ok=True)
-            _p.write_bytes(png_bytes)
-            return (
-                f'<figure><img src="{_p}" '
-                f'style="width:100%;max-width:760px;display:block;margin:0 auto;border-radius:8px;" '
-                f'alt="{name} 주가차트 ({period_label})"/>'
-                f'<figcaption>{name} 주가차트 ({period_label})</figcaption></figure>'
-            )
-
-        b64 = base64.b64encode(png_bytes).decode('utf-8')
-        return (
-            f'<div style="background:linear-gradient(135deg,#0d1117,#161b22);'
-            f'padding:20px;border-radius:16px;border:1px solid #30363d;'
-            f'margin:20px 0;box-shadow:0 4px 24px rgba(0,0,0,0.4);">'
-            f'<img src="data:image/png;base64,{b64}" '
-            f'style="width:100%;max-width:760px;display:block;margin:0 auto;border-radius:8px;" '
-            f'alt="{name} 주가차트 ({period_label})"/></div>'
-        )
+        _alt = f"{name} 주가 {('최근 ' + period) if period else ''}".strip()
+        # 인증 재료 = 꺾은선이 찍는 점 + 제목이 인쇄한 파생값 (그림에 글자로 나가는 전부)
+        _series = [{"label": str(lb), "value": float(v), "unit": "원"}
+                   for lb, v in zip(labels, values)]
+        return _emit_price_chart(fig, name=name, alt=_alt,
+                                 datasets=[ds], printed_rows=_series + printed,
+                                 out_path=out_path)
     except Exception as e:
         log.error(f"[LeaderChart] {name} 오류: {e}")
         _g_report("image", e, module=__name__)
@@ -314,6 +252,5 @@ def make_leader_price_chart(yf_ticker: str, name: str, out_path=None) -> str:
 
 
 __all__ = [
-    "_cap", "set_font", "fig_to_b64", "wrap_img", "CHART_STORE",
-    "make_leader_price_chart", "make_leader_price_chart_from_data",
+    "_cap", "set_font", "CHART_STORE", "make_leader_price_chart",
 ]

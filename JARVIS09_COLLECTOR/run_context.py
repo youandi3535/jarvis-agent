@@ -8,9 +8,8 @@ new_run() 이 하는 일:
   1. RunContext 인스턴스 생성 (theme, run_id, 빈 dict들)
   2. collect_theme.INFOG_STORE    → ctx.infog_store 로 모듈 속성 교체
   3. collect_theme.COLLECTED_DATA → ctx.collected_data 로 교체
-  4. collect_theme.CHART_STORE    → ctx.chart_store 로 교체
-  5. theme_charts.CHART_STORE     → ctx.chart_store 로 교체
-  6. _active_ctx 모듈 전역 교체  → 이후 호출자가 run_id 조회 가능
+  4. theme_charts.CHART_STORE     → ctx.chart_store 로 교체 (차트 저장소의 주인은 06)
+  5. _active_ctx 모듈 전역 교체  → 이후 호출자가 run_id 조회 가능
 
 이미지 출력 폴더는 기존 4개 고정 폴더를 그대로 사용:
   JARVIS06_IMAGE/output/images/economic_naver/
@@ -84,7 +83,10 @@ def _rebind_globals(ctx: RunContext) -> None:
         import JARVIS09_COLLECTOR.collect_theme as _ct
         _ct.INFOG_STORE    = ctx.infog_store
         _ct.COLLECTED_DATA = ctx.collected_data
-        _ct.CHART_STORE    = ctx.chart_store
+        # ★ collect_theme.CHART_STORE 는 교체하지 않는다 (2026-08-10 사본 삭제):
+        #   그 이름은 theme_charts.CHART_STORE 의 *별칭* 일 뿐 읽는 코드가 0곳이었다.
+        #   저장소의 주인은 아래 JARVIS06 한 곳 — 별칭을 함께 갈아 끼우면 '두 개를 맞춰야
+        #   하는 상태' 가 생기고, 한쪽만 갈리는 날 조용히 이전 글의 차트가 새어 나온다.
     except Exception:
         pass
 

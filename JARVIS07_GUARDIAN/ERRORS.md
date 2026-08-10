@@ -12858,7 +12858,8 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
      이 사고 자체가 그 결과였다(2026-07-06 수정이 한쪽에만 걸린 것).
 - **해결 (3원칙 · 상세 결정 근거는 [ADR 018](../docs/decisions/018-image-factuality-single-chokepoint.md))**:
   - **① 단일 진입점** — `infographic_engine._emit` **단일 출구**. `generate_infographic` 의 반환은
-    `return ""` 과 `return _emit(...)` 두 꼴뿐이다. 픽셀을 낳는 모든 경로가 `certify_image` 를
+    `return ""` 과 `return _ladder_emit(...)`(→ `_emit`) 두 꼴뿐이다(실측: 함수 내 return 2개).
+    픽셀을 낳는 모든 경로가 `certify_image` 를
     지나 검증 + provenance 등록을 받고, **미검증이면 이미지를 폐기**한다.
     provenance 레지스트리 쓰기는 `certify_image` **단독**. 조립 사본 3벌·`_dg_allowed`·
     `_dg_verify_html`·`_verify_dataset`·`_src_label` 표를 **shim 없이 삭제**(총 -5,475줄, 3파일 물리 삭제).
@@ -12932,3 +12933,74 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
   자라다가, launch 경로 전환 시 "얼어붙은 채 관측창 안에 남는" 방식으로 전혀 다른 하위계(캐치
   경로 스모크)를 오탐시킨다. 두 launch 스크립트가 같은 결정(stdout 목적지)을 각자 내리게
   두지 말 것 — 하나가 진실이면 나머지는 그것을 따르거나, 최소한 같은 값을 내야 한다.
+
+## [616] ✅ 해결 — D19 렌더 편입 게이트가 잡은 seed-layout 3종(big-number-hero·magazine-feature·dashboard-grid) 고정 표시문구 잔존분 검증·마감 (2026-08-10)
+- 증상: 리페어 큐가 `source=image, module=JARVIS06_IMAGE.pro_templates, func_name=_style_pool,
+  ValueError: 레이아웃 'big-number-hero' 고정 표시문구 ['핵심 지표 · KEY METRIC', '보조 지표',
+  'Supporting Data']`(id=5724, seen_count=8)를 리페어 대상으로 호출. 같은 소스·함수의 형제
+  레코드로 `magazine-feature`(id=5723, `['핵심 지표','데이터 리포트']`)·`dashboard-grid`
+  (id=5722, `['데이터 그리드']`)도 대기 중이었다.
+- 원인: `[615]`(D19) 작업 당시 `design_recipes.json` 의 `source:"seed-layout"` 항목 3종이
+  `_validate_recipe` 게이트를 거친 적 없이 직접 커밋돼 템플릿에 고정 한국어/영어 라벨이
+  박혀 있었다. `_style_pool()`(렌더 편입 직전 2차 게이트)이 이를 감지해 풀에서 제외하고
+  `_g_report` 로 보고하는데, 원본 JSON 이 고쳐지지 않는 한 매 렌더 호출마다 동일 보고가
+  반복된다(감지·격리는 됐지만 근본 오염은 남아 재보고만 계속되는 상태).
+- 헛다리: 없음 — 조사 결과 `design_recipes.json` working tree 는 이미 3종 전부 고정 문구가
+  빈 슬롯(`<span>...</span>` 텍스트 제거)으로 교체돼 있었다(같은 파일 내 다른 seed-layout
+  템플릿과 동일한 "빈 라벨" 패턴). git 미커밋 상태였을 뿐 코드 수정은 불필요했다.
+- 해결: 코드 변경 0건. `git show HEAD:...design_recipes.json` 대조로 각 3종의 고정 문구가
+  현재 working tree 에서 실제로 제거됐음을 확인 → `_style_pool()` 을 `_g_report` 를 스텁으로
+  바꿔 직접 실행, 보고 0건·풀 20개 정상 편입 확인 → `error_log` id 5722/5723/5724 를
+  `mark_error_status(..., "fixed", resolution=...)` 로 반영.
+- 파일: JARVIS06_IMAGE/design_recipes.json (검증만, 코드 변경 없음)
+- 교훈: `_style_pool` 의 재보고는 *탐지가 살아있다는 신호*이지 *미해결의 증거*가 아니다 —
+  같은 오류가 반복 보고되면 먼저 현재 데이터 상태부터 확인할 것(수정이 이미 커밋 전 단계에
+  들어와 있을 수 있다). `git diff`/`git show HEAD:<path>` 대조가 "이미 고쳐졌는지"를 가장
+  빨리 답한다.
+
+## [617] 🔍 조사완료(결함아님) — [616] 후속: `id=5722`(dashboard-grid) 리페어 큐 재호출, 동일 결론 재확인 (2026-08-10)
+- 증상: 별도 리페어 세션이 `error_log` id=5722(`source=image, module=JARVIS06_IMAGE.pro_templates,
+  func_name=_style_pool, ValueError: 레이아웃 'dashboard-grid' 고정 표시문구 ['데이터 그리드']`)를
+  대상으로 다시 호출됨. [616]과 병행/직후 시점이라 조사 착수 시점엔 `error_log` 세 건
+  (5722/5723/5724) 이 이미 `status='fixed'` 로 반영돼 있었다.
+- 원인: [616]과 동일 — `design_recipes.json` working tree(미커밋)에 3종(`dashboard-grid`·
+  `magazine-feature`·`big-number-hero`) 고정 표시문구가 이미 제거돼 있었다. 두 리페어
+  세션이 같은 3건을 각각 다른 id 를 타깃으로 배정받아 독립적으로 같은 결론에 도달한 것.
+- 헛다리: 없음.
+- 해결: 코드 변경 0건 (독립 재검증만) — `JARVIS06_IMAGE.template_engine.template_literals()` 로
+  전체 35개 recipe + `layout_library.LAYOUTS` 10종 재스캔(위반 0건), `pro_templates._style_pool()`
+  을 `_g_report` 스텁으로 실행해 보고 0건·풀 20개 정상 편입 재확인. `mark_error_status`로
+  resolution 문구를 갱신(상태는 이미 `fixed`).
+- 파일: JARVIS06_IMAGE/design_recipes.json (검증만, 코드 변경 없음)
+- 교훈: 리페어 큐가 같은 근본원인의 형제 `error_id` 를 서로 다른 세션에 병렬 배정할 수 있다.
+  착수 전 `error_log.status`/`resolution` 을 먼저 조회하면 중복 조사를 빠르게 스킵할 수 있다.
+
+## [618] 🔍 조사완료(결함아님) — [616][617] 후속: `id=5722` 를 Tier-2 자동 코드패치가 재시도하며 루프 소모, `wontfix` 로 종결 (2026-08-10)
+- 증상: 세 번째 리페어 세션이 동일 `error_log` id=5722(`source=image, module=JARVIS06_IMAGE.pro_templates,
+  func_name=_style_pool, ValueError: 레이아웃 'dashboard-grid' 고정 표시문구 ['데이터 그리드']`)를
+  대상으로 다시 호출됨. 착수 시점 DB 상태는 `status='analyzing'`, `resolution='Tier-2 수정
+  실패/롤백 — 재시도 대기 (1/3)'`, `llm_attempts=3` — [617]이 남긴 "이미 fixed" 결론과 어긋났다.
+- 원인: `mark_error_status()`(`shared/db.py`)는 `status="fixed"` 로 쓸 때만 `resolution` 을
+  `COALESCE(NULLIF(...))`(최초 사유 보존)로 넣고, 그 외 상태는 **항상 최신 사유로 덮어쓴다**
+  (`guardian_agent.py` 주석 그대로 — "재시도 이력에서 중요한 건 지금 왜 이 상태인가"). 그런데
+  이 error_id 를 `run_auto_repair_targeted`(Tier-2 SDK 코드패치 경로, `guardian_agent.py:502`)가
+  **독립적으로 병행 재처리**하고 있었다 — 이 경로는 "코드를 고쳐라"는 전제로 동작하는데
+  실제로는 고칠 코드가 없는(데이터 전용) 사고라 SDK 패치가 재현검증을 통과 못 하고 롤백,
+  `mark_error_status(id, "new", "Tier-2 수정 실패/롤백...")` 를 반복 호출해 [616][617]이
+  써둔 `fixed` 사유를 덮어쓰고 `status` 를 되돌렸다. `fixed_at` 컬럼은 `status=="fixed"` 분기
+  에서만 갱신되므로 옛 `fixed_at` 값이 새 `resolution` 문구와 뒤섞여 남아 조사자를 혼란시켰다.
+- 헛다리: 없음 — [616][617]과 동일하게 `design_recipes.json` working tree(미커밋)를 다시
+  대조해 고정문구 부재를 재확인. 코드에 실제 결함은 처음부터 없었다.
+- 해결: 코드 변경 0건. `template_literals()` 로 35개 recipe + `layout_library.LAYOUTS` 10종
+  재스캔(위반 0건) + `pro_templates._style_pool()` 실사 실행(보고 0건·pool 20개 정상 편입,
+  `dashboard-grid` 포함) 재확인 → `llm_attempts` 가 이미 상한(`MAX_LLM_ATTEMPTS=3`,
+  `architecture.py`)에 도달해 있어 `mark_error_status(5722, "wontfix", ...)` 로 직접 종결
+  (다음 Tier-2 실패를 기다리지 않고 확정 — `guardian_agent.py` 의 상한 도달 시 `wontfix` 분기와
+  동일 결론을 선제 적용).
+- 파일: JARVIS06_IMAGE/design_recipes.json (검증만, 코드 변경 없음)
+- 교훈: **투자·판정 경로가 다른 두 시스템이 같은 error_id 를 각자 옳다고 믿으며 왕복 덮어쓸 수
+  있다** — 사람/조사형 리페어(투자 결과: `fixed`/`wontfix`, 데이터 정합성 확인)와 Tier-2 SDK
+  자동 코드패치(투자 결과: "코드 diff 가 있어야 성공") 는 성공 기준 자체가 다르다. *데이터 전용*
+  사고에 Tier-2 코드패치를 계속 태우면 `llm_attempts` 만 소모하고 `resolution` 만 왕복 덮어써진다.
+  같은 사고가 또 재현되면 이번엔 `error_log.llm_attempts` 를 먼저 확인해 상한 도달 여부로
+  "자동 재시도가 무의미한 상태" 인지부터 판별할 것.

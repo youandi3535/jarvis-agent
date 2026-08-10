@@ -30,13 +30,10 @@ from typing import Optional
 from JARVIS07_GUARDIAN.json_store import write_json
 
 
-def _max_attempts() -> int:
-    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
-    try:
-        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
-        return max(1, int(DEFAULT_MAX_ATTEMPTS))
-    except Exception:
-        return 2
+# 재시도 상한 — 파생 leaf 하나(`shared/limits.py`)에서 받는다.
+#   ★ 여기에 accessor 를 다시 정의하지 말 것: 사본이 늘면 폴백 하나만 어긋나도
+#     경로마다 재시도 횟수가 갈린다(①단일 진입점 · CLAUDE.md 재시도 상한 SSOT).
+from shared.limits import max_attempts as _max_attempts
 
 log = logging.getLogger("jarvis")
 

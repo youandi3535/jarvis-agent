@@ -68,6 +68,7 @@ def _fingerprint(title: str, unit: str) -> str:
 
 def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
     """dataset dict 생성. data 가 비거나 값이 부족하면 None."""
+    from JARVIS09_COLLECTOR.models import ROW_META as _ROW_META
     rows, _seen = [], set()
     for d in data or []:
         try:
@@ -79,12 +80,29 @@ def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
             if v == 0:  # ★ 0값 제외 (viz_hint 무관) — 0개 항목은 데이터 없음·비교 불가
                 continue
             _seen.add(label)
-            rows.append({"label": label, "value": v})
+            # ★ 행 메타(출처·기준일·성격)를 *재구성 때 떨어뜨리지 않는다* (2026-08-10).
+            #   여기서 새 dict 를 만들며 {label,value} 만 남기면, 상류가 실어 보낸
+            #   행별 진실이 이 한 줄에서 소멸한다 — D01 이 정확히 그 형태였다.
+            _meta = {k: d[k] for k in _ROW_META if isinstance(d, dict) and k in d}
+            rows.append({**_meta, "label": label, "value": v})
     # ★ bar_chart: 합계 행과 세부 항목이 섞이면 합계 행 제거 (LLM·KOSIS 양 경로 공통)
     # "전체/계/합계" 라벨은 개별 항목들의 집계이므로 동일 차트에 놓으면 비교 왜곡.
+    totals = None
     if viz_hint == "bar_chart" and len(rows) > 2:
+        cand_total = [r for r in rows if r["label"] in _DEMO_TOTAL]
         non_total = [r for r in rows if r["label"] not in _DEMO_TOTAL]
         if len(non_total) >= 2:
+            # ★ 버리는 대신 '공표 합계' 로 옮겨 담는다 (사용자 박제 2026-08-10).
+            #   가산성의 *유일한 적극 증거* 다 — "출처 자신이 이 부분들의 합을 공표했다".
+            #   ★ 어휘로 고르지 않는다: _DEMO_TOTAL 에는 '평균' 처럼 합이 아닌 라벨도 있다.
+            #     후보가 실제로 부분들의 합과 같은지 *값으로* 확인한다(꼴 판정, ②동적설계).
+            from JARVIS09_COLLECTOR.models import grounds as _grounds
+            _part_sum = sum(r["value"] for r in non_total)
+            for r in cand_total:
+                if _grounds(r["value"], _part_sum):
+                    totals = {"value": r["value"], "label": r["label"],
+                              "source": r.get("source") or source}
+                    break
             rows = non_total
     # 차트 의미 최소 기준: kpi 1개, 그 외 2개
     _min = 1 if viz_hint == "kpi_cards" else 2
@@ -97,7 +115,7 @@ def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
     _pt_bar = int(_os_pt.getenv("CHART_MAX_POINTS_BAR", "20") or "20")
     rows = rows[:_pt_line] if viz_hint == "line_chart" else rows[:_pt_bar]
     _title = str(title).split("(")[0].split("（")[0].strip() or str(title).strip()   # 제목 괄호 설명 제거
-    return {
+    ds = {
         "title": _title[:30],
         "viz_hint": viz_hint,
         "unit": unit.strip(),
@@ -105,6 +123,9 @@ def _mk_dataset(title, viz_hint, unit, data, source) -> dict | None:
         "source": source,
         "fingerprint": _fingerprint(title, unit),
     }
+    if totals is not None:
+        ds["totals"] = totals      # 공표 합계 — 합계 표시·grounding 의 유일한 근거
+    return ds
 
 
 # ── 0. 코스닥 150 섹터 지수 dataset (ERRORS [420]) ───────────────────────────
@@ -590,10 +611,14 @@ _DEMO_TOTAL = {"전체", "계", "합계", "소계", "총계", "전국", "평균"
 
 
 def _clean_label(lab: str) -> str:
-    """차트 라벨 정리 — 괄호 설명 제거 + 길이 제한 (짤림·장황함 방지)."""
+    """차트 라벨 정리 — 괄호 설명 제거 + 길이 제한 (짤림·장황함 방지).
+
+    ★ 길이 상한은 models.AXIS_LABEL_MAX 파생 (2026-08-10) — evidence_pack 도 같은 축에
+      라벨을 얹으므로 두 생산자가 각자 숫자를 들고 있으면 한쪽만 잘린다."""
+    from JARVIS09_COLLECTOR.models import AXIS_LABEL_MAX as _LBL_MAX
     lab = re.sub(r"\s*[(（][^)）]*[)）]", "", str(lab or "")).strip()
     lab = re.sub(r"\s+", " ", lab)
-    return lab[:22]
+    return lab[:_LBL_MAX]
 
 
 def _is_period(s: str) -> bool:

@@ -11,12 +11,16 @@ matplotlib보다 압도적 장점:
 - 픽토그램·아이소타입 아이콘 (Unicode)
 - 그라디언트·그림자 완벽 지원
 
-공개 API:
-    generate_html_infographic(theme, purpose, data, run_id, slot_key) → str  # <img> 태그
+★ 공개 API 는 없다 — 이 모듈은 `_html_to_jpg` 하나짜리 렌더 백엔드다 (2026-08-10).
+  docstring 이 광고하던 `generate_html_infographic` 은 **코드에 존재하지 않았다**
+  (실측 히트 = 이 문장 1건). 설계서(`_PROMPT_TEMPLATE`)와 팔레트 시드
+  (`_PALETTE_SEEDS`) 도 그 함수와 함께 죽어 참조 0인 채 남아 있었다 — 문서·상수가
+  코드보다 오래 살아남으면 다음 작업자가 없는 기능을 있다고 믿는다. 함께 삭제.
+
+  HTML 저작은 `infographic_engine` 이 하고, 여기는 그 HTML 을 픽셀로 만든다.
+  소비자: infographic_engine · pro_templates · design_learner.
 """
 from __future__ import annotations
-import base64
-import hashlib
 import logging
 import os
 import tempfile
@@ -35,77 +39,12 @@ _RENDER_HARD_TIMEOUT_SEC = 120.0    # 단일 차트 렌더 하드 상한(종전 
 _RENDER_GOTO_TIMEOUT_MS = 15000     # goto/폰트 대기 바운드 — 원격폰트 네트워크 열화 시 무한 블로킹 차단
 
 
-def _max_attempts() -> int:
-    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
-    try:
-        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
-        return max(1, int(DEFAULT_MAX_ATTEMPTS))
-    except Exception:
-        return 2
-
 log = logging.getLogger("jarvis")
 
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
 except ImportError:
     def _g_report(*a, **kw): pass
-
-
-# ══════════════════════════════════════════════════════════════════
-#  1. 동적 HSL 팔레트
-# ══════════════════════════════════════════════════════════════════
-
-_PALETTE_SEEDS = [
-    (210, 70, 35), (200, 65, 38), (230, 60, 40), (170, 58, 35),
-    (25,  72, 40), (280, 55, 38), (345, 65, 38), (145, 60, 35),
-]
-
-
-# ══════════════════════════════════════════════════════════════════
-#  2. 데이터 포매터
-# ══════════════════════════════════════════════════════════════════
-
-
-# ══════════════════════════════════════════════════════════════════
-#  3. 프롬프트 — Python 코드로 HTML 문자열 반환
-# ══════════════════════════════════════════════════════════════════
-
-_PROMPT_TEMPLATE = """\
-당신은 통계청·기업 연차보고서급 편집 인포그래픽 디자이너입니다.
-아래 실데이터로 **완전한 HTML 문서 하나**를 ```html 코드블록으로 직접 출력하세요.
-
-테마: {theme} / 목적: {purpose}
-기본색 HSL({H},{S}%,{L}%) · 강조색 HSL({H2},{S2}%,{L2}%)
-
-[실데이터 — 이 수치만 사용. 지어내기·빈차트·"데이터없음" 절대 금지. 없는 항목은 생략]
-{data_str}
-
-[형식] ★ 방향은 내용에 맞게 *직접 선택* — **기본은 가로형(landscape)**, 항목·패널이 많으면
- 세로형(portrait)도 가능. 고정하지 말 것. body 에 디자인 의도에 맞는 *고정 폭* 지정
- (가로형 1120~1280px·높이는 폭보다 작게 / 세로형 760~880px·높이는 폭보다 크게).
- - 상단: 그라디언트 헤더(제목+부제+날짜 배지).
- - KPI 카드 행: 아이콘+큰 숫자+증감 pill(▲빨강/▼파랑)+미니 스파크라인.
- - 메인: 카드 여러 개를 가로형이면 *가로로*, 세로형이면 *세로로* 배치. 빈 공간 없이 균형.
-
-[차트 어휘 — 데이터 성격에 맞게 *매번 다르게* 골라 조합]
- 그라디언트 세로/가로 막대 · 그룹막대 · SVG 꺾은선(그리드라인+면적 그라디언트) ·
- 도넛/파이+레전드 · 원형 진행 게이지 · 픽토그램(이모지 반복) · STEP 화살표 프로세스 ·
- A vs B 비교 막대 · 랭킹 가로막대 · 마일스톤 타임라인.
- → **모든 막대·점·게이지에 데이터 값 라벨 필수.** 라벨이 패널 밖으로 나가지 않게(양끝은 안쪽 정렬).
-
-[품질] SVG defs linearGradient 채움, 둥근 카드(radius 14~18, box-shadow), 통일 팔레트,
- 마지막/최신 값만 강조색, 캡션 1줄, 풍부한 이모지 아이콘. Noto Sans KR
- (@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;800;900&display=swap')).
- 최소 글자 12px. 외부 이미지 src 없음(SVG·이모지만). JavaScript 없음.
-
-[다양성] ★ 매번 *다른 레이아웃·색조합·차트종류·배치*. 고정 템플릿 재사용 금지.
-
-설명·주석 없이 ```html 블록 *하나만* 출력하세요:
-"""
-
-
-# (4. 안전 exec 게이트 제거 — LLM 이 HTML 을 직접 반환하도록 변경되며 exec 경로 폐지,
-#  _FORBIDDEN·_SAFE_BUILTINS·_is_safe·_strip_imports 호출 0: 전수감사 DELETE[16])
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -226,8 +165,4 @@ def _html_to_jpg(html_str: str, out_path: Path, width: int = 980) -> bool:
         return False
 
 
-# ══════════════════════════════════════════════════════════════════
-#  6. 공개 API
-# ══════════════════════════════════════════════════════════════════
-
-__all__: list[str] = []
+__all__: list[str] = []   # 공개 API 없음 — 소비자는 `_html_to_jpg` 를 직접 가져간다

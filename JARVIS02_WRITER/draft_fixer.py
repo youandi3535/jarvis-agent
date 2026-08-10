@@ -13,7 +13,6 @@
   ✅ 헌법 종합 위반 (제3·9조)   → enforce_supreme_law 재실행
   ✅ 연속 빈 p / 연속 br        → _compress_excessive_whitespace (full_html + blocks)
   ✅ 분량 상한 초과              → 말미 <p> 블록 순차 제거 (문장수 상한 내로)
-  ✅ 이미지 최소 미달 (제8조)    → AI 사진 추가 (_fix_image_count_underflow)
 수정 불가 분류 (재생성 필요):
   ❌ draft success=False         → Layer 2 전체 재실행
   ❌ 본문 한글 200자 미만        → 새 draft 필요
@@ -207,83 +206,23 @@ def _fix_excessive_empty_p(draft: dict) -> bool:
     return changed
 
 
-def _fix_image_count_underflow(draft: dict, platform: str, action_name: str = "economic") -> bool:
-    """제8조 위반 — 썸네일 제외 이미지 최소 5장(5+α) 미달 시 AI 사진 추가.
-
-    ★ 사용자 박제 2026-06-01 → 2026-07-05 정정 8→5: 5장은 디폴트가 아닌 절대 최솟값.
-    blocks에서 content 이미지(heading_ 제외)를 세어 MIN_IMAGES 미달이면
-    render_from_spec으로 AI 인포그래픽을 생성하여 text 블록 사이에 삽입.
-
-    ★ 2026-08-07 수정 (ERRORS [image _validate_image_files 렌더 후 파일 소실]):
-    img_dir 이 `economic_naver`/`economic_tistory` 로 고정돼 있어 테마(action_name="theme")
-    호출 시에도 경제 폴더에 이미지를 썼다 — `theme_naver`/`theme_tistory` 와 어긋나
-    경제 파이프라인의 `cleanup_economic_images()` 전체 초기화에 테마 이미지가 함께
-    삭제되는 경로가 열려 있었다. 폴더명은 CLAUDE.md 이미지 경로 표와 동일하게
-    `{action_name}_{platform}` 로 *파생* — 호출자(economic_poster="economic" /
-    trend_theme_writer="theme")가 이미 넘기던 action_name 을 여기까지 관통시킨다.
-    """
-    from pathlib import Path as _P
-    from JARVIS02_WRITER.length_manager import MIN_IMAGES as _MIN
-
-    blocks = draft.get("blocks") or []
-    if not blocks:
-        return False
-
-    def _is_content_img(btype, bdata) -> bool:
-        if btype != "image":
-            return False
-        fname = str(bdata)
-        return not any(k in fname for k in ("heading_", "section_title", "thumbnail_", "economic_h2_"))
-
-    current_count = sum(1 for btype, bdata in blocks if _is_content_img(btype, bdata))
-    if current_count >= _MIN:
-        return False
-
-    needed = _MIN - current_count
-    _log.info(f"[draft_fixer] 이미지 {current_count}/{_MIN}장 — {needed}장 추가")
-
-    keyword = draft.get("theme") or draft.get("keyword") or "경제"
-    sector = draft.get("sector") or ""
-    _plat = platform if platform in ("naver", "tistory") else "tistory"
-    img_dir = (_P(__file__).parent.parent / "JARVIS06_IMAGE" / "output" / "images"
-               / f"{action_name}_{_plat}")
-    img_dir.mkdir(parents=True, exist_ok=True)
-
-    added = 0
-    # text 블록 사이 빈 자리를 찾아 이미지 삽입 (마지막 text 제외)
-    new_blocks = list(blocks)
-    for i in range(len(new_blocks) - 1, 0, -1):
-        if added >= needed:
-            break
-        btype, bdata = new_blocks[i]
-        if btype != "text":
-            continue
-        prev_type = new_blocks[i - 1][0]
-        if prev_type == "image":
-            continue  # 이미 이미지 있음
-        try:
-            from JARVIS06_IMAGE.image_spec import generate_image_spec as _gi, render_from_spec as _ri
-            import hashlib as _hsh
-            _h = _hsh.md5(f"{bdata[:60]}|{keyword}|{i}".encode()).hexdigest()[:8]
-            _dest = img_dir / f"fix_img_{i:04d}_{_h}.png"
-            spec = _gi(section_text=str(bdata)[:400], keyword=keyword, sector=sector)
-            rendered = _ri(spec, _dest)
-            if rendered and rendered.exists():
-                new_blocks.insert(i, ("image", str(rendered)))
-                added += 1
-        except Exception as e:
-            _log.warning(f"[draft_fixer] 이미지 추가 실패 idx={i}: {e}")
-
-    if added:
-        draft["blocks"] = new_blocks
-        _log.info(f"[draft_fixer] 이미지 {added}장 추가 완료 (총 {current_count + added}장)")
-        return True
-    return False
+# ── _fix_image_count_underflow — ★ 삭제 (사용자 박제 2026-08-10) ─────────────
+#   ① 초크포인트 우회: `generate_image_spec` → `render_from_spec` 으로 이미지를 만들어
+#      blocks 에 **직접 삽입**했다. `infographic_engine._emit` 을 지나지 않으므로
+#      "검증 통과 못하면 이미지를 버린다" 는 계약 밖이었다.
+#   ② 폐지된 폴백의 부활: 본문 이미지는 *실데이터 인포그래픽만* 이고 못 만들면 빈 슬롯이다
+#      (CLAUDE_WRITER 박제 2026-07-06 — AI사진·matplotlib 폴백 전부 폐기). 이 함수는
+#      섹션 *텍스트* 로 LLM 스펙을 만들어 그리던, 정확히 그 폐지된 폴백이다.
+#   ③ 그런데 **도달 불가능한 죽은 코드**였다 — 유일한 진입은 `_route_fix` 의
+#      "이미지 최소 미달 / 이미지 부족 / image underflow" 분기인데, 저장소 전역에서
+#      그 이슈 문자열을 *만드는 곳이 0곳* 이다(실측 grep). 즉 열려는 있으나 아무도
+#      쓰지 않는 뒷문이었다. 문을 잠그는 대신 헐었다.
+#   이미지 수 부족은 `draft_processor` 의 min-N top-up(실데이터 인포그래픽) 소관이다.
 
 
 # ── 이슈 문자열 → 수정 함수 라우터 ─────────────────────────
 
-def _route_fix(issue_str: str, draft: dict, platform: str, action_name: str = "economic"):
+def _route_fix(issue_str: str, draft: dict, platform: str):
     """issue_str 키워드 분류 → 적절한 패치 함수 호출.
 
     반환: 수정 성공 시 **경로 이름**(str), 실패/미해당 시 `None`.
@@ -312,10 +251,6 @@ def _route_fix(issue_str: str, draft: dict, platform: str, action_name: str = "e
 
     if any(k in issue_str for k in ("제3조", "제4조", "제9조", "헌법 위반", "enforce")):
         return "law_violation" if _fix_law_violations(draft, platform) else None
-
-    # ★ 사용자 박제 2026-06-01 → 2026-07-05 정정: 이미지 최소 5장 미달 (제8조 5+α)
-    if "이미지 최소 미달" in issue_str or "image underflow" in s or "이미지 부족" in issue_str:
-        return "image_underflow" if _fix_image_count_underflow(draft, platform, action_name) else None
 
     # 수정 불가 — 재생성 필요
     return None
@@ -410,7 +345,7 @@ def fix_and_learn(
     fixed, unfixed = [], []
 
     for iss in raw_issues:
-        route = _route_fix(iss, draft, platform, action_name)
+        route = _route_fix(iss, draft, platform)
         if route:
             # state 갱신 (draft 객체 참조이므로 dict 재할당 보장)
             state[draft_key] = draft

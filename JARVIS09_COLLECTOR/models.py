@@ -26,9 +26,28 @@ def _hash_text(text: str) -> str:
 from .source_registry import SOURCE_TRUST_TIER   # noqa: F401 — SSOT 파생 재노출(evidence_pack 등 소비)
 
 
+# ★ '미지 출처' 의 신뢰 등급 — 레지스트리에서 *파생* 한다 (2026-08-10, ②동적 설계).
+#   종전엔 `5` 를 trust_rank·evidence_pack 4곳이 각자 박고 있었다. source_registry 에
+#   tier 6 짜리 소스가 하나 생기는 순간 '미지' 가 '블로그보다 신뢰됨' 이 된다 —
+#   목록의 주인이 바뀌었는데 사본은 옛 값을 가리킨 채 남는 전형적인 꼴.
+LOWEST_TRUST_TIER: int = max(SOURCE_TRUST_TIER.values())
+
+
 def trust_rank(source_type: str) -> int:
-    """출처 신뢰 순위 (낮을수록 신뢰 높음). 미지 소스는 최하위(5)."""
-    return SOURCE_TRUST_TIER.get((source_type or "").strip().lower(), 5)
+    """출처 신뢰 순위 (낮을수록 신뢰 높음). 미지 소스는 최하위(LOWEST_TRUST_TIER)."""
+    return SOURCE_TRUST_TIER.get((source_type or "").strip().lower(), LOWEST_TRUST_TIER)
+
+
+def source_tier(src) -> int:
+    """dataset/fact 의 `source` dict → 신뢰 티어 정수. 값이 없거나 망가졌으면 최하위.
+
+    ★ 단일 소스 (2026-08-10): 종전엔 `int(src.get("tier", 5) or 5)` 라는 *같은 강제변환*
+      이 evidence_pack 안에만 3벌 있었다. 코드가 같은 세 줄은 이름이 없어도 사본이다.
+    """
+    try:
+        return int((src or {}).get("tier", LOWEST_TRUST_TIER) or LOWEST_TRUST_TIER)
+    except (TypeError, ValueError, AttributeError):
+        return LOWEST_TRUST_TIER
 
 
 # ★ 수집 쿼터 (사용자 박제 2026-07-06, v2 정정): "인포그래픽을 만들 수 있을 만큼"의 자료를
@@ -133,16 +152,29 @@ CATEGORY_POLICY: dict[str, dict] = {
                  # 경제는 자비스03 topic_pack 이 후보와 함께 프로필을 항상 동봉한다.
                  "profile_provider": ""},
 }
+# ★ 차트 승격 문턱 (2026-08-10) — 카테고리별로 다르지 않으므로 *기본값에만* 둔다.
+#   chart_max_source_tier      : 이 티어보다 낮은 신뢰의 출처는 차트가 되지 못한다.
+#   chart_verbatim_above_tier  : 이 티어를 넘는 출처는 원문 대조를 통과해야 차트가 된다.
+#   ★ 값을 카테고리 dict 에 복사해 두지 않는다 — 종전엔 theme·economic·기본값 세 곳에
+#     같은 숫자가 박혀 있었고, 소비처(evidence_pack)까지 `pol.get(..., 2)` 로 네 번째·
+#     다섯 번째 사본을 들고 있었다. 문턱을 바꾸면 다섯 곳이 어긋난다.
 _DEFAULT_POLICY = {"min_images": 5, "thumbnail_body_chars": 3000,
                    "allow_stock_financial": True,
                    "collect_stocks": True,  "collect_charts": False,
                    "market_fallback": False,
+                   "chart_max_source_tier": 2, "chart_verbatim_above_tier": 1,
                    "profile_provider": ""}
 
 
 def policy_for(category: str) -> dict:
-    """카테고리 정책 조회 (미등록 카테고리는 기본값 — 미래 카테고리 안전 상속)."""
-    return CATEGORY_POLICY.get((category or "").strip().lower(), _DEFAULT_POLICY)
+    """카테고리 정책 조회 (미등록 카테고리는 기본값 — 미래 카테고리 안전 상속).
+
+    ★ 기본값 위에 카테고리 차이를 덮는다 (2026-08-10): 종전엔 카테고리 dict 를 *통째로*
+      돌려줘, 카테고리가 명시하지 않은 노브는 아예 없는 키가 됐다. 그래서 소비처마다
+      `pol.get("...", <리터럴>)` 폴백이 자라났고 그 리터럴이 곧 정책의 사본이었다.
+      이제 모든 노브가 항상 존재하므로 소비처는 `pol["..."]` 로 곧장 읽으면 된다.
+    """
+    return {**_DEFAULT_POLICY, **CATEGORY_POLICY.get((category or "").strip().lower(), {})}
 
 
 # ★ 종목 재무 dataset 판별 — 경제 브리핑 배제용 단일 근거 (사용자 박제 2026-07-18).
@@ -165,6 +197,49 @@ def dataset_is_stock_financial(ds: dict) -> bool:
     prov = ((ds.get("source") or {}).get("provider") or "").lower()
     title = ds.get("title") or ""
     return any(p in prov for p in ("krx", "dart", "finance")) and any(m in title for m in _STOCK_FIN_MARKERS)
+
+
+# ★ dataset `data` 행의 *선택* 메타 키 — 단일 소스 (사용자 박제 2026-08-10).
+#   왜 필요한가: 조립 단계에서 행별 진실(어느 출처의·언제 기준의·실적인가 전망인가)을
+#   버리고 대표 1건을 dataset 전체에 박제해, KOFIA·yfinance 수치가 '한국은행' 출처로,
+#   2023년 값이 '2026.08 기준' 배지로 발행됐다 (2026-08-10 경제 브리핑 slot3·slot4).
+#   행이 자기 출처·시점을 들고 다니면 하류가 '단일 시점 주장 불가'를 *판정* 할 수 있다.
+#   ★ 전부 선택 키다 — {label, value} 만 읽는 기존 소비자는 영향 없음(추가 전용).
+#     행 dict 를 *재구성* 하는 곳은 이 상수로 메타를 함께 실어 나를 것.
+ROW_META: tuple[str, ...] = ("as_of", "source", "category", "basis", "fact_id", "verbatim")
+
+def max_attempts() -> int:
+    """재시도 상한 — `JARVIS00_INFRA.harness.DEFAULT_MAX_ATTEMPTS` 파생 (SSOT).
+
+    ★ 사용자 박제 2026-07-21: "어떤 재시도도 최대 2회". 상한을 코드에 박지 않는다.
+      09 안에 이 파생이 여러 벌 생기지 않도록 *패키지 공용 leaf* 인 여기가 소유한다
+      (종전엔 collect_theme 에만 있고, data_planner·collect_theme 다른 루프는 2·3 을
+      각자 박고 있었다 — 상한을 바꿔도 그 루프들만 어긋난다).
+    ★ 폴백 리터럴을 두지 않는다 (2026-08-10 정정 — 같은 커밋의 J06 `limits.py` 와 판단 일치):
+      `except: return 2` 를 두면 그것이 상한의 *또 하나의 사본* 이 된다. harness 를 못 읽는
+      날에도 09 만 조용히 2 로 돌기 때문에 드리프트가 눈에 띄지 않는다. harness 는 외부
+      설정이 아니라 저장소 내부 모듈이므로, import 실패는 '설정 차이' 가 아니라
+      *설치가 깨진 상태* 다 — 조용히 넘기지 말고 그대로 터뜨린다.
+    ★ 매 호출 조회 (모듈 로드 시점 캡처 아님): `HARNESS_MAX_ATTEMPTS` 무배포 조정이
+      이미 뜬 프로세스에도 먹어야 한다 — 복사본을 진실로 믿지 않는다.
+    ★ lazy import — models 는 stdlib-only leaf 계약을 유지해야 한다(순환 방지).
+    """
+    from JARVIS00_INFRA import harness as _h
+    return max(1, int(_h.DEFAULT_MAX_ATTEMPTS))
+
+
+# ★ 차트 축 라벨 최대 길이 — 단일 소스 (2026-08-10).
+#   종전에 chart_data._clean_label 의 `lab[:22]` 와 evidence_pack._QUALIFIED_LABEL_MAX = 22
+#   두 벌이 각자 22 를 들고 있었다. 두 생산자가 같은 축에 라벨을 얹으므로 값이 어긋나면
+#   한쪽 차트만 잘린다 — 사본을 만들지 말고 여기서 파생할 것.
+AXIS_LABEL_MAX: int = 22
+
+# ★ 수치의 성격(basis) 어휘 → 제목에 붙일 한국어 — 단일 소스 (2026-08-10).
+#   ① 추출 단계 유효성 검사 ② 그룹 키 ③ 제목 작명 세 곳이 같은 어휘를 쓴다. 목록을 세 번
+#   적으면 값이 하나 늘 때 두 곳만 고쳐지고 나머지가 조용히 어긋난다(실적/전망 혼합 재발).
+#   ""(미상) 은 유효 어휘가 아니라 *부재* 다 → BASIS_KINDS 에서 제외해 파생한다.
+BASIS_TITLE: dict[str, str] = {"actual": "", "forecast": "전망", "threshold": "기준선"}
+BASIS_KINDS: tuple[str, ...] = tuple(BASIS_TITLE)
 
 
 def dataset_fingerprint(title: str, unit: str) -> str:
@@ -297,17 +372,18 @@ class CollectedData:
 
         for ds in self.datasets or []:
             unit = (ds.get("unit") or "").strip()
-            row_vals: list[float] = []
             for row in ds.get("data") or []:
                 _add(row.get("value"), unit)
-                try:
-                    row_vals.append(float(row.get("value")))
-                except (TypeError, ValueError):
-                    pass
-            # KOSIS 세부 항목처럼 개별 row가 세부 분류일 때, 합계도 gt에 추가
-            # (LLM이 합산한 총계 수치 grounding 가능하도록)
-            if len(row_vals) >= 2:
-                _add(sum(row_vals), unit)
+            # ★ '행들을 더한 값' 은 *출처가 공표한 합계* 일 때만 정답으로 인정
+            #   (사용자 박제 2026-08-10 — D06 의 텍스트 쌍둥이).
+            #   종전엔 행이 2개 이상이면 무조건 sum(row_vals) 를 정답 풀에 넣었다.
+            #   그러면 금리 8종의 합(27.2%)·환율 3시점의 합(4,368원)처럼 *현실에 없는 수* 가
+            #   대본 사실성 게이트의 '근거 있음' 목록에 들어가, 본문이 그 수를 써도 통과한다.
+            #   가산 가능 여부는 데이터가 증명해야 한다 → 생산자가 ds["totals"] 에 실어 보낸
+            #   *공표 합계* 만 인정 (chart_data._mk_dataset 가 '전체/계/합계' 행에서 파생).
+            _t = (ds.get("totals") or {}).get("value")
+            if _t is not None:
+                _add(_t, unit)
         for f in self.facts or []:
             _add(f.get("value"), f.get("unit"))
         for e in self.entities or []:
