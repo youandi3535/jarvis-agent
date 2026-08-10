@@ -65,7 +65,6 @@
 | `thumbnail_maker.py` | Claude 동적 썸네일 (bg 프롬프트 창작 → AI 사진 → SVG 오버레이) |
 | `section_title.py` | matplotlib 소제목 배너 이미지 |
 | `trend_charts.py` | 트렌드 키워드 차트 + 썸네일 |
-| `economic_charts.py` | 경제 브리핑 차트 + 썸네일 |
 | `providers/cloudflare_provider.py` | Cloudflare Workers AI REST 호출 (무료 티어 — **단일 프로바이더**) |
 | ~~`providers/claude_svg_provider.py`~~ | **고아 (호출자 0)** — 유일 소비자 `image_agent.generate_chart` 가 2026-08-10 삭제되며 끊겼다. `providers/__init__` 재export 도 제거됨(우연한 배선 차단). 파일 삭제는 별건 |
 

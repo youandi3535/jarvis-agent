@@ -697,6 +697,11 @@ def test_시크릿_파일_권한이_소유자전용():
         # `__pycache__` 는 추적되지 않지만 *추적 소스의 컴파일 산출물* 이라 비밀이 아니다.
         if "__pycache__" in path.parts or path.suffix == ".pyc":
             return False
+        # ★ 남의 트리(중첩 워크트리·가상환경)는 *이 저장소의* 미추적 파일이 아니다.
+        #   실측: `.claude/worktrees/` 의 .py 205개가 미추적으로 잡혔다. 지금까지 초록이던 것은
+        #   배제가 걸려서가 아니라 비밀 패턴에 우연히 안 걸렸기 때문이다(원칙① — conftest 단독).
+        if not is_scannable_source(path, _ROOT):
+            return False
         try:
             return path.is_file() and str(path.relative_to(_ROOT)) not in tracked
         except ValueError:
