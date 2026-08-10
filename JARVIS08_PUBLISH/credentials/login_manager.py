@@ -525,6 +525,50 @@ def precheck_error_type(platform: str, issues: list) -> str:
     return "Precheck" + platform.capitalize() + kind
 
 
+def refresh_failed_error_type(platform: str) -> str:
+    """자동 갱신 시도 후에도 여전히 실패 → 오류 타입. *이미 있는 판단*(플랫폼)에서 파생.
+
+    ★ 중앙 매핑표를 두지 않는다 (CLAUDE.md ERRORS [547]).
+    """
+    return "Precheck" + platform.capitalize() + "AutoRefreshFailed"
+
+
+def _alert_refresh_failed(still_failing: dict[str, dict[str, Any]]) -> None:
+    """사전점검의 *자동 갱신 시도까지* 실패했을 때 — 발행 시각 전에 미리 알린다.
+
+    ★ 왜 필요한가 (2026-08-11, ERRORS [605][606][612]의 연장선)
+      `job_pre_publish_check` 는 발행 `_COOKIE_PRECHECK_LEAD_MIN`분 전에 돌며
+      `_alert_precheck()` 로 "이대로면 CAPTCHA 뜨면 건너뜁니다" *경고* 를 먼저 보낸 뒤,
+      바로 이어서 `auto_refresh_if_needed()` 로 **실제 재로그인을 이미 시도**한다.
+      그런데 그 시도의 성공/실패가 어디에도 남지 않았다 — CAPTCHA·계정 문제로
+      실패해도 `refresh_naver_cookies`/`refresh_tistory_cookies` 는 `False` 를 조용히
+      돌려줄 뿐(예외가 아니므로 `_g_report` 도 안 탄다). 그래서 사용자는 "경고만 받고
+      끝났으니 알아서 복구됐겠지" 라고 오해한 채 발행 시각까지 기다리다, 그제야
+      (2026-08-11 07:00:44 실측) 같은 실패를 다시 보고 CAPTCHA 를 풀 시간을
+      `_COOKIE_PRECHECK_LEAD_MIN`분만큼 이미 날린 뒤였다.
+    ★ 여기서 새 판정을 만들지 않는다(① 단일 진입점) — `job_pre_publish_check` 가
+      이미 부른 `auto_refresh_if_needed()` 직후 `verify_all_logins()` 로 *재확인* 만 한다.
+    """
+    for plat, info in still_failing.items():
+        issues = list(info.get("issues") or [])
+        try:
+            msg = (f"🚨 [발행 前 점검] {plat.upper()} 자동 갱신도 실패 — 직접 로그인 필요\n"
+                   + "\n".join(f"· {i}" for i in issues)
+                   + "\n\n자동 재로그인을 이미 시도했으나 실패했습니다. "
+                     "발행 시각 전에 지금 직접 로그인해 주세요.")
+            from shared.notify import send_tg                 # noqa: PLC0415
+            send_tg(msg)
+        except Exception as e:                                # noqa: BLE001
+            log.warning(f"[login_manager/pre_check] 갱신실패 알림 실패: {type(e).__name__}: {e}")
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report  # noqa: PLC0415
+            report(refresh_failed_error_type(plat), "publish", module=__name__,
+                   func_name="job_pre_publish_check",
+                   message=f"[발행 前 점검] {plat}: 자동 갱신 시도 후에도 실패 — {'; '.join(issues)}")
+        except Exception as e:                                # noqa: BLE001
+            log.warning(f"[login_manager/pre_check] 갱신실패 박제 실패: {type(e).__name__}: {e}")
+
+
 def _alert_precheck(platform: str, info: dict) -> None:
     """사전점검 실패를 **사람과 원장 양쪽에** 알린다 (2026-08-09, ERRORS [594]).
 
@@ -568,12 +612,19 @@ def job_pre_publish_check(platform: Optional[str] = None) -> None:
     """
     if platform in (None, "all"):
         verify = verify_all_logins()
-        for plat, info in verify.items():
-            if not info["ok"]:
-                log.warning(f"[login_manager/pre_check] {plat}: {info['issues']}")
-                _alert_precheck(plat, info)               # ★ 로그로만 끝내지 않는다
+        failing = [plat for plat, info in verify.items() if not info["ok"]]
+        for plat in failing:
+            log.warning(f"[login_manager/pre_check] {plat}: {verify[plat]['issues']}")
+            _alert_precheck(plat, verify[plat])            # ★ 로그로만 끝내지 않는다
         # 자동 갱신
         auto_refresh_if_needed()
+        # ★ 갱신 시도 후 재확인 — 실패가 발행 시각까지 조용히 묻히지 않게 한다
+        #   (2026-08-11, [605][606][612] 연장선 — 상세는 _alert_refresh_failed 참조).
+        if failing:
+            recheck = verify_all_logins(platforms=tuple(failing))
+            still_failing = {p: i for p, i in recheck.items() if not i["ok"]}
+            if still_failing:
+                _alert_refresh_failed(still_failing)
     elif platform in ("naver", "tistory"):
         # ★ 2026-08-10 — ERRORS [596][597]과 같은 병이 이 분기에도 있었다: 나이/존재만
         #   보고 "만료됐지만 값은 남아있는" 쿠키를 놓쳤다(오늘 실제 사고: TS_COOKIE 는
