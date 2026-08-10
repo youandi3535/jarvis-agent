@@ -574,12 +574,13 @@ def job_pre_publish_check(platform: Optional[str] = None) -> None:
                 _alert_precheck(plat, info)               # ★ 로그로만 끝내지 않는다
         # 자동 갱신
         auto_refresh_if_needed()
-    elif platform == "naver":
-        if naver_cookie_age_hours() > 10:
-            refresh_naver_cookies(force=False)
-    elif platform == "tistory":
-        if not get_tistory_cookie():
-            refresh_tistory_cookies(force=False)
+    elif platform in ("naver", "tistory"):
+        # ★ 2026-08-10 — ERRORS [596][597]과 같은 병이 이 분기에도 있었다: 나이/존재만
+        #   보고 "만료됐지만 값은 남아있는" 쿠키를 놓쳤다(오늘 실제 사고: TS_COOKIE 는
+        #   있었지만 manage 접근이 로그인으로 리다이렉트). 실유효성 판정은
+        #   `auto_refresh_if_needed()` 가 이미 단독 소유하고 있다 — 여기서 판정 로직을
+        #   복제하지 않고 그 단일 진입점에 위임한다(① 단일 진입점).
+        auto_refresh_if_needed(platforms=(platform,))
 
 
 # ══════════════════════════════════════════════════════════

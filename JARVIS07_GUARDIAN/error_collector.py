@@ -727,13 +727,20 @@ register_global_hook = install
 
 
 def _log_scanner_silent() -> Optional[bool]:
-    """로그 스캐너가 **최근에 아무것도 못 잡았는가** — DB·파일 실측에서 파생.
+    """로그 스캐너가 **최근에 아무것도 못 잡았는가** — DB·실 스캐너 커서에서 파생.
 
-    로그에 애초에 오류가 없으면 수확 0 이 정상이다. 그래서 *감시 대상 로그에 오류
-    흔적이 있는데도* 유입이 0 일 때만 침묵(True)으로 본다. 판정 불가면 None.
+    로그에 애초에 오류가 없으면 수확 0 이 정상이다. 그래서 *감시 대상 로그의 미소비
+    구간(스캐너가 아직 읽지 않은 부분)에 오류 흔적이 있는데도* 유입이 0 일 때만
+    침묵(True)으로 본다. 판정 불가면 None.
+
+    ★ 파일 mtime + 임의 tail(200KB) 로 "최근성"을 흉내내지 않는다 (2026-08-10 정정,
+    CatchPathDead #5698). daemon.log 처럼 계속 append 되는 파일은 mtime 이 *항상* 최근이라,
+    이미 며칠 전에 정상 포착·기록된 Traceback(#5260/#5261, 2026-08-07 14:54)이 tail
+    윈도우 안에 남아있는 동안 매 스모크마다 "침묵"으로 오판했다 — 이미 잡은 것을
+    또 못 잡았다고 우겼다. 실제 라이브 스캐너(`_log_scanners`)의 `_positions` 커서
+    기준 *아직 안 읽은 구간* 에서만 찾아야 진짜 침묵과 구별된다.
     """
     import re as _re2
-    import time as _t
     try:
         from shared.db import TS_CUTOFF as _TS_CUTOFF, get_db
         # 관측 창 — '이 정도면 뭔가 잡혔어야 한다' 는 기간. 발행이 하루 4회이므로
@@ -746,18 +753,26 @@ def _log_scanner_silent() -> Optional[bool]:
             ).fetchone()[0]
         if got:
             return False                      # 잡고 있다
-        cutoff = _t.time() - days * 86400
+        if not _log_scanners:
+            return None                       # 실 스캐너 미설치 — 커서가 없어 판정 불가
         pat = _re2.compile(r"^Traceback \(most recent call last\)", _re2.M)
-        for d in _discover_log_dirs():
-            for f in Path(d).glob("*.log"):
+        for scanner in _log_scanners:
+            for f in Path(scanner._log_dir).glob("*.log"):
                 try:
-                    if f.stat().st_mtime < cutoff:
-                        continue
-                    if pat.search(f.read_text(encoding="utf-8", errors="ignore")[-200_000:]):
-                        return True           # 잡을 게 있었는데 0건 = 침묵
+                    pos = scanner._positions.get(str(f))
+                    if pos is None:
+                        continue               # 스캐너가 아직 본 적 없는 파일 — 다음 scan() 대기
+                    size = f.stat().st_size
+                    if size <= pos:
+                        continue               # 신규 바이트 없음 — 잡을 것도 없다
+                    with open(f, "r", encoding="utf-8", errors="ignore") as fh:
+                        fh.seek(pos)
+                        unread = fh.read(2_000_000)
+                    if pat.search(unread):
+                        return True            # 스캐너 미소비 구간에 실제 Traceback — 진짜 침묵
                 except Exception:
                     continue
-        return False                          # 잡을 것이 없었다 — 정상
+        return False                          # 미소비 구간엔 잡을 것이 없었다 — 정상
     except Exception:
         return None
 
