@@ -13004,3 +13004,27 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
   사고에 Tier-2 코드패치를 계속 태우면 `llm_attempts` 만 소모하고 `resolution` 만 왕복 덮어써진다.
   같은 사고가 또 재현되면 이번엔 `error_log.llm_attempts` 를 먼저 확인해 상한 도달 여부로
   "자동 재시도가 무의미한 상태" 인지부터 판별할 것.
+
+## [619] 🔍 조사완료(결함아님) — `PrecheckTistoryCookieExpired`(id=5830) 재확인 — 자동갱신은 이미 회복, 무통보 결함은 [606] 후속으로 이미 수정됨 (2026-08-11)
+
+- 증상: 리페어 큐가 `error_log` id=5830(`PrecheckTistoryCookieExpired`, `2026-08-11T06:30:02`,
+  `"[발행 前 점검] tistory: 쿠키 만료 — manage 접근이 로그인으로 리다이렉트"`)를 대상으로 호출.
+  착수 시점 `llm_attempts=3`(상한 도달), `status='analyzing'`.
+- 원인: 이 알림은 `verify_all_logins()` 의 *최초 감지* 일 뿐 — 같은 `job_pre_publish_check()`
+  호출 안에서 곧바로 `auto_refresh_if_needed()` 가 재로그인을 시도한다([606] 에서 이미 확립된
+  설계). 06:30 시점 코드는 그 재시도의 성공/실패를 재확인하지 않아 결과가 남지 않았지만,
+  이후 다른 세션("VS Code Claude Code", 07:08~07:15, `error_log` id=5833/5834 —
+  `PrecheckAutoRefreshSilentFailure`)이 정확히 이 무통보 결함을 발견해 `job_pre_publish_check`
+  에 재확인+알림 로직(`_alert_refresh_failed`)을 추가했고, 이미 `main`(commit `5181210`)에
+  커밋돼 있었다. 지금 `python -m JARVIS08_PUBLISH.credentials.login_manager status` 로
+  실측하면 TISTORY 는 ✅(정상) — 06:30 재로그인이 실제로 성공했거나 이후 자연 회복됐다.
+- 헛다리: 없음. `tistory_cookie_refresher.py` 의 커밋되지 않은 `driver.quit()` 가드 diff
+  (작업트리에 잔존, `_attempt_once` 성공 경로 무가드 quit() 대칭화)는 이 사고와 무관한
+  별도 세션의 병행 수정으로 판단 — CLAUDE.md 커밋 규정("내 변경분만")에 따라 손대지 않음.
+- 해결: 코드 변경 0건(다른 세션이 근본 결함을 이미 수정·커밋 완료 + 실제 쿠키 상태도 회복
+  확인). `mark_error_status(5830, "fixed", ...)` 로 종결 — 사유: 재확인 결과 정상 +
+  근본 원인은 commit `5181210` 으로 기수정.
+- 파일: 없음 (조사 + DB 상태 갱신만, 저장소 코드 파일 변경 없음).
+- 교훈: 리페어 큐가 병행 세션이 이미 고친 사고를 다시 배정할 수 있다([613][617][618] 과
+  동일 패턴). 착수 전 `error_log.resolution`/최근 git log 를 먼저 조회하면 중복 조사를
+  빠르게 스킵할 수 있다.
