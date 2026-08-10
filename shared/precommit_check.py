@@ -944,6 +944,62 @@ def check_preflight(report: Report) -> None:
                              f"run_preflight() 가 _acquire_lock() 보다 *뒤*에 위치 (preflight={preflight_line}, lock={lock_line})"))
     report.checks_run += 1
 
+    # ── ④⑤ 진입점이 preflight 를 *실제로* 돌리는가 (2026-08-10 — ERRORS [614]) ────────
+    #
+    # ★ 왜 필요한가: 코드에 `ensure_preflight()` 가 쓰여 있는데 **한 번도 안 도는** 상태가
+    #   실측 8곳이었다. 하위 폴더 스크립트를 `python <파일>` 로 직접 실행하면 sys.path[0] 이
+    #   그 폴더라 `from JARVIS00_INFRA...` 가 ModuleNotFoundError 로 죽고, 그것을 감싼
+    #   `except Exception` 이 경고 한 줄만 찍고 삼켰다. 경고는 stdout 으로만 나가는데
+    #   데몬 stdout 은 /dev/null 이라 어디에도 안 남았다 — 완전한 침묵.
+    #   "규정을 읽는 것은 적용의 증거가 아니다" 와 같은 자리다: **코드 존재 ≠ 실행**.
+    #
+    # ② 동적 설계 — 대상 목록을 박지 않는다. `ensure_preflight` 를 부르는 파일을 실물에서
+    #   파생하므로, 새 진입점이 생기면 자동으로 검사 대상이 된다.
+    _BOOT_MARK = "jarvis_daemon.py"          # 루트 판별 마커 (부트스트랩이 찾는 그 파일)
+    for p_ in _iter_py():
+        rel_s = str(p_.relative_to(ROOT))
+        if rel_s == legit_file or rel_s == "shared/precommit_check.py" or rel_s.startswith("tests/"):
+            continue
+        text = _read_py(p_)
+        if text is None or "ensure_preflight" not in text:
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+
+        # ④ 루트 직속이 아니면 sys.path 부트스트랩이 있어야 직접 실행에서 import 가 산다
+        if len(p_.relative_to(ROOT).parts) > 1:
+            if "sys.path.insert" not in text and "sys.path.append" not in text \
+                    and "_sys.path.insert" not in text and "_sys.path.append" not in text:
+                report.add(Violation(
+                    cat, "preflight/no-path-bootstrap", rel_s, 1,
+                    "하위 폴더 진입점인데 sys.path 부트스트랩이 없다 — 직접 실행 시 "
+                    "preflight import 가 죽고 조용히 건너뛴다"))
+            elif _BOOT_MARK not in text and "parent" not in text and "parents" not in text:
+                report.add(Violation(
+                    cat, "preflight/bootstrap-unanchored", rel_s, 1,
+                    "sys.path 조작은 있으나 루트를 무엇으로 찾는지 불분명하다"))
+
+        # ⑤ preflight 호출을 try/except 로 감싸면 실패가 침묵이 된다
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
+                continue
+            seg = ast.get_source_segment(text, node) or ""
+            if "ensure_preflight" not in seg:
+                continue
+            # 예외를 *다시 올리는* try 는 삼킴이 아니다
+            swallows = any(
+                not any(isinstance(st, ast.Raise) for st in h.body)
+                for h in node.handlers)
+            if swallows:
+                report.add(Violation(
+                    cat, "preflight/swallowed", rel_s, node.lineno,
+                    "preflight 호출이 try/except 로 삼켜진다 — 실패해도 그대로 진행하므로 "
+                    "'안전장치가 있다' 는 착각만 남는다 (fail-closed 로 둘 것)"))
+                break
+    report.checks_run += 1
+
 
 # ============================================================================
 # 카탈로그 + main

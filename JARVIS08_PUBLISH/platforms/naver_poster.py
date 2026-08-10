@@ -48,6 +48,21 @@ def _max_attempts() -> int:
         return 2
 
 
+# ── 직접 실행(python <이 파일>) 대비 — 프로젝트 루트를 sys.path 에 올린다 (2026-08-10) ──
+#   ★ 없으면 `from JARVIS00_INFRA...` 가 ModuleNotFoundError 로 죽고, 그것을 감싼 except 가
+#     조용히 삼켜 **Layer 0 preflight 가 한 번도 안 도는** 상태가 된다 (실측: 진입점 16곳 중 8곳).
+#     경고 한 줄만 찍히고 그대로 진행하므로, 안전장치가 있다고 착각하기 딱 좋다.
+#   ★ 깊이를 숫자로 박지 않는다(②) — 파일이 폴더를 옮기면 조용히 깨진다(ADR 008 이관 전례).
+#     루트는 유일한 진입점 `jarvis_daemon.py` 의 존재로 판별한다.
+import sys as _sys
+from pathlib import Path as _Path
+for _anc in _Path(__file__).resolve().parents:
+    if (_anc / "jarvis_daemon.py").exists():
+        if str(_anc) not in _sys.path:
+            _sys.path.insert(0, str(_anc))
+        break
+del _anc
+
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
@@ -1564,11 +1579,13 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
 
 if __name__ == "__main__":
     # ★ P1-④ Phase 2 보강 (사용자 박제 2026-05-18) — 직접 실행 시 Selenium 발행 차단
-    try:
-        from JARVIS00_INFRA.preflight import ensure_preflight as _ep
-        _ep(strict=True)
-    except Exception as _ee:
-        _p(f"⚠️ preflight 호출 실패: {_ee}")
+    # ★ try/except 로 감싸지 않는다 (2026-08-10) — 감싸는 순간 ImportError 가 삼켜져
+    #   "preflight 가 있다" 는 착각만 남고 **실제로는 한 번도 안 도는** 상태가 된다.
+    #   실측(2026-08-10): 진입점 16곳 중 8곳이 그 상태였고, 경고는 stdout 으로만 나가는데
+    #   데몬 stdout 은 /dev/null 이라 어디에도 안 남았다 — 완전한 침묵이었다.
+    #   루트 경로는 파일 상단 부트스트랩이 보장한다. 여기서 실패하면 진짜 환경 문제다(fail-closed).
+    from JARVIS00_INFRA.preflight import ensure_preflight
+    ensure_preflight(strict=True)
 
     from JARVIS00_INFRA.watchdog import guard_main
     with guard_main("네이버 발행 테스트", deadline_sec=1800):

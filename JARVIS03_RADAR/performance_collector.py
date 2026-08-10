@@ -576,11 +576,10 @@ def _update_daily_performance(by_platform: dict):
 
 if __name__ == "__main__":
     # ★ P1-④ 패치 (사용자 박제 2026-05-18 — ADR 009 v2): subprocess Layer 0 게이트.
-    try:
-        from JARVIS00_INFRA.preflight import ensure_preflight as _ep
-        _ep(strict=True)
-    except Exception as _ee:
-        print(f"⚠️ preflight 호출 실패: {_ee}")
+    # ★ try/except 로 감싸지 않는다 (2026-08-10) — 감싸면 ImportError 가 삼켜져
+    #   "preflight 가 있다" 는 착각만 남는다. 루트 경로는 상단 부트스트랩이 보장한다(fail-closed).
+    from JARVIS00_INFRA.preflight import ensure_preflight
+    ensure_preflight(strict=True)
 
     today_only = "--today" in sys.argv
     # ★ deadline_sec=1800(30분)은 성격이 다른 블로그 발행 액션 값의 복붙 미스매치였음
