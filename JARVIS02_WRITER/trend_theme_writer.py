@@ -257,7 +257,7 @@ def _publish_tistory(draft: dict, theme: str, sector: str,
             if not ok:
                 _tg(f"❌ [THEME-TISTORY] 쿠키 갱신 실패 — 발행 중단")
                 return {"success": False, "url": "", "keyword": theme}
-            load_dotenv(override=True)
+            # ★ load_dotenv(override=True) 제거 — 최신 TS_COOKIE 는 get_tistory_cookie() 가 .env 에서 직접 읽는다 — env 전체를 덮지 않는다(2026-08-10)
 
         # ★ ADR 008 Phase 2 완전 이관 (사용자 박제 2026-05-18) — shim 제거, 신 경로 직접 import
         import JARVIS08_PUBLISH.platforms.tistory_poster as _tp_mod
@@ -596,7 +596,7 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
             from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr
             ok, drv = _tcr(force=False, return_driver=True)
             if ok:
-                load_dotenv(override=True)
+                # ★ load_dotenv(override=True) 제거 — 최신 TS_COOKIE 는 get_tistory_cookie() 가 .env 에서 직접 읽는다 — env 전체를 덮지 않는다(2026-08-10)
                 print("  ✅ [④] 티스토리 쿠키 갱신 완료 (신선 세션)")
                 return {"ts_driver_key": _res.put(state.get(_ANK, ""), "ts_driver", drv)}
             if drv:

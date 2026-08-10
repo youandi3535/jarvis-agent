@@ -124,14 +124,27 @@ def captcha_present(driver) -> "bool | None":
 
 
 def human_wait_sec() -> int:
-    """CAPTCHA 를 **사람이 풀 때까지** 기다릴 초 — 무인 실행이면 0."""
+    """CAPTCHA 를 **사람이 풀 때까지** 기다릴 초 — 화면 앞에 사람이 없으면 0.
+
+    ★ 왜 잡 문맥이 아니라 TTY 로 판정하나 (2026-08-10 정정)
+      종전엔 `shared.llm.current_job_id()`(예약 잡 안인가)로 판정했다. 그 값의 출처가
+      **`threading.local`** 이라 프로세스·스레드 경계를 넘지 못한다 —
+      발행은 `scheduler._spawn_publisher` 가 띄운 **subprocess** 에서 돌고,
+      GUARDIAN 인시던트 재시도는 **새 스레드**로 돈다. 둘 다 문맥이 비어 있어
+      "사람이 있다" 로 오판했다.
+      실측(08-10 07:00): 무인인데 120초 대기를 4회, 합 482초를 버렸다.
+      회귀 테스트는 같은 스레드에서 `gate()` 를 불러 초록이었다 —
+      사고가 *일어나지 않는* 경로만 검증한 셈이다.
+
+      '사람이 화면 앞에 있는가' 는 **터미널에 붙어 있는가** 로 직접 판정하는 것이
+      경계와 무관하게 정확하다. 이미 쓰던 판단이다(`scheduler._spawn_publisher` 의
+      `_is_tty`) — 새 플래그를 만들지 않는다(②).
+    """
     try:
-        from shared.llm import current_job_id            # noqa: PLC0415 — 순환 방지
-        if current_job_id():
-            return 0                                     # 예약 잡 = 무인
+        attended = sys.stdout.isatty() or bool(os.environ.get("JARVIS_VERBOSE"))
     except Exception:                                    # noqa: BLE001
-        pass
-    return max(0, CAPTCHA_WAIT_SEC)
+        attended = False                                 # 판정 불가면 기다리지 않는다
+    return max(0, CAPTCHA_WAIT_SEC) if attended else 0
 
 
 # ── 마지막 실패 사유 ────────────────────────────────────────────────
@@ -176,6 +189,83 @@ def naver_login_error_type(reason: str) -> str:
 CAPTCHA_REASONS = frozenset({"captcha_unattended", "captcha_timeout"})
 
 
+# ══════════════════════════════════════════════════════════════════
+# 세션이 실제로 필요한 곳 = 발행이 여는 화면 (판정·수집·발행 공통 단일 소스)
+# ══════════════════════════════════════════════════════════════════
+#
+# ★ 왜 URL 을 여기 한 곳에 두는가 (2026-08-10 — 그날 07:00 경제 네이버 미발행)
+#   판정과 소비가 **서로 다른 문**을 두드리고 있었다. 판정은 `www.naver.com` HTML 에
+#   "로그아웃" 글자가 있으면 유효라 했는데, 정작 발행은 `blog.naver.com/{ID}/postwrite`
+#   를 연다. 네이버는 두 화면의 권한을 따로 본다.
+#   실측(08-10 07:00, 같은 쿠키): 포털 200 정상 / 글쓰기 nidlogin 바운스(565바이트 JS 스텁).
+#   그래서 로그에 "✅ 쿠키 유효" 바로 다음 줄이 "⚠️ 쿠키 브라우저 적용 실패" 였다.
+#   판정·수집·발행이 같은 문을 쓰게 URL 을 단일 소스로 둔다(①②).
+def blog_write_url() -> str:
+    """발행이 실제로 여는 글쓰기 화면 — 판정·발행 공통 단일 소스."""
+    return f"https://blog.naver.com/{NV_ID}/postwrite"
+
+
+def blog_home_url() -> str:
+    """블로그 홈 — *쿠키 수집용*.
+
+    글쓰기 화면은 로그인이 없으면 즉시 nidlogin 으로 튕겨 blog 도메인 쿠키를 남기지
+    않는다. 수집은 홈으로 들러야 JSESSIONID·BA_DEVICE 가 잡힌다.
+    """
+    return f"https://blog.naver.com/{NV_ID}"
+
+
+# 발행에 필요한 인증 쿠키 — 이름을 여기저기 박지 않는다(②).
+AUTH_COOKIE_NAMES = ("NID_AUT", "NID_SES")
+
+
+def has_publish_auth(cookies) -> bool:
+    """이 쿠키 묶음으로 발행이 가능한가 — 이름 판정의 **단일 지점**.
+
+    selenium `get_cookies()` 결과와 pkl 로드 결과를 모두 받는다(둘 다 dict 리스트).
+    종전엔 `{"NID_AUT","NID_SES"} <= names` 가 네 곳에 복사돼 있었다.
+    """
+    try:
+        names = {c["name"] for c in cookies}
+    except (TypeError, KeyError):
+        return False
+    return set(AUTH_COOKIE_NAMES) <= names
+
+
+def _harvest_urls() -> tuple:
+    """쿠키를 거둘 곳 — 포털·인증·블로그. 블로그는 위 단일 소스에서 파생한다."""
+    return ("https://www.naver.com", "https://nid.naver.com", blog_home_url())
+
+
+def _harvest_cookies(driver) -> list:
+    """네이버 쿠키를 **도메인을 순회하며 누적** 수집한다 — 수집 단일 진입점.
+
+    ★ 왜 (2026-08-10 — 07:00 경제 네이버 미발행의 근본 원인)
+      selenium `driver.get_cookies()` 는 *현재 문서에서 접근 가능한* 쿠키만 준다.
+      한 도메인에서 한 번 부르면 다른 도메인 쿠키는 통째로 빠진다.
+      그런데 수집이 **3벌**로 흩어져 서로 다른 곳을 들렀다:
+        · 이미-로그인 경로 : www→nid 방문 후 `get_cookies()` 로 **덮어씀**(누적 아님)
+        · 폼로그인 성공 경로: www 만 보고 `get_cookies()` — nid·blog 를 **안 들름**
+        · 수동 경로        : www→nid→blog 순회 **누적** (셋 중 유일하게 옳았다)
+      실측 사고: 08-09 23:23 로그인은 성공했는데 두 번째 경로로 저장돼
+      blog 도메인 쿠키(BA_DEVICE·JSESSIONID)가 **0개**인 pkl 이 만들어졌다.
+      그 pkl 은 포털 판정을 통과하고 글쓰기에서 튕긴다 → 매 발행이 전체 로그인 →
+      무인 CAPTCHA → 스스로 못 빠져나오는 단방향 고장. 수집을 한 곳으로 모은다(①).
+
+    ★ 키가 이름+도메인인 이유: 같은 이름이 도메인별로 따로 존재한다
+      (실측 pkl 에 `NM_media_current` 2개). 이름만 키로 쓰면 하나가 조용히 사라진다.
+    """
+    merged: dict = {}
+    for url in _harvest_urls():
+        try:
+            driver.get(url)
+            time.sleep(random.uniform(1.2, 2.0))
+            for c in driver.get_cookies():
+                merged[(c["name"], c.get("domain", ""))] = c
+        except Exception as e:                            # noqa: BLE001
+            print(f"  ⚠️ 쿠키 수집 — {url} 방문 실패, 건너뜀: {type(e).__name__}")
+    return list(merged.values())
+
+
 def _save_cookies(cookies) -> None:
     """쿠키 저장 **단일 진입점** — 저장 직후 권한을 소유자 전용(0600)으로 고정한다.
 
@@ -204,11 +294,40 @@ _UA_FOR_CHECK = (                       # 세션 판정용 UA — 두 판정 함
 )
 
 
+def _session_alive_http(jar: dict, timeout: float) -> "bool | None":
+    """발행이 여는 화면으로 세션을 판정한다 — **판정 규칙의 단일 지점**.
+
+    ★ 왜 포털이 아니라 글쓰기 화면인가 (2026-08-10)
+      종전 두 판정 함수는 `www.naver.com` HTML 에 "로그아웃" 글자가 있는지로 봤다.
+      그런데 네이버는 포털과 블로그 글쓰기의 권한을 **따로** 본다. 실측(08-10 07:00):
+      같은 쿠키로 포털은 200 정상, 글쓰기는 nidlogin 바운스.
+      그래서 게이트가 "유효" 라 통과시킨 쿠키로 발행자가 튕겨 전체 로그인 →
+      무인 CAPTCHA 로 떨어졌다. **판정은 소비처와 같은 문을 두드려야 한다.**
+
+    Returns: True(유효) / False(만료) / None(판정 불가 — 네트워크 등)
+    """
+    try:
+        import requests as _req                           # noqa: PLC0415
+        res = _req.get(blog_write_url(), cookies=jar, timeout=timeout,
+                       headers={"User-Agent": _UA_FOR_CHECK,
+                                "Accept-Language": "ko-KR,ko;q=0.9"},
+                       allow_redirects=True)
+    except Exception as e:                                # noqa: BLE001
+        print(f"  ⚠️ 네이버 세션 판정 불가: {type(e).__name__}: {e}")
+        return None
+    # 로그인이 없으면 네이버는 에디터 대신 nidlogin 으로 보내는 JS 스텁을 준다.
+    # (실측: 미인증 응답 565바이트, 본문에 nidlogin.login 리다이렉트 한 줄)
+    return "nidlogin" not in res.text
+
+
 def check_cookie_valid() -> bool:
     """
-    저장된 쿠키로 네이버에 실제 HTTP 요청을 보내 로그인 상태 확인.
+    저장된 쿠키로 **발행이 여는 글쓰기 화면**에 실제 HTTP 요청을 보내 로그인 상태 확인.
     브라우저 없이 requests만 사용 → 빠름 (1~2초).
-    추가로 NID_AUT / NID_SES 만료 시간을 확인해 브라우저 사용 불가 상태도 감지.
+
+    ★ 만료 *시각* 은 보지 않는다 — 종전 docstring 은 "NID_AUT/NID_SES 만료 시간을
+      확인" 한다고 적었으나 본문에 그런 코드가 없었다(문서-코드 드리프트, 2026-08-10 정정).
+      세션 생사는 시각 계산이 아니라 실제 접근으로 판정한다.
     Returns: True = 쿠키 유효(로그인 상태), False = 만료 또는 파일 없음
     """
     if not COOKIE_FILE.exists():
@@ -225,38 +344,20 @@ def check_cookie_valid() -> bool:
         _g_report("writer", e, module=__name__)
         return False
 
-    # ── 핵심 쿠키 존재 여부 먼저 확인 ──────────────────────────────
-    # NID_AUT, NID_SES가 없으면 브라우저 로그인 불가
-    key_names = {c["name"] for c in raw_cookies}
-    for key in ("NID_AUT", "NID_SES"):
-        if key not in key_names:
-            print(f"  ❌ {key} 쿠키 없음 → 브라우저 로그인 불가")
-            return False
+    # ── 발행에 필요한 인증 쿠키가 있는가 (이름 판정은 has_publish_auth 단독) ──
+    if not has_publish_auth(raw_cookies):
+        _have = sorted({c["name"] for c in raw_cookies})
+        print(f"  ❌ {'/'.join(AUTH_COOKIE_NAMES)} 쿠키 없음 → 브라우저 로그인 불가 (보유: {_have})")
+        return False
 
     jar = {c["name"]: c["value"] for c in raw_cookies}
-
-    headers = {"User-Agent": _UA_FOR_CHECK, "Accept-Language": "ko-KR,ko;q=0.9"}
-
-    try:
-        # 네이버 메인 → 로그인 상태면 NV_ID 또는 '로그아웃' 텍스트 포함
-        res = _req.get(
-            "https://www.naver.com",
-            cookies=jar,
-            headers=headers,
-            timeout=8,
-            allow_redirects=True,
-        )
-        logged_in = ("로그아웃" in res.text) or (NV_ID and NV_ID in res.text)
-        if logged_in:
-            print("  ✅ 쿠키 유효 (로그인 상태 확인됨)")
-        else:
-            print("  ❌ 쿠키 만료 (로그아웃 상태)")
-        return logged_in
-    except Exception as e:
-        print(f"  ⚠️ 쿠키 유효성 확인 요청 실패: {e}")
-        _g_report("writer", e, module=__name__)
+    alive = _session_alive_http(jar, timeout=8)
+    if alive is None:
         # 네트워크 오류는 만료로 보지 않음 → True 반환해서 갱신 시도 막음
         return True
+    print("  ✅ 쿠키 유효 (글쓰기 화면 접근 확인)" if alive
+          else "  ❌ 쿠키 만료 (글쓰기 화면이 로그인으로 바운스)")
+    return alive
 
 
 def cookie_valid_http(timeout: float = 8.0) -> "bool | None":
@@ -279,18 +380,14 @@ def cookie_valid_http(timeout: float = 8.0) -> "bool | None":
         import requests as _req                           # noqa: PLC0415
         with open(COOKIE_FILE, "rb") as _f:
             raw = _pk.load(_f)
-        names = {c["name"] for c in raw}
-        if not {"NID_AUT", "NID_SES"} <= names:
+        if not has_publish_auth(raw):
             return False                                  # 핵심 쿠키 부재 = 확실한 만료
         jar = {c["name"]: c["value"] for c in raw}
-        res = _req.get("https://www.naver.com", cookies=jar, timeout=timeout,
-                       headers={"User-Agent": _UA_FOR_CHECK,
-                                "Accept-Language": "ko-KR,ko;q=0.9"},
-                       allow_redirects=True)
-        return ("로그아웃" in res.text) or bool(NV_ID and NV_ID in res.text)
     except Exception as e:                                # noqa: BLE001
-        print(f"  ⚠️ 네이버 쿠키 HTTP 판정 불가: {type(e).__name__}: {e}")
+        print(f"  ⚠️ 네이버 쿠키 파일 판정 불가: {type(e).__name__}: {e}")
         return None
+    # 판정 규칙은 `_session_alive_http` 단독 — 여기서 복제하지 않는다(①).
+    return _session_alive_http(jar, timeout=timeout)
 
 
 def cookie_needs_refresh() -> bool:
@@ -411,21 +508,13 @@ def refresh_naver_cookies(force: bool = False) -> bool:
         src = driver.page_source
         already_logged = "로그아웃" in src or (NV_ID and NV_ID in src)
         if already_logged:
-            # nid.naver.com도 방문해서 NID_AUT / NID_SES 쿠키까지 수집
-            driver.get("https://nid.naver.com")
-            time.sleep(random.uniform(1, 2))
-            cookies = driver.get_cookies()
-            key_names = {c["name"] for c in cookies}
-            if "NID_AUT" not in key_names or "NID_SES" not in key_names:
-                # blog.naver.com도 방문 후 재수집
-                driver.get(f"https://blog.naver.com/{NV_ID}")
-                time.sleep(random.uniform(1.5, 2.5))
-                cookies = driver.get_cookies()
-                key_names = {c["name"] for c in cookies}
-            if cookies and ("NID_AUT" in key_names and "NID_SES" in key_names):
+            # ★ 도메인 순회 누적은 `_harvest_cookies` 단독 (①) — 여기서 재구현하지 않는다.
+            cookies = _harvest_cookies(driver)
+            if has_publish_auth(cookies):
                 _save_cookies(cookies)
                 print(f"  ✅ 프로필 세션 유효 — 쿠키 추출 완료 ({len(cookies)}개, NID_AUT/SES 포함)")
                 return True
+            key_names = {c["name"] for c in cookies}
             print(f"  ⚠️ 로그인 확인됐으나 NID_AUT/SES 없음 (보유: {key_names}) — 재로그인 시도")
 
         # ── 2단계: CGEvent 타이핑으로 로그인 (자동화 감지 우회) ─────
@@ -547,7 +636,14 @@ def refresh_naver_cookies(force: bool = False) -> bool:
             logged = "로그아웃" in src or NV_ID in src
 
         if logged:
-            cookies = driver.get_cookies()
+            # ★ 종전엔 `driver.get_cookies()` 한 번 — 그 순간 문서가 www.naver.com 이라
+            #   blog·nid 쿠키가 통째로 빠진 pkl 이 저장됐다(08-09 23:23 실측: blog 쿠키 0개).
+            #   그 pkl 이 포털 판정만 통과하고 글쓰기에서 튕겨 08-10 미발행으로 이어졌다.
+            cookies = _harvest_cookies(driver)
+            if not has_publish_auth(cookies):
+                return _fail("cookie_harvest_incomplete",
+                             f"  ❌ 로그인은 됐으나 인증 쿠키 수집 실패 "
+                             f"(보유: {sorted({c['name'] for c in cookies})})")
             _save_cookies(cookies)
             print(f"  ✅ 쿠키 갱신 완료 ({len(cookies)}개 저장)")
             return True
@@ -609,21 +705,8 @@ def manual_login_and_save():
         logged = "로그아웃" in src or (NV_ID and NV_ID in src)
         if logged:
             # 여러 도메인 방문하여 모든 쿠키 수집 (BA_DEVICE, JSESSIONID 등 포함)
-            all_cookies: dict = {}
-            for c in driver.get_cookies():
-                all_cookies[c["name"]] = c  # www.naver.com 쿠키
-
-            driver.get("https://nid.naver.com")
-            time.sleep(1.5)
-            for c in driver.get_cookies():
-                all_cookies[c["name"]] = c  # nid.naver.com 쿠키 (BA_DEVICE 등)
-
-            driver.get(f"https://blog.naver.com/{NV_ID}")
-            time.sleep(2)
-            for c in driver.get_cookies():
-                all_cookies[c["name"]] = c  # blog.naver.com 쿠키 (JSESSIONID 등)
-
-            cookies = list(all_cookies.values())
+            # ★ 셋 중 유일하게 옳았던 순회 누적 — 이제 `_harvest_cookies` 가 단독 소유(①).
+            cookies = _harvest_cookies(driver)
             _save_cookies(cookies)
             names = {c["name"] for c in cookies}
             print(f"  ✅ 쿠키 저장 완료 ({len(cookies)}개): {names}")

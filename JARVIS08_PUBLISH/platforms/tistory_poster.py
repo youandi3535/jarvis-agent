@@ -54,12 +54,25 @@ except ImportError:
 _PROJECT_ROOT    = Path(__file__).resolve().parent.parent.parent  # JARVIS08_PUBLISH/platforms → root
 _LEGACY_BASE_DIR = _PROJECT_ROOT / "JARVIS02_WRITER"               # 옛 위치 anchor
 _ENV_FILE        = _PROJECT_ROOT / '.env'                          # 루트 .env
-load_dotenv(dotenv_path=_ENV_FILE, override=True)
+# ★ override=False (2026-08-10) — 모듈 로드 시점엔 '갱신 반영' 할 것이 없다.
+#   override=True 는 .env 의 *모든* 키로 프로세스 환경을 덮어써서, 호출자가 세워 둔
+#   값까지 되돌린다. 실측: 이 한 줄이 테스트가 격리해 둔 `JARVIS_DB_PATH` 를 운영
+#   경로로 되돌려, `from JARVIS08_PUBLISH.platforms import ...` 하는 테스트가 생기자
+#   pytest 전체(112건)가 '테스트가 운영 DB 를 잡았다' 로 터졌다.
+load_dotenv(dotenv_path=_ENV_FILE)
 
 def _get_cookie() -> str:
-    """항상 최신 TS_COOKIE 반환 — 갱신 후 재로드 보장."""
-    load_dotenv(dotenv_path=_ENV_FILE, override=True)
-    return os.getenv("TS_COOKIE", "").strip('"').strip("'")
+    """항상 최신 TS_COOKIE 반환 — 갱신 후 재로드 보장.
+
+    ★ **환경 전체를 덮지 않는다** (2026-08-10). 갱신이 필요한 것은 TS_COOKIE 하나인데
+      종전엔 `load_dotenv(override=True)` 로 .env 의 모든 키를 프로세스에 밀어 넣었다.
+      필요한 값만 파일에서 직접 읽으면 부작용이 0 이다.
+      프로세스 env 를 폴백으로 두어 종전 동작(값이 있으면 쓴다)은 그대로 유지한다.
+    """
+    # 최신값 판정은 login_manager 단독 (LOGIN_SUPREME_LAW ①) — 여기서 복제하지 않는다.
+    from JARVIS08_PUBLISH.credentials.login_manager import (  # noqa: PLC0415
+        get_tistory_cookie)
+    return get_tistory_cookie()
 
 _ts_url = os.getenv("TS_URL", "")
 TS_BLOG = _ts_url.replace("https://","").replace("http://","").split(".")[0] if _ts_url else ""

@@ -305,8 +305,27 @@ def check_naver_cookie_valid() -> bool:
 # ══════════════════════════════════════════════════════════
 
 def get_tistory_cookie() -> str:
-    """티스토리 TS_COOKIE 환경변수 값."""
-    return os.environ.get(TS_COOKIE_ENV, "").strip()
+    """티스토리 TS_COOKIE — **항상 최신값** (갱신 직후에도 옛 값을 주지 않는다).
+
+    ★ 왜 파일을 먼저 보나 (2026-08-10)
+      쿠키 갱신은 `.env` **파일** 에 쓴다. 그런데 이 함수가 `os.environ` 만 보면
+      *프로세스가 시작할 때 로드된 옛 값* 을 계속 준다. 그래서 호출자마다
+      `load_dotenv(override=True)` 를 앞세워 환경을 통째로 덮고 있었다 — 실측 4곳
+      (`trend_theme_writer` 2 · `economic_poster` 1 · `performance_collector` 1)
+      에 `tistory_poster` 모듈 로드 1곳까지 5곳.
+      그 부작용으로 호출자가 세워 둔 *무관한* 값까지 .env 값으로 되돌아갔다.
+      실측 피해: 테스트가 격리해 둔 `JARVIS_DB_PATH` 가 운영 경로로 복귀해
+      pytest 112건이 "테스트가 운영 DB 를 잡았다" 로 터졌다.
+      **최신값을 아는 책임을 소비처 한 곳에 모으면 호출자는 아무것도 안 해도 된다**(①).
+    """
+    from dotenv import dotenv_values                     # noqa: PLC0415
+    _v = None
+    try:
+        _v = dotenv_values(_PROJECT_ROOT / ".env").get(TS_COOKIE_ENV)
+    except Exception:                                    # noqa: BLE001
+        pass                                             # 파일을 못 읽으면 환경변수로 폴백
+    # 따옴표 제거도 여기서 한 번 — 호출자마다 `.strip('"').strip("'")` 를 복사하던 것을 흡수.
+    return (_v or os.environ.get(TS_COOKIE_ENV, "")).strip().strip('"').strip("'")
 
 
 def refresh_tistory_cookies(force: bool = False) -> bool:

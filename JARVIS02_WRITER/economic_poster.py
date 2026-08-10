@@ -469,11 +469,10 @@ def run(post_naver=True, post_tistory=True, resume=None):
             print("  ⏭️ [④] 티스토리 driver 이미 준비됨 (재시도 — 재갱신 스킵)")
             return {}
         try:
-            from dotenv import load_dotenv
             from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr
             ok, drv = _tcr(force=False, return_driver=True)
             if ok:
-                load_dotenv(override=True)
+                # ★ load_dotenv(override=True) 제거 — 최신 TS_COOKIE 는 get_tistory_cookie() 가 .env 에서 직접 읽는다 — env 전체를 덮지 않는다(2026-08-10)
                 from JARVIS00_INFRA.harness import ACTION_NAME_KEY as _ANK
                 return {"ts_driver_key": _res.put(state.get(_ANK, ""), "ts_driver", drv)}
             if drv:

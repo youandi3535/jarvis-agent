@@ -675,8 +675,12 @@ def _load_cookies_to_browser(driver):
             failed += 1
 
     # 실제로 브라우저에 로드된 쿠키 확인
-    loaded = {c["name"] for c in driver.get_cookies()}
-    has_auth = "NID_AUT" in loaded and "NID_SES" in loaded
+    loaded_cookies = driver.get_cookies()
+    loaded = {c["name"] for c in loaded_cookies}
+    # 이름 판정은 refresher 의 has_publish_auth 단독 (①) — 여기서 복제하지 않는다.
+    from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+        has_publish_auth)
+    has_auth = has_publish_auth(loaded_cookies)
     _p(f"  🍪 쿠키 로드: {added}개 추가 / {skipped_expired}개 만료 스킵 / {failed}개 실패")
     _p(f"  🍪 브라우저 확인: {loaded}")
     if has_auth:
@@ -686,9 +690,25 @@ def _load_cookies_to_browser(driver):
     return True
 
 
+def _blog_write_url() -> str:
+    """발행이 여는 글쓰기 화면 — refresher 단일 소스를 *호출 시점에* 조회한다.
+
+    ★ 모듈 로드 시 값을 받아두지 않는다 — 그러면 그 순간의 사본이 되어
+      원본이 바뀌어도 여기만 옛 값을 가리킨다(복사본을 진실로 믿지 말 것).
+    """
+    from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+        blog_write_url)
+    return blog_write_url()
+
+
 def _check_blog_login(driver) -> bool:
-    """블로그 글쓰기 URL 접근 → 로그인 페이지 리다이렉트 여부로 로그인 상태 확인."""
-    driver.get(f"https://blog.naver.com/{NV_ID}/postwrite")
+    """블로그 글쓰기 URL 접근 → 로그인 페이지 리다이렉트 여부로 로그인 상태 확인.
+
+    ★ URL 을 여기 박지 않는다(②) — `naver_cookie_refresher.blog_write_url()` 단일 소스.
+      쿠키 *판정* 과 *수집* 과 *발행* 이 같은 문을 두드려야 한다. 종전엔 판정만
+      `www.naver.com` 을 보고 있어서 "쿠키 유효" 직후 여기서 튕겼다 (2026-08-10).
+    """
+    driver.get(_blog_write_url())
     time.sleep(5)
     cur = driver.current_url
     return "nidlogin" not in cur and "login" not in cur
@@ -806,7 +826,8 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
         # _ensure_logged_in() / _check_blog_login()이 이미 글쓰기 URL로 이동해둠
         # 수정 모드면 그 위에 logNo 파라미터로 다시 이동 → SmartEditor 가 기존 본문 채워서 열림
         if edit_log_no:
-            edit_url = f"https://blog.naver.com/{NV_ID}/postwrite?logNo={edit_log_no}&redirect=Update"
+            # 수정 모드도 같은 글쓰기 화면 — URL 은 단일 소스에서 파생한다(②).
+            edit_url = f"{_blog_write_url()}?logNo={edit_log_no}&redirect=Update"
             _p(f"  ✏️  수정 모드 진입: logNo={edit_log_no}")
             driver.get(edit_url)
             time.sleep(8)
@@ -829,7 +850,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                         c.pop("sameSite", None)
                         try: driver.add_cookie(c)
                         except Exception: pass
-                    driver.get(f"https://blog.naver.com/{NV_ID}/postwrite")
+                    driver.get(_blog_write_url())
                     time.sleep(8)
                     if 'nidlogin' in driver.current_url:
                         _p("  ❌ 쿠키 갱신 후에도 로그인 실패")

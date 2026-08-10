@@ -299,7 +299,7 @@ def _collect_tistory_stats_batch() -> dict[str, int]:
         try:
             print("  [티스토리 배치] 쿠키 갱신 후 재시도...")
             refresh_tistory_cookies()
-            load_dotenv(JARVIS_ROOT / ".env", override=True)
+            # ★ load_dotenv(override=True) 제거 — 최신 TS_COOKIE 는 get_tistory_cookie() 가 .env 에서 직접 읽는다 — env 전체를 덮지 않는다(2026-08-10)
             ts_raw = get_tistory_cookie().strip('"').strip("'")
             result = _try(ts_raw)
         except Exception as e:

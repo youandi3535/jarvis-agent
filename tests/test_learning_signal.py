@@ -416,14 +416,24 @@ def test_무인이면_캡차를_기다리지_않는다():
 
     ★ 판정은 새 플래그가 아니라 `current_job_id()` 에서 파생한다(② 동적 설계).
     """
-    from JARVIS04_SCHEDULER.job_llm_priority import gate
     from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import human_wait_sec
 
-    assert human_wait_sec() > 0, "대화형(잡 밖)에서는 사람을 기다려야 한다"
+    # ★ 2026-08-10 정정 — 종전 이 테스트는 `gate("j01_...", lambda: ...)()` 로 확인했다.
+    #   `gate` 는 람다를 **호출한 그 스레드에서** 실행하므로 threading.local 문맥이
+    #   유일하게 살아 있는 조건이다. 운영은 정반대다 — 발행은 subprocess, 인시던트
+    #   재시도는 새 스레드라 문맥이 비어 '사람이 있다'로 오판했다.
+    #   그래서 테스트는 초록인데 08-10 07:00 에 120초 대기를 4회(482초) 버렸다.
+    #   이제 판정 근거가 TTY 이므로, *사고가 실제로 나는 경로* 로 검증한다.
+    assert human_wait_sec() == 0, (
+        "pytest 는 stdout 을 캡처한다(=TTY 아님) — 무인으로 판정해야 한다")
 
-    seen = {}
-    gate("j01_economic_post", lambda: seen.update(w=human_wait_sec()))()
-    assert seen["w"] == 0, f"예약 잡 안(무인)인데 {seen['w']}초를 기다린다"
+    # 사람이 붙어 있음을 명시하면 기다려야 한다 (양방향 검증)
+    import os as _os
+    _os.environ["JARVIS_VERBOSE"] = "1"
+    try:
+        assert human_wait_sec() > 0, "대화형인데 기다리지 않는다"
+    finally:
+        _os.environ.pop("JARVIS_VERBOSE", None)
 
 
 def test_로그인_실패_타입이_사유에서_파생된다():
@@ -735,10 +745,7 @@ def test_캡차가_아니면_무인도_기다린다():
 
     assert nc.LOGIN_REDIRECT_WAIT_SEC > 0, "무인 로그인 대기 예산이 0 이면 느린 로그인이 죽는다"
 
-    from JARVIS04_SCHEDULER.job_llm_priority import gate
-    seen: dict = {}
-    gate("j01_economic_post", lambda: seen.update(human=nc.human_wait_sec()))()
-    assert seen["human"] == 0, "무인인데 사람을 기다린다"
+    assert nc.human_wait_sec() == 0, "무인인데 사람을 기다린다"
     # 캡차가 아닐 때 쓰는 예산은 무인 여부와 무관해야 한다
     assert nc.LOGIN_REDIRECT_WAIT_SEC == nc.LOGIN_REDIRECT_WAIT_SEC
 
