@@ -191,10 +191,22 @@ def _start_daemon() -> subprocess.Popen | None:
     """
     log.info("🚀 jarvis_daemon.py 시작 중…")
     try:
+        # ★ stdout은 /dev/null — restart_daemon.sh 와 동일 (2026-08-10, CatchPathDead 수정).
+        #   종전엔 여기서만 raw stdout 을 `logs/daemon_stdout.log` 에 별도 기록했는데,
+        #   jarvis_daemon.py 의 logging.basicConfig 가 이미 StreamHandler(stdout) +
+        #   RotatingFileHandler(daemon.log) 둘 다 걸어 두어 daemon_stdout.log 는 daemon.log 의
+        #   **미회전(unbounded) 사본**이었다 — "복사본을 진실로 믿지 말 것" 위반.
+        #   재시작 경로(restart_daemon.sh)는 이미 /dev/null 을 쓰는데 keeper 만 딴 길이라
+        #   두 launch 경로가 stdout 목적지를 놓고 서로 어긋났다(①단일 진입점 위반).
+        #   그 결과 keeper 로 뜬 인스턴스가 죽고 restart_daemon.sh 로 재기동되면
+        #   daemon_stdout.log 는 그 시점에 얼어붙어(더는 아무도 안 씀) 과거 Traceback 을
+        #   품은 채 로그 폴더에 남았고, GUARDIAN 캐치 경로 스모크(`catch_path_effective`)의
+        #   '실수확' 다리가 "잡을 게 있는데 0건" 으로 오판(CatchPathDead)했다 —
+        #   실제로는 그 Traceback 들이 이미 원래 경로(직접 report())로 정상 수집된 뒤였다.
         proc = subprocess.Popen(
             [str(PYTHON), str(DAEMON_SCRIPT)],
             cwd=str(JARVIS_DIR),
-            stdout=open(JARVIS_DIR / "logs" / "daemon_stdout.log", "a"),
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )

@@ -12509,3 +12509,426 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
      구분되지 않는다.
 
 ---
+
+## [606] ✅ 해결 — [601] 이 고친 실유효성 판정, 같은 함수 안의 사본은 놓쳤다 (2026-08-10)
+
+- **증상**: 발행 前 점검이 `PrecheckTistoryCookieExpired` 보고
+  (`[발행 前 점검] tistory: 쿠키 만료 — manage 접근이 로그인으로 리다이렉트`).
+  실제 발행 경로(`platform=None` 전체 점검)는 [601] 수정 이후 정상 — `auto_refresh_if_needed()`
+  가 같은 호출 안에서 즉시 재로그인해 회복했다(재확인 시 `verify_all_logins()` 양쪽 `ok=True`).
+- **원인**: `login_manager.job_pre_publish_check()` 안에 있는 **다른 분기**
+  (`platform=="naver"` / `platform=="tistory"` 명시 호출)가 [601] 이 고친 실유효성 판정
+  (`cookie_valid_http`)을 타지 않고, 여전히 나이(`naver_cookie_age_hours() > 10`)와
+  존재(`not get_tistory_cookie()`)만 봤다 — [601]이 고쳤다고 적은 바로 그 버그의 사본이
+  같은 파일, 같은 함수 안에 남아 있었다. 현재 이 분기는 `job_registry._build_cookie_precheck_jobs()`
+  가 항상 `platform` 인자 없이(=None) 호출해 실제로는 실행되지 않는 죽은 경로지만,
+  `job_pre_publish_check(platform=)` 는 `__all__`·docstring 에 공개 계약으로 박혀 있어
+  향후 호출자가 생기면 그대로 재발한다.
+- **해결**: 두 분기를 `auto_refresh_if_needed(platforms=(platform,))` 위임으로 교체 — 판정 로직을
+  복제하지 않고 [601]이 이미 고친 단일 진입점을 그대로 쓴다(① 단일 진입점).
+- **파일**: `JARVIS08_PUBLISH/credentials/login_manager.py`
+- **교훈**: **한 파일 안에서 고친 로직도 사본이 남을 수 있다.** [601]은 `verify_all_logins`·
+  `auto_refresh_if_needed`(공용 경로)만 고쳤고, 같은 파일의 세 번째 분기(`platform` 명시 경로)는
+  검증 대상에서 빠졌다 — "이 파일을 고쳤다" 가 "이 파일 안의 같은 버그를 전부 고쳤다" 를
+  보장하지 않는다.
+
+---
+
+## [608] ✅ 해결 — JARVIS06 렌더 계층이 두 벌이라, 고친 쪽은 안 돌고 도는 쪽은 검사받지 않았다 (2026-08-10)
+
+- **증상**: 2026-08-10 07:00 경제 브리핑 인포그래픽 8장(경제·티스토리)과 네이버 동일 파일군에
+  ① 현실에 없는 수치 `합계 27.2%`(금리 8종 합)·`합계 4,368원`(환율 3시점 합)·`합계 341,000명`
+  (실적+전망 합)·`합계 1,550억원`(상장유지 *요건 임계값* 합) ② `항목 수 8개` 인데 막대는 7개
+  (독자가 검산하면 24.7 ≠ 27.2) ③ 1행짜리 dataset 이 트랙 100% 를 채운 막대(정보량 0)
+  ④ 학습 레시피의 고정 문구 `핵심 지표 · KEY METRIC`·`보조 지표 Supporting Data`
+  ⑤ 출처 `naver_news`·`market 시장 데이터`(내부 식별자·코드가 조립한 제목)가 그대로 인쇄.
+- **원인 (뿌리 하나)**: 같은 조립 작업이 **두 벌** 이었다 —
+  `pro_templates.build_html` 의 스켈레톤과 `template_engine.render_layout`.
+  2026-07-06 에 '무의미한 합계 폐기' 수정이 *스켈레톤 쪽에만* 걸렸고, 2026-07-18 에
+  `_pick_layout_template` 이 우선 경로가 되면서 **고쳐진 쪽은 도달 불가 폴백**으로 강등되고
+  **안 고쳐진 사본이 상시 실행**됐다. 그 상시 경로엔 검증기가 하나도 배선돼 있지 않았다:
+  `record_provenance` 는 `image_spec` 전용이라 `render_pro` 산출물은 provenance 자체가 없었고,
+  `prepublish_gate._image_factuality_leg` 는 `prov=None` 을 **fail-open** 으로 통과시켰다.
+  설령 배선했어도 못 잡았다 — 대조군 `_dg_allowed` 가 `sum(nums)`·`float(len(nums))` 를
+  *무조건 허용* 해 무의미한 합계와 절단 전 개수가 '근거 있는 수치' 로 판정됐다.
+- **헛다리 (다시 시도 금지)**:
+  · `_BAD_PHRASES` 어휘 목록을 늘리는 것 — 오염 6건 중 4건은 `source:"seed-layout"` 으로
+    `_validate_recipe` 를 **거친 적이 없다**(JSON 직접 커밋). 어휘를 고쳐도 안 잡힌다.
+  · `_dedup_labels` 를 ±5% tolerance 병합으로 바꾸는 것 — 1,419 vs 1,408(0.78%) 같은
+    정당한 시계열 포인트가 조용히 삭제된다.
+  · `prov is None` 을 전면 차단하는 것 — 썸네일·표·재사용 이미지까지 잡아 4조합 즉시 발행 정지.
+- **해결 (JARVIS06 몫)**:
+  ① **조립 사본 제거** — `build_html` 스켈레톤을 지우고 `_FALLBACK_LAYOUT`(토큰만 든 골격 문자열)을
+     *같은 `render_layout` 에 먹인다*. 폴백 제거가 아니라 폴백을 같은 경로로 태우기.
+  ② **단일 초크포인트** `infographic_engine._emit` — `generate_infographic` 의 반환은 정확히
+     `return ""` 과 `return _emit(...)` 두 꼴뿐. 픽셀을 낳는 모든 경로가 `certify_image` 를 지나
+     검증 + provenance 등록을 받고, 미검증이면 **이미지를 폐기**한다.
+  ③ **판정 owner 통합** — `_dg_allowed`·`_dg_verify_html`·`_verify_dataset` 을 shim 없이 삭제하고
+     `validators/image_data_verifier.py` 로 이관(`grounding_pool`·`verify_rendered_html`·
+     `dataset_admissible`). `sum`·`len` 무조건 허용을 제거하고, 합계는 `additive_total()` 이
+     **출처가 공표한 합계**(`ds["totals"]`)를 돌려줄 때만 대조군에 넣는다.
+  ④ **표시 뷰 단일화** `template_engine.view_rows` — 히어로·차트·검증이 같은 행을 본다.
+  ⑤ **차트형 판정 단일화** `chart_fit()` + 단일값용 `_kpi_cards` 렌더러 신설(`MIN_ROWS` 공개 승격).
+  ⑥ **출처 생산자 단일화** — `render_layout` 의 `src` 인자를 폐지(우회로 제거)하고
+     내부 식별자·코드 조립 제목을 *꼴* 로 배제(`naver_news`·`market 시장 데이터` → 표기 안 함).
+  ⑦ **고정 표시문구는 꼴로 판정** `template_engine.template_literals` — 생성·저장·렌더 편입
+     3곳에서 검사하고, 오염 레시피 6건의 리터럴 노드를 제거(골격은 보존 → 풀 20개 유지).
+- **검증(실측)**: 2026-08-10 실캐시 14 dataset × 골격 100회전 = **1,400 렌더에서 미근거 수치 0건**.
+  그 근거로 관용치를 2건/20% → 1건/5% 로 조였다. 오탐 두 원인(기준일 배지 `2026.08`,
+  라벨 `S&P500` 의 500)은 꼴 규칙으로 제거.
+- **파일**: `JARVIS06_IMAGE/{template_engine,pro_templates,infographic_engine,slot_renderer,
+  design_learner,draft_processor,image_spec,theme_charts,limits}.py` ·
+  `JARVIS06_IMAGE/validators/image_data_verifier.py` · `JARVIS06_IMAGE/design_recipes.json`
+- **교훈**: **게이트를 추가하면서 사본을 남기면 게이트는 반드시 새어나간다.**
+  이 사고의 정체는 "검사가 없었다" 가 아니라 "검사받지 않는 사본이 상시 경로였다" 이다.
+  그래서 이번 수정의 절반은 *추가* 가 아니라 *삭제* 다 — `_dg_allowed`·`_dg_verify_html`·
+  `_verify_dataset`·스켈레톤 조립부·`_src_label` 표를 shim 없이 지웠다. shim 을 남기면
+  다음 사람의 손이 그리로 간다.
+
+---
+
+## [609] 🔍 조사완료(결함아님) — `_alt` NameError 는 저장소 밖 스크래치패드의 [608] 작업 중간 스냅샷이었다 (2026-08-10)
+
+- **증상**: GUARDIAN 자동수정 잡이 `source=image, module=old_tc` 로 `NameError: name '_alt' is
+  not defined` (`make_leader_price_chart_from_data` → `_emit_price_chart` 호출부) 를 보고.
+  traceback 경로가 저장소 안이 아니라
+  `/private/tmp/claude-501/.../scratchpad/fontproof/rev_theme_charts.py:248`.
+- **원인**: 해당 경로는 오늘 진행된 [608] 리팩터(가격차트 중복 함수 통합 + 폰트 스타일
+  하드코딩 → `CHART_STYLE[...]` 전환, JARVIS06 CLAUDE.md 규칙 14) 검증용 임시 스크래치패드
+  사본이다. `_alt = _price_alt(...)` 대입이 `_emit_price_chart(..., alt=_alt)` 호출보다
+  뒤에 있던 **작업 중간 상태**를 캡처한 순간 발생한 오류이며, 실제 저장소 파일
+  (`JARVIS06_IMAGE/theme_charts.py`)에는 이 버그가 존재한 적이 없다(대입이 항상 호출보다 선행).
+- ⛔ **헛다리(다시 시도 금지)**: `JARVIS06_IMAGE/theme_charts.py` 를 대상으로 `_alt` 정의 위치를
+  다시 고치려는 시도 — 이미 올바르다. traceback 경로가 `/private/tmp/...scratchpad/...` 로
+  시작하면 *저장소 밖 임시 파일*이므로 먼저 실제 owner 파일 상태부터 대조할 것.
+- **해결**: 코드 변경 0건. `python3 -m py_compile JARVIS06_IMAGE/theme_charts.py` 통과 +
+  저장소 전체 `_alt` 미정의 패턴 잔존 0건 확인. `error_log` 는 `wontfix`(스크래치패드 스냅샷,
+  운영 코드 정상) 처리 대상.
+- **파일**: 없음 (조사만, 저장소 파일 변경 없음)
+
+---
+
+## [610] 🔍 조사완료(결함아님) — [609] 후속: `module=new_tc` 는 traceback 경로가 *진짜 저장소*를
+가리켰지만 그 역시 [608] 리팩터의 중간편집 스냅샷이었다 (2026-08-10)
+
+- **증상**: 동일 배치(13:03:09)에서 `error_log` id=5680 이 `source=image, module=new_tc` 로
+  같은 `NameError: name '_alt' is not defined` 를 보고. [609](id=5681, `old_tc`)와 달리
+  traceback 경로가 이번엔 `/private/tmp/...scratchpad/...` 가 **아니라**
+  `/Users/kimhyojung/AI/.../JARVIS06_IMAGE/theme_charts.py:248` — *저장소 안 실제 파일*.
+  경로만 보면 [609]의 "저장소 밖이라 결함 아님" 판정 논리가 통하지 않는 케이스였다.
+- **원인**: 현재 저장소 `theme_charts.py` 를 `Read`로 직접 대조한 결과 253행에서
+  `_alt = _price_alt(...)` 대입 후 254행에서 `_emit_price_chart(..., alt=_alt)` 로 사용 —
+  순서 정상(대입이 항상 선행). 오류의 traceback 이 가리키는 줄번호(248)는 현재 파일의 실제
+  248행(`ax1.set_xticks(dates[::step])`)과도 안 맞는다 — [608] 리팩터가 진행되던 그 순간
+  (13:03:09) 파일이 지금과 다른 줄 수를 가진 **중간 저장 상태**였고, 그 순간을 읽은 백그라운드
+  A/B 비교 프로세스(`old_tc`=스크래치패드 사본 vs `new_tc`=저장소 원본, 같은 타임스탬프로
+  동시 생성)가 둘 다 같은 찰나의 미완성 상태를 캡처한 것. 저장소 경로라는 사실이 "현재도
+  재현된다"를 보장하지 않는다 — **시점**이 관건이었다.
+- ⛔ **헛다리(다시 시도 금지)**: traceback 경로가 저장소 안이라고 해서 `_alt` 정의 순서를
+  다시 고치려는 시도 — 이미 올바르다. 경로가 저장소 안이어도 *과거 타임스탬프의 스냅샷*일
+  수 있으므로, 코드를 고치기 전 반드시 **현재 워킹트리 파일을 직접 읽어 대조**하고, 가능하면
+  **실제 실행(smoke test)으로 재현을 시도**할 것 — 정적 대조만으로는 줄번호 불일치 같은 신호를
+  놓칠 수 있다.
+- **해결**: 코드 변경 0건. `python3 -m py_compile` 통과 + `make_leader_price_chart_from_data`
+  를 4행 더미 rows(`{"label":"2024.Q1","value":70000}` 등)로 실제 호출해 `certify_image` 검증까지
+  통과하는 `<img>` HTML 반환 확인(재현 0건). `error_log` id=5680·5681 모두 `mark_error_status`
+  로 `wontfix` 처리 완료(사유 기록).
+- **부록**: 같은 배치에서 31초 뒤(13:03:40) id=5682 가 `ImportError: cannot import name
+  'data_image_html' from 'JARVIS06_IMAGE.infographic_engine'` (동일 `_emit_price_chart` 호출
+  경로, severity=high)를 별도로 보고했다. 이 역시 [608] 리팩터가 `infographic_engine.py` 를
+  *동시에* 저장하던 순간의 스냅샷 — 현재 `infographic_engine.data_image_html` 정의·임포트
+  정상(직접 import 테스트 성공) + 위 스모크테스트가 그 함수를 실제로 거쳐 성공했으므로 동일
+  근본원인으로 판정, `wontfix` 처리.
+- **교훈**: "traceback 경로가 저장소 안이다" 는 "지금도 버그다"의 증거가 아니다 — 리팩터
+  진행 중에는 저장소 파일 자체가 매 저장마다 다른 중간 상태를 거친다. 정적 코드 대조에 더해
+  **실행 스모크테스트**로 한 번 더 확인하는 것이 결정적이었다(줄번호 불일치를 알아챈 것도
+  실행 전 정적 대조 단계였음).
+- **파일**: 없음 (조사만, 저장소 파일 변경 없음)
+
+---
+
+## [611] 🔍 조사완료(결함아님) — [608] 이 의도적으로 심은 트립와이어가 정상 발화한 것 (2026-08-10)
+
+- **증상**: `error_log` id=5690 — `source=image, module=JARVIS06_IMAGE.image_agent`,
+  `ValueError: 알 수 없는 요청 유형: chart` (`_handle_bus_request` 279행), severity=medium,
+  `seen_count=1`, 14:30:11 단발 기록.
+- **원인**: 코드 결함 아님. [608] 리팩터가 `image.request` bus 의 `type="chart"` 분기와
+  `generate_chart()` 본체를 **의도적으로 삭제**했다 — `ClaudeSVGProvider` 를 직접 호출해
+  단일 초크포인트(`infographic_engine._emit → certify_image`)를 지나지 않는 채 픽셀을 반환하는
+  유일한 외부 도달 경로였기 때문(이미지 사실성 게이트 우회로, 279행 주석에 사유 명기됨).
+  삭제 후 `type="chart"` 요청은 *의도적으로* `ValueError` 로 떨어지고, 그 예외를 핸들러가
+  잡아 `_g_report()` 로 GUARDIAN 에 보고한다 — 이건 버그가 아니라 **트립와이어**다(옛 우회로를
+  누군가 여전히 두드리면 알아채기 위해 일부러 시끄럽게 실패하게 설계됨).
+  저장소 전역 실측: `image.request` 를 발행하는 살아있는 호출자 **0곳**(`bus.publish`·
+  `EventType` 어디에도 없음) — 이 단발 호출은 [608] 리팩터 도중 가드 동작을 확인하려는
+  수동 검증 호출로 추정되며 재발 경로가 없다.
+- ⛔ **헛다리(다시 시도 금지)**: `type == "chart"` 분기를 되살리는 것 — 그게 바로 [608] 이
+  없앤 사실성 게이트 우회로다. 되살리면 검증·provenance 없는 차트가 다시 외부 도달 가능해진다.
+- **해결**: 코드 변경 0건. `python -m py_compile JARVIS06_IMAGE/image_agent.py` 통과 +
+  `_handle_bus_request({"type":"chart",...})` 스모크 호출로 크래시 없이
+  `{"ok": False, "error": "알 수 없는 요청 유형: chart"}` 응답 확인(설계대로 실패 격리됨).
+  `error_log` id=5690 → `mark_error_status(status="wontfix")` 처리.
+- **부록(범위 밖 관찰 — 조치 안 함)**: `image.request`/`image.response` bus 이벤트 자체가
+  저장소 전역에 발행자·구독자 모두 0곳인 죽은 배선으로 보인다(사진·썸네일 분기 포함). 별도
+  확인·정리가 필요하면 후속 작업으로 분리할 것 — 본 사고와 무관.
+- **교훈**: 삭제된 분기가 예외를 던지는 것은 실패가 아니라 *설계된 방어* 일 수 있다.
+  `_g_report` 가 걸려 있다고 자동으로 "고쳐야 할 버그" 로 단정하지 말고, 그 예외가 *의도된
+  거부*(가드)인지 *놓친 케이스*인지부터 최근 리팩터 이력([608])과 실제 호출자 존재 여부로
+  가른다.
+- **파일**: 없음 (조사만, 저장소 파일 변경 없음)
+
+---
+
+## [612] ✅ 해결 — 로그인은 성공했는데 *포털 쿠키만* 저장돼, 글쓰기에서 튕기고 매 발행이 캡차로 떨어졌다 (2026-08-10)
+
+- **증상**: 07:00 경제 브리핑 네이버 미발행(티스토리는 정상). 로그에 모순이 그대로 찍혔다 —
+  `✅ 쿠키 유효 (로그인 상태 확인됨)` 바로 다음 줄이 `⚠️ 쿠키 브라우저 적용 실패 → 강제 갱신`.
+  이후 ID/PW 타이핑 로그인 → 영수증형 CAPTCHA → 무인이라 실패. 총 4회 시도, 482초 소모.
+- **환경**: 데몬 08-09 23:50 기동. `naver_cookies.pkl` 08-09 23:23 저장(수동 로그인 성공분).
+- **원인 (네 겹)**:
+  1. **수집이 3벌이고 서로 다른 도메인을 들렀다.** selenium `get_cookies()` 는 *현재 문서에서
+     접근 가능한* 쿠키만 준다. 폼로그인 성공 경로는 `www.naver.com` 에서 한 번만 불러
+     **blog·nid 도메인 쿠키를 통째로 놓쳤다**. 실측: 저장된 pkl 13개가 전부 `www.naver.com`
+     계열이고 `BA_DEVICE`·`JSESSIONID`·`NID_JST` 는 0개. Chrome 프로필에도 NID_AUT/SES 부재.
+  2. **판정이 소비처와 다른 문을 두드렸다.** `check_cookie_valid()`/`cookie_valid_http()` 는
+     `www.naver.com` 에 "로그아웃" 글자가 있는지로 봤는데, 발행은 `blog.naver.com/{ID}/postwrite`
+     를 연다. 네이버는 두 화면의 권한을 따로 본다 — 같은 쿠키로 포털 200 / 글쓰기 nidlogin 바운스.
+     그래서 반쪽 쿠키가 게이트를 통과하고 발행자가 뒤늦게 튕겼다.
+  3. **무인 판정이 프로세스·스레드 경계를 못 넘었다.** `human_wait_sec()` 이 `current_job_id()`
+     (threading.local)로 판정했는데 발행은 subprocess, 인시던트 재시도는 새 스레드다.
+     둘 다 문맥이 비어 '사람이 있다'로 오판 → 120초 대기 ×4.
+     회귀 테스트는 같은 스레드에서 `gate()` 를 불러 **사고가 나지 않는 경로만** 검증했다.
+  4. **네이버 게이트가 세트 전체를 끊었다.** `if not _naver_cookie_ready(): return` 이
+     `run_economic_poster()` **앞**에 있어 네이버 쿠키 하나로 티스토리까지 죽었다.
+     08-08 21:00·08-09 07:00·08-09 21:00 세 슬롯이 전부 `결손 2건: naver·tistory` 였던 이유.
+- **헛다리**: ① "자동 경로가 수동과 다른 방식으로 로그인한다" — 아니다. 같은 `post_to_naver`,
+  같은 Chrome 프로필이다. 자동 고유 관문(06:30 사전점검·`_clear_all_cookies`·`_naver_cookie_ready`)은
+  08-10 에 **로그인을 한 번도 유발하지 않았다**. 차이는 경로가 아니라 *사람의 유무* 였다.
+  ② "`_clear_all_cookies` 가 오늘도 쿠키를 지웠다" — 아니다. 08-09 23:26 `07233c2` 로 이미
+  고쳐졌고 08-10 로그는 `🔒 보존(로그인 건너뜀)`. ③ "`pop("expiry")` 가 프로필을 파괴한다" —
+  바로 위에서 만료분을 이미 걸러낸 뒤라 실질 영향 미확인.
+- **해결 (3원칙)**:
+  ① **단일 진입점** — 수집을 `_harvest_cookies()` 하나로(도메인 순회·누적, 키는 이름+도메인).
+     판정 규칙을 `_session_alive_http()` 하나로. 인증 쿠키 이름 판정을 `has_publish_auth()` 하나로.
+     TS_COOKIE 최신값을 아는 책임을 `login_manager.get_tistory_cookie()` 하나로.
+  ② **동적 설계** — 발행 URL 을 `blog_write_url()` 단일 소스로 두고 판정·수집·발행이 파생.
+     무인 여부는 새 플래그가 아니라 **TTY** 에서 파생(이미 쓰던 `_is_tty` 판단) — 경계와 무관.
+  ③ **4조합** — 게이트 중단 권한 회수를 경제·테마 **양쪽** 에 적용. `override=True` 제거도
+     `trend_theme_writer`(2)·`economic_poster`·`performance_collector`·`tistory_poster` 전수.
+- **★ 부수 발견 — `load_dotenv(override=True)` 5곳이 남의 환경변수를 되돌리고 있었다**:
+  목적은 "쿠키 갱신 후 새 TS_COOKIE 읽기" 하나인데 `.env` 의 **모든 키**로 프로세스 환경을 덮었다.
+  실측 피해: 발행 모듈을 import 하는 테스트를 만들자마자 테스트가 격리해 둔 `JARVIS_DB_PATH` 가
+  운영 경로로 복귀해 **pytest 112건이 "테스트가 운영 DB 를 잡았다" 로 터졌다.**
+  소비처가 스스로 최신값을 읽게 하니 호출자 5곳의 override 가 전부 불필요해졌다.
+- **파일**: `JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py` ·
+  `JARVIS08_PUBLISH/credentials/login_manager.py` · `JARVIS08_PUBLISH/platforms/naver_poster.py` ·
+  `JARVIS08_PUBLISH/platforms/tistory_poster.py` · `JARVIS02_WRITER/scheduler.py` ·
+  `JARVIS02_WRITER/trend_theme_writer.py` · `JARVIS02_WRITER/economic_poster.py` ·
+  `JARVIS03_RADAR/performance_collector.py` · `tests/test_naver_session.py`(신규 18건)
+- **검증**: 변이 4/4 검출(수집에서 blog 제거 / 판정을 포털로 되돌림 / 무인도 대기 / 게이트 중단
+  복원) · 전체 365 passed · precommit 22 카테고리 0위반.
+- **교훈**: **판정은 소비처와 같은 문을 두드려야 한다.** 포털이 열린다고 글쓰기가 열리는 것이
+  아니다. 그리고 **테스트가 사고 경로를 지나지 않으면 초록은 아무 의미가 없다** — `gate()` 를
+  같은 스레드에서 부른 테스트는 subprocess 로 도는 실제 발행을 한 번도 검사하지 않았다.
+
+---
+
+## [613] 🔍 조사완료(결함아님) — [611] 후속: 같은 `error_log` id=5690 이 `wontfix` 미반영 상태로 재차 리페어 큐에 들어옴 (2026-08-10)
+
+- **증상**: 이번 리페어 세션도 `error_log` id=5690(`source=image, module=JARVIS06_IMAGE.image_agent,
+  ValueError: 알 수 없는 요청 유형: chart`, `_handle_bus_request` 279행)를 대상으로 호출됐다.
+  [611]과 완전히 동일한 traceback·id — **새 사고가 아니라 같은 레코드**. DB 조회 결과
+  `seen_count=2`, `status='analyzing'` — [611]이 "`mark_error_status(status="wontfix")` 처리"
+  라고 서술했지만 실제 DB 행은 갱신되지 않은 채였다.
+- **원인**: [611]의 판정(코드 결함 아님·의도된 트립와이어) 자체는 이번에도 그대로 재확인됨 —
+  저장소 전역 `bus.publish("image.request", ...)` / `type="chart"` 발행자 **0곳**(재확인).
+  `image_agent.py`·`__init__.py` 는 [608] 리팩터가 남긴 주석대로 `generate_chart`/`chart` 분기를
+  의도적으로 삭제했고, `draft_processor.py`(현재 유일한 본문 인포그래픽 소비자)는 애초에
+  `infographic_engine`/`slot_renderer` 초크포인트만 쓴다 — bus 경로를 타지 않는다. DB 행이
+  `analyzing` 으로 남아 있던 것은 [611] 작성 시점에 `mark_error_status` 호출이 실제로 실행되지
+  않았거나(서술만 되고 커밋되지 않음) 실행 후 무언가 되돌린 것으로 추정 — 근본 코드 결함은
+  없다.
+- ⛔ **헛다리(다시 시도 금지)**: `type == "chart"` 분기를 되살리는 것 — [611]과 동일 사유로
+  금지(검증·provenance 없는 차트 우회로 재도입).
+- **해결**: 코드 변경 0건. `shared.db.mark_error_status(5690, "wontfix", resolution=...)` 를
+  **실제로 실행**해 DB 행을 `wontfix` 로 반영 확인(재조회로 검증). 저장소 전역
+  `image.request`/`chart` 라이브 호출자 0곳 재확인.
+- **교훈**: ERRORS.md 서술("해결: ... 처리 완료")은 *의도의 기록*이지 *실행의 증거*가 아니다 —
+  실제 DB 상태를 다시 조회해 반영 여부를 확인할 것. `resolution` 컬럼이 비어 있거나 status 가
+  기대와 다르면 서술만 있고 실행은 없었다는 신호다.
+- **파일**: 없음 (조사 + DB 상태 갱신만, 저장소 코드 파일 변경 없음)
+
+## [614] ✅ 해결 — `ensure_preflight()` 가 쓰여 있는데 한 번도 안 돌고 있었다 (진입점 16곳 중 8곳) (2026-08-10)
+
+- **증상**: 사용자가 쿠키 복구를 위해 `python JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py --manual`
+  을 직접 실행했더니 첫 줄에 `⚠️ preflight 호출 실패: No module named 'JARVIS00_INFRA'`.
+- **원인 (2단)**:
+  1. 하위 폴더 스크립트를 직접 실행하면 `sys.path[0]` 이 **그 폴더**라 프로젝트 루트가 없다 →
+     `from JARVIS00_INFRA.preflight import ...` 가 `ModuleNotFoundError`.
+  2. 그 import 를 감싼 `except Exception` 이 **경고 한 줄만 찍고 그대로 진행**했다.
+     경고는 `print()` = stdout 인데 데몬 stdout 은 `/dev/null`(restart_daemon.sh:29) →
+     **어디에도 안 남는 완전한 침묵**. 그래서 Layer 0 안전장치가 있다고 착각한 채 운영됐다.
+- **실측 범위**: `ensure_preflight` 를 부르는 진입점 16곳 중 **8곳**이 이 상태였다 —
+  `dry_run` · `auditor` · `repair_history` · `login_manager` · `naver_cookie_refresher` ·
+  `tistory_cookie_refresher` · `naver_poster` · `file_cleanup`.
+- **헛다리**: "grep 으로 검증하면 된다" — CLAUDE_INFRA.md 의 종전 검증 명령이
+  `xargs grep -L 'ensure_preflight'` 로 **문자열 유무만** 봤다. 8곳 전부 문자열은 있었으므로
+  그 검사는 항상 초록이었다. **코드 존재는 실행의 증거가 아니다.**
+- **해결 (3원칙)**:
+  ① 단일 진입점 — 검증을 기존 `check_preflight` 카테고리에 레그로 흡수(새 카테고리 신설 안 함).
+     preflight 호출 형태도 `repair_history.py` 가 이미 쓰던 *감싸지 않는* 형태로 14곳 통일.
+  ② 동적 설계 — 부트스트랩이 깊이를 박지 않는다. `parent.parent` 대신 **루트 마커
+     (`jarvis_daemon.py`) 탐색** — ADR 008 이관 때 깊이가 바뀌어 깨진 전례가 있다.
+     precommit 검사도 대상 목록을 박지 않고 실물에서 파생하므로 새 진입점이 자동 포함된다.
+  ③ 전수 — 삼키는 `try/except` 를 8곳뿐 아니라 부트스트랩이 이미 있던 6곳까지 **14곳 전수** 제거.
+- **파일**: 진입점 14곳 + `shared/precommit_check.py`(레그 `preflight/no-path-bootstrap`·
+  `preflight/swallowed`) + `tests/test_entrypoint_preflight.py`(신규 30건) + `JARVIS00_INFRA/CLAUDE_INFRA.md`
+- **검증**: 변이 2/2 검출(부트스트랩 제거 / try 로 감싸기 — precommit·pytest 양쪽에서 빨강) ·
+  전체 395 passed · precommit 22 카테고리 0위반 ·
+  **실행 실측**: `--check` 가 `✅ Layer 0 preflight 통과` 출력(사고 당시엔 실패 경고).
+- **남은 것**: `ensure_preflight` 가 *아예 없는* `__main__` 이 18곳. `jarvis_daemon.py`
+  (`run_preflight()` 사용)·`shared/db.py`·`severity.py` 등 라이브러리는 정상이고,
+  나머지는 외부 영향 여부 판정 후 개별 처리 필요(미완).
+- **교훈**: **정적 검사는 "있는가" 만 답한다. "도는가" 는 실행해야 안다.**
+  회귀 테스트를 자식 프로세스에서 실제로 돌리도록 만든 이유다 —
+  같은 프로세스에서 import 하면 이미 루트가 sys.path 에 있어 사고가 재현되지 않는다.
+
+---
+
+## [615] ✅ 해결 — 게이트가 **없어서**가 아니라 **라이브 경로 밖에 배선돼** 있었다 — 이미지 사실성 21건 전수 (2026-08-10)
+
+> **번호 주의**: 이 항목은 애초 `[611]` 로 배정됐으나, 병행 세션이 그사이 [611]~[614] 를
+> 먼저 채웠다. 결번을 만들지 않기 위해 **[615]** 로 재배정한다(`[607]` 은 이전부터 결번).
+> 같은 자리를 동시에 고칠 때의 충돌은 [603] 과 동형 — **번호는 쓰기 직전에 재실측할 것.**
+>
+> **[608] 과의 관계**: [608] 은 이 감사의 *1차 수정* 기록이다. 이 항목은 그 1차 보고가
+> "완료" 라고 말한 뒤에도 **거짓이 계속 인쇄됐다**는 사실과, 2·3차에서 무엇이 남아 있었는지를
+> 박제한다. 이 항목의 핵심 가치는 **1차 수정이 만든 새 거짓**의 기록이다.
+
+- **증상**: 2026-08-10 07:00·07:31 경제 브리핑이 네이버·티스토리 양쪽에 인포그래픽 8장을 발행.
+  값 자체는 대부분 실데이터인데 **참인 숫자로 거짓을 말하는** 이미지였다 —
+  · `합계 27.2%`(성격이 다른 금리 8종의 단순합) · `합계 4,368원`(같은 환율의 3개 시점 합)
+  · `합계 1,550억원`(상장유지 *요건 임계값* 합) · `합계 341,000명`(실적+전망 합)
+  · `항목 수 8개` 인데 화면의 막대는 7개(독자가 검산하면 24.7 ≠ 27.2)
+  · 라벨 `기준금리 (2)`·`(3)` — 2023-08·2025-05 값이 *별개 지표*로 위장
+  · 배지 `2026.08 기준` — 8행 중 1행의 날짜를 데이터셋 전체에 박제
+  · 출처 `한국은행 공식 경제 지표` 단 하나 — 실제로는 KOFIA·yfinance·ECOS 혼재
+  · 출처 `naver_news`·`market 시장 데이터`(내부 식별자·코드 조립 제목)가 그대로 인쇄
+  · 1행짜리 dataset 이 트랙 100% 를 채운 막대(정보량 0)
+- **환경**: macOS / `JARVIS06_IMAGE` 렌더 계층 · `JARVIS09_COLLECTOR/evidence_pack.facts_to_datasets`
+  · `JARVIS02_WRITER/prepublish_gate` · 4조합(경제·테마 × 네이버·티스토리) 전부.
+  실캐시 `data/precollect/economic_20260810_*.pkl` 로 전 과정 재현 가능.
+- **★ 원인 (뿌리 하나) — 검사기는 다 있었다. 라이브가 안 불렀을 뿐이다**:
+  `verify_chart_spec`(행 수 하한 `_MIN_ROWS` 포함) · `record_provenance` · `verify_layout_output`
+  **넷 다 저장소에 실재**했고 `__all__` 에도 있었다. 그런데
+  ① `verify_chart_spec` 의 호출자는 `image_spec.py` 하나뿐이라 실제 렌더 경로가 지나지 않았고,
+  ② `verify_layout_output` 은 **나이틀리 학습 잡에서만** 호출됐고,
+  ③ 그래서 산출물에 provenance 가 아예 없었는데(`prov=None`),
+     `prepublish_gate._image_factuality_leg` 의 조건이 `if prov and prov.get("verified") is False`
+     라 **등록조차 안 된 이미지는 "차단할 게 없다"** 로 읽고 통과시켰다(fail-open).
+  결과: 8장 전부가 `{{TOKEN}}` 잔여 정규식 한 줄만 통과하고 발행됐다.
+  · 여기에 ②동적 설계의 **역방향 위반**이 겹쳤다 — fact 에는 행별 `as_of`·`source` 라는
+    진실이 있었는데 `facts_to_datasets` 가 (category, unit) 로 묶으면서 **대표 1건만 남기고
+    나머지를 버렸다**. 검사할 대상 자체가 스키마에서 사라져 있었으니, 게이트를 배선해도
+    출처 귀속·기준일은 원리적으로 검사할 수 없었다.
+  · 그리고 ①단일 진입점 위반 — 같은 조립이 두 벌(`pro_templates.build_html` 스켈레톤 /
+    `template_engine.render_layout`)이라 2026-07-06 의 "무의미한 합계 폐기" 수정이
+    **도달 불가 폴백** 쪽에만 걸렸고, 안 고쳐진 사본이 상시 경로였다.
+- **★★ 헛다리 (다시 시도 금지) — 이 항목의 본론**:
+  ① **"사본 제거 완료" 보고 후에도 `합계 27.2%` 가 그대로 나왔다.** 1차([608])는
+     `pro_templates`↔`template_engine` 두 벌을 통합했으나, **`infographic_engine` 안의
+     세 번째 조립 계층**이 남아 있었다. 재현 렌더를 돌려서야 드러났다.
+     → **"두 벌을 하나로 합쳤다" 는 "출구가 하나다" 를 뜻하지 않는다.** 세는 곳이 아니라
+       *픽셀을 낳는 return 문* 을 세어야 한다. ([604] 의 "세 번째 사본" 과 동형 재발.)
+  ② **수정이 새 거짓을 만들었다 — 라벨에 as_of 를 심자 환율이 `+8.6% ▲` 로 인쇄됐다(실제 -8.7%).**
+     D01 을 고치려고 축 라벨에 시점을 붙였더니, *라벨 문자열 정규식* 으로 시계열을 판정하던
+     `_is_timeseries` 가 뒤집혔다. 8개 이종 금리가 꺾은선으로 이어졌고, 환율은 시간축이
+     역순으로 정렬돼 **하락을 상승으로** 인쇄했다. 게다가 그 정규식은 원래부터
+     `콜금리(1일)`·`통안증권 91일` 을 시간으로 오탐하고 있었다.
+     → **진실이 데이터(`as_of`)에 있는데 표시 산출물(라벨 문자열)을 읽으면 안 된다.**
+       판정은 행 메타에서 파생하도록 `image_data_verifier.is_timeseries` 단독으로 이관.
+  ③ **`_BAD_PHRASES` 어휘 목록 확장** — 오염 레시피 6건 중 4건은 `source:"seed-layout"` 으로
+     `_validate_recipe` 를 **거친 적이 없다**(JSON 직접 커밋). 어휘를 늘려도 안 잡힌다.
+     ②동적 설계대로 *꼴* 로 판정해야 한다.
+  ④ **`_dedup_labels` 를 ±5% tolerance 병합으로** — 1,419 vs 1,408(0.78%) 같은 **정당한
+     시계열 포인트가 조용히 삭제**된다. 접미 번호는 병합이 아니라 *행 메타 보존* 으로 푼다.
+  ⑤ **`prov is None` 을 전면 차단** — 썸네일·표·재사용 이미지까지 잡아 4조합 즉시 발행 정지.
+     `kind` 로 수치 이미지만 fail-closed 해야 한다.
+  ⑥ **게이트를 렌더러마다 각각 배선** — 한쪽만 강화되면 **느슨한 쪽이 출구가 된다.**
+     이 사고 자체가 그 결과였다(2026-07-06 수정이 한쪽에만 걸린 것).
+- **해결 (3원칙 · 상세 결정 근거는 [ADR 018](../docs/decisions/018-image-factuality-single-chokepoint.md))**:
+  - **① 단일 진입점** — `infographic_engine._emit` **단일 출구**. `generate_infographic` 의 반환은
+    `return ""` 과 `return _emit(...)` 두 꼴뿐이다. 픽셀을 낳는 모든 경로가 `certify_image` 를
+    지나 검증 + provenance 등록을 받고, **미검증이면 이미지를 폐기**한다.
+    provenance 레지스트리 쓰기는 `certify_image` **단독**. 조립 사본 3벌·`_dg_allowed`·
+    `_dg_verify_html`·`_verify_dataset`·`_src_label` 표를 **shim 없이 삭제**(총 -5,475줄, 3파일 물리 삭제).
+    ★ 게이트를 *추가* 한 게 아니라 **출구를 하나로 줄인 것**이 이 수정의 본체다.
+  - **② 동적 설계** — 판정을 어휘가 아니라 **꼴**로. 시계열은 행 `as_of` 에서 파생
+    (`is_timeseries`), 합계는 **출처가 공표한 합계**(`ds["totals"]`)가 있을 때만
+    `additive_total()` 이 인정하고 **가산성 기본값은 '불가'**. 차트형은 `chart_fit()` 이
+    행 수·형태에서 파생(1행 → `_kpi_cards`). 출처 문자열 생산자를 `source_label()` 하나로
+    강제하고 우회 인자(`src=`)를 폐지. 표시 문구 리터럴은 `template_literals()` 가 꼴로 검출.
+  - **③ 4조합 전부** — 경제·테마 × 네이버·티스토리 공통 경로에서 처리. `prepublish_gate` 를
+    **fail-closed 로 반전**(`prov=None` 이면 통과가 아니라 차단, 단 `kind` 로 수치 이미지 한정).
+    행 단위 `as_of`·`source` 를 `models.ROW_META` 로 보존하고 데이터셋에는 그 **분포**
+    (`source_mix`·`as_of_range`·`mixed_time`)를 남겨, 배지가 `2026.08 기준` 대신
+    **`2023.08~2026.08` 구간**으로, 출처가 **`금융투자협회 · 한국은행 ECOS · 한국은행`** 으로 인쇄된다.
+- **검증 (실측)**:
+  · 재현 렌더 — 구 캐시 14/14 · 신 경로 12/12, **오폐기율 0.00%**
+  · 조작 검출률 **94.29%** (280건 주입 중 264 검출), 정상 14/14 전건 통과
+  · 사고 수치 **재현 불가** — `합계 27.2%`·`항목 수` 가 1,560 렌더에서 **0건**
+  · 환율 `+8.6% ▲`(거짓) → **`-8.7% ▼`**(실제), 시간축 좌→우 정렬
+  · 라벨 `기준금리 (2)` → **`기준금리 2023.08`**, 1행 dataset → **KPI 카드**(막대 아님)
+  · 출처 `naver_news` → **`네이버 뉴스`**
+  · 표 이미지 게이트 3분기: 일치=생성 / 위조 9.9=검출·폐기 / 대조군0=fail-closed
+  · `pytest tests/ -q` **365 passed** · `precommit_check` **EXIT=0**(22 카테고리, 차단 0)
+- **파일**: `JARVIS06_IMAGE/{infographic_engine,template_engine,pro_templates,slot_renderer,
+  image_spec,html_infographic,html_renderer,matplotlib_renderer,theme_charts,thumbnail_maker,
+  style_engine,design_learner,draft_processor,section_title,limits}.py` ·
+  `JARVIS06_IMAGE/validators/image_data_verifier.py` · `JARVIS06_IMAGE/design_recipes.json` ·
+  `JARVIS09_COLLECTOR/{evidence_pack,models,collector_engine,chart_data,source_registry,collect_theme}.py` ·
+  `JARVIS02_WRITER/prepublish_gate.py` · `shared/{numeric,precommit_check}.py` ·
+  `tests/test_image_factuality_gate.py`(신규) ·
+  삭제: `JARVIS06_IMAGE/{plotly_renderer,svg_renderer,economic_charts}.py`
+- **★ 교훈**:
+  1. **코드 존재는 적용의 증거가 아니다.** 검사기 4종이 실재했고 `__all__` 에도 있었으나
+     라이브가 하나도 부르지 않았다. `grep` 으로 "있다" 를 확인하는 검증은 이 사고를 못 잡는다 —
+     [614] 의 `ensure_preflight` 와 **정확히 같은 병**이다. *부르는지* 는 실행해야 안다.
+  2. **진실을 데이터에 싣고, 소비자가 문자열을 읽게 하지 마라.** `as_of` 가 행에 있는데
+     라벨 정규식으로 시계열을 판정한 탓에, 수정 한 번이 환율 부호를 뒤집었다.
+     표시 산출물을 판정 입력으로 쓰는 코드는 **수정이 곧 새 거짓**이 된다.
+  3. **게이트 추가는 성공 조건이 아니다. 출구를 줄이는 것이 성공 조건이다.**
+     여러 렌더러에 게이트를 각각 다는 설계는 느슨한 쪽이 출구가 되어 반드시 샌다.
+     그래서 이번 작업의 절반은 추가가 아니라 **삭제**(-5,475줄)였다.
+  4. **fail-open 기본값은 "검사 안 함" 과 같다.** `prov=None` 통과 하나로 검증 체계 전체가
+     무력이었다. 판정 불가는 통과가 아니라 차단이어야 한다(범위는 `kind` 로 좁힌다).
+
+### [354] ✅ 해결 — CatchPathDead: keeper 전용 `daemon_stdout.log` 가 얼어붙어 캐치 경로 스모크 오탐 (2026-08-10)
+- 증상: `guardian_agent.register()` 부팅 시 `catch_path_effective()` 스모크가 False →
+  `CatchPathDead`(오류 수집 무력) 보고. 세 다리(로그스캐너/쿨다운/실수확) 중 **실수확**만 실패 —
+  감시 로그 `logs/daemon_stdout.log` 에 Traceback 이 있는데 최근 3일 `error_log(source='log_file')` 유입 0건.
+- 환경: 현재 프로세스는 `restart_daemon.sh`(수동, stdout→`/dev/null`)로 기동. `jarvis_keeper.py`
+  (launchd KeepAlive 워치독)는 데몬을 띄울 때 별도로 `stdout=open(logs/daemon_stdout.log, "a")` 를 썼다.
+- 원인: 두 launch 경로(수동 재시작 vs keeper 자동 재시작)가 stdout 목적지를 놓고 서로 달랐다
+  (①단일 진입점 위반). `daemon.log` 는 `logging.basicConfig` 의 `RotatingFileHandler` 가 이미
+  회전 보관하는데, `daemon_stdout.log` 는 그 내용의 **미회전(unbounded) 사본**이었다
+  (복사본을 진실로 믿지 말 것 위반 — 2026-08-04 감사에서 daemon.log 회전만 고치고
+  이 사본은 놓쳤다). keeper 로 뜬 인스턴스가 죽고 이후 수동 재시작(`/dev/null`)이 이어지자
+  `daemon_stdout.log` 는 그 시점(8/8 15:37)에 얼어붙어 더는 아무도 안 썼다. 그런데 마지막
+  200KB 안에 8/7 14:49 GuardianTier2BridgeCrash Traceback([579]과 동일 사건, 이미 직접
+  `report()` 경로로 정상 수집·해결됨)이 남아 있었고, mtime 이 3일 관측창 안에 들어
+  "잡을 게 있는데 0건" 오탐을 냈다. `_LogFileHandler` 는 첫 조회 파일을 EOF 에서 시작하므로
+  (2026-07-25 결정, 과거분 홍수 차단) 이 과거 내용은 애초에 재수확 대상이 아니었다 — 즉
+  캐치 경로 자체는 멀쩡했고, 스모크가 "얼어붙어 사라질 파일" 을 활성 신호로 오독한 것.
+- 헛다리: 없음 — `_log_scanner_silent()`/스모크 로직 자체를 고치는 대신 원인(중복 unbounded
+  사본의 존재)을 제거하는 쪽으로 잡았다. 스모크 판정 로직은 다른 진짜 침묵도 잡아야 하므로 보존.
+- 해결: `jarvis_keeper.py::_start_daemon()` 의 `stdout=open(...daemon_stdout.log...)` →
+  `stdout=subprocess.DEVNULL` 로 교체(restart_daemon.sh 와 통일). 얼어붙은 잔재
+  `logs/daemon_stdout.log` 삭제(gitignore 대상, 런타임 산출물). 재검증:
+  `catch_path_effective()` → `True`.
+- 파일: `jarvis_keeper.py`
+- 교훈: 로그 회전(rotation) 감사는 *같은 스트림의 사본을 만드는 모든 경로* 를 전수 확인해야
+  한다 — 한 경로(daemon.log)만 고치면 나머지 사본(daemon_stdout.log)이 조용히 무회전으로
+  자라다가, launch 경로 전환 시 "얼어붙은 채 관측창 안에 남는" 방식으로 전혀 다른 하위계(캐치
+  경로 스모크)를 오탐시킨다. 두 launch 스크립트가 같은 결정(stdout 목적지)을 각자 내리게
+  두지 말 것 — 하나가 진실이면 나머지는 그것을 따르거나, 최소한 같은 값을 내야 한다.
