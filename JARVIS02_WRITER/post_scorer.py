@@ -563,22 +563,119 @@ def _b18_spacing(html: str) -> float:
     return graded_violation(excess, mx("B18_spacing"))
 
 
+def _draft_provenances(draft: Any) -> list[tuple[str, dict]]:
+    """draft blocks 의 이미지 경로 → 등록된 provenance. 미등록은 제외.
+
+    ★ 채점 축 여럿(B19·B20)이 같은 조회를 하므로 한 곳에서만 한다(①단일 진입점).
+    """
+    out: list[tuple[str, dict]] = []
+    try:
+        from JARVIS06_IMAGE.validators.image_data_verifier import lookup_provenance
+    except Exception:
+        return out
+    for blk in _blocks(draft):
+        if not (isinstance(blk, (list, tuple)) and len(blk) >= 2):
+            continue
+        path = str(blk[1])
+        if not re.search(r'\.(png|jpg|jpeg|webp)$', path, re.I):
+            continue
+        try:
+            prov = lookup_provenance(path)
+        except Exception:
+            prov = None
+        if isinstance(prov, dict):
+            out.append((path, prov))
+    return out
+
+
+def _is_unverified_chart(prov: dict) -> bool:
+    """이 provenance 가 '미검증 수치 차트' 인가.
+
+    ★ prepublish_gate._image_factuality_leg 와 **같은 계약** (사용자 박제 2026-08-10)
+      같은 판정이 두 곳에 다른 규칙으로 남으면 한쪽만 고쳐져 재발한다(③원칙).
+      v2: kind 가 수치 차트인데 verified 가 True 가 아니면 미검증(None·누락·False 전부).
+      v1(kind 없던 기록): 수치 spec 일 때만 verified=False 가 되므로 종전 규칙 그대로.
+    """
+    kind = str(prov.get("kind") or "")
+    if not kind:
+        return prov.get("verified") is False
+    return kind == "numeric_chart" and prov.get("verified") is not True
+
+
 def _b19_chart(draft: Any) -> float:
     """B19: 차트 실데이터+팔레트 없음 (2점)"""
     try:
-        from JARVIS06_IMAGE.validators.image_data_verifier import lookup_provenance
-        unverified = 0
-        for blk in _blocks(draft):
-            if isinstance(blk, (list, tuple)) and len(blk) >= 2:
-                p = str(blk[1])
-                if re.search(r'\.(png|jpg|jpeg|webp)$', p, re.I):
-                    prov = lookup_provenance(p)
-                    if prov and prov.get("verified") is False:
-                        unverified += 1
-        # 미검증(verified=False) 차트 위반 카운트: 위반당 0.5 감점 (하한 0)
+        unverified = sum(1 for _, prov in _draft_provenances(draft)
+                         if _is_unverified_chart(prov))
+        # 미검증 차트 위반 카운트: 위반당 0.5 감점 (하한 0)
         return graded_violation(unverified, mx("B19_chart"))
     except Exception:
         return mx("B19_chart")
+
+
+# ── B20: 헌법 제12조 (같은 글 내 시각화 스타일 중복 금지) ─────────────────
+#   provenance 에서 '무엇을 그렸나'(데이터·검증·출처) 키를 뺀 나머지가
+#   '어떻게 그렸나' = 스타일 축이다. 목록을 박지 않으므로 JARVIS06 이 스타일 키를
+#   추가하면 자동으로 지문에 편입된다(②동적 설계).
+_PROV_DATA_KEYS = frozenset({"verified", "kind", "method", "source", "values", "issues"})
+
+
+def _style_fingerprint(prov: dict) -> tuple:
+    return tuple(sorted((k, repr(v)) for k, v in prov.items()
+                        if k not in _PROV_DATA_KEYS))
+
+
+def _values_fingerprint(prov: dict) -> tuple:
+    """이 이미지가 실제로 그린 행들. 같은 행을 두 번 그렸으면 시각화 중복이다."""
+    rows = prov.get("values")
+    if not isinstance(rows, (list, tuple)) or not rows:
+        return ()
+    out = []
+    for r in rows:
+        if isinstance(r, dict):
+            out.append((str(r.get("label", "")), repr(r.get("value")), str(r.get("unit", ""))))
+    return tuple(sorted(out))
+
+
+def _b20_visual_div(draft: Any) -> float:
+    """B20: 같은 글 안 시각화 스타일 중복 없음 — 제12조 (1점)
+
+    ★ 2026-08-10 (감사 D15): 종전엔 draft 를 *읽지도 않고* 만점을 돌려줬다.
+      "메타데이터가 없어서 못 본다 → 프로세스가 보장한다 → 그 프로세스는 없다" 의
+      순환이었고, 한 글 8장이 같은 아키타입으로 나가도 감점 0이었다.
+      이제 실제 이미지의 provenance 를 읽어 두 종류의 중복을 센다:
+        ⓐ 같은 행(values)을 두 번 그린 이미지 — 데이터 중복 시각화
+        ⓑ 같은 스타일 지문의 재사용 — 단, 지문 축이 1개뿐이면 *스타일을 구별할
+           정보가 없는 것* 이지 중복이 입증된 것이 아니다 → 세지 않는다.
+           (0축·1축에서 감점하면 모든 글이 영구 0점 — 관측 아닌 잡음)
+      관측 가능한 이미지가 2장 미만이면 비교 자체가 성립하지 않아 만점.
+    """
+    try:
+        provs = [pr for _, pr in _draft_provenances(draft)]
+        if len(provs) < 2:
+            return mx("B20_visual_div")
+        dup = 0
+        seen_vals: set = set()
+        for pr in provs:
+            vf = _values_fingerprint(pr)
+            if not vf:
+                continue
+            if vf in seen_vals:
+                dup += 1
+            else:
+                seen_vals.add(vf)
+        styles = [_style_fingerprint(pr) for pr in provs]
+        if max((len(s) for s in styles), default=0) >= 2:
+            seen_style: set = set()
+            for sf in styles:
+                if sf in seen_style:
+                    dup += 1
+                else:
+                    seen_style.add(sf)
+        # 중복 시각화 위반 카운트: 위반당 0.5 감점 (하한 0)
+        return graded_violation(dup, mx("B20_visual_div"))
+    except Exception:
+        return mx("B20_visual_div")
 
 
 def _b21_consistency(html: str) -> float:
@@ -626,7 +723,7 @@ def score_section_b(draft: Any, platform: str = "", factuality_issues: list = No
         "B17_body_len":     {"score": _b17_body_length(html), "max": mx("B17_body_len"), "name": f"본문 분량 {_target_korean()}자+"},
         "B18_spacing":      {"score": _b18_spacing(html), "max": mx("B18_spacing"), "name": "여백 규정 준수"},
         "B19_chart":        {"score": _b19_chart(draft), "max": mx("B19_chart"), "name": "차트 실데이터"},
-        "B20_visual_div":   {"score": mx("B20_visual_div"), "max": mx("B20_visual_div"), "name": "시각화 스타일 중복 없음(프로세스)"},  # 근거: 차트 스타일 메타데이터 부재로 draft 단독 중복 관측 불가 → 프로세스 보장, max 유지(rule 3)
+        "B20_visual_div":   {"score": _b20_visual_div(draft), "max": mx("B20_visual_div"), "name": "시각화 스타일 중복 없음(제12조)"},
         "B21_consistency":  {"score": _b21_consistency(html), "max": mx("B21_consistency"), "name": "데이터 일관성"},
         "B22_tags":         {"score": _b22_tags(draft), "max": mx("B22_tags"), "name": "태그 특수기호 없음"},
         "B23_process":      {"score": mx("B23_process"), "max": mx("B23_process"), "name": "헌법 프로세스 준수"},  # 근거: 헌법 집행은 law_enforcer 프로세스가 보장(draft 관측 대상 아님) → max 유지(rule 3)

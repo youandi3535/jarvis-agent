@@ -6,9 +6,8 @@ collect_theme.py - Market Signal v11
 3. writer task에 실제 데이터 직접 주입 (context 방식)
 """
 
-import os, io, base64, re, random as _rnd, sys
+import os, re, sys
 from pathlib import Path
-from datetime import datetime
 
 # subprocess로 실행될 때 jarvis-agent 루트를 sys.path에 추가 (JARVIS06_IMAGE 접근)
 # ── JARVIS07 오류 보고 API ───────────────────────────
@@ -28,44 +27,12 @@ try:
 except ImportError:
     import length_manager as _LM
 
-_CAP_DESC = {
-    'overview':     '전체 투자 포인트 요약 인포그래픽',
-    'radar':        '5개 지표 레이더 차트',
-    'factors':      '상승·하락 요인 분석',
-    'timeline':     '투자 단계별 체크리스트',
-    'mechanism':    '테마 작동 구조 도식',
-    'usecase':      '주요 활용 분야',
-    'history':      '발전 역사 타임라인',
-    'keyword':      '핵심 키워드 모음',
-    'terms':        '핵심 투자 용어 3가지',
-    'profit_loss':  '흑자/적자 종목 현황',
-    'mktcap':       '시가총액 비교',
-    'per':          'PER 밸류에이션 비교',
-    'profitability':'수익성 지표 비교',
-    'revenue':      '매출·순이익 비교',
-    'return3m':     '3개월 수익률 비교',
-    'risk':         '종목별 투자 위험도',
-    'portfolio':    '포트폴리오 전략',
-    'principle':    '투자 원칙',
-}
+# ★ 차트 캡션(_cap)·캡션 설명표(_CAP_DESC) 는 여기 있지 않다 (2026-08-10 사본 삭제).
+#   이 파일에 같은 이름의 정의가 한 벌 더 있었는데, 아래 `theme_charts` import 가 모듈
+#   로드 시점에 그 정의를 *덮어써서* 한 번도 실행되지 않는 죽은 코드였다. 죽은 사본은
+#   조용히 원본과 어긋난다 — 실제로 alias(writer_short_analysis vs writer_short_visual)와
+#   프롬프트 문구가 이미 갈라져 있었다. 캡션의 주인은 JARVIS06_IMAGE.theme_charts 다.
 
-
-def _cap(key: str, t: str = '', **kw) -> str:
-    """차트 캡션 LLM 동적 생성 — 매번 다른 표현."""
-    from shared.llm import invoke_text as _llm
-    desc = _CAP_DESC.get(key, key)
-    if key == 'profit_loss' and kw:
-        desc = f"흑자 {kw.get('p','?')}개/적자 {kw.get('l','?')}개 종목 현황"
-    theme_ctx = f"'{t}' 테마 " if t else ""
-    data_ctx = ', '.join(f'{k}={v}' for k, v in kw.items()) if kw and key != 'profit_loss' else ''
-    extra = f" 데이터: {data_ctx}." if data_ctx else ""
-    return _llm(
-        "writer_short_analysis",
-        f"{theme_ctx}블로그 차트 캡션 짧은 {_LM.CHART_CAPTION_SENTS}문장(약 {_LM.CHART_CAPTION_CHARS}자). 차트: {desc}.{extra} 해요체. 문장만 출력.",
-        max_tokens=40, temperature=0.8
-    ) or f"{theme_ctx}{desc}"
-
-import numpy as np
 import pandas as pd
 # ── ADR 008 Phase 5 (사용자 박제 2026-05-17) — matplotlib 위임 ──
 # 옛: matplotlib·plt·fm·mpatches·FancyBboxPatch·Circle 직접 import
@@ -84,19 +51,17 @@ def _yf_with_timeout(fn, timeout: int = 15):
 load_dotenv()
 
 
-def _max_attempts() -> int:
-    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
-    try:
-        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
-        return max(1, int(DEFAULT_MAX_ATTEMPTS))
-    except Exception:
-        return 2
+# ★ 재시도 상한은 models.max_attempts() 단일 파생 (2026-08-10) — 종전 이 파일의 사본 삭제.
+from .models import max_attempts as _max_attempts        # noqa: E402
 
-# ── 차트·인포그래픽 함수 전체를 JARVIS06_IMAGE.theme_charts 에서 임포트 ──
-# (JARVIS06_IMAGE 가 matplotlib Agg 백엔드 + 폰트 설정 자동 수행)
-from JARVIS06_IMAGE.theme_charts import (
-    _cap, set_font, fig_to_b64, wrap_img, CHART_STORE,
-)
+# ── matplotlib 폰트 기본값만 JARVIS06_IMAGE 에 위임 (Agg 백엔드 포함) ──
+#   ★ 2026-08-10: 종전엔 `_cap, set_font, fig_to_b64, wrap_img, CHART_STORE` 를 함께
+#     끌어왔지만 *실제 호출은 set_font 뿐* 이었다(나머지 4개 호출 0회). 그 죽은 import 가
+#     base64 인라인 이미지 생산자(fig_to_b64·wrap_img)를 붙잡아 JARVIS06 쪽 삭제를 막고
+#     있었다 — 쓰지 않는 이름을 붙잡는 것만으로 남의 청소를 막는다.
+#     CHART_STORE 도 여기에 별칭을 둘 이유가 없다: 이 파일이 실제로 비우는 대상은
+#     `theme_charts.CHART_STORE`(collect_stocks_data 안에서 `_tc.CHART_STORE.clear()`)다.
+from JARVIS06_IMAGE.theme_charts import set_font
 set_font()
 INFOG_STORE = {}
 COLLECTED_DATA = {}
@@ -841,8 +806,12 @@ def collect_stocks_data(theme_name: str, related_terms: list | None = None,
     if _skip_to_fallback:
         print(f"  ⚡ [stocks_data] LLM 불가 패턴 감지 ('{theme_name}') — LLM 3-loop 즉시 건너뜀")
 
-    # 최대 3회 시도 — 7개 미만이면 부족분만큼 추가 요청 (★ 사용자 박제: 필히 7개)
-    for attempt in range(3):
+    # 부족분만큼 추가 요청 (★ 사용자 박제: 필히 7개). 시도 상한은 *박지 않는다* —
+    # 재시도 상한의 단일 진실 소스는 harness.DEFAULT_MAX_ATTEMPTS 다 (사용자 박제 2026-07-21:
+    # "어떤 재시도도 최대 2회"). 같은 파일 위쪽에 이미 파생 헬퍼(_max_attempts)가 있는데
+    # 여기만 3 을 박고 있었다 — 상한을 올려도·내려도 이 루프만 어긋난다.
+    _ATT = _max_attempts()
+    for attempt in range(_ATT):
         needed = n - len(pairs)
         if needed <= 0:
             break
@@ -859,7 +828,7 @@ def collect_stocks_data(theme_name: str, related_terms: list | None = None,
         except Exception as e:
             print(f"  ❌ [stocks_data] LLM 호출 실패 (시도 {attempt+1}): {e}")
             _g_report("writer", e, module=__name__,
-                      attempt=attempt + 1, max_attempts=3)
+                      attempt=attempt + 1, max_attempts=_ATT)
             break
         new_pairs = _parse_pairs(raw, exclude_codes=seen_codes)
         for p in new_pairs:

@@ -1461,9 +1461,16 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
         #   *판정 불가·부적격* 이지 "수정 실패" 가 아니다 → 보상 0 (사용자 박제 2026-07-25 P3).
         #   판정은 **사유 코드**로 한다 — 표시 문구로 분기하면 문구를 다듬는 순간 어긋난다.
         if _kind == REJ_SYNTAX:
+            _rec_syn = _fetch_record(error_id, analysis)
             if _verify_enabled():
-                _bandit_signal(_fetch_record(error_id, analysis), analysis, success=False,
-                               why="patch 구문 오류")
+                _bandit_signal(_rec_syn, analysis, success=False, why="patch 구문 오류")
+            # ★ 결함 2 배선 — 롤백 경로(1488행)만 fail_count 를 올리고 있었다. 선검사
+            #   거부(REJ_SYNTAX)는 파일에 쓰지도 못했으니 "롤백"이 아니라서 그 배선을
+            #   타지 않았고, 캐시된 llm_patch 가 이미 적용된 코드에 재적용을 반복
+            #   실패해도 fail_count=0 그대로라 격리(quarantine) 임계(3회)에 영원히
+            #   도달하지 못했다(실측: PrecheckTistoryCookieExpired hit_count 10, fail_count 0,
+            #   10분 간격 GUARDIAN 재처리마다 동일 구문 오류로 무한 재시도).
+            _record_learning_failure(_rec_syn, analysis, "patch 구문 오류(선검사 거부)")
             return _fail(_why, verification=VERIFY_REPRODUCES)
         return _fail(_why)
 

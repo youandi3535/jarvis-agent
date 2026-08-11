@@ -257,7 +257,7 @@ def _publish_tistory(draft: dict, theme: str, sector: str,
             if not ok:
                 _tg(f"❌ [THEME-TISTORY] 쿠키 갱신 실패 — 발행 중단")
                 return {"success": False, "url": "", "keyword": theme}
-            load_dotenv(override=True)
+            # ★ load_dotenv(override=True) 제거 — 최신 TS_COOKIE 는 get_tistory_cookie() 가 .env 에서 직접 읽는다 — env 전체를 덮지 않는다(2026-08-10)
 
         # ★ ADR 008 Phase 2 완전 이관 (사용자 박제 2026-05-18) — shim 제거, 신 경로 직접 import
         import JARVIS08_PUBLISH.platforms.tistory_poster as _tp_mod
@@ -596,7 +596,7 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
             from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr
             ok, drv = _tcr(force=False, return_driver=True)
             if ok:
-                load_dotenv(override=True)
+                # ★ load_dotenv(override=True) 제거 — 최신 TS_COOKIE 는 get_tistory_cookie() 가 .env 에서 직접 읽는다 — env 전체를 덮지 않는다(2026-08-10)
                 print("  ✅ [④] 티스토리 쿠키 갱신 완료 (신선 세션)")
                 return {"ts_driver_key": _res.put(state.get(_ANK, ""), "ts_driver", drv)}
             if drv:
@@ -1056,11 +1056,10 @@ __all__ = [
 # ── 직접 실행 진입점 ──────────────────────────────────────
 if __name__ == "__main__":
     # ★ P1-④ 패치 (사용자 박제 2026-05-18 — ADR 009 v2): subprocess Layer 0 게이트.
-    try:
-        from JARVIS00_INFRA.preflight import ensure_preflight as _ep
-        _ep(strict=True)
-    except Exception as _ee:
-        print(f"⚠️ preflight 호출 실패: {_ee}")
+    # ★ try/except 로 감싸지 않는다 (2026-08-10) — 감싸면 ImportError 가 삼켜져
+    #   "preflight 가 있다" 는 착각만 남는다. 루트 경로는 상단 부트스트랩이 보장한다(fail-closed).
+    from JARVIS00_INFRA.preflight import ensure_preflight
+    ensure_preflight(strict=True)
 
     # ★ 우회 환경변수(JARVIS_ALLOW_LEGACY_PUBLISH) 폐기 (2026-07-23):
     #   그 변수는 *하네스 검증 순환을 건너뛰는 발행* 을 CLI 가 스스로 허용하던 스위치였다.

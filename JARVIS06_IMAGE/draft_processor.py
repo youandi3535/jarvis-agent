@@ -35,6 +35,11 @@ from pathlib import Path
 
 log = logging.getLogger("jarvis.image.draft_processor")
 
+# 재시도 상한 — 정의는 JARVIS06_IMAGE/limits.py 단독(harness.DEFAULT_MAX_ATTEMPTS 파생).
+# 숫자를 이 파일에 적지 말 것: 종전 `range(3)`/`max_attempts=3` 은 SSOT(현재 2)와
+# 어긋난 사본이었고, 사본은 SSOT 를 조정해도 따라오지 않는다(②동적 설계).
+from JARVIS06_IMAGE.limits import max_attempts as _max_attempts   # noqa: E402
+
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
 except ImportError:
@@ -85,13 +90,6 @@ def _count_images(html: str) -> int:
     return len(re.findall(r"<img\b", html, re.I)) + len(re.findall(r"<svg\b", html, re.I))
 
 
-def _infographic_img_html(path, alt: str) -> str:
-    """인포그래픽 이미지 <p><img> 래퍼 (본문 이미지=인포그래픽만 — AI 사진 폐기 2026-07-06)."""
-    return (f'<p><img src="{path}" alt="{alt}" '
-            f'style="width:100%;max-width:760px;border-radius:8px;'
-            f'margin:16px auto;display:block;"></p>')
-
-
 # ── 시각 중복 판정 단일 진입점 (ERRORS [461] — 2026-07-21) ─────────────
 #
 # ★ 종전 결함: `_title in html_so_far` 로 *본문 전체* 를 부분문자열 검색해
@@ -136,7 +134,7 @@ def _next_data_infographic(collected, out_dir: Path, run_id: str, used_titles: s
     폴백 없이 그냥 "" (빈 슬롯). AI 사진·matplotlib 폴백 전부 폐기 — 이미지 없는 게 낫다.
     """
     try:
-        from JARVIS06_IMAGE.infographic_engine import generate_infographic
+        from JARVIS06_IMAGE.infographic_engine import generate_infographic, data_image_html
     except ImportError:
         return ""
     theme = (getattr(collected, "meta", None) or {}).get("keyword", "")
@@ -150,14 +148,19 @@ def _next_data_infographic(collected, out_dir: Path, run_id: str, used_titles: s
         try:
             # subtitle="" (eyebrow 와 이중 금지) · src 미전달 → 렌더러가 ds.source(provider)에서
             # 출처 파생(헤드라인 source.name 사용 금지 — 사용자 박제 2026-07-19, 동적 설계).
+            # ★ used= 배선 (사용자 박제 2026-08-10 — D15): 종전엔 시그니처에만 있고
+            #   본문 미참조 + 호출자 3곳 전부 미전달인 완전한 죽은 인자였다. 제12조(같은 글 내
+            #   시각 스타일 중복 금지)를 관측·강제할 유일한 훅이 비어 있었던 것.
+            #   같은 글에서 이미 쓴 dataset 수를 넘겨 골격 회전 위상을 분산시킨다.
             _path = generate_infographic(
                 _title, "", [ds],
                 run_id=run_id or theme, slot_key=f"dg{len(used_titles)}", out_dir=out_dir,
-                context=f"{theme} — {_title}",
+                context=f"{theme} — {_title}", used=used_titles,
+                category=(getattr(collected, "meta", None) or {}).get("category", ""),
             )
             if _path:
                 print(f"  📊 [{platform}] 실데이터 인포그래픽: {_title[:30]}")
-                return _infographic_img_html(_path, _title[:40].replace('"', "'"))
+                return data_image_html(_path, _title[:40].replace('"', "'"))
         except Exception as e:
             print(f"  ⚠️ [{platform}] 인포그래픽 실패({_title[:20]}): {e}")
     return ""   # 인포그래픽 못 만들면 빈 슬롯 — 폴백 없음
@@ -217,6 +220,7 @@ def _local_text_thumbnail(title: str, keyword: str, out_dir: Path):
             setup_chart_defaults()
         except Exception:
             pass
+        from JARVIS06_IMAGE.style_engine import CHART_STYLE as _S
         h = hashlib.md5((keyword or title or "x").encode("utf-8")).hexdigest()
         accent = "#" + h[:6]
         fig = plt.figure(figsize=(12.8, 6.72), dpi=100)
@@ -224,7 +228,7 @@ def _local_text_thumbnail(title: str, keyword: str, out_dir: Path):
         ax.axis("off")
         ax.add_patch(plt.Rectangle((0, 0), 1, 1, color="#1a2230"))
         ax.add_patch(plt.Rectangle((0, 0), 0.018, 1, color=accent))
-        ax.text(0.06, 0.5, (title or keyword or "")[:38], fontsize=34,
+        ax.text(0.06, 0.5, (title or keyword or "")[:38], fontsize=_S["FONT_HERO_SUB"],
                 color="white", va="center", ha="left")
         out = Path(out_dir) / f"thumb_local_{h[:8]}.png"
         fig.savefig(str(out), facecolor="#1a2230")
@@ -235,22 +239,55 @@ def _local_text_thumbnail(title: str, keyword: str, out_dir: Path):
         return None
 
 
+def _certified_thumbnail(path, engine: str):
+    """썸네일 1장 → 이미지 도메인 초크포인트 등록 → 채택 경로. 미등록이면 None.
+
+    ★ 왜 썸네일까지 초크포인트를 지나는가 (사용자 박제 2026-08-10):
+      썸네일은 수치 사실성 판정 대상이 아니다(`kind="thumbnail"` = 비수치 종류).
+      그러나 **게시물에 실제로 들어가는 픽셀** 이고, 종전엔 그 경로가 인증기
+      바깥이라 provenance 레지스트리에 *존재조차 하지 않았다*. 발행 게이트가
+      "이 글에 들어간 이미지" 를 세면 썸네일만 보이지 않는 상태 —
+      검사하지 않는 것과 *볼 수 없는* 것은 다른 문제이고, 뒤쪽이 더 나쁘다.
+      그래서 판정을 강화하는 게 아니라 **보이게** 한다.
+    ★ 등록은 `certify_image` 단일 경로(=`emit_certified`)로만. 여기서 레지스트리를
+      직접 쓰면 그 순간 우회로가 하나 생긴다.
+    """
+    if not path:
+        return None
+    try:
+        from JARVIS06_IMAGE.infographic_engine import emit_certified
+        got = emit_certified(path, engine=engine, kind="thumbnail")
+    except Exception as e:
+        log.error(f"썸네일 인증 실패 → 폐기({engine}): {e}")
+        _g_report("image", e, module=__name__, func_name="_certified_thumbnail")
+        return None
+    return got or None
+
+
 def _mandatory_thumbnail(title: str, keyword: str, sector: str, platform: str,
                          out_dir: Path, body_text: str, tag_line: str = ""):
-    """★ 썸네일 필수 생성 (사용자 박제 2026-07-05) — 재시도 3회(원래 2회, 사용자 지시로 통일 2026-07-06) + 로컬 폴백 → 누락 0."""
+    """★ 썸네일 필수 생성 (사용자 박제 2026-07-05) — 재시도 + 로컬 폴백 → 누락 0.
+
+    재시도 횟수는 `limits.max_attempts()`(harness SSOT) 파생 — 숫자를 적지 말 것.
+    모든 반환은 `_certified_thumbnail` 을 지난다(생성기가 둘이라 출구도 둘이었다).
+    """
     from JARVIS06_IMAGE.image_agent import generate_thumbnail
-    for attempt in range(3):
+    _n = _max_attempts()
+    for attempt in range(_n):
         try:
             p = generate_thumbnail(title=title, keyword=keyword, sector=sector,
                                    platform=platform, out_dir=out_dir, body_text=body_text,
                                    tag_line=tag_line)
-            if p:
-                return p
+            got = _certified_thumbnail(p, "thumbnail_maker")
+            if got:
+                return got
         except Exception as e:
             log.warning(f"썸네일 시도 {attempt+1} 실패: {e}")
             _g_report("image", e, module=__name__,
-                      attempt=attempt + 1, max_attempts=3)
-    return _local_text_thumbnail(title, keyword, out_dir)   # 최후 로컬 카드
+                      attempt=attempt + 1, max_attempts=_n)
+    # 최후 로컬 카드 — 같은 출구를 지난다
+    return _certified_thumbnail(_local_text_thumbnail(title, keyword, out_dir),
+                                "local_text_thumbnail")
 
 
 def _generate_charts(html: str, theme: str, sector: str, collected,
@@ -348,33 +385,34 @@ def _render_photo_slots(html: str, collected, out_dir: Path, run_id: str,
 
 
 def _inject_leader_price_charts(html: str, collected, out_dir=None) -> str:
-    """[PRICE_CHART_LEADER]...[/PRICE_CHART_LEADER] 슬롯 → 주가 차트 교체.
+    """[PRICE_CHART_LEADER]...[/PRICE_CHART_LEADER] 슬롯 → **인증된** 주가 차트 교체.
 
-    주 경로: collected.datasets 의 viz_hint="stock_price" 데이터로 차트 생성
-    폴백   : 데이터 없으면 collected.entities ticker 로 yfinance 직접 조회
+    데이터 경로는 하나뿐 — `collected.datasets` 의 `viz_hint="stock_price"` dataset.
     실데이터 없으면 슬롯 제거 (ADR 010 — 거짓 차트 금지).
 
-    out_dir 제공 시 PNG 파일로 저장 → <figure><img src="..."/> 반환 (발행자 업로드 가능).
-    out_dir 없으면 base64 data URI (backward compat).
+    ★ entities ticker 실시간 재조회 폴백 폐지 (사용자 박제 2026-08-10 — ③원칙):
+      그 폴백은 *대조군이 없는 차트* 를 만드는 유일한 목적의 경로였다. 그려낸 값을
+      그대로 근거로 제출하는 자기증명이라 `certify_image` 가 `code_drawn:unaudited`
+      로 통과시켰고, 그래서 **테마 2조합(네이버·티스토리)의 주가 차트만** 경제
+      인포그래픽이 받는 grounding 대조를 한 번도 받지 않았다. 게이트를 덧대는 대신
+      경로를 없앤다 — 수집은 J09 의 일이고(CLAUDE.md 수집 단일 진입점), J09 가
+      이력을 못 만든 종목은 차트도 없다.
 
-    rank는 1-indexed (collect_theme.py enumerate(stocks, 1)):
-      rank=1 → 대장주 (label_key="leader")
-      rank=2 → 부대장주 (label_key="second")
+    저장 경로는 항상 파일이다 — base64 data URI 분기는 폐지됐다(2026-08-10).
+    경로가 없는 이미지는 provenance 등록도 발행 게이트 조회도 원리적으로 불가능해
+    검증 밖으로 나가는 문이 된다. out_dir 미지정 시 theme_charts 가 기본 폴더에서 파생.
     """
     try:
-        from JARVIS06_IMAGE.theme_charts import (
-            make_leader_price_chart_from_data,
-            make_leader_price_chart,
-        )
+        from JARVIS06_IMAGE.theme_charts import make_leader_price_chart
     except ImportError:
         for key in ("LEADER", "SECOND"):
             html = re.sub(rf'\[PRICE_CHART_{key}\].*?\[/PRICE_CHART_{key}\]',
                           '', html, flags=re.DOTALL)
         return html
 
-    _SLOTS = [("LEADER", "leader", 1), ("SECOND", "second", 2)]
+    # 슬롯 이름 ↔ dataset label_key — J09 stocks_to_datasets 가 붙이는 그 값에서 파생.
+    _SLOTS = [("LEADER", "leader"), ("SECOND", "second")]
 
-    # datasets 에서 viz_hint="stock_price" 항목 인덱스
     datasets = list(getattr(collected, "datasets", None) or [])
     _price_ds = {
         d.get("label_key"): d
@@ -382,12 +420,7 @@ def _inject_leader_price_charts(html: str, collected, out_dir=None) -> str:
         if d.get("viz_hint") == "stock_price" and d.get("label_key")
     }
 
-    # entities 에서 rank=1,2 인덱스 (폴백용 ticker)
-    entities = list(getattr(collected, "entities", None) or [])
-    _by_rank = {e.get("rank"): e for e in entities
-                if isinstance(e.get("rank"), int) and e.get("rank") in (1, 2)}
-
-    for slot_key, label_key, rank in _SLOTS:
+    for slot_key, label_key in _SLOTS:
         slot_pat = re.compile(
             rf'\[PRICE_CHART_{slot_key}\](.*?)\[/PRICE_CHART_{slot_key}\]',
             re.DOTALL,
@@ -396,8 +429,6 @@ def _inject_leader_price_charts(html: str, collected, out_dir=None) -> str:
             continue
 
         chart_html = ""
-
-        # 주 경로: collected.datasets 의 분기별 데이터
         ds = _price_ds.get(label_key)
         if ds and ds.get("data"):
             _out_path = None
@@ -405,26 +436,7 @@ def _inject_leader_price_charts(html: str, collected, out_dir=None) -> str:
                 import hashlib as _hlib
                 _h = _hlib.md5(f"{label_key}{ds.get('name','')}".encode()).hexdigest()[:8]
                 _out_path = Path(out_dir) / f"price_{label_key}_{_h}.png"
-            chart_html = make_leader_price_chart_from_data(
-                rows=ds["data"],
-                name=ds.get("name", label_key),
-                period=ds.get("period", ""),
-                out_path=_out_path,
-            )
-
-        # 폴백: entities ticker 로 실시간 조회 (ticker 없으면 code 사용 — ERRORS [402] 연관)
-        if not chart_html:
-            stock = _by_rank.get(rank)
-            _yf_ticker = stock.get("ticker") or stock.get("code") or "" if stock else ""
-            if stock and _yf_ticker and stock.get("name"):
-                _out_path = None
-                if out_dir:
-                    import hashlib as _hlib
-                    _h = _hlib.md5(f"{label_key}{_yf_ticker}".encode()).hexdigest()[:8]
-                    _out_path = Path(out_dir) / f"price_{label_key}_{_h}.png"
-                chart_html = make_leader_price_chart(
-                    yf_ticker=_yf_ticker, name=stock["name"], out_path=_out_path
-                )
+            chart_html = make_leader_price_chart(ds, out_path=_out_path)
 
         html = slot_pat.sub(chart_html, html)  # 차트 없으면 chart_html="" → 슬롯 제거
 
@@ -526,9 +538,10 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
     # ② [PHOTO_N] → 인포그래픽 디자인(데이터 있으면) 아니면 슬롯 제거. ★ 본문 AI 사진 폐기.
     html = _render_photo_slots(html, collected, out_dir, _run_id, _used_titles, platform)
 
-    # ②-B 대장주·부대장주 주가 차트 (카테고리=theme 시, rank=1/2 종목, ADR 010)
-    #   주 경로: collected.datasets 의 viz_hint="stock_price" 분기별 데이터
-    #   폴백:   collected.entities 의 ticker 로 yfinance 실시간 조회
+    # ②-B 대장주·부대장주 주가 차트 (카테고리=theme 시, ADR 010)
+    #   데이터 경로는 하나 — collected.datasets 의 viz_hint="stock_price" dataset.
+    #   (entities ticker 실시간 재조회 폴백은 2026-08-10 폐지 — 대조군 없는 차트만
+    #    만들던 경로라 테마 2조합의 주가 차트만 무감사로 남았다. ③원칙)
     if category == "theme":
         html = _inject_leader_price_charts(html, collected, out_dir=out_dir)
 
@@ -589,7 +602,11 @@ def _process_draft_impl(draft_html: str, collected, platform: str = "tistory",
 
     # ⑧ assemble_blocks → 완성 블록
     from JARVIS06_IMAGE.injectors import assemble_blocks
-    blocks = assemble_blocks(html, visual_paths, out_dir=out_dir)
+    #   ★ datasets 전달 (사용자 박제 2026-08-10): 대본 <table> 이 이미지가 되면 표 안의
+    #     LLM 수치가 텍스트 사실성 게이트 시야에서 사라진다. 조립기가 인증기에 넘길
+    #     *대조군* 이 있어야 그 이미지를 검증할 수 있다 — 없으면 표는 텍스트로 남는다.
+    blocks = assemble_blocks(html, visual_paths, out_dir=out_dir,
+                             datasets=list(getattr(collected, "datasets", None) or []))
 
     # ⑨ 썸네일 맨 앞 prepend — J06 책임으로 통합 (사용자 박제 2026-07-11)
     if thumbnail_path and Path(thumbnail_path).exists():

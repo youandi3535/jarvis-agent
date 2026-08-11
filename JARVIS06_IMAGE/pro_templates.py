@@ -11,12 +11,14 @@
   - 번호칩·인라인 SVG 아이콘·구분선·출처 푸터 — 편집 완성도
   - 팔레트 5종 seed 회전 → 글마다 다른 무드
 
-진입점: render_pro(title, subtitle, datasets, seed, out_path, src) -> path | ""
+진입점: render_pro(title, subtitle, datasets, seed, out_path, src) -> (path, html) | ("","")
 데이터 계약: datasets = [{"title","unit","data":[{"label","value"}],"viz_hint"?,"source"?}]
 """
 from __future__ import annotations
 import re
 from pathlib import Path
+
+from shared.numeric import safe_float
 
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
@@ -44,7 +46,6 @@ PALETTES = [
      "eyebrow": "#ffc27a", "grid": "#e3ede6"},
 ]
 
-_MONTHS = tuple(f"{i}월" for i in range(1, 13))
 _ICON = {  # 인라인 SVG path (24x24, stroke)
     "trend": "<path d='M3 17l6-6 4 4 8-8'/><path d='M14 7h7v7'/>",
     "bar": "<path d='M12 20V10'/><path d='M18 20V4'/><path d='M6 20v-6'/>",
@@ -57,10 +58,8 @@ _ICON = {  # 인라인 SVG path (24x24, stroke)
 
 # ── 유틸 ──────────────────────────────────────────────────────────────────
 def _num(v):
-    try:
-        return float(str(v).replace(",", "").replace("%", "").strip())
-    except (TypeError, ValueError):
-        return None
+    """값 → 유한 float. 파싱 실패·NaN·Inf 는 None (단일 소스: shared.numeric.safe_float)."""
+    return safe_float(v)
 
 
 def _fmt(v):
@@ -130,11 +129,16 @@ def _pairs(ds):
 
 
 def _is_timeseries(ds):
-    labs = [str(r.get("label", "")) for r in (ds.get("data") or [])]
-    if len(labs) < 3:
-        return False
-    hits = sum(1 for l in labs if l in _MONTHS or re.search(r"\d{4}|\d+분기|Q[1-4]|\d+월|\d+일", l))
-    return hits >= max(3, len(labs) * 0.6)
+    """시계열 판정 — 구현은 `image_data_verifier.is_timeseries` 단독 (위임만 한다).
+
+    ★ 여기 있던 *라벨 정규식* 판정 본체는 삭제됐다 (사용자 박제 2026-08-10):
+      '라벨에 \\d{4}|\\d+일 … 이 60% 이상' 규칙은 ② 동적 설계 위반이었다 —
+      진실(as_of)은 행에 실려 있는데 표시 산출물인 라벨 문자열을 읽고 있었다.
+      그래서 '콜금리(1일)'·'통안증권 91일' 을 시간으로 오탐했고, 1차 수정이 라벨에
+      as_of 를 심자 판정이 뒤집혀 8개 이종 금리가 꺾은선으로 이어졌다.
+    """
+    from JARVIS06_IMAGE.validators.image_data_verifier import is_timeseries
+    return is_timeseries(ds)
 
 
 def _icon(key, color, s=22):
@@ -147,6 +151,56 @@ def _pct_change(pts):
     if len(pts) < 2 or pts[0][1] == 0:
         return None
     return (pts[-1][1] - pts[0][1]) / abs(pts[0][1]) * 100.0
+
+
+# ── 표시 파생값 단일 소유 (★ 사용자 박제 2026-08-10) ──────────────────────
+#   차트는 원본값 말고도 *계산된 수치* 를 인쇄한다 — Y축 눈금, 최상위/차순위 배율.
+#   종전 검증기는 이것들을 계산할 방법이 없어 `dmin*0.7 ~ dmax*1.3` 이라는 *범위 통과*
+#   구멍으로 덮었고, 그 구멍 하나로 임의 수치의 80%가 무조건 통과했다.
+#   → 그리는 쪽과 검증하는 쪽이 **같은 함수** 를 부르면 구멍이 필요 없다.
+def axis_ticks(vals) -> list[float]:
+    """선차트 Y축에 인쇄되는 눈금 값 (min/mid/max 3개). `_line_chart` 와 공통."""
+    vs = [float(v) for v in vals if v is not None]
+    if not vs:
+        return []
+    lo, hi = min(vs), max(vs)
+    pad = (hi - lo) * 0.12 or (abs(hi) * 0.05 or 1)
+    lo, hi = lo - pad, hi + pad
+    return [hi - pad * 0.4, (hi + lo) / 2, lo + pad * 0.4]
+
+
+def outlier_pair(rows) -> tuple | None:
+    """분리형 막대가 비교하는 두 행 — ((1위 라벨, 값), (차순위 라벨, 값)). 성립 안 하면 None.
+
+    ★ 규칙의 주인은 여기 하나다 (사용자 박제 2026-08-10 3차). 종전엔 *비율* 만 파생하고
+      비교 대상은 표시 문구에 `'↑ 2위 대비'` 라고 **서수를 리터럴로 박아** 두었다.
+      그 '2' 는 데이터가 준 수가 아니라서 grounding 게이트에 미근거 수치로 잡혔고,
+      1위/2위 비율이 큰 테마 차트(핵융합·철도 관련주 등)가 전량 폐기됐다.
+      → 비교 대상을 *데이터에서 파생* 해 그 행의 **이름** 을 인쇄한다. 이름은 데이터가
+      준 문자열이므로 검증기가 이미 근거로 알고 있고, 독자에게도 서수보다 정확하다.
+    rows 는 [(라벨, 값)] 또는 [값] 둘 다 받는다 (검증기는 값만 들고 온다).
+    """
+    pairs = []
+    for r in rows or []:
+        lb, v = (r[0], r[1]) if isinstance(r, (tuple, list)) and len(r) >= 2 else ("", r)
+        v = _num(v)
+        if v is not None:
+            pairs.append((str(lb), v))
+    pairs.sort(key=lambda p: -p[1])
+    if len(pairs) < 2 or pairs[0][1] <= 0:
+        return None
+    rest_pos = [p for p in pairs[1:] if p[1] > 0]
+    if not rest_pos:
+        return None
+    return pairs[0], rest_pos[0]
+
+
+def outlier_ratio(vals) -> float | None:
+    """분리형 막대가 인쇄하는 배율. 성립하지 않으면 None.
+    `_bar_chart`(분기 판정)·`_bar_chart_outlier_split`(표시)·grounding 검증 공통.
+    판정 규칙은 `outlier_pair` 단독 — 여기서 다시 정렬·필터하지 않는다."""
+    pair = outlier_pair(vals)
+    return None if pair is None else pair[0][1] / pair[1][1]
 
 
 def _sparkline(pts, color, W=120, H=36):
@@ -199,6 +253,7 @@ def _line_chart(series, pal, W=980, H=340, unit=""):
         return vals
 
     allv = [v for s in series for v in _series_vals(s)]
+    _ticks = axis_ticks(allv)                 # ★ 눈금 파생 단일 소유 (검증기와 공통)
     lo, hi = min(allv), max(allv)
     pad = (hi - lo) * 0.12 or (abs(hi) * 0.05 or 1)
     lo, hi = lo - pad, hi + pad
@@ -219,7 +274,7 @@ def _line_chart(series, pal, W=980, H=340, unit=""):
         parts.append(f"<line x1='{xL}' y1='{gy:.0f}' x2='{xR}' y2='{gy:.0f}' stroke='{pal['grid']}' stroke-width='1.4'/>")
     # y labels (min/mid/max) — 스케일된 값 + 단위 표시
     _y_unit_sfx = "" if indexed else (f" {disp_unit}" if disp_unit else "")
-    for val in (hi - pad * 0.4, (hi + lo) / 2, lo + pad * 0.4):
+    for val in _ticks:
         parts.append(f"<text x='{xL - 10}' y='{_y(val) + 5:.0f}' text-anchor='end' fill='{pal['muted']}' "
                      f"font-size='13' font-weight='600'>{_fmt(val)}{_y_unit_sfx}</text>")
 
@@ -252,6 +307,14 @@ def _line_chart(series, pal, W=980, H=340, unit=""):
 
 
 _SKEW_SPLIT_RATIO = 10  # 1위/2위 비율 이상이면 분리형 레이아웃
+
+# ── 표시 행 상한 (★ 단일 소유 — 사용자 박제 2026-08-10, D04/D07) ──────────
+#   히어로 KPI 는 절단 전 전량(8)을 세고 막대는 rows[:7] 만 그려, 같은 이미지 안에서
+#   '항목 수 8개 / 합계 27.2%' vs 막대 7개(합 24.7) 로 검산이 깨졌다.
+#   이제 조립부(template_engine.view_rows)가 이 상수를 *조회* 해 히어로·차트가 같은 뷰를 쓴다.
+BAR_MAX_ROWS = 7
+DONUT_MAX_ROWS = 6
+KPI_MAX_CARDS = 4
 
 
 def _bar_defs(pal, grad_id="bg"):
@@ -327,41 +390,88 @@ def _bar_chart_linear(rows, pal, W, unit):
 def _bar_chart_outlier_split(rows, pal, W, unit):
     """극단 skew 분리형: 1위 outlier 히어로 + 나머지 별도 스케일 서브차트.
 
-    1위/2위 비율 >= _SKEW_SPLIT_RATIO 일 때 호출 (rows는 이미 scale 완료, desc 정렬).
+    최상위/차순위 비율 >= _SKEW_SPLIT_RATIO 일 때 호출 (rows는 이미 scale 완료, desc 정렬).
     """
     _u = unit if unit == "%" else (f" {unit}" if unit else "")
     top_lb, top_v = rows[0]
     rest = rows[1:]
-    rest_pos = [v for _, v in rest if v > 0]
-    ratio_txt = f"{top_v / rest_pos[0]:.0f}배" if rest_pos else ""
+    # ★ 배지에 인쇄되는 것은 전부 데이터다 — 비교 대상의 *이름* 과 그 배율뿐이고,
+    #   관계는 글자가 아니라 기호(↑·×)로 말한다 (사용자 박제 2026-08-10 3차).
+    #   종전엔 `'↑ 2위 대비'` 였다. 두 가지가 한꺼번에 잘못돼 있었다 —
+    #     ① 서수 '2' 는 데이터가 준 수가 아니라 grounding 게이트에 미근거 수치로 잡혔고
+    #        (1위/2위 격차가 큰 테마 차트가 전량 폐기), ② '2위'·'대비' 는 코드가 지어낸
+    #        표시 문구라 `precommit --category image` 의 `display-literal` 레그가 막는다.
+    #   이름은 데이터가 준 문자열이라 검증기가 이미 근거로 알고 있고, 서수보다 정확하다.
+    _pair = outlier_pair(rows)
+    ratio_txt = f"×{_pair[0][1] / _pair[1][1]:.0f}" if _pair else ""
+    ref_lb = _pair[1][0] if _pair else ""
 
     trackX, barMax = 228, W - 470
     valX = trackX + barMax + 12
     hero_h = 80
+    barY, barH, barR = 20, 26, 9
+
+    # ★ 히어로 막대 길이는 *값에서* 나온다 (사용자 박제 2026-08-10 최종리뷰 #1).
+    #   종전엔 `width={barMax}` 로 **값과 무관하게 트랙 전폭** 을 칠했다. 아래 서브차트도
+    #   자기 최대값이 전폭이므로, 같은 이미지 안에서 49.3조(히어로)와 0.8조(서브 1위)가
+    #   **똑같은 길이의 막대** 로 인쇄됐다 — 막대 길이가 값을 배신하는 것은 데이터 시각화의
+    #   근본 오류다(실측 558렌더 중 8건).
+    #   이제 히어로는 *서브차트와 같은 스케일* 로 그린다: 길이 = top/차순위 × 트랙.
+    #   그 길이는 분리형 진입 조건(비율 >= _SKEW_SPLIT_RATIO) 상 항상 트랙을 넘으므로
+    #   트랙 끝에서 **잘린다** — 잘렸다는 사실은 톱니(축 파단) 모서리로 표시하고,
+    #   서브차트의 최대값이 이 스케일에서 어디에 오는지를 눈금 하나로 찍는다.
+    #   둘 다 기하(geometry)일 뿐 문구를 지어내지 않으며, 배율 ×N 은 이미 데이터 파생이다.
+    _ref_v = _pair[1][1] if _pair else 0
+    _full_w = (top_v / _ref_v * barMax) if _ref_v else barMax
+    bar_w = min(barMax, _full_w)
+    clipped = _full_w > barMax + 0.5
+    # 서브차트 최대값(=차순위)이 히어로 스케일에서 차지하는 위치 — 축척 차이의 시각 근거
+    ref_x = (trackX + barMax * _ref_v / top_v) if (clipped and top_v) else None
+
+    if clipped:
+        xR = trackX + bar_w
+        zw = 12  # 파단 톱니 폭
+        _d = (f"M{trackX + barR},{barY} H{xR - zw} "
+              f"L{xR},{barY + barH * 0.25:.0f} L{xR - zw},{barY + barH * 0.5:.0f} "
+              f"L{xR},{barY + barH * 0.75:.0f} L{xR - zw},{barY + barH} "
+              f"H{trackX + barR} A{barR},{barR} 0 0 1 {trackX},{barY + barH - barR} "
+              f"V{barY + barR} A{barR},{barR} 0 0 1 {trackX + barR},{barY} Z")
+        bar_svg = f"<path d='{_d}' fill='url(#bg_hero)'/>"
+    else:
+        bar_svg = (f"<rect x='{trackX}' y='{barY}' width='{bar_w:.0f}' height='{barH}' "
+                   f"rx='{barR}' fill='url(#bg_hero)'/>")
 
     hero_parts = [
         f"<svg width='100%' viewBox='0 0 {W} {hero_h}' fill='none' style='display:block'>",
         _bar_defs(pal, "bg_hero"),
         # 라벨
         f"<text x='210' y='38' text-anchor='end' fill='{pal['ink']}' font-size='17' font-weight='800'>{top_lb}</text>",
-        # 배경 트랙 + 꽉 찬 그라디언트 막대
-        f"<rect x='{trackX}' y='20' width='{barMax}' height='26' rx='9' fill='{pal['grid']}'/>",
-        f"<rect x='{trackX}' y='20' width='{barMax}' height='26' rx='9' fill='url(#bg_hero)'/>",
+        # 배경 트랙 + 값에 비례하는 막대(넘치면 파단 표시)
+        f"<rect x='{trackX}' y='{barY}' width='{barMax}' height='{barH}' rx='{barR}' fill='{pal['grid']}'/>",
+        bar_svg,
         # 값 라벨
         f"<text x='{valX}' y='38' fill='{pal['ink']}' font-size='18' font-weight='800'>{_fmt(top_v)}{_u}</text>",
     ]
-    if ratio_txt:
+    if ref_x is not None:
+        # 차순위 값이 이 스케일에서 서는 자리 — 아래 서브차트가 몇 배 확대인지의 시각 근거
+        hero_parts.append(
+            f"<line x1='{ref_x:.1f}' y1='{barY - 4}' x2='{ref_x:.1f}' y2='{barY + barH + 4}' "
+            f"stroke='{pal['muted']}' stroke-width='2' opacity='.75'/>")
+    if ratio_txt and ref_lb:
         hero_parts.append(
             f"<text x='{valX}' y='62' fill='{pal['muted']}' font-size='13' font-weight='600'>"
-            f"↑ 2위 대비 {ratio_txt}</text>"
+            f"↑ {ref_lb} {ratio_txt}</text>"
         )
     hero_parts.append("</svg>")
     hero_svg = "".join(hero_parts)
 
+    # ★ 구분선에도 지어낸 문구를 두지 않는다 ('나머지 종목 (별도 스케일)').
+    #   축척이 바뀐다는 사실은 글로 주장하지 않아도 아래 막대마다 값·단위가 붙어 읽힌다.
+    #   대신 기호 하나로 '여기서 끊긴다' 만 표시한다 — 기호는 데이터를 주장하지 않는다.
     divider = (
         f"<div style='display:flex;align-items:center;gap:10px;margin:10px 0 6px'>"
         f"<span style='flex:1;height:1px;background:{pal['grid']}'></span>"
-        f"<span style='font-size:13px;color:{pal['muted']};white-space:nowrap'>나머지 종목 (별도 스케일)</span>"
+        f"<span style='font-size:13px;color:{pal['muted']};white-space:nowrap'>⌄</span>"
         f"<span style='flex:1;height:1px;background:{pal['grid']}'></span>"
         f"</div>"
     )
@@ -377,7 +487,7 @@ def _bar_chart(rows, pal, W=980, unit=""):
     ★ 음수 처리 (사용자 박제 2026-07-06): 음수 있으면 발산형.
     ★ 극단 skew (2026-07-13): 1위/2위 비율 >= _SKEW_SPLIT_RATIO 이면 분리형.
     """
-    rows = rows[:7]
+    rows = rows[:BAR_MAX_ROWS]
     if not rows:
         return ""
     rows, unit = _scale_rows_uniform(rows, unit)
@@ -388,14 +498,15 @@ def _bar_chart(rows, pal, W=980, unit=""):
         return _bar_chart_diverging(rows, pal, W, unit)
 
     # ★ 극단 skew 감지 — 1위/2위 비율 >= threshold
-    if len(vals) >= 2 and vals[1] > 0 and vals[0] / vals[1] >= _SKEW_SPLIT_RATIO:
+    _sk = outlier_ratio(vals)
+    if _sk is not None and _sk >= _SKEW_SPLIT_RATIO:
         return _bar_chart_outlier_split(rows, pal, W, unit)
 
     return _bar_chart_linear(rows, pal, W, unit)
 
 
 def _donut(rows, pal, size=240, unit=""):
-    rows = rows[:6]
+    rows = rows[:DONUT_MAX_ROWS]
     tot = sum(abs(v) for _, v in rows) or 1
     cx = cy = size / 2
     r = size / 2 - 18
@@ -431,6 +542,35 @@ def _donut(rows, pal, size=240, unit=""):
         f"<span style='font-size:16px;color:{pal['muted']};margin-left:auto;font-weight:700'>{_leg_val(v)}</span></div>"
         for i, (lb, v) in enumerate(rows))
     return donut, legend
+
+
+def _kpi_cards(rows, pal, W=980, unit=""):
+    """단일값·소수 항목 → 대형 수치 카드 (막대 금지).
+
+    ★ 왜 막대가 아닌가 (사용자 박제 2026-08-10 — D13/D21): 행이 1개면
+      `_bar_chart_linear` 의 v/vmax 정규화 때문에 막대가 트랙 100% 를 채운다 —
+      비교 대상이 없는데 '만점' 처럼 보이는 정보량 0의 인코딩이다.
+      2026-08-10 경제 slot2·5·7 + 네이버 dg7 이 정확히 그 꼴이었다.
+    시그니처·단위 스케일 처리는 형제(_bar_chart/_donut)와 동일하게 맞춘다.
+    """
+    rows = rows[:KPI_MAX_CARDS]
+    if not rows:
+        return ""
+    rows, unit = _scale_rows_uniform(rows, unit)
+    _u = unit if unit == "%" else (f" {unit}" if unit else "")
+    cards = []
+    for i, (lb, v) in enumerate(rows):
+        c = pal['a1'] if i % 2 == 0 else pal['a2']
+        cs = pal['a1s'] if i % 2 == 0 else pal['a2s']
+        cards.append(
+            f"<div style='flex:1;min-width:0;background:{pal['soft']};border-radius:20px;"
+            f"padding:34px 32px;border:1px solid {pal['grid']};border-top:5px solid {c}'>"
+            f"<div style='font-size:17px;font-weight:700;color:{pal['muted']};"
+            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{lb}</div>"
+            f"<div style='font-size:60px;font-weight:900;letter-spacing:-.03em;line-height:1.1;"
+            f"color:{pal['ink']};margin-top:10px'>{_fmt(v)}"
+            f"<span style='font-size:26px;font-weight:800;color:{cs}'>{_u}</span></div></div>")
+    return f"<div style='display:flex;gap:20px'>{''.join(cards)}</div>"
 
 
 # ── 조립 요소 ──────────────────────────────────────────────────────────────
@@ -501,26 +641,39 @@ def _style_pool() -> list[dict]:
     layout_library.LAYOUTS(정적 10종) + design_recipes.json 의 나이틀리 학습 recipe.template
     (비전/LLM 이 실제 인포그래픽에서 창작한 *새 스타일* — dashboard-grid·magazine-feature 등)을
     합쳐 render_layout 호환({{...}}) 골격만 dedup. → 나이틀리 학습이 스타일 풀을 매일 키운다.
+
+    ★ 렌더 후보 편입 전 고정 표시문구 검사 (사용자 박제 2026-08-10 — D19):
+      생성 게이트(design_learner._validate_recipe)만으로는 부족하다 — 실제로 이미지에 인쇄된
+      오염 4건은 design_recipes.json 에 직접 커밋된 seed-layout 이라 그 게이트를 *거친 적이
+      없다*. 들어오는 문(생성)과 나가는 문(렌더 편입) 양쪽에서 본다.
     """
+    from JARVIS06_IMAGE.template_engine import template_literals
     pool: list[dict] = []
     seen: set = set()
+
+    def _add(pid: str, html: str) -> None:
+        if not html or html in seen:
+            return
+        lits = template_literals(html)
+        if lits:
+            _g_report("image", ValueError(f"레이아웃 '{pid}' 고정 표시문구 {lits[:3]}"),
+                      module=__name__, func_name="_style_pool")
+            return
+        seen.add(html)
+        pool.append({"id": pid, "html": html})
+
     try:
         from JARVIS06_IMAGE.layout_library import LAYOUTS
         for l in (LAYOUTS or []):
-            h = l.get("html", "")
-            if h and h not in seen:
-                seen.add(h)
-                pool.append({"id": l.get("id", "lib"), "html": h})
+            _add(str(l.get("id", "lib")), l.get("html", ""))
     except Exception:
         pass
     try:  # 함수-로컬 lazy import (design_learner → pro_templates 역참조 순환 회피)
         from JARVIS06_IMAGE.design_learner import get_recipes
         for r in (get_recipes() or []):
             t = r.get("template")
-            if (isinstance(t, str) and t.strip() and t not in seen
-                    and ("{{CHART_1}}" in t or "{{TITLE}}" in t)):
-                seen.add(t)
-                pool.append({"id": str(r.get("id", "learned")), "html": t})
+            if isinstance(t, str) and t.strip() and ("{{CHART_1}}" in t or "{{TITLE}}" in t):
+                _add(str(r.get("id", "learned")), t)
     except Exception:
         pass
     return pool
@@ -558,195 +711,131 @@ def _pick_layout_template(datasets, seed) -> str | None:
     return pick.get("html")
 
 
+# ── 폴백 레이아웃 (★ 사용자 박제 2026-08-10 — D03/D12 뿌리1) ──────────────
+#   종전엔 여기에 *조립 구현 한 벌이 통째로* 있었다(히어로 KPI·차트형 3분기·최고 판정).
+#   template_engine.render_layout 에 같은 일을 하는 사본이 있었고, 2026-07-06 에
+#   '무의미한 합계 폐기' 수정이 이쪽에만 걸리자 그 코드는 도달 불가 폴백이 되고
+#   안 고쳐진 사본이 상시 실행됐다 — 4조합 전부에서 합계가 재발했다(③위반).
+#   → 조립 구현은 render_layout 한 벌만 남기고, 폴백은 *같은 경로에 먹이는 골격 문자열* 로 둔다.
+#     ("폴백 제거" 가 아니라 "폴백을 같은 경로로 태우기" 가 목표다.)
+#   표시 리터럴 0 — 텍스트는 전부 슬롯 토큰에서 온다(precommit image/recipe-literal 대상).
+_FALLBACK_LAYOUT = """<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800;900&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Noto Sans KR',sans-serif}
+.pg{width:1280px;background:var(--soft)}
+.hero{position:relative;overflow:hidden;padding:52px 60px 56px;background:linear-gradient(135deg,var(--hero0),var(--hero1))}
+.hero::after{content:"";position:absolute;right:-120px;top:-150px;width:480px;height:480px;border-radius:50%;background:radial-gradient(circle,var(--a1),transparent 62%);opacity:.16}
+.eb{position:relative;display:inline-flex;align-items:center;gap:9px;padding:8px 16px;border:1px solid var(--eyebrow);border-radius:999px;color:var(--eyebrow);font-size:15px;font-weight:700}
+h1{position:relative;color:#fff;font-size:52px;font-weight:900;letter-spacing:-.02em;line-height:1.1;margin:18px 0 10px}
+.sub{position:relative;color:#a9bad6;font-size:19px}
+.hs{position:relative;margin-top:36px}
+.hs:empty{display:none}
+.body{padding:36px 60px 8px}
+section{background:#fff;border-radius:24px;padding:32px 36px;border:1px solid var(--grid);box-shadow:0 18px 50px rgba(18,42,83,.10);margin-bottom:22px}
+section:has([data-jarvis-empty]){display:none}
+.mc{display:flex;gap:20px;padding:0 60px}
+.mc:empty{display:none}
+footer{padding:18px 60px 28px;display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:14px}
+.br{font-weight:800;color:var(--ink)}
+</style></head><body>
+<div class="pg">
+  <div class="hero">
+    <div class="eb">{{EYEBROW}}</div>
+    <h1>{{TITLE}}</h1>
+    <div class="sub">{{SUBTITLE}}</div>
+    <div class="hs">{{HERO_STATS}}</div>
+  </div>
+  <div class="body">
+    <section>{{CHART_1}}</section>
+    <section>{{CHART_2}}</section>
+    <section>{{CHART_3}}</section>
+  </div>
+  <div class="mc">{{MINI_CARDS}}</div>
+  <footer><span>{{SOURCE}}</span><span class="br">{{BRAND}}</span></footer>
+</div></body></html>"""
+
+
 # ── 메인 렌더 ──────────────────────────────────────────────────────────────
 def build_html(title, subtitle, datasets, seed, src, chip="", recipe=None):
+    """골격(레이아웃 템플릿) + 실데이터 → 완성 HTML. 조립은 render_layout 단일 구현.
+
+    ★ 시그니처 불변 (재현 하네스가 이것을 직접 부른다). 반환은 HTML 문자열.
+    ★ `src` 는 *의도적으로 소비하지 않는다* (사용자 박제 2026-08-10 — D20):
+      출처 문자열은 `template_engine.source_label` 이 데이터에서만 파생한다.
+      인자를 남긴 것은 호출자 시그니처 호환 때문이며, 값을 넣어도 출처는 바뀌지 않는다.
+    """
     pal = recipe or _pick_palette(seed)
 
     # 제목·카드 제목 내 'N종목' LLM 추정치 → 실데이터 실제 개수로 교정 (전 경로 공통)
     def _fix_n(t, n):
         return re.sub(r'\d+종목', f'{n}종목', t) if n > 0 and t else t
     datasets = [{**d, "title": _fix_n(d.get("title", ""), len(_pairs(d)))} for d in (datasets or [])]
+
+    # ★ 시계열은 그리기 전에 시점 오름차순으로 세운다 (사용자 박제 2026-08-10 — 신규거짓 #1).
+    #   정렬 구현은 `image_spec.enforce_time_axis_ltr` 단독 — 여기선 부르기만 한다.
+    #   왜 여기인가: 히어로 증감(_pct_change)·선차트·검증(rendered_view)이 *모두* 이
+    #   datasets 를 보고 파생하므로, 한 곳에서 세워야 세 곳이 같은 순서를 본다.
+    #   (라이브 경로는 infographic_engine._normalize_ds 가 이미 같은 함수를 부른다 — 멱등)
+    try:
+        from JARVIS06_IMAGE.image_spec import enforce_time_axis_ltr as _ltr
+        datasets = [{**d, "data": _ltr(d.get("data") or [])} for d in datasets]
+    except Exception as e:
+        _g_report("image", e, module=__name__, func_name="build_html")
     if datasets:
         title = _fix_n(title, len(_pairs(datasets[0])))
 
-    # ★ 학습된 레이아웃 템플릿 우선 — 임의 레이아웃 재현 (ERRORS [360]). 실패 시 기본 레이아웃 폴백.
-    # 데이터셋 1개+ 이면 템플릿 시도 — 빈 슬롯은 Playwright CSS card:empty{display:none} 으로 자동 숨김.
     _n_ds = len([d for d in (datasets or []) if d.get("data")])
-    # ★ 스타일(골격)=layout_library 10개 큐레이션 우선, 색(팔레트)=recipe (사용자 박제 2026-07-18).
-    #   레시피는 '색만 다른' 팔레트 풀이고, 스타일은 데이터 형태로 선택하는 검증된 골격 10종이 담당.
-    #   → 어떤 레시피가 뽑히든 이미지는 '데이터 형태에 맞는 10개 중 하나의 뚜렷한 스타일 + 다양한 색'.
-    #   학습 recipe.template 은 폴백(데이터 0일 때). has_all_slots_resolved 실패 시 기본 스켈레톤.
-    tmpl = _pick_layout_template(datasets, seed) or pal.get("template")
-    if tmpl and _n_ds >= 1:
-        try:
-            from JARVIS06_IMAGE.template_engine import render_layout, has_all_slots_resolved
-            _h = render_layout(tmpl, title, subtitle, datasets, pal, src=src, chip=chip)
-            if _h and has_all_slots_resolved(_h):
-                return _h
-        except Exception:
-            pass
-    tex = pal.get("hero_texture", "grid")
-    rad = int(pal.get("card_radius", 24))
-    W = 1280
-    ts = [d for d in datasets if _is_timeseries(d)]
-    cats = [d for d in datasets if not _is_timeseries(d)]
-
-    # ── 히어로 스탯 (최대 2) ──
-    hero_blocks = []
-    icon_key = "won"
-    if ts:
-        cols2 = [(pal['a1'], pal['a1s']), (pal['a2'], pal['a2s'])]
-        for i, d in enumerate(ts[:2]):
-            pts = _pairs(d)
-            if not pts:
-                continue
-            chg = _pct_change(pts)
-            _ts_unit = d.get("unit", "")
-            _last_v, _last_u = _auto_scale(pts[-1][1], _ts_unit)
-            _first_v, _first_u = _auto_scale(pts[0][1], _ts_unit)
-            big = (f"{'+' if chg >= 0 else ''}{chg:.1f}<span style='font-size:34px'>%</span>"
-                   f"<span style='font-size:30px'> {'▲' if chg >= 0 else '▼'}</span>") if chg is not None else (
-                       f"{_fmt(_last_v)}<span style='font-size:30px'> {_last_u}</span>" if _ts_unit else _fmt(pts[-1][1]))
-            sub = f"{pts[-1][0]} {_fmt(_last_v)}{_last_u} · {pts[0][0]} {_fmt(_first_v)}{_first_u} 대비"
-            c, cs = cols2[i % 2]
-            hero_blocks.append(_hero_stat(pal, d.get("title", f"지표{i+1}"), big, sub, c, cs, _sparkline(pts, cs)))
-        icon_key = "trend"
-    elif cats:
-        d = cats[0]
-        _unit = d.get("unit", "")
-        pts = sorted(_pairs(d), key=lambda kv: -kv[1])   # ★ 실제값 desc (절댓값 아님 — ROE 음수=꼴찌)
-        if pts:
-            top = pts[0]                                  # 최고 = 실제 최댓값
-            _top_v, _top_u = _auto_scale(top[1], _unit)
-            hero_blocks.append(_hero_stat(pal, f"최고 · {d.get('title','')}",
-                                          f"{_fmt(_top_v)}<span style='font-size:30px'> {_top_u}</span>",
-                                          f"{top[0]}", pal['a1'], pal['a1s']))
-            if len(pts) > 1:
-                low = pts[-1]                             # ★ 최저 = 실제 최솟값 (꼴찌 명시 — 무의미한 합계 폐기)
-                _low_v, _low_u = _auto_scale(low[1], _unit)
-                hero_blocks.append(_hero_stat(pal, f"최저 · {d.get('title','')}",
-                                              f"{_fmt(_low_v)}<span style='font-size:30px'> {_low_u}</span>",
-                                              f"{low[0]}", pal['a2'], pal['a2s']))
-        icon_key = "bar"
-
-    hero_stats = (f"<div style='display:flex;gap:24px;margin-top:36px'>{''.join(hero_blocks)}</div>"
-                  if hero_blocks else "")
-
-    # ── 메인 차트 ──
-    body_cards = []
-    note = ""
-    if ts:
-        cols2 = [(pal['a1'], pal['a1s']), (pal['a2'], pal['a2s'])]
-        series = []
-        _ts_chart_unit = ts[0].get("unit", "") if ts else ""
-        for i, d in enumerate(ts[:2]):
-            pts = _pairs(d)
-            if pts:
-                c, cs = cols2[i % 2]
-                series.append({"name": d.get("title", ""), "pts": pts, "c": c, "cs": cs})
-        if series:
-            chart, note = _line_chart(series, pal, unit=_ts_chart_unit)
-            legend = "".join(
-                f"<span style='display:inline-flex;align-items:center;gap:8px;margin-left:18px;font-size:15px;"
-                f"font-weight:700;color:{pal['ink']}'><i style='width:22px;height:6px;border-radius:3px;"
-                f"background:{s['c']};display:inline-block'></i>{s['name']}</span>" for s in series)
-            body_cards.append(_card(pal, "01", ts[0].get("title", "지수 추이") if len(series) == 1 else "지수 추이 비교",
-                                    legend + f"<span style='color:{pal['muted']};margin-left:10px'>{note}</span>", chart, rad=rad))
-        rest = cats
-    else:
-        rest = cats
-
-    # 카테고리/비중 카드
-    n = len(body_cards) + 1
-    for d in rest[:2]:
-        pts = _pairs(d)
-        if not pts:
-            continue
-        vh = (d.get("viz_hint") or "").lower()
-        unit = d.get("unit", "")
-        _display_unit = unit
-        if "pie" in vh or "donut" in vh or (unit == "%" and 2 <= len(pts) <= 6 and abs(sum(v for _, v in pts) - 100) < 15):
-            donut, legend = _donut(pts, pal, unit=unit)
-            inner = (f"<div style='display:flex;align-items:center;gap:36px'>{donut}"
-                     f"<div style='flex:1'>{legend}</div></div>")
-        else:
-            sorted_pts = sorted(pts, key=lambda kv: -kv[1])
-            inner = _bar_chart(sorted_pts, pal, unit=unit)   # ★ 실제값 desc; _bar_chart 내부서 단위 스케일
-            # 카드 헤더 단위도 스케일된 단위로 표시
-            _display_unit = _scale_rows_uniform(sorted_pts, unit)[1] if sorted_pts else unit
-        body_cards.append(_card(pal, f"{n:02d}", d.get("title", ""), _display_unit or "", inner, rad=rad))
-        n += 1
-
-    # ── 보조 미니카드 (히어로가 비었을 때 통계 요약) ──
-    mini = ""
-    if not hero_blocks and datasets:
-        cards = []
-        for d in datasets[:3]:
-            pts = _pairs(d)
-            if not pts:
-                continue
-            top = max(pts, key=lambda kv: abs(kv[1]))
-            _mv, _mu = _auto_scale(top[1], d.get("unit", ""))
-            cards.append(_mini_card(pal, "chart", pal['soft'], pal['ink'],
-                                    d.get("title", ""), _fmt(_mv), _mu, rad=max(14, rad - 6)))
-        if cards:
-            mini = f"<div style='display:flex;gap:20px;margin-top:22px'>{''.join(cards)}</div>"
-
-    if not body_cards and not mini:
+    if _n_ds < 1:
         return ""
 
-    eyebrow = chip or "데이터 인사이트"
-    body_html = "".join(f"<div style='margin-top:22px'>{c}</div>" for c in body_cards)
-    # ★ 데이터 기간 표시: 각 dataset source 의 as_of 를 수집해 출처에 병기
-    _as_of_parts = []
-    for _d in datasets:
-        _s = _d.get("source") or {}
-        if isinstance(_s, dict):
-            _ao = _s.get("as_of", "")
-            if _ao and _ao not in _as_of_parts:
-                _as_of_parts.append(_ao)
-    _period_str = (" · ".join(_as_of_parts[:2]) + " 기준") if _as_of_parts else ""
-    src_txt = src or "데이터 출처 · JARVIS"
-    if _period_str:
-        src_txt = f"{src_txt}  ({_period_str})"
+    try:
+        from JARVIS06_IMAGE.template_engine import render_layout, has_all_slots_resolved
+    except Exception as e:            # 조립부 부재 = 렌더 불가 (거짓 이미지보다 없는 게 낫다)
+        _g_report("image", e, module=__name__, func_name="build_html")
+        return ""
 
-    return f"""<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;800;900&display=swap');
-*{{margin:0;padding:0;box-sizing:border-box;font-family:{FONT}}}
-</style></head><body>
-<div style="width:{W}px;background:{pal['soft']}">
-  <div style="position:relative;overflow:hidden;padding:52px 60px 56px;background:linear-gradient(135deg,{pal['hero'][0]},{pal['hero'][1]})">
-    <div style="position:absolute;right:-120px;top:-150px;width:480px;height:480px;border-radius:50%;background:radial-gradient(circle,{pal['a1']}22,transparent 62%)"></div>
-    {_hero_texture(tex, pal)}
-    <div style="position:relative;display:inline-flex;align-items:center;gap:9px;padding:8px 16px;border:1px solid {pal['eyebrow']}66;border-radius:999px;color:{pal['eyebrow']};font-size:15px;font-weight:700">
-      {_icon(icon_key, pal['eyebrow'], 17)}{eyebrow}</div>
-    <h1 style="position:relative;margin:18px 0 10px;color:#fff;font-size:52px;font-weight:900;letter-spacing:-.02em;line-height:1.1">{title}</h1>
-    <div style="position:relative;color:#a9bad6;font-size:19px">{subtitle}</div>
-    {hero_stats}
-  </div>
-  <div style="padding:36px 60px 8px">{body_html}{mini}</div>
-  <div style="padding:18px 60px 28px;display:flex;align-items:center;justify-content:space-between;color:{pal['muted']};font-size:14px">
-    <span>{src_txt}</span><span style="font-weight:800;color:{pal['ink']}">JARVIS · 데이터 인사이트</span>
-  </div>
-</div></body></html>"""
+    # ★ 스타일(골격)=layout_library 10종 + 나이틀리 학습본, 색(팔레트)=recipe.
+    #   골격 후보가 하나도 없거나 슬롯 미해결이면 _FALLBACK_LAYOUT 을 *같은 조립부* 에 먹인다.
+    for tmpl in (_pick_layout_template(datasets, seed), pal.get("template"), _FALLBACK_LAYOUT):
+        if not tmpl:
+            continue
+        try:
+            _h = render_layout(tmpl, title, subtitle, datasets, pal, chip=chip)
+        except Exception as e:
+            _g_report("image", e, module=__name__, func_name="build_html")
+            continue
+        if _h and has_all_slots_resolved(_h):
+            return _h
+    return ""
 
 
-def render_pro(title, subtitle, datasets, seed, out_path, src="", chip="") -> str:
-    """결정론 전문 템플릿 렌더 (LLM 0회). 성공 시 경로, 실패 시 "" (→ render_spec 폴백)."""
+
+def render_pro(title, subtitle, datasets, seed, out_path, src="", chip="") -> tuple[str, str]:
+    """결정론 전문 템플릿 렌더 (LLM 0회). 반환 (경로, 렌더된 HTML). 실패 시 ("", "").
+
+    ★ HTML 을 함께 돌려주는 이유 (사용자 박제 2026-08-10): 렌더 산출물의 *표시 텍스트* 를
+      검증하려면 초크포인트(`infographic_engine._emit`)까지 HTML 이 올라와야 한다.
+      종전엔 경로만 돌려줘 검증할 재료가 호출자에게 없었고, 그래서 이 경로로 나간 8장이
+      전부 무검증·provenance 미등록으로 발행됐다.
+    """
     try:
         datasets = [d for d in (datasets or []) if _pairs(d)]
         if not datasets:
-            return ""
+            return "", ""
         html = build_html(title, subtitle, datasets, seed, src, chip=chip)
         if not html:
-            return ""
+            return "", ""
         from JARVIS06_IMAGE.html_infographic import _html_to_jpg
         ok = _html_to_jpg(html, Path(out_path), width=1280)
         p = Path(out_path)
-        return str(out_path) if (ok and p.exists() and p.stat().st_size > 3000) else ""
+        if ok and p.exists() and p.stat().st_size > 3000:
+            return str(out_path), html
+        return "", ""
     except Exception as e:
         _g_report("image", e, module=__name__, func_name="render_pro")
-        return ""
+        return "", ""
 
 
-__all__ = ["render_pro", "build_html", "PALETTES"]
+__all__ = ["render_pro", "build_html", "PALETTES", "axis_ticks",
+           "outlier_ratio", "outlier_pair",
+           "BAR_MAX_ROWS", "DONUT_MAX_ROWS", "KPI_MAX_CARDS"]

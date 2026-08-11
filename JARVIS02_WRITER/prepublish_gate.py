@@ -30,9 +30,12 @@ economic_poster._verify_all / trend_theme_writer._verify_all 양쪽이 호출한
   shared.llm.invoke_text_result 의 ok 로 구분해 ① 항상 GUARDIAN 기록
   ② 사실성은 fail-closed(차단) — 헌법 "사실 판정 LLM 실패=차단".
 
-★ 이미지 사실성 (사용자 박제 2026-06-29): 본문 수치는 사실성 게이트가, *차트 안의 수치*
-  는 이미지 게이트가 막는다. JARVIS06 render_from_spec 가 검증 우회(실데이터 미확인)
-  차트를 unverified 로 기록 → 여기서 차단 → 재작성 순환.
+★ 이미지 사실성 (사용자 박제 2026-06-29 · fail-closed 반전 2026-08-10): 본문 수치는
+  사실성 게이트가, *차트 안의 수치* 는 이미지 게이트가 막는다. JARVIS06 이 생성한
+  모든 수치 이미지는 provenance 로 검증 결과를 남기고, 여기서 **verified=True 가
+  아닌 것 + 검증 기록이 아예 없는 수치 이미지** 를 차단한다.
+  종전엔 `verified is False` 만 봐서 *미등록* 이미지가 통째로 새어나갔다 —
+  2026-08-10 07:00 경제 인포그래픽 8장이 그 구멍으로 발행됐다(감사 D03/D06/D17).
 """
 from __future__ import annotations
 import os
@@ -646,7 +649,7 @@ def _combined_quality_call(body: str, title: str, corpus: str, post_type: str,
         return _no_verdict("malformed")
 
 
-_IMG_EXT = re.compile(r"\.(?:jpg|jpeg|png|webp)$", re.I)
+_IMG_EXT = re.compile(r"\.(?:jpg|jpeg|png|webp|svg)$", re.I)
 
 
 def _walk_strings(obj):
@@ -668,44 +671,136 @@ def _collect_image_paths(draft, body: str) -> list[str]:
         for s in _walk_strings(blocks):
             if _IMG_EXT.search(s):
                 paths.append(s)
-    for m in re.finditer(r'src=["\']([^"\']+\.(?:jpg|jpeg|png|webp))["\']', body or "", re.I):
-        paths.append(m.group(1))
+    #   확장자 규칙은 _IMG_EXT 단일 소스에서 파생 — 여기 두 번째 목록을 박지 않는다(②).
+    for m in re.finditer(r'src=["\']([^"\']+)["\']', body or "", re.I):
+        if _IMG_EXT.search(m.group(1)):
+            paths.append(m.group(1))
     # dedupe (순서 보존)
     seen: set = set()
     return [p for p in paths if not (p in seen or seen.add(p))]
 
 
-def _image_factuality_leg(draft, body) -> list[dict]:
-    """이미지(차트) 사실성 — render 시 unverified 로 기록된 수치 차트가 있으면 차단.
+# ── 수치 이미지 표식 (JARVIS06 ↔ 게이트 계약) ─────────────────────────────
+#   생산자는 JARVIS06 의 <img> 빌더, 소비자는 이 게이트다. 속성명 리터럴을 여기
+#   박지 않고 owner(image_data_verifier.DATA_IMAGE_ATTR)에서 파생한다 —
+#   파일명·경로 꼴로 '수치 차트인지' 를 추측하면 이름 규칙이 바뀔 때마다 샌다.
+def _marked_image_paths(body: str, attr: str) -> set:
+    """본문 HTML 에서 `attr` 표식을 단 <img> 의 src 집합. attr 가 비면 빈 집합."""
+    if not attr or not body:
+        return set()
+    out: set = set()
+    for m in re.finditer(r"<img\b[^>]*>", body, re.I):
+        tag = m.group(0)
+        if attr.lower() not in tag.lower():
+            continue
+        s = re.search(r'src=["\']([^"\']+)["\']', tag, re.I)
+        if s:
+            out.add(s.group(1))
+    return out
 
-    JARVIS06 render_from_spec 가 모든 생성 이미지의 검증 결과를 provenance 레지스트리에
-    기록한다. 수치 차트가 실데이터로 검증 안 된 채 렌더되면 verified=False 로 남고,
-    여기서 그것을 잡아 재작성 순환으로 보낸다 (fail-open — 게이트 자체 오류는 발행 허용)."""
+
+# ★ fingerprint 안정 식별자 (사용자 박제 2026-08-10)
+#   Issue.detail 에 run 마다 바뀌는 값(seed 파일명)을 넣으면 attempt 마다 지문이
+#   달라져 abort 가 안 걸린다. 숫자·해시 조각을 *꼴* 로 걷어내 계열명만 남긴다 —
+#   파일명 목록을 박지 않으므로 새 렌더러가 생겨도 자동으로 따라온다.
+_IDENT_VOLATILE = re.compile(r"[0-9a-f]{4,}|\d+", re.I)
+
+
+def _stable_image_ident(path: str) -> str:
+    stem = re.sub(r"\.[A-Za-z0-9]+$", "", str(path).rsplit("/", 1)[-1])
+    ident = _IDENT_VOLATILE.sub("", stem).strip("_-. ")
+    return ident or "수치차트"
+
+
+def _image_factuality_leg(draft, body) -> list[dict]:
+    """이미지(차트) 사실성 — 검증 기록이 *없거나* 통과하지 못한 수치 차트를 차단.
+
+    ★ fail-closed 반전 (사용자 박제 2026-08-10 — 감사 D03/D06/D17)
+      종전 조건은 `if prov and prov.get("verified") is False:` 였다. 즉 **등록조차
+      안 된 이미지는 아무 일도 없이 통과**했고, 2026-08-10 07:00 경제 브리핑
+      인포그래픽 8장이 정확히 그 구멍으로 나갔다 — 라이브 렌더 경로(render_pro)가
+      provenance 를 남기지 않아 `prov=None` 이었고, 게이트는 "차단할 게 없다" 로 읽었다.
+      *검증 결과가 없다* 를 *문제 없다* 로 읽으면 게이트는 있으나 마나다.
+
+    판정 3층 — 오차단 0 을 위해 층마다 대상을 좁힌다:
+      ① 게이트 자신의 건강 — 검증기가 죽어 있으면 검증 없이 발행하지 않는다.
+      ② 등록분 — kind 가 수치 차트인데 verified 가 True 가 *아니면* 차단
+         (None·누락·False 전부). 사진·썸네일·표는 수치 사실성 대상이 아니다.
+      ③ 미등록분 — **스스로 '수치 이미지' 라고 표식한 것만** 차단.
+         `_collect_image_paths` 는 썸네일·표·재사용 이미지까지 전부 긁으므로
+         미등록 전면 차단은 4조합(경제·테마 × 네이버·티스토리) 즉시 발행 정지다.
+         표식이 발행자·law_enforcer 에서 탈락하면 ③은 조용히 무해해질 뿐
+         오차단은 만들지 않는다 — 의도된 비대칭이고, 정문 ②는 표식과 무관하게 산다.
+
+    kind="data_insufficient" 인 이유: 이미지 수치 미검증의 근본은 *수집 datasets 부족*
+    이라 재작성으로 못 고친다(harness 재시도는 collect step 을 건너뛰어 datasets 불변).
+    fix 훅이 이 kind 를 abort 로 즉시 종결 → 무의미한 2차 시도(플랫폼당 ~15분) 차단.
+    """
     try:
-        from JARVIS06_IMAGE.validators.image_data_verifier import lookup_provenance
+        from JARVIS06_IMAGE.validators import image_data_verifier as _idv
     except Exception as e:
-        log.warning(f"[prepublish_gate] 이미지 검증 import 실패 → 통과: {e}")
-        return []
+        # 종전엔 여기서 `return []` 했다 — 검증기가 사라지면 게이트도 함께 사라졌다.
+        log.error(f"[prepublish_gate] 이미지 검증기 import 실패 → 발행 차단: {e}")
+        return [{"kind": "data_insufficient",
+                 "detail": "[이미지사실성] 검증기 미가용 — 검증 없이 발행 불가"}]
+
+    # ① 검증기가 *실제로 동작하는가* 를 동작으로 확인 (patch_effective 표준).
+    #    코드 존재는 적용의 증거가 아니다 — 조작 수치를 한 번 통과시켜 False 가 나오는지 본다.
+    _eff = getattr(_idv, "verifier_effective", None)
+    if _eff is None:
+        # 스모크 API 미도입 상태(JARVIS06 측 미머지). 검증기 모듈 자체는 살아 있으므로
+        # ②③ 판정은 그대로 하되, 건강검사가 없다는 사실을 침묵시키지 않는다.
+        log.warning("[prepublish_gate] image_data_verifier.verifier_effective 없음 "
+                    "— 검증기 건강검사 생략(②③만 판정)")
+    else:
+        try:
+            _healthy = bool(_eff())
+        except Exception as e:
+            log.error(f"[prepublish_gate] 검증기 스모크 예외 → 발행 차단: {e}")
+            _healthy = False
+        if not _healthy:
+            return [{"kind": "data_insufficient",
+                     "detail": "[이미지사실성] 검증기 미작동 — 검증 없이 발행 불가"}]
+
+    marked = _marked_image_paths(body, getattr(_idv, "DATA_IMAGE_ATTR", ""))
     out: list[dict] = []
     for p in _collect_image_paths(draft, body):
         try:
-            prov = lookup_provenance(p)
+            prov = _idv.lookup_provenance(p)
         except Exception:
             prov = None
-        if prov and prov.get("verified") is False:
-            # ★ 2026-07-24 P1: kind="data_insufficient" — 이미지 수치 미검증은 *수집 datasets 부족*이
-            #   근본이라 재작성으로 못 고친다(harness 재시도는 collect step 을 건너뛰어 datasets 불변).
-            #   fix 훅이 이 kind 를 abort 로 즉시 종결 → 무의미한 2차 시도(플랫폼당 ~15분) 차단.
-            #   detail 은 fingerprint 안정 위해 run별 파일명(seed) 금지 — 불변 식별자(출처명, 대개 고정).
-            _src = (prov.get("source") or {}) if isinstance(prov, dict) else {}
-            _ident = _src.get("name") or _src.get("provider") or "수치차트"
-            out.append({"kind": "data_insufficient",
-                        "detail": f"[이미지사실성] 출처 미검증 수치 차트 ({_ident})"})
+
+        if prov is not None:
+            kind = str(prov.get("kind") or "")
+            if not kind:
+                # provenance v1(등록 시점에 kind 가 없던 기록) — 종전 계약 그대로 판정.
+                #   v1 은 수치 spec 일 때만 verified=False 가 되므로 이 규칙이 정확하고,
+                #   과잉 차단(비수치 이미지까지 잡기)도 만들지 않는다.
+                if prov.get("verified") is False:
+                    out.append(_img_issue(prov, p, "출처 미검증"))
+                continue
+            if kind != "numeric_chart":
+                continue                      # 사진·썸네일·표 — 수치 사실성 대상 아님
+            if prov.get("verified") is not True:
+                out.append(_img_issue(prov, p, "검증 미통과"))
+            continue
+
+        # ③ 미등록 — 표식이 붙은 수치 이미지만
+        if p in marked:
+            out.append(_img_issue(None, p, "검증 기록 없는"))
+
     if out:
         log.warning(f"[prepublish_gate] 이미지 사실성 차단 {len(out)}건 → 데이터부족 abort")
         for o in out:
             log.warning(f"  ↳ {o['detail']}")
     return out
+
+
+def _img_issue(prov, path: str, why: str) -> dict:
+    src = (prov.get("source") or {}) if isinstance(prov, dict) else {}
+    ident = (src.get("name") or src.get("provider") or _stable_image_ident(path))
+    return {"kind": "data_insufficient",
+            "detail": f"[이미지사실성] {why} 수치 차트 ({ident})"}
 
 
 # ★ 2-4 (2026-07-02): 본문 수치 ↔ 차트 수치 교차대조.
@@ -722,18 +817,12 @@ def _cc_close(a: float, b: float, rel: float = 0.03, ab: float = 0.5) -> bool:
     return abs(a - b) <= max(abs(b) * rel, ab)
 
 
-def _cc_image_paths(draft) -> set:
-    paths: set = set()
-    for b in (draft.get("blocks") or []):
-        try:
-            data = b[1] if isinstance(b, (list, tuple)) and len(b) >= 2 else None
-            if isinstance(data, str) and re.search(r'\.(png|jpe?g|webp|svg)$', data, re.I):
-                paths.add(data)
-        except Exception:
-            pass
-    for m in re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', _draft_body(draft) or ""):
-        paths.add(m.group(1))
-    return paths
+# ── _cc_image_paths — ★ 삭제 (사용자 박제 2026-08-10, ①) ────────────────────
+#   같은 파일 안에 이미지 경로 수집기가 **두 벌**이었다(`_collect_image_paths` ·
+#   `_cc_image_paths`). 규칙이 미묘하게 어긋나 있었다 — 앞은 블록을 재귀로 훑고
+#   확장자에 svg 가 없었고, 뒤는 `b[1]` 만 보고 svg 를 포함했다. 두 벌이면 늘
+#   한쪽이 틀린다: 중첩 블록의 이미지는 교차대조에서 빠지고, svg 는 사실성 게이트에서
+#   빠졌다. 수집기는 하나다 — `_collect_image_paths` 로 통일하고 확장자만 넓혔다.
 
 
 def _cc_body_value(body: str, label: str, unit: str):
@@ -754,7 +843,7 @@ def _crosscheck_leg(draft, body) -> list[dict]:
         return []
     out: list[dict] = []
     seen_labels = set()
-    for path in _cc_image_paths(draft):
+    for path in _collect_image_paths(draft, body):
         prov = lookup_provenance(path) or lookup_provenance(os.path.abspath(path))
         if not prov:
             continue

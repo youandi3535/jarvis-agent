@@ -469,11 +469,10 @@ def run(post_naver=True, post_tistory=True, resume=None):
             print("  ⏭️ [④] 티스토리 driver 이미 준비됨 (재시도 — 재갱신 스킵)")
             return {}
         try:
-            from dotenv import load_dotenv
             from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run as _tcr
             ok, drv = _tcr(force=False, return_driver=True)
             if ok:
-                load_dotenv(override=True)
+                # ★ load_dotenv(override=True) 제거 — 최신 TS_COOKIE 는 get_tistory_cookie() 가 .env 에서 직접 읽는다 — env 전체를 덮지 않는다(2026-08-10)
                 from JARVIS00_INFRA.harness import ACTION_NAME_KEY as _ANK
                 return {"ts_driver_key": _res.put(state.get(_ANK, ""), "ts_driver", drv)}
             if drv:
@@ -1050,11 +1049,10 @@ def run(post_naver=True, post_tistory=True, resume=None):
 
 if __name__ == "__main__":
     # ★ P1-④ 패치 (사용자 박제 2026-05-18 — ADR 009 v2): subprocess Layer 0 게이트.
-    try:
-        from JARVIS00_INFRA.preflight import ensure_preflight as _ep
-        _ep(strict=True)
-    except Exception as _ee:
-        print(f"⚠️ preflight 호출 실패: {_ee}")
+    # ★ try/except 로 감싸지 않는다 (2026-08-10) — 감싸면 ImportError 가 삼켜져
+    #   "preflight 가 있다" 는 착각만 남는다. 루트 경로는 상단 부트스트랩이 보장한다(fail-closed).
+    from JARVIS00_INFRA.preflight import ensure_preflight
+    ensure_preflight(strict=True)
 
     # --scheduled 플래그: scheduler.py가 이미 락을 획득한 상태로 호출한 경우 → 락 체크 건너뜀
     scheduled      = "--scheduled"    in sys.argv

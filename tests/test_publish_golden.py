@@ -16,6 +16,8 @@
 """
 from __future__ import annotations
 
+from conftest import is_scannable_source  # 제외 규칙 단일 소유자 (원칙①)
+
 import datetime as dt
 
 import pytest
@@ -695,6 +697,11 @@ def test_시크릿_파일_권한이_소유자전용():
         # `__pycache__` 는 추적되지 않지만 *추적 소스의 컴파일 산출물* 이라 비밀이 아니다.
         if "__pycache__" in path.parts or path.suffix == ".pyc":
             return False
+        # ★ 남의 트리(중첩 워크트리·가상환경)는 *이 저장소의* 미추적 파일이 아니다.
+        #   실측: `.claude/worktrees/` 의 .py 205개가 미추적으로 잡혔다. 지금까지 초록이던 것은
+        #   배제가 걸려서가 아니라 비밀 패턴에 우연히 안 걸렸기 때문이다(원칙① — conftest 단독).
+        if not is_scannable_source(path, _ROOT):
+            return False
         try:
             return path.is_file() and str(path.relative_to(_ROOT)) not in tracked
         except ValueError:
@@ -809,7 +816,7 @@ def test_회로면제_alias_에_nonessential_을_붙이지_않는다():
     bad: list[str] = []
     for f in root.rglob("*.py"):
         sp = str(f)
-        if "__pycache__" in sp or "/.venv/" in sp or "/tests/" in sp:
+        if not is_scannable_source(f, root) or "/tests/" in sp:
             continue
         try:
             src = f.read_text(encoding="utf-8")
@@ -1169,7 +1176,7 @@ def test_인프라_kind_판별을_아무도_등가비교하지_않는다():
     owner = root / "JARVIS00_INFRA" / "harness.py"
     bad = []
     for f in root.rglob("*.py"):
-        if ".venv" in f.parts or "__pycache__" in f.parts or f == owner:
+        if not is_scannable_source(f, root) or f == owner:
             continue
         # ★ 테스트는 예외 — 이 규칙이 막는 것은 *분류 판단* 을 등가비교로 하는 것이다.
         #   "파생이 살아있는가" 를 확인하려면 테스트는 반드시 두 값을 비교해야 한다
@@ -1411,7 +1418,7 @@ def test_죽은_JARVIS_STRICT가_저장소에서_사라졌다():
     for f in list(root.rglob("*.py")) + list(root.rglob("*.md")) \
             + list(root.rglob("*.sh")) + list(root.rglob("*.yml")) \
             + [root / ".githooks" / "pre-commit"]:
-        if not f.is_file() or {".venv", "__pycache__", ".git", "node_modules"} & set(f.parts):
+        if not f.is_file() or not is_scannable_source(f, root):
             continue
         for i, l in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
             if USE.search(l):
@@ -1531,7 +1538,7 @@ def test_낡은_검사_개수_표기가_남아있지_않다():
     root = Path(__file__).resolve().parent.parent
     stale = []
     for f in list(root.rglob("*.md")) + list(root.rglob("*.py")):
-        if not f.is_file() or {".venv", "__pycache__", ".git", "node_modules"} & set(f.parts):
+        if not f.is_file() or not is_scannable_source(f, root):
             continue
         if f.name == "ERRORS.md" or "decisions" in f.parts or "tests" in f.parts:
             continue   # 사고 기록·ADR·테스트 설명문은 역사다 — 보존한다
@@ -1777,7 +1784,7 @@ def test_이미지_프로바이더가_하나뿐이다():
     # 삭제된 것이 코드에 되살아나지 않았는가 (역사 문서는 예외)
     dead = []
     for f in list(root.rglob("*.py")):
-        if {".venv", "__pycache__", "node_modules", "tests"} & set(f.parts):
+        if not is_scannable_source(f, root) or "tests" in f.parts:
             continue
         # precommit 검사기는 *금지 URL 목록* 을 들고 있어야 한다 — 되살아나는 걸 막는 쪽이다.
         if f.name == "precommit_check.py":
@@ -1815,7 +1822,7 @@ def test_JSON을_직접_쓰는_곳이_없다():
     pat = re.compile(r"json\.dump\(|write_text\(\s*json\.dumps")
     bad = []
     for f in root.rglob("*.py"):
-        if {".venv", "__pycache__", "node_modules", "tests"} & set(f.parts):
+        if not is_scannable_source(f, root) or "tests" in f.parts:
             continue
         if f.name in ("json_store.py", "precommit_check.py"):
             continue          # owner 와 검사기는 대상 아님

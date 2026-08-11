@@ -911,17 +911,11 @@ _PROTECT_MIN = int(os.getenv("LLM_PUBLISH_PROTECT_MIN", "90") or "90")   # 발�
 _THROTTLE_NO_RETRY = (os.getenv("LLM_THROTTLE_NO_RETRY", "1") or "1") != "0"
 
 
-def _max_retries() -> int:
-    """LLM 계층 재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT)에서 파생.
-
-    ★ 하드코딩 금지: 상한은 한 곳(harness)에서만 정의한다. import 실패 시에만
-      보수적으로 2 로 폴백(종전 3 이 아니라 2 — 사용자 박제 2026-07-21).
-    """
-    try:
-        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
-        return max(1, int(DEFAULT_MAX_ATTEMPTS))
-    except Exception:
-        return 2
+# LLM 계층 재시도 상한 — 파생 leaf 하나(`shared/limits.py`)에서 받는다.
+#   ★ 여기서 다시 파생하지 않는다: 종전엔 `except Exception: return 2` 폴백을 들고
+#     있었는데, 폴백에 적은 숫자가 곧 사본이다. harness 를 못 읽는 날 LLM 경로만
+#     조용히 다른 횟수로 돈다 — 예외가 조용한 드리프트보다 낫다.
+from shared.limits import max_attempts as _max_retries
 
 # ── SDK cwd 격리 (제안 ② — 2026-07-20, 전수감사 확정) ──────────────────
 #

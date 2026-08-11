@@ -571,11 +571,10 @@ def _build_grouped_telegram_report(date_str: str, groups: dict, total: int) -> s
 
 if __name__ == "__main__":
     # ★ P1-④ Phase 2 보강 (사용자 박제 2026-05-18) — subprocess Layer 0 게이트
-    try:
-        from JARVIS00_INFRA.preflight import ensure_preflight as _ep
-        _ep(strict=True)
-    except Exception as _ee:
-        print(f"⚠️ preflight 호출 실패: {_ee}")
+    # ★ try/except 로 감싸지 않는다 (2026-08-10) — 감싸면 ImportError 가 삼켜져
+    #   "preflight 가 있다" 는 착각만 남는다. 루트 경로는 상단 부트스트랩이 보장한다(fail-closed).
+    from JARVIS00_INFRA.preflight import ensure_preflight
+    ensure_preflight(strict=True)
 
     arg = sys.argv[1] if len(sys.argv) > 1 else None
     from JARVIS00_INFRA.watchdog import guard_main

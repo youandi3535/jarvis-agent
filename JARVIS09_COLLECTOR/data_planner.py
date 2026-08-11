@@ -7,7 +7,10 @@
        → (실행기 collect_chart_data 가 설계도대로 조준 수집)
 
 설계는 *완전 동적* — LLM 이 주제를 보고 매번 series·출처·쿼리를 새로 결정한다.
-provider(출처 메커니즘)는 *고정 카탈로그*(아래 _SOURCE_CATALOG, 11종)에서 LLM 이 고를 뿐,
+provider(출처 메커니즘)는 `source_registry.CATALOG` 에서 LLM 이 고를 뿐,
+★ 갯수를 여기 적지 않는다 (2026-08-10): 종전엔 "11종" 이라 적혀 있었는데 그 숫자는
+  레지스트리에 소스가 하나 늘어도 따라오지 않는다. 현재 값은 실행해서 본다 —
+  `python3 -c "from JARVIS09_COLLECTOR.source_registry import CATALOG; print(len(CATALOG))"`.
 주제별 if-else 분기는 어디에도 없다. 카탈로그는 "가용 도구 목록"이지 주제 로직이 아니다.
 """
 from __future__ import annotations
@@ -217,8 +220,10 @@ def plan_data_sources(topic: str, sector: str = "", description: str = "",
                                  entity_type=entity_type or "-",
                                  desc=(description or topic)[:400], catalog=catalog)
     # ★ 외부 재시도 = JSON 파싱 실패 시만 (ERRORS [399] — 스로틀 근본 차단).
+    #   상한은 harness.DEFAULT_MAX_ATTEMPTS 파생 (리터럴 2 를 박지 않는다).
     from shared.llm import invoke_text
-    for _attempt in range(2):
+    from .models import max_attempts as _max_attempts
+    for _attempt in range(_max_attempts()):
         try:
             # ★ _essential=True (ERRORS [300]): 설계는 수집 품질의 조타수 —
             #   회로 차단 중에도 1회 실시도 보장 (즉시 폴백 금지).

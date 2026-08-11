@@ -39,13 +39,26 @@ def _p(*args, **kwargs):
 
 from dotenv import load_dotenv
 
-def _max_attempts() -> int:
-    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
-    try:
-        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
-        return max(1, int(DEFAULT_MAX_ATTEMPTS))
-    except Exception:
-        return 2
+
+# ── 직접 실행(python <이 파일>) 대비 — 프로젝트 루트를 sys.path 에 올린다 (2026-08-10) ──
+#   ★ 없으면 `from JARVIS00_INFRA...` 가 ModuleNotFoundError 로 죽고, 그것을 감싼 except 가
+#     조용히 삼켜 **Layer 0 preflight 가 한 번도 안 도는** 상태가 된다 (실측: 진입점 16곳 중 8곳).
+#     경고 한 줄만 찍히고 그대로 진행하므로, 안전장치가 있다고 착각하기 딱 좋다.
+#   ★ 깊이를 숫자로 박지 않는다(②) — 파일이 폴더를 옮기면 조용히 깨진다(ADR 008 이관 전례).
+#     루트는 유일한 진입점 `jarvis_daemon.py` 의 존재로 판별한다.
+import sys as _sys
+from pathlib import Path as _Path
+for _anc in _Path(__file__).resolve().parents:
+    if (_anc / "jarvis_daemon.py").exists():
+        if str(_anc) not in _sys.path:
+            _sys.path.insert(0, str(_anc))
+        break
+del _anc
+
+# 재시도 상한 — 파생 leaf 하나(`shared/limits.py`)에서 받는다.
+#   ★ 여기에 accessor 를 다시 정의하지 말 것: 사본이 늘면 폴백 하나만 어긋나도
+#     경로마다 재시도 횟수가 갈린다(①단일 진입점 · CLAUDE.md 재시도 상한 SSOT).
+from shared.limits import max_attempts as _max_attempts
 
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
@@ -675,8 +688,12 @@ def _load_cookies_to_browser(driver):
             failed += 1
 
     # 실제로 브라우저에 로드된 쿠키 확인
-    loaded = {c["name"] for c in driver.get_cookies()}
-    has_auth = "NID_AUT" in loaded and "NID_SES" in loaded
+    loaded_cookies = driver.get_cookies()
+    loaded = {c["name"] for c in loaded_cookies}
+    # 이름 판정은 refresher 의 has_publish_auth 단독 (①) — 여기서 복제하지 않는다.
+    from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+        has_publish_auth)
+    has_auth = has_publish_auth(loaded_cookies)
     _p(f"  🍪 쿠키 로드: {added}개 추가 / {skipped_expired}개 만료 스킵 / {failed}개 실패")
     _p(f"  🍪 브라우저 확인: {loaded}")
     if has_auth:
@@ -686,9 +703,25 @@ def _load_cookies_to_browser(driver):
     return True
 
 
+def _blog_write_url() -> str:
+    """발행이 여는 글쓰기 화면 — refresher 단일 소스를 *호출 시점에* 조회한다.
+
+    ★ 모듈 로드 시 값을 받아두지 않는다 — 그러면 그 순간의 사본이 되어
+      원본이 바뀌어도 여기만 옛 값을 가리킨다(복사본을 진실로 믿지 말 것).
+    """
+    from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+        blog_write_url)
+    return blog_write_url()
+
+
 def _check_blog_login(driver) -> bool:
-    """블로그 글쓰기 URL 접근 → 로그인 페이지 리다이렉트 여부로 로그인 상태 확인."""
-    driver.get(f"https://blog.naver.com/{NV_ID}/postwrite")
+    """블로그 글쓰기 URL 접근 → 로그인 페이지 리다이렉트 여부로 로그인 상태 확인.
+
+    ★ URL 을 여기 박지 않는다(②) — `naver_cookie_refresher.blog_write_url()` 단일 소스.
+      쿠키 *판정* 과 *수집* 과 *발행* 이 같은 문을 두드려야 한다. 종전엔 판정만
+      `www.naver.com` 을 보고 있어서 "쿠키 유효" 직후 여기서 튕겼다 (2026-08-10).
+    """
+    driver.get(_blog_write_url())
     time.sleep(5)
     cur = driver.current_url
     return "nidlogin" not in cur and "login" not in cur
@@ -806,7 +839,8 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
         # _ensure_logged_in() / _check_blog_login()이 이미 글쓰기 URL로 이동해둠
         # 수정 모드면 그 위에 logNo 파라미터로 다시 이동 → SmartEditor 가 기존 본문 채워서 열림
         if edit_log_no:
-            edit_url = f"https://blog.naver.com/{NV_ID}/postwrite?logNo={edit_log_no}&redirect=Update"
+            # 수정 모드도 같은 글쓰기 화면 — URL 은 단일 소스에서 파생한다(②).
+            edit_url = f"{_blog_write_url()}?logNo={edit_log_no}&redirect=Update"
             _p(f"  ✏️  수정 모드 진입: logNo={edit_log_no}")
             driver.get(edit_url)
             time.sleep(8)
@@ -829,7 +863,7 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
                         c.pop("sameSite", None)
                         try: driver.add_cookie(c)
                         except Exception: pass
-                    driver.get(f"https://blog.naver.com/{NV_ID}/postwrite")
+                    driver.get(_blog_write_url())
                     time.sleep(8)
                     if 'nidlogin' in driver.current_url:
                         _p("  ❌ 쿠키 갱신 후에도 로그인 실패")
@@ -1543,11 +1577,13 @@ def post_to_naver(title: str, html_content: str, img_dir: str = None, blocks: li
 
 if __name__ == "__main__":
     # ★ P1-④ Phase 2 보강 (사용자 박제 2026-05-18) — 직접 실행 시 Selenium 발행 차단
-    try:
-        from JARVIS00_INFRA.preflight import ensure_preflight as _ep
-        _ep(strict=True)
-    except Exception as _ee:
-        _p(f"⚠️ preflight 호출 실패: {_ee}")
+    # ★ try/except 로 감싸지 않는다 (2026-08-10) — 감싸는 순간 ImportError 가 삼켜져
+    #   "preflight 가 있다" 는 착각만 남고 **실제로는 한 번도 안 도는** 상태가 된다.
+    #   실측(2026-08-10): 진입점 16곳 중 8곳이 그 상태였고, 경고는 stdout 으로만 나가는데
+    #   데몬 stdout 은 /dev/null 이라 어디에도 안 남았다 — 완전한 침묵이었다.
+    #   루트 경로는 파일 상단 부트스트랩이 보장한다. 여기서 실패하면 진짜 환경 문제다(fail-closed).
+    from JARVIS00_INFRA.preflight import ensure_preflight
+    ensure_preflight(strict=True)
 
     from JARVIS00_INFRA.watchdog import guard_main
     with guard_main("네이버 발행 테스트", deadline_sec=1800):

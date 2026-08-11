@@ -28,15 +28,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-def _max_attempts() -> int:
-    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
-    try:
-        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
-        return max(1, int(DEFAULT_MAX_ATTEMPTS))
-    except Exception:
-        return 2
-
-
 # jarvis_daemon 과 동일한 logger — 데몬 모드에서 daemon.log 에 박힘.
 # CLI 모드 (직접 실행) 에서는 logger 가 핸들러 미설정이면 stderr 로 가지만,
 # print() 도 같이 호출하므로 콘솔 가시성 유지.
@@ -140,10 +131,27 @@ class PreflightReport:
 
 # ── 개별 검증기 ────────────────────────────────────────────────────
 
+def _ensure_root_on_path() -> None:
+    """프로젝트 루트를 sys.path 에 보장 — ★ 검증기들보다 *먼저* 불려야 한다.
+
+    ★ 왜 run_preflight 초입으로 올렸나 (2026-08-10 실측)
+      종전엔 이 보장이 `_check_internal_imports` 안에만 있었다. 그런데 검증기 순서상
+      `chart_font`(그리고 새 `data_verifier`)가 그보다 **앞**에서 돈다. 그래서
+      `python3 JARVIS00_INFRA/preflight.py` 나 하위 폴더 스크립트를 직접 실행하면
+      sys.path[0] 이 그 폴더라 JARVIS06 을 못 찾고, 두 스모크가 조용히
+      "확인 불가" 로 넘어갔다 — 실측으로 확인했다.
+      *배선해 둔 안전장치가 절반의 진입점에서 한 번도 안 도는* 상태였고,
+      그것이 바로 이번 사고의 형태다("코드 존재는 적용의 증거가 아니다").
+    정의는 여기 한 곳 — 호출자(run_preflight·_check_internal_imports)는 부르기만 한다.
+    """
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+
+
 def _check_internal_imports(report: PreflightReport) -> None:
     """핵심 내부 모듈 import 검증 (★ 7시 사고 type 차단).
 
-    ★ 최대 3회 재시도(사용자 박제 "어떤 재시도도 최대 3회" 원칙, ERRORS [463]) — naver_poster
+    ★ 재시도 상한은 `_max_attempts()`(harness SSOT 파생, 현재 2회) — naver_poster
        등은 pyobjc(Quartz/AppKit) 를 함수 내부에서만 지연 import 하므로 자체 코드로는
        "pyobjc-core and pyobjc" AssertionError 를 낼 수 없다(AST 확인 완료). 실제 사고는
        *여러 subprocess 진입점(economic_poster/naver_cookie_refresher 등)이 동시에
@@ -154,10 +162,11 @@ def _check_internal_imports(report: PreflightReport) -> None:
     """
     import time as _time
 
-    # 프로젝트 루트가 sys.path 에 있어야 import 가능 — jarvis_daemon 이 보장하지만
-    # preflight 가 *먼저* 호출되므로 자체적으로도 보장.
-    if str(_ROOT) not in sys.path:
-        sys.path.insert(0, str(_ROOT))
+    _ensure_root_on_path()
+
+    # 재시도 상한 — 파생 leaf 하나(`shared/limits.py`). 루트 경로를 올린 *뒤* 에 부른다
+    # (preflight 는 직접 실행 진입점이라 모듈레벨 import 는 sys.path 보장 전이다).
+    from shared.limits import max_attempts as _max_attempts
 
     for mod_name in _REQUIRED_INTERNAL_MODULES:
         last_exc: Exception | None = None
@@ -168,7 +177,7 @@ def _check_internal_imports(report: PreflightReport) -> None:
                 break
             except Exception as e:
                 last_exc = e
-                if attempt < 2:
+                if attempt < _max_attempts() - 1:   # 마지막 시도 뒤엔 자지 않는다
                     _time.sleep(0.5)
         if last_exc is not None:
             report.fail("internal_import", mod_name, f"{type(last_exc).__name__}: {last_exc}")
@@ -350,11 +359,67 @@ def _check_chart_font(report: PreflightReport) -> None:
         report.warn("chart_font", "effective", "판정 불가 (matplotlib 미설치이면 정상)")
 
 
+def _check_data_verifier(report: PreflightReport) -> None:
+    """이미지 *수치 사실성* 검증기가 실제로 동작하는지 (patch_effective 표준).
+
+    ★ 왜 Layer 0 인가 (2026-08-10 경제 브리핑 8장 사고)
+      검증기는 **있었다**. 그런데 그 검증기가 동작한다는 증거를 부팅에서 아무도 묻지
+      않았고, 그날 8장은 검증 기록조차 없이 발행됐다. 아이러니하게도
+      `shared/precommit_check.py` 는 이미 `verifier_effective()` 의 *존재* 를 요구한다 —
+      존재만 요구하고 **부르지는 않았다**. 코드 존재는 적용의 증거가 아니다(CLAUDE.md).
+      그래서 `_check_secret_masking`·`_check_chart_font` 와 똑같은 자리에서, 조작 수치를
+      한 번 통과시켜 False 가 나오는지 *동작으로* 확인한다.
+
+    ★ 왜 기본이 fail 이 아니라 warn 인가 (② 상황에서 파생 — chart_font 관례)
+      검증기가 죽어도 *거짓 이미지가 밖으로 나가지는 않는다*:
+      `prepublish_gate._image_factuality_leg` 가 같은 스모크를 fail-closed 로 다시 보고
+      발행을 차단한다. 즉 이 상태의 피해는 '발행 중단' 이지 '거짓 발행' 이 아니므로,
+      부팅을 죽여 수집·분석·대시보드까지 멈추면 피해가 원인보다 커진다.
+      이 사고의 본질은 "깨졌다" 가 아니라 **"아무도 몰랐다"** — 보고에 드러나면 충분하다.
+
+    ★ 단, 그물이 하나도 없으면 fail (파생 판정 — 임계값이 아니라 상태에서 나온다)
+      이미지 게이트 킬스위치가 꺼져 있으면(`IMAGE_DATA_GATE=0`) 미검증 이미지가 폐기되지
+      않는다. '검증기 고장 + 게이트 꺼짐' 은 검증이 *한 겹도* 남지 않은 상태다.
+      이때만 부팅을 막는다. 스위치 이름은 검증기(owner)가 가진 상수에서 가져온다 —
+      여기 문자열로 다시 적으면 그 순간 사본이 되고, 이름이 바뀌면 조용히 어긋난다.
+    """
+    try:
+        from JARVIS06_IMAGE.validators.image_data_verifier import (
+            verifier_effective, gate_enabled, GATE_ENV)
+    except Exception as e:
+        report.warn("data_verifier", "import",
+                    f"이미지 수치 검증기 확인 불가: {type(e).__name__}: {e}")
+        return
+    try:
+        gate_on = bool(gate_enabled())
+    except Exception:
+        gate_on = True
+    try:
+        healthy = verifier_effective() is True
+    except Exception as e:
+        # verifier_effective 는 자체적으로 예외를 삼켜 False 를 주지만, import 이후의
+        # 예기치 못한 폭발도 '무력' 으로 본다 (fail-closed 방향).
+        report.warn("data_verifier", "effective", f"판정 실패: {type(e).__name__}: {e}")
+        healthy = False
+    if not healthy:
+        msg = ("이미지 수치 검증기가 조작 수치를 통과시킴 — 차트 사실성 검증 무력 "
+               "(발행은 prepublish_gate 가 차단하므로 이미지가 나가진 않는다)")
+        if gate_on:
+            report.warn("data_verifier", "effective", msg)
+        else:
+            report.fail("data_verifier", "effective",
+                        f"{msg} + {GATE_ENV}=0 으로 폐기까지 꺼져 있음 — 남은 그물 0")
+    elif not gate_on:
+        report.warn("data_verifier", "killswitch",
+                    f"{GATE_ENV}=0 — 미검증 이미지를 폐기하지 않는 상태로 가동 중")
+
+
 # ── 검증기 카탈로그 ────────────────────────────────────────────────
 
 _CHECKERS: tuple[tuple[str, Callable[[PreflightReport], None]], ...] = (
     ("policy_file",    _check_policy_files),     # 헌법 파일이 첫 게이트
     ("chart_font",     _check_chart_font),       # 차트 한글 폰트 *효과* 확인 (ERRORS [459])
+    ("data_verifier",  _check_data_verifier),    # 이미지 수치 검증기 *효과* 확인 (2026-08-10)
     ("env_var",        _check_env_vars),         # 환경변수 먼저 로드해야 다른 검증 가능
     ("claude_sdk_binary", _check_claude_sdk_binary),  # 바이너리 없으면 SDK 호출 불가
     ("disk",           _check_disk_space),       # 디스크 부족이면 즉시 차단
@@ -494,6 +559,7 @@ def run_preflight(strict: bool = True) -> PreflightReport:
         - sys.exit(1) 으로 프로세스 종료
     """
     report = PreflightReport()
+    _ensure_root_on_path()      # ★ 모든 검증기보다 먼저 — 안 그러면 스모크가 조용히 꺼진다
 
     for category, checker in _CHECKERS:
         try:

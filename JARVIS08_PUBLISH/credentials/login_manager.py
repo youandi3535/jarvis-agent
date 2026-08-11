@@ -45,6 +45,21 @@ except Exception:                                         # noqa: BLE001
 
 log = logging.getLogger("jarvis")
 
+# ── 직접 실행(python <이 파일>) 대비 — 프로젝트 루트를 sys.path 에 올린다 (2026-08-10) ──
+#   ★ 없으면 `from JARVIS00_INFRA...` 가 ModuleNotFoundError 로 죽고, 그것을 감싼 except 가
+#     조용히 삼켜 **Layer 0 preflight 가 한 번도 안 도는** 상태가 된다 (실측: 진입점 16곳 중 8곳).
+#     경고 한 줄만 찍히고 그대로 진행하므로, 안전장치가 있다고 착각하기 딱 좋다.
+#   ★ 깊이를 숫자로 박지 않는다(②) — 파일이 폴더를 옮기면 조용히 깨진다(ADR 008 이관 전례).
+#     루트는 유일한 진입점 `jarvis_daemon.py` 의 존재로 판별한다.
+import sys as _sys
+from pathlib import Path as _Path
+for _anc in _Path(__file__).resolve().parents:
+    if (_anc / "jarvis_daemon.py").exists():
+        if str(_anc) not in _sys.path:
+            _sys.path.insert(0, str(_anc))
+        break
+del _anc
+
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
     from JARVIS07_GUARDIAN.error_collector import report as _g_report
@@ -305,8 +320,27 @@ def check_naver_cookie_valid() -> bool:
 # ══════════════════════════════════════════════════════════
 
 def get_tistory_cookie() -> str:
-    """티스토리 TS_COOKIE 환경변수 값."""
-    return os.environ.get(TS_COOKIE_ENV, "").strip()
+    """티스토리 TS_COOKIE — **항상 최신값** (갱신 직후에도 옛 값을 주지 않는다).
+
+    ★ 왜 파일을 먼저 보나 (2026-08-10)
+      쿠키 갱신은 `.env` **파일** 에 쓴다. 그런데 이 함수가 `os.environ` 만 보면
+      *프로세스가 시작할 때 로드된 옛 값* 을 계속 준다. 그래서 호출자마다
+      `load_dotenv(override=True)` 를 앞세워 환경을 통째로 덮고 있었다 — 실측 4곳
+      (`trend_theme_writer` 2 · `economic_poster` 1 · `performance_collector` 1)
+      에 `tistory_poster` 모듈 로드 1곳까지 5곳.
+      그 부작용으로 호출자가 세워 둔 *무관한* 값까지 .env 값으로 되돌아갔다.
+      실측 피해: 테스트가 격리해 둔 `JARVIS_DB_PATH` 가 운영 경로로 복귀해
+      pytest 112건이 "테스트가 운영 DB 를 잡았다" 로 터졌다.
+      **최신값을 아는 책임을 소비처 한 곳에 모으면 호출자는 아무것도 안 해도 된다**(①).
+    """
+    from dotenv import dotenv_values                     # noqa: PLC0415
+    _v = None
+    try:
+        _v = dotenv_values(_PROJECT_ROOT / ".env").get(TS_COOKIE_ENV)
+    except Exception:                                    # noqa: BLE001
+        pass                                             # 파일을 못 읽으면 환경변수로 폴백
+    # 따옴표 제거도 여기서 한 번 — 호출자마다 `.strip('"').strip("'")` 를 복사하던 것을 흡수.
+    return (_v or os.environ.get(TS_COOKIE_ENV, "")).strip().strip('"').strip("'")
 
 
 def refresh_tistory_cookies(force: bool = False) -> bool:
@@ -491,6 +525,50 @@ def precheck_error_type(platform: str, issues: list) -> str:
     return "Precheck" + platform.capitalize() + kind
 
 
+def refresh_failed_error_type(platform: str) -> str:
+    """자동 갱신 시도 후에도 여전히 실패 → 오류 타입. *이미 있는 판단*(플랫폼)에서 파생.
+
+    ★ 중앙 매핑표를 두지 않는다 (CLAUDE.md ERRORS [547]).
+    """
+    return "Precheck" + platform.capitalize() + "AutoRefreshFailed"
+
+
+def _alert_refresh_failed(still_failing: dict[str, dict[str, Any]]) -> None:
+    """사전점검의 *자동 갱신 시도까지* 실패했을 때 — 발행 시각 전에 미리 알린다.
+
+    ★ 왜 필요한가 (2026-08-11, ERRORS [605][606][612]의 연장선)
+      `job_pre_publish_check` 는 발행 `_COOKIE_PRECHECK_LEAD_MIN`분 전에 돌며
+      `_alert_precheck()` 로 "이대로면 CAPTCHA 뜨면 건너뜁니다" *경고* 를 먼저 보낸 뒤,
+      바로 이어서 `auto_refresh_if_needed()` 로 **실제 재로그인을 이미 시도**한다.
+      그런데 그 시도의 성공/실패가 어디에도 남지 않았다 — CAPTCHA·계정 문제로
+      실패해도 `refresh_naver_cookies`/`refresh_tistory_cookies` 는 `False` 를 조용히
+      돌려줄 뿐(예외가 아니므로 `_g_report` 도 안 탄다). 그래서 사용자는 "경고만 받고
+      끝났으니 알아서 복구됐겠지" 라고 오해한 채 발행 시각까지 기다리다, 그제야
+      (2026-08-11 07:00:44 실측) 같은 실패를 다시 보고 CAPTCHA 를 풀 시간을
+      `_COOKIE_PRECHECK_LEAD_MIN`분만큼 이미 날린 뒤였다.
+    ★ 여기서 새 판정을 만들지 않는다(① 단일 진입점) — `job_pre_publish_check` 가
+      이미 부른 `auto_refresh_if_needed()` 직후 `verify_all_logins()` 로 *재확인* 만 한다.
+    """
+    for plat, info in still_failing.items():
+        issues = list(info.get("issues") or [])
+        try:
+            msg = (f"🚨 [발행 前 점검] {plat.upper()} 자동 갱신도 실패 — 직접 로그인 필요\n"
+                   + "\n".join(f"· {i}" for i in issues)
+                   + "\n\n자동 재로그인을 이미 시도했으나 실패했습니다. "
+                     "발행 시각 전에 지금 직접 로그인해 주세요.")
+            from shared.notify import send_tg                 # noqa: PLC0415
+            send_tg(msg)
+        except Exception as e:                                # noqa: BLE001
+            log.warning(f"[login_manager/pre_check] 갱신실패 알림 실패: {type(e).__name__}: {e}")
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report  # noqa: PLC0415
+            report(refresh_failed_error_type(plat), "publish", module=__name__,
+                   func_name="job_pre_publish_check",
+                   message=f"[발행 前 점검] {plat}: 자동 갱신 시도 후에도 실패 — {'; '.join(issues)}")
+        except Exception as e:                                # noqa: BLE001
+            log.warning(f"[login_manager/pre_check] 갱신실패 박제 실패: {type(e).__name__}: {e}")
+
+
 def _alert_precheck(platform: str, info: dict) -> None:
     """사전점검 실패를 **사람과 원장 양쪽에** 알린다 (2026-08-09, ERRORS [594]).
 
@@ -534,18 +612,26 @@ def job_pre_publish_check(platform: Optional[str] = None) -> None:
     """
     if platform in (None, "all"):
         verify = verify_all_logins()
-        for plat, info in verify.items():
-            if not info["ok"]:
-                log.warning(f"[login_manager/pre_check] {plat}: {info['issues']}")
-                _alert_precheck(plat, info)               # ★ 로그로만 끝내지 않는다
+        failing = [plat for plat, info in verify.items() if not info["ok"]]
+        for plat in failing:
+            log.warning(f"[login_manager/pre_check] {plat}: {verify[plat]['issues']}")
+            _alert_precheck(plat, verify[plat])            # ★ 로그로만 끝내지 않는다
         # 자동 갱신
         auto_refresh_if_needed()
-    elif platform == "naver":
-        if naver_cookie_age_hours() > 10:
-            refresh_naver_cookies(force=False)
-    elif platform == "tistory":
-        if not get_tistory_cookie():
-            refresh_tistory_cookies(force=False)
+        # ★ 갱신 시도 후 재확인 — 실패가 발행 시각까지 조용히 묻히지 않게 한다
+        #   (2026-08-11, [605][606][612] 연장선 — 상세는 _alert_refresh_failed 참조).
+        if failing:
+            recheck = verify_all_logins(platforms=tuple(failing))
+            still_failing = {p: i for p, i in recheck.items() if not i["ok"]}
+            if still_failing:
+                _alert_refresh_failed(still_failing)
+    elif platform in ("naver", "tistory"):
+        # ★ 2026-08-10 — ERRORS [596][597]과 같은 병이 이 분기에도 있었다: 나이/존재만
+        #   보고 "만료됐지만 값은 남아있는" 쿠키를 놓쳤다(오늘 실제 사고: TS_COOKIE 는
+        #   있었지만 manage 접근이 로그인으로 리다이렉트). 실유효성 판정은
+        #   `auto_refresh_if_needed()` 가 이미 단독 소유하고 있다 — 여기서 판정 로직을
+        #   복제하지 않고 그 단일 진입점에 위임한다(① 단일 진입점).
+        auto_refresh_if_needed(platforms=(platform,))
 
 
 # ══════════════════════════════════════════════════════════
@@ -614,11 +700,13 @@ __all__ = [
 if __name__ == "__main__":
     import sys
     # ★ P1-④ Phase 2 보강 (사용자 박제 2026-05-18) — 인증 직접 실행 시 환경 검증
-    try:
-        from JARVIS00_INFRA.preflight import ensure_preflight as _ep
-        _ep(strict=True)
-    except Exception as _ee:
-        print(f"⚠️ preflight 호출 실패: {_ee}")
+    # ★ try/except 로 감싸지 않는다 (2026-08-10) — 감싸는 순간 ImportError 가 삼켜져
+    #   "preflight 가 있다" 는 착각만 남고 **실제로는 한 번도 안 도는** 상태가 된다.
+    #   실측(2026-08-10): 진입점 16곳 중 8곳이 그 상태였고, 경고는 stdout 으로만 나가는데
+    #   데몬 stdout 은 /dev/null 이라 어디에도 안 남았다 — 완전한 침묵이었다.
+    #   루트 경로는 파일 상단 부트스트랩이 보장한다. 여기서 실패하면 진짜 환경 문제다(fail-closed).
+    from JARVIS00_INFRA.preflight import ensure_preflight
+    ensure_preflight(strict=True)
 
     if len(sys.argv) < 2:
         sys.exit(_cli_status())

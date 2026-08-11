@@ -21,13 +21,10 @@ import time
 from datetime import date
 from pathlib import Path
 
-def _max_attempts() -> int:
-    """재시도 상한 — harness.DEFAULT_MAX_ATTEMPTS(SSOT) 파생 (사용자 박제 2026-07-21: 2회)."""
-    try:
-        from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS
-        return max(1, int(DEFAULT_MAX_ATTEMPTS))
-    except Exception:
-        return 2
+# 재시도 상한 — 정의는 JARVIS06_IMAGE/limits.py 단독 (사본 4벌 통합 2026-08-10)
+from JARVIS06_IMAGE.limits import max_attempts as _max_attempts   # noqa: E402
+# 차트 폰트 크기 단일 진입점 (JARVIS06/CLAUDE.md 규정14)
+from JARVIS06_IMAGE.style_engine import CHART_STYLE as _S   # noqa: E402
 
 
 try:
@@ -186,7 +183,7 @@ def _textsize(text: str, font) -> tuple[int, int]:
     return bb[2] - bb[0], bb[3] - bb[1]
 
 
-def _wrap(text: str, max_chars: int = 18) -> list[str]:
+def _wrap_lines(text: str, max_chars: int = 18) -> list[str]:
     if len(text) <= max_chars:
         return [text]
     words = text.split()
@@ -434,7 +431,7 @@ def _apply_editorial(photo: "Image.Image", title: str, keyword: str,
 
     # 부제목 줄바꿈
     ty2 = ty + 36 + kw_h + pad + 28
-    lines = _wrap(title, 16)
+    lines = _wrap_lines(title, 16)
     dark_c = tuple(max(0, c - 100) for c in pastel)
     for li, ln in enumerate(lines):
         t_font = _load_font(30 if li == 0 else 26, bold=(li == 0))
@@ -623,14 +620,14 @@ def _simple_fallback(theme: str, output_path: str, today_str: str) -> str:
         ))
         # 날짜
         ax.text(0.5, 0.88, today_str, transform=ax.transAxes,
-                ha="center", va="top", fontsize=14, color=text_color, alpha=0.7)
+                ha="center", va="top", fontsize=_S["FONT_HERO_DATE"], color=text_color, alpha=0.7)
         # 키워드 배지
         ax.add_patch(mpatches.FancyBboxPatch(
             (0.15, 0.52), 0.70, 0.22, transform=ax.transAxes,
             boxstyle="round,pad=0.02", facecolor=accent, linewidth=0, alpha=0.15,
         ))
         ax.text(0.5, 0.64, theme[:16], transform=ax.transAxes,
-                ha="center", va="center", fontsize=42, color=accent,
+                ha="center", va="center", fontsize=_S["FONT_HERO"], color=accent,
                 fontweight="bold")
         # 구분선
         ax.axhline(y=0.48, xmin=0.2, xmax=0.8, color=accent, linewidth=1.5, alpha=0.5,
@@ -644,7 +641,7 @@ def _simple_fallback(theme: str, output_path: str, today_str: str) -> str:
                                     color=accent, alpha=a))
         # 하단 태그
         ax.text(0.5, 0.08, f"★ {theme} ★", transform=ax.transAxes,
-                ha="center", va="bottom", fontsize=18, color=accent, alpha=0.8)
+                ha="center", va="bottom", fontsize=_S["FONT_HERO_TAG"], color=accent, alpha=0.8)
 
         plt.tight_layout(pad=0.1)
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -668,28 +665,8 @@ def _simple_fallback(theme: str, output_path: str, today_str: str) -> str:
     return output_path
 
 
-# economic_charts.py 에서 import 하는 심볼
-_COLOR_THEMES = _COLOR_THEMES  # re-export
-_FONT = _FONT_TTC
-
-def _rgba(hex_c, alpha):
-    try:
-        if isinstance(hex_c, tuple):
-            r, g, b = hex_c[:3]
-        elif isinstance(hex_c, str) and hex_c.startswith("rgba("):
-            # already rgba(...) — extract r,g,b and replace alpha
-            parts = hex_c[5:].rstrip(")").split(",")
-            r, g, b = int(float(parts[0])), int(float(parts[1])), int(float(parts[2]))
-        elif isinstance(hex_c, str) and hex_c.startswith("rgb("):
-            parts = hex_c[4:].rstrip(")").split(",")
-            r, g, b = int(float(parts[0])), int(float(parts[1])), int(float(parts[2]))
-        else:
-            h = str(hex_c).lstrip("#")
-            if len(h) == 3:  # CSS shorthand #abc → #aabbcc
-                h = h[0]*2 + h[1]*2 + h[2]*2
-            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    except Exception:
-        r, g, b = 128, 128, 128  # fallback gray
-    return f"rgba({r},{g},{b},{alpha})"
-
-__all__ = ["create_thumbnail", "_COLOR_THEMES", "_FONT", "_rgba"]
+# ★ 재export 블록 삭제 (사용자 박제 2026-08-10 최종리뷰 #3)
+#   `_COLOR_THEMES = _COLOR_THEMES` (자기대입 no-op) · `_FONT = _FONT_TTC` · `_rgba()` 는
+#   전부 `economic_charts.py` 전용 재export 였는데 그 파일이 삭제돼 소비자가 0곳이다.
+#   죽은 심볼을 남겨두면 다음 작업자의 손이 그리로 간다.
+__all__ = ["create_thumbnail"]

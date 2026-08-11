@@ -2,14 +2,12 @@
 
 이미지 생성: Cloudflare Workers AI 단독 (무료 티어)  (★ 사용자 결정 2026-08-05:
 Bing / HuggingFace 전멸 → 완전 삭제)
-SVG 차트: Claude SVG Provider (LLM 동적 생성, 고정 템플릿 금지)
-버스 연동: image.request 이벤트 수신 → image.response 발행
+버스 연동: image.request 이벤트 수신 → image.response 발행 (photo · thumbnail)
 """
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 # ── JARVIS07 오류 보고 API ───────────────────────────
 try:
@@ -19,6 +17,9 @@ except ImportError:
 # ─────────────────────────────────────────────────────
 
 log = logging.getLogger("jarvis")
+
+# ★ 에이전트 식별자 단일 소유 — capability 선언과 버스 응답 source 가 같은 값을 쓴다.
+AGENT_ID = "jarvis06_image"
 
 _ROOT      = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = _ROOT / "JARVIS06_IMAGE" / "output"
@@ -131,58 +132,26 @@ def generate_photo(prompt_ko: str, out_dir: Path | None = None,
     return result
 
 
-def generate_chart(data: dict[str, Any], chart_type: str, title: str,
-                   out_dir: Path | None = None,
-                   width: int = 800, height: int = 500) -> Path:
-    """SVG/PNG 차트 생성 (Claude LLM 동적 생성).
-
-    chart_type: bar | line | pie | radar | table | custom
-    """
-    from JARVIS06_IMAGE.providers.claude_svg_provider import ClaudeSVGProvider
-    dest = Path(out_dir) if out_dir else OUTPUT_DIR
-    log.info(f"[J06] 차트 생성: type={chart_type} title={title[:40]}")
-    return ClaudeSVGProvider().generate(data, chart_type, title, dest, width, height)
+# ── generate_chart — ★ 삭제 (사용자 박제 2026-08-10) ──────────────────────
+#   `ClaudeSVGProvider().generate(...)` 를 직접 불러 픽셀을 만들어 반환했다.
+#   (그 프로바이더 자체도 2026-08-10 삭제 — 호출자가 0곳이 된 고아였다)
+#   초크포인트(`infographic_engine._emit` → `certify_image`)를 지나지 않으므로
+#   **검증도 provenance 등록도 없는 차트**가 나올 수 있었다. 본문 호출자는 0곳인데
+#   `shared.bus` 의 `image.request(type='chart')` 와 패키지 `__init__` 공개 export 로
+#   외부 도달이 가능해, 게이트를 세우는 대신 도달 경로째 지웠다 (①원칙: 사본은 지운다).
+#   수치 차트가 필요하면 초크포인트를 직접 부를 것 — 실데이터 dataset 이 입력이다:
+#       from JARVIS06_IMAGE.infographic_engine import generate_infographic
 
 
-def generate_infographic(
-    section_text: str,
-    keyword: str,
-    out_path: Path | str,
-    sector: str = "",
-    section_title: str = "",
-    real_datasets: list | None = None,
-) -> Path:
-    """블로그 섹션 텍스트 → matplotlib 인포그래픽 이미지 생성.
-
-    image_spec.generate_image_spec() 으로 설계서 생성 후
-    render_from_spec() (matplotlib 1순위) 으로 렌더링.
-
-    Args:
-        section_text:  섹션 전체 본문
-        keyword:       블로그 키워드 / 테마
-        out_path:      저장 경로 (.jpg / .png)
-        sector:        섹터 (선택)
-        section_title: 소제목 (선택)
-        real_datasets: JARVIS09 collect_chart_data 의 datasets (사실성 보증용).
-                       None 이면 수치 차트일 때 generate_image_spec 이 자동 수집.
-
-    Returns:
-        생성된 이미지 Path.
-    Raises:
-        RuntimeError: 렌더링 완전 실패 시.
-    """
-    from JARVIS06_IMAGE.image_spec import generate_image_spec, render_from_spec
-    dest = Path(out_path)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    log.info(f"[J06] 인포그래픽 생성: keyword={keyword[:30]} → {dest.name}")
-    spec = generate_image_spec(
-        section_text=section_text,
-        keyword=keyword,
-        sector=sector,
-        section_title=section_title,
-        real_datasets=real_datasets,
-    )
-    return render_from_spec(spec, dest)
+# ── generate_infographic — ★ 삭제 (사용자 박제 2026-08-10) ─────────────────
+#   여기 있던 `generate_infographic` 은 초크포인트
+#   (`infographic_engine.generate_infographic` → `_emit` → `certify_image`) 와
+#   **이름이 같은데** 본문은 `generate_image_spec` → `render_from_spec` 이라
+#   `_emit` 을 지나지 않는 완전한 우회로였다. 이름이 같으므로 다음 작업자는
+#   "초크포인트를 지난다" 고 믿는다 — 가장 나쁜 종류의 사본이다.
+#   저장소 전역 호출자 0곳(실측)이라 위임이 아니라 삭제했다.
+#   인포그래픽이 필요하면 초크포인트를 직접 부를 것:
+#     from JARVIS06_IMAGE.infographic_engine import generate_infographic
 
 
 def generate_thumbnail(title: str, keyword: str, sector: str = "",
@@ -251,19 +220,20 @@ def _register_capability() -> None:
     try:
         from shared.capabilities import declare
         declare(
-            agent_id   = "jarvis06_image",
+            agent_id   = AGENT_ID,
             domain     = "image",
-            intents    = ["image.generate.photo", "image.generate.chart",
-                          "image.generate.thumbnail"],
+            # ★ "image.generate.chart" 제거 (2026-08-10) — generate_chart 삭제와 동시.
+            #   선언만 남기면 처리기 없는 인텐트가 되어 "된다" 는 거짓 신호가 된다.
+            intents    = ["image.generate.photo", "image.generate.thumbnail"],
             tools      = [],
             requires_approval = ["image.generate.photo"],
             cost_class = "low",
-            description= "이미지 생성 에이전트 — Cloudflare Workers AI(사진), Claude SVG(차트), 썸네일",
-            tags       = ["image", "chart", "thumbnail", "svg", "cloudflare"],
+            description= "이미지 생성 에이전트 — Cloudflare Workers AI(사진), 썸네일",
+            tags       = ["image", "thumbnail", "cloudflare"],
             help_section=(
                 "🖼️ *이미지 생성 (JARVIS06)*\n"
                 "슬래시 명령어 없음 — 자유 문장으로 요청\n"
-                "예: 특징주 썸네일 만들어줘 / 환율 차트 그려줘"
+                "예: 특징주 썸네일 만들어줘"
             ),
             status_fn=_status_section,
         )
@@ -282,6 +252,26 @@ def _subscribe_bus(bus) -> None:
         _g_report("image", e, module=__name__)
 
 
+def _reply(reply_to: str, payload: dict) -> None:
+    """image.request 응답 송출 — ★ 이 파일의 유일한 응답 경로.
+
+    ★ 시그니처 불일치 + 침묵 삼킴 (사용자 박제 2026-08-10 최종리뷰 #4):
+      `shared.bus.publish(event_type, source, payload=None)` 인데 종전엔
+      `publish(reply_to, {...})` 로 **payload 를 source 자리에** 넘겼다. 그러면
+      ① 실제 payload 는 `{}` 로 비고 ② dict 를 source 컬럼에 넣으니 sqlite 가
+      `InterfaceError` 를 던지는데 ③ 바로 뒤 `except Exception: pass` 가 그것을 삼켜,
+      요청자는 `image.response` 를 **영영 받지 못한 채** 아무 흔적도 남지 않았다.
+      이제 위치인자를 맞추고, 실패는 삼키지 말고 GUARDIAN 에 박제한다.
+      source 는 capability 선언(`_register_capability`)과 같은 에이전트 식별자다.
+    """
+    try:
+        from shared.bus import publish
+        publish(reply_to, AGENT_ID, payload)
+    except Exception as e:
+        log.error(f"[J06] image.response 송출 실패({reply_to}): {e}")
+        _g_report("image", e, module=__name__)
+
+
 def _handle_bus_request(event: dict, source: str = "") -> None:
     """image.request 버스 이벤트 핸들러.
 
@@ -297,13 +287,9 @@ def _handle_bus_request(event: dict, source: str = "") -> None:
                 prompt_ko=params.get("prompt", ""),
                 out_dir=params.get("out_dir"),
             )
-        elif req_type == "chart":
-            path = generate_chart(
-                data      = params.get("data", {}),
-                chart_type= params.get("chart_type", "bar"),
-                title     = params.get("title", ""),
-                out_dir   = params.get("out_dir"),
-            )
+        # ★ type == "chart" 분기 삭제 (2026-08-10) — generate_chart 와 함께.
+        #   검증을 지나지 않는 차트가 버스로 만들어질 수 있던 유일한 외부 도달 경로였다.
+        #   알 수 없는 유형으로 떨어져 ValueError → reply {"ok": False} 로 나간다.
         elif req_type == "thumbnail":
             path_str = generate_thumbnail(
                 title   = params.get("title", ""),
@@ -316,20 +302,12 @@ def _handle_bus_request(event: dict, source: str = "") -> None:
         else:
             raise ValueError(f"알 수 없는 요청 유형: {req_type}")
 
-        try:
-            from shared.bus import publish
-            publish(reply_to, {"ok": True, "path": str(path), "type": req_type})
-        except Exception:
-            pass
+        _reply(reply_to, {"ok": True, "path": str(path), "type": req_type})
 
     except Exception as e:
         log.error(f"[J06] image.request 처리 실패: {e}")
         _g_report("image", e, module=__name__)
-        try:
-            from shared.bus import publish
-            publish(reply_to, {"ok": False, "error": str(e), "type": req_type})
-        except Exception:
-            pass
+        _reply(reply_to, {"ok": False, "error": str(e), "type": req_type})
 
 
 def handle_safe_intent(intent: str, params: dict | None = None) -> bool:
@@ -338,8 +316,7 @@ def handle_safe_intent(intent: str, params: dict | None = None) -> bool:
 
 
 __all__ = [
-    "generate_photo", "generate_chart", "generate_thumbnail",
-    "generate_infographic",
+    "generate_photo", "generate_thumbnail",
     "process_draft",          # ★ 대본+수집자료 → 완성 블록 (JARVIS08 발행 준비)
     "register", "handle_safe_intent",
 ]

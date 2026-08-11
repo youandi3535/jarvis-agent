@@ -67,7 +67,7 @@ _HIGH_COUNT_THRESHOLD = 3
 _DOMAIN_RULES: list[tuple[str, list[str]]] = [
     # ADR 008 single-entry-point 도메인 (owner_dirs 기준)
     ("image",        ["JARVIS06_IMAGE/", "image_validators", "image_injectors",
-                      "block_assembler", "economic_charts", "thumbnail_maker",
+                      "block_assembler", "thumbnail_maker",
                       "html_screenshotter", "image_agent", "image_spec",
                       "_dedupe_image", "_dedupe_consec", "_dedupe_all",
                       "_validate_image", "_is_heading_img", "assemble_blocks",

@@ -1,7 +1,7 @@
 # JARVIS06_IMAGE 비직관 규칙
 
 ## 핵심 원칙
-0. **★ 시간축 좌→우 강제 (사용자 박제 2026-07-03)**: 시간·기간 라벨(연도·월·분기·날짜)이 있는 모든 차트·인포그래픽은 *과거 → 최근* 순서 (예: 2025년 좌, 2026년 우). 단일 진입점 `image_spec.enforce_time_axis_ltr()` — `render_from_spec`·`infographic_engine.generate_infographic` 양쪽에서 렌더 직전 자동 교정 + spec 생성 프롬프트에도 명시. 새 렌더 경로 추가 시 이 함수 경유 의무. 카테고리 라벨(비시간)은 무변경 (80% 파싱 임계).
+0. **★ 시간축 좌→우 강제 (사용자 박제 2026-07-03)**: 시간·기간 라벨(연도·월·분기·날짜)이 있는 모든 차트·인포그래픽은 *과거 → 최근* 순서 (예: 2025년 좌, 2026년 우). 단일 진입점 `image_spec.enforce_time_axis_ltr()`. ★ 2026-08-10: 정렬 키는 **행 메타 `as_of`** 에서 파생한다 — 종전엔 라벨 문자열을 재파싱했는데 '달러/원 환율 2026.08.07' 3행이 전부 같은 키 `(2026,0,0)` 로 읽혀 **무력**이었고, 그 탓에 환율이 실제 -8.7% 하락인데 `+8.6% ▲` 로 인쇄됐다(진실을 행에 실어 놓고 소비자가 문자열을 읽으면 안 된다 — ②원칙). 렌더 경로는 `infographic_engine.generate_infographic` 하나뿐이므로 그 안에서 자동 교정된다(`render_from_spec` 은 삭제됨). 카테고리 라벨(비시간)은 무변경 (80% 파싱 임계).
 1. 한국어 프롬프트는 반드시 `prompt_translator.translate()` 로 영어 변환 후 제공자에 전달
 2. **★ 사진 프로바이더 — Cloudflare Workers AI 단독 (사용자 결정 2026-08-05 — ERRORS [574])**: `providers/cloudflare_provider.py` Flux-1-Schnell. 무료 10,000 neuron/일 = 하루 약 173장. **Pollinations 완전 삭제**(39개 모델 전부 유료화 402). Nanobana(Gemini)는 공식 가격표상 이미지 모델 전부 `Free Tier: Not available` — 도입하지 않는다. **프로바이더를 둘 이상 두지 말 것** — 둘이면 한쪽만 고치는 사고가 난다(실제로 이 교체 중 `thumbnail_maker` 를 빠뜨려 ③원칙 위반).
 3. SVG 차트 오버레이는 Claude LLM 동적 생성 — 고정 템플릿·스타일 풀 절대 금지
@@ -25,10 +25,31 @@
     - **scatter/area/line**: 시계열·2D 전용 — 횡단면 종목 비교에 사용 금지.
     - **min()/max() guard**: 진입 최상단 빈 데이터 guard 필수. `if not x_vals or not y_vals: return ""`
     - **검증**: `grep -rn '_synth_data(' JARVIS06_IMAGE/*.py | grep -v '^.*def _synth_data' | grep -v __pycache__` → 0행이어야 함 (함수 정의 제외, 호출만 검사).
-13. **★ 이미지 데이터 사실성 (ERRORS [287] / ADR 010 — 2026-06-29)**:
-    - **차트 수치는 JARVIS09 실데이터로만**. `from JARVIS09_COLLECTOR import collect_chart_data` 로 주제 연관 실데이터(출처 박제) 수집 → 그 데이터로 차트 생성. *본문에서 숫자 짜내기 금지*.
-    - **검증 단일 진입점**: `validators/image_data_verifier.verify_chart_spec(spec, datasets)`. 검증분 재구성 → 0개면 실데이터 대체 → 그것도 없으면 숫자 없는 카드 폴백. `render_from_spec` 이 provenance 레지스트리 기록(트립와이어).
-    - 다른 파일에 차트 데이터 사실성 로직 박지 말 것. 검증: `grep -rn 'def verify_chart_spec' JARVIS06_IMAGE | grep -v image_data_verifier` → 0행.
+13. **★ 이미지 데이터 사실성 (ERRORS [287] / ADR 010 — 2026-06-29, ★ 2026-08-10 전면 개정)**:
+    - **차트 수치는 JARVIS09 실데이터로만**. *본문에서 숫자 짜내기 금지*.
+    - **검증·판정 단일 진입점 = `validators/image_data_verifier.py` 단독.** 공개 API:
+      `verify_chart_spec` · `chart_fit`(차트형) · `additive_total`(가산성) · `row_provenance`(행별 출처·시점)
+      · `dataset_admissible`(출처 등급 승인) · `grounding_pool` / `verify_rendered_html`(표시 수치 대조)
+      · `certify_image`(**레지스트리 쓰기 유일 경로**) · `verifier_effective`(스모크) · `MIN_ROWS` · `DATA_IMAGE_ATTR`.
+    - **★ 단일 초크포인트 `infographic_engine._emit`** (사용자 박제 2026-08-10):
+      `generate_infographic` 의 반환은 **정확히 두 꼴** — `return ""` 과 `return _emit(...)`.
+      픽셀을 낳는 모든 경로(render_pro·designgen·render_spec·render_single)가 `_emit` → `certify_image`
+      를 지나 검증 + provenance 등록을 받고, **미검증이면 이미지를 폐기**한다(거짓 차트 < 차트 없음).
+      · *왜*: 종전엔 반환이 4갈래라 그중 하나(render_pro)만 등록을 빠뜨려도 아무도 몰랐고,
+        실제로 2026-08-10 경제 브리핑 8장 전부가 무검증·미등록으로 발행됐다.
+    - **가산성은 기본이 '불가'** — `ds["totals"]`(출처가 공표한 합계)가 있을 때만 합계를 표시한다.
+      단위 화이트리스트를 만들지 말 것. 판정은 *꼴*(`/`·`=` 구분자)과 데이터에 실린 증거(as_of·basis·category)로만.
+    - **표시 뷰는 `template_engine.view_rows` 단독** — 히어로·차트·검증이 같은 행을 본다
+      (종전엔 히어로 8행 / 막대 7행으로 같은 이미지 안에서 검산이 깨졌다). 절단 상한은
+      `pro_templates.BAR_MAX_ROWS`/`DONUT_MAX_ROWS`/`KPI_MAX_CARDS` 단독 보유.
+    - **출처 문자열 생산자는 `template_engine.source_label` 단독** — `render_layout` 에 `src` 인자가 없다.
+      호출자가 문자열을 넣을 수 있으면 헤드라인·내부 식별자 배제 가드가 통째로 우회된다.
+    - **레이아웃 템플릿의 고정 표시문구는 `template_engine.template_literals`(꼴 판정)로 차단** —
+      어휘 블랙리스트 금지. 생성(`design_learner._validate_recipe`)·저장(`_save_registry`)·
+      렌더 편입(`pro_templates._style_pool`) 3곳에서 본다(오염 4건이 JSON 직접 커밋이었다).
+    - 기계 강제: `python3 shared/precommit_check.py --category image`
+      (`self-check`·`chokepoint-single-exit`·`provenance-write-outside`·`assembler-drift`·
+      `sibling-drift`·`display-literal`·`recipe-literal`·`j06-style`).
 14. **★ 차트 스타일 단일 진입점 의무 (ERRORS [139][169][175] 3회 반복 박제 — 2026-05-26)**:
     - **matplotlib 차트**: 모든 함수 최상단에서 `setup_chart_defaults()` 1회 호출 필수. 함수 내 `fontsize=` 하드코딩 금지 — `CHART_STYLE["FONT_*"]` 상수 사용.
     - **Plotly 차트**: `_base_layout()` 사용 (font=16 이상, title=28). `_derive_colors()`로 채도 0.45~0.65 범위 컬러 사용 — 직접 hex 하드코딩 금지.
@@ -38,18 +59,19 @@
 ## 파일 구조
 | 파일 | 역할 |
 |------|------|
-| `image_agent.py` | 공개 API (`generate_photo / generate_chart / generate_thumbnail`) + `register()` |
+| `image_agent.py` | 공개 API (`generate_photo / generate_thumbnail`) + `register()`. ★ `generate_chart` 는 2026-08-10 **삭제** — certify_image 초크포인트를 지나지 않는 우회로였다 |
+| `infographic_engine.py` | ★ **데이터 인포그래픽 단일 진입점** `generate_infographic` + 초크포인트 `_emit` |
 | `prompt_translator.py` | 한국어 → 영어 변환 (shared.llm 위임) |
 | `thumbnail_maker.py` | Claude 동적 썸네일 (bg 프롬프트 창작 → AI 사진 → SVG 오버레이) |
 | `section_title.py` | matplotlib 소제목 배너 이미지 |
 | `trend_charts.py` | 트렌드 키워드 차트 + 썸네일 |
-| `economic_charts.py` | 경제 브리핑 차트 + 썸네일 |
 | `providers/cloudflare_provider.py` | Cloudflare Workers AI REST 호출 (무료 티어 — **단일 프로바이더**) |
-| `providers/claude_svg_provider.py` | Claude LLM → SVG 동적 생성 → PNG 변환 |
+| ~~`providers/claude_svg_provider.py`~~ | **고아 (호출자 0)** — 유일 소비자 `image_agent.generate_chart` 가 2026-08-10 삭제되며 끊겼다. `providers/__init__` 재export 도 제거됨(우연한 배선 차단). 파일 삭제는 별건 |
 
 ## 외부에서 호출 방법 (유일한 합법 패턴)
 ```python
-from JARVIS06_IMAGE.image_agent import generate_photo, generate_chart, generate_thumbnail
+from JARVIS06_IMAGE.image_agent import generate_photo, generate_thumbnail
+from JARVIS06_IMAGE.infographic_engine import generate_infographic   # 데이터 차트는 이것 하나뿐
 from JARVIS06_IMAGE.providers.cloudflare_provider import CloudflareProvider  # 영어 프롬프트 있을 때만
 ```
 
