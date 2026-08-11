@@ -13171,3 +13171,68 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
   삭제를 없앤 커밋은 의도가 옳았지만, 그 삭제가 *프로필 세션을 신선하게 유지하던 유일한
   메커니즘* 이라는 걸 아무도 몰랐다. 그리고 **거짓 전제를 테스트가 지키고 있으면
   그 테스트는 회귀를 막는 게 아니라 오류를 고정한다.**
+
+## [623] 🔍 조사완료(결함아님) — 테마 `건강기능식품` naver 발행 harness max_attempts 소진(id=5860·5861) — [622] 백오프가 설계대로 발동, 사람 로그인 전까지 회복 불가 (2026-08-11)
+
+- 증상: GUARDIAN incident_responder 가 `theme=건강기능식품, failed_platforms=['naver']`
+  (harness max_attempts 소진)로 AutoRepair/Targeted 를 트리거(21:32:33). 대상 로그
+  `theme_20260811_210008.log` 확인 시 naver 대본·이미지·SEO 모두 정상 완주했으나 발행 직전
+  `⏸ captcha_unattended 로 자동 로그인 보류 중 (남은 323분)` 로 스킵 → attempt 1·2 모두
+  `unfixed=1` → `🚫 [harness] fingerprint abort: theme-publish-건강기능식품-naver`.
+  같은 실행에서 tistory 는 정상 발행됨(naver 만의 격리된 실패).
+- 원인: 20:30:00 발행 前 쿠키 점검이 `naver_cookies.pkl` 부재를 감지(#5857)→자동 갱신
+  시도(20:30:02)→실제 CAPTCHA 조우→`_fail("captcha_unattended", ...)`가
+  `mark_login_backoff()`로 6h 백오프 기록(`login_backoff.json` at=20:30:45,
+  until=익일 02:30:45) + `alert_human_login_needed()`로 텔레그램 즉시 통지(20:30:47 발화
+  확인, notify 로그 markdown→plain 재전송 성공)→자동 갱신도 실패(#5859)→21:00:04 테마
+  발행이 백오프 감지로 재시도 없이 스킵(#5860 `NaverLoginBackoff`)→harness precondition
+  이 21:09:02 `HarnessLoginInvalid`(#5861)로 재확인 후 fail-closed 로 미발행. 이 전체
+  체인은 오늘 낮 커밋 `9dea9c4`([622])가 신설한 캡차 백오프+즉시 사람 호출 메커니즘이
+  **설계대로 정확히 동작**한 것 — "못 푸는 문을 계속 두드리지 않는다"는 그 커밋의 목적이
+  바로 이 21:00 재시도를 막아 캡차를 추가로 유발하지 않은 것이다.
+- ⛔ 헛다리: 없음. `naver_cookie_age_hours()` 가 파일 부재 시 `inf` 를 반환해 로그에
+  `네이버 쿠키 infh — 갱신 시도` 로 찍히는 것을 처음엔 서식 버그로 의심했으나, 의도된
+  분기(`age > threshold` 를 항상 참으로 만들어 즉시 갱신 시도)임을 코드로 확인 — 실패
+  원인과 무관.
+- 해결: 코드 변경 0건. `mark_error_status(5857/5859/5860/5861, "wontfix", ...)` 로 종결
+  — 사유: 실제 CAPTCHA, [622]가 이미 올바르게 처리, 자동 코드 수정 대상 아님. 복구는
+  사람이 `.venv/bin/python JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py
+  --manual` 실행 후 브라우저에서 직접 로그인 — 이것만이 백오프를 해제한다
+  (`clear_login_backoff()` 는 성공한 로그인 경로에서만 호출됨).
+- 파일: 없음 (조사 + DB 상태 갱신만, 저장소 코드 파일 변경 없음).
+- 교훈: [619]/[620] 패턴이 [622] 배포 이후에도 그대로 재발 가능하다 — 캡차는 코드가
+  아무리 정교해져도 사람만 풀 수 있는 영역이라는 전제는 안 바뀐다. 신규 인시던트가
+  "harness max_attempts 소진"처럼 뭉뚱그려 들어와도, 위쪽 사전점검 로그(`error_log`
+  `Precheck*`/`*Backoff`/`HarnessLoginInvalid`)를 먼저 조준 검색하면 이미 처리 중인
+  캡차 백오프인지 새 결함인지 수 분 안에 구분된다.
+
+## [624] 🔍 조사완료(결함아님) — 테마 `메타버스(Metaverse)` naver 발행 `HarnessLoginInvalid`(id=5865·5866·5867) — [623]과 동일한 백오프 창, 새 사고 아님 (2026-08-11)
+
+- 증상: 리페어 큐가 `error_log` id=5865(attempt=1, 22:13:49)·5866(attempt=2, 22:17:23)
+  `module=JARVIS00_INFRA.harness.theme-publish-메타버스(Metaverse)-naver`,
+  `func_name=① 전제조건`, `message="naver 로그인 세션 무효 — 쿠키 파일 없음 또는 빈 list"`,
+  이어 5867 `HarnessAbort`(fingerprint abort)로 호출됨. `theme_20260811_220316.log` 확인 시
+  naver 대본·KRX 수집·LawEnforcer 검증까지 정상 완주했으나 로그인 확인(`_verify_theme_platform`
+  L1)에서 매 attempt 막힘 → 2/2 소진 후 abort. 같은 실행에서 tistory는 정상 발행(격리 확인).
+- 원인: `JARVIS08_PUBLISH/credentials/login_backoff.json` 실측 — `reason=captcha_unattended`,
+  `at=2026-08-11T20:30:45`, `until=1786469445.54(2026-08-12 02:30:45)`. 이는 [623]
+  (건강기능식품, 20:30:02 발행前점검에서 시작)이 이미 기록·처리한 **바로 그 백오프 창**과
+  `at`·`until`이 정확히 동일 — 새 CAPTCHA 조우가 아니라 **같은 백오프가 아직 만료 전인
+  상태에서 다른 테마(메타버스)가 21:44(건강기능식품)에 이어 재차 naver 발행을 시도해
+  같은 벽에 부딪힌 것**. `login_manager status` 실측(23:22)도 NAVER ❌(쿠키 파일 없음)
+  ·TISTORY ✅로 [619]/[620]/[623]과 동일 패턴 재확인. [622]가 신설한 백오프+fail-closed
+  메커니즘이 설계대로 naver만 정확히 막고 tistory·다른 플랫폼은 건드리지 않았다.
+- ⛔ 헛다리: 없음. 저녁 동안 건강기능식품→메타버스→치아 치료(임플란트 등) 순으로 naver
+  재시도가 반복된 것은 테마 전환 로직이 로그인 실패를 데이터 실패(data_empty)와 혼동해
+  낭비하는 것처럼 보였으나, 각 재시도는 GUARDIAN incident_responder 가 이전 실패를
+  검증하려고 재트리거한 별개 실행이었다(호출 시각 간격이 GUARDIAN 재시도 주기와 일치) —
+  `trend_theme_writer.py` 자체의 테마 교체 로직 결함이 아니므로 코드 수정 대상에서 제외.
+- 해결: 코드 변경 0건. `mark_error_status(5865/5866/5867, "wontfix", ...)`로 종결 — 사유:
+  [622]가 이미 올바르게 처리한 캡차 백오프, [623]과 동일 창. 복구는 [623]과 동일 —
+  사람이 `.venv/bin/python JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py --manual`
+  로 직접 로그인해야 백오프가 해제된다(`clear_login_backoff()`는 성공한 로그인 경로에서만
+  호출).
+- 파일: 없음 (조사 + DB 상태 갱신만, 저장소 코드 파일 변경 없음).
+- 교훈: 백오프 창이 살아있는 동안은 테마가 바뀌어도, 리페어 큐가 몇 번을 재배정해도
+  결론은 동일하다 — 접수 즉시 `login_backoff.json`의 `at`/`until`을 최근 ERRORS 항목의
+  것과 대조하면 "새 사고"와 "같은 백오프의 반복 보고"를 수 초 안에 구분할 수 있다.
