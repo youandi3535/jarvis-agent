@@ -13236,3 +13236,42 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - 교훈: 백오프 창이 살아있는 동안은 테마가 바뀌어도, 리페어 큐가 몇 번을 재배정해도
   결론은 동일하다 — 접수 즉시 `login_backoff.json`의 `at`/`until`을 최근 ERRORS 항목의
   것과 대조하면 "새 사고"와 "같은 백오프의 반복 보고"를 수 초 안에 구분할 수 있다.
+
+## [625] ✅ 해결 — 테마 `치아 치료(임플란트 등)` naver `HarnessLoginInvalid`(id=5868·5874) — [623]/[624]와 동일 백오프 창, 이번엔 재발 방지 코드 추가 (2026-08-11)
+
+- 증상: `error_log` id=5868(attempt=1, 22:36:51)·5874(attempt=2, 22:46:05),
+  `module=JARVIS00_INFRA.harness.theme-publish-치아 치료(임플란트 등)-naver`,
+  `func_name=① 전제조건`, `message="naver 로그인 세션 무효 — 쿠키 파일 없음 또는 빈 list"`.
+  같은 실행에서 tistory 는 정상 발행(id=5875 는 별개의 사실성 경고, 발행은 완료).
+- 원인: `login_backoff.json` 실측 — `reason=captcha_unattended`, `at=2026-08-11T20:30:45`,
+  `until=2026-08-12T02:30:45`. [623](건강기능식품)·[624](메타버스)와 **완전히 동일한
+  백오프 창**. 저녁 동안 건강기능식품→메타버스→치아 치료 순으로 세 테마가 같은 벽에
+  부딪혔고, GUARDIAN 리페어 큐도 매번 별개 세션으로 재투입되어 [623]·[624]·본 건 세 번
+  같은 결론("코드 결함 아님, 사람 로그인 필요")을 반복 조사했다 — 조사 자체가 낭비.
+- ⛔ 헛다리: 없음. [623]/[624]가 이미 근본원인(캡차 백오프)을 확정해 뒀으므로
+  `repair_history.search_incidents()` 조준 검색으로 즉시 확인.
+- 해결: [623]/[624]는 "코드 변경 0건"으로 종결했지만, **같은 백오프 창에서 조사 세션이
+  세 번째 반복**되는 것 자체가 낭비 신호라 이번엔 재발 방지 코드를 추가했다(①②③ 3원칙).
+  - `naver_cookie_refresher.py`: `login_invalid_kind(reason)` / `is_human_required_login_kind(kind)`
+    신설. `HUMAN_REQUIRED_REASONS = CAPTCHA_REASONS | {"backoff"}` — 백오프로 인한
+    즉시-거절(`_fail("backoff", ...)`)도 CAPTCHA 와 같은 "사람이 필요한" 사유로 승격.
+  - `economic_poster.py`·`trend_theme_writer.py` (④ 4조합 — 경제·테마 동시): 로그인
+    precondition 이 `kind="login_invalid"` 로 뭉뚱그리던 것을 `login_invalid_kind(last_login_failure())`
+    로 세분화(예: `login_invalid_backoff`). abort 판정(`_has_login_issue`)은 `startswith("login_invalid")`
+    로 신·구 kind 를 모두 인식하도록 함께 수정.
+  - `severity.py`: `_harness_says_naver_login_human(kind)` 신설 → `is_transient()` 3번째
+    분기로 배선. 판별 로직은 `naver_cookie_refresher.is_human_required_login_kind()` 에
+    위임(① 단일 진입점 — 사본 금지). `_naver_login_human_required_types()` 도
+    `CAPTCHA_REASONS` 단독 참조에서 `HUMAN_REQUIRED_REASONS` 참조로 갱신.
+  - 효과: 다음 백오프 창부터는 `login_invalid_backoff` kind 가 `non_code_issue_kinds()`
+    경로가 아니라 `_harness_says_naver_login_human()` 경로로 즉시 transient 판정 →
+    GUARDIAN Tier-2 가 "같은 백오프인지 새 결함인지"를 매번 새로 조사하지 않는다.
+    (근본 원인 — 캡차 자체 — 은 여전히 사람만 풀 수 있다. 이 fix 는 *조사 낭비* 만 없앤다.)
+- 검증: `test_kind_선언을_메시지_문구가_뒤집지_못한다`(bare `login_invalid` 은 여전히
+  non-transient — 과잉 차단 없음) + `test_publish_golden.py`·`test_naver_session.py`·
+  `test_learning_signal.py` 275 passed + `precommit_check --category auth,copytruth` 0위반.
+- 파일: JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py, JARVIS02_WRITER/economic_poster.py,
+  JARVIS02_WRITER/trend_theme_writer.py, JARVIS07_GUARDIAN/severity.py, ERRORS.md.
+- 교훈: "코드 변경 0건" 이 매번 정답은 아니다 — 같은 wontfix 결론이 반복 조사를 유발한다면
+  *결론을 캐싱하는 코드* 자체가 다음 fix 대상이다. [623]·[624]가 "새 사고 아님을 빨리
+  알아채는 법"을 남겼다면, 이번 건은 "애초에 조사할 필요를 없애는 법"을 남긴다.

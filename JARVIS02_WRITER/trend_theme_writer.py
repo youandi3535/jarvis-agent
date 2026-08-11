@@ -629,7 +629,17 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
             _pl = _login_res.get(platform) or {}
             if not _pl.get("ok", True):   # 구조 변경 시 fail-open
                 _why = "; ".join(_pl.get("issues") or ["재로그인 필요"])[:150]
-                issues.append(Issue(step="① 전제조건", kind="login_invalid",
+                # ★ 사람이 필요한 사유(백오프·CAPTCHA)는 kind 에 표시(ERRORS [547] 세분화) —
+                #   경제(economic_poster._verify_platform)와 동일 규약(원칙①③).
+                _kind = "login_invalid"
+                if platform == "naver":
+                    try:
+                        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (
+                            last_login_failure, login_invalid_kind)
+                        _kind = login_invalid_kind(last_login_failure())
+                    except Exception:
+                        pass
+                issues.append(Issue(step="① 전제조건", kind=_kind,
                     detail=f"{platform} 로그인 세션 무효 — {_why}"))
         except Exception as _le:
             issues.append(Issue(step="① 전제조건", kind="login_error",
@@ -829,7 +839,9 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
         #   재시도는 collect step 을 건너뛰어 datasets 불변이라 재작성으로 충족 불가.
         _has_data_empty = any(i.kind == "data_empty" for i in non_draft)
         _has_data_insuff = any(i.kind == "data_insufficient" for i in non_draft)
-        _has_login_issue = any(i.kind in ("login_invalid", "login_error") for i in non_draft)
+        # ★ startswith — login_invalid_<사유> 변종(백오프 등, ERRORS [615] 후속)도 인식(①).
+        _has_login_issue = any(i.kind.startswith("login_invalid") or i.kind == "login_error"
+                               for i in non_draft)
         if (_has_data_empty or _has_data_insuff) and not _has_login_issue:
             _reason = ("종목 데이터 0개 — 다른 테마로 전환 필요" if _has_data_empty
                        else "검증 데이터 부족(이미지 사실성) — 재작성으로 충족 불가")

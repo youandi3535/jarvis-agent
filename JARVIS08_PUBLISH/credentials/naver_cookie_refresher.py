@@ -292,6 +292,46 @@ def naver_login_error_type(reason: str) -> str:
 #   여기서 파생만 한다(JARVIS07_GUARDIAN/severity.py `_naver_login_human_required_types`).
 CAPTCHA_REASONS = frozenset({"captcha_unattended", "captcha_timeout"})
 
+# ★ 백오프로 인한 즉시-거절도 사람이 필요한 것과 같은 결과다 (2026-08-11, ERRORS [615] 후속).
+#   백오프 중엔 `_fail(BACKOFF_REASON, ...)` 로 실제 로그인 시도조차 하지 않고 즉시
+#   실패한다 — 근본 사유는 여전히 "CAPTCHA 를 사람이 풀어야 함" 이지 코드 결함이 아니다.
+BACKOFF_REASON = "backoff"
+HUMAN_REQUIRED_REASONS = CAPTCHA_REASONS | {BACKOFF_REASON}
+
+# harness Issue 가 쓰는 로그인 무효 kind 의 접두사 — 두 writer(economic·theme)가 공유.
+_LOGIN_INVALID_KIND = "login_invalid"
+
+
+def login_invalid_kind(reason: str) -> str:
+    """harness Issue.kind 생성 — *사람이 필요한 사유* 만 접미사를 붙인다(② 동적 설계).
+
+    ★ 왜 필요한가 (2026-08-11, ERRORS [615] 후속): economic_poster·trend_theme_writer 의
+      로그인 전제조건 검증은 종전 `kind="login_invalid"` 뭉뚱그림 하나였다. 그래서
+      "쿠키 파일 없음" 이 실제로는 *백오프 중이라 재로그인을 시도조차 안 한 것* 이어도
+      코드 버그와 구분이 안 돼 매 회차 GUARDIAN Tier-2 LLM 수리 세션을 태웠다
+      (CLAUDE.md ERRORS [547] 오류 세분화 규정 — 뭉뚱그린 타입 금지).
+      진짜 결함일 수 있는 사유(credentials_missing·login_button_click 등)는 접미사 없이
+      그대로 두어 Tier-2 를 계속 탄다 — human-required 사유만 갈라낸다.
+    ★ 접두사는 기존 리터럴 `login_invalid` 그대로 유지 — `_has_login_issue` 같은
+      `.startswith("login_invalid")` 호출자가 신·구 kind 를 모두 인식하게 한다.
+    """
+    r = (reason or "").strip()
+    if r in HUMAN_REQUIRED_REASONS:
+        return f"{_LOGIN_INVALID_KIND}_{r}"
+    return _LOGIN_INVALID_KIND
+
+
+def is_human_required_login_kind(kind: str) -> bool:
+    """이 harness kind 가 '사람이 CAPTCHA/재로그인을 해야만' 풀리는가 — 판별 단일 진입점.
+
+    `severity._harness_says_naver_login_human()` 이 지연 import 로 여기에 위임한다
+    (판별식을 GUARDIAN 쪽에 복제하면 사본이 되어 사유가 늘 때마다 또 갈라진다).
+    """
+    k = (kind or "").strip()
+    if not k.startswith(f"{_LOGIN_INVALID_KIND}_"):
+        return False
+    return k[len(_LOGIN_INVALID_KIND) + 1:] in HUMAN_REQUIRED_REASONS
+
 
 # ══════════════════════════════════════════════════════════════════
 # 세션이 실제로 필요한 곳 = 발행이 여는 화면 (판정·수집·발행 공통 단일 소스)
@@ -575,7 +615,7 @@ def refresh_naver_cookies(force: bool = False) -> bool:
     #   사람이 직접 푸는 `manual_login_and_save` 는 이 경로를 지나지 않으므로 영향 없다.
     _blk = login_backoff_reason()
     if _blk:
-        return _fail("backoff", f"  ⏸ {_blk}")
+        return _fail(BACKOFF_REASON, f"  ⏸ {_blk}")
 
     if not force and not cookie_needs_refresh():
         print(f"  ✅ 쿠키 유효 (갱신 불필요)")

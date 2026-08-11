@@ -557,6 +557,28 @@ def _harness_says_envelope(kind: str) -> bool:
         return False
 
 
+def _harness_says_naver_login_human(kind: str) -> bool:
+    """`login_invalid_<사유>` kind 가 *사람이 필요한* 사유(백오프·CAPTCHA)인지 판별을
+    **naver_cookie_refresher 에 위임** (2026-08-11, ERRORS [615] 후속).
+
+    ★ 왜 필요한가: economic_poster·trend_theme_writer 의 로그인 전제조건 검증이
+      종전 `kind="login_invalid"` 하나로 뭉뚱그려, 백오프 중이라 재로그인을 시도조차
+      안 한 것도 코드 버그와 구분 없이 매 회차 Tier-2 LLM 수리 세션을 태웠다
+      (`_naver_login_human_required_types()` 는 `_naver_cookie_ready` 경로의
+      `NaverLogin*` 타입만 커버 — harness precondition 경로는 `Harness*` 접두라
+      별개 판별이 필요하다).
+      판별식을 여기 복제하면 사본이 되어 사유가 늘 때마다 또 갈라진다 — 주인에게 묻는다
+      (`_harness_says_infra` 와 동형).
+    지연 import 이유는 `_harness_infra_kinds()` 와 동일(재진입 창 회피). 실패 시 False.
+    """
+    try:
+        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+            is_human_required_login_kind)
+        return bool(is_human_required_login_kind(kind))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # last-known-good 캐시 — `_harness_infra_kinds()` 와 동일 원칙(성공값만 적재).
 _NAVER_CAPTCHA_TYPES_CACHE: frozenset = frozenset()
 
@@ -570,17 +592,19 @@ def _naver_login_human_required_types() -> frozenset:
       아니라 `_TRANSIENT_TYPES`·`CODE_BUG_TYPES` 어디에도 안 걸려 **기본값으로 코드
       버그 취급**됐다 — GUARDIAN 이 사람만 풀 수 있는 CAPTCHA 를 Tier-2 LLM 으로
       "고치려" 세션을 태우는 낭비가 반복될 자리였다(패턴은 ERRORS [387][413][414]와 동형).
-    ★ 단일 진실 소스는 `naver_cookie_refresher.CAPTCHA_REASONS` — "어떤 사유가 CAPTCHA 인가"
-      는 로그인 도메인이 안다. 여기서는 그 사유 목록을 타입 문자열로만 변환한다(② 동적 설계,
-      credentials_missing·login_button_click 같은 *진짜 결함일 수 있는* 사유는 여기 안 들어옴).
+    ★ 단일 진실 소스는 `naver_cookie_refresher.HUMAN_REQUIRED_REASONS` — "어떤 사유가
+      사람을 필요로 하는가" 는 로그인 도메인이 안다(② 동적 설계). CAPTCHA_REASONS 두 가지에
+      더해 `backoff`(캡차 후 자동 재시도를 스스로 접은 상태 — 실제 로그인 시도조차 안 함,
+      2026-08-11 ERRORS [615] 후속)도 같은 이유로 사람이 필요하다. credentials_missing·
+      login_button_click 같은 *진짜 결함일 수 있는* 사유는 여기 안 들어옴.
     ★ 지연 import + fail-open 캐시는 `_harness_infra_kinds()` 와 동일 원칙(순환·부분초기화
       재진입 회피, 파생 실패가 severity 자체를 죽이지 않게).
     """
     global _NAVER_CAPTCHA_TYPES_CACHE
     try:
         from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
-            CAPTCHA_REASONS, naver_login_error_type)
-        got = frozenset(naver_login_error_type(r) for r in CAPTCHA_REASONS)
+            HUMAN_REQUIRED_REASONS, naver_login_error_type)
+        got = frozenset(naver_login_error_type(r) for r in HUMAN_REQUIRED_REASONS)
         if got:
             _NAVER_CAPTCHA_TYPES_CACHE = got
             return got
@@ -688,7 +712,8 @@ def is_transient(error_type: str, message: str = "", source: str = "",
 
     킬스위치 `GUARDIAN_CODEBUG_GUARD=0` → 3) 만 비활성화(종전 동작 복귀).
     """
-    if kind and (kind in non_code_issue_kinds() or _harness_says_infra(kind)):
+    if kind and (kind in non_code_issue_kinds() or _harness_says_infra(kind)
+                 or _harness_says_naver_login_human(kind)):
         return True   # 1) 코드 수정으로 해결 불가한 harness 이슈 — Tier-2 낭비 차단
 
     # 2) ★ ERRORS [446][447][448] 박제 2026-07-17 — source="audit_test" 는 GUARDIAN
