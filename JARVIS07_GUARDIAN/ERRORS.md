@@ -13060,3 +13060,48 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - 교훈: [619]와 같은 06:30 배치의 두 형제 사고([619] tistory / [620] naver)가 겉보기엔
   같은 오류 타입이라도 실제 회복 여부는 플랫폼마다 다를 수 있다 — "형제 사고니 결론도
   같다"고 넘겨짚지 말고 플랫폼별로 반드시 실측(`login_manager status`)할 것.
+
+## [621] 🔍 조사완료(결함아님) — `ModuleNotFoundError: requests`(id=5848, `JARVIS02_WRITER.economic_poster`) — 비정본 인터프리터 검증 부산물, `_is_canonical_interpreter()` 가드가 이미 근본원인 흡수 (2026-08-11)
+
+- 증상: 리페어 큐가 `error_log` id=5848(`source=writer`, `module=JARVIS02_WRITER.economic_poster`,
+  `error_type=ModuleNotFoundError`, `message="No module named 'requests'"`,
+  `timestamp=2026-08-11T09:57:33`)를 대상으로 호출. traceback 은
+  `economic_poster.py:192 from JARVIS03_RADAR.post_quality_analyzer import run_single` →
+  `post_quality_analyzer.py:22 import requests` → `ModuleNotFoundError`. 착수 시점
+  `status='analyzing'`, `llm_attempts=3`(상한 도달), `resolution='Tier-2 수정 실패/롤백 —
+  재시도 대기 (1/3)'`.
+- 원인: 이 import 는 `economic_poster.py` 43~198행의 넓은 `try/except Exception` 안에 있어
+  실패해도 `_QUALITY_ENABLED=False` 로 우아하게 격하될 뿐 발행 자체(911행 `if _QUALITY_ENABLED`
+  는 발행 *완료 후* 품질분석 트리거일 뿐)는 막지 않는다 — 애초에 "포스팅 실패"가 아니었다.
+  타임스탬프(09:57:33)가 같은 세션의 `error_log` id=5840~5846(09:46:55, `source=preflight`,
+  `langchain_core`·`yfinance`·`bs4`·`PIL`·`matplotlib`·`feedparser` 동시 `ModuleNotFoundError`)
+  와 11분 차이로 붙어 있고, 그 6건 모두 이미 "결함아님 — 최소 의존(requirements-test.txt) venv
+  를 pytest 밖에서 직접 실행해 발생한 검증 부산물" 로 `wontfix` 처리돼 있었다. `requests` 는
+  `requirements-test.txt` 에 이미 있는데도(2026-08-05 부터), `tests/test_naver_session.py::
+  test_발행모듈_import_가_환경변수를_덮지_않는다[JARVIS02_WRITER.economic_poster]`(233행)가
+  `subprocess.run([sys.executable, "-c", code], ...)`(256행)로 economic_poster 를 *비정본*
+  최소-의존 venv 인터프리터에서 재-import 하는 검증이라, 그 임시 venv 의 설치 상태에 따라
+  간헐적으로 재현되는 동일 계열 사고다. 실측: 운영 `.venv` 는 `requests-2.32.3`(설치일 Jul 19,
+  이후 변경 없음) 정상 보유, 08-11 07:00 실제 발행 로그(`economic_20260811_070046.log`)에도
+  "JARVIS03 연동 비활성" 경고 없음(정상 활성).
+- 헛다리: 없음 — Tier-2 SDK 코드패치가 이미 3회 `economic_poster.py`/`post_quality_analyzer.py`
+  를 대상으로 재현 검증에 실패해 롤백했는데(코드에 결함이 없으니 당연한 결과), 그 자체가
+  "코드로 못 고치는 환경 의존" 신호였다([618]과 동일 패턴).
+- 해결: 코드 변경 0건 — 근본원인은 **이미 다른(병행) 세션이 작업트리에서 수정 중**이었다.
+  `JARVIS07_GUARDIAN/error_collector.py` 에 `_is_canonical_interpreter()`(`sys.prefix` 를
+  프로젝트 `.venv` 와 비교) + `_is_noncanonical_module_missing()`(비정본 인터프리터의
+  `ModuleNotFoundError`/`ImportError` 만 선별)이 신설돼 `_collect_error()`(279행)에서
+  적재 자체를 막고, `JARVIS00_INFRA/preflight.py` 의 `_is_canonical_venv()` 도 같은 함수를
+  재사용(사본 금지, 단일 진실 소스)하도록 배선돼 있었다(둘 다 미커밋 — CLAUDE.md 커밋 규정상
+  "내 변경분만" 이라 그대로 두고 손대지 않음). `sys.prefix` 를 가짜로 바꿔 재현한 스모크로
+  효과 확인: 정본 인터프리터에서는 `False`(억제 안 함), 비정본으로 바꾸면 `ModuleNotFoundError`
+  만 `True`(억제)·`ValueError` 는 `False`(억제 안 함) — 의도대로 선별 동작. `mark_error_status
+  (5848, "wontfix", ...)` 로 직접 종결 — 사유: 환경 의존이라 코드로 판정 불가 + llm_attempts
+  상한 도달 + 재발 방지 가드가 이미 흡수.
+- 파일: 없음 (조사 + DB 상태 갱신만 — `error_collector.py`/`preflight.py` 수정은 병행 세션 소유,
+  이 세션은 손대지 않음).
+- 교훈: 리페어 큐가 배정한 오류의 *진짜 근본원인* 이 이미 다른 세션의 미커밋 작업트리에
+  존재할 수 있다([616]~[620] 과 동일 계열) — `git status`/`git diff` 로 관련 파일이 이미
+  수정 중인지 먼저 확인하면 중복 코드패치 시도(그리고 그로 인한 Tier-2 롤백 낭비)를 피할 수
+  있다. traceback 의 표면(어떤 모듈을 못 찾았나)이 아니라 *같은 시간대 형제 사고 유무* 가
+  "비정본 인터프리터 검증 부산물"류를 가장 빨리 식별하는 신호다.
