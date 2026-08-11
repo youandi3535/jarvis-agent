@@ -29,7 +29,23 @@ from .source_registry import MAX_PER_SOURCE as _PROVIDER_LIMITS
 # ★ 메인 수집 provider — source_registry.SOURCES(SSOT) 에서 파생 (사용자 박제 2026-07-24).
 #   종전엔 여기 16줄을 손수 유지했고 provider 목록이 chart_data._m·providers/__init__ 과 3벌
 #   흩어져 소스 하나 넣고 뺄 때마다 3곳을 고쳐야 했다. 이제 SOURCES 한 줄이면 전부 자동 반영.
-_PROVIDERS = main_providers()
+# ★ 지연 로드 (사용자 박제 2026-08-10 — CI 적색 근본원인)
+#   종전엔 여기서 `main_providers()` 를 **import 시점에** 불러 프로바이더 10종을 전부
+#   인스턴스화했다. 그 탓에 `JARVIS09_COLLECTOR.models.grounds` 같은 *데이터 모델 한 줄* 을
+#   쓰려고 패키지를 건드리기만 해도 `feedparser` 등 수집 전용 의존성이 전부 필요했다.
+#   실제 사고: 정적 정책 검사(precommit `image/self-check`)가 CI 에서
+#   `No module named 'feedparser'` 로 죽어 **"검증기가 조작 수치를 통과시킨다"** 로 오판됐다.
+#   (fail-closed 자체는 옳게 동작했다 — 문제는 검사기가 수집 스택을 끌어온 것이다.)
+#   수집을 *실제로 하는* 시점에만 로드한다. 목록의 주인은 여전히 source_registry.SOURCES.
+_PROVIDERS_CACHE: list | None = None
+
+
+def _providers() -> list:
+    """메인 수집 provider 인스턴스 (최초 사용 시 1회 로드 후 캐시)."""
+    global _PROVIDERS_CACHE
+    if _PROVIDERS_CACHE is None:
+        _PROVIDERS_CACHE = main_providers()
+    return _PROVIDERS_CACHE
 _MAX_WORKERS = 8   # 병렬 수집
 
 
@@ -70,12 +86,12 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
         #   (yfinance 등 무한 hang 방지 — ERRORS [401])
         exe = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
         try:
-            futures = {exe.submit(_run_provider, p): p.source_type for p in _PROVIDERS}
+            futures = {exe.submit(_run_provider, p): p.source_type for p in _providers()}
         except RuntimeError as e:
             # 인터프리터 종료 레이스 (ERRORS [361][362]) — 병렬 이득만 포기, 동기 폴백으로 수집 지속
             log.warning(f"[Engine] 스레드 스케줄 불가 — 동기 폴백: {e}")
             exe.shutdown(wait=False)
-            for p in _PROVIDERS:
+            for p in _providers():
                 raw_docs.extend(_run_provider(p))
             futures = {}
 
@@ -170,7 +186,9 @@ def collect_for_theme(theme: str, sector: str = "") -> list[CollectionResult]:
 #  (구 plan_research 설계-LLM·질문별 조준수집은 2026-07-11 _collect_tier 재작성으로 폐지)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-_PROVIDER_BY_TYPE = {p.source_type: p for p in _PROVIDERS}
+def _provider_by_type() -> dict:
+    """source_type → provider (지연 — 위 _providers() 와 같은 이유)."""
+    return {p.source_type: p for p in _providers()}
 
 
 SOURCE_CATEGORIES = ["blog", "news", "finance", "web"]
@@ -182,7 +200,7 @@ def list_provider_names() -> list[str]:
 
     프로바이더를 추가/제거하면 텔레그램 /status·대시보드 표시가 자동으로 따라온다.
     """
-    return [p.source_type for p in _PROVIDERS]
+    return [p.source_type for p in _providers()]
 
 
 _DEEPFETCH_MAX = 8               # 전문 딥페치 상한 (시간 가드)
@@ -385,8 +403,8 @@ def collect_research(theme: str, sector: str = "", angle: str = "",
                  f"쿼터=API{api_cap}·총{budget}")
 
         # 티어별 프로바이더 분류
-        api_provs   = [p for p in _PROVIDERS if quota_group(p.source_type) == "api"]
-        rest_provs  = [p for p in _PROVIDERS if quota_group(p.source_type) == "rest"]
+        api_provs   = [p for p in _providers() if quota_group(p.source_type) == "api"]
+        rest_provs  = [p for p in _providers() if quota_group(p.source_type) == "rest"]
 
         seen_urls: set[str] = set()
 
