@@ -31,3 +31,9 @@ apscheduler
 #     `git archive HEAD` + 최소 의존 venv 로 로컬에서 끝까지 돌려봐야 한다.
 pandas
 pytrends
+
+# ★ selenium (2026-08-10 추가) — 발행 모듈(`JARVIS08_PUBLISH/platforms/*_poster.py`)이 모듈 레벨에서
+#   `selenium.webdriver` 를 쓴다. `tests/test_naver_session.py` 4건이 그 모듈을 *import 해서* 검사하므로
+#   없으면 수집 단계에서 죽는다(CI 적색 4건). 발행 테스트가 발행 의존성을 요구하는 것은 정상 계층이다
+#   — 수집 의존성이 데이터 모델 import 에 딸려오던 `feedparser` 건과는 성격이 다르다(그쪽은 지연 로드로 해소).
+selenium

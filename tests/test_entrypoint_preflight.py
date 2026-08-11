@@ -100,5 +100,11 @@ def test_실제_진입점이_preflight_를_돌린다():
     r = subprocess.run(
         [sys.executable, "JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py", "--check"],
         capture_output=True, text=True, cwd=str(ROOT), timeout=180)
-    assert "preflight 호출 실패" not in r.stdout + r.stderr, "preflight 가 여전히 건너뛰어진다"
-    assert "preflight" in r.stdout, f"preflight 흔적이 없다: {r.stdout[:300]}"
+    _out = r.stdout + r.stderr
+    assert "preflight 호출 실패" not in _out, "preflight 가 여전히 건너뛰어진다"
+    # ★ stdout 한정 금지 (2026-08-10, CI 적색) — 이 테스트가 묻는 것은 "preflight 가 **돌았는가**"
+    #   이지 "통과했는가" 가 아니다. 런타임 의존성이 없는 환경(CI 의 최소 설치)에서는 Layer 0 이
+    #   *정당하게 실패* 하고, 그 보고는 stderr 로 나간다("🚨 LAYER 0 PREFLIGHT — 부팅 차단").
+    #   stdout 만 보면 그 환경에서 영구 적색이 되고, 그러면 진짜 회귀와 구별할 수 없다.
+    #   대소문자도 보지 않는다 — 성공 경로는 소문자('✅ Layer 0 preflight 통과'), 실패 경로는 대문자다.
+    assert "preflight" in _out.lower(), f"preflight 흔적이 없다: {_out[:300]}"
