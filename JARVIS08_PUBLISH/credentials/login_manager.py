@@ -141,7 +141,12 @@ def ensure_naver_ready(deadline=None) -> tuple:
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # ★ 네이버 쿠키 — legacy anchor (JARVIS02_WRITER, 이동 금지)
-NAVER_COOKIE_PATH = _PROJECT_ROOT / "JARVIS02_WRITER" / "naver_cookies.pkl"
+# ★ 경로 사본 금지 (2026-08-11, ERRORS [615]) — 파일을 실제로 읽고 쓰는
+#   naver_cookie_refresher.COOKIE_FILE 이 주인이다. 여기서 다시 조립하지 않는다.
+#   실측: 같은 경로를 8곳이 각자 조립하고 있었고, 이번 사고에서 *지운 코드*와
+#   *요구한 코드*가 둘 다 owner 밖 사본이었다.
+from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: E402
+    COOKIE_FILE as NAVER_COOKIE_PATH)
 # ★ 티스토리 — 환경변수 방식 (파일 없음)
 TS_COOKIE_ENV = "TS_COOKIE"
 

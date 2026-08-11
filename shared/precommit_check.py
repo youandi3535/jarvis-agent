@@ -2062,6 +2062,44 @@ def check_auth(report: Report) -> None:
                                      f"필수 심볼 '{sym}' 없음"))
     report.checks_run += 1
 
+    # ── ④⑤ 쿠키 파일 경로·삭제 (2026-08-11, ERRORS [615]) ─────────────────
+    #
+    # ★ 왜 이제야 넣나: 이 함수 docstring 은 예전부터 "③ 쿠키 파일 경로 하드코딩 검출" 을
+    #   광고했는데 **구현이 없었다**(실제 ③번은 '파일이 존재하는가' 였다).
+    #   그래서 같은 경로를 8곳이 각자 조립하도록 방치됐고, 2026-08-11 사고에서
+    #   *쿠키를 지운 코드*(scheduler)와 *쿠키를 요구한 코드*(economic_poster)가
+    #   **둘 다 owner 밖 사본**이었다. 광고만 하는 검사는 없는 검사다.
+    _COOKIE_OWNER = "JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py"
+    # ★ '경로 조립' 만 잡는다 — 파일명이 *목록의 항목* 으로 등장하는 것은 사본이 아니다
+    #   (예: architecture.DENY_FIX_PATHS 의 자동수정 금지 목록). 예외 목록을 박는 대신
+    #   판정을 정확히 한다(②) — 경로 연산자 `/` 가 앞에 붙은 경우만 조립이다.
+    _pat_path = re.compile(r'/\s*["\']naver_cookies\.pkl["\']')
+    _pat_del = re.compile(r"\.unlink\(|os\.remove\(")
+    for p_ in _iter_py():
+        rel_s = str(p_.relative_to(ROOT))
+        if rel_s in (_COOKIE_OWNER, "shared/precommit_check.py") or rel_s.startswith("tests/"):
+            continue
+        text = _read_py(p_)
+        if text is None:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            _code = line.split("#", 1)[0]
+            if not _code.strip():
+                continue
+            # ④ 경로를 직접 조립하면 사본이 된다 — owner 에서 import 할 것
+            if _pat_path.search(_code):
+                report.add(Violation(
+                    cat, "auth/cookie-path-copy", rel_s, i,
+                    "쿠키 경로를 직접 조립한다 — "
+                    "`from ...naver_cookie_refresher import COOKIE_FILE` 로 파생할 것"))
+            # ⑤ 쿠키 파일 삭제는 어디서도 하지 않는다
+            if _pat_del.search(_code) and ("cookie" in _code.lower() or "COOKIE" in _code):
+                report.add(Violation(
+                    cat, "auth/cookie-delete", rel_s, i,
+                    "쿠키 파일을 삭제한다 — 삭제는 갱신을 앞당기지 않고(만료여도 "
+                    "cookie_needs_refresh 가 True) 발행 precondition·복구재료만 없앤다"))
+    report.checks_run += 1
+
 
 # auth 카테고리 등록
 CATEGORIES["auth"] = check_auth

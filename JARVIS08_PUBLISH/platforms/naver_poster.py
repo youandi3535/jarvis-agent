@@ -114,7 +114,9 @@ IS_MAC = sys.platform == "darwin"
 _PROJECT_ROOT     = Path(__file__).resolve().parent.parent.parent  # JARVIS08_PUBLISH/platforms → root
 _LEGACY_BASE_DIR  = _PROJECT_ROOT / "JARVIS02_WRITER"               # 옛 위치 — 쿠키·프로필 anchor
 
-COOKIE_FILE   = _LEGACY_BASE_DIR / "naver_cookies.pkl"
+# ★ 경로는 refresher 단독 소유 (ERRORS [615]) — 여기서 조립하지 않는다.
+from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: E402
+    COOKIE_FILE)
 BASE_DIR      = _LEGACY_BASE_DIR                                    # 옛 코드 호환 — chrome_profile 등
 JARVIS06_BASE = _PROJECT_ROOT / "JARVIS06_IMAGE"                    # 이미지 단일 진입점 (CLAUDE.md 규정)
 LOGS_DIR      = _LEGACY_BASE_DIR / "logs"
@@ -665,27 +667,53 @@ def _load_cookies_to_browser(driver):
     raw_cookies = pickle.load(open(COOKIE_FILE, "rb"))
     now = _t.time()
 
-    # www.naver.com에서 전체 쿠키 적용
-    driver.get("https://www.naver.com")
-    time.sleep(2)
-    driver.delete_all_cookies()
-    time.sleep(0.3)
+    # ★★ 2026-08-11 (ERRORS [615]) — 이 블록은 세 가지로 프로필 세션을 파괴하고 있었다.
+    #    되돌리지 말 것. 각 줄의 사유는 아래에 붙여 둔다.
+    #
+    #    ① delete_all_cookies() 삭제 — 프로필의 *기기 인증* 쿠키(BA_DEVICE·NID_JST·
+    #       nid_slevel 등)까지 날렸다. 그러면 네이버가 **낯선 기기로 인식** 해 다음
+    #       로그인에서 캡차를 건다. 우리가 캡차를 자초하던 자리다.
+    #       add_cookie 는 같은 이름을 덮어쓰므로 미리 비울 이유도 없다.
+    #    ② expiry 보존 — 종전엔 무조건 pop 해서 *영속 쿠키를 세션 쿠키로 격하* 시켰다.
+    #       세션 쿠키는 driver.quit() 시 디스크에 안 남는다. 그래서 이 함수가 한 번
+    #       돌 때마다 프로필에서 로그인이 증발했고(실측: 프로필 네이버 쿠키 16개 중
+    #       NID_AUT·NID_SES 둘만 없음), 다시는 step0 로 못 돌아갔다.
+    #       바로 위 필터가 이미 과거 만료분을 걸렀으므로 남은 expiry 는 전부 미래다.
+    #    ③ 도메인 순회 주입 — Chrome 은 현재 문서가 소유하지 못한 도메인의 쿠키를
+    #       거부한다. www 한 곳에서만 넣어 19개 중 7개가 버려졌다(로그 "7개 실패").
+    #       거두는 곳과 같은 목록(session_urls)을 돌며 넣는다(①단일 진입점).
+    from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+        session_urls as _session_urls)
 
     added, skipped_expired, failed = 0, 0, 0
-    for c in raw_cookies:
-        # 만료된 쿠키(expiry가 현재 시간보다 과거)는 Chrome이 거부하므로 건너뜀
-        expiry = c.get("expiry")
-        if expiry and expiry < now:
-            skipped_expired += 1
-            continue
-        c_copy = {k: v for k, v in c.items() if k not in ("sameSite",)}
-        # session 쿠키(expiry 없음)는 expiry 키 자체를 제거해야 Chrome이 수락
-        c_copy.pop("expiry", None)
+    _seen_ok: set = set()
+    for _url in _session_urls():
         try:
-            driver.add_cookie(c_copy)
-            added += 1
-        except Exception as e:
-            failed += 1
+            driver.get(_url)
+            time.sleep(1.2)
+        except Exception:                                # noqa: BLE001
+            continue                                     # 한 도메인 실패가 전체를 막지 않는다
+        for c in raw_cookies:
+            _key = (c.get("name"), c.get("domain", ""))
+            if _key in _seen_ok:
+                continue                                 # 이미 들어간 것은 재시도하지 않는다
+            expiry = c.get("expiry")
+            if expiry and expiry < now:
+                continue                                 # 과거 만료분은 Chrome 이 거부
+            c_copy = {k: v for k, v in c.items() if k not in ("sameSite",)}
+            if not c_copy.get("expiry"):
+                # 원래 세션 쿠키(만료시각 없음)만 키를 뺀다 — Chrome 요구사항.
+                # 만료시각이 있으면 **그대로 넘겨 영속으로 남긴다**(②).
+                c_copy.pop("expiry", None)
+            try:
+                driver.add_cookie(c_copy)
+                _seen_ok.add(_key)
+                added += 1
+            except Exception:                            # noqa: BLE001
+                pass
+    skipped_expired = sum(1 for c in raw_cookies
+                          if (c.get("expiry") or 0) and c["expiry"] < now)
+    failed = len(raw_cookies) - added - skipped_expired
 
     # 실제로 브라우저에 로드된 쿠키 확인
     loaded_cookies = driver.get_cookies()

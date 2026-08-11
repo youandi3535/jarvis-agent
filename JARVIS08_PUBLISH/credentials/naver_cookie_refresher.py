@@ -138,6 +138,85 @@ def captcha_present(driver) -> "bool | None":
     return None
 
 
+# ══════════════════════════════════════════════════════════════════
+# 캡차 백오프 — 못 푸는 문을 계속 두드리지 않는다 (2026-08-11, ERRORS [615])
+# ══════════════════════════════════════════════════════════════════
+#
+# ★ 왜 필요한가: 캡차는 무인으로 못 푼다. 그런데 시스템은 매 회차 같은 시도를 반복해
+#   **스스로 캡차를 더 부르고 있었다** — 실측 08-10 8회 · 08-11 4회.
+#   네이버 입장에선 짧은 시간에 실패한 로그인이 반복되는 것이라 의심도가 올라간다.
+#   한 번 캡차를 만나면 일정 시간 자동 로그인을 멈추고 **사람을 부른다.**
+# ★ 상태를 파일에 두는 이유: 발행은 subprocess, 인시던트 재시도는 새 스레드다.
+#   메모리 플래그는 그 경계를 못 넘는다(ERRORS [474] 와 같은 병).
+_BACKOFF_FILE = Path(__file__).resolve().parent / "login_backoff.json"
+CAPTCHA_BACKOFF_SEC = int(os.getenv("NAVER_CAPTCHA_BACKOFF_SEC", str(6 * 3600)))
+
+
+def login_backoff_reason() -> str:
+    """지금 자동 로그인을 시도하면 안 되는 이유 — 없으면 빈 문자열.
+
+    ★ 사람이 직접 푸는 경로(`manual_login_and_save`)는 이 판정을 보지 않는다.
+      막는 것은 *무인 반복* 이지 사람의 복구가 아니다.
+    """
+    try:
+        import json as _js                                # noqa: PLC0415
+        _d = _js.loads(_BACKOFF_FILE.read_text(encoding="utf-8"))
+        _until = float(_d.get("until") or 0)
+    except Exception:                                     # noqa: BLE001
+        return ""                                         # 못 읽으면 막지 않는다(fail-open)
+    _left = _until - time.time()
+    if _left <= 0:
+        return ""
+    return (f"{_d.get('reason', 'captcha')} 로 자동 로그인 보류 중 "
+            f"(남은 {_left / 60:.0f}분) — 사람이 직접 로그인하면 즉시 해제된다")
+
+
+def mark_login_backoff(reason: str) -> None:
+    """캡차 등 *사람이 필요한* 실패를 만났음을 기록 — 다음 자동 시도를 멈춘다."""
+    try:
+        import json as _js                                # noqa: PLC0415
+        _BACKOFF_FILE.write_text(_js.dumps({
+            "reason": reason,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "until": time.time() + max(0, CAPTCHA_BACKOFF_SEC),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            os.chmod(_BACKOFF_FILE, 0o600)
+        except OSError:
+            pass
+    except Exception as e:                                # noqa: BLE001
+        print(f"  ⚠️ 로그인 백오프 기록 실패: {e}")
+
+
+def clear_login_backoff() -> None:
+    """로그인이 실제로 성공했으면 백오프를 푼다 — 성공이 유일한 해제 조건이다."""
+    try:
+        _BACKOFF_FILE.unlink(missing_ok=True)
+    except Exception:                                     # noqa: BLE001
+        pass
+
+
+def alert_human_login_needed(reason: str, shot: str = "") -> None:
+    """사람이 필요하다는 것을 **그 순간** 알린다 — 발행 시각까지 기다리지 않는다.
+
+    ★ 08-11 실측: 06:30 에 캡차로 갱신이 실패했는데 07:00 발행까지 30분간 아무 말이 없었다.
+      그 30분이면 사람이 로그인할 수 있었다. 실패를 *발견한 자리* 에서 부른다.
+    """
+    _msg = ("🔐 *네이버 자동 로그인 불가 — 사람이 필요합니다*\n"
+            f"사유: {reason}\n"
+            f"자동 재시도는 {CAPTCHA_BACKOFF_SEC // 3600}시간 보류합니다 "
+            f"(계속 시도하면 캡차를 더 부릅니다).\n\n"
+            "복구: 아래를 실행하고 브라우저에서 직접 로그인하세요.\n"
+            "`.venv/bin/python JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py --manual`")
+    if shot:
+        _msg += f"\n정지 화면: {shot}"
+    try:
+        from shared.notify import send_tg as _tg           # noqa: PLC0415
+        _tg(_msg)
+    except Exception as e:                                # noqa: BLE001
+        print(f"  ⚠️ 사람 호출 알림 실패: {e}")
+
+
 def human_wait_sec() -> int:
     """CAPTCHA 를 **사람이 풀 때까지** 기다릴 초 — 화면 앞에 사람이 없으면 0.
 
@@ -168,6 +247,7 @@ def human_wait_sec() -> int:
 #   반환형을 넓히면 그 전부를 손대야 하고, 하나라도 놓치면 조용히 깨진다.
 #   사유는 옆문으로 노출한다 — 필요한 호출자만 읽는다.
 _LAST_FAILURE: str = ""
+_LAST_SHOT: str = ""      # 마지막 로그인 정지 화면(사람 호출에 동봉)
 
 
 def _fail(reason: str, msg: str = "") -> bool:
@@ -176,6 +256,15 @@ def _fail(reason: str, msg: str = "") -> bool:
     _LAST_FAILURE = reason
     if msg:
         print(msg)
+    # ★ 캡차·기기인증처럼 *사람이 필요한* 실패는 여기 한 곳에서 처리한다(①).
+    #   분기마다 호출을 흩뿌리면 새 사유가 생길 때 또 샌다.
+    #   판정 목록은 이미 있는 CAPTCHA_REASONS 에서 파생 — 새 목록을 만들지 않는다(②).
+    if reason in CAPTCHA_REASONS:
+        try:
+            mark_login_backoff(reason)
+            alert_human_login_needed(reason, _LAST_SHOT)
+        except Exception as _e:                          # noqa: BLE001
+            print(f"  ⚠️ 사람 호출/백오프 처리 실패: {_e}")
     return False
 
 
@@ -246,9 +335,20 @@ def has_publish_auth(cookies) -> bool:
     return set(AUTH_COOKIE_NAMES) <= names
 
 
-def _harvest_urls() -> tuple:
-    """쿠키를 거둘 곳 — 포털·인증·블로그. 블로그는 위 단일 소스에서 파생한다."""
+def session_urls() -> tuple:
+    """네이버 세션이 걸쳐 있는 도메인 — **수집과 주입이 같은 목록을 쓴다**(①).
+
+    ★ 왜 공개인가 (2026-08-11): 수집만 3도메인을 돌고 주입은 www 한 곳에서만 해서,
+      19개를 모아 놓고 브라우저엔 10개만 들어갔다(실측 로그 "10개 추가 / 7개 실패").
+      Chrome 은 www.naver.com 문서에서 blog·nid 도메인 쿠키를 거부한다.
+      거두는 곳과 넣는 곳이 어긋나면 반쪽 세션이 된다 — 목록을 한 곳에서 준다.
+    """
     return ("https://www.naver.com", "https://nid.naver.com", blog_home_url())
+
+
+def _harvest_urls() -> tuple:
+    """하위 호환 별칭 — 내부 호출자용. 목록의 주인은 session_urls()."""
+    return session_urls()
 
 
 def _harvest_cookies(driver) -> list:
@@ -295,6 +395,11 @@ def _save_cookies(cookies) -> None:
     import pickle as _pk
     with open(COOKIE_FILE, "wb") as _f:
         _pk.dump(cookies, _f)
+    # 저장에 성공했다 = 로그인이 실제로 됐다 → 사람 호출 상태를 푼다(단일 지점).
+    try:
+        clear_login_backoff()
+    except Exception:                                    # noqa: BLE001
+        pass
     try:
         _os.chmod(COOKIE_FILE, 0o600)
     except OSError:
@@ -464,6 +569,14 @@ def refresh_naver_cookies(force: bool = False) -> bool:
     pyautogui 기반 사람처럼 타이핑으로 네이버 로그인 후 쿠키 저장.
     force=True 이면 쿠키 나이와 상관없이 갱신.
     """
+    # ★ 백오프 확인 — 기록만 하고 안 읽으면 무의미하다 (2026-08-11, ERRORS [615]).
+    #   실제로 `cookie_watch.json` 의 vanished 가 그렇게 죽어 있었다(소비처 0곳).
+    #   캡차를 만난 뒤 무인 반복 시도를 멈추는 것이 이 판정의 전부다.
+    #   사람이 직접 푸는 `manual_login_and_save` 는 이 경로를 지나지 않으므로 영향 없다.
+    _blk = login_backoff_reason()
+    if _blk:
+        return _fail("backoff", f"  ⏸ {_blk}")
+
     if not force and not cookie_needs_refresh():
         print(f"  ✅ 쿠키 유효 (갱신 불필요)")
         return True
@@ -608,6 +721,7 @@ def refresh_naver_cookies(force: bool = False) -> bool:
             #   추측으로 만든 요소 선택자는 진짜 캡차를 놓쳤다(미탐).
             #   여기서 증거를 남겨 다음 판정을 고칠 재료로 삼는다.
             _shot = capture_login_stuck(driver, "redirect_timeout")
+            globals()["_LAST_SHOT"] = _shot or ""
             if _shot:
                 print(f"  📸 로그인 정지 화면 저장: {_shot}.(html|png)")
             if captcha_present(driver) is True:

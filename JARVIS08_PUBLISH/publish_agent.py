@@ -89,7 +89,8 @@ def _status_section() -> str:
         from datetime import datetime, timedelta
         _ROOT  = Path(__file__).resolve().parent.parent
         _legacy = _ROOT / "JARVIS02_WRITER"
-        nv_cookie = _legacy / "naver_cookies.pkl"
+        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+            COOKIE_FILE as nv_cookie)   # ★ 경로 사본 금지 (ERRORS [615])
         nv_age   = "?"
         if nv_cookie.exists():
             age = datetime.now() - datetime.fromtimestamp(nv_cookie.stat().st_mtime)

@@ -113,24 +113,36 @@ def _clear_all_cookies(label: str) -> None:
 
     kept = []
 
-    # 1) 네이버 쿠키 — **만료가 확인된 경우에만** 삭제
-    _naver_cookie = BASE_DIR / "naver_cookies.pkl"
+    # 1) 네이버 쿠키 — ★ **어떤 경우에도 지우지 않는다** (2026-08-11, ERRORS [615])
+    #
+    #   ★★ 되돌리지 말 것. 삭제는 이득이 0이고 손해만 크다.
+    #
+    #   · "만료됐으니 지워야 새로 받는다" 는 **거짓 전제** 였다.
+    #     `cookie_needs_refresh()` 는 파일이 *있어도* 만료면 True 를 돌려준다
+    #     (naver_cookie_refresher: `return not check_cookie_valid()`).
+    #     즉 남겨둬도 갱신은 정상적으로 일어난다 — 지울 이유가 없다.
+    #   · 반면 지우면 즉시 세 가지를 잃는다:
+    #     ① `economic_poster` 의 harness Layer 1 precondition 이 *파일 존재* 를 요구해
+    #        발행이 attempts=0 으로 통째로 차단된다.
+    #     ② 그 차단이 `_nv_collect_failed` 로 번져 **티스토리까지** 못 나간다
+    #        (2026-08-11 07:00 실측: TS_COOKIE 는 '유효' 였는데도 0건).
+    #     ③ 재로그인이 캡차로 막히면 복구의 재료마저 사라져 스스로 일어설 수 없다.
+    #   · 실제 사고: 08-11 07:00:02 이 자리에서 `네이버 쿠키 파일(만료)` 삭제 →
+    #     07:00:46 precondition cookie_missing → 경제 네이버·티스토리 0/2.
+    #
+    #   ★ 역사 주의 — 이 자리는 두 번 뒤집혔다. 06-08 도입분은 *무조건* 삭제였고,
+    #     그 삭제가 매 발행을 전체 로그인으로 만들어 **프로필 세션을 늘 신선하게 유지**했다
+    #     (08-08 까지 발행이 전부 step0 로 통과한 이유). 08-09 `07233c2` 가 그것을
+    #     "유효하면 보존" 으로 바꾸자 재로그인이 생략되어 낡은 pkl 로 발행에 들어갔고,
+    #     step0 가 처음 실패하며 step1 이 프로필을 파괴하기 시작했다.
+    #     → 그래서 답은 "삭제로 되돌리기" 가 아니다. 매 발행 로그인은 캡차 위험에
+    #       매번 노출된다. **삭제를 없애고, 프로필이 살아남게 고치는 것**(naver_poster
+    #       step1 의 delete_all_cookies·expiry 격하 제거)이 정답이다.
+    # ★ 경로는 refresher 단독 소유 (ERRORS [615]) — 이번 사고에서 이 사본이 실제로 지웠다.
+    from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+        COOKIE_FILE as _naver_cookie)
     if _naver_cookie.exists():
-        _valid = None
-        try:
-            from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
-                cookie_valid_http as _nv_valid)
-            _valid = _nv_valid()
-        except Exception as _e:                          # noqa: BLE001
-            log(f"⚠️ [{label}] 네이버 쿠키 유효성 판정 실패 — 보존: {_e}")
-        if _valid is False:
-            try:
-                _naver_cookie.unlink()
-                cleared.append("네이버 쿠키 파일(만료)")
-            except Exception as _e:
-                log(f"⚠️ [{label}] 네이버 쿠키 파일 삭제 실패: {_e}")
-        else:
-            kept.append("네이버 쿠키" + ("(유효)" if _valid else "(판정 불가)"))
+        kept.append("네이버 쿠키")
 
     # 2) 티스토리 TS_COOKIE — 같은 규칙. 유효하면 지우지 않는다.
     if _os.environ.get("TS_COOKIE"):

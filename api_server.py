@@ -915,7 +915,8 @@ def get_publish():
     import re as _re
     _root   = BASE_DIR
     _legacy = _root / "JARVIS02_WRITER"
-    nv_cookie = _legacy / "naver_cookies.pkl"
+    from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+        COOKIE_FILE as nv_cookie)   # ★ 경로 사본 금지 (ERRORS [615])
     nv_ok     = nv_cookie.exists()
     nv_age_h: float | None = None
     if nv_ok:

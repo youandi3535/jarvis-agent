@@ -398,10 +398,18 @@ def run(post_naver=True, post_tistory=True, resume=None):
                 pc_issues.append(Issue(step="① 전제조건", kind="import_error",
                                        detail=f"collect_theme import 실패: {type(_e).__name__}: {str(_e)[:80]}"))
             if platform == "naver":
-                _nv_cookie = BASE_DIR / "naver_cookies.pkl"
+                # ★ 2026-08-11 (ERRORS [615]) — 쿠키 파일 부재를 **차단 사유로 쓰지 않는다.**
+                #   파일이 없어도 발행자는 `_ensure_logged_in` step2 에서 로그인해 복구할 수
+                #   있다. 그런데 여기서 Issue 를 내면 attempts=0 으로 액션이 통째로 죽고,
+                #   그 죽음이 `_nv_collect_failed` 를 타고 **티스토리까지** 끌고 간다
+                #   (08-11 07:00 실측: 경제 0/2, 그중 티스토리는 쿠키가 멀쩡했다).
+                #   전제조건은 '스스로 회복 불가능한 것' 만 막아야 한다 — 로그인은 회복 가능하다.
+                # ★ 경로는 refresher 단독 소유 (ERRORS [615]) — 이 사본이 발행을 막았다.
+                from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+                    COOKIE_FILE as _nv_cookie)
                 if not _nv_cookie.exists():
-                    pc_issues.append(Issue(step="① 전제조건", kind="cookie_missing",
-                                           detail=f"네이버 쿠키 파일 누락: {_nv_cookie.name}"))
+                    print(f"  ⚠️ [전제조건] 네이버 쿠키 파일 없음({_nv_cookie.name}) "
+                          f"— 차단하지 않고 로그인으로 복구 시도")
             return pc_issues
         return _pc
 
@@ -848,11 +856,22 @@ def run(post_naver=True, post_tistory=True, resume=None):
         # ★ 네이버 수집 자체가 실패하면(키워드 없음 = topic_pack 빌드 실패) 티스토리도 건너뜀.
         # 동일 수집 경로(topic_pack)를 사용하므로 티스토리도 같은 이유로 실패 예상.
         # post_naver=False 이면 _nv_state 비어있으니 False 로 처리 (건너뜀 안 함).
+        # ★ 2026-08-11 (ERRORS [615]) — "시도조차 못 한 것" 은 수집 실패가 아니다.
+        #   08-11 07:00 실측: 네이버가 Layer 1 precondition(cookie_missing)에서
+        #   **attempts=0** 으로 막혀 nv_collect step 이 아예 안 돌았다. 그런데 그 상태가
+        #   '수집 실패' 와 구분되지 않아 티스토리까지 끌고 죽었다 —
+        #   그때 TS_COOKIE 는 '유효' 였고 티스토리는 발행할 수 있었다(결손 2건 중 1건은 순손실).
+        #   네이버가 한 발도 못 뗀 경우엔 티스토리가 자기 수집을 하도록 길을 열어 준다.
+        _nv_attempted = bool(getattr(_nv_res, "attempts", 0))
         _nv_collect_failed = bool(
             post_naver
+            and _nv_attempted
             and not (_nv_state.get("nv_collect_result") or {}).get("success")
             and not nv_keyword
         )
+        if post_naver and not _nv_attempted:
+            print("  ↪ [티스토리] 네이버는 전제조건에서 막혀 수집을 시작도 못 했다 "
+                  "— 수집 실패가 아니므로 티스토리는 독립 진행")
         if _nv_collect_failed:
             msg = "⏭ [티스토리] 네이버 수집 실패(topic_pack 없음) — 티스토리도 수집 실패 예상, 건너뜀"
             print(f"\n  {msg}")

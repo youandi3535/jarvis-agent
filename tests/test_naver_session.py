@@ -274,3 +274,136 @@ def test_티스토리_쿠키_최신값_책임이_한_곳이다(monkeypatch, tmp_
     # 발행자는 같은 답을 받아야 한다 (판정이 두 벌이면 다시 어긋난다)
     from JARVIS08_PUBLISH.platforms import tistory_poster
     assert tistory_poster._get_cookie() == lm.get_tistory_cookie()
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑥ 사슬 — 재획득에 실패한 회차가 끝나도 쿠키가 살아남는가 (2026-08-11, ERRORS [615])
+# ══════════════════════════════════════════════════════════════════
+#
+# 08-11 07:00 사고: 세션이 죽어 재로그인이 캡차로 막혔고, 그 직후 `_clear_all_cookies` 가
+# 쿠키 파일을 '만료' 라며 지웠다. 그러자 harness Layer1 이 파일 부재로 발행을 attempts=0
+# 으로 막았고, 그 막힘이 `_nv_collect_failed` 로 번져 **티스토리까지** 못 나갔다
+# (그때 TS_COOKIE 는 유효했다). 링크마다 테스트가 있어도 링크 *사이* 가 끊긴 사고다.
+@pytest.mark.parametrize("callback", ["run_self_repair_then_economic",
+                                      "run_self_repair_then_theme"])
+def test_재획득_실패해도_쿠키가_남는다(monkeypatch, tmp_path, callback):
+    """★ 회차 전체를 지나며 확인한다 — 함수 단위 대역으로는 이 사고를 못 잡는다."""
+    import JARVIS02_WRITER.scheduler as sch
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nc
+
+    ck = tmp_path / "naver_cookies.pkl"
+    ck.write_bytes(b"pretend-pickle")
+
+    monkeypatch.setattr(sch, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(nc, "COOKIE_FILE", ck)
+    # 세션은 죽었고(만료), 재획득도 실패한다(캡차) — 사고 당시와 같은 조건
+    monkeypatch.setattr(nc, "cookie_valid_http", lambda *a, **k: False)
+    monkeypatch.setattr(sch, "_naver_cookie_ready", lambda *a, **k: False)
+    monkeypatch.setenv("TS_COOKIE", "z" * 40)
+
+    ran = {}
+    for runner in ("run_economic_poster", "run_radar_top_theme"):
+        monkeypatch.setattr(sch, runner, lambda *a, **k: ran.setdefault("ok", True))
+    monkeypatch.setattr(sch, "_run_self_repair_phase",
+                        lambda *a, **k: {"code_changed": 0, "elapsed_sec": 0})
+    monkeypatch.setattr(sch, "send_telegram", lambda *a, **k: None)
+    monkeypatch.setattr(sch, "_is_locked_externally", lambda *a, **k: False)
+    monkeypatch.setattr(sch, "_paused", False, raising=False)
+    monkeypatch.setattr("JARVIS00_INFRA.harness.interpreter_shutting_down", lambda: False)
+
+    getattr(sch, callback)()
+
+    assert ck.exists(), (
+        "재획득에 실패한 회차가 쿠키 파일을 지웠다 — 발행 전제조건과 복구 재료가 함께 사라진다")
+    assert ran.get("ok"), "네이버 쿠키가 준비 안 됐다고 발행 세트가 통째로 끊겼다"
+
+
+def test_전제조건이_쿠키_부재로_발행을_막지_않는다():
+    """파일이 없어도 로그인으로 복구 가능하다 — 막으면 티스토리까지 죽는다."""
+    import ast
+    import inspect
+
+    from JARVIS02_WRITER import economic_poster as ep
+    src = inspect.getsource(ep)
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "id", "") != "Issue":
+            continue
+        seg = ast.unparse(node)
+        assert "cookie_missing" not in seg, (
+            f"전제조건이 쿠키 부재를 차단 사유로 쓴다 — attempts=0 으로 액션이 죽고 "
+            f"그 죽음이 티스토리까지 끌고 간다: {seg[:120]}")
+
+
+def test_네이버가_시작도_못하면_티스토리는_독립_진행한다():
+    """'막힘' 과 '수집 실패' 는 다르다 — 08-11 에 이 구분이 없어 티스토리가 순손실됐다."""
+    import inspect
+
+    from JARVIS02_WRITER import economic_poster as ep
+    src = inspect.getsource(ep)
+    assert "_nv_attempted" in src, (
+        "네이버가 한 발도 못 뗀 경우(attempts=0)를 수집 실패와 구분하지 않는다")
+    i_att = src.index("_nv_attempted =")
+    i_use = src.index("_nv_collect_failed = bool(")
+    assert i_att < i_use, "판정을 만들기 전에 써버린다"
+    seg = src[i_use:i_use + 400]
+    assert "_nv_attempted" in seg, "_nv_collect_failed 가 '시도 여부' 를 보지 않는다"
+
+
+def test_캡차를_만나면_무인_재시도를_멈춘다(monkeypatch, tmp_path):
+    """지금은 매 회차 같은 문을 두드려 캡차를 더 부른다 — 08-10 8회·08-11 4회."""
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nc
+
+    monkeypatch.setattr(nc, "_BACKOFF_FILE", tmp_path / "bo.json")
+    monkeypatch.setattr(nc, "CAPTCHA_BACKOFF_SEC", 3600)
+    sent = []
+    monkeypatch.setattr(nc, "alert_human_login_needed",
+                        lambda *a, **k: sent.append(a))
+
+    nc.clear_login_backoff()
+    assert nc.login_backoff_reason() == "", "초기 상태가 이미 막혀 있다"
+
+    nc._fail("captcha_unattended")               # 캡차 경로는 _fail 하나를 지난다(①)
+    assert nc.login_backoff_reason(), "캡차를 만나고도 다음 시도를 막지 않는다"
+    assert sent, "사람을 부르지 않는다 — 08-11 에 30분간 침묵했다"
+
+    # 자동 갱신이 실제로 차단되는가 (기록만 하고 안 읽으면 무의미 — vanished 의 전철)
+    assert nc.refresh_naver_cookies(force=True) is False
+    assert nc.last_login_failure() == "backoff", "백오프를 읽지 않고 로그인을 시도한다"
+
+    # 로그인 성공(=저장)이 유일한 해제 조건
+    nc.clear_login_backoff()
+    assert nc.login_backoff_reason() == ""
+
+
+def test_step1_이_프로필_세션을_파괴하지_않는다():
+    """★ 08-05~08-08 이 무사했던 이유는 step1 이 한 번도 안 돌았기 때문이다(ERRORS [615]).
+
+    한 번 돌자 프로필의 인증 쿠키가 증발했고(실측: 네이버 쿠키 16개 중 NID_AUT·NID_SES
+    둘만 없음), 다시는 step0 로 돌아가지 못해 매 회차가 전체 로그인=캡차로 떨어졌다.
+    파괴 요소 셋을 구조로 막는다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS08_PUBLISH.platforms import naver_poster
+    src = inspect.getsource(naver_poster._load_cookies_to_browser)
+    tree = ast.parse(src.lstrip())
+
+    calls = {getattr(n.func, "attr", "") for n in ast.walk(tree) if isinstance(n, ast.Call)}
+    assert "delete_all_cookies" not in calls, (
+        "프로필 쿠키를 통째로 지운다 — 기기 인증 쿠키(BA_DEVICE 등)까지 날아가 "
+        "네이버가 낯선 기기로 보고 캡차를 건다")
+
+    # expiry 를 무조건 pop 하면 영속 쿠키가 세션 쿠키로 격하돼 quit 시 증발한다
+    assert 'c_copy.pop("expiry", None)' in src, "expiry 처리 자체가 사라졌다"
+    _i_guard = src.find('if not c_copy.get("expiry")')
+    _i_pop = src.find('c_copy.pop("expiry", None)')
+    assert 0 <= _i_guard < _i_pop, (
+        "expiry 를 조건 없이 제거한다 — 영속 쿠키가 세션 쿠키가 되어 프로필에 안 남는다")
+
+    # 주입도 수집과 같은 도메인 목록을 돌아야 한다 (www 한 곳이면 blog·nid 쿠키가 버려진다)
+    assert "session_urls" in src, (
+        "www 한 곳에서만 주입한다 — Chrome 이 타 도메인 쿠키를 거부해 절반이 버려진다")
