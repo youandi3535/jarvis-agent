@@ -13275,3 +13275,295 @@ Phase 1 (이미지) + Phase 2 (발행·카테고리·쿠키) + Phase 3 (분량·
 - 교훈: "코드 변경 0건" 이 매번 정답은 아니다 — 같은 wontfix 결론이 반복 조사를 유발한다면
   *결론을 캐싱하는 코드* 자체가 다음 fix 대상이다. [623]·[624]가 "새 사고 아님을 빨리
   알아채는 법"을 남겼다면, 이번 건은 "애초에 조사할 필요를 없애는 법"을 남긴다.
+
+## [626] 🔍 조사완료(결함아님) — `PrecheckTistoryCookieExpired`(id=5858, 20:30) 재확인 — [619]와 동일 패턴, 자동갱신이 이미 회복 (2026-08-11)
+
+- 증상: 리페어 큐가 `error_log` id=5858(`PrecheckTistoryCookieExpired`, `2026-08-11T20:30:02`,
+  `module=JARVIS08_PUBLISH.credentials.login_manager`, `func_name=job_pre_publish_check`,
+  `"[발행 前 점검] tistory: 쿠키 만료 — manage 접근이 로그인으로 리다이렉트"`)를 대상으로 호출.
+  착수 시점 `llm_attempts=3`(상한 도달), `status='analyzing'`. [619](id=5830, 06:30)와
+  같은 날 두 번째로 발생한 동일 오류 타입 — 새 결함이 아니라 [619]가 이미 정리한 패턴의
+  재현인지부터 확인.
+- 원인: [619]와 완전히 동일 — 이 알림은 `verify_all_logins()` 의 *최초 감지* 일 뿐이고,
+  같은 `job_pre_publish_check()` 호출 안에서 곧바로 `auto_refresh_if_needed()` 가 재로그인을
+  시도한다([606] 에서 확립, [619]에서 검증된 설계). DB 를 확인하면 같은 20:30 배치의
+  형제 사고 `id=5859`(`PrecheckNaverAutoRefreshFailed`, "쿠키 파일 없음")는 존재하지만
+  **tistory 쪽 `PrecheckTistoryAutoRefreshFailed` 는 없다** — `_alert_refresh_failed()` 가
+  재확인(`verify_all_logins(platforms=("tistory",))`)에서 tistory 를 성공으로 판정해
+  알림을 건너뛰었다는 뜻. 실측(`python -m JARVIS08_PUBLISH.credentials.login_manager status`)
+  으로도 TISTORY ✅ 확인(반면 NAVER 는 `naver_cookies.pkl` 부재로 여전히 ❌ — 별개 사고,
+  코드 결함 아님).
+- ⛔ 헛다리: 없음. `job_pre_publish_check()`/`verify_all_logins()`/`auto_refresh_if_needed()`
+  세 함수 모두 [601][606]이 이미 고친 실유효성 판정·단일 위임 구조 그대로였고, 재확인+알림
+  로직(`_alert_refresh_failed`, commit `5181210`)도 그대로 살아 정상 동작 중이었다.
+- 해결: 코드 변경 0건([619]와 동일 결론 — 근본 설계는 이미 정상). `mark_error_status(5858,
+  "fixed", ...)` 로 종결 — 사유: 재확인 결과 정상 + 근본 원인은 [606]/[619] 후속으로 기수정.
+- 파일: 없음 (조사 + DB 상태 갱신만, 저장소 코드 파일 변경 없음).
+- 교훈: [619]와 마찬가지로 리페어 큐가 *같은 날 다른 시각* 에 발생한 동일 오류 타입을
+  별개 사고로 재배정할 수 있다. `PrecheckTistoryAutoRefreshFailed` 후속 알림의 **부재**가
+  곧 "자동 회복 성공"의 증거라는 점을 먼저 DB 조회로 확인하면 실측(`login_manager status`)
+  전에도 결론을 좁힐 수 있다.
+
+## [627] 🔍 조사완료(결함아님) — 테마 `메타버스(Metaverse)` naver `HarnessLoginInvalid`(id=5865) 재재확인 — [624] 원본 레코드가 llm_attempts 상한까지 재소진 (2026-08-12)
+
+- 증상: GUARDIAN 리페어 큐가 `error_log` id=5865(`attempt=1, 2026-08-11T22:13:49,
+  module=JARVIS00_INFRA.harness.theme-publish-메타버스(Metaverse)-naver, func_name=①
+  전제조건, "naver 로그인 세션 무효 — 쿠키 파일 없음 또는 빈 list"`)로 다시 호출됨.
+  착수 시점 DB 확인 결과 `status='analyzing'`, `resolution="new — 사유 미기록
+  (guardian_agent._circuit_blocked:666)"`, `llm_attempts=3`(상한 도달), `claimed_at=
+  2026-08-12T00:25:15` — [624]가 처리한 **바로 그 id** 인데 wontfix 가 아니라 재청구된
+  상태였다(형제 레코드 5866·5867 은 [624]가 남긴 `resolution`("...ERRORS.md [624]")
+  그대로 `wontfix` 유지 중이라 대조로 확인).
+- 원인: `login_backoff.json` 실측 — `reason=captcha_unattended`, `at=2026-08-11T20:30:45`,
+  `until=2026-08-12T02:30:45`(=1786469445.54). [623]·[624]·[625]와 **완전히 동일한
+  백오프 창**(현재시각 00:24 로 아직 미해제). `login_manager status` 도 NAVER ❌(쿠키
+  파일 없음)·TISTORY ✅ 로 동일 패턴 재확인. 즉 새 CAPTCHA 조우가 아니라 [624]가 이미
+  wontfix 로 닫았던 레코드가 어떤 경로로든 다시 `analyzing` 으로 열려 Tier-2 를 3회
+  소진할 때까지 재시도된 것 — [625]가 추가한 `login_invalid_backoff` kind 승격은 *그
+  이후 새로 생성되는* Issue 부터 적용되므로, 22:13:49 에 이미 만들어진 이 레코드의
+  `context.kind` 는 여전히 구버전 접미사 없는 `"login_invalid"` 그대로다(구조화 필드는
+  생성 시점에 고정 — [625] 배포가 과거 레코드를 소급 재분류하지 않는다). `severity.py`
+  는 접미사 없는 bare `login_invalid` 를 "★ 의도적 *비*포함 — 반드시 Tier-2 유지" 로
+  명시 선언해 두었으므로(결함 2 가드), 이 레코드는 [625] 이후에도 계속 Tier-2 대상으로
+  잡혀 상한까지 소진된 것이지 [625]의 결함은 아니다.
+- ⛔ 헛다리: 없음. [623]/[624]/[625]가 이미 근본원인(캡차 백오프)을 확정해 뒀으므로
+  `repair_history.search_incidents()` 조준 검색 + `login_backoff.json`/`login_manager
+  status` 실측 대조로 즉시 확인.
+- 해결: 코드 변경 0건 — [625]가 이미 *앞으로 생성될* 레코드의 재조사 낭비를 막는
+  구조적 수정을 끝냈고, 이 레코드는 그 수정 이전에 태어난 과거분이 우연히 상한까지
+  돈 것뿐이라 추가 코드 변경 대상이 아니다. `mark_error_status(5865, "wontfix", ...)`
+  로 형제 레코드(5866·5867)와 동일하게 종결.
+- 파일: 없음 (조사 + DB 상태 갱신만, 저장소 코드 파일 변경 없음).
+- 교훈: [625]의 재발 방지는 *생성 시점의 kind 분류*라 소급 적용되지 않는다 — 같은
+  백오프 창 안에서 [625] 배포 **이전에** 이미 큐에 들어와 있던 레코드는 여전히 상한까지
+  Tier-2 를 소진할 수 있다. 새 사고인지 판별할 때 `login_backoff.json` 의 `at`/`until`
+  대조에 더해, **형제 error_id 의 `resolution` 에 이전 ERRORS 번호가 이미 적혀 있는지**
+  확인하면 "같은 레코드가 재청구됐을 뿐"인 경우를 즉시 가려낼 수 있다.
+
+## [628] 🔍 조사완료(결함아님) — 경제 브리핑 `NaverLoginBackoff`(id=5918, 07:00) — 오늘 새 CAPTCHA 조우 + 인메모리 판정이 아직 옛 코드였던 창, 코드는 이미 정상 (2026-08-12)
+
+- 증상: `error_log` id=5918 — `source=publish`, `module=JARVIS02_WRITER.scheduler`,
+  `func_name=_naver_cookie_ready`, `2026-08-12T07:00:03`, `error_type=NaverLoginBackoff`,
+  `message="[경제 브리핑] 네이버 쿠키 점검 실패로 발행 건너뜀 (사유=backoff)"`, severity=medium,
+  착수 시점 `status='analyzing'`, `llm_attempts=1`.
+- 원인: `login_backoff.json` 실측 — `reason=captcha_unattended`, `at=2026-08-12T06:30:43`,
+  `until=2026-08-12T12:30:43`(=1786505443.96, 조사 시각 07:53 기준 잔여 4.6h) — **어제
+  [623]~[627] 이 처리한 08-11 20:30 창과는 다른, 오늘 06:30 새 CAPTCHA 조우**다(경제
+  브리핑 07:00 잡 직전 쿠키 자동갱신이 캡차에 막혀 `mark_login_backoff()` 가 새 6h 창을
+  엶). `login_manager status` 로 NAVER ❌(쿠키 파일 없음)·TISTORY ✅ 재확인, 사람이
+  로그인 전까지 자동 회복 불가한 것도 동일.
+  이 사유가 왜 "코드 결함처럼 보였나": `error_type=NaverLoginBackoff` 는 [625](커밋
+  `eb70afc`, 08-11 23:37:53)가 `HUMAN_REQUIRED_REASONS` 에 `backoff` 를 추가한 뒤로
+  `severity._naver_login_human_required_types()` 에 포함돼 `is_transient()` 가 즉시
+  `True` 를 반환하도록 **이미 고쳐져 있다**(신규 프로세스로 직접 재현: `is_transient(
+  'NaverLoginBackoff', ..., source='publish') == True`, 이 조사 세션에서 확인). 그런데
+  이 레코드가 실제로 `analyzing`/`llm_attempts=1` 로 큐에 남았다는 것은, *그 판정을
+  수행한 프로세스*(리페어 큐를 도는 GUARDIAN 데몬)가 eb70afc 커밋 이후 **재시작되지
+  않은 채** 옛 `severity.py`/`naver_cookie_refresher.py` 를 메모리에 들고 07:00 판정을
+  내렸다는 뜻 — 루트 CLAUDE.md "재시작 의무"(수정한 코드는 데몬 재시작 전엔 무효) 절이
+  경고하는 바로 그 현상이 [625] 배포 직후 창에서 실제로 재현된 사례다.
+- ⛔ 헛다리: 없음. [623]~[627]이 이미 캡차 백오프의 근본원인·정상설계를 확정해 뒀으므로
+  `repair_history.search_incidents()` 조준 검색 + `login_backoff.json` 실측 + 신규
+  프로세스 `is_transient()` 재현으로 "코드는 이미 옳다, 판정 프로세스가 낡았을 뿐"임을
+  직접 확인.
+- 해결: 코드 변경 0건 — [625]가 이 정확한 타입(`NaverLoginBackoff`)을 이미 다루도록
+  고쳐 두었고, 신규 프로세스 재현으로 정상 동작을 재확인했다. `mark_error_status(5918,
+  "wontfix", ...)` 로 [623]~[627]과 동일하게 종결(사람이 `--manual` 로 직접 로그인해야
+  해제, 자동 코드 수정 대상 아님).
+- 파일: 없음 (조사 + DB 상태 갱신만, 저장소 코드 파일 변경 없음).
+- 교훈: [627]이 "같은 백오프 창에서 [625] 이전에 태어난 레코드는 옛 kind 로 소급 재분류
+  안 됨"을 남겼다면, 이번 건은 **그 반대 방향의 같은 병**이다 — [625] 이후에 새로 태어난
+  레코드라도, *판정을 실행하는 프로세스 자체* 가 배포 이후 재시작되지 않았다면 여전히
+  옛 코드로 판정된다. "코드는 고쳤다"와 "판정 프로세스가 그 코드를 메모리에 들고 있다"는
+  별개 사실이며, 후자를 확인하려면 판정을 새 프로세스로 재현해 보는 것이 가장 빠르다.
+
+## [629] 🔍 조사완료(결함아님) — 경제 브리핑 naver `HarnessLoginInvalid`(id=5922·5923, 07:36/07:44) — [628]과 같은 스테일 데몬, 이번엔 harness precondition 경로에서 재현 (2026-08-12)
+
+- 증상: `error_log` id=5922(attempt=1, 07:36:58)·5923(attempt=2, 07:44:26) —
+  `source=harness`, `module=JARVIS00_INFRA.harness.경제 브리핑 발행 — 네이버`,
+  `func_name=① 전제조건`, `error_type=HarnessLoginInvalid`(접미사 없는 **bare** kind),
+  `message="naver 로그인 세션 무효 — 쿠키 파일 없음 또는 빈 list"`, severity=medium.
+- 원인: `login_backoff.json` 실측 — `reason=captcha_unattended`, `at=2026-08-12T06:30:43`,
+  `until=2026-08-12T12:30:43` — [628]이 이미 처리한 **바로 그 백오프 창**(오늘 06:30 CAPTCHA
+  조우, 조사 시각 08:01 기준 잔여 4.5h). 코드는 이미 옳다 — `economic_poster.py`
+  `_verify_platform`(eb70afc, 08-11 23:37:53)는 `_kind = login_invalid_kind(
+  last_login_failure())` 로 파생하고, `refresh_naver_cookies()` 가 백오프 감지 시
+  `_fail(BACKOFF_REASON, ...)` 로 `_LAST_FAILURE="backoff"` 를 세우므로 정상 프로세스라면
+  `error_type=HarnessLoginInvalidBackoff` 가 나와야 한다. 실제로 나온 건 접미사 없는
+  bare `HarnessLoginInvalid` — [628]이 예견한 "판정 프로세스가 배포 이후 재시작되지
+  않았다" 가설을 이번엔 **직접 증거로 확인**: `ps -o lstart -p $(pgrep -f
+  jarvis_daemon.py)` = `Tue Aug 11 12:31:11 2026` — eb70afc(23:37:53)·42a24ed(23:26:04)
+  **양쪽 모두보다 이전** 기동. 즉 이 데몬은 지금(08:01) 기준 19.5시간째 두 커밋의 로그인
+  세분화 수정을 메모리에 반영하지 못한 채 돌고 있다. [628]은 `source=publish`(
+  `_naver_cookie_ready`) 경로에서 같은 스테일 문제를 봤고, 이번엔 `source=harness`(
+  `_verify_platform` precondition) 경로에서 **같은 스테일 데몬이 두 번째 소비처를
+  통해서도** 옛 코드로 판정한 것 — 코드 결함이 아니라 배포-반영 지연이 두 경로에
+  동시에 걸려 있었을 뿐.
+- ⛔ 헛다리: 없음. [623]~[628]이 이미 캡차 백오프·스테일 프로세스 두 근본원인을
+  확정해 뒀으므로 `repair_history.search_incidents()` 조준 검색 + `login_backoff.json`
+  실측 + `ps -o lstart` 데몬 기동 시각 대조로 재확인.
+- 해결: 코드 변경 0건 — eb70afc가 이미 옳게 고쳐 두었다. `mark_error_status(5922/5923,
+  "wontfix", ...)` 로 [623]~[628]과 동일하게 종결(사람이 `--manual` 로 직접 로그인해야
+  백오프 해제, 자동 코드 수정 대상 아님). **데몬 재시작은 이 리페어 세션이 직접 수행하지
+  않음** — Telegram polling·진행 중 스케줄 잡을 끊는 실행 중 변경이라 사용자 확인 없이
+  단행하지 않는다(루트 CLAUDE.md "실행 리스크" 원칙). 다만 19.5시간째 스테일이라
+  `./restart_daemon.sh` 수동 재시작을 사용자에게 권고 — 재시작 전까지는 [628]·본 건과
+  같은 부류의 오탐 리페어 티켓(harness·publish 두 경로 모두)이 계속 발생할 것으로 예상.
+- 파일: 없음 (조사 + DB 상태 갱신만, 저장소 코드 파일 변경 없음).
+- 교훈: [628]의 가설("판정 프로세스가 배포 이후 재시작되지 않았다")이 이번엔 *다른
+  소비처*(harness precondition, publish 아님)에서 재현되며 "스테일 데몬 하나가 여러
+  독립된 판정 경로를 동시에 오염시킨다"는 것을 보여준다. 재시작 없이 코드만 계속
+  고치면, 고칠 때마다 새 소비처가 같은 스테일 창에서 또 오탐을 낸다 — 근본 해법은
+  코드가 아니라 **재시작**이며, 이는 루트 CLAUDE.md "② 재시작 의무" 절이 경고하는
+  바로 그 실패 모드다.
+
+## [630] ✅ 해결 — 경제 브리핑 naver `PrecheckNaverCookieMissing`(id=5915, 06:30) — [623]~[629]와 같은 CAPTCHA 백오프 창, 이번엔 *세 번째* 소비처(precheck)가 백오프를 몰랐던 진짜 결함 발견 (2026-08-12)
+
+- 증상: `error_log` id=5915 — `source=publish`, `module=JARVIS08_PUBLISH.credentials.login_manager`,
+  `func_name=job_pre_publish_check`, `2026-08-12T06:30:01`, `error_type=PrecheckNaverCookieMissing`,
+  `message="[발행 前 점검] naver: 쿠키 파일 없음 또는 빈 list"`, severity=medium.
+- 원인: `login_backoff.json` 실측 — `reason=captcha_unattended`, `at=2026-08-12T06:30:43`,
+  `until=2026-08-12T12:30:43` — [628][629]가 이미 처리한 **바로 그 06:30 백오프 창**(경제
+  브리핑 07:00 잡 직전 사전점검이 쿠키 갱신을 시도하다 캡차에 막힌 순간 열렸다). 여기까지는
+  [628][629]와 동형이지만, 이번엔 **스테일 데몬이 원인이 아니었다** — 원인은 세 번째
+  소비처의 진짜 결함: harness precondition(`economic_poster._verify_platform`, eb70afc)과
+  `_naver_cookie_ready`(`JARVIS02_WRITER/scheduler.py`)는 이미 `naver_login_error_type()`/
+  `login_invalid_kind()`로 위임해 백오프·CAPTCHA를 "사람이 필요한 사유"로 세분화하는데,
+  `login_manager.job_pre_publish_check`가 쓰는 `precheck_error_type()`/`refresh_failed_error_type()`
+  은 **이슈 문구만 보고** ("쿠키 파일 없음" → `CookieMissing`) 백오프 상태를 전혀 참조하지
+  않았다 — `severity._naver_login_human_required_types()` 는 `naver_login_error_type()`
+  파생 타입만 인식하므로 `PrecheckNaverCookieMissing`은 영원히 그 집합에 들지 못해
+  `is_transient()`가 `False`를 반환, 매 백오프 창마다 이 경로에서만 새 Tier-2 리페어
+  티켓이 발생하고 있었다(코드 재현으로 확인: 수정 전 `is_transient('PrecheckNaverCookieMissing',
+  source='publish') == False`).
+- ⛔ 헛다리: 없음. [623]~[629]가 이미 캡차 백오프의 근본원인·정상설계를 확정해 뒀으므로
+  `repair_history.search_incidents()` 조준 검색 + `login_backoff.json` 실측으로 같은 창임을
+  먼저 확인한 뒤, `precheck_error_type`/`refresh_failed_error_type`가 harness·scheduler
+  두 소비처와 달리 백오프를 참조하지 않는다는 것을 코드 대조로 직접 확인했다(추측 아님).
+- 해결: ① `naver_cookie_refresher.py` — 백오프 파일 파싱을 `_login_backoff_state()`
+  한 곳으로 통합(① 단일 진입점) 후 `login_backoff_reason()`(사람이 읽는 문장)은 그대로
+  유지, 타입 파생용 raw reason 을 돌려주는 `login_backoff_active_reason()` 신설.
+  ② `login_manager.py` — `precheck_error_type()`/`refresh_failed_error_type()` 에
+  `backoff_reason` 파라미터 추가 — 값이 있으면 `naver_login_error_type()` 결과로 즉시
+  위임(이슈 문구 분류를 건너뜀). `_alert_precheck()`(갱신 시도 *전*)는 `login_backoff_active_reason()`
+  으로 파일을 직접 읽고, `_alert_refresh_failed()`(갱신 시도 *후*)는 `last_login_failure()`
+  로 이번 프로세스가 방금 겪은 실패 사유를 읽는다 — economic_poster.py 와 동일한 "시도 후
+  사유 조회" 순서. 수정 후 재현: `is_transient('NaverLoginCaptchaUnattended', source='publish')
+  == True`. `mark_error_status(5915, "wontfix", ...)` 로 이번 건 자체는 [628][629]와
+  동일하게 종결(사람이 `--manual` 로 로그인해야 백오프 해제, 발행 재개는 자동 코드
+  변경 대상 아님) — 코드 수정은 **다음** 백오프 창부터 이 경로의 오탐을 막기 위함.
+  precommit `auth`·`copytruth` 카테고리 재검증 0위반.
+- 파일: JARVIS08_PUBLISH/credentials/login_manager.py, JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py
+- 교훈: [629]가 "스테일 데몬 하나가 여러 소비처를 오염시킨다"를 보여줬다면, 이번 건은
+  **소비처 자체가 애초에 갱신되지 않은 경우**다 — 백오프 인식을 harness·scheduler 두
+  경로에만 이식하고 세 번째 소비처(login_manager 의 자체 precheck 잡)를 빠뜨리면, 데몬을
+  아무리 재시작해도 그 소비처는 여전히 이슈 문구만으로 판정한다. 같은 판정을 쓰는
+  소비처가 몇 곳인지(② 동적 설계가 아니라 ① 단일 진입점 문제) 매번 전수 확인이 필요하다 —
+  "harness 는 고쳤다"가 "로그인 실패를 보고하는 모든 통로가 고쳐졌다"를 보장하지 않는다.
+
+## [631] 🔍 조사완료(결함아님) + 회귀 1건 발견·수정 — 경제 브리핑 naver `HarnessLoginInvalidBackoff`(id=5919·5920, 07:08/07:14) — [629]와 같은 창, harness 경로는 이미 정상 + [630] 미커밋 diff 검증 중 테스트 격리 결함 발견 (2026-08-12)
+
+- 증상: `error_log` id=5919(attempt=1, 07:08:16, status='new')·5920(attempt=2, 07:14:23,
+  status='analyzing') — `source=harness`, `module=JARVIS00_INFRA.harness.경제 브리핑 발행 —
+  네이버`, `func_name=① 전제조건`, `error_type=HarnessLoginInvalidBackoff`(접미사 있음),
+  `message="naver 로그인 세션 무효 — 쿠키 파일 없음 또는 빈 list"`, severity=medium,
+  둘 다 `llm_attempts=3`(Tier-2 상한 소진).
+- 원인: `login_backoff.json` 실측 — `reason=captcha_unattended`, `at=2026-08-12T06:30:43`,
+  `until=2026-08-12T12:30:43` — [628]~[630]이 이미 처리한 **바로 그 06:30 백오프 창**과
+  동일. 이번 두 레코드는 (bare `HarnessLoginInvalid` 였던 [629]의 5922·5923과 달리)
+  이미 정확한 접미사 `Backoff` 로 분류됐다 — `login_invalid_kind(last_login_failure())`
+  가 정상 동작한 증거. 신규 프로세스로 직접 재현: `is_transient('HarnessLoginInvalidBackoff',
+  kind='login_invalid_backoff', source='harness') == True`(이 조사 세션에서 확인) —
+  harness precondition 경로(eb70afc)는 이 사고에 관한 한 코드 결함이 없다.
+  ★ 부가 발견 — 작업 디렉터리에 `login_manager.py`/`naver_cookie_refresher.py`/
+  `ERRORS.md`([630] 작성분)가 **미커밋 상태**로 남아 있었다(`source=vscode_claude`
+  08:57:19 기록, id=5927). 커밋 전 검증 삼아 `pytest tests/test_learning_signal.py`
+  전체를 돌려보니(★[630]은 개별 재현만 했지 전체 스위트를 돌리지 않았다) 기존 테스트
+  `test_사전점검_실패가_사람과_원장_양쪽에_간다`가 **깨져 있었다** — 그 테스트는
+  "백오프와 무관하게 쿠키만 없는" 시나리오를 검증하는데, 새 `_alert_precheck()`가
+  저장소의 *실제* `login_backoff.json`(오늘 06:30 캡차로 활성)을 직접 읽어버려서
+  테스트 환경이 아니라 운영 환경 상태가 새어 들어와 기대 타입(`PrecheckNaverCookieMissing`)
+  대신 `NaverLoginCaptchaUnattended`가 나왔다 — 코드 자체는 (프로덕션 기준으론) 옳지만
+  테스트가 그 방화벽 없이 실환경에 의존하고 있었다.
+- ⛔ 헛다리: 없음. [623]~[630]이 이미 캡차 백오프의 근본원인·설계를 확정해 뒀으므로
+  `repair_history.search_incidents()` 조준 검색 + `login_backoff.json` 실측 + 신규
+  프로세스 `is_transient()` 재현으로 harness 경로는 결함이 없음을 먼저 확인한 뒤,
+  [630]의 미커밋 diff를 그대로 커밋하기 전 전체 테스트를 돌려 검증했다(추측 아님,
+  실제 실패를 관측).
+- 해결: ① id=5919·5920 은 `mark_error_status(..., "wontfix", ...)` 로 종결(사람이
+  `--manual` 로 로그인해야 백오프 해제). ② `tests/test_learning_signal.py` —
+  `test_사전점검_실패가_사람과_원장_양쪽에_간다`에 `monkeypatch.setattr(nc,
+  "login_backoff_active_reason", lambda: "")` 추가해 실환경 누출 차단(격리 결함 수정).
+  ③ 새 테스트 `test_사전점검_백오프_중이면_사람필요_타입으로_분류된다` 추가 — 백오프
+  활성 시 `precheck_error_type`이 실제로 `naver_login_error_type()` 파생 타입을 내고
+  그 타입이 `is_transient()==True`임을 회귀 방지로 고정. ④ [630]의 코드 변경(
+  `login_manager.py`·`naver_cookie_refresher.py`)은 그대로 유지 — 로직 자체는 옳았고
+  깨진 것은 격리뿐이었다. `pytest tests/test_learning_signal.py` 42 passed,
+  `pytest tests/ -k "login or naver or precheck or harness"` 38 passed, precommit
+  `auth`·`copytruth` 0위반 재확인.
+- 파일: JARVIS08_PUBLISH/credentials/login_manager.py, JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py, tests/test_learning_signal.py
+- 교훈: "코드는 옳다, 개별 재현으로 확인했다"([630]의 결론)는 **전체 테스트 스위트를
+  실제로 돌린 것과 다르다** — 새 코드가 실환경 파일(`login_backoff.json`)을 직접 읽는
+  순간, 그 파일의 상태가 우연히 "지금 백오프 중" 이면 테스트가 프로덕션 상태에 의존하게
+  된다. 백오프처럼 *시간에 따라 달라지는 전역 상태*를 새로 참조하는 코드를 추가할 때는
+  그 상태를 읽는 모든 소비처(프로덕션 코드 + 그 소비처를 검증하는 기존 테스트)를 함께
+  점검해야 한다 — 커밋 직전 전체 스위트 실행이 이런 격리 결함의 유일한 안전망이다.
+
+## [632] 🔍 조사완료(결함아님) — `PrecheckNaverCookieMissing`(id=5915) Tier-2 재청구 — [630] 이 잡은 것과 동일 레코드, circuit breaker 가 wontfix 를 새로 되돌려 무한 재청구되던 것을 종결 (2026-08-12)
+
+- 증상: 이번 호출의 error_record 가 `source=publish`, `module=JARVIS08_PUBLISH.credentials.login_manager`,
+  `func_name=job_pre_publish_check`, `error_type=PrecheckNaverCookieMissing`,
+  `message="[발행 前 점검] naver: 쿠키 파일 없음 또는 빈 list"` — DB 대조 결과 [630]이 이미
+  다룬 **바로 그 id=5915**(`timestamp=2026-08-12T06:30:01`)와 완전히 동일한 레코드였다.
+  그런데 DB 실측 상태는 `status='analyzing'`, `llm_attempts=3`(cap 도달), `resolution='new —
+  사유 미기록 (JARVIS07_GUARDIAN.guardian_agent._circuit_blocked:666)'` — [630]이 기록에
+  "`mark_error_status(5915, wontfix)` 로 종결" 이라 적었지만 DB 는 종결 상태가 아니었다.
+- 원인: `guardian_agent._circuit_blocked()`(시간당 토큰 한도 초과 회로차단기)가
+  `mark_error_status(error_id, "new")` 로 상태를 **무조건 되돌린다** — wontfix 로 종료된
+  기록이라도 회로차단기가 그 사이 다시 발동하면 `new` 로 리셋되어 `j07_retry_pending`
+  이 계속 재청구한다. 즉 [630]의 종결 자체가 이후 circuit breaker 이벤트에 의해 지워졌고,
+  같은 오류가 세 번째 Tier-2 세션(본 건)까지 소비했다. 근본 원인은 [619]~[631]이 이미
+  확정한 그대로(`login_backoff.json`: `reason=captcha_unattended`, `until=2026-08-12T12:30:43`
+  — 아직 만료 전) — 사람이 `--manual` 로그인해야 풀린다.
+- ⛔ 헛다리: 없음. `repair_history.search_incidents()` 조준 검색으로 [463][499][398] 이
+  잡혔으나 이 사고와는 무관 — 실제로 관련 있는 [619]~[631]은 검색 임계값 밖이라 직접
+  `grep '\[62[0-9]\]'`/`\[630\]`으로 ERRORS.md 를 조준 추적해 찾았다(하이브리드 검색의
+  한계 — 짧은 오류 문구 하나로는 유사도가 갈라진다). 신규 프로세스로 직접 재현:
+  `login_backoff_active_reason()=="captcha_unattended"` → `precheck_error_type("naver",
+  ["쿠키 파일 없음 또는 빈 list"], "captcha_unattended")=="NaverLoginCaptchaUnattended"` →
+  `is_transient(..., source="publish")==True`. [630]/[631]의 코드 변경
+  (`login_manager.py`·`naver_cookie_refresher.py`)은 그대로 옳았다 — 코드 수정 대상이
+  아니라는 결론도 유효.
+- 해결: id=5915·5917(같은 창의 자동갱신 실패 형제 레코드) 을 `mark_error_status(...,
+  "wontfix", ...)` 로 재종결(circuit breaker 리셋 이후 상태). `pytest
+  tests/test_learning_signal.py` 42 passed 재확인, `precommit_check --category
+  auth,copytruth` 0위반 재확인. **코드·git 커밋은 변경하지 않음** — [630]/[631]의 diff 는
+  여전히 워킹트리에 미커밋 상태로 남아 있고, 이 리페어 세션은 git commit/push 를 하지
+  않는다(auto_repair 공통 금지 행위). 라이브 데몬(PID 40543, 기동 2026-08-11T12:31:11)은
+  여전히 그 이전 코드를 메모리에 들고 있어 *이 fix 가 실제로 발효되려면 데몬 재시작이
+  필요* — 다음 재시작(수동 또는 정기 유지보수) 시 이 백오프 창이 재발해도 precheck
+  경로가 더 이상 오탐 티켓을 만들지 않는다.
+- 파일: (변경 없음 — DB `error_log` 상태만 갱신)
+- 교훈: circuit breaker 의 `mark_error_status(error_id, "new")` 리셋은 *진행 중* 레코드를
+  재청구용으로 살려두려는 의도지만, **이미 다른 세션이 wontfix 로 닫은 레코드까지 구분
+  없이 되살린다** — 종결 판정과 회로차단 리셋이 같은 상태 필드(`status`)를 놓고 경합한다.
+  터미널 상태(wontfix/fixed)는 회로차단기가 건드리지 않아야 "결론 재사용"이 실제로
+  재사용된다. 지금은 매번 Tier-2 세션 하나를 다시 태워서야 같은 결론에 도달한다 — [625]가
+  harness 경로에 이식한 "결론을 캐싱하는 코드"가 아직 이 circuit-breaker 교차점까지는
+  닿지 않았다는 뜻. (다음 작업 후보 — 이번 세션 범위 밖: `_circuit_blocked` 이 `new` 로
+  되돌리기 전 현재 status 가 이미 터미널이면 건드리지 않도록 가드 추가.)
+
+## [633] ✅ 해결 — 자동수정 백업(.bak)이 credentials 폴더 규칙을 어겼다 (2026-08-12)
+
+- **증상**: `test_시크릿_파일_권한이_소유자전용` 실패 —
+  `JARVIS08_PUBLISH/credentials/login_manager.py.bak` 권한 0o644.
+- **원인**: GUARDIAN 자동수정이 `shutil.copy2` 로 백업을 뜨는데, copy2 는 **원본 권한을
+  그대로 승계**한다. 소스는 0644 라 백업도 0644 가 됐다. 그런데 그 백업이 떨어지는
+  `credentials/` 는 **git 미추적 파일을 전부 '비밀' 로 취급**하는 폴더다(쿠키·토큰과 한 칸).
+  08-12 08:56 GUARDIAN 이 `login_manager.py`·`naver_cookie_refresher.py` 를 자동수정하며 생성.
+- **해결**: 백업을 만드는 **모든 지점**에서 0600 을 보장 —
+  `error_fixer._backup`(copy2 후 chmod) + `agent_tools` 2곳(write_bytes 후 chmod).
+  기존 잔존 파일 2개도 교정.
+- **파일**: `JARVIS07_GUARDIAN/error_fixer.py` · `JARVIS01_MASTER/agent_tools.py`
+- **교훈**: **`copy2` 는 권한까지 복사한다** — 원본이 안전한 곳에 있다고 사본도 안전한 건
+  아니다. 파일이 *어느 폴더에 떨어지는가* 가 요구 권한을 정한다.

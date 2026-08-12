@@ -506,8 +506,8 @@ def auto_refresh_if_needed(
 # 6) cron 잡 단일 진입점
 # ══════════════════════════════════════════════════════════
 
-def precheck_error_type(platform: str, issues: list) -> str:
-    """사전점검 실패 → 오류 타입. *이미 있는 판단*(플랫폼·이슈)에서 기계적으로 만든다.
+def precheck_error_type(platform: str, issues: list, backoff_reason: str = "") -> str:
+    """사전점검 실패 → 오류 타입. *이미 있는 판단*(플랫폼·이슈·백오프 사유)에서 기계적으로 만든다.
 
     ★ 중앙 매핑표를 두지 않는다 (CLAUDE.md ERRORS [547]). 새 이슈 문구가 생기면
       타입이 자동으로 따라온다. 뭉뚱그린 `RuntimeError` 로 적으면 타입 기반 게이트와
@@ -520,7 +520,23 @@ def precheck_error_type(platform: str, issues: list) -> str:
       — 판정 로직과 분류 로직이 같은 파일 안에서도 따로 놀면 샌다는 실례. "만료 임박"
       을 먼저 검사해 레거시 문구(테스트 고정값)는 그대로 `CookieStale` 유지하고,
       실유효성 판정 문구는 새 kind 로 갈라 *어떤 근거로 만료를 판정했는지* 도 보존한다.
+
+    ★ `backoff_reason` (2026-08-12, ERRORS [623]~[629] 후속): harness precondition
+      (`economic_poster._verify_platform`)과 `_naver_cookie_ready`(scheduler.py) 는
+      이미 `naver_login_error_type()` 으로 위임해 캡차·백오프를 "사람이 필요한 사유"로
+      세분화하는데(2026-08-11 커밋 eb70afc), 이 precheck 경로만 이슈 *문구* 만 보고
+      "쿠키 파일 없음" → `CookieMissing` 으로 뭉뚱그려 매 백오프 창마다 동일한 오탐
+      리페어 티켓을 새로 냈다. 같은 판정을 복제하지 않고 도메인(naver_cookie_refresher)
+      에 위임 — 백오프 중이면 이슈 문구와 무관하게 `naver_login_error_type()` 결과를
+      그대로 쓴다(①③).
     """
+    if platform == "naver" and backoff_reason:
+        try:
+            from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+                naver_login_error_type)
+            return naver_login_error_type(backoff_reason)
+        except Exception:                                  # noqa: BLE001
+            pass
     txt = " ".join(issues or [])
     kind = ("CookieMissing" if "쿠키 파일 없음" in txt
             else "CookieStale" if "만료 임박" in txt
@@ -530,11 +546,20 @@ def precheck_error_type(platform: str, issues: list) -> str:
     return "Precheck" + platform.capitalize() + kind
 
 
-def refresh_failed_error_type(platform: str) -> str:
-    """자동 갱신 시도 후에도 여전히 실패 → 오류 타입. *이미 있는 판단*(플랫폼)에서 파생.
+def refresh_failed_error_type(platform: str, backoff_reason: str = "") -> str:
+    """자동 갱신 시도 후에도 여전히 실패 → 오류 타입. *이미 있는 판단*(플랫폼·사유)에서 파생.
 
     ★ 중앙 매핑표를 두지 않는다 (CLAUDE.md ERRORS [547]).
+    ★ `backoff_reason` — `precheck_error_type` 과 동일 이유(위 참조)로 갱신 시도 *후* 에도
+      사람이 필요한 사유(백오프·CAPTCHA)면 `naver_login_error_type()` 결과로 위임한다.
     """
+    if platform == "naver" and backoff_reason:
+        try:
+            from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+                naver_login_error_type)
+            return naver_login_error_type(backoff_reason)
+        except Exception:                                  # noqa: BLE001
+            pass
     return "Precheck" + platform.capitalize() + "AutoRefreshFailed"
 
 
@@ -556,6 +581,17 @@ def _alert_refresh_failed(still_failing: dict[str, dict[str, Any]]) -> None:
     """
     for plat, info in still_failing.items():
         issues = list(info.get("issues") or [])
+        # ★ 갱신을 이미 시도했으므로 (job_pre_publish_check 가 방금 auto_refresh_if_needed
+        #   를 불렀다) `last_login_failure()` 가 이번 프로세스 안에서 갱신됐다 — 백오프·
+        #   CAPTCHA 를 만났으면 여기 반영된다(economic_poster._verify_platform 과 동일 순서).
+        _reason = ""
+        if plat == "naver":
+            try:
+                from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+                    last_login_failure)
+                _reason = last_login_failure()
+            except Exception:                                 # noqa: BLE001
+                pass
         try:
             msg = (f"🚨 [발행 前 점검] {plat.upper()} 자동 갱신도 실패 — 직접 로그인 필요\n"
                    + "\n".join(f"· {i}" for i in issues)
@@ -567,7 +603,7 @@ def _alert_refresh_failed(still_failing: dict[str, dict[str, Any]]) -> None:
             log.warning(f"[login_manager/pre_check] 갱신실패 알림 실패: {type(e).__name__}: {e}")
         try:
             from JARVIS07_GUARDIAN.error_collector import report  # noqa: PLC0415
-            report(refresh_failed_error_type(plat), "publish", module=__name__,
+            report(refresh_failed_error_type(plat, _reason), "publish", module=__name__,
                    func_name="job_pre_publish_check",
                    message=f"[발행 前 점검] {plat}: 자동 갱신 시도 후에도 실패 — {'; '.join(issues)}")
         except Exception as e:                                # noqa: BLE001
@@ -584,6 +620,17 @@ def _alert_precheck(platform: str, info: dict) -> None:
       즉 이 경고는 "곧 발행이 깨진다" 는 예고인데 아무도 듣지 못했다.
     """
     issues = list(info.get("issues") or [])
+    # ★ 갱신 시도 *전* 이라 `last_login_failure()`(이번 프로세스 내 상태)는 아직 비어
+    #   있을 수 있다 — 백오프는 파일에 먼저 있으므로 `login_backoff_active_reason()` 으로
+    #   직접 확인한다(2026-08-12, ERRORS [623]~[629] 후속).
+    _backoff_reason = ""
+    if platform == "naver":
+        try:
+            from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+                login_backoff_active_reason)
+            _backoff_reason = login_backoff_active_reason()
+        except Exception:                                 # noqa: BLE001
+            pass
     try:
         extra = ""
         if platform == "naver":
@@ -602,7 +649,7 @@ def _alert_precheck(platform: str, info: dict) -> None:
         log.warning(f"[login_manager/pre_check] 알림 실패: {type(e).__name__}: {e}")
     try:
         from JARVIS07_GUARDIAN.error_collector import report  # noqa: PLC0415
-        report(precheck_error_type(platform, issues), "publish", module=__name__,
+        report(precheck_error_type(platform, issues, _backoff_reason), "publish", module=__name__,
                func_name="job_pre_publish_check",
                message=f"[발행 前 점검] {platform}: {'; '.join(issues)}")
     except Exception as e:                                # noqa: BLE001

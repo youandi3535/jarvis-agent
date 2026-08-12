@@ -517,6 +517,7 @@ def test_사전점검_실패가_사람과_원장_양쪽에_간다(monkeypatch, t
     이 경고는 "곧 발행이 깨진다" 는 예고인데 아무도 듣지 못했다.
     """
     import JARVIS08_PUBLISH.credentials.login_manager as lm
+    import JARVIS08_PUBLISH.credentials.naver_cookie_refresher as nc
     import shared.notify as notify
     from JARVIS07_GUARDIAN import error_collector as ec
 
@@ -529,6 +530,10 @@ def test_사전점검_실패가_사람과_원장_양쪽에_간다(monkeypatch, t
     monkeypatch.setattr(lm, "auto_refresh_if_needed", lambda *a, **k: None)
     monkeypatch.setattr(lm, "verify_all_logins", lambda platforms=("naver", "tistory"): {
         "naver": {"ok": False, "issues": ["쿠키 파일 없음 또는 빈 list"], "cookie_age_h": 1e9}})
+    # ★ 이 테스트는 "백오프와 무관하게 쿠키가 없는" 시나리오를 검증한다 — 저장소의
+    #   *실제* login_backoff.json(캡차로 활성 상태일 수 있음)이 새어 들어오지 않도록
+    #   명시적으로 "백오프 없음"을 고정한다(2026-08-12, [630] 후속 — 격리 결함 수정).
+    monkeypatch.setattr(nc, "login_backoff_active_reason", lambda: "")
 
     lm.job_pre_publish_check()
 
@@ -536,6 +541,38 @@ def test_사전점검_실패가_사람과_원장_양쪽에_간다(monkeypatch, t
     assert reported, "사전점검 실패가 오류 원장에 안 남는다"
     assert reported[0][0] == "PrecheckNaverCookieMissing", \
         f"뭉뚱그린 타입으로 박제됐다: {reported[0][0]}"
+
+
+def test_사전점검_백오프_중이면_사람필요_타입으로_분류된다(monkeypatch, tmp_path):
+    """★ [630] — precheck 경로가 harness·scheduler 두 경로와 달리 백오프를 몰라서
+
+    캡차 백오프 창마다 `PrecheckNaverCookieMissing`(코드 버그처럼 보이는 타입)으로
+    오탐 리페어 티켓을 냈다. 이슈 문구가 "쿠키 파일 없음" 이어도 백오프 중이면
+    `naver_login_error_type()` 파생 타입(사람이 필요함을 나타냄)으로 나가야 한다.
+    """
+    import JARVIS08_PUBLISH.credentials.login_manager as lm
+    import JARVIS08_PUBLISH.credentials.naver_cookie_refresher as nc
+    import shared.notify as notify
+    from JARVIS07_GUARDIAN import error_collector as ec
+    from JARVIS07_GUARDIAN.severity import is_transient
+
+    reported: list = []
+    monkeypatch.setattr(notify, "send_tg", lambda m, **k: None)
+    monkeypatch.setattr(ec, "report", lambda *a, **k: reported.append(a))
+    monkeypatch.setattr(lm, "NAVER_COOKIE_PATH", tmp_path / "none.pkl")
+    monkeypatch.setattr(lm, "_COOKIE_WATCH", tmp_path / "watch.json")
+    monkeypatch.setattr(lm, "auto_refresh_if_needed", lambda *a, **k: None)
+    monkeypatch.setattr(lm, "verify_all_logins", lambda platforms=("naver", "tistory"): {
+        "naver": {"ok": False, "issues": ["쿠키 파일 없음 또는 빈 list"], "cookie_age_h": 1e9}})
+    monkeypatch.setattr(nc, "login_backoff_active_reason", lambda: "captcha_unattended")
+
+    lm.job_pre_publish_check()
+
+    assert reported, "사전점검 실패가 오류 원장에 안 남는다"
+    et = reported[0][0]
+    assert et == "NaverLoginCaptchaUnattended", f"백오프 중인데 뭉뚱그린 타입: {et}"
+    assert is_transient(et, source="publish") is True, \
+        "사람이 필요한 타입인데 Tier-2 낭비 대상으로 남는다"
 
 
 def test_사전점검_정상이면_조용하다(monkeypatch, tmp_path):

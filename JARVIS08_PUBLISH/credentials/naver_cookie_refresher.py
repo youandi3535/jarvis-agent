@@ -152,23 +152,48 @@ _BACKOFF_FILE = Path(__file__).resolve().parent / "login_backoff.json"
 CAPTCHA_BACKOFF_SEC = int(os.getenv("NAVER_CAPTCHA_BACKOFF_SEC", str(6 * 3600)))
 
 
-def login_backoff_reason() -> str:
-    """지금 자동 로그인을 시도하면 안 되는 이유 — 없으면 빈 문자열.
+def _login_backoff_state() -> tuple:
+    """백오프 파일을 파싱해 (raw reason, 남은 초) 반환. 없거나 만료면 ("", 0.0).
 
-    ★ 사람이 직접 푸는 경로(`manual_login_and_save`)는 이 판정을 보지 않는다.
-      막는 것은 *무인 반복* 이지 사람의 복구가 아니다.
+    ★ 파싱은 여기 한 곳에서만 한다(① 단일 진입점) — `login_backoff_reason()`(사람이
+      읽는 문장)과 `login_backoff_active_reason()`(타입 파생용 raw reason) 이 함께 쓴다.
     """
     try:
         import json as _js                                # noqa: PLC0415
         _d = _js.loads(_BACKOFF_FILE.read_text(encoding="utf-8"))
         _until = float(_d.get("until") or 0)
     except Exception:                                     # noqa: BLE001
-        return ""                                         # 못 읽으면 막지 않는다(fail-open)
+        return ("", 0.0)                                  # 못 읽으면 막지 않는다(fail-open)
     _left = _until - time.time()
     if _left <= 0:
+        return ("", 0.0)
+    return (str(_d.get("reason") or "captcha"), _left)
+
+
+def login_backoff_reason() -> str:
+    """지금 자동 로그인을 시도하면 안 되는 이유 — 없으면 빈 문자열.
+
+    ★ 사람이 직접 푸는 경로(`manual_login_and_save`)는 이 판정을 보지 않는다.
+      막는 것은 *무인 반복* 이지 사람의 복구가 아니다.
+    """
+    _reason, _left = _login_backoff_state()
+    if not _reason:
         return ""
-    return (f"{_d.get('reason', 'captcha')} 로 자동 로그인 보류 중 "
+    return (f"{_reason} 로 자동 로그인 보류 중 "
             f"(남은 {_left / 60:.0f}분) — 사람이 직접 로그인하면 즉시 해제된다")
+
+
+def login_backoff_active_reason() -> str:
+    """지금 백오프 중이면 raw 사유(`mark_login_backoff` 가 적은 reason 필드) — 없으면 "".
+
+    ★ 왜 필요한가 (2026-08-12, ERRORS [623]~[629] 후속): `login_manager.job_pre_publish_check`
+      는 *refresh 시도 전* 에 실패 사유를 알아야 하는데, `last_login_failure()` 는
+      이번 프로세스에서 `refresh_naver_cookies()` 를 아직 부르지 않았으면 빈 채로
+      남는다 — 백오프는 항상 파일에 먼저 있으므로 여기서 직접 읽는다.
+      `naver_login_error_type()` 으로 타입을 파생할 때 쓴다 — `login_backoff_reason()`
+      의 사람이 읽는 문장은 타입 파생에 못 쓴다.
+    """
+    return _login_backoff_state()[0]
 
 
 def mark_login_backoff(reason: str) -> None:
