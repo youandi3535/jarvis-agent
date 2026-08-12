@@ -2044,7 +2044,19 @@ def try_pattern_fix(error_record: dict) -> Optional[dict]:
     return None
 
 
+def fingerprint_of(error_record: dict) -> str:
+    """오류 레코드 → 지문. `_make_fingerprint` 의 **얇은 공개 래퍼**(새 판단 0).
+
+    ★ 왜 래퍼인가 — 지문 규칙의 주인은 `_make_fingerprint`(정규화 7종 placeholder) 하나다.
+      밖에서 쓰려고 같은 식을 다시 적으면 그 순간 사본이 되고, 정규화가 바뀌면 갈린다(①).
+      `bandit_arm_name` 도 같은 식을 쓰므로 규칙은 이미 한 곳에 있다 — 문만 연다.
+    """
+    return _make_fingerprint(str(error_record.get("error_type", "") or ""),
+                             str(error_record.get("message", "") or ""))
+
+
 __all__ = [
+    "fingerprint_of",
     "try_pattern_fix", "record_pattern_hit", "record_sdk_fix", "bandit_arm_name",
     "stats", "_make_fingerprint",
     "_infer_domain", "backfill_domains",   # ★ ADR 008 Phase 4

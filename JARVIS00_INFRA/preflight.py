@@ -416,10 +416,50 @@ def _check_data_verifier(report: PreflightReport) -> None:
 
 # ── 검증기 카탈로그 ────────────────────────────────────────────────
 
+
+def _check_repair_budget(report: PreflightReport) -> None:
+    """자율 SDK 수리 **브레이크가 실제로 무는지** 동작으로 확인 (patch_effective 표준).
+
+    ★ 왜 Layer 0 인가 (2026-08-12)
+      이 가드는 돈을 막는다 — 7일 $81.62(전체 LLM 지출의 약 절반)를 쓰던 경로다. 그런데
+      가드가 조용히 죽으면 아무도 모른 채 지출이 돌아온다. `budget_effective()` 를 만들어
+      두고도 **호출자가 0곳** 이면 `_check_data_verifier` 가 겪은 그 상태(있는데 안 도는
+      안전장치)와 똑같다. 그래서 부팅에서 한 번 물어본다.
+
+    ★ 왜 fail 이 아니라 warn 인가 (② 상황에서 파생 — chart_font·data_verifier 관례)
+      가드가 죽으면 *지출이 늘어날 뿐* 발행·수집·분석은 정상이다. 부팅을 막으면 피해가
+      원인보다 훨씬 커진다. 이 사고의 본질도 "깨졌다" 가 아니라 **"아무도 몰랐다"** 다.
+
+    ★ 장부 조회 실패는 따로 본다 — 그때는 상한이 통째로 무효인데 화면은 0 을 보고한다.
+    """
+    try:
+        from JARVIS07_GUARDIAN.repair_budget import (budget_effective, budget_state,
+                                                     gate_enabled, GATE_ENV)
+    except Exception as e:
+        report.warn("repair_budget", "import",
+                    f"SDK 수리 브레이크 확인 불가: {type(e).__name__}: {e}")
+        return
+    try:
+        if not gate_enabled():
+            report.warn("repair_budget", "gate",
+                        f"자율 SDK 수리 브레이크가 꺼져 있음 ({GATE_ENV}=0) — 상한 없이 지출된다")
+            return
+        st = budget_state()
+        if st.get("ledger_error"):
+            report.warn("repair_budget", "ledger",
+                        f"장부 조회 실패 — 지문·쿨다운·예산 상한이 모두 무효: {st['ledger_error'][:80]}")
+            return
+        if not budget_effective():
+            report.warn("repair_budget", "effective",
+                        "브레이크가 상한 초과 상황을 막지 못함 — 자율 SDK 수리 지출이 무제한이다")
+    except Exception as e:
+        report.warn("repair_budget", "selfcheck", f"확인 실패: {type(e).__name__}: {e}")
+
 _CHECKERS: tuple[tuple[str, Callable[[PreflightReport], None]], ...] = (
     ("policy_file",    _check_policy_files),     # 헌법 파일이 첫 게이트
     ("chart_font",     _check_chart_font),       # 차트 한글 폰트 *효과* 확인 (ERRORS [459])
     ("data_verifier",  _check_data_verifier),    # 이미지 수치 검증기 *효과* 확인 (2026-08-10)
+    ("repair_budget",  _check_repair_budget),    # 자율 SDK 수리 브레이크 *효과* 확인 (2026-08-12)
     ("env_var",        _check_env_vars),         # 환경변수 먼저 로드해야 다른 검증 가능
     ("claude_sdk_binary", _check_claude_sdk_binary),  # 바이너리 없으면 SDK 호출 불가
     ("disk",           _check_disk_space),       # 디스크 부족이면 즉시 차단

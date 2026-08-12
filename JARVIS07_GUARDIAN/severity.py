@@ -639,6 +639,49 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+# harness 이슈 줄(economic_poster·incident_responder 가 기록하는 구조화 포맷):
+#   "• [naver] nv_precondition: login_invalid_backoff: 캡차 백오프"
+#      └플랫폼┘ └─step─┘        └────kind────┘        └detail┘
+# ★ 이 정규식의 주인은 severity 다 (2026-08-12 — ①).
+#   kind 를 *해석* 하는 판정(`non_code_issue_kinds`·`_harness_says_infra`·
+#   `_harness_says_naver_login_human`)이 전부 여기 있는데, kind 를 *뽑는* 코드만
+#   incident_responder 에 따로 있었다. 뽑기와 해석이 갈라져 있으면 harness 가
+#   포맷을 바꿀 때 한쪽만 따라간다 — 그게 곧 드리프트다.
+_HARNESS_KIND_RE = re.compile(
+    r"^[ \t]*[•\-\*]?[ \t]*\[[a-z_]+\][ \t]*[^:\n]+:[ \t]*([a-z][a-z0-9_]*)[ \t]*:",
+    re.M,
+)
+
+_MAX_KINDS = 20           # harness kind 추출 상한 (로그 꼬리에 같은 줄이 반복되는 경우 방어)
+
+
+def kinds_in_text(text: str) -> list[str]:
+    """★ 공개 API — 자유 텍스트에서 harness 이슈 `kind` 목록 추출 (구조 추출, 판정 아님).
+
+    ★ 왜 severity 에 있나 (①)
+      구조화 레코드가 있으면 `kind_of(record)` 로 끝난다. 그러나 **발행 실패 대응
+      경로(incident_responder → auto_repair)** 는 레코드가 아니라 *로그 텍스트 한 덩어리*
+      를 들고 다닌다(`context`). 그 텍스트에서 kind 를 꺼내는 일이 판정의 입구인데,
+      입구가 severity 밖에 있으면 "kind 로 판정한다" 는 원칙이 한쪽 통로에서만 산다.
+
+    ★ 어휘 목록이 아니라 *꼴* 로 뽑는다
+      `login_invalid_*` 같은 특정 이름을 적지 않는다. harness 가 싣는 **자리**(대괄호
+      플랫폼 → step → kind)만 보므로, 새 kind 가 생기면 자동으로 따라온다.
+      뽑은 kind 의 *의미* 판정은 `non_code_issue_kinds()` / `is_transient()` 가 한다.
+
+    Returns: 등장 순서대로 중복 제거한 kind 목록 (최대 `_MAX_KINDS` 개).
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for k in _HARNESS_KIND_RE.findall(text or ""):
+        if k not in seen:
+            seen.add(k)
+            out.append(k)
+        if len(out) >= _MAX_KINDS:
+            break
+    return out
+
+
 def kind_of(record: dict) -> str:
     """오류 레코드에서 harness 이슈 kind 추출 — context(JSON) 단일 경로."""
     if not isinstance(record, dict):

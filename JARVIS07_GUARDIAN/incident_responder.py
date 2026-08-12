@@ -66,13 +66,8 @@ _EXC_LINE_RE = re.compile(
 
 # harness 이슈 줄(economic_poster 가 기록하는 구조화 포맷): "[naver] step: kind: detail"
 #   kind 는 구조화 필드라 네이버·티스토리 × 경제·테마 4조합에 동일 적용된다(③).
-_HARNESS_KIND_RE = re.compile(
-    r"^[ \t]*[•\-\*]?[ \t]*\[[a-z_]+\][ \t]*[^:\n]+:[ \t]*([a-z][a-z0-9_]*)[ \t]*:",
-    re.M,
-)
 
 _TYPE_SCAN_CHARS = 1500   # 타입 추출 스캔 상한 (로그 꼬리 3000자 전체 스캔 금지)
-_MAX_KINDS = 20           # harness kind 추출 상한
 
 
 def _tg(msg: str) -> None:
@@ -134,8 +129,14 @@ def _is_code_bug_type(etype: str) -> bool:
 
 
 def _harness_kinds(text: str) -> list[str]:
-    """harness 이슈 kind 목록 추출 (구조 추출 — 판정 아님)."""
-    return _HARNESS_KIND_RE.findall(text or "")[:_MAX_KINDS]
+    """harness 이슈 kind 목록 추출 — **severity 에 위임**(구조 추출, 판정 아님).
+
+    ★ 2026-08-12: 정규식·상한 사본을 여기서 **삭제** 했다. severity 가 kind 의 주인이고
+      뽑기와 해석이 갈라지면 드리프트다(①). 종전엔 severity 로 '이관 선언' 만 하고 원본을
+      안 지워 바이트 동일한 두 벌이 공존했다 — CLAUDE_INFRA 「이관 완전성」 위반이었다.
+    """
+    from JARVIS07_GUARDIAN.severity import kinds_in_text
+    return kinds_in_text(text)
 
 
 def _detect_error_type(error_text: str) -> str:
@@ -299,6 +300,40 @@ def _try_sdk_targeted_fix(
     return False
 
 
+# ── 자율 SDK 수리 게이트 — *관측만* 위임 (★ 2026-08-12) ──────────────────
+#   태울지 말지의 판정은 촉점(`auto_repair.run_auto_repair_targeted` → `repair_budget`)
+#   단독이다. 이 모듈은 그 판정을 **다시 하지 않는다** — 게이트를 흉내내는 순간
+#   문이 두 벌이 되고, 그게 지금 고치고 있는 병이다(①).
+#   여기서 필요한 것은 딱 하나: "방금 그 호출이 *실제로* SDK 세션을 태웠나?"
+#   그래야 ① 사용자에게 '왜 수리를 건너뛰었는지' 를 말해주고 ② 학습 기록에 남긴다.
+#   관측 함수도 사본을 만들지 않고 `guardian_agent` 의 한 벌을 쓴다.
+def _sdk_ledger_snapshot():
+    """자율 SDK 수리 장부 스냅샷 (미가용이면 None) — 계산은 guardian_agent 한 벌."""
+    try:
+        from JARVIS07_GUARDIAN.guardian_agent import sdk_repair_ledger_snapshot
+        return sdk_repair_ledger_snapshot()
+    except Exception:
+        return None
+
+
+def _sdk_session_ran(before) -> bool:
+    """스냅샷 이후 SDK 세션이 실제로 돌았는가 (판정 불가면 True — 보수적)."""
+    try:
+        from JARVIS07_GUARDIAN.guardian_agent import sdk_session_ran
+        return bool(sdk_session_ran(before))
+    except Exception:
+        return True
+
+
+def _budget_brief() -> str:
+    """예산 현황 한 줄 — 문구의 주인은 게이트(repair_budget). 여기서 조립하지 않는다."""
+    try:
+        from JARVIS07_GUARDIAN.repair_budget import status_line
+        return (status_line() or "").strip()
+    except Exception:
+        return ""
+
+
 def _call_retry_fn(fn: Callable) -> bool:
     """retry_fn 호출. True/False 또는 dict(success=...) 모두 정규화."""
     try:
@@ -311,18 +346,25 @@ def _call_retry_fn(fn: Callable) -> bool:
         return False
 
 
-def posting_error_type(error_class: str, recovered: bool) -> str:
+def posting_error_type(error_class: str, recovered: bool, *,
+                       repair_gated: bool = False) -> str:
     """발행 실패 분류 + 복구 여부 → 세분화된 error_type (ERRORS [547]).
 
-    `Posting` + PascalCase(분류) + (`Recovered`|`Unrecovered`) 로 **파생**.
+    `Posting` + PascalCase(분류) + [`Gated`] + (`Recovered`|`Unrecovered`) 로 **파생**.
     `_classify()` 가 돌려주는 값이 늘면 타입도 자동으로 따라온다(원칙②).
-      code_bug + 복구  → PostingCodeBugRecovered
-      transient + 실패 → PostingTransientUnrecovered
+      code_bug + 복구            → PostingCodeBugRecovered
+      transient + 실패           → PostingTransientUnrecovered
+      unknown + 수리차단 + 실패  → PostingUnknownGatedUnrecovered
+
+    ★ `repair_gated` (2026-08-12): 자율 SDK 수리가 **게이트에 막혀 아예 안 돌았다** 는
+      뜻. '고치려다 실패' 와 '고칠 기회를 안 준 것' 은 사후 대응이 정반대라 뭉뚱그리면
+      안 된다 — 후자가 쌓이면 사람이 손봐야 한다는 신호다(예산·사람개입·지문 상한).
     """
     import re as _re_p
     parts = [x for x in _re_p.split(r"[_\-\s]+", (error_class or "unknown").strip()) if x]
     body = "".join(x[:1].upper() + x[1:] for x in parts)
-    return f"Posting{body}{'Recovered' if recovered else 'Unrecovered'}"
+    gated = "Gated" if repair_gated else ""
+    return f"Posting{body}{gated}{'Recovered' if recovered else 'Unrecovered'}"
 
 
 def respond(
@@ -357,7 +399,14 @@ def respond(
     error_class = _classify(error_text, returncode)
     log.info(f"[Incident] 오류 분류: {error_class}")
     fix_applied = False
+    sdk_gated   = False     # 자율 SDK 수리가 게이트에 막혀 *아예 안 돌았나*
 
+    # ★ 'unknown' 을 여기서 좁히지 않는다 (2026-08-12 재확인 — 계약 결정 그대로).
+    #   분류 실패는 *모른다* 는 뜻이지 *코드 버그가 아니다* 라는 뜻이 아니다. 이 튜플이
+    #   **아직 타입이 안 붙은 진짜 새 버그** 가 고쳐지는 유일한 통로다(실측: 14일간
+    #   PostingUnknownUnrecovered 1건 — 낭비의 주범이 아니다). 낭비는 분류를 좁혀서가
+    #   아니라 촉점 게이트(`repair_budget`)가 사람개입·지문상한·쿨다운·예산으로 막는다.
+    #   여기에 조건을 하나 더 다는 것이 곧 '문을 두 벌로 만드는' ①원칙 위반이다.
     if error_class in ("code_bug", "unknown"):
         _tg(f"🔍 [GUARDIAN] 오류 분석 중 ({error_class})...")
         error_record = _make_error_record(error_text, job_id)
@@ -367,16 +416,31 @@ def respond(
 
         if not fix_applied:
             # Tier 2: Claude Code SDK targeted (Tier 1 실패 시 직행 — ★ 사용자 박제 2026-05-31)
+            #   ★ 촉점 게이트가 막을 수 있다. 막히면 이 호출은 LLM 0회로 즉시 False —
+            #     '수정 실패' 가 아니라 '시도 자체가 없었음' 이므로 아래에서 구분해 알린다.
             _tg(f"⚙️ [GUARDIAN] Claude Code SDK targeted 수정 시작 (최대 10분)...")
+            _ledger_before = _sdk_ledger_snapshot()
             fix_applied = _try_sdk_targeted_fix(error_text, job_id, failed_platforms, theme, error_record)
+            sdk_gated = (not fix_applied) and (not _sdk_session_ran(_ledger_before))
     else:
         # transient: 코드 수정 없이 대기 후 재시도
         _tg(f"⏳ [GUARDIAN] 일시적 오류({error_class}) — {_TRANSIENT_WAIT}초 대기 후 재시도")
         time.sleep(_TRANSIENT_WAIT)
 
     # ── 재발행 (실패 플랫폼만) ──────────────────────────────────────────
+    #   ★ 수리 여부와 **무관하게** 재발행은 항상 돈다. 재시도는 싸고, 수리를 못 했다고
+    #     복구까지 포기하면 사람이 손댈 때까지 글이 안 나간다.
     if fix_applied:
         _tg(f"✅ [GUARDIAN] 수정 완료! 재발행 시작: {failed_platforms}")
+    elif sdk_gated:
+        # 조용히 건너뛰지 않는다 — *왜* 건너뛰었는지가 사람이 손봐야 할 신호다.
+        # 정확한 사유·다음 가능 시각은 게이트가 직접 보낸 알림에 있다(사본 금지).
+        _brief = _budget_brief()
+        _tg(
+            f"🛑 [GUARDIAN] 자율 SDK 수리 **건너뜀** (게이트 차단 — 상세 사유는 직전 게이트 알림)\n"
+            + (f"{_brief}\n" if _brief else "")
+            + f"🔄 재발행은 그대로 진행합니다: {failed_platforms}"
+        )
     else:
         _tg(f"🔄 [GUARDIAN] 재발행 시도 (수정 미적용): {failed_platforms}")
 
@@ -398,7 +462,10 @@ def respond(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"✅ 복구 성공: {', '.join(succeeded) if succeeded else '없음'}\n"
         f"❌ 미복구: {', '.join(failed_after) if failed_after else '없음'}\n"
-        f"🔧 코드 수정: {'적용됨' if fix_applied else '없음 (재시도만)'}"
+        f"🔧 코드 수정: "
+        + ("적용됨" if fix_applied
+           else ("없음 — 자율 SDK 수리 차단(게이트), 재시도만" if sdk_gated
+                 else "없음 (재시도만)"))
     )
 
     # ── 수동 수정 기록 (GUARDIAN 자기 작업도 박제 대상) ────────────────
@@ -410,10 +477,14 @@ def respond(
             description=(
                 f"포스팅 실패 자동 대응: {failed_platforms} → 복구 {succeeded} | "
                 f"코드 수정={'적용' if fix_applied else '없음'}"
+                # ★ 차단도 학습 자산이다 (2026-08-12) — '고치려다 실패' 와 '기회를 안 준
+                #   것' 을 같은 기록으로 남기면 회고에서 구분이 불가능하다.
+                + (" | 자율 SDK 수리=게이트 차단(미실행)" if sdk_gated else "")
             ),
             # ★ 세분화 (ERRORS [547]) — 코드버그/일시적/미상은 대응이 전혀 다르다.
             #   판정은 이미 _classify 가 했다 — 그 결과에서 파생(재분류 금지, 원칙①).
-            error_type=posting_error_type(error_class, bool(succeeded)),
+            error_type=posting_error_type(error_class, bool(succeeded),
+                                          repair_gated=sdk_gated),
             severity="high",
             actor="guardian",
         )

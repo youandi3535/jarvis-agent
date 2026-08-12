@@ -88,6 +88,12 @@ def build_oauth_env() -> dict[str, str]:
 # (rate_limit_event 등) 도입하면 SDK 업데이트 전까지 query 루프 중단.
 # 우리 monkey-patch: 미지 type 을 SystemMessage 로 흡수 → 루프 계속.
 
+# ★ 텔레메트리 소스 태그 — **이 이름의 주인은 여기다** (사용자 박제 2026-08-12)
+#   `llm_token_usage.source` 에 박히는 값이고, 소비자(비용 집계·예산 가드)가 이 문자열로
+#   조회한다. 종전엔 기록부(:225)와 조회부(repair_budget)에 리터럴이 각각 있어, 태그가
+#   바뀌면 비용이 조용히 $0.00 이 되고 금액 상한이 영원히 안 무는 구조였다.
+USAGE_SOURCE = "sdk_query"
+
 _PATCH_INSTALLED = False
 
 
@@ -222,7 +228,7 @@ def _record_sdk_usage(meter: dict, ok: bool, model: str = "") -> None:
         record_call(
             alias=alias, model=model or "", usage=meter.get("usage"),
             cost_usd=meter.get("cost") or 0.0, duration_ms=meter.get("dur") or 0,
-            num_turns=meter.get("turns") or 0, ok=ok, source="sdk_query",
+            num_turns=meter.get("turns") or 0, ok=ok, source=USAGE_SOURCE,
         )
     except Exception:                                       # noqa: BLE001
         pass
@@ -474,6 +480,7 @@ _install_message_parser_patch()
 
 
 __all__ = [
+    "USAGE_SOURCE",
     "run_sdk_query",
     "build_oauth_env",
     "_EXTRA_PATHS",
