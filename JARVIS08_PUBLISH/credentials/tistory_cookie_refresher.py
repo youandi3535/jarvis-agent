@@ -12,7 +12,8 @@ tistory_cookie_refresher.py
 
 사용법:
   python -m JARVIS08_PUBLISH.credentials.tistory_cookie_refresher          # 쿠키 체크
-  python -m JARVIS08_PUBLISH.credentials.tistory_cookie_refresher --force  # 강제 갱신
+  python -m JARVIS08_PUBLISH.credentials.tistory_cookie_refresher --force   # 강제 갱신
+  python  JARVIS08_PUBLISH/credentials/tistory_cookie_refresher.py --manual  # 사람이 직접 로그인
   from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import run
   ok = run(force=False)                       # 일반 체크
   ok, driver = run(force=True, return_driver=True)   # 강제 + driver 재사용
@@ -82,16 +83,77 @@ TS_BLOG      = TS_URL.replace("https://", "").replace("http://", "").split(".")[
 TS_USERNAME  = os.getenv("TS_USERNAME", "")
 TS_PASSWORD  = os.getenv("TS_PASSWORD", "")
 
-# 자동 로그인 흐름이 막힐 신호 — 페이지 텍스트에 등장하면 수동 개입 필요
-_HUMAN_INTERVENTION_KEYWORDS = (
-    "인증번호", "보안문자", "보안 문자", "captcha", "CAPTCHA",
-    "기기 등록", "디바이스 등록", "새로운 기기", "본인 확인",
-    "추가 인증", "2단계", "2차 인증", "OTP", "휴대전화 인증",
-    "이메일 인증", "QR 코드", "QR코드",
-)
-
 _RETRY_MAX = 3            # 일시 장애 자동 재시도 횟수
 _RETRY_DELAY_SEC = 5      # 재시도 간 대기
+
+# ══════════════════════════════════════════════════════════════════
+# ★ 사람 호출·백오프·실패 사유 — 상태기는 `login_manager` 한 벌뿐 (2026-08-13, ③원칙)
+# ══════════════════════════════════════════════════════════════════
+#
+# ★ 종전 이 파일에는 그런 경로가 **0곳** 이었다. 네이버만 백오프·사람 호출·실패 사유·
+#   캡차 판정을 갖고 있어서, 티스토리는 쿠키가 만료돼 있어도 사람에게 갈 길이 없었다.
+#   `verify_all_logins()` 는 ok=False 를 알고 있었는데 그 다음이 없었다(2026-08-13 실측).
+# ★ **네이버 코드를 여기 복사하지 않는다**(①). 상태기는 `login_manager` 로 승격됐고
+#   양쪽이 그 한 벌을 쓴다. 여기 남는 것은 *이 플랫폼 고유의 것* 뿐 —
+#   어떤 사유가 사람을 필요로 하는가(`HUMAN_REQUIRED_REASONS`)와
+#   이번 프로세스의 마지막 실패(`_LAST_FAILURE`) 두 가지다.
+PLATFORM = "tistory"
+
+
+def _lm():
+    """로그인 상태기 단일 진입점 — **함수 지역 import**(모듈 초기화 순환 회피).
+
+    `login_manager` 는 모듈 로드 시 네이버 refresher 에서 쿠키 경로를 받아온다.
+    여기서 모듈 레벨로 붙잡으면 import 순서에 따라 부분 초기화 모듈을 잡을 수 있다 —
+    같은 이유로 `_is_network_up()` 도 지역 import 다.
+    """
+    from JARVIS08_PUBLISH.credentials import login_manager as _m
+    return _m
+
+
+# ★ 이 사유들은 *사람이 화면 앞에 있어야만* 풀린다 — 코드 수정으로 해결 불가.
+#   네이버의 `CAPTCHA_REASONS` 와 **동렬**이고, `login_manager.human_required_reasons()`
+#   가 이 이름을 규약으로 읽어 `backoff` 를 얹는다(② 파생 — 목록을 두 벌로 만들지 않는다).
+#   `credentials_missing`·`login_unconfirmed` 같은 *진짜 결함일 수 있는* 사유는 여기 없다 —
+#   GUARDIAN Tier-2 가 계속 잡아야 사람이 알아챈다.
+HUMAN_REQUIRED_REASONS = frozenset({"human_intervention", "human_timeout"})
+
+# ── 마지막 실패 사유 ────────────────────────────────────────────────
+#
+# ★ 왜 반환형(bool/str|None)을 안 바꾸나: 호출자를 전부 손대야 하고 하나라도 놓치면
+#   조용히 깨진다. 사유는 옆문으로 노출한다 — 필요한 호출자만 읽는다(네이버와 동형).
+_LAST_FAILURE: str = ""
+_LAST_SHOT: str = ""      # 마지막 로그인 정지 화면(사람 호출에 동봉)
+
+
+def _fail(reason: str, msg: str = "") -> None:
+    """실패를 기록하고 None 을 돌려준다 — **사유를 잃지 않는 유일한 출구**.
+
+    ★ 종전엔 `return None`·`return False` 가 열 곳 넘게 흩어져 있어 *무엇 때문에*
+      실패했는지가 어디에도 남지 않았다. 그래서 티스토리 실패는 늘 "그냥 실패" 였다.
+    ★ 사람이 필요한 실패는 여기 한 곳에서 백오프+호출을 처리한다(①) —
+      분기마다 흩뿌리면 새 사유가 생길 때 또 샌다.
+    """
+    global _LAST_FAILURE
+    _LAST_FAILURE = reason
+    if msg:
+        print(msg)
+    try:
+        lm = _lm()
+        if reason in lm.human_required_reasons(PLATFORM):
+            lm.mark_login_backoff(PLATFORM, reason)
+            lm.alert_human_login_needed(PLATFORM, reason, _LAST_SHOT)
+    except Exception as _e:                              # noqa: BLE001
+        print(f"  ⚠️ 사람 호출/백오프 처리 실패: {_e}")
+    return None
+
+
+def last_login_failure() -> str:
+    """직전 티스토리 로그인 실패 사유 (성공했거나 시도 전이면 "").
+
+    `login_manager.current_login_failure_reason("tistory")` 가 이 이름을 규약으로 읽는다.
+    """
+    return _LAST_FAILURE
 
 
 def _check_env_vars() -> tuple[bool, str]:
@@ -103,18 +165,6 @@ def _check_env_vars() -> tuple[bool, str]:
     if missing:
         return False, ", ".join(missing)
     return True, ""
-
-
-def _detect_human_intervention(driver) -> str | None:
-    """페이지 텍스트에서 수동 개입 요구 신호 감지. 발견 시 키워드 반환."""
-    try:
-        page = (driver.page_source or "")[:50000]
-        for kw in _HUMAN_INTERVENTION_KEYWORDS:
-            if kw in page:
-                return kw
-    except Exception:
-        pass
-    return None
 
 
 # ══════════════════════════════════════════
@@ -280,7 +330,19 @@ def cookie_valid_http(timeout: float = 8.0) -> "bool | None":
                      allow_redirects=False)
         loc = r.headers.get("Location", "")
         if r.status_code in (301, 302, 303, 307, 308):
-            return not is_login_redirect(loc)
+            if not is_login_redirect(loc):
+                return True
+            # ★ 로그인 리다이렉트를 **만료로 단정하지 않는다** (2026-08-13 실측 정정)
+            #   같은 쿠키를 브라우저(`check_cookie_valid`)는 정상으로 본다. 실측:
+            #     최근 3일 이 판정이 "만료" 6회 → 그 직후 발행 **6회 전부 성공**
+            #     (08-10 07:24 · 21:30 / 08-11 21:32 / 08-12 07:27 · 21:39 / 08-13 07:28)
+            #   직접 요청해 보니 브라우저 UA 를 붙여도 302 → /auth/login 이었다.
+            #   즉 `TSSESSION` 단독 HTTP 로는 manage 에 **도달할 수 없는 것이 정상** 이고,
+            #   이 경로로는 유효/만료를 가릴 수 없다. 그런데 그 무능을 '만료' 로 적어
+            #   하루 2회 거짓 경보(`PrecheckTistoryCookieExpired`)를 냈다.
+            #   → 이 함수 자신의 계약("'모른다' 를 '만료' 로 적으면 거짓 경보가 된다")대로 None.
+            #   판정이 필요하면 소비자와 같은 방식인 `check_cookie_valid(driver)` 를 쓴다(①).
+            return None
         return r.status_code < 400
     except Exception as e:                               # noqa: BLE001
         print(f"  ⚠️ 티스토리 쿠키 HTTP 판정 불가: {type(e).__name__}: {e}")
@@ -368,8 +430,8 @@ def refresh_cookie(driver) -> str | None:
     print("  🔄 카카오 로그인 시작...")
 
     if not TS_USERNAME or not TS_PASSWORD:
-        print("  ❌ .env에 TS_USERNAME 또는 TS_PASSWORD가 없습니다.")
-        return None
+        return _fail("credentials_missing",
+                     "  ❌ .env에 TS_USERNAME 또는 TS_PASSWORD가 없습니다.")
 
     try:
         # 1. 티스토리 메인 접속 (쿠키 초기화)
@@ -434,10 +496,11 @@ def refresh_cookie(driver) -> str | None:
             _s(0.5)
             print("  ✅ 이메일 입력 완료")
         except Exception as e:
-            print(f"  ❌ 이메일 입력란 못 찾음: {e}")
-            _g_report("writer", e, module=__name__,
-                      attempt=attempt, max_attempts=_RETRY_MAX)
-            return None
+            # ★ 2026-08-13: 종전 이 자리는 `attempt=attempt` 를 넘겼는데 `attempt` 는
+            #   `run()` 의 지역변수라 이 함수에는 없다 — 예외 처리 도중 NameError 가 나서
+            #   *원래 오류가 통째로 가려졌다*. 실패를 삼키는 실패였다.
+            _g_report("writer", e, module=__name__, max_attempts=_RETRY_MAX)
+            return _fail("login_form_email_missing", f"  ❌ 이메일 입력란 못 찾음: {e}")
 
         # 비밀번호 입력란 찾기
         try:
@@ -449,9 +512,8 @@ def refresh_cookie(driver) -> str | None:
             _s(0.5)
             print("  ✅ 비밀번호 입력 완료")
         except Exception as e:
-            print(f"  ❌ 비밀번호 입력란 못 찾음: {e}")
             _g_report("writer", e, module=__name__)
-            return None
+            return _fail("login_form_password_missing", f"  ❌ 비밀번호 입력란 못 찾음: {e}")
 
         # 5. 로그인 버튼 클릭
         print("  🖱️ 로그인 버튼 클릭...")
@@ -482,42 +544,53 @@ def refresh_cookie(driver) -> str | None:
 
         # 7. 로그인 후 티스토리로 리다이렉트 대기 (+ 2FA/CAPTCHA 감지)
         print(f"  🔍 현재 URL: {driver.current_url[:60]}")
-        _blocker_alerted = False
         for _ in range(15):
             url = driver.current_url
             if "tistory.com" in url and "accounts.kakao" not in url:
                 print("  ✅ 티스토리로 이동 완료")
                 break
-            # ★ 2FA·CAPTCHA·디바이스 인증 감지 — 텔레그램 SOS + 3분 대기
-            blocker = _detect_human_intervention(driver)
-            if blocker and not _blocker_alerted:
-                _blocker_alerted = True
-                print(f"  🚨 수동 개입 필요 — 감지 키워드: '{blocker}'. Chrome 창에서 직접 완료 (최대 3분 대기).")
-                _tg_notify(
-                    f"🚨 티스토리 쿠키 갱신 차단\n"
-                    f"카카오가 '{blocker}' 요구합니다.\n"
-                    f"Chrome 창에서 인증을 직접 완료하면 자동으로 이어집니다 (3분 대기).\n"
-                    f"또는 /refresh_tistory 명령으로 나중에 재시도 가능합니다."
-                )
-                # 최대 3분(36 * 5초) 대기 — Chrome 창 열려 있으므로 사용자 직접 완료 가능
-                for _w in range(36):
+            # ★ 2FA·기기인증·캡차 감지 — **낱말이 아니라 꼴** 로 판정한다(② / ERRORS [595]).
+            #   종전엔 `_HUMAN_INTERVENTION_KEYWORDS` 낱말 나열이었다. 낱말 판정은 이미
+            #   한 번 무너졌다 — 캡차 *없는* 평상시 로그인 페이지에도 `captcha`·`보안` 이
+            #   들어 있어 판정이 항상 참이었다. 판정 본체는 `login_manager` 단독(①).
+            #   `is True` 로만 받는다 — '모름'(None)을 '차단' 으로 단정하지 않는다.
+            if _lm().human_challenge_present(driver) is True:
+                # ★ 티스토리 정지 화면 증거는 지금까지 **0장** 이었다. 추측을 실측으로
+                #   바꿀 유일한 재료라 반드시 남긴다(네이버가 그렇게 선택자를 고쳤다).
+                _shot = _lm().capture_login_stuck(driver, PLATFORM, "human_challenge")
+                globals()["_LAST_SHOT"] = _shot or ""
+                # ★ 3분(36×5초) 하드코딩 폐지 — 무인이면 0초다(플랫폼 무관 파생).
+                #   화면 앞에 아무도 없는데 3분을 버리는 것은 네이버가 482초를 버린
+                #   것과 같은 낭비다(ERRORS [615]). 무인이면 즉시 사람을 부른다.
+                _wait = _lm().human_wait_sec()
+                if _wait <= 0:
+                    return _fail("human_intervention",
+                                 "  ❌ 추가 인증 화면 확인 — 무인 실행이라 대기하지 않는다 "
+                                 "(사람이 직접 로그인해야 함)")
+                print(f"  🚨 추가 인증 필요 — Chrome 창에서 직접 완료해 주세요 (최대 {_wait}초 대기)")
+                _deadline = time.time() + _wait
+                while time.time() < _deadline:
                     _s(5)
                     _cur = driver.current_url
                     if "tistory.com" in _cur and "accounts.kakao" not in _cur:
                         print("  ✅ 사용자가 추가 인증 완료 — 티스토리로 이동 확인")
                         break
                 else:
-                    print("  ❌ 3분 내 인증 완료 안 됨 — 포기")
-                    return None
+                    return _fail("human_timeout", f"  ❌ {_wait}초 내 인증 완료 안 됨 — 종료")
                 break  # outer loop 탈출 (tistory 이동 확인됨)
             _s(2)
 
         if "accounts.kakao" in driver.current_url:
-            print("  ❌ 로그인 실패 — 카카오 페이지에 머물러 있음")
-            blocker = _detect_human_intervention(driver)
-            if blocker:
-                _tg_notify(f"🚨 티스토리 쿠키 갱신 실패 — {blocker} 요구")
-            return None
+            _shot = _lm().capture_login_stuck(driver, PLATFORM, "kakao_stuck")
+            globals()["_LAST_SHOT"] = _shot or ""
+            if _lm().human_challenge_present(driver) is True:
+                return _fail("human_intervention",
+                             "  ❌ 로그인 실패 — 카카오가 추가 인증을 요구한다")
+            # ★ '모름' 을 '사람 필요' 로 단정하지 않는다 — 자격증명·DOM 변경일 수도 있어
+            #   GUARDIAN Tier-2 가 계속 봐야 한다. 대신 화면을 남겨 판정을 고칠 재료로 둔다.
+            return _fail("login_unconfirmed",
+                         "  ❌ 로그인 실패 — 카카오 페이지에 머물러 있음 "
+                         f"(추가 인증 여부 판정 불가, 저장된 화면: {_shot or '저장 실패'})")
 
         print("  ✅ 로그인 완료!")
         _s(3)
@@ -550,14 +623,12 @@ def refresh_cookie(driver) -> str | None:
         for c in cookies:
             print(f"    - {c['name']}: {str(c['value'])[:30]}")
 
-        print("  ❌ TSSESSION 쿠키를 찾지 못함")
-        return None
+        return _fail("cookie_extract_failed", "  ❌ TSSESSION 쿠키를 찾지 못함")
 
     except Exception as e:
-        print(f"  ❌ 로그인 오류: {e}")
         _g_report("writer", e, module=__name__)
         import traceback; traceback.print_exc()
-        return None
+        return _fail(f"exception_{type(e).__name__}", f"  ❌ 로그인 오류: {e}")
 
 
 # ══════════════════════════════════════════
@@ -587,6 +658,13 @@ def update_env_cookie(new_cookie: str) -> bool:
 
         ENV_FILE.write_text(new_content, encoding='utf-8')
         os.environ['TS_COOKIE'] = new_cookie
+        # ★ 저장에 성공했다 = 로그인이 실제로 됐다 → 사람 호출 상태를 푼다(단일 지점).
+        #   네이버는 `_save_cookies()` 가 같은 일을 한다 — 해제 조건도 대칭이다(③).
+        #   이 한 줄이 안내문의 "직접 로그인하면 즉시 해제" 를 사실로 만든다.
+        try:
+            _lm().clear_login_backoff(PLATFORM)
+        except Exception:                                # noqa: BLE001
+            pass
         print(f"  ✅ .env 업데이트 완료")
         return True
 
@@ -610,6 +688,10 @@ def _attempt_once(force: bool, return_driver: bool):
             print("\n🔍 현재 쿠키 유효성 확인 중...")
             if check_cookie_valid(driver):
                 print("  ✅ 쿠키 정상 — 갱신 불필요")
+                try:                                     # 유효 = 사람이 필요 없다 → 해제
+                    _lm().clear_login_backoff(PLATFORM)
+                except Exception:                        # noqa: BLE001
+                    pass
                 try: driver.quit()
                 except Exception: pass
                 driver = None
@@ -640,7 +722,7 @@ def _attempt_once(force: bool, return_driver: bool):
             driver = None
             return True, None
         else:
-            print("\n❌ .env 업데이트 실패")
+            _fail("env_update_failed", "\n❌ .env 업데이트 실패")
             return False, None
 
     except Exception as e:
@@ -716,6 +798,21 @@ def run(force: bool = False, return_driver: bool = False, notify: bool = True):
             _tg_notify(f"🚨 *티스토리 쿠키 갱신 실패*\n{msg}\n`.env` 파일에 누락 변수 추가 후 재시도.")
         return (False, None) if return_driver else False
 
+    # ── ★ 백오프 게이트 — 못 푸는 문을 계속 두드리지 않는다 (2026-08-13, ③ 대칭)
+    #   네이버 `refresh_naver_cookies()` 가 같은 자리에서 같은 판정을 한다.
+    #   ★ 다만 **쿠키가 아직 살아 있으면 막지 않는다** — 막힌 것은 *재로그인* 이지
+    #     발행이 아니다. 여기서 무조건 False 를 돌려주면 백오프 창 동안 티스토리
+    #     2조합(경제·테마)이 통째로 서 버린다. 판정은 도메인이 이미 가진 것을 쓴다(①).
+    _blk = _lm().login_backoff_reason(PLATFORM)
+    if _blk:
+        if not force and cookie_valid_http() is True:
+            print(f"  ⏸ {_blk}\n  ✅ 다만 현재 쿠키는 유효 — 갱신 없이 진행")
+            return (True, None) if return_driver else True
+        _fail(_lm().BACKOFF_REASON, f"  ⏸ {_blk}")
+        if notify:
+            _tg_notify(f"⏸ *티스토리 자동 로그인 보류 중*\n{_blk}")
+        return (False, None) if return_driver else False
+
     # ── 재시도 루프 ─────────────────────────────────────────────
     last_error = None
     for attempt in range(1, _RETRY_MAX + 1):
@@ -741,17 +838,79 @@ def run(force: bool = False, return_driver: bool = False, notify: bool = True):
             print(f"  ⚠️ 시도 {attempt} 예외: {e}")
             _g_report("writer", e, module=__name__,
                       attempt=attempt, max_attempts=_RETRY_MAX)
+        # ★ 사람이 있어야 풀리는 실패면 재시도는 낭비를 넘어 *해롭다* — 반복 실패는
+        #   카카오 쪽 의심도를 올려 추가 인증을 더 부른다(네이버 캡차와 같은 구조).
+        #   `_fail()` 이 이미 백오프를 걸었으므로 그것을 근거로 즉시 중단한다(①).
+        if _lm().login_backoff_active_reason(PLATFORM):
+            print("  ⏸ 사람이 필요한 실패 — 남은 재시도를 건너뛴다")
+            break
 
     # ── 모든 재시도 실패 ─────────────────────────────────────────
     err_str = f": {last_error}" if last_error else ""
-    print(f"\n❌ 쿠키 갱신 {_RETRY_MAX}회 모두 실패{err_str}")
+    print(f"\n❌ 쿠키 갱신 재시도 소진{err_str}")
+    # ★ 사유를 잃지 않는다 — `_fail()` 이 이미 구체적 사유를 적었으면 덮어쓰지 않는다.
+    if not last_login_failure():
+        _fail("refresh_exhausted")
     if notify:
+        _reason = last_login_failure()
+        _hint = _lm().human_action_hint(PLATFORM, _reason)
         _tg_notify(
-            f"🚨 티스토리 쿠키 갱신 실패 ({_RETRY_MAX}회 재시도 모두 실패)\n"
-            f"카카오 로그인, CAPTCHA, 2FA 확인 필요합니다.\n"
-            f"/refresh_tistory 수동 재시도 또는 .env 의 TS_COOKIE 수동 갱신 가능합니다."
+            f"🚨 티스토리 쿠키 갱신 실패 (사유: {_reason or '불명'})\n"
+            f"{_lm().recovery_command(PLATFORM)}\n"
+            + (f"\n{_hint}" if _hint else
+               "/refresh_tistory 수동 재시도 또는 .env 의 TS_COOKIE 수동 갱신 가능합니다.")
         )
     return (False, None) if return_driver else False
+
+
+# ══════════════════════════════════════════
+#  ★ 수동 로그인 — 사람이 직접 푸는 경로 (2026-08-13, ③ 대칭)
+# ══════════════════════════════════════════
+
+def manual_login_and_save() -> bool:
+    """브라우저를 열어 사용자가 직접 카카오 로그인하면 TSSESSION 을 자동 저장.
+
+    ★ 왜 필요한가: 추가 인증·캡차 상황에서 **사람만이 복구할 수 있다.** 그런데 네이버에는
+      이 문(`--manual`)이 있었고 티스토리에는 **없었다** — 그래서 티스토리가 만료되면
+      사용자는 `.env` 의 `TS_COOKIE` 를 손으로 붙여넣는 수밖에 없었다.
+      `alert_human_login_needed()` 가 안내하는 복구 명령(`recovery_command()`)이
+      *실제로 존재하는 문* 이어야 안내가 거짓말이 되지 않는다.
+    ★ 백오프를 보지 않는다 — 막는 것은 *무인 반복* 이지 사람의 복구가 아니다.
+      성공하면 `update_env_cookie()` 가 백오프를 푼다(해제의 단일 지점).
+    """
+    driver = None
+    try:
+        driver = _make_driver()
+        print("\n  🌐 브라우저가 열립니다. 카카오 계정으로 티스토리에 직접 로그인해 주세요.")
+        print("  로그인 완료 후 Enter를 누르면 쿠키가 자동 저장됩니다.")
+        driver.get("https://www.tistory.com/auth/login")
+        try:
+            input("\n  ✅ 로그인 완료 후 여기서 Enter: ")
+        except KeyboardInterrupt:
+            print("\n  ⛔ 취소됨")
+            return False
+        # 내 블로그로 이동해야 TSSESSION 이 확실히 잡힌다(다른 블로그 잔류 차단 포함)
+        force_my_blog(driver)
+        _s(2)
+        for c in driver.get_cookies():
+            if c.get("name") == "TSSESSION" and c.get("value"):
+                if update_env_cookie(c["value"]):
+                    print(f"  ✅ TSSESSION 저장 완료: {str(c['value'])[:20]}...")
+                    return True
+                print("  ❌ .env 업데이트 실패")
+                return False
+        print("  ❌ TSSESSION 쿠키를 찾지 못함 — 로그인이 끝나지 않았을 수 있습니다.")
+        return False
+    except Exception as e:                               # noqa: BLE001
+        print(f"  ❌ 수동 로그인 오류: {e}")
+        _g_report("writer", e, module=__name__)
+        return False
+    finally:
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:                            # noqa: BLE001
+                pass
 
 
 if __name__ == "__main__":
@@ -764,6 +923,13 @@ if __name__ == "__main__":
     from JARVIS00_INFRA.preflight import ensure_preflight
     ensure_preflight(strict=True)
 
+    if "--manual" in sys.argv:
+        # ※ watchdog 미적용 — `manual_login_and_save()` 는 input() 으로 사람의 수동
+        #    로그인을 기다리는 *대화형* 경로다(무인 일회성 작업이 아니다). guard_main
+        #    (freeze 300s 무진전·deadline 초과 시 os._exit)으로 감싸면 사람이 추가 인증을
+        #    푸는 도중 세션이 강제 종료된다. 네이버 `--manual` 과 **같은 사유·같은 판단**(③).
+        sys.exit(0 if manual_login_and_save() else 1)
+
     force   = "--force" in sys.argv
     # ★ 정지 방어 (사용자 박제 2026-07-06) — 일회성 쿠키 갱신 작업을 watchdog 로 감싼다.
     #   freeze(무진전) 300초 / deadline 600초 초과 시 GUARDIAN 보고 후 안전 종료.
@@ -773,4 +939,11 @@ if __name__ == "__main__":
     sys.exit(0 if success else 1)
 
 
-__all__ = ["run", "check_cookie_valid", "refresh_cookie", "update_env_cookie"]
+__all__ = [
+    "run", "check_cookie_valid", "refresh_cookie", "update_env_cookie",
+    "cookie_valid_http", "is_login_redirect", "force_my_blog",
+    # ★ 로그인 상태기 규약 — `login_manager` 가 *이름으로* 찾아 쓴다(② 파생).
+    #   상태기 본체는 여기 없다. 여기 있는 것은 이 플랫폼 고유의 두 가지뿐이다.
+    "PLATFORM", "HUMAN_REQUIRED_REASONS", "last_login_failure",
+    "manual_login_and_save",
+]

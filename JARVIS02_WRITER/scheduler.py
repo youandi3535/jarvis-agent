@@ -984,26 +984,45 @@ def _naver_cookie_ready(label: str) -> bool:
             send_telegram(m)
         return True
 
-    # ★ 실패 사유를 *로그인 도메인* 에서 받아 온다 (2026-08-09 — ERRORS [593]).
+    # ★ 실패 사유·안내문을 **둘 다** 로그인 도메인에서 받아 온다
+    #   (2026-08-09 ERRORS [593] → 2026-08-13 네 번째 소비처 통일).
     #   `ensure_naver_ready` 의 반환은 네트워크/사람 두 갈래뿐이라 "왜 사람이 필요한가"
     #   (CAPTCHA·기기인증·계정)를 구분하지 못한다. 08-09 07:00 사고에서 그 구분이 없어
     #   **재현해 보고서야** 원인을 알았다 — 로그에도 원장에도 남지 않았기 때문이다.
+    #
+    # ★ 왜 사유를 여기서 고르지 않나 (네 번째 소비처 통일)
+    #   종전엔 bare `last_login_failure()` 였다. 그 값은 *이번 프로세스가 실제로 갱신을
+    #   시도했을 때만* 채워지고, 백오프로 즉시 거절된 시도에서는 `backoff` 로 뭉개진다.
+    #   근본 사유(캡차·기기인증)는 백오프 파일에 있고, 그 우선순위를 아는 것은 도메인이다.
+    #   나머지 세 소비처(`login_manager.job_pre_publish_check`·`economic_poster`·
+    #   `trend_theme_writer`)는 이미 `current_login_failure_reason()` 을 쓴다(①③).
+    #
+    # ★ 왜 안내문을 여기서 만들지 않나 (② 동적 설계)
+    #   종전엔 사유→안내문 **어휘 dict** 였다
+    #   (`{"captcha_unattended": …, "captcha_timeout": …}.get(reason, "")`).
+    #   백오프 창에서는 사유가 그 dict 에 없는 값이 되므로 매칭이 실패해 **안내문이 통째로
+    #   사라졌다** — 08-13 07:00 사용자가 받은 문장이 `사유: backoff` 한 줄뿐이었던 이유다
+    #   (06:30 캡차 알림과 같은 사고인 줄 알 수 없다). 어휘를 소비처에 두면 사유가 하나
+    #   늘 때마다 조용히 낡는다. 문장은 사유의 주인(`human_action_hint`)이 만든다.
+    _reason, _hint = why, ""
     try:
-        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import last_login_failure
-        _reason = last_login_failure() or why
-    except Exception:                                    # noqa: BLE001
-        _reason = why
+        from JARVIS08_PUBLISH.credentials import login_manager as _lm
+        _reason = _lm.current_login_failure_reason("naver") or why
+        _hint = _lm.human_action_hint("naver", _reason)
+    except Exception as _le:                             # noqa: BLE001
+        log(f"⚠️ [{label}] 로그인 실패 사유 조회 실패 — 사유만 표시: "
+            f"{type(_le).__name__}: {_le}")
 
+    _extra = f"\n{_hint}" if _hint else ""
     if why == "permanent":
-        _extra = {"captcha_unattended": "\n무인 실행이라 대기하지 않았습니다 — 직접 로그인 후 다음 회차에 발행됩니다.",
-                  "captcha_timeout":    "\n화면 인증이 제한시간 내에 끝나지 않았습니다."}.get(_reason, "")
         m = (f"🚨 *[{label}] 네이버 쿠키 점검 실패 — 발행 건너뜀*\n"
              f"네트워크는 정상입니다. CAPTCHA·계정 문제로 보이며 *직접 로그인* 이 필요합니다."
              f"{_extra}\n사유: `{_reason}`")
     else:
         _until = f" (창 마감 {deadline:%H:%M})" if deadline else ""
         m = (f"🚨 *[{label}] 네이버 쿠키 점검 실패 — 오늘 발행 포기*\n"
-             f"네트워크 단절이 발행 창 안에 회복되지 않았습니다{_until}.\n사유: `{_reason}`")
+             f"네트워크 단절이 발행 창 안에 회복되지 않았습니다{_until}."
+             f"{_extra}\n사유: `{_reason}`")
     log(m.replace("*", ""))
     send_telegram(m)
 
@@ -1012,8 +1031,8 @@ def _naver_cookie_ready(label: str) -> bool:
     #   타입은 로그인 도메인이 사유에서 파생한다 — 중앙 매핑표를 만들지 않는다(ERRORS [547]).
     try:
         from JARVIS07_GUARDIAN.error_collector import report as _report
-        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import naver_login_error_type
-        _report(naver_login_error_type(_reason), "publish", module=__name__,
+        from JARVIS08_PUBLISH.credentials.login_manager import login_error_type
+        _report(login_error_type("naver", _reason), "publish", module=__name__,
                 func_name="_naver_cookie_ready",
                 message=f"[{label}] 네이버 쿠키 점검 실패로 발행 건너뜀 (사유={_reason})")
     except Exception as _re:                             # noqa: BLE001

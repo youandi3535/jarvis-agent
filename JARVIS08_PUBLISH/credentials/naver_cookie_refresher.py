@@ -82,60 +82,201 @@ LOGIN_STUCK_DIR = _LEGACY_BASE_DIR / "logs" / "login_stuck"
 
 
 def capture_login_stuck(driver, tag: str = "") -> str:
-    """로그인이 멈춘 화면을 **증거로 남긴다** — HTML + 스크린샷.
-
-    ★ 왜 (2026-08-09, ERRORS [606]): 캡차 판정 선택자를 *본 적 없는 화면을 추측해서*
-      만들었다가 실제 캡차를 놓쳤다(미탐). 사용자가 손으로 풀어 로그인이 성공했는데
-      로그에는 `캡차 요소 없음` 이라고 **거짓 진술** 이 남았다.
-      추측을 고치려면 실물이 필요하다 — 다음에 뜨면 이 파일이 선택자를 알려준다.
+    """★ 2026-08-13 — 판정 본체는 `login_manager` 단독(플랫폼 중립 승격). 여기는 위임만.
+    사본을 남기면 한쪽만 고쳐진다 — 실제로 `clear_login_backoff` 가 공유 파일을 통째
+    삭제해 **네이버 로그인 성공이 티스토리 백오프까지 지우는** 버그가 났다.
     """
-    import datetime as _dt                                # noqa: PLC0415
-    stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = LOGIN_STUCK_DIR / f"{stamp}{('_' + tag) if tag else ''}"
-    try:
-        LOGIN_STUCK_DIR.mkdir(parents=True, exist_ok=True)
-        try:
-            base.with_suffix(".html").write_text(driver.page_source, encoding="utf-8")
-        except Exception:                                # noqa: BLE001
-            pass
-        try:
-            driver.save_screenshot(str(base.with_suffix(".png")))
-        except Exception:                                # noqa: BLE001
-            pass
-        return str(base)
-    except Exception as e:                               # noqa: BLE001
-        print(f"  ⚠️ 로그인 정지 화면 저장 실패: {type(e).__name__}: {e}")
-        return ""
+    from JARVIS08_PUBLISH.credentials.login_manager import capture_login_stuck as _f
+    return _f(driver, "naver", tag)
+
 
 
 def captcha_present(driver) -> "bool | None":
-    """화면에 캡차가 있는가 — **True(확실) / None(모름)**. False 는 돌려주지 않는다.
-
-    ★ 왜 False 가 없나 (2026-08-09 정정, ERRORS [606])
-      초판은 선택자에 안 걸리면 `False`(= 캡차 아님)를 단정했다. 그 선택자는
-      **실제 네이버 캡차 화면을 한 번도 보지 않고 추측으로 만든 것** 이었고,
-      진짜 캡차가 떴을 때 놓쳤다(미탐). 그런데 로그에는 `캡차 요소 없음` 이라고
-      *확신에 찬 거짓* 이 남았다 — 사용자가 손으로 풀어 성공한 것을 시스템이
-      자기 판정 덕이라 오해하게 만드는 문구다.
-      **모르는 것을 모른다고 말하는 것이 최소 조건이다.**
-
-    ★ 그래서 호출자는 이렇게 쓴다:
-      · True  → 캡차 확실. 무인이면 즉시 포기하고 사람을 부른다.
-      · None  → 모름. 로그인이 느린 것일 수도 있으니 **기다려 본다.**
-                실패하면 "캡차일 수 있음 — 화면 확인 필요" 로 알린다(단정하지 않는다).
+    """★ 2026-08-13 — 판정 본체는 `login_manager` 단독(플랫폼 중립 승격). 여기는 위임만.
+    사본을 남기면 한쪽만 고쳐진다 — 실제로 `clear_login_backoff` 가 공유 파일을 통째
+    삭제해 **네이버 로그인 성공이 티스토리 백오프까지 지우는** 버그가 났다.
     """
+    from JARVIS08_PUBLISH.credentials.login_manager import captcha_present as _f
+    return _f(driver)
+
+
+
+# ══════════════════════════════════════════════════════════════════
+# '로그인 상태 유지' — 세션 쿠키만 받아 반나절 뒤 죽는 사슬의 *시작점*
+# ══════════════════════════════════════════════════════════════════
+#
+# ★ 왜 (2026-08-13 실측): 저장된 pkl 의 NID_AUT·NID_SES 가 **expiry 없음(세션 쿠키)** 이다.
+#   세션 쿠키는 Chrome 종료 시 프로필에서 증발한다 → 다음 회차 step0(프로필 세션 재사용)이
+#   실패 → 폼로그인으로 하강 → 폼로그인 캡차율 실측 100%(login_stuck 캡처 10/10) →
+#   백오프 → 미발행. step0 성공률 08-03~08-08 8/8 → 08-10~08-13 **0/6**.
+#   그런데 폼로그인은 비밀번호를 치자마자 로그인 버튼을 눌렀다 — '로그인 상태 유지' 를
+#   켜는 단계가 아예 없었다(`grep '로그인 상태 유지|keep_login|nvlong'` 저장소 전역 **0건**).
+#   사용자가 12:26 에 **손으로** 로그인한 쿠키조차 세션이었다 → 수동 경로에도 켠다.
+#
+# ★ 셀렉터는 **검증되지 않은 후보** 다 — 이 저장소에 로그인 폼 마크업 실물이 0장이다.
+#   `logs/login_stuck/*.html` 10장은 전부 캡차 화면(nidlogin.rcaptcha)이라 체크박스가 없고
+#   `keep`·`nvlong`·`<input type=checkbox>` 히트도 0건이었다. 그래서
+#   ① 후보를 여럿 두고 ② 못 찾으면 **조용히 넘어가고**(로그인은 계속된다)
+#   ③ 못 찾은 사실을 화면으로 남겨 다음 세션이 추측을 실측으로 바꾸게 한다.
+try:
+    from selenium.webdriver.common.by import By as _By
+except Exception:                                        # noqa: BLE001
+    class _By:                                           # selenium 부재 환경에서도 import 가능
+        # 값은 selenium 실제 값과 동일 — 진짜 드라이버에 그대로 넘어간다(사본 아님).
+        CSS_SELECTOR = "css selector"
+        XPATH = "xpath"
+
+KEEP_LOGIN_CANDIDATES = (
+    (_By.CSS_SELECTOR, "input#keep"),                                 # 전통적 id
+    (_By.CSS_SELECTOR, "input[name='nvlong']"),                       # 전통적 name (value=on)
+    (_By.CSS_SELECTOR, "input[type='checkbox'][id*='keep' i]"),
+    (_By.CSS_SELECTOR, ".keep_check input[type='checkbox'], "
+                       ".login_keep input[type='checkbox']"),
+    (_By.XPATH, "//label[contains(normalize-space(.),'로그인 상태 유지')]"),
+)
+
+# 미발견 증거는 프로세스당 1회만 남긴다(알림 피로 방지).
+# ★ '했다' 는 플래그가 아니라 **실제로 남긴 경로** 를 담는다 — 시도는 적용의 증거가 아니다.
+#   저장에 실패하면(빈 문자열) 아무것도 담기지 않으므로 다음 기회에 다시 시도한다.
+_KEEP_LOGIN_SHOTS: list = []
+
+
+def _is_checked(el) -> bool:
+    """체크 상태를 **읽어서** 확인한다 — 눌렀다는 사실은 켜졌다는 증거가 아니다."""
     try:
-        from selenium.webdriver.common.by import By      # noqa: PLC0415
-        # 아래 목록은 *확실한 양성* 만 담는다. 여기 없다고 캡차가 아닌 것은 아니다.
-        sel = ("img[id*='captcha' i], img[src*='captcha' i], "
-               "input[id*='captcha' i], input[name*='captcha' i], "
-               "#captchaimg, #chptchaimg, iframe[src*='recaptcha' i], "
-               "img[alt*='보안' i], img[alt*='자동입력' i]")
-        if any(e.is_displayed() for e in driver.find_elements(By.CSS_SELECTOR, sel)):
-            return True
+        return bool(el.is_selected())
     except Exception:                                    # noqa: BLE001
         pass
-    return None
+    try:
+        return bool(el.get_attribute("checked"))
+    except Exception:                                    # noqa: BLE001
+        return False
+
+
+def _resolve_checkbox(driver, el):
+    """매치된 노드에서 실제 체크박스 input 을 끌어낸다(label 이 잡혔을 때)."""
+    try:
+        tag = (el.tag_name or "").lower()
+    except Exception:                                    # noqa: BLE001
+        return None
+    if tag == "input":
+        return el
+    try:
+        _for = el.get_attribute("for") or ""
+    except Exception:                                    # noqa: BLE001
+        _for = ""
+    if _for:
+        try:
+            for node in driver.find_elements(_By.CSS_SELECTOR, f"input#{_for}"):
+                return node
+        except Exception:                                # noqa: BLE001
+            pass
+    try:
+        for node in el.find_elements(_By.CSS_SELECTOR, "input[type='checkbox']"):
+            return node
+    except Exception:                                    # noqa: BLE001
+        pass
+    return el if tag else None
+
+
+def _find_keep_login_input(driver):
+    """후보를 순서대로 훑어 체크박스를 찾는다 → (element, 매치한 셀렉터) / (None, "").
+
+    ★ `is_displayed()` 를 요구하지 않는다 — 네이버는 input 을 시각적으로 숨기고
+      <label>·<span class="ico_check"> 로 그리는 관례다. 보이는 것만 찾으면 늘 '없음' 이 된다.
+    """
+    for by, sel in KEEP_LOGIN_CANDIDATES:
+        try:
+            els = driver.find_elements(by, sel)
+        except Exception:                                # noqa: BLE001
+            continue
+        for el in els or ():
+            node = _resolve_checkbox(driver, el)
+            if node is not None:
+                return node, sel
+    return None, ""
+
+
+def enable_keep_login(driver) -> "bool | None":
+    """'로그인 상태 유지' 를 켠다 — **True/False/None 셋 다 로그인을 막지 않는다.**
+
+    Returns:
+        True  — checked 를 *읽어서* 확인함
+        False — 요소는 찾았으나 켜지 못함
+        None  — 요소 없음(DOM 변경 등) 또는 판정 불가
+
+    ★ 계약(어기면 이 함수가 사고를 만든다): 예외를 올리지 않는다 · `_fail()` 을 부르지
+      않는다 · 반환값이 **어떤 분기 조건에도 등장하지 않는다**. 여기서 로그인을 막으면
+      지금까지 되던 로그인까지 죽는다 — 그게 세션 쿠키보다 큰 사고다.
+    ★ 이미 켜져 있으면 다시 누르지 않는다 — 체크박스는 토글이라 누르면 꺼진다.
+    """
+    try:
+        el, matched = _find_keep_login_input(driver)
+        if el is None:
+            print("  ℹ️  '로그인 상태 유지' 요소 없음 — 건너뜀 (네이버 DOM 변경 가능)")
+            _capture_keep_login_missing(driver)
+            return None
+        if _is_checked(el):
+            print(f"  🔒 '로그인 상태 유지' 이미 켜짐 ({matched}) — 다시 누르지 않는다(토글)")
+            return True
+
+        _eid = ""
+        try:
+            _eid = el.get_attribute("id") or ""
+        except Exception:                                # noqa: BLE001
+            _eid = ""
+
+        def _click_label():
+            if not _eid:
+                raise LookupError("id 없음 — label[for] 경로 불가")
+            for lb in driver.find_elements(_By.CSS_SELECTOR, f"label[for='{_eid}']"):
+                lb.click()
+                return
+            raise LookupError("label[for] 없음")
+
+        def _click_el():
+            el.click()
+
+        def _click_js():
+            driver.execute_script("arguments[0].click()", el)
+
+        def _assign_js():
+            # 마지막 수단 — property 직접 대입. 대입만 하면 change 이벤트가 없어
+            # 프레임워크 토글이 상태를 되돌릴 수 있으므로 이벤트를 함께 쏜다.
+            driver.execute_script(
+                "arguments[0].checked = true;"
+                "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));", el)
+
+        for _how, _act in (("label", _click_label), ("click", _click_el),
+                           ("js-click", _click_js), ("js-assign", _assign_js)):
+            try:
+                _act()
+            except Exception as _e:                      # noqa: BLE001
+                continue
+            if _is_checked(el):
+                # 매치한 셀렉터를 남긴다 — 다음 DOM 변경 때의 진단 재료다.
+                print(f"  🔒 '로그인 상태 유지' 켜짐 (셀렉터={matched} / 방법={_how})")
+                return True
+        print(f"  ⚠️ '로그인 상태 유지' 를 켜지 못했다 (셀렉터={matched}) — 로그인은 계속한다")
+        return False
+    except Exception as e:                               # noqa: BLE001
+        # 여기서 예외가 새면 로그인 자체가 죽는다 — 절대 올리지 않는다.
+        print(f"  ⚠️ '로그인 상태 유지' 처리 중 예외(무시): {type(e).__name__}: {e}")
+        return None
+
+
+def _capture_keep_login_missing(driver) -> None:
+    """체크박스를 못 찾은 화면을 1회 남긴다 — 지금 우리에겐 로그인 폼 실물이 0장이다."""
+    if _KEEP_LOGIN_SHOTS:
+        return
+    try:
+        shot = capture_login_stuck(driver, "keep_login_missing")
+    except Exception:                                    # noqa: BLE001
+        return
+    if shot:
+        _KEEP_LOGIN_SHOTS.append(shot)
+        print(f"  📸 '로그인 상태 유지' 미발견 화면 저장: {shot}.(html|png) "
+              f"— 다음 세션이 셀렉터를 실측으로 고칠 재료")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -171,119 +312,73 @@ def _login_backoff_state() -> tuple:
 
 
 def login_backoff_reason() -> str:
-    """지금 자동 로그인을 시도하면 안 되는 이유 — 없으면 빈 문자열.
-
-    ★ 사람이 직접 푸는 경로(`manual_login_and_save`)는 이 판정을 보지 않는다.
-      막는 것은 *무인 반복* 이지 사람의 복구가 아니다.
+    """★ 2026-08-13 — 판정 본체는 `login_manager` 단독(플랫폼 중립 승격). 여기는 위임만.
+    사본을 남기면 한쪽만 고쳐진다 — 실제로 `clear_login_backoff` 가 공유 파일을 통째
+    삭제해 **네이버 로그인 성공이 티스토리 백오프까지 지우는** 버그가 났다.
     """
-    _reason, _left = _login_backoff_state()
-    if not _reason:
-        return ""
-    return (f"{_reason} 로 자동 로그인 보류 중 "
-            f"(남은 {_left / 60:.0f}분) — 사람이 직접 로그인하면 즉시 해제된다")
+    from JARVIS08_PUBLISH.credentials.login_manager import login_backoff_reason as _f
+    return _f("naver")
+
 
 
 def login_backoff_active_reason() -> str:
-    """지금 백오프 중이면 raw 사유(`mark_login_backoff` 가 적은 reason 필드) — 없으면 "".
-
-    ★ 왜 필요한가 (2026-08-12, ERRORS [623]~[629] 후속): `login_manager.job_pre_publish_check`
-      는 *refresh 시도 전* 에 실패 사유를 알아야 하는데, `last_login_failure()` 는
-      이번 프로세스에서 `refresh_naver_cookies()` 를 아직 부르지 않았으면 빈 채로
-      남는다 — 백오프는 항상 파일에 먼저 있으므로 여기서 직접 읽는다.
-      `naver_login_error_type()` 으로 타입을 파생할 때 쓴다 — `login_backoff_reason()`
-      의 사람이 읽는 문장은 타입 파생에 못 쓴다.
+    """★ 2026-08-13 — 판정 본체는 `login_manager` 단독(플랫폼 중립 승격). 여기는 위임만.
+    사본을 남기면 한쪽만 고쳐진다 — 실제로 `clear_login_backoff` 가 공유 파일을 통째
+    삭제해 **네이버 로그인 성공이 티스토리 백오프까지 지우는** 버그가 났다.
     """
-    return _login_backoff_state()[0]
+    from JARVIS08_PUBLISH.credentials.login_manager import login_backoff_active_reason as _f
+    return _f("naver")
+
 
 
 def current_login_failure_reason() -> str:
-    """지금 시점의 실패 사유 — 백오프 파일을 `last_login_failure()` 보다 우선한다.
-
-    ★ 왜 필요한가 (2026-08-13, ERRORS [629]/[630] 후속 — 세 번째 소비처):
-      `last_login_failure()`는 *이번 프로세스* 가 실제로 `refresh_naver_cookies()`
-      를 호출해 실패했을 때만 채워진다. `auto_refresh_if_needed()`는 쿠키 나이가
-      임계값(10h) 미만이면 그 호출 자체를 건너뛰므로, 같은 프로세스 안에서도
-      "방금 전엔 채워져 있다가 다음 호출에선 비어 있는" 요동이 생긴다 — 실측
-      2026-08-13 경제 브리핑 harness precondition: 07:08·07:16 은 정확히
-      `HarnessLoginInvalidBackoff` 로 분류됐는데 07:37·07:46 은 같은 백오프 창
-      (06:30~12:30) 안인데도 접미사 없는 bare `HarnessLoginInvalid` 로 떨어졌다
-      (`login_backoff.json` 실측으로 확인 — 파일은 계속 활성 상태였다).
-      백오프 파일은 프로세스 재시작에도 살아남고 항상 최신이므로 *있으면* 그것을
-      진실로 삼는다 — [630]이 `job_pre_publish_check` 경로에만 심었던 이 우선순위를
-      harness precondition(`economic_poster._verify_platform`·
-      `trend_theme_writer._verify_theme_platform`) 두 소비처에도 동일 적용한다(①③).
+    """★ 2026-08-13 — 판정 본체는 `login_manager` 단독(플랫폼 중립 승격). 여기는 위임만.
+    사본을 남기면 한쪽만 고쳐진다 — 실제로 `clear_login_backoff` 가 공유 파일을 통째
+    삭제해 **네이버 로그인 성공이 티스토리 백오프까지 지우는** 버그가 났다.
     """
-    return login_backoff_active_reason() or last_login_failure()
+    from JARVIS08_PUBLISH.credentials.login_manager import current_login_failure_reason as _f
+    return _f("naver")
+
 
 
 def mark_login_backoff(reason: str) -> None:
-    """캡차 등 *사람이 필요한* 실패를 만났음을 기록 — 다음 자동 시도를 멈춘다."""
-    try:
-        import json as _js                                # noqa: PLC0415
-        _BACKOFF_FILE.write_text(_js.dumps({
-            "reason": reason,
-            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "until": time.time() + max(0, CAPTCHA_BACKOFF_SEC),
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
-        try:
-            os.chmod(_BACKOFF_FILE, 0o600)
-        except OSError:
-            pass
-    except Exception as e:                                # noqa: BLE001
-        print(f"  ⚠️ 로그인 백오프 기록 실패: {e}")
+    """★ 2026-08-13 — 판정 본체는 `login_manager` 단독(플랫폼 중립 승격). 여기는 위임만.
+    사본을 남기면 한쪽만 고쳐진다 — 실제로 `clear_login_backoff` 가 공유 파일을 통째
+    삭제해 **네이버 로그인 성공이 티스토리 백오프까지 지우는** 버그가 났다.
+    """
+    from JARVIS08_PUBLISH.credentials.login_manager import mark_login_backoff as _f
+    _f("naver", reason)
+
 
 
 def clear_login_backoff() -> None:
-    """로그인이 실제로 성공했으면 백오프를 푼다 — 성공이 유일한 해제 조건이다."""
-    try:
-        _BACKOFF_FILE.unlink(missing_ok=True)
-    except Exception:                                     # noqa: BLE001
-        pass
+    """★ 2026-08-13 — 판정 본체는 `login_manager` 단독(플랫폼 중립 승격). 여기는 위임만.
+    사본을 남기면 한쪽만 고쳐진다 — 실제로 `clear_login_backoff` 가 공유 파일을 통째
+    삭제해 **네이버 로그인 성공이 티스토리 백오프까지 지우는** 버그가 났다.
+    """
+    from JARVIS08_PUBLISH.credentials.login_manager import clear_login_backoff as _f
+    _f("naver")
+
 
 
 def alert_human_login_needed(reason: str, shot: str = "") -> None:
-    """사람이 필요하다는 것을 **그 순간** 알린다 — 발행 시각까지 기다리지 않는다.
-
-    ★ 08-11 실측: 06:30 에 캡차로 갱신이 실패했는데 07:00 발행까지 30분간 아무 말이 없었다.
-      그 30분이면 사람이 로그인할 수 있었다. 실패를 *발견한 자리* 에서 부른다.
+    """★ 2026-08-13 — 판정 본체는 `login_manager` 단독(플랫폼 중립 승격). 여기는 위임만.
+    사본을 남기면 한쪽만 고쳐진다 — 실제로 `clear_login_backoff` 가 공유 파일을 통째
+    삭제해 **네이버 로그인 성공이 티스토리 백오프까지 지우는** 버그가 났다.
     """
-    _msg = ("🔐 *네이버 자동 로그인 불가 — 사람이 필요합니다*\n"
-            f"사유: {reason}\n"
-            f"자동 재시도는 {CAPTCHA_BACKOFF_SEC // 3600}시간 보류합니다 "
-            f"(계속 시도하면 캡차를 더 부릅니다).\n\n"
-            "복구: 아래를 실행하고 브라우저에서 직접 로그인하세요.\n"
-            "`.venv/bin/python JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py --manual`")
-    if shot:
-        _msg += f"\n정지 화면: {shot}"
-    try:
-        from shared.notify import send_tg as _tg           # noqa: PLC0415
-        _tg(_msg)
-    except Exception as e:                                # noqa: BLE001
-        print(f"  ⚠️ 사람 호출 알림 실패: {e}")
+    from JARVIS08_PUBLISH.credentials.login_manager import alert_human_login_needed as _f
+    _f("naver", reason, shot)
+
 
 
 def human_wait_sec() -> int:
-    """CAPTCHA 를 **사람이 풀 때까지** 기다릴 초 — 화면 앞에 사람이 없으면 0.
-
-    ★ 왜 잡 문맥이 아니라 TTY 로 판정하나 (2026-08-10 정정)
-      종전엔 `shared.llm.current_job_id()`(예약 잡 안인가)로 판정했다. 그 값의 출처가
-      **`threading.local`** 이라 프로세스·스레드 경계를 넘지 못한다 —
-      발행은 `scheduler._spawn_publisher` 가 띄운 **subprocess** 에서 돌고,
-      GUARDIAN 인시던트 재시도는 **새 스레드**로 돈다. 둘 다 문맥이 비어 있어
-      "사람이 있다" 로 오판했다.
-      실측(08-10 07:00): 무인인데 120초 대기를 4회, 합 482초를 버렸다.
-      회귀 테스트는 같은 스레드에서 `gate()` 를 불러 초록이었다 —
-      사고가 *일어나지 않는* 경로만 검증한 셈이다.
-
-      '사람이 화면 앞에 있는가' 는 **터미널에 붙어 있는가** 로 직접 판정하는 것이
-      경계와 무관하게 정확하다. 이미 쓰던 판단이다(`scheduler._spawn_publisher` 의
-      `_is_tty`) — 새 플래그를 만들지 않는다(②).
+    """★ 2026-08-13 — 판정 본체는 `login_manager` 단독(플랫폼 중립 승격). 여기는 위임만.
+    사본을 남기면 한쪽만 고쳐진다 — 실제로 `clear_login_backoff` 가 공유 파일을 통째
+    삭제해 **네이버 로그인 성공이 티스토리 백오프까지 지우는** 버그가 났다.
     """
-    try:
-        attended = sys.stdout.isatty() or bool(os.environ.get("JARVIS_VERBOSE"))
-    except Exception:                                    # noqa: BLE001
-        attended = False                                 # 판정 불가면 기다리지 않는다
-    return max(0, CAPTCHA_WAIT_SEC) if attended else 0
+    from JARVIS08_PUBLISH.credentials.login_manager import human_wait_sec as _f
+    return _f()
+
 
 
 # ── 마지막 실패 사유 ────────────────────────────────────────────────
@@ -348,34 +443,23 @@ _LOGIN_INVALID_KIND = "login_invalid"
 
 
 def login_invalid_kind(reason: str) -> str:
-    """harness Issue.kind 생성 — *사람이 필요한 사유* 만 접미사를 붙인다(② 동적 설계).
-
-    ★ 왜 필요한가 (2026-08-11, ERRORS [615] 후속): economic_poster·trend_theme_writer 의
-      로그인 전제조건 검증은 종전 `kind="login_invalid"` 뭉뚱그림 하나였다. 그래서
-      "쿠키 파일 없음" 이 실제로는 *백오프 중이라 재로그인을 시도조차 안 한 것* 이어도
-      코드 버그와 구분이 안 돼 매 회차 GUARDIAN Tier-2 LLM 수리 세션을 태웠다
-      (CLAUDE.md ERRORS [547] 오류 세분화 규정 — 뭉뚱그린 타입 금지).
-      진짜 결함일 수 있는 사유(credentials_missing·login_button_click 등)는 접미사 없이
-      그대로 두어 Tier-2 를 계속 탄다 — human-required 사유만 갈라낸다.
-    ★ 접두사는 기존 리터럴 `login_invalid` 그대로 유지 — `_has_login_issue` 같은
-      `.startswith("login_invalid")` 호출자가 신·구 kind 를 모두 인식하게 한다.
+    """★ 2026-08-13 — 판정 본체는 `login_manager` 단독(플랫폼 중립 승격). 여기는 위임만.
+    사본을 남기면 한쪽만 고쳐진다 — 실제로 `clear_login_backoff` 가 공유 파일을 통째
+    삭제해 **네이버 로그인 성공이 티스토리 백오프까지 지우는** 버그가 났다.
     """
-    r = (reason or "").strip()
-    if r in HUMAN_REQUIRED_REASONS:
-        return f"{_LOGIN_INVALID_KIND}_{r}"
-    return _LOGIN_INVALID_KIND
+    from JARVIS08_PUBLISH.credentials.login_manager import login_invalid_kind as _f
+    return _f(reason)
+
 
 
 def is_human_required_login_kind(kind: str) -> bool:
-    """이 harness kind 가 '사람이 CAPTCHA/재로그인을 해야만' 풀리는가 — 판별 단일 진입점.
-
-    `severity._harness_says_naver_login_human()` 이 지연 import 로 여기에 위임한다
-    (판별식을 GUARDIAN 쪽에 복제하면 사본이 되어 사유가 늘 때마다 또 갈라진다).
+    """★ 2026-08-13 — 판정 본체는 `login_manager` 단독(플랫폼 중립 승격). 여기는 위임만.
+    사본을 남기면 한쪽만 고쳐진다 — 실제로 `clear_login_backoff` 가 공유 파일을 통째
+    삭제해 **네이버 로그인 성공이 티스토리 백오프까지 지우는** 버그가 났다.
     """
-    k = (kind or "").strip()
-    if not k.startswith(f"{_LOGIN_INVALID_KIND}_"):
-        return False
-    return k[len(_LOGIN_INVALID_KIND) + 1:] in HUMAN_REQUIRED_REASONS
+    from JARVIS08_PUBLISH.credentials.login_manager import is_human_required_login_kind as _f
+    return _f(kind)
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -418,6 +502,95 @@ def has_publish_auth(cookies) -> bool:
     except (TypeError, KeyError):
         return False
     return set(AUTH_COOKIE_NAMES) <= names
+
+
+def auth_persistence(cookies, *, now: float | None = None) -> dict:
+    """이 묶음이 **브라우저 종료 뒤에도** 살아 있을 것인가 — 미래형 질문. **게이트 아님.**
+
+    ★ 두 질문을 함수로 가른다 (2026-08-13, 사용자 지시):
+      · `has_publish_auth()` — "지금 이 묶음으로 발행 문을 열 수 있는가" (현재형, 게이트)
+      · `auth_persistence()` — "내일도 열 수 있는가"                    (미래형, 경보)
+      **하나로 합치면 발행이 즉시 전면 중단된다.** 실측: 지금 저장된 pkl 의
+      NID_AUT·NID_SES 가 둘 다 세션 쿠키다. `has_publish_auth` 를 조이는 순간
+      `check_cookie_valid` → `cookie_valid_http` → `verify_all_logins(ok=False)` →
+      harness precondition(경제·테마) 차단 → `_naver_cookie_ready` False 로 연쇄한다.
+      게다가 복구 경로(`refresh_naver_cookies`)는 캡차·백오프로 막혀 있어 자력 복귀가
+      불가능하다. 그래서 이 함수의 결과는 **어떤 분기 조건에도 등장하지 않는다** —
+      기록·알림 전용이다(회귀 테스트로 못 박혀 있다).
+
+    ★ '모름' 을 '아님' 으로 단정하지 않는다 — `captcha_present()`·`cookie_valid_http()`
+      가 이미 쓰는 3-상태 계약을 그대로 따른다(커밋 4e09141 의 교훈).
+      `durable is None` ⇔ `has_publish_auth(cookies) is False`(판정 불가).
+
+    ★ 임계값·이름을 새로 만들지 않는다(②) — 대상은 기존 `AUTH_COOKIE_NAMES`,
+      기준 시각은 `time.time()`.
+
+    Returns:
+        {"durable":      True(전부 미래 expiry) / False(하나라도 세션·과거) / None(판정 불가),
+         "session_only": AUTH_COOKIE_NAMES 중 expiry 없음·과거인 이름(정렬된 tuple),
+         "min_expiry_h": 최소 잔여 시간(h). session_only 가 있거나 판정 불가면 None}
+    """
+    _now = time.time() if now is None else float(now)
+    if not has_publish_auth(cookies):
+        return {"durable": None, "session_only": (), "min_expiry_h": None}
+
+    # 같은 이름이 도메인별로 여러 개 존재할 수 있다(실측 pkl 에 중복 이름 있음).
+    # 하나라도 미래 expiry 가 있으면 그 이름은 지속된다 → 이름별 **최댓값** 으로 본다.
+    best: dict = {}
+    for c in cookies:
+        try:
+            name = c["name"]
+        except (TypeError, KeyError):
+            continue
+        if name not in AUTH_COOKIE_NAMES:
+            continue
+        try:
+            exp = float(c.get("expiry") or 0)
+        except (TypeError, ValueError):
+            exp = 0.0
+        if exp > best.get(name, 0.0):
+            best[name] = exp
+
+    session_only = tuple(sorted(n for n in AUTH_COOKIE_NAMES if best.get(n, 0.0) <= _now))
+    if session_only:
+        return {"durable": False, "session_only": session_only, "min_expiry_h": None}
+    return {"durable": True, "session_only": (),
+            "min_expiry_h": min(best[n] - _now for n in AUTH_COOKIE_NAMES) / 3600}
+
+
+def _warn_if_session_only(cookies) -> None:
+    """세션 전용 쿠키로 저장됐음을 **기록·알림** 한다 — 흐름은 바꾸지 않는다.
+
+    ★ 여기가 '로그인 상태 유지'(`enable_keep_login`) 가 실제로 먹었는지 재는 **유일한
+      계측점** 이다. 저장이 `_save_cookies` 하나를 지나므로 폼로그인·수동로그인 두 경로가
+      모두 계측된다. 코드에 체크 단계가 있다는 사실은 적용의 증거가 아니다 —
+      결과(expiry)를 읽어서 확인한다(CLAUDE.md '설치 플래그는 적용의 증거가 아니다').
+    ★ 로그인은 **성공** 이다 — 반환·흐름을 건드리지 않는다(R1: 게이트가 되면 전면 중단).
+    """
+    try:
+        p = auth_persistence(cookies)
+        if p["durable"] is not False:
+            return
+        names = "/".join(p["session_only"])
+        print(f"  ⚠️ 세션 전용 쿠키로 저장됨: {names} (expiry 없음) — "
+              f"브라우저 종료 시 프로필에서 증발한다")
+        # 오류 타입은 이미 있는 판단(사유)에서 파생한다 — 중앙 매핑표를 두지 않는다(②).
+        _g_report(naver_login_error_type("session_only_cookies"), "writer",
+                  message=(f"네이버 인증 쿠키가 세션 전용({names}) — 브라우저 종료 시 증발. "
+                           f"'로그인 상태 유지' 미적용 가능성"),
+                  module=__name__, func_name="_save_cookies")
+        try:
+            from shared.notify import send_tg as _tg     # noqa: PLC0415
+            _tg("🔓 *네이버 쿠키가 세션 전용으로 저장됐습니다*\n"
+                f"대상: {names} (만료시각 없음)\n"
+                "지금은 발행되지만 브라우저를 닫으면 증발합니다 — "
+                "반나절 뒤 전체 재로그인(=캡차)으로 떨어집니다.\n"
+                "로그인 화면의 '로그인 상태 유지' 가 켜졌는지 확인하세요.")
+        except Exception as e:                           # noqa: BLE001
+            print(f"  ⚠️ 지속성 알림 전송 실패: {type(e).__name__}: {e}")
+    except Exception as e:                               # noqa: BLE001
+        # 계측이 저장을 죽이면 안 된다.
+        print(f"  ⚠️ 쿠키 지속성 계측 실패(무시): {type(e).__name__}: {e}")
 
 
 def session_urls() -> tuple:
@@ -489,6 +662,15 @@ def _save_cookies(cookies) -> None:
         _os.chmod(COOKIE_FILE, 0o600)
     except OSError:
         pass
+    # ★ 지속성 계측 — 저장이 여기 하나를 지나므로 두 로그인 경로가 모두 걸린다(①).
+    #   판정은 하되 **막지 않는다**: 반환·흐름 불변(R1).
+    _warn_if_session_only(cookies)
+
+
+# ★ 쿠키 나이 임계값의 **단일 진실 소스** — 네이버 도메인이 소유한다.
+#   `login_manager.auto_refresh_if_needed()` 는 이 값을 *호출 시점에 조회* 해 파생한다
+#   (모듈 로드 시 받아두면 사본이 되어 여기를 고쳐도 저쪽은 옛 값을 쓴다).
+#   같은 숫자를 다른 파일에 다시 적지 말 것(①).
 COOKIE_MAX_AGE_HOURS = 10   # 이 시간 이상 된 쿠키는 갱신
 
 
@@ -767,6 +949,13 @@ def refresh_naver_cookies(force: bool = False) -> bool:
         _type_string_cgevent(NV_PW)
         time.sleep(random.uniform(0.8, 1.5))
 
+        # ── '로그인 상태 유지' — 반드시 **로그인 버튼을 누르기 전** ─────────────
+        # 이게 꺼진 채 로그인하면 NID_AUT/NID_SES 가 세션 쿠키로 발급되고, Chrome 종료
+        # 시 프로필에서 증발해 다음 회차 step0 가 실패 → 폼로그인 → 캡차 → 백오프 →
+        # 미발행으로 이어진다(08-10~08-13 실측 사슬). 종전엔 이 단계가 아예 없었다.
+        # ★ 반환값을 분기에 쓰지 않는다 — 못 켜도 로그인은 그대로 진행한다.
+        enable_keep_login(driver)
+
         # 로그인 버튼 — pyautogui 클릭
         # ★ 네이버가 id="log.login" 을 폐기하고 반응형 레이아웃 변형(loginBtn_row/
         #   loginBtn_column) 둘 중 하나만 display:none 없이 노출한다 (ERRORS 참조:
@@ -907,8 +1096,14 @@ def manual_login_and_save():
     )
 
     print("\n  🌐 브라우저가 열립니다. 네이버에 직접 로그인해 주세요.")
+    print("  ☑️  로그인 화면의 '로그인 상태 유지' 를 **켠 채** 로그인해 주세요 "
+          "(꺼져 있으면 브라우저 종료 시 세션이 증발합니다).")
     print("  로그인 완료 후 Enter를 누르면 쿠키가 자동 저장됩니다.")
     driver.get("https://nid.naver.com/nidlogin.login")
+    # ★ 수동 경로에도 켠다 — 2026-08-13 사용자가 **손으로** 로그인한 쿠키조차 세션이었다.
+    #   사람이 체크를 잊어도 여기서 켜지면 다음 회차가 산다(못 찾으면 위 안내문이 대신한다).
+    time.sleep(2)
+    enable_keep_login(driver)
 
     try:
         input("\n  ✅ 로그인 완료 후 여기서 Enter: ")
@@ -924,15 +1119,20 @@ def manual_login_and_save():
             _save_cookies(cookies)
             names = {c["name"] for c in cookies}
             print(f"  ✅ 쿠키 저장 완료 ({len(cookies)}개): {names}")
-            now = time.time()
-            for c in cookies:
-                if c['name'] in ('NID_AUT', 'NID_SES', 'BA_DEVICE'):
-                    exp = c.get('expiry')
-                    if exp:
-                        remaining = (exp - now) / 3600
-                        print(f"  {c['name']}: 만료까지 {remaining:.1f}시간")
-                    else:
-                        print(f"  {c['name']}: session 쿠키 (브라우저 종료 시 만료)")
+            # ★ 판정 사본 제거 (2026-08-13): 종전엔 여기서 세션 쿠키를 **직접 판별**해
+            #   출력만 하고 True 를 돌려줬다 — 호출자(CLI·사람)는 "성공" 만 보고, 반나절
+            #   뒤 같은 자리에서 죽는 것을 알 길이 없었다. 판정은 `auth_persistence` 단독(①),
+            #   사실 전달은 `_save_cookies` → `_warn_if_session_only`(GUARDIAN 기록+텔레그램).
+            # ★ 반환값은 True 를 유지한다 — 사람이 실제로 성공시킨 로그인을 실패로 적으면
+            #   CLI exit code 가 거짓말이 된다(`--manual` 은 성공 시 0 이어야 한다).
+            _p = auth_persistence(cookies)
+            if _p["durable"] is False:
+                print(f"  ⚠️ 세션 전용 쿠키: {'/'.join(_p['session_only'])} — "
+                      f"브라우저 종료 시 증발한다('로그인 상태 유지' 미적용)")
+            elif _p["durable"] is True:
+                print(f"  🔒 지속 쿠키 확인 — 최소 잔여 {_p['min_expiry_h']:.1f}시간")
+            else:
+                print("  ⚠️ 인증 쿠키가 없어 지속성 판정 불가")
             return True
         else:
             print("  ❌ 로그인 상태 미확인 — 다시 시도하세요.")
@@ -986,18 +1186,22 @@ if __name__ == "__main__":
         if valid:
             age_h = (time.time() - COOKIE_FILE.stat().st_mtime) / 3600 if COOKIE_FILE.exists() else 0
             print(f"  📋 쿠키 파일 나이: {age_h:.1f}시간")
-        # 핵심 쿠키 만료 시간 추가 출력
+        # 핵심 쿠키의 **지속성** 출력 — 판정은 `auth_persistence` 단독(①).
+        # ★ 종전엔 여기에 판별 사본이 있었고, expiry 가 없는 세션 쿠키를
+        #   `만료까지 0.0시간` 으로 찍어 *만료된 쿠키와 구별이 안 됐다*.
+        #   지금 pkl 이 정확히 그 상태다 — 진단 명령이 진단을 못 하고 있었다.
         if COOKIE_FILE.exists():
             try:
-                now = time.time()
-                cookies = pickle.load(open(COOKIE_FILE, "rb"))
-                for c in cookies:
-                    if c['name'] in ('NID_AUT', 'NID_SES'):
-                        exp = c.get('expiry', 0)
-                        remaining = (exp - now) / 3600 if exp else 0
-                        print(f"  {c['name']}: 만료까지 {remaining:.1f}시간")
-            except Exception:
-                pass
+                _p = auth_persistence(pickle.load(open(COOKIE_FILE, "rb")))
+                if _p["durable"] is True:
+                    print(f"  🔒 지속 쿠키 — 최소 잔여 {_p['min_expiry_h']:.1f}시간")
+                elif _p["durable"] is False:
+                    print(f"  ⚠️ 세션 전용 쿠키: {'/'.join(_p['session_only'])} "
+                          f"(만료시각 없음) — 브라우저 종료 시 증발")
+                else:
+                    print(f"  ⚠️ {'/'.join(AUTH_COOKIE_NAMES)} 부재 — 지속성 판정 불가")
+            except Exception as _e:                      # noqa: BLE001
+                print(f"  ⚠️ 지속성 판정 실패: {type(_e).__name__}: {_e}")
         sys.exit(0 if valid else 1)
 
     if "--manual" in sys.argv:

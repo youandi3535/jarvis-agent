@@ -421,15 +421,22 @@ def test_현재_실패사유는_백오프_파일을_우선한다(monkeypatch):
     """
     from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nc
 
-    # 백오프 활성 + 이번 프로세스는 아직 refresh 를 시도한 적 없음(빈 last_login_failure)
-    monkeypatch.setattr(nc, "login_backoff_active_reason", lambda: "captcha_unattended")
+    # ★ 2026-08-13 — 판정 본체가 `login_manager` 로 승격됐다(플랫폼 중립). 그래서 대역도
+    #   **실제 소비자가 지나는 경로**를 겨눈다: 백오프는 진짜 파일로 세우고, process-local
+    #   실패만 비운다. 옛 대역(nc.login_backoff_active_reason 스텁)은 위임 뒤로 밀려나
+    #   더 이상 소비되지 않는다 — 그런 대역을 겨누면 단언이 공허해진다(커밋 4cf23ba).
+    from JARVIS08_PUBLISH.credentials import login_manager as lm
+
+    lm.mark_login_backoff("naver", "captcha_unattended")
     monkeypatch.setattr(nc, "last_login_failure", lambda: "")
+    request_cleanup = lambda: lm.clear_login_backoff("naver")   # noqa: E731
+    monkeypatch.setattr(lm, "_TEST_CLEANUP", request_cleanup, raising=False)
     assert nc.current_login_failure_reason() == "captcha_unattended", (
         "백오프 파일이 활성인데도 process-local last_login_failure() 의 공백에 가려졌다")
     assert nc.login_invalid_kind(nc.current_login_failure_reason()) == (
         "login_invalid_captcha_unattended"), "harness Issue.kind 가 bare 로 떨어진다"
 
     # 백오프가 풀렸으면 이번 프로세스가 실제로 겪은 실패 사유로 폴백
-    monkeypatch.setattr(nc, "login_backoff_active_reason", lambda: "")
+    lm.clear_login_backoff("naver")
     monkeypatch.setattr(nc, "last_login_failure", lambda: "network_down")
     assert nc.current_login_failure_reason() == "network_down"
