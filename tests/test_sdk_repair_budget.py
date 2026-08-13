@@ -794,7 +794,14 @@ def test_장부_조회_실패를_화면이_숨기지_않는다(monkeypatch):
     """DB 가 아프면 L3~L5 가 전부 통과(fail-open)한다. 그때 화면까지 '건강한 0' 을
     보고하면 브레이크가 사라진 줄도 모른다 — 조용한 무력화가 이 프로젝트의 병이다."""
     rb = _gate()
-    monkeypatch.setattr(rb, "_q", lambda *a, **k: rb._LAST_Q_ERROR.__setitem__(0, "database is locked") or [])
+    # ★ 플래그를 손으로 세우지 않는다 (2026-08-13) — 종전엔 `_LAST_Q_ERROR` 리스트를 테스트가
+    #   직접 밀어 넣었다. 그러면 검사 대상인 "`_q` 가 실패를 기록하는가" 를 우회하므로,
+    #   기록 코드를 통째로 지워도 초록이 유지된다. **진짜 sqlite 실패**를 주입한다.
+    _orig_q = rb._q
+    monkeypatch.setattr(
+        rb, "_q",
+        lambda *a, **k: _orig_q("SELECT * FROM __no_such_table_state__", (),
+                                track=k.get("track", True)))
 
     st = rb.budget_state()
     assert st.get("ledger_error"), "장부 조회 실패가 budget_state 에 드러나지 않는다"
@@ -989,3 +996,53 @@ def test_C8_조회마다_스키마를_다시_만들지_않는다():
         rb._init = _orig
     assert calls[0] == 0, f"이미 초기화됐는데 _init 이 {calls[0]}회 더 돌았다"
 
+
+
+def test_C2b_장부실패는_스레드를_넘지_않는다(monkeypatch):
+    """★ 동시성 — 한 스레드의 장부 실패가 다른 스레드의 판정에 새면 안 된다 (2026-08-13).
+
+    C-2 는 "성공이 실패를 덮어 화면이 건강한 0 을 보고한다" 를 막으려고 넣은 장치다.
+    그런데 그 실패 기록이 **모듈 전역** 이었다 — `j07_retry_pending` 은 오류당 스레드를
+    최대 20개 띄우므로, A 가 겪은 장부 실패를 B 의 새 판정이 지우고 A 는 `ledger_error=''`
+    를 보고한다. *C-2 가 막겠다고 선언한 바로 그 상황이 순서가 아니라 동시성으로 재현된다.*
+
+    ★ 검사 방식 — 플래그를 손으로 세우지 않는다. 스냅샷을 **동시에** 뜨되 A 에서만 진짜
+      sqlite 오류를 내고, 두 스레드의 `ledger_error` 를 각자 받아 본다. 손으로 세우면
+      `budget_state()` 가 스냅샷 시작에서 초기화하므로 아무것도 검사하지 못한다.
+    """
+    import threading as _th
+
+    rb = _gate()
+    rb.budget_state()          # 스키마 초기화를 미리 끝낸다(경쟁 요인 제거)
+    orig = rb._q
+    ready, go = _th.Barrier(2), _th.Event()
+    out: dict = {}
+
+    def q_of(fail: bool):
+        def _f(sql, args=(), *, track=True):
+            if fail and "sdk_repair_attempts" in sql:
+                return orig("SELECT * FROM __nope_thread__", (), track=track)
+            return orig(sql, args, track=track)
+        return _f
+
+    def worker(name: str, fail: bool):
+        # `_q` 는 모듈 속성이라 두 스레드가 공유한다 — 실패 주입은 **스레드 판별**로 건다.
+        ready.wait(); go.wait()
+        out[name] = rb.budget_state().get("ledger_error", "")
+
+    def dispatch(sql, args=(), *, track=True):
+        fail = _th.current_thread().name == "A"
+        return q_of(fail)(sql, args, track=track)
+
+    monkeypatch.setattr(rb, "_q", dispatch)
+    ts = [_th.Thread(target=worker, args=(n, n == "A"), name=n) for n in ("A", "B")]
+    for t in ts:
+        t.start()
+    go.set()
+    for t in ts:
+        t.join(10)
+
+    assert out.get("A"), "실패한 스레드가 장부 실패를 보고하지 않는다"
+    assert out.get("B") == "", (
+        f"다른 스레드의 장부 실패가 샜다: B.ledger_error={out.get('B')!r} — "
+        "판정 단위는 스레드다(threading.local). 모듈 전역으로 되돌리지 말 것")

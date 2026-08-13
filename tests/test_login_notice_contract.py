@@ -286,15 +286,18 @@ def test_사람필요_타입이_모든_플랫폼에서_Tier2를_안_태운다():
         assert is_transient(et, source="publish") is True, (
             f"{et}: 사람이 필요한 실패인데 Tier-2 낭비 대상으로 남는다")
 
+    # ★ 2026-08-13 착륙 — 종전엔 여기서 `pytest.xfail` 로 유예했다. 그동안
+    #   `TistoryLoginBackoff`/`...HumanIntervention`/`...HumanTimeout` 은 어디에도 안 걸려
+    #   **코드 버그 기본값**으로 떨어졌고, 티스토리 캡차·기기인증이 날 때마다 GUARDIAN 이
+    #   사람만 풀 수 있는 것을 Tier-2 LLM 으로 "고치려" 세션을 태웠다.
+    #   유예를 남겨두면 고쳐도 초록, 안 고쳐도 초록이라 아무도 모른다 — 그래서 없앴다.
     gaps = [lm.login_error_type(p, r)
             for p in _platforms() if p != "naver"
             for r in sorted(lm.human_required_reasons(p))
             if is_transient(lm.login_error_type(p, r), source="publish") is not True]
-    if gaps:
-        pytest.xfail(
-            "GUARDIAN 분류가 아직 네이버 전용이다 — `severity._naver_login_human_required_types()` "
-            "가 플랫폼 중립으로 파생해야 한다(Group D 잔여): " + ", ".join(gaps))
-    assert not gaps
+    assert not gaps, (
+        "GUARDIAN 분류가 네이버 전용으로 되돌아갔다 — `severity._login_human_required_types()` 는 "
+        "`login_manager.platforms()` × `human_required_reasons()` 로 파생해야 한다: " + ", ".join(gaps))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -507,6 +510,11 @@ def test_고아_세션행이_영구차단을_만들지_않는다():
     rec = {"error_type": "__OrphanSmoke__", "message": "x", "source": "w", "id": -1}
     aid = rb.record_attempt(error_record=rec, caller="g", job_id="j", decision="allowed")
     con = rb._db()
+    # ★ 격리 (2026-08-13) — 판정은 `ORDER BY ts DESC LIMIT 1`, 즉 **가장 최근 allowed 행 하나**만
+    #   본다. 다른 테스트가 남긴 더 최신 행이 있으면 우리가 심은 고아 행까지 닿지도 못한 채
+    #   초록이 된다(합동 실행에서 실측 — 단독으로는 통과, 함께 돌리면 실패). 검사 대상 행을
+    #   *유일한 최신* 으로 만들어 놓고 본다.
+    con.execute("DELETE FROM sdk_repair_attempts WHERE decision='allowed' AND id<>?", (aid,))
     con.execute("UPDATE sdk_repair_attempts SET ts=datetime('now','localtime','-3 hours') "
                 "WHERE id=?", (aid,))
     con.commit()

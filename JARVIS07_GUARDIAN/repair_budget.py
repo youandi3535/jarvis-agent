@@ -42,6 +42,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import threading
 from typing import Any
 
 log = logging.getLogger("jarvis.guardian.repair_budget")
@@ -67,10 +68,23 @@ _BUDGET_WINDOW = "-1 day"
 
 def _q_failed() -> bool:
     """직전 장부 조회가 실패했는가 — 화면이 '건강한 0' 으로 거짓말하지 않게 하는 신호."""
-    return bool(_LAST_Q_ERROR[0])
+    return bool(_q_error())
 
 
-_LAST_Q_ERROR: list = [""]
+# ★ 스레드별 분리 (2026-08-13) — 종전엔 모듈 전역 리스트였다.
+#   `j07_retry_pending` 은 오류당 스레드를 최대 20개 띄운다. 전역이면 A 가 겪은 장부 실패를
+#   B 의 새 판정이 지우고, A 는 `ledger_error=''`(건강한 0)를 보고한다 — **C-2 가 막겠다고
+#   선언한 상황이 순서가 아니라 동시성으로 그대로 재현된다**(실측 재현).
+#   '한 판정 단위' 는 스레드 단위다. `threading.local` 이 그 경계와 정확히 일치한다.
+_TL = threading.local()
+
+
+def _q_error() -> str:
+    return getattr(_TL, "q_error", "")
+
+
+def _set_q_error(msg: str) -> None:
+    _TL.q_error = msg
 
 
 # ── 장부 ──────────────────────────────────────────────────────────────────
@@ -120,7 +134,7 @@ def _q(sql: str, args: tuple = (), *, track: bool = True) -> list:
         # ★ `track=False` 는 *남의 테이블* 조회(비용 집계 등) — 그 실패는 우리 장부가
         #   무효라는 뜻이 아니다. 우리 표에 대한 실패만 상태로 올린다(오탐 방지).
         if track:
-            _LAST_Q_ERROR[0] = str(e)
+            _set_q_error(str(e))
             if "sdk_repair_attempts" in str(e):   # 우리 스키마 문제일 때만 재초기화
                 _INITED[0] = False
         log.warning(f"[RepairBudget] 장부 조회 실패(track={track}): {e}")
@@ -129,7 +143,7 @@ def _q(sql: str, args: tuple = (), *, track: bool = True) -> list:
 
 def _reset_ledger_error() -> None:
     """판정·조회 한 묶음의 시작. 여기서만 실패 기억을 지운다(C-2)."""
-    _LAST_Q_ERROR[0] = ""
+    _set_q_error("")
 
 
 # ── 노브 (전부 *함수 안에서* os.getenv — 무배포 조정·monkeypatch 가 먹어야 한다) ──
@@ -599,7 +613,7 @@ def budget_state() -> dict:
         "by_reason": _by_reason_24h(),
         "gate_enabled": gate_enabled(),
         # ★ 장부를 못 읽었으면 위 숫자는 '0' 이 아니라 '모름' 이다 — 소비자가 구분할 수 있게.
-        "ledger_error": _LAST_Q_ERROR[0],
+        "ledger_error": _q_error(),
     }
 
 

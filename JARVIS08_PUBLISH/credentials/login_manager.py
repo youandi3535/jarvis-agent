@@ -437,7 +437,7 @@ def login_invalid_kind(reason: str) -> str:
 def is_human_required_login_kind(kind: str) -> bool:
     """이 harness kind 가 '사람이 로그인해야만' 풀리는가 — 판별 단일 진입점.
 
-    `severity._harness_says_naver_login_human()` 이 지연 import 로 여기에 위임한다.
+    `severity._harness_says_login_human()` 이 지연 import 로 여기에 위임한다.
     """
     k = (kind or "").strip()
     if not k.startswith(f"{_LOGIN_INVALID_KIND}_"):
