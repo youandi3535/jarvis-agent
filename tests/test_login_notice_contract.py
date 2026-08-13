@@ -395,13 +395,26 @@ def test_티스토리_HTTP판정은_모름을_만료로_적지_않는다():
 
 
 def test_verify_all_logins_가_판정불가로_ok를_깎지_않는다(monkeypatch):
-    """'모름' 이 `issues` 로 새면 발행 게이트가 멀쩡한 티스토리를 막는다."""
+    """'모름' 이 `issues` 로 새면 발행 게이트가 멀쩡한 티스토리를 막는다.
+
+    ★ `.env` 에 기대지 않는다 (커밋 47b2574 — '내 테스트가 .env 에 기대 로컬에서만 초록').
+      CI 에는 자격증명이 없어 env 누락 issue 가 먼저 쌓인다. 그것은 이 테스트의 관심사가
+      아니므로 필요한 env 를 대역으로 채우고, **판정 불가가 issues 를 늘리는지** 만 본다.
+    """
     from JARVIS08_PUBLISH.credentials import login_manager as lm
     from JARVIS08_PUBLISH.credentials import tistory_cookie_refresher as tc
 
+    for _k in lm._REQUIRED_ENV["tistory"]:
+        monkeypatch.setenv(_k, "dummy-for-test")
     monkeypatch.setattr(tc, "cookie_valid_http", lambda *a, **k: None)
+
     got = lm.verify_all_logins(platforms=("tistory",))["tistory"]
     assert got["ok"] is True, f"판정 불가인데 ok=False 로 깎였다: {got['issues']}"
+
+    # 대조군 — 진짜 만료(False)는 여전히 걸러야 한다(과소차단 방지)
+    monkeypatch.setattr(tc, "cookie_valid_http", lambda *a, **k: False)
+    bad = lm.verify_all_logins(platforms=("tistory",))["tistory"]
+    assert bad["ok"] is False, "진짜 만료까지 통과시킨다 — 오탐을 고치다 과소차단을 만들었다"
 
 def test_한_플랫폼_로그인_성공이_다른_플랫폼_백오프를_지우지_않는다():
     """★ 실기능 버그였다 (2026-08-13) — 백오프 파일이 플랫폼 공유가 됐는데
