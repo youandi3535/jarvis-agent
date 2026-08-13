@@ -1039,7 +1039,9 @@ def run_auto_repair_targeted(
         sdk_repair_block_reason,
     )
     # ①경로(incident)는 DB 행이 없어 id=-1 로 온다(`_make_error_record`) — 그것이 유일한 구분자다.
-    _caller = "guardian" if (error_record or {}).get("id", -1) > 0 else "incident"
+    # ★ C-6 — `id=None` 에서 TypeError 가 나던 것. 같은 커밋의 record_attempt 가 쓰는
+    #   안전 패턴(`int(... or -1)`)과 꼴을 맞춘다(①: 같은 판단은 같은 모양으로).
+    _caller = "guardian" if int((error_record or {}).get("id", -1) or -1) > 0 else "incident"
     _why = sdk_repair_block_reason(error_record, context=context,
                                    job_id=job_id, caller=_caller)
     if _why:
