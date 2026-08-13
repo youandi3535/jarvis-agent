@@ -438,6 +438,7 @@ def test_무인이면_캡차를_기다리지_않는다():
 
 def test_로그인_실패_타입이_사유에서_파생된다():
     """중앙 매핑표를 만들지 않는다 — 새 사유가 생기면 타입이 자동으로 따라온다."""
+    from JARVIS08_PUBLISH.credentials.login_manager import login_error_type
     from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import naver_login_error_type
 
     assert naver_login_error_type("captcha_unattended") == "NaverLoginCaptchaUnattended"
@@ -445,6 +446,13 @@ def test_로그인_실패_타입이_사유에서_파생된다():
     # 미지 사유도 뭉개지 않고 이름을 만든다 (ERRORS [547] — 뭉뚱그린 타입 금지)
     assert naver_login_error_type("brand_new_reason") == "NaverLoginBrandNewReason"
     assert naver_login_error_type("") == "NaverLoginUnknown"
+
+    # ★ 승격된 플랫폼 중립 이름도 같은 값을 만든다 — 갈라지면 GUARDIAN 분류가 둘로 쪼개진다.
+    #   (네이버 전용 이름은 severity·기존 테스트가 잡고 있어 *위임으로* 남아야 한다 — R7)
+    for r in ("captcha_unattended", "brand_new_reason", ""):
+        assert login_error_type("naver", r) == naver_login_error_type(r)
+    # ③ 4조합 — 티스토리도 같은 규칙으로 파생된다(사본 없음)
+    assert login_error_type("tistory", "human_timeout") == "TistoryLoginHumanTimeout"
 
 
 def test_캡차_분기가_사유를_남긴다():
@@ -533,7 +541,12 @@ def test_사전점검_실패가_사람과_원장_양쪽에_간다(monkeypatch, t
     # ★ 이 테스트는 "백오프와 무관하게 쿠키가 없는" 시나리오를 검증한다 — 저장소의
     #   *실제* login_backoff.json(캡차로 활성 상태일 수 있음)이 새어 들어오지 않도록
     #   명시적으로 "백오프 없음"을 고정한다(2026-08-12, [630] 후속 — 격리 결함 수정).
-    monkeypatch.setattr(nc, "login_backoff_active_reason", lambda: "")
+    # ★ 패치 대상은 **상태의 주인**이다 (2026-08-13 플랫폼 중립 승격 후 정정).
+    #   종전엔 `nc.login_backoff_active_reason` 를 패치했는데, 백오프 상태기가
+    #   `login_manager` 로 승격된 뒤로 그 패치는 *아무 데도 걸리지 않았다* —
+    #   저장소에 백오프 파일이 없는 동안만 우연히 초록이었다(무력한 monkeypatch).
+    monkeypatch.setattr(lm, "login_backoff_active_reason", lambda *_a, **_k: "")
+    assert lm.login_backoff_active_reason("naver") == "", "패치가 먹지 않았다"
 
     lm.job_pre_publish_check()
 
@@ -564,7 +577,12 @@ def test_사전점검_백오프_중이면_사람필요_타입으로_분류된다
     monkeypatch.setattr(lm, "auto_refresh_if_needed", lambda *a, **k: None)
     monkeypatch.setattr(lm, "verify_all_logins", lambda platforms=("naver", "tistory"): {
         "naver": {"ok": False, "issues": ["쿠키 파일 없음 또는 빈 list"], "cookie_age_h": 1e9}})
-    monkeypatch.setattr(nc, "login_backoff_active_reason", lambda: "captcha_unattended")
+    # ★ 패치 대상은 **상태의 주인** (2026-08-13 — 백오프 상태기가 login_manager 로 승격).
+    #   승격 후에도 `nc.login_backoff_active_reason` 를 패치하면 실제 판정 경로에는
+    #   닿지 않는다 — 그 무력한 패치가 이 테스트를 빨갛게 만든 원인이었다(R6).
+    monkeypatch.setattr(lm, "login_backoff_active_reason",
+                        lambda *_a, **_k: "captcha_unattended")
+    assert lm.login_backoff_active_reason("naver") == "captcha_unattended", "패치가 먹지 않았다"
 
     lm.job_pre_publish_check()
 
@@ -573,6 +591,13 @@ def test_사전점검_백오프_중이면_사람필요_타입으로_분류된다
     assert et == "NaverLoginCaptchaUnattended", f"백오프 중인데 뭉뚱그린 타입: {et}"
     assert is_transient(et, source="publish") is True, \
         "사람이 필요한 타입인데 Tier-2 낭비 대상으로 남는다"
+
+    # ★ ③ 4조합 — 같은 상황이 티스토리에서도 사람 필요 타입으로 나가야 한다.
+    #   (플랫폼 가드가 되살아나면 티스토리만 다시 코드-버그 타입으로 떨어진다)
+    #   (GUARDIAN 쪽 분류 대칭은 tests/test_login_notice_contract.py 가 따로 본다)
+    ts_type = lm.precheck_error_type("tistory", ["env TS_COOKIE 없음"], "captcha_unattended")
+    assert ts_type == "TistoryLoginCaptchaUnattended", \
+        f"티스토리 백오프가 사람 필요 타입으로 안 나간다: {ts_type}"
 
 
 def test_사전점검_정상이면_조용하다(monkeypatch, tmp_path):

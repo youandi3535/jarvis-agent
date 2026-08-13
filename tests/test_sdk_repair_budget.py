@@ -633,6 +633,15 @@ def test_B1_운영_쿨다운에서도_차단_알림이_실제로_나간다(monke
     import shared.notify as _nt
     monkeypatch.setattr(_nt, "send_tg", lambda m, *a, **k: sent.append(m))
 
+    # ★ 억제는 (사유 분류) 단위다(C-5) — 앞선 테스트가 남긴 같은 분류 행을 지워 격리한다.
+    #   장부는 프로세스 경계를 넘으라고 *일부러* 공유 상태이므로 격리는 테스트가 한다.
+    rb._init()          # 표가 없을 수 있다(테스트 순서 무관하게)
+    # ★ 한 커넥션에서 실행·커밋한다 — `_db()` 는 호출마다 커넥션을 줄 수 있어,
+    #   execute 와 commit 을 따로 부르면 삭제가 커밋되지 않는다(실측으로 물림).
+    _con = rb._db()
+    _con.execute("DELETE FROM sdk_repair_attempts")        # 억제 창 격리 (장부는 공유 상태다)
+    _con.commit()
+
     # ★ 지문을 이 테스트 전용으로 — 앞선 테스트가 남긴 같은 (분류,지문) 행이 억제에 걸린다.
     #   장부는 프로세스 경계를 넘으라고 일부러 공유 상태다. 격리는 지문으로 한다.
     rec = _rec(error_type="__B1NotifySmoke__", message="captcha", source="harness")
@@ -810,4 +819,173 @@ def test_부팅_스모크가_실제로_배선돼_있다():
     called = {n.func.id for n in ast.walk(src)
               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
     assert "budget_effective" in called, "스모크가 budget_effective 를 부르지 않는다"
+
+# ══════════════════════════════════════════════════════════════════
+#  PR 검증(2026-08-12) C-1~C-8 회귀 — 관측이 거짓말하지 않게
+# ══════════════════════════════════════════════════════════════════
+def test_C1_남의_차단이_내_세션_판정을_오염시키지_않는다():
+    """★ 실증된 회귀였다 — 전역 blocked 증분으로 판정해, 무관한 차단 1건이면
+    580초 실제 세션도 '안 돌았다' 가 됐다. L4 쿨다운이 세션이 도는 그 창의 다른 시도를
+    전부 차단하며 행을 쓰므로 구조적이다. → 지문(신원) 기준으로 묻는다."""
+    rb = _gate()
+    mine = _rec(error_type="__C1Mine__", message="m", source="w")
+    other = _rec(error_type="__C1Other__", message="o", source="w")
+
+    mark = rb.ledger_mark()
+    assert rb.session_ran_since(mark, mine) is False, "전제 깨짐 — 아무것도 안 했는데 돌았다고 한다"
+
+    rb.record_attempt(error_record=other, caller="g", job_id="j",
+                      decision="blocked", reason=f"{rb.R_COOLDOWN}:남의 차단")
+    assert rb.session_ran_since(mark, mine) is False, "남의 차단이 내 판정을 바꿨다"
+
+    # ★ 판별력의 핵심 — **다른 지문의 allowed 세션**. 지문 스코프가 없으면 여기서 True 가 된다.
+    rb.record_attempt(error_record=other, caller="g", job_id="j", decision="allowed")
+    assert rb.session_ran_since(mark, mine) is False, (
+        "남의 세션이 내 판정을 바꿨다 — 지문 스코프가 없다(전역 카운터로 회귀)")
+
+    rb.record_attempt(error_record=mine, caller="g", job_id="j", decision="allowed")
+    assert rb.session_ran_since(mark, mine) is True, "내 세션이 돌았는데 안 돌았다고 한다"
+
+    rb.record_attempt(error_record=other, caller="g", job_id="j",
+                      decision="blocked", reason=f"{rb.R_COOLDOWN}:또 남의 차단")
+    assert rb.session_ran_since(mark, mine) is True, (
+        "★C-1 재현 — 내 세션 뒤 남의 차단이 판정을 뒤집었다(llm_attempts 가 영영 안 오른다)")
+
+
+def test_C1_판정의_주인이_하나다():
+    """guardian_agent·incident_responder 는 판단을 복제하지 않고 **위임** 한다(①).
+
+    ★ hasattr 만 보면 위임이 끊겨도(`return True` 고정) 초록이다 — 실제로 통과시켜 본다.
+    """
+    rb = _gate()
+    import JARVIS07_GUARDIAN.guardian_agent as ga
+    import JARVIS07_GUARDIAN.incident_responder as ir
+    assert not hasattr(ga, "sdk_repair_ledger_snapshot"), "구 전역카운터 API 가 남아 있다"
+    assert not hasattr(ir, "_sdk_ledger_snapshot"), "incident_responder 에 구 사본이 남아 있다"
+
+    rec = _rec(error_type="__C1Deleg__", message="m", source="w")
+    mark = ga.sdk_repair_ledger_mark()
+    assert mark, "표식을 못 만든다 — 위임이 끊겼다"
+    assert ga.sdk_session_ran(mark, rec) is False, (
+        "아무 세션도 없는데 '돌았다' 고 한다 — 위임이 끊겨 상수를 돌려준다")
+    rb.record_attempt(error_record=rec, caller="g", job_id="j", decision="allowed")
+    assert ga.sdk_session_ran(mark, rec) is True, "실제 세션을 못 본다"
+
+
+def test_C2_앞_질의_실패가_뒤_성공으로_덮이지_않는다(monkeypatch):
+    """`_q` 가 성공할 때마다 플래그를 지우면, 첫 집계 실패가 마지막 성공으로 덮여
+    budget_state 가 '건강한 0' 을 보고한다 — 이 함수가 막겠다고 선언한 그 상황이다."""
+    rb = _gate()
+    orig, n = rb._q, [0]
+
+    # ★ 각 스냅샷의 **첫 질의만** 실패시킨다 — 뒤 질의는 성공한다. 이것이 C-2 의 조건이다
+    #   (성공이 실패를 덮으면 화면이 '건강한 0' 을 보고한다). status_line() 은 새 스냅샷을
+    #   뜨므로 그쪽도 같은 조건이어야 '숨김' 여부를 검사할 수 있다.
+    # ★ 플래그를 손으로 세우지 않는다 — `_q` 자신이 기록하는지가 검사 대상이다.
+    #   각 스냅샷의 첫 질의만 **진짜 sqlite 오류** 로 만든다.
+    def flaky(sql, args=(), *, track=True):
+        n[0] += 1
+        if n[0] % 6 == 1:
+            return orig("SELECT * FROM __no_such_table_c2__", (), track=track)
+        return orig(sql, args, track=track)
+
+    monkeypatch.setattr(rb, "_q", flaky)
+    st = rb.budget_state()
+    assert st.get("ledger_error"), "첫 질의 실패가 사라졌다 — 화면이 정상인 척한다"
+    assert "장부" in rb.status_line(), "상태 한 줄이 실패를 숨긴다"
+
+
+def test_C3_쿨다운은_세션_종료_기준이다():
+    """`allowed` 행은 SDK 호출 *앞* 에 찍힌다. 시작 기준이면 600초 세션 직후 실효 간격이 0이다."""
+    rb = _gate()
+    con0 = rb._db()                      # 내 행만 남긴다 — 질의가 최신 1건만 보기 때문
+    rb._init(); con0.execute("DELETE FROM sdk_repair_attempts"); con0.commit()
+    rec = _rec(error_type="__C3__", message="x", source="w")
+    aid = rb.record_attempt(error_record=rec, caller="g", job_id="j", decision="allowed")
+    rb.record_outcome(aid, fixed=False, elapsed_sec=600)
+    # ★ 시작 시각을 300초 전으로 옮긴다 → 시작 기준이면 gap≈300, 종료 기준이면 gap≈0.
+    #   (그냥 방금 세션이면 둘 다 0 이라 판별이 안 된다 — 뮤테이션이 그걸 잡았다)
+    con = rb._db()
+    con.execute("UPDATE sdk_repair_attempts SET ts=datetime('now','localtime','-300 seconds') "
+                "WHERE id=?", (aid,))
+    con.commit()
+    gap = rb._sec_since_last_allowed()
+    assert gap is not None and gap < 60, (
+        f"세션 *시작* 기준이다 — 600초 세션(300초 전 시작) 직후 경과가 {gap:.0f}초로 계산된다")
+
+
+def test_C4_스모크는_지문상한만_밟는다(monkeypatch):
+    """부팅 직전 세션이 있으면 L4 가 먼저 물어, 확인하려던 L3 는 한 번도 안 밟힌 채
+    True 가 나왔다 — 무엇을 봤는지 모르는 통과는 증거가 아니다."""
+    rb = _gate()
+    rec = _rec(error_type="__C4Recent__", message="x", source="w")
+    rb.record_attempt(error_record=rec, caller="g", job_id="j", decision="allowed")  # 방금 세션
+    monkeypatch.delenv(rb.COOLDOWN_ENV, raising=False)      # 운영 쿨다운(600초) 활성
+    assert rb.budget_effective() is True, "L4 가 가려 L3 를 못 밟았거나 스모크가 실패한다"
+
+    # ★ 판별력 — 스모크는 **지문 상한(L3)이 물었을 때만** True 여야 한다.
+    #   다른 사유(쿨다운·예산)로 막힌 것을 성공으로 치면 '무엇을 확인했는지 모르는 통과' 다.
+    #   판정을 가로채 사유 분류만 바꿔 본다(뮤테이션이 이 느슨함을 잡았다).
+    monkeypatch.setattr(rb, "sdk_repair_block_reason",
+                        lambda *a, **k: f"{rb.R_COOLDOWN}:다른 사유로 막힘")
+    assert rb.budget_effective() is False, (
+        "지문 상한이 아닌 사유로 막혔는데 스모크가 True — 무엇을 확인했는지 모르는 통과다")
+
+
+def test_C5_같은_사유_무더기는_알림이_폭주하지_않는다(monkeypatch):
+    """백로그 20건이 한 sweep 에 들어오면 지문이 다 달라 최대 19통이 나갔다."""
+    rb = _gate()
+    monkeypatch.delenv(rb.COOLDOWN_ENV, raising=False)
+    sent: list = []
+    import shared.notify as _nt
+    monkeypatch.setattr(_nt, "send_tg", lambda m, *a, **k: sent.append(m))
+    for i in range(6):
+        rb.record_attempt(error_record=_rec(error_type=f"__C5_{i}__", message="x", source="w"),
+                          caller="g", job_id="j", decision="blocked",
+                          reason=f"{rb.R_COOLDOWN}:쿨다운")
+    assert len(sent) <= 1, f"같은 사유 6건에 알림 {len(sent)}통 — 폭주"
+
+
+def test_C6_id_가_None_이어도_터지지_않는다():
+    """`_caller` 파생이 `(rec).get('id',-1) > 0` 이라 id=None 에서 TypeError 였다."""
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import auto_repair as ar
+    src = inspect.getsource(ar.run_auto_repair_targeted)
+    assert 'int((error_record or {}).get("id", -1) or -1)' in src, (
+        "안전 패턴이 아니다 — record_attempt 와 꼴이 어긋난다(①)")
+
+
+def test_C7_예산은_가드가_다스리는_지출만_센다():
+    """source 태그는 사건구동·주1회감사·승인도구를 전부 같게 적는다. 전량을 임계값에 쓰면
+    가드가 막지도 않는 남의 지출로 자율 수리가 막힌다."""
+    rb = _gate()
+    import inspect
+    sig = inspect.signature(rb._cost_24h).parameters
+    assert "governed_only" in sig, "전량/관장 구분이 없다 — USD 노브가 남의 지출로 물 수 있다"
+    assert sig["governed_only"].default is True, (
+        "기본값이 전량 합계다 — 가드가 막지도 않는 남의 지출로 자율 수리가 막힌다")
+    assert rb._cost_24h() <= rb._cost_24h(governed_only=False) + 1e-9, (
+        "관장 지출이 전량보다 크다 — 귀속이 틀렸다")
+
+
+def test_C8_조회마다_스키마를_다시_만들지_않는다():
+    """판정 1회에 CREATE TABLE 이 6회씩 돌던 것."""
+    rb = _gate()
+    rb.budget_state()
+    assert rb._INITED[0] is True, "초기화 완료 플래그가 서지 않는다"
+    calls = [0]
+    _orig = rb._init
+
+    def counting():
+        calls[0] += 1
+        _orig()
+
+    rb._init = counting
+    try:
+        rb.budget_state(); rb.budget_state()
+    finally:
+        rb._init = _orig
+    assert calls[0] == 0, f"이미 초기화됐는데 _init 이 {calls[0]}회 더 돌았다"
 

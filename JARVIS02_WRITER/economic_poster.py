@@ -566,16 +566,18 @@ def run(post_naver=True, post_tistory=True, resume=None):
             _pl = _login_res.get(platform) or {}
             if not _pl.get("ok", True):   # 구조 변경 시 fail-open
                 _why = "; ".join(_pl.get("issues") or ["재로그인 필요"])[:150]
-                # ★ 사람이 필요한 사유(백오프·CAPTCHA)는 kind 에 표시(ERRORS [547] 세분화) —
-                #   테마(trend_theme_writer._verify_theme_platform)와 동일 규약(원칙①③).
+                # ★ 사람이 필요한 사유(백오프·CAPTCHA)는 kind 에 표시(ERRORS [547] 세분화).
+                #   ★ 2026-08-13 — `if platform == "naver"` 가드 제거(③원칙). 판정은 이제
+                #     플랫폼 중립(`login_manager`)이라 티스토리도 같은 세분화를 받는다.
+                #     종전엔 티스토리가 뭉뚱그린 `login_invalid` 로 떨어져 하네스가
+                #     '사람이 필요한가' 를 구분하지 못했다 — 지금 티스토리가 실제 만료라 곧 쓰이는 경로다.
                 _kind = "login_invalid"
-                if platform == "naver":
-                    try:
-                        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (
-                            last_login_failure, login_invalid_kind)
-                        _kind = login_invalid_kind(last_login_failure())
-                    except Exception:
-                        pass
+                try:
+                    from JARVIS08_PUBLISH.credentials.login_manager import (
+                        current_login_failure_reason, login_invalid_kind)
+                    _kind = login_invalid_kind(current_login_failure_reason(platform)) or _kind
+                except Exception:
+                    pass
                 issues.append(Issue(
                     step="① 전제조건",
                     kind=_kind,

@@ -613,6 +613,43 @@ def _naver_login_human_required_types() -> frozenset:
     return _NAVER_CAPTCHA_TYPES_CACHE
 
 
+# last-known-good 캐시 — 위와 동일 원칙(성공값만 적재).
+_LOGIN_PRECHECK_DETECTION_CACHE: frozenset = frozenset()
+
+
+def _login_precheck_detection_types() -> frozenset:
+    """발행 前 점검 *감지 단계* 타입 전체 — 코드 수정 불가(Tier-2 비대상).
+
+    ★ 왜 생겼나 (2026-08-12, ERRORS [619]/[626]와 동일한 `PrecheckTistoryCookieExpired`
+      패턴이 08-11 06:30·20:30·08-12 06:30·20:30 네 차례 반복 — [625]가 남긴 "같은
+      wontfix 결론이 반복 조사를 유발하면 *결론을 캐싱하는 코드* 자체가 다음 fix
+      대상" 교훈 적용): `login_manager._alert_precheck()` 가 내는 이 타입들은 *같은
+      `job_pre_publish_check()` 호출 안에서 곧바로 `auto_refresh_if_needed()` 가
+      뒤따르는 예비 경보* 라 대부분 그 자리에서 자동 회복된다([619]/[626] 둘 다 실측
+      회복 확인). 회복 여부와 무관하게 매번 GUARDIAN 리페어 큐에 들어가 "코드 결함
+      아님"을 사람/LLM 이 반복 재확인했다 — 조사 자체가 낭비.
+      진짜 지속 실패는 *다른* 타입(`...AutoRefreshFailed` 또는 백오프 중 CAPTCHA
+      파생 타입)으로 별도 보고되므로 이 집합과 겹치지 않는다 — 그 타입들은 그대로
+      Tier-2 대상. 가시성도 그대로 유지된다: 텔레그램 경보는 이 분류와 무관하게
+      항상 나간다(`login_manager._alert_precheck`) — 바뀌는 것은 GUARDIAN 자동수정
+      큐 진입 여부뿐.
+    ★ 판별식을 여기 복제하지 않는다 — 로그인 도메인
+      (`login_manager.precheck_detection_error_types()`)에서 파생한다(① 단일 진입점).
+    지연 import + fail-open 캐시는 `_harness_infra_kinds()` 와 동일 원칙.
+    """
+    global _LOGIN_PRECHECK_DETECTION_CACHE
+    try:
+        from JARVIS08_PUBLISH.credentials.login_manager import (  # noqa: PLC0415
+            precheck_detection_error_types)
+        got = precheck_detection_error_types()
+        if got:
+            _LOGIN_PRECHECK_DETECTION_CACHE = got
+            return got
+    except Exception:  # noqa: BLE001 — 파생 실패가 severity 를 죽이면 안 된다
+        pass
+    return _LOGIN_PRECHECK_DETECTION_CACHE
+
+
 def _env_extra_kinds() -> frozenset:
     """무배포 안전밸브 — `GUARDIAN_EXTRA_NON_CODE_KINDS=a,b` 로 kind 추가(호출 시점 조회).
 
@@ -780,6 +817,12 @@ def is_transient(error_type: str, message: str = "", source: str = "",
     #   `NaverLoginCaptchaUnattended`/`NaverLoginCaptchaTimeout` 만 해당 — 나머지 로그인
     #   실패 타입(NaverLoginCredentialsMissing 등)은 진짜 결함일 수 있어 그대로 Tier-2 유지.
     if et in _naver_login_human_required_types():
+        return True
+
+    # 4-A2) ★ 발행 前 점검 감지 단계 — 자동 갱신이 뒤이어 도는 예비 경보라 코드 수정
+    #   대상이 아니다 (2026-08-12, ERRORS [619]/[625]/[626] 후속). 상세는
+    #   `_login_precheck_detection_types()` 참조.
+    if et in _login_precheck_detection_types():
         return True
 
     # 4-B) ★ 결함 2 가드 (2026-08-08 감사) — **kind 선언을 메시지 문구가 뒤집지 못한다**

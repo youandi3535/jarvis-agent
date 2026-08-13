@@ -69,44 +69,29 @@ def _flag(name: str, default: bool = True) -> bool:
 #      소진**되고, 진짜 코드 버그가 단 한 번도 시도되지 못한 채 wontfix 로 죽는다.
 #      같은 병을 backlog 통로에서 이미 한 번 고쳤다(`analyze_llm_only` 의 `deferred`).
 #      → 상한 *판정* 은 종전 자리 그대로 두고(중복 금지), **세는 시점** 만 실행 뒤로 옮긴다.
-def sdk_repair_ledger_snapshot() -> "dict | None":
-    """자율 SDK 수리 장부 스냅샷 — {"calls": 태운 세션 수, "blocked": 차단 건수} (24h).
+def sdk_repair_ledger_mark() -> str:
+    """자율 SDK 수리 장부 표식 — 값의 주인은 `repair_budget`. 여기서 만들지 않는다."""
+    try:
+        from JARVIS07_GUARDIAN.repair_budget import ledger_mark
+        return ledger_mark()
+    except Exception:
+        return ""
 
-    ★ 값의 주인은 `repair_budget` — 여기서 숫자를 만들지 않는다. 게이트가 아직
-      배포되지 않았거나 조회가 실패하면 None(=판정 불가) 을 돌려준다.
+
+def sdk_session_ran(mark: "str | None", error_record: "dict | None" = None) -> bool:
+    """표식 이후 **이 오류에 대해** 자율 SDK 세션이 실제로 돌았는가 — `repair_budget` 위임.
+
+    ★ 2026-08-12 (적대적 검증 C-1): 종전 구현은 장부의 **전역 blocked 증분** 으로 판정해,
+      내 호출과 무관한 남의 차단 한 건이면 곧바로 False 였다(실측: 580초 세션이 돌았는데도).
+      L4 쿨다운이 세션이 도는 그 창의 다른 시도를 전부 차단하며 행을 쓰므로 구조적 오판이다.
+      판정을 owner(`repair_budget`)로 옮기고 **지문(신원)** 기준으로 묻는다 — 판단을 여기
+      복제하지 않는다(①). 판정 불가면 True(보수적 기본값)는 그대로다.
     """
     try:
-        from JARVIS07_GUARDIAN.repair_budget import budget_state
-        st = budget_state() or {}
-        def _i(v):
-            return None if v is None else int(v)
-        return {"calls": _i(st.get("calls_24h")), "blocked": _i(st.get("blocked_24h"))}
+        from JARVIS07_GUARDIAN.repair_budget import session_ran_since
+        return bool(session_ran_since(mark or "", error_record))
     except Exception:
-        return None
-
-
-def sdk_session_ran(before: "dict | None") -> bool:
-    """스냅샷 이후 자율 SDK 세션이 *실제로* 돌았는가.
-
-    ★ 판정 방향이 비대칭인 이유(비직관):
-      '차단이 한 건 늘었을 때만' 안 돌았다고 본다. 허용된 세션 수(`calls`)의 증가로
-      판정하지 않는 까닭은 장부 창이 **rolling 24h** 라서다 — SDK 세션은 최대 10분을
-      점유하는데, 그 사이에 24시간 전 기록 하나가 창 밖으로 빠지면 개수가 그대로여서
-      *실제로 돈 세션* 을 '안 돌았다' 고 오판한다. 차단은 밀리초 안에 기록되므로
-      그 창에서 노화가 끼어들 여지가 없다.
-      판정 불가(게이트 미배포·조회 실패·동시 실행)면 **True** — 종전 동작(시도로 셈)을
-      유지하는 보수적 기본값이다. 모를 때 상한을 슬그머니 늘리는 쪽으로 틀리지 않는다.
-    """
-    after = sdk_repair_ledger_snapshot()
-    if not before or not after:
         return True
-    b0, b1 = before.get("blocked"), after.get("blocked")
-    if b0 is not None and b1 is not None:
-        return not (b1 > b0)
-    c0, c1 = before.get("calls"), after.get("calls")
-    if c0 is not None and c1 is not None:
-        return c1 > c0
-    return True
 
 
 # ── error_log 시간 컬럼 런타임 파생 (★ 결함1 재발 방지) ──────────────────
@@ -550,14 +535,14 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
         log.info(f"[GUARDIAN] #{error_id} 2순위 Claude Code SDK 수정 시작 (최대 10분)")
         # ★ 촉점 게이트(repair_budget)가 막으면 이 호출은 LLM 0회로 즉시 False 를 준다.
         #   '고치려 했지만 실패' 와 '아예 시도하지 못함' 은 뒤처리가 다르므로 구분한다.
-        _ledger_before = sdk_repair_ledger_snapshot()
+        _ledger_mark = sdk_repair_ledger_mark()
         fixed = run_auto_repair_targeted(
             context=error_text,
             job_id=error_record.get("source", "unknown"),
             failed_platforms=[error_record.get("module", error_record.get("source", "unknown"))],
             error_record=error_record,   # ★ 밴딧 학습 브리지 — SDK 수정 → fingerprint llm_patch + 밴딧 보상
         )
-        _ran = sdk_session_ran(_ledger_before)   # False = 게이트가 막아 세션 자체가 없었음
+        _ran = sdk_session_ran(_ledger_mark, error_record)   # False = 게이트가 막아 세션 자체가 없었음
 
         if fixed:
             # ★ 근거를 남긴다 (2026-08-08) — `fixed` 가 세 뜻을 말하지 않게.
@@ -739,9 +724,24 @@ def _orchestrate(error_id: int):
         _cb_late = _flag("GUARDIAN_CB_LATE")
 
         def _circuit_blocked() -> bool:
-            """토큰 소모 + 초과 시 보고·상태 되돌림. True 면 호출자는 즉시 return."""
+            """토큰 소모 + 초과 시 보고·상태 되돌림. True 면 호출자는 즉시 return.
+
+            ★ 터미널 상태는 덮어쓰지 않는다 (ERRORS [632] 후속) — 종전엔 무조건
+              status='new' 로 되돌려 다음 retry_pending 이 재청구했다. 다른 세션이
+              이미 wontfix/ignored/fixed 로 닫은 레코드까지 구분 없이 되살아나
+              같은 결론(예: 캡차 백오프 — 사람 개입 필요)을 세션마다 다시 태워
+              확인하는 낭비가 반복됐다([625][627][628][629][631][632][636][637]
+              전부 이 반복의 사례). 위 585행 `_try_sdk_targeted_fix` 가 이미 쓰는
+              "게이트 종결 상태 유지" 패턴을 여기도 동일 적용(① 단일 진입점 —
+              사본 아니라 같은 판단을 circuit breaker 교차점에도 배선).
+            """
             if _circuit_breaker_ok():
                 return False
+            _cur = (_db.get_error(error_id) or {}).get("status", "")
+            if _cur in ("ignored", "wontfix", "fixed"):
+                log.info(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — "
+                         f"이미 종결 상태({_cur})라 유지, 재청구 안 함")
+                return True
             log.warning(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — 시간당 한도 초과")
             _notify_all(error_record, "circuit_open")
             _db.mark_error_status(error_id, "new")  # 다음 retry_pending 에서 재처리
@@ -939,9 +939,9 @@ def _orchestrate(error_id: int):
         # low도 Tier 2까지 진행 → 학습 데이터 축적 → 다음엔 Tier 1 해결
         log.info(f"[GUARDIAN] #{error_id} Tier 1 실패 → Tier 2 (LLM, {severity}, "
                  f"시도 {_attempts_prev + 1}/{_MAX_LLM_ATTEMPTS})")
-        _ledger_before = sdk_repair_ledger_snapshot()
+        _ledger_mark = sdk_repair_ledger_mark()
         fixed = _try_sdk_targeted_fix(error_id, error_record)
-        _ran  = sdk_session_ran(_ledger_before)
+        _ran  = sdk_session_ran(_ledger_mark, error_record)
         attempts = _db.bump_llm_attempts(error_id) if _ran else _attempts_prev
 
         if fixed:

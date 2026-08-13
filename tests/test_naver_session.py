@@ -407,3 +407,36 @@ def test_step1_이_프로필_세션을_파괴하지_않는다():
     # 주입도 수집과 같은 도메인 목록을 돌아야 한다 (www 한 곳이면 blog·nid 쿠키가 버려진다)
     assert "session_urls" in src, (
         "www 한 곳에서만 주입한다 — Chrome 이 타 도메인 쿠키를 거부해 절반이 버려진다")
+
+
+def test_현재_실패사유는_백오프_파일을_우선한다(monkeypatch):
+    """★ [629]/[630] 후속 — harness precondition 소비처(경제·테마 둘 다)의 요동 회귀 방지.
+
+    실측(2026-08-13 경제 브리핑): 같은 캡차 백오프 창(06:30~12:30) 안인데도
+    `HarnessLoginInvalidBackoff`(07:08·07:16)와 접미사 없는 bare `HarnessLoginInvalid`
+    (07:37·07:46)가 뒤섞여 나왔다. 원인은 `last_login_failure()`가 *이번 프로세스가
+    실제로 refresh 를 시도했을 때만* 채워지는 값이라 — `auto_refresh_if_needed()`가
+    쿠키 나이 임계값 미만이라 시도 자체를 건너뛴 호출에서는 빈 문자열로 되돌아간다.
+    `current_login_failure_reason()`은 파일 기반 백오프를 우선해 이 요동을 없앤다.
+    """
+    from JARVIS08_PUBLISH.credentials import naver_cookie_refresher as nc
+
+    # ★ 2026-08-13 — 판정 본체가 `login_manager` 로 승격됐다(플랫폼 중립). 그래서 대역도
+    #   **실제 소비자가 지나는 경로**를 겨눈다: 백오프는 진짜 파일로 세우고, process-local
+    #   실패만 비운다. 옛 대역(nc.login_backoff_active_reason 스텁)은 위임 뒤로 밀려나
+    #   더 이상 소비되지 않는다 — 그런 대역을 겨누면 단언이 공허해진다(커밋 4cf23ba).
+    from JARVIS08_PUBLISH.credentials import login_manager as lm
+
+    lm.mark_login_backoff("naver", "captcha_unattended")
+    monkeypatch.setattr(nc, "last_login_failure", lambda: "")
+    request_cleanup = lambda: lm.clear_login_backoff("naver")   # noqa: E731
+    monkeypatch.setattr(lm, "_TEST_CLEANUP", request_cleanup, raising=False)
+    assert nc.current_login_failure_reason() == "captcha_unattended", (
+        "백오프 파일이 활성인데도 process-local last_login_failure() 의 공백에 가려졌다")
+    assert nc.login_invalid_kind(nc.current_login_failure_reason()) == (
+        "login_invalid_captcha_unattended"), "harness Issue.kind 가 bare 로 떨어진다"
+
+    # 백오프가 풀렸으면 이번 프로세스가 실제로 겪은 실패 사유로 폴백
+    lm.clear_login_backoff("naver")
+    monkeypatch.setattr(nc, "last_login_failure", lambda: "network_down")
+    assert nc.current_login_failure_reason() == "network_down"

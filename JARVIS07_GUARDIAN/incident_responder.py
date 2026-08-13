@@ -307,20 +307,24 @@ def _try_sdk_targeted_fix(
 #   여기서 필요한 것은 딱 하나: "방금 그 호출이 *실제로* SDK 세션을 태웠나?"
 #   그래야 ① 사용자에게 '왜 수리를 건너뛰었는지' 를 말해주고 ② 학습 기록에 남긴다.
 #   관측 함수도 사본을 만들지 않고 `guardian_agent` 의 한 벌을 쓴다.
-def _sdk_ledger_snapshot():
-    """자율 SDK 수리 장부 스냅샷 (미가용이면 None) — 계산은 guardian_agent 한 벌."""
+def _sdk_ledger_mark() -> str:
+    """자율 SDK 수리 장부 표식 — 계산은 guardian_agent(→repair_budget) 한 벌."""
     try:
-        from JARVIS07_GUARDIAN.guardian_agent import sdk_repair_ledger_snapshot
-        return sdk_repair_ledger_snapshot()
+        from JARVIS07_GUARDIAN.guardian_agent import sdk_repair_ledger_mark
+        return sdk_repair_ledger_mark()
     except Exception:
-        return None
+        return ""
 
 
-def _sdk_session_ran(before) -> bool:
-    """스냅샷 이후 SDK 세션이 실제로 돌았는가 (판정 불가면 True — 보수적)."""
+def _sdk_session_ran(mark, error_record=None) -> bool:
+    """표식 이후 **이 오류에 대해** SDK 세션이 돌았는가 (판정 불가면 True — 보수적).
+
+    ★ 2026-08-12 C-1: 종전은 전역 blocked 증분이라 남의 차단 한 건에 오판했다.
+      ③원칙 — 같은 병이 ①경로(여기)에도 있었으므로 함께 고친다.
+    """
     try:
         from JARVIS07_GUARDIAN.guardian_agent import sdk_session_ran
-        return bool(sdk_session_ran(before))
+        return bool(sdk_session_ran(mark, error_record))
     except Exception:
         return True
 
@@ -419,9 +423,9 @@ def respond(
             #   ★ 촉점 게이트가 막을 수 있다. 막히면 이 호출은 LLM 0회로 즉시 False —
             #     '수정 실패' 가 아니라 '시도 자체가 없었음' 이므로 아래에서 구분해 알린다.
             _tg(f"⚙️ [GUARDIAN] Claude Code SDK targeted 수정 시작 (최대 10분)...")
-            _ledger_before = _sdk_ledger_snapshot()
+            _ledger_mark = _sdk_ledger_mark()
             fix_applied = _try_sdk_targeted_fix(error_text, job_id, failed_platforms, theme, error_record)
-            sdk_gated = (not fix_applied) and (not _sdk_session_ran(_ledger_before))
+            sdk_gated = (not fix_applied) and (not _sdk_session_ran(_ledger_mark, error_record))
     else:
         # transient: 코드 수정 없이 대기 후 재시도
         _tg(f"⏳ [GUARDIAN] 일시적 오류({error_class}) — {_TRANSIENT_WAIT}초 대기 후 재시도")

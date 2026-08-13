@@ -95,7 +95,10 @@ CREATE INDEX IF NOT EXISTS idx_sra_fp ON sdk_repair_attempts(fingerprint, ts);
     con.commit()
 
 
-def _q(sql: str, args: tuple = ()) -> list:
+_INITED: list = [False]
+
+
+def _q(sql: str, args: tuple = (), *, track: bool = True) -> list:
     """장부 조회. 실패는 삼키되 **기억한다**.
 
     ★ 왜 기억해야 하나 (2026-08-12 적대적 심사)
@@ -105,14 +108,28 @@ def _q(sql: str, args: tuple = ()) -> list:
       조용한 무력화가 바로 이 프로젝트가 앓아 온 병이라, 실패 사실을 표면까지 올린다.
     """
     try:
-        _init()
-        rows = _db().execute(sql, args).fetchall()
-        _LAST_Q_ERROR[0] = ""
-        return rows
+        if not _INITED[0]:                       # C-8: 조회마다 CREATE TABLE 을 돌지 않는다
+            _init()
+            _INITED[0] = True
+        return _db().execute(sql, args).fetchall()
     except sqlite3.Error as e:
-        _LAST_Q_ERROR[0] = str(e)
-        log.warning(f"[RepairBudget] 장부 조회 실패: {e}")
+        # ★ C-2 — 성공해도 **지우지 않는다.** 종전엔 성공 시 플래그를 비워, 앞 질의 실패가
+        #   뒤 질의 성공으로 덮여 `budget_state()` 가 '건강한 0' 을 보고했다(실측 재현).
+        #   한 판정 안에서 한 번이라도 실패했으면 그 판정 결과는 통째로 믿을 수 없다.
+        #   플래그는 판정 시작 시점(`_reset_ledger_error`)에만 지운다.
+        # ★ `track=False` 는 *남의 테이블* 조회(비용 집계 등) — 그 실패는 우리 장부가
+        #   무효라는 뜻이 아니다. 우리 표에 대한 실패만 상태로 올린다(오탐 방지).
+        if track:
+            _LAST_Q_ERROR[0] = str(e)
+            if "sdk_repair_attempts" in str(e):   # 우리 스키마 문제일 때만 재초기화
+                _INITED[0] = False
+        log.warning(f"[RepairBudget] 장부 조회 실패(track={track}): {e}")
         return []
+
+
+def _reset_ledger_error() -> None:
+    """판정·조회 한 묶음의 시작. 여기서만 실패 기억을 지운다(C-2)."""
+    _LAST_Q_ERROR[0] = ""
 
 
 # ── 노브 (전부 *함수 안에서* os.getenv — 무배포 조정·monkeypatch 가 먹어야 한다) ──
@@ -216,18 +233,46 @@ def _persistent_unknown(fp: str, days: int, limit: int) -> bool:
 
 
 def _sec_since_last_allowed() -> float | None:
-    r = _q("SELECT (julianday('now','localtime')-julianday(max(ts)))*86400.0 "
-           "FROM sdk_repair_attempts WHERE decision='allowed'")
+    """직전 세션 **종료** 이후 경과 초.
+
+    ★ C-3 (2026-08-12) — 종전엔 `allowed` 행의 ts(= 세션 *시작*) 기준이었다. 그 행은 SDK
+      호출 **앞** 에 찍히고 쿨다운 기본값이 세션 상한(600초)과 같아서, 600초를 꽉 채운 세션
+      직후 실효 간격이 **0** 이었다. "세션 사이 최소 휴지" 가 성립하지 않았다.
+      마감된 세션은 `elapsed_sec` 이 있으므로 종료 시각을 파생한다. 아직 도는 세션
+      (outcome IS NULL)은 종료 시각을 모르므로 *지금* 으로 본다 — 도는 중엔 최대한 막는다.
+    """
+    r = _q("SELECT (julianday('now','localtime') - julianday("
+           "  CASE WHEN outcome IS NULL THEN datetime('now','localtime') "
+           "       ELSE datetime(ts, '+' || COALESCE(elapsed_sec,0) || ' seconds') END"
+           "))*86400.0 AS gap "
+           "FROM sdk_repair_attempts WHERE decision='allowed' ORDER BY ts DESC LIMIT 1")
     if not r or r[0][0] is None:
         return None
-    return float(r[0][0])
+    return max(0.0, float(r[0][0]))
 
 
-def _cost_24h() -> float:
-    """자율·수동 구분 없는 SDK 실지출 — 보고용(임계값 아님)."""
+def _cost_24h(governed_only: bool = True) -> float:
+    """최근 24h SDK 실지출(USD).
+
+    ★ C-7 (2026-08-12) — 기본은 **가드가 다스리는 지출만** 센다.
+      `llm_token_usage.source` 는 ① 사건 구동 targeted 수리 ② 주 1회 심층감사
+      ③ 사용자 승인 도구를 전부 같은 태그로 적는다. 전량 합계를 임계값에 쓰면
+      **가드가 막지도 않는 남의 지출로 자율 수리가 막힌다**(USD 노브를 켠 경우).
+      그래서 장부에 `allowed` 로 남은 세션 구간과 겹치는 사용분만 귀속시킨다.
+      `governed_only=False` 는 표시용 전량 합계(사용자가 총액을 볼 때).
+    """
     from shared.claude_sdk_compat import USAGE_SOURCE      # ★ 태그의 주인에서 파생(D1)
-    r = _q("SELECT COALESCE(SUM(cost_usd),0) FROM llm_token_usage WHERE source=? "
-           "AND ts>=datetime('now','localtime',?)", (USAGE_SOURCE, _BUDGET_WINDOW))
+    if not governed_only:
+        r = _q("SELECT COALESCE(SUM(cost_usd),0) FROM llm_token_usage WHERE source=? "
+               "AND ts>=datetime('now','localtime',?)", (USAGE_SOURCE, _BUDGET_WINDOW),
+               track=False)
+        return float(r[0][0]) if r else 0.0
+    # 자율 수리 세션 = 장부 allowed 행. 그 시작~(시작+세션상한) 창에 기록된 사용분만 귀속.
+    r = _q("SELECT COALESCE(SUM(u.cost_usd),0) FROM llm_token_usage u "
+           "WHERE u.source=? AND u.ts>=datetime('now','localtime',?) AND EXISTS ("
+           "  SELECT 1 FROM sdk_repair_attempts a WHERE a.decision='allowed' "
+           "  AND u.ts>=a.ts AND u.ts<=datetime(a.ts, ?))",
+           (USAGE_SOURCE, _BUDGET_WINDOW, f"+{_cooldown_sec()} seconds"), track=False)
     return float(r[0][0]) if r else 0.0
 
 
@@ -240,6 +285,7 @@ def sdk_repair_block_reason(error_record: dict | None, *, context: str = "",
     앞머리(`R_*`)로 분류를 파생하므로 형식은 `"<분류>:<사람이 읽을 사유>"` 를 지킨다.
     레그 순서 = 첫 히트 승. **순서 자체가 정책** (싼 판정·영구 사유 먼저).
     """
+    _reset_ledger_error()                # 이 판정에서 장부가 한 번이라도 실패하면 남긴다(C-2)
     if not gate_enabled():
         return None                      # L0 킬스위치 — 종전 동작 복귀
     rec: dict[str, Any] = dict(error_record or {})
@@ -358,11 +404,16 @@ def _notify_once(reason: str, fp: str, caller: str, job_id: str, rec: dict,
       그래서 방금 넣은 행을 **명시적으로 배제** 하고, 운영 쿨다운으로 도는 테스트를 따로 둔다.
     """
     cls = _reason_class(reason)
+    # ★ C-5 — 억제 키가 (사유, **지문**) 뿐이면 백로그 20건이 한 sweep 에 들어올 때
+    #   지문이 다 달라 최대 19통이 나간다. 사람이 받는 것은 '한 번의 사건' 이므로
+    #   **사유 분류 단위** 창을 하나 더 건다. 지문 창은 같은 오류의 반복을, 분류 창은
+    #   같은 원인의 무더기를 막는다 — 둘 다 창 길이는 쿨다운에서 파생(새 숫자 0).
     prev = _q("SELECT (julianday('now','localtime')-julianday(max(ts)))*86400.0 "
-              "FROM sdk_repair_attempts WHERE decision='blocked' AND fingerprint=? "
-              "AND reason LIKE ? AND id<>?", (fp, f"{cls}:%", int(exclude_id)))
+              "FROM sdk_repair_attempts WHERE decision='blocked' "
+              "AND reason LIKE ? AND id<>?", (f"{cls}:%", int(exclude_id)))
     gap = prev[0][0] if prev and prev[0][0] is not None else None
     if gap is not None and gap < _cooldown_sec():
+        log.info("[RepairBudget] 차단 알림 억제(같은 사유 %s, %.0f초 전) — fp=%s", cls, gap, fp[:40])
         return
     calls, cap = _allowed_calls_24h(), _daily_cap()
     body = (f"🛑 *[GUARDIAN] 자율 SDK 수리 차단*\n"
@@ -465,9 +516,54 @@ def void_attempt(attempt_id: int) -> None:
         log.warning(f"[RepairBudget] 시도 무효화 실패: {e}")
 
 
+def ledger_mark() -> str:
+    """지금 시각 표식 — `session_ran_since()` 와 짝. 장부와 같은 시계를 쓴다(localtime)."""
+    r = _q("SELECT datetime('now','localtime')")
+    return str(r[0][0]) if r else ""
+
+
+def session_ran_since(mark: str, error_record: dict | None) -> bool:
+    """표식 이후 **이 오류에 대해** 자율 SDK 세션이 실제로 허용됐는가.
+
+    ★ 왜 전역 카운터로 판정하면 안 되는가 (2026-08-12 적대적 검증 C-1 — 실증된 회귀)
+      종전 `guardian_agent.sdk_session_ran` 은 장부의 **전역 blocked 증분** 으로 판정했다
+      (`return not (b1 > b0)`). 내 호출과 무관한 남의 차단 1건이면 곧바로 False 다.
+      실측: 세션이 580초 실제로 돌았는데도 타 스레드 쿨다운 차단 1건 때문에 False.
+      우연이 아니라 구조적이다 — L4 쿨다운(600초)은 세션이 도는 **바로 그 창** 의 다른 시도를
+      전부 차단하며 행을 쓰고, `j07_retry_pending` 은 10분마다 최대 20건을 별도 스레드로 띄운다.
+      즉 **관측을 무너뜨리는 것이 그 관측이 지켜보는 쿨다운 레그 자신** 이었다.
+      여파: `llm_attempts` 가 영영 안 올라 `MAX_LLM_ATTEMPTS` 가 무력화되고, 10분 세션을 태우고도
+      "Tier-2 미실행 — 게이트 대기" 로 기록돼 재큐잉되며, 사용자에게 거짓 알림이 갔다.
+
+    ★ 그래서 **지문(신원)** 으로 묻는다 — "내 것이 돌았나". 다른 오류는 지문이 다르므로
+      동시 실행이 판정을 오염시키지 않는다. 창 노화(rolling 24h)도 무관하다 —
+      개수가 아니라 *표식 이후의 행 존재* 를 보기 때문이다.
+    ★ 판정 불가(표식 없음·조회 실패)면 **True** — 종전 동작(시도로 셈)을 유지하는 보수적
+      기본값. 모를 때 상한을 슬그머니 늘리는 쪽으로 틀리지 않는다.
+    """
+    if not mark:
+        return True
+    _rec = dict(error_record or {})
+    if not (_rec.get("error_type") or _rec.get("message")):
+        return True                      # 신원을 만들 재료가 없다 = 판정 불가
+    try:
+        from JARVIS07_GUARDIAN.pattern_fixer import fingerprint_of
+        fp = fingerprint_of(_rec)
+    except Exception:
+        return True
+    if not fp:
+        return True
+    r = _q("SELECT COUNT(*) FROM sdk_repair_attempts WHERE decision='allowed' "
+           "AND fingerprint=? AND ts>=?", (fp, mark))
+    if not r:
+        return True                      # 조회 실패 = 판정 불가 → 보수적으로 '돌았다'
+    return int(r[0][0]) > 0
+
+
 # ── 관측 ──────────────────────────────────────────────────────────────────
 def budget_state() -> dict:
     """현재 예산 상태 — 대시보드·/status·테스트 공용 (표시 계층이 값을 재계산하지 않게)."""
+    _reset_ledger_error()                # 이 스냅샷 동안의 실패만 반영한다(C-2)
     gap = _sec_since_last_allowed()
     cd = _cooldown_sec()
     return {
@@ -517,11 +613,25 @@ def budget_effective() -> bool:
             " VALUES('smoke','smoke',?,'__BudgetSmoke__','allowed')", [(fp,)] * n)
         con.commit()
         try:
-            why = sdk_repair_block_reason(rec, context="", job_id="smoke", caller="smoke")
+            # ★ C-4 — L3(지문 상한)만 밟히게 한다. 종전엔 L4·L5 도 성공으로 쳤는데,
+            #   부팅 직전 600초 안에 실제 세션이 있었으면 L4 가 먼저 물어 **확인하려던
+            #   L3 는 한 번도 안 밟힌 채 True** 가 나왔다. 스모크가 무엇을 봤는지 모르면
+            #   그 통과는 증거가 아니다. 쿨다운·예산은 이 판정에서 잠시 비활성화한다.
+            _prev = (os.environ.get(COOLDOWN_ENV), os.environ.get(CALLS_ENV))
+            os.environ[COOLDOWN_ENV] = "0"
+            os.environ[CALLS_ENV] = str(10 ** 6)
+            try:
+                why = sdk_repair_block_reason(rec, context="", job_id="smoke", caller="smoke")
+            finally:
+                for _k, _v in ((COOLDOWN_ENV, _prev[0]), (CALLS_ENV, _prev[1])):
+                    if _v is None:
+                        os.environ.pop(_k, None)
+                    else:
+                        os.environ[_k] = _v
         finally:
             con.execute("DELETE FROM sdk_repair_attempts WHERE caller='smoke'")
             con.commit()
-        return bool(why) and _reason_class(why) in (R_FINGERPRINT, R_COOLDOWN, R_BUDGET)
+        return bool(why) and _reason_class(why) == R_FINGERPRINT
     except Exception as e:
         log.warning(f"[RepairBudget] budget_effective 예외 → 무력 판정: {e}")
         return False
@@ -530,6 +640,7 @@ def budget_effective() -> bool:
 __all__ = [
     "sdk_repair_block_reason", "record_attempt", "record_outcome",
     "budget_state", "status_line", "gate_enabled", "budget_effective", "void_attempt",
+    "ledger_mark", "session_ran_since",
     "GATE_ENV", "CALLS_ENV", "USD_ENV", "COOLDOWN_ENV",
     "R_TIER2", "R_HUMAN", "R_FINGERPRINT", "R_COOLDOWN", "R_BUDGET",
 ]
