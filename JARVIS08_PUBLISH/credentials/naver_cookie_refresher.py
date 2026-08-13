@@ -196,6 +196,26 @@ def login_backoff_active_reason() -> str:
     return _login_backoff_state()[0]
 
 
+def current_login_failure_reason() -> str:
+    """지금 시점의 실패 사유 — 백오프 파일을 `last_login_failure()` 보다 우선한다.
+
+    ★ 왜 필요한가 (2026-08-13, ERRORS [629]/[630] 후속 — 세 번째 소비처):
+      `last_login_failure()`는 *이번 프로세스* 가 실제로 `refresh_naver_cookies()`
+      를 호출해 실패했을 때만 채워진다. `auto_refresh_if_needed()`는 쿠키 나이가
+      임계값(10h) 미만이면 그 호출 자체를 건너뛰므로, 같은 프로세스 안에서도
+      "방금 전엔 채워져 있다가 다음 호출에선 비어 있는" 요동이 생긴다 — 실측
+      2026-08-13 경제 브리핑 harness precondition: 07:08·07:16 은 정확히
+      `HarnessLoginInvalidBackoff` 로 분류됐는데 07:37·07:46 은 같은 백오프 창
+      (06:30~12:30) 안인데도 접미사 없는 bare `HarnessLoginInvalid` 로 떨어졌다
+      (`login_backoff.json` 실측으로 확인 — 파일은 계속 활성 상태였다).
+      백오프 파일은 프로세스 재시작에도 살아남고 항상 최신이므로 *있으면* 그것을
+      진실로 삼는다 — [630]이 `job_pre_publish_check` 경로에만 심었던 이 우선순위를
+      harness precondition(`economic_poster._verify_platform`·
+      `trend_theme_writer._verify_theme_platform`) 두 소비처에도 동일 적용한다(①③).
+    """
+    return login_backoff_active_reason() or last_login_failure()
+
+
 def mark_login_backoff(reason: str) -> None:
     """캡차 등 *사람이 필요한* 실패를 만났음을 기록 — 다음 자동 시도를 멈춘다."""
     try:

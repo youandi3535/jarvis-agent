@@ -563,6 +563,39 @@ def refresh_failed_error_type(platform: str, backoff_reason: str = "") -> str:
     return "Precheck" + platform.capitalize() + "AutoRefreshFailed"
 
 
+def precheck_detection_error_types() -> frozenset:
+    """`_alert_precheck()` 가 낼 수 있는 *감지 단계* 타입 전체 — severity.py Tier-2 판정 위임처.
+
+    ★ 왜 필요한가 (2026-08-12, ERRORS [619]/[626]와 동일 패턴이 08-11 06:30·20:30·
+      08-12 06:30·20:30 네 차례 반복된 뒤 — [625]가 남긴 "같은 wontfix 결론이 반복
+      조사를 유발하면 *결론을 캐싱하는 코드* 자체가 다음 fix 대상" 교훈 적용):
+      이 타입들은 *같은 `job_pre_publish_check()` 호출 안에서 곧바로
+      `auto_refresh_if_needed()` 가 뒤따르는 예비 경보*([606]에서 확립)라 대부분
+      그 자리에서 자동 회복된다. 회복 여부와 무관하게 매번 GUARDIAN 리페어 큐에
+      들어가 "코드 결함 아님"을 사람/LLM이 반복 재확인해야 했다.
+      진짜 지속 실패는 *다른* 타입(`refresh_failed_error_type()` 의
+      `...AutoRefreshFailed` 또는 백오프 중 `naver_login_error_type()` 파생 CAPTCHA
+      타입)으로 별도 보고되므로 이 집합과 겹치지 않는다 — 그 타입들은 그대로 Tier-2
+      대상으로 남는다. 가시성도 그대로다: 텔레그램 경보(`_alert_precheck` 의
+      `send_tg`)는 이 분류와 무관하게 항상 나간다. 여기서 나오는 것은 *GUARDIAN
+      자동수정 큐 진입 여부* 뿐이다.
+    ★ 새 issue 문구가 추가돼도 `precheck_error_type()` 자체에서 자동으로 따라온다
+      (② 동적 설계 — 리터럴 목록을 두 벌로 만들지 않는다).
+    """
+    _sample_texts = (
+        "쿠키 파일 없음 또는 빈 list",
+        "만료 임박",
+        "쿠키 만료 — manage 접근이 로그인으로 리다이렉트",
+        "env NV_ID 누락",
+        "",  # 위 어느 것도 매치 안 됨 → Unknown
+    )
+    return frozenset(
+        precheck_error_type(plat, [txt] if txt else [])
+        for plat in ("naver", "tistory")
+        for txt in _sample_texts
+    )
+
+
 def _alert_refresh_failed(still_failing: dict[str, dict[str, Any]]) -> None:
     """사전점검의 *자동 갱신 시도까지* 실패했을 때 — 발행 시각 전에 미리 알린다.
 
@@ -581,15 +614,19 @@ def _alert_refresh_failed(still_failing: dict[str, dict[str, Any]]) -> None:
     """
     for plat, info in still_failing.items():
         issues = list(info.get("issues") or [])
-        # ★ 갱신을 이미 시도했으므로 (job_pre_publish_check 가 방금 auto_refresh_if_needed
-        #   를 불렀다) `last_login_failure()` 가 이번 프로세스 안에서 갱신됐다 — 백오프·
-        #   CAPTCHA 를 만났으면 여기 반영된다(economic_poster._verify_platform 과 동일 순서).
+        # ★ `last_login_failure()` 는 process-local 이라 요동친다(2026-08-13, ERRORS
+        #   [636] — harness precondition 두 소비처에서 실측 확인된 결함이 이 세 번째
+        #   소비처에도 그대로 있었다). 이 함수 호출 직전 `auto_refresh_if_needed()` 가
+        #   refresh 를 *시도했다면* 갱신되지만, 백오프 창 안에서 나이 임계값(10h)
+        #   미만이라 시도 자체를 건너뛴 경우엔 이전 호출이 남긴 값(또는 빈 값)을 그대로
+        #   본다. 백오프 파일을 우선하는 [630]/[636] 의 단일 진입점을 그대로 재사용
+        #   한다(① — 판정을 복제하지 않는다).
         _reason = ""
         if plat == "naver":
             try:
                 from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
-                    last_login_failure)
-                _reason = last_login_failure()
+                    current_login_failure_reason)
+                _reason = current_login_failure_reason()
             except Exception:                                 # noqa: BLE001
                 pass
         try:
@@ -744,6 +781,7 @@ __all__ = [
     "verify_all_logins",
     "auto_refresh_if_needed",
     "job_pre_publish_check",
+    "precheck_detection_error_types",
     "network_up",
     "ensure_naver_ready",
 ]

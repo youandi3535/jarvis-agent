@@ -572,8 +572,8 @@ def run(post_naver=True, post_tistory=True, resume=None):
                 if platform == "naver":
                     try:
                         from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (
-                            last_login_failure, login_invalid_kind)
-                        _kind = login_invalid_kind(last_login_failure())
+                            current_login_failure_reason, login_invalid_kind)
+                        _kind = login_invalid_kind(current_login_failure_reason())
                     except Exception:
                         pass
                 issues.append(Issue(

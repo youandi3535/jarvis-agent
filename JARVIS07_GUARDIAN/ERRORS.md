@@ -13617,3 +13617,251 @@ Layer-4 판정이고 다른 경로도 쓰므로, 이번 작업에서 건드리�
 바뀔 때 조용히 뒤집힌다. 그리고 "항상 막는 안전장치" 는 안전하지 않다 — 학습 통로까지
 막으면 손실에 상한이 없다.
 
+## [635] ✅ 해결 — `PrecheckTistoryCookieExpired` 4연속 재발(08-11 06:30·20:30·08-12 06:30·20:30) — 감지 단계 자체를 Tier-2 비대상으로 분류 (2026-08-12)
+
+**증상**
+`error_log` id=5939(`PrecheckTistoryCookieExpired`, `2026-08-12T20:30:01`,
+`module=JARVIS08_PUBLISH.credentials.login_manager`, `func_name=job_pre_publish_check`,
+`"[발행 前 점검] tistory: 쿠키 만료 — manage 접근이 로그인으로 리다이렉트"`) 로 리페어 착수.
+같은 오류 타입이 08-11 06:30(id=5830, [619])·08-11 20:30(id=5858, [626])·08-12 06:30
+(id=5916, wontfix — 사유 미기록·llm_attempts=4 소진) 에 이어 **같은 날 네 번째** 재발.
+
+**환경** JARVIS08_PUBLISH/credentials/login_manager.py · JARVIS07_GUARDIAN/severity.py · 2026-08-12
+
+**원인**
+[606] 수정(실유효성 판정 단일 위임)은 이미 코드에 반영돼 있었고 재확인 결과 티스토리는
+정상(`cookie_valid_http()==True`, `verify_all_logins()` ok=True) — [619]/[626]와 완전히
+같은 결론이었다. 실제 문제는 코드 결함이 아니라 **`_alert_precheck()` 의 설계 자체**다:
+`verify_all_logins()` 가 쿠키 이상을 *최초 감지* 하면 `_alert_precheck()` 가 텔레그램 경보와
+동시에 GUARDIAN `error_collector.report()` 를 호출하는데, 같은 `job_pre_publish_check()`
+호출 안에서 곧바로 `auto_refresh_if_needed()` 가 재로그인을 시도해 대부분 그 자리에서
+회복된다([606] 설계). 회복 여부와 무관하게 매번 리페어 큐에 들어가므로, 자동 회복되는
+"정상 동작"이 반복적으로 사람/LLM 의 재조사를 강제했다 — [619]·[626]이 이미 같은 결론을
+두 번 냈는데도 세 번째·네 번째가 또 들어왔다.
+
+**헛다리**
+없음. `_alert_precheck()` 의 `report()` 호출 자체를 제거하는 안은 검토 후 기각 —
+[594]/[630] 테스트(`test_사전점검_실패가_사람과_원장_양쪽에_간다` 등)가 "탐지 즉시 원장에도
+남아야 한다"를 명시적으로 고정해 뒀고, 그 규정을 뒤집으면 자동 갱신마저 조용히 실패하는
+경로(예: `auto_refresh_if_needed` 자체가 예외로 죽는 경우)의 유일한 기록마저 사라진다.
+
+**해결**
+[625]가 남긴 "같은 wontfix 결론이 반복되면 결론을 캐싱하는 코드 자체가 다음 fix 대상"
+교훈을 적용 — `report()` 를 없애지 않고, GUARDIAN 이 이 타입을 **집어드는 단계**에서
+자동으로 "코드 수정 불가"로 분류하게 했다.
+- `login_manager.precheck_detection_error_types()` 신설 — `precheck_error_type()` 이 낼 수
+  있는 감지 단계 타입 10종(네이버·티스토리 × CookieMissing/CookieStale/CookieExpired/
+  EnvMissing/Unknown) 을 *그 함수 자신을 호출해* 파생(② 동적 설계 — 리터럴 사본 없음).
+- `severity._login_precheck_detection_types()` 신설 — 위 함수를 지연 import 로 위임
+  받아 `is_transient()` 4-A2 단계에 배선(① 단일 진입점, `_naver_login_human_required_types`
+  와 동형 패턴).
+- **겹치지 않는 것 확인**: `refresh_failed_error_type()` 이 내는 `...AutoRefreshFailed`
+  타입(자동 갱신도 실패한 *진짜* 지속 실패)은 이 집합에 없다 — 그대로 Tier-2 대상 유지.
+  텔레그램 경보(`_alert_precheck`)도 분류와 무관하게 그대로 나간다 — 바뀐 것은 GUARDIAN
+  자동수정 큐 진입 여부뿐.
+- id=5939 는 재확인 결과 정상(`verify_all_logins(platforms=("tistory",))` ok=True)이라
+  `mark_error_status(5939, "fixed", ...)` 로 종결.
+
+**검증** `is_transient("PrecheckTistoryCookieExpired", ...) == True` /
+`is_transient("PrecheckTistoryAutoRefreshFailed", ...) == False`(진짜 실패는 그대로 차단
+안 됨) / `is_transient("ImportError", ...) == False`(결함1 가드 회귀 없음) 실측 확인 +
+`severity.selfcheck()` 0건 + `tests/test_naver_session.py`·`tests/test_learning_signal.py`
+66 passed + `precommit_check --category auth,copytruth` 0위반.
+
+**파일** `JARVIS08_PUBLISH/credentials/login_manager.py`, `JARVIS07_GUARDIAN/severity.py`
+
+**교훈**
+[625]와 같은 교훈이 다른 도메인(로그인 백오프 → 발행 前 점검)에서 재확인됐다 — "코드
+변경 0건" 결론이 같은 사고에 세 번 이상 반복되면, 네 번째 조사를 또 하는 대신 *그
+반복 자체를 만드는 설계* (여기서는 "감지=보고" 를 "감지=보고, 하지만 자동회복형은
+Tier-2 비대상"으로 세분화)를 고칠 것.
+
+## [636] ✅ 해결 — 경제 브리핑 naver `HarnessLoginInvalid`(id=5972·5973, 07:37/07:46) — 같은 백오프 창(06:30~12:30) 안에서 07:08·07:16 은 `...Backoff` 정확 분류, 07:37·07:46 만 bare — harness precondition 두 소비처가 프로세스 요동값을 썼다 (2026-08-13)
+
+**증상**
+`error_log` id=5972(attempt=1, 07:37:20)·5973(attempt=2, 07:46:07) — `source=harness`,
+`module=JARVIS00_INFRA.harness.경제 브리핑 발행 — 네이버`, `func_name=① 전제조건`,
+`error_type=HarnessLoginInvalid`(접미사 없는 **bare**), `message="naver 로그인 세션 무효 —
+쿠키 만료 — 실제 요청이 로그아웃 상태를 보고"`, severity=medium. 같은 날 같은 백오프 창
+안에서 07:08:00(id=5969)·07:16:31(id=5970)은 정확히 `HarnessLoginInvalidBackoff`로
+분류됐는데, 21분 뒤 새로 시작된 액션 런(07:37)만 bare로 떨어졌다 — [629]("스테일
+데몬")로는 설명이 안 된다. 스테일이면 같은 프로세스 안에서 시종 bare여야 하는데
+전반부는 정확했다.
+
+**환경** `JARVIS02_WRITER/economic_poster.py` · `JARVIS02_WRITER/trend_theme_writer.py` ·
+`JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py` · 2026-08-13, 데몬 PID 40543
+(기동 2026-08-11 12:xx, 조사 시점까지 재시작 없이 43h+ 연속 가동 — 단 이번 건의 근본
+원인은 스테일 자체가 아니다, 아래 원인 참조)
+
+**원인**
+`login_backoff.json` 실측 — `reason=captcha_unattended`, `at=2026-08-13T06:30:48`,
+`until=2026-08-13T12:30:48` — 조사 시각(07:55) 기준 여전히 활성인 **동일** 백오프 창.
+`economic_poster._verify_platform`·`trend_theme_writer._verify_theme_platform` 두
+harness precondition 소비처는 `_kind = login_invalid_kind(last_login_failure())` 로
+kind 를 파생하는데, `last_login_failure()`(`naver_cookie_refresher._LAST_FAILURE`)는
+**이번 프로세스가 실제로 `refresh_naver_cookies()`를 호출해 실패했을 때만** 채워지는
+process-local 값이다. `_verify_platform`이 그 직전에 부르는 `auto_refresh_if_needed()`는
+쿠키 나이가 임계값(10h) 미만이면 refresh 시도 자체를 건너뛴다 — 그 경우
+`last_login_failure()`는 이전 호출이 남긴 값(있으면 "backoff" 등, 없으면 "")을 그대로
+돌려주는데, 실측상 07:37·07:46 시점엔 그 값이 human-required 사유가 아닌 상태로
+비어 있었다(재현: `login_backoff_active_reason()=="captcha_unattended"`인데
+`last_login_failure()==""`인 조합이 `login_invalid_kind()`에 들어가면 bare
+`"login_invalid"`가 나온다 — 코드로 직접 확인). 반면 [630]이 고친 `job_pre_publish_check`
+경로는 이미 `login_backoff_active_reason()`(백오프 **파일**을 직접 읽음 — 프로세스
+호출 이력과 무관)을 우선하도록 배선돼 있어 이 요동이 없다. [629]의 교훈("harness 는
+고쳤다"가 "모든 통로가 고쳐졌다"를 보장하지 않는다")이 세 번째로 재확인된 셈 —
+[630]이 심은 "백오프 파일 우선" 원칙이 precheck 경로 한 곳에만 심어졌고 harness
+precondition 두 소비처(경제·테마)엔 이식되지 않았다.
+
+**헛다리**
+[629]("스테일 데몬") 가설을 먼저 재확인했으나 기각 — 같은 daemon 프로세스가 07:08·07:16엔
+정확히 분류하고 07:37·07:46엔 틀리게 분류한 것은 "코드가 메모리에 없다"로는 설명되지
+않는다(코드가 있다면 매번 있고, 없다면 매번 없어야 한다). 값 자체가 호출 시점마다
+달라지는 process-local 상태라는 것이 재현으로 직접 확인됐다.
+
+**해결**
+`naver_cookie_refresher.py`에 `current_login_failure_reason()` 신설 —
+`login_backoff_active_reason() or last_login_failure()` (① 단일 진입점, [630]이 이미
+검증한 "파일 우선" 판단을 재사용·복제하지 않음). `economic_poster._verify_platform`·
+`trend_theme_writer._verify_theme_platform` 두 호출부(③ 경제·테마 양쪽 동시)를
+`last_login_failure()` 대신 이 함수로 교체. 회귀 테스트
+`tests/test_naver_session.py::test_현재_실패사유는_백오프_파일을_우선한다` 추가 —
+백오프 활성+process-local 공백 조합에서 bare kind 로 떨어지지 않음을 고정, 백오프 해제
+시 process-local 값으로 정상 폴백함도 함께 검증. `mark_error_status(5972/5973, "fixed", ...)`
+— 이번 건은 실제 코드 결함이라 [629]/[630]과 달리 wontfix 가 아니라 fixed 로 종결.
+`pytest tests/test_naver_session.py` 25 passed, `tests/test_learning_signal.py` 포함
+66 passed, `pytest tests/ -k "login or naver or precheck or harness"` 39 passed,
+precommit `auth`·`copytruth` 0위반.
+
+**파일** `JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py`,
+`JARVIS02_WRITER/economic_poster.py`, `JARVIS02_WRITER/trend_theme_writer.py`,
+`tests/test_naver_session.py`
+
+**교훈**
+[630]이 이미 "process-local 값은 요동친다, 파일을 우선하라"는 원칙을 세웠는데, 그
+원칙을 새 함수로 캡슐화하지 않고 호출부(`precheck_error_type`의 `backoff_reason`
+파라미터)에만 심어서 **다른 소비처가 그 존재조차 몰랐다**. 원칙을 도출한 그 자리
+(`naver_cookie_refresher.py`)에 재사용 가능한 함수로 박아 두지 않으면, 같은 교훈이
+같은 파일 두 곳(harness precondition)에서 또 새는 걸 3주기 후에나 발견하게 된다 — 이번
+발견까지 하루가 채 안 걸렸으니 그나마 빨랐다.
+
+## [637] ✅ 해결 — `PrecheckNaverCookieExpired`(id=5965, 08-13 06:30) 재조사 — [635]가 이미 naver 도 커버 + `_alert_refresh_failed()`에 남아있던 [636]과 동일 결함(id=5967)의 세 번째 소비처를 마저 닫음 (2026-08-13)
+
+**증상**
+`error_log` id=5965(`PrecheckNaverCookieExpired`, `2026-08-13T06:30:01`, `module=
+JARVIS08_PUBLISH.credentials.login_manager`, `func_name=job_pre_publish_check`,
+`"[발행 前 점검] naver: 쿠키 만료 — 실제 요청이 로그아웃 상태를 보고"`)로 리페어 착수.
+같은 06:30 호출 안에서 자동 갱신도 실패해 id=5967(`PrecheckNaverAutoRefreshFailed`,
+`06:32:02`)이 뒤이어 발생.
+
+**환경** `JARVIS08_PUBLISH/credentials/login_manager.py` · 2026-08-13, `login_backoff.json`
+`reason=captcha_unattended`·`at=2026-08-13T06:30:48`·`until=12:30:48` 활성 중
+
+**원인 (두 갈래)**
+1. **id=5965 — 코드 결함 아님.** `python -m JARVIS08_PUBLISH.credentials.login_manager
+   status` 실측(08:04) — `NAVER ❌`, 쿠키 경과 20.9h, 동일 이슈 문구. 백오프 파일이
+   실제 CAPTCHA 를 가리킨다 — [619]/[620]/[625]/[626]/[635]와 완전히 같은 패턴. 이 세션
+   착수 *전에* 이미 우연히도 [635]가 심은 `severity._login_precheck_detection_types()`
+   가 `precheck_detection_error_types()`(naver·tistory 양쪽을 순회)에서 파생되고 있어
+   `PrecheckNaverCookieExpired` 도 이미 transient 로 분류됨을 실동작으로 재확인
+   (`is_transient("PrecheckNaverCookieExpired", ...) == True`) — 즉 naver 몫은 이미
+   해결돼 있었다. [635]의 서술이 "PrecheckTistoryCookieExpired 4연속"이라 naver 는
+   별도 확인이 안 돼 있었을 뿐.
+2. **id=5967 — 진짜 결함, [636]의 형제.** [636]이 `current_login_failure_reason()`
+   (백오프 파일 우선)을 만들어 `economic_poster._verify_platform`·
+   `trend_theme_writer._verify_theme_platform` 두 harness precondition 소비처에 배선했다고
+   기록했는데, `login_manager._alert_refresh_failed()` 는 여전히 옛 `last_login_failure()`
+   (process-local, 이번 함수 호출 시점까지 refresh 가 실제로 시도됐는지에 따라 요동)를
+   그대로 쓰고 있었다 — **세 번째 소비처가 이식에서 빠졌다**. 그 결과 id=5967 이
+   `NaverLoginCaptchaUnattended` 대신 접미사 없는 bare `PrecheckNaverAutoRefreshFailed`
+   로 떨어졌다 ([606]이 이미 남긴 "한 파일 안에서 고친 로직도 사본이 남을 수 있다"는
+   교훈의 재현).
+
+**헛다리** 없음. id=5967 도 "그냥 재조사만 하고 끝낼까" 검토했으나, [636]과 완전히 동일한
+근본 원인(process-local 값 요동)이 같은 파일 안에 남아 있다는 게 코드로 바로 확인돼
+바로 고쳤다 — [606]/[636] 둘 다 "발견하면 그 자리에서 닫아라"가 결론이었다.
+
+**해결**
+- id=5965: 코드 변경 없음(이미 [635]가 커버) — `mark_error_status(5965, "wontfix", ...)`.
+- id=5967: `login_manager._alert_refresh_failed()` 의 `from ... import last_login_failure`
+  를 `current_login_failure_reason` 으로 교체(① 단일 진입점 — [630]/[636]이 이미 검증한
+  판정을 재사용, 복제하지 않음). 수정 후 실동작 확인 — `current_login_failure_reason()`
+  이 활성 백오프에서 `"captcha_unattended"` 를 정확히 반환(수정 전엔 이 소비처만
+  `last_login_failure()` 의 process-local 요동에 노출돼 있었다). `mark_error_status(5967,
+  "fixed", ...)`.
+- `pytest tests/test_naver_session.py tests/test_learning_signal.py` 67 passed,
+  `pytest tests/ -k "login or naver or precheck or harness"` 40 passed,
+  `precommit_check --category auth` 0위반, `py_compile` 통과.
+
+**파일** `JARVIS08_PUBLISH/credentials/login_manager.py`
+
+**교훈**
+[606]이 이미 "한 파일 안에서 고친 로직도 사본이 남을 수 있다"고 적었고 [636]이 바로
+전날 같은 문장을 다시 썼는데, 이번에도 *같은 함수가 고친 원칙의 세 번째 사본*이
+하루 만에 또 나왔다. "N개 소비처를 고쳤다"고 기록할 때는 그 판정 함수를 호출하는
+**모든** 곳을 `grep`으로 먼저 세어보고 그 개수와 실제로 고친 개수를 맞춰볼 것 — 이번
+경우 `grep -n "last_login_failure" login_manager.py` 한 줄이면 세 번째 소비처를
+착수 전에 바로 찾을 수 있었다.
+
+## [638] ✅ 해결 — 경제 브리핑 naver `HarnessLoginInvalidBackoff`(id=5969·5970, 07:08/07:16) 재청구 — [636]이 이미 고친 창, `_circuit_blocked`가 [632]가 미룬 터미널 상태 무시 재청구를 이번엔 닫음 (2026-08-13)
+
+**증상**
+리페어 큐가 `error_log` id=5970(`attempt=2, 2026-08-13T07:16:31, source=harness,
+module=JARVIS00_INFRA.harness.경제 브리핑 발행 — 네이버, func_name=① 전제조건,
+error_type=HarnessLoginInvalidBackoff, message="naver 로그인 세션 무효 — 쿠키 만료 —
+실제 요청이 로그아웃 상태를 보고"`)로 착수. DB 실측 — `status='analyzing'`,
+`llm_attempts=2`, `resolution='new — 사유 미기록 (guardian_agent._circuit_blocked:666)'`.
+형제 id=5969(attempt=1, 07:08:00)도 동일 패턴.
+
+**환경** `JARVIS07_GUARDIAN/guardian_agent.py` · 2026-08-13, `login_backoff.json`
+`reason=captcha_unattended`·`at=2026-08-13T06:30:48`·`until=12:30:48` 활성 중(조사 시각
+09:03 기준 잔여 3.5h). 데몬 미기동 상태(`pgrep jarvis_daemon.py` 무응답) — 이 리페어는
+별도 세션 프로세스로 신선하게 실행됨(스테일 프로세스 문제 아님).
+
+**원인**
+id=5969·5970 는 [636]이 처리한 **바로 그 시각의 바로 그 창**(06:30~12:30, id=5969·5970
+자체는 [636] 본문에도 "07:08·07:16 은 `...Backoff` 정확 분류"로 이미 언급됨)이다. 신규
+프로세스로 현재(우선순위 커밋 전 워킹트리) 코드를 그대로 재현한 결과 —
+`kind_of(record)=="login_invalid_backoff"`, `is_transient("HarnessLoginInvalidBackoff",
+..., kind="login_invalid_backoff", source="harness") == True`. 즉 `_orchestrate()` 의
+안전장치 0(704행, `is_transient` 게이트)이 **지금 코드로 이 레코드를 다시 태우면 즉시
+`ignored`로 닫혀 Tier-2 근처도 안 간다** — harness 경로 자체는 이미 완전히 정상이다.
+그런데 DB 에 남은 실제 `resolution`은 `_circuit_blocked`(741행)이 남긴 것이었다 — 즉
+*과거 어느 시점*엔 circuit breaker 한도 초과로 `status='new'`로 되돌려졌고, 그 뒤
+`j07_retry_pending`이 재청구했지만 이번 세션 착수 시점엔 `status='analyzing'`으로
+멈춰 있었다. [632]가 정확히 이 지점을 "다음 작업 후보"로 남겨 뒀다 — `_circuit_blocked`
+가 현재 status 가 이미 터미널(wontfix/ignored/fixed)인지 확인 없이 무조건 `new`로
+되돌리는 문제. 이번 두 레코드가 그 갭을 실측으로 증명한 첫 사례다: 상태가 터미널이
+아니었을 뿐(`analyzing`/`new`)이라 [632]가 말한 "이미 wontfix로 닫힌 레코드가 되살아남"
+케이스는 아니지만, 같은 갭이 이 두 레코드가 앞으로 `ignored`로 닫힌 뒤에도 circuit
+breaker 가 다시 발동하면 **또** `new`로 되돌릴 수 있다는 점에서 동일한 근본 결함이다.
+
+**헛다리**
+[629] 스테일 데몬 가설 — 기각. 데몬 자체가 기동 중이 아니라 이번 세션은 항상 신선한
+프로세스로 현재 코드를 읽는다. `_orchestrate` 안전장치 0 을 재현으로 직접 확인했으므로
+harness 경로에 새 결함이 있는지도 추가 조사 없이 즉시 배제 가능했다.
+
+**해결**
+① `guardian_agent._circuit_blocked()`(741행) — `_db.get_error(error_id)` 로 현재 status
+조회 후 이미 `ignored`/`wontfix`/`fixed` 면 재청구 없이(`new`로 되돌리지 않고) 즉시
+차단만 반환. `_try_sdk_targeted_fix`(585행)가 이미 쓰는 "게이트 종결 상태 유지" 패턴을
+circuit breaker 교차점에도 동일 배선(① 단일 진입점, [632]가 남긴 갭을 닫음).
+② id=5969·5970 는 현재 코드가 실제로 내리는 판정(`ignored`, 안전장치 0)과 동일하게
+`mark_error_status(..., "ignored", ...)` 로 종결 — [636]/[637]과 동일 창, 코드 결함
+아님(사람이 `--manual` 로그인해야 백오프 해제).
+**검증**: 합성 레코드로 종결 상태(wontfix) 후 circuit breaker 재청구 시뮬레이션 —
+가드가 `new` 로 되돌리지 않고 상태 유지 확인. `pytest tests/test_naver_session.py
+tests/test_learning_signal.py tests/test_sdk_repair_budget.py` 100 passed, `pytest
+tests/ -k "guardian or circuit or harness or login or naver or precheck"` 45 passed,
+`precommit_check --category auth` · `--category copytruth` 각각 0위반, `py_compile` 통과.
+
+**파일** `JARVIS07_GUARDIAN/guardian_agent.py`
+
+**교훈**
+[632]가 "이번 세션 범위 밖"으로 미룬 다음 작업 후보가 실제로 같은 문제의 다른 얼굴로
+재현되는 데 하루가 걸렸다 — 원인 진단에서 "다음에 고칠 것"을 지목했다면, 그 지목이
+가리키는 재발이 실제로 나타난 첫 순간이 곧 미루지 않고 닫을 시점이다. 이번 건은 harness
+경로 자체엔 결함이 없었다([636]이 이미 다 고쳤다)는 점에서 [631]·[628]과 같은 "코드는
+이미 옳다" 부류지만, 그 판정에 도달하기까지 두 번째 Tier-2 세션을 태운 이유가 circuit
+breaker 라는 별개 교차점의 미완성 가드였다는 점에서 [632]의 직접 후속이다.
+

@@ -635,8 +635,8 @@ def run_all_themes(theme: str, sector: str = "", gate_feedback: dict | None = No
                 if platform == "naver":
                     try:
                         from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (
-                            last_login_failure, login_invalid_kind)
-                        _kind = login_invalid_kind(last_login_failure())
+                            current_login_failure_reason, login_invalid_kind)
+                        _kind = login_invalid_kind(current_login_failure_reason())
                     except Exception:
                         pass
                 issues.append(Issue(step="① 전제조건", kind=_kind,

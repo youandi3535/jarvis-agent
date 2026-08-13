@@ -739,9 +739,24 @@ def _orchestrate(error_id: int):
         _cb_late = _flag("GUARDIAN_CB_LATE")
 
         def _circuit_blocked() -> bool:
-            """토큰 소모 + 초과 시 보고·상태 되돌림. True 면 호출자는 즉시 return."""
+            """토큰 소모 + 초과 시 보고·상태 되돌림. True 면 호출자는 즉시 return.
+
+            ★ 터미널 상태는 덮어쓰지 않는다 (ERRORS [632] 후속) — 종전엔 무조건
+              status='new' 로 되돌려 다음 retry_pending 이 재청구했다. 다른 세션이
+              이미 wontfix/ignored/fixed 로 닫은 레코드까지 구분 없이 되살아나
+              같은 결론(예: 캡차 백오프 — 사람 개입 필요)을 세션마다 다시 태워
+              확인하는 낭비가 반복됐다([625][627][628][629][631][632][636][637]
+              전부 이 반복의 사례). 위 585행 `_try_sdk_targeted_fix` 가 이미 쓰는
+              "게이트 종결 상태 유지" 패턴을 여기도 동일 적용(① 단일 진입점 —
+              사본 아니라 같은 판단을 circuit breaker 교차점에도 배선).
+            """
             if _circuit_breaker_ok():
                 return False
+            _cur = (_db.get_error(error_id) or {}).get("status", "")
+            if _cur in ("ignored", "wontfix", "fixed"):
+                log.info(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — "
+                         f"이미 종결 상태({_cur})라 유지, 재청구 안 함")
+                return True
             log.warning(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — 시간당 한도 초과")
             _notify_all(error_record, "circuit_open")
             _db.mark_error_status(error_id, "new")  # 다음 retry_pending 에서 재처리
