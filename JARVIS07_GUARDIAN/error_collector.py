@@ -170,6 +170,41 @@ def _is_sandbox_traceback(tb_str: Optional[str]) -> bool:
     return bool(_SANDBOX_PATH_PAT.search(m.group(1)))
 
 
+# ── 비-정본 인터프리터 차단 (2026-08-11, error_log #5848류) ─────────────
+# `_is_sandbox_traceback` 은 *경로*(컨테이너 마운트)로 걸지만, 같은 macOS 호스트에서
+# CI 재현용 "최소 의존 venv"(예: requirements-test.txt 만 설치)로 저장소 안 진입점을
+# pytest 밖에서 직접 돌리면 traceback 의 File 경로는 저장소 정본 경로 그대로라
+# 경로 판정으로는 못 잡는다 — 걸러야 할 건 *어떤 인터프리터가 실행했는가* 다.
+# 이 경우 실제 정본 `.venv` 는 멀쩡한데 다른 interpreter 에만 없는 모듈이라
+# ModuleNotFoundError/ImportError 가 나며, 이는 "코드 결함" 이 아니라 "검증 방법론의 산물"이다.
+_MODULE_MISSING_TYPES = {"ModuleNotFoundError", "ImportError"}
+
+
+def _is_canonical_interpreter() -> bool:
+    """이 프로세스가 프로젝트 정본 `.venv` 인터프리터로 도는가.
+
+    ★ 단일 진입점 — 오류 수집 억제 판단은 전부 여기(GUARDIAN error_collector)가 갖는다.
+      `JARVIS00_INFRA/preflight.py` 의 `_is_canonical_venv()` 도 이 함수를 그대로 재사용한다
+      (같은 계산을 두 곳에 복사해 두면 값이 갈라진다 — CLAUDE.md '복사본을 진실로 믿지 말 것').
+    """
+    # ★ `sys.executable` 을 `.resolve()` 하면 안 됨 — `.venv/bin/python` 은 심볼릭 링크 사슬
+    #   끝(예: `/opt/homebrew/.../python3.10`)까지 풀려 `.venv` 흔적이 사라진다(실측 확인됨).
+    #   venv 판정은 `sys.prefix`(venv 루트, 링크를 따라가지 않음)가 표준.
+    try:
+        canonical = (_ROOT / ".venv").resolve()
+        current = Path(sys.prefix).resolve()
+    except Exception:
+        return True  # 판정 불가 — 억제하지 않음(기존 동작 유지, fail-open)
+    if not canonical.exists():
+        return True  # venv 자체가 없는 환경(예: 컨테이너) — 판정 보류, 기존 동작 유지
+    return current == canonical
+
+
+def _is_noncanonical_module_missing(error_type: str) -> bool:
+    """의존성 누락류 오류 + 비정본 인터프리터 — 둘 다 참일 때만 억제 대상."""
+    return error_type in _MODULE_MISSING_TYPES and not _is_canonical_interpreter()
+
+
 # ── 쿨다운 헬퍼 ─────────────────────────────────────────────────
 
 def _cool_key(source, module, error_type, message: str) -> str:
@@ -234,6 +269,15 @@ def _collect_error(
     # Sandbox 환경 traceback 차단 — 호스트 데몬과 무관한 사고는 적재 금지
     if _is_sandbox_traceback(tb_str):
         log.debug(f"[GUARDIAN] sandbox traceback skip — {error_type}: {(message or '')[:60]}")
+        return None
+
+    # 비-정본 인터프리터(예: requirements-test.txt 최소 venv)에서만 없는 모듈 —
+    # 검증 방법론의 산물이지 코드 결함이 아니다. preflight 는 이 계산을 자체 게이트에서
+    # 재사용하지만(단일 진실 소스), 그 경로는 synthetic RuntimeError 로 감싸 error_type 이
+    # 안 걸린다 — 여기는 ModuleNotFoundError/ImportError 를 *직접* report() 하는 다른
+    # 진입점(예: 다른 __main__ 이 import 실패를 그대로 report)을 위한 그물이다.
+    if _is_noncanonical_module_missing(error_type):
+        log.debug(f"[GUARDIAN] non-canonical interpreter module-missing skip — {error_type}: {(message or '')[:60]}")
         return None
 
     # ★ `__smoke__` 표식 — 스모크 테스트의 *합성 입력* 은 DB·통계·이벤트를 오염시키지 않는다.

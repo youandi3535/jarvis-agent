@@ -1534,6 +1534,8 @@ def backup_db(retention_days: int = 30) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 RETENTION: dict[str, tuple[int, str, str]] = {
+    # 자율 SDK 수리 게이트 결정 장부 (repair_budget) — 테이블 신설 시 보존기간 동반 선언 규정
+    "sdk_repair_attempts": (90, "ts", "자율 SDK 수리 게이트 결정 장부"),
     # 빠르게 쌓이는 관측 데이터 — 짧게
     # ★ vision_agent_history 는 2026-07-27 부터 **상태 변화 시에만** 적재한다
     #   (종전 30초마다 → 182,437행 = DB 최대 테이블, 그런데 읽는 코드 0).

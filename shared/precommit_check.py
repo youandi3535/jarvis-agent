@@ -2062,6 +2062,44 @@ def check_auth(report: Report) -> None:
                                      f"필수 심볼 '{sym}' 없음"))
     report.checks_run += 1
 
+    # ── ④⑤ 쿠키 파일 경로·삭제 (2026-08-11, ERRORS [615]) ─────────────────
+    #
+    # ★ 왜 이제야 넣나: 이 함수 docstring 은 예전부터 "③ 쿠키 파일 경로 하드코딩 검출" 을
+    #   광고했는데 **구현이 없었다**(실제 ③번은 '파일이 존재하는가' 였다).
+    #   그래서 같은 경로를 8곳이 각자 조립하도록 방치됐고, 2026-08-11 사고에서
+    #   *쿠키를 지운 코드*(scheduler)와 *쿠키를 요구한 코드*(economic_poster)가
+    #   **둘 다 owner 밖 사본**이었다. 광고만 하는 검사는 없는 검사다.
+    _COOKIE_OWNER = "JARVIS08_PUBLISH/credentials/naver_cookie_refresher.py"
+    # ★ '경로 조립' 만 잡는다 — 파일명이 *목록의 항목* 으로 등장하는 것은 사본이 아니다
+    #   (예: architecture.DENY_FIX_PATHS 의 자동수정 금지 목록). 예외 목록을 박는 대신
+    #   판정을 정확히 한다(②) — 경로 연산자 `/` 가 앞에 붙은 경우만 조립이다.
+    _pat_path = re.compile(r'/\s*["\']naver_cookies\.pkl["\']')
+    _pat_del = re.compile(r"\.unlink\(|os\.remove\(")
+    for p_ in _iter_py():
+        rel_s = str(p_.relative_to(ROOT))
+        if rel_s in (_COOKIE_OWNER, "shared/precommit_check.py") or rel_s.startswith("tests/"):
+            continue
+        text = _read_py(p_)
+        if text is None:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            _code = line.split("#", 1)[0]
+            if not _code.strip():
+                continue
+            # ④ 경로를 직접 조립하면 사본이 된다 — owner 에서 import 할 것
+            if _pat_path.search(_code):
+                report.add(Violation(
+                    cat, "auth/cookie-path-copy", rel_s, i,
+                    "쿠키 경로를 직접 조립한다 — "
+                    "`from ...naver_cookie_refresher import COOKIE_FILE` 로 파생할 것"))
+            # ⑤ 쿠키 파일 삭제는 어디서도 하지 않는다
+            if _pat_del.search(_code) and ("cookie" in _code.lower() or "COOKIE" in _code):
+                report.add(Violation(
+                    cat, "auth/cookie-delete", rel_s, i,
+                    "쿠키 파일을 삭제한다 — 삭제는 갱신을 앞당기지 않고(만료여도 "
+                    "cookie_needs_refresh 가 True) 발행 precondition·복구재료만 없앤다"))
+    report.checks_run += 1
+
 
 # auth 카테고리 등록
 CATEGORIES["auth"] = check_auth
@@ -3182,6 +3220,305 @@ def check_retry_ssot(report: Report) -> None:
 
 
 CATEGORIES["retry"] = check_retry_ssot
+
+
+# ══════════════════════════════════════════════════════════════════
+#  sdkguard — 비싼 *자율* 자원(Claude Code SDK 자가수리)은 가드를 지난 통로로만
+# ══════════════════════════════════════════════════════════════════
+#
+# ★ 왜 새 카테고리인가 (symmetry 에 붙이지 않은 사유)
+#   `symmetry` 의 주제는 "보호 함수 F 가 적용 대상 S 의 *진부분집합* 에만 걸렸다" 는
+#   **사후 대칭**이다. 여기서 막을 것은 성격이 다르다 — **비싼 자원으로 가는 새 통로가
+#   가드를 우회한 채 생기는 것**(사전 봉쇄)이고, 자체 owner 모듈(`repair_budget.py`)과
+#   자체 fail-closed self-check 를 갖는다. `collect` 가 같은 이유로 독립 카테고리다.
+#   독립 카테고리여야 `--category sdkguard` 로 단독 실행·단독 보고가 된다.
+#
+# ★ 무엇이 터졌나 (2026-08 실측)
+#   최근 7일 LLM 지출의 약 50%가 사건 구동 SDK 자가수리였다 — `sdk_query` 54회
+#   1.4억 토큰 $81.62. 상한은 `guardian_agent` 경로에만 있었고
+#   `incident_responder` 경로엔 **없었다**(③원칙 위반). 캡차처럼 *코드로 못 고치는*
+#   사유에도 매 회차 10분짜리 세션이 돌았다.
+#
+# ★ ② 동적 설계 — 이 검사는 이름 목록을 갖지 않는다. 앵커는 **모듈 두 개**뿐이고
+#   나머지는 전부 실물에서 파생한다:
+#     · 게이트 API      ← `repair_budget.__all__`
+#     · 판정 함수(judge) ← 그중 반환이 '차단 사유'(`str | None`)인 것
+#     · 비싼 자원       ← `claude_sdk_compat.__all__` 중 `prompt` 인자를 받는 함수
+#     · 면제 통로       ← DEFAULT_JOBS 콜백(심의된 스케줄) / `requires_approval=True`
+#                        도구(사용자 승인) — *성질* 로 면제한다, 이름으로가 아니라.
+#   그래서 함수 이름이 바뀌어도, 새 잡·새 도구가 생겨도 검사가 따라온다.
+_SDK_GATE_OWNER  = "JARVIS07_GUARDIAN/repair_budget.py"     # 게이트 owner (앵커 ①)
+_SDK_SPEND_OWNER = "shared/claude_sdk_compat.py"            # 비싼 자원 owner (앵커 ②)
+
+
+def _module_all(rel: str) -> tuple[ast.Module | None, set[str] | None]:
+    """모듈 AST + `__all__` 공개 이름 집합. 읽기/파싱 실패 시 (None, None)."""
+    p = ROOT / rel
+    text = _read_py(p) if p.exists() else None
+    if text is None:
+        return None, None
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None, None
+    names: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        tgts = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(isinstance(t, ast.Name) and t.id == "__all__" for t in tgts):
+            continue
+        val = node.value
+        if isinstance(val, (ast.List, ast.Tuple, ast.Set)):
+            names |= {e.value for e in val.elts
+                      if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+    return tree, (names or None)
+
+
+def _sdk_spend_symbols() -> set[str] | None:
+    """비싼 자원의 진입 심볼 — owner 의 `__all__` 중 `prompt` 를 받는 함수에서 파생."""
+    tree, api = _module_all(_SDK_SPEND_OWNER)
+    if tree is None or not api:
+        return None
+    out = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name not in api:
+            continue
+        args = [a.arg for a in (node.args.args + node.args.posonlyargs + node.args.kwonlyargs)]
+        if "prompt" in args:
+            out.add(node.name)
+    return out or None
+
+
+def _sdk_gate_judges() -> tuple[set[str] | None, set[str] | None]:
+    """(게이트 공개 API, 판정 함수 이름) — owner 가 없으면 (None, None).
+
+    판정 함수 = 반환 주석이 '차단 사유 문자열 또는 None' 인 공개 함수.
+    이름을 박지 않는 이유: owner 가 함수를 개명해도 검사가 따라와야 한다.
+    """
+    tree, api = _module_all(_SDK_GATE_OWNER)
+    if tree is None:
+        return None, None
+    if not api:
+        api = {n.name for n in tree.body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and not n.name.startswith("_")}
+    judges = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name not in api or node.returns is None:
+            continue
+        ann = ast.unparse(node.returns)
+        if re.search(r"\bstr\b", ann) and re.search(r"\bNone\b|Optional", ann):
+            judges.add(node.name)
+    return (api or None), (judges or None)
+
+
+def _sdk_deliberate_targets() -> set[str] | None:
+    """*심의된* 통로 — 스케줄 잡 콜백 + 그 콜백이 **직접** 부르는 함수 (1홉).
+
+    주 1회 `j07_deep_audit` 처럼 **사람이 주기를 정해 등록한** 통로는 자율 폭주가
+    아니다. 목록을 박지 않고 `DEFAULT_JOBS`(잡 단일 진실 소스)에서 파생한다 —
+    새 잡이 생기면 자동으로 따라온다. 읽기 실패는 None(=fail-closed 신호).
+
+    ★ 이름이 아니라 **`파일::함수`** 로 식별한다. 이름만 모으면(실측 194개) 새로 생긴
+      가드 없는 통로가 *우연히 같은 이름* 이라는 이유로 조용히 면제된다 — 검사가
+      스스로 구멍을 뚫는 꼴이다. import 문에서 정의 모듈을 되짚어 자격을 붙인다.
+    """
+    rel = "JARVIS04_SCHEDULER/job_registry.py"
+    p = ROOT / rel
+    text = _read_py(p) if p.exists() else None
+    if text is None:
+        return None
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    callbacks: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for k, v in zip(node.keys, node.values):
+                if (isinstance(k, ast.Constant) and k.value == "callback"
+                        and isinstance(v, ast.Constant) and isinstance(v.value, str)):
+                    callbacks.add(v.value)
+    if not callbacks:
+        return None
+
+    out: set[str] = set()
+    for cb in callbacks:
+        mod, _, fn_name = cb.rpartition(".")
+        mod_rel = mod.replace(".", "/") + ".py"
+        out.add(f"{mod_rel}::{fn_name}")                      # 콜백 자신
+        mtext = _read_py(ROOT / mod_rel) if (ROOT / mod_rel).exists() else None
+        if mtext is None:
+            continue
+        try:
+            mtree = ast.parse(mtext)
+        except SyntaxError:
+            continue
+        for node in ast.walk(mtree):
+            if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == fn_name):
+                continue
+            # 이 콜백 안에서 보이는 import 로 '어느 파일의 함수인가' 를 되짚는다
+            origin: dict = {}
+            for imp in ast.walk(node):
+                if isinstance(imp, ast.ImportFrom) and imp.module:
+                    src = imp.module.replace(".", "/") + ".py"
+                    for a in imp.names:
+                        origin[a.asname or a.name] = src
+            for c in ast.walk(node):
+                if not isinstance(c, ast.Call):
+                    continue
+                nm = _call_name(c) or ""
+                if nm:
+                    out.add(f"{origin.get(nm, mod_rel)}::{nm}")
+    return out
+
+
+def _sdk_approval_tools(tree: ast.Module) -> set[str]:
+    """`@register_tool(..., requires_approval=True)` 함수 이름 — 사용자 승인 통로.
+
+    승인 게이트를 이미 통과하는 도구는 *자율* 지출이 아니다. 성질로 면제한다.
+    """
+    out = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for dec in node.decorator_list:
+            if not isinstance(dec, ast.Call) or _call_name(dec) != "register_tool":
+                continue
+            for kw in dec.keywords:
+                if (kw.arg == "requires_approval" and isinstance(kw.value, ast.Constant)
+                        and kw.value.value is True):
+                    out.add(node.name)
+    return out
+
+
+def _sdk_enclosing(tree: ast.Module) -> list:
+    """모듈 최상위 함수 + 클래스 메서드.
+
+    ★ 중첩 def 를 따로 세지 않는다 — 안쪽 헬퍼가 SDK 를 부르는 것은 *바깥 함수의
+      통로* 다. 따로 세면 ① 가드는 바깥에 있는데 안쪽이 '무가드' 로 오판되고
+      ② 같은 지출이 두 번 계상된다. 실측: `run_auto_repair` 의 중첩
+      `_step_run_cli` 가 정확히 이 꼴이다.
+    """
+    out = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out.append(node)
+        elif isinstance(node, ast.ClassDef):
+            out += [m for m in node.body
+                    if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    return out
+
+
+def check_sdkguard(report: Report) -> None:
+    """★ 비싼 *자율* SDK 자가수리는 가드를 지난 통로로만 (사용자 박제 2026-08-12).
+
+    ① 게이트 owner·비싼 자원·잡 카탈로그를 못 읽으면 **위반**(fail-closed)
+    ② 비싼 자원(SDK)을 부르는 함수는 *가드를 지나거나* 심의된 통로여야 한다
+    ③ 판정(judge)은 촉점 **한 곳** 에서만 — 호출자마다 붙이면 그게 지금 문제의 형태
+    ④ 가드는 지출 **앞** 에 — 뒤에 있으면 이미 돈을 쓴 뒤다
+    """
+    cat = "sdkguard"
+
+    spend = _sdk_spend_symbols()
+    if not spend:
+        report.add(Violation(
+            cat, "sdkguard/self-check", _SDK_SPEND_OWNER, 0,
+            "비싼 자원(SDK 진입 심볼)을 못 읽어 검사가 무력화됨 — 검사 자체를 고칠 것"))
+        report.checks_run += 1
+        return
+
+    deliberate = _sdk_deliberate_targets()
+    if deliberate is None:
+        report.add(Violation(
+            cat, "sdkguard/self-check", "JARVIS04_SCHEDULER/job_registry.py", 0,
+            "DEFAULT_JOBS 콜백을 못 읽어 '심의된 통로' 판정이 무력화됨 — 검사 자체를 고칠 것"))
+        report.checks_run += 1
+        return
+
+    api, judges = _sdk_gate_judges()
+    if api is None:
+        # 게이트 owner 미도입 — 이 상태를 *차단* 으로 만들면 게이트를 들여오는 커밋 자체가
+        # 막힌다(닭·달걀). 대신 **경고로 항상 보이게** 둔다. 도입 후의 회귀(가드 삭제·
+        # 사본·우회)는 아래 레그들이 차단하고, "게이트가 아예 없는 상태" 는
+        # tests/test_sdk_repair_budget.py 가 빨갛게 잡는다(테스트가 fail-closed 백스톱).
+        report.add(Violation(
+            cat, "sdkguard/gate-missing", _SDK_GATE_OWNER, 0,
+            "자율 SDK 수리 게이트 owner 가 없다 — 비싼 자원이 무제한이다. "
+            "이 경고가 사라지지 않으면 브레이크가 없는 것이다", severity="warn"))
+        report.checks_run += 1
+        return
+    if not judges:
+        report.add(Violation(
+            cat, "sdkguard/self-check", _SDK_GATE_OWNER, 0,
+            "게이트 판정 함수(반환 `str | None`)를 못 찾아 검사가 무력화됨 — "
+            "공개 API 에 판정 함수를 두고 반환 주석을 붙일 것"))
+        report.checks_run += 1
+        return
+
+    judge_sites: list[tuple[str, str, int]] = []   # (파일, 감싼 함수, 줄)
+    for p in _iter_py():
+        rel = str(p.relative_to(ROOT))
+        if rel in (_SDK_GATE_OWNER, "shared/precommit_check.py") or rel.startswith("tests/"):
+            continue
+        text = _read_py(p)
+        if text is None or not any(s in text for s in (spend | judges)):
+            continue                      # 2-phase — 사전 필터로 AST 비용 회피
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as e:
+            report.add(Violation(cat, "sdkguard/self-check", rel, e.lineno or 0,
+                                 f"파싱 실패로 검사 무력화: {e.msg}"))
+            continue
+        approval = _sdk_approval_tools(tree)
+        for fn in _sdk_enclosing(tree):
+            calls = [(c, _call_name(c) or "") for c in ast.walk(fn) if isinstance(c, ast.Call)]
+            spend_lines = [c.lineno for c, n in calls if n in spend]
+            judge_lines = [c.lineno for c, n in calls if n in judges]
+            for ln in judge_lines:
+                judge_sites.append((rel, fn.name, ln))
+            if not spend_lines:
+                continue
+            # ★ 면제는 *성질* 로 — 승인 도구 / 심의된 스케줄 통로
+            if fn.name in approval or f"{rel}::{fn.name}" in deliberate:
+                continue
+            if not judge_lines:
+                report.add(Violation(
+                    cat, "sdkguard/unguarded-path", rel, min(spend_lines),
+                    f"`{fn.name}()` 이 가드 없이 비싼 자율 SDK 를 쓴다 — "
+                    f"촉점에서 게이트({'/'.join(sorted(judges))})를 먼저 물을 것"))
+            elif min(judge_lines) > min(spend_lines):
+                report.add(Violation(
+                    cat, "sdkguard/guard-after-spend", rel, min(judge_lines),
+                    f"`{fn.name}()` 의 가드가 지출({min(spend_lines)}행) *뒤* 에 있다 — "
+                    f"이미 쓴 돈은 못 막는다"))
+
+    # ③ 판정 사본 금지 — 촉점 한 곳(①원칙). 호출자마다 붙이는 순간 두 벌이 된다.
+    holders = {(f, fn) for f, fn, _ in judge_sites}
+    if not holders:
+        report.add(Violation(
+            cat, "sdkguard/gate-unwired", _SDK_GATE_OWNER, 0,
+            "게이트를 만들어 두고 아무도 부르지 않는다 — 설치는 적용의 증거가 아니다"))
+    elif len(holders) > 1:
+        primary = sorted(holders)[0]      # 촉점 하나만 남기고 나머지를 사본으로 본다
+        for f, fn, ln in sorted(judge_sites):
+            if (f, fn) == primary:
+                continue
+            report.add(Violation(
+                cat, "sdkguard/duplicate-judgment", f, ln,
+                f"게이트 판정이 `{fn}()` 에도 있다 — 판정의 주인은 촉점 하나. "
+                f"호출자마다 붙이는 것이 바로 이번에 고친 결함의 형태다"))
+
+    report.checks_run += 4
+
+
+CATEGORIES["sdkguard"] = check_sdkguard
 
 
 def run(categories: list[str] | None = None) -> Report:

@@ -212,10 +212,23 @@ def _validate_python(content: str) -> bool:
 
 
 def _backup(file_path: Path) -> Path | None:
-    """.bak 백업 생성. 성공 시 백업 경로 반환."""
+    """.bak 백업 생성. 성공 시 백업 경로 반환.
+
+    ★ 권한을 소유자 전용으로 조인다 (2026-08-12).
+      `copy2` 는 원본 권한을 그대로 승계하는데, 소스는 0644 다. 그 백업이
+      `JARVIS08_PUBLISH/credentials/` 안에 떨어지면 **그 폴더 규칙(0600)을 어긴다** —
+      그 폴더는 git 미추적 파일을 전부 '비밀' 로 취급한다(쿠키·토큰과 한 칸에 산다).
+      실측: `login_manager.py.bak`·`naver_cookie_refresher.py.bak` 이 0644 로 남아
+      `test_시크릿_파일_권한이_소유자전용` 이 빨갛게 됐다.
+      백업을 만드는 곳이 여기 하나이므로 여기서 한 번에 보장한다(①).
+    """
     bak = file_path.with_suffix(file_path.suffix + ".bak")
     try:
         shutil.copy2(file_path, bak)
+        try:
+            bak.chmod(0o600)
+        except OSError:
+            pass
         return bak
     except Exception as e:
         log.error(f"[GUARDIAN] 백업 실패: {e}")

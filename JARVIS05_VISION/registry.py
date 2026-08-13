@@ -381,7 +381,8 @@ class _Publish08Adapter(BaseAgent):
             from pathlib import Path
             from datetime import datetime
             _ROOT   = Path(__file__).resolve().parent.parent
-            nv_path = _ROOT / "JARVIS02_WRITER" / "naver_cookies.pkl"
+            from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+                COOKIE_FILE as nv_path)   # ★ 경로 사본 금지 (ERRORS [615])
             nv_ok   = nv_path.exists()
             from JARVIS08_PUBLISH.credentials.login_manager import get_tistory_cookie
             ts_ok = bool(get_tistory_cookie())
@@ -401,7 +402,8 @@ class _Publish08Adapter(BaseAgent):
             from pathlib import Path
             from datetime import datetime
             _ROOT   = Path(__file__).resolve().parent.parent
-            nv_path = _ROOT / "JARVIS02_WRITER" / "naver_cookies.pkl"
+            from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+                COOKIE_FILE as nv_path)   # ★ 경로 사본 금지 (ERRORS [615])
             nv_ok   = nv_path.exists()
             nv_age  = None
             if nv_ok:

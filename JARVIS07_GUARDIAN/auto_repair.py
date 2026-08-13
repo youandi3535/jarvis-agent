@@ -1018,106 +1018,159 @@ def run_auto_repair_targeted(
     """
     log.info("[AutoRepair/Targeted] 시작: job=%s, platforms=%s", job_id, failed_platforms)
 
-    theme_line = f"- 테마: {theme}" if theme else ""
-    # ★ ERRORS [534] — 종전 `head -60`(전체의 0.6%·최신 1건)을 **조준 검색**으로 교체.
-    #   1.2MB 를 통독시키지도, 앞부분만 보여주지도 않는다 — 이 오류와 유사한 사고
-    #   상위 3건만 주입한다(헛다리 포함). 검색 실패 시 빈 문자열 → 프롬프트는 정상 동작.
-    prompt = _TARGETED_PROMPT_TMPL.format(
-        WORKDIR=str(ROOT.resolve()),
-        job_id=job_id,
-        failed_platforms=", ".join(failed_platforms),
-        theme_line=theme_line,
-        context=context[-3000:],
-        incidents=_incidents_block(context),
+    # ══════════════════════════════════════════════════════════════════
+    # ★ 자율 SDK 수리 브레이크 (2026-08-12 — CLAUDE.md ①③)
+    #
+    #   여기가 **자율 SDK 수리의 단일 통로** 다. 두 호출자(incident_responder 발행실패
+    #   구동 · guardian_agent 오류로그 구동)가 모두 이 함수로 모인다. 그런데 시도 상한은
+    #   ②(guardian) 에만 있었고 ①(incident) 은 Tier-1 실패 시 조건 없이 SDK 로 직행했다 —
+    #   같은 비싼 자원인데 문이 한쪽에만 있었다(③위반). 실측 7일 sdk_query 54회 $81.62.
+    #
+    #   ★ 판정을 여기서 하지 않는다. 주인은 `repair_budget.sdk_repair_block_reason` 하나다(①).
+    #     호출자마다 게이트를 붙이는 것이 곧 지금 문제의 형태이므로, 촉점 한 곳에서만 묻는다.
+    #   ★ 막지 않는 것: 사용자 텔레그램 승인 구동(`agent_tools` → `run_sdk_query` 직접)과
+    #     주 1회 `job_deep_audit`(→ `run_auto_repair()`, 별개 함수)은 이 촉점을 지나지 않는다.
+    #   ★ 킬스위치: `GUARDIAN_SDK_REPAIR_GATE=0` → 게이트 전면 무효(종전 동작 복귀).
+    # ══════════════════════════════════════════════════════════════════
+    from JARVIS07_GUARDIAN.repair_budget import (
+        record_attempt,
+        record_outcome,
+        void_attempt,
+        sdk_repair_block_reason,
     )
-
-    # ★ 밴딧 학습 브리지 — error_record 있으면 SDK 실행 전 스냅샷 (수정 후 diff 계산용)
-    _pre_snapshot = _snapshot_py_files() if error_record else None
-
-    # ★ 사용자 박제 2026-06-07 — Claude CLI 잔존 흔적 일소.
-    # PATH·OAuth·MessageParseError 처리 모두 run_sdk_query 가 자동 흡수.
-    from shared.claude_sdk_compat import run_sdk_query
-    result = run_sdk_query(
-        prompt=prompt, model=_MODEL,
-        cwd=str(ROOT),
-        permission_mode="bypassPermissions",
-        timeout=_TARGETED_TIMEOUT,
-        background=True,   # ★ 순번 대기 상한 — 줄이 길면 포기하고 defer (ERRORS [474])
-    )
-    # ★ 계약 위반을 크래시로 만들지 않는다 (2026-08-07 감사).
-    #   run_sdk_query 는 이제 None 을 내지 않지만, 몽키패치·구버전 등으로 깨질 수 있다.
-    #   그때 `result["elapsed"]` 는 즉시 터지고, 위쪽 except 가 삼키면 원인이 사라진다.
-    if not isinstance(result, dict):
-        log.error(f"[AutoRepair/Targeted] run_sdk_query 계약 위반: {type(result).__name__} 반환")
-        result = {"returncode": -3, "stdout": "", "stderr": "SDK 반환 계약 위반",
-                  "elapsed": 0, "error_kind": "sdk_error"}
-    elapsed = result.get("elapsed", 0)
-    rc      = result.get("returncode", -3)
-
-    if rc != 0:
-        kind = result.get("error_kind") or "sdk_error"
-        if kind == "deferred":
-            # ★ ERRORS [474] — LLM 순번을 못 잡아 *시작도 못 한* 것. 실패가 아니다.
-            #   알림 없이 조용히 물러나고 다음 retry_pending 이 재시도한다.
-            log.info("[AutoRepair/Targeted] 순번 대기 초과로 보류(defer) — %s",
-                     result.get("stderr", ""))
-            return False
-        if kind == "cli_not_found":
-            _send_tg("❌ *targeted 수정 실패*: claude 바이너리 PATH 미등록.")
-        elif kind == "timeout":
-            _send_tg(f"⏰ *targeted 수정 timeout* ({_TARGETED_TIMEOUT}초 초과)")
-        else:
-            _send_tg(f"❌ *targeted 수정 예외*: {(result.get('stderr') or '?')[:200]}")
-        log.error("[AutoRepair/Targeted] 실패(%s): %s", kind, result.get("stderr",""))
+    # ①경로(incident)는 DB 행이 없어 id=-1 로 온다(`_make_error_record`) — 그것이 유일한 구분자다.
+    _caller = "guardian" if (error_record or {}).get("id", -1) > 0 else "incident"
+    _why = sdk_repair_block_reason(error_record, context=context,
+                                   job_id=job_id, caller=_caller)
+    if _why:
+        # 로그·텔레그램·오류 status 갱신은 전부 record_attempt 안에서 — 호출자가 잊을 수 없게.
+        record_attempt(error_record=error_record, caller=_caller, job_id=job_id,
+                       decision="blocked", reason=_why)
         return False
+    _att_id = record_attempt(error_record=error_record, caller=_caller,
+                             job_id=job_id, decision="allowed")
 
-    output = result["stdout"]
-    summary = _parse_summary(output)
-    counts  = _parse_layer_counts(summary)
-    files_fixed = counts.get("files_fixed", 0)
+    # 아래 본체는 try/finally 로 감싼다 — 어떤 반환 경로든 결과를 장부에 남긴다.
+    # ※ 본체를 별도 함수로 빼지 않는다: 골든 테스트가 이 함수 노드 안에서
+    #   `_verify_sdk_fix`·`_restore_snapshot` 호출을 AST 로 확인한다.
+    _fixed, _elapsed, _deferred = False, 0, False
+    try:
+        theme_line = f"- 테마: {theme}" if theme else ""
+        # ★ ERRORS [534] — 종전 `head -60`(전체의 0.6%·최신 1건)을 **조준 검색**으로 교체.
+        #   1.2MB 를 통독시키지도, 앞부분만 보여주지도 않는다 — 이 오류와 유사한 사고
+        #   상위 3건만 주입한다(헛다리 포함). 검색 실패 시 빈 문자열 → 프롬프트는 정상 동작.
+        prompt = _TARGETED_PROMPT_TMPL.format(
+            WORKDIR=str(ROOT.resolve()),
+            job_id=job_id,
+            failed_platforms=", ".join(failed_platforms),
+            theme_line=theme_line,
+            context=context[-3000:],
+            incidents=_incidents_block(context),
+        )
 
-    log.info("[AutoRepair/Targeted] 완료: %ds, files_fixed=%d", elapsed, files_fixed)
-    _send_tg(
-        f"{'✅' if files_fixed > 0 else '⚠️'} *targeted 수정 완료* "
-        f"(job={job_id}, {elapsed}초)\n"
-        f"파일 수정: {files_fixed}개"
-    )
+        # ★ 밴딧 학습 브리지 — error_record 있으면 SDK 실행 전 스냅샷 (수정 후 diff 계산용)
+        _pre_snapshot = _snapshot_py_files() if error_record else None
 
-    if files_fixed > 0:
-        # ★ **자기보고를 믿지 않는다** (2026-08-08 감사 — Tier-2 가 무검증이었다).
-        #
-        #   종전엔 `files_fixed > 0` 하나로 `fixed` 를 확정했다. 그 값은 LLM 이 쓴
-        #   산문에서 정규식으로 뽑은 숫자다 — 실행 검증: "수정 파일 3개를 검토했으나
-        #   아무것도 고치지 않았습니다" → 3 → fixed. 요약 블록에 files_fixed:0 이 있어도
-        #   앞줄 산문이 먼저 매치된다.
-        #
-        #   결정적 대조(2026-08-08 03:04): Tier-1 은 같은 수정을 적용하고
-        #   재현검증에서 still_reproduces 를 받아 **롤백**했는데, 38초 뒤 Tier-2 가
-        #   같은 파일을 **무검증으로 통과**시켰다. 같은 저장소, 같은 오류, 반대 결론.
-        #
-        #   검증·롤백의 주인은 `error_fixer` 하나다(①). 여기서 새로 만들지 않고
-        #   그 정문(`verify_fix`)을 부른다 — 지금 그 정문의 호출자는 Tier-1 뿐이었다.
-        _v_ok, _v_why = _verify_sdk_fix(error_record, _pre_snapshot)
-        if _v_ok is False:
-            _restored = _restore_snapshot(_pre_snapshot)
-            log.warning("[AutoRepair/Targeted] 재현검증 실패 → 롤백 %d파일: %s",
-                        _restored, _v_why)
-            _send_tg(f"↩️ *targeted 수정 롤백* (job={job_id})\n"
-                     f"재현검증 실패 — {_v_why[:180]}\n복원 {_restored}개 파일")
+        # ★ 사용자 박제 2026-06-07 — Claude CLI 잔존 흔적 일소.
+        # PATH·OAuth·MessageParseError 처리 모두 run_sdk_query 가 자동 흡수.
+        from shared.claude_sdk_compat import run_sdk_query
+        result = run_sdk_query(
+            prompt=prompt, model=_MODEL,
+            cwd=str(ROOT),
+            permission_mode="bypassPermissions",
+            timeout=_TARGETED_TIMEOUT,
+            background=True,   # ★ 순번 대기 상한 — 줄이 길면 포기하고 defer (ERRORS [474])
+        )
+        # ★ 계약 위반을 크래시로 만들지 않는다 (2026-08-07 감사).
+        #   run_sdk_query 는 이제 None 을 내지 않지만, 몽키패치·구버전 등으로 깨질 수 있다.
+        #   그때 `result["elapsed"]` 는 즉시 터지고, 위쪽 except 가 삼키면 원인이 사라진다.
+        if not isinstance(result, dict):
+            log.error(f"[AutoRepair/Targeted] run_sdk_query 계약 위반: {type(result).__name__} 반환")
+            result = {"returncode": -3, "stdout": "", "stderr": "SDK 반환 계약 위반",
+                      "elapsed": 0, "error_kind": "sdk_error"}
+        elapsed = result.get("elapsed", 0)
+        _elapsed = elapsed          # ← 장부(record_outcome)용 — 아래 finally 에서 읽는다
+        rc      = result.get("returncode", -3)
+
+        if rc != 0:
+            kind = result.get("error_kind") or "sdk_error"
+            if kind == "deferred":
+                # ★ ERRORS [474] — LLM 순번을 못 잡아 *시작도 못 한* 것. 실패가 아니다.
+                #   알림 없이 조용히 물러나고 다음 retry_pending 이 재시도한다.
+                _deferred = True        # ← 장부에서 이 시도를 무효화한다(아래 finally)
+                log.info("[AutoRepair/Targeted] 순번 대기 초과로 보류(defer) — %s",
+                         result.get("stderr", ""))
+                return False
+            if kind == "cli_not_found":
+                _send_tg("❌ *targeted 수정 실패*: claude 바이너리 PATH 미등록.")
+            elif kind == "timeout":
+                _send_tg(f"⏰ *targeted 수정 timeout* ({_TARGETED_TIMEOUT}초 초과)")
+            else:
+                _send_tg(f"❌ *targeted 수정 예외*: {(result.get('stderr') or '?')[:200]}")
+            log.error("[AutoRepair/Targeted] 실패(%s): %s", kind, result.get("stderr",""))
             return False
-        if _v_ok is None:
-            log.info("[AutoRepair/Targeted] 재현검증 불가 — 수정 유지(%s)", _v_why)
-        _record_repairs_to_guardian(summary)
-        # ★ 밴딧 학습 브리지 — SDK 수정 diff → 원본 오류 fingerprint llm_patch 등록 + 밴딧 보상
-        if error_record and _pre_snapshot:
-            try:
-                from JARVIS07_GUARDIAN.pattern_fixer import record_sdk_fix
-                diffs = _compute_diffs(_pre_snapshot)
-                if record_sdk_fix(error_record, diffs):
-                    log.info("[AutoRepair/Targeted] ★ 밴딧 학습 완료 — SDK 수정이 밴딧 arm 으로 자산화")
-            except Exception as e:
-                log.debug("[AutoRepair/Targeted] 밴딧 학습 브리지 실패: %s", e)
 
-    return files_fixed > 0
+        output = result["stdout"]
+        summary = _parse_summary(output)
+        counts  = _parse_layer_counts(summary)
+        files_fixed = counts.get("files_fixed", 0)
+
+        log.info("[AutoRepair/Targeted] 완료: %ds, files_fixed=%d", elapsed, files_fixed)
+        _send_tg(
+            f"{'✅' if files_fixed > 0 else '⚠️'} *targeted 수정 완료* "
+            f"(job={job_id}, {elapsed}초)\n"
+            f"파일 수정: {files_fixed}개"
+        )
+
+        if files_fixed > 0:
+            # ★ **자기보고를 믿지 않는다** (2026-08-08 감사 — Tier-2 가 무검증이었다).
+            #
+            #   종전엔 `files_fixed > 0` 하나로 `fixed` 를 확정했다. 그 값은 LLM 이 쓴
+            #   산문에서 정규식으로 뽑은 숫자다 — 실행 검증: "수정 파일 3개를 검토했으나
+            #   아무것도 고치지 않았습니다" → 3 → fixed. 요약 블록에 files_fixed:0 이 있어도
+            #   앞줄 산문이 먼저 매치된다.
+            #
+            #   결정적 대조(2026-08-08 03:04): Tier-1 은 같은 수정을 적용하고
+            #   재현검증에서 still_reproduces 를 받아 **롤백**했는데, 38초 뒤 Tier-2 가
+            #   같은 파일을 **무검증으로 통과**시켰다. 같은 저장소, 같은 오류, 반대 결론.
+            #
+            #   검증·롤백의 주인은 `error_fixer` 하나다(①). 여기서 새로 만들지 않고
+            #   그 정문(`verify_fix`)을 부른다 — 지금 그 정문의 호출자는 Tier-1 뿐이었다.
+            _v_ok, _v_why = _verify_sdk_fix(error_record, _pre_snapshot)
+            if _v_ok is False:
+                _restored = _restore_snapshot(_pre_snapshot)
+                log.warning("[AutoRepair/Targeted] 재현검증 실패 → 롤백 %d파일: %s",
+                            _restored, _v_why)
+                _send_tg(f"↩️ *targeted 수정 롤백* (job={job_id})\n"
+                         f"재현검증 실패 — {_v_why[:180]}\n복원 {_restored}개 파일")
+                return False
+            if _v_ok is None:
+                log.info("[AutoRepair/Targeted] 재현검증 불가 — 수정 유지(%s)", _v_why)
+            _record_repairs_to_guardian(summary)
+            # ★ 밴딧 학습 브리지 — SDK 수정 diff → 원본 오류 fingerprint llm_patch 등록 + 밴딧 보상
+            if error_record and _pre_snapshot:
+                try:
+                    from JARVIS07_GUARDIAN.pattern_fixer import record_sdk_fix
+                    diffs = _compute_diffs(_pre_snapshot)
+                    if record_sdk_fix(error_record, diffs):
+                        log.info("[AutoRepair/Targeted] ★ 밴딧 학습 완료 — SDK 수정이 밴딧 arm 으로 자산화")
+                except Exception as e:
+                    log.debug("[AutoRepair/Targeted] 밴딧 학습 브리지 실패: %s", e)
+
+        _fixed = files_fixed > 0   # ← 장부에 남길 최종 결과 (조기 반환 경로는 False 유지)
+        return _fixed
+    finally:
+        # ★ deferred 는 예산·지문 상한을 갉아먹지 않는다 (2026-08-12 적대적 심사 B3)
+        #   순번을 못 잡아 **세션이 시작조차 안 된** 것이라 지출 $0·턴 0 이다. 그런데 장부에
+        #   `allowed`(SDK 호출 *앞* 에 찍힌다) + `nofix` 로 남으면 일일 예산과 지문 상한을
+        #   함께 소진했다. 실측: deferred 3회로 calls 3/3 소진 → 4회차 지문 상한 차단.
+        #   deferred 는 LLM 큐가 붐빌 때 나오고 그 시점이 정확히 발행 창이라, 사건이 몰릴수록
+        #   브레이크가 *진짜 수리* 를 막는 역효과를 냈다.
+        #   같은 병을 guardian_agent.py 가 `if not (a2 or {}).get("deferred")` 로 이미 고쳤다 —
+        #   그 형태를 그대로 재사용한다(①: 교훈의 주인은 하나).
+        if _deferred:
+            void_attempt(_att_id)
+        else:
+            record_outcome(_att_id, fixed=_fixed, elapsed_sec=_elapsed)
 
 

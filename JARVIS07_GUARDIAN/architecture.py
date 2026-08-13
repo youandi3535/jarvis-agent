@@ -63,12 +63,20 @@ ERROR_STATS_WINDOW_DAYS = 7    # 오류 통계 집계 기본 윈도우(일) — 
 # 어떤 재시도도 harness.DEFAULT_MAX_ATTEMPTS(SSOT, 현재 2회). 같은 error_id 가
 # Tier 2(LLM) 를 이 횟수만큼 이미 시도했으면 재시도 없이 wontfix + 텔레그램 알림.
 MAX_LLM_ATTEMPTS = 3
+
+# ★ 자율 SDK 수리 일일 상한 (사용자 박제 2026-08-12) — **새 숫자를 만들지 않는다.**
+#   뜻: "시스템 전체가 하루에 받는 자율 SDK 세션 수 = 문제 하나에 주는 시도 수".
+#   MAX_LLM_ATTEMPTS 에서 파생하므로 그 값을 바꾸면 함께 따라온다(②동적 설계).
+#   무배포 상향은 GUARDIAN_SDK_DAILY_CALLS 노브. 실측 대입: 3회 x 중앙값 $1.98 ~= $6/일
+#   (현행 무제한 상태의 8/10 실지출 $32.14 대비).
+SDK_REPAIR_DAILY_CALLS = MAX_LLM_ATTEMPTS
 DENY_FIX_PATHS = {            # 자동수정 절대 금지 파일 (보안·코어)
     ".env", "jarvis_daemon.py",
     "login_manager.py", "naver_cookies.pkl", "tistory_cookies.pkl",
 }
 
 __all__ = [
+    "SDK_REPAIR_DAILY_CALLS",
     "CATCH_MECHANISMS", "TIERS", "SEVERITY_MATRIX",
     "CB_MAX_HOUR", "ESCALATE_THRESHOLD", "ESCALATE_WINDOW_SECS", "DENY_FIX_PATHS",
     "DOMAIN_SKEW_THRESHOLD", "ERROR_STATS_WINDOW_DAYS", "MAX_LLM_ATTEMPTS",

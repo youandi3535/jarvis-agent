@@ -595,6 +595,12 @@ def write_file(path: str, content: str) -> dict:
         if p.exists():
             backup_path = p.with_suffix(p.suffix + ".bak")
             backup_path.write_bytes(p.read_bytes())
+            # ★ 백업도 소유자 전용 (2026-08-12) — credentials/ 안에 떨어지면
+            #   그 폴더의 미추적 파일은 전부 '비밀' 로 취급된다(쿠키와 한 칸에 산다).
+            try:
+                backup_path.chmod(0o600)
+            except OSError:
+                pass
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         _v = _verify_py_or_rollback(p, backup_path, new_created=(backup_path is None))
@@ -632,6 +638,11 @@ def edit_file(path: str, old_string: str, new_string: str,
             return {"ok": False, "error": f"old_string appears {cnt} times — use replace_all=True or provide more context"}
         backup_path = p.with_suffix(p.suffix + ".bak")
         backup_path.write_bytes(p.read_bytes())
+        # ★ 백업도 소유자 전용 (2026-08-12) — 위와 같은 사유.
+        try:
+            backup_path.chmod(0o600)
+        except OSError:
+            pass
         if replace_all:
             new_text = text.replace(old_string, new_string)
         else:

@@ -58,6 +58,57 @@ def _flag(name: str, default: bool = True) -> bool:
     return str(v).strip().lower() not in ("0", "false", "off", "no")
 
 
+# ── 자율 SDK 수리 장부 *관측* (★ 2026-08-12 — 판정 아님) ────────────────────
+#    자율 SDK 수리를 태울지 말지의 **판정은 `repair_budget` 단독**(①단일 진입점).
+#    아래 두 함수는 그 판정을 흉내내지 않는다 — "방금 그 호출에서 SDK 세션이 *실제로*
+#    돌았나" 만 장부(게이트 주인이 공개한 `budget_state()`)에서 **파생해서 읽는다**.
+#
+#    왜 필요한가 (겹치지 않게 하려고):
+#      Tier-2 시도 상한(`MAX_LLM_ATTEMPTS`)은 *LLM 을 태운 횟수* 를 세는 카운터다.
+#      촉점 게이트가 막아 0초 만에 돌아온 호출까지 시도로 세면 **LLM 0회로 상한이
+#      소진**되고, 진짜 코드 버그가 단 한 번도 시도되지 못한 채 wontfix 로 죽는다.
+#      같은 병을 backlog 통로에서 이미 한 번 고쳤다(`analyze_llm_only` 의 `deferred`).
+#      → 상한 *판정* 은 종전 자리 그대로 두고(중복 금지), **세는 시점** 만 실행 뒤로 옮긴다.
+def sdk_repair_ledger_snapshot() -> "dict | None":
+    """자율 SDK 수리 장부 스냅샷 — {"calls": 태운 세션 수, "blocked": 차단 건수} (24h).
+
+    ★ 값의 주인은 `repair_budget` — 여기서 숫자를 만들지 않는다. 게이트가 아직
+      배포되지 않았거나 조회가 실패하면 None(=판정 불가) 을 돌려준다.
+    """
+    try:
+        from JARVIS07_GUARDIAN.repair_budget import budget_state
+        st = budget_state() or {}
+        def _i(v):
+            return None if v is None else int(v)
+        return {"calls": _i(st.get("calls_24h")), "blocked": _i(st.get("blocked_24h"))}
+    except Exception:
+        return None
+
+
+def sdk_session_ran(before: "dict | None") -> bool:
+    """스냅샷 이후 자율 SDK 세션이 *실제로* 돌았는가.
+
+    ★ 판정 방향이 비대칭인 이유(비직관):
+      '차단이 한 건 늘었을 때만' 안 돌았다고 본다. 허용된 세션 수(`calls`)의 증가로
+      판정하지 않는 까닭은 장부 창이 **rolling 24h** 라서다 — SDK 세션은 최대 10분을
+      점유하는데, 그 사이에 24시간 전 기록 하나가 창 밖으로 빠지면 개수가 그대로여서
+      *실제로 돈 세션* 을 '안 돌았다' 고 오판한다. 차단은 밀리초 안에 기록되므로
+      그 창에서 노화가 끼어들 여지가 없다.
+      판정 불가(게이트 미배포·조회 실패·동시 실행)면 **True** — 종전 동작(시도로 셈)을
+      유지하는 보수적 기본값이다. 모를 때 상한을 슬그머니 늘리는 쪽으로 틀리지 않는다.
+    """
+    after = sdk_repair_ledger_snapshot()
+    if not before or not after:
+        return True
+    b0, b1 = before.get("blocked"), after.get("blocked")
+    if b0 is not None and b1 is not None:
+        return not (b1 > b0)
+    c0, c1 = before.get("calls"), after.get("calls")
+    if c0 is not None and c1 is not None:
+        return c1 > c0
+    return True
+
+
 # ── error_log 시간 컬럼 런타임 파생 (★ 결함1 재발 방지) ──────────────────
 #    종전 코드는 `created_at` 이라는 *존재하지 않는* 컬럼을 SQL 에 박아두고
 #    `except: pass` 로 예외를 삼켰다 → 빈도 상향 안전장치가 상시 무력(70일 무증상).
@@ -210,6 +261,16 @@ def _status_section() -> str:
             _remaining = max(0, _CB_MAX_HOUR - _cb_count)
         if _cb_count > 0:
             lines.append(f"⚡ Circuit breaker: 이번 시간 {_cb_count}/{_CB_MAX_HOUR}건 사용 (남은 {_remaining}건)")
+
+        # ★ 자율 SDK 수리 예산 — 게이트 주인(repair_budget)이 만든 한 줄을 *그대로* 싣는다.
+        #   문구를 여기서 조립하면 사본이 된다. 게이트 미배포면 조용히 생략.
+        try:
+            from JARVIS07_GUARDIAN.repair_budget import status_line as _rb_status_line
+            _rb_line = (_rb_status_line() or "").strip()
+            if _rb_line:
+                lines.append(_rb_line)
+        except Exception:
+            pass
 
         # 로그 스캔 다음 실행
         try:
@@ -487,12 +548,16 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
         )
 
         log.info(f"[GUARDIAN] #{error_id} 2순위 Claude Code SDK 수정 시작 (최대 10분)")
+        # ★ 촉점 게이트(repair_budget)가 막으면 이 호출은 LLM 0회로 즉시 False 를 준다.
+        #   '고치려 했지만 실패' 와 '아예 시도하지 못함' 은 뒤처리가 다르므로 구분한다.
+        _ledger_before = sdk_repair_ledger_snapshot()
         fixed = run_auto_repair_targeted(
             context=error_text,
             job_id=error_record.get("source", "unknown"),
             failed_platforms=[error_record.get("module", error_record.get("source", "unknown"))],
             error_record=error_record,   # ★ 밴딧 학습 브리지 — SDK 수정 → fingerprint llm_patch + 밴딧 보상
         )
+        _ran = sdk_session_ran(_ledger_before)   # False = 게이트가 막아 세션 자체가 없었음
 
         if fixed:
             # ★ 근거를 남긴다 (2026-08-08) — `fixed` 가 세 뜻을 말하지 않게.
@@ -512,6 +577,22 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
             #   `MAX_LLM_ATTEMPTS` 상한이 이미 있어 무한 재시도 위험은 없다 —
             #   시도 여유가 남아 있는데 스스로 문을 닫을 이유가 없다.
             #   실측 wontfix 61건 전부 `resolution` NULL 이었다 — '왜' 가 공백이었다.
+            # ★ 게이트가 이미 종결 사유를 남겼으면 **덮어쓰지 않는다** (2026-08-12).
+            #   자율 SDK 수리 게이트는 영구 사유(사람 개입·지문 상한·보안 파일)일 때
+            #   status 를 ignored/wontfix + resolution 으로 찍는다. 여기서 관성적으로
+            #   "재시도 대기" 를 덮어쓰면 **사유가 지워지고** 10분마다 같은 문을 다시
+            #   두드린다. 새 플래그를 만들지 않고 *DB 상태에서 파생* 한다(②).
+            _cur = (_db.get_error(error_id) or {}).get("status", "")
+            if _cur in ("ignored", "wontfix"):
+                log.info(f"[GUARDIAN] #{error_id} 게이트 종결 상태({_cur}) 유지 — 덮어쓰지 않음")
+                return False
+            if not _ran:
+                # 일시적 차단(쿨다운·일일 예산) — *시도한 적이 없으므로* 상한을 쓰지 않는다.
+                _db.mark_error_status(
+                    error_id, "new",
+                    "Tier-2 미실행 — 자율 SDK 수리 게이트 대기(쿨다운·예산). 재시도 대기")
+                log.info(f"[GUARDIAN] #{error_id} Tier-2 미실행(게이트 대기) → new 유지")
+                return False
             _attempts = int(error_record.get("llm_attempts") or 0)
             if _attempts >= _MAX_LLM_ATTEMPTS:
                 _db.mark_error_status(
@@ -838,22 +919,41 @@ def _orchestrate(error_id: int):
         #    'analyzing' 상태로 멈춘 오류가 job_retry_pending 에 의해 재투입될 때마다
         #    Tier 2(LLM) 를 무제한 재호출하는 사고(조용한 토큰 소모) 재발 방지.
         #    같은 error_id 가 이미 MAX_LLM_ATTEMPTS 회 시도됐으면 재시도 없이 종결.
-        attempts = _db.bump_llm_attempts(error_id)
-        if attempts > _MAX_LLM_ATTEMPTS:
-            log.warning(f"[GUARDIAN] #{error_id} Tier 2 시도 {attempts}회 — 상한({_MAX_LLM_ATTEMPTS}) 초과, 재시도 중단")
+        #
+        #    ★ 2026-08-12 — **세는 시점** 을 실제 실행 뒤로 옮긴다 (판정은 그대로 여기 한 곳).
+        #      촉점 게이트(`repair_budget`)가 막으면 LLM 은 0회 도는데, 호출 *앞* 에서 세면
+        #      그 0회가 상한을 갉아먹어 진짜 버그가 한 번도 시도되지 못한 채 wontfix 로
+        #      죽는다. 같은 병을 backlog 통로가 `deferred` 검사로 이미 고쳤다.
+        #      상한 판정 자체는 새 게이트와 **겹치지 않는다** — 게이트는 지문·예산·쿨다운을,
+        #      여기는 *이 error_id 를 몇 번 태웠나* 를 본다(축이 다르다).
+        _attempts_prev = int((_db.get_error(error_id) or error_record).get("llm_attempts") or 0)
+        if _attempts_prev >= _MAX_LLM_ATTEMPTS:
+            log.warning(f"[GUARDIAN] #{error_id} Tier 2 시도 {_attempts_prev}회 — 상한({_MAX_LLM_ATTEMPTS}) 도달, 재시도 중단")
             _notify_all(error_record, "llm_cap_reached", severity=severity)
-            _db.mark_error_status(error_id, "wontfix")
+            _db.mark_error_status(error_id, "wontfix",
+                                  f"Tier-2 {_attempts_prev}회 시도 후 상한 도달 "
+                                  f"({_MAX_LLM_ATTEMPTS})")
             return
 
         # ── Tier 2: LLM 수정 — low 포함 전 심각도 ────────────────
         # low도 Tier 2까지 진행 → 학습 데이터 축적 → 다음엔 Tier 1 해결
-        log.info(f"[GUARDIAN] #{error_id} Tier 1 실패 → Tier 2 (LLM, {severity}, 시도 {attempts}/{_MAX_LLM_ATTEMPTS})")
+        log.info(f"[GUARDIAN] #{error_id} Tier 1 실패 → Tier 2 (LLM, {severity}, "
+                 f"시도 {_attempts_prev + 1}/{_MAX_LLM_ATTEMPTS})")
+        _ledger_before = sdk_repair_ledger_snapshot()
         fixed = _try_sdk_targeted_fix(error_id, error_record)
+        _ran  = sdk_session_ran(_ledger_before)
+        attempts = _db.bump_llm_attempts(error_id) if _ran else _attempts_prev
 
         if fixed:
             _notify_all(error_record, "success", tier=2, severity=severity)
-        else:
+        elif _ran:
             _notify_all(error_record, "failed", severity=severity)
+        else:
+            # 게이트가 막은 것은 '수정 실패' 가 아니다 — 사유·예산·다음 가능 시각은
+            # 게이트가 이미 텔레그램·장부에 남겼다. 여기서 '실패' 알림을 겹쳐 보내면
+            # 사람이 원인을 코드에서 찾게 된다. 로그로만 흔적을 남긴다.
+            log.info(f"[GUARDIAN] #{error_id} 자율 SDK 수리 게이트에 막힘 — 시도 미소모 "
+                     f"({attempts}/{_MAX_LLM_ATTEMPTS}). 사유는 게이트 알림 참조")
 
     except Exception as e:
         log.error(f"[GUARDIAN] 오케스트레이터 오류: {e}")

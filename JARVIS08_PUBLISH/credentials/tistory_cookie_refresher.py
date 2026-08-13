@@ -629,7 +629,15 @@ def _attempt_once(force: bool, return_driver: bool):
             print("\n✅ 티스토리 쿠키 갱신 완료!")
             if return_driver:
                 return True, driver
-            driver.quit()
+            # ★ 다른 3개 quit() 호출과 대칭 — 여기만 무가드였다 (2026-08-10).
+            #   .env 는 이미 갱신됐는데 quit() 이 던지면(예: chromedriver 가 이미 죽어
+            #   "Connection refused") 바깥 except 가 이걸 "시도 실패" 로 오판 → 이미 성공한
+            #   갱신을 또 재시도(카카오 재로그인, CAPTCHA 위험) + 거짓 실패 알림.
+            try:
+                driver.quit()
+            except Exception:
+                pass
+            driver = None
             return True, None
         else:
             print("\n❌ .env 업데이트 실패")

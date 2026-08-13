@@ -517,6 +517,7 @@ def test_사전점검_실패가_사람과_원장_양쪽에_간다(monkeypatch, t
     이 경고는 "곧 발행이 깨진다" 는 예고인데 아무도 듣지 못했다.
     """
     import JARVIS08_PUBLISH.credentials.login_manager as lm
+    import JARVIS08_PUBLISH.credentials.naver_cookie_refresher as nc
     import shared.notify as notify
     from JARVIS07_GUARDIAN import error_collector as ec
 
@@ -529,6 +530,10 @@ def test_사전점검_실패가_사람과_원장_양쪽에_간다(monkeypatch, t
     monkeypatch.setattr(lm, "auto_refresh_if_needed", lambda *a, **k: None)
     monkeypatch.setattr(lm, "verify_all_logins", lambda platforms=("naver", "tistory"): {
         "naver": {"ok": False, "issues": ["쿠키 파일 없음 또는 빈 list"], "cookie_age_h": 1e9}})
+    # ★ 이 테스트는 "백오프와 무관하게 쿠키가 없는" 시나리오를 검증한다 — 저장소의
+    #   *실제* login_backoff.json(캡차로 활성 상태일 수 있음)이 새어 들어오지 않도록
+    #   명시적으로 "백오프 없음"을 고정한다(2026-08-12, [630] 후속 — 격리 결함 수정).
+    monkeypatch.setattr(nc, "login_backoff_active_reason", lambda: "")
 
     lm.job_pre_publish_check()
 
@@ -536,6 +541,38 @@ def test_사전점검_실패가_사람과_원장_양쪽에_간다(monkeypatch, t
     assert reported, "사전점검 실패가 오류 원장에 안 남는다"
     assert reported[0][0] == "PrecheckNaverCookieMissing", \
         f"뭉뚱그린 타입으로 박제됐다: {reported[0][0]}"
+
+
+def test_사전점검_백오프_중이면_사람필요_타입으로_분류된다(monkeypatch, tmp_path):
+    """★ [630] — precheck 경로가 harness·scheduler 두 경로와 달리 백오프를 몰라서
+
+    캡차 백오프 창마다 `PrecheckNaverCookieMissing`(코드 버그처럼 보이는 타입)으로
+    오탐 리페어 티켓을 냈다. 이슈 문구가 "쿠키 파일 없음" 이어도 백오프 중이면
+    `naver_login_error_type()` 파생 타입(사람이 필요함을 나타냄)으로 나가야 한다.
+    """
+    import JARVIS08_PUBLISH.credentials.login_manager as lm
+    import JARVIS08_PUBLISH.credentials.naver_cookie_refresher as nc
+    import shared.notify as notify
+    from JARVIS07_GUARDIAN import error_collector as ec
+    from JARVIS07_GUARDIAN.severity import is_transient
+
+    reported: list = []
+    monkeypatch.setattr(notify, "send_tg", lambda m, **k: None)
+    monkeypatch.setattr(ec, "report", lambda *a, **k: reported.append(a))
+    monkeypatch.setattr(lm, "NAVER_COOKIE_PATH", tmp_path / "none.pkl")
+    monkeypatch.setattr(lm, "_COOKIE_WATCH", tmp_path / "watch.json")
+    monkeypatch.setattr(lm, "auto_refresh_if_needed", lambda *a, **k: None)
+    monkeypatch.setattr(lm, "verify_all_logins", lambda platforms=("naver", "tistory"): {
+        "naver": {"ok": False, "issues": ["쿠키 파일 없음 또는 빈 list"], "cookie_age_h": 1e9}})
+    monkeypatch.setattr(nc, "login_backoff_active_reason", lambda: "captcha_unattended")
+
+    lm.job_pre_publish_check()
+
+    assert reported, "사전점검 실패가 오류 원장에 안 남는다"
+    et = reported[0][0]
+    assert et == "NaverLoginCaptchaUnattended", f"백오프 중인데 뭉뚱그린 타입: {et}"
+    assert is_transient(et, source="publish") is True, \
+        "사람이 필요한 타입인데 Tier-2 낭비 대상으로 남는다"
 
 
 def test_사전점검_정상이면_조용하다(monkeypatch, tmp_path):
@@ -870,11 +907,19 @@ def test_유효한_쿠키를_발행전에_지우지_않는다(monkeypatch, tmp_p
 
     assert run(True) == (True, True), "유효한 쿠키를 지운다 — 매 발행이 전체 로그인이 되어 CAPTCHA 를 부른다"
     assert run(None) == (True, True), "판정 불가를 만료로 단정해 지운다 — 네트워크 순단이 강제 재로그인이 된다"
-    assert run(False) == (False, False), "만료된 쿠키를 남긴다 — 갱신 기회를 놓친다"
+    # ★ 2026-08-11 (ERRORS [615]) — 단언을 **뒤집는다**. 종전엔 만료 시 삭제를 요구했고
+    #   그 근거는 "남기면 갱신 기회를 놓친다" 였는데 **거짓 전제** 였다:
+    #   `cookie_needs_refresh()` 는 파일이 있어도 만료면 True 를 돌려준다
+    #   (`return not check_cookie_valid()`). 남겨도 갱신은 정상적으로 일어난다.
+    #   반면 지우면 즉시 잃는다 — ① harness Layer1 precondition 차단(attempts=0)
+    #   ② 그 차단이 `_nv_collect_failed` 로 번져 티스토리까지 미발행
+    #   ③ 재로그인이 캡차로 막히면 복구 재료마저 소멸.
+    #   실측 08-11 07:00:02 이 자리에서 삭제 → 경제 네이버·티스토리 0/2.
+    assert run(False)[0] is True, "만료됐다고 쿠키를 지운다 — 발행 전제조건과 복구 재료를 함께 없앤다"
 
 
 def test_쿠키_삭제가_유효성에서_파생된다():
-    """무조건 삭제로 되돌아가면 같은 사고가 재발한다 — 판정 호출을 구조로 강제한다."""
+    """★ 이름은 역사다 — 지금 강제하는 것은 '쿠키 파일을 아예 지우지 않는다' 이다(ERRORS [615])."""
     import ast
     import inspect
     import importlib.util
@@ -887,12 +932,19 @@ def test_쿠키_삭제가_유효성에서_파생된다():
     sys.modules["_sched_clear2"] = sc
     spec.loader.exec_module(sc)
 
-    tree = ast.parse(inspect.getsource(sc._clear_all_cookies).lstrip())
-    names = {getattr(n.func, "id", "") or getattr(n.func, "attr", "")
-             for n in ast.walk(tree) if isinstance(n, ast.Call)}
-    assert "_nv_valid" in names or "cookie_valid_http" in names, \
-        "유효성 판정 없이 쿠키를 지운다 — 삭제가 무조건이면 매 발행이 전체 로그인이다"
-    # unlink 가 유효성 분기 *안* 에 있는지 — 분기 밖이면 판정이 장식이 된다
+    # ★ 2026-08-11 (ERRORS [615]) — 강제 방향을 **뒤집는다**.
+    #   종전엔 "유효성 판정 뒤에 삭제하라" 를 강제했는데, 이번 사고로 *삭제 자체* 가
+    #   해롭다는 것이 확정됐다. 이제 강제할 것은 **쿠키 파일을 지우지 않는다** 이다.
     src = inspect.getsource(sc._clear_all_cookies)
-    i_valid, i_unlink = src.index("is False"), src.index("unlink()")
-    assert i_valid < i_unlink, "삭제가 유효성 판정보다 앞에 있다 — 판정이 무의미하다"
+    tree = ast.parse(src.lstrip())
+    _dels = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call)
+             and getattr(n.func, "attr", "") in ("unlink", "remove")]
+    _cookie_dels = [n for n in _dels
+                    if "cookie" in ast.unparse(n).lower()]
+    assert not _cookie_dels, (
+        f"_clear_all_cookies 가 쿠키 파일을 지운다({[ast.unparse(n) for n in _cookie_dels]}) — "
+        "삭제는 갱신을 앞당기지 않고(만료여도 cookie_needs_refresh 가 True) "
+        "발행 precondition·티스토리·복구재료만 없앤다")
+    # Chrome *캐시* 정리는 남아 있어야 한다 (로그인 데이터가 아니다)
+    assert "rmtree" in src, "Chrome 캐시 정리까지 사라졌다 — 그건 지워도 되는 것이다"
