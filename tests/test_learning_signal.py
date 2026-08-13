@@ -696,15 +696,19 @@ def test_티스토리_만료를_사전점검이_잡는다(monkeypatch):
     monkeypatch.setenv("TS_PASSWORD", "p")
     monkeypatch.setenv("TS_COOKIE", "z" * 40)
 
-    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: False)
+    monkeypatch.setattr(tc, "cookie_valid_http",
+                        lambda timeout=8.0, detail=False: (False, "empty") if detail else False)
     v = lm.verify_all_logins(platforms=("tistory",))
     assert not v["tistory"]["ok"], "만료된 쿠키인데 사전점검이 통과시킨다"
 
-    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: True)
+    monkeypatch.setattr(tc, "cookie_valid_http",
+                        lambda timeout=8.0, detail=False: (True, "ok") if detail else True)
     assert lm.verify_all_logins(platforms=("tistory",))["tistory"]["ok"]
 
     # ★ '모른다'(None)를 '만료'로 적지 않는다 — 거짓 경보 금지
-    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: None)
+    # ★ 순단(network) — 아무 것도 하면 안 된다. 순단마다 로그인하면 캡차를 부른다.
+    monkeypatch.setattr(tc, "cookie_valid_http",
+                        lambda timeout=8.0, detail=False: (None, "network") if detail else None)
     assert lm.verify_all_logins(platforms=("tistory",))["tistory"]["ok"], \
         "판정 불가를 만료로 단정한다 — 네트워크 순단마다 거짓 경보가 된다"
 
@@ -721,16 +725,20 @@ def test_티스토리_만료면_자동갱신이_돈다(monkeypatch):
     monkeypatch.setattr(lm, "refresh_tistory_cookies", lambda force=False: calls.append(force) or True)
     monkeypatch.setenv("TS_COOKIE", "z" * 40)
 
-    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: True)
+    monkeypatch.setattr(tc, "cookie_valid_http",
+                        lambda timeout=8.0, detail=False: (True, "ok") if detail else True)
     lm.auto_refresh_if_needed(platforms=("tistory",))
     assert not calls, "유효한데 갱신을 시도한다 — 불필요한 로그인은 CAPTCHA 위험을 부른다"
 
-    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: False)
+    monkeypatch.setattr(tc, "cookie_valid_http",
+                        lambda timeout=8.0, detail=False: (False, "empty") if detail else False)
     lm.auto_refresh_if_needed(platforms=("tistory",))
     assert calls, "만료인데 갱신하지 않는다 — 발행 시각에 그대로 튕긴다"
 
     calls.clear()
-    monkeypatch.setattr(tc, "cookie_valid_http", lambda timeout=8.0: None)
+    # ★ 순단(network) — 아무 것도 하면 안 된다. 순단마다 로그인하면 캡차를 부른다.
+    monkeypatch.setattr(tc, "cookie_valid_http",
+                        lambda timeout=8.0, detail=False: (None, "network") if detail else None)
     lm.auto_refresh_if_needed(platforms=("tistory",))
     assert not calls, "판정 불가인데 갱신한다 — 네트워크 순단마다 로그인하면 CAPTCHA 를 부른다"
 
