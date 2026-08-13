@@ -429,7 +429,7 @@ def naver_login_error_type(reason: str) -> str:
 #   사라진다.) network_down·credentials_missing·login_button_click 등 나머지 사유는
 #   진짜 코드/설정 결함일 수 있어 여기 넣지 않는다 — GUARDIAN Tier-2 가 계속 잡아야
 #   사람이 알아챈다. 이 상수가 "무엇이 CAPTCHA 인가"의 단일 진실 소스 — GUARDIAN 쪽은
-#   여기서 파생만 한다(JARVIS07_GUARDIAN/severity.py `_naver_login_human_required_types`).
+#   여기서 파생만 한다(JARVIS07_GUARDIAN/severity.py `_login_human_required_types`).
 CAPTCHA_REASONS = frozenset({"captcha_unattended", "captcha_timeout"})
 
 # ★ 백오프로 인한 즉시-거절도 사람이 필요한 것과 같은 결과다 (2026-08-11, ERRORS [615] 후속).

@@ -307,7 +307,7 @@ def is_login_redirect(url: str) -> bool:
     return "/auth/login" in u or "accounts.kakao.com" in u
 
 
-def cookie_valid_http(timeout: float = 8.0) -> "bool | None":
+def cookie_valid_http(timeout: float = 8.0, *, detail: bool = False) -> "bool | None | tuple[bool | None, str]":
     """브라우저 없이 TSSESSION 유효성 판정 — 네이버 `check_cookie_valid()` 와 **대칭**.
 
     ★ 왜 필요한가 (2026-08-09 실사고, ERRORS [596])
@@ -317,12 +317,22 @@ def cookie_valid_http(timeout: float = 8.0) -> "bool | None":
       하는데 티스토리만 안 했다 — **원칙③(4조합 전부) 위반이 여기 있었다.**
       브라우저를 띄우면 상태점검·텔레그램 `/status` 까지 무거워지므로 HTTP 로 판정한다.
 
-    Returns: True(유효) / False(만료) / None(판정 불가 — 네트워크 등)
+    Returns: True(유효) / False(만료) / None(판정 불가)
       · **None 을 False 로 뭉개지 않는다.** '모른다' 를 '만료' 로 적으면 거짓 경보가 된다.
+      · `detail=True` 면 `(verdict, reason)` — reason 은 '모름' 의 **종류** 다.
+        ★ 왜 종류가 필요한가 (2026-08-13): `None` 에는 성격이 다른 둘이 섞여 있다.
+          - `"network"` — 순단·타임아웃. **아무 것도 하면 안 된다.** 순단마다 로그인하면
+            그게 캡차를 부른다(네이버가 그렇게 무너졌다).
+          - `"indeterminate"` — 응답은 정상인데 **이 방식으로는 원리적으로 못 가린다**
+            (유효 쿠키도 로그인 리다이렉트. 엔드포인트 6종·리다이렉트 추적·도메인 쿠키
+             실측 전부 유효=무효 동일). 이때는 *정확한 판정자*(브라우저)에게 물어야 한다.
+          둘을 뭉개면 ① 순단마다 로그인(캡차 유발) 또는 ② 만료를 영영 못 잡음 중 하나가 된다.
     """
+    def _r(v, why):
+        return (v, why) if detail else v
     ck = os.getenv("TS_COOKIE", "").strip('"').strip("'")
     if not ck:
-        return False
+        return _r(False, "empty")
     try:
         import requests as _req                          # noqa: PLC0415
         r = _req.get(f"https://{TS_BLOG}.tistory.com/manage/newpost/",
@@ -331,7 +341,7 @@ def cookie_valid_http(timeout: float = 8.0) -> "bool | None":
         loc = r.headers.get("Location", "")
         if r.status_code in (301, 302, 303, 307, 308):
             if not is_login_redirect(loc):
-                return True
+                return _r(True, "ok")
             # ★ 로그인 리다이렉트를 **만료로 단정하지 않는다** (2026-08-13 실측 정정)
             #   같은 쿠키를 브라우저(`check_cookie_valid`)는 정상으로 본다. 실측:
             #     최근 3일 이 판정이 "만료" 6회 → 그 직후 발행 **6회 전부 성공**
@@ -342,11 +352,11 @@ def cookie_valid_http(timeout: float = 8.0) -> "bool | None":
             #   하루 2회 거짓 경보(`PrecheckTistoryCookieExpired`)를 냈다.
             #   → 이 함수 자신의 계약("'모른다' 를 '만료' 로 적으면 거짓 경보가 된다")대로 None.
             #   판정이 필요하면 소비자와 같은 방식인 `check_cookie_valid(driver)` 를 쓴다(①).
-            return None
-        return r.status_code < 400
+            return _r(None, "indeterminate")
+        return _r(r.status_code < 400, "ok" if r.status_code < 400 else "http_error")
     except Exception as e:                               # noqa: BLE001
         print(f"  ⚠️ 티스토리 쿠키 HTTP 판정 불가: {type(e).__name__}: {e}")
-        return None
+        return _r(None, "network")
 
 
 def check_cookie_valid(driver) -> bool:

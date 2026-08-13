@@ -557,22 +557,24 @@ def _harness_says_envelope(kind: str) -> bool:
         return False
 
 
-def _harness_says_naver_login_human(kind: str) -> bool:
+def _harness_says_login_human(kind: str) -> bool:
     """`login_invalid_<사유>` kind 가 *사람이 필요한* 사유(백오프·CAPTCHA)인지 판별을
-    **naver_cookie_refresher 에 위임** (2026-08-11, ERRORS [615] 후속).
+    **login_manager 에 위임** (2026-08-11, ERRORS [615] 후속 / 2026-08-13 주인 정정).
 
     ★ 왜 필요한가: economic_poster·trend_theme_writer 의 로그인 전제조건 검증이
       종전 `kind="login_invalid"` 하나로 뭉뚱그려, 백오프 중이라 재로그인을 시도조차
       안 한 것도 코드 버그와 구분 없이 매 회차 Tier-2 LLM 수리 세션을 태웠다
-      (`_naver_login_human_required_types()` 는 `_naver_cookie_ready` 경로의
-      `NaverLogin*` 타입만 커버 — harness precondition 경로는 `Harness*` 접두라
-      별개 판별이 필요하다).
+      (`_login_human_required_types()` 는 쿠키 점검 경로의 `<플랫폼>Login*` 타입을
+      커버 — harness precondition 경로는 `Harness*` 접두라 별개 판별이 필요하다).
       판별식을 여기 복제하면 사본이 되어 사유가 늘 때마다 또 갈라진다 — 주인에게 묻는다
       (`_harness_says_infra` 와 동형).
     지연 import 이유는 `_harness_infra_kinds()` 와 동일(재진입 창 회피). 실패 시 False.
     """
     try:
-        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
+        # ★ 2026-08-13 — 주인(`login_manager`)에게 **직접** 묻는다. 종전엔
+        #   `naver_cookie_refresher` 를 거쳤는데 그쪽은 이미 위임 shim 뿐이라,
+        #   경유할 이유가 없으면서 "네이버 것" 이라는 인상만 남겼다.
+        from JARVIS08_PUBLISH.credentials.login_manager import (  # noqa: PLC0415
             is_human_required_login_kind)
         return bool(is_human_required_login_kind(kind))
     except Exception:  # noqa: BLE001
@@ -580,11 +582,11 @@ def _harness_says_naver_login_human(kind: str) -> bool:
 
 
 # last-known-good 캐시 — `_harness_infra_kinds()` 와 동일 원칙(성공값만 적재).
-_NAVER_CAPTCHA_TYPES_CACHE: frozenset = frozenset()
+_HUMAN_REQUIRED_TYPES_CACHE: frozenset = frozenset()
 
 
-def _naver_login_human_required_types() -> frozenset:
-    """네이버 로그인 실패 타입 중 *사람이 CAPTCHA 를 풀어야* 사라지는 것만 — 코드 수정 불가.
+def _login_human_required_types() -> frozenset:
+    """로그인 실패 타입 중 *사람이 직접 풀어야* 사라지는 것만 — 코드 수정 불가(전 플랫폼).
 
     ★ 왜 생겼나 (2026-08-09, `_naver_cookie_ready` 사고 대응) — 무인 실행 중 CAPTCHA 를
       만나면 `NaverLoginCaptchaUnattended`/`NaverLoginCaptchaTimeout` 으로 보고되는데
@@ -600,17 +602,25 @@ def _naver_login_human_required_types() -> frozenset:
     ★ 지연 import + fail-open 캐시는 `_harness_infra_kinds()` 와 동일 원칙(순환·부분초기화
       재진입 회피, 파생 실패가 severity 자체를 죽이지 않게).
     """
-    global _NAVER_CAPTCHA_TYPES_CACHE
+    global _HUMAN_REQUIRED_TYPES_CACHE
     try:
-        from JARVIS08_PUBLISH.credentials.naver_cookie_refresher import (  # noqa: PLC0415
-            HUMAN_REQUIRED_REASONS, naver_login_error_type)
-        got = frozenset(naver_login_error_type(r) for r in HUMAN_REQUIRED_REASONS)
+        # ★ 2026-08-13 — **모든 플랫폼** 에서 파생한다(③원칙). 종전엔 네이버 모듈만 읽어
+        #   `TistoryLoginBackoff`/`...HumanIntervention`/`...HumanTimeout` 이 어디에도 안 걸려
+        #   **코드 버그 취급** → 티스토리 캡차·기기인증마다 GUARDIAN 이 Tier-2 LLM 수리를
+        #   태우는 낭비가 됐다(네이버가 겪은 그 병이 티스토리에 그대로 남아 있었다).
+        #   플랫폼 목록·사유·타입명 전부 `login_manager` 가 소유하므로 여기서 이름을 짓지 않는다.
+        from JARVIS08_PUBLISH.credentials.login_manager import (  # noqa: PLC0415
+            human_required_reasons, login_error_type, platforms)
+        got = frozenset(
+            login_error_type(p, r)
+            for p in platforms()
+            for r in human_required_reasons(p))
         if got:
-            _NAVER_CAPTCHA_TYPES_CACHE = got
+            _HUMAN_REQUIRED_TYPES_CACHE = got
             return got
     except Exception:  # noqa: BLE001 — 파생 실패가 severity 를 죽이면 안 된다
         pass
-    return _NAVER_CAPTCHA_TYPES_CACHE
+    return _HUMAN_REQUIRED_TYPES_CACHE
 
 
 # last-known-good 캐시 — 위와 동일 원칙(성공값만 적재).
@@ -681,7 +691,7 @@ def __getattr__(name: str):
 #      └플랫폼┘ └─step─┘        └────kind────┘        └detail┘
 # ★ 이 정규식의 주인은 severity 다 (2026-08-12 — ①).
 #   kind 를 *해석* 하는 판정(`non_code_issue_kinds`·`_harness_says_infra`·
-#   `_harness_says_naver_login_human`)이 전부 여기 있는데, kind 를 *뽑는* 코드만
+#   `_harness_says_login_human`)이 전부 여기 있는데, kind 를 *뽑는* 코드만
 #   incident_responder 에 따로 있었다. 뽑기와 해석이 갈라져 있으면 harness 가
 #   포맷을 바꿀 때 한쪽만 따라간다 — 그게 곧 드리프트다.
 _HARNESS_KIND_RE = re.compile(
@@ -793,7 +803,7 @@ def is_transient(error_type: str, message: str = "", source: str = "",
     킬스위치 `GUARDIAN_CODEBUG_GUARD=0` → 3) 만 비활성화(종전 동작 복귀).
     """
     if kind and (kind in non_code_issue_kinds() or _harness_says_infra(kind)
-                 or _harness_says_naver_login_human(kind)):
+                 or _harness_says_login_human(kind)):
         return True   # 1) 코드 수정으로 해결 불가한 harness 이슈 — Tier-2 낭비 차단
 
     # 2) ★ ERRORS [446][447][448] 박제 2026-07-17 — source="audit_test" 는 GUARDIAN
@@ -816,7 +826,7 @@ def is_transient(error_type: str, message: str = "", source: str = "",
     # 4-A) ★ 네이버 로그인 CAPTCHA — 사람이 화면 앞에서 풀어야 사라진다(코드 수정 불가).
     #   `NaverLoginCaptchaUnattended`/`NaverLoginCaptchaTimeout` 만 해당 — 나머지 로그인
     #   실패 타입(NaverLoginCredentialsMissing 등)은 진짜 결함일 수 있어 그대로 Tier-2 유지.
-    if et in _naver_login_human_required_types():
+    if et in _login_human_required_types():
         return True
 
     # 4-A2) ★ 발행 前 점검 감지 단계 — 자동 갱신이 뒤이어 도는 예비 경보라 코드 수정

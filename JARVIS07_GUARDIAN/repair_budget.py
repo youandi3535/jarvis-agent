@@ -42,6 +42,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import threading
 from typing import Any
 
 log = logging.getLogger("jarvis.guardian.repair_budget")
@@ -67,10 +68,23 @@ _BUDGET_WINDOW = "-1 day"
 
 def _q_failed() -> bool:
     """직전 장부 조회가 실패했는가 — 화면이 '건강한 0' 으로 거짓말하지 않게 하는 신호."""
-    return bool(_LAST_Q_ERROR[0])
+    return bool(_q_error())
 
 
-_LAST_Q_ERROR: list = [""]
+# ★ 스레드별 분리 (2026-08-13) — 종전엔 모듈 전역 리스트였다.
+#   `j07_retry_pending` 은 오류당 스레드를 최대 20개 띄운다. 전역이면 A 가 겪은 장부 실패를
+#   B 의 새 판정이 지우고, A 는 `ledger_error=''`(건강한 0)를 보고한다 — **C-2 가 막겠다고
+#   선언한 상황이 순서가 아니라 동시성으로 그대로 재현된다**(실측 재현).
+#   '한 판정 단위' 는 스레드 단위다. `threading.local` 이 그 경계와 정확히 일치한다.
+_TL = threading.local()
+
+
+def _q_error() -> str:
+    return getattr(_TL, "q_error", "")
+
+
+def _set_q_error(msg: str) -> None:
+    _TL.q_error = msg
 
 
 # ── 장부 ──────────────────────────────────────────────────────────────────
@@ -120,7 +134,7 @@ def _q(sql: str, args: tuple = (), *, track: bool = True) -> list:
         # ★ `track=False` 는 *남의 테이블* 조회(비용 집계 등) — 그 실패는 우리 장부가
         #   무효라는 뜻이 아니다. 우리 표에 대한 실패만 상태로 올린다(오탐 방지).
         if track:
-            _LAST_Q_ERROR[0] = str(e)
+            _set_q_error(str(e))
             if "sdk_repair_attempts" in str(e):   # 우리 스키마 문제일 때만 재초기화
                 _INITED[0] = False
         log.warning(f"[RepairBudget] 장부 조회 실패(track={track}): {e}")
@@ -129,7 +143,7 @@ def _q(sql: str, args: tuple = (), *, track: bool = True) -> list:
 
 def _reset_ledger_error() -> None:
     """판정·조회 한 묶음의 시작. 여기서만 실패 기억을 지운다(C-2)."""
-    _LAST_Q_ERROR[0] = ""
+    _set_q_error("")
 
 
 # ── 노브 (전부 *함수 안에서* os.getenv — 무배포 조정·monkeypatch 가 먹어야 한다) ──
@@ -148,6 +162,16 @@ def _daily_cap() -> int:
         return max(1, int(raw)) if raw else int(_a.SDK_REPAIR_DAILY_CALLS)
     except ValueError:
         return int(_a.SDK_REPAIR_DAILY_CALLS)
+
+
+def _session_cap_sec() -> int:
+    """SDK 세션 하나가 점유할 수 있는 최대 시간 — **세션 길이의 주인** 에서 파생.
+
+    쿨다운 노브(`GUARDIAN_SDK_REPAIR_COOLDOWN_SEC`)와 **분리** 한다. 종전엔 비용 귀속 창이
+    쿨다운에서 파생돼, 노브를 낮추면 380초·$3.00 짜리 세션이 $0.00 으로 계상됐다(C-7 재발).
+    """
+    from JARVIS07_GUARDIAN.auto_repair import _TARGETED_TIMEOUT
+    return int(_TARGETED_TIMEOUT)
 
 
 def _cooldown_sec() -> int:
@@ -241,11 +265,25 @@ def _sec_since_last_allowed() -> float | None:
       마감된 세션은 `elapsed_sec` 이 있으므로 종료 시각을 파생한다. 아직 도는 세션
       (outcome IS NULL)은 종료 시각을 모르므로 *지금* 으로 본다 — 도는 중엔 최대한 막는다.
     """
-    r = _q("SELECT (julianday('now','localtime') - julianday("
-           "  CASE WHEN outcome IS NULL THEN datetime('now','localtime') "
-           "       ELSE datetime(ts, '+' || COALESCE(elapsed_sec,0) || ' seconds') END"
+    # ★ 고아 행이 영구 차단을 만들지 않게 (2026-08-13 — C-3 수정이 낳은 결함, 실증)
+    #   `outcome IS NULL` 을 무조건 "지금 도는 중" 으로 읽으면, 세션 도중 프로세스가 죽은 행이
+    #   **영원히 NULL** 로 남아(`record_outcome` 은 finally — SIGKILL·재부팅엔 안 돈다)
+    #   모든 자율 SDK 수리가 영구 차단된다. 실측: 3시간 전 고아 행 하나로 gap=0.19초.
+    #   사유가 `cooldown`(비영구)이라 오류는 `new` 로 남아 10분마다 영원히 재시도되고,
+    #   풀리려면 새 allowed 행이 필요한데 그 행이 바로 차단당한다 — 자기잠금이다.
+    #   → **세션 상한을 넘긴 NULL 은 '도는 중' 일 수 없다.** 그때는 ts+상한을 종료로 본다.
+    #     상한은 `_cooldown_sec()` 이 아니라 **세션 길이의 주인**(_TARGETED_TIMEOUT)에서 파생한다
+    #     (쿨다운 노브를 낮추면 종료 판정이 함께 흔들리면 안 된다 — C-7 이 그 병이었다).
+    _cap = _session_cap_sec()
+    r = _q("SELECT (julianday('now','localtime') - julianday(CASE "
+           "  WHEN outcome IS NOT NULL "
+           "    THEN datetime(ts, '+' || COALESCE(elapsed_sec,0) || ' seconds') "
+           "  WHEN julianday('now','localtime') - julianday(ts) > ? "
+           "    THEN datetime(ts, '+' || ? || ' seconds') "
+           "  ELSE datetime('now','localtime') END"
            "))*86400.0 AS gap "
-           "FROM sdk_repair_attempts WHERE decision='allowed' ORDER BY ts DESC LIMIT 1")
+           "FROM sdk_repair_attempts WHERE decision='allowed' ORDER BY ts DESC LIMIT 1",
+           (_cap / 86400.0, int(_cap)))
     if not r or r[0][0] is None:
         return None
     return max(0.0, float(r[0][0]))
@@ -272,7 +310,7 @@ def _cost_24h(governed_only: bool = True) -> float:
            "WHERE u.source=? AND u.ts>=datetime('now','localtime',?) AND EXISTS ("
            "  SELECT 1 FROM sdk_repair_attempts a WHERE a.decision='allowed' "
            "  AND u.ts>=a.ts AND u.ts<=datetime(a.ts, ?))",
-           (USAGE_SOURCE, _BUDGET_WINDOW, f"+{_cooldown_sec()} seconds"), track=False)
+           (USAGE_SOURCE, _BUDGET_WINDOW, f"+{_session_cap_sec()} seconds"), track=False)
     return float(r[0][0]) if r else 0.0
 
 
@@ -575,7 +613,7 @@ def budget_state() -> dict:
         "by_reason": _by_reason_24h(),
         "gate_enabled": gate_enabled(),
         # ★ 장부를 못 읽었으면 위 숫자는 '0' 이 아니라 '모름' 이다 — 소비자가 구분할 수 있게.
-        "ledger_error": _LAST_Q_ERROR[0],
+        "ledger_error": _q_error(),
     }
 
 

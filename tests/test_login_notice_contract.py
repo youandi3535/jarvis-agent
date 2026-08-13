@@ -286,15 +286,18 @@ def test_사람필요_타입이_모든_플랫폼에서_Tier2를_안_태운다():
         assert is_transient(et, source="publish") is True, (
             f"{et}: 사람이 필요한 실패인데 Tier-2 낭비 대상으로 남는다")
 
+    # ★ 2026-08-13 착륙 — 종전엔 여기서 `pytest.xfail` 로 유예했다. 그동안
+    #   `TistoryLoginBackoff`/`...HumanIntervention`/`...HumanTimeout` 은 어디에도 안 걸려
+    #   **코드 버그 기본값**으로 떨어졌고, 티스토리 캡차·기기인증이 날 때마다 GUARDIAN 이
+    #   사람만 풀 수 있는 것을 Tier-2 LLM 으로 "고치려" 세션을 태웠다.
+    #   유예를 남겨두면 고쳐도 초록, 안 고쳐도 초록이라 아무도 모른다 — 그래서 없앴다.
     gaps = [lm.login_error_type(p, r)
             for p in _platforms() if p != "naver"
             for r in sorted(lm.human_required_reasons(p))
             if is_transient(lm.login_error_type(p, r), source="publish") is not True]
-    if gaps:
-        pytest.xfail(
-            "GUARDIAN 분류가 아직 네이버 전용이다 — `severity._naver_login_human_required_types()` "
-            "가 플랫폼 중립으로 파생해야 한다(Group D 잔여): " + ", ".join(gaps))
-    assert not gaps
+    assert not gaps, (
+        "GUARDIAN 분류가 네이버 전용으로 되돌아갔다 — `severity._login_human_required_types()` 는 "
+        "`login_manager.platforms()` × `human_required_reasons()` 로 파생해야 한다: " + ", ".join(gaps))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -464,3 +467,90 @@ def test_하네스_전제조건이_플랫폼_중립이다():
         seg = ast.get_source_segment((ROOT / rel).read_text(encoding="utf-8"), node) or ""
         assert "login_manager" in seg, (
             f"{fn_name} 이 플랫폼 중립 판정(login_manager)을 쓰지 않는다")
+
+def test_판정불가면_브라우저_실확인에_위임한다(monkeypatch):
+    """★ 오탐을 고치다 만든 **과소차단** 회귀 (2026-08-13).
+
+    `TSSESSION` 단독 HTTP 로는 유효/만료를 원리적으로 못 가린다(엔드포인트 6종·리다이렉트
+    추적·도메인 쿠키까지 실측 — 전부 유효=무효 동일). 그래서 `None`(판정 불가)로 고쳤는데,
+    `auto_refresh_if_needed` 가 `None` 을 **아무 일 안 함** 으로 읽어 만료 탐지가 0 이 됐다
+    (실측: `deadbeef` 무효 쿠키도 통과). 정확한 판정은 소비자와 같은 방식(브라우저)에 있다.
+    """
+    from JARVIS08_PUBLISH.credentials import login_manager as lm
+    from JARVIS08_PUBLISH.credentials import tistory_cookie_refresher as tc
+
+    called: list = []
+    monkeypatch.setattr(lm, "get_tistory_cookie", lambda: "dummy")
+    monkeypatch.setattr(tc, "cookie_valid_http",
+                        lambda *a, detail=False, **k: (None, "indeterminate") if detail else None)
+    monkeypatch.setattr(lm, "refresh_tistory_cookies",
+                        lambda *a, **k: called.append(True) or True)
+
+    lm.auto_refresh_if_needed(platforms=("tistory",))
+    assert called, (
+        "원리적 판정 불가인데 브라우저 실확인을 하지 않는다 — 만료를 아무도 못 잡는다")
+
+    # ★ 대조군 — **순단**(network)은 건드리면 안 된다. 순단마다 로그인하면 캡차를 부른다.
+    called.clear()
+    monkeypatch.setattr(tc, "cookie_valid_http",
+                        lambda *a, detail=False, **k: (None, "network") if detail else None)
+    lm.auto_refresh_if_needed(platforms=("tistory",))
+    assert not called, "네트워크 순단에 로그인을 시도한다 — 그게 캡차를 부른다"
+
+
+def test_고아_세션행이_영구차단을_만들지_않는다():
+    """★ C-3 수정이 만든 자기잠금 (2026-08-13 실증).
+
+    세션 도중 프로세스가 죽으면 `outcome` 이 영원히 NULL 이다(`record_outcome` 은 finally —
+    SIGKILL·재부팅엔 안 돈다). 그것을 무조건 '지금 도는 중' 으로 읽으면 gap≈0 이 되어
+    **모든 자율 SDK 수리가 영구 차단**된다. 사유가 비영구(cooldown)라 오류는 `new` 로 남아
+    10분마다 영원히 재시도되고, 풀리려면 새 allowed 행이 필요한데 그 행이 바로 차단당한다.
+    """
+    rb = _gate_budget()
+    rec = {"error_type": "__OrphanSmoke__", "message": "x", "source": "w", "id": -1}
+    aid = rb.record_attempt(error_record=rec, caller="g", job_id="j", decision="allowed")
+    con = rb._db()
+    # ★ 격리 (2026-08-13) — 판정은 `ORDER BY ts DESC LIMIT 1`, 즉 **가장 최근 allowed 행 하나**만
+    #   본다. 다른 테스트가 남긴 더 최신 행이 있으면 우리가 심은 고아 행까지 닿지도 못한 채
+    #   초록이 된다(합동 실행에서 실측 — 단독으로는 통과, 함께 돌리면 실패). 검사 대상 행을
+    #   *유일한 최신* 으로 만들어 놓고 본다.
+    con.execute("DELETE FROM sdk_repair_attempts WHERE decision='allowed' AND id<>?", (aid,))
+    con.execute("UPDATE sdk_repair_attempts SET ts=datetime('now','localtime','-3 hours') "
+                "WHERE id=?", (aid,))
+    con.commit()
+
+    gap = rb._sec_since_last_allowed()
+    cap = rb._session_cap_sec()
+    assert gap is not None and gap > cap, (
+        f"3시간 전 고아 행이 '도는 중' 으로 읽힌다 (경과 {gap}초) — 영구 차단이 된다")
+
+    # 반대로 **방금 시작한** 세션은 여전히 막아야 한다(과소차단 방지)
+    rb.record_attempt(error_record=rec, caller="g", job_id="j", decision="allowed")
+    assert rb._sec_since_last_allowed() < cap, "도는 중인 세션을 종료로 본다 — 동시 실행이 열린다"
+
+
+def test_비용귀속창이_쿨다운_노브에_흔들리지_않는다(monkeypatch):
+    """C-7 재발 방지 — 세션 길이 파생이 한 파일에 두 벌이면 노브 하나로 회계가 뒤집힌다."""
+    rb = _gate_budget()
+    import ast
+    import inspect
+
+    base = rb._session_cap_sec()
+    monkeypatch.setenv(rb.COOLDOWN_ENV, "1")
+    assert rb._session_cap_sec() == base, (
+        "쿨다운 노브를 바꿨더니 세션 길이가 따라 변했다 — 비용 귀속이 흔들린다")
+
+    # ★ 판별력 — 상수만 보면 *사용처* 가 쿨다운을 쓰도록 되돌려도 초록이다(뮤테이션 실측).
+    #   비용 귀속 질의가 어느 함수에서 창을 파생하는지 소스로 고정한다.
+    src = textwrap.dedent(inspect.getsource(rb._cost_24h))
+    called = {n.func.id for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert "_session_cap_sec" in called, "비용 귀속 창을 세션 길이에서 파생하지 않는다"
+    assert "_cooldown_sec" not in called, (
+        "비용 귀속 창이 쿨다운 노브에서 파생된다 — 노브를 낮추면 380초·$3.00 세션이 $0.00 이 된다")
+
+
+def _gate_budget():
+    from JARVIS07_GUARDIAN import repair_budget
+    return repair_budget
+

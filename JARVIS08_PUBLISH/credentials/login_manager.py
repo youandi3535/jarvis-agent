@@ -437,7 +437,7 @@ def login_invalid_kind(reason: str) -> str:
 def is_human_required_login_kind(kind: str) -> bool:
     """이 harness kind 가 '사람이 로그인해야만' 풀리는가 — 판별 단일 진입점.
 
-    `severity._harness_says_naver_login_human()` 이 지연 import 로 여기에 위임한다.
+    `severity._harness_says_login_human()` 이 지연 import 로 여기에 위임한다.
     """
     k = (kind or "").strip()
     if not k.startswith(f"{_LOGIN_INVALID_KIND}_"):
@@ -1005,9 +1005,23 @@ def auto_refresh_if_needed(
             try:
                 from JARVIS08_PUBLISH.credentials.tistory_cookie_refresher import (  # noqa: PLC0415
                     cookie_valid_http)
-                if cookie_valid_http() is False:          # None(판정 불가)은 건드리지 않는다
+                # ★ '모름' 두 종류를 구분한다 (2026-08-13)
+                #   network  = 순단·타임아웃 → **아무 것도 안 한다.** 순단마다 로그인하면
+                #              그게 캡차를 부른다(네이버가 그렇게 무너졌다).
+                #   indeterminate = 응답은 정상인데 이 방식으로는 원리적으로 못 가림
+                #              (유효 쿠키도 로그인 리다이렉트 — 엔드포인트 6종 실측)
+                #              → 정확한 판정자(브라우저 `check_cookie_valid`)에게 묻는다.
+                #                유효하면 그 안에서 "쿠키 정상 — 갱신 불필요" no-op 이다.
+                #   둘을 뭉개면 ① 순단마다 로그인(캡차) 또는 ② 만료를 영영 못 잡음 이 된다.
+                _v, _why = cookie_valid_http(detail=True)
+                if _v is False:
                     log.info("[login_manager] 티스토리 TS_COOKIE 만료 — 갱신 시도")
                     _need = True
+                elif _v is None and _why == "indeterminate":
+                    log.info("[login_manager] 티스토리 HTTP 판정 불가(원리적) — 브라우저 실확인 위임")
+                    _need = True
+                elif _v is None:
+                    log.info(f"[login_manager] 티스토리 판정 보류({_why}) — 건드리지 않는다")
             except Exception as e:                        # noqa: BLE001
                 log.warning(f"[login_manager] 티스토리 유효성 판정 실패(갱신 보류): "
                             f"{type(e).__name__}: {e}")
