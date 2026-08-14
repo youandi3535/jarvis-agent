@@ -5456,3 +5456,54 @@ def test_사전점검이_두_플랫폼_모두_실효를_본다(monkeypatch):
                 f"{who}: 판정 불가를 만료로 적는다 — DNS 순단마다 거짓 경보"
     finally:
         nvm.cookie_valid_http, tsm.cookie_valid_http = _onv, _ots
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ERRORS [641] — 네이버 실패를 근거로 티스토리를 끄던 것 (실패 격리 위반)
+# ══════════════════════════════════════════════════════════════════════
+
+def test_티스토리_건너뜀은_추론이_아니라_주제팩_실물로_판정한다(monkeypatch):
+    """★ CLAUDE_WRITER 「실패 격리」 — 한쪽 실패가 다른 쪽을 차단하면 안 된다.
+
+    종전엔 "네이버 수집 실패 = topic_pack 없음" 이라 *단정* 하고 티스토리를 껐다.
+    2026-08-14 07:00 엔 결과적으로 맞았지만(팩이 정말 없었다), 팩이 살아 있는데
+    네이버만 실패한 날에는 발행 가능한 글을 그냥 버리게 된다 — ERRORS [615] 가
+    같은 병으로 결손 1건을 낸 전례가 있다.
+    """
+    import JARVIS03_RADAR.topic_pack as tp
+    from JARVIS02_WRITER.economic_poster import tistory_spare_topics
+
+    # ── 케이스 A: 팩이 살아 있고 네이버가 쓴 주제 말고도 남아 있다 → 독립 진행
+    monkeypatch.setattr(tp, "load_topic_pack",
+                        lambda *a, **k: {"candidates": [{"keyword": "백화점"},
+                                                        {"keyword": "이더리움"}]})
+    pack, spare = tistory_spare_topics("백화점")
+    assert pack is not None
+    assert [c["keyword"] for c in spare] == ["이더리움"], (
+        "팩이 살아 있는데 티스토리를 끄면 발행 가능한 글이 순손실된다"
+    )
+
+    # ── 케이스 B: 2026-08-14 07:00 실제 상황 — 팩 자체가 없다 → 건너뜀이 옳다
+    monkeypatch.setattr(tp, "load_topic_pack", lambda *a, **k: None)
+    pack, spare = tistory_spare_topics("")
+    assert pack is None and spare == [], "팩이 없으면 티스토리도 확실히 실패한다 — 건너뛰어야 한다"
+
+    # ── 케이스 C: 팩은 있는데 네이버가 마지막 후보를 썼다 → 남은 것이 없으니 건너뜀
+    monkeypatch.setattr(tp, "load_topic_pack",
+                        lambda *a, **k: {"candidates": [{"keyword": "백화점"}]})
+    _pack, spare = tistory_spare_topics("백화점")
+    assert spare == []
+
+
+def test_주제팩_조회가_실패해도_조용히_넘어가지_않는다(monkeypatch, capsys):
+    """★ 조용한 무력화 금지 — 조회 실패는 보수적으로 '건너뜀' 이되 흔적을 남긴다."""
+    import JARVIS03_RADAR.topic_pack as tp
+    from JARVIS02_WRITER.economic_poster import tistory_spare_topics
+
+    def _boom(*a, **k):
+        raise RuntimeError("디스크 오류")
+    monkeypatch.setattr(tp, "load_topic_pack", _boom)
+
+    pack, spare = tistory_spare_topics("백화점")
+    assert pack is None and spare == []
+    assert "주제팩 조회 실패" in capsys.readouterr().out, "실패가 어디에도 안 남으면 무증상 열화다"

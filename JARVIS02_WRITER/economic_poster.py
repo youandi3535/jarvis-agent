@@ -286,6 +286,34 @@ TODAY_PREFIX       = f"[{TODAY.month}/{TODAY.day}]"
 
 
 
+def tistory_spare_topics(nv_keyword: str = "") -> tuple[dict | None, list[dict]]:
+    """네이버가 실패했을 때 **티스토리가 쓸 주제가 실제로 남아 있는지** 조회.
+
+    Returns: (당일 주제팩 or None, 네이버가 쓴 키워드를 뺀 남은 후보 목록)
+
+    ★ 왜 이 함수가 있나 (2026-08-14, ERRORS [641])
+      종전엔 "네이버 수집 실패 = topic_pack 없음" 이라고 **단정** 하고 티스토리를 껐다.
+      그런데 `_nv_collect_failed` 는 '네이버가 키워드를 못 얻었다' 는 *대리 신호* 일 뿐이다 —
+      팩은 멀쩡한데 네이버 쪽 사유로 실패했을 수도 있고, 그때 티스토리는 다른 슬롯
+      주제로 발행할 수 있다. 근거 없이 끄면 순손실이다(같은 병으로 ERRORS [615] 가
+      결손 1건을 냈고 그때는 attempts=0 경우만 고쳤다).
+      → 추론 대신 **공유 자원을 실제로 본다**(②). `load_topic_pack` 은 순수 조회라
+        재빌드·LLM 비용이 0 이다(`pick_slot_candidate` 를 쓰면 프로브가 팩을 다시 만든다).
+
+    조회 실패 시 `(None, [])` — 보수적으로 '건너뜀' 을 유지하되 조용히 넘어가지 않는다.
+    """
+    try:
+        from JARVIS03_RADAR.topic_pack import load_topic_pack as _load_pack
+        pack = _load_pack()
+    except Exception as e:
+        print(f"  ⚠️ [티스토리] 주제팩 조회 실패({e}) — 보수적으로 종전 판단(건너뜀) 유지")
+        return None, []
+    used = (nv_keyword or "").strip()
+    spare = [c for c in ((pack or {}).get("candidates") or [])
+             if (c.get("keyword") or "").strip() and (c.get("keyword") or "").strip() != used]
+    return pack, spare
+
+
 def run(post_naver=True, post_tistory=True, resume=None):
     """경제 브리핑 포스팅 통합 진입점.
 
@@ -886,10 +914,31 @@ def run(post_naver=True, post_tistory=True, resume=None):
         if post_naver and not _nv_attempted:
             print("  ↪ [티스토리] 네이버는 전제조건에서 막혀 수집을 시작도 못 했다 "
                   "— 수집 실패가 아니므로 티스토리는 독립 진행")
+
+        # ★ 2026-08-14 (ERRORS [641]) — **추론이 아니라 공유 자원을 실제로 본다**(②).
+        #   종전엔 네이버 수집 실패 = "topic_pack 없음" 이라고 *단정* 하고 티스토리를 껐다.
+        #   그런데 `_nv_collect_failed` 는 '네이버가 키워드를 못 얻었다' 는 대리 신호일 뿐이다 —
+        #   팩은 멀쩡한데 네이버 쪽 사유(그 주제의 수집 0건 등)로 실패했을 수도 있고,
+        #   그때 티스토리는 *다른 슬롯 주제로* 발행할 수 있다. 근거 없이 끄면 순손실이다
+        #   (같은 병으로 ERRORS [615] 에서 이미 결손 1건을 냈고, 그때는 attempts=0 만 고쳤다).
+        #   → 팩을 **순수 조회**(load_topic_pack — 재빌드·LLM 0)해서 티스토리가 쓸 후보가
+        #     남아 있는지 실제로 확인한다. 남아 있으면 실패 격리 원칙대로 독립 진행한다.
+        #     (CLAUDE_WRITER: "한쪽 실패·재작성이 다른 쪽을 지연·차단 금지 — 실패 격리")
         if _nv_collect_failed:
-            msg = "⏭ [티스토리] 네이버 수집 실패(topic_pack 없음) — 티스토리도 수집 실패 예상, 건너뜀"
-            print(f"\n  {msg}")
-            tg(msg)
+            _pack_alive, _left = tistory_spare_topics(nv_keyword)
+            if _left:
+                _nv_collect_failed = False   # 팩 살아있음 → 티스토리는 자기 슬롯으로 독립 진행
+                msg = (f"↪ [티스토리] 네이버는 실패했지만 주제팩은 살아 있다 "
+                       f"(남은 후보 {len(_left)}개: {', '.join(c['keyword'] for c in _left[:3])}) "
+                       f"— 실패 격리, 티스토리 독립 진행")
+                print(f"\n  {msg}")
+                tg(msg)
+            else:
+                _why = ("주제팩 자체가 없음" if not _pack_alive
+                        else "주제팩에 티스토리가 쓸 남은 후보 0개")
+                msg = f"⏭ [티스토리] 네이버 수집 실패 + {_why} — 티스토리도 실패 확실, 건너뜀"
+                print(f"\n  {msg}")
+                tg(msg)
 
         # ★ 티스토리는 네이버 *종결 후* 에만 시작 — 네이버 성패와 무관하게 독립 진행
         if post_tistory and not _concurrent_blocked and not _nv_collect_failed:

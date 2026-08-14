@@ -1046,3 +1046,64 @@ def test_C2b_장부실패는_스레드를_넘지_않는다(monkeypatch):
     assert out.get("B") == "", (
         f"다른 스레드의 장부 실패가 샜다: B.ledger_error={out.get('B')!r} — "
         "판정 단위는 스레드다(threading.local). 모듈 전역으로 되돌리지 말 것")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ERRORS [641] — 하네스 '봉투'(포기 신호)를 GUARDIAN 이 재시도 신호로 오독하던 것
+# ══════════════════════════════════════════════════════════════════════
+#
+# 2026-08-14 07:00 실측: 주제팩 미생성으로 harness 가 네이버·티스토리 각각
+#   `abort`("수정 불가 지문 반복 — 재생성해도 동일 결과 예상")로 포기했는데,
+#   incident_responder 가 그것을 `transient`(=기다리면 낫는다)로 분류해 30초 대기 후
+#   **전체 발행 파이프라인을 2회 더** 돌렸다. 세 번 다 같은 지점에서 죽었다.
+#   `abort` 와 `transient` 는 정반대 뜻이다.
+
+
+def test_봉투kind는_harness_소스에서_파생된다():
+    """★ 원칙② — 봉투 kind 목록을 어디에도 박지 않는다.
+
+    `Issue(step=ENVELOPE_STEP, kind=...)` 호출부를 AST 로 훑어 파생하므로,
+    새 봉투 kind 가 생기면 자동으로 따라온다. 목록을 박으면 조용히 샌다.
+    """
+    from JARVIS00_INFRA.harness import envelope_kinds, is_envelope_kind
+
+    kinds = envelope_kinds()
+    assert kinds, "봉투 kind 파생이 빈 집합 — fail-closed 로 종전 동작이 되어 판정이 죽는다"
+    assert "abort" in kinds, "harness 가 실제로 만드는 abort 봉투가 파생에서 빠졌다"
+    assert is_envelope_kind("abort") is True
+    # 봉투가 *아닌* 것을 봉투로 오판하면 진짜 일시 오류의 복구까지 막는다.
+    for not_envelope in ("draft_failed", "factuality", "timeout", "engagement"):
+        assert is_envelope_kind(not_envelope) is False, f"{not_envelope} 는 봉투가 아니다"
+
+
+def test_하네스가_포기한_실패는_수정없이_재발행하지_않는다():
+    """★ 실사고 (2026-08-14) — 오늘 온 실제 issue 문자열 꼴로 판정을 확인한다.
+
+    포맷은 `economic_poster` 가 만들고(`[{plat}] {step}: {kind}: {detail}`)
+    `scheduler` 가 "  • " 를 붙인다. severity 의 추출 정규식이 그 *자리* 를 본다.
+    """
+    from JARVIS07_GUARDIAN.incident_responder import _harness_kinds
+    from JARVIS00_INFRA.harness import is_envelope_kind
+
+    real = (
+        "[하네스 검증 실패 상세]\n"
+        "  • [naver] ③ NV 대본 생성: draft_failed: 대본 생성 실패: 자비스03 주제 패키지 없음\n"
+        "  • [naver] 전체: abort: 수정 불가 1건 패턴 반복 — 재생성해도 동일 결과 예상 (attempt=2)\n"
+    )
+    kinds = _harness_kinds(real)
+    assert "abort" in kinds, f"봉투를 못 뽑았다({kinds}) — 판정이 발화하지 않는다"
+    assert [k for k in kinds if is_envelope_kind(k)] == ["abort"]
+
+
+def test_봉투_없는_일시오류는_종전대로_재발행한다():
+    """★ 과잉 차단 방지 — "재시도는 싸고, 수리를 못 했다고 복구까지 포기하지 않는다" 는
+    원래 의도는 살아 있어야 한다. 봉투가 붙은 경우에만 예외다."""
+    from JARVIS07_GUARDIAN.incident_responder import _harness_kinds
+    from JARVIS00_INFRA.harness import is_envelope_kind
+
+    transient_only = "[하네스 검증 실패 상세]\n  • [tistory] ⑧ TS 발행: timeout: 셀레늄 응답 없음\n"
+    kinds = _harness_kinds(transient_only)
+    assert kinds == ["timeout"]
+    assert not [k for k in kinds if is_envelope_kind(k)], (
+        "봉투가 없는데 재발행을 막으면 복구 가능한 실패까지 죽인다"
+    )

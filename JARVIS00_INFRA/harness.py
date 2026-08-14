@@ -1413,4 +1413,11 @@ __all__ = [
     "infra_kind",
     "is_infra_kind",
     "action_module",
+    # ★ 2026-08-14 (ERRORS [641]) — 봉투('포기했다') 판정을 공개 계약으로 올린다.
+    #   이 kind 의 *의미* 는 harness 소유다: "바뀐 것 없이 다시 돌리면 같은 결과".
+    #   종전엔 공개돼 있지 않아, GUARDIAN 이 그 뜻을 모른 채 abort 를 `transient`
+    #   (=기다리면 낫는다)로 오독하고 전체 발행을 두 번 더 돌렸다 — 정반대 의미다.
+    "ENVELOPE_STEP",
+    "envelope_kinds",
+    "is_envelope_kind",
 ]
