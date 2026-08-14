@@ -514,24 +514,68 @@ from shared.limits import max_attempts as _max_attempts
 _WEIGHTS_CACHE = {"data": None, "ts": 0.0}
 _WEIGHTS_TTL_SEC = 300.0
 
+def default_weights() -> dict:
+    """기본 가중치 — **주인은 `shared.db.DEFAULT_WEIGHTS` 한 곳** (① 단일 진입점).
+
+    ★ 여기에 값을 다시 적지 말 것 (2026-08-14 정정). 종전 이 자리에 같은 값이
+      한 벌 더 박혀 있었다 — `shared/db.py:DEFAULT_WEIGHTS`(학습 행이 없을 때
+      `learned_weights_latest()` 가 돌려주는 값)의 사본이었다. 사본이 있으면
+      한쪽만 손대는 순간 "학습 전"과 "학습 실패 폴백"이 서로 다른 기준으로
+      채점한다. 값이 아니라 *주인* 을 참조한다.
+    """
+    from shared.db import DEFAULT_WEIGHTS as _DW   # lazy — import 시 init_db 부작용 회피
+    return dict(_DW)
+
+
+def apply_weights(weights: dict | None, *, trend_score: float,
+                  perf: float, fresh: float) -> float:
+    """가중치 → 원점수(raw). ★ **채점식의 단일 진입점** (① 단일 진입점).
+
+    ★ 왜 함수로 뽑았나 (2026-08-14 사고의 근본)
+      종전엔 같은 채점식이 두 곳에 *서로 다르게* 박혀 있었다 —
+        · `learning.train_weights` 는 절편 포함 아핀 모델을 적합해 `intercept` 를 저장하고
+        · `analyzer.opportunity_score` 는 **절편 항이 없는** 식으로 채점했다.
+      즉 학습이 맞춰 놓은 모델과 실제로 채점되는 모델이 달랐다. 계수만 SCALE 배 하고
+      절편을 버리면 아핀 관계가 깨져, 계수가 조금만 작아져도 raw 가 통째로 음수로
+      내려간다(실측 2026-08-14: 학습 가중치로 일일 배치 50개가 전원 0.0 → 정렬키 사망
+      → 경제 브리핑 주제 선정 붕괴 → 07:00 네이버·티스토리 동시 발행 실패).
+      → 학습 쪽 변별력 가드와 적용 쪽 채점이 **이 함수 하나** 를 쓴다.
+
+    키 누락 시 기본값도 여기 적지 않는다 — `default_weights()` 에서 파생한다(②).
+    """
+    w = {**default_weights(), **(weights or {})}
+    return (
+        trend_score * float(w["w_trend"])
+        + perf      * float(w["w_perf"])
+        + fresh     * float(w["w_fresh"])
+        + float(w.get("intercept", 0.0) or 0.0)
+    )
+
+
+# 표시 점수의 범위 — 값의 주인은 여기 한 곳(①). 클립 식을 다른 파일에 다시 쓰지 말 것.
+SCORE_MIN, SCORE_MAX = 0.0, 150.0
+
+
+def clamp_score(raw: float) -> float:
+    """원점수 → 표시 점수(클립 + 반올림). ★ **클립의 단일 진입점**.
+
+    학습 관문의 적용형상 프로브도 이 함수를 쓴다 — 프로브가 클립을 스스로 다시
+    구현하면 "관문이 본 점수" 와 "실제로 매겨지는 점수" 가 갈린다. 하한 클립이야말로
+    2026-08-14 사고에서 음수 raw 를 전원 0.0 으로 만든 지점이므로, 관문은 반드시
+    *클립 이후* 를 봐야 한다.
+    """
+    return round(max(SCORE_MIN, min(SCORE_MAX, float(raw))), 1)
+
 
 def _get_learned_weights() -> dict:
-    """학습된 가중치 (없으면 DEFAULT_WEIGHTS) — 5분 캐싱."""
+    """학습된 가중치 (없으면 기본값) — 5분 캐싱."""
     now = _time.time()
     if _WEIGHTS_CACHE["data"] is None or (now - _WEIGHTS_CACHE["ts"]) > _WEIGHTS_TTL_SEC:
         try:
             from JARVIS03_RADAR import learning as _learning
             _WEIGHTS_CACHE["data"] = _learning.get_current_weights()
         except Exception:
-            # 학습 모듈 사용 불가 시 하드코딩 기본값
-            _WEIGHTS_CACHE["data"] = {
-                "w_trend":       0.45,
-                "w_perf":        1.0,
-                "w_fresh":       0.85,
-                "w_velocity":    0.0,   # 유령 피처 — 미사용 (ERRORS [485])
-                "w_competition": 0.0,
-                "intercept":     0.0,
-            }
+            _WEIGHTS_CACHE["data"] = default_weights()
         _WEIGHTS_CACHE["ts"] = now
     return _WEIGHTS_CACHE["data"]
 
@@ -555,6 +599,7 @@ def opportunity_score(
     velocity_score: float = 0.0,
     competition: float = 50.0,
     sector: str = "",
+    weights: dict | None = None,
 ) -> float:
     """
     RADAR(트렌드) + ANALYST(성과) + SEO(신선도) 통합 점수.
@@ -574,30 +619,52 @@ def opportunity_score(
       perf:   ~35  (0–35   × 1.00)
       fresh:  ~17  (0–20   × 0.85)
       페널티/부스트: -45 ~ +12
+
+    `weights` — 지정 시 학습 캐시 대신 이 값 사용 (`enrich_with_opportunity()` 가
+    배치 변별력 붕괴 감지 시 DEFAULT_WEIGHTS 로 재계산할 때 사용).
     """
     perf  = get_performance_boost(keyword)   # 0~35 (avg + 재현성)
     fresh = get_freshness_bonus(keyword)      # 0~20
 
     # ★ velocity·competition 제거 (ERRORS [485]) — 수집 경로가 없어 학습 불가한 유령 피처였다.
     #   점수 공식에서도 빼 실제 학습된 3개 입력(trend·perf·fresh)만 반영한다.
-    weights = _get_learned_weights()
-    raw = (
-        trend_score * float(weights.get("w_trend",       0.45))
-        + perf      * float(weights.get("w_perf",        1.0))
-        + fresh     * float(weights.get("w_fresh",       0.85))
-    )
+    w = weights if weights is not None else _get_learned_weights()
+    raw = apply_weights(w, trend_score=trend_score, perf=perf, fresh=fresh)
 
     # 학습 통합 — 양방향 (부정 / 피드백 / cold-start)
     neg, fb, cold = _learning_penalty(keyword, sector)
     raw += neg + fb + cold
 
-    return round(max(0.0, min(150.0, raw)), 1)
+    return clamp_score(raw)
 
 
 # ── 통합 파이프라인 ───────────────────────────────────────────
 
 def enrich_with_opportunity(scored: list[dict]) -> list[dict]:
-    """score_keywords() 결과에 opportunity_score를 추가."""
+    """score_keywords() 결과에 opportunity_score를 추가.
+
+    ★ 학습 가중치는 *학습 시점* 표본에서만 변별력을 검증한다(learning.train_weights 의
+      가드). 그런데 적용 시점의 실제 배치는 학습 표본과 분포가 다를 수 있다 — 예:
+      RADAR 가 매일 뽑는 후보는 대부분 '한 번도 안 쓴' 신규 키워드라 freshness 가
+      거의 전원 20.0(최고점) 으로 고정되는데, 학습 표본엔 재사용 키워드도 섞여 있어
+      그때는 가드를 통과했다. 그 가중치를 이 배치에 적용하면 (w_fresh 가 학습으로
+      음수가 된 경우) 전원이 0.0 으로 클립되어 정렬키가 완전히 죽는다
+      (실측 2026-08-14: scored_keywords 50개 전원 0.0 → topic_pack 후보 선정이
+      경제와 무관한 잡음 키워드로 뒤집힘 → TopicPackNoCandidate).
+      학습 시점과 동일한 판정(distinct_ratio)을 *이 배치* 에도 적용해 감지 →
+      기본 가중치로 즉시 재계산(이전 학습 결과를 폐기하지 않음 — 다음 배치가
+      변별력을 회복하면 학습 가중치가 다시 쓰인다).
+
+    ★ 이 가드는 **오류를 보고하지 않는다** (2026-08-14 정정)
+      종전엔 발동할 때마다 `report(RuntimeError(...))` 를 불렀다. 그런데 폴백 발동은
+      *정상 동작* 이지 코드 버그가 아니라서 GUARDIAN 의 Tier1·Tier2 가 고칠 수 없고,
+      고칠 수 없으니 `status='new'` 로 남아 `j07_retry_pending`(10분)이 영원히 재투입했다.
+      실측: 오류 6행이 07:18~13:10 동안 Circuit-Breaker 알림 74통을 만들었고, 그 사이
+      시간당 수리 토큰 10개를 전부 잠식해 **진짜 신규 오류의 수리 용량이 0** 이 됐다.
+      → 폴백은 로그로 남긴다. 정말 고쳐야 할 것(썩은 학습 가중치)은 학습 관문
+        (`learning.train_weights` 의 적용형상 프로브)이 애초에 저장을 막는다.
+    """
+    weights = _get_learned_weights()
     for item in scored:
         item["opportunity_score"] = opportunity_score(
             item["keyword"],
@@ -605,7 +672,29 @@ def enrich_with_opportunity(scored: list[dict]) -> list[dict]:
             item.get("velocity_score", 0.0),
             item.get("competition", 50.0),
             sector=item.get("sector", ""),
+            weights=weights,
         )
+
+    if len(scored) >= 5:
+        from JARVIS03_RADAR.learning import is_ranking_degenerate
+        out_vals = [it["opportunity_score"] for it in scored]
+        in_vals  = [it["score"] for it in scored]
+        if is_ranking_degenerate(out_vals, in_vals):
+            _fallback = default_weights()
+            # 경고 한 줄로 남긴다 — 오류로 신고하지 않는 이유는 docstring 참조.
+            print(f"[RADAR] ⚠️ opportunity_score 배치 변별력 붕괴 — 학습 가중치 "
+                  f"(id={weights.get('id')}, learned_at={weights.get('learned_at')}) 를 "
+                  f"이 배치({len(scored)}건)에 적용 시 정렬키가 뭉침 → 기본 가중치로 재계산")
+            for item in scored:
+                item["opportunity_score"] = opportunity_score(
+                    item["keyword"],
+                    item["score"],
+                    item.get("velocity_score", 0.0),
+                    item.get("competition", 50.0),
+                    sector=item.get("sector", ""),
+                    weights=_fallback,
+                )
+
     return scored
 
 

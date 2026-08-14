@@ -322,6 +322,32 @@ def _circuit_breaker_ok() -> bool:
         return True
 
 
+# 알림을 이미 보낸 시간 버킷의 시작 시각 — 버킷당 1통만 나가게 하는 유일한 상태.
+_cb_notified_ts = -1.0
+
+
+def _circuit_open_is_new() -> bool:
+    """브레이커가 *이번 시간 버킷에서 처음* 열렸으면 True.
+
+    ★ 왜 필요한가 (2026-08-14 사고)
+      종전엔 차단이 **발동할 때마다** 텔레그램을 보냈다. 억제가 0줄이라 같은 문장이
+      6시간 동안 74통 나갔다(실측 07:18~13:10, 오류 6건 × 10분 스윕). 같은 파일의
+      형제 게이트(`repair_budget._notify_once`)는 이미 쿨다운으로 57건 중 51건을
+      억제하고 있었다 — **알림 억제가 한쪽 경로에만 있었던 비대칭**이 원인이다.
+
+      브레이커의 상태는 *시간 버킷* 하나로 정의된다(`_cb_hour_ts`). 사람이 알아야 할
+      사건은 "이 시간에 브레이커가 열렸다" 지 "몇 번째 오류가 막혔다" 가 아니다.
+      → 쿨다운 숫자를 새로 만들지 않고 **버킷 자체를 억제 키로 쓴다**(②).
+        버킷이 리셋되면(다음 시간) 다시 한 통 — 상황이 계속되면 시간당 1통으로 알려준다.
+    """
+    global _cb_notified_ts
+    with _CB_LOCK:
+        if _cb_notified_ts == _cb_hour_ts:
+            return False
+        _cb_notified_ts = _cb_hour_ts
+        return True
+
+
 def _is_deny_path(module: str) -> bool:
     """절대 자동수정 금지 파일인지 확인."""
     if not module:
@@ -742,8 +768,13 @@ def _orchestrate(error_id: int):
                 log.info(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — "
                          f"이미 종결 상태({_cur})라 유지, 재청구 안 함")
                 return True
-            log.warning(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — 시간당 한도 초과")
-            _notify_all(error_record, "circuit_open")
+            # 알림은 *버킷당 1통* — 발동마다 보내면 같은 문장이 수십 통 나간다(위 함수 주석).
+            if _circuit_open_is_new():
+                log.warning(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — 시간당 한도 초과")
+                _notify_all(error_record, "circuit_open")
+            else:
+                log.info(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — "
+                         f"이 시간 버킷에서 이미 알림, 알림 억제")
             _db.mark_error_status(error_id, "new")  # 다음 retry_pending 에서 재처리
             return True
 

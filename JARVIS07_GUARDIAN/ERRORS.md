@@ -13865,3 +13865,186 @@ tests/ -k "guardian or circuit or harness or login or naver or precheck"` 45 pas
 이미 옳다" 부류지만, 그 판정에 도달하기까지 두 번째 Tier-2 세션을 태운 이유가 circuit
 breaker 라는 별개 교차점의 미완성 가드였다는 점에서 [632]의 직접 후속이다.
 
+
+## [639] ✅ 해결 — 경제 브리핑 radar `TopicPackNoCandidate` — 학습 가중치가 오늘 배치의 opportunity_score 를 전원 0.0 으로 뭉갬 → 경제 무관 잡음 키워드가 선정돼 적합 후보 0개 (2026-08-14)
+
+**증상**
+`source=radar`, `module=JARVIS03_RADAR.jobs`, `error_type=RuntimeError`,
+`func_name=TopicPackNoCandidate`, `message="topic_pack 미생성 — 07:00 경제 발행이
+주제를 못 받는다 (TopicPackNoCandidate)"`, `traceback="NoneType: None"`(`_report_pack_empty()`
+가 직접 생성한 인공 RuntimeError). `_pack_empty_reason()` 판정 결과 트렌드 파일은
+있고 `combined_keywords` 도 비어있지 않은데(TrendFileMissing·TrendCollectEmpty 아님)
+`build_topic_pack()` 이 None 을 반환한 케이스.
+
+**환경** `JARVIS03_RADAR/topic_pack.py::build_topic_pack` · `JARVIS03_RADAR/analyzer.py`
+· 2026-08-14.
+
+**원인**
+`topic_pack._candidates()` 는 `opportunity_score` 내림차순으로 정렬해 상위
+`max_candidates`(10)개만 LLM 적합성 프로파일링에 넘긴다. 그런데 그날 배치의
+`scored_keywords` 50개가 대부분 신규(미사용) 키워드라 `freshness` 가 전원 20.0(최고점)
+동률이었고, 그 시점 학습된 `w_fresh` 가 음수로 학습돼 있어 `opportunity_score` 가
+**전원 0.0** 으로 클립됐다. 전원 동점이면 정렬이 사실상 원본(combined_keywords) 순서
+그대로 유지되므로, 경제 섹터와 무관한 잡음 키워드가 상위 10개를 차지 → LLM 적합성
+판정에서 전부 `fit=False` → `selected=[]` → "적합 후보 0개" → `build_topic_pack()=None`
+→ `TopicPackNoCandidate`.
+근본 원인은 `learning.train_weights()` 의 변별력 가드(`_distinct_ratio` 기반, 학습
+*시점* 표본에서만 검증)가 **적용 시점의 실제 배치**에는 적용되지 않았다는 것 — 학습
+표본엔 재사용 키워드도 섞여 freshness 가 다양했으므로 그때는 가드를 통과했지만, 신규
+키워드 위주인 오늘 배치에 그 가중치를 그대로 적용하면서 변별력이 배치 단위로 붕괴했다.
+
+**헛다리**
+없음 — `_pack_empty_reason()` 이 이미 TrendFileMissing/TrendCollectEmpty/
+TrendCollectEmptyLastRun 을 먼저 배제하도록 세분화([516]류 오분류 방지가 이미 반영)돼
+있어, 수집 실패가 아니라 팩 빌드 내부(선정 로직)로 조사 범위를 곧장 좁힐 수 있었다.
+
+**해결**
+① `JARVIS03_RADAR/learning.py` — `train_weights()` 내부에만 있던 `_distinct_ratio()`
+를 모듈 최상위 `distinct_ratio()` + `is_ranking_degenerate(out_vals, in_vals, factor=0.5)`
+로 승격(① 단일 진입점 — 학습 시점·적용 시점 양쪽이 같은 판정 함수 공유).
+② `JARVIS03_RADAR/analyzer.py` — `_get_learned_weights()` 폴백에 인라인으로 박혀
+있던 기본 가중치를 모듈 상수 `DEFAULT_WEIGHTS` 로 승격(② 동적 설계 — 사본 제거).
+`opportunity_score()` 에 `weights` 인자를 추가해 호출자가 학습 캐시 대신 특정
+가중치를 강제할 수 있게 함. `enrich_with_opportunity()` 가 학습 가중치로 배치 전체를
+채점한 뒤 `is_ranking_degenerate(출력 opportunity_score, 입력 score)` 로 붕괴를
+감지하면 `DEFAULT_WEIGHTS` 로 **그 배치만** 즉시 재계산(학습 결과 자체는 폐기하지
+않음 — 다음 배치가 변별력을 회복하면 학습 가중치가 다시 쓰인다).
+③ `tests/test_learning_signal.py` — 붕괴 재현(`w_fresh=-50.0` 로 인위 클립) 후
+`opportunity_score` 가 동일값으로 뭉치지 않는지, `DEFAULT_WEIGHTS` 가 유일한 진실
+소스인지 회귀 테스트 2건 추가.
+**검증**: 합성 배치(10건, freshness 전원 동률)로 붕괴 재현 → 재계산 후
+`distinct(opportunity_score)==10` 확인. `pytest tests/test_learning_signal.py` 44
+passed. `py_compile` 통과.
+
+**파일** `JARVIS03_RADAR/analyzer.py`, `JARVIS03_RADAR/learning.py`,
+`tests/test_learning_signal.py`
+
+**교훈**
+정렬키의 변별력은 *학습 시점 표본* 이 아니라 *적용 시점 배치* 기준으로도 검증해야
+한다 — 같은 가중치가 표본에선 안전해도 배치 조성(오늘은 대부분 신규 키워드)에 따라
+사후에 붕괴할 수 있다. 학습 시점 가드와 적용 시점 가드는 서로 다른 코드로 각자
+재구현하지 말고 판정 함수 하나를 공유해야, 학습 가드를 강화하면 적용 가드도 자동으로
+같이 강해진다.
+
+
+## [640] ✅ 해결 — [639] 정밀 후속: 근본은 *학습식 ≠ 적용식*(① 위반)이었고, GUARDIAN 이 넣은 가드가 **정상 동작을 오류로 신고**해 6시간 74통 알림 폭주를 만들었다 (2026-08-14)
+
+**증상**
+① 07:00 경제 브리핑 네이버·티스토리 **동시 실패**(`post_analysis` 2026-08-14 = 0행,
+09:20 `PublishGapEconomicNaver`/`Tistory` 결손 감지). ② 그 뒤 07:18~13:10 사이
+텔레그램에 `⚡ Circuit Breaker 발동` 이 **74통**. 그런데 `error_log` 의 해당 오류는
+**6행**뿐이었다(수:알림 = 1:12).
+
+**환경** `JARVIS03_RADAR/{analyzer,learning,topic_pack,jobs}.py` ·
+`JARVIS07_GUARDIAN/guardian_agent.py` · 데몬 PID 92078(Aug13 17:30 기동) · 2026-08-14.
+
+**원인 — 사슬 5개**
+
+1. **학습식과 적용식이 다른 함수였다 (① 단일 진입점 위반 — 진짜 근본).**
+   `learning.train_weights` 는 절편 포함 아핀 모델을 적합해 `intercept` 를 저장하는데
+   (`w_scaled = [v*6.0 …]` 은 **계수에만** SCALE 적용, 절편은 원 스케일 저장),
+   `analyzer.opportunity_score` 의 채점식에는 **절편 항이 아예 없었다**
+   (실측: `grep -n intercept analyzer.py` → 리터럴 1건뿐). 계수만 배수하고 절편을
+   버리면 아핀 관계가 깨져 계수가 조금만 작아져도 raw 가 통째로 음수로 내려간다.
+2. **학습 표본과 적용 배치의 특징공간이 겹치지 않는다.**
+   학습 표본 = 이미 발행된 글(perf>0, freshness 낮음) / 적용 배치 = 오늘의 후보
+   (perf=0, freshness 최고점 전원 동일). 실측: `(perf=0, freshness=20)` 조합은 학습
+   표본 496행 중 **0행**. 게다가 learn_log 582행의 고유 키워드는 **21개**뿐
+   (`경제지표 YYYY년 MM월 DD일` 두 개가 51행 중 26·25회) — `n_samples=496 · r²=0.4466`
+   은 의사반복(pseudo-replication)이었다.
+3. **그래서 학습 시점 가드는 통과했고 적용 시점에 붕괴했다.**
+   `w_fresh=-0.0689 × 20.0 = -1.378` 이 모든 키워드에 동일하게 걸리고 trend 최대
+   기여는 `100×0.0011=0.11` 뿐 → raw -1.365~-0.597 → 하한 클립으로 **전원 0.0**.
+   붕괴는 오늘이 아니라 **2026-07-22 부터 단계적**(고유값 48~50 → 6~11 → 1~5 → 1~2).
+   08-09~08-13 은 fit LLM 이 우연히 1~2개를 통과시켜 `market`·`의성군`·
+   `latest iphone rumors`·`디즈니+`·`k9 자주포` 가 **경제 브리핑으로 발행됐다**.
+   오늘은 트렌딩 상위가 전부 인명·지자체라 우연이 끊긴 첫날일 뿐이다.
+4. **정렬키가 두 척도를 섞고 있었다 (`topic_pack.py:_candidates`).**
+   `scored.get("opportunity_score", it.get("score", 0))` — 채점분은 0~150, 미채점분은
+   combined 의 **0~1 정규화값**. `radar_main.py` 가 `[:30]` 으로 잘라 31위 이하는
+   채점을 아예 안 받는다. 정상일 땐 22~66 이 0.3~0.4 를 압도해 숨어 있다가, 점수가
+   0.0 이 되는 순간 **미채점 꼬리가 통째로 선두를 점거**했다.
+   실측 재현(점수 전원 0.0): 수정 전 후보 10개가 **전원 미채점**
+   (스타벅스·위클리·일본군·위안부·피해자·기념식·안창호·애기애타·빗자루·코스닥)
+   → fit 전멸. 수정 후 0/10.
+5. **알림 폭주는 별개 결함 — 가드가 자기를 오류로 신고했다.**
+   GUARDIAN 이 07:17 SDK 수리로 넣은 `enrich_with_opportunity` 배치 가드는 **진단이
+   정확했고 효과도 실증**됐다(06:02 전원 0.0 → 07:37 44.9~66.2). 그러나 폴백이
+   발동할 때마다 `report(RuntimeError(...))` 를 불렀다. **폴백 발동은 정상 동작이지
+   코드 버그가 아니라서** Tier1·Tier2 가 고칠 수 없고 → `status='new'` 잔류 →
+   `j07_retry_pending`(10분) 무한 재투입 → CB 차단 → `mark_error_status(…,"new")`
+   재무장. 게다가 `guardian_agent._circuit_blocked` 의 `_notify_all("circuit_open")`
+   에는 **억제가 0줄**이었다(형제 게이트 `repair_budget._notify_once` 는 쿨다운으로
+   오늘 57건 중 51건 억제 — **알림 억제가 한쪽 경로에만 있던 비대칭**).
+   부작용: CB 토큰 10/시간을 이 루프가 전량 잠식 → 같은 시간대 **진짜 신규 오류의
+   수리 용량이 0**. 보호장치가 거꾸로 작동했다.
+6. **관측이 거짓말을 했다.** `jobs.py:626` 이 `train_res.get("ok")` 를 보는데
+   `train_weights` 의 실제 반환은 `{"trained": …}` → **학습이 성공해도 언제나
+   `skip: None`**. 08-09 04:00 에 id6·id7 이 저장되는 동안 로그는 skip 두 줄이었고,
+   그래서 가중치가 바뀐 사실을 **아무도 볼 수 없었다**. (`bt_res.get('n_samples')` 도
+   실제 키가 `"n"` 이라 항상 None.)
+
+**헛다리** (실측으로 기각 — 다시 시도 금지)
+- ~~"하한 클립(`max(0.0,·)`)이 정렬키를 죽였다"~~ — 클립을 제거해도 `round(·,1)` 때문에
+  출력 고유값이 3개뿐이고 `_candidates()` 결과가 **한 글자도 안 바뀐다**. 부하를 지는
+  것은 클립이 아니라 **점수 스케일 붕괴 + 척도 혼용**.
+- ~~"학습 가드가 나쁜 가중치를 통과시킨 게 버그"~~ — 실제 표본 496행으로 재현하면
+  `out_ratio 0.0444 > 임계 0.0403` 으로 **정당하게 통과**한다. 문제는 가드가 *학습
+  표본* 만 본다는 **모집단** 이지 판정식이 아니다.
+- ~~"경제 우선화는 opportunity_score 의 섹터 부스트였다"~~ — 섹터 가점은 **역사상 존재한
+  적이 없다**(전체 git 이력 확인). `sector` 는 `_learning_penalty` 감점에만 쓰이고
+  현재 `feedback_penalty` 해당 행이 0건이라 수치 영향 0. 진짜 경제 필터
+  `if it.get("sector") not in _ECON_SECTORS: continue` 는 커밋 **3e6a6d6(2026-07-14)**
+  이 소스 교체와 함께 삭제했다.
+- ~~"경제 tier 로 정렬 우선순위를 주면 된다"~~ — 실데이터 검증 결과 잡음이 *비경제*에서
+  **경제 잡음**(`대표지수인`·`e종목`·`상승폭`)으로 바뀔 뿐이고, fit 프롬프트가
+  "순수 비경제만 false" 라 **이것들은 통과한다**. 더 나쁜 결과(잡음 발행)를 만든다.
+- ~~"장부 기반 지수 백오프로 재투입을 늦춘다"~~ — 실 DB dry-run 결과 **무료 Tier-1까지
+  차단**하고(백오프가 `_orchestrate` 앞에 걸림), 탈출 조건인 `allowed` 행은 하루 3장뿐인
+  SDK 티켓을 따내야 생겨 **도달 불가** → 오류당 24시간 고착. `_sec_since_last_allowed`
+  주석이 이미 기록한 자기잠금의 재현.
+
+**해결**
+- `analyzer.apply_weights()` 신설 — **채점식의 단일 진입점**(절편 포함). 학습 관문의
+  변별력 가드와 적용 채점이 **같은 함수**를 쓴다. `clamp_score()` 로 클립도 단일화
+  (관문이 클립을 다시 구현하면 "관문이 본 점수"와 "실제 점수"가 갈린다).
+- `analyzer.DEFAULT_WEIGHTS` **사본 삭제** → `default_weights()` 가
+  `shared.db.DEFAULT_WEIGHTS`(원래 주인)에서 파생. GUARDIAN 패치가 만든 ① 위반이었고
+  테스트가 그 사본을 "단일 진실 소스"라고 박제하고 있었다 — 테스트도 주인 참조로 교체.
+- `learning.train_weights` 에 **적용형상 프로브** 신설 — 학습 직후 (perf, freshness) 를
+  *실제 채점 함수에 미사용 키워드를 넣어 런타임 파생*(②, 숫자 안 박음)하고, 실제 관측된
+  trend 분포로 채점해 클립 이후 변별력이 남는지 본다. 실측으로 이번 가중치를 거부 확인:
+  `고유비 0.059 < trend 1.000×0.5, 점수범위 0.0~0.0`. **옛 관문은 이걸 통과시켰다.**
+- `FEATURE_WEIGHT_KEY` + `_as_weights()` — 피처명↔컬럼명 대응을 한 곳으로(①).
+- 배치 가드는 유지하되 **오류 신고 제거**(로그만) — 폴백은 정상 동작이다. `except: pass`
+  도 제거(조용한 무력화 금지).
+- `guardian_agent._circuit_open_is_new()` — CB 알림을 **시간 버킷당 1통**으로.
+  쿨다운 숫자를 새로 만들지 않고 브레이커 자신의 버킷(`_cb_hour_ts`)을 억제 키로 쓴다(②).
+- `topic_pack._candidates` — **미채점 항목을 후보에서 제외**. 없는 점수를 지어내지 않는다.
+  실측: combined 50 중 19개가 미채점이었고 붕괴 시 그 19개가 상위 10을 전원 점거했다.
+- `topic_pack` 재빌드 깊이 정정 — 소진 복구가 `max_candidates=8` 로 기본(10)보다 **얕았다**
+  (로그만 "확장 재탐색"). `_DEFAULT_PUBLISH_SLOTS`/`_CANDIDATE_BUFFER` 에서 파생.
+- `jobs.py` 학습 보고 키 정정(`ok`→`trained`, `n_samples`→`n`).
+- DB: 썩은 가중치 **행을 지우지 않고**(이력 보존) 기본값 세대 id=10 을 얹어 최신을 건강하게.
+- 진행 중이던 `status='new'` 6행은 `ignored` + 사유 박제로 종결(13:21 이후 CB 0건 확인).
+
+**파일**
+`JARVIS03_RADAR/analyzer.py` · `JARVIS03_RADAR/learning.py` ·
+`JARVIS03_RADAR/topic_pack.py` · `JARVIS03_RADAR/jobs.py` ·
+`JARVIS07_GUARDIAN/guardian_agent.py` · `tests/test_learning_signal.py`
+
+**교훈**
+1. **"학습식 ≠ 적용식" 이 가장 비싼 ① 위반이다.** `intercept` 는 저장·표시·가드 판정에는
+   쓰이는데 실제 점수식엔 한 번도 안 들어갔다. 학습과 적용을 서로 다른 함수로 두면
+   학습이 아무리 잘 돌아도 적용에서 무너진다.
+2. **가드는 *적용 시점 모집단* 으로 검증해야 한다.** 학습 표본에서만 보는 가드는
+   특징공간이 다른 배치에 무력하다. 판정식을 고치는 게 아니라 **무엇 위에서 판정하는가**
+   를 고쳐야 했다.
+3. **실패하지 않는 열화가 가장 오래 산다.** 22일간 하드 실패 0건, `적합 후보 0개` 는
+   오늘이 최근 7일 중 처음. 그동안 비경제 주제가 경제 브리핑으로 조용히 나갔다.
+   정렬키 변별력 같은 *연속량* 에는 임계 경보가 없다.
+4. **정상 동작을 오류로 신고하면 자가수리가 자기를 먹는다.** 고칠 수 없는 것을 오류로
+   넣으면 재시도 루프가 종료 조건에 영원히 도달하지 못하고, 그 사이 보호장치(CB 토큰)를
+   전량 잠식해 **진짜 오류의 수리 용량을 0 으로 만든다.**
+5. **알림 억제는 *모든* 통지 경로에 걸어야 한다.** 같은 파일 안에서도 한 경로엔 쿨다운이
+   있고 다른 경로엔 0줄이면, 사람이 받는 것은 억제 없는 쪽 뿐이다.

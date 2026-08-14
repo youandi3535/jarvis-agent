@@ -119,14 +119,27 @@ def _candidates(trends: dict, max_candidates: int = 8) -> list[dict]:
         if _is_too_generic(kw):
             log.debug(f"[topic_pack] '{kw}' 너무 넓은 키워드 — 후보 제외")
             continue
-        seen.add(kw.lower())
         # scored_keywords에서 점수·섹터 조인
-        scored = scored_idx.get(kw.lower(), {})
+        scored = scored_idx.get(kw.lower())
+        # ★ 채점 안 된 항목은 후보에서 제외한다 (2026-08-14 신설 — ② 동적 설계)
+        #   종전엔 `scored.get("opportunity_score", it.get("score", 0))` 로 **미채점분에
+        #   다른 척도를 폴백**했다. opportunity_score 는 0~150 인데 combined 의 score 는
+        #   0~1 정규화값이라, 한 정렬키 안에 두 자가 섞여 있었다.
+        #   정상일 때는 22~66 이 0.3~0.4 를 압도해 이 결함이 보이지 않다가, 학습 가중치가
+        #   망가져 채점분이 전원 0.0 이 되는 순간 **채점조차 안 받은 꼬리가 통째로 선두를
+        #   점거**했다(실측 2026-08-14 06:03 — combined 3·4·5위였던 항목이 후보 8·9·10번째로
+        #   밀리고 그 위를 미채점 7건이 차지 → 후보 10개 전원 비경제 → fit 전멸 → 발행 실패).
+        #   채점 대상은 `radar_main` 이 정한다(상위 30 + 경제 보완). 그 밖은 *점수가 없는*
+        #   것이지 *점수가 낮은* 것이 아니므로, 없는 점수를 지어내지 않고 후보에서 뺀다.
+        if not scored:
+            log.debug(f"[topic_pack] '{kw}' 미채점(채점 풀 밖) — 후보 제외")
+            continue
+        seen.add(kw.lower())
         pool.append({
             **it,
             "sector":            scored.get("sector", "기타"),
-            "opportunity_score": scored.get("opportunity_score", it.get("score", 0)),
-            "score":             scored.get("score", it.get("score", 0)),
+            "opportunity_score": scored.get("opportunity_score", 0.0),
+            "score":             scored.get("score", 0.0),
             "velocity":          scored.get("velocity", "—"),
             "competition":       scored.get("competition", 50.0),
         })
@@ -180,7 +193,15 @@ def _profile_batch(cands: list[dict]) -> list[dict]:
 
 
 
-def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
+# 발행 슬롯(네이버·티스토리 각 1) 과 프로파일링 버퍼 — **숫자의 주인은 여기 한 곳**(①).
+#   종전엔 기본값이 `publish_slots + 8` 로 시그니처에 박혀 있고 소진 복구 재빌드는
+#   `max_candidates=8` 을 따로 박아, 재빌드가 평시보다 *얕아지는* 것을 아무도 못 봤다.
+_DEFAULT_PUBLISH_SLOTS = 2
+_CANDIDATE_BUFFER      = 8
+
+
+def build_topic_pack(trends: dict | None = None,
+                     publish_slots: int = _DEFAULT_PUBLISH_SLOTS,
                      max_candidates: int | None = None) -> dict | None:
     """주제 패키지 생성 + 박제. topic_pack = 키워드 + 프로필만 (수집은 파이프라인에서). 실패 시 None.
 
@@ -194,7 +215,7 @@ def build_topic_pack(trends: dict | None = None, publish_slots: int = 2,
     except Exception:
         pass
     if max_candidates is None:
-        max_candidates = publish_slots + 8  # 혼합 30개 중 경제 키워드 충분히 확보
+        max_candidates = publish_slots + _CANDIDATE_BUFFER  # 채점 풀에서 충분히 확보
     if trends is None:
         try:
             from JARVIS03_RADAR.radar_main import load as _load
@@ -406,8 +427,14 @@ def pick_slot_candidate(exclude_keyword: str = "", force_env: str = "") -> dict 
     #   한 슬롯이 선점한 뒤 재빌드해도 동일 1개만 재생산돼 다른 슬롯이 영구 소진. *소진 복구
     #   재빌드만* max_candidates 를 넓혀 더 깊은 후보 풀에서 대안을 찾는다 (평시 프로파일링
     #   비용은 그대로 — ERRORS [384] 원칙 유지, 소진 시에만 예외).
-    log.info("[topic_pack] 당일 팩 없음/소진 — 파이프라인 즉석 실행(확장 재탐색)")
-    build_topic_pack(max_candidates=8)
+    #   ★ '확장' 이 실제로 확장이어야 한다 (2026-08-14 정정). 종전엔 `max_candidates=8` 을
+    #     박아 두었는데 기본값이 `publish_slots + 8`(=10) 이라 **재탐색이 평시보다 얕았다** —
+    #     로그만 "확장 재탐색" 이라 적혀 있고 실제로는 축소였다. 숫자를 다시 박지 말고
+    #     기본 깊이에서 *파생* 한다(②). 2026-08-14 06:07·06:08 의 즉석 재시도가 06:03 과
+    #     똑같이 실패한 데에는 이 축소도 한몫했다.
+    _deep = _DEFAULT_PUBLISH_SLOTS + _CANDIDATE_BUFFER * 2
+    log.info(f"[topic_pack] 당일 팩 없음/소진 — 파이프라인 즉석 실행(확장 재탐색, 후보 {_deep}개)")
+    build_topic_pack(max_candidates=_deep)
     return pick_candidate(exclude_keyword=exclude_keyword)
 
 
