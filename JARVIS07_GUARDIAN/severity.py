@@ -21,8 +21,11 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
+
+log = logging.getLogger("jarvis.guardian.severity")
 
 
 def _flag(name: str, default: bool = True) -> bool:
@@ -881,6 +884,129 @@ def is_transient(error_type: str, message: str = "", source: str = "",
 
 
 # ══════════════════════════════════════════════════════════════════
+# 5-B. '사람이 봐야 하는가' — is_transient 와 **다른 질문** (2026-08-14)
+#
+# ★ 왜 쪼갰나
+#   `is_transient()` 하나가 서로 다른 두 질문에 같은 답을 강요하고 있었다:
+#     ① "코드로 못 고치는가"      → 수리(Tier-1·Tier-2) 비대상인가
+#     ② "사람도 볼 필요 없는가"   → 재조회 대상에서 빼도 되는가
+#   두 소비자(sweep · deep_audit · _orchestrate)는 ①이 True 면 곧장 `ignored` 로
+#   종결했다. 그런데 `ignored` 는 재수집 집합(`UNRESOLVED_STATUSES`)에 없다 —
+#   즉 ①만 보고 닫으면 ②까지 함께 닫힌다.
+#
+#   실측 피해: `PublishGap*`(발행 결손) 29건 중 18건이 `ignored`.
+#   발행이 통째로 빠진 사건인데 "일시적 오류" 로 자동 종결돼 아무도 다시 안 봤다.
+#   코드로 못 고치는 것은 맞다(데몬이 꺼져 있었거나 슬롯을 놓친 것) — 그러나
+#   **사람은 반드시 봐야 한다**. 캡차도 같은 부류다(이미 `_login_human_required_types`
+#   가 그 개념을 갖고 있었는데, 그 개념이 종결 단계까지 전달되지 않았다).
+#
+# ★ 목록을 박지 않는다(②) — 두 도메인이 이미 자기 답을 갖고 있다.
+#     · 로그인: `_login_human_required_types()` (login_manager 파생)
+#     · 발행결손: `publish_ledger.publish_gap_error_type()` × 기대 집합 파생
+#   새 플랫폼·새 글종류가 생기면 타입이 자동으로 따라온다.
+# ══════════════════════════════════════════════════════════════════
+
+# last-known-good 캐시 — 성공값만 적재(파생 실패가 판정을 죽이지 않게).
+_PUBLISH_GAP_TYPES_CACHE: frozenset = frozenset()
+_PUBLISH_GAP_LAST_ERROR: str = ""       # 마지막 파생 실패 사유 (관측용 — 비면 실패 이력 없음)
+_PUBLISH_GAP_WARNED: bool = False       # 로그 1회 억제 (알림 폭주 금지 — 새 채널 신설 안 함)
+
+
+def _publish_gap_types() -> frozenset:
+    """발행 결손 오류 타입 전체 — `publish_ledger` 파생(리터럴 금지).
+
+    지연 import 는 `_login_human_required_types()` 와 동일 원칙
+    (순환 import·부분 초기화 재진입 회피).
+
+    ★ 2026-08-14 (P2) — **파생 실패를 무음으로 종전 동작에 되돌리지 않는다.**
+      종전엔 캐시 초기값이 빈 집합이고 실패를 `except: pass` 로 삼켰다. 그래서
+      *첫 파생이 실패하면* `needs_human_attention()` 이 영구히 False →
+      `is_dismissable()` 이 True → `_park_non_code` 가 **발행 결손을 다시 `ignored` 로
+      자동 종결**했다. 즉 T5 가 고치려던 바로 그 동작으로 **신호 없이** 되돌아간다.
+      빈 집합은 "해당 없음" 이 아니라 "**모른다**" 다. 둘을 같은 값으로 표현했던 것이 병.
+      → 실패를 기록하고(`_PUBLISH_GAP_LAST_ERROR`), 아직 한 번도 못 읽었으면
+        `publish_gap_types_known()` 이 False 를 말한다. 판정은 그때 fail-closed 로 간다.
+    """
+    global _PUBLISH_GAP_TYPES_CACHE, _PUBLISH_GAP_LAST_ERROR, _PUBLISH_GAP_WARNED
+    try:
+        from JARVIS08_PUBLISH.publish_ledger import (  # noqa: PLC0415
+            expected_platforms, publish_gap_error_type, publish_slots)
+        post_types = {pt for pt, _h, _m in publish_slots() if pt}
+        got = frozenset(
+            publish_gap_error_type(pt, pf)
+            for pt in post_types
+            for pf in expected_platforms())
+        if got:
+            _PUBLISH_GAP_TYPES_CACHE = got
+            _PUBLISH_GAP_LAST_ERROR = ""
+            _PUBLISH_GAP_WARNED = False
+            return got
+        _PUBLISH_GAP_LAST_ERROR = "publish_ledger 가 빈 기대집합을 돌려줬다(슬롯·플랫폼 0)"
+    except Exception as e:  # noqa: BLE001
+        _PUBLISH_GAP_LAST_ERROR = f"{type(e).__name__}: {e}"[:200]
+    if not _PUBLISH_GAP_TYPES_CACHE and not _PUBLISH_GAP_WARNED:
+        _PUBLISH_GAP_WARNED = True      # 소음 억제 — 성공하면 위에서 다시 열린다
+        log.error("[severity] 발행 결손 타입 파생 실패 — 자동 종결(ignored) 판정을 "
+                  "보류한다(fail-closed). 사유: %s", _PUBLISH_GAP_LAST_ERROR)
+    return _PUBLISH_GAP_TYPES_CACHE
+
+
+def publish_gap_types_known() -> bool:
+    """발행 결손 어휘를 **실제로 알고 있는가** — 빈 집합('모름')과 '해당 없음' 을 가른다."""
+    return bool(_publish_gap_types())
+
+
+def publish_gap_types_effective() -> "bool | None":
+    """`patch_effective()` 표준 프로브 — 어휘 파생이 *동작으로* 살아 있는가.
+
+    True = 파생됨 / False = 파생 불가(자동 종결이 보류되고 있다) / None = 판정 자체 불가.
+    상시 감시는 `selfcheck()` 의 [P5] 레그가 한다.
+    """
+    try:
+        return bool(_publish_gap_types())
+    except Exception:   # noqa: BLE001
+        return None
+
+
+def needs_human_attention(error_type: str = "", message: str = "",
+                          source: str = "", kind: str = "") -> bool:
+    """★ 공개 API — "코드로는 못 고치지만 **사람은 봐야 한다**" 인가.
+
+    `is_transient()` 가 True 인 것들 가운데 *그냥 흘려보내면 안 되는* 부류만 골라낸다.
+    여기 True 인 오류는 자동 종결(`ignored`) 대신 재조회 대상(`wontfix`)에 남는다.
+
+    킬스위치 `GUARDIAN_HUMAN_ATTENTION=0` → 종전 동작(전부 자동 종결)으로 즉시 복귀.
+    """
+    if not _flag("GUARDIAN_HUMAN_ATTENTION", True):
+        return False
+    et = (error_type or "").strip()
+    if not et:
+        return False
+    return (et in _login_human_required_types()
+            or _short_type(et) in _login_human_required_types()
+            or et in _publish_gap_types())
+
+
+def is_dismissable(error_type: str, message: str = "", source: str = "",
+                   kind: str = "", companions=None) -> bool:
+    """★ 공개 API — 자동 종결(`ignored`)해도 되는가 = 수리 비대상 **이면서** 사람도 불필요.
+
+    소비자는 이 함수 하나만 부른다(③ — 같은 문). 수리 대상 여부는 `is_transient()`,
+    종결 가능 여부는 여기. 두 답이 갈리는 구간이 곧 `wontfix` 다.
+    """
+    if not is_transient(error_type, message, source, kind=kind, companions=companions):
+        return False
+    # ★ fail-closed (2026-08-14 P2): 발행 결손 어휘를 **모르면** 자동 종결하지 않는다.
+    #   모르는 채로 "사람 필요 없음" 이라고 답하면 발행 결손이 `ignored` 로 사라진다
+    #   (재수집 집합 밖 → 아무도 다시 안 본다). 모를 때의 안전한 답은 `wontfix` —
+    #   미해결 버킷에 남아 sweep 이 계속 집고 사람도 볼 수 있다.
+    #   킬스위치 `GUARDIAN_HUMAN_ATTENTION=0` 이면 이 레그도 함께 꺼진다(종전 동작 복귀).
+    if _flag("GUARDIAN_HUMAN_ATTENTION", True) and not publish_gap_types_known():
+        return False
+    return not needs_human_attention(error_type, message, source, kind)
+
+
+# ══════════════════════════════════════════════════════════════════
 # 6. 표시용 라벨
 # ══════════════════════════════════════════════════════════════════
 
@@ -1053,6 +1179,12 @@ def selfcheck() -> list[str]:
     # ── is_auto_fixable: 환경 타입은 자동수정 비대상 ──
     if is_auto_fixable("high", "WebDriverException"):
         bad.append("[결함3] is_auto_fixable(high, WebDriverException) == True — 환경 오류에 LLM 낭비")
+
+    # ── [P5] 발행 결손 어휘 파생 (2026-08-14 P2) ──
+    #   빈 집합이면 '해당 없음' 이 아니라 '모름' 이다. 모르는 채로 도는 것을 여기서 드러낸다.
+    if publish_gap_types_effective() is not True:
+        bad.append(f"[P5] 발행 결손 타입 파생 실패 — 자동 종결(ignored) 보류 중. "
+                   f"사유: {_PUBLISH_GAP_LAST_ERROR or '알 수 없음'}")
 
     # ── 결함4: 오류 타입이 뭉뚱그려져 있지 않은가 (사용자 박제 2026-07-29) ──
     bad.extend(type_granularity_issues())

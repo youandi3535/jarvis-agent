@@ -3537,16 +3537,245 @@ def test_fixed에는_근거가_남는다():
 
 
 def test_Tier2_fixed_표시가_근거를_동반한다():
-    """호출부가 근거를 안 주면 DB 계층이 메워주더라도 '누가 왜' 를 알 수 없다."""
+    """호출부가 근거를 안 주면 DB 계층이 메워주더라도 '누가 왜' 를 알 수 없다.
+
+    ★ 2026-08-14 강화 — 종전 검사는 "근거 *인자* 가 있는가" 만 봤다. 그 인자가
+      `"Tier-2 SDK 수정 + 재현검증 통과"` 라는 **리터럴** 이어도 통과했고, 실제로
+      리터럴이었다. 근거가 있는 것과 근거가 *참인* 것은 다르다. 이제 셋을 본다:
+        ① `fixed` 를 쓰는 곳이 **하나** 인가 (단일 출구)
+        ② 그 사유가 **상수가 아닌가** (검증 상태에서 파생)
+        ③ 그 단 하나의 출구가 `close_error` 인가
+    """
     import ast
 
     tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
-    for n in ast.walk(tree):
-        if (isinstance(n, ast.Call)
-                and getattr(n.func, "attr", "") == "mark_error_status"
-                and any(isinstance(a, ast.Constant) and a.value == "fixed" for a in n.args)):
-            assert len(n.args) >= 3 or n.keywords, \
-                f"guardian_agent:{n.lineno} fixed 를 근거 없이 찍는다"
+    fixed_calls = [n for n in ast.walk(tree)
+                   if isinstance(n, ast.Call)
+                   and getattr(n.func, "attr", "") == "mark_error_status"
+                   and any(isinstance(a, ast.Constant) and a.value == "fixed" for a in n.args)]
+    assert fixed_calls, "fixed 를 쓰는 곳이 사라졌다 — 검사가 무의미해졌다(vacuous)"
+    for n in fixed_calls:
+        assert len(n.args) >= 3 or n.keywords, \
+            f"guardian_agent:{n.lineno} fixed 를 근거 없이 찍는다"
+
+    # ① 단일 출구 — `fixed` 를 쓰는 함수는 `close_error` 하나뿐이어야 한다
+    owners = set()
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef) and any(c in ast.walk(fn) for c in fixed_calls):
+            owners.add(fn.name)
+    assert owners == {"close_error"}, \
+        f"fixed 종결이 여러 곳에서 나간다 — 단일 출구가 아니다: {sorted(owners)}"
+
+    # ② 사유가 **검증 상태에서 파생** 되는가
+    #    ★ 인자 노드가 상수인지만 보면 안 된다 — `_res = "리터럴"` 뒤에
+    #      `mark_error_status(..., _res)` 면 노드는 Name 이라 그대로 통과한다(실측).
+    #      출구 함수가 파생 헬퍼를 *실제로 부르는지* 를 본다.
+    ce = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "close_error")
+    ce_calls = {getattr(c.func, "id", "") or getattr(c.func, "attr", "")
+                for c in ast.walk(ce) if isinstance(c, ast.Call)}
+    assert {"verification_tag", "verification_phrase"} <= ce_calls, \
+        f"종결 사유가 검증 상태에서 파생되지 않는다 — 리터럴로 회귀: {sorted(ce_calls)}"
+    assert "verification" in {a.arg for a in ce.args.args + ce.args.kwonlyargs}, \
+        "출구가 검증 상태를 인자로 받지 않는다"
+
+    # ③ Tier-2 호출부는 직접 찍지 말고 그 출구를 지나야 한다
+    t2 = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_try_sdk_targeted_fix")
+    t2_states = {a.value for c in ast.walk(t2) if isinstance(c, ast.Call)
+                 and getattr(c.func, "attr", "") == "mark_error_status"
+                 for a in c.args if isinstance(a, ast.Constant)}
+    assert "fixed" not in t2_states, "_try_sdk_targeted_fix 가 출구를 우회해 직접 fixed 를 찍는다"
+    assert any(isinstance(c, ast.Call) and getattr(c.func, "id", "") == "close_error"
+               for c in ast.walk(t2)), "_try_sdk_targeted_fix 가 종결 단일 출구를 안 쓴다"
+
+
+def test_검증판정이_호출자에게_전달된다():
+    """★ `run_auto_repair_targeted` 가 bool 만 돌려주던 것이 결함의 뿌리였다.
+
+    `_verify_sdk_fix` 는 3값(재현 안 됨/재현됨/판정 불가)을 내는데 그 판정이 함수
+    경계에서 증발했고, 호출자는 bool 만 보고 "재현검증 통과" 리터럴을 찍었다.
+    """
+    import ast
+    import inspect
+
+    from JARVIS07_GUARDIAN import auto_repair as ar
+
+    # ① 판정을 밖으로 내보내는 통로가 시그니처에 있는가
+    assert "out" in inspect.signature(ar.run_auto_repair_targeted).parameters, \
+        "검증 판정을 호출자에게 전달할 통로가 없다"
+
+    # ② `True` 가 두 뜻을 겸하던 것 — 정본 상태가 실려 나오는가
+    from JARVIS07_GUARDIAN.error_fixer import VERIFY_UNVERIFIABLE, verification_states
+    out: dict = {}
+    ok, _why = ar._verify_sdk_fix(None, None, out=out)
+    assert ok is None, "전제 깨짐 — error_record 없음을 실패로 단정했다"
+    assert out.get("state") in verification_states(), \
+        f"정본 검증 상태가 안 실렸다: {out!r}"
+    assert out["state"] == VERIFY_UNVERIFIABLE, \
+        f"판정 불가를 다른 상태로 말한다: {out['state']}"
+
+    # ③ 호출부가 그 통로를 실제로 쓰는가 (인자만 있고 안 쓰면 죽은 배선이다)
+    tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
+    t2 = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_try_sdk_targeted_fix")
+    assert any(isinstance(c, ast.Call)
+               and getattr(c.func, "id", "") == "run_auto_repair_targeted"
+               and any(k.arg == "out" for k in c.keywords)
+               for c in ast.walk(t2)), "Tier-2 가 판정을 받아오지 않는다"
+    assert any(isinstance(c, ast.Call) and getattr(c.func, "id", "") == "close_error"
+               and any(k.arg == "verification" for k in c.keywords)
+               for c in ast.walk(t2)), "받아온 판정을 종결 기록에 안 쓴다"
+
+
+def test_판정불가와_재현안됨을_같은_True로_뭉개지_않는다(monkeypatch):
+    """★ 결함의 정확한 지점 — `_verify_sdk_fix` 는 둘 다 `True` 를 돌려준다.
+
+    `reproduced_gone`(원 오류가 실제로 사라짐)과 `unverifiable`(재현 프로브가 도는
+    타입이 6종뿐이라 애초에 검사가 불가)은 **롤백하지 않는다**는 점만 같고 근거는
+    정반대다. 종전엔 이 둘이 같은 `True` 로 접혀 호출자가 전부 "재현검증 통과" 로
+    기록했다. 실트래픽 대부분이 후자였다.
+    """
+    from JARVIS07_GUARDIAN import auto_repair as ar
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    rec = {"error_type": "NameError", "message": "name 'x' is not defined"}
+
+    for state in (ef.VERIFY_GONE, ef.VERIFY_UNVERIFIABLE):
+        monkeypatch.setattr(ef, "verify_fix", lambda *a, **k: (state, "합성 판정"))
+        out: dict = {}
+        ok, _why = ar._verify_sdk_fix(rec, None, out=out)
+        assert ok is True, f"{state} 인데 롤백 판정이 됐다"
+        assert out["state"] == state, \
+            f"판정이 뭉개졌다 — {state} 를 {out['state']} 로 보고한다"
+
+
+def test_미검증_수정을_검증통과라고_기록하지_않는다():
+    """★ 라벨은 증거를 반영해야 한다 — 이것이 T1 의 핵심 요구다."""
+    from shared import db as _db
+    from JARVIS07_GUARDIAN.error_fixer import (VERIFY_GONE, VERIFY_REPRODUCES,
+                                               VERIFY_UNVERIFIABLE)
+    from JARVIS07_GUARDIAN.guardian_agent import close_error
+
+    def _new_row() -> int:
+        with _db.get_db() as con:
+            con.execute("INSERT INTO error_log (source,module,error_type,message,status) "
+                        "VALUES ('closeprobe','m','X','x','new')")
+            return con.execute("SELECT id FROM error_log WHERE source='closeprobe' "
+                               "ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+    def _row(eid: int) -> dict:
+        with _db.get_db() as con:
+            return dict(con.execute("SELECT status, resolution FROM error_log WHERE id=?",
+                                    (eid,)).fetchone())
+
+    # 미검증 → '통과' 라고 말하면 안 된다
+    e1 = _new_row()
+    close_error(e1, verification=VERIFY_UNVERIFIABLE, detail="프로브")
+    r1 = _row(e1)
+    assert r1["status"] == "fixed"
+    assert r1["resolution"].startswith(f"[verification={VERIFY_UNVERIFIABLE}]"), \
+        f"검증 상태가 기계 판독 접두로 안 남았다: {r1['resolution'][:80]}"
+    assert "재현검증 통과" not in r1["resolution"], \
+        f"미검증인데 '재현검증 통과' 라고 적었다: {r1['resolution'][:120]}"
+
+    # 검증 통과는 통과라고 말한다
+    e2 = _new_row()
+    close_error(e2, verification=VERIFY_GONE)
+    assert _row(e2)["resolution"].startswith(f"[verification={VERIFY_GONE}]")
+
+    # ★ 재현되는 판정으로는 **닫지 않는다** (fail-closed)
+    e3 = _new_row()
+    assert close_error(e3, verification=VERIFY_REPRODUCES) == "", "재현되는데 fixed 로 닫았다"
+    assert _row(e3)["status"] != "fixed", "판정을 무시하고 종결했다"
+
+
+def test_fixed_사유가_실패문구에_먹히지_않는다():
+    """★ 실측 — status=fixed 인데 본문이 "Tier-2 수정 실패/롤백" 인 행이 10건 있었다.
+
+    `COALESCE(NULLIF(resolution,''), ?)` 가 first-wins 라, 재시도 중 남은 실패 사유가
+    나중의 성공 사유를 이겼다. 상태와 근거가 정면으로 어긋나 있었다.
+    """
+    from shared import db as _db
+
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source,module,error_type,message,status) "
+                    "VALUES ('fwprobe','m','X','x','new')")
+        eid = con.execute("SELECT id FROM error_log WHERE source='fwprobe' "
+                          "ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+    _db.mark_error_status(eid, "new", "Tier-2 수정 실패/롤백 — 재시도 대기 (0/3)")
+    _db.mark_error_status(eid, "fixed", "[verification=reproduced_gone] 진짜 성공 사유")
+    with _db.get_db() as con:
+        res = con.execute("SELECT resolution FROM error_log WHERE id=?", (eid,)).fetchone()[0]
+
+    assert res.startswith("[verification=reproduced_gone]"), \
+        f"성공 사유가 앞에 안 온다 — 접두 조회가 최신 사유를 못 잡는다: {res[:80]}"
+    assert "재시도 대기 (0/3)" in res, "이전 기록이 통째로 사라졌다 — 이력이 끊긴다"
+
+    # 같은 사유를 여러 번 찍어도 이력이 무한 증식하지 않는다
+    before = res
+    _db.mark_error_status(eid, "fixed", "[verification=reproduced_gone] 진짜 성공 사유")
+    _db.mark_error_status(eid, "fixed", "[verification=reproduced_gone] 진짜 성공 사유")
+    with _db.get_db() as con:
+        after = con.execute("SELECT resolution FROM error_log WHERE id=?", (eid,)).fetchone()[0]
+    assert after == before, f"같은 사유 반복으로 이력이 불어난다: {len(before)} → {len(after)}"
+
+    # 상한은 db.py 한 곳에서만 정한다
+    assert isinstance(_db.RESOLUTION_MAX, int) and _db.RESOLUTION_MAX > 0
+    with _db.get_db() as con:
+        assert len(after) <= _db.RESOLUTION_MAX
+
+
+def test_Tier1_성공경로가_검증태그를_실제로_남긴다(monkeypatch):
+    """★ 접두를 박는 코드는 2026-07-25 부터 있었는데 실측 태그 보유 행은 **0행**이었다.
+
+    코드 존재는 적용의 증거가 아니다 — `apply_fix` 를 *끝까지 실제로 돌려* 확인한다.
+    """
+    import tempfile
+    from pathlib import Path as _P
+
+    from shared import db as _db
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    # ★ ERRORS.md 는 **버전 관리되는 공유 문서** 다. 종전엔 이 테스트가 *자기만*
+    #   `_update_errors_md` 를 monkeypatch 해서 막고 있었는데, 그건 conftest 가 맨 위에서
+    #   경계한 형태다 — **잊는 테스트가 반드시 생긴다**. 실제로 새어 43건이 쌓였다.
+    #   이제 `conftest` 가 `GUARDIAN_ERRORS_MD` 로 사본을 세워 중앙에서 막는다.
+    #   여기서 다시 막지 않는 것이 곧 그 중앙 격리를 *실제로 쓰는* 검사다.
+
+    root = _P(ef._ROOT)
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        tgt = _P(td) / "tier1_tag_probe.py"
+        tgt.write_text("def f():\n    return undefined_name\n", encoding="utf-8")
+        rel = str(tgt.relative_to(root))
+        eid = _db.save_error(source="tagprobe", error_type="NameError",
+                             message="name 'undefined_name' is not defined",
+                             module=rel, func_name="f",
+                             traceback=f'File "{rel}", line 2\n',
+                             context="", severity="low")
+        res = ef.apply_fix(eid, {
+            "fixable": True, "target_file": rel,
+            "patch": "def f():\n    undefined_name = 1\n    return undefined_name\n",
+            "explanation": "probe", "pattern": "probe_pattern", "source": "probe",
+        }, mark_wontfix=False)
+        assert bool(res), "전제 깨짐 — 합성 수정이 적용되지 않았다"
+
+        with _db.get_db() as con:
+            row = dict(con.execute("SELECT status, resolution FROM error_log WHERE id=?",
+                                   (eid,)).fetchone())
+    assert row["status"] == "fixed"
+    assert row["resolution"].startswith("[verification="), \
+        f"Tier-1 성공 경로가 검증 태그를 안 남긴다: {row['resolution'][:100]}"
+    assert res.get("verification") in ef.verification_states()
+
+
+def test_검증태그_스모크가_동작으로_판정한다():
+    """`verification_tag_effective()` — 표준 형태(patch_effective)와 같은 동작 판정."""
+    from JARVIS07_GUARDIAN.error_fixer import verification_tag_effective
+
+    assert verification_tag_effective() is True, \
+        "태그가 DB 까지 살아남지 못한다 — 두 출구 중 하나가 새고 있다"
 
 
 def test_eval_훅이_venv_파이썬을_쓴다():
@@ -4805,10 +5034,74 @@ def test_시도_상한이_모든_통로에_걸린다():
     from JARVIS07_GUARDIAN import guardian_agent as _ga
     from JARVIS07_GUARDIAN.architecture import MAX_LLM_ATTEMPTS as _cap
 
-    # ① 수집기가 상한을 존중하는가 — 숫자를 박지 않고 주인에서 파생하는가
+    # ① 상한 필터의 주인은 **공개 단일 질의** 하나다 (2026-08-14 구조 변경 반영)
+    #    종전엔 `_collect_unresolved` 가 직접 상한을 걸었고, 그래서 이 검사도 그 함수의
+    #    소스에서 `MAX_LLM_ATTEMPTS` 를 찾았다. 그 구조 자체가 결함이었다 —
+    #    같은 필터를 다른 소비자(`job_retry_pending`)는 안 걸고 있었고(③위반),
+    #    파이썬 필터라 LIMIT 이 먼저 걸려 창 밖 항목을 아무도 못 봤다.
+    #    → 이제 문(`db.list_unresolved`)이 SQL 로 소유한다. 검사도 그 문을 본다.
+    from shared import db as _db
+    door = _code_only(inspect.getsource(_db.list_unresolved))
+    cap_src = _code_only(inspect.getsource(_db._llm_attempt_cap))
+    assert "MAX_LLM_ATTEMPTS" in cap_src, "문이 상한을 주인에서 파생하지 않는다"
+    assert str(_cap) not in cap_src.replace("MAX_LLM_ATTEMPTS", ""), "상한 숫자를 박았다"
+    assert "llm_attempts" in door, "문이 상한을 질의 조건에 안 건다(파이썬 후필터로 돌아갔다)"
+
+    # ①-A **거르고 나서 자른다** — 실행으로 확인한다 (종전 결함의 핵심)
+    #     종전은 `list_errors(limit)` 로 긁은 뒤 파이썬에서 걸렀다. LIMIT 이 먼저라
+    #     앞쪽이 상한 도달분으로 차면 고칠 수 있는 행이 창 밖으로 밀려 **아무도 못 본다**.
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
+                    "llm_attempts) VALUES ('capwindow','m','X','live','wontfix',0)")
+        # ★ 상한 도달분을 **정렬 맨 앞** 에 둔다 (+1분 — 같은 초 동률에 기대지 않는다).
+        #   자르고 나서 거르면 이 셋이 창을 통째로 먹고 결과가 빈다.
+        for _ in range(3):
+            con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
+                        "llm_attempts, timestamp) VALUES ('capwindow','m','X','dead','wontfix',?,"
+                        "strftime('%Y-%m-%dT%H:%M:%S','now','localtime','+1 minute'))", (_cap,))
+        dead = {r[0] for r in con.execute(
+            "SELECT id FROM error_log WHERE source='capwindow' AND message='dead'").fetchall()}
+    try:
+        got = _db.list_unresolved(1)
+        assert got, "상한 도달분이 창을 통째로 먹었다 — 거르기 전에 잘랐다(종전 결함)"
+        assert got[0].get("id") not in dead, "상한 도달분이 결과에 들어왔다 — 상한이 무력"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE source='capwindow'")
+
+    # ①-B 수집기는 필터를 **복제하지 않고 위임** 하는가 (사본이 생기면 다시 갈라진다)
     src = _code_only(inspect.getsource(_ga._collect_unresolved))
-    assert "MAX_LLM_ATTEMPTS" in src, "수집기가 상한을 안 본다"
-    assert str(_cap) not in src.replace("MAX_LLM_ATTEMPTS", ""), "상한 숫자를 박았다"
+    assert "list_unresolved" in src, "수집기가 공개 단일 질의를 안 쓴다"
+    assert "MAX_LLM_ATTEMPTS" not in src and str(_cap) not in src, \
+        "수집기가 상한 필터를 다시 들고 있다 — 문과 갈라진다"
+
+    # ①-C ★ **두 소비자가 같은 문을 쓰는가** (③원칙 — 이 결함의 핵심)
+    #     `job_retry_pending` 은 10분마다 도는데 종전엔 `list_errors(status='new')` 라
+    #     상한도 백오프도 몰랐다. 한 통로만 고치면 다른 통로로 샌다(ERRORS [474] 형태).
+    #     ★ 문자열 검색이 아니라 **구조** 로 본다 — 같은 함수 안의 다른 루프(오래된
+    #       '잠정' 실패를 ignored 로 치우는 청소부)는 재시도 소비자가 아니라서 이 필터를
+    #       쓰면 안 된다. "무엇을 먹여서 `_orchestrate` 를 띄우는가" 만 지목한다.
+    _fn = ast.parse(inspect.getsource(_ga.job_retry_pending)).body[0]
+    _feeders: list = []
+    for _node in ast.walk(_fn):
+        if not (isinstance(_node, ast.For) and "_orchestrate" in ast.unparse(_node)):
+            continue
+        _it = _node.iter
+        if isinstance(_it, ast.Name):        # `rows = ...` 로 받아 도는 형태 — 대입을 되짚는다
+            for _a in ast.walk(_fn):
+                if isinstance(_a, ast.Assign) and any(
+                        isinstance(t, ast.Name) and t.id == _it.id for t in _a.targets):
+                    _feeders.append(ast.unparse(_a.value))
+        else:
+            _feeders.append(ast.unparse(_it))
+    assert _feeders, "재투입 루프를 못 찾았다 — 검사가 헛돌고 있다(테스트 자체가 무의미)"
+    for _f in _feeders:
+        assert "list_unresolved" in _f, \
+            f"재투입이 문을 우회한다 — 백오프가 이 통로에서 무력해진다: {_f}"
+        # ★ 배수구 성질 — 상한 도달분을 여기서 거르면 그 행이 영원히 'new' 로 남는다.
+        #   (닫아 주는 곳이 바로 이 루프다. 위 ③ 실행 검증과 짝)
+        assert "max_attempts=None" in _f, \
+            f"재투입이 상한으로 걸러 배수구를 막았다 — 'new' 누수: {_f}"
 
     # ② LLM 을 부르는 **모든** 곳이 시도를 세는가
     tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/guardian_agent.py").read_text(encoding="utf-8"))
@@ -4828,18 +5121,292 @@ def test_시도_상한이_모든_통로에_걸린다():
                     "llm_attempts) VALUES ('capprobe','m','X','x','wontfix',?)", (_cap,))
         eid = con.execute("SELECT id FROM error_log WHERE source='capprobe' "
                           "ORDER BY id DESC LIMIT 1").fetchone()[0]
+    from JARVIS07_GUARDIAN.architecture import STATUS_NEW as _st_new
     try:
         got = {r.get("id") for r in _ga._collect_unresolved(500)}
         assert eid not in got, "상한 도달분이 backlog 에 다시 들어온다 — 상한이 무력"
+        # ★ 그러나 재투입 통로에서는 **보여야 한다** — 비직관적이라 여기 박제한다.
+        #   그 스윕은 재시도 통로이자 **배수구** 다. 마지막 Tier-2 실패 직후의 행은
+        #   status='new' + 상한 도달 상태로 남는데(카운트가 나중에 올라간다), 그것을
+        #   `wontfix` 로 닫아 주는 것이 바로 다음 회차의 그 루프다(LLM 0회).
+        #   여기서까지 상한으로 걸러 버리면 그 행은 **영원히 `new`** — 심층 감사도
+        #   상한으로 빼므로 아무도 안 보고 종결 사유도 안 남는 조용한 누수가 된다.
         with _db.get_db() as con:
-            con.execute("UPDATE error_log SET llm_attempts=? WHERE id=?", (_cap - 1, eid))
-        assert eid in _ga._collect_unresolved.__wrapped__(500) if hasattr(
-            _ga._collect_unresolved, "__wrapped__") else eid in {
-            r.get("id") for r in _ga._collect_unresolved(500)}, \
+            con.execute("UPDATE error_log SET status=? WHERE id=?", (_st_new, eid))
+        assert eid in {r.get("id") for r in
+                       _db.list_unresolved(500, statuses=(_st_new,), max_attempts=None)}, \
+            "상한 도달분이 배수구에서도 빠졌다 — 영원히 'new' 로 남아 아무도 안 본다"
+        assert eid not in {r.get("id") for r in _db.list_unresolved(500, statuses=(_st_new,))}, \
+            "상한이 기본 필터에서 안 걸린다 — LLM 을 다시 태운다"
+        with _db.get_db() as con:
+            con.execute("UPDATE error_log SET llm_attempts=?, status='wontfix' WHERE id=?",
+                        (_cap - 1, eid))
+        assert eid in {r.get("id") for r in _ga._collect_unresolved(500)}, \
             "여유가 남았는데 제외했다 — 과잉 차단"
     finally:
         with _db.get_db() as con:
             con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  T3 — 상태기계 자기모순과 재시도 종료조건 (2026-08-14)
+#
+#  네 결함이 한 뿌리에서 나왔다: **같은 판단을 두 곳이 각자 적었다.**
+#    · "다시 볼 수 있는 상태" 를 선점기와 수집기가 서로 다르게 (→ 조용한 return)
+#    · "재발" 을 종결된 행이 삼킴 (→ seen_count 만 오르고 아무도 안 봄)
+#    · "건당 시도" 와 "전역 예산" 을 한 상수로 (→ 지문 1종이 하루치를 독점)
+#    · "언제 다시 와도 되나" 를 아무도 안 남김 (→ 10분마다 같은 판정 반복)
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_수집_집합과_선점_집합이_어긋나지_않는다():
+    """★ 긁어온 것을 선점할 수 없으면 그 sweep 은 조용히 아무것도 안 한다.
+
+    실측 결함: `try_claim_error` 의 기본값은 ("new","ignored") 인데 `_collect_unresolved`
+    는 ("new","wontfix") 를 모았다. 그래서 재발한 `wontfix` 오류가 오케스트레이터 첫 문에서
+    rowcount=0 을 받고 **"이미 처리 착수됨"** 이라는 *정반대 사유* 로 버려졌다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import architecture as _arch
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+    from shared import db as _db
+
+    # ① 관계가 코드로 보장되는가 — 선점 집합 ⊇ 수집 집합
+    assert set(_arch.UNRESOLVED_STATUSES) <= set(_arch.CLAIMABLE_STATUSES), \
+        "수집해 놓고 선점할 수 없는 상태가 있다 — 그 행은 조용히 버려진다"
+
+    # ② 두 곳이 **주인에서 파생** 하는가 (목록을 다시 적으면 또 갈라진다)
+    claim = _code_only(inspect.getsource(_db.try_claim_error))
+    for lit in ("'ignored'", '"ignored"', "'wontfix'", '"wontfix"'):
+        assert lit not in claim, f"선점기가 상태 목록을 복제했다({lit})"
+    assert "_claimable_statuses" in claim, "선점기가 주인에서 파생하지 않는다"
+    coll = _code_only(inspect.getsource(_ga._collect_unresolved))
+    for lit in ("'wontfix'", '"wontfix"', "'new'", '"new"'):
+        assert lit not in coll, f"수집기가 상태 목록을 복제했다({lit})"
+
+    # ③ 실행 — sweep 이 집은 것을 오케스트레이터가 실제로 선점하는가
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('claimprobe','m.py','NameError','name claim_probe is not defined',"
+                    "'wontfix')")
+        eid = con.execute("SELECT id FROM error_log WHERE source='claimprobe' "
+                          "ORDER BY id DESC LIMIT 1").fetchone()[0]
+    try:
+        assert eid in {r.get("id") for r in _ga._collect_unresolved(500)}, \
+            "전제 깨짐 — sweep 이 wontfix 를 안 집는다"
+        assert _db.try_claim_error(eid) is True, \
+            "sweep 이 집은 행을 선점하지 못한다 — 오케스트레이터가 조용히 return 한다"
+        assert _db.try_claim_error(eid) is False, \
+            "두 번째 선점이 통과한다 — 중복 세션 방어가 깨졌다"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+
+
+def test_재발이_종결된_행에_흡수되지_않는다(monkeypatch):
+    """★ 종결된 행이 재발을 삼키면 그 오류는 영원히 처리되지 않는다.
+
+    `save_error` 의 dedup 은 병합하면서 timestamp 를 now 로 갱신한다 → 재발이 계속
+    들어오는 한 그 행은 1시간 창을 **영원히** 벗어나지 못한다. 상태가 이미 `wontfix`
+    여도 마찬가지라, 실측에서 wontfix 95건의 seen_count 합이 127 이었다 —
+    재발 32건이 죽은 행에 흡수돼 seen_count 만 조용히 올랐다.
+    """
+    import shared.notify as _nt
+
+    from JARVIS07_GUARDIAN import error_collector as _ec
+    from shared import db as _db
+
+    sent: list = []
+    monkeypatch.setattr(_nt, "send_tg", lambda m, *a, **k: sent.append(m))
+
+    def _seed(status: str, etype: str, msg: str, attempts: int = 1) -> int:
+        eid = _db.save_error(source="recurprobe", error_type=etype, message=msg,
+                             module="m.py", severity="medium")
+        with _db.get_db() as con:
+            con.execute("UPDATE error_log SET status=?, llm_attempts=? WHERE id=?",
+                        (status, attempts, eid))
+        return eid
+
+    MSG = "name recur_probe is not defined"
+    eid = _seed("wontfix", "NameError", MSG)
+    try:
+        _ec._cooldown.clear()
+        got = _ec._collect_error(source="recurprobe", error_type="NameError",
+                                 message=MSG, module="m.py")
+        assert got == eid, "전제 깨짐 — 같은 행으로 병합되지 않았다"
+        with _db.get_db() as con:
+            row = dict(con.execute("SELECT * FROM error_log WHERE id=?", (eid,)).fetchone())
+        assert row["status"] == "new", \
+            f"재발이 종결된 행에 흡수됐다 — 아무도 안 본다(status={row['status']})"
+        assert int(row["llm_attempts"]) == 1, \
+            "승격이 시도 횟수를 지웠다 — 상한이 풀려 무한 재시도가 된다"
+        assert (row["resolution"] or "").strip(), "근거 없이 상태가 바뀐다"
+        assert len(sent) == 1, f"재개를 사람에게 알리지 않거나 여러 번 알린다: {len(sent)}건"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+
+    # ② 진짜 일시적(비코드)은 되살리지 않는다 — 판정은 severity 가 소유한다
+    eid = _seed("ignored", "ConnectionError", "Max retries exceeded with url")
+    try:
+        _ec._cooldown.clear()
+        _ec._collect_error(source="recurprobe", error_type="ConnectionError",
+                           message="Max retries exceeded with url", module="m.py")
+        with _db.get_db() as con:
+            st = con.execute("SELECT status FROM error_log WHERE id=?", (eid,)).fetchone()[0]
+        assert st == "ignored", f"일시적 오류까지 되살린다 — 격리가 무의미해진다({st})"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+
+    # ③ 킬스위치가 종전 동작으로 되돌리는가
+    monkeypatch.setenv("GUARDIAN_WONTFIX_PROMOTE", "0")
+    eid = _seed("wontfix", "NameError", MSG)
+    try:
+        _ec._cooldown.clear()
+        _ec._collect_error(source="recurprobe", error_type="NameError", message=MSG, module="m.py")
+        with _db.get_db() as con:
+            st = con.execute("SELECT status FROM error_log WHERE id=?", (eid,)).fetchone()[0]
+        assert st == "wontfix", "킬스위치가 안 먹는다 — 무배포로 되돌릴 방법이 없다"
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+
+
+def test_전역_예산과_건당_상한은_다른_축이다():
+    """★ 직교하는 두 축을 한 상수로 묶으면 한쪽을 못 움직인다.
+
+    종전 `SDK_REPAIR_DAILY_CALLS = MAX_LLM_ATTEMPTS`. 실측 사고: 지문 1종이 6시간 10분
+    동안 하루 예산 3발을 독점(허용 3 / 차단 64) — *건당* 상한을 다 쓴 것이 곧 *전역*
+    예산 소진이라 그날 다른 어떤 오류도 자율 수리를 한 번도 못 받았다.
+    """
+    import inspect
+
+    from JARVIS00_INFRA.harness import DEFAULT_MAX_ATTEMPTS as _H
+    from JARVIS07_GUARDIAN import architecture as _arch
+
+    import ast
+
+    _tree = ast.parse((_ROOT / "JARVIS07_GUARDIAN/architecture.py").read_text(encoding="utf-8"))
+
+    def _rhs(name: str) -> str:
+        got = [ast.unparse(n.value) for n in _tree.body
+               if isinstance(n, ast.Assign)
+               and any(isinstance(t, ast.Name) and t.id == name for t in n.targets)]
+        assert len(got) == 1, f"{name} 대입이 {len(got)}곳 — 주인이 하나여야 한다"
+        return got[0]
+
+    # ① 건당 상한은 **재시도 상한의 주인** 에서 파생한다 (주석만 그렇다고 하면 안 된다)
+    assert _arch.MAX_LLM_ATTEMPTS == int(_H), \
+        "MAX_LLM_ATTEMPTS 가 harness.DEFAULT_MAX_ATTEMPTS 와 다르다 — 계약 드리프트"
+    _cap_rhs = _rhs("MAX_LLM_ATTEMPTS")
+    assert not any(c.isdigit() for c in _cap_rhs), \
+        f"상한을 숫자로 박았다({_cap_rhs}) — HARNESS_MAX_ATTEMPTS 노브가 이 층에 안 닿는다"
+    assert "HARNESS" in _cap_rhs.upper(), f"상한이 주인에서 오지 않는다: {_cap_rhs}"
+
+    # ② 전역 예산은 그 축을 **따라가지 않는다**
+    _bud_rhs = _rhs("SDK_REPAIR_DAILY_CALLS")
+    assert "MAX_LLM_ATTEMPTS" not in _bud_rhs, \
+        f"전역 예산이 건당 상한 파생으로 되돌아갔다({_bud_rhs}) — 지문 하나가 하루치를 독점한다"
+
+    # ③ 그런데 **기본값은 지금과 같아야** 한다 (과거 $81 사고를 막은 값)
+    assert _arch.SDK_REPAIR_DAILY_CALLS == 3, \
+        "일일 예산 기본값이 바뀌었다 — 축 분리는 상한 완화가 아니다"
+
+    # ④ 독립적으로 조정 가능한가 — 한쪽을 흔들어 다른 쪽이 따라오지 않는지 실행으로 본다
+    import importlib
+    import os
+
+    import JARVIS00_INFRA.harness as _h
+    _prev = os.environ.get("HARNESS_MAX_ATTEMPTS")
+    try:
+        os.environ["HARNESS_MAX_ATTEMPTS"] = str(int(_H) + 3)
+        importlib.reload(_h)
+        _re = importlib.reload(_arch)
+        assert _re.MAX_LLM_ATTEMPTS == int(_H) + 3, "건당 축이 노브를 안 따른다"
+        assert _re.SDK_REPAIR_DAILY_CALLS == 3, \
+            "건당 축을 올렸더니 전역 예산이 따라 올랐다 — 아직 묶여 있다"
+    finally:
+        if _prev is None:
+            os.environ.pop("HARNESS_MAX_ATTEMPTS", None)
+        else:
+            os.environ["HARNESS_MAX_ATTEMPTS"] = _prev
+        importlib.reload(_h)
+        importlib.reload(_arch)
+
+
+def test_재시도_백오프가_두_통로에_동시에_걸린다(monkeypatch):
+    """★ "지금은 안 된다" 만 말하고 "언제부터 되는지" 를 안 말하면 10분마다 다시 온다.
+
+    게이트가 일시적 사유로 막을 때 status 는 일부러 `new` 로 둔다. 그런데
+    `j07_retry_pending` 은 조건 없이 다시 집었다 — 실측 6시간 10분간 64회 차단.
+    """
+    import inspect
+
+    import shared.notify as _nt
+
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+    from JARVIS07_GUARDIAN import repair_budget as _rb
+    from JARVIS07_GUARDIAN.architecture import STATUS_NEW
+    from shared import db as _db
+
+    monkeypatch.setattr(_nt, "send_tg", lambda m, *a, **k: None)
+
+    # ① 백오프 길이를 **게이트가 이미 아는 값** 에서 파생하는가 (새 상수 금지)
+    nes = _code_only(inspect.getsource(_rb.next_eligible_sec))
+    assert "_cooldown_sec" in nes and "_BUDGET_WINDOW" in nes, \
+        "백오프가 기존 창·쿨다운에서 파생되지 않는다 — 새 숫자를 만들었다"
+    fwd = _code_only(inspect.getsource(_rb._window_forward))
+    assert "day" not in fwd and "hour" not in fwd, "창 길이를 다시 박았다"
+
+    with _db.get_db() as con:
+        con.execute("INSERT INTO error_log (source, module, error_type, message, status) "
+                    "VALUES ('boprobe','m.py','NameError','name bo_probe is not defined','new')")
+        eid = con.execute("SELECT id FROM error_log WHERE source='boprobe' "
+                          "ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+    def _visible() -> tuple:
+        return (eid in {r.get("id") for r in _ga._collect_unresolved(500)},          # 심층 감사
+                eid in {r.get("id") for r in                                          # 10분 재투입
+                        _db.list_unresolved(500, statuses=(STATUS_NEW,))})
+
+    try:
+        assert _visible() == (True, True), "전제 깨짐 — 백오프 전에 이미 안 보인다"
+
+        # ② 게이트의 *일시적* 차단이 status 대신 다음 가능 시각을 남기는가 (end-to-end)
+        rec = {"id": eid, "error_type": "NameError", "message": "name bo_probe is not defined",
+               "source": "boprobe", "module": "m.py"}
+        # 예산이 소진되려면 *쓴 세션* 이 있어야 한다 — 백오프는 "가장 오래된 허용 세션이
+        # 창 밖으로 빠지는 시각" 에서 파생하므로 장부에 허용 행이 하나는 있어야 성립한다.
+        _rb.record_attempt(error_record=rec, caller="boprobe", job_id="probe",
+                           decision="allowed")
+        aid = _rb.record_attempt(error_record=rec, caller="boprobe", job_id="probe",
+                                 decision="blocked",
+                                 reason=f"{_rb.R_BUDGET}:24시간 예산 소진(테스트)")
+        with _db.get_db() as con:
+            row = dict(con.execute(
+                "SELECT status, next_eligible_at FROM error_log WHERE id=?", (eid,)).fetchone())
+        assert row["status"] == STATUS_NEW, \
+            "일시적 사유가 status 를 바꿨다 — 영영 안 돌아오는 길이 생긴다"
+        assert row["next_eligible_at"], "게이트가 다음 가능 시각을 안 남긴다 — 10분마다 재방문"
+
+        # ③ ★ **두 통로 모두** 빠지는가 (한쪽만 고치면 다른 통로로 샌다 — ③원칙)
+        assert _visible() == (False, False), \
+            f"백오프가 한 통로에만 걸린다: (심층감사, 재투입)={_visible()}"
+
+        # ④ 킬스위치는 **읽는 쪽** 에 있어야 종전 동작으로 진짜 복귀한다
+        monkeypatch.setenv("GUARDIAN_RETRY_BACKOFF", "0")
+        assert _visible() == (True, True), "킬스위치를 꺼도 백오프가 남는다 — 복귀가 아니다"
+        monkeypatch.delenv("GUARDIAN_RETRY_BACKOFF")
+
+        # ⑤ 시각이 지나면 스스로 풀린다 (사람이 안 풀어도 된다)
+        _db.set_error_backoff(eid, 0)
+        assert _visible() == (True, True), "해제해도 안 돌아온다 — 영구 차단이 됐다"
+        assert aid > 0
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE id=?", (eid,))
+            con.execute("DELETE FROM sdk_repair_attempts WHERE caller='boprobe'")
 
 
 def test_테스트가_운영_데이터_폴더를_안_쓴다():
@@ -5507,3 +6074,1924 @@ def test_주제팩_조회가_실패해도_조용히_넘어가지_않는다(monke
     pack, spare = tistory_spare_topics("백화점")
     assert pack is None and spare == []
     assert "주제팩 조회 실패" in capsys.readouterr().out, "실패가 어디에도 안 남으면 무증상 열화다"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  패치 트랜잭션 — 배타 + 테스트 게이트 (2026-08-14)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _gate_off(monkeypatch):
+    """게이트를 무력화한 채 트랜잭션만 본다 — 테스트가 스위트를 또 띄우면 안 된다."""
+    from JARVIS07_GUARDIAN import error_fixer as ef
+    monkeypatch.setattr(ef, "ci_gate_failures", lambda *, tag="", budget=None: [])
+    return ef
+
+
+def test_락이_같은_프로세스_스레드도_막는다():
+    """★ `json_store.locked` 는 flock 만 잡았고 **스레드는 그냥 통과** 했다.
+
+    재진입 판정 키가 '경로' 뿐이라, 스레드 A 가 보유 중일 때 스레드 B 가 `depth>0` 을
+    보고 "내가 이미 갖고 있다" 며 락 없이 들어갔다. flock 은 같은 프로세스의 fd 를
+    공유하므로 애초에 스레드를 못 막는다 — 즉 스레드 배타가 **하나도 없었다**.
+    이 저장소의 수리 경로는 스레드에서 돈다(실측: 같은 파일 5스레드 동시 도달).
+    """
+    import tempfile
+    import threading
+    import time
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN.json_store import locked
+
+    order: list = []
+
+    def worker(name):
+        with locked(_P(d) / "probe.json", timeout=5) as got:
+            order.append((name, "in", got))
+            time.sleep(0.15)
+            order.append((name, "out", got))
+
+    with tempfile.TemporaryDirectory() as d:
+        ts = [threading.Thread(target=worker, args=(n,)) for n in ("A", "B")]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+
+    seq = [f"{n}{p}" for n, p, _ in order]
+    assert seq in (["Ain", "Aout", "Bin", "Bout"], ["Bin", "Bout", "Ain", "Aout"]), \
+        f"스레드가 임계구역에 겹쳐 들어갔다: {seq}"
+    assert all(g for _, _, g in order), "배타를 얻었다고 보고하지 않는다"
+
+    # 같은 스레드의 중첩은 여전히 통과해야 한다 (안 그러면 write_json 이 자기와 데드락)
+    with tempfile.TemporaryDirectory() as d2:
+        p2 = _P(d2) / "x.json"
+        with locked(p2, timeout=2) as g1, locked(p2, timeout=2) as g2:
+            assert g1 and g2, "재진입이 막혔다 — read-modify-write 가 자기 자신과 데드락한다"
+
+
+def test_패치_백업이_시도마다_다른_슬롯이다(tmp_path):
+    """★ 종전 백업은 `<파일>.bak` **고정 단일 슬롯** 이었다.
+
+    같은 파일을 겨눈 두 시도가 겹치면 뒤엣것이 앞엣것의 백업을 덮어써, 어느 쪽이
+    롤백하든 원본이 사라진다. 그러고도 **양쪽 다 "롤백 완료" 를 로그에 남긴다**.
+    """
+    from JARVIS07_GUARDIAN.error_fixer import _backup, patch_backup_dir
+
+    f = tmp_path / "victim.py"
+    f.write_text("A = 1\n", encoding="utf-8")
+    b1 = _backup(f)
+    f.write_text("A = 2\n", encoding="utf-8")      # 첫 시도가 패치한 상태
+    b2 = _backup(f)
+
+    assert b1 and b2 and b1 != b2, "백업 슬롯이 시도마다 갈리지 않는다"
+    assert b1.read_text(encoding="utf-8") == "A = 1\n", "앞선 백업이 덮어써졌다"
+    assert b2.read_text(encoding="utf-8") == "A = 2\n"
+    for b in (b1, b2):
+        assert b.parent == patch_backup_dir(), \
+            "백업이 원본 옆에 흩어진다 — 정리 규칙을 걸 수 없고 비밀 폴더 규칙도 어긴다"
+        assert oct(b.stat().st_mode)[-3:] == "600", "백업 권한이 소유자 전용이 아니다"
+
+
+def test_동시_패치가_원본을_잃지_않는다(monkeypatch):
+    """★ 실측 조건(같은 파일 5스레드 동시 도달)을 합성해 **실제로 돌린다**.
+
+    락만으로는 부족했다 — 트랜잭션은 apply(락) → 재현검증(락 밖, 최대 25초) →
+    rollback(락) 이라 가운데 창이 열려 있고, 그 창에서 들어온 쪽의 백업에는
+    **먼저 온 쪽의 패치** 가 '원본' 으로 담긴다(초판이 정확히 그렇게 깨졌다).
+    그래서 전제 검사(원본 재확인)까지 있어야 한다. 둘 중 하나가 빠지면 이 테스트가 잡는다.
+    """
+    import tempfile
+    import threading
+    import time
+    from pathlib import Path as _P
+
+    ef = _gate_off(monkeypatch)
+    orig = "V = 0\n"
+    res: dict = {}
+
+    def worker(i, rel):
+        staged, why, _k = ef.precheck_patchset([(rel, f"V = {i}\n")], tag=f"t{i}")
+        if why:
+            res[i] = {"ok": False, "kind": "precheck", "bak": None}
+            return
+        ok, _why2, kind = ef.apply_patchset(staged, tag=f"t{i}")
+        bak = staged[0].bak.read_text(encoding="utf-8") if staged[0].bak else None
+        time.sleep(0.05)                      # 재현검증에 해당하는 '락 밖' 구간
+        ef.rollback_patchset(staged)
+        res[i] = {"ok": bool(ok), "kind": kind, "bak": bak}
+
+    root = _P(ef._ROOT)
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        tgt = _P(td) / "concurrent_probe.py"
+        tgt.write_text(orig, encoding="utf-8")
+        rel = str(tgt.relative_to(root))
+        ts = [threading.Thread(target=worker, args=(i, rel)) for i in range(1, 6)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        final = tgt.read_text(encoding="utf-8")
+
+    winners = [i for i, r in res.items() if r["ok"]]
+    assert len(winners) == 1, f"동시 적용이 직렬화되지 않았다: {res}"
+    assert res[winners[0]]["bak"] == orig, "승자의 백업에 남의 패치가 담겼다 — 원본 소실 경로"
+    assert all(r["kind"] in (ef.REJ_STALE, "precheck") for i, r in res.items() if not r["ok"]), \
+        f"패자가 '판정 불가' 가 아닌 사유로 실패했다(학습에 헛된 벌점이 흐른다): {res}"
+    assert final == orig, f"롤백이 끝났는데 원본이 아니다: {final!r}"
+
+
+def test_판정불가_거부는_학습에_벌점을_흘리지_않는다():
+    """★ 락 미획득·원본 변경은 *패치의 잘못이 아니다*. 벌점을 주면 옳은 전략이 강등된다."""
+    import inspect
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    assert {ef.REJ_LOCK, ef.REJ_STALE, ef.REJ_BACKUP} <= set(ef.NO_BLAME_REJECTS)
+    src = _code_only(inspect.getsource(ef.apply_fix))
+    assert "NO_BLAME_REJECTS" in src, \
+        "apply_fix 가 판정불가 사유를 자체 판단한다 — 사유가 늘면 한쪽만 낡는다"
+
+
+def test_테스트_게이트가_실패하면_전량_롤백한다(monkeypatch):
+    """★ 종전 '고쳤다' 의 실체는 `ast.parse` + import 1회였다 — 스위트는 한 번도 안 돌았다."""
+    import tempfile
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    calls: list = []
+
+    def _gate(*, tag="", budget=None):
+        calls.append((tag, budget))
+        return ["pytest: rc=1 새로 깨진 테스트"] if len(calls) == 1 else []
+
+    monkeypatch.setattr(ef, "ci_gate_failures", _gate)
+    root = _P(ef._ROOT)
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        tgt = _P(td) / "gate_probe.py"
+        tgt.write_text("Y = 0\n", encoding="utf-8")
+        staged, why, _k = ef.precheck_patchset([(str(tgt.relative_to(root)), "Y = 1\n")])
+        assert not why, why
+        ok, _why, kind = ef.apply_patchset(staged, tag="gate")
+        assert ok is False and kind == ef.REJ_TEST, (ok, kind)
+        assert tgt.read_text(encoding="utf-8") == "Y = 0\n", "게이트가 막았는데 패치가 남았다"
+    assert len(calls) == 2, f"기준선(패치 이전)을 다시 확인하지 않았다: {calls}"
+    # ★ 본검사와 기준선 재확인이 **하나의 예산** 을 나눠 쓴다 — 각자 쓰면 상한이 2배가 된다.
+    (_t1, _b1), (_t2, _b2) = calls
+    assert _b1 is not None and _b2 is not None, f"게이트에 절대 상한이 전달되지 않는다: {calls}"
+    assert _b2 <= _b1, f"기준선 재확인이 예산을 새로 받았다(상한 2배): {_b1} → {_b2}"
+
+
+def test_게이트가_무력이면_멈추지_않고_사람에게_알린다(monkeypatch):
+    """★ 이미 빨간 스위트에 게이트를 걸면 **모든 자동수리가 조용히 멈춘다**.
+
+    이 저장소의 '조용한 정지' 이력 때문에 그 상태는 반드시 사람에게 드러나야 한다.
+    """
+    import tempfile
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    told: list = []
+    monkeypatch.setattr(ef, "ci_gate_failures",
+                        lambda *, tag="", budget=None: ["precommit: rc=1"])
+    monkeypatch.setattr(ef, "_notify_gate_blind", lambda f, tag="": told.append((f, tag)))
+
+    root = _P(ef._ROOT)
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        tgt = _P(td) / "blind_probe.py"
+        tgt.write_text("Z = 0\n", encoding="utf-8")
+        staged, why, _k = ef.precheck_patchset([(str(tgt.relative_to(root)), "Z = 1\n")])
+        assert not why, why
+        ok, _why, _kind = ef.apply_patchset(staged, tag="blind")
+        assert ok is True, "기준선도 빨간데 막았다 — 자동수리가 통째로 멈춘다"
+        assert tgt.read_text(encoding="utf-8") == "Z = 1\n", "판정 불가인데 패치가 사라졌다"
+        assert staged[0].bak is not None and \
+            staged[0].bak.read_text(encoding="utf-8") == "Z = 0\n", \
+            "재적용 후 백업이 없다 — 이후 롤백이 조용한 no-op 이 된다"
+    assert told, "게이트 무력을 사람에게 알리지 않았다 — 로그만으로는 아무도 모른다"
+
+
+def test_게이트_명령은_ci_yml_에서_파생한다():
+    """★ 명령 문자열을 박으면 CI 가 바뀌어도 게이트만 낡는다(②). 주인도 하나여야 한다(①)."""
+    import inspect
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+    from JARVIS07_GUARDIAN.error_fixer import ci_gate_commands
+
+    cmds = ci_gate_commands()
+    assert cmds, "ci.yml 에서 검사 명령을 파생하지 못한다"
+    ci_text = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    for c in cmds:
+        tail = c.split(" ", 1)[1]                     # 인터프리터 치환분을 뺀 나머지
+        assert tail in ci_text, f"ci.yml 에 없는 명령을 돌린다(박아넣은 문자열): {tail}"
+        assert ".venv/bin/python3" in c, \
+            "venv 파이썬을 명시하지 않는다 — Framework Python 재기동 시 venv 밖으로 떨어진다"
+
+    # 검사 본체가 두 벌이 아닌가 — auto_repair 는 부르기만 해야 한다
+    src = _code_only(inspect.getsource(_ar))
+    assert "ci.yml" not in src, "auto_repair 가 ci.yml 을 자체 파싱한다 — 한쪽만 낡는다"
+    assert "ci_gate_failures" in src, "auto_repair 가 게이트 주인을 부르지 않는다"
+
+
+def test_게이트는_테스트_안에서_스스로_멈춘다(monkeypatch):
+    """★ 게이트가 pytest 를 띄우는데 그 안에서 또 게이트가 돌면 스위트가 기하급수로 늘어난다.
+
+    ★ 두 차단 사유를 **따로** 확인한다 (2026-08-14 2차): 종전엔 `pytest in sys.modules`
+      하나로 항상 참이라, 자식 표식(`GUARDIAN_GATE_INSIDE`) 레그가 살아 있는지는
+      한 번도 확인되지 않았다. 그 레그가 죽으면 게이트가 스스로를 무한 재귀시킨다.
+    """
+    import sys as _sys
+
+    import shared.llm as _llm
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    # ★ 발행창 레그를 **결정론적으로** 끈다 — 그 레그는 전용 테스트가 따로 본다.
+    #   안 끄면 이 테스트가 벽시계에 매인다: 발행 보호구간(하루 3시간, 05:30~07:00 ·
+    #   19:30~21:00)에 돌리면 앞선 레그가 먼저 걸려 빨개진다. 실제로 19:35 에 걸렸다.
+    monkeypatch.setattr(_llm, "bg_defer_reason", lambda: "")
+
+    assert "재귀" in ef.gate_blocked_reason(), "테스트 실행 중인데 게이트가 안 멈춘다"
+    assert ef.ci_gate_failures(tag="selfcheck") == [], "재귀 차단 상태인데 검사를 돌린다"
+
+    # ② 표식이 없으면 pytest 레그가 받는다 (둘 중 하나만 살아 있어도 통과하면 안 된다)
+    #    ★ `delenv` 먼저 — 이 스위트는 **게이트가 띄운 자식 안에서도 돈다**. 표식이 켜진
+    #      채로 이 단언을 하면 게이트가 매번 빨갛게 나오고, 그 빨강이 곧 '게이트 무력'
+    #      판정이 되어 게이트가 스스로를 무력화한다(초판이 정확히 그렇게 깨졌다).
+    monkeypatch.delenv(ef._GATE_INSIDE_ENV, raising=False)
+    assert "테스트 실행 중" in ef.gate_blocked_reason()
+
+    # ① 자식 표식 레그 — pytest 가 로드돼 있지 않아도 표식만으로 멈춰야 한다
+    #    (`delitem` 은 monkeypatch 가 원복한다 — `sys.modules` 를 통째로 갈아끼우지 않는다)
+    monkeypatch.delitem(_sys.modules, "pytest", raising=False)
+    assert "테스트 실행 중" not in ef.gate_blocked_reason(), "재현 조건이 안 만들어졌다"
+    for _mark in ("1", "3"):            # 깊이 표기가 몇이든 재귀는 끊긴다
+        monkeypatch.setenv(ef._GATE_INSIDE_ENV, _mark)
+        assert ef.gate_depth() == int(_mark)
+        assert "재귀 차단" in ef.gate_blocked_reason(), \
+            "게이트가 띄운 자식 안에서 게이트가 또 돈다 — 스위트가 기하급수로 늘어난다"
+
+
+def test_검증없는_확장자가_쓰기관문을_통과하지_않는다():
+    """★ `.sh` 는 검사 0 인 채 착지했고, 그 목록에 `restart_daemon.sh` 가 있었다.
+
+    깨지면 데몬 재시작 자체가 불가능해진다 — 복구 경로가 사라진다.
+    실사용 이력상 이 자동 경로로 `.sh` 가 적용된 적은 한 번도 없다(학습 원장 85건 전부
+    `.py`/`.json`, `fixed_file` 의 `.sh` 2행은 사람의 수동 수정 기록).
+    """
+    from JARVIS07_GUARDIAN.error_fixer import _ALLOW_EXT, _safe_path
+
+    assert ".sh" not in _ALLOW_EXT, "검사 없는 실행 파일 쓰기가 열려 있다"
+    assert _safe_path("restart_daemon.sh") is None, "복구 스크립트가 쓰기 관문을 통과한다"
+    assert _safe_path("JARVIS02_WRITER/length_manager.py") is not None, \
+        "정상 파일까지 막으면 자동수정이 죽는다"
+
+
+def test_패치_백업에_보존기간이_걸려있다():
+    """★ 잔여 백업의 주인은 `file_cleanup` 이다. 경로는 만든 쪽에서 받아온다(①)."""
+    import inspect
+
+    from JARVIS07_GUARDIAN.error_fixer import patch_backup_dir
+    from shared import file_cleanup as fc
+
+    rules = fc._rules()
+    hit = [r for r in rules if r[0] == patch_backup_dir() and r[1] == "*.bak"]
+    assert hit, f"패치 백업에 정리 규칙이 없다 — 영원히 쌓인다: {[str(r[0]) for r in rules]}"
+    assert hit[0][2] > 0
+
+    src = _code_only(inspect.getsource(fc._rules))
+    assert "patch_backup_dir" in src, "정리 규칙이 경로를 자체 보유한다 — 옮기면 빈 폴더를 쓴다"
+    assert "_backup_patches" not in src, "경로 문자열을 복제했다"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  T5 — 죽은 계기판 정리 · 무음 좁히기 (2026-08-14)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_사람이_봐야_하는_오류는_자동종결되지_않는다():
+    """★ `is_transient` 하나가 두 질문에 같은 답을 강요하던 것을 쪼갰다.
+
+    ① "코드로 못 고침"(수리 비대상) 과 ② "사람도 볼 필요 없음"(재조회 비대상)은 다르다.
+    발행 결손(`PublishGap*`)·로그인 캡차는 ①만 True — 종전엔 둘 다 True 로 처리돼
+    발생 즉시 `ignored` 로 종결됐다(실측 PublishGap* 29건 중 18건).
+    """
+    import os
+
+    from JARVIS07_GUARDIAN.architecture import UNRESOLVED_STATUSES
+    from JARVIS07_GUARDIAN.severity import (is_dismissable, is_transient,
+                                            needs_human_attention)
+    from JARVIS08_PUBLISH.publish_ledger import (expected_platforms,
+                                                 publish_gap_error_type, publish_slots)
+
+    gaps = [publish_gap_error_type(pt, pf)
+            for pt in {p for p, _h, _m in publish_slots()}
+            for pf in expected_platforms()]
+    assert gaps, "발행 결손 타입을 파생하지 못한다 — 검사가 무력해진다"
+    for et in gaps:
+        assert is_transient(et, "", "publish", kind="publish_gap") is True, \
+            f"{et} 가 수리 대상이 됐다 — Tier-2 LLM 낭비"
+        assert needs_human_attention(et) is True, f"{et} 를 사람이 안 봐도 된다고 판정"
+        assert is_dismissable(et, "", "publish", kind="publish_gap") is False, \
+            f"{et} 가 자동 종결된다 — 발행이 통째로 빠진 사건이 묻힌다"
+
+    # 로그인 캡차도 같은 부류 (③ — 한 도메인만 고치면 다른 도메인에서 재발)
+    from JARVIS07_GUARDIAN.severity import _login_human_required_types
+    for et in _login_human_required_types():
+        assert is_dismissable(et, "", "publish") is False, f"{et} 가 자동 종결된다"
+
+    # 순수 환경 오류는 종전대로 자동 종결돼야 한다 (반대 방향 회귀 방지)
+    assert is_dismissable("ConnectionError", "connection reset", "writer") is True, \
+        "환경 오류까지 사람 큐에 넣으면 소음이 된다"
+
+    # 사람이 봐야 하는 것이 가는 버킷은 **재조회 집합 안** 이어야 한다
+    assert "wontfix" in UNRESOLVED_STATUSES, \
+        "wontfix 가 재조회 집합에서 빠지면 이 분리가 무의미해진다"
+
+    # 킬스위치로 종전 동작 복귀
+    _prev = os.environ.get("GUARDIAN_HUMAN_ATTENTION")
+    os.environ["GUARDIAN_HUMAN_ATTENTION"] = "0"
+    try:
+        assert is_dismissable(gaps[0], "", "publish", kind="publish_gap") is True, \
+            "킬스위치가 안 먹는다 — 라이브에서 되돌릴 방법이 없다"
+    finally:
+        if _prev is None:
+            os.environ.pop("GUARDIAN_HUMAN_ATTENTION", None)
+        else:
+            os.environ["GUARDIAN_HUMAN_ATTENTION"] = _prev
+
+
+def test_수리_비대상_버킷_배정이_모든_통로에서_한_문을_지난다():
+    """★ ③원칙 — `_orchestrate` · sweep · deep_audit 세 통로가 **같은 함수**를 쓴다.
+
+    종전엔 세 곳이 각자 `if is_transient(...): mark_error_status(id,"ignored")` 를
+    적고 있었다. 한 곳만 고치면 나머지 둘로 그대로 샌다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import guardian_agent as G
+
+    import ast
+    import textwrap
+
+    for fn in (G._orchestrate, G.self_heal_known_errors, G.deep_audit_backlog):
+        src = _code_only(inspect.getsource(fn))
+        assert "_park_non_code" in src, f"{fn.__name__} 이 공통 문을 안 쓴다"
+        # ★ 문자열 유무가 아니라 **호출** 을 본다 — 서킷브레이커의 상태 *비교* 는 정당하다.
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        lits = {a.value for n in ast.walk(tree) if isinstance(n, ast.Call)
+                and getattr(n.func, "attr", getattr(n.func, "id", "")) == "mark_error_status"
+                for a in n.args if isinstance(a, ast.Constant) and isinstance(a.value, str)}
+        # `wontfix`(보안파일·Tier-2 비대상)·`new`(재청구)는 이 함수들의 정당한 결정이다.
+        # 금지하는 것은 **격리 버킷 직접 지정** — 그 판단의 주인은 `_park_non_code` 다.
+        assert "ignored" not in lits, \
+            f"{fn.__name__} 이 격리 버킷을 직접 지정한다({lits}) — 분산 재발"
+
+    park = _code_only(inspect.getsource(G._park_non_code))
+    assert "is_dismissable" in park, "종결 가능 판정을 안 쓴다 — 사람 큐가 다시 묻힌다"
+    assert '"wontfix"' in park, "사람이 봐야 하는 것을 재조회 집합에 남기지 않는다"
+
+
+def test_쓰기_없는_상태를_자동수정으로_세지_않는다():
+    """★ `resolved` 는 **쓰는 코드가 저장소 전역 0곳**인데 '자동수정' 에 합산됐다.
+
+    실측 all-time: fixed 115 · resolved 185 → 화면의 '자동수정' 62%가 죽은 상태였다.
+    """
+    import re
+    import subprocess
+
+    from JARVIS07_GUARDIAN.architecture import FIXED_STATUSES, LEGACY_STATUSES
+
+    assert LEGACY_STATUSES, "죽은 상태 목록이 비었다 — 검사가 무력해진다"
+    for st in LEGACY_STATUSES:
+        assert st not in FIXED_STATUSES, f"{st} 가 여전히 자동수정으로 계산된다"
+        # 저장소 전역에 *쓰는* 코드가 없어야 한다 (mark_error_status/UPDATE ... status=)
+        out = subprocess.run(
+            ["grep", "-rnE",
+             rf"""(mark_error_status\([^)]*["']{st}["']|status\s*=\s*["']{st}["'])""",
+             "--include=*.py", str(_ROOT)],
+            capture_output=True, text=True).stdout
+        hits = [ln for ln in out.splitlines()
+                if "__pycache__" not in ln and "/.venv/" not in ln and "/tests/" not in ln]
+        assert not hits, f"{st} 를 쓰는 코드가 생겼다 — 그렇다면 죽은 상태가 아니다:\n" + "\n".join(hits[:5])
+
+    # api_server 는 어휘를 파생해서 쓴다 (리터럴 IN 절 금지)
+    #   ★ 주석은 제외한다 — "종전엔 이랬다" 는 설명이 걸리면 그 설명을 지워야 통과한다.
+    api = _code_only((_ROOT / "api_server.py").read_text(encoding="utf-8"))
+    for st in LEGACY_STATUSES:
+        assert not re.search(rf"""IN\s*\(\s*['"]fixed['"]\s*,\s*['"]{st}['"]""", api), \
+            f"api_server 가 {st} 를 자동수정에 합산한다"
+    assert "_guardian_status_vocab" in api, "api_server 가 상태 어휘를 파생하지 않는다"
+
+
+def test_측정_안_한_점수를_점수처럼_보여주지_않는다():
+    """★ `_parse_self_scores` 는 하드코딩 0 을 돌려주는 스텁이었다(106/106 회차 0점).
+
+    0 은 '나쁨' 이고 None 은 '모름' 이다. 한 칸에 넣으면 계기판이 거짓말을 한다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+
+    got = _ar._parse_self_scores("수정 파일: 3개\n1. [a.py] 뭔가 고침")
+    for axis in _ar.SELF_SCORE_AXES:
+        assert got[axis] is None, f"{axis} 를 측정도 안 하고 값으로 만든다: {got}"
+
+    # 계약에 점수가 있으면 진짜로 파싱한다 (스텁이 아님을 증명)
+    real = _ar._parse_self_scores("코드 품질: 7/10\n학습 누적: 5/10\n비전 정합: 9/10")
+    assert real["quality"] == 7 and real["learning"] == 5 and real["vision"] == 9
+
+    # 저장 경로가 0 을 박지 않는다
+    save = _code_only(inspect.getsource(_ar._save_run_to_db))
+    assert 'scores.get("quality", 0)' not in save, "미측정 축에 0 을 박는다"
+
+    # 측정 가능 여부는 **프롬프트 계약에서 파생** (문자열로 박지 않는다)
+    meas = _code_only(inspect.getsource(_ar._self_score_measurable))
+    assert "_BASE_PROMPT" in meas and "_parse_self_scores" in meas, \
+        "측정 가능 여부를 계약이 아니라 상수로 판단한다"
+
+
+def test_학습추세가_미측정_때문에_통째로_사라지지_않는다():
+    """★ `WHERE llm_saved_1d IS NOT NULL` 이 **블록 전체**를 사라지게 했다.
+
+    실측 106회차 전부 NULL(칸이 마지막 회차보다 14시간 늦게 생겼고 잡은 주 1회)
+    → 학습 추세 보고가 무음. 무음은 '문제 없음' 처럼 보인다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+
+    src = _code_only(inspect.getsource(_ar._learning_trend_brief))
+    assert "IS NOT NULL" not in src, "한 지표 미측정이 블록 전체를 지운다"
+
+    # 격리 DB 에는 회차가 없다 — **창을 가득 채울 만큼** 미측정 회차를 넣고 확인한다.
+    #   (앞선 테스트가 측정된 회차를 남겨두면 창에 섞인다. 창 크기는 SQL 에서 파생.)
+    import re as _re
+    _win = int(_re.search(r"LIMIT\s+(\d+)",
+                          inspect.getsource(_ar._learning_trend_brief)).group(1))
+    from shared import db as _sdb
+    with _sdb.get_db() as c:
+        for _ in range(_win):
+            c.execute("INSERT INTO self_repair_runs (model, elapsed_sec, returncode, "
+                      "patterns_count, hits_total, llm_saved_1d, score_quality, summary) "
+                      "VALUES ('m', 1, 0, 10, 20, NULL, NULL, 's')")
+    brief = _ar._learning_trend_brief()
+    assert brief.strip(), "회차가 있는데 추세 보고가 비었다"
+    # 미측정 지표는 0 이 아니라 '측정 안 함' 으로 말해야 한다
+    _llm_line = [l for l in brief.splitlines() if "LLM 절약" in l]
+    assert _llm_line and _ar.UNMEASURED in _llm_line[0], \
+        f"미측정을 '측정 안 함' 이라고 말하지 않는다:\n{brief}"
+
+    # 측정된 회차가 섞이면 **그 회차들끼리만** 비교하고, 몇 회 기록인지 밝힌다
+    with _sdb.get_db() as c:
+        c.execute("INSERT INTO self_repair_runs (model, elapsed_sec, returncode, "
+                  "patterns_count, hits_total, llm_saved_1d, summary) "
+                  "VALUES ('m', 1, 0, 10, 20, 7, 's')")
+    mixed = [l for l in _ar._learning_trend_brief().splitlines() if "LLM 절약" in l]
+    assert mixed and "7" in mixed[0] and "기록 1/" in mixed[0], \
+        f"측정된 회차를 미측정과 섞어 계산한다: {mixed}"
+
+
+def test_자가수정_무음은_3종만_사람에게_간다():
+    """★ 사용자 박제(텔레그램 알림 비활성)를 뒤집지 않는다 — 노브 기본 OFF.
+
+    되돌림(rollback)·CI 게이트 실패·timeout 만, 그것도 노브를 켰을 때만 나간다.
+    """
+    import inspect
+    import os
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+
+    sent: list = []
+    import shared.notify as _nt
+    _orig = _nt.send_tg
+    _nt.send_tg = lambda *a, **k: sent.append(a[0] if a else "")
+    _prev = os.environ.get(_ar._TG_ENV)
+    try:
+        # ① 기본 OFF — 3종이라도 안 나간다
+        os.environ.pop(_ar._TG_ENV, None)
+        _ar._send_tg("롤백했다", kind="rollback")
+        assert not sent, "사용자 박제를 뒤집고 기본으로 알림을 보낸다"
+
+        # ② 노브 ON — 3종은 나간다
+        os.environ[_ar._TG_ENV] = "1"
+        for i, kind in enumerate(_ar._TG_KINDS):
+            _ar._send_tg(f"사건-{i}-{kind}", kind=kind)
+        assert len(sent) == len(_ar._TG_KINDS), \
+            f"무음 3종 중 일부가 여전히 안 간다: {sent}"
+
+        # ③ 노브 ON 이라도 그 외는 로그만 (소음 재발 방지)
+        sent.clear()
+        _ar._send_tg("평범한 완료 보고", kind="")
+        _ar._send_tg("평범한 완료 보고2", kind="progress")
+        assert not sent, f"3종 밖까지 나간다 — 소음 재발: {sent}"
+    finally:
+        _nt.send_tg = _orig
+        if _prev is None:
+            os.environ.pop(_ar._TG_ENV, None)
+        else:
+            os.environ[_ar._TG_ENV] = _prev
+
+    # 호출부가 실제로 kind 를 달고 있어야 한다(안 달면 위 계약이 무의미)
+    #   ★ `_code_only` 는 토큰 사이에 공백을 넣으므로 공백을 지우고 비교한다.
+    full = _code_only(inspect.getsource(_ar)).replace(" ", "")
+    for kind in _ar._TG_KINDS:
+        assert f'kind="{kind}"' in full, f"{kind} 사건을 표시하는 호출부가 없다"
+
+    # dedup 을 새로 만들지 않았다 — 기존 억제기 재사용
+    send = _code_only(inspect.getsource(_ar._send_tg))
+    assert "_in_cooldown" in send, "알림 억제기를 새로 만들었다(중복 채널)"
+
+
+def test_SLO는_임계를_박지_않고_경보를_기본으로_끈다():
+    """★ 임계 리터럴은 첫날부터 낡는다 — 실측 분포 백분위에서 파생하고, 표본이
+    모자라면 임계를 **내지 않는다**. 경보 발효는 사람이 켠다.
+    """
+    import inspect
+    import os
+    import re
+
+    from JARVIS07_GUARDIAN import guardian_agent as G
+
+    slo = G.guardian_slo()
+    for key in ("verified_fixes_week", "recurrence_rate", "bandit_stale_h"):
+        assert key in slo, f"SLO 지표 {key} 가 없다"
+    assert slo["alerts"] == [], "기본이 경보 발효 상태다 — 상시 경보는 무시된다"
+
+    src = _code_only(inspect.getsource(G.guardian_slo)).replace(" ", "")
+    assert "_pct(" in src, "임계를 분포에서 파생하지 않는다"
+    # 임계 리터럴 금지 — 비교식 우변에 숫자를 박았는지 본다
+    assert not re.search(r"(<|>)\s*0?\.\d+\b", src), f"임계 리터럴이 박혀 있다"
+    # 노브 *이름* 은 상수로 한 번만 적는다 — 함수 안에 리터럴을 또 적으면 사본이 된다(②).
+    assert "SLO_ALERT_ENV" in src and "getenv" in src, \
+        "경보 발효 노브가 함수 안에서 조회되지 않는다"
+    assert G.SLO_ALERT_ENV not in src, "노브 이름 문자열을 함수 안에 복제했다"
+
+    # 표본이 모자라면 임계는 None (지어내지 않는다)
+    assert G._pct([1, 2], 50) is None, "표본 2개로 임계를 만든다"
+
+    # 노브를 켜면 실제로 판정이 돈다
+    _prev = os.environ.get(G.SLO_ALERT_ENV)
+    os.environ[G.SLO_ALERT_ENV] = "1"
+    try:
+        on = G.guardian_slo()
+        assert isinstance(on["alerts"], list)
+    finally:
+        if _prev is None:
+            os.environ.pop(G.SLO_ALERT_ENV, None)
+        else:
+            os.environ[G.SLO_ALERT_ENV] = _prev
+
+    # /status 에 값이 노출된다 (새 채널·새 카드 없이)
+    assert "slo_lines" in _code_only(inspect.getsource(G._status_section)), \
+        "SLO 를 사람이 보는 화면에 안 붙였다"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  P1 — 발행 임계경로에서 비싼 검증 걷어내기 (2026-08-14 2차)
+#
+#  리뷰 판정: "비용 있는 검증을 '자가수리' 라는 값싼 이름표가 붙은 자리에 넣었다."
+#  실측 — 게이트 1회 왕복 138~150초(2026-08-14: precommit 12.8s + pytest 124.6s),
+#  실패 시 기준선 재확인까지 그 2배. ★ 이 숫자는 **스위트가 자라면 함께 자란다** —
+#  상한을 여기서 파생하지 말 것. 상한의 주인은 `gate_time_budget_sec()` 하나다.
+#  그게 발행(07:00·21:00) **직전 동기** 실행 안에서 건건이 돌고 있었다.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_발행_임계경로에서는_테스트_게이트가_보류된다(monkeypatch, caplog):
+    """★ 게이트는 *시간 여유가 있는 경로*(토 03:00 j07_deep_audit)의 것이다.
+
+    맥락은 **파생** 한다(②) — 함수명·잡ID 목록을 박지 않는다. JARVIS04
+    `job_llm_priority.gate()` 가 발행 파이프라인 잡 구간을 `mark_publishing` 으로
+    표시하고 `shared.llm.bg_defer_reason()` 이 그 창을 답한다. 발행 前 자체수리 페이즈는
+    발행 잡 **안에서** 도므로 새 표식 없이 자동으로 이 창에 들어온다.
+    """
+    import logging
+
+    import shared.llm as _llm
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    # 평시(발행창 밖) — 이 레그는 통과해야 한다. 안 그러면 게이트가 영영 안 돈다.
+    monkeypatch.setattr(_llm, "bg_defer_reason", lambda: "")
+    assert ef.publish_critical_reason() == ""
+    assert "발행 임계경로" not in ef.gate_blocked_reason()
+
+    # 발행 중 — 게이트는 스스로 물러난다
+    monkeypatch.setattr(_llm, "bg_defer_reason", lambda: "발행 진행 중")
+    assert "발행 임계경로" in ef.gate_blocked_reason(), \
+        "발행 직전 동기 실행 자리에서 150초짜리 검증이 그대로 돈다"
+
+    def _boom(*a, **kw):
+        raise AssertionError("발행 임계경로인데 게이트가 실제로 검사를 띄웠다")
+    monkeypatch.setattr(ef.subprocess, "run", _boom)
+    with caplog.at_level(logging.WARNING, logger="jarvis.guardian.fixer"):
+        assert ef.ci_gate_failures(tag="pub") == []
+    assert any("게이트 보류" in r.message for r in caplog.records), \
+        "검증 없이 착지한다는 사실이 아무 데도 안 남는다(조용한 통과 금지)"
+
+
+def test_게이트_보류가_세_통로_전부에_걸린다(monkeypatch):
+    """★ ③ — Tier-1(`apply_fix`)·Tier-2·`apply_stored_patches` 가 **같은 문**을 지난다.
+
+    한 통로만 고치면 다른 통로로 샌다. 세 경로 전부 `ci_gate_failures` 하나를 지나고,
+    그 안에 `gate_blocked_reason()` 이 있다 — 그래서 판정이 한 곳이다(①).
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import auto_repair as ar
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    # ① 게이트 실행 본체는 한 곳뿐 — 여기서만 검사를 띄운다
+    owners = [n for n, fn in vars(ef).items()
+              if callable(fn) and getattr(fn, "__module__", "") == ef.__name__
+              and "subprocess.run" in _code_only(inspect.getsource(fn))]
+    assert set(owners) <= {"ci_gate_failures", "_import_check", "_run_probe"}, \
+        f"게이트/프로브 밖에서 검사를 띄우는 자리가 생겼다: {owners}"
+
+    # ② 세 통로가 전부 게이트 주인을 경유한다
+    from JARVIS07_GUARDIAN import pattern_fixer as pfx
+    assert "gate_patchset" in _code_only(inspect.getsource(ef.apply_patchset))
+    assert "gate_patchset" in _code_only(inspect.getsource(ef.apply_fix))
+    assert "ci_gate_failures" in _code_only(inspect.getsource(ar))
+    # ★ 게이트 주인은 *정문 + 본체* 한 쌍이다 (2026-08-14 3차 — 정문이 배타를 잡고
+    #   본체가 검사를 돈다). 본체가 둘로 늘면 한쪽만 낡으므로 **둘 다** 확인한다.
+    _gate_owner = (_code_only(inspect.getsource(ef.gate_patchset))
+                   + _code_only(inspect.getsource(ef._gate_patchset_locked)))
+    assert "ci_gate_failures" in _gate_owner, "게이트 주인이 검사를 안 돈다"
+    assert "_gate_patchset_locked" in _code_only(inspect.getsource(ef.gate_patchset)), \
+        "정문이 본체에 위임하지 않는다 — 게이트 본체가 두 벌이 될 자리"
+    assert "ci_gate_failures" not in _code_only(inspect.getsource(ef.gate_patchset)), \
+        "정문이 검사를 직접 돈다 — 본체와 두 벌이 된다(①)"
+
+    # ②-B 순서 교정도 세 통로 전부 — 한 통로만 고치면 다른 통로로 샌다
+    for fn in (ef.apply_fix, pfx.apply_stored_patches):
+        src = _code_only(inspect.getsource(fn))
+        # `_code_only` 는 토큰을 공백으로 정규화한다 — 원문 그대로 비교하지 않는다
+        assert "run_gate = False" in src and "gate_patchset" in src, \
+            f"{fn.__name__} 이 옛 순서(비싼 게이트 먼저)로 남았다"
+
+    # ③ 보류 판정은 게이트 주인 **안** 에 있다 — 통로마다 조건을 복제하지 않는다
+    for fn in (ef.apply_fix, ef.apply_patchset, ef.gate_patchset, ef._gate_patchset_locked):
+        assert "publish_critical_reason" not in _code_only(inspect.getsource(fn)), \
+            f"{fn.__name__} 이 발행창 판정을 자체 보유한다 — 통로마다 낡는다"
+    assert "publish_critical_reason" in _code_only(inspect.getsource(ef.gate_blocked_reason))
+
+
+def test_발행창_파생이_끊기면_조용히_통과하지_않는다(monkeypatch, caplog):
+    """★ ② — 파생 실패가 조용히 통과되면 안 된다. 배선은 *동작으로* 확인한다.
+
+    `shared.llm.bg_defer_reason` 이 사라지면 종전 설계에선 예외가 삼켜져 게이트가
+    '평시' 로 오판하고 발행 직전에 150초를 쓴다. 그 반대(영구 보류)도 조용하면 안 된다.
+    """
+    import logging
+
+    import shared.llm as _llm
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    assert ef.gate_context_effective() is True, \
+        "발행창 배선이 죽었다 — 코드 존재는 적용의 증거가 아니다(patch_effective 표준)"
+
+    monkeypatch.delattr(_llm, "bg_defer_reason")
+    assert ef.gate_context_effective() is False, "배선이 끊겼는데 자기점검이 초록이다"
+    with caplog.at_level(logging.ERROR, logger="jarvis.guardian.fixer"):
+        reason = ef.publish_critical_reason()
+    assert reason, "파생 실패인데 '평시' 로 답한다 — 임계경로 보호가 풀린다"
+    assert any("발행창 파생 실패" in r.message for r in caplog.records), \
+        "파생 실패가 로그에도 안 남는다"
+
+
+def test_게이트에_절대_시간_상한이_있다(monkeypatch):
+    """★ 명령별 상한만 있고 총합 상한이 없었다 — `ci.yml` 이 늘면 조용히 함께 늘어난다.
+
+    상한 값은 박지 않고 이미 있는 예산(`watchdog.DEFAULT_ACTION_DEADLINE_SEC`)에서 파생한다.
+    """
+    import time
+
+    from JARVIS00_INFRA.watchdog import DEFAULT_ACTION_DEADLINE_SEC
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    assert ef.gate_time_budget_sec() == max(60.0, DEFAULT_ACTION_DEADLINE_SEC / 4), \
+        "상한이 액션 데드라인에서 파생되지 않는다(숫자를 박았다)"
+    monkeypatch.setenv("GUARDIAN_TEST_GATE_BUDGET", "7")
+    assert ef.gate_time_budget_sec() == 7.0, "무배포 조정 노브가 안 먹는다"
+
+    # 예산 안에서 끝낼 수 없는 검사는 **시작하지 않고 실패로 올린다**(fail-closed).
+    #   반쪽 실행의 실패는 '패치가 나쁘다' 와 '시간이 없었다' 를 구분하지 못하고,
+    #   `shell=True` 는 timeout kill 이 셸만 죽여 실검사를 고아로 남긴다.
+    monkeypatch.setattr(ef, "gate_blocked_reason", lambda: "")
+    monkeypatch.setattr(ef, "ci_gate_commands", lambda: ["cmd-a", "cmd-b"])
+    monkeypatch.setattr(ef, "_gate_timeout", lambda: 5.0)
+    seen: list = []
+
+    class _R:
+        returncode = 0
+        stdout = stderr = ""
+
+    def _run(c, **kw):
+        seen.append((c, kw.get("timeout")))
+        time.sleep(0.4)
+        return _R()
+
+    monkeypatch.setattr(ef.subprocess, "run", _run)
+    bad = ef.ci_gate_failures(tag="budget", budget=5.2)
+    assert len(seen) == 1, f"예산을 넘겨 두 번째 검사를 시작했다: {seen}"
+    assert seen[0][1] == 5.0, f"명령 상한이 전달되지 않았다: {seen}"
+    assert bad and "미실행" in bad[0], f"미실행을 통과로 적었다: {bad}"
+
+
+def test_싼_재현검증이_비싼_게이트보다_먼저_돈다(monkeypatch):
+    """★ 순서 교정 — 되돌릴 패치에 게이트 시간(실측 왕복 150초)을 쓰지 않는다.
+
+    종전: `apply_patchset` 안 게이트(150초) → 그 **뒤** `verify_fix`(수초)가
+    "원 오류 그대로 재현" 이면 전량 롤백. 즉 어차피 버릴 패치에 150초를 썼다.
+    """
+    import tempfile
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    order: list = []
+    monkeypatch.setattr(ef, "ci_gate_failures",
+                        lambda *, tag="", budget=None: order.append("gate") or [])
+    monkeypatch.setattr(ef, "verify_fix",
+                        lambda *a, **k: (order.append("verify") or
+                                         (ef.VERIFY_REPRODUCES, "여전히 재현됨")))
+    monkeypatch.setattr(ef, "_bandit_signal", lambda *a, **k: None)
+    monkeypatch.setattr(ef, "_record_learning_failure", lambda *a, **k: None)
+
+    root = _P(ef._ROOT)
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        tgt = _P(td) / "order_probe.py"
+        tgt.write_text("W = 0\n", encoding="utf-8")
+        rel = str(tgt.relative_to(root))
+        res = ef.apply_fix(-1, {"fixable": True, "target_file": rel, "patch": "W = 1\n",
+                                "explanation": "t"}, mark_wontfix=False)
+        assert bool(res) is False, "재현되는 패치가 성공으로 처리됐다"
+        assert tgt.read_text(encoding="utf-8") == "W = 0\n", "롤백되지 않았다"
+
+    assert order == ["verify"], \
+        f"싼 검증 전에 비싼 게이트가 돌았다(되돌릴 패치에 150초) — 순서: {order}"
+
+
+def test_게이트가_통과한_뒤에는_게이트가_실제로_돈다(monkeypatch):
+    """★ 순서를 바꾸면서 게이트를 *영영 안 도는* 것으로 만들면 안 된다(반대 방향 회귀)."""
+    import tempfile
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    order: list = []
+    monkeypatch.setattr(ef, "ci_gate_failures",
+                        lambda *, tag="", budget=None: order.append("gate") or [])
+    monkeypatch.setattr(ef, "verify_fix",
+                        lambda *a, **k: (order.append("verify") or
+                                         (ef.VERIFY_GONE, "사라짐")))
+
+    root = _P(ef._ROOT)
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        tgt = _P(td) / "order_ok_probe.py"
+        tgt.write_text("W = 0\n", encoding="utf-8")
+        rel = str(tgt.relative_to(root))
+        res = ef.apply_fix(-1, {"fixable": True, "target_file": rel, "patch": "W = 1\n",
+                                "explanation": "t"}, mark_wontfix=False)
+        assert bool(res) is True, "게이트가 통과했는데 실패 처리됐다"
+        assert tgt.read_text(encoding="utf-8") == "W = 1\n"
+    assert order == ["verify", "gate"], f"싼 검증 → 비싼 게이트 순서가 아니다: {order}"
+
+
+def test_패치락은_백업폴더에_기대지_않는다(monkeypatch):
+    """★ 실측 교착 — 부모/자식이 **같은 patchset.lock inode** 를 잡아 실시간 7분 41초 블로킹.
+
+    원인은 락 경로를 `patch_backup_dir()` 에서 파생하고, 그 격리를 `conftest` 의
+    `os.environ.setdefault` 에 기댄 것이다. `setdefault` 는 부모가 이미 그 변수를
+    내보내면 **아무 일도 하지 않는다** — 게다가 같은 변수를 `error_fixer` 는
+    '무배포 오버라이드' 로 공식 지원한다고 문서화했다(두 문서가 정면 충돌).
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    before = ef.patch_lock_path()
+    monkeypatch.setenv("GUARDIAN_PATCH_BACKUP_DIR", "/tmp/somewhere-else")
+    assert ef.patch_lock_path() == before, \
+        "백업 폴더 노브 하나가 배타와 격리를 동시에 좌우한다 — 교착의 근원"
+    assert "patch_backup_dir" not in _code_only(inspect.getsource(ef.patch_lock_path))
+
+    # 역할이 다르면 락도 다르다 (부모=live/test, 게이트 자식=gate)
+    scopes = {}
+    for env, expect in ((str(ef.gate_depth() + 1), "gate"), (None, None)):
+        if env:
+            monkeypatch.setenv(ef._GATE_INSIDE_ENV, env)
+        else:
+            monkeypatch.delenv(ef._GATE_INSIDE_ENV, raising=False)
+        scopes[ef.patch_lock_scope()] = ef.patch_lock_path()
+        if expect:
+            assert ef.patch_lock_scope().startswith(expect)
+    assert len(set(scopes.values())) == len(scopes), f"역할이 달라도 같은 락을 잡는다: {scopes}"
+
+    # conftest 가 다시 `setdefault` 로 돌아가면 이 격리가 조용히 사라진다
+    conf = (_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+    assert 'os.environ.setdefault("GUARDIAN_PATCH_BACKUP_DIR"' not in conf, \
+        "밖에서 내보낸 값이 백업 격리를 무력화한다(setdefault 회귀)"
+
+
+def test_게이트가_띄운_자식은_부모_락에_걸리지_않는다():
+    """★ **실제 프로세스로** 확인한다 — 부모가 락을 든 채 자식을 띄워 본다.
+
+    부모가 패치 배타를 든 상태에서 게이트가 검사를 띄우는 것이 운영의 실제 형태다.
+    같은 락이면 자식은 `_patch_lock_timeout()`(적용+재현검증+게이트 예산, 실측 950초)만큼
+    통째로 멈춘다. 실측 재현 결과가 CPU 1.92초 / 실시간 7분 41초였다.
+    """
+    import json
+    import os
+    import subprocess
+    import time
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    src = (
+        "import json, sys, time\n"
+        f"sys.path.insert(0, {str(ef._ROOT)!r})\n"
+        "from JARVIS07_GUARDIAN.error_fixer import _patch_lock, patch_lock_path\n"
+        "t0 = time.time()\n"
+        "with _patch_lock() as got:\n"
+        "    print(json.dumps({'got': bool(got), 'path': str(patch_lock_path()),\n"
+        "                      'waited': round(time.time() - t0, 2)}))\n"
+    )
+    env = dict(os.environ)
+    # 게이트가 자식에게 넘기는 표식 — **깊이를 하나 올려서** (겹쳐 들어가도 역할이 갈린다).
+    # 이 스위트 자체가 게이트 자식 안에서 또 돌 수 있으므로 고정값 "1" 을 쓰면 안 된다.
+    env[ef._GATE_INSIDE_ENV] = str(ef.gate_depth() + 1)
+    with ef._patch_lock() as parent_got:
+        assert parent_got, "부모가 배타를 못 얻어 재현 조건이 안 만들어졌다"
+        t0 = time.time()
+        r = subprocess.run([ef._SUBPROC_PY, "-c", src], capture_output=True, text=True,
+                           timeout=60, env=env)
+        elapsed = time.time() - t0
+        assert r.returncode == 0, r.stderr[-400:]
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert out["got"] is True, f"게이트 자식이 부모 락에 막혔다(교착): {out}"
+    assert out["path"] != str(ef.patch_lock_path()), \
+        f"부모와 자식이 같은 락 파일을 잡는다: {out['path']}"
+    assert elapsed < 20, f"자식이 락 대기로 멈췄다: {elapsed:.1f}s"
+
+
+def _run_two_concurrent_repairs(monkeypatch, gate_sleep: float, *, barrier: bool):
+    """서로 다른 파일을 겨눈 수리 2건을 **스레드로 동시에** 돌리고 게이트를 계측한다.
+
+    Returns `(peak, snapshots_stable, results)`:
+      · `peak`             — 동시에 게이트 안에 있던 최대 스레드 수
+      · `snapshots_stable` — 각 게이트가 도는 **동안** 워킹트리가 그대로였는가
+      · `results`          — 스레드별 apply_fix 성공 여부
+    `barrier=True` 면 게이트 직전에 두 스레드를 맞춰 세운다 — *직렬화가 없을 때* 반드시
+    겹치게 만들어, 이 계측이 겹침을 실제로 잡아낸다는 것을 증명하는 용도다(비-vacuous).
+    """
+    import tempfile
+    import threading
+    import time
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    files: dict = {}
+    inside = {"now": 0, "peak": 0}
+    stable: list = []
+    lock = threading.Lock()
+    gate_barrier = threading.Barrier(2, timeout=30) if barrier else None
+
+    def _snap():
+        return {i: f.read_text(encoding="utf-8") for i, f in files.items()}
+
+    def fake_gate(*, tag="", budget=None):
+        with lock:
+            inside["now"] += 1
+            inside["peak"] = max(inside["peak"], inside["now"])
+        before = _snap()
+        time.sleep(gate_sleep)
+        after = _snap()
+        with lock:
+            inside["now"] -= 1
+            stable.append(before == after)
+        return []
+
+    def fake_verify(*a, **k):
+        if gate_barrier is not None:
+            gate_barrier.wait()      # 직렬화가 없을 때만 성립 — 있으면 여기서 못 만난다
+        return (ef.VERIFY_GONE, "사라짐")
+
+    monkeypatch.setattr(ef, "ci_gate_failures", fake_gate)
+    monkeypatch.setattr(ef, "verify_fix", fake_verify)
+    monkeypatch.setattr(ef, "_bandit_signal", lambda *a, **k: None)
+
+    root = _P(ef._ROOT)
+    results: dict = {}
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        for i in (1, 2):
+            f = _P(td) / f"conc_gate_probe_{i}.py"
+            f.write_text("W = 0\n", encoding="utf-8")
+            files[i] = f
+
+        def worker(i):
+            rel = str(files[i].relative_to(root))
+            results[i] = bool(ef.apply_fix(
+                -1, {"fixable": True, "target_file": rel, "patch": f"W = {i}\n",
+                     "explanation": "t"}, mark_wontfix=False))
+
+        ts = [threading.Thread(target=worker, args=(i,)) for i in (1, 2)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(timeout=120)
+        assert not any(t.is_alive() for t in ts), "수리 스레드가 끝나지 않았다(교착 의심)"
+    return inside["peak"], all(stable), results
+
+
+def test_게이트가_남의_패치가_섞인_트리를_채점하지_않는다(monkeypatch):
+    """★★ 적용 → 재현검증 → 게이트가 **하나의 배타 구간** 인가 (2026-08-14 3차).
+
+    순서 교정(싼 검증 먼저)을 하면서 게이트가 `apply_patchset` 의 락 **밖으로** 나왔다.
+    실측(스레드 2개): 두 수리가 0.37초 차로 동시에 게이트에 들어갔고, 각자의 게이트가
+    도는 동안 워킹트리엔 **양쪽 패치가 함께** 있었다.
+
+    이게 왜 치명적인가 — 느려서가 아니다. 남의 패치가 스위트를 깨면 무고한 패치가
+    롤백되고 `_rejected()` 를 타 **밴딧 음의보상 → learned_patterns 강등 → wontfix**
+    까지 간다. 즉 **학습 원장이 거짓으로 갱신된다.** `job_retry_pending` 은 10분마다
+    최대 20 스레드를 띄우므로 최악 20개의 pytest+precommit 이 동시에 돈다.
+
+    문서가 아니라 **동작으로** 확인한다 — 스레드 2개를 실제로 돌린다.
+    """
+    peak, stable, results = _run_two_concurrent_repairs(monkeypatch, 0.5, barrier=False)
+    assert peak == 1, \
+        f"게이트가 동시에 {peak}개 돌았다 — 남의 패치가 섞인 트리를 채점한다"
+    assert stable, "게이트가 도는 도중 워킹트리가 바뀌었다 — 판정의 전제가 깨진다"
+    assert all(results.values()), f"동시 수리가 직렬화되지 못하고 실패했다: {results}"
+
+
+def test_게이트_동시성_계측이_실제로_겹침을_잡는다(monkeypatch):
+    """★ 위 검사가 *비어 있지 않음* 을 증명한다 — 배타를 끄면 반드시 겹쳐야 한다.
+
+    직렬화가 없을 때도 peak=1 이 나온다면 그건 계측이 아무것도 안 보는 것이다.
+    (킬스위치 `GUARDIAN_PATCH_LOCK=0` = 종전 동작. 노브의 존재도 함께 지킨다.)
+    """
+    monkeypatch.setenv("GUARDIAN_PATCH_LOCK", "0")
+    peak, _stable, results = _run_two_concurrent_repairs(monkeypatch, 0.5, barrier=True)
+    assert peak == 2, \
+        f"배타를 껐는데도 겹침이 안 잡혔다 — 계측이 무의미하다(peak={peak})"
+    assert all(results.values()), f"전제 깨짐 — 락 없이도 적용은 성공해야 한다: {results}"
+
+
+def test_배타_대기_상한이_임계구역_전체에서_파생한다(monkeypatch):
+    """★ 임계구역이 길어졌으면 대기 상한도 그만큼이어야 한다 — 숫자를 박지 않는다(②).
+
+    상한이 모자라면 *진행 중* 인 수리를 '경합' 으로 오인해 계속 보류시킨다.
+    종전 상한은 `_import_timeout() + _gate_timeout()` 이었는데, `_gate_timeout()` 은
+    게이트 **명령 하나** 의 상한이라 `ci.yml` 에 검사가 늘어도 따라오지 않는다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    src = _code_only(inspect.getsource(ef._patch_lock_timeout))
+    for name in ("_import_timeout", "_verify_timeout", "gate_time_budget_sec"):
+        assert name in src, f"대기 상한이 {name} 을 반영하지 않는다 — 임계구역과 어긋난다"
+    assert ef._patch_lock_timeout() >= (ef._import_timeout() + ef._verify_timeout()
+                                        + ef.gate_time_budget_sec())
+
+    # 예산 노브를 돌리면 상한이 **따라온다** (사본이 아니라 파생임을 동작으로 확인)
+    before = ef._patch_lock_timeout()
+    monkeypatch.setenv("GUARDIAN_TEST_GATE_BUDGET", str(ef.gate_time_budget_sec() * 2))
+    assert ef._patch_lock_timeout() > before, \
+        "게이트 예산을 늘렸는데 대기 상한이 그대로 — 어딘가에 사본이 있다"
+
+
+def test_게이트는_스스로도_배타를_잡는다():
+    """★ ③ 모든 통로 — 호출자가 깜빡해도 게이트가 남의 패치를 채점하지 않도록.
+
+    `apply_fix`(재현검증 뒤)·`apply_patchset(run_gate=True)` 두 소비자가 이미 락을 들고
+    들어오므로 재진입이라 비용은 0 이다. 새로 생길 통로는 자동으로 같은 보호를 받는다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    src = _code_only(inspect.getsource(ef.gate_patchset))
+    assert "with _patch_lock" in src, "게이트가 배타 없이 돌 수 있다"
+    # 본체는 분리돼 있고, 정문만이 락을 잡는다 (중복 구현 금지 ①)
+    assert "_gate_patchset_locked" in src
+
+    # ★ ③ — `gate_patchset` 을 부르는 **모든 함수** 가 배타 구간 안에서 부르는가.
+    #   목록을 박지 않고 저장소에서 파생한다(② — 새 통로가 생기면 자동으로 대상이 된다).
+    #   실측: 이 검사를 만들 때 `pattern_fixer.apply_stored_patches` 가 정확히 같은 창을
+    #   갖고 있었다(적용은 락 안, 게이트는 락 밖). 한 통로만 고치면 다른 통로로 샌다.
+    import ast
+    import warnings
+
+    root = _Path(__file__).resolve().parent.parent
+    callers: list = []
+    scanned = 0
+    for f in root.rglob("*.py"):
+        rel = f.relative_to(root).as_posix()
+        if not is_scannable_source(f, root) or rel.startswith("tests/"):
+            continue
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                src_txt = f.read_text(encoding="utf-8")
+                tree = ast.parse(src_txt)
+        except Exception:
+            continue
+        scanned += 1
+        for n in ast.walk(tree):
+            if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if n.name in ("gate_patchset", "_gate_patchset_locked"):
+                continue          # 게이트 자신은 스스로 잡는다(위에서 확인)
+            calls = [c for c in ast.walk(n) if isinstance(c, ast.Call)
+                     and isinstance(c.func, ast.Name) and c.func.id == "gate_patchset"]
+            if not calls:
+                continue
+            # 배타 구간 = `with _patch_lock():` 블록. **구문 트리로** 판정한다 —
+            # 문자열 위치로 보면 함수 상단 import 목록의 이름에 걸려 거짓 통과한다.
+            guarded: set = set()
+            for w in ast.walk(n):
+                if not isinstance(w, (ast.With, ast.AsyncWith)):
+                    continue
+                if not any(isinstance(it.context_expr, ast.Call)
+                           and isinstance(it.context_expr.func, ast.Name)
+                           and it.context_expr.func.id == "_patch_lock"
+                           for it in w.items):
+                    continue
+                guarded |= {id(c) for c in ast.walk(w) if isinstance(c, ast.Call)}
+            outside = [c for c in calls if id(c) not in guarded]
+            callers.append((rel, n.name, len(calls), outside))
+    assert scanned > 50, f"스캔한 파일이 {scanned}개뿐 — 검사가 사실상 비어 있다"
+    assert callers, "gate_patchset 호출자를 하나도 못 찾았다 — 검사가 비어 있다"
+    for rel, fname, total, outside in callers:
+        assert not outside, \
+            (f"{rel}:{fname} 이 배타 구간 밖에서 게이트를 부른다(줄 "
+             f"{[c.lineno for c in outside]}/{total}건) — 창이 다시 열렸다: "
+             f"남의 패치가 섞인 트리를 채점하게 된다")
+
+
+def test_ERRORS_md_경로의_주인이_하나다():
+    """★ ① — 경로를 조립하는 코드가 넷이라 *읽는 쪽만* 격리해도 쓰는 쪽이 샜다.
+
+    실측: 골든 테스트가 라이브 문서에 `tmpXXXX/*_probe.py` 의 '수정 성공' 43건을 남겼다.
+    주인이 하나면 한 곳만 갈아끼워도 모든 통로가 따라온다(③).
+    """
+    import ast
+    import inspect
+    import warnings
+
+    root = _Path(__file__).resolve().parent.parent
+    owners: list = []
+    scanned = 0
+    for f in root.rglob("*.py"):
+        rel = f.relative_to(root).as_posix()
+        if not is_scannable_source(f, root) or rel.startswith("tests/"):
+            continue
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                tree = ast.parse(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        scanned += 1
+        for n in ast.walk(tree):
+            # `<무엇> / "ERRORS.md"` 형태 = 경로 조립. 문자열이 그냥 등장하는 것(보호 목록
+            # ·프롬프트·로그)은 조립이 아니므로 잡지 않는다.
+            if (isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)
+                    and isinstance(n.right, ast.Constant) and n.right.value == "ERRORS.md"):
+                owners.append(rel)
+    assert scanned > 50, f"스캔한 파일이 {scanned}개뿐 — 검사가 사실상 비어 있다"
+    assert set(owners) == {"JARVIS07_GUARDIAN/repair_history.py"}, \
+        f"ERRORS.md 경로를 자기가 조립하는 곳이 또 있다: {sorted(set(owners))}"
+
+    # 주인은 **호출 시점** 에 환경변수를 본다 (로드 시점 캡처면 격리가 안 먹는다)
+    from JARVIS07_GUARDIAN.repair_history import errors_md_path
+    assert "GUARDIAN_ERRORS_MD" in _code_only(inspect.getsource(errors_md_path))
+
+
+def _errors_md_probe(marker: str):
+    """`_update_errors_md` 를 한 번 부른다 — 서식이 아니라 *어디에 쓰는가* 를 본다."""
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    ef._update_errors_md({"error_type": "IsolationProbe", "message": marker, "module": "probe"},
+                         {"explanation": marker, "target_file": "tmp/isolation_probe.py"},
+                         success=True, verified=[marker])
+
+
+def test_테스트가_라이브_ERRORS_md를_건드리지_않는다():
+    """★★ 중앙 격리가 *먹는지* 를 동작으로 확인한다 — 설정 존재는 적용의 증거가 아니다.
+
+    ERRORS.md 는 오류 기록의 **유일한 저장소** 다. 존재하지도 않는 파일의 '수정 성공' 이
+    쌓이면 `incidents_brief` 조준 검색과 사람 검토가 그만큼 헛다리를 짚는다.
+    """
+    import uuid
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+    from JARVIS07_GUARDIAN.repair_history import errors_md_path
+
+    live = _Path(ef._ROOT) / "JARVIS07_GUARDIAN" / "ERRORS.md"
+    target = errors_md_path()
+    assert target.resolve() != live.resolve(), \
+        f"스위트가 라이브 ERRORS.md 를 잡았다: {target} — conftest 격리가 안 걸렸다"
+
+    marker = f"isolation-probe-{uuid.uuid4().hex}"
+    before = target.stat().st_size
+    _errors_md_probe(marker)
+    assert target.stat().st_size > before, \
+        "사본에도 안 썼다 — 검사가 비어 있다(쓰기 경로가 죽으면 이 테스트가 무의미해진다)"
+    assert marker not in live.read_text(encoding="utf-8", errors="replace"), \
+        "라이브 ERRORS.md 에 테스트 기록이 들어갔다 — 격리를 우회한 통로가 있다"
+
+
+def test_게이트_자식_안에서는_ERRORS_md에_적지_않는다(monkeypatch):
+    """★ 게이트는 *검사* 를 하러 자식을 띄운 것이지 *기록* 을 하러 간 게 아니다.
+
+    이 변경으로 게이트가 수리 경로에서 스위트를 돌리므로, 막지 않으면 **운영 수리
+    1건마다** 프로브 항목이 1~3건씩 문서에 쌓인다. 판정은 새 설정이 아니라 이미 있는
+    재귀 차단 표식(`GUARDIAN_GATE_INSIDE`)에서 온다(②).
+    """
+    import uuid
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+    from JARVIS07_GUARDIAN.repair_history import errors_md_path
+
+    target = errors_md_path()
+    monkeypatch.setenv(ef._GATE_INSIDE_ENV, str(ef.gate_depth() + 1))
+    assert ef.gate_depth() > 0, "전제 깨짐 — 자식 표식이 안 세워졌다"
+
+    marker = f"gate-child-probe-{uuid.uuid4().hex}"
+    before = target.stat().st_size
+    _errors_md_probe(marker)
+    assert target.stat().st_size == before, \
+        "게이트 자식이 ERRORS.md 에 적었다 — 운영 수리마다 문서가 오염된다"
+    assert marker not in target.read_text(encoding="utf-8", errors="replace")
+
+
+def test_게이트_본체가_운영과_같은_형태로_실제로_돈다():
+    """★★ P1-6 — 지금까지 게이트의 **실제 형태를 검증한 테스트가 하나도 없었다.**
+
+    골든 테스트는 전부 `ci_gate_failures` 를 monkeypatch 했고,
+    `test_게이트는_테스트_안에서_스스로_멈춘다` 는 `"pytest" in sys.modules` 때문에
+    스위트 안에서 항상 참이라 **본체가 실행될 여지가 원천적으로 없었다**.
+    → 자식 프로세스(= pytest 미로드, 표식 없음)에서 진짜로 돌려 본다.
+
+    비용 통제: 명령 상한을 낮춰 예산 안에 **첫 검사만** 들어가게 한다.
+      · 첫 검사(`precommit_check`, 실측 9.7초)는 **진짜로 끝까지 돌아 통과** 해야 한다
+        → 명령 파생·venv 파이썬·cwd·재귀 표식이 실제로 맞물린다는 증거.
+      · 둘째(`pytest tests/`)는 예산 부족으로 **시작조차 하지 않고** 실패로 올라야 한다
+        → 반쪽 실행으로 고아 프로세스를 남기지 않는다는 증거.
+    """
+    import json
+    import os
+    import subprocess
+    import time
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    cmds = ef.ci_gate_commands()
+    assert len(cmds) >= 2, f"ci.yml 파생 명령이 2개 미만 — 이 테스트의 전제가 깨졌다: {cmds}"
+
+    src = (
+        "import json, sys\n"
+        f"sys.path.insert(0, {str(ef._ROOT)!r})\n"
+        # ★ 발행창 레그만 끈다(그 레그는 전용 테스트가 본다). 안 끄면 이 테스트가
+        #   벽시계에 매여 발행 보호구간(하루 3시간)에는 항상 빨개진다.
+        "import shared.llm as _l; _l.bg_defer_reason = lambda: ''\n"
+        "from JARVIS07_GUARDIAN.error_fixer import (ci_gate_failures, ci_gate_commands,\n"
+        "                                           gate_blocked_reason)\n"
+        "assert gate_blocked_reason() == '', gate_blocked_reason()\n"
+        "bad = ci_gate_failures(tag='real', budget=35.0)\n"
+        "print('<<<' + json.dumps({'bad': bad, 'cmds': ci_gate_commands()}) + '>>>')\n"
+    )
+    env = dict(os.environ)
+    env.pop(ef._GATE_INSIDE_ENV, None)
+    env["GUARDIAN_TEST_GATE_TIMEOUT"] = "30"      # 명령 상한(하한 30s)
+    env.pop("GUARDIAN_TEST_GATE", None)
+    t0 = time.time()
+    r = subprocess.run([ef._SUBPROC_PY, "-c", src], capture_output=True, text=True,
+                       timeout=180, env=env)
+    elapsed = time.time() - t0
+    assert r.returncode == 0, f"게이트 본체가 자식에서 죽었다:\n{r.stderr[-1500:]}"
+    payload = json.loads(r.stdout.split("<<<")[1].split(">>>")[0])
+    bad, child_cmds = payload["bad"], payload["cmds"]
+
+    first = child_cmds[0].split("/")[-1][:60]
+    assert not any(b.startswith(first) for b in bad), \
+        f"운영과 같은 형태로 돌린 첫 검사가 실패했다 — {bad}"
+    assert bad, "예산이 모자란데 전부 통과로 적었다(fail-closed 아님)"
+    assert any("미실행" in b for b in bad), f"미실행이 실패로 올라오지 않았다: {bad}"
+    assert elapsed < 60, f"예산 상한이 실제로는 안 걸린다: {elapsed:.0f}s"
+
+
+def test_학습_재적용도_싼_검증을_먼저_한다(monkeypatch):
+    """★ ③ — `apply_stored_patches` 는 종전에 **가드 0종**으로 남아 있던 자리다.
+
+    `apply_fix` 만 고치고 이 통로를 두면 매일 도는 전수 재적용이 옛 순서로 남는다
+    (비싼 게이트 → 그 뒤 재현검증 → 롤백 = 버릴 패치에 150초).
+    """
+    import contextlib
+    import tempfile
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+    from JARVIS07_GUARDIAN import pattern_fixer as pf
+
+    root = _P(ef._ROOT)
+    order: list = []
+    monkeypatch.setattr(ef, "ci_gate_failures",
+                        lambda *, tag="", budget=None: order.append("gate") or [])
+    monkeypatch.setattr(ef, "verify_fix",
+                        lambda *a, **k: (order.append("verify") or
+                                         (ef.VERIFY_REPRODUCES, "여전히 재현됨")))
+    monkeypatch.setattr(pf, "_save_learned", lambda *a, **k: None)
+
+    @contextlib.contextmanager
+    def _noop_mutate():
+        yield {"patterns": []}
+    monkeypatch.setattr(pf, "mutate_learned", _noop_mutate)
+
+    with tempfile.TemporaryDirectory(dir=str(root)) as td:
+        tgt = _P(td) / "stored_probe.py"
+        tgt.write_text("S = 0\n", encoding="utf-8")
+        rel = str(tgt.relative_to(root))
+        entry = {"fixer": "llm_patch", "fingerprint": "fp-order-test",
+                 "error_type": "ProbeError", "sample_message": "boom", "hit_count": 1}
+        monkeypatch.setattr(pf, "_load_learned", lambda: {"patterns": [entry]})
+        monkeypatch.setattr(pf, "_restore_items",
+                            lambda e, **k: [{"target_file": rel, "patch": "S = 1\n"}])
+        applied = pf.apply_stored_patches()
+
+        assert applied == 0, "원 오류가 재현되는데 재적용을 성공으로 셌다"
+        assert tgt.read_text(encoding="utf-8") == "S = 0\n", "롤백되지 않았다"
+
+    assert order == ["verify"], \
+        f"학습 재적용 통로가 싼 검증 전에 비싼 게이트를 돌렸다: {order}"
+
+
+def test_락_대기가_누적되지_않고_재진입이_정직하다():
+    """★ 두 결함이 한 함수에 있었다 (2026-08-14 2차).
+
+    ① **누적 대기** — 스레드락에 `timeout` 만큼 기다려 실패한 *뒤에* flock 을 또 그만큼
+       기다렸다(실측 `timeout=1.0` 인데 2.02초). 상한을 시간 예산에서 파생하는 소비자
+       (`error_fixer._patch_lock_timeout`)에게 그 두 배는 곧 임계경로 지연이다.
+    ② **거짓 재진입** — 바깥이 배타를 *못 얻은 채* 진행 중이어도 중첩 호출은 `yield True`
+       를 무조건 줬다. 소비자의 '보류'(REJ_LOCK) 판단이 중첩에서만 조용히 뒤집힌다.
+    """
+    import tempfile
+    import threading
+    import time
+    from pathlib import Path as _P
+
+    from JARVIS07_GUARDIAN.json_store import held_exclusive, locked
+
+    d = _P(tempfile.mkdtemp())
+    probe = d / "wait_probe.json"
+    started = threading.Event()
+
+    def holder():
+        with locked(probe, timeout=5) as g:
+            assert g, "보유자가 배타를 못 얻어 재현 조건이 안 만들어졌다"
+            started.set()
+            time.sleep(2.0)
+
+    t = threading.Thread(target=holder)
+    t.start()
+    assert started.wait(5), "보유 스레드가 임계구역에 들어가지 못했다"
+    try:
+        t0 = time.time()
+        with locked(probe, timeout=1.0) as got:
+            waited = time.time() - t0
+            assert got is False, "남이 들고 있는데 배타를 얻었다고 답한다"
+            assert waited < 1.7, f"두 대기가 누적됐다: {waited:.2f}s (상한 1.0s)"
+            with locked(probe, timeout=1.0) as inner:
+                assert inner is False, \
+                    "재진입이 바깥의 배타 실패를 감췄다 — 중첩에서만 보류가 무력해진다"
+            assert held_exclusive(probe) is False
+    finally:
+        t.join()
+
+    # 정상 경로: 배타를 얻은 바깥의 재진입은 True 여야 한다(안 그러면 write_json 이 죽는다)
+    with locked(probe, timeout=2) as g1, locked(probe, timeout=2) as g2:
+        assert g1 is True and g2 is True, "재진입이 막혔다 — read-modify-write 가 자기와 데드락"
+        assert held_exclusive(probe) is True
+    assert held_exclusive(probe) is None, "보유 기록이 해제 후에도 남았다"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# P2 — 3원칙 위반 해소 + 조용한 실패 제거 (2026-08-14)
+#
+# 앞선 트랙(T1·T3·T4·T5)이 *새로 만든* 결함을 잡는다. 공통 형태는 둘이다:
+#   ② 어휘·스키마 사본이 '사라진 게 아니라 옮겨 앉았다'
+#   ② 파생 실패가 **무음으로 종전 동작** 이 된다 (그래서 회귀가 신호를 안 남긴다)
+# ══════════════════════════════════════════════════════════════════════════
+
+_STATUS_VOCAB_OWNER = "JARVIS07_GUARDIAN/architecture.py"
+
+
+def _status_vocab_copies() -> list[tuple[str, int, tuple]]:
+    """저장소 전역에서 **오류 상태 어휘의 리터럴 사본** 을 찾는다.
+
+    ★ 목록을 테스트에 박지 않는다(②) — 어휘는 `architecture.ALL_STATUSES` 에서 읽는다.
+      주인에 새 상태가 추가되면 이 검사가 **자동으로** 그 상태의 사본까지 잡는다.
+    ★ 주석·docstring 은 대상이 아니다 — AST 로 보므로 '왜 없앴는지' 설명은 안전하다
+      (`_code_only` 와 같은 원칙: 검사 대상은 코드, 보존 대상은 설명).
+    """
+    import ast
+    import re
+    import warnings
+
+    from JARVIS07_GUARDIAN.architecture import ALL_STATUSES
+    vocab = set(ALL_STATUSES)
+    root = _Path(__file__).resolve().parent.parent
+    out: list[tuple[str, int, tuple]] = []
+    for f in root.rglob("*.py"):
+        rel = f.relative_to(root).as_posix()
+        if not is_scannable_source(f, root):
+            continue
+        if rel == _STATUS_VOCAB_OWNER or rel.startswith("tests/"):
+            continue                       # 주인 + 테스트(가짜 입력을 만들어야 한다)
+        try:
+            # 다른 파일이 이미 갖고 있는 escape 경고(예: `shared/precommit_check.py` 의
+            # 비-raw docstring 안 `\s`)는 이 검사의 관심사가 아니다 — 소음만 만든다.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                tree = ast.parse(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for n in ast.walk(tree):
+            # ① 파이썬 집합 리터럴 — ("fixed","resolved") 형태
+            if isinstance(n, (ast.Tuple, ast.List, ast.Set)):
+                vals = [e.value for e in n.elts
+                        if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+                if len(vals) >= 2 and len(vals) == len(n.elts) and set(vals) <= vocab:
+                    out.append((rel, n.lineno, tuple(vals)))
+            # ② SQL 문자열 — "status IN ('fixed','resolved')" 형태
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) \
+                    and "status" in n.value.lower():
+                for m in re.finditer(r"status\s+IN\s*\(([^)]*)\)", n.value, re.I):
+                    names = re.findall(r"'([a-z_]+)'", m.group(1))
+                    if len(names) >= 2 and set(names) <= vocab:
+                        out.append((rel, n.lineno, tuple(names)))
+    return sorted(set(out))
+
+
+def test_오류_상태_어휘의_리터럴_사본이_저장소에_없다():
+    """★ ② — 사본이 '없어진' 게 아니라 **옮겨 앉는** 것을 막는 검사.
+
+    T1 은 `architecture.FIXED_STATUSES` 를 세우고 api_server 4곳을 파생으로 바꿨지만,
+    `repair_history` 는 `status IN ('fixed','resolved','manual','wontfix')` 와
+    `if status in ("fixed","resolved")` 를 그대로 들고 있었다. grep 을 한 파일에만
+    돌렸기 때문이다. 그래서 검사를 **저장소 전역**으로 돌린다 — 다음 사람이 어디에
+    사본을 만들든 여기서 걸린다.
+    """
+    copies = _status_vocab_copies()
+    assert not copies, (
+        "오류 상태 어휘의 리터럴 사본이 남아 있다 — 주인은 "
+        f"{_STATUS_VOCAB_OWNER} 단독이다:\n"
+        + "\n".join(f"  {p}:{ln}  {v}" for p, ln, v in copies))
+
+
+def test_어휘_검사가_실제로_사본을_잡는다():
+    """검사가 *비어 있어서* 통과하는 것이 아님을 증명한다 (vacuous 방지).
+
+    위 테스트는 "0건" 을 단언한다. 그런 검사는 스캐너가 조용히 망가져도 초록이다
+    (실측 전례: `--category dashboard` 가 삭제된 파일을 겨눠 **한 번도 집행되지 않았다**).
+    → 사본을 하나 심어 **잡히는지** 확인한다.
+    """
+    import os
+
+    from JARVIS07_GUARDIAN.architecture import FIXED_STATUSES, LEGACY_STATUSES
+    root = _Path(__file__).resolve().parent.parent
+    bait = root / f"_p2_vocab_bait_{os.getpid()}.py"
+    payload = list(FIXED_STATUSES) + list(LEGACY_STATUSES)
+    assert len(payload) >= 2, "어휘가 1종뿐이라 이 미끼는 성립하지 않는다"
+    bait.write_text("X = " + repr(tuple(payload)) + "\n", encoding="utf-8")
+    try:
+        found = [c for c in _status_vocab_copies() if c[0] == bait.name]
+        assert found, "심어둔 사본을 못 잡았다 — 검사가 무력하다"
+    finally:
+        bait.unlink(missing_ok=True)
+    assert not [c for c in _status_vocab_copies() if c[0] == bait.name], \
+        "미끼 제거 후에도 잡힌다 — 캐시된 결과를 보고 있다"
+
+
+def test_api_서버_상태어휘에_하드코딩_폴백이_없다():
+    """★ ② — 폴백 사본은 '안전장치' 가 아니라 **낡을 예정인 진실 행세** 다.
+
+    종전 `_guardian_status_vocab()` 은 import 실패 시
+    `("new","analyzing","fixed","wontfix","ignored","manual"), ("fixed",), ()` 를 돌려줬다.
+    어휘가 바뀌면 이 줄만 낡고 화면은 옛 정의로 조용히 계속 그려진다.
+    """
+    import inspect
+
+    import api_server as _api
+    src = _code_only(inspect.getsource(_api._guardian_status_vocab))
+    from JARVIS07_GUARDIAN.architecture import ALL_STATUSES
+    leaked = [s for s in ALL_STATUSES if f'"{s}"' in src or f"'{s}'" in src]
+    assert not leaked, f"어휘 폴백 사본이 코드에 남아 있다: {leaked}"
+    assert "except" not in src, \
+        "파생 실패를 삼키고 있다 — 못 읽으면 올려서 화면에 드러나야 한다"
+
+
+def test_집계_실패는_0이_아니라_오류로_드러난다():
+    """★ ② — 0 은 대시보드에서 '문제 없음' 으로 읽힌다. 실패는 실패라고 말해야 한다."""
+    import api_server as _api
+    real = _api._guardian_status_vocab
+
+    def _boom():
+        raise ImportError("architecture 를 못 읽는 상황 재현")
+
+    _api._guardian_status_vocab = _boom
+    try:
+        for fn in (_api.get_guardian_stats, _api.get_guardian_alltime,
+                   _api.get_guardian_trend, _api.get_guardian_sources):
+            got = fn()
+            assert isinstance(got, dict), f"{fn.__name__} 이 실패를 빈 목록으로 위장했다: {got!r}"
+            assert got.get("error"), f"{fn.__name__} 이 실패 사유를 안 준다: {got!r}"
+            assert got.get("measured") is False, f"{fn.__name__} 이 '측정됨' 이라고 주장한다"
+            assert not any(isinstance(v, int) and v > 0 for k, v in got.items()
+                           if k not in ("error",)), \
+                f"{fn.__name__} 이 실패인데 0 이상의 수치를 함께 준다: {got!r}"
+    finally:
+        _api._guardian_status_vocab = real
+    # 정상 경로는 여전히 측정값을 준다 (이 테스트가 실패만 보는 vacuous 검사가 아님)
+    ok = _api.get_guardian_stats()
+    assert ok.get("measured") is True and not ok.get("error")
+
+
+def test_학습_집계_실패도_0이_아니라_사유로_드러난다():
+    """★ `/api/learning` 의 두 칸이 실패를 조용히 0·빈배열로 적고 있었다.
+
+    `patterns_now={'count':0,'hits':0}` 은 화면에서 **'학습 자산 없음'(=전멸)** 으로,
+    `resolve_rate=[]` 는 **'해소 0건'** 으로 읽힌다. 실측 사고 이력이 정확히 그 형태다
+    (learned_patterns.json 이 48패턴 → 1패턴으로 줄어도 화면은 조용했다).
+    P2 가 guardian 4개 엔드포인트에서 고친 것과 **같은 병** 이라 같은 계약을 쓴다.
+    """
+    import api_server as _api
+
+    ok = _api.get_learning()
+    assert ok.get("patterns_now", {}).get("measured") is True, \
+        f"정상 경로가 '측정됨' 을 말하지 않는다: {ok.get('patterns_now')!r}"
+    assert "resolve_rate_error" not in ok, "정상인데 실패 사유가 붙었다"
+
+    from JARVIS07_GUARDIAN import pattern_fixer as _pf
+    real_pats, real_vocab = _pf.all_patterns, _api._guardian_status_vocab
+
+    def _boom(*a, **k):
+        raise RuntimeError("학습 원장을 못 읽는 상황 재현")
+
+    _pf.all_patterns = _boom
+    _api._guardian_status_vocab = _boom
+    try:
+        bad = _api.get_learning()
+    finally:
+        _pf.all_patterns, _api._guardian_status_vocab = real_pats, real_vocab
+
+    pn = bad.get("patterns_now") or {}
+    assert pn.get("measured") is False and pn.get("error"), \
+        f"학습 자산 조회 실패가 사유 없이 지나갔다: {pn!r}"
+    assert not any(isinstance(v, int) for k, v in pn.items() if k != "measured"), \
+        f"실패인데 수치를 함께 준다(0 으로 위장): {pn!r}"
+    assert bad.get("resolve_rate_error"), \
+        "자동해소율 조회 실패가 '빈 배열' 로 위장됐다"
+
+    # 화면도 그 사유를 읽어야 한다 — 서버만 고치면 사용자는 여전히 0 을 본다(③)
+    page = (_ROOT / "dashboard" / "app" / "learning" / "page.tsx").read_text(encoding="utf-8")
+    assert "resolve_rate_error" in page and "measured === false" in page, \
+        "대시보드가 실패 사유를 안 읽는다 — 화면은 그대로 0"
+
+
+def test_발행결손_어휘를_모르면_자동종결하지_않는다():
+    """★ ② fail-closed — 파생 실패가 **무음으로 T5 이전 동작** 이 되던 자리.
+
+    `_publish_gap_types()` 의 캐시 초기값이 빈 집합이고 실패를 `except: pass` 로 삼켜서,
+    첫 파생이 실패하면 `needs_human_attention()` 이 영구 False → `is_dismissable()` True
+    → `_park_non_code` 가 **발행 결손을 다시 `ignored` 로 자동 종결**했다.
+    빈 집합은 '해당 없음' 이 아니라 '**모른다**' 다.
+    """
+    import os
+    import sys as _sys
+    import types as _types
+
+    from JARVIS07_GUARDIAN import severity as _sv
+
+    # 정상 상태 먼저 — 어휘를 알면 종전대로 자동 종결이 가능해야 한다(양방향 확인).
+    assert _sv.publish_gap_types_effective() is True
+    assert _sv.is_dismissable("ConnectionError", "connection reset by peer", "radar") is True
+    gap = sorted(_sv._publish_gap_types())[0]
+    assert _sv.is_dismissable(gap, "발행 결손", "publish_ledger") is False, \
+        "발행 결손이 자동 종결 대상이 됐다 — T5 가 고친 동작이 되돌아갔다"
+
+    saved_mod = _sys.modules.get("JARVIS08_PUBLISH.publish_ledger")
+    saved_cache, saved_warn = _sv._PUBLISH_GAP_TYPES_CACHE, _sv._PUBLISH_GAP_WARNED
+    try:
+        _sys.modules["JARVIS08_PUBLISH.publish_ledger"] = _types.ModuleType("broken")
+        _sv._PUBLISH_GAP_TYPES_CACHE = frozenset()
+        _sv._PUBLISH_GAP_WARNED = False
+        assert _sv.publish_gap_types_known() is False
+        assert _sv.publish_gap_types_effective() is False, "프로브가 파생 실패를 못 본다"
+        # 핵심: 모르면 자동 종결하지 않는다 → `wontfix`(미해결 버킷)에 남는다
+        assert _sv.is_dismissable("ConnectionError", "connection reset by peer", "radar") is False, \
+            "어휘를 모르는데 '무시 가능' 이라고 답했다 — 조용히 종전 동작"
+        # 사람이 알 수 있는 신호도 남는다
+        legs = [b for b in _sv.selfcheck() if b.startswith("[P5]")]
+        assert legs, "파생 실패가 selfcheck 에 드러나지 않는다 — 무음 열화"
+        # 킬스위치로는 종전 동작 복귀 (라이브 안전판)
+        os.environ["GUARDIAN_HUMAN_ATTENTION"] = "0"
+        try:
+            assert _sv.is_dismissable("ConnectionError", "connection reset by peer", "radar") is True
+        finally:
+            os.environ.pop("GUARDIAN_HUMAN_ATTENTION", None)
+    finally:
+        if saved_mod is not None:
+            _sys.modules["JARVIS08_PUBLISH.publish_ledger"] = saved_mod
+        else:
+            _sys.modules.pop("JARVIS08_PUBLISH.publish_ledger", None)
+        _sv._PUBLISH_GAP_TYPES_CACHE, _sv._PUBLISH_GAP_WARNED = saved_cache, saved_warn
+
+
+def test_미해결_조회_실패가_수리0건으로_위장되지_않는다():
+    """★ ④ — 두 통로의 **유일한 문**이 실패를 debug 한 줄로 삼키던 자리.
+
+    `_collect_unresolved` 는 `self_heal_known_errors`·`deep_audit_backlog` 가 함께 쓴다.
+    그 안의 `db.list_unresolved` 는 새 컬럼을 WHERE 에서 직접 참조하고, 컬럼 추가는
+    마이그레이션의 무음 try/except 안에 있었다. 두 무음이 겹치면 "고칠 게 없음" 이라는
+    정반대 결론이 조용히 선다.
+    """
+    import logging
+    import sqlite3
+
+    from shared import db as _db
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+
+    reported: list = []
+    real_list = _db.list_unresolved
+
+    def _boom(*a, **k):
+        raise sqlite3.OperationalError("no such column: next_eligible_at")
+
+    import JARVIS07_GUARDIAN.error_collector as _ec
+    real_report = _ec.report
+    _ec.report = lambda *a, **k: reported.append((a, k))
+    _db.list_unresolved = _boom
+    try:
+        with _pytest_caplog_like() as records:
+            got = _ga._collect_unresolved(10)
+    finally:
+        _db.list_unresolved = real_list
+        _ec.report = real_report
+
+    assert got == [], "조회 실패인데 행을 만들어냈다"
+    assert any(r.levelno >= logging.WARNING for r in records), \
+        "실패가 WARNING 이상으로 안 남는다 — 데몬 로그 레벨에서 사라진다"
+    assert reported, "GUARDIAN 오류 기록으로 올리지 않았다 — 아무도 모른다"
+    assert reported[0][1].get("error_type") == "GuardianUnresolvedQueryFailed", \
+        "오류 타입이 뭉뚱그려졌다 (CLAUDE.md 세분화 규정)"
+
+
+class _pytest_caplog_like:
+    """루트 로거에 임시 핸들러를 달아 레코드를 모은다 (caplog 없이 쓰는 최소 도구)."""
+
+    def __enter__(self):
+        import logging
+        self._records: list = []
+        outer = self
+
+        class _H(logging.Handler):
+            def emit(self, record):
+                outer._records.append(record)
+
+        self._h = _H()
+        self._root = logging.getLogger()
+        self._lvl = self._root.level
+        self._root.addHandler(self._h)
+        self._root.setLevel(logging.DEBUG)
+        return self._records
+
+    def __exit__(self, *exc):
+        self._root.removeHandler(self._h)
+        self._root.setLevel(self._lvl)
+        return False
+
+
+def test_스키마_마이그레이션_실패가_보인다():
+    """★ ④ — `try: ALTER ... except: pass` 24벌이 **모든 실패** 를 삼키고 있었다.
+
+    '이미 존재' 만 정상이다. 그 외의 실패는 그 컬럼에 기대는 기능이 조용히 죽는다는 뜻.
+    """
+    import logging
+    import sqlite3
+
+    from shared import db as _db
+
+    class _DupConn:
+        def execute(self, ddl):
+            raise sqlite3.OperationalError("duplicate column name: x")
+
+    class _RealFailConn:
+        def execute(self, ddl):
+            raise sqlite3.OperationalError("no such table: nope")
+
+    with _pytest_caplog_like() as rec:
+        assert _db._add_column(_DupConn(), "ALTER TABLE t ADD COLUMN x TEXT") is True
+    assert not [r for r in rec if r.levelno >= logging.WARNING], \
+        "'이미 존재' 는 정상인데 경고를 냈다 — 진짜 신호가 묻힌다"
+
+    with _pytest_caplog_like() as rec:
+        assert _db._add_column(_RealFailConn(), "ALTER TABLE nope ADD COLUMN x TEXT") is False
+    assert [r for r in rec if r.levelno >= logging.WARNING], \
+        "진짜 마이그레이션 실패가 무음이다"
+
+
+def test_백오프_컬럼이_없어도_수리가_멈추지_않는다():
+    """★ ④ — 백오프는 *최적화* 다. 없으면 최적화만 포기하고 수리는 계속 돌아야 한다."""
+    import logging
+    from shared import db as _db
+
+    real = _db.column_exists
+    _db.column_exists = lambda t, c: False if c == "next_eligible_at" else real(t, c)
+    try:
+        with _pytest_caplog_like() as rec:
+            rows = _db.list_unresolved(3)
+    finally:
+        _db.column_exists = real
+    assert isinstance(rows, list), "컬럼 부재에 조회가 죽었다 — 수리가 0건이 된다"
+    assert [r for r in rec if r.levelno >= logging.WARNING], \
+        "컬럼 부재가 무음이다 — 마이그레이션 실패를 아무도 모른다"
+
+
+def test_반복_결론_알림만_억제되고_상태변화_알림은_안_억제된다():
+    """★ ③ — 재발 승격(T3)과 wontfix 선점이 겹쳐 만든 **우리 회귀**를 막는다.
+
+    시도 상한에 도달해 종결된 오류가 재발할 때마다 오케스트레이터가 끝까지 돌고
+    `llm_cap_reached` 를 쐈다(그 경로에 dedup 이 없었다). 종전에는 선점이 실패해
+    조용히 return 했으므로 이 폭주는 P1/T3 가 새로 만든 것이다.
+    억제는 **이미 있는 창**(`error_collector._in_cooldown`)만 쓴다 — 새 창·새 채널 금지.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+    rec = {"source": "s", "module": "m", "error_type": "CapT", "message": "m",
+           "severity": "low"}
+    # 반복 결론 — 두 번째부터 억제
+    assert _ga._notify_suppressed(rec, "llm_cap_reached") is False
+    assert _ga._notify_suppressed(rec, "llm_cap_reached") is True
+    # 상태가 바뀐 알림은 절대 억제하지 않는다 (진짜 신호를 지우면 안 된다)
+    for r in ("success", "failed", "critical_manual"):
+        assert _ga._notify_suppressed(rec, r) is False
+        assert _ga._notify_suppressed(rec, r) is False, f"{r} 알림이 억제됐다"
+    # 다른 오류는 별개로 센다 (키가 오류를 구분하는가)
+    other = dict(rec, error_type="OtherT")
+    assert _ga._notify_suppressed(other, "llm_cap_reached") is False
+    # 억제 창의 주인은 error_collector — 새 창을 만들지 않았는가
+    src = _code_only(inspect.getsource(_ga._notify_suppressed))
+    assert "_in_cooldown" in src, "기존 쿨다운을 안 쓰고 자체 창을 만들었다"
+
+
+def test_상한_소진_행은_재발해도_되살아나지_않는다():
+    """★ ③ — 폭주를 **원천**에서 끊는다 (쿨다운은 60초라 여기엔 안 닿는다).
+
+    ★ 왜 쿨다운만으로는 부족한가 (초판이 여기서 헛짚었다)
+      `catch()` 는 이미 같은 지문을 60초 창으로 걸러낸다(`_collect_error` 의 `_in_cooldown`).
+      그러니 `_orchestrate` 에 도달하는 재발은 **이미 60초 이상 떨어져 있다** — 같은
+      60초 창을 알림 앞에 한 겹 더 놓아도 한 통도 못 막는다. "코드는 있는데 한 번도
+      안 도는" 바로 그 형태다.
+    ★ 진짜 원인: 시도 상한을 다 쓴 행을 `_reopen_if_recurred` 가 `wontfix→new` 로 열고,
+      `try_claim_error` 가 그것을 선점해 오케스트레이터가 끝까지 돌았다. 그런데 되살려도
+      `list_unresolved` 의 상한 필터에서 빠지므로 **sweep 에는 아무 효과가 없다** —
+      효과는 오직 '텔레그램 한 통' 뿐이었다. 줄 게 없으면 되살리지 않는다.
+    """
+    from shared import db as _db
+    from JARVIS07_GUARDIAN import error_collector as _ec
+    from JARVIS07_GUARDIAN.architecture import MAX_LLM_ATTEMPTS as _cap
+
+    sent: list = []
+    import shared.notify as _notify
+    real_tg = _notify.send_tg
+    _notify.send_tg = lambda text, **k: sent.append(text)
+    try:
+        with _db.get_db() as con:
+            con.execute("INSERT INTO error_log (source, module, error_type, message, "
+                        "status, llm_attempts) VALUES ('p2flood','m.py','CapBurn','x',"
+                        "'wontfix',?)", (int(_cap),))
+            capped = con.execute("SELECT MAX(id) FROM error_log").fetchone()[0]
+            con.execute("INSERT INTO error_log (source, module, error_type, message, "
+                        "status, llm_attempts) VALUES ('p2flood','n.py','NameError',"
+                        "'name x is not defined','wontfix',0)")
+            fresh = con.execute("SELECT MAX(id) FROM error_log").fetchone()[0]
+        try:
+            for _ in range(5):
+                _ec._cooldown.clear()      # 60초 창을 비워 '충분히 떨어진 재발' 재현
+                _ec._reopen_if_recurred(capped, "p2flood", "CapBurn", "x", "m.py")
+            assert _db.get_error(capped)["status"] == "wontfix", \
+                "상한을 다 쓴 행이 되살아났다 — 되살려도 sweep 은 안 집는다(알림만 난다)"
+            assert not sent, f"상한 소진 행 재발에 알림이 {len(sent)}통 나갔다"
+
+            # 대조군: 시도 여유가 남은 행은 종전대로 재개되고 알림도 나가야 한다
+            _ec._cooldown.clear()
+            assert _ec._reopen_if_recurred(fresh, "p2flood", "NameError",
+                                           "name x is not defined", "n.py") is True
+            assert _db.get_error(fresh)["status"] == "new", "고칠 여지가 남은 행까지 막았다"
+            assert len(sent) == 1, "진짜 재발 신호까지 지웠다 — 과잉 억제"
+        finally:
+            with _db.get_db() as con:
+                con.execute("DELETE FROM error_log WHERE source='p2flood'")
+    finally:
+        _notify.send_tg = real_tg
+
+
+def test_상한_알림은_결론이_새로_났을_때만_나간다():
+    """★ ③ — 같은 결론을 재발 수만큼 반복하지 않는다. 판정은 **입장 시 상태**에서 파생."""
+    import inspect
+
+    from JARVIS07_GUARDIAN import guardian_agent as _ga
+    from JARVIS07_GUARDIAN.architecture import PARKED_STATUSES
+
+    body = _code_only(inspect.getsource(_ga._orchestrate))
+    assert "PARKED_STATUSES" in body, \
+        "상한 알림이 '이미 전달된 결론' 인지 보지 않는다 — 재발마다 같은 문장이 나간다"
+    assert set(PARKED_STATUSES), "파킹 버킷 어휘가 비었다"
+    # 새 플래그·새 저장소를 만들지 않았는가 (판정은 DB 상태 파생이어야 한다)
+    assert "_CAP_NOTIFIED" not in body and "cap_notified" not in body, \
+        "알림 여부를 별도 상태로 들고 있다 — 복사본을 진실로 믿는 형태"
+
+
+def test_프로브가_20초_폴링에서_떨어졌고_지표를_오염시키지_않는다():
+    """★ ⑤ — 관측이 관측 대상을 더럽히던 자리.
+
+    `verification_tag_effective()` 는 라이브 `error_log` 에 INSERT/UPDATE/DELETE 를 한다.
+    그런데 `/api/tokens`(대시보드 홈 **20초 폴링**)가 그것을 매번 불렀고, 삭제 전 창에
+    걸린 합성 행이 `guardian_slo()` 의 '검증된 코드수정' 에 그대로 합산됐다.
+    """
+    import inspect
+
+    import shared.token_usage as _tu
+    from JARVIS07_GUARDIAN.architecture import SYNTHETIC_SOURCES
+
+    # ① 캐시 — TTL 안에서는 다시 측정하지 않는다
+    calls = {"n": 0}
+    real = _tu._run_probes
+
+    def _counting():
+        calls["n"] += 1
+        return [("probe", True)]
+
+    _tu._run_probes = _counting
+    saved = dict(_tu._probe_cache)
+    try:
+        _tu._probe_cache["ts"], _tu._probe_cache["data"] = 0.0, None
+        for _ in range(5):
+            _tu._probes_cached()
+        assert calls["n"] == 1, f"폴링마다 프로브가 돌았다 ({calls['n']}회) — hot path 그대로"
+    finally:
+        _tu._run_probes = real
+        _tu._probe_cache.update(saved)
+    assert _tu.probe_ttl_sec() > 20, "TTL 이 폴링 주기(20초)보다 짧으면 캐시가 무의미하다"
+    # ★ '무배포 조정' 이 사실인가 — **호출 시점** 조회여야 노브가 재시작 없이 먹는다.
+    #   종전엔 모듈 레벨 상수라 import 시점에 굳었고, 그런데도 주석은 무배포라고 적었다.
+    import os as _os
+    _saved = _os.environ.get("TOKEN_PROBE_TTL_SEC")
+    _os.environ["TOKEN_PROBE_TTL_SEC"] = "31"
+    try:
+        assert _tu.probe_ttl_sec() == 31, "노브를 돌려도 TTL 이 안 바뀐다(로드 시점 캡처)"
+    finally:
+        if _saved is None:
+            _os.environ.pop("TOKEN_PROBE_TTL_SEC", None)
+        else:
+            _os.environ["TOKEN_PROBE_TTL_SEC"] = _saved
+
+    # ② 합성 행은 집계에서 배제된다 — 배제 조건의 주인은 한 곳.
+    #    ★ 절대값이 아니라 **델타** 를 본다: 같은 DB 를 다른 테스트도 쓰므로 절대값 단언은
+    #      실행 순서에 따라 흔들린다(=거짓 신호). 우리가 넣은 행이 숫자를 움직였는가만 묻는다.
+    from shared import db as _db
+    import api_server as _api
+    from JARVIS07_GUARDIAN.guardian_agent import guardian_slo
+
+    src = str(SYNTHETIC_SOURCES[0])
+
+    from JARVIS07_GUARDIAN import auto_repair as _ar
+    from JARVIS07_GUARDIAN import repair_history as _rh
+
+    def _snap():
+        # ③ — 집계 소비자를 **전부** 함께 본다. 한 곳만 막으면 다른 화면으로 샌다.
+        return (guardian_slo(30).get("verified_fixes_week", 0),
+                _db.get_error_stats(7).get("total", 0),
+                _api.get_guardian_alltime().get("total", 0),
+                _ar._real_llm_saved(),
+                len(_rh.history(days=30, limit=200)))
+
+    before = _snap()
+    with _db.get_db() as con:
+        for _ in range(3):
+            con.execute("INSERT INTO error_log (source, module, error_type, message, status, "
+                        "resolution, fixed_at, fixed_file) VALUES (?,?,?,?,?,?,"
+                        "strftime('%Y-%m-%dT%H:%M:%S','now','localtime'),'x.py')",
+                        (src, src, "SmokePollution", "합성", "fixed",
+                         "[verification=reproduced_gone] 합성"))
+    try:
+        after = _snap()
+        assert after == before, (
+            "합성 행이 집계를 움직였다 (검증된수정/오류통계/전체누적) "
+            f"{before} → {after}")
+        # 배제를 *끄면* 실제로 움직인다 — 이 검사가 비어 있지 않음을 증명한다
+        real_excl = _db.synthetic_exclusion_sql
+        _db.synthetic_exclusion_sql = lambda col="source": ""
+        try:
+            assert _snap() != before, "배제를 꺼도 숫자가 그대로 — 검사가 아무것도 안 본다"
+        finally:
+            _db.synthetic_exclusion_sql = real_excl
+    finally:
+        with _db.get_db() as con:
+            con.execute("DELETE FROM error_log WHERE source=?", (src,))
+
+    # ③ 식별자의 주인은 하나 — 프로브가 리터럴을 다시 들고 있지 않은가
+    from JARVIS07_GUARDIAN import error_fixer as _ef
+    psrc = _code_only(inspect.getsource(_ef.verification_tag_effective))
+    assert f"'{src}'" not in psrc and f'"{src}"' not in psrc, \
+        "프로브가 합성 소스명을 리터럴로 들고 있다 — 배제 조건과 갈라진다"
+
+
+def test_자기평가_점수는_점수의_꼴만_받는다():
+    """★ ⑧ — 축 이름 뒤 12자 이내의 **아무 정수나** 점수로 채택하던 정규식.
+
+    "학습 패턴 3개 등록" 이 `learning=3` 이 되어 `self_repair_runs.score_*` 에 저장됐다.
+    T5 가 화면에 '측정 안 함' 을 도입해도, 파서가 쓰레기를 만들면 그 값은 '측정된 것' 으로
+    들어가 화면을 다시 거짓말시킨다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN.auto_repair import (SELF_SCORE_AXES, _parse_self_scores,
+                                               _self_score_measurable)
+    junk = ("수정 파일: 3개\n학습 패턴 3개 등록\n품질 게이트 2건 통과\n"
+            "학습 데이터: 1204건 적재\n비전 문서 5개 확인")
+    got = _parse_self_scores(junk)
+    assert all(got[a] is None for a in SELF_SCORE_AXES), \
+        f"점수가 아닌 정수를 점수로 채택했다: {got}"
+
+    real = "  • 코드 품질: 7/10\n  • 학습 누적: 8/10\n  • 비전 정합 = 9\n다음 회차: 밴딧 정리"
+    got = _parse_self_scores(real)
+    assert (got["quality"], got["learning"], got["vision"]) == (7, 8, 9), \
+        f"진짜 점수를 놓쳤다 — 검사가 과도하게 좁다: {got}"
+    assert got["next"].startswith("밴딧")
+
+    assert _parse_self_scores("학습 12/10  품질: 99")["learning"] is None, "범위 밖을 받았다"
+
+    # 저장 경로: 계약이 점수를 못 내면 애초에 파싱하지 않는다 (DB 에 우연을 적지 않는다)
+    import JARVIS07_GUARDIAN.auto_repair as _ar
+    body = _code_only(inspect.getsource(_ar.run_auto_repair))
+    assert "_parse_self_scores" in body, "저장 경로가 파서를 안 쓴다 — 검사가 헛짚었다"
+    # ★ `_code_only` 는 토큰을 공백으로 이어 붙인다 → `f ( )` 형태로 나온다.
+    _i, _j = body.find("_self_score_measurable"), body.find("_parse_self_scores")
+    assert _i >= 0, "계약 게이트 없이 요약문에서 점수를 뽑아 DB 에 저장한다"
+    assert _i > _j, "게이트가 파싱 결과를 거르는 자리에 있지 않다(조건부 표현 뒤여야 한다)"
+    assert _self_score_measurable() in (True, False)
+
+
+def test_ERRORS_md_가_게이트_소비자를_정확히_적는다():
+    """★ ③ — 틀린 기록은 다음 사람의 조사 방향을 통째로 돌려놓는다.
+
+    [644] 는 `apply_stored_patches` 를 '발행 직전 sweep' 이라고 적었으나, 실측 호출자는
+    토요일 심층감사 한 곳뿐이다. 발행 직전은 `self_heal_known_errors → apply_fix` 다.
+    → **문서가 아니라 코드에서** 사실을 파생해 확인한다(문서만 고치면 또 어긋난다).
+    """
+    import ast
+    import warnings
+
+    root = _Path(__file__).resolve().parent.parent
+    callers: list[str] = []
+    scanned = 0
+    for f in root.rglob("*.py"):
+        rel = f.relative_to(root).as_posix()
+        if not is_scannable_source(f, root) or rel.startswith("tests/"):
+            continue
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                tree = ast.parse(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        scanned += 1
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
+                    and n.func.id == "apply_stored_patches":
+                callers.append(rel)
+    # ★ 스캔이 조용히 0건이 되지 않게 (초판이 `import ast` 누락 → 전 파일 skip → 초록).
+    assert scanned > 50, f"스캔한 파일이 {scanned}개뿐 — 검사가 사실상 비어 있다"
+    assert set(callers) == {"JARVIS07_GUARDIAN/auto_repair.py"}, \
+        f"호출자가 바뀌었다 — ERRORS.md [644] 정정문도 함께 갱신할 것: {sorted(set(callers))}"
+
+    # 그 호출자는 토요일 심층감사 잡이다 (스케줄도 코드에서 파생)
+    from JARVIS04_SCHEDULER.job_registry import DEFAULT_JOBS
+    deep = [j for j in DEFAULT_JOBS if j.get("id") == "j07_deep_audit"]
+    assert deep, "j07_deep_audit 잡이 사라졌다"
+    assert (deep[0].get("kwargs") or {}).get("day_of_week") == "sat", \
+        f"j07_deep_audit 이 더는 토요일이 아니다 — [644] 정정문도 함께 갱신할 것: {deep}"
+
+    md = (root / "JARVIS07_GUARDIAN" / "ERRORS.md").read_text(encoding="utf-8")
+    i = md.find("## [644]")
+    assert i >= 0, "[644] 항목이 사라졌다"
+    block = md[i:i + 4000]
+    assert "정정" in block and "self_heal_known_errors" in block, \
+        "[644] 의 오기 정정이 사라졌다 — 다음 사람이 토요일 잡을 들여다보게 된다"

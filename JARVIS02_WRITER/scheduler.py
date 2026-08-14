@@ -925,8 +925,10 @@ def _run_self_repair_phase(label: str) -> dict:
         _res = _sweep()
         code_changed = int(_res.get("fixed", 0))  # 코드 수정 건수 → 데몬 재시작 권장 판단
         elapsed = int(_time.time() - t0)
+        # ★ '무시' 안에 *사람 확인 대기* 가 섞여 있다 — 따로 보여야 사람이 다르게 행동한다.
         log(f"✅ [{label}] 발행 전 자체수리(Tier-1) 완료 ({elapsed}s, "
-            f"수리 {_res.get('fixed', 0)} / 보류 {_res.get('skipped', 0)} / 무시 {_res.get('ignored', 0)})")
+            f"수리 {_res.get('fixed', 0)} / 보류 {_res.get('skipped', 0)} / "
+            f"수리비대상 {_res.get('ignored', 0)}(사람확인 {_res.get('human', 0)}))")
         return {"ok": True, "elapsed_sec": elapsed, "code_changed": code_changed, "skip_reason": ""}
     except Exception as _e:
         elapsed = int(_time.time() - t0)

@@ -94,6 +94,11 @@ def build_oauth_env() -> dict[str, str]:
 #   바뀌면 비용이 조용히 $0.00 이 되고 금액 상한이 영원히 안 무는 구조였다.
 USAGE_SOURCE = "sdk_query"
 
+# ★ 쓰기범위 가드 노브 이름의 **주인은 `JARVIS07_GUARDIAN.sdk_tool_guard.MODE_ENV_KEY`** 다.
+#   여기 사본이 있는 유일한 이유는 위 fail-closed 탈출구 — 주인 모듈을 import 하지 못하는
+#   상황에서도 `off` 는 읽혀야 한다. 어긋남은 precommit `sdkwrite/knob-mismatch` 가 잡는다.
+_GUARD_MODE_ENV = "GUARDIAN_SDK_TOOL_GUARD"
+
 _PATCH_INSTALLED = False
 
 
@@ -245,6 +250,7 @@ def run_sdk_query(
     background: bool = False,
     extra_env: dict[str, str] | None = None,
     allowed_tools: list[str] | None = None,
+    disallowed_tools: list[str] | None = None,
 ) -> dict[str, Any]:
     """claude_code_sdk.query 동기 래퍼 — 모든 오류 통합 처리.
 
@@ -254,8 +260,15 @@ def run_sdk_query(
         "stdout":      수집된 텍스트,
         "stderr":      오류 요약,
         "elapsed":     초,
-        "error_kind":  None | "cli_not_found" | "timeout" | "auth_error" | "sdk_error",
+        "error_kind":  None | "cli_not_found" | "timeout" | "auth_error" | "sdk_error"
+                       | "deferred" | "guard_error",
       }
+
+    `disallowed_tools` (2026-08-14 T2 — 자율 수리 세션의 쓰기 범위를 *좁히는* 파라미터):
+      미지정이면 `JARVIS07_GUARDIAN.sdk_tool_guard` 가 보호 목록에서 **파생** 한다.
+      호출자가 명시하면 그것도 함께 건다(덮어쓰지 않는다 — 좁히는 방향으로만 합친다).
+      종전엔 이 파라미터가 아예 없어서 `bypassPermissions` 세션이 헌법 문서·오류 기록·
+      학습 원장·자기 브레이크 모듈까지 편집할 수 있었다.
 
     *호출자는 returncode 만 확인하면 됨* — MessageParseError / ProcessError /
     CLINotFoundError / TimeoutError 같은 라이브러리 내부 예외는 여기서 다 흡수.
@@ -278,6 +291,23 @@ def run_sdk_query(
         return {"returncode": -4, "stdout": "", "stderr": f"보류: {_sdk_why}",
                 "elapsed": 0.0, "error_kind": "deferred"}
 
+    # ★ 자율 세션 쓰기 범위 (2026-08-14 T2) — 경계를 *모르면 띄우지 않는다*(fail-closed).
+    #   판정·목록의 주인은 `JARVIS07_GUARDIAN.sdk_tool_guard` 하나다. 여기서는 묻기만 한다.
+    #   ★ 아래 `_GUARD_MODE_ENV` 한 벌이 더 있는 이유: **주인을 못 읽는 상황이 곧 이
+    #     탈출구가 필요한 상황** 이라 주인에게 물어볼 수가 없다. 두 값이 어긋나면
+    #     precommit `sdkwrite/knob-mismatch` 가 잡는다(사본을 두되 기계가 감시한다).
+    _guard: dict[str, Any] = {"mode": "off", "disallowed_tools": [], "env": {}}
+    try:
+        from JARVIS07_GUARDIAN.sdk_tool_guard import session_guard as _session_guard
+        _guard = _session_guard()
+    except Exception as _ge:                                # noqa: BLE001
+        if (os.getenv(_GUARD_MODE_ENV) or "").strip().lower() != "off":
+            log.error("[sdk_compat] 쓰기 범위 파생 실패 — 세션 미기동(fail-closed): %s", _ge)
+            return {"returncode": -3, "stdout": "",
+                    "stderr": f"guard_derivation_failed: {_ge}",
+                    "elapsed": 0.0, "error_kind": "guard_error"}
+        log.warning("[sdk_compat] 쓰기 범위 가드 off — 무가드 세션으로 진행")
+
     if not model:
         # 지연 import — shared.llm 이 이 모듈을 import 하므로 모듈 최상단은 순환.
         from shared.llm import model_id as _model_id
@@ -287,6 +317,8 @@ def run_sdk_query(
     env = build_oauth_env()
     if extra_env:
         env.update(extra_env)
+    # 가드 표식은 **마지막에** — 호출자가 extra_env 로 표식을 덮어 우회하지 못하게.
+    env.update(_guard.get("env") or {})
 
     t0 = _time.time()
     try:
@@ -309,6 +341,11 @@ def run_sdk_query(
             opts_kw["max_turns"] = max_turns
         if allowed_tools:
             opts_kw["allowed_tools"] = allowed_tools
+        # ★ 금지목록은 *합집합* — 호출자 명시분 + 가드 파생분(enforce 일 때만 채워진다).
+        #   observe 는 비어 있다: 무엇이 막힐지 먼저 보고 사람이 승격한다(T2 (4)).
+        _deny_tools = list(disallowed_tools or []) + list(_guard.get("disallowed_tools") or [])
+        if _deny_tools:
+            opts_kw["disallowed_tools"] = sorted(set(_deny_tools))
 
         # ★ 전역 하트비트 (사용자 박제 2026-07-06): 장시간 SDK 호출(auto_repair 심층감사 등)이
         #   메시지를 흘리는 동안 beat() → freeze 워치독이 정상 장시간 작업을 오탐 안 함.

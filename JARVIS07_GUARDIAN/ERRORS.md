@@ -14129,3 +14129,499 @@ CLAUDE_WRITER 「플랫폼 단위 실패 격리 — 한쪽 실패가 다른 쪽�
 4. **차단 판정은 추론이 아니라 실물 조회로.** "A 가 실패했으니 B 도 실패할 것" 은
    가설이다. 공유 자원을 직접 보면 되는데 보지 않으면, 맞는 날엔 티가 안 나고
    틀린 날엔 조용히 글 하나를 잃는다.
+
+---
+
+## [642] ✅ 해결 — `fixed` 라벨이 검증 증거와 무관했다: Tier-2 가 검증 판정을 버리고 리터럴을 찍었고, DB 의 first-wins 가 실패 사유로 성공 사유를 덮었다 (2026-08-14)
+
+**증상**
+① `error_log` 5,845행 중 `[verification=` 태그를 가진 행이 **0행**. 태그를 박는 코드는
+   2026-07-25 부터 있었다.
+② `status='fixed'` 인데 `resolution` 이 `"Tier-2 수정 실패/롤백 — 재시도 대기 (0/3)"`
+   인 행이 10건(#6026·#5973·#5972·#5967 …). 상태와 근거가 정면으로 어긋났다.
+③ Tier-2 성공 기록은 전부 `"Tier-2 SDK 수정 + 재현검증 통과"` — 실제 판정과 무관하게 같은 문장.
+
+**환경**
+`JARVIS07_GUARDIAN` Tier-1(`error_fixer.apply_fix`) · Tier-2(`auto_repair.run_auto_repair_targeted`
+→ `guardian_agent._try_sdk_targeted_fix`) · `shared.db.mark_error_status`.
+
+**원인** (셋이 겹쳤다 — 하나만 고치면 남는다)
+1. **판정이 함수 경계에서 증발**. `_verify_sdk_fix` 는 3값(`True`/`False`/`None`)을 내는데
+   `run_auto_repair_targeted` 는 **bool 만** 돌려줬다. 호출자는 그 bool 만 보고 사유를 지었다.
+2. **`True` 가 두 뜻을 겸했다**. `verify_fix` 가 `reproduced_gone` 을 줘도, `unverifiable`
+   (재현 프로브가 도는 오류 타입이 6종뿐이라 `RuntimeError` 계열은 애초에 검사 불가)을 줘도
+   똑같이 `True` 였다. 실트래픽 대부분이 후자인데 기록은 "재현검증 통과" 였다.
+3. **DB 의 first-wins**. `fixed` 분기가 `COALESCE(NULLIF(resolution,''), ?)` 라
+   재시도 중 남은 *실패* 사유가 나중의 *성공* 사유를 이겼다.
+   ※ 태그가 0행인 직접 원인은 따로다 — 태그를 쓰는 유일한 출구(`apply_fix` 성공 경로)가
+   3주간 한 번도 안 돌았고, 실제로 도는 출구(Tier-2)는 태그를 아예 안 남겼다.
+
+**헛다리** (다시 시도 금지)
+- "태그 코드가 버그라 안 찍힌다" — **아니다**. `apply_fix` 를 합성 오류로 끝까지 돌려 보니
+  태그는 정상적으로 남았다(`[verification=reproduced_gone] …`). 코드가 아니라 *경로* 가 문제였다.
+- "새 status(`unverified_patch`)를 만들자" — 파급을 실측하니 `api_server.py` 집계 6곳·
+  `repair_history`·`_collect_unresolved`·대시보드까지 번진다. status 는 그대로 두고
+  **resolution 이 정직하게 말하게** 하는 쪽이 blast radius 가 훨씬 작다.
+
+**해결**
+- `auto_repair._verify_sdk_fix(..., out=)` — 정본 검증 상태를 명시적 out 인자로 전달.
+  `verdict` 를 뭉개지 않고 **그대로** 흘린다(`reproduced_gone` ≠ `unverifiable`).
+- `auto_repair.run_auto_repair_targeted(..., out=)` — 반환 타입은 bool 유지(골든 테스트가
+  `fixed is False` 동일성을 보고, `incident_responder` 가 그 값을 dict 로 흘린다).
+- `guardian_agent.close_error()` **신설 — `fixed` 종결의 단일 출구**. 사유를 리터럴이 아니라
+  검증 상태에서 파생하고, 판정이 `still_reproduces` 면 **닫지 않는다**(fail-closed).
+  킬스위치 `GUARDIAN_CLOSE_STRICT=0` 으로 종전 문구 복귀.
+- `error_fixer.verification_tag()/verification_phrase()/verification_states()` — 태그 형식의
+  주인을 하나로. Tier-1·Tier-2 가 같은 문장을 쓴다.
+- `shared/db.py` — `fixed` 의 first-wins 폐기. `_fixed_resolution_sql()` 단일 병합 규칙
+  (새 사유가 앞 + 이전 기록은 뒤로 보존 + 같은 사유 반복 시 no-op). 길이 상한 `RESOLUTION_MAX`
+  를 이 파일이 단독 소유(종전 500/4000/무제한 3종 공존).
+- `error_fixer.verification_tag_effective()` — 표준 형태(`patch_effective`)의 동작 스모크.
+  합성 오류를 **두 출구에 실제로 통과**시켜 태그 생존을 판정하고, 합성 행은 삭제한다.
+
+**파일**
+`JARVIS07_GUARDIAN/auto_repair.py` · `JARVIS07_GUARDIAN/guardian_agent.py` ·
+`JARVIS07_GUARDIAN/error_fixer.py` · `shared/db.py` · `tests/test_publish_golden.py`
+
+**교훈**
+1. **판정을 계산해 놓고 반환하지 않으면 계산하지 않은 것과 같다.** `_verify_sdk_fix` 는
+   3주 동안 성실히 판정했고 그 결과는 전부 함수 안에서 죽었다.
+2. **불리언으로 접으면 뜻이 섞인다.** "롤백 안 함" 이 같다고 "검증 통과" 가 같은 것은 아니다.
+   접는 순간 호출자는 둘 중 *더 좋은 쪽* 으로 기록하게 된다.
+3. **태그를 박는 코드의 존재는 태그가 남는다는 증거가 아니다.** 0행을 발견한 것은 코드가
+   아니라 `SELECT` 였다. 그래서 이번엔 `verification_tag_effective()` 로 *통과시켜* 본다.
+4. **골든 테스트도 무의미해질 수 있다.** 종전 검사는 "근거 인자가 있는가" 만 봤고 그 인자가
+   리터럴이어도 통과했다. AST 로 `_res` 같은 변수를 보면 상수인지 알 수 없다 —
+   출구가 *파생 헬퍼를 실제로 부르는지* 로 바꿔야 뮤테이션에 걸린다.
+5. **관측이 대상을 더럽히면 안 된다.** 이 테스트를 처음 쓸 때 `apply_fix` 가
+   ERRORS.md 에 가짜 사고 5건을 적었다. conftest 의 격리(DB·pipeline_activity)는
+   `Path(__file__).parent` 로 경로를 직접 만드는 코드에는 닿지 않는다.
+
+---
+
+## [643] ✅ 해결 — 상태기계가 자기모순이었다: sweep 이 긁은 것을 선점기가 거부하고, 재발이 죽은 행에 흡수되고, 전역 예산이 건당 상한에 묶이고, 재시도에 종료조건이 없었다 (2026-08-14)
+
+**증상**
+① 재발한 `wontfix` 오류가 오케스트레이터 첫 문에서 조용히 사라진다. 로그에는
+   `"#N 이미 처리 착수됨(DB 선점 실패) — 중복 오케스트레이션 skip"` — **원인과 정반대** 문구.
+② `wontfix` 95건의 `seen_count` 합이 127. 재발 32건이 *종결된 행* 에 흡수돼
+   `seen_count` 만 조용히 올랐다. 아무 처리도 못 받았다.
+③ 오늘 지문 **1종** 이 6시간 10분 동안 하루 예산 3발을 통째로 독점(허용 3 / 차단 64).
+   그날 다른 어떤 오류도 자율 SDK 수리를 한 번도 못 받았다.
+④ `j07_retry_pending`(10분)이 같은 오류를 조건 없이 계속 집어 같은 차단 판정을 반복.
+
+**환경**
+`shared.db.{try_claim_error,save_error,list_errors}` · `JARVIS07_GUARDIAN.{architecture,
+guardian_agent._collect_unresolved/job_retry_pending, repair_budget.record_attempt}`.
+
+**원인** — 넷이 **같은 뿌리**다: *같은 판단을 두 곳이 각자 적었다*.
+1. **상태 집합 자기모순**. `try_claim_error(from_statuses=("new","ignored"))` 인데
+   `_collect_unresolved` 는 `("new","wontfix")` 를 모았다. 교집합이 아니라 **어긋난 집합** —
+   긁어온 것을 선점할 수 없었다. 두 곳이 목록을 각자 들고 있었기 때문이다.
+2. **재발이 죽은 행에 흡수**. `save_error` 의 dedup 은 병합하며 `timestamp` 를 now 로
+   갱신한다 → 재발이 계속 들어오는 한 그 행은 1시간 창을 **영원히** 못 벗어난다.
+   상태가 이미 `wontfix`/`ignored` 여도 마찬가지였다.
+3. **직교하는 두 축을 한 상수로**. `SDK_REPAIR_DAILY_CALLS = MAX_LLM_ATTEMPTS`.
+   "새 숫자를 만들지 않는다" 는 뜻이었지만 *문제 하나에 주는 시도 수* 와 *시스템 전체가
+   하루에 쓰는 세션 수* 는 다른 것이다. **②동적 설계는 '같은 것' 을 두 번 적지 말라는
+   뜻이지, 다른 것을 한 이름으로 묶으라는 뜻이 아니다.**
+   같은 파일에서 `MAX_LLM_ATTEMPTS = 3` 은 리터럴이었는데 바로 위 주석은
+   "harness.DEFAULT_MAX_ATTEMPTS(SSOT, 현재 2회)" 라고 적혀 있었다 — 계약 드리프트.
+4. **백오프 부재**. 게이트는 일시적 사유(쿨다운·예산)일 때 status 를 일부러 안 건드린다
+   (`new` 로 남아야 회수되니까). 그런데 "언제부터 되는지" 를 아무도 안 남겨서,
+   다시 오는 쪽은 10분마다 문을 두드릴 수밖에 없었다.
+
+**헛다리** (다시 시도 금지)
+- "`job_retry_pending` 도 시도 상한으로 걸러야 ③원칙이다" — **아니다. 그러면 누수가 생긴다.**
+  그 스윕은 재시도 통로이자 **배수구** 다. 마지막 Tier-2 실패 직후의 행은
+  `status='new'` + 상한 도달 상태로 남고(`_try_sdk_targeted_fix` 는 *직전 스냅샷* 으로
+  판단하고 `bump_llm_attempts` 는 그 뒤에 돈다), 그것을 `wontfix` 로 닫아 주는 것이
+  바로 다음 회차의 그 루프다(LLM 0회). 여기서 상한으로 걸러 버리면 그 행은 **영원히 `new`** —
+  심층 감사도 상한으로 빼므로 아무도 안 보고, 대시보드 '신규' 만 영구히 부풀고,
+  종결 사유도 안 남는다. 실제로 그렇게 만들었다가 되돌렸다(골든 테스트에 박제).
+- "새 status(`retry_waiting`)나 새 잡·새 큐를 만들자" — 불필요. `next_eligible_at`
+  nullable 컬럼 하나 + **읽는 쪽 한 곳**의 조건이면 끝난다. status 신설은 집계 6곳·
+  대시보드까지 번진다([642] 에서 이미 같은 결론).
+- "백오프 킬스위치를 쓰는 쪽에 달자" — 이미 기록된 미래 시각이 남아 노브를 꺼도 계속
+  막힌다. **읽는 쪽** 에 달아야 진짜 '종전 동작 복귀' 가 된다.
+
+**해결**
+- `architecture.py` — 상태 어휘를 단일 소유. `UNRESOLVED_STATUSES` → `CLAIMABLE_STATUSES`
+  (상위집합) → `REOPENABLE_STATUSES` 를 **파생** 으로 못 박아, 수집해 놓고 선점 못 하는
+  조합이 다시 생길 수 없게 했다. `MAX_LLM_ATTEMPTS` 는 `harness.DEFAULT_MAX_ATTEMPTS`
+  에서 실제로 파생(3→2, 주석이 주장하던 값과 일치). `SDK_REPAIR_DAILY_CALLS` 는 축을
+  분리하되 **기본값 3 유지**(과거 $81 사고를 막은 값 — 축 분리는 상한 완화가 아니다).
+- `shared/db.py` — **공개 단일 질의** `list_unresolved()` 신설. 상태·상한·백오프를 전부
+  SQL 한 곳에서 처리해 *거르고 나서 자른다*(종전은 LIMIT 이 먼저라 창 밖 항목을 아무도
+  못 봤다). `try_claim_error` 기본값·`_llm_attempt_cap` 은 주인에서 파생.
+  `next_eligible_at` nullable 컬럼 + `set_error_backoff(id, 초)`.
+- `error_collector._reopen_if_recurred()` — dedup 병합 직후, 종결 버킷에 재발이 들어왔고
+  `severity.is_transient()` 가 False(=코드 버그)면 `new` 로 승격 + 1회 알림(**기존 쿨다운**
+  재사용). `llm_attempts` 는 건드리지 않아 상한은 그대로 걸린다.
+  *신규 INSERT 는 반드시 `status='new'`* 라는 스키마 사실에서 "병합이었나" 를 파생 —
+  `save_error` 반환 계약을 바꾸지 않았다.
+- `repair_budget.next_eligible_sec()` — 백오프 길이를 **게이트가 이미 아는 값** 에서 파생
+  (쿨다운 잔여 / 창 안 가장 오래된 허용 세션이 빠지는 시각). 새 상수 0개.
+- 킬스위치: `GUARDIAN_WONTFIX_PROMOTE=0` · `GUARDIAN_RETRY_BACKOFF=0` (둘 다 함수 안 `os.getenv`).
+
+**파일**
+`JARVIS07_GUARDIAN/architecture.py` · `shared/db.py` · `JARVIS07_GUARDIAN/error_collector.py` ·
+`JARVIS07_GUARDIAN/repair_budget.py` · `JARVIS07_GUARDIAN/guardian_agent.py` ·
+`tests/test_publish_golden.py`
+
+**교훈**
+- **어긋난 집합은 빈 집합보다 나쁘다.** 없으면 눈에 띄지만, 어긋나면 *정반대 사유의 로그* 를
+  남기며 조용히 동작한다("이미 처리 착수됨" 이 실제로는 "아무도 손댈 수 없음" 이었다).
+- **②동적 설계를 '숫자 줄이기' 로 오독하면 축이 붙는다.** 파생은 *같은 것* 일 때만 파생이다.
+  서로 다른 것이 우연히 같은 값이면 그것은 파생이 아니라 우연이고, 언젠가 한쪽을 못 움직인다.
+- **③원칙은 "모든 통로에 같은 필터" 가 아니라 "모든 통로가 같은 문"** 이다. 통로마다 역할이
+  다르면(재시도 vs 배수구) 필터는 달라야 한다 — 대신 그 차이가 **문 앞에서 명시** 돼야 한다.
+
+---
+
+## [644] ✅ 해결 — 패치 적용에 트랜잭션이 없었다: 고정 `.bak` 한 칸을 여럿이 나눠 쓰고, "고쳤다" 의 근거가 `ast.parse` + import 1회였다 (2026-08-14)
+
+**증상**
+- 같은 파일을 겨눈 5스레드 동시 도달이 오늘 3회 관측. 그 조건에서 원본이 사라질 수 있는데
+  **양쪽 다 로그엔 "롤백 완료" 를 남긴다** — 조용한 파손.
+- 자동수정이 "성공" 으로 기록되는 근거가 *파일이 깨지지 않았다* 뿐이었다. 저장소에 있는
+  스위트(522개·70초)는 수리 경로에서 **한 번도 돌지 않았다**(CI 에서만 돌았다).
+
+**환경**
+`JARVIS07_GUARDIAN/error_fixer.py` (`apply_patchset`/`rollback_patchset`/`_backup`),
+소비자 2곳: `apply_fix`(Tier-1·Tier-2) · `pattern_fixer.apply_stored_patches`.
+
+> ★ 2026-08-14 정정 (P2 감사) — 위 괄호에 **`apply_stored_patches`(발행 직전 sweep)** 라고
+> 적었던 것은 **사실이 아니다**. 실측 호출자:
+>   · `apply_stored_patches` ← `auto_repair.run_auto_repair` 의 `_step_pre_patch`
+>     **한 곳뿐** (= `j07_deep_audit`, **토요일 03:00** 심층감사. 매일도 04:30 도 아니다)
+>   · **발행 직전 sweep** 은 `JARVIS02_WRITER/scheduler.py:924`
+>     → `guardian_agent.self_heal_known_errors` → `error_fixer.apply_fix`
+>     → `apply_patchset` 경로다.
+> 왜 남기나: 이 오기를 믿으면 "발행이 느리다" 를 조사하는 다음 사람이 토요일에만 도는
+> 함수를 들여다보게 된다. 틀린 기록은 없느니만 못한 게 아니라 **적극적으로 해롭다** —
+> 조사 방향을 통째로 돌려놓는다. (같은 오기가 코드 주석 2곳에도 있었고 함께 고쳤다:
+> `error_fixer.py` 의 "매일 04:30 auto_repair 가 호출", `pattern_fixer.py` 의
+> "매일 04:30 전수 재적용".)
+
+**원인**
+1. **배타 0** — 파일 전체에 Lock/RLock/Semaphore 정의가 0개. `_backup` 은 `<파일>.bak`
+   **고정 단일 슬롯**이라 두 시도가 겹치면 뒤엣것이 앞엣것의 백업을 덮는다.
+2. **`json_store.locked` 는 스레드를 못 막았다** — 재진입 판정 키가 '경로' 뿐이라 스레드 A 가
+   보유 중일 때 **스레드 B 가 `depth>0` 을 보고 자기 것으로 착각해 그냥 통과**했다.
+   flock 은 프로세스 경계용이고 같은 프로세스의 fd 를 공유하므로 스레드는 원래 못 막는다.
+   즉 이 함수에는 스레드 배타가 **하나도 없었다**(있다고 믿고 쓴 소비자만 있었다).
+3. **검증 게이트 0** — import 1회가 전부. `auto_repair` 에는 ci.yml 에서 명령을 파생하는
+   `_ci_gate_failures` 가 이미 있었지만 *그 함수 안에만* 있었고 수리 경로는 몰랐다.
+4. **검증 없는 확장자** — `_ALLOW_EXT` 에 `.sh` 가 있는데 구문검사조차 없이 착지했다.
+   그 목록에 `restart_daemon.sh` 가 들어간다 = 깨지면 재시작 자체가 불가능해진다.
+
+**헛다리** (다시 시도 금지)
+- "`apply_patchset`/`rollback_patchset` 을 락으로 감싸면 끝" — **아니다. 합성 2스레드로
+  실측했더니 그대로 깨졌다.** 트랜잭션은 apply(락) → 재현검증(**락 밖**, 최대 25초) →
+  rollback(락) 이라 가운데 창이 열려 있다. 그 창에 들어온 쪽의 백업에는 *먼저 온 쪽의 패치* 가
+  '원본' 으로 담긴다: `B적용(bak=원본) → A적용(bak=B의 패치) → B롤백(원본) → A롤백(B의 패치)`
+  → 최종 파일에 B 의 패치가 남는다. 락 범위를 넓히는 대신 **전제(원본)를 재검사** 해야 한다.
+- "롤백 직전에 '내가 쓴 내용인가' 를 보면 된다" — 늦다. 그 시점엔 이미 남의 패치를 원본으로
+  박제한 뒤라, 검사에 걸려도 되돌릴 곳이 없다. 검사는 **쓰기 전** 에 있어야 한다.
+- "게이트를 fail-closed 로 두면 안전" — 스위트가 이미 빨간 날 **모든 자동수리가 조용히
+  멈춘다**. 이 저장소가 가장 경계하는 형태다. 판별 불가와 실패는 다른 상태다.
+- "`.sh` 에 `bash -n` 을 붙이자" — 문법이 맞는 스크립트도 재시작을 망가뜨린다. 실사용
+  이력상 이 자동 경로로 `.sh` 가 적용된 적이 **한 번도 없다**(학습 원장 85건 전부 `.py`/`.json`,
+  `error_log.fixed_file` 4,729행 중 `.sh` 2행은 둘 다 *사람의 수동 수정 기록*). 닫는 게 맞다.
+- "게이트가 띄운 자식은 패치락을 잡지 말자(부모-자식 교착 방지)" — **내가 실제로 넣었다가
+  스텁 없는 e2e 스모크에서 잡혔다.** 그 자식 안에서 도는 동시성 골든 테스트가 배타 없이 돌아
+  실패하고, 그 실패가 곧 '기준선도 빨감 → 게이트 무력' 판정이 되어 **게이트가 스스로를
+  무력화**했다(텔레그램 경보까지 실제로 나갔다). 배타를 노브로 끄면 그 배타를 검증하는
+  테스트도 함께 꺼진다. 교착은 락 경로가 백업 폴더에서 파생되는 것으로 이미 해결돼 있었다
+  (테스트 세션은 `GUARDIAN_PATCH_BACKUP_DIR` 가 임시 경로라 부모와 다른 락 파일을 쓴다).
+
+**해결**
+- `json_store.locked` — 재진입 키를 `(스레드, 경로)` 로 바꾸고 **경로별 `threading.Lock`** 을
+  flock 앞에 세웠다. yield 값 = *스레드락 ∧ 파일락* (소비자가 진행/보류를 이 값으로 정한다).
+  새 락 구현을 만들지 않고 이미 있는 단일 진입점을 고쳤다(①).
+- `error_fixer._backup` — 시도마다 다른 슬롯(`<경로>.<시각>-<pid>-<tid>-<seq>.bak`) +
+  전용 폴더 `JARVIS07_GUARDIAN/_backup_patches/`(`.gitignore` 기존 규칙에 이미 걸린다).
+  경로의 주인은 `patch_backup_dir()` 하나 — `shared/file_cleanup._rules()` 가 거기서 받아
+  14일 보존을 건다(경로를 두 곳에 적지 않는다). 롤백에 **성공** 하면 그 백업은 그 자리에서 지운다.
+- `error_fixer._backup_all` — ★ **원본 재확인**(선검사 때 읽은 내용과 다르면 아무것도 쓰지 않고
+  `REJ_STALE` 로 후퇴). 락으로 못 막는 창을 이 전제 검사가 막는다. 겹친 쪽은 벌점 없이 물러나고
+  다음 스윕이 새 원본으로 다시 만든다(`NO_BLAME_REJECTS` = 백업실패·락·원본변경).
+- `error_fixer.ci_gate_failures` — **검사의 주인을 여기로 이관**(①). `auto_repair` 의 중첩
+  함수는 이제 이것을 부르기만 한다. 명령은 `.github/workflows/ci.yml` 에서 파생(②).
+  `apply_patchset` 은 import 검증 **다음** 에 이 게이트를 돌리고, 실패하면 기존
+  `rollback_patchset` 으로 전량 롤백한다.
+- **게이트 self-check** — 실패 시 롤백한 *기준선* 에서 한 번 더 돌려 본다. 기준선도 빨가면
+  판별 불가 → 패치를 복원해 통과시키되 `_notify_gate_blind` 로 텔레그램 경보(억제 창은
+  `repair_budget._cooldown_sec()` 파생, 판정은 오류 장부 조회라 프로세스 경계를 넘는다).
+- **재귀 차단** — 게이트가 띄운 자식에 `GUARDIAN_GATE_INSIDE=1`. 그 프로세스와 pytest 실행
+  중에는 게이트도 트랜잭션 락도 잡지 않는다(안 그러면 스위트가 스위트를 부르고, 자식이 부모
+  락을 기다려 게이트 타임아웃까지 통째로 정지한다).
+- `_ALLOW_EXT` 에서 `.sh` 제거. 죽은 `_rollback`(실패를 삼키던 옛 버전) 삭제.
+- 킬스위치: `GUARDIAN_TEST_GATE=0` · `GUARDIAN_PATCH_LOCK=0` (둘 다 함수 안 `os.getenv`).
+
+**파일**
+`JARVIS07_GUARDIAN/error_fixer.py` · `JARVIS07_GUARDIAN/json_store.py` ·
+`JARVIS07_GUARDIAN/auto_repair.py` · `shared/file_cleanup.py` · `tests/conftest.py` ·
+`tests/test_publish_golden.py`
+
+**교훈**
+- **"락을 걸었다" 와 "임계구역을 덮었다" 는 다른 말이다.** 트랜잭션이 함수 경계를 넘어
+  이어지면(apply → 검증 → rollback), 함수마다 잡는 락은 가운데를 열어 둔다. 그 창을
+  못 닫을 땐 **전제를 다시 검사** 하는 편이 락 범위를 늘리는 것보다 싸고 정확하다.
+- **재진입 판정 키를 잘못 잡으면 락이 정확히 반대로 동작한다.** '이미 보유' 판정이 남의
+  보유까지 자기 것으로 세면, 경합이 심할수록 더 잘 통과한다.
+- **검증은 소비자의 경로를 그대로 재현해야 한다** — `ast.parse`+import 는 우리가 겪는 실패의
+  형태가 아니었다. CI 가 이미 정의해 둔 검사를 *그대로* 돌리면 정의를 새로 만들 필요가 없다.
+
+---
+
+## [645] 계기판 3개가 죽은 채 초록불이었다 — 그리고 "되돌렸다"는 사실만 사람에게 안 갔다
+
+**증상**
+- 대시보드 `/learning` 의 "오류 — LLM 없이 해결" KPI 는 `—`, 차트는 빈 칸.
+  텔레그램 `학습 추세` 블록은 **아예 안 나왔다**(무음 = 문제 없음처럼 보인다).
+- 텔레그램 학습 추세가 `품질 점수: 0 → 0 (0)/10` 을 매번 **점수처럼** 보고.
+- 대시보드 "자동수정" 누적이 300건. 실제 `fixed` 는 115건.
+- 자가수정이 재현검증 실패로 **롤백**해도, CI 게이트에 걸려도, SDK 가 timeout 나도
+  사람에게 가는 통보가 0건(로그만).
+- 발행 결손(`PublishGap*`)이 발생 즉시 `ignored` 로 자동 종결 — 아무도 다시 안 봤다.
+
+**환경** 2026-08-14 / feat/hj / `self_repair_runs` 106행 · `error_log` 5,852행
+
+**원인**
+1. `self_repair_runs.llm_saved_1d` **106/106 NULL**. 칸과 배선은 커밋 `152b2f9`
+   (2026-08-08 17:06)에서 생겼는데 마지막 회차는 같은 날 **03:04** — 14시간 **먼저**였다.
+   기록 주체 `j07_deep_audit` 는 주 1회(토 03:00)라 그 뒤로 한 번도 안 돌았다.
+   여기까지는 시간 문제인데, 진짜 결함은 `_learning_trend_brief()` 의
+   `WHERE llm_saved_1d IS NOT NULL` 이었다 — **한 지표가 미측정이면 블록 전체가 사라진다.**
+   그래서 "지표 하나 미측정" 이 "학습 추세 보고 전체 무음" 으로 번졌다.
+2. `auto_repair._parse_self_scores` 는 `{"quality":0,"learning":0,"vision":0}` 을
+   **무조건** 돌려주는 스텁이다(저장소 최초 커밋부터). 게다가 SDK 요약 계약
+   (`---REPAIR-SUMMARY---`)에 점수 항목이 **아예 없다** — 구조적으로 측정 불가인데
+   화면엔 0점이 찍혔다. **0 은 '나쁨' 이고 None 은 '모름' 이다.**
+3. `resolved` 상태는 **쓰는 코드가 저장소 전역 0곳**(grep 실측)인데 api_server 4곳이
+   `status IN ('fixed','resolved')` 로 '자동수정 성공' 에 합산했다. 185행 전부
+   2026-05-12~06-07 구간의 옛 기록이고 최근 30일 0건 — 화면 숫자의 **62%가 유령**.
+4. `auto_repair._send_tg` 는 `log.info` 한 줄 스텁(`# 텔레그램 알림 비활성 (사용자 박제)`).
+   성공 보고까지 다 열려 있던 종전 소음 때문에 사용자가 끈 것이라 **되살리면 안 된다**.
+   그러나 그 결과 롤백·CI게이트·timeout 처럼 *사람이 모르면 다음 발행까지 그대로 가는*
+   사건까지 함께 묻혔다.
+5. `severity.is_transient()` 하나가 **서로 다른 두 질문**에 같은 답을 강요했다 —
+   ① "코드로 못 고치는가"(수리 비대상) ② "사람도 볼 필요 없는가"(재조회 비대상).
+   세 소비자(`_orchestrate`·`self_heal_known_errors`·`deep_audit_backlog`)가 ①만 보고
+   `ignored` 로 닫았고, `ignored` 는 `UNRESOLVED_STATUSES` 밖이라 ②까지 함께 닫혔다.
+   실측 `PublishGap*` 29건 중 18건이 `ignored`. 캡차도 같은 부류였다
+   (`_login_human_required_types()` 가 그 개념을 이미 갖고 있었는데 **종결 단계까지
+   전달되지 않았다**).
+
+**헛다리**
+- "알림이 전부 끊겼다" — **틀렸다.** `guardian_agent._notify_all` 과
+  `JARVIS08_PUBLISH/publish_ledger` 는 실제로 텔레그램을 보낸다. 무음인 것은
+  `auto_repair` 의 **세 사건뿐**이다. 알림 채널을 새로 만들 이유가 없었다.
+- "`publish_gap` 은 알림 문제다" — **아니다.** 텔레그램은 이미 나가고 있었다.
+  문제는 *상태* 였다(발생 즉시 종결돼 재조회 대상에서 빠짐).
+- "`llm_saved_1d` 배선이 끊겼다" — **아니다.** 배선은 맞다. 칸이 마지막 회차보다
+  늦게 생겼을 뿐. 배선을 고치려다 멀쩡한 코드를 건드릴 뻔했다.
+- ③원칙을 "모든 통로에 같은 *필터*" 로 읽는 것 — 아니다. `_park_non_code` 는 같은 **문**
+  이지 같은 결론이 아니다(같은 문을 지나되 버킷은 오류마다 다르다).
+
+**해결**
+- `severity.needs_human_attention()` / `is_dismissable()` 신설 — 두 질문을 쪼갰다.
+  목록은 박지 않는다: 로그인은 `_login_human_required_types()`(login_manager 파생),
+  발행결손은 `publish_ledger.publish_gap_error_type()` × 기대집합 파생. 새 플랫폼·새
+  글종류가 생기면 타입이 자동으로 따라온다. 킬스위치 `GUARDIAN_HUMAN_ATTENTION=0`.
+- `guardian_agent._park_non_code()` 신설 — 세 통로가 쓰는 **한 문**(①③). 종결 가능하면
+  `ignored`, 사람이 봐야 하면 `wontfix`(= `UNRESOLVED_STATUSES` 안이라 계속 보인다).
+  둘 다 Tier-1·Tier-2 를 태우지 않는다.
+- `architecture.{STATUS_FIXED,FIXED_STATUSES,LEGACY_STATUSES,ALL_STATUSES}` 신설.
+  `api_server` 는 `_guardian_status_vocab()` 으로 **파생**해 쓰고 `resolved` 는
+  `legacy` 라는 자기 칸으로 분리(행은 지우지 않는다 — 총계엔 남는다).
+- `auto_repair._parse_self_scores` — 진짜 파서로 교체, 없으면 `None`.
+  `_save_run_to_db` 는 NULL 로 저장(0 을 박지 않는다).
+  `_self_score_measurable()` 은 **프롬프트 계약을 실제 파서에 한 번 통과시켜** 판정한다
+  (`patch_effective()` 표준 형태) — 계약에 점수가 추가되면 자동으로 따라온다.
+- `_learning_trend_brief` — `IS NOT NULL` 제거, 지표별 `_delta_line()` 이
+  **측정된 회차끼리만** 빼고 없으면 `측정 안 함` 이라고 *말한다*.
+- `_send_tg(msg, *, kind=)` — 사용자 박제를 **뒤집지 않는다**. 노브 `GUARDIAN_REPAIR_TG`
+  기본 OFF, 켜도 `_TG_KINDS`(rollback·ci_gate·timeout) 3종만. dedup 은 새로 만들지 않고
+  `error_collector._in_cooldown`+`_cool_key` 재사용(`repair_budget._notify_once` 를 직접
+  부르지 않는 이유: 그쪽은 예산 장부에 묶여 있어 태우면 `_allowed_calls_24h` 가 오염된다).
+- `guardian_agent.guardian_slo()` / `slo_lines()` — 지표 3개(검증된 코드수정/주 · 재발률 ·
+  밴딧 경과시간). **임계는 최근 30일 실측 분포 백분위에서 파생**하고 표본이 모자라면 내지
+  않는다. 기본은 **경보 없이 값만**; 발효는 `GUARDIAN_SLO_ALERT=1` 로 사람이 켠다.
+- 대시보드는 카드를 늘리지 않고 기존 카드에 `note`/`sub` 한 줄만 붙였다.
+
+**파일**
+`JARVIS07_GUARDIAN/{severity.py, guardian_agent.py, auto_repair.py, architecture.py}` ·
+`api_server.py` · `dashboard/app/{learning,errors}/page.tsx` · `dashboard/lib/api.ts` ·
+`tests/test_publish_golden.py`
+
+**교훈**
+- **무음은 초록불처럼 보인다.** 한 지표가 미측정이라고 보고 블록 전체를 감추면,
+  "측정 안 함" 이 "문제 없음" 으로 읽힌다. 모르면 **모른다고 써야** 한다.
+- **0 과 None 을 한 칸에 넣지 마라.** 기본값 0 을 쓰는 스텁은 화면에서 점수와 구분되지
+  않는다. 측정 가능 여부는 *추측하지 말고 계약을 통과시켜 판정* 할 것.
+- **쓰는 코드가 없는 상태를 집계에 넣지 마라.** 어휘의 주인을 한 곳(`architecture`)에
+  두고 파생하면, 어휘가 죽었는지 살았는지가 grep 한 번으로 판정된다.
+- **한 함수가 두 질문에 답하고 있으면 소비자는 둘 중 하나를 반드시 잘못 쓴다.**
+  "코드로 못 고침" 과 "사람도 볼 필요 없음" 은 다른 말이다. 쪼개는 순간
+  `publish_gap`·캡차가 제자리를 찾았다.
+- **사용자가 끈 알림을 되살리지 말고 노브를 달아라.** 기본 OFF 로 두면 결정은 존중되고,
+  필요할 때 사람이 켤 수 있다.
+
+---
+
+## [646] ✅ 해결 — 자율 수리 세션이 *자기 안전장치까지* 쓸 수 있었다: 금지목록 파라미터가 아예 없었다 (2026-08-14)
+
+**증상**
+- GUARDIAN 자가수리(`auto_repair`)의 Claude Code SDK 세션 2곳이 `permission_mode="bypassPermissions"`
+  로 뜨면서 **도구 허용·금지 목록을 하나도 넘기지 않았다.**
+- 그 결과 수리 세션이 `error_fixer` 보호목록의 파일을 실제로 편집했다 (live DB 실측,
+  `source='auto_repair'`): `CLAUDE.md`·`JARVIS06_IMAGE/CLAUDE.md`·`JARVIS07_GUARDIAN/ERRORS.md`·
+  `learned_patterns.json` 등 14행. 보호목록 파일 전체로는 `AutoRepairFix` 10건 +
+  `ConstitutionPinning` 2건.
+- 자기 브레이크(`repair_budget.py`)·변경 감사 훅(`record_claude_change.py`)·부팅 점검
+  (`preflight.py`)은 **어느 목록에도 없었다** — 고치면 다음 회차의 제동 능력이 사라지는데도.
+
+**환경** 2026-08-14 / feat/hj / `shared/claude_sdk_compat.run_sdk_query` · `JARVIS07_GUARDIAN/auto_repair.py`
+
+**원인**
+1. `run_sdk_query` 시그니처에 **금지목록 파라미터 자체가 없었다.** 호출자가 좁히고 싶어도
+   걸 방법이 없었다 — "안 걸었다" 가 아니라 "못 걸었다".
+2. `error_fixer._safe_path`(결정론적 패치 관문)에는 보호목록이 있었지만, 그것은 *패치 적용*
+   경로에만 걸린다. **SDK 세션은 그 관문을 지나지 않는다** — 자기가 직접 파일을 쓴다.
+   같은 규정이 한 통로에만 걸려 있던, 이 저장소의 반복 형태(③위반).
+3. 도구 이름만 막아도 부족하다: 셸로 우회된다. 실제로 수리 세션이 `rm` 으로 백업 파일을
+   지운 이력이 있다.
+
+**헛다리**
+- "보호목록을 훅에 복사해 두면 된다" — 목록이 두 벌이 되는 순간 한쪽이 낡는다. 실제로
+  `auto_repair._snapshot_py_files` 가 자기 목록을 갖고 있다가 학습 자산을 빠뜨린 전례가 있다
+  ([2026-08-08]). 훅은 **판정도 목록도 갖지 않는다** — owner 를 import 해 파생만 한다.
+- "파일 전체에서 보호 경로 문자열을 grep 해 훅의 하드코딩을 잡자" — `os.environ` 안의
+  `.env` 에 걸려 오탐. AST 문자열 상수 + 경로형만 본다.
+- "노브 이름이 사본에 들어 있으면 일치한다" — 부분문자열이라 `..._V2` 개명이 그대로 통과.
+  owner 의 **값을 파싱해** 사본과 동일성 비교해야 잡힌다(뮤테이션에서 발각).
+
+**해결**
+1. `shared/claude_sdk_compat.run_sdk_query(..., disallowed_tools=None)` **신설**. 미지정이면
+   `JARVIS07_GUARDIAN/sdk_tool_guard.session_guard()` 가 파생. 호출자 명시분은 덮지 않고 합친다
+   (좁히는 방향으로만).
+2. 목록은 **주인에게서만** 온다 — `error_fixer.protected_files()/deny_dirs()/self_guard_files()`
+   + `architecture.DENY_FIX_PATHS`. 가드 모듈에는 경로 리터럴이 0개다.
+   **파생 실패는 통과가 아니라 세션 미기동**(`error_kind="guard_error"`).
+3. 셸 우회는 `.claude/settings.json` 의 PreToolUse 훅이 **같은 목록** 으로 본다
+   (`rm`·리다이렉션·`sed -i`·`git checkout`·인터프리터). 훅은 경로를 갖지 않는다.
+4. **기본은 차단이 아니라 기록**(`GUARDIAN_SDK_TOOL_GUARD=observe`). 무엇이 실제로 막힐지
+   1주 실측(`error_log` 의 `SdkGuard*` 행) 후 사람이 `enforce` 로 올린다. `off` 는 탈출구 —
+   가드가 깨져도 시스템이 서지 않게 하는 유일한 문.
+5. `error_fixer._SELF_GUARD_FILES` 신설(브레이크·감사훅·부팅점검). `_DENY_FILES` 와 합치지
+   않았다 — 저쪽은 즉시 집행이라 넣는 순간 **관측 없이 차단** 이 된다.
+6. 회귀 차단: `precommit_check --category sdkwrite` 9레그. **문자열 grep 이 아니라**
+   ① 배선(AST: 파라미터가 SDK 옵션까지 가는가) ② 동작(자식 프로세스에서 판정을 실제로
+   실행). 14가지 뮤테이션(파라미터 삭제·배선 제거·기본 enforce·셸 판정 무력화·훅 삭제·
+   노브 개명 …) 전부에서 해당 레그가 발화함을 실측했다.
+
+**파일**
+- `shared/claude_sdk_compat.py` (파라미터·fail-closed·세션 표식) ·
+  `JARVIS07_GUARDIAN/sdk_tool_guard.py`(신규 owner) · `JARVIS07_GUARDIAN/error_fixer.py`
+  (`_SELF_GUARD_FILES`) · `.claude/hooks/guardian_sdk_tool_guard.py`(신규) ·
+  `.claude/settings.json`(PreToolUse 추가, 기존 훅 보존) · `shared/precommit_check.py`
+  (`sdkwrite`) · `tests/test_sdk_repair_budget.py`(12건 추가)
+
+**한계 (남겨 둔 것 — 다음 사람이 알아야 한다)**
+- **환경변수로 이미 상속된 자격증명은 파일 접근 제한으로 막히지 않는다.** SDK 세션은
+  `build_oauth_env()` 로 부모 환경을 통째로 물려받는다. 선별 주입은 이번 범위 밖.
+- `shared/llm.py` 의 다른 SDK 통로 둘(`_invoke_sdk`·`_invoke_sdk_vision`)에는 이 가드를
+  걸지 않았다. 각각 `disallowed_tools=["*"]`(도구 전면 차단)·`allowed_tools=["Read"]` +
+  저장소 밖 cwd 로 이미 좁고, 발행 핫패스에 fail-closed 를 넣으면 *조용한 정지* 라는
+  이번 작업의 반대 결과를 만든다. 필요하면 별건으로 판단할 것.
+- 셸 판정은 휴리스틱이다 — `python - <<EOF` 로 파일을 쓰는 경우는 "인터프리터가 보호
+  대상을 언급함" 규칙으로 보수적으로만 잡는다. 진짜 격리는 샌드박스의 몫이다.
+
+**교훈**
+- **"못 걸었다" 는 "안 걸었다" 보다 나쁘다.** 파라미터가 없으면 조심성 있는 호출자도
+  방법이 없다. 경계는 *걸 수 있게* 만들어 두는 것부터다.
+- **넓은 금지를 곧바로 집행하면 조용한 정지가 된다.** 먼저 기록하고, 실측한 뒤, 사람이 올린다.
+- 검사는 문자열이 아니라 **배선과 동작** 을 봐야 한다. 이 저장소는 '문자열은 있는데 한 번도
+  안 도는' 사고를 이미 여러 번 냈다.
+
+---
+
+## [647] ✅ 해결 — 게이트가 배타락 밖이라 동시 수리끼리 서로의 패치를 채점했고, 골든 테스트가 ERRORS.md 에 프로브를 남겼다 (2026-08-14)
+
+**증상**
+① 스레드 2개로 서로 다른 파일을 동시에 수리시키자 **두 게이트가 동시에 진입**했고(ENTER 0.37초 차),
+   각자의 게이트가 도는 동안 워킹트리에 **양쪽 패치가 함께** 보였다(`W=1` 과 `W=2` 동시).
+② `git diff JARVIS07_GUARDIAN/ERRORS.md` 의 +847줄 중 `### [시각] ✅ 자동수정` **43건**이
+   전부 `tmpXXXX/order_ok_probe.py`·`smoke_probe.py`·`gate_timing_probe.py` — 테스트가 만든
+   임시 프로브였다. **존재하지도 않는 파일의 '수정 성공'** 이 오류 기록의 유일한 저장소에 쌓였다.
+③ `TOKEN_PROBE_TTL_SEC` 는 '무배포 조정' 이라고 문서화돼 있었는데 모듈 레벨 상수라 재시작 전엔 안 먹었다.
+④ `/api/learning` 의 `patterns_now`·`resolve_rate` 가 조회 실패를 `{count:0,hits:0}`·`[]` 로 적었다.
+
+**환경**
+`JARVIS07_GUARDIAN/error_fixer.apply_fix` · `pattern_fixer.apply_stored_patches` ·
+`tests/conftest.py` · `shared/token_usage.py` · `api_server.get_learning`.
+
+**원인**
+1. **직전 순서 교정이 만든 새 노출.** 싼 재현검증을 먼저 돌리려고 게이트를 `apply_patchset` 의
+   `with _patch_lock()` **밖으로** 꺼냈다. 그래서 적용(락 안)과 게이트(락 밖) 사이에 창이 열렸고,
+   `gate_patchset` 은 `ci_gate_failures` 동안 락을 잡지 않았다. 그 창에서 다른 수리가 자기 패치를
+   적용하면 이쪽 게이트는 *남의 패치까지 섞인 워킹트리* 를 채점한다. 남의 패치가 스위트를 깨면
+   무고한 패치가 롤백되고 `_rejected()` 를 타 **밴딧 음의보상 → learned_patterns 강등 → wontfix**
+   까지 간다. `job_retry_pending` 은 10분마다 최대 20 스레드를 띄운다.
+   ★ **같은 구조가 `pattern_fixer.apply_stored_patches` 에도 그대로 있었다**(③ 위반).
+2. **ERRORS.md 경로의 주인이 넷이었다** — `repair_history`·`error_fixer`(`Path(__file__).parent`)·
+   `auditor`·`architect`. 읽는 쪽을 격리해도 **쓰는 쪽이 새어나갔다**. 게다가 그 사실을 아는
+   테스트가 *자기만* monkeypatch 로 막고 있었다 — conftest 가 맨 위에서 경계한 바로 그 형태다
+   ("잊는 테스트가 반드시 생긴다"). 실제로 잊혀 43건이 쌓였다.
+   ★ 이번 변경으로 게이트가 수리 경로에서 스위트를 돌리므로, 막지 않으면 **운영 수리 1건마다**
+     프로브 항목이 1~3건씩 더 쌓일 참이었다.
+
+**헛다리**
+- "게이트에도 락을 걸면 게이트 자식(pytest)이 부모 락에 걸려 교착" — **아니다.** 락 경로는
+  `patch_lock_scope()` 가 `live`/`test`/`gate{N}` 으로 역할에 따라 가른다. 부모가 락을 든 채
+  자식을 띄워도 다른 파일을 잡는다(앞 패스의 성과 — 되돌리지 말 것).
+- "재진입이 자기 데드락" — **아니다.** `json_store.locked` 는 같은 스레드의 보유 깊이를 세어
+  재획득 없이 통과시킨다. 다만 그때 `yield` 값은 *바깥이 실제로 얻었는가* 이므로 보류 판정이 보존된다.
+- "테스트 ERRORS.md 를 빈 파일로 두면 된다" — 읽는 쪽(파싱·조준검색·다음 사고번호)이 실물과
+  다른 것을 보게 된다. **복사** 해서 쓰기만 사본으로 흘렸다.
+
+**해결**
+- `apply_fix`: **적용 → 재현검증 → 게이트를 하나의 `with _patch_lock()` 구간** 안으로. 순서(싼 검증
+  먼저)와 scope 격리는 그대로 유지. 새 락을 만들지 않고 기존 `json_store.locked` 를 중첩 획득.
+- `gate_patchset`: 정문이 스스로 배타를 잡고 본체(`_gate_patchset_locked`)에 위임 — 앞으로 생길
+  통로도 자동으로 같은 보호를 받는다(③).
+- `pattern_fixer.apply_stored_patches`: 같은 배타 구간으로 감쌌다(③).
+- `_patch_lock_timeout()`: `_import_timeout() + _verify_timeout() + gate_time_budget_sec()` 로
+  **임계구역 전체에서 파생**(종전은 명령 하나 상한인 `_gate_timeout()`).
+- ERRORS.md 경로의 주인을 `repair_history.errors_md_path()` **하나**로 통일(`GUARDIAN_ERRORS_MD`
+  를 호출 시점 조회). `conftest` 가 사본을 세워 **중앙에서** 막고, `_update_errors_md` 는
+  `gate_depth()` 가 0 이 아니면 기록하지 않는다.
+- 프로브 43건 제거(판별: 자동생성 서식 + `- **파일**` 이 저장소에 없는 `tmpXXXX/` 경로). 사람이 쓴
+  [642]~[646] 은 보존.
+- `token_usage.probe_ttl_sec()` 함수화, `/api/learning` 두 칸이 실패를 `measured:false`·
+  `resolve_rate_error` 로 말하고 대시보드가 그것을 읽는다.
+
+**검증** (문서가 아니라 **동작**)
+- 스레드 2개 재현 프로브: 락 ON → 게이트 동시 진입 최대 **1**, T1 게이트가 볼 때 상대 파일은
+  `W = 0` 그대로. 락 OFF(종전 동작) → 동시 진입 **2**, 양쪽 다 `W=1`·`W=2` 동시 관측.
+  같은 판정을 테스트 2건(`…남의_패치가_섞인…`, `…계측이_실제로_겹침을_잡는다`)으로 박제.
+- 전체 스위트 전후 라이브 ERRORS.md **md5 동일**(`4f649b5…`, 14,548줄 불변).
+  conftest 세션 픽스처가 이 불변을 상시 감시한다.
+- `pytest tests/ -q` **584 passed**(기준선 576 + 신규 8) · `precommit_check` 24 카테고리 위반 0 ·
+  import 21/21 · `tsc --noEmit` 0.
+
+**파일**
+`JARVIS07_GUARDIAN/{error_fixer,pattern_fixer,repair_history,auditor}.py` ·
+`JARVIS00_INFRA/architect.py` · `tests/conftest.py` · `tests/test_publish_golden.py` ·
+`shared/token_usage.py` · `api_server.py` · `dashboard/{lib/api.ts,app/learning/page.tsx}`
+
+**교훈**
+- **고치는 행위가 새 구멍을 만든다.** 순서 교정은 옳았지만 그것이 배타 경계를 옮겼다.
+  경계를 옮기는 변경은 *옮긴 뒤의 경계* 를 다시 실측해야 한다.
+- **판정은 그 판정이 보는 상태가 자기 것일 때만 의미가 있다.** 게이트를 락 밖에 두는 것은
+  "남의 답안지를 보고 내 점수를 매기는" 것과 같다 — 느려지는 게 아니라 **원장이 거짓이 된다.**
+- **관측이 대상을 더럽히면 안 된다.** 테스트가 오류 장부에 쓰면 조준 검색이 그만큼 헛다리를 짚는다.
+  그리고 그 방지를 *각 테스트의 기억력* 에 맡기면 반드시 잊는다 — 중앙에서, 경로의 주인 하나로.

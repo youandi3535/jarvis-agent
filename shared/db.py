@@ -85,6 +85,42 @@ def get_db() -> sqlite3.Connection:
     return conn
 
 
+# ── 스키마 마이그레이션 단일 창구 (2026-08-14 P2) ────────────────────────────
+#
+# ★ 왜 함수인가 — `try: ALTER ... except Exception: pass` 가 24벌 흩어져 있었다.
+#   "이미 있으면 무시" 라는 뜻이었지만 실제로는 **모든 실패를 무음으로** 삼킨다.
+#   실측 위험(감사 지적): `error_log.next_eligible_at` 추가가 이 무음 블록 안에 있고,
+#   `list_unresolved` 는 그 컬럼을 WHERE 에서 직접 참조한다. 추가가 실패하면 조회가
+#   OperationalError 로 죽고, 그 위 `_collect_unresolved` 가 다시 예외를 삼켜 `[]` 를
+#   돌려준다 → **아무도 모르게 수리가 0건이 된다**. 무음 두 겹이 겹치면 장애가 성공처럼 보인다.
+#   이제 '이미 존재' 만 정상으로 보고 나머지는 반드시 로그에 남긴다.
+_DUP_COL_MARK = "duplicate column name"
+
+
+def _add_column(conn, ddl: str) -> bool:
+    """`ALTER TABLE ... ADD COLUMN` 1건. 이미 있으면 조용히 True, 진짜 실패는 로그+False."""
+    try:
+        conn.execute(ddl)
+        return True
+    except Exception as e:                                   # noqa: BLE001
+        if _DUP_COL_MARK in str(e).lower():
+            return True                                      # 이미 존재 — 정상
+        log.warning("[db] 스키마 마이그레이션 실패 (이 컬럼에 기대는 기능이 조용히 죽는다): "
+                    "%s — %s: %s", ddl, type(e).__name__, e)
+        return False
+
+
+def column_exists(table: str, column: str) -> bool:
+    """PRAGMA 로 컬럼 실존 확인 — 마이그레이션 성공을 *추정하지 않고* 확인한다."""
+    try:
+        with get_db() as conn:
+            return any(r["name"] == column
+                       for r in conn.execute(f"PRAGMA table_info({table})").fetchall())
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("[db] 컬럼 확인 실패 %s.%s: %s", table, column, e)
+        return False
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript("""
@@ -358,67 +394,48 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_srr_ran_at ON self_repair_runs(ran_at);
         """)
         # 기존 DB 마이그레이션 — current_views 컬럼 없으면 추가
-        try:
-            conn.execute("ALTER TABLE post_analysis ADD COLUMN current_views INTEGER DEFAULT 0")
-        except Exception:
-            pass  # 이미 존재하면 무시
+        _add_column(conn, "ALTER TABLE post_analysis ADD COLUMN current_views INTEGER DEFAULT 0")
         # llm_attempts: error_log 행별 Tier 2(LLM) 시도 횟수 상한 캡 (job_retry_pending 무한 재시도 방지)
-        try:
-            conn.execute("ALTER TABLE error_log ADD COLUMN llm_attempts INTEGER DEFAULT 0")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE error_log ADD COLUMN llm_attempts INTEGER DEFAULT 0")
         # claimed_at: 처리 착수(선점) 시각 + 살아있음 신호(하트비트) — ERRORS [473]
         #   종전 수확기는 '오류가 *기록된* 시각(timestamp)' 으로 stuck 을 판정했는데,
         #   그 값은 작업 진행과 아무 상관이 없어 *살아 있는 세션* 을 죽은 걸로 오인했다.
-        try:
-            conn.execute("ALTER TABLE error_log ADD COLUMN claimed_at TEXT")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE error_log ADD COLUMN claimed_at TEXT")
         # provisional: 아직 재시도가 남은 '잠정' 실패 — Tier-2(LLM) 판정 보류 (ERRORS [476])
         #   액션이 끝나야 '일시적' 인지 '결정론적' 인지 알 수 있다.
-        try:
-            conn.execute("ALTER TABLE error_log ADD COLUMN provisional INTEGER DEFAULT 0")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE error_log ADD COLUMN provisional INTEGER DEFAULT 0")
+        # next_eligible_at: 이 오류를 *다시 집어도 되는 가장 이른 시각* (2026-08-14)
+        #   ★ 왜 필요한가 — 재시도에 백오프가 없었다. 자율 SDK 수리 게이트가 일시적 사유
+        #     (쿨다운·일일예산)로 막으면 status 를 `new` 로 **그대로 두는데**, 10분마다 도는
+        #     `j07_retry_pending` 이 조건 없이 다시 집었다. 실측: 지문 1종이 6시간 10분 동안
+        #     64회 차단당하며 같은 판정을 반복했다(허용 3 / 차단 64).
+        #   ★ NULL = 제약 없음. 옛 코드는 이 컬럼을 몰라도 그대로 동작한다(nullable).
+        #   ★ 값 포맷은 `timestamp` 와 **같은 'T' 구분자** 여야 한다 — 아래 TS_CUTOFF 주석의
+        #     사고(공백 구분자와 문자열 비교가 어긋나 창이 무력화)를 그대로 물려받는 자리다.
+        _add_column(conn, "ALTER TABLE error_log ADD COLUMN next_eligible_at TEXT")
         # ★ 지침별 준수/위반 (2026-08-07 감사 — credit assignment 붕괴 시정)
         #   종전엔 한 배치의 지침 8개가 **전부 같은 보상**(그 글의 점수)을 받았다.
         #   그러면 어느 지침이 좋았는지 영영 구분되지 않는다(실측: 배치 53개 전부
         #   `count(distinct reward)=1`). 발행 게이트가 이미 계산해 놓고 로그로만 흘리던
         #   `violated_directives` 를 여기 적어 배치 안에서 변별을 만든다.
         #   NULL = 판정 없음(옛 행), 0 = 준수, 1 = 위반.
-        try:
-            conn.execute("ALTER TABLE insight_usage ADD COLUMN violated INTEGER DEFAULT NULL")
-        except Exception:
-            pass
         # NOTE: retry_count / retry_at / last_error 컬럼은 사후 retry 잡 폐기로 더 이상
         # 사용하지 않음. 기존 DB 에 남아 있어도 무시됨 (drop 하지 않음 — 데이터 보존).
         # source_keyword: RADAR pipeline 에서 발행 트리거 시 채워지는 trends.keyword 와
         # 동일한 raw 키워드. theme 은 표시용(축약/꾸밈), source_keyword 는 학습용 join 키.
-        try:
-            conn.execute("ALTER TABLE post_analysis ADD COLUMN source_keyword TEXT")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE post_analysis ADD COLUMN source_keyword TEXT")
         # post_type: 글 종류별 분리 학습용. 'economic' / 'theme' / 자유문자열.
         # NULL 이면 daily_review 가 backfill 로 theme 패턴으로 추론. 새 종류 추가 시
         # 자유문자열로 명시만 하면 자동 그룹 분리됨 (코드 수정 불필요).
-        try:
-            conn.execute("ALTER TABLE post_analysis ADD COLUMN post_type TEXT")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE post_analysis ADD COLUMN post_type TEXT")
         try:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pa_post_type ON post_analysis(post_type)")
         except Exception:
             pass
-        try:
-            conn.execute("ALTER TABLE post_analysis ADD COLUMN image_paths TEXT DEFAULT '[]'")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE post_analysis ADD COLUMN image_paths TEXT DEFAULT '[]'")
         # post_analysis.quality_score: 발행글 100점 루브릭 총점 (ADR 014 보상 신호 — 2026-07-24).
         #   글품질 강화학습 보상 = quality_score/100. NULL = 미채점(옛 행·채점불가) → 보상 스킵.
-        try:
-            conn.execute("ALTER TABLE post_analysis ADD COLUMN quality_score REAL")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE post_analysis ADD COLUMN quality_score REAL")
         # post_analysis.rubric_items: 100점 루브릭 **항목별** 점수 (2026-08-07 신설).
         #   `post_scorer.items_compact(sr)` 의 `{항목key: 점수}` JSON.
         #   ★ 왜 필요했나 — 종전엔 총점 스칼라 한 칸뿐이라 채점기가 글마다 계산한 50개
@@ -426,36 +443,24 @@ def init_db():
         #     신호만 받아, *어느 항목이 왜 0점인지* 를 모른 채 가중치를 굴리고 있었다.
         #   만점·섹션·표시명은 **넣지 않는다** — 채점기에서 파생한다(② 동적 설계).
         #   컬럼을 50개 만들지 않는 이유도 같다: 항목이 늘 때마다 스키마를 고치게 된다.
-        try:
-            conn.execute("ALTER TABLE post_analysis ADD COLUMN rubric_items TEXT")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE post_analysis ADD COLUMN rubric_items TEXT")
         # post_analysis.publish_meta: 발행에 실제로 붙은 메타 (2026-08-07 신설).
         #   `{"tags": [...], "meta_description": "..."}` — process_draft ⑫ 산출물.
         #   ★ 왜 필요했나 — 발행 draft 는 그 프로세스 안에서만 산다(경제는 subprocess).
         #     이 값이 DB 를 건너지 못하면 **발행 후 채점이 태그·메타를 못 본다** →
         #     발행 전엔 N7·T7 만점인데 DB 점수(=학습 보상)는 0점인 반쪽 적용이 된다.
         #     "개선했는데 벌을 받는" 상태 — 학습이 정확히 거꾸로 간다.
-        try:
-            conn.execute("ALTER TABLE post_analysis ADD COLUMN publish_meta TEXT")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE post_analysis ADD COLUMN publish_meta TEXT")
         # self_repair_runs.llm_saved_1d: **하루 창에서 LLM 없이 실제로 고친 횟수** (2026-08-08).
         #   ★ 왜 새 칸인가 — `llm_saved` 는 2026-08-07 이전 105행이 `actionable_hits`
         #     (= 저장된 패턴 수, 누적)를 담고 있고 그 뒤 행은 전혀 다른 정의(1일 창 실적)를
         #     담는다. **한 칸에 두 정의가 섞이면 추세 계산이 거짓말을 한다** — 실제로
         #     텔레그램이 "실제 LLM 절약: 50 → 0 (-50회)" 라는 가짜 붕괴를 보고했다.
         #     옛 값을 덮어쓰지 않는다(이력 오염). 새 정의는 새 칸에 담고 옛 칸은 읽지 않는다.
-        try:
-            conn.execute("ALTER TABLE self_repair_runs ADD COLUMN llm_saved_1d INTEGER DEFAULT NULL")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE self_repair_runs ADD COLUMN llm_saved_1d INTEGER DEFAULT NULL")
         # learning_insights.scope: 어떤 글 종류에 적용할 인사이트인지.
         # 'economic' / 'theme' / 'all'. 작성기가 호출 시 scope IN (post_type,'all') 만 주입.
-        try:
-            conn.execute("ALTER TABLE learning_insights ADD COLUMN scope TEXT DEFAULT 'all'")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE learning_insights ADD COLUMN scope TEXT DEFAULT 'all'")
         try:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_li_scope ON learning_insights(scope)")
         except Exception:
@@ -469,10 +474,7 @@ def init_db():
             "ALTER TABLE learning_insights ADD COLUMN reward_count INTEGER DEFAULT 0",
             "ALTER TABLE learning_insights ADD COLUMN last_used_at TEXT",
         ):
-            try:
-                conn.execute(_mig)
-            except Exception:
-                pass
+            _add_column(conn, _mig)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS insight_usage (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -488,15 +490,17 @@ def init_db():
                 violated    INTEGER DEFAULT NULL    -- NULL=판정없음 0=준수 1=위반
             )
         """)
+        # ★ 2026-08-14 (P2) — 이 ALTER 는 종전에 **CREATE TABLE 보다 위**에 있었다.
+        #   새 DB 에서는 테이블이 아직 없어 매번 실패했는데 `except: pass` 가 삼켰다
+        #   (CREATE 쪽 DDL 에 같은 컬럼이 있어 결과가 같았을 뿐 — 우연히 무해했다).
+        #   무음을 걷어내자 경고로 드러나서 순서를 바로잡는다. 옛 DB 는 여기서 보강된다.
+        _add_column(conn, "ALTER TABLE insight_usage ADD COLUMN violated INTEGER DEFAULT NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_iu_pending ON insight_usage(reward, used_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_iu_insight ON insight_usage(insight_id)")
 
         # learn_log.naver_rank: 네이버 검색 노출 순위 (1~100, NULL = 미측정).
         # 조회수 외 핵심 학습 신호. 낮을수록 좋음 (1위 = 최상). actual_views 와 함께 적재.
-        try:
-            conn.execute("ALTER TABLE learn_log ADD COLUMN naver_rank INTEGER")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE learn_log ADD COLUMN naver_rank INTEGER")
 
         # ★ 알림 아웃박스 (사용자 승인 2026-07-25) — 전송 실패한 텔레그램 메시지를 *보관* 한다.
         #   종전 `notify.send_tg` 는 실패 시 로그 한 줄 남기고 메시지를 버렸다. 2026-07-25
@@ -516,29 +520,14 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_outbox_created ON notify_outbox(created_at)")
 
         # post_analysis.naver_rank / naver_rank_at — update_naver_rank() 가 사용
-        try:
-            conn.execute("ALTER TABLE post_analysis ADD COLUMN naver_rank INTEGER")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE post_analysis ADD COLUMN naver_rank_at TEXT")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE post_analysis ADD COLUMN naver_rank INTEGER")
+        _add_column(conn, "ALTER TABLE post_analysis ADD COLUMN naver_rank_at TEXT")
 
         # keyword_performance — best_rank / avg_rank / composite_score
         # update_keyword_views_from_posts() 가 ON CONFLICT DO UPDATE 에서 사용
-        try:
-            conn.execute("ALTER TABLE keyword_performance ADD COLUMN best_rank INTEGER")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE keyword_performance ADD COLUMN avg_rank REAL DEFAULT 101")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE keyword_performance ADD COLUMN composite_score REAL DEFAULT 0")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE keyword_performance ADD COLUMN best_rank INTEGER")
+        _add_column(conn, "ALTER TABLE keyword_performance ADD COLUMN avg_rank REAL DEFAULT 101")
+        _add_column(conn, "ALTER TABLE keyword_performance ADD COLUMN composite_score REAL DEFAULT 0")
 
     # ★ 위까지가 **베이스라인(v1)** — 여기 있는 CREATE/ALTER 는 전부 멱등이라 몇 번
     #   실행해도 안전하다. 그래서 과거분은 그대로 두고, *앞으로의 변경* 만 번호를 매겨
@@ -2457,15 +2446,63 @@ def outbox_purge(ttl_hours: float) -> int:
         return 0
 
 
+# ══════════════════════════════════════════════════════════════════
+# ★ `error_log.resolution` 저장 규약 — **이 파일이 단독 소유** (2026-08-14)
+# ══════════════════════════════════════════════════════════════════
+#
+# 상한을 호출자마다 박으면(실측: 500 / 4000 / 무제한 3종이 공존했다) 같은 컬럼에
+# 서로 다른 규칙이 걸린다. 한 곳에서만 정하고 나머지는 파생한다(①).
+RESOLUTION_MAX = 4000
+
+# 종결 기록의 '이전 사유' 구분자. 새 사유가 **앞**, 옛 사유가 뒤 — 순서가 중요하다:
+#   `WHERE resolution LIKE '[verification=...]%'` 같은 접두 조회가 최신 사유를 잡아야 한다.
+RESOLUTION_HISTORY_SEP = "\n↳ 이전 기록: "
+
+
+def _fixed_resolution_sql(col: str = "resolution") -> str:
+    """`fixed` 종결 시 resolution 병합식 — **새 사유가 앞, 이전 기록은 뒤로 보존**.
+
+    ★ 왜 first-wins 를 버렸나 (2026-08-14 실측)
+      종전은 `COALESCE(NULLIF(resolution,''), ?)` 였다. 의도는 "처음 고쳐진 근거가
+      진실이다" 였는데, 실제로는 **먼저 쓰인 *실패* 사유가 나중의 성공 사유를 이겼다**.
+      status 는 `fixed` 인데 본문은 "Tier-2 수정 실패/롤백 — 재시도 대기 (0/3)" 인 행이
+      10건 있었다(#6026·#5973·#5972 …). 상태와 근거가 정면으로 어긋나 있었다.
+      원인: 재시도 중 `new` 로 남긴 실패 사유가 이미 컬럼을 차지한 상태에서
+      나중 회차가 `fixed` 를 찍었기 때문이다.
+
+    두 요구를 다 만족시키는 형태는 '덮어쓰기' 도 '무시' 도 아닌 **이력 append** 다 —
+    지금 왜 이 상태인지(앞)와 어떻게 여기까지 왔는지(뒤)를 둘 다 남긴다.
+    단일 UPDATE 문 안에서 계산하므로 read-modify-write 경쟁이 없다.
+    """
+    return (
+        "CASE"
+        f"  WHEN COALESCE({col},'') = '' THEN ?"
+        # ★ 이미 *같은 사유가 맨 앞* 이면 no-op — 같은 종결이 두 번 찍혀도 이력이
+        #   무한 증식하지 않는다(등가 비교로는 못 막는다: 1회차 뒤엔 뒤에 이력이 붙어
+        #   컬럼 전체가 더는 새 사유와 같지 않기 때문. 실측으로 걸렸다).
+        f"  WHEN substr({col}, 1, length(?)) = ? THEN {col}"
+        f"  ELSE substr(? || ? || {col}, 1, {int(RESOLUTION_MAX)})"
+        " END"
+    )
+
+
+def _fixed_resolution_params(why: str) -> tuple:
+    """`_fixed_resolution_sql()` 의 바인딩 5개 — 식과 인자를 같은 곳에서 만든다(①)."""
+    _w = (why or "")[:RESOLUTION_MAX]
+    return (_w, _w, _w, _w, RESOLUTION_HISTORY_SEP)
+
+
 def mark_error_fixed(error_id: int, resolution: str, fixed_file: str = None):
     """오류 해결 처리."""
     with get_db() as conn:
         conn.execute(
-            """UPDATE error_log
-               SET status='fixed', resolution=?, fixed_file=?,
+            f"""UPDATE error_log
+               SET status='fixed',
+                   resolution={_fixed_resolution_sql()},
+                   fixed_file=?,
                    fixed_at=strftime('%Y-%m-%dT%H:%M:%S','now','localtime')
                WHERE id=?""",
-            (resolution, fixed_file, error_id),
+            (*_fixed_resolution_params(resolution), fixed_file, error_id),
         )
 
 
@@ -2568,18 +2605,21 @@ def mark_error_status(error_id: int, status: str, resolution: str = ""):
         if status == "fixed":
             # ★ `fixed_at` 은 **고쳐진 시각** 이다 — 다른 상태에 찍으면 수리시간 지표가
             #   오염된다(2026-08-08 재검증). `new`·`wontfix` 는 사유만 남긴다.
+            # ★ resolution 은 **새 사유가 앞 + 이전 기록 보존** (2026-08-14 first-wins 폐기).
+            #   종전 `COALESCE(NULLIF(resolution,''), ?)` 는 재시도 중 남은 *실패* 사유가
+            #   나중의 성공 사유를 이겨, status=fixed 인데 본문이 "수정 실패/롤백" 인
+            #   행을 10건 만들었다. 병합 규칙의 주인은 `_fixed_resolution_sql()` 하나다(①).
             conn.execute(
                 "UPDATE error_log SET status=?, "
-                "  resolution = COALESCE(NULLIF(resolution,''), ?), "
+                f"  resolution = {_fixed_resolution_sql()}, "
                 "  fixed_at = COALESCE(fixed_at, datetime('now','localtime')) "
-                "WHERE id=?", (status, _why[:500], error_id))
+                "WHERE id=?", (status, *_fixed_resolution_params(_why), error_id))
         else:
             # ★ 사유는 **마지막 것을 남긴다** — 재시도 이력에서 중요한 건 *지금 왜 이 상태인가*
             #   이고, 첫 사유를 고집하면 3회차 실패가 1회차 문구로 보인다.
-            #   (`fixed` 는 반대로 first-wins — 처음 고쳐진 근거가 진실이다.)
             conn.execute(
                 "UPDATE error_log SET status=?, resolution=? WHERE id=?",
-                (status, _why[:500], error_id))
+                (status, _why[:RESOLUTION_MAX], error_id))
 
 
 # ── 격리 버킷(ignored) 관측 — 공개 헬퍼 (사용자 박제 2026-07-25) ──────────────
@@ -2594,15 +2634,202 @@ def mark_error_status(error_id: int, status: str, resolution: str = ""):
 #                      이 있는 error_type 집합을 DB 에서 파생 → ignored 와 교집합.
 #     손으로 나열하지 않으므로 새 오류 타입이 생겨도 자동으로 검사 대상이 된다.
 
+# ══════════════════════════════════════════════════════════════════
+# ★ 오류 수명주기 질의 — 상태 어휘는 **GUARDIAN 이 소유**, SQL 만 여기 (2026-08-14)
+# ══════════════════════════════════════════════════════════════════
+#
+# 종전엔 "다시 들여다봐도 되는 상태" 를 두 곳이 각자 적었고 그 둘이 어긋났다
+# (`try_claim_error` 의 ("new","ignored") vs `_collect_unresolved` 의 ("new","wontfix")).
+# 어긋난 결과: sweep 이 긁어온 `wontfix` 가 선점에 실패해 **조용히 return** 했다.
+# → 목록을 여기 적지 않는다. 주인(`JARVIS07_GUARDIAN.architecture`)에서 파생한다.
+
+def _claimable_statuses() -> tuple:
+    """선점 가능 상태 — 주인에서 파생. 파생 실패 시 **스키마의 기본값만** (fail-closed).
+
+    폴백에 목록을 적지 않는 이유: 적는 순간 그것이 사본이 되어 주인이 바뀌어도
+    옛 값으로 남는다. 스키마 기본값(`status` 컬럼의 DEFAULT)은 이 파일이 이미
+    소유한 사실이므로 PRAGMA 로 **읽어서** 쓴다 — 새 값을 만들지 않는다.
+    """
+    try:
+        from JARVIS07_GUARDIAN.architecture import CLAIMABLE_STATUSES
+        return tuple(CLAIMABLE_STATUSES)
+    except Exception as e:
+        log.warning("[db] 선점 가능 상태 파생 실패 → 스키마 기본값만 사용: %s", e)
+        return (_schema_default_error_status(),)
+
+
+def _unresolved_statuses() -> tuple:
+    """sweep 이 다시 집는 '미해결' 상태 — 주인에서 파생 (폴백 규칙은 위와 동일)."""
+    try:
+        from JARVIS07_GUARDIAN.architecture import UNRESOLVED_STATUSES
+        return tuple(UNRESOLVED_STATUSES)
+    except Exception as e:
+        log.warning("[db] 미해결 상태 파생 실패 → 스키마 기본값만 사용: %s", e)
+        return (_schema_default_error_status(),)
+
+
+# ── 관측용 합성 행 배제 — 조건의 주인은 하나 (2026-08-14 P2) ────────────────
+#
+# ★ 왜 SQL 조각을 함수로 파는가 (②)
+#   `verification_tag_effective()` 프로브가 `error_log` 에 합성 행을 넣었다 지운다.
+#   그 창(과 삭제 실패분)이 집계에 합산돼 "검증된 코드수정" 을 부풀렸다.
+#   배제 조건을 집계마다 복사하면 **새 집계가 생길 때마다 다시 샌다** — 조건은 한 곳.
+#   식별자 자체의 주인은 `architecture.SYNTHETIC_SOURCES`. 여기는 SQL 로 옮기는 일만.
+
+def synthetic_sources() -> tuple:
+    """관측용 합성 행의 `source` 목록 — 주인에서 파생. 실패는 조용히 넘기지 않는다."""
+    try:
+        from JARVIS07_GUARDIAN.architecture import SYNTHETIC_SOURCES
+        return tuple(SYNTHETIC_SOURCES)
+    except Exception as e:
+        log.warning("[db] 합성 소스 목록 파생 실패 → 배제 없이 집계함(수치가 부풀 수 있다): %s", e)
+        return ()
+
+
+def synthetic_exclusion_sql(col: str = "source") -> str:
+    """집계에서 합성 행을 빼는 SQL 조각 (앞에 AND 없이 조건만). 파생 실패 시 "" .
+
+    사용: `f"WHERE ... AND {synthetic_exclusion_sql()}"` 가 아니라
+          `_and(synthetic_exclusion_sql())` 처럼 빈 문자열을 견디게 조립할 것.
+    """
+    names = synthetic_sources()
+    if not names:
+        return ""
+    lst = ",".join("'" + str(n).replace("'", "") + "'" for n in names)
+    return f"COALESCE({col},'') NOT IN ({lst})"
+
+
+def and_sql(*clauses: str) -> str:
+    """빈 조각을 견디는 AND 조립기 — 조건이 없으면 '1=1'."""
+    parts = [c for c in clauses if c and c.strip()]
+    return " AND ".join(parts) if parts else "1=1"
+
+
+def _schema_default_error_status() -> str:
+    """`error_log.status` 의 DDL 기본값을 **읽어서** 돌려준다 (리터럴 사본 금지)."""
+    try:
+        with get_db() as conn:
+            for r in conn.execute("PRAGMA table_info(error_log)").fetchall():
+                if r["name"] == "status":
+                    v = str(r["dflt_value"] or "").strip().strip("'")
+                    if v:
+                        return v
+        # ★ 2026-08-14 (P2) — 여기까지 왔다는 것은 PRAGMA 는 읽혔는데 DEFAULT 가 비었다는 뜻.
+        #   아래 리터럴은 '완화적 최후 바닥' 이지 진실이 아니다 → 반드시 흔적을 남긴다.
+        log.warning("[db] error_log.status DEFAULT 를 스키마에서 읽지 못했다 "
+                    "— 최후 폴백('new') 사용. 스키마가 바뀌었으면 이 값이 낡은다.")
+    except Exception as e:
+        log.warning("[db] error_log.status DEFAULT PRAGMA 조회 실패 → 최후 폴백('new'): %s", e)
+    return "new"      # PRAGMA 조차 못 읽는 상황 — 최후의 바닥
+
+
+def _llm_attempt_cap() -> "int | None":
+    """Tier-2 시도 상한 — 주인에서 파생. 실패 시 None(상한 미적용, 조용히 덜 고치지 않는다)."""
+    try:
+        from JARVIS07_GUARDIAN.architecture import MAX_LLM_ATTEMPTS
+        return int(MAX_LLM_ATTEMPTS)
+    except Exception as e:
+        log.warning("[db] 시도 상한 파생 실패 → 상한 미적용: %s", e)
+        return None
+
+
+def _backoff_respected() -> bool:
+    """백오프 킬스위치 — `GUARDIAN_RETRY_BACKOFF=0` 이면 종전 동작(백오프 무시)으로 복귀.
+
+    ★ 왜 **읽는 쪽** 에 다는가: 쓰는 쪽에 달면 이미 기록된 미래 시각이 남아 있어
+      노브를 꺼도 그 행들이 계속 막힌다 — 킬스위치가 '복귀' 가 아니게 된다.
+      읽는 쪽 한 곳에서 무시하면 컬럼에 무엇이 적혀 있든 즉시 종전 동작이다.
+    """
+    import os
+    return (os.getenv("GUARDIAN_RETRY_BACKOFF") or "").strip().lower() \
+        not in ("0", "false", "off", "no")
+
+
+def list_unresolved(limit: int = 40, *, statuses: tuple = None,
+                    max_attempts: "int | None" = -1) -> list:
+    """★ 미해결 오류 **공개 단일 질의** — 모든 재시도 소비자가 쓰는 하나의 문 (2026-08-14).
+
+    ★ 왜 신설했나 (③원칙 — ERRORS [474] 와 같은 형태)
+      종전엔 소비자마다 `list_errors(status=...)` 로 긁은 뒤 파이썬에서 걸렀다.
+      **LIMIT 이 필터보다 먼저** 걸리므로, 앞쪽이 상한 도달분·백오프 대기분으로 채워지면
+      정작 고칠 수 있는 행이 창 밖으로 밀려 *아무도 못 본다*. 게다가 필터가 소비자마다
+      복제돼 있어서(`job_retry_pending` 은 상한 검사조차 없었다) 한 통로를 고쳐도
+      다른 통로로 샜다. → 거르고 나서 자르는 일을 SQL 한 곳에서 한다.
+
+    Args:
+        limit:        최대 건수 (필터 **후** 적용)
+        statuses:     조회할 상태 버킷. 미지정이면 주인에서 파생(UNRESOLVED_STATUSES).
+        max_attempts: Tier-2 시도 상한. 기본(-1)이면 주인에서 파생, None 이면 상한 미적용.
+    """
+    st = tuple(statuses) if statuses else _unresolved_statuses()
+    if not st:
+        return []
+    cap = _llm_attempt_cap() if max_attempts == -1 else max_attempts
+    where = ["status IN (%s)" % ",".join("?" for _ in st)]
+    args: list = list(st)
+    if cap is not None:
+        where.append("COALESCE(llm_attempts, 0) < ?")
+        args.append(int(cap))
+    if _backoff_respected():
+        # NULL = 제약 없음. 포맷은 timestamp 와 같은 'T' 구분자로 맞춘다(TS_CUTOFF 규약).
+        #
+        # ★ 2026-08-14 (P2) — **컬럼이 없으면 조건을 빼고 시끄럽게 간다** (fail-loud).
+        #   이 컬럼은 마이그레이션에서 추가되는데, 그 추가가 실패하면 여기 WHERE 가
+        #   OperationalError 로 죽고 위층(`_collect_unresolved`)이 예외를 삼켜 `[]` 를
+        #   돌려준다 → 수리가 0건인데 화면엔 "미해결 없음" 으로 보인다. 백오프는 *최적화*
+        #   이지 안전장치가 아니다. 없으면 최적화만 포기하고 **수리는 계속 돈다**.
+        if column_exists("error_log", "next_eligible_at"):
+            where.append(
+                f"(next_eligible_at IS NULL OR next_eligible_at <= {ts_cutoff_sql()})")
+        else:
+            log.warning("[db] error_log.next_eligible_at 컬럼 부재 — 재시도 백오프를 "
+                        "적용하지 못한다(마이그레이션 실패 의심). 조회는 계속 진행한다.")
+    args.append(int(limit))
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM error_log WHERE " + " AND ".join(where)
+            + " ORDER BY timestamp DESC LIMIT ?", args).fetchall()
+        return [dict(r) for r in rows]
+
+
+def set_error_backoff(error_id: int, seconds: int) -> bool:
+    """이 오류를 *N초 뒤* 까지 재시도 대상에서 빼둔다. seconds<=0 이면 해제(NULL).
+
+    ★ 시각 계산을 SQL 안에서 하는 이유: 저장 포맷('T' 구분자)의 주인이 이 파일이고,
+      파이썬에서 만들어 넘기면 포맷이 호출자 수만큼 갈라진다(TS_CUTOFF 사고와 같은 병).
+      호출자는 '얼마나 기다려야 하는가' 라는 **초 단위 스칼라만** 넘긴다.
+    """
+    try:
+        with get_db() as conn:
+            if int(seconds) <= 0:
+                cur = conn.execute(
+                    "UPDATE error_log SET next_eligible_at=NULL WHERE id=?", (error_id,))
+            else:
+                cur = conn.execute(
+                    f"UPDATE error_log SET next_eligible_at={TS_CUTOFF} WHERE id=?",
+                    (f"+{int(seconds)} seconds", error_id))
+            return (cur.rowcount or 0) > 0
+    except Exception as e:
+        log.warning("[db] 재시도 백오프 기록 실패(#%s): %s", error_id, e)
+        return False
+
+
 def try_claim_error(error_id: int, claim_status: str = "analyzing",
-                     from_statuses: tuple = ("new", "ignored")) -> bool:
+                     from_statuses: tuple = None) -> bool:
     """오류 처리 착수를 DB 레벨에서 원자적으로 선점.
 
     in-memory 집합(guardian_agent._processing)은 같은 프로세스 내 스레드만 방어 —
     bus 재전달(dispatch_pending 폴백)·job_retry_pending 스윕이 겹치면 서로 다른
     스레드가 동시에 오케스트레이터 진입점을 통과할 수 있다. UPDATE...WHERE 조건부
     갱신은 SQLite 자체가 직렬화하므로 두 번째 호출은 반드시 rowcount=0 을 받는다.
+
+    ★ `from_statuses` 기본값을 **주인에서 파생** 한다 (2026-08-14 — 자기모순 시정)
+      종전 기본값은 `("new", "ignored")` 리터럴이었는데, sweep 이 실제로 재수집하는
+      집합은 `("new", "wontfix")` 였다. 즉 **긁어온 것을 선점할 수 없었다** — 재발한
+      `wontfix` 오류가 오케스트레이터 첫 문에서 rowcount=0 을 받고 "이미 처리 착수됨"
+      이라는 *정반대 사유* 로 조용히 버려졌다. 집합을 두 곳에 적었기에 생긴 어긋남이다.
     """
+    from_statuses = tuple(from_statuses) if from_statuses else _claimable_statuses()
     placeholders = ",".join("?" for _ in from_statuses)
     _now = datetime.now().isoformat(timespec="seconds")
     with get_db() as conn:
@@ -2676,12 +2903,13 @@ def bump_llm_attempts(error_id: int) -> int:
 
 
 def get_error_stats(days: int = 7) -> dict:
-    """오류 통계 요약."""
+    """오류 통계 요약. ★ 관측용 합성 행은 제외 — 프로브가 자기 지표를 부풀리지 않게(P2)."""
+    _excl = synthetic_exclusion_sql()
     with get_db() as conn:
         rows = conn.execute(
             """SELECT severity, status, COUNT(*) as cnt
                FROM error_log
-               WHERE timestamp >= """ + TS_CUTOFF + """
+               WHERE """ + and_sql("timestamp >= " + TS_CUTOFF, _excl) + """
                GROUP BY severity, status""",
             (f"-{days} days",),
         ).fetchall()
@@ -2690,7 +2918,8 @@ def get_error_stats(days: int = 7) -> dict:
             key = f"{r['severity']}_{r['status']}"
             stats[key] = r["cnt"]
         total = conn.execute(
-            f"SELECT COUNT(*) FROM error_log WHERE timestamp >= {TS_CUTOFF}",
+            "SELECT COUNT(*) FROM error_log WHERE "
+            + and_sql("timestamp >= " + TS_CUTOFF, _excl),
             (f"-{days} days",),
         ).fetchone()[0]
         stats["total"] = total
@@ -2700,9 +2929,12 @@ def get_error_stats(days: int = 7) -> dict:
 def archive_old_errors(days: int = 30) -> int:
     """30일 초과 해결·무시 오류 삭제 후 삭제 건수 반환."""
     with get_db() as conn:
+        # 어휘의 주인은 architecture 단독 — 여기 리터럴로 다시 적지 않는다 (② · P2).
+        from JARVIS07_GUARDIAN.architecture import CLOSED_STATUSES
+        _in = ",".join("'" + str(x).replace("'", "") + "'" for x in CLOSED_STATUSES)
         cur = conn.execute(
-            """DELETE FROM error_log
-               WHERE status IN ('fixed','ignored','wontfix')
+            f"""DELETE FROM error_log
+               WHERE status IN ({_in})
                  AND timestamp < datetime('now',?,'localtime')""",
             (f"-{days} days",),
         )

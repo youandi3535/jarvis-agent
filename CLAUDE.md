@@ -775,6 +775,18 @@ python3 shared/precommit_check.py --category collect    # git 훅·CI·GUARDIAN 
 - **학습 상태 조회**: `from JARVIS07_GUARDIAN.pattern_fixer import stats; stats()` → `total_patterns`·`total_hits`·`by_fixer`·`top5`.
 - **자동 승인 설계**: `guardian.apply_fix()` 는 Telegram 인라인 버튼 없이 자동 실행. 사유: 파일 변경이 `jarvis-agent` 폴더 내부(`side_effect="internal"`)이므로 CLAUDE.md 자율 코드 자가수정 규정의 외부 영향 게이트 적용 제외. **패치 크기 무제한으로 모든 오류 자동 수정** (critical 심각도 오류 실패 시에만 Telegram 알림).
 - **ERRORS.md 병행 — 자동**: `error_fixer.apply_fix()` 성공/실패 시 자동으로 ERRORS.md 에 항목 추가. 사용자·다른 에이전트가 수동 추가하는 것도 허용 (중복 기록 무방). ERRORS.md 선행 읽기 의무(루트 규정)는 여전히 유효 — guardian 자동 기록이 수동 검토를 대체하지 않음.
+- **★ 자율 수리 세션의 *쓰기 범위* — `JARVIS07_GUARDIAN/sdk_tool_guard.py` 단일 진입점 (2026-08-14, ERRORS [646])**:
+  SDK 자가수리 세션은 `permission_mode="bypassPermissions"` 로 뜬다. 무엇을 못 건드리는지는
+  **목록을 새로 만들지 말고** 이 모듈에서 파생한다 — 주인은 `error_fixer.protected_files()/
+  deny_dirs()/self_guard_files()` + `architecture.DENY_FIX_PATHS`. `run_sdk_query` 가
+  `session_guard()` 로 자동 적용하며 **파생 실패 = 세션 미기동**(fail-closed, `error_kind="guard_error"`).
+  셸 우회(`rm`·리다이렉션 등)는 PreToolUse 훅 `JARVIS07_GUARDIAN/sdk_tool_guard_hook.py` 가 같은 목록으로 본다.
+  · **노브 `GUARDIAN_SDK_TOOL_GUARD=observe|enforce|off`, 기본 `observe`(기록만)**. 넓은 금지를
+    곧바로 집행하면 정당한 수리까지 막혀 *조용한 정지* 가 된다 — `error_log` 의 `SdkGuard*` 행으로
+    1주 실측한 뒤 **사람이** `enforce` 로 올린다. `off` 는 가드가 깨졌을 때의 탈출구.
+  · **훅 등록(`.claude/settings.json`)은 기계 로컬** — `.gitignore` 대상이라 새 기기·CI 에는 없다.
+    미등록은 `precommit --category sdkwrite` 가 **경고** 로 보여 준다(차단 아님).
+  · 검증: `python3 shared/precommit_check.py --category sdkwrite` (배선은 AST, 판정은 자식 프로세스 실행)
 - **심각도 분류 단일 진입점**: `JARVIS07_GUARDIAN/severity.py` 의 `classify()` / `is_auto_fixable()` 만 사용. 다른 파일에 severity 판단 로직 박지 말 것.
 - **쿨다운 정책**: 동일 오류(`source:module:error_type:message[:80]` 키) 60초 내 재수집 방지 — 메모리 캐시 (`error_collector._cooldown`). DB 레벨 dedup 은 1시간 (같은 type+module 조합).
 - **로그 스캐너 감시 대상**: 기본 `JARVIS02_WRITER/logs/*.log`. 신규 에이전트가 로그 파일을 생성하면 `init_log_scanner(log_dir=Path(...))` 로 추가 등록.

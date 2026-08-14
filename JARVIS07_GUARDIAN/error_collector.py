@@ -250,6 +250,94 @@ def _in_cooldown(key: str) -> bool:
         return False
 
 
+# ── 재발 재개 — 종결된 행이 재발을 삼키지 않게 (2026-08-14) ─────────────────
+
+def _reopen_if_recurred(error_id: int, source: str, error_type: str,
+                        message: str, module: str = None) -> bool:
+    """재발이 **종결된 행에 흡수**되는 것을 막는다. 승격했으면 True.
+
+    ★ 무엇이 문제였나 (실측)
+      `db.save_error` 의 dedup 은 같은 오류를 1시간 창 안에서 한 행으로 합치면서
+      `timestamp` 를 now 로 갱신한다. 그래서 재발이 계속 들어오는 한 그 행은 **영원히
+      창 안에 머문다** — 상태가 `wontfix`/`ignored` 로 이미 닫혔어도 마찬가지다.
+      결과: `wontfix` 95건의 seen_count 합이 127. 재발 32건이 *죽은 행* 에 흡수돼
+      아무 처리도 못 받았다. seen_count 만 조용히 올라간다.
+
+    ★ 왜 '다시 열기' 가 옳은가
+      `wontfix`·`ignored` 는 *그 시점의 판단* 이다 — 상한 도달·일시적이라는 추정·
+      사람 개입 필요. 그런데 **또 났다** 는 것은 그 판단을 재검토할 새 증거다.
+      특히 `severity.is_transient()` 가 False 라고 말하는 것(=코드 버그)은 시간이
+      지나서 저절로 낫지 않는다. 판단의 주인은 severity 이므로 여기서 어휘를 다시
+      판정하지 않고 그 함수에 묻는다(①).
+
+    ★ 상한은 그대로 걸린다 — `llm_attempts` 를 **건드리지 않는다**.
+      되살아난 행도 `MAX_LLM_ATTEMPTS` 를 이미 다 썼으면 `db.list_unresolved` 의
+      SQL 필터에서 그대로 빠진다. '다시 볼 기회' 를 주는 것이지 '상한을 푸는' 게 아니다.
+
+    킬스위치: `GUARDIAN_WONTFIX_PROMOTE=0` → 종전 동작(흡수)으로 즉시 복귀.
+    """
+    import os
+    if (os.getenv("GUARDIAN_WONTFIX_PROMOTE") or "").strip().lower() in ("0", "false", "off", "no"):
+        return False
+    try:
+        from shared import db as _db
+        from JARVIS07_GUARDIAN.architecture import REOPENABLE_STATUSES, STATUS_NEW
+        rec = _db.get_error(int(error_id)) or {}
+        st = (rec.get("status") or "").strip()
+        if st not in REOPENABLE_STATUSES:
+            return False          # 새로 만들어진 행이거나 이미 열려 있다 — 할 일 없음
+
+        from JARVIS07_GUARDIAN.severity import companions_of, is_transient, kind_of
+        if is_transient(error_type or "", message or "", source or "",
+                        kind=kind_of(rec), companions=companions_of(rec)):
+            return False          # 진짜 일시적 — 격리가 옳다. 되살리면 소음만 는다
+
+        seen = int(rec.get("seen_count") or 0)
+        tries = int(rec.get("llm_attempts") or 0)
+
+        # ★ 2026-08-14 (P2) — **줄 수 있는 게 없으면 되살리지 않는다.**
+        #   이 함수는 "다시 볼 기회를 준다" 는 뜻인데, Tier-2 시도 상한을 이미 다 쓴 행은
+        #   되살려도 `db.list_unresolved` 의 상한 필터에서 그대로 빠진다(이 docstring 이
+        #   스스로 그렇게 적고 있다). 즉 sweep 에는 아무 효과가 없다.
+        #   그런데 **버스 경로에는 효과가 있었다** — `wontfix→new` 로 열어 두면 재발마다
+        #   `_orchestrate` 가 끝까지 돌고 `llm_cap_reached` 텔레그램을 쐈다.
+        #   (`try_claim_error` 기본 선점 집합에 `wontfix` 가 들어오면서 겹친 결과 —
+        #    종전에는 선점이 실패해 조용히 return 했다. 즉 이 폭주는 우리가 만든 회귀다.)
+        #   상한을 다 쓴 행이 필요로 하는 것은 '재개' 가 아니라 '사람' 이다. `wontfix` 에
+        #   그대로 두면 재조회 대상(UNRESOLVED_STATUSES)에 남아 사람도 sweep 도 볼 수 있다.
+        try:
+            from JARVIS07_GUARDIAN.architecture import MAX_LLM_ATTEMPTS as _cap
+            if tries >= int(_cap):
+                log.info("[GUARDIAN] #%s 재발했으나 Tier-2 상한(%s) 소진 — 재개하지 않는다"
+                         " (%s 유지, 누적 %s회): %s",
+                         error_id, _cap, st, seen, error_type)
+                return False
+        except Exception as _ce:      # noqa: BLE001 — 상한을 못 읽으면 종전대로 재개
+            log.warning("[GUARDIAN] 시도 상한 파생 실패 → 재발 재개 그대로 진행: %s", _ce)
+
+        why = (f"재발로 재개 — {st} 종결 뒤 같은 오류가 다시 들어왔다 "
+               f"(누적 {seen}회 · Tier-2 시도 {tries}회는 유지)")
+        _db.mark_error_status(int(error_id), STATUS_NEW, why)
+        log.warning("[GUARDIAN] #%s %s → %s (재발) — %s: %s",
+                    error_id, st, STATUS_NEW, error_type, (message or "")[:80])
+
+        # 사람에게 1회 — 알림 dedup 은 **이미 있는 쿨다운** 을 그대로 쓴다(새 채널·새 창 금지).
+        if not _in_cooldown("reopen:" + _cool_key(source, module, error_type, message)):
+            try:
+                from shared.notify import send_tg
+                send_tg(f"♻️ *[GUARDIAN] 종결된 오류가 재발했다*\n"
+                        f"#{error_id} `{error_type}` ({source})\n"
+                        f"이전 종결: {st} · 누적 {seen}회 · Tier-2 {tries}회\n"
+                        f"{(message or '')[:200]}\n"
+                        f"→ 재시도 대상으로 되돌렸다 (상한은 그대로)")
+            except Exception as e:
+                log.warning("[GUARDIAN] 재발 재개 알림 실패: %s", e)
+        return True
+    except Exception as e:
+        log.warning("[GUARDIAN] 재발 재개 판정 실패(#%s): %s", error_id, e)
+        return False
+
+
 # ── 핵심 수집 함수 (내부 전용) ──────────────────────────────────
 
 def _collect_error(
@@ -324,6 +412,12 @@ def _collect_error(
     except Exception as e:
         log.error(f"[GUARDIAN] DB 저장 실패: {e}")
         return None
+
+    # ★ 재발이 *종결된 행* 에 흡수되지 않게 (2026-08-14) — dedup 병합 직후가 유일한 관측점.
+    #   `save_error` 는 신규/병합을 구분해 알려주지 않지만, **신규 INSERT 는 반드시
+    #   status='new'** 이므로(스키마 기본값) 방금 받은 id 의 상태가 종결 버킷이면
+    #   그것은 병합이었다는 뜻이다 — 반환값 계약을 바꾸지 않고 파생한다.
+    _reopen_if_recurred(error_id, source, error_type, message, module)
 
     # ERROR_DETECTED 이벤트 publish
     try:

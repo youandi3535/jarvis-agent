@@ -34,6 +34,46 @@ os.environ["JARVIS_TEST_MODE"] = "1"      # ★ setdefault 아님 — 밖에서 
 #   **여기(import 전)에서** 세워야 한다.
 os.environ.setdefault("JARVIS_PIPELINE_ACTIVITY",
                       str(_TEST_DB_DIR / "pipeline_activity.json"))
+# ★ 자동수정 백업도 임시 경로로 (2026-08-14) — 골든 테스트는 `apply_fix` 를 *끝까지 실제로*
+#   돌린다. 그때 만들어지는 백업이 저장소 안(`JARVIS07_GUARDIAN/_backup_patches/`)에 쌓이면
+#   테스트를 돌릴 때마다 실제 작업 폴더가 더러워진다. 경로 규칙은 `error_fixer` 것을 그대로
+#   쓰고(오버라이드 환경변수), 폴더는 세션 종료 시 임시 DB 와 함께 사라진다.
+#
+# ★ `setdefault` 가 아니다 (2026-08-14 2차 — 두 문서가 정면 충돌했다)
+#   종전엔 `setdefault` 라, **부모가 이 변수를 이미 내보내면 아무 일도 하지 않았다.**
+#   그런데 `error_fixer.patch_lock_path()` 의 docstring 은 바로 그 격리를 근거로
+#   "게이트가 띄운 자식은 부모와 다른 락을 쓴다" 고 선언했고, 같은 파일 다른 자리는
+#   같은 변수를 '무배포 오버라이드' 로 **공식 지원한다** 고 적었다. 어느 쪽이 옳든
+#   한쪽은 조용히 깨진다 — 실측으로 부모/자식이 같은 `patchset.lock` inode 를 잡아
+#   부모가 실시간 7분 41초 완전 블로킹됐다.
+#   → 락 격리는 이제 `error_fixer.patch_lock_scope()`(역할 파생)가 단독으로 책임진다.
+#     여기 남은 책임은 **백업이 저장소를 더럽히지 않게 하는 것 하나뿐** 이고,
+#     그건 밖에서 무엇을 내보내든 예외 없이 지켜야 한다(`JARVIS_TEST_MODE` 와 같은 이유).
+os.environ["GUARDIAN_PATCH_BACKUP_DIR"] = str(_TEST_DB_DIR / "patch_backups")
+
+# ★ ERRORS.md — 오류 기록의 **유일한 저장소**. 테스트가 여기에 쓰면 안 된다 (2026-08-14)
+#
+#   실측 오염: 골든 테스트가 `apply_fix` 를 *끝까지 실제로* 완주시키면서 라이브 문서에
+#   `### [시각] ✅ 자동수정` 43건을 append 했다. 대상 파일은 전부 `tmpXXXX/*_probe.py` —
+#   **존재하지도 않는 파일의 '수정 성공'** 이다. 그만큼 `incidents_brief`·`search_incidents`
+#   조준 검색과 사람 검토가 헛다리를 짚는다. 관측이 대상을 더럽히면 안 된다.
+#
+#   ★ 왜 conftest 인가 — 종전엔 그 사실을 아는 테스트가 자기만 `monkeypatch` 로 막고
+#     있었다(`test_publish_golden.py`). 그건 conftest 자신이 맨 위에서 경계한 바로 그
+#     형태다: **잊는 테스트가 반드시 생긴다**. 실제로 그렇게 새어 43건이 쌓였다.
+#   ★ 어떻게 막는가 — 경로의 주인이 `repair_history.errors_md_path()` 하나이고 그 주인이
+#     `GUARDIAN_ERRORS_MD` 를 **호출 시점에** 본다. 여기서 세워두면 어떤 테스트가 무엇을
+#     import 하든(그리고 어느 통로로 쓰든) 사본으로 간다.
+#   ★ 비우지 않고 **복사** 한다 — 읽는 쪽(파싱·조준검색·다음 사고번호)이 실물과 같은
+#     내용을 봐야 검사가 비어 있지 않다. 쓰기만 사본으로 흘린다.
+#   ※ `setdefault` 가 아니다: 밖에서 무엇을 내보내든 라이브 문서는 예외 없이 지킨다.
+_LIVE_ERRORS_MD = Path(__file__).resolve().parent.parent / "JARVIS07_GUARDIAN" / "ERRORS.md"
+_TEST_ERRORS_MD = _TEST_DB_DIR / "ERRORS.md"
+try:
+    shutil.copy2(_LIVE_ERRORS_MD, _TEST_ERRORS_MD)
+except Exception:                       # 라이브 문서가 없어도 테스트는 돌아야 한다
+    _TEST_ERRORS_MD.write_text("", encoding="utf-8")
+os.environ["GUARDIAN_ERRORS_MD"] = str(_TEST_ERRORS_MD)
 
 import pytest  # noqa: E402
 
@@ -41,6 +81,37 @@ import pytest  # noqa: E402
 def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001
     """테스트 종료 후 임시 DB 폐기 — 흔적을 남기지 않는다."""
     shutil.rmtree(_TEST_DB_DIR, ignore_errors=True)
+
+
+def _live_errors_md_fingerprint() -> tuple:
+    """라이브 ERRORS.md 의 지문 — 크기와 마지막 헤더. 없으면 빈 튜플."""
+    try:
+        raw = _LIVE_ERRORS_MD.read_bytes()
+    except Exception:
+        return ()
+    return (len(raw), raw[-400:])
+
+
+_LIVE_ERRORS_MD_BEFORE = _live_errors_md_fingerprint()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _live_errors_md_untouched():
+    """★ 격리가 *먹었는지* 를 동작으로 확인한다 — 설정 존재는 적용의 증거가 아니다.
+
+    세션이 끝날 때 라이브 문서가 그대로인지 본다. 스위트가 한 줄이라도 보태면 여기서
+    터진다(조용히 지나가지 않는다).
+    ※ 데몬이 같은 창에 진짜 수리를 기록하면 크기가 바뀔 수 있다 — 그때는 *꼬리* 를 함께
+      보여줘 사람이 "테스트가 쓴 것인가" 를 즉시 판별할 수 있게 한다.
+    """
+    yield
+    after = _live_errors_md_fingerprint()
+    if after != _LIVE_ERRORS_MD_BEFORE:
+        tail = after[1].decode("utf-8", "replace") if after else ""
+        raise AssertionError(
+            "테스트 세션 동안 라이브 ERRORS.md 가 변했다 — 격리를 우회한 통로가 있다.\n"
+            f"크기 {_LIVE_ERRORS_MD_BEFORE[:1]} → {after[:1]}\n"
+            f"꼬리: {tail[-300:]}")
 
 
 @pytest.fixture(scope="session")

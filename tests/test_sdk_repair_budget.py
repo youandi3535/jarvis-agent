@@ -1107,3 +1107,269 @@ def test_봉투_없는_일시오류는_종전대로_재발행한다():
     assert not [k for k in kinds if is_envelope_kind(k)], (
         "봉투가 없는데 재발행을 막으면 복구 가능한 실패까지 죽인다"
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+#  9) 자율 수리 세션의 **쓰기 범위** — 넓히는 게 아니라 좁히는 쪽 (2026-08-14 T2)
+#
+#  ★ 무엇이 열려 있었나
+#    `auto_repair` 의 SDK 호출 2곳이 `bypassPermissions` 로 세션을 띄우면서 도구
+#    허용·금지 목록을 **하나도 넘기지 않았다**. `run_sdk_query` 에는 금지목록
+#    파라미터 자체가 없어서 호출자가 걸고 싶어도 못 걸었다. 그래서 수리 세션이
+#    헌법 문서·오류 기록·학습 원장·자기 브레이크 모듈까지 편집할 수 있었다.
+#
+#  ★ 여기서 지키는 것 (되살아나면 빨개진다)
+#    1. 금지목록의 주인은 `error_fixer` 하나 — 가드는 **파생만** 한다
+#    2. 파생 실패는 통과가 아니라 **세션 미기동**(fail-closed)
+#    3. 기본은 차단이 아니라 **기록**(observe) — 넓은 금지가 조용한 정지를 만든다
+#    4. 셸 우회도 **같은 목록** 으로 본다 (도구 이름만 막으면 `rm` 으로 샌다)
+#    5. 사람이 띄운 세션은 건드리지 않는다 (규정이 미움받아 꺼지는 것을 막는다)
+# ══════════════════════════════════════════════════════════════════
+import json as _json
+import os as _os
+
+
+# 훅 경로는 **한 곳에서만** 적는다 — 테스트 안에서 두 벌이 되면 이동 시 한쪽이 낡는다.
+_HOOK = _ROOT / "JARVIS07_GUARDIAN" / "sdk_tool_guard_hook.py"
+
+
+def _guard():
+    from JARVIS07_GUARDIAN import sdk_tool_guard
+    return sdk_tool_guard
+
+
+def test_금지목록의_주인은_하나이고_가드는_파생만_한다():
+    """★ 목록을 복제하면 한쪽만 낡는다 — 이 저장소가 이미 여러 번 당한 형태다."""
+    import ast as _ast
+    import inspect
+
+    g = _guard()
+    from JARVIS07_GUARDIAN.architecture import DENY_FIX_PATHS
+    from JARVIS07_GUARDIAN.error_fixer import (
+        deny_dirs, protected_files, self_guard_files,
+    )
+
+    owned = set(protected_files()) | set(deny_dirs()) | set(self_guard_files()) | set(DENY_FIX_PATHS)
+    assert owned <= set(g.guarded_targets()), "주인의 목록 중 가드가 모르는 항목이 있다"
+
+    # 가드 모듈이 *자기 목록* 을 갖고 있지 않은가 — 문자열 상수에 경로형이 있으면 사본이다
+    src = inspect.getsource(g)
+    consts = [n.value for n in _ast.walk(_ast.parse(src))
+              if isinstance(n, _ast.Constant) and isinstance(n.value, str)]
+    copied = [t for t in owned if "/" in t and any(t in c for c in consts)]
+    assert not copied, f"가드가 보호 경로를 자체 보유한다(사본): {copied}"
+
+
+def test_자기_안전장치가_보호_대상에_들어있다():
+    """자율 수리가 자기 브레이크를 고치면 *다음 회차의 제동 능력* 을 스스로 지운다."""
+    g = _guard()
+    targets = g.guarded_targets()
+    for f in ("JARVIS07_GUARDIAN/repair_budget.py",     # 예산 브레이크
+              "shared/record_claude_change.py",          # 변경 감사 훅
+              "JARVIS00_INFRA/preflight.py"):            # 부팅 점검
+        assert f in targets, f"{f} 가 쓰기 금지 대상에 없다"
+        assert g.violations("Edit", {"file_path": f}), f"{f} 편집이 신고되지 않는다"
+
+
+def test_기본은_차단이_아니라_기록이다(monkeypatch):
+    """★ 금지 범위가 넓으면 정당한 수리까지 막혀 *조용한 정지* 가 된다.
+
+    1주 실측 뒤 사람이 `enforce` 로 올린다 — 기본이 enforce 로 바뀌면 여기서 빨개진다.
+    """
+    g = _guard()
+    monkeypatch.delenv(g.MODE_ENV_KEY, raising=False)
+    assert g.guard_mode() == g.MODE_OBSERVE
+    assert g.session_guard()["disallowed_tools"] == [], \
+        "observe 인데 SDK 에 금지목록을 걸었다 — 무엇이 막힐지 보기도 전에 막는다"
+
+    monkeypatch.setenv(g.MODE_ENV_KEY, "enforce")
+    assert g.session_guard()["disallowed_tools"], "enforce 인데 금지목록이 비었다"
+
+    monkeypatch.setenv(g.MODE_ENV_KEY, "off")
+    assert g.session_guard() == {"mode": "off", "disallowed_tools": [], "env": {}}
+
+
+def test_파생실패는_통과가_아니라_세션미기동이다(monkeypatch):
+    """★ '검사가 있는데 조용히 무력화' 는 이 저장소의 단골 사고다. 경계를 모르면 안 띄운다."""
+    import shared.claude_sdk_compat as sc
+    from JARVIS07_GUARDIAN import error_fixer as ef
+
+    g = _guard()
+    monkeypatch.delenv(g.MODE_ENV_KEY, raising=False)
+
+    def _boom():
+        raise RuntimeError("주인을 못 읽었다")
+
+    monkeypatch.setattr(ef, "protected_files", _boom)
+    with pytest.raises(g.GuardDerivationError):
+        g.session_guard()
+
+    started = []
+    monkeypatch.setattr(sc, "build_oauth_env", lambda: started.append("env") or {})
+    monkeypatch.setattr("shared.llm.defer_reason", lambda **kw: "")
+    out = sc.run_sdk_query(prompt="x", model="m", timeout=5)
+    assert out["error_kind"] == "guard_error" and out["returncode"] != 0
+    assert not started, "가드가 깨졌는데 세션 준비가 진행됐다 — fail-closed 가 아니다"
+
+
+def test_off_는_주인이_깨져도_열리는_탈출구다(monkeypatch):
+    """가드 모듈이 통째로 깨져도 시스템이 서면 안 된다 — 사람이 열 문 하나는 남긴다."""
+    import shared.claude_sdk_compat as sc
+
+    g = _guard()
+    monkeypatch.setenv(g.MODE_ENV_KEY, "off")
+    monkeypatch.setitem(sys.modules, "JARVIS07_GUARDIAN.sdk_tool_guard", None)
+    monkeypatch.setattr("shared.llm.defer_reason", lambda **kw: "")
+    reached = []
+    monkeypatch.setattr(sc, "build_oauth_env", lambda: (reached.append(1), {})[1])
+    sc.run_sdk_query(prompt="x", model="m", timeout=5)
+    assert reached, "off 인데도 막혔다 — 탈출구가 없으면 가드가 곧 시스템 정지다"
+
+
+def _fake_sdk(monkeypatch, box: dict):
+    """실 SDK 대신 옵션만 가로챈다 — 네트워크·CLI 없이 *배선* 을 실측한다."""
+    import claude_code_sdk as _sdk
+    import shared.llm as _sl
+
+    async def _q(prompt, options):        # noqa: ANN001
+        box["options"] = options
+        if False:                          # 빈 async generator
+            yield None
+
+    monkeypatch.setattr(_sdk, "query", _q)
+    monkeypatch.setattr(_sl, "defer_reason", lambda **kw: "")
+    monkeypatch.setattr(_sl, "_pace_spawn", lambda *a, **k: None)
+    monkeypatch.setattr(_sl, "_acquire_llm_sem", lambda *a, **k: True)
+    monkeypatch.setattr(_sl, "_proc_lock_acquire", lambda *a, **k: True)
+    monkeypatch.setattr(_sl, "_proc_lock_release", lambda *a, **k: None)
+
+
+def test_세션에_금지목록과_표식이_실제로_전달된다(monkeypatch):
+    """★ 파라미터가 있는 것과 *전달되는 것* 은 다르다 — 옵션 객체를 직접 본다."""
+    import shared.claude_sdk_compat as sc
+
+    g = _guard()
+    box: dict = {}
+    _fake_sdk(monkeypatch, box)
+
+    monkeypatch.setenv(g.MODE_ENV_KEY, "enforce")
+    sc.run_sdk_query(prompt="x", model="m", timeout=5, permission_mode="bypassPermissions")
+    opts = box["options"]
+    deny = list(getattr(opts, "disallowed_tools", []) or [])
+    assert deny, "enforce 인데 SDK 옵션에 금지목록이 없다 — 세션이 무제한으로 쓴다"
+    assert any("ERRORS.md" in d for d in deny), f"보호 파일이 금지 스펙에 없다: {deny[:5]}"
+    assert opts.env.get(g.SESSION_ENV_KEY), "세션 표식이 없다 — 훅이 사람 세션과 구분 못 한다"
+    assert opts.env.get(g.MODE_ENV_KEY) == "enforce"
+
+    box.clear()
+    monkeypatch.setenv(g.MODE_ENV_KEY, "observe")
+    sc.run_sdk_query(prompt="x", model="m", timeout=5)
+    assert not (getattr(box["options"], "disallowed_tools", None) or []), \
+        "observe 인데 실제로 막았다"
+    assert box["options"].env.get(g.SESSION_ENV_KEY), "observe 에서도 관측은 해야 한다"
+
+
+def test_호출자_지정_금지목록을_덮어쓰지_않는다(monkeypatch):
+    """좁히는 방향으로만 합친다 — 호출자가 건 제한이 가드 때문에 풀리면 안 된다."""
+    import shared.claude_sdk_compat as sc
+
+    g = _guard()
+    box: dict = {}
+    _fake_sdk(monkeypatch, box)
+    monkeypatch.setenv(g.MODE_ENV_KEY, "observe")
+    sc.run_sdk_query(prompt="x", model="m", timeout=5, disallowed_tools=["WebFetch"])
+    assert "WebFetch" in (box["options"].disallowed_tools or [])
+
+
+def test_셸_우회도_같은_목록으로_본다():
+    """★ 도구 이름만 막으면 `rm`·리다이렉션으로 그대로 우회된다(실제 이력 있음)."""
+    g = _guard()
+    ledger = "JARVIS07_GUARDIAN/learned_patterns.json"
+    assert g.violations("Bash", {"command": f"rm -f {ledger}"})
+    assert g.violations("Bash", {"command": f"echo x > {ledger}"})
+    assert g.violations("Bash", {"command": "sed -i s/a/b/ JARVIS07_GUARDIAN/repair_budget.py"})
+    # `cd` 로 상대경로를 바꾸는 우회 — 세션 cwd 가 루트라는 전제는 세그먼트 안에서 깨진다
+    assert g.violations("Bash", {"command": "cd JARVIS07_GUARDIAN && rm -f ERRORS.md"})
+    # `2> path` 는 진짜 파일 쓰기다 (`2>&1` 은 fd 복제라 아니다)
+    assert g.violations("Bash", {"command": "python3 x.py 2> logs/x.log"})
+    assert not g.violations("Bash", {"command": "python3 x.py 2>&1"})
+    # 과잉 차단 금지 — 읽기와 무관한 세그먼트까지 잡으면 정당한 수리가 죽는다
+    assert not g.violations("Bash", {"command": f"cat {ledger}"})
+    assert not g.violations("Bash", {"command": f"rm -rf /tmp/x && cat {ledger}"})
+    assert not g.violations("Bash", {"command": "python3 -m pytest tests/ -q"})
+    assert not g.violations("Read", {"file_path": ledger})
+    assert not g.violations("Edit", {"file_path": "JARVIS02_WRITER/scheduler.py"})
+
+
+def _run_hook(env_extra: dict, event: dict):
+    """훅을 *자식 프로세스로 실제 실행* — 코드 존재가 아니라 동작을 본다."""
+    hook = _HOOK
+    env = dict(_os.environ)
+    env.update(env_extra)
+    r = subprocess.run([sys.executable, str(hook)], input=_json.dumps(event),
+                       capture_output=True, text=True, timeout=90, env=env, cwd=str(_ROOT))
+    return r
+
+
+def test_훅은_사람_세션에_관여하지_않는다():
+    """사람의 편집을 막는 것은 이 규정의 목적이 아니다 — 막으면 규정이 먼저 꺼진다."""
+    g = _guard()
+    r = _run_hook({g.MODE_ENV_KEY: "enforce"},
+                  {"tool_name": "Write", "tool_input": {"file_path": "CLAUDE.md"}})
+    assert r.returncode == 0 and not r.stdout.strip(), \
+        f"표식 없는 세션에 훅이 개입했다: {r.stdout[:200]}"
+
+
+def test_훅이_enforce_에서_실제로_차단한다():
+    g = _guard()
+    r = _run_hook({g.SESSION_ENV_KEY: "1", g.MODE_ENV_KEY: "enforce"},
+                  {"tool_name": "Bash",
+                   "tool_input": {"command": "rm -f JARVIS07_GUARDIAN/ERRORS.md"}})
+    assert r.returncode == 0, r.stderr[:300]
+    out = _json.loads(r.stdout)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "ERRORS.md" in out["reason"]
+
+    # observe 는 같은 입력을 **통과** 시킨다 (기록만)
+    r2 = _run_hook({g.SESSION_ENV_KEY: "1", g.MODE_ENV_KEY: "observe"},
+                   {"tool_name": "Bash",
+                    "tool_input": {"command": "rm -f JARVIS07_GUARDIAN/ERRORS.md"}})
+    assert r2.returncode == 0 and not r2.stdout.strip(), "observe 가 차단했다"
+
+
+def test_훅이_설정에_등록돼_있다():
+    """설치는 적용의 증거가 아니다 — 등록이 빠지면 셸 우회가 통째로 열린다.
+
+    ★ `.claude/` 는 `.gitignore` 대상이라 **CI·새 체크아웃엔 설정 파일이 없다.**
+      없는 환경에서 실패시키면 이 테스트는 곧 지워진다 — 그래서 *있으면 반드시 맞아야
+      한다* 로 세운다. 훅 자체의 동작은 위 두 테스트가 환경과 무관하게 검증한다.
+    """
+    st = _ROOT / ".claude" / "settings.json"
+    if not st.exists():
+        pytest.skip("Claude Code 설정 없음 (기기 로컬 파일) — 등록 검사 대상 아님")
+    cfg = _json.loads(st.read_text(encoding="utf-8"))
+    hooks = cfg.get("hooks", {})
+    pre = hooks.get("PreToolUse") or []
+    cmds = [h.get("command", "") for e in pre for h in (e.get("hooks") or [])]
+    assert _HOOK.exists(), f"훅 파일이 없다: {_HOOK}"
+    assert any(_HOOK.name in c for c in cmds), f"PreToolUse 훅 미등록 ({_HOOK.name})"
+    # 기존 훅을 밀어내지 않았는가 (설정 보존)
+    for kind, needle in (("PostToolUse", "record_claude_change.py"),
+                         ("UserPromptSubmit", "conversation_hook.py"),
+                         ("Stop", "conversation_hook.py")):
+        got = [h.get("command", "") for e in (hooks.get(kind) or [])
+               for h in (e.get("hooks") or [])]
+        assert any(needle in c for c in got), f"{kind} 기존 설정이 사라졌다"
+
+
+def test_precommit_sdkwrite_레그가_실제로_돈다():
+    """★ 레그를 만들어 두고 조용히 실패하면 늘 '통과' 다 (collect/self-check 의 전례).
+
+    카테고리 등록 + 실제 실행 + 현재 저장소 무결을 한 번에 본다.
+    """
+    r = subprocess.run([sys.executable, str(_ROOT / "shared/precommit_check.py"),
+                        "--category", "sdkwrite"],
+                       capture_output=True, text=True, timeout=180, cwd=str(_ROOT))
+    out = (r.stdout or "") + (r.stderr or "")
+    assert "알 수 없는 카테고리" not in out, "sdkwrite 카테고리가 등록되지 않았다"
+    assert r.returncode == 0, f"쓰기 범위 경계가 깨져 있다:\n{out[-1200:]}"

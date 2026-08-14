@@ -1617,7 +1617,10 @@ def _restore_items(matched: dict, *, allow_full_file: bool = True) -> list:
     저장된 것은 unified diff(현행) 또는 full-file(레거시)이다.
     **전부** 복원돼야 반환한다 — 하나라도 불가하면 빈 목록(반쪽 복원 금지).
 
-    allow_full_file=False: `apply_stored_patches`(매일 04:30 전수 재적용)용.
+    allow_full_file=False: `apply_stored_patches` 용.
+        (★ 2026-08-14 정정 — "매일 04:30" 이 아니다. 이 함수의 실측 호출자는
+         `auto_repair.run_auto_repair._step_pre_patch` 한 곳이고 그것은
+         `j07_deep_audit` = **토요일 03:00** 이다. 발행 직전 sweep 과 혼동 금지.)
       레거시 full-file 은 "before 컨텍스트가 남아 있는가" 라는 회귀 감지 의미가 없어서
       매번 무조건 덮어쓰게 된다 — 정기 스윕에서는 diff 만 다룬다.
     """
@@ -1664,8 +1667,8 @@ def apply_stored_patches() -> int:
     Returns: 적용 성공 건수
     """
     from JARVIS07_GUARDIAN.error_fixer import (
-        apply_files_safely, rollback_patchset, verify_fix, record_rollback_learning,
-        VERIFY_REPRODUCES, VERIFY_UNVERIFIABLE,
+        _patch_lock, apply_files_safely, gate_patchset, rollback_patchset, verify_fix,
+        record_rollback_learning, VERIFY_REPRODUCES, VERIFY_UNVERIFIABLE,
     )
 
     data = _load_learned()
@@ -1689,56 +1692,93 @@ def apply_stored_patches() -> int:
         _tag  = f"learned:{_fp[:40]}"
         _rels = ", ".join(r for r, _ in items)
 
-        ok, why, staged = apply_files_safely(items, tag=_tag)
-        if not ok:
-            log.info(f"[GUARDIAN/patch] 학습 패치 거부 ({_rels}): {why}")
-            continue
+        # ★ 테스트 게이트는 **여기서 돌리지 않는다** (2026-08-14 2차 — 순서 교정, ③).
+        #   바로 아래 재현검증(수초)이 "원 오류 그대로" 라고 답하면 이 패치는 어차피
+        #   전량 롤백된다. `apply_fix` 와 **같은 순서** 여야 한다 — 한 통로만 고치면
+        #   다른 통로로 샌다(이 함수가 정확히 그렇게 가드 0종으로 남아 있던 자리다).
+        # ★★ 적용 → 재현검증 → 게이트를 **하나의 배타 구간** 으로 (2026-08-14 3차, ③)
+        #   `apply_fix` 와 **같은 구조** 다 — 한 통로만 고치면 다른 통로로 샌다.
+        #   적용(락 안)과 게이트(락 밖) 사이에 창이 열리면, 그 창에서 다른 수리가 자기
+        #   패치를 적용하고 이쪽 게이트는 *남의 패치까지 섞인 워킹트리* 를 채점한다.
+        #   그러면 무고한 패치가 롤백되고 바로 아래 음의보상·학습강등이 **거짓으로** 흐른다.
+        #   새 락을 만들지 않는다 — `_patch_lock` 은 같은 스레드의 재진입을 통과시키므로
+        #   안쪽 `apply_files_safely`·`rollback_patchset`·`gate_patchset` 이 그대로 중첩된다.
+        with _patch_lock():
+            ok, why, staged = apply_files_safely(items, tag=_tag, run_gate=False)
+            if not ok:
+                log.info(f"[GUARDIAN/patch] 학습 패치 거부 ({_rels}): {why}")
+                continue
 
-        # ★ 재현 검증 — 적용됐다고 고쳐진 것이 아니다. apply_fix 와 **같은 정책**.
-        #   ★★ `message_pattern` 을 message 로 넘기지 말 것 (2026-07-26 자수):
-        #     그건 메시지가 아니라 `record_pattern_hit` 이 만든 **정규식**(`re.escape` 포함)이다.
-        #     `verify_fix` 의 `_parse_import_target`·NameError 추출이 전부 no-op 이 되어
-        #     `compile_file` 프로브만 남고, 그건 이미 선검사(`ast.parse`)가 보장한 사실이라
-        #     **무조건 reproduced_gone → 근거 없는 +1 보상**이 된다. 2026-07-25 가 폐기한
-        #     "컴파일되면 fixed" 가 이 경로에서 되살아나는 것이다.
-        #     원문이 없으면 **검증 못 한 것으로 취급**한다(보상 0) — 이 파일이 스스로 세운 규칙.
-        _sample = str(entry.get("sample_message") or "").strip()
-        if _sample:
-            _rec = {"error_type": entry.get("error_type", "") or "",
-                    "message": _sample, "module": items[0][0]}
-            _vstate, _vdetail = verify_fix(
-                _rec, {"target_file": items[0][0], "patch": items[0][1]}, staged[0].path,
-                original_content=staged[0].original,
-            )
-        else:
-            _rec = {"error_type": entry.get("error_type", "") or "", "message": "",
-                    "module": items[0][0]}
-            _vstate, _vdetail = VERIFY_UNVERIFIABLE, "원 오류 메시지 원문 미보유 — 재현 불가"
+            # ★ 재현 검증 — 적용됐다고 고쳐진 것이 아니다. apply_fix 와 **같은 정책**.
+            #   ★★ `message_pattern` 을 message 로 넘기지 말 것 (2026-07-26 자수):
+            #     그건 메시지가 아니라 `record_pattern_hit` 이 만든 **정규식**(`re.escape` 포함)이다.
+            #     `verify_fix` 의 `_parse_import_target`·NameError 추출이 전부 no-op 이 되어
+            #     `compile_file` 프로브만 남고, 그건 이미 선검사(`ast.parse`)가 보장한 사실이라
+            #     **무조건 reproduced_gone → 근거 없는 +1 보상**이 된다. 2026-07-25 가 폐기한
+            #     "컴파일되면 fixed" 가 이 경로에서 되살아나는 것이다.
+            #     원문이 없으면 **검증 못 한 것으로 취급**한다(보상 0) — 이 파일이 스스로 세운 규칙.
+            _sample = str(entry.get("sample_message") or "").strip()
+            if _sample:
+                _rec = {"error_type": entry.get("error_type", "") or "",
+                        "message": _sample, "module": items[0][0]}
+                _vstate, _vdetail = verify_fix(
+                    _rec, {"target_file": items[0][0], "patch": items[0][1]}, staged[0].path,
+                    original_content=staged[0].original,
+                )
+            else:
+                _rec = {"error_type": entry.get("error_type", "") or "", "message": "",
+                        "module": items[0][0]}
+                _vstate, _vdetail = VERIFY_UNVERIFIABLE, "원 오류 메시지 원문 미보유 — 재현 불가"
 
-        if _vstate == VERIFY_REPRODUCES:
-            _n, _failed = rollback_patchset(staged)
-            log.warning(f"[GUARDIAN/patch] 재적용했으나 원 오류 재현 → 전량 롤백 "
-                        f"({_rels}): {_vdetail[:80]}"
-                        + (f" / ★ 롤백 실패 {_failed}" if _failed else ""))
-            # ★ 롤백은 가장 강한 외생 신호다 — apply_fix 와 같은 3종을 여기서도 흘린다.
-            #   종전엔 `continue` 뿐이라 **양의 보상만 흐르고 음의 신호는 안 흘렀다**.
-            try:
-                from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
-                _hc0  = int(entry.get("hit_count", 0) or 0)
-                _arm0 = (f"verified:{_fp[:32]}" if _hc0 >= _HIGH_COUNT_THRESHOLD
-                         else f"new:{_fp[:32]}")
-                _bandit_reward(entry.get("error_type", "") or "", _arm0, success=False,
-                               error_record=_rec)
-            except Exception as _re:
-                log.debug(f"[GUARDIAN/patch] 롤백 음의보상 실패: {_re}")
-            try:
-                record_rollback_learning(
-                    _rec, {"pattern": fixer, "target_file": items[0][0]},
-                    f"학습 재적용 후 원 오류 재현 → 롤백: {_vdetail[:100]}",
-                    verification=VERIFY_REPRODUCES)
-            except Exception as _re:
-                log.debug(f"[GUARDIAN/patch] 롤백 학습강등 실패: {_re}")
-            continue
+            if _vstate == VERIFY_REPRODUCES:
+                _n, _failed = rollback_patchset(staged)
+                log.warning(f"[GUARDIAN/patch] 재적용했으나 원 오류 재현 → 전량 롤백 "
+                            f"({_rels}): {_vdetail[:80]}"
+                            + (f" / ★ 롤백 실패 {_failed}" if _failed else ""))
+                # ★ 롤백은 가장 강한 외생 신호다 — apply_fix 와 같은 3종을 여기서도 흘린다.
+                #   종전엔 `continue` 뿐이라 **양의 보상만 흐르고 음의 신호는 안 흘렀다**.
+                try:
+                    from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
+                    _hc0  = int(entry.get("hit_count", 0) or 0)
+                    _arm0 = (f"verified:{_fp[:32]}" if _hc0 >= _HIGH_COUNT_THRESHOLD
+                             else f"new:{_fp[:32]}")
+                    _bandit_reward(entry.get("error_type", "") or "", _arm0, success=False,
+                                   error_record=_rec)
+                except Exception as _re:
+                    log.debug(f"[GUARDIAN/patch] 롤백 음의보상 실패: {_re}")
+                try:
+                    record_rollback_learning(
+                        _rec, {"pattern": fixer, "target_file": items[0][0]},
+                        f"학습 재적용 후 원 오류 재현 → 롤백: {_vdetail[:100]}",
+                        verification=VERIFY_REPRODUCES)
+                except Exception as _re:
+                    log.debug(f"[GUARDIAN/patch] 롤백 학습강등 실패: {_re}")
+                continue
+
+            # ★ 싼 검증을 통과한 것만 비싼 게이트로 (주인은 `error_fixer.gate_patchset` 하나 — ①).
+            #   발행 임계경로에서는 그 안에서 스스로 보류한다.
+            _gok, _gwhy, _gkind = gate_patchset(staged, tag=_tag)
+            if not _gok:
+                log.warning(f"[GUARDIAN/patch] 재적용이 게이트에 막힘 → 전량 롤백 "
+                            f"({_rels}): {_gwhy[:120]}")
+                # 게이트 실패는 재현과 같은 급의 외생 신호다 — 같은 3종을 흘린다.
+                try:
+                    from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
+                    _hcg  = int(entry.get("hit_count", 0) or 0)
+                    _armg = (f"verified:{_fp[:32]}" if _hcg >= _HIGH_COUNT_THRESHOLD
+                             else f"new:{_fp[:32]}")
+                    _bandit_reward(entry.get("error_type", "") or "", _armg, success=False,
+                                   error_record=_rec)
+                except Exception as _ge:
+                    log.debug(f"[GUARDIAN/patch] 게이트 음의보상 실패: {_ge}")
+                try:
+                    record_rollback_learning(
+                        _rec, {"pattern": fixer, "target_file": items[0][0]},
+                        f"학습 재적용이 테스트 게이트에 막힘 → 롤백: {_gwhy[:100]}",
+                        verification=VERIFY_REPRODUCES)
+                except Exception as _ge:
+                    log.debug(f"[GUARDIAN/patch] 게이트 학습강등 실패: {_ge}")
+                continue
 
         applied += 1
         bumped.append(_fp)

@@ -1,14 +1,16 @@
 """JARVIS07_GUARDIAN/error_fixer.py — 오류 자동 수정기.
 
-흐름:
+흐름 (2~5 는 **배타 구간** — `json_store.locked` 스레드락 ∧ flock):
   1. 안전 검증 (경로 탈출 방지 / 줄 수 / ast.parse)
   1-B. ★ code-removal 가드 — "지워서 통과시키는" 패치 거부
-  2. .bak 백업
-  3. 파일 적용
-  4. import 검증
-  5. ★ 원 오류 재현 검증 (reproduced_gone / unverifiable / still_reproduces)
-  6. 실패·재현 시 .bak 롤백
-  7. DB 상태 업데이트 + ERRORS.md 기록 + 밴딧 *양방향* 보상
+  2. ★ 원본 재확인 (선검사 이후 바뀌었으면 전제가 거짓 → 아무것도 쓰지 않고 후퇴)
+  3. 백업 (★ 시도마다 다른 슬롯 — 고정 `<파일>.bak` 은 동시 도달 시 원본을 잃는다)
+  4. 파일 적용 (임시파일 → os.replace 원자 교체)
+  5. import 검증 (수초)
+  6. ★ 원 오류 재현 검증 (reproduced_gone / unverifiable / still_reproduces) — **싼 검증 먼저**
+  7. ★ 테스트 게이트 (CI 와 같은 검사) — **비싼 검증은 나중**, 발행 임계경로에서는 보류
+  8. 실패·재현 시 전량 롤백 (성공 롤백은 백업까지 정리)
+  9. DB 상태 업데이트 + ERRORS.md 기록 + 밴딧 *양방향* 보상
 
 ★ 자동 승인 — Telegram 버튼 없음. 검증 통과 시 즉시 적용.
 
@@ -27,17 +29,45 @@
     "still_reproduces" = 여전히 재현됨 = 수정 실패                → 롤백 + 음의 보상
 
   킬스위치: `GUARDIAN_FIX_VERIFY=0` → 종전 동작(구문·import 만으로 fixed + 양의 보상).
+
+★★ 테스트 게이트 (2026-08-14) — "고쳤다" 의 실체가 `ast.parse` + import 1회였다
+  그 둘은 *파일이 깨지지 않았다* 만 말한다. 저장소엔 스위트(약 540개·84초)가 있었는데
+  수리 경로에서는 **한 번도 돌지 않았다**. 이제 CI 와 같은 검사를 실제로 돌리고,
+  실패하면 이미 있는 `rollback_patchset` 으로 되돌린다. 주인은 `gate_patchset` 하나(①).
+  · 무엇을 돌릴지는 `.github/workflows/ci.yml` 에서 파생한다(②) — 명령을 박지 않는다.
+  · 게이트가 *기준선부터* 빨가면 판별 불가다. 그때 막으면 **모든 자동수리가 조용히
+    멈춘다** → 막지 않고 통과시키되 텔레그램으로 알린다(`_notify_gate_blind`).
+  · 킬스위치: `GUARDIAN_TEST_GATE=0` / 배타는 `GUARDIAN_PATCH_LOCK=0`.
+
+  ★★ 어디서 도는가 — **발행 임계경로에서는 돌지 않는다** (2026-08-14 2차 정정)
+    초판은 값싼 이름표("발행 전 자체수리 — LLM-0, 수초")가 붙은 자리에 150초짜리
+    검증을 넣었다. 수리 가능한 오류 N 건이면 발행 앞에 N×150초가 붙는 구조였다.
+    ★ 숫자는 **스위트 길이를 따라 자란다** — 실측 왕복은 2026-08-14 기준 138~150초
+      (precommit 12.8초 + pytest 124.6초). 종전 주석의 '93초' 는 스위트가 짧던 때의
+      값이라 이미 낡아 있었다. 상한을 이 숫자에서 파생하지 말 것 —
+      상한의 주인은 `gate_time_budget_sec()` 하나다(②).
+    이제 `gate_blocked_reason()` 이 `publish_critical_reason()`(= JARVIS04 발행창)에서
+    파생해 스스로 보류하고, 시간 여유가 있는 경로(토 03:00 `j07_deep_audit`)에서만 돈다.
+    · 절대 상한: `gate_time_budget_sec()` — `watchdog.DEFAULT_ACTION_DEADLINE_SEC` 파생.
+    · 순서: 싼 재현검증(`verify_fix`) → 통과한 것만 게이트. 되돌릴 패치에 150초를 쓰지 않는다.
+    · 배타: 적용·재현검증·게이트가 **한 배타 구간**. 남의 패치가 섞인 워킹트리를 채점하면
+      무고한 패치가 롤백되고 학습 원장이 거짓으로 갱신된다 (2026-08-14 3차).
 """
 from __future__ import annotations
 
 import ast
+import itertools
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 log = logging.getLogger("jarvis.guardian.fixer")
@@ -55,7 +85,18 @@ _SUBPROC_PY = str(_VENV_PY) if _VENV_PY.exists() else sys.executable
 # 수정 금지 디렉터리
 _DENY_DIRS = {".venv", ".git", "__pycache__", "shared/backups", "chrome_profile", "logs"}
 # 수정 허용 확장자
-_ALLOW_EXT = {".py", ".sh", ".md"}
+#   ★ `.sh` 를 뺐다 (2026-08-14 — 검증 없이 착지하던 유일한 실행 파일)
+#     `.py` 는 `ast.parse` 로, `.md` 는 실행되지 않아 무해하지만, `.sh` 는 **검사 0** 인 채
+#     그대로 실행 대상이 된다. 그 목록 안에 `restart_daemon.sh` 가 있었다 — 깨지면
+#     데몬 재시작 자체가 불가능해져 *복구 경로* 가 사라진다.
+#     실사용 이력으로 판단했다(실측 2026-08-14): 자동 적용된 패치의 대상 확장자는
+#     학습 원장 85건 전부 `.py`/`.json` 이고, `error_log.fixed_file` 4,729행 중 `.sh` 는
+#     2행뿐인데 **둘 다 사람·Claude 의 수동 수정 기록**(`report_manual_fix`)이다.
+#     즉 이 자동 경로로 `.sh` 가 적용된 적은 한 번도 없다 — 빼도 잃는 기능이 없고,
+#     남기면 검사 없는 실행 파일 쓰기가 열린 채로 있다. `bash -n` 을 붙이는 대신 닫는다
+#     (문법이 맞는 스크립트도 재시작을 망가뜨릴 수 있으므로 구문검사는 답이 아니었다).
+#     `.sh` 수정이 정말 필요하면 사람이 한다.
+_ALLOW_EXT = {".py", ".md"}
 # ★ ERRORS [137] 사용자 박제 2026-05-17 — 기록·박제 파일 *절대 수정 금지* 리스트.
 # GUARDIAN auto_repair 가 *기록 파일을 수정 대상으로 인식* 하여 *덮어쓰기 사고* 발견.
 # 기록 파일은 *읽기 전용* — append 만 허용 (그것도 error_collector API 통해서만).
@@ -69,6 +110,23 @@ _DENY_FILES = {
     "JARVIS07_GUARDIAN/learned_patterns.json",   # 학습 자산 (별도 API 만)
     "JARVIS07_GUARDIAN/bandit_state.json",       # 밴딧 가중치 — 되돌리면 학습이 사라진다
     "JARVIS07_GUARDIAN/learned_incidents.json",  # 사고 이력 (append only)
+}
+
+
+# ★ 자율 수리 세션이 *자기 안전장치* 를 못 고치게 (2026-08-14 — T2 방어적 하드닝).
+#   아래 셋은 "고장 나면 브레이크가 사라지는" 파일이다. 자동 수리가 이것을 편집하면
+#   *다음 회차의 제동 능력* 을 스스로 지운다 — 그리고 그 사실이 아무 데도 안 남는다.
+#     · repair_budget.py       — 자율 SDK 수리 예산·시도 상한 (자기 브레이크)
+#     · record_claude_change.py — Claude Code 변경 감사 훅 (자기 감사 기록)
+#     · preflight.py           — 부팅 점검 (Layer 0, 복구 경로의 시작점)
+#   ★ `_DENY_FILES` 와 합치지 않았다: 저쪽은 *결정론적 패치 관문*(`_safe_path`)이 즉시
+#     차단하는 목록이라, 넣는 순간 **관측 없이 집행** 이 된다. 이 셋은 우선
+#     `sdk_tool_guard` 의 observe 로 1주 실측한 뒤 사람이 승격을 판단한다(T2 (4)).
+#     두 목록의 주인은 여전히 이 파일 하나다 — 소비자는 `self_guard_files()` 로 파생한다.
+_SELF_GUARD_FILES = {
+    "JARVIS07_GUARDIAN/repair_budget.py",
+    "shared/record_claude_change.py",
+    "JARVIS00_INFRA/preflight.py",
 }
 
 
@@ -86,6 +144,17 @@ def protected_files() -> frozenset:
 def deny_dirs() -> frozenset:
     """수정·복원 금지 디렉터리 — 같은 이유로 여기가 주인이다."""
     return frozenset(_DENY_DIRS)
+
+
+def self_guard_files() -> frozenset:
+    """**자율 수리 세션의 쓰기 금지** — 자기 안전장치 파일 (2026-08-14).
+
+    ★ 왜 `protected_files()` 와 나눠 두나: 저쪽은 *기록·학습 자산*(되돌리면 사라지는 것),
+      이쪽은 *브레이크·감사·부팅 점검*(고치면 다음 사고를 못 막는 것)이다. 성질이 달라
+      승격 시점도 다르다 — 이쪽은 observe 실측이 끝난 뒤 사람이 집행으로 올린다.
+      목록의 주인은 두 함수 모두 이 파일 하나다(①). 소비자는 복제하지 말고 부를 것.
+    """
+    return frozenset(_SELF_GUARD_FILES)
 
 
 def _normalize_target(raw: str) -> str:
@@ -211,19 +280,49 @@ def _validate_python(content: str) -> bool:
         return False
 
 
-def _backup(file_path: Path) -> Path | None:
-    """.bak 백업 생성. 성공 시 백업 경로 반환.
+_BAK_SEQ = itertools.count()
 
-    ★ 권한을 소유자 전용으로 조인다 (2026-08-12).
-      `copy2` 는 원본 권한을 그대로 승계하는데, 소스는 0644 다. 그 백업이
-      `JARVIS08_PUBLISH/credentials/` 안에 떨어지면 **그 폴더 규칙(0600)을 어긴다** —
-      그 폴더는 git 미추적 파일을 전부 '비밀' 로 취급한다(쿠키·토큰과 한 칸에 산다).
-      실측: `login_manager.py.bak`·`naver_cookie_refresher.py.bak` 이 0644 로 남아
-      `test_시크릿_파일_권한이_소유자전용` 이 빨갛게 됐다.
-      백업을 만드는 곳이 여기 하나이므로 여기서 한 번에 보장한다(①).
+
+def patch_backup_dir() -> Path:
+    """패치 백업 보관소 — **이 경로의 주인은 여기 하나** (①).
+
+    `shared/file_cleanup.py` 가 보존기간을 걸 때 이 함수에서 읽어 간다. 두 곳에 적으면
+    한쪽이 옮겨졌을 때 정리 규칙이 조용히 빈 폴더를 쓸게 된다.
+    이름이 `_backup_*` 이라 `.gitignore` 가 이미 통째로 무시한다(.gitignore:20).
+    무배포 오버라이드: `GUARDIAN_PATCH_BACKUP_DIR` (테스트는 이걸로 임시 경로에 격리한다 —
+    관측이 대상을 더럽히면 안 된다. `shared/db.py` 의 `JARVIS_BACKUP_DIR` 과 같은 형태).
     """
-    bak = file_path.with_suffix(file_path.suffix + ".bak")
+    return Path(os.getenv("GUARDIAN_PATCH_BACKUP_DIR")
+                or (_ROOT / "JARVIS07_GUARDIAN" / "_backup_patches"))
+
+
+def _backup(file_path: Path) -> Path | None:
+    """백업 생성. 성공 시 백업 경로 반환.
+
+    ★★ **시도마다 다른 파일** 이다 (2026-08-14 — 종전은 `<파일>.bak` *고정 단일 슬롯*)
+      같은 파일을 겨눈 스레드가 동시에 도달하면(실측: 5스레드 동시 도달이 하루 3회)
+      B 의 백업에 **이미 A 가 패치한 내용** 이 담겼다. 그 뒤 어느 쪽이 롤백하든 원본은
+      영구 소실되는데, **두 스레드 다 로그엔 "롤백 완료" 를 남긴다** — 조용한 파손이다.
+      → 이름에 시각·pid·스레드·시퀀스를 넣어 슬롯을 분리한다. 배타는 `apply_patchset`
+        의 파일락이 담당하고, 여기서는 *설령 겹쳐도 서로를 덮지 않게* 만든다(이중 방어).
+
+    ★ 저장 위치를 원본 옆에서 **전용 폴더로** 옮겼다 (같은 날)
+      ① 원본 옆에 두면 정리 규칙을 걸 수 없다 — `.bak` 이 저장소 어디에나 흩어진다.
+      ② `JARVIS08_PUBLISH/credentials/` 안에 떨어지면 그 폴더 규칙(0600)을 어긴다.
+         그 폴더는 git 미추적 파일을 전부 '비밀' 로 취급한다(쿠키·토큰과 한 칸에 산다).
+         실측: `login_manager.py.bak`·`naver_cookie_refresher.py.bak` 이 0644 로 남아
+         `test_시크릿_파일_권한이_소유자전용` 이 빨갛게 됐다.
+      권한 0600 은 그대로 유지한다 — 백업을 만드는 곳이 여기 하나이므로 여기서 보장한다(①).
+    """
     try:
+        rel = str(file_path.resolve().relative_to(_ROOT))
+    except Exception:                                   # noqa: BLE001 — 루트 밖(임시경로 등)
+        rel = file_path.name
+    stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{threading.get_ident()}-{next(_BAK_SEQ)}"
+    d = patch_backup_dir()
+    bak = d / f"{rel.replace('/', '__')}.{stamp}.bak"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
         shutil.copy2(file_path, bak)
         try:
             bak.chmod(0o600)
@@ -244,15 +343,6 @@ def _rollback_ok(file_path: Path, bak_path: Path) -> bool:
     except Exception as e:                              # noqa: BLE001
         log.error(f"[GUARDIAN] ★ 롤백 실패 — 파일이 파손된 채 남았다: {file_path} — {e}")
         return False
-
-
-def _rollback(file_path: Path, bak_path: Path):
-    """백업에서 원복."""
-    try:
-        shutil.copy2(bak_path, file_path)
-        log.info(f"[GUARDIAN] 롤백 완료: {file_path.name}")
-    except Exception as e:
-        log.error(f"[GUARDIAN] 롤백 실패: {e}")
 
 
 # ── import 검증 프로브 (별도 인터프리터) ─────────────────────────────────────
@@ -365,9 +455,25 @@ def _update_errors_md(error_record: dict, analysis: dict, success: bool,
     ★ 검증·결과 필수 (사용자 박제 2026-07-23): "무엇을 고쳤나" 만 적으면
       *고친 뒤 무엇이 정상으로 바뀌었는지* 를 아무도 답할 수 없다. 자동 수리도
       수동 수리와 **같은 서식** 을 남긴다 (③ 모든 경로 동일 적용).
+
+    ★★ **게이트가 띄운 자식 안에서는 적지 않는다** (2026-08-14 — 실측 오염 43건)
+      게이트는 CI 와 같은 검사(pytest)를 자식 프로세스로 돌린다. 그 자식 안에서 도는
+      골든 테스트가 `apply_fix` 를 끝까지 완주시키므로, 운영 수리 **1건마다** 존재하지도
+      않는 `tmpXXXX/*_probe.py` 의 '수정 성공' 이 1~3건씩 이 문서에 쌓인다.
+      오류 기록의 유일한 저장소가 오염되면 `incidents_brief` 조준 검색과 사람 검토가
+      그만큼 헛다리를 짚는다. 자식은 *검사* 를 하러 간 것이지 *기록* 을 하러 간 게 아니다.
+      판정은 새 설정이 아니라 **이미 있는 표식**(`GUARDIAN_GATE_INSIDE` → `gate_depth()`)에서
+      온다 — 재귀 차단이 쓰는 것과 같은 표식이라 새 통로가 생겨도 자동으로 따라온다(②③).
+
+    ★ 경로의 주인은 `repair_history.errors_md_path()` 하나다 (①). 종전엔 여기서
+      `Path(__file__).parent` 로 직접 조립해, 읽는 쪽을 격리해도 **쓰는 쪽이 새어나갔다**.
     """
+    if gate_depth():
+        log.debug("[GUARDIAN] 게이트 자식 안 — ERRORS.md 기록 생략(문서 오염 방지)")
+        return
     try:
-        errors_md = Path(__file__).parent / "ERRORS.md"
+        from JARVIS07_GUARDIAN.repair_history import errors_md_path
+        errors_md = errors_md_path()
         if not errors_md.exists():
             return
         from datetime import datetime
@@ -405,6 +511,135 @@ def _update_errors_md(error_record: dict, analysis: dict, success: bool,
 VERIFY_GONE        = "reproduced_gone"
 VERIFY_UNVERIFIABLE = "unverifiable"
 VERIFY_REPRODUCES  = "still_reproduces"
+# 검증을 아예 돌리지 않은 것("" 상태)의 이름 — 종전엔 문자열이 인라인으로 박혀 있었다.
+VERIFY_LEGACY      = "legacy_unchecked"
+
+
+def verification_tag(state: str) -> str:
+    """종결 사유 맨 앞에 붙는 **기계 판독 접두** — `[verification=<상태>] `.
+
+    ★ 왜 이 함수가 필요한가 (2026-08-14)
+      접두 형식이 `error_fixer` 안에 인라인으로 한 번만 쓰여 있었다. 그래서 Tier-2
+      (`guardian_agent`)는 같은 뜻을 `"Tier-2 SDK 수정 + 재현검증 통과"` 라는 **리터럴**로
+      적었고, 두 통로의 기록이 서로 다른 언어가 됐다. 실측: `[verification=` 을 가진 행이
+      5,845행 중 **0행** — 접두는 있는데 그것을 쓰는 통로가 사실상 하나도 안 돌았다.
+      형식의 주인을 하나로 만들어 두 통로가 같은 문장을 쓰게 한다(①③).
+    """
+    return f"[verification={state or VERIFY_LEGACY}] "
+
+
+# 사람이 읽는 표현 — *상태에서 파생*. 호출자가 자기 문구를 짓지 않게 한다(②).
+_VERIFY_PHRASE = {
+    VERIFY_GONE:         "재현검증 통과 — 원 오류가 실제로 사라짐",
+    VERIFY_UNVERIFIABLE: "재현검증 불가 — 미검증 수정(깨뜨리지 않은 것만 확인)",
+    VERIFY_REPRODUCES:   "원 오류 재현 — 수정으로 인정하지 않음",
+    VERIFY_LEGACY:       "검증 미실행 — 근거 없음",
+}
+
+
+def verification_phrase(state: str) -> str:
+    """검증 상태 → 사람이 읽는 한 줄. 모르는 상태도 *상태 이름 그대로* 정직하게 말한다."""
+    _s = state or VERIFY_LEGACY
+    return _VERIFY_PHRASE.get(_s, f"검증 상태 `{_s}`")
+
+
+def verification_states() -> tuple:
+    """정본 검증 상태 전체 — 목록을 복사하지 말고 여기서 파생할 것(②)."""
+    return (VERIFY_GONE, VERIFY_UNVERIFIABLE, VERIFY_REPRODUCES, VERIFY_LEGACY)
+
+
+def verification_tag_effective() -> "bool | None":
+    """`[verification=...]` 태그가 **실제로 DB 에 남는지** 동작으로 판정 (2026-08-14).
+
+    ★ 왜 필요한가 — 코드 존재는 적용의 증거가 아니다
+      접두를 박는 코드는 2026-07-25 부터 있었다. 그런데 실측하면 `[verification=` 을
+      가진 `error_log` 행이 **5,845행 중 0행** 이었다. 두 가지가 겹쳤다:
+        ① 그 접두를 쓰는 출구(`apply_fix` 성공 경로)가 3주간 한 번도 안 돌았고,
+        ② 실제로 도는 출구(Tier-2)는 리터럴을 찍어 접두를 아예 안 남겼다.
+      "코드가 있으니 남을 것" 이라는 추정이 3주를 갔다. 그래서 *추정하지 않고 통과시켜 본다*.
+
+    표준 형태는 `claude_sdk_compat.patch_effective()` /
+    `pytrends_utils.retry_compat_effective()` — 가짜 입력을 **실제 소비자가 쓰는 참조** 로
+    한 번 통과시켜 결과로 판정한다. 여기서 통과시키는 참조는 태그를 DB 에 쓰는 두 출구다:
+      · Tier-1 → `shared.db.mark_error_fixed`  (apply_fix 성공 경로가 쓰는 그 함수)
+      · Tier-2 → `guardian_agent.close_error`  (Tier-2 종결 단일 출구)
+    앞서 남아 있던 *실패 사유* 위에 덮어써 본다 — first-wins 로 태그가 먹히던 사고까지
+    같은 통과로 잡기 위해서다.
+
+    ※ 관측이 관측 대상을 더럽히지 않는다: 합성 행은 판정 직후 삭제한다.
+    ※ 다루지 않는 것(정직하게): `apply_fix` 가 *그 문자열을 만들어 내는지* 는 여기서
+      보지 않는다 — 그건 `tests/test_publish_golden.py` 가 실제 `apply_fix` 를 끝까지
+      돌려 확인한다. 여기서 보는 것은 "만들어진 태그가 DB 까지 살아 남는가" 다.
+
+    반환: True(유효) / False(무력 — 즉시 수리 필요) / None(판정 불가·검사 비활성)
+    """
+    import os as _os
+
+    if _os.getenv("GUARDIAN_CLOSE_STRICT", "1") == "0":
+        return None                       # 킬스위치로 종전 문구 복귀 중 — 태그 부재가 정상
+    try:
+        from shared import db as _db
+    except Exception:
+        return None
+
+    # ★ 합성 행 식별자의 주인은 `architecture.SYNTHETIC_SOURCES` 단독 (2026-08-14 P2).
+    #   집계 배제 조건(`shared.db.synthetic_exclusion_sql`)이 같은 값에서 파생하므로,
+    #   여기 리터럴을 다시 적으면 둘이 갈라져 **프로브가 다시 지표를 오염**시킨다.
+    from JARVIS07_GUARDIAN.architecture import SYNTHETIC_SOURCES as _SYN
+    _SRC = str(_SYN[0])
+    _STATUS_NEW_ = None
+    try:
+        from JARVIS07_GUARDIAN.architecture import STATUS_NEW as _STATUS_NEW_
+    except Exception:
+        _STATUS_NEW_ = _db._schema_default_error_status()
+    _eids: list = []
+
+    def _mk() -> int:
+        with _db.get_db() as con:
+            con.execute(
+                "INSERT INTO error_log (source, module, error_type, message, status) "
+                "VALUES (?,?,'VerificationTagSmoke','태그 스모크',?)",
+                (_SRC, _SRC, _STATUS_NEW_))
+            eid = con.execute("SELECT id FROM error_log WHERE source=? "
+                              "ORDER BY id DESC LIMIT 1", (_SRC,)).fetchone()[0]
+        _eids.append(int(eid))
+        # 먼저 실패 사유를 깔아 둔다 — 종전 first-wins 라면 여기서 태그가 지워진다.
+        _db.mark_error_status(int(eid), _STATUS_NEW_, "스모크: 선행 실패 사유(태그를 먹던 자리)")
+        return int(eid)
+
+    def _res_of(eid: int) -> str:
+        with _db.get_db() as con:
+            row = con.execute("SELECT resolution FROM error_log WHERE id=?", (eid,)).fetchone()
+        return (row[0] if row else "") or ""
+
+    try:
+        # ── Tier-1 출구 ──────────────────────────────────────────
+        e1 = _mk()
+        _db.mark_error_fixed(e1, verification_tag(VERIFY_GONE) + "스모크(Tier-1)",
+                             fixed_file=None)
+        ok1 = _res_of(e1).startswith(verification_tag(VERIFY_GONE))
+
+        # ── Tier-2 출구 ──────────────────────────────────────────
+        from JARVIS07_GUARDIAN.guardian_agent import close_error as _close
+        e2 = _mk()
+        _close(e2, verification=VERIFY_UNVERIFIABLE, detail="스모크(Tier-2)")
+        _r2 = _res_of(e2)
+        # 태그가 남는 것으로 끝이 아니다 — **상태가 그대로** 실려야 한다.
+        # (종전 리터럴은 unverifiable 을 "재현검증 통과" 라고 말했다.)
+        ok2 = _r2.startswith(verification_tag(VERIFY_UNVERIFIABLE))
+
+        return bool(ok1 and ok2)
+    except Exception as e:
+        log.warning("[GUARDIAN] verification_tag_effective 판정 불가: %s: %s",
+                    type(e).__name__, e)
+        return None
+    finally:
+        for _e in _eids:
+            try:
+                with _db.get_db() as con:
+                    con.execute("DELETE FROM error_log WHERE id=? AND source=?", (_e, _SRC))
+            except Exception:
+                pass
 
 
 def _verify_enabled() -> bool:
@@ -1155,9 +1390,11 @@ def _note_resolution(error_id: int, text: str) -> None:
     try:
         if not isinstance(error_id, int) or error_id < 0:
             return
+        from shared.db import RESOLUTION_MAX as _RMAX
         from shared.db import get_db as _get_db
         with _get_db() as conn:
-            conn.execute("UPDATE error_log SET resolution=? WHERE id=?", (text[:4000], error_id))
+            conn.execute("UPDATE error_log SET resolution=? WHERE id=?",
+                         (text[:_RMAX], error_id))
     except Exception as e:
         log.debug(f"[GUARDIAN] resolution 기록 실패: {e}")
 
@@ -1203,7 +1440,10 @@ class FixResult(int):
 #
 #  왜 만들었나 (ERRORS [502]): 정책 기반 경로 **둘** 의 가드가 서로 달랐다.
 #    · `apply_fix`                     — 가드 5종 전부 통과
-#    · `pattern_fixer.apply_stored_patches` — 가드 **0종** (매일 04:30 auto_repair 가 호출)
+#    · `pattern_fixer.apply_stored_patches` — 가드 **0종**
+#      (★ 2026-08-14 정정: "매일 04:30" 이 아니다. 실측 호출자는 `auto_repair.
+#       run_auto_repair._step_pre_patch` 한 곳 = `j07_deep_audit`, **토요일 03:00**.
+#       발행 직전 sweep 은 `self_heal_known_errors → apply_fix → apply_patchset` 이다.)
 #  두 번째 길에는 경로안전·삭제가드·import 검증·재현검증이 하나도 없었고, 구문검사마저
 #  *파일에 쓴 뒤* 였다. `_DENY_FILES` 로 지킨 learned_patterns.json 이 그 길에선 무방비였다.
 #  가드를 아무리 정교하게 만들어도 옆문이 열려 있으면 정책은 새어나간다(CLAUDE.md 실례 [474]).
@@ -1321,6 +1561,381 @@ def precheck_patchset(items: list, *, tag: str = "") -> tuple:
     return staged, "", REJ_NONE
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  패치 트랜잭션 — 배타(①) + 테스트 게이트(②)   ★ 2026-08-14 신설
+#
+#  ★ 왜 배타인가: `apply_patchset` 은 **백업 → 쓰기 → 검증 → (실패 시) 롤백** 을 한 덩어리로
+#    수행한다. 그 사이에 다른 스레드가 같은 파일을 백업하면 **이미 패치된 내용** 이 '원본'
+#    으로 박제되고, 어느 쪽이 롤백하든 진짜 원본이 사라진다. 게다가 둘 다 로그엔
+#    "롤백 완료" 를 남긴다 — 조용한 파손이다. (실측: 같은 파일을 겨눈 5스레드 동시 도달
+#    이 하루 3회.) 백업 슬롯 분리(`_backup`)는 *피해 축소* 일 뿐, 순서를 세우는 건 락이다.
+#
+#  ★ 왜 테스트 게이트인가: 여기까지의 판정은 `ast.parse` + import 1회 — 즉 "파일이 깨지지
+#    않았다" 만 말한다. 저장소엔 이미 스위트(약 520개, 70초)가 있는데 **수리 경로에서
+#    한 번도 돌지 않았다**. 무엇을 돌릴지는 `.github/workflows/ci.yml` 에서 파생한다 —
+#    명령을 코드에 박으면 CI 가 바뀔 때 여기만 낡는다(②).
+# ══════════════════════════════════════════════════════════════════════════════
+
+_GATE_INSIDE_ENV = "GUARDIAN_GATE_INSIDE"     # 게이트가 띄운 자식에게 넘기는 재귀 표식
+
+
+def gate_depth() -> int:
+    """이 프로세스가 게이트 안에서 **몇 겹째** 인가 (0 = 게이트 밖).
+
+    ★ 왜 깊이인가 (2026-08-14 2차): 종전 표식은 `"1"` 고정이라 *안에 있다/없다* 두 값뿐이었다.
+      그러면 겹쳐 들어간 자식들이 **서로 같은 역할** 로 보여 같은 패치 락을 잡는다 —
+      부모-자식 교착을 막으려고 역할을 나눠 놓고 한 겹 더 들어가면 도로 교착이다.
+      깊이를 세면 어느 겹이든 자기 락을 갖는다. `"1"` 은 그대로 깊이 1 로 읽히므로
+      옛 표식과 호환된다.
+    ★ 값이 이상하면 '안에 있다' 로 본다 — 재귀 차단은 fail-closed 여야 한다.
+    """
+    raw = (os.getenv(_GATE_INSIDE_ENV) or "").strip()
+    if not raw:
+        return 0
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 1
+
+
+def patch_lock_scope() -> str:
+    """이 프로세스가 잡아야 할 패치 락의 **범위** — *역할* 에서 파생한다(②).
+
+    세 역할이 서로를 막으면 안 된다. 같은 락을 잡는 순간 교착이거나 헛대기다:
+      · `live` — 운영 데몬의 수리
+      · `gate` — 게이트가 띄운 검사 자식(부모가 락을 든 채 띄운다 → 같은 락이면 **교착**)
+      · `test` — 사람이 돌리는 스위트(운영 데몬의 수리를 막아서는 안 된다)
+    판정은 *설정* 이 아니라 이미 있는 표식에서 온다 — 자식에겐 `GUARDIAN_GATE_INSIDE=1`
+    를 이미 넘기고 있고(재귀 차단용), 스위트 안에서는 `pytest` 가 로드돼 있다.
+    """
+    _d = gate_depth()
+    if _d:
+        return f"gate{_d}"
+    if "pytest" in sys.modules:
+        return "test"
+    return "live"
+
+
+def patch_lock_path() -> Path:
+    """패치 트랜잭션 배타 락의 대상 — 역할 범위마다 **하나**.
+
+    ★ 파일별이 아니라 전역인 이유: 트랜잭션이 여러 파일을 함께 쓴다. 파일별로 잡으면
+      A=(x,y) B=(y,x) 순서에서 서로를 기다리는 고전적 락순서 데드락이 열린다.
+      패치 적용은 드물어(실측: 최근 자동 코드변경 0건/한 달) 전역 직렬화 비용은 사실상 0.
+    ★ 생기는 `<이름>.lock` 파일을 **지우지 말 것** — 이유는 `json_store.locked` 참조
+      (unlink 하면 두 보유자가 동시에 락을 가졌다고 믿는다).
+
+    ★★ **백업 폴더에서 파생하지 않는다** (2026-08-14 2차 — 실측 교착 재현)
+      종전엔 `patch_backup_dir() / "patchset"` 이었고, 그 docstring 은 그것이 곧
+      부모-자식 교착 방지 장치라고 선언했다("테스트 세션은 `GUARDIAN_PATCH_BACKUP_DIR`
+      를 임시경로로 잡으므로 자식은 다른 락을 쓴다"). 그런데 그 전제는 **거짓이었다**:
+        ① `conftest.py` 는 `os.environ.setdefault` 라, 부모가 이미 그 변수를 내보내면
+           아무 일도 하지 않는다.
+        ② 같은 변수를 이 파일은 '무배포 오버라이드' 로 **공식 지원한다고 문서화** 했다.
+           즉 두 문서가 정면 충돌했고, 어느 쪽이 옳든 한쪽은 조용히 깨진다.
+      실측: 부모/자식이 **같은 patchset.lock inode** 를 잡아 부모 CPU 1.92초 /
+      실시간 **7분 41초** 완전 블로킹.
+      → 락은 *백업이 어디에 저장되는가* 와 아무 상관이 없다. 저장소 고정 경로 아래에서
+        **역할**(`patch_lock_scope`)로만 갈린다. 노브 하나가 배타와 격리를 동시에
+        좌우하던 구조 자체를 없앤다.
+      · 생성 위치는 `.gitignore` 의 `*.lock` 이 이미 통째로 무시한다.
+    """
+    return _ROOT / "JARVIS07_GUARDIAN" / "_locks" / f"patchset.{patch_lock_scope()}"
+
+
+def _gate_timeout() -> float:
+    """게이트 명령 **하나** 의 상한(초). 무배포 조정: `GUARDIAN_TEST_GATE_TIMEOUT`."""
+    try:
+        return max(30.0, float(os.getenv("GUARDIAN_TEST_GATE_TIMEOUT", "") or 600))
+    except Exception:                                   # noqa: BLE001
+        return 600.0
+
+
+def gate_time_budget_sec() -> float:
+    """게이트 **전체** 의 절대 상한(초) — 기존 시간 예산에서 파생한다(②).
+
+    ★ 왜 필요한가 (2026-08-14 2차): 명령별 상한만 있고 총합 상한이 없었다. `ci.yml` 에
+      검사가 한 줄 늘 때마다 상한이 조용히 `_gate_timeout()` 만큼 늘어나고, 실패 시
+      기준선 재확인까지 하면 **다시 그만큼** 늘어난다(실측 왕복 150초 → 실패 시 300초).
+      어떤 경로에서 돌든 넘지 못하는 벽이 하나 있어야 한다.
+    ★ 숫자를 박지 않는다: `watchdog.DEFAULT_ACTION_DEADLINE_SEC` 는 '발행 외 액션'
+      (auto_repair 심층감사 등)의 데드라인이다. 게이트는 그 액션 안의 *한 단계* 이므로
+      1/4 을 넘지 않는다 — 데드라인이 바뀌면 자동 추종.
+    무배포 조정: `GUARDIAN_TEST_GATE_BUDGET`.
+    """
+    env = (os.getenv("GUARDIAN_TEST_GATE_BUDGET") or "").strip()
+    if env:
+        try:
+            return max(5.0, float(env))
+        except ValueError:
+            pass
+    try:
+        from JARVIS00_INFRA.watchdog import DEFAULT_ACTION_DEADLINE_SEC as _d
+        return max(60.0, float(_d) / 4)
+    except Exception:                                   # noqa: BLE001
+        return 900.0
+
+
+def publish_critical_reason() -> str:
+    """지금이 **발행 임계경로** 인가 — 맞으면 사유, 아니면 빈 문자열.
+
+    ★★ 왜 이 판정이 필요한가 (2026-08-14 2차 — 리뷰 판정 그대로)
+      "비용 있는 검증을 '자가수리' 라는 값싼 이름표가 붙은 자리에 넣었다."
+      `_run_self_repair_phase` 는 발행(07:00·21:00) **직전 동기** 실행이고 텔레그램에
+      스스로 '(LLM-0, 수초)' 라고 광고한다. 그런데 그 안의 sweep 이 건건이 테스트
+      게이트(실측 왕복 150초, 실패 시 300초)를 타서, 수리 가능한 오류 N 건이면 발행 앞에
+      N×150초가 붙었다. 노출이 작았던 건 라이브 `status='new'` 가 0건이었기 때문이지
+      설계가 막아서가 아니다 — 학습 패턴이 쌓일수록(= 이 시스템의 목표) 그만큼 나빠진다.
+      → 게이트는 **시간 여유가 있는 경로**(토 03:00 `j07_deep_audit`)의 것이다.
+
+    ★ 함수명·잡ID 목록을 박지 않는다(②). 이 맥락에는 이미 주인이 있다:
+      JARVIS04 `job_llm_priority.gate()` 가 발행 파이프라인 잡 구간 전체를
+      `shared.llm.mark_publishing` 으로 표시하고, `bg_defer_reason()` 이 그 창
+      (+ 발행 前 보호구간)을 답한다. 발행 前 자체수리 페이즈는 발행 잡 **안에서** 도므로
+      새 표식 없이 자동으로 이 창에 들어온다. 잡이 늘어도 `requires` 그래프가 따라온다.
+    ★ 파생 실패를 **조용히 통과시키지 않는다**: 알 수 없으면 '임계경로일 수 있다' 로 보고
+      게이트를 미루되(임계경로 보호가 우선), 그 사실을 error 로그로 드러낸다.
+      배선이 살아 있는지는 `gate_context_effective()` 로 *동작으로* 확인한다 —
+      코드 존재는 적용의 증거가 아니다(CLAUDE.md `patch_effective()` 표준).
+    """
+    try:
+        from shared.llm import bg_defer_reason
+        return bg_defer_reason() or ""
+    except Exception as e:                              # noqa: BLE001
+        log.error("[GUARDIAN/gate] 발행창 파생 실패 — 게이트를 보류한다(임계경로 보호 우선): %s", e)
+        return "발행창 판정 불가"
+
+
+def gate_context_effective() -> bool:
+    """발행창 파생 배선이 *실제로* 동작하는가 — 설정을 묻지 않고 호출해 본다.
+
+    `patch_effective()` 표준. `shared.llm.bg_defer_reason` 이 사라지거나 이름이 바뀌면
+    `publish_critical_reason()` 이 영구히 '판정 불가' 로 떨어져 게이트가 통째로 잠든다.
+    그 조용한 정지를 여기서 잡는다(precommit·골든 테스트가 호출).
+    """
+    try:
+        from shared.llm import bg_defer_reason
+        return isinstance(bg_defer_reason(), str)
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+def _patch_lock_timeout() -> float:
+    """락 대기 상한 — **임계구역 길이에서 파생** 한다(숫자를 박지 않는다, ②).
+
+    먼저 온 수리가 게이트를 돌리는 중이면 그만큼은 기다려 줘야 '진행 중' 을 '실패' 로
+    오인하지 않는다. 그보다 오래 걸리면 보류하고 다음 스윕에 맡긴다.
+
+    ★ 임계구역이 **셋** 이다 (2026-08-14 3차 — `apply_fix` 가 적용·재현검증·게이트를
+      한 배타 구간으로 묶었다). 그러니 상한도 셋의 합이어야 한다:
+        · `_import_timeout()`      — 백업·쓰기·import 검증
+        · `_verify_timeout()`      — 원 오류 재현검증
+        · `gate_time_budget_sec()` — 테스트 게이트 **전체**(실측 왕복 138~150초)
+      종전엔 `_gate_timeout()`(명령 *하나* 의 상한)을 썼다. 그건 게이트가 몇 개의 명령을
+      돌리는지와 무관한 값이라, `ci.yml` 에 검사가 늘면 상한이 조용히 모자라진다 —
+      그러면 멀쩡히 진행 중인 수리를 '경합' 으로 오인해 계속 보류시킨다.
+    """
+    return _import_timeout() + _verify_timeout() + gate_time_budget_sec()
+
+
+@contextmanager
+def _patch_lock():
+    """패치 배타 — **기존 락을 재사용** 한다(`json_store.locked` = 스레드락 ∧ flock).
+
+    새 락 구현을 만들지 않는다. yield 값 = *배타를 실제로 얻었는가*.
+    킬스위치 `GUARDIAN_PATCH_LOCK=0` → 락 없이 진행(종전 동작). 이때는 '못 얻었다' 가
+    아니라 '멈출 이유가 없다' 이므로 True 를 준다 — 노브가 곧 정지가 되면 안 된다.
+    """
+    if (os.getenv("GUARDIAN_PATCH_LOCK", "1") or "").strip().lower() in ("0", "false", "off", "no"):
+        yield True
+        return
+    from JARVIS07_GUARDIAN.json_store import locked
+    with locked(patch_lock_path(), timeout=_patch_lock_timeout()) as got:
+        yield bool(got)
+
+
+def _lock_supported() -> bool:
+    """락이 이 환경에서 *실제로* 잡히는가 — 설정을 묻지 않고 **동작으로** 판정한다.
+
+    (CLAUDE.md `patch_effective()` 표준. 실패 경로에서만 부르므로 비용은 무관하다.)
+    이걸 설정 조회로 하면 `GUARDIAN_STORE_LOCK=0` 같은 *남의 노브* 가 켜졌을 때
+    '경합' 으로 오판해 모든 수리를 보류시킨다.
+    """
+    try:
+        from JARVIS07_GUARDIAN.json_store import locked
+        with tempfile.TemporaryDirectory() as d:
+            with locked(Path(d) / "lockprobe", timeout=0.5) as got:
+                return bool(got)
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+def ci_gate_commands() -> list:
+    """게이트가 돌릴 명령 목록 — `.github/workflows/ci.yml` 에서 **파생**(②).
+
+    ★ 인터프리터를 명시 치환한다 — 데몬은 `.../Python.app/Contents/MacOS/Python` 으로
+      도는데 그 디렉터리엔 `python3` 도 `pytest` 도 없다. CI 문자열의 `python3` 를 그대로
+      쓰면 엉뚱한 파이썬이 잡혀 *멀쩡한 수정이 실패로 판정* 된다.
+    ★ `sys.executable` 은 오답이었다 (2026-08-08, ERRORS EvalEnvBroken #5386) — macOS
+      Framework Python 이 GUI 관련 import 로 자기 자신을 재기동하면 `sys.executable` 이
+      원본 프레임워크 바이너리를 가리키고, 그 경로로 새 프로세스를 띄우면 `.venv/pyvenv.cfg`
+      를 못 찾아 venv 밖 site-packages 로 떨어진다(= `python-dotenv` 부재로 전부 깨짐).
+      `.venv/bin/python3` 를 **경로로 직접** 가리키면 탐색이 항상 성립한다.
+    Returns: 실행 가능한 명령 문자열 목록. 파생 불가면 빈 목록(호출자가 실패로 취급).
+    """
+    ci = _ROOT / ".github" / "workflows" / "ci.yml"
+    if not ci.exists():
+        return []
+    if not _VENV_PY.exists():
+        return []
+    cmds = []
+    try:
+        lines = ci.read_text(encoding="utf-8").splitlines()
+    except Exception:                                   # noqa: BLE001
+        return []
+    for line in lines:
+        m = re.match(r"\s*(?:run:\s*)?(python3?\s+-m\s+pytest[^\n]*"
+                     r"|python3?\s+shared/precommit_check\.py[^\n]*)", line)
+        if m:
+            cmds.append(re.sub(r"^python3?\b", str(_VENV_PY), m.group(1).strip()))
+    return cmds
+
+
+def gate_blocked_reason() -> str:
+    """게이트를 *돌리면 안 되는* 상황이면 사유를, 아니면 빈 문자열.
+
+    ★ 재귀 차단이 핵심이다 — 게이트가 띄운 pytest 안에서 수리가 또 게이트를 부르면
+      스위트가 스위트를 부르며 기하급수로 늘어난다. 자식에게 표식을 넘겨 끊는다.
+      테스트 실행 중(`pytest` 가 로드된 프로세스)도 같은 이유로 돌리지 않는다 —
+      골든 테스트가 `apply_fix` 를 실제로 끝까지 돌리기 때문이다.
+    """
+    if (os.getenv("GUARDIAN_TEST_GATE", "1") or "").strip().lower() in ("0", "false", "off", "no"):
+        return "킬스위치 GUARDIAN_TEST_GATE=0"
+    # ★ 발행 임계경로에서는 돌리지 않는다 — 시간 여유가 있는 경로(j07_deep_audit)의 것이다.
+    #   Tier-1(`apply_fix`)·Tier-2·`apply_stored_patches` 세 통로가 전부 여기를 지난다(③).
+    #   ★ 재귀 차단보다 **앞에** 둔다: 운영 동작은 어느 쪽이 먼저든 '보류' 로 같지만,
+    #     뒤에 두면 스위트 안에서는 항상 재귀 레그가 먼저 걸려 이 레그가 **도달 불가** 가
+    #     되고, 그것을 검증하려는 테스트가 원천적으로 vacuous 해진다.
+    _crit = publish_critical_reason()
+    if _crit:
+        return f"발행 임계경로({_crit}) — 심층감사로 위임"
+    if gate_depth():
+        return "게이트가 띄운 검사 안(재귀 차단)"
+    if "pytest" in sys.modules:
+        return "테스트 실행 중(재귀 차단)"
+    return ""
+
+
+def ci_gate_failures(*, tag: str = "", budget: float | None = None) -> list:
+    """CI 와 **같은 검사** 를 지금 워킹트리에 돌려 실패 목록을 반환. 통과면 빈 목록.
+
+    ★ 이 검사의 주인은 여기 하나다(①). `auto_repair` 도 이 함수를 부른다 —
+      두 벌을 두면 한쪽만 낡는다. 다만 *실패했을 때 무엇을 할지* 는 소비자마다 다르다:
+        · `apply_patchset` — 전량 롤백(트랜잭션이니까)
+        · `auto_repair`    — 롤백하지 않고 학습 적재만 건너뜀(스냅샷 복원이 더 파괴적)
+    ★ 파생 실패(ci.yml·venv 부재)는 *통과가 아니라 실패* 로 올린다(fail-closed).
+      호출자가 기준선 재확인으로 "게이트 무력" 을 구분하므로 조용히 멈추지는 않는다.
+
+    Args:
+        budget: 이 호출 **전체** 의 절대 상한(초). 미지정이면 `gate_time_budget_sec()`.
+          예산이 바닥나면 남은 검사를 돌리지 않고 *실패로* 올린다(fail-closed) —
+          "시간이 없어서 못 봤다" 를 "통과" 로 적으면 게이트가 아니다.
+    """
+    why = gate_blocked_reason()
+    if why:
+        # ★ 생략을 debug 로만 남기면 '검증 없이 통과' 가 아무 데도 안 보인다.
+        #   재귀 차단은 정상 동작이라 조용해도 되지만, 그 외(발행 임계경로·킬스위치)는
+        #   *패치가 스위트를 안 거치고 착지한다* 는 뜻이므로 드러낸다.
+        if "재귀 차단" in why:
+            log.debug(f"[GUARDIAN/gate] {tag} 게이트 생략 — {why}")
+        else:
+            log.warning(f"[GUARDIAN/gate] {tag} 게이트 보류 — {why} "
+                        f"(이 패치는 스위트 검증 없이 착지한다)")
+        return []
+    cmds = ci_gate_commands()
+    if not cmds:
+        return ["ci.yml 또는 .venv 부재 — 게이트 검사 불가"]
+    env = dict(os.environ)
+    # ★ 재귀 차단 표식 (자식에게만) — **깊이를 하나 올려서** 넘긴다. 같은 값을 넘기면
+    #   겹쳐 들어간 자식들이 서로 같은 역할로 보여 같은 패치 락을 잡는다(교착 재발).
+    env[_GATE_INSIDE_ENV] = str(gate_depth() + 1)
+    total = gate_time_budget_sec() if budget is None else max(1.0, float(budget))
+    deadline = time.time() + total
+    bad: list = []
+    per = _gate_timeout()
+    for c in cmds:
+        left = deadline - time.time()
+        if left < per:
+            # ★ **끝낼 수 없는 검사는 시작하지 않는다.** 도중에 죽은 검사의 실패는
+            #   '패치가 나쁘다' 와 '시간이 없었다' 를 구분하지 못한다. 게다가 `shell=True`
+            #   로 띄운 프로세스는 timeout kill 이 **셸만** 죽여 실검사가 고아로 남는다.
+            #   미실행은 통과가 아니라 실패로 올린다(fail-closed) — 호출자가 기준선
+            #   재확인으로 '게이트 무력' 을 구분한다.
+            bad.append(f"{c.split('/')[-1][:60]}: 게이트 예산 부족"
+                       f"(남은 {max(0.0, left):.0f}s < 명령 상한 {per:.0f}s) — 미실행")
+            log.warning(f"[GUARDIAN/gate] {tag} 예산 {total:.0f}s 중 남은 "
+                        f"{max(0.0, left):.0f}s — 남은 검사 미실행")
+            break
+        t0 = time.time()
+        try:
+            r = subprocess.run(c, shell=True, cwd=str(_ROOT), capture_output=True,
+                               text=True, timeout=per, env=env)
+            if r.returncode != 0:
+                bad.append(f"{c.split('/')[-1][:60]}: rc={r.returncode} "
+                           f"{((r.stdout or '') + (r.stderr or '')).strip()[-200:]}")
+        except Exception as e:                          # noqa: BLE001
+            bad.append(f"{c.split('/')[-1][:60]}: {type(e).__name__}: {e}")
+        log.info(f"[GUARDIAN/gate] {tag} {c.split('/')[-1][:50]} — {time.time() - t0:.0f}s")
+    return bad
+
+
+def _notify_gate_blind(failures: list, tag: str = "") -> None:
+    """게이트가 **판별 불가** 상태임을 사람에게 알린다 — 로그로는 부족하다.
+
+    ★ 이 저장소의 '조용한 정지' 이력 때문에 이 알림이 존재한다: 스위트가 이미 빨간
+      상태면 모든 자동수리가 게이트에 막혀 멈추는데, 로그만 남기면 아무도 모른다.
+      우리는 막지 않고 통과시키되, **검증 없이 통과했다는 사실** 을 드러낸다.
+    ★ 새 알림 채널·새 dedup 을 만들지 않는다: 기록은 GUARDIAN 단일 진입점
+      (`error_collector.report`), 발송은 `shared.notify.send_tg`, 억제 창은
+      `repair_budget._cooldown_sec()` 에서 파생하고 판정은 **오류 장부 조회** 로 한다
+      (메모리 플래그는 프로세스 경계를 못 넘는다 — CLAUDE.md 실례 [474]).
+    """
+    etype = "GuardianTestGateBlind"
+    msg = f"테스트 게이트 기준선도 실패 — 검증 없이 패치 통과({tag}): {failures[:2]}"
+    recent = False
+    try:
+        from JARVIS07_GUARDIAN.repair_budget import _cooldown_sec
+        from shared.db import get_db
+        with get_db() as con:
+            row = con.execute(
+                "SELECT (julianday('now','localtime')-julianday(max(timestamp)))*86400.0 "
+                "FROM error_log WHERE error_type=?", (etype,)).fetchone()
+        gap = row[0] if row and row[0] is not None else None
+        recent = gap is not None and gap < _cooldown_sec()
+    except Exception as e:                              # noqa: BLE001
+        log.debug(f"[GUARDIAN/gate] 억제 판정 실패(알림은 보낸다): {e}")
+    try:
+        from JARVIS07_GUARDIAN.error_collector import report
+        report(etype, "guardian", message=msg, module=__name__,
+               func_name="apply_patchset",
+               context={"kind": "gate_blind", "failures": failures[:3], "tag": tag})
+    except Exception as e:                              # noqa: BLE001
+        log.debug(f"[GUARDIAN/gate] 게이트 무력 기록 실패: {e}")
+    if recent:
+        log.warning("[GUARDIAN/gate] 게이트 무력 알림 억제(쿨다운 창 안) — 기록만 남긴다")
+        return
+    try:
+        from shared.notify import send_tg
+        send_tg("⚠️ *[GUARDIAN] 테스트 게이트 무력*\n"
+                "기준선(패치 이전)부터 스위트가 빨갛습니다 — 게이트가 패치의 잘잘못을 "
+                "판별할 수 없습니다.\n"
+                "그동안 자동수정은 *검증 없이* 통과합니다(막으면 자동수리가 통째로 멈춥니다).\n"
+                + "\n".join(f"· {f[:180]}" for f in failures[:3])
+                + "\n\n→ 스위트를 초록으로 되돌리거나, 임시로 `GUARDIAN_TEST_GATE=0`.")
+    except Exception as e:                              # noqa: BLE001
+        log.warning(f"[GUARDIAN/gate] 게이트 무력 알림 전송 실패: {e}")
+
+
 def rollback_patchset(staged: list) -> tuple:
     """쓴 것을 전부 되돌린다. Returns `(되돌린 수, 되돌리지 못한 rel 목록)`.
 
@@ -1329,28 +1944,165 @@ def rollback_patchset(staged: list) -> tuple:
       되돌리지 못한 파일이 있으면 그건 '자동수정 실패' 가 아니라 **저장소 파손** 이다.
     """
     ok, failed = 0, []
-    for st in staged:
-        if not st.bak:
-            continue
-        # ★ `written` 이 False 여도 시도한다 — 쓰기 도중 예외(인코딩·ENOSPC)면 파일이
-        #   이미 잘려 있을 수 있다. 백업이 있으면 되돌리는 쪽이 항상 안전하다.
-        if _rollback_ok(st.path, st.bak):
-            st.written = False
-            ok += 1
-        else:
-            failed.append(st.rel)
+    with _patch_lock():          # ★ 적용과 **같은 락** — 되돌리는 도중 남이 쓰면 뒤섞인다
+        for st in staged:
+            if not st.bak:
+                continue
+            # ★ `written` 이 False 여도 시도한다 — 쓰기 도중 예외(인코딩·ENOSPC)면 파일이
+            #   이미 잘려 있을 수 있다. 백업이 있으면 되돌리는 쪽이 항상 안전하다.
+            if _rollback_ok(st.path, st.bak):
+                st.written = False
+                ok += 1
+                # 되돌렸으면 그 백업은 할 일이 끝났다 — 원본이 제자리에 있으니 사본은
+                # 잔여다. 실패한 백업은 **남긴다**(그게 유일한 원본 사본이다).
+                try:
+                    st.bak.unlink(missing_ok=True)
+                    st.bak = None
+                except Exception:                       # noqa: BLE001
+                    pass
+            else:
+                failed.append(st.rel)
     return ok, failed
 
 
 REJ_BACKUP = "backup"         # 백업 실패 — *아직 아무것도 안 쓴* 상태
 REJ_WRITE  = "write"          # 쓰기 실패 → 전량 롤백
 REJ_IMPORT = "import"         # import 검증 실패 → 전량 롤백
+REJ_TEST   = "test"           # 테스트 게이트 실패 → 전량 롤백
+REJ_LOCK   = "lock"           # 배타락 미획득 — *판정 불가*(전략 실패 아님). 다음 스윕이 다시 온다
+REJ_STALE  = "stale"          # 선검사 이후 원본이 바뀜 — 이 패치의 전제가 이미 거짓
+
+# 이 거부들은 *패치의 잘못이 아니다* — 학습·보상 신호를 흘리면 안 된다(판정 불가).
+NO_BLAME_REJECTS = frozenset({REJ_BACKUP, REJ_LOCK, REJ_STALE})
 
 
-def apply_patchset(staged: list, *, tag: str = "") -> tuple:
-    """백업 전량 → 쓰기 전량 → import 검증 전량. 실패 시 **전량 롤백**.
+def _backup_all(staged: list) -> tuple:
+    """원본 재확인 → 백업 전량. Returns `(사유, 사유코드)` — 빈 사유면 성공.
+
+    ★★ **원본 재확인이 왜 필요한가** (2026-08-14 — 락만으로는 못 막는다. 실측으로 확인)
+      `apply_patchset` 을 락으로 감싸도 *트랜잭션 전체* 는 여전히 겹친다:
+      백업·쓰기(락 안) → 재현검증(락 밖, 최대 25초) → 롤백(락 안). 그 가운데 창에서
+      다른 트랜잭션이 락을 얻어 들어오면, 그쪽 백업에 **먼저 온 쪽의 패치** 가 '원본' 으로
+      담긴다. 합성 2스레드 재현 결과가 정확히 그랬다:
+          B적용(bak=원본) → A적용(bak=**B의 패치**) → B롤백(원본) → A롤백(**B의 패치**)
+      최종 파일에 B 의 패치가 남고 둘 다 로그엔 "롤백 완료" 를 남긴다.
+      → 락 범위를 넓히는 대신 **전제를 검사** 한다. 지금 디스크의 내용이 선검사 때 읽은
+        원본과 다르면 이 패치는 이미 낡은 것이다(남의 트랜잭션 진행 중이거나 사람이 편집).
+        아무것도 쓰지 않고 물러난다 — 다음 스윕이 새 원본으로 다시 만든다.
+    """
+    for st in staged:                                  # ① 전제 검사 — *쓰기 전에 전량*
+        try:
+            now = st.path.read_text(encoding="utf-8")
+        except Exception as e:                          # noqa: BLE001
+            return f"원본 재확인 실패 {st.rel}: {str(e)[:60]}", REJ_STALE
+        if now != st.original:
+            return (f"선검사 이후 원본이 변경됨: {st.rel} "
+                    f"(다른 수리 진행 중이거나 외부 편집)"), REJ_STALE
+    for st in staged:                                  # ② 백업 전량
+        st.bak = _backup(st.path)
+        if not st.bak:
+            return f"백업 실패: {st.rel}", REJ_BACKUP
+    return "", REJ_NONE
+
+
+def _write_all(staged: list) -> str:
+    """쓰기 전량 — ★ 임시파일에 쓴 뒤 **원자 교체**. 실패 사유를 돌려준다.
+
+    `write_text` 는 먼저 truncate 하고 인코딩하므로, 인코딩 도중 예외가 나면
+    원본이 이미 0바이트로 날아간 뒤다(실측: lone surrogate 가 섞인 `.md` 로 재현).
+    교체 방식이면 실패해도 원본이 그대로 남는다 — 되돌릴 일 자체를 없앤다.
+    같은 이유로 저장소는 이미 `json_store` 에서 이 패턴을 쓰고 있다.
+    """
+    for st in staged:
+        tmp = st.path.with_suffix(st.path.suffix + ".tmp")
+        try:
+            tmp.write_text(st.content, encoding="utf-8")
+            os.replace(tmp, st.path)
+            st.written = True
+        except Exception as e:                         # noqa: BLE001
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:                          # noqa: BLE001
+                pass
+            return f"파일 쓰기 실패 {st.rel}: {str(e)[:60]}"
+    return ""
+
+
+def gate_patchset(staged: list, *, tag: str = "") -> tuple:
+    """이미 적용된 패치에 **테스트 게이트** 를 걸고 판정한다. Returns `(통과?, 사유, 사유코드)`.
+
+    실패면 **전량 롤백까지 끝난 상태** 로 돌아온다.
+
+    ★ 게이트의 주인은 여기 하나다(①). 두 소비자가 *같은 함수* 를 부른다 —
+      · `apply_patchset(run_gate=True)` — 외부 정문(`apply_files_safely` → 학습 재적용 등)
+      · `apply_fix`                     — 값싼 재현검증을 **먼저** 통과한 뒤에 부른다
+      게이트 로직을 두 벌 만들면 한쪽만 낡는다(이 저장소가 반복해서 데인 형태).
+
+    ★ 예산은 **호출 전체에 하나** (2026-08-14 2차): 본 검사와 기준선 재확인이 각자
+      `gate_time_budget_sec()` 를 쓰면 상한이 조용히 2배가 된다. 하나의 데드라인을 나눠 쓴다.
+
+    ★★ **배타 구간 안에서만 의미가 있다** (2026-08-14 3차 — ③ 모든 통로)
+      이 함수의 판정은 "지금 워킹트리가 스위트를 통과하는가" 다. 그 워킹트리에 *남의
+      패치* 가 섞여 있으면 답은 이 패치와 무관해진다 — 무고한 패치가 롤백되고 밴딧·
+      learned_patterns 까지 거짓으로 갱신된다. 그래서 소비자에게 맡기지 않고 **여기서**
+      배타를 잡는다. 이미 들고 들어온 호출자(`apply_fix`·`apply_patchset`)에게는
+      재진입이라 비용이 0 이고, 앞으로 생길 통로도 자동으로 같은 보호를 받는다(①③).
+    """
+    with _patch_lock():
+        return _gate_patchset_locked(staged, tag=tag)
+
+
+def _gate_patchset_locked(staged: list, *, tag: str = "") -> tuple:
+    """`gate_patchset` 본체 — **배타 구간 안** 임이 전제. 직접 부르지 말 것."""
+    _t0 = time.time()
+    _budget = gate_time_budget_sec()
+    _bad = ci_gate_failures(tag=tag, budget=_budget)
+    if not _bad:
+        return True, "", REJ_NONE
+
+    _n, _failed = rollback_patchset(staged)
+    _base = ci_gate_failures(tag=f"{tag}/기준선",
+                             budget=max(1.0, _budget - (time.time() - _t0)))
+    if _base:
+        # ★ 기준선부터 빨갛다 = 게이트가 *패치 때문인지* 판별할 수 없다.
+        #   여기서 막으면 **모든 자동수리가 조용히 멈춘다** — 이 저장소가 가장
+        #   경계하는 형태다. 막지 않고 통과시키되 사람에게 알린다(로그로는 부족).
+        _notify_gate_blind(_base, tag=tag)
+        with _patch_lock():                      # 되돌린 패치를 복원 — 적용과 같은 배타
+            _re = _backup_all(staged)[0] or _write_all(staged)
+        if _re:
+            return False, f"게이트 판별 불가 후 재적용 실패: {_re}", REJ_WRITE
+        log.error(f"[GUARDIAN/apply] {tag} 테스트 게이트 무력(기준선도 실패) — "
+                  f"검증 없이 통과: {_base[:2]}")
+        return True, "", REJ_NONE
+
+    _why = f"테스트 게이트 실패: {'; '.join(_bad[:2])}"
+    if _failed:
+        _why += (f" / ★ 롤백 실패 {len(_failed)}개 — 저장소 파손 상태: "
+                 f"{', '.join(_failed)}")
+        log.error(f"[GUARDIAN/apply] {tag} {_why}")
+    log.warning(f"[GUARDIAN/apply] {tag} {_why} → 전량 롤백")
+    return False, _why, REJ_TEST
+
+
+def apply_patchset(staged: list, *, tag: str = "", run_gate: bool = True) -> tuple:
+    """백업 전량 → 쓰기 전량 → import 검증 전량 → **테스트 게이트**. 실패 시 **전량 롤백**.
+
+    Args:
+        run_gate: False 면 테스트 게이트를 *여기서* 돌리지 않는다. 호출자가 **더 싼 검증을
+            먼저 끝낸 뒤** `gate_patchset()` 을 직접 부르는 경우에만 쓴다(`apply_fix`).
+            ★ 왜 (2026-08-14 2차): 종전엔 게이트(실측 왕복 150초)가 먼저 돌고, 호출자가 그
+              **뒤에** `verify_fix`(수초 재현검증)로 원 오류를 확인해 실패하면 전량
+              롤백했다. 즉 *어차피 되돌릴 패치* 에 150초를 썼다. 싼 검증이 먼저다.
+            ★ 이때 **배타락은 호출자가 들고 있어야 한다** (2026-08-14 3차) — 적용과
+              게이트 사이에 창이 열리면 게이트가 남의 패치까지 함께 채점한다.
+              `gate_patchset` 이 스스로도 배타를 잡으므로(재진입) 이중 안전이다.
 
     Returns `(성공?, 사유, 사유코드)`. 실패면 호출자가 추가로 되돌릴 것은 없다.
+
+    ★ 전 구간이 **배타** 다 (2026-08-14): 같은 파일을 겨눈 스레드가 동시에 도달하면
+      백업·쓰기·롤백이 서로를 덮어써 원본이 영구 소실된다. 락은 새로 만들지 않고
+      이미 검증된 `json_store.locked`(스레드락 ∧ flock — 프로세스 경계를 넘는다)를 쓴다.
     """
     if not staged:
         return False, "적용 대상 없음", REJ_EMPTY
@@ -1364,50 +2116,58 @@ def apply_patchset(staged: list, *, tag: str = "") -> tuple:
             log.error(f"[GUARDIAN/apply] {tag} {reason}")
         return False, reason, kind
 
-    for st in staged:                                  # ① 백업 전량
-        st.bak = _backup(st.path)
-        if not st.bak:
-            return _abort(f"백업 실패: {st.rel}", REJ_BACKUP)
+    with _patch_lock() as _exclusive:
+        # ★ 배타를 못 얻었는데 **얻을 수 있는 환경** 이면 = 다른 수리가 진행 중이라는 뜻.
+        #   그때 그냥 진행하면 이 락을 단 이유가 사라진다. 적용을 미루는 쪽이 항상 안전하다
+        #   (오류는 그대로 남아 다음 스윕이 다시 데려온다).
+        #   반대로 애초에 락이 불가능한 환경(비 POSIX·노브 OFF)이면 멈출 이유가 없다 —
+        #   그 판정을 **설정을 읽어서** 하지 않고 *동작으로* 한다(`patch_effective` 표준).
+        if not _exclusive and _lock_supported():
+            log.warning(f"[GUARDIAN/apply] {tag} 배타락 획득 실패 — 다른 패치 적용 중. 보류")
+            return False, "패치 배타락 획득 실패 — 다른 수리가 적용 중", REJ_LOCK
 
-    # ② 쓰기 전량 — ★ 임시파일에 쓴 뒤 **원자 교체**.
-    #   `write_text` 는 먼저 truncate 하고 인코딩하므로, 인코딩 도중 예외가 나면
-    #   원본이 이미 0바이트로 날아간 뒤다(실측: lone surrogate 가 섞인 `.md` 로 재현).
-    #   교체 방식이면 실패해도 원본이 그대로 남는다 — 되돌릴 일 자체를 없앤다.
-    #   같은 이유로 저장소는 이미 `json_store` 에서 이 패턴을 쓰고 있다.
-    for st in staged:
-        tmp = st.path.with_suffix(st.path.suffix + ".tmp")
-        try:
-            tmp.write_text(st.content, encoding="utf-8")
-            os.replace(tmp, st.path)
-            st.written = True
-        except Exception as e:                         # noqa: BLE001
-            try:
-                tmp.unlink(missing_ok=True)
-            except Exception:                          # noqa: BLE001
-                pass
-            return _abort(f"파일 쓰기 실패 {st.rel}: {str(e)[:60]}", REJ_WRITE)
+        _why, _kind = _backup_all(staged)              # ① 원본 재확인 + 백업 전량
+        if _why and _kind == REJ_STALE:
+            # 아직 아무것도 쓰지 않았다 — 되돌릴 것도, 벌할 것도 없다.
+            log.warning(f"[GUARDIAN/apply] {tag} {_why} → 적용 보류")
+            return False, _why, REJ_STALE
+        if _why:
+            return _abort(_why, REJ_BACKUP)
 
-    # ③ import 검증 — ★ N개를 *전부 쓴 뒤* 에 한다. 하나씩 쓰고 검사하면 중간 상태
-    #    (새 A + 옛 B)를 검사하게 되는데, 그건 우리가 만들려는 최종 상태가 아니다.
-    time.sleep(0.3)
-    for st in staged:
-        if not _import_check(st.path):
-            return _abort(f"import 검증 실패: {st.rel}", REJ_IMPORT)
+        _why = _write_all(staged)                      # ② 쓰기 전량
+        if _why:
+            return _abort(_why, REJ_WRITE)
 
-    if tag:
-        log.info(f"[GUARDIAN/apply] {tag} 적용 완료 — {len(staged)}개 파일")
-    return True, "", REJ_NONE
+        # ③ import 검증 — ★ N개를 *전부 쓴 뒤* 에 한다. 하나씩 쓰고 검사하면 중간 상태
+        #    (새 A + 옛 B)를 검사하게 되는데, 그건 우리가 만들려는 최종 상태가 아니다.
+        time.sleep(0.3)
+        for st in staged:
+            if not _import_check(st.path):
+                return _abort(f"import 검증 실패: {st.rel}", REJ_IMPORT)
+
+        # ④ ★ 테스트 게이트 (2026-08-14) — 여기까지의 판정은 "파일이 안 깨졌다" 뿐이다.
+        #    저장소엔 스위트가 있었는데 수리 경로에서 한 번도 돌지 않았다.
+        #    ★ 주인은 `gate_patchset` 하나다 — 여기서 다시 구현하지 않는다(①).
+        if run_gate:
+            _gok, _gwhy, _gkind = gate_patchset(staged, tag=tag)
+            if not _gok:
+                return False, _gwhy, _gkind
+
+        if tag:
+            log.info(f"[GUARDIAN/apply] {tag} 적용 완료 — {len(staged)}개 파일")
+        return True, "", REJ_NONE
 
 
-def apply_files_safely(items: list, *, tag: str = "") -> tuple:
+def apply_files_safely(items: list, *, tag: str = "", run_gate: bool = True) -> tuple:
     """선검사 → 적용을 한 번에. **외부 호출자용 정문** (pattern_fixer 등).
 
     Returns `(성공?, 사유, staged)`. 성공 시 `staged` 로 추가 검증 후 직접 롤백할 수 있다.
+    `run_gate` 의미는 `apply_patchset` 과 동일 — 그대로 위임한다(노브를 두 벌 두지 않는다).
     """
     staged, why, _kind = precheck_patchset(items, tag=tag)
     if why:
         return False, why, []
-    ok, why2, _k2 = apply_patchset(staged, tag=tag)
+    ok, why2, _k2 = apply_patchset(staged, tag=tag, run_gate=run_gate)
     return ok, why2, (staged if ok else [])
 
 
@@ -1494,11 +2254,15 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
     patch             = _primary.content
     original_content  = _primary.original
 
-    # ── 백업 전량 → 쓰기 전량 → import 검증 전량 (실패 시 전량 롤백) ──
-    _ok, _why, _kind = apply_patchset(_staged, tag=f"#{error_id}")
-    if not _ok:
-        # 백업 실패는 *아직 아무것도 안 쓴* 상태 — 학습·보상 신호를 줄 사건이 아니다.
-        if _kind == REJ_BACKUP:
+    def _rejected(_why: str, _kind: str, _notes: list) -> bool:
+        """적용이 되돌려졌을 때의 뒤처리 — **한 곳에만** 둔다(①).
+
+        쓰기·import 실패와 테스트 게이트 실패가 *같은* 학습·보상·기록 경로를 타야 한다.
+        두 벌로 적으면 게이트만 학습에 안 잡히는(또는 그 반대) 비대칭이 생긴다.
+        """
+        # 백업 실패·락 미획득·원본 변경은 *아직 아무것도 안 쓴* 상태 —
+        # 패치의 잘잘못을 판정할 수 없으므로 학습·보상 신호를 주지 않는다.
+        if _kind in NO_BLAME_REJECTS:
             log.error(f"[GUARDIAN] #{error_id} {_why}")
             return _fail(_why)
 
@@ -1521,44 +2285,88 @@ def apply_fix(error_id: int, analysis: dict, mark_wontfix: bool = True) -> bool:
             except Exception:
                 pass
             _update_errors_md(error_record, analysis, success=False,
-                              verified=["선검사 통과", f"{_why} → 자동 롤백"])
+                              verified=[*_notes, f"{_why} → 자동 롤백"])
         return FixResult(False, verification=VERIFY_REPRODUCES, reason=_why)
 
-    # ── ★ 원 오류 재현 검증 (구문·import 통과 ≠ 오류 해소) ──────────
-    _rec_for_verify = _fetch_record(error_id, analysis)
-    _vstate, _vdetail = verify_fix(_rec_for_verify, analysis, file_path,
-                                   original_content=original_content)
-    log.info(f"[GUARDIAN] #{error_id} 재현검증 = {_vstate or '(비활성)'} — {_vdetail}")
+    # ══ ★ 적용 → 재현검증 → 게이트 = **하나의 배타 구간** (2026-08-14 3차) ══════
+    #
+    # ★★ 왜 셋을 묶는가 — 이 노출은 *직전 순서 교정이 만든 것* 이다(실측 재현)
+    #   싼 검증을 먼저 돌리려고 게이트를 `apply_patchset` 의 락 **밖으로** 꺼냈더니,
+    #   적용(락 안)과 게이트(락 밖) 사이에 창이 열렸다. 그 창에서 다른 스레드가 자기
+    #   패치를 적용하면 이쪽 게이트는 *남의 패치까지 적용된 워킹트리* 를 채점한다.
+    #   실측(스레드 2개, 서로 다른 파일): 두 수리가 0.37초 차로 동시에 게이트에 들어갔고
+    #   각자의 게이트가 도는 동안 워킹트리엔 **양쪽 패치가 함께** 있었다(W=1 과 W=2 동시).
+    #   결과가 나쁜 이유는 느려서가 아니다 — **학습 원장이 거짓으로 갱신된다**:
+    #   남의 패치가 스위트를 깨면 무고한 패치가 롤백되고 `_rejected()` 를 타
+    #   밴딧 음의보상 → learned_patterns 강등 → wontfix 까지 간다.
+    #   `job_retry_pending` 은 10분마다 최대 20 스레드를 띄운다(서로 다른 error_id 는 병렬).
+    #
+    # ★ 유지하는 것 두 가지 — 앞 패스를 되돌리지 않는다
+    #   ① **순서**: 싼 재현검증(수초)이 먼저, 비싼 게이트(실측 왕복 138~150초)가 나중.
+    #      되돌릴 패치에 게이트 시간을 쓰지 않는다.
+    #   ② **락 교착 해소**: 게이트가 띄운 자식은 `patch_lock_scope()` 가 `gate{N}` 으로
+    #      갈라 부모 락과 다른 파일을 잡는다 — 부모가 락을 든 채 자식을 띄워도 안 막힌다.
+    #
+    # ★ 새 락을 만들지 않는다 — 이미 있는 `_patch_lock`(= `json_store.locked`) 을 **중첩**
+    #   획득한다. 그 함수는 같은 스레드의 재진입을 깊이로 세어 재획득 없이 통과시키므로
+    #   (flock 은 open file description 단위라 재획득하면 자기 데드락이다) 안쪽
+    #   `apply_patchset`·`rollback_patchset`·`gate_patchset` 이 그대로 중첩돼도 안전하다.
+    #   대기 상한은 이 구간 전체 길이에서 파생한다 — `_patch_lock_timeout()` 참조.
+    #
+    # ★ 배타를 못 얻었을 때의 판정은 **여기서 다시 적지 않는다**(①). 안쪽
+    #   `apply_patchset` 이 `_exclusive=False` 를 보고 `REJ_LOCK`(무죄 보류)으로 돌려주고,
+    #   재진입 계약상 그 값은 *바깥이 실제로 얻었는가* 와 같다.
+    with _patch_lock():
+        _ok, _why, _kind = apply_patchset(_staged, tag=f"#{error_id}", run_gate=False)
+        if not _ok:
+            return _rejected(_why, _kind, ["선검사 통과"])
 
-    if _vstate == VERIFY_REPRODUCES:
-        # 원 오류가 그대로 재현 → 이 패치는 고친 것이 아니다. 되돌린다.
-        log.warning(f"[GUARDIAN] #{error_id} 원 오류 재현됨 → 롤백 (증상 은폐 학습 차단)")
-        rollback_patchset(_staged)          # ★ 전량 롤백 — 다중 파일이면 N개 전부
-        _bandit_signal(_rec_for_verify, analysis, success=False,
-                       why=f"still_reproduces — {_vdetail[:80]}")
-        # ★ 결함 2 배선 — 외생 신호(재현됨)를 learned_patterns 에 반영: 감쇠 → 임계 시 격리
-        _record_learning_failure(_rec_for_verify, analysis,
-                                 f"원 오류 재현 → 롤백: {_vdetail[:100]}",
-                                 verification=VERIFY_REPRODUCES)
-        if mark_wontfix:
-            try:
-                from shared import db as _db
-                _db.mark_error_status(error_id, "wontfix")
-            except Exception:
-                pass
-            _note_resolution(error_id, f"[verification={VERIFY_REPRODUCES}] {_vdetail}")
-            _notify_fail(error_id, "원 오류 재현 — 롤백 완료")
-            _update_errors_md(_rec_for_verify, analysis, success=False,
-                              verified=["문법 검사 통과", "import 검증 통과",
-                                        f"원 오류 재현 검증: {VERIFY_REPRODUCES} — {_vdetail[:120]}",
-                                        "→ 자동 롤백"])
-        return FixResult(False, verification=VERIFY_REPRODUCES, reason=_vdetail)
+        # ── ★ 원 오류 재현 검증 (구문·import 통과 ≠ 오류 해소) ──────────
+        _rec_for_verify = _fetch_record(error_id, analysis)
+        _vstate, _vdetail = verify_fix(_rec_for_verify, analysis, file_path,
+                                       original_content=original_content)
+        log.info(f"[GUARDIAN] #{error_id} 재현검증 = {_vstate or '(비활성)'} — {_vdetail}")
+
+        if _vstate == VERIFY_REPRODUCES:
+            # 원 오류가 그대로 재현 → 이 패치는 고친 것이 아니다. 되돌린다.
+            log.warning(f"[GUARDIAN] #{error_id} 원 오류 재현됨 → 롤백 (증상 은폐 학습 차단)")
+            rollback_patchset(_staged)      # ★ 전량 롤백 — 다중 파일이면 N개 전부
+            _bandit_signal(_rec_for_verify, analysis, success=False,
+                           why=f"still_reproduces — {_vdetail[:80]}")
+            # ★ 결함 2 배선 — 외생 신호(재현됨)를 learned_patterns 에 반영: 감쇠 → 임계 시 격리
+            _record_learning_failure(_rec_for_verify, analysis,
+                                     f"원 오류 재현 → 롤백: {_vdetail[:100]}",
+                                     verification=VERIFY_REPRODUCES)
+            if mark_wontfix:
+                try:
+                    from shared import db as _db
+                    _db.mark_error_status(error_id, "wontfix")
+                except Exception:
+                    pass
+                _note_resolution(error_id, f"[verification={VERIFY_REPRODUCES}] {_vdetail}")
+                _notify_fail(error_id, "원 오류 재현 — 롤백 완료")
+                _update_errors_md(_rec_for_verify, analysis, success=False,
+                                  verified=["문법 검사 통과", "import 검증 통과",
+                                            f"원 오류 재현 검증: {VERIFY_REPRODUCES} — {_vdetail[:120]}",
+                                            "→ 자동 롤백"])
+            return FixResult(False, verification=VERIFY_REPRODUCES, reason=_vdetail)
+
+        # ── ★ 테스트 게이트 — *싼 검증을 통과한 뒤에만* 비싼 검사를 쓴다 ──────
+        #   주인은 `gate_patchset` 하나(①). 발행 임계경로에서는 그 안에서 스스로 보류하고
+        #   시간 여유가 있는 경로(토 03:00 j07_deep_audit)에서만 실제로 돈다.
+        #   ★ 이 호출이 배타 구간 **안** 이라는 것이 판정의 전제다 — 워킹트리에 이 패치만
+        #     있어야 "이 패치가 스위트를 깼는가" 에 답할 수 있다.
+        _gok, _gwhy, _gkind = gate_patchset(_staged, tag=f"#{error_id}")
+        if not _gok:
+            return _rejected(_gwhy, _gkind,
+                             ["문법 검사 통과", "import 검증 통과",
+                              f"원 오류 재현 검증: {_vstate or '(비활성)'}"])
 
     # ── 성공 처리 ────────────────────────────────────────────────
     #   ★ resolution 에 검증 상태를 *기계 판독 가능한 접두* 로 박제 (스키마 변경 0).
     #     나중에  SELECT ... WHERE resolution LIKE '[verification=reproduced_gone]%'
     #     로 "진짜 검증된 수정" 만 집계할 수 있다.
-    _vtag = f"[verification={_vstate or 'legacy_unchecked'}] "
+    _vtag = verification_tag(_vstate)
     try:
         from shared import db as _db
         # ★ fixed_file 은 **경로 하나** 로 유지한다 (2026-07-26). 다중 파일이라고 콤마로
