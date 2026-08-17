@@ -42,6 +42,36 @@ from typing import Any
 log = logging.getLogger("jarvis.claude_sdk_compat")
 
 
+# ── SDK 예외 이름은 **항상 바인딩된다** (2026-08-17 — 잠복 결함 수정) ────────
+#   ★ 왜 모듈 레벨인가: 종전엔 이 세 이름을 `run_sdk_query` 의 `try:` **안에서** import
+#     했는데, 그 import 자체가 실패하는 경우(= claude_code_sdk 미설치)에는 이름이
+#     바인딩되지 않은 채 아래 `except CLINotFoundError` 절이 그것을 참조했다.
+#     파이썬은 except 절을 순서대로 *평가* 하므로 함수 지역이름 조회에서
+#     `UnboundLocalError: local variable 'CLINotFoundError' referenced before assignment`
+#     가 나고 — **예외 처리기 자체가 터진다.** 즉 "SDK 가 없다" 는 흔한 환경이
+#     계약(`error_kind` dict)이 아니라 생짜 예외로 호출자에게 튀었다.
+#     이름은 예외를 *잡는 쪽* 이 항상 갖고 있어야 한다. 폴백 클래스는 절대 raise 되지
+#     않으므로 잡는 동작을 바꾸지 않는다 — 오직 *이름 조회* 만 성립시킨다.
+#   ★ 미설치 환경의 반환 규약: 새 error_kind 를 만들지 않는다. import 실패는 아래
+#     `except Exception` 으로 떨어져 `error_kind="sdk_error"` 가 된다(계약 그대로).
+#     `cli_not_found` 로 적지 않는 이유 — 그 kind 를 받은 소비자
+#     (`auto_repair._send_tg`)가 "claude 바이너리 PATH 미등록" 이라는 **틀린 처방** 을
+#     사람에게 보낸다. 패키지 부재를 PATH 문제로 안내하면 진단이 한 번 더 꼬인다.
+try:                                                    # pragma: no cover - 환경 분기
+    from claude_code_sdk._errors import (                # type: ignore[attr-defined]
+        CLINotFoundError, MessageParseError, ProcessError,
+    )
+except Exception:                                       # noqa: BLE001
+    class CLINotFoundError(Exception):                   # type: ignore[no-redef]
+        """claude_code_sdk 부재 시 자리표 — raise 되지 않는다(이름 바인딩 전용)."""
+
+    class MessageParseError(Exception):                  # type: ignore[no-redef]
+        """〃"""
+
+    class ProcessError(Exception):                       # type: ignore[no-redef]
+        """〃"""
+
+
 # ── PATH 보장 ──────────────────────────────────────────────────────────
 # macOS Homebrew (Intel/ARM) + npm-global + ~/.local 모두 커버.
 # 한 곳에서만 관리 — auto_repair.py 3곳·incident_responder 등 *반드시* 이 리스트 참조.
@@ -326,9 +356,9 @@ def run_sdk_query(
         from claude_code_sdk import (
             query, ClaudeCodeOptions, AssistantMessage, TextBlock,
         )
-        from claude_code_sdk._errors import (
-            MessageParseError, ProcessError, CLINotFoundError,
-        )
+        # ★ 예외 세 이름은 **모듈 레벨** 에서 이미 바인딩됐다(위 폴백 블록).
+        #   여기서 다시 import 하면 그 순간 함수 지역이름이 되어, import 가 실패한
+        #   경로에서 `except CLINotFoundError` 가 UnboundLocalError 로 터진다.
 
         opts_kw: dict[str, Any] = {
             "model": model,

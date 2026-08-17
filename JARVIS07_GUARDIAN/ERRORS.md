@@ -14821,3 +14821,74 @@ HEAD 대비 이 파일의 변경은 정확히 그 **한 줄뿐**이라 사람의
 **자율 수리 에이전트에게 테스트 게이트가 없으면, 그것은 수리 도구가 아니라 무작위 편집기다.**
 그리고 **데몬의 import 캐시는 방어막이 아니라 지연 신관이다** — 잠복시켰다가 다음 재시작에 터뜨린다.
 "고쳤다"를 증거에서 파생시키는 일([642])이 왜 다른 모든 개선보다 먼저였는지를 이 사고가 사후에 증명했다.
+
+---
+
+## [651] ✅ 해결 — CI 만 9건 적색: 빠진 의존 4 · 환경에 인질 잡힌 파생 2 · 실 SDK 요구 2 · **진짜 잠복 결함 1** (2026-08-17)
+
+**증상**
+로컬 `595 passed` 인데 CI 는 `9 failed, 584 passed, 2 skipped`. 9건 전부 이번 PR 이 새로 넣은 테스트
+(기존 회귀 0건). 하나의 원인이 아니라 **성격이 다른 넷**이 겹쳐 있었다.
+
+| 갈래 | 건수 | 표면 | 실제 성격 |
+|---|---|---|---|
+| A | 4 | `ModuleNotFoundError: fastapi` | 테스트 의존 미등록 |
+| B | 2 | `ModuleNotFoundError: claude_code_sdk` | *우리 배선* 검사가 외부 패키지를 요구 |
+| C | 2 | `assert []` (ci.yml 파생 0개) | 파싱 능력이 `.venv` 존재에 인질 |
+| D | 1 | `UnboundLocalError: CLINotFoundError` | **진짜 결함 — `origin/main` 에도 있었다** |
+
+**원인**
+
+**(D) 예외 처리기가 자기 이름을 못 찾는다** — `shared/claude_sdk_compat.run_sdk_query` 가
+`CLINotFoundError`·`MessageParseError`·`ProcessError` 를 **함수 안 `try:` 에서** import 했다.
+그런데 그 import 자체가 실패하는 경우(= `claude_code_sdk` 미설치)에는 이름이 바인딩되지 않은 채
+**같은 try 의 `except CLINotFoundError` 절이 그것을 참조**한다. 파이썬은 except 절을 순서대로
+*평가* 하므로 함수 지역이름 조회에서 `UnboundLocalError` 가 나고 — **예외 처리기 자체가 터진다.**
+즉 "SDK 가 없다" 는 흔한 환경에서 이 함수는 계약(`error_kind` dict)이 아니라 생짜 예외를 던졌다.
+호출자(`agent_tools`·`auto_repair`)는 전부 dict 를 첨자 접근하므로 그 자리에서 연쇄로 죽는다.
+
+**(C) 관심사 둘이 붙어 있었다** — `error_fixer.ci_gate_commands()` 가
+`if not _VENV_PY.exists(): return []` 로 시작했다. *ci.yml 을 파싱하는 일* 과
+*인터프리터를 고르는 일* 은 다른 관심사인데, 전자까지 venv 존재에 매여 있었다.
+그래서 venv 를 안 쓰는 환경(CI 는 전역 pip install)에서 파싱은 멀쩡한데 명령이 0개가 됐다.
+
+**(B)** `_fake_sdk` 가 `import claude_code_sdk` 로 **실 패키지** 를 요구했다. 이 파일 머리말은
+이미 "외부 의존(.env·네트워크·실 SDK)은 하나도 쓰지 않는다" 고 선언해 놓고 여기만 어겼다.
+그 결과 SDK 없는 환경에서는 *배선 검사가 통째로 사라졌다* — 검사가 안 도는 것은 통과가 아니다.
+
+**헛다리**
+· ~~"D 도 CI 초록을 위한 조정"~~ → 아니다. import 차단 환경을 실제로 만들어 재현했고
+  `origin/main` 에도 있다. CI 는 이 결함을 *드러낸 것* 이지 만든 것이 아니다.
+· ~~"C 는 `sys.executable` 로 바꾸면 된다"~~ → 그것만 하면 ERRORS EvalEnvBroken #5386 재발이다.
+  운영(macOS Framework Python)에서는 `.venv/bin/python3` 를 **경로로 직접** 가리켜야 한다.
+  바꾼 것은 *우선순위* 가 아니라 *파싱을 인터프리터 선택과 분리* 한 것뿐이다.
+· ~~"A 는 api_server import 를 피해 소스 문자열 검사로 내리면 의존이 안 는다"~~ → 약화다.
+  그 4건이 보는 것은 "실패를 0 으로 위장하지 않는가" 라는 **실제 응답의 계약** 이다.
+  비용 실측 `pip install fastapi` = **2.9초**(휠 11개). 이미 든 selenium 과 비교가 안 되게 싸다.
+· ~~"B 는 requirements-test 에 claude-code-sdk 추가"~~ → 그 테스트는 SDK 동작이 아니라
+  *우리가 금지목록·표식을 전달하는가* 를 본다. 검사 목적에 없는 패키지를 CI 에 지우지 않는다.
+
+**해결**
+· **(D)** 예외 세 이름을 **모듈 레벨**에서 바인딩(실패 시 raise 되지 않는 폴백 클래스).
+  함수 안 중복 import 제거. 미설치 환경의 반환은 새 kind 를 만들지 않고 `sdk_error`
+  (`cli_not_found` 로 적으면 소비자가 "claude 바이너리 PATH 미등록" 이라는 **틀린 처방**을 보낸다).
+  → 전 저장소 AST 전수 스캔으로 같은 꼴(except 절이 참조하는 이름이 그 try 본문에서만 바인딩)을
+  확인: 남은 것은 `agent_tools.py:976 except _sock.gaierror` 하나이고 stdlib 라 발화 불가.
+· **(C)** `subprocess_python(root=None)` 단일 진입점 신설(`_SUBPROC_PY` 도 여기서 파생) +
+  `ci_gate_commands` 의 venv 조기반환 삭제. **fail-closed 유지** — 파생이 0개면 여전히 실패로 올린다.
+· **(A)** `requirements-test.txt` 에 `fastapi`(+ `anyio` 명시 — 남의 의존 그래프에 기대지 않는다).
+· **(B)** 실 SDK 가 있으면 실물, 없으면 **최소 대역**을 `sys.modules` 에 세운다. 단언은 여전히
+  **옵션 객체 자체**를 붙잡아 본다. 배선을 일부러 끊어 대역 환경에서도 빨개지는 것을 확인(비공허성).
+
+**검증** `requirements-test.txt` 가 지시한 그대로 — 워킹트리 스냅샷 + **최소 의존 venv** 로 재현:
+`592 passed, 3 skipped, 0 failed`(3 skip 은 .git/.env/.venv 부재 조건부, 전부 기존 것).
+원 저장소 `595 passed` 유지. precommit 24 카테고리 0건, syntax 전수 통과.
+
+**파일** `shared/claude_sdk_compat.py` · `JARVIS07_GUARDIAN/error_fixer.py` ·
+`requirements-test.txt` · `tests/test_publish_golden.py` · `tests/test_sdk_repair_budget.py`
+
+**교훈**
+**CI 적색을 한 가지 병으로 뭉뚱그리면 세 개는 덮고 하나는 놓친다.** 여기서 놓칠 뻔한 하나(D)가
+유일한 진짜 결함이었고, 나머지 셋과 처방이 전혀 달랐다.
+그리고 **예외 이름은 예외를 *잡는 쪽* 이 항상 갖고 있어야 한다** — 잡으려던 그 실패가
+이름 바인딩까지 앗아가면 안전망이 곧 두 번째 사고가 된다.

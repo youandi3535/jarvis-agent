@@ -6280,20 +6280,68 @@ def test_게이트가_무력이면_멈추지_않고_사람에게_알린다(monke
 
 
 def test_게이트_명령은_ci_yml_에서_파생한다():
-    """★ 명령 문자열을 박으면 CI 가 바뀌어도 게이트만 낡는다(②). 주인도 하나여야 한다(①)."""
+    """★ 명령 문자열을 박으면 CI 가 바뀌어도 게이트만 낡는다(②). 주인도 하나여야 한다(①).
+
+    ★ **파싱 능력은 환경에 매이면 안 된다** (2026-08-17 정정). 종전 이 테스트는
+      `".venv/bin/python3" in c` 를 단언했는데, 그건 *ci.yml 을 읽을 수 있는가* 가 아니라
+      *이 기계에 venv 가 있는가* 를 물은 것이었다. 그래서 venv 를 안 쓰는 환경(CI 는 전역
+      pip install)에서 파싱은 멀쩡한데도 빨개졌다. 관심사를 둘로 나눠 **둘 다** 본다:
+        ① ci.yml → 명령 파생 (어디서든 성립해야 한다)
+        ② 인터프리터 치환 규칙 (`.venv/bin/python3` 우선 — 운영 동작. 가짜 venv 로 확인)
+    """
     import inspect
+    import sys as _sys
+    import tempfile
+    from pathlib import Path as _P
 
     from JARVIS07_GUARDIAN import auto_repair as _ar
-    from JARVIS07_GUARDIAN.error_fixer import ci_gate_commands
+    from JARVIS07_GUARDIAN import error_fixer as _ef
+    from JARVIS07_GUARDIAN.error_fixer import ci_gate_commands, subprocess_python
 
+    # ① 파싱 — 환경 무관
     cmds = ci_gate_commands()
     assert cmds, "ci.yml 에서 검사 명령을 파생하지 못한다"
     ci_text = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    _py = subprocess_python()
     for c in cmds:
         tail = c.split(" ", 1)[1]                     # 인터프리터 치환분을 뺀 나머지
         assert tail in ci_text, f"ci.yml 에 없는 명령을 돌린다(박아넣은 문자열): {tail}"
-        assert ".venv/bin/python3" in c, \
-            "venv 파이썬을 명시하지 않는다 — Framework Python 재기동 시 venv 밖으로 떨어진다"
+        # 치환이 *실제로 일어났는가* — ci.yml 의 맨 `python3` 가 그대로 남으면 안 된다.
+        head = c.split(" ", 1)[0]
+        assert head == _py and _P(head).is_absolute(), \
+            f"인터프리터가 치환되지 않았다(엉뚱한 파이썬이 잡힌다): {head}"
+
+    # ② 인터프리터 선택 규칙 — **가짜 venv 로 결정론적으로** 확인한다.
+    #    (이 기계에 실제 `.venv` 가 있든 없든 같은 결론이 나와야 규칙을 검증한 것이다.)
+    with tempfile.TemporaryDirectory() as td:
+        fake_root = _P(td)
+        assert subprocess_python(fake_root) == _sys.executable, \
+            "venv 가 없는데 엉뚱한 경로를 가리킨다 — 그 환경엔 지금 인터프리터뿐이다"
+        fake_py = fake_root / ".venv" / "bin" / "python3"
+        fake_py.parent.mkdir(parents=True)
+        fake_py.write_text("#!/bin/sh\n", encoding="utf-8")
+        assert subprocess_python(fake_root) == str(fake_py), \
+            "venv 가 있는데 sys.executable 로 떨어진다 — ERRORS EvalEnvBroken #5386 재발"
+    # 그리고 그 규칙이 실제로 명령 파생에 *물려 있는가* (호출 시점 조회여야 한다)
+    _sentinel = "/nowhere/sentinel-python3"
+    _real = _ef.subprocess_python
+    _ef.subprocess_python = lambda root=None: _sentinel
+    try:
+        assert all(c.startswith(_sentinel + " ") for c in _ef.ci_gate_commands()), \
+            "인터프리터 선택이 명령 파생에 물려 있지 않다(로드 시점에 굳었다)"
+    finally:
+        _ef.subprocess_python = _real
+
+    # ③ 관심사를 갈랐다고 fail-open 이 되면 게이트가 통째로 무력해진다 — **동작으로** 본다.
+    #    (`ci_gate_failures` docstring 이 "파생 실패는 통과가 아니라 실패" 라고 선언한다.)
+    _real_cmds, _real_why = _ef.ci_gate_commands, _ef.gate_blocked_reason
+    _ef.ci_gate_commands = lambda: []
+    _ef.gate_blocked_reason = lambda: ""      # 재귀 차단 레그는 전용 테스트가 따로 본다
+    try:
+        assert _ef.ci_gate_failures(tag="derive-fail"), \
+            "파생이 0개인데 '통과' 로 적었다 — fail-closed 가 무너졌다"
+    finally:
+        _ef.ci_gate_commands, _ef.gate_blocked_reason = _real_cmds, _real_why
 
     # 검사 본체가 두 벌이 아닌가 — auto_repair 는 부르기만 해야 한다
     src = _code_only(inspect.getsource(_ar))

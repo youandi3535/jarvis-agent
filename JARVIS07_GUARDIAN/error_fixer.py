@@ -76,11 +76,26 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-# ★ `sys.executable` 금지 (2026-08-08, ERRORS EvalEnvBroken #5386/#5389) — macOS Framework
-#   Python 재기동 시 venv 밖으로 떨어질 위험. `.venv/bin/python3` 를 경로로 직접 지정
-#   (auto_repair.py 와 동일 패턴, 단일 진실). venv 부재 시에만 sys.executable 로 폴백.
-_VENV_PY = _ROOT / ".venv" / "bin" / "python3"
-_SUBPROC_PY = str(_VENV_PY) if _VENV_PY.exists() else sys.executable
+
+def subprocess_python(root: "Path | None" = None) -> str:
+    """자식 프로세스가 쓸 인터프리터 — **이 판단의 주인은 여기 하나다**(①).
+
+    ★ 운영 규칙은 안 바뀐다: `.venv/bin/python3` 가 있으면 **경로로 직접** 그것을 쓴다
+      (`auto_repair.py` 와 동일 패턴 — 단일 진실).
+      `sys.executable` 은 오답이었다 (2026-08-08, ERRORS EvalEnvBroken #5386/#5389) — macOS Framework
+      Python 이 자기 자신을 재기동하면 `sys.executable` 이 원본 프레임워크 바이너리를
+      가리키고, 그 경로로 띄운 자식은 `.venv/pyvenv.cfg` 를 못 찾아 venv 밖
+      site-packages 로 떨어진다(= `python-dotenv` 부재로 전부 깨짐).
+    ★ venv 가 **아예 없는** 환경(CI 는 전역 pip install 을 쓴다)에서는 가리킬 venv 자체가
+      없다. 그때 유일하게 옳은 답은 지금 도는 인터프리터다 — 그것이 곧 그 환경의 venv 다.
+    ★ `root` 인자는 테스트가 *가짜 venv* 로 이 규칙을 결정론적으로 확인하기 위한 것.
+      운영 호출은 인자 없이 쓴다(‘어느 저장소인가’ 를 두 곳에서 정하지 않는다).
+    """
+    venv = (Path(root) if root is not None else _ROOT) / ".venv" / "bin" / "python3"
+    return str(venv) if venv.exists() else sys.executable
+
+
+_SUBPROC_PY = subprocess_python()
 
 # 수정 금지 디렉터리
 _DENY_DIRS = {".venv", ".git", "__pycache__", "shared/backups", "chrome_profile", "logs"}
@@ -1810,19 +1825,21 @@ def ci_gate_commands() -> list:
 
     ★ 인터프리터를 명시 치환한다 — 데몬은 `.../Python.app/Contents/MacOS/Python` 으로
       도는데 그 디렉터리엔 `python3` 도 `pytest` 도 없다. CI 문자열의 `python3` 를 그대로
-      쓰면 엉뚱한 파이썬이 잡혀 *멀쩡한 수정이 실패로 판정* 된다.
-    ★ `sys.executable` 은 오답이었다 (2026-08-08, ERRORS EvalEnvBroken #5386) — macOS
-      Framework Python 이 GUI 관련 import 로 자기 자신을 재기동하면 `sys.executable` 이
-      원본 프레임워크 바이너리를 가리키고, 그 경로로 새 프로세스를 띄우면 `.venv/pyvenv.cfg`
-      를 못 찾아 venv 밖 site-packages 로 떨어진다(= `python-dotenv` 부재로 전부 깨짐).
-      `.venv/bin/python3` 를 **경로로 직접** 가리키면 탐색이 항상 성립한다.
+      쓰면 엉뚱한 파이썬이 잡혀 *멀쩡한 수정이 실패로 판정* 된다. 어느 인터프리터인지는
+      `subprocess_python()` 이 단독으로 정한다(운영에선 `.venv/bin/python3` — 근거는 거기).
+
+    ★ **파싱과 인터프리터 선택은 다른 관심사다** (2026-08-17 정정).
+      종전엔 `.venv/bin/python3` 부재만으로 `[]` 를 돌려줘, *ci.yml 을 읽는 능력* 까지
+      venv 존재에 인질로 잡혀 있었다. 그래서 venv 를 안 쓰는 환경(CI 는 전역 pip install)
+      에서는 파싱이 멀쩡한데도 명령이 0개가 되고, 그것이 곧 게이트 '검사 불가' 로 올라왔다.
+      파싱은 어디서든 성립해야 한다 — 인터프리터가 무엇이냐와 무관하게 ci.yml 은 읽힌다.
+      (fail-closed 는 그대로다: 진짜로 파생이 깨지면 여전히 빈 목록 → 호출자가 실패 처리.)
     Returns: 실행 가능한 명령 문자열 목록. 파생 불가면 빈 목록(호출자가 실패로 취급).
     """
     ci = _ROOT / ".github" / "workflows" / "ci.yml"
     if not ci.exists():
         return []
-    if not _VENV_PY.exists():
-        return []
+    py = subprocess_python()
     cmds = []
     try:
         lines = ci.read_text(encoding="utf-8").splitlines()
@@ -1832,7 +1849,7 @@ def ci_gate_commands() -> list:
         m = re.match(r"\s*(?:run:\s*)?(python3?\s+-m\s+pytest[^\n]*"
                      r"|python3?\s+shared/precommit_check\.py[^\n]*)", line)
         if m:
-            cmds.append(re.sub(r"^python3?\b", str(_VENV_PY), m.group(1).strip()))
+            cmds.append(re.sub(r"^python3?\b", py, m.group(1).strip()))
     return cmds
 
 
@@ -1868,7 +1885,7 @@ def ci_gate_failures(*, tag: str = "", budget: float | None = None) -> list:
       두 벌을 두면 한쪽만 낡는다. 다만 *실패했을 때 무엇을 할지* 는 소비자마다 다르다:
         · `apply_patchset` — 전량 롤백(트랜잭션이니까)
         · `auto_repair`    — 롤백하지 않고 학습 적재만 건너뜀(스냅샷 복원이 더 파괴적)
-    ★ 파생 실패(ci.yml·venv 부재)는 *통과가 아니라 실패* 로 올린다(fail-closed).
+    ★ 파생 실패(ci.yml 부재·검사 명령 0개)는 *통과가 아니라 실패* 로 올린다(fail-closed).
       호출자가 기준선 재확인으로 "게이트 무력" 을 구분하므로 조용히 멈추지는 않는다.
 
     Args:
@@ -1889,7 +1906,7 @@ def ci_gate_failures(*, tag: str = "", budget: float | None = None) -> list:
         return []
     cmds = ci_gate_commands()
     if not cmds:
-        return ["ci.yml 또는 .venv 부재 — 게이트 검사 불가"]
+        return ["ci.yml 파생 실패(부재·검사 명령 0개) — 게이트 검사 불가"]
     env = dict(os.environ)
     # ★ 재귀 차단 표식 (자식에게만) — **깊이를 하나 올려서** 넘긴다. 같은 값을 넘기면
     #   겹쳐 들어간 자식들이 서로 같은 역할로 보여 같은 패치 락을 잡는다(교착 재발).

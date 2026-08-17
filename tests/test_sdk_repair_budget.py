@@ -1226,17 +1226,69 @@ def test_off_는_주인이_깨져도_열리는_탈출구다(monkeypatch):
     assert reached, "off 인데도 막혔다 — 탈출구가 없으면 가드가 곧 시스템 정지다"
 
 
+def _sdk_module(monkeypatch):
+    """SDK 모듈 자리 — **실물이 있으면 실물**, 없으면 최소 대역을 세운다.
+
+    ★ 왜 대역을 두나 (2026-08-17). 이 두 테스트가 보는 것은 *우리 배선* 이다 —
+      금지목록과 세션 표식이 **옵션 객체에 실려 나가는가**. SDK 자체의 동작이 아니다.
+      이 파일 머리말이 이미 선언했다: "외부 의존(.env·네트워크·실 SDK)은 하나도 쓰지
+      않는다". 그런데 여기만 `import claude_code_sdk` 로 실 패키지를 요구해, 그 패키지가
+      없는 환경(CI)에서는 **배선 검사가 통째로 사라졌다**. 검사가 안 도는 것은 통과가
+      아니다 — 그래서 없으면 우리가 세운다.
+    ★ 그래도 **있으면 실물을 쓴다**. 실 `ClaudeCodeOptions` 는 모르는 필드를 거부하므로
+      `disallowed_tools` 가 SDK 에서 사라지는 회귀를 개발기에서 즉시 잡아 준다. 대역은
+      그 능력이 없다 — 그래서 대역은 실물의 *대체* 가 아니라 *폴백* 이다.
+    ★ 대역이어도 검사는 헐거워지지 않는다: 단언은 여전히 **실제 호출 인자**(options
+      객체)를 붙잡아 본다. "전달했다" 를 문자열로 확인하는 형태로 내려가지 않는다.
+    """
+    try:
+        import claude_code_sdk as _sdk       # 실물 우선
+        return _sdk
+    except Exception:                        # noqa: BLE001 - 미설치 환경
+        pass
+
+    import types
+
+    mod = types.ModuleType("claude_code_sdk")
+
+    class _Options:
+        """옵션 자리표 — 넘어온 필드를 **그대로** 보관한다(단언이 직접 읽는다).
+
+        ★ 실 `ClaudeCodeOptions` 와 같은 *기본값* 을 미리 깐다. 안 그러면 배선이 끊겼을 때
+          단언 실패(사유가 적힌 한국어 메시지)가 아니라 `AttributeError` 로 죽어서,
+          다음 사람이 "무엇이 어긋났나" 를 로그에서 못 읽는다.
+        """
+
+        def __init__(self, **kw):
+            self.allowed_tools: list = []
+            self.disallowed_tools: list = []
+            self.env: dict = {}
+            self.__dict__.update(kw)
+
+    errs = types.ModuleType("claude_code_sdk._errors")
+    for _n in ("MessageParseError", "ProcessError", "CLINotFoundError"):
+        setattr(errs, _n, type(_n, (Exception,), {}))
+    mod.ClaudeCodeOptions = _Options
+    for _n in ("AssistantMessage", "TextBlock", "SystemMessage"):
+        setattr(mod, _n, type(_n, (), {}))
+    mod._errors = errs
+    monkeypatch.setitem(sys.modules, "claude_code_sdk", mod)
+    monkeypatch.setitem(sys.modules, "claude_code_sdk._errors", errs)
+    return mod
+
+
 def _fake_sdk(monkeypatch, box: dict):
-    """실 SDK 대신 옵션만 가로챈다 — 네트워크·CLI 없이 *배선* 을 실측한다."""
-    import claude_code_sdk as _sdk
+    """SDK 호출을 가로채 **옵션 객체 자체** 를 붙잡는다 — 네트워크·CLI 없이 배선 실측."""
     import shared.llm as _sl
+
+    _sdk = _sdk_module(monkeypatch)
 
     async def _q(prompt, options):        # noqa: ANN001
         box["options"] = options
         if False:                          # 빈 async generator
             yield None
 
-    monkeypatch.setattr(_sdk, "query", _q)
+    monkeypatch.setattr(_sdk, "query", _q, raising=False)
     monkeypatch.setattr(_sl, "defer_reason", lambda **kw: "")
     monkeypatch.setattr(_sl, "_pace_spawn", lambda *a, **k: None)
     monkeypatch.setattr(_sl, "_acquire_llm_sem", lambda *a, **k: True)
