@@ -3465,6 +3465,22 @@ def _sdk_tool_guard_probe() -> dict | None:
     return None
 
 
+def _repo_tracks(rel: str) -> bool:
+    """저장소가 이 경로를 **추적하기로 했는가** — `.gitignore` 의 *실제 판정* 에서 파생.
+
+    ★ 문자열로 "`.claude/` 가 무시된다" 를 박아두면 규칙이 바뀐 날 그 문장이 거짓이 된다
+      (실제로 그렇게 낡았다). git 에게 직접 묻는다: `check-ignore` rc 1 = 무시 대상 아님.
+      판정 불가(깃 없음·타임아웃)면 False — 등급을 *올리지 않는* 쪽이 보수적이다.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(["git", "check-ignore", "-q", rel], cwd=str(ROOT),
+                           capture_output=True, timeout=10)
+        return r.returncode == 1
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
 def check_sdkwrite(report: Report) -> None:
     """★ 자율 수리 세션의 **쓰기 범위** 회귀 차단 (2026-08-14 T2).
 
@@ -3571,15 +3587,22 @@ def check_sdkwrite(report: Report) -> None:
             cat, "sdkwrite/hook-missing", _SDK_TOOL_GUARD_HOOK, 0,
             "셸 우회를 보는 PreToolUse 훅이 없다 — 도구 이름만 막으면 `rm` 으로 새어나간다"))
     elif not st_txt:
-        # ★ 등급이 warn 인 이유 (2026-08-14 실측): `.gitignore:60` 이 `.claude/` 를 통째로
-        #   무시한다. 즉 **등록은 기계 로컬** 이고 새 체크아웃·CI 에는 설정 파일이 아예 없다.
-        #   그걸 차단으로 만들면 CI 가 영구히 빨갛고, 사람은 레그를 꺼 버린다(그러면 진짜
-        #   회귀도 안 보인다). 없는 것은 *보이게만* 하고, **있는데 빠진 것** 은 차단한다.
+        # ★ 등급을 박지 않는다 — **저장소의 의사** 에서 파생한다 (2026-08-17 개정).
+        #   종전엔 무조건 warn 이었다. 근거는 "`.claude/` 가 .gitignore 대상이라 CI 엔
+        #   설정 파일이 아예 없다" 였고, 그건 사실이었다. 그러나 그 결과 **가드가 꺼진
+        #   채로도 초록** 이었다. 이제 `.gitignore` 가 `!.claude/settings.json` 으로
+        #   이 파일을 추적하므로, *추적하기로 한 파일이 없는 것* 은 사고다(block).
+        #   여전히 무시 대상인 저장소(포크·옛 브랜치)에서는 종전처럼 warn — 즉 등급이
+        #   `.gitignore` 를 따라간다. 판정 불가(깃 없음)면 보수적으로 warn.
+        _shared = _repo_tracks(_SDK_TOOL_GUARD_SETTINGS)
         report.add(Violation(
             cat, "sdkwrite/hook-unregistered", _SDK_TOOL_GUARD_SETTINGS, 0,
-            "Claude Code 설정이 없어 PreToolUse 등록을 확인할 수 없다 — 이 기기에서 자율 "
-            "수리를 돌린다면 훅을 등록할 것(설정 파일은 .gitignore 대상이라 기기마다 필요)",
-            severity="warn"))
+            ("추적 대상인 공유 설정이 없다 — 커밋에서 빠졌거나 지워졌다. PreToolUse 훅이 "
+             "등록되지 않은 채 돌고 있다(셸 우회 가드가 꺼진 상태)")
+            if _shared else
+            ("Claude Code 설정이 없어 PreToolUse 등록을 확인할 수 없다 — 이 기기에서 자율 "
+             "수리를 돌린다면 훅을 등록할 것(이 저장소에선 설정 파일이 무시 대상이다)"),
+            severity="block" if _shared else "warn"))
     elif "PreToolUse" not in st_txt or hook_p.name not in st_txt:
         report.add(Violation(
             cat, "sdkwrite/hook-unregistered", _SDK_TOOL_GUARD_SETTINGS, 0,

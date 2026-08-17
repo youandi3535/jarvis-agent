@@ -1250,19 +1250,27 @@ def selfheal_budget_sec() -> float:
     ★ 숫자를 박지 않는다: 이 페이즈가 앞서는 것이 *플랫폼당 발행 액션*
       (`watchdog.BLOG_ACTION_DEADLINE_SEC`)이므로 그 예산의 5% 를 넘지 않는다 —
       전주곡이 본편을 잡아먹지 않는다. 데드라인이 바뀌면 자동 추종.
+    ★ 파생이 끊기면 드러난다 (2026-08-17): 종전 폴백 `120.0` 은 정상 파생값
+      (2400/20)과 **같은 숫자** 라, `BLOG_ACTION_DEADLINE_SEC` 가 개명·이동해도 값이
+      그대로여서 파생 단절을 구별할 수 없었다. 이제 `severity.derived_or` 가 드러낸다.
+      값은 보수적으로 유지한다 — 여기서 예산을 줄이면 발행 前 자체수리가 조용히
+      일을 덜 하게 되고(수리 누락), 늘리면 발행을 지연시킨다. 둘 다 무음 열화다.
     무배포 조정: `GUARDIAN_SELFHEAL_BUDGET`.
     """
+    from JARVIS07_GUARDIAN.severity import derived_or
+
     env = (os.getenv("GUARDIAN_SELFHEAL_BUDGET") or "").strip()
     if env:
         try:
             return max(5.0, float(env))
         except ValueError:
             pass
-    try:
+
+    def _derive() -> float:
         from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC as _d
         return max(30.0, float(_d) / 20)
-    except Exception:                                   # noqa: BLE001
-        return 120.0
+
+    return derived_or("selfheal/watchdog.BLOG_ACTION_DEADLINE_SEC", _derive, 120.0)
 
 
 def self_heal_known_errors(limit: int = 40) -> dict:

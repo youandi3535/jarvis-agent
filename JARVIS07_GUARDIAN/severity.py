@@ -37,6 +37,95 @@ def _flag(name: str, default: bool = True) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════
+# 0-A. 파생 실패를 **드러내는** 단일 진입점 (사용자 박제 2026-08-17)
+# ══════════════════════════════════════════════════════════════════
+# ★ 무엇이 문제였나: GUARDIAN 안에 "파생인 척하는 사본" 이 6곳 있었다.
+#     `gate_time_budget_sec` 900.0 = 3600/4 · `selfheal_budget_sec` 120.0 = 2400/20 ·
+#     `bandit._stale_hours` 48.0 = 24/2×4 · `_import_timeout` 25.0 · 재발행간격 24 ·
+#     귀속창 18 = 24×0.75.
+#   전부 `except: return <리터럴>` 인데 그 리터럴이 **정상 파생값과 같은 숫자** 였다.
+#   그래서 파생원(watchdog 상수·publish_slots)을 지우고 불러도 값이 그대로 나왔다 —
+#   끊긴 줄을 값으로도 로그로도 알 수 없었다. CLAUDE.md 가 '복사본을 진실로 믿지 말 것'
+#   으로 박제한 병 그대로이고, 그 값에서 또 파생하는 소비자(`_patch_lock_timeout`)까지
+#   조용히 함께 낡는다.
+# ★ 왜 여기인가(①): 소비자 4개 모듈(error_fixer·guardian_agent·bandit·quality_learner)이
+#   전부 GUARDIAN 이고, severity 는 stdlib 만 쓰는 잎(import 0.01s)이라 어디서 불러도
+#   부담이 없다. 게다가 '결함을 사람에게 드러내는' 자리(`selfcheck()`)가 이미 여기다 —
+#   정의와 노출을 같은 곳에 둔다.
+_PROBE_PREFIX = "__probe__"              # 자기점검이 *일부러* 끊는 자리 (로그 면제)
+_DERIVED_BROKEN: dict[str, str] = {}    # label → 지금 끊겨 있는 사유 (없으면 정상)
+_DERIVED_SITES: dict[str, object] = {}  # label → derive 콜러블 (재점검용)
+
+
+def derived_or(label: str, derive, fallback):
+    """`derive()` 로 파생하되 **끊기면 그 사실이 드러나게** 한다. 값은 보수적으로 유지.
+
+    ★ 왜 값을 줄이지 않는가 — '안전한 실패' 의 정의(근거):
+      여기 걸린 값은 전부 *시간 예산·정지 임계* 다. 파생이 끊겼다고 예산을 줄이면
+      테스트 게이트가 `예산 부족 → 남은 검사 미실행`(fail-closed)으로 전 항목을 실패로
+      올리고, 호출자의 기준선 재확인도 같은 이유로 실패해 `_notify_gate_blind` 경로가
+      열린다 = **검증 없이 패치가 착지**한다. 즉 이 도메인에선 '작게 실패' 가 더 위험하다.
+      → 자동수리는 계속 돌게 두고(멈추면 그것도 사고다), 끊긴 사실은 로그·상태로 드러낸다.
+      값을 흔드는 것이 안전한 자리라면 그 자리에서 fallback 을 다르게 주면 된다 —
+      정책은 호출자가, *드러내는 방식* 은 여기가 소유한다.
+
+    ★ 로그는 **상태가 바뀔 때만**: 이 함수들은 패치·스윕마다 불린다(실측 수십 회).
+      매번 짖으면 로그가 사고를 덮는다 → 첫 단절 WARNING 1줄, 회복 INFO 1줄. 침묵 아님.
+    """
+    _DERIVED_SITES[label] = derive
+    try:
+        v = derive()
+    except Exception as e:                              # noqa: BLE001
+        why = f"{type(e).__name__}: {e}"
+        # ★ 프로브(`derivations_effective`)는 *일부러* 끊는다 — 그걸 WARNING 으로 짖으면
+        #   사람이 진짜 단절 경고를 무시하도록 훈련된다. 상태에는 남기고 로그만 아낀다.
+        if not label.startswith(_PROBE_PREFIX) and _DERIVED_BROKEN.get(label) != why:
+            log.warning("[GUARDIAN] 파생 끊김 — %s: %s → 폴백 %r 로 돈다"
+                        "(이 값은 이제 파생원을 따라가지 않는다)", label, why, fallback)
+        _DERIVED_BROKEN[label] = why
+        return fallback
+    if _DERIVED_BROKEN.pop(label, "") and not label.startswith(_PROBE_PREFIX):
+        log.info("[GUARDIAN] 파생 복구 — %s: %r", label, v)
+    return v
+
+
+def derivation_failures() -> dict[str, str]:
+    """지금 **끊겨 있는** 파생 (label → 사유). 빈 dict = 정상.
+
+    ★ 이 프로세스에서 *한 번이라도 불린* 자리만 보인다 — 안 불린 것을 안다고 하지 않는다.
+      전수로 다시 보려면 `recheck_derivations()`.
+    """
+    return dict(_DERIVED_BROKEN)
+
+
+def recheck_derivations() -> dict[str, str]:
+    """등록된 파생을 **다시 실행** 해 상태를 갱신하고 끊긴 것만 돌려준다."""
+    for label, fn in list(_DERIVED_SITES.items()):
+        derived_or(label, fn, None)
+    return derivation_failures()
+
+
+def derivations_effective() -> bool:
+    """관측 배선이 *실제로* 도는가 — 설정을 묻지 않고 가짜 파생을 한 번 통과시킨다.
+
+    (CLAUDE.md `patch_effective()` 표준: "코드 존재는 적용의 증거가 아니다".)
+    """
+    probe = f"{_PROBE_PREFIX}/derivation"
+
+    def _boom():
+        raise RuntimeError("probe")
+
+    try:
+        got = derived_or(probe, _boom, -1.0)
+        return got == -1.0 and probe in derivation_failures()
+    except Exception:                                   # noqa: BLE001
+        return False
+    finally:
+        _DERIVED_BROKEN.pop(probe, None)
+        _DERIVED_SITES.pop(probe, None)
+
+
+# ══════════════════════════════════════════════════════════════════
 # 0. 분류 어휘 (taxonomy) — 이 파일의 단일 진실 소스
 # ══════════════════════════════════════════════════════════════════
 # error_type(예: "ValueError")만으로는 어떤 종류의 오류인지 한눈에 안 들어옴 →
@@ -1188,6 +1277,14 @@ def selfcheck() -> list[str]:
 
     # ── 결함4: 오류 타입이 뭉뚱그려져 있지 않은가 (사용자 박제 2026-07-29) ──
     bad.extend(type_granularity_issues())
+
+    # ── [P6] 파생 끊김 (2026-08-17) — 값으로는 안 보이는 고장 ──
+    #   폴백 리터럴이 정상 파생값과 같은 숫자라, 끊겨도 값이 그대로다. 여기서 드러낸다.
+    #   `recheck_derivations()` 는 등록된 파생을 *다시 실행* 한다(상태 사본을 믿지 않는다).
+    if not derivations_effective():
+        bad.append("[P6] 파생 관측 배선이 죽었다 — 파생이 끊겨도 아무도 모른다")
+    for _lb, _why in sorted(recheck_derivations().items()):
+        bad.append(f"[P6] 파생 끊김 {_lb} — {_why} (폴백으로 도는 중: 파생원을 따라가지 않는다)")
 
     return bad
 

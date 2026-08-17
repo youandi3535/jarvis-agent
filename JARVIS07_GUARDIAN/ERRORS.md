@@ -14625,3 +14625,199 @@ guardian_agent._collect_unresolved/job_retry_pending, repair_budget.record_attem
   "남의 답안지를 보고 내 점수를 매기는" 것과 같다 — 느려지는 게 아니라 **원장이 거짓이 된다.**
 - **관측이 대상을 더럽히면 안 된다.** 테스트가 오류 장부에 쓰면 조준 검색이 그만큼 헛다리를 짚는다.
   그리고 그 방지를 *각 테스트의 기억력* 에 맡기면 반드시 잊는다 — 중앙에서, 경로의 주인 하나로.
+
+---
+
+## [648] ✅ 해결 — 심사를 *못 받은* 학습 지문 39건(49%)이 여전히 재적용 후보였다 (2026-08-17)
+
+**증상**
+`learned_patterns.json` 79건 중 **39건(49%)의 `eval_meta.score` 가 정확히 70** 이었다.
+`eval_agent.SCORE_PASS = 80` 인데 전부 등록돼 있었고, `_fix_from_learned`·
+`apply_stored_patches` 의 **재적용 후보로 살아 있었다** — 즉 코드에 패치를 쓸 자격을 갖고 있었다.
+
+**환경**
+`JARVIS07_GUARDIAN/{eval_agent,pattern_fixer,auto_repair}.py`.
+실측 시점: 원장 79건 / 보류 39건 / 자격 40건.
+
+**원인**
+1. 70 은 통과 점수가 아니라 `_SCORE_CONSERVATIVE` — *LLM 이 판정을 못 했을 때* 붙는
+   '보수적 통과' 다. 사유 1위 19건이 `LLM 호출 실패 — No module named 'dotenv'`
+   (eval 훅이 bare `python3` 를 써서 모델이 **아예 안 돌았다**), 14건이 `ok=False`,
+   3건이 응답 파싱 실패. 실측 39건 전부 `llm_judged is not True` 였다.
+   **심사에 떨어진 것이 아니라 심사를 받지 못한 것** 인데 통과로 기록됐다.
+2. 문턱은 *신규 등록 시점에만* 걸렸다. 이번 하드닝으로 `SCORE_PASS_UNVERIFIED = 90` 이
+   생겨 신규는 엄격해졌지만 **기존 항목은 소급받지 않는다** — 원장이 옛 판정을 들고 있으면
+   문턱을 올려도 이미 들어온 것은 그대로 남는다.
+3. 문턱 선택식(`SCORE_PASS_UNVERIFIED if verif == V_UNVERIFIABLE else SCORE_PASS`)이
+   `_evaluate_llm_patch` **안에 인라인** 으로만 있어서, "지금 문턱으로 보면 통과인가" 를
+   물을 곳이 없었다. 물으려면 식을 한 벌 더 적어야 했고 그 순간 두 번째 진실이 된다(①).
+
+**헛다리**
+- **"39건을 지우면 된다"** — 아니다. 심사를 못 받았을 뿐 *틀렸다고 확인된 것이 아니다*.
+  실제로 재심사 1건을 돌려보니 **88점** 이 나왔다(자격 회복 대상). 지웠으면 멀쩡한 학습을 버렸다.
+- **"기존 `quarantined` 버킷으로 옮기면 된다"** — 아니다. 그 버킷은 *3회 실패 = 기각* 이고
+  `prune_quarantined(keep_days=30)` 가 **삭제** 한다. 보류를 거기 넣으면 30일 뒤 자산이 사라진다.
+  자료구조가 '기각' 과 '보류' 를 구분해야 한다.
+- **"`_fix_from_learned` 만 막으면 된다"** — 아니다. 통로가 셋이다. 정확·정규식 매칭,
+  **시맨틱 폴백**(후보 선별이 따로 있다), 토요일 전수 `apply_stored_patches`.
+  한 곳만 막으면 나머지 둘로 샌다(③).
+- **"`llm_judged=False` 를 보고 거르자"** — 판정 규칙이 둘이 되어 문턱과 따로 논다.
+  게다가 옛 스키마 22건엔 그 키가 **아예 없다**. 판정은 문턱 비교 하나로 하고,
+  `llm_judged` 는 *사유 설명* 에만 싣는다.
+
+**해결**
+- `eval_agent.pass_threshold(verification)` 신설 — 문턱 선택식을 **저장소에서 하나로**.
+  신규 등록(`_evaluate_llm_patch`)과 소급 자격(`reuse_eligibility`)이 같은 함수를 지난다(①).
+- `eval_agent.reuse_eligibility(entry)` — `eval_meta.score >= pass_threshold(verification)`.
+  숫자를 박지 않으므로 **문턱이 바뀌면 자격이 자동으로 따라간다**(②).
+  검증 정보가 없는 옛 항목은 `""` 로 읽어 기본 문턱 — `evaluate()` 자신이 `verification=None`
+  을 그렇게 다루기 때문이다(없는 정보에 독자 규칙을 만들면 그것이 두 번째 진실이 된다).
+  `eval_meta`·`score` 자체가 없으면 `HOLD_UNREVIEWED`(보류, fail-closed).
+- `pattern_fixer.reuse_hold(entry)` — **세 통로가 지나는 하나의 문**. `_fix_from_learned`,
+  `_semantic_fallback_match` 후보 선별, `apply_stored_patches` 전부 여기를 지난다(③).
+  게이트 주인에게 못 닿으면 **전량 보류 + WARNING**(모르면 통과가 아니라 보류).
+  킬스위치 `GUARDIAN_REUSE_BAR=0` 은 함수 안에서 조회.
+- **지우지 않는다** — 원장에 그대로 남고 빠지는 것은 재적용 후보 자격 하나뿐이다.
+  `pattern_fixer.held_patterns()` 가 사유(`_hold`·`_hold_detail`)와 함께 돌려준다.
+- 돌아올 길: `eval_agent.rereview_held(dry_run=True)` — 저장 패치를 다시 채점하고
+  **실제 판정이 일어났을 때만**(`llm_judged=True`) `eval_meta` 를 갱신한다.
+  자격은 저장 플래그가 아니라 파생값이라 점수가 회복되면 **자동으로** 후보로 돌아온다.
+- 관측은 **있는 자리를 넓혔다**(새 카드·새 알림 0): `pattern_fixer.stats()` 에
+  `reuse_eligible`·`reuse_held`·`reuse_held_by_reason`·`reuse_held_unjudged`·`reuse_bar`,
+  `auto_repair._learning_trend_brief()`(기존 텔레그램 학습 추세)에 보류 1줄.
+
+**파일**
+`JARVIS07_GUARDIAN/eval_agent.py` (pass_threshold·reuse_eligibility·rereview_held) ·
+`JARVIS07_GUARDIAN/pattern_fixer.py` (reuse_hold·held_patterns + 3통로 배선 + stats) ·
+`JARVIS07_GUARDIAN/auto_repair.py` (학습 추세 브리핑) ·
+`tests/test_publish_golden.py` (신규 7건 + 합성 항목 2곳 강화)
+
+**교훈**
+- **문턱은 미래에만 걸린다.** 게이트를 엄격하게 고쳐도 *이미 원장에 들어온 것* 은 그대로다.
+  게이트를 바꿨으면 **기존 자산을 지금 문턱으로 다시 보는 길** 을 함께 만들어야 한다.
+- **판정식은 함수로 꺼내 두어야 소급 질문이 가능하다.** 인라인 식은 "지금 기준으로 어떤가" 를
+  물을 수 없고, 묻는 순간 사본이 생긴다.
+- **'심사 탈락' 과 '심사 미수행' 은 다른 상태다.** 자료구조와 문구가 그 차이를 반영하지 않으면
+  다음 사람이 보류를 기각으로 오해하고 지운다 — 그리고 88점짜리 학습이 함께 사라진다.
+
+---
+
+## [649] ✅ 해결 — 폴백 숫자가 정상 파생값과 *똑같아서* 파생이 끊겨도 아무도 몰랐다 (9곳) + 셸 우회 가드 등록이 이 기기에만 있었다 (2026-08-17)
+
+**증상**
+① `error_fixer.gate_time_budget_sec()` 의 예외 폴백이 `return 900.0` 인데 정상 파생값
+   (`watchdog.DEFAULT_ACTION_DEADLINE_SEC 3600 ÷ 4`)도 **정확히 900.0** 이었다.
+   실증 — 파생원 상수를 지우고 호출해도 900.0 이 나왔고 **로그도 없었다**.
+② 같은 형태가 GUARDIAN 에 총 9곳: `selfheal_budget_sec` 120.0(=2400/20) ·
+   `bandit._stale_hours` 48.0(=24/2×4) · `quality_learner._same_type_republish_gap_h` 24 ·
+   `attribution_window_h` 18(=24×0.75, 주석이 "종전 값과 동일" 이라 실토) ·
+   `_import_timeout` 25.0 · `_verify_timeout`·`_gate_timeout`(노브 기본값이 두 곳) ·
+   `reward_neutral` 0.5(**DB 실패가 '표본 부족' 과 구별 불가**).
+③ `sdk_tool_guard_hook.py` 는 커밋돼 있는데 그 *발동 등록* 인 `.claude/settings.json` 이
+   `.gitignore` 의 `.claude/` 에 걸려 커밋되지 않았다 → 새 체크아웃·CI 에선 셸 우회 가드가
+   **꺼진 상태**, 그리고 `test_훅이_설정에_등록돼_있다` 는 그 환경에서 **조용히 skip**.
+
+**환경**
+`JARVIS07_GUARDIAN/{severity,error_fixer,guardian_agent,bandit,quality_learner,sdk_tool_guard_hook}.py` ·
+`shared/precommit_check.py` · `.gitignore` · `tests/{test_publish_golden,test_sdk_repair_budget}.py`.
+
+**원인**
+- 폴백을 쓸 때 **그 순간의 파생 결과를 손으로 베껴** 넣었다. 베낀 값이 같으니 회귀가
+  *값으로도 로그로도* 신호를 남기지 않는다 — CLAUDE.md 「복사본을 진실로 믿지 말 것」 그대로.
+  게다가 그 값에서 또 파생하는 소비자(`_patch_lock_timeout` = 25+25+900)가 함께 낡는다.
+- `reward_neutral` 은 피해가 더 컸다. DB 를 못 읽으면 중립점이 0.5 로 돌아가는데,
+  실측 점수 분포(59~77)에서 0.5 는 `Δw` 를 **항상 양수** 로 만든다 = "검증된 지침만 생존" 이
+  "쓰인 지침은 전부 생존" 으로 조용히 퇴화한다. 실측 정상값은 **0.7**.
+- ③ 은 "설정은 기기 로컬" 이라는 전제를 문서·코드·검사에 세 벌 박아둔 결과다. 전제가
+  사실이긴 했지만, 그 전제를 **바꿀 수 있다는 검토를 아무도 하지 않았다**. Claude Code 는
+  공유 설정(`settings.json`)과 개인 설정(`settings.local.json`)을 이미 분리해 준다.
+
+**헛다리**
+- *"폴백 값을 작게 주면 구별된다"* — 게이트 예산에선 **위험하다**. 예산이 줄면
+  `예산 부족 → 남은 검사 미실행`(fail-closed)으로 기준선 재확인까지 실패해
+  `_notify_gate_blind` 경로가 열린다 = **검증 없이 패치가 착지**한다. 작게 실패하는 쪽이 더 나쁘다.
+- *"`.claude/` 를 통째로 추적"* — 세션 로그·워크트리·개인 권한 목록(28KB, 기기 절대경로)이
+  딸려 들어간다. 부모 디렉터리를 무시하면 `!` 부정 패턴이 먹지 않으므로 `.claude/*` 로 바꾼 뒤
+  **파일 하나만** 되살려야 한다.
+
+**해결**
+- `severity.derived_or(label, derive, fallback)` **단일 진입점**(①) — 값은 보수적으로 유지하고
+  끊긴 사실만 드러낸다. 로그는 **상태가 바뀔 때만**(첫 단절 WARNING 1줄, 회복 INFO 1줄) —
+  이 함수들은 스윕마다 수십 번 불려서 매번 짖으면 로그가 사고를 덮는다.
+  조회는 `derivation_failures()` / 전수 재실행은 `recheck_derivations()` /
+  배선 자체의 생사는 `derivations_effective()`(patch_effective 표준).
+- 9곳 전부 배선(③). 노출은 **있는 자리**(`severity.selfcheck()` `[P6]`) — 새 채널 0.
+- `.gitignore` 를 `.claude/*` + `!.claude/settings.json` 로 바꿔 **훅 등록이 저장소를 따라간다**.
+  개인 설정·hooks·worktrees 는 계속 무시(실측 확인: 노출되는 파일은 정확히 1개).
+- `precommit sdkwrite/hook-unregistered` 의 등급을 박지 않고 **`git check-ignore` 판정에서 파생** —
+  추적 대상이면 block, 여전히 무시 대상인 저장소(포크·옛 브랜치)면 종전대로 warn.
+- 테스트도 같은 원칙으로 강화: 설정이 없을 때 무조건 skip 하지 않고 *저장소가 추적하기로
+  했으면 실패* 시킨다. 그리고 등록 문자열을 **자식 프로세스로 실제 실행** 해 deny 를 확인한다
+  (문자열 grep 금지 — 이 저장소엔 "문자열은 있는데 안 도는" 사고가 여럿이다).
+
+**파일**
+`JARVIS07_GUARDIAN/severity.py`(derived_or·derivation_failures·recheck_derivations·
+derivations_effective·selfcheck [P6]) · `error_fixer.py`(4곳) · `guardian_agent.py`(1곳) ·
+`bandit.py`(1곳) · `quality_learner.py`(3곳) · `sdk_tool_guard_hook.py`(문서 갱신) ·
+`shared/precommit_check.py`(`_repo_tracks`) · `.gitignore` ·
+`tests/test_publish_golden.py`(신규 3건) · `tests/test_sdk_repair_budget.py`(신규 1건 + 1건 강화)
+
+**교훈**
+- **폴백은 "그때의 정답" 을 베낀 것이다.** 베낀 순간부터 그것은 두 번째 진실이고,
+  하필 값이 같아 *고장과 정상이 같은 얼굴* 을 한다. 값을 바꿀 수 없으면 **말이라도 하게** 하라.
+- **안전한 실패는 도메인마다 다르다.** 시간 예산은 *작게* 실패하면 검증이 통째로 꺼진다 —
+  "보수적" 이 곧 "작게" 가 아니다. 무엇이 열리는지 경로를 따라가 보고 정할 것.
+- **검사가 skip 되는 환경이 곧 검사가 가장 필요한 환경이었다.** "없으면 건너뛴다" 는
+  조건은, 그 파일이 *왜* 없는지 묻지 않으면 검사를 조용히 꺼 두는 장치가 된다.
+
+---
+
+## [650] ✅ 해결 — GUARDIAN 심층감사가 발행 경로를 부수고 `syntax_fixed:1 / returncode:0` 으로 성공 보고했다 (2026-08-17)
+
+**증상**
+`JARVIS02_WRITER/draft_fixer.py:348` 이 `_route_fix(iss, draft, platform, action_name)` 로 4인자를 넘기는데
+정의(:225)는 `_route_fix(issue_str, draft, platform)` 3인자 — `TypeError: _route_fix() takes 3 positional
+arguments but 4 were given`. 이 함수는 harness Layer-3 의 fix 훅이고 호출자가
+`economic_poster.py:662` · `trend_theme_writer.py:776` 이라 **경제·테마 × 네이버·티스토리 4조합 전부**의
+발행 경로다. `draft_quality` 이슈가 하나라도 나오면 터진다.
+
+**환경** 2026-08-15 03:03 파일 변경 / 발견 2026-08-17 15:5x / HEAD(a798706) 버전은 정상(3인자)
+
+**원인**
+`self_repair_runs` **#107 `ran_at=2026-08-15T03:07:21`, `syntax_fixed:1`, `returncode:0`** —
+토요일 03:00 `j07_deep_audit`(Sonnet 5 SDK 세션)이 호출부에만 인자를 붙이고 **정의를 안 고쳤다**.
+`_route_fix` 본체는 `action_name` 을 **참조하지도 않는다**(불필요한 인자였다).
+HEAD 대비 이 파일의 변경은 정확히 그 **한 줄뿐**이라 사람의 미완 리팩터가 아니라 기계의 오편집이다.
+
+**왜 아무도 몰랐나 — 세 겹이 동시에 실패했다**
+1. **테스트 게이트가 없었다.** 3인자 함수를 4인자로 부르는 것은 스위트가 즉시 잡는다.
+   이 사고 시점의 수리 경로엔 `ast.parse` + import 검증뿐이었고, `_route_fix` 는 import 시점에
+   호출되지 않으므로 **둘 다 통과**했다.
+2. **라벨이 거짓이었다.** 회차가 스스로 `syntax_fixed:1 / returncode:0` 을 남겼다.
+   `error_log` 에 `draft_fixer` 를 고쳤다는 기록은 **한 건도 없다**(귀속 자체가 새고 있었다).
+3. **데몬이 옛 코드를 들고 있어 증상이 안 났다.** 데몬 기동 08-14 15:34 < 파일 변경 08-15 03:03.
+   그래서 08-15·16·17 발행이 정상으로 보였다 — **잠복**이었다.
+   08-17 15:34 재시작(이번 작업)이 그 깨진 코드를 **처음으로 라이브에 올렸다.**
+
+**헛다리**
+· "남의 미완 편집이니 손대지 말 것" → 아니다. `self_repair_runs` 와 mtime 대조로 기계 소행이 확정됐다.
+  사람의 작업이라면 정의도 함께 건드렸을 것이고, diff 가 한 줄일 리 없다.
+· "정의에 `action_name` 을 추가해 완성" → 아니다. 본체가 그 값을 안 쓴다. 쓰지도 않는 인자를 받는 건
+  결함을 서식만 바꿔 남기는 것이다. 호출부를 HEAD 로 되돌리는 것이 옳다.
+
+**해결**
+`draft_fixer.py:348` 을 HEAD 와 동일하게 되돌림(`git diff` 0바이트). 동작 재현으로 확인 —
+`fix_and_learn(state=..., platform='naver', raw_issues=['빈 헤더 발견'])` → 정상 완주(fixed=0 unfixed=1).
+
+**이 사고가 증명한 것 — 같은 날 넣은 장치가 정확히 이걸 막는다**
+· [644] 테스트 게이트: 수리 패치가 스위트를 통과해야 착지한다 → 이 오편집은 **적용 단계에서 롤백**된다.
+· [642] `close_error` 단일 출구: 검증 못 한 수정은 `[verification=unverifiable]` 로 남는다
+  → `syntax_fixed:1` 같은 자기보고가 성공으로 둔갑하지 않는다.
+· [646] 쓰기 경계: 지금은 `observe` 라 기록만 한다. 이런 오편집이 쌓이면 `enforce` 근거가 된다.
+
+**파일** `JARVIS02_WRITER/draft_fixer.py`
+
+**교훈**
+**자율 수리 에이전트에게 테스트 게이트가 없으면, 그것은 수리 도구가 아니라 무작위 편집기다.**
+그리고 **데몬의 import 캐시는 방어막이 아니라 지연 신관이다** — 잠복시켰다가 다음 재시작에 터뜨린다.
+"고쳤다"를 증거에서 파생시키는 일([642])이 왜 다른 모든 개선보다 먼저였는지를 이 사고가 사후에 증명했다.

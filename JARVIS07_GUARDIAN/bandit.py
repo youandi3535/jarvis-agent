@@ -834,15 +834,21 @@ def _stale_hours() -> float:
       뮤테이션 테스트가 그걸 잡았다(발행 슬롯을 못 읽게 만들어도 값이 안 변했다).
       진짜 파생: 하루 n슬롯이면 간격은 24/n 시간이고, 그 간격 4번을 놓치면 정지다.
       발행이 잦아지면 임계가 자동으로 짧아진다.
+    ★ 파생이 끊기면 드러난다 (2026-08-17): 폴백 `48.0` 은 지금의 정상 파생값
+      (24/2×4)과 **같은 숫자** 라, `publish_slots` 가 사라져도 값이 그대로였다 —
+      뮤테이션 테스트가 잡은 그 병이 폴백 안에 그대로 남아 있었던 셈이다.
+      값은 보수적으로 유지하고(정지 오탐이 알림 폭주를 만든다) 사실만 드러낸다.
     """
-    try:
+    from JARVIS07_GUARDIAN.severity import derived_or
+
+    def _derive() -> float:
         from JARVIS08_PUBLISH.publish_ledger import publish_slots
         n = len(publish_slots())
         if n <= 0:
-            raise ValueError("발행 슬롯 파생 실패")
+            raise ValueError("발행 슬롯 0개")
         return round(24.0 / n * _STALE_MISSED_SLOTS, 1)
-    except Exception:
-        return 48.0
+
+    return derived_or("bandit/publish_slots", _derive, 48.0)
 
 
 

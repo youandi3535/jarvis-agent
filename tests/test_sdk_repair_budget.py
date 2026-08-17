@@ -1337,16 +1337,36 @@ def test_훅이_enforce_에서_실제로_차단한다():
     assert r2.returncode == 0 and not r2.stdout.strip(), "observe 가 차단했다"
 
 
+def _settings_is_shared() -> bool:
+    """저장소가 `.claude/settings.json` 을 **추적하기로 했는가** — git 판정에서 파생.
+
+    ★ 문자열로 "`.claude/` 는 무시된다" 를 박으면 규칙이 바뀐 날 그 문장이 거짓이 된다.
+      `git check-ignore` rc 1 = 무시 대상 아님. 판정 불가면 False(=종전처럼 skip 허용).
+    """
+    try:
+        r = subprocess.run(["git", "check-ignore", "-q", ".claude/settings.json"],
+                           cwd=str(_ROOT), capture_output=True, timeout=10)
+        return r.returncode == 1
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
 def test_훅이_설정에_등록돼_있다():
     """설치는 적용의 증거가 아니다 — 등록이 빠지면 셸 우회가 통째로 열린다.
 
-    ★ `.claude/` 는 `.gitignore` 대상이라 **CI·새 체크아웃엔 설정 파일이 없다.**
-      없는 환경에서 실패시키면 이 테스트는 곧 지워진다 — 그래서 *있으면 반드시 맞아야
-      한다* 로 세운다. 훅 자체의 동작은 위 두 테스트가 환경과 무관하게 검증한다.
+    ★ 2026-08-17 — 종전엔 설정 파일이 없으면 **무조건 skip** 이었다. `.claude/` 가
+      통째로 `.gitignore` 대상이라 새 체크아웃·CI 에는 파일이 아예 없었고, 그래서 이
+      검사는 그 환경에서 *늘 조용히 꺼져* 있었다 — 정작 가드가 필요한 환경에서만 꺼진 셈.
+      이제 `.gitignore` 가 `!.claude/settings.json` 으로 이 파일만 추적한다. 따라서
+      **저장소가 추적하기로 했으면 없는 것은 실패** 다. 여전히 무시 대상인 저장소
+      (포크·옛 브랜치)에서만 종전처럼 skip — 판정은 박지 않고 git 에게 묻는다.
     """
     st = _ROOT / ".claude" / "settings.json"
     if not st.exists():
-        pytest.skip("Claude Code 설정 없음 (기기 로컬 파일) — 등록 검사 대상 아님")
+        assert not _settings_is_shared(), (
+            "저장소가 추적하기로 한 공유 설정이 없다 — 커밋에서 빠졌거나 지워졌다. "
+            "PreToolUse 훅이 등록되지 않은 채 돌고 있다(셸 우회 가드 꺼짐)")
+        pytest.skip("이 저장소에선 설정 파일이 무시 대상 — 등록 검사 대상 아님")
     cfg = _json.loads(st.read_text(encoding="utf-8"))
     hooks = cfg.get("hooks", {})
     pre = hooks.get("PreToolUse") or []
@@ -1360,6 +1380,46 @@ def test_훅이_설정에_등록돼_있다():
         got = [h.get("command", "") for e in (hooks.get(kind) or [])
                for h in (e.get("hooks") or [])]
         assert any(needle in c for c in got), f"{kind} 기존 설정이 사라졌다"
+
+
+def test_등록된_명령이_실제로_차단한다():
+    """★ 문자열 grep 금지 — *등록 문자열 그대로* 셸에 넣어 자식 프로세스로 돌린다.
+
+    이 저장소엔 '문자열은 있는데 한 번도 안 도는' 사고 이력이 여러 건 있다
+    (진입점 preflight 16곳 중 8곳). 등록이 *먹는가* 는 실행으로만 알 수 있다:
+      · `${CLAUDE_PROJECT_DIR}` 치환이 맞는가 · 인터프리터 선택이 맞는가
+      · 그 명령이 진짜 deny 를 뱉는가 · 무해한 호출은 통과시키는가
+    """
+    st = _ROOT / ".claude" / "settings.json"
+    if not st.exists():
+        pytest.skip("설정 파일 없음 — 등록 실행 검사 대상 아님")
+    cfg = _json.loads(st.read_text(encoding="utf-8"))
+    cmds = [h.get("command", "") for e in (cfg.get("hooks", {}).get("PreToolUse") or [])
+            for h in (e.get("hooks") or [])]
+    cmds = [c for c in cmds if _HOOK.name in c]
+    assert cmds, "PreToolUse 에 훅 명령이 없다"
+    g = _guard()
+
+    def _run(cmd: str, env_extra: dict, event: dict):
+        env = dict(_os.environ)
+        env.pop(g.SESSION_ENV_KEY, None)
+        env.update({"CLAUDE_PROJECT_DIR": str(_ROOT)}, **env_extra)
+        return subprocess.run(["bash", "-c", cmd], input=_json.dumps(event), text=True,
+                              capture_output=True, timeout=120, env=env, cwd=str(_ROOT))
+
+    for cmd in cmds:
+        r = _run(cmd, {g.SESSION_ENV_KEY: "1", g.MODE_ENV_KEY: "enforce"},
+                 {"tool_name": "Bash", "tool_input": {"command": "rm -f CLAUDE.md"}})
+        assert r.returncode == 0, f"등록 명령이 죽는다: {r.stderr[:300]}"
+        out = _json.loads(r.stdout or "{}")
+        assert out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+            f"등록된 명령이 보호 대상 쓰기를 통과시킨다: {r.stdout[:200]}"
+        # 무해한 호출·사람 세션은 건드리지 않는다 (과잉 차단은 규정을 먼저 죽인다)
+        r2 = _run(cmd, {g.SESSION_ENV_KEY: "1", g.MODE_ENV_KEY: "enforce"},
+                  {"tool_name": "Bash", "tool_input": {"command": "echo hi > /tmp/j_x.txt"}})
+        assert not r2.stdout.strip(), f"무해한 호출을 막는다: {r2.stdout[:200]}"
+        r3 = _run(cmd, {}, {"tool_name": "Bash", "tool_input": {"command": "rm -f CLAUDE.md"}})
+        assert not r3.stdout.strip(), f"사람 세션에 개입한다: {r3.stdout[:200]}"
 
 
 def test_precommit_sdkwrite_레그가_실제로_돈다():

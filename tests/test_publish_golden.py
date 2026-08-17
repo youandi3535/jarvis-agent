@@ -3896,14 +3896,21 @@ def test_도달불가_지문이_매칭후보에서_빠진다():
     _orig_load, _orig_save = _pf._load_learned, _pf._save_learned
     _orig_restore = _pf._restore_items
     # ★ 필드명은 `fixer` 다(`fixer_name` 아님) — 실제 저장 구조를 그대로 쓴다.
+    #   ★ `eval_meta` 필수 (2026-08-17): 재적용 후보는 *등록 게이트를 통과한 기록* 이 있어야
+    #     한다. 점수를 리터럴로 적지 않고 `SCORE_PASS` 에서 파생한다 — 문턱이 바뀌면 이
+    #     합성 항목도 따라 움직여야 '도달성' 만 격리해 볼 수 있다(문턱 검사는 다른 테스트).
+    from JARVIS07_GUARDIAN import eval_agent as _ev
+    _passing = {"score": _ev.SCORE_PASS, "llm_judged": True, "verification": ""}
     _fake = {"patterns": [
         {"fingerprint": "HandLabelOnly::probe", "error_type": "HandLabelOnly",
          "message_pattern": "probe", "fixer": "llm_patch", "hit_count": 9,
-         "target_file": "x.py", "patch": "--- a\n+++ b\n"},
+         "target_file": "x.py", "patch": "--- a\n+++ b\n", "eval_meta": dict(_passing)},
         {"fingerprint": "RuntimeError::probe", "error_type": "RuntimeError",
          "message_pattern": "probe", "fixer": "llm_patch", "hit_count": 9,
-         "target_file": "x.py", "patch": "--- a\n+++ b\n"},
+         "target_file": "x.py", "patch": "--- a\n+++ b\n", "eval_meta": dict(_passing)},
     ]}
+    assert not _pf.reuse_hold(_fake["patterns"][1]), \
+        "합성 항목이 자격 게이트에 걸린다 — 이 검사는 *도달성* 만 봐야 한다"
     # 복원 형식은 이 검사의 관심사가 아니다 — 가드만 격리해서 본다.
     _pf._restore_items = lambda m, **k: [{"target_file": "x.py", "patch": "--- a\n+++ b\n"}]
     _pf._load_learned = lambda: _fake
@@ -7316,8 +7323,13 @@ def test_학습_재적용도_싼_검증을_먼저_한다(monkeypatch):
         tgt = _P(td) / "stored_probe.py"
         tgt.write_text("S = 0\n", encoding="utf-8")
         rel = str(tgt.relative_to(root))
+        # ★ `eval_meta` 필수 (2026-08-17) — 자격 없는 항목은 `apply_stored_patches` 가
+        #   검증 전에 보류시킨다. 여기서 보려는 것은 *순서* 이므로 자격은 통과시켜 둔다.
+        from JARVIS07_GUARDIAN import eval_agent as _ev
         entry = {"fixer": "llm_patch", "fingerprint": "fp-order-test",
-                 "error_type": "ProbeError", "sample_message": "boom", "hit_count": 1}
+                 "error_type": "ProbeError", "sample_message": "boom", "hit_count": 1,
+                 "eval_meta": {"score": _ev.SCORE_PASS, "llm_judged": True,
+                               "verification": ""}}
         monkeypatch.setattr(pf, "_load_learned", lambda: {"patterns": [entry]})
         monkeypatch.setattr(pf, "_restore_items",
                             lambda e, **k: [{"target_file": rel, "patch": "S = 1\n"}])
@@ -7995,3 +8007,366 @@ def test_ERRORS_md_가_게이트_소비자를_정확히_적는다():
     block = md[i:i + 4000]
     assert "정정" in block and "self_heal_known_errors" in block, \
         "[644] 의 오기 정정이 사라졌다 — 다음 사람이 토요일 잡을 들여다보게 된다"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 학습 재적용 자격 — 심사를 못 받은 지문이 코드에 패치를 쓰지 못하게 (2026-08-17)
+# ══════════════════════════════════════════════════════════════════════
+
+def _mk_pattern(score, *, judged, verification="", fp="ProbeGate::x", et="ProbeGate"):
+    """실제 저장 구조 그대로의 합성 학습 항목."""
+    return {"fingerprint": fp, "error_type": et, "message_pattern": "boom",
+            "fixer": "llm_patch", "hit_count": 9,
+            "eval_meta": {"score": score, "llm_judged": judged,
+                          "verification": verification}}
+
+
+def test_심사_못받은_지문은_재적용_후보에서_빠진다():
+    """★ 실측 2026-08-17 — 원장 79건 중 **39건(49%)이 score=70** 이었다.
+
+    70 은 통과 점수가 아니라 *LLM 이 판정을 못 했을 때* 붙는 '보수적 통과' 다
+    (사유 1위 19건 = `No module named 'dotenv'` — eval 훅이 모델을 못 돌렸다).
+    그런데도 `SCORE_PASS=80` 게이트를 지난 것처럼 원장에 남아 재적용 후보였다.
+    """
+    from JARVIS07_GUARDIAN import eval_agent as ev
+    from JARVIS07_GUARDIAN import pattern_fixer as pf
+
+    held = _mk_pattern(70, judged=False)
+    ok = _mk_pattern(ev.SCORE_PASS, judged=True)
+    assert pf.reuse_hold(held) == ev.HOLD_BELOW_BAR, "심사 못 받은 항목이 자격을 유지한다"
+    assert pf.reuse_hold(ok) == "", "정상 통과 항목까지 막혔다 — 과잉 차단"
+
+    # 심사 기록 자체가 없는 항목 = fail-closed (통과가 아니라 보류)
+    assert pf.reuse_hold({"fingerprint": "x", "fixer": "llm_patch"}) == ev.HOLD_UNREVIEWED
+
+    # ★ 사유가 조회 가능한가 — "왜 빠졌나" 를 사람이 물어볼 수 있어야 한다
+    detail = ev.reuse_eligibility(held)
+    assert detail["score"] == 70 and detail["threshold"] == ev.SCORE_PASS
+    assert "문턱 미달" in detail["detail"] and detail["judged"] is False
+
+
+def test_재적용_자격이_문턱을_따라_움직인다(monkeypatch):
+    """★ ② — 자격은 `eval_agent` 문턱에서 *파생* 돼야 한다. 사본이면 안 움직인다.
+
+    이 검사가 이 설계의 유일한 시험이다: 문턱을 바꿨을 때 자격이 따라오지 않으면
+    어딘가에 숫자가 박혀 있다는 뜻이다.
+    """
+    from JARVIS07_GUARDIAN import eval_agent as ev
+    from JARVIS07_GUARDIAN import pattern_fixer as pf
+
+    p70 = _mk_pattern(70, judged=False)
+    assert pf.reuse_hold(p70), "전제가 깨졌다 — 기본 문턱에서 70 은 미달이어야 한다"
+
+    monkeypatch.setattr(ev, "SCORE_PASS", 70)
+    assert not pf.reuse_hold(p70), "문턱을 낮췄는데 자격이 안 따라왔다 — 어딘가 숫자가 박혔다"
+
+    monkeypatch.setattr(ev, "SCORE_PASS", 99)
+    assert pf.reuse_hold(_mk_pattern(95, judged=True)), "문턱을 올렸는데 자격이 안 따라왔다"
+
+    # 검증 상태별 문턱도 파생인가 (verified 와 unverifiable 은 다른 문턱을 쓴다)
+    monkeypatch.setattr(ev, "SCORE_PASS", 80)
+    monkeypatch.setattr(ev, "SCORE_PASS_UNVERIFIED", 90)
+    assert not pf.reuse_hold(_mk_pattern(85, judged=True))
+    assert pf.reuse_hold(_mk_pattern(85, judged=True, verification=ev.V_UNVERIFIABLE)), \
+        "외생 검증 불가 항목에 기본 문턱을 적용했다 — 문턱 선택이 파생이 아니다"
+
+    # 문턱 *선택식* 은 저장소에 하나뿐이어야 한다 (①).
+    #   함수 이름으로 겨누지 않는다 — 이름이 바뀌면 검사가 조용히 죽는다.
+    #   식 자체를 세고, 그 하나가 `pass_threshold` 안인지 본다.
+    import inspect
+    mod_src = inspect.getsource(ev)
+    owner_src = inspect.getsource(ev.pass_threshold)
+    _EXPR = "SCORE_PASS_UNVERIFIED if"
+    assert mod_src.count(_EXPR) == 1, \
+        f"문턱 선택식이 {mod_src.count(_EXPR)}곳에 있다 — 소급 판정과 신규 등록이 갈린다"
+    assert owner_src.count(_EXPR) == 1, "문턱 선택식의 주인이 pass_threshold 가 아니다"
+    # 신규 등록 경로가 그 주인을 *실제로* 부르는가
+    callers = [n for n, fn in vars(ev).items()
+               if callable(fn) and getattr(fn, "__module__", "") == ev.__name__
+               and "pass_threshold(" in inspect.getsource(fn) and n != "pass_threshold"]
+    assert "reuse_eligibility" in callers, "재적용 자격이 문턱 주인을 안 부른다"
+    assert len(callers) >= 2, f"신규 등록 경로가 문턱 주인을 안 부른다: {callers}"
+
+
+def test_자격_게이트가_세_통로_전부에_걸린다(monkeypatch):
+    """★ ③ — Tier-1(정확·정규식) · Tier-1(시맨틱) · 정기 전수 재적용.
+
+    한 곳만 막으면 나머지로 샌다. 세 통로가 **같은 문**(`reuse_hold`)을 지나는지
+    코드가 아니라 **동작** 으로 본다.
+    """
+    import contextlib
+    import inspect
+
+    from JARVIS07_GUARDIAN import error_fixer as ef
+    from JARVIS07_GUARDIAN import pattern_fixer as pf
+
+    held = _mk_pattern(70, judged=False)
+    # 실 원장 보호 — 읽기·쓰기 전부 격리
+    monkeypatch.setattr(pf, "_load_learned", lambda: {"patterns": [held]})
+    monkeypatch.setattr(pf, "_save_learned", lambda d: None)
+    monkeypatch.setattr(pf, "_restore_items",
+                        lambda m, **k: [{"target_file": "x.py", "patch": "S = 1\n"}])
+    monkeypatch.setattr(pf, "runtime_error_types", lambda: frozenset())
+
+    @contextlib.contextmanager
+    def _noop():
+        yield {"patterns": []}
+    monkeypatch.setattr(pf, "mutate_learned", _noop)
+
+    # ① 정확·정규식
+    assert pf._fix_from_learned({"error_type": "ProbeGate", "message": "boom"}) is None, \
+        "심사 못 받은 지문이 Tier-1 정확매칭으로 재적용됐다"
+
+    # ② 시맨틱 폴백 — 후보 선별 자체에서 빠져야 한다
+    from shared import embeddings as emb
+    if emb.available():
+        vec = [round(float(x), 5) for x in emb.encode(pf._normalize_message("boom"))]
+        h2 = dict(held, embedding=vec, message_pattern="zzz-nomatch")
+        assert pf._semantic_fallback_match("ProbeGate", "boom", {"patterns": [h2]}, 0) is None, \
+            "심사 못 받은 지문이 시맨틱 폴백으로 재적용됐다"
+        ok2 = dict(h2, eval_meta={"score": 95, "llm_judged": True, "verification": ""})
+        assert pf._semantic_fallback_match("ProbeGate", "boom", {"patterns": [ok2]}, 0), \
+            "자격 있는 지문까지 시맨틱에서 막혔다 — 과잉 차단"
+
+    # ③ 정기 전수 재적용 — 파일에 닿는 함수가 아예 안 불려야 한다
+    touched = []
+    monkeypatch.setattr(ef, "apply_files_safely",
+                        lambda *a, **k: (touched.append("apply"), (False, "stub", []))[1])
+    assert pf.apply_stored_patches() == 0, "심사 못 받은 지문이 전수 재적용에서 살아남았다"
+    assert not touched, "보류 항목이 파일 적용 단계까지 갔다"
+
+    # 세 통로가 같은 문을 지나는가 — 새 통로가 생겼을 때 여기서 드러난다
+    for fn in (pf._fix_from_learned, pf._semantic_fallback_match, pf.apply_stored_patches):
+        assert "reuse_hold" in inspect.getsource(fn), \
+            f"{fn.__name__} 이 자격 게이트를 지나지 않는다 — 이 통로로 샌다"
+
+
+def test_보류는_기각이_아니다_지우지_않고_돌아올_길이_있다():
+    """★ 규칙 9 — 학습 자산은 지우는 것이 아니라 격리·재심사한다.
+
+    보류(hold)와 기각(quarantine)은 자료구조부터 달라야 한다:
+    기각 버킷(`quarantined`)은 `prune_quarantined` 가 30일 뒤 **삭제** 한다.
+    보류를 거기 넣으면 '심사를 못 받았을 뿐인' 자산이 소리 없이 사라진다.
+    """
+    import inspect
+
+    from JARVIS07_GUARDIAN import eval_agent as ev
+    from JARVIS07_GUARDIAN import pattern_fixer as pf
+
+    # ① 보류가 원장에서 사라지지 않는다 — 전체 목록은 보류를 포함한다
+    total, held = len(pf.all_patterns()), len(pf.held_patterns())
+    assert total >= held, "보류 항목이 원장에서 빠졌다 — 기록이 사라진다"
+
+    # ② 보류는 기각 버킷을 건드리지 않는다 (삭제 대상이 되면 안 된다)
+    for fn in (pf.reuse_hold, pf.held_patterns, ev.reuse_eligibility):
+        src = inspect.getsource(fn)
+        assert "quarantin" not in src, \
+            f"{fn.__name__} 이 보류를 기각 버킷으로 보낸다 — 30일 뒤 삭제된다"
+
+    # ③ 돌아올 길이 실재하는가 — 재심사 진입점 + 기본 dry-run
+    assert callable(ev.rereview_held)
+    sig = inspect.signature(ev.rereview_held)
+    assert sig.parameters["dry_run"].default is True, "재심사가 기본으로 원장을 쓴다"
+
+    # ④ 자격은 저장된 플래그가 아니라 *파생값* 이다 — 재심사로 점수만 오르면 자동 복귀
+    recovered = ev.reuse_eligibility(
+        {"eval_meta": {"score": ev.SCORE_PASS, "llm_judged": True, "verification": ""}})
+    assert recovered["eligible"], "점수가 회복돼도 자격이 안 돌아온다 — 어딘가 플래그가 있다"
+
+
+def test_보류_현황이_기존_관측지점에_드러난다():
+    """★ 관측 — 새 대시보드 카드·새 알림 채널을 만들지 않고 *있는 조회* 를 넓힌다.
+
+    보류가 안 보이면 `actionable` 이 실제 재적용 후보를 부풀려 보고한다
+    (실측: 79개로 보이지만 실제 후보는 40개였다).
+    """
+    from JARVIS07_GUARDIAN import auto_repair as ar
+    from JARVIS07_GUARDIAN import eval_agent as ev
+    from JARVIS07_GUARDIAN import pattern_fixer as pf
+
+    st = pf.stats()
+    for k in ("reuse_eligible", "reuse_held", "reuse_held_by_reason",
+              "reuse_held_unjudged", "reuse_bar"):
+        assert k in st, f"stats() 에 {k} 가 없다 — 보류가 화면에서 사라진다"
+    assert st["reuse_eligible"] + st["reuse_held"] == st["total_patterns"]
+
+    # 문턱은 화면에서도 *파생값* 이어야 한다 (박으면 그 순간 사본)
+    assert st["reuse_bar"]["default"] == ev.SCORE_PASS
+    assert st["reuse_bar"]["unverifiable"] == ev.SCORE_PASS_UNVERIFIED
+
+    # 기존 텔레그램 학습 추세 브리핑이 보류를 말하는가
+    import inspect
+    src = inspect.getsource(ar._learning_trend_brief)
+    assert "reuse_held" in src, "학습 추세 브리핑이 보류를 숨긴다"
+
+
+def test_자격_파생이_끊기면_조용히_통과하지_않는다(monkeypatch, caplog):
+    """★ ② — 파생 실패가 조용히 통과하면 그 순간 게이트는 없는 것과 같다.
+
+    재적용은 *코드에 패치를 쓰는 특권* 이다. 모르면 통과가 아니라 **보류** 다.
+    """
+    import logging
+
+    from JARVIS07_GUARDIAN import eval_agent as ev
+    from JARVIS07_GUARDIAN import pattern_fixer as pf
+
+    def _boom(entry):
+        raise RuntimeError("문턱 파생 불가(모의)")
+
+    monkeypatch.setattr(ev, "reuse_eligibility", _boom)
+    monkeypatch.setattr(pf, "_GATE_FAIL_LAST", {"why": ""})
+    with caplog.at_level(logging.WARNING, logger="jarvis.guardian.pattern"):
+        got = pf.reuse_hold(_mk_pattern(95, judged=True))
+    assert got, "자격 파생이 죽었는데 통과시켰다 — fail-closed 가 아니다"
+    assert any("fail-closed" in r.message or "보류" in r.message for r in caplog.records), \
+        "파생 실패가 로그에도 안 남는다 — 사람이 알 수 없다"
+
+
+def test_자격_게이트_킬스위치는_함수_안에서_읽는다(monkeypatch):
+    """★ 규칙 7 — 킬스위치는 *호출 시점* 조회. 모듈 레벨 스냅샷은 무배포 조정이 안 먹는다."""
+    from JARVIS07_GUARDIAN import pattern_fixer as pf
+
+    held = _mk_pattern(70, judged=False)
+    assert pf.reuse_hold(held), "전제가 깨졌다"
+    monkeypatch.setenv("GUARDIAN_REUSE_BAR", "0")
+    assert not pf.reuse_hold(held), "킬스위치가 즉시 안 먹는다 — import 시 스냅샷했다"
+    monkeypatch.delenv("GUARDIAN_REUSE_BAR")
+    assert pf.reuse_hold(held), "킬스위치 해제가 안 먹는다"
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  파생 실패가 **드러나는가** (잔여 #5 — 2026-08-17)
+#    폴백 리터럴이 정상 파생값과 *같은 숫자* 인 자리가 GUARDIAN 에 6곳 있었다.
+#    파생원을 지워도 값이 그대로라 끊긴 줄을 알 수 없었다(로그도 없었다).
+# ══════════════════════════════════════════════════════════════════════
+def _derive_sites():
+    """검사 대상 6곳 — (라벨 접두, 호출, 파생원을 끊는 함수).
+
+    ★ 목록을 여기 두는 이유: *테스트는 무엇을 검사하는지 이름을 대야 한다.* 새로 생긴
+      자리를 놓치는 것은 아래 `test_새_파생자리도_같은_형태로_새지_않는다`(AST 전수)가 막는다.
+    """
+    from JARVIS07_GUARDIAN import bandit as B
+    from JARVIS07_GUARDIAN import error_fixer as EF
+    from JARVIS07_GUARDIAN import guardian_agent as GA
+    from JARVIS07_GUARDIAN import quality_learner as QL
+
+    def _break_watchdog(mp, name):
+        import JARVIS00_INFRA.watchdog as W
+        mp.delattr(W, name)
+
+    def _break_slots(mp):
+        import JARVIS08_PUBLISH.publish_ledger as PL
+        mp.setattr(PL, "publish_slots",
+                   lambda: (_ for _ in ()).throw(RuntimeError("장부 파생 불가(모의)")))
+
+    return [
+        ("gate/", EF.gate_time_budget_sec,
+         lambda mp: _break_watchdog(mp, "DEFAULT_ACTION_DEADLINE_SEC")),
+        ("selfheal/", GA.selfheal_budget_sec,
+         lambda mp: _break_watchdog(mp, "BLOG_ACTION_DEADLINE_SEC")),
+        ("bandit/", B._stale_hours, _break_slots),
+        ("quality/publish_slots-gap", QL._same_type_republish_gap_h, _break_slots),
+        ("fixer/import-timeout", EF._import_timeout,
+         lambda mp: mp.setattr(EF, "_verify_timeout",
+                               lambda: (_ for _ in ()).throw(RuntimeError("상위 파생 불가(모의)")))),
+        ("fixer/verify-timeout", EF._verify_timeout,
+         lambda mp: mp.setenv("GUARDIAN_FIX_VERIFY_TIMEOUT", "스물다섯")),
+    ]
+
+
+def test_파생이_끊기면_값이_같아도_드러난다(monkeypatch, caplog):
+    """★ ② — 폴백이 정상값과 같은 숫자면 값만 봐선 고장을 못 본다. 상태·로그로 드러내라.
+
+    안전한 실패의 정의도 함께 고정한다: **값을 줄이지 않는다.** 게이트 예산을 줄이면
+    '예산 부족 → 전 검사 미실행' 으로 기준선까지 실패해 `_notify_gate_blind` 경로가 열려
+    *검증 없이 패치가 착지* 한다. 작게 실패하는 쪽이 더 위험하다.
+    """
+    import logging
+
+    from JARVIS07_GUARDIAN import severity as SV
+
+    for prefix, call, breaker in _derive_sites():
+        SV._DERIVED_BROKEN.clear()
+        healthy = call()
+        assert not [k for k in SV.derivation_failures() if k.startswith(prefix)], \
+            f"{prefix}: 멀쩡한데 끊겼다고 한다"
+        with monkeypatch.context() as mp:
+            breaker(mp)
+            with caplog.at_level(logging.WARNING, logger="jarvis.guardian.severity"):
+                caplog.clear()
+                broken = call()
+            hit = [k for k in SV.derivation_failures() if k.startswith(prefix)]
+            assert hit, f"{prefix}: 파생이 끊겼는데 상태가 조용하다 — 값만으로는 알 수 없다"
+            assert any("파생 끊김" in r.message for r in caplog.records), \
+                f"{prefix}: 파생 단절이 로그에도 안 남는다"
+            assert broken >= min(healthy, broken) > 0, f"{prefix}: 폴백이 값을 못 준다"
+            assert broken >= healthy * 0.5, \
+                (f"{prefix}: 파생 실패가 예산을 깎았다({healthy}→{broken}) — 게이트가 "
+                 f"'시간 없음' 으로 전 검사를 실패시키면 검증 없이 패치가 착지한다")
+            # 같은 사유 재호출은 **더 짖지 않는다** (로그가 사고를 덮으면 안 된다)
+            caplog.clear()
+            call()
+            assert not [r for r in caplog.records if "파생 끊김" in r.message], \
+                f"{prefix}: 같은 단절을 매 호출 반복 경고한다 — 로그가 신호를 덮는다"
+        # 파생원이 돌아오면 상태도 돌아온다(끊김이 눌러앉지 않는다)
+        call()
+        assert not [k for k in SV.derivation_failures() if k.startswith(prefix)], \
+            f"{prefix}: 파생이 복구됐는데 끊김 상태가 남아 있다"
+
+
+def test_파생_끊김이_기존_점검지점에_드러난다(monkeypatch):
+    """새 카드·새 채널을 만들지 않는다 — 이미 사람이 보는 `severity.selfcheck()` 에 실린다."""
+    from JARVIS07_GUARDIAN import error_fixer as EF
+    from JARVIS07_GUARDIAN import severity as SV
+
+    SV._DERIVED_BROKEN.clear()
+    EF.gate_time_budget_sec()
+    assert not [b for b in SV.selfcheck() if b.startswith("[P6]")], "멀쩡한데 결함이라 한다"
+
+    import JARVIS00_INFRA.watchdog as W
+    monkeypatch.delattr(W, "DEFAULT_ACTION_DEADLINE_SEC")
+    legs = [b for b in SV.selfcheck() if b.startswith("[P6]")]
+    assert any("DEFAULT_ACTION_DEADLINE_SEC" in b for b in legs), \
+        f"파생 끊김이 selfcheck 에 안 드러난다: {legs}"
+    # 관측 배선 자체가 죽는 것도 잡는다 (patch_effective 표준)
+    assert SV.derivations_effective() is True
+    monkeypatch.setattr(SV, "derived_or", lambda *a, **k: 0)
+    assert SV.derivations_effective() is False, "배선이 죽었는데 프로브가 초록이다"
+
+
+def test_새_파생자리도_같은_형태로_새지_않는다():
+    """★ ③ — 6곳을 고쳐도 *7번째* 가 옛 형태로 태어나면 같은 병이 재발한다.
+
+    형태 정의: try 안에서 **프로젝트 모듈**(JARVIS*/shared)을 import 해 값을 파생하면서
+    except 에서 **0 이 아닌 숫자 리터럴** 을 돌려주는 함수 = '파생인 척하는 사본'.
+    그런 자리는 `severity.derived_or` 를 지나야 한다(0 은 '아무것도 못 했다' 라 예외).
+    """
+    import ast as _ast
+    from pathlib import Path as _P
+
+    bad = []
+    for f in sorted((_P(__file__).resolve().parent.parent / "JARVIS07_GUARDIAN").glob("*.py")):
+        tree = _ast.parse(f.read_text(encoding="utf-8"))
+        for fn in _ast.walk(tree):
+            if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                continue
+            routed = "derived_or" in _ast.dump(fn)
+            for t in _ast.walk(fn):
+                if not isinstance(t, _ast.Try):
+                    continue
+                mods = [n for b in t.body for n in _ast.walk(b)
+                        if isinstance(n, _ast.ImportFrom) and (n.module or "").split(".")[0]
+                        in ("JARVIS00_INFRA", "JARVIS02_WRITER", "JARVIS03_RADAR",
+                            "JARVIS04_SCHEDULER", "JARVIS06_IMAGE", "JARVIS07_GUARDIAN",
+                            "JARVIS08_PUBLISH", "JARVIS09_COLLECTOR", "shared")]
+                if not mods:
+                    continue
+                for h in t.handlers:
+                    for r in _ast.walk(h):
+                        if (isinstance(r, _ast.Return) and isinstance(r.value, _ast.Constant)
+                                and isinstance(r.value.value, (int, float))
+                                and not isinstance(r.value.value, bool)
+                                and r.value.value != 0 and not routed):
+                            bad.append(f"{f.name}:{fn.name}:{r.lineno} → {r.value.value}")
+    assert not bad, ("파생 실패를 조용한 리터럴로 삼키는 자리가 새로 생겼다 "
+                     f"(severity.derived_or 를 지나게 할 것): {bad}")

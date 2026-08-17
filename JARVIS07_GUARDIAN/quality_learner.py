@@ -139,8 +139,15 @@ SELECTION_DAYS: int = 21
 
 
 def _same_type_republish_gap_h() -> int:
-    """같은 글종류가 다시 발행되기까지의 **최소 간격(시간)** — 발행 슬롯에서 파생."""
-    try:
+    """같은 글종류가 다시 발행되기까지의 **최소 간격(시간)** — 발행 슬롯에서 파생.
+
+    ★ 파생이 끊기면 드러난다 (2026-08-17): 폴백 `24` 는 지금의 정상 파생값과 **같은
+      숫자** 라(글종류당 슬롯 1개 → 1440분 → 24h), `publish_slots` 가 죽어도 값이
+      그대로였다. 그러면 이 값에서 파생하는 귀속 창(18h)까지 조용히 함께 낡는다.
+    """
+    from JARVIS07_GUARDIAN.severity import derived_or
+
+    def _derive() -> int:
         from JARVIS08_PUBLISH.publish_ledger import publish_slots
 
         by: dict[str, list[int]] = {}
@@ -153,19 +160,27 @@ def _same_type_republish_gap_h() -> int:
             for i in range(n):
                 g = (mins[(i + 1) % n] - mins[i]) % 1440 or 1440
                 gaps.append(g)
-        if gaps:
-            return max(1, min(gaps) // 60)
-    except Exception:
-        pass
-    return 24
+        if not gaps:
+            raise ValueError("발행 슬롯에서 간격을 얻지 못했다")
+        return max(1, min(gaps) // 60)
+
+    return derived_or("quality/publish_slots-gap", _derive, 24)
 
 
 def attribution_window_h() -> int:
-    """사용→분석 매칭 최대 시간(h). 발행 시각을 옮기면 이 값이 따라온다."""
-    try:
+    """사용→분석 매칭 최대 시간(h). 발행 시각을 옮기면 이 값이 따라온다.
+
+    ★ 폴백 `_ATTRIB_FALLBACK_H`(18) 도 정상 파생값(24×0.75)과 같은 숫자다 —
+      주석이 이미 "종전 값과 동일" 이라고 실토하고 있었다. 끊김은 위쪽
+      `quality/publish_slots-gap` 에서 먼저 드러나고, 여기서 한 번 더 드러낸다.
+    """
+    from JARVIS07_GUARDIAN.severity import derived_or
+
+    def _derive() -> int:
         return max(1, int(_same_type_republish_gap_h() * _ATTRIB_SAFETY))
-    except Exception:
-        return _ATTRIB_FALLBACK_H
+
+    return derived_or("quality/attribution-window←republish-gap", _derive,
+                      _ATTRIB_FALLBACK_H)
 
 
 ATTRIBUTION_WINDOW_H: int = attribution_window_h()   # 하위호환 — 기존 참조 그대로 동작
@@ -748,6 +763,10 @@ def item_reward_neutral(item_key: str, days: int = 60) -> "float | None":
         return None
 
 
+# ★ 중립 보상의 **폴백 주인** — 리터럴은 여기 하나뿐(종전엔 0.5 가 두 곳).
+_REWARD_NEUTRAL_FALLBACK = 0.5
+
+
 def reward_neutral(days: int = 60) -> float:
     """보상의 **중립점** — 이 값보다 높으면 weight ↑, 낮으면 ↓.
 
@@ -763,9 +782,17 @@ def reward_neutral(days: int = 60) -> float:
       전부 양수가 된다. **중앙값을 런타임에 계산** 하면 "평균보다 나은 지침" 이라는
       상대 기준이 유지된다 — 분포가 올라가도 절반은 내려간다.
 
-    표본이 부족하면(<8) 0.5 로 폴백 — 소표본 중앙값은 튀어서 오히려 해롭다.
+    표본이 부족하면(<8) `_REWARD_NEUTRAL_FALLBACK` 로 폴백 — 소표본 중앙값은 튀어서 해롭다.
+
+    ★ 파생 실패가 표본 부족과 **구별되지 않던** 자리 (2026-08-17): 두 갈래가 똑같이
+      `0.5` 를 돌려줬다. 그런데 이 둘의 뜻은 정반대다 — 표본 부족은 *정상*(기다리면 된다),
+      DB 를 못 읽은 것은 *고장* 이다. 그리고 고장 쪽이 훨씬 아프다: 중립점이 0.5 로
+      돌아가면 위 설명대로 `Δw` 가 **항상 양수** 가 되어 학습이 인기투표로 조용히 퇴화한다.
+      → 예외 경로만 `severity.derived_or` 를 태워 드러낸다(표본 부족은 조용해도 된다).
     """
-    try:
+    from JARVIS07_GUARDIAN.severity import derived_or
+
+    def _derive() -> float:
         from shared.db import get_db
         with get_db() as con:
             rows = [float(r[0]) for r in con.execute(
@@ -774,11 +801,11 @@ def reward_neutral(days: int = 60) -> float:
                 "  AND created_at > datetime('now', ?) ORDER BY quality_score",
                 (f"-{int(days)} day",)) if r[0] is not None]
         if len(rows) < 8:
-            return 0.5
+            return _REWARD_NEUTRAL_FALLBACK          # 표본 부족 — 고장이 아니다
         import statistics as _st
         return round(max(0.05, min(0.95, _st.median(rows) / 100.0)), 4)
-    except Exception:
-        return 0.5
+
+    return derived_or("quality/reward-neutral(median)", _derive, _REWARD_NEUTRAL_FALLBACK)
 
 
 def reward_retry_days() -> int:

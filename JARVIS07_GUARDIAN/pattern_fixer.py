@@ -944,6 +944,83 @@ def runtime_error_types() -> frozenset:
     return got
 
 
+# ──────────────────────────────────────────────────────────────
+# ★ 재적용 자격 게이트 — 세 통로가 지나는 **하나의 문** (2026-08-17)
+#
+#   통로: `_fix_from_learned`(정확·정규식) · `_semantic_fallback_match`(시맨틱)
+#         · `apply_stored_patches`(정기 전수 재적용)
+#   한 곳만 막으면 나머지 둘로 샌다 — 실제로 이 파일이 그렇게 새던 자리다(③).
+#
+#   판정 자체는 여기 없다. 문턱의 주인은 `eval_agent` 하나이고 이 문은 그것을 **묻는다**(①).
+# ──────────────────────────────────────────────────────────────
+
+# 이 모듈이 게이트 주인에게 닿지 못했다는 *자기* 상태 — eval_agent 의 판정 코드가 아니다.
+_HOLD_GATE_UNREACHABLE = "eval_gate_unreachable"
+
+# ★ 경고 throttle — 이 함수는 패턴 *마다* 불린다(실측 79회/1오류). 파생이 죽으면
+#   같은 WARNING 이 79줄씩 쏟아져 로그가 사고 자체를 덮는다. 상태가 *바뀔 때만* 말한다.
+#   (침묵이 아니다 — 첫 실패와 회복은 반드시 남는다.)
+_GATE_FAIL_LAST: dict = {"why": ""}
+
+
+def reuse_hold(entry: dict) -> str:
+    """학습 항목의 **재적용 보류 사유** — 빈 문자열이면 재적용 가능.
+
+    ★ 왜 보류인가 (기각이 아니다): 실측 39/79 건이 `eval_meta.score == 70` 이었는데
+      70 은 *심사를 통과한 점수* 가 아니라 *심사를 못 했을 때* 붙는 보수적 통과다
+      (사유 1위 19건 = `No module named 'dotenv'` — eval 훅이 LLM 을 못 돌렸다).
+      틀렸다고 확인된 게 아니므로 **지우지 않는다**. 원장에 그대로 남고, 빠지는 것은
+      재적용 후보 자격 하나뿐이며, `eval_agent.rereview_held()` 로 돌아올 수 있다.
+
+    ★ 파생 실패는 조용히 통과시키지 않는다 (②): 게이트 주인에게 못 닿으면
+      *보류* 로 처리하고 WARNING 을 남긴다. 재적용은 코드에 패치를 쓰는 특권이므로
+      "모르면 통과" 가 아니라 "모르면 보류" 다. 정적 fixer·Tier-2 는 영향받지 않는다.
+
+    킬스위치: `GUARDIAN_REUSE_BAR=0` → 게이트 무효(종전 동작). 무배포 조정을 위해
+    **호출 시점** 조회한다(모듈 레벨 스냅샷 금지).
+    """
+    import os
+    if os.getenv("GUARDIAN_REUSE_BAR", "1") == "0":
+        return ""
+    try:
+        from JARVIS07_GUARDIAN import eval_agent as _eval_mod  # noqa: PLC0415
+        hold = str(_eval_mod.reuse_eligibility(entry).get("hold") or "")
+    except Exception as e:  # noqa: BLE001
+        why = f"{type(e).__name__}: {e}"
+        if _GATE_FAIL_LAST["why"] != why:
+            _GATE_FAIL_LAST["why"] = why
+            log.warning("[GUARDIAN/learned] 재적용 자격 파생 실패 → **전량 보류**"
+                        "(fail-closed, 학습 재적용 정지): %s", why)
+        return _HOLD_GATE_UNREACHABLE
+    if _GATE_FAIL_LAST["why"]:
+        log.info("[GUARDIAN/learned] 재적용 자격 파생 복구 — 보류 해제")
+        _GATE_FAIL_LAST["why"] = ""
+    return hold
+
+
+def held_patterns() -> list:
+    """재적용이 **보류** 된 학습 항목 — 관측용 (삭제하지 않는다).
+
+    `unreachable_patterns()` 와 같은 성격이다: 매칭에서만 빼고 기록은 남긴다.
+    각 항목에 왜 빠졌는지(`_hold`)를 붙여 돌려준다 — 사유가 조회 가능해야 한다.
+    """
+    out = []
+    for p in all_patterns():
+        why = reuse_hold(p)
+        if not why:
+            continue
+        q = dict(p)
+        q.pop("embedding", None)          # 384차 벡터는 관측에 방해만 된다
+        q["_hold"] = why
+        try:
+            from JARVIS07_GUARDIAN import eval_agent as _eval_mod  # noqa: PLC0415
+            q["_hold_detail"] = _eval_mod.reuse_eligibility(p)
+        except Exception:  # noqa: BLE001
+            q["_hold_detail"] = {"hold": why}
+        out.append(q)
+    return out
+
+
 def unreachable_patterns() -> list:
     """런타임에 도달할 수 없는 학습 지문 — 관측용(삭제하지 않는다).
 
@@ -985,6 +1062,13 @@ def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[di
         _pt = str(p.get("error_type") or "")
         if _live and _pt and _pt not in _live:
             continue          # 도달 불가 지문 — 삭제하지 않고 매칭에서만 제외
+        # ★ 심사 문턱을 못 넘은 항목은 후보에서 뺀다 (2026-08-17, ③ 세 통로 공통).
+        #   기각이 아니라 보류 — 원장에는 남고 `rereview_held()` 로 돌아온다.
+        _hold = reuse_hold(p)
+        if _hold:
+            log.debug("[GUARDIAN/learned] 재적용 보류(%s) — fp='%s'",
+                      _hold, str(p.get("fingerprint") or "")[:60])
+            continue
         # 정확 매칭 (fingerprint 동일) 우선
         if p.get("fingerprint") == fp:
             matched = p
@@ -1099,11 +1183,13 @@ def _semantic_fallback_match(et: str, msg: str, data: dict, min_hit_count: int) 
     if not _emb.available():
         return None
     # 후보 사전 필터 — error_type 완전일치 + embedding 보유 + actionable + hit_count
+    #   ★ 자격 게이트는 여기서도 건다 (③) — 정확매칭만 막으면 시맨틱으로 그대로 샌다.
     cands = [p for p in data.get("patterns", [])
              if p.get("error_type") == et
              and p.get("embedding")
              and p.get("fixer") in _ACTIONABLE_FIXERS
-             and int(p.get("hit_count", 0)) >= min_hit_count]
+             and int(p.get("hit_count", 0)) >= min_hit_count
+             and not reuse_hold(p)]
     if not cands:
         return None   # 후보 0 → 모델 로드조차 안 함 (성능)
     q = _emb.encode(_normalize_message(msg))
@@ -1567,6 +1653,30 @@ def stats() -> dict:
     actionable_hits = sum(
         int(p.get("hit_count", 0)) for p in pats if p.get("fixer") in _actionable_fixers
     )
+    # ★ 재적용 보류 현황 (2026-08-17) — 새 카드·새 알림을 만들지 않고 *있는 조회* 를 넓힌다.
+    #   `actionable` 은 "재적용 *가능한 꼴* 인가" 만 보므로, 심사 문턱을 못 넘어 실제로는
+    #   후보에서 빠진 항목까지 세고 있었다. 그 차이가 안 보이면 학습 자산이 실제보다 커 보인다.
+    _held_by_reason: dict[str, int] = {}
+    _held_unjudged = 0
+    for p_ in pats:
+        _why = reuse_hold(p_)
+        if not _why:
+            continue
+        _held_by_reason[_why] = _held_by_reason.get(_why, 0) + 1
+        try:
+            from JARVIS07_GUARDIAN import eval_agent as _em  # noqa: PLC0415
+            if _em.reuse_eligibility(p_).get("judged") is not True:
+                _held_unjudged += 1
+        except Exception:  # noqa: BLE001
+            pass
+    _held = sum(_held_by_reason.values())
+    # 문턱은 **파생값을 그대로 보여준다** — 화면에 숫자를 박으면 그 순간 사본이 된다.
+    try:
+        from JARVIS07_GUARDIAN import eval_agent as _em2  # noqa: PLC0415
+        _bar = {"default": _em2.pass_threshold(None),
+                "unverifiable": _em2.pass_threshold(_em2.V_UNVERIFIABLE)}
+    except Exception as _be:  # noqa: BLE001
+        _bar = {"error": str(_be)}
     return {
         "total_patterns":    len(pats),
         "total_hits":        sum(int(p.get("hit_count", 0)) for p in pats),
@@ -1579,6 +1689,12 @@ def stats() -> dict:
         "by_tier":           by_tier,           # ★ static/llm/manual 분포
         "by_domain":         by_domain_count,   # ★ ADR 008 Phase 4
         "by_domain_hits":    by_domain_hits,    # ★ ADR 008 Phase 4
+        # ★ 재적용 자격 (2026-08-17) — 보류는 '기각' 이 아니라 '보류' 다 (재심사로 복귀 가능)
+        "reuse_eligible":    len(pats) - _held,
+        "reuse_held":        _held,
+        "reuse_held_by_reason": _held_by_reason,
+        "reuse_held_unjudged":  _held_unjudged,   # 그중 '심사 자체를 못 받은' 건수
+        "reuse_bar":         _bar,                # 현재 문턱 (eval_agent 파생 — 사본 아님)
         "top5":              pats[:5],
     }
 
@@ -1677,9 +1793,16 @@ def apply_stored_patches() -> int:
     applied = 0
     bumped: list[str] = []
 
+    held = 0
     for entry in patterns:
         fixer = entry.get("fixer")
         if fixer not in ("auto_patch", "llm_patch"):
+            continue
+        # ★ 심사 문턱 미달은 여기서도 뺀다 (2026-08-17, ③) — Tier-1 만 막으면
+        #   토요일 전수 스윕이 같은 항목을 코드에 그대로 쓴다. 문은 `reuse_hold` 하나.
+        _hold = reuse_hold(entry)
+        if _hold:
+            held += 1
             continue
         # ★ 복원은 `_restore_items` 단일 지점. 하나라도 불가면 전체 포기(전부 아니면 전무).
         #   정기 스윕이라 레거시 full-file 은 제외한다(회귀 감지 의미가 없어 매번 덮어쓴다).
@@ -1801,6 +1924,10 @@ def apply_stored_patches() -> int:
                            error_record=_rec)
         except Exception as _re:
             log.debug(f"[GUARDIAN/patch] 재적용 보상 실패: {_re}")
+
+    if held:
+        log.info("[GUARDIAN/patch] 재적용 보류 %d건 — 심사 문턱 미달(기각 아님). "
+                 "상세: pattern_fixer.held_patterns() / 재심사: eval_agent.rereview_held()", held)
 
     if bumped:
         # ★ 한 임계구역에서 일괄 증가 — fingerprint 마다 따로 열면 523KB 를 N번 되쓴다.
@@ -2099,5 +2226,7 @@ __all__ = [
     "fingerprint_of",
     "try_pattern_fix", "record_pattern_hit", "record_sdk_fix", "bandit_arm_name",
     "stats", "_make_fingerprint",
+    "all_patterns", "mutate_learned", "stored_patch_specs",
+    "reuse_hold", "held_patterns", "unreachable_patterns",   # ★ 재적용 자격·관측
     "_infer_domain", "backfill_domains",   # ★ ADR 008 Phase 4
 ]

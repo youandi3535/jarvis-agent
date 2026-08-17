@@ -2,12 +2,17 @@
 """PreToolUse 훅 — 자율 수리 세션의 *셸 우회* 까지 같은 목록으로 본다.
 
 ★ 왜 `.claude/hooks/` 가 아니라 여기인가 (2026-08-14 실측):
-  `.gitignore:60` 이 `.claude/` 를 통째로 무시한다 — 거기 두면 **커밋되지 않아**
+  종전 `.gitignore` 가 `.claude/` 를 통째로 무시했다 — 거기 두면 **커밋되지 않아**
   새 체크아웃·CI 에는 파일 자체가 없다(= 훅이 없는 것과 같고, CI 는 빨개진다).
   판정 owner 옆(JARVIS07)에 두고 `.claude/settings.json` 이 이 경로를 가리킨다.
   (선례: `JARVIS07_GUARDIAN/conversation_hook.py` 도 같은 이유로 추적되는 폴더에 있다.)
-  ※ 그래도 **등록(settings.json)은 여전히 기계 로컬** 이다 — 새 기기에서는 사람이 한 번
-    등록해야 한다. 미등록은 `precommit --category sdkwrite` 가 경고로 보여 준다.
+★ 등록도 이제 저장소를 따라간다 (2026-08-17): 종전엔 등록(`settings.json`)이 **기기
+  로컬** 이라 새 체크아웃·CI 에선 이 가드가 *꺼진 채* 돌았고, 그 사실을 확인하던
+  테스트는 파일이 없어 조용히 skip 됐다(= 검사가 없는 것과 같다). `.gitignore` 를
+  `.claude/*` + `!.claude/settings.json` 으로 바꿔 **공유 설정 파일 하나만** 추적한다
+  (개인 권한 목록 `settings.local.json` 은 계속 무시). 그래서 `precommit --category
+  sdkwrite` 의 `hook-unregistered` 는 이제 *경고가 아니라 차단* 이다 — 등급도 박지 않고
+  `.gitignore` 의 실제 판정에서 파생한다.
 
 ★ 2026-08-14 (T2). 도구 이름만 제한하면 셸로 우회된다 — 실제로 수리 세션이 `rm` 으로
   백업 파일을 지운 이력이 있다. SDK 의 `disallowed_tools` 는 `Write/Edit` 같은 내장

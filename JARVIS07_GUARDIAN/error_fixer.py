@@ -393,13 +393,18 @@ def _import_timeout() -> float:
 
     같은 파일이 재현검증엔 `_verify_timeout()`(무배포 조정 노브)을 두고 있는데 import
     검증만 숫자를 박아두면, 노브를 돌려도 한쪽만 따라오는 드리프트가 생긴다.
+    ★ 파생 실패를 조용히 통과시키지 않는다 (2026-08-17): 종전 폴백 `25.0` 은
+      `_verify_timeout()` 의 기본값과 **같은 숫자** 라, 파생이 끊겨도(노브에 오타를 넣어도)
+      값이 그대로여서 아무도 몰랐다. 이제 `severity.derived_or` 가 로그·상태로 드러낸다.
     무배포 조정: `GUARDIAN_IMPORT_TIMEOUT`.
     """
-    try:
-        v = float(os.getenv("GUARDIAN_IMPORT_TIMEOUT", "") or _verify_timeout())
-        return max(2.0, v)
-    except Exception:                                   # noqa: BLE001
-        return 25.0
+    from JARVIS07_GUARDIAN.severity import derived_or
+
+    def _derive() -> float:
+        return max(2.0, float(os.getenv("GUARDIAN_IMPORT_TIMEOUT", "") or _verify_timeout()))
+
+    return derived_or("fixer/import-timeout←_verify_timeout()", _derive,
+                      _VERIFY_TIMEOUT_DEFAULT)
 
 
 def _import_check(file_path: Path, timeout: float | None = None) -> bool:
@@ -647,11 +652,22 @@ def _verify_enabled() -> bool:
     return os.getenv("GUARDIAN_FIX_VERIFY", "1") != "0"
 
 
+# ★ 재현검증 상한의 **기본값 주인** — 리터럴은 여기 하나뿐이다(②).
+#   종전엔 `getenv(..., "25")` 와 `except: return 25.0` 두 곳에 같은 숫자가 있어,
+#   노브 오타로 파생이 끊겨도 값이 같아 구별되지 않았다.
+_VERIFY_TIMEOUT_DEFAULT = 25.0
+
+
 def _verify_timeout() -> float:
-    try:
-        return max(3.0, float(os.getenv("GUARDIAN_FIX_VERIFY_TIMEOUT", "25")))
-    except Exception:
-        return 25.0
+    """원 오류 재현검증 상한(초). 무배포 조정: `GUARDIAN_FIX_VERIFY_TIMEOUT`."""
+    from JARVIS07_GUARDIAN.severity import derived_or
+
+    def _derive() -> float:
+        return max(3.0, float(os.getenv("GUARDIAN_FIX_VERIFY_TIMEOUT", "")
+                              or _VERIFY_TIMEOUT_DEFAULT))
+
+    return derived_or("fixer/verify-timeout(GUARDIAN_FIX_VERIFY_TIMEOUT)", _derive,
+                      _VERIFY_TIMEOUT_DEFAULT)
 
 
 # ★ code-removal 가드 임계값 — *상수 하나* (②). 무배포 조정: GUARDIAN_FIX_MAX_SHRINK
@@ -1643,12 +1659,20 @@ def patch_lock_path() -> Path:
     return _ROOT / "JARVIS07_GUARDIAN" / "_locks" / f"patchset.{patch_lock_scope()}"
 
 
+# ★ 게이트 명령 상한의 **기본값 주인** — 리터럴 하나 (종전엔 600 이 두 곳).
+_GATE_TIMEOUT_DEFAULT = 600.0
+
+
 def _gate_timeout() -> float:
     """게이트 명령 **하나** 의 상한(초). 무배포 조정: `GUARDIAN_TEST_GATE_TIMEOUT`."""
-    try:
-        return max(30.0, float(os.getenv("GUARDIAN_TEST_GATE_TIMEOUT", "") or 600))
-    except Exception:                                   # noqa: BLE001
-        return 600.0
+    from JARVIS07_GUARDIAN.severity import derived_or
+
+    def _derive() -> float:
+        return max(30.0, float(os.getenv("GUARDIAN_TEST_GATE_TIMEOUT", "")
+                               or _GATE_TIMEOUT_DEFAULT))
+
+    return derived_or("fixer/gate-timeout(GUARDIAN_TEST_GATE_TIMEOUT)", _derive,
+                      _GATE_TIMEOUT_DEFAULT)
 
 
 def gate_time_budget_sec() -> float:
@@ -1661,19 +1685,30 @@ def gate_time_budget_sec() -> float:
     ★ 숫자를 박지 않는다: `watchdog.DEFAULT_ACTION_DEADLINE_SEC` 는 '발행 외 액션'
       (auto_repair 심층감사 등)의 데드라인이다. 게이트는 그 액션 안의 *한 단계* 이므로
       1/4 을 넘지 않는다 — 데드라인이 바뀌면 자동 추종.
+    ★★ 파생이 끊기면 **드러난다** (2026-08-17): 종전 폴백은 `900.0` 이었는데 그건
+      정상 파생값(3600/4)과 **같은 숫자** 였다. 실증 — `DEFAULT_ACTION_DEADLINE_SEC`
+      를 지우고 불러도 900.0 이 나왔다. 파생원이 개명·이동해도 값이 그대로라
+      *끊긴 줄을 아무도 모른 채* 이 값에서 또 파생하는 `_patch_lock_timeout()` 까지
+      조용히 낡는다. 이제 `severity.derived_or` 가 WARNING·상태로 드러낸다.
+    ★ 왜 값은 안 줄이나: 예산을 줄이면 게이트가 '예산 부족 → 미실행'(fail-closed)으로
+      전 검사를 실패로 올리고 기준선 재확인도 같은 이유로 실패해 `_notify_gate_blind`
+      경로가 열린다 = **검증 없이 패치 착지**. 작게 실패하는 쪽이 더 위험하다.
     무배포 조정: `GUARDIAN_TEST_GATE_BUDGET`.
     """
+    from JARVIS07_GUARDIAN.severity import derived_or
+
     env = (os.getenv("GUARDIAN_TEST_GATE_BUDGET") or "").strip()
     if env:
         try:
             return max(5.0, float(env))
         except ValueError:
             pass
-    try:
+
+    def _derive() -> float:
         from JARVIS00_INFRA.watchdog import DEFAULT_ACTION_DEADLINE_SEC as _d
         return max(60.0, float(_d) / 4)
-    except Exception:                                   # noqa: BLE001
-        return 900.0
+
+    return derived_or("gate/watchdog.DEFAULT_ACTION_DEADLINE_SEC", _derive, 900.0)
 
 
 def publish_critical_reason() -> str:

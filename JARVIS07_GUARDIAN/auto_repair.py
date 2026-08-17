@@ -423,6 +423,13 @@ def _learning_trend_brief() -> str:
             actionable     = pf.get("actionable", 0)
             actionable_hits = pf.get("actionable_hits", 0)
             extra = f"  • 자동수정 가능 패턴: {actionable}개 / 누적 hits: {actionable_hits}회\n"
+            # ★ 보류를 *같은 자리에서* 말한다 (2026-08-17) — 새 카드·새 알림을 만들지 않는다.
+            #   보류가 안 보이면 "자동수정 가능 79개" 가 실제 후보(40개)를 두 배로 부풀린다.
+            _held = pf.get("reuse_held", 0)
+            if _held:
+                _bar = pf.get("reuse_bar", {})
+                extra += (f"  • ↳ 재적용 보류: {_held}개 (심사 문턱 {_bar.get('default','?')} 미달 "
+                          f"— 기각 아님, 재심사 시 복귀)\n")
         except Exception:
             extra = ""
         return (
