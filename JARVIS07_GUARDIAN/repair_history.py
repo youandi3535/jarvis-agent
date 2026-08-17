@@ -31,6 +31,7 @@ del _anc
 
 
 import json
+import os
 import re
 import sqlite3
 from datetime import datetime, timedelta
@@ -38,11 +39,31 @@ from pathlib import Path
 from typing import Any, Optional
 
 _DIR = Path(__file__).resolve().parent
-_ERRORS_MD = _DIR / "ERRORS.md"
 # _PATTERNS 상수 제거 — 경로의 주인은 pattern_fixer (① 단일 진입점)
 
+
+def errors_md_path() -> Path:
+    """ERRORS.md 의 경로 — **주인은 이 함수 하나** (① 단일 진입점, 2026-08-14).
+
+    ★ 왜 함수인가 (실측 사고: 라이브 문서에 가짜 '자동수정' 43건)
+      경로를 만드는 코드가 네 곳에 흩어져 있었다 — 여기(`_DIR/"ERRORS.md"`),
+      `error_fixer._update_errors_md`(`Path(__file__).parent/…`), `auditor`, `architect`.
+      그래서 **읽는 쪽만 격리해도 쓰는 쪽이 새어나갔다**: 골든 테스트가 `apply_fix` 를
+      끝까지 돌리며 존재하지도 않는 `tmpXXXX/*_probe.py` 의 '수정 성공' 을 실제 문서에
+      append 했고, 그만큼 `incidents_brief` 조준 검색과 사람 검토가 오염됐다.
+      주인이 하나면 **한 곳만 갈아끼워도 모든 통로가 따라온다**(③).
+
+    ★ 무배포/테스트 격리: `GUARDIAN_ERRORS_MD` — **호출 시점** 조회다(모듈 로드 시점에
+      캡처하면 그 뒤에 세운 값이 안 먹는다). `tests/conftest.py` 가 사본을 세워
+      스위트 전체를 중앙에서 막는다 — 테스트마다 monkeypatch 하는 형태로 두면
+      *잊는 테스트가 반드시 생긴다*.
+    """
+    env = (os.getenv("GUARDIAN_ERRORS_MD") or "").strip()
+    return Path(env) if env else _DIR / "ERRORS.md"
+
+
 __all__ = [
-    "history", "history_text", "parse_errors_md", "SLOT_LABELS",
+    "history", "history_text", "parse_errors_md", "SLOT_LABELS", "errors_md_path",
     # ★ 사고 지식 검색 정문 (ERRORS [534]) — 호출자는 이것만 쓴다
     "search_incidents", "incidents_brief",
     "next_incident_no", "duplicate_incident_nos", "selfcheck",
@@ -93,7 +114,7 @@ _md_cache: dict[str, Any] = {"mtime": 0.0, "entries": []}
 
 def parse_errors_md(path: Path | None = None) -> list[dict]:
     """ERRORS.md 를 항목 단위로 파싱. mtime 캐시 — 파일이 바뀌면 자동 재파싱."""
-    p = path or _ERRORS_MD
+    p = path or errors_md_path()
     if not p.exists():
         return []
     try:
@@ -195,6 +216,38 @@ _ACTOR_LABEL = {
 _HUMAN_ACTORS = frozenset({"claude", "vscode_claude", "external_user", "user"})
 
 
+# ── 상태 어휘는 GUARDIAN 소유 — 여기서 리터럴로 다시 적지 않는다 (② · 2026-08-14 P2)
+#
+# ★ 무엇이 있었나: `architecture` 에 어휘를 모으고 `api_server` 4곳을 파생으로 바꿨는데,
+#   이 파일만 `status IN ('fixed','resolved','manual','wontfix')` 와
+#   `if status in ("fixed","resolved")` 를 그대로 들고 있었다. 사본이 *사라진 게 아니라
+#   옮겨 앉은* 것이다 — 어휘가 바뀌면 수리 이력 화면만 옛 정의로 남는다.
+# ★ 파생 실패를 조용히 넘기지 않는다: 폴백 목록을 여기 적으면 그것이 또 하나의 사본이다.
+#   못 읽으면 예외를 그대로 올려 화면이 "이력 조회 실패" 를 말하게 둔다(0건으로 위장 금지).
+
+def _attempted() -> tuple:
+    """'손을 댄 결과가 있는' 상태 — 이력 조회 대상. 주인에서 파생."""
+    from JARVIS07_GUARDIAN.architecture import ATTEMPTED_STATUSES
+    return tuple(ATTEMPTED_STATUSES)
+
+
+def _open() -> tuple:
+    """'아직 결론 없음' 상태 — 주인에서 파생."""
+    from JARVIS07_GUARDIAN.architecture import OPEN_STATUSES
+    return tuple(OPEN_STATUSES)
+
+
+def _fixed_or_legacy() -> tuple:
+    """'자동수정 성공' 으로 읽히는 상태(옛 `resolved` 포함) — 주인에서 파생."""
+    from JARVIS07_GUARDIAN.architecture import FIXED_OR_LEGACY_STATUSES
+    return tuple(FIXED_OR_LEGACY_STATUSES)
+
+
+def _status_sql(names) -> str:
+    """('a','b') → "'a','b'" — IN 절 본문."""
+    return ",".join("'" + str(n).replace("'", "") + "'" for n in names)
+
+
 def _fixer(row: dict, pidx: dict) -> tuple[str, str]:
     """(주체, 수단) — 어떻게 고쳤는지까지 파생."""
     res = str(row.get("resolution") or "")
@@ -208,7 +261,7 @@ def _fixer(row: dict, pidx: dict) -> tuple[str, str]:
         return "harness 자가 해소", "같은 동작을 재시도해 검증 통과 — 코드 수정 없음"
     if status == "wontfix":
         return "GUARDIAN 자동 수리 (실패)", "패치를 적용했으나 검증에서 걸려 원상 복구"
-    if status in ("fixed", "resolved"):
+    if status in _fixed_or_legacy():
         p = pidx.get(str(row.get("error_type") or ""))
         if p:
             fx, tier = str(p.get("fixer") or ""), str(p.get("tier") or "")
@@ -226,7 +279,7 @@ def _outcome(con: sqlite3.Connection, row: dict) -> dict:
     status = str(row.get("status") or "")
     if status == "ignored":
         return {"state": "n/a", "text": "코드 결함이 아님 — 수리 대상 밖으로 분류"}
-    if status in ("new", "analyzing"):
+    if status in _open():
         return {"state": "open", "text": "아직 수리 전"}
     if status == "wontfix":
         return {"state": "fail", "text": "자동 수리 실패 — 롤백됨 (수동 검토 필요)"}
@@ -364,6 +417,13 @@ def history(days: int = 30, limit: int = 40, actor: str = "",
     if db_path is None:
         from shared.db import DB_PATH as db_path  # type: ignore
         from shared.db import TS_CUTOFF as _TS_CUTOFF  # 포맷 주인은 shared.db(①)
+    # 관측용 합성 행 배제 — 조건의 주인은 shared.db 단독 (② · P2).
+    # 프로브가 만들었다 지우는 행이 '자동 수리 이력' 으로 표시되면 안 된다.
+    try:
+        from shared.db import and_sql as _and, synthetic_exclusion_sql as _syn
+        _excl = _syn()
+    except Exception:
+        _and, _excl = (lambda *c: " AND ".join([x for x in c if x]) or "1=1"), ""
     con = sqlite3.connect(str(db_path))
     con.row_factory = sqlite3.Row
     try:
@@ -371,8 +431,8 @@ def history(days: int = 30, limit: int = 40, actor: str = "",
             "SELECT id, timestamp, source, module, func_name, error_type, message, context, "
             "       severity, status, resolution, fixed_file, fixed_at, seen_count "
             "FROM error_log "
-            "WHERE status IN ('fixed','resolved','manual','wontfix') "
-            f"  AND timestamp >= {_TS_CUTOFF} "
+            "WHERE " + _and(f"status IN ({_status_sql(_attempted())})",
+                             f"timestamp >= {_TS_CUTOFF}", _excl) + " "
             "ORDER BY id DESC LIMIT 4000",
             (f"-{int(days)} days",),
         ).fetchall()]
@@ -616,7 +676,7 @@ def _index() -> tuple[list[dict], Any]:
     """검색 인덱스 — ERRORS.md 에서 *파생*. mtime 이 바뀌면 자동 재계산(사본 없음)."""
     rows = parse_errors_md()          # 이미 mtime 캐시 내장
     try:
-        mtime = _ERRORS_MD.stat().st_mtime
+        mtime = errors_md_path().stat().st_mtime
     except OSError:
         mtime = 0.0
     if _SEARCH_CACHE["mtime"] == mtime and _SEARCH_CACHE["rows"]:

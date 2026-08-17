@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -45,7 +46,7 @@ from typing import Any, Optional
 
 log = logging.getLogger("jarvis.guardian.store")
 
-__all__ = ["read_json", "write_json", "locked", "store_effective"]
+__all__ = ["read_json", "write_json", "locked", "held_exclusive", "store_effective"]
 
 
 def _flag(name: str, default: bool = True) -> bool:
@@ -56,18 +57,55 @@ def _flag(name: str, default: bool = True) -> bool:
     return raw not in ("0", "false", "off", "no")
 
 
-# 같은 프로세스가 이미 잡은 경로 — **재진입 자기 데드락 방지** (아래 주석 참조)
-_HELD: dict[str, int] = {}
-_HELD_GUARD = __import__("threading").Lock()
+# 이 **스레드** 가 이미 잡은 경로 — 재진입 자기 데드락 방지 (아래 주석 참조)
+#   ★ 키가 경로뿐이면 안 된다 (2026-08-14 — flock 만으로는 스레드가 안 막힌다)
+#     종전 키는 `경로` 였다. 그래서 스레드 A 가 보유 중일 때 **같은 프로세스의 스레드 B** 가
+#     `depth>0` 을 보고 "내가 이미 갖고 있다" 고 판단해 **락 없이 그대로 통과** 했다.
+#     flock 은 *프로세스* 경계를 막으라고 있는 것이고, 스레드는 애초에 같은 fd 를 공유하므로
+#     flock 으로는 못 막는다 — 즉 이 파일에는 스레드 배타가 **하나도 없었다**.
+#     (실측 계기: `error_fixer.apply_patchset` 에 같은 파일을 겨눈 5스레드가 동시 도달.)
+#     ★ 값이 깊이 하나면 안 된다 (2026-08-14 2차) — 재진입 분기가 "이미 갖고 있다" 는 이유로
+#     `yield True` 를 무조건 줬다. 바깥이 **배타를 못 얻은 채** 진행 중이어도 안쪽은
+#     "얻었다" 고 답한 셈이라, 소비자(`error_fixer.apply_patchset`)의 REJ_LOCK 보류가
+#     중첩 호출에서만 조용히 무력해진다. → 값에 *바깥이 실제로 얻었는가* 를 함께 담는다.
+_HELD: dict[tuple[int, str], tuple[int, bool]] = {}
+# 경로 → 같은 프로세스 스레드끼리의 배타. flock 과 **다른 질문** 이라 둘 다 필요하다.
+_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_HELD_GUARD = threading.Lock()
+
+
+def _release_held(thread_id: int, key: str) -> None:
+    """보유 깊이 1 감소 — 감소 로직을 한 곳에만 둔다(①). 0 이면 항목 자체를 지운다."""
+    with _HELD_GUARD:
+        depth, exclusive = _HELD.get((thread_id, key), (1, False))
+        depth -= 1
+        if depth > 0:
+            _HELD[(thread_id, key)] = (depth, exclusive)
+        else:
+            _HELD.pop((thread_id, key), None)
+
+
+def held_exclusive(path: Path) -> "bool | None":
+    """이 스레드가 지금 `path` 락을 *배타로* 들고 있는가. 미보유면 None.
+
+    보유 상태를 밖에서 조회할 유일한 창구(①) — 테스트·자기점검이 내부 dict 를
+    직접 들여다보지 않게 한다.
+    """
+    with _HELD_GUARD:
+        got = _HELD.get((threading.get_ident(), str(Path(path).resolve())))
+    return None if got is None else bool(got[1])
 
 
 @contextmanager
 def locked(path: Path, timeout: float = 10.0):
-    """교차 프로세스 배타 락 — `<path>.lock` 에 `fcntl.flock`.
+    """배타 락 — **스레드락 ∧ 파일락(flock)** 을 함께 잡는다.
 
-    ★ `threading.Lock` 과 **다른 질문**이다. 혼동 금지:
+    ★ 둘은 **다른 질문**이다. 하나만으로는 배타가 아니다:
         · threading.Lock = 같은 프로세스의 스레드끼리
         · flock          = **다른 프로세스끼리** (경제·테마 subprocess 가 여기 해당)
+      2026-08-14 까지 이 함수는 flock 만 잡았고, 스레드는 재진입 판정에 걸려 *통과* 했다.
+      그래서 `yield` 값은 이제 "둘 다 얻었는가" 다 — 소비자(예: `error_fixer.apply_patchset`)
+      가 그 값으로 *진행할지 멈출지* 를 정한다.
 
     ★ **재진입 필수** (비직관 — 안 하면 자기 자신과 데드락):
       `flock` 은 *open file description* 단위다. 같은 프로세스라도 `open()` 을 또 하면
@@ -78,6 +116,12 @@ def locked(path: Path, timeout: float = 10.0):
 
     타임아웃이면 락 없이 진행한다(fail-open) — 학습 저장이 발행을 막으면 안 된다.
     단 그 사실을 로그로 남긴다(조용한 열화 금지).
+
+    ★★ `timeout` 은 **두 대기의 합** 이다 (2026-08-14 2차 — 실측 timeout=1.0 인데 2.02초)
+      종전엔 스레드락에 `timeout` 만큼 기다려 실패한 *뒤에* flock 을 또 `timeout` 만큼
+      기다렸다. 즉 호출자가 건 상한이 조용히 두 배가 됐다. 상한을 시간 예산에서 파생하는
+      소비자(`error_fixer._patch_lock_timeout`)에게는 그 두 배가 곧 임계경로 지연이다.
+      → 진입 시 **절대 데드라인 하나** 를 만들고 두 대기가 그것을 나눠 쓴다.
 
     ★★ `<path>.lock` 파일은 **일부러 남긴다. 지우지 말 것** (2026-08-09 박제)
       0바이트이고 `.gitignore` 대상이라 비용이 없다. 반면 지우면 *진짜 경합* 이 생긴다:
@@ -99,22 +143,36 @@ def locked(path: Path, timeout: float = 10.0):
         return
 
     key = str(Path(path).resolve())
+    me = threading.get_ident()
+    deadline = time.time() + max(0.0, float(timeout))   # ★ 두 대기가 **나눠 쓰는** 하나의 상한
     with _HELD_GUARD:
-        depth = _HELD.get(key, 0)
-        if depth:                       # ★ 이미 이 프로세스가 보유 — 재획득하면 자기 데드락
-            _HELD[key] = depth + 1
+        depth, outer_exclusive = _HELD.get((me, key), (0, False))
+        if depth:                       # ★ 이미 **이 스레드** 가 보유 — 재획득하면 자기 데드락
+            _HELD[(me, key)] = (depth + 1, outer_exclusive)
             reentrant = True
         else:
             reentrant = False
+            tlock = _THREAD_LOCKS.setdefault(key, threading.Lock())
     if reentrant:
         try:
-            yield True
+            # ★ 바깥이 배타를 못 얻은 채 진행 중이면 안쪽도 배타가 아니다. 여기서 True 를
+            #   주면 소비자의 '보류' 판단이 중첩 호출에서만 조용히 뒤집힌다.
+            yield outer_exclusive
         finally:
-            with _HELD_GUARD:
-                _HELD[key] = max(0, _HELD.get(key, 1) - 1)
-                if not _HELD[key]:
-                    _HELD.pop(key, None)
+            _release_held(me, key)
         return
+
+    # ① 같은 프로세스의 다른 스레드 배제 — flock 은 이걸 못 한다(같은 fd 를 공유하므로).
+    t_got = tlock.acquire(timeout=max(0.0, deadline - time.time()))
+    if not t_got:
+        log.warning("[GUARDIAN/store] 스레드락 타임아웃 %.0fs — 락 없이 진행: %s",
+                    timeout, path.name)
+    # ★ 보유 등록은 flock 성공 여부와 무관하게 **지금** 한다. 안 하면 같은 스레드의
+    #   중첩 호출이 재진입으로 인식되지 않아 `tlock`(비재귀) 에 자기가 자기를 막는다.
+    #   (배타 여부는 flock 판정 후 아래에서 확정한다 — 지금은 스레드락 결과만 담는다.)
+    with _HELD_GUARD:
+        _d, _ = _HELD.get((me, key), (0, False))
+        _HELD[(me, key)] = (_d + 1, t_got)
 
     lock_path = path.with_suffix(path.suffix + ".lock")
     fh = None
@@ -122,7 +180,7 @@ def locked(path: Path, timeout: float = 10.0):
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fh = open(lock_path, "a+")          # noqa: SIM115 — finally 에서 닫는다
-        deadline = time.time() + timeout
+        # ★ 새 데드라인을 만들지 않는다 — 위에서 만든 것을 그대로 쓴다(누적 대기 금지).
         while True:
             try:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -136,16 +194,19 @@ def locked(path: Path, timeout: float = 10.0):
                     )
                     break
                 time.sleep(0.02)
-        if got:
-            with _HELD_GUARD:
-                _HELD[key] = _HELD.get(key, 0) + 1
-        yield got
+        # ② 배타를 **실제로** 얻었는가 = 스레드락 ∧ 파일락. 소비자가 이 값으로 판단한다.
+        exclusive = bool(got and t_got)
+        with _HELD_GUARD:                   # 중첩 호출이 같은 답을 하도록 확정값을 박아둔다
+            _d, _ = _HELD.get((me, key), (1, False))
+            _HELD[(me, key)] = (_d, exclusive)
+        yield exclusive
     finally:
-        if got:
-            with _HELD_GUARD:
-                _HELD[key] = max(0, _HELD.get(key, 1) - 1)
-                if not _HELD[key]:
-                    _HELD.pop(key, None)
+        _release_held(me, key)
+        if t_got:
+            try:
+                tlock.release()
+            except Exception:  # noqa: BLE001
+                pass
         if fh is not None:
             try:
                 if got:

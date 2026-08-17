@@ -216,6 +216,19 @@ def log_predictions_vs_actual(verbose: bool = False) -> dict:
 #   (DB 스키마 learned_weights.w_velocity/w_competition 컬럼은 호환 위해 유지, 0 으로 저장)
 FEATURES = ["trend_score", "perf_boost", "freshness"]
 
+# 학습 피처명 ↔ learned_weights 컬럼명 — **대응은 여기 한 곳** (① 단일 진입점).
+#   종전엔 이 대응이 `learned_weights_save(...)` 호출 인자에만 손으로 적혀 있어,
+#   피처를 하나 더 쓰려면 대응을 새로 적어야 했다(그러면 사본이 는다).
+FEATURE_WEIGHT_KEY = {"trend_score": "w_trend", "perf_boost": "w_perf",
+                      "freshness": "w_fresh"}
+
+
+def _as_weights(wmap: dict, intercept: float = 0.0) -> dict:
+    """FEATURES 계수맵 → `analyzer.apply_weights` 가 먹는 가중치 dict."""
+    out = {FEATURE_WEIGHT_KEY[f]: float(wmap.get(f, 0.0) or 0.0) for f in FEATURES}
+    out["intercept"] = float(intercept or 0.0)
+    return out
+
 
 _RANK_UNRANKED = 100.0   # 검색 100위 밖 = 미노출 취급 (순위 상한)
 
@@ -314,6 +327,28 @@ def _drop_unobserved(X: np.ndarray, y: np.ndarray) -> "tuple[np.ndarray, np.ndar
     return X[keep], y[keep], int((~keep).sum())
 
 
+def distinct_ratio(vals) -> float:
+    """서로 다른 값의 비율(0~1) — 정렬키 변별력 판정 단일 진입점.
+
+    ★ `train_weights()`(학습 시점) 와 `analyzer.enrich_with_opportunity()`(적용 시점)
+      양쪽이 이 함수 하나를 공유한다 — 사본을 두면 학습 시점 가드는 통과했는데
+      적용 시점 배치(예: 오늘치가 전부 신규 키워드라 freshness 가 전원 동일값)에서
+      변별력이 죽는 경우를 못 잡는다(실측 2026-08-14: scored_keywords 50개 전원
+      opportunity_score=0.0 — TopicPackNoCandidate).
+    """
+    vals = [round(float(v), 6) for v in vals]
+    return len(set(vals)) / max(1, len(vals))
+
+
+def is_ranking_degenerate(out_vals, in_vals, factor: float = 0.5) -> bool:
+    """출력(정렬키)이 입력보다 변별력을 factor 이하로 잃었으면 True.
+
+    절대 기준이 아니라 *상대* 기준 — 입력 자체가 뭉쳐 있으면(예: 피처가 모두 상수)
+    출력도 뭉치는 게 정상이므로, 입력 대비 얼마나 잃었는지만 본다.
+    """
+    return distinct_ratio(out_vals) < distinct_ratio(in_vals) * factor
+
+
 def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
     """
     learn_log 에서 (X, y) 학습 → Ridge regression → learned_weights 저장.
@@ -382,15 +417,58 @@ def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
     #     기준값도 박지 않는다: **입력 피처가 가진 변별력** 에서 파생한다(원칙②).
     _wmap = dict(zip(FEATURES, w_scaled))
 
-    def _distinct_ratio(vals) -> float:
-        vals = [round(float(v), 6) for v in vals]
-        return len(set(vals)) / max(1, len(vals))
-
-    _scored = [sum(row[i] * w_scaled[i] for i in range(len(FEATURES))) for row in X]
-    _out_ratio = _distinct_ratio(_scored)
+    #   ★ 채점식은 analyzer.apply_weights 단독 (2026-08-14, ① 단일 진입점) —
+    #     여기서 식을 손으로 다시 쓰면 "학습이 검증한 식"과 "실제로 채점하는 식"이
+    #     갈린다. 실제로 갈려 있었다: 저장은 절편 포함인데 채점은 절편 없이 했다.
+    from JARVIS03_RADAR.analyzer import (
+        apply_weights as _apply, get_performance_boost as _perf_of,
+        get_freshness_bonus as _fresh_of, clamp_score as _clamp,
+    )
+    _cand = _as_weights(_wmap, intercept)
+    _scored = [_apply(_cand, trend_score=row[0], perf=row[1], fresh=row[2]) for row in X]
+    _out_ratio = distinct_ratio(_scored)
     #   입력이 가진 변별력의 절반은 살아남아야 한다 — 입력 자체가 뭉쳐 있으면(예: 피처가
     #   모두 상수) 출력도 뭉치는 게 정상이므로, 절대 기준이 아니라 *상대* 기준을 쓴다.
-    _in_ratio = max(_distinct_ratio([row[i] for row in X]) for i in range(len(FEATURES)))
+    _in_ratio = max(distinct_ratio([row[i] for row in X]) for i in range(len(FEATURES)))
+
+    # ── ★★ 적용형상 프로브 (2026-08-14 신설 — 이번 사고를 실제로 막는 관문) ─────────
+    #   위 판정은 **학습 표본** 위에서만 본다. 그런데 이 가중치가 실제로 채점하는 것은
+    #   *후보 키워드 배치* 이고, 두 모집단은 겹치지 않는다:
+    #     · 학습 표본 = 이미 발행된 글  → perf > 0, freshness 낮음
+    #     · 적용 배치 = 오늘의 후보     → perf = 0, freshness 최고점(전원 동일)
+    #   실측(2026-08-14): (perf=0, freshness=최고) 조합은 학습 표본 496행 중 **0행**.
+    #   그래서 학습 표본에서는 변별이 살아 있는데 적용 배치에서는 전원 음수→0 클립으로
+    #   정렬키가 죽었고, 그 가중치가 5일간 조용히 쓰였다.
+    #   → *적용 시점의 형상* 을 직접 채점해 본다. 형상값도 박지 않는다: 실제 채점 함수에
+    #     한 번도 안 쓴 키워드를 넣어 **런타임으로 파생**한다(②).
+    _never = "\x00__never_used_probe__"
+    _p_perf, _p_fresh = _perf_of(_never), _fresh_of(_never)
+    _p_trend = sorted({round(float(r[0]), 6) for r in X})      # 실제 관측된 trend 분포
+    _probe = [_apply(_cand, trend_score=t, perf=_p_perf, fresh=_p_fresh) for t in _p_trend]
+    #   채점기의 클립을 프로브가 다시 구현하지 않는다 — `analyzer.clamp_score` 단독(①).
+    #   하한 클립이 바로 음수 raw 를 전원 0.0 으로 만든 지점이라 *클립 이후* 를 봐야 한다.
+    _probe_clipped = [_clamp(v) for v in _probe]
+    _probe_ratio = distinct_ratio(_probe_clipped)
+    _trend_ratio = distinct_ratio(_p_trend)
+    if _probe_ratio < _trend_ratio * 0.5:
+        _msg = (f"학습 가중치가 *적용 배치* 의 정렬키를 죽인다 "
+                f"(후보형상 perf={_p_perf} fresh={_p_fresh} 로 채점 시 "
+                f"고유비 {_probe_ratio:.3f} < trend {_trend_ratio:.3f}×0.5, "
+                f"점수범위 {min(_probe_clipped):.1f}~{max(_probe_clipped):.1f}) — 이전 가중치 유지")
+        if verbose:
+            print(f"  ⏸  학습 거부 — {_msg}")
+        try:
+            from JARVIS07_GUARDIAN.error_collector import report as _rep
+            _rep("RadarWeightApplyShapeDegenerate", "radar",
+                 message=_msg, module=__name__, func_name="train_weights",
+                 context={"kind": "learning_rejected", "probe_ratio": round(_probe_ratio, 4),
+                          "trend_ratio": round(_trend_ratio, 4), "signal": _signal,
+                          "weights": {f: round(v, 4) for f, v in _wmap.items()}})
+        except Exception:
+            pass
+        return {"trained": False, "n_samples": int(X.shape[0]), "reason": _msg,
+                "signal": _signal, "probe_ratio": round(_probe_ratio, 4)}
+
     if _out_ratio < _in_ratio * 0.5:
         _msg = (f"학습 가중치가 정렬 변별력을 죽인다 "
                 f"(출력 고유비 {_out_ratio:.3f} < 입력 {_in_ratio:.3f}×0.5) — 이전 가중치 유지")
@@ -410,10 +488,11 @@ def train_weights(min_samples: int = 20, verbose: bool = True) -> dict:
         return {"trained": False, "n_samples": int(X.shape[0]), "reason": _msg,
                 "signal": _signal, "out_ratio": round(_out_ratio, 4)}
 
+    _wk = _as_weights(_wmap, intercept)   # 피처명→컬럼명 대응은 _as_weights 단독(①)
     new_id = _db.learned_weights_save(
-        w_trend=round(_wmap.get("trend_score", 0.0), 4),
-        w_perf=round(_wmap.get("perf_boost", 0.0), 4),
-        w_fresh=round(_wmap.get("freshness", 0.0), 4),
+        w_trend=round(_wk["w_trend"], 4),
+        w_perf=round(_wk["w_perf"], 4),
+        w_fresh=round(_wk["w_fresh"], 4),
         w_velocity=0.0,      # ★ 제거된 유령 피처 — 0 저장 (스키마 호환, ERRORS [485])
         w_competition=0.0,
         intercept=round(intercept, 4),

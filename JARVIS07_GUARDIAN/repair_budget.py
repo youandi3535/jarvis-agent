@@ -428,6 +428,52 @@ def _reason_class(reason: str) -> str:
     return (reason or "").split(":", 1)[0]
 
 
+def _window_forward() -> str:
+    """예산 창을 **앞으로** 본 수정자 — `_BUDGET_WINDOW` 에서 부호만 뒤집어 파생.
+
+    새 숫자를 만들지 않는다. 창을 '-1 day' 에서 '-6 hours' 로 바꾸면 이것도 따라온다.
+    """
+    w = (_BUDGET_WINDOW or "").strip()
+    return ("+" + w[1:]) if w.startswith("-") else w if w.startswith("+") else "+" + w
+
+
+def next_eligible_sec(reason: str) -> int:
+    """이 *일시적* 차단이 풀리기까지 남은 초 — **게이트가 이미 아는 값에서 파생**.
+
+    ★ 왜 필요한가 (2026-08-14 — 재시도에 백오프가 없었다)
+      일시적 사유(쿨다운·예산)로 막을 때 게이트는 오류 status 를 일부러 손대지 않는다
+      (`new` 로 남아야 `j07_retry_pending` 이 나중에 다시 데려오니까). 그런데 그 잡은
+      10분마다 **조건 없이** 다시 집었다 — 아직 풀릴 수 없는 것을 계속 집어 같은 판정을
+      반복했다. 실측: 지문 1종이 6시간 10분 동안 허용 3 / 차단 64.
+      "언제 다시 와도 되는가" 는 막은 쪽이 **이미 알고 있다**. 그 값을 말해 주면 된다.
+
+    ★ 새 상수·새 창을 만들지 않는다 (②동적 설계)
+      · 쿨다운: `_cooldown_sec()` 에서 이미 경과한 만큼 뺀 나머지
+      · 예산  : 창 안에서 **가장 오래된 허용 세션** 이 창 밖으로 빠지는 시각까지
+                (rolling 창이므로 그때 자리가 정확히 하나 난다 — 창 길이를 통째로
+                 기다리게 하면 실제보다 오래 막힌다)
+
+    영구 사유(status 로 이미 종결)와 판정 불가는 0 — 백오프를 쓰지 않는다.
+    """
+    cls = _reason_class(reason)
+    try:
+        if cls == R_COOLDOWN:
+            gap = _sec_since_last_allowed()
+            left = _cooldown_sec() - int(gap if gap is not None else 0)
+            return max(0, int(left))
+        if cls == R_BUDGET:
+            r = _q("SELECT (julianday(datetime(min(ts), ?)) "
+                   "        - julianday('now','localtime'))*86400.0 "
+                   "FROM sdk_repair_attempts WHERE decision='allowed' "
+                   "AND ts>=datetime('now','localtime',?)",
+                   (_window_forward(), _BUDGET_WINDOW))
+            if r and r[0][0] is not None:
+                return max(0, int(float(r[0][0])))
+    except Exception as e:      # 백오프 실패가 수리 자체를 막으면 안 된다 — 종전 동작으로
+        log.warning("[RepairBudget] 다음 가능 시각 파생 실패 → 백오프 없음: %s", e)
+    return 0
+
+
 def _notify_once(reason: str, fp: str, caller: str, job_id: str, rec: dict,
                  *, exclude_id: int = -1) -> None:
     """같은 (분류, 지문)은 쿨다운 창에 1회만 — 창 길이도 파생(새 숫자 0).
@@ -511,6 +557,18 @@ def record_attempt(*, error_record: dict | None, caller: str, job_id: str,
             mark_error_status(eid, status, reason)
         except Exception as e:
             log.warning(f"[RepairBudget] status 갱신 실패(#{eid}): {e}")
+    # ★ 일시적 사유는 status 대신 **다음 가능 시각** 을 남긴다 (2026-08-14).
+    #   "지금은 안 된다" 만 말하고 "언제부터 되는지" 를 안 말하면, 다시 오는 쪽은
+    #   10분마다 문을 두드릴 수밖에 없다. 새 잡·새 큐·새 상수를 만들지 않고,
+    #   막은 쪽이 이미 아는 값을 오류 행에 적어 둔다(소비자는 `db.list_unresolved` 하나).
+    elif eid > 0 and (_secs := next_eligible_sec(reason)) > 0:
+        try:
+            from shared.db import set_error_backoff
+            if set_error_backoff(eid, _secs):
+                log.info("[RepairBudget] #%s 재시도 백오프 %d초 (%s) — 그때까지 스윕 대상 제외",
+                         eid, _secs, _reason_class(reason))
+        except Exception as e:
+            log.warning(f"[RepairBudget] 백오프 기록 실패(#{eid}): {e}")
     return aid
 
 

@@ -511,6 +511,16 @@ def _read_text(p: Path, default: str = "") -> str:
         return default
 
 
+def _errors_md_path() -> Path:
+    """ERRORS.md 경로 — **주인은 GUARDIAN** (`repair_history.errors_md_path`, ①).
+
+    여기서 경로를 다시 조립하면 무배포·테스트 격리가 이 통로만 비껴간다.
+    폴백 사본을 두지 않는다 — 사본은 환경변수를 안 보므로 격리가 이 통로만 새게 된다.
+    """
+    from JARVIS07_GUARDIAN.repair_history import errors_md_path
+    return errors_md_path()
+
+
 def _tail_errors_md(path: Path, n_entries: int = 30) -> str:
     """ERRORS.md 의 최근 N 항목 추출. `### [번호]` 헤더 기준."""
     txt = _read_text(path)
@@ -597,7 +607,7 @@ def _load_context() -> dict:
         "claude_writer": _read_text(_ROOT / "JARVIS02_WRITER" / "CLAUDE_WRITER.md"),
         "claude_radar": _read_text(_ROOT / "JARVIS03_RADAR" / "CLAUDE_RADAR.md"),
         "claude_infra": _read_text(_ROOT / "JARVIS00_INFRA" / "CLAUDE_INFRA.md"),
-        "errors_recent": _tail_errors_md(_ROOT / "JARVIS07_GUARDIAN" / "ERRORS.md", n_entries=30),
+        "errors_recent": _tail_errors_md(_errors_md_path(), n_entries=30),
         "agent_declares": _scan_capability_declares(_ROOT),
         "tools_catalog": _list_tools_meta(),
         "default_jobs": _summarize_default_jobs(),

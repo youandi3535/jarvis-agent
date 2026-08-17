@@ -60,7 +60,7 @@ function parseWeights(json: string): Record<string, number> {
 }
 
 /* ── KPI 카드 ────────────────────────────────────────────────────── */
-function KpiCard({ label, value, color }: { label: string; value: string | number; color: string }) {
+function KpiCard({ label, value, color, note }: { label: string; value: string | number; color: string; note?: string }) {
   /* ★ minWidth 를 내용에서 파생(min-content)한다 — 고정 140px 은 44px 숫자보다 좁아질 수 있어
      좁은 뷰포트에서 값이 카드 밖으로 삐져나갔다(실측 768px: "0.608" 128px vs 내용폭 103px = +25px).
      min-content 는 *가장 긴 끊을 수 없는 토큰* 을 바닥으로 삼으므로 값이 잘리지도, 넘치지도 않는다.
@@ -69,6 +69,8 @@ function KpiCard({ label, value, color }: { label: string; value: string | numbe
     <div style={{ ...card(color), minWidth: "min-content" }}>
       <div style={{ fontSize: 44, fontWeight: 800, color, lineHeight: 1.1 }}>{value}</div>
       <div style={{ fontSize: 14, color: "var(--c-text2)", marginTop: 8 }}>{label}</div>
+      {/* ★ '측정 안 함' 을 말하는 자리 — 0(=나쁨)과 미측정을 같은 '—' 로 뭉개지 않는다. */}
+      {note ? <div style={{ fontSize: 14, color: "var(--c-warn)", marginTop: 4 }}>{note}</div> : null}
     </div>
   );
 }
@@ -168,10 +170,10 @@ function useBoxWidth() {
 
 /* ── KPI 추세 차트 (★ ERRORS [479]) ───────────────────────────────
    홈탭과 동일한 recharts 패턴 사용 — 새 라이브러리·새 API 도입 없음. */
-function TrendChart({ title, hint, data, xKey, yKey, color, unit = "" }: {
+function TrendChart({ title, hint, data, xKey, yKey, color, unit = "", emptyNote }: {
   title: string; hint: string;
   data: Array<Record<string, unknown>>; xKey: string; yKey: string;
-  color: string; unit?: string;
+  color: string; unit?: string; emptyNote?: string;
 }) {
   const pts = data ?? [];
   const [boxRef, boxW] = useBoxWidth();
@@ -185,7 +187,10 @@ function TrendChart({ title, hint, data, xKey, yKey, color, unit = "" }: {
       <div ref={boxRef} style={{ width: "100%", minHeight: enough ? CHART_H : undefined }}>
         {!enough ? (
           <div style={{ fontSize: 14, color: "var(--c-text2)", padding: "28px 0", textAlign: "center" }}>
-            추세를 그릴 만큼 기록이 쌓이지 않았습니다 ({pts.length}개)
+            {/* ★ '아직 안 쌓였다' 와 '한 번도 측정한 적 없다' 는 다른 말이다.
+                한 문구로 뭉개면 죽은 계기판이 '곧 채워질 것' 처럼 보인다. */}
+            {pts.length === 0 && emptyNote ? emptyNote
+              : `추세를 그릴 만큼 기록이 쌓이지 않았습니다 (${pts.length}개)`}
           </div>
         ) : boxW > 0 ? (
           <LineChart width={boxW} height={CHART_H} data={pts}
@@ -244,10 +249,21 @@ export default function LearningPage() {
   const patNow      = data?.patterns_now ?? { count: 0, hits: 0 };
   const last        = timeline.length ? timeline[timeline.length - 1] : null;
 
-  const kpiPatterns = patNow.count || last?.patterns || 0;
-  const kpiHits     = patNow.hits  || last?.hits     || 0;
+  // ★ 조회 실패를 0 으로 위장하지 않는다 — 0 은 '학습 자산 없음'(=전멸)으로 읽힌다.
+  //   서버가 `measured:false` 를 주면 값 자리는 '—' 이고 사유를 함께 적는다.
+  const patFailed   = patNow.measured === false || Boolean(patNow.error);
+  const patNote     = patFailed
+    ? `측정 실패 — ${String(patNow.error ?? "사유 없음").slice(0, 60)}` : undefined;
+  const kpiPatterns = patFailed ? null : (patNow.count || last?.patterns || 0);
+  const kpiHits     = patFailed ? null : (patNow.hits  || last?.hits     || 0);
   // 측정 안 한 회차(null)는 0 이 아니라 '—' 로 보여야 하므로 null 을 유지한다.
   const kpiSaved    = last?.llm_saved_1d ?? null;
+  // ★ 측정된 회차 수 — 받은 배열에서 파생한다(서버에 새 필드를 만들지 않는다).
+  //   실측 2026-08-14: 106회차 전부 null 이었다(칸이 마지막 회차보다 14시간 늦게 생겼고
+  //   기록 잡은 주 1회). 그동안 이 KPI 는 '—', 차트는 빈 칸이라 *고장인지 0인지* 알 수 없었다.
+  const savedTl     = timeline.filter((p) => p.llm_saved_1d !== null);
+  const savedNote   = savedTl.length === 0
+    ? `측정 안 함 (회차 ${timeline.length}회 중 0회 기록)` : undefined;
   // ★ 밴딧 생존 — 텔레그램 /status 와 같은 판정(서버 파생). 정지를 정지라고 말한다.
   //   종전 이 화면은 학습이 11일 멈춰 있어도 "LLM 절약" 차트만 보여줬다.
   const bandit      = data?.bandit ?? {};
@@ -257,7 +273,11 @@ export default function LearningPage() {
         ? `${Math.round(bandit.last_update_h / 24)}일 전`
         : `${Math.round(bandit.last_update_h)}시간 전`)
     : "기록 없음";
-  const kpiRate     = resolveRate.length ? resolveRate[resolveRate.length - 1].rate : null;
+  // ★ 같은 이유로 자동해소율도 '빈 배열' 과 '조회 실패' 를 구분한다.
+  const rateError   = data?.resolve_rate_error;
+  const rateNote    = rateError ? `측정 실패 — ${rateError.slice(0, 60)}` : undefined;
+  const kpiRate     = (!rateError && resolveRate.length)
+    ? resolveRate[resolveRate.length - 1].rate : null;
 
   /* 글 품질 학습(ADR 014) — 오류 학습과 다른 시스템 (★ ERRORS [480]) */
   const q = data?.quality_now ?? { insights: 0, usage: 0, rewards: 0,
@@ -299,11 +319,14 @@ export default function LearningPage() {
         <div style={{ color: "var(--c-text2)", fontSize: 14 }}>로딩 중…</div>
       ) : (
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-          <KpiCard label="오류 학습 패턴"    value={fmtNum(kpiPatterns)} color="var(--c-primary)" />
-          <KpiCard label="오류 패턴 적중"    value={fmtNum(kpiHits)}     color="var(--c-success)" />
-          <KpiCard label="오류 — LLM 없이 해결" value={fmtNum(kpiSaved)}  color="var(--c-warn)" />
+          <KpiCard label="오류 학습 패턴"    value={fmtNum(kpiPatterns)} color="var(--c-primary)"
+                   note={patNote} />
+          <KpiCard label="오류 패턴 적중"    value={fmtNum(kpiHits)}     color="var(--c-success)"
+                   note={patNote} />
+          <KpiCard label="오류 — LLM 없이 해결" value={fmtNum(kpiSaved)}  color="var(--c-warn)"
+                   note={savedNote} />
           <KpiCard label="오류 자동해소율"    value={kpiRate != null ? `${kpiRate.toFixed(1)}%` : "—"}
-                   color="var(--c-muted)" />
+                   color="var(--c-muted)" note={rateNote} />
         </div>
       )}
 
@@ -322,10 +345,11 @@ export default function LearningPage() {
             <TrendChart title="오류 패턴 적중 누적" hint="학습한 패턴이 실제로 재사용되고 있나"
                         data={timeline} xKey="at" yKey="hits" color="var(--c-success)" />
             <TrendChart title="오류 — LLM 없이 해결 (1일)" hint="학습의 목적 — 높을수록 LLM 호출 절약"
-                        data={timeline.filter((p) => p.llm_saved_1d !== null)}
+                        data={savedTl} emptyNote={savedNote}
                         xKey="at" yKey="llm_saved_1d" color="var(--c-warn)" />
             <TrendChart title="오류 자동해소율 (일별)" hint="학습이 결과를 바꾸고 있나" unit="%"
-                        data={resolveRate} xKey="at" yKey="rate" color="var(--c-muted)" />
+                        data={resolveRate} emptyNote={rateNote}
+                        xKey="at" yKey="rate" color="var(--c-muted)" />
           </div>
 
           {/* ── ② 글 품질 학습 (ADR 014) — 오류 학습과 다른 시스템 ────── */}

@@ -624,18 +624,24 @@ def job_train_weights() -> None:
     def _run():
         from JARVIS03_RADAR import learning
         train_res = learning.train_weights(min_samples=20, verbose=True)
-        if train_res.get("ok"):
+        # ★ 키 이름을 실제 반환에서 맞춘다 (2026-08-14 정정) — `train_weights` 는
+        #   `{"trained": ...}` 를 돌려주는데 종전엔 `.get("ok")` 를 봤다. 항상 None →
+        #   **학습이 성공해도 언제나 `skip: None`** 으로 찍혔다. 그 탓에 2026-08-09 에
+        #   가중치 id6·id7 이 저장되는 동안 로그는 skip 두 줄이었고, 그 뒤 5일간
+        #   썩은 가중치가 쓰이는 것을 **아무도 볼 수 없었다**(2026-08-14 사고).
+        #   run_backtest 는 `{"ok":..., "n":...}` 라 키가 다르다 — 각자 자기 키를 본다.
+        if train_res.get("trained"):
             _log.info(
                 f"🧠 train_weights: n={train_res.get('n_samples')} "
                 f"R²={train_res.get('r2'):.3f} MSE={train_res.get('mse'):.2f}"
             )
         else:
-            _log.info(f"🧠 train_weights skip: {train_res.get('reason')}")
+            _log.info(f"🧠 train_weights skip: {train_res.get('reason') or train_res.get('error')}")
 
         bt_res = learning.run_backtest(test_ratio=0.2, verbose=True)
         if bt_res.get("ok"):
             _log.info(
-                f"📈 backtest: n={bt_res.get('n_samples')} "
+                f"📈 backtest: n={bt_res.get('n')} "
                 f"R²={bt_res.get('r2'):.3f} MAPE={bt_res.get('mape', 0):.1f}%"
             )
         else:

@@ -14,6 +14,7 @@ register(scheduler, bus) — 데몬 부팅 시 자동 호출.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import threading
 from pathlib import Path
@@ -190,6 +191,13 @@ def _status_section() -> str:
         except Exception:
             pass
 
+        # ★ SLO 3종 — **값만** 노출한다(경보 발효는 GUARDIAN_SLO_ALERT=1 로 사람이 켠다).
+        #   여기 붙이는 이유: 이미 사람이 보는 화면이라 새 채널·새 카드가 필요 없다.
+        try:
+            lines += slo_lines()
+        except Exception:
+            pass
+
         # ★ 글 품질 강화학습 상태 (ADR 014 — quality_learner.py)
         try:
             from JARVIS07_GUARDIAN.quality_learner import stats as _ql_stats
@@ -322,6 +330,32 @@ def _circuit_breaker_ok() -> bool:
         return True
 
 
+# 알림을 이미 보낸 시간 버킷의 시작 시각 — 버킷당 1통만 나가게 하는 유일한 상태.
+_cb_notified_ts = -1.0
+
+
+def _circuit_open_is_new() -> bool:
+    """브레이커가 *이번 시간 버킷에서 처음* 열렸으면 True.
+
+    ★ 왜 필요한가 (2026-08-14 사고)
+      종전엔 차단이 **발동할 때마다** 텔레그램을 보냈다. 억제가 0줄이라 같은 문장이
+      6시간 동안 74통 나갔다(실측 07:18~13:10, 오류 6건 × 10분 스윕). 같은 파일의
+      형제 게이트(`repair_budget._notify_once`)는 이미 쿨다운으로 57건 중 51건을
+      억제하고 있었다 — **알림 억제가 한쪽 경로에만 있었던 비대칭**이 원인이다.
+
+      브레이커의 상태는 *시간 버킷* 하나로 정의된다(`_cb_hour_ts`). 사람이 알아야 할
+      사건은 "이 시간에 브레이커가 열렸다" 지 "몇 번째 오류가 막혔다" 가 아니다.
+      → 쿨다운 숫자를 새로 만들지 않고 **버킷 자체를 억제 키로 쓴다**(②).
+        버킷이 리셋되면(다음 시간) 다시 한 통 — 상황이 계속되면 시간당 1통으로 알려준다.
+    """
+    global _cb_notified_ts
+    with _CB_LOCK:
+        if _cb_notified_ts == _cb_hour_ts:
+            return False
+        _cb_notified_ts = _cb_hour_ts
+        return True
+
+
 def _is_deny_path(module: str) -> bool:
     """절대 자동수정 금지 파일인지 확인."""
     if not module:
@@ -381,8 +415,39 @@ def _escalate_severity(error_record: dict) -> str:
     return base_sev
 
 
+#: 반복 발화가 구조적으로 가능한 알림 — 같은 오류에 같은 결론이 계속 나오는 부류.
+#  ★ 2026-08-14 (P2) — **우리가 만든 회귀**를 막는다.
+#    `_reopen_if_recurred`(재발 시 wontfix→new)와 `try_claim_error` 기본 선점 집합의
+#    `wontfix` 가 겹치면서, *시도 상한에 도달해 종결된* 오류가 **재발할 때마다**
+#    오케스트레이터를 끝까지 돌고 `llm_cap_reached` 를 쐈다. 종전에는 선점이 실패해
+#    조용히 return 했으므로 이 폭주는 P1/T3 변경이 새로 만든 것이다.
+#    억제는 **이미 있는 창** (`error_collector._in_cooldown`)만 쓴다 — 새 창·새 채널 금지.
+#    성공/실패 같은 '상태가 바뀐' 알림은 여기 넣지 않는다(억제하면 진짜 신호가 사라진다).
+_REPEATABLE_NOTIFY = ("llm_cap_reached", "not_auto_fixable", "deny_path")
+
+
+def _notify_suppressed(error_record: dict, result: str) -> bool:
+    """이 알림을 이번엔 보내지 않아도 되는가 — 반복 발화 억제(기존 쿨다운 재사용)."""
+    if result not in _REPEATABLE_NOTIFY:
+        return False
+    try:
+        from JARVIS07_GUARDIAN.error_collector import _cool_key, _in_cooldown
+        key = "notify:" + result + ":" + _cool_key(
+            str(error_record.get("source") or ""),
+            str(error_record.get("module") or ""),
+            str(error_record.get("error_type") or ""),
+            str(error_record.get("message") or ""))
+        return _in_cooldown(key)
+    except Exception:       # noqa: BLE001 — 억제 판정 실패 시 보내는 쪽이 안전
+        return False
+
+
 def _notify_all(error_record: dict, result: str, tier: int = 0, severity: str = ""):
     """모든 심각도에 텔레그램 알림 — 수정 성공·실패·불가 공통."""
+    if _notify_suppressed(error_record, result):
+        log.info("[GUARDIAN] 알림 억제(%s) — 같은 오류에 같은 결론이 쿨다운 안에서 반복됨: %s",
+                 result, (error_record.get("error_type") or "?"))
+        return
     sev = severity or error_record.get("severity", "medium")
     etype   = error_record.get("error_type", "?")
     source  = error_record.get("source", "?")
@@ -511,6 +576,58 @@ def _retry_original_job(error_record: dict) -> None:
         log.debug(f"[GUARDIAN] 잡 재시도 실패: {e} — 다음 스케줄에 자동 실행됩니다.")
 
 
+# ══════════════════════════════════════════════════════════════════
+# ★ 종결(`fixed`) 상태의 **단일 출구** — `close_error()` (2026-08-14)
+# ══════════════════════════════════════════════════════════════════
+#
+# 왜 출구를 하나로 모았나 (ADR 018 `infographic_engine._emit` 과 같은 형태)
+#   검사를 늘리는 대신 **나가는 문을 줄인다**. 종전엔 Tier-2 성공 경로가
+#   `mark_error_status(error_id, "fixed", "Tier-2 SDK 수정 + 재현검증 통과")` 라는
+#   **리터럴**을 직접 찍었다. 그 문장은 참일 수도 거짓일 수도 있는데, 무엇이든
+#   똑같이 찍혔다 — 실측상 트래픽 대부분은 `unverifiable`(재현 프로브가 도는 오류
+#   타입이 6종뿐이라 `RuntimeError` 계열은 검증 대상이 아니다)인데도 DB 에는
+#   "재현검증 통과" 라고 남았다. 라벨이 증거와 무관하면 그 라벨은 정보가 아니다.
+#
+# 규칙 3가지
+#   ① 사유는 **리터럴이 아니라 검증 상태에서 파생** 한다(`error_fixer` 가 형식의 주인).
+#   ② 판정이 "여전히 재현됨" 이면 **fixed 로 닫지 않는다**(fail-closed).
+#   ③ 킬스위치 `GUARDIAN_CLOSE_STRICT=0` 이면 종전 문구로 복귀(무배포 롤백).
+
+def close_error(error_id: int, *, verification: str = "", detail: str = "",
+                tier: int = 2) -> str:
+    """오류를 `fixed` 로 닫는다. 반환: 실제로 기록한 resolution (닫지 않았으면 "").
+
+    Args:
+        verification: `error_fixer` 정본 검증 상태 문자열. 빈 값이면 '검증 미실행'.
+        detail:       사람이 읽을 부연(검증기가 준 사유 등).
+        tier:         어느 티어가 고쳤는지 — 사유 문장에 파생 삽입.
+    """
+    from shared import db as _db
+    from JARVIS07_GUARDIAN.error_fixer import (VERIFY_REPRODUCES, verification_phrase,
+                                               verification_tag)
+
+    _state = (verification or "").strip()
+
+    # ② 판정이 '재현됨' 이면 종결하지 않는다 — 출구가 판정을 존중한다(fail-closed).
+    if _state == VERIFY_REPRODUCES:
+        log.warning(f"[GUARDIAN] #{error_id} close_error 거부 — 검증 판정이 "
+                    f"{VERIFY_REPRODUCES} 다. fixed 로 닫지 않는다")
+        return ""
+
+    # ③ 킬스위치는 **함수 안에서** 읽는다 — 데몬 무재시작 토글·monkeypatch 가 실제로 먹는다.
+    if os.getenv("GUARDIAN_CLOSE_STRICT", "1") == "0":
+        _res = f"Tier-{tier} SDK 수정 + 재현검증 통과"      # ← 종전 문구(킬스위치 복귀 전용)
+        _db.mark_error_status(error_id, "fixed", _res)
+        return _res
+
+    # ① 파생 — 태그(기계 판독) + 문장(사람) + 부연. 형식·표현의 주인은 error_fixer 다.
+    _res = f"{verification_tag(_state)}Tier-{tier} — {verification_phrase(_state)}"
+    if detail:
+        _res = f"{_res}: {str(detail)[:300]}"
+    _db.mark_error_status(error_id, "fixed", _res)
+    return _res
+
+
 def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
     """2순위 — Claude Code SDK targeted repair.
 
@@ -536,22 +653,32 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
         # ★ 촉점 게이트(repair_budget)가 막으면 이 호출은 LLM 0회로 즉시 False 를 준다.
         #   '고치려 했지만 실패' 와 '아예 시도하지 못함' 은 뒤처리가 다르므로 구분한다.
         _ledger_mark = sdk_repair_ledger_mark()
+        # ★ `_repair` — Tier-2 안에서 난 **검증 판정을 받아 오는 그릇** (2026-08-14).
+        #   이것이 없으면 `_verify_sdk_fix` 의 결론이 함수 경계에서 증발한다(종전 상태).
+        _repair: dict = {}
         fixed = run_auto_repair_targeted(
             context=error_text,
             job_id=error_record.get("source", "unknown"),
             failed_platforms=[error_record.get("module", error_record.get("source", "unknown"))],
             error_record=error_record,   # ★ 밴딧 학습 브리지 — SDK 수정 → fingerprint llm_patch + 밴딧 보상
+            out=_repair,
         )
         _ran = sdk_session_ran(_ledger_mark, error_record)   # False = 게이트가 막아 세션 자체가 없었음
 
         if fixed:
             # ★ 근거를 남긴다 (2026-08-08) — `fixed` 가 세 뜻을 말하지 않게.
-            #   Tier-2 는 이제 재현검증을 통과해야만 True 를 돌려준다(auto_repair).
             #   ※ 2026-08-08 19시경 자동 수정이 이 인자를 **주석만 남기고 지웠다**
             #     (근거 없이 fixed 를 찍는 상태로 되돌아감). 골든 테스트가 잡았다.
-            _db.mark_error_status(error_id, "fixed",
-                                  "Tier-2 SDK 수정 + 재현검증 통과")
-            log.info(f"[GUARDIAN] #{error_id} SDK 수정 성공 → 학습 저장 완료, 작업 재시도 중")
+            # ★ 2026-08-14 — 그 '근거' 가 **리터럴**이었던 것이 다음 결함이었다.
+            #   `run_auto_repair_targeted` 는 True 를 `reproduced_gone` 과
+            #   `unverifiable` 둘 다에 준다. 종전 문구는 그 둘을 구분 없이
+            #   "재현검증 통과" 라고 말했다 — 대부분이 후자였다.
+            #   이제 판정(`_repair["state"]`)에서 사유를 **파생** 하고, 종결 기록은
+            #   `close_error` 단일 출구를 지난다.
+            _res = close_error(error_id, verification=_repair.get("state", ""),
+                               detail=_repair.get("why", ""), tier=2)
+            log.info(f"[GUARDIAN] #{error_id} SDK 수정 성공 → 학습 저장 완료, "
+                     f"작업 재시도 중 — {_res}")
             # 학습 저장: ① _record_repairs_to_guardian(external_change) ② record_sdk_fix(밴딧 보상 + llm_patch) — 둘 다 run_auto_repair_targeted 내부 자동
             _retry_original_job(error_record)
             return True
@@ -567,8 +694,10 @@ def _try_sdk_targeted_fix(error_id: int, error_record: dict) -> bool:
             #   status 를 ignored/wontfix + resolution 으로 찍는다. 여기서 관성적으로
             #   "재시도 대기" 를 덮어쓰면 **사유가 지워지고** 10분마다 같은 문을 다시
             #   두드린다. 새 플래그를 만들지 않고 *DB 상태에서 파생* 한다(②).
+            #   어휘의 주인은 architecture 단독 — 여기 리터럴로 다시 적지 않는다(② · P2).
+            from JARVIS07_GUARDIAN.architecture import PARKED_STATUSES as _PARKED
             _cur = (_db.get_error(error_id) or {}).get("status", "")
-            if _cur in ("ignored", "wontfix"):
+            if _cur in _PARKED:
                 log.info(f"[GUARDIAN] #{error_id} 게이트 종결 상태({_cur}) 유지 — 덮어쓰지 않음")
                 return False
             if not _ran:
@@ -690,15 +819,12 @@ def _orchestrate(error_id: int):
         #    ★ ERRORS [286] — 네트워크·Selenium 환경·외부 API 할당량·정상 제어흐름(테마 교체)·
         #    외부 발행(Layer 4)·Claude CLI 운영 오류는 wontfix 가 아니라 ignored.
         #    수동검토 큐 오염·알림 폭주 방지. 자동수정 파이프라인 진입 안 함.
-        from JARVIS07_GUARDIAN.severity import (companions_of, is_transient, kind_of,
-                                                is_deterministic_code_error)
-        # ★ `companions` 를 넘긴다 — 봉투 신호가 *유일한 신호* 면 삼키지 않기 위해.
-        if is_transient(error_type, error_record.get("message", ""),
-                        error_record.get("source", ""), kind=kind_of(error_record),
-                        companions=companions_of(error_record)):
-            log.info(f"[GUARDIAN] #{error_id} 일시적/외부/제어흐름 오류 — ignored (자동수정 비대상): {error_type}")
-            _db.mark_error_status(error_id, "ignored",
-                                  f"일시적/외부/제어흐름 오류 — 자동수정 비대상 ({error_type})")
+        from JARVIS07_GUARDIAN.severity import is_deterministic_code_error
+        # ★ 버킷 결정은 `_park_non_code` 단독 (2026-08-14 — ①·③).
+        #   `companions` 전달(봉투 신호가 유일한 신호면 삼키지 않기)도 그 안에 있다.
+        _parked = _park_non_code(error_id, error_record)
+        if _parked:
+            log.info(f"[GUARDIAN] #{error_id} 수리 비대상 → {_parked}: {error_type}")
             return
 
         # ── 안전장치 1: 보안 파일 수정 금지 ───────────────────────
@@ -738,12 +864,19 @@ def _orchestrate(error_id: int):
             if _circuit_breaker_ok():
                 return False
             _cur = (_db.get_error(error_id) or {}).get("status", "")
-            if _cur in ("ignored", "wontfix", "fixed"):
+            # 어휘의 주인은 architecture 단독 — 여기 리터럴로 다시 적지 않는다(②).
+            from JARVIS07_GUARDIAN.architecture import CLOSED_STATUSES as _CLOSED
+            if _cur in _CLOSED:
                 log.info(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — "
                          f"이미 종결 상태({_cur})라 유지, 재청구 안 함")
                 return True
-            log.warning(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — 시간당 한도 초과")
-            _notify_all(error_record, "circuit_open")
+            # 알림은 *버킷당 1통* — 발동마다 보내면 같은 문장이 수십 통 나간다(위 함수 주석).
+            if _circuit_open_is_new():
+                log.warning(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — 시간당 한도 초과")
+                _notify_all(error_record, "circuit_open")
+            else:
+                log.info(f"[GUARDIAN] #{error_id} Circuit breaker 발동 — "
+                         f"이 시간 버킷에서 이미 알림, 알림 억제")
             _db.mark_error_status(error_id, "new")  # 다음 retry_pending 에서 재처리
             return True
 
@@ -929,7 +1062,18 @@ def _orchestrate(error_id: int):
         _attempts_prev = int((_db.get_error(error_id) or error_record).get("llm_attempts") or 0)
         if _attempts_prev >= _MAX_LLM_ATTEMPTS:
             log.warning(f"[GUARDIAN] #{error_id} Tier 2 시도 {_attempts_prev}회 — 상한({_MAX_LLM_ATTEMPTS}) 도달, 재시도 중단")
-            _notify_all(error_record, "llm_cap_reached", severity=severity)
+            # ★ 2026-08-14 (P2) — 알림은 **결론이 새로 났을 때만** 보낸다.
+            #   들어올 때 이미 파킹 버킷(`wontfix`/`ignored`)이었다면 이 결론은 앞서
+            #   전달된 것이고, 지금은 재발로 한 번 더 들여다본 것뿐이다. 매번 쏘면
+            #   같은 문장이 재발 수만큼 나가고, 그러면 진짜 신호가 왔을 때 아무도 안 본다.
+            #   판정 근거는 **입장 시 상태** — 새 플래그를 만들지 않고 DB 에서 파생한다(②).
+            from JARVIS07_GUARDIAN.architecture import PARKED_STATUSES as _PARKED_ON_CAP
+            _entry_status = str(error_record.get("status") or "")
+            if _entry_status in _PARKED_ON_CAP:
+                log.info(f"[GUARDIAN] #{error_id} 상한 결론은 이미 전달됨"
+                         f"(입장 상태 {_entry_status}) — 알림 생략, 상태만 유지")
+            else:
+                _notify_all(error_record, "llm_cap_reached", severity=severity)
             _db.mark_error_status(error_id, "wontfix",
                                   f"Tier-2 {_attempts_prev}회 시도 후 상한 도달 "
                                   f"({_MAX_LLM_ATTEMPTS})")
@@ -983,6 +1127,44 @@ def _on_error_detected(payload: dict, source: str):
 #  학습 자산(learned_patterns·Bandit)이 비대해질수록 미해결 오류 소급 자동수리율↑.
 #  대상 status: 'new'(미처리) + 'wontfix'(과거 실패 — 패턴 성장 시 재수리 기회).
 
+# ── 수리 비대상 오류의 종착 버킷 — 세 통로가 쓰는 **한 문** (2026-08-14) ────────
+#
+# ★ 왜 함수인가 (①)
+#   `_orchestrate` · `self_heal_known_errors` · `deep_audit_backlog` 세 곳이 각자
+#   `if is_transient(...): mark_error_status(id, "ignored")` 를 적고 있었다. 한 곳만
+#   고치면 나머지 두 통로로 그대로 샌다 — 이 저장소가 반복해서 겪은 형태다(③).
+#
+# ★ 무엇이 달라지나
+#   종전엔 "코드로 못 고침" 하나로 `ignored`(재수집 집합 밖) 를 결정했다. 이제
+#   `severity.is_dismissable()` 이 "사람도 볼 필요 없는가" 까지 확인하고, 갈리는
+#   구간(캡차·발행결손)은 `wontfix` 로 남긴다 — `UNRESOLVED_STATUSES` 안이라
+#   sweep 이 계속 집어 보고, `_reopen_if_recurred` 도 재발을 되살릴 수 있다.
+#   두 버킷 모두 Tier-1·Tier-2 를 **태우지 않는다**(호출자가 즉시 continue).
+def _park_non_code(error_id: int, error_record: dict) -> str:
+    """수리 비대상이면 버킷에 넣고 그 상태명을 돌려준다. 수리 대상이면 "" (계속 진행).
+
+    반환: "ignored" (자동 종결) / "wontfix" (사람이 봐야 함 — 재조회 유지) / "" (수리 대상)
+    """
+    from shared import db as _db
+    from JARVIS07_GUARDIAN.severity import (companions_of, is_dismissable, is_transient,
+                                            kind_of)
+    et  = str(error_record.get("error_type") or "")
+    msg = str(error_record.get("message") or "")
+    src = str(error_record.get("source") or "")
+    k   = kind_of(error_record)
+    comp = companions_of(error_record)
+    if not is_transient(et, msg, src, kind=k, companions=comp):
+        return ""
+    if is_dismissable(et, msg, src, kind=k, companions=comp):
+        _db.mark_error_status(error_id, "ignored",
+                              f"일시적/외부/제어흐름 오류 — 자동수정 비대상 ({et})")
+        return "ignored"
+    # 코드로는 못 고치지만 **사람이 봐야 한다** — 종결하지 않고 재조회 대상에 남긴다.
+    _db.mark_error_status(error_id, "wontfix",
+                          f"코드 수정 불가 · 사람 개입 필요 — 재조회 대상 유지 ({et})")
+    return "wontfix"
+
+
 def tier2_blocked_reason(error_record: dict) -> "str | None":
     """이 오류에 **Tier-2(LLM)를 태우면 안 되는 사유** — 없으면 None.
 
@@ -1014,43 +1196,81 @@ def tier2_blocked_reason(error_record: dict) -> "str | None":
 
 
 def _collect_unresolved(limit: int) -> list:
-    """미해결 오류 수집 — status 'new' + 'wontfix' 병합·dedup (최신순).
+    """미해결 오류 수집 — **공개 단일 질의** `db.list_unresolved()` 위임 (최신순).
 
     ★ **시도 상한을 존중한다** (2026-08-09 2차 적대적 검증)
       `MAX_LLM_ATTEMPTS` 로 시도를 막아 놓고, 상한에 도달해 `wontfix` 가 된 오류를
       여기서 **다시 끌어와** 심층 감사마다 Tier-2 를 또 열고 있었다 — 상한이 무력이다.
       실측: 미해결 64건 전원이 `wontfix` 이고 그중 8월 이전이 46건. 7/13 워치독 freeze
       같은 *지나간 사건* 은 코드 패치로 되살아나지 않는데 매 회차 LLM 세션을 태웠다.
-      상한값은 `architecture.MAX_LLM_ATTEMPTS` 단독 소유 — 여기 숫자를 적지 않는다.
+
+    ★ **필터를 여기서 하지 않는다** (2026-08-14 — ③원칙)
+      종전엔 `list_errors` 로 상태별로 긁은 뒤 파이썬에서 상한을 걸렀다. 두 가지가 샜다:
+        ① LIMIT 이 필터보다 먼저라, 앞쪽이 상한 도달분으로 차면 고칠 수 있는 행이
+           창 밖으로 밀려 **아무도 못 본다**.
+        ② 같은 필터를 다른 소비자(`job_retry_pending`)는 안 걸고 있었다 — 한 통로만
+           고치면 다른 통로로 새는 그 형태다.
+      → 상태 목록·상한·백오프는 전부 문(`db.list_unresolved`) 안에서 SQL 로 처리한다.
+        여기에는 숫자도 상태 문자열도 적지 않는다.
+
+    ★ **실패를 '수리 0건' 으로 위장하지 않는다** (2026-08-14 P2)
+      이 함수는 이번 변경으로 `self_heal_known_errors` · `deep_audit_backlog`
+      **두 통로의 유일한 문** 이 됐다. 종전엔 모든 예외를 삼키고 `[]` 를 `log.debug` 로만
+      남겼다 — 데몬 로그 레벨이 INFO 이상이면 **어디에도 안 남는다**.
+      게다가 안쪽 `db.list_unresolved` 는 `next_eligible_at` 컬럼을 WHERE 에서 직접
+      참조하는데, 그 컬럼 추가도 마이그레이션의 무음 `try/except` 안에 있었다.
+      두 무음이 겹치면 "미해결 0건 — 고칠 게 없음" 이라는 **정반대 결론** 이 조용히 선다.
+      → 이제 `log.warning` + GUARDIAN 오류 기록으로 올린다. 기록 자체가 실패해도
+        (DB 가 죽은 상황) 로그는 남는다.
     """
     try:
         from shared import db as _db
-    except Exception:
-        return []
-    try:
-        from JARVIS07_GUARDIAN.architecture import MAX_LLM_ATTEMPTS as _cap
-    except Exception:      # 파생 실패 시 종전 동작(전량 수집) — 조용히 덜 고치지 않는다
-        _cap = None
-    seen: set = set()
-    out: list = []
-    skipped = 0
-    for st in ("new", "wontfix"):
+        return _db.list_unresolved(limit)
+    except Exception as e:
+        log.warning("[GUARDIAN/unresolved] 미해결 조회 실패 — 이번 회차 수리 대상이 "
+                    "0건으로 보인다(실제로 없는 것이 아니다): %s: %s", type(e).__name__, e)
         try:
-            for r in _db.list_errors(status=st, limit=limit):
-                i = r.get("id")
-                if i in seen:
-                    continue
-                seen.add(i)
-                if _cap is not None and int(r.get("llm_attempts") or 0) >= int(_cap):
-                    skipped += 1
-                    continue
-                out.append(r)
-        except Exception as e:
-            log.debug(f"[GUARDIAN/unresolved] {st} 조회 실패: {e}")
-    if skipped:
-        log.info(f"[GUARDIAN/unresolved] 시도 상한({_cap}) 도달 {skipped}건 제외 — "
-                 f"재시도해도 같은 결과, 수동 검토 대상")
-    return out
+            from JARVIS07_GUARDIAN.error_collector import report
+            report("guardian", e, module="JARVIS07_GUARDIAN/guardian_agent.py",
+                   func_name="_collect_unresolved",
+                   error_type="GuardianUnresolvedQueryFailed")
+        except Exception as rec_err:  # noqa: BLE001 — 기록 실패가 수리를 막지 않는다
+            log.warning("[GUARDIAN/unresolved] 조회 실패를 기록하지도 못했다: %s", rec_err)
+        return []
+
+
+def selfheal_budget_sec() -> float:
+    """발행 前 자체수리 페이즈의 **절대 시간 상한**(초) — 기존 예산에서 파생한다(②).
+
+    ★ 왜 필요한가 (2026-08-14 2차): 이 페이즈는 발행(07:00·21:00) **직전 동기** 실행이고
+      텔레그램에 스스로 '수초' 라고 광고하는데, 실제로는 **건수 상한(limit)만 있고 시간
+      상한이 없었다**. 건당 비용은 고정이 아니다 — import 검증·재현검증이 각각 상한까지
+      갈 수 있어서, 수리 대상이 늘수록(= 학습이 쌓일수록) 발행 앞의 지연이 함께 자란다.
+      상한이 없으면 "수초" 는 약속이 아니라 희망이다.
+    ★ 숫자를 박지 않는다: 이 페이즈가 앞서는 것이 *플랫폼당 발행 액션*
+      (`watchdog.BLOG_ACTION_DEADLINE_SEC`)이므로 그 예산의 5% 를 넘지 않는다 —
+      전주곡이 본편을 잡아먹지 않는다. 데드라인이 바뀌면 자동 추종.
+    ★ 파생이 끊기면 드러난다 (2026-08-17): 종전 폴백 `120.0` 은 정상 파생값
+      (2400/20)과 **같은 숫자** 라, `BLOG_ACTION_DEADLINE_SEC` 가 개명·이동해도 값이
+      그대로여서 파생 단절을 구별할 수 없었다. 이제 `severity.derived_or` 가 드러낸다.
+      값은 보수적으로 유지한다 — 여기서 예산을 줄이면 발행 前 자체수리가 조용히
+      일을 덜 하게 되고(수리 누락), 늘리면 발행을 지연시킨다. 둘 다 무음 열화다.
+    무배포 조정: `GUARDIAN_SELFHEAL_BUDGET`.
+    """
+    from JARVIS07_GUARDIAN.severity import derived_or
+
+    env = (os.getenv("GUARDIAN_SELFHEAL_BUDGET") or "").strip()
+    if env:
+        try:
+            return max(5.0, float(env))
+        except ValueError:
+            pass
+
+    def _derive() -> float:
+        from JARVIS00_INFRA.watchdog import BLOG_ACTION_DEADLINE_SEC as _d
+        return max(30.0, float(_d) / 20)
+
+    return derived_or("selfheal/watchdog.BLOG_ACTION_DEADLINE_SEC", _derive, 120.0)
 
 
 def self_heal_known_errors(limit: int = 40) -> dict:
@@ -1060,33 +1280,43 @@ def self_heal_known_errors(limit: int = 40) -> dict:
     Tier 2(LLM) 절대 호출 안 함 — 못 고치면 그대로 남겨 새벽 심층 감사(job_deep_audit)로 위임.
     apply_fix 성공 시 *실제 오류 지문* 으로 record_pattern_hit + Bandit 양의 보상 자동 기록.
 
-    Returns: {"fixed", "skipped", "ignored", "scanned"}
+    ★ 시간 상한 `selfheal_budget_sec()` — 넘기면 남은 건은 **손대지 않고** 심층 감사로 넘긴다.
+      여기서 더 붙잡는 것은 발행을 미루는 것과 같다(이 페이즈는 발행 직전 동기 실행이다).
+
+    Returns: {"fixed", "skipped", "ignored", "human", "scanned", "deferred"}
     """
     try:
         from shared.pipeline_activity import mark_busy as _mb
         _mb("j07", "Tier-1 자체수리", ttl=300)
     except Exception:
         pass
-    fixed = skipped = ignored = 0
+    import time as _time
+    fixed = skipped = ignored = human = 0
     try:
         from shared import db as _db
         from JARVIS07_GUARDIAN.error_analyzer import analyze
         from JARVIS07_GUARDIAN.error_fixer import apply_fix
-        from JARVIS07_GUARDIAN.severity import (companions_of as _companions_of,
-                                                is_transient, kind_of as _kind_of)
     except Exception as e:
         log.warning(f"[GUARDIAN/selfheal] import 실패: {e}")
-        return {"fixed": 0, "skipped": 0, "ignored": 0, "scanned": 0}
+        return {"fixed": 0, "skipped": 0, "ignored": 0, "human": 0, "scanned": 0}
 
     rows = _collect_unresolved(limit)
+    _budget  = selfheal_budget_sec()
+    _t0      = _time.time()
+    deferred = 0
     for er in rows:
         eid = er.get("id")
         et  = er.get("error_type", "")
+        if _time.time() - _t0 >= _budget:
+            # ★ 남은 건은 *손대지 않는다*. 오류는 그대로 남아 심층 감사·다음 스윕이 데려간다.
+            deferred += 1
+            continue
         try:
-            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er),
-                            companions=_companions_of(er)):
-                _db.mark_error_status(eid, "ignored")
+            # ★ 수리 비대상 판정·버킷 배정은 `_park_non_code` 단독 (①·③).
+            _bucket = _park_non_code(eid, er)
+            if _bucket:
                 ignored += 1
+                human += 1 if _bucket == "wontfix" else 0
                 continue
             analysis = analyze(er)  # Tier 1 전용 (패턴·Bandit·정적, LLM 0)
             if analysis.get("fixable") and apply_fix(eid, analysis, mark_wontfix=False):
@@ -1097,13 +1327,20 @@ def self_heal_known_errors(limit: int = 40) -> dict:
             log.debug(f"[GUARDIAN/selfheal] #{eid} 처리 예외: {e}")
             skipped += 1
 
-    log.info(f"[GUARDIAN/selfheal] 발행 전 Tier-1 sweep — 수리 {fixed} / 보류 {skipped} / 무시 {ignored} (스캔 {len(rows)})")
+    # ★ '무시' 와 '사람 확인 대기' 를 한 숫자로 뭉개지 않는다 — 후자는 아직 살아 있는 일이다.
+    log.info(f"[GUARDIAN/selfheal] 발행 전 Tier-1 sweep — 수리 {fixed} / 보류 {skipped} / "
+             f"수리비대상 {ignored}(사람확인 {human}) (스캔 {len(rows)}"
+             + (f", 예산 {_budget:.0f}s 초과로 미처리 {deferred}" if deferred else "") + ")")
+    if deferred:
+        log.warning(f"[GUARDIAN/selfheal] 시간 예산 {_budget:.0f}s 초과 — {deferred}건을 "
+                    f"심층 감사(j07_deep_audit)로 넘긴다 (발행을 미루지 않는다)")
     try:
         from shared.pipeline_activity import clear_busy as _cb
         _cb("j07")
     except Exception:
         pass
-    return {"fixed": fixed, "skipped": skipped, "ignored": ignored, "scanned": len(rows)}
+    return {"fixed": fixed, "skipped": skipped, "ignored": ignored,
+            "human": human, "scanned": len(rows), "deferred": deferred}
 
 
 def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
@@ -1116,26 +1353,26 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
 
     Returns: {"fixed_t1", "fixed_t2", "failed", "ignored", "scanned", "llm_used"}
     """
-    fixed_t1 = fixed_t2 = failed = ignored = llm_used = 0
+    fixed_t1 = fixed_t2 = failed = ignored = human = llm_used = 0
     try:
         from shared import db as _db
         from JARVIS07_GUARDIAN.error_analyzer import analyze, analyze_llm_only
         from JARVIS07_GUARDIAN.error_fixer import apply_fix
-        from JARVIS07_GUARDIAN.severity import (companions_of as _companions_of,
-                                                is_transient, kind_of as _kind_of)
     except Exception as e:
         log.warning(f"[GUARDIAN/deepaudit] import 실패: {e}")
-        return {"fixed_t1": 0, "fixed_t2": 0, "failed": 0, "ignored": 0, "scanned": 0, "llm_used": 0}
+        return {"fixed_t1": 0, "fixed_t2": 0, "failed": 0, "ignored": 0, "human": 0,
+                "scanned": 0, "llm_used": 0}
 
     rows = _collect_unresolved(limit)
     for er in rows:
         eid = er.get("id")
         et  = er.get("error_type", "")
         try:
-            if is_transient(et, er.get("message", ""), er.get("source", ""), kind=_kind_of(er),
-                            companions=_companions_of(er)):
-                _db.mark_error_status(eid, "ignored")
+            # ★ 수리 비대상 판정·버킷 배정은 `_park_non_code` 단독 (①·③).
+            _bucket = _park_non_code(eid, er)
+            if _bucket:
                 ignored += 1
+                human += 1 if _bucket == "wontfix" else 0
                 continue
             a1 = analyze(er)  # Tier 1 먼저 (LLM 0)
             if a1.get("fixable") and apply_fix(eid, a1, mark_wontfix=False):
@@ -1175,7 +1412,7 @@ def deep_audit_backlog(limit: int = 40, max_llm: int = 15) -> dict:
 
     log.info(f"[GUARDIAN/deepaudit] backlog — T1 {fixed_t1} / T2(LLM {llm_used}) {fixed_t2} / 실패 {failed} / 무시 {ignored} (스캔 {len(rows)})")
     return {"fixed_t1": fixed_t1, "fixed_t2": fixed_t2, "failed": failed,
-            "ignored": ignored, "scanned": len(rows), "llm_used": llm_used}
+            "ignored": ignored, "human": human, "scanned": len(rows), "llm_used": llm_used}
 
 
 # ── ★ 격리 버킷(ignored) 집계·추세 보고 (결함3 — 2026-07-25) ─────────────
@@ -1356,6 +1593,220 @@ def ignored_bucket_report(days: int = 0, limit: int = 3000) -> dict:
     log.info(f"[GUARDIAN/ignored] {win}일 {total}건 / 사유 {dict(reasons.most_common(5))} "
              f"/ 오탐의심 {len(fp)}건(범위 {out['fp_scope']}, 창내 {in_win}) / 사유미기록 {no_res}")
     return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  GUARDIAN SLO — 지표 3개. **경보 없이 값만** (2026-08-14)
+#
+#  ★ 왜 3개뿐인가
+#    지표가 많으면 아무도 안 본다. "자가수리가 실제로 일하고 있는가" 는 셋이면 답이 난다:
+#      ① 검증된 코드수정 건수/주 — 고쳤다고 *증명된* 것만 (T1 의 `[verification=...]` 파생)
+#      ② 재발률                  — 고친 것이 다시 나는가 (고쳤다는 말의 반증)
+#      ③ 밴딧 마지막 갱신 경과시간 — 학습이 살아 있는가
+#
+#  ★ 임계값을 리터럴로 박지 않는다 (선례: `pattern_fixer.calibrate_semantic_threshold`)
+#    "주 3건 미만이면 경보" 같은 숫자는 첫날부터 낡는다. 최근 창의 **실측 분포 백분위**
+#    에서 파생한다 — 표본이 모자라면 임계를 내지 않는다(모르면 모른다고 한다).
+#
+#  ★ 처음에는 **경보를 켜지 않는다**
+#    타이트하게 잡으면 즉시 상시 경보가 되고, 상시 경보는 무시된다 — 이 저장소가 이미
+#    겪은 패턴이다. 기본은 값과 임계 *후보* 만 노출하고, 발효는 사람이 켠다:
+#      `GUARDIAN_SLO_ALERT=1` → `alerts` 배열이 채워진다(그전엔 항상 빈 배열).
+# ══════════════════════════════════════════════════════════════════════════════
+
+SLO_ALERT_ENV = "GUARDIAN_SLO_ALERT"
+_SLO_MIN_SAMPLES = 4          # 백분위를 낼 최소 관측 수(주 단위 창) — 그 아래면 임계 없음
+
+
+def _pct(values: list, q: float) -> "float | None":
+    """표본의 q 백분위 (0~100). 표본이 모자라면 None — 없는 임계를 지어내지 않는다."""
+    vals = sorted(float(v) for v in values if v is not None)
+    if len(vals) < _SLO_MIN_SAMPLES:
+        return None
+    import statistics as _st
+    try:
+        # 100분위 → 그 경계값. statistics 는 n=100 컷포인트 99개를 준다.
+        cuts = _st.quantiles(vals, n=100, method="inclusive")
+        i = min(max(int(round(q)) - 1, 0), len(cuts) - 1)
+        return round(cuts[i], 3)
+    except Exception:
+        return None
+
+
+def _slo_fingerprint(row: dict) -> str:
+    """재발 판정용 지문 — 정규화는 `pattern_fixer._normalize_message` 재사용(①)."""
+    et = str(row.get("error_type") or "")
+    msg = str(row.get("message") or "")
+    try:
+        from JARVIS07_GUARDIAN.pattern_fixer import _normalize_message
+        msg = _normalize_message(msg)
+    except Exception:
+        msg = msg[:80]
+    return f"{et}::{msg}"
+
+
+def guardian_slo(days: int = 30) -> dict:
+    """자가수리 SLO 3종 — 값 + 실측 분포에서 파생한 임계 후보. 기본은 경보 없음.
+
+    반환:
+      {"window_days", "verified_fixes_week", "recurrence_rate", "bandit_stale_h",
+       "thresholds": {...}, "alerts": [...], "measured": bool}
+    """
+    import os as _os
+    out: dict = {"window_days": int(days), "alerts": [], "measured": False}
+    try:
+        from shared import db as _db
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"db 미가용: {e}"
+        return out
+
+    # ── ① 검증된 코드수정 — 'fixed' 가 아니라 *검증 태그* 에서 파생한다(T1).
+    #    상태 문자열을 여기 적지 않는다: 정본 목록은 error_fixer 소유.
+    try:
+        from JARVIS07_GUARDIAN.error_fixer import VERIFY_GONE
+        _tag = f"[verification={VERIFY_GONE}]%"
+    except Exception:
+        _tag = None
+    # ★ 관측용 합성 행 배제 (2026-08-14 P2) — `verification_tag_effective()` 프로브가
+    #   `error_log` 에 넣었다 지우는 행이 바로 이 지표(`[verification=gone]` 태그)를
+    #   **그대로 부풀렸다**. 프로브가 자기 성적표를 쓰는 형태. 조건의 주인은 shared.db.
+    _excl = _db.synthetic_exclusion_sql()
+    _and = _db.and_sql
+    weekly_ok: list = []
+    if _tag:
+        try:
+            with _db.get_db() as conn:
+                rows = conn.execute(
+                    "SELECT strftime('%Y-%W', COALESCE(fixed_at, timestamp)) wk, COUNT(*) n "
+                    "FROM error_log WHERE " + _and(
+                        "resolution LIKE ?",
+                        f"COALESCE(fixed_at, timestamp) >= date('now','-{int(days)} days')",
+                        _excl) + " "
+                    "GROUP BY wk ORDER BY wk", (_tag,)).fetchall()
+            weekly_ok = [int(r["n"]) for r in rows]
+        except Exception as e:  # noqa: BLE001
+            out["verified_error"] = str(e)[:120]
+    out["verified_fixes_week"] = weekly_ok[-1] if weekly_ok else 0
+    out["verified_weeks_observed"] = len(weekly_ok)
+
+    # ── ② 재발률 — 고쳤다고 종결한 지문이 그 뒤에 다시 들어왔는가.
+    recurred = total_fixed = 0
+    weekly_rec: list = []
+    try:
+        from JARVIS07_GUARDIAN.architecture import FIXED_STATUSES
+        _in = ",".join("?" for _ in FIXED_STATUSES)
+        with _db.get_db() as conn:
+            rows = [dict(r) for r in conn.execute(
+                "SELECT id, error_type, message, status, timestamp, fixed_at FROM error_log "
+                "WHERE " + _and(f"timestamp >= date('now','-{int(days)} days')", _excl)
+                + " ORDER BY id").fetchall()]
+            fixed_rows = [r for r in rows if (r.get("status") or "") in FIXED_STATUSES]
+        later: dict = {}
+        for r in rows:                       # 지문별 *마지막* 발생 시각
+            later[_slo_fingerprint(r)] = max(
+                later.get(_slo_fingerprint(r), ""), str(r.get("timestamp") or ""))
+        _wk: dict = {}                       # 주 → [재발수, 전체수] — 백분위용 분포
+        for r in fixed_rows:
+            total_fixed += 1
+            closed = str(r.get("fixed_at") or r.get("timestamp") or "")
+            hit = bool(closed and later.get(_slo_fingerprint(r), "") > closed)
+            recurred += 1 if hit else 0
+            k = closed[:7] + "-" + str((int(closed[8:10] or 1) - 1) // 7)   # 월-주차
+            b = _wk.setdefault(k, [0, 0])
+            b[0] += 1 if hit else 0
+            b[1] += 1
+        weekly_rec = [round(a / b, 3) for a, b in _wk.values() if b]
+    except Exception as e:  # noqa: BLE001
+        out["recurrence_error"] = str(e)[:120]
+    out["recurrence_rate"] = round(recurred / total_fixed, 3) if total_fixed else None
+    out["recurrence_base"] = total_fixed
+
+    # ── ③ 밴딧 생존 — 판정은 `bandit.stats()` 단독(사본 금지).
+    try:
+        from JARVIS07_GUARDIAN.bandit import stats as _bstats
+        _b = _bstats()
+        out["bandit_stale_h"] = round(float(_b.get("last_update_h", -1)), 1)
+    except Exception as e:  # noqa: BLE001
+        out["bandit_stale_h"] = None
+        out["bandit_error"] = str(e)[:120]
+
+    # ── 임계 *후보* — 최근 창 실측 분포에서 파생. 표본 부족이면 None.
+    #    ① 은 '적으면 이상' 이라 하위 백분위, ② 는 '많으면 이상' 이라 상위 백분위.
+    #    ③ 의 분포는 **밴딧을 실제로 먹이는 사건** 의 간격이다 — `apply_fix` 성공, 즉
+    #       파일을 고치고 종결된 행. 종전 초안은 `fixed_at IS NOT NULL` 전체를 썼는데
+    #       그 4,700건은 대부분 `manual`(변경 기록)이라 간격 p90 이 0.25시간으로 나왔다.
+    #       상관 없는 사건으로 만든 임계는 리터럴보다 나쁘다(측정한 척을 한다).
+    gaps_h: list = []
+    try:
+        from JARVIS07_GUARDIAN.architecture import FIXED_STATUSES as _FS
+        _fin = ",".join("?" for _ in _FS)
+        with _db.get_db() as conn:
+            ts = [str(r[0]) for r in conn.execute(
+                "SELECT fixed_at FROM error_log WHERE " + _and(
+                    "fixed_at IS NOT NULL", "fixed_file IS NOT NULL",
+                    f"status IN ({_fin})",
+                    f"fixed_at >= date('now','-{int(days)} days')", _excl)
+                + " ORDER BY fixed_at",
+                tuple(_FS)).fetchall()]
+        import datetime as _dt
+        prev = None
+        for t in ts:
+            try:
+                cur = _dt.datetime.fromisoformat(t.replace(" ", "T")[:19])
+            except Exception:
+                continue
+            if prev is not None:
+                gaps_h.append((cur - prev).total_seconds() / 3600.0)
+            prev = cur
+    except Exception:
+        pass
+    out["thresholds"] = {
+        "verified_fixes_week_min": _pct(weekly_ok, 25),
+        "recurrence_rate_max":     _pct(weekly_rec, 75),
+        "bandit_stale_h_max":      _pct(gaps_h, 90),
+    }
+    out["measured"] = any(v is not None for v in out["thresholds"].values())
+
+    # ── 경보는 사람이 켠다. 기본 OFF.
+    if (_os.getenv(SLO_ALERT_ENV) or "").strip().lower() in ("1", "true", "on", "yes"):
+        th = out["thresholds"]
+        if th["verified_fixes_week_min"] is not None and \
+                out["verified_fixes_week"] < th["verified_fixes_week_min"]:
+            out["alerts"].append(
+                f"검증된 코드수정 {out['verified_fixes_week']}건/주 "
+                f"< 임계 {th['verified_fixes_week_min']}")
+        if th["recurrence_rate_max"] is not None and out["recurrence_rate"] is not None and \
+                out["recurrence_rate"] > th["recurrence_rate_max"]:
+            out["alerts"].append(
+                f"재발률 {out['recurrence_rate']:.1%} > 임계 {th['recurrence_rate_max']:.1%}")
+        if th["bandit_stale_h_max"] is not None and (out.get("bandit_stale_h") or 0) > th["bandit_stale_h_max"]:
+            out["alerts"].append(
+                f"밴딧 정지 {out['bandit_stale_h']}시간 > 임계 {th['bandit_stale_h_max']}시간")
+    return out
+
+
+def slo_lines() -> list:
+    """`/status` 에 붙일 표시 줄 — **값만**. 임계는 '후보' 라고 명시한다."""
+    try:
+        s = guardian_slo()
+    except Exception as e:  # noqa: BLE001
+        return [f"📐 SLO 산출 실패: {str(e)[:80]}"]
+    th = s.get("thresholds") or {}
+    _fmt = lambda v, suf="": ("—" if v is None else f"{v}{suf}")
+    _cand = lambda v, suf="": ("" if v is None else f" (임계후보 {v}{suf})")
+    rr = s.get("recurrence_rate")
+    lines = [
+        f"📐 *SLO* (최근 {s.get('window_days')}일 · 경보 미발효)",
+        f"　① 검증된 코드수정 {s.get('verified_fixes_week', 0)}건/주"
+        + _cand(th.get("verified_fixes_week_min"), "건"),
+        f"　② 재발률 {'—' if rr is None else f'{rr:.1%}'} (표본 {s.get('recurrence_base', 0)}건)"
+        + ("" if th.get("recurrence_rate_max") is None else f" (임계후보 {th['recurrence_rate_max']:.1%})"),
+        f"　③ 밴딧 마지막 갱신 {_fmt(s.get('bandit_stale_h'), '시간 전')}"
+        + _cand(th.get("bandit_stale_h_max"), "시간"),
+    ]
+    if s.get("alerts"):
+        lines += [f"　⚠️ {a}" for a in s["alerts"]]
+    return lines
 
 
 def report_ignored_bucket() -> dict:
@@ -1653,9 +2104,25 @@ def job_retry_pending(*, max_per_run: int = 20, stuck_minutes: int = 30):
                  f"(재시도가 지나갔거나 종결자 없음)")
 
     # 2) new → _orchestrate 재투입
+    #    ★ 2026-08-14 — **`deep_audit_backlog` 와 같은 문을 쓴다** (③원칙, ERRORS [474] 형태).
+    #      종전은 `list_errors(status="new")` 라 게이트가 남긴 재시도 백오프를 몰랐고,
+    #      아직 풀릴 수 없는 것을 10분마다 다시 집어 같은 판정을 반복했다
+    #      (실측: 지문 1종이 6시간 10분간 허용 3 / 차단 64).
+    #
+    #    ★ 단 **시도 상한은 여기서 거르지 않는다** (`max_attempts=None`) — 비직관적이라 박제.
+    #      이 스윕은 재시도 통로이자 **배수구** 다. Tier-2 마지막 세션이 실패하면
+    #      `_try_sdk_targeted_fix` 는 *직전 스냅샷* 기준으로 아직 여유가 있다고 보고
+    #      status 를 `new` 로 둔다(그 뒤에 `bump_llm_attempts` 가 상한을 채운다).
+    #      그 행을 닫아 주는 것이 바로 다음 회차의 이 루프다 — `_orchestrate` 가
+    #      상한을 보고 LLM 0회로 `wontfix` 로 종결한다.
+    #      여기서 상한으로 걸러 버리면 그 행은 **영원히 `new`** 로 남는다: 심층 감사도
+    #      상한으로 제외하므로 아무도 안 보고, 대시보드 '신규' 만 영구히 부풀고,
+    #      종결 사유도 안 남는다. 조용한 누수는 이 저장소가 반복해 온 병이다.
+    #      → LLM 낭비 방지는 `_orchestrate` 의 상한 문이 이미 한다(축이 다르다).
     retry_n = 0
     try:
-        new_rows = _db.list_errors(status="new", limit=max_per_run)
+        from JARVIS07_GUARDIAN.architecture import STATUS_NEW as _st_new
+        new_rows = _db.list_unresolved(max_per_run, statuses=(_st_new,), max_attempts=None)
         for r in new_rows:
             eid = int(r["id"])
             sev = (r.get("severity") or "").lower()

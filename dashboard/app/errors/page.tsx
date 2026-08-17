@@ -10,8 +10,12 @@ import { severityColor, statusColor, fmtNum, fmtTime, C } from "@/lib/utils";
 interface GuardianStats {
   total: number; new: number; fixed: number;
   critical: number; high: number; medium: number; low: number;
+  /** 집계 실패 시에만 채워진다. ★ 서버는 실패를 0 으로 위장하지 않는다(2026-08-14 P2) —
+   *  0 은 화면에서 '문제 없음' 으로 읽히기 때문. 이 값이 있으면 숫자 대신 실패를 보여준다. */
+  error?: string; measured?: boolean;
 }
-interface AlltimeData  { total: number }
+/** legacy = 쓰기 코드가 없는 옛 상태(resolved) 건수. '자동수정' 에 합산하지 않는다. */
+interface AlltimeData  { total: number; fixed?: number; legacy?: number; error?: string; measured?: boolean }
 interface TrendDay     { day: string; total: number; crit: number; high: number; fixed: number }
 interface SourceRow    { source: string; total: number; crit: number; fixed: number; new: number }
 interface ErrorRow     {
@@ -322,6 +326,9 @@ export default function ErrorsPage() {
 
   const critHigh = (stats?.critical ?? 0) + (stats?.high ?? 0);
   const latest   = (errors ?? []).slice(0, 30);
+  // 집계가 실패하면 숫자를 그리지 않는다 — 0 은 '문제 없음' 처럼 보인다.
+  const statErr  = stats?.error || alltime?.error || "";
+  const kv = (v: number | undefined) => (statErr ? "집계 실패" : fmtNum(v));
 
   return (
     <div style={{ maxWidth: 1200 }}>
@@ -330,12 +337,29 @@ export default function ErrorsPage() {
         오류 관리
       </h1>
 
+      {/* 집계 실패 배너 — 숫자가 0 으로 위장되지 않게 사유를 그대로 보여준다 */}
+      {statErr && (
+        <div style={{
+          background: "var(--c-card)", border: `1px solid ${C.danger}`,
+          borderLeft: `4px solid ${C.danger}`, borderRadius: 12,
+          padding: "16px 20px", marginBottom: 20, fontSize: 16, color: "var(--c-text)",
+        }}>
+          <strong style={{ color: C.danger }}>오류 집계 실패</strong> — 아래 숫자는 신뢰할 수 없다.
+          <div style={{ fontSize: 14, color: "var(--c-text5)", marginTop: 6, wordBreak: "break-word" }}>
+            {statErr}
+          </div>
+        </div>
+      )}
+
       {/* KPI 4개 */}
       <div style={{ display: "flex", gap: 16, marginBottom: 28, flexWrap: "wrap" }}>
-        <KpiCard label="미해결"       value={fmtNum(stats?.new)}     color={C.danger}  sub="해결 필요" />
-        <KpiCard label="CRITICAL+HIGH" value={fmtNum(critHigh)}       color={critHigh > 0 ? C.danger : C.warn} sub={`CRITICAL ${stats?.critical ?? 0} / HIGH ${stats?.high ?? 0}`} />
-        <KpiCard label="7일 자동수정"  value={fmtNum(stats?.fixed)}   color={C.success} sub="자동 수정 완료" />
-        <KpiCard label="전체 누적"     value={fmtNum(alltime?.total)} color={C.primary} sub="총 오류 기록" />
+        <KpiCard label="미해결"       value={kv(stats?.new)}     color={C.danger}  sub="해결 필요" />
+        <KpiCard label="CRITICAL+HIGH" value={statErr ? "집계 실패" : fmtNum(critHigh)} color={critHigh > 0 ? C.danger : C.warn} sub={`CRITICAL ${stats?.critical ?? 0} / HIGH ${stats?.high ?? 0}`} />
+        <KpiCard label="7일 자동수정"  value={kv(stats?.fixed)}   color={C.success} sub="자동 수정 완료" />
+        <KpiCard label="전체 누적"     value={kv(alltime?.total)} color={C.primary}
+                 sub={alltime?.legacy
+                   ? `총 오류 기록 · 자동수정 ${alltime.fixed ?? 0} (옛 상태 ${alltime.legacy} 별도)`
+                   : "총 오류 기록"} />
       </div>
 
       {/* 7일 추이 + 에이전트별 나란히 —

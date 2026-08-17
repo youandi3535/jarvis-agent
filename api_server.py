@@ -653,9 +653,10 @@ def get_learning():
 
     # 일별 오류 자동해소율 — '학습이 결과를 바꾸고 있나' 의 최종 지표
     try:
+        _fx_sql = _status_sql(_guardian_status_vocab()[1])
         _dr = _rows(con,
             "SELECT substr(timestamp,1,10) d, COUNT(*) tot, "
-            "SUM(CASE WHEN status IN ('fixed','resolved') THEN 1 ELSE 0 END) fx "
+            f"SUM(CASE WHEN status IN ({_fx_sql}) THEN 1 ELSE 0 END) fx "
             "FROM error_log WHERE timestamp >= date('now','-30 days') "
             "GROUP BY d ORDER BY d")
         r["resolve_rate"] = [
@@ -663,8 +664,11 @@ def get_learning():
              "rate": round((x["fx"] * 100.0) / max(x["tot"], 1), 1)}
             for x in _dr
         ]
-    except Exception:
+    except Exception as _re:
+        # ★ 빈 배열은 화면에서 '해소 0건' 으로 읽힌다 — 조회 실패와 구분되지 않는다.
+        #   실패는 실패라고 말한다(P2 가 4개 엔드포인트에서 고친 것과 같은 병).
         r["resolve_rate"] = []
+        r["resolve_rate_error"] = str(_re)
 
     # 현재 학습 자산 요약 (learned_patterns.json 실시간 조회 — 복사본 금지)
     try:
@@ -673,9 +677,12 @@ def get_learning():
         r["patterns_now"] = {
             "count": len(_pats),
             "hits":  sum(int(x.get("hit_count", 0) or 0) for x in _pats),
+            "measured": True,
         }
-    except Exception:
-        r["patterns_now"] = {"count": 0, "hits": 0}
+    except Exception as _pe:
+        # ★ 0 은 대시보드에서 '학습 자산 없음' 으로 읽힌다 — 학습 원장을 못 읽은 것과
+        #   전멸한 것이 같은 화면이 된다. 수치를 주지 않고 사유를 준다.
+        r["patterns_now"] = {"error": str(_pe), "measured": False}
 
     # ★ 글 품질 학습 (ADR 014) — 오류 학습과 *다른 시스템* 이므로 별도 섹션 (ERRORS [480])
     #   라벨만 "학습 패턴" 이라고 쓰면 어느 학습인지 알 수 없다는 지적에 따라 분리.
@@ -979,61 +986,146 @@ def _with_error_category(rows: list) -> list:
     return rows
 
 
+# ── 오류 상태 어휘는 GUARDIAN 소유 — 여기서 리터럴로 다시 적지 않는다 (②) ──────
+#   ★ 2026-08-14: 종전엔 `status IN ('fixed','resolved')` 가 4곳에 박혀 있었다.
+#     `resolved` 는 **쓰는 코드가 0곳** 인데 '자동수정 성공' 에 합산돼 화면 숫자의
+#     62%를 차지했다(fixed 115 / resolved 185). 목록을 파생으로 바꾸면 어휘가 바뀔 때
+#     화면이 자동으로 따라온다.
+def _and(*clauses: str) -> str:
+    """빈 조각을 견디는 WHERE 조립기 — 조건이 하나도 없으면 '1=1' (조건 주인은 shared.db)."""
+    try:
+        from shared.db import and_sql
+        return and_sql(*clauses)
+    except Exception:
+        parts = [c for c in clauses if c and c.strip()]
+        return " AND ".join(parts) if parts else "1=1"
+
+
+def _ts_cut_clause(*mods: str) -> str:
+    """`timestamp >= <컷>` 한 조각 — 포맷 주인은 `_ts_cut`."""
+    return "timestamp >= " + _ts_cut(*mods)
+
+
+def _STATUS_NEW() -> str:
+    """'아직 아무도 안 본' 상태명 — 주인에서 파생(리터럴 금지)."""
+    from JARVIS07_GUARDIAN.architecture import STATUS_NEW
+    return str(STATUS_NEW)
+
+
+def _status_sql(names) -> str:
+    """('a','b') → "'a','b'" — IN 절 본문. 어휘의 주인은 architecture 단독."""
+    return ",".join("'" + str(n).replace("'", "") + "'" for n in names)
+
+
+def _guardian_status_vocab():
+    """(전체, 자동수정성공, 죽은상태) — 주인에서 파생. **폴백 사본을 두지 않는다.**
+
+    ★ 2026-08-14 (P2) — 종전엔 import 실패 시
+      `("new","analyzing","fixed","wontfix","ignored","manual"), ("fixed",), ()` 를
+      돌려줬다. 그게 정확히 CLAUDE.md '복사본을 진실로 믿지 말 것' 표의 *스키마를 코드에*
+      항목이다: 어휘가 바뀌면 **이 줄만 낡고**, 화면은 옛 정의로 조용히 계속 그려진다.
+      게다가 바깥 `except` 가 전부 0 을 돌려주므로 사람 눈에는 "문제 없음" 으로 보였다.
+      → 못 읽으면 **올린다**. 호출자가 명시적 오류 페이로드로 바꿔 화면에 드러낸다.
+    """
+    from JARVIS07_GUARDIAN.architecture import (ALL_STATUSES, FIXED_STATUSES,
+                                                LEGACY_STATUSES)
+    return tuple(ALL_STATUSES), tuple(FIXED_STATUSES), tuple(LEGACY_STATUSES)
+
+
+def _syn_excl() -> str:
+    """관측용 합성 행 배제 조건 — 조건의 주인은 `shared.db` 단독(사본 금지)."""
+    try:
+        from shared.db import synthetic_exclusion_sql
+        return synthetic_exclusion_sql()
+    except Exception:
+        return ""
+
+
+def _status_bucket_sql(names) -> str:
+    """상태별 카운트 SELECT 조각을 **어휘에서 생성** — 상태명을 손으로 적지 않는다.
+
+    새 상태가 `architecture.ALL_STATUSES` 에 추가되면 이 화면이 자동으로 따라온다
+    (종전엔 SUM(CASE ...) 12줄이 손으로 적혀 있어 새 상태가 조용히 누락됐다).
+    """
+    bad = [n for n in names if not str(n).isidentifier()]
+    if bad:
+        # 조용히 넘기면 그 상태만 화면에서 사라진다 — 올려서 오류 페이로드로 드러낸다.
+        raise ValueError(f"SQL 별칭으로 쓸 수 없는 상태명: {bad}")
+    return ", ".join(
+        f"SUM(CASE WHEN status='{n}' THEN 1 ELSE 0 END) AS st_{n}" for n in names)
+
+
+def _vocab_error_payload(e: Exception, extra: dict) -> dict:
+    """어휘 파생·집계 실패를 **0 이 아니라 오류로** 돌려준다 (0 은 '문제 없음' 으로 읽힌다)."""
+    out = {"error": f"{type(e).__name__}: {e}"[:300], "measured": False}
+    out.update(extra)
+    return out
+
+
 @app.get("/api/guardian/stats")
 def get_guardian_stats():
     try:
         con = _get_db()
         if not con:
-            raise Exception("no db")
-        row = con.execute("""
+            raise RuntimeError("DB 연결 불가")
+        _all, _fixed, _legacy = _guardian_status_vocab()
+        _excl = _syn_excl()
+        row = con.execute(f"""
             SELECT
-                SUM(CASE WHEN status IN ('new','analyzing','fixed','resolved','wontfix','ignored','manual') THEN 1 ELSE 0 END) AS total,
-                SUM(CASE WHEN status='new'       THEN 1 ELSE 0 END) AS new_cnt,
-                SUM(CASE WHEN status='analyzing' THEN 1 ELSE 0 END) AS analyzing_cnt,
-                SUM(CASE WHEN status IN ('fixed','resolved') THEN 1 ELSE 0 END) AS fixed_cnt,
-                SUM(CASE WHEN status='wontfix'   THEN 1 ELSE 0 END) AS wontfix_cnt,
-                SUM(CASE WHEN status='ignored'   THEN 1 ELSE 0 END) AS ignored_cnt,
-                SUM(CASE WHEN status='manual'    THEN 1 ELSE 0 END) AS manual_cnt,
+                SUM(CASE WHEN status IN ({_status_sql(_all)}) THEN 1 ELSE 0 END) AS total,
+                {_status_bucket_sql(_all)},
+                SUM(CASE WHEN status IN ({_status_sql(_fixed)}) THEN 1 ELSE 0 END) AS fixed_cnt,
+                SUM(CASE WHEN status IN ({_status_sql(_legacy) or "''"}) THEN 1 ELSE 0 END) AS legacy_cnt,
                 SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END) AS crit_cnt,
                 SUM(CASE WHEN severity='high'     THEN 1 ELSE 0 END) AS high_cnt,
                 SUM(CASE WHEN severity='medium'   THEN 1 ELSE 0 END) AS med_cnt,
                 SUM(CASE WHEN severity='low'      THEN 1 ELSE 0 END) AS low_cnt
             FROM error_log
-            WHERE timestamp >= """ + _ts_cut('-7 days') + """
+            WHERE """ + _and(_ts_cut_clause('-7 days'), _excl) + """
         """).fetchone()
         recent = _with_error_category(
-            [dict(r) for r in con.execute("SELECT id, timestamp, severity, status, error_type, module, message FROM error_log ORDER BY id DESC LIMIT 10").fetchall()])
+            [dict(r) for r in con.execute(
+                "SELECT id, timestamp, severity, status, error_type, module, message "
+                "FROM error_log WHERE " + _and(_excl) + " ORDER BY id DESC LIMIT 10").fetchall()])
         con.close()
-        return {
-            "total": row["total"] or 0, "new": row["new_cnt"] or 0,
-            "analyzing": row["analyzing_cnt"] or 0, "fixed": row["fixed_cnt"] or 0,
-            "wontfix": row["wontfix_cnt"] or 0, "ignored": row["ignored_cnt"] or 0,
-            "manual": row["manual_cnt"] or 0, "critical": row["crit_cnt"] or 0,
-            "high": row["high_cnt"] or 0, "medium": row["med_cnt"] or 0,
-            "low": row["low_cnt"] or 0, "recent": recent,
-        }
-    except Exception:
-        return {"total": 0, "new": 0, "analyzing": 0, "fixed": 0, "wontfix": 0, "ignored": 0, "manual": 0, "critical": 0, "high": 0, "medium": 0, "low": 0, "recent": []}
+        out = {n: (row[f"st_{n}"] or 0) for n in _all}      # 상태별 — 어휘에서 생성
+        out.update({
+            "total": row["total"] or 0,
+            "fixed": row["fixed_cnt"] or 0,
+            # legacy = 쓰기 코드가 없는 옛 상태(resolved). 총계엔 남기고 '자동수정' 엔 안 넣는다.
+            "legacy": row["legacy_cnt"] or 0,
+            "critical": row["crit_cnt"] or 0, "high": row["high_cnt"] or 0,
+            "medium": row["med_cnt"] or 0, "low": row["low_cnt"] or 0,
+            "recent": recent, "measured": True,
+        })
+        return out
+    except Exception as e:
+        # ★ 0 을 돌려주지 않는다 — 0 은 화면에서 '문제 없음' 으로 읽힌다 (2026-08-14 P2).
+        return _vocab_error_payload(e, {"recent": []})
 
 
 @app.get("/api/guardian/alltime")
 def get_guardian_alltime():
     try:
         con = _get_db()
-        r = con.execute("""
+        _all, _fixed, _legacy = _guardian_status_vocab()
+        _excl = _syn_excl()
+        r = con.execute(f"""
             SELECT COUNT(*) AS total,
-                SUM(CASE WHEN status='new'                   THEN 1 ELSE 0 END) AS new_cnt,
-                SUM(CASE WHEN status IN ('fixed','resolved') THEN 1 ELSE 0 END) AS fixed_cnt,
-                SUM(CASE WHEN status='manual'                THEN 1 ELSE 0 END) AS manual_cnt,
-                SUM(CASE WHEN status='wontfix'               THEN 1 ELSE 0 END) AS wontfix_cnt,
-                SUM(CASE WHEN status='ignored'               THEN 1 ELSE 0 END) AS ignored_cnt,
+                {_status_bucket_sql(_all)},
+                SUM(CASE WHEN status IN ({_status_sql(_fixed)})    THEN 1 ELSE 0 END) AS fixed_cnt,
+                SUM(CASE WHEN status IN ({_status_sql(_legacy) or "''"}) THEN 1 ELSE 0 END) AS legacy_cnt,
                 MIN(timestamp) AS first_seen
-            FROM error_log
+            FROM error_log WHERE """ + _and(_excl) + """
         """).fetchone()
         con.close()
-        return {"total": r["total"] or 0, "new": r["new_cnt"] or 0, "fixed": r["fixed_cnt"] or 0, "manual": r["manual_cnt"] or 0, "wontfix": r["wontfix_cnt"] or 0, "ignored": r["ignored_cnt"] or 0, "first": (r["first_seen"] or "")[:10]}
-    except Exception:
-        return {"total": 0, "new": 0, "fixed": 0, "manual": 0, "wontfix": 0, "ignored": 0, "first": ""}
+        out = {n: (r[f"st_{n}"] or 0) for n in _all}
+        out.update({"total": r["total"] or 0, "fixed": r["fixed_cnt"] or 0,
+                    "legacy": r["legacy_cnt"] or 0,
+                    "first": (r["first_seen"] or "")[:10], "measured": True})
+        return out
+    except Exception as e:
+        return _vocab_error_payload(e, {"first": ""})
 
 
 @app.get("/api/errors")
@@ -1084,15 +1176,15 @@ def get_guardian_trend(days: int = 14):
                    COUNT(*) AS total,
                    SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END) AS crit,
                    SUM(CASE WHEN severity='high'     THEN 1 ELSE 0 END) AS high,
-                   SUM(CASE WHEN status='fixed'      THEN 1 ELSE 0 END) AS fixed
+                   SUM(CASE WHEN status IN ({_status_sql(_guardian_status_vocab()[1])}) THEN 1 ELSE 0 END) AS fixed
             FROM error_log
-            WHERE timestamp >= {_TSCUT}
+            WHERE {_and(f"timestamp >= {_TSCUT}", _syn_excl())}
             GROUP BY day ORDER BY day
         """).fetchall()
         con.close()
         return [{"day": r[0], "total": r[1], "crit": r[2], "high": r[3], "fixed": r[4]} for r in rows]
-    except Exception:
-        return []
+    except Exception as e:
+        return _vocab_error_payload(e, {"items": []})
 
 
 @app.get("/api/guardian/sources")
@@ -1103,16 +1195,16 @@ def get_guardian_sources(days: int = 7):
         rows = con.execute(f"""
             SELECT source, COUNT(*) AS total,
                    SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END) AS crit,
-                   SUM(CASE WHEN status='fixed'      THEN 1 ELSE 0 END) AS fixed,
-                   SUM(CASE WHEN status='new'        THEN 1 ELSE 0 END) AS new_cnt
+                   SUM(CASE WHEN status IN ({_status_sql(_guardian_status_vocab()[1])}) THEN 1 ELSE 0 END) AS fixed,
+                   SUM(CASE WHEN status='{_STATUS_NEW()}'        THEN 1 ELSE 0 END) AS new_cnt
             FROM error_log
-            WHERE timestamp >= {_TSCUT}
+            WHERE {_and(f"timestamp >= {_TSCUT}", _syn_excl())}
             GROUP BY source ORDER BY total DESC LIMIT 10
         """).fetchall()
         con.close()
         return [{"source": r[0], "total": r[1], "crit": r[2], "fixed": r[3], "new": r[4]} for r in rows]
-    except Exception:
-        return []
+    except Exception as e:
+        return _vocab_error_payload(e, {"items": []})
 
 
 @app.get("/api/repairs")

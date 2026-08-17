@@ -434,7 +434,36 @@ def respond(
     # ── 재발행 (실패 플랫폼만) ──────────────────────────────────────────
     #   ★ 수리 여부와 **무관하게** 재발행은 항상 돈다. 재시도는 싸고, 수리를 못 했다고
     #     복구까지 포기하면 사람이 손댈 때까지 글이 안 나간다.
-    if fix_applied:
+    #
+    #   ★★ 단 하나의 예외 — harness 가 '봉투' 를 붙였고 수정도 없을 때 (2026-08-14, ERRORS [641])
+    #     "재시도는 싸다" 는 **틀렸다**. 재발행은 수집→대본(LLM)→이미지→발행 전체를 다시 돈다.
+    #     그리고 harness 의 `abort` 봉투는 *이미* "재생성해도 동일 결과 예상" 이라는 판정이다.
+    #     그 판정을 무시하고 바뀐 것 없이 다시 돌리면 같은 실패를 값비싸게 반복할 뿐이다.
+    #     실측 2026-08-14 07:00: 주제팩 미생성으로 harness 가 네이버·티스토리 각각
+    #     `abort`(수정 불가 지문 반복) 했는데, GUARDIAN 이 그것을 `transient` 로 읽고
+    #     30초 대기 후 **전체 발행을 2회 더** 돌렸다 — 세 번 다 같은 지점에서 죽었다.
+    #     · 판정의 주인은 harness 다(①) — 여기서 kind 목록을 다시 적지 않고 물어본다.
+    #     · 수정이 적용됐으면(fix_applied) 상태가 바뀐 것이므로 봉투가 있어도 재발행한다.
+    #     · 인프라 이슈는 애초에 지문에서 제외돼 abort 를 만들지 않는다(harness `_is_infra_issue`)
+    #       — 즉 '아직 인프라가 안 풀렸다' 를 여기서 futile 로 오판하지 않는다.
+    _envelope = []
+    if not fix_applied:
+        try:
+            from JARVIS00_INFRA.harness import is_envelope_kind as _is_env
+            _envelope = [k for k in _harness_kinds(error_text) if _is_env(k)]
+        except Exception as _e_env:
+            log.warning(f"[Incident] 봉투 판정 불가 — 종전대로 재발행 진행: {_e_env}")
+
+    if _envelope:
+        _tg(
+            f"🚫 *[GUARDIAN] 재발행 건너뜀 — 재시도가 무의미*\n"
+            f"harness 가 `{', '.join(sorted(set(_envelope)))}` 로 포기했고 코드 수정도 적용되지 않았습니다.\n"
+            f"바뀐 것이 없으므로 다시 돌려도 같은 지점에서 실패합니다 "
+            f"(수집→대본→이미지→발행 전체를 재실행하는 비싼 경로).\n"
+            f"→ 원인을 고친 뒤 정규 시각 또는 수동 재실행으로 복구하세요: `{job_id}`"
+        )
+        retry_fns = {}
+    elif fix_applied:
         _tg(f"✅ [GUARDIAN] 수정 완료! 재발행 시작: {failed_platforms}")
     elif sdk_gated:
         # 조용히 건너뛰지 않는다 — *왜* 건너뛰었는지가 사람이 손봐야 할 신호다.

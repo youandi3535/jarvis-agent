@@ -21,8 +21,11 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
+
+log = logging.getLogger("jarvis.guardian.severity")
 
 
 def _flag(name: str, default: bool = True) -> bool:
@@ -31,6 +34,95 @@ def _flag(name: str, default: bool = True) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+# ══════════════════════════════════════════════════════════════════
+# 0-A. 파생 실패를 **드러내는** 단일 진입점 (사용자 박제 2026-08-17)
+# ══════════════════════════════════════════════════════════════════
+# ★ 무엇이 문제였나: GUARDIAN 안에 "파생인 척하는 사본" 이 6곳 있었다.
+#     `gate_time_budget_sec` 900.0 = 3600/4 · `selfheal_budget_sec` 120.0 = 2400/20 ·
+#     `bandit._stale_hours` 48.0 = 24/2×4 · `_import_timeout` 25.0 · 재발행간격 24 ·
+#     귀속창 18 = 24×0.75.
+#   전부 `except: return <리터럴>` 인데 그 리터럴이 **정상 파생값과 같은 숫자** 였다.
+#   그래서 파생원(watchdog 상수·publish_slots)을 지우고 불러도 값이 그대로 나왔다 —
+#   끊긴 줄을 값으로도 로그로도 알 수 없었다. CLAUDE.md 가 '복사본을 진실로 믿지 말 것'
+#   으로 박제한 병 그대로이고, 그 값에서 또 파생하는 소비자(`_patch_lock_timeout`)까지
+#   조용히 함께 낡는다.
+# ★ 왜 여기인가(①): 소비자 4개 모듈(error_fixer·guardian_agent·bandit·quality_learner)이
+#   전부 GUARDIAN 이고, severity 는 stdlib 만 쓰는 잎(import 0.01s)이라 어디서 불러도
+#   부담이 없다. 게다가 '결함을 사람에게 드러내는' 자리(`selfcheck()`)가 이미 여기다 —
+#   정의와 노출을 같은 곳에 둔다.
+_PROBE_PREFIX = "__probe__"              # 자기점검이 *일부러* 끊는 자리 (로그 면제)
+_DERIVED_BROKEN: dict[str, str] = {}    # label → 지금 끊겨 있는 사유 (없으면 정상)
+_DERIVED_SITES: dict[str, object] = {}  # label → derive 콜러블 (재점검용)
+
+
+def derived_or(label: str, derive, fallback):
+    """`derive()` 로 파생하되 **끊기면 그 사실이 드러나게** 한다. 값은 보수적으로 유지.
+
+    ★ 왜 값을 줄이지 않는가 — '안전한 실패' 의 정의(근거):
+      여기 걸린 값은 전부 *시간 예산·정지 임계* 다. 파생이 끊겼다고 예산을 줄이면
+      테스트 게이트가 `예산 부족 → 남은 검사 미실행`(fail-closed)으로 전 항목을 실패로
+      올리고, 호출자의 기준선 재확인도 같은 이유로 실패해 `_notify_gate_blind` 경로가
+      열린다 = **검증 없이 패치가 착지**한다. 즉 이 도메인에선 '작게 실패' 가 더 위험하다.
+      → 자동수리는 계속 돌게 두고(멈추면 그것도 사고다), 끊긴 사실은 로그·상태로 드러낸다.
+      값을 흔드는 것이 안전한 자리라면 그 자리에서 fallback 을 다르게 주면 된다 —
+      정책은 호출자가, *드러내는 방식* 은 여기가 소유한다.
+
+    ★ 로그는 **상태가 바뀔 때만**: 이 함수들은 패치·스윕마다 불린다(실측 수십 회).
+      매번 짖으면 로그가 사고를 덮는다 → 첫 단절 WARNING 1줄, 회복 INFO 1줄. 침묵 아님.
+    """
+    _DERIVED_SITES[label] = derive
+    try:
+        v = derive()
+    except Exception as e:                              # noqa: BLE001
+        why = f"{type(e).__name__}: {e}"
+        # ★ 프로브(`derivations_effective`)는 *일부러* 끊는다 — 그걸 WARNING 으로 짖으면
+        #   사람이 진짜 단절 경고를 무시하도록 훈련된다. 상태에는 남기고 로그만 아낀다.
+        if not label.startswith(_PROBE_PREFIX) and _DERIVED_BROKEN.get(label) != why:
+            log.warning("[GUARDIAN] 파생 끊김 — %s: %s → 폴백 %r 로 돈다"
+                        "(이 값은 이제 파생원을 따라가지 않는다)", label, why, fallback)
+        _DERIVED_BROKEN[label] = why
+        return fallback
+    if _DERIVED_BROKEN.pop(label, "") and not label.startswith(_PROBE_PREFIX):
+        log.info("[GUARDIAN] 파생 복구 — %s: %r", label, v)
+    return v
+
+
+def derivation_failures() -> dict[str, str]:
+    """지금 **끊겨 있는** 파생 (label → 사유). 빈 dict = 정상.
+
+    ★ 이 프로세스에서 *한 번이라도 불린* 자리만 보인다 — 안 불린 것을 안다고 하지 않는다.
+      전수로 다시 보려면 `recheck_derivations()`.
+    """
+    return dict(_DERIVED_BROKEN)
+
+
+def recheck_derivations() -> dict[str, str]:
+    """등록된 파생을 **다시 실행** 해 상태를 갱신하고 끊긴 것만 돌려준다."""
+    for label, fn in list(_DERIVED_SITES.items()):
+        derived_or(label, fn, None)
+    return derivation_failures()
+
+
+def derivations_effective() -> bool:
+    """관측 배선이 *실제로* 도는가 — 설정을 묻지 않고 가짜 파생을 한 번 통과시킨다.
+
+    (CLAUDE.md `patch_effective()` 표준: "코드 존재는 적용의 증거가 아니다".)
+    """
+    probe = f"{_PROBE_PREFIX}/derivation"
+
+    def _boom():
+        raise RuntimeError("probe")
+
+    try:
+        got = derived_or(probe, _boom, -1.0)
+        return got == -1.0 and probe in derivation_failures()
+    except Exception:                                   # noqa: BLE001
+        return False
+    finally:
+        _DERIVED_BROKEN.pop(probe, None)
+        _DERIVED_SITES.pop(probe, None)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -485,6 +577,15 @@ _OWN_NON_CODE_KINDS = frozenset({
     #   DNS 이름풀이 실패**(외부 서비스 장애가 아니라 이 기계의 네트워크가 끊긴 것).
     #   코드로 고칠 수 없다. 보이긴 해야 하므로 기록은 남기되 Tier-2 세션은 열지 않는다.
     "trends_empty",   # 이번 회차 수집이 0건 — 외부 네트워크·수집처 상태
+    # ★ 2026-08-14 (ERRORS [640]) — **학습 관문이 거부한 것은 코드 결함이 아니다.**
+    #   `learning.train_weights` 는 회귀 결과가 정렬키의 변별력을 죽이면 저장을 거부하고
+    #   그 사실을 기록한다(`RadarWeightDegenerate` · `RadarWeightApplyShapeDegenerate`).
+    #   이건 **관문이 제대로 일한 것**이고, 원인은 학습 표본의 조성(의사반복·특징공간
+    #   불일치)이지 코드가 틀린 게 아니다. 등록하지 않으면 고칠 수 없는 것을 Tier-1·2 가
+    #   붙잡고, `status='new'` 로 남아 `j07_retry_pending`(10분)이 영원히 재투입한다 —
+    #   2026-08-14 에 정확히 그 형태로 CB 알림 74통 + 시간당 수리 토큰 전량 잠식이 났다.
+    #   기록은 남기되(사람이 봐야 한다) 수리 세션은 열지 않는다.
+    "learning_rejected",
 })
 
 # last-known-good 캐시 — *성공한 파생만* 적재한다(실패값을 캐시하면 영구 degrade).
@@ -872,6 +973,129 @@ def is_transient(error_type: str, message: str = "", source: str = "",
 
 
 # ══════════════════════════════════════════════════════════════════
+# 5-B. '사람이 봐야 하는가' — is_transient 와 **다른 질문** (2026-08-14)
+#
+# ★ 왜 쪼갰나
+#   `is_transient()` 하나가 서로 다른 두 질문에 같은 답을 강요하고 있었다:
+#     ① "코드로 못 고치는가"      → 수리(Tier-1·Tier-2) 비대상인가
+#     ② "사람도 볼 필요 없는가"   → 재조회 대상에서 빼도 되는가
+#   두 소비자(sweep · deep_audit · _orchestrate)는 ①이 True 면 곧장 `ignored` 로
+#   종결했다. 그런데 `ignored` 는 재수집 집합(`UNRESOLVED_STATUSES`)에 없다 —
+#   즉 ①만 보고 닫으면 ②까지 함께 닫힌다.
+#
+#   실측 피해: `PublishGap*`(발행 결손) 29건 중 18건이 `ignored`.
+#   발행이 통째로 빠진 사건인데 "일시적 오류" 로 자동 종결돼 아무도 다시 안 봤다.
+#   코드로 못 고치는 것은 맞다(데몬이 꺼져 있었거나 슬롯을 놓친 것) — 그러나
+#   **사람은 반드시 봐야 한다**. 캡차도 같은 부류다(이미 `_login_human_required_types`
+#   가 그 개념을 갖고 있었는데, 그 개념이 종결 단계까지 전달되지 않았다).
+#
+# ★ 목록을 박지 않는다(②) — 두 도메인이 이미 자기 답을 갖고 있다.
+#     · 로그인: `_login_human_required_types()` (login_manager 파생)
+#     · 발행결손: `publish_ledger.publish_gap_error_type()` × 기대 집합 파생
+#   새 플랫폼·새 글종류가 생기면 타입이 자동으로 따라온다.
+# ══════════════════════════════════════════════════════════════════
+
+# last-known-good 캐시 — 성공값만 적재(파생 실패가 판정을 죽이지 않게).
+_PUBLISH_GAP_TYPES_CACHE: frozenset = frozenset()
+_PUBLISH_GAP_LAST_ERROR: str = ""       # 마지막 파생 실패 사유 (관측용 — 비면 실패 이력 없음)
+_PUBLISH_GAP_WARNED: bool = False       # 로그 1회 억제 (알림 폭주 금지 — 새 채널 신설 안 함)
+
+
+def _publish_gap_types() -> frozenset:
+    """발행 결손 오류 타입 전체 — `publish_ledger` 파생(리터럴 금지).
+
+    지연 import 는 `_login_human_required_types()` 와 동일 원칙
+    (순환 import·부분 초기화 재진입 회피).
+
+    ★ 2026-08-14 (P2) — **파생 실패를 무음으로 종전 동작에 되돌리지 않는다.**
+      종전엔 캐시 초기값이 빈 집합이고 실패를 `except: pass` 로 삼켰다. 그래서
+      *첫 파생이 실패하면* `needs_human_attention()` 이 영구히 False →
+      `is_dismissable()` 이 True → `_park_non_code` 가 **발행 결손을 다시 `ignored` 로
+      자동 종결**했다. 즉 T5 가 고치려던 바로 그 동작으로 **신호 없이** 되돌아간다.
+      빈 집합은 "해당 없음" 이 아니라 "**모른다**" 다. 둘을 같은 값으로 표현했던 것이 병.
+      → 실패를 기록하고(`_PUBLISH_GAP_LAST_ERROR`), 아직 한 번도 못 읽었으면
+        `publish_gap_types_known()` 이 False 를 말한다. 판정은 그때 fail-closed 로 간다.
+    """
+    global _PUBLISH_GAP_TYPES_CACHE, _PUBLISH_GAP_LAST_ERROR, _PUBLISH_GAP_WARNED
+    try:
+        from JARVIS08_PUBLISH.publish_ledger import (  # noqa: PLC0415
+            expected_platforms, publish_gap_error_type, publish_slots)
+        post_types = {pt for pt, _h, _m in publish_slots() if pt}
+        got = frozenset(
+            publish_gap_error_type(pt, pf)
+            for pt in post_types
+            for pf in expected_platforms())
+        if got:
+            _PUBLISH_GAP_TYPES_CACHE = got
+            _PUBLISH_GAP_LAST_ERROR = ""
+            _PUBLISH_GAP_WARNED = False
+            return got
+        _PUBLISH_GAP_LAST_ERROR = "publish_ledger 가 빈 기대집합을 돌려줬다(슬롯·플랫폼 0)"
+    except Exception as e:  # noqa: BLE001
+        _PUBLISH_GAP_LAST_ERROR = f"{type(e).__name__}: {e}"[:200]
+    if not _PUBLISH_GAP_TYPES_CACHE and not _PUBLISH_GAP_WARNED:
+        _PUBLISH_GAP_WARNED = True      # 소음 억제 — 성공하면 위에서 다시 열린다
+        log.error("[severity] 발행 결손 타입 파생 실패 — 자동 종결(ignored) 판정을 "
+                  "보류한다(fail-closed). 사유: %s", _PUBLISH_GAP_LAST_ERROR)
+    return _PUBLISH_GAP_TYPES_CACHE
+
+
+def publish_gap_types_known() -> bool:
+    """발행 결손 어휘를 **실제로 알고 있는가** — 빈 집합('모름')과 '해당 없음' 을 가른다."""
+    return bool(_publish_gap_types())
+
+
+def publish_gap_types_effective() -> "bool | None":
+    """`patch_effective()` 표준 프로브 — 어휘 파생이 *동작으로* 살아 있는가.
+
+    True = 파생됨 / False = 파생 불가(자동 종결이 보류되고 있다) / None = 판정 자체 불가.
+    상시 감시는 `selfcheck()` 의 [P5] 레그가 한다.
+    """
+    try:
+        return bool(_publish_gap_types())
+    except Exception:   # noqa: BLE001
+        return None
+
+
+def needs_human_attention(error_type: str = "", message: str = "",
+                          source: str = "", kind: str = "") -> bool:
+    """★ 공개 API — "코드로는 못 고치지만 **사람은 봐야 한다**" 인가.
+
+    `is_transient()` 가 True 인 것들 가운데 *그냥 흘려보내면 안 되는* 부류만 골라낸다.
+    여기 True 인 오류는 자동 종결(`ignored`) 대신 재조회 대상(`wontfix`)에 남는다.
+
+    킬스위치 `GUARDIAN_HUMAN_ATTENTION=0` → 종전 동작(전부 자동 종결)으로 즉시 복귀.
+    """
+    if not _flag("GUARDIAN_HUMAN_ATTENTION", True):
+        return False
+    et = (error_type or "").strip()
+    if not et:
+        return False
+    return (et in _login_human_required_types()
+            or _short_type(et) in _login_human_required_types()
+            or et in _publish_gap_types())
+
+
+def is_dismissable(error_type: str, message: str = "", source: str = "",
+                   kind: str = "", companions=None) -> bool:
+    """★ 공개 API — 자동 종결(`ignored`)해도 되는가 = 수리 비대상 **이면서** 사람도 불필요.
+
+    소비자는 이 함수 하나만 부른다(③ — 같은 문). 수리 대상 여부는 `is_transient()`,
+    종결 가능 여부는 여기. 두 답이 갈리는 구간이 곧 `wontfix` 다.
+    """
+    if not is_transient(error_type, message, source, kind=kind, companions=companions):
+        return False
+    # ★ fail-closed (2026-08-14 P2): 발행 결손 어휘를 **모르면** 자동 종결하지 않는다.
+    #   모르는 채로 "사람 필요 없음" 이라고 답하면 발행 결손이 `ignored` 로 사라진다
+    #   (재수집 집합 밖 → 아무도 다시 안 본다). 모를 때의 안전한 답은 `wontfix` —
+    #   미해결 버킷에 남아 sweep 이 계속 집고 사람도 볼 수 있다.
+    #   킬스위치 `GUARDIAN_HUMAN_ATTENTION=0` 이면 이 레그도 함께 꺼진다(종전 동작 복귀).
+    if _flag("GUARDIAN_HUMAN_ATTENTION", True) and not publish_gap_types_known():
+        return False
+    return not needs_human_attention(error_type, message, source, kind)
+
+
+# ══════════════════════════════════════════════════════════════════
 # 6. 표시용 라벨
 # ══════════════════════════════════════════════════════════════════
 
@@ -1045,8 +1269,22 @@ def selfcheck() -> list[str]:
     if is_auto_fixable("high", "WebDriverException"):
         bad.append("[결함3] is_auto_fixable(high, WebDriverException) == True — 환경 오류에 LLM 낭비")
 
+    # ── [P5] 발행 결손 어휘 파생 (2026-08-14 P2) ──
+    #   빈 집합이면 '해당 없음' 이 아니라 '모름' 이다. 모르는 채로 도는 것을 여기서 드러낸다.
+    if publish_gap_types_effective() is not True:
+        bad.append(f"[P5] 발행 결손 타입 파생 실패 — 자동 종결(ignored) 보류 중. "
+                   f"사유: {_PUBLISH_GAP_LAST_ERROR or '알 수 없음'}")
+
     # ── 결함4: 오류 타입이 뭉뚱그려져 있지 않은가 (사용자 박제 2026-07-29) ──
     bad.extend(type_granularity_issues())
+
+    # ── [P6] 파생 끊김 (2026-08-17) — 값으로는 안 보이는 고장 ──
+    #   폴백 리터럴이 정상 파생값과 같은 숫자라, 끊겨도 값이 그대로다. 여기서 드러낸다.
+    #   `recheck_derivations()` 는 등록된 파생을 *다시 실행* 한다(상태 사본을 믿지 않는다).
+    if not derivations_effective():
+        bad.append("[P6] 파생 관측 배선이 죽었다 — 파생이 끊겨도 아무도 모른다")
+    for _lb, _why in sorted(recheck_derivations().items()):
+        bad.append(f"[P6] 파생 끊김 {_lb} — {_why} (폴백으로 도는 중: 파생원을 따라가지 않는다)")
 
     return bad
 

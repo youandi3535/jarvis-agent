@@ -61,7 +61,9 @@ _ROOT = Path(__file__).resolve().parents[1]
 def _learned_patterns() -> list:
     from JARVIS07_GUARDIAN.pattern_fixer import all_patterns  # noqa: PLC0415
     return all_patterns()
-_ERRORS_MD = Path(__file__).resolve().parent / "ERRORS.md"
+# ★ 경로의 주인은 `repair_history.errors_md_path()` 하나다 (①, 2026-08-14).
+#   여기에 사본을 두면 테스트·무배포 격리가 이 통로만 비껴간다 — 실제로 그렇게 샜다.
+from JARVIS07_GUARDIAN.repair_history import errors_md_path  # noqa: E402
 
 
 # ──────────────────────────────────────────────────────────────
@@ -193,11 +195,11 @@ def audit_repeated_lessons(window_days: int = 30) -> RepeatedLessons:
 
     유사 판별: 교훈 라인의 *키워드 집합 jaccard 0.6 이상* 휴리스틱.
     """
-    if not _ERRORS_MD.exists():
+    if not errors_md_path().exists():
         return RepeatedLessons(window_days=window_days, repeated=[])
 
     try:
-        text = _ERRORS_MD.read_text(encoding="utf-8", errors="replace")
+        text = errors_md_path().read_text(encoding="utf-8", errors="replace")
     except Exception:
         return RepeatedLessons(window_days=window_days, repeated=[])
 

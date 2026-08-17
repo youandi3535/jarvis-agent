@@ -1,0 +1,49 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$(test -x \"${CLAUDE_PROJECT_DIR}/.venv/bin/python\" && echo \"${CLAUDE_PROJECT_DIR}/.venv/bin/python\" || echo python3) \"${CLAUDE_PROJECT_DIR}/shared/record_claude_change.py\" 2>/dev/null || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -f \"${CLAUDE_PROJECT_DIR}/JARVIS07_GUARDIAN/conversation_hook.py\" && $(test -x \"${CLAUDE_PROJECT_DIR}/.venv/bin/python\" && echo \"${CLAUDE_PROJECT_DIR}/.venv/bin/python\" || echo python3) \"${CLAUDE_PROJECT_DIR}/JARVIS07_GUARDIAN/conversation_hook.py\" || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -f \"${CLAUDE_PROJECT_DIR}/JARVIS07_GUARDIAN/conversation_hook.py\" && $(test -x \"${CLAUDE_PROJECT_DIR}/.venv/bin/python\" && echo \"${CLAUDE_PROJECT_DIR}/.venv/bin/python\" || echo python3) \"${CLAUDE_PROJECT_DIR}/JARVIS07_GUARDIAN/conversation_hook.py\" || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$(test -x \"${CLAUDE_PROJECT_DIR}/.venv/bin/python\" && echo \"${CLAUDE_PROJECT_DIR}/.venv/bin/python\" || echo python3) \"${CLAUDE_PROJECT_DIR}/JARVIS07_GUARDIAN/sdk_tool_guard_hook.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

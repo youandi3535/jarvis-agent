@@ -26,7 +26,8 @@ export type CombinedItem = { keyword: string; score: number; sources: string[] }
 export type RecommendItem  = { keyword: string; sector: string; score: number; opportunity_score: number; velocity: string; competition: number; reason: string };
 export type TrendDelta     = { prev_date?: string; new_entry?: string[]; dropped?: string[]; risen?: { keyword: string; delta: number }[]; fallen?: { keyword: string; delta: number }[] };
 export type TopicCandidate = { keyword: string; sector: string; opportunity_score: number; reason: string; profile?: { summary?: string } };
-export type GuardianStats = { total: number; new: number; fixed: number; critical: number; high: number; medium: number; low: number; recent: ErrorRow[] };
+// ★ legacy — 쓰기 코드가 0곳인 옛 상태(resolved). `fixed` 에 합산하지 않는다(2026-08-14).
+export type GuardianStats = { total: number; new: number; fixed: number; legacy?: number; critical: number; high: number; medium: number; low: number; recent: ErrorRow[]; /** 집계 실패 사유. 서버는 실패를 0 으로 위장하지 않는다(2026-08-14 P2). */ error?: string; measured?: boolean };
 export type ErrorRow   = { id: number; timestamp: string; severity: string; status: string; error_type: string; module: string; message: string };
 export type VisionSummary = { total_agents?: number; healthy?: number; degraded?: number; offline?: number };
 export type OverviewData  = { daemon: DaemonInfo; posts: PostStats; trends: TrendData; guardian: GuardianStats; vision: VisionSummary; ts: string };
@@ -50,7 +51,10 @@ export type LearningData = {
   bandit?: { arms?: number; observed_arms?: number; last_update_h?: number; stalled?: boolean; error?: string };
  weights: WeightRow[]; backtest: BacktestRow[]; insights: InsightRow[]; learn_log: { cnt: number; mae: number | null };
   insights_total?: number; timeline?: LearningPoint[]; resolve_rate?: ResolvePoint[];
-  patterns_now?: { count: number; hits: number };
+  /** 조회 실패 사유 — 있으면 `resolve_rate` 의 빈 배열은 '0건' 이 아니라 '모름' 이다. */
+  resolve_rate_error?: string;
+  /** `measured:false` = 학습 원장을 못 읽음. 그때는 수치를 주지 않는다(0 으로 위장 금지). */
+  patterns_now?: { count?: number; hits?: number; measured?: boolean; error?: string };
   quality_now?: { insights: number; usage: number; rewards: number; avg_reward: number; avg_weight: number; rediscovered: number; rewarded: number };
   quality_timeline?: Array<{ at: string; insights: number; added: number }>;
   feature_variance?: Record<string, number> };

@@ -63,6 +63,26 @@ _RULES: list[tuple[Path, str, int]] = [
 
 _SCREENSHOT_KEEP_DAYS = 30  # screenshots 폴더: 30일
 
+# GUARDIAN 패치 백업 보존 (일) — 롤백에 성공하면 그 자리에서 지워지므로 여기 남는 것은
+# *성공한 수정의 직전 원본* 뿐이다. 사람이 되돌려 보고 싶을 만한 기간만 남긴다.
+_PATCH_BAK_KEEP_DAYS = 14
+
+
+def _rules() -> list:
+    """정리 규칙 — 고정 목록 + **경로의 주인에게서 받아오는** 규칙(②).
+
+    ★ GUARDIAN 패치 백업 경로를 여기 다시 적지 않는다. 주인은 `error_fixer.patch_backup_dir`
+      이고, 그쪽이 폴더를 옮기면 이 규칙이 조용히 빈 폴더를 쓸게 된다(사본을 진실로 믿는 병).
+      보존 *기간* 은 정리 정책이라 이 파일이 주인이다 — 경로만 받아온다.
+    """
+    rules = list(_RULES)
+    try:
+        from JARVIS07_GUARDIAN.error_fixer import patch_backup_dir
+        rules.append((patch_backup_dir(), "*.bak", _PATCH_BAK_KEEP_DAYS))
+    except Exception as e:                              # noqa: BLE001
+        print(f"  ⚠️  GUARDIAN 백업 정리 규칙 로드 실패 — 건너뜀: {e}")
+    return rules
+
 
 def _is_old(path: Path, keep_days: int) -> bool:
     try:
@@ -78,7 +98,8 @@ def run_cleanup(verbose: bool = True) -> dict:
     total = 0
 
     # 1. 날짜 기준 로그/데이터 파일
-    for folder, pattern, keep_days in _RULES:
+    _rule_list = _rules()
+    for folder, pattern, keep_days in _rule_list:
         removed = 0
         for f in folder.glob(pattern):
             if _is_old(f, keep_days):
@@ -94,7 +115,7 @@ def run_cleanup(verbose: bool = True) -> dict:
     #   패턴 목록만으로는 새로 생기는 로그를 영영 못 잡는다. 목록에 없는 것은
     #   기본 보존일로 처리한다 — "정책 밖" 이라는 상태를 없앤다.
     #   ※ *지금 쓰이고 있는* 파일은 건드리지 않는다(mtime 이 최근이면 자동 제외).
-    _rule_pairs = {(str(f), pat) for f, pat, _k in _RULES}
+    _rule_pairs = {(str(f), pat) for f, pat, _k in _rule_list}
     import fnmatch as _fn
     for d in log_dirs():
         removed = 0

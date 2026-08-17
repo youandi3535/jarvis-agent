@@ -37,3 +37,19 @@ pytrends
 #   없으면 수집 단계에서 죽는다(CI 적색 4건). 발행 테스트가 발행 의존성을 요구하는 것은 정상 계층이다
 #   — 수집 의존성이 데이터 모델 import 에 딸려오던 `feedparser` 건과는 성격이 다르다(그쪽은 지연 로드로 해소).
 selenium
+
+# ★ fastapi (2026-08-17 추가) — `/api/*` 집계 계약 테스트 4건이 `api_server` 를 **import 해서
+#   실제 함수를 호출** 한다 (`get_guardian_stats`·`get_learning`·`get_guardian_alltime` 등).
+#   그 모듈은 파일 첫머리에서 `from fastapi import FastAPI, HTTPException, Query` 를 한다.
+#   ㉮(여기 추가) vs ㉯(테스트가 api_server 를 import 안 하게 재구성) 중 ㉮ 를 골랐다:
+#     · 이 4건이 보는 것은 "실패를 0 으로 위장하지 않는가" 라는 **실제 응답의 계약** 이다.
+#       import 를 피하려고 소스 문자열 검사로 내리면 검사의 실질이 약해진다(= 약화 금지).
+#     · 비용 실측: `pip install fastapi` **2.9초**(휠 11개, 전부 순수/소형).
+#       이미 들어 있는 selenium 과 비교가 안 되게 싸다. "느린 CI 는 꺼지는 CI" 에 해당 없음.
+#   API 테스트가 API 의존성을 요구하는 것은 정상 계층이다 — selenium 을 넣은 근거와 같다.
+fastapi
+# ★ anyio (2026-08-17 추가) — `shared/claude_sdk_compat.run_sdk_query` 가 **직접** import 한다.
+#   SDK 배선 테스트(금지목록·세션 표식 전달)가 그 함수를 끝까지 돌린다.
+#   ※ fastapi→starlette 가 anyio 를 끌고 오지만 **거기에 기대지 않는다** — 남의 의존 그래프는
+#     우리 진실이 아니다. 우리가 쓰는 것은 우리가 적는다.
+anyio

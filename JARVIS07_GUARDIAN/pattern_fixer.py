@@ -944,6 +944,83 @@ def runtime_error_types() -> frozenset:
     return got
 
 
+# ──────────────────────────────────────────────────────────────
+# ★ 재적용 자격 게이트 — 세 통로가 지나는 **하나의 문** (2026-08-17)
+#
+#   통로: `_fix_from_learned`(정확·정규식) · `_semantic_fallback_match`(시맨틱)
+#         · `apply_stored_patches`(정기 전수 재적용)
+#   한 곳만 막으면 나머지 둘로 샌다 — 실제로 이 파일이 그렇게 새던 자리다(③).
+#
+#   판정 자체는 여기 없다. 문턱의 주인은 `eval_agent` 하나이고 이 문은 그것을 **묻는다**(①).
+# ──────────────────────────────────────────────────────────────
+
+# 이 모듈이 게이트 주인에게 닿지 못했다는 *자기* 상태 — eval_agent 의 판정 코드가 아니다.
+_HOLD_GATE_UNREACHABLE = "eval_gate_unreachable"
+
+# ★ 경고 throttle — 이 함수는 패턴 *마다* 불린다(실측 79회/1오류). 파생이 죽으면
+#   같은 WARNING 이 79줄씩 쏟아져 로그가 사고 자체를 덮는다. 상태가 *바뀔 때만* 말한다.
+#   (침묵이 아니다 — 첫 실패와 회복은 반드시 남는다.)
+_GATE_FAIL_LAST: dict = {"why": ""}
+
+
+def reuse_hold(entry: dict) -> str:
+    """학습 항목의 **재적용 보류 사유** — 빈 문자열이면 재적용 가능.
+
+    ★ 왜 보류인가 (기각이 아니다): 실측 39/79 건이 `eval_meta.score == 70` 이었는데
+      70 은 *심사를 통과한 점수* 가 아니라 *심사를 못 했을 때* 붙는 보수적 통과다
+      (사유 1위 19건 = `No module named 'dotenv'` — eval 훅이 LLM 을 못 돌렸다).
+      틀렸다고 확인된 게 아니므로 **지우지 않는다**. 원장에 그대로 남고, 빠지는 것은
+      재적용 후보 자격 하나뿐이며, `eval_agent.rereview_held()` 로 돌아올 수 있다.
+
+    ★ 파생 실패는 조용히 통과시키지 않는다 (②): 게이트 주인에게 못 닿으면
+      *보류* 로 처리하고 WARNING 을 남긴다. 재적용은 코드에 패치를 쓰는 특권이므로
+      "모르면 통과" 가 아니라 "모르면 보류" 다. 정적 fixer·Tier-2 는 영향받지 않는다.
+
+    킬스위치: `GUARDIAN_REUSE_BAR=0` → 게이트 무효(종전 동작). 무배포 조정을 위해
+    **호출 시점** 조회한다(모듈 레벨 스냅샷 금지).
+    """
+    import os
+    if os.getenv("GUARDIAN_REUSE_BAR", "1") == "0":
+        return ""
+    try:
+        from JARVIS07_GUARDIAN import eval_agent as _eval_mod  # noqa: PLC0415
+        hold = str(_eval_mod.reuse_eligibility(entry).get("hold") or "")
+    except Exception as e:  # noqa: BLE001
+        why = f"{type(e).__name__}: {e}"
+        if _GATE_FAIL_LAST["why"] != why:
+            _GATE_FAIL_LAST["why"] = why
+            log.warning("[GUARDIAN/learned] 재적용 자격 파생 실패 → **전량 보류**"
+                        "(fail-closed, 학습 재적용 정지): %s", why)
+        return _HOLD_GATE_UNREACHABLE
+    if _GATE_FAIL_LAST["why"]:
+        log.info("[GUARDIAN/learned] 재적용 자격 파생 복구 — 보류 해제")
+        _GATE_FAIL_LAST["why"] = ""
+    return hold
+
+
+def held_patterns() -> list:
+    """재적용이 **보류** 된 학습 항목 — 관측용 (삭제하지 않는다).
+
+    `unreachable_patterns()` 와 같은 성격이다: 매칭에서만 빼고 기록은 남긴다.
+    각 항목에 왜 빠졌는지(`_hold`)를 붙여 돌려준다 — 사유가 조회 가능해야 한다.
+    """
+    out = []
+    for p in all_patterns():
+        why = reuse_hold(p)
+        if not why:
+            continue
+        q = dict(p)
+        q.pop("embedding", None)          # 384차 벡터는 관측에 방해만 된다
+        q["_hold"] = why
+        try:
+            from JARVIS07_GUARDIAN import eval_agent as _eval_mod  # noqa: PLC0415
+            q["_hold_detail"] = _eval_mod.reuse_eligibility(p)
+        except Exception:  # noqa: BLE001
+            q["_hold_detail"] = {"hold": why}
+        out.append(q)
+    return out
+
+
 def unreachable_patterns() -> list:
     """런타임에 도달할 수 없는 학습 지문 — 관측용(삭제하지 않는다).
 
@@ -985,6 +1062,13 @@ def _fix_from_learned(error_record: dict, min_hit_count: int = 0) -> Optional[di
         _pt = str(p.get("error_type") or "")
         if _live and _pt and _pt not in _live:
             continue          # 도달 불가 지문 — 삭제하지 않고 매칭에서만 제외
+        # ★ 심사 문턱을 못 넘은 항목은 후보에서 뺀다 (2026-08-17, ③ 세 통로 공통).
+        #   기각이 아니라 보류 — 원장에는 남고 `rereview_held()` 로 돌아온다.
+        _hold = reuse_hold(p)
+        if _hold:
+            log.debug("[GUARDIAN/learned] 재적용 보류(%s) — fp='%s'",
+                      _hold, str(p.get("fingerprint") or "")[:60])
+            continue
         # 정확 매칭 (fingerprint 동일) 우선
         if p.get("fingerprint") == fp:
             matched = p
@@ -1099,11 +1183,13 @@ def _semantic_fallback_match(et: str, msg: str, data: dict, min_hit_count: int) 
     if not _emb.available():
         return None
     # 후보 사전 필터 — error_type 완전일치 + embedding 보유 + actionable + hit_count
+    #   ★ 자격 게이트는 여기서도 건다 (③) — 정확매칭만 막으면 시맨틱으로 그대로 샌다.
     cands = [p for p in data.get("patterns", [])
              if p.get("error_type") == et
              and p.get("embedding")
              and p.get("fixer") in _ACTIONABLE_FIXERS
-             and int(p.get("hit_count", 0)) >= min_hit_count]
+             and int(p.get("hit_count", 0)) >= min_hit_count
+             and not reuse_hold(p)]
     if not cands:
         return None   # 후보 0 → 모델 로드조차 안 함 (성능)
     q = _emb.encode(_normalize_message(msg))
@@ -1567,6 +1653,30 @@ def stats() -> dict:
     actionable_hits = sum(
         int(p.get("hit_count", 0)) for p in pats if p.get("fixer") in _actionable_fixers
     )
+    # ★ 재적용 보류 현황 (2026-08-17) — 새 카드·새 알림을 만들지 않고 *있는 조회* 를 넓힌다.
+    #   `actionable` 은 "재적용 *가능한 꼴* 인가" 만 보므로, 심사 문턱을 못 넘어 실제로는
+    #   후보에서 빠진 항목까지 세고 있었다. 그 차이가 안 보이면 학습 자산이 실제보다 커 보인다.
+    _held_by_reason: dict[str, int] = {}
+    _held_unjudged = 0
+    for p_ in pats:
+        _why = reuse_hold(p_)
+        if not _why:
+            continue
+        _held_by_reason[_why] = _held_by_reason.get(_why, 0) + 1
+        try:
+            from JARVIS07_GUARDIAN import eval_agent as _em  # noqa: PLC0415
+            if _em.reuse_eligibility(p_).get("judged") is not True:
+                _held_unjudged += 1
+        except Exception:  # noqa: BLE001
+            pass
+    _held = sum(_held_by_reason.values())
+    # 문턱은 **파생값을 그대로 보여준다** — 화면에 숫자를 박으면 그 순간 사본이 된다.
+    try:
+        from JARVIS07_GUARDIAN import eval_agent as _em2  # noqa: PLC0415
+        _bar = {"default": _em2.pass_threshold(None),
+                "unverifiable": _em2.pass_threshold(_em2.V_UNVERIFIABLE)}
+    except Exception as _be:  # noqa: BLE001
+        _bar = {"error": str(_be)}
     return {
         "total_patterns":    len(pats),
         "total_hits":        sum(int(p.get("hit_count", 0)) for p in pats),
@@ -1579,6 +1689,12 @@ def stats() -> dict:
         "by_tier":           by_tier,           # ★ static/llm/manual 분포
         "by_domain":         by_domain_count,   # ★ ADR 008 Phase 4
         "by_domain_hits":    by_domain_hits,    # ★ ADR 008 Phase 4
+        # ★ 재적용 자격 (2026-08-17) — 보류는 '기각' 이 아니라 '보류' 다 (재심사로 복귀 가능)
+        "reuse_eligible":    len(pats) - _held,
+        "reuse_held":        _held,
+        "reuse_held_by_reason": _held_by_reason,
+        "reuse_held_unjudged":  _held_unjudged,   # 그중 '심사 자체를 못 받은' 건수
+        "reuse_bar":         _bar,                # 현재 문턱 (eval_agent 파생 — 사본 아님)
         "top5":              pats[:5],
     }
 
@@ -1617,7 +1733,10 @@ def _restore_items(matched: dict, *, allow_full_file: bool = True) -> list:
     저장된 것은 unified diff(현행) 또는 full-file(레거시)이다.
     **전부** 복원돼야 반환한다 — 하나라도 불가하면 빈 목록(반쪽 복원 금지).
 
-    allow_full_file=False: `apply_stored_patches`(매일 04:30 전수 재적용)용.
+    allow_full_file=False: `apply_stored_patches` 용.
+        (★ 2026-08-14 정정 — "매일 04:30" 이 아니다. 이 함수의 실측 호출자는
+         `auto_repair.run_auto_repair._step_pre_patch` 한 곳이고 그것은
+         `j07_deep_audit` = **토요일 03:00** 이다. 발행 직전 sweep 과 혼동 금지.)
       레거시 full-file 은 "before 컨텍스트가 남아 있는가" 라는 회귀 감지 의미가 없어서
       매번 무조건 덮어쓰게 된다 — 정기 스윕에서는 diff 만 다룬다.
     """
@@ -1664,8 +1783,8 @@ def apply_stored_patches() -> int:
     Returns: 적용 성공 건수
     """
     from JARVIS07_GUARDIAN.error_fixer import (
-        apply_files_safely, rollback_patchset, verify_fix, record_rollback_learning,
-        VERIFY_REPRODUCES, VERIFY_UNVERIFIABLE,
+        _patch_lock, apply_files_safely, gate_patchset, rollback_patchset, verify_fix,
+        record_rollback_learning, VERIFY_REPRODUCES, VERIFY_UNVERIFIABLE,
     )
 
     data = _load_learned()
@@ -1674,9 +1793,16 @@ def apply_stored_patches() -> int:
     applied = 0
     bumped: list[str] = []
 
+    held = 0
     for entry in patterns:
         fixer = entry.get("fixer")
         if fixer not in ("auto_patch", "llm_patch"):
+            continue
+        # ★ 심사 문턱 미달은 여기서도 뺀다 (2026-08-17, ③) — Tier-1 만 막으면
+        #   토요일 전수 스윕이 같은 항목을 코드에 그대로 쓴다. 문은 `reuse_hold` 하나.
+        _hold = reuse_hold(entry)
+        if _hold:
+            held += 1
             continue
         # ★ 복원은 `_restore_items` 단일 지점. 하나라도 불가면 전체 포기(전부 아니면 전무).
         #   정기 스윕이라 레거시 full-file 은 제외한다(회귀 감지 의미가 없어 매번 덮어쓴다).
@@ -1689,56 +1815,93 @@ def apply_stored_patches() -> int:
         _tag  = f"learned:{_fp[:40]}"
         _rels = ", ".join(r for r, _ in items)
 
-        ok, why, staged = apply_files_safely(items, tag=_tag)
-        if not ok:
-            log.info(f"[GUARDIAN/patch] 학습 패치 거부 ({_rels}): {why}")
-            continue
+        # ★ 테스트 게이트는 **여기서 돌리지 않는다** (2026-08-14 2차 — 순서 교정, ③).
+        #   바로 아래 재현검증(수초)이 "원 오류 그대로" 라고 답하면 이 패치는 어차피
+        #   전량 롤백된다. `apply_fix` 와 **같은 순서** 여야 한다 — 한 통로만 고치면
+        #   다른 통로로 샌다(이 함수가 정확히 그렇게 가드 0종으로 남아 있던 자리다).
+        # ★★ 적용 → 재현검증 → 게이트를 **하나의 배타 구간** 으로 (2026-08-14 3차, ③)
+        #   `apply_fix` 와 **같은 구조** 다 — 한 통로만 고치면 다른 통로로 샌다.
+        #   적용(락 안)과 게이트(락 밖) 사이에 창이 열리면, 그 창에서 다른 수리가 자기
+        #   패치를 적용하고 이쪽 게이트는 *남의 패치까지 섞인 워킹트리* 를 채점한다.
+        #   그러면 무고한 패치가 롤백되고 바로 아래 음의보상·학습강등이 **거짓으로** 흐른다.
+        #   새 락을 만들지 않는다 — `_patch_lock` 은 같은 스레드의 재진입을 통과시키므로
+        #   안쪽 `apply_files_safely`·`rollback_patchset`·`gate_patchset` 이 그대로 중첩된다.
+        with _patch_lock():
+            ok, why, staged = apply_files_safely(items, tag=_tag, run_gate=False)
+            if not ok:
+                log.info(f"[GUARDIAN/patch] 학습 패치 거부 ({_rels}): {why}")
+                continue
 
-        # ★ 재현 검증 — 적용됐다고 고쳐진 것이 아니다. apply_fix 와 **같은 정책**.
-        #   ★★ `message_pattern` 을 message 로 넘기지 말 것 (2026-07-26 자수):
-        #     그건 메시지가 아니라 `record_pattern_hit` 이 만든 **정규식**(`re.escape` 포함)이다.
-        #     `verify_fix` 의 `_parse_import_target`·NameError 추출이 전부 no-op 이 되어
-        #     `compile_file` 프로브만 남고, 그건 이미 선검사(`ast.parse`)가 보장한 사실이라
-        #     **무조건 reproduced_gone → 근거 없는 +1 보상**이 된다. 2026-07-25 가 폐기한
-        #     "컴파일되면 fixed" 가 이 경로에서 되살아나는 것이다.
-        #     원문이 없으면 **검증 못 한 것으로 취급**한다(보상 0) — 이 파일이 스스로 세운 규칙.
-        _sample = str(entry.get("sample_message") or "").strip()
-        if _sample:
-            _rec = {"error_type": entry.get("error_type", "") or "",
-                    "message": _sample, "module": items[0][0]}
-            _vstate, _vdetail = verify_fix(
-                _rec, {"target_file": items[0][0], "patch": items[0][1]}, staged[0].path,
-                original_content=staged[0].original,
-            )
-        else:
-            _rec = {"error_type": entry.get("error_type", "") or "", "message": "",
-                    "module": items[0][0]}
-            _vstate, _vdetail = VERIFY_UNVERIFIABLE, "원 오류 메시지 원문 미보유 — 재현 불가"
+            # ★ 재현 검증 — 적용됐다고 고쳐진 것이 아니다. apply_fix 와 **같은 정책**.
+            #   ★★ `message_pattern` 을 message 로 넘기지 말 것 (2026-07-26 자수):
+            #     그건 메시지가 아니라 `record_pattern_hit` 이 만든 **정규식**(`re.escape` 포함)이다.
+            #     `verify_fix` 의 `_parse_import_target`·NameError 추출이 전부 no-op 이 되어
+            #     `compile_file` 프로브만 남고, 그건 이미 선검사(`ast.parse`)가 보장한 사실이라
+            #     **무조건 reproduced_gone → 근거 없는 +1 보상**이 된다. 2026-07-25 가 폐기한
+            #     "컴파일되면 fixed" 가 이 경로에서 되살아나는 것이다.
+            #     원문이 없으면 **검증 못 한 것으로 취급**한다(보상 0) — 이 파일이 스스로 세운 규칙.
+            _sample = str(entry.get("sample_message") or "").strip()
+            if _sample:
+                _rec = {"error_type": entry.get("error_type", "") or "",
+                        "message": _sample, "module": items[0][0]}
+                _vstate, _vdetail = verify_fix(
+                    _rec, {"target_file": items[0][0], "patch": items[0][1]}, staged[0].path,
+                    original_content=staged[0].original,
+                )
+            else:
+                _rec = {"error_type": entry.get("error_type", "") or "", "message": "",
+                        "module": items[0][0]}
+                _vstate, _vdetail = VERIFY_UNVERIFIABLE, "원 오류 메시지 원문 미보유 — 재현 불가"
 
-        if _vstate == VERIFY_REPRODUCES:
-            _n, _failed = rollback_patchset(staged)
-            log.warning(f"[GUARDIAN/patch] 재적용했으나 원 오류 재현 → 전량 롤백 "
-                        f"({_rels}): {_vdetail[:80]}"
-                        + (f" / ★ 롤백 실패 {_failed}" if _failed else ""))
-            # ★ 롤백은 가장 강한 외생 신호다 — apply_fix 와 같은 3종을 여기서도 흘린다.
-            #   종전엔 `continue` 뿐이라 **양의 보상만 흐르고 음의 신호는 안 흘렀다**.
-            try:
-                from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
-                _hc0  = int(entry.get("hit_count", 0) or 0)
-                _arm0 = (f"verified:{_fp[:32]}" if _hc0 >= _HIGH_COUNT_THRESHOLD
-                         else f"new:{_fp[:32]}")
-                _bandit_reward(entry.get("error_type", "") or "", _arm0, success=False,
-                               error_record=_rec)
-            except Exception as _re:
-                log.debug(f"[GUARDIAN/patch] 롤백 음의보상 실패: {_re}")
-            try:
-                record_rollback_learning(
-                    _rec, {"pattern": fixer, "target_file": items[0][0]},
-                    f"학습 재적용 후 원 오류 재현 → 롤백: {_vdetail[:100]}",
-                    verification=VERIFY_REPRODUCES)
-            except Exception as _re:
-                log.debug(f"[GUARDIAN/patch] 롤백 학습강등 실패: {_re}")
-            continue
+            if _vstate == VERIFY_REPRODUCES:
+                _n, _failed = rollback_patchset(staged)
+                log.warning(f"[GUARDIAN/patch] 재적용했으나 원 오류 재현 → 전량 롤백 "
+                            f"({_rels}): {_vdetail[:80]}"
+                            + (f" / ★ 롤백 실패 {_failed}" if _failed else ""))
+                # ★ 롤백은 가장 강한 외생 신호다 — apply_fix 와 같은 3종을 여기서도 흘린다.
+                #   종전엔 `continue` 뿐이라 **양의 보상만 흐르고 음의 신호는 안 흘렀다**.
+                try:
+                    from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
+                    _hc0  = int(entry.get("hit_count", 0) or 0)
+                    _arm0 = (f"verified:{_fp[:32]}" if _hc0 >= _HIGH_COUNT_THRESHOLD
+                             else f"new:{_fp[:32]}")
+                    _bandit_reward(entry.get("error_type", "") or "", _arm0, success=False,
+                                   error_record=_rec)
+                except Exception as _re:
+                    log.debug(f"[GUARDIAN/patch] 롤백 음의보상 실패: {_re}")
+                try:
+                    record_rollback_learning(
+                        _rec, {"pattern": fixer, "target_file": items[0][0]},
+                        f"학습 재적용 후 원 오류 재현 → 롤백: {_vdetail[:100]}",
+                        verification=VERIFY_REPRODUCES)
+                except Exception as _re:
+                    log.debug(f"[GUARDIAN/patch] 롤백 학습강등 실패: {_re}")
+                continue
+
+            # ★ 싼 검증을 통과한 것만 비싼 게이트로 (주인은 `error_fixer.gate_patchset` 하나 — ①).
+            #   발행 임계경로에서는 그 안에서 스스로 보류한다.
+            _gok, _gwhy, _gkind = gate_patchset(staged, tag=_tag)
+            if not _gok:
+                log.warning(f"[GUARDIAN/patch] 재적용이 게이트에 막힘 → 전량 롤백 "
+                            f"({_rels}): {_gwhy[:120]}")
+                # 게이트 실패는 재현과 같은 급의 외생 신호다 — 같은 3종을 흘린다.
+                try:
+                    from JARVIS07_GUARDIAN.bandit import reward as _bandit_reward
+                    _hcg  = int(entry.get("hit_count", 0) or 0)
+                    _armg = (f"verified:{_fp[:32]}" if _hcg >= _HIGH_COUNT_THRESHOLD
+                             else f"new:{_fp[:32]}")
+                    _bandit_reward(entry.get("error_type", "") or "", _armg, success=False,
+                                   error_record=_rec)
+                except Exception as _ge:
+                    log.debug(f"[GUARDIAN/patch] 게이트 음의보상 실패: {_ge}")
+                try:
+                    record_rollback_learning(
+                        _rec, {"pattern": fixer, "target_file": items[0][0]},
+                        f"학습 재적용이 테스트 게이트에 막힘 → 롤백: {_gwhy[:100]}",
+                        verification=VERIFY_REPRODUCES)
+                except Exception as _ge:
+                    log.debug(f"[GUARDIAN/patch] 게이트 학습강등 실패: {_ge}")
+                continue
 
         applied += 1
         bumped.append(_fp)
@@ -1761,6 +1924,10 @@ def apply_stored_patches() -> int:
                            error_record=_rec)
         except Exception as _re:
             log.debug(f"[GUARDIAN/patch] 재적용 보상 실패: {_re}")
+
+    if held:
+        log.info("[GUARDIAN/patch] 재적용 보류 %d건 — 심사 문턱 미달(기각 아님). "
+                 "상세: pattern_fixer.held_patterns() / 재심사: eval_agent.rereview_held()", held)
 
     if bumped:
         # ★ 한 임계구역에서 일괄 증가 — fingerprint 마다 따로 열면 523KB 를 N번 되쓴다.
@@ -2059,5 +2226,7 @@ __all__ = [
     "fingerprint_of",
     "try_pattern_fix", "record_pattern_hit", "record_sdk_fix", "bandit_arm_name",
     "stats", "_make_fingerprint",
+    "all_patterns", "mutate_learned", "stored_patch_specs",
+    "reuse_hold", "held_patterns", "unreachable_patterns",   # ★ 재적용 자격·관측
     "_infer_domain", "backfill_domains",   # ★ ADR 008 Phase 4
 ]

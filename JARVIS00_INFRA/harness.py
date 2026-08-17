@@ -384,6 +384,29 @@ def _db_attempt_error_ids(action_name: str, statuses: tuple) -> list[int]:
     return out
 
 
+def _error_statuses(*names: str) -> tuple:
+    """오류 상태 어휘를 **주인(GUARDIAN architecture)에서** 가져온다 — 리터럴 금지 (② · P2).
+
+    ★ 왜 지연 import 인가: `architecture` 는 모듈 레벨에서 이 파일의
+      `DEFAULT_MAX_ATTEMPTS` 를 읽는다. 여기서 모듈 레벨로 되받으면 순환이다.
+      severity 가 harness 를 지연 조회하는 것과 같은 이유·같은 형태.
+
+    ★ 파생 실패는 조용히 넘기지 않는다 — 빈 튜플을 돌려주면 DB 파생분 청소가 멈추므로
+      (메모리 분은 그대로 처리된다) **동작이 줄어드는 쪽**으로 실패한다 + 경고를 남긴다.
+      여기에 폴백 목록을 적으면 그 순간 그것이 사본이 되어 어휘 변경을 못 따라간다.
+    """
+    try:
+        from JARVIS07_GUARDIAN import architecture as _arch   # noqa: PLC0415 (의도된 지연)
+        out: list = []
+        for n in names:
+            v = getattr(_arch, n)          # 없는 이름이면 AttributeError → 아래에서 드러난다
+            out.extend([v] if isinstance(v, str) else list(v))
+        return tuple(out)
+    except Exception as e:      # noqa: BLE001
+        _log.warning("[harness] 오류 상태 어휘 파생 실패 — DB 고아 행 정리를 건너뛴다: %s", e)
+        return ()
+
+
 def _attempt_error_ids(action_name: str, statuses: tuple) -> list[int]:
     """메모리(빠름) ∪ DB 파생(프로세스 경계 넘김) — 되돌림 대상 id 단일 조회."""
     ids = list(_ATTEMPT_ERROR_IDS.get(action_name) or [])
@@ -402,7 +425,7 @@ def _resolve_attempt_errors(action_name: str, resolution: str) -> int:
       함께 해소한다 — 그 실패들은 지금의 성공으로 무효화된 것이 맞고, 방치하면 아무도
       분석하지 않은 채 `ignored` 로 썩는다.
     """
-    ids = _attempt_error_ids(action_name, ("new", "analyzing", "ignored"))
+    ids = _attempt_error_ids(action_name, _error_statuses("OPEN_STATUSES", "STATUS_IGNORED"))
     _ATTEMPT_ERROR_IDS.pop(action_name, None)
     if not ids:
         return 0
@@ -433,7 +456,7 @@ def _finalize_attempt_errors(action_name: str) -> int:
       ★ 결함3: DB 파생분을 합쳐, *이전 프로세스가 죽으면서 남긴* 잠정 행도 여기서 승격된다.
         (`ignored` 는 제외 — 이미 격리된 것을 되살리지 않는다. 승격은 미결 행에만.)
     """
-    ids = _attempt_error_ids(action_name, ("new", "analyzing"))
+    ids = _attempt_error_ids(action_name, _error_statuses("OPEN_STATUSES"))
     if not ids:
         return 0
     try:
@@ -1413,4 +1436,11 @@ __all__ = [
     "infra_kind",
     "is_infra_kind",
     "action_module",
+    # ★ 2026-08-14 (ERRORS [641]) — 봉투('포기했다') 판정을 공개 계약으로 올린다.
+    #   이 kind 의 *의미* 는 harness 소유다: "바뀐 것 없이 다시 돌리면 같은 결과".
+    #   종전엔 공개돼 있지 않아, GUARDIAN 이 그 뜻을 모른 채 abort 를 `transient`
+    #   (=기다리면 낫는다)로 오독하고 전체 발행을 두 번 더 돌렸다 — 정반대 의미다.
+    "ENVELOPE_STEP",
+    "envelope_kinds",
+    "is_envelope_kind",
 ]

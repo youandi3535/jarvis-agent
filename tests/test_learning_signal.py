@@ -981,3 +981,97 @@ def test_쿠키_삭제가_유효성에서_파생된다():
         "발행 precondition·티스토리·복구재료만 없앤다")
     # Chrome *캐시* 정리는 남아 있어야 한다 (로그인 데이터가 아니다)
     assert "rmtree" in src, "Chrome 캐시 정리까지 사라졌다 — 그건 지워도 되는 것이다"
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑥ opportunity_score 배치 변별력 붕괴 → topic_pack 후보 0개 (2026-08-14)
+# ══════════════════════════════════════════════════════════════════
+def test_학습가중치_붕괴시_opportunity_score가_뭉치지_않는다(monkeypatch):
+    """★ 실사고 (2026-08-14, radar/TopicPackNoCandidate): 학습된 가중치가 이번 배치에서
+    (예: freshness 가 전원 20.0 로 동률인데 w_fresh 가 음수로 학습됨) opportunity_score
+    를 전원 0.0 으로 뭉갰다. `_candidates()`(topic_pack.py) 는 이 점수로 내림차순 정렬하는데
+    전원 동점이면 정렬이 사실상 원본 순서 그대로라 경제와 무관한 잡음 키워드가 앞으로 오고,
+    LLM 적합성 판정에서 전부 걸러져 "적합 후보 0개" → build_topic_pack()=None →
+    TopicPackNoCandidate 로 이어졌다. `enrich_with_opportunity()` 는 학습 시점(train_weights)
+    과 같은 판정(`is_ranking_degenerate`)을 적용 시점 배치에도 돌려 붕괴를 감지하면
+    DEFAULT_WEIGHTS 로 즉시 재계산해야 한다.
+    """
+    import time
+    import JARVIS03_RADAR.analyzer as az
+
+    # freshness 전원 동률(신규 키워드 배치) + 붕괴된 학습 가중치(w_fresh 음수 지배)
+    monkeypatch.setitem(az._WEIGHTS_CACHE, "data", {
+        "w_trend": -0.001, "w_perf": 0.0, "w_fresh": -50.0,
+        "w_velocity": 0.0, "w_competition": 0.0, "intercept": 0.0,
+    })
+    monkeypatch.setitem(az._WEIGHTS_CACHE, "ts", time.time())
+
+    scored = [
+        {"keyword": f"kw{i}", "score": 10.0 + i, "velocity_score": 0.0,
+         "competition": 50.0, "sector": "기타"}
+        for i in range(10)
+    ]
+    out = az.enrich_with_opportunity(scored)
+    vals = [round(o["opportunity_score"], 6) for o in out]
+
+    assert len(set(vals)) > 1, (
+        f"opportunity_score 가 전원 동일값으로 뭉쳤다({vals}) — 정렬키 붕괴가 감지·복구되지 않았다"
+    )
+
+
+def test_기본가중치는_사본이_아니라_주인에서_파생한다():
+    """★ 원칙① — 기본 가중치의 **주인은 `shared.db.DEFAULT_WEIGHTS` 한 곳**이다.
+
+    종전 이 테스트는 `analyzer.DEFAULT_WEIGHTS` 에 값을 그대로 다시 적고 "단일 진실
+    소스" 라고 단언했다. 그런데 같은 값이 `shared/db.py` 에 이미 있었다(학습 행이
+    없을 때 `learned_weights_latest()` 가 돌려주는 값) — 즉 **테스트가 사본을
+    진실이라고 박제**하고 있었다. 값을 비교하지 말고 *주인을 참조하는지* 를 본다.
+    """
+    from JARVIS03_RADAR.analyzer import default_weights
+    from shared.db import DEFAULT_WEIGHTS as OWNER
+
+    d = default_weights()
+    for k in ("w_trend", "w_perf", "w_fresh", "w_velocity", "w_competition", "intercept"):
+        assert d[k] == OWNER[k], f"{k} 가 주인(shared.db.DEFAULT_WEIGHTS)과 다르다 — 사본이 생겼다"
+    # 값을 여기 적지 않는다: 주인이 바뀌면 이 테스트는 따라 바뀌어야 하고, 그게 정상이다.
+    assert d is not OWNER, "주인 dict 를 그대로 돌려주면 호출자가 원본을 오염시킬 수 있다"
+
+
+def test_채점식은_analyzer_apply_weights_단독이다():
+    """★ 원칙① — 학습(변별력 가드)과 적용(opportunity_score)이 *같은 식* 을 써야 한다.
+
+    2026-08-14 사고의 근본: 학습은 절편 포함 아핀 모델을 적합·저장했는데 적용식엔
+    절편 항이 없었다. 두 곳에 따로 박힌 식은 반드시 어긋난다.
+    """
+    from JARVIS03_RADAR.analyzer import apply_weights
+
+    w = {"w_trend": 1.0, "w_perf": 2.0, "w_fresh": 3.0, "intercept": 7.0}
+    got = apply_weights(w, trend_score=10.0, perf=1.0, fresh=2.0)
+    assert got == 10.0 * 1.0 + 1.0 * 2.0 + 2.0 * 3.0 + 7.0, "절편이 채점식에서 빠졌다"
+
+    # 키가 없으면 기본값에서 파생 — 여기에 숫자를 적지 않는다(②).
+    from JARVIS03_RADAR.analyzer import default_weights
+    d = default_weights()
+    assert apply_weights({}, trend_score=10.0, perf=0.0, fresh=0.0) == 10.0 * d["w_trend"]
+
+
+def test_적용형상에서_정렬키를_죽이는_가중치는_학습이_거부한다():
+    """★ 실사고 (2026-08-14) — 학습 표본과 적용 배치의 특징공간이 겹치지 않는다.
+
+    학습 표본 = 이미 발행된 글(perf>0, freshness 낮음)
+    적용 배치 = 오늘의 후보(perf=0, freshness 최고점 — 전원 동일)
+    실측: (perf=0, freshness=20) 조합은 학습 표본 496행 중 **0행**. 그래서 학습 표본
+    위에서만 보는 가드는 통과했는데 적용 배치에서는 전원 0.0 으로 뭉갰다.
+    → 학습 관문은 *적용 시점 형상* 으로도 채점해 봐야 한다.
+    """
+    from JARVIS03_RADAR.analyzer import apply_weights
+    from JARVIS03_RADAR.learning import distinct_ratio
+
+    rotten = {"w_trend": 0.0011, "w_perf": 0.1125, "w_fresh": -0.0689, "intercept": 0.2422}
+    trend = [float(t) for t in range(10, 101, 2)]
+    probe = [max(0.0, apply_weights(rotten, trend_score=t, perf=0.0, fresh=20.0)) for t in trend]
+
+    assert distinct_ratio(probe) < distinct_ratio(trend) * 0.5, (
+        "실제 사고를 만든 가중치가 적용형상 프로브를 통과했다 — 관문이 무력하다"
+    )
+    assert max(probe) == 0.0, "이 가중치는 후보 배치를 전원 0.0 으로 만든다(사고 재현 조건)"

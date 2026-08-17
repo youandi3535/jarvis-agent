@@ -155,9 +155,46 @@ def _esc(text: str) -> str:
     return text
 
 
-def _send_tg(msg: str) -> None:
-    # 텔레그램 알림 비활성 (사용자 박제) — 로그만 기록
+# ★ 사람에게 반드시 가야 하는 사건 3종 (2026-08-14 — T5 '무음 좁히기').
+#   나머지는 종전대로 로그만 남긴다(소음 재발 방지). 셋의 공통점: **"되돌렸다"·"못 했다"
+#   는 사실이 어디에도 안 남는다** — 성공 보고는 로그로 충분하지만, 이 셋은 사람이
+#   모르면 다음 발행까지 그대로 간다.
+#     · rollback : 재현검증 실패로 수정을 되돌림 → 오류가 그대로 살아 있다
+#     · ci_gate  : 자가수정 후 CI 검사 실패 → 워킹트리에 미검증 변경이 남았다
+#     · timeout  : SDK 세션이 시간 초과 → 수리가 아예 일어나지 않았다
+_TG_KINDS = ("rollback", "ci_gate", "timeout")
+_TG_ENV = "GUARDIAN_REPAIR_TG"
+
+
+def _send_tg(msg: str, *, kind: str = "") -> None:
+    """자가수정 알림 — **기본은 로그만** (사용자 박제: 텔레그램 알림 비활성).
+
+    ★ 사용자 결정을 뒤집지 않는다. 되살리는 대신 노브를 둔다 —
+      `GUARDIAN_REPAIR_TG=1` 일 때에 **한해**, 그리고 `_TG_KINDS` 3종에 **한해**
+      실제 송출한다. 노브 기본값은 OFF 이므로 지금 동작은 종전과 완전히 같다.
+
+    ★ dedup 은 새로 만들지 않는다(①) — `error_collector._in_cooldown` + `_cool_key` 는
+      이미 재발 알림(`reopen:`)이 쓰고 검증된 억제기다. `repair_budget._notify_once` 를
+      직접 부르지 않는 이유: 그쪽은 `sdk_repair_attempts` **예산 장부**에 묶여 있어
+      자가수정 알림을 태우면 예산 집계(`_allowed_calls_24h`)가 오염된다.
+    """
     log.info(f"[AutoRepair] {msg[:300]}")
+    if kind not in _TG_KINDS:
+        return
+    import os as _os
+    if (_os.getenv(_TG_ENV) or "").strip().lower() not in ("1", "true", "on", "yes"):
+        return                       # 기본 OFF — 사용자 박제 존중
+    try:
+        from JARVIS07_GUARDIAN.error_collector import _cool_key, _in_cooldown
+        if _in_cooldown("autorepair:" + _cool_key("auto_repair", __name__, kind, msg)):
+            return
+    except Exception:                # 억제기 고장이 알림을 막으면 안 된다(fail-open)
+        pass
+    try:
+        from shared.notify import send_tg
+        send_tg(msg)
+    except Exception as e:
+        log.warning(f"[AutoRepair] 알림 전송 실패({kind}): {e}")
 
 
 def _parse_summary(output: str) -> str:
@@ -205,8 +242,66 @@ def _parse_layer_counts(summary: str) -> dict:
     }
 
 
+# 자기 평가 점수 축 — 이름을 두 번 적지 않는다(표시·저장·판정이 같은 목록을 본다).
+SELF_SCORE_AXES = ("quality", "learning", "vision")
+
+
 def _parse_self_scores(summary: str) -> dict:
-    return {"quality": 0, "learning": 0, "vision": 0, "next": ""}
+    """SDK 요약에서 자기 평가 점수를 **파싱** 한다. 없으면 None = *측정 안 함*.
+
+    ★ 왜 0 이 아니라 None 인가 (2026-08-14 — T5 '죽은 계기판')
+      종전 구현은 `{"quality": 0, "learning": 0, "vision": 0}` 를 **무조건** 돌려주는
+      스텁이었다. 그 0 이 그대로 `self_repair_runs.score_*` 에 박히고
+      `_learning_trend_brief()` 가 "품질 점수: 0 → 0 (0)/10" 이라고 **점수처럼** 보고했다.
+      실측 106회차 전부 0 — 측정한 적이 없는데 화면엔 "0점" 이 찍혀 있었다.
+      0 은 '나쁨' 이고 None 은 '모름' 이다. 둘을 같은 칸에 넣으면 계기판이 거짓말을 한다.
+
+    ★ 지금은 **구조적으로 측정 불가** 다 — `_BASE_PROMPT` 의 `---REPAIR-SUMMARY---`
+      계약에 점수 항목이 없다(파일 수·항목 목록뿐). 그래서 이 파서는 정상 동작해도
+      대부분 None 을 낸다. 그것이 정직한 답이다. 점수를 *만들어* 채우지 않는다.
+      (프롬프트 계약에 점수를 추가하는 것은 별개 결정 — 여기서 몰래 하지 않는다.)
+
+    파싱 형태: `품질: 7/10` · `quality = 7` · `코드 품질 7/10` · `학습 점수: 7`.
+    **점수가 아닌 숫자는 받지 않는다** — 아래 참조.
+
+    ★ 2026-08-14 (P2) — 종전 정규식은 축 이름 뒤 **12자 이내의 아무 정수나** 점수로
+      채택했다(축 이름 뒤 `[^줄바꿈·숫자]{0,12}` 다음의 1~2자리 정수). 요약문에 흔한
+      "학습 패턴 3개 등록" · "품질 게이트 2건" 같은 문장이 그대로 `learning=3` ·
+      `quality=2` 가 되어 `self_repair_runs.score_*` 에 **저장**됐다.
+      T5 는 화면에 '측정 안 함' 을 도입했지만, 파서가 쓰레기를 만들어 내는 한 그 값은
+      '측정된 것' 으로 들어가 화면을 다시 거짓말시킨다. 화면만 고치고 DB 를 그대로 두면
+      다음 사람은 '있는 데이터' 를 믿는다.
+      → 점수의 **꼴** 을 요구한다: 구분자(`:`/`=`)로 붙거나, 명시적으로 `/10` 이거나.
+        어휘 목록(거부 표현)을 늘리는 방식은 쓰지 않는다 — 새 문장이 그대로 통과한다.
+    """
+    out: dict = {a: None for a in SELF_SCORE_AXES}
+    out["next"] = ""
+    text = summary or ""
+    # 축 이름은 한 곳에서만 정한다 — 라벨은 '축 → 별칭들' 로 파생(사본 금지).
+    aliases = {"quality": ("quality", "품질"), "learning": ("learning", "학습"),
+               "vision": ("vision", "비전")}
+    #: 점수로 인정하는 두 꼴. ① 구분자 뒤 정수  ② `N/10`. 그 외 정수는 점수가 아니다.
+    #   축 이름과 점수 사이에 짧은 수식어("학습 *누적*: 8/10")는 허용하되, 숫자·구분자는
+    #   그 안에 들어올 수 없다 — "학습 데이터: 1204건" 같은 문장이 새어 들어오지 않게.
+    _forms = (r'{n}[^\n\d:=]{{0,6}}?\s*[:=]\s*(\d{{1,2}})(?:\s*/\s*10)?(?!\s*\d)',
+              r'{n}[^\n\d:=]{{0,6}}?\s*(\d{{1,2}})\s*/\s*10(?!\d)')
+    for axis in SELF_SCORE_AXES:
+        found = False
+        for name in aliases[axis]:
+            for form in _forms:
+                m = re.search(form.format(n=re.escape(name)), text, re.I)
+                if m:
+                    v = int(m.group(1))
+                    if 0 <= v <= 10:
+                        out[axis] = v
+                        found = True
+                        break
+            if found:
+                break
+    m = re.search(r'(?:다음\s*회차|next)[:\s]*(.+)', text, re.I)
+    if m:
+        out["next"] = m.group(1).strip()[:200]
+    return out
 
 
 def _save_run_to_db(model: str, elapsed: int, returncode: int,
@@ -255,8 +350,10 @@ def _save_run_to_db(model: str, elapsed: int, returncode: int,
                 #   섞이면 추세가 거짓말을 한다 — 실측으로 "50 → 0 (-50회)" 라는 가짜
                 #   붕괴가 텔레그램에 나갔다. 옛 값은 건드리지 않고 읽지도 않는다.
                 patterns_count, hits_total, _real_llm_saved(),
-                scores.get("quality", 0), scores.get("learning", 0),
-                scores.get("vision", 0), scores.get("next", ""),
+                # ★ 측정 안 한 축은 **NULL** — 0(=나쁨)과 구분되어야 한다.
+                #   실패 회차는 scores={} 로 들어오므로 이것도 자동으로 NULL 이 된다.
+                scores.get("quality"), scores.get("learning"),
+                scores.get("vision"), scores.get("next", ""),
                 summary[:4000],
             ))
             return cur.lastrowid
@@ -265,8 +362,49 @@ def _save_run_to_db(model: str, elapsed: int, returncode: int,
         return None
 
 
+UNMEASURED = "측정 안 함"     # 화면·알림 공통 표기 — 0(=나쁨)과 구분되는 유일한 말
+
+
+def _delta_line(label: str, rows, col: str, unit: str = "", note: str = "") -> str:
+    """한 지표의 추세 한 줄 — **측정된 회차끼리만** 뺀다. 없으면 '측정 안 함'.
+
+    ★ 왜 함수인가: 종전엔 지표마다 `latest[c] - oldest[c]` 를 인라인으로 적었는데
+      NULL 이 섞이면 TypeError 로 블록 전체가 사라지거나(=무음), `or 0` 으로 감싸면
+      '측정 안 함' 이 '0' 으로 둔갑했다. 두 사고가 같은 뿌리라 한 곳에 모은다.
+    """
+    vals = [(r["ran_at"], r[col]) for r in rows if r[col] is not None]
+    if not vals:
+        return f"  • {label}: {UNMEASURED} (최근 {len(rows)}회 중 0회 기록){note}\n"
+    newest, oldest = vals[0][1], vals[-1][1]
+    d = newest - oldest
+    sign = f"+{d}" if d > 0 else str(d)
+    seen = "" if len(vals) == len(rows) else f" · 기록 {len(vals)}/{len(rows)}회"
+    return f"  • {label}: {oldest} → {newest} ({sign}{unit}){seen}\n"
+
+
+def _self_score_measurable() -> bool:
+    """자기 평가 점수를 **측정할 수 있는 계약인가** — `_BASE_PROMPT` 에서 파생.
+
+    ★ 추측하지 않고 통과시켜 본다(`patch_effective()` 표준 형태). 프롬프트가 요구하는
+      요약 블록을 실제 파서에 한 번 넣어 보고, 점수가 나오면 True.
+      계약에 점수 항목을 추가하는 순간 이 판정이 **자동으로** 따라온다 — 여기에
+      "지금은 점수가 없다" 는 사실을 문자열로 박아두면 그것이 또 하나의 사본이 된다.
+    """
+    try:
+        return _parse_self_scores(_parse_summary(_BASE_PROMPT)).get("quality") is not None
+    except Exception:
+        return False
+
+
 def _learning_trend_brief() -> str:
-    """최근 5회 회차 추세 요약 — 텔레그램 학습 진도 표시용."""
+    """최근 5회 회차 추세 요약 — 텔레그램 학습 진도 표시용.
+
+    ★ 2026-08-14 — `WHERE llm_saved_1d IS NOT NULL` 을 걷어냈다.
+      그 조건은 *한 지표가 미측정이면 블록 전체를 사라지게* 만들었다. 실측
+      106회차 전부 NULL 이라(칸이 2026-08-08 17:06 에 생겼고 마지막 회차는 같은 날
+      03:04 — 그 뒤 주 1회 잡이 아직 안 돌았다) 학습 추세 보고가 **통째로 무음**이었다.
+      무음은 '문제 없음' 처럼 보인다. 이제 지표별로 '측정 안 함' 을 *말한다*.
+    """
     try:
         from shared import db as _db
         with _db.get_db() as conn:
@@ -274,37 +412,37 @@ def _learning_trend_brief() -> str:
                 SELECT ran_at, total_fixed, patterns_count, hits_total, llm_saved_1d,
                        score_quality, score_learning
                 FROM self_repair_runs
-                WHERE llm_saved_1d IS NOT NULL
                 ORDER BY id DESC LIMIT 5
             """).fetchall()
-        if not rows:
+        if len(rows) < 2:
             return ""
-        # 현재 actionable_hits — DB llm_saved (이제 actionable_hits 저장됨)
-        latest = rows[0]
-        oldest = rows[-1] if len(rows) > 1 else None
-        if not oldest:
-            return ""
-        d_pat  = latest["patterns_count"] - oldest["patterns_count"]
-        # ★ 같은 정의를 쓰는 행끼리만 뺀다 — WHERE 절이 옛 정의 행을 이미 걸러낸다.
-        d_llm  = (latest["llm_saved_1d"] or 0) - (oldest["llm_saved_1d"] or 0)
-        d_qual = latest["score_quality"]  - oldest["score_quality"]
-        sign = lambda n: f"+{n}" if n > 0 else str(n)
         # 현재 stats() 에서 actionable 현황 실시간 조회
         try:
             from JARVIS07_GUARDIAN.pattern_fixer import stats as _pf_stats
             pf = _pf_stats()
             actionable     = pf.get("actionable", 0)
             actionable_hits = pf.get("actionable_hits", 0)
-            extra = f"\n  • 자동수정 가능 패턴: {actionable}개 / 누적 hits: {actionable_hits}회"
+            extra = f"  • 자동수정 가능 패턴: {actionable}개 / 누적 hits: {actionable_hits}회\n"
+            # ★ 보류를 *같은 자리에서* 말한다 (2026-08-17) — 새 카드·새 알림을 만들지 않는다.
+            #   보류가 안 보이면 "자동수정 가능 79개" 가 실제 후보(40개)를 두 배로 부풀린다.
+            _held = pf.get("reuse_held", 0)
+            if _held:
+                _bar = pf.get("reuse_bar", {})
+                extra += (f"  • ↳ 재적용 보류: {_held}개 (심사 문턱 {_bar.get('default','?')} 미달 "
+                          f"— 기각 아님, 재심사 시 복귀)\n")
         except Exception:
             extra = ""
         return (
             f"\n📈 *학습 추세* (최근 {len(rows)}회)\n"
-            f"  • 패턴 누적: {oldest['patterns_count']} → {latest['patterns_count']} ({sign(d_pat)})\n"
-            f"  • 실제 LLM 절약(1일): {oldest['llm_saved_1d'] or 0} → "
-            f"{latest['llm_saved_1d'] or 0} ({sign(d_llm)}회){extra}\n"
-            f"  • 품질 점수: {oldest['score_quality']} → {latest['score_quality']} ({sign(d_qual)})/10"
-        )
+            + _delta_line("패턴 누적", rows, "patterns_count")
+            + _delta_line("실제 LLM 절약(1일)", rows, "llm_saved_1d", unit="회")
+            + extra
+            # 자기 평가 점수 — *계약에 항목이 있는지* 를 런타임에 확인하고 말한다.
+            # 없으면 '측정 안 함' 이라고 쓴다. 저장된 0 을 점수처럼 보여주지 않는다.
+            + (_delta_line("품질 점수", rows, "score_quality", unit="/10")
+               if _self_score_measurable()
+               else f"  • 자기 평가 점수: {UNMEASURED} (SDK 요약 계약에 점수 항목 없음)\n")
+        ).rstrip("\n")
     except Exception as e:
         log.debug(f"[AutoRepair] 학습 추세 로드 실패: {e}")
         return ""
@@ -318,13 +456,18 @@ def _real_llm_saved() -> int:
       나머지를 절약으로 계상하면 지표가 실제와 반대 방향으로 부풀어 오른다.
     """
     try:
-        from shared.db import get_db
+        # 어휘의 주인은 architecture, 합성 행 배제 조건의 주인은 shared.db (② · P2).
+        from shared.db import and_sql, get_db, synthetic_exclusion_sql
+        from JARVIS07_GUARDIAN.architecture import FIXED_STATUSES
+        _in = ",".join("'" + str(x).replace("'", "") + "'" for x in FIXED_STATUSES)
         with get_db() as con:
             return int(con.execute(
-                "SELECT count(*) FROM error_log "
-                "WHERE status='fixed' AND llm_attempts = 0 AND fixed_file IS NOT NULL "
-                "  AND fixed_at > datetime('now','-1 day')").fetchone()[0] or 0)
-    except Exception:
+                "SELECT count(*) FROM error_log WHERE " + and_sql(
+                    f"status IN ({_in})", "llm_attempts = 0", "fixed_file IS NOT NULL",
+                    "fixed_at > datetime('now','-1 day')",
+                    synthetic_exclusion_sql())).fetchone()[0] or 0)
+    except Exception as e:      # noqa: BLE001
+        log.warning("[AutoRepair] 실제 LLM 절약 집계 실패 → 0 으로 보고: %s", e)
         return 0
 
 
@@ -579,6 +722,9 @@ def run_auto_repair() -> None:
             # 옛 동작: 호출자가 anyio+query 인라인 + PATH·OAuth 직접 관리 (3곳 복붙) →
             # cli_not_found / MessageParseError / API 가짜 키 누수 반복.
             # 새 동작: shared.claude_sdk_compat.run_sdk_query 단일 진입점 — 모든 환경 보장.
+            # ★ 쓰기 범위 (2026-08-14 T2): 금지 도구·경로는 `run_sdk_query` 가
+            #   `JARVIS07_GUARDIAN.sdk_tool_guard` 에서 **파생** 한다 — 여기에 목록을
+            #   적지 않는다(적는 순간 두 벌이 되고 한쪽이 낡는다). 기본 `observe`.
             from shared.claude_sdk_compat import run_sdk_query
             result = run_sdk_query(   # ★ 배경 작업 — 순번 대기 상한 적용 (ERRORS [474])
                 prompt=state["prompt"], model=_MODEL,
@@ -642,51 +788,17 @@ def run_auto_repair() -> None:
         #   (마지막 실제 변경 2026-07-17), auto_patch 학습은 1건·diff 없음이었다.
         #   유일하게 실재하는 위험이 "무가드 diff 의 학습 오염" 이라 그것만 막는다.
         #
-        # ★ 인터프리터를 명시 치환한다 — 데몬은 `.../Python.app/Contents/MacOS/Python`
-        #   으로 도는데 그 디렉터리엔 `python3` 도 `pytest` 도 없다. CI 문자열의
-        #   `python3` 를 그대로 쓰면 엉뚱한 파이썬이 잡혀 *멀쩡한 수정이 실패로 판정* 된다.
-        #
-        # ★ `sys.executable` 은 오답이었다 (2026-08-08, ERRORS EvalEnvBroken #5386) —
-        #   macOS Framework Python 이 GUI 관련 import(예: matplotlib/Quartz 경로)로
-        #   자기 자신을 `Python.app/Contents/MacOS/Python` 로 재기동(re-exec)하면
-        #   `sys.executable` 이 *그 원본 프레임워크 바이너리* 를 가리키게 된다.
-        #   그 경로를 새 subprocess 로 그대로 실행하면 `.venv/pyvenv.cfg` 를 찾지 못해
-        #   venv 밖 시스템 site-packages 로 떨어진다 — `python-dotenv` 등 venv 전용
-        #   패키지가 전부 빠진 채로 pytest/precommit_check 가 돌아 즉시
-        #   `ModuleNotFoundError` 로 깨졌다(eval_agent 학습 게이트까지 무력화).
-        #   `.venv/bin/python3` 를 **경로로 직접** 가리키면 pyvenv.cfg 탐색이 항상 성립한다
-        #   (jarvis_keeper.py·JARVIS01_MASTER/dispatchers.py 와 동일 패턴 — 단일 진실).
+        # ★ 검사 본체를 여기서 만들지 않는다 (2026-08-14 이관, ①).
+        #   같은 검사가 `error_fixer.apply_patchset` 의 테스트 게이트에도 필요해졌다.
+        #   두 벌을 두면 한쪽만 낡는다 — 특히 *어느 파이썬으로 돌리느냐* 처럼 한 번 크게
+        #   데인 부분이 그렇다(2026-08-08 EvalEnvBroken #5386: `sys.executable` 로 띄웠다가
+        #   venv 밖으로 떨어져 검사 전체가 ModuleNotFoundError 로 깨졌다). 그 근거와
+        #   `.venv/bin/python3` 명시 치환은 이제 `error_fixer.ci_gate_commands` 안에 있다.
+        #   킬스위치도 하나다: `GUARDIAN_TEST_GATE=0` (종전 `GUARDIAN_CI_GATE` 폐기).
         def _ci_gate_failures() -> list:
-            """CI 가 정의한 검사를 그대로 돌려 실패 목록을 반환. 킬스위치 `GUARDIAN_CI_GATE=0`."""
-            import os as _os
-            import re as _re
-            import subprocess as _sp
-            if _os.getenv("GUARDIAN_CI_GATE", "1") == "0":
-                return []
-            ci = ROOT / ".github" / "workflows" / "ci.yml"
-            if not ci.exists():
-                return ["ci.yml 부재 — 게이트 검사 불가"]
-            venv_py = ROOT / ".venv" / "bin" / "python3"
-            if not venv_py.exists():
-                return [f"venv 파이썬 부재 — 게이트 검사 불가: {venv_py}"]
-            cmds = []
-            for line in ci.read_text(encoding="utf-8").splitlines():
-                m = _re.match(r"\s*(?:run:\s*)?(python3?\s+-m\s+pytest[^\n]*|python3?\s+shared/precommit_check\.py[^\n]*)", line)
-                if m:
-                    cmds.append(m.group(1).strip())
-            if not cmds:
-                return ["ci.yml 에서 검사 명령을 파생하지 못함"]
-            bad = []
-            for c in cmds:
-                c = _re.sub(r"^python3?\b", str(venv_py), c)
-                try:
-                    r = _sp.run(c, shell=True, cwd=str(ROOT), capture_output=True,
-                                text=True, timeout=600)
-                    if r.returncode != 0:
-                        bad.append(f"{c.split()[-2:]}: rc={r.returncode} {(r.stdout or r.stderr)[-200:]}")
-                except Exception as e:
-                    bad.append(f"{c}: {type(e).__name__}: {e}")
-            return bad
+            """CI 가 정의한 검사를 그대로 돌려 실패 목록을 반환. 주인은 `error_fixer`."""
+            from JARVIS07_GUARDIAN.error_fixer import ci_gate_failures
+            return ci_gate_failures(tag="auto_repair")
 
         # ── [L3] 즉시 수정 훅 ─────────────────────────────────────
         def _fix(state: dict, issues: list) -> tuple:
@@ -721,7 +833,11 @@ def run_auto_repair() -> None:
             # 학습 패치 선적용 건수를 총 수정에 합산
             if pre_applied:
                 layers["syntax_fixed"] = layers.get("syntax_fixed", 0) + pre_applied
-            scores = _parse_self_scores(summary)
+            # ★ 계약이 점수를 낼 수 없으면 **파싱조차 하지 않는다** (2026-08-14 P2).
+            #   `_BASE_PROMPT` 의 `---REPAIR-SUMMARY---` 계약에 점수 항목이 없는 동안
+            #   요약문에서 뽑아낸 정수는 전부 우연이다. 우연을 DB 에 적으면 그때부터
+            #   그것은 '데이터' 가 된다. 계약에 점수가 추가되면 이 게이트가 자동으로 열린다.
+            scores = _parse_self_scores(summary) if _self_score_measurable() else {}
             # ★ 변경된 파일 diff → auto_patch 학습 저장 (재발 시 LLM 0 재적용, git 불필요)
             py_snapshot = state.get("py_snapshot", {})
             # ★ 검증 안 된 diff 를 학습에 넣지 않는다 (2026-08-05).
@@ -733,7 +849,7 @@ def run_auto_repair() -> None:
                 _send_tg("⚠️ *자가수정 사후 검증 실패*\n"
                          + "\n".join(f"· {b}" for b in _ci_bad[:3])
                          + "\n\n_변경은 워킹트리에 남아 있습니다. 커밋 시 pre-commit 훅이 차단합니다._"
-                           "\n_검증 안 된 패치는 학습에 넣지 않았습니다._")
+                           "\n_검증 안 된 패치는 학습에 넣지 않았습니다._", kind="ci_gate")
                 try:
                     from JARVIS07_GUARDIAN.error_collector import report as _rep
                     _rep("AutoRepairCIGateFailed", "guardian",
@@ -933,7 +1049,8 @@ def _import_broken_files(changed: "dict | None") -> list:
     return bad
 
 def _verify_sdk_fix(error_record: "dict | None",
-                    pre_snapshot: "dict | None") -> "tuple[bool | None, str]":
+                    pre_snapshot: "dict | None",
+                    out: "dict | None" = None) -> "tuple[bool | None, str]":
     """SDK 수정이 **원 오류를 실제로 없앴는지** 판정. 검증의 주인은 error_fixer 다(①).
 
     Returns `(ok, why)`:
@@ -944,13 +1061,30 @@ def _verify_sdk_fix(error_record: "dict | None",
     ★ `None` 에 롤백하지 않는 이유: 판정을 못 한 것과 실패한 것은 다르다.
       모르는 것을 실패로 취급하면 SDK 가 고친 정상 수정까지 되돌려 다음 발행에
       옛 코드가 남는다. 되돌리는 것은 **확실히 재현될 때만**.
+
+    ★ `out` — 정본 검증 상태를 담아 돌려주는 명시적 출력 인자 (2026-08-14).
+      반환 튜플의 *길이를 늘리지 않는* 이유: `ok, why = _verify_sdk_fix(...)` 로 푸는
+      호출자·골든 테스트가 이미 있다. 세 값을 두 값으로 접는 순간 정보가 사라지는데,
+      **특히 `True` 가 두 뜻을 겸했다** — `reproduced_gone`(진짜 재현 안 됨)과
+      `unverifiable`(재현 프로브 자체가 안 도는 타입인데 import 는 안 깨짐)이
+      같은 `True` 였다. 그 `True` 를 호출자가 "재현검증 통과" 라고 기록해 왔다.
+      `out["state"]` 에는 `error_fixer` 의 정본 상태 문자열이 그대로 들어간다.
     """
+    from JARVIS07_GUARDIAN.error_fixer import VERIFY_LEGACY, VERIFY_UNVERIFIABLE
+
+    def _ret(ok, why, state):
+        if out is not None:
+            out["state"] = state
+            out["why"] = why
+        return ok, why
+
     if not error_record:
-        return None, "error_record 없음 — 재현 대상 특정 불가"
+        return _ret(None, "error_record 없음 — 재현 대상 특정 불가", VERIFY_UNVERIFIABLE)
     try:
         from JARVIS07_GUARDIAN.error_fixer import (VERIFY_REPRODUCES, verify_fix)
     except Exception as e:
-        return None, f"검증 모듈 로드 실패: {type(e).__name__}: {e}"
+        return _ret(None, f"검증 모듈 로드 실패: {type(e).__name__}: {e}",
+                    VERIFY_UNVERIFIABLE)
     try:
         changed = _compute_diffs(pre_snapshot)
         # 검증 프로브의 앵커 파일 — 바뀐 파일 중 첫 번째(없으면 오류가 난 파일).
@@ -959,7 +1093,7 @@ def _verify_sdk_fix(error_record: "dict | None",
         before = (pre_snapshot or {}).get(rel, "") if rel else ""
         verdict, why = verify_fix(error_record, {}, target, before)
         if verdict == VERIFY_REPRODUCES:
-            return False, why
+            return _ret(False, why, VERIFY_REPRODUCES)
         # ★ 재현 불가(UNVERIFIABLE)여도 **깨뜨리지 않았는지** 는 항상 볼 수 있다
         #   (2026-08-08 재검증 — 커버리지가 0/158 이었다).
         #   `verify_fix` 는 원 오류를 다시 일으켜 보는 검사라 대상 타입이 6종뿐인데,
@@ -969,13 +1103,18 @@ def _verify_sdk_fix(error_record: "dict | None",
         #   이건 Tier-1 안전박스가 이미 하는 검사다. 새로 만들지 않고 그 함수를 부른다(①).
         broke = _import_broken_files(changed)
         if broke:
-            return False, f"SDK 수정 후 import 실패: {', '.join(broke[:3])}"
+            # import 를 깨뜨린 수정은 *원 오류가 무엇이었든* 되돌려야 한다 → 재현과 동급.
+            return _ret(False, f"SDK 수정 후 import 실패: {', '.join(broke[:3])}",
+                        VERIFY_REPRODUCES)
         if not verdict:
-            return None, why or "검증 비활성"
-        return True, why
+            return _ret(None, why or "검증 비활성", VERIFY_LEGACY)
+        # ★ verdict 를 **그대로** 흘린다 — `reproduced_gone` 과 `unverifiable` 은
+        #   둘 다 "롤백하지 않는다" 지만 **같은 근거가 아니다**. 종전엔 여기서 둘을
+        #   `True` 하나로 뭉개 호출자가 전부 "재현검증 통과" 로 기록했다.
+        return _ret(True, why, verdict)
     except Exception as e:
         # 검증기 자체가 터진 것을 '수정 실패' 로 단정하지 않는다(fail-open).
-        return None, f"검증 예외: {type(e).__name__}: {e}"
+        return _ret(None, f"검증 예외: {type(e).__name__}: {e}", VERIFY_UNVERIFIABLE)
 
 
 def _restore_snapshot(pre_snapshot: "dict | None") -> int:
@@ -1002,6 +1141,7 @@ def run_auto_repair_targeted(
     failed_platforms: list[str],
     theme: str = "",
     error_record: dict | None = None,
+    out: dict | None = None,
 ) -> bool:
     """포스팅 실패에 특화된 targeted fix (빠른 수정, 전체 진단 아님).
 
@@ -1015,8 +1155,25 @@ def run_auto_repair_targeted(
     Returns:
         True: 적어도 1개 파일 수정 완료
         False: 수정 없음 또는 실패
+
+    ★ `out` — **검증 판정을 호출자에게 전달하는 유일한 통로** (2026-08-14).
+      종전엔 이 함수가 bool 만 돌려줬고, 그래서 안에서 계산한 `_verify_sdk_fix` 판정이
+      **함수 밖으로 한 글자도 나가지 못했다**. 호출자(`guardian_agent`)는 그 bool 만 보고
+      `"Tier-2 SDK 수정 + 재현검증 통과"` 라는 리터럴을 DB 에 찍었다 — 판정이
+      `unverifiable`(트래픽 대부분)이어도 "재현검증 통과" 라고 기록된 것이다.
+      · 반환 타입을 바꾸지 않은 이유: `assert fixed is False` 로 **동일성**을 보는 골든
+        테스트가 있고, `incident_responder` 는 이 값을 그대로 dict 에 담아 흘린다.
+        int 서브클래스(FixResult)로 바꾸면 둘 다 조용히 의미가 달라진다.
+      · 담기는 키: `state`(error_fixer 정본 문자열) · `why` · `files_fixed` · `ran`.
+        `ran=False` 는 게이트에 막혀 **세션이 아예 없었다**는 뜻이다.
     """
     log.info("[AutoRepair/Targeted] 시작: job=%s, platforms=%s", job_id, failed_platforms)
+    if out is not None:
+        # 어느 경로로 빠져나가도 호출자가 키 부재로 터지지 않게 바닥을 깔아 둔다.
+        out.setdefault("state", "")
+        out.setdefault("why", "")
+        out.setdefault("files_fixed", 0)
+        out.setdefault("ran", False)
 
     # ══════════════════════════════════════════════════════════════════
     # ★ 자율 SDK 수리 브레이크 (2026-08-12 — CLAUDE.md ①③)
@@ -1048,6 +1205,8 @@ def run_auto_repair_targeted(
         # 로그·텔레그램·오류 status 갱신은 전부 record_attempt 안에서 — 호출자가 잊을 수 없게.
         record_attempt(error_record=error_record, caller=_caller, job_id=job_id,
                        decision="blocked", reason=_why)
+        if out is not None:
+            out["why"] = _why           # ran=False 유지 — 시도 자체가 없었다
         return False
     _att_id = record_attempt(error_record=error_record, caller=_caller,
                              job_id=job_id, decision="allowed")
@@ -1075,6 +1234,8 @@ def run_auto_repair_targeted(
 
         # ★ 사용자 박제 2026-06-07 — Claude CLI 잔존 흔적 일소.
         # PATH·OAuth·MessageParseError 처리 모두 run_sdk_query 가 자동 흡수.
+        # ★ 쓰기 범위 (2026-08-14 T2) — 위와 동일. 파생 실패 시 `run_sdk_query` 가
+        #   세션을 띄우지 않고 error_kind="guard_error" 로 돌려준다(fail-closed).
         from shared.claude_sdk_compat import run_sdk_query
         result = run_sdk_query(
             prompt=prompt, model=_MODEL,
@@ -1106,7 +1267,8 @@ def run_auto_repair_targeted(
             if kind == "cli_not_found":
                 _send_tg("❌ *targeted 수정 실패*: claude 바이너리 PATH 미등록.")
             elif kind == "timeout":
-                _send_tg(f"⏰ *targeted 수정 timeout* ({_TARGETED_TIMEOUT}초 초과)")
+                _send_tg(f"⏰ *targeted 수정 timeout* ({_TARGETED_TIMEOUT}초 초과)",
+                         kind="timeout")
             else:
                 _send_tg(f"❌ *targeted 수정 예외*: {(result.get('stderr') or '?')[:200]}")
             log.error("[AutoRepair/Targeted] 실패(%s): %s", kind, result.get("stderr",""))
@@ -1138,13 +1300,20 @@ def run_auto_repair_targeted(
             #
             #   검증·롤백의 주인은 `error_fixer` 하나다(①). 여기서 새로 만들지 않고
             #   그 정문(`verify_fix`)을 부른다 — 지금 그 정문의 호출자는 Tier-1 뿐이었다.
-            _v_ok, _v_why = _verify_sdk_fix(error_record, _pre_snapshot)
+            _v_out: dict = {}
+            _v_ok, _v_why = _verify_sdk_fix(error_record, _pre_snapshot, out=_v_out)
+            if out is not None:
+                # ★ 판정을 **밖으로 내보낸다** — 이 세 줄이 없으면 아래 롤백/유지 분기의
+                #   결론이 함수 경계에서 증발하고, 호출자는 다시 bool 만 보고 추측한다.
+                out["state"] = _v_out.get("state", "")
+                out["why"] = _v_why
             if _v_ok is False:
                 _restored = _restore_snapshot(_pre_snapshot)
                 log.warning("[AutoRepair/Targeted] 재현검증 실패 → 롤백 %d파일: %s",
                             _restored, _v_why)
                 _send_tg(f"↩️ *targeted 수정 롤백* (job={job_id})\n"
-                         f"재현검증 실패 — {_v_why[:180]}\n복원 {_restored}개 파일")
+                         f"재현검증 실패 — {_v_why[:180]}\n복원 {_restored}개 파일",
+                         kind="rollback")
                 return False
             if _v_ok is None:
                 log.info("[AutoRepair/Targeted] 재현검증 불가 — 수정 유지(%s)", _v_why)
@@ -1160,6 +1329,9 @@ def run_auto_repair_targeted(
                     log.debug("[AutoRepair/Targeted] 밴딧 학습 브리지 실패: %s", e)
 
         _fixed = files_fixed > 0   # ← 장부에 남길 최종 결과 (조기 반환 경로는 False 유지)
+        if out is not None:
+            out["files_fixed"] = files_fixed
+            out["ran"] = True          # 세션이 실제로 돌았다(게이트 통과)
         return _fixed
     finally:
         # ★ deferred 는 예산·지문 상한을 갉아먹지 않는다 (2026-08-12 적대적 심사 B3)

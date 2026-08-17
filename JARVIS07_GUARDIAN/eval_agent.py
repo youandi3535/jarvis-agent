@@ -104,6 +104,19 @@ _SCORE_CONSERVATIVE = 70      # 보수적 통과 (종전 unknown 경로와 동�
 
 _FAIL_DECAY = 15              # 실패 1회당 eval_meta.score 감쇠폭
 
+
+def pass_threshold(verification: str | None) -> int:
+    """검증 상태 → **통과 문턱**. 문턱을 고르는 식은 저장소에 이것 하나뿐이다 (①).
+
+    ★ 왜 함수인가 (2026-08-17)
+      종전 이 식은 `_evaluate_llm` 안에 인라인으로만 있었다. 그래서 *이미 등록된* 학습
+      항목이 "지금 문턱으로 보면 통과인가" 를 물을 곳이 없었고, 물으려면 식을 한 벌 더
+      적어야 했다 — 적는 순간 그것이 두 번째 진실이 되어 `SCORE_PASS_UNVERIFIED` 를
+      올려도 소급 판정만 옛 문턱에 남는다.
+      이제 *신규 등록* 과 *재적용 자격* 이 같은 함수를 지난다.
+    """
+    return SCORE_PASS_UNVERIFIED if (verification or "") == V_UNVERIFIABLE else SCORE_PASS
+
 # ★ 레거시 리터럴 — GUARDIAN_EVAL_STATIC_DERIVE=0 롤백 전용.
 #   실측 2026-07-25: pattern_fixer._FIXER_REGISTRY 와 교집합 ∅ (= 전종 unknown 70점).
 #   정상 경로에서는 절대 사용하지 않는다.
@@ -480,6 +493,149 @@ def record_fix_failure(
     return res
 
 
+# ──────────────────────────────────────────────────────────────
+# 재적용 자격 — "지금 문턱으로 보면 이 학습 항목은 통과인가"
+#
+# ★ 왜 필요했나 (실측 2026-08-17)
+#   `learned_patterns.json` 79건 중 **39건(49%)의 eval_meta.score 가 정확히 70** 이었다.
+#   70 은 `_SCORE_CONSERVATIVE` — LLM 이 *판정을 못 했을 때* 붙는 '보수적 통과' 다.
+#   사유 1위 19건이 `LLM 호출 실패 — No module named 'dotenv'`(eval 훅이 bare python3 를
+#   써서 모델이 아예 안 돌았다). 즉 그 39건은 **심사를 통과한 것이 아니라 심사를 못 받은 것**
+#   인데, 등록된 뒤로는 `_fix_from_learned`·`apply_stored_patches` 의 재적용 후보로
+#   그대로 남아 코드에 패치를 쓸 자격을 갖고 있었다.
+#   이번 하드닝으로 신규 등록 문턱은 올라갔지만(SCORE_PASS_UNVERIFIED) **기존 항목은
+#   소급받지 않는다** — 문턱은 미래에만 걸리고 원장은 옛 판정을 그대로 들고 있다.
+#
+# ★ 성격은 '기각' 이 아니라 '보류' 다
+#   틀렸다고 확인된 것이 아니라 *증거가 없는* 것이다. 그래서
+#     · 삭제하지 않는다 (기록은 남는다)
+#     · `quarantined` 버킷으로 옮기지 않는다 — 그 버킷은 3회 실패 = 기각이고
+#       `prune_quarantined` 가 30일 뒤 **지운다**. 보류를 거기 넣으면 데이터가 사라진다.
+#     · 재심사(`rereview_held`)로 되돌아올 길을 연다.
+#   빠지는 것은 오직 *재적용 후보 자격* 하나다.
+# ──────────────────────────────────────────────────────────────
+
+HOLD_NONE = ""                       # 보류 없음 = 재적용 가능
+HOLD_UNREVIEWED = "unreviewed"       # 심사 기록(eval_meta·score) 자체가 없다
+HOLD_BELOW_BAR = "below_bar"         # 현재 문턱 미달
+
+
+def reuse_eligibility(entry: dict) -> dict:
+    """학습 항목 1건의 **재적용 자격** — 현재 문턱에서 파생 (②).
+
+    판정식은 하나다: `eval_meta.score >= pass_threshold(eval_meta.verification)`.
+    숫자를 여기 박지 않으므로 `SCORE_PASS`·`SCORE_PASS_UNVERIFIED` 가 바뀌면
+    자격이 **자동으로** 따라 움직인다. (사본이면 안 움직인다 — 그것이 이 설계의 시험이다.)
+
+    ★ 정보가 없는 옛 항목의 취급 (근거)
+      · `verification` 키가 없는 항목(실측 46/79) → `""` 로 읽어 **기본 문턱**(SCORE_PASS).
+        이유: `evaluate()` 자신이 `verification=None` 을 "종전 동작 그대로" 로 다루기
+        때문이다. 없는 정보에 대해 *이 함수가 독자적으로* 더 엄한 규칙을 만들면 그 규칙이
+        곧 두 번째 진실이 된다. 문턱 선택은 `pass_threshold` 한 곳의 것이다.
+      · `eval_meta` 나 `score` 가 아예 없는 항목 → `HOLD_UNREVIEWED`(보류).
+        게이트를 지났다는 증거가 없는 것을 통과로 볼 수는 없다 (fail-closed).
+      · `llm_judged` 는 **판정에 쓰지 않는다** — 판정 규칙을 둘로 늘리면 문턱과 따로 논다.
+        보류 *사유를 설명* 하는 데만 실어 보낸다(`judged`). 실제로 판정이 없었던 항목은
+        점수가 `_SCORE_CONSERVATIVE`(70) 라 문턱 비교만으로 이미 걸린다.
+
+    Returns:
+        {"eligible", "hold", "score", "threshold", "verification", "judged", "detail"}
+        · judged: True(LLM 이 판정) / False(판정 없음) / None(옛 스키마 — 알 수 없음)
+    """
+    meta = entry.get("eval_meta") if isinstance(entry, dict) else None
+    if not isinstance(meta, dict):
+        return {"eligible": False, "hold": HOLD_UNREVIEWED, "score": None,
+                "threshold": pass_threshold(None), "verification": "", "judged": None,
+                "detail": "eval_meta 없음 — 등록 게이트를 지났다는 기록이 없다"}
+
+    verif = str(meta.get("verification") or "")
+    thr = pass_threshold(verif)
+    raw = meta.get("score")
+    try:
+        score = int(raw)
+    except (TypeError, ValueError):
+        return {"eligible": False, "hold": HOLD_UNREVIEWED, "score": None,
+                "threshold": thr, "verification": verif, "judged": meta.get("llm_judged"),
+                "detail": f"eval_meta.score 해석 불가({raw!r}) — 심사 결과가 없다"}
+
+    judged = meta.get("llm_judged")          # 없으면 None = 옛 스키마(알 수 없음)
+    if score >= thr:
+        return {"eligible": True, "hold": HOLD_NONE, "score": score, "threshold": thr,
+                "verification": verif, "judged": judged, "detail": ""}
+
+    if judged is True:
+        why = "심사는 받았으나 현재 문턱 미달"
+    elif judged is False:
+        why = "심사 불가로 보수적 통과했던 항목 — 현재 문턱 미달"
+    else:
+        why = "심사 기록 없는 옛 항목 — 현재 문턱 미달"
+    return {"eligible": False, "hold": HOLD_BELOW_BAR, "score": score, "threshold": thr,
+            "verification": verif, "judged": judged,
+            "detail": f"{why} (score={score} < {thr}"
+                      + (f", 외생={verif}" if verif else "") + ")"}
+
+
+def rereview_held(dry_run: bool = True, limit: int | None = None) -> dict:
+    """보류된 학습 항목 **재심사** — 보류에서 돌아오는 길 (기본 dry-run).
+
+    보류는 기각이 아니므로 되돌아올 문이 있어야 한다. eval 이 정상 동작할 때
+    (= LLM 이 실제로 판정할 수 있을 때) 이 함수를 부르면 저장된 패치를 다시 채점해
+    `eval_meta` 를 갱신한다. 점수가 문턱을 넘으면 자격은 *자동으로* 회복된다 —
+    이 함수가 자격 플래그를 따로 쓰지 않기 때문이다(자격은 언제나 파생값이다).
+
+    ★ **판정이 실제로 일어났을 때만 기록을 바꾼다** (`llm_judged=True`).
+      또 보수적 통과 70 을 덮어써 봐야 같은 자리로 돌아올 뿐이고, 그때마다
+      `evaluated_at` 만 갱신되어 "재심사했다" 는 착시를 만든다.
+    ★ 자동 실행하지 않는다 — 스케줄 잡·알림을 새로 만들지 않는다. 사람이 부른다.
+
+    Returns: {"held", "attempted", "updated", "recovered", "skipped", "dry_run", "items"}
+    """
+    pf = _pattern_fixer_mod()
+    if pf is None:
+        return {"ok": False, "reason": "pattern_fixer-unavailable"}
+
+    held = [p for p in pf.all_patterns() if not reuse_eligibility(p)["eligible"]]
+    out = {"ok": True, "held": len(held), "attempted": 0, "updated": 0,
+           "recovered": 0, "skipped": 0, "dry_run": dry_run, "items": []}
+
+    for entry in held:
+        if limit is not None and out["attempted"] >= limit:
+            break
+        specs = pf.stored_patch_specs(entry)
+        sample = str(entry.get("sample_message") or "").strip()
+        fp = str(entry.get("fingerprint") or "")[:60]
+        if not specs or not sample:
+            out["skipped"] += 1
+            out["items"].append({"fingerprint": fp, "action": "skip",
+                                 "why": "재심사 자료 부족 (저장 패치 또는 원 메시지 없음)"})
+            continue
+        out["attempted"] += 1
+        rec = {"error_type": entry.get("error_type", "") or "", "message": sample}
+        res = evaluate(rec, entry.get("fixer") or "llm_patch",
+                       patch=specs[0][1], target_file=specs[0][0],
+                       verification=(entry.get("eval_meta") or {}).get("verification") or None)
+        if not res.llm_judged:
+            out["items"].append({"fingerprint": fp, "action": "still-unreviewed",
+                                 "why": res.rationale[:100]})
+            continue
+        out["updated"] += 1
+        recovered = reuse_eligibility({"eval_meta": to_meta(res)})["eligible"]
+        if recovered:
+            out["recovered"] += 1
+        out["items"].append({"fingerprint": fp, "action": "rejudged",
+                             "score": res.score, "recovered": recovered})
+        if not dry_run:
+            with pf.mutate_learned() as data:
+                for p in data.get("patterns", []):
+                    if p.get("fingerprint") == entry.get("fingerprint"):
+                        p["eval_meta"] = to_meta(res)
+                        break
+    log.info("[GUARDIAN/eval] 재심사 — 보류 %d건 중 %d건 시도, %d건 재판정, %d건 자격회복%s",
+             out["held"], out["attempted"], out["updated"], out["recovered"],
+             " (dry-run)" if dry_run else "")
+    return out
+
+
 def prune_quarantined(dry_run: bool = True, keep_days: int = 30) -> dict:
     """격리된 패턴 정리 — 기본 dry-run (라이브 안전).
 
@@ -749,7 +905,7 @@ def _evaluate_llm_patch(
     if _hold:
         return _hold_degraded(_hold, verif, fail_count, quarantined)
 
-    pass_score = SCORE_PASS_UNVERIFIED if verif == V_UNVERIFIABLE else SCORE_PASS
+    pass_score = pass_threshold(verif)
 
     et = error_record.get("error_type", "")
     msg = (error_record.get("message", "") or "")[:200]
@@ -997,6 +1153,8 @@ def _notify_rejection(error_record: dict, target_file: str, result: EvalResult) 
 __all__ = ["evaluate", "should_register", "to_meta", "EvalResult",
            "STATIC_FIXERS", "REPLAY_FIXERS", "LLM_FIXERS", "fixer_sets", "FixerSets",
            "SCORE_PASS", "SCORE_PASS_UNVERIFIED",
+           "pass_threshold", "reuse_eligibility", "rereview_held",
+           "HOLD_NONE", "HOLD_UNREVIEWED", "HOLD_BELOW_BAR",
            "pattern_health", "record_fix_failure", "prune_quarantined",
            "eval_signal_stats",
            "V_GONE", "V_UNVERIFIABLE", "V_STILL", "VERIFICATION_VALUES"]

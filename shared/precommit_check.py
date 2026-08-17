@@ -3416,6 +3416,265 @@ def _sdk_enclosing(tree: ast.Module) -> list:
     return out
 
 
+_SDK_TOOL_GUARD_OWNER = "JARVIS07_GUARDIAN/sdk_tool_guard.py"   # 쓰기범위 owner (앵커 ③)
+_SDK_TOOL_GUARD_HOOK  = "JARVIS07_GUARDIAN/sdk_tool_guard_hook.py"
+_SDK_TOOL_GUARD_SETTINGS = ".claude/settings.json"
+
+
+def _sdk_tool_guard_probe() -> dict | None:
+    """쓰기범위 판정을 *자식 프로세스에서 실제로 돌려* 결과를 받아온다.
+
+    실패(임포트 불가·예외·타임아웃)는 None — 호출자가 위반으로 올린다(fail-closed).
+    노브는 지우고 띄운다: 실행 환경에 `enforce` 가 걸려 있어도 **기본값** 을 검사한다.
+    """
+    import json as _json
+    import subprocess as _sp
+    venv_py = ROOT / ".venv" / "bin" / "python3"
+    py = str(venv_py) if venv_py.exists() else sys.executable
+    code = (
+        "import json\n"
+        "from JARVIS07_GUARDIAN.sdk_tool_guard import (\n"
+        "    MODE_OBSERVE, guard_mode, guarded_targets, disallowed_tools, violations)\n"
+        "t = sorted(guarded_targets())\n"
+        "s = next((x for x in t if '/' in x), '')\n"
+        "print(json.dumps({\n"
+        "  'targets': t, 'sample': s,\n"
+        "  'default_observe': guard_mode() == MODE_OBSERVE,\n"
+        "  'write_flagged': bool(s) and bool(violations('Write', {'file_path': s})),\n"
+        "  'read_allowed': not violations('Read', {'file_path': s}),\n"
+        "  'shell_flagged': bool(violations('Bash', {'command': 'rm -f ' + s})),\n"
+        "  'specs': len(disallowed_tools()),\n"
+        "}))\n"
+    )
+    env = dict(os.environ)
+    env.pop("GUARDIAN_SDK_TOOL_GUARD", None)
+    try:
+        r = _sp.run([py, "-c", code], cwd=str(ROOT), env=env,
+                    capture_output=True, text=True, timeout=90)
+    except Exception:                                        # noqa: BLE001
+        return None
+    if r.returncode != 0:
+        return None
+    for line in reversed((r.stdout or "").splitlines()):     # 앞선 경고 로그를 건너뛴다
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return _json.loads(line)
+            except Exception:                                # noqa: BLE001
+                return None
+    return None
+
+
+def _repo_tracks(rel: str) -> bool:
+    """저장소가 이 경로를 **추적하기로 했는가** — `.gitignore` 의 *실제 판정* 에서 파생.
+
+    ★ 문자열로 "`.claude/` 가 무시된다" 를 박아두면 규칙이 바뀐 날 그 문장이 거짓이 된다
+      (실제로 그렇게 낡았다). git 에게 직접 묻는다: `check-ignore` rc 1 = 무시 대상 아님.
+      판정 불가(깃 없음·타임아웃)면 False — 등급을 *올리지 않는* 쪽이 보수적이다.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(["git", "check-ignore", "-q", rel], cwd=str(ROOT),
+                           capture_output=True, timeout=10)
+        return r.returncode == 1
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+def check_sdkwrite(report: Report) -> None:
+    """★ 자율 수리 세션의 **쓰기 범위** 회귀 차단 (2026-08-14 T2).
+
+    ★ `sdkguard`(예산·시도 상한)와 **다른 카테고리** 다: 저쪽은 "얼마나 자주·비싸게
+      돌 수 있나", 이쪽은 "무엇을 건드릴 수 있나". 한 함수에 합치면 저쪽의 early
+      return 뒤에 가려 조용히 안 돌게 된다 — 그게 이 저장소가 반복해 온 사고의 형태다.
+
+    ★ 문자열 grep 으로 보지 않는다 — 이 저장소에는 '문자열은 있는데 한 번도 안 도는'
+      사고 이력이 여러 건이다(ERRORS [614]: `ensure_preflight` 가 있는데 16곳 중 8곳이
+      한 번도 안 돌았다). 그래서 두 가지로 본다:
+        ① **배선**  — `run_sdk_query` 의 파라미터가 *실제로 SDK 옵션까지 흘러가는가* (AST)
+        ② **동작**  — 파생·판정을 *실제로 불러* 본다. 보호 파일 쓰기가 신고되고
+                      읽기는 통과하며 셸 우회가 잡히는지 (`patch_effective()` 표준).
+    """
+    cat = "sdkwrite"
+    report.checks_run += 6
+
+    owner_p = ROOT / _SDK_TOOL_GUARD_OWNER
+    if not owner_p.exists():
+        report.add(Violation(
+            cat, "sdkwrite/tool-guard-missing", _SDK_TOOL_GUARD_OWNER, 0,
+            "쓰기범위 owner 가 없다 — bypassPermissions 세션이 무제한으로 쓴다"))
+        return
+
+    # ── ① 배선: 파라미터가 있고, 그 값이 SDK 옵션까지 간다 ──────────────
+    spend_tree, _ = _module_all(_SDK_SPEND_OWNER)
+    fn = None
+    if spend_tree is not None:
+        fn = next((n for n in spend_tree.body
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                   and n.name == "run_sdk_query"), None)
+    if fn is None:
+        report.add(Violation(
+            cat, "sdkwrite/self-check", _SDK_SPEND_OWNER, 0,
+            "`run_sdk_query` 를 못 읽어 배선 검사가 무력화됨 — 검사 자체를 고칠 것"))
+        return
+
+    params = {a.arg for a in (fn.args.args + fn.args.posonlyargs + fn.args.kwonlyargs)}
+    if "disallowed_tools" not in params:
+        report.add(Violation(
+            cat, "sdkwrite/tool-param-missing", _SDK_SPEND_OWNER, fn.lineno,
+            "`run_sdk_query` 에 금지목록 파라미터가 없다 — 호출자가 제한하고 싶어도 못 건다"))
+
+    # 옵션 dict 나 ClaudeCodeOptions 로 *실제로 전달* 되는가
+    wired = False
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if (isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant)
+                        and t.slice.value == "disallowed_tools"):
+                    wired = True
+        if isinstance(node, ast.Call) and any(
+                k.arg == "disallowed_tools" for k in node.keywords):
+            wired = True
+    if not wired:
+        report.add(Violation(
+            cat, "sdkwrite/tool-param-unwired", _SDK_SPEND_OWNER, fn.lineno,
+            "금지목록이 SDK 옵션까지 배선되지 않았다 — 파라미터만 있고 아무 데도 안 간다"))
+
+    # 파생 owner 를 실제로 부르는가 (기본값이 owner 에서 나오는지)
+    calls = {_call_name(c) or "" for c in ast.walk(fn) if isinstance(c, ast.Call)}
+    if "session_guard" not in calls and "_session_guard" not in calls:
+        report.add(Violation(
+            cat, "sdkwrite/tool-default-not-derived", _SDK_SPEND_OWNER, fn.lineno,
+            "기본 금지목록을 owner 에서 파생하지 않는다 — 목록 사본이 생긴다"))
+
+    # ── ② 동작: 실제로 불러 본다 (코드 존재는 적용의 증거가 아니다) ─────
+    #   ★ 자식 프로세스에서 돌린다. 두 가지 이유다:
+    #     ① 이 스크립트는 `shared/` 안에 있어 sys.path[0] 이 `shared/` 다 —
+    #        그 상태로 프로젝트 모듈을 import 하면 `shared/secrets.py` 가 표준
+    #        라이브러리 `secrets` 를 가려 엉뚱한 오류가 출력에 섞인다(실측).
+    #     ② 검사가 검사 대상의 import 부작용을 자기 프로세스에 들이지 않는다.
+    probe = _sdk_tool_guard_probe()
+    if probe is None:
+        report.add(Violation(
+            cat, "sdkwrite/tool-guard-dead", _SDK_TOOL_GUARD_OWNER, 0,
+            "쓰기범위 판정을 실행할 수 없다 — 이 상태면 fail-closed 로 SDK 세션이 안 뜬다"))
+        targets = []
+    else:
+        targets = probe.get("targets") or []
+        for ok, msg in (
+            (probe.get("default_observe"),
+             "기본 모드가 observe 가 아니다 — 실측 없이 차단하면 조용한 정지가 된다"),
+            (bool(targets), "보호 대상이 비었다 — 가드가 아무것도 안 막는다"),
+            (probe.get("write_flagged"),
+             f"보호 파일 쓰기({probe.get('sample')})가 신고되지 않는다"),
+            (probe.get("read_allowed"),
+             "읽기까지 막는다 — 수리 세션이 읽지도 못하면 아무것도 못 고친다"),
+            (probe.get("shell_flagged"),
+             "셸 우회(rm)가 잡히지 않는다 — 도구 이름만 막으면 그대로 새어나간다"),
+            (probe.get("specs"), "SDK 금지 스펙이 비었다"),
+        ):
+            if not ok:
+                report.add(Violation(cat, "sdkwrite/tool-guard-dead",
+                                     _SDK_TOOL_GUARD_OWNER, 0, msg))
+
+    # ── ③ 셸 우회 통로: PreToolUse 훅이 등록돼 있는가 ──────────────────
+    hook_p = ROOT / _SDK_TOOL_GUARD_HOOK
+    st_p = ROOT / _SDK_TOOL_GUARD_SETTINGS
+    hook_txt = hook_p.read_text(encoding="utf-8", errors="ignore") if hook_p.exists() else ""
+    st_txt = st_p.read_text(encoding="utf-8", errors="ignore") if st_p.exists() else ""
+    if not hook_txt:
+        report.add(Violation(
+            cat, "sdkwrite/hook-missing", _SDK_TOOL_GUARD_HOOK, 0,
+            "셸 우회를 보는 PreToolUse 훅이 없다 — 도구 이름만 막으면 `rm` 으로 새어나간다"))
+    elif not st_txt:
+        # ★ 등급을 박지 않는다 — **저장소의 의사** 에서 파생한다 (2026-08-17 개정).
+        #   종전엔 무조건 warn 이었다. 근거는 "`.claude/` 가 .gitignore 대상이라 CI 엔
+        #   설정 파일이 아예 없다" 였고, 그건 사실이었다. 그러나 그 결과 **가드가 꺼진
+        #   채로도 초록** 이었다. 이제 `.gitignore` 가 `!.claude/settings.json` 으로
+        #   이 파일을 추적하므로, *추적하기로 한 파일이 없는 것* 은 사고다(block).
+        #   여전히 무시 대상인 저장소(포크·옛 브랜치)에서는 종전처럼 warn — 즉 등급이
+        #   `.gitignore` 를 따라간다. 판정 불가(깃 없음)면 보수적으로 warn.
+        _shared = _repo_tracks(_SDK_TOOL_GUARD_SETTINGS)
+        report.add(Violation(
+            cat, "sdkwrite/hook-unregistered", _SDK_TOOL_GUARD_SETTINGS, 0,
+            ("추적 대상인 공유 설정이 없다 — 커밋에서 빠졌거나 지워졌다. PreToolUse 훅이 "
+             "등록되지 않은 채 돌고 있다(셸 우회 가드가 꺼진 상태)")
+            if _shared else
+            ("Claude Code 설정이 없어 PreToolUse 등록을 확인할 수 없다 — 이 기기에서 자율 "
+             "수리를 돌린다면 훅을 등록할 것(이 저장소에선 설정 파일이 무시 대상이다)"),
+            severity="block" if _shared else "warn"))
+    elif "PreToolUse" not in st_txt or hook_p.name not in st_txt:
+        report.add(Violation(
+            cat, "sdkwrite/hook-unregistered", _SDK_TOOL_GUARD_SETTINGS, 0,
+            "훅 파일은 있는데 PreToolUse 에 등록돼 있지 않다 — 설치는 적용의 증거가 아니다"))
+
+    # ④ 훅에 경로를 박지 않았는가 + 판정을 owner 에게 맡기는가 (목록의 주인은 하나)
+    #   ★ 파일 전체 문자열이 아니라 **AST 문자열 상수** 를 본다: `os.environ` 안에 ".env" 가
+    #     들어 있어 통짜 검색은 오탐이 난다(실제로 났다). 또 *경로형*(구분자 있는 것)만
+    #     본다 — 홑이름은 루트 마커(`jarvis_daemon.py`) 같은 정당한 용도와 구분되지 않고,
+    #     '목록을 베꼈다' 의 신호는 어차피 경로형에서 먼저 나타난다.
+    hook_consts: list = []
+    if hook_txt:
+        try:
+            for n in ast.walk(ast.parse(hook_txt)):
+                if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                    hook_consts.append(n.value)
+        except SyntaxError as e:
+            report.add(Violation(cat, "sdkwrite/self-check", _SDK_TOOL_GUARD_HOOK,
+                                 e.lineno or 0, f"훅 파싱 실패로 검사 무력화: {e.msg}"))
+    for t in [x for x in targets if "/" in x]:
+        if any(t in c for c in hook_consts):
+            report.add(Violation(
+                cat, "sdkwrite/hook-hardcoded", _SDK_TOOL_GUARD_HOOK, 0,
+                f"훅이 보호 경로를 직접 갖고 있다: {t} — owner 에서 파생할 것"))
+            break
+    if hook_txt and "violations" not in hook_txt:
+        report.add(Violation(
+            cat, "sdkwrite/hook-not-derived", _SDK_TOOL_GUARD_HOOK, 0,
+            "훅이 owner 판정(`violations`)을 부르지 않는다 — 훅이 자기 판단을 갖는 순간 두 벌이 된다"))
+
+    # ⑤ 노브 이름 사본 일치 — **owner 의 값에서 파생해** 사본들과 대조한다.
+    #   ★ 부분문자열로 보지 않는다: owner 가 `..._V2` 로 개명해도 옛 이름이 사본에
+    #     substring 으로 남아 통과하던 것을 뮤테이션에서 발각했다. 문자열 상수 *동일성* 으로 본다.
+    def _consts(txt: str) -> set:
+        try:
+            return {n.value for n in ast.walk(ast.parse(txt))
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+        except SyntaxError:
+            return set()
+
+    owner_txt = owner_p.read_text(encoding="utf-8")
+    keys: dict = {}
+    try:
+        for node in ast.parse(owner_txt).body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id in ("MODE_ENV_KEY", "SESSION_ENV_KEY")
+                    and isinstance(node.value, ast.Constant)):
+                keys[node.targets[0].id] = node.value.value
+    except SyntaxError as e:
+        report.add(Violation(cat, "sdkwrite/self-check", _SDK_TOOL_GUARD_OWNER,
+                             e.lineno or 0, f"owner 파싱 실패로 검사 무력화: {e.msg}"))
+    if set(keys) != {"MODE_ENV_KEY", "SESSION_ENV_KEY"}:
+        report.add(Violation(
+            cat, "sdkwrite/knob-mismatch", _SDK_TOOL_GUARD_OWNER, 0,
+            "노브 이름의 주인(MODE_ENV_KEY/SESSION_ENV_KEY)이 owner 에 없다 — "
+            "사본(compat 탈출구·훅 fast-path)이 가리킬 정본이 사라졌다"))
+    else:
+        compat_consts = _consts((ROOT / _SDK_SPEND_OWNER).read_text(encoding="utf-8"))
+        hook_consts_set = set(hook_consts)
+        if keys["MODE_ENV_KEY"] not in compat_consts:
+            report.add(Violation(
+                cat, "sdkwrite/knob-mismatch", _SDK_SPEND_OWNER, 0,
+                f"탈출구가 {keys['MODE_ENV_KEY']} 를 안 본다 — "
+                "owner 가 깨지면 `off` 로도 못 열어 SDK 가 영구 정지한다"))
+        if hook_txt and not {keys["MODE_ENV_KEY"], keys["SESSION_ENV_KEY"]} <= hook_consts_set:
+            report.add(Violation(
+                cat, "sdkwrite/knob-mismatch", _SDK_TOOL_GUARD_HOOK, 0,
+                "훅의 노브 사본이 owner 와 다르다 — 사람 세션까지 판정하거나, "
+                "표식이 있어도 아무도 판정하지 않는다"))
+
+
 def check_sdkguard(report: Report) -> None:
     """★ 비싼 *자율* SDK 자가수리는 가드를 지난 통로로만 (사용자 박제 2026-08-12).
 
@@ -3519,6 +3778,7 @@ def check_sdkguard(report: Report) -> None:
 
 
 CATEGORIES["sdkguard"] = check_sdkguard
+CATEGORIES["sdkwrite"] = check_sdkwrite
 
 
 def run(categories: list[str] | None = None) -> Report:

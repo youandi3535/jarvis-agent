@@ -794,6 +794,81 @@ def _live_config() -> dict:
     return cfg
 
 
+# ── 호환 패치 실효성 프로브 — **강한 캐시** (2026-08-14 P2) ────────────────────
+#
+# ★ 왜 캐시가 *필수* 인가 (감사 지적)
+#   `suggestions()` 는 `summary()` 안에서 불리고, `summary()` 는 `/api/tokens` 이며,
+#   대시보드 홈이 그것을 **20초마다 폴링**한다. 그런데 프로브 중 하나
+#   (`verification_tag_effective`)는 **라이브 `error_log` 에 INSERT/UPDATE/DELETE** 를
+#   한다(호출당 8건). 즉 화면을 열어두는 것만으로 하루 수만 건의 쓰기가 발생하고,
+#   삭제 전 창에 걸린 합성 행이 `guardian_slo()` 의 '검증된 코드수정' 에 합산됐다.
+#   → ① 여기서 주기를 끊고(캐시) ② 남는 합성 행은 집계에서 배제한다
+#     (`shared.db.synthetic_exclusion_sql` — 조건의 주인은 한 곳).
+#
+# TTL 관례는 이 파일에 이미 있는 두 캐시(`_SCAN_TTL_SEC` 120 / `_QUOTA_TTL_SEC` 300)를
+# 따른다. 프로브는 그 둘보다 **부작용이 크므로 더 길게** 잡는다. 무배포 조정:
+# `TOKEN_PROBE_TTL_SEC` (0 = 매번 측정 — 테스트·수동 확인용).
+_probe_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+_probe_lock = threading.Lock()
+_PROBE_TTL_DEFAULT = 900.0
+
+
+def probe_ttl_sec() -> float:
+    """프로브 캐시 TTL(초) — **호출 시점** 조회 (2026-08-14 정정).
+
+    ★ 종전엔 모듈 레벨 상수(`... = float(os.getenv(...))`) 였다. 그러면 값이 **import
+      시점에 굳어** 데몬을 재시작하기 전엔 노브가 먹지 않는다 — 그런데 바로 위 주석은
+      '무배포 조정' 이라고 적혀 있었다. 문서와 동작이 어긋나면 문서가 거짓이 된다.
+      이 저장소의 킬스위치 관례(`json_store._flag` 등)와 같은 형태로 맞춘다.
+    """
+    raw = (os.getenv("TOKEN_PROBE_TTL_SEC") or "").strip()
+    if not raw:
+        return _PROBE_TTL_DEFAULT
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _PROBE_TTL_DEFAULT
+
+
+def _run_probes() -> list[tuple[str, Any]]:
+    """실제 측정 — 부작용이 있는 호출은 전부 여기 안에서만 일어난다."""
+    probes: list[tuple[str, Any]] = []
+    try:
+        from shared.claude_sdk_compat import patch_effective
+        probes.append(("SDK 메시지 파서(rate_limit_event 흡수)", patch_effective()))
+    except Exception:
+        probes.append(("SDK 메시지 파서(rate_limit_event 흡수)", None))
+    try:
+        from shared.pytrends_utils import retry_compat_effective
+        probes.append(("pytrends urllib3 호환", retry_compat_effective()))
+    except Exception:
+        probes.append(("pytrends urllib3 호환", None))
+    # ★ 2026-08-14 [642] — 같은 병의 3번째 얼굴. `[verification=...]` 접두를 박는 코드는
+    #   3주 전부터 있었는데 그 태그를 가진 행은 **0행**이었다(출구가 안 돌았고, 실제로 도는
+    #   출구는 리터럴을 찍었다). 플래그가 아니라 *동작* 으로 상시 감시한다.
+    try:
+        from JARVIS07_GUARDIAN.error_fixer import verification_tag_effective
+        probes.append(("자동수정 검증태그(fixed 근거)", verification_tag_effective()))
+    except Exception:
+        probes.append(("자동수정 검증태그(fixed 근거)", None))
+    return probes
+
+
+def _probes_cached() -> tuple[list[tuple[str, Any]], float]:
+    """(프로브 결과, 측정 후 경과초). TTL 안이면 재측정하지 않는다 — 폴링과 분리."""
+    import time
+    now = time.time()
+    with _probe_lock:
+        if (_probe_cache["data"] is not None
+                and now - _probe_cache["ts"] < probe_ttl_sec()):
+            return _probe_cache["data"], now - _probe_cache["ts"]
+    data = _run_probes()           # 락 밖에서 측정 (동시 요청은 중복 측정 감수)
+    with _probe_lock:
+        _probe_cache["ts"] = time.time()
+        _probe_cache["data"] = data
+    return data, 0.0
+
+
 def suggestions() -> list[dict]:
     """토큰 절감·한도 회피 제안 — 실측 데이터 + *실시간 설정값* 기반.
 
@@ -1039,17 +1114,7 @@ def suggestions() -> list[dict]:
     # ── 8. 호환 패치 실효성 (설치 플래그가 아니라 *동작* 으로 확인) ─────
     #   ★ 2026-07-20: 같은 monkey-patch 무력화 사고가 하루에 두 번 났다.
     #     플래그는 내내 True 였고 아무도 몰랐다 → 상시 감시 항목으로 승격.
-    probes: list[tuple[str, Any]] = []
-    try:
-        from shared.claude_sdk_compat import patch_effective
-        probes.append(("SDK 메시지 파서(rate_limit_event 흡수)", patch_effective()))
-    except Exception:
-        probes.append(("SDK 메시지 파서(rate_limit_event 흡수)", None))
-    try:
-        from shared.pytrends_utils import retry_compat_effective
-        probes.append(("pytrends urllib3 호환", retry_compat_effective()))
-    except Exception:
-        probes.append(("pytrends urllib3 호환", None))
+    probes, probes_age = _probes_cached()
 
     dead = [n for n, v in probes if v is False]
     unknown = [n for n, v in probes if v is None]
@@ -1059,9 +1124,10 @@ def suggestions() -> list[dict]:
                   else "호환 패치 실효성 — 정상" if not unknown
                   else "호환 패치 일부 판정 불가"),
         "severity": "high" if dead else ("low" if unknown else "good"),
-        "finding": " / ".join(
+        "finding": (" / ".join(
             f"{n}: {'✅ 유효' if v else '❌ 무력' if v is False else '판정 불가'}"
-            for n, v in probes),
+            for n, v in probes)
+            + f" (측정 {int(probes_age)}초 전 · TTL {int(probe_ttl_sec())}초)"),
         "action": ("무력 판정된 패치를 즉시 수리할 것. monkey-patch 는 `sys.modules` 순회로 "
                    "*모든 바인딩* 을 교체해야 한다 — `from X import f` 로 미리 복사된 참조는 "
                    "모듈 속성만 바꿔서는 안 바뀐다."
