@@ -14892,3 +14892,37 @@ HEAD 대비 이 파일의 변경은 정확히 그 **한 줄뿐**이라 사람의
 유일한 진짜 결함이었고, 나머지 셋과 처방이 전혀 달랐다.
 그리고 **예외 이름은 예외를 *잡는 쪽* 이 항상 갖고 있어야 한다** — 잡으려던 그 실패가
 이름 바인딩까지 앗아가면 안전망이 곧 두 번째 사고가 된다.
+
+### [652] ✅ 해결 — auto_repair `_send()` 의 `scores[k]` bracket 접근이 KeyError → harness 송출 실패 → job_deep_audit RuntimeError 연쇄 (2026-08-22)
+- 증상: `job_deep_audit`(토요일 03:00 심층 감사)가 `RuntimeError: 심층 감사 실패 —
+  auto_repair returncode=-99` 로 실패(source=scheduler #6310, source=log_file #6311).
+  daemon.log 추적 결과 실제 최초 원인은 `[harness] Layer 4 송출 실패 (시도 1/2) —
+  검증 순환 재진입: KeyError: 'quality'`(source=harness #6306/#6309).
+- 원인: `auto_repair.run_auto_repair()` 의 `_send()` 에서
+  `scores = _parse_self_scores(summary) if _self_score_measurable() else {}` —
+  `_self_score_measurable()` 은 **실제 이번 회차 요약이 아니라 `_BASE_PROMPT` 템플릿
+  자체**를 파싱해 점수 형식이 존재하는지 검사한다(2026-08-14 P2 도입). 이 값이 False 면
+  `scores = {}` (빈 딕셔너리, 키 자체가 없음)가 되는데, 뒤이은
+  `if any(scores[k] for k in ("quality","learning","vision")):` 가 **bracket 접근**이라
+  제너레이터 평가 첫 항목(`scores["quality"]`)에서 곧바로 KeyError. `_parse_self_scores()`
+  는 항상 3축 키를 `None` 으로 채워 반환하므로 이 KeyError 는 `scores={}` (else 분기) 일
+  때만 재현된다 — 자기평가 점수를 프롬프트 계약이 아직 지원하지 않는 한 **매 회차 재현**.
+  harness 는 `action_def.send(state)` 예외를 `send_failure` 이슈로 잡아 재시도하지만,
+  결정론적 버그라 attempt 1·2 모두 동일하게 실패 → `max_attempts(2) 도달` escalation →
+  `self_repair_runs.returncode=-99` 기록 → `job_deep_audit` 이 이를 감지해 RuntimeError 재발화.
+- 헛다리: 없음 — `_repair_returncode_since()`/`job_deep_audit` 의 raise 자체는 2026-08-08
+  설계대로 정상 동작(잠복 실패를 job_runs 에 정직하게 적재하려는 의도). 이 raise 로직은
+  건드리지 않고 실제 송출 실패를 만든 근본 버그만 고쳤다.
+- 해결: `if any(scores[k] for k in (...)):` → `if any(scores.get(k) for k in (...)):` 로
+  안전화(블록 내부의 `scores['quality']` 등은 가드 통과 시엔 `_parse_self_scores()` 결과라
+  항상 키가 존재하므로 그대로 안전). 이 수정은 GUARDIAN 자체 재귀 자가수정 SDK 세션
+  (`_try_sdk_targeted_fix(job="harness")`)이 이미 워킹트리에 적용·재현검증까지 완료한
+  상태였음(error_log #6306/#6309 status=fixed) — 단, `report_manual_fix`/학습 자산화가
+  누락돼 있어 본 세션에서 `learned_patterns` 등록 겸 회고 기록.
+- 파일: `JARVIS07_GUARDIAN/auto_repair.py`
+- 교훈: **재귀 자가수정 경로(harness 실패 → GUARDIAN 이 harness 자신을 targeted-fix)는
+  실제로 유효하게 동작한다** — 단, 그 경로의 산출물이 `report_manual_fix` 로 이어지지
+  않으면 코드는 고쳐져도 학습 자산화·ERRORS.md 기록이라는 두 번째 절반이 비게 된다.
+  또한 "회차 요약을 파싱해 점수를 낸다"는 기능이 **아직 프롬프트 계약에 없는 채로
+  소비 코드(`scores[k]`)만 먼저 들어오면**, 그 소비 코드가 항상 타는 else-분기(빈 딕셔너리)
+  에서 즉시 죽는다 — 계약 미완성 상태의 소비자는 반드시 `.get()`/기본값으로 방어할 것.

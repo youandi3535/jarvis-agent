@@ -521,37 +521,60 @@ def _snapshot_py_files() -> dict[str, str]:
     except Exception as _de:                       # fail-closed: 못 읽으면 더 넓게 막는다
         log.warning("[AutoRepair] 보호 목록 파생 실패 — 보수적 기본값 사용: %s", _de)
         _DENY_DIRS  = {".venv", "__pycache__", ".git", "chrome_profile", "logs",
-                       "shared/backups"}
+                       "shared/backups", "node_modules"}
         _DENY_FILES = {"CLAUDE.md", "BLOG_SUPREME_LAW.md", ".env",
                        "JARVIS07_GUARDIAN/learned_patterns.json",
                        "JARVIS07_GUARDIAN/bandit_state.json"}
     _DENY_EXT   = {".sqlite", ".pkl", ".bak"}
     _INCLUDE_EXT = {".py", ".md", ".json", ".yaml", ".yml"}
+    # ★ 하드코딩 이름("node_modules" 등)과 복합 경로("shared/backups")를 분리 —
+    #   os.walk 가지치기는 디렉터리 *이름* 단위라 복합 경로는 방문 시점의 상대경로로 판정.
+    _deny_names = {d for d in _DENY_DIRS if "/" not in d}
+    _deny_paths = {d for d in _DENY_DIRS if "/" in d}
+
+    # ★ 2026-08-22 — harness freeze(300s) 오탐의 근본 원인 수정 (ERRORS 조준검색 무매칭,
+    #   신규 진단): 종전 `ROOT.rglob("*")` 는 가지치기 없이 트리 전체를 순회해 `.venv`
+    #   (79,063 entries)·`dashboard/node_modules`(17,596 entries)까지 전부 stat 한 뒤
+    #   *파일 단위로* deny 판정했다 — 대상 아닌 10만 엔트리를 훑고 나서야 걸렀다는 뜻.
+    #   `os.walk` 는 `dirnames` 를 제자리에서 비우면 그 하위로 아예 내려가지 않는다
+    #   (deny 디렉터리 자체를 건너뛴다 — 필터링이 아니라 가지치기). 장시간 걸리는 LLM
+    #   호출이 없는 순수 파일시스템 순회라 이 함수 내내 `_GLOBAL_BEAT` 갱신이 0회였고,
+    #   freeze 워치독이 "진행 없음" 으로 오판했다(실제로는 느리게 진행 중이었다).
     snap: dict[str, str] = {}
-    for p in ROOT.rglob("*"):
-        if not p.is_file():
-            continue
-        if any(d in p.parts for d in _DENY_DIRS):
-            continue
-        if p.suffix in _DENY_EXT:
-            continue
-        if p.suffix not in _INCLUDE_EXT:
-            continue
-        try:
-            _rel = str(p.relative_to(ROOT))
-        except Exception:
-            continue
-        # ★ 파일명이 아니라 **상대 경로** 로 대조한다 (2026-08-08).
-        #   `_DENY_FILES` 는 `JARVIS07_GUARDIAN/learned_patterns.json` 처럼 경로를 담는데
-        #   `p.name` 은 `learned_patterns.json` 뿐이라 **한 건도 안 걸렸다** —
-        #   보호 목록을 파생해 놓고 대조 키가 달라 무력이었다.
-        #   경로 없는 항목(`CLAUDE.md` 등)도 함께 잡히도록 둘 다 본다.
-        if _rel in _DENY_FILES or p.name in _DENY_FILES:
-            continue
-        try:
-            snap[_rel] = p.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            pass
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        _wd_beat = lambda: None
+    _scanned = 0
+    for _dirpath, _dirnames, _filenames in os.walk(ROOT):
+        _rel_dir = Path(_dirpath).relative_to(ROOT)
+        _rel_dir_s = "" if str(_rel_dir) == "." else str(_rel_dir)
+        _kept = []
+        for d in _dirnames:
+            _rel_child = f"{_rel_dir_s}/{d}" if _rel_dir_s else d
+            if d in _deny_names or _rel_child in _deny_paths:
+                continue
+            _kept.append(d)
+        _dirnames[:] = _kept
+        for _fname in _filenames:
+            _scanned += 1
+            if _scanned % 2000 == 0:
+                _wd_beat()   # ★ 대형 저장소 방어(defense-in-depth) — freeze 오탐 방지
+            p = Path(_dirpath) / _fname
+            if p.suffix in _DENY_EXT or p.suffix not in _INCLUDE_EXT:
+                continue
+            _rel = f"{_rel_dir_s}/{_fname}" if _rel_dir_s else _fname
+            # ★ 파일명이 아니라 **상대 경로** 로 대조한다 (2026-08-08).
+            #   `_DENY_FILES` 는 `JARVIS07_GUARDIAN/learned_patterns.json` 처럼 경로를 담는데
+            #   `p.name` 은 `learned_patterns.json` 뿐이라 **한 건도 안 걸렸다** —
+            #   보호 목록을 파생해 놓고 대조 키가 달라 무력이었다.
+            #   경로 없는 항목(`CLAUDE.md` 등)도 함께 잡히도록 둘 다 본다.
+            if _rel in _DENY_FILES or _fname in _DENY_FILES:
+                continue
+            try:
+                snap[_rel] = p.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                pass
     return snap
 
 
@@ -889,7 +912,7 @@ def run_auto_repair() -> None:
             _pre_note = f"\n🧠 학습 패치 선적용: {pre_applied}건" if pre_applied else ""
             _gd_note  = f"\n📚 GUARDIAN 박제: {guardian_recorded}건" if guardian_recorded else ""
             _score_note = ""
-            if any(scores[k] for k in ("quality", "learning", "vision")):
+            if any(scores.get(k) for k in ("quality", "learning", "vision")):
                 _score_note = (
                     f"\n\n🎯 *자기 평가*"
                     f"\n  • 코드 품질: {scores['quality']}/10"

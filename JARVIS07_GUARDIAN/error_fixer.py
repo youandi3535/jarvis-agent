@@ -98,7 +98,11 @@ def subprocess_python(root: "Path | None" = None) -> str:
 _SUBPROC_PY = subprocess_python()
 
 # 수정 금지 디렉터리
-_DENY_DIRS = {".venv", ".git", "__pycache__", "shared/backups", "chrome_profile", "logs"}
+# ★ "node_modules" 2026-08-22 추가 — 빠져 있어 `auto_repair._snapshot_py_files` 가
+#   dashboard/node_modules 의 .json/.md(1,008개·16MB, 우리 코드 아님)를 매 회차 읽고
+#   diff 대상에 넣고 있었다. 이 목록의 주인은 여기 하나 — 소비자는 복제하지 말 것.
+_DENY_DIRS = {".venv", ".git", "__pycache__", "shared/backups", "chrome_profile", "logs",
+              "node_modules"}
 # 수정 허용 확장자
 #   ★ `.sh` 를 뺐다 (2026-08-14 — 검증 없이 착지하던 유일한 실행 파일)
 #     `.py` 는 `ast.parse` 로, `.md` 는 실행되지 않아 무해하지만, `.sh` 는 **검사 0** 인 채
@@ -1610,6 +1614,45 @@ def precheck_patchset(items: list, *, tag: str = "") -> tuple:
 _GATE_INSIDE_ENV = "GUARDIAN_GATE_INSIDE"     # 게이트가 띄운 자식에게 넘기는 재귀 표식
 
 
+def _run_gate_cmd(cmd: str, *, cwd: str, timeout: float, env: dict) -> subprocess.CompletedProcess:
+    """게이트 명령 1개 실행 — 폴링 스레드로 감싸 대기 중 주기적으로 beat() (ERRORS [426][436][456]).
+
+    ★ 왜 필요한가: `pytest`/`precommit_check.py` 는 수 분 걸릴 수 있는데(명령 상한
+      `_gate_timeout()` 기본 600s), plain `subprocess.run(..., timeout=per)` 는 완료까지
+      **무진전**이다. 이 호출은 `auto_repair._send()`(harness Layer 4) 안에서 일어나고,
+      그 액션을 감싼 외곽 Watchdog 의 freeze_sec(300s 고정)이 자식 프로세스 내부 진행을
+      볼 수 없어 정상 실행 중에도 "멈춤(freeze) 오탐"으로 GUARDIAN 에 보고된다
+      (실측: `harness.auto-repair` HarnessStuck, 2026-08-22). `_run_script_checked`
+      (JARVIS03_RADAR/jobs.py)와 동일한 ThreadPoolExecutor+폴링 패턴을 재사용한다.
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
+    try:
+        from JARVIS00_INFRA.watchdog import beat as _wd_beat
+    except Exception:
+        def _wd_beat() -> None: pass
+
+    def _run_blocking() -> subprocess.CompletedProcess:
+        return subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True,
+                               text=True, timeout=timeout, env=env)
+
+    exe = ThreadPoolExecutor(max_workers=1)
+    try:
+        fut = exe.submit(_run_blocking)
+        poll = 15.0                        # freeze_sec(300s) 보다 충분히 작게
+        wall_cap = timeout + 10.0          # subprocess 자체 timeout 위 안전 마진
+        waited = 0.0
+        while True:
+            try:
+                return fut.result(timeout=min(poll, max(0.1, wall_cap - waited)))
+            except _FutTimeout:
+                waited += poll
+                _wd_beat()   # ★ 게이트 명령 진행 중 — 외곽 watchdog freeze 오탐 방지
+                if waited >= wall_cap:
+                    raise
+    finally:
+        exe.shutdown(wait=False)   # 내부 스레드 leak 가능 — 비블로킹 우선(llm.py 와 동일 정책)
+
+
 def gate_depth() -> int:
     """이 프로세스가 게이트 안에서 **몇 겹째** 인가 (0 = 게이트 밖).
 
@@ -1930,8 +1973,7 @@ def ci_gate_failures(*, tag: str = "", budget: float | None = None) -> list:
             break
         t0 = time.time()
         try:
-            r = subprocess.run(c, shell=True, cwd=str(_ROOT), capture_output=True,
-                               text=True, timeout=per, env=env)
+            r = _run_gate_cmd(c, cwd=str(_ROOT), timeout=per, env=env)
             if r.returncode != 0:
                 bad.append(f"{c.split('/')[-1][:60]}: rc={r.returncode} "
                            f"{((r.stdout or '') + (r.stderr or '')).strip()[-200:]}")
